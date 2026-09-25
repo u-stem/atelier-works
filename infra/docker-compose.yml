@@ -1,0 +1,175 @@
+# All secret, instance-specific, and version variables below use the
+# ${VAR:?...} form on purpose: there is no infra/.env. Values come from
+# mise's [env] block (non-secret, committed in mise.toml) and from
+# mise.local.toml (gitignored secrets), and only reach this file when
+# docker compose is launched as a mise task/subprocess (mise run ..., or
+# mise exec -- docker compose ...). Running docker compose directly, without
+# mise, fails fast with the message after `:?` instead of silently using an
+# empty value.
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "${LOG_MAX_SIZE:-20m}"
+    max-file: "${LOG_MAX_FILE:-10}"
+    compress: "true"
+
+services:
+  ## UPGRADING FROM POSTGRES 16: db_data holds a cluster 18 cannot read, so the
+  ## container exits with an explanatory error rather than coming up blank. Migrating
+  ## means dumping the WHOLE cluster (pg_dumpall), never just the windmill database:
+  ## Windmill keeps datatable, DuckLake and wm_fork_* databases beside it and grants
+  ## its RLS policies to cluster-level roles, and a single-database dump loses both
+  ## silently. See https://www.windmill.dev/docs/advanced/self_host#upgrade-postgresql-to-18
+  db:
+    image: postgres:18
+    shm_size: 1g
+    restart: unless-stopped
+    deploy:
+      replicas: 1
+    volumes:
+      # From 18 on, the official image keeps the cluster in a major-version
+      # subdirectory (/var/lib/postgresql/18/docker), so the mount has to be
+      # the parent directory.
+      - db_data:/var/lib/postgresql
+    expose:
+      - 5432
+    environment:
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?run via mise}
+      POSTGRES_DB: windmill
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging: *default-logging
+
+  windmill_server:
+    image: ghcr.io/windmill-labs/windmill:${WM_VERSION:?run via mise}
+    pull_policy: always
+    deploy:
+      replicas: 1
+    restart: unless-stopped
+    expose:
+      - 8000
+      - 2525
+    environment:
+      - DATABASE_URL=postgres://postgres:${DB_PASSWORD:?run via mise}@db/windmill?sslmode=disable
+      - MODE=server
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - worker_logs:/tmp/windmill/logs
+    logging: *default-logging
+
+  windmill_worker:
+    # Custom image: adds claude, gh, gtr and wmill on top of the upstream base
+    # so factory jobs can drive an agentic worktree workflow. See ./worker/Dockerfile.
+    build:
+      context: ./worker
+      args:
+        WM_VERSION: ${WM_VERSION:?run via mise}
+        CLAUDE_VERSION: ${CLAUDE_VERSION:?run via mise}
+        GH_VERSION: ${GH_VERSION:?run via mise}
+        GTR_REF: ${GTR_REF:?run via mise}
+        GTR_COMMIT: ${GTR_COMMIT:?run via mise}
+        WMILL_VERSION: ${WMILL_VERSION:?run via mise}
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          memory: 4096M
+          # Nested under deploy.resources.limits rather than the top-level
+          # pids_limit shorthand: this compose version rejects a service that
+          # mixes deploy.resources.limits with the top-level pids_limit key
+          # ("can't set distinct values on 'pids_limit' and
+          # 'deploy.resources.limits.pids'"), even when only one is set.
+          pids: 512
+    restart: unless-stopped
+    # Intentionally NOT privileged and without FAVOR_UNSHARE_PID: the upstream
+    # PID-namespace isolation needs --mount-proc via privileged mode, which is a
+    # bigger blast radius than this worker's jobs need. See docs/security.md.
+    security_opt:
+      - "no-new-privileges:true"
+    environment:
+      - DATABASE_URL=postgres://postgres:${DB_PASSWORD:?run via mise}@db/windmill?sslmode=disable
+      - MODE=worker
+      - WORKER_GROUP=default
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - worker_dependency_cache:/tmp/windmill/cache
+      - worker_logs:/tmp/windmill/logs
+      - factory_workspaces:/workspaces
+      - factory_state:/var/lib/factory
+    logging: *default-logging
+
+  ## This worker is specialized for "native" jobs, which run in-process and are
+  ## much more lightweight than other jobs.
+  windmill_worker_native:
+    image: ghcr.io/windmill-labs/windmill:${WM_VERSION:?run via mise}
+    pull_policy: always
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          memory: 2048M
+          pids: 512
+    restart: unless-stopped
+    security_opt:
+      - "no-new-privileges:true"
+    environment:
+      - DATABASE_URL=postgres://postgres:${DB_PASSWORD:?run via mise}@db/windmill?sslmode=disable
+      - MODE=worker
+      - WORKER_GROUP=native
+      - NATIVE_MODE=true
+      - SLEEP_QUEUE=200
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - worker_logs:/tmp/windmill/logs
+    logging: *default-logging
+
+  ## LSP only: multiplayer and the debugger are Enterprise/attack-surface
+  ## features this deployment does not need.
+  windmill_extra:
+    image: ghcr.io/windmill-labs/windmill-extra:${WM_VERSION:?run via mise}
+    restart: unless-stopped
+    expose:
+      - 3001 # LSP
+    environment:
+      - ENABLE_LSP=true
+      - ENABLE_MULTIPLAYER=false
+      - ENABLE_DEBUGGER=false
+      - WINDMILL_BASE_URL=http://windmill_server:8000
+    volumes:
+      - lsp_cache:/pyls/.cache
+    logging: *default-logging
+
+  caddy:
+    # Pinned: this image and the ./Caddyfile next to it are version-coupled, so
+    # they have to move together.
+    image: ghcr.io/windmill-labs/caddy-l4:2.11.4-1
+    restart: unless-stopped
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    ports:
+      # WM_BIND / WM_HTTP_PORT have no default: set them in mise's [env]
+      # (WM_BIND=127.0.0.1 for localhost-only by default) so a missing value
+      # fails fast instead of silently binding somewhere unexpected.
+      - "${WM_BIND:?run via mise}:${WM_HTTP_PORT:?run via mise}:80"
+    environment:
+      - BASE_URL=:80
+    logging: *default-logging
+
+volumes:
+  db_data: null
+  worker_dependency_cache: null
+  worker_logs: null
+  caddy_data: null
+  lsp_cache: null
+  factory_workspaces: null
+  factory_state: null
