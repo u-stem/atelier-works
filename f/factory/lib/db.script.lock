@@ -1,6 +1,6 @@
 {
   "dependencies": {
-    "windmill-client": "latest"
+    "windmill-client": "1.817.0"
   }
 }
 //bun.lock
@@ -10,7 +10,7 @@
   "workspaces": {
     "": {
       "dependencies": {
-        "windmill-client": "latest",
+        "windmill-client": "1.817.0",
       },
     },
   },

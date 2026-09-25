@@ -756,6 +756,65 @@ async function findExistingMarkerComment(
   return null;
 }
 
+export type IssueComment = {
+  readonly id: number;
+  readonly authorLogin: string;
+  readonly body: string;
+};
+
+export type ListIssueCommentsOptions = {
+  readonly viewer: string;
+  /** Only comments with an id greater than this are returned (the caller's
+   * `last_comment_id` high-water mark); omit to return every human comment. */
+  readonly sinceId?: number;
+};
+
+/**
+ * `GET .../issues/{number}/comments` (paginated), filtered to human,
+ * non-marker comments newer than `sinceId` — mirrors `listPrReviews`'s
+ * shape (viewer-exclusion, `{ items, maxId }`). Feeds the `/factory fix`
+ * slash-command trigger detector (poll_prs.ts): a comment is excluded here
+ * when it's `isOwnPost` for `viewer` OR carries a factory marker. Unlike
+ * `listPrReviews`/`listPrReviewComments` (security-audit fix: a marker
+ * alone is never proof of authorship for *review-visibility* purposes),
+ * excluding on marker alone here doesn't reopen that hole — the exact-match
+ * `/factory fix` command text can never coexist with an appended marker
+ * line in the same comment body, so this only ever drops comments that
+ * could never have matched the command anyway.
+ */
+export async function listIssueComments(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  number: number,
+  opts: ListIssueCommentsOptions,
+): Promise<ListHumanResult<IssueComment>> {
+  validateOwnerRepo(owner, repo);
+  assertGitHubName(opts.viewer);
+
+  const parsed = await callGhApiAll(
+    client,
+    `repos/${owner}/${repo}/issues/${number}/comments?per_page=100`,
+  );
+
+  let maxId = 0;
+  const items: IssueComment[] = [];
+  for (const raw of parsed) {
+    if (!isCommentBodyPayload(raw)) continue;
+    if (raw.id > maxId) maxId = raw.id;
+    if (opts.sinceId !== undefined && raw.id <= opts.sinceId) continue;
+    const login = raw.user?.login;
+    if (typeof login === "string" && isOwnPost(login, opts.viewer)) continue;
+    if (hasMarker(raw.body)) continue;
+    items.push({
+      id: raw.id,
+      authorLogin: typeof login === "string" ? login : "",
+      body: raw.body,
+    });
+  }
+  return { items, maxId };
+}
+
 export async function setLabels(
   client: GhClient,
   owner: string,
@@ -875,7 +934,10 @@ export type PullRequest = {
   readonly title: string;
   readonly body: string;
   readonly draft: boolean;
+  readonly state: "open" | "closed";
+  readonly merged: boolean;
   readonly headSha: string;
+  readonly headRef: string;
   readonly headRepoFullName: string | null;
   readonly baseRepoFullName: string;
   readonly baseRef: string;
@@ -888,8 +950,11 @@ type PrPayload = {
   readonly title: string;
   readonly body: string | null;
   readonly draft: boolean;
+  readonly state: "open" | "closed";
+  readonly merged: boolean;
   readonly head: {
     readonly sha: string;
+    readonly ref: string;
     readonly repo: { readonly full_name: unknown } | null;
   };
   readonly base: {
@@ -907,6 +972,8 @@ function isPrPayload(value: unknown): value is PrPayload {
     title: unknown;
     body: unknown;
     draft: unknown;
+    state: unknown;
+    merged: unknown;
     head: unknown;
     base: unknown;
   };
@@ -914,11 +981,14 @@ function isPrPayload(value: unknown): value is PrPayload {
   if (typeof record.title !== "string") return false;
   if (record.body !== null && typeof record.body !== "string") return false;
   if (typeof record.draft !== "boolean") return false;
+  if (record.state !== "open" && record.state !== "closed") return false;
+  if (typeof record.merged !== "boolean") return false;
   if (typeof record.head !== "object" || record.head === null) return false;
   if (typeof record.base !== "object" || record.base === null) return false;
-  const head = record.head as { sha: unknown };
+  const head = record.head as { sha: unknown; ref: unknown };
   const base = record.base as { ref: unknown };
   if (typeof head.sha !== "string") return false;
+  if (typeof head.ref !== "string") return false;
   if (typeof base.ref !== "string") return false;
   return true;
 }
@@ -954,7 +1024,10 @@ export async function getPr(
     title: parsed.title,
     body: parsed.body ?? "",
     draft: parsed.draft === true,
+    state: parsed.state,
+    merged: parsed.merged,
     headSha: parsed.head.sha,
+    headRef: parsed.head.ref,
     headRepoFullName,
     baseRepoFullName,
     baseRef: parsed.base.ref,
@@ -1002,6 +1075,66 @@ export async function getPrDiff(
     truncated: true,
     totalLines: lines.length,
   };
+}
+
+export type PrFile = {
+  readonly filename: string;
+  readonly status: string;
+  readonly additions: number;
+  readonly deletions: number;
+  readonly changes: number;
+};
+
+type PrFilePayload = {
+  readonly filename: string;
+  readonly status: string;
+  readonly additions: number;
+  readonly deletions: number;
+  readonly changes: number;
+};
+
+function isPrFilePayload(value: unknown): value is PrFilePayload {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as {
+    filename: unknown;
+    status: unknown;
+    additions: unknown;
+    deletions: unknown;
+    changes: unknown;
+  };
+  return (
+    typeof record.filename === "string" &&
+    typeof record.status === "string" &&
+    typeof record.additions === "number" &&
+    typeof record.deletions === "number" &&
+    typeof record.changes === "number"
+  );
+}
+
+/** `GET .../pulls/{number}/files` (paginated), the PR's changed-file list. */
+export async function getPrFiles(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  number: number,
+): Promise<PrFile[]> {
+  validateOwnerRepo(owner, repo);
+  const parsed = await callGhApiAll(
+    client,
+    `repos/${owner}/${repo}/pulls/${number}/files?per_page=100`,
+  );
+  const items: PrFile[] = [];
+  for (const raw of parsed) {
+    if (!isPrFilePayload(raw)) continue;
+    items.push({
+      filename: raw.filename,
+      status: raw.status,
+      additions: raw.additions,
+      deletions: raw.deletions,
+      changes: raw.changes,
+    });
+  }
+  return items;
 }
 
 export type PrReview = {

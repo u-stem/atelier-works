@@ -8,9 +8,11 @@ import {
   getIssueTimeline,
   getPr,
   getPrDiff,
+  getPrFiles,
   getViewer,
   hasMarker,
   isOwnPost,
+  listIssueComments,
   listPrReviewComments,
   listPrReviews,
   removeLabel,
@@ -488,6 +490,84 @@ describe("commentIssue", () => {
   });
 });
 
+describe("listIssueComments", () => {
+  test("excludes the viewer's own comment and a marker-bearing comment, keeps a plain human comment", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([
+        { id: 1, body: "please fix this", user: { login: "alice" } },
+        {
+          id: 2,
+          body: "factory reply",
+          user: { login: "factory-bot" },
+        },
+        {
+          id: 3,
+          body: withMarker("comment", 9, "auto note"),
+          user: { login: "bob" },
+        },
+      ]),
+    ]);
+    const result = await listIssueComments(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      5,
+      { viewer: "factory-bot" },
+    );
+    expect(result.items).toEqual([
+      { id: 1, authorLogin: "alice", body: "please fix this" },
+    ]);
+  });
+
+  test("only returns comments with an id greater than sinceId", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([
+        { id: 10, body: "old comment", user: { login: "alice" } },
+        { id: 20, body: "/factory fix", user: { login: "alice" } },
+      ]),
+    ]);
+    const result = await listIssueComments(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      5,
+      { viewer: "factory-bot", sinceId: 10 },
+    );
+    expect(result.items.map((c) => c.id)).toEqual([20]);
+  });
+
+  test("returns maxId across all comments, including filtered-out ones", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([
+        { id: 1, body: "human comment", user: { login: "alice" } },
+        { id: 9, body: "factory reply", user: { login: "factory-bot" } },
+      ]),
+    ]);
+    const result = await listIssueComments(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      5,
+      { viewer: "factory-bot" },
+    );
+    expect(result.maxId).toBe(9);
+  });
+
+  test("rejects an invalid viewer before making any call", async () => {
+    const fake = createFakeCommandRunner([]);
+    await expect(
+      listIssueComments(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        5,
+        { viewer: "not valid!" },
+      ),
+    ).rejects.toThrow();
+    expect(fake.calls).toHaveLength(0);
+  });
+});
+
 describe("setLabels / removeLabel", () => {
   test("setLabels PUTs the full label list", async () => {
     const fake = createFakeCommandRunner([ok(ghApiStdout(200, []))]);
@@ -625,14 +705,20 @@ describe("searchPrs", () => {
 });
 
 describe("getPr", () => {
-  test("parses head/base/draft/mergeable_state", async () => {
+  test("parses head/base/draft/mergeable_state/state/merged", async () => {
     const fake = createFakeCommandRunner([
       ghApiOk({
         number: 12,
         title: "t",
         body: "b",
         draft: false,
-        head: { sha: "abc123", repo: { full_name: "acme/widgets-fork" } },
+        state: "open",
+        merged: false,
+        head: {
+          sha: "abc123",
+          ref: "feature-x",
+          repo: { full_name: "acme/widgets-fork" },
+        },
         base: { ref: "main", repo: { full_name: "acme/widgets" } },
         mergeable_state: "clean",
         user: { login: "alice" },
@@ -649,13 +735,111 @@ describe("getPr", () => {
       title: "t",
       body: "b",
       draft: false,
+      state: "open",
+      merged: false,
       headSha: "abc123",
+      headRef: "feature-x",
       headRepoFullName: "acme/widgets-fork",
       baseRepoFullName: "acme/widgets",
       baseRef: "main",
       mergeableState: "clean",
       authorLogin: "alice",
     });
+  });
+
+  test("parses a merged, closed PR", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        number: 13,
+        title: "t2",
+        body: null,
+        draft: false,
+        state: "closed",
+        merged: true,
+        head: { sha: "def456", ref: "feature-y", repo: null },
+        base: { ref: "main", repo: { full_name: "acme/widgets" } },
+        mergeable_state: null,
+        user: null,
+      }),
+    ]);
+    const pr = await getPr(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      13,
+    );
+    expect(pr.state).toBe("closed");
+    expect(pr.merged).toBe(true);
+    expect(pr.headRef).toBe("feature-y");
+  });
+});
+
+describe("getPrFiles", () => {
+  test("returns the changed-file list", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([
+        {
+          filename: "src/a.ts",
+          status: "modified",
+          additions: 3,
+          deletions: 1,
+          changes: 4,
+        },
+      ]),
+    ]);
+    const files = await getPrFiles(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+    );
+    expect(files).toEqual([
+      {
+        filename: "src/a.ts",
+        status: "modified",
+        additions: 3,
+        deletions: 1,
+        changes: 4,
+      },
+    ]);
+  });
+
+  test("follows the link header's rel=next page and combines both pages' files", async () => {
+    const fake = createFakeCommandRunner([
+      ok(
+        ghApiStdout(
+          200,
+          [
+            {
+              filename: "a.ts",
+              status: "added",
+              additions: 10,
+              deletions: 0,
+              changes: 10,
+            },
+          ],
+          {
+            link: '<https://api.github.com/repos/acme/widgets/pulls/12/files?page=2>; rel="next"',
+          },
+        ),
+      ),
+      ghApiOk([
+        {
+          filename: "b.ts",
+          status: "removed",
+          additions: 0,
+          deletions: 5,
+          changes: 5,
+        },
+      ]),
+    ]);
+    const files = await getPrFiles(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+    );
+    expect(files.map((f) => f.filename)).toEqual(["a.ts", "b.ts"]);
   });
 });
 

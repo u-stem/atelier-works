@@ -1,0 +1,14 @@
+summary: ''
+description: ''
+lock: '!inline f/factory/retry_work_item.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties:
+    work_item_id:
+      type: number
+      description: ''
+      default: null
+  required:
+    - work_item_id

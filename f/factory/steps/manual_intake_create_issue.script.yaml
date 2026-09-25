@@ -1,0 +1,39 @@
+summary: ''
+description: ''
+lock: '!inline f/factory/steps/manual_intake_create_issue.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties:
+    acceptance_criteria:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    body:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    owner:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    repo:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    title:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+  required:
+    - owner
+    - repo
+    - title
+    - body
+    - acceptance_criteria

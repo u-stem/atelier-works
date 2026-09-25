@@ -98,6 +98,8 @@ stateDiagram-v2
 | `rereview_requested` | 修正を push し再レビューを依頼した(終端、`kind=pr_fix`) | PR ワークフロー |
 | `blocked` | 禁止された変更パターンの検出、または安全策の前提が崩れて中断(`kind=pr_fix`) | PR ワークフロー |
 
+work item を終端 status(`approved` / `needs_human` / `expired` / `failed` / `reviewed` / `rereview_requested` / `blocked` / `cancelled`)にする際は、`wip` ラベルに加えてトリガーラベル(Issue の `factory`、PR の `factory:review` / `factory:fix`)も外す(`approved` は `factory` の代わりに `factory:approved` へ付け替える)。トリガーラベルを残すと、孤児失敗した Issue / PR が次回の poll で自動再クレームされ、無限に再試行してしまう。人が改めてラベルを付け直したときだけ新しいサイクル・再実行が始まる。
+
 ## データモデル
 
 Data Tables はスキーマ `factory` に置く。migration は追加のみで、rename は禁止する(列定義の詳細は migration ファイル自体を正とする)。

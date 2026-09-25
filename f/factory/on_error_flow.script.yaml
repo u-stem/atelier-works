@@ -1,0 +1,28 @@
+summary: ''
+description: ''
+lock: '!inline f/factory/on_error_flow.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties:
+    error:
+      type: ''
+      description: ''
+      default: null
+    job_id:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    path:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    work_item_id:
+      type: number
+      description: ''
+      default: null
+  required:
+    - error

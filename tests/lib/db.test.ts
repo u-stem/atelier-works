@@ -1,11 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import {
   addNotice,
+  bumpWatermarks,
   getWorkItem,
   insertFixRound,
   insertReview,
   insertWorkItem,
+  latestDraft,
+  latestPrWorkItem,
   listActive,
+  nextCycleForIssue,
   recordAgentRun,
   recordApproval,
   recordDeployment,
@@ -13,6 +17,9 @@ import {
   type SqlClient,
   type SqlRow,
   saveDraft,
+  setFixRound,
+  setFlowJobId,
+  sumAgentCostSince,
   toApproval,
   toFixRoundRecord,
   toRequirementDraft,
@@ -504,5 +511,175 @@ describe("toFixRoundRecord", () => {
     expect(fixRound.replies).toEqual([
       { review_comment_id: 101, body: "fixed" },
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// M5 promotions (spec-cycle2.md M5, promoted from f/factory/lib/poll_support.ts)
+// ---------------------------------------------------------------------------
+
+describe("setFlowJobId", () => {
+  test("updates flow_job_id", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await setFlowJobId(1, "job-123", sql);
+    expect(calls[0]?.text).toContain("SET flow_job_id");
+  });
+
+  test("passes flowJobId and id as parameters", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await setFlowJobId(1, "job-123", sql);
+    expect(calls[0]?.values).toEqual(["job-123", 1]);
+  });
+});
+
+describe("setFixRound", () => {
+  test("updates fix_round", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await setFixRound(1, 2, sql);
+    expect(calls[0]?.text).toContain("SET fix_round");
+  });
+});
+
+describe("bumpWatermarks", () => {
+  test("raises both watermarks with GREATEST when both are given", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await bumpWatermarks(1, { last_review_id: 5, last_comment_id: 9 }, sql);
+    expect(calls[0]?.text).toContain("GREATEST");
+  });
+
+  test("touches only last_review_id when only that watermark is given", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await bumpWatermarks(1, { last_review_id: 5 }, sql);
+    expect(calls[0]?.text).not.toContain("last_comment_id");
+  });
+
+  test("touches only last_comment_id when only that watermark is given", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await bumpWatermarks(1, { last_comment_id: 9 }, sql);
+    expect(calls[0]?.text).not.toContain("last_review_id");
+  });
+
+  test("issues no query when neither watermark is given", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await bumpWatermarks(1, {}, sql);
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("nextCycleForIssue", () => {
+  test("returns one more than the highest recorded cycle", async () => {
+    const { sql } = createFakeSqlClient([[{ next_cycle: 5 }]]);
+    const cycle = await nextCycleForIssue("u-stem", "atelier-works", 42, sql);
+    expect(cycle).toBe(5);
+  });
+
+  test("returns 1 when the issue has never had a work item", async () => {
+    const { sql } = createFakeSqlClient([[{ next_cycle: 1 }]]);
+    const cycle = await nextCycleForIssue("u-stem", "atelier-works", 42, sql);
+    expect(cycle).toBe(1);
+  });
+
+  test("selects from factory.work_items filtered by owner, repo, and issue_number", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ next_cycle: 1 }]]);
+    await nextCycleForIssue("u-stem", "atelier-works", 42, sql);
+    expect(calls[0]?.text).toContain("FROM factory.work_items");
+  });
+});
+
+describe("latestPrWorkItem", () => {
+  test("returns null when the PR has never had a work item", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    const result = await latestPrWorkItem(
+      "u-stem",
+      "atelier-works",
+      7,
+      undefined,
+      sql,
+    );
+    expect(result).toBeNull();
+  });
+
+  test("parses the most recent row into a LatestPrWorkItem", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ id: 3, head_sha: "abc1234", fix_round: 1, last_comment_id: 9 }],
+    ]);
+    const result = await latestPrWorkItem(
+      "u-stem",
+      "atelier-works",
+      7,
+      undefined,
+      sql,
+    );
+    expect(result).toEqual({
+      id: 3,
+      headSha: "abc1234",
+      fixRound: 1,
+      lastCommentId: 9,
+    });
+  });
+
+  test("does not filter by kind when kind is omitted", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await latestPrWorkItem("u-stem", "atelier-works", 7, undefined, sql);
+    expect(calls[0]?.text).not.toContain("kind =");
+  });
+
+  test("filters by kind when kind is given", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await latestPrWorkItem("u-stem", "atelier-works", 7, "pr_fix", sql);
+    expect(calls[0]?.values).toContain("pr_fix");
+  });
+});
+
+describe("sumAgentCostSince", () => {
+  test("sums cost_usd since the given ISO timestamp", async () => {
+    const { sql } = createFakeSqlClient([[{ total_cost_usd: 12.5 }]]);
+    const total = await sumAgentCostSince("2026-09-26T00:00:00.000Z", sql);
+    expect(total).toBe(12.5);
+  });
+
+  test("returns 0 when no agent_runs rows fall in range", async () => {
+    const { sql } = createFakeSqlClient([[{ total_cost_usd: 0 }]]);
+    const total = await sumAgentCostSince("2026-09-26T00:00:00.000Z", sql);
+    expect(total).toBe(0);
+  });
+
+  test("filters by created_at >= the given timestamp", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ total_cost_usd: 0 }]]);
+    await sumAgentCostSince("2026-09-26T00:00:00.000Z", sql);
+    expect(calls[0]?.text).toContain("created_at >=");
+  });
+});
+
+describe("latestDraft", () => {
+  test("returns null when the work item has no draft", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    const draft = await latestDraft(1, sql);
+    expect(draft).toBeNull();
+  });
+
+  test("returns the most recently created draft", async () => {
+    const { sql } = createFakeSqlClient([
+      [
+        {
+          id: 3,
+          work_item_id: 1,
+          attempt: 2,
+          summary: "s",
+          markdown: "m",
+          diagrams: [],
+          open_questions: [],
+          created_at: "2026-09-26T00:00:00.000Z",
+        },
+      ],
+    ]);
+    const draft = await latestDraft(1, sql);
+    expect(draft?.attempt).toBe(2);
+  });
+
+  test("orders by created_at descending, limited to one row", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await latestDraft(1, sql);
+    expect(calls[0]?.text).toContain("ORDER BY created_at DESC");
   });
 });

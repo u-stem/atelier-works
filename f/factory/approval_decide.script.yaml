@@ -1,0 +1,32 @@
+summary: ''
+description: ''
+lock: '!inline f/factory/approval_decide.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties:
+    approver:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    decision:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    reason:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    work_item_id:
+      type: number
+      description: ''
+      default: null
+  required:
+    - work_item_id
+    - decision
+    - reason
+    - approver

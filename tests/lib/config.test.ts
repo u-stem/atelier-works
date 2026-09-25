@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   ConfigValidationError,
+  isRepoAllowed,
   loadConfig,
   parseFactoryConfig,
 } from "../../f/factory/lib/config.ts";
@@ -115,5 +116,48 @@ describe("loadConfig", () => {
   test("calls the injected getResource and validates its result", async () => {
     const config = await loadConfig(() => Promise.resolve(LEGACY_RAW_CONFIG));
     expect(config.instance_name).toBe("local");
+  });
+});
+
+describe("isRepoAllowed", () => {
+  const OWNERS = [{ name: "u-stem", kind: "user" as const }];
+
+  test("rejects an owner not in config.owners", () => {
+    const config = { owners: OWNERS, repo_allowlist: [] };
+    expect(isRepoAllowed(config, "someone-else", "repo")).toBe(false);
+  });
+
+  test("matches an owner case-insensitively", () => {
+    const config = { owners: OWNERS, repo_allowlist: [] };
+    expect(isRepoAllowed(config, "U-Stem", "atelier-works")).toBe(true);
+  });
+
+  test("allows any repo under an allowed owner when repo_allowlist is empty", () => {
+    const config = { owners: OWNERS, repo_allowlist: [] };
+    expect(isRepoAllowed(config, "u-stem", "any-repo")).toBe(true);
+  });
+
+  test("rejects a repo not in a non-empty repo_allowlist", () => {
+    const config = {
+      owners: OWNERS,
+      repo_allowlist: ["https://github.com/u-stem/other-repo"],
+    };
+    expect(isRepoAllowed(config, "u-stem", "atelier-works")).toBe(false);
+  });
+
+  test("allows a repo whose HTTPS clone URL is in repo_allowlist", () => {
+    const config = {
+      owners: OWNERS,
+      repo_allowlist: ["https://github.com/u-stem/atelier-works"],
+    };
+    expect(isRepoAllowed(config, "u-stem", "atelier-works")).toBe(true);
+  });
+
+  test("normalizes a trailing .git when matching repo_allowlist", () => {
+    const config = {
+      owners: OWNERS,
+      repo_allowlist: ["https://github.com/u-stem/atelier-works.git"],
+    };
+    expect(isRepoAllowed(config, "u-stem", "atelier-works")).toBe(true);
   });
 });

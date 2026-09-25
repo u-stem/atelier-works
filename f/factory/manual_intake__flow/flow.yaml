@@ -1,0 +1,95 @@
+summary: Manual intake
+description: 'Manually submit a factory task: opens the trigger Issue with the
+  same Markdown layout as .github/ISSUE_TEMPLATE/factory-task.yml, claims it the
+  same way poll_issues.ts would, and starts f/factory/pipeline (spec-cycle2.md
+  §3 M5).'
+value:
+  modules:
+    - id: create_issue
+      summary: Create the trigger Issue
+      value:
+        type: script
+        input_transforms:
+          acceptance_criteria:
+            type: javascript
+            expr: flow_input.acceptance_criteria
+          body:
+            type: javascript
+            expr: flow_input.body
+          owner:
+            type: javascript
+            expr: flow_input.owner
+          repo:
+            type: javascript
+            expr: flow_input.repo
+          title:
+            type: javascript
+            expr: flow_input.title
+        path: f/factory/steps/manual_intake_create_issue
+    - id: register
+      summary: Claim the Issue and start the pipeline
+      value:
+        type: script
+        input_transforms:
+          body:
+            type: javascript
+            expr: results.create_issue.body
+          issue_number:
+            type: javascript
+            expr: results.create_issue.number
+          issue_url:
+            type: javascript
+            expr: results.create_issue.htmlUrl
+          owner:
+            type: javascript
+            expr: results.create_issue.owner
+          repo:
+            type: javascript
+            expr: results.create_issue.repo
+          title:
+            type: javascript
+            expr: results.create_issue.title
+        path: f/factory/steps/manual_intake_register
+  failure_module:
+    id: failure
+    value:
+      type: script
+      input_transforms:
+        error:
+          type: javascript
+          expr: error.message
+        path:
+          type: static
+          value: f/factory/manual_intake
+      path: f/factory/on_error_flow
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  order:
+    - owner
+    - repo
+    - title
+    - body
+    - acceptance_criteria
+  properties:
+    acceptance_criteria:
+      type: string
+      description: 受入基準(acceptance criteria), one per line. Optional.
+      default: ''
+    body:
+      type: string
+      description: 目的(purpose) — what this task should achieve.
+    owner:
+      type: string
+      description: GitHub owner (user or org) of the target repository.
+    repo:
+      type: string
+      description: GitHub repository name.
+    title:
+      type: string
+      description: Issue title.
+  required:
+    - owner
+    - repo
+    - title
+    - body

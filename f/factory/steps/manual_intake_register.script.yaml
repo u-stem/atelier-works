@@ -1,0 +1,44 @@
+summary: ''
+description: ''
+lock: '!inline f/factory/steps/manual_intake_register.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties:
+    body:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    issue_number:
+      type: number
+      description: ''
+      default: null
+    issue_url:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    owner:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    repo:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    title:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+  required:
+    - owner
+    - repo
+    - issue_number
+    - issue_url
+    - title
+    - body

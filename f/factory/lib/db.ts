@@ -11,7 +11,12 @@
 // defaulting to `defaultSqlClient` (backed by `wmill.datatable()`), per
 // spec-cycle2.md §1's "external I/O must be injectable" rule.
 
-import * as wmill from "windmill-client";
+// Pinned to the deployed Windmill server's version (mise.toml's WM_VERSION)
+// per .claude/skills/windmill-script/SKILL.md — an unpinned import lets
+// dependency resolution drift to whatever's newest on npm at
+// `wmill generate-metadata` time, producing a client/server version
+// mismatch.
+import * as wmill from "windmill-client@1.817.0";
 import {
   type AgentRunRecord,
   type Approval,
@@ -100,6 +105,19 @@ function parseId(value: unknown, field: string): number {
     return Number(value);
   }
   throw new Error(`db: row field "${field}" is not a valid id`);
+}
+
+/** Same number-or-numeric-string leniency as parseId, for a non-id numeric
+ * aggregate (`SUM`/`COUNT`/arithmetic) that may also come back as either
+ * depending on serialization. */
+function parseNumericLike(value: unknown, field: string): number {
+  if (isNumber(value)) {
+    return value;
+  }
+  if (isString(value) && value.length > 0 && Number.isFinite(Number(value))) {
+    return Number(value);
+  }
+  throw new Error(`db: row field "${field}" is not a valid number`);
 }
 
 function parseNullableId(value: unknown, field: string): number | null {
@@ -691,4 +709,193 @@ export function toFixRoundRecord(row: SqlRow): FixRoundRecord {
     replies,
     commit_shas: commitShas,
   };
+}
+
+// ---------------------------------------------------------------------------
+// M5 promotions (spec-cycle2.md M5). Promoted from the small per-script
+// workarounds M5's implementers wrote against the (then out-of-scope) gap in
+// this file: f/factory/lib/poll_support.ts's setFlowJobId / setFixRound /
+// bumpWatermarks / nextCycleForIssue / latestPrWorkItem, and the local
+// `updateWorkItemFlowJobId` in f/factory/steps/manual_intake_register.ts /
+// f/factory/retry_work_item.ts (all duplicates of the same flow_job_id
+// update this module now owns as setFlowJobId). Call sites switch over on
+// their owners' own schedule.
+// ---------------------------------------------------------------------------
+
+/** Records the job id `runFlowAsync` returned, right after insert (spec-
+ * cycle2.md §7 item 7: "子フロー起動直後に flow_job_id を新 id に更新"). */
+export async function setFlowJobId(
+  id: number,
+  flowJobId: string,
+  sql: SqlClient = defaultSqlClient,
+): Promise<void> {
+  await sql`
+    UPDATE factory.work_items
+    SET flow_job_id = ${flowJobId}, updated_at = now()
+    WHERE id = ${id}
+  `.execute();
+}
+
+export async function setFixRound(
+  id: number,
+  round: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<void> {
+  await sql`
+    UPDATE factory.work_items
+    SET fix_round = ${round}, updated_at = now()
+    WHERE id = ${id}
+  `.execute();
+}
+
+export type WatermarkUpdate = {
+  last_review_id?: number;
+  last_comment_id?: number;
+};
+
+/**
+ * Raises `last_review_id` and/or `last_comment_id` to at least the given
+ * value (never lowers them — `GREATEST` guards against a stale/out-of-order
+ * call), touching only the column(s) `update` provides. A no-op (no query)
+ * when neither is given.
+ */
+export async function bumpWatermarks(
+  id: number,
+  update: WatermarkUpdate,
+  sql: SqlClient = defaultSqlClient,
+): Promise<void> {
+  const hasReview = update.last_review_id !== undefined;
+  const hasComment = update.last_comment_id !== undefined;
+
+  if (hasReview && hasComment) {
+    await sql`
+      UPDATE factory.work_items
+      SET last_review_id = GREATEST(COALESCE(last_review_id, 0), ${update.last_review_id}),
+          last_comment_id = GREATEST(COALESCE(last_comment_id, 0), ${update.last_comment_id}),
+          updated_at = now()
+      WHERE id = ${id}
+    `.execute();
+    return;
+  }
+  if (hasReview) {
+    await sql`
+      UPDATE factory.work_items
+      SET last_review_id = GREATEST(COALESCE(last_review_id, 0), ${update.last_review_id}),
+          updated_at = now()
+      WHERE id = ${id}
+    `.execute();
+    return;
+  }
+  if (hasComment) {
+    await sql`
+      UPDATE factory.work_items
+      SET last_comment_id = GREATEST(COALESCE(last_comment_id, 0), ${update.last_comment_id}),
+          updated_at = now()
+      WHERE id = ${id}
+    `.execute();
+  }
+}
+
+/** Next `cycle` number for (owner, repo, issueNumber): one greater than the
+ * highest cycle ever recorded (across terminal and active rows alike), or 1
+ * if this issue has never had a work item. */
+export async function nextCycleForIssue(
+  owner: string,
+  repo: string,
+  issueNumber: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  const rows = await sql`
+    SELECT COALESCE(MAX(cycle), 0) + 1 AS next_cycle
+    FROM factory.work_items
+    WHERE owner = ${owner} AND repo = ${repo} AND issue_number = ${issueNumber}
+  `.fetch();
+  const row = rows[0];
+  if (row === undefined) {
+    return 1;
+  }
+  return parseNumericLike(row.next_cycle, "next_cycle");
+}
+
+export type LatestPrWorkItem = {
+  readonly id: number;
+  readonly headSha: string | null;
+  readonly fixRound: number;
+  readonly lastCommentId: number;
+};
+
+/** Most recent (by created_at) work_items row for this PR — of any kind
+ * when `kind` is omitted, or restricted to one kind — `null` if none
+ * exists. Backs both the review path's "unprocessed head_sha" check and the
+ * fix path's fix_round / last_comment_id carry-forward. */
+export async function latestPrWorkItem(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  kind?: WorkItemKind,
+  sql: SqlClient = defaultSqlClient,
+): Promise<LatestPrWorkItem | null> {
+  const rows =
+    kind === undefined
+      ? await sql`
+          SELECT id, head_sha, fix_round, last_comment_id
+          FROM factory.work_items
+          WHERE owner = ${owner} AND repo = ${repo} AND pr_number = ${prNumber}
+          ORDER BY created_at DESC
+          LIMIT 1
+        `.fetch()
+      : await sql`
+          SELECT id, head_sha, fix_round, last_comment_id
+          FROM factory.work_items
+          WHERE owner = ${owner} AND repo = ${repo} AND pr_number = ${prNumber} AND kind = ${kind}
+          ORDER BY created_at DESC
+          LIMIT 1
+        `.fetch();
+  const row = rows[0];
+  if (row === undefined) {
+    return null;
+  }
+  return {
+    id: parseId(row.id, "id"),
+    headSha: parseNullableString(row.head_sha, "head_sha"),
+    fixRound: parseRequiredNumber(row.fix_round, "fix_round"),
+    lastCommentId:
+      row.last_comment_id === null || row.last_comment_id === undefined
+        ? 0
+        : parseId(row.last_comment_id, "last_comment_id"),
+  };
+}
+
+/** Total factory.agent_runs cost since `sinceIso` (inclusive), for the
+ * daily budget check against factory_config.daily_budget_usd. */
+export async function sumAgentCostSince(
+  sinceIso: string,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  const rows = await sql`
+    SELECT COALESCE(SUM(cost_usd), 0) AS total_cost_usd
+    FROM factory.agent_runs
+    WHERE created_at >= ${sinceIso}
+  `.fetch();
+  const row = rows[0];
+  if (row === undefined) {
+    return 0;
+  }
+  return parseNumericLike(row.total_cost_usd, "total_cost_usd");
+}
+
+/** Most recently created factory.requirement_drafts row for a work item, or
+ * `null` if it has none yet. */
+export async function latestDraft(
+  workItemId: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<RequirementDraft | null> {
+  const rows = await sql`
+    SELECT * FROM factory.requirement_drafts
+    WHERE work_item_id = ${workItemId}
+    ORDER BY created_at DESC
+    LIMIT 1
+  `.fetch();
+  const row = rows[0];
+  return row === undefined ? null : toRequirementDraft(row);
 }

@@ -30,9 +30,10 @@ description: 本リポジトリ (atelier-works) で Windmill の script / flow /
 
 - 可変だが秘密ではない設定は resource `f/factory/factory_config`(resource type `c_factory_config`)から取得する。
 - 型は `wmill generate-metadata` / `wmill resource-type generate-namespace` が生成する `rt.d.ts` の `RT.CFactoryConfig` を使う。`rt.d.ts` は tsconfig の `include` に入るアンビエント型定義ファイルで、`RT` はグローバル名前空間として提供される。**import 文は不要**(managed skill `write-script-bun` の「Resource Types」節と同じ扱い)。
+- `windmill-client` の import は **バージョンを固定する**: `import * as wmill from "windmill-client@1.817.0"`(Windmill サーバーのバージョンに合わせる。固定しないと lock の版がずれる)。
 
 ```ts
-import * as wmill from "windmill-client";
+import * as wmill from "windmill-client@1.817.0";
 
 export async function main() {
   const config: RT.CFactoryConfig = await wmill.getResource("f/factory/factory_config");
@@ -41,6 +42,7 @@ export async function main() {
 ```
 
 `windmill-client` の型引数対応状況によっては `getResource<RT.CFactoryConfig>(...)` の形も使えるが、いずれの書き方でも `as` によるキャストはしない(戻り値への型注釈、または型ガードでの検証で受け取る)。resource の中身を推測で決め打ちせず、`rt.d.ts` の型定義を必ず確認してから使う。
+- `getResultMaybe` / `getResult` / `getWorkspace` / `getStatePath` などは named export ではなく**default export のオブジェクトにのみ存在する**(`node_modules/windmill-client` の `index.d.ts` で確認済み)。これらが必要な場合は `import wmillDefault, * as wmill from "windmill-client@1.817.0"` として `wmillDefault.getResultMaybe(...)` のように呼ぶ。
 
 ## TypeScript の規約
 
@@ -134,3 +136,9 @@ M4 のゲートで worker 内で実測した外部コマンド・API の挙動�
 - `f/factory/lib/*.ts`(`main` を持たない helper module)は wmill が script として扱い、`wmill script run` で実行した際に相対 import が実行時に解決されることを確認済み。
 - `wmill generate-metadata` は各 lib ファイルに対しても空スキーマの `.script.yaml` / `.lock` を生成する(いずれもコミット対象)。
 - `wmill.yaml` の `codebases` バンドルは**不要**(相対 import のままで問題ない)。
+
+## 終端 status では wip ラベル・トリガーラベルの両方を外す
+
+work item を終端 status(`approved` / `needs_human` / `expired` / `failed` / `reviewed` / `rereview_requested` / `blocked` / `cancelled`)にするフローのステップは、必ず対象 Issue / PR から `wip` ラベルを外す。外し忘れると、`poll_issues` / `poll_prs` の検索クエリ(`-label:<wip>`)から対象が永久に外れ、二度と拾われなくなる。
+
+**加えて、トリガーラベル(Issue の `factory`、PR の `factory:review` / `factory:fix`)も外す**。`approved` の場合だけは `factory` を外す代わりに `factory:approved` へ付け替える。トリガーラベルを残したままにすると、次回の poll で `label:<trigger> -label:<wip>` の検索条件に再び合致し、孤児失敗した Issue / PR が自動で再クレーム → 再試行を無限に繰り返してしまう。人がラベルを付け直したときだけ新しいサイクル・再実行が始まる設計にする。

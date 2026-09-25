@@ -292,3 +292,36 @@ export async function loadConfig(
   const raw = await getResource();
   return parseFactoryConfig(raw);
 }
+
+/**
+ * Whether `owner`/`repo` is allowed to be targeted by this factory instance:
+ * `owner` must be one of `config.owners` (case-insensitive, as GitHub logins
+ * are), and when `config.repo_allowlist` is non-empty the repo's HTTPS
+ * clone URL (with or without a trailing `.git`) must appear in it
+ * (spec-cycle2.md §7 item 10: "repo_allowlist([] = owners 全体)"). Promoted
+ * from f/factory/steps/manual_intake_create_issue.ts's own copy — that
+ * call site switches over on its owner's own schedule.
+ */
+export function isRepoAllowed(
+  config: Pick<FactoryConfig, "owners" | "repo_allowlist">,
+  owner: string,
+  repo: string,
+): boolean {
+  const ownerAllowed = config.owners.some(
+    (candidate) => candidate.name.toLowerCase() === owner.toLowerCase(),
+  );
+  if (!ownerAllowed) {
+    return false;
+  }
+  if (config.repo_allowlist.length === 0) {
+    return true;
+  }
+  const normalize = (url: string): string =>
+    url
+      .trim()
+      .replace(/\.git$/i, "")
+      .replace(/\/+$/, "")
+      .toLowerCase();
+  const target = normalize(`https://github.com/${owner}/${repo}`);
+  return config.repo_allowlist.some((entry) => normalize(entry) === target);
+}
