@@ -1,0 +1,130 @@
+description: 'Software Factory runtime configuration: who owns triggered repos,
+  label names, Claude Code execution limits/budget, and instance identity.'
+format_extension: null
+is_fileset: false
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  order:
+    - owners
+    - trigger_label
+    - wip_label
+    - approved_label
+    - allowed_labeler_associations
+    - model
+    - max_attempts
+    - max_turns
+    - max_budget_usd_per_run
+    - daily_budget_usd
+    - claude_timeout_sec
+    - worktree_ttl_days
+    - factory_repo
+    - instance_name
+    - windmill_public_url
+  properties:
+    allowed_labeler_associations:
+      type: array
+      description: GitHub author_association values allowed to apply trigger_label for
+        the issue to be picked up.
+      default:
+        - OWNER
+        - MEMBER
+        - COLLABORATOR
+      items:
+        type: string
+        enum:
+          - OWNER
+          - MEMBER
+          - COLLABORATOR
+    approved_label:
+      type: string
+      description: Label applied once requirements are approved.
+      default: factory:approved
+    claude_timeout_sec:
+      type: integer
+      description: Subprocess timeout in seconds for a single Claude Code invocation.
+      default: 1800
+    daily_budget_usd:
+      type: number
+      description: Daily USD budget across all agent runs before new runs are refused.
+      default: 50
+    factory_repo:
+      type: string
+      description: HTTPS clone URL of this factory repository (self-update target).
+      format: uri
+    instance_name:
+      type: string
+      description: Label for this Windmill instance, shown in Discord notices and
+        Issue comments so multiple instances can be told apart.
+    max_attempts:
+      type: integer
+      description: Maximum requirement-generation attempts before falling back to
+        needs_human.
+      default: 3
+    max_budget_usd_per_run:
+      type: number
+      description: Max USD budget passed to `claude -p --max-budget-usd` per stage run.
+      default: 5
+    max_turns:
+      type: integer
+      description: Max turns passed to `claude -p --max-turns` per stage run.
+      default: 40
+    model:
+      type: string
+      description: Claude Code model used for factory stages.
+      default: claude-opus-5-5
+    owners:
+      type: array
+      description: Accounts whose repos the factory is allowed to poll for triggered issues.
+      items:
+        type: object
+        order:
+          - name
+          - kind
+        properties:
+          name:
+            type: string
+            description: GitHub login of the user or organization.
+          kind:
+            type: string
+            description: Whether the owner is a personal account or an organization.
+            enum:
+              - user
+              - org
+        required:
+          - name
+          - kind
+    trigger_label:
+      type: string
+      description: Issue label that hands an issue to the factory.
+      default: factory
+    windmill_public_url:
+      type: string
+      description: Base URL used to build resume/approval links in notifications.
+      default: http://127.0.0.1:8080
+      format: uri
+    wip_label:
+      type: string
+      description: Label applied while an instance has claimed an issue.
+      default: factory:wip
+    worktree_ttl_days:
+      type: integer
+      description: Days a terminal-status worktree is kept before cleanup_workspaces
+        removes it.
+      default: 7
+  required:
+    - owners
+    - trigger_label
+    - wip_label
+    - approved_label
+    - allowed_labeler_associations
+    - model
+    - max_attempts
+    - max_turns
+    - max_budget_usd_per_run
+    - daily_budget_usd
+    - claude_timeout_sec
+    - worktree_ttl_days
+    - factory_repo
+    - instance_name
+    - windmill_public_url

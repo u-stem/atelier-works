@@ -1,19 +1,21 @@
 # Managed by mise.toml's `setup` task (`lefthook install`). Do not bypass
 # with `--no-verify`; see AGENTS.md.
+# Every command goes through `mise exec --` so the hooks work even when mise
+# is not activated in the committer's shell (only `mise` itself must be on PATH).
 pre-commit:
   parallel: true
   commands:
     biome:
       glob: "*.{ts,json,jsonc}"
-      run: bunx --bun biome check --no-errors-on-unmatched {staged_files}
+      run: mise exec -- bunx --bun biome check --no-errors-on-unmatched {staged_files}
     no-type-assertions:
       glob: "*.ts"
-      run: bun run scripts/lint-no-type-assertions.ts {staged_files}
+      run: mise exec -- bun run scripts/lint-no-type-assertions.ts {staged_files}
     gitleaks:
-      run: gitleaks protect --staged --redact --no-banner
+      run: mise exec -- gitleaks protect --staged --redact --no-banner
     wmill-lint:
       glob: "f/**"
-      run: wmill lint f
+      run: mise exec -- wmill lint f
 
 commit-msg:
   commands:
