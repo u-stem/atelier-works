@@ -1,0 +1,112 @@
+[tools]
+node = "24"
+bun = "1.4.2"
+"npm:windmill-cli" = "1.817.0"
+gh = "2.101.0"
+lefthook = "2.1.14"
+gitleaks = "8.30.1"
+
+[env]
+WMILL_CONFIG_DIR = "{{config_root}}/.wmill"
+WM_VERSION = "1.817.0"
+WM_HTTP_PORT = "8080"
+WM_BIND = "127.0.0.1"
+WM_BASE_URL = "http://127.0.0.1:8080"
+CLAUDE_VERSION = "2.1.282"
+GH_VERSION = "2.101.0"
+GTR_REF = "v2.11.1"
+GTR_COMMIT = "f4df6344a362303e6b47bc92955fef3bba468426"
+WMILL_VERSION = "1.817.0"
+LOG_MAX_SIZE = "20m"
+LOG_MAX_FILE = "10"
+
+[tasks.up]
+description = "Start the local Windmill stack"
+run = "docker compose -f infra/docker-compose.yml up -d --build"
+
+[tasks.down]
+description = "Stop the local Windmill stack"
+run = "docker compose -f infra/docker-compose.yml down"
+
+[tasks.build]
+description = "Build the worker image"
+run = "docker compose -f infra/docker-compose.yml build windmill_worker"
+
+[tasks.logs]
+description = "Tail logs from the local Windmill stack"
+run = "docker compose -f infra/docker-compose.yml logs -f"
+
+[tasks.setup]
+description = "Install mise-managed tools, project dependencies, and git hooks"
+run = """
+mise install
+bun install --frozen-lockfile
+lefthook install
+"""
+
+[tasks.deploy]
+description = "Update checkout, rebuild, restart, push, and migrate"
+run = """
+git pull --ff-only
+docker compose -f infra/docker-compose.yml pull
+docker compose -f infra/docker-compose.yml build windmill_worker
+docker compose -f infra/docker-compose.yml up -d
+wmill sync push --yes --keep-deleted
+wmill datatable migrate up
+"""
+
+[tasks.push]
+description = "Push local sync state to the Windmill workspace (keeps remote-only items)"
+run = "wmill sync push --yes --keep-deleted"
+
+[tasks."push:prune"]
+description = "Push and delete remote items that no longer exist locally (manual only)"
+run = "wmill sync push --yes"
+
+[tasks."push:dry"]
+description = "Dry-run of wmill sync push"
+run = "wmill sync push --dry-run"
+
+[tasks.pull]
+description = "Pull remote Windmill state into the sync root"
+run = "wmill sync pull"
+
+[tasks.migrate]
+description = "Apply pending datatable migrations"
+run = "wmill datatable migrate up"
+
+[tasks.lint]
+description = "Run biome, wmill lint, and the type-assertion lint script"
+run = """
+bunx --bun biome check .
+if [ -d f ]; then wmill lint f; fi
+bun run scripts/lint-no-type-assertions.ts
+"""
+
+[tasks.typecheck]
+description = "Type-check the repository"
+run = "bunx --bun tsc --noEmit"
+
+[tasks.test]
+description = "Run the test suite"
+run = "bun test"
+
+[tasks.check]
+description = "Run lint, typecheck, and test in order"
+run = """
+mise run lint
+mise run typecheck
+mise run test
+"""
+
+[tasks.doctor]
+description = "Run environment diagnostics"
+run = "scripts/doctor.sh"
+
+[tasks.bootstrap]
+description = "Bootstrap the local Windmill workspace"
+run = "scripts/bootstrap.sh"
+
+[tasks."test:db"]
+description = "Apply datatable migrations to a scratch database and SELECT from every view"
+run = "scripts/test-db.sh"

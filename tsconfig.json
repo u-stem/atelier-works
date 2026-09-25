@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.wmill.json",
+  "compilerOptions": {
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "verbatimModuleSyntax": true
+  },
+  "include": ["f/**/*.ts", "tests/**/*.ts", "scripts/**/*.ts", "rt.d.ts"]
+}

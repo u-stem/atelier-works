@@ -1,0 +1,109 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Setup mise
+        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Lint, typecheck, and test
+        run: mise run check
+
+      - name: Determine gitleaks scan range
+        # Scope the scan to the commits this push/PR actually introduces
+        # (full history is available thanks to fetch-depth: 0 above). Falls
+        # back to an empty range (gitleaks then scans full history) when
+        # there is no meaningful diff base, e.g. `before` is all zeros on a
+        # brand new branch push.
+        id: gitleaks-range
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          zero="0000000000000000000000000000000000000000"
+          range=""
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            range="${BASE_SHA}..${HEAD_SHA}"
+          elif [ "$EVENT_NAME" = "push" ] && [ "$BEFORE_SHA" != "$zero" ] && [ -n "$BEFORE_SHA" ]; then
+            range="${BEFORE_SHA}..${AFTER_SHA}"
+          fi
+          echo "range=${range}" >> "$GITHUB_OUTPUT"
+
+      - name: Scan for leaked secrets
+        # gitleaks comes from mise.toml's [tools] so the version is pinned in
+        # one place instead of also pinning a separate GitHub Action.
+        env:
+          SCAN_RANGE: ${{ steps.gitleaks-range.outputs.range }}
+        run: |
+          set -euo pipefail
+          if [ -n "$SCAN_RANGE" ]; then
+            mise exec -- gitleaks detect --redact --no-banner --source . --log-opts "$SCAN_RANGE"
+          else
+            mise exec -- gitleaks detect --redact --no-banner --source .
+          fi
+
+      - name: Build worker image
+        # There is no .env file: worker build inputs live in mise.toml's
+        # [env]. `mise exec -c '...'` runs the command through a shell with
+        # that [env] applied, so $WM_VERSION etc. are expanded by mise's
+        # subshell rather than by this step's own shell (which would not have
+        # them). These are the same build args infra/docker-compose.yml passes
+        # to the worker image build.
+        run: |
+          mise exec -c '
+            docker build infra/worker \
+              --build-arg WM_VERSION=$WM_VERSION \
+              --build-arg CLAUDE_VERSION=$CLAUDE_VERSION \
+              --build-arg GH_VERSION=$GH_VERSION \
+              --build-arg GTR_REF=$GTR_REF \
+              --build-arg GTR_COMMIT=$GTR_COMMIT \
+              --build-arg WMILL_VERSION=$WMILL_VERSION
+          '
+
+  test-db:
+    # Independent of the `check` job (and its worker image build) so a slow
+    # or flaky Postgres start never blocks/is blocked by the image build.
+    runs-on: ubuntu-latest
+    env:
+      # Scratch-only: migrations/datatable/main/*.{up,down}.sql are applied to
+      # a disposable "factory_test" database that scripts/test-db.sh drops on
+      # exit; the real "windmill" database this password also guards is never
+      # touched. Not a real secret, so it is fine to inline here rather than
+      # route through mise.local.toml (which does not exist in CI).
+      DB_PASSWORD: ci-dummy-password
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup mise
+        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+
+      - name: Start a scratch Postgres (db service only)
+        run: mise exec -- docker compose -f infra/docker-compose.yml up -d db --wait
+
+      - name: Apply and roll back datatable migrations against a scratch database
+        run: mise run test:db
+
+      - name: Tear down Postgres
+        if: always()
+        run: mise exec -- docker compose -f infra/docker-compose.yml down -v

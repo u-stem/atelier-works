@@ -1,0 +1,40 @@
+name: Factory タスク
+description: Software Factory リポジトリへの作業依頼
+title: "[factory] "
+labels: ["factory"]
+body:
+  - type: textarea
+    id: purpose
+    attributes:
+      label: 目的
+      description: このタスクで達成したいこと
+    validations:
+      required: true
+  - type: textarea
+    id: background
+    attributes:
+      label: 背景
+      description: なぜ必要か、関連する経緯や参照
+    validations:
+      required: false
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 受入基準
+      description: 完了とみなせる条件を箇条書きで
+    validations:
+      required: true
+  - type: textarea
+    id: constraints
+    attributes:
+      label: 制約
+      description: 触ってよい範囲、避けるべき手段など
+    validations:
+      required: false
+  - type: textarea
+    id: scope
+    attributes:
+      label: 対象範囲
+      description: 対象ファイル・ディレクトリ
+    validations:
+      required: false

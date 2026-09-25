@@ -1,0 +1,26 @@
+# Managed by mise.toml's `setup` task (`lefthook install`). Do not bypass
+# with `--no-verify`; see AGENTS.md.
+pre-commit:
+  parallel: true
+  commands:
+    biome:
+      glob: "*.{ts,json,jsonc}"
+      run: bunx --bun biome check --no-errors-on-unmatched {staged_files}
+    no-type-assertions:
+      glob: "*.ts"
+      run: bun run scripts/lint-no-type-assertions.ts {staged_files}
+    gitleaks:
+      run: gitleaks protect --staged --redact --no-banner
+    wmill-lint:
+      glob: "f/**"
+      run: wmill lint f
+
+commit-msg:
+  commands:
+    check-message:
+      run: scripts/check-commit-msg.sh {1}
+
+pre-push:
+  commands:
+    check:
+      run: mise run check
