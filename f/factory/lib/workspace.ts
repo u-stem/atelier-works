@@ -1,0 +1,1048 @@
+// Clone / fetch / worktree management for target repositories and the
+// factory's own self clone (spec-cycle2.md §1 workspace.ts, §7 items 2 and
+// 9). All subprocess execution goes through the injected `run`
+// (`CommandRunner`) — nothing here spawns `Bun.spawn` directly except the
+// default `runCommand` implementation, so every function is testable with a
+// fake runner.
+//
+// `CommandRunner` / `CommandResult` are defined here (not in types.ts,
+// which predates this module) and re-exported for use by github.ts and
+// claude.ts, which shell out the same way.
+//
+// Security hardening (post-M4 security-audit fixes):
+// - Every git invocation goes through `buildGitArgv`, which resets
+//   `credential.helper` (`-c credential.helper=`, clearing any
+//   system/global helper list) and disables hooks/fsmonitor
+//   (`-c core.hooksPath=/dev/null -c core.fsmonitor=false`) so a
+//   compromised/malicious clone can't run arbitrary hook scripts or an
+//   fsmonitor helper. Only network operations (clone/fetch/push) add back
+//   `-c credential.helper='!gh auth git-credential'` and get `GH_TOKEN` in
+//   their env (`networkGitEnv`); local-only operations (rev-parse, status,
+//   add, commit, worktree, diff) use `localGitEnv`, which never carries the
+//   token.
+// - User-derived positional arguments (URLs, dirs, shas, branches) are
+//   preceded by `--` to stop a value starting with `-` from being
+//   misread as a flag — EXCEPT for `git rev-parse`, which is a documented,
+//   verified exception: `git rev-parse -- <rev>` doesn't work like other
+//   subcommands (it degrades `--verify` to "no revision given", and in
+//   non-`--verify` mode it *echoes* a literal `--` line before the
+//   requested output instead of suppressing option parsing). Verified
+//   empirically; rev-parse calls below rely on `assertSha`/`assertBranchName`
+//   input validation instead for the same "no leading `-`" protection.
+//   `git gtr new` (a third-party subcommand, not core git) also skips `--`
+//   since its own argv handling isn't guaranteed `--`-compatible; branch
+//   names are validated via `assertBranchName` before reaching it either way.
+// - Callers pass GitHub-sourced identifiers (owner, repo, sha, branch)
+//   through `assertGitHubName` / `assertSha` / `assertBranchName`
+//   (types.ts) before they're interpolated into a URL, ref, or directory
+//   path.
+// - `commitAndPush` verifies the worktree it's about to run git in is a
+//   *registered* worktree of the expected repo, and that its `.git` file's
+//   `gitdir:` target actually lives under that repo's
+//   `.git/worktrees/<name>/` — guards against operating on a
+//   worktree directory that was redirected (e.g. a replaced `.git` file)
+//   to point somewhere else.
+//
+// Locking note: `withRepoLock` is a userspace lockfile mutex (atomic
+// exclusive file creation + mtime-based staleness + a per-acquisition
+// token that gates release, so a reclaimed lock is never deleted out from
+// under its new owner), not a literal flock(2) syscall — see the
+// implementer's report for why (Bun/Node have no core flock binding, and
+// wrapping an in-process async callback around the `flock(1)` CLI is
+// fragile). This is enough to serialize concurrent `ensureRepo` calls for
+// the same repo within one worker container.
+
+import { access, open, readFile, rename, stat, unlink } from "node:fs/promises";
+import { dirname } from "node:path";
+import { maskSecrets } from "./log.ts";
+import { assertBranchName, assertGitHubName, assertSha } from "./types.ts";
+
+// ---------------------------------------------------------------------------
+// Subprocess execution (shared with github.ts / claude.ts)
+// ---------------------------------------------------------------------------
+
+export type CommandResult = {
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly exitCode: number;
+  readonly timedOut: boolean;
+};
+
+export type CommandRunOptions = {
+  readonly cwd?: string;
+  readonly env?: Readonly<Record<string, string>>;
+  readonly stdin?: string;
+  readonly timeoutMs?: number;
+};
+
+export type CommandRunner = (
+  argv: readonly string[],
+  options?: CommandRunOptions,
+) => Promise<CommandResult>;
+
+const DEFAULT_TIMEOUT_MS = 60_000;
+const DEFAULT_KILL_GRACE_MS = 5_000;
+
+export type BunCommandRunnerOptions = {
+  /** Grace period between SIGTERM and SIGKILL when a command times out. Default 5000ms. */
+  readonly killGraceMs?: number;
+};
+
+/**
+ * Build a `CommandRunner` that spawns via `Bun.spawn`. On timeout, sends
+ * SIGTERM first and escalates to SIGKILL after `killGraceMs` (default 5s)
+ * if the process hasn't exited by then.
+ */
+// Signaling only the directly-spawned pid is not enough to guarantee a
+// timed-out command actually stops: if it forked a child of its own (e.g. a
+// shell running a pipeline, or a credential helper), that grandchild is not
+// signaled and can keep the stdout/stderr pipes open — `Promise.all` below
+// then hangs reading those pipes until the grandchild exits on its own,
+// silently defeating the timeout. Verified empirically (`sh -c "trap ''
+// TERM; sleep 5"` killed only by pid: the pipe read didn't resolve until
+// the full 5s naturally elapsed). Fix: spawn `detached: true` (POSIX
+// `setsid()`, making the child its own process-group leader) and signal the
+// whole group via `process.kill(-pid, signal)`.
+function killProcessGroup(pid: number, signal: "SIGTERM" | "SIGKILL"): void {
+  try {
+    process.kill(-pid, signal);
+  } catch {
+    // Already exited — nothing to signal.
+  }
+}
+
+export function createBunCommandRunner(
+  options: BunCommandRunnerOptions = {},
+): CommandRunner {
+  const killGraceMs = options.killGraceMs ?? DEFAULT_KILL_GRACE_MS;
+
+  return async (argv, runOptions = {}) => {
+    const proc = Bun.spawn({
+      cmd: [...argv],
+      ...(runOptions.cwd !== undefined ? { cwd: runOptions.cwd } : {}),
+      env: runOptions.env !== undefined ? { ...runOptions.env } : {},
+      stdin: runOptions.stdin !== undefined ? "pipe" : "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+      detached: true,
+    });
+
+    if (
+      runOptions.stdin !== undefined &&
+      proc.stdin !== undefined &&
+      typeof proc.stdin !== "number"
+    ) {
+      proc.stdin.write(runOptions.stdin);
+      proc.stdin.end();
+    }
+
+    let timedOut = false;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      killProcessGroup(proc.pid, "SIGTERM");
+      killTimer = setTimeout(() => {
+        killProcessGroup(proc.pid, "SIGKILL");
+      }, killGraceMs);
+    }, runOptions.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    clearTimeout(timer);
+    if (killTimer !== undefined) clearTimeout(killTimer);
+
+    return { stdout, stderr, exitCode, timedOut };
+  };
+}
+
+/** Default `CommandRunner`: `createBunCommandRunner()` with default settings. */
+export const runCommand: CommandRunner = createBunCommandRunner();
+
+// ---------------------------------------------------------------------------
+// git argv / env construction
+// ---------------------------------------------------------------------------
+
+export type GitCommandOptions = {
+  /** Whether this invocation talks to a remote (clone/fetch/push) — adds the gh credential helper and requires `GH_TOKEN` in env. */
+  readonly network?: boolean;
+};
+
+/**
+ * Prefix `args` with the common hardening flags: reset `credential.helper`
+ * (clearing any system/global helper), disable hooks and fsmonitor, and —
+ * for network operations only — add back the gh credential helper.
+ */
+function buildGitArgv(
+  args: readonly string[],
+  options: GitCommandOptions = {},
+): string[] {
+  return [
+    "git",
+    "-c",
+    "core.hooksPath=/dev/null",
+    "-c",
+    "core.fsmonitor=false",
+    "-c",
+    "credential.helper=",
+    ...(options.network === true
+      ? ["-c", "credential.helper=!gh auth git-credential"]
+      : []),
+    ...args,
+  ];
+}
+
+/** Env for git operations that never touch the network — no `GH_TOKEN`. */
+function localGitEnv(home?: string, path?: string): Record<string, string> {
+  const env: Record<string, string> = { GIT_TERMINAL_PROMPT: "0" };
+  const resolvedHome = home ?? process.env.HOME;
+  if (resolvedHome !== undefined) env.HOME = resolvedHome;
+  const resolvedPath = path ?? process.env.PATH;
+  if (resolvedPath !== undefined) env.PATH = resolvedPath;
+  return env;
+}
+
+/** Env for git operations that clone/fetch/push — carries `GH_TOKEN` for the gh credential helper. */
+function networkGitEnv(
+  ghToken: string,
+  home?: string,
+  path?: string,
+): Record<string, string> {
+  return { ...localGitEnv(home, path), GH_TOKEN: ghToken };
+}
+
+/** Build a masked `Error` from a failed `CommandResult`, for a consistent `throw` shape across this module. */
+function gitError(context: string, result: CommandResult): Error {
+  return new Error(maskSecrets(`${context}: ${result.stderr.trim()}`));
+}
+
+/**
+ * The lock path scoping ALL git activity for one repo's directory tree
+ * (`ensureRepo`'s main clone plus every worktree under the same parent
+ * dir) — `repoDir` is always `<owner-repo-dir>/main`, so its parent is the
+ * same `<baseDir>/<owner>/<repo>` directory `ensureRepo` locks. Shared by
+ * `addDetachedWorktree` / `createGtrWorktree` / `removeWorktree` /
+ * `commitAndPush` (code-review fix: avoid `.git/index.lock` races between
+ * concurrent flows touching the same repo).
+ */
+function repoLockPath(repoDir: string): string {
+  return `${dirname(repoDir)}/main.lock`;
+}
+
+// ---------------------------------------------------------------------------
+// Filesystem existence check (injectable for tests)
+// ---------------------------------------------------------------------------
+
+export type PathExists = (path: string) => Promise<boolean>;
+
+export const pathExists: PathExists = async (path) => {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+// ---------------------------------------------------------------------------
+// withRepoLock: userspace lockfile mutex
+// ---------------------------------------------------------------------------
+
+export type LockFs = {
+  /** Atomically create `lockPath` with `content`; false if it already exists. */
+  readonly tryCreate: (lockPath: string, content: string) => Promise<boolean>;
+  readonly read: (lockPath: string) => Promise<string | null>;
+  /** File mtime in ms since epoch, or null if the lock doesn't exist. */
+  readonly mtimeMs: (lockPath: string) => Promise<number | null>;
+  /** Remove the lock (rename-then-unlink internally); no-op if already gone. */
+  readonly remove: (lockPath: string) => Promise<void>;
+};
+
+type ErrnoLike = Error & { readonly code?: string };
+
+function isErrnoLike(err: unknown): err is ErrnoLike {
+  if (!(err instanceof Error)) return false;
+  const maybeCode = (err as { code?: unknown }).code;
+  return maybeCode === undefined || typeof maybeCode === "string";
+}
+
+export const defaultLockFs: LockFs = {
+  tryCreate: async (lockPath, content) => {
+    try {
+      const handle = await open(lockPath, "wx");
+      try {
+        await handle.writeFile(content);
+      } finally {
+        await handle.close();
+      }
+      return true;
+    } catch (err) {
+      if (isErrnoLike(err) && err.code === "EEXIST") {
+        return false;
+      }
+      throw err;
+    }
+  },
+  read: async (lockPath) => {
+    try {
+      return await readFile(lockPath, "utf8");
+    } catch {
+      return null;
+    }
+  },
+  mtimeMs: async (lockPath) => {
+    try {
+      const info = await stat(lockPath);
+      return info.mtimeMs;
+    } catch {
+      return null;
+    }
+  },
+  remove: async (lockPath) => {
+    // Rename-then-unlink: if the lock was already replaced/removed by
+    // someone else, the rename itself fails (ENOENT) instead of us
+    // unlinking whatever now occupies `lockPath`.
+    const tempPath = `${lockPath}.removing-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    try {
+      await rename(lockPath, tempPath);
+    } catch (err) {
+      if (isErrnoLike(err) && err.code === "ENOENT") return;
+      throw err;
+    }
+    await unlink(tempPath);
+  },
+};
+
+type LockFileContent = { readonly token: string };
+
+// The predicate's target type is a named alias (not an inline `{...}`
+// literal) so `scripts/lint-no-type-assertions.ts`'s brace-depth heuristic
+// correctly recognizes this whole body as a type-guard region — an inline
+// object-literal return type confuses it into closing the guard region at
+// the literal's own `}` instead of the function body's.
+function isLockFileContent(value: unknown): value is LockFileContent {
+  if (typeof value !== "object" || value === null) return false;
+  if (!("token" in value)) return false;
+  return typeof (value as { token: unknown }).token === "string";
+}
+
+function parseLockToken(content: string): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    return null;
+  }
+  if (!isLockFileContent(parsed)) return null;
+  return parsed.token;
+}
+
+const defaultSleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+export type WithRepoLockOptions<T> = {
+  readonly lockPath: string;
+  readonly fn: () => Promise<T>;
+  readonly lockFs?: LockFs;
+  readonly now?: () => Date;
+  readonly sleep?: (ms: number) => Promise<void>;
+  /** A lock file whose mtime is older than this is treated as abandoned by a crashed holder. Default 10 minutes. */
+  readonly staleMs?: number;
+  readonly pollMs?: number;
+  readonly maxWaitMs?: number;
+};
+
+/**
+ * Run `fn` while holding an exclusive lock keyed by `lockPath`. Serializes
+ * concurrent callers within one worker container (e.g. two flows both
+ * calling `ensureRepo` for the same repo). See the module doc comment for
+ * why this is a lockfile mutex rather than a `flock(2)` syscall, and for
+ * the token/mtime staleness protocol.
+ */
+export async function withRepoLock<T>(
+  opts: WithRepoLockOptions<T>,
+): Promise<T> {
+  const lockFs = opts.lockFs ?? defaultLockFs;
+  const now = opts.now ?? (() => new Date());
+  const sleep = opts.sleep ?? defaultSleep;
+  const staleMs = opts.staleMs ?? 10 * 60_000;
+  const pollMs = opts.pollMs ?? 200;
+  // 5 minutes (code-review fix): now shared by every repo-tree git op
+  // (ensureRepo, addDetachedWorktree, createGtrWorktree, removeWorktree,
+  // commitAndPush), not just the initial clone/fetch, so it needs enough
+  // headroom for a slow clone/checkout ahead of it in the queue.
+  const maxWaitMs = opts.maxWaitMs ?? 5 * 60_000;
+  const deadline = now().getTime() + maxWaitMs;
+  const token = crypto.randomUUID();
+
+  for (;;) {
+    const created = await lockFs.tryCreate(
+      opts.lockPath,
+      JSON.stringify({ token }),
+    );
+    if (created) break;
+
+    const mtimeMs = await lockFs.mtimeMs(opts.lockPath);
+    if (mtimeMs !== null && now().getTime() - mtimeMs > staleMs) {
+      await lockFs.remove(opts.lockPath);
+      continue;
+    }
+
+    if (now().getTime() >= deadline) {
+      throw new Error(
+        `withRepoLock: timed out waiting for lock at ${opts.lockPath}`,
+      );
+    }
+    await sleep(pollMs);
+  }
+
+  try {
+    return await opts.fn();
+  } finally {
+    // Only release the lock if it's still ours — if fn() ran long enough
+    // that another waiter reclaimed it as stale, deleting it now would
+    // steal the new owner's lock out from under them.
+    const current = await lockFs.read(opts.lockPath);
+    const currentToken = current !== null ? parseLockToken(current) : null;
+    if (currentToken === token) {
+      await lockFs.remove(opts.lockPath);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Worktree gitdir verification
+// ---------------------------------------------------------------------------
+
+export type VerifyWorktreeGitdirOptions = {
+  readonly run: CommandRunner;
+  readonly repoDir: string;
+  readonly dir: string;
+  readonly readTextFile?: (path: string) => Promise<string>;
+};
+
+/**
+ * Before running git *inside* a worktree directory, confirm it's actually a
+ * registered worktree of `repoDir` (per `git worktree list`) and that its
+ * `.git` file's `gitdir:` target lives under `<repoDir>/.git/worktrees/`.
+ * Throws otherwise — guards against operating on a worktree directory whose
+ * `.git` file was redirected elsewhere.
+ */
+export async function verifyWorktreeGitdir(
+  opts: VerifyWorktreeGitdirOptions,
+): Promise<void> {
+  const entries = await listWorktrees({ run: opts.run, repoDir: opts.repoDir });
+  const registered = entries.some((entry) => entry.path === opts.dir);
+  if (!registered) {
+    throw new Error(
+      `worktree ${opts.dir} is not registered under ${opts.repoDir} (git worktree list)`,
+    );
+  }
+
+  const readTextFile =
+    opts.readTextFile ?? ((path: string) => readFile(path, "utf8"));
+  const content = (await readTextFile(`${opts.dir}/.git`)).trim();
+  const match = content.match(/^gitdir:\s*(.+)$/);
+  const expectedPrefix = `${opts.repoDir}/.git/worktrees/`;
+  if (
+    match === null ||
+    match[1] === undefined ||
+    !match[1].startsWith(expectedPrefix)
+  ) {
+    throw new Error(
+      `worktree ${opts.dir}: .git file does not point under ${expectedPrefix}`,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// ensureRepo: fetch-only main clone at /workspaces/<owner>/<repo>/main
+// ---------------------------------------------------------------------------
+
+export type EnsureRepoOptions = {
+  readonly run: CommandRunner;
+  readonly owner: string;
+  readonly repo: string;
+  readonly ghToken: string;
+  /** Default "/workspaces". */
+  readonly baseDir?: string;
+  readonly home?: string;
+  readonly path?: string;
+  readonly exists?: PathExists;
+  readonly lockFs?: LockFs;
+  readonly sleep?: (ms: number) => Promise<void>;
+  readonly now?: () => Date;
+};
+
+export type EnsureRepoResult = {
+  readonly dir: string;
+  readonly action: "cloned" | "fetched";
+};
+
+/**
+ * Ensure a fetch-only clone of `owner/repo` exists at
+ * `<baseDir>/<owner>/<repo>/main`. Never checks out a working tree there
+ * (spec-cycle2.md §7 item 2) — callers read files via a detached worktree
+ * (`addDetachedWorktree`) or a `git gtr` worktree (`createGtrWorktree`).
+ */
+export async function ensureRepo(
+  opts: EnsureRepoOptions,
+): Promise<EnsureRepoResult> {
+  assertGitHubName(opts.owner);
+  assertGitHubName(opts.repo);
+
+  const baseDir = opts.baseDir ?? "/workspaces";
+  const parentDir = `${baseDir}/${opts.owner}/${opts.repo}`;
+  const dir = `${parentDir}/main`;
+  const exists = opts.exists ?? pathExists;
+
+  await opts.run(["mkdir", "-p", parentDir]);
+
+  return withRepoLock({
+    lockPath: repoLockPath(dir),
+    ...(opts.lockFs !== undefined ? { lockFs: opts.lockFs } : {}),
+    ...(opts.sleep !== undefined ? { sleep: opts.sleep } : {}),
+    ...(opts.now !== undefined ? { now: opts.now } : {}),
+    fn: async () => {
+      if (await exists(dir)) {
+        const result = await opts.run(
+          buildGitArgv(["fetch", "--", "origin"], { network: true }),
+          {
+            cwd: dir,
+            env: networkGitEnv(opts.ghToken, opts.home, opts.path),
+          },
+        );
+        if (result.exitCode !== 0) {
+          throw gitError(
+            `git fetch failed for ${opts.owner}/${opts.repo}`,
+            result,
+          );
+        }
+        return { dir, action: "fetched" as const };
+      }
+
+      const url = `https://github.com/${opts.owner}/${opts.repo}.git`;
+      const result = await opts.run(
+        buildGitArgv(["clone", "--no-checkout", "--", url, dir], {
+          network: true,
+        }),
+        { env: networkGitEnv(opts.ghToken, opts.home, opts.path) },
+      );
+      if (result.exitCode !== 0) {
+        throw gitError(
+          `git clone failed for ${opts.owner}/${opts.repo}`,
+          result,
+        );
+      }
+      return { dir, action: "cloned" as const };
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// ensureFactoryClone: real (checked-out) self clone used to read skills
+// ---------------------------------------------------------------------------
+
+const DEFAULT_FACTORY_CLONE_DIR = "/workspaces/factory/atelier-works";
+
+export type EnsureFactoryCloneOptions = {
+  readonly run: CommandRunner;
+  readonly repoUrl: string;
+  readonly ghToken: string;
+  /** Default "/workspaces/factory/atelier-works". */
+  readonly dir?: string;
+  readonly home?: string;
+  readonly path?: string;
+  readonly exists?: PathExists;
+};
+
+export type EnsureFactoryCloneResult = {
+  readonly dir: string;
+  readonly action: "cloned" | "pulled";
+};
+
+/**
+ * Ensure the factory's own self clone exists, with a real (checked-out)
+ * working tree, and is up to date. Unlike `ensureRepo`, this clone is read
+ * for its files directly (`.claude/skills/<name>/SKILL.md` via
+ * `claude.ts#buildSystemPrompt`), so it needs a working tree rather than a
+ * fetch-only bare clone. Call at the start of every flow (spec-cycle2.md §0).
+ */
+export async function ensureFactoryClone(
+  opts: EnsureFactoryCloneOptions,
+): Promise<EnsureFactoryCloneResult> {
+  const dir = opts.dir ?? DEFAULT_FACTORY_CLONE_DIR;
+  const exists = opts.exists ?? pathExists;
+  const env = networkGitEnv(opts.ghToken, opts.home, opts.path);
+
+  if (await exists(dir)) {
+    const result = await opts.run(
+      buildGitArgv(["pull", "--ff-only"], { network: true }),
+      {
+        cwd: dir,
+        env,
+      },
+    );
+    if (result.exitCode !== 0) {
+      throw gitError("git pull --ff-only failed for factory clone", result);
+    }
+    return { dir, action: "pulled" };
+  }
+
+  const result = await opts.run(
+    buildGitArgv(["clone", "--", opts.repoUrl, dir], { network: true }),
+    {
+      env,
+    },
+  );
+  if (result.exitCode !== 0) {
+    throw gitError("git clone failed for factory clone", result);
+  }
+  return { dir, action: "cloned" };
+}
+
+// ---------------------------------------------------------------------------
+// Detached worktrees (pr_review, requirements generation)
+// ---------------------------------------------------------------------------
+
+export type AddDetachedWorktreeOptions = {
+  readonly run: CommandRunner;
+  readonly repoDir: string;
+  readonly sha: string;
+  readonly dir: string;
+  readonly ghToken: string;
+  readonly home?: string;
+  readonly path?: string;
+  readonly lockFs?: LockFs;
+  readonly sleep?: (ms: number) => Promise<void>;
+  readonly now?: () => Date;
+};
+
+/**
+ * `git worktree add --detach <dir> <sha>`, fetching `sha` first. Serialized
+ * under `repoLockPath(repoDir)` (code-review fix), same lock `ensureRepo`
+ * uses for this repo.
+ */
+export async function addDetachedWorktree(
+  opts: AddDetachedWorktreeOptions,
+): Promise<{ readonly dir: string }> {
+  assertSha(opts.sha);
+
+  return withRepoLock({
+    lockPath: repoLockPath(opts.repoDir),
+    ...(opts.lockFs !== undefined ? { lockFs: opts.lockFs } : {}),
+    ...(opts.sleep !== undefined ? { sleep: opts.sleep } : {}),
+    ...(opts.now !== undefined ? { now: opts.now } : {}),
+    fn: async () => {
+      const fetchResult = await opts.run(
+        buildGitArgv(["fetch", "origin", "--", opts.sha], { network: true }),
+        {
+          cwd: opts.repoDir,
+          env: networkGitEnv(opts.ghToken, opts.home, opts.path),
+        },
+      );
+      if (fetchResult.exitCode !== 0) {
+        throw gitError(`git fetch ${opts.sha} failed`, fetchResult);
+      }
+
+      const addResult = await opts.run(
+        buildGitArgv(["worktree", "add", "--detach", "--", opts.dir, opts.sha]),
+        { cwd: opts.repoDir, env: localGitEnv(opts.home, opts.path) },
+      );
+      if (addResult.exitCode !== 0) {
+        throw gitError("git worktree add --detach failed", addResult);
+      }
+
+      return { dir: opts.dir };
+    },
+  });
+}
+
+export type RemoveWorktreeOptions = {
+  readonly run: CommandRunner;
+  readonly repoDir: string;
+  readonly dir: string;
+  readonly force?: boolean;
+  readonly home?: string;
+  readonly path?: string;
+  readonly lockFs?: LockFs;
+  readonly sleep?: (ms: number) => Promise<void>;
+  readonly now?: () => Date;
+};
+
+/** Serialized under `repoLockPath(repoDir)` (code-review fix), same lock `ensureRepo` uses for this repo. */
+export async function removeWorktree(
+  opts: RemoveWorktreeOptions,
+): Promise<void> {
+  await withRepoLock({
+    lockPath: repoLockPath(opts.repoDir),
+    ...(opts.lockFs !== undefined ? { lockFs: opts.lockFs } : {}),
+    ...(opts.sleep !== undefined ? { sleep: opts.sleep } : {}),
+    ...(opts.now !== undefined ? { now: opts.now } : {}),
+    fn: async () => {
+      const args = [
+        "worktree",
+        "remove",
+        ...(opts.force === true ? ["--force"] : []),
+        "--",
+        opts.dir,
+      ];
+      const result = await opts.run(buildGitArgv(args), {
+        cwd: opts.repoDir,
+        env: localGitEnv(opts.home, opts.path),
+      });
+      if (result.exitCode !== 0) {
+        throw gitError("git worktree remove failed", result);
+      }
+      await opts.run(buildGitArgv(["worktree", "prune"]), {
+        cwd: opts.repoDir,
+        env: localGitEnv(opts.home, opts.path),
+      });
+    },
+  });
+}
+
+export type WorktreeEntry = {
+  readonly path: string;
+  readonly headSha: string | null;
+  readonly branch: string | null;
+  readonly bare: boolean;
+  readonly detached: boolean;
+};
+
+function parseWorktreeListPorcelain(stdout: string): WorktreeEntry[] {
+  const blocks = stdout
+    .split("\n\n")
+    .map((block) => block.trim())
+    .filter((block) => block.length > 0);
+
+  return blocks.map((block) => {
+    let path: string | null = null;
+    let headSha: string | null = null;
+    let branch: string | null = null;
+    let bare = false;
+    let detached = false;
+
+    for (const line of block.split("\n")) {
+      if (line.startsWith("worktree ")) {
+        path = line.slice("worktree ".length);
+      } else if (line.startsWith("HEAD ")) {
+        headSha = line.slice("HEAD ".length);
+      } else if (line.startsWith("branch ")) {
+        const ref = line.slice("branch ".length);
+        branch = ref.startsWith("refs/heads/")
+          ? ref.slice("refs/heads/".length)
+          : ref;
+      } else if (line === "bare") {
+        bare = true;
+      } else if (line === "detached") {
+        detached = true;
+      }
+    }
+
+    if (path === null) {
+      throw new Error(
+        `unexpected 'git worktree list --porcelain' block: ${block}`,
+      );
+    }
+    return { path, headSha, branch, bare, detached };
+  });
+}
+
+export async function listWorktrees(opts: {
+  readonly run: CommandRunner;
+  readonly repoDir: string;
+  readonly home?: string;
+  readonly path?: string;
+}): Promise<WorktreeEntry[]> {
+  const result = await opts.run(
+    buildGitArgv(["worktree", "list", "--porcelain"]),
+    {
+      cwd: opts.repoDir,
+      env: localGitEnv(opts.home, opts.path),
+    },
+  );
+  if (result.exitCode !== 0) {
+    throw gitError("git worktree list failed", result);
+  }
+  return parseWorktreeListPorcelain(result.stdout);
+}
+
+// ---------------------------------------------------------------------------
+// git gtr worktrees (pr_fix)
+// ---------------------------------------------------------------------------
+
+export type GtrWorktree = {
+  readonly path: string;
+  readonly branch: string;
+  readonly hookStatus: string;
+};
+
+function parseGtrPorcelain(stdout: string): GtrWorktree {
+  const fields = new Map<string, string>();
+  for (const line of stdout.split("\n")) {
+    if (line.length === 0) continue;
+    const tabIndex = line.indexOf("\t");
+    if (tabIndex === -1) continue;
+    fields.set(line.slice(0, tabIndex), line.slice(tabIndex + 1));
+  }
+
+  const path = fields.get("path");
+  const branch = fields.get("branch");
+  const hookStatus = fields.get("hook_status");
+  if (path === undefined || branch === undefined || hookStatus === undefined) {
+    throw new Error(`unexpected 'git gtr new --porcelain' output: ${stdout}`);
+  }
+  return { path, branch, hookStatus };
+}
+
+export type CreateGtrWorktreeOptions = {
+  readonly run: CommandRunner;
+  readonly repoDir: string;
+  readonly branch: string;
+  readonly ghToken: string;
+  readonly home?: string;
+  readonly path?: string;
+  readonly lockFs?: LockFs;
+  readonly sleep?: (ms: number) => Promise<void>;
+  readonly now?: () => Date;
+};
+
+/**
+ * `git gtr new <branch> --porcelain --yes`, reusing an existing worktree for
+ * `branch` if `git worktree list` already has one (spec-cycle2.md §1
+ * workspace.ts "既存なら再利用"). Serialized under `repoLockPath(repoDir)`
+ * (code-review fix), same lock `ensureRepo` uses for this repo.
+ */
+export async function createGtrWorktree(
+  opts: CreateGtrWorktreeOptions,
+): Promise<GtrWorktree> {
+  assertBranchName(opts.branch);
+
+  return withRepoLock({
+    lockPath: repoLockPath(opts.repoDir),
+    ...(opts.lockFs !== undefined ? { lockFs: opts.lockFs } : {}),
+    ...(opts.sleep !== undefined ? { sleep: opts.sleep } : {}),
+    ...(opts.now !== undefined ? { now: opts.now } : {}),
+    fn: async () => {
+      const existing = await listWorktrees({
+        run: opts.run,
+        repoDir: opts.repoDir,
+        ...(opts.home !== undefined ? { home: opts.home } : {}),
+        ...(opts.path !== undefined ? { path: opts.path } : {}),
+      });
+      const reused = existing.find((entry) => entry.branch === opts.branch);
+      if (reused !== undefined) {
+        return { path: reused.path, branch: opts.branch, hookStatus: "reused" };
+      }
+
+      // No `--` here: `git gtr` is a third-party subcommand (not core git)
+      // and its own argv parsing isn't guaranteed to honor `--` the way
+      // core git commands do; `assertBranchName` above already rejects a
+      // leading `-`.
+      const result = await opts.run(
+        buildGitArgv(["gtr", "new", opts.branch, "--porcelain", "--yes"], {
+          network: true,
+        }),
+        {
+          cwd: opts.repoDir,
+          env: networkGitEnv(opts.ghToken, opts.home, opts.path),
+        },
+      );
+      if (result.exitCode !== 0) {
+        throw gitError(`git gtr new ${opts.branch} failed`, result);
+      }
+      return parseGtrPorcelain(result.stdout);
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// commitAndPush (pr_fix)
+// ---------------------------------------------------------------------------
+
+export type CommitAndPushOptions = {
+  readonly run: CommandRunner;
+  /** The main repo clone dir (see `ensureRepo`) this worktree belongs to — used to verify `dir` is a genuine, registered worktree before running git inside it, and to derive the shared per-repo lock. */
+  readonly repoDir: string;
+  readonly dir: string;
+  readonly message: string;
+  /** The PR branch's remote head SHA observed when the caller started working. */
+  readonly expectedHeadSha: string;
+  readonly ghToken: string;
+  readonly home?: string;
+  readonly path?: string;
+  readonly verifyWorktree?: (
+    opts: VerifyWorktreeGitdirOptions,
+  ) => Promise<void>;
+  readonly lockFs?: LockFs;
+  readonly sleep?: (ms: number) => Promise<void>;
+  readonly now?: () => Date;
+};
+
+export type CommitAndPushResult =
+  | { readonly outcome: "pushed"; readonly newSha: string }
+  | { readonly outcome: "head_changed"; readonly currentSha: string }
+  | { readonly outcome: "nothing_to_commit" };
+
+// A local (non-`--verify`) `rev-parse`/`push` failure due to the remote
+// having moved is reported in the child's stderr with one of these
+// substrings, across git's various phrasings ("[rejected]", "(non-fast-forward)",
+// "hint: ... fetch first"). Matched case-insensitively.
+const PUSH_REJECTED_SUBSTRINGS = [
+  "rejected",
+  "non-fast-forward",
+  "fetch first",
+];
+
+function isNonFastForwardRejection(stderr: string): boolean {
+  const lower = stderr.toLowerCase();
+  return PUSH_REJECTED_SUBSTRINGS.some((needle) => lower.includes(needle));
+}
+
+/**
+ * Verify `dir` is a genuine worktree of `repoDir` (see
+ * `verifyWorktreeGitdir`), fetch, verify the remote branch head still
+ * matches `expectedHeadSha` (someone else may have pushed while Claude was
+ * editing), then commit and push all working-tree changes. Token never
+ * appears in the remote URL — auth goes through
+ * `-c credential.helper='!gh auth git-credential'` with `GH_TOKEN` in the
+ * subprocess env, only for the fetch/push steps. Serialized under
+ * `repoLockPath(repoDir)` (code-review fix), same lock `ensureRepo` uses
+ * for this repo. If `push` itself is rejected as non-fast-forward (a race
+ * that slipped past the earlier head-sha check), re-fetches and returns
+ * `{ outcome: "head_changed" }` instead of throwing.
+ */
+export async function commitAndPush(
+  opts: CommitAndPushOptions,
+): Promise<CommitAndPushResult> {
+  assertSha(opts.expectedHeadSha);
+
+  return withRepoLock({
+    lockPath: repoLockPath(opts.repoDir),
+    ...(opts.lockFs !== undefined ? { lockFs: opts.lockFs } : {}),
+    ...(opts.sleep !== undefined ? { sleep: opts.sleep } : {}),
+    ...(opts.now !== undefined ? { now: opts.now } : {}),
+    fn: async () => {
+      const verify = opts.verifyWorktree ?? verifyWorktreeGitdir;
+      await verify({ run: opts.run, repoDir: opts.repoDir, dir: opts.dir });
+
+      const local = localGitEnv(opts.home, opts.path);
+      const network = networkGitEnv(opts.ghToken, opts.home, opts.path);
+
+      // No `--` on these `rev-parse` calls: verified empirically that `git
+      // rev-parse -- <rev>` either breaks `--verify` ("Needed a single
+      // revision") or echoes a literal `--` line in non-`--verify` mode —
+      // see the module doc comment. `assertBranchName` below covers the
+      // same "no leading `-`" concern.
+      const branchResult = await opts.run(
+        buildGitArgv(["rev-parse", "--abbrev-ref", "HEAD"]),
+        { cwd: opts.dir, env: local },
+      );
+      if (branchResult.exitCode !== 0) {
+        throw gitError("git rev-parse --abbrev-ref HEAD failed", branchResult);
+      }
+      const branch = branchResult.stdout.trim();
+      assertBranchName(branch);
+
+      const fetchResult = await opts.run(
+        buildGitArgv(["fetch", "origin", "--", branch], { network: true }),
+        { cwd: opts.dir, env: network },
+      );
+      if (fetchResult.exitCode !== 0) {
+        throw gitError(`git fetch origin ${branch} failed`, fetchResult);
+      }
+
+      const remoteShaResult = await opts.run(
+        buildGitArgv(["rev-parse", "--verify", `origin/${branch}`]),
+        { cwd: opts.dir, env: local },
+      );
+      if (remoteShaResult.exitCode !== 0) {
+        throw gitError(
+          `git rev-parse --verify origin/${branch} failed`,
+          remoteShaResult,
+        );
+      }
+      const remoteSha = remoteShaResult.stdout.trim();
+      if (remoteSha !== opts.expectedHeadSha) {
+        return { outcome: "head_changed" as const, currentSha: remoteSha };
+      }
+
+      const addResult = await opts.run(buildGitArgv(["add", "-A"]), {
+        cwd: opts.dir,
+        env: local,
+      });
+      if (addResult.exitCode !== 0) {
+        throw gitError("git add -A failed", addResult);
+      }
+
+      const statusResult = await opts.run(
+        buildGitArgv(["status", "--porcelain"]),
+        { cwd: opts.dir, env: local },
+      );
+      if (statusResult.stdout.trim().length === 0) {
+        return { outcome: "nothing_to_commit" as const };
+      }
+
+      const commitResult = await opts.run(
+        buildGitArgv(["commit", "-m", opts.message]),
+        { cwd: opts.dir, env: local },
+      );
+      if (commitResult.exitCode !== 0) {
+        throw gitError("git commit failed", commitResult);
+      }
+
+      const pushResult = await opts.run(
+        buildGitArgv(["push", "origin", "--", `HEAD:${branch}`], {
+          network: true,
+        }),
+        { cwd: opts.dir, env: network },
+      );
+      if (pushResult.exitCode !== 0) {
+        if (isNonFastForwardRejection(pushResult.stderr)) {
+          const refetchResult = await opts.run(
+            buildGitArgv(["fetch", "origin", "--", branch], {
+              network: true,
+            }),
+            { cwd: opts.dir, env: network },
+          );
+          if (refetchResult.exitCode !== 0) {
+            throw gitError(
+              `git fetch origin ${branch} failed (after push rejection)`,
+              refetchResult,
+            );
+          }
+          const currentShaResult = await opts.run(
+            buildGitArgv(["rev-parse", "--verify", `origin/${branch}`]),
+            { cwd: opts.dir, env: local },
+          );
+          if (currentShaResult.exitCode !== 0) {
+            throw gitError(
+              `git rev-parse --verify origin/${branch} failed (after push rejection)`,
+              currentShaResult,
+            );
+          }
+          return {
+            outcome: "head_changed" as const,
+            currentSha: currentShaResult.stdout.trim(),
+          };
+        }
+        throw gitError("git push failed", pushResult);
+      }
+
+      const newShaResult = await opts.run(
+        buildGitArgv(["rev-parse", "--verify", "HEAD"]),
+        { cwd: opts.dir, env: local },
+      );
+      if (newShaResult.exitCode !== 0) {
+        throw gitError("git rev-parse --verify HEAD failed", newShaResult);
+      }
+      return {
+        outcome: "pushed" as const,
+        newSha: newShaResult.stdout.trim(),
+      };
+    },
+  });
+}

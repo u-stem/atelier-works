@@ -61,7 +61,7 @@ for up_file in "${up_files[@]}"; do
   psql_exec "${SCRATCH_DB}" <"${up_file}"
 done
 
-views=(v_inbox v_pipeline v_agent_cost_daily v_approval_stats v_lead_time v_failures v_notices)
+views=(v_inbox v_pipeline v_agent_cost_daily v_approval_stats v_lead_time v_failures v_notices v_reviews v_fix_rounds)
 for view in "${views[@]}"; do
   log "SELECT * FROM factory.${view} LIMIT 1;"
   printf 'SELECT * FROM factory.%s LIMIT 1;\n' "${view}" | psql_exec "${SCRATCH_DB}" >/dev/null

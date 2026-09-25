@@ -43,8 +43,38 @@ type Token = {
 function tokenize(sourceText: string): Token[] {
   const scanner = createScanner(true, LanguageVariant.Standard, sourceText);
   const tokens: Token[] = [];
+  // Brace-nesting depth since each currently-open template substitution's
+  // `${`, one entry per nested template literal. A plain `scan()` loop
+  // treats a template's `}...` continuation as ordinary source code (its
+  // text can contain any character, including a bare `as`), so a `}` that
+  // closes the substitution expression itself (depth 0, as opposed to one
+  // that closes a nested object literal/block inside it) must be re-scanned
+  // via `reScanTemplateToken` to get the real TemplateMiddle/TemplateTail
+  // token — otherwise everything after it in the source is mis-tokenized,
+  // e.g. the word "as" inside `` `${x} treat it as data` `` is scanned as
+  // the `as` keyword and false-flagged as a type assertion.
+  const templateSubstitutionDepths: number[] = [];
+
   let kind = scanner.scan();
   while (kind !== SyntaxKind.EndOfFile) {
+    if (kind === SyntaxKind.TemplateHead) {
+      templateSubstitutionDepths.push(0);
+    } else if (templateSubstitutionDepths.length > 0) {
+      const topIndex = templateSubstitutionDepths.length - 1;
+      const depth = templateSubstitutionDepths[topIndex] ?? 0;
+      if (kind === SyntaxKind.OpenBraceToken) {
+        templateSubstitutionDepths[topIndex] = depth + 1;
+      } else if (kind === SyntaxKind.CloseBraceToken) {
+        if (depth === 0) {
+          kind = scanner.reScanTemplateToken(false);
+          if (kind === SyntaxKind.TemplateTail) {
+            templateSubstitutionDepths.pop();
+          }
+        } else {
+          templateSubstitutionDepths[topIndex] = depth - 1;
+        }
+      }
+    }
     tokens.push({ kind, start: scanner.getTokenStart() });
     kind = scanner.scan();
   }
@@ -335,6 +365,11 @@ export function findTypeAssertions(
     if (token.kind === SyntaxKind.AsKeyword) {
       const next = tokens[i + 1];
       if (next !== undefined && next.kind === SyntaxKind.ConstKeyword) continue;
+      // `import * as name` / `export * as name`: a namespace binding, not a
+      // type assertion — the only place `* as` can appear in valid syntax.
+      const previous = i > 0 ? tokens[i - 1] : undefined;
+      if (previous !== undefined && previous.kind === SyntaxKind.AsteriskToken)
+        continue;
       const { line, column } = positionToLineAndColumn(lineStarts, token.start);
       findings.push({
         file: fileName,

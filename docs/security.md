@@ -8,7 +8,7 @@
   - `--setting-sources user`: プロジェクト設定(対象リポジトリ側の `.claude/` 等)を読み込ませない。
   - `--strict-mcp-config`: 対象リポジトリの MCP 設定を無視し、明示的に渡した設定のみを使う。
   - `--max-budget-usd` / `--max-turns` / サブプロセスのタイムアウト: 暴走・コスト超過を打ち切る。
-- 工程 3 以降で書き込み権限を持つ Claude 実行を導入する際は、追加のガード(許可コマンドの絞り込み、実行結果のレビュー必須化など)を別途設計する(実装時に確定)。
+- `pr_fix` は書き込み権限を持つ Claude 実行の最初の例である。追加のガードは「pr_fix の安全策」節に定める(下記)。
 
 ## シークレットの扱い
 
@@ -22,9 +22,20 @@
 - 値の投入は人が行う。推奨コマンドは `read -rs 'v?KEY: ' && mise set -E local KEY="$v"; unset v`(zsh / bash 共通。値に `!` などの記号を含んでもシェル履歴展開で失敗せず、平文がシェル履歴に残らない)。`mise set -E local KEY=value` は `mise.local.toml` に `[env]` テーブルとして書き込まれる(実機確認済み)。Claude が担当するのは `mise.local.toml.example`(値の無いテンプレート)の更新までで、値の投入は人の作業。必要になったら作業を止めずに投入コマンドを提示して先に進む。具体的な手順は `factory-dev` スキル(`.claude/skills/factory-dev/SKILL.md`)を参照。`mise set -E local KEY=value` の直書きは、値に記号を含まない場合のみ動くが、平文のままシェル履歴に残るため推奨しない。
 - `infra/.env` ファイルは置かない(存在すると Docker Compose が自動的に読み込んでしまうため)。`mise run` タスク経由で解決された環境変数を compose ファイル内で `${VAR:?run via mise}` として参照し、`mise run` を経由せず直接 `docker compose` を叩いた場合は fail-fast で止まるようにする。
 
+## pr_fix の安全策
+
+`pr_fix` は Claude に書き込みツール(`Edit`/`Write`)を与える最初のフローであり、次のガードを設ける。
+
+- Claude のツールは `Read,Glob,Grep,Edit,Write` のみ。**`Bash` は与えない**。
+- 対象リポジトリの標準チェック(lint / typecheck / test 相当)は Claude 自身に実行させない。フロー側のステップが `factory_config.allowed_check_commands[]`(例: `["mise run check"]`)を実行する。実行環境はシークレットを含まない(`env -i PATH=... HOME=...` 相当)、timeout 付き。結果を2回目の Claude 実行(修正)への入力として渡す。
+- 対象リポジトリが定義するコマンドの中身(`allowed_check_commands` が指す先、対象リポジトリの `mise.toml` / `package.json` の scripts 等)は **untrusted** として扱う。worker 内の mise は対象リポジトリの `mise.toml` を trust しない(`mise --yes trust` を行わない)。`mise.toml` に依存しないコマンドか `MISE_TRUSTED_CONFIG_PATHS` を使わずに実行できないコマンドは、実行せず `blocked` として報告する。
+- 修正の差分に次のいずれかが含まれる場合は **`blocked`** として中断する: `.claude/**`、`.agents/**`、`mise.toml`、`mise.*.toml`、`lefthook.yml`、`.github/workflows/**`、`package.json` の `scripts` 変更、新規の `*.sh` ファイル追加。
+- push 前に次をすべて確認し、いずれかが成り立たなければ `blocked` として中断する: `head.repo == base.repo`(fork からの PR には push しない)、PR が draft でない、base ブランチが保護ブランチでない、fetch し直した `head_sha` が起動時に確認した値と一致する(その間に人が push していない)。
+- E2E の検証は本番の Issue やブランチではなく、捨てブランチ・捨て PR で行う。
+
 ## GitHub PAT
 
-- fine-grained PAT を使う。スコープは Issues R/W、Contents R、Metadata R、Pull requests R/W とする。工程 3 では実装のために Contents R/W が必要になり、その時点で PAT の再発行が必要になる。
+- fine-grained PAT を使う。スコープは Issues R/W、Contents R/W、Metadata R、Pull requests R/W とする。`pr_fix` の修正 push のため Contents を Read and write にした。fine-grained PAT は権限設定の変更をトークンの値を変えずに反映できるため、既存トークンの権限を更新するだけでよく、再発行(値の再生成)は不要。
 - 有効期限は最長 1 年。`poll_issues` の冒頭で `gh api user` により有効性を確認し、失効していれば notice を出す。
 - org リポジトリを対象にする場合、org 側の PAT 承認が必要になる場合がある点に注意する。
 - 認証は `GH_TOKEN` 環境変数と `gh auth git-credential`(git の credential helper 経由)のみで行う。`gh auth login` の対話ログインや、トークンを埋め込んだ clone URL(`https://<token>@github.com/...`)は使わない。
@@ -42,7 +53,7 @@ GitHub 右上のアイコン → **Settings** → **Developer settings** → **P
 | Expiration | Custom で 1 年後(最長)。期限切れは `mise run doctor` と `poll_issues` が検出する |
 | Repository access | Only select repositories → 拾わせるリポジトリ(sandbox リポジトリを含む) |
 | Repository permissions: Issues | Read and write |
-| Repository permissions: Contents | Read-only(工程 3 で Read and write に変更し、PAT を再発行する) |
+| Repository permissions: Contents | Read and write(`pr_fix` の修正 push に必要) |
 | Repository permissions: Metadata | Read-only(Issues/Contents を選ぶと自動で付与される) |
 | Repository permissions: Pull requests | Read and write |
 | Account permissions | すべて No access |
@@ -102,3 +113,4 @@ read -rs 'v?GITHUB_TOKEN: ' && mise set -E local GITHUB_TOKEN="$v"; unset v
 ## public リポジトリでのラベル付与制限
 
 - `factory` ラベルの付与者は OWNER / MEMBER / COLLABORATOR のいずれかである場合のみ Issue を拾う。`poll_issues` は各 Issue のタイムラインから最後にラベルを付けた人の `author_association` を確認し、許可された関係でなければ拾わずに notice を出す。これにより、public リポジトリで第三者が任意にラベルを付けてパイプラインを起動させることを防ぐ。
+- GitHub 側でもラベルの付与には triage 以上の権限が必要なため、`labeled` イベントの actor はそもそも書き込み権限を持つ人に限られる。`author_association` の確認は、この GitHub 側の制約に加えた補助的な二重チェックという位置づけ。

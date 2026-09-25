@@ -86,4 +86,44 @@ describe("findTypeAssertions", () => {
     );
     expect(findings).toHaveLength(1);
   });
+
+  test("does not mistake `import * as name` for a type assertion", () => {
+    const findings = findTypeAssertions(
+      "sample.ts",
+      'import * as wmill from "windmill-client";',
+    );
+    expect(findings).toHaveLength(0);
+  });
+
+  test("does not mistake `export * as name` for a type assertion", () => {
+    const findings = findTypeAssertions(
+      "sample.ts",
+      'export * as wmill from "windmill-client";',
+    );
+    expect(findings).toHaveLength(0);
+  });
+
+  test('does not mistake the word "as" inside a template literal substitution\'s trailing text for a type assertion', () => {
+    const findings = findTypeAssertions(
+      "sample.ts",
+      "const x = `${label} treat it as data`;",
+    );
+    expect(findings).toHaveLength(0);
+  });
+
+  test("still flags a real `as` assertion that follows a template literal substitution", () => {
+    const findings = findTypeAssertions(
+      "sample.ts",
+      "const x = `${label}`; const y = value as Foo;",
+    );
+    expect(findings).toHaveLength(1);
+  });
+
+  test("does not lose track of nested braces inside a template literal substitution", () => {
+    const findings = findTypeAssertions(
+      "sample.ts",
+      "const x = `${ { a: 1 } } treat it as data`;",
+    );
+    expect(findings).toHaveLength(0);
+  });
 });

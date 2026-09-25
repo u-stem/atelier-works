@@ -1,0 +1,694 @@
+// factory schema Data Table access (migrations/datatable/main/*.sql).
+//
+// All I/O goes through an injected SqlClient so tests never hit a real
+// database — see createFakeSqlClient in tests/lib/db.test.ts for the shape
+// fakes take. The default client adapts `wmill.datatable()` (the real
+// windmill-client tagged-template SQL API; see the write-script-bun skill's
+// windmill-client reference and
+// https://www.windmill.dev/docs/core_concepts/persistent_storage/data_tables.md).
+//
+// Every exported function takes `sql: SqlClient` as its last parameter,
+// defaulting to `defaultSqlClient` (backed by `wmill.datatable()`), per
+// spec-cycle2.md §1's "external I/O must be injectable" rule.
+
+import * as wmill from "windmill-client";
+import {
+  type AgentRunRecord,
+  type Approval,
+  type ApprovalDecision,
+  type DeploymentRecord,
+  type Diagram,
+  type FailureRecord,
+  type FixOutcome,
+  type FixReply,
+  type FixRoundRecord,
+  isNumber,
+  isOneOf,
+  isRecord,
+  isString,
+  type NoticeRecord,
+  type RequirementDraft,
+  type ReviewFinding,
+  type ReviewRecord,
+  type ReviewSeverity,
+  type ReviewVerdict,
+  TERMINAL_WORK_ITEM_STATUSES,
+  WORK_ITEM_KINDS,
+  WORK_ITEM_SOURCES,
+  WORK_ITEM_STATUSES,
+  type WorkItem,
+  type WorkItemKind,
+  type WorkItemSource,
+  type WorkItemStatus,
+} from "./types.ts";
+
+// ---------------------------------------------------------------------------
+// SqlClient: a minimal, easily-fakeable slice of windmill-client's
+// DatatableSqlTemplateFunction (SqlStatement.fetch/execute), used via tagged
+// template syntax: `await sql\`SELECT ... WHERE id = ${id}\`.fetch()`.
+// ---------------------------------------------------------------------------
+
+export type SqlRow = Record<string, unknown>;
+
+export type SqlStatementHandle = {
+  fetch(): Promise<SqlRow[]>;
+  execute(): Promise<void>;
+};
+
+export type SqlClient = (
+  strings: TemplateStringsArray,
+  ...values: unknown[]
+) => SqlStatementHandle;
+
+function toSqlRows(value: unknown): SqlRow[] {
+  if (!Array.isArray(value)) {
+    throw new Error("db: sql client fetch() did not return an array");
+  }
+  return value.map((row) => {
+    if (!isRecord(row)) {
+      throw new Error("db: sql client fetch() returned a non-object row");
+    }
+    return row;
+  });
+}
+
+/** Default SqlClient, backed by `wmill.datatable()` (schema "factory" via
+ * the "main" data table — table/view names are schema-qualified in every
+ * query below). */
+export const defaultSqlClient: SqlClient = (strings, ...values) => {
+  const tag = wmill.datatable();
+  const statement = tag(strings, ...values);
+  return {
+    fetch: async () => toSqlRows(await statement.fetch()),
+    execute: async () => {
+      await statement.execute();
+    },
+  };
+};
+
+// ---------------------------------------------------------------------------
+// Row parsing helpers (Parse-don't-validate for every SELECT / RETURNING).
+// bigint/bigserial columns may come back as either a JS number or a numeric
+// string depending on serialization, so id fields accept both.
+// ---------------------------------------------------------------------------
+
+function parseId(value: unknown, field: string): number {
+  if (isNumber(value)) {
+    return value;
+  }
+  if (isString(value) && value.length > 0 && Number.isFinite(Number(value))) {
+    return Number(value);
+  }
+  throw new Error(`db: row field "${field}" is not a valid id`);
+}
+
+function parseNullableId(value: unknown, field: string): number | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  return parseId(value, field);
+}
+
+function parseRequiredString(value: unknown, field: string): string {
+  if (!isString(value)) {
+    throw new Error(`db: row field "${field}" is not a string`);
+  }
+  return value;
+}
+
+function parseNullableString(value: unknown, field: string): string | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  return parseRequiredString(value, field);
+}
+
+function parseRequiredNumber(value: unknown, field: string): number {
+  if (!isNumber(value)) {
+    throw new Error(`db: row field "${field}" is not a number`);
+  }
+  return value;
+}
+
+function parseDate(value: unknown, field: string): Date {
+  if (value instanceof Date) {
+    return value;
+  }
+  if (isString(value)) {
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed;
+    }
+  }
+  throw new Error(`db: row field "${field}" is not a valid timestamp`);
+}
+
+function parseEnum<T extends string>(
+  value: unknown,
+  allowed: readonly T[],
+  field: string,
+): T {
+  if (!isOneOf(value, allowed)) {
+    throw new Error(`db: row field "${field}" has an unexpected value`);
+  }
+  return value;
+}
+
+function parseJsonArray(value: unknown, field: string): unknown[] {
+  if (Array.isArray(value)) {
+    return value;
+  }
+  if (isString(value)) {
+    const parsed: unknown = JSON.parse(value);
+    if (Array.isArray(parsed)) {
+      return parsed;
+    }
+  }
+  throw new Error(`db: row field "${field}" is not a JSON array`);
+}
+
+function isDiagram(value: unknown): value is Diagram {
+  return isRecord(value) && isString(value.name) && isString(value.drawio_xml);
+}
+
+function parseDiagrams(value: unknown, field: string): Diagram[] {
+  const array = parseJsonArray(value, field);
+  if (!array.every(isDiagram)) {
+    throw new Error(`db: row field "${field}" contains a malformed diagram`);
+  }
+  return array;
+}
+
+function parseOpenQuestions(value: unknown, field: string): string[] {
+  const array = parseJsonArray(value, field);
+  if (!array.every((item): item is string => isString(item))) {
+    throw new Error(
+      `db: row field "${field}" contains a non-string open question`,
+    );
+  }
+  return array;
+}
+
+/** Parses one factory.work_items row. */
+function toWorkItem(row: SqlRow): WorkItem {
+  return {
+    id: parseId(row.id, "id"),
+    cycle: parseRequiredNumber(row.cycle, "cycle"),
+    source: parseEnum<WorkItemSource>(row.source, WORK_ITEM_SOURCES, "source"),
+    kind: parseEnum<WorkItemKind>(row.kind, WORK_ITEM_KINDS, "kind"),
+    owner: parseRequiredString(row.owner, "owner"),
+    repo: parseRequiredString(row.repo, "repo"),
+    issue_number:
+      row.issue_number === null
+        ? null
+        : parseRequiredNumber(row.issue_number, "issue_number"),
+    issue_url: parseNullableString(row.issue_url, "issue_url"),
+    pr_number:
+      row.pr_number === null
+        ? null
+        : parseRequiredNumber(row.pr_number, "pr_number"),
+    title: parseNullableString(row.title, "title"),
+    body: parseNullableString(row.body, "body"),
+    status: parseEnum<WorkItemStatus>(row.status, WORK_ITEM_STATUSES, "status"),
+    attempt: parseRequiredNumber(row.attempt, "attempt"),
+    claimed_by: parseNullableString(row.claimed_by, "claimed_by"),
+    flow_job_id: parseNullableString(row.flow_job_id, "flow_job_id"),
+    resume_url: parseNullableString(row.resume_url, "resume_url"),
+    cancel_url: parseNullableString(row.cancel_url, "cancel_url"),
+    head_sha: parseNullableString(row.head_sha, "head_sha"),
+    last_review_id: parseNullableId(row.last_review_id, "last_review_id"),
+    last_comment_id: parseNullableId(row.last_comment_id, "last_comment_id"),
+    fix_round: parseRequiredNumber(row.fix_round, "fix_round"),
+    parent_work_item_id: parseNullableId(
+      row.parent_work_item_id,
+      "parent_work_item_id",
+    ),
+    created_at: parseDate(row.created_at, "created_at"),
+    updated_at: parseDate(row.updated_at, "updated_at"),
+  };
+}
+
+async function fetchOneRow(
+  statement: SqlStatementHandle,
+  what: string,
+): Promise<SqlRow> {
+  const rows = await statement.fetch();
+  const first = rows[0];
+  if (first === undefined) {
+    throw new Error(`db: expected ${what} to return one row, got none`);
+  }
+  return first;
+}
+
+// ---------------------------------------------------------------------------
+// work_items
+// ---------------------------------------------------------------------------
+
+export type NewWorkItem = {
+  cycle: number;
+  source: WorkItemSource;
+  kind: WorkItemKind;
+  owner: string;
+  repo: string;
+  issue_number: number | null;
+  issue_url: string | null;
+  pr_number: number | null;
+  title: string | null;
+  body: string | null;
+  status: WorkItemStatus;
+  attempt: number;
+  claimed_by: string | null;
+  flow_job_id: string | null;
+  resume_url: string | null;
+  cancel_url: string | null;
+  head_sha: string | null;
+  parent_work_item_id: number | null;
+};
+
+/** Inserts a new factory.work_items row and returns its id. */
+export async function insertWorkItem(
+  item: NewWorkItem,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  const statement = sql`
+    INSERT INTO factory.work_items (
+      cycle, source, kind, owner, repo, issue_number, issue_url, pr_number,
+      title, body, status, attempt, claimed_by, flow_job_id, resume_url,
+      cancel_url, head_sha, parent_work_item_id
+    ) VALUES (
+      ${item.cycle}, ${item.source}, ${item.kind}, ${item.owner}, ${item.repo},
+      ${item.issue_number}, ${item.issue_url}, ${item.pr_number}, ${item.title},
+      ${item.body}, ${item.status}, ${item.attempt}, ${item.claimed_by},
+      ${item.flow_job_id}, ${item.resume_url}, ${item.cancel_url}, ${item.head_sha},
+      ${item.parent_work_item_id}
+    )
+    RETURNING id
+  `;
+  const row = await fetchOneRow(statement, "insertWorkItem");
+  return parseId(row.id, "id");
+}
+
+/**
+ * Transitions a work item's status and appends an audit row to
+ * factory.work_item_events, atomically: a single statement locks the row
+ * (`FOR UPDATE`) to read its previous status, updates it, and inserts the
+ * event, so a concurrent writer (most notably poll_issues.ts's reconcile,
+ * which can cancel a work item out from under an in-flight flow step per
+ * spec-cycle2.md §7 item 6) can never interleave with this read-modify-write
+ * and produce a wrong `from_status` or a lost update. `previous` must be
+ * joined into the UPDATE's `FROM` clause (not referenced as an independent
+ * sibling CTE via a scalar subquery in RETURNING) — verified empirically
+ * against Postgres 18: the sibling-CTE form silently returns a NULL
+ * from_status, because a `SELECT ... FOR UPDATE` CTE referenced only from
+ * another data-modifying CTE's RETURNING list is not guaranteed to execute
+ * before that CTE touches the same row.
+ *
+ * This function does not itself protect against a *flow branch* clobbering
+ * a status a concurrent process already moved on from (e.g. resuming a
+ * pipeline step after the work item was independently cancelled) — a flow's
+ * own branch logic must re-check the current status first (spec-cycle2.md
+ * §7 item 6), or use `updateStatusIfCurrent` below for a single atomic
+ * compare-and-swap.
+ */
+export async function updateStatus(
+  id: number,
+  to: WorkItemStatus,
+  note: string | null,
+  sql: SqlClient = defaultSqlClient,
+): Promise<void> {
+  const statement = sql`
+    WITH previous AS MATERIALIZED (
+      SELECT status FROM factory.work_items WHERE id = ${id} FOR UPDATE
+    ),
+    updated AS (
+      UPDATE factory.work_items
+      SET status = ${to}, updated_at = now()
+      FROM previous
+      WHERE factory.work_items.id = ${id}
+      RETURNING factory.work_items.id, previous.status AS from_status
+    )
+    INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note)
+    SELECT updated.id, updated.from_status, ${to}, ${note}
+    FROM updated
+    RETURNING from_status
+  `;
+  const rows = await statement.fetch();
+  if (rows.length === 0) {
+    throw new Error(`db: updateStatus: no work item with id ${id}`);
+  }
+}
+
+/**
+ * Compare-and-swap status transition: updates the row only if its current
+ * status is still `expectedFrom`, and records the matching
+ * factory.work_item_events row in the same statement. Returns `false`
+ * (without throwing or recording anything) when no row matched — the
+ * expected outcome when a concurrent process already moved the work item
+ * on (e.g. reconcile cancelling it), which is what lets a flow branch use
+ * this for idempotent status transitions per spec-cycle2.md §7 item 6.
+ */
+export async function updateStatusIfCurrent(
+  id: number,
+  expectedFrom: WorkItemStatus,
+  to: WorkItemStatus,
+  note: string | null = null,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  const statement = sql`
+    WITH updated AS (
+      UPDATE factory.work_items
+      SET status = ${to}, updated_at = now()
+      WHERE id = ${id} AND status = ${expectedFrom}
+      RETURNING id
+    )
+    INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note)
+    SELECT updated.id, ${expectedFrom}, ${to}, ${note}
+    FROM updated
+    RETURNING work_item_id
+  `;
+  const rows = await statement.fetch();
+  return rows.length > 0;
+}
+
+/** Fetches one factory.work_items row by id, or null if it does not exist. */
+export async function getWorkItem(
+  id: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<WorkItem | null> {
+  const rows =
+    await sql`SELECT * FROM factory.work_items WHERE id = ${id}`.fetch();
+  const row = rows[0];
+  return row === undefined ? null : toWorkItem(row);
+}
+
+/** Lists every work item whose status is not terminal, most recently
+ * updated first. */
+export async function listActive(
+  sql: SqlClient = defaultSqlClient,
+): Promise<WorkItem[]> {
+  const terminal: string[] = [...TERMINAL_WORK_ITEM_STATUSES];
+  const rows = await sql`
+    SELECT * FROM factory.work_items
+    WHERE status != ALL(${terminal})
+    ORDER BY updated_at DESC
+  `.fetch();
+  return rows.map(toWorkItem);
+}
+
+// ---------------------------------------------------------------------------
+// requirement_drafts
+// ---------------------------------------------------------------------------
+
+export type NewRequirementDraft = {
+  work_item_id: number;
+  attempt: number;
+  summary: string;
+  markdown: string;
+  diagrams: Diagram[];
+  open_questions: string[];
+};
+
+/** Inserts a factory.requirement_drafts row and returns its id. */
+export async function saveDraft(
+  draft: NewRequirementDraft,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  const statement = sql`
+    INSERT INTO factory.requirement_drafts (
+      work_item_id, attempt, summary, markdown, diagrams, open_questions
+    ) VALUES (
+      ${draft.work_item_id}, ${draft.attempt}, ${draft.summary}, ${draft.markdown},
+      ${JSON.stringify(draft.diagrams)}::jsonb, ${JSON.stringify(draft.open_questions)}::jsonb
+    )
+    RETURNING id
+  `;
+  const row = await fetchOneRow(statement, "saveDraft");
+  return parseId(row.id, "id");
+}
+
+/** Parses a full factory.requirement_drafts row (for future readers). */
+export function toRequirementDraft(row: SqlRow): RequirementDraft {
+  return {
+    id: parseId(row.id, "id"),
+    work_item_id: parseId(row.work_item_id, "work_item_id"),
+    attempt: parseRequiredNumber(row.attempt, "attempt"),
+    summary: parseRequiredString(row.summary, "summary"),
+    markdown: parseRequiredString(row.markdown, "markdown"),
+    diagrams: parseDiagrams(row.diagrams, "diagrams"),
+    open_questions: parseOpenQuestions(row.open_questions, "open_questions"),
+    created_at: parseDate(row.created_at, "created_at"),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// approvals
+// ---------------------------------------------------------------------------
+
+export type NewApproval = {
+  work_item_id: number;
+  attempt: number;
+  decision: ApprovalDecision;
+  reason: string | null;
+  approver: string;
+};
+
+/** Inserts a factory.approvals row and returns its id. */
+export async function recordApproval(
+  approval: NewApproval,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  const statement = sql`
+    INSERT INTO factory.approvals (work_item_id, attempt, decision, reason, approver)
+    VALUES (${approval.work_item_id}, ${approval.attempt}, ${approval.decision}, ${approval.reason}, ${approval.approver})
+    RETURNING id
+  `;
+  const row = await fetchOneRow(statement, "recordApproval");
+  return parseId(row.id, "id");
+}
+
+export function toApproval(row: SqlRow): Approval {
+  return {
+    id: parseId(row.id, "id"),
+    work_item_id: parseId(row.work_item_id, "work_item_id"),
+    attempt: parseRequiredNumber(row.attempt, "attempt"),
+    decision: parseEnum<ApprovalDecision>(
+      row.decision,
+      ["approved", "rejected"],
+      "decision",
+    ),
+    reason: parseNullableString(row.reason, "reason"),
+    approver: parseRequiredString(row.approver, "approver"),
+    decided_at: parseDate(row.decided_at, "decided_at"),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// agent_runs
+// ---------------------------------------------------------------------------
+
+/** Inserts a factory.agent_runs row and returns its id. */
+export async function recordAgentRun(
+  record: AgentRunRecord,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  const statement = sql`
+    INSERT INTO factory.agent_runs (
+      work_item_id, stage, attempt, model, claude_version, input_tokens,
+      output_tokens, cache_read_tokens, cost_usd, num_turns, duration_ms,
+      session_id, exit_code, error
+    ) VALUES (
+      ${record.work_item_id}, ${record.stage}, ${record.attempt}, ${record.model},
+      ${record.claude_version}, ${record.input_tokens}, ${record.output_tokens},
+      ${record.cache_read_tokens}, ${record.cost_usd}, ${record.num_turns},
+      ${record.duration_ms}, ${record.session_id}, ${record.exit_code}, ${record.error}
+    )
+    RETURNING id
+  `;
+  const row = await fetchOneRow(statement, "recordAgentRun");
+  return parseId(row.id, "id");
+}
+
+// ---------------------------------------------------------------------------
+// job_failures
+// ---------------------------------------------------------------------------
+
+/** Inserts a factory.job_failures row and returns its id. */
+export async function recordFailure(
+  record: FailureRecord,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  const statement = sql`
+    INSERT INTO factory.job_failures (work_item_id, flow_path, job_id, step, error)
+    VALUES (${record.work_item_id}, ${record.flow_path}, ${record.job_id}, ${record.step}, ${record.error})
+    RETURNING id
+  `;
+  const row = await fetchOneRow(statement, "recordFailure");
+  return parseId(row.id, "id");
+}
+
+// ---------------------------------------------------------------------------
+// deployments
+// ---------------------------------------------------------------------------
+
+/** Inserts a factory.deployments row and returns its id. */
+export async function recordDeployment(
+  record: DeploymentRecord,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  const statement = sql`
+    INSERT INTO factory.deployments (sha_from, sha_to, changed_paths, result, needs_host_action)
+    VALUES (
+      ${record.sha_from}, ${record.sha_to}, ${JSON.stringify(record.changed_paths)}::jsonb,
+      ${record.result}, ${record.needs_host_action}
+    )
+    RETURNING id
+  `;
+  const row = await fetchOneRow(statement, "recordDeployment");
+  return parseId(row.id, "id");
+}
+
+// ---------------------------------------------------------------------------
+// notices
+// ---------------------------------------------------------------------------
+
+/** Inserts a factory.notices row and returns its id. */
+export async function addNotice(
+  record: NoticeRecord,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  const statement = sql`
+    INSERT INTO factory.notices (kind, message)
+    VALUES (${record.kind}, ${record.message})
+    RETURNING id
+  `;
+  const row = await fetchOneRow(statement, "addNotice");
+  return parseId(row.id, "id");
+}
+
+// ---------------------------------------------------------------------------
+// reviews (migration 2)
+// ---------------------------------------------------------------------------
+
+const REVIEW_VERDICTS: readonly ReviewVerdict[] = [
+  "approve",
+  "comment",
+  "request_changes",
+];
+const REVIEW_SEVERITIES: readonly ReviewSeverity[] = [
+  "blocker",
+  "major",
+  "minor",
+  "nit",
+];
+
+/** Inserts a factory.reviews row and returns its id. */
+export async function insertReview(
+  record: ReviewRecord,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  const statement = sql`
+    INSERT INTO factory.reviews (work_item_id, head_sha, verdict, summary, findings, posted_review_id)
+    VALUES (
+      ${record.work_item_id}, ${record.head_sha}, ${record.verdict}, ${record.summary},
+      ${JSON.stringify(record.findings)}::jsonb, ${record.posted_review_id}
+    )
+    RETURNING id
+  `;
+  const row = await fetchOneRow(statement, "insertReview");
+  return parseId(row.id, "id");
+}
+
+function isReviewFinding(value: unknown): value is ReviewFinding {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return (
+    isString(value.path) &&
+    (value.line === null || isNumber(value.line)) &&
+    isOneOf(value.severity, REVIEW_SEVERITIES) &&
+    isString(value.message) &&
+    (value.suggestion === null || isString(value.suggestion))
+  );
+}
+
+/** Parses a full factory.reviews row (for future readers). */
+export function toReviewRecord(row: SqlRow): ReviewRecord {
+  const findings = parseJsonArray(row.findings, "findings");
+  if (!findings.every(isReviewFinding)) {
+    throw new Error('db: row field "findings" contains a malformed finding');
+  }
+  return {
+    work_item_id: parseId(row.work_item_id, "work_item_id"),
+    head_sha: parseRequiredString(row.head_sha, "head_sha"),
+    verdict: parseEnum<ReviewVerdict>(row.verdict, REVIEW_VERDICTS, "verdict"),
+    summary: parseRequiredString(row.summary, "summary"),
+    findings,
+    posted_review_id: parseNullableString(
+      row.posted_review_id,
+      "posted_review_id",
+    ),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// fix_rounds (migration 2)
+// ---------------------------------------------------------------------------
+
+const FIX_OUTCOMES: readonly FixOutcome[] = [
+  "done",
+  "requirements_gap",
+  "blocked",
+];
+
+/** Inserts a factory.fix_rounds row and returns its id. */
+export async function insertFixRound(
+  record: FixRoundRecord,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  const statement = sql`
+    INSERT INTO factory.fix_rounds (
+      work_item_id, round, trigger_review_ids, outcome, replies, commit_shas
+    ) VALUES (
+      ${record.work_item_id}, ${record.round}, ${JSON.stringify(record.trigger_review_ids)}::jsonb,
+      ${record.outcome}, ${JSON.stringify(record.replies)}::jsonb, ${JSON.stringify(record.commit_shas)}::jsonb
+    )
+    RETURNING id
+  `;
+  const row = await fetchOneRow(statement, "insertFixRound");
+  return parseId(row.id, "id");
+}
+
+function isFixReply(value: unknown): value is FixReply {
+  return (
+    isRecord(value) && isNumber(value.review_comment_id) && isString(value.body)
+  );
+}
+
+/** Parses a full factory.fix_rounds row (for future readers). */
+export function toFixRoundRecord(row: SqlRow): FixRoundRecord {
+  const triggerReviewIds = parseJsonArray(
+    row.trigger_review_ids,
+    "trigger_review_ids",
+  );
+  if (!triggerReviewIds.every((item): item is number => isNumber(item))) {
+    throw new Error(
+      'db: row field "trigger_review_ids" contains a non-number id',
+    );
+  }
+  const replies = parseJsonArray(row.replies, "replies");
+  if (!replies.every(isFixReply)) {
+    throw new Error('db: row field "replies" contains a malformed reply');
+  }
+  const commitShas = parseJsonArray(row.commit_shas, "commit_shas");
+  if (!commitShas.every((item): item is string => isString(item))) {
+    throw new Error('db: row field "commit_shas" contains a non-string sha');
+  }
+  return {
+    work_item_id: parseId(row.work_item_id, "work_item_id"),
+    round: parseRequiredNumber(row.round, "round"),
+    trigger_review_ids: triggerReviewIds,
+    outcome: parseEnum<FixOutcome>(row.outcome, FIX_OUTCOMES, "outcome"),
+    replies,
+    commit_shas: commitShas,
+  };
+}

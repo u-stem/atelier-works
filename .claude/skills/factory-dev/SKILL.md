@@ -44,7 +44,7 @@ description: 本リポジトリ (atelier-works) の開発環境をセットア�
 4. **Resource owner**: 対象リポジトリの所有者(個人アカウント or org)を選ぶ。
 5. **Expiration**: Custom で 1 年後(最長)を選ぶ。期限切れは `mise run doctor` と `poll_issues` が検出する。
 6. **Repository access**: Only select repositories → 拾わせるリポジトリ(sandbox リポジトリを含む)を選ぶ。
-7. **Repository permissions** を設定する: Issues = Read and write / Contents = Read-only(工程 3 で Read and write に変更し PAT を再発行する)/ Metadata = Read-only(Issues/Contents 選択時に自動付与)/ Pull requests = Read and write。
+7. **Repository permissions** を設定する: Issues = Read and write / Contents = Read and write(`pr_fix` の修正 push に必要)/ Metadata = Read-only(Issues/Contents 選択時に自動付与)/ Pull requests = Read and write。
 8. **Account permissions**: すべて No access のままにする。
 9. **Generate token** を押し、表示された `github_pat_...` を次のコマンドで投入する(org リポジトリでは org 側の承認が必要な場合がある):
 

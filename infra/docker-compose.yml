@@ -95,6 +95,8 @@ services:
       - DATABASE_URL=postgres://postgres:${DB_PASSWORD:?run via mise}@db/windmill?sslmode=disable
       - MODE=worker
       - WORKER_GROUP=default
+      # Claude 実行中でも schedule が止まらないように並列化。
+      - NUM_WORKERS=3
     depends_on:
       db:
         condition: service_healthy

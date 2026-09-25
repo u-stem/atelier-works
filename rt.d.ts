@@ -18,6 +18,15 @@ declare namespace RT {
     claude_timeout_sec: number,
     windmill_public_url: string,
     max_budget_usd_per_run: number,
-    allowed_labeler_associations: string[]
+    allowed_labeler_associations: string[],
+    review_label?: string,
+    fix_label?: string,
+    pr_label?: string,
+    review_post_mode?: string,
+    max_fix_rounds?: number,
+    allowed_check_commands?: string[],
+    default_reviewers?: string[],
+    repo_allowlist?: string[],
+    diff_max_lines?: number
   }
 }

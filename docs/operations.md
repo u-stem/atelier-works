@@ -17,9 +17,19 @@
 - 失敗した work item は Failures タブから再実行できる想定(`retry_work_item`)。
 - 通知の種類: `picked` / `awaiting_approval` / `approved` / `rejected` / `needs_human` / `failed` / `expired` / `cancelled` / `self_update`(ホスト操作が必要)/ `daily_summary`(前日のコスト・件数・失敗)。
 
+## PR の使い方(pr_review / pr_fix)
+
+**現状の注意**: `pr_review` / `pr_fix` フローも未実装(次の開発サイクルで実装)。以下は実装後の想定運用。
+
+- PR に `factory:review` ラベルを付けると、その PR のレビューが実行され、指摘が GitHub の COMMENT として投稿される。
+- PR に `factory:fix` ラベルを付ける、または PR に `/factory fix` とコメントすると、レビュー指摘・未解決コメントの修正が実行される。
+- `factory:pr` ラベルは factory 自身が作成した PR の目印(将来の工程3で使用)。このリポジトリ自身の基盤整備 PR(foundation PR)には `factory:review` / `factory:fix` / `factory:pr` のいずれも付けない。
+- 対象は `factory_config` の `repo_allowlist`(未指定なら `owners` に含まれるリポジトリ全体)に含まれるリポジトリのみ。試験的に対象を絞りたい場合は `repo_allowlist` に対象リポジトリを明示する。
+
 ## 更新の反映
 
 - 通常の更新は `git pull` してから `mise run deploy` を実行する(ホスト側 checkout で `git pull --ff-only` → worker イメージのビルド → `docker compose up -d` → `wmill sync push` → migration を一括実行する)。
+- worker の並列数(`NUM_WORKERS`)のような `infra/docker-compose.yml` の変更は、通常の `git pull` だけでは反映されない。`mise run deploy` を実行して worker イメージの再ビルドとコンテナの再起動まで行う。
 - `wmill sync push` に **`--include-secrets` を付けてはいけない**。付けるとリポジトリ内の `f/factory/*.variable.yaml`(値は空のままコミットされている)で4つの secret 変数(`claude_oauth_token` / `github_token` / `wmill_token` / `discord_webhook_url`)が空に上書きされる。`mise run push`(`wmill sync push --yes --keep-deleted`)は `--include-secrets` を付けない設定になっている。
 - `self_update` スケジュール(未実装)が `infra/` や `mise.toml` の変更を検知すると、Discord とダッシュボードの Notices で「`mise run deploy` を実行してください」と通知する想定。
 - ダッシュボード App(未実装)を編集する場合の規約: 最新を `mise run pull` で取り込む → Windmill UI で編集する → 再度 `mise run pull` でローカルに反映する → コミットする。同時編集は避ける。

@@ -21,7 +21,24 @@ schema:
     - factory_repo
     - instance_name
     - windmill_public_url
+    - review_label
+    - fix_label
+    - pr_label
+    - review_post_mode
+    - max_fix_rounds
+    - allowed_check_commands
+    - default_reviewers
+    - repo_allowlist
+    - diff_max_lines
   properties:
+    allowed_check_commands:
+      type: array
+      description: Shell commands pr_fix.flow may run (via `env -i`, no secrets, with a
+        timeout) to check a repo's standard checks before a second Claude Code run, e.g.
+        ["mise run check"]. Empty means no check command is run.
+      default: []
+      items:
+        type: string
     allowed_labeler_associations:
       type: array
       description: GitHub author_association values allowed to apply trigger_label for
@@ -48,10 +65,26 @@ schema:
       type: number
       description: Daily USD budget across all agent runs before new runs are refused.
       default: 50
+    default_reviewers:
+      type: array
+      description: GitHub logins requested as reviewers on a pull request pr_fix.flow
+        just pushed to. Empty means keep the PR's existing reviewers.
+      default: []
+      items:
+        type: string
+    diff_max_lines:
+      type: integer
+      description: Max diff lines passed inline to a review/fix Claude Code prompt;
+        beyond this only the changed-file list is passed and Claude reads the rest itself.
+      default: 3000
     factory_repo:
       type: string
       description: HTTPS clone URL of this factory repository (self-update target).
       format: uri
+    fix_label:
+      type: string
+      description: Label that hands a pull request to pr_fix.flow.
+      default: factory:fix
     instance_name:
       type: string
       description: Label for this Windmill instance, shown in Discord notices and
@@ -65,6 +98,11 @@ schema:
       type: number
       description: Max USD budget passed to `claude -p --max-budget-usd` per stage run.
       default: 5
+    max_fix_rounds:
+      type: integer
+      description: Max pr_fix.flow rounds for one pull request before falling back to
+        needs_human.
+      default: 3
     max_turns:
       type: integer
       description: Max turns passed to `claude -p --max-turns` per stage run.
@@ -94,6 +132,30 @@ schema:
         required:
           - name
           - kind
+    pr_label:
+      type: string
+      description: Label applied to a pull request the factory itself opened, so
+        pr_review.flow knows to pass it the PR's approved requirements.
+      default: factory:pr
+    repo_allowlist:
+      type: array
+      description: HTTPS clone URLs of repos the factory is allowed to act on. Empty
+        means no restriction beyond owners.
+      default: []
+      items:
+        type: string
+    review_label:
+      type: string
+      description: Label that hands a pull request to pr_review.flow.
+      default: factory:review
+    review_post_mode:
+      type: string
+      description: How pr_review.flow posts its review. "gated" is reserved for a
+        future cycle and not yet implemented.
+      default: comment_only
+      enum:
+        - comment_only
+        - gated
     trigger_label:
       type: string
       description: Issue label that hands an issue to the factory.

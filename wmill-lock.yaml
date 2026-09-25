@@ -1,2 +1,12 @@
 version: v2
-locks: {}
+locks:
+  f/factory/lib/claude: e7ae99dc5f490a8d005b70ccc8dc2861ca345be987928e00ed92ba2d7cf60926
+  f/factory/lib/config: 8424f92d8e695d9cf1d12ad59ea0d77d9a62253e07474bdb112e1212cd0e9357
+  f/factory/lib/db: 45780d43d2ad5aba37995b976c16cea7d61f5f7c3d595ba792f0f12018f6a04a
+  f/factory/lib/discord: 2a5d4a10aed8184c72d5594ce50ef29a0aa55b01beaa639dc72a19fca10a32c4
+  f/factory/lib/drawio: 78c0f3bc64d324271bd8c7a2a0b41b0521f6522607e15466458648386300153a
+  f/factory/lib/github: aa94e468ad39ea2bbbb5e6b55eece846e39ca211448b60cc5a0a29fd2109f3b3
+  f/factory/lib/log: 8e038bd30d8ecb80766be307830d7d532ae49d23f471093ea3faac677c533aa5
+  f/factory/lib/prompts: e91216f0e65091dfc76b560422b728d8dc4de5c3ce4434e0c4905a6be27fe910
+  f/factory/lib/types: 47c1d91236c6793f5aae199a16036e203a6a966afb3cdd412ddafa5a21b5eb39
+  f/factory/lib/workspace: 678c23596396d74b9e71565ee7235952fda8edaa0a27734066201aede33fa565

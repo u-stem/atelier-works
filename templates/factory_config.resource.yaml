@@ -30,6 +30,15 @@ value:
   factory_repo: https://github.com/u-stem/atelier-works
   instance_name: local
   windmill_public_url: http://127.0.0.1:8080
+  review_label: "factory:review"
+  fix_label: "factory:fix"
+  pr_label: "factory:pr"
+  review_post_mode: comment_only
+  max_fix_rounds: 3
+  allowed_check_commands: []
+  default_reviewers: []
+  repo_allowlist: []
+  diff_max_lines: 3000
 resource_type: c_factory_config
 description: >-
   Seed configuration for a single personal-account instance. Set owners and

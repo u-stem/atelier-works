@@ -7,7 +7,7 @@ Software Factory は GitHub Issue を起点に、要件定義から自己改善�
 主なコンポーネント:
 
 - **GitHub**: Issue の起票・ラベル付け・PR・コメントのやり取り先。`factory` ラベルが付いた Issue が入力になる。
-- **Windmill server / worker**: フローとスケジュールの実行基盤。worker はカスタムイメージで動き、`claude`(Claude Code CLI)、`gh`、`gtr`(git worktree runner)、`wmill` を同梱する。worker は単一の default ワーカーグループで 1 replica 動作する。
+- **Windmill server / worker**: フローとスケジュールの実行基盤。worker はカスタムイメージで動き、`claude`(Claude Code CLI)、`gh`、`gtr`(git worktree runner)、`wmill` を同梱する。worker は default ワーカーグループの 1 コンテナで、`NUM_WORKERS=3` により内部で 3 つのワーカープロセスが並列動作する(メモリ上限は 1 コンテナ分の 4096M のまま)。
 - **Data Tables**: 作業の状態・要件定義ドラフト・承認履歴・実行ログ・失敗記録などを保持する Postgres ベースのテーブル群。
 - **App(ダッシュボード)**: 承認 Inbox、パイプラインの一覧、コスト等の分析、失敗の再実行、通知一覧を提供する UI。
 - **Discord**: 各イベント(拾い上げ、承認待ち、承認、却下、要対応、失敗など)を Webhook 経由で通知する。
@@ -57,12 +57,24 @@ stateDiagram-v2
     requirements_generating --> cancelled: Issueがclosed/ラベル剥奪
     awaiting_approval --> cancelled: Issueがclosed/ラベル剥奪
     approved --> implementing: 工程3(未実装、拡張点)
-    implementing --> requirements_generating: gap(attempt+1)
+    implementing --> requirements_generating: gap(工程3実装からのgap、未実装、attempt+1)
     implementing --> pr_open
+    approved --> requirements_generating: gap(pr_fixのrequirements_gap、parent_work_item_id経由、attempt+1)
+    [*] --> reviewing: PRレビュー起動(kind=pr_review)
+    reviewing --> reviewed
+    reviewing --> cancelled: PRがclosed/merged
+    [*] --> fixing: PR修正起動(kind=pr_fix)
+    fixing --> rereview_requested
+    fixing --> blocked
+    fixing --> needs_human: requirements_gap(元Issueが分からない場合)
+    fixing --> cancelled: PRがclosed/merged
+    blocked --> needs_human
     needs_human --> [*]
     failed --> [*]
     expired --> [*]
     cancelled --> [*]
+    reviewed --> [*]
+    rereview_requested --> [*]
 ```
 
 ### status 一覧
@@ -80,6 +92,11 @@ stateDiagram-v2
 | `cancelled` | Issue が closed またはラベル剥奪 | 1/2 |
 | `implementing` | 実装中(worktree 上で実装 → レビュー → PR 作成) | 3(未実装、拡張点) |
 | `pr_open` | 実装が完了し PR を作成した | 3(未実装、拡張点) |
+| `reviewing` | PR レビューを実行中(`kind=pr_review`) | PR ワークフロー |
+| `reviewed` | PR レビューを COMMENT として投稿済み(終端、`kind=pr_review`) | PR ワークフロー |
+| `fixing` | レビュー指摘・コメントの修正を実行中(`kind=pr_fix`) | PR ワークフロー |
+| `rereview_requested` | 修正を push し再レビューを依頼した(終端、`kind=pr_fix`) | PR ワークフロー |
+| `blocked` | 禁止された変更パターンの検出、または安全策の前提が崩れて中断(`kind=pr_fix`) | PR ワークフロー |
 
 ## データモデル
 
@@ -113,7 +130,21 @@ Data Tables はスキーマ `factory` に置く。migration は追加のみで�
 | `cleanup_workspaces` | schedule(毎日 03:00) | 期限切れ worktree の削除、古い transcript の削除 |
 | `daily_summary` | schedule(毎日 09:00) | 前日のコスト・件数・失敗を Discord に通知 |
 
-各 schedule の cron はタイムゾーン `Asia/Tokyo`、Windmill の 6 フィールド形式で `*.schedule.yaml` に持つ。schedule ごとに advisory lock で多重実行を防ぎ、error handler で失敗を `job_failures` と Discord 通知に流す。承認のタイムアウト(7 日)は schedule ではなく `pipeline` の suspend 設定側が持つ。
+各 schedule の cron はタイムゾーン `Asia/Tokyo`、Windmill の 6 フィールド形式で `*.schedule.yaml` に持つ。多重実行防止は advisory lock を使わず、各 schedule の `no_flow_overlap: true` で行う(前回実行中はスキップする)。複数インスタンスを同時運用する場合の排他は Windmill 側ではなく GitHub 側の claim(`wip` ラベル + assignee)で担保する。error handler で失敗を `job_failures` と Discord 通知に流す。承認のタイムアウト(7 日)は schedule ではなく `pipeline` の suspend 設定側が持つ。
+
+## PR ワークフロー(pr_review / pr_fix)
+
+工程1→2(Issue の要件定義)とは別に、既存の PR(人が作った PR、または将来 factory 自身が作る PR)をレビュー・修正するワークフローを持つ。
+
+- **起動条件**:
+  - `pr_review`: PR に `factory:review` ラベルが付与されたとき(起動時にラベルを外す)、または PR の review-requested / assignee がこのインスタンスの GitHub アカウントで、`head_sha` が未処理のとき。
+  - `pr_fix`: PR に `factory:fix` ラベルが付与されたとき(起動時にラベルを外す)、または PR コメントに `/factory fix` と書き込まれたとき。
+- **自己再発火の防止**: factory が投稿する Issue コメント・PR レビュー・レビュー返信には必ず marker(`<!-- factory:<kind>:<work_item_id> -->`)を埋め込む。GitHub 上の自分のログイン名と一致する投稿、または marker 付きの投稿は「人間の入力」として扱わず、起動条件の判定から除外する。
+- **作業ディレクトリ**: `/workspaces/<owner>/<repo>/main` は fetch 専用(working tree を checkout しない)。
+  - `pr_review` は `git worktree add --detach /workspaces/<owner>/<repo>/review-<pr>-<sha7> <sha>` で PR ごとの detached worktree を使い、終了時に削除する。
+  - `pr_fix` は `git gtr new` で作る PR ブランチの worktree を使う。
+- **pr_review**: PR 本文・差分・変更ファイル一覧(factory 製 PR なら承認済み要件も)を入力にレビューし、結果は常に GitHub の COMMENT レビューとして投稿する(スキル内部の `verdict` は記録用で、投稿種別には反映しない)。完了すると `reviewed`(終端)。
+- **pr_fix**: レビュー指摘・未解決コメント・要件を入力に修正し、push 後に各コメントへ返信して再レビューを依頼する(`rereview_requested`)。要件変更が必要な場合は自分で要件や設計を書き換えず `requirements_gap` として中断し、元 Issue の work item(`parent_work_item_id` で紐付け)を `requirements_generating` に attempt+1 で戻す。安全策の詳細は [docs/security.md](security.md) を参照。
 
 ## 自己更新の仕組み(self_update)
 
