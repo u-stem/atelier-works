@@ -139,10 +139,11 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加のみで、ren
 | `job_failures` | フロー実行時のエラー(トークンはマスク済み) |
 | `deployments` | self_updateによるデプロイ結果 |
 | `notices` | 要対応事項(ホスト操作要、PAT失効、SHA不一致など) |
+| `issue_proposals` | pr_fixの`propose_issue`返信が提案するIssue(title / body)と、その承認 / 却下の判断履歴 |
 
 ### view(Appはこれらのみを参照する)
 
-`v_inbox`、`v_pipeline`、`v_agent_cost_daily`、`v_approval_stats`、`v_lead_time`、`v_failures`、`v_notices`
+`v_inbox`、`v_pipeline`、`v_agent_cost_daily`、`v_approval_stats`、`v_lead_time`、`v_failures`、`v_notices`、`v_issue_proposals`
 
 ## フローとスケジュール
 
@@ -197,6 +198,7 @@ WindmillのUIはsummaryでソートされるため、種別を示すタグをsum
 | `f/factory/steps/pr_fix_apply` | `[SF-3-2/3] 修正の適用(Claude)` |
 | `f/factory/steps/pr_fix_verify` | `[SF-3-2/4] 変更の検証` |
 | `f/factory/steps/pr_fix_finish` | `[SF-3-2/5] push と再レビュー依頼` |
+| `f/factory/issue_proposal_decide` | `[OP-3-1] Issue化提案の承認 / 却下` |
 | `f/factory/steps/pr_workflow_support` | `[LIB] PR ワークフロー共通処理` |
 | `f/factory/self_update`(script + schedule) | `[SYS-1] Software Factory 自身を最新化` |
 | `f/factory/cleanup_workspaces`(script + schedule) | `[SYS-2] 作業領域を掃除` |
@@ -233,9 +235,10 @@ WindmillのUIはsummaryでソートされるため、種別を示すタグをsum
   - `pr_fix`は`git gtr new`で作るPRブランチのworktreeを使う。
 - **pr_review**: PR本文・差分・変更ファイル一覧(factory製PRなら承認済み要件も)を入力にレビューし、結果は常にGitHubのCOMMENTレビューとして投稿する(スキル内部の`verdict`は記録用で、投稿種別には反映しない)。完了すると`reviewed`(終端)。
 - **pr_fix**: レビュー指摘・未解決コメント・要件を入力に修正し、push後に各コメントへ返信して再レビューを依頼する(`rereview_requested`)。要件変更が必要な場合は自分で要件や設計を書き換えず`requirements_gap`として中断し、元Issueのwork item(`parent_work_item_id`で紐付け)を`requirements_generating`にattempt+1で戻す。安全策の詳細は [docs/security.md](security.md)を参照。
-- **PRに書くのはレビュー本体と返信のみ**: pr_reviewの指摘・総評、pr_fixの返信のみをPRに投稿し、失敗・要人手・ブロック・requirements_gapといった運用通知はPRに書かずDiscordに送る。
+- **propose_issue(Issue化提案、ユーザー決定2026-09-26)**: pr_fixの各返信は`fixed` / `skipped`に加え`propose_issue`を選べる。指摘は妥当だがこのPRの範囲外という判断で、Claudeは修正を強行せずIssueのtitle/bodyを`factory.issue_proposals`に記録する(`pr_fix_finish`が挿入し、レビューコメントのthread idを`listReviewThreads`でベストエフォート解決する)。1件でも提案があるその回のpr_fixは`rereview_requested`ではなく`needs_human`で終わり(状態ラベルは`needs_human_label`)、Discordに`ConsoleのInboxで提案を承認または却下してください`という通知が飛ぶ。人が`f/factory/issue_proposal_decide`で承認するとその提案のIssueを対象リポジトリに作成してスレッドへ返信・resolveし、却下すると理由を返信してスレッドは開いたままにする(承認・却下いずれも要件定義の承認と同じ「人が判断してから進む」枠組み)。対象work itemの提案がすべて決定すると、状態ラベルはその回でコミットをpushしていれば`rereview_label`、していなければ`reviewed_label`へ切り替わる(`decideIssueProposalLabelSwap`、pr_workflow_support.ts)。返信対象がPRレビューコメントかプレーンなissueコメントかは行挿入時に`is_inline`列へ記録し(`matchReviewThreadForComment`もコメントの`databaseId`で一致させ、`(path, line)`には依存しない)、`issue_proposal_decide`はそれをもとに決定的に返信先を選ぶ。承認は`decided_by`(要件定義の承認と同じfail-closed導出)と`status = 'pending'`条件付きUPDATEによる楽観ロック、作成したIssue本文へ埋め込む`<!-- factory:issue_proposal:<id> -->`マーカー(`findIssueByMarker`で再検索して再利用)によって、途中でクラッシュしても再実行が安全になっている(Issueの二重作成や決定の上書きは起きない)。詳細な手順は [docs/operations.md](operations.md)の「Issue化提案の承認 / 却下」を参照。
+- **PRに書くのはレビュー本体と返信のみ**: pr_reviewの指摘・総評、pr_fixの返信のみをPRに投稿し、失敗・要人手・ブロック・requirements_gap・Issue化提案の承認/却下結果といった運用系の内容も、通知はPRに書かずDiscordに送る(Issue化提案の承認/却下自体への返信はPRのスレッドに書く。上記参照)。
 - **状態ラベル**: factoryが扱ったPRには常に高々1つの状態ラベル(`changes_requested_label` / `reviewed_label` / `rereview_label` / `needs_human_label`、いずれも`factory_config`で設定可能)をfactory自身が設定・付け替える。人はこれを見るだけでPRが何を待っているか分かり、`poll_prs`の`searchPrs`はトリガーラベルが外れた後もこの状態ラベルで対象PRを再発見する(詳細は [docs/operations.md](operations.md)の「ラベルと終端状態」を参照)。
-- **watermark**: 処理済みwatermark(`last_review_id` / `last_comment_id` / `last_review_comment_id`)はpr_fixがpushに成功したとき、またはrequirements_gapで元Issueへ差し戻したときにのみ進める。それ以外の終端(`failed` / `needs_human` / `blocked`)では進めず、`retry_work_item`による再実行で同じフィードバックを再収集できるようにする。
+- **watermark**: 処理済みwatermark(`last_review_id` / `last_comment_id` / `last_review_comment_id`)はpr_fixがpushに成功したとき、またはrequirements_gapで元Issueへ差し戻したときにのみ進める。それ以外の終端(`failed` / `needs_human` / `blocked`)では進めず、`retry_work_item`による再実行で同じフィードバックを再収集できるようにする。push成功時にIssue化提案があって`needs_human`に終わる場合も、watermarkは(pushが実際に成功しているため)通常のpush成功と同様に進める。
 
 ## 自己更新の仕組み(self_update)
 

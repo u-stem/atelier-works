@@ -3,16 +3,22 @@ import {
   addNotice,
   bumpWatermarks,
   clearResumeUrls,
+  countPendingIssueProposals,
+  decideIssueProposal,
   findApprovedWorkItemForIssue,
+  getIssueProposal,
   getWorkItem,
   hasPriorReview,
   insertFixRound,
+  insertIssueProposal,
   insertReview,
   insertWorkItem,
   latestApproval,
   latestDraft,
+  latestFixRound,
   latestPrWorkItem,
   listActive,
+  listPendingIssueProposals,
   listStaleTerminalWorkItems,
   nextCycleForIssue,
   recordAgentRun,
@@ -26,11 +32,13 @@ import {
   setFixRound,
   setFlowJobId,
   setHeadSha,
+  setIssueProposalCreatedIssue,
   setObservedWatermarks,
   setResumeUrls,
   sumAgentCostSince,
   toApproval,
   toFixRoundRecord,
+  toIssueProposal,
   toRequirementDraft,
   toReviewRecord,
   updateStatus,
@@ -798,6 +806,247 @@ describe("toFixRoundRecord", () => {
     expect(fixRound.replies).toEqual([
       { review_comment_id: 101, body: "fixed", decision: "fixed" },
     ]);
+  });
+});
+
+describe("latestFixRound", () => {
+  test("returns null when the work item has no fix round yet", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    const fixRound = await latestFixRound(1, sql);
+    expect(fixRound).toBeNull();
+  });
+
+  test("returns the most recently created fix round", async () => {
+    const { sql } = createFakeSqlClient([
+      [
+        {
+          work_item_id: 1,
+          round: 2,
+          trigger_review_ids: [17],
+          outcome: "done",
+          replies: [],
+          commit_shas: ["deadbeef"],
+        },
+      ],
+    ]);
+    const fixRound = await latestFixRound(1, sql);
+    expect(fixRound?.round).toBe(2);
+  });
+});
+
+describe("insertIssueProposal", () => {
+  test("inserts into factory.issue_proposals", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 3 }]]);
+    await insertIssueProposal(
+      {
+        work_item_id: 1,
+        review_comment_id: 101,
+        thread_id: "PRRT_1",
+        title: "Extract a shared helper",
+        body: "背景\n提案\n{{pr_url}}",
+        is_inline: true,
+      },
+      sql,
+    );
+    expect(calls[0]?.text).toContain("INSERT INTO factory.issue_proposals");
+  });
+
+  test("casts work_item_id and review_comment_id to their real numeric type", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 3 }]]);
+    await insertIssueProposal(
+      {
+        work_item_id: 1,
+        review_comment_id: 101,
+        thread_id: null,
+        title: "Extract a shared helper",
+        body: "背景\n提案\n{{pr_url}}",
+        is_inline: false,
+      },
+      sql,
+    );
+    const text = calls[0]?.text ?? "";
+    expect(text).toContain("::bigint");
+  });
+});
+
+describe("toIssueProposal", () => {
+  test("parses a factory.issue_proposals row", () => {
+    const proposal = toIssueProposal({
+      id: 3,
+      work_item_id: 1,
+      review_comment_id: 101,
+      thread_id: "PRRT_1",
+      title: "Extract a shared helper",
+      body: "背景\n提案\n{{pr_url}}",
+      status: "pending",
+      decided_by: null,
+      decision_reason: null,
+      with_factory_label: null,
+      created_issue_number: null,
+      created_issue_url: null,
+      is_inline: true,
+      created_at: NOW.toISOString(),
+      decided_at: null,
+    });
+    expect(proposal).toMatchObject({
+      id: 3,
+      status: "pending",
+      title: "Extract a shared helper",
+      is_inline: true,
+    });
+  });
+});
+
+describe("getIssueProposal", () => {
+  test("returns null when the proposal does not exist", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    const proposal = await getIssueProposal(99, sql);
+    expect(proposal).toBeNull();
+  });
+
+  test("returns the parsed proposal when found", async () => {
+    const { sql } = createFakeSqlClient([
+      [
+        {
+          id: 3,
+          work_item_id: 1,
+          review_comment_id: 101,
+          thread_id: null,
+          title: "Extract a shared helper",
+          body: "背景\n提案\n{{pr_url}}",
+          status: "pending",
+          decided_by: null,
+          decision_reason: null,
+          with_factory_label: null,
+          created_issue_number: null,
+          created_issue_url: null,
+          is_inline: true,
+          created_at: NOW.toISOString(),
+          decided_at: null,
+        },
+      ],
+    ]);
+    const proposal = await getIssueProposal(3, sql);
+    expect(proposal?.id).toBe(3);
+  });
+});
+
+describe("listPendingIssueProposals", () => {
+  test("returns only the pending rows for a work item", async () => {
+    const { sql, calls } = createFakeSqlClient([
+      [
+        {
+          id: 3,
+          work_item_id: 1,
+          review_comment_id: 101,
+          thread_id: null,
+          title: "Extract a shared helper",
+          body: "背景\n提案\n{{pr_url}}",
+          status: "pending",
+          decided_by: null,
+          decision_reason: null,
+          with_factory_label: null,
+          created_issue_number: null,
+          created_issue_url: null,
+          is_inline: true,
+          created_at: NOW.toISOString(),
+          decided_at: null,
+        },
+      ],
+    ]);
+    const proposals = await listPendingIssueProposals(1, sql);
+    expect(proposals).toHaveLength(1);
+    expect(calls[0]?.text).toContain("status = 'pending'");
+  });
+});
+
+describe("decideIssueProposal", () => {
+  test("updates status, decided_by, and the created Issue fields", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 3 }]]);
+    const updated = await decideIssueProposal(
+      3,
+      {
+        status: "approved",
+        decided_by: "alice",
+        decision_reason: null,
+        with_factory_label: true,
+        created_issue_number: 42,
+        created_issue_url:
+          "https://github.com/octo-owner/atelier-works/issues/42",
+      },
+      sql,
+    );
+    expect(calls[0]?.text).toContain("UPDATE factory.issue_proposals");
+    expect(updated).toBe(true);
+  });
+
+  // team-lead fix round, [MUST] #2: guarded by `WHERE status = 'pending'` so
+  // it doubles as an optimistic lock — issue_proposal_decide.ts relies on
+  // this to tell a fresh decision from a retry.
+  test("guards the update with WHERE status = 'pending'", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 3 }]]);
+    await decideIssueProposal(
+      3,
+      {
+        status: "rejected",
+        decided_by: "alice",
+        decision_reason: "scope外のため",
+        with_factory_label: null,
+        created_issue_number: null,
+        created_issue_url: null,
+      },
+      sql,
+    );
+    expect(calls[0]?.text).toContain("status = 'pending'");
+  });
+
+  test("returns false when no pending row matched (already decided)", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    const updated = await decideIssueProposal(
+      3,
+      {
+        status: "approved",
+        decided_by: "alice",
+        decision_reason: null,
+        with_factory_label: true,
+        created_issue_number: null,
+        created_issue_url: null,
+      },
+      sql,
+    );
+    expect(updated).toBe(false);
+  });
+});
+
+describe("setIssueProposalCreatedIssue", () => {
+  test("writes the created Issue's number and url", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await setIssueProposalCreatedIssue(
+      3,
+      {
+        created_issue_number: 42,
+        created_issue_url:
+          "https://github.com/octo-owner/atelier-works/issues/42",
+      },
+      sql,
+    );
+    expect(calls[0]?.text).toContain("UPDATE factory.issue_proposals");
+    expect(calls[0]?.text).toContain("created_issue_number");
+  });
+});
+
+describe("countPendingIssueProposals", () => {
+  test("returns the pending count for a work item", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ pending_count: 2 }]]);
+    const count = await countPendingIssueProposals(1, sql);
+    expect(count).toBe(2);
+    expect(calls[0]?.text).toContain("status = 'pending'");
+  });
+
+  test("returns 0 when no row is returned", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    const count = await countPendingIssueProposals(1, sql);
+    expect(count).toBe(0);
   });
 });
 

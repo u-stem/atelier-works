@@ -255,6 +255,46 @@ describe("runConsoleQuery", () => {
       commit_shas: ["deadbee"],
     });
   });
+
+  // User decision (2026-09-26): the Inbox needs every still-pending
+  // propose_issue proposal, so this query filters to status = 'pending'
+  // itself rather than relying on the view (unlike v_inbox, which already
+  // filters in the view).
+  test("issue_proposals: queries factory.v_issue_proposals filtered to pending", async () => {
+    const row: SqlRow = {
+      issue_proposal_id: 5,
+      work_item_id: 2,
+      owner: "octo-owner",
+      repo: "atelier-works",
+      pr_number: 7,
+      pr_title: "Add feature",
+      claimed_by: "factory-local",
+      review_comment_id: 101,
+      thread_id: "PRRT_1",
+      title: "共有ヘルパーへ抽出する",
+      body: "背景\n提案",
+      status: "pending",
+      decided_by: null,
+      decision_reason: null,
+      with_factory_label: null,
+      created_issue_number: null,
+      created_issue_url: null,
+      is_inline: true,
+      created_at: NOW.toISOString(),
+      decided_at: null,
+    };
+    const { sql, calls } = createFakeSqlClient([[row]]);
+
+    const rows = await runConsoleQuery("issue_proposals", 200, 30, sql);
+
+    expect(calls[0]?.text).toContain("FROM factory.v_issue_proposals");
+    expect(calls[0]?.text).toContain("status = 'pending'");
+    expect(rows[0]).toMatchObject({
+      issue_proposal_id: 5,
+      status: "pending",
+      title: "共有ヘルパーへ抽出する",
+    });
+  });
 });
 
 describe("main", () => {

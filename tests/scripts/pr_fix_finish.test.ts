@@ -185,4 +185,51 @@ describe("renderFixReply", () => {
     const body = renderFixReply(fixReply({ decision: "skipped" }), null);
     expect(body.split("\n").at(-1)).toBe("対応: 見送り");
   });
+
+  // User decision (2026-09-26): a finding that is valid but out of this
+  // PR's scope gets a distinct rendering — the proposed Issue's title and a
+  // preview of its body, ending with a dedicated disposition line instead
+  // of a commit sha or 見送り.
+  describe("propose_issue", () => {
+    const proposeReply = fixReply({
+      decision: "propose_issue",
+      issue_proposal: {
+        title: "共有ヘルパーへ抽出する",
+        body: "背景\n提案\nhttps://github.com/octo-owner/atelier-works/pull/1",
+      },
+    });
+
+    test("ends with the Issue化提案 disposition line", () => {
+      const body = renderFixReply(proposeReply, "abc1234ef");
+      expect(body.split("\n").at(-1)).toBe("対応: Issue化を提案(承認待ち)");
+    });
+
+    test("includes the proposed Issue's title", () => {
+      const body = renderFixReply(proposeReply, "abc1234ef");
+      expect(body).toContain("提案するIssue: 共有ヘルパーへ抽出する");
+    });
+
+    test("quotes the first 3 lines of the proposed Issue's body", () => {
+      const body = renderFixReply(proposeReply, "abc1234ef");
+      expect(body).toContain(
+        "> 背景\n> 提案\n> https://github.com/octo-owner/atelier-works/pull/1",
+      );
+    });
+
+    test("does not quote a 4th body line", () => {
+      const reply = fixReply({
+        decision: "propose_issue",
+        issue_proposal: { title: "t", body: "l1\nl2\nl3\nl4" },
+      });
+      expect(renderFixReply(reply, null)).not.toContain("> l4");
+    });
+
+    test("falls back to an empty title/body when issue_proposal is missing", () => {
+      const reply = fixReply({
+        decision: "propose_issue",
+        issue_proposal: null,
+      });
+      expect(() => renderFixReply(reply, null)).not.toThrow();
+    });
+  });
 });

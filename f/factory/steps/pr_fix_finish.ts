@@ -26,6 +26,7 @@ import {
   bumpWatermarks,
   getWorkItem,
   insertFixRound,
+  insertIssueProposal,
   setFlowJobId,
   setHeadSha,
   updateStatus,
@@ -38,6 +39,7 @@ import {
   getPr,
   getViewer,
   gitIdentityForViewer,
+  listReviewThreads,
   postIssueComment,
   replyReviewComment,
   requestReviewers,
@@ -47,6 +49,7 @@ import { logger, maskSecrets } from "../lib/log.ts";
 import { type FixReply, isOneOf, type WorkItemStatus } from "../lib/types.ts";
 import { commitAndPush, runCommand } from "../lib/workspace.ts";
 import {
+  buildIssueProposalReason,
   type CollectedComment,
   type CollectedReview,
   composeCommitMessage,
@@ -55,10 +58,12 @@ import {
   describeReason,
   evaluateRelabelFailure,
   filterKnownReplies,
+  matchReviewThreadForComment,
   nextActionFor,
   type PrFixFinishOutcome,
   removeTerminalLabels,
   renderFixReply,
+  selectProposeIssueReplies,
   setStateLabel,
   shouldAdvanceWatermarks,
   stateLabelForFixOutcome,
@@ -411,11 +416,78 @@ export async function main(
    * Claude marked every one "skipped" — instead of dropping them silently).
    * Shared by the push-success and nothing_to_commit paths so a queued
    * reply reaches GitHub either way.
+   *
+   * For a `propose_issue` reply (team-lead fix round, [MUST] #3 "Proposal
+   * rows must never be silently lost"), the `factory.issue_proposals` row is
+   * inserted *before* its reply is posted: if the insert throws, the reply
+   * for that item is skipped entirely (never posted) and an
+   * `issue_proposal_record_failed` notice is recorded, so a human sees the
+   * failure via the Console Notices tab instead of a PR comment promising an
+   * Issue review that was never actually recorded anywhere. If posting the
+   * reply itself then fails (the row already exists), that is not fatal —
+   * the proposal is already visible in the Console Inbox regardless of
+   * whether GitHub ever shows its reply. `thread_id` is resolved best-effort
+   * via a single `listReviewThreads` call, reused across every proposal this
+   * round (only fetched when at least one proposal is inline — a plain issue
+   * comment has no review thread at all).
    */
   async function postFixReplies(newSha: string | null): Promise<void> {
+    const proposeReplies = repliesToPost.filter(
+      (reply) => reply.decision === "propose_issue",
+    );
+    const hasInlineProposal = proposeReplies.some((reply) => {
+      const original = commentById.get(reply.review_comment_id);
+      return original !== undefined && original.path.length > 0;
+    });
+    const threads = hasInlineProposal
+      ? await listReviewThreads(client, owner, repo, pr_number)
+      : [];
+
     for (const reply of repliesToPost) {
       const original = commentById.get(reply.review_comment_id);
       const isInline = original !== undefined && original.path.length > 0;
+
+      if (reply.decision === "propose_issue") {
+        const proposal = reply.issue_proposal;
+        if (proposal === null || proposal === undefined) continue;
+        try {
+          await insertIssueProposal({
+            work_item_id,
+            review_comment_id: reply.review_comment_id,
+            thread_id: matchReviewThreadForComment(
+              threads,
+              reply.review_comment_id,
+            ),
+            title: proposal.title,
+            body: proposal.body,
+            is_inline: isInline,
+          });
+        } catch (err) {
+          const message = maskSecrets(
+            err instanceof Error ? err.message : String(err),
+          );
+          log.error("failed to record an issue proposal; skipping its reply", {
+            review_comment_id: reply.review_comment_id,
+            error: message,
+          });
+          try {
+            await addNotice({
+              kind: "issue_proposal_record_failed",
+              message: `${owner}/${repo}#${String(pr_number)} (work item ${String(work_item_id)}): 提案の記録に失敗しました: ${message}`,
+            });
+          } catch (noticeErr) {
+            log.warn("failed to record issue_proposal_record_failed notice", {
+              error: maskSecrets(
+                noticeErr instanceof Error
+                  ? noticeErr.message
+                  : String(noticeErr),
+              ),
+            });
+          }
+          continue;
+        }
+      }
+
       const body = withMarker(
         "pr_fix",
         work_item_id,
@@ -484,9 +556,21 @@ export async function main(
     // no actual diff), and those replies must still reach GitHub instead of
     // being silently dropped.
     await postFixReplies(null);
+    // User decision (2026-09-26): a propose_issue reply is recorded here too
+    // (not just on the push-success path below) — Claude can decide a
+    // finding is out of scope even on a round that ends up with nothing to
+    // commit. `postFixReplies` above already inserted the
+    // factory.issue_proposals row(s) before posting their replies (team-lead
+    // fix round, [MUST] #3). When at least one was recorded, the Discord
+    // reason names the proposal(s) instead of the generic "nothing to
+    // commit" text, so the notification points the operator at the Console
+    // Inbox.
+    const nothingToCommitProposals = selectProposeIssueReplies(repliesToPost);
     await finalizeTerminal(
       "needs_human",
-      "no changes to commit; replies posted",
+      nothingToCommitProposals.length > 0
+        ? buildIssueProposalReason(nothingToCommitProposals.length)
+        : "no changes to commit; replies posted",
     );
     return {
       ok: true,
@@ -520,6 +604,67 @@ export async function main(
       last_comment_id: max_comment_id,
       last_review_comment_id: max_review_comment_id,
     });
+  }
+
+  // User decision (2026-09-26): when this round recorded one or more
+  // propose_issue replies, the PR is not ready for re-review yet — a human
+  // must first approve or reject the proposed Issue(s) from the Console
+  // Inbox (issue_proposal_decide.ts). The round ends needs_human instead of
+  // rereview_requested, and the reviewer-request step below is skipped
+  // entirely; issue_proposal_decide.ts swaps the label to rereview_label
+  // once every proposal for this work item has been decided.
+  // `postFixReplies` above already inserted the factory.issue_proposals
+  // row(s) before posting their replies (team-lead fix round, [MUST] #3).
+  const proposeIssueReplies = selectProposeIssueReplies(repliesToPost);
+  if (proposeIssueReplies.length > 0) {
+    const proposalReason = buildIssueProposalReason(proposeIssueReplies.length);
+    const moved = await updateStatusIfCurrent(
+      work_item_id,
+      "fixing",
+      "needs_human",
+      proposalReason,
+    );
+    if (moved) {
+      await removeTerminalLabels(
+        client,
+        owner,
+        repo,
+        pr_number,
+        [config.wip_label, config.fix_label],
+        log,
+      );
+      await setStateLabel(
+        client,
+        owner,
+        repo,
+        pr_number,
+        config,
+        stateLabelForFixOutcome("needs_human", config),
+        log,
+      );
+      if (webhookUrl.length > 0) {
+        try {
+          const event: NotifyEvent = {
+            kind: "needs_human",
+            instance_name: config.instance_name,
+            owner,
+            repo,
+            url: prUrl,
+            reason: describeReason(proposalReason),
+            target: { kind: "pr", number: pr_number },
+            next_action: nextActionFor(proposalReason),
+          };
+          await notify(webhookUrl, event);
+        } catch (err) {
+          log.warn("discord notify failed", {
+            error: maskSecrets(
+              err instanceof Error ? err.message : String(err),
+            ),
+          });
+        }
+      }
+    }
+    return { ok: true, final_status: "needs_human", notice: proposalReason };
   }
 
   const pr = await getPr(client, owner, repo, pr_number);

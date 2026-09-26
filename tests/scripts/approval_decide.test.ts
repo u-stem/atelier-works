@@ -3,7 +3,6 @@ import {
   assertValidApprovalDecideInput,
   buildRecordedReason,
   classifyExistingApproval,
-  deriveApprover,
   isDecisionForCurrentAttempt,
   resolveInternalBase,
   toInternalUrl,
@@ -35,30 +34,6 @@ describe("assertValidApprovalDecideInput", () => {
     expect(() =>
       assertValidApprovalDecideInput({ decision: "reject", reason: "   " }),
     ).toThrow();
-  });
-});
-
-describe("deriveApprover", () => {
-  test("prefers WM_USERNAME when set", () => {
-    expect(
-      deriveApprover({ WM_USERNAME: "alice", WM_EMAIL: "alice@example.com" }),
-    ).toBe("alice");
-  });
-
-  test("falls back to WM_EMAIL when WM_USERNAME is unset", () => {
-    expect(deriveApprover({ WM_EMAIL: "alice@example.com" })).toBe(
-      "alice@example.com",
-    );
-  });
-
-  test("falls back to WM_EMAIL when WM_USERNAME is empty", () => {
-    expect(
-      deriveApprover({ WM_USERNAME: "", WM_EMAIL: "alice@example.com" }),
-    ).toBe("alice@example.com");
-  });
-
-  test("throws when neither WM_USERNAME nor WM_EMAIL is set", () => {
-    expect(() => deriveApprover({})).toThrow();
   });
 });
 

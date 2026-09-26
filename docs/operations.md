@@ -52,6 +52,26 @@
 - 要件変更が必要な場合は修正を中断し、元のIssueをrequirements_generatingにattempt+1で再起動(`requirements_gap` → 親Issue)。
 - Factory自身の投稿は「viewer(FactoryのGitHubアカウント)と同じログイン **かつ** factoryマーカー付き」の両方で判定する。同一アカウントで運用しているため、人が投稿したコメントはログインが一致してもマーカーが無いのでhuman feedbackとして扱われる。同様にFactory自身の一次レビュー(`pr_review`)とその未解決のインラインコメントもマーカー無し(または`pr_review`マーカー)であればfeedbackとして扱われ、pr_fixはその指摘を修正対象にする。除外されるのはFactory自身の`pr_fix`返信(`pr_fix`マーカー付き)のみ。
 
+#### 各コメントへの返信の3値(`decision`)
+
+各レビューコメント・未解決コメントへの返信は、`fixed` / `skipped` / `propose_issue`のいずれかになる(ユーザー決定、2026-09-26)。
+
+| `decision` | 意味 | 返信末尾 |
+| --- | --- | --- |
+| `fixed` | このPRの範囲内で修正した | `対応: <commit sha7>` |
+| `skipped` | 対応しないと判断した(理由は`body`に書く) | `対応: 見送り` |
+| `propose_issue` | 指摘は妥当だがこのPRの範囲外。Issue化を提案する | `対応: Issue化を提案(承認待ち)` |
+
+`propose_issue`の提案は`factory.issue_proposals`に記録され、その回のpr_fixは`needs_human`で終わる(状態ラベルは`factory:needs-human`)。1件でも提案が残っている間はこの状態が続く。
+
+#### Issue化提案の承認 / 却下(ConsoleのInbox)
+
+- ConsoleのInboxタブ(Issue化提案が実装され次第、追加予定)、またはWindmill UIで`f/factory/issue_proposal_decide`を直接開き、`proposal_id` / `decision`(approve / reject) / `reason`(却下時は必須) / `with_factory_label`(承認時のみ意味を持つ)を入力してRunする。
+- **承認**すると、提案の`title` / `body`でIssueを対象リポジトリに作成し(`body`中の`{{pr_url}}`は元PRのURLに置換され、末尾に起票元を示す一文が付く)、レビュースレッドに`Issue #Nを起票しました。`と返信してスレッドを解決(resolve)する。`with_factory_label`を`true`にすると、作成したIssueに`factory_config.trigger_label`(既定`factory`)が付き、そのまま要件定義工程に乗る。ラベルを付けない場合は起票のみで、必要になったら人が後から`factory`ラベルを付ける。
+- **却下**すると、レビュースレッドに`見送りとします。`+ 入力した理由を返信するが、スレッドは開いたままになる(人が改めて判断する)。
+- 対象work itemに未決定の提案が残っていなければ、PRの状態ラベルを`needs-human`から`rereview`(その回でコミットをpushしていた場合)または`reviewed`(pushしていなかった場合)へ自動で切り替える。未決定の提案が他に残っている間は`needs-human`のまま。
+- **同じ`decision`での再実行は安全**(冪等)。承認は`status = 'pending'`条件付きのUPDATEで一度だけ決定を記録し、作成したIssueの本文へ`<!-- factory:issue_proposal:<id> -->`というマーカーを埋め込む。途中(決定の記録後、Issue作成前後)でjobが失敗して同じ`proposal_id` / `decision`で再実行しても、このマーカーで既存のIssueを検索して再利用するため、Issueが二重に作られることはない。すでに承認 / 却下が完了している提案に対して異なる`decision`を投げた場合は、上書きせずエラーで拒否する。
+
 ### ラベルと終端状態
 
 - トリガーラベル(人が付与し、起動時に外れる): `factory:review`(レビュー起動) / `factory:fix`(修正起動)。`factory:pr`ラベルはfactory自身が作成したPRの目印(将来の工程3で使用)。このリポジトリ自身の基盤整備PR(foundation PR)には`factory:review` / `factory:fix` / `factory:pr`のいずれも付けない。
@@ -62,9 +82,9 @@
   | `factory:changes-requested` | 一次レビューで修正が必要な指摘(must)があった、または今回は新規指摘がなくても未解決の`[MUST]`が残っている(上記パターン4) | pr_review完了時 |
   | `factory:reviewed` | 一次レビュー完了、修正不要(人のApprove待ち) | pr_review完了時(mustなし、かつ未解決の`[MUST]`も残っていない) |
   | `factory:rereview` | 修正をpushして再レビューを依頼中 | pr_fixがpushに成功して終了したとき |
-  | `factory:needs-human` | 人の対応が必要 | pr_fixが`needs_human` / `blocked` / `failed`で終了したとき、またはpr_review自体が失敗したとき |
+  | `factory:needs-human` | 人の対応が必要 | pr_fixが`needs_human` / `blocked` / `failed`で終了したとき、pr_review自体が失敗したとき、またはIssue化提案(`propose_issue`)が1件以上あるとき |
 
-  状態ラベルは人への状態表示に加え、`poll_prs`がトリガーラベル脱落後のPRを再発見する手段にもなる(前節「起動条件」参照)。PRがクレームされて新しいレビュー・修正サイクルが始まると、それまでの状態ラベルはすべて一旦外れる。
+  状態ラベルは人への状態表示に加え、`poll_prs`がトリガーラベル脱落後のPRを再発見する手段にもなる(前節「起動条件」参照)。PRがクレームされて新しいレビュー・修正サイクルが始まると、それまでの状態ラベルはすべて一旦外れる。Issue化提案による`factory:needs-human`は例外で、`issue_proposal_decide`が全件を承認 / 却下し終えたときにだけ`factory:rereview`または`factory:reviewed`へ切り替わる(前節「Issue化提案の承認 / 却下」参照)。
   - ラベルは対象リポジトリに事前作成しなくても、初回付与時にGitHubが既定色(灰色)・説明なしで自動作成する(`factory:wip` / `factory:approved`が実際にそうなっている)。一覧で見分けやすくしたい場合は、対象リポジトリで4つの状態ラベルを色と説明付きで先に作っておく。
   - 状態ラベルが付いたPRは以後も`poll_prs`の発見対象であり続けるため、人が新しいcommitをpushするたびに自動で再レビューが起動する(1 pushにつきClaude実行1回)。再レビューを止めたいPRは状態ラベルを手で外す。
   - `review_post_mode: "gated"`ではレビューを投稿しないため状態ラベルも付けない(gatedは検証用の予約モードで、PRはレビュー依頼・assignee経由でのみ再発見される)。

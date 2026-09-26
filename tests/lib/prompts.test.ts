@@ -588,10 +588,28 @@ describe("JSON schema constants", () => {
     );
   });
 
-  test("FIX_SCHEMA requires decision on a reply item, enum fixed/skipped", () => {
+  test("FIX_SCHEMA requires decision on a reply item, enum fixed/skipped/propose_issue", () => {
     expect(FIX_SCHEMA.properties.replies.items.required).toContain("decision");
     expect(
       FIX_SCHEMA.properties.replies.items.properties.decision.enum,
-    ).toEqual(["fixed", "skipped"]);
+    ).toEqual(["fixed", "skipped", "propose_issue"]);
+  });
+
+  // User decision (2026-09-26): a "propose_issue" reply drafts a candidate
+  // GitHub Issue instead of fixing or skipping the finding.
+  test("FIX_SCHEMA requires issue_proposal on a reply item, nullable object", () => {
+    expect(FIX_SCHEMA.properties.replies.items.required).toContain(
+      "issue_proposal",
+    );
+    expect(
+      FIX_SCHEMA.properties.replies.items.properties.issue_proposal.type,
+    ).toEqual(["object", "null"]);
+  });
+
+  test("FIX_SCHEMA's issue_proposal requires title and body, forbids extras", () => {
+    const issueProposal =
+      FIX_SCHEMA.properties.replies.items.properties.issue_proposal;
+    expect(issueProposal.required).toEqual(["title", "body"]);
+    expect(issueProposal.additionalProperties).toBe(false);
   });
 });

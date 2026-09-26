@@ -118,6 +118,85 @@ describe("isFixClaudeOutput", () => {
     expect(isFixClaudeOutput(output)).toBe(false);
   });
 
+  // User decision (2026-09-26): a finding valid but out of this PR's scope
+  // gets decision "propose_issue" with a title/body for a candidate Issue.
+  test("accepts a propose_issue reply with a well-formed issue_proposal", () => {
+    const output = {
+      ...VALID_OUTPUT,
+      replies: [
+        {
+          review_comment_id: 1,
+          body: "この指摘は別Issueとして起票します",
+          decision: "propose_issue",
+          issue_proposal: {
+            title: "共有ヘルパーへ抽出する",
+            body: "背景\n提案",
+          },
+        },
+      ],
+    };
+    expect(isFixClaudeOutput(output)).toBe(true);
+  });
+
+  test("rejects a propose_issue reply with issue_proposal null", () => {
+    const output = {
+      ...VALID_OUTPUT,
+      replies: [
+        {
+          review_comment_id: 1,
+          body: "この指摘は別Issueとして起票します",
+          decision: "propose_issue",
+          issue_proposal: null,
+        },
+      ],
+    };
+    expect(isFixClaudeOutput(output)).toBe(false);
+  });
+
+  test("rejects a propose_issue reply missing issue_proposal entirely", () => {
+    const output = {
+      ...VALID_OUTPUT,
+      replies: [
+        {
+          review_comment_id: 1,
+          body: "この指摘は別Issueとして起票します",
+          decision: "propose_issue",
+        },
+      ],
+    };
+    expect(isFixClaudeOutput(output)).toBe(false);
+  });
+
+  test("rejects a propose_issue reply whose issue_proposal is missing body", () => {
+    const output = {
+      ...VALID_OUTPUT,
+      replies: [
+        {
+          review_comment_id: 1,
+          body: "この指摘は別Issueとして起票します",
+          decision: "propose_issue",
+          issue_proposal: { title: "共有ヘルパーへ抽出する" },
+        },
+      ],
+    };
+    expect(isFixClaudeOutput(output)).toBe(false);
+  });
+
+  test("rejects a fixed reply that also carries a non-null issue_proposal", () => {
+    const output = {
+      ...VALID_OUTPUT,
+      replies: [
+        {
+          review_comment_id: 1,
+          body: "done",
+          decision: "fixed",
+          issue_proposal: { title: "t", body: "b" },
+        },
+      ],
+    };
+    expect(isFixClaudeOutput(output)).toBe(false);
+  });
+
   test("rejects a non-string, non-null blocked_reason", () => {
     const output = { ...VALID_OUTPUT, blocked_reason: 42 };
     expect(isFixClaudeOutput(output)).toBe(false);

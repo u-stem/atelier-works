@@ -131,6 +131,14 @@ describe("describeReason", () => {
       "コミットする変更がありませんでした; 返信は投稿済みです",
     );
   });
+
+  // User decision (2026-09-26): buildIssueProposalReason's text is already
+  // Japanese, so describeReason returns it unchanged, keeping the count.
+  test("passes the issue-proposal reason through unchanged (already Japanese)", () => {
+    expect(describeReason("Issue化の提案が2件あります")).toBe(
+      "Issue化の提案が2件あります",
+    );
+  });
 });
 
 describe("nextActionFor", () => {
@@ -169,6 +177,12 @@ describe("nextActionFor", () => {
   test("falls back to pointing at the Console for an unrecognized reason", () => {
     expect(nextActionFor("some future guard reason nobody mapped yet")).toBe(
       "ConsoleのFailures / Noticesタブで詳細を確認してください",
+    );
+  });
+
+  test("tells the operator to decide in the Inbox for an issue-proposal reason", () => {
+    expect(nextActionFor("Issue化の提案が1件あります")).toBe(
+      "ConsoleのInboxで提案を承認または却下してください",
     );
   });
 });

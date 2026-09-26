@@ -30,6 +30,7 @@ import { toViewerUrl, validateDrawioXml } from "../lib/drawio.ts";
 import {
   type Diagram,
   type FixReply,
+  type IssueProposalStatus,
   isBoolean,
   isNumber,
   isOneOf,
@@ -49,6 +50,7 @@ const CONSOLE_VIEWS = [
   "notices",
   "reviews",
   "fix_rounds",
+  "issue_proposals",
 ] as const;
 
 export type ConsoleView = (typeof CONSOLE_VIEWS)[number];
@@ -528,6 +530,79 @@ function toFixRoundRow(row: SqlRow): FixRoundRow {
   };
 }
 
+const ISSUE_PROPOSAL_STATUSES: readonly IssueProposalStatus[] = [
+  "pending",
+  "approved",
+  "rejected",
+];
+
+function asIssueProposalStatus(value: unknown): IssueProposalStatus {
+  if (!isOneOf(value, ISSUE_PROPOSAL_STATUSES)) {
+    throw new Error('console_query: field "status" has an unexpected value');
+  }
+  return value;
+}
+
+export type IssueProposalRow = {
+  readonly issue_proposal_id: number;
+  readonly work_item_id: number;
+  readonly owner: string;
+  readonly repo: string;
+  readonly pr_number: number | null;
+  readonly pr_title: string | null;
+  readonly claimed_by: string | null;
+  readonly review_comment_id: number;
+  readonly thread_id: string | null;
+  readonly title: string;
+  readonly body: string;
+  readonly status: IssueProposalStatus;
+  readonly decided_by: string | null;
+  readonly decision_reason: string | null;
+  readonly with_factory_label: boolean | null;
+  readonly created_issue_number: number | null;
+  readonly created_issue_url: string | null;
+  readonly is_inline: boolean;
+  readonly created_at: string;
+  readonly decided_at: string | null;
+};
+
+function toIssueProposalRow(row: SqlRow): IssueProposalRow {
+  return {
+    issue_proposal_id: asId(row.issue_proposal_id, "issue_proposal_id"),
+    work_item_id: asId(row.work_item_id, "work_item_id"),
+    owner: asStr(row.owner, "owner"),
+    repo: asStr(row.repo, "repo"),
+    pr_number: asNullableNumeric(row.pr_number, "pr_number"),
+    pr_title: asNullableStr(row.pr_title, "pr_title"),
+    claimed_by: asNullableStr(row.claimed_by, "claimed_by"),
+    review_comment_id: asId(row.review_comment_id, "review_comment_id"),
+    thread_id: asNullableStr(row.thread_id, "thread_id"),
+    title: asStr(row.title, "title"),
+    body: asStr(row.body, "body"),
+    status: asIssueProposalStatus(row.status),
+    decided_by: asNullableStr(row.decided_by, "decided_by"),
+    decision_reason: asNullableStr(row.decision_reason, "decision_reason"),
+    with_factory_label:
+      row.with_factory_label === null || row.with_factory_label === undefined
+        ? null
+        : asBool(row.with_factory_label, "with_factory_label"),
+    created_issue_number: asNullableNumeric(
+      row.created_issue_number,
+      "created_issue_number",
+    ),
+    created_issue_url: asNullableStr(
+      row.created_issue_url,
+      "created_issue_url",
+    ),
+    is_inline: asBool(row.is_inline, "is_inline"),
+    created_at: asIsoDate(row.created_at, "created_at"),
+    decided_at:
+      row.decided_at === null || row.decided_at === undefined
+        ? null
+        : asIsoDate(row.decided_at, "decided_at"),
+  };
+}
+
 export type ConsoleQueryRow =
   | InboxRow
   | PipelineRow
@@ -537,7 +612,8 @@ export type ConsoleQueryRow =
   | FailureRow
   | NoticeRow
   | ReviewRow
-  | FixRoundRow;
+  | FixRoundRow
+  | IssueProposalRow;
 
 /**
  * Runs the whitelisted view query for `view` against `sql` (defaulting to
@@ -662,6 +738,27 @@ export async function runConsoleQuery(
         LIMIT ${limit}::integer
       `.fetch();
       return rows.map(toFixRoundRow);
+    }
+    case "issue_proposals": {
+      // Not time-windowed (`since`/`limit`'s days bound is unused here),
+      // same rationale as "inbox"/"notices": a pending proposal must never
+      // silently disappear from the tab that exists to surface it. Filtered
+      // to status = 'pending' here (not in factory.v_issue_proposals
+      // itself), so the view stays useful for a future decision-history
+      // reader too.
+      const rows = await sql`
+        SELECT
+          issue_proposal_id, work_item_id, owner, repo, pr_number, pr_title,
+          claimed_by, review_comment_id, thread_id, title, body, status,
+          decided_by, decision_reason, with_factory_label,
+          created_issue_number, created_issue_url, is_inline, created_at,
+          decided_at
+        FROM factory.v_issue_proposals
+        WHERE status = 'pending'
+        ORDER BY created_at DESC
+        LIMIT ${limit}::integer
+      `.fetch();
+      return rows.map(toIssueProposalRow);
     }
   }
 }

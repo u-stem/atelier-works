@@ -66,6 +66,7 @@
 // `BASE_URL` when `BASE_INTERNAL_URL` is unset, preferring
 // `BASE_INTERNAL_URL` if a future deployment ever sets both.
 
+import { deriveApprover } from "./lib/approver.ts";
 import {
   getWorkItem,
   latestApproval,
@@ -92,33 +93,6 @@ export function assertValidApprovalDecideInput(
       'approval_decide: "reason" is required when decision is "reject"',
     );
   }
-}
-
-export type ApproverEnv = {
-  readonly WM_USERNAME?: string | undefined;
-  readonly WM_EMAIL?: string | undefined;
-};
-
-/**
- * Derives the recorded approver's identity from the job's own Windmill run
- * context (pure, for testing) — never from a caller-supplied argument,
- * which cannot be trusted as identity. `WM_USERNAME` is preferred;
- * `WM_EMAIL` is the fallback for a context where only the email is set.
- * Throws if neither is available: a decision must never be recorded under
- * an unidentified approver (fail closed).
- */
-export function deriveApprover(env: ApproverEnv): string {
-  const username = env.WM_USERNAME;
-  if (username !== undefined && username.length > 0) {
-    return username;
-  }
-  const email = env.WM_EMAIL;
-  if (email !== undefined && email.length > 0) {
-    return email;
-  }
-  throw new Error(
-    "approval_decide: cannot determine approver identity (WM_USERNAME and WM_EMAIL are both unset)",
-  );
 }
 
 /**

@@ -17,6 +17,8 @@ function thread(overrides: Partial<ReviewThread> = {}): ReviewThread {
     firstCommentBody: "[pr_review 自動レビュー]\n[MUST] fix this",
     lastCommentAuthorLogin: "factory-bot",
     lastCommentBody: "[pr_review 自動レビュー]\n[MUST] fix this",
+    firstCommentDatabaseId: 1,
+    allCommentIds: [1],
     ...overrides,
   };
 }

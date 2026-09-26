@@ -361,16 +361,32 @@ export type ReviewRecord = {
 export type FixOutcome = "done" | "requirements_gap" | "blocked";
 
 /** Whether a fix reply's underlying comment was actually addressed with a
- * code change ("fixed") or deliberately left as-is ("skipped") — drives
- * pr_workflow_support.ts's `renderFixReply` last line (a commit sha for
- * "fixed", "見送り" for "skipped"). Required, not optional: a reply without
- * a decision fails the FixReply type guard (parse-don't-validate). */
-export type FixReplyDecision = "fixed" | "skipped";
+ * code change ("fixed"), deliberately left as-is ("skipped"), or is valid
+ * but out of this PR's scope ("propose_issue" — user decision, 2026-09-26:
+ * Claude drafts a candidate GitHub Issue instead of fixing or skipping it,
+ * and a human approves/rejects it from the Console Inbox via
+ * issue_proposal_decide.ts). Drives pr_workflow_support.ts's
+ * `renderFixReply` last line (a commit sha for "fixed", "見送り" for
+ * "skipped", "Issue化を提案(承認待ち)" for "propose_issue"). Required, not
+ * optional: a reply without a decision fails the FixReply type guard
+ * (parse-don't-validate). */
+export type FixReplyDecision = "fixed" | "skipped" | "propose_issue";
+
+/** The Issue title/body Claude drafts for a `"propose_issue"` FixReply. */
+export type IssueProposalDraft = {
+  title: string;
+  body: string;
+};
 
 export type FixReply = {
   review_comment_id: number;
   body: string;
   decision: FixReplyDecision;
+  /** Present (non-null) exactly when `decision` is `"propose_issue"` — see
+   * pr_workflow_support.ts's `isFixReplyShape` type guard. Optional (and
+   * treated the same as `null` by every reader) for backward compatibility
+   * with a reply recorded before this field existed. */
+  issue_proposal?: IssueProposalDraft | null;
 };
 
 /** Payload for db.insertFixRound: one row of factory.fix_rounds. */
@@ -381,6 +397,48 @@ export type FixRoundRecord = {
   outcome: FixOutcome;
   replies: FixReply[];
   commit_shas: string[];
+};
+
+// ---------------------------------------------------------------------------
+// issue_proposals (user decision, 2026-09-26): a pr_fix `"propose_issue"`
+// FixReply's candidate GitHub Issue, awaiting human approval/rejection from
+// the Console Inbox (issue_proposal_decide.ts).
+// ---------------------------------------------------------------------------
+
+export type IssueProposalStatus = "pending" | "approved" | "rejected";
+
+/** One row of factory.issue_proposals. */
+export type IssueProposal = {
+  id: number;
+  work_item_id: number;
+  /** The GitHub review comment (or plain issue comment) this proposal's
+   * reply is threaded under — the same id as the originating FixReply's
+   * `review_comment_id`. */
+  review_comment_id: number;
+  /** GraphQL review-thread node id, when `pr_fix_finish.ts` could resolve
+   * one for `review_comment_id` — `null` for a plain issue comment, or when
+   * the match attempt failed (e.g. the comment's anchor line moved). */
+  thread_id: string | null;
+  title: string;
+  body: string;
+  status: IssueProposalStatus;
+  decided_by: string | null;
+  decision_reason: string | null;
+  /** Whether the created Issue also got `factory_config.trigger_label`
+   * (entering the requirements pipeline) — `null` until decided, and on a
+   * rejection (never applicable there). */
+  with_factory_label: boolean | null;
+  created_issue_number: number | null;
+  created_issue_url: string | null;
+  /** Whether `review_comment_id` is a PR review comment (`true`, reply via
+   * `replyReviewComment`) or a plain issue comment (`false`, reply via
+   * `postIssueComment`) — set by pr_fix_finish.ts at insert time from the
+   * same signal it uses to pick its own reply target, so
+   * issue_proposal_decide.ts's decision reply can pick the right one
+   * deterministically instead of guessing. */
+  is_inline: boolean;
+  created_at: Date;
+  decided_at: Date | null;
 };
 
 /** Payload for db.recordFailure: one row of factory.job_failures. */

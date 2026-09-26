@@ -375,6 +375,8 @@ describe("selectThreadsToResolve", () => {
       firstCommentBody: "[pr_review 自動レビュー] @alice\n[MUST] fix this",
       lastCommentAuthorLogin: "factory-bot",
       lastCommentBody: "[pr_review 自動レビュー] @alice\n[MUST] fix this",
+      firstCommentDatabaseId: 1,
+      allCommentIds: [1],
       ...overrides,
     };
   }
@@ -533,6 +535,8 @@ describe("countOpenMustThreads", () => {
       firstCommentBody: "[pr_review 自動レビュー] @alice\n[MUST] fix this",
       lastCommentAuthorLogin: "factory-bot",
       lastCommentBody: "[pr_review 自動レビュー] @alice\n[MUST] fix this",
+      firstCommentDatabaseId: 1,
+      allCommentIds: [1],
       ...overrides,
     };
   }

@@ -27,6 +27,9 @@ import {
   type FixOutcome,
   type FixReply,
   type FixRoundRecord,
+  type IssueProposal,
+  type IssueProposalStatus,
+  isBoolean,
   isNumber,
   isOneOf,
   isRecord,
@@ -140,6 +143,20 @@ function parseNullableString(value: unknown, field: string): string | null {
     return null;
   }
   return parseRequiredString(value, field);
+}
+
+function parseBoolean(value: unknown, field: string): boolean {
+  if (!isBoolean(value)) {
+    throw new Error(`db: row field "${field}" is not a boolean`);
+  }
+  return value;
+}
+
+function parseNullableBoolean(value: unknown, field: string): boolean | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  return parseBoolean(value, field);
 }
 
 function parseRequiredNumber(value: unknown, field: string): number {
@@ -830,6 +847,230 @@ export function toFixRoundRecord(row: SqlRow): FixRoundRecord {
     replies,
     commit_shas: commitShas,
   };
+}
+
+/** Most recently created factory.fix_rounds row for a work item, or `null`
+ * if it has none yet — used by issue_proposal_decide.ts to tell whether the
+ * round that produced a pending issue proposal also pushed a commit
+ * (`commit_shas` non-empty), which decides whether the PR's state label
+ * swaps to `rereview_label` or `reviewed_label` once every proposal for
+ * that work item has been decided. */
+export async function latestFixRound(
+  workItemId: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<FixRoundRecord | null> {
+  const rows = await sql`
+    SELECT * FROM factory.fix_rounds
+    WHERE work_item_id = ${workItemId}
+    ORDER BY created_at DESC
+    LIMIT 1
+  `.fetch();
+  const row = rows[0];
+  return row === undefined ? null : toFixRoundRecord(row);
+}
+
+// ---------------------------------------------------------------------------
+// issue_proposals (user decision, 2026-09-26) — see
+// migrations/datatable/main/20260926130000_issue_proposals.up.sql.
+// ---------------------------------------------------------------------------
+
+const ISSUE_PROPOSAL_STATUSES: readonly IssueProposalStatus[] = [
+  "pending",
+  "approved",
+  "rejected",
+];
+
+export type NewIssueProposal = {
+  work_item_id: number;
+  review_comment_id: number;
+  thread_id: string | null;
+  title: string;
+  body: string;
+  /** See IssueProposal.is_inline (types.ts) — whether review_comment_id is a
+   * PR review comment (true) or a plain issue comment (false). */
+  is_inline: boolean;
+};
+
+/** Inserts a factory.issue_proposals row (status "pending") and returns its
+ * id. */
+export async function insertIssueProposal(
+  proposal: NewIssueProposal,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  const statement = sql`
+    INSERT INTO factory.issue_proposals (
+      work_item_id, review_comment_id, thread_id, title, body, is_inline
+    ) VALUES (
+      ${proposal.work_item_id}::bigint, ${proposal.review_comment_id}::bigint,
+      ${proposal.thread_id}, ${proposal.title}, ${proposal.body}, ${proposal.is_inline}::boolean
+    )
+    RETURNING id
+  `;
+  const row = await fetchOneRow(statement, "insertIssueProposal");
+  return parseId(row.id, "id");
+}
+
+/** Parses a full factory.issue_proposals row (for future readers). */
+export function toIssueProposal(row: SqlRow): IssueProposal {
+  return {
+    id: parseId(row.id, "id"),
+    work_item_id: parseId(row.work_item_id, "work_item_id"),
+    review_comment_id: parseId(row.review_comment_id, "review_comment_id"),
+    thread_id: parseNullableString(row.thread_id, "thread_id"),
+    title: parseRequiredString(row.title, "title"),
+    body: parseRequiredString(row.body, "body"),
+    status: parseEnum<IssueProposalStatus>(
+      row.status,
+      ISSUE_PROPOSAL_STATUSES,
+      "status",
+    ),
+    decided_by: parseNullableString(row.decided_by, "decided_by"),
+    decision_reason: parseNullableString(
+      row.decision_reason,
+      "decision_reason",
+    ),
+    with_factory_label: parseNullableBoolean(
+      row.with_factory_label,
+      "with_factory_label",
+    ),
+    created_issue_number:
+      row.created_issue_number === null ||
+      row.created_issue_number === undefined
+        ? null
+        : parseRequiredNumber(row.created_issue_number, "created_issue_number"),
+    created_issue_url: parseNullableString(
+      row.created_issue_url,
+      "created_issue_url",
+    ),
+    is_inline: parseBoolean(row.is_inline, "is_inline"),
+    created_at: parseDate(row.created_at, "created_at"),
+    decided_at:
+      row.decided_at === null || row.decided_at === undefined
+        ? null
+        : parseDate(row.decided_at, "decided_at"),
+  };
+}
+
+/** Fetches one factory.issue_proposals row by id, or `null` if it does not
+ * exist. */
+export async function getIssueProposal(
+  id: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<IssueProposal | null> {
+  const rows =
+    await sql`SELECT * FROM factory.issue_proposals WHERE id = ${id}`.fetch();
+  const row = rows[0];
+  return row === undefined ? null : toIssueProposal(row);
+}
+
+/** Lists every `status = 'pending'` factory.issue_proposals row for one
+ * work item, oldest first — used by issue_proposal_decide.ts to tell
+ * whether any proposal is still awaiting a human decision after this one
+ * was just decided. */
+export async function listPendingIssueProposals(
+  workItemId: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<IssueProposal[]> {
+  const rows = await sql`
+    SELECT * FROM factory.issue_proposals
+    WHERE work_item_id = ${workItemId} AND status = 'pending'
+    ORDER BY created_at ASC
+  `.fetch();
+  return rows.map(toIssueProposal);
+}
+
+export type IssueProposalDecisionInput = {
+  status: "approved" | "rejected";
+  decided_by: string;
+  decision_reason: string | null;
+  with_factory_label: boolean | null;
+  created_issue_number: number | null;
+  created_issue_url: string | null;
+};
+
+/**
+ * Records a human's approve/reject decision on a factory.issue_proposals
+ * row — atomically guarded by `WHERE status = 'pending'` (team-lead fix
+ * round, [MUST] #2: the optimistic lock issue_proposal_decide.ts relies on
+ * for idempotency). Returns `true` when this call actually performed the
+ * transition, `false` when no row matched (the row was no longer "pending" —
+ * a concurrent/earlier call already decided it, one way or the other; the
+ * caller re-reads the row and re-classifies via
+ * `classifyIssueProposalDecision`, pr_workflow_support.ts, to tell an
+ * idempotent retry from a genuine conflict). For an approve decision, the
+ * first call passes `created_issue_number`/`created_issue_url` as `null` —
+ * the Issue is created only after this call locks in the transition;
+ * `setIssueProposalCreatedIssue` below writes those two columns back once
+ * GitHub confirms creation.
+ */
+export async function decideIssueProposal(
+  id: number,
+  decision: IssueProposalDecisionInput,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  const rows = await sql`
+    UPDATE factory.issue_proposals
+    SET status = ${decision.status},
+        decided_by = ${decision.decided_by},
+        decision_reason = ${decision.decision_reason},
+        with_factory_label = ${decision.with_factory_label}::boolean,
+        created_issue_number = ${decision.created_issue_number}::integer,
+        created_issue_url = ${decision.created_issue_url},
+        decided_at = now()
+    WHERE id = ${id} AND status = 'pending'
+    RETURNING id
+  `.fetch();
+  return rows.length > 0;
+}
+
+export type IssueProposalCreatedIssue = {
+  created_issue_number: number;
+  created_issue_url: string;
+};
+
+/**
+ * Writes back the Issue issue_proposal_decide.ts created (or reused, via
+ * `findIssueByMarker`) for an approved proposal, once GitHub has actually
+ * confirmed it — kept as its own write, separate from `decideIssueProposal`'s
+ * initial status transition (team-lead fix round, [MUST] #2), so a retry
+ * after a crash between the two calls can tell "approved, Issue not yet
+ * created" (both columns still null) from "approved, Issue created" (see
+ * `classifyIssueProposalDecision`, pr_workflow_support.ts). Does not itself
+ * check the row's current status.
+ */
+export async function setIssueProposalCreatedIssue(
+  id: number,
+  created: IssueProposalCreatedIssue,
+  sql: SqlClient = defaultSqlClient,
+): Promise<void> {
+  await sql`
+    UPDATE factory.issue_proposals
+    SET created_issue_number = ${created.created_issue_number}::integer,
+        created_issue_url = ${created.created_issue_url}
+    WHERE id = ${id}
+  `.execute();
+}
+
+/** Number of `status = 'pending'` factory.issue_proposals rows for one work
+ * item (team-lead fix round, IMO #5: replaces `listPendingIssueProposals`'s
+ * full row fetch at the one call site — issue_proposal_decide.ts — that only
+ * ever needed the count, and is called a second time after the label swap to
+ * catch a proposal that appeared in the tiny window between the two reads —
+ * see that script's module doc). */
+export async function countPendingIssueProposals(
+  workItemId: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  const rows = await sql`
+    SELECT COUNT(*) AS pending_count
+    FROM factory.issue_proposals
+    WHERE work_item_id = ${workItemId} AND status = 'pending'
+  `.fetch();
+  const row = rows[0];
+  if (row === undefined) {
+    return 0;
+  }
+  return parseNumericLike(row.pending_count, "pending_count");
 }
 
 // ---------------------------------------------------------------------------

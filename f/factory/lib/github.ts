@@ -996,6 +996,52 @@ export async function createIssue(
   return { number: parsed.number, htmlUrl: parsed.html_url };
 }
 
+export type MarkerSearchResult = {
+  readonly number: number;
+  readonly htmlUrl: string;
+  readonly body: string;
+};
+
+/**
+ * `GET /search/issues` for an open-or-closed issue in `owner/repo` whose
+ * body contains the literal `markerText` (quoted phrase search) — team-lead
+ * fix round, [MUST] #2: issue_proposal_decide.ts uses this before calling
+ * `createIssue` on an approve decision, so a retry after a crash between
+ * recording the decision and creating the Issue reuses the Issue a previous
+ * attempt already created instead of duplicating it. The caller passes the
+ * *inner* marker text (`factory:issue_proposal:<id>`, not the full
+ * `<!-- ... -->` comment syntax — pr_workflow_support.ts's
+ * `issueProposalMarkerSearchTerm`), since GitHub's search treats `<`/`-`/`>`
+ * as noise; quoting alone keeps the colon-bearing phrase from being parsed
+ * as a `qualifier:value` search operator (mirrors `searchIssues`'s own label
+ * quoting). Returns the first match's number/htmlUrl/body — `body` so the
+ * caller can additionally confirm the match with an exact-substring check
+ * (`hasIssueProposalMarker`) before trusting it, since search is a
+ * word/phrase match, not an exact comparison — or `null` when nothing
+ * matches. Not restricted to `state:open`, since a previously-created Issue
+ * could have been closed independently.
+ */
+export async function findIssueByMarker(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  markerText: string,
+): Promise<MarkerSearchResult | null> {
+  validateOwnerRepo(owner, repo);
+  const query = `repo:${owner}/${repo} "${markerText}" in:body`;
+  const items = await callGhApiAllSearchItems(
+    client,
+    `search/issues?q=${encodeURIComponent(query)}&per_page=100`,
+  );
+  const first = items[0];
+  if (first === undefined) return null;
+  return {
+    number: first.number,
+    htmlUrl: first.html_url,
+    body: first.body ?? "",
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Pull requests
 // ---------------------------------------------------------------------------
@@ -1745,6 +1791,18 @@ export type ReviewThread = {
   readonly firstCommentBody: string;
   readonly lastCommentAuthorLogin: string;
   readonly lastCommentBody: string;
+  /** The first comment's REST id (`databaseId`) — team-lead fix round,
+   * [MUST] #4: `matchReviewThreadForComment` (pr_workflow_support.ts) used
+   * to match a FixReply's `review_comment_id` (a REST id) against a thread
+   * by (path, line) instead, which silently mismatched once a later commit
+   * shifted the diff's line numbers. `null` when GitHub returns no
+   * `databaseId` for the comment (should not happen for a real REST-backed
+   * comment, but the type guard treats it as absent rather than throwing). */
+  readonly firstCommentDatabaseId: number | null;
+  /** REST ids of every comment in the thread, first 50 (see the module note
+   * above `listReviewThreads`) — lets `matchReviewThreadForComment` match a
+   * reply that targets a later comment in the thread, not just the first. */
+  readonly allCommentIds: number[];
 };
 
 type ReviewThreadsGraphqlPayload = {
@@ -1793,6 +1851,7 @@ type ReviewThreadNodePayload = {
   readonly line: number | null;
   readonly firstComments: ReviewThreadCommentsConnectionPayload;
   readonly lastComments: ReviewThreadCommentsConnectionPayload;
+  readonly allComments: ReviewThreadCommentsConnectionPayload;
 };
 
 function isReviewThreadNodePayload(
@@ -1806,6 +1865,7 @@ function isReviewThreadNodePayload(
     line: unknown;
     firstComments: unknown;
     lastComments: unknown;
+    allComments: unknown;
   };
   if (typeof record.id !== "string") return false;
   if (typeof record.isResolved !== "boolean") return false;
@@ -1814,21 +1874,49 @@ function isReviewThreadNodePayload(
   if (!isReviewThreadCommentsConnectionPayload(record.firstComments)) {
     return false;
   }
-  return isReviewThreadCommentsConnectionPayload(record.lastComments);
+  if (!isReviewThreadCommentsConnectionPayload(record.lastComments)) {
+    return false;
+  }
+  return isReviewThreadCommentsConnectionPayload(record.allComments);
 }
 
 type ReviewThreadCommentPayload = {
   readonly author: { readonly login: string } | null;
   readonly body: string;
+  readonly databaseId?: number | null;
 };
 
 function isReviewThreadCommentPayload(
   value: unknown,
 ): value is ReviewThreadCommentPayload {
   if (typeof value !== "object" || value === null) return false;
-  const record = value as { author: unknown; body: unknown };
+  const record = value as {
+    author: unknown;
+    body: unknown;
+    databaseId: unknown;
+  };
   if (record.author !== null && !isLoginPayload(record.author)) return false;
-  return typeof record.body === "string";
+  if (typeof record.body !== "string") return false;
+  if (
+    record.databaseId !== undefined &&
+    record.databaseId !== null &&
+    typeof record.databaseId !== "number"
+  ) {
+    return false;
+  }
+  return true;
+}
+
+type ReviewThreadDatabaseIdNodePayload = {
+  readonly databaseId: number | null;
+};
+
+function isReviewThreadDatabaseIdNodePayload(
+  value: unknown,
+): value is ReviewThreadDatabaseIdNodePayload {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as { databaseId: unknown };
+  return record.databaseId === null || typeof record.databaseId === "number";
 }
 
 /**
@@ -1836,13 +1924,19 @@ function isReviewThreadCommentPayload(
  * the module note above): each thread's resolution state, its diff anchor
  * (`path`/`line` — team-lead decision, 2026-09-26: needed by
  * `openFindingsForPrompt`, pr_workflow_support.ts), its first comment's
- * author/body, and (via the `lastComments` alias) its last comment's
- * author/body — `selectThreadsToResolve` (pr_workflow_support.ts) needs the
- * latter two to find the factory's own still-unresolved `pr_review` threads
- * whose last word was also the factory's (a human reply left in the thread
- * must block auto-resolve). A thread whose shape doesn't match (including
- * one with no comments at all, which shouldn't happen on GitHub) is skipped
- * rather than throwing.
+ * author/body/REST id (`databaseId`), and (via the `lastComments` alias) its
+ * last comment's author/body — `selectThreadsToResolve` (pr_workflow_support.ts)
+ * needs the latter two to find the factory's own still-unresolved
+ * `pr_review` threads whose last word was also the factory's (a human reply
+ * left in the thread must block auto-resolve). The `allComments` alias
+ * (first 50 comments' REST ids only) backs `matchReviewThreadForComment`
+ * (team-lead fix round, [MUST] #4): matching a `FixReply.review_comment_id`
+ * (a REST id) against a thread by (path, line) silently mismatched once a
+ * later commit shifted the diff's line numbers, so matching is now by id —
+ * `firstCommentDatabaseId` for the common case, `allCommentIds` for a reply
+ * that targets a later comment in the thread. A thread whose shape doesn't
+ * match (including one with no comments at all, which shouldn't happen on
+ * GitHub) is skipped rather than throwing.
  */
 export async function listReviewThreads(
   client: GhClient,
@@ -1865,12 +1959,18 @@ export async function listReviewThreads(
                 nodes {
                   author { login }
                   body
+                  databaseId
                 }
               }
               lastComments: comments(last: 1) {
                 nodes {
                   author { login }
                   body
+                }
+              }
+              allComments: comments(first: 50) {
+                nodes {
+                  databaseId
                 }
               }
             }
@@ -1896,6 +1996,10 @@ export async function listReviewThreads(
     const lastComment = rawNode.lastComments.nodes[0];
     if (!isReviewThreadCommentPayload(firstComment)) continue;
     if (!isReviewThreadCommentPayload(lastComment)) continue;
+    const allCommentIds = rawNode.allComments.nodes
+      .filter(isReviewThreadDatabaseIdNodePayload)
+      .map((node) => node.databaseId)
+      .filter((id): id is number => id !== null);
     threads.push({
       id: rawNode.id,
       isResolved: rawNode.isResolved,
@@ -1905,6 +2009,8 @@ export async function listReviewThreads(
       firstCommentBody: firstComment.body,
       lastCommentAuthorLogin: lastComment.author?.login ?? "",
       lastCommentBody: lastComment.body,
+      firstCommentDatabaseId: firstComment.databaseId ?? null,
+      allCommentIds,
     });
   }
   return threads;

@@ -38,6 +38,7 @@ import {
   type FixOutcome,
   type FixReply,
   type FixReplyDecision,
+  type IssueProposalStatus,
   isNumber,
   isOneOf,
   isRecord,
@@ -1059,7 +1060,11 @@ const FIX_OUTCOMES: readonly FixOutcome[] = [
   "blocked",
 ];
 
-const FIX_REPLY_DECISIONS: readonly FixReplyDecision[] = ["fixed", "skipped"];
+const FIX_REPLY_DECISIONS: readonly FixReplyDecision[] = [
+  "fixed",
+  "skipped",
+  "propose_issue",
+];
 
 // team-lead fix (2026-09-26): raised from 60 to git's own subject-line
 // convention of 72 code points — a small margin over the ~50 characters the
@@ -1076,16 +1081,33 @@ export type FixClaudeOutput = {
   readonly commit_body: string | null;
 };
 
+function isIssueProposalDraftShape(
+  value: unknown,
+): value is { title: string; body: string } {
+  return isRecord(value) && isString(value.title) && isString(value.body);
+}
+
 /** `decision` is required (team-lead decision, 2026-09-26): a reply without
  * it fails this guard outright rather than being accepted with an implied
- * default, per this codebase's parse-don't-validate convention. */
+ * default, per this codebase's parse-don't-validate convention.
+ *
+ * `issue_proposal` (user decision, 2026-09-26) must be present (non-null)
+ * exactly when `decision` is `"propose_issue"` — `undefined` is treated the
+ * same as `null` for every other decision (backward compatibility with a
+ * reply recorded before this field existed). */
 function isFixReplyShape(value: unknown): value is FixReply {
-  return (
-    isRecord(value) &&
-    isNumber(value.review_comment_id) &&
-    isString(value.body) &&
-    isOneOf(value.decision, FIX_REPLY_DECISIONS)
-  );
+  if (
+    !isRecord(value) ||
+    !isNumber(value.review_comment_id) ||
+    !isString(value.body) ||
+    !isOneOf(value.decision, FIX_REPLY_DECISIONS)
+  ) {
+    return false;
+  }
+  if (value.decision === "propose_issue") {
+    return isIssueProposalDraftShape(value.issue_proposal);
+  }
+  return value.issue_proposal === undefined || value.issue_proposal === null;
 }
 
 /**
@@ -1803,7 +1825,13 @@ export function decideFixFinishAction(
  * The watermarks must only advance once this round's feedback was actually
  * consumed:
  *   - `push_success`: the fix was committed and pushed, and replies were
- *     posted to the comments that triggered it.
+ *     posted to the comments that triggered it. Still counts as
+ *     `push_success` (user decision, 2026-09-26) even when the round also
+ *     recorded one or more `propose_issue` proposals and therefore ends
+ *     `needs_human` rather than `rereview_requested` — the underlying
+ *     comments were replied to (with a proposal, not a fix) either way, so
+ *     this round's feedback is consumed the same as any other successful
+ *     push.
  *   - `requirements_gap_reroute_success`: the feedback was consumed by
  *     rerouting the parent issue back to `requirements_generating`.
  * Every other terminal kind here — a guard blocking the attempt before it
@@ -1949,8 +1977,36 @@ export function filterKnownReplies(
  * `<!-- factory:pr_fix:<id> -->` marker via github.ts's withMarker after
  * this, same as before. `reply.body` is passed through
  * `normalizeJapaneseText` (team-lead decision, 2026-09-26).
+ *
+ * When `reply.decision` is `"propose_issue"` (user decision, 2026-09-26),
+ * the body instead carries the proposed Issue's title (`提案するIssue:
+ * <title>`) and a blockquote of the first 3 lines of its body, ending
+ * `対応: Issue化を提案(承認待ち)` — a human approves or rejects the actual
+ * Issue creation from the Console Inbox (issue_proposal_decide.ts), which
+ * posts its own follow-up reply once decided. A `"propose_issue"` reply
+ * with no `issue_proposal` (should not happen once `isFixReplyShape` has
+ * validated it, but this function accepts any `FixReply`) falls back to an
+ * empty title/body rather than throwing.
  */
 export function renderFixReply(reply: FixReply, newSha: string | null): string {
+  if (reply.decision === "propose_issue") {
+    const proposal = reply.issue_proposal ?? { title: "", body: "" };
+    const quotedBody = proposal.body
+      .split("\n")
+      .slice(0, 3)
+      .map((line) => `> ${normalizeJapaneseText(line)}`)
+      .join("\n");
+    return [
+      ROLE_TAGS.pr_fix,
+      normalizeJapaneseText(reply.body),
+      "",
+      `提案するIssue: ${normalizeJapaneseText(proposal.title)}`,
+      quotedBody,
+      "",
+      "対応: Issue化を提案(承認待ち)",
+    ].join("\n");
+  }
+
   const disposition =
     reply.decision === "skipped"
       ? "見送り"
@@ -1963,6 +2019,264 @@ export function renderFixReply(reply: FixReply, newSha: string | null): string {
     "",
     `対応: ${disposition}`,
   ].join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// pr_fix_finish / issue_proposal_decide: `propose_issue` replies (user
+// decision, 2026-09-26) — recording a candidate Issue for human
+// approval/rejection.
+// ---------------------------------------------------------------------------
+
+/** The `FixReply`s Claude marked `"propose_issue"` this round — used by
+ * pr_fix_finish.ts to decide how many `factory.issue_proposals` rows to
+ * record and whether the round ends `needs_human` instead of
+ * `rereview_requested`. */
+export function selectProposeIssueReplies(
+  replies: readonly FixReply[],
+): FixReply[] {
+  return replies.filter((reply) => reply.decision === "propose_issue");
+}
+
+/**
+ * Finds the review thread containing `reviewCommentId` among `threads` —
+ * used by pr_fix_finish.ts to attach a GraphQL thread id to a newly
+ * recorded `propose_issue` row, so issue_proposal_decide.ts can resolve it
+ * on approval. Matches on comment id (team-lead fix round, [MUST] #4 —
+ * supersedes matching by `(path, line)`, which silently mismatched once a
+ * later commit shifted the diff's line numbers): `thread.firstCommentDatabaseId`
+ * covers the common case cheaply, `thread.allCommentIds` (first 50 comments
+ * in the thread — see github.ts's `listReviewThreads`) covers a reply that
+ * targets a later comment in the thread. `null` when no thread contains the
+ * id — e.g. a plain issue comment, which has no review thread at all.
+ */
+export function matchReviewThreadForComment(
+  threads: readonly ReviewThread[],
+  reviewCommentId: number,
+): string | null {
+  const match = threads.find(
+    (thread) =>
+      thread.firstCommentDatabaseId === reviewCommentId ||
+      thread.allCommentIds.includes(reviewCommentId),
+  );
+  return match?.id ?? null;
+}
+
+/** The Discord/status_reason text for a round that ends `needs_human`
+ * because it recorded one or more pending issue proposals (user decision,
+ * 2026-09-26) — matched by a `REASON_RULES` entry below so `describeReason`
+ * (unchanged, since this text is already Japanese) and `nextActionFor`
+ * (pointed at the Console Inbox) both handle it like every other
+ * needs_human reason. */
+export function buildIssueProposalReason(count: number): string {
+  return `Issue化の提案が${String(count)}件あります`;
+}
+
+/**
+ * Substitutes the literal `{{pr_url}}` placeholder in a fix's proposed
+ * Issue body (fixPrompt's contract, prompts.ts) with the originating PR's
+ * own URL, then appends a fixed footer noting the Issue's origin (user
+ * decision, 2026-09-26). The footer has no half-width space between
+ * "Issue"/"PR #<N>" and the adjoining Japanese characters, per this
+ * project's writing-style rule.
+ */
+export function buildIssueProposalBody(
+  bodyTemplate: string,
+  prUrl: string,
+  prNumber: number,
+): string {
+  const withUrl = bodyTemplate.split("{{pr_url}}").join(prUrl);
+  return `${withUrl}\n\nこのIssueはPR #${String(prNumber)}のレビュー指摘から起票されました`;
+}
+
+/** Renders the thread reply issue_proposal_decide.ts posts on approval —
+ * the caller appends the `<!-- factory:pr_fix:<id> -->` marker via
+ * github.ts's withMarker, same as renderFixReply's callers. */
+export function renderIssueProposalApprovedReply(issueNumber: number): string {
+  return [
+    ROLE_TAGS.pr_fix,
+    `Issue #${String(issueNumber)}を起票しました。`,
+    "",
+    `対応: Issue #${String(issueNumber)}`,
+  ].join("\n");
+}
+
+/** Renders the thread reply issue_proposal_decide.ts posts on rejection —
+ * same marker convention as renderIssueProposalApprovedReply. `reason` is
+ * the human's own free text, passed through `normalizeJapaneseText`. */
+export function renderIssueProposalRejectedReply(reason: string): string {
+  return [
+    ROLE_TAGS.pr_fix,
+    "見送りとします。",
+    `理由: ${normalizeJapaneseText(reason)}`,
+    "",
+    "対応: 見送り",
+  ].join("\n");
+}
+
+export type IssueProposalDecideInput = {
+  readonly decision: "approve" | "reject";
+  readonly reason: string;
+};
+
+/** `reason` is required only when rejecting a proposal — approving one
+ * needs no justification (mirrors approval_decide.ts's
+ * assertValidApprovalDecideInput). */
+export function assertValidIssueProposalDecideInput(
+  input: IssueProposalDecideInput,
+): void {
+  if (input.decision === "reject" && input.reason.trim().length === 0) {
+    throw new Error(
+      'issue_proposal_decide: "reason" is required when decision is "reject"',
+    );
+  }
+}
+
+// team-lead fix round, [MUST] #2: builder/parser pair for the
+// `<!-- factory:issue_proposal:<id> -->` marker issue_proposal_decide.ts
+// embeds in a created Issue's body, so a retried approve decision can find
+// (and reuse) the Issue it already created via github.ts's
+// `findIssueByMarker` instead of creating a duplicate.
+const ISSUE_PROPOSAL_MARKER_KIND = "issue_proposal";
+
+/** The inner marker phrase (no `<!-- -->` comment syntax) — passed to
+ * `findIssueByMarker`'s quoted GitHub search, since the comment syntax's
+ * `<`/`-`/`>` characters are noise to GitHub's search tokenizer. */
+export function issueProposalMarkerSearchTerm(proposalId: number): string {
+  return `factory:${ISSUE_PROPOSAL_MARKER_KIND}:${String(proposalId)}`;
+}
+
+/** The full `<!-- factory:issue_proposal:<id> -->` marker text embedded in a
+ * created Issue's body. */
+export function issueProposalMarkerText(proposalId: number): string {
+  return `<!-- ${issueProposalMarkerSearchTerm(proposalId)} -->`;
+}
+
+/** Appends `issueProposalMarkerText`'s marker to a created Issue's body
+ * (builder). */
+export function appendIssueProposalMarker(
+  body: string,
+  proposalId: number,
+): string {
+  return `${body}\n\n${issueProposalMarkerText(proposalId)}`;
+}
+
+/** Whether `body` contains the exact marker for `proposalId` (parser) — used
+ * to confirm a `findIssueByMarker` search hit before trusting it, since a
+ * quoted GitHub search phrase is a word/substring match, not an exact
+ * comparison (e.g. it could in principle also match a longer id containing
+ * this one as a prefix). */
+export function hasIssueProposalMarker(
+  body: string,
+  proposalId: number,
+): boolean {
+  return body.includes(issueProposalMarkerText(proposalId));
+}
+
+export type IssueProposalReplyTarget = "inline" | "issue_comment";
+
+/**
+ * Which GitHub reply mechanism issue_proposal_decide.ts should use for a
+ * proposal's decision reply (team-lead fix round, [MUST] #4) — deterministic
+ * from the row's own persisted `is_inline` flag, replacing a former
+ * try-`replyReviewComment`-then-fallback-to-`postIssueComment` guess (the
+ * row didn't used to record which kind its `review_comment_id` was).
+ */
+export function chooseIssueProposalReplyTarget(
+  isInline: boolean,
+): IssueProposalReplyTarget {
+  return isInline ? "inline" : "issue_comment";
+}
+
+export type IssueProposalDecisionRow = {
+  readonly status: IssueProposalStatus;
+  readonly created_issue_number: number | null;
+};
+
+export type IssueProposalDecisionRequest = {
+  readonly decision: "approve" | "reject";
+  readonly reason: string;
+  readonly with_factory_label: boolean;
+};
+
+export type IssueProposalClassification =
+  | { readonly action: "proceed" }
+  | { readonly action: "repost_only" }
+  | { readonly action: "refuse"; readonly message: string };
+
+/**
+ * Classifies what issue_proposal_decide.ts's main() should do about a
+ * proposal row it just read, before touching the DB or GitHub at all
+ * (team-lead fix round, [MUST] #2 "Approve path must be idempotent" — pure,
+ * for testing, mirrors approval_decide.ts's `classifyExistingApproval`):
+ *
+ *   - `"proceed"`: the row is still `pending` — this is a fresh decision.
+ *   - `"repost_only"`: the row already carries the *same* decision as
+ *     `requested`, but its side effects may not have completed (an approve
+ *     whose Issue creation crashed before `created_issue_number` was
+ *     written back) — main() must not attempt to record the decision again
+ *     (`decideIssueProposal`'s own `WHERE status = 'pending'` guard would
+ *     make that call a no-op anyway), but should still finish the rest of
+ *     the flow (create-or-reuse the Issue, reply, resolve) idempotently.
+ *   - `"refuse"`: either the row already carries a *different* decision than
+ *     `requested` (a genuine conflict), or it carries the same decision and
+ *     its side effects already completed (an approve whose Issue was
+ *     already created) — nothing left to do, and doing it again would
+ *     create a duplicate Issue/reply. `message` is a ready-to-throw Japanese
+ *     sentence.
+ */
+export function classifyIssueProposalDecision(
+  row: IssueProposalDecisionRow,
+  requested: IssueProposalDecisionRequest,
+): IssueProposalClassification {
+  if (row.status === "pending") {
+    return { action: "proceed" };
+  }
+  const requestedStatus =
+    requested.decision === "approve" ? "approved" : "rejected";
+  if (row.status !== requestedStatus) {
+    const currentLabel = row.status === "approved" ? "承認" : "却下";
+    const requestedLabel = requested.decision === "approve" ? "承認" : "却下";
+    return {
+      action: "refuse",
+      message: `この提案は既に${currentLabel}として判断済みです(今回のリクエストは${requestedLabel})`,
+    };
+  }
+  if (row.status === "approved" && row.created_issue_number !== null) {
+    return {
+      action: "refuse",
+      message: `この提案は既に承認済みで、Issue #${String(row.created_issue_number)}も作成済みです`,
+    };
+  }
+  return { action: "repost_only" };
+}
+
+export type IssueProposalLabelDecision =
+  | { readonly action: "keep" }
+  | {
+      readonly action: "swap";
+      readonly toStatus: "rereview_requested" | "reviewed";
+    };
+
+/**
+ * Decides what issue_proposal_decide.ts should do to the PR's state label
+ * after recording one decision (user decision, 2026-09-26): keep the
+ * current `needs_human_label` while any proposal for this work item is
+ * still pending, otherwise swap to `rereview_label` (a commit was pushed
+ * this round — `factory.fix_rounds.commit_shas` non-empty) or
+ * `reviewed_label` (nothing was pushed — the round that produced the
+ * proposal was itself a `nothing_to_commit` round).
+ */
+export function decideIssueProposalLabelSwap(
+  remainingPendingCount: number,
+  committedThisRound: boolean,
+): IssueProposalLabelDecision {
+  if (remainingPendingCount > 0) {
+    return { action: "keep" };
+  }
+  return {
+    action: "swap",
+    toStatus: committedThisRound ? "rereview_requested" : "reviewed",
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -2013,6 +2327,8 @@ const DAILY_BUDGET_NEXT_ACTION =
   "翌日まで待つか、daily_budget_usdを引き上げてください";
 const NOTHING_TO_COMMIT_NEXT_ACTION =
   "返信内容を確認し、必要なら指示をコメントして`factory:fix`を付け直してください";
+const ISSUE_PROPOSAL_NEXT_ACTION =
+  "ConsoleのInboxで提案を承認または却下してください";
 
 const REASON_RULES: readonly ReasonRule[] = [
   // pr_fix_prepare.ts's evaluatePrFixSafetyGuards / evaluateRepoAllowedGuard
@@ -2161,6 +2477,15 @@ const REASON_RULES: readonly ReasonRule[] = [
     pattern: /^replies posted$/,
     describe: () => "返信は投稿済みです",
     nextAction: () => NOTHING_TO_COMMIT_NEXT_ACTION,
+  },
+  // pr_fix_finish.ts's buildIssueProposalReason (user decision, 2026-09-26):
+  // already Japanese, so describe() returns it unchanged — this rule exists
+  // so nextActionFor still points at the Console Inbox instead of the
+  // generic fallback.
+  {
+    pattern: /^Issue化の提案が(\d+)件あります$/,
+    describe: (m) => `Issue化の提案が${m[1]}件あります`,
+    nextAction: () => ISSUE_PROPOSAL_NEXT_ACTION,
   },
   {
     pattern: /^needs human attention$/,

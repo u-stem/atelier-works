@@ -5,6 +5,7 @@ import {
   commentIssue,
   createIssue,
   createPrReview,
+  findIssueByMarker,
   getBranchProtected,
   getIssue,
   getIssueTimeline,
@@ -834,6 +835,72 @@ describe("createIssue", () => {
   });
 });
 
+describe("findIssueByMarker", () => {
+  test("returns the first match's number/htmlUrl/body", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        items: [
+          {
+            id: 1,
+            number: 7,
+            title: "Extract a shared helper",
+            body: "背景\n\n<!-- factory:issue_proposal:3 -->",
+            html_url: "https://github.com/acme/widgets/issues/7",
+            repository_url: "https://api.github.com/repos/acme/widgets",
+            user: { login: "alice" },
+          },
+        ],
+      }),
+    ]);
+    const result = await findIssueByMarker(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      "factory:issue_proposal:3",
+    );
+    expect(result).toEqual({
+      number: 7,
+      htmlUrl: "https://github.com/acme/widgets/issues/7",
+      body: "背景\n\n<!-- factory:issue_proposal:3 -->",
+    });
+  });
+
+  test("returns null when nothing matches", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ items: [] })]);
+    const result = await findIssueByMarker(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      "factory:issue_proposal:3",
+    );
+    expect(result).toBeNull();
+  });
+
+  test("quotes the marker phrase in the search query", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ items: [] })]);
+    await findIssueByMarker(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      "factory:issue_proposal:3",
+    );
+    const decoded = decodeURIComponent(fake.calls[0]?.argv.join(" ") ?? "");
+    expect(decoded).toContain('"factory:issue_proposal:3" in:body');
+  });
+
+  test("scopes the search to the given repo", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ items: [] })]);
+    await findIssueByMarker(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      "factory:issue_proposal:3",
+    );
+    const decoded = decodeURIComponent(fake.calls[0]?.argv.join(" ") ?? "");
+    expect(decoded).toContain("repo:acme/widgets");
+  });
+});
+
 describe("searchPrs", () => {
   const STATE_LABELS = [
     "factory:changes-requested",
@@ -1575,6 +1642,7 @@ function reviewThreadNode(overrides: {
   readonly line?: number | null;
   readonly firstComment: unknown;
   readonly lastComment?: unknown;
+  readonly allCommentDatabaseIds?: readonly (number | null)[];
 }): unknown {
   return {
     id: overrides.id,
@@ -1583,6 +1651,11 @@ function reviewThreadNode(overrides: {
     line: overrides.line ?? 10,
     firstComments: { nodes: [overrides.firstComment] },
     lastComments: { nodes: [overrides.lastComment ?? overrides.firstComment] },
+    allComments: {
+      nodes: (overrides.allCommentDatabaseIds ?? []).map((databaseId) => ({
+        databaseId,
+      })),
+    },
   };
 }
 
@@ -1630,8 +1703,64 @@ describe("listReviewThreads", () => {
         firstCommentBody: "[pr_review 自動レビュー] @alice\n[MUST] fix this",
         lastCommentAuthorLogin: VIEWER,
         lastCommentBody: "[pr_review 自動レビュー] @alice\n[MUST] fix this",
+        firstCommentDatabaseId: null,
+        allCommentIds: [],
       },
     ]);
+  });
+
+  test("parses the first comment's databaseId and every comment's id in allCommentIds", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(
+        reviewThreadsGraphqlPayload([
+          reviewThreadNode({
+            id: "PRRT_1",
+            isResolved: false,
+            firstComment: {
+              author: { login: VIEWER },
+              body: "[pr_review 自動レビュー] @alice\n[MUST] fix this",
+              databaseId: 501,
+            },
+            allCommentDatabaseIds: [501, 502],
+          }),
+        ]),
+      ),
+    ]);
+    const threads = await listReviewThreads(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+    );
+    expect(threads[0]).toMatchObject({
+      firstCommentDatabaseId: 501,
+      allCommentIds: [501, 502],
+    });
+  });
+
+  test("drops a null databaseId from allCommentIds", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(
+        reviewThreadsGraphqlPayload([
+          reviewThreadNode({
+            id: "PRRT_1",
+            isResolved: false,
+            firstComment: {
+              author: { login: VIEWER },
+              body: "hi",
+            },
+            allCommentDatabaseIds: [null, 502],
+          }),
+        ]),
+      ),
+    ]);
+    const threads = await listReviewThreads(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+    );
+    expect(threads[0]?.allCommentIds).toEqual([502]);
   });
 
   test("parses the last comment's author/body separately from the first", async () => {
@@ -1722,6 +1851,7 @@ describe("listReviewThreads", () => {
             line: 10,
             firstComments: { nodes: [] },
             lastComments: { nodes: [] },
+            allComments: { nodes: [] },
           },
         ]),
       ),

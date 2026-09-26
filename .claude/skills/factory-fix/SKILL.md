@@ -21,8 +21,20 @@ description: PR のレビュー指摘やコメントを修正するときに使�
 ## コメントごとに必ず応答する
 
 - 渡された各レビューコメント・未解決コメントに対して、`replies`に1件ずつ応答を作る。**無視して応答を作らないコメントがあってはいけない**。
-- 応答は`decision`で「対応した」(`"fixed"`)か「対応しない」(`"skipped"`)かを明確にし、`body`に対応した場合は何をどう直したか、対応しない場合はその理由を書く。
+- 応答は`decision`で3値のいずれかを明確にする。
+  - `"fixed"`: このPRの範囲内で修正した。`body`に何をどう直したかを書く。
+  - `"skipped"`: 対応しないと判断した。`body`にその理由を書く。
+  - `"propose_issue"`: 指摘自体は妥当だが、このPRの範囲外(別の変更が必要、設計を書き換える必要がある、影響範囲が広すぎる等)。修正を強行せず、`issue_proposal`にIssue化の提案を書く(下記「Issue化の提案の書き方」参照)。人がConsoleのInboxで承認 / 却下する。
 - `reply`各要素の`review_comment_id`は呼び出し側から渡されたコメントIDをそのまま使う。
+
+### Issue化の提案の書き方(`decision: "propose_issue"`)
+
+- `issue_proposal.title`: 短い日本語の要約(GitHub Issueのタイトルになる)。
+- `issue_proposal.body`: 短いMarkdownで、次の3部構成にする。
+  1. `## 背景`: なぜこの指摘が問題か、なぜこのPRの範囲外なのか。
+  2. `## 提案`: 何をどう変更すべきか。
+  3. 最後の行に、置換用プレースホルダ`{{pr_url}}`をそのまま書く(実際のURLは書かない。flow側がこのPRのURLに置換してからIssueを作成する)。
+- `decision`が`"propose_issue"`以外のときは`issue_proposal`を`null`にする。
 
 ## 要件・設計を書き換えない
 
@@ -80,14 +92,16 @@ description: PR のレビュー指摘やコメントを修正するときに使�
 対応: <commit sha7>
 ```
 
-`decision: "skipped"`のときは最終行が`対応: 見送り`になる。
+`decision: "skipped"`のときは最終行が`対応: 見送り`になる。`decision: "propose_issue"`のときは、`body`の後に提案するIssueのタイトルと本文冒頭3行の引用が入り、最終行は`対応: Issue化を提案(承認待ち)`になる(人がConsoleのInboxで承認 / 却下すると、その結果を伝える別の返信がスレッドに追加される)。
 
-Claudeがstructured outputで書くのは次の2フィールドのみ。
+Claudeがstructured outputで書くのは次の3フィールドのみ。
 
 - `body`: 説明のみ(日本語、1-2文が目安)。旧来の「対応しました: <1行>」「対応しません: <理由1行>」という接頭辞は**不要**(構造はflow側が付与する)。
   - 例(`decision: "fixed"`のとき): 「`userID`の型チェックを追加しました」
   - 例(`decision: "skipped"`のとき): 「この指摘は要件に含まれていないため対応しません」
-- `decision`: 修正を行ったら`"fixed"`、行わなかったら`"skipped"`。
+  - 例(`decision: "propose_issue"`のとき): 「この指摘はこのPRの範囲外のため、別Issueとして提案します」
+- `decision`: 修正を行ったら`"fixed"`、行わなかったら`"skipped"`、範囲外のIssue化を提案するなら`"propose_issue"`。
+- `issue_proposal`: `decision: "propose_issue"`のときのみ`{ title, body }`を埋める。それ以外は`null`。書き方は上の「Issue化の提案の書き方」を参照。
 
 ### 将来のPR作成
 
@@ -108,9 +122,17 @@ factoryが実装からPRを作成する工程(工程3)が実装されたとき�
         "properties": {
           "review_comment_id": { "type": "integer" },
           "body": { "type": "string" },
-          "decision": { "type": "string", "enum": ["fixed", "skipped"] }
+          "decision": { "type": "string", "enum": ["fixed", "skipped", "propose_issue"] },
+          "issue_proposal": {
+            "type": ["object", "null"],
+            "properties": {
+              "title": { "type": "string" },
+              "body": { "type": "string" }
+            },
+            "required": ["title", "body"]
+          }
         },
-        "required": ["review_comment_id", "body", "decision"]
+        "required": ["review_comment_id", "body", "decision", "issue_proposal"]
       }
     },
     "blocked_reason": { "type": ["string", "null"] },
@@ -128,6 +150,7 @@ factoryが実装からPRを作成する工程(工程3)が実装されたとき�
 - `summary`: 修正内容の要約。記録用(`factory.fix_rounds`)。
 - `replies`: 各コメントへの応答。`review_comment_id`は呼び出し側から渡されたコメントIDをそのまま使う。
   - `body`: 説明のみ(日本語、1-2文が目安)。返信の見た目(先頭行のタグ、末尾の対応行)はflow側がレンダリングするため、接頭辞を自分で付けない。
-  - `decision`: 修正を行ったら`"fixed"`、行わなかったら`"skipped"`。
+  - `decision`: 修正を行ったら`"fixed"`、行わなかったら`"skipped"`、範囲外のIssue化を提案するなら`"propose_issue"`。
+  - `issue_proposal`: `decision: "propose_issue"`のときのみ`{ title, body }`(それ以外は`null`)。書き方は「Issue化の提案の書き方」節を参照。
 - `commit_subject` / `commit_body`: 上の「コミットメッセージ」節を参照。
 - `blocked_reason`: `outcome: "done"`のとき`null`、`requirements_gap`または`blocked`のとき必須。「どの要件・指摘が対応できないか」「なぜ設計変更が必要か、または修正を中断したか」を記述する。
