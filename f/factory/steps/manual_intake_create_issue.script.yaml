@@ -1,5 +1,8 @@
-summary: ''
-description: ''
+summary: '[OP-1-1/1] Issue を作成'
+description: >-
+  `manual_intake__flow` のステップ。手動投入された内容から、
+  `.github/ISSUE_TEMPLATE/factory-task.yml` と同じ Markdown 構成でトリガー
+  Issue を作成する。
 lock: '!inline f/factory/steps/manual_intake_create_issue.script.lock'
 kind: script
 schema:

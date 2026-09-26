@@ -1,5 +1,8 @@
-summary: ''
-description: ''
+summary: '[SF-3-2/5] push と再レビュー依頼'
+description: >-
+  `pr_fix__flow` の終端ステップ。直前までの結果をもとに work item の状態
+  遷移・GitHub 側の後処理(ラベル除去、コメント返信)・Discord 通知を
+  まとめて行う。
 lock: '!inline f/factory/steps/pr_fix_finish.script.lock'
 kind: script
 schema:

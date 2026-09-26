@@ -1,5 +1,7 @@
-summary: ''
-description: ''
+summary: '[SYS-5] schedule 失敗ハンドラ'
+description: >-
+  `f/factory/*.schedule.yaml` 各 schedule の on_failure ハンドラ。失敗を
+  記録し、Discord へ通知する。
 lock: '!inline f/factory/on_error_schedule.script.lock'
 kind: script
 schema:

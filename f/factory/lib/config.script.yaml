@@ -1,5 +1,7 @@
-summary: ''
-description: ''
+summary: '[LIB] 設定の読み込み'
+description: >-
+  `f/factory/factory_config` リソースを読み込み、スキーマ検証とデフォルト値の
+  補完を行う。
 lock: '!inline f/factory/lib/config.script.lock'
 kind: script
 schema:

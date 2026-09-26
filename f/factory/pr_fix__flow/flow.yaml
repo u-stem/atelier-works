@@ -1,15 +1,16 @@
-summary: Apply an automated fix to a PR based on review feedback
-description: 'pr_fix.flow (spec-cycle2.md §3 M6, §7 item 3 / docs/security.md
-  "pr_fix の安全策"): checks pre-attempt safety guards, gathers new human feedback,
-  runs headless Claude (factory-fix skill, no Bash) in a gtr worktree on the
-  PR''s head branch, verifies the change against forbidden-file patterns and
-  factory_config.allowed_check_commands, then pushes, replies to comments, and
-  requests re-review — or routes to needs_human / blocked / a
-  requirements-generation re-cycle on the originating issue.'
+summary: '[SF-3-2] レビュー指摘の修正と再レビュー依頼'
+description: >-
+  自動修正を PR に適用する(docs/architecture.md、docs/security.md
+  「pr_fix の安全策」参照)。試行前の安全確認を行い、新規の人間の指摘を
+  収集し、gtr worktree 上で headless Claude(factory-fix スキル、Bash
+  なし)を実行して修正、禁止ファイルパターンと
+  `factory_config.allowed_check_commands` で変更を検証したうえで push・
+  コメント返信・再レビュー依頼を行う。あるいは needs_human / blocked へ
+  遷移、または元 Issue への要件定義再生成サイクルへ差し戻す。
 value:
   modules:
     - id: pr_fix_prepare
-      summary: Load the work item, check safety guards, build the gtr worktree
+      summary: '[SF-3-2/1] worktree の準備と安全確認'
       value:
         type: script
         input_transforms:
@@ -18,7 +19,7 @@ value:
             expr: flow_input.work_item_id
         path: f/factory/steps/pr_fix_prepare
     - id: pr_fix_collect
-      summary: Gather new human reviews/comments since the last round
+      summary: '[SF-3-2/2] 指摘の収集'
       value:
         type: script
         input_transforms:
@@ -38,7 +39,7 @@ value:
       skip_if:
         expr: results.pr_fix_prepare.outcome !== "proceed"
     - id: pr_fix_apply
-      summary: Run headless Claude to apply the fix
+      summary: '[SF-3-2/3] 修正の適用(Claude)'
       value:
         type: script
         input_transforms:
@@ -89,7 +90,7 @@ value:
         expr: results.pr_fix_prepare.outcome !== "proceed" ||
           results.pr_fix_collect?.outcome !== "proceed"
     - id: pr_fix_verify
-      summary: Verify the fix (forbidden-file check, allowed check commands)
+      summary: '[SF-3-2/4] 変更の検証'
       value:
         type: script
         input_transforms:
@@ -146,7 +147,7 @@ value:
         expr: results.pr_fix_prepare.outcome !== "proceed" ||
           results.pr_fix_collect?.outcome !== "proceed"
     - id: pr_fix_finish
-      summary: Route the outcome to a terminal status and GitHub/Discord side effects
+      summary: '[SF-3-2/5] push と再レビュー依頼'
       value:
         type: script
         input_transforms:

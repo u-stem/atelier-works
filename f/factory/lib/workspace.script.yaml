@@ -1,5 +1,7 @@
-summary: ''
-description: ''
+summary: '[LIB] git worktree と作業領域'
+description: >-
+  対象リポジトリと自己クローンの clone / fetch / worktree を管理する。
+  サブプロセス実行は注入した CommandRunner 経由で行う。
 lock: '!inline f/factory/lib/workspace.script.lock'
 kind: script
 schema:

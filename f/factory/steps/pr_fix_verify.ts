@@ -209,7 +209,7 @@ export async function main(
   if (config.allowed_check_commands.length > 0) {
     await addNotice({
       kind: "unsandboxed_check_commands",
-      message: `pr_fix_verify is about to run ${String(config.allowed_check_commands.length)} allowed_check_commands entry(ies) as root with no sandbox isolation against untrusted code from ${owner}/${repo}#${String(pr_number)} (work item ${String(work_item_id)}).`,
+      message: `pr_fix_verify はこれから ${String(config.allowed_check_commands.length)} 件の allowed_check_commands を、サンドボックス分離なしで root 権限により ${owner}/${repo}#${String(pr_number)} の未検証コードに対して実行します(work item ${String(work_item_id)})。`,
     });
   }
 

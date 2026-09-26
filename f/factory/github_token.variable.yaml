@@ -1,6 +1,6 @@
 value: ""
 is_secret: true
 description: >-
-  GitHub fine-grained personal access token (GH_TOKEN / GITHUB_TOKEN). Passed
-  to worker subprocesses as an env var, never as a CLI argument. Value is set
-  via bootstrap.sh / the Windmill UI, never committed.
+  GitHub のきめ細かい個人アクセストークン(GH_TOKEN / GITHUB_TOKEN)。worker
+  のサブプロセスへ環境変数として渡し、CLI 引数には渡さない。値は
+  bootstrap.sh または Windmill UI から設定し、コミットしない。

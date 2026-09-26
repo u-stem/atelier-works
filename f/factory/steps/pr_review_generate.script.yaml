@@ -1,5 +1,8 @@
-summary: ''
-description: ''
+summary: '[SF-3-1/2] レビューの生成(Claude)'
+description: >-
+  `pr_review__flow` のステップ。headless Claude(PR レビュースキル、読み
+  取り専用ツール)を実行し、PR の差分・変更ファイル・本文(該当すれば承認
+  済み要件定義も)からレビューを生成する。
 lock: '!inline f/factory/steps/pr_review_generate.script.lock'
 kind: script
 schema:

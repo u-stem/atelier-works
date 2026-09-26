@@ -154,6 +154,65 @@ Data Tables はスキーマ `factory` に置く。migration は追加のみで�
 
 各 schedule の cron はタイムゾーン `Asia/Tokyo`、Windmill の 6 フィールド形式で `*.schedule.yaml` に持つ。多重実行防止は advisory lock を使わず、各 schedule の `no_flow_overlap: true` で行う(前回実行中はスキップする)。複数インスタンスを同時運用する場合の排他は Windmill 側ではなく GitHub 側の claim(`wip` ラベル + assignee)で担保する。error handler で失敗を記録し、すべてのフロー（pipeline / pr_review / pr_fix）の `failed` 終端処理（ラベル除去、Issue / PR コメント、Discord 通知）は `on_error_flow` に一本化される。承認のタイムアウト(7 日)は schedule ではなく `pipeline` の suspend 設定側が持つ。
 
+## 命名規則
+
+Windmill の UI は summary でソートされるため、種別を示すタグを summary の先頭に付ける(path は英数字のみに固定し変更しない)。
+
+| タグ形式 | 対象 |
+| --- | --- |
+| `[SF-<工程>-<順>] <日本語の表示名>` | 自動フロー / schedule |
+| `[SF-<工程>-<順>/<n>] <日本語>` | フロー内ステップ script |
+| `[OP-<工程>-<順>] <日本語>` | 人が UI から手動実行するもの |
+| `[SYS-<順>] <日本語>` | 基盤・運用の自動処理 |
+| `[LIB] <日本語>` | 共有ライブラリ |
+
+工程番号は 1=作業を拾う、2=要件定義、3=実装・PR、4=CI 監視、5=自己改善に対応する。
+
+### 割り当て表
+
+| path | summary |
+| --- | --- |
+| `f/factory/poll_issues`(script + schedule) | `[SF-1-1] Issue を巡回して担当を確定` |
+| `f/factory/poll_prs`(script + schedule) | `[SF-1-2] PR を巡回してレビュー / 修正を起動` |
+| `f/factory/manual_intake__flow` | `[OP-1-1] 手動投入フォーム(Issue を作成して工程に乗せる)` |
+| `f/factory/steps/manual_intake_create_issue` | `[OP-1-1/1] Issue を作成` |
+| `f/factory/steps/manual_intake_register` | `[OP-1-1/2] 作業項目を登録して工程 2 を起動` |
+| `f/factory/pipeline__flow` | `[SF-2-1] 要件定義の生成と承認` |
+| `f/factory/steps/pipeline_prepare` | `[SF-2-1/1] 作業領域の準備` |
+| `f/factory/steps/pipeline_generate` | `[SF-2-1/2] 要件定義の生成(Claude)` |
+| `f/factory/steps/pipeline_request_approval` | `[SF-2-1/3] 承認依頼(待機)` |
+| `f/factory/steps/pipeline_decide` | `[SF-2-1/4] 承認結果の反映` |
+| `f/factory/approval_decide` | `[OP-2-1] 承認 / 差し戻しを記録して再開` |
+| `f/factory/retry_work_item` | `[OP-2-2] 作業項目を再実行` |
+| `f/factory/pr_review__flow` | `[SF-3-1] PR の自動レビュー` |
+| `f/factory/steps/pr_review_prepare` | `[SF-3-1/1] PR の取得と検証` |
+| `f/factory/steps/pr_review_generate` | `[SF-3-1/2] レビューの生成(Claude)` |
+| `f/factory/steps/pr_review_post` | `[SF-3-1/3] レビューの投稿` |
+| `f/factory/pr_fix__flow` | `[SF-3-2] レビュー指摘の修正と再レビュー依頼` |
+| `f/factory/steps/pr_fix_prepare` | `[SF-3-2/1] worktree の準備と安全確認` |
+| `f/factory/steps/pr_fix_collect` | `[SF-3-2/2] 指摘の収集` |
+| `f/factory/steps/pr_fix_apply` | `[SF-3-2/3] 修正の適用(Claude)` |
+| `f/factory/steps/pr_fix_verify` | `[SF-3-2/4] 変更の検証` |
+| `f/factory/steps/pr_fix_finish` | `[SF-3-2/5] push と再レビュー依頼` |
+| `f/factory/steps/pr_workflow_support` | `[LIB] PR ワークフロー共通処理` |
+| `f/factory/notify_daily_summary`(script + schedule) | `[SYS-3] 日次サマリ通知` |
+| `f/factory/on_error_flow` | `[SYS-4] フロー失敗ハンドラ` |
+| `f/factory/on_error_schedule` | `[SYS-5] schedule 失敗ハンドラ` |
+| `f/factory/lib/config` | `[LIB] 設定の読み込み` |
+| `f/factory/lib/db` | `[LIB] Data Table アクセス` |
+| `f/factory/lib/github` | `[LIB] GitHub API ラッパー` |
+| `f/factory/lib/workspace` | `[LIB] git worktree と作業領域` |
+| `f/factory/lib/claude` | `[LIB] headless Claude 実行` |
+| `f/factory/lib/drawio` | `[LIB] draw.io 図の生成` |
+| `f/factory/lib/discord` | `[LIB] Discord 通知` |
+| `f/factory/lib/log` | `[LIB] ログとマスク` |
+| `f/factory/lib/prompts` | `[LIB] プロンプト定義` |
+| `f/factory/lib/types` | `[LIB] 共通型` |
+| `f/factory/lib/poll_support` | `[LIB] 巡回の純粋ロジック` |
+| `f/factory/lib/summary_support` | `[LIB] 日次サマリの集計` |
+
+`[SYS-1]`(self_update)と `[SYS-2]`(cleanup_workspaces)は[工程 3〜5](#拡張点)と同様に未実装で、番号のみ予約している。
+
 ## PR ワークフロー(pr_review / pr_fix)
 
 工程1→2(Issue の要件定義)とは別に、既存の PR(人が作った PR、または将来 factory 自身が作る PR)をレビュー・修正するワークフローを持つ。

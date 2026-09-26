@@ -1,5 +1,8 @@
-summary: ''
-description: ''
+summary: '[SF-2-1/1] 作業領域の準備'
+description: >-
+  `pipeline__flow` のステップ。work item と設定を読み込み、自己クローンと
+  対象リポジトリの clone/fetch、要件定義生成用の読み取り専用 worktree を
+  用意する。
 lock: '!inline f/factory/steps/pipeline_prepare.script.lock'
 kind: script
 schema:

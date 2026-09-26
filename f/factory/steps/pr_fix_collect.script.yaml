@@ -1,5 +1,8 @@
-summary: ''
-description: ''
+summary: '[SF-3-2/2] 指摘の収集'
+description: >-
+  `pr_fix__flow` のステップ。前回以降に付いた PR レビュー・インライン
+  コメント・通常コメントのうち、factory 自身の投稿を除いた人間の指摘を
+  収集する。
 lock: '!inline f/factory/steps/pr_fix_collect.script.lock'
 kind: script
 schema:

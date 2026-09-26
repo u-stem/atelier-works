@@ -170,7 +170,7 @@ async function checkDeployedSha(
 
     await addNotice({
       kind: "deployed_sha_mismatch",
-      message: `self clone HEAD ${selfSha} does not match f/factory/deployed_sha ${deployedSha}`,
+      message: `self clone の HEAD(${selfSha})が f/factory/deployed_sha(${deployedSha})と一致しません`,
     });
   } catch (err) {
     log.warn("deployed_sha check failed", {
@@ -476,7 +476,7 @@ async function claimAndStart(
     candidate.number,
     "issue",
     workItemId,
-    `The factory (instance \`${config.instance_name}\`) picked up this issue and will start generating requirements shortly.`,
+    `Factory(インスタンス \`${config.instance_name}\`)がこの Issue に着手し、まもなく要件定義の生成を開始します。`,
     viewerLogin,
   );
 
@@ -580,7 +580,7 @@ export async function main(): Promise<{
       skipped += 1;
       await addNotice({
         kind: "labeler_association_denied",
-        message: `${candidate.owner}/${candidate.repo}#${candidate.number}: last labeler association "${decision.association ?? "unknown"}" is not in allowed_labeler_associations`,
+        message: `${candidate.owner}/${candidate.repo}#${candidate.number}: 直近のラベル付与者の association "${decision.association ?? "unknown"}" は allowed_labeler_associations に含まれていません`,
       });
       continue;
     }

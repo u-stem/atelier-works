@@ -22,7 +22,10 @@ describe("buildEmbed", () => {
       job_id: "job-1",
       error: "boom",
     });
-    expect(embed.fields).toContainEqual({ name: "instance", value: "local" });
+    expect(embed.fields).toContainEqual({
+      name: "インスタンス",
+      value: "local",
+    });
   });
 
   test("sets the embed url from the event's primary link", () => {
@@ -49,7 +52,7 @@ describe("buildEmbed", () => {
       approved_count: 2,
       rejected_count: 1,
     });
-    expect(embed.description).toBe("3 agent runs, $1.50 spent.");
+    expect(embed.description).toBe("エージェント実行 3 件、$1.50 消費。");
   });
 
   test("truncates a title longer than 256 characters", () => {
@@ -88,7 +91,7 @@ describe("buildEmbed", () => {
       ),
     });
     const changedPathsField = embed.fields.find(
-      (field) => field.name === "changed paths",
+      (field) => field.name === "変更パス",
     );
     expect(changedPathsField?.value).toHaveLength(1024);
   });
@@ -121,7 +124,7 @@ describe("buildEmbed", () => {
       inbox_url: "http://127.0.0.1:8080/apps/get/f/factory/factory_console",
     });
     expect(embed.fields).toContainEqual({
-      name: "issue",
+      name: "Issue",
       value: "https://github.com/u-stem/atelier-works/issues/42",
     });
   });
@@ -223,7 +226,7 @@ describe("notify", () => {
 
     const parsed: unknown = JSON.parse(sentBody ?? "{}");
     expect(parsed).toMatchObject({
-      embeds: [{ title: "Job failed: f/factory/poll_issues" }],
+      embeds: [{ title: "ジョブ失敗: f/factory/poll_issues" }],
     });
   });
 

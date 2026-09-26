@@ -1,5 +1,10 @@
-summary: ''
-description: ''
+summary: '[SF-1-1] Issue を巡回して担当を確定'
+description: >-
+  5分毎に `factory` ラベル付き Issue を検知して claim し、`pipeline__flow`
+  を起動する。あわせて issue/PR 種別を問わずすべての進行中 work item を
+  GitHub / Windmill の状態と突き合わせて reconcile する(closed 検知、
+  孤児検知等)。複数インスタンス間の排他は GitHub 側の claim(wip ラベル
+  + 再取得確認)のみで担保する(docs/architecture.md 参照)。
 lock: '!inline f/factory/poll_issues.script.lock'
 kind: script
 schema:

@@ -1,5 +1,8 @@
-summary: ''
-description: ''
+summary: '[OP-2-1] 承認 / 差し戻しを記録して再開'
+description: >-
+  承認 Inbox(または将来の App)からの手動トリガー。suspend 中の
+  `pipeline__flow` に対する承認/却下の判断を `approvals` テーブルへ記録した
+  後、work item の resume_url へ POST してフローを再開させる。
 lock: '!inline f/factory/approval_decide.script.lock'
 kind: script
 schema:

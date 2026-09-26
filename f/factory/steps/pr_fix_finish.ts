@@ -51,6 +51,7 @@ import {
   type CollectedReview,
   decideFixFinishAction,
   deriveFallbackReviewers,
+  describeReason,
   evaluateRelabelFailure,
   filterKnownReplies,
   type PrFixFinishOutcome,
@@ -168,7 +169,9 @@ export async function main(
         pr_number,
         `pr_fix-${toStatus}`,
         work_item_id,
-        reason !== null ? `${commentPrefix}: ${reason}` : commentPrefix,
+        reason !== null
+          ? `${commentPrefix}: ${describeReason(reason)}`
+          : commentPrefix,
         viewer.login,
       );
     } catch (err) {
@@ -184,7 +187,10 @@ export async function main(
           owner,
           repo,
           url: prUrl,
-          reason: discordReason,
+          // display-only Japanese mapping (team-lead follow-up) — the
+          // untranslated `reason`/`discordReason` value was already recorded
+          // to work_items.status_reason via updateStatusIfCurrent above.
+          reason: describeReason(discordReason),
         };
         await notify(webhookUrl, event);
       } catch (err) {
@@ -198,7 +204,7 @@ export async function main(
   if (action.kind === "guard_blocked") {
     await finalizeWithComment(
       "blocked",
-      "Automated fix could not start",
+      "自動修正を開始できませんでした",
       reason ?? "safety guard failed",
     );
     return { ok: true, final_status: "blocked", notice: reason };
@@ -217,7 +223,7 @@ export async function main(
     }
     await finalizeWithComment(
       "needs_human",
-      "Automated fix needs human attention",
+      "自動修正で人による対応が必要です",
       reason ?? "needs human attention",
     );
     return { ok: true, final_status: "needs_human", notice: reason };
@@ -234,7 +240,7 @@ export async function main(
     });
     await finalizeWithComment(
       "needs_human",
-      "Automated fix requires a requirements change, but no originating issue is linked",
+      "自動修正には要件定義の変更が必要ですが、元となる Issue が紐付いていません",
       reason ?? summary,
     );
     return { ok: true, final_status: "needs_human", notice: reason };
@@ -259,7 +265,7 @@ export async function main(
     if (parentItem === null) {
       await finalizeWithComment(
         "needs_human",
-        "Automated fix requires a requirements change, but the originating issue's work item is missing",
+        "自動修正には要件定義の変更が必要ですが、元の Issue の work item が見つかりません",
         reason ?? summary,
       );
       return { ok: true, final_status: "needs_human", notice: reason };
@@ -315,7 +321,7 @@ export async function main(
       );
       await finalizeWithComment(
         "needs_human",
-        `Automated fix requires a requirements change, but re-applying labels to the originating issue failed (relabel_failed: ${relabelFailedReason})`,
+        `自動修正には要件定義の変更が必要ですが、元の Issue へのラベル再付与に失敗しました(relabel_failed: ${describeReason(relabelFailedReason)})`,
         reason ?? summary,
       );
       return { ok: true, final_status: "needs_human", notice: reason };
@@ -358,7 +364,7 @@ export async function main(
           pr_number,
           "pr_fix-requirements_gap",
           work_item_id,
-          `This PR needs a requirements change to proceed: ${gapReport}. Requirements are being regenerated on the originating issue.`,
+          `この PR を進めるには要件定義の変更が必要です: ${describeReason(gapReport)}。元の Issue で要件定義を再生成しています。`,
           viewer.login,
         );
       } catch (err) {
@@ -382,7 +388,7 @@ export async function main(
   if (commit_message === null) {
     await finalizeWithComment(
       "needs_human",
-      "Automated fix reported done but produced no commit message",
+      "自動修正は完了と報告しましたが、コミットメッセージがありませんでした",
       "done outcome missing a commit message",
     );
     return {
@@ -412,7 +418,7 @@ export async function main(
     });
     await finalizeWithComment(
       "blocked",
-      "Automated fix blocked",
+      "自動修正がブロックされました",
       `PR head moved to ${pushResult.currentSha} while the fix was in progress`,
     );
     return { ok: true, final_status: "blocked", notice: "head_changed" };
@@ -429,7 +435,7 @@ export async function main(
     });
     await finalizeWithComment(
       "needs_human",
-      "Automated fix reported done but produced no file changes",
+      "自動修正は完了と報告しましたが、ファイルの変更がありませんでした",
       "done outcome with no changes to commit",
     );
     return {
@@ -570,7 +576,12 @@ export async function main(
             owner,
             repo,
             url: prUrl,
-            reason: `could not request re-review: ${reviewerNote}`,
+            // display-only Japanese mapping (team-lead follow-up) —
+            // `reviewerNote` itself stays untranslated in work_items.
+            // status_reason / factory.notices (see the comment above).
+            reason: describeReason(
+              `could not request re-review: ${reviewerNote}`,
+            ),
           };
           await notify(webhookUrl, reviewerEvent);
         }

@@ -1,5 +1,7 @@
-summary: ''
-description: ''
+summary: '[LIB] 巡回の純粋ロジック'
+description: >-
+  `poll_issues` / `poll_prs` が使う純粋な判定ロジック(claim すべきか、
+  reconcile でどう扱うか等)。I/O を持たず、フェイクだけでテストできる。
 lock: '!inline f/factory/lib/poll_support.script.lock'
 kind: script
 schema:

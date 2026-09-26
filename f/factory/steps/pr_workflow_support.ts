@@ -224,7 +224,7 @@ export function mapFindingsToReviewComments(
 
 function formatFindingBody(finding: ReviewFinding): string {
   const suggestion =
-    finding.suggestion !== null ? `\n\nSuggestion: ${finding.suggestion}` : "";
+    finding.suggestion !== null ? `\n\n提案: ${finding.suggestion}` : "";
   return `**[${finding.severity}]** ${finding.message}${suggestion}`;
 }
 
@@ -237,10 +237,10 @@ export function buildReviewBody(
   totalFindings: number,
   droppedCount: number,
 ): string {
-  const verdictLine = `**Verdict:** ${verdict}`;
+  const verdictLine = `**判定:** ${verdict}`;
   const note =
     droppedCount > 0
-      ? `\n\n_${String(droppedCount)} of ${String(totalFindings)} finding(s) could not be posted as inline comments (file outside this PR's diff, or no line reference) — see this review's summary above._`
+      ? `\n\n_${String(droppedCount)} / ${String(totalFindings)} 件の指摘はインラインコメントとして投稿できませんでした(この PR の差分外のファイル、または行参照なし)。上記のレビュー概要を参照してください。_`
       : "";
   return `${summary}\n\n${verdictLine}${note}`;
 }
@@ -1240,6 +1240,210 @@ export function filterKnownReplies(
   return replies.filter((reply) =>
     knownCommentIds.has(reply.review_comment_id),
   );
+}
+
+// ---------------------------------------------------------------------------
+// describeReason: display-only Japanese translation of a `reason` /
+// `status_reason` string (team-lead follow-up). The `reason` recorded via
+// updateStatusIfCurrent / addNotice must stay in its original English form —
+// other tooling keys off it, and factory.notices/status_reason are meant to
+// stay machine-comparable — but the *same* text shown in a GitHub comment or
+// a Discord notification should read in Japanese like every other
+// human-facing string the factory posts. `describeReason` maps every known
+// guard/outcome reason string produced across pr_workflow_support.ts and the
+// pr_fix_*/pipeline_*/pr_review_generate.ts step scripts to a Japanese
+// sentence for *that display only*; callers keep passing the untranslated
+// value to updateStatusIfCurrent/addNotice. A reason this function doesn't
+// recognize — including Claude's own free-text `summary`/`blocked_reason` —
+// is returned unchanged rather than silently dropped or garbled.
+// ---------------------------------------------------------------------------
+
+type ReasonRule = {
+  readonly pattern: RegExp;
+  readonly describe: (match: RegExpMatchArray) => string;
+};
+
+const REASON_RULES: readonly ReasonRule[] = [
+  // pr_fix_prepare.ts's evaluatePrFixSafetyGuards / evaluateRepoAllowedGuard
+  {
+    pattern: /^pull request is not open$/,
+    describe: () => "PR がオープンではありません",
+  },
+  {
+    pattern: /^head repository differs from base repository \(fork PR\)$/,
+    describe: () => "head リポジトリと base リポジトリが異なります(fork PR)",
+  },
+  {
+    pattern: /^pull request is a draft$/,
+    describe: () => "PR がドラフトです",
+  },
+  {
+    pattern: /^base branch is protected$/,
+    describe: () => "base ブランチが保護されています",
+  },
+  {
+    pattern:
+      /^repository is not allowed by factory_config \(owners \/ repo_allowlist\)$/,
+    describe: () =>
+      "factory_config(owners / repo_allowlist)で許可されていないリポジトリです",
+  },
+  // pr_fix_prepare.ts's evaluateFixRoundGuard (round_exhausted)
+  {
+    pattern: /^fix_round (\d+) exceeds max_fix_rounds (\d+)$/,
+    describe: (m) => `fix_round ${m[1]} が max_fix_rounds ${m[2]} を超えました`,
+  },
+  // pr_fix_collect.ts (no_feedback)
+  {
+    pattern:
+      /^no actionable feedback since the last processed review\/comment$/,
+    describe: () =>
+      "前回処理したレビュー・コメント以降、対応可能なフィードバックがありません",
+  },
+  // pr_fix_verify.ts's detectForbiddenChanges / detectEscapingSymlinks /
+  // detectSymlinkChanges / evaluateDiffSizeGuard (forbidden paths /
+  // symlink_change / diff size)
+  {
+    pattern: /^forbidden path changed: (.+)$/,
+    describe: (m) => `変更が禁止されたパスです: ${m[1]}`,
+  },
+  {
+    pattern: /^new shell script added: (.+)$/,
+    describe: (m) => `新しいシェルスクリプトが追加されました: ${m[1]}`,
+  },
+  {
+    pattern: /^package\.json "scripts" field changed$/,
+    describe: () => 'package.json の "scripts" が変更されました',
+  },
+  {
+    pattern: /^symlink escapes the worktree: (.+) -> (.+)$/,
+    describe: (m) =>
+      `シンボリックリンクが worktree の外を指しています: ${m[1]} -> ${m[2]}`,
+  },
+  {
+    pattern: /^symlink_change: symlink changed: (.+)$/,
+    describe: (m) =>
+      `symlink_change: シンボリックリンクが変更されました: ${m[1]}`,
+  },
+  {
+    pattern:
+      /^symlink_change: file type changed \(possible symlink conversion\): (.+)$/,
+    describe: (m) =>
+      `symlink_change: ファイル種別が変更されました(シンボリックリンクへの変換の可能性): ${m[1]}`,
+  },
+  {
+    pattern: /^changed file count (\d+) exceeds max_fix_changed_files (\d+)$/,
+    describe: (m) =>
+      `変更ファイル数 ${m[1]} が max_fix_changed_files ${m[2]} を超えました`,
+  },
+  {
+    pattern: /^diff line total (\d+) exceeds max_fix_diff_lines (\d+)$/,
+    describe: (m) =>
+      `diff の総行数 ${m[1]} が max_fix_diff_lines ${m[2]} を超えました`,
+  },
+  // pr_fix_apply.ts / pr_fix_verify.ts / pipeline_generate.ts /
+  // pr_review_generate.ts's daily-budget guard (budget exceeded)
+  {
+    pattern: /^daily budget exceeded \(\$([\d.]+) >= \$([\d.]+)\)$/,
+    describe: (m) =>
+      `1 日あたりの Claude 利用予算の上限に達しました($${m[1]} >= $${m[2]})`,
+  },
+  {
+    pattern: /^daily budget exceeded$/,
+    describe: () => "1 日あたりの Claude 利用予算の上限に達しました",
+  },
+  // pr_fix_finish.ts's push / retry outcomes (head_changed, etc.)
+  {
+    pattern: /^PR head moved to (\S+) while the fix was in progress$/,
+    describe: (m) => `修正の実行中に PR の head が ${m[1]} に変わりました`,
+  },
+  {
+    pattern: /^check-fix retry pass failed \((.+)\): (.+)$/,
+    describe: (m) =>
+      `チェック失敗後の自動修正リトライに失敗しました(${m[1]}): ${m[2]}`,
+  },
+  {
+    pattern: /^repository checks still failing after one automated fix retry$/,
+    describe: () => "自動修正の再試行後もリポジトリのチェックに失敗しています",
+  },
+  {
+    pattern: /^done outcome missing a commit message$/,
+    describe: () =>
+      "完了と報告されましたが、コミットメッセージがありませんでした",
+  },
+  {
+    pattern: /^done outcome with no changes to commit$/,
+    describe: () =>
+      "完了と報告されましたが、コミットする変更がありませんでした",
+  },
+  {
+    pattern: /^needs human attention$/,
+    describe: () => "人による対応が必要です",
+  },
+  {
+    pattern: /^safety guard failed$/,
+    describe: () => "安全性ガードに失敗しました",
+  },
+  // pr_fix_finish.ts's evaluateRelabelFailure (relabel_failed)
+  {
+    pattern: /^parent work item has no issue_number$/,
+    describe: () => "親の work item に issue_number がありません",
+  },
+  // pipeline_decide.ts's rejected/expired/needs_human outcomes
+  {
+    pattern: /^rejected (\d+) times$/,
+    describe: (m) => `${m[1]} 回連続で差し戻されました`,
+  },
+  {
+    pattern: /^approval timed out$/,
+    describe: () => "承認がタイムアウトしました",
+  },
+  {
+    pattern: /^resumed via unsupported channel$/,
+    describe: () => "サポート対象外の経路で再開されました",
+  },
+  // pr_fix_finish.ts's post-push reviewer-request outcome (reviewerNote)
+  {
+    pattern:
+      /^no reviewers to request \(default_reviewers empty and no fallback reviewer authors\)$/,
+    describe: () =>
+      "リクエストするレビュアーがいません(default_reviewers が空で、フォールバックの候補者もいません)",
+  },
+  {
+    pattern: /^failed to request reviewers: (.+)$/,
+    describe: (m) => `レビュアーのリクエストに失敗しました: ${m[1]}`,
+  },
+  {
+    pattern:
+      /^requested reviewers were all excluded \(PR author \/ factory viewer\)$/,
+    describe: () =>
+      "リクエスト対象のレビュアーが全員除外されました(PR 作成者 / factory 自身)",
+  },
+  {
+    pattern: /^could not request re-review: (.+)$/,
+    describe: (m) =>
+      `再レビューをリクエストできませんでした: ${describeReason(m[1] ?? "")}`,
+  },
+];
+
+/**
+ * Maps one factory-authored `reason`/`status_reason` string to Japanese for
+ * display in a GitHub comment or Discord notification (pure, for testing) —
+ * see the module note above. Recurses over a `"; "`-joined list
+ * (pr_fix_verify.ts's `ForbiddenChangeResult.reasons.join("; ")`) so each
+ * entry is translated independently; an entry (or the whole string) this
+ * function doesn't recognize is returned unchanged.
+ */
+export function describeReason(reason: string): string {
+  if (reason.includes("; ")) {
+    return reason.split("; ").map(describeReason).join("; ");
+  }
+  for (const rule of REASON_RULES) {
+    const match = reason.match(rule.pattern);
+    if (match !== null) {
+      return rule.describe(match);
+    }
+  }
+  return reason;
 }
 
 // ---------------------------------------------------------------------------

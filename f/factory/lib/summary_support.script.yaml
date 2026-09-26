@@ -1,5 +1,7 @@
-summary: ''
-description: ''
+summary: '[LIB] 日次サマリの集計'
+description: >-
+  `notify_daily_summary` が使う集計ヘルパー。前日0時から当日0時(Asia/Tokyo)
+  までの agent_runs / approvals を集計する。
 lock: '!inline f/factory/lib/summary_support.script.lock'
 kind: script
 schema:

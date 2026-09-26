@@ -1,6 +1,6 @@
 value: ""
 is_secret: true
 description: >-
-  Claude Code long-lived OAuth token (CLAUDE_CODE_OAUTH_TOKEN). Passed to
-  worker subprocesses as an env var, never as a CLI argument. Value is set
-  via bootstrap.sh / the Windmill UI, never committed.
+  Claude Code の長期 OAuth トークン(CLAUDE_CODE_OAUTH_TOKEN)。worker の
+  サブプロセスへ環境変数として渡し、CLI 引数には渡さない。値は bootstrap.sh
+  または Windmill UI から設定し、コミットしない。

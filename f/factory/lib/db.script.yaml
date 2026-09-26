@@ -1,5 +1,7 @@
-summary: ''
-description: ''
+summary: '[LIB] Data Table アクセス'
+description: >-
+  `factory` スキーマの Data Table への読み書きを担うヘルパー群。すべての I/O
+  は注入した SqlClient 経由で行い、テストでは実データベースに接続しない。
 lock: '!inline f/factory/lib/db.script.lock'
 kind: script
 schema:

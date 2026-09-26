@@ -108,11 +108,11 @@ export type NotifyEvent =
     };
 
 function repoField(owner: string, repo: string): DiscordEmbedField {
-  return { name: "repo", value: `${owner}/${repo}` };
+  return { name: "リポジトリ", value: `${owner}/${repo}` };
 }
 
 function instanceField(instanceName: string): DiscordEmbedField {
-  return { name: "instance", value: instanceName };
+  return { name: "インスタンス", value: instanceName };
 }
 
 const TITLE_MAX = 256;
@@ -178,9 +178,9 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
   switch (event.kind) {
     case "issue_claimed":
       return {
-        title: `Issue claimed: #${event.issue_number} ${event.title}`,
+        title: `Issue 着手: #${event.issue_number} ${event.title}`,
         description:
-          "The factory picked up this issue and started generating requirements.",
+          "Factory がこの Issue に着手し、要件定義の生成を開始しました。",
         url: event.issue_url,
         fields: [
           instanceField(event.instance_name),
@@ -189,20 +189,19 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
       };
     case "approval_requested":
       return {
-        title: `Approval needed: #${event.issue_number} ${event.title}`,
-        description: "A requirement draft is ready for review.",
+        title: `承認待ち: #${event.issue_number} ${event.title}`,
+        description: "要件定義ドラフトが確認待ちです。",
         url: event.inbox_url,
         fields: [
           instanceField(event.instance_name),
           repoField(event.owner, event.repo),
-          { name: "issue", value: event.issue_url },
+          { name: "Issue", value: event.issue_url },
         ],
       };
     case "requirements_approved":
       return {
-        title: `Requirements approved: #${event.issue_number} ${event.title}`,
-        description:
-          "The requirement draft was approved and posted to the issue.",
+        title: `要件定義承認: #${event.issue_number} ${event.title}`,
+        description: "要件定義ドラフトが承認され、Issue に投稿されました。",
         url: event.issue_url,
         fields: [
           instanceField(event.instance_name),
@@ -211,7 +210,7 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
       };
     case "needs_human":
       return {
-        title: "Needs human attention",
+        title: "人による対応が必要です",
         description: event.reason,
         url: event.url,
         fields: [
@@ -221,8 +220,8 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
       };
     case "pr_reviewed":
       return {
-        title: `PR reviewed: #${event.pr_number}`,
-        description: `Verdict: ${event.verdict}`,
+        title: `PR レビュー完了: #${event.pr_number}`,
+        description: `判定: ${event.verdict}`,
         url: event.pr_url,
         fields: [
           instanceField(event.instance_name),
@@ -231,8 +230,8 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
       };
     case "pr_fixed":
       return {
-        title: `PR fix applied: #${event.pr_number}`,
-        description: `Outcome: ${event.outcome}`,
+        title: `PR 修正適用: #${event.pr_number}`,
+        description: `結果: ${event.outcome}`,
         url: event.pr_url,
         fields: [
           instanceField(event.instance_name),
@@ -241,37 +240,37 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
       };
     case "deploy_action_needed":
       return {
-        title: "Self-update needs a host action",
-        description: `mise run deploy is required for commit ${event.sha}.`,
+        title: "自己更新にホスト操作が必要です",
+        description: `commit ${event.sha} の反映には mise run deploy の実行が必要です。`,
         url: null,
         fields: [
           instanceField(event.instance_name),
           {
-            name: "changed paths",
-            value: event.changed_paths.join(", ") || "(none)",
+            name: "変更パス",
+            value: event.changed_paths.join(", ") || "(なし)",
           },
         ],
       };
     case "job_failed":
       return {
-        title: `Job failed: ${event.flow_path}`,
+        title: `ジョブ失敗: ${event.flow_path}`,
         description: event.error,
         url: null,
         fields: [
           instanceField(event.instance_name),
-          { name: "job", value: event.job_id },
+          { name: "ジョブ", value: event.job_id },
         ],
       };
     case "daily_summary":
       return {
-        title: `Daily summary: ${event.day}`,
-        description: `${event.run_count} agent runs, $${event.total_cost_usd.toFixed(2)} spent.`,
+        title: `日次サマリー: ${event.day}`,
+        description: `エージェント実行 ${event.run_count} 件、$${event.total_cost_usd.toFixed(2)} 消費。`,
         url: null,
         fields: [
           instanceField(event.instance_name),
-          { name: "failures", value: String(event.failure_count) },
-          { name: "approved", value: String(event.approved_count) },
-          { name: "rejected", value: String(event.rejected_count) },
+          { name: "失敗", value: String(event.failure_count) },
+          { name: "承認", value: String(event.approved_count) },
+          { name: "却下", value: String(event.rejected_count) },
         ],
       };
   }

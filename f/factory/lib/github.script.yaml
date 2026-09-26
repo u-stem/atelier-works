@@ -1,5 +1,7 @@
-summary: ''
-description: ''
+summary: '[LIB] GitHub API ラッパー'
+description: >-
+  `gh api` 経由での GitHub REST API 呼び出しをラップする。トークンはサブ
+  プロセスの環境変数としてのみ渡し、CLI 引数や URL には含めない。
 lock: '!inline f/factory/lib/github.script.lock'
 kind: script
 schema:

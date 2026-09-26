@@ -237,7 +237,7 @@ async function buildPrCandidate(
     });
     await addNotice({
       kind: "fix_trigger_association_excluded",
-      message: `${found.owner}/${found.repo}#${found.number}: ignored /factory fix from ${authors.join(", ")} — not in allowed_labeler_associations`,
+      message: `${found.owner}/${found.repo}#${found.number}: allowed_labeler_associations に含まれていないため /factory fix を無視しました(${authors.join(", ")})`,
     });
   }
 
@@ -370,7 +370,7 @@ async function startReview(
     candidate.number,
     "pr_review",
     workItemId,
-    `The factory (instance \`${config.instance_name}\`) started reviewing this pull request at \`${candidate.headSha.slice(0, 7)}\`.`,
+    `Factory(インスタンス \`${config.instance_name}\`)が \`${candidate.headSha.slice(0, 7)}\` 時点でこの PR のレビューを開始しました。`,
     viewerLogin,
   );
   const flowJobId = await wmill.runFlowAsync("f/factory/pr_review", {
@@ -431,7 +431,7 @@ async function startFix(
     candidate.number,
     "pr_fix",
     workItemId,
-    `The factory (instance \`${config.instance_name}\`) started applying a fix for this pull request (round ${round}).`,
+    `Factory(インスタンス \`${config.instance_name}\`)がこの PR の修正 round ${round} を開始しました。`,
     viewerLogin,
   );
   const flowJobId = await wmill.runFlowAsync("f/factory/pr_fix", {

@@ -1,5 +1,8 @@
-summary: ''
-description: ''
+summary: '[SYS-4] フロー失敗ハンドラ'
+description: >-
+  `pipeline__flow` / `pr_review__flow` / `pr_fix__flow` 各フローの
+  failure_module ハンドラ。work item を失敗状態に遷移させ、ラベル除去・
+  記録・Discord 通知を一本化する。
 lock: '!inline f/factory/on_error_flow.script.lock'
 kind: script
 schema:

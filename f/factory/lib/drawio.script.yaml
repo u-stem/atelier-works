@@ -1,5 +1,7 @@
-summary: ''
-description: ''
+summary: '[LIB] draw.io 図の生成'
+description: >-
+  draw.io(mxGraph)形式 XML の検証と、diagrams.net のビューアー URL への
+  エンコードを行う。
 lock: '!inline f/factory/lib/drawio.script.lock'
 kind: script
 schema:

@@ -1,7 +1,8 @@
-summary: Daily summary notification
-description: Aggregates yesterday's agent_runs (count, cost, failures) and
-  approvals (approve/reject counts) and posts a daily_summary Discord embed
-  (spec-cycle2.md §3 M5).
+summary: '[SYS-3] 日次サマリ通知'
+description: >-
+  前日分の agent_runs(件数・コスト・失敗)と approvals(承認/却下件数)を
+  集計し、Discord へ日次サマリの embed を投稿する(docs/architecture.md
+  参照)。
 args: {}
 cron_version: v2
 enabled: true

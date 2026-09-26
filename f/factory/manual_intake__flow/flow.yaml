@@ -1,12 +1,12 @@
-summary: Manual intake
-description: 'Manually submit a factory task: opens the trigger Issue with the
-  same Markdown layout as .github/ISSUE_TEMPLATE/factory-task.yml, claims it the
-  same way poll_issues.ts would, and starts f/factory/pipeline (spec-cycle2.md
-  §3 M5).'
+summary: '[OP-1-1] 手動投入フォーム(Issue を作成して工程に乗せる)'
+description: >-
+  フォームから手動でタスクを投入する。`.github/ISSUE_TEMPLATE/factory-task.yml`
+  と同じ Markdown 構成でトリガー Issue を作成し、`poll_issues` と同じ手順で
+  claim したうえで `pipeline__flow` を起動する(docs/architecture.md 参照)。
 value:
   modules:
     - id: create_issue
-      summary: Create the trigger Issue
+      summary: '[OP-1-1/1] Issue を作成'
       value:
         type: script
         input_transforms:
@@ -27,7 +27,7 @@ value:
             expr: flow_input.title
         path: f/factory/steps/manual_intake_create_issue
     - id: register
-      summary: Claim the Issue and start the pipeline
+      summary: '[OP-1-1/2] 作業項目を登録して工程 2 を起動'
       value:
         type: script
         input_transforms:

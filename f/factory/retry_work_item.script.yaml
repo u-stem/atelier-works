@@ -1,5 +1,9 @@
-summary: ''
-description: ''
+summary: '[OP-2-2] 作業項目を再実行'
+description: >-
+  詰まった work item(failed / needs_human / expired / blocked)を手動で
+  再実行する。kind に応じて対象フロー(pipeline / pr_review / pr_fix)と
+  目的の状態を切り替え、再起動前に wip ラベルとトリガーラベルを冪等に
+  再付与する。
 lock: '!inline f/factory/retry_work_item.script.lock'
 kind: script
 schema:

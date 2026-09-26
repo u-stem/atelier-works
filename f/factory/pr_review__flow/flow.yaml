@@ -1,13 +1,14 @@
-summary: Review a PR the factory was asked to review
-description: "pr_review.flow (spec-cycle2.md §3 M6, §7): prepares a detached
-  worktree at the PR's head commit, runs headless Claude (factory-review skill,
-  read-only tools) to produce a review, and posts it as a GitHub PR review
-  (event COMMENT) with inline comments, recording the outcome and notifying
-  Discord."
+summary: '[SF-3-1] PR の自動レビュー'
+description: >-
+  依頼された PR をレビューする(docs/architecture.md 参照)。PR の head
+  commit で detached worktree を用意し、headless Claude(factory-review
+  スキル、読み取り専用ツール)でレビューを生成し、GitHub PR レビュー
+  (event COMMENT)としてインラインコメント付きで投稿、結果の記録と
+  Discord 通知を行う。
 value:
   modules:
     - id: pr_review_prepare
-      summary: Load the work item and build a detached review worktree
+      summary: '[SF-3-1/1] PR の取得と検証'
       value:
         type: script
         input_transforms:
@@ -16,7 +17,7 @@ value:
             expr: flow_input.work_item_id
         path: f/factory/steps/pr_review_prepare
     - id: pr_review_generate
-      summary: Run headless Claude to produce the review
+      summary: '[SF-3-1/2] レビューの生成(Claude)'
       value:
         type: script
         input_transforms:
@@ -60,7 +61,7 @@ value:
       skip_if:
         expr: results.pr_review_prepare.skip === true
     - id: pr_review_post
-      summary: Post the review to GitHub, record it, and clean up the worktree
+      summary: '[SF-3-1/3] レビューの投稿'
       value:
         type: script
         input_transforms:

@@ -1,5 +1,8 @@
-summary: ''
-description: ''
+summary: '[SYS-3] 日次サマリ通知'
+description: >-
+  毎日09:00(Asia/Tokyo)に、前日分の agent_runs(件数・コスト・失敗数)と
+  approvals(承認/却下件数)を集計し、Discord へ日次サマリの embed を
+  投稿する。
 lock: '!inline f/factory/notify_daily_summary.script.lock'
 kind: script
 schema:

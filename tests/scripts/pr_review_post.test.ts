@@ -97,6 +97,6 @@ describe("buildReviewBody", () => {
 
   test("omits the dropped-findings note when nothing was dropped", () => {
     const body = buildReviewBody("summary", "comment", 5, 0);
-    expect(body).not.toContain("could not be posted");
+    expect(body).not.toContain("投稿できませんでした");
   });
 });

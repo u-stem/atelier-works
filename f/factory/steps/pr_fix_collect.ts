@@ -119,7 +119,7 @@ export async function main(
     });
     await addNotice({
       kind: "fix_feedback_association_excluded",
-      message: `${owner}/${repo}#${String(pr_number)}: excluded feedback from ${excludedAuthors.join(", ")} — not in allowed_labeler_associations (work item ${String(work_item_id)})`,
+      message: `${owner}/${repo}#${String(pr_number)}: allowed_labeler_associations に含まれていないため ${excludedAuthors.join(", ")} のフィードバックを除外しました(work item ${String(work_item_id)})`,
     });
   }
 

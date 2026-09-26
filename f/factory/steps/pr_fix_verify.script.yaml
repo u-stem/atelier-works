@@ -1,5 +1,8 @@
-summary: ''
-description: ''
+summary: '[SF-3-2/4] 変更の検証'
+description: >-
+  `pr_fix__flow` のステップ。禁止パターンへの抵触を検査し、問題なければ
+  `factory_config.allowed_check_commands` を実行して変更を検証する。チェック
+  失敗時は1回だけ Claude による修正と再検証を行う。
 lock: '!inline f/factory/steps/pr_fix_verify.script.lock'
 kind: script
 schema:

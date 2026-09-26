@@ -1,6 +1,5 @@
 value: ""
 is_secret: true
 description: >-
-  Discord incoming webhook URL used by notify_discord for pipeline events and
-  the daily summary. Value is set via bootstrap.sh / the Windmill UI, never
-  committed.
+  パイプラインの各イベントと日次サマリの通知に使う Discord incoming webhook
+  URL。値は bootstrap.sh または Windmill UI から設定し、コミットしない。

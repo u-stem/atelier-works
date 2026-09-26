@@ -1,5 +1,7 @@
-summary: ''
-description: ''
+summary: '[LIB] ログとマスク'
+description: >-
+  構造化ログの出力と、GitHub PAT / Claude Code OAuth トークン / Discord
+  Webhook URL などの秘密情報のマスク処理。
 lock: '!inline f/factory/lib/log.script.lock'
 kind: script
 schema:

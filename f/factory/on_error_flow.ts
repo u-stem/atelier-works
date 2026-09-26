@@ -204,7 +204,7 @@ async function handleTerminalFailure(
       number,
       `failed-${resolvedJobId}`,
       item.id,
-      `The factory (instance \`${config.instance_name}\`) hit an error and marked this work item \`failed\`. It can be re-launched with \`retry_work_item\` (work_item_id ${item.id}).\n\nError: ${truncateForComment(message, MAX_FAILURE_COMMENT_ERROR_LENGTH)}`,
+      `Factory(インスタンス \`${config.instance_name}\`)でエラーが発生し、この work item を \`failed\` としました。\`retry_work_item\`(work_item_id ${item.id})から再実行できます。\n\nエラー: ${truncateForComment(message, MAX_FAILURE_COMMENT_ERROR_LENGTH)}`,
       viewer.login,
     );
   } catch (err) {

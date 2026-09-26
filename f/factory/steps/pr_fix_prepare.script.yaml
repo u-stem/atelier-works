@@ -1,5 +1,8 @@
-summary: ''
-description: ''
+summary: '[SF-3-2/1] worktree の準備と安全確認'
+description: >-
+  `pr_fix__flow` のステップ。work item を読み込み、fix_round の上限と
+  修正前の安全確認(PR が open か、base/head が同一リポジトリか、draft
+  でないか等)を行ったうえで、PR の head ブランチに worktree を用意する。
 lock: '!inline f/factory/steps/pr_fix_prepare.script.lock'
 kind: script
 schema:

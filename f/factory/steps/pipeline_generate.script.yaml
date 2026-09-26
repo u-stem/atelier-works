@@ -1,5 +1,8 @@
-summary: ''
-description: ''
+summary: '[SF-2-1/2] 要件定義の生成(Claude)'
+description: >-
+  `pipeline__flow` のステップ。日次予算ガードを確認したうえで headless
+  Claude(要件定義・draw.io 図生成スキル)を実行し、要件定義ドラフトと図を
+  検証・保存する。
 lock: '!inline f/factory/steps/pipeline_generate.script.lock'
 kind: script
 schema:

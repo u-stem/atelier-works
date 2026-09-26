@@ -1,5 +1,9 @@
-summary: ''
-description: ''
+summary: '[SF-1-2] PR を巡回してレビュー / 修正を起動'
+description: >-
+  5分毎に `pr_review__flow` / `pr_fix__flow` を起動すべき PR を検知する。
+  PR 種別 work item の reconcile(closed/merged 検知、孤児検知)は
+  `poll_issues` 側が担い、本スクリプトはレビュー/修正サイクルの新規検知・
+  起動のみを行う(docs/architecture.md 参照)。
 lock: '!inline f/factory/poll_prs.script.lock'
 kind: script
 schema:

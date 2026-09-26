@@ -1,10 +1,10 @@
-summary: Requirements pipeline
-description: 要件定義の生成 → 承認 → 公開/差し戻しの工程 2 のフロー(spec-cycle2.md §3 M6)。ステップは
+summary: '[SF-2-1] 要件定義の生成と承認'
+description: 要件定義の生成 → 承認 → 公開/差し戻しの工程 2 のフロー(docs/architecture.md 参照)。ステップは
   f/factory/steps/pipeline_*.ts の PathScript。
 value:
   modules:
     - id: prepare
-      summary: Load work item, prepare workspace
+      summary: '[SF-2-1/1] 作業領域の準備'
       value:
         type: script
         input_transforms:
@@ -16,7 +16,7 @@ value:
             expr: flow_input.work_item_id
         path: f/factory/steps/pipeline_prepare
     - id: generate
-      summary: Generate requirements draft with Claude
+      summary: '[SF-2-1/2] 要件定義の生成(Claude)'
       value:
         type: script
         input_transforms:
@@ -42,7 +42,7 @@ value:
       skip_if:
         expr: results.prepare.skip === true
     - id: request_approval
-      summary: Request human approval (suspend)
+      summary: '[SF-2-1/3] 承認依頼(待機)'
       value:
         type: script
         input_transforms:
@@ -61,7 +61,7 @@ value:
         required_events: 1
         timeout: 604800
     - id: decide
-      summary: Branch on the approval decision
+      summary: '[SF-2-1/4] 承認結果の反映'
       value:
         type: script
         input_transforms:

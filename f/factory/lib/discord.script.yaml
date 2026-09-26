@@ -1,5 +1,7 @@
-summary: ''
-description: ''
+summary: '[LIB] Discord 通知'
+description: >-
+  Discord Webhook への通知送信。1回の呼び出しで1つの embed を投稿し、429
+  応答時は1回だけリトライする。
 lock: '!inline f/factory/lib/discord.script.lock'
 kind: script
 schema:

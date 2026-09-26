@@ -1,6 +1,7 @@
 value: ""
 is_secret: true
 description: >-
-  Permanent Windmill API token used by self_update to run `wmill sync push`
-  and `wmill datatable migrate up` from inside the worker container. Same
-  token minted by bootstrap.sh during workspace setup.
+  self_update が worker コンテナ内から `wmill sync push` と
+  `wmill datatable migrate up` を実行するために使う恒久的な Windmill API
+  トークン。ワークスペースセットアップ時に bootstrap.sh が発行したものと
+  同一。

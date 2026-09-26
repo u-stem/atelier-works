@@ -1,9 +1,13 @@
 // Tests for f/factory/steps/pr_workflow_support.ts's
 // evaluatePrFixSafetyGuards and evaluateFixRoundGuard (used by
-// pr_fix_prepare.ts).
+// pr_fix_prepare.ts), plus describeReason (the display-only Japanese
+// mapping of those guards' `reason` strings, used by pr_fix_finish.ts /
+// pr_review_generate.ts / pipeline_*.ts when composing a GitHub comment or
+// Discord notification).
 
 import { describe, expect, test } from "bun:test";
 import {
+  describeReason,
   evaluateFixRoundGuard,
   evaluatePrFixSafetyGuards,
   evaluateRepoAllowedGuard,
@@ -89,5 +93,33 @@ describe("evaluateRepoAllowedGuard", () => {
   test("fails when the repo is not allowed", () => {
     const result = evaluateRepoAllowedGuard(false);
     expect(result.ok).toBe(false);
+  });
+});
+
+describe("describeReason", () => {
+  test("translates a static safety-guard reason", () => {
+    expect(describeReason("pull request is a draft")).toBe("PR がドラフトです");
+  });
+
+  test("translates a dynamic fix-round-exhausted reason, keeping the numbers", () => {
+    expect(describeReason("fix_round 4 exceeds max_fix_rounds 3")).toBe(
+      "fix_round 4 が max_fix_rounds 3 を超えました",
+    );
+  });
+
+  test("translates each entry of a semicolon-joined forbidden-change reason list", () => {
+    expect(
+      describeReason(
+        'forbidden path changed: .github/workflows/ci.yml; package.json "scripts" field changed',
+      ),
+    ).toBe(
+      '変更が禁止されたパスです: .github/workflows/ci.yml; package.json の "scripts" が変更されました',
+    );
+  });
+
+  test("passes an unrecognized reason through unchanged", () => {
+    expect(describeReason("some future guard reason nobody mapped yet")).toBe(
+      "some future guard reason nobody mapped yet",
+    );
   });
 });

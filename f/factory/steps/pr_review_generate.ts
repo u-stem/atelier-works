@@ -31,6 +31,7 @@ import type { ReviewFinding, ReviewVerdict } from "../lib/types.ts";
 import { runCommand } from "../lib/workspace.ts";
 import {
   buildReviewDiffText,
+  describeReason,
   isReviewClaudeOutput,
   removeTerminalLabels,
 } from "./pr_workflow_support.ts";
@@ -137,7 +138,7 @@ export async function main(
             owner,
             repo,
             url: `https://github.com/${owner}/${repo}/pull/${String(pr_number)}`,
-            reason: "daily budget exceeded",
+            reason: describeReason("daily budget exceeded"),
           };
           await notify(webhookUrl, event);
         } catch (err) {
@@ -218,7 +219,7 @@ export async function main(
     const findings = output.findings.slice(0, MAX_FINDINGS);
     const summary =
       output.findings.length > MAX_FINDINGS
-        ? `${output.summary}\n\n(${String(output.findings.length - MAX_FINDINGS)} additional low-priority finding(s) were omitted.)`
+        ? `${output.summary}\n\n(優先度の低い指摘を ${String(output.findings.length - MAX_FINDINGS)} 件省略しました。)`
         : output.summary;
 
     return {

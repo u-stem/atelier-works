@@ -1,8 +1,8 @@
-summary: Poll pull requests for review/fix triggers and start pr_review.flow /
-  pr_fix.flow.
-description: 'Every 5 minutes: review_label / review-requested / assignee
-  detection for pr_review.flow, and fix_label / "/factory fix" comment detection
-  for pr_fix.flow — spec-cycle2.md §3 M5, §7 item 1.'
+summary: '[SF-1-2] PR を巡回してレビュー / 修正を起動'
+description: >-
+  5分毎に実行。review_label / review-requested / assignee による
+  `pr_review__flow` 起動判定と、fix_label / `/factory fix` コメントによる
+  `pr_fix__flow` 起動判定を行う(docs/architecture.md 参照)。
 args: {}
 cron_version: v2
 enabled: true

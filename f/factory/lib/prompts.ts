@@ -119,6 +119,8 @@ export function requirementsPrompt(
   sections.push(
     "",
     "Respond with structured output matching the provided JSON schema only.",
+    "Write any natural-language prose in your output in Japanese " +
+      "(identifiers, code, and file paths stay as-is in their original form).",
   );
   return sections.join("\n");
 }
@@ -223,6 +225,8 @@ export function reviewPrompt(
   sections.push(
     "",
     "Respond with structured output matching the provided JSON schema only.",
+    "Write any natural-language prose in your output in Japanese " +
+      "(identifiers, code, and file paths stay as-is in their original form).",
   );
   return sections.join("\n");
 }
@@ -363,6 +367,8 @@ export function fixPrompt(
   sections.push(
     "",
     "Respond with structured output matching the provided JSON schema only.",
+    "Write any natural-language prose in your output in Japanese " +
+      "(identifiers, code, and file paths stay as-is in their original form).",
   );
   return sections.join("\n");
 }

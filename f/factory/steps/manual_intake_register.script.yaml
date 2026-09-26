@@ -1,5 +1,8 @@
-summary: ''
-description: ''
+summary: '[OP-1-1/2] 作業項目を登録して工程 2 を起動'
+description: >-
+  `manual_intake__flow` のステップ。直前に作成した Issue を `poll_issues`
+  と同じ手順で claim し、work_items 行の作成・claim コメント投稿・Discord
+  通知の後、`pipeline__flow` を起動する。
 lock: '!inline f/factory/steps/manual_intake_register.script.lock'
 kind: script
 schema:

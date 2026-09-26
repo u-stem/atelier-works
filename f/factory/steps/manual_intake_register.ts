@@ -100,7 +100,7 @@ export async function main(
     issue_number,
     "issue",
     workItemId,
-    `Claimed by factory instance \`${config.instance_name}\`.`,
+    `Factory インスタンス \`${config.instance_name}\` が担当を開始しました。`,
     viewer.login,
   );
 

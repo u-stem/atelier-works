@@ -1,5 +1,7 @@
-summary: ''
-description: ''
+summary: '[SF-3-2/3] 修正の適用(Claude)'
+description: >-
+  `pr_fix__flow` のステップ。headless Claude(PR 修正スキル、Bash なし)を
+  worktree 上で実行し、レビュー指摘・コメントへの対応を適用する。
 lock: '!inline f/factory/steps/pr_fix_apply.script.lock'
 kind: script
 schema:
