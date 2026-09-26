@@ -64,6 +64,14 @@ export type NotifyEvent =
       repo: string;
       url: string;
       reason: string;
+      // team-lead decision (2026-09-26): every needs_human notification
+      // must name what needs attention and what to do about it — a bare
+      // "人による対応が必要です" title with only instance/repo fields gave the
+      // reader nothing to act on. `target` names the PR/Issue in the title;
+      // `next_action` (pr_workflow_support.ts's `nextActionFor`) is a
+      // concrete one-sentence instruction shown in its own field.
+      target: { kind: "pr" | "issue"; number: number };
+      next_action: string;
     }
   | {
       kind: "pr_reviewed";
@@ -73,6 +81,12 @@ export type NotifyEvent =
       pr_number: number;
       pr_url: string;
       verdict: string;
+      // team-lead decision (2026-09-26): the description now states what
+      // happened (finding count) and the resulting state label, rather than
+      // the raw verdict text — the state label is what actually tells the
+      // reader whether anything is needed from them.
+      finding_count: number;
+      state_label: string;
     }
   | {
       kind: "pr_fixed";
@@ -82,6 +96,12 @@ export type NotifyEvent =
       pr_number: number;
       pr_url: string;
       outcome: string;
+      // team-lead decision (2026-09-26): same state-oriented description
+      // change as pr_reviewed. `note` carries an optional supplementary
+      // fact (currently: the re-review request's API call failing) that
+      // doesn't warrant its own needs_human notification.
+      state_label: string;
+      note: string | null;
     }
   | {
       kind: "deploy_action_needed";
@@ -208,36 +228,44 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
           repoField(event.owner, event.repo),
         ],
       };
-    case "needs_human":
+    case "needs_human": {
+      const targetLabel = event.target.kind === "pr" ? "PR" : "Issue";
       return {
-        title: "人による対応が必要です",
+        title: `人による対応が必要です: ${targetLabel} #${String(event.target.number)}`,
         description: event.reason,
         url: event.url,
         fields: [
+          { name: "次の操作", value: event.next_action },
           instanceField(event.instance_name),
           repoField(event.owner, event.repo),
         ],
       };
+    }
     case "pr_reviewed":
       return {
         title: `PR レビュー完了: #${event.pr_number}`,
-        description: `判定: ${event.verdict}`,
+        description: `指摘${String(event.finding_count)}件。状態ラベル: ${event.state_label}`,
         url: event.pr_url,
         fields: [
           instanceField(event.instance_name),
           repoField(event.owner, event.repo),
         ],
       };
-    case "pr_fixed":
+    case "pr_fixed": {
+      const fields = [
+        instanceField(event.instance_name),
+        repoField(event.owner, event.repo),
+      ];
+      if (event.note !== null) {
+        fields.push({ name: "補足", value: event.note });
+      }
       return {
         title: `PR 修正適用: #${event.pr_number}`,
-        description: `結果: ${event.outcome}`,
+        description: `修正をpushしました。状態ラベル: ${event.state_label}`,
         url: event.pr_url,
-        fields: [
-          instanceField(event.instance_name),
-          repoField(event.owner, event.repo),
-        ],
+        fields,
       };
+    }
     case "deploy_action_needed":
       return {
         title: "自己更新にホスト操作が必要です",

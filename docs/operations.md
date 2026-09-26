@@ -16,6 +16,11 @@
 - 失敗したwork itemはFactory Console AppのFailuresタブから再実行できる(`retry_work_item`)。再実行時は`wip`ラベルと該当するトリガーラベル(`factory` / `factory:review` / `factory:fix`)を再付与して再起動する。
 - 通知の種類: `picked` / `awaiting_approval` / `approved` / `rejected` / `needs_human` / `failed` / `expired` / `cancelled` / `self_update`(ホスト操作が必要)/ `daily_summary`(前日のコスト・件数・失敗)。
 
+## 通知
+
+- 通知は行動が必要なものだけ送る。例えば再レビュー依頼の対象レビュアーが全員除外されて誰にも依頼できなかった場合、状態ラベル(`factory:rereview`)がそれをすでに表しているため、追加の通知はしない(再レビュー依頼のAPI呼び出し自体が失敗した場合は、`pr_fixed`通知の補足欄に記録する)。
+- `needs_human`通知には対象(PR / Issue番号)・起きたこと・次の操作(何をすればよいか)が必ず載る。
+
 ## PRの使い方(pr_review / pr_fix)
 
 - Claudeが生成してGitHubに投稿する文章(指摘・コメント・返信・要約)は共通の文体規則に従う: 半角英数字と日本語の間に半角スペースを入れない(インラインコード・コードブロックの内部は対象外)、です・ます調、1文1行(要点が複数あれば箇条書き)。詳細は`.claude/skills/factory-review/SKILL.md` / `.claude/skills/factory-fix/SKILL.md`の「文体」節を参照。

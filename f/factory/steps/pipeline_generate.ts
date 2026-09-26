@@ -73,7 +73,7 @@ import {
   isStringArray,
 } from "../lib/types.ts";
 import { ensureFactoryClone, runCommand } from "../lib/workspace.ts";
-import { describeReason } from "./pr_workflow_support.ts";
+import { describeReason, nextActionFor } from "./pr_workflow_support.ts";
 
 export type RequirementsOutput = {
   summary: string;
@@ -248,6 +248,8 @@ export async function main(
       repo: workItem.repo,
       url: workItem.issue_url ?? "",
       reason: describeReason("daily budget exceeded"),
+      target: { kind: "issue", number: workItem.issue_number },
+      next_action: nextActionFor("daily budget exceeded"),
     });
     return { outcome: "budget_exceeded" };
   }

@@ -1984,36 +1984,72 @@ export function renderFixReply(reply: FixReply, newSha: string | null): string {
 type ReasonRule = {
   readonly pattern: RegExp;
   readonly describe: (match: RegExpMatchArray) => string;
+  // team-lead decision (2026-09-26): every reason a needs_human
+  // notification carries must also tell the reader what to do about it —
+  // `nextActionFor` below picks this per rule, the same way `describeReason`
+  // picks `describe`. A concrete, one-sentence Japanese instruction; the
+  // generic `GENERIC_NEXT_ACTION` fallback covers a reason with no specific
+  // action of its own (e.g. a bare safety-guard failure) or one this table
+  // doesn't recognize at all.
+  readonly nextAction: (match: RegExpMatchArray) => string;
 };
+
+// team-lead decision (2026-09-26): pointed at the Console's own
+// Failures/Notices tabs (factory_console__raw_app) — the one place every
+// needs_human work item / notice is listed regardless of cause, so it's a
+// safe default when no more specific action applies.
+const GENERIC_NEXT_ACTION =
+  "ConsoleのFailures / Noticesタブで詳細を確認してください";
+
+const FACTORY_FIX_RELABEL_ACTION =
+  "対応してほしい指摘をコメントしてから`factory:fix`を付け直してください";
+const CHECK_COMMAND_NEXT_ACTION =
+  "失敗しているチェックを確認し、人が修正してください";
+const FORBIDDEN_CHANGE_NEXT_ACTION =
+  "差分を確認し、問題なければ人が直接修正してください";
+const DIFF_SIZE_NEXT_ACTION =
+  "変更を分割するか、上限を見直してから`factory:fix`を付け直してください";
+const DAILY_BUDGET_NEXT_ACTION =
+  "翌日まで待つか、daily_budget_usdを引き上げてください";
+const NOTHING_TO_COMMIT_NEXT_ACTION =
+  "返信内容を確認し、必要なら指示をコメントして`factory:fix`を付け直してください";
 
 const REASON_RULES: readonly ReasonRule[] = [
   // pr_fix_prepare.ts's evaluatePrFixSafetyGuards / evaluateRepoAllowedGuard
   {
     pattern: /^pull request is not open$/,
     describe: () => "PR がオープンではありません",
+    nextAction: () => "PRを再オープンするか、この作業を取り下げてください",
   },
   {
     pattern: /^head repository differs from base repository \(fork PR\)$/,
     describe: () => "head リポジトリと base リポジトリが異なります(fork PR)",
+    nextAction: () =>
+      "forkではなく同一リポジトリのブランチからPRを作り直してください",
   },
   {
     pattern: /^pull request is a draft$/,
     describe: () => "PR がドラフトです",
+    nextAction: () => "ドラフトを解除してから`factory:fix`を付け直してください",
   },
   {
     pattern: /^base branch is protected$/,
     describe: () => "base ブランチが保護されています",
+    nextAction: () => "baseブランチの保護設定を確認してください",
   },
   {
     pattern:
       /^repository is not allowed by factory_config \(owners \/ repo_allowlist\)$/,
     describe: () =>
       "factory_config(owners / repo_allowlist)で許可されていないリポジトリです",
+    nextAction: () =>
+      "factory_configのowners / repo_allowlistを見直してください",
   },
   // pr_fix_prepare.ts's evaluateFixRoundGuard (round_exhausted)
   {
     pattern: /^fix_round (\d+) exceeds max_fix_rounds (\d+)$/,
     describe: (m) => `fix_round ${m[1]} が max_fix_rounds ${m[2]} を超えました`,
+    nextAction: () => "残りの指摘は人が対応するか、上限を見直してください",
   },
   // pr_fix_collect.ts (no_feedback)
   {
@@ -2021,6 +2057,7 @@ const REASON_RULES: readonly ReasonRule[] = [
       /^no actionable feedback since the last processed review\/comment$/,
     describe: () =>
       "前回処理したレビュー・コメント以降、対応可能なフィードバックがありません",
+    nextAction: () => FACTORY_FIX_RELABEL_ACTION,
   },
   // pr_fix_verify.ts's detectForbiddenChanges / detectEscapingSymlinks /
   // detectSymlinkChanges / evaluateDiffSizeGuard (forbidden paths /
@@ -2028,40 +2065,48 @@ const REASON_RULES: readonly ReasonRule[] = [
   {
     pattern: /^forbidden path changed: (.+)$/,
     describe: (m) => `変更が禁止されたパスです: ${m[1]}`,
+    nextAction: () => FORBIDDEN_CHANGE_NEXT_ACTION,
   },
   {
     pattern: /^new shell script added: (.+)$/,
     describe: (m) => `新しいシェルスクリプトが追加されました: ${m[1]}`,
+    nextAction: () => FORBIDDEN_CHANGE_NEXT_ACTION,
   },
   {
     pattern: /^package\.json "scripts" field changed$/,
     describe: () => 'package.json の "scripts" が変更されました',
+    nextAction: () => FORBIDDEN_CHANGE_NEXT_ACTION,
   },
   {
     pattern: /^symlink escapes the worktree: (.+) -> (.+)$/,
     describe: (m) =>
       `シンボリックリンクが worktree の外を指しています: ${m[1]} -> ${m[2]}`,
+    nextAction: () => FORBIDDEN_CHANGE_NEXT_ACTION,
   },
   {
     pattern: /^symlink_change: symlink changed: (.+)$/,
     describe: (m) =>
       `symlink_change: シンボリックリンクが変更されました: ${m[1]}`,
+    nextAction: () => FORBIDDEN_CHANGE_NEXT_ACTION,
   },
   {
     pattern:
       /^symlink_change: file type changed \(possible symlink conversion\): (.+)$/,
     describe: (m) =>
       `symlink_change: ファイル種別が変更されました(シンボリックリンクへの変換の可能性): ${m[1]}`,
+    nextAction: () => FORBIDDEN_CHANGE_NEXT_ACTION,
   },
   {
     pattern: /^changed file count (\d+) exceeds max_fix_changed_files (\d+)$/,
     describe: (m) =>
       `変更ファイル数 ${m[1]} が max_fix_changed_files ${m[2]} を超えました`,
+    nextAction: () => DIFF_SIZE_NEXT_ACTION,
   },
   {
     pattern: /^diff line total (\d+) exceeds max_fix_diff_lines (\d+)$/,
     describe: (m) =>
       `diff の総行数 ${m[1]} が max_fix_diff_lines ${m[2]} を超えました`,
+    nextAction: () => DIFF_SIZE_NEXT_ACTION,
   },
   // pr_fix_apply.ts / pr_fix_verify.ts / pipeline_generate.ts /
   // pr_review_generate.ts's daily-budget guard (budget exceeded)
@@ -2069,89 +2114,121 @@ const REASON_RULES: readonly ReasonRule[] = [
     pattern: /^daily budget exceeded \(\$([\d.]+) >= \$([\d.]+)\)$/,
     describe: (m) =>
       `1 日あたりの Claude 利用予算の上限に達しました($${m[1]} >= $${m[2]})`,
+    nextAction: () => DAILY_BUDGET_NEXT_ACTION,
   },
   {
     pattern: /^daily budget exceeded$/,
     describe: () => "1 日あたりの Claude 利用予算の上限に達しました",
+    nextAction: () => DAILY_BUDGET_NEXT_ACTION,
   },
   // pr_fix_finish.ts's push / retry outcomes (head_changed, etc.)
   {
     pattern: /^PR head moved to (\S+) while the fix was in progress$/,
     describe: (m) => `修正の実行中に PR の head が ${m[1]} に変わりました`,
+    nextAction: () =>
+      "最新のheadを確認し、必要なら`factory:fix`を付け直してください",
   },
   {
     pattern: /^check-fix retry pass failed \((.+)\): (.+)$/,
     describe: (m) =>
       `チェック失敗後の自動修正リトライに失敗しました(${m[1]}): ${m[2]}`,
+    nextAction: () => CHECK_COMMAND_NEXT_ACTION,
   },
   {
     pattern: /^repository checks still failing after one automated fix retry$/,
     describe: () => "自動修正の再試行後もリポジトリのチェックに失敗しています",
+    nextAction: () => CHECK_COMMAND_NEXT_ACTION,
   },
   {
     pattern: /^done outcome missing a commit message$/,
     describe: () =>
       "完了と報告されましたが、コミットメッセージがありませんでした",
+    nextAction: () => "もう一度`factory:fix`を付け直してください",
   },
   // team-lead fix: pr_fix_finish.ts's nothing_to_commit branch now also
   // posts the queued replies, so its Discord reason records both halves
   // (describeReason recurses over a "; "-joined list — see the module note
   // above — so each half is matched and translated independently here).
+  // nextActionFor (below) only ever needs the first segment's action, since
+  // "no changes to commit" always precedes "replies posted" in that joined
+  // reason — both share the same next action for that reason.
   {
     pattern: /^no changes to commit$/,
     describe: () => "コミットする変更がありませんでした",
+    nextAction: () => NOTHING_TO_COMMIT_NEXT_ACTION,
   },
   {
     pattern: /^replies posted$/,
     describe: () => "返信は投稿済みです",
+    nextAction: () => NOTHING_TO_COMMIT_NEXT_ACTION,
   },
   {
     pattern: /^needs human attention$/,
     describe: () => "人による対応が必要です",
+    nextAction: () => GENERIC_NEXT_ACTION,
   },
   {
     pattern: /^safety guard failed$/,
     describe: () => "安全性ガードに失敗しました",
+    nextAction: () => GENERIC_NEXT_ACTION,
   },
   // pr_fix_finish.ts's evaluateRelabelFailure (relabel_failed)
   {
     pattern: /^parent work item has no issue_number$/,
     describe: () => "親の work item に issue_number がありません",
+    nextAction: () => "work itemの状態をConsoleで確認してください",
   },
   // pipeline_decide.ts's rejected/expired/needs_human outcomes
   {
     pattern: /^rejected (\d+) times$/,
     describe: (m) => `${m[1]} 回連続で差し戻されました`,
+    nextAction: () =>
+      "要件を人が整理し、Issueに追記してから`factory`ラベルを付け直してください",
   },
   {
     pattern: /^approval timed out$/,
     describe: () => "承認がタイムアウトしました",
+    nextAction: () => "Inboxで承認または却下してください",
   },
   {
     pattern: /^resumed via unsupported channel$/,
     describe: () => "サポート対象外の経路で再開されました",
+    nextAction: () => GENERIC_NEXT_ACTION,
   },
-  // pr_fix_finish.ts's post-push reviewer-request outcome (reviewerNote)
+  // pr_fix_finish.ts's post-push reviewer-request outcome (reviewerNote) —
+  // team-lead decision (2026-09-26): none of these three reach a
+  // needs_human notification anymore (skipped_empty / no candidates post no
+  // notification at all; failed folds into the pr_fixed event's own `note`
+  // field instead — see pr_fix_finish.ts), so their nextAction is
+  // exercised only through describeReason/nextActionFor directly (e.g. in
+  // tests), not through a live Discord notification.
   {
     pattern:
       /^no reviewers to request \(default_reviewers empty and no fallback reviewer authors\)$/,
     describe: () =>
       "リクエストするレビュアーがいません(default_reviewers が空で、フォールバックの候補者もいません)",
+    nextAction: () =>
+      "default_reviewersを設定するか、レビュー履歴を確認してください",
   },
   {
     pattern: /^failed to request reviewers: (.+)$/,
     describe: (m) => `レビュアーのリクエストに失敗しました: ${m[1]}`,
+    nextAction: () =>
+      "GitHubのレビュアー設定を確認し、必要なら再度`factory:fix`を付け直してください",
   },
   {
     pattern:
       /^requested reviewers were all excluded \(PR author \/ factory viewer\)$/,
     describe: () =>
       "リクエスト対象のレビュアーが全員除外されました(PR 作成者 / factory 自身)",
+    nextAction: () =>
+      "default_reviewersにPR作成者以外のレビュアーを設定してください",
   },
   {
     pattern: /^could not request re-review: (.+)$/,
     describe: (m) =>
       `再レビューをリクエストできませんでした: ${describeReason(m[1] ?? "")}`,
+    nextAction: (m) => nextActionFor(m[1] ?? ""),
   },
 ];
 
@@ -2174,6 +2251,31 @@ export function describeReason(reason: string): string {
     }
   }
   return reason;
+}
+
+/**
+ * Picks the concrete "次の操作" instruction for a `reason`/`status_reason`
+ * string (team-lead decision, 2026-09-26) — used by every needs_human
+ * NotifyEvent emitter (pr_fix_finish.ts, pr_review_generate.ts,
+ * pipeline_decide.ts, pipeline_generate.ts) alongside `describeReason`.
+ * Unlike `describeReason`, this does not translate/join every "; "-joined
+ * segment — it returns the *first* segment's matching rule's action (the
+ * segment order in every producer here places the primary, actionable
+ * reason first; see the module note on the `"no changes to commit; replies
+ * posted"` pair above), falling back to `GENERIC_NEXT_ACTION` when no
+ * segment matches any rule.
+ */
+export function nextActionFor(reason: string): string {
+  const segments = reason.includes("; ") ? reason.split("; ") : [reason];
+  for (const segment of segments) {
+    for (const rule of REASON_RULES) {
+      const match = segment.match(rule.pattern);
+      if (match !== null) {
+        return rule.nextAction(match);
+      }
+    }
+  }
+  return GENERIC_NEXT_ACTION;
 }
 
 // ---------------------------------------------------------------------------

@@ -267,6 +267,12 @@ export async function main(
         [config.wip_label, config.review_label],
         log,
       );
+      // team-lead decision (2026-09-26): computed unconditionally (a pure
+      // function of findings/openMustCount) so the Discord notification
+      // below can always name a state label, even in "gated" mode where
+      // setStateLabel itself is skipped (nothing was posted yet for a human
+      // to act on, so no label is actually applied to the PR).
+      const stateLabel = stateLabelForReview(findings, openMustCount, config);
       // Only when the review was actually posted (review_post_mode ===
       // "comment_only") — the "gated" mode records the review without
       // posting it, so there is nothing yet for a human to act on.
@@ -277,7 +283,7 @@ export async function main(
           repo,
           pr_number,
           config,
-          stateLabelForReview(findings, openMustCount, config),
+          stateLabel,
           log,
         );
       }
@@ -293,6 +299,8 @@ export async function main(
           pr_number,
           pr_url: `https://github.com/${owner}/${repo}/pull/${String(pr_number)}`,
           verdict,
+          finding_count: findings.length,
+          state_label: stateLabel,
         };
         try {
           await notify(webhookUrl, event);

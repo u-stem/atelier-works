@@ -52,7 +52,7 @@ import {
 import { logger, maskSecrets } from "../lib/log.ts";
 import type { FactoryConfig, WorkItem } from "../lib/types.ts";
 import { removeWorktree, runCommand } from "../lib/workspace.ts";
-import { describeReason } from "./pr_workflow_support.ts";
+import { describeReason, nextActionFor } from "./pr_workflow_support.ts";
 
 export type PipelineDecideOutcome =
   | "approved"
@@ -270,6 +270,8 @@ export async function main(
       repo: workItem.repo,
       url: workItem.issue_url ?? "",
       reason: describeReason(note),
+      target: { kind: "issue", number: workItem.issue_number },
+      next_action: nextActionFor(note),
     });
     await removeReqWorktree(workItem);
     return { outcome: missingOutcome };
@@ -406,6 +408,8 @@ export async function main(
     repo: workItem.repo,
     url: workItem.issue_url ?? "",
     reason: describeReason(`rejected ${String(config.max_attempts)} times`),
+    target: { kind: "issue", number: workItem.issue_number },
+    next_action: nextActionFor(`rejected ${String(config.max_attempts)} times`),
   });
   await removeReqWorktree(workItem);
   return { outcome: "needs_human" };

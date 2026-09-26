@@ -11,6 +11,7 @@ import {
   evaluateFixRoundGuard,
   evaluatePrFixSafetyGuards,
   evaluateRepoAllowedGuard,
+  nextActionFor,
 } from "../../f/factory/steps/pr_workflow_support.ts";
 
 const SAFE_INPUT = {
@@ -128,6 +129,46 @@ describe("describeReason", () => {
   test("translates each entry of the nothing_to_commit reason", () => {
     expect(describeReason("no changes to commit; replies posted")).toBe(
       "コミットする変更がありませんでした; 返信は投稿済みです",
+    );
+  });
+});
+
+describe("nextActionFor", () => {
+  // Every needs_human Discord notification's "次の操作" field (team-lead
+  // decision, 2026-09-26) comes from this function — see its doc comment for
+  // why it picks a single segment's action rather than joining every "; "
+  // segment the way describeReason does.
+  test("tells the operator to reopen or withdraw when the PR is not open", () => {
+    expect(nextActionFor("pull request is not open")).toBe(
+      "PRを再オープンするか、この作業を取り下げてください",
+    );
+  });
+
+  test("tells the operator to re-apply factory:fix when there is no actionable feedback", () => {
+    expect(
+      nextActionFor(
+        "no actionable feedback since the last processed review/comment",
+      ),
+    ).toBe(
+      "対応してほしい指摘をコメントしてから`factory:fix`を付け直してください",
+    );
+  });
+
+  test("tells the operator to check the Inbox when approval timed out", () => {
+    expect(nextActionFor("approval timed out")).toBe(
+      "Inboxで承認または却下してください",
+    );
+  });
+
+  test("picks the first segment's action for a semicolon-joined reason", () => {
+    expect(nextActionFor("no changes to commit; replies posted")).toBe(
+      "返信内容を確認し、必要なら指示をコメントして`factory:fix`を付け直してください",
+    );
+  });
+
+  test("falls back to pointing at the Console for an unrecognized reason", () => {
+    expect(nextActionFor("some future guard reason nobody mapped yet")).toBe(
+      "ConsoleのFailures / Noticesタブで詳細を確認してください",
     );
   });
 });

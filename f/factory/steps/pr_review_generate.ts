@@ -34,6 +34,7 @@ import {
   buildReviewDiffText,
   describeReason,
   isReviewClaudeOutput,
+  nextActionFor,
   openFindingsForPrompt,
   removeTerminalLabels,
 } from "./pr_workflow_support.ts";
@@ -141,6 +142,8 @@ export async function main(
             repo,
             url: `https://github.com/${owner}/${repo}/pull/${String(pr_number)}`,
             reason: describeReason("daily budget exceeded"),
+            target: { kind: "pr", number: pr_number },
+            next_action: nextActionFor("daily budget exceeded"),
           };
           await notify(webhookUrl, event);
         } catch (err) {

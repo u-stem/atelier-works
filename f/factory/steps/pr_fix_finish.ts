@@ -55,6 +55,7 @@ import {
   describeReason,
   evaluateRelabelFailure,
   filterKnownReplies,
+  nextActionFor,
   type PrFixFinishOutcome,
   removeTerminalLabels,
   renderFixReply,
@@ -182,6 +183,8 @@ export async function main(
           // untranslated `reason`/`discordReason` value was already recorded
           // to work_items.status_reason via updateStatusIfCurrent above.
           reason: describeReason(discordReason),
+          target: { kind: "pr", number: pr_number },
+          next_action: nextActionFor(discordReason),
         };
         await notify(webhookUrl, event);
       } catch (err) {
@@ -537,7 +540,17 @@ export async function main(
   // the work item still moves to "rereview_requested" either way (the fix
   // itself did succeed and push — only the reviewer-request step is
   // affected), per this task's explicit instructions.
+  //
+  // team-lead decision (2026-09-26): only an actual API error
+  // (reviewersResult.outcome === "failed") is worth telling the operator
+  // about via Discord — "skipped_empty" (every candidate excluded) and "no
+  // candidates at all" are both silent, expected outcomes the
+  // factory:rereview state label already fully explains, so they no longer
+  // produce a separate Discord notification (`reviewerApiError` alone
+  // drives that; `reviewerNote` still records every case in
+  // work_items.status_reason / factory.notices as before).
   let reviewerNote: string | null = null;
+  let reviewerApiError: string | null = null;
   if (reviewersToRequest.length === 0) {
     reviewerNote =
       "no reviewers to request (default_reviewers empty and no fallback reviewer authors)";
@@ -555,6 +568,7 @@ export async function main(
     );
     if (reviewersResult.outcome === "failed") {
       reviewerNote = `failed to request reviewers: ${reviewersResult.error}`;
+      reviewerApiError = reviewersResult.error;
     } else if (reviewersResult.outcome === "skipped_empty") {
       reviewerNote =
         "requested reviewers were all excluded (PR author / factory viewer)";
@@ -607,24 +621,15 @@ export async function main(
           pr_number,
           pr_url: prUrl,
           outcome: "done",
+          state_label: config.rereview_label,
+          // team-lead decision (2026-09-26): only a re-review request API
+          // failure surfaces here — see the comment above reviewerApiError.
+          note:
+            reviewerApiError !== null
+              ? `再レビュー依頼のAPI呼び出しに失敗しました: ${reviewerApiError}`
+              : null,
         };
         await notify(webhookUrl, event);
-        if (reviewerNote !== null) {
-          const reviewerEvent: NotifyEvent = {
-            kind: "needs_human",
-            instance_name: config.instance_name,
-            owner,
-            repo,
-            url: prUrl,
-            // display-only Japanese mapping (team-lead follow-up) —
-            // `reviewerNote` itself stays untranslated in work_items.
-            // status_reason / factory.notices (see the comment above).
-            reason: describeReason(
-              `could not request re-review: ${reviewerNote}`,
-            ),
-          };
-          await notify(webhookUrl, reviewerEvent);
-        }
       } catch (err) {
         log.warn("discord notify failed", {
           error: maskSecrets(err instanceof Error ? err.message : String(err)),

@@ -78,8 +78,122 @@ describe("buildEmbed", () => {
       repo: "atelier-works",
       url: "https://github.com/octo-owner/atelier-works/issues/42",
       reason: "x".repeat(5000),
+      target: { kind: "issue", number: 42 },
+      next_action: "Consoleで確認してください",
     });
     expect(embed.description).toHaveLength(4096);
+  });
+
+  test("names the target (kind and number) in the needs_human title", () => {
+    const embed = buildEmbed({
+      kind: "needs_human",
+      instance_name: "local",
+      owner: "octo-owner",
+      repo: "atelier-works",
+      url: "https://github.com/octo-owner/atelier-works/pull/7",
+      reason: "PR head moved",
+      target: { kind: "pr", number: 7 },
+      next_action: "最新のheadを確認してください",
+    });
+    expect(embed.title).toBe("人による対応が必要です: PR #7");
+  });
+
+  test("includes a next-action field on the needs_human embed", () => {
+    const embed = buildEmbed({
+      kind: "needs_human",
+      instance_name: "local",
+      owner: "octo-owner",
+      repo: "atelier-works",
+      url: "https://github.com/octo-owner/atelier-works/issues/42",
+      reason: "承認がタイムアウトしました",
+      target: { kind: "issue", number: 42 },
+      next_action: "Inboxで承認または却下してください",
+    });
+    expect(embed.fields).toContainEqual({
+      name: "次の操作",
+      value: "Inboxで承認または却下してください",
+    });
+  });
+
+  test("names the issue target when the needs_human notification is about an issue", () => {
+    const embed = buildEmbed({
+      kind: "needs_human",
+      instance_name: "local",
+      owner: "octo-owner",
+      repo: "atelier-works",
+      url: "https://github.com/octo-owner/atelier-works/issues/42",
+      reason: "承認がタイムアウトしました",
+      target: { kind: "issue", number: 42 },
+      next_action: "Inboxで承認または却下してください",
+    });
+    expect(embed.title).toBe("人による対応が必要です: Issue #42");
+  });
+
+  test("states the state label in the pr_fixed description", () => {
+    const embed = buildEmbed({
+      kind: "pr_fixed",
+      instance_name: "local",
+      owner: "octo-owner",
+      repo: "atelier-works",
+      pr_number: 7,
+      pr_url: "https://github.com/octo-owner/atelier-works/pull/7",
+      outcome: "done",
+      state_label: "factory:rereview",
+      note: null,
+    });
+    expect(embed.description).toBe(
+      "修正をpushしました。状態ラベル: factory:rereview",
+    );
+  });
+
+  test("includes an optional 補足 field on pr_fixed when a note is present", () => {
+    const embed = buildEmbed({
+      kind: "pr_fixed",
+      instance_name: "local",
+      owner: "octo-owner",
+      repo: "atelier-works",
+      pr_number: 7,
+      pr_url: "https://github.com/octo-owner/atelier-works/pull/7",
+      outcome: "done",
+      state_label: "factory:rereview",
+      note: "再レビュー依頼のAPI呼び出しに失敗しました: HTTP 500",
+    });
+    expect(embed.fields).toContainEqual({
+      name: "補足",
+      value: "再レビュー依頼のAPI呼び出しに失敗しました: HTTP 500",
+    });
+  });
+
+  test("omits the 補足 field on pr_fixed when there is no note", () => {
+    const embed = buildEmbed({
+      kind: "pr_fixed",
+      instance_name: "local",
+      owner: "octo-owner",
+      repo: "atelier-works",
+      pr_number: 7,
+      pr_url: "https://github.com/octo-owner/atelier-works/pull/7",
+      outcome: "done",
+      state_label: "factory:rereview",
+      note: null,
+    });
+    expect(embed.fields.some((field) => field.name === "補足")).toBe(false);
+  });
+
+  test("states the finding count and state label in the pr_reviewed description", () => {
+    const embed = buildEmbed({
+      kind: "pr_reviewed",
+      instance_name: "local",
+      owner: "octo-owner",
+      repo: "atelier-works",
+      pr_number: 7,
+      pr_url: "https://github.com/octo-owner/atelier-works/pull/7",
+      verdict: "request_changes",
+      finding_count: 3,
+      state_label: "factory:changes-requested",
+    });
+    expect(embed.description).toBe(
+      "指摘3件。状態ラベル: factory:changes-requested",
+    );
   });
 
   test("truncates a field value longer than 1024 characters", () => {
