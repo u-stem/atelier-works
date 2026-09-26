@@ -3,6 +3,8 @@
 
 import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
+import { fixPrompt } from "../../f/factory/lib/prompts.ts";
+import type { RequirementDraft } from "../../f/factory/lib/types.ts";
 import type { CreateCheckHomeDir } from "../../f/factory/steps/pr_workflow_support.ts";
 import {
   countUntrackedFileLines,
@@ -631,5 +633,51 @@ describe("runAllowedCheckCommands", () => {
     const firstHome = first.calls[0]?.options?.env?.HOME;
     const secondHome = second.calls[0]?.options?.env?.HOME;
     expect(firstHome).not.toBe(secondHome);
+  });
+});
+
+describe("fixPrompt requirements wiring (retry pass)", () => {
+  // team-lead: confirms the retry pass's requirements wiring (same
+  // parent_work_item_id -> latestDraft pattern as pr_fix_apply.ts) still
+  // activates fixPrompt's requirements-alignment section when combined
+  // with a non-empty checkFailures — the retry pass is the one caller that
+  // passes both at once.
+  function retryPrompt(): string {
+    const requirements: RequirementDraft = {
+      id: 1,
+      work_item_id: 9,
+      attempt: 1,
+      summary: "s",
+      markdown: "the button must be blue",
+      diagrams: [],
+      open_questions: [],
+      created_at: new Date("2026-01-01"),
+    };
+    return fixPrompt({
+      pr: {
+        owner: "acme",
+        repo: "widgets",
+        number: 1,
+        title: "t",
+        body: "b",
+        url: "https://github.com/acme/widgets/pull/1",
+        head_sha: "abc1234",
+        base_ref: "main",
+      },
+      reviews: [],
+      comments: [],
+      requirements,
+      checkFailures: [
+        { command: "mise run check", outputTail: "FAIL a.test.ts" },
+      ],
+    });
+  }
+
+  test("includes the approved requirements text", () => {
+    expect(retryPrompt()).toContain("the button must be blue");
+  });
+
+  test("also includes the check failure output", () => {
+    expect(retryPrompt()).toContain("FAIL a.test.ts");
   });
 });

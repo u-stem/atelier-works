@@ -53,6 +53,20 @@ export function isOneOf<T extends string>(
   return (allowed as readonly string[]).includes(value);
 }
 
+/**
+ * The git author/committer identity `commitAndPush` (workspace.ts) applies
+ * to a commit via `GIT_AUTHOR_*`/`GIT_COMMITTER_*` env vars — never written
+ * to git config. Shared between github.ts (`gitIdentityForViewer`, which
+ * builds one from the PAT's viewer) and workspace.ts (`CommitAndPushOptions.
+ * author`), so it lives here rather than in either module, avoiding a
+ * circular import (github.ts already imports `CommandRunner` from
+ * workspace.ts).
+ */
+export type GitIdentity = {
+  readonly name: string;
+  readonly email: string;
+};
+
 // ---------------------------------------------------------------------------
 // Validation assertions for values that get interpolated into subprocess
 // argv or git refs (gh/git/claude command lines built by lib-exec's
@@ -181,7 +195,11 @@ export const WORK_ITEM_STATUSES: readonly WorkItemStatus[] = [
   "cancelled",
 ];
 
-/** Terminal statuses, per migration 2 / spec-cycle2.md §7 item 8 (v_lead_time). */
+/** Terminal statuses (docs/architecture.md "状態遷移"; mirrored by the
+ * `factory.v_lead_time` view — keep the two lists in sync via a migration).
+ * `rereview_requested` is pr_fix's success end state: leaving it out made
+ * poll_issues's reconcile treat a finished pr_fix row as an orphan and
+ * fail it once the grace period elapsed. */
 export const TERMINAL_WORK_ITEM_STATUSES: readonly WorkItemStatus[] = [
   "approved",
   "rejected",
@@ -190,6 +208,7 @@ export const TERMINAL_WORK_ITEM_STATUSES: readonly WorkItemStatus[] = [
   "expired",
   "cancelled",
   "reviewed",
+  "rereview_requested",
   "blocked",
 ];
 
@@ -300,12 +319,28 @@ export type AgentRunRecord = {
 
 export type ReviewSeverity = "blocker" | "major" | "minor" | "nit";
 
+/** must = requires a fix before merge; imo = a suggestion/opinion, not
+ * blocking; nits = trivial/stylistic; q = a pure question, no change
+ * implied. Aligned with (but kept separate from) `severity`, which stays
+ * for statistics: blocker/major → must, minor → imo, nit → nits, q
+ * regardless of severity. */
+export type ReviewFindingKind = "must" | "imo" | "nits" | "q";
+
 export type ReviewFinding = {
   path: string;
+  /** Head (post-diff) line number, same basis as `end_line`. */
   line: number | null;
+  /** Last line of a finding spanning multiple lines, or `null` for a
+   * single-line finding. */
+  end_line: number | null;
   severity: ReviewSeverity;
+  kind: ReviewFindingKind;
   message: string;
   suggestion: string | null;
+  /** Complete replacement text for lines `line`..`end_line` inclusive,
+   * meant to be posted as a GitHub suggestion block — `null` when no
+   * concrete edit is proposed. */
+  suggested_code: string | null;
 };
 
 /** Overall verdict of a pr_review.flow run (always posted as a COMMENT-event
@@ -325,9 +360,17 @@ export type ReviewRecord = {
 
 export type FixOutcome = "done" | "requirements_gap" | "blocked";
 
+/** Whether a fix reply's underlying comment was actually addressed with a
+ * code change ("fixed") or deliberately left as-is ("skipped") — drives
+ * pr_workflow_support.ts's `renderFixReply` last line (a commit sha for
+ * "fixed", "見送り" for "skipped"). Required, not optional: a reply without
+ * a decision fails the FixReply type guard (parse-don't-validate). */
+export type FixReplyDecision = "fixed" | "skipped";
+
 export type FixReply = {
   review_comment_id: number;
   body: string;
+  decision: FixReplyDecision;
 };
 
 /** Payload for db.insertFixRound: one row of factory.fix_rounds. */
@@ -413,6 +456,16 @@ export type FactoryConfig = {
   review_label: string;
   fix_label: string;
   pr_label: string;
+  // State labels (mutually exclusive on a PR the factory has handled — see
+  // pr_workflow_support.ts's setStateLabel/allStateLabels): unlike
+  // review_label/fix_label (human-set triggers, removed at launch), these
+  // are set and swapped by the factory itself so a human sees at a glance
+  // what a PR needs, and poll_prs.ts's searchPrs re-discovers a PR by them
+  // instead of the `commenter:<viewer>` query.
+  changes_requested_label: string;
+  reviewed_label: string;
+  rereview_label: string;
+  needs_human_label: string;
   review_post_mode: ReviewPostMode;
   max_fix_rounds: number;
   allowed_check_commands: string[];

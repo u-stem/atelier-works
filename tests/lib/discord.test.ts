@@ -32,13 +32,15 @@ describe("buildEmbed", () => {
     const embed = buildEmbed({
       kind: "issue_claimed",
       instance_name: "local",
-      owner: "u-stem",
+      owner: "octo-owner",
       repo: "atelier-works",
       issue_number: 42,
-      issue_url: "https://github.com/u-stem/atelier-works/issues/42",
+      issue_url: "https://github.com/octo-owner/atelier-works/issues/42",
       title: "Add feature",
     });
-    expect(embed.url).toBe("https://github.com/u-stem/atelier-works/issues/42");
+    expect(embed.url).toBe(
+      "https://github.com/octo-owner/atelier-works/issues/42",
+    );
   });
 
   test("summarizes daily_summary cost in the description", () => {
@@ -59,10 +61,10 @@ describe("buildEmbed", () => {
     const embed = buildEmbed({
       kind: "issue_claimed",
       instance_name: "local",
-      owner: "u-stem",
+      owner: "octo-owner",
       repo: "atelier-works",
       issue_number: 42,
-      issue_url: "https://github.com/u-stem/atelier-works/issues/42",
+      issue_url: "https://github.com/octo-owner/atelier-works/issues/42",
       title: "x".repeat(300),
     });
     expect(embed.title).toHaveLength(256);
@@ -72,9 +74,9 @@ describe("buildEmbed", () => {
     const embed = buildEmbed({
       kind: "needs_human",
       instance_name: "local",
-      owner: "u-stem",
+      owner: "octo-owner",
       repo: "atelier-works",
-      url: "https://github.com/u-stem/atelier-works/issues/42",
+      url: "https://github.com/octo-owner/atelier-works/issues/42",
       reason: "x".repeat(5000),
     });
     expect(embed.description).toHaveLength(4096);
@@ -100,10 +102,10 @@ describe("buildEmbed", () => {
     const embed = buildEmbed({
       kind: "approval_requested",
       instance_name: "local",
-      owner: "u-stem",
+      owner: "octo-owner",
       repo: "atelier-works",
       issue_number: 42,
-      issue_url: "https://github.com/u-stem/atelier-works/issues/42",
+      issue_url: "https://github.com/octo-owner/atelier-works/issues/42",
       title: "Add feature",
       inbox_url: "http://127.0.0.1:8080/apps/get/f/factory/factory_console",
     });
@@ -116,16 +118,16 @@ describe("buildEmbed", () => {
     const embed = buildEmbed({
       kind: "approval_requested",
       instance_name: "local",
-      owner: "u-stem",
+      owner: "octo-owner",
       repo: "atelier-works",
       issue_number: 42,
-      issue_url: "https://github.com/u-stem/atelier-works/issues/42",
+      issue_url: "https://github.com/octo-owner/atelier-works/issues/42",
       title: "Add feature",
       inbox_url: "http://127.0.0.1:8080/apps/get/f/factory/factory_console",
     });
     expect(embed.fields).toContainEqual({
       name: "Issue",
-      value: "https://github.com/u-stem/atelier-works/issues/42",
+      value: "https://github.com/octo-owner/atelier-works/issues/42",
     });
   });
 });

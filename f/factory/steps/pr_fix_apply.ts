@@ -2,6 +2,12 @@
 // (factory-fix skill, tools Read/Glob/Grep/Edit/Write — no Bash,
 // docs/security.md "pr_fix の安全策") in the gtr worktree pr_fix_prepare.ts
 // built, addressing the reviews/comments pr_fix_collect.ts gathered.
+//
+// team-lead decision (2026-09-26): main() no longer takes a `fix_round`
+// parameter — it used to feed the removed `buildFixCommitMessage`'s
+// round-based fallback subject ("address round N review feedback") for a
+// blank Claude summary; Claude now proposes `commit_subject`/`commit_body`
+// directly (FIX_SCHEMA), so there is nothing left here to compute from it.
 
 import * as wmill from "windmill-client@1.817.0";
 import {
@@ -17,7 +23,6 @@ import { FIX_SCHEMA, fixPrompt } from "../lib/prompts.ts";
 import type { FixOutcome, FixReply } from "../lib/types.ts";
 import { runCommand } from "../lib/workspace.ts";
 import {
-  buildFixCommitMessage,
   type CollectedComment,
   type CollectedReview,
   isFixClaudeOutput,
@@ -28,7 +33,8 @@ export type PrFixApplyResult = {
   readonly reason: string | null;
   readonly summary: string;
   readonly replies: FixReply[];
-  readonly commit_message: string | null;
+  readonly commit_subject: string | null;
+  readonly commit_body: string | null;
 };
 
 export async function main(
@@ -41,7 +47,6 @@ export async function main(
   factory_clone_dir: string,
   parent_work_item_id: number | null,
   attempt: number,
-  fix_round: number,
   reviews: CollectedReview[],
   comments: CollectedComment[],
 ): Promise<PrFixApplyResult> {
@@ -69,7 +74,8 @@ export async function main(
       reason: `daily budget exceeded ($${budgetStatus.spent_usd.toFixed(2)} >= $${budgetStatus.limit_usd.toFixed(2)})`,
       summary: "",
       replies: [],
-      commit_message: null,
+      commit_subject: null,
+      commit_body: null,
     };
   }
 
@@ -152,10 +158,11 @@ export async function main(
       reason: output.blocked_reason,
       summary: output.summary,
       replies: output.replies,
-      commit_message:
-        output.outcome === "done"
-          ? buildFixCommitMessage(output.summary, fix_round)
-          : null,
+      // team-lead decision (2026-09-26): Claude proposes commit_subject/
+      // commit_body directly now (isFixClaudeOutput's guard validates their
+      // shape) — only meaningful when outcome is "done", same as before.
+      commit_subject: output.outcome === "done" ? output.commit_subject : null,
+      commit_body: output.outcome === "done" ? output.commit_body : null,
     };
   } finally {
     await systemPrompt.cleanup();

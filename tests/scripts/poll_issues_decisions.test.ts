@@ -14,12 +14,12 @@ const ALLOWED: LabelerAssociation[] = ["OWNER", "MEMBER", "COLLABORATOR"];
 
 function candidate(overrides: Partial<IssueCandidate> = {}): IssueCandidate {
   return {
-    owner: "u-stem",
+    owner: "octo-owner",
     repo: "atelier-works",
     number: 1,
     title: "Add a thing",
     body: "please add a thing",
-    htmlUrl: "https://github.com/u-stem/atelier-works/issues/1",
+    htmlUrl: "https://github.com/octo-owner/atelier-works/issues/1",
     labelerAssociation: "OWNER",
     hasActiveWorkItem: false,
     ...overrides,
@@ -28,19 +28,19 @@ function candidate(overrides: Partial<IssueCandidate> = {}): IssueCandidate {
 
 describe("filterByRepoAllowlist", () => {
   test("returns every item unchanged when the allowlist is empty", () => {
-    const items = [{ owner: "u-stem", repo: "atelier-works" }];
+    const items = [{ owner: "octo-owner", repo: "atelier-works" }];
     expect(filterByRepoAllowlist(items, [])).toEqual(items);
   });
 
   test("drops items whose owner/repo is not in a non-empty allowlist", () => {
     const items = [
-      { owner: "u-stem", repo: "atelier-works" },
-      { owner: "u-stem", repo: "other-repo" },
+      { owner: "octo-owner", repo: "atelier-works" },
+      { owner: "octo-owner", repo: "other-repo" },
     ];
     const filtered = filterByRepoAllowlist(items, [
-      "https://github.com/u-stem/atelier-works",
+      "https://github.com/octo-owner/atelier-works",
     ]);
-    expect(filtered).toEqual([{ owner: "u-stem", repo: "atelier-works" }]);
+    expect(filtered).toEqual([{ owner: "octo-owner", repo: "atelier-works" }]);
   });
 });
 

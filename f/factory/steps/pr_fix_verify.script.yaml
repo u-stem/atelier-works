@@ -6,9 +6,14 @@ schema:
   $schema: https://json-schema.org/draft/2020-12/schema
   type: object
   properties:
-    apply_commit_message:
+    apply_commit_body:
       type: string
-      description: 修正適用時に付けたコミットメッセージ案。
+      description: 修正適用時にClaudeが提案したコミットメッセージ本文案。
+      default: null
+      originalType: string
+    apply_commit_subject:
+      type: string
+      description: 修正適用時にClaudeが提案したコミットメッセージ件名案。
       default: null
       originalType: string
     apply_outcome:
@@ -51,10 +56,6 @@ schema:
       description: Software Factory自身の複製を置いた作業ディレクトリのパス。
       default: null
       originalType: string
-    fix_round:
-      type: number
-      description: このPRに対する修正の試行回数。
-      default: null
     owner:
       type: string
       description: 対象リポジトリを所有するGitHubのユーザー名または組織名。
@@ -101,6 +102,5 @@ schema:
     - worktree_dir
     - factory_clone_dir
     - attempt
-    - fix_round
     - reviews
     - comments

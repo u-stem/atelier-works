@@ -15,8 +15,8 @@ import {
 
 const SAFE_INPUT = {
   open: true,
-  headRepoFullName: "u-stem/atelier-works",
-  baseRepoFullName: "u-stem/atelier-works",
+  headRepoFullName: "octo-owner/atelier-works",
+  baseRepoFullName: "octo-owner/atelier-works",
   draft: false,
   baseProtected: false,
 };
@@ -120,6 +120,14 @@ describe("describeReason", () => {
   test("passes an unrecognized reason through unchanged", () => {
     expect(describeReason("some future guard reason nobody mapped yet")).toBe(
       "some future guard reason nobody mapped yet",
+    );
+  });
+
+  // team-lead fix: pr_fix_finish.ts's nothing_to_commit branch now also
+  // posts queued replies, so its Discord reason joins both halves.
+  test("translates each entry of the nothing_to_commit reason", () => {
+    expect(describeReason("no changes to commit; replies posted")).toBe(
+      "コミットする変更がありませんでした; 返信は投稿済みです",
     );
   });
 });

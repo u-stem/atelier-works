@@ -3,7 +3,9 @@ import {
   addNotice,
   bumpWatermarks,
   clearResumeUrls,
+  findApprovedWorkItemForIssue,
   getWorkItem,
+  hasPriorReview,
   insertFixRound,
   insertReview,
   insertWorkItem,
@@ -65,10 +67,10 @@ const WORK_ITEM_ROW: SqlRow = {
   cycle: 1,
   source: "issue",
   kind: "issue",
-  owner: "u-stem",
+  owner: "octo-owner",
   repo: "atelier-works",
   issue_number: 42,
-  issue_url: "https://github.com/u-stem/atelier-works/issues/42",
+  issue_url: "https://github.com/octo-owner/atelier-works/issues/42",
   pr_number: null,
   title: "Add feature",
   body: "do the thing",
@@ -95,10 +97,10 @@ const NEW_WORK_ITEM = {
   cycle: 1,
   source: "issue" as const,
   kind: "issue" as const,
-  owner: "u-stem",
+  owner: "octo-owner",
   repo: "atelier-works",
   issue_number: 42,
-  issue_url: "https://github.com/u-stem/atelier-works/issues/42",
+  issue_url: "https://github.com/octo-owner/atelier-works/issues/42",
   pr_number: null,
   title: "Add feature",
   body: "do the thing",
@@ -126,10 +128,10 @@ describe("insertWorkItem", () => {
       1,
       "issue",
       "issue",
-      "u-stem",
+      "octo-owner",
       "atelier-works",
       42,
-      "https://github.com/u-stem/atelier-works/issues/42",
+      "https://github.com/octo-owner/atelier-works/issues/42",
       null,
       "Add feature",
       "do the thing",
@@ -258,7 +260,11 @@ describe("getWorkItem", () => {
   test("parses the row into a WorkItem", async () => {
     const { sql } = createFakeSqlClient([[WORK_ITEM_ROW]]);
     const item = await getWorkItem(1, sql);
-    expect(item).toMatchObject({ id: 1, owner: "u-stem", status: "picked" });
+    expect(item).toMatchObject({
+      id: 1,
+      owner: "octo-owner",
+      status: "picked",
+    });
   });
 
   test("returns null when no row matches", async () => {
@@ -622,9 +628,12 @@ describe("toReviewRecord", () => {
         {
           path: "a.ts",
           line: 10,
+          end_line: 12,
           severity: "major",
+          kind: "must",
           message: "bug",
           suggestion: null,
+          suggested_code: "const x = 2;",
         },
       ],
       posted_review_id: "review-1",
@@ -633,11 +642,110 @@ describe("toReviewRecord", () => {
       {
         path: "a.ts",
         line: 10,
+        end_line: 12,
         severity: "major",
+        kind: "must",
         message: "bug",
         suggestion: null,
+        suggested_code: "const x = 2;",
       },
     ]);
+  });
+
+  test("derives kind from severity when kind is absent (legacy pre-schema-change row shape): blocker/major → must, minor → imo, nit → nits", () => {
+    const review = toReviewRecord({
+      work_item_id: 1,
+      head_sha: "abc1234",
+      verdict: "request_changes",
+      summary: "needs work",
+      findings: [
+        {
+          path: "a.ts",
+          line: 1,
+          severity: "blocker",
+          message: "m1",
+          suggestion: null,
+        },
+        {
+          path: "a.ts",
+          line: 2,
+          severity: "major",
+          message: "m2",
+          suggestion: null,
+        },
+        {
+          path: "a.ts",
+          line: 3,
+          severity: "minor",
+          message: "m3",
+          suggestion: null,
+        },
+        {
+          path: "a.ts",
+          line: 4,
+          severity: "nit",
+          message: "m4",
+          suggestion: null,
+        },
+      ],
+      posted_review_id: "review-1",
+    });
+    expect(review.findings.map((finding) => finding.kind)).toEqual([
+      "must",
+      "must",
+      "imo",
+      "nits",
+    ]);
+  });
+
+  test("defaults end_line and suggested_code to null when absent (legacy pre-schema-change row shape)", () => {
+    const review = toReviewRecord({
+      work_item_id: 1,
+      head_sha: "abc1234",
+      verdict: "request_changes",
+      summary: "needs work",
+      findings: [
+        {
+          path: "a.ts",
+          line: 10,
+          severity: "major",
+          message: "bug",
+          suggestion: null,
+        },
+      ],
+      posted_review_id: "review-1",
+    });
+    expect(review.findings[0]).toMatchObject({
+      end_line: null,
+      suggested_code: null,
+    });
+  });
+
+  test("keeps an explicit kind/end_line/suggested_code from a new-format row instead of deriving/defaulting them", () => {
+    const review = toReviewRecord({
+      work_item_id: 1,
+      head_sha: "abc1234",
+      verdict: "request_changes",
+      summary: "needs work",
+      findings: [
+        {
+          path: "a.ts",
+          line: 10,
+          end_line: 12,
+          severity: "minor",
+          kind: "q",
+          message: "bug",
+          suggestion: null,
+          suggested_code: "const x = 2;",
+        },
+      ],
+      posted_review_id: "review-1",
+    });
+    expect(review.findings[0]).toMatchObject({
+      kind: "q",
+      end_line: 12,
+      suggested_code: "const x = 2;",
+    });
   });
 });
 
@@ -650,7 +758,7 @@ describe("insertFixRound", () => {
         round: 1,
         trigger_review_ids: [17],
         outcome: "done",
-        replies: [{ review_comment_id: 101, body: "fixed" }],
+        replies: [{ review_comment_id: 101, body: "fixed", decision: "fixed" }],
         commit_shas: ["deadbeef"],
       },
       sql,
@@ -666,7 +774,7 @@ describe("insertFixRound", () => {
         round: 1,
         trigger_review_ids: [17],
         outcome: "done",
-        replies: [{ review_comment_id: 101, body: "fixed" }],
+        replies: [{ review_comment_id: 101, body: "fixed", decision: "fixed" }],
         commit_shas: ["deadbeef"],
       },
       sql,
@@ -684,12 +792,50 @@ describe("toFixRoundRecord", () => {
       round: 1,
       trigger_review_ids: [17],
       outcome: "done",
-      replies: [{ review_comment_id: 101, body: "fixed" }],
+      replies: [{ review_comment_id: 101, body: "fixed", decision: "fixed" }],
       commit_shas: ["deadbeef"],
     });
     expect(fixRound.replies).toEqual([
-      { review_comment_id: 101, body: "fixed" },
+      { review_comment_id: 101, body: "fixed", decision: "fixed" },
     ]);
+  });
+});
+
+describe("hasPriorReview", () => {
+  test("returns true when a prior review row is found", async () => {
+    const { sql } = createFakeSqlClient([[{ "?column?": 1 }]]);
+    const result = await hasPriorReview(
+      "octo-owner",
+      "atelier-works",
+      7,
+      1,
+      sql,
+    );
+    expect(result).toBe(true);
+  });
+
+  test("returns false when no prior review row is found", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    const result = await hasPriorReview(
+      "octo-owner",
+      "atelier-works",
+      7,
+      1,
+      sql,
+    );
+    expect(result).toBe(false);
+  });
+
+  test("joins factory.reviews to factory.work_items on work_item_id", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasPriorReview("octo-owner", "atelier-works", 7, 1, sql);
+    expect(calls[0]?.text).toContain("JOIN factory.work_items");
+  });
+
+  test("excludes the given work_item_id so this in-flight review never counts as a prior one", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasPriorReview("octo-owner", "atelier-works", 7, 1, sql);
+    expect(calls[0]?.values).toContain(1);
   });
 });
 
@@ -870,20 +1016,76 @@ describe("setObservedWatermarks", () => {
 describe("nextCycleForIssue", () => {
   test("returns one more than the highest recorded cycle", async () => {
     const { sql } = createFakeSqlClient([[{ next_cycle: 5 }]]);
-    const cycle = await nextCycleForIssue("u-stem", "atelier-works", 42, sql);
+    const cycle = await nextCycleForIssue(
+      "octo-owner",
+      "atelier-works",
+      42,
+      sql,
+    );
     expect(cycle).toBe(5);
   });
 
   test("returns 1 when the issue has never had a work item", async () => {
     const { sql } = createFakeSqlClient([[{ next_cycle: 1 }]]);
-    const cycle = await nextCycleForIssue("u-stem", "atelier-works", 42, sql);
+    const cycle = await nextCycleForIssue(
+      "octo-owner",
+      "atelier-works",
+      42,
+      sql,
+    );
     expect(cycle).toBe(1);
   });
 
   test("selects from factory.work_items filtered by owner, repo, and issue_number", async () => {
     const { sql, calls } = createFakeSqlClient([[{ next_cycle: 1 }]]);
-    await nextCycleForIssue("u-stem", "atelier-works", 42, sql);
+    await nextCycleForIssue("octo-owner", "atelier-works", 42, sql);
     expect(calls[0]?.text).toContain("FROM factory.work_items");
+  });
+});
+
+describe("findApprovedWorkItemForIssue", () => {
+  test("returns the most recent kind='issue' work item at approved or later, parsed as a WorkItem", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ ...WORK_ITEM_ROW, id: 3, cycle: 2, status: "implementing" }],
+    ]);
+    const item = await findApprovedWorkItemForIssue(
+      "octo-owner",
+      "atelier-works",
+      42,
+      sql,
+    );
+    expect(item).toMatchObject({ id: 3, cycle: 2, status: "implementing" });
+  });
+
+  test("returns null when the issue has no approved-or-later work item", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    const item = await findApprovedWorkItemForIssue(
+      "octo-owner",
+      "atelier-works",
+      42,
+      sql,
+    );
+    expect(item).toBeNull();
+  });
+
+  test("filters by kind='issue', owner/repo/issue_number, and the approved-or-later status set, ordered by cycle DESC, id DESC", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await findApprovedWorkItemForIssue("octo-owner", "atelier-works", 42, sql);
+    const text = calls[0]?.text ?? "";
+    expect(text).toContain("kind = 'issue'");
+    expect(text).toContain("ORDER BY cycle DESC, id DESC");
+    expect(calls[0]?.values).toContain(42);
+    expect(
+      calls[0]?.values.some(
+        (value) => Array.isArray(value) && value.includes("approved"),
+      ),
+    ).toBe(true);
+  });
+
+  test("casts issue_number to ::integer", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await findApprovedWorkItemForIssue("octo-owner", "atelier-works", 42, sql);
+    expect(calls[0]?.text).toContain("::integer");
   });
 });
 
@@ -891,7 +1093,7 @@ describe("latestPrWorkItem", () => {
   test("returns null when the PR has never had a work item", async () => {
     const { sql } = createFakeSqlClient([[]]);
     const result = await latestPrWorkItem(
-      "u-stem",
+      "octo-owner",
       "atelier-works",
       7,
       undefined,
@@ -913,7 +1115,7 @@ describe("latestPrWorkItem", () => {
       ],
     ]);
     const result = await latestPrWorkItem(
-      "u-stem",
+      "octo-owner",
       "atelier-works",
       7,
       undefined,
@@ -932,7 +1134,7 @@ describe("latestPrWorkItem", () => {
       [{ ...WORK_ITEM_ROW, id: 3, observed_comment_id: 42 }],
     ]);
     const result = await latestPrWorkItem(
-      "u-stem",
+      "octo-owner",
       "atelier-works",
       7,
       undefined,
@@ -943,26 +1145,26 @@ describe("latestPrWorkItem", () => {
 
   test("selects the full row (SELECT *), not a narrow column list", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
-    await latestPrWorkItem("u-stem", "atelier-works", 7, undefined, sql);
+    await latestPrWorkItem("octo-owner", "atelier-works", 7, undefined, sql);
     expect(calls[0]?.text).toContain("SELECT *");
   });
 
   test("does not filter by kind when opts is omitted", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
-    await latestPrWorkItem("u-stem", "atelier-works", 7, undefined, sql);
+    await latestPrWorkItem("octo-owner", "atelier-works", 7, undefined, sql);
     expect(calls[0]?.text).not.toContain("kind =");
   });
 
   test("does not filter by kind when opts.kind is omitted", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
-    await latestPrWorkItem("u-stem", "atelier-works", 7, {}, sql);
+    await latestPrWorkItem("octo-owner", "atelier-works", 7, {}, sql);
     expect(calls[0]?.text).not.toContain("kind =");
   });
 
   test("filters by kind when opts.kind is given", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await latestPrWorkItem(
-      "u-stem",
+      "octo-owner",
       "atelier-works",
       7,
       { kind: "pr_fix" },
@@ -973,7 +1175,7 @@ describe("latestPrWorkItem", () => {
 
   test("orders by created_at DESC, id DESC to break same-second insert ties", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
-    await latestPrWorkItem("u-stem", "atelier-works", 7, undefined, sql);
+    await latestPrWorkItem("octo-owner", "atelier-works", 7, undefined, sql);
     expect(calls[0]?.text).toContain("ORDER BY created_at DESC, id DESC");
   });
 });

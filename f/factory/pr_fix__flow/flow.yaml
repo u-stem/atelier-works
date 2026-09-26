@@ -46,9 +46,6 @@ value:
           factory_clone_dir:
             type: javascript
             expr: results.pr_fix_prepare.factory_clone_dir
-          fix_round:
-            type: javascript
-            expr: results.pr_fix_prepare.fix_round
           head_sha:
             type: javascript
             expr: results.pr_fix_prepare.head_sha
@@ -86,9 +83,12 @@ value:
       value:
         type: script
         input_transforms:
-          apply_commit_message:
+          apply_commit_body:
             type: javascript
-            expr: results.pr_fix_apply.commit_message
+            expr: results.pr_fix_apply.commit_body
+          apply_commit_subject:
+            type: javascript
+            expr: results.pr_fix_apply.commit_subject
           apply_outcome:
             type: javascript
             expr: results.pr_fix_apply.outcome
@@ -110,9 +110,6 @@ value:
           factory_clone_dir:
             type: javascript
             expr: results.pr_fix_prepare.factory_clone_dir
-          fix_round:
-            type: javascript
-            expr: results.pr_fix_prepare.fix_round
           owner:
             type: javascript
             expr: results.pr_fix_prepare.owner
@@ -149,9 +146,12 @@ value:
           comments:
             type: javascript
             expr: results.pr_fix_collect?.comments ?? []
-          commit_message:
+          commit_body:
             type: javascript
-            expr: results.pr_fix_verify?.commit_message ?? null
+            expr: results.pr_fix_verify?.commit_body ?? null
+          commit_subject:
+            type: javascript
+            expr: results.pr_fix_verify?.commit_subject ?? null
           fix_round:
             type: javascript
             expr: results.pr_fix_prepare.fix_round

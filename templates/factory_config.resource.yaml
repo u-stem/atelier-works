@@ -27,12 +27,16 @@ value:
   daily_budget_usd: 50
   claude_timeout_sec: 1800
   worktree_ttl_days: 7
-  factory_repo: https://github.com/u-stem/atelier-works
+  factory_repo: https://github.com/<owner>/atelier-works
   factory_branch: main
   instance_name: local
   windmill_public_url: http://127.0.0.1:8080
   review_label: "factory:review"
   fix_label: "factory:fix"
+  changes_requested_label: "factory:changes-requested"
+  reviewed_label: "factory:reviewed"
+  rereview_label: "factory:rereview"
+  needs_human_label: "factory:needs-human"
   pr_label: "factory:pr"
   review_post_mode: comment_only
   max_fix_rounds: 3

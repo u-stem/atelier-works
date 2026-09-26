@@ -3,11 +3,12 @@ import {
   assertBranchName,
   assertGitHubName,
   assertSha,
+  TERMINAL_WORK_ITEM_STATUSES,
 } from "../../f/factory/lib/types.ts";
 
 describe("assertGitHubName", () => {
   test("accepts a plain login", () => {
-    expect(() => assertGitHubName("u-stem")).not.toThrow();
+    expect(() => assertGitHubName("octo-owner")).not.toThrow();
   });
 
   test("accepts a name with digits and dots", () => {
@@ -128,5 +129,13 @@ describe("assertBranchName", () => {
 
   test("rejects a name ending with .lock", () => {
     expect(() => assertBranchName("feature.lock")).toThrow();
+  });
+});
+
+describe("TERMINAL_WORK_ITEM_STATUSES", () => {
+  test("treats rereview_requested as terminal (pr_fix's success end state)", () => {
+    // poll_issues's reconcile only inspects non-terminal rows; a missing
+    // entry here made it fail a finished pr_fix row as an orphan.
+    expect(TERMINAL_WORK_ITEM_STATUSES).toContain("rereview_requested");
   });
 });

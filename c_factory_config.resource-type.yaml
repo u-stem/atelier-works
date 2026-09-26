@@ -24,6 +24,10 @@ schema:
     - windmill_public_url
     - review_label
     - fix_label
+    - changes_requested_label
+    - reviewed_label
+    - rereview_label
+    - needs_human_label
     - pr_label
     - review_post_mode
     - max_fix_rounds
@@ -59,6 +63,11 @@ schema:
       type: string
       description: 要件定義が承認されたときに付与するラベル。
       default: factory:approved
+    changes_requested_label:
+      type: string
+      description: >-
+        一次レビューで修正が必要な指摘(must)があったPRに付与する状態ラベル。他の状態ラベルとは同時に付きません。
+      default: factory:changes-requested
     claude_timeout_sec:
       type: integer
       description: Claude Codeの1回の実行を打ち切るまでの制限時間(秒)。
@@ -130,6 +139,11 @@ schema:
       type: string
       description: 各処理でClaude Codeが使用するモデル名。
       default: claude-opus-5-5
+    needs_human_label:
+      type: string
+      description: >-
+        人による対応が必要になったPRに付与する状態ラベル。修正処理が失敗・ブロックされた場合や、レビュー処理自体が失敗した場合に付きます。他の状態ラベルとは同時に付きません。
+      default: factory:needs-human
     owners:
       type: array
       description: >-
@@ -164,6 +178,11 @@ schema:
       default: []
       items:
         type: string
+    rereview_label:
+      type: string
+      description: >-
+        修正をpushして再レビューを依頼したPRに付与する状態ラベル。他の状態ラベルとは同時に付きません。
+      default: factory:rereview
     review_label:
       type: string
       description: このラベルが付いたPRはレビュー処理の対象になります。
@@ -176,6 +195,11 @@ schema:
       enum:
         - comment_only
         - gated
+    reviewed_label:
+      type: string
+      description: >-
+        一次レビューで修正が必要な指摘(must)がなかったPRに付与する状態ラベル(人によるApproveを待つ状態)。他の状態ラベルとは同時に付きません。
+      default: factory:reviewed
     trigger_label:
       type: string
       description: このラベルが付いたIssueが処理対象になります。

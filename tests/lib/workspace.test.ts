@@ -20,6 +20,7 @@ import {
   resolveDefaultBranchHeadSha,
   runCommand,
   verifyWorktreeGitdir,
+  withCommitTrailers,
   withRepoLock,
 } from "../../f/factory/lib/workspace.ts";
 import { createFakeCommandRunner, fail, ok } from "./testSupport.ts";
@@ -1191,12 +1192,31 @@ describe("readGitShowFile", () => {
 const HEAD_SHA = "0000000000000000000000000000000000000a";
 const OTHER_SHA = "1111111111111111111111111111111111111b";
 const noopVerify = async (): Promise<void> => {};
+const TEST_AUTHOR = {
+  name: "factory-bot",
+  email: "12345+factory-bot@users.noreply.github.com",
+};
 
 function commitAndPushCalls(
   responses: readonly CommandResult[],
 ): ReturnType<typeof createFakeCommandRunner> {
   return createFakeCommandRunner(responses);
 }
+
+describe("withCommitTrailers", () => {
+  test("appends the Claude co-author and Generated-By trailers after a blank line", () => {
+    const result = withCommitTrailers("fix: something", "acme-factory");
+    expect(result).toBe(
+      "fix: something\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nGenerated-By: Software Factory (acme-factory)",
+    );
+  });
+
+  test("is idempotent: does not double the trailers when the message already has them", () => {
+    const once = withCommitTrailers("fix: something", "acme-factory");
+    const twice = withCommitTrailers(once, "acme-factory");
+    expect(twice).toBe(once);
+  });
+});
 
 describe("commitAndPush", () => {
   test("returns head_changed when the remote branch moved", async () => {
@@ -1210,7 +1230,9 @@ describe("commitAndPush", () => {
       repoDir: "/repo",
       dir: "/repo/wt",
       message: "fix: something",
+      instanceName: "acme-factory",
       expectedHeadSha: HEAD_SHA,
+      author: TEST_AUTHOR,
       ghToken: "gh-token",
       verifyWorktree: noopVerify,
       lockFs: createInMemoryLockFs(),
@@ -1231,7 +1253,9 @@ describe("commitAndPush", () => {
       repoDir: "/repo",
       dir: "/repo/wt",
       message: "fix: something",
+      instanceName: "acme-factory",
       expectedHeadSha: HEAD_SHA,
+      author: TEST_AUTHOR,
       ghToken: "gh-token",
       verifyWorktree: noopVerify,
       lockFs: createInMemoryLockFs(),
@@ -1256,12 +1280,41 @@ describe("commitAndPush", () => {
       repoDir: "/repo",
       dir: "/repo/wt",
       message: "fix: something",
+      instanceName: "acme-factory",
       expectedHeadSha: HEAD_SHA,
+      author: TEST_AUTHOR,
       ghToken: "gh-token",
       verifyWorktree: noopVerify,
       lockFs: createInMemoryLockFs(),
     });
     expect(result).toEqual({ outcome: "pushed", newSha });
+  });
+
+  test("the git commit call's env carries GIT_AUTHOR_EMAIL from the given author", async () => {
+    const fake = commitAndPushCalls([
+      ok("fix/branch\n"),
+      ok(),
+      ok(`${HEAD_SHA}\n`),
+      ok(),
+      ok(" M file.ts\n"),
+      ok(), // git commit
+      ok(), // git push
+      ok(`${HEAD_SHA}\n`), // rev-parse --verify HEAD
+    ]);
+    await commitAndPush({
+      run: fake.run,
+      repoDir: "/repo",
+      dir: "/repo/wt",
+      message: "fix: something",
+      instanceName: "acme-factory",
+      expectedHeadSha: HEAD_SHA,
+      author: TEST_AUTHOR,
+      ghToken: "gh-token",
+      verifyWorktree: noopVerify,
+      lockFs: createInMemoryLockFs(),
+    });
+    const commitCallEnv = fake.calls[5]?.options?.env; // git commit -m
+    expect(commitCallEnv?.GIT_AUTHOR_EMAIL).toBe(TEST_AUTHOR.email);
   });
 
   test("returns head_changed (not a throw) when push is rejected as non-fast-forward", async () => {
@@ -1284,7 +1337,9 @@ describe("commitAndPush", () => {
       repoDir: "/repo",
       dir: "/repo/wt",
       message: "fix: something",
+      instanceName: "acme-factory",
       expectedHeadSha: HEAD_SHA,
+      author: TEST_AUTHOR,
       ghToken: "gh-token",
       verifyWorktree: noopVerify,
       lockFs: createInMemoryLockFs(),
@@ -1309,7 +1364,9 @@ describe("commitAndPush", () => {
       repoDir: "/repo",
       dir: "/repo/wt",
       message: "fix: something",
+      instanceName: "acme-factory",
       expectedHeadSha: HEAD_SHA,
+      author: TEST_AUTHOR,
       ghToken: "gh-token",
       verifyWorktree: noopVerify,
       lockFs: createInMemoryLockFs(),
@@ -1335,7 +1392,9 @@ describe("commitAndPush", () => {
         repoDir: "/repo",
         dir: "/repo/wt",
         message: "fix: something",
+        instanceName: "acme-factory",
         expectedHeadSha: HEAD_SHA,
+        author: TEST_AUTHOR,
         ghToken: "gh-token",
         verifyWorktree: noopVerify,
         lockFs: createInMemoryLockFs(),
@@ -1357,7 +1416,9 @@ describe("commitAndPush", () => {
       repoDir: "/repo",
       dir: "/repo/wt",
       message: "fix: something",
+      instanceName: "acme-factory",
       expectedHeadSha: HEAD_SHA,
+      author: TEST_AUTHOR,
       ghToken: "gh-token",
       verifyWorktree: async () => {
         verifiedBeforeFirstRun = fake.calls.length === 0;
@@ -1375,7 +1436,9 @@ describe("commitAndPush", () => {
         repoDir: "/repo",
         dir: "/repo/wt",
         message: "fix: something",
+        instanceName: "acme-factory",
         expectedHeadSha: HEAD_SHA,
+        author: TEST_AUTHOR,
         ghToken: "gh-token",
         verifyWorktree: async () => {
           throw new Error("not a registered worktree");
@@ -1393,7 +1456,9 @@ describe("commitAndPush", () => {
         repoDir: "/repo",
         dir: "/repo/wt",
         message: "fix: something",
+        instanceName: "acme-factory",
         expectedHeadSha: "not-a-sha",
+        author: TEST_AUTHOR,
         ghToken: "gh-token",
         verifyWorktree: noopVerify,
       }),
@@ -1416,7 +1481,9 @@ describe("commitAndPush", () => {
       repoDir: "/repo",
       dir: "/repo/wt",
       message: "fix: something",
+      instanceName: "acme-factory",
       expectedHeadSha: HEAD_SHA,
+      author: TEST_AUTHOR,
       ghToken: "gh-secret",
       verifyWorktree: noopVerify,
       lockFs: createInMemoryLockFs(),
@@ -1427,6 +1494,37 @@ describe("commitAndPush", () => {
       undefined,
       "gh-secret",
     ]);
+  });
+
+  test("the commit message (argv) carries the Claude co-author and Generated-By trailers", async () => {
+    const fake = commitAndPushCalls([
+      ok("fix/branch\n"),
+      ok(),
+      ok(`${HEAD_SHA}\n`),
+      ok(),
+      ok(" M file.ts\n"),
+      ok(), // git commit
+      ok(), // git push
+      ok(`${HEAD_SHA}\n`),
+    ]);
+    await commitAndPush({
+      run: fake.run,
+      repoDir: "/repo",
+      dir: "/repo/wt",
+      message: "fix: something",
+      instanceName: "acme-factory",
+      expectedHeadSha: HEAD_SHA,
+      author: TEST_AUTHOR,
+      ghToken: "gh-token",
+      verifyWorktree: noopVerify,
+      lockFs: createInMemoryLockFs(),
+    });
+    const commitArgv = fake.calls[5]?.argv ?? [];
+    expect(commitArgv).toEqual(
+      expect.arrayContaining([
+        withCommitTrailers("fix: something", "acme-factory"),
+      ]),
+    );
   });
 });
 
@@ -1473,7 +1571,9 @@ describe("repo-wide lock scope (code-review fix)", () => {
       repoDir: "/workspaces/acme/widgets/main",
       dir: "/workspaces/acme/widgets/wt",
       message: "fix: x",
+      instanceName: "acme-factory",
       expectedHeadSha: "abc1234",
+      author: TEST_AUTHOR,
       ghToken: "gh-token",
       verifyWorktree: noopVerify,
       lockFs,

@@ -14,7 +14,7 @@ function fakeIssue(labels: string[]) {
     number: 7,
     title: "t",
     body: null,
-    html_url: "https://github.com/u-stem/atelier-works/issues/7",
+    html_url: "https://github.com/octo-owner/atelier-works/issues/7",
     state: "open",
     labels,
   };
@@ -28,7 +28,7 @@ describe("claimPr", () => {
     ]);
     const result = await claimPr(
       { run, ghToken: "token" },
-      "u-stem",
+      "octo-owner",
       "atelier-works",
       7,
       "factory:wip",
@@ -43,7 +43,7 @@ describe("claimPr", () => {
     ]);
     await claimPr(
       { run, ghToken: "token" },
-      "u-stem",
+      "octo-owner",
       "atelier-works",
       7,
       "factory:wip",
@@ -61,7 +61,7 @@ describe("claimPr", () => {
     ]);
     await claimPr(
       { run, ghToken: "token" },
-      "u-stem",
+      "octo-owner",
       "atelier-works",
       7,
       "factory:wip",
@@ -75,7 +75,7 @@ describe("claimPr", () => {
     const { run } = createFakeCommandRunner([fail("rate limited")]);
     const result = await claimPr(
       { run, ghToken: "token" },
-      "u-stem",
+      "octo-owner",
       "atelier-works",
       7,
       "factory:wip",
@@ -90,7 +90,7 @@ describe("claimPr", () => {
     ]);
     const result = await claimPr(
       { run, ghToken: "token" },
-      "u-stem",
+      "octo-owner",
       "atelier-works",
       7,
       "factory:wip",

@@ -78,10 +78,10 @@ describe("runConsoleQuery", () => {
   test("inbox: queries factory.v_inbox and parses diagrams/open_questions", async () => {
     const row: SqlRow = {
       work_item_id: 1,
-      owner: "u-stem",
+      owner: "octo-owner",
       repo: "atelier-works",
       issue_number: 42,
-      issue_url: "https://github.com/u-stem/atelier-works/issues/42",
+      issue_url: "https://github.com/octo-owner/atelier-works/issues/42",
       title: "Add feature",
       attempt: 1,
       claimed_by: "factory-local",
@@ -102,10 +102,10 @@ describe("runConsoleQuery", () => {
     expect(rows).toEqual([
       {
         work_item_id: 1,
-        owner: "u-stem",
+        owner: "octo-owner",
         repo: "atelier-works",
         issue_number: 42,
-        issue_url: "https://github.com/u-stem/atelier-works/issues/42",
+        issue_url: "https://github.com/octo-owner/atelier-works/issues/42",
         title: "Add feature",
         attempt: 1,
         claimed_by: "factory-local",
@@ -196,7 +196,7 @@ describe("runConsoleQuery", () => {
     const row: SqlRow = {
       review_id: 1,
       work_item_id: 2,
-      owner: "u-stem",
+      owner: "octo-owner",
       repo: "atelier-works",
       pr_number: 7,
       head_sha: "abc1234",
@@ -235,7 +235,7 @@ describe("runConsoleQuery", () => {
     const row: SqlRow = {
       fix_round_id: 1,
       work_item_id: 2,
-      owner: "u-stem",
+      owner: "octo-owner",
       repo: "atelier-works",
       pr_number: 7,
       round: 1,

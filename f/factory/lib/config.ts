@@ -60,6 +60,10 @@ type DefaultableField =
   | "review_label"
   | "fix_label"
   | "pr_label"
+  | "changes_requested_label"
+  | "reviewed_label"
+  | "rereview_label"
+  | "needs_human_label"
   | "review_post_mode"
   | "max_fix_rounds"
   | "allowed_check_commands"
@@ -89,6 +93,12 @@ const DEFAULTS: Pick<FactoryConfig, DefaultableField> = {
   review_label: "factory:review",
   fix_label: "factory:fix",
   pr_label: "factory:pr",
+  // New state labels (2026-09-26 design): the factory sets/swaps exactly
+  // one of these on a PR it has handled.
+  changes_requested_label: "factory:changes-requested",
+  reviewed_label: "factory:reviewed",
+  rereview_label: "factory:rereview",
+  needs_human_label: "factory:needs-human",
   review_post_mode: "comment_only",
   max_fix_rounds: 3,
   allowed_check_commands: [],
@@ -286,6 +296,18 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
     review_label: stringField(raw, "review_label", DEFAULTS.review_label),
     fix_label: stringField(raw, "fix_label", DEFAULTS.fix_label),
     pr_label: stringField(raw, "pr_label", DEFAULTS.pr_label),
+    changes_requested_label: stringField(
+      raw,
+      "changes_requested_label",
+      DEFAULTS.changes_requested_label,
+    ),
+    reviewed_label: stringField(raw, "reviewed_label", DEFAULTS.reviewed_label),
+    rereview_label: stringField(raw, "rereview_label", DEFAULTS.rereview_label),
+    needs_human_label: stringField(
+      raw,
+      "needs_human_label",
+      DEFAULTS.needs_human_label,
+    ),
     review_post_mode: resolvedReviewPostMode,
     max_fix_rounds: numberField(raw, "max_fix_rounds", DEFAULTS.max_fix_rounds),
     allowed_check_commands: stringArrayField(

@@ -4,10 +4,10 @@
 //
 // This file holds ONLY pure decision functions (decideIssueActions,
 // decidePrActions, decideReconcileAction, filterByRepoAllowlist,
-// associationFromLabeledEvent, isFactoryFixCommand) — no I/O, fully
-// testable with plain fakes (tests/scripts/*.test.ts). poll_issues.ts /
-// poll_prs.ts's main() calls these and only does I/O based on their output
-// ("main() should be thin wiring", per the M5a task).
+// associationFromLabeledEvent) — no I/O, fully testable with plain fakes
+// (tests/scripts/*.test.ts). poll_issues.ts / poll_prs.ts's main() calls
+// these and only does I/O based on their output ("main() should be thin
+// wiring", per the M5a task).
 //
 // History: this file briefly carried small additive I/O helpers
 // (setFlowJobId / setFixRound / bumpWatermarks / nextCycleForIssue /
@@ -128,9 +128,6 @@ export type PrCandidate = {
   /** An active (non-terminal) `pr_review` work item already exists for
    * this PR. */
   readonly hasActiveReviewingItem: boolean;
-  /** An active (non-terminal) `pr_fix` work item already exists for this
-   * PR. */
-  readonly hasActiveFixingItem: boolean;
   /** `head_sha` of the most recent work_items row for this PR (any kind,
    * any status), or `null` if this PR has never had a work item. Used to
    * decide whether the current head_sha is "unprocessed" for the
@@ -139,18 +136,9 @@ export type PrCandidate = {
   /** `fix_round` of the most recent work_items row for this PR, 0 if
    * none — the new pr_fix row's `fix_round` is this plus one. */
   readonly previousFixRound: number;
-  /** `last_comment_id` high-water mark from the most recent work_items row
-   * for this PR, 0 if none. */
-  readonly lastCommentId: number;
-  /** Human (non-viewer), non-marker issue comments newer than
-   * `lastCommentId` whose body is the `/factory fix` command, oldest
-   * first. Already filtered by the caller (isOwnPost / hasMarker /
-   * command-text checks belong to I/O-adjacent parsing, not here). */
-  readonly newFixCommands: readonly { readonly id: number }[];
-  /** Max review id / review-comment id observed on this PR in this poll,
-   * for bumping the watermark regardless of whether a trigger fired. */
+  /** Max review id observed on this PR in this poll, for bumping the
+   * watermark regardless of whether a trigger fired. */
   readonly maxReviewId: number;
-  readonly maxCommentId: number;
 };
 
 export type PrReviewAction =
@@ -163,12 +151,7 @@ export type PrReviewAction =
 
 export type PrFixAction =
   | { readonly kind: "none" }
-  | {
-      readonly kind: "trigger_fix";
-      readonly reason: "label" | "comment";
-      readonly removeLabel: boolean;
-      readonly triggerCommentId: number | null;
-    };
+  | { readonly kind: "trigger_fix"; readonly removeLabel: boolean };
 
 export type PrDecision = {
   readonly candidate: PrCandidate;
@@ -178,9 +161,10 @@ export type PrDecision = {
 
 /**
  * spec-cycle2.md §7 item 1: label-triggered review/fix always fires
- * (the label removal itself makes it idempotent); the auto-detect paths
- * (unprocessed head_sha for review, `/factory fix` comment for fix) defer
- * while a same-kind item is already active for this PR.
+ * (the label removal itself makes it idempotent); the review auto-detect
+ * path (unprocessed head_sha) defers while a pr_review item is already
+ * active for this PR. `pr_fix` has no auto-detect path — a human decision
+ * (2026-09-26): it starts only via the `fix_label`, never from a comment.
  */
 export function decidePrActions(
   candidates: readonly PrCandidate[],
@@ -198,22 +182,9 @@ export function decidePrActions(
         ? { kind: "trigger_review", reason: "assignment", removeLabel: false }
         : { kind: "none" };
 
-    const firstNewCommand = candidate.newFixCommands[0];
     const fix: PrFixAction = hasFixLabel
-      ? {
-          kind: "trigger_fix",
-          reason: "label",
-          removeLabel: true,
-          triggerCommentId: null,
-        }
-      : !candidate.hasActiveFixingItem && firstNewCommand !== undefined
-        ? {
-            kind: "trigger_fix",
-            reason: "comment",
-            removeLabel: false,
-            triggerCommentId: firstNewCommand.id,
-          }
-        : { kind: "none" };
+      ? { kind: "trigger_fix", removeLabel: true }
+      : { kind: "none" };
 
     return { candidate, review, fix };
   });
@@ -316,16 +287,4 @@ export function decideReconcileAction(
     action: "fail_orphan",
     reason: "flow job finished or absent without a terminal status update",
   };
-}
-
-// ---------------------------------------------------------------------------
-// isFactoryFixCommand (pure) — db.ts / github.ts now own every I/O helper
-// this file used to carry (see the header comment); this is the one bit of
-// `/factory fix`-specific parsing left for the caller.
-// ---------------------------------------------------------------------------
-
-/** Whether `body` (trimmed) is the `/factory fix` slash command
- * (case-insensitive). */
-export function isFactoryFixCommand(body: string): boolean {
-  return body.trim().toLowerCase() === "/factory fix";
 }

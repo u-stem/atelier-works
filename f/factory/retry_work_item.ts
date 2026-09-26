@@ -32,6 +32,7 @@ import {
   type GhClient,
   getViewer,
 } from "./lib/github.ts";
+import { type Logger, logger } from "./lib/log.ts";
 import {
   type FactoryConfig,
   isOneOf,
@@ -40,6 +41,10 @@ import {
   type WorkItemStatus,
 } from "./lib/types.ts";
 import { runCommand } from "./lib/workspace.ts";
+import {
+  allStateLabels,
+  removeTerminalLabels,
+} from "./steps/pr_workflow_support.ts";
 
 const RESTARTABLE_STATUSES = [
   "failed",
@@ -151,11 +156,24 @@ async function restoreLabels(
     "owner" | "repo" | "kind" | "issue_number" | "pr_number"
   >,
   config: FactoryConfig,
+  log: Logger,
 ): Promise<void> {
   const number = labelableNumber(workItem);
   const labels = labelsToRestore(workItem.kind, config);
 
   if (restoreStrategy(workItem.kind) === "add_labels") {
+    // team-lead design (2026-09-26): the PR is active again, so any state
+    // label a previous terminal transition left on it (changes-requested /
+    // reviewed / rereview / needs-human) no longer applies — best-effort,
+    // like every other terminal-transition label cleanup.
+    await removeTerminalLabels(
+      client,
+      workItem.owner,
+      workItem.repo,
+      number,
+      allStateLabels(config),
+      log,
+    );
     await addLabels(client, workItem.owner, workItem.repo, number, labels);
     return;
   }
@@ -187,6 +205,7 @@ export type RetryWorkItemResult = {
 };
 
 export async function main(work_item_id: number): Promise<RetryWorkItemResult> {
+  const log = logger("retry_work_item");
   const workItem = await getWorkItem(work_item_id);
   if (workItem === null) {
     throw new Error(`retry_work_item: no work item with id ${work_item_id}`);
@@ -200,7 +219,7 @@ export async function main(work_item_id: number): Promise<RetryWorkItemResult> {
   const ghToken = await wmill.getVariable("f/factory/github_token");
   const client: GhClient = { run: runCommand, ghToken };
 
-  await restoreLabels(client, workItem, config);
+  await restoreLabels(client, workItem, config, log);
 
   await updateStatus(
     work_item_id,

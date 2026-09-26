@@ -11,16 +11,16 @@ import {
 
 describe("mainRepoDir", () => {
   test("builds the fetch-only main clone path", () => {
-    expect(mainRepoDir("u-stem", "atelier-works")).toBe(
-      "/workspaces/u-stem/atelier-works/main",
+    expect(mainRepoDir("octo-owner", "atelier-works")).toBe(
+      "/workspaces/octo-owner/atelier-works/main",
     );
   });
 });
 
 describe("requirementsWorktreeDir", () => {
   test("builds the req-<issue_number> path", () => {
-    expect(requirementsWorktreeDir("u-stem", "atelier-works", 42)).toBe(
-      "/workspaces/u-stem/atelier-works/req-42",
+    expect(requirementsWorktreeDir("octo-owner", "atelier-works", 42)).toBe(
+      "/workspaces/octo-owner/atelier-works/req-42",
     );
   });
 });

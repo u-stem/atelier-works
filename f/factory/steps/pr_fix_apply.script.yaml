@@ -23,10 +23,6 @@ schema:
       description: Software Factory自身の複製を置いた作業ディレクトリのパス。
       default: null
       originalType: string
-    fix_round:
-      type: number
-      description: このPRに対する修正の試行回数。
-      default: null
     head_sha:
       type: string
       description: 検証対象とするPRの最新コミットのSHA。
@@ -76,6 +72,5 @@ schema:
     - worktree_dir
     - factory_clone_dir
     - attempt
-    - fix_round
     - reviews
     - comments

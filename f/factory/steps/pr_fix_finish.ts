@@ -34,10 +34,10 @@ import {
 import { type NotifyEvent, notify } from "../lib/discord.ts";
 import {
   addLabels,
-  commentIssue,
   type GhClient,
   getPr,
   getViewer,
+  gitIdentityForViewer,
   postIssueComment,
   replyReviewComment,
   requestReviewers,
@@ -49,6 +49,7 @@ import { commitAndPush, runCommand } from "../lib/workspace.ts";
 import {
   type CollectedComment,
   type CollectedReview,
+  composeCommitMessage,
   decideFixFinishAction,
   deriveFallbackReviewers,
   describeReason,
@@ -56,6 +57,10 @@ import {
   filterKnownReplies,
   type PrFixFinishOutcome,
   removeTerminalLabels,
+  renderFixReply,
+  setStateLabel,
+  shouldAdvanceWatermarks,
+  stateLabelForFixOutcome,
 } from "./pr_workflow_support.ts";
 
 const ALL_OUTCOMES: readonly PrFixFinishOutcome[] = [
@@ -80,7 +85,8 @@ export async function main(
   reason: string | null,
   summary: string,
   replies: FixReply[],
-  commit_message: string | null,
+  commit_subject: string | null,
+  commit_body: string | null,
   owner: string,
   repo: string,
   pr_number: number,
@@ -119,24 +125,14 @@ export async function main(
   const webhookUrl = await wmill.getVariable("f/factory/discord_webhook_url");
   const prUrl = `https://github.com/${owner}/${repo}/pull/${String(pr_number)}`;
 
-  // team-lead fix round 2 item f: every terminal path bumps last_* to what
-  // was actually processed this round (done / blocked / needs_human /
-  // requirements_gap, and guard_blocked when collect never even ran — in
-  // that last case every max_* here is still 0, via flow.yaml's `?? 0`
-  // fallback, so this is a safe no-op through bumpWatermarks's own
-  // GREATEST-based UPDATE). Runs unconditionally before any action.kind
-  // branch below, so it always executes regardless of which one fires.
-  if (max_review_id > 0 || max_comment_id > 0 || max_review_comment_id > 0) {
-    await bumpWatermarks(work_item_id, {
-      last_review_id: max_review_id,
-      last_comment_id: max_comment_id,
-      last_review_comment_id: max_review_comment_id,
-    });
-  }
+  // team-lead fix (2026-09-26): watermarks are no longer bumped
+  // unconditionally here — see shouldAdvanceWatermarks's doc comment
+  // (pr_workflow_support.ts) for why, and each of the two call sites below
+  // (requirements_gap reroute success, push success) for where they now
+  // advance instead.
 
-  async function finalizeWithComment(
+  async function finalizeTerminal(
     toStatus: WorkItemStatus,
-    commentPrefix: string,
     discordReason: string,
   ): Promise<void> {
     const moved = await updateStatusIfCurrent(
@@ -154,31 +150,26 @@ export async function main(
       [config.wip_label, config.fix_label],
       log,
     );
-    try {
-      // team-lead fix round 2 item g: kind must differ from poll_prs.ts's
-      // own "pr_fix" launch-comment kind (same work_item_id) — otherwise
-      // commentIssue's marker-based dedup finds that comment already exists
-      // and silently skips posting this one, so the terminal reason never
-      // shows up on GitHub. `pr_fix-<toStatus>` mirrors pipeline_generate's
-      // `issue-failed-<attempt>` / `issue-budget-<attempt>` convention of
-      // encoding the distinguishing bit of context into the kind string.
-      await commentIssue(
+    // team-lead design (2026-09-26): every finalizeTerminal call here lands
+    // on "blocked" (guard_blocked) or "needs_human" — both map to
+    // needs_human_label via stateLabelForFixOutcome, so a human sees this PR
+    // needs attention.
+    if (toStatus === "blocked" || toStatus === "needs_human") {
+      await setStateLabel(
         client,
         owner,
         repo,
         pr_number,
-        `pr_fix-${toStatus}`,
-        work_item_id,
-        reason !== null
-          ? `${commentPrefix}: ${describeReason(reason)}`
-          : commentPrefix,
-        viewer.login,
+        config,
+        stateLabelForFixOutcome(toStatus, config),
+        log,
       );
-    } catch (err) {
-      log.warn("failed to post pr_fix comment", {
-        error: maskSecrets(err instanceof Error ? err.message : String(err)),
-      });
     }
+    // team-lead decision (2026-09-26): operational notices (failure,
+    // needs_human, blocked, requirements_gap) are never posted to the PR —
+    // it must carry only the first-pass review itself and replies to review
+    // comments. This information reaches the operator via the Discord
+    // notify() call below instead.
     if (webhookUrl.length > 0) {
       try {
         const event: NotifyEvent = {
@@ -201,12 +192,13 @@ export async function main(
     }
   }
 
+  // Every branch below that terminates via finalizeTerminal (this action, and
+  // every "needs_human"/"blocked" outcome further down) deliberately never
+  // calls bumpWatermarks — see shouldAdvanceWatermarks's doc comment in
+  // pr_workflow_support.ts. Only the requirements_gap reroute success path
+  // and the push success path (both further down) do.
   if (action.kind === "guard_blocked") {
-    await finalizeWithComment(
-      "blocked",
-      "自動修正を開始できませんでした",
-      reason ?? "safety guard failed",
-    );
+    await finalizeTerminal("blocked", reason ?? "safety guard failed");
     return { ok: true, final_status: "blocked", notice: reason };
   }
 
@@ -221,11 +213,7 @@ export async function main(
         commit_shas: [],
       });
     }
-    await finalizeWithComment(
-      "needs_human",
-      "自動修正で人による対応が必要です",
-      reason ?? "needs human attention",
-    );
+    await finalizeTerminal("needs_human", reason ?? "needs human attention");
     return { ok: true, final_status: "needs_human", notice: reason };
   }
 
@@ -238,11 +226,7 @@ export async function main(
       replies,
       commit_shas: [],
     });
-    await finalizeWithComment(
-      "needs_human",
-      "自動修正には要件定義の変更が必要ですが、元となる Issue が紐付いていません",
-      reason ?? summary,
-    );
+    await finalizeTerminal("needs_human", reason ?? summary);
     return { ok: true, final_status: "needs_human", notice: reason };
   }
 
@@ -263,11 +247,7 @@ export async function main(
 
     const parentItem = await getWorkItem(parent_work_item_id);
     if (parentItem === null) {
-      await finalizeWithComment(
-        "needs_human",
-        "自動修正には要件定義の変更が必要ですが、元の Issue の work item が見つかりません",
-        reason ?? summary,
-      );
+      await finalizeTerminal("needs_human", reason ?? summary);
       return { ok: true, final_status: "needs_human", notice: reason };
     }
 
@@ -319,12 +299,20 @@ export async function main(
           detail: relabelFailedReason,
         },
       );
-      await finalizeWithComment(
-        "needs_human",
-        `自動修正には要件定義の変更が必要ですが、元の Issue へのラベル再付与に失敗しました(relabel_failed: ${describeReason(relabelFailedReason)})`,
-        reason ?? summary,
-      );
+      await finalizeTerminal("needs_human", reason ?? summary);
       return { ok: true, final_status: "needs_human", notice: reason };
+    }
+
+    // team-lead fix (2026-09-26): this round's feedback is consumed by the
+    // reroute itself (the parent issue's requirements are being regenerated
+    // to address it), so the watermarks advance here — see
+    // shouldAdvanceWatermarks's doc comment (pr_workflow_support.ts).
+    if (shouldAdvanceWatermarks("requirements_gap_reroute_success")) {
+      await bumpWatermarks(work_item_id, {
+        last_review_id: max_review_id,
+        last_comment_id: max_comment_id,
+        last_review_comment_id: max_review_comment_id,
+      });
     }
 
     await updateStatus(
@@ -337,7 +325,12 @@ export async function main(
     // this branch happens before runFlowAsync (the one truly irreversible,
     // externally-visible action — starting the child pipeline flow), so a
     // failure partway through never leaves a started child flow with this
-    // work item's own bookkeeping (status/labels/comment) not yet recorded.
+    // work item's own bookkeeping (status/labels not yet recorded).
+    //
+    // team-lead decision (2026-09-26): no PR comment is posted here — the PR
+    // must carry only the first-pass review and replies to review comments.
+    // The reroute is visible via the parent issue's own requirements_gap
+    // notice and the Discord notification pipeline_generate posts for it.
     const moved = await updateStatusIfCurrent(
       work_item_id,
       "fixing",
@@ -353,25 +346,18 @@ export async function main(
         [config.wip_label, config.fix_label],
         log,
       );
-      try {
-        // team-lead fix round 2 item g: distinct kind from poll_prs.ts's own
-        // "pr_fix" launch comment (same work_item_id) — see finalizeWithComment's
-        // comment above for why a shared kind silently dedupes away.
-        await commentIssue(
-          client,
-          owner,
-          repo,
-          pr_number,
-          "pr_fix-requirements_gap",
-          work_item_id,
-          `この PR を進めるには要件定義の変更が必要です: ${describeReason(gapReport)}。元の Issue で要件定義を再生成しています。`,
-          viewer.login,
-        );
-      } catch (err) {
-        log.warn("failed to post pr_fix comment", {
-          error: maskSecrets(err instanceof Error ? err.message : String(err)),
-        });
-      }
+      // team-lead design (2026-09-26): the PR itself now waits on the
+      // parent issue's requirements being regenerated — needs_human_label
+      // signals that to a human the same as any other needs_human outcome.
+      await setStateLabel(
+        client,
+        owner,
+        repo,
+        pr_number,
+        config,
+        stateLabelForFixOutcome("needs_human", config),
+        log,
+      );
     }
 
     const childFlowJobId = await wmill.runFlowAsync("f/factory/pipeline", {
@@ -385,10 +371,9 @@ export async function main(
   }
 
   // action.kind === "push"
-  if (commit_message === null) {
-    await finalizeWithComment(
+  if (commit_subject === null) {
+    await finalizeTerminal(
       "needs_human",
-      "自動修正は完了と報告しましたが、コミットメッセージがありませんでした",
       "done outcome missing a commit message",
     );
     return {
@@ -397,13 +382,72 @@ export async function main(
       notice: "missing commit_message",
     };
   }
+  // team-lead decision (2026-09-26): pr_fix_apply.ts/pr_fix_verify.ts now
+  // carry Claude's proposed commit_subject/commit_body as separate fields
+  // end to end; this is the one place they're joined into the literal
+  // commit message text (composeCommitMessage) — commitAndPush's own
+  // withCommitTrailers still appends the Co-Authored-By/Generated-By
+  // trailers after this.
+  const commitMessage = composeCommitMessage(commit_subject, commit_body);
+
+  const commentById = new Map(comments.map((comment) => [comment.id, comment]));
+  // team-lead fix round 1b item 10: only act on replies whose
+  // review_comment_id is one we actually collected — insertFixRound below
+  // still records Claude's full raw output for audit purposes.
+  const repliesToPost = filterKnownReplies(
+    replies,
+    new Set(commentById.keys()),
+  );
+
+  /**
+   * Posts every queued reply to GitHub — inline reply to the review comment
+   * it addresses, or a plain issue comment when the original wasn't inline
+   * (`original.path` empty). `newSha` is the commit the fix produced, or
+   * `null` when there is nothing to point to (team-lead fix: the
+   * `nothing_to_commit` branch below now also posts replies — e.g. when
+   * Claude marked every one "skipped" — instead of dropping them silently).
+   * Shared by the push-success and nothing_to_commit paths so a queued
+   * reply reaches GitHub either way.
+   */
+  async function postFixReplies(newSha: string | null): Promise<void> {
+    for (const reply of repliesToPost) {
+      const original = commentById.get(reply.review_comment_id);
+      const isInline = original !== undefined && original.path.length > 0;
+      const body = withMarker(
+        "pr_fix",
+        work_item_id,
+        renderFixReply(reply, newSha),
+      );
+      try {
+        if (isInline) {
+          await replyReviewComment(
+            client,
+            owner,
+            repo,
+            pr_number,
+            reply.review_comment_id,
+            body,
+          );
+        } else {
+          await postIssueComment(client, owner, repo, pr_number, body);
+        }
+      } catch (err) {
+        log.warn("failed to reply to a review comment", {
+          review_comment_id: reply.review_comment_id,
+          error: maskSecrets(err instanceof Error ? err.message : String(err)),
+        });
+      }
+    }
+  }
 
   const pushResult = await commitAndPush({
     run: runCommand,
     repoDir: repo_dir,
     dir: worktree_dir,
-    message: commit_message,
+    message: commitMessage,
+    instanceName: config.instance_name,
     expectedHeadSha: head_sha,
+    author: gitIdentityForViewer(viewer),
     ghToken,
   });
 
@@ -416,9 +460,8 @@ export async function main(
       replies,
       commit_shas: [],
     });
-    await finalizeWithComment(
+    await finalizeTerminal(
       "blocked",
-      "自動修正がブロックされました",
       `PR head moved to ${pushResult.currentSha} while the fix was in progress`,
     );
     return { ok: true, final_status: "blocked", notice: "head_changed" };
@@ -433,10 +476,14 @@ export async function main(
       replies,
       commit_shas: [],
     });
-    await finalizeWithComment(
+    // team-lead fix: post the queued replies even though there is no commit
+    // to push — Claude may have marked every one "skipped" (or "fixed" with
+    // no actual diff), and those replies must still reach GitHub instead of
+    // being silently dropped.
+    await postFixReplies(null);
+    await finalizeTerminal(
       "needs_human",
-      "自動修正は完了と報告しましたが、ファイルの変更がありませんでした",
-      "done outcome with no changes to commit",
+      "no changes to commit; replies posted",
     );
     return {
       ok: true,
@@ -456,37 +503,21 @@ export async function main(
     commit_shas: [newSha],
   });
 
-  const commentById = new Map(comments.map((comment) => [comment.id, comment]));
-  // team-lead fix round 1b item 10: only act on replies whose
-  // review_comment_id is one we actually collected — insertFixRound above
-  // still records Claude's full raw output for audit purposes.
-  const knownReplies = filterKnownReplies(replies, new Set(commentById.keys()));
-  for (const reply of knownReplies) {
-    const original = commentById.get(reply.review_comment_id);
-    const isInline = original !== undefined && original.path.length > 0;
-    const body = withMarker("pr_fix", work_item_id, reply.body);
-    try {
-      if (isInline) {
-        await replyReviewComment(
-          client,
-          owner,
-          repo,
-          pr_number,
-          reply.review_comment_id,
-          body,
-        );
-      } else {
-        await postIssueComment(client, owner, repo, pr_number, body);
-      }
-    } catch (err) {
-      log.warn("failed to reply to a review comment", {
-        review_comment_id: reply.review_comment_id,
-        error: maskSecrets(err instanceof Error ? err.message : String(err)),
-      });
-    }
-  }
+  await postFixReplies(newSha);
 
   await setHeadSha(work_item_id, newSha);
+  // team-lead fix (2026-09-26): this round's feedback is now consumed — the
+  // fix was committed, pushed, and replies were posted to the comments that
+  // triggered it — so the watermarks advance here, and only here, for the
+  // push path. See shouldAdvanceWatermarks's doc comment
+  // (pr_workflow_support.ts).
+  if (shouldAdvanceWatermarks("push_success")) {
+    await bumpWatermarks(work_item_id, {
+      last_review_id: max_review_id,
+      last_comment_id: max_comment_id,
+      last_review_comment_id: max_review_comment_id,
+    });
+  }
 
   const pr = await getPr(client, owner, repo, pr_number);
   const fallbackReviewers = deriveFallbackReviewers(
@@ -543,6 +574,15 @@ export async function main(
       repo,
       pr_number,
       [config.wip_label, config.fix_label],
+      log,
+    );
+    await setStateLabel(
+      client,
+      owner,
+      repo,
+      pr_number,
+      config,
+      stateLabelForFixOutcome("rereview_requested", config),
       log,
     );
     if (reviewerNote !== null) {

@@ -24,6 +24,7 @@ import {
   getPrDiff,
   getPrFiles,
   getViewer,
+  listReviewThreads,
 } from "../lib/github.ts";
 import { logger, maskSecrets } from "../lib/log.ts";
 import { REVIEW_SCHEMA, reviewPrompt } from "../lib/prompts.ts";
@@ -33,6 +34,7 @@ import {
   buildReviewDiffText,
   describeReason,
   isReviewClaudeOutput,
+  openFindingsForPrompt,
   removeTerminalLabels,
 } from "./pr_workflow_support.ts";
 
@@ -153,10 +155,12 @@ export async function main(
     return { ...SKIPPED_RESULT, budget_exceeded: true };
   }
 
-  const [pr, prDiff, prFileEntries] = await Promise.all([
+  const [pr, prDiff, prFileEntries, viewer, reviewThreads] = await Promise.all([
     getPr(client, owner, repo, pr_number),
     getPrDiff(client, owner, repo, pr_number, config.diff_max_lines),
     getPrFiles(client, owner, repo, pr_number),
+    getViewer(client),
+    listReviewThreads(client, owner, repo, pr_number),
   ]);
   const prFiles = prFileEntries.map((entry) => entry.filename);
 
@@ -164,6 +168,11 @@ export async function main(
     parent_work_item_id === null
       ? null
       : await latestDraft(parent_work_item_id);
+
+  // team-lead decision (2026-09-26): a re-review must not re-post a finding
+  // substantially the same as one that's already open — naturally empty on
+  // a PR's first review, since no threads exist yet.
+  const openFindings = openFindingsForPrompt(reviewThreads, viewer.login);
 
   const promptText = reviewPrompt({
     pr: {
@@ -179,6 +188,7 @@ export async function main(
     diff: buildReviewDiffText(prDiff),
     changedFiles: prFiles,
     requirements,
+    openFindings,
   });
 
   const systemPrompt = await buildSystemPrompt({

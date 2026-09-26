@@ -1,12 +1,15 @@
 // Tests for f/factory/steps/pr_workflow_support.ts's decideFixFinishAction,
-// deriveFallbackReviewers, and evaluateRelabelFailure (used by
-// pr_fix_finish.ts).
+// deriveFallbackReviewers, evaluateRelabelFailure, renderFixReply, and
+// shouldAdvanceWatermarks (used by pr_fix_finish.ts).
 
 import { describe, expect, test } from "bun:test";
+import type { FixReply } from "../../f/factory/lib/types.ts";
 import {
   decideFixFinishAction,
   deriveFallbackReviewers,
   evaluateRelabelFailure,
+  renderFixReply,
+  shouldAdvanceWatermarks,
 } from "../../f/factory/steps/pr_workflow_support.ts";
 
 describe("decideFixFinishAction", () => {
@@ -83,5 +86,103 @@ describe("evaluateRelabelFailure", () => {
   // this must instead abort the reroute with the failure surfaced.
   test("surfaces the addLabels error message when the issue has an issue_number", () => {
     expect(evaluateRelabelFailure(42, "HTTP 403")).toBe("HTTP 403");
+  });
+});
+
+describe("shouldAdvanceWatermarks", () => {
+  // team-lead fix (2026-09-26): watermarks used to advance unconditionally
+  // before the outcome was known, so a later throw (e.g. `git commit`
+  // failing) left processed watermarks past feedback that was never
+  // actually consumed — a subsequent retry_work_item then found nothing to
+  // collect. Only the two kinds below should advance the watermarks.
+  test("advances watermarks when the requirements_gap reroute succeeded", () => {
+    expect(shouldAdvanceWatermarks("requirements_gap_reroute_success")).toBe(
+      true,
+    );
+  });
+
+  test("advances watermarks when the fix was pushed", () => {
+    expect(shouldAdvanceWatermarks("push_success")).toBe(true);
+  });
+
+  test("does not advance watermarks when a guard blocked the attempt", () => {
+    expect(shouldAdvanceWatermarks("guard_blocked")).toBe(false);
+  });
+
+  test("does not advance watermarks for a plain needs_human outcome", () => {
+    expect(shouldAdvanceWatermarks("needs_human")).toBe(false);
+  });
+
+  test("does not advance watermarks when requirements_gap has no parent", () => {
+    expect(shouldAdvanceWatermarks("requirements_gap_needs_human")).toBe(false);
+  });
+
+  test("does not advance watermarks when the requirements_gap reroute failed", () => {
+    expect(shouldAdvanceWatermarks("requirements_gap_reroute_failed")).toBe(
+      false,
+    );
+  });
+
+  test("does not advance watermarks when the done outcome had no commit message", () => {
+    expect(shouldAdvanceWatermarks("push_missing_commit_message")).toBe(false);
+  });
+
+  test("does not advance watermarks when the PR head moved before push", () => {
+    expect(shouldAdvanceWatermarks("push_head_changed")).toBe(false);
+  });
+
+  test("does not advance watermarks when there was nothing to commit", () => {
+    expect(shouldAdvanceWatermarks("push_nothing_to_commit")).toBe(false);
+  });
+});
+
+function fixReply(overrides: Partial<FixReply> = {}): FixReply {
+  return {
+    review_comment_id: 1,
+    body: "null チェックを追加しました",
+    decision: "fixed",
+    ...overrides,
+  };
+}
+
+describe("renderFixReply", () => {
+  // team-lead decision (2026-09-26): every factory post's first line names
+  // the job that wrote it, since the factory posts under the operator's own
+  // GitHub account.
+  test("starts with the pr_fix role tag", () => {
+    expect(renderFixReply(fixReply(), "abc1234ef")).toStartWith(
+      "[pr_fix 自動返信]\n",
+    );
+  });
+
+  // team-lead decision (2026-09-26): renderFixReply normalizes the body's
+  // Japanese writing style (normalizeJapaneseText) — the half-width space
+  // between the ASCII "null" and the following katakana is removed.
+  test("includes the reply body, writing-style normalized", () => {
+    expect(renderFixReply(fixReply(), "abc1234ef")).toContain(
+      "nullチェックを追加しました",
+    );
+  });
+
+  test("ends with the commit sha's short (7-char) form when fixed", () => {
+    const body = renderFixReply(fixReply({ decision: "fixed" }), "abc1234ef");
+    expect(body.split("\n").at(-1)).toBe("対応: `abc1234`");
+  });
+
+  test("ends with 見送り instead of a sha when skipped", () => {
+    const body = renderFixReply(fixReply({ decision: "skipped" }), "abc1234ef");
+    expect(body.split("\n").at(-1)).toBe("対応: 見送り");
+  });
+
+  // team-lead fix: nothing_to_commit still posts queued replies, with no
+  // commit sha to point to.
+  test("ends with 変更なし when fixed but there is no sha (nothing to commit)", () => {
+    const body = renderFixReply(fixReply({ decision: "fixed" }), null);
+    expect(body.split("\n").at(-1)).toBe("対応: 変更なし");
+  });
+
+  test("ends with 見送り instead of 変更なし when skipped and there is no sha", () => {
+    const body = renderFixReply(fixReply({ decision: "skipped" }), null);
+    expect(body.split("\n").at(-1)).toBe("対応: 見送り");
   });
 });

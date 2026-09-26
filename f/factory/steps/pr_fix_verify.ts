@@ -8,6 +8,12 @@
 // still forbidden) ends in "blocked". requirements_gap/blocked from
 // pr_fix_apply.ts pass through unchanged (Claude decided not to produce a
 // commit at all, so there's nothing to verify).
+//
+// team-lead decision (2026-09-26): main() no longer takes a `fix_round`
+// parameter, for the same reason as pr_fix_apply.ts's own — Claude proposes
+// `commit_subject`/`commit_body` directly now (FIX_SCHEMA), so the retry
+// pass below just passes those through instead of deriving one from
+// `fix_round`.
 
 import * as wmill from "windmill-client@1.817.0";
 import {
@@ -23,7 +29,6 @@ import { FIX_SCHEMA, fixPrompt } from "../lib/prompts.ts";
 import type { FixOutcome, FixReply } from "../lib/types.ts";
 import { readGitShowFile, runCommand } from "../lib/workspace.ts";
 import {
-  buildFixCommitMessage,
   type CollectedComment,
   type CollectedReview,
   countUntrackedFileLines,
@@ -49,7 +54,8 @@ export type PrFixVerifyResult = {
   readonly reason: string | null;
   readonly summary: string;
   readonly replies: FixReply[];
-  readonly commit_message: string | null;
+  readonly commit_subject: string | null;
+  readonly commit_body: string | null;
 };
 
 function localGitEnv(): Record<string, string> {
@@ -177,12 +183,12 @@ export async function main(
   apply_reason: string | null,
   apply_summary: string,
   apply_replies: FixReply[],
-  apply_commit_message: string | null,
+  apply_commit_subject: string | null,
+  apply_commit_body: string | null,
   worktree_dir: string,
   factory_clone_dir: string,
   parent_work_item_id: number | null,
   attempt: number,
-  fix_round: number,
   reviews: CollectedReview[],
   comments: CollectedComment[],
 ): Promise<PrFixVerifyResult> {
@@ -192,7 +198,8 @@ export async function main(
       reason: apply_reason,
       summary: apply_summary,
       replies: apply_replies,
-      commit_message: null,
+      commit_subject: null,
+      commit_body: null,
     };
   }
 
@@ -224,7 +231,8 @@ export async function main(
       reason: forbidden.reasons.join("; "),
       summary: apply_summary,
       replies: apply_replies,
-      commit_message: null,
+      commit_subject: null,
+      commit_body: null,
     };
   }
   const timeoutMs = config.claude_timeout_sec * 1000;
@@ -235,7 +243,8 @@ export async function main(
       reason: null,
       summary: apply_summary,
       replies: apply_replies,
-      commit_message: apply_commit_message,
+      commit_subject: apply_commit_subject,
+      commit_body: apply_commit_body,
     };
   }
 
@@ -251,7 +260,8 @@ export async function main(
       reason: null,
       summary: apply_summary,
       replies: apply_replies,
-      commit_message: apply_commit_message,
+      commit_subject: apply_commit_subject,
+      commit_body: apply_commit_body,
     };
   }
 
@@ -272,7 +282,8 @@ export async function main(
       reason: `daily budget exceeded ($${budgetStatus.spent_usd.toFixed(2)} >= $${budgetStatus.limit_usd.toFixed(2)})`,
       summary: apply_summary,
       replies: apply_replies,
-      commit_message: null,
+      commit_subject: null,
+      commit_body: null,
     };
   }
 
@@ -351,7 +362,8 @@ export async function main(
         reason: `check-fix retry pass failed (${retryResult.reason}): ${retryResult.detail}`,
         summary: apply_summary,
         replies: apply_replies,
-        commit_message: null,
+        commit_subject: null,
+        commit_body: null,
       };
     }
 
@@ -362,7 +374,8 @@ export async function main(
         reason: retryOutput.blocked_reason,
         summary: retryOutput.summary,
         replies: retryOutput.replies,
-        commit_message: null,
+        commit_subject: null,
+        commit_body: null,
       };
     }
 
@@ -377,7 +390,8 @@ export async function main(
         reason: forbiddenAfterRetry.reasons.join("; "),
         summary: retryOutput.summary,
         replies: retryOutput.replies,
-        commit_message: null,
+        commit_subject: null,
+        commit_body: null,
       };
     }
 
@@ -393,16 +407,21 @@ export async function main(
         reason: "repository checks still failing after one automated fix retry",
         summary: retryOutput.summary,
         replies: retryOutput.replies,
-        commit_message: null,
+        commit_subject: null,
+        commit_body: null,
       };
     }
 
+    // Claude proposed commit_subject/commit_body directly on this retry
+    // pass too (isFixClaudeOutput's guard already validated their shape),
+    // guaranteed non-null here since retryOutput.outcome === "done".
     return {
       outcome: "done",
       reason: null,
       summary: retryOutput.summary,
       replies: retryOutput.replies,
-      commit_message: buildFixCommitMessage(retryOutput.summary, fix_round),
+      commit_subject: retryOutput.commit_subject,
+      commit_body: retryOutput.commit_body,
     };
   } finally {
     await systemPrompt.cleanup();

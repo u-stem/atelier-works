@@ -226,13 +226,16 @@ Windmill の UI は summary でソートされるため、種別を示すタグ�
 
 - **起動条件**:
   - `pr_review`: PR に `factory:review` ラベルが付与されたとき(起動時にラベルを外す)、または PR の review-requested / assignee がこのインスタンスの GitHub アカウントで、`head_sha` が未処理のとき。
-  - `pr_fix`: PR に `factory:fix` ラベルが付与されたとき(起動時にラベルを外す)、または PR コメントに `/factory fix` と書き込まれたとき。
+  - `pr_fix`: PR に `factory:fix` ラベルが付与されたとき(起動時にラベルを外す)。修正への指示は、ラベルを付ける前に PR へ通常のコメントとして書いておく(他の人間のコメントと同様にフィードバックとして収集される)。
 - **自己再発火の防止**: factory が投稿する Issue コメント・PR レビュー・レビュー返信には必ず marker(`<!-- factory:<kind>:<work_item_id> -->`)を埋め込む。GitHub 上の自分のログイン名と一致する投稿、または marker 付きの投稿は「人間の入力」として扱わず、起動条件の判定から除外する。
 - **作業ディレクトリ**: `/workspaces/<owner>/<repo>/main` は fetch 専用(working tree を checkout しない)。
   - `pr_review` は `git worktree add --detach /workspaces/<owner>/<repo>/review-<pr>-<sha7> <sha>` で PR ごとの detached worktree を使い、終了時に削除する。
   - `pr_fix` は `git gtr new` で作る PR ブランチの worktree を使う。
 - **pr_review**: PR 本文・差分・変更ファイル一覧(factory 製 PR なら承認済み要件も)を入力にレビューし、結果は常に GitHub の COMMENT レビューとして投稿する(スキル内部の `verdict` は記録用で、投稿種別には反映しない)。完了すると `reviewed`(終端)。
 - **pr_fix**: レビュー指摘・未解決コメント・要件を入力に修正し、push 後に各コメントへ返信して再レビューを依頼する(`rereview_requested`)。要件変更が必要な場合は自分で要件や設計を書き換えず `requirements_gap` として中断し、元 Issue の work item(`parent_work_item_id` で紐付け)を `requirements_generating` に attempt+1 で戻す。安全策の詳細は [docs/security.md](security.md) を参照。
+- **PR に書くのはレビュー本体と返信のみ**: pr_review の指摘・総評、pr_fix の返信のみを PR に投稿し、失敗・要人手・ブロック・requirements_gap といった運用通知は PR に書かず Discord に送る。
+- **状態ラベル**: factory が扱った PR には常に高々1つの状態ラベル(`changes_requested_label` / `reviewed_label` / `rereview_label` / `needs_human_label`、いずれも `factory_config` で設定可能)を factory 自身が設定・付け替える。人はこれを見るだけで PR が何を待っているか分かり、`poll_prs` の `searchPrs` はトリガーラベルが外れた後もこの状態ラベルで対象 PR を再発見する(詳細は [docs/operations.md](operations.md) の「ラベルと終端状態」を参照)。
+- **watermark**: 処理済み watermark(`last_review_id` / `last_comment_id` / `last_review_comment_id`)は pr_fix が push に成功したとき、または requirements_gap で元 Issue へ差し戻したときにのみ進める。それ以外の終端(`failed` / `needs_human` / `blocked`)では進めず、`retry_work_item` による再実行で同じフィードバックを再収集できるようにする。
 
 ## 自己更新の仕組み(self_update)
 

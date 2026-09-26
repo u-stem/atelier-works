@@ -12,20 +12,26 @@ import {
   getPrDiff,
   getPrFiles,
   getViewer,
+  gitIdentityForViewer,
   hasMarker,
+  isFactoryPost,
   isOwnPost,
   listIssueComments,
   listPrReviewComments,
   listPrReviews,
+  listReviewThreads,
   postIssueComment,
   removeLabel,
   replyReviewComment,
   requestReviewers,
+  resolveReviewThread,
   searchIssues,
   searchPrs,
   setLabels,
   withMarker,
 } from "../../f/factory/lib/github.ts";
+import { isRecord } from "../../f/factory/lib/types.ts";
+import type { CommandResult } from "../../f/factory/lib/workspace.ts";
 import {
   createFakeCommandRunner,
   ghApiOk,
@@ -79,17 +85,58 @@ describe("isOwnPost", () => {
   });
 });
 
+describe("isFactoryPost", () => {
+  test("returns true when login matches viewer and body carries any marker", () => {
+    const body = withMarker("pr_review", 1, "findings");
+    expect(isFactoryPost("factory-bot", "factory-bot", body)).toBe(true);
+  });
+
+  test("returns false when login matches viewer but body carries no marker (shared operator account)", () => {
+    expect(
+      isFactoryPost("factory-bot", "factory-bot", "READMEも直してください"),
+    ).toBe(false);
+  });
+
+  test("returns false when body carries a marker but login is a different user (marker alone is not proof)", () => {
+    const body = withMarker("pr_fix", 1, "reply");
+    expect(isFactoryPost("someone-else", "factory-bot", body)).toBe(false);
+  });
+
+  test("returns false when login matches viewer but the marker kind does not match the requested kind", () => {
+    const body = withMarker("pr_review", 1, "findings");
+    expect(isFactoryPost("factory-bot", "factory-bot", body, "pr_fix")).toBe(
+      false,
+    );
+  });
+
+  test("returns false when login is undefined", () => {
+    expect(
+      isFactoryPost(undefined, "factory-bot", "READMEも直してください"),
+    ).toBe(false);
+  });
+});
+
 describe("getViewer", () => {
   test("returns the authenticated login", async () => {
-    const fake = createFakeCommandRunner([ghApiOk({ login: "factory-bot" })]);
+    const fake = createFakeCommandRunner([
+      ghApiOk({ login: "factory-bot", id: 12345 }),
+    ]);
     const viewer = await getViewer({ run: fake.run, ghToken: "tok" });
     expect(viewer.login).toBe("factory-bot");
+  });
+
+  test("returns the authenticated user's numeric id", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ login: "factory-bot", id: 12345 }),
+    ]);
+    const viewer = await getViewer({ run: fake.run, ghToken: "tok" });
+    expect(viewer.id).toBe(12345);
   });
 
   test("retries once after a rate-limited response then succeeds", async () => {
     const fake = createFakeCommandRunner([
       ok(ghApiStdout(403, { message: "rate limited" }, { "retry-after": "1" })),
-      ghApiOk({ login: "factory-bot" }),
+      ghApiOk({ login: "factory-bot", id: 12345 }),
     ]);
     const viewer = await getViewer({
       run: fake.run,
@@ -106,6 +153,27 @@ describe("getViewer", () => {
     await expect(getViewer({ run: fake.run, ghToken: "tok" })).rejects.toThrow(
       /HTTP 500/,
     );
+  });
+
+  test("rejects a response whose id is not a number", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ login: "factory-bot", id: "not-a-number" }),
+    ]);
+    await expect(getViewer({ run: fake.run, ghToken: "tok" })).rejects.toThrow(
+      /unexpected response shape/,
+    );
+  });
+});
+
+describe("gitIdentityForViewer", () => {
+  test("uses the viewer's login as the git identity name", () => {
+    const identity = gitIdentityForViewer({ login: "factory-bot", id: 12345 });
+    expect(identity.name).toBe("factory-bot");
+  });
+
+  test("builds a GitHub noreply email from the numeric id and login", () => {
+    const identity = gitIdentityForViewer({ login: "factory-bot", id: 12345 });
+    expect(identity.email).toBe("12345+factory-bot@users.noreply.github.com");
   });
 });
 
@@ -513,15 +581,49 @@ describe("commentIssue", () => {
 });
 
 describe("listIssueComments", () => {
-  test("excludes the viewer's own comment and a marker-bearing comment, keeps a plain human comment", async () => {
+  test("keeps the viewer's plain instruction comment (shared operator account, no marker)", async () => {
     const fake = createFakeCommandRunner([
       ghApiOk([
-        { id: 1, body: "please fix this", user: { login: "alice" } },
         {
-          id: 2,
-          body: "factory reply",
+          id: 1,
+          body: "READMEも直してください",
           user: { login: "factory-bot" },
         },
+      ]),
+    ]);
+    const result = await listIssueComments(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      5,
+      { viewer: "factory-bot" },
+    );
+    expect(result.items.map((c) => c.id)).toEqual([1]);
+  });
+
+  test("drops the viewer's marker-bearing comment (factory's own post)", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([
+        {
+          id: 2,
+          body: withMarker("pr_review", 9, "review started"),
+          user: { login: "factory-bot" },
+        },
+      ]),
+    ]);
+    const result = await listIssueComments(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      5,
+      { viewer: "factory-bot" },
+    );
+    expect(result.items).toEqual([]);
+  });
+
+  test("keeps another user's marker-bearing comment (marker alone is not proof of factory authorship)", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([
         {
           id: 3,
           body: withMarker("comment", 9, "auto note"),
@@ -536,14 +638,7 @@ describe("listIssueComments", () => {
       5,
       { viewer: "factory-bot" },
     );
-    expect(result.items).toEqual([
-      {
-        id: 1,
-        authorLogin: "alice",
-        authorAssociation: null,
-        body: "please fix this",
-      },
-    ]);
+    expect(result.items.map((c) => c.id)).toEqual([3]);
   });
 
   test("parses author_association when present", async () => {
@@ -571,7 +666,7 @@ describe("listIssueComments", () => {
     const fake = createFakeCommandRunner([
       ghApiOk([
         { id: 10, body: "old comment", user: { login: "alice" } },
-        { id: 20, body: "/factory fix", user: { login: "alice" } },
+        { id: 20, body: "READMEも直してください", user: { login: "alice" } },
       ]),
     ]);
     const result = await listIssueComments(
@@ -588,7 +683,11 @@ describe("listIssueComments", () => {
     const fake = createFakeCommandRunner([
       ghApiOk([
         { id: 1, body: "human comment", user: { login: "alice" } },
-        { id: 9, body: "factory reply", user: { login: "factory-bot" } },
+        {
+          id: 9,
+          body: withMarker("pr_review", 9, "review started"),
+          user: { login: "factory-bot" },
+        },
       ]),
     ]);
     const result = await listIssueComments(
@@ -736,13 +835,30 @@ describe("createIssue", () => {
 });
 
 describe("searchPrs", () => {
+  const STATE_LABELS = [
+    "factory:changes-requested",
+    "factory:reviewed",
+    "factory:rereview",
+    "factory:needs-human",
+  ];
+
   const SEARCH_PRS_OPTS = {
     owner: "acme",
     ownerKind: "user" as const,
     viewer: "factory-bot",
     reviewLabel: "factory:review",
+    fixLabel: "factory:fix",
     wipLabel: "factory:wip",
+    stateLabels: STATE_LABELS,
   };
+
+  // 4 base queries (review-requested, assignee, review label, fix label)
+  // plus one per state label.
+  const QUERY_COUNT = 4 + STATE_LABELS.length;
+
+  function emptyResponses(count: number): CommandResult[] {
+    return Array.from({ length: count }, () => ghApiOk({ items: [] }));
+  }
 
   function prItem(id: number, number: number): unknown {
     return {
@@ -759,16 +875,15 @@ describe("searchPrs", () => {
   // GitHub's /search/issues does not support parenthesized OR grouping
   // (confirmed empirically: `(review-requested:X OR assignee:X OR
   // label:Y)` always returned 0 results, while each qualifier alone
-  // matched) — so searchPrs issues three separate queries and merges them.
+  // matched) — so searchPrs issues one query per qualifier and merges them:
+  // review-requested, assignee, review label, fix label, and one per PR
+  // state label (team-lead design, 2026-09-26 — replaces the former
+  // commenter:<viewer> re-discovery query; see searchPrs's doc comment).
 
-  test("issues three separate queries — review-requested, assignee, and label — instead of one OR-grouped query", async () => {
-    const fake = createFakeCommandRunner([
-      ghApiOk({ items: [] }),
-      ghApiOk({ items: [] }),
-      ghApiOk({ items: [] }),
-    ]);
+  test("issues one query per qualifier — review-requested, assignee, review label, fix label, then one per state label — instead of one OR-grouped query", async () => {
+    const fake = createFakeCommandRunner(emptyResponses(QUERY_COUNT));
     await searchPrs({ run: fake.run, ghToken: "tok" }, SEARCH_PRS_OPTS);
-    expect(fake.calls).toHaveLength(3);
+    expect(fake.calls).toHaveLength(QUERY_COUNT);
     const decoded = fake.calls.map((call) =>
       decodeURIComponent(call.argv.join(" ")),
     );
@@ -776,15 +891,27 @@ describe("searchPrs", () => {
     expect(decoded[0]).not.toContain("OR");
     expect(decoded[1]).toContain("assignee:factory-bot");
     expect(decoded[2]).toContain('label:"factory:review"');
+    expect(decoded[3]).toContain('label:"factory:fix"');
+    expect(decoded[4]).toContain('label:"factory:changes-requested"');
+    expect(decoded[5]).toContain('label:"factory:reviewed"');
+    expect(decoded[6]).toContain('label:"factory:rereview"');
+    expect(decoded[7]).toContain('label:"factory:needs-human"');
   });
 
-  test("quotes the wip label qualifier on every one of the three queries (a label name can contain a colon)", async () => {
-    const fake = createFakeCommandRunner([
-      ghApiOk({ items: [] }),
-      ghApiOk({ items: [] }),
-      ghApiOk({ items: [] }),
-    ]);
+  test("issues no commenter: query", async () => {
+    const fake = createFakeCommandRunner(emptyResponses(QUERY_COUNT));
     await searchPrs({ run: fake.run, ghToken: "tok" }, SEARCH_PRS_OPTS);
+    for (const call of fake.calls) {
+      expect(decodeURIComponent(call.argv.join(" "))).not.toContain(
+        "commenter:",
+      );
+    }
+  });
+
+  test("quotes the wip label qualifier on every query (a label name can contain a colon)", async () => {
+    const fake = createFakeCommandRunner(emptyResponses(QUERY_COUNT));
+    await searchPrs({ run: fake.run, ghToken: "tok" }, SEARCH_PRS_OPTS);
+    expect(fake.calls).toHaveLength(QUERY_COUNT);
     for (const call of fake.calls) {
       expect(decodeURIComponent(call.argv.join(" "))).toContain(
         '-label:"factory:wip"',
@@ -793,43 +920,51 @@ describe("searchPrs", () => {
   });
 
   test("requests per_page=100 on every query", async () => {
-    const fake = createFakeCommandRunner([
-      ghApiOk({ items: [] }),
-      ghApiOk({ items: [] }),
-      ghApiOk({ items: [] }),
-    ]);
+    const fake = createFakeCommandRunner(emptyResponses(QUERY_COUNT));
     await searchPrs({ run: fake.run, ghToken: "tok" }, SEARCH_PRS_OPTS);
-    expect(fake.calls).toHaveLength(3); // all three canned responses consumed
+    expect(fake.calls).toHaveLength(QUERY_COUNT); // all canned responses consumed
     for (const call of fake.calls) {
       expect(call.argv.join(" ")).toContain("per_page=100");
     }
   });
 
-  test("de-duplicates by PR id when the same PR matches more than one of the three queries", async () => {
+  test("de-duplicates by PR id when the same PR matches more than one query", async () => {
     const fake = createFakeCommandRunner([
       ghApiOk({ items: [prItem(1, 10)] }), // review-requested
       ghApiOk({ items: [prItem(1, 10)] }), // assignee — same PR again
-      ghApiOk({ items: [] }), // label
+      ghApiOk({ items: [] }), // review label
+      ghApiOk({ items: [] }), // fix label
+      ghApiOk({ items: [prItem(1, 10)] }), // changes-requested — same PR again
+      ghApiOk({ items: [] }), // reviewed
+      ghApiOk({ items: [] }), // rereview
+      ghApiOk({ items: [] }), // needs-human
     ]);
     const items = await searchPrs(
       { run: fake.run, ghToken: "tok" },
       SEARCH_PRS_OPTS,
     );
-    expect(fake.calls).toHaveLength(3); // all three canned responses consumed
+    expect(fake.calls).toHaveLength(QUERY_COUNT); // all canned responses consumed
     expect(items.map((item) => item.number)).toEqual([10]);
   });
 
-  test("combines distinct PRs across all three queries", async () => {
+  test("combines distinct PRs across every query", async () => {
     const fake = createFakeCommandRunner([
       ghApiOk({ items: [prItem(1, 10)] }),
       ghApiOk({ items: [prItem(2, 11)] }),
       ghApiOk({ items: [prItem(3, 12)] }),
+      ghApiOk({ items: [prItem(4, 13)] }),
+      ghApiOk({ items: [prItem(5, 14)] }),
+      ghApiOk({ items: [prItem(6, 15)] }),
+      ghApiOk({ items: [prItem(7, 16)] }),
+      ghApiOk({ items: [prItem(8, 17)] }),
     ]);
     const items = await searchPrs(
       { run: fake.run, ghToken: "tok" },
       SEARCH_PRS_OPTS,
     );
-    expect(items.map((item) => item.number)).toEqual([10, 11, 12]);
+    expect(items.map((item) => item.number)).toEqual([
+      10, 11, 12, 13, 14, 15, 16, 17,
+    ]);
   });
 
   test("follows the link header's rel=next page within a single query", async () => {
@@ -844,14 +979,13 @@ describe("searchPrs", () => {
         ),
       ),
       ghApiOk({ items: [prItem(2, 11)] }),
-      ghApiOk({ items: [] }),
-      ghApiOk({ items: [] }),
+      ...emptyResponses(QUERY_COUNT - 1),
     ]);
     const items = await searchPrs(
       { run: fake.run, ghToken: "tok" },
       SEARCH_PRS_OPTS,
     );
-    expect(fake.calls).toHaveLength(4); // 2 pages of query 1 + query 2 + query 3
+    expect(fake.calls).toHaveLength(QUERY_COUNT + 1); // 2 pages of query 1 + the rest
     expect(items.map((item) => item.number)).toEqual([10, 11]);
   });
 });
@@ -1032,7 +1166,28 @@ describe("getPrDiff", () => {
 const VIEWER = "factory-bot";
 
 describe("listPrReviews", () => {
-  test("filters out the viewer's own review", async () => {
+  test("keeps the viewer's review whose body carries a pr_review marker (factory's own review is feedback for pr_fix)", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([
+        {
+          id: 2,
+          user: { login: VIEWER },
+          state: "COMMENTED",
+          body: withMarker("pr_review", 1, "factory review findings"),
+        },
+      ]),
+    ]);
+    const result = await listPrReviews(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+      VIEWER,
+    );
+    expect(result.items.map((r) => r.id)).toEqual([2]);
+  });
+
+  test("drops the viewer's review carrying a pr_fix marker (factory's own reply)", async () => {
     const fake = createFakeCommandRunner([
       ghApiOk([
         {
@@ -1045,7 +1200,7 @@ describe("listPrReviews", () => {
           id: 2,
           user: { login: VIEWER },
           state: "COMMENTED",
-          body: "factory review",
+          body: withMarker("pr_fix", 1, "fixed"),
         },
       ]),
     ]);
@@ -1106,7 +1261,12 @@ describe("listPrReviews", () => {
     const fake = createFakeCommandRunner([
       ghApiOk([
         { id: 1, user: { login: "alice" }, state: "COMMENTED", body: "x" },
-        { id: 9, user: { login: VIEWER }, state: "COMMENTED", body: "y" },
+        {
+          id: 9,
+          user: { login: VIEWER },
+          state: "COMMENTED",
+          body: withMarker("pr_fix", 1, "y"),
+        },
       ]),
     ]);
     const result = await listPrReviews(
@@ -1121,7 +1281,7 @@ describe("listPrReviews", () => {
 });
 
 describe("listPrReviewComments", () => {
-  test("filters out the viewer's own comment", async () => {
+  test("keeps the viewer's unmarked inline comment (factory's own pr_review-pass finding is feedback for pr_fix)", async () => {
     const fake = createFakeCommandRunner([
       ghApiOk([
         {
@@ -1136,7 +1296,36 @@ describe("listPrReviewComments", () => {
           user: { login: VIEWER },
           path: "a.ts",
           line: 12,
-          body: "factory comment",
+          body: "factory finding, no marker",
+        },
+      ]),
+    ]);
+    const result = await listPrReviewComments(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+      VIEWER,
+    );
+    expect(result.items.map((c) => c.id)).toEqual([1, 2]);
+  });
+
+  test("drops the viewer's pr_fix-marked reply (factory's own reply)", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([
+        {
+          id: 1,
+          user: { login: "alice" },
+          path: "a.ts",
+          line: 10,
+          body: "fix this",
+        },
+        {
+          id: 2,
+          user: { login: VIEWER },
+          path: "a.ts",
+          line: 12,
+          body: withMarker("pr_fix", 1, "fixed"),
         },
       ]),
     ]);
@@ -1189,6 +1378,59 @@ describe("createPrReview", () => {
       },
     );
     expect(result).toEqual({ id: 77 });
+  });
+
+  test("omits start_line/start_side for a single-line comment", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ id: 77 })]);
+    await createPrReview(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+      {
+        event: "COMMENT",
+        body: "summary",
+        comments: [{ path: "a.ts", line: 10, side: "RIGHT", body: "nit" }],
+      },
+    );
+    const stdin = fake.calls[0]?.options?.stdin ?? "";
+    expect(stdin).not.toContain("start_line");
+    expect(stdin).not.toContain("start_side");
+  });
+
+  test("includes start_line and a fixed start_side: RIGHT for a multi-line comment", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ id: 77 })]);
+    await createPrReview(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+      {
+        event: "COMMENT",
+        body: "summary",
+        comments: [
+          {
+            path: "a.ts",
+            line: 12,
+            start_line: 10,
+            side: "RIGHT",
+            body: "spans multiple lines",
+          },
+        ],
+      },
+    );
+    const stdin = fake.calls[0]?.options?.stdin ?? "";
+    const parsed: unknown = JSON.parse(stdin);
+    if (!isRecord(parsed) || !Array.isArray(parsed.comments)) {
+      throw new Error("expected a comments array in the request body");
+    }
+    const comment = parsed.comments[0];
+    expect(comment).toMatchObject({
+      line: 12,
+      start_line: 10,
+      side: "RIGHT",
+      start_side: "RIGHT",
+    });
   });
 });
 
@@ -1323,5 +1565,243 @@ describe("postIssueComment", () => {
       "plain reply, no marker",
     );
     expect(fake.calls[0]?.options?.stdin).not.toContain("factory:");
+  });
+});
+
+function reviewThreadNode(overrides: {
+  readonly id: string;
+  readonly isResolved: boolean;
+  readonly path?: string;
+  readonly line?: number | null;
+  readonly firstComment: unknown;
+  readonly lastComment?: unknown;
+}): unknown {
+  return {
+    id: overrides.id,
+    isResolved: overrides.isResolved,
+    path: overrides.path ?? "a.ts",
+    line: overrides.line ?? 10,
+    firstComments: { nodes: [overrides.firstComment] },
+    lastComments: { nodes: [overrides.lastComment ?? overrides.firstComment] },
+  };
+}
+
+function reviewThreadsGraphqlPayload(nodes: unknown[]): unknown {
+  return {
+    data: {
+      repository: {
+        pullRequest: {
+          reviewThreads: { nodes },
+        },
+      },
+    },
+  };
+}
+
+describe("listReviewThreads", () => {
+  test("parses each thread's id, isResolved, and first comment's author/body", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(
+        reviewThreadsGraphqlPayload([
+          reviewThreadNode({
+            id: "PRRT_1",
+            isResolved: false,
+            firstComment: {
+              author: { login: VIEWER },
+              body: "[pr_review 自動レビュー] @alice\n[MUST] fix this",
+            },
+          }),
+        ]),
+      ),
+    ]);
+    const threads = await listReviewThreads(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+    );
+    expect(threads).toEqual([
+      {
+        id: "PRRT_1",
+        isResolved: false,
+        path: "a.ts",
+        line: 10,
+        firstCommentAuthorLogin: VIEWER,
+        firstCommentBody: "[pr_review 自動レビュー] @alice\n[MUST] fix this",
+        lastCommentAuthorLogin: VIEWER,
+        lastCommentBody: "[pr_review 自動レビュー] @alice\n[MUST] fix this",
+      },
+    ]);
+  });
+
+  test("parses the last comment's author/body separately from the first", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(
+        reviewThreadsGraphqlPayload([
+          reviewThreadNode({
+            id: "PRRT_1",
+            isResolved: false,
+            firstComment: {
+              author: { login: VIEWER },
+              body: "[pr_review 自動レビュー] @alice\n[MUST] fix this",
+            },
+            lastComment: { author: { login: "alice" }, body: "done, thanks" },
+          }),
+        ]),
+      ),
+    ]);
+    const threads = await listReviewThreads(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+    );
+    expect(threads[0]).toMatchObject({
+      lastCommentAuthorLogin: "alice",
+      lastCommentBody: "done, thanks",
+    });
+  });
+
+  test("throws when the response is HTTP 200 with a GraphQL errors envelope", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ errors: [{ message: "Resource not accessible" }] }),
+    ]);
+    await expect(
+      listReviewThreads(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        12,
+      ),
+    ).rejects.toThrow(/Resource not accessible/);
+  });
+
+  test("calls gh api graphql", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(reviewThreadsGraphqlPayload([])),
+    ]);
+    await listReviewThreads(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+    );
+    expect(fake.calls[0]?.argv).toContain("graphql");
+  });
+
+  test("passes owner/repo/number as GraphQL variables", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(reviewThreadsGraphqlPayload([])),
+    ]);
+    await listReviewThreads(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+    );
+    const stdin = fake.calls[0]?.options?.stdin ?? "";
+    const parsed: unknown = JSON.parse(stdin);
+    if (!isRecord(parsed)) {
+      throw new Error("expected a JSON request body");
+    }
+    expect(parsed.variables).toEqual({
+      owner: "acme",
+      repo: "widgets",
+      number: 12,
+    });
+  });
+
+  test("skips a thread with no comments rather than throwing", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(
+        reviewThreadsGraphqlPayload([
+          {
+            id: "PRRT_1",
+            isResolved: false,
+            path: "a.ts",
+            line: 10,
+            firstComments: { nodes: [] },
+            lastComments: { nodes: [] },
+          },
+        ]),
+      ),
+    ]);
+    const threads = await listReviewThreads(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+    );
+    expect(threads).toEqual([]);
+  });
+
+  test("returns an empty firstCommentAuthorLogin when the first comment's author is null", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(
+        reviewThreadsGraphqlPayload([
+          reviewThreadNode({
+            id: "PRRT_1",
+            isResolved: true,
+            firstComment: { author: null, body: "hi" },
+          }),
+        ]),
+      ),
+    ]);
+    const threads = await listReviewThreads(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+    );
+    expect(threads[0]?.firstCommentAuthorLogin).toBe("");
+  });
+});
+
+describe("resolveReviewThread", () => {
+  test("posts the resolveReviewThread mutation with the thread id", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        data: {
+          resolveReviewThread: { thread: { id: "PRRT_1", isResolved: true } },
+        },
+      }),
+    ]);
+    await resolveReviewThread({ run: fake.run, ghToken: "tok" }, "PRRT_1");
+    const stdin = fake.calls[0]?.options?.stdin ?? "";
+    const parsed: unknown = JSON.parse(stdin);
+    if (!isRecord(parsed)) {
+      throw new Error("expected a JSON request body");
+    }
+    expect(parsed.variables).toEqual({ id: "PRRT_1" });
+  });
+
+  test("calls gh api graphql", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        data: {
+          resolveReviewThread: { thread: { id: "PRRT_1", isResolved: true } },
+        },
+      }),
+    ]);
+    await resolveReviewThread({ run: fake.run, ghToken: "tok" }, "PRRT_1");
+    expect(fake.calls[0]?.argv).toContain("graphql");
+  });
+
+  test("throws when the GraphQL call returns an error status", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(400, { message: "bad" })),
+    ]);
+    await expect(
+      resolveReviewThread({ run: fake.run, ghToken: "tok" }, "PRRT_1"),
+    ).rejects.toThrow();
+  });
+
+  test("throws when the response is HTTP 200 with a GraphQL errors envelope", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ errors: [{ message: "Could not resolve to a node" }] }),
+    ]);
+    await expect(
+      resolveReviewThread({ run: fake.run, ghToken: "tok" }, "PRRT_1"),
+    ).rejects.toThrow(/Could not resolve to a node/);
   });
 });

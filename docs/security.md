@@ -24,6 +24,8 @@
 
 ## pr_fix の安全策
 
+- Factory 自身の投稿かどうかは「投稿者ログインが viewer(Factory 自身の GitHub アカウント)と一致 **かつ** 本文が factory マーカーを含む」の両方(`isFactoryPost`)で判定する。Factory は人と同じ GitHub アカウント(共有 PAT)で運用されるため、ログイン一致だけでは人の投稿と区別できず、逆にマーカーの有無だけでは第三者が偽装できてしまう(marker alone is not proof of authorship)。この判定により、同一アカウント運用下でも人が投稿したコメントと Factory 自身の一次レビュー指摘は pr_fix への feedback として扱われ、除外されるのは Factory 自身の `pr_fix` 返信のみとなる。
+
 `pr_fix` は Claude に書き込みツール(`Edit`/`Write`)を与える最初のフローであり、次のガードを設ける。
 
 - Claude のツールは `Read,Glob,Grep,Edit,Write` のみ。**`Bash` は与えない**。
@@ -38,6 +40,7 @@
 - push 前に次をすべて確認し、いずれかが成り立たなければ `blocked` として中断する: `head.repo == base.repo`(fork からの PR には push しない)、PR が draft でない、base ブランチが保護ブランチでない、fetch し直した `head_sha` が起動時に確認した値と一致する(その間に人が push していない)。
 - E2E の検証は本番の Issue やブランチではなく、捨てブランチ・捨て PR で行う。
 - symlink は `core.symlinks=false` を main clone の config に永続化し、pr_fix の検証で symlink の新規作成・変更・typechange は `blocked` として扱う。
+- コミットの author / committer 情報は、PAT が解決する GitHub アカウントのログイン名と、GitHub の noreply メールアドレス(`<数値 ID>+<ログイン名>@users.noreply.github.com`)を使う。個人のメールアドレスをどこにも書き込まないための措置で、`git commit` 呼び出しの環境変数(`GIT_AUTHOR_*`/`GIT_COMMITTER_*`)としてのみ渡し、git config には書き込まない。
 
 ## GitHub PAT
 

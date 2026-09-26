@@ -26,23 +26,112 @@
 import { mkdtemp, readlink, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
-import { type GhClient, removeLabel } from "../lib/github.ts";
-import { type Logger, maskSecrets } from "../lib/log.ts";
-import { isFactoryFixCommand } from "../lib/poll_support.ts";
 import {
+  addLabels,
+  type GhClient,
+  type ReviewThread,
+  removeLabel,
+} from "../lib/github.ts";
+import { type Logger, maskSecrets } from "../lib/log.ts";
+import {
+  type FactoryConfig,
   type FixOutcome,
   type FixReply,
+  type FixReplyDecision,
   isNumber,
   isOneOf,
   isRecord,
   isString,
   type LabelerAssociation,
   type ReviewFinding,
+  type ReviewFindingKind,
   type ReviewSeverity,
   type ReviewVerdict,
   type WorkItem,
 } from "../lib/types.ts";
 import type { CommandRunner } from "../lib/workspace.ts";
+
+// ---------------------------------------------------------------------------
+// Role tags (team-lead decision, 2026-09-26): the factory posts to GitHub
+// using the operator's own account (not a distinct bot login), so every
+// factory-authored post's first line names which job wrote it — a human
+// reading the PR timeline otherwise cannot tell a factory post from one the
+// operator wrote by hand. Kept here (not factory_config) since the tag text
+// is a fixed part of the posting format, not an operator-tunable setting.
+// ---------------------------------------------------------------------------
+
+export const ROLE_TAGS = {
+  pr_review: "[pr_review 自動レビュー]",
+  pr_fix: "[pr_fix 自動返信]",
+} as const;
+
+// ---------------------------------------------------------------------------
+// Writing-style normalization (team-lead decision, 2026-09-26): this
+// project's Japanese language rule (CLAUDE.md §3) forbids mixing ASCII and
+// Japanese text with a half-width space between them, but Claude's
+// structured-output prose (finding `message`/`suggestion`, review `summary`,
+// pr_fix reply `body`) sometimes writes one anyway (e.g. "3 件" instead of
+// "3件"). Applied at render time (renderInlineComment/renderReviewSummary/
+// renderFixReply below) rather than trusted from the prompt instructions
+// alone, since Claude's output is untrusted-influenced free text.
+// ---------------------------------------------------------------------------
+
+// Hiragana, katakana, CJK Unified Ideographs (+ Extension A), CJK
+// symbols/punctuation (、。「」 etc.), and the halfwidth/fullwidth forms
+// block — "a Japanese character" for this rule's purposes.
+const JAPANESE_CHAR_CLASS =
+  "\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\u3000-\\u303f\\uff00-\\uffef";
+// An ASCII alphanumeric, or a `)`/`]`/`` ` `` closing character — the shape
+// of character this rule treats as "the end (or start) of an ASCII run".
+const ASCII_BOUNDARY_CLASS = "0-9A-Za-z)\\]`";
+
+const JAPANESE_CHAR_RE = new RegExp(`[${JAPANESE_CHAR_CLASS}]`);
+const ASCII_BOUNDARY_RE = new RegExp(`[${ASCII_BOUNDARY_CLASS}]`);
+
+// A fenced ``` ... ``` block (across lines) or an inline `...` span (never
+// crossing a newline, matching normal Markdown inline-code semantics) —
+// content matched here is left untouched by normalizeJapaneseText below.
+const CODE_SEGMENT_PATTERN = /```[\s\S]*?```|`[^`\n]*`/g;
+
+/**
+ * Removes a single half-width space directly between an ASCII run (ending
+ * or starting with an alphanumeric, `)`, `]`, or a closing backtick) and a
+ * Japanese character, in either direction (team-lead decision, 2026-09-26:
+ * "N 件" -> "N件", "LGTM です" -> "LGTMです", "`code` です" -> "`code`です").
+ * Text inside a fenced ``` block or an inline `backtick span` — including a
+ * space immediately inside one — is left completely untouched: the closing
+ * backtick of a span still counts as an ASCII boundary character for a
+ * space just *outside* it, but a space *inside* the span never is. Only a
+ * literal " " character is ever removed; a newline is never touched or
+ * crossed.
+ */
+export function normalizeJapaneseText(text: string): string {
+  const protectedRanges: Array<readonly [number, number]> = [];
+  for (const match of text.matchAll(CODE_SEGMENT_PATTERN)) {
+    const start = match.index;
+    protectedRanges.push([start, start + match[0].length]);
+  }
+  const isProtected = (index: number): boolean =>
+    protectedRanges.some(([start, end]) => index >= start && index < end);
+
+  let result = "";
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    const before = text[i - 1] ?? "";
+    const after = text[i + 1] ?? "";
+    const removable =
+      char === " " &&
+      !isProtected(i) &&
+      before.length > 0 &&
+      after.length > 0 &&
+      ((ASCII_BOUNDARY_RE.test(before) && JAPANESE_CHAR_RE.test(after)) ||
+        (JAPANESE_CHAR_RE.test(before) && ASCII_BOUNDARY_RE.test(after)));
+    if (!removable) {
+      result += char;
+    }
+  }
+  return result;
+}
 
 // ---------------------------------------------------------------------------
 // Shared: terminal-transition label cleanup (I/O)
@@ -82,6 +171,114 @@ export async function removeTerminalLabels(
 // call site for why) was this file's own thin `gh api` copy at first, then
 // promoted into lib/github.ts mid-cycle (same signature/behavior); callers
 // import it from there now instead of a local duplicate.
+
+// ---------------------------------------------------------------------------
+// State labels (team-lead design, 2026-09-26): exactly one of four
+// mutually-exclusive labels is present on a PR the factory has handled, so
+// a human sees at a glance what it needs. Unlike review_label/fix_label
+// (human-set triggers, removed at launch), the factory itself sets and
+// swaps these; poll_prs.ts's searchPrs re-discovers a PR by them instead of
+// the `commenter:<viewer>` query.
+// ---------------------------------------------------------------------------
+
+export type StateLabelConfig = Pick<
+  FactoryConfig,
+  | "changes_requested_label"
+  | "reviewed_label"
+  | "rereview_label"
+  | "needs_human_label"
+>;
+
+/** Every state label this factory instance knows about, in no particular
+ * order — used to clear all of them before setting a new one
+ * (setStateLabel), or when a PR leaves the active set entirely (poll_prs.ts
+ * on claim, poll_issues.ts's reconcile on cancel). */
+export function allStateLabels(config: StateLabelConfig): string[] {
+  return [
+    config.changes_requested_label,
+    config.reviewed_label,
+    config.rereview_label,
+    config.needs_human_label,
+  ];
+}
+
+/** Decides the state label for a posted review: `changes_requested_label`
+ * when at least one finding this round is a `must`, OR when `openMustCount`
+ * (pr_workflow_support.ts's `countOpenMustThreads`) is greater than zero —
+ * team-lead fix, 2026-09-26: an old `[MUST]` finding left unresolved from a
+ * prior round must keep the PR flagged as needing changes even on a round
+ * that itself posts nothing new (`ReviewBodyMode`'s `"rereview_open"`).
+ * `reviewed_label` otherwise (including no findings at all and no open
+ * `must` — nothing blocking, awaiting human approval). */
+export function stateLabelForReview(
+  findings: readonly ReviewFinding[],
+  openMustCount: number,
+  config: Pick<StateLabelConfig, "changes_requested_label" | "reviewed_label">,
+): string {
+  const hasMustFinding = findings.some((finding) => finding.kind === "must");
+  return hasMustFinding || openMustCount > 0
+    ? config.changes_requested_label
+    : config.reviewed_label;
+}
+
+/** The terminal outcomes of a pr_review/pr_fix cycle that carry a state
+ * label: a pushed fix awaiting re-review, or any of the ways a cycle ends
+ * up needing a human — pr_fix_finish.ts's guard_blocked/needs_human
+ * outcomes, or on_error_flow.ts's exception-driven `failed` transition
+ * (either kind: a failed pr_review counts here too). */
+export type PrFixStateOutcome =
+  | "rereview_requested"
+  | "needs_human"
+  | "blocked"
+  | "failed";
+
+export function stateLabelForFixOutcome(
+  outcome: PrFixStateOutcome,
+  config: Pick<StateLabelConfig, "rereview_label" | "needs_human_label">,
+): string {
+  switch (outcome) {
+    case "rereview_requested":
+      return config.rereview_label;
+    case "needs_human":
+    case "blocked":
+    case "failed":
+      return config.needs_human_label;
+  }
+}
+
+/**
+ * Sets exactly one state label on a PR: removes the other three
+ * (best-effort, warn-log on failure — same shape as removeTerminalLabels)
+ * then adds `label`. Best-effort on the add too — a label-set failure must
+ * never fail the step that already committed the underlying status
+ * transition, matching removeTerminalLabels's own contract.
+ */
+export async function setStateLabel(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  number: number,
+  config: StateLabelConfig,
+  label: string,
+  log: Logger,
+): Promise<void> {
+  const otherLabels = allStateLabels(config).filter((each) => each !== label);
+  await removeTerminalLabels(client, owner, repo, number, otherLabels, log);
+  try {
+    await addLabels(client, owner, repo, number, [label]);
+  } catch (err) {
+    // Include the PR coordinates: a PR left without a state label is
+    // invisible to poll_prs's label-based re-discovery, so the operator
+    // must be able to find it from this line alone.
+    log.warn("failed to set state label", {
+      owner,
+      repo,
+      number,
+      label,
+      error: maskSecrets(err instanceof Error ? err.message : String(err)),
+    });
+  }
+}
 
 // ---------------------------------------------------------------------------
 // pr_review_prepare: decide whether to proceed (pure)
@@ -149,6 +346,12 @@ const REVIEW_SEVERITIES: readonly ReviewSeverity[] = [
   "minor",
   "nit",
 ];
+const REVIEW_FINDING_KINDS: readonly ReviewFindingKind[] = [
+  "must",
+  "imo",
+  "nits",
+  "q",
+];
 
 export type ReviewClaudeOutput = {
   readonly verdict: ReviewVerdict;
@@ -160,9 +363,14 @@ function isReviewFindingShape(value: unknown): value is ReviewFinding {
   if (!isRecord(value)) return false;
   if (!isString(value.path)) return false;
   if (value.line !== null && !isNumber(value.line)) return false;
+  if (value.end_line !== null && !isNumber(value.end_line)) return false;
   if (!isOneOf(value.severity, REVIEW_SEVERITIES)) return false;
+  if (!isOneOf(value.kind, REVIEW_FINDING_KINDS)) return false;
   if (!isString(value.message)) return false;
   if (value.suggestion !== null && !isString(value.suggestion)) return false;
+  if (value.suggested_code !== null && !isString(value.suggested_code)) {
+    return false;
+  }
   return true;
 }
 
@@ -189,60 +397,385 @@ export type ReviewCommentLike = {
   readonly path: string;
   readonly line: number;
   readonly side: "LEFT" | "RIGHT";
+  readonly start_line?: number;
   readonly body: string;
 };
 
 /** Maps findings to GitHub inline review comments, dropping any finding
  * whose `path` is not among the PR's changed files (GitHub rejects an
  * inline comment on a path outside the diff) or whose `line` can't anchor
- * one (`null` or non-positive). */
+ * one (`null` or non-positive) — the dropped findings themselves (not just
+ * a count) are returned too, since team-lead's "投稿形式" lists them in the
+ * summary comment instead of silently discarding them.
+ *
+ * A finding with a distinct `end_line` becomes a range-anchored comment
+ * (lib/github.ts's `ReviewComment.start_line`): GitHub's Review API takes
+ * `start_line` as the first line and `line` as the last, so
+ * `start_line = finding.line`, `line = finding.end_line`. An `end_line`
+ * before `line` is not a valid range (GitHub rejects the whole review for
+ * it), so that case is treated as single-line instead — Claude's own
+ * `end_line` is untrusted-influenced output, not a value this function can
+ * assume is well-formed. */
 export function mapFindingsToReviewComments(
   findings: readonly ReviewFinding[],
   prFiles: readonly string[],
-): { readonly comments: ReviewCommentLike[]; readonly droppedCount: number } {
+): {
+  readonly comments: ReviewCommentLike[];
+  readonly droppedFindings: ReviewFinding[];
+} {
   const fileSet = new Set(prFiles);
   const comments: ReviewCommentLike[] = [];
-  let droppedCount = 0;
+  const droppedFindings: ReviewFinding[] = [];
   for (const finding of findings) {
     if (
       finding.line === null ||
       finding.line <= 0 ||
       !fileSet.has(finding.path)
     ) {
-      droppedCount += 1;
+      droppedFindings.push(finding);
       continue;
     }
+    const endLine = finding.end_line;
+    const range =
+      endLine !== null && endLine > finding.line
+        ? { start_line: finding.line, line: endLine }
+        : { line: finding.line };
     comments.push({
       path: finding.path,
-      line: finding.line,
       side: "RIGHT",
-      body: formatFindingBody(finding),
+      ...range,
+      body: renderInlineComment(finding),
     });
   }
-  return { comments, droppedCount };
+  return { comments, droppedFindings };
 }
 
-function formatFindingBody(finding: ReviewFinding): string {
-  const suggestion =
-    finding.suggestion !== null ? `\n\n提案: ${finding.suggestion}` : "";
-  return `**[${finding.severity}]** ${finding.message}${suggestion}`;
+const REVIEW_FINDING_KIND_PREFIXES: Record<ReviewFindingKind, string> = {
+  must: "[MUST]",
+  imo: "[IMO]",
+  nits: "[NITS]",
+  q: "[Q]",
+};
+
+/**
+ * The fence to wrap a `suggested_code` block in (team-lead fix, 2026-09-26):
+ * three backticks, or one more than the longest run of consecutive
+ * backticks `code` itself contains, whichever is longer — a fixed
+ * ` ```suggestion ` fence would otherwise be prematurely closed (or its
+ * nesting broken) by a suggested code snippet that itself contains a
+ * ``` ``` ``` (or longer) run, e.g. a snippet that edits a Markdown fenced
+ * block. GitHub renders a suggestion fenced with any length >= 3 the same
+ * way, so widening the fence never changes how a plain snippet renders.
+ */
+export function fenceFor(code: string): string {
+  const backtickRuns = code.match(/`+/g);
+  const longestRun =
+    backtickRuns === null
+      ? 0
+      : Math.max(...backtickRuns.map((run) => run.length));
+  return "`".repeat(Math.max(3, longestRun + 1));
 }
 
-/** Composes the top-level review comment body: summary + verdict line +
- * a note when some findings couldn't be posted inline. The caller appends
- * the `<!-- factory:pr_review:<id> -->` marker via github.ts's withMarker. */
-export function buildReviewBody(
-  summary: string,
-  verdict: ReviewVerdict,
-  totalFindings: number,
-  droppedCount: number,
-): string {
-  const verdictLine = `**判定:** ${verdict}`;
-  const note =
-    droppedCount > 0
-      ? `\n\n_${String(droppedCount)} / ${String(totalFindings)} 件の指摘はインラインコメントとして投稿できませんでした(この PR の差分外のファイル、または行参照なし)。上記のレビュー概要を参照してください。_`
+/** Renders `code` as a ` ```suggestion ` block, fenced via `fenceFor` above
+ * so the fence itself always survives any backtick run `code` contains. */
+function renderSuggestionBlock(code: string): string {
+  const fence = fenceFor(code);
+  return `\n\n${fence}suggestion\n${code}\n${fence}`;
+}
+
+/**
+ * Renders one finding as an inline review-comment body per the
+ * factory-review skill's "投稿形式": a role-tag first line (team-lead
+ * decision, 2026-09-26: identifies this as a `pr_review` post), then a
+ * second line with the `[MUST]`/`[IMO]`/`[NITS]`/`[Q]` prefix (from `kind`)
+ * and `message`, an optional `suggestion` note, and `suggested_code` as a
+ * ` ```suggestion ` block (see `renderSuggestionBlock`/`fenceFor` above).
+ * `mapFindingsToReviewComments` anchors a multi-line finding's
+ * `start_line`/`line` to the finding's own `line`/`end_line`, so the block
+ * always applies to exactly the range GitHub shows it against — no separate
+ * range note is needed in the body. `message`/`suggestion` are passed
+ * through `normalizeJapaneseText` (team-lead decision, 2026-09-26) —
+ * `suggested_code` is code, not prose, so it is never touched.
+ */
+export function renderInlineComment(finding: ReviewFinding): string {
+  const prefix = REVIEW_FINDING_KIND_PREFIXES[finding.kind];
+  const message = normalizeJapaneseText(finding.message);
+  const suggestionText =
+    finding.suggestion !== null
+      ? `\n\n提案: ${normalizeJapaneseText(finding.suggestion)}`
       : "";
-  return `${summary}\n\n${verdictLine}${note}`;
+  const codeBlock =
+    finding.suggested_code === null
+      ? ""
+      : renderSuggestionBlock(finding.suggested_code);
+  return `${ROLE_TAGS.pr_review}\n${prefix} ${message}${suggestionText}${codeBlock}`;
+}
+
+/**
+ * Which of the four fixed top-level review-comment bodies
+ * `renderReviewSummary` renders (team-lead decision, 2026-09-26: the
+ * first-pass review body is no longer Claude's free-form `summary` — it's
+ * exactly one of these four forms; `"rereview_open"` added 2026-09-26).
+ * `hasPriorReview` (db.ts's `hasPriorReview`) distinguishes a genuine
+ * re-review of this PR from the very first one. `"rereview_open"` is the
+ * re-review counterpart of `"rereview_clean"` for when this round itself
+ * found nothing new, but at least one `[MUST]` finding from a prior round is
+ * still open after this round's own thread-resolving pass — a bare LGTM
+ * body would otherwise read as "nothing left to do" even though an old
+ * required finding remains unaddressed.
+ */
+export type ReviewBodyMode =
+  | "findings"
+  | "rereview_clean"
+  | "first_clean"
+  | "rereview_open";
+
+/** Selects the body mode purely from whether any finding was actually
+ * posted inline or dropped this round, whether a factory review of this PR
+ * already exists, and (team-lead fix, 2026-09-26) how many of the factory's
+ * own `[MUST]` threads remain open after this round's resolving pass
+ * (`openMustCount` — see `countOpenMustThreads`, computed by the caller
+ * against the pre-resolve thread list minus the ids it is about to resolve).
+ * A dropped finding (one that couldn't be posted inline, e.g. its `path`
+ * isn't in the diff) still forces mode `"findings"` even when
+ * `postedCommentCount` is 0 (team-lead review finding): `renderReviewSummary`
+ * always lists dropped findings below the fixed second line, and an LGTM
+ * line must never appear directly above that list. Otherwise, when an open
+ * `must` finding remains (`openMustCount > 0`), the would-be clean mode
+ * (`"rereview_clean"` or, in principle, `"first_clean"` — though a PR's
+ * first review can never have a prior open thread to begin with) is
+ * upgraded to `"rereview_open"` instead. */
+export function decideReviewBodyMode(
+  postedCommentCount: number,
+  droppedCount: number,
+  hasPriorReview: boolean,
+  openMustCount: number,
+): ReviewBodyMode {
+  if (postedCommentCount + droppedCount > 0) return "findings";
+  if (openMustCount > 0) return "rereview_open";
+  return hasPriorReview ? "rereview_clean" : "first_clean";
+}
+
+/**
+ * Composes the top-level review comment body per the factory-review
+ * skill's "投稿形式": a role-tag + `@author` mention on the first line
+ * (team-lead decision, 2026-09-26: identifies this as a `pr_review` post),
+ * one of four fixed second lines selected by `mode`, and (when some
+ * findings couldn't be posted inline) a bulleted list of them. Claude's own
+ * `summary` is never posted here (team-lead decision, 2026-09-26: recorded
+ * in factory.reviews / used by Discord only). `verdict` is likewise never
+ * included (DB / Discord only, never in the PR body). The caller appends
+ * the `<!-- factory:pr_review:<id> -->` marker via github.ts's withMarker.
+ *
+ * team-lead decision (2026-09-26, wording pass): mode `"findings"` no
+ * longer carries the final-Approve-is-human disclaimer line at all — a
+ * finding-carrying post already asks the author to look at it ("確認お願い
+ * します。"), so the extra disclaimer was redundant there. The `"rereview_clean"`/
+ * `"first_clean"` modes (nothing to fix) keep it as their third line, since
+ * an LGTM-shaped post is exactly where a human could otherwise read
+ * "nothing more to do" into it. `"rereview_open"` (team-lead fix,
+ * 2026-09-26 — see `ReviewBodyMode`'s doc comment) uses `openMustCount` to
+ * report how many old `[MUST]` findings are still open and carries no
+ * disclaimer either, since it explicitly asks for confirmation already.
+ * Every literal string here follows this project's Japanese writing-style
+ * rule (CLAUDE.md §3 / docs/coding-guidelines.md): no half-width space
+ * between an ASCII/digit run and a Japanese character.
+ */
+export function renderReviewSummary(
+  authorLogin: string,
+  postedCommentCount: number,
+  mode: ReviewBodyMode,
+  droppedFindings: readonly ReviewFinding[],
+  openMustCount: number,
+): string {
+  const lines = [`${ROLE_TAGS.pr_review} @${authorLogin}`];
+  switch (mode) {
+    case "findings":
+      lines.push(
+        `${String(postedCommentCount)}件コメントしました。確認お願いします。`,
+      );
+      break;
+    case "rereview_clean":
+      lines.push("修正を確認しました。LGTMです。");
+      lines.push("最終的なApprove判断は人が行ってください。");
+      break;
+    case "first_clean":
+      lines.push("指摘はありません。LGTMです。");
+      lines.push("最終的なApprove判断は人が行ってください。");
+      break;
+    case "rereview_open":
+      lines.push(
+        `新しい指摘はありません。未対応の指摘が${String(openMustCount)}件残っています。確認お願いします。`,
+      );
+      break;
+  }
+  if (droppedFindings.length > 0) {
+    lines.push("", "(行に紐づけられなかった指摘)");
+    for (const finding of droppedFindings) {
+      const prefix = REVIEW_FINDING_KIND_PREFIXES[finding.kind];
+      lines.push(
+        `- ${prefix} ${finding.path}: ${normalizeJapaneseText(finding.message)}`,
+      );
+    }
+  }
+  return lines.join("\n");
+}
+
+/**
+ * Whether `body` is a `pr_fix` reply (renderFixReply) that closes the loop on
+ * its own: the first line is the `pr_fix` role tag and some line is the
+ * `対応: \`<sha>\`` form (7-40 hex chars in backticks) it renders for a
+ * `"fixed"` reply that actually produced a commit. A reply ending
+ * `対応: 見送り` (Claude chose not to act) or `対応: 変更なし` (nothing ended up
+ * committed) does NOT count — team-lead decision, 2026-09-26: those two
+ * outcomes still need a human's judgment, so the thread stays open for one.
+ */
+export function isFixedFixReply(body: string): boolean {
+  const lines = body.split("\n");
+  if (lines[0] !== ROLE_TAGS.pr_fix) return false;
+  return lines.some((line) => /^対応: `[0-9a-f]{7,40}`$/.test(line));
+}
+
+/**
+ * Selects the review threads pr_review_post.ts should resolve on this post
+ * (team-lead decision, 2026-09-26, extended 2026-09-26 to every re-review):
+ * the factory's own still-unresolved `pr_review` inline-comment threads on
+ * this PR — a thread's *first* comment must be authored by `viewer`
+ * (case-insensitive, matching isOwnPost's convention) and start with the
+ * `pr_review` role tag, mirroring isFactoryPost's login-match-AND-marker rule
+ * (the factory runs under the operator's own GitHub account, so login alone
+ * can't tell a factory thread from a human one). A thread GitHub already
+ * marked resolved is left alone, and a thread a human started (even one the
+ * factory later replied in) is never touched, since resolving is scoped to
+ * threads the factory itself opened.
+ *
+ * team-lead review finding: the thread's *last* comment must also be the
+ * factory's own (`viewer`-authored) — a human reply left in the thread (even
+ * one after the factory's original finding) means the factory did not have
+ * the last word, so the thread stays open for a human to actually resolve.
+ *
+ * `mode` (pr_review_post.ts passes the *pre-`openMustCount`* mode here — see
+ * `countOpenMustThreads`'s doc comment below for why — which is always one
+ * of `"findings"`/`"rereview_clean"`/`"first_clean"`, never
+ * `"rereview_open"` in practice) then decides which viewer-authored last
+ * comments count as "addressed" (team-lead decision, 2026-09-26):
+ *   - `"rereview_clean"` (re-review, zero findings) — and, defensively,
+ *     `"rereview_open"`, which shares its resolving rule: a still-untouched
+ *     `pr_review` finding (nothing remained to fix, e.g. a human fixed it by
+ *     hand) OR a `pr_fix` reply that names a commit (`isFixedFixReply`).
+ *   - `"findings"` (a re-review that still has findings, or a first review):
+ *     only a `pr_fix` reply that names a commit — an untouched `pr_review`
+ *     finding must stay open here, since this same post may have just left
+ *     new findings and only pr_fix's own confirmation closes an old one.
+ *   - `"first_clean"` (first review, zero findings): never — there is no
+ *     prior factory review for the operator to have addressed anything of,
+ *     so nothing is resolved.
+ */
+export function selectThreadsToResolve(
+  threads: readonly ReviewThread[],
+  viewer: string,
+  mode: ReviewBodyMode,
+): string[] {
+  if (mode === "first_clean") return [];
+  const viewerLower = viewer.toLowerCase();
+  return threads
+    .filter((thread) => !thread.isResolved)
+    .filter(
+      (thread) => thread.firstCommentAuthorLogin.toLowerCase() === viewerLower,
+    )
+    .filter((thread) => thread.firstCommentBody.startsWith(ROLE_TAGS.pr_review))
+    .filter(
+      (thread) => thread.lastCommentAuthorLogin.toLowerCase() === viewerLower,
+    )
+    .filter((thread) =>
+      mode === "rereview_clean" || mode === "rereview_open"
+        ? thread.lastCommentBody.startsWith(ROLE_TAGS.pr_review) ||
+          isFixedFixReply(thread.lastCommentBody)
+        : isFixedFixReply(thread.lastCommentBody),
+    )
+    .map((thread) => thread.id);
+}
+
+/**
+ * Counts the factory's own still-open `[MUST]` `pr_review` findings on this
+ * PR (team-lead fix, 2026-09-26) — used by pr_review_post.ts to decide
+ * whether a round that itself posts nothing new should still render
+ * `"rereview_open"` instead of a bare LGTM (`decideReviewBodyMode`'s
+ * `openMustCount` parameter). Mirrors `selectThreadsToResolve`'s own
+ * factory-authorship check on the thread's *first* comment (login match
+ * case-insensitive, starts with the `pr_review` role tag) — a thread GitHub
+ * already marked resolved, or one this same round is about to resolve
+ * (`resolvedIds`, `selectThreadsToResolve`'s own return value, computed
+ * against the same pre-resolve `threads` snapshot passed here) does not
+ * count as open. Additionally requires the finding's own kind prefix — the
+ * first comment's *second* line, `renderInlineComment`'s own format — to be
+ * `[MUST]` (`REVIEW_FINDING_KIND_PREFIXES.must`); an `[IMO]`/`[NITS]`/`[Q]`
+ * finding never blocks a clean re-review body.
+ */
+export function countOpenMustThreads(
+  threads: readonly ReviewThread[],
+  viewer: string,
+  resolvedIds: readonly string[],
+): number {
+  const viewerLower = viewer.toLowerCase();
+  const resolvedIdSet = new Set(resolvedIds);
+  return threads.filter((thread) => {
+    if (thread.isResolved) return false;
+    if (resolvedIdSet.has(thread.id)) return false;
+    if (thread.firstCommentAuthorLogin.toLowerCase() !== viewerLower) {
+      return false;
+    }
+    if (!thread.firstCommentBody.startsWith(ROLE_TAGS.pr_review)) return false;
+    const secondLine = thread.firstCommentBody.split("\n")[1] ?? "";
+    return secondLine.startsWith(REVIEW_FINDING_KIND_PREFIXES.must);
+  }).length;
+}
+
+export type OpenFindingForPrompt = {
+  readonly path: string;
+  readonly line: number | null;
+  readonly body: string;
+};
+
+/**
+ * Maps the factory's own still-open `pr_review` findings on this PR into
+ * `reviewPrompt`'s `openFindings` input (team-lead decision, 2026-09-26): a
+ * re-review must not re-post a finding substantially the same as one that's
+ * already open, so pr_review_generate.ts passes every such finding back to
+ * Claude. Selection mirrors `selectThreadsToResolve`'s own factory-authorship
+ * check (login match case-insensitive, first comment starts with the
+ * `pr_review` role tag) but is independent of `mode`/last-comment state —
+ * this only cares whether the finding itself is still unresolved, not who
+ * (if anyone) replied to it since. The role-tag line is stripped from
+ * `body` (Claude doesn't need to know how the factory tags its own posts).
+ * Naturally empty on a PR's first review, since no threads exist yet.
+ */
+export function openFindingsForPrompt(
+  threads: readonly ReviewThread[],
+  viewer: string,
+): OpenFindingForPrompt[] {
+  const viewerLower = viewer.toLowerCase();
+  return threads
+    .filter((thread) => !thread.isResolved)
+    .filter(
+      (thread) => thread.firstCommentAuthorLogin.toLowerCase() === viewerLower,
+    )
+    .filter((thread) => thread.firstCommentBody.startsWith(ROLE_TAGS.pr_review))
+    .map((thread) => ({
+      path: thread.path,
+      line: thread.line,
+      body: stripRoleTagLine(thread.firstCommentBody),
+    }));
+}
+
+/** Strips the `pr_review` role-tag first line from a factory-authored
+ * comment body, if present — used by `openFindingsForPrompt` above so
+ * Claude sees only the finding's own content. */
+function stripRoleTagLine(body: string): string {
+  const newlineIndex = body.indexOf("\n");
+  if (newlineIndex === -1) return body;
+  if (body.slice(0, newlineIndex) !== ROLE_TAGS.pr_review) return body;
+  return body.slice(newlineIndex + 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -446,11 +979,14 @@ export function selectNewReviewComments(
   return { items, excludedAuthors };
 }
 
-/** Plain issue-level comments, excluding the `/factory fix` trigger command
- * itself (that's a trigger, not feedback) and any author outside
- * `allowedAssociations` — github.ts's `listIssueComments` already filters
- * to human, non-marker comments newer than the `last_comment_id` watermark
- * (`opts.sinceId`), so this only needs the pr_fix-specific exclusions. */
+/** Plain issue-level comments from an author whose `author_association` is
+ * in `allowedAssociations` — github.ts's `listIssueComments` already filters
+ * out the factory's own marker-bearing posts and anything older than the
+ * `last_comment_id` watermark (`opts.sinceId`). A human writes instructions
+ * for a fix as an ordinary comment before adding the `fix_label` (user
+ * decision, 2026-09-26: pr_fix has no comment-based trigger of its own, so
+ * every comment here is plain feedback for Claude to act on, collected the
+ * same way as any other human comment). */
 export function selectNewIssueComments(
   comments: readonly RawIssueComment[],
   allowedAssociations: readonly LabelerAssociation[],
@@ -458,7 +994,6 @@ export function selectNewIssueComments(
   const items: CollectedComment[] = [];
   const excludedAuthors: string[] = [];
   for (const comment of comments) {
-    if (isFactoryFixCommand(comment.body)) continue;
     if (!isOneOf(comment.authorAssociation, allowedAssociations)) {
       excludedAuthors.push(comment.authorLogin);
       continue;
@@ -489,28 +1024,29 @@ export function decideCollectOutcome(
 }
 
 // ---------------------------------------------------------------------------
-// pr_fix_apply: commit message synthesis (pure)
+// pr_fix_apply / pr_fix_verify: commit message composition (pure)
 // ---------------------------------------------------------------------------
 
-const COMMIT_SUBJECT_MAX = 72;
-
-/** prompts.ts's FIX_SCHEMA has no `commit_message` field (unlike
- * .claude/skills/factory-fix's own, out-of-date, schema section — see the
- * implementer's report) — Claude never proposes one. This derives a
- * Conventional-Commits subject line from Claude's own `summary` field
- * instead, deterministically, so pr_fix_finish never needs to trust
- * untrusted free text as a literal commit subject beyond this. */
-export function buildFixCommitMessage(summary: string, round: number): string {
-  const firstLine = (summary.split("\n")[0] ?? "").trim();
-  const subject =
-    firstLine.length > 0
-      ? firstLine
-      : `address round ${String(round)} review feedback`;
-  const truncated =
-    subject.length > COMMIT_SUBJECT_MAX
-      ? `${subject.slice(0, COMMIT_SUBJECT_MAX - 1)}…`
-      : subject;
-  return `fix: ${truncated}`;
+/** Joins a fix round's proposed commit subject and (optional) body into the
+ * final commit message text `pr_fix_finish.ts` passes to `commitAndPush`
+ * (team-lead decision, 2026-09-26 — supersedes the former
+ * `buildFixCommitMessage`, which derived a subject from Claude's `summary`
+ * field deterministically; Claude now proposes `commit_subject`/
+ * `commit_body` directly in its structured output, see `FixClaudeOutput`,
+ * so this is a plain join with no truncation logic of its own —
+ * `isFixClaudeOutput`'s guard is what enforces the subject's shape).
+ * `commitAndPush`'s own `withCommitTrailers` still appends the
+ * Co-Authored-By/Generated-By trailers after this. */
+export function composeCommitMessage(
+  subject: string,
+  body: string | null,
+): string {
+  // The same Japanese spacing rule as posted review text applies to commit
+  // messages (user decision, 2026-09-26); inline code spans stay untouched.
+  const normalizedSubject = normalizeJapaneseText(subject);
+  return body === null
+    ? normalizedSubject
+    : `${normalizedSubject}\n\n${normalizeJapaneseText(body)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -523,23 +1059,76 @@ const FIX_OUTCOMES: readonly FixOutcome[] = [
   "blocked",
 ];
 
+const FIX_REPLY_DECISIONS: readonly FixReplyDecision[] = ["fixed", "skipped"];
+
+// team-lead fix (2026-09-26): raised from 60 to git's own subject-line
+// convention of 72 code points — a small margin over the ~50 characters the
+// prompt/skill text asks Claude to aim for, so a subject that runs slightly
+// long doesn't throw away a whole Claude run.
+const COMMIT_SUBJECT_MAX_CODEPOINTS = 72;
+
 export type FixClaudeOutput = {
   readonly outcome: FixOutcome;
   readonly summary: string;
   readonly replies: FixReply[];
   readonly blocked_reason: string | null;
+  readonly commit_subject: string;
+  readonly commit_body: string | null;
 };
 
+/** `decision` is required (team-lead decision, 2026-09-26): a reply without
+ * it fails this guard outright rather than being accepted with an implied
+ * default, per this codebase's parse-don't-validate convention. */
 function isFixReplyShape(value: unknown): value is FixReply {
   return (
-    isRecord(value) && isNumber(value.review_comment_id) && isString(value.body)
+    isRecord(value) &&
+    isNumber(value.review_comment_id) &&
+    isString(value.body) &&
+    isOneOf(value.decision, FIX_REPLY_DECISIONS)
   );
+}
+
+/**
+ * Whether `value` is an acceptable `commit_subject` shape (team-lead
+ * decision, 2026-09-26, limit revised 2026-09-26): a string of at most
+ * `COMMIT_SUBJECT_MAX_CODEPOINTS` Unicode code points — counted via
+ * spreading into an array of code points, not `.length`'s UTF-16 code
+ * units, since a description could contain astral-plane characters —
+ * containing no newline (a commit subject is always one line), and not
+ * ending with "…". The ellipsis check exists because this field replaces
+ * the former `buildFixCommitMessage`, which silently truncated an
+ * overlong subject and appended "…" itself; Claude now writes the whole
+ * subject directly, so a trailing "…" means it tried to write something
+ * past the limit rather than keeping the subject itself within it. This
+ * shape check alone allows an empty string (`""`) — `isFixClaudeOutput`
+ * below additionally requires a non-empty, non-whitespace subject when
+ * `outcome` is `"done"`.
+ */
+function isValidCommitSubject(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  if (value.includes("\n")) return false;
+  if (value.endsWith("…")) return false;
+  return [...value].length <= COMMIT_SUBJECT_MAX_CODEPOINTS;
 }
 
 /** Matches prompts.ts's FIX_SCHEMA exactly (see isReviewClaudeOutput's note
  * on the same divergence from .claude/skills/factory-fix's own schema
- * section: no `commit_message`/`gap_report`, but a `blocked_reason` used
- * for both the "blocked" and "requirements_gap" outcomes). */
+ * section: `blocked_reason` used for both the "blocked" and
+ * "requirements_gap" outcomes, and `commit_subject`/`commit_body` — team-lead
+ * decision, 2026-09-26 — replacing the former derive-from-`summary`
+ * approach).
+ *
+ * team-lead fix (2026-09-26): when `outcome` is `"done"`, `commit_subject`
+ * must additionally be non-empty and not whitespace-only. FIX_SCHEMA's own
+ * text asks Claude for `commit_subject: ""` only when there is nothing to
+ * commit (any outcome other than "done") — an empty/blank subject on a
+ * "done" outcome would otherwise reach pr_fix_finish.ts's
+ * `composeCommitMessage` as the commit's subject line, which then promotes
+ * the following `Co-Authored-By`/`Generated-By` trailers into the subject
+ * (`git commit -m "\n\nCo-Authored-By: ..."`). For every other outcome, `""`
+ * is still accepted exactly as before (pr_fix_apply.ts never carries a
+ * non-done outcome's `commit_subject` through to an actual commit attempt
+ * anyway). */
 export function isFixClaudeOutput(value: unknown): value is FixClaudeOutput {
   if (!isRecord(value)) return false;
   if (!isOneOf(value.outcome, FIX_OUTCOMES)) return false;
@@ -548,6 +1137,13 @@ export function isFixClaudeOutput(value: unknown): value is FixClaudeOutput {
     return false;
   }
   if (value.blocked_reason !== null && !isString(value.blocked_reason)) {
+    return false;
+  }
+  if (!isValidCommitSubject(value.commit_subject)) return false;
+  if (value.outcome === "done" && value.commit_subject.trim().length === 0) {
+    return false;
+  }
+  if (value.commit_body !== null && !isString(value.commit_body)) {
     return false;
   }
   return true;
@@ -1192,6 +1788,48 @@ export function decideFixFinishAction(
 }
 
 /**
+ * Whether pr_fix_finish.ts should advance the processed watermarks
+ * (`last_review_id` / `last_comment_id` / `last_review_comment_id`) for a
+ * given terminal outcome of `main()`. team-lead fix (2026-09-26): the
+ * watermarks used to be bumped unconditionally at the top of `main()`,
+ * before the outcome was known — when a later step then threw (observed:
+ * `git commit` failing), the work item became `failed` with its watermarks
+ * already past the feedback that triggered this round, so
+ * `retry_work_item` re-ran `pr_fix_collect` with nothing left to collect and
+ * landed in `needs_human` ("no actionable feedback") instead of actually
+ * retrying (docs/operations.md's former "pr_fix の再実行" note documented
+ * this as a known limitation; it is a bug, fixed here).
+ *
+ * The watermarks must only advance once this round's feedback was actually
+ * consumed:
+ *   - `push_success`: the fix was committed and pushed, and replies were
+ *     posted to the comments that triggered it.
+ *   - `requirements_gap_reroute_success`: the feedback was consumed by
+ *     rerouting the parent issue back to `requirements_generating`.
+ * Every other terminal kind here — a guard blocking the attempt before it
+ * started, `needs_human` from any cause, a failed reroute (no parent /
+ * relabel failure), or a push that didn't actually land (missing commit
+ * message, moved head, nothing to commit) — must leave the watermarks
+ * untouched, so a subsequent `retry_work_item` re-collects the same
+ * feedback. An exception anywhere in `main()` (→ `failed`, handled by
+ * on_error_flow.ts, not this function) never reaches a bump call either.
+ */
+export type PrFixFinishBumpKind =
+  | "guard_blocked"
+  | "needs_human"
+  | "requirements_gap_needs_human"
+  | "requirements_gap_reroute_failed"
+  | "requirements_gap_reroute_success"
+  | "push_missing_commit_message"
+  | "push_head_changed"
+  | "push_nothing_to_commit"
+  | "push_success";
+
+export function shouldAdvanceWatermarks(kind: PrFixFinishBumpKind): boolean {
+  return kind === "requirements_gap_reroute_success" || kind === "push_success";
+}
+
+/**
  * Whether the parent issue's wip + trigger labels could not be re-applied
  * before a requirements_gap reroute — pure, so the abort-vs-proceed
  * decision itself is unit-testable without faking GitHub I/O (the actual
@@ -1226,6 +1864,60 @@ export function deriveFallbackReviewers(
   return [...set];
 }
 
+// GitHub's own closing-keyword syntax: close/closes/closed, fix/fixes/fixed,
+// resolve/resolves/resolved (case-insensitive), each optionally followed by
+// a colon, then either a bare `#N` (always same-repo, GitHub's own
+// shorthand meaning) or an explicit `owner/repo#N`. Captures ($1,$2) the
+// owner/repo when present so the caller can filter a cross-repo reference
+// out; a fresh RegExp instance is built per call (see below) since a
+// module-level `g`-flag pattern would carry `lastIndex` state across calls.
+const LINKED_ISSUE_PATTERN =
+  /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b\s*:?\s*(?:([\w.-]+)\/([\w.-]+))?#(\d+)/gi;
+
+/**
+ * Extracts the issue numbers a PR body closes via GitHub's own
+ * closing-keyword syntax — team-lead's "link a human-authored PR to its
+ * approved requirements" feature (poll_prs.ts uses the first result to look
+ * up an approved pipeline work item for that issue and set the new
+ * pr_review/pr_fix row's `parent_work_item_id`). An explicit `owner/repo#N`
+ * reference is only kept when `owner`/`repo` match this PR's own repo
+ * (case-insensitive) — a cross-repo reference doesn't link to anything this
+ * factory instance can look up. Deduplicated, first-occurrence order
+ * preserved.
+ */
+export function extractLinkedIssueNumbers(
+  body: string,
+  owner: string,
+  repo: string,
+): number[] {
+  const pattern = new RegExp(
+    LINKED_ISSUE_PATTERN.source,
+    LINKED_ISSUE_PATTERN.flags,
+  );
+  const seen = new Set<number>();
+  const result: number[] = [];
+  let match: RegExpExecArray | null = pattern.exec(body);
+  while (match !== null) {
+    const [, matchedOwner, matchedRepo, numberText] = match;
+    if (matchedOwner !== undefined && matchedRepo !== undefined) {
+      const sameRepo =
+        matchedOwner.toLowerCase() === owner.toLowerCase() &&
+        matchedRepo.toLowerCase() === repo.toLowerCase();
+      if (!sameRepo) {
+        match = pattern.exec(body);
+        continue;
+      }
+    }
+    const issueNumber = Number(numberText);
+    if (Number.isFinite(issueNumber) && !seen.has(issueNumber)) {
+      seen.add(issueNumber);
+      result.push(issueNumber);
+    }
+    match = pattern.exec(body);
+  }
+  return result;
+}
+
 /** Drops any reply whose `review_comment_id` isn't one of the comment ids
  * pr_fix_collect.ts actually gathered (team-lead fix round 1b item 10):
  * Claude's structured output is untrusted-influenced (it was asked to
@@ -1240,6 +1932,37 @@ export function filterKnownReplies(
   return replies.filter((reply) =>
     knownCommentIds.has(reply.review_comment_id),
   );
+}
+
+/**
+ * Renders a pr_fix reply body per the factory-fix skill's "返信形式"
+ * (team-lead decision, 2026-09-26, superseding the earlier
+ * `appendCommitShaNote`): a role-tag first line, then Claude's own `body`
+ * (an explanation only — the "対応しました:"/"対応しません:" prefix this
+ * used to require from Claude is now rendered here instead), a blank line,
+ * and a final `対応: <sha7>` line — or `対応: 見送り` when `reply.decision`
+ * is `"skipped"`, since there is no commit to point to for a reply Claude
+ * chose not to act on. `newSha` is `null` on the `nothing_to_commit` path
+ * (team-lead fix: pr_fix_finish.ts still posts queued replies even when
+ * there was nothing to commit) — a `"fixed"` reply then renders `対応: 変更
+ * なし` instead of a sha, since none exists. The caller appends the
+ * `<!-- factory:pr_fix:<id> -->` marker via github.ts's withMarker after
+ * this, same as before. `reply.body` is passed through
+ * `normalizeJapaneseText` (team-lead decision, 2026-09-26).
+ */
+export function renderFixReply(reply: FixReply, newSha: string | null): string {
+  const disposition =
+    reply.decision === "skipped"
+      ? "見送り"
+      : newSha === null
+        ? "変更なし"
+        : `\`${newSha.slice(0, 7)}\``;
+  return [
+    ROLE_TAGS.pr_fix,
+    normalizeJapaneseText(reply.body),
+    "",
+    `対応: ${disposition}`,
+  ].join("\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -1370,10 +2093,17 @@ const REASON_RULES: readonly ReasonRule[] = [
     describe: () =>
       "完了と報告されましたが、コミットメッセージがありませんでした",
   },
+  // team-lead fix: pr_fix_finish.ts's nothing_to_commit branch now also
+  // posts the queued replies, so its Discord reason records both halves
+  // (describeReason recurses over a "; "-joined list — see the module note
+  // above — so each half is matched and translated independently here).
   {
-    pattern: /^done outcome with no changes to commit$/,
-    describe: () =>
-      "完了と報告されましたが、コミットする変更がありませんでした",
+    pattern: /^no changes to commit$/,
+    describe: () => "コミットする変更がありませんでした",
+  },
+  {
+    pattern: /^replies posted$/,
+    describe: () => "返信は投稿済みです",
   },
   {
     pattern: /^needs human attention$/,

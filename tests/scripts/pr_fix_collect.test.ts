@@ -145,7 +145,13 @@ describe("selectNewReviewComments", () => {
       ALLOWED,
     );
     expect(items).toEqual([
-      { id: 4, path: "a.ts", line: 1, body: "fix this", author: "bob" },
+      {
+        id: 4,
+        path: "a.ts",
+        line: 1,
+        body: "fix this",
+        author: "bob",
+      },
     ]);
   });
 
@@ -169,34 +175,25 @@ describe("selectNewReviewComments", () => {
 });
 
 describe("selectNewIssueComments", () => {
-  test("excludes the /factory fix trigger command", () => {
+  // User decision (2026-09-26): pr_fix has no comment-based trigger of its
+  // own (it starts only via the fix_label) — a comment written before the
+  // label is added is plain feedback like any other human comment, verbatim,
+  // even one that happens to look like the old `/factory fix` command.
+  test("keeps a comment that looks like the old trigger command as plain feedback", () => {
     const { items } = selectNewIssueComments(
       [
         {
           id: 1,
           authorLogin: "carol",
           authorAssociation: "OWNER",
-          body: "/factory fix",
+          body: "/factory fix\n\n空文字の敬称も直してください。",
         },
       ],
       ALLOWED,
     );
-    expect(items).toHaveLength(0);
-  });
-
-  test("excludes the trigger command case-insensitively with surrounding whitespace", () => {
-    const { items } = selectNewIssueComments(
-      [
-        {
-          id: 1,
-          authorLogin: "carol",
-          authorAssociation: "OWNER",
-          body: "  /Factory Fix  ",
-        },
-      ],
-      ALLOWED,
+    expect(items[0]?.body).toBe(
+      "/factory fix\n\n空文字の敬称も直してください。",
     );
-    expect(items).toHaveLength(0);
   });
 
   test("maps a regular issue comment with an empty path/null line", () => {
@@ -265,7 +262,15 @@ describe("decideCollectOutcome", () => {
   test("proceeds when there is at least one new comment", () => {
     const outcome = decideCollectOutcome(
       [],
-      [{ id: 1, path: "a.ts", line: 1, body: "x", author: "a" }],
+      [
+        {
+          id: 1,
+          path: "a.ts",
+          line: 1,
+          body: "x",
+          author: "a",
+        },
+      ],
     );
     expect(outcome).toBe("proceed");
   });

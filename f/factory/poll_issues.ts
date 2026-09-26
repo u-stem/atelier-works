@@ -62,6 +62,12 @@ import {
   removeWorktree,
   runCommand,
 } from "./lib/workspace.ts";
+import {
+  allStateLabels,
+  removeTerminalLabels,
+  setStateLabel,
+  stateLabelForFixOutcome,
+} from "./steps/pr_workflow_support.ts";
 
 // ---------------------------------------------------------------------------
 // readRepoHeadSha: `git rev-parse HEAD` for the self clone, used only by
@@ -414,6 +420,34 @@ async function reconcileActiveItems(
                 err instanceof Error ? err.message : String(err),
               ),
             });
+          }
+        }
+
+        // team-lead design (2026-09-26): PR state labels track poll_issues's
+        // own reconcile outcome too — fail_orphan needs a human (same as
+        // any other on_error_flow/pr_fix_finish `failed`), while a
+        // cancelled item (e.g. the PR closed) leaves nothing for a human to
+        // act on, so every state label is cleared instead of set.
+        if (item.kind !== "issue") {
+          if (targetStatus === "failed") {
+            await setStateLabel(
+              client,
+              item.owner,
+              item.repo,
+              labelNumber,
+              config,
+              stateLabelForFixOutcome("failed", config),
+              log,
+            );
+          } else {
+            await removeTerminalLabels(
+              client,
+              item.owner,
+              item.repo,
+              labelNumber,
+              allStateLabels(config),
+              log,
+            );
           }
         }
       }

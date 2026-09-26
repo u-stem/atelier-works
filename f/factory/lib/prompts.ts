@@ -166,6 +166,15 @@ export type PromptPr = {
   base_ref: string;
 };
 
+/** One of the factory's own still-open `pr_review` findings on this PR
+ * (pr_workflow_support.ts's `openFindingsForPrompt`, from `listReviewThreads`)
+ * — see `ReviewPromptInput.openFindings`. */
+export type PromptOpenFinding = {
+  path: string;
+  line: number | null;
+  body: string;
+};
+
 export type ReviewPromptInput = {
   pr: PromptPr;
   /** Unified diff, already truncated to factory_config.diff_max_lines by the
@@ -176,6 +185,11 @@ export type ReviewPromptInput = {
   /** The approved requirement draft, only present when reviewing a PR the
    * factory itself opened. */
   requirements: RequirementDraft | null;
+  /** The factory's own still-unresolved findings from a prior review of this
+   * PR (team-lead decision, 2026-09-26: a re-review must not re-post a
+   * finding substantially the same as one still open). Empty on a PR's
+   * first review. */
+  openFindings: PromptOpenFinding[];
 };
 
 export function reviewPrompt(
@@ -222,7 +236,60 @@ export function reviewPrompt(
     );
   }
 
+  if (input.openFindings.length > 0) {
+    const openFindingsText = input.openFindings
+      .map((finding) => {
+        const location =
+          finding.line === null
+            ? finding.path
+            : `${finding.path}:${String(finding.line)}`;
+        return `- ${location}: ${finding.body}`;
+      })
+      .join("\n\n");
+    sections.push(
+      "",
+      "The findings below are still open from the factory's own most recent",
+      "review of this PR (each one's own comment thread on GitHub is still",
+      "unresolved). Do not report a new finding that is substantially the",
+      "same as one of these — only report something new or changed since.",
+      "If the diff now fully addresses one of these, say nothing about it (a",
+      "separate process resolves its thread).",
+      dataFence(nonce, "open findings from a prior review", openFindingsText),
+    );
+  }
+
   sections.push(
+    "",
+    "For each finding, set `kind` to align with `severity` (kept for",
+    'statistics): blocker/major → "must" (a required fix before merge),',
+    'minor → "imo" (a suggestion or opinion, not blocking), nit → "nits"',
+    '(trivial/stylistic), or "q" for a pure question regardless of severity',
+    "(you are not proposing a change, just asking).",
+    "",
+    "`line` and `end_line` are line numbers in the diff's head (post-change)",
+    "version, not the base version. `end_line` is the last line of a finding",
+    "spanning multiple lines, or `null` for a single-line finding. Fill",
+    "`suggested_code` whenever you can propose one: it must be the complete",
+    "replacement text for lines `line` through `end_line` inclusive, since",
+    "it will be posted as a GitHub suggestion block replacing exactly that",
+    "range — `null` only when no concrete edit is proposed. `message` is",
+    "the prose explanation of the finding, in Japanese like the rest of",
+    "your prose output; `suggested_code` is code and stays as-is, never",
+    "translated.",
+    "",
+    "`summary` is a 2-4 sentence overview stored for the operator's own",
+    "dashboard only — it is never posted to GitHub, so do not write",
+    "disclaimers about this being a first-pass review or about a human",
+    "making the final call (the posted comment already carries a fixed",
+    "sentence to that effect).",
+    "",
+    "Japanese writing style for `message`, `suggestion`, and `summary`: never",
+    "put a half-width space directly between an ASCII/digit run and a",
+    'Japanese character (e.g. write "3件" and "LGTMです", not "3 件" or',
+    '"LGTM です") — this does not apply inside inline code or a fenced code',
+    "block. Use polite です・ます form throughout. Put one sentence per line",
+    "(a newline right after each 「。」); when you have more than one point,",
+    "use a bulleted list instead of one long paragraph.",
     "",
     "Respond with structured output matching the provided JSON schema only.",
     "Write any natural-language prose in your output in Japanese " +
@@ -246,14 +313,29 @@ export const REVIEW_SCHEMA = {
         properties: {
           path: { type: "string" },
           line: { type: ["integer", "null"] },
+          end_line: { type: ["integer", "null"] },
           severity: {
             type: "string",
             enum: ["blocker", "major", "minor", "nit"],
           },
+          kind: {
+            type: "string",
+            enum: ["must", "imo", "nits", "q"],
+          },
           message: { type: "string" },
           suggestion: { type: ["string", "null"] },
+          suggested_code: { type: ["string", "null"] },
         },
-        required: ["path", "line", "severity", "message", "suggestion"],
+        required: [
+          "path",
+          "line",
+          "end_line",
+          "severity",
+          "kind",
+          "message",
+          "suggestion",
+          "suggested_code",
+        ],
         additionalProperties: false,
       },
     },
@@ -308,9 +390,21 @@ export function fixPrompt(
     "You are the fix stage of a Software Factory PR-fix pipeline.",
     "Read the human review feedback and unresolved review comments below, then",
     "edit the repository to address them. You must reply to every comment",
-    "listed below in your structured output, even if you decide not to change",
-    "anything for it (explain why in the reply). Do not change the design or",
-    "requirements described in the approved requirements, if provided.",
+    "listed below in your structured output.",
+    'For every reply, set `decision` to "fixed" when you changed',
+    'something to address it, or "skipped" when you deliberately left it',
+    "as-is; `body` is a short Japanese explanation only (1-2 sentences) — the",
+    "flow itself renders the reply's surrounding structure, so do not prefix",
+    "it yourself. Do not change the design or requirements described in the",
+    "approved requirements, if provided.",
+    "",
+    "Japanese writing style for `body`, `summary`, and `commit_body`: never",
+    "put a half-width space directly between an ASCII/digit run and a",
+    'Japanese character (e.g. write "3件" not "3 件") — this does not apply',
+    "inside inline code or a fenced code block. Use polite です・ます form",
+    "throughout. Put one sentence per line (a newline right after each",
+    "「。」); when you have more than one point, use a bulleted list instead",
+    "of one long paragraph.",
     "",
     nonceBanner(nonce),
     "",
@@ -366,6 +460,17 @@ export function fixPrompt(
 
   sections.push(
     "",
+    'When `outcome` is "done", also propose `commit_subject`: a non-empty,',
+    "single-line Conventional Commits subject (`<type>: <日本語での説明>`, e.g.",
+    '"fix: null チェックを追加", using the same writing-style rules above).',
+    "Aim for about 50 characters or fewer, writing the whole subject within",
+    "that target rather than letting it run long. A subject over 72 code",
+    'points (or ending in "…", or empty/whitespace-only) is rejected',
+    "outright, so stay well under that. `commit_body` is optional: `null`,",
+    "or a short bullet list (`- ...`, one changed point per line) expanding",
+    'on the subject. When `outcome` is not "done", set `commit_subject` to',
+    '`""` and `commit_body` to `null` — there is nothing to commit.',
+    "",
     "Respond with structured output matching the provided JSON schema only.",
     "Write any natural-language prose in your output in Japanese " +
       "(identifiers, code, and file paths stay as-is in their original form).",
@@ -385,13 +490,23 @@ export const FIX_SCHEMA = {
         properties: {
           review_comment_id: { type: "integer" },
           body: { type: "string" },
+          decision: { type: "string", enum: ["fixed", "skipped"] },
         },
-        required: ["review_comment_id", "body"],
+        required: ["review_comment_id", "body", "decision"],
         additionalProperties: false,
       },
     },
     blocked_reason: { type: ["string", "null"] },
+    commit_subject: { type: "string" },
+    commit_body: { type: ["string", "null"] },
   },
-  required: ["outcome", "summary", "replies", "blocked_reason"],
+  required: [
+    "outcome",
+    "summary",
+    "replies",
+    "blocked_reason",
+    "commit_subject",
+    "commit_body",
+  ],
   additionalProperties: false,
 } as const;

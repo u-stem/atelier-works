@@ -74,7 +74,12 @@ import {
 } from "node:fs/promises";
 import { dirname } from "node:path";
 import { maskSecrets } from "./log.ts";
-import { assertBranchName, assertGitHubName, assertSha } from "./types.ts";
+import {
+  assertBranchName,
+  assertGitHubName,
+  assertSha,
+  type GitIdentity,
+} from "./types.ts";
 
 // ---------------------------------------------------------------------------
 // Subprocess execution (shared with github.ts / claude.ts)
@@ -1304,8 +1309,18 @@ export type CommitAndPushOptions = {
   readonly repoDir: string;
   readonly dir: string;
   readonly message: string;
+  /** Factory instance name, embedded in the commit's `Generated-By` trailer (see `withCommitTrailers`). */
+  readonly instanceName: string;
   /** The PR branch's remote head SHA observed when the caller started working. */
   readonly expectedHeadSha: string;
+  /**
+   * The `git commit`'s author/committer identity, passed via
+   * `GIT_AUTHOR_*`/`GIT_COMMITTER_*` env vars for that one invocation only —
+   * never written to git config (see docs/security.md's "pr_fix の安全策").
+   * Callers build this with `gitIdentityForViewer` (github.ts) from the
+   * PAT's own viewer.
+   */
+  readonly author: GitIdentity;
   readonly ghToken: string;
   readonly home?: string;
   readonly path?: string;
@@ -1335,6 +1350,53 @@ const PUSH_REJECTED_SUBSTRINGS = [
 function isNonFastForwardRejection(stderr: string): boolean {
   const lower = stderr.toLowerCase();
   return PUSH_REJECTED_SUBSTRINGS.some((needle) => lower.includes(needle));
+}
+
+// User request (product decision, not security/audit-driven): every commit
+// the factory makes should carry Claude attribution trailers.
+const CLAUDE_COAUTHOR_TRAILER =
+  "Co-Authored-By: Claude <noreply@anthropic.com>";
+
+function generatedByTrailer(instanceName: string): string {
+  return `Generated-By: Software Factory (${instanceName})`;
+}
+
+/**
+ * `GIT_AUTHOR_NAME`/`GIT_AUTHOR_EMAIL`/`GIT_COMMITTER_NAME`/
+ * `GIT_COMMITTER_EMAIL` for `author` — merged into the `git commit`
+ * invocation's env only (see `CommitAndPushOptions.author`'s doc comment).
+ * Never written to git config, so it has no effect on any other git
+ * invocation in this module.
+ */
+function commitIdentityEnv(author: GitIdentity): Record<string, string> {
+  return {
+    GIT_AUTHOR_NAME: author.name,
+    GIT_AUTHOR_EMAIL: author.email,
+    GIT_COMMITTER_NAME: author.name,
+    GIT_COMMITTER_EMAIL: author.email,
+  };
+}
+
+/**
+ * Append the Claude co-author trailer and a `Generated-By: Software
+ * Factory (<instanceName>)` trailer to `message`, separated from the rest
+ * of the message by a blank line (git trailer convention) — unless
+ * `message` already carries the co-author trailer, in which case it's
+ * returned unchanged (idempotent: calling this twice, or on an already-
+ * trailered message, doesn't double the trailers up). Pure function, no
+ * I/O — used by `commitAndPush` before building the `git commit -m`
+ * argv; author/committer identity itself is set separately, via
+ * `CommitAndPushOptions.author` (`GIT_AUTHOR_*`/`GIT_COMMITTER_*` env vars
+ * on the commit invocation only — see that field's doc comment).
+ */
+export function withCommitTrailers(
+  message: string,
+  instanceName: string,
+): string {
+  if (message.includes(CLAUDE_COAUTHOR_TRAILER)) {
+    return message;
+  }
+  return `${message}\n\n${CLAUDE_COAUTHOR_TRAILER}\n${generatedByTrailer(instanceName)}`;
 }
 
 /**
@@ -1422,8 +1484,15 @@ export async function commitAndPush(
       }
 
       const commitResult = await opts.run(
-        buildGitArgv(["commit", "-m", opts.message]),
-        { cwd: opts.dir, env: local },
+        buildGitArgv([
+          "commit",
+          "-m",
+          withCommitTrailers(opts.message, opts.instanceName),
+        ]),
+        {
+          cwd: opts.dir,
+          env: { ...local, ...commitIdentityEnv(opts.author) },
+        },
       );
       if (commitResult.exitCode !== 0) {
         throw gitError("git commit failed", commitResult);

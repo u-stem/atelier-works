@@ -19,6 +19,7 @@ import { loadConfig } from "./lib/config.ts";
 import {
   addNotice,
   bumpWatermarks,
+  findApprovedWorkItemForIssue,
   insertWorkItem,
   latestPrWorkItem,
   listActive,
@@ -29,12 +30,10 @@ import {
 } from "./lib/db.ts";
 import {
   addLabels,
-  commentIssue,
   type GhClient,
   getIssue,
   getPr,
   getViewer,
-  listIssueComments,
   listPrReviewComments,
   listPrReviews,
   type PrSearchItem,
@@ -45,16 +44,15 @@ import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import {
   decidePrActions,
   filterByRepoAllowlist,
-  isFactoryFixCommand,
   type PrCandidate,
 } from "./lib/poll_support.ts";
-import {
-  type FactoryConfig,
-  isOneOf,
-  type LabelerAssociation,
-  type WorkItem,
-} from "./lib/types.ts";
+import type { WorkItem } from "./lib/types.ts";
 import { runCommand } from "./lib/workspace.ts";
+import {
+  allStateLabels,
+  extractLinkedIssueNumbers,
+  removeTerminalLabels,
+} from "./steps/pr_workflow_support.ts";
 
 async function recordFailureSafe(
   step: string,
@@ -94,42 +92,6 @@ function activeItemsByPr(active: readonly WorkItem[]): Map<string, WorkItem[]> {
   return byPr;
 }
 
-export type FixCommandComment = {
-  readonly id: number;
-  readonly authorLogin: string;
-  readonly authorAssociation: LabelerAssociation | string | null;
-  readonly body: string;
-};
-
-export type PartitionedFixCommands = {
-  /** Newest-first is not guaranteed — callers sort by id themselves. */
-  readonly trusted: FixCommandComment[];
-  readonly untrusted: FixCommandComment[];
-};
-
-/**
- * Pure partition of `/factory fix` command comments by author_association
- * (security-auditor fix round 1b item 1, extending spec-cycle2.md §7 item
- * 1's `allowed_labeler_associations` check — already applied to trigger
- * labels — to this comment-based trigger too). `comments` should already be
- * filtered to `isFactoryFixCommand` bodies.
- */
-export function partitionFixCommandsByAssociation(
-  comments: readonly FixCommandComment[],
-  allowedAssociations: readonly LabelerAssociation[],
-): PartitionedFixCommands {
-  const trusted: FixCommandComment[] = [];
-  const untrusted: FixCommandComment[] = [];
-  for (const comment of comments) {
-    if (isOneOf(comment.authorAssociation, allowedAssociations)) {
-      trusted.push(comment);
-    } else {
-      untrusted.push(comment);
-    }
-  }
-  return { trusted, untrusted };
-}
-
 // ---------------------------------------------------------------------------
 // team-lead fix round 2 item f: watermark contract — "observed" (what
 // poll_prs saw when it claimed a work item, set unconditionally every
@@ -153,10 +115,16 @@ type PrFixSeed = {
 };
 
 /** This poll's own observed max ids, recorded via setObservedWatermarks at
- * claim time regardless of kind (review or fix). */
+ * claim time regardless of kind (review or fix). No `commentId` here: that
+ * field only ever fed `observed_comment_id`, whose sole reader was this
+ * function's own (since removed) comment-command re-detection cutoff — removed
+ * 2026-09-26 per the user decision that pr_fix starts only via the
+ * `fix_label`, never from a comment (see decidePrActions in
+ * lib/poll_support.ts). Nothing else in this codebase reads
+ * `observed_comment_id`, so it is left uncomputed rather than written with
+ * no reader; the column itself is untouched (see the migration). */
 type ObservedSeed = {
   readonly reviewId: number;
-  readonly commentId: number;
   readonly reviewCommentId: number;
 };
 
@@ -164,6 +132,10 @@ type PrCandidateContext = {
   readonly candidate: PrCandidate;
   readonly prevFixSeed: PrFixSeed;
   readonly observed: ObservedSeed;
+  /** The approved-or-later pipeline work item for the issue this PR's body
+   * closes (Closes/Fixes/Resolves #N), if any — becomes the new
+   * pr_review/pr_fix row's parent_work_item_id. */
+  readonly linkedParentWorkItemId: number | null;
 };
 
 function prKey(owner: string, repo: string, number: number): string {
@@ -175,31 +147,17 @@ async function buildPrCandidate(
   found: PrSearchItem,
   viewerLogin: string,
   activeForPr: readonly WorkItem[],
-  allowedAssociations: readonly LabelerAssociation[],
-  log: Logger,
 ): Promise<PrCandidateContext> {
-  // `listIssueComments`'s `sinceId` depends on `latestAny`, so it (and
-  // `latestFix`, needed before startFix's carry-forward regardless) are
-  // fetched first; the rest run in parallel off those two values.
+  // `latestFix` (needed before startFix's carry-forward regardless) is
+  // fetched first; the rest run in parallel off it.
   // latestPrWorkItem now returns the full WorkItem row directly (lib-core
   // push), so no follow-up getWorkItem(id) round trip is needed.
-  //
-  // The `/factory fix` re-detection cutoff is `latestAny`'s *observed*
-  // comment id, not its *last* (processed) one: last_comment_id is only
-  // bumped once pr_fix_finish actually reaches its end, so a pr_fix attempt
-  // that crashes/errors before then would otherwise leave last_comment_id
-  // stuck behind the same already-seen comment forever, re-triggering a new
-  // cycle on every subsequent poll (infinite retrigger loop). observed_* is
-  // set unconditionally at claim time below, so it always advances past
-  // anything poll_prs has ever acted on, whether or not that attempt
-  // succeeded.
   const [latestAny, latestFix] = await Promise.all([
     latestPrWorkItem(found.owner, found.repo, found.number),
     latestPrWorkItem(found.owner, found.repo, found.number, { kind: "pr_fix" }),
   ]);
-  const observedCommentCutoff = latestAny?.observed_comment_id ?? 0;
 
-  const [pr, asIssue, reviews, reviewComments, comments] = await Promise.all([
+  const [pr, asIssue, reviews, reviewComments] = await Promise.all([
     getPr(client, found.owner, found.repo, found.number),
     getIssue(client, found.owner, found.repo, found.number),
     listPrReviews(client, found.owner, found.repo, found.number, viewerLogin),
@@ -210,40 +168,27 @@ async function buildPrCandidate(
       found.number,
       viewerLogin,
     ),
-    listIssueComments(client, found.owner, found.repo, found.number, {
-      viewer: viewerLogin,
-      sinceId: observedCommentCutoff,
-    }),
   ]);
 
-  // github.ts's listIssueComments already excludes the viewer's own posts
-  // and any marker-carrying comment and honors sinceId — only the
-  // command-text check and the author_association gate are left for us.
-  const fixCommandComments = comments.items.filter((comment) =>
-    isFactoryFixCommand(comment.body),
+  // team-lead: link a human-authored PR to its approved requirements —
+  // the first issue this PR's own body closes (Closes/Fixes/Resolves #N),
+  // if that issue has an approved-or-later pipeline work item, becomes
+  // this new pr_review/pr_fix row's parent_work_item_id the same way a
+  // factory-opened PR already gets one from pipeline_decide.ts.
+  const linkedIssueNumbers = extractLinkedIssueNumbers(
+    pr.body,
+    found.owner,
+    found.repo,
   );
-  const { trusted: trustedFixCommands, untrusted: untrustedFixCommands } =
-    partitionFixCommandsByAssociation(fixCommandComments, allowedAssociations);
-  if (untrustedFixCommands.length > 0) {
-    const authors = untrustedFixCommands.map(
-      (comment) =>
-        `${comment.authorLogin} (${String(comment.authorAssociation)})`,
-    );
-    log.warn("ignoring /factory fix from a disallowed author_association", {
-      owner: found.owner,
-      repo: found.repo,
-      number: found.number,
-      authors,
-    });
-    await addNotice({
-      kind: "fix_trigger_association_excluded",
-      message: `${found.owner}/${found.repo}#${found.number}: allowed_labeler_associations に含まれていないため /factory fix を無視しました(${authors.join(", ")})`,
-    });
-  }
-
-  const newFixCommands = trustedFixCommands
-    .sort((a, b) => a.id - b.id)
-    .map((comment) => ({ id: comment.id }));
+  const firstLinkedIssue = linkedIssueNumbers[0];
+  const approvedParent =
+    firstLinkedIssue === undefined
+      ? null
+      : await findApprovedWorkItemForIssue(
+          found.owner,
+          found.repo,
+          firstLinkedIssue,
+        );
 
   const candidate: PrCandidate = {
     owner: found.owner,
@@ -255,16 +200,9 @@ async function buildPrCandidate(
     hasActiveReviewingItem: activeForPr.some(
       (item) => item.kind === "pr_review",
     ),
-    hasActiveFixingItem: activeForPr.some((item) => item.kind === "pr_fix"),
     lastKnownHeadSha: latestAny?.head_sha ?? null,
     previousFixRound: latestFix?.fix_round ?? 0,
-    // PrCandidate.lastCommentId is lib/poll_support.ts's field name
-    // (unchanged, per team-lead) — the value populated here is actually
-    // observedCommentCutoff (observed_comment_id), not a last_* watermark.
-    lastCommentId: observedCommentCutoff,
-    newFixCommands,
     maxReviewId: reviews.maxId,
-    maxCommentId: comments.maxId,
   };
 
   return {
@@ -276,9 +214,9 @@ async function buildPrCandidate(
     },
     observed: {
       reviewId: reviews.maxId,
-      commentId: comments.maxId,
       reviewCommentId: reviewComments.maxId,
     },
+    linkedParentWorkItemId: approvedParent?.id ?? null,
   };
 }
 
@@ -329,11 +267,10 @@ export async function claimPr(
 }
 
 async function startReview(
-  client: GhClient,
   candidate: PrCandidate,
   viewerLogin: string,
-  config: FactoryConfig,
   observed: ObservedSeed,
+  linkedParentWorkItemId: number | null,
 ): Promise<void> {
   const workItemId = await insertWorkItem({
     cycle: 1,
@@ -353,26 +290,23 @@ async function startReview(
     resume_url: null,
     cancel_url: null,
     head_sha: candidate.headSha,
-    parent_work_item_id: null,
+    parent_work_item_id: linkedParentWorkItemId,
   });
   // team-lead fix round 2 item f: pr_review never consumes last_* (it
   // doesn't gather "feedback since a watermark" the way pr_fix does) — only
   // the observed snapshot is recorded here.
   await setObservedWatermarks(workItemId, {
     observed_review_id: observed.reviewId,
-    observed_comment_id: observed.commentId,
     observed_review_comment_id: observed.reviewCommentId,
   });
-  await commentIssue(
-    client,
-    candidate.owner,
-    candidate.repo,
-    candidate.number,
-    "pr_review",
-    workItemId,
-    `Factory(インスタンス \`${config.instance_name}\`)が \`${candidate.headSha.slice(0, 7)}\` 時点でこの PR のレビューを開始しました。`,
-    viewerLogin,
-  );
+  // team-lead (batch B/C round): no "started reviewing" PR comment — claim
+  // idempotency never actually depended on it (searchPrs + decidePrActions
+  // check the wip label and this PR's non-terminal work_items rows
+  // directly; commentIssue's marker dedupe was never load-bearing here),
+  // and an unrequested factory narration comment on a human's PR is noise.
+  // Re-discovery once the trigger label falls off now comes from the state
+  // label pr_review_post.ts sets on this PR (team-lead design, 2026-09-26),
+  // not from a factory-authored comment.
   const flowJobId = await wmill.runFlowAsync("f/factory/pr_review", {
     work_item_id: workItemId,
   });
@@ -380,12 +314,11 @@ async function startReview(
 }
 
 async function startFix(
-  client: GhClient,
   candidate: PrCandidate,
   viewerLogin: string,
-  config: FactoryConfig,
   prevFixSeed: PrFixSeed,
   observed: ObservedSeed,
+  linkedParentWorkItemId: number | null,
 ): Promise<void> {
   const round = candidate.previousFixRound + 1;
   const workItemId = await insertWorkItem({
@@ -406,7 +339,7 @@ async function startFix(
     resume_url: null,
     cancel_url: null,
     head_sha: candidate.headSha,
-    parent_work_item_id: null,
+    parent_work_item_id: linkedParentWorkItemId,
   });
   await setFixRound(workItemId, round);
   // team-lead fix round 2 item f: seed the new row's last_* 3 columns by
@@ -421,19 +354,13 @@ async function startFix(
   });
   await setObservedWatermarks(workItemId, {
     observed_review_id: observed.reviewId,
-    observed_comment_id: observed.commentId,
     observed_review_comment_id: observed.reviewCommentId,
   });
-  await commentIssue(
-    client,
-    candidate.owner,
-    candidate.repo,
-    candidate.number,
-    "pr_fix",
-    workItemId,
-    `Factory(インスタンス \`${config.instance_name}\`)がこの PR の修正 round ${round} を開始しました。`,
-    viewerLogin,
-  );
+  // team-lead (batch B/C round): no "started fixing round N" PR comment —
+  // see startReview's identical note above for why claim idempotency
+  // doesn't depend on it. Re-discovery once the trigger label falls off now
+  // comes from the state label pr_fix_finish.ts sets on this PR (team-lead
+  // design, 2026-09-26), not from a factory-authored comment.
   const flowJobId = await wmill.runFlowAsync("f/factory/pr_fix", {
     work_item_id: workItemId,
   });
@@ -471,7 +398,9 @@ export async function main(): Promise<{
         ownerKind: owner.kind,
         viewer: viewer.login,
         reviewLabel: config.review_label,
+        fixLabel: config.fix_label,
         wipLabel: config.wip_label,
+        stateLabels: allStateLabels(config),
       });
       rawCandidates.push(...found);
     } catch (err) {
@@ -488,14 +417,7 @@ export async function main(): Promise<{
       const activeForPr =
         byPr.get(`${found.owner}/${found.repo}#${found.number}`) ?? [];
       contexts.push(
-        await buildPrCandidate(
-          client,
-          found,
-          viewer.login,
-          activeForPr,
-          config.allowed_labeler_associations,
-          log,
-        ),
+        await buildPrCandidate(client, found, viewer.login, activeForPr),
       );
     } catch (err) {
       failed += 1;
@@ -564,13 +486,26 @@ export async function main(): Promise<{
         continue;
       }
 
+      // team-lead design (2026-09-26): the PR is now in progress again —
+      // whatever state label a previous cycle left on it (changes-requested
+      // / reviewed / rereview / needs-human) no longer describes its
+      // current state, so it's cleared here rather than left stale until
+      // the new cycle's own terminal step sets the next one.
+      await removeTerminalLabels(
+        client,
+        candidate.owner,
+        candidate.repo,
+        candidate.number,
+        allStateLabels(config),
+        log,
+      );
+
       if (review.kind === "trigger_review") {
         await startReview(
-          client,
           candidate,
           viewer.login,
-          config,
           context.observed,
+          context.linkedParentWorkItemId,
         );
         reviewsStarted += 1;
         if (review.removeLabel) {
@@ -586,12 +521,11 @@ export async function main(): Promise<{
 
       if (fix.kind === "trigger_fix") {
         await startFix(
-          client,
           candidate,
           viewer.login,
-          config,
           context.prevFixSeed,
           context.observed,
+          context.linkedParentWorkItemId,
         );
         fixesStarted += 1;
         if (fix.removeLabel) {

@@ -34,6 +34,7 @@ import {
   type NoticeRecord,
   type RequirementDraft,
   type ReviewFinding,
+  type ReviewFindingKind,
   type ReviewRecord,
   type ReviewSeverity,
   type ReviewVerdict,
@@ -633,6 +634,12 @@ const REVIEW_SEVERITIES: readonly ReviewSeverity[] = [
   "minor",
   "nit",
 ];
+const REVIEW_FINDING_KINDS: readonly ReviewFindingKind[] = [
+  "must",
+  "imo",
+  "nits",
+  "q",
+];
 
 /** Inserts a factory.reviews row and returns its id. */
 export async function insertReview(
@@ -651,25 +658,72 @@ export async function insertReview(
   return parseId(row.id, "id");
 }
 
-function isReviewFinding(value: unknown): value is ReviewFinding {
-  if (!isRecord(value)) {
-    return false;
+/** `kind` didn't exist before the review-finding schema change — derives it
+ * from `severity` for a pre-existing factory.reviews row (spec-cycle2.md
+ * review-format update: at least one real row already exists, so read-back
+ * must stay backward-compatible even though write-side validation
+ * (REVIEW_SCHEMA) requires all 8 fields going forward). */
+function deriveKindFromSeverity(severity: ReviewSeverity): ReviewFindingKind {
+  switch (severity) {
+    case "blocker":
+    case "major":
+      return "must";
+    case "minor":
+      return "imo";
+    case "nit":
+      return "nits";
   }
-  return (
-    isString(value.path) &&
-    (value.line === null || isNumber(value.line)) &&
-    isOneOf(value.severity, REVIEW_SEVERITIES) &&
-    isString(value.message) &&
-    (value.suggestion === null || isString(value.suggestion))
-  );
+}
+
+/** Parses one factory.reviews row's `findings` array element, backfilling
+ * `kind` (derived from `severity`) and `end_line`/`suggested_code`
+ * (defaulted to `null`) when a pre-existing row predates those columns. */
+function parseReviewFinding(value: unknown, field: string): ReviewFinding {
+  if (
+    !isRecord(value) ||
+    !isString(value.path) ||
+    !(value.line === null || isNumber(value.line)) ||
+    !isOneOf(value.severity, REVIEW_SEVERITIES) ||
+    !isString(value.message) ||
+    !(value.suggestion === null || isString(value.suggestion))
+  ) {
+    throw new Error(`db: row field "${field}" contains a malformed finding`);
+  }
+  if (
+    value.end_line !== undefined &&
+    value.end_line !== null &&
+    !isNumber(value.end_line)
+  ) {
+    throw new Error(`db: row field "${field}" contains a malformed finding`);
+  }
+  if (
+    value.suggested_code !== undefined &&
+    value.suggested_code !== null &&
+    !isString(value.suggested_code)
+  ) {
+    throw new Error(`db: row field "${field}" contains a malformed finding`);
+  }
+  if (value.kind !== undefined && !isOneOf(value.kind, REVIEW_FINDING_KINDS)) {
+    throw new Error(`db: row field "${field}" contains a malformed finding`);
+  }
+  return {
+    path: value.path,
+    line: value.line,
+    end_line: value.end_line ?? null,
+    severity: value.severity,
+    kind: value.kind ?? deriveKindFromSeverity(value.severity),
+    message: value.message,
+    suggestion: value.suggestion,
+    suggested_code: value.suggested_code ?? null,
+  };
 }
 
 /** Parses a full factory.reviews row (for future readers). */
 export function toReviewRecord(row: SqlRow): ReviewRecord {
-  const findings = parseJsonArray(row.findings, "findings");
-  if (!findings.every(isReviewFinding)) {
-    throw new Error('db: row field "findings" contains a malformed finding');
-  }
+  const rawFindings = parseJsonArray(row.findings, "findings");
+  const findings = rawFindings.map((finding) =>
+    parseReviewFinding(finding, "findings"),
+  );
   return {
     work_item_id: parseId(row.work_item_id, "work_item_id"),
     head_sha: parseRequiredString(row.head_sha, "head_sha"),
@@ -681,6 +735,38 @@ export function toReviewRecord(row: SqlRow): ReviewRecord {
       "posted_review_id",
     ),
   };
+}
+
+/**
+ * Whether a factory review of this PR was already recorded before this
+ * work item (team-lead decision, 2026-09-26): joins factory.reviews to
+ * factory.work_items on work_item_id and filters to rows for the same
+ * (owner, repo, pr_number) but a different work_item_id — this in-flight
+ * pr_review's own not-yet-inserted row (or a still-uncommitted earlier
+ * insert within the same call) never counts as a "prior" review. True for
+ * either a posted or a gated-and-recorded prior review — both count as "the
+ * factory has reviewed this PR before", which is what selects the
+ * re-review-clean vs first-review-clean body (renderReviewSummary's
+ * ReviewBodyMode).
+ */
+export async function hasPriorReview(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  excludingWorkItemId: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  const rows = await sql`
+    SELECT 1
+    FROM factory.reviews
+    JOIN factory.work_items ON factory.work_items.id = factory.reviews.work_item_id
+    WHERE factory.work_items.owner = ${owner}
+      AND factory.work_items.repo = ${repo}
+      AND factory.work_items.pr_number = ${prNumber}::integer
+      AND factory.reviews.work_item_id != ${excludingWorkItemId}::bigint
+    LIMIT 1
+  `.fetch();
+  return rows.length > 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -932,6 +1018,38 @@ export async function nextCycleForIssue(
     return 1;
   }
   return parseNumericLike(row.next_cycle, "next_cycle");
+}
+
+const APPROVED_OR_LATER_STATUSES: readonly WorkItemStatus[] = [
+  "approved",
+  "implementing",
+  "pr_open",
+];
+
+/**
+ * Most recent (by cycle, id as a same-cycle tiebreak) `kind = 'issue'` work
+ * item for (owner, repo, issueNumber) whose status has reached `approved`
+ * or later (`approved` / `implementing` / `pr_open`) — `null` if none
+ * exists. Used to link a human-created PR back to its parent issue's
+ * approved requirements.
+ */
+export async function findApprovedWorkItemForIssue(
+  owner: string,
+  repo: string,
+  issueNumber: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<WorkItem | null> {
+  const statuses: string[] = [...APPROVED_OR_LATER_STATUSES];
+  const rows = await sql`
+    SELECT * FROM factory.work_items
+    WHERE kind = 'issue' AND owner = ${owner} AND repo = ${repo}
+      AND issue_number = ${issueNumber}::integer
+      AND status = ANY(${statuses})
+    ORDER BY cycle DESC, id DESC
+    LIMIT 1
+  `.fetch();
+  const row = rows[0];
+  return row === undefined ? null : toWorkItem(row);
 }
 
 export type LatestPrWorkItemOpts = {

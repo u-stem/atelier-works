@@ -1,11 +1,14 @@
-// PathScript step for f/factory/pr_fix: gathers human feedback (PR reviews,
-// inline review comments, and plain issue comments) newer than the work
-// item's last_review_id / last_comment_id watermarks, excluding the
-// factory's own posts (spec-cycle2.md §7 item 1) — the "approved
-// requirements" input is fetched directly by pr_fix_apply.ts /
-// pr_fix_verify.ts from parent_work_item_id instead of being threaded
-// through this step's JSON result (a RequirementDraft's created_at:Date
-// wouldn't survive a flow-result JSON round trip anyway).
+// PathScript step for f/factory/pr_fix: gathers feedback (PR reviews,
+// inline review comments, and issue comments) newer than the work item's
+// last_review_id / last_comment_id watermarks (spec-cycle2.md §7 item 1) —
+// including the factory's own `pr_review`-kind review and its unmarked
+// inline findings (adding the `factory:fix` label after the factory's own
+// review means "fix those findings"), excluding only the factory's own
+// `pr_fix` replies.
+// The "approved requirements" input is fetched directly by
+// pr_fix_apply.ts / pr_fix_verify.ts from parent_work_item_id instead of
+// being threaded through this step's JSON result (a RequirementDraft's
+// created_at:Date wouldn't survive a flow-result JSON round trip anyway).
 
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "../lib/config.ts";

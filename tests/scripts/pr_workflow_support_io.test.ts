@@ -59,7 +59,7 @@ describe("removeTerminalLabels", () => {
     const { log } = createFakeLogger();
     await removeTerminalLabels(
       { run, ghToken: "token" },
-      "u-stem",
+      "octo-owner",
       "atelier-works",
       7,
       ["factory:wip", "factory:fix"],
@@ -76,7 +76,7 @@ describe("removeTerminalLabels", () => {
     await expect(
       removeTerminalLabels(
         { run, ghToken: "token" },
-        "u-stem",
+        "octo-owner",
         "atelier-works",
         7,
         ["factory:wip"],
@@ -91,7 +91,7 @@ describe("removeTerminalLabels", () => {
     await expect(
       removeTerminalLabels(
         { run, ghToken: "token" },
-        "u-stem",
+        "octo-owner",
         "atelier-works",
         7,
         ["factory:wip"],
@@ -105,7 +105,7 @@ describe("removeTerminalLabels", () => {
     const { log, warnings } = createFakeLogger();
     await removeTerminalLabels(
       { run, ghToken: "token" },
-      "u-stem",
+      "octo-owner",
       "atelier-works",
       7,
       ["factory:wip"],
@@ -122,7 +122,7 @@ describe("removeTerminalLabels", () => {
     const { log } = createFakeLogger();
     await removeTerminalLabels(
       { run, ghToken: "token" },
-      "u-stem",
+      "octo-owner",
       "atelier-works",
       7,
       ["factory:wip", "factory:fix"],

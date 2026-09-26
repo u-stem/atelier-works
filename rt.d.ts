@@ -22,14 +22,18 @@ declare namespace RT {
     repo_allowlist: string[],
     daily_budget_usd: number,
     review_post_mode: string,
+    reviewed_label: string,
+    rereview_label: string,
     default_reviewers: string[],
     worktree_ttl_days: number,
     claude_timeout_sec: number,
     max_fix_diff_lines: number,
+    needs_human_label: string,
     windmill_public_url: string,
     max_fix_changed_files: number,
     allowed_check_commands: string[],
     max_budget_usd_per_run: number,
+    changes_requested_label: string,
     allowed_labeler_associations: string[]
   }
 }

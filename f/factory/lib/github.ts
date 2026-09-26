@@ -11,11 +11,17 @@
 //
 // Self-reentry guard (spec-cycle2.md §7 item 1): every comment / review /
 // reply the factory posts carries a `<!-- factory:<kind>:<work_item_id> -->`
-// marker (`withMarker`); `hasMarker` / `isOwnPost` let pollers tell a human
-// post from a factory one.
+// marker (`withMarker`); `isFactoryPost` (login match via `isOwnPost` AND
+// `hasMarker`) lets pollers tell a human post from a factory one — the
+// factory runs under the same GitHub account as its human operator, so
+// login alone can never make that call.
 
 import { maskSecrets } from "./log.ts";
-import type { FactoryOwnerKind, LabelerAssociation } from "./types.ts";
+import type {
+  FactoryOwnerKind,
+  GitIdentity,
+  LabelerAssociation,
+} from "./types.ts";
 import { assertGitHubName } from "./types.ts";
 import type { CommandRunner } from "./workspace.ts";
 
@@ -283,7 +289,8 @@ export function withMarker(
  * post came from the factory itself" regardless of which work item posted
  * it) — but see spec-cycle2.md §7 item 1 / the security-audit fix: a marker
  * alone must never be treated as proof of factory authorship on its own;
- * callers must additionally require `isOwnPost(login, viewer)`.
+ * callers must additionally require `isOwnPost(login, viewer)` (see
+ * `isFactoryPost`, which combines both).
  */
 export function hasMarker(
   text: string,
@@ -302,6 +309,35 @@ export function isOwnPost(login: string, viewer: string): boolean {
   return login.toLowerCase() === viewer.toLowerCase();
 }
 
+/**
+ * Whether a post (comment/review/review-comment) is one the factory itself
+ * made, as opposed to a human's — requires BOTH conditions:
+ *
+ * - `isOwnPost(login, viewer)`: login alone is not enough, because the
+ *   factory runs under the same GitHub account as its human operator
+ *   (shared PAT) — a login match cannot by itself distinguish the
+ *   operator's own comment (e.g. a plain instruction comment) from the
+ *   factory's.
+ * - `hasMarker(body, kind)`: a marker alone is not enough either
+ *   (spec-cycle2.md §7 item 1 / security-audit fix) — a third party could
+ *   paste a matching `<!-- factory:... -->` line into their own post to
+ *   have it ignored.
+ *
+ * Pass `kind` to further require a specific marker kind, e.g. only the
+ * factory's own `pr_fix` replies (not its `pr_review` review) should be
+ * excluded from pr_fix's feedback collection.
+ */
+export function isFactoryPost(
+  login: string | undefined,
+  viewer: string,
+  body: string,
+  kind?: string,
+): boolean {
+  if (typeof login !== "string") return false;
+  if (!isOwnPost(login, viewer)) return false;
+  return hasMarker(body, kind);
+}
+
 /** GitHub's `author_association` value for a comment/review/timeline-event
  * author, or `null` when absent — same type as
  * `LabeledTimelineEvent.authorAssociation` (spec-cycle2.md §7 item 1's
@@ -317,7 +353,7 @@ function parseAuthorAssociation(
 // Viewer
 // ---------------------------------------------------------------------------
 
-export type Viewer = { readonly login: string };
+export type Viewer = { readonly login: string; readonly id: number };
 
 /** `{ login: string }` — shared by `getViewer` and any GitHub "actor" object (e.g. timeline events). */
 type LoginPayload = { readonly login: string };
@@ -328,14 +364,39 @@ function isLoginPayload(value: unknown): value is LoginPayload {
   return typeof (value as { login: unknown }).login === "string";
 }
 
+/** `GET /user`'s payload shape needed by `getViewer` — a `LoginPayload` plus the numeric account `id` used to build a GitHub noreply commit email (`gitIdentityForViewer`). */
+type ViewerPayload = LoginPayload & { readonly id: number };
+
+function isViewerPayload(value: unknown): value is ViewerPayload {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as { login: unknown; id: unknown };
+  return typeof record.login === "string" && typeof record.id === "number";
+}
+
 export async function getViewer(client: GhClient): Promise<Viewer> {
   const response = await callGhApi(client, "user");
   ensureSuccess(response, "GET /user");
   const parsed = parseJsonBody(response, "GET /user");
-  if (!isLoginPayload(parsed)) {
+  if (!isViewerPayload(parsed)) {
     throw new Error("GET /user: unexpected response shape");
   }
-  return { login: parsed.login };
+  return { login: parsed.login, id: parsed.id };
+}
+
+/**
+ * The git author/committer identity for a commit the factory makes, derived
+ * from the viewer (the GitHub account the PAT resolves to). Uses GitHub's
+ * noreply commit-email form (`<numeric id>+<login>@users.noreply.github.com`)
+ * so no personal email is ever written to a commit — see docs/security.md's
+ * "pr_fix の安全策" section. Pure function; `commitAndPush` (workspace.ts)
+ * passes the result through the process env only (`GIT_AUTHOR_*`/
+ * `GIT_COMMITTER_*`), never into git config.
+ */
+export function gitIdentityForViewer(viewer: Viewer): GitIdentity {
+  return {
+    name: viewer.login,
+    email: `${viewer.id}+${viewer.login}@users.noreply.github.com`,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -786,22 +847,24 @@ export type IssueComment = {
 export type ListIssueCommentsOptions = {
   readonly viewer: string;
   /** Only comments with an id greater than this are returned (the caller's
-   * `last_comment_id` high-water mark); omit to return every human comment. */
+   * `last_comment_id` high-water mark); omit to return every comment
+   * (excluding the factory's own marker-bearing posts — see
+   * `isFactoryPost`). */
   readonly sinceId?: number;
 };
 
 /**
- * `GET .../issues/{number}/comments` (paginated), filtered to human,
- * non-marker comments newer than `sinceId` — mirrors `listPrReviews`'s
- * shape (viewer-exclusion, `{ items, maxId }`). Feeds the `/factory fix`
- * slash-command trigger detector (poll_prs.ts): a comment is excluded here
- * when it's `isOwnPost` for `viewer` OR carries a factory marker. Unlike
- * `listPrReviews`/`listPrReviewComments` (security-audit fix: a marker
- * alone is never proof of authorship for *review-visibility* purposes),
- * excluding on marker alone here doesn't reopen that hole — the exact-match
- * `/factory fix` command text can never coexist with an appended marker
- * line in the same comment body, so this only ever drops comments that
- * could never have matched the command anyway.
+ * `GET .../issues/{number}/comments` (paginated), filtered to non-factory
+ * comments newer than `sinceId` — mirrors `listPrReviews`'s shape
+ * (`{ items, maxId }`). Feeds pr_fix's human-feedback collection
+ * detector (poll_prs.ts): a comment is excluded here only when it is the
+ * factory's own post — `isFactoryPost(login, opts.viewer, raw.body)` (any
+ * marker kind), i.e. authored by the viewer login AND carrying a factory
+ * marker. The factory runs under the same GitHub account as its human
+ * operator (shared PAT), so a plain instruction comment typed by the
+ * operator has the same login as the factory and is deliberately kept —
+ * only a marker-bearing post (the factory's own comment, or an old "review
+ * started" announcement) is dropped.
  */
 export async function listIssueComments(
   client: GhClient,
@@ -825,8 +888,7 @@ export async function listIssueComments(
     if (raw.id > maxId) maxId = raw.id;
     if (opts.sinceId !== undefined && raw.id <= opts.sinceId) continue;
     const login = raw.user?.login;
-    if (typeof login === "string" && isOwnPost(login, opts.viewer)) continue;
-    if (hasMarker(raw.body)) continue;
+    if (isFactoryPost(login, opts.viewer, raw.body)) continue;
     items.push({
       id: raw.id,
       authorLogin: typeof login === "string" ? login : "",
@@ -951,20 +1013,38 @@ export type SearchPrsOptions = {
   readonly ownerKind: FactoryOwnerKind;
   readonly viewer: string;
   readonly reviewLabel: string;
+  readonly fixLabel: string;
   readonly wipLabel: string;
+  /** The four PR state labels (pr_workflow_support.ts's allStateLabels) —
+   * one `label:"<label>"` query is issued per entry, re-discovering a PR
+   * the factory is already tracking whose trigger label has since fallen
+   * off (team-lead design, 2026-09-26: replaces the former
+   * `commenter:<viewer>` query — see the doc comment below). */
+  readonly stateLabels: readonly string[];
 };
 
 /**
- * `GET /search/issues` scoped to PRs: review-requested, assigned, or
- * labeled `reviewLabel`, excluding `wipLabel` (spec-cycle2.md §7 item 1).
+ * `GET /search/issues` scoped to PRs: review-requested, assigned, labeled
+ * `reviewLabel` or `fixLabel`, or carrying one of `stateLabels` — excluding
+ * `wipLabel` (spec-cycle2.md §7 item 1). The state-label queries re-discover
+ * a PR whose trigger label has already fallen off (e.g. review finished and
+ * the review label was removed) before a human acts on it (approving,
+ * adding the fix label, or pushing a fix themselves) — without them,
+ * such a PR would never re-enter the candidate set (E2E gap). This replaces
+ * the former `commenter:<viewer>` query (team-lead design, 2026-09-26):
+ * `commenter:` re-discovered a PR via the factory's own opening comment,
+ * but the factory no longer posts one (see poll_prs.ts's startReview/
+ * startFix); the state labels the factory itself sets and swaps are a more
+ * precise, human-visible substitute that also doubles as an at-a-glance PR
+ * status indicator.
  *
- * Runs as three separate queries, not one combined
- * `(review-requested:X OR assignee:X OR label:Y)` query — confirmed
+ * Runs as one query per qualifier, not one combined
+ * `(review-requested:X OR assignee:X OR label:Y OR ...)` query — confirmed
  * empirically (real-flow E2E failure) that GitHub's `/search/issues` does
  * not support parenthesized OR grouping: the combined query always
  * returned 0 results, while each qualifier alone matched. Results are
  * merged and de-duplicated by the search item's GitHub `id` (a PR can
- * satisfy more than one of the three qualifiers at once).
+ * satisfy more than one qualifier at once).
  */
 export async function searchPrs(
   client: GhClient,
@@ -979,6 +1059,8 @@ export async function searchPrs(
     `${base} review-requested:${opts.viewer}`,
     `${base} assignee:${opts.viewer}`,
     `${base} label:"${opts.reviewLabel}"`,
+    `${base} label:"${opts.fixLabel}"`,
+    ...opts.stateLabels.map((label) => `${base} label:"${label}"`),
   ];
   const resultsByQuery = await Promise.all(
     queries.map((query) =>
@@ -1250,10 +1332,14 @@ export type ListHumanResult<T> = {
 };
 
 /**
- * `GET .../reviews` (paginated), filtered to human reviews. A review is
- * excluded only when `isOwnPost(login, viewer)` — a marker alone is never
- * sufficient (spec-cycle2.md §7 item 1 / security-audit fix): anyone could
- * paste a matching marker line into their own review to get it ignored.
+ * `GET .../reviews` (paginated), filtered so that only the factory's own
+ * `pr_fix` replies are excluded —
+ * `isFactoryPost(login, viewer, raw.body, "pr_fix")`. The factory's own
+ * `pr_review`-kind review (and a human's review) are intentionally kept:
+ * adding the fix label after the factory's own review means "fix those
+ * findings", so that review must remain visible as feedback rather than
+ * being dropped just because its login happens to match the viewer (shared
+ * operator account).
  */
 export async function listPrReviews(
   client: GhClient,
@@ -1276,7 +1362,7 @@ export async function listPrReviews(
     if (!isPrReviewPayload(raw)) continue;
     if (raw.id > maxId) maxId = raw.id;
     const login = raw.user?.login;
-    if (typeof login === "string" && isOwnPost(login, viewer)) continue;
+    if (isFactoryPost(login, viewer, raw.body, "pr_fix")) continue;
     items.push({
       id: raw.id,
       authorLogin: typeof login === "string" ? login : "",
@@ -1321,9 +1407,11 @@ function isPrReviewCommentPayload(
 }
 
 /**
- * `GET .../comments` (inline review comments, paginated), filtered to human
- * posts. Excluded only via `isOwnPost(login, viewer)` — same reasoning as
- * `listPrReviews`.
+ * `GET .../comments` (inline review comments, paginated), filtered the same
+ * way as `listPrReviews`: only the factory's own `pr_fix`-kind reply is
+ * excluded (`isFactoryPost(login, viewer, raw.body, "pr_fix")`). The
+ * factory's own unmarked inline findings from a `pr_review` pass stay
+ * visible — pr_fix needs to see them as feedback to act on.
  */
 export async function listPrReviewComments(
   client: GhClient,
@@ -1346,7 +1434,7 @@ export async function listPrReviewComments(
     if (!isPrReviewCommentPayload(raw)) continue;
     if (raw.id > maxId) maxId = raw.id;
     const login = raw.user?.login;
-    if (typeof login === "string" && isOwnPost(login, viewer)) continue;
+    if (isFactoryPost(login, viewer, raw.body, "pr_fix")) continue;
     items.push({
       id: raw.id,
       authorLogin: typeof login === "string" ? login : "",
@@ -1363,6 +1451,11 @@ export type ReviewComment = {
   readonly path: string;
   readonly line: number;
   readonly side: "LEFT" | "RIGHT";
+  /** First line of a comment spanning multiple lines — omit for a
+   * single-line comment. When present, `start_side` is always sent as
+   * `"RIGHT"` (every review comment in this project anchors to the new/
+   * head version of the file, never a deletion on the base side). */
+  readonly start_line?: number;
   readonly body: string;
 };
 
@@ -1371,6 +1464,23 @@ export type CreatePrReviewOptions = {
   readonly body: string;
   readonly comments: readonly ReviewComment[];
 };
+
+/** GitHub Pull Request Review API's `comments[]` shape: same fields as
+ * `ReviewComment`, plus `start_side` (only ever present alongside
+ * `start_line`, fixed to `"RIGHT"` — not a caller-facing option). */
+function toReviewCommentPayload(
+  comment: ReviewComment,
+): Record<string, unknown> {
+  return {
+    path: comment.path,
+    line: comment.line,
+    side: comment.side,
+    body: comment.body,
+    ...(comment.start_line !== undefined
+      ? { start_line: comment.start_line, start_side: "RIGHT" }
+      : {}),
+  };
+}
 
 export async function createPrReview(
   client: GhClient,
@@ -1385,7 +1495,11 @@ export async function createPrReview(
     `repos/${owner}/${repo}/pulls/${number}/reviews`,
     {
       method: "POST",
-      body: { event: opts.event, body: opts.body, comments: opts.comments },
+      body: {
+        event: opts.event,
+        body: opts.body,
+        comments: opts.comments.map(toReviewCommentPayload),
+      },
     },
   );
   ensureSuccess(response, `POST pr review ${owner}/${repo}#${number}`);
@@ -1539,6 +1653,286 @@ export async function getBranchProtected(
 // Plain (non-idempotent) issue comment (promoted from f/factory/steps/
 // pr_workflow_support.ts)
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Review threads (GraphQL) — team-lead decision (2026-09-26): on a
+// re-review with zero findings, pr_review_post.ts resolves the factory's
+// own still-unresolved `pr_review` inline-comment threads on the PR.
+// GitHub's REST API has no thread-resolution endpoint, so this goes through
+// `gh api graphql` instead (same `callGhApi` plumbing, endpoint "graphql").
+// One page (100 threads) is enough for now; a PR with more open review
+// threads than that is far beyond this project's expected review size.
+// ---------------------------------------------------------------------------
+
+type GraphqlErrorPayload = {
+  readonly message: string;
+};
+
+type GraphqlErrorsPayload = {
+  readonly errors: readonly GraphqlErrorPayload[];
+};
+
+/** A non-empty top-level `errors` array — GitHub's GraphQL error envelope. An
+ * empty or absent `errors` field means the call actually succeeded, so this
+ * intentionally returns `false` for it (an empty array is not an error). */
+function isGraphqlErrorsPayload(value: unknown): value is GraphqlErrorsPayload {
+  if (typeof value !== "object" || value === null) return false;
+  const errors = (value as { errors: unknown }).errors;
+  if (!Array.isArray(errors) || errors.length === 0) return false;
+  return errors.every(
+    (item) =>
+      typeof item === "object" &&
+      item !== null &&
+      typeof (item as { message: unknown }).message === "string",
+  );
+}
+
+type GraphqlDataPayload = {
+  readonly data: unknown;
+};
+
+function isGraphqlDataPayload(value: unknown): value is GraphqlDataPayload {
+  if (typeof value !== "object" || value === null) return false;
+  return "data" in value;
+}
+
+/**
+ * Shared POST to `gh api graphql` (spec-cycle2.md §1's `ensureSuccess`
+ * covers REST's non-2xx-means-failure convention, but GitHub's GraphQL
+ * endpoint returns HTTP 200 even for a permission/argument error — the
+ * failure is only visible in a top-level `errors` array in the body). This
+ * runs `ensureSuccess` first (still needed for genuine transport-level
+ * failures), parses the JSON body, and throws when `errors` is a non-empty
+ * array so a GraphQL-level failure can never be mistaken for success by a
+ * caller that only checked the HTTP status. Returns the `data` field on
+ * success.
+ */
+async function callGhGraphql(
+  client: GhClient,
+  query: string,
+  variables: Record<string, unknown>,
+  context: string,
+): Promise<unknown> {
+  const response = await callGhApi(client, "graphql", {
+    method: "POST",
+    body: { query, variables },
+  });
+  ensureSuccess(response, context);
+  const parsed = parseJsonBody(response, context);
+  if (isGraphqlErrorsPayload(parsed)) {
+    const messages = parsed.errors.map((error) => error.message).join("; ");
+    throw new Error(`${context}: GraphQL error: ${messages}`);
+  }
+  if (!isGraphqlDataPayload(parsed)) {
+    throw new Error(`${context}: unexpected response shape`);
+  }
+  return parsed.data;
+}
+
+export type ReviewThread = {
+  readonly id: string;
+  readonly isResolved: boolean;
+  /** The file path and current diff line this thread is anchored to
+   * (team-lead decision, 2026-09-26: needed by pr_workflow_support.ts's
+   * `openFindingsForPrompt`, so a re-review can tell Claude *where* an open
+   * finding is, not just what it said). `line` is GitHub's own
+   * `PullRequestReviewThread.line` — `null` once the thread's anchor is no
+   * longer part of the diff (e.g. the commented-on lines were since
+   * changed again), same as a `ReviewFinding`'s own nullable `line`. */
+  readonly path: string;
+  readonly line: number | null;
+  readonly firstCommentAuthorLogin: string;
+  readonly firstCommentBody: string;
+  readonly lastCommentAuthorLogin: string;
+  readonly lastCommentBody: string;
+};
+
+type ReviewThreadsGraphqlPayload = {
+  readonly repository: {
+    readonly pullRequest: {
+      readonly reviewThreads: {
+        readonly nodes: readonly unknown[];
+      };
+    };
+  };
+};
+
+function isReviewThreadsGraphqlPayload(
+  value: unknown,
+): value is ReviewThreadsGraphqlPayload {
+  if (typeof value !== "object" || value === null) return false;
+  const repository = (value as { repository: unknown }).repository;
+  if (typeof repository !== "object" || repository === null) return false;
+  const pullRequest = (repository as { pullRequest: unknown }).pullRequest;
+  if (typeof pullRequest !== "object" || pullRequest === null) return false;
+  const reviewThreads = (pullRequest as { reviewThreads: unknown })
+    .reviewThreads;
+  if (typeof reviewThreads !== "object" || reviewThreads === null) {
+    return false;
+  }
+  return Array.isArray((reviewThreads as { nodes: unknown }).nodes);
+}
+
+/** One `comments(...) { nodes { ... } }` connection — used for both the
+ * `firstComments`/`lastComments` GraphQL aliases in the query below. */
+type ReviewThreadCommentsConnectionPayload = {
+  readonly nodes: readonly unknown[];
+};
+
+function isReviewThreadCommentsConnectionPayload(
+  value: unknown,
+): value is ReviewThreadCommentsConnectionPayload {
+  if (typeof value !== "object" || value === null) return false;
+  return Array.isArray((value as { nodes: unknown }).nodes);
+}
+
+type ReviewThreadNodePayload = {
+  readonly id: string;
+  readonly isResolved: boolean;
+  readonly path: string;
+  readonly line: number | null;
+  readonly firstComments: ReviewThreadCommentsConnectionPayload;
+  readonly lastComments: ReviewThreadCommentsConnectionPayload;
+};
+
+function isReviewThreadNodePayload(
+  value: unknown,
+): value is ReviewThreadNodePayload {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as {
+    id: unknown;
+    isResolved: unknown;
+    path: unknown;
+    line: unknown;
+    firstComments: unknown;
+    lastComments: unknown;
+  };
+  if (typeof record.id !== "string") return false;
+  if (typeof record.isResolved !== "boolean") return false;
+  if (typeof record.path !== "string") return false;
+  if (record.line !== null && typeof record.line !== "number") return false;
+  if (!isReviewThreadCommentsConnectionPayload(record.firstComments)) {
+    return false;
+  }
+  return isReviewThreadCommentsConnectionPayload(record.lastComments);
+}
+
+type ReviewThreadCommentPayload = {
+  readonly author: { readonly login: string } | null;
+  readonly body: string;
+};
+
+function isReviewThreadCommentPayload(
+  value: unknown,
+): value is ReviewThreadCommentPayload {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as { author: unknown; body: unknown };
+  if (record.author !== null && !isLoginPayload(record.author)) return false;
+  return typeof record.body === "string";
+}
+
+/**
+ * `GET`-equivalent GraphQL query for a PR's review threads (first 100 — see
+ * the module note above): each thread's resolution state, its diff anchor
+ * (`path`/`line` — team-lead decision, 2026-09-26: needed by
+ * `openFindingsForPrompt`, pr_workflow_support.ts), its first comment's
+ * author/body, and (via the `lastComments` alias) its last comment's
+ * author/body — `selectThreadsToResolve` (pr_workflow_support.ts) needs the
+ * latter two to find the factory's own still-unresolved `pr_review` threads
+ * whose last word was also the factory's (a human reply left in the thread
+ * must block auto-resolve). A thread whose shape doesn't match (including
+ * one with no comments at all, which shouldn't happen on GitHub) is skipped
+ * rather than throwing.
+ */
+export async function listReviewThreads(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  number: number,
+): Promise<ReviewThread[]> {
+  validateOwnerRepo(owner, repo);
+  const query = `
+    query($owner: String!, $repo: String!, $number: Int!) {
+      repository(owner: $owner, name: $repo) {
+        pullRequest(number: $number) {
+          reviewThreads(first: 100) {
+            nodes {
+              id
+              isResolved
+              path
+              line
+              firstComments: comments(first: 1) {
+                nodes {
+                  author { login }
+                  body
+                }
+              }
+              lastComments: comments(last: 1) {
+                nodes {
+                  author { login }
+                  body
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  `;
+  const context = `GraphQL reviewThreads ${owner}/${repo}#${number}`;
+  const data = await callGhGraphql(
+    client,
+    query,
+    { owner, repo, number },
+    context,
+  );
+  if (!isReviewThreadsGraphqlPayload(data)) {
+    throw new Error(`${context}: unexpected response shape`);
+  }
+  const threads: ReviewThread[] = [];
+  for (const rawNode of data.repository.pullRequest.reviewThreads.nodes) {
+    if (!isReviewThreadNodePayload(rawNode)) continue;
+    const firstComment = rawNode.firstComments.nodes[0];
+    const lastComment = rawNode.lastComments.nodes[0];
+    if (!isReviewThreadCommentPayload(firstComment)) continue;
+    if (!isReviewThreadCommentPayload(lastComment)) continue;
+    threads.push({
+      id: rawNode.id,
+      isResolved: rawNode.isResolved,
+      path: rawNode.path,
+      line: rawNode.line,
+      firstCommentAuthorLogin: firstComment.author?.login ?? "",
+      firstCommentBody: firstComment.body,
+      lastCommentAuthorLogin: lastComment.author?.login ?? "",
+      lastCommentBody: lastComment.body,
+    });
+  }
+  return threads;
+}
+
+/**
+ * Resolves one review thread via GitHub's `resolveReviewThread` GraphQL
+ * mutation (no REST equivalent exists). Callers (pr_review_post.ts) treat a
+ * failure here as best-effort — warn-log per thread, never fail the step.
+ */
+export async function resolveReviewThread(
+  client: GhClient,
+  threadId: string,
+): Promise<void> {
+  const mutation = `
+    mutation($id: ID!) {
+      resolveReviewThread(input: { threadId: $id }) {
+        thread { id isResolved }
+      }
+    }
+  `;
+  await callGhGraphql(
+    client,
+    mutation,
+    { id: threadId },
+    `GraphQL resolveReviewThread ${threadId}`,
+  );
+}
 
 /**
  * Posts a plain (non-idempotent) issue-level comment. Unlike `commentIssue`

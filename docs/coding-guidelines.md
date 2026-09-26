@@ -64,6 +64,21 @@ if (!isClaudeResult(parsed)) {
 
 - `mise run check` で `lint`(`biome check` + `wmill lint f` + 型アサーション検出)→ `typecheck`(`tsc --noEmit`)→ `test`(`bun test`)を順に実行する。PR を出す前に必ず緑にする。
 
+## PR テンプレート
+
+PR は `.github/PULL_REQUEST_TEMPLATE.md` の以下の章立てに従う:
+
+1. **概要**: このPRで何をしたか、なぜ必要かを簡潔に記述する。
+2. **受入条件**: Issue の受入基準をチェックリストで記述する(factory が作成した PR)。
+3. **動作確認結果**: lint / typecheck / test / E2E の実行結果をチェックする。
+4. **確認して欲しい点**: 実装上のトレードオフや不確実な部分を記述する。
+5. **関連リンク**: `Closes #N` 形式で Issue を明示する(factory はこれで承認済み要件と照合する)。
+6. **備考**: Windmill への反映(sync push / migrate / image rebuild)の要否を記述する。
+
+人が Claude Code で作成するコミットは、トレーラー `Co-Authored-By: Claude <noreply@anthropic.com>` を付ける。
+
+Software Factory が作成するコミットには、トレーラー `Co-Authored-By: Claude <noreply@anthropic.com>` と `Generated-By: Software Factory (<instance_name>)` が自動で付く(`lib/workspace.ts` の `commitAndPush`)。
+
 ## PR チェックリスト
 
 - [ ] `mise run check` が緑

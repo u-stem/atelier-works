@@ -19,9 +19,14 @@ schema:
         type: resource
         resourceType: collected_comment
       originalType: resource[]
-    commit_message:
+    commit_body:
       type: string
-      description: 適用した変更に付けるコミットメッセージ。
+      description: 適用した変更に付けるコミットメッセージの本文(任意)。
+      default: null
+      originalType: string
+    commit_subject:
+      type: string
+      description: 適用した変更に付けるコミットメッセージの件名。
       default: null
       originalType: string
     fix_round:

@@ -3,6 +3,8 @@
 //   removes, kept symmetric with retry_work_item.ts's labelsToRestore.
 // - shouldMarkFailed: whether a stale failure_module run (superseded by a
 //   newer run's setFlowJobId) is entitled to mark the work item `failed`.
+// - shouldPostFailureComment: whether the failure comment is posted to the
+//   GitHub issue/PR (issue only — team-lead decision, 2026-09-26).
 // - truncateForComment: caps the masked error text embedded in the
 //   failure comment posted to GitHub.
 // - failureWorkItemRef: the FK-safe work_item_id for recordFailure, given
@@ -14,6 +16,8 @@ import {
   failureWorkItemRef,
   labelsToRemove,
   shouldMarkFailed,
+  shouldPostFailureComment,
+  shouldSetNeedsHumanLabel,
   truncateForComment,
 } from "../../f/factory/on_error_flow.ts";
 
@@ -62,6 +66,39 @@ describe("shouldMarkFailed", () => {
 
   test("marks failed when the root job id is unavailable", () => {
     expect(shouldMarkFailed("job-a", null)).toBe(true);
+  });
+});
+
+describe("shouldPostFailureComment", () => {
+  // team-lead decision (2026-09-26): a PR must carry only the first-pass
+  // review itself and replies to review comments, never an operational
+  // notice such as this failure comment.
+  test("posts a failure comment for an issue work item", () => {
+    expect(shouldPostFailureComment("issue")).toBe(true);
+  });
+
+  test("does not post a failure comment for a pr_review work item", () => {
+    expect(shouldPostFailureComment("pr_review")).toBe(false);
+  });
+
+  test("does not post a failure comment for a pr_fix work item", () => {
+    expect(shouldPostFailureComment("pr_fix")).toBe(false);
+  });
+});
+
+describe("shouldSetNeedsHumanLabel", () => {
+  // team-lead design (2026-09-26): needs_human_label covers a failed
+  // pr_review as well as a failed pr_fix — both PR kinds get it here.
+  test("does not set a state label for an issue work item", () => {
+    expect(shouldSetNeedsHumanLabel("issue")).toBe(false);
+  });
+
+  test("sets the state label for a pr_review work item", () => {
+    expect(shouldSetNeedsHumanLabel("pr_review")).toBe(true);
+  });
+
+  test("sets the state label for a pr_fix work item", () => {
+    expect(shouldSetNeedsHumanLabel("pr_fix")).toBe(true);
   });
 });
 

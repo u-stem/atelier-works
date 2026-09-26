@@ -9,7 +9,7 @@ import {
 /** A resource value shaped like the resource created before spec-cycle2.md
  * §7 item 10 — none of the 9 new fields are present. */
 const LEGACY_RAW_CONFIG = {
-  owners: [{ name: "u-stem", kind: "user" }],
+  owners: [{ name: "octo-owner", kind: "user" }],
   trigger_label: "factory",
   wip_label: "factory:wip",
   approved_label: "factory:approved",
@@ -21,7 +21,7 @@ const LEGACY_RAW_CONFIG = {
   daily_budget_usd: 50,
   claude_timeout_sec: 1800,
   worktree_ttl_days: 7,
-  factory_repo: "https://github.com/u-stem/atelier-works",
+  factory_repo: "https://github.com/octo-owner/atelier-works",
   instance_name: "local",
   windmill_public_url: "http://127.0.0.1:8080",
 };
@@ -40,6 +40,37 @@ describe("parseFactoryConfig", () => {
       repo_allowlist: [],
       diff_max_lines: 3000,
     });
+  });
+
+  test("defaults the four state labels when absent (PR state labels, 2026-09-26)", () => {
+    const config = parseFactoryConfig(LEGACY_RAW_CONFIG);
+    expect(config).toMatchObject({
+      changes_requested_label: "factory:changes-requested",
+      reviewed_label: "factory:reviewed",
+      rereview_label: "factory:rereview",
+      needs_human_label: "factory:needs-human",
+    });
+  });
+
+  test("passes through explicit values for the four state labels", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      changes_requested_label: "custom:changes-requested",
+      reviewed_label: "custom:reviewed",
+      rereview_label: "custom:rereview",
+      needs_human_label: "custom:needs-human",
+    });
+    expect(config).toMatchObject({
+      changes_requested_label: "custom:changes-requested",
+      reviewed_label: "custom:reviewed",
+      rereview_label: "custom:rereview",
+      needs_human_label: "custom:needs-human",
+    });
+  });
+
+  test("throws when reviewed_label is present but not a string", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, reviewed_label: 42 };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
   });
 
   test("defaults factory_branch to main when absent (M7)", () => {
@@ -88,7 +119,7 @@ describe("parseFactoryConfig", () => {
   test("throws when an owner entry has an invalid kind", () => {
     const raw = {
       ...LEGACY_RAW_CONFIG,
-      owners: [{ name: "u-stem", kind: "robot" }],
+      owners: [{ name: "octo-owner", kind: "robot" }],
     };
     expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
   });
@@ -178,7 +209,7 @@ describe("loadConfig", () => {
 });
 
 describe("isRepoAllowed", () => {
-  const OWNERS = [{ name: "u-stem", kind: "user" as const }];
+  const OWNERS = [{ name: "octo-owner", kind: "user" as const }];
 
   test("rejects an owner not in config.owners", () => {
     const config = { owners: OWNERS, repo_allowlist: [] };
@@ -187,35 +218,35 @@ describe("isRepoAllowed", () => {
 
   test("matches an owner case-insensitively", () => {
     const config = { owners: OWNERS, repo_allowlist: [] };
-    expect(isRepoAllowed(config, "U-Stem", "atelier-works")).toBe(true);
+    expect(isRepoAllowed(config, "Octo-Owner", "atelier-works")).toBe(true);
   });
 
   test("allows any repo under an allowed owner when repo_allowlist is empty", () => {
     const config = { owners: OWNERS, repo_allowlist: [] };
-    expect(isRepoAllowed(config, "u-stem", "any-repo")).toBe(true);
+    expect(isRepoAllowed(config, "octo-owner", "any-repo")).toBe(true);
   });
 
   test("rejects a repo not in a non-empty repo_allowlist", () => {
     const config = {
       owners: OWNERS,
-      repo_allowlist: ["https://github.com/u-stem/other-repo"],
+      repo_allowlist: ["https://github.com/octo-owner/other-repo"],
     };
-    expect(isRepoAllowed(config, "u-stem", "atelier-works")).toBe(false);
+    expect(isRepoAllowed(config, "octo-owner", "atelier-works")).toBe(false);
   });
 
   test("allows a repo whose HTTPS clone URL is in repo_allowlist", () => {
     const config = {
       owners: OWNERS,
-      repo_allowlist: ["https://github.com/u-stem/atelier-works"],
+      repo_allowlist: ["https://github.com/octo-owner/atelier-works"],
     };
-    expect(isRepoAllowed(config, "u-stem", "atelier-works")).toBe(true);
+    expect(isRepoAllowed(config, "octo-owner", "atelier-works")).toBe(true);
   });
 
   test("normalizes a trailing .git when matching repo_allowlist", () => {
     const config = {
       owners: OWNERS,
-      repo_allowlist: ["https://github.com/u-stem/atelier-works.git"],
+      repo_allowlist: ["https://github.com/octo-owner/atelier-works.git"],
     };
-    expect(isRepoAllowed(config, "u-stem", "atelier-works")).toBe(true);
+    expect(isRepoAllowed(config, "octo-owner", "atelier-works")).toBe(true);
   });
 });

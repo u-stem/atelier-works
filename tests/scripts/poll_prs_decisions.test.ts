@@ -4,7 +4,6 @@
 import { describe, expect, test } from "bun:test";
 import {
   decidePrActions,
-  isFactoryFixCommand,
   type PrCandidate,
 } from "../../f/factory/lib/poll_support.ts";
 
@@ -13,37 +12,19 @@ const FIX_LABEL = "factory:fix";
 
 function candidate(overrides: Partial<PrCandidate> = {}): PrCandidate {
   return {
-    owner: "u-stem",
+    owner: "octo-owner",
     repo: "atelier-works",
     number: 7,
     title: "Fix the thing",
     headSha: "aaaaaaa1111111111111111111111111111111",
     labels: [],
     hasActiveReviewingItem: false,
-    hasActiveFixingItem: false,
     lastKnownHeadSha: null,
     previousFixRound: 0,
-    lastCommentId: 0,
-    newFixCommands: [],
     maxReviewId: 0,
-    maxCommentId: 0,
     ...overrides,
   };
 }
-
-describe("isFactoryFixCommand", () => {
-  test("matches the exact command", () => {
-    expect(isFactoryFixCommand("/factory fix")).toBe(true);
-  });
-
-  test("matches case-insensitively with surrounding whitespace", () => {
-    expect(isFactoryFixCommand("  /Factory Fix  \n")).toBe(true);
-  });
-
-  test("does not match unrelated text", () => {
-    expect(isFactoryFixCommand("please factory fix this later")).toBe(false);
-  });
-});
 
 describe("decidePrActions — review", () => {
   test("triggers a label-based review and asks to remove the label", () => {
@@ -105,33 +86,37 @@ describe("decidePrActions — fix", () => {
     );
     expect(decision?.fix).toEqual({
       kind: "trigger_fix",
-      reason: "label",
       removeLabel: true,
-      triggerCommentId: null,
     });
   });
 
-  test("triggers a comment-based fix using the first new /factory fix command", () => {
-    const [decision] = decidePrActions(
-      [candidate({ newFixCommands: [{ id: 42 }, { id: 43 }] })],
-      REVIEW_LABEL,
-      FIX_LABEL,
-    );
-    const fix = decision?.fix;
-    expect(fix?.kind === "trigger_fix" ? fix.triggerCommentId : null).toBe(42);
-  });
-
-  test("does not trigger fix when an item is already fixing", () => {
-    const [decision] = decidePrActions(
-      [candidate({ hasActiveFixingItem: true, newFixCommands: [{ id: 42 }] })],
-      REVIEW_LABEL,
-      FIX_LABEL,
-    );
-    expect(decision?.fix).toEqual({ kind: "none" });
-  });
-
-  test("does not trigger fix when there is no label and no new command", () => {
+  // User decision (2026-09-26): pr_fix has no comment-based trigger — the
+  // `fix_label` is the only way to start a fix cycle, regardless of any
+  // comment on the PR.
+  test("does not trigger fix without the label, even with no other state", () => {
     const [decision] = decidePrActions([candidate()], REVIEW_LABEL, FIX_LABEL);
     expect(decision?.fix).toEqual({ kind: "none" });
+  });
+
+  // team-lead: an already-reviewed PR (its pr_review work item finished
+  // long ago, so hasActiveReviewingItem is false — decidePrActions has no
+  // separate "reviewed" concept, only "is a same-kind item currently
+  // active") getting the fix label must still trigger a fix cycle —
+  // searchPrs's per-state-label queries (team-lead design, 2026-09-26) are
+  // what make such a PR reachable again (an E2E gap fixed at the I/O layer,
+  // lib/github.ts), this confirms the pure decision itself imposes no
+  // additional "must still be under active review" requirement.
+  test("triggers a label-based fix on a PR that already finished a review", () => {
+    const [decision] = decidePrActions(
+      [
+        candidate({
+          hasActiveReviewingItem: false,
+          labels: [FIX_LABEL],
+        }),
+      ],
+      REVIEW_LABEL,
+      FIX_LABEL,
+    );
+    expect(decision?.fix.kind).toBe("trigger_fix");
   });
 });
