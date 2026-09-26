@@ -75,11 +75,9 @@ value:
             expr: results.pr_fix_prepare.worktree_dir
         path: f/factory/steps/pr_fix_apply
       retry:
-        exponential:
+        constant:
           attempts: 2
-          multiplier: 4
-          random_factor: 0
-          seconds: 30
+          seconds: 60
       skip_if:
         expr: results.pr_fix_prepare.outcome !== "proceed" ||
           results.pr_fix_collect?.outcome !== "proceed"

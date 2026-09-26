@@ -1,5 +1,7 @@
 version: v2
 locks:
+  f/factory/_probe_c: 643221a4ca94677ee569ffce85c2296154924c7a61a0fc05cd7d41df8fc9b57c
+  f/factory/_probe_ps: 3ba6895ecf3a00740946903a00662a57f9bc8abf1fa105437e84b6bc7b1a4f28
   f/factory/_smoke_suspend__flow+__flow_hash: c642c40389574e98140d74c6a555ab5e6eeade0d1462c8bb7cfffa3205ecdc37
   f/factory/_smoke_suspend__flow+report_what_resume_produced.ts: dbb0ef9c729a74523bae031d57667cb2595c867000eecba39c033e08e0dd7ae8
   f/factory/_smoke_suspend__flow+request_approval.ts: c56881749f5785c8546f4e79e0f78c7a069735c17873845b4234251c5e9b9729

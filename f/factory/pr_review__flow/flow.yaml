@@ -49,11 +49,9 @@ value:
             expr: results.pr_review_prepare.worktree_dir
         path: f/factory/steps/pr_review_generate
       retry:
-        exponential:
+        constant:
           attempts: 2
-          multiplier: 4
-          random_factor: 0
-          seconds: 30
+          seconds: 60
       skip_if:
         expr: results.pr_review_prepare.skip === true
     - id: pr_review_post

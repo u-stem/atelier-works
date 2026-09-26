@@ -34,11 +34,9 @@ value:
             expr: results.prepare.worktree_dir
         path: f/factory/steps/pipeline_generate
       retry:
-        exponential:
+        constant:
           attempts: 2
-          multiplier: 4
-          random_factor: 0
-          seconds: 30
+          seconds: 60
       skip_if:
         expr: results.prepare.skip === true
     - id: request_approval
