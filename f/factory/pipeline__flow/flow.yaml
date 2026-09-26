@@ -1,6 +1,6 @@
 summary: '[SF-2-1] 要件定義の生成と承認'
-description: 要件定義の生成 → 承認 → 公開/差し戻しの工程 2 のフロー(docs/architecture.md 参照)。ステップは
-  f/factory/steps/pipeline_*.ts の PathScript。
+description: >-
+  要件定義を生成し、承認を受けたうえで次の工程に進めます。却下された場合はフィードバックをもとに要件定義を作り直します。
 value:
   modules:
     - id: prepare
@@ -100,15 +100,16 @@ schema:
   properties:
     attempt:
       type: integer
-      description: Requirement-generation attempt number (1-based).
+      description: 要件定義生成の試行回数(1から始まります)。
       default: 1
     feedback:
       type: string
-      description: Rejection reason / gap report to address on this attempt. Empty
-        string means none.
+      description: >-
+        差し戻された理由や指摘事項。今回の試行で反映します。無ければ空のままで構いません。
       default: ''
     work_item_id:
       type: integer
-      description: factory.work_items.id to run the pipeline for.
+      description: >-
+        処理対象の作業項目のID。GitHub Issueのコメントや、Discordの通知に記載されています。
   required:
     - work_item_id

@@ -1,8 +1,6 @@
 summary: '[SF-1-1] Issue を巡回して担当を確定'
 description: >-
-  5分毎に実行。ヘルスチェック、deployed_sha の通知、owner ごとの Issue
-  検索・claim、およびすべての work item 種別の reconcile を行う
-  (docs/architecture.md 参照)。
+  5分ごとに実行します。稼働確認とデプロイ状況の通知を行い、担当リポジトリのIssueを検索して担当を確定します。あわせて、進行中のすべての作業項目をGitHub側の状態と突き合わせ、後始末が必要なものを処理します。
 args: {}
 cron_version: v2
 enabled: true

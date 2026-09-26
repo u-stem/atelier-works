@@ -1,8 +1,6 @@
 summary: '[OP-1-1] 手動投入フォーム(Issue を作成して工程に乗せる)'
 description: >-
-  フォームから手動でタスクを投入する。`.github/ISSUE_TEMPLATE/factory-task.yml`
-  と同じ Markdown 構成でトリガー Issue を作成し、`poll_issues` と同じ手順で
-  claim したうえで `pipeline__flow` を起動する(docs/architecture.md 参照)。
+  手動でタスクを投入するためのフォームです。入力内容をもとにGitHub Issueを作成し、担当を確定したうえで要件定義の生成を開始します。
 value:
   modules:
     - id: create_issue
@@ -74,20 +72,20 @@ schema:
   properties:
     acceptance_criteria:
       type: string
-      description: 受入基準(acceptance criteria), one per line. Optional.
+      description: 受入基準。1行につき1項目で入力してください(任意)。
       default: ''
     body:
       type: string
-      description: 目的(purpose) — what this task should achieve.
+      description: このタスクで達成したい目的。
     owner:
       type: string
-      description: GitHub owner (user or org) of the target repository.
+      description: 対象リポジトリを所有するGitHubのユーザー名または組織名。
     repo:
       type: string
-      description: GitHub repository name.
+      description: 対象リポジトリ名。
     title:
       type: string
-      description: Issue title.
+      description: 作成するIssueのタイトル。
   required:
     - owner
     - repo

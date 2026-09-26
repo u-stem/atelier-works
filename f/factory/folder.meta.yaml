@@ -1,4 +1,5 @@
-summary: Software Factory のスクリプト・フロー・リソース・変数一式。
+summary: >-
+  Software Factoryを動かすスクリプト・フロー・リソース・変数をまとめたフォルダです。
 display_name: factory
 owners: []
 extra_perms: {}

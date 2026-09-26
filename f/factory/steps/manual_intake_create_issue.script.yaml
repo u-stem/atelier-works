@@ -1,8 +1,6 @@
 summary: '[OP-1-1/1] Issue を作成'
 description: >-
-  `manual_intake__flow` のステップ。手動投入された内容から、
-  `.github/ISSUE_TEMPLATE/factory-task.yml` と同じ Markdown 構成でトリガー
-  Issue を作成する。
+  投入されたタイトル・目的・受入基準をもとにGitHub Issueを作成します。作成したIssueの情報を次のステップに渡します。
 lock: '!inline f/factory/steps/manual_intake_create_issue.script.lock'
 kind: script
 schema:
@@ -11,27 +9,27 @@ schema:
   properties:
     acceptance_criteria:
       type: string
-      description: ''
+      description: '受入基準。1行につき1項目で入力してください(任意)。'
       default: null
       originalType: string
     body:
       type: string
-      description: ''
+      description: 'このタスクで達成したい目的。'
       default: null
       originalType: string
     owner:
       type: string
-      description: ''
+      description: '対象リポジトリを所有するGitHubのユーザー名または組織名。'
       default: null
       originalType: string
     repo:
       type: string
-      description: ''
+      description: '対象リポジトリ名。'
       default: null
       originalType: string
     title:
       type: string
-      description: ''
+      description: '作成するIssueのタイトル。'
       default: null
       originalType: string
   required:

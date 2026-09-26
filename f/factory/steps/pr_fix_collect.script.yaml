@@ -1,8 +1,6 @@
 summary: '[SF-3-2/2] 指摘の収集'
 description: >-
-  `pr_fix__flow` のステップ。前回以降に付いた PR レビュー・インライン
-  コメント・通常コメントのうち、factory 自身の投稿を除いた人間の指摘を
-  収集する。
+  前回の修正以降に付いたレビューやコメントのうち、人による指摘だけを集めるステップです。集めた指摘を次のステップに渡します。
 lock: '!inline f/factory/steps/pr_fix_collect.script.lock'
 kind: script
 schema:
@@ -11,21 +9,21 @@ schema:
   properties:
     owner:
       type: string
-      description: ''
+      description: '対象リポジトリを所有するGitHubのユーザー名または組織名。'
       default: null
       originalType: string
     pr_number:
       type: number
-      description: ''
+      description: '対象PRの番号。'
       default: null
     repo:
       type: string
-      description: ''
+      description: '対象リポジトリ名。'
       default: null
       originalType: string
     work_item_id:
       type: number
-      description: ''
+      description: '対象の作業項目のID。'
       default: null
   required:
     - work_item_id

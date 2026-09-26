@@ -1,8 +1,6 @@
 summary: '[SF-3-1/1] PR の取得と検証'
 description: >-
-  `pr_review__flow` のステップ。work item を読み込みレビュー対象として
-  有効か確認したうえで、PR の head commit に対する detached worktree を
-  用意する。
+  レビュー対象のPRを確認するステップです。レビューしてよい状態か確認したうえで、レビュー用の作業ディレクトリを用意し、次のステップに渡します。
 lock: '!inline f/factory/steps/pr_review_prepare.script.lock'
 kind: script
 schema:
@@ -11,7 +9,7 @@ schema:
   properties:
     work_item_id:
       type: number
-      description: ''
+      description: '対象の作業項目のID。'
       default: null
   required:
     - work_item_id

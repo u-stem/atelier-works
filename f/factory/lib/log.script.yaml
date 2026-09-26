@@ -1,7 +1,6 @@
 summary: '[LIB] ログとマスク'
 description: >-
-  構造化ログの出力と、GitHub PAT / Claude Code OAuth トークン / Discord
-  Webhook URL などの秘密情報のマスク処理。
+  内部ライブラリです。直接実行するものではありません。実行ログの記録と、トークンなど秘密情報のマスク処理を行う共通処理です。
 lock: '!inline f/factory/lib/log.script.lock'
 kind: script
 schema:

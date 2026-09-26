@@ -1,8 +1,6 @@
 summary: '[SF-2-1/4] 承認結果の反映'
 description: >-
-  `pipeline__flow` のステップ。suspend 復帰後、`approvals` テーブルから
-  承認/却下の判断を読み取り、work item の状態を分岐させる(承認・却下・
-  再試行上限超過・タイムアウト等)。
+  届いた承認結果を反映するステップです。承認なら次の工程へ進み、却下ならフィードバックをもとに要件定義を作り直します。再試行の上限を超えた場合や期限切れの場合は、対応が必要な状態(needs_human)にします。
 lock: '!inline f/factory/steps/pipeline_decide.script.lock'
 kind: script
 schema:
@@ -11,11 +9,11 @@ schema:
   properties:
     attempt:
       type: number
-      description: ''
+      description: '要件定義生成の試行回数。'
       default: null
     work_item_id:
       type: number
-      description: ''
+      description: '対象の作業項目のID。'
       default: null
   required:
     - work_item_id

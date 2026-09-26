@@ -1,6 +1,4 @@
 value: ""
 is_secret: true
 description: >-
-  GitHub のきめ細かい個人アクセストークン(GH_TOKEN / GITHUB_TOKEN)。worker
-  のサブプロセスへ環境変数として渡し、CLI 引数には渡さない。値は
-  bootstrap.sh または Windmill UI から設定し、コミットしない。
+  GitHubとやり取りするために使う、きめ細かい個人アクセストークン(GH_TOKEN / GITHUB_TOKEN)です。ここで値を設定してください。

@@ -1,10 +1,6 @@
 summary: '[SF-3-1] PR の自動レビュー'
 description: >-
-  依頼された PR をレビューする(docs/architecture.md 参照)。PR の head
-  commit で detached worktree を用意し、headless Claude(factory-review
-  スキル、読み取り専用ツール)でレビューを生成し、GitHub PR レビュー
-  (event COMMENT)としてインラインコメント付きで投稿、結果の記録と
-  Discord 通知を行う。
+  依頼されたPRをレビューします。PRの内容をもとにClaudeがレビューを生成し、GitHubのPRへコメントとして投稿します。結果は記録され、Discordに通知されます。
 value:
   modules:
     - id: pr_review_prepare
@@ -127,6 +123,7 @@ schema:
   properties:
     work_item_id:
       type: integer
-      description: factory.work_items.id of the pr_review-kind work item to process.
+      description: >-
+        レビュー処理の対象となる作業項目のID。GitHub Issueのコメントや、Discordの通知に記載されています。
   required:
     - work_item_id

@@ -1,6 +1,5 @@
 description: >-
-  Software Factory の実行時設定。対象リポジトリの所有者、ラベル名、Claude
-  Code の実行上限・予算、インスタンス識別情報を持つ。
+  Software Factoryの動作を決める設定です。対象リポジトリの所有者、各種ラベル名、Claude Codeの実行上限・予算、インスタンスを識別する情報などを持ちます。
 format_extension: null
 is_fileset: false
 schema:
@@ -37,18 +36,14 @@ schema:
     allowed_check_commands:
       type: array
       description: >-
-        `pr_fix__flow` が(`env -i` 経由、秘密情報なし、タイムアウト付きで)
-        実行してよいシェルコマンド。2回目の Claude Code 実行前にリポジトリの
-        標準チェックを走らせる(例: `["mise run check"]`)。空配列ならチェック
-        コマンドは実行しない。
+        修正を検証する際に実行してよいシェルコマンドの一覧です(例: ["mise run check"])。ここに指定したコマンドは、秘密情報を渡さずタイムアウト付きで実行されます。空の場合はチェックを行いません。
       default: []
       items:
         type: string
     allowed_labeler_associations:
       type: array
       description: >-
-        `trigger_label` を付けて Issue を拾わせることを許可する GitHub の
-        author_association。
+        `trigger_label`のラベルを付けてIssueを処理対象にすることを許可する、GitHub上の関係(所有者・メンバー・コラボレーターなど)です。ここに含まれない人がラベルを付けても、処理は始まりません。
       default:
         - OWNER
         - MEMBER
@@ -65,82 +60,74 @@ schema:
       default: factory:approved
     claude_timeout_sec:
       type: integer
-      description: Claude Code を1回実行する際のサブプロセスタイムアウト(秒)。
+      description: Claude Codeの1回の実行を打ち切るまでの制限時間(秒)。
       default: 1800
     daily_budget_usd:
       type: number
       description: >-
-        全 agent run 合計の1日あたりの USD 予算上限。超過すると新規実行を
-        拒否する。
+        1日あたりのClaude利用上限(USD)。超えるとその日の自動処理は人の対応待ちになります。
       default: 50
     default_reviewers:
       type: array
       description: >-
-        `pr_fix__flow` が push した直後の PR にレビュワーとして指定する
-        GitHub ログイン名。空なら PR の既存レビュワーをそのまま使う。
+        修正を反映した直後のPRに、レビュワーとして指定するGitHubのログイン名です。空の場合は、PRに既に設定されているレビュワーをそのまま使います。
       default: []
       items:
         type: string
     diff_max_lines:
       type: integer
       description: >-
-        レビュー/修正の Claude Code プロンプトにインラインで渡す差分の最大
-        行数。これを超えると変更ファイル一覧のみを渡し、残りは Claude 自身に
-        読ませる。
+        レビューや修正の際に、Claudeへそのまま渡す差分の最大行数です。これを超える場合は変更ファイルの一覧だけを渡し、詳細はClaude自身に読み取らせます。
       default: 3000
     factory_repo:
       type: string
-      description: この factory リポジトリ自身の HTTPS clone URL(self_update の対象)。
+      description: >-
+        このSoftware Factory自身のリポジトリのURLです。自分自身を最新化する処理の対象になります。
       format: uri
     fix_label:
       type: string
-      description: PR を `pr_fix__flow` に渡すラベル。
+      description: このラベルが付いたPRは修正処理の対象になります。
       default: factory:fix
     instance_name:
       type: string
       description: >-
-        この Windmill インスタンスを識別する名前。Discord 通知や Issue
-        コメントに表示され、複数インスタンスを区別できるようにする。
+        このインスタンスを識別するための名前です。Discord通知やIssueへのコメントに表示され、複数のインスタンスを運用している場合に区別できるようにします。
     max_attempts:
       type: integer
       description: >-
-        要件定義の再生成を試みる最大回数。超えると `needs_human` へ
-        フォールバックする。
+        要件定義の再生成を試みる最大回数です。超えると対応が必要な状態(needs_human)にします。
       default: 3
     max_budget_usd_per_run:
       type: number
-      description: 各ステージの `claude -p --max-budget-usd` に渡す1回あたりの USD 予算上限。
+      description: 1回の自動処理あたりのClaude利用上限(USD)。
       default: 5
     max_fix_changed_files:
       type: integer
       description: >-
-        `pr_fix_verify` の差分に含めてよい変更ファイル数の上限。超えると
-        自動適用には大きすぎると判断し `needs_human` へフォールバックする。
+        1回の修正で変更してよいファイル数の上限です。これを超える差分は自動での適用には大きすぎると判断し、対応が必要な状態(needs_human)にします。
       default: 30
     max_fix_diff_lines:
       type: integer
       description: >-
-        `pr_fix_verify` の差分に含めてよい変更行数(追加+削除)の上限。
-        超えると自動適用には大きすぎると判断し `needs_human` へ
-        フォールバックする。
+        1回の修正で変更してよい行数(追加+削除)の上限です。これを超える差分は自動での適用には大きすぎると判断し、対応が必要な状態(needs_human)にします。
       default: 1500
     max_fix_rounds:
       type: integer
       description: >-
-        1つの PR に対する `pr_fix__flow` の最大試行回数。超えると
-        `needs_human` へフォールバックする。
+        1つのPRに対して修正を試みる最大回数です。超えると対応が必要な状態(needs_human)にします。
       default: 3
     max_turns:
       type: integer
-      description: 各ステージの `claude -p --max-turns` に渡す最大ターン数。
+      description: 1回の自動処理でClaudeがやり取りできる最大ターン数。
       default: 40
     model:
       type: string
-      description: factory の各ステージで使用する Claude Code のモデル。
+      description: 各処理でClaude Codeが使用するモデル名。
       default: claude-opus-5-5
     owners:
       type: array
-      description: 巡回対象の GitHub アカウント。`kind` は user または org。
+      description: >-
+        この処理が巡回する対象のGitHubアカウントの一覧です。それぞれ`kind`で個人アカウントか組織かを指定します。
       items:
         type: object
         order:
@@ -149,10 +136,10 @@ schema:
         properties:
           name:
             type: string
-            description: GitHub のユーザーまたは組織のログイン名。
+            description: GitHubのユーザーまたは組織のログイン名。
           kind:
             type: string
-            description: 個人アカウントか組織かの区別。
+            description: userなら個人アカウント、orgなら組織を指定します。
             enum:
               - user
               - org
@@ -162,48 +149,45 @@ schema:
     pr_label:
       type: string
       description: >-
-        factory 自身が作成した PR に付与するラベル。`pr_review__flow` が
-        このラベルを見て、承認済み要件定義を渡すべき PR だと判断する。
+        Software Factory自身が作成したPRに付与するラベルです。このラベルが付いたPRは、承認済みの要件定義をもとに作られたものとして扱われます。
       default: factory:pr
     repo_allowlist:
       type: array
       description: >-
-        factory が操作してよいリポジトリの HTTPS clone URL。空なら owners
-        以外の制限は無い。
+        この処理が操作してよいリポジトリのURLです。空の場合は、ownersに含まれるリポジトリすべてを対象にします。
       default: []
       items:
         type: string
     review_label:
       type: string
-      description: PR を `pr_review__flow` に渡すラベル。
+      description: このラベルが付いたPRはレビュー処理の対象になります。
       default: factory:review
     review_post_mode:
       type: string
       description: >-
-        `pr_review__flow` がレビューを投稿する方式。`gated` は将来のサイクル
-        向けの予約値で未実装。
+        レビュー結果の投稿方法です。`gated`は今後の機能のために予約された値で、現時点では未実装です。
       default: comment_only
       enum:
         - comment_only
         - gated
     trigger_label:
       type: string
-      description: Issue を factory に渡すラベル。
+      description: このラベルが付いたIssueが処理対象になります。
       default: factory
     windmill_public_url:
       type: string
-      description: 通知内の resume / 承認リンクを組み立てる際に使うベース URL。
+      description: >-
+        通知に含める承認リンクなどを組み立てる際に使う、このインスタンスの公開URLです。
       default: http://127.0.0.1:8080
       format: uri
     wip_label:
       type: string
-      description: インスタンスが Issue / PR を claim している間に付与するラベル。
+      description: このインスタンスがIssue / PRの担当になっている間に付与するラベルです。
       default: factory:wip
     worktree_ttl_days:
       type: integer
       description: >-
-        終端状態の worktree を `cleanup_workspaces` が削除するまで保持する
-        日数。
+        処理が終わった作業用ディレクトリを保持する日数です。この日数を過ぎると自動的に削除されます。
       default: 7
   required:
     - owners

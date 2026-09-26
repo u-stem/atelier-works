@@ -1,8 +1,6 @@
 summary: '[LIB] headless Claude 実行'
 description: >-
-  `claude -p` による headless Claude Code 実行のラッパー。プロンプトは stdin
-  経由で渡し(引数には含めない)、`--output-format json`
-  の構造化出力を検証し、必要なら1回だけリトライする。
+  内部ライブラリです。直接実行するものではありません。Claude Codeを自動実行するための共通処理です。
 lock: '!inline f/factory/lib/claude.script.lock'
 kind: script
 schema:

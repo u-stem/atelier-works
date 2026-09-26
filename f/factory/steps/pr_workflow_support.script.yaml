@@ -1,7 +1,6 @@
 summary: '[LIB] PR ワークフロー共通処理'
 description: >-
-  `pr_review` / `pr_fix` のステップ群が使う純粋な判定ロジックと、小さな
-  追加 I/O ヘルパー。
+  内部ライブラリです。直接実行するものではありません。PRレビューと修正の処理が使う共通の判定ロジックです。
 lock: '!inline f/factory/steps/pr_workflow_support.script.lock'
 kind: script
 schema:

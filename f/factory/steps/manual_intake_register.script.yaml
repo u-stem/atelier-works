@@ -1,8 +1,6 @@
 summary: '[OP-1-1/2] 作業項目を登録して工程 2 を起動'
 description: >-
-  `manual_intake__flow` のステップ。直前に作成した Issue を `poll_issues`
-  と同じ手順で claim し、work_items 行の作成・claim コメント投稿・Discord
-  通知の後、`pipeline__flow` を起動する。
+  作成されたIssueの担当を確定し、作業項目として登録します。GitHubへ確認コメントを投稿してDiscordに通知したうえで、要件定義の生成を開始します。
 lock: '!inline f/factory/steps/manual_intake_register.script.lock'
 kind: script
 schema:
@@ -11,31 +9,31 @@ schema:
   properties:
     body:
       type: string
-      description: ''
+      description: '作成されたIssueの本文。'
       default: null
       originalType: string
     issue_number:
       type: number
-      description: ''
+      description: '作成されたIssueの番号。'
       default: null
     issue_url:
       type: string
-      description: ''
+      description: '作成されたIssueのURL。'
       default: null
       originalType: string
     owner:
       type: string
-      description: ''
+      description: '対象リポジトリを所有するGitHubのユーザー名または組織名。'
       default: null
       originalType: string
     repo:
       type: string
-      description: ''
+      description: '対象リポジトリ名。'
       default: null
       originalType: string
     title:
       type: string
-      description: ''
+      description: '作成されたIssueのタイトル。'
       default: null
       originalType: string
   required:

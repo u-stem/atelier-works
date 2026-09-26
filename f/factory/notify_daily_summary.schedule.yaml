@@ -1,8 +1,6 @@
 summary: '[SYS-3] 日次サマリ通知'
 description: >-
-  前日分の agent_runs(件数・コスト・失敗)と approvals(承認/却下件数)を
-  集計し、Discord へ日次サマリの embed を投稿する(docs/architecture.md
-  参照)。
+  毎日9:00(Asia/Tokyo)に実行します。前日分の実行回数・コスト・失敗回数と承認/却下の件数を集計し、Discordへ日次サマリを投稿します。
 args: {}
 cron_version: v2
 enabled: true

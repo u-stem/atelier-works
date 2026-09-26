@@ -43,5 +43,4 @@ value:
   diff_max_lines: 3000
 resource_type: c_factory_config
 description: >-
-  個人アカウント単体インスタンス向けの初期設定。bootstrap 後に owners と
-  instance_name を Windmill UI から設定する。このファイル自体は同期対象外。
+  個人アカウント単体インスタンス向けの初期設定です。ownersとinstance_nameは、この画面から入力してください。

@@ -1,12 +1,6 @@
 summary: '[SF-3-2] レビュー指摘の修正と再レビュー依頼'
 description: >-
-  自動修正を PR に適用する(docs/architecture.md、docs/security.md
-  「pr_fix の安全策」参照)。試行前の安全確認を行い、新規の人間の指摘を
-  収集し、gtr worktree 上で headless Claude(factory-fix スキル、Bash
-  なし)を実行して修正、禁止ファイルパターンと
-  `factory_config.allowed_check_commands` で変更を検証したうえで push・
-  コメント返信・再レビュー依頼を行う。あるいは needs_human / blocked へ
-  遷移、または元 Issue への要件定義再生成サイクルへ差し戻す。
+  PRへの指摘を自動で修正します。安全確認を行ったうえで新しい指摘を集め、Claudeに修正を適用させます。適用結果を検証し、問題なければ変更をpushして再レビューを依頼します。試行回数の上限を超えた場合や危険な変更を検知した場合は、対応が必要な状態(needs_human)にするか、要件定義からやり直します。
 value:
   modules:
     - id: pr_fix_prepare
@@ -177,8 +171,8 @@ value:
             expr: results.pr_fix_collect?.max_review_id ?? 0
           outcome:
             type: javascript
-            expr: 'results.pr_fix_verify == null ? (results.pr_fix_collect == null ?
-              results.pr_fix_prepare.outcome : results.pr_fix_collect.outcome) :
+            expr: 'results.pr_fix_verify == null ? (results.pr_fix_collect == null
+              ? results.pr_fix_prepare.outcome : results.pr_fix_collect.outcome) :
               results.pr_fix_verify.outcome'
           owner:
             type: javascript
@@ -191,9 +185,8 @@ value:
             expr: results.pr_fix_prepare.pr_number
           reason:
             type: javascript
-            expr: 'results.pr_fix_verify == null ? (results.pr_fix_collect == null ?
-              results.pr_fix_prepare.reason : results.pr_fix_collect.reason) :
-              results.pr_fix_verify.reason'
+            expr: 'results.pr_fix_verify == null ? (results.pr_fix_collect == null
+              ? results.pr_fix_prepare.reason : results.pr_fix_collect.reason) : results.pr_fix_verify.reason'
           replies:
             type: javascript
             expr: results.pr_fix_verify?.replies ?? []
@@ -239,6 +232,7 @@ schema:
   properties:
     work_item_id:
       type: integer
-      description: factory.work_items.id of the pr_fix-kind work item to process.
+      description: >-
+        修正処理の対象となる作業項目のID。GitHub Issueのコメントや、Discordの通知に記載されています。
   required:
     - work_item_id

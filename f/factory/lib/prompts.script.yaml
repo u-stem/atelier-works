@@ -1,8 +1,6 @@
 summary: '[LIB] プロンプト定義'
 description: >-
-  要件定義生成・PR レビュー・PR 修正の3段階向けに headless Claude Code
-  へ渡すプロンプトを組み立てる。外部由来のテキストは nonce 付きフェンスで
-  囲み、プロンプトインジェクションに備える。
+  内部ライブラリです。直接実行するものではありません。Claudeへ渡すプロンプトを組み立てる共通処理です。
 lock: '!inline f/factory/lib/prompts.script.lock'
 kind: script
 schema:

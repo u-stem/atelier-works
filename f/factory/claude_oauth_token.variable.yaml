@@ -1,6 +1,4 @@
 value: ""
 is_secret: true
 description: >-
-  Claude Code の長期 OAuth トークン(CLAUDE_CODE_OAUTH_TOKEN)。worker の
-  サブプロセスへ環境変数として渡し、CLI 引数には渡さない。値は bootstrap.sh
-  または Windmill UI から設定し、コミットしない。
+  Claude Codeを自動実行するために使う、Claude Codeの長期利用トークン(CLAUDE_CODE_OAUTH_TOKEN)です。ここで値を設定してください。

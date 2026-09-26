@@ -1,7 +1,6 @@
 summary: '[LIB] 共通型'
 description: >-
-  Software Factory の Windmill 資産が共有するドメイン型定義。Postgres の
-  列名やリソースのフィールド名(snake_case)にそのまま対応する。
+  内部ライブラリです。直接実行するものではありません。Software Factory内で共有するデータ型の定義です。
 lock: '!inline f/factory/lib/types.script.lock'
 kind: script
 schema:

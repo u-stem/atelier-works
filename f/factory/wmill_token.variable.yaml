@@ -1,7 +1,4 @@
 value: ""
 is_secret: true
 description: >-
-  self_update が worker コンテナ内から `wmill sync push` と
-  `wmill datatable migrate up` を実行するために使う恒久的な Windmill API
-  トークン。ワークスペースセットアップ時に bootstrap.sh が発行したものと
-  同一。
+  Software Factory自身を最新化する処理が、設定やデータベースの更新を反映するために使うWindmill APIトークンです。ワークスペースを準備した際に発行したものと同じ値を、ここで設定してください。
