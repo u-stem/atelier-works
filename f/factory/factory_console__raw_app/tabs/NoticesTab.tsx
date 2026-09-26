@@ -1,4 +1,5 @@
 import React from "react";
+import { Skeleton } from "../components/Skeleton";
 import { toNoticeRow } from "../lib/types";
 import { useConsoleQuery } from "../lib/useConsoleQuery";
 
@@ -18,33 +19,48 @@ export function NoticesTab(): React.ReactElement {
     <div className="tab notices-tab">
       <div className="tab-toolbar">
         <h2>要対応通知</h2>
-        <button type="button" onClick={reload} disabled={loading}>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          onClick={reload}
+          disabled={loading}
+          aria-label="通知一覧を更新"
+        >
           更新
         </button>
       </div>
-      {loading && <p>読み込み中...</p>}
+      {loading && <Skeleton rows={3} />}
       {error !== null && <p className="error-banner">{error}</p>}
       {!loading && rows.length === 0 && error === null && (
-        <p>未解決の通知はありません。</p>
+        <div className="empty-state">
+          <p className="empty-state-title">未解決の通知はありません。</p>
+          <p className="empty-state-hint">
+            対応が必要な通知が発生すると、ここに表示されます。
+          </p>
+        </div>
       )}
-      <table className="data-table">
-        <thead>
-          <tr>
-            <th>種別</th>
-            <th>内容</th>
-            <th>発生</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => (
-            <tr key={row.notice_id}>
-              <td>{row.kind}</td>
-              <td>{row.message}</td>
-              <td>{formatDateTime(row.created_at)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      {!loading && rows.length > 0 && (
+        <div className="table-scroll">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>種別</th>
+                <th>内容</th>
+                <th>発生</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={row.notice_id}>
+                  <td>{row.kind}</td>
+                  <td>{row.message}</td>
+                  <td>{formatDateTime(row.created_at)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

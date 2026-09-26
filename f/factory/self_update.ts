@@ -9,25 +9,23 @@
 // minimal env for the `wmill` CLI subprocess) lives in
 // ./lib/self_update_support.ts; this file is I/O wiring only.
 //
-// `f/factory/deployed_sha` (a non-secret Windmill variable) is synced from
-// this repo like any other variable, with an empty committed value — so an
-// unrelated `wmill sync push` (a human running `mise run push` for a
-// different change, or this very script's own step below) resets it back
-// to "" on every push, *before* this script's own `wmill.setVariable` call
-// restores it to the just-deployed sha. A push that races with a
-// concurrent self_update run could momentarily observe "" here too; either
-// way the effect is limited to treating "unchanged" as "update" for one
-// extra run — `wmill sync push --yes --keep-deleted` is idempotent, so a
-// redundant deploy is harmless, just extra worker-local I/O.
+// `f/factory/deployed_sha` (a non-secret Windmill variable) is excluded
+// from sync entirely (see wmill.yaml's excludes comment on this path) —
+// scripts/bootstrap.sh creates it once, empty, and only this script's own
+// `wmill.setVariable` call below ever changes its value afterward. An
+// unrelated `wmill sync push` never resets it.
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "./lib/config.ts";
 import { addNotice, recordDeployment } from "./lib/db.ts";
 import { notify } from "./lib/discord.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import {
+  assertBranchMatches,
+  buildWmillArgv,
   buildWmillEnv,
   classifyChangedPaths,
   decideUpdate,
+  resolveWmillCliContext,
   truncateOutput,
 } from "./lib/self_update_support.ts";
 import { assertSha } from "./lib/types.ts";
@@ -35,6 +33,7 @@ import {
   type CommandResult,
   type CommandRunner,
   ensureFactoryClone,
+  pathExists,
   runCommand,
 } from "./lib/workspace.ts";
 
@@ -75,6 +74,30 @@ export async function readSelfCloneHeadSha(
     throw new Error(
       maskSecrets(
         `git rev-parse HEAD failed in ${dir}: ${result.stderr.trim()}`,
+      ),
+    );
+  }
+  return result.stdout.trim();
+}
+
+/** `git rev-parse --abbrev-ref HEAD` in the self clone's working tree — the
+ * currently checked-out branch name. Local-only. Used as a defense-in-depth
+ * check (M7 re-gate) that `ensureFactoryClone` actually left the clone on
+ * `config.factory_branch`, since a real worker run found it stuck on `main`
+ * before `ensureFactoryClone`'s own re-checkout fix (see lib/workspace.ts's
+ * module comment on that fix for the full incident). */
+export async function readSelfCloneBranch(
+  run: CommandRunner,
+  dir: string,
+): Promise<string> {
+  const result = await run(
+    [...GIT_BASE_ARGV, "rev-parse", "--abbrev-ref", "HEAD"],
+    { cwd: dir, env: selfCloneGitEnv() },
+  );
+  if (result.exitCode !== 0) {
+    throw new Error(
+      maskSecrets(
+        `git rev-parse --abbrev-ref HEAD failed in ${dir}: ${result.stderr.trim()}`,
       ),
     );
   }
@@ -133,6 +156,27 @@ export async function diffPaths(
     .filter((line) => line.length > 0);
 }
 
+/**
+ * Throws unless `<dir>/wmill.yaml` exists — defense-in-depth (M7 re-gate):
+ * a real worker run once had `wmill sync push` print "No wmill.yaml found.
+ * Use 'wmill init' to bootstrap it." (harmlessly, since it then reported
+ * "0 changes" and exited 0) because the CLI ran from a working directory
+ * that wasn't actually this repo's sync root. Refuse outright rather than
+ * risk a silent no-op push next time. `exists` is injectable for testing
+ * (default: lib/workspace.ts's `pathExists`).
+ */
+export async function assertWmillYamlExists(
+  dir: string,
+  exists: (path: string) => Promise<boolean> = pathExists,
+): Promise<void> {
+  const wmillYamlPath = `${dir}/wmill.yaml`;
+  if (!(await exists(wmillYamlPath))) {
+    throw new Error(
+      `self_update: ${wmillYamlPath} not found — refusing to run the wmill CLI from an unexpected working directory`,
+    );
+  }
+}
+
 async function resolveChangedPaths(
   run: CommandRunner,
   dir: string,
@@ -155,32 +199,42 @@ function logCommandOutput(
   log: Logger,
   step: string,
   result: CommandResult,
+  secrets: readonly string[],
 ): void {
   log.info(step, {
     exit_code: result.exitCode,
     timed_out: result.timedOut,
-    stdout: truncateOutput(maskSecrets(result.stdout), LOG_OUTPUT_MAX),
-    stderr: truncateOutput(maskSecrets(result.stderr), LOG_OUTPUT_MAX),
+    stdout: truncateOutput(maskSecrets(result.stdout, secrets), LOG_OUTPUT_MAX),
+    stderr: truncateOutput(maskSecrets(result.stderr, secrets), LOG_OUTPUT_MAX),
   });
 }
 
+// `secrets` masks the wmill API token in logged output/thrown errors — the
+// token is now a literal argv element (buildWmillArgv's module comment
+// explains why: no env var this CLI reads substitutes for --token), so a
+// CLI error that happens to echo its own invocation back would otherwise
+// leak it. The Windmill API token has no fixed public format `maskSecrets`
+// recognizes unprompted (see lib/log.ts's own doc comment), so it must be
+// passed explicitly here.
 async function runWmillCli(
   argv: readonly string[],
   cwd: string,
   env: Record<string, string>,
   log: Logger,
   step: string,
+  secrets: readonly string[],
 ): Promise<void> {
   const result = await runCommand(argv, {
     cwd,
     env,
     timeoutMs: WMILL_CLI_TIMEOUT_MS,
   });
-  logCommandOutput(log, step, result);
+  logCommandOutput(log, step, result, secrets);
   if (result.exitCode !== 0 || result.timedOut) {
     throw new Error(
       maskSecrets(
         `${step} failed (exit ${String(result.exitCode)}, timed_out=${String(result.timedOut)}): ${result.stderr.trim()}`,
+        secrets,
       ),
     );
   }
@@ -212,6 +266,14 @@ export async function main(): Promise<SelfUpdateResult> {
     ghToken,
     branch: config.factory_branch,
   });
+
+  // Defense-in-depth (M7 re-gate): verify ensureFactoryClone's own
+  // postcondition actually held, rather than silently trusting it — see
+  // readSelfCloneBranch's doc comment for the real incident this guards
+  // against.
+  const actualBranch = await readSelfCloneBranch(runCommand, factoryClone.dir);
+  assertBranchMatches(actualBranch, config.factory_branch, factoryClone.dir);
+
   const currentSha = await readSelfCloneHeadSha(runCommand, factoryClone.dir);
 
   let deployedSha = "";
@@ -232,32 +294,49 @@ export async function main(): Promise<SelfUpdateResult> {
     sha_to: currentSha,
   });
 
+  // Populated as soon as the token is fetched below, and read by the outer
+  // catch block too (see its own maskSecrets call) — declared here so it is
+  // in scope in both places rather than duplicated.
+  let secrets: string[] = [];
+
   try {
     const wmillToken = await wmill.getVariable("f/factory/wmill_token");
-    const env = buildWmillEnv(
-      {
-        BASE_INTERNAL_URL: process.env.BASE_INTERNAL_URL,
-        BASE_URL: process.env.BASE_URL,
-        WM_WORKSPACE: process.env.WM_WORKSPACE,
-        HOME: process.env.HOME,
-        PATH: process.env.PATH,
-      },
-      wmillToken,
-    );
+    secrets = [wmillToken];
+    const context = resolveWmillCliContext({
+      BASE_INTERNAL_URL: process.env.BASE_INTERNAL_URL,
+      BASE_URL: process.env.BASE_URL,
+      WM_WORKSPACE: process.env.WM_WORKSPACE,
+    });
+    const env = buildWmillEnv({
+      HOME: process.env.HOME,
+      PATH: process.env.PATH,
+    });
+
+    await assertWmillYamlExists(factoryClone.dir);
 
     await runWmillCli(
-      ["wmill", "sync", "push", "--yes", "--keep-deleted"],
+      buildWmillArgv(
+        ["wmill", "sync", "push", "--yes", "--keep-deleted"],
+        context,
+        wmillToken,
+      ),
       factoryClone.dir,
       env,
       log,
       "wmill sync push",
+      secrets,
     );
     await runWmillCli(
-      ["wmill", "datatable", "migrate", "up"],
+      buildWmillArgv(
+        ["wmill", "datatable", "migrate", "up"],
+        context,
+        wmillToken,
+      ),
       factoryClone.dir,
       env,
       log,
       "wmill datatable migrate up",
+      secrets,
     );
 
     await wmill.setVariable(
@@ -317,6 +396,7 @@ export async function main(): Promise<SelfUpdateResult> {
   } catch (err) {
     const message = maskSecrets(
       err instanceof Error ? err.message : String(err),
+      secrets,
     );
     log.error("self_update failed", { error: message });
     try {

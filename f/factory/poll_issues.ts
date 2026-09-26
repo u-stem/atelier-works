@@ -12,12 +12,10 @@
 // file is I/O wiring only, and never throws on a single item's failure —
 // see recordFailureSafe.
 
-// `getResultMaybe` is only exposed on windmill-client's default export, not
-// its named exports (verified against node_modules/windmill-client/dist/
-// index.d.ts) — a second, default import just for it. Pinned to 1.817.0 to
-// match the deployed server version (per lib-core; an unpinned "latest"
-// import drifts independently across scripts at `generate-metadata` time).
-import wmillDefault, * as wmill from "windmill-client@1.817.0";
+// Pinned to 1.817.0 to match the deployed server version (per lib-core; an
+// unpinned "latest" import drifts independently across scripts at
+// `generate-metadata` time).
+import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "./lib/config.ts";
 import {
   addNotice,
@@ -50,7 +48,7 @@ import {
   type JobState,
   type ReconcileGithubState,
 } from "./lib/poll_support.ts";
-import type { FactoryConfig, WorkItem } from "./lib/types.ts";
+import { type FactoryConfig, isRecord, type WorkItem } from "./lib/types.ts";
 import {
   type CommandRunner,
   ensureFactoryClone,
@@ -179,29 +177,61 @@ async function checkDeployedSha(
   }
 }
 
-type ResultMaybePayload = {
-  readonly started: boolean;
-  readonly completed: boolean;
-};
-
-function isResultMaybePayload(value: unknown): value is ResultMaybePayload {
-  if (typeof value !== "object" || value === null) return false;
-  const record = value as { started: unknown; completed: unknown };
-  return (
-    typeof record.started === "boolean" && typeof record.completed === "boolean"
-  );
+/**
+ * Interprets a `JobService.getJob` response's `type` discriminator as a
+ * `JobState`. `job` is `null`/non-record for "couldn't fetch" (the
+ * exception path in `getJobState` below folds a 404/any other error into
+ * this same `null` input, rather than branching separately, so this one
+ * function is the whole decision and stays fully unit-testable). A
+ * successfully-fetched-but-unrecognized shape (`type` missing or some
+ * future third value) defaults to `running`, not `absent` — deliberately:
+ * the entire point of this fix is to never again treat "we couldn't
+ * positively confirm the job is done" as grounds to cancel/orphan a work
+ * item, so an ambiguous *positive* fetch errs toward "leave it alone"
+ * while only a *failed* fetch (the job genuinely isn't there) errs toward
+ * "absent."
+ *
+ * devil-advocate fatal fix (E2E, 2026-09-26): `getJobState` previously
+ * called `wmill.getResultMaybe(flowJobId)`. A live probe (`f/factory/
+ * _probe.ts` + `_probe_sleep.ts`, deleted after recording this finding)
+ * against a job independently confirmed `running` via `wmill job get`
+ * moments earlier still came back `{ completed: true, success: true,
+ * started: true, result: ... }` by the time the probe itself got a worker
+ * turn — every trial, including one with a 5-minute target job. This
+ * worker pool was also visibly contended throughout testing (`docker
+ * compose ps` shows a single `windmill_worker` container; multiple
+ * schedules sat `queued` for 5-25+ minutes during the same window), so
+ * the exact mechanism (whether `getResultMaybe` itself waits for
+ * completion rather than returning a snapshot, or the probe just never
+ * got to run until after the target finished) isn't fully isolated — but
+ * either way, `getResultMaybe` is not a safe "is this still running right
+ * now" check. Left uncorrected, a still-running `pipeline` (e.g. deep in
+ * the `generate` step's Claude Code call) would look `absent`/`completed`
+ * to `poll_issues` once the reconcile grace elapsed, and get cancelled out
+ * from under itself (reproduced twice: 03:00:02 and 03:15:02).
+ * `JobService.getJob` instead reads the job's row directly — no
+ * result-polling/waiting semantics — so it can't exhibit this.
+ */
+export function jobStateFromJob(job: unknown): JobState {
+  if (!isRecord(job)) return { state: "absent" };
+  if (job.type === "CompletedJob") return { state: "completed" };
+  return { state: "running" };
 }
 
 async function getJobState(flowJobId: string | null): Promise<JobState> {
   if (flowJobId === null) return { state: "absent" };
-  let raw: unknown;
+  let job: unknown = null;
   try {
-    raw = await wmillDefault.getResultMaybe(flowJobId);
+    job = await wmill.JobService.getJob({
+      workspace: process.env.WM_WORKSPACE ?? "",
+      id: flowJobId,
+      noLogs: true,
+      noCode: true,
+    });
   } catch {
-    return { state: "absent" };
+    job = null;
   }
-  if (!isResultMaybePayload(raw)) return { state: "absent" };
-  return raw.completed ? { state: "completed" } : { state: "running" };
+  return jobStateFromJob(job);
 }
 
 /** Best-effort removal of pr_review's detached worktrees
@@ -259,6 +289,16 @@ async function reconcileActiveItems(
 ): Promise<number> {
   let count = 0;
   const now = new Date();
+  // Devil-advocate follow-up: 10 minutes is enough slack for the normal
+  // "job finished/absent, work_items row lags behind" case, but not for a
+  // pipeline still legitimately deep in a single Claude Code call — that
+  // alone can run up to `claude_timeout_sec`. Give it two full timeouts'
+  // worth of headroom on top of the 10-minute floor, as insurance should
+  // getJobState itself ever misjudge a run that's taking unusually long.
+  const orphanGraceMs = Math.max(
+    10 * 60_000,
+    config.claude_timeout_sec * 2 * 1000,
+  );
 
   for (const item of active) {
     const label =
@@ -293,7 +333,13 @@ async function reconcileActiveItems(
       }
 
       const jobState = await getJobState(item.flow_job_id);
-      const decision = decideReconcileAction(item, github, jobState, now);
+      const decision = decideReconcileAction(
+        item,
+        github,
+        jobState,
+        now,
+        orphanGraceMs,
+      );
       if (decision.action === "none") continue;
 
       if (item.flow_job_id !== null) {

@@ -1,8 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
+  assertBranchMatches,
+  buildWmillArgv,
   buildWmillEnv,
   classifyChangedPaths,
   decideUpdate,
+  resolveWmillCliContext,
   truncateOutput,
 } from "../../f/factory/lib/self_update_support.ts";
 
@@ -19,6 +22,36 @@ describe("decideUpdate", () => {
 
   test("returns update when deployedSha is empty (never deployed yet)", () => {
     expect(decideUpdate("abc1234", "")).toEqual({ outcome: "update" });
+  });
+});
+
+describe("assertBranchMatches", () => {
+  test("does not throw when the branches match", () => {
+    expect(() =>
+      assertBranchMatches("main", "main", "/workspaces/factory/atelier-works"),
+    ).not.toThrow();
+  });
+
+  test("throws when the branches differ", () => {
+    expect(() =>
+      assertBranchMatches(
+        "main",
+        "feat/factory-foundation",
+        "/workspaces/factory/atelier-works",
+      ),
+    ).toThrow(
+      /is on branch "main", expected factory_branch "feat\/factory-foundation"/,
+    );
+  });
+
+  test("includes dir in the thrown message", () => {
+    expect(() =>
+      assertBranchMatches(
+        "main",
+        "release",
+        "/workspaces/factory/atelier-works",
+      ),
+    ).toThrow(/\/workspaces\/factory\/atelier-works/);
   });
 });
 
@@ -77,58 +110,103 @@ describe("classifyChangedPaths", () => {
   });
 });
 
-describe("buildWmillEnv", () => {
-  test("prefers BASE_INTERNAL_URL over BASE_URL for WM_BASE_URL", () => {
-    const env = buildWmillEnv(
-      {
-        BASE_INTERNAL_URL: "http://internal:8000",
-        BASE_URL: "http://127.0.0.1:8080",
-      },
-      "wm-token",
-    );
-    expect(env.WM_BASE_URL).toBe("http://internal:8000");
+describe("resolveWmillCliContext", () => {
+  test("prefers BASE_INTERNAL_URL over BASE_URL", () => {
+    const context = resolveWmillCliContext({
+      BASE_INTERNAL_URL: "http://internal:8000",
+      BASE_URL: "http://127.0.0.1:8080",
+      WM_WORKSPACE: "factory",
+    });
+    expect(context.baseUrl).toBe("http://internal:8000");
   });
 
   test("falls back to BASE_URL when BASE_INTERNAL_URL is unset", () => {
-    const env = buildWmillEnv(
-      { BASE_URL: "http://127.0.0.1:8080" },
+    const context = resolveWmillCliContext({
+      BASE_URL: "http://127.0.0.1:8080",
+      WM_WORKSPACE: "factory",
+    });
+    expect(context.baseUrl).toBe("http://127.0.0.1:8080");
+  });
+
+  test("carries WM_WORKSPACE through as workspace", () => {
+    const context = resolveWmillCliContext({
+      BASE_URL: "http://127.0.0.1:8080",
+      WM_WORKSPACE: "factory",
+    });
+    expect(context.workspace).toBe("factory");
+  });
+
+  test("throws when neither BASE_INTERNAL_URL nor BASE_URL is set", () => {
+    expect(() => resolveWmillCliContext({ WM_WORKSPACE: "factory" })).toThrow(
+      /base URL/,
+    );
+  });
+
+  test("throws when WM_WORKSPACE is unset", () => {
+    expect(() =>
+      resolveWmillCliContext({ BASE_URL: "http://127.0.0.1:8080" }),
+    ).toThrow(/workspace/);
+  });
+
+  test("throws when WM_WORKSPACE is empty", () => {
+    expect(() =>
+      resolveWmillCliContext({
+        BASE_URL: "http://127.0.0.1:8080",
+        WM_WORKSPACE: "",
+      }),
+    ).toThrow(/workspace/);
+  });
+});
+
+describe("buildWmillArgv", () => {
+  test("appends --workspace, --base-url, and --token to the base argv", () => {
+    const argv = buildWmillArgv(
+      ["wmill", "sync", "push", "--yes"],
+      { workspace: "factory", baseUrl: "http://127.0.0.1:8080" },
       "wm-token",
     );
-    expect(env.WM_BASE_URL).toBe("http://127.0.0.1:8080");
+    expect(argv).toEqual([
+      "wmill",
+      "sync",
+      "push",
+      "--yes",
+      "--workspace",
+      "factory",
+      "--base-url",
+      "http://127.0.0.1:8080",
+      "--token",
+      "wm-token",
+    ]);
   });
 
-  test("omits WM_BASE_URL when neither is set", () => {
-    const env = buildWmillEnv({}, "wm-token");
-    expect(env.WM_BASE_URL).toBeUndefined();
+  test("does not mutate the base argv array", () => {
+    const baseArgv = ["wmill", "datatable", "migrate", "up"];
+    buildWmillArgv(
+      baseArgv,
+      { workspace: "factory", baseUrl: "http://127.0.0.1:8080" },
+      "wm-token",
+    );
+    expect(baseArgv).toEqual(["wmill", "datatable", "migrate", "up"]);
   });
+});
 
-  test("always includes WM_TOKEN from the token argument", () => {
-    const env = buildWmillEnv({}, "wm-token");
-    expect(env.WM_TOKEN).toBe("wm-token");
-  });
-
-  test("carries WM_WORKSPACE through when set", () => {
-    const env = buildWmillEnv({ WM_WORKSPACE: "factory" }, "wm-token");
-    expect(env.WM_WORKSPACE).toBe("factory");
-  });
-
+describe("buildWmillEnv", () => {
   test("carries HOME and PATH through when set", () => {
-    const env = buildWmillEnv(
-      { HOME: "/home/factory", PATH: "/usr/bin:/bin" },
-      "wm-token",
-    );
-    expect(env.HOME).toBe("/home/factory");
-    expect(env.PATH).toBe("/usr/bin:/bin");
+    const env = buildWmillEnv({
+      HOME: "/home/factory",
+      PATH: "/usr/bin:/bin",
+    });
+    expect(env).toEqual({ HOME: "/home/factory", PATH: "/usr/bin:/bin" });
   });
 
-  test("does not carry any other ambient env field through", () => {
-    const env = buildWmillEnv(
-      { BASE_URL: "http://127.0.0.1:8080", WM_WORKSPACE: "factory" },
-      "wm-token",
-    );
-    expect(Object.keys(env).sort()).toEqual(
-      ["WM_BASE_URL", "WM_TOKEN", "WM_WORKSPACE"].sort(),
-    );
+  test("omits HOME/PATH when unset", () => {
+    const env = buildWmillEnv({});
+    expect(env).toEqual({});
+  });
+
+  test("never includes a workspace/base-url/token field", () => {
+    const env = buildWmillEnv({ HOME: "/home/factory" });
+    expect(Object.keys(env).sort()).toEqual(["HOME"]);
   });
 });
 

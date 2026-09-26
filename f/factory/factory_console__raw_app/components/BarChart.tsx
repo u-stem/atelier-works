@@ -27,7 +27,7 @@ function defaultFormatValue(value: number): string {
 export function BarChart({
   data,
   height = DEFAULT_HEIGHT,
-  barColor = "#3b6fe0",
+  barColor = "var(--accent)",
   formatValue = defaultFormatValue,
 }: BarChartProps): React.ReactElement {
   if (data.length === 0) {
@@ -59,7 +59,7 @@ export function BarChart({
               y={Math.max(y - 4, 10)}
               textAnchor="middle"
               fontSize="10"
-              fill="#333"
+              fill="var(--text-muted)"
             >
               {formatValue(datum.value)}
             </text>
@@ -75,7 +75,7 @@ export function BarChart({
               y={chartHeight + 16}
               textAnchor="middle"
               fontSize="10"
-              fill="#555"
+              fill="var(--text-muted)"
             >
               {datum.label}
             </text>

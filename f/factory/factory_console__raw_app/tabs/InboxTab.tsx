@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { Markdown } from "../components/Markdown";
+import { Skeleton } from "../components/Skeleton";
 import { decideApproval, describeError } from "../lib/api";
 import { toInboxRow } from "../lib/types";
 import { useConsoleQuery } from "../lib/useConsoleQuery";
@@ -60,14 +61,27 @@ export function InboxTab(): React.ReactElement {
       <div className="inbox-list">
         <div className="tab-toolbar">
           <h2>承認待ち一覧</h2>
-          <button type="button" onClick={reload} disabled={loading}>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={reload}
+            disabled={loading}
+            aria-label="承認待ち一覧を更新"
+          >
             更新
           </button>
         </div>
-        {loading && <p>読み込み中...</p>}
+        {loading && <Skeleton />}
         {error !== null && <p className="error-banner">{error}</p>}
         {!loading && rows.length === 0 && error === null && (
-          <p>承認待ちの作業項目はありません。</p>
+          <div className="empty-state">
+            <p className="empty-state-title">
+              承認待ちの作業項目はありません。
+            </p>
+            <p className="empty-state-hint">
+              新しい要件定義が提出されると、ここに表示されます。
+            </p>
+          </div>
         )}
         <ul className="inbox-items">
           {rows.map((row) => (
@@ -94,7 +108,14 @@ export function InboxTab(): React.ReactElement {
       </div>
       <div className="inbox-detail">
         {selected === null ? (
-          <p>左の一覧から作業項目を選択してください。</p>
+          <div className="empty-state">
+            <p className="empty-state-title">
+              左の一覧から作業項目を選択してください。
+            </p>
+            <p className="empty-state-hint">
+              要件定義の内容と承認 / 却下の操作がここに表示されます。
+            </p>
+          </div>
         ) : (
           <>
             <h2>{selected.title ?? "(タイトルなし)"}</h2>
@@ -172,19 +193,23 @@ export function InboxTab(): React.ReactElement {
             <div className="button-row">
               <button
                 type="button"
+                className="btn btn-primary"
                 onClick={() => {
                   void handleDecision("approve");
                 }}
                 disabled={pendingId !== null}
+                aria-label="この作業項目を承認"
               >
                 承認
               </button>
               <button
                 type="button"
+                className="btn btn-danger"
                 onClick={() => {
                   void handleDecision("reject");
                 }}
                 disabled={pendingId !== null}
+                aria-label="この作業項目を却下"
               >
                 却下
               </button>

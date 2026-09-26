@@ -482,8 +482,8 @@ describe("ensureFactoryClone", () => {
     ).rejects.toThrow(/invalid branch name/);
   });
 
-  test("pulls --ff-only when the clone dir already exists", async () => {
-    const fake = createFakeCommandRunner([ok()]);
+  test("fetches then checks out -B the configured branch when the clone dir already exists", async () => {
+    const fake = createFakeCommandRunner([ok(), ok()]);
     const result = await ensureFactoryClone({
       run: fake.run,
       repoUrl: "https://github.com/acme/atelier-works.git",
@@ -495,12 +495,72 @@ describe("ensureFactoryClone", () => {
       dir: "/workspaces/factory/atelier-works",
       action: "pulled",
     });
+    expect(fake.calls[0]?.argv).toEqual(
+      expect.arrayContaining(["fetch", "origin", "--", "main"]),
+    );
+    expect(fake.calls[1]?.argv).toEqual(
+      expect.arrayContaining(["checkout", "-B", "main", "origin/main"]),
+    );
+  });
+
+  test("checks out -B the *configured* branch even when the existing clone was left on a different one (M7 re-gate: a prior caller defaulting to main must not stick)", async () => {
+    const fake = createFakeCommandRunner([ok(), ok()]);
+    await ensureFactoryClone({
+      run: fake.run,
+      repoUrl: "https://github.com/acme/atelier-works.git",
+      ghToken: "gh-token",
+      branch: "feat/factory-foundation",
+      exists: async () => true,
+      lockFs: createInMemoryLockFs(),
+    });
+    expect(fake.calls[0]?.argv).toEqual(
+      expect.arrayContaining([
+        "fetch",
+        "origin",
+        "--",
+        "feat/factory-foundation",
+      ]),
+    );
+    expect(fake.calls[1]?.argv).toEqual(
+      expect.arrayContaining([
+        "checkout",
+        "-B",
+        "feat/factory-foundation",
+        "origin/feat/factory-foundation",
+      ]),
+    );
+  });
+
+  test("throws when the fetch fails", async () => {
+    const fake = createFakeCommandRunner([fail("could not fetch")]);
+    await expect(
+      ensureFactoryClone({
+        run: fake.run,
+        repoUrl: "https://github.com/acme/atelier-works.git",
+        ghToken: "gh-token",
+        exists: async () => true,
+        lockFs: createInMemoryLockFs(),
+      }),
+    ).rejects.toThrow();
+  });
+
+  test("throws when the checkout fails", async () => {
+    const fake = createFakeCommandRunner([ok(), fail("could not checkout")]);
+    await expect(
+      ensureFactoryClone({
+        run: fake.run,
+        repoUrl: "https://github.com/acme/atelier-works.git",
+        ghToken: "gh-token",
+        exists: async () => true,
+        lockFs: createInMemoryLockFs(),
+      }),
+    ).rejects.toThrow();
   });
 
   test("acquires a lock scoped to the clone dir before pulling (security fix, devil-advocate: avoids .git/index.lock races between concurrent flows and poll_issues sharing the same self clone)", async () => {
     const lockFs = createInMemoryLockFs();
     let sawLockDuringRun = false;
-    const fake = createFakeCommandRunner([ok()]);
+    const fake = createFakeCommandRunner([ok(), ok()]);
     const runAndCheck: typeof fake.run = async (argv, options) => {
       sawLockDuringRun =
         (await lockFs.read("/workspaces/factory/atelier-works.lock")) !==

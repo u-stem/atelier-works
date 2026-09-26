@@ -36,7 +36,10 @@
 #      change the password to WM_ADMIN_PASSWORD. -> SESSION_TOKEN.
 #   2. `wmill workspace add factory factory $WM_BASE_URL --token <session> --create`
 #      (creates the workspace if missing) using the session token - no
-#      workspace-scoped token exists yet.
+#      workspace-scoped token exists yet. Then set the workspace's display
+#      name to "Factory" (id stays lowercase "factory") via
+#      `POST .../workspaces/change_workspace_name` - idempotent, safe to
+#      re-run every time.
 #   3. Ensure the instance-backed Postgres database is set up (CREATE
 #      DATABASE + grants for custom_instance_user) via the official
 #      superadmin API (`/settings/{list,setup}_custom_instance_pg_database*`),
@@ -265,6 +268,10 @@ folder_body() {
   '
 }
 
+change_workspace_name_body() {
+  bun_eval 'process.stdout.write(JSON.stringify({ new_name: "Factory" }));'
+}
+
 # --- step 1: log in, changing the initial admin password on first run -----
 status="$(login_body "${WM_ADMIN_PASSWORD}" | api_post /auth/login)"
 if [ "${status}" = "200" ]; then
@@ -293,6 +300,13 @@ run_wmill workspace add "${WORKSPACE}" "${WORKSPACE}" "${WM_BASE_URL}" \
   --token "${SESSION_TOKEN}" --create >&2
 harden_wmill_config_dir
 log "workspace '${WORKSPACE}' ready (using the session token for now)"
+
+# id stays lowercase ("factory"); display name is capitalized ("Factory")
+# to match the UI (Factory Console, etc.). Idempotent - setting the same
+# name again on a re-run is a no-op.
+status="$(change_workspace_name_body | api_post "/w/${WORKSPACE}/workspaces/change_workspace_name")"
+[ "${status}" = "200" ] || die "failed to set workspace display name (status ${status})"
+log "workspace display name set to 'Factory'"
 
 # Prints the resource_path of the 'main' datatable on stdout and exits 0 if
 # it exists; exits 1 (nothing printed) otherwise.

@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { Skeleton } from "../components/Skeleton";
 import { describeError, retryWorkItem } from "../lib/api";
 import { toFailureRow } from "../lib/types";
 import { useConsoleQuery } from "../lib/useConsoleQuery";
@@ -43,14 +44,25 @@ export function FailuresTab(): React.ReactElement {
     <div className="tab failures-tab">
       <div className="tab-toolbar">
         <h2>失敗一覧</h2>
-        <button type="button" onClick={reload} disabled={loading}>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          onClick={reload}
+          disabled={loading}
+          aria-label="失敗一覧を更新"
+        >
           更新
         </button>
       </div>
-      {loading && <p>読み込み中...</p>}
+      {loading && <Skeleton rows={3} />}
       {error !== null && <p className="error-banner">{error}</p>}
       {!loading && rows.length === 0 && error === null && (
-        <p>失敗はありません。</p>
+        <div className="empty-state">
+          <p className="empty-state-title">失敗はありません。</p>
+          <p className="empty-state-hint">
+            ジョブが失敗すると、ここに詳細と再実行の操作が表示されます。
+          </p>
+        </div>
       )}
       <ul className="failure-list">
         {rows.map((row) => (
@@ -73,10 +85,12 @@ export function FailuresTab(): React.ReactElement {
             )}
             <button
               type="button"
+              className="btn btn-primary"
               onClick={() => {
                 void handleRetry(row.work_item_id);
               }}
               disabled={row.work_item_id === null || pendingId !== null}
+              aria-label="この作業項目を再実行"
             >
               {pendingId === row.work_item_id ? "実行中..." : "再実行"}
             </button>

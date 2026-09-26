@@ -1,15 +1,46 @@
 // Tests for self_update.ts's private-ish git helpers (`readSelfCloneHeadSha`,
-// `listAllPaths`, `diffPaths`) — I/O wiring, tested the same way
-// poll_issues.ts's own `readRepoHeadSha` is (tests/scripts/
+// `readSelfCloneBranch`, `listAllPaths`, `diffPaths`) — I/O wiring, tested
+// the same way poll_issues.ts's own `readRepoHeadSha` is (tests/scripts/
 // poll_issues_read_repo_head_sha.test.ts).
 
 import { describe, expect, test } from "bun:test";
 import {
+  assertWmillYamlExists,
   diffPaths,
   listAllPaths,
+  readSelfCloneBranch,
   readSelfCloneHeadSha,
 } from "../../f/factory/self_update.ts";
 import { createFakeCommandRunner, fail, ok } from "../lib/testSupport.ts";
+
+describe("assertWmillYamlExists", () => {
+  test("does not throw when wmill.yaml exists at the given dir", async () => {
+    await expect(
+      assertWmillYamlExists(
+        "/workspaces/factory/atelier-works",
+        async (path) => path === "/workspaces/factory/atelier-works/wmill.yaml",
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  test("throws when wmill.yaml does not exist at the given dir", async () => {
+    await expect(
+      assertWmillYamlExists(
+        "/workspaces/factory/atelier-works",
+        async () => false,
+      ),
+    ).rejects.toThrow(/wmill\.yaml not found/);
+  });
+
+  test("checks the exact wmill.yaml path under dir", async () => {
+    const checkedPaths: string[] = [];
+    await assertWmillYamlExists("/some/dir", async (path) => {
+      checkedPaths.push(path);
+      return true;
+    });
+    expect(checkedPaths).toEqual(["/some/dir/wmill.yaml"]);
+  });
+});
 
 describe("readSelfCloneHeadSha", () => {
   test("returns the trimmed rev-parse output", async () => {
@@ -25,6 +56,32 @@ describe("readSelfCloneHeadSha", () => {
     const { run } = createFakeCommandRunner([fail("not a git repository")]);
     await expect(
       readSelfCloneHeadSha(run, "/workspaces/factory/atelier-works"),
+    ).rejects.toThrow();
+  });
+});
+
+describe("readSelfCloneBranch", () => {
+  test("returns the trimmed rev-parse --abbrev-ref HEAD output", async () => {
+    const { run } = createFakeCommandRunner([ok("feat/factory-foundation\n")]);
+    const branch = await readSelfCloneBranch(
+      run,
+      "/workspaces/factory/atelier-works",
+    );
+    expect(branch).toBe("feat/factory-foundation");
+  });
+
+  test("uses git rev-parse --abbrev-ref HEAD", async () => {
+    const fake = createFakeCommandRunner([ok("main\n")]);
+    await readSelfCloneBranch(fake.run, "/workspaces/factory/atelier-works");
+    expect(fake.calls[0]?.argv).toEqual(
+      expect.arrayContaining(["rev-parse", "--abbrev-ref", "HEAD"]),
+    );
+  });
+
+  test("throws when git rev-parse fails", async () => {
+    const { run } = createFakeCommandRunner([fail("not a git repository")]);
+    await expect(
+      readSelfCloneBranch(run, "/workspaces/factory/atelier-works"),
     ).rejects.toThrow();
   });
 });

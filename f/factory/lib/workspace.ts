@@ -814,15 +814,54 @@ export async function ensureFactoryClone(
     ...(opts.now !== undefined ? { now: opts.now } : {}),
     fn: async () => {
       if (await exists(dir)) {
-        const result = await opts.run(
-          buildGitArgv(["pull", "--ff-only"], { network: true }),
+        // Fetch + `checkout -B` (not `pull --ff-only`), unconditionally, on
+        // every call — not just at first clone (security/correctness fix,
+        // M7 re-gate): `branch` (config `factory_branch`) can differ from
+        // whatever branch this clone happened to be on already (e.g. a
+        // *different* caller of ensureFactoryClone that didn't pass
+        // `branch` defaults to "main" and leaves the clone checked out
+        // there), and a plain `pull --ff-only` only ever advances the
+        // *currently checked-out* branch — it neither switches branches nor
+        // notices a mismatch. Verified in a real worker run: this let the
+        // clone stay stuck on `main` while `factory_branch` was the actual
+        // working branch, so self_update deployed stale `main` content.
+        // `checkout -B <branch> origin/<branch>` always converges to the
+        // configured branch's current remote state regardless of what was
+        // checked out before (switching if needed, resetting hard if
+        // already on it) - safe here since this clone is fetch-and-read
+        // only, never edited in place.
+        const fetchResult = await opts.run(
+          buildGitArgv(["fetch", "origin", "--", branch], { network: true }),
           {
             cwd: dir,
             env,
           },
         );
-        if (result.exitCode !== 0) {
-          throw gitError("git pull --ff-only failed for factory clone", result);
+        if (fetchResult.exitCode !== 0) {
+          throw gitError(
+            `git fetch origin ${branch} failed for factory clone`,
+            fetchResult,
+          );
+        }
+        // No `--` here: like `reset --hard` elsewhere in this module,
+        // `checkout -B <branch> <start-point>` does not tolerate a `--`
+        // before its start-point argument the way most other subcommands
+        // do — `--` switches `checkout` into "restore these paths" mode,
+        // silently misinterpreting `origin/<branch>` as a pathspec instead
+        // of a ref. `branch` is validated via `assertBranchName` above
+        // instead (rejects a leading `-`, `..`, control/whitespace chars).
+        const checkoutResult = await opts.run(
+          buildGitArgv(["checkout", "-B", branch, `origin/${branch}`]),
+          {
+            cwd: dir,
+            env: localGitEnv(opts.home, opts.path),
+          },
+        );
+        if (checkoutResult.exitCode !== 0) {
+          throw gitError(
+            `git checkout -B ${branch} origin/${branch} failed for factory clone`,
+            checkoutResult,
+          );
         }
         return { dir, action: "pulled" as const };
       }

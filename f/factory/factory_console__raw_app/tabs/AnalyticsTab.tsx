@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { BarChart, type BarChartDatum } from "../components/BarChart";
+import { Skeleton } from "../components/Skeleton";
 import {
   toAgentCostDailyRow,
   toApprovalStatsRow,
@@ -126,7 +127,7 @@ export function AnalyticsTab(): React.ReactElement {
           </select>
         </label>
       </div>
-      {loading && <p>読み込み中...</p>}
+      {loading && <Skeleton rows={3} />}
       {cost.error !== null && <p className="error-banner">{cost.error}</p>}
       {approvals.error !== null && (
         <p className="error-banner">{approvals.error}</p>

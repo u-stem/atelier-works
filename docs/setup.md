@@ -27,6 +27,8 @@ mise run bootstrap      # ワークスペース作成、secret 投入、sync pus
 
 `GITHUB_TOKEN` / `CLAUDE_CODE_OAUTH_TOKEN` / `DISCORD_WEBHOOK_URL` を空のまま `bootstrap` を実行しても完了はする(該当する Windmill 変数が空で作成される)。ただし `doctor` はこれらが未設定だと NG を報告するため、実運用前には必ず値を投入する。
 
+`bootstrap` はワークスペース ID を小文字の `factory` のまま、表示名だけを `Factory`(ダッシュボード App「Factory Console」などと表記を揃える)に設定する。
+
 ## 自己更新に関する設定
 
 - `factory_config` リソースの `factory_branch`(既定 `main`)は、`self_update` が追跡するこのリポジトリのブランチ名。フォークやフィーチャーブランチで運用したい場合は Windmill UI からこの値を変更する(変更が効くのは worker 内の self clone をまだ作成していない場合のみ。既存の clone に反映するには worker コンテナ内の `/workspaces/factory/atelier-works` を削除して再作成させる)。
