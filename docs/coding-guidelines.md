@@ -55,6 +55,11 @@ if (!isClaudeResult(parsed)) {
 
 - Windmill 固有の配置・secret 取得・config 取得・native 不使用などの規約は `windmill-script` スキル(`.claude/skills/windmill-script/SKILL.md`)を参照する。
 
+## Windmill datatable の型安全性
+
+- `wmill.datatable()` のタグ付きテンプレート(バッククォート文字列)に `null` パラメータを渡すと、Windmill がそのパラメータを `text` 型で束縛する。bigint / integer / numeric / boolean / jsonb などの非 text 列に対して null 値を INSERT / UPDATE しようとすると、`column is of type bigint but expression is of type text` エラーで失敗する。
+- **回避策**: null になりうるパラメータに対して明示キャストを付ける。`lib/db.ts` では、null になりうるすべての非 text パラメータに `::型名`(例: `::bigint`、`::boolean`)キャストを必ず付け、テストで確認する。
+
 ## 検証コマンド
 
 - `mise run check` で `lint`(`biome check` + `wmill lint f` + 型アサーション検出)→ `typecheck`(`tsc --noEmit`)→ `test`(`bun test`)を順に実行する。PR を出す前に必ず緑にする。

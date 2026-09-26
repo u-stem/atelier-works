@@ -81,6 +81,11 @@ function isClaudeResult(value: unknown): value is ClaudeResult {
 - デプロイは `mise run push`(内部で `wmill sync push --yes --keep-deleted`)。`--keep-deleted` により、UI 上で作成途中の App などリポジトリに未反映のリモート項目を誤って消さない。
 - **リモートの項目を自動削除しない**。削除が必要な場合は人手で個別に判断して行う(通常の `push` タスクに削除は含めない)。
 
+## 外部サービスの契約と実装上の注意
+
+- **lib module の非同期再デプロイ**: `f/factory/lib/*` を push すると、それを相対 import する script は Windmill がバックグラウンドの dependency job で非同期に再デプロイする(Windmill CE 1.817.0 で確認)。push 完了直後は importer が旧バンドルで動くため、push の数十秒後に dependency job の完了を待ってから動作確認する。`wmill job list` は kind `dependencies` を既定で表示しないため、確認は UI の Runs か CLI で `wmill job list --job-kinds dependencies` で行う。
+- **datatable の型安全性**: `wmill.datatable()` のタグ付きテンプレートに `null` を渡すとパラメータが `text` 型で束縛され、bigint / integer / numeric / boolean / jsonb 列への INSERT / UPDATE が `column is of type bigint but expression is of type text` で失敗する。null になりうる非 text 列には明示キャストを必ず付ける(例: `${x}::bigint`、`${y}::boolean`)。詳細は `docs/coding-guidelines.md` を参照。
+
 ## スケジュール一覧
 
 `timezone: Asia/Tokyo`、cron は Windmill の 6 フィールド形式。worker は単一の default グループで動くため、`tag` は基本的に指定しない。
