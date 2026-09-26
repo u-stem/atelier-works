@@ -35,6 +35,7 @@
 - 通常の更新は `git pull` してから `mise run deploy` を実行する(ホスト側 checkout で `git pull --ff-only` → worker イメージのビルド → `docker compose up -d` → `wmill sync push` → migration を一括実行する)。
 - worker の並列数(`NUM_WORKERS`)のような `infra/docker-compose.yml` の変更は、通常の `git pull` だけでは反映されない。`mise run deploy` を実行して worker イメージの再ビルドとコンテナの再起動まで行う。
 - `wmill sync push` に **`--include-secrets` を付けてはいけない**。付けるとリポジトリ内の `f/factory/*.variable.yaml`(値は空のままコミットされている)で4つの secret 変数(`claude_oauth_token` / `github_token` / `wmill_token` / `discord_webhook_url`)が空に上書きされる。`mise run push`(`wmill sync push --yes --keep-deleted`)は `--include-secrets` を付けない設定になっている。
+- secret 変数(`f/factory/*.variable.yaml`)と instance 固有の `factory_config` resource は同期対象外のため、これらの **説明文(description)を変えても `mise run push` では既存 instance に反映されない**。既存 instance では Windmill UI(Variables / Resources の編集画面)で説明文だけを更新する。新規 instance は bootstrap がリポジトリの説明文で作成する。
 - `self_update` スケジュール(未実装)が `infra/` や `mise.toml` の変更を検知すると、Discord とダッシュボードの Notices で「`mise run deploy` を実行してください」と通知する想定。
 - ダッシュボード App(未実装)を編集する場合の規約: 最新を `mise run pull` で取り込む → Windmill UI で編集する → 再度 `mise run pull` でローカルに反映する → コミットする。同時編集は避ける。
 
