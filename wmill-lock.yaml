@@ -8,7 +8,7 @@ locks:
   f/factory/approval_decide: 25e089b1e3dc658d7bd5251e235d3a18bb223a462916011e3274d87f391f3ecc
   f/factory/cleanup_workspaces: da94657a256e12b046ef6c37eacbde6ba280298c64ba106b79887305a7969d2d
   f/factory/factory_console__raw_app+__app_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
-  f/factory/issue_proposal_decide: fcd770eddd3f49d70604757c726e2f0c69cfaee5a1d9c9f835643e841c0febf0
+  f/factory/issue_proposal_decide: 93d18ed6f96184d74ac69bbd6c9d08c7e318840214b829c23aef6d523d4f8bdf
   f/factory/lib/approver: 6b30fc9a914222f1f297e413dfefc7b1e5f3d96ea9ee895007e21049bc487d60
   f/factory/lib/claude: 97aea69f9dcc4b10cd066d21f2bf5f9bc2109e2a9b0268796a8e6375d7f7c7b9
   f/factory/lib/cleanup_support: 0a657dc05c7df924be4a7c93d9aa57809d11308eafe9e5413ed477158670a7e4
@@ -50,4 +50,4 @@ locks:
   f/factory/steps/pr_review_generate: cad06dc0a73c1bec768f742876935f9827531116e1f906536009151119524d19
   f/factory/steps/pr_review_post: 706adfa3a8890acc6129a305f975dad66590f36c5fab989b03e00fb5d8104dbd
   f/factory/steps/pr_review_prepare: 78449ab97f9f8f25b9cc9deaf959a04da28ee696f0d50eee49df4a4c1def6f22
-  f/factory/steps/pr_workflow_support: c49d9a4d75046b8101f6c86d913562380eb60593c2b0aea09fe4c8164093aa76
+  f/factory/steps/pr_workflow_support: 3cc02e5cdef4276533942183cf694e489ef7e89a70fbea33820948a515348d53

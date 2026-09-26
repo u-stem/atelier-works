@@ -81,6 +81,7 @@ import {
   appendIssueProposalMarker,
   assertValidIssueProposalDecideInput,
   buildIssueProposalBody,
+  buildIssueProposalTitle,
   chooseIssueProposalReplyTarget,
   classifyIssueProposalDecision,
   decideIssueProposalLabelSwap,
@@ -224,7 +225,7 @@ export async function main(
           proposal_id,
         );
         created = await createIssue(client, owner, repo, {
-          title: proposal.title,
+          title: buildIssueProposalTitle(proposal.title),
           body,
           ...(withLabel ? { labels: [config.trigger_label] } : {}),
         });

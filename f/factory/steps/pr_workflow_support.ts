@@ -2085,7 +2085,15 @@ export function buildIssueProposalBody(
   prNumber: number,
 ): string {
   const withUrl = bodyTemplate.split("{{pr_url}}").join(prUrl);
-  return `${withUrl}\n\nこのIssueはPR #${String(prNumber)}のレビュー指摘から起票されました`;
+  // Claude's proposal text follows the same spacing rule as every other
+  // factory-authored text once it becomes a GitHub Issue.
+  return `${normalizeJapaneseText(withUrl)}\n\nこのIssueはPR #${String(prNumber)}のレビュー指摘から起票されました`;
+}
+
+/** The Issue title as created on GitHub: Claude's proposal title with the
+ * ASCII/Japanese spacing rule applied. */
+export function buildIssueProposalTitle(title: string): string {
+  return normalizeJapaneseText(title.trim());
 }
 
 /** Renders the thread reply issue_proposal_decide.ts posts on approval —

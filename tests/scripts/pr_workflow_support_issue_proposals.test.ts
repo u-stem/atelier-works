@@ -13,6 +13,7 @@ import {
   assertValidIssueProposalDecideInput,
   buildIssueProposalBody,
   buildIssueProposalReason,
+  buildIssueProposalTitle,
   decideIssueProposalLabelSwap,
   matchReviewThreadForComment,
   renderIssueProposalApprovedReply,
@@ -109,6 +110,15 @@ describe("buildIssueProposalReason", () => {
 });
 
 describe("buildIssueProposalBody", () => {
+  test("removes half-width spaces between ASCII and Japanese in the body", () => {
+    const body = buildIssueProposalBody(
+      "`src/greet.ts` と `src/shout.ts` の両方",
+      "https://example.test/pr/4",
+      4,
+    );
+    expect(body.startsWith("`src/greet.ts`と`src/shout.ts`の両方")).toBe(true);
+  });
+
   test("substitutes the {{pr_url}} placeholder with the PR's own URL", () => {
     const body = buildIssueProposalBody(
       "背景\n提案\n{{pr_url}}",
@@ -209,5 +219,13 @@ describe("decideIssueProposalLabelSwap", () => {
       action: "swap",
       toStatus: "reviewed",
     });
+  });
+});
+
+describe("buildIssueProposalTitle", () => {
+  test("removes half-width spaces between ASCII and Japanese", () => {
+    expect(buildIssueProposalTitle("greet と shout の敬称処理を共通化")).toBe(
+      "greetとshoutの敬称処理を共通化",
+    );
   });
 });
