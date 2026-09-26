@@ -8,6 +8,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   describeReason,
+  earlyExitBase,
   evaluateFixRoundGuard,
   evaluatePrFixSafetyGuards,
   evaluateRepoAllowedGuard,
@@ -99,12 +100,12 @@ describe("evaluateRepoAllowedGuard", () => {
 
 describe("describeReason", () => {
   test("translates a static safety-guard reason", () => {
-    expect(describeReason("pull request is a draft")).toBe("PR がドラフトです");
+    expect(describeReason("pull request is a draft")).toBe("PRがドラフトです");
   });
 
   test("translates a dynamic fix-round-exhausted reason, keeping the numbers", () => {
     expect(describeReason("fix_round 4 exceeds max_fix_rounds 3")).toBe(
-      "fix_round 4 が max_fix_rounds 3 を超えました",
+      "fix_round 4がmax_fix_rounds 3を超えました",
     );
   });
 
@@ -114,7 +115,7 @@ describe("describeReason", () => {
         'forbidden path changed: .github/workflows/ci.yml; package.json "scripts" field changed',
       ),
     ).toBe(
-      '変更が禁止されたパスです: .github/workflows/ci.yml; package.json の "scripts" が変更されました',
+      "変更が禁止されたパスです: .github/workflows/ci.yml; package.jsonの`scripts`が変更されました",
     );
   });
 
@@ -184,5 +185,29 @@ describe("nextActionFor", () => {
     expect(nextActionFor("Issue化の提案が1件あります")).toBe(
       "ConsoleのInboxで提案を承認または却下してください",
     );
+  });
+});
+
+describe("earlyExitBase", () => {
+  const workItem = {
+    owner: "octo-owner",
+    repo: "sample-repo",
+    pr_number: 3,
+    head_sha: "abc1234",
+    parent_work_item_id: null,
+    attempt: 1,
+    fix_round: 4,
+  };
+
+  test("keeps the PR coordinates so pr_fix_finish can relabel the PR", () => {
+    expect(earlyExitBase(workItem).pr_number).toBe(3);
+  });
+
+  test("keeps the repository owner", () => {
+    expect(earlyExitBase(workItem).owner).toBe("octo-owner");
+  });
+
+  test("leaves the worktree directory empty because none was prepared", () => {
+    expect(earlyExitBase(workItem).worktree_dir).toBe("");
   });
 });

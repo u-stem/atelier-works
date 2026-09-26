@@ -18,6 +18,7 @@ import {
   runCommand,
 } from "../lib/workspace.ts";
 import {
+  earlyExitBase,
   evaluateFixRoundGuard,
   evaluatePrFixSafetyGuards,
   evaluateRepoAllowedGuard,
@@ -39,19 +40,6 @@ export type PrFixPrepareResult = {
   readonly fix_round: number;
 };
 
-const EMPTY_BASE = {
-  owner: "",
-  repo: "",
-  pr_number: 0,
-  head_sha: "",
-  worktree_dir: "",
-  repo_dir: "",
-  factory_clone_dir: "",
-  parent_work_item_id: null,
-  attempt: 1,
-  fix_round: 0,
-} as const;
-
 export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
   const workItem = await getWorkItem(work_item_id);
   if (workItem === null) {
@@ -62,7 +50,7 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
     return {
       outcome: "skip",
       reason: `work item kind/status is "${workItem.kind}"/"${workItem.status}", not "pr_fix"/"fixing"`,
-      ...EMPTY_BASE,
+      ...earlyExitBase(workItem),
     };
   }
   if (workItem.pr_number === null) {
@@ -88,7 +76,7 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
     return {
       outcome: "guard_blocked",
       reason: repoGuard.reason,
-      ...EMPTY_BASE,
+      ...earlyExitBase(workItem),
     };
   }
 
@@ -100,7 +88,7 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
     return {
       outcome: "round_exhausted",
       reason: roundGuard.reason,
-      ...EMPTY_BASE,
+      ...earlyExitBase(workItem),
     };
   }
 
@@ -128,7 +116,11 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
     baseProtected,
   });
   if (!safety.ok) {
-    return { outcome: "guard_blocked", reason: safety.reason, ...EMPTY_BASE };
+    return {
+      outcome: "guard_blocked",
+      reason: safety.reason,
+      ...earlyExitBase(workItem),
+    };
   }
 
   const factoryClone = await ensureFactoryClone({

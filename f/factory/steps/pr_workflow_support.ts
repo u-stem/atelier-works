@@ -2390,7 +2390,7 @@ const REASON_RULES: readonly ReasonRule[] = [
   },
   {
     pattern: /^package\.json "scripts" field changed$/,
-    describe: () => 'package.json の "scripts" が変更されました',
+    describe: () => "package.jsonの`scripts`が変更されました",
     nextAction: () => FORBIDDEN_CHANGE_NEXT_ACTION,
   },
   {
@@ -2565,6 +2565,51 @@ const REASON_RULES: readonly ReasonRule[] = [
  * entry is translated independently; an entry (or the whole string) this
  * function doesn't recognize is returned unchanged.
  */
+/**
+ * The result fields for an early exit (skip / guard_blocked /
+ * round_exhausted). The PR coordinates are always taken from the work
+ * item: pr_fix_finish.ts needs owner / repo / pr_number to remove the wip
+ * label, set the state label and address the Discord notification even
+ * when no worktree was prepared (a real run once left a PR stuck with only
+ * `factory:wip` and an empty "リポジトリ" field because these were blank).
+ */
+export function earlyExitBase(
+  workItem: Pick<
+    WorkItem,
+    | "owner"
+    | "repo"
+    | "pr_number"
+    | "head_sha"
+    | "parent_work_item_id"
+    | "attempt"
+    | "fix_round"
+  >,
+): {
+  readonly owner: string;
+  readonly repo: string;
+  readonly pr_number: number;
+  readonly head_sha: string;
+  readonly worktree_dir: string;
+  readonly repo_dir: string;
+  readonly factory_clone_dir: string;
+  readonly parent_work_item_id: number | null;
+  readonly attempt: number;
+  readonly fix_round: number;
+} {
+  return {
+    owner: workItem.owner,
+    repo: workItem.repo,
+    pr_number: workItem.pr_number ?? 0,
+    head_sha: workItem.head_sha ?? "",
+    worktree_dir: "",
+    repo_dir: "",
+    factory_clone_dir: "",
+    parent_work_item_id: workItem.parent_work_item_id,
+    attempt: workItem.attempt,
+    fix_round: workItem.fix_round,
+  };
+}
+
 export function describeReason(reason: string): string {
   if (reason.includes("; ")) {
     return reason.split("; ").map(describeReason).join("; ");
@@ -2572,7 +2617,9 @@ export function describeReason(reason: string): string {
   for (const rule of REASON_RULES) {
     const match = reason.match(rule.pattern);
     if (match !== null) {
-      return rule.describe(match);
+      // Translations are user-facing text, so the same ASCII/Japanese
+      // spacing rule as posted comments applies to them.
+      return normalizeJapaneseText(rule.describe(match));
     }
   }
   return reason;
