@@ -14,9 +14,44 @@ describe("jobStateFromJob", () => {
     });
   });
 
-  test("reads a CompletedJob as completed", () => {
+  test("reads a successful CompletedJob as completed/success/not-canceled", () => {
+    expect(
+      jobStateFromJob({
+        type: "CompletedJob",
+        id: "job-1",
+        success: true,
+        canceled: false,
+      }),
+    ).toEqual({ state: "completed", success: true, canceled: false });
+  });
+
+  test("reads a canceled CompletedJob's canceled flag", () => {
+    expect(
+      jobStateFromJob({
+        type: "CompletedJob",
+        id: "job-1",
+        success: false,
+        canceled: true,
+      }),
+    ).toEqual({ state: "completed", success: false, canceled: true });
+  });
+
+  test("reads a failed (not canceled) CompletedJob's success flag", () => {
+    expect(
+      jobStateFromJob({
+        type: "CompletedJob",
+        id: "job-1",
+        success: false,
+        canceled: false,
+      }),
+    ).toEqual({ state: "completed", success: false, canceled: false });
+  });
+
+  test("defaults a CompletedJob with a malformed success/canceled to success/not-canceled", () => {
     expect(jobStateFromJob({ type: "CompletedJob", id: "job-1" })).toEqual({
       state: "completed",
+      success: true,
+      canceled: false,
     });
   });
 

@@ -39,24 +39,50 @@ describe("decideReconcileAction — issue kind", () => {
     expect(decision).toEqual({ action: "none" });
   });
 
-  test("does nothing when the job finished but is still within the grace period", () => {
+  test("does nothing when the job completed successfully but is still within the grace period", () => {
     const decision = decideReconcileAction(
       { updated_at: RECENT },
       { kind: "issue", open: true, hasTriggerLabel: true },
-      { state: "completed" },
+      { state: "completed", success: true, canceled: false },
       NOW,
     );
     expect(decision).toEqual({ action: "none" });
   });
 
-  test("fails as orphaned when the job finished past the grace period", () => {
+  test("fails as orphaned when a successful completion is past the grace period", () => {
     const decision = decideReconcileAction(
       { updated_at: STALE },
       { kind: "issue", open: true, hasTriggerLabel: true },
-      { state: "completed" },
+      { state: "completed", success: true, canceled: false },
       NOW,
     );
     expect(decision.action).toBe("fail_orphan");
+  });
+
+  test("fails as orphaned immediately when the job was canceled, even within the grace period", () => {
+    const decision = decideReconcileAction(
+      { updated_at: RECENT },
+      { kind: "issue", open: true, hasTriggerLabel: true },
+      { state: "completed", success: false, canceled: true },
+      NOW,
+    );
+    expect(decision).toEqual({
+      action: "fail_orphan",
+      reason: "flow job was canceled without a terminal status update",
+    });
+  });
+
+  test("fails as orphaned immediately when the job failed (not canceled), even within the grace period", () => {
+    const decision = decideReconcileAction(
+      { updated_at: RECENT },
+      { kind: "issue", open: true, hasTriggerLabel: true },
+      { state: "completed", success: false, canceled: false },
+      NOW,
+    );
+    expect(decision).toEqual({
+      action: "fail_orphan",
+      reason: "flow job failed without a terminal status update",
+    });
   });
 
   test("fails as orphaned when the job is absent past the grace period", () => {

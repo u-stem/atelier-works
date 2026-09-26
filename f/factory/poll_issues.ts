@@ -48,7 +48,12 @@ import {
   type JobState,
   type ReconcileGithubState,
 } from "./lib/poll_support.ts";
-import { type FactoryConfig, isRecord, type WorkItem } from "./lib/types.ts";
+import {
+  type FactoryConfig,
+  isBoolean,
+  isRecord,
+  type WorkItem,
+} from "./lib/types.ts";
 import {
   type CommandRunner,
   ensureFactoryClone,
@@ -212,10 +217,27 @@ async function checkDeployedSha(
  * from under itself (reproduced twice: 03:00:02 and 03:15:02).
  * `JobService.getJob` instead reads the job's row directly — no
  * result-polling/waiting semantics — so it can't exhibit this.
+ *
+ * devil-advocate follow-up: a `CompletedJob` also reports `success` /
+ * `canceled` (both required fields on the real API), which
+ * `decideReconcileAction` uses to skip the orphan grace entirely for a
+ * job it can positively confirm was canceled or failed (E2E: a manually
+ * canceled `pipeline` job otherwise left its work item stuck for the
+ * full grace period before reconcile caught it). If either field is
+ * present but somehow not a boolean (shouldn't happen — defensive only),
+ * this defaults to `success: true, canceled: false`, i.e. falls back to
+ * the grace-respecting path rather than the fast-path — same "don't act
+ * on an ambiguous signal" bias as the `type`-missing case above.
  */
 export function jobStateFromJob(job: unknown): JobState {
   if (!isRecord(job)) return { state: "absent" };
-  if (job.type === "CompletedJob") return { state: "completed" };
+  if (job.type === "CompletedJob") {
+    return {
+      state: "completed",
+      success: isBoolean(job.success) ? job.success : true,
+      canceled: isBoolean(job.canceled) ? job.canceled : false,
+    };
+  }
   return { state: "running" };
 }
 

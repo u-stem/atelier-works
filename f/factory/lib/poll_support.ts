@@ -233,9 +233,22 @@ export type ReconcileGithubState =
 
 export type JobState =
   | { readonly state: "running" }
-  | { readonly state: "completed" }
-  /** No `flow_job_id` recorded, or `wmill.getResultMaybe` found nothing —
-   * treated the same as "completed" for orphan purposes. */
+  /** `success`/`canceled` come from the job row itself (`CompletedJob`),
+   * not inferred — devil-advocate follow-up: a manually/automatically
+   * canceled or failed job is definitively never going to write its own
+   * terminal status, so `decideReconcileAction` no longer waits out the
+   * orphan grace for those; a genuinely successful completion still does
+   * (the flow's own terminal step should catch up shortly). */
+  | {
+      readonly state: "completed";
+      readonly success: boolean;
+      readonly canceled: boolean;
+    }
+  /** No `flow_job_id` recorded, or the job lookup found nothing — treated
+   * the same as a *successful* completion for orphan-grace purposes
+   * (still waits out the grace, doesn't fast-path to fail_orphan), since
+   * "we couldn't find it" isn't the same positive signal as "we found it
+   * and it was canceled/failed." */
   | { readonly state: "absent" };
 
 export type ReconcileDecision =
@@ -251,6 +264,18 @@ const DEFAULT_ORPHAN_GRACE_MS = 10 * 60_000;
 /**
  * One work item's reconcile decision. `now`/`orphanGraceMs` are parameters
  * (not read from `Date.now()`) so this stays pure and testable.
+ *
+ * devil-advocate follow-up: a job the reconcile can positively confirm
+ * was canceled, or completed unsuccessfully, skips the orphan grace
+ * entirely (there is nothing left to wait for — it will never write its
+ * own terminal status). E2E reproduction: manually canceling a
+ * `pipeline` flow job left its work item stuck `requirements_generating`
+ * for the full grace (now up to an hour with the `claude_timeout_sec`-
+ * scaled floor) before reconcile finally caught it. A *successful*
+ * completion, or the job being unreachable (`absent`), still waits out
+ * the grace — the flow's own terminal step should catch up shortly in
+ * the success case, and "we couldn't confirm" isn't the same positive
+ * signal as "we confirmed it failed/was canceled."
  */
 export function decideReconcileAction(
   item: Pick<WorkItem, "updated_at">,
@@ -272,6 +297,15 @@ export function decideReconcileAction(
 
   if (job.state === "running") {
     return { action: "none" };
+  }
+
+  if (job.state === "completed" && (job.canceled || !job.success)) {
+    return {
+      action: "fail_orphan",
+      reason: job.canceled
+        ? "flow job was canceled without a terminal status update"
+        : "flow job failed without a terminal status update",
+    };
   }
 
   const elapsedMs = now.getTime() - item.updated_at.getTime();
