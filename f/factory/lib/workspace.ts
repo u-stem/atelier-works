@@ -63,7 +63,15 @@
 // fragile). This is enough to serialize concurrent `ensureRepo` calls for
 // the same repo within one worker container.
 
-import { access, open, readFile, rename, stat, unlink } from "node:fs/promises";
+import {
+  access,
+  mkdir,
+  open,
+  readFile,
+  rename,
+  stat,
+  unlink,
+} from "node:fs/promises";
 import { dirname } from "node:path";
 import { maskSecrets } from "./log.ts";
 import { assertBranchName, assertGitHubName, assertSha } from "./types.ts";
@@ -325,6 +333,19 @@ export type LockFs = {
   readonly mtimeMs: (lockPath: string) => Promise<number | null>;
   /** Remove the lock (rename-then-unlink internally); no-op if already gone. */
   readonly remove: (lockPath: string) => Promise<void>;
+  /**
+   * Ensure `lockPath`'s parent directory exists (`mkdir -p` equivalent),
+   * called once before the first `tryCreate` attempt. Real bug (E2E,
+   * post-launch fix): `ensureFactoryClone`'s lock path's parent (e.g.
+   * `/workspaces/factory/`) doesn't exist yet on a container's first-ever
+   * run, before the clone that would create it — `tryCreate`'s
+   * `open(path, "wx")` then fails with `ENOENT`, which it isn't built to
+   * treat as "not locked" (only `EEXIST` means that). Optional: a fake
+   * `LockFs` backed by an in-memory `Map` (as most tests use) has no real
+   * directory hierarchy to create, so it can omit this and `withRepoLock`
+   * just skips the call.
+   */
+  readonly ensureLockDir?: (lockPath: string) => Promise<void>;
 };
 
 type ErrnoLike = Error & { readonly code?: string };
@@ -336,6 +357,9 @@ function isErrnoLike(err: unknown): err is ErrnoLike {
 }
 
 export const defaultLockFs: LockFs = {
+  ensureLockDir: async (lockPath) => {
+    await mkdir(dirname(lockPath), { recursive: true });
+  },
   tryCreate: async (lockPath, content) => {
     try {
       const handle = await open(lockPath, "wx");
@@ -443,6 +467,8 @@ export async function withRepoLock<T>(
   const maxWaitMs = opts.maxWaitMs ?? 5 * 60_000;
   const deadline = now().getTime() + maxWaitMs;
   const token = crypto.randomUUID();
+
+  await lockFs.ensureLockDir?.(opts.lockPath);
 
   for (;;) {
     const created = await lockFs.tryCreate(

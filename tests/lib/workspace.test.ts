@@ -226,6 +226,45 @@ describe("withRepoLock", () => {
 
     expect(removeCalls).toBe(0);
   });
+
+  // Real bug (E2E, post-launch fix): `ensureFactoryClone`'s lock path's
+  // parent dir (e.g. `/workspaces/factory/`) doesn't exist yet on a
+  // container's first-ever run, before the clone that would create it —
+  // `tryCreate`'s real `open(path, "wx")` then fails with `ENOENT`
+  // (`pipeline_prepare` crashed on this in E2E), which the lock's own
+  // "already locked" retry logic only ever expected to be `EEXIST`.
+  test("acquires the lock even when its parent directory doesn't exist yet (mkdir -p first)", async () => {
+    let dirEnsured = false;
+    const store = new Map<string, string>();
+    const lockFs: LockFs = {
+      tryCreate: async (lockPath, content) => {
+        if (!dirEnsured) {
+          const err = new Error(
+            `ENOENT: no such file or directory, open '${lockPath}'`,
+          );
+          throw Object.assign(err, { code: "ENOENT" });
+        }
+        if (store.has(lockPath)) return false;
+        store.set(lockPath, content);
+        return true;
+      },
+      read: async (lockPath) => store.get(lockPath) ?? null,
+      mtimeMs: async () => 0,
+      remove: async (lockPath) => {
+        store.delete(lockPath);
+      },
+      ensureLockDir: async () => {
+        dirEnsured = true;
+      },
+    };
+
+    const result = await withRepoLock({
+      lockPath: "/workspaces/factory/atelier-works.lock",
+      lockFs,
+      fn: async () => "acquired",
+    });
+    expect(result).toBe("acquired");
+  });
 });
 
 describe("ensureRepo", () => {
