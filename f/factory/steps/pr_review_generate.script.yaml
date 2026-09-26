@@ -1,6 +1,5 @@
 summary: '[SF-3-1/2] レビューの生成(Claude)'
-description: >-
-  Claudeを使ってPRのレビューを生成するステップです。PRの差分や変更内容(承認済みの要件定義があればそれも)をもとにレビュー内容をまとめ、次のステップに渡します。
+description: Claudeを使ってPRのレビューを生成するステップです。PRの差分や変更内容(承認済みの要件定義があればそれも)をもとにレビュー内容をまとめ、次のステップに渡します。
 lock: '!inline f/factory/steps/pr_review_generate.script.lock'
 kind: script
 schema:
@@ -9,47 +8,47 @@ schema:
   properties:
     attempt:
       type: number
-      description: 'この処理の実行回数。'
+      description: この処理の実行回数。
       default: null
     factory_clone_dir:
       type: string
-      description: 'Software Factory自身の複製を置いた作業ディレクトリのパス。'
+      description: Software Factory自身の複製を置いた作業ディレクトリのパス。
       default: null
       originalType: string
     owner:
       type: string
-      description: '対象リポジトリを所有するGitHubのユーザー名または組織名。'
+      description: 対象リポジトリを所有するGitHubのユーザー名または組織名。
       default: null
       originalType: string
     parent_work_item_id:
       type: number
-      description: '元になった作業項目(Issueの処理)のID。'
+      description: 元になった作業項目(Issueの処理)のID。
       default: null
     pr_number:
       type: number
-      description: '対象PRの番号。'
+      description: 対象PRの番号。
       default: null
     repo:
       type: string
-      description: '対象リポジトリ名。'
+      description: 対象リポジトリ名。
       default: null
       originalType: string
     review_sha:
       type: string
-      description: 'レビュー対象とするPRの最新コミットのSHA。'
+      description: レビュー対象とするPRの最新コミットのSHA。
       default: null
       originalType: string
     skip:
       type: boolean
-      description: 'このステップの処理を省略するかどうか。'
+      description: このステップの処理を省略するかどうか。
       default: null
     work_item_id:
       type: number
-      description: '対象の作業項目のID。'
+      description: 対象の作業項目のID。
       default: null
     worktree_dir:
       type: string
-      description: 'この処理で使う作業用ディレクトリのパス。'
+      description: この処理で使う作業用ディレクトリのパス。
       default: null
       originalType: string
   required:

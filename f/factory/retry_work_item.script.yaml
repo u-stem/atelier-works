@@ -1,6 +1,5 @@
 summary: '[OP-2-2] 作業項目を再実行'
-description: >-
-  詰まってしまった作業項目を手動で再実行します。作業項目の種類に応じて対象の処理と目指す状態を切り替え、再開前にラベルを付け直します。
+description: 詰まってしまった作業項目を手動で再実行します。作業項目の種類に応じて対象の処理と目指す状態を切り替え、再開前にラベルを付け直します。
 lock: '!inline f/factory/retry_work_item.script.lock'
 kind: script
 schema:
@@ -9,8 +8,7 @@ schema:
   properties:
     work_item_id:
       type: number
-      description: >-
-        再実行する作業項目のID。GitHub Issueのコメントや、Discordの通知に記載されています。
+      description: 再実行する作業項目のID。GitHub Issueのコメントや、Discordの通知に記載されています。
       default: null
   required:
     - work_item_id

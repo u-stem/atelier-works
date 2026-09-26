@@ -411,6 +411,17 @@ export function findTypeAssertions(
   return findings;
 }
 
+// Bun.Glob.scan has no built-in .gitignore/node_modules awareness (unlike
+// e.g. ripgrep), so a nested `node_modules` under `f/**` — which a raw
+// app's own package.json creates once `wmill app lint`/`wmill app dev`
+// installs its frontend dependencies (see .claude/skills/raw-app/SKILL.md)
+// — would otherwise have its third-party `.d.ts` files swept up by the
+// `f/**/*.ts` glob and false-positive on this script's own assertion check
+// (those files are not this repo's code and are gitignored regardless).
+function isUnderNodeModules(path: string): boolean {
+  return path.split("/").includes("node_modules");
+}
+
 async function collectDefaultFiles(): Promise<string[]> {
   const files: string[] = [];
   for (const pattern of DEFAULT_GLOBS) {
@@ -419,7 +430,9 @@ async function collectDefaultFiles(): Promise<string[]> {
       cwd: process.cwd(),
       onlyFiles: true,
     })) {
-      files.push(file);
+      if (!isUnderNodeModules(file)) {
+        files.push(file);
+      }
     }
   }
   return files;

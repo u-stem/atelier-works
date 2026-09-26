@@ -1,6 +1,5 @@
 summary: '[SYS-4] フロー失敗ハンドラ'
-description: >-
-  要件定義の生成、PRレビュー、PR修正、いずれかの自動処理が失敗した際に呼ばれる共通処理です。対象の作業項目を失敗状態にし、付与されていたラベルを外し、失敗内容を記録したうえでDiscordに通知します。
+description: 要件定義の生成、PRレビュー、PR修正、いずれかの自動処理が失敗した際に呼ばれる共通処理です。対象の作業項目を失敗状態にし、付与されていたラベルを外し、失敗内容を記録したうえでDiscordに通知します。
 lock: '!inline f/factory/on_error_flow.script.lock'
 kind: script
 schema:
@@ -9,21 +8,21 @@ schema:
   properties:
     error:
       type: ''
-      description: '失敗の内容(エラー情報)。'
+      description: 失敗の内容(エラー情報)。
       default: null
     job_id:
       type: string
-      description: '失敗したジョブのID。'
+      description: 失敗したジョブのID。
       default: null
       originalType: string
     path:
       type: string
-      description: '失敗した処理の識別子。'
+      description: 失敗した処理の識別子。
       default: null
       originalType: string
     work_item_id:
       type: number
-      description: '失敗した処理の対象になっていた作業項目のID。'
+      description: 失敗した処理の対象になっていた作業項目のID。
       default: null
   required:
     - error

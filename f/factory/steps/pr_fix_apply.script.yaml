@@ -1,6 +1,5 @@
 summary: '[SF-3-2/3] 修正の適用(Claude)'
-description: >-
-  Claudeを使って指摘への修正を作業ディレクトリに適用するステップです。適用結果を次のステップに渡します。
+description: Claudeを使って指摘への修正を作業ディレクトリに適用するステップです。適用結果を次のステップに渡します。
 lock: '!inline f/factory/steps/pr_fix_apply.script.lock'
 kind: script
 schema:
@@ -9,11 +8,11 @@ schema:
   properties:
     attempt:
       type: number
-      description: 'この処理の実行回数。'
+      description: この処理の実行回数。
       default: null
     comments:
       type: array
-      description: '収集したPRコメントの一覧。'
+      description: 収集したPRコメントの一覧。
       default: null
       items:
         type: resource
@@ -21,39 +20,39 @@ schema:
       originalType: resource[]
     factory_clone_dir:
       type: string
-      description: 'Software Factory自身の複製を置いた作業ディレクトリのパス。'
+      description: Software Factory自身の複製を置いた作業ディレクトリのパス。
       default: null
       originalType: string
     fix_round:
       type: number
-      description: 'このPRに対する修正の試行回数。'
+      description: このPRに対する修正の試行回数。
       default: null
     head_sha:
       type: string
-      description: '検証対象とするPRの最新コミットのSHA。'
+      description: 検証対象とするPRの最新コミットのSHA。
       default: null
       originalType: string
     owner:
       type: string
-      description: '対象リポジトリを所有するGitHubのユーザー名または組織名。'
+      description: 対象リポジトリを所有するGitHubのユーザー名または組織名。
       default: null
       originalType: string
     parent_work_item_id:
       type: number
-      description: '元になった作業項目(Issueの処理)のID。'
+      description: 元になった作業項目(Issueの処理)のID。
       default: null
     pr_number:
       type: number
-      description: '対象PRの番号。'
+      description: 対象PRの番号。
       default: null
     repo:
       type: string
-      description: '対象リポジトリ名。'
+      description: 対象リポジトリ名。
       default: null
       originalType: string
     reviews:
       type: array
-      description: '収集したPRレビューの一覧。'
+      description: 収集したPRレビューの一覧。
       default: null
       items:
         type: resource
@@ -61,11 +60,11 @@ schema:
       originalType: resource[]
     work_item_id:
       type: number
-      description: '対象の作業項目のID。'
+      description: 対象の作業項目のID。
       default: null
     worktree_dir:
       type: string
-      description: 'この処理で使う作業用ディレクトリのパス。'
+      description: この処理で使う作業用ディレクトリのパス。
       default: null
       originalType: string
   required:

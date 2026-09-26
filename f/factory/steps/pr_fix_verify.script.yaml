@@ -1,6 +1,5 @@
 summary: '[SF-3-2/4] 変更の検証'
-description: >-
-  適用された修正を検証するステップです。禁止された変更が含まれていないか確認したうえで、リポジトリのチェックコマンドを実行します。チェックに失敗した場合は、Claudeによる修正と再検証を1回だけ行います。
+description: 適用された修正を検証するステップです。禁止された変更が含まれていないか確認したうえで、リポジトリのチェックコマンドを実行します。チェックに失敗した場合は、Claudeによる修正と再検証を1回だけ行います。
 lock: '!inline f/factory/steps/pr_fix_verify.script.lock'
 kind: script
 schema:
@@ -9,22 +8,22 @@ schema:
   properties:
     apply_commit_message:
       type: string
-      description: '修正適用時に付けたコミットメッセージ案。'
+      description: 修正適用時に付けたコミットメッセージ案。
       default: null
       originalType: string
     apply_outcome:
       type: object
-      description: '修正適用の結果。'
+      description: 修正適用の結果。
       default: null
       format: resource-fix_outcome
     apply_reason:
       type: string
-      description: '修正適用の結果に対する理由。'
+      description: 修正適用の結果に対する理由。
       default: null
       originalType: string
     apply_replies:
       type: array
-      description: '修正適用時にまとめた、各指摘への対応内容。'
+      description: 修正適用時にまとめた、各指摘への対応内容。
       default: null
       items:
         type: resource
@@ -32,16 +31,16 @@ schema:
       originalType: resource[]
     apply_summary:
       type: string
-      description: '修正適用内容の要約。'
+      description: 修正適用内容の要約。
       default: null
       originalType: string
     attempt:
       type: number
-      description: 'この処理の実行回数。'
+      description: この処理の実行回数。
       default: null
     comments:
       type: array
-      description: '収集したPRコメントの一覧。'
+      description: 収集したPRコメントの一覧。
       default: null
       items:
         type: resource
@@ -49,34 +48,34 @@ schema:
       originalType: resource[]
     factory_clone_dir:
       type: string
-      description: 'Software Factory自身の複製を置いた作業ディレクトリのパス。'
+      description: Software Factory自身の複製を置いた作業ディレクトリのパス。
       default: null
       originalType: string
     fix_round:
       type: number
-      description: 'このPRに対する修正の試行回数。'
+      description: このPRに対する修正の試行回数。
       default: null
     owner:
       type: string
-      description: '対象リポジトリを所有するGitHubのユーザー名または組織名。'
+      description: 対象リポジトリを所有するGitHubのユーザー名または組織名。
       default: null
       originalType: string
     parent_work_item_id:
       type: number
-      description: '元になった作業項目(Issueの処理)のID。'
+      description: 元になった作業項目(Issueの処理)のID。
       default: null
     pr_number:
       type: number
-      description: '対象PRの番号。'
+      description: 対象PRの番号。
       default: null
     repo:
       type: string
-      description: '対象リポジトリ名。'
+      description: 対象リポジトリ名。
       default: null
       originalType: string
     reviews:
       type: array
-      description: '収集したPRレビューの一覧。'
+      description: 収集したPRレビューの一覧。
       default: null
       items:
         type: resource
@@ -84,11 +83,11 @@ schema:
       originalType: resource[]
     work_item_id:
       type: number
-      description: '対象の作業項目のID。'
+      description: 対象の作業項目のID。
       default: null
     worktree_dir:
       type: string
-      description: 'この処理で使う作業用ディレクトリのパス。'
+      description: この処理で使う作業用ディレクトリのパス。
       default: null
       originalType: string
   required:

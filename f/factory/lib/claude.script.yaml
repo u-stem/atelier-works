@@ -1,6 +1,5 @@
 summary: '[LIB] headless Claude 実行'
-description: >-
-  内部ライブラリです。直接実行するものではありません。Claude Codeを自動実行するための共通処理です。
+description: 内部ライブラリです。直接実行するものではありません。Claude Codeを自動実行するための共通処理です。
 lock: '!inline f/factory/lib/claude.script.lock'
 kind: script
 schema:

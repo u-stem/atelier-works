@@ -1,6 +1,5 @@
 summary: '[SYS-5] schedule 失敗ハンドラ'
-description: >-
-  各定期実行(スケジュール)が失敗した際に呼ばれる共通処理です。失敗内容を記録し、Discordに通知します。
+description: 各定期実行(スケジュール)が失敗した際に呼ばれる共通処理です。失敗内容を記録し、Discordに通知します。
 lock: '!inline f/factory/on_error_schedule.script.lock'
 kind: script
 schema:
@@ -9,25 +8,25 @@ schema:
   properties:
     error:
       type: ''
-      description: '失敗の内容(エラー情報)。'
+      description: 失敗の内容(エラー情報)。
       default: null
     is_flow:
       type: boolean
-      description: '失敗したのがフローかどうか。'
+      description: 失敗したのがフローかどうか。
       default: null
     job_id:
       type: string
-      description: '失敗したジョブのID。'
+      description: 失敗したジョブのID。
       default: null
       originalType: string
     path:
       type: string
-      description: '失敗した処理の識別子。'
+      description: 失敗した処理の識別子。
       default: null
       originalType: string
     schedule_path:
       type: string
-      description: '失敗した定期実行(スケジュール)の識別子。'
+      description: 失敗した定期実行(スケジュール)の識別子。
       default: null
       originalType: string
   required: []

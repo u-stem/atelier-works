@@ -1,6 +1,5 @@
 summary: '[LIB] 巡回の純粋ロジック'
-description: >-
-  内部ライブラリです。直接実行するものではありません。IssueとPRの巡回処理が使う判定ロジックです。
+description: 内部ライブラリです。直接実行するものではありません。IssueとPRの巡回処理が使う判定ロジックです。
 lock: '!inline f/factory/lib/poll_support.script.lock'
 kind: script
 schema:

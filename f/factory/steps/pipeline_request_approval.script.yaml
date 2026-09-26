@@ -1,6 +1,5 @@
 summary: '[SF-2-1/3] 承認依頼(待機)'
-description: >-
-  生成した要件定義の承認を依頼するステップです。承認用のリンクを発行して作業項目を承認待ちの状態にし、IssueへのコメントとDiscord通知で承認を依頼したうえで、判断が届くまで処理を一時停止します。
+description: 生成した要件定義の承認を依頼するステップです。承認用のリンクを発行して作業項目を承認待ちの状態にし、IssueへのコメントとDiscord通知で承認を依頼したうえで、判断が届くまで処理を一時停止します。
 lock: '!inline f/factory/steps/pipeline_request_approval.script.lock'
 kind: script
 schema:
@@ -9,11 +8,11 @@ schema:
   properties:
     attempt:
       type: number
-      description: '要件定義生成の試行回数。'
+      description: 要件定義生成の試行回数。
       default: null
     work_item_id:
       type: number
-      description: '対象の作業項目のID。'
+      description: 対象の作業項目のID。
       default: null
   required:
     - work_item_id

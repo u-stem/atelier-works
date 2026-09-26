@@ -1,6 +1,5 @@
 summary: '[SF-3-2/5] push と再レビュー依頼'
-description: >-
-  修正結果を確定するステップです。変更をpushし、対応した指摘への返信・ラベルの更新・Discord通知を行ったうえで、必要であれば再レビューを依頼します。
+description: 修正結果を確定するステップです。変更をpushし、対応した指摘への返信・ラベルの更新・Discord通知を行ったうえで、必要であれば再レビューを依頼します。
 lock: '!inline f/factory/steps/pr_fix_finish.script.lock'
 kind: script
 schema:
@@ -9,12 +8,12 @@ schema:
   properties:
     summary:
       type: string
-      description: '処理内容の要約。'
+      description: 処理内容の要約。
       default: null
       originalType: string
     comments:
       type: array
-      description: '収集したPRコメントの一覧。'
+      description: 収集したPRコメントの一覧。
       default: null
       items:
         type: resource
@@ -22,56 +21,56 @@ schema:
       originalType: resource[]
     commit_message:
       type: string
-      description: '適用した変更に付けるコミットメッセージ。'
+      description: 適用した変更に付けるコミットメッセージ。
       default: null
       originalType: string
     fix_round:
       type: number
-      description: 'このPRに対する修正の試行回数。'
+      description: このPRに対する修正の試行回数。
       default: null
     head_sha:
       type: string
-      description: '検証対象とするPRの最新コミットのSHA。'
+      description: 検証対象とするPRの最新コミットのSHA。
       default: null
       originalType: string
     max_comment_id:
       type: number
-      description: '収集済みの最新コメントID。'
+      description: 収集済みの最新コメントID。
       default: null
     max_review_comment_id:
       type: number
-      description: '収集済みの最新インラインコメントID。'
+      description: 収集済みの最新インラインコメントID。
       default: null
     max_review_id:
       type: number
-      description: '収集済みの最新レビューID。'
+      description: 収集済みの最新レビューID。
       default: null
     outcome:
       type: string
-      description: 'このステップの処理結果。'
+      description: このステップの処理結果。
       default: null
       originalType: string
     owner:
       type: string
-      description: '対象リポジトリを所有するGitHubのユーザー名または組織名。'
+      description: 対象リポジトリを所有するGitHubのユーザー名または組織名。
       default: null
       originalType: string
     parent_work_item_id:
       type: number
-      description: '元になった作業項目(Issueの処理)のID。'
+      description: 元になった作業項目(Issueの処理)のID。
       default: null
     pr_number:
       type: number
-      description: '対象PRの番号。'
+      description: 対象PRの番号。
       default: null
     reason:
       type: string
-      description: '処理結果の理由。'
+      description: 処理結果の理由。
       default: null
       originalType: string
     replies:
       type: array
-      description: '各指摘への対応内容の一覧。'
+      description: 各指摘への対応内容の一覧。
       default: null
       items:
         type: resource
@@ -79,17 +78,17 @@ schema:
       originalType: resource[]
     repo:
       type: string
-      description: '対象リポジトリ名。'
+      description: 対象リポジトリ名。
       default: null
       originalType: string
     repo_dir:
       type: string
-      description: '対象リポジトリを展開した作業ディレクトリのパス。'
+      description: 対象リポジトリを展開した作業ディレクトリのパス。
       default: null
       originalType: string
     reviews:
       type: array
-      description: '収集したPRレビューの一覧。'
+      description: 収集したPRレビューの一覧。
       default: null
       items:
         type: resource
@@ -97,18 +96,18 @@ schema:
       originalType: resource[]
     trigger_review_ids:
       type: array
-      description: '今回の修正のきっかけになったレビューのID一覧。'
+      description: 今回の修正のきっかけになったレビューのID一覧。
       default: null
       items:
         type: number
       originalType: number[]
     work_item_id:
       type: number
-      description: '対象の作業項目のID。'
+      description: 対象の作業項目のID。
       default: null
     worktree_dir:
       type: string
-      description: 'この処理で使う作業用ディレクトリのパス。'
+      description: この処理で使う作業用ディレクトリのパス。
       default: null
       originalType: string
   required:
