@@ -40,6 +40,25 @@ export async function retryWorkItem(workItemId: number): Promise<unknown> {
   return await backend.retry_work_item({ work_item_id: workItemId });
 }
 
+/** Calls f/factory/issue_proposal_decide.ts. `reason` is required by that
+ * script when `action` is "reject" (empty string is rejected there);
+ * `withFactoryLabel` only matters on "approve" (whether the created Issue
+ * gets `factory_config.trigger_label`, entering the requirements
+ * pipeline). */
+export async function decideIssueProposal(
+  proposalId: number,
+  action: ApprovalAction,
+  reason: string,
+  withFactoryLabel: boolean,
+): Promise<unknown> {
+  return await backend.issue_proposal_decide({
+    proposal_id: proposalId,
+    decision: action,
+    reason,
+    with_factory_label: withFactoryLabel,
+  });
+}
+
 /** Renders any thrown value as a short Japanese-friendly message for
  * display — Windmill job errors are usually `Error` instances whose
  * `message` already carries the backend script's own (Japanese-safe) text,

@@ -23,6 +23,7 @@ export const CONSOLE_VIEWS = [
   "lead_time",
   "failures",
   "notices",
+  "issue_proposals",
 ] as const;
 
 export type ConsoleView = (typeof CONSOLE_VIEWS)[number];
@@ -242,6 +243,42 @@ export function toNoticeRow(row: Record<string, unknown>): NoticeRow {
     kind: str(row.kind),
     message: str(row.message),
     resolved: bool(row.resolved),
+    created_at: str(row.created_at),
+  };
+}
+
+export type IssueProposalRow = {
+  issue_proposal_id: number;
+  work_item_id: number;
+  owner: string;
+  repo: string;
+  pr_number: number | null;
+  pr_title: string | null;
+  claimed_by: string | null;
+  review_comment_id: number;
+  thread_id: string | null;
+  title: string;
+  body: string;
+  status: string;
+  created_at: string;
+};
+
+export function toIssueProposalRow(
+  row: Record<string, unknown>,
+): IssueProposalRow {
+  return {
+    issue_proposal_id: num(row.issue_proposal_id),
+    work_item_id: num(row.work_item_id),
+    owner: str(row.owner),
+    repo: str(row.repo),
+    pr_number: numOrNull(row.pr_number),
+    pr_title: strOrNull(row.pr_title),
+    claimed_by: strOrNull(row.claimed_by),
+    review_comment_id: num(row.review_comment_id),
+    thread_id: strOrNull(row.thread_id),
+    title: str(row.title),
+    body: str(row.body),
+    status: str(row.status),
     created_at: str(row.created_at),
   };
 }

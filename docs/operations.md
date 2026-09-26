@@ -66,7 +66,7 @@
 
 #### Issue化提案の承認 / 却下(ConsoleのInbox)
 
-- ConsoleのInboxタブ(Issue化提案が実装され次第、追加予定)、またはWindmill UIで`f/factory/issue_proposal_decide`を直接開き、`proposal_id` / `decision`(approve / reject) / `reason`(却下時は必須) / `with_factory_label`(承認時のみ意味を持つ)を入力してRunする。
+- ConsoleのInboxタブ(要件定義の承認待ち一覧の下)に「Issue化提案」セクションがあり、そこから承認 / 却下する。左の一覧でPR番号・PRタイトル・提案タイトル・作成日時・担当者を確認して提案を選ぶと、右に提案本文(Markdown)と操作欄が表示される。「起票と同時にfactoryラベルを付けて要件定義に進める」のチェックボックス(既定オフ)で`with_factory_label`を切り替え、却下時のみ理由欄が必須になる。Appを使わない代替手順として、Windmill UIで`f/factory/issue_proposal_decide`を直接開き、`proposal_id` / `decision`(approve / reject) / `reason`(却下時は必須) / `with_factory_label`(承認時のみ意味を持つ)を入力してRunすることもできる。
 - **承認**すると、提案の`title` / `body`でIssueを対象リポジトリに作成し(`body`中の`{{pr_url}}`は元PRのURLに置換され、末尾に起票元を示す一文が付く)、レビュースレッドに`Issue #Nを起票しました。`と返信してスレッドを解決(resolve)する。`with_factory_label`を`true`にすると、作成したIssueに`factory_config.trigger_label`(既定`factory`)が付き、そのまま要件定義工程に乗る。ラベルを付けない場合は起票のみで、必要になったら人が後から`factory`ラベルを付ける。
 - **却下**すると、レビュースレッドに`見送りとします。`+ 入力した理由を返信するが、スレッドは開いたままになる(人が改めて判断する)。
 - 対象work itemに未決定の提案が残っていなければ、PRの状態ラベルを`needs-human`から`rereview`(その回でコミットをpushしていた場合)または`reviewed`(pushしていなかった場合)へ自動で切り替える。未決定の提案が他に残っている間は`needs-human`のまま。
