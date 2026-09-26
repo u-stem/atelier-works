@@ -72,6 +72,26 @@ function errorStepId(error: unknown): string | null {
 }
 
 /**
+ * The `work_item_id` value safe to pass to `recordFailure` (a real FK
+ * column on `job_failures`). devil-advocate fatal fix, found via a live
+ * `wmill flow run` with a bogus `work_item_id`: passing a requested id
+ * straight through when no such row exists violates
+ * `job_failures_work_item_id_fkey` and silently drops the whole failure
+ * record (the insert throws, caught, only warn-logged). `item` is the
+ * result of looking `requestedId` up (`null` if it doesn't exist, or was
+ * never provided); this returns that confirmed id, or `null` — the caller
+ * folds `requestedId` into the recorded error text instead so it isn't
+ * lost.
+ */
+export function failureWorkItemRef(
+  item: Pick<WorkItem, "id"> | null,
+  requestedId: number | undefined,
+): number | null {
+  if (item === null || requestedId === undefined) return null;
+  return item.id;
+}
+
+/**
  * Whether this on_error_flow invocation is entitled to mark its work item
  * `failed`. `rootJobId` is this invocation's own flow's root job id
  * (`WM_ROOT_FLOW_JOB_ID`); `workItemFlowJobId` is the job id last recorded
@@ -214,13 +234,33 @@ export async function main(
     error: message,
   });
 
+  let item: WorkItem | null = null;
+  if (work_item_id !== undefined) {
+    try {
+      item = await getWorkItem(work_item_id);
+    } catch (fetchErr) {
+      log.error("failed to fetch work item", {
+        work_item_id,
+        error: maskSecrets(
+          fetchErr instanceof Error ? fetchErr.message : String(fetchErr),
+        ),
+      });
+    }
+  }
+
+  const workItemRef = failureWorkItemRef(item, work_item_id);
+  const recordedError =
+    work_item_id !== undefined && workItemRef === null
+      ? `${message} (work_item_id ${work_item_id}: no matching row)`
+      : message;
+
   try {
     await recordFailure({
-      work_item_id: work_item_id ?? null,
+      work_item_id: workItemRef,
       flow_path: resolvedPath,
       job_id: resolvedJobId,
       step: errorStepId(error),
-      error: message,
+      error: recordedError,
     });
   } catch (recordErr) {
     log.error("failed to record failure", {
@@ -230,29 +270,26 @@ export async function main(
     });
   }
 
-  if (work_item_id !== undefined) {
+  if (item !== null && !TERMINAL_WORK_ITEM_STATUSES.includes(item.status)) {
     try {
-      const item = await getWorkItem(work_item_id);
-      if (item !== null && !TERMINAL_WORK_ITEM_STATUSES.includes(item.status)) {
-        if (!shouldMarkFailed(item.flow_job_id, rootJobId)) {
-          log.warn(
-            "on_error_flow: skipping status transition — work item's flow_job_id no longer matches this run (a newer run already replaced it)",
-            {
-              work_item_id,
-              work_item_flow_job_id: item.flow_job_id,
-              root_job_id: rootJobId,
-            },
-          );
-        } else {
-          const updated = await updateStatusIfCurrent(
+      if (!shouldMarkFailed(item.flow_job_id, rootJobId)) {
+        log.warn(
+          "on_error_flow: skipping status transition — work item's flow_job_id no longer matches this run (a newer run already replaced it)",
+          {
             work_item_id,
-            item.status,
-            "failed",
-            message,
-          );
-          if (updated) {
-            await handleTerminalFailure(item, resolvedJobId, message, log);
-          }
+            work_item_flow_job_id: item.flow_job_id,
+            root_job_id: rootJobId,
+          },
+        );
+      } else {
+        const updated = await updateStatusIfCurrent(
+          item.id,
+          item.status,
+          "failed",
+          message,
+        );
+        if (updated) {
+          await handleTerminalFailure(item, resolvedJobId, message, log);
         }
       }
     } catch (statusErr) {

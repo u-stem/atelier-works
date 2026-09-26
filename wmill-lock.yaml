@@ -3,7 +3,7 @@ locks:
   f/factory/_smoke_suspend__flow+__flow_hash: c642c40389574e98140d74c6a555ab5e6eeade0d1462c8bb7cfffa3205ecdc37
   f/factory/_smoke_suspend__flow+report_what_resume_produced.ts: dbb0ef9c729a74523bae031d57667cb2595c867000eecba39c033e08e0dd7ae8
   f/factory/_smoke_suspend__flow+request_approval.ts: c56881749f5785c8546f4e79e0f78c7a069735c17873845b4234251c5e9b9729
-  f/factory/approval_decide: 844d0e6b94fcb536ae24db8aed28e0845817657556345601e96efe371d4c8963
+  f/factory/approval_decide: 7a385c64a2d48781e385ff7c1e630353b85235b24365df331be27befd51c52d4
   f/factory/lib/claude: c01cd4548ba36d3e52dbc7351eb8f63a29977ac22b1ffd2f9ac826fe0222cfe6
   f/factory/lib/config: 7cc96fa0fc82ade8d8e859972b290d86980325a2794d36405a18b8b8499ff24e
   f/factory/lib/db: cc4f1153348411ed2b095d6c9a6fb377232626000dbcc6c441f6f115ca133db3
@@ -18,7 +18,7 @@ locks:
   f/factory/lib/workspace: f6cfece5213b883ade4d892a4e0ac714311f0ce829f64eb45f28ed57c0f1810b
   f/factory/manual_intake__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/notify_daily_summary: 8567cb63466debe147b218436ae3310f7fd5024bf9f0b394db96b8b2413c8ce2
-  f/factory/on_error_flow: 63288abbadcabc92ba3059e99ee8c65ecf762399422ffbb2a10d4915b77bba66
+  f/factory/on_error_flow: 53c51aeec104656ffe12824a4e720034741553ea469d753918081241c5cfc20e
   f/factory/on_error_schedule: fbb81f0eaf9cd9f50f6fbb46bc0133d159acb598e980410fdf6de9b08af0c211
   f/factory/pipeline__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/poll_issues: fc4b660847a282e9f271b4fb9842fbdffd3c43f2f73120c0d5375a4020b0145e

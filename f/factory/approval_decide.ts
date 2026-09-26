@@ -53,9 +53,18 @@
 // builds the resume URL from the instance's externally-facing BASE_URL
 // (e.g. `127.0.0.1:8080` in this repo's docker compose), which this
 // script's own `fetch` — running *inside* a worker container — likely
-// cannot reach. `toInternalUrl` rewrites the URL's origin to
-// `BASE_INTERNAL_URL` (the worker-reachable origin Windmill sets for
-// in-cluster calls) before the POST, when that env var is set.
+// cannot reach. `toInternalUrl` rewrites the URL's origin before the POST.
+//
+// [medium, security-auditor re-gate — measured] The origin to rewrite to
+// was first taken from `BASE_INTERNAL_URL` alone. Measured directly from
+// inside a real worker job: `BASE_INTERNAL_URL` is unset there;
+// `BASE_URL` *is* set, and `${BASE_URL}/api/version` returns HTTP 200 from
+// that job — while `http://127.0.0.1:8080` (the origin
+// `wmill.getResumeUrls()` actually bakes into the URL) is unreachable, so
+// the original `BASE_INTERNAL_URL`-only lookup was a no-op and the resume
+// POST failed every time. `resolveInternalBase` now falls back to
+// `BASE_URL` when `BASE_INTERNAL_URL` is unset, preferring
+// `BASE_INTERNAL_URL` if a future deployment ever sets both.
 
 import {
   getWorkItem,
@@ -189,6 +198,22 @@ export function toInternalUrl(
   return target.toString();
 }
 
+export type InternalBaseEnv = {
+  readonly BASE_INTERNAL_URL?: string | undefined;
+  readonly BASE_URL?: string | undefined;
+};
+
+/**
+ * Picks the origin `toInternalUrl` should rewrite the resume URL to (pure,
+ * for testing): `BASE_INTERNAL_URL` if set, else `BASE_URL`, else
+ * `undefined` (in which case `toInternalUrl` no-ops) — see the module
+ * doc's security-auditor re-gate note for the measured environment this
+ * fallback order is based on.
+ */
+export function resolveInternalBase(env: InternalBaseEnv): string | undefined {
+  return env.BASE_INTERNAL_URL ?? env.BASE_URL ?? undefined;
+}
+
 export type ApprovalDecideResult = {
   readonly ok: boolean;
   readonly status: string;
@@ -255,7 +280,10 @@ export async function main(
 
   const resumeUrl = toInternalUrl(
     workItem.resume_url,
-    process.env.BASE_INTERNAL_URL,
+    resolveInternalBase({
+      BASE_INTERNAL_URL: process.env.BASE_INTERNAL_URL,
+      BASE_URL: process.env.BASE_URL,
+    }),
   );
   const response = await fetch(resumeUrl, {
     method: "POST",

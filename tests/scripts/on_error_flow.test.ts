@@ -5,10 +5,13 @@
 //   newer run's setFlowJobId) is entitled to mark the work item `failed`.
 // - truncateForComment: caps the masked error text embedded in the
 //   failure comment posted to GitHub.
+// - failureWorkItemRef: the FK-safe work_item_id for recordFailure, given
+//   a (possibly null) getWorkItem lookup result.
 // See the devil-advocate notes above each function in on_error_flow.ts.
 
 import { describe, expect, test } from "bun:test";
 import {
+  failureWorkItemRef,
   labelsToRemove,
   shouldMarkFailed,
   truncateForComment,
@@ -75,5 +78,15 @@ describe("truncateForComment", () => {
   test("keeps the truncated result at exactly max characters", () => {
     const text = "x".repeat(310);
     expect(truncateForComment(text, 300).length).toBe(300);
+  });
+});
+
+describe("failureWorkItemRef", () => {
+  test("returns the item's id when the lookup found a row", () => {
+    expect(failureWorkItemRef({ id: 42 }, 42)).toBe(42);
+  });
+
+  test("returns null when the lookup found no row (avoids the FK violation)", () => {
+    expect(failureWorkItemRef(null, 999999)).toBeNull();
   });
 });

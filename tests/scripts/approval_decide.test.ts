@@ -5,6 +5,7 @@ import {
   classifyExistingApproval,
   deriveApprover,
   isDecisionForCurrentAttempt,
+  resolveInternalBase,
   toInternalUrl,
 } from "../../f/factory/approval_decide.ts";
 
@@ -135,5 +136,26 @@ describe("toInternalUrl", () => {
     expect(toInternalUrl(RESUME_URL, "http://windmill-server:8000")).toBe(
       "http://windmill-server:8000/api/w/factory/jobs_u/resume/abc?token=secret",
     );
+  });
+});
+
+describe("resolveInternalBase", () => {
+  test("prefers BASE_INTERNAL_URL when both are set", () => {
+    expect(
+      resolveInternalBase({
+        BASE_INTERNAL_URL: "http://internal:8000",
+        BASE_URL: "http://external:8080",
+      }),
+    ).toBe("http://internal:8000");
+  });
+
+  test("falls back to BASE_URL when BASE_INTERNAL_URL is unset (the measured worker env)", () => {
+    expect(resolveInternalBase({ BASE_URL: "http://external:8080" })).toBe(
+      "http://external:8080",
+    );
+  });
+
+  test("returns undefined when neither is set", () => {
+    expect(resolveInternalBase({})).toBeUndefined();
   });
 });
