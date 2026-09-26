@@ -27,6 +27,11 @@ mise run bootstrap      # ワークスペース作成、secret 投入、sync pus
 
 `GITHUB_TOKEN` / `CLAUDE_CODE_OAUTH_TOKEN` / `DISCORD_WEBHOOK_URL` を空のまま `bootstrap` を実行しても完了はする(該当する Windmill 変数が空で作成される)。ただし `doctor` はこれらが未設定だと NG を報告するため、実運用前には必ず値を投入する。
 
+## 自己更新に関する設定
+
+- `factory_config` リソースの `factory_branch`(既定 `main`)は、`self_update` が追跡するこのリポジトリのブランチ名。フォークやフィーチャーブランチで運用したい場合は Windmill UI からこの値を変更する(変更が効くのは worker 内の self clone をまだ作成していない場合のみ。既存の clone に反映するには worker コンテナ内の `/workspaces/factory/atelier-works` を削除して再作成させる)。
+- `f/factory/deployed_sha` 変数は、直近で Windmill に反映済みのコミット SHA を保持する非 secret 変数。`self_update` が自動的に更新するため、通常は人が編集する必要はない。`factory_config` リソースと同様に sync 対象外で、`bootstrap` が初回のみ空値で作成する(既に存在する場合は値を変更しない)。値を手動でリセットしたい場合は Windmill UI から直接編集する。
+
 ## 動作確認コマンドと期待出力
 
 | 確認内容 | コマンド | 期待される出力 |

@@ -28,6 +28,7 @@ value:
   claude_timeout_sec: 1800
   worktree_ttl_days: 7
   factory_repo: https://github.com/u-stem/atelier-works
+  factory_branch: main
   instance_name: local
   windmill_public_url: http://127.0.0.1:8080
   review_label: "factory:review"

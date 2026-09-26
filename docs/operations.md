@@ -9,13 +9,13 @@
 
 ## 日常運用
 
-**現状の注意**: `poll_issues` / `manual_intake` / `pipeline` の実処理フロー、ダッシュボード App、Discord 通知(`notify_discord`)は**未実装**。以下は実装後の想定運用であり、次の開発サイクルで実装する([docs/architecture.md](architecture.md) の拡張点・スコープ表も参照)。
+**現状の注意**: `poll_issues` / `manual_intake` / `pipeline` の実処理フロー、Discord 通知(`notify_discord`)は**未実装**。以下は実装後の想定運用であり、次の開発サイクルで実装する([docs/architecture.md](architecture.md) の拡張点・スコープ表も参照)。ダッシュボード App(Factory Console)は実装済み。
 
 - Issue に `factory` ラベルを付けると拾われる(付与者は OWNER / MEMBER / COLLABORATOR のいずれかである必要がある)。
 - 手動フォームからも同じパイプラインに Issue を投入できる想定(`manual_intake` フロー)。
-- **承認は Inbox App(`factory_console`)からのみ行う** (実装予定 M8)。それまで暫定手順: Windmill UI で `f/factory/approval_decide` を開き、Issue コメント記載の `work_item_id` / `decision`(approve / reject) / `reason` / `note` を入力して Run する。承認者は実行ユーザー(`WM_USERNAME`)として記録される。Windmill の approval page URL から直接 resume しない(approval がスキップされて `needs_human` に落ちる)。
+- **承認は Factory Console App(`f/factory/factory_console`)の Inbox タブから行う**。Issue コメントに記載された Inbox の URL を開き、対象の作業項目を選択して要件定義・図(draw.io ビューアー)・未確定事項を確認したうえで承認 / 却下する(却下時は理由の入力が必須、補足は任意)。承認者は実行ユーザー(`WM_USERNAME`)として記録される。Windmill の approval page URL(承認 URL)から直接 resume しない(approval がスキップされて `needs_human` に落ちる)。App を使わない代替手順として、Windmill UI で `f/factory/approval_decide` を直接開き、`work_item_id` / `decision`(approve / reject) / `reason` / `note` を入力して Run することもできる。
 - Reject すると要件定義が再生成され(`attempt` が加算される)、再度承認待ちになる。試行回数が上限を超えると `needs_human` になる。
-- 失敗した work item は Failures タブから再実行できる想定(`retry_work_item`)。再実行時は `wip` ラベルと該当するトリガーラベル(`factory` / `factory:review` / `factory:fix`)を再付与して再起動する。
+- 失敗した work item は Factory Console App の Failures タブから再実行できる(`retry_work_item`)。再実行時は `wip` ラベルと該当するトリガーラベル(`factory` / `factory:review` / `factory:fix`)を再付与して再起動する。
 - 通知の種類: `picked` / `awaiting_approval` / `approved` / `rejected` / `needs_human` / `failed` / `expired` / `cancelled` / `self_update`(ホスト操作が必要)/ `daily_summary`(前日のコスト・件数・失敗)。
 
 ## PR の使い方(pr_review / pr_fix)
@@ -36,8 +36,9 @@
 - worker の並列数(`NUM_WORKERS`)のような `infra/docker-compose.yml` の変更は、通常の `git pull` だけでは反映されない。`mise run deploy` を実行して worker イメージの再ビルドとコンテナの再起動まで行う。
 - `wmill sync push` に **`--include-secrets` を付けてはいけない**。付けるとリポジトリ内の `f/factory/*.variable.yaml`(値は空のままコミットされている)で4つの secret 変数(`claude_oauth_token` / `github_token` / `wmill_token` / `discord_webhook_url`)が空に上書きされる。`mise run push`(`wmill sync push --yes --keep-deleted`)は `--include-secrets` を付けない設定になっている。
 - secret 変数(`f/factory/*.variable.yaml`)と instance 固有の `factory_config` resource は同期対象外のため、これらの **説明文(description)を変えても `mise run push` では既存 instance に反映されない**。既存 instance では Windmill UI(Variables / Resources の編集画面)で説明文だけを更新する。新規 instance は bootstrap がリポジトリの説明文で作成する。
-- `self_update` スケジュール(未実装)が `infra/` や `mise.toml` の変更を検知すると、Discord とダッシュボードの Notices で「`mise run deploy` を実行してください」と通知する想定。
-- ダッシュボード App(未実装)を編集する場合の規約: 最新を `mise run pull` で取り込む → Windmill UI で編集する → 再度 `mise run pull` でローカルに反映する → コミットする。同時編集は避ける。
+- `f/factory/deployed_sha` 変数も同期対象外(理由は他の2つと異なり、instance 固有の設定ではなく `self_update` が書き込む実行時状態のため)。`mise run push` を実行しても値は変わらない。`bootstrap` は初回のみ空値で作成し、既に存在する場合は値を変更しない。値をリセットしたい場合は Windmill UI から直接編集する。
+- `self_update` スケジュール(10 分毎)が `infra/`・`mise.toml`・`mise.local.toml.example`・`scripts/` の変更を検知すると、Discord とダッシュボードの Notices で「`mise run deploy` を実行してください」と通知する。
+- ダッシュボード App(Factory Console、`f/factory/factory_console__raw_app/`)は raw app としてコードでリポジトリ管理する。編集は Windmill UI ではなくリポジトリのソース(`App.tsx` / `tabs/*.tsx` / `backend/*.yaml` 等)を直接編集し、`mise run push` でデプロイする。バックエンド runnable を追加・変更した場合は `wmill generate-metadata` でロック情報を更新してからコミットする。
 
 ## 秘密のローテーション
 
@@ -55,6 +56,4 @@
 次はまだ実装されていない(基盤 + 工程1→2 の骨組みまでが現在のスコープ)。実装され次第このドキュメントを更新する。
 
 - `poll_issues` / `manual_intake` / `pipeline` フロー(工程2の実処理)
-- ダッシュボード App(Inbox / Pipeline / Analytics / Failures / Notices)
 - Discord 通知(`notify_discord`)
-- `self_update` / `cleanup_workspaces` スケジュール

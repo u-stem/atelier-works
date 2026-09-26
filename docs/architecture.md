@@ -195,6 +195,8 @@ Windmill の UI は summary でソートされるため、種別を示すタグ�
 | `f/factory/steps/pr_fix_verify` | `[SF-3-2/4] 変更の検証` |
 | `f/factory/steps/pr_fix_finish` | `[SF-3-2/5] push と再レビュー依頼` |
 | `f/factory/steps/pr_workflow_support` | `[LIB] PR ワークフロー共通処理` |
+| `f/factory/self_update`(script + schedule) | `[SYS-1] Software Factory 自身を最新化` |
+| `f/factory/cleanup_workspaces`(script + schedule) | `[SYS-2] 作業領域を掃除` |
 | `f/factory/notify_daily_summary`(script + schedule) | `[SYS-3] 日次サマリ通知` |
 | `f/factory/on_error_flow` | `[SYS-4] フロー失敗ハンドラ` |
 | `f/factory/on_error_schedule` | `[SYS-5] schedule 失敗ハンドラ` |
@@ -210,8 +212,10 @@ Windmill の UI は summary でソートされるため、種別を示すタグ�
 | `f/factory/lib/types` | `[LIB] 共通型` |
 | `f/factory/lib/poll_support` | `[LIB] 巡回の純粋ロジック` |
 | `f/factory/lib/summary_support` | `[LIB] 日次サマリの集計` |
-
-`[SYS-1]`(self_update)と `[SYS-2]`(cleanup_workspaces)は[工程 3〜5](#拡張点)と同様に未実装で、番号のみ予約している。
+| `f/factory/factory_console__raw_app` | `[OP-0-1] Factory Console(承認・進捗・分析)` |
+| `f/factory/steps/console_query` | `[OP-0-1/1] Console 用データ取得` |
+| `f/factory/lib/self_update_support` | `[LIB] 自己更新の純粋ロジック` |
+| `f/factory/lib/cleanup_support` | `[LIB] 作業領域掃除の純粋ロジック` |
 
 ## PR ワークフロー(pr_review / pr_fix)
 
@@ -231,7 +235,7 @@ Windmill の UI は summary でソートされるため、種別を示すタグ�
 
 1. worker 内の self clone(このリポジトリ自身)を pull する。SHA が変わっていなければ何もしない。
 2. 変更があれば `wmill sync push --yes --keep-deleted` と `wmill datatable migrate up` を worker 内から実行し、Windmill 側の script/flow/schedule と Data Table の定義を最新化する。
-3. `infra/` や `mise.toml`(worker イメージや compose 定義)に変更がある場合は、worker の自己更新だけでは反映できないため `deployments.needs_host_action = true` として記録し、Discord とダッシュボードの Notices で「`mise run deploy` を実行してください」と通知する。`mise run deploy` はホスト側 checkout で `git pull --ff-only` → worker image のビルド → `compose up -d` → `wmill sync push` → migration の順で実行する。
+3. `infra/**`・`mise.toml`・`mise.local.toml.example`・`scripts/**`(worker イメージや compose 定義、ホスト側スクリプト)に変更がある場合は、worker の自己更新だけでは反映できないため `deployments.needs_host_action = true` として記録し、Discord とダッシュボードの Notices で「`mise run deploy` を実行してください」と通知する。`mise run deploy` はホスト側 checkout で `git pull --ff-only` → worker image のビルド → `compose up -d` → `wmill sync push` → migration の順で実行する。
 4. Claude が参照するスキル(`.claude/skills/**`)は self clone を `--add-dir` で直接読むため、pull 直後から反映される。
 5. 初回の反映(schedule 自体の登録や初回 push)は `scripts/bootstrap.sh` がホストから行う。
 

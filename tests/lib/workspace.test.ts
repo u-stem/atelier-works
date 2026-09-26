@@ -14,6 +14,7 @@ import {
   type LockFs,
   listWorktrees,
   pathExists,
+  pruneWorktrees,
   readGitShowFile,
   removeWorktree,
   resolveDefaultBranchHeadSha,
@@ -439,6 +440,48 @@ describe("ensureFactoryClone", () => {
     });
   });
 
+  test("clones with --branch main --single-branch by default (M7 factory_branch)", async () => {
+    const fake = createFakeCommandRunner([ok()]);
+    await ensureFactoryClone({
+      run: fake.run,
+      repoUrl: "https://github.com/acme/atelier-works.git",
+      ghToken: "gh-token",
+      exists: async () => false,
+      lockFs: createInMemoryLockFs(),
+    });
+    expect(fake.calls[0]?.argv).toContain("--branch");
+    expect(fake.calls[0]?.argv).toContain("main");
+    expect(fake.calls[0]?.argv).toContain("--single-branch");
+  });
+
+  test("clones with the configured branch when one is given (M7 factory_branch)", async () => {
+    const fake = createFakeCommandRunner([ok()]);
+    await ensureFactoryClone({
+      run: fake.run,
+      repoUrl: "https://github.com/acme/atelier-works.git",
+      ghToken: "gh-token",
+      branch: "release",
+      exists: async () => false,
+      lockFs: createInMemoryLockFs(),
+    });
+    const argv = fake.calls[0]?.argv ?? [];
+    expect(argv.indexOf("--branch") + 1).toBe(argv.indexOf("release"));
+  });
+
+  test("rejects an invalid branch name before spawning anything", async () => {
+    const fake = createFakeCommandRunner([ok()]);
+    await expect(
+      ensureFactoryClone({
+        run: fake.run,
+        repoUrl: "https://github.com/acme/atelier-works.git",
+        ghToken: "gh-token",
+        branch: "-oops",
+        exists: async () => false,
+        lockFs: createInMemoryLockFs(),
+      }),
+    ).rejects.toThrow(/invalid branch name/);
+  });
+
   test("pulls --ff-only when the clone dir already exists", async () => {
     const fake = createFakeCommandRunner([ok()]);
     const result = await ensureFactoryClone({
@@ -599,6 +642,43 @@ describe("removeWorktree", () => {
       dir: "/repo/main-wt",
       lockFs,
     });
+    expect(sawLockDuringRun).toBe(true);
+  });
+});
+
+describe("pruneWorktrees", () => {
+  test("runs git worktree prune in repoDir", async () => {
+    const fake = createFakeCommandRunner([ok()]);
+    await pruneWorktrees({
+      run: fake.run,
+      repoDir: "/repo/main",
+      lockFs: createInMemoryLockFs(),
+    });
+    expect(fake.calls[0]?.argv).toContain("prune");
+    expect(fake.calls[0]?.options?.cwd).toBe("/repo/main");
+  });
+
+  test("throws when git worktree prune fails", async () => {
+    const fake = createFakeCommandRunner([fail("not a git repository")]);
+    await expect(
+      pruneWorktrees({
+        run: fake.run,
+        repoDir: "/repo/main",
+        lockFs: createInMemoryLockFs(),
+      }),
+    ).rejects.toThrow();
+  });
+
+  test("is serialized under the same lock path other worktree operations use for this repo", async () => {
+    const lockFs = createInMemoryLockFs();
+    let sawLockDuringRun = false;
+    const fake = createFakeCommandRunner([ok()]);
+    const runAndCheck: typeof fake.run = async (argv, options) => {
+      sawLockDuringRun =
+        (await lockFs.read("/repo/main.lock")) !== null || sawLockDuringRun;
+      return fake.run(argv, options);
+    };
+    await pruneWorktrees({ run: runAndCheck, repoDir: "/repo/main", lockFs });
     expect(sawLockDuringRun).toBe(true);
   });
 });

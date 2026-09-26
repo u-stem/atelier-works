@@ -19,6 +19,7 @@ schema:
     - claude_timeout_sec
     - worktree_ttl_days
     - factory_repo
+    - factory_branch
     - instance_name
     - windmill_public_url
     - review_label
@@ -36,7 +37,7 @@ schema:
     allowed_check_commands:
       type: array
       description: >-
-        修正を検証する際に実行してよいシェルコマンドの一覧です(例: ["mise run check"])。ここに指定したコマンドは、秘密情報を渡さずタイムアウト付きで実行されます。空の場合はチェックを行いません。
+        修正内容を検証するために実行するコマンド(例: ["mise run check"])。対象リポジトリのコードをFactoryの実行環境でそのまま実行するため隔離はされません。通常は空のままにし、信頼できるリポジトリだけで使ってください。
       default: []
       items:
         type: string
@@ -79,6 +80,11 @@ schema:
       description: >-
         レビューや修正の際に、Claudeへそのまま渡す差分の最大行数です。これを超える場合は変更ファイルの一覧だけを渡し、詳細はClaude自身に読み取らせます。
       default: 3000
+    factory_branch:
+      type: string
+      description: >-
+        自分自身を最新化する処理が追跡するリポジトリのブランチ名です。
+      default: main
     factory_repo:
       type: string
       description: >-

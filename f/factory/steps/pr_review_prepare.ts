@@ -33,6 +33,18 @@ export type PrReviewPrepareResult = {
   readonly attempt: number;
 };
 
+/** The detached worktree path for reviewing one PR commit (pure, for
+ * testing) — shared by this file (create) and cleanup_workspaces.ts (M7
+ * TTL sweep removal). `sha7` is the first 7 characters of the reviewed
+ * commit's sha. */
+export function buildReviewWorktreeDir(
+  repoDir: string,
+  prNumber: number,
+  sha7: string,
+): string {
+  return `${repoDir.replace(/\/main$/, "")}/review-${String(prNumber)}-${sha7}`;
+}
+
 const SKIPPED_BASE = {
   owner: "",
   repo: "",
@@ -108,7 +120,7 @@ export async function main(
   assertSha(prBeforeWorktree.headSha);
 
   const sha7 = prBeforeWorktree.headSha.slice(0, 7);
-  const worktreeDir = `${repoDir.replace(/\/main$/, "")}/review-${String(workItem.pr_number)}-${sha7}`;
+  const worktreeDir = buildReviewWorktreeDir(repoDir, workItem.pr_number, sha7);
 
   await addDetachedWorktree({
     run: runCommand,

@@ -752,6 +752,16 @@ export type EnsureFactoryCloneOptions = {
   readonly ghToken: string;
   /** Default "/workspaces/factory/atelier-works". */
   readonly dir?: string;
+  /**
+   * Branch to check out (config `factory_config.factory_branch`, M7).
+   * Default "main". Only takes effect on a *fresh* clone (`git clone
+   * --branch <branch> --single-branch`) — an already-existing clone is
+   * simply pulled on whatever branch it was originally created on
+   * (self_update.ts's own use never switches branches mid-lifetime of a
+   * clone; changing `factory_branch` after the clone dir already exists
+   * requires removing that directory so a subsequent call re-clones fresh).
+   */
+  readonly branch?: string;
   readonly home?: string;
   readonly path?: string;
   readonly exists?: PathExists;
@@ -792,6 +802,8 @@ export async function ensureFactoryClone(
   opts: EnsureFactoryCloneOptions,
 ): Promise<EnsureFactoryCloneResult> {
   const dir = opts.dir ?? DEFAULT_FACTORY_CLONE_DIR;
+  const branch = opts.branch ?? "main";
+  assertBranchName(branch);
   const exists = opts.exists ?? pathExists;
   const env = networkGitEnv(opts.ghToken, opts.home, opts.path);
 
@@ -816,7 +828,18 @@ export async function ensureFactoryClone(
       }
 
       const result = await opts.run(
-        buildGitArgv(["clone", "--", opts.repoUrl, dir], { network: true }),
+        buildGitArgv(
+          [
+            "clone",
+            "--branch",
+            branch,
+            "--single-branch",
+            "--",
+            opts.repoUrl,
+            dir,
+          ],
+          { network: true },
+        ),
         {
           env,
         },
@@ -941,6 +964,45 @@ export async function removeWorktree(
         cwd: opts.repoDir,
         env: localGitEnv(opts.home, opts.path),
       });
+    },
+  });
+}
+
+export type PruneWorktreesOptions = {
+  readonly run: CommandRunner;
+  readonly repoDir: string;
+  readonly home?: string;
+  readonly path?: string;
+  readonly lockFs?: LockFs;
+  readonly sleep?: (ms: number) => Promise<void>;
+  readonly now?: () => Date;
+};
+
+/**
+ * `git worktree prune` in `repoDir` on its own — for a standalone sweep
+ * (cleanup_workspaces.ts, M7) that isn't itself removing a specific entry
+ * via `removeWorktree` (which already prunes after every removal). Clears
+ * stale worktree administrative metadata for a working tree directory that
+ * no longer exists on disk (e.g. removed outside of git). Serialized under
+ * `repoLockPath(repoDir)` (same lock every other worktree-mutating function
+ * in this module uses for this repo).
+ */
+export async function pruneWorktrees(
+  opts: PruneWorktreesOptions,
+): Promise<void> {
+  await withRepoLock({
+    lockPath: repoLockPath(opts.repoDir),
+    ...(opts.lockFs !== undefined ? { lockFs: opts.lockFs } : {}),
+    ...(opts.sleep !== undefined ? { sleep: opts.sleep } : {}),
+    ...(opts.now !== undefined ? { now: opts.now } : {}),
+    fn: async () => {
+      const result = await opts.run(buildGitArgv(["worktree", "prune"]), {
+        cwd: opts.repoDir,
+        env: localGitEnv(opts.home, opts.path),
+      });
+      if (result.exitCode !== 0) {
+        throw gitError("git worktree prune failed", result);
+      }
     },
   });
 }

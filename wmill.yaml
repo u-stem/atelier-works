@@ -19,6 +19,18 @@ excludes:
   # templates/factory_config.resource.yaml for the seed used on first
   # bootstrap and scripts/bootstrap.sh for how it is created.
   - "f/factory/factory_config.resource.yaml"
+  # Instance-specific mutable state, not instance-specific config: self_update
+  # writes the deployed sha into this non-secret variable at runtime. If it
+  # synced like an ordinary variable, every unrelated `wmill sync push` would
+  # reset it back to this file's committed empty value, making self_update
+  # treat "unchanged" as "update" and re-push worker-side right as a human's
+  # `mise run deploy` is mid-flight overwriting the same script/flow
+  # definitions from the host side — a real, not just theoretical, race.
+  # scripts/bootstrap.sh creates the variable once on first setup (empty
+  # value, description there); the file stays in the repo only as the
+  # source of that seed description, same as factory_config.resource.yaml
+  # above.
+  - "f/factory/deployed_sha.variable.yaml"
 
 # --- What to sync -----------------------------------------------------
 # "skip" options default to false (synced), "include" options default to false (not synced)

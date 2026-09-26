@@ -401,6 +401,10 @@ export type FactoryConfig = {
   claude_timeout_sec: number;
   worktree_ttl_days: number;
   factory_repo: string;
+  /** Branch of factory_repo self_update.ts tracks (checks out on first
+   * clone, then pulls) when updating this Software Factory instance from
+   * its own repository. */
+  factory_branch: string;
   instance_name: string;
   windmill_public_url: string;
   // New in cycle 2 (spec-cycle2.md §7 item 10). All optional on the

@@ -1,0 +1,9 @@
+summary: '[SYS-2] 作業領域を掃除'
+description: 毎日3:00(Asia/Tokyo)に実行します。処理が終わってから一定日数が経過した作業用ディレクトリを削除し、動かなくなったまま残っている処理を停止します。あわせて、保存領域の使用量をお知らせ一覧に記録します。
+lock: '!inline f/factory/cleanup_workspaces.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

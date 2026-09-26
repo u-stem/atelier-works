@@ -11,6 +11,7 @@ declare namespace RT {
     max_turns: number,
     wip_label: string,
     factory_repo: string,
+    factory_branch: string,
     max_attempts: number,
     review_label: string,
     instance_name: string,

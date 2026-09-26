@@ -42,6 +42,24 @@ describe("parseFactoryConfig", () => {
     });
   });
 
+  test("defaults factory_branch to main when absent (M7)", () => {
+    const config = parseFactoryConfig(LEGACY_RAW_CONFIG);
+    expect(config.factory_branch).toBe("main");
+  });
+
+  test("passes through an explicit factory_branch value", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      factory_branch: "release",
+    });
+    expect(config.factory_branch).toBe("release");
+  });
+
+  test("throws when factory_branch is present but not a string", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, factory_branch: 42 };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
   test("passes through explicit values for the cycle-2 fields", () => {
     const config = parseFactoryConfig({
       ...LEGACY_RAW_CONFIG,

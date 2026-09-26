@@ -55,6 +55,7 @@ type DefaultableField =
   | "daily_budget_usd"
   | "claude_timeout_sec"
   | "worktree_ttl_days"
+  | "factory_branch"
   | "windmill_public_url"
   | "review_label"
   | "fix_label"
@@ -82,6 +83,7 @@ const DEFAULTS: Pick<FactoryConfig, DefaultableField> = {
   daily_budget_usd: 50,
   claude_timeout_sec: 1800,
   worktree_ttl_days: 7,
+  factory_branch: "main",
   windmill_public_url: "http://127.0.0.1:8080",
   // New in cycle 2 (spec-cycle2.md §7 item 10).
   review_label: "factory:review",
@@ -274,6 +276,7 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
       DEFAULTS.worktree_ttl_days,
     ),
     factory_repo: requiredStringField(raw, "factory_repo"),
+    factory_branch: stringField(raw, "factory_branch", DEFAULTS.factory_branch),
     instance_name: requiredStringField(raw, "instance_name"),
     windmill_public_url: stringField(
       raw,

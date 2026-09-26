@@ -1,0 +1,14 @@
+summary: '[SYS-1] Software Factory 自身を最新化'
+description: >-
+  10分ごとに実行します。Software
+  Factory自身の最新のコミットを取り込み、変更があればWindmillへの反映とデータベースの更新を自動的に行います。ホスト側での作業が必要な変更を検知した場合は、その旨をお知らせします。
+args: {}
+cron_version: v2
+enabled: true
+is_flow: false
+no_flow_overlap: true
+on_failure: f/factory/on_error_schedule
+schedule: 0 */10 * * * *
+script_path: f/factory/self_update
+timezone: Asia/Tokyo
+ws_error_handler_muted: false

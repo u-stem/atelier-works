@@ -75,10 +75,15 @@
 #      (owners, instance_name, windmill_public_url) and excluded from sync (see
 #      wmill.yaml) - bootstrap never overwrites an existing one, so UI edits
 #      always win.
-#  12. `wmill sync push --yes --keep-deleted`
-#  13. `wmill datatable migrate up`
-#  14. `wmill resource-type generate-namespace` (writes rt.d.ts)
-#  15. Print next steps.
+#  12. Create the non-secret f/factory/deployed_sha variable (empty value) if
+#      it does not already exist remotely - also excluded from sync (see
+#      wmill.yaml), but for a different reason than factory_config: it is
+#      self_update's own runtime state, not instance config, and must never
+#      be reset back to empty by a bootstrap re-run.
+#  13. `wmill sync push --yes --keep-deleted`
+#  14. `wmill datatable migrate up`
+#  15. `wmill resource-type generate-namespace` (writes rt.d.ts)
+#  16. Print next steps.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
@@ -229,12 +234,16 @@ persistent_token_body() {
 }
 
 variable_create_body() {
-  # $1 = path, $2 = value, $3 = description
-  WM_TMP_PATH="$1" WM_TMP_VALUE="$2" WM_TMP_DESC="$3" bun_eval '
+  # $1 = path, $2 = value, $3 = description, $4 = is_secret ("true"/"false",
+  # default "true" - every existing call site below creates a secret; step
+  # 12's deployed_sha is the one non-secret exception and passes "false").
+  local is_secret="${4:-true}"
+  WM_TMP_PATH="$1" WM_TMP_VALUE="$2" WM_TMP_DESC="$3" WM_TMP_IS_SECRET="${is_secret}" bun_eval '
     const path = process.env.WM_TMP_PATH ?? "";
     const value = process.env.WM_TMP_VALUE ?? "";
     const description = process.env.WM_TMP_DESC ?? "";
-    process.stdout.write(JSON.stringify({ path, value, is_secret: true, description }));
+    const is_secret = process.env.WM_TMP_IS_SECRET === "true";
+    process.stdout.write(JSON.stringify({ path, value, is_secret, description }));
   '
 }
 
@@ -539,11 +548,30 @@ else
   log "resource f/factory/factory_config created from templates/factory_config.resource.yaml (owners is empty)"
 fi
 
-# --- step 12: push local sync state -----------------------------------------
+# --- step 12: instance-specific deployed_sha variable (create-if-missing) ---
+# Not synced (see wmill.yaml's excludes comment on this path): self_update
+# writes into this non-secret variable at runtime, so - unlike the 4 secrets
+# in step 7, which are fine to overwrite on every bootstrap re-run - it must
+# only ever be created once and never reset back to empty by a later re-run
+# (that would make self_update treat every run as "needs a fresh redeploy",
+# racing a host-side `mise run deploy` mid-flight). Detected via the create
+# call's own response status, the same "non-201 likely means it already
+# exists" signal upsert_variable above relies on - on non-201 this just logs
+# and leaves the existing value alone, it never calls update.
+deployed_sha_create_status="$(variable_create_body "f/factory/deployed_sha" "" \
+  "Software Factory 自身のうち、直近で Windmill に反映済みのコミットです。自己更新処理が自動的に更新します。" \
+  "false" | api_post "/w/${WORKSPACE}/variables/create")"
+if [ "${deployed_sha_create_status}" = "201" ]; then
+  log "variable f/factory/deployed_sha created (empty)"
+else
+  log "variable f/factory/deployed_sha create returned ${deployed_sha_create_status} (likely already exists); leaving its value alone"
+fi
+
+# --- step 13: push local sync state -----------------------------------------
 run_wmill sync push --yes --keep-deleted >&2
 log "sync push complete"
 
-# --- step 13: apply pending data table migrations ----------------------------
+# --- step 14: apply pending data table migrations ----------------------------
 # FACTORY_BOOTSTRAP_SKIP_MIGRATE=1 is an escape hatch to stop bootstrap right
 # before this step (e.g. to manually verify the instance pg database state
 # after step 3 before letting `migrate up` touch it). Deliberately
@@ -556,7 +584,7 @@ else
   log "datatable migrations applied"
 fi
 
-# --- step 14: regenerate the RT namespace ------------------------------------
+# --- step 15: regenerate the RT namespace ------------------------------------
 run_wmill resource-type generate-namespace >&2
 log "rt.d.ts regenerated"
 

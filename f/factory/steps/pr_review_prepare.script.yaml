@@ -1,6 +1,5 @@
 summary: '[SF-3-1/1] PR の取得と検証'
-description: >-
-  レビュー対象のPRを確認するステップです。レビューしてよい状態か確認したうえで、レビュー用の作業ディレクトリを用意し、次のステップに渡します。
+description: レビュー対象のPRを確認するステップです。レビューしてよい状態か確認したうえで、レビュー用の作業ディレクトリを用意し、次のステップに渡します。
 lock: '!inline f/factory/steps/pr_review_prepare.script.lock'
 kind: script
 schema:
@@ -9,7 +8,7 @@ schema:
   properties:
     work_item_id:
       type: number
-      description: '対象の作業項目のID。'
+      description: 対象の作業項目のID。
       default: null
   required:
     - work_item_id
