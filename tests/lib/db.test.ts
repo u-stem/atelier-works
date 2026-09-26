@@ -11,6 +11,7 @@ import {
   latestDraft,
   latestPrWorkItem,
   listActive,
+  listStaleTerminalWorkItems,
   nextCycleForIssue,
   recordAgentRun,
   recordApproval,
@@ -286,6 +287,40 @@ describe("listActive", () => {
     ]);
     const items = await listActive(sql);
     expect(items).toHaveLength(2);
+  });
+});
+
+describe("listStaleTerminalWorkItems", () => {
+  test("includes terminal statuses via status = ANY(...)", async () => {
+    const { sql, calls } = createFakeSqlClient([[WORK_ITEM_ROW]]);
+    await listStaleTerminalWorkItems(NOW, sql);
+    expect(calls[0]?.text).toContain("status = ANY");
+  });
+
+  test("passes the terminal status list as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[WORK_ITEM_ROW]]);
+    await listStaleTerminalWorkItems(NOW, sql);
+    expect(calls[0]?.values[0]).toContain("cancelled");
+  });
+
+  test("passes olderThan as an ISO string parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[WORK_ITEM_ROW]]);
+    await listStaleTerminalWorkItems(NOW, sql);
+    expect(calls[0]?.values[1]).toBe(NOW.toISOString());
+  });
+
+  test("parses every returned row", async () => {
+    const { sql } = createFakeSqlClient([
+      [WORK_ITEM_ROW, { ...WORK_ITEM_ROW, id: 2 }],
+    ]);
+    const items = await listStaleTerminalWorkItems(NOW, sql);
+    expect(items).toHaveLength(2);
+  });
+
+  test("casts olderThan to ::timestamptz so the ISO string doesn't bind as text against updated_at (timestamptz)", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listStaleTerminalWorkItems(NOW, sql);
+    expect(calls[0]?.text).toContain("::timestamptz");
   });
 });
 
@@ -969,6 +1004,12 @@ describe("sumAgentCostSince", () => {
     const { sql } = createFakeSqlClient([[{ total_cost_usd: 0 }]]);
     const total = await sumAgentCostSince("2026-09-26T00:00:00.000Z", sql);
     expect(total).toBe(0);
+  });
+
+  test('casts sinceIso to ::timestamptz so the JS string doesn\'t bind as text against created_at (timestamptz) — reproduces the real E2E failure "operator does not exist: timestamp with time zone >= text"', async () => {
+    const { sql, calls } = createFakeSqlClient([[{ total_cost_usd: 0 }]]);
+    await sumAgentCostSince("2026-09-26T00:00:00.000Z", sql);
+    expect(calls[0]?.text).toContain("::timestamptz");
   });
 
   test("filters by created_at >= the given timestamp", async () => {

@@ -429,6 +429,25 @@ export async function listActive(
   return rows.map(toWorkItem);
 }
 
+/**
+ * Lists every work item in a terminal status whose `updated_at` is at or
+ * before `olderThan` — cleanup_workspaces.ts's (M7) TTL sweep target set
+ * (`config.worktree_ttl_days` before "now"). Most recently updated first,
+ * same as `listActive`.
+ */
+export async function listStaleTerminalWorkItems(
+  olderThan: Date,
+  sql: SqlClient = defaultSqlClient,
+): Promise<WorkItem[]> {
+  const terminal: string[] = [...TERMINAL_WORK_ITEM_STATUSES];
+  const rows = await sql`
+    SELECT * FROM factory.work_items
+    WHERE status = ANY(${terminal}) AND updated_at <= ${olderThan.toISOString()}::timestamptz
+    ORDER BY updated_at DESC
+  `.fetch();
+  return rows.map(toWorkItem);
+}
+
 // ---------------------------------------------------------------------------
 // requirement_drafts
 // ---------------------------------------------------------------------------
@@ -962,7 +981,7 @@ export async function sumAgentCostSince(
   const rows = await sql`
     SELECT COALESCE(SUM(cost_usd), 0) AS total_cost_usd
     FROM factory.agent_runs
-    WHERE created_at >= ${sinceIso}
+    WHERE created_at >= ${sinceIso}::timestamptz
   `.fetch();
   const row = rows[0];
   if (row === undefined) {
