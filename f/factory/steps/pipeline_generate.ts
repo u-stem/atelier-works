@@ -256,6 +256,7 @@ export async function main(
     run: runCommand,
     repoUrl: config.factory_repo,
     ghToken,
+    branch: config.factory_branch,
   });
   const systemPrompt = await buildSystemPrompt({
     skillNames: ["factory-requirements", "drawio-diagram"],

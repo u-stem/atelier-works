@@ -753,15 +753,17 @@ export type EnsureFactoryCloneOptions = {
   /** Default "/workspaces/factory/atelier-works". */
   readonly dir?: string;
   /**
-   * Branch to check out (config `factory_config.factory_branch`, M7).
-   * Default "main". Only takes effect on a *fresh* clone (`git clone
-   * --branch <branch> --single-branch`) — an already-existing clone is
-   * simply pulled on whatever branch it was originally created on
-   * (self_update.ts's own use never switches branches mid-lifetime of a
-   * clone; changing `factory_branch` after the clone dir already exists
-   * requires removing that directory so a subsequent call re-clones fresh).
+   * Branch to check out and keep the clone on (config
+   * `factory_config.factory_branch`, M7) — required, no default. Every
+   * call site must pass `config.factory_branch` explicitly; there is no
+   * safe default to fall back to, since a caller that forgets it would
+   * silently pin the *shared* self clone to whatever this parameter
+   * defaulted to (see this function's own module comment for the real
+   * incident: with an optional `branch` defaulting to "main", one caller
+   * omitting it kept resetting the clone away from the configured branch
+   * out from under every other caller).
    */
-  readonly branch?: string;
+  readonly branch: string;
   readonly home?: string;
   readonly path?: string;
   readonly exists?: PathExists;
@@ -787,22 +789,43 @@ function factoryCloneLockPath(dir: string): string {
 
 /**
  * Ensure the factory's own self clone exists, with a real (checked-out)
- * working tree, and is up to date. Unlike `ensureRepo`, this clone is read
- * for its files directly (`.claude/skills/<name>/SKILL.md` via
- * `claude.ts#buildSystemPrompt`), so it needs a working tree rather than a
- * fetch-only bare clone. Call at the start of every flow (spec-cycle2.md §0).
+ * working tree, and is up to date on `opts.branch`. Unlike `ensureRepo`,
+ * this clone is read for its files directly (`.claude/skills/<name>/
+ * SKILL.md` via `claude.ts#buildSystemPrompt`), so it needs a working tree
+ * rather than a fetch-only bare clone. Call at the start of every flow
+ * (spec-cycle2.md §0).
  *
- * Serialized under `factoryCloneLockPath(dir)` (devil-advocate fix,
- * security-auditor-adopted): with `NUM_WORKERS` > 1, every flow's first
- * step and `poll_issues` all call this for the *same* `dir` concurrently;
- * without a lock, two `git pull`/`git clone` racing on the same working
- * tree fail on `.git/index.lock`.
+ * On every call — not just at first clone — this fetches `opts.branch` and
+ * force-checks-out onto it (`checkout -B`), converging the clone to that
+ * branch's current remote state regardless of what was checked out before
+ * (M7 re-gate; see the incident below). Serialized under
+ * `factoryCloneLockPath(dir)` (devil-advocate fix, security-auditor-
+ * adopted): with `NUM_WORKERS` > 1, every flow's first step and
+ * `poll_issues` all call this for the *same* `dir` concurrently; without a
+ * lock, two `git fetch`/`git checkout`/`git clone` racing on the same
+ * working tree fail on `.git/index.lock`.
+ *
+ * Real incident (M7, self_update's own second production run): with an
+ * earlier version of this function that only checked out `opts.branch` on
+ * a *fresh* clone (an already-existing clone was just `git pull --ff-
+ * only`ed on whatever branch it happened to be on), one caller
+ * (poll_issues.ts's `checkDeployedSha`, which reads the self clone but
+ * doesn't deploy from it) omitted `branch` and got a default of "main" —
+ * which, running every 5 minutes, kept resetting the *shared* clone back
+ * to `main` in between self_update's own 10-minutely runs, so self_update
+ * kept deploying stale `main` content instead of the real
+ * `factory_branch`. Fixed two ways: this function now always re-converges
+ * to `opts.branch` on every call (this comment), and `branch` has no
+ * default (it is a required field on `EnsureFactoryCloneOptions`) so every
+ * call site is forced to pass `config.factory_branch` explicitly — a
+ * caller can no longer *silently* fall back to a wrong branch for the
+ * whole shared clone.
  */
 export async function ensureFactoryClone(
   opts: EnsureFactoryCloneOptions,
 ): Promise<EnsureFactoryCloneResult> {
   const dir = opts.dir ?? DEFAULT_FACTORY_CLONE_DIR;
-  const branch = opts.branch ?? "main";
+  const branch = opts.branch;
   assertBranchName(branch);
   const exists = opts.exists ?? pathExists;
   const env = networkGitEnv(opts.ghToken, opts.home, opts.path);

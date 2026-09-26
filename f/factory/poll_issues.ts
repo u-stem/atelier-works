@@ -155,6 +155,7 @@ async function checkDeployedSha(
       run: runCommand,
       repoUrl: config.factory_repo,
       ghToken,
+      branch: config.factory_branch,
     });
     const selfSha = await readRepoHeadSha(runCommand, factoryClone.dir);
 

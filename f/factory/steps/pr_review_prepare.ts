@@ -100,6 +100,7 @@ export async function main(
     run: runCommand,
     repoUrl: config.factory_repo,
     ghToken,
+    branch: config.factory_branch,
   });
 
   const { dir: repoDir } = await ensureRepo({

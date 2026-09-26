@@ -431,6 +431,7 @@ describe("ensureFactoryClone", () => {
       run: fake.run,
       repoUrl: "https://github.com/acme/atelier-works.git",
       ghToken: "gh-token",
+      branch: "main",
       exists: async () => false,
       lockFs: createInMemoryLockFs(),
     });
@@ -440,21 +441,7 @@ describe("ensureFactoryClone", () => {
     });
   });
 
-  test("clones with --branch main --single-branch by default (M7 factory_branch)", async () => {
-    const fake = createFakeCommandRunner([ok()]);
-    await ensureFactoryClone({
-      run: fake.run,
-      repoUrl: "https://github.com/acme/atelier-works.git",
-      ghToken: "gh-token",
-      exists: async () => false,
-      lockFs: createInMemoryLockFs(),
-    });
-    expect(fake.calls[0]?.argv).toContain("--branch");
-    expect(fake.calls[0]?.argv).toContain("main");
-    expect(fake.calls[0]?.argv).toContain("--single-branch");
-  });
-
-  test("clones with the configured branch when one is given (M7 factory_branch)", async () => {
+  test("clones with --branch <branch> --single-branch (M7 factory_branch, required — no default)", async () => {
     const fake = createFakeCommandRunner([ok()]);
     await ensureFactoryClone({
       run: fake.run,
@@ -465,6 +452,7 @@ describe("ensureFactoryClone", () => {
       lockFs: createInMemoryLockFs(),
     });
     const argv = fake.calls[0]?.argv ?? [];
+    expect(argv).toContain("--single-branch");
     expect(argv.indexOf("--branch") + 1).toBe(argv.indexOf("release"));
   });
 
@@ -488,6 +476,7 @@ describe("ensureFactoryClone", () => {
       run: fake.run,
       repoUrl: "https://github.com/acme/atelier-works.git",
       ghToken: "gh-token",
+      branch: "main",
       exists: async () => true,
       lockFs: createInMemoryLockFs(),
     });
@@ -538,6 +527,7 @@ describe("ensureFactoryClone", () => {
         run: fake.run,
         repoUrl: "https://github.com/acme/atelier-works.git",
         ghToken: "gh-token",
+        branch: "main",
         exists: async () => true,
         lockFs: createInMemoryLockFs(),
       }),
@@ -551,6 +541,7 @@ describe("ensureFactoryClone", () => {
         run: fake.run,
         repoUrl: "https://github.com/acme/atelier-works.git",
         ghToken: "gh-token",
+        branch: "main",
         exists: async () => true,
         lockFs: createInMemoryLockFs(),
       }),
@@ -571,6 +562,7 @@ describe("ensureFactoryClone", () => {
       run: runAndCheck,
       repoUrl: "https://github.com/acme/atelier-works.git",
       ghToken: "gh-token",
+      branch: "main",
       exists: async () => true,
       lockFs,
     });

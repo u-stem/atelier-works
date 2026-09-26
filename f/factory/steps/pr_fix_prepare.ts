@@ -135,6 +135,7 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
     run: runCommand,
     repoUrl: config.factory_repo,
     ghToken,
+    branch: config.factory_branch,
   });
   const { dir: repoDir } = await ensureRepo({
     run: runCommand,
