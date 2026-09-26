@@ -1,29 +1,29 @@
 # atelier-works — Software Factory
 
-GitHub Issue を起点に、要件定義 → 実装 → PR → CI 監視 → マージ後監視 → 自己改善までを
-Windmill 上のフローとして自動化する「Software Factory」。このリポジトリを `clone` して
+GitHub Issueを起点に、要件定義 → 実装 → PR → CI監視 → マージ後監視 → 自己改善までを
+Windmill上のフローとして自動化する「Software Factory」。このリポジトリを`clone`して
 手順どおりに実行するだけで完結し、グローバル設定や別リポジトリへの依存を持たない。
 
 ## 概要
 
 工程は次の5段階。
 
-1. **拾う** — `factory` ラベル付き Issue を検知して claim する
-2. **要件定義** — headless Claude が要件定義ドラフトを生成し、人が承認・差し戻しする
-3. **実装** — worktree 上で実装し PR を作成する
-4. **CI 監視** — マージ後の CI を監視する
-5. **自己改善** — 失敗や却下の履歴から改善提案を Issue 化する
+1. **拾う** — `factory`ラベル付きIssueを検知してclaimする
+2. **要件定義** — headless Claudeが要件定義ドラフトを生成し、人が承認・差し戻しする
+3. **実装** — worktree上で実装しPRを作成する
+4. **CI監視** — マージ後のCIを監視する
+5. **自己改善** — 失敗や却下の履歴から改善提案をIssue化する
 
-**現在のスコープ**: 基盤(docker compose による Windmill スタック、claude/gh/gtr/wmill を
-同梱した worker イメージ、Data Table、`doctor` / `bootstrap`)、工程 1 の自動巡回(`poll_issues` / `poll_prs`)、
-工程 2 の要件定義と承認、PR ワークフロー(工程 3 の一部: `pr_review` / `pr_fix`)、
-ダッシュボード App(Factory Console)、自己更新と失敗ハンドラ。
-未実装は工程 3 の「Issue から実装して PR を作る」、工程 4 のマージ後 CI 監視、工程 5 の自己改善提案、
-Discord の双方向操作(詳細は [docs/architecture.md](docs/architecture.md) と [docs/operations.md](docs/operations.md) を参照)。
+**現在のスコープ**: 基盤(docker composeによるWindmillスタック、claude/gh/gtr/wmillを
+同梱したworkerイメージ、Data Table、`doctor` / `bootstrap`)、工程1の自動巡回(`poll_issues` / `poll_prs`)、
+工程2の要件定義と承認、PRワークフロー(工程3の一部: `pr_review` / `pr_fix`)、
+ダッシュボードApp(Factory Console)、自己更新と失敗ハンドラ。
+未実装は工程3の「Issueから実装してPRを作る」、工程4のマージ後CI監視、工程5の自己改善提案、
+Discordの双方向操作(詳細は [docs/architecture.md](docs/architecture.md)と [docs/operations.md](docs/operations.md)を参照)。
 
 ## 10分で動かす
 
-前提: ホストに **docker**(Desktop または OrbStack)と **mise** のみ。
+前提: ホストに **docker**(DesktopまたはOrbStack)と **mise** のみ。
 
 ```bash
 git clone <このリポジトリの URL> atelier-works
@@ -32,8 +32,8 @@ mise trust
 mise run setup
 ```
 
-秘密値を投入する(キー一覧と取得手順は `mise.local.toml.example` を参照。投入は
-シェル履歴に残さない `read -rs` 経由を推奨):
+秘密値を投入する(キー一覧と取得手順は`mise.local.toml.example`を参照。投入は
+シェル履歴に残さない`read -rs`経由を推奨):
 
 ```bash
 read -rs 'v?DB_PASSWORD: ' && mise set -E local DB_PASSWORD="$v"; unset v
@@ -47,32 +47,32 @@ mise run up
 mise run bootstrap
 ```
 
-ブラウザで <http://127.0.0.1:8080> を開き、`admin@windmill.dev` と設定した
-`WM_ADMIN_PASSWORD` でログインする。Windmill UI で `f/factory/factory_config` を開き、
-`owners`(対象リポジトリの所有者)と `instance_name` を設定する。この2項目は git 管理外で、
-`bootstrap` 実行時点では空のまま作成される。
+ブラウザで <http://127.0.0.1:8080> を開き、`admin@windmill.dev`と設定した
+`WM_ADMIN_PASSWORD`でログインする。Windmill UIで`f/factory/factory_config`を開き、
+`owners`(対象リポジトリの所有者)と`instance_name`を設定する。この2項目はgit管理外で、
+`bootstrap`実行時点では空のまま作成される。
 
-詳しい手順・動作確認・トラブルシュートは [docs/setup.md](docs/setup.md) を参照。
+詳しい手順・動作確認・トラブルシュートは [docs/setup.md](docs/setup.md)を参照。
 
-## 主要 mise タスク
+## 主要miseタスク
 
 | タスク | 内容 |
 | --- | --- |
-| `mise run setup` | mise 管理ツールの導入 + `bun install --frozen-lockfile` + `lefthook install` |
-| `mise run doctor` | 環境診断(OK / NG 一覧) |
-| `mise run up` | ローカル Windmill スタックを起動(build 込み) |
+| `mise run setup` | mise管理ツールの導入 + `bun install --frozen-lockfile` + `lefthook install` |
+| `mise run doctor` | 環境診断(OK / NG一覧) |
+| `mise run up` | ローカルWindmillスタックを起動(build込み) |
 | `mise run down` | スタックを停止する |
-| `mise run build` | worker イメージのみビルドする |
-| `mise run bootstrap` | 初回セットアップ(ワークスペース作成・secret 投入・sync push・migration、冪等) |
-| `mise run deploy` | `git pull --ff-only` → build → up → push → migrate を一括実行する |
-| `mise run check` | `lint` → `typecheck` → `test` を順に実行する |
+| `mise run build` | workerイメージのみビルドする |
+| `mise run bootstrap` | 初回セットアップ(ワークスペース作成・secret投入・sync push・migration、冪等) |
+| `mise run deploy` | `git pull --ff-only` → build → up → push → migrateを一括実行する |
+| `mise run check` | `lint` → `typecheck` → `test`を順に実行する |
 | `mise run lint` | biome + `wmill lint` + 型アサーション検出 |
 | `mise run typecheck` | `tsc --noEmit` |
 | `mise run test` | `bun test`(small) |
-| `mise run test:db` | Data Table migration の SQL スモークテスト(medium) |
+| `mise run test:db` | Data Table migrationのSQLスモークテスト(medium) |
 | `mise run push` | `wmill sync push --yes --keep-deleted` |
 | `mise run push:dry` | `wmill sync push --dry-run`(変更しない) |
-| `mise run push:prune` | 削除も反映する push(手動のみ) |
+| `mise run push:prune` | 削除も反映するpush(手動のみ) |
 | `mise run pull` | `wmill sync pull` |
 | `mise run migrate` | `wmill datatable migrate up` |
 | `mise run logs` | スタックのログを追跡する |

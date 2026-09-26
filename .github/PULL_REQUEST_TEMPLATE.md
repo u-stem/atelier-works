@@ -23,9 +23,9 @@ Closes #
 
 ## 備考
 
-Windmill への反映の要否:
+Windmillへの反映の要否:
 
-- [ ] `wmill sync push` が必要
-- [ ] `wmill datatable migrate up` が必要
-- [ ] worker image の rebuild が必要
+- [ ] `wmill sync push`が必要
+- [ ] `wmill datatable migrate up`が必要
+- [ ] worker imageのrebuildが必要
 - [ ] 上記いずれも不要

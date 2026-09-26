@@ -1,5 +1,5 @@
-name: Factory タスク
-description: Software Factory リポジトリへの作業依頼
+name: Factoryタスク
+description: Software Factoryリポジトリへの作業依頼
 title: "[factory] "
 labels: ["factory"]
 body:
