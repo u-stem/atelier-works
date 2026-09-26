@@ -372,6 +372,7 @@ type SearchIssuesPayload = {
 };
 
 type SearchIssueItemPayload = {
+  readonly id: number;
   readonly number: number;
   readonly title: string;
   readonly body: string | null;
@@ -385,6 +386,7 @@ function isSearchIssueItemPayload(
 ): value is SearchIssueItemPayload {
   if (typeof value !== "object" || value === null) return false;
   const record = value as {
+    id: unknown;
     number: unknown;
     title: unknown;
     body: unknown;
@@ -392,6 +394,7 @@ function isSearchIssueItemPayload(
     repository_url: unknown;
     user: unknown;
   };
+  if (typeof record.id !== "number") return false;
   if (typeof record.number !== "number") return false;
   if (typeof record.title !== "string") return false;
   if (record.body !== null && typeof record.body !== "string") return false;
@@ -437,7 +440,10 @@ export async function searchIssues(
   opts: SearchIssuesOptions,
 ): Promise<IssueSearchItem[]> {
   assertGitHubName(opts.owner);
-  const query = `is:issue state:open ${ownerQualifier(opts.owner, opts.ownerKind)} label:${opts.label} -label:${opts.notLabel}`;
+  // Quoted (label names can contain a colon, e.g. "factory:wip") — GitHub's
+  // /search/issues currently accepts an unquoted `label:factory:wip` too,
+  // but quoting is the documented/safe form and matches searchPrs below.
+  const query = `is:issue state:open ${ownerQualifier(opts.owner, opts.ownerKind)} label:"${opts.label}" -label:"${opts.notLabel}"`;
   const items = await callGhApiAllSearchItems(
     client,
     `search/issues?q=${encodeURIComponent(query)}&per_page=100`,
@@ -951,6 +957,14 @@ export type SearchPrsOptions = {
 /**
  * `GET /search/issues` scoped to PRs: review-requested, assigned, or
  * labeled `reviewLabel`, excluding `wipLabel` (spec-cycle2.md §7 item 1).
+ *
+ * Runs as three separate queries, not one combined
+ * `(review-requested:X OR assignee:X OR label:Y)` query — confirmed
+ * empirically (real-flow E2E failure) that GitHub's `/search/issues` does
+ * not support parenthesized OR grouping: the combined query always
+ * returned 0 results, while each qualifier alone matched. Results are
+ * merged and de-duplicated by the search item's GitHub `id` (a PR can
+ * satisfy more than one of the three qualifiers at once).
  */
 export async function searchPrs(
   client: GhClient,
@@ -958,21 +972,39 @@ export async function searchPrs(
 ): Promise<PrSearchItem[]> {
   assertGitHubName(opts.owner);
   assertGitHubName(opts.viewer);
-  const query = `is:pr state:open ${ownerQualifier(opts.owner, opts.ownerKind)} -label:${opts.wipLabel} (review-requested:${opts.viewer} OR assignee:${opts.viewer} OR label:${opts.reviewLabel})`;
-  const items = await callGhApiAllSearchItems(
-    client,
-    `search/issues?q=${encodeURIComponent(query)}&per_page=100`,
+  // Label names can contain a colon (e.g. "factory:wip"), so the label
+  // qualifiers are quoted.
+  const base = `is:pr state:open ${ownerQualifier(opts.owner, opts.ownerKind)} -label:"${opts.wipLabel}"`;
+  const queries = [
+    `${base} review-requested:${opts.viewer}`,
+    `${base} assignee:${opts.viewer}`,
+    `${base} label:"${opts.reviewLabel}"`,
+  ];
+  const resultsByQuery = await Promise.all(
+    queries.map((query) =>
+      callGhApiAllSearchItems(
+        client,
+        `search/issues?q=${encodeURIComponent(query)}&per_page=100`,
+      ),
+    ),
   );
-  return items.map((item) => {
-    const { owner, repo } = repoFromRepositoryUrl(item.repository_url);
-    return {
-      owner,
-      repo,
-      number: item.number,
-      title: item.title,
-      htmlUrl: item.html_url,
-    };
-  });
+  const seen = new Set<number>();
+  const items: PrSearchItem[] = [];
+  for (const queryItems of resultsByQuery) {
+    for (const item of queryItems) {
+      if (seen.has(item.id)) continue;
+      seen.add(item.id);
+      const { owner, repo } = repoFromRepositoryUrl(item.repository_url);
+      items.push({
+        owner,
+        repo,
+        number: item.number,
+        title: item.title,
+        htmlUrl: item.html_url,
+      });
+    }
+  }
+  return items;
 }
 
 export type PullRequest = {

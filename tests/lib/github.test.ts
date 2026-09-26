@@ -115,6 +115,7 @@ describe("searchIssues", () => {
       ghApiOk({
         items: [
           {
+            id: 101,
             number: 7,
             title: "do the thing",
             body: "body text",
@@ -184,6 +185,7 @@ describe("searchIssues", () => {
           {
             items: [
               {
+                id: 201,
                 number: 1,
                 title: "first page",
                 body: "b1",
@@ -201,6 +203,7 @@ describe("searchIssues", () => {
       ghApiOk({
         items: [
           {
+            id: 202,
             number: 2,
             title: "second page",
             body: "b2",
@@ -221,6 +224,22 @@ describe("searchIssues", () => {
       },
     );
     expect(items.map((item) => item.number)).toEqual([1, 2]);
+  });
+
+  test('quotes the label qualifiers (a label name can contain a colon, e.g. "factory:wip")', async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ items: [] })]);
+    await searchIssues(
+      { run: fake.run, ghToken: "tok" },
+      {
+        owner: "acme",
+        ownerKind: "user",
+        label: "factory:review",
+        notLabel: "factory:wip",
+      },
+    );
+    const decoded = decodeURIComponent(fake.calls[0]?.argv.join(" ") ?? "");
+    expect(decoded).toContain('label:"factory:review"');
+    expect(decoded).toContain('-label:"factory:wip"');
   });
 });
 
@@ -717,82 +736,122 @@ describe("createIssue", () => {
 });
 
 describe("searchPrs", () => {
-  test("builds a query combining review-requested / assignee / label", async () => {
-    const fake = createFakeCommandRunner([ghApiOk({ items: [] })]);
-    await searchPrs(
-      { run: fake.run, ghToken: "tok" },
-      {
-        owner: "acme",
-        ownerKind: "user",
-        viewer: "factory-bot",
-        reviewLabel: "factory:review",
-        wipLabel: "factory:wip",
-      },
+  const SEARCH_PRS_OPTS = {
+    owner: "acme",
+    ownerKind: "user" as const,
+    viewer: "factory-bot",
+    reviewLabel: "factory:review",
+    wipLabel: "factory:wip",
+  };
+
+  function prItem(id: number, number: number): unknown {
+    return {
+      id,
+      number,
+      title: `pr ${String(number)}`,
+      body: null,
+      html_url: `https://github.com/acme/widgets/pull/${String(number)}`,
+      repository_url: "https://api.github.com/repos/acme/widgets",
+      user: null,
+    };
+  }
+
+  // GitHub's /search/issues does not support parenthesized OR grouping
+  // (confirmed empirically: `(review-requested:X OR assignee:X OR
+  // label:Y)` always returned 0 results, while each qualifier alone
+  // matched) — so searchPrs issues three separate queries and merges them.
+
+  test("issues three separate queries — review-requested, assignee, and label — instead of one OR-grouped query", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ items: [] }),
+      ghApiOk({ items: [] }),
+      ghApiOk({ items: [] }),
+    ]);
+    await searchPrs({ run: fake.run, ghToken: "tok" }, SEARCH_PRS_OPTS);
+    expect(fake.calls).toHaveLength(3);
+    const decoded = fake.calls.map((call) =>
+      decodeURIComponent(call.argv.join(" ")),
     );
-    const decoded = decodeURIComponent(fake.calls[0]?.argv.join(" ") ?? "");
-    expect(decoded).toContain("review-requested:factory-bot");
+    expect(decoded[0]).toContain("review-requested:factory-bot");
+    expect(decoded[0]).not.toContain("OR");
+    expect(decoded[1]).toContain("assignee:factory-bot");
+    expect(decoded[2]).toContain('label:"factory:review"');
   });
 
-  test("requests per_page=100", async () => {
-    const fake = createFakeCommandRunner([ghApiOk({ items: [] })]);
-    await searchPrs(
-      { run: fake.run, ghToken: "tok" },
-      {
-        owner: "acme",
-        ownerKind: "user",
-        viewer: "factory-bot",
-        reviewLabel: "factory:review",
-        wipLabel: "factory:wip",
-      },
-    );
-    expect(fake.calls[0]?.argv.join(" ")).toContain("per_page=100");
+  test("quotes the wip label qualifier on every one of the three queries (a label name can contain a colon)", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ items: [] }),
+      ghApiOk({ items: [] }),
+      ghApiOk({ items: [] }),
+    ]);
+    await searchPrs({ run: fake.run, ghToken: "tok" }, SEARCH_PRS_OPTS);
+    for (const call of fake.calls) {
+      expect(decodeURIComponent(call.argv.join(" "))).toContain(
+        '-label:"factory:wip"',
+      );
+    }
   });
 
-  test("follows the link header's rel=next page and combines both pages' items", async () => {
+  test("requests per_page=100 on every query", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ items: [] }),
+      ghApiOk({ items: [] }),
+      ghApiOk({ items: [] }),
+    ]);
+    await searchPrs({ run: fake.run, ghToken: "tok" }, SEARCH_PRS_OPTS);
+    expect(fake.calls).toHaveLength(3); // all three canned responses consumed
+    for (const call of fake.calls) {
+      expect(call.argv.join(" ")).toContain("per_page=100");
+    }
+  });
+
+  test("de-duplicates by PR id when the same PR matches more than one of the three queries", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ items: [prItem(1, 10)] }), // review-requested
+      ghApiOk({ items: [prItem(1, 10)] }), // assignee — same PR again
+      ghApiOk({ items: [] }), // label
+    ]);
+    const items = await searchPrs(
+      { run: fake.run, ghToken: "tok" },
+      SEARCH_PRS_OPTS,
+    );
+    expect(fake.calls).toHaveLength(3); // all three canned responses consumed
+    expect(items.map((item) => item.number)).toEqual([10]);
+  });
+
+  test("combines distinct PRs across all three queries", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ items: [prItem(1, 10)] }),
+      ghApiOk({ items: [prItem(2, 11)] }),
+      ghApiOk({ items: [prItem(3, 12)] }),
+    ]);
+    const items = await searchPrs(
+      { run: fake.run, ghToken: "tok" },
+      SEARCH_PRS_OPTS,
+    );
+    expect(items.map((item) => item.number)).toEqual([10, 11, 12]);
+  });
+
+  test("follows the link header's rel=next page within a single query", async () => {
     const fake = createFakeCommandRunner([
       ok(
         ghApiStdout(
           200,
-          {
-            items: [
-              {
-                number: 10,
-                title: "first page pr",
-                body: null,
-                html_url: "https://github.com/acme/widgets/pull/10",
-                repository_url: "https://api.github.com/repos/acme/widgets",
-                user: null,
-              },
-            ],
-          },
+          { items: [prItem(1, 10)] },
           {
             link: '<https://api.github.com/search/issues?q=x&page=2>; rel="next"',
           },
         ),
       ),
-      ghApiOk({
-        items: [
-          {
-            number: 11,
-            title: "second page pr",
-            body: null,
-            html_url: "https://github.com/acme/widgets/pull/11",
-            repository_url: "https://api.github.com/repos/acme/widgets",
-            user: null,
-          },
-        ],
-      }),
+      ghApiOk({ items: [prItem(2, 11)] }),
+      ghApiOk({ items: [] }),
+      ghApiOk({ items: [] }),
     ]);
     const items = await searchPrs(
       { run: fake.run, ghToken: "tok" },
-      {
-        owner: "acme",
-        ownerKind: "user",
-        viewer: "factory-bot",
-        reviewLabel: "factory:review",
-        wipLabel: "factory:wip",
-      },
+      SEARCH_PRS_OPTS,
     );
+    expect(fake.calls).toHaveLength(4); // 2 pages of query 1 + query 2 + query 3
     expect(items.map((item) => item.number)).toEqual([10, 11]);
   });
 });
