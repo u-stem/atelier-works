@@ -1,13 +1,14 @@
 summary: Daily summary notification
-description: >-
-  Aggregates yesterday's agent_runs (count, cost, failures) and approvals
-  (approve/reject counts) and posts a daily_summary Discord embed
+description: Aggregates yesterday's agent_runs (count, cost, failures) and
+  approvals (approve/reject counts) and posts a daily_summary Discord embed
   (spec-cycle2.md §3 M5).
-schedule: 0 0 9 * * *
-timezone: Asia/Tokyo
-enabled: true
-script_path: f/factory/notify_daily_summary
-is_flow: false
 args: {}
-on_failure: f/factory/on_error_schedule
+cron_version: v2
+enabled: true
+is_flow: false
 no_flow_overlap: true
+on_failure: f/factory/on_error_schedule
+schedule: 0 0 9 * * *
+script_path: f/factory/notify_daily_summary
+timezone: Asia/Tokyo
+ws_error_handler_muted: false

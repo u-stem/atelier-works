@@ -33,13 +33,14 @@ value:
             type: javascript
             expr: results.prepare.worktree_dir
         path: f/factory/steps/pipeline_generate
-      skip_if:
-        expr: results.prepare.skip === true
       retry:
         exponential:
           attempts: 2
-          seconds: 30
           multiplier: 4
+          random_factor: 0
+          seconds: 30
+      skip_if:
+        expr: results.prepare.skip === true
     - id: request_approval
       summary: Request human approval (suspend)
       value:

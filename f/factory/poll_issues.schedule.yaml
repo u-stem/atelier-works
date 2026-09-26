@@ -1,12 +1,14 @@
-summary: Poll for newly triggered issues, claim them, start pipeline.flow, and reconcile active work items.
-description: >-
-  Every 5 minutes: health check, deployed_sha notice, per-owner issue
-  search/claim, and reconcile (all kinds) — spec-cycle2.md §3 M5, §7.
-schedule: 0 */5 * * * *
-timezone: Asia/Tokyo
-enabled: true
-script_path: f/factory/poll_issues
-is_flow: false
+summary: Poll for newly triggered issues, claim them, start pipeline.flow, and
+  reconcile active work items.
+description: 'Every 5 minutes: health check, deployed_sha notice, per-owner
+  issue search/claim, and reconcile (all kinds) — spec-cycle2.md §3 M5, §7.'
 args: {}
-on_failure: f/factory/on_error_schedule
+cron_version: v2
+enabled: true
+is_flow: false
 no_flow_overlap: true
+on_failure: f/factory/on_error_schedule
+schedule: 0 */5 * * * *
+script_path: f/factory/poll_issues
+timezone: Asia/Tokyo
+ws_error_handler_muted: false

@@ -51,13 +51,14 @@ value:
             type: javascript
             expr: results.pr_review_prepare.worktree_dir
         path: f/factory/steps/pr_review_generate
-      skip_if:
-        expr: results.pr_review_prepare.skip === true
       retry:
         exponential:
           attempts: 2
-          seconds: 30
           multiplier: 4
+          random_factor: 0
+          seconds: 30
+      skip_if:
+        expr: results.pr_review_prepare.skip === true
     - id: pr_review_post
       summary: Post the review to GitHub, record it, and clean up the worktree
       value:

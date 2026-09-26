@@ -79,14 +79,15 @@ value:
             type: javascript
             expr: results.pr_fix_prepare.worktree_dir
         path: f/factory/steps/pr_fix_apply
-      skip_if:
-        expr: results.pr_fix_prepare.outcome !== "proceed" ||
-          results.pr_fix_collect?.outcome !== "proceed"
       retry:
         exponential:
           attempts: 2
-          seconds: 30
           multiplier: 4
+          random_factor: 0
+          seconds: 30
+      skip_if:
+        expr: results.pr_fix_prepare.outcome !== "proceed" ||
+          results.pr_fix_collect?.outcome !== "proceed"
     - id: pr_fix_verify
       summary: Verify the fix (forbidden-file check, allowed check commands)
       value:
@@ -175,7 +176,9 @@ value:
             expr: results.pr_fix_collect?.max_review_id ?? 0
           outcome:
             type: javascript
-            expr: "results.pr_fix_verify == null ? (results.pr_fix_collect == null ? results.pr_fix_prepare.outcome : results.pr_fix_collect.outcome) : results.pr_fix_verify.outcome"
+            expr: 'results.pr_fix_verify == null ? (results.pr_fix_collect == null ?
+              results.pr_fix_prepare.outcome : results.pr_fix_collect.outcome) :
+              results.pr_fix_verify.outcome'
           owner:
             type: javascript
             expr: results.pr_fix_prepare.owner
@@ -187,7 +190,9 @@ value:
             expr: results.pr_fix_prepare.pr_number
           reason:
             type: javascript
-            expr: "results.pr_fix_verify == null ? (results.pr_fix_collect == null ? results.pr_fix_prepare.reason : results.pr_fix_collect.reason) : results.pr_fix_verify.reason"
+            expr: 'results.pr_fix_verify == null ? (results.pr_fix_collect == null ?
+              results.pr_fix_prepare.reason : results.pr_fix_collect.reason) :
+              results.pr_fix_verify.reason'
           replies:
             type: javascript
             expr: results.pr_fix_verify?.replies ?? []
