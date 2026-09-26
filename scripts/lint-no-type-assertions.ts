@@ -18,6 +18,17 @@
 // repository's application code. Nested generics that make the scanner emit
 // a compound `>>`/`>>>` token instead of separate `>` tokens (e.g.
 // `Array<Array<Foo>>`) are also out of scope for the same reason.
+//
+// Two scanner-level pitfalls are handled explicitly in `tokenize`: template
+// literal continuations (`}...` after a `${` substitution) and regular
+// expression literals both need a re-scan, because a plain `scan()` loop
+// otherwise treats their text as ordinary source code. The regex case is
+// also a robustness issue, not just a false-positive one: TypeScript 7's
+// pure-JS scanner does not advance past a `#` that is not followed by an
+// identifier (e.g. the `#(` in `/#(\d+)/`), so tokenizing a regex body as
+// code makes `scan()` return the same token forever and the process grow
+// without bound. `tokenize` therefore also aborts with an error if the
+// scanner ever fails to make progress.
 
 import {
   computeLineStarts,
@@ -40,6 +51,61 @@ type Token = {
   readonly start: number;
 };
 
+// Tokens after which a `/` cannot be a division operator because they
+// cannot end an expression, so a following `/` starts a regular expression
+// literal and must be re-scanned as one. Expressed as the complement: the
+// only tokens that CAN end an expression are identifiers, literals, closing
+// parens/brackets, `this`/`super`/`true`/`false`/`null`, and postfix
+// `++`/`--`. A closing brace is deliberately NOT in the set: at token level
+// a `}` closing a block statement (after which `/` starts a regex) cannot
+// be told apart from one closing an object literal (after which `/` would
+// be a division), and the former is far more common in real code. Dividing
+// an object literal directly (`{ a: 1 } / 2`) is therefore a known,
+// accepted mis-tokenization, like the nested-generics case above.
+const EXPRESSION_END_TOKENS = new Set<number>([
+  SyntaxKind.Identifier,
+  SyntaxKind.PrivateIdentifier,
+  SyntaxKind.StringLiteral,
+  SyntaxKind.NumericLiteral,
+  SyntaxKind.BigIntLiteral,
+  SyntaxKind.NoSubstitutionTemplateLiteral,
+  SyntaxKind.TemplateTail,
+  SyntaxKind.RegularExpressionLiteral,
+  SyntaxKind.CloseParenToken,
+  SyntaxKind.CloseBracketToken,
+  SyntaxKind.ThisKeyword,
+  SyntaxKind.SuperKeyword,
+  SyntaxKind.TrueKeyword,
+  SyntaxKind.FalseKeyword,
+  SyntaxKind.NullKeyword,
+  SyntaxKind.PlusPlusToken,
+  SyntaxKind.MinusMinusToken,
+]);
+
+function isRegularExpressionStart(
+  kind: number,
+  previousKind: number | undefined,
+): boolean {
+  if (kind !== SyntaxKind.SlashToken && kind !== SyntaxKind.SlashEqualsToken) {
+    return false;
+  }
+  return previousKind === undefined || !EXPRESSION_END_TOKENS.has(previousKind);
+}
+
+/** Thrown by `tokenize` when the scanner returns a token without advancing
+ * (see the module header) — carries the source offset so the caller can
+ * report a `file:line:column` location instead of hanging. */
+export class ScannerStallError extends Error {
+  readonly position: number;
+  constructor(position: number, kind: number) {
+    super(
+      `scanner made no progress at offset ${position} (token kind ${kind}); the file could not be tokenized`,
+    );
+    this.name = "ScannerStallError";
+    this.position = position;
+  }
+}
+
 function tokenize(sourceText: string): Token[] {
   const scanner = createScanner(true, LanguageVariant.Standard, sourceText);
   const tokens: Token[] = [];
@@ -55,8 +121,19 @@ function tokenize(sourceText: string): Token[] {
   // the `as` keyword and false-flagged as a type assertion.
   const templateSubstitutionDepths: number[] = [];
 
+  let previousKind: number | undefined;
+  let previousEnd = -1;
   let kind = scanner.scan();
   while (kind !== SyntaxKind.EndOfFile) {
+    if (isRegularExpressionStart(kind, previousKind)) {
+      kind = scanner.reScanSlashToken();
+    }
+    // Every token must move the scanner forward; a stalled scanner would
+    // otherwise loop here forever, allocating a token per iteration.
+    if (scanner.getTokenEnd() <= previousEnd) {
+      throw new ScannerStallError(scanner.getTokenStart(), kind);
+    }
+    previousEnd = scanner.getTokenEnd();
     if (kind === SyntaxKind.TemplateHead) {
       templateSubstitutionDepths.push(0);
     } else if (templateSubstitutionDepths.length > 0) {
@@ -67,6 +144,13 @@ function tokenize(sourceText: string): Token[] {
       } else if (kind === SyntaxKind.CloseBraceToken) {
         if (depth === 0) {
           kind = scanner.reScanTemplateToken(false);
+          // The re-scan replaces the 1-char `}` token with the template
+          // continuation, so the progress guard has to be re-applied to
+          // the new token end (the check above only saw the bare `}`).
+          if (scanner.getTokenEnd() <= previousEnd - 1) {
+            throw new ScannerStallError(scanner.getTokenStart(), kind);
+          }
+          previousEnd = scanner.getTokenEnd();
           if (kind === SyntaxKind.TemplateTail) {
             templateSubstitutionDepths.pop();
           }
@@ -76,6 +160,7 @@ function tokenize(sourceText: string): Token[] {
       }
     }
     tokens.push({ kind, start: scanner.getTokenStart() });
+    previousKind = kind;
     kind = scanner.scan();
   }
   return tokens;
@@ -352,9 +437,21 @@ export function findTypeAssertions(
   fileName: string,
   sourceText: string,
 ): Finding[] {
-  const tokens = tokenize(sourceText);
-  const typeGuardDepths = computeTypeGuardDepths(tokens);
   const lineStarts = computeLineStarts(sourceText);
+  let tokens: Token[];
+  try {
+    tokens = tokenize(sourceText);
+  } catch (err) {
+    if (err instanceof ScannerStallError) {
+      const { line, column } = positionToLineAndColumn(
+        lineStarts,
+        err.position,
+      );
+      throw new Error(`${fileName}:${line}:${column} ${err.message}`);
+    }
+    throw err;
+  }
+  const typeGuardDepths = computeTypeGuardDepths(tokens);
   const findings: Finding[] = [];
 
   for (let i = 0; i < tokens.length; i++) {

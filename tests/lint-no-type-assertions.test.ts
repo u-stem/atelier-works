@@ -126,4 +126,34 @@ describe("findTypeAssertions", () => {
     );
     expect(findings).toHaveLength(0);
   });
+
+  test("does not tokenize the body of a regular expression literal as code (`#(` would stall the scanner)", () => {
+    const findings = findTypeAssertions(
+      "sample.ts",
+      "const pattern = /close[sd]?\\s*#(\\d+)/gi;",
+    );
+    expect(findings).toHaveLength(0);
+  });
+
+  test('does not mistake the word "as" inside a regular expression literal for a type assertion', () => {
+    const findings = findTypeAssertions(
+      "sample.ts",
+      "const pattern = / as /; const other = value;",
+    );
+    expect(findings).toHaveLength(0);
+  });
+
+  test("still flags an `as` assertion that follows a division", () => {
+    const findings = findTypeAssertions(
+      "sample.ts",
+      "const x = (total / count) as Foo;",
+    );
+    expect(findings).toHaveLength(1);
+  });
+
+  test("throws instead of looping when the scanner makes no progress", () => {
+    expect(() => findTypeAssertions("sample.ts", "#(")).toThrow(
+      /sample\.ts:1:1/,
+    );
+  });
 });
