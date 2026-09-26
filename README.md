@@ -15,10 +15,11 @@ Windmill 上のフローとして自動化する「Software Factory」。この�
 5. **自己改善** — 失敗や却下の履歴から改善提案を Issue 化する
 
 **現在のスコープ**: 基盤(docker compose による Windmill スタック、claude/gh/gtr/wmill を
-同梱した worker イメージ、Data Table、`doctor` / `bootstrap`)と、工程 1→2 の骨組み
-(resource / variable の定義、migration)まで。`poll_issues` / `pipeline` などの実処理フロー、
-ダッシュボード App、Discord 通知はまだ実装されていない(詳細は [docs/architecture.md](docs/architecture.md)
-と [docs/operations.md](docs/operations.md) を参照)。
+同梱した worker イメージ、Data Table、`doctor` / `bootstrap`)、工程 1 の自動巡回(`poll_issues` / `poll_prs`)、
+工程 2 の要件定義と承認、PR ワークフロー(工程 3 の一部: `pr_review` / `pr_fix`)、
+ダッシュボード App(Factory Console)、自己更新と失敗ハンドラ。
+未実装は工程 3 の「Issue から実装して PR を作る」、工程 4 のマージ後 CI 監視、工程 5 の自己改善提案、
+Discord の双方向操作(詳細は [docs/architecture.md](docs/architecture.md) と [docs/operations.md](docs/operations.md) を参照)。
 
 ## 10分で動かす
 

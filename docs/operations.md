@@ -9,8 +9,6 @@
 
 ## 日常運用
 
-**現状の注意**: `poll_issues` / `manual_intake` / `pipeline` の実処理フロー、Discord 通知(`notify_discord`)は**未実装**。以下は実装後の想定運用であり、次の開発サイクルで実装する([docs/architecture.md](architecture.md) の拡張点・スコープ表も参照)。ダッシュボード App(Factory Console)は実装済み。
-
 - Issue に `factory` ラベルを付けると拾われる(付与者は OWNER / MEMBER / COLLABORATOR のいずれかである必要がある)。
 - 手動フォームからも同じパイプラインに Issue を投入できる想定(`manual_intake` フロー)。
 - **承認は Factory Console App(`f/factory/factory_console`)の Inbox タブから行う**。Issue コメントに記載された Inbox の URL を開き、対象の作業項目を選択して要件定義・図(draw.io ビューアー)・未確定事項を確認したうえで承認 / 却下する(却下時は理由の入力が必須、補足は任意)。承認者は実行ユーザー(`WM_USERNAME`)として記録される。Windmill の approval page URL(承認 URL)から直接 resume しない(approval がスキップされて `needs_human` に落ちる)。App を使わない代替手順として、Windmill UI で `f/factory/approval_decide` を直接開き、`work_item_id` / `decision`(approve / reject) / `reason` / `note` を入力して Run することもできる。
@@ -19,8 +17,6 @@
 - 通知の種類: `picked` / `awaiting_approval` / `approved` / `rejected` / `needs_human` / `failed` / `expired` / `cancelled` / `self_update`(ホスト操作が必要)/ `daily_summary`(前日のコスト・件数・失敗)。
 
 ## PR の使い方(pr_review / pr_fix)
-
-**現状の注意**: `pr_review` / `pr_fix` フローも実装済み(M6 工程)。以下は実装後の運用。
 
 - **起動条件**: PR に `factory:review` ラベルを付ける、または PR のレビュー依頼・assignee がこのインスタンスのアカウント(未処理の commit がある場合)で起動。コメント投稿者・レビュー者の `author_association` が `allowed_labeler_associations` に含まれることを確認してから起動する。
 - **PR レビュー(`pr_review`)**: 指摘が GitHub の COMMENT として投稿される。完了状態は `reviewed`。
@@ -53,7 +49,9 @@
 
 ## 未実装の機能
 
-次はまだ実装されていない(基盤 + 工程1→2 の骨組みまでが現在のスコープ)。実装され次第このドキュメントを更新する。
+次はまだ実装されていない。実装され次第このドキュメントを更新する。
 
-- `poll_issues` / `manual_intake` / `pipeline` フロー(工程2の実処理)
-- Discord 通知(`notify_discord`)
+- 工程 3 の「Issue から実装して PR を作る」フロー(factory 自身が実装 worktree を作成して PR を投稿する機能)
+- 工程 4 のマージ後 CI 監視
+- 工程 5 の自己改善提案(失敗・却下の履歴から改善 Issue を自動作成する機能)
+- Discord 双方向化(ボタン操作による承認)
