@@ -6,7 +6,7 @@ locks:
   f/factory/approval_decide: 7a385c64a2d48781e385ff7c1e630353b85235b24365df331be27befd51c52d4
   f/factory/lib/claude: c01cd4548ba36d3e52dbc7351eb8f63a29977ac22b1ffd2f9ac826fe0222cfe6
   f/factory/lib/config: 7cc96fa0fc82ade8d8e859972b290d86980325a2794d36405a18b8b8499ff24e
-  f/factory/lib/db: cc4f1153348411ed2b095d6c9a6fb377232626000dbcc6c441f6f115ca133db3
+  f/factory/lib/db: 353c3a6cbb83e7ed137d46c9e85e766e056cbd72d95c10c7fd65f1cd2e9af9dc
   f/factory/lib/discord: 58cf4feda903a6924dd3d6d635c3581849d5e672fcfc3defe23cab20f48d758b
   f/factory/lib/drawio: 78c0f3bc64d324271bd8c7a2a0b41b0521f6522607e15466458648386300153a
   f/factory/lib/github: fb36d88de0ae1954d6f3674028b4b160fcdea0eaf2bda93d836409025eb02ac7

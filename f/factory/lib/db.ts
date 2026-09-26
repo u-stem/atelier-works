@@ -310,11 +310,11 @@ export async function insertWorkItem(
       title, body, status, attempt, claimed_by, flow_job_id, resume_url,
       cancel_url, head_sha, parent_work_item_id
     ) VALUES (
-      ${item.cycle}, ${item.source}, ${item.kind}, ${item.owner}, ${item.repo},
-      ${item.issue_number}, ${item.issue_url}, ${item.pr_number}, ${item.title},
-      ${item.body}, ${item.status}, ${item.attempt}, ${item.claimed_by},
+      ${item.cycle}::integer, ${item.source}, ${item.kind}, ${item.owner}, ${item.repo},
+      ${item.issue_number}::integer, ${item.issue_url}, ${item.pr_number}::integer, ${item.title},
+      ${item.body}, ${item.status}, ${item.attempt}::integer, ${item.claimed_by},
       ${item.flow_job_id}, ${item.resume_url}, ${item.cancel_url}, ${item.head_sha},
-      ${item.parent_work_item_id}
+      ${item.parent_work_item_id}::bigint
     )
     RETURNING id
   `;
@@ -451,7 +451,7 @@ export async function saveDraft(
     INSERT INTO factory.requirement_drafts (
       work_item_id, attempt, summary, markdown, diagrams, open_questions
     ) VALUES (
-      ${draft.work_item_id}, ${draft.attempt}, ${draft.summary}, ${draft.markdown},
+      ${draft.work_item_id}::bigint, ${draft.attempt}::integer, ${draft.summary}, ${draft.markdown},
       ${JSON.stringify(draft.diagrams)}::jsonb, ${JSON.stringify(draft.open_questions)}::jsonb
     )
     RETURNING id
@@ -493,7 +493,7 @@ export async function recordApproval(
 ): Promise<number> {
   const statement = sql`
     INSERT INTO factory.approvals (work_item_id, attempt, decision, reason, approver)
-    VALUES (${approval.work_item_id}, ${approval.attempt}, ${approval.decision}, ${approval.reason}, ${approval.approver})
+    VALUES (${approval.work_item_id}::bigint, ${approval.attempt}::integer, ${approval.decision}, ${approval.reason}, ${approval.approver})
     RETURNING id
   `;
   const row = await fetchOneRow(statement, "recordApproval");
@@ -531,10 +531,10 @@ export async function recordAgentRun(
       output_tokens, cache_read_tokens, cost_usd, num_turns, duration_ms,
       session_id, exit_code, error
     ) VALUES (
-      ${record.work_item_id}, ${record.stage}, ${record.attempt}, ${record.model},
-      ${record.claude_version}, ${record.input_tokens}, ${record.output_tokens},
-      ${record.cache_read_tokens}, ${record.cost_usd}, ${record.num_turns},
-      ${record.duration_ms}, ${record.session_id}, ${record.exit_code}, ${record.error}
+      ${record.work_item_id}::bigint, ${record.stage}, ${record.attempt}::integer, ${record.model},
+      ${record.claude_version}, ${record.input_tokens}::integer, ${record.output_tokens}::integer,
+      ${record.cache_read_tokens}::integer, ${record.cost_usd}::numeric, ${record.num_turns}::integer,
+      ${record.duration_ms}::integer, ${record.session_id}, ${record.exit_code}::integer, ${record.error}
     )
     RETURNING id
   `;
@@ -553,7 +553,7 @@ export async function recordFailure(
 ): Promise<number> {
   const statement = sql`
     INSERT INTO factory.job_failures (work_item_id, flow_path, job_id, step, error)
-    VALUES (${record.work_item_id}, ${record.flow_path}, ${record.job_id}, ${record.step}, ${record.error})
+    VALUES (${record.work_item_id}::bigint, ${record.flow_path}, ${record.job_id}, ${record.step}, ${record.error})
     RETURNING id
   `;
   const row = await fetchOneRow(statement, "recordFailure");
@@ -573,7 +573,7 @@ export async function recordDeployment(
     INSERT INTO factory.deployments (sha_from, sha_to, changed_paths, result, needs_host_action)
     VALUES (
       ${record.sha_from}, ${record.sha_to}, ${JSON.stringify(record.changed_paths)}::jsonb,
-      ${record.result}, ${record.needs_host_action}
+      ${record.result}, ${record.needs_host_action}::boolean
     )
     RETURNING id
   `;
@@ -623,7 +623,7 @@ export async function insertReview(
   const statement = sql`
     INSERT INTO factory.reviews (work_item_id, head_sha, verdict, summary, findings, posted_review_id)
     VALUES (
-      ${record.work_item_id}, ${record.head_sha}, ${record.verdict}, ${record.summary},
+      ${record.work_item_id}::bigint, ${record.head_sha}, ${record.verdict}, ${record.summary},
       ${JSON.stringify(record.findings)}::jsonb, ${record.posted_review_id}
     )
     RETURNING id
@@ -683,7 +683,7 @@ export async function insertFixRound(
     INSERT INTO factory.fix_rounds (
       work_item_id, round, trigger_review_ids, outcome, replies, commit_shas
     ) VALUES (
-      ${record.work_item_id}, ${record.round}, ${JSON.stringify(record.trigger_review_ids)}::jsonb,
+      ${record.work_item_id}::bigint, ${record.round}::integer, ${JSON.stringify(record.trigger_review_ids)}::jsonb,
       ${record.outcome}, ${JSON.stringify(record.replies)}::jsonb, ${JSON.stringify(record.commit_shas)}::jsonb
     )
     RETURNING id
@@ -759,7 +759,7 @@ export async function setFixRound(
 ): Promise<void> {
   await sql`
     UPDATE factory.work_items
-    SET fix_round = ${round}, updated_at = now()
+    SET fix_round = ${round}::integer, updated_at = now()
     WHERE id = ${id}
   `.execute();
 }
@@ -780,7 +780,7 @@ export async function setAttempt(
 ): Promise<void> {
   await sql`
     UPDATE factory.work_items
-    SET attempt = ${attempt}, updated_at = now()
+    SET attempt = ${attempt}::integer, updated_at = now()
     WHERE id = ${id}
   `.execute();
 }
@@ -827,7 +827,7 @@ export async function bumpWatermarks(
   if (update.last_review_id !== undefined) {
     await sql`
       UPDATE factory.work_items
-      SET last_review_id = GREATEST(COALESCE(last_review_id, 0), ${update.last_review_id}),
+      SET last_review_id = GREATEST(COALESCE(last_review_id, 0), ${update.last_review_id}::bigint),
           updated_at = now()
       WHERE id = ${id}
     `.execute();
@@ -835,7 +835,7 @@ export async function bumpWatermarks(
   if (update.last_comment_id !== undefined) {
     await sql`
       UPDATE factory.work_items
-      SET last_comment_id = GREATEST(COALESCE(last_comment_id, 0), ${update.last_comment_id}),
+      SET last_comment_id = GREATEST(COALESCE(last_comment_id, 0), ${update.last_comment_id}::bigint),
           updated_at = now()
       WHERE id = ${id}
     `.execute();
@@ -843,7 +843,7 @@ export async function bumpWatermarks(
   if (update.last_review_comment_id !== undefined) {
     await sql`
       UPDATE factory.work_items
-      SET last_review_comment_id = GREATEST(COALESCE(last_review_comment_id, 0), ${update.last_review_comment_id}),
+      SET last_review_comment_id = GREATEST(COALESCE(last_review_comment_id, 0), ${update.last_review_comment_id}::bigint),
           updated_at = now()
       WHERE id = ${id}
     `.execute();
@@ -874,21 +874,21 @@ export async function setObservedWatermarks(
   if (update.observed_review_id !== undefined) {
     await sql`
       UPDATE factory.work_items
-      SET observed_review_id = ${update.observed_review_id}, updated_at = now()
+      SET observed_review_id = ${update.observed_review_id}::bigint, updated_at = now()
       WHERE id = ${id}
     `.execute();
   }
   if (update.observed_comment_id !== undefined) {
     await sql`
       UPDATE factory.work_items
-      SET observed_comment_id = ${update.observed_comment_id}, updated_at = now()
+      SET observed_comment_id = ${update.observed_comment_id}::bigint, updated_at = now()
       WHERE id = ${id}
     `.execute();
   }
   if (update.observed_review_comment_id !== undefined) {
     await sql`
       UPDATE factory.work_items
-      SET observed_review_comment_id = ${update.observed_review_comment_id}, updated_at = now()
+      SET observed_review_comment_id = ${update.observed_review_comment_id}::bigint, updated_at = now()
       WHERE id = ${id}
     `.execute();
   }

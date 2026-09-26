@@ -153,6 +153,15 @@ describe("insertWorkItem", () => {
     const { sql } = createFakeSqlClient([[]]);
     await expect(insertWorkItem(NEW_WORK_ITEM, sql)).rejects.toThrow();
   });
+
+  test("casts nullable non-text columns (pr_number/parent_work_item_id) to their real type — a null value otherwise binds as text and fails against the integer/bigint column", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    // NEW_WORK_ITEM's pr_number and parent_work_item_id are both null.
+    await insertWorkItem(NEW_WORK_ITEM, sql);
+    const text = calls[0]?.text ?? "";
+    expect(text).toContain("::integer");
+    expect(text).toContain("::bigint");
+  });
 });
 
 describe("updateStatus", () => {
@@ -314,6 +323,24 @@ describe("saveDraft", () => {
       JSON.stringify([{ name: "d1", drawio_xml: "<mxfile/>" }]),
     );
   });
+
+  test("casts work_item_id and attempt to their real numeric type", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 3 }]]);
+    await saveDraft(
+      {
+        work_item_id: 1,
+        attempt: 1,
+        summary: "s",
+        markdown: "m",
+        diagrams: [],
+        open_questions: [],
+      },
+      sql,
+    );
+    const text = calls[0]?.text ?? "";
+    expect(text).toContain("::bigint");
+    expect(text).toContain("::integer");
+  });
 });
 
 describe("toRequirementDraft", () => {
@@ -346,6 +373,23 @@ describe("recordApproval", () => {
       sql,
     );
     expect(calls[0]?.text).toContain("INSERT INTO factory.approvals");
+  });
+
+  test("casts work_item_id and attempt to their real numeric type", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    await recordApproval(
+      {
+        work_item_id: 1,
+        attempt: 1,
+        decision: "approved",
+        reason: null,
+        approver: "alice",
+      },
+      sql,
+    );
+    const text = calls[0]?.text ?? "";
+    expect(text).toContain("::bigint");
+    expect(text).toContain("::integer");
   });
 });
 
@@ -392,6 +436,32 @@ describe("recordAgentRun", () => {
     );
     expect(calls[0]?.text).toContain("INSERT INTO factory.agent_runs");
   });
+
+  test("casts nullable numeric columns (tokens/cost/turns/duration/exit_code) to their real type when null — a Claude timeout/error leaves most of these null", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await recordAgentRun(
+      {
+        work_item_id: 1,
+        stage: "generate_requirements",
+        attempt: 1,
+        model: "claude-opus-5-5",
+        claude_version: null,
+        input_tokens: null,
+        output_tokens: null,
+        cache_read_tokens: null,
+        cost_usd: null,
+        num_turns: null,
+        duration_ms: null,
+        session_id: null,
+        exit_code: null,
+        error: "timed out",
+      },
+      sql,
+    );
+    const text = calls[0]?.text ?? "";
+    expect(text).toContain("::integer");
+    expect(text).toContain("::numeric");
+  });
 });
 
 describe("recordFailure", () => {
@@ -409,6 +479,21 @@ describe("recordFailure", () => {
     );
     expect(calls[0]?.text).toContain("INSERT INTO factory.job_failures");
   });
+
+  test('casts work_item_id to ::bigint so a null work_item_id (job_failures.work_item_id is nullable — a windmill-level failure not yet tied to a work item) doesn\'t bind as text — reproduces the real-flow failure "column \\"work_item_id\\" is of type bigint but expression is of type text"', async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 11 }]]);
+    await recordFailure(
+      {
+        work_item_id: null,
+        flow_path: "f/factory/pipeline",
+        job_id: "job-1",
+        step: null,
+        error: "boom",
+      },
+      sql,
+    );
+    expect(calls[0]?.text).toContain("::bigint");
+  });
 });
 
 describe("recordDeployment", () => {
@@ -425,6 +510,21 @@ describe("recordDeployment", () => {
       sql,
     );
     expect(calls[0]?.text).toContain("INSERT INTO factory.deployments");
+  });
+
+  test("casts needs_host_action to ::boolean", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 13 }]]);
+    await recordDeployment(
+      {
+        sha_from: null,
+        sha_to: "bbb",
+        changed_paths: [],
+        result: "ok",
+        needs_host_action: true,
+      },
+      sql,
+    );
+    expect(calls[0]?.text).toContain("::boolean");
   });
 });
 
@@ -457,6 +557,22 @@ describe("insertReview", () => {
       sql,
     );
     expect(calls[0]?.text).toContain("INSERT INTO factory.reviews");
+  });
+
+  test("casts work_item_id to ::bigint", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 17 }]]);
+    await insertReview(
+      {
+        work_item_id: 1,
+        head_sha: "abc1234",
+        verdict: "approve",
+        summary: "looks good",
+        findings: [],
+        posted_review_id: "review-1",
+      },
+      sql,
+    );
+    expect(calls[0]?.text).toContain("::bigint");
   });
 });
 
@@ -506,6 +622,24 @@ describe("insertFixRound", () => {
     );
     expect(calls[0]?.text).toContain("INSERT INTO factory.fix_rounds");
   });
+
+  test("casts work_item_id and round to their real numeric type", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 19 }]]);
+    await insertFixRound(
+      {
+        work_item_id: 1,
+        round: 1,
+        trigger_review_ids: [17],
+        outcome: "done",
+        replies: [{ review_comment_id: 101, body: "fixed" }],
+        commit_shas: ["deadbeef"],
+      },
+      sql,
+    );
+    const text = calls[0]?.text ?? "";
+    expect(text).toContain("::bigint");
+    expect(text).toContain("::integer");
+  });
 });
 
 describe("toFixRoundRecord", () => {
@@ -548,6 +682,12 @@ describe("setFixRound", () => {
     await setFixRound(1, 2, sql);
     expect(calls[0]?.text).toContain("SET fix_round");
   });
+
+  test("casts round to ::integer", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await setFixRound(1, 2, sql);
+    expect(calls[0]?.text).toContain("::integer");
+  });
 });
 
 describe("setAttempt", () => {
@@ -561,6 +701,12 @@ describe("setAttempt", () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await setAttempt(1, 2, sql);
     expect(calls[0]?.values).toEqual([2, 1]);
+  });
+
+  test("casts attempt to ::integer", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await setAttempt(1, 2, sql);
+    expect(calls[0]?.text).toContain("::integer");
   });
 });
 
@@ -622,6 +768,16 @@ describe("bumpWatermarks", () => {
     expect(calls).toHaveLength(3);
     expect(calls.every((call) => call.text.includes("GREATEST"))).toBe(true);
   });
+
+  test("casts each watermark column to ::bigint", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [], []]);
+    await bumpWatermarks(
+      1,
+      { last_review_id: 5, last_comment_id: 9, last_review_comment_id: 3 },
+      sql,
+    );
+    expect(calls.every((call) => call.text.includes("::bigint"))).toBe(true);
+  });
 });
 
 describe("setObservedWatermarks", () => {
@@ -659,6 +815,20 @@ describe("setObservedWatermarks", () => {
       sql,
     );
     expect(calls).toHaveLength(3);
+  });
+
+  test("casts each observed watermark column to ::bigint", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [], []]);
+    await setObservedWatermarks(
+      1,
+      {
+        observed_review_id: 5,
+        observed_comment_id: 9,
+        observed_review_comment_id: 3,
+      },
+      sql,
+    );
+    expect(calls.every((call) => call.text.includes("::bigint"))).toBe(true);
   });
 });
 
