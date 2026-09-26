@@ -6,12 +6,12 @@ schema:
   $schema: https://json-schema.org/draft/2020-12/schema
   type: object
   properties:
-    approver:
+    decision:
       type: string
       description: ''
       default: null
       originalType: string
-    decision:
+    note:
       type: string
       description: ''
       default: null
@@ -29,4 +29,4 @@ schema:
     - work_item_id
     - decision
     - reason
-    - approver
+    - note

@@ -41,7 +41,12 @@ export type NotifyEvent =
       issue_number: number;
       issue_url: string;
       title: string;
-      approval_page_url: string;
+      // Security fix (M6 review round 1b): never the signed getResumeUrls()
+      // "approvalPage" capability URL — that lets anyone who sees it
+      // resume/cancel the suspended flow without going through
+      // approval_decide.ts (so no factory.approvals row gets recorded).
+      // Only the App's own (authenticated) Inbox URL belongs here.
+      inbox_url: string;
     }
   | {
       kind: "requirements_approved";
@@ -186,7 +191,7 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
       return {
         title: `Approval needed: #${event.issue_number} ${event.title}`,
         description: "A requirement draft is ready for review.",
-        url: event.approval_page_url,
+        url: event.inbox_url,
         fields: [
           instanceField(event.instance_name),
           repoField(event.owner, event.repo),

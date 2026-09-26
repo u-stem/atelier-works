@@ -1,0 +1,31 @@
+summary: ''
+description: ''
+lock: '!inline f/factory/steps/pr_fix_collect.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties:
+    owner:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    pr_number:
+      type: number
+      description: ''
+      default: null
+    repo:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    work_item_id:
+      type: number
+      description: ''
+      default: null
+  required:
+    - work_item_id
+    - owner
+    - repo
+    - pr_number

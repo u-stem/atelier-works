@@ -1,0 +1,31 @@
+summary: ''
+description: ''
+lock: '!inline f/factory/steps/pipeline_generate.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties:
+    attempt:
+      type: number
+      description: ''
+      default: null
+    feedback:
+      type: string
+      description: ''
+      default: null
+      enum: []
+      originalType: enum
+    work_item_id:
+      type: number
+      description: ''
+      default: null
+    worktree_dir:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+  required:
+    - work_item_id
+    - attempt
+    - worktree_dir

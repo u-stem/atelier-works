@@ -2,11 +2,36 @@ import { describe, expect, test } from "bun:test";
 import { access } from "node:fs/promises";
 import {
   buildSystemPrompt,
+  dailyBudgetStatus,
+  isBudgetExceeded,
+  jstMidnightTodayIso,
   parseClaudeJson,
   type RunClaudeOptions,
   runClaude,
 } from "../../f/factory/lib/claude.ts";
+import type { SqlClient, SqlRow } from "../../f/factory/lib/db.ts";
 import { createFakeCommandRunner, fail, timeout } from "./testSupport.ts";
+
+type FakeCall = { text: string; values: unknown[] };
+
+/** Same fake-SqlClient shape as tests/lib/db.test.ts. */
+function createFakeSqlClient(responses: SqlRow[][] = []): {
+  sql: SqlClient;
+  calls: FakeCall[];
+} {
+  const calls: FakeCall[] = [];
+  let callIndex = 0;
+  const sql: SqlClient = (strings, ...values) => {
+    calls.push({ text: strings.join(" ? "), values });
+    const rows = responses[callIndex] ?? [];
+    callIndex += 1;
+    return {
+      fetch: () => Promise.resolve(rows),
+      execute: () => Promise.resolve(),
+    };
+  };
+  return { sql, calls };
+}
 
 describe("buildSystemPrompt", () => {
   test("concatenates each skill's SKILL.md content", async () => {
@@ -338,6 +363,84 @@ describe("runClaude", () => {
     expect(fake.calls[0]?.argv).toContain("--restricted");
   });
 
+  describe("allowedTools", () => {
+    test("passes each tool name as its own --allowedTools argument", async () => {
+      const fake = createFakeCommandRunner([
+        {
+          stdout: claudeJsonStdout(),
+          stderr: "",
+          exitCode: 0,
+          timedOut: false,
+        },
+      ]);
+      await runClaude({
+        ...baseOptions(fake.run),
+        tools: ["Edit", "Write"],
+        allowedTools: ["Edit", "Write"],
+      });
+      const argv = fake.calls[0]?.argv ?? [];
+      const flagIndex = argv.indexOf("--allowedTools");
+      expect(flagIndex).toBeGreaterThanOrEqual(0);
+      expect(argv[flagIndex + 1]).toBe("Edit");
+      expect(argv[flagIndex + 2]).toBe("Write");
+    });
+
+    test("does not add --allowedTools when omitted", async () => {
+      const fake = createFakeCommandRunner([
+        {
+          stdout: claudeJsonStdout(),
+          stderr: "",
+          exitCode: 0,
+          timedOut: false,
+        },
+      ]);
+      await runClaude(baseOptions(fake.run));
+      expect(fake.calls[0]?.argv).not.toContain("--allowedTools");
+    });
+
+    test("does not add --allowedTools when given an empty array", async () => {
+      const fake = createFakeCommandRunner([
+        {
+          stdout: claudeJsonStdout(),
+          stderr: "",
+          exitCode: 0,
+          timedOut: false,
+        },
+      ]);
+      await runClaude({
+        ...baseOptions(fake.run),
+        tools: ["Edit"],
+        allowedTools: [],
+      });
+      expect(fake.calls[0]?.argv).not.toContain("--allowedTools");
+    });
+
+    test("rejects when an allowedTools entry is not in tools", async () => {
+      const fake = createFakeCommandRunner([]);
+      await expect(
+        runClaude({
+          ...baseOptions(fake.run),
+          tools: ["Edit"],
+          allowedTools: ["Write"],
+        }),
+      ).rejects.toThrow('allowedTools entry "Write" is not in opts.tools');
+      // Validation must happen before the process is spawned.
+      expect(fake.calls).toHaveLength(0);
+    });
+
+    test('rejects when allowedTools includes "Bash", even if tools allows it', async () => {
+      const fake = createFakeCommandRunner([]);
+      await expect(
+        runClaude({
+          ...baseOptions(fake.run),
+          tools: ["Bash"],
+          allowedTools: ["Bash"],
+        }),
+      ).rejects.toThrow('allowedTools must not include "Bash"');
+      expect(fake.calls).toHaveLength(0);
+    });
+  });
+
   test("masks a secret-looking value in the invalid_structured_output agentRun.error", async () => {
     // Both attempts fail schema validation, so the final (returned) failure
     // carries the masked detail — a successful retry would otherwise
@@ -357,6 +460,19 @@ describe("runClaude", () => {
     );
   });
 
+  test("masks a secret-looking value in RunClaudeResult.detail, not just agentRun.error", async () => {
+    const fake = createFakeCommandRunner([
+      fail("auth failed: github_pat_11ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"),
+    ]);
+    const result = await runClaude(baseOptions(fake.run));
+    if (result.outcome !== "failure") {
+      throw new Error("expected a failure outcome");
+    }
+    expect(result.detail).not.toContain(
+      "github_pat_11ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+    );
+  });
+
   test("accepts an (unused) runAs option without changing behavior", async () => {
     const fake = createFakeCommandRunner([
       { stdout: claudeJsonStdout(), stderr: "", exitCode: 0, timedOut: false },
@@ -366,5 +482,56 @@ describe("runClaude", () => {
       runAs: { uid: 1000, gid: 1000 },
     });
     expect(result.outcome).toBe("success");
+  });
+});
+
+describe("isBudgetExceeded", () => {
+  test("is true once spend reaches the daily cap", () => {
+    expect(isBudgetExceeded(50, 50)).toBe(true);
+  });
+
+  test("is false while spend is below the daily cap", () => {
+    expect(isBudgetExceeded(49.99, 50)).toBe(false);
+  });
+});
+
+describe("jstMidnightTodayIso", () => {
+  test("returns the JST calendar day's midnight as a real-UTC ISO instant", () => {
+    // 2026-09-26 08:00:00 JST = 2026-09-25 23:00:00 UTC; JST midnight that
+    // day is 2026-09-25 15:00:00 UTC.
+    const now = new Date("2026-09-25T23:00:00.000Z");
+    expect(jstMidnightTodayIso(now)).toBe("2026-09-25T15:00:00.000Z");
+  });
+});
+
+describe("dailyBudgetStatus", () => {
+  test("reports exceeded once today's spend reaches the daily budget", async () => {
+    const { sql } = createFakeSqlClient([[{ total_cost_usd: 50 }]]);
+    const status = await dailyBudgetStatus(
+      { daily_budget_usd: 50 },
+      new Date("2026-09-26T00:00:00.000Z"),
+      sql,
+    );
+    expect(status.exceeded).toBe(true);
+  });
+
+  test("reports the spent and limit amounts", async () => {
+    const { sql } = createFakeSqlClient([[{ total_cost_usd: 12.5 }]]);
+    const status = await dailyBudgetStatus(
+      { daily_budget_usd: 50 },
+      new Date("2026-09-26T00:00:00.000Z"),
+      sql,
+    );
+    expect(status).toEqual({ exceeded: false, spent_usd: 12.5, limit_usd: 50 });
+  });
+
+  test("sums cost since JST midnight of the given day", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ total_cost_usd: 0 }]]);
+    await dailyBudgetStatus(
+      { daily_budget_usd: 50 },
+      new Date("2026-09-25T23:00:00.000Z"),
+      sql,
+    );
+    expect(calls[0]?.values).toContain("2026-09-25T15:00:00.000Z");
   });
 });

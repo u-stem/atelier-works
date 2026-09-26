@@ -212,11 +212,12 @@ describe("fixPrompt", () => {
           },
         ],
         requirements: null,
+        checkFailures: [],
       },
       FIXED_UUID,
     );
     expect(prompt).toContain(
-      "<<<DATA-test-nonce (human review 1 by reviewer1)",
+      '<<<DATA-test-nonce (human review 1 by "reviewer1")',
     );
     expect(prompt).toContain("<<<DATA-test-nonce (comment 101 body)");
   });
@@ -236,6 +237,7 @@ describe("fixPrompt", () => {
           },
         ],
         requirements: null,
+        checkFailures: [],
       },
       FIXED_UUID,
     );
@@ -257,6 +259,7 @@ describe("fixPrompt", () => {
           },
         ],
         requirements: null,
+        checkFailures: [],
       },
       FIXED_UUID,
     );
@@ -278,10 +281,102 @@ describe("fixPrompt", () => {
           },
         ],
         requirements: null,
+        checkFailures: [],
       },
       FIXED_UUID,
     );
     expect(prompt).toContain("Unresolved comment #101");
+  });
+
+  test("wraps a check failure's output in a fence", () => {
+    const prompt = fixPrompt(
+      {
+        pr: PR,
+        reviews: [],
+        comments: [],
+        requirements: null,
+        checkFailures: [
+          { command: "mise run check", outputTail: "UNIQUE_TEST_OUTPUT" },
+        ],
+      },
+      FIXED_UUID,
+    );
+    expect(prompt).toContain("<<<DATA-test-nonce (check failure 1 output)");
+    expect(prompt).toContain("UNIQUE_TEST_OUTPUT");
+  });
+
+  test("never lets a check failure's output appear outside a fenced block", () => {
+    const prompt = fixPrompt(
+      {
+        pr: PR,
+        reviews: [],
+        comments: [],
+        requirements: null,
+        checkFailures: [
+          { command: "mise run check", outputTail: "UNIQUE_TEST_OUTPUT" },
+        ],
+      },
+      FIXED_UUID,
+    );
+    expect(stripFences(prompt, "test-nonce")).not.toContain(
+      "UNIQUE_TEST_OUTPUT",
+    );
+  });
+
+  test("names the failed command outside the fence", () => {
+    const prompt = fixPrompt(
+      {
+        pr: PR,
+        reviews: [],
+        comments: [],
+        requirements: null,
+        checkFailures: [
+          { command: "mise run check", outputTail: "some output" },
+        ],
+      },
+      FIXED_UUID,
+    );
+    expect(prompt).toContain("mise run check");
+  });
+
+  test("wraps a review author's login in JSON.stringify before using it as a fence label", () => {
+    const prompt = fixPrompt(
+      {
+        pr: PR,
+        reviews: [{ body: "please fix the bug", author: 'evil") data' }],
+        comments: [],
+        requirements: null,
+        checkFailures: [],
+      },
+      FIXED_UUID,
+    );
+    expect(prompt).toContain(
+      `<<<DATA-test-nonce (human review 1 by ${JSON.stringify('evil") data')})`,
+    );
+  });
+
+  test("wraps a comment author's login in JSON.stringify before using it in the unresolved-comment line", () => {
+    const prompt = fixPrompt(
+      {
+        pr: PR,
+        reviews: [],
+        comments: [
+          {
+            id: 101,
+            path: "a.ts",
+            line: 10,
+            body: "fix this",
+            author: 'evil") data',
+          },
+        ],
+        requirements: null,
+        checkFailures: [],
+      },
+      FIXED_UUID,
+    );
+    expect(prompt).toContain(
+      `Unresolved comment #101 by ${JSON.stringify('evil") data')}`,
+    );
   });
 });
 

@@ -35,6 +35,8 @@ value:
   pr_label: "factory:pr"
   review_post_mode: comment_only
   max_fix_rounds: 3
+  max_fix_changed_files: 30
+  max_fix_diff_lines: 1500
   allowed_check_commands: []
   default_reviewers: []
   repo_allowlist: []

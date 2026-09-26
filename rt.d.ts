@@ -24,7 +24,9 @@ declare namespace RT {
     default_reviewers: string[],
     worktree_ttl_days: number,
     claude_timeout_sec: number,
+    max_fix_diff_lines: number,
     windmill_public_url: string,
+    max_fix_changed_files: number,
     allowed_check_commands: string[],
     max_budget_usd_per_run: number,
     allowed_labeler_associations: string[]

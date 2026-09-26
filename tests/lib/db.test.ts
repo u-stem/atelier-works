@@ -2,10 +2,12 @@ import { describe, expect, test } from "bun:test";
 import {
   addNotice,
   bumpWatermarks,
+  clearResumeUrls,
   getWorkItem,
   insertFixRound,
   insertReview,
   insertWorkItem,
+  latestApproval,
   latestDraft,
   latestPrWorkItem,
   listActive,
@@ -17,8 +19,12 @@ import {
   type SqlClient,
   type SqlRow,
   saveDraft,
+  setAttempt,
   setFixRound,
   setFlowJobId,
+  setHeadSha,
+  setObservedWatermarks,
+  setResumeUrls,
   sumAgentCostSince,
   toApproval,
   toFixRoundRecord,
@@ -74,6 +80,10 @@ const WORK_ITEM_ROW: SqlRow = {
   head_sha: null,
   last_review_id: null,
   last_comment_id: null,
+  last_review_comment_id: null,
+  observed_review_id: null,
+  observed_comment_id: null,
+  observed_review_comment_id: null,
   fix_round: 0,
   parent_work_item_id: null,
   created_at: NOW.toISOString(),
@@ -540,6 +550,34 @@ describe("setFixRound", () => {
   });
 });
 
+describe("setAttempt", () => {
+  test("updates attempt", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await setAttempt(1, 2, sql);
+    expect(calls[0]?.text).toContain("SET attempt");
+  });
+
+  test("passes attempt and id as parameters", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await setAttempt(1, 2, sql);
+    expect(calls[0]?.values).toEqual([2, 1]);
+  });
+});
+
+describe("setHeadSha", () => {
+  test("updates head_sha", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await setHeadSha(1, "abc1234", sql);
+    expect(calls[0]?.text).toContain("SET head_sha");
+  });
+
+  test("passes headSha and id as parameters", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await setHeadSha(1, "abc1234", sql);
+    expect(calls[0]?.values).toEqual(["abc1234", 1]);
+  });
+});
+
 describe("bumpWatermarks", () => {
   test("raises both watermarks with GREATEST when both are given", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
@@ -563,6 +601,64 @@ describe("bumpWatermarks", () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await bumpWatermarks(1, {}, sql);
     expect(calls).toHaveLength(0);
+  });
+
+  test("touches only last_review_comment_id when only that watermark is given", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await bumpWatermarks(1, { last_review_comment_id: 3 }, sql);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.text).toContain("last_review_comment_id");
+    expect(calls[0]?.text).not.toContain("last_review_id =");
+    expect(calls[0]?.text).not.toContain("last_comment_id =");
+  });
+
+  test("raises all three watermarks with GREATEST when all three are given", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [], []]);
+    await bumpWatermarks(
+      1,
+      { last_review_id: 5, last_comment_id: 9, last_review_comment_id: 3 },
+      sql,
+    );
+    expect(calls).toHaveLength(3);
+    expect(calls.every((call) => call.text.includes("GREATEST"))).toBe(true);
+  });
+});
+
+describe("setObservedWatermarks", () => {
+  test("issues no query when nothing is given", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await setObservedWatermarks(1, {}, sql);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("touches only observed_review_id when only that is given", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await setObservedWatermarks(1, { observed_review_id: 5 }, sql);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.text).toContain("observed_review_id");
+    expect(calls[0]?.text).not.toContain("observed_comment_id");
+    expect(calls[0]?.text).not.toContain("observed_review_comment_id");
+  });
+
+  test("overwrites (no GREATEST) — a fresh claim supersedes an earlier one", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await setObservedWatermarks(1, { observed_comment_id: 5 }, sql);
+    expect(calls[0]?.text).not.toContain("GREATEST");
+    expect(calls[0]?.values).toEqual([5, 1]);
+  });
+
+  test("records all three snapshot watermarks when all three are given", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [], []]);
+    await setObservedWatermarks(
+      1,
+      {
+        observed_review_id: 5,
+        observed_comment_id: 9,
+        observed_review_comment_id: 3,
+      },
+      sql,
+    );
+    expect(calls).toHaveLength(3);
   });
 });
 
@@ -599,9 +695,17 @@ describe("latestPrWorkItem", () => {
     expect(result).toBeNull();
   });
 
-  test("parses the most recent row into a LatestPrWorkItem", async () => {
+  test("parses the most recent row into a full WorkItem", async () => {
     const { sql } = createFakeSqlClient([
-      [{ id: 3, head_sha: "abc1234", fix_round: 1, last_comment_id: 9 }],
+      [
+        {
+          ...WORK_ITEM_ROW,
+          id: 3,
+          head_sha: "abc1234",
+          fix_round: 1,
+          last_comment_id: 9,
+        },
+      ],
     ]);
     const result = await latestPrWorkItem(
       "u-stem",
@@ -610,24 +714,77 @@ describe("latestPrWorkItem", () => {
       undefined,
       sql,
     );
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       id: 3,
-      headSha: "abc1234",
-      fixRound: 1,
-      lastCommentId: 9,
+      head_sha: "abc1234",
+      fix_round: 1,
+      last_comment_id: 9,
     });
   });
 
-  test("does not filter by kind when kind is omitted", async () => {
+  test("includes fields beyond id/head_sha/fix_round/last_comment_id, so callers don't need a second getWorkItem lookup", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ ...WORK_ITEM_ROW, id: 3, observed_comment_id: 42 }],
+    ]);
+    const result = await latestPrWorkItem(
+      "u-stem",
+      "atelier-works",
+      7,
+      undefined,
+      sql,
+    );
+    expect(result?.observed_comment_id).toBe(42);
+  });
+
+  test("selects the full row (SELECT *), not a narrow column list", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await latestPrWorkItem("u-stem", "atelier-works", 7, undefined, sql);
+    expect(calls[0]?.text).toContain("SELECT *");
+  });
+
+  test("does not filter by kind when opts is omitted", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await latestPrWorkItem("u-stem", "atelier-works", 7, undefined, sql);
     expect(calls[0]?.text).not.toContain("kind =");
   });
 
-  test("filters by kind when kind is given", async () => {
+  test("does not filter by kind when opts.kind is omitted", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
-    await latestPrWorkItem("u-stem", "atelier-works", 7, "pr_fix", sql);
+    await latestPrWorkItem("u-stem", "atelier-works", 7, {}, sql);
+    expect(calls[0]?.text).not.toContain("kind =");
+  });
+
+  test("filters by kind when opts.kind is given", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await latestPrWorkItem(
+      "u-stem",
+      "atelier-works",
+      7,
+      { kind: "pr_fix" },
+      sql,
+    );
     expect(calls[0]?.values).toContain("pr_fix");
+  });
+
+  test("orders by created_at DESC, id DESC to break same-second insert ties", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await latestPrWorkItem("u-stem", "atelier-works", 7, undefined, sql);
+    expect(calls[0]?.text).toContain("ORDER BY created_at DESC, id DESC");
+  });
+});
+
+describe("clearResumeUrls", () => {
+  test("sets resume_url and cancel_url to NULL", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await clearResumeUrls(1, sql);
+    expect(calls[0]?.text).toContain("SET resume_url = NULL");
+    expect(calls[0]?.text).toContain("cancel_url = NULL");
+  });
+
+  test("passes id as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await clearResumeUrls(1, sql);
+    expect(calls[0]?.values).toEqual([1]);
   });
 });
 
@@ -681,5 +838,70 @@ describe("latestDraft", () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await latestDraft(1, sql);
     expect(calls[0]?.text).toContain("ORDER BY created_at DESC");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// M6 pipeline promotions (promoted from f/factory/steps/
+// pipeline_request_approval.ts / pipeline_decide.ts)
+// ---------------------------------------------------------------------------
+
+describe("setResumeUrls", () => {
+  test("updates resume_url and cancel_url", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await setResumeUrls(
+      1,
+      "https://example/resume",
+      "https://example/cancel",
+      sql,
+    );
+    expect(calls[0]?.text).toContain("SET resume_url");
+  });
+
+  test("passes resumeUrl, cancelUrl, and id as parameters", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await setResumeUrls(
+      1,
+      "https://example/resume",
+      "https://example/cancel",
+      sql,
+    );
+    expect(calls[0]?.values).toEqual([
+      "https://example/resume",
+      "https://example/cancel",
+      1,
+    ]);
+  });
+});
+
+describe("latestApproval", () => {
+  test("returns null when there is no approval for this attempt", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    const approval = await latestApproval(1, 1, sql);
+    expect(approval).toBeNull();
+  });
+
+  test("returns the most recent approval for (work_item_id, attempt)", async () => {
+    const { sql } = createFakeSqlClient([
+      [
+        {
+          id: 5,
+          work_item_id: 1,
+          attempt: 1,
+          decision: "approved",
+          reason: null,
+          approver: "alice",
+          decided_at: "2026-09-26T00:00:00.000Z",
+        },
+      ],
+    ]);
+    const approval = await latestApproval(1, 1, sql);
+    expect(approval?.decision).toBe("approved");
+  });
+
+  test("filters by work_item_id and attempt", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await latestApproval(1, 2, sql);
+    expect(calls[0]?.values).toEqual([1, 2]);
   });
 });

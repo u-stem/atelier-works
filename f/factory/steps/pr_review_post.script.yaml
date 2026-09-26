@@ -1,0 +1,82 @@
+summary: ''
+description: ''
+lock: '!inline f/factory/steps/pr_review_post.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties:
+    summary:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    findings:
+      type: array
+      description: ''
+      default: null
+      items:
+        type: resource
+        resourceType: review_finding
+      originalType: resource[]
+    owner:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    pr_files:
+      type: array
+      description: ''
+      default: null
+      items:
+        type: string
+      originalType: string[]
+    pr_number:
+      type: number
+      description: ''
+      default: null
+    repo:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    repo_dir:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    review_sha:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    skip:
+      type: boolean
+      description: ''
+      default: null
+    verdict:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    work_item_id:
+      type: number
+      description: ''
+      default: null
+    worktree_dir:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+  required:
+    - work_item_id
+    - skip
+    - owner
+    - repo
+    - pr_number
+    - review_sha
+    - summary
+    - findings
+    - pr_files
+    - worktree_dir
+    - repo_dir

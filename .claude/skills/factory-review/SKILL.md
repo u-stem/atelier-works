@@ -16,7 +16,7 @@ description: GitHub PR をレビューして指摘を投稿するときに使う
 
 ## 実行は必ず完走させる(止まらない)
 
-- worker 内の Claude は人と対話できない。判断に迷う点があっても、レビューを止めて確認を求めない。妥当な範囲で判断し、確信が持てない指摘は severity を `low` にする、または `body` に不確実性を明記した上で必ず出力する。
+- worker 内の Claude は人と対話できない。判断に迷う点があっても、レビューを止めて確認を求めない。妥当な範囲で判断し、確信が持てない指摘は severity を `nit` にする、または `message` に不確実性を明記した上で必ず出力する。
 - 「確認してください」で終わる出力、指摘を書かずに質問だけをする出力は禁止する。
 - JSON schema の必須フィールドはすべて埋める。欠落した出力は失敗として扱われ、再実行される。
 
@@ -35,12 +35,14 @@ description: GitHub PR をレビューして指摘を投稿するときに使う
 各指摘(`findings` の要素)は次の情報を持つ。
 
 - `path`: 指摘対象のファイルパス(diff 上のパス)。ファイル全体に関する指摘は該当ファイルの代表行を使う。
-- `line`: 指摘対象の行番号(diff の新しい側の行番号)。行に紐付かない指摘は `0` にする。
-- `severity`: `high` / `medium` / `low` のいずれか。
-  - `high`: 正しさ・セキュリティに関わり、マージ前に必ず直すべきもの。
-  - `medium`: 直すことが望ましいが、マージをブロックするほどではないもの。
-  - `low`: 好みの範囲、軽微な指摘。
-- `body`: 何が問題か、なぜ問題か、**修正案**を含めて具体的に書く。「改善してください」のような埋め草を避ける。
+- `line`: 指摘対象の行番号(diff の新しい側の行番号)。行に紐付かない指摘は `null` にする。
+- `severity`: `blocker` / `major` / `minor` / `nit` のいずれか。
+  - `blocker`: 正しさ・セキュリティに関わり、マージ前に必ず直すべきもの。
+  - `major`: 直すことが望ましいが、マージをブロックするほどではないもの。
+  - `minor`: 改善提案レベルの指摘。
+  - `nit`: 好みの範囲、軽微な指摘。
+- `message`: 何が問題か、なぜ問題か を簡潔に記述する。
+- `suggestion`: 具体的な修正案がある場合に記述する。修正案がない場合は `null`。
 
 ## 要件外の設計変更を勧めない
 
@@ -56,28 +58,33 @@ description: GitHub PR をレビューして指摘を投稿するときに使う
 {
   "type": "object",
   "properties": {
+    "verdict": { "type": "string", "enum": ["approve", "comment", "request_changes"] },
     "summary": { "type": "string", "description": "レビュー全体の要約" },
-    "verdict": { "type": "string", "enum": ["approve", "request_changes", "comment"] },
     "findings": {
       "type": "array",
-      "maxItems": 20,
       "items": {
         "type": "object",
         "properties": {
           "path": { "type": "string" },
-          "line": { "type": "integer" },
-          "severity": { "type": "string", "enum": ["high", "medium", "low"] },
-          "body": { "type": "string" }
+          "line": { "type": ["integer", "null"] },
+          "severity": { "type": "string", "enum": ["blocker", "major", "minor", "nit"] },
+          "message": { "type": "string" },
+          "suggestion": { "type": ["string", "null"] }
         },
-        "required": ["path", "line", "severity", "body"]
+        "required": ["path", "line", "severity", "message", "suggestion"]
       }
     }
   },
-  "required": ["summary", "verdict", "findings"]
+  "required": ["verdict", "summary", "findings"]
 }
 ```
 
-- `summary`: レビュー全体の要約。人が Inbox やダッシュボードで読んで趣旨を把握できる文章。
-- `verdict`: このスキル自身の判断の**記録用**の値。`high` の指摘があれば `request_changes`、指摘はあるが軽微なら `comment`、問題なければ `approve` とする。
+- `verdict`: このスキル自身の判断の**記録用**の値。`blocker` の指摘があれば `request_changes`、指摘はあるが軽微なら `comment`、問題なければ `approve` とする。
 - **`verdict` は GitHub 上の投稿には反映されない**。GitHub API の制約上、このリポジトリでは PR レビューの投稿種別は常に `COMMENT` にする(`approve` や `request_changes` としては投稿しない)。`verdict` は Data Table の `reviews` テーブルに記録され、統計や後続の `pr_fix` トリガー判定に使われる。
-- `findings`: 指摘の配列。**最大 20 件**。20 件を超える指摘がある場合は severity の高いものを優先して残し、`summary` に「他にも軽微な指摘が複数あるため別途確認を推奨する」等を書く。指摘が無ければ空配列でよい(無理に指摘を作らない)。
+- `summary`: レビュー全体の要約。人が Inbox やダッシュボードで読んで趣旨を把握できる文章。
+- `findings`: 指摘の配列。指摘が無ければ空配列でよい(無理に指摘を作らない)。
+  - `path`: 指摘対象ファイルのパス。
+  - `line`: 行番号(diff の新しい側)。行に紐付かない場合は `null`。
+  - `severity`: 指摘の重大度(`blocker` / `major` / `minor` / `nit`)。
+  - `message`: 何が問題か、なぜ問題か。
+  - `suggestion`: 修正案。無い場合は `null`。

@@ -137,6 +137,17 @@ M4 のゲートで worker 内で実測した外部コマンド・API の挙動�
 - `wmill generate-metadata` は各 lib ファイルに対しても空スキーマの `.script.yaml` / `.lock` を生成する(いずれもコミット対象)。
 - `wmill.yaml` の `codebases` バンドルは**不要**(相対 import のままで問題ない)。
 
+### suspend / resume(Windmill CE 1.817.0、実測)
+
+- `wmill.getResumeUrls()` が返す resume / cancel URL に JSON を POST しても、**POST した本文は後続ステップには渡らない**。後続ステップが受け取るのは suspend ステップ自身の戻り値 `{ resume, cancel, approvalPage }` だけで、これは `resume_form` の有無に関わらず実フローで確認済み。
+- そのため承認内容(decision / reason / approver)は `approval_decide` が **resume する前に** `factory.approvals` へ先に記録し、resume 後の分岐ステップは `approvals` の最新行(`work_item_id` + `attempt` 単位)を読んで判断する。
+- タイムアウト(`continue_on_disapprove_timeout: true` で続行する設定)は、`approvals` に対応する行が無いことで判別する。
+
+### `commentIssue` の marker 冪等性
+
+- marker(`<!-- factory:<kind>:<work_item_id> -->`)による冪等性は `(kind, work_item_id)` 単位の **first-wins**(先に投稿された1件だけが有効、以降の同じ `kind` での投稿は黙って no-op になる)。
+- 同じ work item に対して用途の異なる複数のコメントを投稿する場合(例: 承認待ち通知と承認完了通知)は、`kind` を用途ごとに分ける。例: `issue-awaiting-approval-<attempt>`、`issue-approved-<attempt>`。同じ `kind` を使い回すと2件目以降が投稿されない。
+
 ## 終端 status では wip ラベル・トリガーラベルの両方を外す
 
 work item を終端 status(`approved` / `needs_human` / `expired` / `failed` / `reviewed` / `rereview_requested` / `blocked` / `cancelled`)にするフローのステップは、必ず対象 Issue / PR から `wip` ラベルを外す。外し忘れると、`poll_issues` / `poll_prs` の検索クエリ(`-label:<wip>`)から対象が永久に外れ、二度と拾われなくなる。

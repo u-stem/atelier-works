@@ -220,6 +220,19 @@ export type WorkItem = {
   head_sha: string | null;
   last_review_id: number | null;
   last_comment_id: number | null;
+  /** Processed watermark: highest inline PR review comment id
+   * pr_fix_finish has replied to. Separate id space from issue comments
+   * (see last_comment_id). */
+  last_review_comment_id: number | null;
+  /** Poll-observed watermark: highest PR review id poll_prs saw when it
+   * claimed this work item. */
+  observed_review_id: number | null;
+  /** Poll-observed watermark: highest issue comment id poll_prs saw when it
+   * claimed this work item. */
+  observed_comment_id: number | null;
+  /** Poll-observed watermark: highest inline PR review comment id poll_prs
+   * saw when it claimed this work item. */
+  observed_review_comment_id: number | null;
   fix_round: number;
   parent_work_item_id: number | null;
   created_at: Date;
@@ -403,4 +416,11 @@ export type FactoryConfig = {
   /** Empty means "no restriction beyond owners" (spec-cycle2.md §7 item 10). */
   repo_allowlist: string[];
   diff_max_lines: number;
+  /** Max changed files allowed in one pr_fix_verify diff before it falls
+   * back to needs_human (M6 security review). */
+  max_fix_changed_files: number;
+  /** Max diff lines (additions + deletions combined) allowed in one
+   * pr_fix_verify diff before it falls back to needs_human (M6 security
+   * review). */
+  max_fix_diff_lines: number;
 };

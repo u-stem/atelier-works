@@ -1,0 +1,81 @@
+summary: ''
+description: ''
+lock: '!inline f/factory/steps/pr_fix_apply.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties:
+    attempt:
+      type: number
+      description: ''
+      default: null
+    comments:
+      type: array
+      description: ''
+      default: null
+      items:
+        type: resource
+        resourceType: collected_comment
+      originalType: resource[]
+    factory_clone_dir:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    fix_round:
+      type: number
+      description: ''
+      default: null
+    head_sha:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    owner:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    parent_work_item_id:
+      type: number
+      description: ''
+      default: null
+    pr_number:
+      type: number
+      description: ''
+      default: null
+    repo:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    reviews:
+      type: array
+      description: ''
+      default: null
+      items:
+        type: resource
+        resourceType: collected_review
+      originalType: resource[]
+    work_item_id:
+      type: number
+      description: ''
+      default: null
+    worktree_dir:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+  required:
+    - work_item_id
+    - owner
+    - repo
+    - pr_number
+    - head_sha
+    - worktree_dir
+    - factory_clone_dir
+    - attempt
+    - fix_round
+    - reviews
+    - comments

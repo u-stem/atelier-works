@@ -110,6 +110,46 @@ describe("parseFactoryConfig", () => {
     const raw = { ...LEGACY_RAW_CONFIG, allowed_check_commands: [1, 2] };
     expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
   });
+
+  test("defaults max_fix_changed_files and max_fix_diff_lines when absent (M6 security review)", () => {
+    const config = parseFactoryConfig(LEGACY_RAW_CONFIG);
+    expect(config).toMatchObject({
+      max_fix_changed_files: 30,
+      max_fix_diff_lines: 1500,
+    });
+  });
+
+  test("passes through explicit max_fix_changed_files / max_fix_diff_lines values", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      max_fix_changed_files: 10,
+      max_fix_diff_lines: 500,
+    });
+    expect(config).toMatchObject({
+      max_fix_changed_files: 10,
+      max_fix_diff_lines: 500,
+    });
+  });
+
+  test("throws when max_fix_changed_files is zero", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, max_fix_changed_files: 0 };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when max_fix_changed_files is negative", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, max_fix_changed_files: -5 };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when max_fix_diff_lines is not an integer", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, max_fix_diff_lines: 1.5 };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when max_fix_diff_lines is present but not a number", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, max_fix_diff_lines: "1500" };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
 });
 
 describe("loadConfig", () => {

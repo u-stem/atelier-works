@@ -32,6 +32,17 @@
 //   `git gtr new` (a third-party subcommand, not core git) also skips `--`
 //   since its own argv handling isn't guaranteed `--`-compatible; branch
 //   names are validated via `assertBranchName` before reaching it either way.
+//   `readGitShowFile`'s `git show <ref>:<path>` is a third exception, for a
+//   different reason: `--` doesn't error there either, it silently changes
+//   what git returns (see that function's doc comment for the verified
+//   behavior) — `ref` is validated via `assertBranchName` instead, which
+//   also protects `path` transitively (it always follows a validated,
+//   `:`-free `ref` and our own inserted `:` in the same argv entry).
+//   `createGtrWorktree`'s reuse-path `git reset --hard <ref>` is a fourth
+//   exception: `--` before the ref there errors outright ("fatal: Cannot
+//   do hard reset with paths" — verified empirically), since `--hard`
+//   mode doesn't take a pathspec at all; `assertBranchName` validation
+//   again stands in for it.
 // - Callers pass GitHub-sourced identifiers (owner, repo, sha, branch)
 //   through `assertGitHubName` / `assertSha` / `assertBranchName`
 //   (types.ts) before they're interpolated into a URL, ref, or directory
@@ -213,9 +224,65 @@ function networkGitEnv(
   return { ...localGitEnv(home, path), GH_TOKEN: ghToken };
 }
 
+/**
+ * Convert `overrides` into `GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_<i>` /
+ * `GIT_CONFIG_VALUE_<i>` env vars — git reads these the same as `-c
+ * key=value` regardless of which git subcommand (or wrapper around git)
+ * invoked it, which matters for `git gtr` (security fix, medium): it's a
+ * third-party subcommand whose own argv parsing can't be trusted to accept
+ * an interspersed `-c` flag the way a direct `git` invocation can (see the
+ * "No `--` here" note on `createGtrWorktree`'s `gtr new` call for the same
+ * reasoning applied to `--`), so config overrides for it go through env
+ * instead. Merge the result into `networkGitEnv(...)`/`localGitEnv(...)`.
+ */
+function gitConfigEnvOverrides(
+  overrides: Readonly<Record<string, string>>,
+): Record<string, string> {
+  const entries = Object.entries(overrides);
+  const env: Record<string, string> = {
+    GIT_CONFIG_COUNT: String(entries.length),
+  };
+  entries.forEach(([key, value], index) => {
+    env[`GIT_CONFIG_KEY_${index}`] = key;
+    env[`GIT_CONFIG_VALUE_${index}`] = value;
+  });
+  return env;
+}
+
 /** Build a masked `Error` from a failed `CommandResult`, for a consistent `throw` shape across this module. */
 function gitError(context: string, result: CommandResult): Error {
   return new Error(maskSecrets(`${context}: ${result.stderr.trim()}`));
+}
+
+/**
+ * `git config core.symlinks false`, persisted into `dir`'s config — a
+ * re-gate fix (High, adopted): `-c core.symlinks=false` on
+ * `addDetachedWorktree`'s `worktree add` (and the `GIT_CONFIG_*` env on
+ * `git gtr new`) only applies to that ONE invocation; every later
+ * operation on the same repo (`git status`, `add -A`, `commit`, and
+ * critically `createGtrWorktree`'s reuse-path `reset --hard`) runs with
+ * git's default `core.symlinks=true` unless the setting is persisted —
+ * letting `reset --hard` recreate a real symlink from a committed one,
+ * which then shows up as a `typechange` in the next commit. Persisting it
+ * into the *main* clone's config covers every worktree of this repo, since
+ * they all share it (git worktrees read the main clone's `.git/config`).
+ * `ensureRepo` calls this after every successful clone/fetch; the
+ * per-invocation `-c`/`GIT_CONFIG_*` settings elsewhere are kept too —
+ * redundant with this now, but harmless.
+ */
+async function persistNoSymlinksConfig(
+  run: CommandRunner,
+  dir: string,
+  home?: string,
+  path?: string,
+): Promise<void> {
+  const result = await run(buildGitArgv(["config", "core.symlinks", "false"]), {
+    cwd: dir,
+    env: localGitEnv(home, path),
+  });
+  if (result.exitCode !== 0) {
+    throw gitError("git config core.symlinks false failed", result);
+  }
 }
 
 /**
@@ -520,6 +587,7 @@ export async function ensureRepo(
             result,
           );
         }
+        await persistNoSymlinksConfig(opts.run, dir, opts.home, opts.path);
         return { dir, action: "fetched" as const };
       }
 
@@ -536,9 +604,114 @@ export async function ensureRepo(
           result,
         );
       }
+      await persistNoSymlinksConfig(opts.run, dir, opts.home, opts.path);
       return { dir, action: "cloned" as const };
     },
   });
+}
+
+/**
+ * The sha `origin/HEAD` currently points at in a fetch-only `ensureRepo`
+ * clone at `repoDir` — i.e. the target repo's current default-branch head.
+ * Read-only and local-only: no `GH_TOKEN` needed, since `ensureRepo` must
+ * already have fetched `origin` before this runs, making `origin/HEAD`
+ * locally resolvable. Promoted from the M6 pipeline step's local copy
+ * (`pipeline_prepare.ts`'s `resolveDefaultBranchHeadSha`) — same `-c`
+ * hardening flags and `rev-parse --verify` (no `--`; see this module's
+ * `rev-parse` exception note above) as every other git call here.
+ */
+export async function resolveDefaultBranchHeadSha(
+  run: CommandRunner,
+  repoDir: string,
+): Promise<string> {
+  const result = await run(
+    buildGitArgv(["rev-parse", "--verify", "origin/HEAD"]),
+    { cwd: repoDir, env: localGitEnv() },
+  );
+  if (result.exitCode !== 0) {
+    throw gitError(
+      `git rev-parse --verify origin/HEAD failed in ${repoDir}`,
+      result,
+    );
+  }
+  return result.stdout.trim();
+}
+
+/**
+ * `git fetch origin -- pull/<prNumber>/head` in the fetch-only main clone —
+ * guarantees the PR's current head commit is fetchable by sha even for a
+ * commit that (unlike a branch tip) may not otherwise be reachable from any
+ * ref the client already asked for. Promoted from the M6 pr_review step's
+ * local copy (`pr_workflow_support.ts`'s `fetchPrHeadRef`). `prNumber` is
+ * `number`-typed so it can never itself start with `-` once interpolated
+ * after the literal `pull/` prefix, but the refspec still goes after `--`
+ * for consistency with every other network git call in this module (and as
+ * defense-in-depth against a future caller passing something looser than a
+ * validated number).
+ */
+export async function fetchPrHeadRef(
+  run: CommandRunner,
+  repoDir: string,
+  prNumber: number,
+  ghToken: string,
+  home?: string,
+  path?: string,
+): Promise<void> {
+  const result = await run(
+    buildGitArgv(["fetch", "origin", "--", `pull/${prNumber}/head`], {
+      network: true,
+    }),
+    { cwd: repoDir, env: networkGitEnv(ghToken, home, path) },
+  );
+  if (result.exitCode !== 0) {
+    throw gitError(
+      `git fetch origin pull/${prNumber}/head failed in ${repoDir}`,
+      result,
+    );
+  }
+}
+
+/**
+ * `git show <ref>:<path>` in `dir` — the file's content at that ref, or
+ * `null` when the file doesn't exist there (or `ref` fails validation, or
+ * any other error) for a "does this file exist at HEAD" check that
+ * shouldn't itself throw. Promoted from the M6 pr_fix step's local copy
+ * (`pr_workflow_support.ts`'s `readGitShowFile`).
+ *
+ * `<ref>:<path>` is a *second*, git-show-specific exception to this
+ * module's usual "untrusted positional args go after `--`" rule (see the
+ * module doc comment's `rev-parse` exception) — verified empirically:
+ * `git show -- HEAD:file.txt` does not error, but silently returns empty
+ * output instead of the file's content (git parses the combined
+ * `ref:path` token as a pathspec-only filter once it's past `--`, not as
+ * an object reference), which would be a *worse* bug than the one `--`
+ * is meant to prevent. Since `path` always follows `ref` and a literal
+ * `:` inside the same argv entry, an untrusted `path` alone can never
+ * make this entry start with `-` or shift the rev/path split (the split
+ * happens on our own inserted `:`, not on anything `path` contributes);
+ * only `ref` starting with `-` (or containing a stray `:`) is a risk, so
+ * `ref` is validated via `assertBranchName` (rejects a leading `-`, `..`,
+ * control/whitespace chars, and `:` among others) — caught rather than
+ * left to propagate, to preserve this function's "never throws" contract.
+ */
+export async function readGitShowFile(
+  run: CommandRunner,
+  dir: string,
+  ref: string,
+  path: string,
+  home?: string,
+  envPath?: string,
+): Promise<string | null> {
+  try {
+    assertBranchName(ref);
+  } catch {
+    return null;
+  }
+  const result = await run(buildGitArgv(["show", `${ref}:${path}`]), {
+    cwd: dir,
+    env: localGitEnv(home, envPath),
+  });
+  return result.exitCode === 0 ? result.stdout : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -556,6 +729,9 @@ export type EnsureFactoryCloneOptions = {
   readonly home?: string;
   readonly path?: string;
   readonly exists?: PathExists;
+  readonly lockFs?: LockFs;
+  readonly sleep?: (ms: number) => Promise<void>;
+  readonly now?: () => Date;
 };
 
 export type EnsureFactoryCloneResult = {
@@ -564,11 +740,27 @@ export type EnsureFactoryCloneResult = {
 };
 
 /**
+ * The lock path scoping the factory self clone at `dir` — a sibling
+ * `<dir>.lock` file, since (unlike `ensureRepo`'s `<baseDir>/<owner>/<repo>/
+ * main` clones) there's no shared parent directory of same-repo siblings to
+ * key off here; `dir` itself is the one resource to protect.
+ */
+function factoryCloneLockPath(dir: string): string {
+  return `${dir}.lock`;
+}
+
+/**
  * Ensure the factory's own self clone exists, with a real (checked-out)
  * working tree, and is up to date. Unlike `ensureRepo`, this clone is read
  * for its files directly (`.claude/skills/<name>/SKILL.md` via
  * `claude.ts#buildSystemPrompt`), so it needs a working tree rather than a
  * fetch-only bare clone. Call at the start of every flow (spec-cycle2.md §0).
+ *
+ * Serialized under `factoryCloneLockPath(dir)` (devil-advocate fix,
+ * security-auditor-adopted): with `NUM_WORKERS` > 1, every flow's first
+ * step and `poll_issues` all call this for the *same* `dir` concurrently;
+ * without a lock, two `git pull`/`git clone` racing on the same working
+ * tree fail on `.git/index.lock`.
  */
 export async function ensureFactoryClone(
   opts: EnsureFactoryCloneOptions,
@@ -577,30 +769,38 @@ export async function ensureFactoryClone(
   const exists = opts.exists ?? pathExists;
   const env = networkGitEnv(opts.ghToken, opts.home, opts.path);
 
-  if (await exists(dir)) {
-    const result = await opts.run(
-      buildGitArgv(["pull", "--ff-only"], { network: true }),
-      {
-        cwd: dir,
-        env,
-      },
-    );
-    if (result.exitCode !== 0) {
-      throw gitError("git pull --ff-only failed for factory clone", result);
-    }
-    return { dir, action: "pulled" };
-  }
+  return withRepoLock({
+    lockPath: factoryCloneLockPath(dir),
+    ...(opts.lockFs !== undefined ? { lockFs: opts.lockFs } : {}),
+    ...(opts.sleep !== undefined ? { sleep: opts.sleep } : {}),
+    ...(opts.now !== undefined ? { now: opts.now } : {}),
+    fn: async () => {
+      if (await exists(dir)) {
+        const result = await opts.run(
+          buildGitArgv(["pull", "--ff-only"], { network: true }),
+          {
+            cwd: dir,
+            env,
+          },
+        );
+        if (result.exitCode !== 0) {
+          throw gitError("git pull --ff-only failed for factory clone", result);
+        }
+        return { dir, action: "pulled" as const };
+      }
 
-  const result = await opts.run(
-    buildGitArgv(["clone", "--", opts.repoUrl, dir], { network: true }),
-    {
-      env,
+      const result = await opts.run(
+        buildGitArgv(["clone", "--", opts.repoUrl, dir], { network: true }),
+        {
+          env,
+        },
+      );
+      if (result.exitCode !== 0) {
+        throw gitError("git clone failed for factory clone", result);
+      }
+      return { dir, action: "cloned" as const };
     },
-  );
-  if (result.exitCode !== 0) {
-    throw gitError("git clone failed for factory clone", result);
-  }
-  return { dir, action: "cloned" };
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -647,8 +847,23 @@ export async function addDetachedWorktree(
         throw gitError(`git fetch ${opts.sha} failed`, fetchResult);
       }
 
+      // `-c core.symlinks=false` (security fix, medium): a committed
+      // symlink (e.g. one pointing at `/proc/self/environ` or another
+      // path outside the worktree) would otherwise be checked out as a
+      // real symlink here; this forces it to be checked out as the plain
+      // text of its target path instead, same as `git clone -c
+      // core.symlinks=false`.
       const addResult = await opts.run(
-        buildGitArgv(["worktree", "add", "--detach", "--", opts.dir, opts.sha]),
+        buildGitArgv([
+          "-c",
+          "core.symlinks=false",
+          "worktree",
+          "add",
+          "--detach",
+          "--",
+          opts.dir,
+          opts.sha,
+        ]),
         { cwd: opts.repoDir, env: localGitEnv(opts.home, opts.path) },
       );
       if (addResult.exitCode !== 0) {
@@ -835,6 +1050,71 @@ export async function createGtrWorktree(
       });
       const reused = existing.find((entry) => entry.branch === opts.branch);
       if (reused !== undefined) {
+        // devil-advocate fix (adopted, fatal): a previous round's
+        // timed-out/cancelled Claude run can leave stray edits sitting in
+        // a reused worktree; without resetting to the branch's current
+        // remote state first, those stray edits would get swept into the
+        // *next* round's `git add -A` (commitAndPush), and — if a human
+        // had since pushed to the branch directly — the reused worktree's
+        // stale local history would also make the next push non-fast-
+        // forward. Fetch, hard-reset, and clean back to a pristine
+        // `origin/<branch>` state before handing the worktree back. New
+        // worktrees (`git gtr new` below) don't need this: they're
+        // created fresh from the current remote state already.
+        const fetchResult = await opts.run(
+          buildGitArgv(["fetch", "origin", "--", opts.branch], {
+            network: true,
+          }),
+          {
+            cwd: opts.repoDir,
+            env: networkGitEnv(opts.ghToken, opts.home, opts.path),
+          },
+        );
+        if (fetchResult.exitCode !== 0) {
+          throw gitError(
+            `git fetch origin ${opts.branch} failed (gtr worktree reuse)`,
+            fetchResult,
+          );
+        }
+
+        // No `--` here: like `rev-parse`/`show` above, `git reset --hard`
+        // is a fourth documented exception — verified empirically:
+        // `git reset --hard -- <ref>` fails outright ("fatal: Cannot do
+        // hard reset with paths"), since `--hard` mode doesn't accept a
+        // pathspec at all. `opts.branch` is already validated via
+        // `assertBranchName` above.
+        const resetResult = await opts.run(
+          buildGitArgv(["reset", "--hard", `origin/${opts.branch}`]),
+          { cwd: reused.path, env: localGitEnv(opts.home, opts.path) },
+        );
+        if (resetResult.exitCode !== 0) {
+          throw gitError(
+            `git reset --hard origin/${opts.branch} failed (gtr worktree reuse)`,
+            resetResult,
+          );
+        }
+
+        // `-fd`, not `-fdx`: this worktree belongs to an arbitrary target
+        // repo whose own `.gitignore` may legitimately exclude heavy,
+        // expensive-to-rebuild artifacts (`node_modules/`, build output,
+        // ...) that a stale/cancelled run wouldn't itself have created —
+        // `-x` would wipe those on every reuse for no correctness benefit.
+        // The actual hazard here (a cancelled run's stray untracked/
+        // modified files leaking into the next round's `git add -A`) is
+        // already fully covered by plain untracked-file cleanup plus the
+        // hard reset above (which already discards modifications to
+        // tracked files).
+        const cleanResult = await opts.run(buildGitArgv(["clean", "-fd"]), {
+          cwd: reused.path,
+          env: localGitEnv(opts.home, opts.path),
+        });
+        if (cleanResult.exitCode !== 0) {
+          throw gitError(
+            "git clean -fd failed (gtr worktree reuse)",
+            cleanResult,
+          );
+        }
+
         return { path: reused.path, branch: opts.branch, hookStatus: "reused" };
       }
 
@@ -848,7 +1128,12 @@ export async function createGtrWorktree(
         }),
         {
           cwd: opts.repoDir,
-          env: networkGitEnv(opts.ghToken, opts.home, opts.path),
+          // core.symlinks=false via env, not `-c` (see gitConfigEnvOverrides's
+          // doc comment: `gtr` is a third-party wrapper, not core git).
+          env: {
+            ...networkGitEnv(opts.ghToken, opts.home, opts.path),
+            ...gitConfigEnvOverrides({ "core.symlinks": "false" }),
+          },
         },
       );
       if (result.exitCode !== 0) {

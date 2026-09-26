@@ -1,0 +1,113 @@
+summary: Requirements pipeline
+description: 要件定義の生成 → 承認 → 公開/差し戻しの工程 2 のフロー(spec-cycle2.md §3 M6)。ステップは
+  f/factory/steps/pipeline_*.ts の PathScript。
+value:
+  modules:
+    - id: prepare
+      summary: Load work item, prepare workspace
+      value:
+        type: script
+        input_transforms:
+          attempt:
+            type: javascript
+            expr: flow_input.attempt
+          work_item_id:
+            type: javascript
+            expr: flow_input.work_item_id
+        path: f/factory/steps/pipeline_prepare
+    - id: generate
+      summary: Generate requirements draft with Claude
+      value:
+        type: script
+        input_transforms:
+          attempt:
+            type: javascript
+            expr: flow_input.attempt
+          feedback:
+            type: javascript
+            expr: flow_input.feedback
+          work_item_id:
+            type: javascript
+            expr: flow_input.work_item_id
+          worktree_dir:
+            type: javascript
+            expr: results.prepare.worktree_dir
+        path: f/factory/steps/pipeline_generate
+      skip_if:
+        expr: results.prepare.skip === true
+      retry:
+        exponential:
+          attempts: 2
+          seconds: 30
+          multiplier: 4
+    - id: request_approval
+      summary: Request human approval (suspend)
+      value:
+        type: script
+        input_transforms:
+          attempt:
+            type: javascript
+            expr: flow_input.attempt
+          work_item_id:
+            type: javascript
+            expr: flow_input.work_item_id
+        path: f/factory/steps/pipeline_request_approval
+      skip_if:
+        expr: results.prepare.skip === true || results.generate == null ||
+          results.generate.outcome !== "success"
+      suspend:
+        continue_on_disapprove_timeout: true
+        required_events: 1
+        timeout: 604800
+    - id: decide
+      summary: Branch on the approval decision
+      value:
+        type: script
+        input_transforms:
+          attempt:
+            type: javascript
+            expr: flow_input.attempt
+          work_item_id:
+            type: javascript
+            expr: flow_input.work_item_id
+        path: f/factory/steps/pipeline_decide
+      skip_if:
+        expr: results.prepare.skip === true || results.generate == null ||
+          results.generate.outcome !== "success"
+  failure_module:
+    id: failure
+    value:
+      type: script
+      input_transforms:
+        error:
+          type: javascript
+          expr: error
+        path:
+          type: static
+          value: f/factory/pipeline
+        work_item_id:
+          type: javascript
+          expr: flow_input.work_item_id
+      path: f/factory/on_error_flow
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  order:
+    - work_item_id
+    - attempt
+    - feedback
+  properties:
+    attempt:
+      type: integer
+      description: Requirement-generation attempt number (1-based).
+      default: 1
+    feedback:
+      type: string
+      description: Rejection reason / gap report to address on this attempt. Empty
+        string means none.
+      default: ''
+    work_item_id:
+      type: integer
+      description: factory.work_items.id to run the pipeline for.
+  required:
+    - work_item_id

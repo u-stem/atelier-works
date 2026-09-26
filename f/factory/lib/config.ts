@@ -6,11 +6,12 @@
 //
 // Fields that have a `default:` in the resource type schema are filled in
 // when absent (this is what lets an existing remote resource created before
-// spec-cycle2.md §7 item 10 still validate: the 9 new fields are all
-// optional with defaults). `owners`, `factory_repo`, and `instance_name`
-// have no schema default (they are instance-specific) and are required.
-// A present-but-wrong-shaped value is always a validation error, defaulted
-// or not.
+// spec-cycle2.md §7 item 10 still validate: the 9 fields added there are all
+// optional with defaults, as are max_fix_changed_files / max_fix_diff_lines
+// added by the M6 security review). `owners`, `factory_repo`, and
+// `instance_name` have no schema default (they are instance-specific) and
+// are required. A present-but-wrong-shaped value is always a validation
+// error, defaulted or not.
 
 import {
   type FactoryConfig,
@@ -63,7 +64,9 @@ type DefaultableField =
   | "allowed_check_commands"
   | "default_reviewers"
   | "repo_allowlist"
-  | "diff_max_lines";
+  | "diff_max_lines"
+  | "max_fix_changed_files"
+  | "max_fix_diff_lines";
 
 /** Defaults for every field in DefaultableField, typed against FactoryConfig
  * itself so each value is checked without a type assertion. */
@@ -90,6 +93,9 @@ const DEFAULTS: Pick<FactoryConfig, DefaultableField> = {
   default_reviewers: [],
   repo_allowlist: [],
   diff_max_lines: 3000,
+  // New in the M6 security review: pr_fix_verify diff-size limits.
+  max_fix_changed_files: 30,
+  max_fix_diff_lines: 1500,
 };
 
 function isFactoryOwner(value: unknown): value is FactoryOwner {
@@ -148,6 +154,23 @@ function numberField(
   }
   if (!isNumber(value)) {
     throw new ConfigValidationError(`"${field}" must be a number`);
+  }
+  return value;
+}
+
+/** Reads `raw[field]`, defaulting to `fallback` when absent; throws when
+ * present but not a positive integer (whole number > 0). */
+function positiveIntegerField(
+  raw: Record<string, unknown>,
+  field: string,
+  fallback: number,
+): number {
+  const value = raw[field];
+  if (value === undefined) {
+    return fallback;
+  }
+  if (!isNumber(value) || !Number.isInteger(value) || value <= 0) {
+    throw new ConfigValidationError(`"${field}" must be a positive integer`);
   }
   return value;
 }
@@ -278,6 +301,16 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
       DEFAULTS.repo_allowlist,
     ),
     diff_max_lines: numberField(raw, "diff_max_lines", DEFAULTS.diff_max_lines),
+    max_fix_changed_files: positiveIntegerField(
+      raw,
+      "max_fix_changed_files",
+      DEFAULTS.max_fix_changed_files,
+    ),
+    max_fix_diff_lines: positiveIntegerField(
+      raw,
+      "max_fix_diff_lines",
+      DEFAULTS.max_fix_diff_lines,
+    ),
   };
 }
 

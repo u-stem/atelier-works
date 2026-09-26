@@ -12,17 +12,49 @@
 // `value.failure_module.value.input_transforms` should map these
 // parameter names 1:1 (see this implementer's report for the open
 // question this leaves for M6).
+//
+// devil-advocate note: every other terminal transition (pipeline_* /
+// pr_*'s own terminal steps, poll_issues's reconcile) removes wip + the
+// kind-specific trigger label when it moves a work item to a terminal
+// status. An exception-driven `failed` transition here didn't, leaving the
+// GitHub issue/PR permanently excluded from poll_issues/poll_prs's
+// `-label:wip` search (nothing else will ever remove it). Label removal is
+// now symmetric with those other paths — best-effort: a removal failure is
+// only warn-logged, never blocking the job_failures record or the Discord
+// notification below.
+//
+// devil-advocate note (round 2): pipeline_generate's own failure path now
+// funnels into on_error_flow rather than handling termination itself
+// (avoids interfering with retry_work_item's status/label bookkeeping), so
+// this handler also posts a human-visible comment when it actually marks a
+// work item `failed` — the GitHub issue/PR otherwise goes silent with only
+// wip/trigger labels removed and no indication why, or that
+// `retry_work_item` can relaunch it. The marker kind
+// (`failed-<resolvedJobId>`) is unique per failure run (not just per work
+// item), so a *different* failure on the same work item still gets its own
+// comment, while `commentIssue`'s own marker+viewer check keeps re-running
+// this exact handler for the exact same failure idempotent.
 
-import * as wmill from "windmill-client";
+import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "./lib/config.ts";
 import { getWorkItem, recordFailure, updateStatusIfCurrent } from "./lib/db.ts";
 import { notify } from "./lib/discord.ts";
-import { logger, maskSecrets } from "./lib/log.ts";
 import {
+  commentIssue,
+  type GhClient,
+  getViewer,
+  removeLabel,
+} from "./lib/github.ts";
+import { type Logger, logger, maskSecrets } from "./lib/log.ts";
+import {
+  type FactoryConfig,
   isRecord,
   isString,
   TERMINAL_WORK_ITEM_STATUSES,
+  type WorkItem,
+  type WorkItemKind,
 } from "./lib/types.ts";
+import { runCommand } from "./lib/workspace.ts";
 
 function errorMessage(error: unknown): string {
   if (isRecord(error) && isString(error.message)) return error.message;
@@ -39,6 +71,129 @@ function errorStepId(error: unknown): string | null {
   return null;
 }
 
+/**
+ * Whether this on_error_flow invocation is entitled to mark its work item
+ * `failed`. `rootJobId` is this invocation's own flow's root job id
+ * (`WM_ROOT_FLOW_JOB_ID`); `workItemFlowJobId` is the job id last recorded
+ * via `setFlowJobId` on the work_items row. devil-advocate fatal fix: if a
+ * reject/regenerate, `retry_work_item`, or reroute already launched a
+ * *newer* flow for this work item before the old one's failure_module
+ * fires, the two job ids no longer match — marking the item `failed` now
+ * would make the newer run's own prepare step see a terminal status and
+ * silently skip (dropping the regeneration). A missing signal on either
+ * side (never recorded yet, or running outside a flow context) is treated
+ * as "nothing to contradict" and allowed through, matching the prior
+ * behavior.
+ */
+export function shouldMarkFailed(
+  workItemFlowJobId: string | null,
+  rootJobId: string | null,
+): boolean {
+  if (workItemFlowJobId === null || rootJobId === null) return true;
+  return workItemFlowJobId === rootJobId;
+}
+
+/**
+ * Same wip + kind-specific trigger label set as retry_work_item.ts's
+ * `labelsToRestore` (duplicated here rather than imported — each factory
+ * script is meant to stand alone; see this implementer's report for a
+ * note on promoting this to a shared spot).
+ */
+export function labelsToRemove(
+  kind: WorkItemKind,
+  config: Pick<
+    FactoryConfig,
+    "wip_label" | "trigger_label" | "review_label" | "fix_label"
+  >,
+): string[] {
+  switch (kind) {
+    case "issue":
+      return [config.wip_label, config.trigger_label];
+    case "pr_review":
+      return [config.wip_label, config.review_label];
+    case "pr_fix":
+      return [config.wip_label, config.fix_label];
+  }
+}
+
+const MAX_FAILURE_COMMENT_ERROR_LENGTH = 300;
+
+/** Truncates already-masked `text` to at most `max` characters, marking an
+ * actual cut with a trailing ellipsis. */
+export function truncateForComment(text: string, max: number): string {
+  if (text.length <= max) return text;
+  if (max <= 1) return "…";
+  return `${text.slice(0, max - 1)}…`;
+}
+
+/**
+ * Removes wip + the kind-specific trigger label, then posts a failure
+ * comment (instance name, a pointer to `retry_work_item`, and the masked
+ * error truncated to `MAX_FAILURE_COMMENT_ERROR_LENGTH` chars) — called
+ * only after `main()` has actually transitioned the work item to `failed`.
+ * Label removal and comment-posting are independent best-effort steps
+ * (each only warn-logs its own failure) so one failing doesn't skip the
+ * other, and neither blocks the job_failures record or Discord
+ * notification in `main()`.
+ */
+async function handleTerminalFailure(
+  item: Pick<
+    WorkItem,
+    "id" | "owner" | "repo" | "kind" | "issue_number" | "pr_number"
+  >,
+  resolvedJobId: string,
+  message: string,
+  log: Logger,
+): Promise<void> {
+  const number = item.kind === "issue" ? item.issue_number : item.pr_number;
+  if (number === null) return;
+
+  let client: GhClient;
+  let config: FactoryConfig;
+  try {
+    config = await loadConfig(() =>
+      wmill.getResource("f/factory/factory_config"),
+    );
+    const ghToken = await wmill.getVariable("f/factory/github_token");
+    client = { run: runCommand, ghToken };
+  } catch (err) {
+    log.warn(
+      "on_error_flow: failed to load config/token for terminal-failure handling",
+      { error: maskSecrets(err instanceof Error ? err.message : String(err)) },
+    );
+    return;
+  }
+
+  for (const label of labelsToRemove(item.kind, config)) {
+    try {
+      await removeLabel(client, item.owner, item.repo, number, label);
+    } catch (err) {
+      log.warn("on_error_flow: failed to remove label", {
+        label,
+        error: maskSecrets(err instanceof Error ? err.message : String(err)),
+      });
+    }
+  }
+
+  try {
+    const viewer = await getViewer(client);
+    await commentIssue(
+      client,
+      item.owner,
+      item.repo,
+      number,
+      `failed-${resolvedJobId}`,
+      item.id,
+      `The factory (instance \`${config.instance_name}\`) hit an error and marked this work item \`failed\`. It can be re-launched with \`retry_work_item\` (work_item_id ${item.id}).\n\nError: ${truncateForComment(message, MAX_FAILURE_COMMENT_ERROR_LENGTH)}`,
+      viewer.login,
+    );
+  } catch (err) {
+    log.warn("on_error_flow: failed to post failure comment", {
+      error: maskSecrets(err instanceof Error ? err.message : String(err)),
+    });
+  }
+}
+
 export async function main(
   error: unknown,
   work_item_id?: number,
@@ -48,7 +203,9 @@ export async function main(
   const log = logger("on_error_flow");
   const message = maskSecrets(errorMessage(error));
   const resolvedPath = path ?? "unknown";
-  const resolvedJobId = job_id ?? "unknown";
+  const rootJobId = process.env.WM_ROOT_FLOW_JOB_ID ?? null;
+  const resolvedJobId =
+    job_id ?? rootJobId ?? process.env.WM_JOB_ID ?? "unknown";
 
   log.error("flow failed", {
     work_item_id,
@@ -77,12 +234,26 @@ export async function main(
     try {
       const item = await getWorkItem(work_item_id);
       if (item !== null && !TERMINAL_WORK_ITEM_STATUSES.includes(item.status)) {
-        await updateStatusIfCurrent(
-          work_item_id,
-          item.status,
-          "failed",
-          message,
-        );
+        if (!shouldMarkFailed(item.flow_job_id, rootJobId)) {
+          log.warn(
+            "on_error_flow: skipping status transition — work item's flow_job_id no longer matches this run (a newer run already replaced it)",
+            {
+              work_item_id,
+              work_item_flow_job_id: item.flow_job_id,
+              root_job_id: rootJobId,
+            },
+          );
+        } else {
+          const updated = await updateStatusIfCurrent(
+            work_item_id,
+            item.status,
+            "failed",
+            message,
+          );
+          if (updated) {
+            await handleTerminalFailure(item, resolvedJobId, message, log);
+          }
+        }
       }
     } catch (statusErr) {
       log.error("failed to mark work item failed", {

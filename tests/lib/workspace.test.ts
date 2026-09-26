@@ -10,10 +10,13 @@ import {
   createGtrWorktree,
   ensureFactoryClone,
   ensureRepo,
+  fetchPrHeadRef,
   type LockFs,
   listWorktrees,
   pathExists,
+  readGitShowFile,
   removeWorktree,
+  resolveDefaultBranchHeadSha,
   runCommand,
   verifyWorktreeGitdir,
   withRepoLock,
@@ -227,7 +230,7 @@ describe("withRepoLock", () => {
 
 describe("ensureRepo", () => {
   test("clones with --no-checkout when the target dir does not exist", async () => {
-    const fake = createFakeCommandRunner([ok(), ok()]);
+    const fake = createFakeCommandRunner([ok(), ok(), ok()]);
     const result = await ensureRepo({
       run: fake.run,
       owner: "acme",
@@ -243,7 +246,7 @@ describe("ensureRepo", () => {
   });
 
   test("passes --no-checkout and the https clone URL", async () => {
-    const fake = createFakeCommandRunner([ok(), ok()]);
+    const fake = createFakeCommandRunner([ok(), ok(), ok()]);
     await ensureRepo({
       run: fake.run,
       owner: "acme",
@@ -257,7 +260,7 @@ describe("ensureRepo", () => {
   });
 
   test("puts -- before the clone URL and dir", async () => {
-    const fake = createFakeCommandRunner([ok(), ok()]);
+    const fake = createFakeCommandRunner([ok(), ok(), ok()]);
     await ensureRepo({
       run: fake.run,
       owner: "acme",
@@ -272,7 +275,7 @@ describe("ensureRepo", () => {
   });
 
   test("resets credential.helper and disables hooks/fsmonitor on every call", async () => {
-    const fake = createFakeCommandRunner([ok(), ok()]);
+    const fake = createFakeCommandRunner([ok(), ok(), ok()]);
     await ensureRepo({
       run: fake.run,
       owner: "acme",
@@ -286,7 +289,7 @@ describe("ensureRepo", () => {
   });
 
   test("clone (network op) carries GH_TOKEN in env", async () => {
-    const fake = createFakeCommandRunner([ok(), ok()]);
+    const fake = createFakeCommandRunner([ok(), ok(), ok()]);
     await ensureRepo({
       run: fake.run,
       owner: "acme",
@@ -299,7 +302,7 @@ describe("ensureRepo", () => {
   });
 
   test("fetches instead of cloning when the target dir already exists", async () => {
-    const fake = createFakeCommandRunner([ok(), ok()]);
+    const fake = createFakeCommandRunner([ok(), ok(), ok()]);
     const result = await ensureRepo({
       run: fake.run,
       owner: "acme",
@@ -340,6 +343,45 @@ describe("ensureRepo", () => {
       }),
     ).rejects.toThrow();
   });
+
+  // Re-gate fix (adopted, High): `-c core.symlinks=false` on
+  // `addDetachedWorktree`'s `worktree add` (and the `GIT_CONFIG_*` on `git
+  // gtr new`) only applies to that ONE invocation — every later operation
+  // on the same repo (`git status`, `add -A`, `commit`, and critically the
+  // gtr-reuse `reset --hard`) runs with git's default `core.symlinks=true`
+  // unless the setting is persisted into the main clone's config, which
+  // every worktree of it shares.
+  test("persists core.symlinks=false into the main clone's config after cloning", async () => {
+    const fake = createFakeCommandRunner([ok(), ok(), ok()]);
+    await ensureRepo({
+      run: fake.run,
+      owner: "acme",
+      repo: "widgets",
+      ghToken: "gh-token",
+      exists: async () => false,
+      lockFs: createInMemoryLockFs(),
+    });
+    const argv = fake.calls[2]?.argv ?? [];
+    expect(argv).toEqual(
+      expect.arrayContaining(["config", "core.symlinks", "false"]),
+    );
+  });
+
+  test("persists core.symlinks=false into the main clone's config after fetching", async () => {
+    const fake = createFakeCommandRunner([ok(), ok(), ok()]);
+    await ensureRepo({
+      run: fake.run,
+      owner: "acme",
+      repo: "widgets",
+      ghToken: "gh-token",
+      exists: async () => true,
+      lockFs: createInMemoryLockFs(),
+    });
+    const argv = fake.calls[2]?.argv ?? [];
+    expect(argv).toEqual(
+      expect.arrayContaining(["config", "core.symlinks", "false"]),
+    );
+  });
 });
 
 describe("ensureFactoryClone", () => {
@@ -350,6 +392,7 @@ describe("ensureFactoryClone", () => {
       repoUrl: "https://github.com/acme/atelier-works.git",
       ghToken: "gh-token",
       exists: async () => false,
+      lockFs: createInMemoryLockFs(),
     });
     expect(result).toEqual({
       dir: "/workspaces/factory/atelier-works",
@@ -364,11 +407,32 @@ describe("ensureFactoryClone", () => {
       repoUrl: "https://github.com/acme/atelier-works.git",
       ghToken: "gh-token",
       exists: async () => true,
+      lockFs: createInMemoryLockFs(),
     });
     expect(result).toEqual({
       dir: "/workspaces/factory/atelier-works",
       action: "pulled",
     });
+  });
+
+  test("acquires a lock scoped to the clone dir before pulling (security fix, devil-advocate: avoids .git/index.lock races between concurrent flows and poll_issues sharing the same self clone)", async () => {
+    const lockFs = createInMemoryLockFs();
+    let sawLockDuringRun = false;
+    const fake = createFakeCommandRunner([ok()]);
+    const runAndCheck: typeof fake.run = async (argv, options) => {
+      sawLockDuringRun =
+        (await lockFs.read("/workspaces/factory/atelier-works.lock")) !==
+          null || sawLockDuringRun;
+      return fake.run(argv, options);
+    };
+    await ensureFactoryClone({
+      run: runAndCheck,
+      repoUrl: "https://github.com/acme/atelier-works.git",
+      ghToken: "gh-token",
+      exists: async () => true,
+      lockFs,
+    });
+    expect(sawLockDuringRun).toBe(true);
   });
 });
 
@@ -415,6 +479,24 @@ describe("addDetachedWorktree", () => {
         ghToken: "gh-token",
       }),
     ).rejects.toThrow();
+  });
+
+  test("adds -c core.symlinks=false before the worktree add subcommand (security fix: don't check out a committed symlink)", async () => {
+    const fake = createFakeCommandRunner([ok(), ok()]);
+    await addDetachedWorktree({
+      run: fake.run,
+      repoDir: "/repo",
+      sha: "abc1234",
+      dir: "/repo/wt",
+      ghToken: "gh-token",
+      lockFs: createInMemoryLockFs(),
+    });
+    const argv = fake.calls[1]?.argv ?? [];
+    const symlinksIndex = argv.indexOf("core.symlinks=false");
+    const worktreeIndex = argv.indexOf("worktree");
+    expect(symlinksIndex).toBeGreaterThan(-1);
+    expect(argv[symlinksIndex - 1]).toBe("-c");
+    expect(symlinksIndex).toBeLessThan(worktreeIndex);
   });
 });
 
@@ -550,7 +632,12 @@ describe("listWorktrees", () => {
 
 describe("createGtrWorktree", () => {
   test("reuses an existing worktree whose branch matches", async () => {
-    const fake = createFakeCommandRunner([ok(REAL_WORKTREE_PORCELAIN)]);
+    const fake = createFakeCommandRunner([
+      ok(REAL_WORKTREE_PORCELAIN),
+      ok(),
+      ok(),
+      ok(),
+    ]);
     const result = await createGtrWorktree({
       run: fake.run,
       repoDir: "/repo",
@@ -562,7 +649,12 @@ describe("createGtrWorktree", () => {
   });
 
   test("does not call `git gtr new` when reusing", async () => {
-    const fake = createFakeCommandRunner([ok(REAL_WORKTREE_PORCELAIN)]);
+    const fake = createFakeCommandRunner([
+      ok(REAL_WORKTREE_PORCELAIN),
+      ok(),
+      ok(),
+      ok(),
+    ]);
     await createGtrWorktree({
       run: fake.run,
       repoDir: "/repo",
@@ -570,7 +662,144 @@ describe("createGtrWorktree", () => {
       ghToken: "gh-token",
       lockFs: createInMemoryLockFs(),
     });
-    expect(fake.calls).toHaveLength(1);
+    expect(fake.calls.some((call) => call.argv.includes("gtr"))).toBe(false);
+  });
+
+  // devil-advocate fix (adopted, fatal): a previous round's timed-out /
+  // cancelled Claude run can leave stray edits sitting in a reused
+  // worktree; without resetting to the branch's current remote state first,
+  // those stray edits would get swept into the *next* round's `git add -A`
+  // (commitAndPush), and — if a human had since pushed to the branch
+  // directly — the reused worktree's stale local history would also make
+  // the next push non-fast-forward. Reusing a worktree now fetches, hard-
+  // resets, and cleans it back to a pristine `origin/<branch>` state before
+  // handing it back. New worktrees (via `git gtr new`) don't need this:
+  // they're freshly created from the current remote state already.
+  describe("reuse path: fetch -> reset --hard -> clean (fixes stale-worktree bug)", () => {
+    test("fetches origin/<branch> first", async () => {
+      const fake = createFakeCommandRunner([
+        ok(REAL_WORKTREE_PORCELAIN),
+        ok(),
+        ok(),
+        ok(),
+      ]);
+      await createGtrWorktree({
+        run: fake.run,
+        repoDir: "/repo",
+        branch: "contract-smoke-branch",
+        ghToken: "gh-token",
+        lockFs: createInMemoryLockFs(),
+      });
+      const argv = fake.calls[1]?.argv ?? [];
+      expect(argv).toEqual(
+        expect.arrayContaining([
+          "fetch",
+          "origin",
+          "--",
+          "contract-smoke-branch",
+        ]),
+      );
+    });
+
+    test("then resets --hard to origin/<branch>", async () => {
+      const fake = createFakeCommandRunner([
+        ok(REAL_WORKTREE_PORCELAIN),
+        ok(),
+        ok(),
+        ok(),
+      ]);
+      await createGtrWorktree({
+        run: fake.run,
+        repoDir: "/repo",
+        branch: "contract-smoke-branch",
+        ghToken: "gh-token",
+        lockFs: createInMemoryLockFs(),
+      });
+      const argv = fake.calls[2]?.argv ?? [];
+      expect(argv).toEqual(
+        expect.arrayContaining([
+          "reset",
+          "--hard",
+          "origin/contract-smoke-branch",
+        ]),
+      );
+    });
+
+    test("then cleans untracked files", async () => {
+      const fake = createFakeCommandRunner([
+        ok(REAL_WORKTREE_PORCELAIN),
+        ok(),
+        ok(),
+        ok(),
+      ]);
+      await createGtrWorktree({
+        run: fake.run,
+        repoDir: "/repo",
+        branch: "contract-smoke-branch",
+        ghToken: "gh-token",
+        lockFs: createInMemoryLockFs(),
+      });
+      const argv = fake.calls[3]?.argv ?? [];
+      expect(argv).toEqual(expect.arrayContaining(["clean", "-fd"]));
+    });
+
+    test("does not put -- before the ref for reset --hard (same rev-parse-like exception as elsewhere)", async () => {
+      const fake = createFakeCommandRunner([
+        ok(REAL_WORKTREE_PORCELAIN),
+        ok(),
+        ok(),
+        ok(),
+      ]);
+      await createGtrWorktree({
+        run: fake.run,
+        repoDir: "/repo",
+        branch: "contract-smoke-branch",
+        ghToken: "gh-token",
+        lockFs: createInMemoryLockFs(),
+      });
+      const argv = fake.calls[2]?.argv ?? [];
+      expect(argv).not.toContain("--");
+    });
+
+    test("resets and cleans in the worktree dir, not repoDir", async () => {
+      const fake = createFakeCommandRunner([
+        ok(REAL_WORKTREE_PORCELAIN),
+        ok(),
+        ok(),
+        ok(),
+      ]);
+      await createGtrWorktree({
+        run: fake.run,
+        repoDir: "/repo",
+        branch: "contract-smoke-branch",
+        ghToken: "gh-token",
+        lockFs: createInMemoryLockFs(),
+      });
+      expect([
+        fake.calls[2]?.options?.cwd,
+        fake.calls[3]?.options?.cwd,
+      ]).toEqual([
+        "/tmp/repo-worktrees/contract-smoke-branch",
+        "/tmp/repo-worktrees/contract-smoke-branch",
+      ]);
+    });
+
+    test("throws a masked error when the reset fails", async () => {
+      const fake = createFakeCommandRunner([
+        ok(REAL_WORKTREE_PORCELAIN),
+        ok(),
+        fail("fatal: could not reset"),
+      ]);
+      await expect(
+        createGtrWorktree({
+          run: fake.run,
+          repoDir: "/repo",
+          branch: "contract-smoke-branch",
+          ghToken: "gh-token",
+          lockFs: createInMemoryLockFs(),
+        }),
+      ).rejects.toThrow(/reset --hard/);
+    });
   });
 
   test("parses a real captured `git gtr new --porcelain` sample when creating", async () => {
@@ -601,6 +830,23 @@ describe("createGtrWorktree", () => {
         ghToken: "gh-token",
       }),
     ).rejects.toThrow();
+  });
+
+  test("passes core.symlinks=false to git gtr new via GIT_CONFIG_* env vars (gtr's own argv can't carry -c)", async () => {
+    const gtrPorcelain =
+      "path\t/tmp/repo-worktrees/new-branch\nbranch\tnew-branch\nhook_status\tnone\n";
+    const fake = createFakeCommandRunner([ok(""), ok(gtrPorcelain)]);
+    await createGtrWorktree({
+      run: fake.run,
+      repoDir: "/repo",
+      branch: "new-branch",
+      ghToken: "gh-token",
+      lockFs: createInMemoryLockFs(),
+    });
+    const env = fake.calls[1]?.options?.env ?? {};
+    expect(env.GIT_CONFIG_COUNT).toBe("1");
+    expect(env.GIT_CONFIG_KEY_0).toBe("core.symlinks");
+    expect(env.GIT_CONFIG_VALUE_0).toBe("false");
   });
 });
 
@@ -642,6 +888,132 @@ describe("verifyWorktreeGitdir", () => {
           "gitdir: /somewhere/else/.git/worktrees/contract-smoke-branch\n",
       }),
     ).rejects.toThrow(/does not point under/);
+  });
+});
+
+describe("resolveDefaultBranchHeadSha", () => {
+  test("returns the trimmed sha origin/HEAD points to", async () => {
+    const fake = createFakeCommandRunner([
+      ok("2222222222222222222222222222222222222c\n"),
+    ]);
+    const sha = await resolveDefaultBranchHeadSha(fake.run, "/repo/main");
+    expect(sha).toBe("2222222222222222222222222222222222222c");
+  });
+
+  test("runs git rev-parse --verify origin/HEAD without -- (rev-parse exception)", async () => {
+    const fake = createFakeCommandRunner([ok("abc\n")]);
+    await resolveDefaultBranchHeadSha(fake.run, "/repo/main");
+    const argv = fake.calls[0]?.argv ?? [];
+    expect(argv).toEqual(
+      expect.arrayContaining(["rev-parse", "--verify", "origin/HEAD"]),
+    );
+    expect(argv).not.toContain("--");
+  });
+
+  test("does not include GH_TOKEN in env (local-only, no network)", async () => {
+    const fake = createFakeCommandRunner([ok("abc\n")]);
+    await resolveDefaultBranchHeadSha(fake.run, "/repo/main");
+    const env = fake.calls[0]?.options?.env ?? {};
+    expect(env).not.toHaveProperty("GH_TOKEN");
+  });
+
+  test("throws a masked error when rev-parse fails", async () => {
+    const fake = createFakeCommandRunner([
+      fail("fatal: ambiguous argument 'origin/HEAD': unknown revision"),
+    ]);
+    await expect(
+      resolveDefaultBranchHeadSha(fake.run, "/repo/main"),
+    ).rejects.toThrow(/origin\/HEAD/);
+  });
+});
+
+describe("fetchPrHeadRef", () => {
+  test("fetches the PR's head ref from origin", async () => {
+    const fake = createFakeCommandRunner([ok()]);
+    await fetchPrHeadRef(fake.run, "/repo/main", 42, "gh-token");
+    const argv = fake.calls[0]?.argv ?? [];
+    expect(argv).toEqual(
+      expect.arrayContaining(["fetch", "origin", "--", "pull/42/head"]),
+    );
+  });
+
+  test("places the refspec after -- (untrusted-positional-arg convention)", async () => {
+    const fake = createFakeCommandRunner([ok()]);
+    await fetchPrHeadRef(fake.run, "/repo/main", 42, "gh-token");
+    const argv = fake.calls[0]?.argv ?? [];
+    const dashIndex = argv.indexOf("--");
+    const refspecIndex = argv.indexOf("pull/42/head");
+    expect(dashIndex).toBeGreaterThan(-1);
+    expect(refspecIndex).toBeGreaterThan(dashIndex);
+  });
+
+  test("carries GH_TOKEN in env (network operation)", async () => {
+    const fake = createFakeCommandRunner([ok()]);
+    await fetchPrHeadRef(fake.run, "/repo/main", 42, "gh-token-xyz");
+    const env = fake.calls[0]?.options?.env ?? {};
+    expect(env).toMatchObject({ GH_TOKEN: "gh-token-xyz" });
+  });
+
+  test("throws a masked error on failure", async () => {
+    const fake = createFakeCommandRunner([
+      fail("fatal: couldn't find remote ref pull/42/head"),
+    ]);
+    await expect(
+      fetchPrHeadRef(fake.run, "/repo/main", 42, "gh-token"),
+    ).rejects.toThrow(/pull\/42\/head failed/);
+  });
+});
+
+describe("readGitShowFile", () => {
+  test("returns the file's content at the given ref", async () => {
+    const fake = createFakeCommandRunner([ok("file contents\n")]);
+    const content = await readGitShowFile(
+      fake.run,
+      "/repo/wt",
+      "HEAD",
+      "package.json",
+    );
+    expect(content).toBe("file contents\n");
+  });
+
+  test("returns null when the file doesn't exist at that ref, without throwing", async () => {
+    const fake = createFakeCommandRunner([
+      fail("fatal: path 'missing.json' does not exist in 'HEAD'"),
+    ]);
+    const content = await readGitShowFile(
+      fake.run,
+      "/repo/wt",
+      "HEAD",
+      "missing.json",
+    );
+    expect(content).toBeNull();
+  });
+
+  test("does not carry GH_TOKEN in env (local-only read)", async () => {
+    const fake = createFakeCommandRunner([ok("x")]);
+    await readGitShowFile(fake.run, "/repo/wt", "HEAD", "a.txt");
+    const env = fake.calls[0]?.options?.env ?? {};
+    expect(env).not.toHaveProperty("GH_TOKEN");
+  });
+
+  test("does not build ref:path with -- (git show's own rev-parse-like exception — verified empirically: -- silently breaks ref:path lookup)", async () => {
+    const fake = createFakeCommandRunner([ok("x")]);
+    await readGitShowFile(fake.run, "/repo/wt", "HEAD", "a.txt");
+    const argv = fake.calls[0]?.argv ?? [];
+    expect(argv).not.toContain("--");
+    expect(argv).toContain("HEAD:a.txt");
+  });
+
+  test("returns null without calling git for a ref that could be misread as a flag", async () => {
+    const fake = createFakeCommandRunner([]);
+    const content = await readGitShowFile(
+      fake.run,
+      "/repo/wt",
+      "--upload-pack=evil",
+      "a.txt",
+    );
+    expect(content).toBeNull();
+    expect(fake.calls).toHaveLength(0);
   });
 });
 
@@ -902,7 +1274,7 @@ describe("repo-wide lock scope (code-review fix)", () => {
     };
 
     await ensureRepo({
-      run: createFakeCommandRunner([ok(), ok()]).run,
+      run: createFakeCommandRunner([ok(), ok(), ok()]).run,
       owner: "acme",
       repo: "widgets",
       ghToken: "gh-token",

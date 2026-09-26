@@ -37,6 +37,8 @@ flowchart TD
     E -->|timeout| I[expired]
 ```
 
+`request_approval` は Windmill の suspend ステップで待機する。resume URL に POST した本文は後続ステップには渡らない(suspend ステップの戻り値は `{resume, cancel, approvalPage}` のみ)ため、`approval_decide` は resume する前に承認内容(decision / reason / approver)を先に `approvals` テーブルへ記録し、resume 後の分岐ステップは `approvals` の最新行(`work_item_id` + `attempt` 単位)を読んで approve / reject を判断する。タイムアウトは `approvals` に対応する行が無いことで判別する。
+
 ## 状態遷移(work_items.status)
 
 ```mermaid
@@ -48,6 +50,7 @@ stateDiagram-v2
     awaiting_approval --> rejected
     rejected --> requirements_generating: attempt+1
     awaiting_approval --> expired
+    awaiting_approval --> needs_human: approvals行不在かつtimeout前
     picked --> needs_human
     requirements_generating --> needs_human
     rejected --> needs_human: 試行上限超過
@@ -66,6 +69,7 @@ stateDiagram-v2
     [*] --> fixing: PR修正起動(kind=pr_fix)
     fixing --> rereview_requested
     fixing --> blocked
+    fixing --> requirements_generating: requirements_gap(親Issueが存在、attempt+1)
     fixing --> needs_human: requirements_gap(元Issueが分からない場合)
     fixing --> cancelled: PRがclosed/merged
     blocked --> needs_human
@@ -86,7 +90,7 @@ stateDiagram-v2
 | `awaiting_approval` | 承認 Inbox で承認待ち | 2 |
 | `approved` | 要件定義が承認された | 2 |
 | `rejected` | 却下され再生成待ち(attempt+1) | 2 |
-| `needs_human` | 自動処理を打ち切り人の対応が必要(試行上限超過を含む) | 2 |
+| `needs_human` | 自動処理を打ち切り人の対応が必要(試行上限超過、unsupported channel、requirements_gap の元 Issue 不在、等) | 2/PR ワークフロー |
 | `failed` | 実行時エラーで失敗 | 1/2 |
 | `expired` | 承認タイムアウト(7 日) | 2 |
 | `cancelled` | Issue が closed またはラベル剥奪 | 1/2 |
@@ -96,9 +100,25 @@ stateDiagram-v2
 | `reviewed` | PR レビューを COMMENT として投稿済み(終端、`kind=pr_review`) | PR ワークフロー |
 | `fixing` | レビュー指摘・コメントの修正を実行中(`kind=pr_fix`) | PR ワークフロー |
 | `rereview_requested` | 修正を push し再レビューを依頼した(終端、`kind=pr_fix`) | PR ワークフロー |
-| `blocked` | 禁止された変更パターンの検出、または安全策の前提が崩れて中断(`kind=pr_fix`) | PR ワークフロー |
+| `blocked` | 禁止された変更パターンの検出、差分上限超過、または安全策の前提が崩れて中断(`kind=pr_fix`) | PR ワークフロー |
 
 work item を終端 status(`approved` / `needs_human` / `expired` / `failed` / `reviewed` / `rereview_requested` / `blocked` / `cancelled`)にする際は、`wip` ラベルに加えてトリガーラベル(Issue の `factory`、PR の `factory:review` / `factory:fix`)も外す(`approved` は `factory` の代わりに `factory:approved` へ付け替える)。トリガーラベルを残すと、孤児失敗した Issue / PR が次回の poll で自動再クレームされ、無限に再試行してしまう。人が改めてラベルを付け直したときだけ新しいサイクル・再実行が始まる。
+
+`retry_work_item` のように終端 status から再度フローを起動する経路は、逆に `runFlowAsync` の前に同じ wip + トリガーラベル(kind に応じて `factory` / `factory:review` / `factory:fix`)を冪等に再付与する。付け忘れると、再起動直後の work item がラベル無しのまま `poll_issues` の reconcile(5 分周期)に「トリガーラベル剥奪」と誤認され、即座に再度 `cancelled` にされてしまう。terminal 化する経路を新設・変更するときは、対になる再起動経路がラベルを再付与しているかを必ず確認する。
+
+### 状態遷移の詳細
+
+**工程 2 (要件定義) から工程 3 へ:**
+- `approved` → `implementing`(工程 3 実装ステップで実装を試みる)。
+- `implementing` → `requirements_generating: gap`(工程 3 実装ステップが `requirements_gap` を返した場合、attempt+1 で要件定義を再生成。状態遷移図では省略)。
+
+**PR ワークフローの `requirements_gap`:**
+- `pr_fix` フロー実行中に `outcome: "requirements_gap"` が返された場合、`parent_work_item_id` で元 Issue の work item を特定する。
+- 元 Issue が存在する場合、その work item を `requirements_generating` に attempt+1 で再起動(issue の工程 2 に戻す)。
+- 元 Issue が見つからない場合(PR が factory 製ではなく manual で投入された場合など)は `needs_human` に遷移。
+
+**unsupported channel:**
+- `awaiting_approval` 状態中に、approval page URL から直接 resume された場合(approval data がスキップされた場合)、approvals テーブルに対応する行が無い状態で timeout 判定が走り、`needs_human` に遷移。
 
 ## データモデル
 
@@ -132,7 +152,7 @@ Data Tables はスキーマ `factory` に置く。migration は追加のみで�
 | `cleanup_workspaces` | schedule(毎日 03:00) | 期限切れ worktree の削除、古い transcript の削除 |
 | `daily_summary` | schedule(毎日 09:00) | 前日のコスト・件数・失敗を Discord に通知 |
 
-各 schedule の cron はタイムゾーン `Asia/Tokyo`、Windmill の 6 フィールド形式で `*.schedule.yaml` に持つ。多重実行防止は advisory lock を使わず、各 schedule の `no_flow_overlap: true` で行う(前回実行中はスキップする)。複数インスタンスを同時運用する場合の排他は Windmill 側ではなく GitHub 側の claim(`wip` ラベル + assignee)で担保する。error handler で失敗を `job_failures` と Discord 通知に流す。承認のタイムアウト(7 日)は schedule ではなく `pipeline` の suspend 設定側が持つ。
+各 schedule の cron はタイムゾーン `Asia/Tokyo`、Windmill の 6 フィールド形式で `*.schedule.yaml` に持つ。多重実行防止は advisory lock を使わず、各 schedule の `no_flow_overlap: true` で行う(前回実行中はスキップする)。複数インスタンスを同時運用する場合の排他は Windmill 側ではなく GitHub 側の claim(`wip` ラベル + assignee)で担保する。error handler で失敗を記録し、すべてのフロー（pipeline / pr_review / pr_fix）の `failed` 終端処理（ラベル除去、Issue / PR コメント、Discord 通知）は `on_error_flow` に一本化される。承認のタイムアウト(7 日)は schedule ではなく `pipeline` の suspend 設定側が持つ。
 
 ## PR ワークフロー(pr_review / pr_fix)
 

@@ -92,6 +92,39 @@ describe("buildEmbed", () => {
     );
     expect(changedPathsField?.value).toHaveLength(1024);
   });
+
+  test("sets the embed url to the inbox url, not a resume/cancel capability url", () => {
+    const embed = buildEmbed({
+      kind: "approval_requested",
+      instance_name: "local",
+      owner: "u-stem",
+      repo: "atelier-works",
+      issue_number: 42,
+      issue_url: "https://github.com/u-stem/atelier-works/issues/42",
+      title: "Add feature",
+      inbox_url: "http://127.0.0.1:8080/apps/get/f/factory/factory_console",
+    });
+    expect(embed.url).toBe(
+      "http://127.0.0.1:8080/apps/get/f/factory/factory_console",
+    );
+  });
+
+  test("still includes the issue url as a field on approval_requested", () => {
+    const embed = buildEmbed({
+      kind: "approval_requested",
+      instance_name: "local",
+      owner: "u-stem",
+      repo: "atelier-works",
+      issue_number: 42,
+      issue_url: "https://github.com/u-stem/atelier-works/issues/42",
+      title: "Add feature",
+      inbox_url: "http://127.0.0.1:8080/apps/get/f/factory/factory_console",
+    });
+    expect(embed.fields).toContainEqual({
+      name: "issue",
+      value: "https://github.com/u-stem/atelier-works/issues/42",
+    });
+  });
 });
 
 describe("capEmbedToDiscordLimits", () => {

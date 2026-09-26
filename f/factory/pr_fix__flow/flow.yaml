@@ -1,0 +1,238 @@
+summary: Apply an automated fix to a PR based on review feedback
+description: 'pr_fix.flow (spec-cycle2.md §3 M6, §7 item 3 / docs/security.md
+  "pr_fix の安全策"): checks pre-attempt safety guards, gathers new human feedback,
+  runs headless Claude (factory-fix skill, no Bash) in a gtr worktree on the
+  PR''s head branch, verifies the change against forbidden-file patterns and
+  factory_config.allowed_check_commands, then pushes, replies to comments, and
+  requests re-review — or routes to needs_human / blocked / a
+  requirements-generation re-cycle on the originating issue.'
+value:
+  modules:
+    - id: pr_fix_prepare
+      summary: Load the work item, check safety guards, build the gtr worktree
+      value:
+        type: script
+        input_transforms:
+          work_item_id:
+            type: javascript
+            expr: flow_input.work_item_id
+        path: f/factory/steps/pr_fix_prepare
+    - id: pr_fix_collect
+      summary: Gather new human reviews/comments since the last round
+      value:
+        type: script
+        input_transforms:
+          owner:
+            type: javascript
+            expr: results.pr_fix_prepare.owner
+          pr_number:
+            type: javascript
+            expr: results.pr_fix_prepare.pr_number
+          repo:
+            type: javascript
+            expr: results.pr_fix_prepare.repo
+          work_item_id:
+            type: javascript
+            expr: flow_input.work_item_id
+        path: f/factory/steps/pr_fix_collect
+      skip_if:
+        expr: results.pr_fix_prepare.outcome !== "proceed"
+    - id: pr_fix_apply
+      summary: Run headless Claude to apply the fix
+      value:
+        type: script
+        input_transforms:
+          attempt:
+            type: javascript
+            expr: results.pr_fix_prepare.attempt
+          comments:
+            type: javascript
+            expr: results.pr_fix_collect?.comments ?? []
+          factory_clone_dir:
+            type: javascript
+            expr: results.pr_fix_prepare.factory_clone_dir
+          fix_round:
+            type: javascript
+            expr: results.pr_fix_prepare.fix_round
+          head_sha:
+            type: javascript
+            expr: results.pr_fix_prepare.head_sha
+          owner:
+            type: javascript
+            expr: results.pr_fix_prepare.owner
+          parent_work_item_id:
+            type: javascript
+            expr: results.pr_fix_prepare.parent_work_item_id
+          pr_number:
+            type: javascript
+            expr: results.pr_fix_prepare.pr_number
+          repo:
+            type: javascript
+            expr: results.pr_fix_prepare.repo
+          reviews:
+            type: javascript
+            expr: results.pr_fix_collect?.reviews ?? []
+          work_item_id:
+            type: javascript
+            expr: flow_input.work_item_id
+          worktree_dir:
+            type: javascript
+            expr: results.pr_fix_prepare.worktree_dir
+        path: f/factory/steps/pr_fix_apply
+      skip_if:
+        expr: results.pr_fix_prepare.outcome !== "proceed" ||
+          results.pr_fix_collect?.outcome !== "proceed"
+      retry:
+        exponential:
+          attempts: 2
+          seconds: 30
+          multiplier: 4
+    - id: pr_fix_verify
+      summary: Verify the fix (forbidden-file check, allowed check commands)
+      value:
+        type: script
+        input_transforms:
+          apply_commit_message:
+            type: javascript
+            expr: results.pr_fix_apply.commit_message
+          apply_outcome:
+            type: javascript
+            expr: results.pr_fix_apply.outcome
+          apply_reason:
+            type: javascript
+            expr: results.pr_fix_apply.reason
+          apply_replies:
+            type: javascript
+            expr: results.pr_fix_apply.replies
+          apply_summary:
+            type: javascript
+            expr: results.pr_fix_apply.summary
+          attempt:
+            type: javascript
+            expr: results.pr_fix_prepare.attempt
+          comments:
+            type: javascript
+            expr: results.pr_fix_collect?.comments ?? []
+          factory_clone_dir:
+            type: javascript
+            expr: results.pr_fix_prepare.factory_clone_dir
+          fix_round:
+            type: javascript
+            expr: results.pr_fix_prepare.fix_round
+          owner:
+            type: javascript
+            expr: results.pr_fix_prepare.owner
+          parent_work_item_id:
+            type: javascript
+            expr: results.pr_fix_prepare.parent_work_item_id
+          pr_number:
+            type: javascript
+            expr: results.pr_fix_prepare.pr_number
+          repo:
+            type: javascript
+            expr: results.pr_fix_prepare.repo
+          reviews:
+            type: javascript
+            expr: results.pr_fix_collect?.reviews ?? []
+          work_item_id:
+            type: javascript
+            expr: flow_input.work_item_id
+          worktree_dir:
+            type: javascript
+            expr: results.pr_fix_prepare.worktree_dir
+        path: f/factory/steps/pr_fix_verify
+      skip_if:
+        expr: results.pr_fix_prepare.outcome !== "proceed" ||
+          results.pr_fix_collect?.outcome !== "proceed"
+    - id: pr_fix_finish
+      summary: Route the outcome to a terminal status and GitHub/Discord side effects
+      value:
+        type: script
+        input_transforms:
+          summary:
+            type: javascript
+            expr: results.pr_fix_verify?.summary ?? ""
+          comments:
+            type: javascript
+            expr: results.pr_fix_collect?.comments ?? []
+          commit_message:
+            type: javascript
+            expr: results.pr_fix_verify?.commit_message ?? null
+          fix_round:
+            type: javascript
+            expr: results.pr_fix_prepare.fix_round
+          head_sha:
+            type: javascript
+            expr: results.pr_fix_prepare.head_sha
+          max_comment_id:
+            type: javascript
+            expr: results.pr_fix_collect?.max_comment_id ?? 0
+          max_review_comment_id:
+            type: javascript
+            expr: results.pr_fix_collect?.max_review_comment_id ?? 0
+          max_review_id:
+            type: javascript
+            expr: results.pr_fix_collect?.max_review_id ?? 0
+          outcome:
+            type: javascript
+            expr: "results.pr_fix_verify == null ? (results.pr_fix_collect == null ? results.pr_fix_prepare.outcome : results.pr_fix_collect.outcome) : results.pr_fix_verify.outcome"
+          owner:
+            type: javascript
+            expr: results.pr_fix_prepare.owner
+          parent_work_item_id:
+            type: javascript
+            expr: results.pr_fix_prepare.parent_work_item_id
+          pr_number:
+            type: javascript
+            expr: results.pr_fix_prepare.pr_number
+          reason:
+            type: javascript
+            expr: "results.pr_fix_verify == null ? (results.pr_fix_collect == null ? results.pr_fix_prepare.reason : results.pr_fix_collect.reason) : results.pr_fix_verify.reason"
+          replies:
+            type: javascript
+            expr: results.pr_fix_verify?.replies ?? []
+          repo:
+            type: javascript
+            expr: results.pr_fix_prepare.repo
+          repo_dir:
+            type: javascript
+            expr: results.pr_fix_prepare.repo_dir
+          reviews:
+            type: javascript
+            expr: results.pr_fix_collect?.reviews ?? []
+          trigger_review_ids:
+            type: javascript
+            expr: results.pr_fix_collect?.trigger_review_ids ?? []
+          work_item_id:
+            type: javascript
+            expr: flow_input.work_item_id
+          worktree_dir:
+            type: javascript
+            expr: results.pr_fix_prepare.worktree_dir
+        path: f/factory/steps/pr_fix_finish
+  failure_module:
+    id: failure
+    value:
+      type: script
+      input_transforms:
+        error:
+          type: javascript
+          expr: error
+        path:
+          type: static
+          value: f/factory/pr_fix
+        work_item_id:
+          type: javascript
+          expr: flow_input.work_item_id
+      path: f/factory/on_error_flow
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  order:
+    - work_item_id
+  properties:
+    work_item_id:
+      type: integer
+      description: factory.work_items.id of the pr_fix-kind work item to process.
+  required:
+    - work_item_id

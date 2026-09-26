@@ -30,6 +30,8 @@ schema:
     - default_reviewers
     - repo_allowlist
     - diff_max_lines
+    - max_fix_changed_files
+    - max_fix_diff_lines
   properties:
     allowed_check_commands:
       type: array
@@ -98,6 +100,17 @@ schema:
       type: number
       description: Max USD budget passed to `claude -p --max-budget-usd` per stage run.
       default: 5
+    max_fix_changed_files:
+      type: integer
+      description: Max changed files allowed in one pr_fix_verify diff before it is
+        treated as too large to auto-apply and falls back to needs_human.
+      default: 30
+    max_fix_diff_lines:
+      type: integer
+      description: Max diff lines (additions + deletions combined) allowed in one
+        pr_fix_verify diff before it is treated as too large to auto-apply and falls
+        back to needs_human.
+      default: 1500
     max_fix_rounds:
       type: integer
       description: Max pr_fix.flow rounds for one pull request before falling back to

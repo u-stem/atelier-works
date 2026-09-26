@@ -302,6 +302,17 @@ export function isOwnPost(login: string, viewer: string): boolean {
   return login.toLowerCase() === viewer.toLowerCase();
 }
 
+/** GitHub's `author_association` value for a comment/review/timeline-event
+ * author, or `null` when absent — same type as
+ * `LabeledTimelineEvent.authorAssociation` (spec-cycle2.md §7 item 1's
+ * `allowed_labeler_associations` check, extended to the pr_fix human-
+ * feedback filter). */
+function parseAuthorAssociation(
+  value: unknown,
+): LabelerAssociation | string | null {
+  return typeof value === "string" ? value : null;
+}
+
 // ---------------------------------------------------------------------------
 // Viewer
 // ---------------------------------------------------------------------------
@@ -590,10 +601,7 @@ export async function getIssueTimeline(
     last = {
       event: "labeled",
       actorLogin,
-      authorAssociation:
-        typeof raw.author_association === "string"
-          ? raw.author_association
-          : null,
+      authorAssociation: parseAuthorAssociation(raw.author_association),
       label: resolvedLabelName,
       createdAt: typeof raw.created_at === "string" ? raw.created_at : null,
     };
@@ -725,11 +733,17 @@ type CommentBodyPayload = {
   readonly id: number;
   readonly body: string;
   readonly user: { readonly login: string } | null;
+  readonly author_association: unknown;
 };
 
 function isCommentBodyPayload(value: unknown): value is CommentBodyPayload {
   if (typeof value !== "object" || value === null) return false;
-  const record = value as { id: unknown; body: unknown; user: unknown };
+  const record = value as {
+    id: unknown;
+    body: unknown;
+    user: unknown;
+    author_association: unknown;
+  };
   if (typeof record.id !== "number") return false;
   if (typeof record.body !== "string") return false;
   return record.user === null || isLoginPayload(record.user);
@@ -759,6 +773,7 @@ async function findExistingMarkerComment(
 export type IssueComment = {
   readonly id: number;
   readonly authorLogin: string;
+  readonly authorAssociation: LabelerAssociation | string | null;
   readonly body: string;
 };
 
@@ -809,6 +824,7 @@ export async function listIssueComments(
     items.push({
       id: raw.id,
       authorLogin: typeof login === "string" ? login : "",
+      authorAssociation: parseAuthorAssociation(raw.author_association),
       body: raw.body,
     });
   }
@@ -851,6 +867,36 @@ export async function removeLabel(
   );
   if (response.status === 404) return; // already absent — nothing to do
   ensureSuccess(response, `DELETE issue label ${owner}/${repo}#${number}`);
+}
+
+/**
+ * Adds `labels` to an issue/PR without touching any label already on it —
+ * GitHub's `POST .../labels` endpoint is additive, unlike `setLabels`'s PUT
+ * (replaces the whole set). Promoted from
+ * f/factory/steps/pr_workflow_support.ts's local version (same signature
+ * and behavior — a bare POST, no re-fetch-to-confirm step). Used by
+ * retry_work_item.ts to restore a terminal work item's labels without also
+ * assigning anyone (unlike claimIssue, which POSTs an assignee too), and by
+ * pr_fix_finish's requirements_gap reroute (re-adding the parent issue's
+ * wip/trigger labels before restarting f/factory/pipeline on it).
+ */
+export async function addLabels(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  number: number,
+  labels: readonly string[],
+): Promise<void> {
+  validateOwnerRepo(owner, repo);
+  const response = await callGhApi(
+    client,
+    `repos/${owner}/${repo}/issues/${number}/labels`,
+    {
+      method: "POST",
+      body: { labels },
+    },
+  );
+  ensureSuccess(response, `POST issue labels ${owner}/${repo}#${number}`);
 }
 
 export type CreateIssueOptions = {
@@ -1140,6 +1186,7 @@ export async function getPrFiles(
 export type PrReview = {
   readonly id: number;
   readonly authorLogin: string;
+  readonly authorAssociation: LabelerAssociation | string | null;
   readonly state: string;
   readonly body: string;
   readonly submittedAt: string | null;
@@ -1151,6 +1198,7 @@ type PrReviewPayload = {
   readonly state: string;
   readonly body: string;
   readonly submitted_at: unknown;
+  readonly author_association: unknown;
 };
 
 function isPrReviewPayload(value: unknown): value is PrReviewPayload {
@@ -1200,6 +1248,7 @@ export async function listPrReviews(
     items.push({
       id: raw.id,
       authorLogin: typeof login === "string" ? login : "",
+      authorAssociation: parseAuthorAssociation(raw.author_association),
       state: raw.state,
       body: raw.body,
       submittedAt:
@@ -1212,6 +1261,7 @@ export async function listPrReviews(
 export type PrReviewComment = {
   readonly id: number;
   readonly authorLogin: string;
+  readonly authorAssociation: LabelerAssociation | string | null;
   readonly path: string;
   readonly line: number | null;
   readonly body: string;
@@ -1223,6 +1273,7 @@ type PrReviewCommentPayload = {
   readonly path: string;
   readonly line: unknown;
   readonly body: string;
+  readonly author_association: unknown;
 };
 
 function isPrReviewCommentPayload(
@@ -1267,6 +1318,7 @@ export async function listPrReviewComments(
     items.push({
       id: raw.id,
       authorLogin: typeof login === "string" ? login : "",
+      authorAssociation: parseAuthorAssociation(raw.author_association),
       path: raw.path,
       line: typeof raw.line === "number" ? raw.line : null,
       body: raw.body,
@@ -1406,4 +1458,89 @@ export async function requestReviewers(
     const message = err instanceof Error ? err.message : String(err);
     return { outcome: "failed", error: maskSecrets(message) };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Branch protection (promoted from f/factory/steps/pr_workflow_support.ts)
+// ---------------------------------------------------------------------------
+
+type BranchProtectionPayload = { readonly protected: boolean };
+
+function isBranchProtectionPayload(
+  value: unknown,
+): value is BranchProtectionPayload {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as { protected: unknown };
+  return typeof record.protected === "boolean";
+}
+
+/**
+ * `GET repos/{owner}/{repo}/branches/{branch}`'s `protected` flag — this
+ * endpoint returns `protected: false` (not a 404) for an unprotected
+ * branch, unlike the dedicated `/branches/{branch}/protection` endpoint.
+ */
+export async function getBranchProtected(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  branch: string,
+): Promise<boolean> {
+  validateOwnerRepo(owner, repo);
+  const response = await callGhApi(
+    client,
+    `repos/${owner}/${repo}/branches/${encodeURIComponent(branch)}`,
+  );
+  ensureSuccess(response, `GET branch ${owner}/${repo}@${branch}`);
+  const parsed = parseJsonBody(
+    response,
+    `GET branch ${owner}/${repo}@${branch}`,
+  );
+  if (!isBranchProtectionPayload(parsed)) {
+    throw new Error(
+      `GET branch ${owner}/${repo}@${branch}: unexpected response shape`,
+    );
+  }
+  return parsed.protected;
+}
+
+// ---------------------------------------------------------------------------
+// Plain (non-idempotent) issue comment (promoted from f/factory/steps/
+// pr_workflow_support.ts)
+// ---------------------------------------------------------------------------
+
+/**
+ * Posts a plain (non-idempotent) issue-level comment. Unlike `commentIssue`
+ * (one canonical marker comment per kind+work_item_id, deduplicated), this
+ * always creates a new comment and never adds a marker — the caller applies
+ * `withMarker` itself when one is needed. Used by pr_fix_finish.ts to reply
+ * to a plain issue comment (GitHub has no threaded-reply concept for
+ * issue-level comments, unlike PR review comments' `replyReviewComment`).
+ */
+export async function postIssueComment(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  number: number,
+  body: string,
+): Promise<{ readonly id: number }> {
+  validateOwnerRepo(owner, repo);
+  const response = await callGhApi(
+    client,
+    `repos/${owner}/${repo}/issues/${number}/comments`,
+    {
+      method: "POST",
+      body: { body },
+    },
+  );
+  ensureSuccess(response, `POST issue comment ${owner}/${repo}#${number}`);
+  const parsed = parseJsonBody(
+    response,
+    `POST issue comment ${owner}/${repo}#${number}`,
+  );
+  if (!isIdPayload(parsed)) {
+    throw new Error(
+      `POST issue comment ${owner}/${repo}#${number}: unexpected response shape`,
+    );
+  }
+  return { id: parsed.id };
 }

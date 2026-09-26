@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
+  addLabels,
   claimIssue,
   commentIssue,
   createIssue,
   createPrReview,
+  getBranchProtected,
   getIssue,
   getIssueTimeline,
   getPr,
@@ -15,6 +17,7 @@ import {
   listIssueComments,
   listPrReviewComments,
   listPrReviews,
+  postIssueComment,
   removeLabel,
   replyReviewComment,
   requestReviewers,
@@ -515,8 +518,34 @@ describe("listIssueComments", () => {
       { viewer: "factory-bot" },
     );
     expect(result.items).toEqual([
-      { id: 1, authorLogin: "alice", body: "please fix this" },
+      {
+        id: 1,
+        authorLogin: "alice",
+        authorAssociation: null,
+        body: "please fix this",
+      },
     ]);
+  });
+
+  test("parses author_association when present", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([
+        {
+          id: 1,
+          body: "please fix this",
+          user: { login: "alice" },
+          author_association: "CONTRIBUTOR",
+        },
+      ]),
+    ]);
+    const result = await listIssueComments(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      5,
+      { viewer: "factory-bot" },
+    );
+    expect(result.items[0]?.authorAssociation).toBe("CONTRIBUTOR");
   });
 
   test("only returns comments with an id greater than sinceId", async () => {
@@ -591,6 +620,70 @@ describe("setLabels / removeLabel", () => {
         "factory:wip",
       ),
     ).resolves.toBeUndefined();
+  });
+});
+
+describe("addLabels", () => {
+  test("POSTs (additive — unlike setLabels's PUT, which replaces the whole set)", async () => {
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, []))]);
+    await addLabels({ run: fake.run, ghToken: "tok" }, "acme", "widgets", 5, [
+      "a",
+      "b",
+    ]);
+    expect(fake.calls[0]?.argv).toContain("POST");
+    expect(fake.calls[0]?.argv).toContain("repos/acme/widgets/issues/5/labels");
+  });
+
+  test("sends labels as the request body", async () => {
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, []))]);
+    await addLabels({ run: fake.run, ghToken: "tok" }, "acme", "widgets", 5, [
+      "a",
+      "b",
+    ]);
+    expect(fake.calls[0]?.options?.stdin).toBe(
+      JSON.stringify({ labels: ["a", "b"] }),
+    );
+  });
+
+  test("throws on a non-2xx response", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(422, { message: "Validation Failed" })),
+    ]);
+    await expect(
+      addLabels({ run: fake.run, ghToken: "tok" }, "acme", "widgets", 5, ["a"]),
+    ).rejects.toThrow();
+  });
+
+  test("masks a secret-looking value in the thrown error", async () => {
+    const secret = "github_pat_11ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(422, { message: secret })),
+    ]);
+    let caught: unknown;
+    try {
+      await addLabels({ run: fake.run, ghToken: "tok" }, "acme", "widgets", 5, [
+        "a",
+      ]);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught instanceof Error && !caught.message.includes(secret)).toBe(
+      true,
+    );
+  });
+
+  test("validates owner/repo before making any request", async () => {
+    const fake = createFakeCommandRunner([]);
+    await expect(
+      addLabels(
+        { run: fake.run, ghToken: "tok" },
+        "not a valid owner",
+        "widgets",
+        5,
+        ["a"],
+      ),
+    ).rejects.toThrow();
+    expect(fake.calls).toHaveLength(0);
   });
 });
 
@@ -928,6 +1021,28 @@ describe("listPrReviews", () => {
     expect(result.items).toHaveLength(1);
   });
 
+  test("parses author_association when present", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([
+        {
+          id: 1,
+          user: { login: "alice" },
+          state: "COMMENTED",
+          body: "looks fine",
+          author_association: "MEMBER",
+        },
+      ]),
+    ]);
+    const result = await listPrReviews(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+      VIEWER,
+    );
+    expect(result.items[0]?.authorAssociation).toBe("MEMBER");
+  });
+
   test("returns maxId across all reviews, including filtered-out ones", async () => {
     const fake = createFakeCommandRunner([
       ghApiOk([
@@ -974,6 +1089,29 @@ describe("listPrReviewComments", () => {
       VIEWER,
     );
     expect(result.items.map((c) => c.id)).toEqual([1]);
+  });
+
+  test("parses author_association when present", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([
+        {
+          id: 1,
+          user: { login: "alice" },
+          path: "a.ts",
+          line: 10,
+          body: "fix this",
+          author_association: "OWNER",
+        },
+      ]),
+    ]);
+    const result = await listPrReviewComments(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+      VIEWER,
+    );
+    expect(result.items[0]?.authorAssociation).toBe("OWNER");
   });
 });
 
@@ -1076,5 +1214,55 @@ describe("requestReviewers", () => {
       },
     );
     expect(result.outcome).toBe("failed");
+  });
+});
+
+describe("getBranchProtected", () => {
+  test("returns true for a protected branch", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ protected: true })]);
+    const protectedFlag = await getBranchProtected(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      "main",
+    );
+    expect(protectedFlag).toBe(true);
+  });
+
+  test("returns false for an unprotected branch (the endpoint returns 200, not 404)", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ protected: false })]);
+    const protectedFlag = await getBranchProtected(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      "main",
+    );
+    expect(protectedFlag).toBe(false);
+  });
+});
+
+describe("postIssueComment", () => {
+  test("always posts a new comment (non-idempotent, no marker added)", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ id: 55 })]);
+    const result = await postIssueComment(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      5,
+      "plain reply, no marker",
+    );
+    expect(result).toEqual({ id: 55 });
+  });
+
+  test("does not append a marker to the posted body", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ id: 55 })]);
+    await postIssueComment(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      5,
+      "plain reply, no marker",
+    );
+    expect(fake.calls[0]?.options?.stdin).not.toContain("factory:");
   });
 });

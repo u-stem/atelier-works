@@ -1,0 +1,130 @@
+summary: ''
+description: ''
+lock: '!inline f/factory/steps/pr_fix_finish.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties:
+    summary:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    comments:
+      type: array
+      description: ''
+      default: null
+      items:
+        type: resource
+        resourceType: collected_comment
+      originalType: resource[]
+    commit_message:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    fix_round:
+      type: number
+      description: ''
+      default: null
+    head_sha:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    max_comment_id:
+      type: number
+      description: ''
+      default: null
+    max_review_comment_id:
+      type: number
+      description: ''
+      default: null
+    max_review_id:
+      type: number
+      description: ''
+      default: null
+    outcome:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    owner:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    parent_work_item_id:
+      type: number
+      description: ''
+      default: null
+    pr_number:
+      type: number
+      description: ''
+      default: null
+    reason:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    replies:
+      type: array
+      description: ''
+      default: null
+      items:
+        type: resource
+        resourceType: fix_reply
+      originalType: resource[]
+    repo:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    repo_dir:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    reviews:
+      type: array
+      description: ''
+      default: null
+      items:
+        type: resource
+        resourceType: collected_review
+      originalType: resource[]
+    trigger_review_ids:
+      type: array
+      description: ''
+      default: null
+      items:
+        type: number
+      originalType: number[]
+    work_item_id:
+      type: number
+      description: ''
+      default: null
+    worktree_dir:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+  required:
+    - work_item_id
+    - outcome
+    - summary
+    - replies
+    - owner
+    - repo
+    - pr_number
+    - worktree_dir
+    - repo_dir
+    - head_sha
+    - fix_round
+    - reviews
+    - comments
+    - trigger_review_ids
+    - max_review_id
+    - max_comment_id
+    - max_review_comment_id

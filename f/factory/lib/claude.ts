@@ -14,8 +14,9 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { defaultSqlClient, type SqlClient, sumAgentCostSince } from "./db.ts";
 import { maskSecrets } from "./log.ts";
-import type { AgentRunRecord } from "./types.ts";
+import type { AgentRunRecord, FactoryConfig } from "./types.ts";
 import type { CommandRunner } from "./workspace.ts";
 
 // ---------------------------------------------------------------------------
@@ -211,6 +212,20 @@ export type RunClaudeOptions<T> = {
   readonly jsonSchema: Record<string, unknown>;
   readonly isStructuredOutput: (value: unknown) => value is T;
   readonly tools: readonly string[];
+  /**
+   * `--allowedTools`: a permission rule narrowing which of `tools` (the
+   * available set) claude may use without asking, e.g. `["Edit", "Write"]`
+   * for pr_fix. Must be a subset of `tools`; `"Bash"` is rejected outright
+   * (pr_fix runs without Bash by design). Omitted or empty: no
+   * `--allowedTools` flag is added.
+   *
+   * External contract, measured against claude 2.1.282: `--permission-mode
+   * dontAsk` denies Edit/Write automatically, and even `acceptEdits` denies
+   * writes under `--add-dir` paths. Only `dontAsk` + `--allowedTools Edit
+   * Write` (with `--restricted`, always on — see buildClaudeArgv) actually
+   * allowed edits/writes in that measurement.
+   */
+  readonly allowedTools?: readonly string[];
   readonly permissionMode: string;
   readonly settingSources: readonly string[];
   readonly maxTurns: number;
@@ -272,6 +287,29 @@ function buildClaudeEnv(opts: ClaudeEnvInputs): Record<string, string> {
   return env;
 }
 
+function buildAllowedToolsArgs<T>(opts: RunClaudeOptions<T>): string[] {
+  const allowedTools = opts.allowedTools ?? [];
+  if (allowedTools.length === 0) {
+    return [];
+  }
+  if (allowedTools.includes("Bash")) {
+    throw new Error(
+      'buildClaudeArgv: allowedTools must not include "Bash" (pr_fix runs without Bash by design)',
+    );
+  }
+  const toolsSet = new Set(opts.tools);
+  for (const tool of allowedTools) {
+    if (!toolsSet.has(tool)) {
+      throw new Error(
+        `buildClaudeArgv: allowedTools entry "${tool}" is not in opts.tools`,
+      );
+    }
+  }
+  // Each tool name is its own argv element (unlike --tools, which is one
+  // comma-joined argument) — matches claude's --allowedTools flag shape.
+  return ["--allowedTools", ...allowedTools];
+}
+
 function buildClaudeArgv<T>(opts: RunClaudeOptions<T>): string[] {
   return [
     "claude",
@@ -286,6 +324,7 @@ function buildClaudeArgv<T>(opts: RunClaudeOptions<T>): string[] {
     opts.permissionMode,
     "--tools",
     opts.tools.join(","),
+    ...buildAllowedToolsArgs(opts),
     "--setting-sources",
     opts.settingSources.join(","),
     "--strict-mcp-config",
@@ -351,21 +390,21 @@ async function attemptClaude<T>(
   };
 
   if (commandResult.timedOut) {
-    const detail = `claude -p timed out after ${opts.timeoutMs}ms`;
+    const detail = maskSecrets(`claude -p timed out after ${opts.timeoutMs}ms`);
     return {
       outcome: "failure",
       reason: "timeout",
-      agentRun: { ...baseAgentRun, error: maskSecrets(detail) },
+      agentRun: { ...baseAgentRun, error: detail },
       detail,
     };
   }
 
   if (commandResult.exitCode !== 0) {
-    const detail = commandResult.stderr.slice(-2000);
+    const detail = maskSecrets(commandResult.stderr.slice(-2000));
     return {
       outcome: "failure",
       reason: "non_zero_exit",
-      agentRun: { ...baseAgentRun, error: maskSecrets(detail) },
+      agentRun: { ...baseAgentRun, error: detail },
       detail,
     };
   }
@@ -374,11 +413,13 @@ async function attemptClaude<T>(
   try {
     parsed = parseClaudeJson(commandResult.stdout);
   } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
+    const detail = maskSecrets(
+      err instanceof Error ? err.message : String(err),
+    );
     return {
       outcome: "failure",
       reason: "invalid_json",
-      agentRun: { ...baseAgentRun, error: maskSecrets(detail) },
+      agentRun: { ...baseAgentRun, error: detail },
       detail,
     };
   }
@@ -395,21 +436,25 @@ async function attemptClaude<T>(
   };
 
   if (parsed.isError) {
-    const detail = `claude reported an error (subtype=${parsed.subtype}): ${parsed.resultText.slice(0, 500)}`;
+    const detail = maskSecrets(
+      `claude reported an error (subtype=${parsed.subtype}): ${parsed.resultText.slice(0, 500)}`,
+    );
     return {
       outcome: "failure",
       reason: "claude_error",
-      agentRun: { ...enrichedAgentRun, error: maskSecrets(detail) },
+      agentRun: { ...enrichedAgentRun, error: detail },
       detail,
     };
   }
 
   if (!opts.isStructuredOutput(parsed.structuredOutput)) {
-    const detail = `structured_output does not match the expected schema: ${JSON.stringify(parsed.structuredOutput).slice(0, 500)}`;
+    const detail = maskSecrets(
+      `structured_output does not match the expected schema: ${JSON.stringify(parsed.structuredOutput).slice(0, 500)}`,
+    );
     return {
       outcome: "failure",
       reason: "invalid_structured_output",
-      agentRun: { ...enrichedAgentRun, error: maskSecrets(detail) },
+      agentRun: { ...enrichedAgentRun, error: detail },
       detail,
     };
   }
@@ -448,4 +493,65 @@ export async function runClaude<T>(
   const retryPrompt = `${opts.prompt}\n\n${opts.retryNote ?? DEFAULT_RETRY_NOTE}`;
   const second = await attemptClaude(opts, retryPrompt);
   return { ...second, retried: true };
+}
+
+// ---------------------------------------------------------------------------
+// Daily budget guard (spec-cycle2.md §3 M6 "daily budget guard"). Promoted
+// from f/factory/steps/pipeline_generate.ts's local isBudgetExceeded /
+// jstMidnightTodayIso — pipeline_generate.ts's own migration to this export
+// is that implementer's to do.
+// ---------------------------------------------------------------------------
+
+const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
+
+/**
+ * Start of "today" in JST, as a real-UTC ISO instant. Mirrors
+ * lib/summary_support.ts's JST-midnight math but for "today so far" (an
+ * open-ended `since`) rather than a full closed [yesterday start, yesterday
+ * end) range, so it is kept separate from that module's
+ * `computeYesterdayRangeJst`.
+ */
+export function jstMidnightTodayIso(now: Date): string {
+  const jstShifted = new Date(now.getTime() + JST_OFFSET_MS);
+  const todayJstMidnightUtcMs = Date.UTC(
+    jstShifted.getUTCFullYear(),
+    jstShifted.getUTCMonth(),
+    jstShifted.getUTCDate(),
+  );
+  return new Date(todayJstMidnightUtcMs - JST_OFFSET_MS).toISOString();
+}
+
+/** True once spend-so-far reaches (not just exceeds) the configured daily
+ * cap. */
+export function isBudgetExceeded(
+  spentTodayUsd: number,
+  dailyBudgetUsd: number,
+): boolean {
+  return spentTodayUsd >= dailyBudgetUsd;
+}
+
+export type DailyBudgetStatus = {
+  readonly exceeded: boolean;
+  readonly spent_usd: number;
+  readonly limit_usd: number;
+};
+
+/**
+ * Daily agent-run cost guard: sums today's (JST) agent_runs cost via
+ * db.sumAgentCostSince and compares it to factory_config.daily_budget_usd.
+ * `sql` is an addition beyond the requested signature, for the same reason
+ * every other db-touching function in this codebase takes one — so tests
+ * never hit a real database; defaults to `db.ts`'s `defaultSqlClient`.
+ */
+export async function dailyBudgetStatus(
+  config: Pick<FactoryConfig, "daily_budget_usd">,
+  now: Date = new Date(),
+  sql: SqlClient = defaultSqlClient,
+): Promise<DailyBudgetStatus> {
+  const spentUsd = await sumAgentCostSince(jstMidnightTodayIso(now), sql);
+  return {
+    exceeded: isBudgetExceeded(spentUsd, config.daily_budget_usd),
+    spent_usd: spentUsd,
+    limit_usd: config.daily_budget_usd,
+  };
 }

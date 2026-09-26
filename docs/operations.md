@@ -13,19 +13,22 @@
 
 - Issue に `factory` ラベルを付けると拾われる(付与者は OWNER / MEMBER / COLLABORATOR のいずれかである必要がある)。
 - 手動フォームからも同じパイプラインに Issue を投入できる想定(`manual_intake` フロー)。
-- 承認は Inbox(App)で行う。要件定義ドラフトと図を確認し、Approve または理由付きで Reject する。
+- **承認は Inbox App(`factory_console`)からのみ行う** (実装予定 M8)。それまで暫定手順: Windmill UI で `f/factory/approval_decide` を開き、Issue コメント記載の `work_item_id` / `decision`(approve / reject) / `reason` / `note` を入力して Run する。承認者は実行ユーザー(`WM_USERNAME`)として記録される。Windmill の approval page URL から直接 resume しない(approval がスキップされて `needs_human` に落ちる)。
 - Reject すると要件定義が再生成され(`attempt` が加算される)、再度承認待ちになる。試行回数が上限を超えると `needs_human` になる。
-- 失敗した work item は Failures タブから再実行できる想定(`retry_work_item`)。
+- 失敗した work item は Failures タブから再実行できる想定(`retry_work_item`)。再実行時は `wip` ラベルと該当するトリガーラベル(`factory` / `factory:review` / `factory:fix`)を再付与して再起動する。
 - 通知の種類: `picked` / `awaiting_approval` / `approved` / `rejected` / `needs_human` / `failed` / `expired` / `cancelled` / `self_update`(ホスト操作が必要)/ `daily_summary`(前日のコスト・件数・失敗)。
 
 ## PR の使い方(pr_review / pr_fix)
 
-**現状の注意**: `pr_review` / `pr_fix` フローも未実装(次の開発サイクルで実装)。以下は実装後の想定運用。
+**現状の注意**: `pr_review` / `pr_fix` フローも実装済み(M6 工程)。以下は実装後の運用。
 
-- PR に `factory:review` ラベルを付けると、その PR のレビューが実行され、指摘が GitHub の COMMENT として投稿される。
-- PR に `factory:fix` ラベルを付ける、または PR に `/factory fix` とコメントすると、レビュー指摘・未解決コメントの修正が実行される。
+- **起動条件**: PR に `factory:review` ラベルを付ける、または PR のレビュー依頼・assignee がこのインスタンスのアカウント(未処理の commit がある場合)で起動。コメント投稿者・レビュー者の `author_association` が `allowed_labeler_associations` に含まれることを確認してから起動する。
+- **PR レビュー(`pr_review`)**: 指摘が GitHub の COMMENT として投稿される。完了状態は `reviewed`。
+- **PR 修正(`pr_fix`)**: PR に `factory:fix` ラベルを付ける、または PR に `/factory fix` とコメントすると実行される。レビュー指摘・未解決コメントの修正を行い、各コメントへ返信して再レビューを依頼(`rereview_requested`)。要件変更が必要な場合は修正を中断し、元の Issue を requirements_generating に attempt+1 で再起動(`requirements_gap` → 親 Issue)。
 - `factory:pr` ラベルは factory 自身が作成した PR の目印(将来の工程3で使用)。このリポジトリ自身の基盤整備 PR(foundation PR)には `factory:review` / `factory:fix` / `factory:pr` のいずれも付けない。
 - 対象は `factory_config` の `repo_allowlist`(未指定なら `owners` に含まれるリポジトリ全体)に含まれるリポジトリのみ。試験的に対象を絞りたい場合は `repo_allowlist` に対象リポジトリを明示する。
+- 終端状態: `reviewed` / `rereview_requested` / `blocked` / `needs_human`。終端状態になると `wip` ラベルとトリガーラベル(`factory:review` / `factory:fix`)は自動で外れる。
+- **pr_fix の再実行**: `retry_work_item` で pr_fix 行を再実行しても処理済み watermark(`last_review_id` / `last_comment_id`)が進んでいるため feedback が取り込まれず `needs_human` に落ちる。pr_fix をやり直すときは PR に新しい `/factory fix` コメント(または新しいレビュー)を投げて次の round を起動する。`retry_work_item` は Issue kind と、`pr_fix_prepare` のガードで止まった(`blocked`)PR 行の再実行に使う。
 
 ## 更新の反映
 

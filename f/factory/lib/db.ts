@@ -236,6 +236,22 @@ function toWorkItem(row: SqlRow): WorkItem {
     head_sha: parseNullableString(row.head_sha, "head_sha"),
     last_review_id: parseNullableId(row.last_review_id, "last_review_id"),
     last_comment_id: parseNullableId(row.last_comment_id, "last_comment_id"),
+    last_review_comment_id: parseNullableId(
+      row.last_review_comment_id,
+      "last_review_comment_id",
+    ),
+    observed_review_id: parseNullableId(
+      row.observed_review_id,
+      "observed_review_id",
+    ),
+    observed_comment_id: parseNullableId(
+      row.observed_comment_id,
+      "observed_comment_id",
+    ),
+    observed_review_comment_id: parseNullableId(
+      row.observed_review_comment_id,
+      "observed_review_comment_id",
+    ),
     fix_round: parseRequiredNumber(row.fix_round, "fix_round"),
     parent_work_item_id: parseNullableId(
       row.parent_work_item_id,
@@ -748,49 +764,131 @@ export async function setFixRound(
   `.execute();
 }
 
+/**
+ * Updates work_items.attempt. Promoted from an M6 code-review blocker:
+ * `attempt` was never written after insert, so approval_decide.ts always
+ * recorded a decision at attempt=1 while pipeline_decide.ts reads it back
+ * via `latestApproval(work_item_id, flow_input.attempt)` — on a second (or
+ * later) requirements-generation attempt this mismatch made a real human
+ * decision look like a timeout. pipeline_prepare.ts calls this at the start
+ * of the flow, persisting flow_input.attempt.
+ */
+export async function setAttempt(
+  id: number,
+  attempt: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<void> {
+  await sql`
+    UPDATE factory.work_items
+    SET attempt = ${attempt}, updated_at = now()
+    WHERE id = ${id}
+  `.execute();
+}
+
+/** Updates work_items.head_sha — used when pr_review_prepare's re-check
+ * finds the PR moved after the review worktree was already built (spec-
+ * cycle2.md §3 M6 pr_review_prepare "else update head_sha and continue"),
+ * and when pr_fix_finish records the sha it just pushed. Promoted from
+ * f/factory/steps/pr_workflow_support.ts's local version (same SQL). */
+export async function setHeadSha(
+  id: number,
+  headSha: string,
+  sql: SqlClient = defaultSqlClient,
+): Promise<void> {
+  await sql`
+    UPDATE factory.work_items
+    SET head_sha = ${headSha}, updated_at = now()
+    WHERE id = ${id}
+  `.execute();
+}
+
 export type WatermarkUpdate = {
   last_review_id?: number;
   last_comment_id?: number;
+  /** Processed watermark for inline PR review comments — separate id space
+   * from issue comments (see last_comment_id). Set by pr_fix_finish. */
+  last_review_comment_id?: number;
 };
 
 /**
- * Raises `last_review_id` and/or `last_comment_id` to at least the given
- * value (never lowers them — `GREATEST` guards against a stale/out-of-order
- * call), touching only the column(s) `update` provides. A no-op (no query)
- * when neither is given.
+ * Raises each of `last_review_id` / `last_comment_id` /
+ * `last_review_comment_id` to at least the given value (never lowers them —
+ * `GREATEST` guards against a stale/out-of-order call), touching only the
+ * column(s) `update` provides. Each provided column is updated with its own
+ * statement (independent, not required to be atomic with the others — every
+ * column's GREATEST is safe regardless of statement ordering). A no-op (no
+ * query at all) when none is given.
  */
 export async function bumpWatermarks(
   id: number,
   update: WatermarkUpdate,
   sql: SqlClient = defaultSqlClient,
 ): Promise<void> {
-  const hasReview = update.last_review_id !== undefined;
-  const hasComment = update.last_comment_id !== undefined;
-
-  if (hasReview && hasComment) {
-    await sql`
-      UPDATE factory.work_items
-      SET last_review_id = GREATEST(COALESCE(last_review_id, 0), ${update.last_review_id}),
-          last_comment_id = GREATEST(COALESCE(last_comment_id, 0), ${update.last_comment_id}),
-          updated_at = now()
-      WHERE id = ${id}
-    `.execute();
-    return;
-  }
-  if (hasReview) {
+  if (update.last_review_id !== undefined) {
     await sql`
       UPDATE factory.work_items
       SET last_review_id = GREATEST(COALESCE(last_review_id, 0), ${update.last_review_id}),
           updated_at = now()
       WHERE id = ${id}
     `.execute();
-    return;
   }
-  if (hasComment) {
+  if (update.last_comment_id !== undefined) {
     await sql`
       UPDATE factory.work_items
       SET last_comment_id = GREATEST(COALESCE(last_comment_id, 0), ${update.last_comment_id}),
           updated_at = now()
+      WHERE id = ${id}
+    `.execute();
+  }
+  if (update.last_review_comment_id !== undefined) {
+    await sql`
+      UPDATE factory.work_items
+      SET last_review_comment_id = GREATEST(COALESCE(last_review_comment_id, 0), ${update.last_review_comment_id}),
+          updated_at = now()
+      WHERE id = ${id}
+    `.execute();
+  }
+}
+
+export type ObservedWatermarkUpdate = {
+  observed_review_id?: number;
+  observed_comment_id?: number;
+  observed_review_comment_id?: number;
+};
+
+/**
+ * Records the poll-time snapshot watermarks poll_prs observed when it
+ * claimed a work item (see migrations/datatable/main/
+ * 20260925211232_pr_watermarks_and_inbox.up.sql's column comments):
+ * overwrites — not GREATEST, unlike bumpWatermarks — since a fresh claim's
+ * observation supersedes any earlier one rather than accumulating. Touches
+ * only the column(s) `update` provides, one statement per column (same
+ * independence rationale as bumpWatermarks). A no-op (no query) when none is
+ * given.
+ */
+export async function setObservedWatermarks(
+  id: number,
+  update: ObservedWatermarkUpdate,
+  sql: SqlClient = defaultSqlClient,
+): Promise<void> {
+  if (update.observed_review_id !== undefined) {
+    await sql`
+      UPDATE factory.work_items
+      SET observed_review_id = ${update.observed_review_id}, updated_at = now()
+      WHERE id = ${id}
+    `.execute();
+  }
+  if (update.observed_comment_id !== undefined) {
+    await sql`
+      UPDATE factory.work_items
+      SET observed_comment_id = ${update.observed_comment_id}, updated_at = now()
+      WHERE id = ${id}
+    `.execute();
+  }
+  if (update.observed_review_comment_id !== undefined) {
+    await sql`
+      UPDATE factory.work_items
+      SET observed_review_comment_id = ${update.observed_review_comment_id}, updated_at = now()
       WHERE id = ${id}
     `.execute();
   }
@@ -817,53 +915,42 @@ export async function nextCycleForIssue(
   return parseNumericLike(row.next_cycle, "next_cycle");
 }
 
-export type LatestPrWorkItem = {
-  readonly id: number;
-  readonly headSha: string | null;
-  readonly fixRound: number;
-  readonly lastCommentId: number;
+export type LatestPrWorkItemOpts = {
+  kind?: WorkItemKind;
 };
 
-/** Most recent (by created_at) work_items row for this PR — of any kind
- * when `kind` is omitted, or restricted to one kind — `null` if none
- * exists. Backs both the review path's "unprocessed head_sha" check and the
- * fix path's fix_round / last_comment_id carry-forward. */
+/** Most recent (by created_at, id as a same-second-insert tiebreak)
+ * work_items row for this PR — of any kind when `opts.kind` is omitted, or
+ * restricted to one kind — `null` if none exists. Returns the full row (not
+ * just id/head_sha/fix_round/last_comment_id) so a caller doesn't need a
+ * second `getWorkItem` lookup to read e.g. observed_comment_id/
+ * last_review_id. Backs both the review path's "unprocessed head_sha" check
+ * and the fix path's
+ * fix_round / last_comment_id carry-forward. */
 export async function latestPrWorkItem(
   owner: string,
   repo: string,
   prNumber: number,
-  kind?: WorkItemKind,
+  opts: LatestPrWorkItemOpts | undefined = undefined,
   sql: SqlClient = defaultSqlClient,
-): Promise<LatestPrWorkItem | null> {
+): Promise<WorkItem | null> {
+  const kind = opts?.kind;
   const rows =
     kind === undefined
       ? await sql`
-          SELECT id, head_sha, fix_round, last_comment_id
-          FROM factory.work_items
+          SELECT * FROM factory.work_items
           WHERE owner = ${owner} AND repo = ${repo} AND pr_number = ${prNumber}
-          ORDER BY created_at DESC
+          ORDER BY created_at DESC, id DESC
           LIMIT 1
         `.fetch()
       : await sql`
-          SELECT id, head_sha, fix_round, last_comment_id
-          FROM factory.work_items
+          SELECT * FROM factory.work_items
           WHERE owner = ${owner} AND repo = ${repo} AND pr_number = ${prNumber} AND kind = ${kind}
-          ORDER BY created_at DESC
+          ORDER BY created_at DESC, id DESC
           LIMIT 1
         `.fetch();
   const row = rows[0];
-  if (row === undefined) {
-    return null;
-  }
-  return {
-    id: parseId(row.id, "id"),
-    headSha: parseNullableString(row.head_sha, "head_sha"),
-    fixRound: parseRequiredNumber(row.fix_round, "fix_round"),
-    lastCommentId:
-      row.last_comment_id === null || row.last_comment_id === undefined
-        ? 0
-        : parseId(row.last_comment_id, "last_comment_id"),
-  };
+  return row === undefined ? null : toWorkItem(row);
 }
 
 /** Total factory.agent_runs cost since `sinceIso` (inclusive), for the
@@ -898,4 +985,64 @@ export async function latestDraft(
   `.fetch();
   const row = rows[0];
   return row === undefined ? null : toRequirementDraft(row);
+}
+
+// ---------------------------------------------------------------------------
+// M6 pipeline promotions (spec-cycle2.md M6). Promoted from local versions
+// in f/factory/steps/pipeline_request_approval.ts (setResumeUrls) and
+// f/factory/steps/pipeline_decide.ts (latestApproval, which already reused
+// toApproval). Call sites switch over on their owner's own schedule.
+// ---------------------------------------------------------------------------
+
+/** Persists the suspend step's resume/cancel URLs on the work item, right
+ * after `wmill.getResumeUrls()` (spec-cycle2.md §3 M6
+ * "request_approval は suspend...resume URL を work_items に保存"). */
+export async function setResumeUrls(
+  id: number,
+  resumeUrl: string,
+  cancelUrl: string,
+  sql: SqlClient = defaultSqlClient,
+): Promise<void> {
+  await sql`
+    UPDATE factory.work_items
+    SET resume_url = ${resumeUrl}, cancel_url = ${cancelUrl}, updated_at = now()
+    WHERE id = ${id}
+  `.execute();
+}
+
+/** Clears resume_url / cancel_url after a terminal transition, so a stale
+ * signed getResumeUrls() capability URL cannot be used to resume/cancel a
+ * work item that is already done, bypassing approval_decide.ts (M6 security
+ * review; see migrations/datatable/main/
+ * 20260925211232_pr_watermarks_and_inbox.up.sql's factory.v_inbox note for
+ * the related "don't expose these two columns" fix). */
+export async function clearResumeUrls(
+  id: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<void> {
+  await sql`
+    UPDATE factory.work_items
+    SET resume_url = NULL, cancel_url = NULL, updated_at = now()
+    WHERE id = ${id}
+  `.execute();
+}
+
+/** Most recent (by decided_at) factory.approvals row for
+ * (work_item_id, attempt), or `null` if no human has decided yet — how
+ * pipeline_decide.ts tells "human decided" from "suspend timed out with no
+ * decision" (Windmill CE does not propagate the resume payload to the
+ * flow's next step; see that script's module doc). */
+export async function latestApproval(
+  workItemId: number,
+  attempt: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<Approval | null> {
+  const rows = await sql`
+    SELECT * FROM factory.approvals
+    WHERE work_item_id = ${workItemId} AND attempt = ${attempt}
+    ORDER BY decided_at DESC
+    LIMIT 1
+  `.fetch();
+  const row = rows[0];
+  return row === undefined ? null : toApproval(row);
 }

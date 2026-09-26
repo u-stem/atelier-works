@@ -1,0 +1,130 @@
+summary: Review a PR the factory was asked to review
+description: "pr_review.flow (spec-cycle2.md §3 M6, §7): prepares a detached
+  worktree at the PR's head commit, runs headless Claude (factory-review skill,
+  read-only tools) to produce a review, and posts it as a GitHub PR review
+  (event COMMENT) with inline comments, recording the outcome and notifying
+  Discord."
+value:
+  modules:
+    - id: pr_review_prepare
+      summary: Load the work item and build a detached review worktree
+      value:
+        type: script
+        input_transforms:
+          work_item_id:
+            type: javascript
+            expr: flow_input.work_item_id
+        path: f/factory/steps/pr_review_prepare
+    - id: pr_review_generate
+      summary: Run headless Claude to produce the review
+      value:
+        type: script
+        input_transforms:
+          attempt:
+            type: javascript
+            expr: results.pr_review_prepare.attempt
+          factory_clone_dir:
+            type: javascript
+            expr: results.pr_review_prepare.factory_clone_dir
+          owner:
+            type: javascript
+            expr: results.pr_review_prepare.owner
+          parent_work_item_id:
+            type: javascript
+            expr: results.pr_review_prepare.parent_work_item_id
+          pr_number:
+            type: javascript
+            expr: results.pr_review_prepare.pr_number
+          repo:
+            type: javascript
+            expr: results.pr_review_prepare.repo
+          review_sha:
+            type: javascript
+            expr: results.pr_review_prepare.review_sha
+          skip:
+            type: javascript
+            expr: results.pr_review_prepare.skip
+          work_item_id:
+            type: javascript
+            expr: flow_input.work_item_id
+          worktree_dir:
+            type: javascript
+            expr: results.pr_review_prepare.worktree_dir
+        path: f/factory/steps/pr_review_generate
+      skip_if:
+        expr: results.pr_review_prepare.skip === true
+      retry:
+        exponential:
+          attempts: 2
+          seconds: 30
+          multiplier: 4
+    - id: pr_review_post
+      summary: Post the review to GitHub, record it, and clean up the worktree
+      value:
+        type: script
+        input_transforms:
+          summary:
+            type: javascript
+            expr: results.pr_review_generate?.summary ?? ""
+          findings:
+            type: javascript
+            expr: results.pr_review_generate?.findings ?? []
+          owner:
+            type: javascript
+            expr: results.pr_review_prepare.owner
+          pr_files:
+            type: javascript
+            expr: results.pr_review_generate?.pr_files ?? []
+          pr_number:
+            type: javascript
+            expr: results.pr_review_prepare.pr_number
+          repo:
+            type: javascript
+            expr: results.pr_review_prepare.repo
+          repo_dir:
+            type: javascript
+            expr: results.pr_review_prepare.repo_dir
+          review_sha:
+            type: javascript
+            expr: results.pr_review_prepare.review_sha
+          skip:
+            type: javascript
+            expr: results.pr_review_prepare.skip
+          verdict:
+            type: javascript
+            expr: results.pr_review_generate?.verdict ?? null
+          work_item_id:
+            type: javascript
+            expr: flow_input.work_item_id
+          worktree_dir:
+            type: javascript
+            expr: results.pr_review_prepare.worktree_dir
+        path: f/factory/steps/pr_review_post
+      skip_if:
+        expr: results.pr_review_prepare.skip === true
+  failure_module:
+    id: failure
+    value:
+      type: script
+      input_transforms:
+        error:
+          type: javascript
+          expr: error
+        path:
+          type: static
+          value: f/factory/pr_review
+        work_item_id:
+          type: javascript
+          expr: flow_input.work_item_id
+      path: f/factory/on_error_flow
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  order:
+    - work_item_id
+  properties:
+    work_item_id:
+      type: integer
+      description: factory.work_items.id of the pr_review-kind work item to process.
+  required:
+    - work_item_id

@@ -22,11 +22,12 @@ description: PR のレビュー指摘やコメントを修正するときに使�
 
 - 渡された各レビューコメント・未解決コメントに対して、`replies` に1件ずつ応答を作る。
 - 応答は「対応した」か「対応しない」かを明確にし、対応した場合は何をどう直したか、対応しない場合はその理由を書く。**無視して応答を作らないコメントがあってはいけない**。
+- `reply` 各要素の `review_comment_id` は呼び出し側から渡されたコメント ID をそのまま使う。
 
 ## 要件・設計を書き換えない
 
 - 修正はレビュー指摘・コメントの範囲に留め、承認済みの要件や設計を自分の判断で書き換えない。
-- 指摘に対応するために要件や設計の変更が必要だと判断した場合は、修正を強行せず **`outcome: "requirements_gap"`** で中断する。`gap_report` に「どの要件・指摘が対応できないか」「なぜ設計変更が必要か」「要件側でどう変更すべきかの提案」を書く。
+- 指摘に対応するために要件や設計の変更が必要だと判断した場合は、修正を強行せず **`outcome: "requirements_gap"`** で中断する。`blocked_reason` に「どの要件・指摘が対応できないか」「なぜ設計変更が必要か」「要件側でどう変更すべきかの提案」を書く。
 
 ## 使えるツール
 
@@ -52,7 +53,8 @@ description: PR のレビュー指摘やコメントを修正するときに使�
 
 ## コミットメッセージ
 
-- Conventional Commits(`<type>: <説明>`)に従う。`type` は対象リポジトリの規約があればそれに従い、無ければ `fix` / `test` / `refactor` などレビュー指摘の内容に合わせたものを使う。
+- 修正内容の要約を `summary` フィールドに記述する。コミットメッセージの生成と commit は flow 側が行う。
+- コミットメッセージ形式は flow が Conventional Commits(`<type>: <説明>`)に従う設計になっているため、`summary` には説明部分のみを記述する。
 
 ## 出力契約(JSON schema)
 
@@ -61,28 +63,28 @@ description: PR のレビュー指摘やコメントを修正するときに使�
   "type": "object",
   "properties": {
     "outcome": { "type": "string", "enum": ["done", "requirements_gap", "blocked"] },
+    "summary": { "type": "string" },
     "replies": {
       "type": "array",
       "items": {
         "type": "object",
         "properties": {
-          "comment_id": { "type": "string" },
+          "review_comment_id": { "type": "integer" },
           "body": { "type": "string" }
         },
-        "required": ["comment_id", "body"]
+        "required": ["review_comment_id", "body"]
       }
     },
-    "commit_message": { "type": "string" },
-    "gap_report": { "type": "string" }
+    "blocked_reason": { "type": ["string", "null"] }
   },
-  "required": ["outcome", "replies"]
+  "required": ["outcome", "summary", "replies", "blocked_reason"]
 }
 ```
 
 - `outcome`:
   - `"done"`: すべてのコメントに対応(または対応しない理由を明示)し、修正をコミットできる状態にした。
-  - `"requirements_gap"`: 要件・設計の変更が必要で、自分では修正を進められない。`gap_report` を必ず埋める。
-  - `"blocked"`: 「変更してはいけないファイル」に触れる必要がある、または安全に実行できるチェック手段がない等の理由で修正を中断した。理由を `gap_report` に書く。
-- `replies`: 各コメントへの応答。`comment_id` は呼び出し側から渡されたコメント識別子をそのまま使う。
-- `commit_message`: `outcome: "done"` のときに使うコミットメッセージ(Conventional Commits 形式)。他の `outcome` では省略してよい。
-- `gap_report`: `requirements_gap` または `blocked` のときに必須。それ以外では省略してよい。
+  - `"requirements_gap"`: 要件・設計の変更が必要で、自分では修正を進められない。`blocked_reason` を必ず埋める。
+  - `"blocked"`: 「変更してはいけないファイル」に触れる必要がある、または安全に実行できるチェック手段がない等の理由で修正を中断した。理由を `blocked_reason` に書く。
+- `summary`: 修正内容の要約。flow が Conventional Commits のコミットメッセージ(`<type>: <summary>`)を生成する際に使われる。
+- `replies`: 各コメントへの応答。`review_comment_id` は呼び出し側から渡されたコメント ID をそのまま使う。
+- `blocked_reason`: `outcome: "done"` のとき `null`、`requirements_gap` または `blocked` のとき必須。「どの要件・指摘が対応できないか」「なぜ設計変更が必要か、または修正を中断したか」を記述する。

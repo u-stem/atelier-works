@@ -27,11 +27,17 @@
 `pr_fix` は Claude に書き込みツール(`Edit`/`Write`)を与える最初のフローであり、次のガードを設ける。
 
 - Claude のツールは `Read,Glob,Grep,Edit,Write` のみ。**`Bash` は与えない**。
-- 対象リポジトリの標準チェック(lint / typecheck / test 相当)は Claude 自身に実行させない。フロー側のステップが `factory_config.allowed_check_commands[]`(例: `["mise run check"]`)を実行する。実行環境はシークレットを含まない(`env -i PATH=... HOME=...` 相当)、timeout 付き。結果を2回目の Claude 実行(修正)への入力として渡す。
+- headless Claude の起動オプション:
+  - `--permission-mode dontAsk`: 確認なしで実行(Edit/Write 拒否のデフォルト動作を overwrite するため)。
+  - `--allowedTools Edit Write`: Read/Glob/Grep に加えて Edit / Write のみを明示許可、Bash は許可しない。
+  - `--restricted`: Bash 等のコード実行ツールと WebFetch を外し、file ツールを作業ディレクトリ(`--add-dir` 含む)に閉じる。ネットワークは遮断しない。
+- 対象リポジトリの標準チェック(lint / typecheck / test 相当)は Claude 自身に実行させない。フロー側のステップが `factory_config.allowed_check_commands[]`(例: `["mise run check"]`)を実行する。対象 repo のコードを worker コンテナ内で root として実行する。env の最小化は隔離ではなく、同一 uid のため `/proc` 経由でジョブトークンに到達しうる。サンドボックス(別コンテナ / 非 root / network none)の実装まで既定 `[]` を維持し、非空にすると実行ごとに notice `unsandboxed_check_commands` が記録される。結果を2回目の Claude 実行(修正)への入力として渡す。
 - 対象リポジトリが定義するコマンドの中身(`allowed_check_commands` が指す先、対象リポジトリの `mise.toml` / `package.json` の scripts 等)は **untrusted** として扱う。worker 内の mise は対象リポジトリの `mise.toml` を trust しない(`mise --yes trust` を行わない)。`mise.toml` に依存しないコマンドか `MISE_TRUSTED_CONFIG_PATHS` を使わずに実行できないコマンドは、実行せず `blocked` として報告する。
 - 修正の差分に次のいずれかが含まれる場合は **`blocked`** として中断する: `.claude/**`、`.agents/**`、`mise.toml`、`mise.*.toml`、`lefthook.yml`、`.github/workflows/**`、`package.json` の `scripts` 変更、新規の `*.sh` ファイル追加。
+- 変更ファイル数・差分行数上限: diff に含まれるファイル数が `factory_config.max_fix_changed_files` を超える、またはその diff の追加・削除行数合計が `factory_config.max_fix_diff_lines` を超える場合は、安全上の理由で `blocked` として中断する(マージコンフリクトやファイル削除による大規模変更を検出するため)。
 - push 前に次をすべて確認し、いずれかが成り立たなければ `blocked` として中断する: `head.repo == base.repo`(fork からの PR には push しない)、PR が draft でない、base ブランチが保護ブランチでない、fetch し直した `head_sha` が起動時に確認した値と一致する(その間に人が push していない)。
 - E2E の検証は本番の Issue やブランチではなく、捨てブランチ・捨て PR で行う。
+- symlink は `core.symlinks=false` を main clone の config に永続化し、pr_fix の検証で symlink の新規作成・変更・typechange は `blocked` として扱う。
 
 ## GitHub PAT
 
@@ -110,7 +116,14 @@ read -rs 'v?GITHUB_TOKEN: ' && mise set -E local GITHUB_TOKEN="$v"; unset v
 - 要件定義の図は `viewer.diagrams.net` の URL(`#` 以降に圧縮した XML を埋め込む形式)で共有する。URL のフラグメント部分(`#` 以降)はブラウザから diagrams.net のサーバーには送信されない。
 - ただし、生成された URL 自体を Issue コメントや Discord 通知として共有するため、**その URL を受け取った人は誰でも図の内容を閲覧できる**。対象リポジトリが public であっても、図の内容が意図せず外部に見えてよいかを踏まえて運用する。
 
+## 承認と権限
+
+- **承認権限**: `f/factory/**` スクリプトの実行権限を持つアカウント。Windmill の default ワーカーグループでは workspace admin のみが対象。
+- **承認方法**: Windmill の approval page URL(署名付き capability URL)は、PR コメントや Discord 通知に載せない。承認は必ず Inbox App(`approval_decide`)を経由する。approval page URL を直接 resume すると approval がスキップされ、承認状態が記録されず `needs_human` に落ちる動作になる。
+- **approver の記録**: `approvals` テーブルの `approver` カラムには `WM_USERNAME`(Windmill のログインユーザー名)から記録する。
+
 ## public リポジトリでのラベル付与制限
 
 - `factory` ラベルの付与者は OWNER / MEMBER / COLLABORATOR のいずれかである場合のみ Issue を拾う。`poll_issues` は各 Issue のタイムラインから最後にラベルを付けた人の `author_association` を確認し、許可された関係でなければ拾わずに notice を出す。これにより、public リポジトリで第三者が任意にラベルを付けてパイプラインを起動させることを防ぐ。
 - GitHub 側でもラベルの付与には triage 以上の権限が必要なため、`labeled` イベントの actor はそもそも書き込み権限を持つ人に限られる。`author_association` の確認は、この GitHub 側の制約に加えた補助的な二重チェックという位置づけ。
+- PR のレビュー・コメント投稿者についても同様に制限する。`allowed_labeler_associations`(既定値: `["OWNER", "MEMBER", "COLLABORATOR"]`)に該当しない `author_association` からのレビューコメント・新規コメントは `pr_review` / `pr_fix` フローの起動対象から除外する。

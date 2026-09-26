@@ -1,0 +1,19 @@
+summary: ''
+description: ''
+lock: '!inline f/factory/steps/pipeline_decide.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties:
+    attempt:
+      type: number
+      description: ''
+      default: null
+    work_item_id:
+      type: number
+      description: ''
+      default: null
+  required:
+    - work_item_id
+    - attempt

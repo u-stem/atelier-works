@@ -275,11 +275,22 @@ export type PromptComment = {
   author: string;
 };
 
+/** One `factory_config.allowed_check_commands` entry's failed run, as
+ * captured by pr_workflow_support.ts's `runAllowedCheckCommands`.
+ * `outputTail` is target-repo command output (untrusted); `command` is
+ * operator-authored (factory_config), so it is safe to name outside a
+ * fence. */
+export type CheckFailure = {
+  command: string;
+  outputTail: string;
+};
+
 export type FixPromptInput = {
   pr: PromptPr;
   reviews: PromptReview[];
   comments: PromptComment[];
   requirements: RequirementDraft | null;
+  checkFailures: readonly CheckFailure[];
 };
 
 export function fixPrompt(
@@ -312,7 +323,7 @@ export function fixPrompt(
     sections.push(
       dataFence(
         nonce,
-        `human review ${String(index + 1)} by ${review.author}`,
+        `human review ${String(index + 1)} by ${JSON.stringify(review.author)}`,
         review.body,
       ),
     );
@@ -323,9 +334,21 @@ export function fixPrompt(
       comment.line === null ? "" : ` at line ${String(comment.line)}`;
     sections.push(
       "",
-      `Unresolved comment #${String(comment.id)} by ${comment.author}${locationSuffix}:`,
+      `Unresolved comment #${String(comment.id)} by ${JSON.stringify(comment.author)}${locationSuffix}:`,
       dataFence(nonce, `comment ${String(comment.id)} path`, comment.path),
       dataFence(nonce, `comment ${String(comment.id)} body`, comment.body),
+    );
+  });
+
+  input.checkFailures.forEach((failure, index) => {
+    sections.push(
+      "",
+      `Check command failed: ${failure.command}`,
+      dataFence(
+        nonce,
+        `check failure ${String(index + 1)} output`,
+        failure.outputTail,
+      ),
     );
   });
 
