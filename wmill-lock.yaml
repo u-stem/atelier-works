@@ -16,7 +16,7 @@ locks:
   f/factory/lib/db: f4dc5c9ef0823b0c5357894a0b463ac692a040dd37bd0e3b1fc0d763ca1070bd
   f/factory/lib/discord: 4733d2e32b87f7e1696fe0f033a3d741fd26f061c7b3d390ee3fa35d9eb063e7
   f/factory/lib/drawio: 1b6ff4f665cbb8fcabcb0f89384fd5deac473ea79078f3e95ab64ea8fc8fdf04
-  f/factory/lib/github: 6dba8e0f108ae778d2f61ff601e0a5adca2c3d5fe752a146169b4480b0f57e0d
+  f/factory/lib/github: 13cf1c62a0eba5a28b1568ff2ad070e90c166c1557f17e0e6829ea3ac49b0c56
   f/factory/lib/log: d02443bbbdd8d24f1b90939e569fb010f50784f39f5851bfe1bb4db3bc2b318d
   f/factory/lib/poll_support: 1e53fef3ed4f7c81df8583d0cd14d93fbb6fce9e7d2fdd0b487c40398c8251bd
   f/factory/lib/prompts: 654798df466cfc36b17efa63f61d01938e575c906c66a318e000eb57cf39da31

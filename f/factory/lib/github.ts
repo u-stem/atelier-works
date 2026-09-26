@@ -1028,7 +1028,7 @@ export async function findIssueByMarker(
   markerText: string,
 ): Promise<MarkerSearchResult | null> {
   validateOwnerRepo(owner, repo);
-  const query = `repo:${owner}/${repo} "${markerText}" in:body`;
+  const query = `is:issue repo:${owner}/${repo} "${markerText}" in:body`;
   const items = await callGhApiAllSearchItems(
     client,
     `search/issues?q=${encodeURIComponent(query)}&per_page=100`,

@@ -897,7 +897,7 @@ describe("findIssueByMarker", () => {
       "factory:issue_proposal:3",
     );
     const decoded = decodeURIComponent(fake.calls[0]?.argv.join(" ") ?? "");
-    expect(decoded).toContain("repo:acme/widgets");
+    expect(decoded).toContain("is:issue repo:acme/widgets");
   });
 });
 
