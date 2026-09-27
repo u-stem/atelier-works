@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { inflateRawSync } from "node:zlib";
-import { toViewerUrl, validateDrawioXml } from "../../f/factory/lib/drawio.ts";
+import { validateDrawioXml } from "../../f/factory/lib/drawio.ts";
 
 const MINIMAL_VALID_XML = [
   '<mxfile host="app.diagrams.net">',
@@ -64,47 +63,5 @@ describe("validateDrawioXml", () => {
     ].join("\n");
     const result = validateDrawioXml(xml);
     expect(result.valid).toBe(false);
-  });
-});
-
-describe("toViewerUrl", () => {
-  test("emits a standard base64 fragment that the viewer can pass to atob directly", () => {
-    const url = toViewerUrl(MINIMAL_VALID_XML);
-    const fragment = (url ?? "").split("#R")[1] ?? "";
-    // viewer.diagrams.net decodes `#R<data>` with atob(): URL-safe base64
-    // (`-`, `_`, stripped padding) makes it fail with "not correctly encoded".
-    expect(() => atob(fragment)).not.toThrow();
-  });
-
-  test("round-trips through inflateRawSync back to the original XML", () => {
-    const url = toViewerUrl(MINIMAL_VALID_XML);
-    const fragment = (url ?? "").split("#R")[1] ?? "";
-    const base64 = fragment.replace(/-/g, "+").replace(/_/g, "/");
-    const inflated = inflateRawSync(Buffer.from(base64, "base64")).toString(
-      "utf8",
-    );
-    expect(decodeURIComponent(inflated)).toBe(MINIMAL_VALID_XML);
-  });
-
-  test("returns a URL containing the #R fragment marker for a small diagram", () => {
-    const url = toViewerUrl(MINIMAL_VALID_XML);
-    expect(url).toContain("#R");
-  });
-
-  test("returns null when the encoded fragment exceeds 8KB", () => {
-    const alphabet =
-      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-    const randomBytes = new Uint8Array(11 * 1024);
-    crypto.getRandomValues(randomBytes);
-    let blob = "";
-    for (const byte of randomBytes) {
-      blob += alphabet[byte % alphabet.length];
-    }
-    const bigXml = MINIMAL_VALID_XML.replace(
-      'value="start"',
-      `value="${blob}"`,
-    );
-    const url = toViewerUrl(bigXml);
-    expect(url).toBeNull();
   });
 });

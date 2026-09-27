@@ -13,7 +13,8 @@
 
 - Issueに`factory`ラベルを付けると拾われる(付与者はOWNER / MEMBER / COLLABORATORのいずれかである必要がある)。
 - 手動フォームからも同じパイプラインにIssueを投入できる想定(`manual_intake`フロー)。
-- **承認はFactory Console App(`f/factory/factory_console`)のInboxタブから行う**。Discord通知に記載されたURL、またはConsoleを直接開き、対象の作業項目を選択して要件定義・図(draw.ioビューアー)・未確定事項を確認したうえで承認 / 却下する(却下時は理由の入力が必須、補足は任意)。承認者は実行ユーザー(`WM_USERNAME`)として記録される。Appを使わない代替手順として、Windmill UIで`f/factory/approval_decide`を直接開き、`approval_request_id`(ConsoleのInboxに記載)/ `decision`(approve / reject) / `reason` / `note`を入力してRunすることもできる(`options`は要件定義承認では空のままでよい)。
+- **承認はFactory Console App(`f/factory/factory_console`)のInboxタブから行う**。Discord通知に記載されたURL、またはConsoleを直接開き、対象の作業項目を選択して要件定義書(見出し・表・図を含むConfluenceの文書ページに近い見た目で表示され、draw.io図はページ内にそのまま描画される)・未確定事項を確認したうえで承認 / 却下する(却下時は理由の入力が必須、補足は任意)。承認者は実行ユーザー(`WM_USERNAME`)として記録される。Appを使わない代替手順として、Windmill UIで`f/factory/approval_decide`を直接開き、`approval_request_id`(ConsoleのInboxに記載)/ `decision`(approve / reject) / `reason` / `note`を入力してRunすることもできる(`options`は要件定義承認では空のままでよい)。
+- 要件定義書はConsoleの**要件定義タブ**からも一覧・閲覧できる(承認待ちに限らず、過去に生成されたすべてのattemptを含む)。Issueコメントの承認済みリンクやDiscord通知のリンクは`#requirements/<work_item_id>`という形式のフラグメントを末尾に付けており、これを開くと要件定義タブが自動的にその作業項目を選択する。ただしConsoleはWindmillの管理画面内で動くraw app(サンドボックスされた別オリジン)であるため、埋め込み元のURLを読み取れずこのジャンプが効かない場合がある(実行環境依存、未検証)。その場合はリンク本文に併記されている`work_item_id`を要件定義タブの一覧上部の絞り込み欄に入力して探す(一覧の各行にも`work_item_id`を表示している)か、ブラウザのアドレスバーで開いたConsoleのタブに直接`#requirements/<work_item_id>`を追記する。
 - Issueに自動投稿されるコメントは、要件定義が承認されたときのConsoleリンク1件のみ。着手・承認待ち・却下・期限切れ・失敗・要人手といった運用上の状態はIssueには書かず、Discord通知とConsoleで確認する(GitHubには成果物のみを残す方針、2026-09-27)。
 - Rejectすると要件定義が再生成され(`attempt`が加算される)、再度承認待ちになる。試行回数が上限を超えると`needs_human`になる。
 - 失敗したwork itemはFactory Console AppのFailuresタブから再実行できる(`retry_work_item`)。PR kind(`pr_review` / `pr_fix`)は再実行時に`wip`ラベルと該当するトリガーラベル(`factory:review` / `factory:fix`)を再付与して再起動する。Issue kindはラベルの付け外しをせず、`f/factory/pipeline`を直接再起動する(`factory`ラベルはclaim時に一度だけ消費され、再付与されない)。

@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { Markdown } from "../components/Markdown";
+import { RequirementsDocumentLoader } from "../components/RequirementsDocument";
 import { Skeleton } from "../components/Skeleton";
 import { decideApproval, describeError } from "../lib/api";
 import { type InboxRow, toInboxRow } from "../lib/types";
@@ -157,6 +158,11 @@ export function InboxTab(): React.ReactElement {
                       </>
                     )}
                   </div>
+                  {row.kind === "requirements" &&
+                    row.summary !== null &&
+                    row.summary.length > 0 && (
+                      <div className="inbox-item-summary">{row.summary}</div>
+                    )}
                   <div className="inbox-item-meta">
                     依頼: {formatDateTime(row.requested_at)}
                   </div>
@@ -178,54 +184,10 @@ export function InboxTab(): React.ReactElement {
           </div>
         ) : selected.kind === "requirements" ? (
           <>
-            <h2>{selected.title ?? "(タイトルなし)"}</h2>
-            <p className="inbox-item-meta">
-              {selected.owner}/{selected.repo}
-              {selected.issue_url !== null && (
-                <>
-                  {" "}
-                  ・{" "}
-                  <a href={selected.issue_url} target="_blank" rel="noreferrer">
-                    Issue を開く
-                  </a>
-                </>
-              )}{" "}
-              ・ work_item_id {selected.work_item_id} ・ attempt{" "}
-              {selected.draft_attempt}
-            </p>
-            <h3>要約</h3>
-            <p>{selected.summary}</p>
-            <h3>要件定義</h3>
-            <Markdown text={selected.markdown} />
-            {selected.diagrams.length > 0 && (
-              <>
-                <h3>図</h3>
-                {selected.diagrams.map((diagram) => (
-                  <div key={diagram.name} className="diagram-viewer">
-                    <p>{diagram.name}</p>
-                    {diagram.viewer_url !== null ? (
-                      <iframe
-                        title={diagram.name}
-                        src={diagram.viewer_url}
-                        className="diagram-iframe"
-                      />
-                    ) : (
-                      <p>図を表示できませんでした。</p>
-                    )}
-                  </div>
-                ))}
-              </>
-            )}
-            {selected.open_questions.length > 0 && (
-              <>
-                <h3>未確定事項</h3>
-                <ul>
-                  {selected.open_questions.map((question) => (
-                    <li key={question}>{question}</li>
-                  ))}
-                </ul>
-              </>
-            )}
+            <RequirementsDocumentLoader
+              workItemId={selected.work_item_id}
+              attempt={selected.draft_attempt}
+            />
             <h3>承認 / 却下</h3>
             <label className="field">
               却下理由(却下する場合は必須)
@@ -292,7 +254,7 @@ export function InboxTab(): React.ReactElement {
               {" ・ "}approval_request_id {selected.approval_request_id}
             </p>
             <h3>提案内容</h3>
-            <Markdown text={selected.proposal_body} />
+            <Markdown markdown={selected.proposal_body} />
             <h3>承認 / 却下</h3>
             {incomplete ? (
               <p className="empty-state-hint">

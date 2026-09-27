@@ -2,10 +2,11 @@ import { describe, expect, test } from "bun:test";
 import type { SqlClient, SqlRow } from "../../f/factory/lib/db.ts";
 import {
   main,
+  readDocFromDisk,
   resolveIntArg,
+  resolvePositiveIntArg,
   runConsoleQuery,
   sinceIso,
-  toDiagramLink,
 } from "../../f/factory/steps/console_query.ts";
 
 type FakeCall = { text: string; values: unknown[] };
@@ -56,15 +57,101 @@ describe("sinceIso", () => {
   });
 });
 
-describe("toDiagramLink", () => {
-  test("passes the diagram's name through", () => {
-    const link = toDiagramLink({ name: "flow", file: "flow.drawio" });
-    expect(link.name).toBe("flow");
+describe("resolvePositiveIntArg", () => {
+  test("returns the value when a positive integer", () => {
+    expect(resolvePositiveIntArg(7)).toBe(7);
   });
 
-  test("always returns a null viewer_url (inline rendering not wired up yet)", () => {
-    const link = toDiagramLink({ name: "flow", file: "flow.drawio" });
-    expect(link.viewer_url).toBeNull();
+  test("returns null when undefined", () => {
+    expect(resolvePositiveIntArg(undefined)).toBeNull();
+  });
+
+  test("returns null for a non-positive value", () => {
+    expect(resolvePositiveIntArg(0)).toBeNull();
+  });
+
+  test("returns null for a non-integer value", () => {
+    expect(resolvePositiveIntArg(1.5)).toBeNull();
+  });
+});
+
+describe("readDocFromDisk", () => {
+  const DOC_DIR =
+    "/var/lib/factory/requirements/octo-owner/atelier-works/issue-42/wi-1/attempt-1";
+
+  test("reads requirements.md and every diagram file", async () => {
+    const reads = new Map([
+      [`${DOC_DIR}/requirements.md`, "# 要件"],
+      [`${DOC_DIR}/flow.drawio`, "<mxfile></mxfile>"],
+    ]);
+    const readFile = (path: string) => {
+      const content = reads.get(path);
+      if (content === undefined) {
+        return Promise.reject(new Error(`not found: ${path}`));
+      }
+      return Promise.resolve(content);
+    };
+
+    const result = await readDocFromDisk(
+      DOC_DIR,
+      [{ name: "flow", file: "flow.drawio" }],
+      readFile,
+    );
+
+    expect(result).toEqual({
+      markdown: "# 要件",
+      diagrams: [{ name: "flow", xml: "<mxfile></mxfile>" }],
+    });
+  });
+
+  test("returns null when doc_dir is outside REQUIREMENTS_BASE_DIR", async () => {
+    const readFile = () => Promise.resolve("# 要件");
+
+    const result = await readDocFromDisk("/etc/passwd", [], readFile);
+
+    expect(result).toBeNull();
+  });
+
+  test("returns null when requirements.md can't be read", async () => {
+    const readFile = () => Promise.reject(new Error("ENOENT"));
+
+    const result = await readDocFromDisk(DOC_DIR, [], readFile);
+
+    expect(result).toBeNull();
+  });
+
+  test("skips a diagram whose file name doesn't match the full <name>.drawio contract (path traversal guard) without reading it", async () => {
+    const readCalls: string[] = [];
+    const readFile = (path: string) => {
+      readCalls.push(path);
+      return path === `${DOC_DIR}/requirements.md`
+        ? Promise.resolve("# 要件")
+        : Promise.reject(new Error(`not found: ${path}`));
+    };
+
+    const result = await readDocFromDisk(
+      DOC_DIR,
+      [{ name: "flow", file: "../../etc/passwd.drawio" }],
+      readFile,
+    );
+
+    expect(result).toEqual({ markdown: "# 要件", diagrams: [] });
+    expect(readCalls).toEqual([`${DOC_DIR}/requirements.md`]);
+  });
+
+  test("drops a diagram that fails to read instead of failing the whole document", async () => {
+    const readFile = (path: string) =>
+      path.endsWith("requirements.md")
+        ? Promise.resolve("# 要件")
+        : Promise.reject(new Error("ENOENT"));
+
+    const result = await readDocFromDisk(
+      DOC_DIR,
+      [{ name: "flow", file: "flow.drawio" }],
+      readFile,
+    );
+
+    expect(result).toEqual({ markdown: "# 要件", diagrams: [] });
   });
 });
 
@@ -84,9 +171,6 @@ describe("runConsoleQuery", () => {
       issue_url: "https://github.com/octo-owner/atelier-works/issues/42",
       draft_attempt: 1,
       summary: "要約",
-      markdown: "# 要件",
-      diagrams: JSON.stringify([{ name: "flow", file: "flow.drawio" }]),
-      open_questions: JSON.stringify(["未確定事項A"]),
       pr_number: null,
       proposal_title: null,
       proposal_body: null,
@@ -116,9 +200,6 @@ describe("runConsoleQuery", () => {
         issue_url: "https://github.com/octo-owner/atelier-works/issues/42",
         draft_attempt: 1,
         summary: "要約",
-        markdown: "# 要件",
-        diagrams: [{ name: "flow", viewer_url: null }],
-        open_questions: ["未確定事項A"],
       },
     ]);
   });
@@ -356,6 +437,142 @@ describe("runConsoleQuery", () => {
       replies: [{ review_comment_id: 99, body: "fixed" }],
       commit_shas: ["deadbee"],
     });
+  });
+
+  test("requirements_index: joins the latest requirement draft per work item", async () => {
+    const row: SqlRow = {
+      work_item_id: 1,
+      owner: "octo-owner",
+      repo: "atelier-works",
+      issue_number: 42,
+      issue_url: "https://github.com/octo-owner/atelier-works/issues/42",
+      title: "Add feature",
+      status: "awaiting_approval",
+      updated_at: NOW.toISOString(),
+      latest_attempt: 2,
+    };
+    const { sql, calls } = createFakeSqlClient([[row]]);
+
+    const rows = await runConsoleQuery("requirements_index", 200, 30, sql);
+
+    expect(calls[0]?.text).toContain("FROM factory.work_items wi");
+    expect(calls[0]?.text).toContain("wi.kind = 'issue'");
+    expect(rows).toEqual([
+      {
+        work_item_id: 1,
+        owner: "octo-owner",
+        repo: "atelier-works",
+        issue_number: 42,
+        issue_url: "https://github.com/octo-owner/atelier-works/issues/42",
+        title: "Add feature",
+        status: "awaiting_approval",
+        latest_attempt: 2,
+        updated_at: NOW.toISOString(),
+      },
+    ]);
+  });
+
+  test("requirements_doc: requires a work_item_id", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+
+    await expect(
+      runConsoleQuery("requirements_doc", 200, 30, sql),
+    ).rejects.toThrow('"work_item_id" is required');
+  });
+
+  test("requirements_doc: reads the doc dir from disk when present", async () => {
+    const docDir =
+      "/var/lib/factory/requirements/octo-owner/atelier-works/issue-42/wi-1/attempt-1";
+    const row: SqlRow = {
+      work_item_id: 1,
+      attempt: 1,
+      summary: "要約(DB)",
+      markdown: "# 要件(DB)",
+      diagrams: JSON.stringify([{ name: "flow", file: "flow.drawio" }]),
+      open_questions: JSON.stringify(["未確定事項A"]),
+      doc_dir: docDir,
+      owner: "octo-owner",
+      repo: "atelier-works",
+      issue_number: 42,
+      issue_url: "https://github.com/octo-owner/atelier-works/issues/42",
+      title: "Add feature",
+      work_item_status: "awaiting_approval",
+    };
+    const { sql, calls } = createFakeSqlClient([[row]]);
+    const reads = new Map([
+      [`${docDir}/requirements.md`, "# 要件(ファイル)"],
+      [`${docDir}/flow.drawio`, "<mxfile></mxfile>"],
+    ]);
+    const readFile = (path: string) => {
+      const content = reads.get(path);
+      return content === undefined
+        ? Promise.reject(new Error(`not found: ${path}`))
+        : Promise.resolve(content);
+    };
+
+    const rows = await runConsoleQuery(
+      "requirements_doc",
+      200,
+      30,
+      sql,
+      1,
+      null,
+      readFile,
+    );
+
+    expect(calls[0]?.text).toContain("FROM factory.requirement_drafts rd");
+    expect(rows).toEqual([
+      {
+        work_item_id: 1,
+        owner: "octo-owner",
+        repo: "atelier-works",
+        issue_number: 42,
+        issue_url: "https://github.com/octo-owner/atelier-works/issues/42",
+        title: "Add feature",
+        work_item_status: "awaiting_approval",
+        attempt: 1,
+        summary: "要約(DB)",
+        markdown: "# 要件(ファイル)",
+        diagrams: [{ name: "flow", xml: "<mxfile></mxfile>" }],
+        open_questions: ["未確定事項A"],
+        doc_dir_source: "file",
+      },
+    ]);
+  });
+
+  test("requirements_doc: falls back to the DB markdown when doc_dir is null", async () => {
+    const row: SqlRow = {
+      work_item_id: 1,
+      attempt: 1,
+      summary: "要約",
+      markdown: "# 要件(DB)",
+      diagrams: JSON.stringify([]),
+      open_questions: JSON.stringify([]),
+      doc_dir: null,
+      owner: "octo-owner",
+      repo: "atelier-works",
+      issue_number: 42,
+      issue_url: "https://github.com/octo-owner/atelier-works/issues/42",
+      title: "Add feature",
+      work_item_status: "awaiting_approval",
+    };
+    const { sql } = createFakeSqlClient([[row]]);
+
+    const rows = await runConsoleQuery("requirements_doc", 200, 30, sql, 1);
+
+    expect(rows[0]).toMatchObject({
+      markdown: "# 要件(DB)",
+      diagrams: [],
+      doc_dir_source: "db_fallback",
+    });
+  });
+
+  test("requirements_doc: returns no rows when the work item has no draft", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+
+    const rows = await runConsoleQuery("requirements_doc", 200, 30, sql, 1);
+
+    expect(rows).toEqual([]);
   });
 });
 

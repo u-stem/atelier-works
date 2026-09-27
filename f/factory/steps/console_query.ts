@@ -20,17 +20,31 @@
 // unresolved notice must not silently disappear from the tab that exists to
 // surface it.
 //
-// Diagrams are returned as `{name, viewer_url}`, the shape the App's Inbox
-// tab renders a link from — but `viewer_url` is always `null` for now: as
-// of the file-per-diagram requirements-doc format (2026-09-27), a diagram's
-// XML lives on disk under `requirement_drafts.doc_dir`/`<file>` (a
-// worker-local path this runnable has no read access to), not in this row.
-// Wiring up inline rendering from that file is a follow-up PR (see
-// docs/architecture.md, 工程2, and docs/security.md "draw.io ビューアーの
-// プライバシー" — a diagram's content is never posted to GitHub or Discord
-// either way, 2026-09-27 policy).
+// A requirements document's own body ("requirements_doc" view) is read back
+// from disk under `requirement_drafts.doc_dir` — this runnable and
+// pipeline_generate.ts (which writes those files) both run in the same
+// worker container (default worker group, see docs/architecture.md, 工程2),
+// so a plain file read works. `doc_dir` is only ever used verbatim as read
+// from the DB row (never built from caller-supplied arguments) and is
+// checked to fall under REQUIREMENTS_BASE_DIR before any read — the
+// `work_item_id`/`attempt` arguments this script *does* accept from the
+// caller only ever reach a `${}` bind parameter, never a path (see
+// `runConsoleQuery`'s "requirements_doc" case). A diagram's XML is never
+// posted to GitHub or Discord (2026-09-27 policy) — it is only read back
+// here for the Console's own inline draw.io viewer
+// (components/DrawioViewer.tsx). Each `diagrams[].file` value read back from
+// the DB is validated against `DIAGRAM_FILE_PATTERN` (the full
+// `<name>.drawio` contract, not just an `.endsWith` suffix check) before it
+// is ever concatenated onto `docDir` — a malformed/corrupted `diagrams`
+// column value (e.g. `"../../etc/passwd.drawio"`) is skipped rather than
+// read (see `readDocFromDisk`).
 
 import { defaultSqlClient, type SqlClient, type SqlRow } from "../lib/db.ts";
+import { logger } from "../lib/log.ts";
+import {
+  DIAGRAM_NAME_PATTERN,
+  REQUIREMENTS_BASE_DIR,
+} from "../lib/requirements_template.ts";
 import {
   APPROVAL_REQUEST_KINDS,
   APPROVAL_REQUEST_STATUSES,
@@ -47,6 +61,7 @@ import {
   type ReviewFinding,
   type ReviewSeverity,
 } from "../lib/types.ts";
+import { type ReadTextFile, readTextFile } from "../lib/workspace.ts";
 
 const CONSOLE_VIEWS = [
   "inbox",
@@ -58,6 +73,8 @@ const CONSOLE_VIEWS = [
   "notices",
   "reviews",
   "fix_rounds",
+  "requirements_index",
+  "requirements_doc",
 ] as const;
 
 export type ConsoleView = (typeof CONSOLE_VIEWS)[number];
@@ -68,6 +85,24 @@ const MIN_LIMIT = 1;
 const MAX_LIMIT = 2000;
 const MIN_DAYS = 1;
 const MAX_DAYS = 3650;
+
+/** The requirements template's rendered file name inside a doc dir —
+ * duplicated from steps/pipeline_generate.ts's own
+ * `REQUIREMENTS_MD_FILENAME` (not imported: PathScripts under `steps/`
+ * don't cross-import each other's files, `pr_workflow_support.ts` aside; see
+ * .claude/skills/windmill-script/SKILL.md's "配置場所"). */
+const REQUIREMENTS_MD_FILENAME = "requirements.md";
+
+/** Full `diagrams[].file` naming contract: `DIAGRAM_NAME_PATTERN`'s
+ * lowercase-alphanumeric-and-hyphens name plus the mandatory `.drawio`
+ * extension, anchored end-to-end (not just an `.endsWith(".drawio")`
+ * suffix check) — mirrored, rather than shared as one constant, with the
+ * Console App's own `components/Markdown.tsx`'s `DRAWIO_IMG_SRC_PATTERN`
+ * (the App bundle can't import `steps/` code, see AGENTS.wmill.md's
+ * "配置場所"). Guards `readDocFromDisk` against a `file` value built from a
+ * corrupted `requirement_drafts.diagrams` JSON column (e.g.
+ * `"../../etc/passwd.drawio"`) ever reaching a path concatenation. */
+const DIAGRAM_FILE_PATTERN = /^[a-z0-9-]{1,64}\.drawio$/;
 
 /** Clamps `value` (falling back to `fallback` when absent/non-finite) into
  * `[min, max]`, truncating to an integer (pure, for testing). */
@@ -171,27 +206,21 @@ function isDiagram(value: unknown): value is Diagram {
   return isRecord(value) && isString(value.name) && isString(value.file);
 }
 
-export type DiagramLink = {
-  readonly name: string;
-  readonly viewer_url: string | null;
-};
-
-/** Converts a stored `{name, file}` diagram reference into `{name,
- * viewer_url}` (pure, for testing). `viewer_url` is always `null` — see
- * this file's module doc comment for why. The diagram is still listed by
- * name so the Inbox tab can show it exists. */
-export function toDiagramLink(diagram: Diagram): DiagramLink {
-  return { name: diagram.name, viewer_url: null };
-}
-
-function parseDiagramLinks(value: unknown, field: string): DiagramLink[] {
+/** Parses `requirement_drafts.diagrams` (`{name, file}[]`, pure, for
+ * testing) — the reference list read back from the DB before the
+ * "requirements_doc" view resolves each `file` against `doc_dir` on disk
+ * (see `readDocFromDisk`). No `viewer_url` is derived here (the former
+ * `DiagramLink`/`toDiagramLink` shape, dropped along with the URL-fragment
+ * viewer it fed — the Console now embeds the XML directly, see
+ * components/DrawioViewer.tsx). */
+function parseDiagrams(value: unknown, field: string): Diagram[] {
   const array = asJsonArray(value, field);
   if (!array.every(isDiagram)) {
     throw new Error(
       `console_query: field "${field}" contains a malformed diagram`,
     );
   }
-  return array.map(toDiagramLink);
+  return array;
 }
 
 function parseStringArray(value: unknown, field: string): string[] {
@@ -293,15 +322,23 @@ export type InboxRowBase = {
   readonly expires_at: string | null;
 };
 
+/** The requirements full-document fields (markdown, diagrams,
+ * open_questions) used to live on this row directly. They are now fetched
+ * on demand via the "requirements_doc" view (`RequirementsTab.tsx` /
+ * `InboxTab.tsx` both call it once a row is selected) so a full document
+ * (which can include multi-KB diagram XML) is never pulled for every row of
+ * the Inbox list. `summary` (cheap, one short string) still lives on this
+ * row so the Inbox list can show a preview without that extra fetch. */
 export type RequirementsInboxRow = InboxRowBase & {
   readonly kind: "requirements";
   readonly issue_number: number | null;
   readonly issue_url: string | null;
   readonly draft_attempt: number;
-  readonly summary: string;
-  readonly markdown: string;
-  readonly diagrams: DiagramLink[];
-  readonly open_questions: string[];
+  /** `requirement_drafts.summary` (short, always present for a requirements
+   * row) — unlike `markdown`/`diagrams`/`open_questions`, cheap enough to
+   * carry on every Inbox list row so the list can show a one-line preview
+   * without a second "requirements_doc" fetch per row. */
+  readonly summary: string | null;
 };
 
 export type IssueProposalInboxRow = InboxRowBase & {
@@ -339,10 +376,7 @@ function toInboxRow(row: SqlRow): InboxRow {
       issue_number: asNullableNumeric(row.issue_number, "issue_number"),
       issue_url: asNullableStr(row.issue_url, "issue_url"),
       draft_attempt: asNumeric(row.draft_attempt, "draft_attempt"),
-      summary: asStr(row.summary, "summary"),
-      markdown: asStr(row.markdown, "markdown"),
-      diagrams: parseDiagramLinks(row.diagrams, "diagrams"),
-      open_questions: parseStringArray(row.open_questions, "open_questions"),
+      summary: asNullableStr(row.summary, "summary"),
     };
   }
   return {
@@ -605,6 +639,156 @@ function asIssueProposalStatus(value: unknown): IssueProposalStatus {
   return value;
 }
 
+/** One row of the "requirements_index" view (要件定義 tab's list): every
+ * `kind = 'issue'` work item that has at least one requirement draft, with
+ * its latest attempt number. */
+export type RequirementsIndexRow = {
+  readonly work_item_id: number;
+  readonly owner: string;
+  readonly repo: string;
+  readonly issue_number: number | null;
+  readonly issue_url: string | null;
+  readonly title: string | null;
+  readonly status: string;
+  readonly latest_attempt: number;
+  readonly updated_at: string;
+};
+
+function toRequirementsIndexRow(row: SqlRow): RequirementsIndexRow {
+  return {
+    work_item_id: asId(row.work_item_id, "work_item_id"),
+    owner: asStr(row.owner, "owner"),
+    repo: asStr(row.repo, "repo"),
+    issue_number: asNullableNumeric(row.issue_number, "issue_number"),
+    issue_url: asNullableStr(row.issue_url, "issue_url"),
+    title: asNullableStr(row.title, "title"),
+    status: asStr(row.status, "status"),
+    latest_attempt: asNumeric(row.latest_attempt, "latest_attempt"),
+    updated_at: asIsoDate(row.updated_at, "updated_at"),
+  };
+}
+
+/** A diagram resolved from disk: its declared `name` plus the raw mxGraph
+ * XML read from `doc_dir`/`file` (see `readDocFromDisk`) — distinct from
+ * `Diagram` (lib/types.ts's `{name, file}` DB reference), which never
+ * carries the XML itself. */
+export type RequirementsDiagramContent = {
+  readonly name: string;
+  readonly xml: string;
+};
+
+/** Where a "requirements_doc" row's `markdown`/`diagrams` came from: `"file"`
+ * when the on-disk doc dir was readable, `"db_fallback"` when `doc_dir` is
+ * null (pre-2026-09-27 row) or the file is missing/unreadable — the row
+ * still returns the DB's own `markdown` column in that case, just with no
+ * diagrams (their XML was never in the DB to begin with). */
+export type DocDirSource = "file" | "db_fallback";
+
+/** One row of the "requirements_doc" view (要件定義 tab's detail pane and
+ * the Inbox tab's requirements detail, both replacing their former
+ * inline-in-InboxRow markdown/diagrams/open_questions fields). */
+export type RequirementsDocRow = {
+  readonly work_item_id: number;
+  readonly owner: string;
+  readonly repo: string;
+  readonly issue_number: number | null;
+  readonly issue_url: string | null;
+  readonly title: string | null;
+  readonly work_item_status: string;
+  readonly attempt: number;
+  readonly summary: string;
+  readonly markdown: string;
+  readonly diagrams: RequirementsDiagramContent[];
+  readonly open_questions: string[];
+  readonly doc_dir_source: DocDirSource;
+};
+
+/**
+ * Reads a requirements doc dir's `requirements.md` plus every declared
+ * diagram file back from disk (pure I/O wrapper, `readFile` injected for
+ * testing — see tests/scripts/console_query.test.ts). `docDir` must fall
+ * under `REQUIREMENTS_BASE_DIR` — a `doc_dir` value can only ever have come
+ * from a `requirement_drafts` row written by
+ * requirements_template.ts's `buildRequirementsDocDir`, but this is checked
+ * again here defensively before it reaches a file path. Returns `null` (the
+ * "db_fallback" case) when that check fails, `doc_dir` doesn't exist, or
+ * `requirements.md` itself can't be read; an individual diagram file that
+ * fails to read is silently dropped instead of failing the whole document,
+ * since a lightbox one diagram cannot render is a smaller problem than the
+ * text becoming unreadable. A diagram whose `name`/`file` doesn't match the
+ * `DIAGRAM_NAME_PATTERN`/`DIAGRAM_FILE_PATTERN` naming contract is dropped
+ * the same way (logged via `logger("console_query").warn`) before its
+ * `file` is ever concatenated onto `docDir` — see this module's top
+ * comment.
+ */
+export async function readDocFromDisk(
+  docDir: string,
+  diagrams: readonly Diagram[],
+  readFile: ReadTextFile = readTextFile,
+): Promise<{
+  readonly markdown: string;
+  readonly diagrams: RequirementsDiagramContent[];
+} | null> {
+  if (!docDir.startsWith(`${REQUIREMENTS_BASE_DIR}/`)) {
+    return null;
+  }
+  let markdown: string;
+  try {
+    markdown = await readFile(`${docDir}/${REQUIREMENTS_MD_FILENAME}`);
+  } catch {
+    return null;
+  }
+  const resolvedDiagrams: RequirementsDiagramContent[] = [];
+  const log = logger("console_query");
+  for (const diagram of diagrams) {
+    if (
+      !DIAGRAM_NAME_PATTERN.test(diagram.name) ||
+      !DIAGRAM_FILE_PATTERN.test(diagram.file)
+    ) {
+      log.warn("skipping diagram with a malformed file name", {
+        doc_dir: docDir,
+        name: diagram.name,
+        file: diagram.file,
+      });
+      continue;
+    }
+    try {
+      const xml = await readFile(`${docDir}/${diagram.file}`);
+      resolvedDiagrams.push({ name: diagram.name, xml });
+    } catch {
+      // Missing/unreadable diagram file: drop just this diagram (see this
+      // function's doc comment).
+    }
+  }
+  return { markdown, diagrams: resolvedDiagrams };
+}
+
+async function toRequirementsDocRow(
+  row: SqlRow,
+  readFile: ReadTextFile,
+): Promise<RequirementsDocRow> {
+  const docDir = asNullableStr(row.doc_dir, "doc_dir");
+  const diagrams = parseDiagrams(row.diagrams, "diagrams");
+  const fromDisk =
+    docDir === null ? null : await readDocFromDisk(docDir, diagrams, readFile);
+
+  return {
+    work_item_id: asId(row.work_item_id, "work_item_id"),
+    owner: asStr(row.owner, "owner"),
+    repo: asStr(row.repo, "repo"),
+    issue_number: asNullableNumeric(row.issue_number, "issue_number"),
+    issue_url: asNullableStr(row.issue_url, "issue_url"),
+    title: asNullableStr(row.title, "title"),
+    work_item_status: asStr(row.work_item_status, "work_item_status"),
+    attempt: asNumeric(row.attempt, "attempt"),
+    summary: asStr(row.summary, "summary"),
+    markdown: fromDisk?.markdown ?? asStr(row.markdown, "markdown"),
+    diagrams: fromDisk?.diagrams ?? [],
+    open_questions: parseStringArray(row.open_questions, "open_questions"),
+    doc_dir_source: fromDisk === null ? "db_fallback" : "file",
+  };
+}
+
 export type ConsoleQueryRow =
   | InboxRow
   | PipelineRow
@@ -614,7 +798,9 @@ export type ConsoleQueryRow =
   | FailureRow
   | NoticeRow
   | ReviewRow
-  | FixRoundRow;
+  | FixRoundRow
+  | RequirementsIndexRow
+  | RequirementsDocRow;
 
 /**
  * Runs the whitelisted view query for `view` against `sql` (defaulting to
@@ -631,6 +817,9 @@ export async function runConsoleQuery(
   limit: number,
   days: number,
   sql: SqlClient = defaultSqlClient,
+  workItemId: number | null = null,
+  attempt: number | null = null,
+  readFile: ReadTextFile = readTextFile,
 ): Promise<ConsoleQueryRow[]> {
   const since = sinceIso(days, new Date());
 
@@ -650,9 +839,8 @@ export async function runConsoleQuery(
         SELECT
           id AS approval_request_id, kind, status, work_item_id, owner, repo,
           title, requested_at, expires_at, issue_number, issue_url,
-          draft_attempt, summary, markdown, diagrams, open_questions,
-          pr_number, proposal_title, proposal_body, proposal_status,
-          created_issue_number, created_issue_url, claimed_by
+          draft_attempt, summary, pr_number, proposal_title, proposal_body,
+          proposal_status, created_issue_number, created_issue_url, claimed_by
         FROM factory.v_approval_requests
         WHERE status = 'pending'
           OR (kind = 'issue_proposal' AND status = 'approved' AND created_issue_number IS NULL)
@@ -755,13 +943,72 @@ export async function runConsoleQuery(
       `.fetch();
       return rows.map(toFixRoundRow);
     }
+    case "requirements_index": {
+      const rows = await sql`
+        SELECT
+          wi.id AS work_item_id, wi.owner, wi.repo, wi.issue_number,
+          wi.issue_url, wi.title, wi.status, wi.updated_at,
+          rd.attempt AS latest_attempt
+        FROM factory.work_items wi
+        JOIN LATERAL (
+          SELECT attempt
+          FROM factory.requirement_drafts rd2
+          WHERE rd2.work_item_id = wi.id
+          ORDER BY rd2.attempt DESC
+          LIMIT 1
+        ) rd ON true
+        WHERE wi.kind = 'issue'
+          AND wi.updated_at >= ${since}::timestamptz
+        ORDER BY wi.updated_at DESC
+        LIMIT ${limit}::integer
+      `.fetch();
+      return rows.map(toRequirementsIndexRow);
+    }
+    case "requirements_doc": {
+      if (workItemId === null) {
+        throw new Error(
+          'console_query: "work_item_id" is required for view "requirements_doc"',
+        );
+      }
+      const rows = await sql`
+        SELECT
+          rd.work_item_id, rd.attempt, rd.summary, rd.markdown, rd.diagrams,
+          rd.open_questions, rd.doc_dir, wi.owner, wi.repo, wi.issue_number,
+          wi.issue_url, wi.title, wi.status AS work_item_status
+        FROM factory.requirement_drafts rd
+        JOIN factory.work_items wi ON wi.id = rd.work_item_id
+        WHERE rd.work_item_id = ${workItemId}::bigint
+          AND (${attempt}::integer IS NULL OR rd.attempt = ${attempt}::integer)
+        ORDER BY rd.attempt DESC
+        LIMIT 1
+      `.fetch();
+      if (rows.length === 0 || rows[0] === undefined) {
+        return [];
+      }
+      return [await toRequirementsDocRow(rows[0], readFile)];
+    }
   }
+}
+
+/** Narrows an optional numeric arg to a positive integer, or `null` when
+ * absent/invalid (pure, for testing) — used for `work_item_id`/`attempt`,
+ * which (unlike `limit`/`days`) have no sensible clamped fallback: an
+ * invalid value must mean "not given", not be silently coerced into some
+ * other id. */
+export function resolvePositiveIntArg(
+  value: number | undefined,
+): number | null {
+  return value !== undefined && Number.isInteger(value) && value > 0
+    ? value
+    : null;
 }
 
 export async function main(
   view: string,
   limit: number = DEFAULT_LIMIT,
   days: number = DEFAULT_DAYS,
+  work_item_id?: number,
+  attempt?: number,
 ): Promise<ConsoleQueryRow[]> {
   if (!isOneOf(view, CONSOLE_VIEWS)) {
     throw new Error(
@@ -776,5 +1023,12 @@ export async function main(
   );
   const resolvedDays = resolveIntArg(days, DEFAULT_DAYS, MIN_DAYS, MAX_DAYS);
 
-  return await runConsoleQuery(view, resolvedLimit, resolvedDays);
+  return await runConsoleQuery(
+    view,
+    resolvedLimit,
+    resolvedDays,
+    defaultSqlClient,
+    resolvePositiveIntArg(work_item_id),
+    resolvePositiveIntArg(attempt),
+  );
 }

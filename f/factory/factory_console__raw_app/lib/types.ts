@@ -23,30 +23,11 @@ export const CONSOLE_VIEWS = [
   "lead_time",
   "failures",
   "notices",
+  "requirements_index",
+  "requirements_doc",
 ] as const;
 
 export type ConsoleView = (typeof CONSOLE_VIEWS)[number];
-
-export type DiagramLink = {
-  name: string;
-  viewer_url: string | null;
-};
-
-function toDiagramLink(value: unknown): DiagramLink | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-  return { name: str(value.name), viewer_url: strOrNull(value.viewer_url) };
-}
-
-function toDiagramLinks(value: unknown): DiagramLink[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value
-    .map(toDiagramLink)
-    .filter((item): item is DiagramLink => item !== null);
-}
 
 export type ApprovalRequestKind = "requirements" | "issue_proposal";
 export type ApprovalRequestStatus =
@@ -69,15 +50,17 @@ export type InboxRowBase = {
   expires_at: string | null;
 };
 
+/** The full document (markdown/diagrams/open_questions) is fetched on
+ * demand via the "requirements_doc" view (see `toRequirementsDocRow` below)
+ * once a row is selected — not carried on the list row itself. `summary`
+ * (cheap, one short string) is carried here so the Inbox list can show a
+ * preview without that extra fetch. */
 export type RequirementsInboxRow = InboxRowBase & {
   kind: "requirements";
   issue_number: number | null;
   issue_url: string | null;
   draft_attempt: number;
-  summary: string;
-  markdown: string;
-  diagrams: DiagramLink[];
-  open_questions: string[];
+  summary: string | null;
 };
 
 export type IssueProposalInboxRow = InboxRowBase & {
@@ -129,10 +112,7 @@ export function toInboxRow(row: Record<string, unknown>): InboxRow {
     issue_number: numOrNull(row.issue_number),
     issue_url: strOrNull(row.issue_url),
     draft_attempt: num(row.draft_attempt),
-    summary: str(row.summary),
-    markdown: str(row.markdown),
-    diagrams: toDiagramLinks(row.diagrams),
-    open_questions: strArray(row.open_questions),
+    summary: strOrNull(row.summary),
   };
 }
 
@@ -293,5 +273,103 @@ export function toNoticeRow(row: Record<string, unknown>): NoticeRow {
     message: str(row.message),
     resolved: bool(row.resolved),
     created_at: str(row.created_at),
+  };
+}
+
+/** One row of the "requirements_index" view — the 要件定義 tab's list. */
+export type RequirementsIndexRow = {
+  work_item_id: number;
+  owner: string;
+  repo: string;
+  issue_number: number | null;
+  issue_url: string | null;
+  title: string | null;
+  status: string;
+  latest_attempt: number;
+  updated_at: string;
+};
+
+export function toRequirementsIndexRow(
+  row: Record<string, unknown>,
+): RequirementsIndexRow {
+  return {
+    work_item_id: num(row.work_item_id),
+    owner: str(row.owner),
+    repo: str(row.repo),
+    issue_number: numOrNull(row.issue_number),
+    issue_url: strOrNull(row.issue_url),
+    title: strOrNull(row.title),
+    status: str(row.status),
+    latest_attempt: num(row.latest_attempt),
+    updated_at: str(row.updated_at),
+  };
+}
+
+/** A diagram resolved from disk: `name` plus its raw mxGraph XML — see
+ * f/factory/steps/console_query.ts's `RequirementsDiagramContent`. */
+export type RequirementsDiagram = {
+  name: string;
+  xml: string;
+};
+
+function toRequirementsDiagram(value: unknown): RequirementsDiagram | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const xml = strOrNull(value.xml);
+  if (xml === null) {
+    return null;
+  }
+  return { name: str(value.name), xml };
+}
+
+function toRequirementsDiagrams(value: unknown): RequirementsDiagram[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map(toRequirementsDiagram)
+    .filter((item): item is RequirementsDiagram => item !== null);
+}
+
+export type DocDirSource = "file" | "db_fallback";
+
+/** One row of the "requirements_doc" view — a single requirement draft's
+ * full document, shared by the 要件定義 tab's detail pane and the Inbox
+ * tab's requirements detail (both render it via
+ * components/RequirementsDocument.tsx). */
+export type RequirementsDocRow = {
+  work_item_id: number;
+  owner: string;
+  repo: string;
+  issue_number: number | null;
+  issue_url: string | null;
+  title: string | null;
+  work_item_status: string;
+  attempt: number;
+  summary: string;
+  markdown: string;
+  diagrams: RequirementsDiagram[];
+  open_questions: string[];
+  doc_dir_source: DocDirSource;
+};
+
+export function toRequirementsDocRow(
+  row: Record<string, unknown>,
+): RequirementsDocRow {
+  return {
+    work_item_id: num(row.work_item_id),
+    owner: str(row.owner),
+    repo: str(row.repo),
+    issue_number: numOrNull(row.issue_number),
+    issue_url: strOrNull(row.issue_url),
+    title: strOrNull(row.title),
+    work_item_status: str(row.work_item_status),
+    attempt: num(row.attempt),
+    summary: str(row.summary),
+    markdown: str(row.markdown),
+    diagrams: toRequirementsDiagrams(row.diagrams),
+    open_questions: strArray(row.open_questions),
+    doc_dir_source: row.doc_dir_source === "file" ? "file" : "db_fallback",
   };
 }

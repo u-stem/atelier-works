@@ -107,6 +107,12 @@ describe("buildConsoleUrl", () => {
   test("does not contain a getResumeUrls-style capability token", () => {
     expect(buildConsoleUrl("http://127.0.0.1:8080")).not.toContain("token=");
   });
+
+  test("appends a requirements deep-link fragment when a target is given", () => {
+    expect(buildConsoleUrl("http://127.0.0.1:8080", { work_item_id: 42 })).toBe(
+      "http://127.0.0.1:8080/apps/get/f/factory/factory_console#requirements/42",
+    );
+  });
 });
 
 describe("handlerPathFor", () => {

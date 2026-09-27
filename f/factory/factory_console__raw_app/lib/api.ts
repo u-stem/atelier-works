@@ -7,13 +7,23 @@ import type { ConsoleView } from "./types";
 
 /** Calls f/factory/steps/console_query.ts. Returns `unknown` — the caller
  * converts each element via lib/types.ts's `to*Row` helpers, which coerce
- * defensively rather than throwing (see lib/coerce.ts's module doc). */
+ * defensively rather than throwing (see lib/coerce.ts's module doc).
+ * `work_item_id`/`attempt` are only meaningful for the "requirements_doc"
+ * view (ignored server-side otherwise). */
 export async function queryConsole(
   view: ConsoleView,
   limit?: number,
   days?: number,
+  work_item_id?: number,
+  attempt?: number,
 ): Promise<unknown> {
-  return await backend.console_query({ view, limit, days });
+  return await backend.console_query({
+    view,
+    limit,
+    days,
+    work_item_id,
+    attempt,
+  });
 }
 
 export type ApprovalAction = "approve" | "reject";
