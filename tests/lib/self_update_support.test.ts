@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   assertBranchMatches,
+  buildNpmCiArgv,
   buildWmillArgv,
   buildWmillEnv,
   classifyChangedPaths,
@@ -216,5 +217,20 @@ describe("truncateOutput", () => {
   test("truncates to exactly max characters when over the max", () => {
     const text = "a".repeat(20);
     expect(truncateOutput(text, 10)).toBe("a".repeat(10));
+  });
+});
+
+describe("buildNpmCiArgv", () => {
+  test("runs npm ci against the raw app dir without touching the lockfile", () => {
+    expect(buildNpmCiArgv("/clone/f/factory/factory_console__raw_app")).toEqual(
+      [
+        "npm",
+        "ci",
+        "--prefix",
+        "/clone/f/factory/factory_console__raw_app",
+        "--no-audit",
+        "--no-fund",
+      ],
+    );
   });
 });
