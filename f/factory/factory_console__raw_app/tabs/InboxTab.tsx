@@ -3,17 +3,13 @@ import { Markdown } from "../components/Markdown";
 import { RequirementsDocumentLoader } from "../components/RequirementsDocument";
 import { Skeleton } from "../components/Skeleton";
 import { decideApproval, describeError } from "../lib/api";
+import { kindLabel } from "../lib/inboxLabels";
 import { type InboxRow, toInboxRow } from "../lib/types";
 import { useConsoleQuery } from "../lib/useConsoleQuery";
 
 function formatDateTime(iso: string): string {
   const date = new Date(iso);
   return Number.isNaN(date.getTime()) ? iso : date.toLocaleString("ja-JP");
-}
-
-function kindLabel(row: InboxRow): string {
-  if (row.kind === "requirements") return "要件定義";
-  return row.origin === "audit" ? "改善提案" : "Issue化提案";
 }
 
 /** Whether an issue_proposal row is "approved but the Issue was never
@@ -30,7 +26,14 @@ function isIncompleteProposal(row: InboxRow): boolean {
   );
 }
 
-export function InboxTab(): React.ReactElement {
+export function InboxTab({
+  onOpenAudit,
+}: {
+  /** Opens the 監査 tab and selects the audit report this proposal came
+   * from (App.tsx wires this to `setAuditTarget` + `setActiveTab("audit")`
+   * — see AuditTab.tsx's `initialWorkItemId` prop). */
+  onOpenAudit: (workItemId: number) => void;
+}): React.ReactElement {
   const { rows, loading, error, reload } = useConsoleQuery(
     "inbox",
     toInboxRow,
@@ -153,11 +156,7 @@ export function InboxTab(): React.ReactElement {
                       <>
                         {row.owner}/{row.repo} ・{" "}
                         {row.origin === "audit" ? (
-                          <>
-                            監査 {row.period_label ?? "-"}
-                            {" ・ "}
-                            <a href={`#audit/${row.work_item_id}`}>レポート</a>
-                          </>
+                          <>監査 {row.period_label ?? "-"}</>
                         ) : (
                           <>PR #{row.pr_number ?? "-"}</>
                         )}
@@ -263,7 +262,13 @@ export function InboxTab(): React.ReactElement {
                 <>
                   監査 {selected.period_label ?? "-"}
                   {" ・ "}
-                  <a href={`#audit/${selected.work_item_id}`}>レポート</a>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => onOpenAudit(selected.work_item_id)}
+                  >
+                    レポートを開く
+                  </button>
                 </>
               ) : (
                 <>PR #{selected.pr_number ?? "-"}</>

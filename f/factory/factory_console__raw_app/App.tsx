@@ -36,6 +36,10 @@ const App = (): React.ReactElement => {
   const [activeTab, setActiveTab] = useState<TabId>("inbox");
   const [theme, setTheme] = useState<Theme>(() => getInitialTheme());
   const [refreshKey, setRefreshKey] = useState(0);
+  // The work_item_id to hand off from the Inbox tab's 「レポートを開く」
+  // button (an audit-origin issue_proposal) to the 監査 tab — see
+  // AuditTab.tsx's `initialWorkItemId` prop.
+  const [auditTarget, setAuditTarget] = useState<number | null>(null);
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
@@ -100,11 +104,24 @@ const App = (): React.ReactElement => {
         ))}
       </div>
       <main className="factory-console-main">
-        {activeTab === "inbox" && <InboxTab key={`inbox-${refreshKey}`} />}
+        {activeTab === "inbox" && (
+          <InboxTab
+            key={`inbox-${refreshKey}`}
+            onOpenAudit={(id) => {
+              setAuditTarget(id);
+              setActiveTab("audit");
+            }}
+          />
+        )}
         {activeTab === "requirements" && (
           <RequirementsTab key={`requirements-${refreshKey}`} />
         )}
-        {activeTab === "audit" && <AuditTab key={`audit-${refreshKey}`} />}
+        {activeTab === "audit" && (
+          <AuditTab
+            key={`audit-${refreshKey}`}
+            initialWorkItemId={auditTarget}
+          />
+        )}
         {activeTab === "pipeline" && (
           <PipelineTab key={`pipeline-${refreshKey}`} />
         )}

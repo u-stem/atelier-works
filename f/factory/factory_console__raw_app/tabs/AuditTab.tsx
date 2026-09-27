@@ -32,7 +32,15 @@ function describeKickoff(result: unknown): string {
     : `監査を起動しました(work_item_id ${workItemId})`;
 }
 
-export function AuditTab(): React.ReactElement {
+export function AuditTab({
+  initialWorkItemId,
+}: {
+  /** A work_item_id to select immediately on mount — set by App.tsx when
+   * the Inbox tab's 「レポートを開く」button switches to this tab (see
+   * InboxTab.tsx's `onOpenAudit`). `null` when this tab was opened directly
+   * (falls back to a `#audit/<id>` deep link, then no selection). */
+  initialWorkItemId: number | null;
+}): React.ReactElement {
   const { rows, loading, error, reload } = useConsoleQuery(
     "audit_index",
     toAuditIndexRow,
@@ -41,16 +49,45 @@ export function AuditTab(): React.ReactElement {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [days, setDays] = useState("7");
   const [kickoffMessage, setKickoffMessage] = useState<string | null>(null);
+  const [kickoffError, setKickoffError] = useState<string | null>(null);
   const [kickoffPending, setKickoffPending] = useState(false);
 
+  /** Selects `workItemId` and keeps `location.hash` in sync (`#audit/<id>`)
+   * so the URL stays shareable/reloadable — same fragment format
+   * lib/deepLink.ts's `parseAuditDeepLink` reads back. Wrapped in try/catch
+   * like the rest of this app's `window`/`location` access (see
+   * lib/deepLink.ts's module doc): a sandboxed embedding may disallow
+   * mutating `location.hash`, and that must not block the selection itself. */
+  function selectAudit(workItemId: number): void {
+    setSelectedId(workItemId);
+    try {
+      window.location.hash = `audit/${workItemId}`;
+    } catch {
+      // Some sandboxed embeddings disallow mutating location.hash.
+    }
+  }
+
+  // Initial selection priority: `initialWorkItemId` (Inbox tab hand-off)
+  // wins over a `#audit/<id>` deep link (Issue comment / Discord
+  // notification), neither present leaves the list unselected. Mount-only:
+  // App.tsx unmounts this whole tab whenever "audit" isn't the active tab,
+  // so `initialWorkItemId` is only ever set once per mount, never changes
+  // afterwards.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally mount-only, see comment above.
   useEffect(() => {
-    const link = parseAuditDeepLink(collectDeepLinkCandidates());
-    if (link !== null) setSelectedId(link.work_item_id);
+    const target =
+      initialWorkItemId ??
+      parseAuditDeepLink(collectDeepLinkCandidates())?.work_item_id ??
+      null;
+    if (target !== null) {
+      selectAudit(target);
+    }
   }, []);
 
   async function handleKickoff(): Promise<void> {
     setKickoffPending(true);
     setKickoffMessage(null);
+    setKickoffError(null);
     try {
       const parsed = Number(days);
       const result = await kickoffAudit(
@@ -61,7 +98,7 @@ export function AuditTab(): React.ReactElement {
       setKickoffMessage(describeKickoff(result));
       reload();
     } catch (caught) {
-      setKickoffMessage(describeError(caught));
+      setKickoffError(describeError(caught));
     } finally {
       setKickoffPending(false);
     }
@@ -107,6 +144,9 @@ export function AuditTab(): React.ReactElement {
         {kickoffMessage !== null && (
           <p className="success-banner">{kickoffMessage}</p>
         )}
+        {kickoffError !== null && (
+          <p className="error-banner">{kickoffError}</p>
+        )}
         {loading && <Skeleton />}
         {error !== null && <p className="error-banner">{error}</p>}
         {!loading && rows.length === 0 && error === null && (
@@ -123,7 +163,7 @@ export function AuditTab(): React.ReactElement {
               <button
                 type="button"
                 className={row.work_item_id === selectedId ? "selected" : ""}
-                onClick={() => setSelectedId(row.work_item_id)}
+                onClick={() => selectAudit(row.work_item_id)}
               >
                 <div className="inbox-item-title">監査 {row.period_label}</div>
                 <div className="inbox-item-summary">{row.summary}</div>
@@ -160,7 +200,10 @@ export function AuditTab(): React.ReactElement {
  * by the caller (same pattern as RequirementsTab.tsx's `RequirementsDetail`)
  * so switching the selected report always starts from a clean `doc: null`
  * state instead of momentarily showing the previous report's content while
- * the new one loads. */
+ * the new one loads. `loading` is tracked separately from `doc === null` so
+ * "still fetching" and "fetched, but no such report" render differently —
+ * the latter only appears once the fetch has actually resolved with no
+ * row. */
 function AuditDetail({
   workItemId,
 }: {
@@ -168,27 +211,40 @@ function AuditDetail({
 }): React.ReactElement {
   const [doc, setDoc] = useState<AuditDocRow | null>(null);
   const [docError, setDocError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
+    setLoading(true);
     setDocError(null);
+    setDoc(null);
     queryConsole("audit_doc", 1, 3650, workItemId)
       .then((result) => {
         if (!cancelled) setDoc(toRows(result).map(toAuditDocRow)[0] ?? null);
       })
       .catch((caught: unknown) => {
         if (!cancelled) setDocError(describeError(caught));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
       });
     return () => {
       cancelled = true;
     };
   }, [workItemId]);
 
+  if (loading) {
+    return <Skeleton />;
+  }
   if (docError !== null) {
     return <p className="error-banner">{docError}</p>;
   }
   if (doc === null) {
-    return <Skeleton />;
+    return (
+      <p className="empty-state">
+        work_item_id {workItemId}の監査レポートが見つかりませんでした。
+      </p>
+    );
   }
   return (
     <div className="confluence-doc">
