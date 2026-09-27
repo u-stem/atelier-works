@@ -1,0 +1,4 @@
+value: ""
+is_secret: false
+description: >-
+  Software Factory自身のうち、直近でWindmillに反映済みのコミットです。自己更新処理が自動的に更新するため、通常は人が編集する必要はありません。

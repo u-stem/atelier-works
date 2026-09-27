@@ -1,0 +1,51 @@
+# Seed template for the f/factory/factory_config resource (c_factory_config
+# resource type). This file is NOT synced (see wmill.yaml excludes) because
+# owners / instance_name / windmill_public_url are instance-specific.
+#
+# scripts/bootstrap.sh creates the resource from this template only if it
+# does not already exist remotely; once created, edit it via the Windmill UI
+# (or `wmill resource push`), never by re-running bootstrap.
+#
+# owners: leave empty until a human fills it in via the Windmill UI (empty
+# means the factory polls no repos - safe default). Example entry:
+#   owners:
+#     - name: <GitHub username or org>
+#       kind: user   # or "org"
+value:
+  owners: []
+  trigger_label: factory
+  wip_label: "factory:wip"
+  approved_label: "factory:approved"
+  allowed_labeler_associations:
+    - OWNER
+    - MEMBER
+    - COLLABORATOR
+  model: claude-opus-5-5
+  max_attempts: 3
+  max_turns: 40
+  max_budget_usd_per_run: 5
+  daily_budget_usd: 50
+  claude_timeout_sec: 1800
+  worktree_ttl_days: 7
+  factory_repo: https://github.com/<owner>/atelier-works
+  factory_branch: main
+  instance_name: local
+  windmill_public_url: http://127.0.0.1:8080
+  review_label: "factory:review"
+  fix_label: "factory:fix"
+  changes_requested_label: "factory:changes-requested"
+  reviewed_label: "factory:reviewed"
+  rereview_label: "factory:rereview"
+  needs_human_label: "factory:needs-human"
+  pr_label: "factory:pr"
+  review_post_mode: comment_only
+  max_fix_rounds: 3
+  max_fix_changed_files: 30
+  max_fix_diff_lines: 1500
+  allowed_check_commands: []
+  default_reviewers: []
+  repo_allowlist: []
+  diff_max_lines: 3000
+resource_type: c_factory_config
+description: >-
+  個人アカウント単体インスタンス向けの初期設定です。ownersとinstance_nameは、この画面から入力してください。

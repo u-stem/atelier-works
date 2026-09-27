@@ -1,0 +1,82 @@
+summary: '[SF-3-1/3] レビューの投稿'
+description: 生成したレビューをPRにコメントとして投稿するステップです。投稿後は作業項目の状態を更新し、付与されたラベルを外してDiscordに通知します。
+lock: '!inline f/factory/steps/pr_review_post.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties:
+    summary:
+      type: string
+      description: 処理内容の要約。
+      default: null
+      originalType: string
+    findings:
+      type: array
+      description: レビューで見つかった指摘の一覧。
+      default: null
+      items:
+        type: resource
+        resourceType: review_finding
+      originalType: resource[]
+    owner:
+      type: string
+      description: 対象リポジトリを所有するGitHubのユーザー名または組織名。
+      default: null
+      originalType: string
+    pr_files:
+      type: array
+      description: PRで変更されたファイルの一覧。
+      default: null
+      items:
+        type: string
+      originalType: string[]
+    pr_number:
+      type: number
+      description: 対象PRの番号。
+      default: null
+    repo:
+      type: string
+      description: 対象リポジトリ名。
+      default: null
+      originalType: string
+    repo_dir:
+      type: string
+      description: 対象リポジトリを展開した作業ディレクトリのパス。
+      default: null
+      originalType: string
+    review_sha:
+      type: string
+      description: レビュー対象とするPRの最新コミットのSHA。
+      default: null
+      originalType: string
+    skip:
+      type: boolean
+      description: このステップの処理を省略するかどうか。
+      default: null
+    verdict:
+      type: string
+      description: レビューの総合判定。
+      default: null
+      originalType: string
+    work_item_id:
+      type: number
+      description: 対象の作業項目のID。
+      default: null
+    worktree_dir:
+      type: string
+      description: この処理で使う作業用ディレクトリのパス。
+      default: null
+      originalType: string
+  required:
+    - work_item_id
+    - skip
+    - owner
+    - repo
+    - pr_number
+    - review_sha
+    - summary
+    - findings
+    - pr_files
+    - worktree_dir
+    - repo_dir

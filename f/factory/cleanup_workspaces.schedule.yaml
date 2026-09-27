@@ -1,0 +1,13 @@
+summary: '[SYS-2] 作業領域を掃除'
+description: >-
+  毎日3:00に実行します。処理が終わった作業用ディレクトリや、動かなくなった処理の後始末を行い、保存領域の使用量を記録します。
+args: {}
+cron_version: v2
+enabled: true
+is_flow: false
+no_flow_overlap: true
+on_failure: f/factory/on_error_schedule
+schedule: 0 0 3 * * *
+script_path: f/factory/cleanup_workspaces
+timezone: Asia/Tokyo
+ws_error_handler_muted: false

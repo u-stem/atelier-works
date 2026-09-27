@@ -1,0 +1,13 @@
+summary: '[SF-1-1] Issue を巡回して担当を確定'
+description: >-
+  5分ごとに実行します。稼働確認とデプロイ状況の通知を行い、担当リポジトリのIssueを検索して担当を確定します。あわせて、進行中のすべての作業項目をGitHub側の状態と突き合わせ、後始末が必要なものを処理します。
+args: {}
+cron_version: v2
+enabled: true
+is_flow: false
+no_flow_overlap: true
+on_failure: f/factory/on_error_schedule
+schedule: 0 */5 * * * *
+script_path: f/factory/poll_issues
+timezone: Asia/Tokyo
+ws_error_handler_muted: false

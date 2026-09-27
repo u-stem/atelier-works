@@ -1,0 +1,31 @@
+summary: '[SF-2-1/2] 要件定義の生成(Claude)'
+description: Claudeを使って要件定義のドラフトと図を生成するステップです。生成した内容を検証・保存し、結果を次のステップに渡します。1日あたりの利用上限を超えている場合は、ここで処理を止めます。
+lock: '!inline f/factory/steps/pipeline_generate.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties:
+    attempt:
+      type: number
+      description: 要件定義生成の試行回数。
+      default: null
+    feedback:
+      type: string
+      description: 差し戻された理由や指摘事項。
+      default: null
+      enum: []
+      originalType: enum
+    work_item_id:
+      type: number
+      description: 対象の作業項目のID。
+      default: null
+    worktree_dir:
+      type: string
+      description: この処理で使う作業用ディレクトリのパス。
+      default: null
+      originalType: string
+  required:
+    - work_item_id
+    - attempt
+    - worktree_dir

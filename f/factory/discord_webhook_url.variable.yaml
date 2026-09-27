@@ -1,0 +1,4 @@
+value: ""
+is_secret: true
+description: >-
+  パイプラインの各イベントと日次サマリの通知に使うDiscordのWebhook URLです。ここで値を設定してください。

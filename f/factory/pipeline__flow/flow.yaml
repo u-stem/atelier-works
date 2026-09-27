@@ -1,0 +1,113 @@
+summary: '[SF-2-1] 要件定義の生成と承認'
+description: >-
+  要件定義を生成し、承認を受けたうえで次の工程に進めます。却下された場合はフィードバックをもとに要件定義を作り直します。
+value:
+  modules:
+    - id: prepare
+      summary: '[SF-2-1/1] 作業領域の準備'
+      value:
+        type: script
+        input_transforms:
+          attempt:
+            type: javascript
+            expr: flow_input.attempt
+          work_item_id:
+            type: javascript
+            expr: flow_input.work_item_id
+        path: f/factory/steps/pipeline_prepare
+    - id: generate
+      summary: '[SF-2-1/2] 要件定義の生成(Claude)'
+      value:
+        type: script
+        input_transforms:
+          attempt:
+            type: javascript
+            expr: flow_input.attempt
+          feedback:
+            type: javascript
+            expr: flow_input.feedback
+          work_item_id:
+            type: javascript
+            expr: flow_input.work_item_id
+          worktree_dir:
+            type: javascript
+            expr: results.prepare.worktree_dir
+        path: f/factory/steps/pipeline_generate
+      retry:
+        constant:
+          attempts: 2
+          seconds: 60
+      skip_if:
+        expr: results.prepare.skip === true
+    - id: request_approval
+      summary: '[SF-2-1/3] 承認依頼(待機)'
+      value:
+        type: script
+        input_transforms:
+          attempt:
+            type: javascript
+            expr: flow_input.attempt
+          work_item_id:
+            type: javascript
+            expr: flow_input.work_item_id
+        path: f/factory/steps/pipeline_request_approval
+      skip_if:
+        expr: results.prepare.skip === true || results.generate == null ||
+          results.generate.outcome !== "success"
+      suspend:
+        continue_on_disapprove_timeout: true
+        required_events: 1
+        timeout: 604800
+    - id: decide
+      summary: '[SF-2-1/4] 承認結果の反映'
+      value:
+        type: script
+        input_transforms:
+          attempt:
+            type: javascript
+            expr: flow_input.attempt
+          work_item_id:
+            type: javascript
+            expr: flow_input.work_item_id
+        path: f/factory/steps/pipeline_decide
+      skip_if:
+        expr: results.prepare.skip === true || results.generate == null ||
+          results.generate.outcome !== "success"
+  failure_module:
+    id: failure
+    value:
+      type: script
+      input_transforms:
+        error:
+          type: javascript
+          expr: error
+        path:
+          type: static
+          value: f/factory/pipeline
+        work_item_id:
+          type: javascript
+          expr: flow_input.work_item_id
+      path: f/factory/on_error_flow
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  order:
+    - work_item_id
+    - attempt
+    - feedback
+  properties:
+    attempt:
+      type: integer
+      description: 要件定義生成の試行回数(1から始まります)。
+      default: 1
+    feedback:
+      type: string
+      description: >-
+        差し戻された理由や指摘事項。今回の試行で反映します。無ければ空のままで構いません。
+      default: ''
+    work_item_id:
+      type: integer
+      description: >-
+        処理対象の作業項目のID。GitHub Issueのコメントや、Discordの通知に記載されています。
+  required:
+    - work_item_id

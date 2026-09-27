@@ -1,0 +1,31 @@
+summary: '[SF-3-2/2] 指摘の収集'
+description: 前回の修正以降に付いたレビューやコメントのうち、人による指摘だけを集めるステップです。集めた指摘を次のステップに渡します。
+lock: '!inline f/factory/steps/pr_fix_collect.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties:
+    owner:
+      type: string
+      description: 対象リポジトリを所有するGitHubのユーザー名または組織名。
+      default: null
+      originalType: string
+    pr_number:
+      type: number
+      description: 対象PRの番号。
+      default: null
+    repo:
+      type: string
+      description: 対象リポジトリ名。
+      default: null
+      originalType: string
+    work_item_id:
+      type: number
+      description: 対象の作業項目のID。
+      default: null
+  required:
+    - work_item_id
+    - owner
+    - repo
+    - pr_number

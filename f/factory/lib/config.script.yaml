@@ -1,0 +1,9 @@
+summary: '[LIB] 設定の読み込み'
+description: 内部ライブラリです。直接実行するものではありません。実行時設定を読み込むための共通処理です。
+lock: '!inline f/factory/lib/config.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

@@ -1,0 +1,237 @@
+description: >-
+  Software Factoryの動作を決める設定です。対象リポジトリの所有者、各種ラベル名、Claude Codeの実行上限・予算、インスタンスを識別する情報などを持ちます。
+format_extension: null
+is_fileset: false
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  order:
+    - owners
+    - trigger_label
+    - wip_label
+    - approved_label
+    - allowed_labeler_associations
+    - model
+    - max_attempts
+    - max_turns
+    - max_budget_usd_per_run
+    - daily_budget_usd
+    - claude_timeout_sec
+    - worktree_ttl_days
+    - factory_repo
+    - factory_branch
+    - instance_name
+    - windmill_public_url
+    - review_label
+    - fix_label
+    - changes_requested_label
+    - reviewed_label
+    - rereview_label
+    - needs_human_label
+    - pr_label
+    - review_post_mode
+    - max_fix_rounds
+    - allowed_check_commands
+    - default_reviewers
+    - repo_allowlist
+    - diff_max_lines
+    - max_fix_changed_files
+    - max_fix_diff_lines
+  properties:
+    allowed_check_commands:
+      type: array
+      description: >-
+        修正内容を検証するために実行するコマンド(例: ["mise run check"])。対象リポジトリのコードをFactoryの実行環境でそのまま実行するため隔離はされません。通常は空のままにし、信頼できるリポジトリだけで使ってください。
+      default: []
+      items:
+        type: string
+    allowed_labeler_associations:
+      type: array
+      description: >-
+        `trigger_label`のラベルを付けてIssueを処理対象にすることを許可する、GitHub上の関係(所有者・メンバー・コラボレーターなど)です。ここに含まれない人がラベルを付けても、処理は始まりません。
+      default:
+        - OWNER
+        - MEMBER
+        - COLLABORATOR
+      items:
+        type: string
+        enum:
+          - OWNER
+          - MEMBER
+          - COLLABORATOR
+    approved_label:
+      type: string
+      description: 要件定義が承認されたときに付与するラベル。
+      default: factory:approved
+    changes_requested_label:
+      type: string
+      description: >-
+        一次レビューで修正が必要な指摘(must)があったPRに付与する状態ラベル。他の状態ラベルとは同時に付きません。
+      default: factory:changes-requested
+    claude_timeout_sec:
+      type: integer
+      description: Claude Codeの1回の実行を打ち切るまでの制限時間(秒)。
+      default: 1800
+    daily_budget_usd:
+      type: number
+      description: >-
+        1日あたりのClaude利用上限(USD)。超えるとその日の自動処理は人の対応待ちになります。
+      default: 50
+    default_reviewers:
+      type: array
+      description: >-
+        修正を反映した直後のPRに、レビュワーとして指定するGitHubのログイン名です。空の場合は、PRに既に設定されているレビュワーをそのまま使います。
+      default: []
+      items:
+        type: string
+    diff_max_lines:
+      type: integer
+      description: >-
+        レビューや修正の際に、Claudeへそのまま渡す差分の最大行数です。これを超える場合は変更ファイルの一覧だけを渡し、詳細はClaude自身に読み取らせます。
+      default: 3000
+    factory_branch:
+      type: string
+      description: >-
+        自分自身を最新化する処理が追跡するリポジトリのブランチ名です。
+      default: main
+    factory_repo:
+      type: string
+      description: >-
+        このSoftware Factory自身のリポジトリのURLです。自分自身を最新化する処理の対象になります。
+      format: uri
+    fix_label:
+      type: string
+      description: このラベルが付いたPRは修正処理の対象になります。
+      default: factory:fix
+    instance_name:
+      type: string
+      description: >-
+        このインスタンスを識別するための名前です。Discord通知やIssueへのコメントに表示され、複数のインスタンスを運用している場合に区別できるようにします。
+    max_attempts:
+      type: integer
+      description: >-
+        要件定義の再生成を試みる最大回数です。超えると対応が必要な状態(needs_human)にします。
+      default: 3
+    max_budget_usd_per_run:
+      type: number
+      description: 1回の自動処理あたりのClaude利用上限(USD)。
+      default: 5
+    max_fix_changed_files:
+      type: integer
+      description: >-
+        1回の修正で変更してよいファイル数の上限です。これを超える差分は自動での適用には大きすぎると判断し、対応が必要な状態(needs_human)にします。
+      default: 30
+    max_fix_diff_lines:
+      type: integer
+      description: >-
+        1回の修正で変更してよい行数(追加+削除)の上限です。これを超える差分は自動での適用には大きすぎると判断し、対応が必要な状態(needs_human)にします。
+      default: 1500
+    max_fix_rounds:
+      type: integer
+      description: >-
+        1つのPRに対して修正を試みる最大回数です。超えると対応が必要な状態(needs_human)にします。
+      default: 3
+    max_turns:
+      type: integer
+      description: 1回の自動処理でClaudeがやり取りできる最大ターン数。
+      default: 40
+    model:
+      type: string
+      description: 各処理でClaude Codeが使用するモデル名。
+      default: claude-opus-5-5
+    needs_human_label:
+      type: string
+      description: >-
+        人による対応が必要になったPRに付与する状態ラベル。修正処理が失敗・ブロックされた場合や、レビュー処理自体が失敗した場合に付きます。他の状態ラベルとは同時に付きません。
+      default: factory:needs-human
+    owners:
+      type: array
+      description: >-
+        この処理が巡回する対象のGitHubアカウントの一覧です。それぞれ`kind`で個人アカウントか組織かを指定します。
+      items:
+        type: object
+        order:
+          - name
+          - kind
+        properties:
+          name:
+            type: string
+            description: GitHubのユーザーまたは組織のログイン名。
+          kind:
+            type: string
+            description: userなら個人アカウント、orgなら組織を指定します。
+            enum:
+              - user
+              - org
+        required:
+          - name
+          - kind
+    pr_label:
+      type: string
+      description: >-
+        Software Factory自身が作成したPRに付与するラベルです。このラベルが付いたPRは、承認済みの要件定義をもとに作られたものとして扱われます。
+      default: factory:pr
+    repo_allowlist:
+      type: array
+      description: >-
+        この処理が操作してよいリポジトリのURLです。空の場合は、ownersに含まれるリポジトリすべてを対象にします。
+      default: []
+      items:
+        type: string
+    rereview_label:
+      type: string
+      description: >-
+        修正をpushして再レビューを依頼したPRに付与する状態ラベル。他の状態ラベルとは同時に付きません。
+      default: factory:rereview
+    review_label:
+      type: string
+      description: このラベルが付いたPRはレビュー処理の対象になります。
+      default: factory:review
+    review_post_mode:
+      type: string
+      description: >-
+        レビュー結果の投稿方法です。`gated`は今後の機能のために予約された値で、現時点では未実装です。
+      default: comment_only
+      enum:
+        - comment_only
+        - gated
+    reviewed_label:
+      type: string
+      description: >-
+        一次レビューで修正が必要な指摘(must)がなかったPRに付与する状態ラベル(人によるApproveを待つ状態)。他の状態ラベルとは同時に付きません。
+      default: factory:reviewed
+    trigger_label:
+      type: string
+      description: このラベルが付いたIssueが処理対象になります。
+      default: factory
+    windmill_public_url:
+      type: string
+      description: >-
+        通知に含める承認リンクなどを組み立てる際に使う、このインスタンスの公開URLです。
+      default: http://127.0.0.1:8080
+      format: uri
+    wip_label:
+      type: string
+      description: このインスタンスがIssue / PRの担当になっている間に付与するラベルです。
+      default: factory:wip
+    worktree_ttl_days:
+      type: integer
+      description: >-
+        処理が終わった作業用ディレクトリを保持する日数です。この日数を過ぎると自動的に削除されます。
+      default: 7
+  required:
+    - owners
+    - trigger_label
+    - wip_label
+    - approved_label
+    - allowed_labeler_associations
+    - model
+    - max_attempts
+    - max_turns
+    - max_budget_usd_per_run
+    - daily_budget_usd
+    - claude_timeout_sec
+    - worktree_ttl_days
+    - factory_repo
+    - instance_name
+    - windmill_public_url

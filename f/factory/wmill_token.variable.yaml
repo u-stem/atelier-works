@@ -1,0 +1,4 @@
+value: ""
+is_secret: true
+description: >-
+  Software Factory自身を最新化する処理が、設定やデータベースの更新を反映するために使うWindmill APIトークンです。ワークスペースを準備した際に発行したものと同じ値を、ここで設定してください。

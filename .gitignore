@@ -1,0 +1,19 @@
+node_modules/
+.wmill/
+infra/.env
+infra/secrets.env
+.env
+.env.*
+.envrc
+*.pem
+*.key
+.claude/*.jsonl
+.claude/settings.local.json
+*.local.*
+mise.local.toml
+.mise.local.toml
+mise.*.local.toml
+.DS_Store
+
+# *.local.* above also matches this on-purpose committed template; keep it tracked.
+!mise.local.toml.example

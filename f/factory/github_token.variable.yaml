@@ -1,0 +1,4 @@
+value: ""
+is_secret: true
+description: >-
+  GitHubとやり取りするために使う、きめ細かい個人アクセストークン(GH_TOKEN / GITHUB_TOKEN)です。ここで値を設定してください。

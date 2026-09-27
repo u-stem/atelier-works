@@ -1,0 +1,9 @@
+summary: '[LIB] draw.io 図の生成'
+description: 内部ライブラリです。直接実行するものではありません。要件定義に添える図の生成と検証を行う共通処理です。
+lock: '!inline f/factory/lib/drawio.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

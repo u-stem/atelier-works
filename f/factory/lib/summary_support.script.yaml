@@ -1,0 +1,9 @@
+summary: '[LIB] 日次サマリの集計'
+description: 内部ライブラリです。直接実行するものではありません。日次サマリ通知の集計処理です。
+lock: '!inline f/factory/lib/summary_support.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

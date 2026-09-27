@@ -1,0 +1,9 @@
+summary: '[LIB] 共通型'
+description: 内部ライブラリです。直接実行するものではありません。Software Factory内で共有するデータ型の定義です。
+lock: '!inline f/factory/lib/types.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

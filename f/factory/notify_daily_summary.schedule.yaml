@@ -1,0 +1,13 @@
+summary: '[SYS-3] 日次サマリ通知'
+description: >-
+  毎日9:00(Asia/Tokyo)に実行します。前日分の実行回数・コスト・失敗回数と承認/却下の件数を集計し、Discordへ日次サマリを投稿します。
+args: {}
+cron_version: v2
+enabled: true
+is_flow: false
+no_flow_overlap: true
+on_failure: f/factory/on_error_schedule
+schedule: 0 0 9 * * *
+script_path: f/factory/notify_daily_summary
+timezone: Asia/Tokyo
+ws_error_handler_muted: false

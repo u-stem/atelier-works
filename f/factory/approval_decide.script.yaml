@@ -1,0 +1,32 @@
+summary: '[OP-2-1] 承認 / 差し戻しを記録して再開'
+description: 承認待ちの作業項目に対して、承認または差し戻しの判断を記録するためのフォームです。判断を記録すると、待機していた要件定義の承認工程が再開します。
+lock: '!inline f/factory/approval_decide.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties:
+    decision:
+      type: string
+      description: approve = 承認して次工程へ、reject = 差し戻して要件定義を作り直す
+      default: null
+      originalType: string
+    note:
+      type: string
+      description: 任意の補足メモ。理由に併記して記録されます。
+      default: null
+      originalType: string
+    reason:
+      type: string
+      description: 差し戻す理由。承認する場合は空でも構いません。
+      default: null
+      originalType: string
+    work_item_id:
+      type: number
+      description: 承認または差し戻しの対象となる作業項目のID。GitHub Issueのコメントや、Discordの通知に記載されています。
+      default: null
+  required:
+    - work_item_id
+    - decision
+    - reason
+    - note

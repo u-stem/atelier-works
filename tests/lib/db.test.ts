@@ -1,0 +1,1592 @@
+import { describe, expect, test } from "bun:test";
+import {
+  addNotice,
+  bumpWatermarks,
+  clearResumeUrls,
+  countPendingIssueProposals,
+  decideIssueProposal,
+  findApprovedWorkItemForIssue,
+  getIssueProposal,
+  getWorkItem,
+  hasPriorReview,
+  insertFixRound,
+  insertIssueProposal,
+  insertReview,
+  insertWorkItem,
+  latestApproval,
+  latestDraft,
+  latestFixRound,
+  latestPrWorkItem,
+  listActive,
+  listPendingIssueProposals,
+  listStaleTerminalWorkItems,
+  nextCycleForIssue,
+  recordAgentRun,
+  recordApproval,
+  recordDeployment,
+  recordFailure,
+  revertIssueProposalToPending,
+  type SqlClient,
+  type SqlRow,
+  saveDraft,
+  setAttempt,
+  setFixRound,
+  setFlowJobId,
+  setHeadSha,
+  setIssueProposalCreatedIssue,
+  setObservedWatermarks,
+  setResumeUrls,
+  sumAgentCostSince,
+  toApproval,
+  toFixRoundRecord,
+  toIssueProposal,
+  toRequirementDraft,
+  toReviewRecord,
+  updateStatus,
+  updateStatusIfCurrent,
+} from "../../f/factory/lib/db.ts";
+
+type FakeCall = { text: string; values: unknown[] };
+
+/** A fake SqlClient that records every tagged-template call (joined SQL
+ * text + interpolated values) and returns one canned row set per call, in
+ * call order. */
+function createFakeSqlClient(responses: SqlRow[][] = []): {
+  sql: SqlClient;
+  calls: FakeCall[];
+} {
+  const calls: FakeCall[] = [];
+  let callIndex = 0;
+  const sql: SqlClient = (strings, ...values) => {
+    calls.push({ text: strings.join(" ? "), values });
+    const rows = responses[callIndex] ?? [];
+    callIndex += 1;
+    return {
+      fetch: () => Promise.resolve(rows),
+      execute: () => Promise.resolve(),
+    };
+  };
+  return { sql, calls };
+}
+
+const NOW = new Date("2026-09-26T00:00:00.000Z");
+
+const WORK_ITEM_ROW: SqlRow = {
+  id: 1,
+  cycle: 1,
+  source: "issue",
+  kind: "issue",
+  owner: "octo-owner",
+  repo: "atelier-works",
+  issue_number: 42,
+  issue_url: "https://github.com/octo-owner/atelier-works/issues/42",
+  pr_number: null,
+  title: "Add feature",
+  body: "do the thing",
+  status: "picked",
+  attempt: 1,
+  claimed_by: "factory-local",
+  flow_job_id: null,
+  resume_url: null,
+  cancel_url: null,
+  head_sha: null,
+  last_review_id: null,
+  last_comment_id: null,
+  last_review_comment_id: null,
+  observed_review_id: null,
+  observed_comment_id: null,
+  observed_review_comment_id: null,
+  fix_round: 0,
+  parent_work_item_id: null,
+  created_at: NOW.toISOString(),
+  updated_at: NOW.toISOString(),
+};
+
+const NEW_WORK_ITEM = {
+  cycle: 1,
+  source: "issue" as const,
+  kind: "issue" as const,
+  owner: "octo-owner",
+  repo: "atelier-works",
+  issue_number: 42,
+  issue_url: "https://github.com/octo-owner/atelier-works/issues/42",
+  pr_number: null,
+  title: "Add feature",
+  body: "do the thing",
+  status: "picked" as const,
+  attempt: 1,
+  claimed_by: "factory-local",
+  flow_job_id: null,
+  resume_url: null,
+  cancel_url: null,
+  head_sha: null,
+  parent_work_item_id: null,
+};
+
+describe("insertWorkItem", () => {
+  test("inserts into factory.work_items", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await insertWorkItem(NEW_WORK_ITEM, sql);
+    expect(calls[0]?.text).toContain("INSERT INTO factory.work_items");
+  });
+
+  test("passes the work item's fields as parameters in column order", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await insertWorkItem(NEW_WORK_ITEM, sql);
+    expect(calls[0]?.values).toEqual([
+      1,
+      "issue",
+      "issue",
+      "octo-owner",
+      "atelier-works",
+      42,
+      "https://github.com/octo-owner/atelier-works/issues/42",
+      null,
+      "Add feature",
+      "do the thing",
+      "picked",
+      1,
+      "factory-local",
+      null,
+      null,
+      null,
+      null,
+      null,
+    ]);
+  });
+
+  test("returns the inserted id", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 7 }]]);
+    const id = await insertWorkItem(NEW_WORK_ITEM, sql);
+    expect(id).toBe(7);
+  });
+
+  test("throws when the insert returns no row", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    await expect(insertWorkItem(NEW_WORK_ITEM, sql)).rejects.toThrow();
+  });
+
+  test("casts nullable non-text columns (pr_number/parent_work_item_id) to their real type — a null value otherwise binds as text and fails against the integer/bigint column", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    // NEW_WORK_ITEM's pr_number and parent_work_item_id are both null.
+    await insertWorkItem(NEW_WORK_ITEM, sql);
+    const text = calls[0]?.text ?? "";
+    expect(text).toContain("::integer");
+    expect(text).toContain("::bigint");
+  });
+});
+
+describe("updateStatus", () => {
+  test("issues a single query combining the previous-status read, the update, and the event insert", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ from_status: "picked" }]]);
+    await updateStatus(1, "requirements_generating", null, sql);
+    expect(calls).toHaveLength(1);
+  });
+
+  test("locks the row it reads with FOR UPDATE (spec-cycle2.md §7 item 6: races with reconcile's concurrent cancel)", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ from_status: "picked" }]]);
+    await updateStatus(1, "requirements_generating", null, sql);
+    expect(calls[0]?.text).toContain("FOR UPDATE");
+  });
+
+  test("updates the row's status", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ from_status: "picked" }]]);
+    await updateStatus(1, "requirements_generating", null, sql);
+    expect(calls[0]?.text).toContain("UPDATE factory.work_items");
+  });
+
+  test("inserts a work_item_events row in the same statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ from_status: "picked" }]]);
+    await updateStatus(1, "requirements_generating", "moving on", sql);
+    expect(calls[0]?.text).toContain("INSERT INTO factory.work_item_events");
+  });
+
+  test("passes id and the target status as parameters", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ from_status: "picked" }]]);
+    await updateStatus(1, "requirements_generating", "moving on", sql);
+    expect(calls[0]?.values).toContain(1);
+  });
+
+  test("passes the note as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ from_status: "picked" }]]);
+    await updateStatus(1, "requirements_generating", "moving on", sql);
+    expect(calls[0]?.values).toContain("moving on");
+  });
+
+  test("throws when the work item does not exist (the combined query returns no row)", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    await expect(updateStatus(999, "failed", null, sql)).rejects.toThrow();
+  });
+});
+
+describe("updateStatusIfCurrent", () => {
+  test("issues a single query combining the guarded update and the event insert", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await updateStatusIfCurrent(1, "awaiting_approval", "approved", null, sql);
+    expect(calls).toHaveLength(1);
+  });
+
+  test("guards the update with a WHERE status = <expectedFrom> clause", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await updateStatusIfCurrent(1, "awaiting_approval", "approved", null, sql);
+    expect(calls[0]?.values).toContain("awaiting_approval");
+  });
+
+  test("returns true when the guarded update matched a row", async () => {
+    const { sql } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    const result = await updateStatusIfCurrent(
+      1,
+      "awaiting_approval",
+      "approved",
+      null,
+      sql,
+    );
+    expect(result).toBe(true);
+  });
+
+  test("returns false without throwing when the current status does not match expectedFrom", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    const result = await updateStatusIfCurrent(
+      1,
+      "awaiting_approval",
+      "approved",
+      null,
+      sql,
+    );
+    expect(result).toBe(false);
+  });
+});
+
+describe("getWorkItem", () => {
+  test("selects from factory.work_items by id", async () => {
+    const { sql, calls } = createFakeSqlClient([[WORK_ITEM_ROW]]);
+    await getWorkItem(1, sql);
+    expect(calls[0]?.text).toContain(
+      "SELECT * FROM factory.work_items WHERE id",
+    );
+  });
+
+  test("parses the row into a WorkItem", async () => {
+    const { sql } = createFakeSqlClient([[WORK_ITEM_ROW]]);
+    const item = await getWorkItem(1, sql);
+    expect(item).toMatchObject({
+      id: 1,
+      owner: "octo-owner",
+      status: "picked",
+    });
+  });
+
+  test("returns null when no row matches", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    const item = await getWorkItem(999, sql);
+    expect(item).toBeNull();
+  });
+});
+
+describe("listActive", () => {
+  test("excludes terminal statuses via status != ALL(...)", async () => {
+    const { sql, calls } = createFakeSqlClient([[WORK_ITEM_ROW]]);
+    await listActive(sql);
+    expect(calls[0]?.text).toContain("status != ALL");
+  });
+
+  test("passes the terminal status list as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[WORK_ITEM_ROW]]);
+    await listActive(sql);
+    expect(calls[0]?.values[0]).toContain("cancelled");
+  });
+
+  test("parses every returned row", async () => {
+    const { sql } = createFakeSqlClient([
+      [WORK_ITEM_ROW, { ...WORK_ITEM_ROW, id: 2 }],
+    ]);
+    const items = await listActive(sql);
+    expect(items).toHaveLength(2);
+  });
+});
+
+describe("listStaleTerminalWorkItems", () => {
+  test("includes terminal statuses via status = ANY(...)", async () => {
+    const { sql, calls } = createFakeSqlClient([[WORK_ITEM_ROW]]);
+    await listStaleTerminalWorkItems(NOW, sql);
+    expect(calls[0]?.text).toContain("status = ANY");
+  });
+
+  test("passes the terminal status list as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[WORK_ITEM_ROW]]);
+    await listStaleTerminalWorkItems(NOW, sql);
+    expect(calls[0]?.values[0]).toContain("cancelled");
+  });
+
+  test("passes olderThan as an ISO string parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[WORK_ITEM_ROW]]);
+    await listStaleTerminalWorkItems(NOW, sql);
+    expect(calls[0]?.values[1]).toBe(NOW.toISOString());
+  });
+
+  test("parses every returned row", async () => {
+    const { sql } = createFakeSqlClient([
+      [WORK_ITEM_ROW, { ...WORK_ITEM_ROW, id: 2 }],
+    ]);
+    const items = await listStaleTerminalWorkItems(NOW, sql);
+    expect(items).toHaveLength(2);
+  });
+
+  test("casts olderThan to ::timestamptz so the ISO string doesn't bind as text against updated_at (timestamptz)", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listStaleTerminalWorkItems(NOW, sql);
+    expect(calls[0]?.text).toContain("::timestamptz");
+  });
+});
+
+describe("saveDraft", () => {
+  test("inserts into factory.requirement_drafts", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 3 }]]);
+    await saveDraft(
+      {
+        work_item_id: 1,
+        attempt: 1,
+        summary: "s",
+        markdown: "m",
+        diagrams: [],
+        open_questions: [],
+      },
+      sql,
+    );
+    expect(calls[0]?.text).toContain("INSERT INTO factory.requirement_drafts");
+  });
+
+  test("serializes diagrams as a JSON array parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 3 }]]);
+    await saveDraft(
+      {
+        work_item_id: 1,
+        attempt: 1,
+        summary: "s",
+        markdown: "m",
+        diagrams: [{ name: "d1", drawio_xml: "<mxfile/>" }],
+        open_questions: [],
+      },
+      sql,
+    );
+    expect(calls[0]?.values).toContainEqual(
+      JSON.stringify([{ name: "d1", drawio_xml: "<mxfile/>" }]),
+    );
+  });
+
+  test("casts work_item_id and attempt to their real numeric type", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 3 }]]);
+    await saveDraft(
+      {
+        work_item_id: 1,
+        attempt: 1,
+        summary: "s",
+        markdown: "m",
+        diagrams: [],
+        open_questions: [],
+      },
+      sql,
+    );
+    const text = calls[0]?.text ?? "";
+    expect(text).toContain("::bigint");
+    expect(text).toContain("::integer");
+  });
+});
+
+describe("toRequirementDraft", () => {
+  test("parses diagrams and open_questions from a jsonb row", () => {
+    const draft = toRequirementDraft({
+      id: 3,
+      work_item_id: 1,
+      attempt: 1,
+      summary: "s",
+      markdown: "m",
+      diagrams: [{ name: "d1", drawio_xml: "<mxfile/>" }],
+      open_questions: ["what about x?"],
+      created_at: NOW.toISOString(),
+    });
+    expect(draft.diagrams).toEqual([{ name: "d1", drawio_xml: "<mxfile/>" }]);
+  });
+});
+
+describe("recordApproval", () => {
+  test("inserts into factory.approvals", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    await recordApproval(
+      {
+        work_item_id: 1,
+        attempt: 1,
+        decision: "approved",
+        reason: null,
+        approver: "alice",
+      },
+      sql,
+    );
+    expect(calls[0]?.text).toContain("INSERT INTO factory.approvals");
+  });
+
+  test("casts work_item_id and attempt to their real numeric type", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    await recordApproval(
+      {
+        work_item_id: 1,
+        attempt: 1,
+        decision: "approved",
+        reason: null,
+        approver: "alice",
+      },
+      sql,
+    );
+    const text = calls[0]?.text ?? "";
+    expect(text).toContain("::bigint");
+    expect(text).toContain("::integer");
+  });
+});
+
+describe("toApproval", () => {
+  test("parses a factory.approvals row", () => {
+    const approval = toApproval({
+      id: 5,
+      work_item_id: 1,
+      attempt: 1,
+      decision: "approved",
+      reason: null,
+      approver: "alice",
+      decided_at: NOW.toISOString(),
+    });
+    expect(approval).toMatchObject({
+      id: 5,
+      decision: "approved",
+      approver: "alice",
+    });
+  });
+});
+
+describe("recordAgentRun", () => {
+  test("inserts into factory.agent_runs", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await recordAgentRun(
+      {
+        work_item_id: 1,
+        stage: "generate_requirements",
+        attempt: 1,
+        model: "claude-opus-5-5",
+        claude_version: "2.1.282",
+        input_tokens: 100,
+        output_tokens: 200,
+        cache_read_tokens: 0,
+        cost_usd: 0.5,
+        num_turns: 3,
+        duration_ms: 1000,
+        session_id: "sess-1",
+        exit_code: 0,
+        error: null,
+      },
+      sql,
+    );
+    expect(calls[0]?.text).toContain("INSERT INTO factory.agent_runs");
+  });
+
+  test("casts nullable numeric columns (tokens/cost/turns/duration/exit_code) to their real type when null — a Claude timeout/error leaves most of these null", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await recordAgentRun(
+      {
+        work_item_id: 1,
+        stage: "generate_requirements",
+        attempt: 1,
+        model: "claude-opus-5-5",
+        claude_version: null,
+        input_tokens: null,
+        output_tokens: null,
+        cache_read_tokens: null,
+        cost_usd: null,
+        num_turns: null,
+        duration_ms: null,
+        session_id: null,
+        exit_code: null,
+        error: "timed out",
+      },
+      sql,
+    );
+    const text = calls[0]?.text ?? "";
+    expect(text).toContain("::integer");
+    expect(text).toContain("::numeric");
+  });
+});
+
+describe("recordFailure", () => {
+  test("inserts into factory.job_failures", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 11 }]]);
+    await recordFailure(
+      {
+        work_item_id: 1,
+        flow_path: "f/factory/pipeline",
+        job_id: "job-1",
+        step: "generate_requirements",
+        error: "boom",
+      },
+      sql,
+    );
+    expect(calls[0]?.text).toContain("INSERT INTO factory.job_failures");
+  });
+
+  test('casts work_item_id to ::bigint so a null work_item_id (job_failures.work_item_id is nullable — a windmill-level failure not yet tied to a work item) doesn\'t bind as text — reproduces the real-flow failure "column \\"work_item_id\\" is of type bigint but expression is of type text"', async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 11 }]]);
+    await recordFailure(
+      {
+        work_item_id: null,
+        flow_path: "f/factory/pipeline",
+        job_id: "job-1",
+        step: null,
+        error: "boom",
+      },
+      sql,
+    );
+    expect(calls[0]?.text).toContain("::bigint");
+  });
+});
+
+describe("recordDeployment", () => {
+  test("inserts into factory.deployments", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 13 }]]);
+    await recordDeployment(
+      {
+        sha_from: "aaa",
+        sha_to: "bbb",
+        changed_paths: ["f/factory/lib/db.ts"],
+        result: "ok",
+        needs_host_action: false,
+      },
+      sql,
+    );
+    expect(calls[0]?.text).toContain("INSERT INTO factory.deployments");
+  });
+
+  test("casts needs_host_action to ::boolean", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 13 }]]);
+    await recordDeployment(
+      {
+        sha_from: null,
+        sha_to: "bbb",
+        changed_paths: [],
+        result: "ok",
+        needs_host_action: true,
+      },
+      sql,
+    );
+    expect(calls[0]?.text).toContain("::boolean");
+  });
+});
+
+describe("addNotice", () => {
+  test("inserts into factory.notices", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 15 }]]);
+    await addNotice(
+      {
+        kind: "sha_mismatch",
+        message: "self clone SHA does not match deployed_sha",
+      },
+      sql,
+    );
+    expect(calls[0]?.text).toContain("INSERT INTO factory.notices");
+  });
+});
+
+describe("insertReview", () => {
+  test("inserts into factory.reviews", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 17 }]]);
+    await insertReview(
+      {
+        work_item_id: 1,
+        head_sha: "abc1234",
+        verdict: "approve",
+        summary: "looks good",
+        findings: [],
+        posted_review_id: "review-1",
+      },
+      sql,
+    );
+    expect(calls[0]?.text).toContain("INSERT INTO factory.reviews");
+  });
+
+  test("casts work_item_id to ::bigint", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 17 }]]);
+    await insertReview(
+      {
+        work_item_id: 1,
+        head_sha: "abc1234",
+        verdict: "approve",
+        summary: "looks good",
+        findings: [],
+        posted_review_id: "review-1",
+      },
+      sql,
+    );
+    expect(calls[0]?.text).toContain("::bigint");
+  });
+});
+
+describe("toReviewRecord", () => {
+  test("parses findings from a jsonb row", () => {
+    const review = toReviewRecord({
+      work_item_id: 1,
+      head_sha: "abc1234",
+      verdict: "request_changes",
+      summary: "needs work",
+      findings: [
+        {
+          path: "a.ts",
+          line: 10,
+          end_line: 12,
+          severity: "major",
+          kind: "must",
+          message: "bug",
+          suggestion: null,
+          suggested_code: "const x = 2;",
+        },
+      ],
+      posted_review_id: "review-1",
+    });
+    expect(review.findings).toEqual([
+      {
+        path: "a.ts",
+        line: 10,
+        end_line: 12,
+        severity: "major",
+        kind: "must",
+        message: "bug",
+        suggestion: null,
+        suggested_code: "const x = 2;",
+      },
+    ]);
+  });
+
+  test("derives kind from severity when kind is absent (legacy pre-schema-change row shape): blocker/major → must, minor → imo, nit → nits", () => {
+    const review = toReviewRecord({
+      work_item_id: 1,
+      head_sha: "abc1234",
+      verdict: "request_changes",
+      summary: "needs work",
+      findings: [
+        {
+          path: "a.ts",
+          line: 1,
+          severity: "blocker",
+          message: "m1",
+          suggestion: null,
+        },
+        {
+          path: "a.ts",
+          line: 2,
+          severity: "major",
+          message: "m2",
+          suggestion: null,
+        },
+        {
+          path: "a.ts",
+          line: 3,
+          severity: "minor",
+          message: "m3",
+          suggestion: null,
+        },
+        {
+          path: "a.ts",
+          line: 4,
+          severity: "nit",
+          message: "m4",
+          suggestion: null,
+        },
+      ],
+      posted_review_id: "review-1",
+    });
+    expect(review.findings.map((finding) => finding.kind)).toEqual([
+      "must",
+      "must",
+      "imo",
+      "nits",
+    ]);
+  });
+
+  test("defaults end_line and suggested_code to null when absent (legacy pre-schema-change row shape)", () => {
+    const review = toReviewRecord({
+      work_item_id: 1,
+      head_sha: "abc1234",
+      verdict: "request_changes",
+      summary: "needs work",
+      findings: [
+        {
+          path: "a.ts",
+          line: 10,
+          severity: "major",
+          message: "bug",
+          suggestion: null,
+        },
+      ],
+      posted_review_id: "review-1",
+    });
+    expect(review.findings[0]).toMatchObject({
+      end_line: null,
+      suggested_code: null,
+    });
+  });
+
+  test("keeps an explicit kind/end_line/suggested_code from a new-format row instead of deriving/defaulting them", () => {
+    const review = toReviewRecord({
+      work_item_id: 1,
+      head_sha: "abc1234",
+      verdict: "request_changes",
+      summary: "needs work",
+      findings: [
+        {
+          path: "a.ts",
+          line: 10,
+          end_line: 12,
+          severity: "minor",
+          kind: "q",
+          message: "bug",
+          suggestion: null,
+          suggested_code: "const x = 2;",
+        },
+      ],
+      posted_review_id: "review-1",
+    });
+    expect(review.findings[0]).toMatchObject({
+      kind: "q",
+      end_line: 12,
+      suggested_code: "const x = 2;",
+    });
+  });
+});
+
+describe("insertFixRound", () => {
+  test("inserts into factory.fix_rounds", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 19 }]]);
+    await insertFixRound(
+      {
+        work_item_id: 1,
+        round: 1,
+        trigger_review_ids: [17],
+        outcome: "done",
+        replies: [{ review_comment_id: 101, body: "fixed", decision: "fixed" }],
+        commit_shas: ["deadbeef"],
+      },
+      sql,
+    );
+    expect(calls[0]?.text).toContain("INSERT INTO factory.fix_rounds");
+  });
+
+  test("casts work_item_id and round to their real numeric type", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 19 }]]);
+    await insertFixRound(
+      {
+        work_item_id: 1,
+        round: 1,
+        trigger_review_ids: [17],
+        outcome: "done",
+        replies: [{ review_comment_id: 101, body: "fixed", decision: "fixed" }],
+        commit_shas: ["deadbeef"],
+      },
+      sql,
+    );
+    const text = calls[0]?.text ?? "";
+    expect(text).toContain("::bigint");
+    expect(text).toContain("::integer");
+  });
+});
+
+describe("toFixRoundRecord", () => {
+  test("parses replies from a jsonb row", () => {
+    const fixRound = toFixRoundRecord({
+      work_item_id: 1,
+      round: 1,
+      trigger_review_ids: [17],
+      outcome: "done",
+      replies: [{ review_comment_id: 101, body: "fixed", decision: "fixed" }],
+      commit_shas: ["deadbeef"],
+    });
+    expect(fixRound.replies).toEqual([
+      { review_comment_id: 101, body: "fixed", decision: "fixed" },
+    ]);
+  });
+});
+
+describe("latestFixRound", () => {
+  test("returns null when the work item has no fix round yet", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    const fixRound = await latestFixRound(1, sql);
+    expect(fixRound).toBeNull();
+  });
+
+  test("returns the most recently created fix round", async () => {
+    const { sql } = createFakeSqlClient([
+      [
+        {
+          work_item_id: 1,
+          round: 2,
+          trigger_review_ids: [17],
+          outcome: "done",
+          replies: [],
+          commit_shas: ["deadbeef"],
+        },
+      ],
+    ]);
+    const fixRound = await latestFixRound(1, sql);
+    expect(fixRound?.round).toBe(2);
+  });
+});
+
+describe("insertIssueProposal", () => {
+  test("inserts into factory.issue_proposals", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 3 }]]);
+    await insertIssueProposal(
+      {
+        work_item_id: 1,
+        review_comment_id: 101,
+        thread_id: "PRRT_1",
+        title: "Extract a shared helper",
+        body: "背景\n提案\n{{pr_url}}",
+        is_inline: true,
+      },
+      sql,
+    );
+    expect(calls[0]?.text).toContain("INSERT INTO factory.issue_proposals");
+  });
+
+  test("casts work_item_id and review_comment_id to their real numeric type", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 3 }]]);
+    await insertIssueProposal(
+      {
+        work_item_id: 1,
+        review_comment_id: 101,
+        thread_id: null,
+        title: "Extract a shared helper",
+        body: "背景\n提案\n{{pr_url}}",
+        is_inline: false,
+      },
+      sql,
+    );
+    const text = calls[0]?.text ?? "";
+    expect(text).toContain("::bigint");
+  });
+});
+
+describe("toIssueProposal", () => {
+  test("parses a factory.issue_proposals row", () => {
+    const proposal = toIssueProposal({
+      id: 3,
+      work_item_id: 1,
+      review_comment_id: 101,
+      thread_id: "PRRT_1",
+      title: "Extract a shared helper",
+      body: "背景\n提案\n{{pr_url}}",
+      status: "pending",
+      decided_by: null,
+      decision_reason: null,
+      with_factory_label: null,
+      created_issue_number: null,
+      created_issue_url: null,
+      is_inline: true,
+      created_at: NOW.toISOString(),
+      decided_at: null,
+    });
+    expect(proposal).toMatchObject({
+      id: 3,
+      status: "pending",
+      title: "Extract a shared helper",
+      is_inline: true,
+    });
+  });
+});
+
+describe("getIssueProposal", () => {
+  test("returns null when the proposal does not exist", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    const proposal = await getIssueProposal(99, sql);
+    expect(proposal).toBeNull();
+  });
+
+  test("returns the parsed proposal when found", async () => {
+    const { sql } = createFakeSqlClient([
+      [
+        {
+          id: 3,
+          work_item_id: 1,
+          review_comment_id: 101,
+          thread_id: null,
+          title: "Extract a shared helper",
+          body: "背景\n提案\n{{pr_url}}",
+          status: "pending",
+          decided_by: null,
+          decision_reason: null,
+          with_factory_label: null,
+          created_issue_number: null,
+          created_issue_url: null,
+          is_inline: true,
+          created_at: NOW.toISOString(),
+          decided_at: null,
+        },
+      ],
+    ]);
+    const proposal = await getIssueProposal(3, sql);
+    expect(proposal?.id).toBe(3);
+  });
+});
+
+describe("listPendingIssueProposals", () => {
+  test("returns only the pending rows for a work item", async () => {
+    const { sql, calls } = createFakeSqlClient([
+      [
+        {
+          id: 3,
+          work_item_id: 1,
+          review_comment_id: 101,
+          thread_id: null,
+          title: "Extract a shared helper",
+          body: "背景\n提案\n{{pr_url}}",
+          status: "pending",
+          decided_by: null,
+          decision_reason: null,
+          with_factory_label: null,
+          created_issue_number: null,
+          created_issue_url: null,
+          is_inline: true,
+          created_at: NOW.toISOString(),
+          decided_at: null,
+        },
+      ],
+    ]);
+    const proposals = await listPendingIssueProposals(1, sql);
+    expect(proposals).toHaveLength(1);
+    expect(calls[0]?.text).toContain("status = 'pending'");
+  });
+});
+
+describe("decideIssueProposal", () => {
+  test("updates status, decided_by, and the created Issue fields", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 3 }]]);
+    const updated = await decideIssueProposal(
+      3,
+      {
+        status: "approved",
+        decided_by: "alice",
+        decision_reason: null,
+        with_factory_label: true,
+        created_issue_number: 42,
+        created_issue_url:
+          "https://github.com/octo-owner/atelier-works/issues/42",
+      },
+      sql,
+    );
+    expect(calls[0]?.text).toContain("UPDATE factory.issue_proposals");
+    expect(updated).toBe(true);
+  });
+
+  // team-lead fix round, [MUST] #2: guarded by `WHERE status = 'pending'` so
+  // it doubles as an optimistic lock — issue_proposal_decide.ts relies on
+  // this to tell a fresh decision from a retry.
+  test("guards the update with WHERE status = 'pending'", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 3 }]]);
+    await decideIssueProposal(
+      3,
+      {
+        status: "rejected",
+        decided_by: "alice",
+        decision_reason: "scope外のため",
+        with_factory_label: null,
+        created_issue_number: null,
+        created_issue_url: null,
+      },
+      sql,
+    );
+    expect(calls[0]?.text).toContain("status = 'pending'");
+  });
+
+  test("returns false when no pending row matched (already decided)", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    const updated = await decideIssueProposal(
+      3,
+      {
+        status: "approved",
+        decided_by: "alice",
+        decision_reason: null,
+        with_factory_label: true,
+        created_issue_number: null,
+        created_issue_url: null,
+      },
+      sql,
+    );
+    expect(updated).toBe(false);
+  });
+});
+
+describe("setIssueProposalCreatedIssue", () => {
+  test("writes the created Issue's number and url", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await setIssueProposalCreatedIssue(
+      3,
+      {
+        created_issue_number: 42,
+        created_issue_url:
+          "https://github.com/octo-owner/atelier-works/issues/42",
+      },
+      sql,
+    );
+    expect(calls[0]?.text).toContain("UPDATE factory.issue_proposals");
+    expect(calls[0]?.text).toContain("created_issue_number");
+  });
+});
+
+describe("revertIssueProposalToPending", () => {
+  test("reverts an approved row with no created Issue back to pending", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 3 }]]);
+    const reverted = await revertIssueProposalToPending(3, sql);
+    expect(calls[0]?.text).toContain("status = 'pending'");
+    expect(reverted).toBe(true);
+  });
+
+  test("guards the update with status = 'approved' AND created_issue_number IS NULL", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 3 }]]);
+    await revertIssueProposalToPending(3, sql);
+    expect(calls[0]?.text).toContain("status = 'approved'");
+    expect(calls[0]?.text).toContain("created_issue_number IS NULL");
+  });
+
+  test("returns false when no matching row exists (e.g. the Issue was already created)", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    const reverted = await revertIssueProposalToPending(3, sql);
+    expect(reverted).toBe(false);
+  });
+});
+
+describe("countPendingIssueProposals", () => {
+  test("returns the pending count for a work item", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ pending_count: 2 }]]);
+    const count = await countPendingIssueProposals(1, sql);
+    expect(count).toBe(2);
+    expect(calls[0]?.text).toContain("status = 'pending'");
+  });
+
+  test("returns 0 when no row is returned", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    const count = await countPendingIssueProposals(1, sql);
+    expect(count).toBe(0);
+  });
+});
+
+describe("hasPriorReview", () => {
+  test("returns true when a prior review row is found", async () => {
+    const { sql } = createFakeSqlClient([[{ "?column?": 1 }]]);
+    const result = await hasPriorReview(
+      "octo-owner",
+      "atelier-works",
+      7,
+      1,
+      sql,
+    );
+    expect(result).toBe(true);
+  });
+
+  test("returns false when no prior review row is found", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    const result = await hasPriorReview(
+      "octo-owner",
+      "atelier-works",
+      7,
+      1,
+      sql,
+    );
+    expect(result).toBe(false);
+  });
+
+  test("joins factory.reviews to factory.work_items on work_item_id", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasPriorReview("octo-owner", "atelier-works", 7, 1, sql);
+    expect(calls[0]?.text).toContain("JOIN factory.work_items");
+  });
+
+  test("excludes the given work_item_id so this in-flight review never counts as a prior one", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasPriorReview("octo-owner", "atelier-works", 7, 1, sql);
+    expect(calls[0]?.values).toContain(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// M5 promotions (spec-cycle2.md M5, promoted from f/factory/lib/poll_support.ts)
+// ---------------------------------------------------------------------------
+
+describe("setFlowJobId", () => {
+  test("updates flow_job_id", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await setFlowJobId(1, "job-123", sql);
+    expect(calls[0]?.text).toContain("SET flow_job_id");
+  });
+
+  test("passes flowJobId and id as parameters", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await setFlowJobId(1, "job-123", sql);
+    expect(calls[0]?.values).toEqual(["job-123", 1]);
+  });
+});
+
+describe("setFixRound", () => {
+  test("updates fix_round", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await setFixRound(1, 2, sql);
+    expect(calls[0]?.text).toContain("SET fix_round");
+  });
+
+  test("casts round to ::integer", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await setFixRound(1, 2, sql);
+    expect(calls[0]?.text).toContain("::integer");
+  });
+});
+
+describe("setAttempt", () => {
+  test("updates attempt", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await setAttempt(1, 2, sql);
+    expect(calls[0]?.text).toContain("SET attempt");
+  });
+
+  test("passes attempt and id as parameters", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await setAttempt(1, 2, sql);
+    expect(calls[0]?.values).toEqual([2, 1]);
+  });
+
+  test("casts attempt to ::integer", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await setAttempt(1, 2, sql);
+    expect(calls[0]?.text).toContain("::integer");
+  });
+});
+
+describe("setHeadSha", () => {
+  test("updates head_sha", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await setHeadSha(1, "abc1234", sql);
+    expect(calls[0]?.text).toContain("SET head_sha");
+  });
+
+  test("passes headSha and id as parameters", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await setHeadSha(1, "abc1234", sql);
+    expect(calls[0]?.values).toEqual(["abc1234", 1]);
+  });
+});
+
+describe("bumpWatermarks", () => {
+  test("raises both watermarks with GREATEST when both are given", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await bumpWatermarks(1, { last_review_id: 5, last_comment_id: 9 }, sql);
+    expect(calls[0]?.text).toContain("GREATEST");
+  });
+
+  test("touches only last_review_id when only that watermark is given", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await bumpWatermarks(1, { last_review_id: 5 }, sql);
+    expect(calls[0]?.text).not.toContain("last_comment_id");
+  });
+
+  test("touches only last_comment_id when only that watermark is given", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await bumpWatermarks(1, { last_comment_id: 9 }, sql);
+    expect(calls[0]?.text).not.toContain("last_review_id");
+  });
+
+  test("issues no query when neither watermark is given", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await bumpWatermarks(1, {}, sql);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("touches only last_review_comment_id when only that watermark is given", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await bumpWatermarks(1, { last_review_comment_id: 3 }, sql);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.text).toContain("last_review_comment_id");
+    expect(calls[0]?.text).not.toContain("last_review_id =");
+    expect(calls[0]?.text).not.toContain("last_comment_id =");
+  });
+
+  test("raises all three watermarks with GREATEST when all three are given", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [], []]);
+    await bumpWatermarks(
+      1,
+      { last_review_id: 5, last_comment_id: 9, last_review_comment_id: 3 },
+      sql,
+    );
+    expect(calls).toHaveLength(3);
+    expect(calls.every((call) => call.text.includes("GREATEST"))).toBe(true);
+  });
+
+  test("casts each watermark column to ::bigint", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [], []]);
+    await bumpWatermarks(
+      1,
+      { last_review_id: 5, last_comment_id: 9, last_review_comment_id: 3 },
+      sql,
+    );
+    expect(calls.every((call) => call.text.includes("::bigint"))).toBe(true);
+  });
+});
+
+describe("setObservedWatermarks", () => {
+  test("issues no query when nothing is given", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await setObservedWatermarks(1, {}, sql);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("touches only observed_review_id when only that is given", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await setObservedWatermarks(1, { observed_review_id: 5 }, sql);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.text).toContain("observed_review_id");
+    expect(calls[0]?.text).not.toContain("observed_comment_id");
+    expect(calls[0]?.text).not.toContain("observed_review_comment_id");
+  });
+
+  test("overwrites (no GREATEST) — a fresh claim supersedes an earlier one", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await setObservedWatermarks(1, { observed_comment_id: 5 }, sql);
+    expect(calls[0]?.text).not.toContain("GREATEST");
+    expect(calls[0]?.values).toEqual([5, 1]);
+  });
+
+  test("records all three snapshot watermarks when all three are given", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [], []]);
+    await setObservedWatermarks(
+      1,
+      {
+        observed_review_id: 5,
+        observed_comment_id: 9,
+        observed_review_comment_id: 3,
+      },
+      sql,
+    );
+    expect(calls).toHaveLength(3);
+  });
+
+  test("casts each observed watermark column to ::bigint", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [], []]);
+    await setObservedWatermarks(
+      1,
+      {
+        observed_review_id: 5,
+        observed_comment_id: 9,
+        observed_review_comment_id: 3,
+      },
+      sql,
+    );
+    expect(calls.every((call) => call.text.includes("::bigint"))).toBe(true);
+  });
+});
+
+describe("nextCycleForIssue", () => {
+  test("returns one more than the highest recorded cycle", async () => {
+    const { sql } = createFakeSqlClient([[{ next_cycle: 5 }]]);
+    const cycle = await nextCycleForIssue(
+      "octo-owner",
+      "atelier-works",
+      42,
+      sql,
+    );
+    expect(cycle).toBe(5);
+  });
+
+  test("returns 1 when the issue has never had a work item", async () => {
+    const { sql } = createFakeSqlClient([[{ next_cycle: 1 }]]);
+    const cycle = await nextCycleForIssue(
+      "octo-owner",
+      "atelier-works",
+      42,
+      sql,
+    );
+    expect(cycle).toBe(1);
+  });
+
+  test("selects from factory.work_items filtered by owner, repo, and issue_number", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ next_cycle: 1 }]]);
+    await nextCycleForIssue("octo-owner", "atelier-works", 42, sql);
+    expect(calls[0]?.text).toContain("FROM factory.work_items");
+  });
+});
+
+describe("findApprovedWorkItemForIssue", () => {
+  test("returns the most recent kind='issue' work item at approved or later, parsed as a WorkItem", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ ...WORK_ITEM_ROW, id: 3, cycle: 2, status: "implementing" }],
+    ]);
+    const item = await findApprovedWorkItemForIssue(
+      "octo-owner",
+      "atelier-works",
+      42,
+      sql,
+    );
+    expect(item).toMatchObject({ id: 3, cycle: 2, status: "implementing" });
+  });
+
+  test("returns null when the issue has no approved-or-later work item", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    const item = await findApprovedWorkItemForIssue(
+      "octo-owner",
+      "atelier-works",
+      42,
+      sql,
+    );
+    expect(item).toBeNull();
+  });
+
+  test("filters by kind='issue', owner/repo/issue_number, and the approved-or-later status set, ordered by cycle DESC, id DESC", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await findApprovedWorkItemForIssue("octo-owner", "atelier-works", 42, sql);
+    const text = calls[0]?.text ?? "";
+    expect(text).toContain("kind = 'issue'");
+    expect(text).toContain("ORDER BY cycle DESC, id DESC");
+    expect(calls[0]?.values).toContain(42);
+    expect(
+      calls[0]?.values.some(
+        (value) => Array.isArray(value) && value.includes("approved"),
+      ),
+    ).toBe(true);
+  });
+
+  test("casts issue_number to ::integer", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await findApprovedWorkItemForIssue("octo-owner", "atelier-works", 42, sql);
+    expect(calls[0]?.text).toContain("::integer");
+  });
+});
+
+describe("latestPrWorkItem", () => {
+  test("returns null when the PR has never had a work item", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    const result = await latestPrWorkItem(
+      "octo-owner",
+      "atelier-works",
+      7,
+      undefined,
+      sql,
+    );
+    expect(result).toBeNull();
+  });
+
+  test("parses the most recent row into a full WorkItem", async () => {
+    const { sql } = createFakeSqlClient([
+      [
+        {
+          ...WORK_ITEM_ROW,
+          id: 3,
+          head_sha: "abc1234",
+          fix_round: 1,
+          last_comment_id: 9,
+        },
+      ],
+    ]);
+    const result = await latestPrWorkItem(
+      "octo-owner",
+      "atelier-works",
+      7,
+      undefined,
+      sql,
+    );
+    expect(result).toMatchObject({
+      id: 3,
+      head_sha: "abc1234",
+      fix_round: 1,
+      last_comment_id: 9,
+    });
+  });
+
+  test("includes fields beyond id/head_sha/fix_round/last_comment_id, so callers don't need a second getWorkItem lookup", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ ...WORK_ITEM_ROW, id: 3, observed_comment_id: 42 }],
+    ]);
+    const result = await latestPrWorkItem(
+      "octo-owner",
+      "atelier-works",
+      7,
+      undefined,
+      sql,
+    );
+    expect(result?.observed_comment_id).toBe(42);
+  });
+
+  test("selects the full row (SELECT *), not a narrow column list", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await latestPrWorkItem("octo-owner", "atelier-works", 7, undefined, sql);
+    expect(calls[0]?.text).toContain("SELECT *");
+  });
+
+  test("does not filter by kind when opts is omitted", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await latestPrWorkItem("octo-owner", "atelier-works", 7, undefined, sql);
+    expect(calls[0]?.text).not.toContain("kind =");
+  });
+
+  test("does not filter by kind when opts.kind is omitted", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await latestPrWorkItem("octo-owner", "atelier-works", 7, {}, sql);
+    expect(calls[0]?.text).not.toContain("kind =");
+  });
+
+  test("filters by kind when opts.kind is given", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await latestPrWorkItem(
+      "octo-owner",
+      "atelier-works",
+      7,
+      { kind: "pr_fix" },
+      sql,
+    );
+    expect(calls[0]?.values).toContain("pr_fix");
+  });
+
+  test("orders by created_at DESC, id DESC to break same-second insert ties", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await latestPrWorkItem("octo-owner", "atelier-works", 7, undefined, sql);
+    expect(calls[0]?.text).toContain("ORDER BY created_at DESC, id DESC");
+  });
+});
+
+describe("clearResumeUrls", () => {
+  test("sets resume_url and cancel_url to NULL", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await clearResumeUrls(1, sql);
+    expect(calls[0]?.text).toContain("SET resume_url = NULL");
+    expect(calls[0]?.text).toContain("cancel_url = NULL");
+  });
+
+  test("passes id as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await clearResumeUrls(1, sql);
+    expect(calls[0]?.values).toEqual([1]);
+  });
+});
+
+describe("sumAgentCostSince", () => {
+  test("sums cost_usd since the given ISO timestamp", async () => {
+    const { sql } = createFakeSqlClient([[{ total_cost_usd: 12.5 }]]);
+    const total = await sumAgentCostSince("2026-09-26T00:00:00.000Z", sql);
+    expect(total).toBe(12.5);
+  });
+
+  test("returns 0 when no agent_runs rows fall in range", async () => {
+    const { sql } = createFakeSqlClient([[{ total_cost_usd: 0 }]]);
+    const total = await sumAgentCostSince("2026-09-26T00:00:00.000Z", sql);
+    expect(total).toBe(0);
+  });
+
+  test('casts sinceIso to ::timestamptz so the JS string doesn\'t bind as text against created_at (timestamptz) — reproduces the real E2E failure "operator does not exist: timestamp with time zone >= text"', async () => {
+    const { sql, calls } = createFakeSqlClient([[{ total_cost_usd: 0 }]]);
+    await sumAgentCostSince("2026-09-26T00:00:00.000Z", sql);
+    expect(calls[0]?.text).toContain("::timestamptz");
+  });
+
+  test("filters by created_at >= the given timestamp", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ total_cost_usd: 0 }]]);
+    await sumAgentCostSince("2026-09-26T00:00:00.000Z", sql);
+    expect(calls[0]?.text).toContain("created_at >=");
+  });
+});
+
+describe("latestDraft", () => {
+  test("returns null when the work item has no draft", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    const draft = await latestDraft(1, sql);
+    expect(draft).toBeNull();
+  });
+
+  test("returns the most recently created draft", async () => {
+    const { sql } = createFakeSqlClient([
+      [
+        {
+          id: 3,
+          work_item_id: 1,
+          attempt: 2,
+          summary: "s",
+          markdown: "m",
+          diagrams: [],
+          open_questions: [],
+          created_at: "2026-09-26T00:00:00.000Z",
+        },
+      ],
+    ]);
+    const draft = await latestDraft(1, sql);
+    expect(draft?.attempt).toBe(2);
+  });
+
+  test("orders by created_at descending, limited to one row", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await latestDraft(1, sql);
+    expect(calls[0]?.text).toContain("ORDER BY created_at DESC");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// M6 pipeline promotions (promoted from f/factory/steps/
+// pipeline_request_approval.ts / pipeline_decide.ts)
+// ---------------------------------------------------------------------------
+
+describe("setResumeUrls", () => {
+  test("updates resume_url and cancel_url", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await setResumeUrls(
+      1,
+      "https://example/resume",
+      "https://example/cancel",
+      sql,
+    );
+    expect(calls[0]?.text).toContain("SET resume_url");
+  });
+
+  test("passes resumeUrl, cancelUrl, and id as parameters", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await setResumeUrls(
+      1,
+      "https://example/resume",
+      "https://example/cancel",
+      sql,
+    );
+    expect(calls[0]?.values).toEqual([
+      "https://example/resume",
+      "https://example/cancel",
+      1,
+    ]);
+  });
+});
+
+describe("latestApproval", () => {
+  test("returns null when there is no approval for this attempt", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    const approval = await latestApproval(1, 1, sql);
+    expect(approval).toBeNull();
+  });
+
+  test("returns the most recent approval for (work_item_id, attempt)", async () => {
+    const { sql } = createFakeSqlClient([
+      [
+        {
+          id: 5,
+          work_item_id: 1,
+          attempt: 1,
+          decision: "approved",
+          reason: null,
+          approver: "alice",
+          decided_at: "2026-09-26T00:00:00.000Z",
+        },
+      ],
+    ]);
+    const approval = await latestApproval(1, 1, sql);
+    expect(approval?.decision).toBe("approved");
+  });
+
+  test("filters by work_item_id and attempt", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await latestApproval(1, 2, sql);
+    expect(calls[0]?.values).toEqual([1, 2]);
+  });
+});

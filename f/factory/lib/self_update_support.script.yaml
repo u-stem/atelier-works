@@ -1,0 +1,9 @@
+summary: '[LIB] 自己更新の純粋ロジック'
+description: 内部ライブラリです。直接実行するものではありません。自己更新処理が使う判定・整形ロジックです。
+lock: '!inline f/factory/lib/self_update_support.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

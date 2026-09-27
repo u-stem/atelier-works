@@ -1,0 +1,26 @@
+summary: '[OP-0-1/1] Console 用データ取得'
+description: Factory Console(承認・進捗・分析ダッシュボード)が表示する一覧・集計データを、対応するData
+  Tableのビューから読み取り専用で取得します。承認や再実行などの操作は行いません。
+lock: '!inline f/factory/steps/console_query.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties:
+    days:
+      type: number
+      description: 何日前までのデータを対象にするか(既定30日)。
+      default: null
+    limit:
+      type: number
+      description: 取得する最大件数(既定200件)。
+      default: null
+    view:
+      type: string
+      description: 取得するデータの種類。inbox(承認待ち) / pipeline(作業項目一覧) / agent_cost_daily(日別コスト)
+        / approval_stats(承認統計) / lead_time(リードタイム) / failures(失敗一覧) /
+        notices(要対応通知) / reviews(PRレビュー) / fix_rounds(PR修正)のいずれか。
+      default: null
+      originalType: string
+  required:
+    - view

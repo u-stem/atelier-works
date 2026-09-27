@@ -1,0 +1,4 @@
+value: ""
+is_secret: true
+description: >-
+  Claude Codeを自動実行するために使う、Claude Codeの長期利用トークン(CLAUDE_CODE_OAUTH_TOKEN)です。ここで値を設定してください。
