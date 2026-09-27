@@ -441,6 +441,73 @@ describe("runClaude", () => {
     });
   });
 
+  describe("addDirs", () => {
+    test("passes each directory as its own --add-dir argument", async () => {
+      const fake = createFakeCommandRunner([
+        {
+          stdout: claudeJsonStdout(),
+          stderr: "",
+          exitCode: 0,
+          timedOut: false,
+        },
+      ]);
+      await runClaude({
+        ...baseOptions(fake.run),
+        addDirs: ["/workspaces/octo-owner/atelier-works/pr-1"],
+      });
+      const argv = fake.calls[0]?.argv ?? [];
+      const flagIndex = argv.indexOf("--add-dir");
+      expect(flagIndex).toBeGreaterThanOrEqual(0);
+      expect(argv[flagIndex + 1]).toBe(
+        "/workspaces/octo-owner/atelier-works/pr-1",
+      );
+    });
+
+    test("adds one --add-dir flag per directory", async () => {
+      const fake = createFakeCommandRunner([
+        {
+          stdout: claudeJsonStdout(),
+          stderr: "",
+          exitCode: 0,
+          timedOut: false,
+        },
+      ]);
+      await runClaude({
+        ...baseOptions(fake.run),
+        addDirs: ["/workspaces/a", "/workspaces/b"],
+      });
+      const argv = fake.calls[0]?.argv ?? [];
+      const flagCount = argv.filter((arg) => arg === "--add-dir").length;
+      expect(flagCount).toBe(2);
+    });
+
+    test("does not add --add-dir when omitted", async () => {
+      const fake = createFakeCommandRunner([
+        {
+          stdout: claudeJsonStdout(),
+          stderr: "",
+          exitCode: 0,
+          timedOut: false,
+        },
+      ]);
+      await runClaude(baseOptions(fake.run));
+      expect(fake.calls[0]?.argv).not.toContain("--add-dir");
+    });
+
+    test("does not add --add-dir when given an empty array", async () => {
+      const fake = createFakeCommandRunner([
+        {
+          stdout: claudeJsonStdout(),
+          stderr: "",
+          exitCode: 0,
+          timedOut: false,
+        },
+      ]);
+      await runClaude({ ...baseOptions(fake.run), addDirs: [] });
+      expect(fake.calls[0]?.argv).not.toContain("--add-dir");
+    });
+  });
+
   test("masks a secret-looking value in the invalid_structured_output agentRun.error", async () => {
     // Both attempts fail schema validation, so the final (returned) failure
     // carries the masked detail — a successful retry would otherwise

@@ -71,6 +71,11 @@ export type RequirementsPromptInput = {
   feedback: string | null;
   previousDraft: RequirementDraft | null;
   attempt: number;
+  /** The target repository's read-only worktree directory (mounted via
+   * `runClaude`'s `addDirs`, not `cwd`) — passed through as plain text
+   * (an operator-controlled filesystem path, not untrusted GitHub content),
+   * so it does not need a DATA fence. */
+  targetRepoDir: string;
 };
 
 export function requirementsPrompt(
@@ -82,10 +87,9 @@ export function requirementsPrompt(
   const { issue } = input;
   const sections: string[] = [
     "You are the requirements-generation stage of a Software Factory pipeline.",
-    "Read the GitHub issue below and produce a requirements draft: a summary,",
-    "full markdown (acceptance criteria, scope, edge cases), any draw.io",
-    "diagrams needed to clarify the design, and any open questions for a human",
-    "approver. Do not write or edit any code in this stage.",
+    "Read the GitHub issue below, investigate the target repository as needed",
+    "(read-only), and produce a requirements document by editing files in your",
+    "current working directory. Do not write or edit any code in this stage.",
     "",
     nonceBanner(nonce),
     "",
@@ -93,6 +97,7 @@ export function requirementsPrompt(
     `Issue: #${String(issue.number)}`,
     `Issue URL: ${issue.url}`,
     `Attempt: ${String(input.attempt)}`,
+    `Target repository (read-only): ${input.targetRepoDir}`,
     "",
     dataFence(nonce, "issue title", JSON.stringify(issue.title)),
     "",
@@ -118,7 +123,17 @@ export function requirementsPrompt(
 
   sections.push(
     "",
-    "Respond with structured output matching the provided JSON schema only.",
+    "Your current working directory already contains requirements.md, a copy",
+    "of the requirements template. Fill it in with the Edit tool, following",
+    "the factory-requirements skill's section list and writing rules exactly",
+    "— do not create, rename, or delete any other file there. Any draw.io",
+    "diagram goes in the same directory as a `<name>.drawio` file written",
+    "with the Write tool, per the drawio-diagram skill.",
+    "",
+    "Respond with structured output matching the provided JSON schema only:",
+    "a short summary and any open questions for a human approver. The",
+    "requirements markdown itself belongs in requirements.md, not in this",
+    "structured output.",
     "Write any natural-language prose in your output in Japanese " +
       "(identifiers, code, and file paths stay as-is in their original form).",
   );
@@ -129,25 +144,12 @@ export const REQUIREMENTS_SCHEMA = {
   type: "object",
   properties: {
     summary: { type: "string" },
-    markdown: { type: "string" },
-    diagrams: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          name: { type: "string" },
-          drawio_xml: { type: "string" },
-        },
-        required: ["name", "drawio_xml"],
-        additionalProperties: false,
-      },
-    },
     open_questions: {
       type: "array",
       items: { type: "string" },
     },
   },
-  required: ["summary", "markdown", "diagrams", "open_questions"],
+  required: ["summary", "open_questions"],
   additionalProperties: false,
 } as const;
 

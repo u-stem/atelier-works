@@ -43,3 +43,18 @@ describe("buildRequirementsDocDir", () => {
     ).toThrow();
   });
 });
+
+describe("buildRequirementsDocDir numeric parts", () => {
+  test("rejects a non-integer attempt", () => {
+    expect(() =>
+      buildRequirementsDocDir(
+        REQUIREMENTS_BASE_DIR,
+        "acme",
+        "widgets",
+        1,
+        2,
+        1.5,
+      ),
+    ).toThrow(/attempt/);
+  });
+});

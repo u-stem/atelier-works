@@ -16,19 +16,25 @@
 // propagates out of `main`, rather than the per-step try/catch silently
 // returning an all-zero result.
 //
-// Deleting the requirements-generation worktree directory for an
-// old/deleted work item (`doc_dirs_deleted`) is out of scope here — it is
-// always 0 for now and added in a follow-up PR.
+// Deleting a work item's requirements-doc directory (`doc_dirs_deleted`) is
+// best-effort filesystem cleanup, not itself a DB sweep: it runs after
+// `deleteTerminalWorkItemsBefore` succeeds, using the `{id, owner, repo,
+// issue_number}` refs that call already returns for the rows it deleted
+// (`lib/cleanup_db_support.ts`'s `docDirsFor`). A failure here (or the DB
+// delete never running at all) is logged and noticed the same way as the
+// other sweeps, and never blocks the rest of this job.
 
 import * as wmill from "windmill-client@1.817.0";
 import {
   type CleanupCounts,
   computeRetentionCutoffs,
+  docDirsFor,
   summarizeCleanup,
 } from "./lib/cleanup_db_support.ts";
 import { loadConfig } from "./lib/config.ts";
 import {
   addNotice,
+  type DeletedWorkItemRef,
   deleteDeploymentsBefore,
   deleteJobFailuresBefore,
   deleteResolvedNoticesBefore,
@@ -36,6 +42,8 @@ import {
   insertCleanupRun,
 } from "./lib/db.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
+import { REQUIREMENTS_BASE_DIR } from "./lib/requirements_template.ts";
+import { removeEmptyDir, removePath } from "./lib/workspace.ts";
 
 function errorMessage(err: unknown): string {
   return maskSecrets(err instanceof Error ? err.message : String(err));
@@ -45,13 +53,18 @@ function errorMessage(err: unknown): string {
  * Deletes terminal work items past `cutoff`. The approval_requests rows the
  * delete cascades away are counted inside the same statement (see
  * `deleteTerminalWorkItemsBefore`), so the two numbers always describe the
- * same set of rows.
+ * same set of rows. `deleted` (the per-item owner/repo/issue_number refs)
+ * is what `cleanupDocDirs` below uses to find each item's requirements-doc
+ * directory — empty when the delete itself failed, which correctly skips
+ * that sweep too (there is nothing to delete `docDirsFor` could compute).
  */
 async function cleanupWorkItems(
   cutoff: Date,
   log: Logger,
 ): Promise<
-  Pick<CleanupCounts, "work_items_deleted" | "approval_requests_deleted">
+  Pick<CleanupCounts, "work_items_deleted" | "approval_requests_deleted"> & {
+    readonly deleted: readonly DeletedWorkItemRef[];
+  }
 > {
   try {
     return await deleteTerminalWorkItemsBefore(cutoff);
@@ -64,8 +77,43 @@ async function cleanupWorkItems(
       kind: "cleanup_db_failed",
       message: `終端 work item の削除に失敗しました: ${message}`,
     });
-    return { work_items_deleted: 0, approval_requests_deleted: 0 };
+    return { work_items_deleted: 0, approval_requests_deleted: 0, deleted: [] };
   }
+}
+
+/**
+ * Best-effort deletes each deleted work item's requirements-doc directory
+ * (`docDirsFor`): the `wi-<id>` directory recursively, then its parent
+ * `issue-<N>` directory only if that leaves it empty (a sibling work item
+ * for the same issue may still have its own `wi-<id>` there). One failure
+ * is logged and noticed but does not stop the rest — a stray directory left
+ * behind is a disk-usage concern, not a correctness one, and the DB rows it
+ * belonged to are already gone either way.
+ */
+async function cleanupDocDirs(
+  deleted: readonly DeletedWorkItemRef[],
+  log: Logger,
+): Promise<number> {
+  const dirs = docDirsFor(deleted, REQUIREMENTS_BASE_DIR);
+  let deletedCount = 0;
+  for (const { wiDir, issueDir } of dirs) {
+    try {
+      await removePath(wiDir);
+      await removeEmptyDir(issueDir);
+      deletedCount += 1;
+    } catch (err) {
+      const message = errorMessage(err);
+      log.error("cleanup_db: failed to delete a requirements doc dir", {
+        wiDir,
+        error: message,
+      });
+      await addNotice({
+        kind: "cleanup_db_failed",
+        message: `要件定義ディレクトリの削除に失敗しました(${wiDir}): ${message}`,
+      });
+    }
+  }
+  return deletedCount;
 }
 
 async function cleanupJobFailures(cutoff: Date, log: Logger): Promise<number> {
@@ -139,6 +187,7 @@ export async function main(): Promise<CleanupCounts> {
   const cutoffs = computeRetentionCutoffs(new Date(), config);
 
   const workItems = await cleanupWorkItems(cutoffs.workItemsBefore, log);
+  const docDirsDeleted = await cleanupDocDirs(workItems.deleted, log);
   const jobFailuresDeleted = await cleanupJobFailures(cutoffs.logsBefore, log);
   const deploymentsDeleted = await cleanupDeployments(cutoffs.logsBefore, log);
   const noticesDeleted = await cleanupNotices(cutoffs.logsBefore, log);
@@ -149,8 +198,7 @@ export async function main(): Promise<CleanupCounts> {
     job_failures_deleted: jobFailuresDeleted,
     deployments_deleted: deploymentsDeleted,
     notices_deleted: noticesDeleted,
-    // Requirement-definition worktree cleanup is added in a follow-up PR.
-    doc_dirs_deleted: 0,
+    doc_dirs_deleted: docDirsDeleted,
   };
 
   await recordRun(counts, log);

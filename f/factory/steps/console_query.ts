@@ -20,14 +20,17 @@
 // unresolved notice must not silently disappear from the tab that exists to
 // surface it.
 //
-// Diagrams are never returned as raw drawio_xml — only `{name, viewer_url}`
-// (lib/drawio.ts's toViewerUrl), the same format the App's Inbox tab needs
-// to render a link, so the App never has to embed or re-derive the XML
-// client-side. This is also the only place a diagram's viewer URL is ever
-// exposed — it is never posted to GitHub or Discord (2026-09-27 policy).
+// Diagrams are returned as `{name, viewer_url}`, the shape the App's Inbox
+// tab renders a link from — but `viewer_url` is always `null` for now: as
+// of the file-per-diagram requirements-doc format (2026-09-27), a diagram's
+// XML lives on disk under `requirement_drafts.doc_dir`/`<file>` (a
+// worker-local path this runnable has no read access to), not in this row.
+// Wiring up inline rendering from that file is a follow-up PR (see
+// docs/architecture.md, 工程2, and docs/security.md "draw.io ビューアーの
+// プライバシー" — a diagram's content is never posted to GitHub or Discord
+// either way, 2026-09-27 policy).
 
 import { defaultSqlClient, type SqlClient, type SqlRow } from "../lib/db.ts";
-import { toViewerUrl, validateDrawioXml } from "../lib/drawio.ts";
 import {
   APPROVAL_REQUEST_KINDS,
   APPROVAL_REQUEST_STATUSES,
@@ -165,7 +168,7 @@ function asJsonArray(value: unknown, field: string): unknown[] {
 }
 
 function isDiagram(value: unknown): value is Diagram {
-  return isRecord(value) && isString(value.name) && isString(value.drawio_xml);
+  return isRecord(value) && isString(value.name) && isString(value.file);
 }
 
 export type DiagramLink = {
@@ -173,16 +176,12 @@ export type DiagramLink = {
   readonly viewer_url: string | null;
 };
 
-/** Converts a stored `{name, drawio_xml}` diagram into `{name, viewer_url}`
- * (pure, for testing) — `viewer_url` is `null` when the XML fails the same
- * validation lib/drawio.ts applies before posting to GitHub, or is too large
- * to encode as a fragment. */
+/** Converts a stored `{name, file}` diagram reference into `{name,
+ * viewer_url}` (pure, for testing). `viewer_url` is always `null` — see
+ * this file's module doc comment for why. The diagram is still listed by
+ * name so the Inbox tab can show it exists. */
 export function toDiagramLink(diagram: Diagram): DiagramLink {
-  const validation = validateDrawioXml(diagram.drawio_xml);
-  if (!validation.valid) {
-    return { name: diagram.name, viewer_url: null };
-  }
-  return { name: diagram.name, viewer_url: toViewerUrl(diagram.drawio_xml) };
+  return { name: diagram.name, viewer_url: null };
 }
 
 function parseDiagramLinks(value: unknown, field: string): DiagramLink[] {

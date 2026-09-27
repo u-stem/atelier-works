@@ -1,13 +1,15 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   addDetachedWorktree,
   type CommandResult,
   commitAndPush,
+  copyFileTo,
   createBunCommandRunner,
   createGtrWorktree,
+  ensureEmptyDir,
   ensureFactoryClone,
   ensureRepo,
   fetchPrHeadRef,
@@ -15,13 +17,17 @@ import {
   listWorktrees,
   pathExists,
   pruneWorktrees,
+  readDirEntries,
   readGitShowFile,
+  readTextFile,
+  removeEmptyDir,
   removeWorktree,
   resolveDefaultBranchHeadSha,
   runCommand,
   verifyWorktreeGitdir,
   withCommitTrailers,
   withRepoLock,
+  writeTextFile,
 } from "../../f/factory/lib/workspace.ts";
 import { createFakeCommandRunner, fail, ok } from "./testSupport.ts";
 
@@ -1580,5 +1586,75 @@ describe("repo-wide lock scope (code-review fix)", () => {
     });
 
     expect(seenLockPaths).toEqual(new Set([lockPath]));
+  });
+});
+
+describe("ensureEmptyDir", () => {
+  test("creates the directory when it does not exist yet", async () => {
+    const base = mkdtempSync(join(tmpdir(), "factory-ensure-empty-dir-"));
+    const dir = join(base, "docdir");
+    await ensureEmptyDir(dir);
+    expect(existsSync(dir)).toBe(true);
+  });
+
+  test("removes an existing directory's stray contents before recreating it", async () => {
+    const base = mkdtempSync(join(tmpdir(), "factory-ensure-empty-dir-"));
+    const dir = join(base, "docdir");
+    mkdirSync(dir);
+    writeFileSync(join(dir, "stray.txt"), "leftover from a previous attempt");
+    await ensureEmptyDir(dir);
+    expect(existsSync(join(dir, "stray.txt"))).toBe(false);
+  });
+});
+
+describe("readDirEntries / readTextFile / writeTextFile / copyFileTo", () => {
+  test("readDirEntries lists a directory's entries", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "factory-readdir-"));
+    writeFileSync(join(dir, "requirements.md"), "# a");
+    writeFileSync(join(dir, "flow.drawio"), "<mxfile/>");
+    const entries = await readDirEntries(dir);
+    expect(entries.sort()).toEqual(["flow.drawio", "requirements.md"]);
+  });
+
+  test("writeTextFile then readTextFile round-trips the content", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "factory-readwrite-"));
+    const path = join(dir, "requirements.md");
+    await writeTextFile(path, "# hello");
+    expect(await readTextFile(path)).toBe("# hello");
+  });
+
+  test("copyFileTo copies a file's content to a new path", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "factory-copy-"));
+    const source = join(dir, "template.md");
+    writeFileSync(source, "template body");
+    const destination = join(dir, "requirements.md");
+    await copyFileTo(source, destination);
+    expect(await readTextFile(destination)).toBe("template body");
+  });
+});
+
+describe("removeEmptyDir", () => {
+  test("removes an empty directory and returns true", async () => {
+    const base = mkdtempSync(join(tmpdir(), "factory-remove-empty-dir-"));
+    const dir = join(base, "issue-1");
+    mkdirSync(dir);
+    const removed = await removeEmptyDir(dir);
+    expect(removed).toBe(true);
+    expect(existsSync(dir)).toBe(false);
+  });
+
+  test("returns false without throwing for a non-empty directory", async () => {
+    const base = mkdtempSync(join(tmpdir(), "factory-remove-empty-dir-"));
+    const dir = join(base, "issue-1");
+    mkdirSync(dir);
+    writeFileSync(join(dir, "wi-1"), "");
+    const removed = await removeEmptyDir(dir);
+    expect(removed).toBe(false);
+    expect(existsSync(dir)).toBe(true);
+  });
+
+  test("returns false without throwing for a directory that doesn't exist", async () => {
+    const removed = await removeEmptyDir("/nonexistent/path/for/sure");
+    expect(removed).toBe(false);
   });
 });

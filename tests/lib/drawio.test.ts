@@ -45,10 +45,10 @@ describe("validateDrawioXml", () => {
     expect(result.valid).toBe(false);
   });
 
-  test("rejects a document over 12KB", () => {
+  test("rejects a document over 256KB", () => {
     const bigXml = MINIMAL_VALID_XML.replace(
       'value="start"',
-      `value="${"x".repeat(13 * 1024)}"`,
+      `value="${"x".repeat(257 * 1024)}"`,
     );
     const result = validateDrawioXml(bigXml);
     expect(result.valid).toBe(false);

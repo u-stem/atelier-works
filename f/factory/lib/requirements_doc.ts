@@ -2,9 +2,9 @@
 // .claude/skills/factory-requirements/template.md and SKILL.md). Every
 // function here is a pure function over markdown text — no I/O, no
 // Windmill/GitHub dependency — so headless Claude's output can be checked
-// the same way in a unit test as it eventually will be in the pipeline
-// (wiring that check into pipeline_generate.ts is out of scope for this
-// PR; see docs/architecture.md).
+// the same way in a unit test as it is wired into the pipeline
+// (steps/pipeline_generate.ts's post-generation validation; see
+// docs/architecture.md, 工程2).
 //
 // Each `check*` function returns a list of Japanese-language issue strings
 // (empty when there's nothing to report); `validateRequirementsDoc`

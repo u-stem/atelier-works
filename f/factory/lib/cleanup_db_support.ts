@@ -1,8 +1,10 @@
 // Pure decision/formatting logic for cleanup_db.ts (DB retention cleanup,
 // 2026-09-27 addition). No I/O -- see that script for wiring (db.ts calls,
-// config loading, per-step error handling).
+// config loading, per-step error handling, and the actual filesystem
+// deletes docDirsFor's paths point at).
 
-import type { FactoryConfig } from "./types.ts";
+import type { DeletedWorkItemRef } from "./db.ts";
+import { assertGitHubName, type FactoryConfig } from "./types.ts";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -46,8 +48,8 @@ export type CleanupCounts = {
   readonly job_failures_deleted: number;
   readonly deployments_deleted: number;
   readonly notices_deleted: number;
-  /** Requirement-definition worktree directories deleted. Always 0 for
-   * now -- that sweep is added in a follow-up PR (see cleanup_db.ts). */
+  /** Requirement-definition doc dirs (see docDirsFor) deleted alongside a
+   * deleted work item. */
   readonly doc_dirs_deleted: number;
 };
 
@@ -55,9 +57,10 @@ export type CleanupCounts = {
  * A one-line Japanese summary of `counts`, for both the cleanup_db.ts job
  * log and the daily_summary Discord embed's "DB 掃除" field. Intentionally
  * omits approval_requests_deleted (a side effect of the work_items delete
- * cascading, not a sweep of its own) and doc_dirs_deleted (always 0 for
- * now) -- the four counts shown are each an independent sweep the operator
- * may care about individually.
+ * cascading, not a sweep of its own) and doc_dirs_deleted (a filesystem
+ * side effect of the same work_items delete, not a DB sweep of its own) --
+ * the four counts shown are each an independent sweep the operator may
+ * care about individually.
  */
 export function summarizeCleanup(counts: CleanupCounts): string {
   return (
@@ -66,4 +69,46 @@ export function summarizeCleanup(counts: CleanupCounts): string {
     `デプロイ記録 ${String(counts.deployments_deleted)}件、` +
     `通知 ${String(counts.notices_deleted)}件を削除しました`
   );
+}
+
+// ---------------------------------------------------------------------------
+// Requirements-doc directory cleanup (cleanup_db.ts, 2026-09-27 file-per-
+// diagram redesign). Pure path computation only -- cleanup_db.ts does the
+// actual filesystem deletes (best-effort, via lib/workspace.ts's
+// removePath / removeEmptyDir).
+// ---------------------------------------------------------------------------
+
+export type DocDirsToDelete = {
+  /** The deleted work item's own requirements doc dir, covering every
+   * attempt (`<base>/<owner>/<repo>/issue-<N>/wi-<id>`) -- deleted
+   * recursively. */
+  readonly wiDir: string;
+  /** Its parent `issue-<N>` directory, which cleanup_db.ts should also
+   * remove but only if it is left empty (a sibling work item for the same
+   * issue may still have its own `wi-<id>` directory under it). */
+  readonly issueDir: string;
+};
+
+/**
+ * Computes the requirements doc dir(s) to delete for each deleted work item
+ * (`db.ts`'s `deleteTerminalWorkItemsBefore` return value), skipping items
+ * with no `issue_number` (a `pr`-kind work item never had a requirements
+ * doc dir in the first place). Mirrors
+ * `lib/requirements_template.ts`'s `buildRequirementsDocDir` path scheme up
+ * to the `wi-<id>` segment (this deletes every attempt at once, so it does
+ * not go one level deeper to a specific `attempt-<k>`).
+ */
+export function docDirsFor(
+  items: readonly DeletedWorkItemRef[],
+  base: string,
+): DocDirsToDelete[] {
+  const result: DocDirsToDelete[] = [];
+  for (const item of items) {
+    if (item.issue_number === null) continue;
+    assertGitHubName(item.owner);
+    assertGitHubName(item.repo);
+    const issueDir = `${base}/${item.owner}/${item.repo}/issue-${item.issue_number}`;
+    result.push({ wiDir: `${issueDir}/wi-${item.id}`, issueDir });
+  }
+  return result;
 }

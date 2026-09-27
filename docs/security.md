@@ -117,8 +117,9 @@ read -rs 'v?GITHUB_TOKEN: ' && mise set -E local GITHUB_TOKEN="$v"; unset v
 
 ## draw.ioビューアーのプライバシー
 
-- 要件定義の図は`viewer.diagrams.net`のURL(`#`以降に圧縮したXMLを埋め込む形式)で共有する。URLのフラグメント部分(`#`以降)はブラウザからdiagrams.netのサーバーには送信されない。
-- このURLはGitHub(Issue / PRコメント)にもDiscord通知にも投稿しない(2026-09-27の方針変更: GitHubには成果物のみを書く)。図の内容はFactory Console App(`f/factory/factory_console`)のInboxタブからのみ閲覧できるため、閲覧できるのはConsoleへのアクセス権を持つ人に限られる。
+- 要件定義の図(`<name>.drawio`)は要件定義ファイルと同じworker専用ディレクトリ(`requirement_drafts.doc_dir`以下)に生のXMLとして書かれ、DBの`requirement_drafts.diagrams`列には`{name, file}`という参照だけが入る。GitHub(Issue / PRコメント)にもDiscord通知にも図の内容・URLのいずれも投稿しない(2026-09-27の方針)。
+- Consoleでのインライン描画(`doc_dir`のファイルを読んで表示する)は次のPRで実装する。それまでは`f/factory/steps/console_query.ts`の`toDiagramLink`が図の名前だけを返し、`viewer_url`は常に`null`になる。
+- `f/factory/lib/drawio.ts`の`toViewerUrl`(`viewer.diagrams.net`のURLフラグメントへのエンコード)は上記の接続が済むまで未使用のまま残す。将来これを使う場合も、URLのフラグメント部分(`#`以降)はブラウザからdiagrams.netのサーバーには送信されない設計を維持し、GitHubやDiscordには投稿しない。
 
 ## 承認と権限
 

@@ -651,6 +651,7 @@ describe("fixPrompt requirements wiring (retry pass)", () => {
       markdown: "the button must be blue",
       diagrams: [],
       open_questions: [],
+      doc_dir: null,
       created_at: new Date("2026-01-01"),
     };
     return fixPrompt({

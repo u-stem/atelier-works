@@ -1,8 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
-  filterValidDiagrams,
-  isDiagram,
+  buildGenerateFailureMessage,
+  classifyDocDirEntries,
+  diagramNameFromFile,
   isRequirementsOutput,
+  listDiagramFiles,
+  readDocFile,
   resolveFeedback,
 } from "../../f/factory/steps/pipeline_generate.ts";
 
@@ -24,28 +27,9 @@ describe("resolveFeedback", () => {
   });
 });
 
-const VALID_XML =
-  '<mxfile host="app.diagrams.net"><diagram name="d" id="d1"><mxGraphModel><root><mxCell id="0" /><mxCell id="1" parent="0" /></root></mxGraphModel></diagram></mxfile>';
-
-describe("isDiagram", () => {
-  test("accepts an object with string name and drawio_xml", () => {
-    expect(isDiagram({ name: "d", drawio_xml: VALID_XML })).toBe(true);
-  });
-
-  test("rejects a non-object value", () => {
-    expect(isDiagram("not an object")).toBe(false);
-  });
-
-  test("rejects an object missing drawio_xml", () => {
-    expect(isDiagram({ name: "d" })).toBe(false);
-  });
-});
-
 describe("isRequirementsOutput", () => {
   const valid = {
     summary: "s",
-    markdown: "m",
-    diagrams: [{ name: "d", drawio_xml: VALID_XML }],
     open_questions: ["q1"],
   };
 
@@ -53,8 +37,8 @@ describe("isRequirementsOutput", () => {
     expect(isRequirementsOutput(valid)).toBe(true);
   });
 
-  test("accepts an empty diagrams array", () => {
-    expect(isRequirementsOutput({ ...valid, diagrams: [] })).toBe(true);
+  test("accepts an empty open_questions array", () => {
+    expect(isRequirementsOutput({ ...valid, open_questions: [] })).toBe(true);
   });
 
   test("rejects a missing summary field", () => {
@@ -66,35 +50,94 @@ describe("isRequirementsOutput", () => {
     expect(isRequirementsOutput({ ...valid, open_questions: [1] })).toBe(false);
   });
 
-  test("rejects diagrams containing a malformed entry", () => {
-    expect(isRequirementsOutput({ ...valid, diagrams: [{ name: "d" }] })).toBe(
-      false,
+  test("rejects a non-object value", () => {
+    expect(isRequirementsOutput("not an object")).toBe(false);
+  });
+});
+
+describe("listDiagramFiles", () => {
+  test("keeps entries ending in .drawio", () => {
+    expect(listDiagramFiles(["flow.drawio", "requirements.md"])).toEqual([
+      "flow.drawio",
+    ]);
+  });
+
+  test("returns an empty array when there are no diagram files", () => {
+    expect(listDiagramFiles(["requirements.md"])).toEqual([]);
+  });
+
+  test("preserves the original order", () => {
+    expect(listDiagramFiles(["b.drawio", "a.drawio"])).toEqual([
+      "b.drawio",
+      "a.drawio",
+    ]);
+  });
+});
+
+describe("classifyDocDirEntries", () => {
+  test("puts every .drawio entry into diagramFiles", () => {
+    const result = classifyDocDirEntries(["requirements.md", "flow.drawio"]);
+    expect(result.diagramFiles).toEqual(["flow.drawio"]);
+  });
+
+  test("excludes requirements.md from stray", () => {
+    const result = classifyDocDirEntries(["requirements.md", "flow.drawio"]);
+    expect(result.stray).toEqual([]);
+  });
+
+  test("reports an unexpected file as stray", () => {
+    const result = classifyDocDirEntries(["requirements.md", "notes.txt"]);
+    expect(result.stray).toEqual(["notes.txt"]);
+  });
+
+  test("reports an unexpected subdirectory as stray", () => {
+    const result = classifyDocDirEntries(["requirements.md", "scratch"]);
+    expect(result.stray).toEqual(["scratch"]);
+  });
+
+  test("handles a doc dir with only the template file", () => {
+    const result = classifyDocDirEntries(["requirements.md"]);
+    expect(result).toEqual({ diagramFiles: [], stray: [] });
+  });
+});
+
+describe("diagramNameFromFile", () => {
+  test("strips the .drawio extension", () => {
+    expect(diagramNameFromFile("issue-intake-flow.drawio")).toBe(
+      "issue-intake-flow",
     );
   });
 });
 
-describe("filterValidDiagrams", () => {
-  test("keeps a diagram with valid XML", () => {
-    const result = filterValidDiagrams([{ name: "d", drawio_xml: VALID_XML }]);
-    expect(result).toEqual([{ name: "d", drawio_xml: VALID_XML }]);
-  });
-
-  test("drops a diagram with invalid XML", () => {
-    const result = filterValidDiagrams([
-      { name: "bad", drawio_xml: "<not-mxfile/>" },
-    ]);
-    expect(result).toEqual([]);
-  });
-
-  test("calls onInvalid once per dropped diagram", () => {
-    const dropped: string[] = [];
-    filterValidDiagrams(
-      [
-        { name: "bad", drawio_xml: "<not-mxfile/>" },
-        { name: "d", drawio_xml: VALID_XML },
-      ],
-      (diagram) => dropped.push(diagram.name),
+describe("buildGenerateFailureMessage", () => {
+  test("joins every issue with a semicolon", () => {
+    expect(buildGenerateFailureMessage(["issue A", "issue B"])).toBe(
+      "requirements document failed validation: issue A; issue B",
     );
-    expect(dropped).toEqual(["bad"]);
+  });
+
+  test("handles a single issue", () => {
+    expect(buildGenerateFailureMessage(["issue A"])).toBe(
+      "requirements document failed validation: issue A",
+    );
+  });
+});
+
+describe("readDocFile", () => {
+  test("returns the file content", async () => {
+    const content = await readDocFile(
+      "/doc",
+      "requirements.md",
+      async () => "# x",
+    );
+    expect(content).toBe("# x");
+  });
+
+  test("wraps a read failure in a Japanese message naming the file", async () => {
+    await expect(
+      readDocFile("/doc", "requirements.md", async () => {
+        throw new Error("ENOENT");
+      }),
+    ).rejects.toThrow(/requirements\.md/);
   });
 });
