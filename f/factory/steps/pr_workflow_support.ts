@@ -39,6 +39,8 @@ import {
   type ReviewSeverity,
   type ReviewVerdict,
   type WorkItem,
+  type WorkItemKind,
+  type WorkItemStatus,
 } from "../lib/types.ts";
 import type { CommandRunner } from "../lib/workspace.ts";
 
@@ -1950,6 +1952,15 @@ export function buildIssueProposalBody(
   return `${normalizeJapaneseText(withUrl)}\n\nこのIssueはPR #${String(prNumber)}のレビュー指摘から起票されました`;
 }
 
+/** Issue body for a proposal raised by an audit report (工程5): no PR to
+ * link, the provenance line names the audited period instead. */
+export function buildAuditProposalBody(
+  bodyTemplate: string,
+  periodLabel: string,
+): string {
+  return `${normalizeJapaneseText(bodyTemplate)}\n\nこのIssueは監査レポート(${periodLabel})から起票されました`;
+}
+
 /** The Issue title as created on GitHub: Claude's proposal title with the
  * ASCII/Japanese spacing rule applied. */
 export function buildIssueProposalTitle(title: string): string {
@@ -2140,6 +2151,39 @@ export function decidePostProposalStatus(
   }
   return {
     action: "swap",
+    toStatus: committedThisRound ? "rereview_requested" : "reviewed",
+  };
+}
+
+export type PostProposalTransition =
+  | { readonly action: "keep" }
+  | {
+      readonly action: "swap";
+      readonly expectedFrom: WorkItemStatus;
+      readonly toStatus: WorkItemStatus;
+    };
+
+/** Kind-aware successor of decidePostProposalStatus: an audit waits in
+ * `awaiting_approval` and ends in `audited`; a pr_fix waits in
+ * `needs_human` and ends in rereview_requested / reviewed. */
+export function decidePostProposalTransition(
+  kind: WorkItemKind,
+  remainingPendingCount: number,
+  committedThisRound: boolean,
+): PostProposalTransition {
+  if (remainingPendingCount > 0) {
+    return { action: "keep" };
+  }
+  if (kind === "audit") {
+    return {
+      action: "swap",
+      expectedFrom: "awaiting_approval",
+      toStatus: "audited",
+    };
+  }
+  return {
+    action: "swap",
+    expectedFrom: "needs_human",
     toStatus: committedThisRound ? "rereview_requested" : "reviewed",
   };
 }
