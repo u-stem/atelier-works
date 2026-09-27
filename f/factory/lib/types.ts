@@ -262,9 +262,13 @@ export type WorkItem = {
 // requirement_drafts
 // ---------------------------------------------------------------------------
 
+/** One draw.io diagram written alongside a requirements document — `file`
+ * is the `<name>.drawio` file's name inside `RequirementDraft.doc_dir`; the
+ * XML itself is never stored in the DB (see pipeline_generate.ts's module
+ * doc comment). */
 export type Diagram = {
   name: string;
-  drawio_xml: string;
+  file: string;
 };
 
 export type RequirementDraft = {
@@ -275,6 +279,11 @@ export type RequirementDraft = {
   markdown: string;
   diagrams: Diagram[];
   open_questions: string[];
+  /** Worker-local directory (see lib/requirements_template.ts's
+   * `buildRequirementsDocDir`) holding `requirements.md` and every diagram
+   * file for this attempt — `null` for a pre-2026-09-27 row generated
+   * before this column existed. */
+  doc_dir: string | null;
   created_at: Date;
 };
 

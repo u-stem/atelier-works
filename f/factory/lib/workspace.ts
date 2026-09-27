@@ -65,12 +65,17 @@
 
 import {
   access,
+  copyFile,
   mkdir,
   open,
+  readdir,
   readFile,
   rename,
+  rm,
+  rmdir,
   stat,
   unlink,
+  writeFile,
 } from "node:fs/promises";
 import { dirname } from "node:path";
 import { maskSecrets } from "./log.ts";
@@ -323,6 +328,99 @@ export const pathExists: PathExists = async (path) => {
     return true;
   } catch {
     return false;
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Plain filesystem helpers (requirements-doc directory management —
+// pipeline_generate.ts writes/reads a docDir per attempt, cleanup_db.ts
+// deletes old ones). Injectable, same rationale as `pathExists` above:
+// every caller takes these as parameters (defaulting to the real
+// implementation here) so tests never touch the real filesystem.
+// ---------------------------------------------------------------------------
+
+export type ReadDir = (path: string) => Promise<string[]>;
+
+/** Lists a directory's entry names (files and subdirectories alike, not
+ * recursive) — used by pipeline_generate.ts to find the `.drawio` files
+ * Claude wrote alongside `requirements.md`. */
+export const readDirEntries: ReadDir = (path) => readdir(path);
+
+export type ReadTextFile = (path: string) => Promise<string>;
+
+export const readTextFile: ReadTextFile = (path) => readFile(path, "utf8");
+
+export type WriteTextFile = (path: string, content: string) => Promise<void>;
+
+export const writeTextFile: WriteTextFile = (path, content) =>
+  writeFile(path, content);
+
+export type CopyFile = (source: string, destination: string) => Promise<void>;
+
+export const copyFileTo: CopyFile = (source, destination) =>
+  copyFile(source, destination);
+
+export type RemovePath = (path: string) => Promise<void>;
+
+/** Recursively removes `path` (file or directory); a no-op if it doesn't
+ * exist. */
+export const removePath: RemovePath = (path) =>
+  rm(path, { recursive: true, force: true });
+
+export type MakeDir = (path: string) => Promise<void>;
+
+export const makeDir: MakeDir = async (path) => {
+  await mkdir(path, { recursive: true });
+};
+
+export type EnsureEmptyDirOptions = {
+  readonly exists?: PathExists;
+  readonly remove?: RemovePath;
+  readonly mkdir?: MakeDir;
+};
+
+/**
+ * Ensures `dir` exists and is empty: removes it first (recursively) if it
+ * already exists, then recreates it. Used by pipeline_generate.ts at the
+ * start of every requirements-generation attempt, so a retried attempt
+ * never sees a previous attempt's stray `requirements.md` edits or leftover
+ * `.drawio` files.
+ */
+export async function ensureEmptyDir(
+  dir: string,
+  opts: EnsureEmptyDirOptions = {},
+): Promise<void> {
+  const exists = opts.exists ?? pathExists;
+  const remove = opts.remove ?? removePath;
+  const mkdirFn = opts.mkdir ?? makeDir;
+  if (await exists(dir)) {
+    await remove(dir);
+  }
+  await mkdirFn(dir);
+}
+
+export type RemoveEmptyDir = (path: string) => Promise<boolean>;
+
+/**
+ * Removes `path` only if it is an empty directory — returns `true` when it
+ * removed it, `false` when the directory was non-empty or didn't exist
+ * (both treated as "nothing to do", never thrown). Used by cleanup_db.ts to
+ * best-effort prune a now-empty `issue-<N>` requirements directory after
+ * deleting its last `wi-<id>` subdirectory, without disturbing it if a
+ * sibling work item's own `wi-<id>` directory is still there.
+ */
+export const removeEmptyDir: RemoveEmptyDir = async (path) => {
+  try {
+    await rmdir(path);
+    return true;
+  } catch (err) {
+    if (
+      isErrnoLike(err) &&
+      (err.code === "ENOTEMPTY" || err.code === "ENOENT")
+    ) {
+      return false;
+    }
+    throw err;
   }
 };
 

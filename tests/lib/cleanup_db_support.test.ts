@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   computeRetentionCutoffs,
+  docDirsFor,
   summarizeCleanup,
 } from "../../f/factory/lib/cleanup_db_support.ts";
 
@@ -39,5 +40,53 @@ describe("summarizeCleanup", () => {
     expect(summary).toBe(
       "work item 3件、失敗記録 12件、デプロイ記録 5件、通知 2件を削除しました",
     );
+  });
+});
+
+describe("docDirsFor", () => {
+  const BASE = "/var/lib/factory/requirements";
+
+  test("builds wiDir and issueDir for an issue-kind deleted work item", () => {
+    const dirs = docDirsFor(
+      [{ id: 1, owner: "acme", repo: "widgets", issue_number: 5 }],
+      BASE,
+    );
+    expect(dirs).toEqual([
+      {
+        wiDir: "/var/lib/factory/requirements/acme/widgets/issue-5/wi-1",
+        issueDir: "/var/lib/factory/requirements/acme/widgets/issue-5",
+      },
+    ]);
+  });
+
+  test("skips a work item with no issue_number (a pr-kind work item)", () => {
+    const dirs = docDirsFor(
+      [{ id: 1, owner: "acme", repo: "widgets", issue_number: null }],
+      BASE,
+    );
+    expect(dirs).toEqual([]);
+  });
+
+  test("returns one entry per issue-kind item, in order", () => {
+    const dirs = docDirsFor(
+      [
+        { id: 1, owner: "acme", repo: "widgets", issue_number: 5 },
+        { id: 2, owner: "acme", repo: "widgets", issue_number: 6 },
+      ],
+      BASE,
+    );
+    expect(dirs.map((d) => d.wiDir)).toEqual([
+      "/var/lib/factory/requirements/acme/widgets/issue-5/wi-1",
+      "/var/lib/factory/requirements/acme/widgets/issue-6/wi-2",
+    ]);
+  });
+
+  test("rejects an invalid owner name", () => {
+    expect(() =>
+      docDirsFor(
+        [{ id: 1, owner: "../evil", repo: "widgets", issue_number: 5 }],
+        BASE,
+      ),
+    ).toThrow();
   });
 });

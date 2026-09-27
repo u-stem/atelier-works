@@ -57,20 +57,14 @@ describe("sinceIso", () => {
 });
 
 describe("toDiagramLink", () => {
-  test("returns a null viewer_url for invalid xml", () => {
-    const link = toDiagramLink({ name: "flow", drawio_xml: "<not-mxfile/>" });
-    expect(link).toEqual({ name: "flow", viewer_url: null });
+  test("passes the diagram's name through", () => {
+    const link = toDiagramLink({ name: "flow", file: "flow.drawio" });
+    expect(link.name).toBe("flow");
   });
 
-  test("returns a viewer_url for valid xml", () => {
-    const xml =
-      "<mxfile><diagram><mxGraphModel><root/></mxGraphModel></diagram></mxfile>";
-    const link = toDiagramLink({ name: "flow", drawio_xml: xml });
-    expect(link.name).toBe("flow");
-    expect(link.viewer_url).not.toBeNull();
-    expect(link.viewer_url?.startsWith("https://viewer.diagrams.net/")).toBe(
-      true,
-    );
+  test("always returns a null viewer_url (inline rendering not wired up yet)", () => {
+    const link = toDiagramLink({ name: "flow", file: "flow.drawio" });
+    expect(link.viewer_url).toBeNull();
   });
 });
 
@@ -91,7 +85,7 @@ describe("runConsoleQuery", () => {
       draft_attempt: 1,
       summary: "要約",
       markdown: "# 要件",
-      diagrams: JSON.stringify([{ name: "flow", drawio_xml: "<bad/>" }]),
+      diagrams: JSON.stringify([{ name: "flow", file: "flow.drawio" }]),
       open_questions: JSON.stringify(["未確定事項A"]),
       pr_number: null,
       proposal_title: null,

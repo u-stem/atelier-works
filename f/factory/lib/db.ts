@@ -224,15 +224,16 @@ function parseJsonObject(
 }
 
 function isDiagram(value: unknown): value is Diagram {
-  return isRecord(value) && isString(value.name) && isString(value.drawio_xml);
+  return isRecord(value) && isString(value.name) && isString(value.file);
 }
 
+/** Parses `requirement_drafts.diagrams`. Entries that are not the current
+ * `{name, file}` shape (e.g. a pre-redesign `{name, drawio_xml}` row that the
+ * doc_dir migration did not reach) are dropped rather than failing the whole
+ * row: a draft with no renderable diagrams is still a readable draft. */
 function parseDiagrams(value: unknown, field: string): Diagram[] {
   const array = parseJsonArray(value, field);
-  if (!array.every(isDiagram)) {
-    throw new Error(`db: row field "${field}" contains a malformed diagram`);
-  }
-  return array;
+  return array.filter(isDiagram);
 }
 
 function parseOpenQuestions(value: unknown, field: string): string[] {
@@ -497,6 +498,8 @@ export type NewRequirementDraft = {
   markdown: string;
   diagrams: Diagram[];
   open_questions: string[];
+  /** See RequirementDraft.doc_dir (types.ts). */
+  doc_dir: string | null;
 };
 
 /** Inserts a factory.requirement_drafts row and returns its id. */
@@ -506,10 +509,11 @@ export async function saveDraft(
 ): Promise<number> {
   const statement = sql`
     INSERT INTO factory.requirement_drafts (
-      work_item_id, attempt, summary, markdown, diagrams, open_questions
+      work_item_id, attempt, summary, markdown, diagrams, open_questions, doc_dir
     ) VALUES (
       ${draft.work_item_id}::bigint, ${draft.attempt}::integer, ${draft.summary}, ${draft.markdown},
-      ${JSON.stringify(draft.diagrams)}::jsonb, ${JSON.stringify(draft.open_questions)}::jsonb
+      ${JSON.stringify(draft.diagrams)}::jsonb, ${JSON.stringify(draft.open_questions)}::jsonb,
+      ${draft.doc_dir}
     )
     RETURNING id
   `;
@@ -527,6 +531,7 @@ export function toRequirementDraft(row: SqlRow): RequirementDraft {
     markdown: parseRequiredString(row.markdown, "markdown"),
     diagrams: parseDiagrams(row.diagrams, "diagrams"),
     open_questions: parseOpenQuestions(row.open_questions, "open_questions"),
+    doc_dir: parseNullableString(row.doc_dir, "doc_dir"),
     created_at: parseDate(row.created_at, "created_at"),
   };
 }
@@ -1593,19 +1598,31 @@ export async function listExpiredPendingApprovalRequests(
 /**
  * Deletes every terminal-status work item last updated before `olderThan`
  * (same target set as `listStaleTerminalWorkItems`, as a DELETE) and reports
- * how many rows went with it. Runs as a single statement: the CTE counts the
- * approval_requests rows attached to the candidate ids from the statement's
- * own snapshot, so the count and the delete always describe the same set —
- * a `retry_work_item` slipping in between two separate queries cannot make
- * the reported count drift from what was actually removed. Every other
- * referencing table cascades from this one statement (requirement_drafts /
- * approvals / agent_runs / work_item_events / approval_requests via
- * `ON DELETE CASCADE`; job_failures via `ON DELETE SET NULL`, swept
- * separately by `deleteJobFailuresBefore`).
+ * how many rows went with it, plus a `{id, owner, repo, issue_number}` ref
+ * for each one deleted — cleanup_db.ts uses these to also delete that work
+ * item's requirements-doc directories (`lib/cleanup_db_support.ts`'s
+ * `docDirsFor`), which live on disk, not in this table. Runs as a single
+ * statement: the CTE counts the approval_requests rows attached to the
+ * candidate ids from the statement's own snapshot, so the count and the
+ * delete always describe the same set — a `retry_work_item` slipping in
+ * between two separate queries cannot make the reported count drift from
+ * what was actually removed. Every other referencing table cascades from
+ * this one statement (requirement_drafts / approvals / agent_runs /
+ * work_item_events / approval_requests via `ON DELETE CASCADE`;
+ * job_failures via `ON DELETE SET NULL`, swept separately by
+ * `deleteJobFailuresBefore`).
  */
+export type DeletedWorkItemRef = {
+  readonly id: number;
+  readonly owner: string;
+  readonly repo: string;
+  readonly issue_number: number | null;
+};
+
 export type TerminalWorkItemsDeleted = {
   readonly work_items_deleted: number;
   readonly approval_requests_deleted: number;
+  readonly deleted: readonly DeletedWorkItemRef[];
 };
 
 export async function deleteTerminalWorkItemsBefore(
@@ -1626,25 +1643,39 @@ export async function deleteTerminalWorkItemsBefore(
     deleted AS (
       DELETE FROM factory.work_items
       WHERE id IN (SELECT id FROM candidates)
-      RETURNING id
+      RETURNING id, owner, repo, issue_number
     )
     SELECT
-      (SELECT COUNT(*) FROM deleted) AS work_items_deleted,
+      deleted.id,
+      deleted.owner,
+      deleted.repo,
+      deleted.issue_number,
       (SELECT approval_requests_count FROM cascaded) AS approval_requests_deleted
+    FROM deleted
   `.fetch();
-  const row = rows[0];
-  if (row === undefined) {
-    return { work_items_deleted: 0, approval_requests_deleted: 0 };
-  }
+
+  const deleted = rows.map((row) => ({
+    id: parseId(row.id, "id"),
+    owner: parseRequiredString(row.owner, "owner"),
+    repo: parseRequiredString(row.repo, "repo"),
+    issue_number:
+      row.issue_number === null
+        ? null
+        : parseRequiredNumber(row.issue_number, "issue_number"),
+  }));
+  const firstRow = rows[0];
+  const approvalRequestsDeleted =
+    firstRow === undefined
+      ? 0
+      : parseNumericLike(
+          firstRow.approval_requests_deleted,
+          "approval_requests_deleted",
+        );
+
   return {
-    work_items_deleted: parseNumericLike(
-      row.work_items_deleted,
-      "work_items_deleted",
-    ),
-    approval_requests_deleted: parseNumericLike(
-      row.approval_requests_deleted,
-      "approval_requests_deleted",
-    ),
+    work_items_deleted: rows.length,
+    approval_requests_deleted: approvalRequestsDeleted,
+    deleted,
   };
 }
 

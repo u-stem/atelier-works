@@ -358,6 +358,8 @@ describe("saveDraft", () => {
         markdown: "m",
         diagrams: [],
         open_questions: [],
+        doc_dir:
+          "/var/lib/factory/requirements/acme/widgets/issue-1/wi-1/attempt-1",
       },
       sql,
     );
@@ -372,13 +374,34 @@ describe("saveDraft", () => {
         attempt: 1,
         summary: "s",
         markdown: "m",
-        diagrams: [{ name: "d1", drawio_xml: "<mxfile/>" }],
+        diagrams: [{ name: "d1", file: "d1.drawio" }],
         open_questions: [],
+        doc_dir: null,
       },
       sql,
     );
     expect(calls[0]?.values).toContainEqual(
-      JSON.stringify([{ name: "d1", drawio_xml: "<mxfile/>" }]),
+      JSON.stringify([{ name: "d1", file: "d1.drawio" }]),
+    );
+  });
+
+  test("passes doc_dir through as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 3 }]]);
+    await saveDraft(
+      {
+        work_item_id: 1,
+        attempt: 1,
+        summary: "s",
+        markdown: "m",
+        diagrams: [],
+        open_questions: [],
+        doc_dir:
+          "/var/lib/factory/requirements/acme/widgets/issue-1/wi-1/attempt-1",
+      },
+      sql,
+    );
+    expect(calls[0]?.values).toContain(
+      "/var/lib/factory/requirements/acme/widgets/issue-1/wi-1/attempt-1",
     );
   });
 
@@ -392,6 +415,7 @@ describe("saveDraft", () => {
         markdown: "m",
         diagrams: [],
         open_questions: [],
+        doc_dir: null,
       },
       sql,
     );
@@ -409,11 +433,64 @@ describe("toRequirementDraft", () => {
       attempt: 1,
       summary: "s",
       markdown: "m",
-      diagrams: [{ name: "d1", drawio_xml: "<mxfile/>" }],
+      diagrams: [{ name: "d1", file: "d1.drawio" }],
       open_questions: ["what about x?"],
+      doc_dir:
+        "/var/lib/factory/requirements/acme/widgets/issue-1/wi-1/attempt-1",
       created_at: NOW.toISOString(),
     });
-    expect(draft.diagrams).toEqual([{ name: "d1", drawio_xml: "<mxfile/>" }]);
+    expect(draft.diagrams).toEqual([{ name: "d1", file: "d1.drawio" }]);
+  });
+
+  test("drops pre-redesign {name, drawio_xml} diagram entries instead of throwing", () => {
+    const draft = toRequirementDraft({
+      id: 3,
+      work_item_id: 1,
+      attempt: 1,
+      summary: "s",
+      markdown: "m",
+      diagrams: [
+        { name: "old", drawio_xml: "<mxfile/>" },
+        { name: "new", file: "new.drawio" },
+      ],
+      open_questions: [],
+      doc_dir: null,
+      created_at: NOW.toISOString(),
+    });
+    expect(draft.diagrams).toEqual([{ name: "new", file: "new.drawio" }]);
+  });
+
+  test("parses doc_dir", () => {
+    const draft = toRequirementDraft({
+      id: 3,
+      work_item_id: 1,
+      attempt: 1,
+      summary: "s",
+      markdown: "m",
+      diagrams: [],
+      open_questions: [],
+      doc_dir:
+        "/var/lib/factory/requirements/acme/widgets/issue-1/wi-1/attempt-1",
+      created_at: NOW.toISOString(),
+    });
+    expect(draft.doc_dir).toBe(
+      "/var/lib/factory/requirements/acme/widgets/issue-1/wi-1/attempt-1",
+    );
+  });
+
+  test("parses a null doc_dir (pre-existing row from before the column existed)", () => {
+    const draft = toRequirementDraft({
+      id: 3,
+      work_item_id: 1,
+      attempt: 1,
+      summary: "s",
+      markdown: "m",
+      diagrams: [],
+      open_questions: [],
+      doc_dir: null,
+      created_at: NOW.toISOString(),
+    });
+    expect(draft.doc_dir).toBeNull();
   });
 });
 
@@ -1717,41 +1794,64 @@ describe("latestDraft", () => {
 
 // ---------------------------------------------------------------------------
 describe("deleteTerminalWorkItemsBefore", () => {
-  const COUNT_ROW = { work_items_deleted: "2", approval_requests_deleted: "3" };
+  const DELETED_ROWS = [
+    {
+      id: 1,
+      owner: "acme",
+      repo: "widgets",
+      issue_number: 5,
+      approval_requests_deleted: "3",
+    },
+    {
+      id: 2,
+      owner: "acme",
+      repo: "widgets",
+      issue_number: null,
+      approval_requests_deleted: "3",
+    },
+  ];
 
   test("deletes terminal-status work_items via status = ANY(...)", async () => {
-    const { sql, calls } = createFakeSqlClient([[COUNT_ROW]]);
+    const { sql, calls } = createFakeSqlClient([DELETED_ROWS]);
     await deleteTerminalWorkItemsBefore(NOW, sql);
     expect(calls[0]?.text).toContain("DELETE FROM factory.work_items");
   });
 
   test("counts cascaded approval_requests in the same statement", async () => {
-    const { sql, calls } = createFakeSqlClient([[COUNT_ROW]]);
+    const { sql, calls } = createFakeSqlClient([DELETED_ROWS]);
     await deleteTerminalWorkItemsBefore(NOW, sql);
     expect(calls).toHaveLength(1);
   });
 
   test("passes olderThan as an ISO string parameter", async () => {
-    const { sql, calls } = createFakeSqlClient([[COUNT_ROW]]);
+    const { sql, calls } = createFakeSqlClient([DELETED_ROWS]);
     await deleteTerminalWorkItemsBefore(NOW, sql);
     expect(calls[0]?.values).toContain(NOW.toISOString());
   });
 
   test("returns the parsed counts", async () => {
-    const { sql } = createFakeSqlClient([[COUNT_ROW]]);
+    const { sql } = createFakeSqlClient([DELETED_ROWS]);
     const deleted = await deleteTerminalWorkItemsBefore(NOW, sql);
-    expect(deleted).toEqual({
-      work_items_deleted: 2,
-      approval_requests_deleted: 3,
-    });
+    expect(deleted.work_items_deleted).toBe(2);
+    expect(deleted.approval_requests_deleted).toBe(3);
   });
 
-  test("returns zero counts when the statement yields no row", async () => {
+  test("returns a ref (id, owner, repo, issue_number) for every deleted work item", async () => {
+    const { sql } = createFakeSqlClient([DELETED_ROWS]);
+    const deleted = await deleteTerminalWorkItemsBefore(NOW, sql);
+    expect(deleted.deleted).toEqual([
+      { id: 1, owner: "acme", repo: "widgets", issue_number: 5 },
+      { id: 2, owner: "acme", repo: "widgets", issue_number: null },
+    ]);
+  });
+
+  test("returns zero counts and no refs when the statement yields no row", async () => {
     const { sql } = createFakeSqlClient([[]]);
     const deleted = await deleteTerminalWorkItemsBefore(NOW, sql);
     expect(deleted).toEqual({
       work_items_deleted: 0,
       approval_requests_deleted: 0,
+      deleted: [],
     });
   });
 });

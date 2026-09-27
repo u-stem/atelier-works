@@ -7,8 +7,9 @@
 // tests/lib/requirements_template.test.ts asserts the template's actual
 // `##` headings match REQUIREMENTS_SECTIONS.
 //
-// Wiring this into pipeline_generate.ts / prompts.ts / the DB / the Console
-// is out of scope for this PR (tracked in docs/architecture.md, 工程2).
+// Wired into pipeline_generate.ts / prompts.ts / the DB (see
+// docs/architecture.md, 工程2); Console inline diagram rendering from the
+// doc dir is a follow-up PR.
 
 import { assertGitHubName } from "./types.ts";
 
@@ -69,9 +70,8 @@ export const DIAGRAM_REF_PATTERN = /!\[([a-z0-9-]{1,64})\]\(\1\.drawio\)/g;
 export const TEMPLATE_RELATIVE_PATH =
   ".claude/skills/factory-requirements/template.md";
 
-/** Base directory under which generated requirements documents are stored.
- * Wiring this into `pipeline_generate.ts` is out of scope for this PR (see
- * the module doc comment above). */
+/** Base directory under which generated requirements documents are stored
+ * — a worker-only volume (see docs/architecture.md, 工程2). */
 export const REQUIREMENTS_BASE_DIR = "/var/lib/factory/requirements";
 
 /**
@@ -93,5 +93,17 @@ export function buildRequirementsDocDir(
 ): string {
   assertGitHubName(owner);
   assertGitHubName(repo);
-  return `${base}/${owner}/${repo}/issue-${issueNumber}/wi-${workItemId}/attempt-${attempt}`;
+  const numericParts: readonly (readonly [string, number])[] = [
+    ["issueNumber", issueNumber],
+    ["workItemId", workItemId],
+    ["attempt", attempt],
+  ];
+  for (const [label, value] of numericParts) {
+    if (!Number.isInteger(value) || value < 0) {
+      throw new Error(
+        `buildRequirementsDocDir: ${label} must be a non-negative integer (got ${String(value)})`,
+      );
+    }
+  }
+  return `${base}/${owner}/${repo}/issue-${String(issueNumber)}/wi-${String(workItemId)}/attempt-${String(attempt)}`;
 }

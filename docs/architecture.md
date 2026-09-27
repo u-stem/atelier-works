@@ -43,7 +43,7 @@ flowchart TD
 
 承認は`approval_requests`テーブルの`pending`行で待つ(Windmillのsuspendステップは使わない)。`request_approval`ステップは`kind = 'requirements'`の`pending`行を記録して即座に終了し、フロー自体はそこで完了する。人がConsoleから承認 / 却下すると`approval_decide`が決定を`approval_requests`へ記録し(`decideApprovalRequestIfPending`による楽観ロック)、`kind`に応じたapplyスクリプト(`steps/requirements_apply` / `steps/issue_proposal_apply`)を`runScriptByPathAsync`で起動して実際の反映処理を行う。期限(7日、`approval_requests.expires_at`)は`poll_issues`のreconcile後に行う期限切れスイープが判定し、`expired`への遷移と通知を行う。
 
-工程2の要件定義書はテンプレート(`.claude/skills/factory-requirements/template.md`)を単一の正とし、生成物は`requirements_doc`で機械検査する(`pipeline_generate.ts` / DB / Consoleへの接続は次のPRで行う)。
+工程2の要件定義書はテンプレート(`.claude/skills/factory-requirements/template.md`)を単一の正とし、生成物は`requirements_doc`で機械検査する。headless ClaudeのカレントディレクトリはIssue単位・試行単位の要件定義ファイル置き場(`/var/lib/factory/requirements/<owner>/<repo>/issue-<N>/wi-<work_item_id>/attempt-<attempt>/`、workerコンテナ専用のvolumeでコミットしない)そのものであり、`requirements.md`(テンプレートのコピー)を`Edit`で埋め、図があれば`<name>.drawio`を`Write`で書く。対象リポジトリのworktreeは`--add-dir`で読み取り専用に見せるだけで、カレントディレクトリにはしない。構造化出力は`{summary, open_questions}`に縮小し、本文と図は生成後にファイルから読み戻して検査・保存する(`f/factory/steps/pipeline_generate.ts`)。Factory ConsoleのbackendランナブルもCLIワーカーと同じworkerコンテナ(defaultワーカーグループ)で同じvolumeを読む前提であり、workerを複数コンテナに分ける場合は共有ストレージが必要になる。図のインライン描画へのConsole側の接続は次のPRで行う。
 
 ## 状態遷移(work_items.status)
 
@@ -132,7 +132,7 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加のみで、ren
 | --- | --- |
 | `work_items` | Issue単位の作業状態。`(owner, repo, issue_number, cycle)`で一意 |
 | `work_item_events` | 状態遷移のイベント履歴 |
-| `requirement_drafts` | 要件定義ドラフト(markdown、図、未確定事項)。attemptごとに保存 |
+| `requirement_drafts` | 要件定義ドラフト(markdown、図の参照`{name, file}`、未確定事項、`doc_dir`)。attemptごとに保存。図のXML自体はDBではなく`doc_dir`配下のファイルにある |
 | `approvals` | 旧テーブル。過去の承認・却下履歴のみを保持し、新規の書き込みはない(`approval_requests`に統一済み) |
 | `agent_runs` | Claude実行1回ごとのログ(トークン数、コスト、所要時間、終了コード等) |
 | `job_failures` | フロー実行時のエラー(トークンはマスク済み) |

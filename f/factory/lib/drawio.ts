@@ -6,14 +6,19 @@
 // M4 contract smoke), then standard base64-encoded (see toViewerUrl). The
 // fragment (`#...`) is never sent to the diagrams.net server by the
 // browser. The resulting URL is never posted to GitHub or Discord (2026-09-27
-// policy) — it is only ever read from the factory_console App's Inbox tab
-// (see steps/console_query.ts), so only someone with Console access can view
-// a diagram (see docs/security.md "draw.io ビューアーのプライバシー").
+// policy). As of the file-per-diagram requirements-doc format (2026-09-27),
+// a diagram's XML lives on disk under pipeline_generate.ts's requirements
+// doc dir, not in the DB — steps/console_query.ts's `toDiagramLink` has no
+// read access to that path yet, so `toViewerUrl` is currently unused
+// pending a follow-up PR wiring inline rendering from the file (see
+// docs/architecture.md, 工程2, and docs/security.md "draw.io ビューアーの
+// プライバシー"); `validateDrawioXml` remains in active use by
+// pipeline_generate.ts's post-generation checks.
 //
 // See also: .claude/skills/drawio-diagram/SKILL.md (the generation-side
-// contract: uncompressed XML, 12KB limit, `[a-z0-9-]+` diagram names).
+// contract: uncompressed XML, 256KB limit, `[a-z0-9-]+` diagram names).
 
-const MAX_XML_BYTES = 12 * 1024;
+const MAX_XML_BYTES = 256 * 1024;
 const MAX_VIEWER_URL_FRAGMENT_BYTES = 8 * 1024;
 const DEFAULT_VIEWER_BASE_URL = "https://viewer.diagrams.net/";
 
@@ -28,14 +33,14 @@ function byteLength(text: string): number {
 /**
  * Validate a single draw.io/mxGraph XML document against the
  * drawio-diagram skill's contract: `<mxfile>` root, uncompressed, contains
- * at least one `<diagram>`, and no larger than 12KB.
+ * at least one `<diagram>`, and no larger than 256KB.
  */
 export function validateDrawioXml(xml: string): DrawioValidationResult {
   const size = byteLength(xml);
   if (size > MAX_XML_BYTES) {
     return {
       valid: false,
-      reason: `XML が 12KB を超えています(${size} bytes)`,
+      reason: `XML が 256KB を超えています(${size} bytes)`,
     };
   }
 

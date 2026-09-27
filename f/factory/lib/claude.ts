@@ -231,6 +231,16 @@ export type RunClaudeOptions<T> = {
   readonly maxTurns: number;
   readonly maxBudgetUsd: number;
   readonly cwd: string;
+  /**
+   * `--add-dir`: extra directories claude may read from. The measurement in
+   * `allowedTools`'s doc comment showed `acceptEdits` refusing writes under
+   * `--add-dir`; the exact combination pipeline_generate.ts relies on
+   * (`dontAsk` + `--allowedTools Write Edit` + `--add-dir` + `--restricted`,
+   * expecting writes to land only under `cwd`) is verified by its first E2E
+   * run, not by this comment. One `--add-dir <dir>` flag per entry. Omitted
+   * or empty: no `--add-dir` flag is added.
+   */
+  readonly addDirs?: readonly string[];
   readonly oauthToken: string;
   readonly claudeConfigDir?: string;
   readonly home?: string;
@@ -310,6 +320,12 @@ function buildAllowedToolsArgs<T>(opts: RunClaudeOptions<T>): string[] {
   return ["--allowedTools", ...allowedTools];
 }
 
+/** One `--add-dir <dir>` flag per `opts.addDirs` entry (see that field's doc comment). */
+function buildAddDirsArgs<T>(opts: RunClaudeOptions<T>): string[] {
+  const addDirs = opts.addDirs ?? [];
+  return addDirs.flatMap((dir) => ["--add-dir", dir]);
+}
+
 function buildClaudeArgv<T>(opts: RunClaudeOptions<T>): string[] {
   return [
     "claude",
@@ -325,6 +341,7 @@ function buildClaudeArgv<T>(opts: RunClaudeOptions<T>): string[] {
     "--tools",
     opts.tools.join(","),
     ...buildAllowedToolsArgs(opts),
+    ...buildAddDirsArgs(opts),
     "--setting-sources",
     opts.settingSources.join(","),
     "--strict-mcp-config",
