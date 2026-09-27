@@ -60,16 +60,56 @@ export function assertBranchMatches(
  * Paths whose changes worker-side `wmill sync push` / `wmill datatable
  * migrate up` cannot themselves apply — they require a host-side `mise run
  * deploy` (worker image rebuild, compose restart) to take effect. Only the
- * worker image / compose definition (`infra/**`) and the tool versions and
- * env compose reads (`mise.toml`) qualify. `scripts/**` (host-side dev
- * tooling such as bootstrap, doctor, lint) and `mise.local.toml.example`
- * (a human-facing template) never affect the running worker, so a change
- * there must not raise a "run `mise run deploy`" notice.
+ * worker image / compose definition (`infra/**`) qualifies unconditionally.
+ * `mise.toml` qualifies only when its `[tools]` (tool versions) or `[env]`
+ * (values compose reads) sections changed — a task definition edit does
+ * not affect the running worker (see `miseTomlNeedsHostAction`).
+ * `scripts/**` (host-side dev tooling) and `mise.local.toml.example` (a
+ * human-facing template) never affect the running worker.
  */
-const HOST_ACTION_PATH_PATTERNS: readonly RegExp[] = [
-  /^infra\//,
-  /^mise\.toml$/,
-];
+const HOST_ACTION_PATH_PATTERNS: readonly RegExp[] = [/^infra\//];
+
+export const MISE_TOML_PATH = "mise.toml";
+
+/** Sections of mise.toml whose content the running stack depends on:
+ * `[tools]` pins the versions (e.g. the worker image's tool versions) and
+ * `[env]` holds the values docker compose interpolates. */
+const MISE_HOST_SECTIONS: readonly string[] = ["tools", "env"];
+
+/**
+ * Extracts the text of the host-relevant sections (`[tools]`, `[env]`) of
+ * a mise.toml (pure, for testing): line-based, a `[name]` header starts a
+ * section and the next header ends it; blank lines and `#` comments are
+ * dropped so a comment-only edit does not count.
+ */
+export function extractMiseHostSections(toml: string): string {
+  const kept: string[] = [];
+  let current: string | null = null;
+  for (const rawLine of toml.split("\n")) {
+    const line = rawLine.trim();
+    const header = /^\[([^\]]+)\]$/.exec(line);
+    if (header !== null) {
+      current = header[1] ?? null;
+      continue;
+    }
+    if (current === null || !MISE_HOST_SECTIONS.includes(current)) continue;
+    if (line.length === 0 || line.startsWith("#")) continue;
+    kept.push(`${current}:${line}`);
+  }
+  return kept.join("\n");
+}
+
+/** Whether a mise.toml change needs a host-side `mise run deploy` (pure,
+ * for testing): true only when the `[tools]` / `[env]` sections differ
+ * between the two versions. `oldToml === null` (no prior deploy to diff
+ * against) is treated conservatively as needing host action. */
+export function miseTomlNeedsHostAction(
+  oldToml: string | null,
+  newToml: string,
+): boolean {
+  if (oldToml === null) return true;
+  return extractMiseHostSections(oldToml) !== extractMiseHostSections(newToml);
+}
 
 export type ChangedPathsClassification = {
   readonly needs_host_action: boolean;
@@ -79,14 +119,19 @@ export type ChangedPathsClassification = {
 /**
  * Classifies a list of changed file paths (as reported by `git diff
  * --name-only` / `git ls-tree --name-only`): `host_paths` is the subset
- * that matches one of `HOST_ACTION_PATH_PATTERNS`, and `needs_host_action`
- * is whether that subset is non-empty.
+ * that requires a host-side deploy, and `needs_host_action` is whether that
+ * subset is non-empty. `miseTomlHostSectionsChanged` is the caller's
+ * verdict for mise.toml (from `miseTomlNeedsHostAction`); it only matters
+ * when mise.toml is among `paths`.
  */
 export function classifyChangedPaths(
   paths: readonly string[],
+  miseTomlHostSectionsChanged: boolean,
 ): ChangedPathsClassification {
-  const hostPaths = paths.filter((path) =>
-    HOST_ACTION_PATH_PATTERNS.some((pattern) => pattern.test(path)),
+  const hostPaths = paths.filter(
+    (path) =>
+      HOST_ACTION_PATH_PATTERNS.some((pattern) => pattern.test(path)) ||
+      (path === MISE_TOML_PATH && miseTomlHostSectionsChanged),
   );
   return { needs_host_action: hostPaths.length > 0, host_paths: hostPaths };
 }

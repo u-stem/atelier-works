@@ -6,6 +6,8 @@ import {
   buildWmillEnv,
   classifyChangedPaths,
   decideUpdate,
+  extractMiseHostSections,
+  miseTomlNeedsHostAction,
   resolveWmillCliContext,
   truncateOutput,
 } from "../../f/factory/lib/self_update_support.ts";
@@ -58,53 +60,67 @@ describe("assertBranchMatches", () => {
 
 describe("classifyChangedPaths", () => {
   test("flags a path under infra/ as needing host action", () => {
-    const result = classifyChangedPaths(["infra/docker-compose.yml"]);
+    const result = classifyChangedPaths(["infra/docker-compose.yml"], false);
     expect(result).toEqual({
       needs_host_action: true,
       host_paths: ["infra/docker-compose.yml"],
     });
   });
 
-  test("flags mise.toml as needing host action", () => {
-    const result = classifyChangedPaths(["mise.toml"]);
+  test("flags mise.toml only when its host sections changed", () => {
+    const result = classifyChangedPaths(["mise.toml"], true);
     expect(result.needs_host_action).toBe(true);
   });
 
+  test("does not flag mise.toml when only task definitions changed", () => {
+    const result = classifyChangedPaths(["mise.toml"], false);
+    expect(result.needs_host_action).toBe(false);
+  });
+
   test("does not flag mise.local.toml.example (a human-facing template only)", () => {
-    const result = classifyChangedPaths(["mise.local.toml.example"]);
+    const result = classifyChangedPaths(["mise.local.toml.example"], false);
     expect(result.needs_host_action).toBe(false);
   });
 
   test("does not flag a path under scripts/ (host tooling, not worker runtime)", () => {
-    const result = classifyChangedPaths(["scripts/lint-no-type-assertions.ts"]);
+    const result = classifyChangedPaths(
+      ["scripts/lint-no-type-assertions.ts"],
+      false,
+    );
     expect(result.needs_host_action).toBe(false);
   });
 
   test("does not flag a f/factory/** path", () => {
-    const result = classifyChangedPaths(["f/factory/self_update.ts"]);
+    const result = classifyChangedPaths(["f/factory/self_update.ts"], false);
     expect(result).toEqual({ needs_host_action: false, host_paths: [] });
   });
 
   test("returns only the matching subset in host_paths, in order", () => {
-    const result = classifyChangedPaths([
-      "f/factory/self_update.ts",
-      "infra/worker/Dockerfile",
-      "docs/setup.md",
-      "scripts/doctor.sh",
-      "mise.toml",
-    ]);
+    const result = classifyChangedPaths(
+      [
+        "f/factory/self_update.ts",
+        "infra/worker/Dockerfile",
+        "docs/setup.md",
+        "scripts/doctor.sh",
+        "mise.toml",
+      ],
+      true,
+    );
     expect(result.host_paths).toEqual(["infra/worker/Dockerfile", "mise.toml"]);
   });
 
   test("returns no host action for an empty path list", () => {
-    expect(classifyChangedPaths([])).toEqual({
+    expect(classifyChangedPaths([], false)).toEqual({
       needs_host_action: false,
       host_paths: [],
     });
   });
 
   test("does not match a path that merely contains 'infra/' mid-string", () => {
-    const result = classifyChangedPaths(["f/factory/lib/infra/helper.ts"]);
+    const result = classifyChangedPaths(
+      ["f/factory/lib/infra/helper.ts"],
+      false,
+    );
     expect(result.needs_host_action).toBe(false);
   });
 });
@@ -231,6 +247,59 @@ describe("buildNpmCiArgv", () => {
         "--no-audit",
         "--no-fund",
       ],
+    );
+  });
+});
+
+const MISE_BASE = `[tools]
+bun = "1.4.2"
+
+[env]
+WM_VERSION = "1.817.0"
+
+[tasks.push]
+run = "wmill sync push"
+`;
+
+describe("miseTomlNeedsHostAction", () => {
+  test("ignores a task definition change", () => {
+    const changed = MISE_BASE.replace(
+      'run = "wmill sync push"',
+      'run = "npm ci && wmill sync push"',
+    );
+    expect(miseTomlNeedsHostAction(MISE_BASE, changed)).toBe(false);
+  });
+
+  test("detects a tool version change", () => {
+    const changed = MISE_BASE.replace('bun = "1.4.2"', 'bun = "1.5.0"');
+    expect(miseTomlNeedsHostAction(MISE_BASE, changed)).toBe(true);
+  });
+
+  test("detects an env value change", () => {
+    const changed = MISE_BASE.replace(
+      'WM_VERSION = "1.817.0"',
+      'WM_VERSION = "1.818.0"',
+    );
+    expect(miseTomlNeedsHostAction(MISE_BASE, changed)).toBe(true);
+  });
+
+  test("ignores a comment-only change inside [env]", () => {
+    const changed = MISE_BASE.replace(
+      "[env]\n",
+      "[env]\n# compose reads these\n",
+    );
+    expect(miseTomlNeedsHostAction(MISE_BASE, changed)).toBe(false);
+  });
+
+  test("is conservative when there is no previous version", () => {
+    expect(miseTomlNeedsHostAction(null, MISE_BASE)).toBe(true);
+  });
+});
+
+describe("extractMiseHostSections", () => {
+  test("keeps only [tools] and [env] entries", () => {
+    expect(extractMiseHostSections(MISE_BASE)).toBe(
+      'tools:bun = "1.4.2"\nenv:WM_VERSION = "1.817.0"',
     );
   });
 });

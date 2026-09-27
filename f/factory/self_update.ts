@@ -26,6 +26,8 @@ import {
   buildWmillEnv,
   classifyChangedPaths,
   decideUpdate,
+  MISE_TOML_PATH,
+  miseTomlNeedsHostAction,
   RAW_APP_RELATIVE_DIR,
   resolveWmillCliContext,
   truncateOutput,
@@ -177,6 +179,40 @@ export async function assertWmillYamlExists(
       `self_update: ${wmillYamlPath} not found — refusing to run the wmill CLI from an unexpected working directory`,
     );
   }
+}
+
+/** `git show <sha>:<path>` in the self clone — the file's content at that
+ * commit, or `null` when the file does not exist there. Local-only. */
+export async function readFileAtSha(
+  run: CommandRunner,
+  dir: string,
+  sha: string,
+  path: string,
+): Promise<string | null> {
+  assertSha(sha);
+  const result = await run([...GIT_BASE_ARGV, "show", `${sha}:${path}`], {
+    cwd: dir,
+    env: selfCloneGitEnv(),
+  });
+  return result.exitCode === 0 ? result.stdout : null;
+}
+
+/** Whether the mise.toml change between `oldSha` and `newSha` touches the
+ * host-relevant sections (see miseTomlNeedsHostAction). With no prior
+ * deploy (`oldSha` empty) this is conservatively `true`. */
+export async function miseTomlHostSectionsChanged(
+  run: CommandRunner,
+  dir: string,
+  oldSha: string,
+  newSha: string,
+): Promise<boolean> {
+  const newToml = await readFileAtSha(run, dir, newSha, MISE_TOML_PATH);
+  if (newToml === null) return false;
+  const oldToml =
+    oldSha.length === 0
+      ? null
+      : await readFileAtSha(run, dir, oldSha, MISE_TOML_PATH);
+  return miseTomlNeedsHostAction(oldToml, newToml);
 }
 
 async function resolveChangedPaths(
@@ -371,7 +407,15 @@ export async function main(): Promise<SelfUpdateResult> {
       deployedSha,
       currentSha,
     );
-    const classification = classifyChangedPaths(changedPaths);
+    const miseChanged = changedPaths.includes(MISE_TOML_PATH)
+      ? await miseTomlHostSectionsChanged(
+          runCommand,
+          factoryClone.dir,
+          deployedSha,
+          currentSha,
+        )
+      : false;
+    const classification = classifyChangedPaths(changedPaths, miseChanged);
 
     if (classification.needs_host_action) {
       await addNotice({
