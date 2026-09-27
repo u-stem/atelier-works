@@ -86,6 +86,37 @@ const OVERLOADED_EVIDENCE: AuditEvidence = {
   deployments_needing_host_action: 2,
 };
 
+/**
+ * Reproduces the fix-round-2 regression: many short failure/human-outcome
+ * rows (many, short lines — not few, long ones — maximize the *count* of
+ * lines the old ratio-based pass kept, which is what the old bug's error
+ * scaled with). Confirmed against the pre-fix `audit_evidence.ts` (fix
+ * round 1) via `git stash`: that version rendered exactly 12,000 chars —
+ * i.e. its `rendered.slice(0, 12000)` tail-clamp actually fired — and the
+ * clamped output contained neither `ホスト操作要` nor `未解決` (both cut
+ * off), with the final line mid-cut through a data row's padding rather
+ * than a complete `- `-prefixed line. This fixture is the smallest one
+ * found (during this fix round) that reproduces that failure; it is not
+ * required to match the reviewer's originally-reported row count/width,
+ * only the same failure mode.
+ */
+const REGRESSION_EVIDENCE: AuditEvidence = {
+  ...EMPTY_EVIDENCE,
+  unresolved_notices: 7,
+  deployments_needing_host_action: 12,
+  failures: Array.from({ length: 400 }, (_, i) => ({
+    flow_path: `f/factory/p-${i}-${"a".repeat(20)}`,
+    step: `s${i}`,
+    count: i + 1,
+    sample_error: "x",
+  })),
+  human_outcomes: Array.from({ length: 400 }, (_, i) => ({
+    to_status: "needs_human",
+    note: `n-${i}-${"b".repeat(20)}`,
+    count: i + 1,
+  })),
+};
+
 describe("sanitizeCell", () => {
   test("collapses newlines and pipes into spaces", () => {
     expect(sanitizeCell("a\nb|c", 100)).toBe("a b c");
@@ -130,12 +161,29 @@ describe("truncateEvidence", () => {
     expect(result[0]?.lines.at(-1)).toMatch(/^省略\d+行$/);
   });
 
-  test("keeps at least one data line per section", () => {
+  test("keeps at least one data line per section when the budget allows it", () => {
+    // Real rendered cost of keeping one 100-char line in each of two
+    // sections is 216 chars (< 220), so the fitting loop below never has
+    // to touch either — even though the pessimistic length+3-per-line
+    // first-pass estimate (206 + 24 fixed overhead = 230) thinks it must.
+    const sections = [
+      { heading: "a", fixed: [], lines: ["x".repeat(100)] },
+      { heading: "b", fixed: [], lines: ["y".repeat(100)] },
+    ];
+    expect(truncateEvidence(sections, 220)[1]?.lines[0]).toBe("y".repeat(100));
+  });
+
+  test("drops a section to its marker rather than exceeding maxChars (fix round 2)", () => {
+    // Fix round 1's `truncateEvidence` always kept >= 1 data line per
+    // section; that guarantee could exceed maxChars (the bug this fix
+    // addresses). The hard cap now wins: when even one line per section
+    // doesn't fit, sections are reduced all the way to their `省略N行`
+    // marker rather than the rendered output exceeding maxChars.
     const sections = [
       { heading: "a", fixed: [], lines: ["x".repeat(500)] },
       { heading: "b", fixed: [], lines: ["y".repeat(500)] },
     ];
-    expect(truncateEvidence(sections, 100)[1]?.lines[0]).toBe("y".repeat(500));
+    expect(truncateEvidence(sections, 100)[1]?.lines[0]).toBe("省略1行");
   });
 
   test("never drops a fixed line even under a tiny budget (R2)", () => {
@@ -192,6 +240,31 @@ describe("renderEvidenceMarkdown", () => {
   test("never exceeds 12,000 characters for a heavily overloaded evidence (R3/F7d)", () => {
     const markdown = renderEvidenceMarkdown(OVERLOADED_EVIDENCE);
     expect(markdown.length).toBeLessThanOrEqual(12000);
+  });
+
+  // Fix round 2 regression: 30 failure rows + 30 human-outcome rows of
+  // ~190 chars each — reported to exceed 12,000 and have its old
+  // rendered.slice(0, 12000) tail-clamp cut into the 通知/デプロイ fixed
+  // lines (and once, mid-number).
+  test("keeps ホスト操作要 for the fix-round-2 regression input (1)", () => {
+    const markdown = renderEvidenceMarkdown(REGRESSION_EVIDENCE);
+    expect(markdown).toContain("ホスト操作要: 12件");
+  });
+
+  test("keeps 未解決 for the fix-round-2 regression input (2)", () => {
+    const markdown = renderEvidenceMarkdown(REGRESSION_EVIDENCE);
+    expect(markdown).toContain("未解決: 7件");
+  });
+
+  test("never exceeds 12,000 characters for the fix-round-2 regression input (3)", () => {
+    const markdown = renderEvidenceMarkdown(REGRESSION_EVIDENCE);
+    expect(markdown.length).toBeLessThanOrEqual(12000);
+  });
+
+  test("ends with a complete line, never a mid-cut (4)", () => {
+    const markdown = renderEvidenceMarkdown(REGRESSION_EVIDENCE);
+    const lastLine = markdown.split("\n").at(-1);
+    expect(lastLine).toMatch(/^- /);
   });
 });
 

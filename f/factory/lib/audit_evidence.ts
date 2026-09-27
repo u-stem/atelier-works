@@ -70,48 +70,115 @@ function joinSections(sections: readonly EvidenceSection[]): string {
   return sections.map(renderSection).join("\n\n");
 }
 
+// Every rendered line — fixed, kept data, or a `省略N行` marker — costs its
+// own length plus a `- ` prefix (2 chars) plus one joining newline (1
+// char): +3. (The real render has one fewer newline than line count per
+// section, since `join("\n")` doesn't add a trailing separator, so this
+// slightly over-estimates — a safe bias for the proportional first pass
+// below, since the fitting loop that follows is the actual correctness
+// guarantee, not this estimate.)
+const LINE_RENDER_OVERHEAD = 3;
+
+/** One section's truncation state while `truncateEvidence` works: how many
+ * of its original droppable lines are still kept, tracked separately from
+ * the public `EvidenceSection` shape so the `省略N行` marker can be
+ * recomputed cheaply as `keptCount` changes, without re-slicing arrays. */
+type WorkingSection = {
+  heading: string;
+  fixed: string[];
+  originalLines: string[];
+  keptCount: number;
+};
+
+function materialize(section: WorkingSection): EvidenceSection {
+  const omitted = section.originalLines.length - section.keptCount;
+  const lines =
+    omitted > 0
+      ? [
+          ...section.originalLines.slice(0, section.keptCount),
+          `省略${omitted}行`,
+        ]
+      : section.originalLines.slice(0, section.keptCount);
+  return { heading: section.heading, fixed: [...section.fixed], lines };
+}
+
+function renderWorking(sections: readonly WorkingSection[]): string {
+  return joinSections(sections.map(materialize));
+}
+
 /** Keeps `sections` as-is when their fully-rendered length is within
  * `maxChars`; otherwise drops each section's droppable `lines` (never
- * `fixed`) proportionally to fit, always keeping at least one line per
- * non-empty `lines` list, and appends a `省略N行` marker line when any were
- * actually dropped. The budget is computed against `renderSection`'s own
- * output (headings, `- ` prefixes, and the `該当なし` fallback all count),
- * so a caller that also has its own fixed overhead (a banner/title above
- * the sections) must pre-subtract that from `maxChars` itself. */
+ * `fixed`) to fit — a fast proportional first pass, then a fitting loop
+ * that renders the *actual* output (the same `renderSection`/`joinSections`
+ * the caller uses) and, while it is still over `maxChars`, removes one more
+ * data line from whichever section currently has the most kept data lines,
+ * recomputing that section's `省略N行` marker each time — until it fits or
+ * every section has been reduced to zero data lines. This never slices the
+ * rendered string: if section headings + `fixed` lines alone already
+ * exceed `maxChars` (so the loop runs out of data lines to drop), the
+ * result is returned over budget rather than cut, since a hard slice can
+ * land mid-line or mid-character (see renderEvidenceMarkdown). The budget
+ * is computed against `renderSection`'s own output (headings, `- `
+ * prefixes, and the `該当なし` fallback all count), so a caller that also
+ * has its own fixed overhead (a banner/title above the sections) must
+ * pre-subtract that from `maxChars` itself. */
 export function truncateEvidence(
   sections: readonly EvidenceSection[],
   maxChars: number,
 ): EvidenceSection[] {
-  const fixedOnly = sections.map((section) => ({ ...section, lines: [] }));
-  const fixedLength = joinSections(fixedOnly).length;
-  const linesLength = sections.reduce(
+  const working: WorkingSection[] = sections.map((section) => ({
+    heading: section.heading,
+    fixed: [...section.fixed],
+    originalLines: [...section.lines],
+    keptCount: section.lines.length,
+  }));
+
+  const fixedLength = joinSections(
+    working.map((section) => ({
+      heading: section.heading,
+      fixed: section.fixed,
+      lines: [],
+    })),
+  ).length;
+  const totalLinesCost = working.reduce(
     (total, section) =>
-      total + section.lines.reduce((sum, line) => sum + line.length, 0),
+      total +
+      section.originalLines.reduce(
+        (sum, line) => sum + line.length + LINE_RENDER_OVERHEAD,
+        0,
+      ),
     0,
   );
-  const total = fixedLength + linesLength;
-  if (total <= maxChars) {
-    return sections.map((section) => ({
-      heading: section.heading,
-      fixed: [...section.fixed],
-      lines: [...section.lines],
-    }));
-  }
-  const budget = Math.max(0, maxChars - fixedLength);
-  const ratio = linesLength > 0 ? budget / linesLength : 0;
-  return sections.map((section) => {
-    if (section.lines.length === 0) {
-      return { heading: section.heading, fixed: [...section.fixed], lines: [] };
+
+  if (fixedLength + totalLinesCost > maxChars) {
+    const budget = Math.max(0, maxChars - fixedLength);
+    const ratio = totalLinesCost > 0 ? budget / totalLinesCost : 0;
+    for (const section of working) {
+      if (section.originalLines.length === 0) continue;
+      section.keptCount = Math.max(
+        1,
+        Math.floor(section.originalLines.length * ratio),
+      );
     }
-    const keep = Math.max(1, Math.floor(section.lines.length * ratio));
-    const kept = section.lines.slice(0, keep);
-    const omitted = section.lines.length - keep;
-    return {
-      heading: section.heading,
-      fixed: [...section.fixed],
-      lines: omitted > 0 ? [...kept, `省略${omitted}行`] : kept,
-    };
-  });
+  }
+
+  while (renderWorking(working).length > maxChars) {
+    let targetIndex = -1;
+    let targetCount = 0;
+    for (let i = 0; i < working.length; i++) {
+      const section = working[i];
+      if (section !== undefined && section.keptCount > targetCount) {
+        targetIndex = i;
+        targetCount = section.keptCount;
+      }
+    }
+    if (targetIndex === -1) break; // no data lines left anywhere to drop.
+    const target = working[targetIndex];
+    if (target === undefined) break;
+    target.keptCount -= 1;
+  }
+
+  return working.map(materialize);
 }
 
 export type StageStat = {
@@ -273,10 +340,17 @@ function buildEvidenceSections(evidence: AuditEvidence): EvidenceSection[] {
 /** Renders an evidence pack as markdown, starting with a banner stating the
  * file is audit input data, not instructions — followed by a title heading
  * and one `## <heading>` block per section. The section body is truncated
- * to fit `EVIDENCE_MAX_CHARS` total via truncateEvidence (which is given
- * the budget net of this banner+title header), and the final string is
- * hard-capped at `EVIDENCE_MAX_CHARS` as a defensive backstop in case any
- * section's actual rendering ever drifts from truncateEvidence's estimate. */
+ * to fit `EVIDENCE_MAX_CHARS` total via truncateEvidence (given the budget
+ * net of this banner+title header) — including its fitting loop, which
+ * renders the actual output and keeps dropping data lines until it truly
+ * fits. This never slices the final string to force the cap: a hard slice
+ * can land mid-line, or split a fixed line like `ホスト操作要: N件` in
+ * half, or split a multi-byte character — all worse than returning an
+ * over-budget string. If truncateEvidence's fitting loop ever runs out of
+ * data lines to drop and the section headings + fixed lines alone still
+ * exceed the budget (which the fixed-content set here is not expected to,
+ * by construction — see buildEvidenceSections), the result is returned
+ * over `EVIDENCE_MAX_CHARS` uncut rather than truncated. */
 export function renderEvidenceMarkdown(evidence: AuditEvidence): string {
   const title = `# 証跡パック(${evidence.period_label})`;
   const header = `${DATA_NOT_INSTRUCTIONS_BANNER}\n\n${title}\n\n`;
@@ -285,10 +359,7 @@ export function renderEvidenceMarkdown(evidence: AuditEvidence): string {
     sections,
     Math.max(0, EVIDENCE_MAX_CHARS - header.length),
   );
-  const rendered = header + joinSections(truncated);
-  return rendered.length > EVIDENCE_MAX_CHARS
-    ? rendered.slice(0, EVIDENCE_MAX_CHARS)
-    : rendered;
+  return header + joinSections(truncated);
 }
 
 /** Same number-or-numeric-string leniency as db.ts's parseNumericLike, but
@@ -514,7 +585,7 @@ export async function collectAuditEvidence(
     JOIN factory.work_items wi ON wi.id = ar.work_item_id
     WHERE ar.status = 'rejected' AND ar.decided_at >= ${start}::timestamptz AND ar.decided_at < ${end}::timestamptz
       AND wi.kind <> 'audit'
-    ORDER BY ar.decided_at DESC
+    ORDER BY ar.decided_at DESC, ar.id DESC
     LIMIT 30
   `.fetch();
 

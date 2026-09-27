@@ -1,8 +1,9 @@
 // Pure helpers for 工程5 (audit): period math, title, and kickoff
 // decisions. The evidence pack (collection + markdown rendering) lives in
-// ./audit_evidence.ts, which imports AuditPeriod / formatAuditPeriodLabel /
-// DAY_MS from here — kept separate so this file stays small and dependency-
-// free (no SqlClient/maskSecrets needed to decide "should an audit run?").
+// ./audit_evidence.ts, which imports AuditPeriod / ActionableCounts /
+// formatAuditPeriodLabel from here — kept separate so this file stays small
+// and dependency-free (no SqlClient/maskSecrets needed to decide "should an
+// audit run?").
 
 import { jstMidnightTodayIso } from "./claude.ts";
 
