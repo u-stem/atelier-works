@@ -278,3 +278,15 @@ describe("isRepoAllowed", () => {
     expect(isRepoAllowed(config, "octo-owner", "atelier-works")).toBe(true);
   });
 });
+
+describe("max_lookback_days", () => {
+  test("defaults max_lookback_days to 28 when absent", () => {
+    const config = parseFactoryConfig(LEGACY_RAW_CONFIG);
+    expect(config.max_lookback_days).toBe(28);
+  });
+
+  test("throws when max_lookback_days is zero", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, max_lookback_days: 0 };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+});

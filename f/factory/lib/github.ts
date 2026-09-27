@@ -31,6 +31,25 @@ function validateOwnerRepo(owner: string, repo: string): void {
   assertGitHubName(repo);
 }
 
+export type GitHubRepoRef = { readonly owner: string; readonly repo: string };
+
+const GITHUB_REPO_URL_PATTERN =
+  /^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/;
+
+/** Splits `factory_config.factory_repo` (an https clone URL) into owner /
+ * repo. Only the https://github.com form is accepted — the same form
+ * isRepoAllowed (lib/config.ts) normalizes against. */
+export function parseGitHubRepoUrl(url: string): GitHubRepoRef {
+  const match = GITHUB_REPO_URL_PATTERN.exec(url.trim());
+  const owner = match?.[1];
+  const repo = match?.[2];
+  if (owner === undefined || repo === undefined) {
+    throw new Error(`github: not a GitHub repository URL: ${url}`);
+  }
+  validateOwnerRepo(owner, repo);
+  return { owner, repo };
+}
+
 export type GhClient = {
   readonly run: CommandRunner;
   readonly ghToken: string;

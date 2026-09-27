@@ -38,6 +38,7 @@ value:
   max_fix_rounds: 3
   max_fix_changed_files: 30
   max_fix_diff_lines: 1500
+  max_lookback_days: 28
   allowed_check_commands: []
   default_reviewers: []
   repo_allowlist: []

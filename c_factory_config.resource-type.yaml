@@ -33,6 +33,7 @@ schema:
     - diff_max_lines
     - max_fix_changed_files
     - max_fix_diff_lines
+    - max_lookback_days
   properties:
     allowed_check_commands:
       type: array
@@ -118,6 +119,11 @@ schema:
       description: >-
         1つのPRに対して修正を試みる最大回数です。超えると対応が必要な状態(needs_human)にします。
       default: 3
+    max_lookback_days:
+      type: integer
+      description: >-
+        週次監査(工程5)が1回に遡る日数の上限です。前回の監査が失敗するなどして前回レポートの終端が古い場合でも、この日数より前は監査対象にしません。
+      default: 28
     max_turns:
       type: integer
       description: 1回の自動処理でClaudeがやり取りできる最大ターン数。

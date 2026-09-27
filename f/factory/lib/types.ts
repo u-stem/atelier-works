@@ -634,4 +634,7 @@ export type FactoryConfig = {
    * pr_fix_verify diff before it falls back to needs_human (M6 security
    * review). */
   max_fix_diff_lines: number;
+  /** Upper bound (days) on how far back one audit period may reach when
+   * the previous report is older than that (工程5). */
+  max_lookback_days: number;
 };
