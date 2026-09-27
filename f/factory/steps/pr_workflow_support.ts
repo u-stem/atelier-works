@@ -2203,6 +2203,14 @@ export type IssueProposalDecisionRow = {
 export type IssueProposalDecisionRequest = {
   readonly decision: "approve" | "reject";
   readonly reason: string;
+  /** Not read by `classifyIssueProposalDecision` below (`IssueProposalDecisionRow`
+   * carries no matching field) — a `repost_only` retry's own
+   * `with_factory_label` never changes the classification. It also never
+   * changes which label choice actually applies: issue_proposal_decide.ts's
+   * approve path re-reads the row's already-stored `with_factory_label`
+   * (the first approval's choice) when it resumes Issue creation on a
+   * retry, not this field's value from the retry request. The stored choice
+   * always wins. */
   readonly with_factory_label: boolean;
 };
 

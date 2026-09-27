@@ -743,9 +743,14 @@ export async function runConsoleQuery(
       // Not time-windowed (`since`/`limit`'s days bound is unused here),
       // same rationale as "inbox"/"notices": a pending proposal must never
       // silently disappear from the tab that exists to surface it. Filtered
-      // to status = 'pending' here (not in factory.v_issue_proposals
-      // itself), so the view stays useful for a future decision-history
-      // reader too.
+      // here (not in factory.v_issue_proposals itself), so the view stays
+      // useful for a future decision-history reader too. Also includes an
+      // "approved" row whose Issue was never created (team-lead fix round,
+      // "Keep incomplete approvals visible in Inbox"): issue_proposal_decide.ts
+      // records the approval before creating the Issue, and a failure in
+      // between (e.g. GitHub returning an error) otherwise left that row
+      // permanently invisible to a human, since only `status = 'pending'`
+      // used to be selected here.
       const rows = await sql`
         SELECT
           issue_proposal_id, work_item_id, owner, repo, pr_number, pr_title,
@@ -755,6 +760,7 @@ export async function runConsoleQuery(
           decided_at
         FROM factory.v_issue_proposals
         WHERE status = 'pending'
+          OR (status = 'approved' AND created_issue_number IS NULL)
         ORDER BY created_at DESC
         LIMIT ${limit}::integer
       `.fetch();

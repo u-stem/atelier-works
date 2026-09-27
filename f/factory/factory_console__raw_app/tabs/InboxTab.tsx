@@ -80,6 +80,15 @@ export function InboxTab(): React.ReactElement {
   const selectedProposal =
     proposalRows.find((row) => row.issue_proposal_id === selectedProposalId) ??
     null;
+  // Approved but Issue creation never completed (team-lead fix round, "Keep
+  // incomplete approvals visible in Inbox") — 承認 is safe to re-run
+  // (issue_proposal_decide.ts classifies it as repost_only and resumes the
+  // create-or-reuse step), but 却下 no longer makes sense once approval is
+  // already on record, so that action is hidden for this row.
+  const proposalIncomplete =
+    selectedProposal !== null &&
+    selectedProposal.status === "approved" &&
+    selectedProposal.created_issue_number === null;
 
   function selectProposal(issueProposalId: number): void {
     setSelectedProposalId(issueProposalId);
@@ -316,29 +325,42 @@ export function InboxTab(): React.ReactElement {
               </div>
             )}
           <ul className="inbox-items">
-            {proposalRows.map((row) => (
-              <li key={row.issue_proposal_id}>
-                <button
-                  type="button"
-                  className={
-                    row.issue_proposal_id === selectedProposalId
-                      ? "selected"
-                      : ""
-                  }
-                  onClick={() => selectProposal(row.issue_proposal_id)}
-                >
-                  <div className="inbox-item-title">{row.title}</div>
-                  <div className="inbox-item-meta">
-                    {row.owner}/{row.repo} ・ PR #{row.pr_number ?? "-"}
-                    {row.pr_title !== null && <> ・ {row.pr_title}</>}
-                  </div>
-                  <div className="inbox-item-meta">
-                    {row.claimed_by !== null && <>担当: {row.claimed_by} ・ </>}
-                    作成: {formatDateTime(row.created_at)}
-                  </div>
-                </button>
-              </li>
-            ))}
+            {proposalRows.map((row) => {
+              const incomplete =
+                row.status === "approved" && row.created_issue_number === null;
+              return (
+                <li key={row.issue_proposal_id}>
+                  <button
+                    type="button"
+                    className={
+                      row.issue_proposal_id === selectedProposalId
+                        ? "selected"
+                        : ""
+                    }
+                    onClick={() => selectProposal(row.issue_proposal_id)}
+                  >
+                    <div className="inbox-item-title">
+                      {row.title}
+                      {incomplete && (
+                        <span className="status-pill status-pill--warning">
+                          起票未完了
+                        </span>
+                      )}
+                    </div>
+                    <div className="inbox-item-meta">
+                      {row.owner}/{row.repo} ・ PR #{row.pr_number ?? "-"}
+                      {row.pr_title !== null && <> ・ {row.pr_title}</>}
+                    </div>
+                    <div className="inbox-item-meta">
+                      {row.claimed_by !== null && (
+                        <>担当: {row.claimed_by} ・ </>
+                      )}
+                      作成: {formatDateTime(row.created_at)}
+                    </div>
+                  </button>
+                </li>
+              );
+            })}
           </ul>
         </div>
         <div className="inbox-detail">
@@ -353,7 +375,14 @@ export function InboxTab(): React.ReactElement {
             </div>
           ) : (
             <>
-              <h2>{selectedProposal.title}</h2>
+              <h2>
+                {selectedProposal.title}
+                {proposalIncomplete && (
+                  <span className="status-pill status-pill--warning">
+                    起票未完了
+                  </span>
+                )}
+              </h2>
               <p className="inbox-item-meta">
                 {selectedProposal.owner}/{selectedProposal.repo} ・ PR #
                 {selectedProposal.pr_number ?? "-"}
@@ -365,24 +394,34 @@ export function InboxTab(): React.ReactElement {
               <h3>提案内容</h3>
               <Markdown text={selectedProposal.body} />
               <h3>承認 / 却下</h3>
-              <label className="field-inline">
-                <input
-                  type="checkbox"
-                  checked={proposalWithLabel}
-                  onChange={(event) =>
-                    setProposalWithLabel(event.target.checked)
-                  }
-                />
-                起票と同時にfactoryラベルを付けて要件定義に進める
-              </label>
-              <label className="field">
-                却下理由(却下する場合は必須)
-                <textarea
-                  value={proposalReason}
-                  onChange={(event) => setProposalReason(event.target.value)}
-                  rows={3}
-                />
-              </label>
+              {proposalIncomplete ? (
+                <p className="empty-state-hint">
+                  前回の承認でIssueの起票に失敗しました。承認を再実行するとIssueを起票します。
+                </p>
+              ) : (
+                <>
+                  <label className="field-inline">
+                    <input
+                      type="checkbox"
+                      checked={proposalWithLabel}
+                      onChange={(event) =>
+                        setProposalWithLabel(event.target.checked)
+                      }
+                    />
+                    起票と同時にfactoryラベルを付けて要件定義に進める
+                  </label>
+                  <label className="field">
+                    却下理由(却下する場合は必須)
+                    <textarea
+                      value={proposalReason}
+                      onChange={(event) =>
+                        setProposalReason(event.target.value)
+                      }
+                      rows={3}
+                    />
+                  </label>
+                </>
+              )}
               {proposalActionError !== null && (
                 <p className="error-banner">{proposalActionError}</p>
               )}
@@ -402,17 +441,19 @@ export function InboxTab(): React.ReactElement {
                 >
                   承認
                 </button>
-                <button
-                  type="button"
-                  className="btn btn-danger"
-                  onClick={() => {
-                    void handleProposalDecision("reject");
-                  }}
-                  disabled={proposalPendingId !== null}
-                  aria-label="この提案を却下"
-                >
-                  却下
-                </button>
+                {!proposalIncomplete && (
+                  <button
+                    type="button"
+                    className="btn btn-danger"
+                    onClick={() => {
+                      void handleProposalDecision("reject");
+                    }}
+                    disabled={proposalPendingId !== null}
+                    aria-label="この提案を却下"
+                  >
+                    却下
+                  </button>
+                )}
               </div>
             </>
           )}

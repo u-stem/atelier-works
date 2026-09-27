@@ -44,6 +44,21 @@
 // Issue. The reject path similarly records the decision first, then posts
 // the reply.
 //
+// Keeping an incomplete approval visible (team-lead fix round, "Keep
+// incomplete approvals visible in Inbox"): if the Issue create-or-reuse step
+// itself throws — e.g. GitHub returns an error creating the Issue — before
+// any Issue number is known, the row is reverted back to "pending"
+// (`revertIssueProposalToPending`, lib/db.ts) rather than left stuck
+// "approved" with `created_issue_number` still null, which the Console
+// Inbox (console_query.ts's "issue_proposals" view) used to show nowhere: it
+// only ever listed `status = 'pending'` rows. That view now also surfaces an
+// "approved" row whose Issue was never created, so even the (rarer) case
+// where a later step — `setIssueProposalCreatedIssue`'s own write, the
+// reply, resolving the thread, or the label swap — fails after the Issue
+// already exists on GitHub still leaves the proposal visible for a human to
+// retry; that later case is intentionally never reverted, since the Issue
+// already exists and a revert-then-recreate would risk a duplicate.
+//
 // The GitHub comment a proposal's reply is threaded under
 // (`review_comment_id`) may be either a PR review comment or a plain issue
 // comment (pr_fix's two reply targets — see pr_workflow_support.ts's
@@ -62,6 +77,7 @@ import {
   getIssueProposal,
   getWorkItem,
   latestFixRound,
+  revertIssueProposalToPending,
   setIssueProposalCreatedIssue,
   updateStatusIfCurrent,
 } from "./lib/db.ts";
@@ -206,29 +222,41 @@ export async function main(
         htmlUrl: current.created_issue_url ?? "",
       };
     } else {
-      const markerSearchTerm = issueProposalMarkerSearchTerm(proposal_id);
-      const existingIssue = await findIssueByMarker(
-        client,
-        owner,
-        repo,
-        markerSearchTerm,
-      );
-      if (
-        existingIssue !== null &&
-        hasIssueProposalMarker(existingIssue.body, proposal_id)
-      ) {
-        created = existingIssue;
-      } else {
-        const withLabel = current.with_factory_label ?? false;
-        const body = appendIssueProposalMarker(
-          buildIssueProposalBody(proposal.body, prUrl, prNumber),
-          proposal_id,
+      try {
+        const markerSearchTerm = issueProposalMarkerSearchTerm(proposal_id);
+        const existingIssue = await findIssueByMarker(
+          client,
+          owner,
+          repo,
+          markerSearchTerm,
         );
-        created = await createIssue(client, owner, repo, {
-          title: buildIssueProposalTitle(proposal.title),
-          body,
-          ...(withLabel ? { labels: [config.trigger_label] } : {}),
-        });
+        if (
+          existingIssue !== null &&
+          hasIssueProposalMarker(existingIssue.body, proposal_id)
+        ) {
+          created = existingIssue;
+        } else {
+          const withLabel = current.with_factory_label ?? false;
+          const body = appendIssueProposalMarker(
+            buildIssueProposalBody(proposal.body, prUrl, prNumber),
+            proposal_id,
+          );
+          created = await createIssue(client, owner, repo, {
+            title: buildIssueProposalTitle(proposal.title),
+            body,
+            ...(withLabel ? { labels: [config.trigger_label] } : {}),
+          });
+        }
+      } catch (err) {
+        // No Issue number is known yet at this point, so the row would
+        // otherwise be stuck "approved" with created_issue_number still
+        // null and invisible to a human (see the module doc's "Keeping an
+        // incomplete approval visible" note) — put it back to "pending" so
+        // the Console Inbox shows it again for a retry.
+        await revertIssueProposalToPending(proposal_id);
+        throw new Error(
+          `issue_proposal_decide: Issueの起票に失敗しました: ${maskSecrets(err instanceof Error ? err.message : String(err))}。Inboxから再度承認してください`,
+        );
       }
       await setIssueProposalCreatedIssue(proposal_id, {
         created_issue_number: created.number,

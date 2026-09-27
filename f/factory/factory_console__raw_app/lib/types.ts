@@ -260,6 +260,13 @@ export type IssueProposalRow = {
   title: string;
   body: string;
   status: string;
+  // Present (non-null) once issue_proposal_decide.ts has confirmed the
+  // Issue exists on GitHub. A row with status "approved" and this still
+  // null means approval was recorded but Issue creation failed partway
+  // through (team-lead fix round, "Keep incomplete approvals visible in
+  // Inbox") — InboxTab shows a "起票未完了" badge for that case instead of
+  // treating the row as a normal pending proposal.
+  created_issue_number: number | null;
   created_at: string;
 };
 
@@ -279,6 +286,7 @@ export function toIssueProposalRow(
     title: str(row.title),
     body: str(row.body),
     status: str(row.status),
+    created_issue_number: numOrNull(row.created_issue_number),
     created_at: str(row.created_at),
   };
 }

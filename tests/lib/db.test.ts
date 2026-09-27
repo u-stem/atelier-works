@@ -25,6 +25,7 @@ import {
   recordApproval,
   recordDeployment,
   recordFailure,
+  revertIssueProposalToPending,
   type SqlClient,
   type SqlRow,
   saveDraft,
@@ -1032,6 +1033,28 @@ describe("setIssueProposalCreatedIssue", () => {
     );
     expect(calls[0]?.text).toContain("UPDATE factory.issue_proposals");
     expect(calls[0]?.text).toContain("created_issue_number");
+  });
+});
+
+describe("revertIssueProposalToPending", () => {
+  test("reverts an approved row with no created Issue back to pending", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 3 }]]);
+    const reverted = await revertIssueProposalToPending(3, sql);
+    expect(calls[0]?.text).toContain("status = 'pending'");
+    expect(reverted).toBe(true);
+  });
+
+  test("guards the update with status = 'approved' AND created_issue_number IS NULL", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 3 }]]);
+    await revertIssueProposalToPending(3, sql);
+    expect(calls[0]?.text).toContain("status = 'approved'");
+    expect(calls[0]?.text).toContain("created_issue_number IS NULL");
+  });
+
+  test("returns false when no matching row exists (e.g. the Issue was already created)", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    const reverted = await revertIssueProposalToPending(3, sql);
+    expect(reverted).toBe(false);
   });
 });
 

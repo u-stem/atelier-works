@@ -1051,6 +1051,41 @@ export async function setIssueProposalCreatedIssue(
   `.execute();
 }
 
+/**
+ * Reverts an approved factory.issue_proposals row back to "pending" —
+ * guarded by `WHERE status = 'approved' AND created_issue_number IS NULL`,
+ * so a row whose Issue already exists (a genuine, completed approval) is
+ * never touched even if this is called for it by mistake. Used by
+ * issue_proposal_decide.ts's approve path (team-lead fix round, "Keep
+ * incomplete approvals visible in Inbox"): when the search-for-existing-or-
+ * create-Issue step throws before an Issue number is known, the row would
+ * otherwise be stuck "approved" with `created_issue_number` still null and
+ * invisible to a human — this puts it back in front of them. Clears
+ * `decided_by` / `decision_reason` / `with_factory_label` / `decided_at`
+ * back to null too, so the reverted row looks exactly like a fresh pending
+ * proposal (matching what `insertIssueProposal` leaves them as) rather than
+ * a "pending" row that still carries a stale prior decision. Returns `true`
+ * when this call actually performed the revert, `false` when no row matched
+ * (e.g. a concurrent retry already reverted it, or the Issue was created in
+ * the meantime).
+ */
+export async function revertIssueProposalToPending(
+  id: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  const rows = await sql`
+    UPDATE factory.issue_proposals
+    SET status = 'pending',
+        decided_by = NULL,
+        decision_reason = NULL,
+        with_factory_label = NULL,
+        decided_at = NULL
+    WHERE id = ${id} AND status = 'approved' AND created_issue_number IS NULL
+    RETURNING id
+  `.fetch();
+  return rows.length > 0;
+}
+
 /** Number of `status = 'pending'` factory.issue_proposals rows for one work
  * item (team-lead fix round, IMO #5: replaces `listPendingIssueProposals`'s
  * full row fetch at the one call site — issue_proposal_decide.ts — that only

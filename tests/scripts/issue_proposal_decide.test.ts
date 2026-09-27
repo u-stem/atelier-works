@@ -31,6 +31,21 @@ describe("classifyIssueProposalDecision", () => {
     expect(result).toEqual({ action: "repost_only" });
   });
 
+  // `IssueProposalDecisionRow` carries no `with_factory_label` field, so a
+  // retry's `with_factory_label` can never change this classification —
+  // issue_proposal_decide.ts's approve path also reads the *stored*
+  // `current.with_factory_label` (the value recorded by the original
+  // approval), not the value passed to this retry, when it re-attempts
+  // Issue creation: the first approval's choice always wins, whatever a
+  // later retry requests.
+  test("reposts only regardless of the retry's with_factory_label value", () => {
+    const result = classifyIssueProposalDecision(
+      { status: "approved", created_issue_number: null },
+      { decision: "approve", reason: "", with_factory_label: true },
+    );
+    expect(result).toEqual({ action: "repost_only" });
+  });
+
   test("reposts only when a reject decision is retried", () => {
     const result = classifyIssueProposalDecision(
       { status: "rejected", created_issue_number: null },

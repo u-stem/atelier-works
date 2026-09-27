@@ -295,6 +295,49 @@ describe("runConsoleQuery", () => {
       title: "共有ヘルパーへ抽出する",
     });
   });
+
+  // Team-lead fix round ("Keep incomplete approvals visible in Inbox"):
+  // issue_proposal_decide.ts records the approval before creating the
+  // Issue, so a row can be "approved" with created_issue_number still null
+  // when Issue creation failed partway through — this must still surface in
+  // the Inbox for a human to retry, not disappear once its status leaves
+  // "pending".
+  test("issue_proposals: also includes an approved row whose Issue was never created", async () => {
+    const row: SqlRow = {
+      issue_proposal_id: 6,
+      work_item_id: 2,
+      owner: "octo-owner",
+      repo: "atelier-works",
+      pr_number: 7,
+      pr_title: "Add feature",
+      claimed_by: "factory-local",
+      review_comment_id: 102,
+      thread_id: "PRRT_2",
+      title: "共有ヘルパーへ抽出する",
+      body: "背景\n提案",
+      status: "approved",
+      decided_by: "alice",
+      decision_reason: null,
+      with_factory_label: false,
+      created_issue_number: null,
+      created_issue_url: null,
+      is_inline: true,
+      created_at: NOW.toISOString(),
+      decided_at: NOW.toISOString(),
+    };
+    const { sql, calls } = createFakeSqlClient([[row]]);
+
+    const rows = await runConsoleQuery("issue_proposals", 200, 30, sql);
+
+    expect(calls[0]?.text).toContain(
+      "status = 'approved' AND created_issue_number IS NULL",
+    );
+    expect(rows[0]).toMatchObject({
+      issue_proposal_id: 6,
+      status: "approved",
+      created_issue_number: null,
+    });
+  });
 });
 
 describe("main", () => {
