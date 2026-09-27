@@ -638,6 +638,96 @@ describe("runConsoleQuery inbox (audit origin)", () => {
         : null,
     ).toBe("2026-09-22〜2026-09-28");
   });
+
+  test("maps factory_label_available: true in payload to true", async () => {
+    const { sql } = createFakeSqlClient([
+      [
+        {
+          approval_request_id: 1,
+          kind: "issue_proposal",
+          status: "pending",
+          work_item_id: 2,
+          owner: "o",
+          repo: "r",
+          title: "監査 2026-09-22〜2026-09-28",
+          requested_at: "2026-09-29T00:00:00Z",
+          expires_at: null,
+          issue_number: null,
+          issue_url: null,
+          draft_attempt: null,
+          summary: null,
+          pr_number: null,
+          proposal_title: "t",
+          proposal_body: "b",
+          proposal_status: "pending",
+          created_issue_number: null,
+          created_issue_url: null,
+          claimed_by: null,
+          origin: "audit",
+          audit_report_id: 5,
+          payload: {
+            origin: "audit",
+            period_label: "2026-09-22〜2026-09-28",
+            factory_label_available: true,
+          },
+        },
+      ],
+    ]);
+    const rows = await runConsoleQuery("inbox", 10, 30, sql);
+    const row = rows[0];
+    expect(
+      row !== undefined &&
+        "proposal_title" in row &&
+        row.kind === "issue_proposal"
+        ? row.factory_label_available
+        : null,
+    ).toBe(true);
+  });
+
+  test("parses payload given as a JSON string (period_label read)", async () => {
+    const { sql } = createFakeSqlClient([
+      [
+        {
+          approval_request_id: 1,
+          kind: "issue_proposal",
+          status: "pending",
+          work_item_id: 2,
+          owner: "o",
+          repo: "r",
+          title: "監査 2026-09-22〜2026-09-28",
+          requested_at: "2026-09-29T00:00:00Z",
+          expires_at: null,
+          issue_number: null,
+          issue_url: null,
+          draft_attempt: null,
+          summary: null,
+          pr_number: null,
+          proposal_title: "t",
+          proposal_body: "b",
+          proposal_status: "pending",
+          created_issue_number: null,
+          created_issue_url: null,
+          claimed_by: null,
+          origin: "audit",
+          audit_report_id: 5,
+          payload: JSON.stringify({
+            origin: "audit",
+            period_label: "2026-09-22〜2026-09-28",
+            factory_label_available: false,
+          }),
+        },
+      ],
+    ]);
+    const rows = await runConsoleQuery("inbox", 10, 30, sql);
+    const row = rows[0];
+    expect(
+      row !== undefined &&
+        "proposal_title" in row &&
+        row.kind === "issue_proposal"
+        ? row.period_label
+        : null,
+    ).toBe("2026-09-22〜2026-09-28");
+  });
 });
 
 describe("runConsoleQuery audit_index", () => {

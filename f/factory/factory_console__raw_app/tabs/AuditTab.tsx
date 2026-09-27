@@ -2,34 +2,16 @@ import React, { useEffect, useState } from "react";
 import { Markdown } from "../components/Markdown";
 import { Skeleton } from "../components/Skeleton";
 import { describeError, kickoffAudit, queryConsole } from "../lib/api";
-import { isRecord, numOrNull, toRows } from "../lib/coerce";
+import { describeKickoff } from "../lib/auditKickoff";
+import { toRows } from "../lib/coerce";
 import { collectDeepLinkCandidates, parseAuditDeepLink } from "../lib/deepLink";
+import { statusLabel } from "../lib/statusLabel";
 import { type AuditDocRow, toAuditDocRow, toAuditIndexRow } from "../lib/types";
 import { useConsoleQuery } from "../lib/useConsoleQuery";
 
 function formatDateTime(iso: string): string {
   const date = new Date(iso);
   return Number.isNaN(date.getTime()) ? iso : date.toLocaleString("ja-JP");
-}
-
-const SKIP_REASONS: Record<string, string> = {
-  audit_in_progress: "別の監査が実行中です",
-  empty_period: "前回の監査以降の期間がまだありません",
-  no_new_records: "前回の監査以降に新しい記録がありません",
-  daily_budget_exceeded: "本日の予算を超過しています",
-  concurrent_kickoff: "同時に別の監査が起動されました",
-};
-
-function describeKickoff(result: unknown): string {
-  if (!isRecord(result)) return "起動結果を読み取れませんでした";
-  if (result.skipped === true) {
-    const reason = typeof result.reason === "string" ? result.reason : "";
-    return `スキップしました: ${SKIP_REASONS[reason] ?? reason}`;
-  }
-  const workItemId = numOrNull(result.work_item_id);
-  return workItemId === null
-    ? "監査を起動しました"
-    : `監査を起動しました(work_item_id ${workItemId})`;
 }
 
 export function AuditTab({
@@ -169,8 +151,9 @@ export function AuditTab({
                 <div className="inbox-item-summary">{row.summary}</div>
                 <div className="inbox-item-meta">
                   提案: 未決定 {row.pending_count} ・ 承認 {row.approved_count}{" "}
-                  ・ 却下 {row.rejected_count} ・ {row.work_item_status} ・
-                  work_item_id {row.work_item_id}
+                  ・ 却下 {row.rejected_count} ・{" "}
+                  {statusLabel(row.work_item_status)} ・ work_item_id{" "}
+                  {row.work_item_id}
                 </div>
                 <div className="inbox-item-meta">
                   作成: {formatDateTime(row.created_at)}
@@ -246,6 +229,8 @@ function AuditDetail({
       </p>
     );
   }
+  const proposalTotal =
+    doc.pending_count + doc.approved_count + doc.rejected_count;
   return (
     <div className="confluence-doc">
       <div className="confluence-doc-header">
@@ -253,9 +238,9 @@ function AuditDetail({
           監査レポート {doc.period_label}
         </h1>
         <div className="confluence-doc-meta">
-          <span>{doc.work_item_status}</span>
-          {" ・ "}提案{" "}
-          {doc.pending_count + doc.approved_count + doc.rejected_count} 件
+          <span>{statusLabel(doc.work_item_status)}</span>
+          {" ・ "}
+          {`提案${proposalTotal}件(承認待ち${doc.pending_count}・承認${doc.approved_count}・却下${doc.rejected_count})`}
           {" ・ "}work_item_id {doc.work_item_id}
         </div>
       </div>
