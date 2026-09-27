@@ -2,7 +2,11 @@
 // (f/factory/lib/poll_support.ts) — spec-cycle2.md §3 M5, §7 items 6/7/12.
 
 import { describe, expect, test } from "bun:test";
-import { decideReconcileAction } from "../../f/factory/lib/poll_support.ts";
+import {
+  decideClosureOnly,
+  decideReconcileAction,
+  isWaitingForHuman,
+} from "../../f/factory/lib/poll_support.ts";
 
 const NOW = new Date("2026-09-26T12:00:00.000Z");
 const RECENT = new Date("2026-09-26T11:59:00.000Z"); // 1 min ago
@@ -105,5 +109,37 @@ describe("decideReconcileAction — pr kind", () => {
       NOW,
     );
     expect(decision).toEqual({ action: "none" });
+  });
+});
+
+describe("isWaitingForHuman", () => {
+  test("awaiting_approval waits for a human decision", () => {
+    expect(isWaitingForHuman("awaiting_approval")).toBe(true);
+  });
+
+  test("requirements_generating does not", () => {
+    expect(isWaitingForHuman("requirements_generating")).toBe(false);
+  });
+});
+
+describe("decideClosureOnly", () => {
+  test("cancels a closed issue", () => {
+    expect(decideClosureOnly({ kind: "issue", open: false })).toEqual({
+      action: "cancel",
+      reason: "closed",
+    });
+  });
+
+  test("cancels a closed PR", () => {
+    expect(decideClosureOnly({ kind: "pr", open: false })).toEqual({
+      action: "cancel",
+      reason: "pr_closed",
+    });
+  });
+
+  test("does nothing for an open issue even when the job is long gone", () => {
+    expect(decideClosureOnly({ kind: "issue", open: true })).toEqual({
+      action: "none",
+    });
   });
 });

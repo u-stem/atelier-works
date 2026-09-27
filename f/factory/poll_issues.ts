@@ -44,10 +44,12 @@ import {
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import {
   associationFromLabeledEvent,
+  decideClosureOnly,
   decideIssueActions,
   decideReconcileAction,
   filterByRepoAllowlist,
   type IssueCandidate,
+  isWaitingForHuman,
   type JobState,
   type ReconcileGithubState,
 } from "./lib/poll_support.ts";
@@ -358,14 +360,15 @@ async function reconcileActiveItems(
         github = { kind: "pr", open: asIssue.state === "open" };
       }
 
-      const jobState = await getJobState(item.flow_job_id);
-      const decision = decideReconcileAction(
-        item,
-        github,
-        jobState,
-        now,
-        orphanGraceMs,
-      );
+      const decision = isWaitingForHuman(item.status)
+        ? decideClosureOnly(github)
+        : decideReconcileAction(
+            item,
+            github,
+            await getJobState(item.flow_job_id),
+            now,
+            orphanGraceMs,
+          );
       if (decision.action === "none") continue;
 
       if (item.flow_job_id !== null) {

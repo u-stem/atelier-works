@@ -86,6 +86,8 @@ stateDiagram-v2
     rereview_requested --> [*]
 ```
 
+`awaiting_approval`のwork itemはflow jobが完了済みのまま人の決定を待つため、`poll_issues`のreconcileはこのstatusに孤児判定(job生死と猶予)を適用せず、Issue / PRのclose検知だけを行う。
+
 ### status一覧
 
 | status | 意味 | 工程 |

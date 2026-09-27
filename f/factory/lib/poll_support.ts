@@ -22,7 +22,12 @@
 // function inside poll_issues.ts (it's git-workspace I/O, not a decision,
 // and workspace.ts is out of scope for this file to extend).
 
-import { isOneOf, type LabelerAssociation, type WorkItem } from "./types.ts";
+import {
+  isOneOf,
+  type LabelerAssociation,
+  type WorkItem,
+  type WorkItemStatus,
+} from "./types.ts";
 
 // ---------------------------------------------------------------------------
 // filterByRepoAllowlist (pure)
@@ -285,4 +290,28 @@ export function decideReconcileAction(
     action: "fail_orphan",
     reason: "flow job finished or absent without a terminal status update",
   };
+}
+
+/** Statuses in which the work item's flow has legitimately finished and
+ * the item is waiting on a human (approval Inbox). The orphan-grace check
+ * must not apply here: there is no running job to be orphaned from. */
+const HUMAN_WAIT_STATUSES: readonly WorkItemStatus[] = ["awaiting_approval"];
+
+export function isWaitingForHuman(status: WorkItemStatus): boolean {
+  return HUMAN_WAIT_STATUSES.includes(status);
+}
+
+/** Reconcile decision for a work item that is waiting on a human: only a
+ * closed Issue/PR cancels it; the job state is irrelevant. */
+export function decideClosureOnly(
+  github: ReconcileGithubState,
+): ReconcileDecision {
+  if (github.kind === "issue") {
+    return github.open
+      ? { action: "none" }
+      : { action: "cancel", reason: "closed" };
+  }
+  return github.open
+    ? { action: "none" }
+    : { action: "cancel", reason: "pr_closed" };
 }
