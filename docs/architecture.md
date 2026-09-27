@@ -84,6 +84,12 @@ stateDiagram-v2
     cancelled --> [*]
     reviewed --> [*]
     rereview_requested --> [*]
+    [*] --> picked: 監査起動(kind=audit)
+    picked --> auditing
+    auditing --> awaiting_approval: 提案あり
+    auditing --> audited: 提案0件
+    awaiting_approval --> audited: 全提案を決定(kind=audit)
+    audited --> [*]
 ```
 
 `awaiting_approval`のwork itemはflow jobが完了済みのまま人の決定を待つため、`poll_issues`のreconcileはこのstatusに孤児判定(job生死と猶予)を適用せず、Issue / PRのclose検知だけを行う。
@@ -108,6 +114,8 @@ stateDiagram-v2
 | `fixing` | レビュー指摘・コメントの修正を実行中(`kind=pr_fix`) | PRワークフロー |
 | `rereview_requested` | 修正をpushし再レビューを依頼した(終端、`kind=pr_fix`) | PRワークフロー |
 | `blocked` | 禁止された変更パターンの検出、差分上限超過、または安全策の前提が崩れて中断(`kind=pr_fix`) | PRワークフロー |
+| `auditing` | 監査を実行中(`kind=audit`) | 5 |
+| `audited` | 監査完了(終端、`kind=audit`) | 5 |
 
 **Issue・PR共通(2026-09-27方針変更)**: トリガーラベル(Issueの`factory`、PRの`factory:review` / `factory:fix`)はclaim時(Issueはassignee付与直後、PRはトリガーラベル自体の削除直後)に一度だけ消費する。以降のどの状態遷移(終端遷移を含む)でもIssue / PR側のラベルは付け外ししない — 状態は`work_items.status`のみが正で、GitHubのラベルは「人からFactoryへのトリガー」の役割に限定される。`retry_work_item`のように終端statusから再起動する経路も、`runFlowAsync`を呼ぶだけでラベルの再付与は行わない。最初からやり直すには人が改めてトリガーラベルを付け直す(新しいcycle)。
 
@@ -140,13 +148,14 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加のみで、ren
 | `job_failures` | フロー実行時のエラー(トークンはマスク済み) |
 | `deployments` | self_updateによるデプロイ結果 |
 | `notices` | 要対応事項(ホスト操作要、PAT失効、SHA不一致など) |
-| `issue_proposals` | pr_fixの`propose_issue`返信が提案するIssue(title / body)と、その承認 / 却下の判断履歴。`title` / `body` / `review_comment_id` / `thread_id`の一次情報源(`approval_requests`はこれらを複製しない) |
+| `audit_reports` | 監査1回のレポート。work itemと1対1、`markdown`が正、`metrics`に証跡の数値 |
+| `issue_proposals` | pr_fixの`propose_issue`返信が提案するIssue(title / body)と、その承認 / 却下の判断履歴。`title` / `body` / `review_comment_id` / `thread_id`の一次情報源(`approval_requests`はこれらを複製しない)。`origin`(`pr_fix` / `audit`)。auditは`audit_report_id` / `position`で紐づき`review_comment_id`はnull |
 | `approval_requests` | 承認依頼の汎用テーブル。`kind`は`requirements`(要件定義承認、`subject_id`は`requirement_drafts.id`)/ `issue_proposal`(Issue化提案、`subject_id`は`issue_proposals.id`)、`status`は`pending` / `approved` / `rejected` / `expired`。`approval_decide`が読み書きする唯一のテーブルで、suspendベースの承認と`approvals`テーブルへの書き込みを置き換えた |
 | `cleanup_runs` | `cleanup_db`が実行するたびの削除件数の記録(work item・失敗記録・デプロイ記録・通知など) |
 
 ### view(Appはこれらのみを参照する)
 
-`v_inbox`、`v_pipeline`、`v_agent_cost_daily`、`v_approval_stats`、`v_lead_time`、`v_failures`、`v_notices`、`v_issue_proposals`、`v_approval_requests`
+`v_inbox`、`v_pipeline`、`v_agent_cost_daily`、`v_approval_stats`、`v_lead_time`、`v_failures`、`v_notices`、`v_issue_proposals`、`v_approval_requests`、`v_audit_reports`
 
 ## フローとスケジュール
 
@@ -275,7 +284,7 @@ WindmillのUIはsummaryでソートされるため、種別を示すタグをsum
 
 ### 工程5: 自己改善(未実装、拡張点)
 
-`job_failures` / `approvals`(却下)/ `notices`を入力に、改善提案をIssueとして起票し工程1に戻すフローを追加する。
+データモデルのみ実装済み。flowはfeat/audit-flowで追加。
 
 ### Discord双方向化
 

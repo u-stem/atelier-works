@@ -1,5 +1,6 @@
 summary: '[SF-3-3] Issue化提案の承認結果を反映'
-description: 決定済みの承認依頼(kind = issue_proposal)を受け取り、承認ならIssueを作成してレビュースレッドに返信・解決し、却下なら理由を返信します。全件決定するとPRの状態ラベルを切り替えます。
+description: 決定済みの承認依頼(kind =
+  issue_proposal)を受け取り、承認ならIssueを作成してレビュースレッドに返信・解決し、却下なら理由を返信します。全件決定するとPRの状態ラベルを切り替えます。
 lock: '!inline f/factory/steps/issue_proposal_apply.script.lock'
 kind: script
 schema:

@@ -1,5 +1,6 @@
 summary: '[SF-2-2] 要件定義の承認結果を反映'
-description: 決定済みの承認依頼(kind = requirements)を受け取り、承認なら次の工程へ進め、却下ならフィードバックをもとに要件定義を作り直します。再試行の上限を超えた場合は対応が必要な状態(needs_human)にします。
+description: 決定済みの承認依頼(kind =
+  requirements)を受け取り、承認なら次の工程へ進め、却下ならフィードバックをもとに要件定義を作り直します。再試行の上限を超えた場合は対応が必要な状態(needs_human)にします。
 lock: '!inline f/factory/steps/requirements_apply.script.lock'
 kind: script
 schema:
