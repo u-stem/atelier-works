@@ -1,5 +1,5 @@
-summary: ''
-description: ''
+summary: '[LIB] 監査の期間計算と起動判定'
+description: 内部ライブラリです。直接実行するものではありません。監査の対象期間の計算と、監査を起動するかどうかの判定を行う純粋ロジックです。
 lock: '!inline f/factory/lib/audit_support.script.lock'
 kind: script
 schema:

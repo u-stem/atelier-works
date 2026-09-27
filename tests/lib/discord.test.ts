@@ -332,6 +332,19 @@ describe("buildEmbed", () => {
       value: "https://github.com/octo-owner/atelier-works/issues/42",
     });
   });
+
+  test("audit_completed names the next action", () => {
+    const embed = buildEmbed({
+      kind: "audit_completed",
+      instance_name: "local",
+      period_label: "2026-09-22〜2026-09-28",
+      proposal_count: 2,
+      console_url:
+        "http://127.0.0.1:8080/apps/get/f/factory/factory_console#audit/12",
+      work_item_id: 12,
+    });
+    expect(embed.fields.map((f) => f.name)).toContain("次の操作");
+  });
 });
 
 describe("capEmbedToDiscordLimits", () => {

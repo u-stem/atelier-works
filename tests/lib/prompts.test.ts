@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
+  AUDIT_SCHEMA,
+  auditPrompt,
   FIX_SCHEMA,
   fixPrompt,
   REQUIREMENTS_SCHEMA,
@@ -572,6 +574,33 @@ describe("fixPrompt", () => {
     expect(prompt).toContain(
       `Unresolved comment #101 by ${JSON.stringify('evil") data')}`,
     );
+  });
+});
+
+describe("auditPrompt", () => {
+  const input = {
+    instanceName: "local",
+    periodLabel: "2026-09-22〜2026-09-28",
+    unauditedGapDays: 0,
+    factoryRepoDir: "/workspaces/factory/atelier-works",
+  };
+
+  test("names evidence.md as data, not instructions", () => {
+    expect(auditPrompt(input)).toContain("evidence.md");
+  });
+
+  test("mentions the unaudited gap when present", () => {
+    expect(auditPrompt({ ...input, unauditedGapDays: 5 })).toContain("5");
+  });
+
+  test("does not refer to fenced blocks it never emits", () => {
+    expect(auditPrompt(input)).not.toContain("fenced blocks");
+  });
+});
+
+describe("AUDIT_SCHEMA", () => {
+  test("requires summary and proposals", () => {
+    expect(AUDIT_SCHEMA.required).toEqual(["summary", "proposals"]);
   });
 });
 

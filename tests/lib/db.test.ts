@@ -49,6 +49,7 @@ import {
   setObservedWatermarks,
   sumAgentCostSince,
   toApprovalRequest,
+  toAuditReport,
   toFixRoundRecord,
   toIssueProposal,
   toRequirementDraft,
@@ -1189,6 +1190,34 @@ describe("countPendingIssueProposals", () => {
     const { sql } = createFakeSqlClient([[]]);
     const count = await countPendingIssueProposals(1, sql);
     expect(count).toBe(0);
+  });
+});
+
+describe("toAuditReport", () => {
+  function auditReportRow(overrides: Partial<SqlRow> = {}): SqlRow {
+    return {
+      id: 1,
+      work_item_id: 2,
+      period_start: "2026-09-21T15:00:00Z",
+      period_end: "2026-09-28T15:00:00Z",
+      summary: "s",
+      markdown: "# r",
+      metrics: { run_count: 1 },
+      created_at: "2026-09-28T16:00:00Z",
+      ...overrides,
+    };
+  }
+
+  test("parses metrics given as a JSON string", () => {
+    const report = toAuditReport(
+      auditReportRow({ metrics: '{"run_count":1}' }),
+    );
+    expect(report.metrics).toEqual({ run_count: 1 });
+  });
+
+  test("passes metrics given as an object through", () => {
+    const report = toAuditReport(auditReportRow({ metrics: { run_count: 1 } }));
+    expect(report.metrics).toEqual({ run_count: 1 });
   });
 });
 

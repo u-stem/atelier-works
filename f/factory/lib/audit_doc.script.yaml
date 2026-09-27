@@ -1,0 +1,9 @@
+summary: '[LIB] 監査レポートの検査'
+description: 内部ライブラリです。直接実行するものではありません。監査レポートと構造化出力(要約・改善提案)を機械検査する純粋ロジックです。
+lock: '!inline f/factory/lib/audit_doc.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

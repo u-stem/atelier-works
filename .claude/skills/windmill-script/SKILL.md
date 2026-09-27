@@ -97,6 +97,7 @@ function isClaudeResult(value: unknown): value is ClaudeResult {
 | `cleanup_workspaces` | 毎日03:00 | 期限切れworktreeの削除、古いtranscriptの削除、ディスク使用量の記録 |
 | `cleanup_db` | 毎日03:30 | 保持期限を過ぎたDBレコード(終端状態の作業項目とその関連データ、失敗記録・デプロイ記録・解決済み通知)の削除 |
 | `daily_summary`(`notify_discord`経由) | 毎日09:00 | 前日のコスト・件数・失敗・DB掃除件数をDiscordに通知 |
+| `audit_kickoff` | 毎週月曜09:30 | 前回監査以降の運用記録を集計し、対象があれば監査work itemと`audit`フローを起動 |
 
 - 多重実行防止はadvisory lockを使わない。各`*.schedule.yaml`に`no_flow_overlap: true`を設定し、前回実行中はスキップする。複数インスタンスを同時運用する場合の排他はWindmill側ではなく **GitHub側のclaim**(Issueはassigneeの付与、PRはトリガーラベル自体の消費。いずれも再取得しての確認)で担保する。
 - scheduleにはerror handlerを設定し、失敗を`job_failures`テーブルとDiscord通知に流す(`f/factory/on_error_schedule.ts`)。

@@ -1,0 +1,9 @@
+summary: '[LIB] 監査の証跡収集'
+description: 内部ライブラリです。直接実行するものではありません。監査の対象期間の運用記録を集計し、証跡パックのMarkdownに整形する処理です。
+lock: '!inline f/factory/lib/audit_evidence.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

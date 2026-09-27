@@ -884,9 +884,14 @@ export type EnsureFactoryCloneResult = {
  * The lock path scoping the factory self clone at `dir` — a sibling
  * `<dir>.lock` file, since (unlike `ensureRepo`'s `<baseDir>/<owner>/<repo>/
  * main` clones) there's no shared parent directory of same-repo siblings to
- * key off here; `dir` itself is the one resource to protect.
+ * key off here; `dir` itself is the one resource to protect. Exported so
+ * that other git operations on the self clone (audit_generate's snapshot
+ * worktree add/remove) can take the same lock `ensureFactoryClone` takes;
+ * the worktree helpers themselves lock `repoLockPath(dir)`, a different
+ * file, so without this outer lock `self_update`'s `reset --hard` could
+ * race a `worktree add` on the same clone.
  */
-function factoryCloneLockPath(dir: string): string {
+export function factoryCloneLockPath(dir: string): string {
   return `${dir}.lock`;
 }
 

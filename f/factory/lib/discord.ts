@@ -137,6 +137,14 @@ export type NotifyEvent =
       // or null when no run is recorded for that day (e.g. the schedule
       // hasn't run yet on a freshly-bootstrapped instance).
       cleanup: CleanupCounts | null;
+    }
+  | {
+      kind: "audit_completed";
+      instance_name: string;
+      period_label: string;
+      proposal_count: number;
+      console_url: string;
+      work_item_id: number;
     };
 
 function repoField(owner: string, repo: string): DiscordEmbedField {
@@ -324,6 +332,20 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
                 ? "前日の掃除記録なし"
                 : summarizeCleanup(event.cleanup),
           },
+        ],
+      };
+    case "audit_completed":
+      return {
+        title: `監査レポートができました(${event.period_label})`,
+        description: `改善提案を${String(event.proposal_count)}件登録しました。`,
+        url: event.console_url,
+        fields: [
+          {
+            name: "次の操作",
+            value: "承認Inboxで提案を承認または却下してください",
+          },
+          instanceField(event.instance_name),
+          { name: "work_item_id", value: String(event.work_item_id) },
         ],
       };
   }

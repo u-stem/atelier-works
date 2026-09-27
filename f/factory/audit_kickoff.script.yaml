@@ -1,0 +1,22 @@
+summary: '[SF-5-1] 週次監査の起動'
+description: 工程5(監査)の入口です。前回の監査レポート以降の期間を決め、行動につながる記録があれば監査の作業項目を作成して監査フローを起動します。記録が無い場合、別の監査が実行中の場合、日次予算を超過している場合は起動しません。
+lock: '!inline f/factory/audit_kickoff.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties:
+    days:
+      type: number
+      description: ''
+      default: 7
+    force:
+      type: boolean
+      description: ''
+      default: false
+    source:
+      type: string
+      description: ''
+      default: manual
+      originalType: string
+  required: []

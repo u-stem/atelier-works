@@ -15,8 +15,8 @@ Software FactoryはGitHub Issueを起点に、要件定義から自己改善ま�
 ## パイプライン(工程1 → 5)
 
 実装済みは工程1(作業を拾う)、工程2(要件定義の生成と承認・差し戻し)、工程3の一部(PRレビュー・修正)、
-ダッシュボード(Factory Console)、自己更新と失敗ハンドラ。工程3の「Issueから実装してPRを作る」、
-工程4・5は拡張点として後続で実装予定。
+工程5(自己改善)、ダッシュボード(Factory Console)、自己更新と失敗ハンドラ。工程3の「Issueから実装してPRを作る」、
+工程4は拡張点として後続で実装予定。
 
 | 工程 | 内容 | 状態 |
 | --- | --- | --- |
@@ -25,7 +25,7 @@ Software FactoryはGitHub Issueを起点に、要件定義から自己改善ま�
 | 3. 実装 | worktree上で実装しPRを作成する | 未実装(拡張点) |
 | 3. PRレビュー・修正 | 既存PRをレビュー・修正する(`pr_review` / `pr_fix`) | 実装済み |
 | 4. CI監視 | マージ後のCIを監視する | 未実装(拡張点) |
-| 5. 自己改善 | 失敗や却下の履歴から改善提案をIssue化する | 未実装(拡張点) |
+| 5. 自己改善 | 週次で運用記録を監査し、レポートと改善提案(承認後にFactory自身のリポジトリへIssue起票)を作る | 実装済み |
 
 ```mermaid
 flowchart TD
@@ -168,6 +168,8 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加のみで、ren
 | `cleanup_workspaces` | schedule(毎日03:00) | 期限切れworktreeの削除、古いtranscriptの削除 |
 | `cleanup_db` | schedule(毎日03:30) | 保持期限を過ぎたDBのレコード(終端状態の作業項目とその関連データ、失敗記録・デプロイ記録・解決済みの通知)の削除 |
 | `daily_summary` | schedule(毎日09:00) | 前日のコスト・件数・失敗・DB掃除件数をDiscordに通知 |
+| `audit_kickoff` | schedule(毎週月曜09:30) | 前回監査以降の運用記録を集計し、対象があれば監査work itemを作成して`audit`フローを起動 |
+| `audit` | flow | 証跡パックの収集と監査レポート・改善提案の生成(headless Claude)、提案の承認登録 |
 
 各scheduleのcronはタイムゾーン`Asia/Tokyo`、Windmillの6フィールド形式で`*.schedule.yaml`に持つ。多重実行防止はadvisory lockを使わず、各scheduleの`no_flow_overlap: true`で行う(前回実行中はスキップする)。複数インスタンスを同時運用する場合の排他はWindmill側ではなくGitHub側のclaim(Issueはassignee付与、PRはトリガーラベルの消費。いずれも再取得して確認する)で担保する。error handlerで失敗を記録し、すべてのフロー(pipeline / pr_review / pr_fix)の`failed`終端処理(Discord通知。ラベルはclaim時に既に消費済みのため除去は行わない)は`on_error_flow`に一本化される。承認のタイムアウト(7日)は`poll_issues`のreconcile後に行う期限切れスイープが`approval_requests.expires_at`を見て判定する(`pipeline.flow`はsuspendを使わない)。
 
@@ -219,6 +221,13 @@ WindmillのUIはsummaryでソートされるため、種別を示すタグをsum
 | `f/factory/on_error_flow` | `[SYS-4] フロー失敗ハンドラ` |
 | `f/factory/on_error_schedule` | `[SYS-5] schedule 失敗ハンドラ` |
 | `f/factory/cleanup_db`(script + schedule) | `[SYS-6] DB を掃除` |
+| `f/factory/audit_kickoff`(script + schedule) | `[SF-5-1] 週次監査の起動` |
+| `f/factory/audit__flow` | `[SF-5-2] 運用記録の監査と改善提案` |
+| `f/factory/steps/audit_prepare` | `[SF-5-2/1] 証跡の収集と作業領域の準備` |
+| `f/factory/steps/audit_generate` | `[SF-5-2/2] 監査レポートと提案の生成(Claude)` |
+| `f/factory/lib/audit_support` | `[LIB] 監査の期間計算と起動判定` |
+| `f/factory/lib/audit_evidence` | `[LIB] 監査の証跡収集` |
+| `f/factory/lib/audit_doc` | `[LIB] 監査レポートの検査` |
 | `f/factory/lib/config` | `[LIB] 設定の読み込み` |
 | `f/factory/lib/db` | `[LIB] Data Table アクセス` |
 | `f/factory/lib/github` | `[LIB] GitHub API ラッパー` |
@@ -266,6 +275,17 @@ WindmillのUIはsummaryでソートされるため、種別を示すタグをsum
 4. Claudeが参照するスキル(`.claude/skills/**`)はself cloneを`--add-dir`で直接読むため、pull直後から反映される。
 5. 初回の反映(schedule自体の登録や初回push)は`scripts/bootstrap.sh`がホストから行う。
 
+## 工程5: 自己改善(監査)
+
+- **起動**: `audit_kickoff`(毎週月曜09:30のschedule、Consoleの「今すぐ監査」で前倒し可)が条件を判定し、満たせば作業項目(`kind=audit`)を作成して`audit`フローを起動する。scheduleはConsoleの監査タブが揃うまで無効(`enabled: false`)にしてある。
+- **期間**: 対象期間は前回レポート終了時刻から実行日のJST 00:00まで(実行日当日は含めない)とし、`max_lookback_days`(既定28日)を上限に切り詰める。切り詰めた日数は`unaudited_gap_days`として証跡に記録する。
+- **スキップ条件**: 別の監査が実行中(`picked` / `auditing`)、期間が空、対象期間に行動につながる記録が無い(強制実行時を除く)、日次予算超過のいずれかであれば起動をスキップする。スキップは記録のみで通知しない。
+- **準備**: `audit_prepare`が作業項目を`picked`から`auditing`へ進め、証跡パック(サニタイズ済み)を作り、Factory自身のself cloneを同期する(Claudeに渡す使い捨てのスナップショットは`audit_generate`が作る)。ステップの再試行は`auditing`のまま再開し、二重に状態遷移しない。
+- **生成**: `audit_generate`はheadless Claudeにテンプレートと証跡パックを与えレポートと改善提案を生成させ、章立て・改善提案の表・URL許可リストを機械検査してから保存する。保存済みレポートがある再開時はClaudeを再実行せず、提案登録と承認依頼の作成をべき等に再生する。
+- **提案と承認**: 提案は`issue_proposals`(`origin=audit`)として登録し、各提案に承認依頼(`kind=issue_proposal`)を作る。提案が0件なら作業項目は`audited`、1件以上あれば`awaiting_approval`に進み、全提案の承認 / 却下が終わると`audited`になる。
+- **起票**: 承認された提案はFactory自身のリポジトリ(`factory_repo`)にIssueとして起票される。監査は`retry_work_item`による再実行の対象外で、失敗した期間は次回の週次監査か「今すぐ監査」でカバーする。
+- **通知**: Discordの`audit_completed`通知は提案が1件以上あるときのみ送る。スキップやゼロ件のレポートは通知しない。
+
 ## 拡張点
 
 ### 工程3: 実装(未実装、拡張点)
@@ -282,12 +302,8 @@ WindmillのUIはsummaryでソートされるため、種別を示すタグをsum
 
 マージ後のCIを監視するscheduleを追加する。
 
-### 工程5: 自己改善(未実装、拡張点)
-
-データモデルのみ実装済み。flowはfeat/audit-flowで追加。
-
 ### Discord双方向化
 
 ボタンによる承認操作はInteractions Endpointの公開URLが必要なため、共有インスタンス化(VPS等)の際に検討する。
 
-上記のうち、工程3以降の具体的なガード設計や監視scheduleの詳細は実装時に確定する。
+上記のうち、工程3・4の具体的なガード設計や監視scheduleの詳細は実装時に確定する。
