@@ -22,8 +22,6 @@ import {
   type AgentRunRecord,
   APPROVAL_REQUEST_KINDS,
   APPROVAL_REQUEST_STATUSES,
-  type Approval,
-  type ApprovalDecision,
   type ApprovalRequest,
   type ApprovalRequestKind,
   type ApprovalRequestStatus,
@@ -534,48 +532,6 @@ export function toRequirementDraft(row: SqlRow): RequirementDraft {
 }
 
 // ---------------------------------------------------------------------------
-// approvals
-// ---------------------------------------------------------------------------
-
-export type NewApproval = {
-  work_item_id: number;
-  attempt: number;
-  decision: ApprovalDecision;
-  reason: string | null;
-  approver: string;
-};
-
-/** Inserts a factory.approvals row and returns its id. */
-export async function recordApproval(
-  approval: NewApproval,
-  sql: SqlClient = defaultSqlClient,
-): Promise<number> {
-  const statement = sql`
-    INSERT INTO factory.approvals (work_item_id, attempt, decision, reason, approver)
-    VALUES (${approval.work_item_id}::bigint, ${approval.attempt}::integer, ${approval.decision}, ${approval.reason}, ${approval.approver})
-    RETURNING id
-  `;
-  const row = await fetchOneRow(statement, "recordApproval");
-  return parseId(row.id, "id");
-}
-
-export function toApproval(row: SqlRow): Approval {
-  return {
-    id: parseId(row.id, "id"),
-    work_item_id: parseId(row.work_item_id, "work_item_id"),
-    attempt: parseRequiredNumber(row.attempt, "attempt"),
-    decision: parseEnum<ApprovalDecision>(
-      row.decision,
-      ["approved", "rejected"],
-      "decision",
-    ),
-    reason: parseNullableString(row.reason, "reason"),
-    approver: parseRequiredString(row.approver, "approver"),
-    decided_at: parseDate(row.decided_at, "decided_at"),
-  };
-}
-
-// ---------------------------------------------------------------------------
 // agent_runs
 // ---------------------------------------------------------------------------
 
@@ -872,7 +828,7 @@ export function toFixRoundRecord(row: SqlRow): FixRoundRecord {
 }
 
 /** Most recently created factory.fix_rounds row for a work item, or `null`
- * if it has none yet — used by issue_proposal_decide.ts to tell whether the
+ * if it has none yet — used by issue_proposal_apply.ts to tell whether the
  * round that produced a pending issue proposal also pushed a commit
  * (`commit_shas` non-empty), which decides whether the PR's state label
  * swaps to `rereview_label` or `reviewed_label` once every proposal for
@@ -986,7 +942,7 @@ export async function getIssueProposal(
 }
 
 /** Lists every `status = 'pending'` factory.issue_proposals row for one
- * work item, oldest first — used by issue_proposal_decide.ts to tell
+ * work item, oldest first — used by issue_proposal_apply.ts to tell
  * whether any proposal is still awaiting a human decision after this one
  * was just decided. */
 export async function listPendingIssueProposals(
@@ -1013,7 +969,7 @@ export type IssueProposalDecisionInput = {
 /**
  * Records a human's approve/reject decision on a factory.issue_proposals
  * row — atomically guarded by `WHERE status = 'pending'` (team-lead fix
- * round, [MUST] #2: the optimistic lock issue_proposal_decide.ts relies on
+ * round, [MUST] #2: the optimistic lock issue_proposal_apply.ts relies on
  * for idempotency). Returns `true` when this call actually performed the
  * transition, `false` when no row matched (the row was no longer "pending" —
  * a concurrent/earlier call already decided it, one way or the other; the
@@ -1051,7 +1007,7 @@ export type IssueProposalCreatedIssue = {
 };
 
 /**
- * Writes back the Issue issue_proposal_decide.ts created (or reused, via
+ * Writes back the Issue issue_proposal_apply.ts created (or reused, via
  * `findIssueByMarker`) for an approved proposal, once GitHub has actually
  * confirmed it — kept as its own write, separate from `decideIssueProposal`'s
  * initial status transition (team-lead fix round, [MUST] #2), so a retry
@@ -1078,7 +1034,7 @@ export async function setIssueProposalCreatedIssue(
  * guarded by `WHERE status = 'approved' AND created_issue_number IS NULL`,
  * so a row whose Issue already exists (a genuine, completed approval) is
  * never touched even if this is called for it by mistake. Used by
- * issue_proposal_decide.ts's approve path (team-lead fix round, "Keep
+ * issue_proposal_apply.ts's approve path (team-lead fix round, "Keep
  * incomplete approvals visible in Inbox"): when the search-for-existing-or-
  * create-Issue step throws before an Issue number is known, the row would
  * otherwise be stuck "approved" with `created_issue_number` still null and
@@ -1110,7 +1066,7 @@ export async function revertIssueProposalToPending(
 
 /** Number of `status = 'pending'` factory.issue_proposals rows for one work
  * item (team-lead fix round, IMO #5: replaces `listPendingIssueProposals`'s
- * full row fetch at the one call site — issue_proposal_decide.ts — that only
+ * full row fetch at the one call site — issue_proposal_apply.ts — that only
  * ever needed the count, and is called a second time after the label swap to
  * catch a proposal that appeared in the tiny window between the two reads —
  * see that script's module doc). */
@@ -1169,12 +1125,10 @@ export async function setFixRound(
 
 /**
  * Updates work_items.attempt. Promoted from an M6 code-review blocker:
- * `attempt` was never written after insert, so approval_decide.ts always
- * recorded a decision at attempt=1 while pipeline_decide.ts reads it back
- * via `latestApproval(work_item_id, flow_input.attempt)` — on a second (or
- * later) requirements-generation attempt this mismatch made a real human
- * decision look like a timeout. pipeline_prepare.ts calls this at the start
- * of the flow, persisting flow_input.attempt.
+ * `attempt` was never written after insert, so anything reading it back
+ * (e.g. `retry_work_item.ts`'s `workItem.attempt + 1`) saw a stale value on
+ * a second (or later) requirements-generation attempt. pipeline_prepare.ts
+ * calls this at the start of the flow, persisting flow_input.attempt.
  */
 export async function setAttempt(
   id: number,
@@ -1422,66 +1376,6 @@ export async function latestDraft(
   return row === undefined ? null : toRequirementDraft(row);
 }
 
-// ---------------------------------------------------------------------------
-// M6 pipeline promotions (spec-cycle2.md M6). Promoted from local versions
-// in f/factory/steps/pipeline_request_approval.ts (setResumeUrls) and
-// f/factory/steps/pipeline_decide.ts (latestApproval, which already reused
-// toApproval). Call sites switch over on their owner's own schedule.
-// ---------------------------------------------------------------------------
-
-/** Persists the suspend step's resume/cancel URLs on the work item, right
- * after `wmill.getResumeUrls()` (spec-cycle2.md §3 M6
- * "request_approval は suspend...resume URL を work_items に保存"). */
-export async function setResumeUrls(
-  id: number,
-  resumeUrl: string,
-  cancelUrl: string,
-  sql: SqlClient = defaultSqlClient,
-): Promise<void> {
-  await sql`
-    UPDATE factory.work_items
-    SET resume_url = ${resumeUrl}, cancel_url = ${cancelUrl}, updated_at = now()
-    WHERE id = ${id}
-  `.execute();
-}
-
-/** Clears resume_url / cancel_url after a terminal transition, so a stale
- * signed getResumeUrls() capability URL cannot be used to resume/cancel a
- * work item that is already done, bypassing approval_decide.ts (M6 security
- * review; see migrations/datatable/main/
- * 20260925211232_pr_watermarks_and_inbox.up.sql's factory.v_inbox note for
- * the related "don't expose these two columns" fix). */
-export async function clearResumeUrls(
-  id: number,
-  sql: SqlClient = defaultSqlClient,
-): Promise<void> {
-  await sql`
-    UPDATE factory.work_items
-    SET resume_url = NULL, cancel_url = NULL, updated_at = now()
-    WHERE id = ${id}
-  `.execute();
-}
-
-/** Most recent (by decided_at) factory.approvals row for
- * (work_item_id, attempt), or `null` if no human has decided yet — how
- * pipeline_decide.ts tells "human decided" from "suspend timed out with no
- * decision" (Windmill CE does not propagate the resume payload to the
- * flow's next step; see that script's module doc). */
-export async function latestApproval(
-  workItemId: number,
-  attempt: number,
-  sql: SqlClient = defaultSqlClient,
-): Promise<Approval | null> {
-  const rows = await sql`
-    SELECT * FROM factory.approvals
-    WHERE work_item_id = ${workItemId} AND attempt = ${attempt}
-    ORDER BY decided_at DESC
-    LIMIT 1
-  `.fetch();
-  const row = rows[0];
-  return row === undefined ? null : toApproval(row);
-}
-
 /** Fetches one factory.requirement_drafts row by id, or `null` if it does
  * not exist — used by approval_requests readers (kind "requirements") to
  * resolve `subject_id` into its full draft. */
@@ -1498,10 +1392,11 @@ export async function getRequirementDraft(
 // ---------------------------------------------------------------------------
 // approval_requests (generalized approval waiting, replacing suspend-based
 // approval) — see
-// migrations/datatable/main/20260927120000_approval_requests.up.sql. This
-// module only adds schema + accessors; callers still go through
-// factory.approvals / pipeline.flow's suspend step until a follow-up PR
-// switches them over.
+// migrations/datatable/main/20260927120000_approval_requests.up.sql. Every
+// approval-flow script (approval_decide.ts, pipeline_request_approval.ts,
+// steps/requirements_apply.ts, steps/issue_proposal_apply.ts,
+// poll_issues.ts's expiry sweep) goes through this table; factory.approvals
+// and pipeline.flow's suspend step are gone.
 // ---------------------------------------------------------------------------
 
 /** Parses a full factory.approval_requests row (same `SqlRow` contract as

@@ -1,7 +1,8 @@
 // Tests for f/factory/lib/approver.ts's deriveApprover (team-lead fix round,
-// [MUST] #1: shared fail-closed approver-identity derivation, extracted from
-// approval_decide.ts so issue_proposal_decide.ts uses the same logic instead
-// of a bare `process.env.WM_USERNAME ?? "unknown"`).
+// [MUST] #1: shared fail-closed approver-identity derivation, used by
+// approval_decide.ts — the single decision recorder for every
+// approval_requests kind — instead of a bare
+// `process.env.WM_USERNAME ?? "unknown"`).
 
 import { describe, expect, test } from "bun:test";
 import { deriveApprover } from "../../f/factory/lib/approver.ts";

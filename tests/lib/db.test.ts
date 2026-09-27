@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import {
   addNotice,
   bumpWatermarks,
-  clearResumeUrls,
   countPendingIssueProposals,
   decideApprovalRequestIfPending,
   decideIssueProposal,
@@ -24,7 +23,6 @@ import {
   insertIssueProposal,
   insertReview,
   insertWorkItem,
-  latestApproval,
   latestDraft,
   latestFixRound,
   latestPrWorkItem,
@@ -34,7 +32,6 @@ import {
   listStaleTerminalWorkItems,
   nextCycleForIssue,
   recordAgentRun,
-  recordApproval,
   recordDeployment,
   recordFailure,
   revertIssueProposalToPending,
@@ -47,9 +44,7 @@ import {
   setHeadSha,
   setIssueProposalCreatedIssue,
   setObservedWatermarks,
-  setResumeUrls,
   sumAgentCostSince,
-  toApproval,
   toApprovalRequest,
   toFixRoundRecord,
   toIssueProposal,
@@ -419,59 +414,6 @@ describe("toRequirementDraft", () => {
       created_at: NOW.toISOString(),
     });
     expect(draft.diagrams).toEqual([{ name: "d1", drawio_xml: "<mxfile/>" }]);
-  });
-});
-
-describe("recordApproval", () => {
-  test("inserts into factory.approvals", async () => {
-    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
-    await recordApproval(
-      {
-        work_item_id: 1,
-        attempt: 1,
-        decision: "approved",
-        reason: null,
-        approver: "alice",
-      },
-      sql,
-    );
-    expect(calls[0]?.text).toContain("INSERT INTO factory.approvals");
-  });
-
-  test("casts work_item_id and attempt to their real numeric type", async () => {
-    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
-    await recordApproval(
-      {
-        work_item_id: 1,
-        attempt: 1,
-        decision: "approved",
-        reason: null,
-        approver: "alice",
-      },
-      sql,
-    );
-    const text = calls[0]?.text ?? "";
-    expect(text).toContain("::bigint");
-    expect(text).toContain("::integer");
-  });
-});
-
-describe("toApproval", () => {
-  test("parses a factory.approvals row", () => {
-    const approval = toApproval({
-      id: 5,
-      work_item_id: 1,
-      attempt: 1,
-      decision: "approved",
-      reason: null,
-      approver: "alice",
-      decided_at: NOW.toISOString(),
-    });
-    expect(approval).toMatchObject({
-      id: 5,
-      decision: "approved",
-      approver: "alice",
-    });
   });
 });
 
@@ -995,7 +937,7 @@ describe("decideIssueProposal", () => {
   });
 
   // team-lead fix round, [MUST] #2: guarded by `WHERE status = 'pending'` so
-  // it doubles as an optimistic lock — issue_proposal_decide.ts relies on
+  // it doubles as an optimistic lock — issue_proposal_apply.ts relies on
   // this to tell a fresh decision from a retry.
   test("guards the update with WHERE status = 'pending'", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 3 }]]);
@@ -1714,21 +1656,6 @@ describe("latestPrWorkItem", () => {
   });
 });
 
-describe("clearResumeUrls", () => {
-  test("sets resume_url and cancel_url to NULL", async () => {
-    const { sql, calls } = createFakeSqlClient([[]]);
-    await clearResumeUrls(1, sql);
-    expect(calls[0]?.text).toContain("SET resume_url = NULL");
-    expect(calls[0]?.text).toContain("cancel_url = NULL");
-  });
-
-  test("passes id as a parameter", async () => {
-    const { sql, calls } = createFakeSqlClient([[]]);
-    await clearResumeUrls(1, sql);
-    expect(calls[0]?.values).toEqual([1]);
-  });
-});
-
 describe("sumAgentCostSince", () => {
   test("sums cost_usd since the given ISO timestamp", async () => {
     const { sql } = createFakeSqlClient([[{ total_cost_usd: 12.5 }]]);
@@ -1789,70 +1716,6 @@ describe("latestDraft", () => {
 });
 
 // ---------------------------------------------------------------------------
-// M6 pipeline promotions (promoted from f/factory/steps/
-// pipeline_request_approval.ts / pipeline_decide.ts)
-// ---------------------------------------------------------------------------
-
-describe("setResumeUrls", () => {
-  test("updates resume_url and cancel_url", async () => {
-    const { sql, calls } = createFakeSqlClient([[]]);
-    await setResumeUrls(
-      1,
-      "https://example/resume",
-      "https://example/cancel",
-      sql,
-    );
-    expect(calls[0]?.text).toContain("SET resume_url");
-  });
-
-  test("passes resumeUrl, cancelUrl, and id as parameters", async () => {
-    const { sql, calls } = createFakeSqlClient([[]]);
-    await setResumeUrls(
-      1,
-      "https://example/resume",
-      "https://example/cancel",
-      sql,
-    );
-    expect(calls[0]?.values).toEqual([
-      "https://example/resume",
-      "https://example/cancel",
-      1,
-    ]);
-  });
-});
-
-describe("latestApproval", () => {
-  test("returns null when there is no approval for this attempt", async () => {
-    const { sql } = createFakeSqlClient([[]]);
-    const approval = await latestApproval(1, 1, sql);
-    expect(approval).toBeNull();
-  });
-
-  test("returns the most recent approval for (work_item_id, attempt)", async () => {
-    const { sql } = createFakeSqlClient([
-      [
-        {
-          id: 5,
-          work_item_id: 1,
-          attempt: 1,
-          decision: "approved",
-          reason: null,
-          approver: "alice",
-          decided_at: "2026-09-26T00:00:00.000Z",
-        },
-      ],
-    ]);
-    const approval = await latestApproval(1, 1, sql);
-    expect(approval?.decision).toBe("approved");
-  });
-
-  test("filters by work_item_id and attempt", async () => {
-    const { sql, calls } = createFakeSqlClient([[]]);
-    await latestApproval(1, 2, sql);
-    expect(calls[0]?.values).toEqual([1, 2]);
-  });
-});
-
 describe("deleteTerminalWorkItemsBefore", () => {
   const COUNT_ROW = { work_items_deleted: "2", approval_requests_deleted: "3" };
 

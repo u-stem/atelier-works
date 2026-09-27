@@ -100,7 +100,7 @@ function isClaudeResult(value: unknown): value is ClaudeResult {
 
 - 多重実行防止はadvisory lockを使わない。各`*.schedule.yaml`に`no_flow_overlap: true`を設定し、前回実行中はスキップする。複数インスタンスを同時運用する場合の排他はWindmill側ではなく **GitHub側のclaim**(`wip`ラベル + assigneeの付与、再取得しての確認)で担保する。
 - scheduleにはerror handlerを設定し、失敗を`job_failures`テーブルとDiscord通知に流す(`f/factory/on_error_schedule.ts`)。
-- 承認のタイムアウト(7日)はscheduleではなく`pipeline.flow`のsuspend設定側で持つ。
+- 承認のタイムアウト(7日)は`poll_issues`のreconcile後に行う期限切れスイープが`approval_requests.expires_at`を見て判定する(`pipeline.flow`はsuspendを使わない)。
 
 ## プロンプトと投稿の規約
 
@@ -143,11 +143,11 @@ M4のゲートでworker内で実測した外部コマンド・APIの挙動。型
 - `wmill generate-metadata`は各libファイルに対しても空スキーマの`.script.yaml` / `.lock`を生成する(いずれもコミット対象)。
 - `wmill.yaml`の`codebases`バンドルは**不要**(相対importのままで問題ない)。
 
-### suspend / resume(Windmill CE 1.817.0、実測)
+### 承認待ち(approval_requests、suspendは使わない)
 
-- `wmill.getResumeUrls()`が返すresume / cancel URLにJSONをPOSTしても、**POSTした本文は後続ステップには渡らない**。後続ステップが受け取るのはsuspendステップ自身の戻り値`{ resume, cancel, approvalPage }`だけで、これは`resume_form`の有無に関わらず実フローで確認済み。
-- そのため承認内容(decision / reason / approver)は`approval_decide`が **resumeする前に** `factory.approvals`へ先に記録し、resume後の分岐ステップは`approvals`の最新行(`work_item_id` + `attempt`単位)を読んで判断する。
-- タイムアウト(`continue_on_disapprove_timeout: true`で続行する設定)は、`approvals`に対応する行が無いことで判別する。
+- `wmill.getResumeUrls()`が返すresume / cancel URLにJSONをPOSTしても、**POSTした本文は後続ステップには渡らない**(後続ステップが受け取るのはsuspendステップ自身の戻り値`{ resume, cancel, approvalPage }`だけで、これは`resume_form`の有無に関わらず実フローで確認済み)。この実測結果を踏まえ、承認待ちはWindmillのsuspendステップを使わず、`factory.approval_requests`テーブルの`pending`行で表現する: `pipeline_request_approval`は`pending`行を記録して即座にフローを終了し、以降フローは待機しない。
+- 人がConsoleから承認 / 却下すると`approval_decide`が決定を`approval_requests`へ`decideApprovalRequestIfPending`(`WHERE status = 'pending'`の楽観ロック)で記録し、`kind`(`requirements` / `issue_proposal`)に応じたapplyスクリプト(`steps/requirements_apply` / `steps/issue_proposal_apply`)を`wmill.runScriptByPathAsync`で起動して実際の反映処理を行う。
+- タイムアウト(7日)は`poll_issues`のreconcile後に行う期限切れスイープが`approval_requests.expires_at`を見て判定し、`expireApprovalRequestIfPending`で`expired`に遷移させる。
 
 ### `commentIssue`のmarker冪等性
 

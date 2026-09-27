@@ -95,7 +95,7 @@ export function isRequirementsOutput(
 
 /**
  * Normalizes `feedback` (pure, for testing). [major, M6 review round 1,
- * devil-advocate] This flow's callers other than pipeline_decide.ts's
+ * devil-advocate] This flow's callers other than requirements_apply.ts's
  * reject-and-retry branch (poll_issues, retry_work_item,
  * manual_intake_register) don't pass `feedback` at all — the flow schema's
  * `default: ''` only applies when the flow is started through the UI/form,

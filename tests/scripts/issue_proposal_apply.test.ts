@@ -1,10 +1,13 @@
 // Tests for f/factory/steps/pr_workflow_support.ts's pure helpers backing
-// f/factory/issue_proposal_decide.ts (team-lead fix round): idempotency
-// classification ([MUST] #2), the marker builder/parser pair used to find
-// (and avoid re-creating) an already-approved proposal's Issue ([MUST] #2),
-// and the deterministic reply-target choice by `is_inline` ([MUST] #4).
+// f/factory/steps/issue_proposal_apply.ts (team-lead fix round, carried over
+// from the former issue_proposal_decide.ts): idempotency classification
+// ([MUST] #2), the marker builder/parser pair used to find (and avoid
+// re-creating) an already-approved proposal's Issue ([MUST] #2), and the
+// deterministic reply-target choice by `is_inline` ([MUST] #4). Also covers
+// issue_proposal_apply.ts's own `readWithFactoryLabel`.
 
 import { describe, expect, test } from "bun:test";
+import { readWithFactoryLabel } from "../../f/factory/steps/issue_proposal_apply.ts";
 import {
   appendIssueProposalMarker,
   chooseIssueProposalReplyTarget,
@@ -13,6 +16,20 @@ import {
   issueProposalMarkerSearchTerm,
   issueProposalMarkerText,
 } from "../../f/factory/steps/pr_workflow_support.ts";
+
+describe("readWithFactoryLabel", () => {
+  test("reads a boolean with_factory_label from decision_options", () => {
+    expect(readWithFactoryLabel({ with_factory_label: true })).toBe(true);
+  });
+
+  test("defaults to false when absent", () => {
+    expect(readWithFactoryLabel({})).toBe(false);
+  });
+
+  test("defaults to false when not a boolean", () => {
+    expect(readWithFactoryLabel({ with_factory_label: "true" })).toBe(false);
+  });
+});
 
 describe("classifyIssueProposalDecision", () => {
   test("proceeds when the row is still pending", () => {
@@ -78,14 +95,14 @@ describe("classifyIssueProposalDecision", () => {
     expect(result.action).toBe("refuse");
   });
 
-  test("refuses as already done when approved and the Issue was already created", () => {
+  test("classifies as already_done when approved and the Issue was already created", () => {
     const result = classifyIssueProposalDecision(
       { status: "approved", created_issue_number: 42 },
       { decision: "approve", reason: "", with_factory_label: false },
     );
     expect(result).toEqual({
-      action: "refuse",
-      message: "この提案は既に承認済みで、Issue #42も作成済みです",
+      action: "already_done",
+      created_issue_number: 42,
     });
   });
 

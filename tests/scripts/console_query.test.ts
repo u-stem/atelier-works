@@ -75,49 +75,157 @@ describe("toDiagramLink", () => {
 });
 
 describe("runConsoleQuery", () => {
-  test("inbox: queries factory.v_inbox and parses diagrams/open_questions", async () => {
+  test("inbox: queries factory.v_approval_requests and parses a requirements row", async () => {
     const row: SqlRow = {
+      approval_request_id: 3,
+      kind: "requirements",
+      status: "pending",
       work_item_id: 1,
       owner: "octo-owner",
       repo: "atelier-works",
+      title: "Add feature",
+      requested_at: NOW.toISOString(),
+      expires_at: null,
       issue_number: 42,
       issue_url: "https://github.com/octo-owner/atelier-works/issues/42",
-      title: "Add feature",
-      attempt: 1,
-      claimed_by: "factory-local",
-      requirement_draft_id: 9,
+      draft_attempt: 1,
       summary: "要約",
       markdown: "# 要件",
       diagrams: JSON.stringify([{ name: "flow", drawio_xml: "<bad/>" }]),
       open_questions: JSON.stringify(["未確定事項A"]),
-      created_at: NOW.toISOString(),
-      updated_at: NOW.toISOString(),
+      pr_number: null,
+      proposal_title: null,
+      proposal_body: null,
+      proposal_status: null,
+      created_issue_number: null,
+      created_issue_url: null,
+      claimed_by: null,
     };
     const { sql, calls } = createFakeSqlClient([[row]]);
 
     const rows = await runConsoleQuery("inbox", 200, 30, sql);
 
-    expect(calls[0]?.text).toContain("FROM factory.v_inbox");
+    expect(calls[0]?.text).toContain("FROM factory.v_approval_requests");
     expect(calls[0]?.text).not.toContain("v_pipeline");
     expect(rows).toEqual([
       {
+        approval_request_id: 3,
+        kind: "requirements",
+        status: "pending",
         work_item_id: 1,
         owner: "octo-owner",
         repo: "atelier-works",
+        title: "Add feature",
+        requested_at: NOW.toISOString(),
+        expires_at: null,
         issue_number: 42,
         issue_url: "https://github.com/octo-owner/atelier-works/issues/42",
-        title: "Add feature",
-        attempt: 1,
-        claimed_by: "factory-local",
-        requirement_draft_id: 9,
+        draft_attempt: 1,
         summary: "要約",
         markdown: "# 要件",
         diagrams: [{ name: "flow", viewer_url: null }],
         open_questions: ["未確定事項A"],
-        created_at: NOW.toISOString(),
-        updated_at: NOW.toISOString(),
       },
     ]);
+  });
+
+  test("inbox: parses an issue_proposal row", async () => {
+    const row: SqlRow = {
+      approval_request_id: 5,
+      kind: "issue_proposal",
+      status: "pending",
+      work_item_id: 2,
+      owner: "octo-owner",
+      repo: "atelier-works",
+      title: "Add feature",
+      requested_at: NOW.toISOString(),
+      expires_at: null,
+      issue_number: null,
+      issue_url: null,
+      draft_attempt: null,
+      summary: null,
+      markdown: null,
+      diagrams: null,
+      open_questions: null,
+      pr_number: 7,
+      proposal_title: "共有ヘルパーへ抽出する",
+      proposal_body: "背景\n提案",
+      proposal_status: "pending",
+      created_issue_number: null,
+      created_issue_url: null,
+      claimed_by: "factory-local",
+    };
+    const { sql, calls } = createFakeSqlClient([[row]]);
+
+    const rows = await runConsoleQuery("inbox", 200, 30, sql);
+
+    expect(calls[0]?.text).toContain("FROM factory.v_approval_requests");
+    expect(rows).toEqual([
+      {
+        approval_request_id: 5,
+        kind: "issue_proposal",
+        status: "pending",
+        work_item_id: 2,
+        owner: "octo-owner",
+        repo: "atelier-works",
+        title: "Add feature",
+        requested_at: NOW.toISOString(),
+        expires_at: null,
+        pr_number: 7,
+        proposal_title: "共有ヘルパーへ抽出する",
+        proposal_body: "背景\n提案",
+        proposal_status: "pending",
+        created_issue_number: null,
+        created_issue_url: null,
+        claimed_by: "factory-local",
+      },
+    ]);
+  });
+
+  // Team-lead fix round ("Keep incomplete approvals visible in Inbox"):
+  // approval_decide.ts records the approval before the issue_proposal apply
+  // script creates the Issue, so a row can be "approved" with
+  // created_issue_number still null when Issue creation failed partway
+  // through — this must still surface in the Inbox for a human to retry, not
+  // disappear once its status leaves "pending".
+  test("inbox: also includes an approved issue_proposal row whose Issue was never created", async () => {
+    const row: SqlRow = {
+      approval_request_id: 6,
+      kind: "issue_proposal",
+      status: "approved",
+      work_item_id: 2,
+      owner: "octo-owner",
+      repo: "atelier-works",
+      title: "Add feature",
+      requested_at: NOW.toISOString(),
+      expires_at: null,
+      issue_number: null,
+      issue_url: null,
+      draft_attempt: null,
+      summary: null,
+      markdown: null,
+      diagrams: null,
+      open_questions: null,
+      pr_number: 7,
+      proposal_title: "共有ヘルパーへ抽出する",
+      proposal_body: "背景\n提案",
+      proposal_status: "approved",
+      created_issue_number: null,
+      created_issue_url: null,
+      claimed_by: "factory-local",
+    };
+    const { sql, calls } = createFakeSqlClient([[row]]);
+
+    const rows = await runConsoleQuery("inbox", 200, 30, sql);
+
+    expect(calls[0]?.text).toContain(
+      "kind = 'issue_proposal' AND status = 'approved' AND created_issue_number IS NULL",
+    );
+    expect(rows[0]).toMatchObject({
+      approval_request_id: 6,
+      status: "approved",
+      created_issue_number: null,
+    });
   });
 
   test("pipeline: binds the since timestamp and limit", async () => {
@@ -253,89 +361,6 @@ describe("runConsoleQuery", () => {
       trigger_review_ids: [10, 11],
       replies: [{ review_comment_id: 99, body: "fixed" }],
       commit_shas: ["deadbee"],
-    });
-  });
-
-  // User decision (2026-09-26): the Inbox needs every still-pending
-  // propose_issue proposal, so this query filters to status = 'pending'
-  // itself rather than relying on the view (unlike v_inbox, which already
-  // filters in the view).
-  test("issue_proposals: queries factory.v_issue_proposals filtered to pending", async () => {
-    const row: SqlRow = {
-      issue_proposal_id: 5,
-      work_item_id: 2,
-      owner: "octo-owner",
-      repo: "atelier-works",
-      pr_number: 7,
-      pr_title: "Add feature",
-      claimed_by: "factory-local",
-      review_comment_id: 101,
-      thread_id: "PRRT_1",
-      title: "共有ヘルパーへ抽出する",
-      body: "背景\n提案",
-      status: "pending",
-      decided_by: null,
-      decision_reason: null,
-      with_factory_label: null,
-      created_issue_number: null,
-      created_issue_url: null,
-      is_inline: true,
-      created_at: NOW.toISOString(),
-      decided_at: null,
-    };
-    const { sql, calls } = createFakeSqlClient([[row]]);
-
-    const rows = await runConsoleQuery("issue_proposals", 200, 30, sql);
-
-    expect(calls[0]?.text).toContain("FROM factory.v_issue_proposals");
-    expect(calls[0]?.text).toContain("status = 'pending'");
-    expect(rows[0]).toMatchObject({
-      issue_proposal_id: 5,
-      status: "pending",
-      title: "共有ヘルパーへ抽出する",
-    });
-  });
-
-  // Team-lead fix round ("Keep incomplete approvals visible in Inbox"):
-  // issue_proposal_decide.ts records the approval before creating the
-  // Issue, so a row can be "approved" with created_issue_number still null
-  // when Issue creation failed partway through — this must still surface in
-  // the Inbox for a human to retry, not disappear once its status leaves
-  // "pending".
-  test("issue_proposals: also includes an approved row whose Issue was never created", async () => {
-    const row: SqlRow = {
-      issue_proposal_id: 6,
-      work_item_id: 2,
-      owner: "octo-owner",
-      repo: "atelier-works",
-      pr_number: 7,
-      pr_title: "Add feature",
-      claimed_by: "factory-local",
-      review_comment_id: 102,
-      thread_id: "PRRT_2",
-      title: "共有ヘルパーへ抽出する",
-      body: "背景\n提案",
-      status: "approved",
-      decided_by: "alice",
-      decision_reason: null,
-      with_factory_label: false,
-      created_issue_number: null,
-      created_issue_url: null,
-      is_inline: true,
-      created_at: NOW.toISOString(),
-      decided_at: NOW.toISOString(),
-    };
-    const { sql, calls } = createFakeSqlClient([[row]]);
-
-    const rows = await runConsoleQuery("issue_proposals", 200, 30, sql);
-
-    expect(calls[0]?.text).toContain(
-      "status = 'approved' AND created_issue_number IS NULL",
-    );
-    expect(rows[0]).toMatchObject({
-      issue_proposal_id: 6,
-      status: "approved",
-      created_issue_number: null,
     });
   });
 });

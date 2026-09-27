@@ -85,7 +85,7 @@ export async function main(
   // team-lead fix round 1b item 3 / fix round 2 item b: same daily-budget
   // guard as pipeline_generate.ts (lib/claude.ts's dailyBudgetStatus, same
   // exceeded check and log.warn shape), run before any Claude call. Unlike
-  // pipeline_generate.ts — whose caller (pipeline_decide.ts / on_error_flow)
+  // pipeline_generate.ts — whose caller (pipeline.flow, via on_error_flow)
   // has no separate "post the failure" step — pr_review has no downstream
   // step that handles a non-post outcome, so the needs_human status
   // transition, label removal, and Discord notice all happen right here

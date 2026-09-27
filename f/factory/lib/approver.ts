@@ -1,13 +1,12 @@
 // Shared fail-closed approver-identity derivation (team-lead fix round,
-// [MUST] #1: issue_proposal_decide.ts used to record `process.env.WM_USERNAME
-// ?? "unknown"` as `decided_by` — a decision could silently land under the
-// literal string "unknown" when the job's run context carried no identity at
-// all, defeating the whole point of recording who decided). Extracted from
-// approval_decide.ts (its module doc's first security-auditor note explains
-// why a caller-supplied argument can never be trusted as identity instead)
-// so every step script that records a human decision derives it the same,
-// fail-closed way: approval_decide.ts (requirement-draft approval) and
-// issue_proposal_decide.ts (Issue-proposal approval) both import this.
+// [MUST] #1: the former issue_proposal_decide.ts used to record
+// `process.env.WM_USERNAME ?? "unknown"` as `decided_by` — a decision could
+// silently land under the literal string "unknown" when the job's run
+// context carried no identity at all, defeating the whole point of
+// recording who decided). Used by approval_decide.ts (its module doc's
+// first security-auditor note explains why a caller-supplied argument can
+// never be trusted as identity instead) — the single decision recorder for
+// every approval_requests kind (requirements and issue_proposal alike).
 
 export type ApproverEnv = {
   readonly WM_USERNAME?: string | undefined;

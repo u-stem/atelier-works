@@ -1,80 +1,31 @@
-// PathScript for the suspend step of f/factory/pipeline (spec-cycle2.md §3
-// M6 "request_approval"). Calls wmill.getResumeUrls(), persists resume_url
-// / cancel_url on the work item, flips status to awaiting_approval, and
-// sends a Discord approval_requested notification. GitHub itself gets no
-// comment at this stage (2026-09-27 policy: GitHub carries only work
-// product; operational notices — including "awaiting approval" — go to
-// Discord/Console only. The Issue does get one comment later, on approval —
-// see pipeline_decide.ts's buildApprovedComment).
-//
-// IMPORTANT — read before changing this step or pipeline_decide.ts (full
-// writeup in this implementer's final report): the flow module's downstream
-// step never actually receives whatever JSON body a human posts to
-// resume_url/cancel_url. Empirically verified against this repo's own
-// Windmill server (self-hosted CE 1.817.0), with and without a
-// `resume_form` schema on the suspend config: `results.<this step's id>` in
-// the next module is always this script's own return value (the
-// `{resume, cancel, approvalPage}` object from `wmill.getResumeUrls()`),
-// unchanged by any resume/cancel POST body — confirmed across a plain
-// resume, a resume posted before the timeout with a decision body, and a
-// natural timeout. The rich "resume payload becomes the step's result"
-// behavior the OpenAPI spec's `/jobs_u/flow/resume_suspended/{job_id}`
-// endpoint (`payload`/`approved` fields) suggests is a different, EE-only
-// code path (`/api/.../flows/update`-adjacent audit log entries during this
-// probe were tagged `resource: "EE only"`), not what `getResumeUrls()`'s
-// plain resume/cancel URLs exercise on CE.
-//
-// So the actual approve/reject decision + reason/approver cannot be read
-// back from the suspend payload at all here. pipeline_decide.ts instead
-// reads the decision from factory.approvals, which f/factory/
-// approval_decide.ts now records *before* POSTing to resume_url — a small,
-// necessary fix to that already-implemented script (see the final report;
-// it previously assumed the payload would propagate and recorded nothing).
-// continue_on_disapprove_timeout: true (set on this step's suspend config in
-// pipeline__flow/flow.yaml) makes a genuine 7-day timeout *also* continue to
-// pipeline_decide.ts rather than failing the flow — pipeline_decide.ts tells
-// "human decided" from "nobody decided" by whether a factory.approvals row
-// exists for (work_item_id, attempt), not from this step's result.
-//
-// [high, M6 review round 1b, security-auditor] `wmill.getResumeUrls()`'s
-// `approvalPage` is a signed capability URL: anyone who sees it can
-// resume/cancel this suspended flow directly, with no login and without
-// going through approval_decide.ts — so no factory.approvals row gets
-// recorded, and pipeline_decide.ts previously had no way to tell that
-// apart from a genuine 7-day timeout. `approvalPage` must never be posted
-// anywhere (Discord, the Issue comment, or this step's own return value —
-// Windmill persists every job's args/result indefinitely, which is itself
-// a broad-enough audience to treat as "public" for a bearer credential).
-// Only `resume_url`/`cancel_url` are persisted (to the DB, not posted
-// anywhere), and only for approval_decide.ts's own use. Everywhere a human
-// needs a link, it is the App's own authenticated Inbox URL instead — see
-// `buildInboxUrl`. pipeline_decide.ts's `classifyMissingApproval` is the
-// other half of this fix: it now treats an early wake with no approvals
-// row as `needs_human` ("resumed via unsupported channel") rather than
-// blindly calling it `expired`.
+// PathScript for the "request approval" step of f/factory/pipeline. Records
+// a pending `factory.approval_requests` row (kind "requirements") for the
+// just-generated draft, flips the work item's status to `awaiting_approval`,
+// and posts the "承認待ち" Issue comment (summary + open_questions) plus a
+// Discord approval_requested notification. Unlike the former suspend-based
+// version of this step, the flow does not wait here at all — it returns
+// immediately once the approval request is recorded. A human decides later,
+// entirely out of band, via f/factory/approval_decide.ts, which dispatches
+// to f/factory/steps/requirements_apply.ts once a decision is recorded.
+// poll_issues.ts's scheduled expiry sweep marks a still-pending request
+// expired once `expires_at` (computeExpiresAt, lib/approval_support.ts) has
+// passed.
 
 import * as wmill from "windmill-client@1.817.0";
+import { buildConsoleUrl, computeExpiresAt } from "../lib/approval_support.ts";
 import { loadConfig } from "../lib/config.ts";
-import { getWorkItem, setResumeUrls, updateStatus } from "../lib/db.ts";
+import {
+  getWorkItem,
+  insertApprovalRequest,
+  latestDraft,
+  updateStatusIfCurrent,
+} from "../lib/db.ts";
 import { notify } from "../lib/discord.ts";
 import { logger } from "../lib/log.ts";
 
-// Kept as a single named constant per the security fix's instruction
-// ("定数化して1箇所に") — the exact Windmill App view URL path, so a future
-// correction (once f/factory/factory_console is actually created and its
-// real URL can be verified) is a one-line change.
-const FACTORY_CONSOLE_APP_PATH = "f/factory/factory_console";
-
-/** The App's authenticated Inbox URL (pure, for testing) — the only link
- * ever posted for "go approve/reject this", replacing the raw
- * `getResumeUrls()` `approvalPage` capability URL (security fix, see this
- * file's module doc). */
-export function buildInboxUrl(windmillPublicUrl: string): string {
-  return `${windmillPublicUrl}/apps/get/${FACTORY_CONSOLE_APP_PATH}`;
-}
-
 export type PipelineRequestApprovalResult = {
   readonly ok: true;
+  readonly approval_request_id: number;
 };
 
 export async function main(
@@ -98,13 +49,35 @@ export async function main(
     );
   }
 
-  // `urls.approvalPage` is deliberately never read — see the security-fix
-  // module doc above.
-  const urls = await wmill.getResumeUrls();
-  await setResumeUrls(work_item_id, urls.resume, urls.cancel);
-  await updateStatus(work_item_id, "awaiting_approval", null);
+  const draft = await latestDraft(work_item_id);
+  if (draft === null || draft.attempt !== attempt) {
+    throw new Error(
+      `pipeline_request_approval: work item ${work_item_id} has no requirement draft for attempt ${String(attempt)}`,
+    );
+  }
 
-  const inboxUrl = buildInboxUrl(config.windmill_public_url);
+  const approvalRequestId = await insertApprovalRequest({
+    kind: "requirements",
+    work_item_id,
+    subject_id: draft.id,
+    payload: { attempt },
+    expires_at: computeExpiresAt(new Date()),
+  });
+
+  const updated = await updateStatusIfCurrent(
+    work_item_id,
+    "requirements_generating",
+    "awaiting_approval",
+    null,
+  );
+  if (!updated) {
+    log.info("work item moved on before approval could be requested", {
+      work_item_id,
+    });
+    return { ok: true, approval_request_id: approvalRequestId };
+  }
+
+  const inboxUrl = buildConsoleUrl(config.windmill_public_url);
 
   const webhookUrl = await wmill.getVariable("f/factory/discord_webhook_url");
   if (webhookUrl.length > 0) {
@@ -120,7 +93,11 @@ export async function main(
     });
   }
 
-  log.info("requested approval", { work_item_id, attempt });
+  log.info("requested approval", {
+    work_item_id,
+    attempt,
+    approval_request_id: approvalRequestId,
+  });
 
-  return { ok: true };
+  return { ok: true, approval_request_id: approvalRequestId };
 }

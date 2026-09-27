@@ -18,45 +18,31 @@ export async function queryConsole(
 
 export type ApprovalAction = "approve" | "reject";
 
-/** Calls f/factory/approval_decide.ts. `reason` is required by that script
- * when `action` is "reject" (empty string is rejected there); `note` is
- * always optional free-text context. */
+/** Calls f/factory/approval_decide.ts, the single decision recorder for
+ * every approval_requests kind. `reason` is required by that script when
+ * `action` is "reject" (empty string is rejected there); `note` is always
+ * optional free-text context; `options` carries kind-specific decider-side
+ * data (e.g. `{ with_factory_label: boolean }` for an "issue_proposal"
+ * request) and defaults to `{}` when omitted. */
 export async function decideApproval(
-  workItemId: number,
+  approvalRequestId: number,
   action: ApprovalAction,
   reason: string,
   note: string,
+  options: Record<string, unknown> = {},
 ): Promise<unknown> {
   return await backend.approval_decide({
-    work_item_id: workItemId,
+    approval_request_id: approvalRequestId,
     decision: action,
     reason,
     note,
+    options,
   });
 }
 
 /** Calls f/factory/retry_work_item.ts. */
 export async function retryWorkItem(workItemId: number): Promise<unknown> {
   return await backend.retry_work_item({ work_item_id: workItemId });
-}
-
-/** Calls f/factory/issue_proposal_decide.ts. `reason` is required by that
- * script when `action` is "reject" (empty string is rejected there);
- * `withFactoryLabel` only matters on "approve" (whether the created Issue
- * gets `factory_config.trigger_label`, entering the requirements
- * pipeline). */
-export async function decideIssueProposal(
-  proposalId: number,
-  action: ApprovalAction,
-  reason: string,
-  withFactoryLabel: boolean,
-): Promise<unknown> {
-  return await backend.issue_proposal_decide({
-    proposal_id: proposalId,
-    decision: action,
-    reason,
-    with_factory_label: withFactoryLabel,
-  });
 }
 
 /** Renders any thrown value as a short Japanese-friendly message for

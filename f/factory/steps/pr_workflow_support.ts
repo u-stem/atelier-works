@@ -1982,7 +1982,7 @@ export function filterKnownReplies(
  * the body instead carries the proposed Issue's title (`提案するIssue:
  * <title>`) and a blockquote of the first 3 lines of its body, ending
  * `対応: Issue化を提案(承認待ち)` — a human approves or rejects the actual
- * Issue creation from the Console Inbox (issue_proposal_decide.ts), which
+ * Issue creation from the Console Inbox (issue_proposal_apply.ts), which
  * posts its own follow-up reply once decided. A `"propose_issue"` reply
  * with no `issue_proposal` (should not happen once `isFixReplyShape` has
  * validated it, but this function accepts any `FixReply`) falls back to an
@@ -2022,7 +2022,7 @@ export function renderFixReply(reply: FixReply, newSha: string | null): string {
 }
 
 // ---------------------------------------------------------------------------
-// pr_fix_finish / issue_proposal_decide: `propose_issue` replies (user
+// pr_fix_finish / issue_proposal_apply: `propose_issue` replies (user
 // decision, 2026-09-26) — recording a candidate Issue for human
 // approval/rejection.
 // ---------------------------------------------------------------------------
@@ -2040,7 +2040,7 @@ export function selectProposeIssueReplies(
 /**
  * Finds the review thread containing `reviewCommentId` among `threads` —
  * used by pr_fix_finish.ts to attach a GraphQL thread id to a newly
- * recorded `propose_issue` row, so issue_proposal_decide.ts can resolve it
+ * recorded `propose_issue` row, so issue_proposal_apply.ts can resolve it
  * on approval. Matches on comment id (team-lead fix round, [MUST] #4 —
  * supersedes matching by `(path, line)`, which silently mismatched once a
  * later commit shifted the diff's line numbers): `thread.firstCommentDatabaseId`
@@ -2096,7 +2096,7 @@ export function buildIssueProposalTitle(title: string): string {
   return normalizeJapaneseText(title.trim());
 }
 
-/** Renders the thread reply issue_proposal_decide.ts posts on approval —
+/** Renders the thread reply issue_proposal_apply.ts posts on approval —
  * the caller appends the `<!-- factory:pr_fix:<id> -->` marker via
  * github.ts's withMarker, same as renderFixReply's callers. */
 export function renderIssueProposalApprovedReply(issueNumber: number): string {
@@ -2108,7 +2108,7 @@ export function renderIssueProposalApprovedReply(issueNumber: number): string {
   ].join("\n");
 }
 
-/** Renders the thread reply issue_proposal_decide.ts posts on rejection —
+/** Renders the thread reply issue_proposal_apply.ts posts on rejection —
  * same marker convention as renderIssueProposalApprovedReply. `reason` is
  * the human's own free text, passed through `normalizeJapaneseText`. */
 export function renderIssueProposalRejectedReply(reason: string): string {
@@ -2121,26 +2121,8 @@ export function renderIssueProposalRejectedReply(reason: string): string {
   ].join("\n");
 }
 
-export type IssueProposalDecideInput = {
-  readonly decision: "approve" | "reject";
-  readonly reason: string;
-};
-
-/** `reason` is required only when rejecting a proposal — approving one
- * needs no justification (mirrors approval_decide.ts's
- * assertValidApprovalDecideInput). */
-export function assertValidIssueProposalDecideInput(
-  input: IssueProposalDecideInput,
-): void {
-  if (input.decision === "reject" && input.reason.trim().length === 0) {
-    throw new Error(
-      'issue_proposal_decide: "reason" is required when decision is "reject"',
-    );
-  }
-}
-
 // team-lead fix round, [MUST] #2: builder/parser pair for the
-// `<!-- factory:issue_proposal:<id> -->` marker issue_proposal_decide.ts
+// `<!-- factory:issue_proposal:<id> -->` marker issue_proposal_apply.ts
 // embeds in a created Issue's body, so a retried approve decision can find
 // (and reuse) the Issue it already created via github.ts's
 // `findIssueByMarker` instead of creating a duplicate.
@@ -2183,7 +2165,7 @@ export function hasIssueProposalMarker(
 export type IssueProposalReplyTarget = "inline" | "issue_comment";
 
 /**
- * Which GitHub reply mechanism issue_proposal_decide.ts should use for a
+ * Which GitHub reply mechanism issue_proposal_apply.ts should use for a
  * proposal's decision reply (team-lead fix round, [MUST] #4) — deterministic
  * from the row's own persisted `is_inline` flag, replacing a former
  * try-`replyReviewComment`-then-fallback-to-`postIssueComment` guess (the
@@ -2206,7 +2188,7 @@ export type IssueProposalDecisionRequest = {
   /** Not read by `classifyIssueProposalDecision` below (`IssueProposalDecisionRow`
    * carries no matching field) — a `repost_only` retry's own
    * `with_factory_label` never changes the classification. It also never
-   * changes which label choice actually applies: issue_proposal_decide.ts's
+   * changes which label choice actually applies: issue_proposal_apply.ts's
    * approve path re-reads the row's already-stored `with_factory_label`
    * (the first approval's choice) when it resumes Issue creation on a
    * retry, not this field's value from the retry request. The stored choice
@@ -2217,10 +2199,14 @@ export type IssueProposalDecisionRequest = {
 export type IssueProposalClassification =
   | { readonly action: "proceed" }
   | { readonly action: "repost_only" }
+  /** The same decision was already recorded *and* every side effect
+   * completed (the Issue exists): a harmless redispatch, to be treated as
+   * a silent no_op rather than a failure. */
+  | { readonly action: "already_done"; readonly created_issue_number: number }
   | { readonly action: "refuse"; readonly message: string };
 
 /**
- * Classifies what issue_proposal_decide.ts's main() should do about a
+ * Classifies what issue_proposal_apply.ts's main() should do about a
  * proposal row it just read, before touching the DB or GitHub at all
  * (team-lead fix round, [MUST] #2 "Approve path must be idempotent" — pure,
  * for testing, mirrors approval_decide.ts's `classifyExistingApproval`):
@@ -2259,8 +2245,8 @@ export function classifyIssueProposalDecision(
   }
   if (row.status === "approved" && row.created_issue_number !== null) {
     return {
-      action: "refuse",
-      message: `この提案は既に承認済みで、Issue #${String(row.created_issue_number)}も作成済みです`,
+      action: "already_done",
+      created_issue_number: row.created_issue_number,
     };
   }
   return { action: "repost_only" };
@@ -2274,7 +2260,7 @@ export type IssueProposalLabelDecision =
     };
 
 /**
- * Decides what issue_proposal_decide.ts should do to the PR's state label
+ * Decides what issue_proposal_apply.ts should do to the PR's state label
  * after recording one decision (user decision, 2026-09-26): keep the
  * current `needs_human_label` while any proposal for this work item is
  * still pending, otherwise swap to `rereview_label` (a commit was pushed
@@ -2519,7 +2505,8 @@ const REASON_RULES: readonly ReasonRule[] = [
     describe: () => "親の work item に issue_number がありません",
     nextAction: () => "work itemの状態をConsoleで確認してください",
   },
-  // pipeline_decide.ts's rejected/expired/needs_human outcomes
+  // requirements_apply.ts's rejected/needs_human outcome and
+  // poll_issues.ts's expiry sweep
   {
     pattern: /^rejected (\d+) times$/,
     describe: (m) => `${m[1]} 回連続で差し戻されました`,
@@ -2530,11 +2517,6 @@ const REASON_RULES: readonly ReasonRule[] = [
     pattern: /^approval timed out$/,
     describe: () => "承認がタイムアウトしました",
     nextAction: () => "Inboxで承認または却下してください",
-  },
-  {
-    pattern: /^resumed via unsupported channel$/,
-    describe: () => "サポート対象外の経路で再開されました",
-    nextAction: () => GENERIC_NEXT_ACTION,
   },
   // pr_fix_finish.ts's post-push reviewer-request outcome (reviewerNote) —
   // team-lead decision (2026-09-26): none of these three reach a
@@ -2645,7 +2627,8 @@ export function describeReason(reason: string): string {
  * Picks the concrete "次の操作" instruction for a `reason`/`status_reason`
  * string (team-lead decision, 2026-09-26) — used by every needs_human
  * NotifyEvent emitter (pr_fix_finish.ts, pr_review_generate.ts,
- * pipeline_decide.ts, pipeline_generate.ts) alongside `describeReason`.
+ * requirements_apply.ts, pipeline_generate.ts, poll_issues.ts's expiry
+ * sweep) alongside `describeReason`.
  * Unlike `describeReason`, this does not translate/join every "; "-joined
  * segment — it returns the *first* segment's matching rule's action (the
  * segment order in every producer here places the primary, actionable

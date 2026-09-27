@@ -11,7 +11,7 @@
 
 - Issueに`factory`ラベルを付けると拾われる(付与者はOWNER / MEMBER / COLLABORATORのいずれかである必要がある)。
 - 手動フォームからも同じパイプラインにIssueを投入できる想定(`manual_intake`フロー)。
-- **承認はFactory Console App(`f/factory/factory_console`)のInboxタブから行う**。Discord通知に記載されたURL、またはConsoleを直接開き、対象の作業項目を選択して要件定義・図(draw.ioビューアー)・未確定事項を確認したうえで承認 / 却下する(却下時は理由の入力が必須、補足は任意)。承認者は実行ユーザー(`WM_USERNAME`)として記録される。Windmillのapproval page URL(承認URL)から直接resumeしない(approvalがスキップされて`needs_human`に落ちる)。Appを使わない代替手順として、Windmill UIで`f/factory/approval_decide`を直接開き、`work_item_id` / `decision`(approve / reject) / `reason` / `note`を入力してRunすることもできる。
+- **承認はFactory Console App(`f/factory/factory_console`)のInboxタブから行う**。Discord通知に記載されたURL、またはConsoleを直接開き、対象の作業項目を選択して要件定義・図(draw.ioビューアー)・未確定事項を確認したうえで承認 / 却下する(却下時は理由の入力が必須、補足は任意)。承認者は実行ユーザー(`WM_USERNAME`)として記録される。Appを使わない代替手順として、Windmill UIで`f/factory/approval_decide`を直接開き、`approval_request_id`(ConsoleのInboxに記載)/ `decision`(approve / reject) / `reason` / `note`を入力してRunすることもできる(`options`は要件定義承認では空のままでよい)。
 - Issueに自動投稿されるコメントは、要件定義が承認されたときのConsoleリンク1件のみ。着手・承認待ち・却下・期限切れ・失敗・要人手といった運用上の状態はIssueには書かず、Discord通知とConsoleで確認する(GitHubには成果物のみを残す方針、2026-09-27)。
 - Rejectすると要件定義が再生成され(`attempt`が加算される)、再度承認待ちになる。試行回数が上限を超えると`needs_human`になる。
 - 失敗したwork itemはFactory Console AppのFailuresタブから再実行できる(`retry_work_item`)。再実行時は`wip`ラベルと該当するトリガーラベル(`factory` / `factory:review` / `factory:fix`)を再付与して再起動する。
@@ -67,7 +67,7 @@
 
 #### Issue化提案の承認 / 却下(ConsoleのInbox)
 
-- ConsoleのInboxタブ(要件定義の承認待ち一覧の下)に「Issue化提案」セクションがあり、そこから承認 / 却下する。左の一覧でPR番号・PRタイトル・提案タイトル・作成日時・担当者を確認して提案を選ぶと、右に提案本文(Markdown)と操作欄が表示される。「起票と同時にfactoryラベルを付けて要件定義に進める」のチェックボックス(既定オフ)で`with_factory_label`を切り替え、却下時のみ理由欄が必須になる。Appを使わない代替手順として、Windmill UIで`f/factory/issue_proposal_decide`を直接開き、`proposal_id` / `decision`(approve / reject) / `reason`(却下時は必須) / `with_factory_label`(承認時のみ意味を持つ)を入力してRunすることもできる。
+- ConsoleのInboxタブに、要件定義の承認待ちと並んで「Issue化提案」の種別バッジ付きで一覧表示され、そこから承認 / 却下する。左の一覧でPR番号・PRタイトル・提案タイトル・作成日時・担当者を確認して提案を選ぶと、右に提案本文(Markdown)と操作欄が表示される。「起票と同時にfactoryラベルを付けて要件定義に進める」のチェックボックス(既定オフ)で`with_factory_label`を切り替え、却下時のみ理由欄が必須になる。Appを使わない代替手順として、Windmill UIで`f/factory/approval_decide`を直接開き、`approval_request_id`(ConsoleのInboxに記載)/ `decision`(approve / reject) / `reason`(却下時は必須) / `options`(承認時のみ`{"with_factory_label": true}`のように指定)を入力してRunすることもできる。
 - **承認**すると、提案の`title` / `body`でIssueを対象リポジトリに作成し(`body`中の`{{pr_url}}`は元PRのURLに置換され、末尾に起票元を示す一文が付く)、レビュースレッドに`Issue #Nを起票しました。`と返信してスレッドを解決(resolve)する。`with_factory_label`を`true`にすると、作成したIssueに`factory_config.trigger_label`(既定`factory`)が付き、そのまま要件定義工程に乗る。ラベルを付けない場合は起票のみで、必要になったら人が後から`factory`ラベルを付ける。
 - **却下**すると、レビュースレッドに`見送りとします。`+ 入力した理由を返信するが、スレッドは開いたままになる(人が改めて判断する)。
 - 対象work itemに未決定の提案が残っていなければ、PRの状態ラベルを`needs-human`から`rereview`(その回でコミットをpushしていた場合)または`reviewed`(pushしていなかった場合)へ自動で切り替える。未決定の提案が他に残っている間は`needs-human`のまま。
@@ -86,7 +86,7 @@
   | `factory:rereview` | 修正をpushして再レビューを依頼中 | pr_fixがpushに成功して終了したとき |
   | `factory:needs-human` | 人の対応が必要 | pr_fixが`needs_human` / `blocked` / `failed`で終了したとき、pr_review自体が失敗したとき、またはIssue化提案(`propose_issue`)が1件以上あるとき |
 
-  状態ラベルは人への状態表示に加え、`poll_prs`がトリガーラベル脱落後のPRを再発見する手段にもなる(前節「起動条件」参照)。PRがクレームされて新しいレビュー・修正サイクルが始まると、それまでの状態ラベルはすべて一旦外れる。Issue化提案による`factory:needs-human`は例外で、`issue_proposal_decide`が全件を承認 / 却下し終えたときにだけ`factory:rereview`または`factory:reviewed`へ切り替わる(前節「Issue化提案の承認 / 却下」参照)。
+  状態ラベルは人への状態表示に加え、`poll_prs`がトリガーラベル脱落後のPRを再発見する手段にもなる(前節「起動条件」参照)。PRがクレームされて新しいレビュー・修正サイクルが始まると、それまでの状態ラベルはすべて一旦外れる。Issue化提案による`factory:needs-human`は例外で、`issue_proposal_apply`が全件を承認 / 却下し終えたときにだけ`factory:rereview`または`factory:reviewed`へ切り替わる(前節「Issue化提案の承認 / 却下」参照)。
   - ラベルは対象リポジトリに事前作成しなくても、初回付与時にGitHubが既定色(灰色)・説明なしで自動作成する(`factory:wip` / `factory:approved`が実際にそうなっている)。一覧で見分けやすくしたい場合は、対象リポジトリで4つの状態ラベルを色と説明付きで先に作っておく。
   - 状態ラベルが付いたPRは以後も`poll_prs`の発見対象であり続けるため、人が新しいcommitをpushするたびに自動で再レビューが起動する(1 pushにつきClaude実行1回)。再レビューを止めたいPRは状態ラベルを手で外す。
   - `review_post_mode: "gated"`ではレビューを投稿しないため状態ラベルも付けない(gatedは検証用の予約モードで、PRはレビュー依頼・assignee経由でのみ再発見される)。

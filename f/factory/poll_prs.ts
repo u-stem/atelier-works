@@ -174,7 +174,7 @@ async function buildPrCandidate(
   // the first issue this PR's own body closes (Closes/Fixes/Resolves #N),
   // if that issue has an approved-or-later pipeline work item, becomes
   // this new pr_review/pr_fix row's parent_work_item_id the same way a
-  // factory-opened PR already gets one from pipeline_decide.ts.
+  // factory-opened PR already gets one from requirements_apply.ts.
   const linkedIssueNumbers = extractLinkedIssueNumbers(
     pr.body,
     found.owner,
