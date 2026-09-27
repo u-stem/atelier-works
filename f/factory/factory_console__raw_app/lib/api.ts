@@ -1,4 +1,4 @@
-// Thin wrappers around the generated `./wmill` bindings for this App's three
+// Thin wrappers around the generated `./wmill` bindings for this App's
 // backend runnables (all `type: script` references — see
 // ../backend/*.yaml — so there is no inline SQL or business logic here).
 
@@ -53,6 +53,12 @@ export async function decideApproval(
 /** Calls f/factory/retry_work_item.ts. */
 export async function retryWorkItem(workItemId: number): Promise<unknown> {
   return await backend.retry_work_item({ work_item_id: workItemId });
+}
+
+/** Calls f/factory/audit_kickoff.ts from the 監査 tab's 今すぐ監査 button.
+ * `days` only matters when no audit report exists yet. */
+export async function kickoffAudit(days: number | undefined): Promise<unknown> {
+  return await backend.audit_kickoff({ days, force: false, source: "manual" });
 }
 
 /** Renders any thrown value as a short Japanese-friendly message for

@@ -25,6 +25,8 @@ export const CONSOLE_VIEWS = [
   "notices",
   "requirements_index",
   "requirements_doc",
+  "audit_index",
+  "audit_doc",
 ] as const;
 
 export type ConsoleView = (typeof CONSOLE_VIEWS)[number];
@@ -72,6 +74,15 @@ export type IssueProposalInboxRow = InboxRowBase & {
   created_issue_number: number | null;
   created_issue_url: string | null;
   claimed_by: string | null;
+  /** "audit" for a 工程5-sourced proposal (e.g. a period without an
+   * actionable PR), "pr_fix" for the usual PR-review-triggered one. */
+  origin: "pr_fix" | "audit";
+  /** Human-readable audit period (e.g. "2026-09-20〜2026-09-27"), only set
+   * when `origin` is "audit". */
+  period_label: string | null;
+  /** Whether the deciding UI should offer the `with_factory_label` option —
+   * false for an audit-sourced proposal with no matching issue to label. */
+  factory_label_available: boolean;
 };
 
 export type InboxRow = RequirementsInboxRow | IssueProposalInboxRow;
@@ -104,6 +115,9 @@ export function toInboxRow(row: Record<string, unknown>): InboxRow {
       created_issue_number: numOrNull(row.created_issue_number),
       created_issue_url: strOrNull(row.created_issue_url),
       claimed_by: strOrNull(row.claimed_by),
+      origin: row.origin === "audit" ? "audit" : "pr_fix",
+      period_label: strOrNull(row.period_label),
+      factory_label_available: bool(row.factory_label_available),
     };
   }
   return {
@@ -371,5 +385,60 @@ export function toRequirementsDocRow(
     diagrams: toRequirementsDiagrams(row.diagrams),
     open_questions: strArray(row.open_questions),
     doc_dir_source: row.doc_dir_source === "file" ? "file" : "db_fallback",
+  };
+}
+
+/** One row of the "audit_index" view — the 監査 tab's list. One row per
+ * `factory.audit_reports` entry, joined against its work item and the
+ * issue_proposal approval counts it produced. */
+export type AuditIndexRow = {
+  audit_report_id: number;
+  work_item_id: number;
+  work_item_status: string;
+  title: string | null;
+  source: string;
+  period_start: string;
+  period_end: string;
+  /** Human-readable period, computed server-side (mirrors
+   * `formatAuditPeriodLabel` in f/factory/lib/audit_support.ts). */
+  period_label: string;
+  summary: string;
+  pending_count: number;
+  approved_count: number;
+  rejected_count: number;
+  created_at: string;
+};
+
+export function toAuditIndexRow(row: Record<string, unknown>): AuditIndexRow {
+  return {
+    audit_report_id: num(row.audit_report_id),
+    work_item_id: num(row.work_item_id),
+    work_item_status: str(row.work_item_status),
+    title: strOrNull(row.title),
+    source: str(row.source),
+    period_start: str(row.period_start),
+    period_end: str(row.period_end),
+    period_label: str(row.period_label),
+    summary: str(row.summary),
+    pending_count: num(row.pending_count),
+    approved_count: num(row.approved_count),
+    rejected_count: num(row.rejected_count),
+    created_at: str(row.created_at),
+  };
+}
+
+/** One row of the "audit_doc" view — a single audit report's full document,
+ * fetched on demand once a row is selected (same pattern as
+ * `toRequirementsDocRow` above). */
+export type AuditDocRow = AuditIndexRow & {
+  markdown: string;
+  metrics: Record<string, unknown>;
+};
+
+export function toAuditDocRow(row: Record<string, unknown>): AuditDocRow {
+  return {
+    ...toAuditIndexRow(row),
+    markdown: str(row.markdown),
+    metrics: isRecord(row.metrics) ? row.metrics : {},
   };
 }

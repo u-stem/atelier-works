@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseDeepLink } from "./deepLink";
+import { parseAuditDeepLink, parseDeepLink } from "./deepLink";
 
 describe("parseDeepLink", () => {
   test("parses a work_item_id from a bare requirements fragment", () => {
@@ -37,5 +37,15 @@ describe("parseDeepLink", () => {
   test("rejects a non-positive work_item_id", () => {
     const link = parseDeepLink(["#requirements/0"]);
     expect(link).toBeNull();
+  });
+});
+
+describe("parseAuditDeepLink", () => {
+  test("parses #audit/<id>", () => {
+    expect(parseAuditDeepLink(["#audit/12"])).toEqual({ work_item_id: 12 });
+  });
+
+  test("ignores a requirements fragment", () => {
+    expect(parseAuditDeepLink(["#requirements/12"])).toBeNull();
   });
 });

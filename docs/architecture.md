@@ -9,7 +9,7 @@ Software FactoryはGitHub Issueを起点に、要件定義から自己改善ま�
 - **GitHub**: Issueの起票・ラベル付け・PR・コメントのやり取り先。`factory`ラベルが付いたIssueが入力になる。
 - **Windmill server / worker**: フローとスケジュールの実行基盤。workerはカスタムイメージで動き、`claude`(Claude Code CLI)、`gh`、`gtr`(git worktree runner)、`wmill`を同梱する。workerはdefaultワーカーグループの1コンテナで、`NUM_WORKERS=3`により内部で3つのワーカープロセスが並列動作する(メモリ上限は1コンテナ分の4096Mのまま)。
 - **Data Tables**: 作業の状態・要件定義ドラフト・承認履歴・実行ログ・失敗記録などを保持するPostgresベースのテーブル群。
-- **App(ダッシュボード)**: 承認Inbox、要件定義書の一覧・全文表示(Confluenceの文書ページに近い見た目、図はインライン描画)、パイプラインの一覧、コスト等の分析、失敗の再実行、通知一覧を提供するUI。
+- **App(ダッシュボード)**: 承認Inbox、要件定義書の一覧・全文表示(Confluenceの文書ページに近い見た目、図はインライン描画)、パイプラインの一覧、コスト等の分析、失敗の再実行、通知一覧、監査(監査レポートの一覧・全文表示と「今すぐ監査」)を提供するUI。
 - **Discord**: 各イベント(拾い上げ、承認待ち、承認、却下、要対応、失敗など)をWebhook経由で通知する。
 
 ## パイプライン(工程1 → 5)
@@ -277,7 +277,7 @@ WindmillのUIはsummaryでソートされるため、種別を示すタグをsum
 
 ## 工程5: 自己改善(監査)
 
-- **起動**: `audit_kickoff`(毎週月曜09:30のschedule、Consoleの「今すぐ監査」で前倒し可)が条件を判定し、満たせば作業項目(`kind=audit`)を作成して`audit`フローを起動する。scheduleはConsoleの監査タブが揃うまで無効(`enabled: false`)にしてある。
+- **起動**: `audit_kickoff`(毎週月曜09:30のschedule、Consoleの「今すぐ監査」で前倒し可)が条件を判定し、満たせば作業項目(`kind=audit`)を作成して`audit`フローを起動する。
 - **期間**: 対象期間は前回レポート終了時刻から実行日のJST 00:00まで(実行日当日は含めない)とし、`max_lookback_days`(既定28日)を上限に切り詰める。切り詰めた日数は`unaudited_gap_days`として証跡に記録する。
 - **スキップ条件**: 別の監査が実行中(`picked` / `auditing`)、期間が空、対象期間に行動につながる記録が無い(強制実行時を除く)、日次予算超過のいずれかであれば起動をスキップする。スキップは記録のみで通知しない。
 - **準備**: `audit_prepare`が作業項目を`picked`から`auditing`へ進め、証跡パック(サニタイズ済み)を作り、Factory自身のself cloneを同期する(Claudeに渡す使い捨てのスナップショットは`audit_generate`が作る)。ステップの再試行は`auditing`のまま再開し、二重に状態遷移しない。

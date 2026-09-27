@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import "./index.css";
 import { AnalyticsTab } from "./tabs/AnalyticsTab";
+import { AuditTab } from "./tabs/AuditTab";
 import { FailuresTab } from "./tabs/FailuresTab";
 import { InboxTab } from "./tabs/InboxTab";
 import { NoticesTab } from "./tabs/NoticesTab";
@@ -10,6 +11,7 @@ import { RequirementsTab } from "./tabs/RequirementsTab";
 const TABS = [
   { id: "inbox", label: "承認" },
   { id: "requirements", label: "要件定義" },
+  { id: "audit", label: "監査" },
   { id: "pipeline", label: "パイプライン" },
   { id: "analytics", label: "分析" },
   { id: "failures", label: "失敗" },
@@ -34,6 +36,10 @@ const App = (): React.ReactElement => {
   const [activeTab, setActiveTab] = useState<TabId>("inbox");
   const [theme, setTheme] = useState<Theme>(() => getInitialTheme());
   const [refreshKey, setRefreshKey] = useState(0);
+  // The work_item_id to hand off from the Inbox tab's 「レポートを開く」
+  // button (an audit-origin issue_proposal) to the 監査 tab — see
+  // AuditTab.tsx's `initialWorkItemId` prop.
+  const [auditTarget, setAuditTarget] = useState<number | null>(null);
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
@@ -98,9 +104,24 @@ const App = (): React.ReactElement => {
         ))}
       </div>
       <main className="factory-console-main">
-        {activeTab === "inbox" && <InboxTab key={`inbox-${refreshKey}`} />}
+        {activeTab === "inbox" && (
+          <InboxTab
+            key={`inbox-${refreshKey}`}
+            onOpenAudit={(id) => {
+              setAuditTarget(id);
+              setActiveTab("audit");
+            }}
+          />
+        )}
         {activeTab === "requirements" && (
           <RequirementsTab key={`requirements-${refreshKey}`} />
+        )}
+        {activeTab === "audit" && (
+          <AuditTab
+            key={`audit-${refreshKey}`}
+            initialWorkItemId={auditTarget}
+            onInitialWorkItemConsumed={() => setAuditTarget(null)}
+          />
         )}
         {activeTab === "pipeline" && (
           <PipelineTab key={`pipeline-${refreshKey}`} />

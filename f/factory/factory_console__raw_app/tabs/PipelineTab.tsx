@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { Skeleton } from "../components/Skeleton";
+import { statusLabel } from "../lib/statusLabel";
 import type { PipelineRow } from "../lib/types";
 import { toPipelineRow } from "../lib/types";
 import { useConsoleQuery } from "../lib/useConsoleQuery";
@@ -8,7 +9,7 @@ const ALL = "__all__";
 
 type StatusVariant = "success" | "warning" | "danger" | "neutral";
 
-const SUCCESS_STATUSES = new Set(["approved", "reviewed"]);
+const SUCCESS_STATUSES = new Set(["approved", "reviewed", "audited"]);
 const DANGER_STATUSES = new Set(["failed", "blocked", "needs_human"]);
 
 function statusVariant(status: string): StatusVariant {
@@ -144,8 +145,9 @@ export function PipelineTab(): React.ReactElement {
                     <td>
                       <span
                         className={`status-pill status-pill--${statusVariant(row.status)}`}
+                        title={row.status}
                       >
-                        {row.status}
+                        {statusLabel(row.status)}
                       </span>
                     </td>
                     <td>
