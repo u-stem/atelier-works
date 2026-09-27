@@ -11,8 +11,9 @@ function formatDateTime(iso: string): string {
   return Number.isNaN(date.getTime()) ? iso : date.toLocaleString("ja-JP");
 }
 
-function kindLabel(kind: InboxRow["kind"]): string {
-  return kind === "requirements" ? "要件定義" : "Issue化提案";
+function kindLabel(row: InboxRow): string {
+  if (row.kind === "requirements") return "要件定義";
+  return row.origin === "audit" ? "改善提案" : "Issue化提案";
 }
 
 /** Whether an issue_proposal row is "approved but the Issue was never
@@ -110,7 +111,7 @@ export function InboxTab(): React.ReactElement {
           <div className="empty-state">
             <p className="empty-state-title">承認待ちの項目はありません。</p>
             <p className="empty-state-hint">
-              新しい要件定義やIssue化提案が届くと、ここに表示されます。
+              新しい要件定義・Issue化提案・改善提案が届くと、ここに表示されます。
             </p>
           </div>
         )}
@@ -132,7 +133,7 @@ export function InboxTab(): React.ReactElement {
                 >
                   <div className="inbox-item-title">
                     <span className="status-pill status-pill--neutral">
-                      {kindLabel(row.kind)}
+                      {kindLabel(row)}
                     </span>{" "}
                     {title}
                     {rowIncomplete && (
@@ -150,7 +151,16 @@ export function InboxTab(): React.ReactElement {
                       </>
                     ) : (
                       <>
-                        {row.owner}/{row.repo} ・ PR #{row.pr_number ?? "-"}
+                        {row.owner}/{row.repo} ・{" "}
+                        {row.origin === "audit" ? (
+                          <>
+                            監査 {row.period_label ?? "-"}
+                            {" ・ "}
+                            <a href={`#audit/${row.work_item_id}`}>レポート</a>
+                          </>
+                        ) : (
+                          <>PR #{row.pr_number ?? "-"}</>
+                        )}
                         {row.title !== null && <> ・ {row.title}</>}
                         {row.claimed_by !== null && (
                           <> ・ 担当: {row.claimed_by}</>
@@ -248,8 +258,16 @@ export function InboxTab(): React.ReactElement {
               )}
             </h2>
             <p className="inbox-item-meta">
-              {selected.owner}/{selected.repo} ・ PR #
-              {selected.pr_number ?? "-"}
+              {selected.owner}/{selected.repo} ・{" "}
+              {selected.origin === "audit" ? (
+                <>
+                  監査 {selected.period_label ?? "-"}
+                  {" ・ "}
+                  <a href={`#audit/${selected.work_item_id}`}>レポート</a>
+                </>
+              ) : (
+                <>PR #{selected.pr_number ?? "-"}</>
+              )}
               {selected.title !== null && <> ・ {selected.title}</>}
               {" ・ "}approval_request_id {selected.approval_request_id}
             </p>
@@ -262,16 +280,23 @@ export function InboxTab(): React.ReactElement {
               </p>
             ) : (
               <>
-                <label className="field-inline">
-                  <input
-                    type="checkbox"
-                    checked={withFactoryLabel}
-                    onChange={(event) =>
-                      setWithFactoryLabel(event.target.checked)
-                    }
-                  />
-                  起票と同時にfactoryラベルを付けて要件定義に進める
-                </label>
+                {selected.origin !== "audit" ||
+                selected.factory_label_available ? (
+                  <label className="field-inline">
+                    <input
+                      type="checkbox"
+                      checked={withFactoryLabel}
+                      onChange={(event) =>
+                        setWithFactoryLabel(event.target.checked)
+                      }
+                    />
+                    起票と同時にfactoryラベルを付けて要件定義に進める
+                  </label>
+                ) : (
+                  <p className="empty-state-hint">
+                    factory_repoがrepo_allowlistに含まれていないため、起票のみ行います。
+                  </p>
+                )}
                 <label className="field">
                   却下理由(却下する場合は必須)
                   <textarea

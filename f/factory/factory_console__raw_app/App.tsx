@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import "./index.css";
 import { AnalyticsTab } from "./tabs/AnalyticsTab";
+import { AuditTab } from "./tabs/AuditTab";
 import { FailuresTab } from "./tabs/FailuresTab";
 import { InboxTab } from "./tabs/InboxTab";
 import { NoticesTab } from "./tabs/NoticesTab";
@@ -10,6 +11,7 @@ import { RequirementsTab } from "./tabs/RequirementsTab";
 const TABS = [
   { id: "inbox", label: "承認" },
   { id: "requirements", label: "要件定義" },
+  { id: "audit", label: "監査" },
   { id: "pipeline", label: "パイプライン" },
   { id: "analytics", label: "分析" },
   { id: "failures", label: "失敗" },
@@ -102,6 +104,7 @@ const App = (): React.ReactElement => {
         {activeTab === "requirements" && (
           <RequirementsTab key={`requirements-${refreshKey}`} />
         )}
+        {activeTab === "audit" && <AuditTab key={`audit-${refreshKey}`} />}
         {activeTab === "pipeline" && (
           <PipelineTab key={`pipeline-${refreshKey}`} />
         )}

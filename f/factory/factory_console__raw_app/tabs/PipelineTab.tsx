@@ -8,7 +8,7 @@ const ALL = "__all__";
 
 type StatusVariant = "success" | "warning" | "danger" | "neutral";
 
-const SUCCESS_STATUSES = new Set(["approved", "reviewed"]);
+const SUCCESS_STATUSES = new Set(["approved", "reviewed", "audited"]);
 const DANGER_STATUSES = new Set(["failed", "blocked", "needs_human"]);
 
 function statusVariant(status: string): StatusVariant {
