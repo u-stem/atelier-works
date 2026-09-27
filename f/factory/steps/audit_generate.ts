@@ -94,6 +94,7 @@ import {
   type CommandRunner,
   copyFileTo,
   ensureEmptyDir,
+  factoryCloneLockPath,
   pathExists,
   pruneWorktrees,
   readDirEntries,
@@ -101,6 +102,7 @@ import {
   removePath,
   removeWorktree,
   runCommand,
+  withRepoLock,
   writeTextFile,
 } from "../lib/workspace.ts";
 
@@ -398,14 +400,27 @@ export async function main(
     await writeTextFile(`${docDir}/${EVIDENCE_MD_FILENAME}`, evidence_markdown);
 
     const ghToken = await wmill.getVariable("f/factory/github_token");
-    const snapshotSha = await readCloneHeadSha(runCommand, factory_clone_dir);
-    await removeSnapshot(factory_clone_dir, snapshotDir, log);
-    await addDetachedWorktree({
-      run: runCommand,
-      repoDir: factory_clone_dir,
-      sha: snapshotSha,
-      dir: snapshotDir,
-      ghToken,
+    // Hold the self clone's own lock (the one `ensureFactoryClone` takes)
+    // around every git op on it: the worktree helpers lock a different
+    // file, so this is what keeps `self_update`'s `reset --hard` /
+    // `checkout -B` from racing the snapshot. The helpers' inner lock is
+    // always taken after this outer one, so the order cannot deadlock.
+    await withRepoLock({
+      lockPath: factoryCloneLockPath(factory_clone_dir),
+      fn: async () => {
+        const snapshotSha = await readCloneHeadSha(
+          runCommand,
+          factory_clone_dir,
+        );
+        await removeSnapshot(factory_clone_dir, snapshotDir, log);
+        await addDetachedWorktree({
+          run: runCommand,
+          repoDir: factory_clone_dir,
+          sha: snapshotSha,
+          dir: snapshotDir,
+          ghToken,
+        });
+      },
     });
 
     await copyFileTo(
@@ -525,7 +540,10 @@ export async function main(
     return { outcome: "success", proposal_count: proposals.length };
   } finally {
     await removePath(docDir);
-    await removeSnapshot(factory_clone_dir, snapshotDir, log);
+    await withRepoLock({
+      lockPath: factoryCloneLockPath(factory_clone_dir),
+      fn: () => removeSnapshot(factory_clone_dir, snapshotDir, log),
+    });
     if (systemPrompt !== undefined) {
       await systemPrompt.cleanup();
     }

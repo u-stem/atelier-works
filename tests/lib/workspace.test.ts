@@ -12,6 +12,7 @@ import {
   ensureEmptyDir,
   ensureFactoryClone,
   ensureRepo,
+  factoryCloneLockPath,
   fetchPrHeadRef,
   type LockFs,
   listWorktrees,
@@ -428,6 +429,17 @@ describe("ensureRepo", () => {
     expect(argv).toEqual(
       expect.arrayContaining(["config", "core.symlinks", "false"]),
     );
+  });
+});
+
+describe("factoryCloneLockPath", () => {
+  test("is the sibling <dir>.lock file, not the worktree helpers' lock", () => {
+    // Arrange
+    const dir = "/workspaces/factory/atelier-works";
+    // Act
+    const lockPath = factoryCloneLockPath(dir);
+    // Assert
+    expect(lockPath).toBe("/workspaces/factory/atelier-works.lock");
   });
 });
 
