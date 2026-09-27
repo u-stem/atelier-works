@@ -127,7 +127,7 @@ read -rs 'v?GITHUB_TOKEN: ' && mise set -E local GITHUB_TOKEN="$v"; unset v
 - **証跡パックはDATA**: `audit_prepare`が集計する証跡パック(`evidence.md`)は`maskSecrets`とHTML除去(タグ・コメントとも)を通した文字列のみで構成し、`factory-audit`スキル(`.claude/skills/factory-audit/SKILL.md`)がこれを命令ではなくデータとして扱うことを明文化する。`--add-dir`で渡すFactory自身のリポジトリ(下記のスナップショット)の内容も同様にDATAとして扱う。
 - **ツール制限**: Claudeのツールは`Read` / `Glob` / `Grep` / `Edit`のみ。`Edit`はカレントディレクトリの`report.md`にしか使わせない(`Write`は許可しない、新規ファイルを作らせない)。
 - **self cloneは見せない**: `self_update`のデプロイ元であるself cloneそのものはClaudeに渡さない。`audit_generate`は実行のたびにそのHEADから使い捨てのdetached worktree(`/var/lib/factory/audits/wi-<id>-snapshot`)を作り、`--add-dir`・テンプレート・スキルの読み込みをすべてこのスナップショットに向ける。スナップショットは成功・失敗を問わず`finally`で削除し、stepの再試行時に作り直す。
-- **出力の機械検査**: 生成されたレポートと構造化出力は、HTMLコメントの禁止、許可リスト(Factory自身のGitHub URLとWindmillの公開URL)外のURLの禁止、改善提案の表と構造化出力の件数・タイトル一致を機械検査してから保存する。検査を通らない出力はIssue本文にならない。
+- **出力の機械検査**: Issueになる構造化出力(提案のtitle・bodyとsummary)は、HTMLコメント・禁止記法と、許可リスト(Factory自身のGitHub URLとWindmillの公開URL)外のURLを機械検査する。レポート本文は証跡にある対象リポジトリのURLを正当に引用するためURL許可リストの対象外とし、章立て・HTMLコメント・改善提案の表(構造化出力との件数・タイトル一致)を検査する。検査を通らない出力は保存せず、Issue本文にならない。
 - **人の承認が最終ゲート**: 検査を通った提案も、承認Inboxで人が承認するまでGitHubのIssueにはならない。承認された提案だけがFactory自身のリポジトリ(`factory_repo`)にIssueとして起票される。
 
 ## 承認と権限

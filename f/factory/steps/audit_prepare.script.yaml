@@ -1,5 +1,5 @@
-summary: ''
-description: ''
+summary: '[SF-5-2/1] 証跡の収集と作業領域の準備'
+description: 監査フローの最初のステップです。Factory自身のクローンを最新にし、対象期間の運用記録を集計した証跡パックを作成して次のステップに渡します。
 lock: '!inline f/factory/steps/audit_prepare.script.lock'
 kind: script
 schema:

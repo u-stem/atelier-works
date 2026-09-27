@@ -17,7 +17,7 @@
 - Issueに自動投稿されるコメントは、要件定義が承認されたときのConsoleリンク1件のみ。着手・承認待ち・却下・期限切れ・失敗・要人手といった運用上の状態はIssueには書かず、Discord通知とConsoleで確認する(GitHubには成果物のみを残す方針、2026-09-27)。
 - Rejectすると要件定義が再生成され(`attempt`が加算される)、再度承認待ちになる。試行回数が上限を超えると`needs_human`になる。
 - 失敗したwork itemはFactory Console AppのFailuresタブから再実行できる(`retry_work_item`)。kindを問わずラベルの付け外しはせず、対応するflow(Issue kindは`f/factory/pipeline`、PR kindは`f/factory/pr_review` / `f/factory/pr_fix`)を直接再起動する(トリガーラベルはclaim時に一度だけ消費され、再付与されない。PR kindは再起動後も`listTrackedPrs`によるDB上の追跡対象であり続ける)。
-- 監査は毎週月曜09:30に自動で走る。Consoleの監査タブの「今すぐ監査」で前倒しできる。提案は承認Inboxに「改善提案」として並び、承認するとFactory自身のリポジトリにIssueが起票される。`factory`ラベルを付けて要件定義へ進めるには、`factory_config`の`owners` / `repo_allowlist`に`factory_repo`を含める必要がある(含まれていない場合、Inboxはその選択肢を出さない)。
+- 監査の週次schedule(毎週月曜09:30)は現在無効にしてある。Consoleの監査タブ・「今すぐ監査」・承認Inboxの「改善提案」はConsole側の実装(Phase 3)で提供され、そのリリースに合わせてscheduleを有効にする。提案を承認するとFactory自身のリポジトリにIssueが起票される。`factory`ラベルを付けて要件定義へ進めるには、`factory_config`の`owners` / `repo_allowlist`に`factory_repo`を含める必要がある(含まれていない場合、Inboxはその選択肢を出さない)。
 - 通知の種類: `picked` / `awaiting_approval` / `approved` / `rejected` / `needs_human` / `failed` / `expired` / `cancelled` / `self_update`(ホスト操作が必要)/ `daily_summary`(前日のコスト・件数・失敗)/ `audit_completed`(監査で改善提案が1件以上生成された)。
 
 ## 通知

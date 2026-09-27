@@ -1,5 +1,5 @@
-summary: ''
-description: ''
+summary: '[SF-5-2/2] 監査レポートと提案の生成(Claude)'
+description: Claudeを使って監査レポートと改善提案を生成するステップです。Factory自身のクローンのスナップショットを読ませ、生成結果を機械検査したうえでレポートを保存し、提案ごとに承認依頼を作成します。
 lock: '!inline f/factory/steps/audit_generate.script.lock'
 kind: script
 schema:
