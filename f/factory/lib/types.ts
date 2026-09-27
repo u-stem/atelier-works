@@ -477,9 +477,13 @@ type IssueProposalBase = {
   status: IssueProposalStatus;
   decided_by: string | null;
   decision_reason: string | null;
-  /** Whether the created Issue also got `factory_config.trigger_label`
-   * (entering the requirements pipeline) — `null` until decided, and on a
-   * rejection (never applicable there). */
+  /** Records the decider's request for `factory_config.trigger_label` on
+   * the Issue this proposal creates (entering the requirements pipeline) —
+   * `null` until decided, and on a rejection (never applicable there).
+   * Whether the label was actually attached is decided separately at apply
+   * time (`resolveFactoryLabel` in steps/issue_proposal_apply.ts), which can
+   * refuse an `audit` proposal's request when `factory_repo` is not allowed
+   * by `factory_config` — this column keeps the requested value regardless. */
   with_factory_label: boolean | null;
   created_issue_number: number | null;
   created_issue_url: string | null;
@@ -488,7 +492,8 @@ type IssueProposalBase = {
    * `postIssueComment`) — set by pr_fix_finish.ts at insert time from the
    * same signal it uses to pick its own reply target, so
    * issue_proposal_apply.ts's decision reply can pick the right one
-   * deterministically instead of guessing. */
+   * deterministically instead of guessing. For `origin = "audit"` it is
+   * always `false` and never read. */
   is_inline: boolean;
   created_at: Date;
   decided_at: Date | null;

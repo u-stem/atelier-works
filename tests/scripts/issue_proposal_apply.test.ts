@@ -68,6 +68,16 @@ describe("resolveFactoryLabel", () => {
       }).apply,
     ).toBe(false);
   });
+
+  test("applies the label for a pr_fix proposal even when repoAllowed is false", () => {
+    expect(
+      resolveFactoryLabel({
+        requested: true,
+        origin: "pr_fix",
+        repoAllowed: false,
+      }).apply,
+    ).toBe(true);
+  });
 });
 
 describe("classifyIssueProposalDecision", () => {

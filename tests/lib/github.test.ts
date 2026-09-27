@@ -1989,4 +1989,14 @@ describe("parseGitHubRepoUrl", () => {
   test("rejects a non-GitHub URL", () => {
     expect(() => parseGitHubRepoUrl("https://example.com/a/b")).toThrow();
   });
+
+  test("normalizes an uppercase .GIT suffix and trailing slash", () => {
+    expect(parseGitHubRepoUrl("https://github.com/o/r.GIT/").repo).toBe("r");
+  });
+
+  test("never includes the raw URL (which may carry credentials) in the error message", () => {
+    expect(() =>
+      parseGitHubRepoUrl("https://user:secret@github.com/o/r"),
+    ).toThrow(/^(?!.*secret).*$/);
+  });
 });

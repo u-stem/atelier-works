@@ -1225,6 +1225,23 @@ describe("insertAuditWorkItem", () => {
     );
     expect(id).toBeNull();
   });
+
+  test("pins the ON CONFLICT clause to the audit partial-index predicate", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await insertAuditWorkItem(
+      {
+        owner: "o",
+        repo: "r",
+        title: "監査 2026-09-22〜2026-09-28",
+        source: "schedule",
+        claimed_by: null,
+      },
+      sql,
+    );
+    expect(calls[0]?.text).toContain(
+      "ON CONFLICT (kind) WHERE kind = 'audit' AND status IN ('picked', 'auditing') DO NOTHING",
+    );
+  });
 });
 
 describe("hasPriorReview", () => {

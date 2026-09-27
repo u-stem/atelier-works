@@ -473,8 +473,10 @@ async function run(
     );
 
     // A tiny window remains between the count above and the status write
-    // just made, during which another pr_fix round (or audit) could record
-    // a brand-new pending proposal for this same work item. Re-checking
+    // just made, during which another pr_fix round could record a
+    // brand-new pending proposal for this same work item (an audit cannot:
+    // nothing adds proposals to an audit once it is awaiting_approval).
+    // Re-checking
     // once more here catches that: if a new pending proposal appeared, put
     // the work item straight back to where it was rather than leaving a
     // status that implies "nothing pending" when one actually is. Not a

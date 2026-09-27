@@ -34,17 +34,23 @@ function validateOwnerRepo(owner: string, repo: string): void {
 export type GitHubRepoRef = { readonly owner: string; readonly repo: string };
 
 const GITHUB_REPO_URL_PATTERN =
-  /^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/;
+  /^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/*$/i;
 
 /** Splits `factory_config.factory_repo` (an https clone URL) into owner /
  * repo. Only the https://github.com form is accepted — the same form
- * isRepoAllowed (lib/config.ts) normalizes against. */
+ * isRepoAllowed (lib/config.ts) normalizes against, and this pattern
+ * normalizes the same way (case-insensitive host, optional trailing
+ * `.git`, any number of trailing slashes). The error message never
+ * includes the raw URL — it may carry embedded credentials
+ * (`https://user:token@github.com/...`). */
 export function parseGitHubRepoUrl(url: string): GitHubRepoRef {
   const match = GITHUB_REPO_URL_PATTERN.exec(url.trim());
   const owner = match?.[1];
   const repo = match?.[2];
   if (owner === undefined || repo === undefined) {
-    throw new Error(`github: not a GitHub repository URL: ${url}`);
+    throw new Error(
+      "github: factory_repo is not a GitHub repository URL (expected https://github.com/<owner>/<repo>)",
+    );
   }
   validateOwnerRepo(owner, repo);
   return { owner, repo };
