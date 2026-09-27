@@ -42,6 +42,8 @@ flowchart TD
 
 `request_approval`はWindmillのsuspendステップで待機する。resume URLにPOSTした本文は後続ステップには渡らない(suspendステップの戻り値は`{resume, cancel, approvalPage}`のみ)ため、`approval_decide`はresumeする前に承認内容(decision / reason / approver)を先に`approvals`テーブルへ記録し、resume後の分岐ステップは`approvals`の最新行(`work_item_id` + `attempt`単位)を読んでapprove / rejectを判断する。タイムアウトは`approvals`に対応する行が無いことで判別する。
 
+工程2の要件定義書はテンプレート(`.claude/skills/factory-requirements/template.md`)を単一の正とし、生成物は`requirements_doc`で機械検査する(`pipeline_generate.ts` / DB / Consoleへの接続は次のPRで行う)。
+
 ## 状態遷移(work_items.status)
 
 ```mermaid
@@ -222,6 +224,8 @@ WindmillのUIはsummaryでソートされるため、種別を示すタグをsum
 | `f/factory/steps/console_query` | `[OP-0-1/1] Console 用データ取得` |
 | `f/factory/lib/self_update_support` | `[LIB] 自己更新の純粋ロジック` |
 | `f/factory/lib/cleanup_support` | `[LIB] 作業領域掃除の純粋ロジック` |
+| `f/factory/lib/requirements_template` | `[LIB] 要件定義テンプレートの定義` |
+| `f/factory/lib/requirements_doc` | `[LIB] 要件定義ファイルの検査` |
 
 ## PRワークフロー(pr_review / pr_fix)
 

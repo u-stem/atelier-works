@@ -1,13 +1,13 @@
 ---
 name: drawio-diagram
-description: 要件定義や設計の図を draw.io (mxGraph) の XML として手書きで生成するときに使う。viewer.diagrams.net で表示できる自己完結した XML を作る規約を定める。
+description: 要件定義や設計の図を draw.io (mxGraph) の XML として手書きで生成するときに使う。Factory Console がインライン描画できる自己完結した XML を作る規約を定める。
 ---
 
 # draw.io (mxGraph) XMLの書き方 (drawio-diagram)
 
 ## この図の使われ方
 
-生成したXMLは`viewer.diagrams.net`のURLに埋め込んで表示される(圧縮 + base64 + URLフラグメントの形式)。フラグメント(`#`以降)はブラウザからdiagrams.netのサーバーへは送信されないため、**XML自体がすべての情報を含む自己完結した文書である必要がある**。外部ファイルの参照や相対パスの画像などは使わない。
+生成したXMLファイルはConsoleがインライン描画する。URLには載せない。**XML自体がすべての情報を含む自己完結した文書である必要がある**。外部ファイルの参照や相対パスの画像などは使わない。
 
 ## 最小スケルトン
 
@@ -27,7 +27,7 @@ description: 要件定義や設計の図を draw.io (mxGraph) の XML として�
 
 - `mxCell id="0"`と`id="1"`(`parent="0"`)はdraw.ioの内部ルートで、必ず両方置く。以降のセルはすべて`parent="1"`から辿れるようにする。
 - `diagram`の`id`(`UNIQUE_ID`)はファイル内で一意であればよい(自分で決めた一意な文字列でよい)。
-- `diagram`の`name`(`DIAGRAM_NAME`)は、要件定義の出力契約における`diagrams[].name`と同じ値にする。`[a-z0-9-]+`の形式にし、配列内で一意にする。
+- `diagram`の`name`(`DIAGRAM_NAME`)は、図名 = ファイル名(`<name>.drawio`)= 本文の参照(`![name](name.drawio)`)と同じ値にする。`name`は`[a-z0-9-]{1,64}`の形式にする。
 
 ## vertex(ノード)の書き方
 
@@ -127,5 +127,5 @@ Issue受付から承認までの簡易フロー図:
 - すべての`source`/`target`が実在する`vertex`の`id`を指していること。
 - `&` `<` `>` `"`がエスケープされていること(特にファイル内容やユーザー入力由来のラベルテキスト)。
 - 全`mxCell`の`id`が一意であり、`0` / `1`(ルートセル)を再利用していないこと。
-- `diagrams[].name`は`[a-z0-9-]+`の形式で配列内一意であり、`<diagram name>`属性の値と一致し、`markdown`内の「図: `<name>`を参照」という参照とも一致していること。
-- 非圧縮の生XMLが12KB以内であること。超える場合は図を分割する(「1図1概念」の原則に従う)。
+- 図名 = ファイル名(`<name>.drawio`)= 本文の参照(`![name](name.drawio)`)が一致していること。`name`は`[a-z0-9-]{1,64}`の形式であること。
+- 非圧縮の生XMLが256KB以内であること。超える場合は図を分割する(「1図1概念」の原則に従う)。
