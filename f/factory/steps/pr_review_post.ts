@@ -2,19 +2,21 @@
 // review (event COMMENT — GitHub review "approve"/"request_changes" events
 // are never used, per spec-cycle2.md §3 M6 and the factory-review skill;
 // `verdict` is recorded in factory.reviews / Discord only), records it,
-// transitions the work item to "reviewed", removes the wip and review_label
-// labels (team-lead rule, 2026-09-26: idempotent — only re-applying the
-// label starts a fresh cycle), notifies Discord, and removes the detached
+// transitions the work item to "reviewed" (the review_label trigger was
+// already consumed at claim time — 2026-09-27 PR label cleanup — so there is
+// no label left to remove here), notifies Discord, and removes the detached
 // worktree pr_review_prepare.ts built.
 //
-// team-lead design (2026-09-26): once the review is actually posted, sets a
-// state label — changes_requested_label if any finding this round is
+// team-lead design (2026-09-26): once the review is actually posted, decides
+// a result — `"changes_requested"` if any finding this round is
 // `kind === "must"`, OR if an old `[MUST]` finding from a prior round is
 // still open after this round's resolving pass (`openMustCount`, team-lead
-// fix, 2026-09-26 — see countOpenMustThreads), reviewed_label otherwise —
-// so a human sees at a glance whether the PR needs changes or just an
-// approval, and so poll_prs.ts's searchPrs can re-discover it. Skipped when
-// review_post_mode is "gated" (nothing posted yet for a human to act on).
+// fix, 2026-09-26 — see countOpenMustThreads), `"reviewed"` otherwise — so
+// the Discord notification names at a glance whether the PR needs changes or
+// just an approval. 2026-09-27 PR label cleanup: this used to also set a PR
+// state label so poll_prs.ts's searchPrs could re-discover it by that label;
+// poll_prs.ts now rediscovers a tracked PR from work_items instead
+// (listTrackedPrs), so this is purely a Discord-facing result now.
 //
 // `review_post_mode: "gated"` is reserved (spec-cycle2.md §7 item 8): this
 // records the review and moves the work item to "reviewed" with a notice,
@@ -68,11 +70,9 @@ import {
   countOpenMustThreads,
   decideReviewBodyMode,
   mapFindingsToReviewComments,
-  removeTerminalLabels,
   renderReviewSummary,
+  reviewResultFor,
   selectThreadsToResolve,
-  setStateLabel,
-  stateLabelForReview,
 } from "./pr_workflow_support.ts";
 
 const REVIEW_VERDICTS: readonly ReviewVerdict[] = [
@@ -259,34 +259,10 @@ export async function main(
       notice,
     );
     if (moved) {
-      await removeTerminalLabels(
-        client,
-        owner,
-        repo,
-        pr_number,
-        [config.wip_label, config.review_label],
-        log,
-      );
-      // team-lead decision (2026-09-26): computed unconditionally (a pure
-      // function of findings/openMustCount) so the Discord notification
-      // below can always name a state label, even in "gated" mode where
-      // setStateLabel itself is skipped (nothing was posted yet for a human
-      // to act on, so no label is actually applied to the PR).
-      const stateLabel = stateLabelForReview(findings, openMustCount, config);
-      // Only when the review was actually posted (review_post_mode ===
-      // "comment_only") — the "gated" mode records the review without
-      // posting it, so there is nothing yet for a human to act on.
-      if (postedReviewId !== null) {
-        await setStateLabel(
-          client,
-          owner,
-          repo,
-          pr_number,
-          config,
-          stateLabel,
-          log,
-        );
-      }
+      // 2026-09-27 PR label cleanup: the review_label trigger was already
+      // consumed at claim time (poll_prs.ts), so there is no label left to
+      // remove here, and no PR state label to set either.
+      const result = reviewResultFor(findings, openMustCount);
       const webhookUrl = await wmill.getVariable(
         "f/factory/discord_webhook_url",
       );
@@ -300,7 +276,7 @@ export async function main(
           pr_url: `https://github.com/${owner}/${repo}/pull/${String(pr_number)}`,
           verdict,
           finding_count: findings.length,
-          state_label: stateLabel,
+          result,
         };
         try {
           await notify(webhookUrl, event);

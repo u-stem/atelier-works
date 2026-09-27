@@ -13,16 +13,6 @@
 // parameter names 1:1 (see this implementer's report for the open
 // question this leaves for M6).
 //
-// devil-advocate note: every other terminal transition (pipeline_* /
-// pr_*'s own terminal steps, poll_issues's reconcile) removes wip + the
-// kind-specific trigger label when it moves a work item to a terminal
-// status. An exception-driven `failed` transition here didn't, leaving the
-// GitHub issue/PR permanently excluded from poll_issues/poll_prs's
-// `-label:wip` search (nothing else will ever remove it). Label removal is
-// now symmetric with those other paths — best-effort: a removal failure is
-// only warn-logged, never blocking the job_failures record or the Discord
-// notification below.
-//
 // devil-advocate note (round 2): pipeline_generate's own failure path now
 // funnels into on_error_flow rather than handling termination itself
 // (avoids interfering with retry_work_item's status/label bookkeeping).
@@ -30,31 +20,25 @@
 // policy change (2026-09-27): GitHub carries only work product — operational
 // notices (including a `failed` transition) go to Discord and the Console
 // only, never a GitHub comment. This handler therefore does not post
-// anything to the Issue/PR when it marks a work item `failed`; label
-// removal still happens for every kind, `shouldSetNeedsHumanLabel` still
-// sets the PR state label for a PR kind, and the Discord `job_failed`
-// notification `main()` sends unconditionally already reaches the operator
-// regardless of kind.
+// anything to the Issue/PR when it marks a work item `failed`. Nor does it
+// touch any label: every kind's trigger label (`factory` for an issue,
+// `factory:review` / `factory:fix` for a PR) is consumed at claim time
+// (2026-09-27 PR label cleanup, matching the Issue-side policy from the
+// prior PR), so there is nothing left to remove or set here — the DB status
+// transition to `failed` plus the Discord `job_failed` notification
+// `main()` sends unconditionally are what reach the operator.
 
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "./lib/config.ts";
 import { getWorkItem, recordFailure, updateStatusIfCurrent } from "./lib/db.ts";
 import { notify } from "./lib/discord.ts";
-import { type GhClient, removeLabel } from "./lib/github.ts";
-import { type Logger, logger, maskSecrets } from "./lib/log.ts";
+import { logger, maskSecrets } from "./lib/log.ts";
 import {
-  type FactoryConfig,
   isRecord,
   isString,
   TERMINAL_WORK_ITEM_STATUSES,
   type WorkItem,
-  type WorkItemKind,
 } from "./lib/types.ts";
-import { runCommand } from "./lib/workspace.ts";
-import {
-  setStateLabel,
-  stateLabelForFixOutcome,
-} from "./steps/pr_workflow_support.ts";
 
 function errorMessage(error: unknown): string {
   if (isRecord(error) && isString(error.message)) return error.message;
@@ -111,103 +95,6 @@ export function shouldMarkFailed(
 ): boolean {
   if (workItemFlowJobId === null || rootJobId === null) return true;
   return workItemFlowJobId === rootJobId;
-}
-
-/**
- * PR-kind label set (same as retry_work_item.ts's `labelsToRestore`,
- * duplicated here rather than imported — each factory script is meant to
- * stand alone; see this implementer's report for a note on promoting this
- * to a shared spot). Issue kind returns an empty array: the Issue's
- * `factory` trigger label was already consumed at claim time (2026-09-27
- * policy), so there is nothing left to remove — status lives solely in
- * work_items.status. PR-kind label handling is unchanged pending the
- * follow-up PR that does the same cleanup for PRs.
- */
-export function labelsToRemove(
-  kind: WorkItemKind,
-  config: Pick<FactoryConfig, "wip_label" | "review_label" | "fix_label">,
-): string[] {
-  switch (kind) {
-    case "issue":
-      return [];
-    case "pr_review":
-      return [config.wip_label, config.review_label];
-    case "pr_fix":
-      return [config.wip_label, config.fix_label];
-  }
-}
-
-/**
- * Whether on_error_flow should set the PR state label needs_human_label
- * when it marks a work item `failed` — team-lead design (2026-09-26):
- * needs_human_label covers pr_fix ending in needs_human/blocked/failed *or*
- * pr_review failing outright, so both PR kinds get it here; `issue` kind
- * has no PR state labels to set.
- */
-export function shouldSetNeedsHumanLabel(kind: WorkItemKind): boolean {
-  return kind === "pr_review" || kind === "pr_fix";
-}
-
-/**
- * Removes wip + the kind-specific trigger label, then sets the
- * needs_human_label state label for a PR kind (team-lead design, 2026-09-26
- * — see shouldSetNeedsHumanLabel) — called only after `main()` has actually
- * transitioned the work item to `failed`. No GitHub comment is posted
- * (2026-09-27 policy: GitHub carries only work product; a `failed` work item
- * is reported via the Discord `job_failed` notification in `main()` and the
- * PR state label alone). Label removal and the state label are independent
- * best-effort steps (each only warn-logs its own failure) so one failing
- * doesn't skip the other, and neither blocks the job_failures record or
- * Discord notification in `main()`.
- */
-async function handleTerminalFailure(
-  item: Pick<
-    WorkItem,
-    "id" | "owner" | "repo" | "kind" | "issue_number" | "pr_number"
-  >,
-  log: Logger,
-): Promise<void> {
-  const number = item.kind === "issue" ? item.issue_number : item.pr_number;
-  if (number === null) return;
-
-  let client: GhClient;
-  let config: FactoryConfig;
-  try {
-    config = await loadConfig(() =>
-      wmill.getResource("f/factory/factory_config"),
-    );
-    const ghToken = await wmill.getVariable("f/factory/github_token");
-    client = { run: runCommand, ghToken };
-  } catch (err) {
-    log.warn(
-      "on_error_flow: failed to load config/token for terminal-failure handling",
-      { error: maskSecrets(err instanceof Error ? err.message : String(err)) },
-    );
-    return;
-  }
-
-  for (const label of labelsToRemove(item.kind, config)) {
-    try {
-      await removeLabel(client, item.owner, item.repo, number, label);
-    } catch (err) {
-      log.warn("on_error_flow: failed to remove label", {
-        label,
-        error: maskSecrets(err instanceof Error ? err.message : String(err)),
-      });
-    }
-  }
-
-  if (shouldSetNeedsHumanLabel(item.kind)) {
-    await setStateLabel(
-      client,
-      item.owner,
-      item.repo,
-      number,
-      config,
-      stateLabelForFixOutcome("failed", config),
-      log,
-    );
-  }
 }
 
 export async function main(
@@ -278,15 +165,12 @@ export async function main(
           },
         );
       } else {
-        const updated = await updateStatusIfCurrent(
-          item.id,
-          item.status,
-          "failed",
-          message,
-        );
-        if (updated) {
-          await handleTerminalFailure(item, log);
-        }
+        // 2026-09-27 PR label cleanup: every kind's trigger label is
+        // consumed at claim time, so there is no label to remove or state
+        // label to set on this transition any more — the DB status update
+        // alone, plus the Discord job_failed notification below, is what
+        // reaches the operator.
+        await updateStatusIfCurrent(item.id, item.status, "failed", message);
       }
     } catch (statusErr) {
       log.error("failed to mark work item failed", {

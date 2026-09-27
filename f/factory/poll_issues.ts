@@ -3,9 +3,10 @@
 // them, starts f/factory/pipeline, and reconciles every active work item
 // (issue and PR kinds alike) against GitHub/Windmill state — spec-
 // cycle2.md §3 M5, §7. Multi-instance exclusivity comes entirely from the
-// GitHub-side claim (wip label + re-fetch confirm), not an advisory lock
-// (§7 item 5) — overlap within one instance is prevented by this
-// schedule's `no_flow_overlap: true`.
+// GitHub-side claim (assignee for an issue, trigger-label consumption for a
+// PR — both re-fetch to confirm), not an advisory lock (§7 item 5) —
+// overlap within one instance is prevented by this schedule's
+// `no_flow_overlap: true`.
 //
 // Decision logic (which issues to claim / skip, what to do with each
 // active work item) lives in ./lib/poll_support.ts as pure functions; this
@@ -38,7 +39,6 @@ import {
   getIssueTimeline,
   getViewer,
   type IssueSearchItem,
-  removeLabel,
   searchIssues,
 } from "./lib/github.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
@@ -65,14 +65,7 @@ import {
   removeWorktree,
   runCommand,
 } from "./lib/workspace.ts";
-import {
-  allStateLabels,
-  describeReason,
-  nextActionFor,
-  removeTerminalLabels,
-  setStateLabel,
-  stateLabelForFixOutcome,
-} from "./steps/pr_workflow_support.ts";
+import { describeReason, nextActionFor } from "./steps/pr_workflow_support.ts";
 
 // ---------------------------------------------------------------------------
 // readRepoHeadSha: `git rev-parse HEAD` for the self clone, used only by
@@ -394,64 +387,12 @@ async function reconcileActiveItems(
       );
       if (!updated) continue; // a concurrent process already moved it on.
 
-      // PR-kind label bookkeeping only (2026-09-27 policy: an Issue's
-      // `factory` trigger label is consumed at claim time, so there is
-      // nothing left to remove here for issue-kind items — status lives
-      // solely in work_items.status. PR label handling is unchanged pending
-      // the follow-up PR that does the same cleanup for PRs).
-      if (item.kind !== "issue" && item.pr_number !== null) {
-        const labelNumber = item.pr_number;
-        const labelsToRemove = [
-          config.wip_label,
-          config.review_label,
-          config.fix_label,
-        ];
-        for (const labelName of labelsToRemove) {
-          try {
-            await removeLabel(
-              client,
-              item.owner,
-              item.repo,
-              labelNumber,
-              labelName,
-            );
-          } catch (err) {
-            log.warn("reconcile: failed to remove label", {
-              item: label,
-              label: labelName,
-              error: maskSecrets(
-                err instanceof Error ? err.message : String(err),
-              ),
-            });
-          }
-        }
-
-        // team-lead design (2026-09-26): PR state labels track poll_issues's
-        // own reconcile outcome too — fail_orphan needs a human (same as
-        // any other on_error_flow/pr_fix_finish `failed`), while a
-        // cancelled item (e.g. the PR closed) leaves nothing for a human to
-        // act on, so every state label is cleared instead of set.
-        if (targetStatus === "failed") {
-          await setStateLabel(
-            client,
-            item.owner,
-            item.repo,
-            labelNumber,
-            config,
-            stateLabelForFixOutcome("failed", config),
-            log,
-          );
-        } else {
-          await removeTerminalLabels(
-            client,
-            item.owner,
-            item.repo,
-            labelNumber,
-            allStateLabels(config),
-            log,
-          );
-        }
-      }
+      // 2026-09-27 PR label cleanup: both an Issue's `factory` trigger label
+      // and a PR's `factory:review` / `factory:fix` trigger label are
+      // consumed at claim time, so there is nothing left to remove here for
+      // either kind — status lives solely in work_items.status, and a PR is
+      // rediscovered from the DB (poll_prs.ts's listTrackedPrs) rather than
+      // by a state label.
 
       if (
         item.kind !== "issue" &&

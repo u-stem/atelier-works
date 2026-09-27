@@ -3,7 +3,7 @@
 // matchReviewThreadForComment (pr_fix_finish.ts), and
 // buildIssueProposalReason / buildIssueProposalBody /
 // renderIssueProposalApprovedReply / renderIssueProposalRejectedReply /
-// decideIssueProposalLabelSwap (issue_proposal_apply.ts).
+// decidePostProposalStatus (issue_proposal_apply.ts).
 
 import { describe, expect, test } from "bun:test";
 import type { ReviewThread } from "../../f/factory/lib/github.ts";
@@ -12,7 +12,7 @@ import {
   buildIssueProposalBody,
   buildIssueProposalReason,
   buildIssueProposalTitle,
-  decideIssueProposalLabelSwap,
+  decidePostProposalStatus,
   matchReviewThreadForComment,
   renderIssueProposalApprovedReply,
   renderIssueProposalRejectedReply,
@@ -171,20 +171,20 @@ describe("renderIssueProposalRejectedReply", () => {
   });
 });
 
-describe("decideIssueProposalLabelSwap", () => {
-  test("keeps the current label while a proposal is still pending", () => {
-    expect(decideIssueProposalLabelSwap(1, true)).toEqual({ action: "keep" });
+describe("decidePostProposalStatus", () => {
+  test("keeps the current status while a proposal is still pending", () => {
+    expect(decidePostProposalStatus(1, true)).toEqual({ action: "keep" });
   });
 
   test("swaps to rereview_requested when a commit was pushed this round", () => {
-    expect(decideIssueProposalLabelSwap(0, true)).toEqual({
+    expect(decidePostProposalStatus(0, true)).toEqual({
       action: "swap",
       toStatus: "rereview_requested",
     });
   });
 
   test("swaps to reviewed when nothing was pushed this round", () => {
-    expect(decideIssueProposalLabelSwap(0, false)).toEqual({
+    expect(decidePostProposalStatus(0, false)).toEqual({
       action: "swap",
       toStatus: "reviewed",
     });

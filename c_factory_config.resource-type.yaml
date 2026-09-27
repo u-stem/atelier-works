@@ -8,8 +8,6 @@ schema:
   order:
     - owners
     - trigger_label
-    - wip_label
-    - approved_label
     - allowed_labeler_associations
     - model
     - max_attempts
@@ -26,11 +24,7 @@ schema:
     - windmill_public_url
     - review_label
     - fix_label
-    - changes_requested_label
-    - reviewed_label
-    - rereview_label
-    - needs_human_label
-    - pr_label
+    - tracked_pr_days
     - review_post_mode
     - max_fix_rounds
     - allowed_check_commands
@@ -61,15 +55,6 @@ schema:
           - OWNER
           - MEMBER
           - COLLABORATOR
-    approved_label:
-      type: string
-      description: 要件定義が承認されたときに付与するラベル。
-      default: factory:approved
-    changes_requested_label:
-      type: string
-      description: >-
-        一次レビューで修正が必要な指摘(must)があったPRに付与する状態ラベル。他の状態ラベルとは同時に付きません。
-      default: factory:changes-requested
     claude_timeout_sec:
       type: integer
       description: Claude Codeの1回の実行を打ち切るまでの制限時間(秒)。
@@ -141,11 +126,6 @@ schema:
       type: string
       description: 各処理でClaude Codeが使用するモデル名。
       default: claude-opus-5-5
-    needs_human_label:
-      type: string
-      description: >-
-        人による対応が必要になったPRに付与する状態ラベル。修正処理が失敗・ブロックされた場合や、レビュー処理自体が失敗した場合に付きます。他の状態ラベルとは同時に付きません。
-      default: factory:needs-human
     owners:
       type: array
       description: >-
@@ -168,11 +148,6 @@ schema:
         required:
           - name
           - kind
-    pr_label:
-      type: string
-      description: >-
-        Software Factory自身が作成したPRに付与するラベルです。このラベルが付いたPRは、承認済みの要件定義をもとに作られたものとして扱われます。
-      default: factory:pr
     repo_allowlist:
       type: array
       description: >-
@@ -190,11 +165,6 @@ schema:
       description: >-
         終端状態(承認済み・要対応・タイムアウト・失敗・レビュー済み・再レビュー依頼・ブロック・キャンセル)になった作業項目を保持する日数です。この日数を過ぎると、関連する要件定義ドラフトや承認依頼もあわせて自動的に削除されます。
       default: 90
-    rereview_label:
-      type: string
-      description: >-
-        修正をpushして再レビューを依頼したPRに付与する状態ラベル。他の状態ラベルとは同時に付きません。
-      default: factory:rereview
     review_label:
       type: string
       description: このラベルが付いたPRはレビュー処理の対象になります。
@@ -207,11 +177,11 @@ schema:
       enum:
         - comment_only
         - gated
-    reviewed_label:
-      type: string
+    tracked_pr_days:
+      type: integer
       description: >-
-        一次レビューで修正が必要な指摘(must)がなかったPRに付与する状態ラベル(人によるApproveを待つ状態)。他の状態ラベルとは同時に付きません。
-      default: factory:reviewed
+        PRのトリガーラベル(review / fix)を消費した後もそのPRを追跡対象として扱う日数です。この日数のあいだに作業項目が更新されていれば、ラベルが外れていても再レビュー・再修正の対象として再発見します。過ぎると追跡から外れ、人が改めてラベルを付け直すまで対象になりません。
+      default: 30
     trigger_label:
       type: string
       description: このラベルが付いたIssueが処理対象になります。
@@ -222,10 +192,6 @@ schema:
         通知に含める承認リンクなどを組み立てる際に使う、このインスタンスの公開URLです。
       default: http://127.0.0.1:8080
       format: uri
-    wip_label:
-      type: string
-      description: このインスタンスがIssue / PRの担当になっている間に付与するラベルです。
-      default: factory:wip
     worktree_ttl_days:
       type: integer
       description: >-
@@ -234,8 +200,6 @@ schema:
   required:
     - owners
     - trigger_label
-    - wip_label
-    - approved_label
     - allowed_labeler_associations
     - model
     - max_attempts

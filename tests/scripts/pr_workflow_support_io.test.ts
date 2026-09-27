@@ -7,35 +7,11 @@
 // lib/github.ts, lib/db.ts, and lib/workspace.ts promoted the same functions
 // (same signatures) — they're covered by tests/lib/github.test.ts,
 // tests/lib/db.test.ts, and tests/lib/workspace.test.ts now instead.
+// removeTerminalLabels was removed by the 2026-09-27 PR label cleanup (no
+// more state/wip labels to clear on a terminal transition).
 
 import { describe, expect, test } from "bun:test";
-import type { LogFields, Logger } from "../../f/factory/lib/log.ts";
-import {
-  readWorktreeFileIfExists,
-  removeTerminalLabels,
-} from "../../f/factory/steps/pr_workflow_support.ts";
-import {
-  createFakeCommandRunner,
-  fail,
-  ghApiOk,
-  ghApiStdout,
-  ok,
-} from "../lib/testSupport.ts";
-
-function createFakeLogger(): {
-  log: Logger;
-  warnings: { message: string; fields?: LogFields }[];
-} {
-  const warnings: { message: string; fields?: LogFields }[] = [];
-  const log: Logger = {
-    info: () => {},
-    warn: (message, fields) => {
-      warnings.push(fields === undefined ? { message } : { message, fields });
-    },
-    error: () => {},
-  };
-  return { log, warnings };
-}
+import { readWorktreeFileIfExists } from "../../f/factory/steps/pr_workflow_support.ts";
 
 describe("readWorktreeFileIfExists", () => {
   test("returns the content when the read succeeds", async () => {
@@ -50,84 +26,5 @@ describe("readWorktreeFileIfExists", () => {
       Promise.reject(new Error("ENOENT")),
     );
     expect(content).toBeNull();
-  });
-});
-
-describe("removeTerminalLabels", () => {
-  test("removes every given label", async () => {
-    const { run, calls } = createFakeCommandRunner([ghApiOk([]), ghApiOk([])]);
-    const { log } = createFakeLogger();
-    await removeTerminalLabels(
-      { run, ghToken: "token" },
-      "octo-owner",
-      "atelier-works",
-      7,
-      ["factory:wip", "factory:fix"],
-      log,
-    );
-    expect(calls).toHaveLength(2);
-  });
-
-  test("does not throw when a label is already absent (404)", async () => {
-    const { run } = createFakeCommandRunner([
-      ok(ghApiStdout(404, { message: "Not Found" })),
-    ]);
-    const { log } = createFakeLogger();
-    await expect(
-      removeTerminalLabels(
-        { run, ghToken: "token" },
-        "octo-owner",
-        "atelier-works",
-        7,
-        ["factory:wip"],
-        log,
-      ),
-    ).resolves.toBeUndefined();
-  });
-
-  test("swallows a genuine removal failure instead of throwing", async () => {
-    const { run } = createFakeCommandRunner([fail("network error")]);
-    const { log } = createFakeLogger();
-    await expect(
-      removeTerminalLabels(
-        { run, ghToken: "token" },
-        "octo-owner",
-        "atelier-works",
-        7,
-        ["factory:wip"],
-        log,
-      ),
-    ).resolves.toBeUndefined();
-  });
-
-  test("logs a warning when a removal fails", async () => {
-    const { run } = createFakeCommandRunner([fail("network error")]);
-    const { log, warnings } = createFakeLogger();
-    await removeTerminalLabels(
-      { run, ghToken: "token" },
-      "octo-owner",
-      "atelier-works",
-      7,
-      ["factory:wip"],
-      log,
-    );
-    expect(warnings).toHaveLength(1);
-  });
-
-  test("still removes the second label after the first fails", async () => {
-    const { run, calls } = createFakeCommandRunner([
-      fail("network error"),
-      ghApiOk([]),
-    ]);
-    const { log } = createFakeLogger();
-    await removeTerminalLabels(
-      { run, ghToken: "token" },
-      "octo-owner",
-      "atelier-works",
-      7,
-      ["factory:wip", "factory:fix"],
-      log,
-    );
-    expect(calls).toHaveLength(2);
   });
 });

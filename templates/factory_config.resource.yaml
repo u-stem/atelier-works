@@ -14,8 +14,6 @@
 value:
   owners: []
   trigger_label: factory
-  wip_label: "factory:wip"
-  approved_label: "factory:approved"
   allowed_labeler_associations:
     - OWNER
     - MEMBER
@@ -35,11 +33,7 @@ value:
   windmill_public_url: http://127.0.0.1:8080
   review_label: "factory:review"
   fix_label: "factory:fix"
-  changes_requested_label: "factory:changes-requested"
-  reviewed_label: "factory:reviewed"
-  rereview_label: "factory:rereview"
-  needs_human_label: "factory:needs-human"
-  pr_label: "factory:pr"
+  tracked_pr_days: 30
   review_post_mode: comment_only
   max_fix_rounds: 3
   max_fix_changed_files: 30

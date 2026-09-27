@@ -8,10 +8,15 @@
 // this file is I/O wiring only, and never throws on a single PR's
 // failure — see recordFailureSafe in poll_issues.ts's sibling helper here.
 //
-// NOTE: claimPr's own "add wip label, re-fetch to confirm" shape stays here
-// (PR-claim-specific, no assignee — see claimPr's doc comment) but now
-// delegates its actual label POST to lib/github.ts's addLabels, once that
-// landed mid-cycle (team-lead re-gate's "defer promotion" note predates it).
+// 2026-09-27 PR label cleanup: a PR carries only its two trigger labels
+// (`factory:review` / `factory:fix`), consumed at claim time — same policy
+// as the Issue side. There is no `wip` label and no state labels any more.
+// claimPr (below) removes whichever trigger label fired this cycle and
+// re-fetches to confirm, mirroring lib/github.ts's claimIssue; the
+// assignment-triggered review path (no label involved) skips claimPr
+// entirely. Once a trigger label is consumed, searchPrs's label queries can
+// no longer find that PR again, so listTrackedPrs (lib/db.ts) supplies
+// DB-backed rediscovery instead — see main() below.
 
 // Pinned to 1.817.0 to match the deployed server version (per lib-core).
 import * as wmill from "windmill-client@1.817.0";
@@ -23,13 +28,13 @@ import {
   insertWorkItem,
   latestPrWorkItem,
   listActive,
+  listTrackedPrs,
   recordFailure,
   setFixRound,
   setFlowJobId,
   setObservedWatermarks,
 } from "./lib/db.ts";
 import {
-  addLabels,
   type GhClient,
   getIssue,
   getPr,
@@ -48,11 +53,7 @@ import {
 } from "./lib/poll_support.ts";
 import type { WorkItem } from "./lib/types.ts";
 import { runCommand } from "./lib/workspace.ts";
-import {
-  allStateLabels,
-  extractLinkedIssueNumbers,
-  removeTerminalLabels,
-} from "./steps/pr_workflow_support.ts";
+import { extractLinkedIssueNumbers } from "./steps/pr_workflow_support.ts";
 
 async function recordFailureSafe(
   step: string,
@@ -225,42 +226,41 @@ export type ClaimPrResult =
   | { readonly claimed: false; readonly reason: string };
 
 /**
- * Claims a PR by adding `wipLabel` only — no assignee (team-lead fix round
- * 2 item i, unlike lib/github.ts's `claimIssue`, which is Issue-claim only
- * and always assigns): assigning the factory's viewer login to a PR would
- * make `assignee:<viewer>` match it in GitHub search forever afterward,
- * turning every PR the factory has ever touched into a standing (if
- * otherwise harmless) search hit — searchPrs's own query doesn't filter on
- * assignee, but any other assignee-based tooling would. Confirms the label
- * actually stuck via a re-fetch, the same "post then re-fetch to confirm"
- * shape as claimIssue (spec-cycle2.md §1 github.ts "claimIssue... 再取得で確
- * 認") since GitHub's label-add endpoint can silently no-op under some races.
- * Uses lib/github.ts's own `addLabels` (promoted from this file's earlier
- * raw `gh api` copy) rather than duplicating that request plumbing here.
+ * Claims a PR by consuming `triggerLabel` — the `review_label` or
+ * `fix_label` that fired this cycle — no assignee (2026-09-27 policy,
+ * mirrors lib/github.ts's `claimIssue`: assigning the factory's viewer
+ * login to a PR would make `assignee:<viewer>` match it in GitHub search
+ * forever afterward, turning every PR the factory has ever touched into a
+ * standing search hit). Removes the label, then re-fetches to confirm it's
+ * actually gone — the same "act then re-fetch to confirm" shape as
+ * claimIssue (spec-cycle2.md §1 github.ts "claimIssue... 再取得で確認"), since
+ * GitHub's label endpoints can silently no-op under some races. Not called
+ * for the assignment-triggered review path (no label involved — see
+ * main()).
  */
 export async function claimPr(
   client: GhClient,
   owner: string,
   repo: string,
   number: number,
-  wipLabel: string,
+  triggerLabel: string,
 ): Promise<ClaimPrResult> {
   try {
-    await addLabels(client, owner, repo, number, [wipLabel]);
+    await removeLabel(client, owner, repo, number, triggerLabel);
   } catch (err) {
-    // team-lead re-gate N5: this reason string flows into main()'s
-    // claim_race_lost addNotice call below — mask it the same way every
-    // other gh-failure-derived message in this file already is.
+    // This reason string flows into main()'s claim_race_lost addNotice call
+    // below — mask it the same way every other gh-failure-derived message
+    // in this file already is.
     return {
       claimed: false,
-      reason: `failed to add wip label: ${maskSecrets(err instanceof Error ? err.message : String(err))}`,
+      reason: `failed to remove trigger label: ${maskSecrets(err instanceof Error ? err.message : String(err))}`,
     };
   }
   const confirmed = await getIssue(client, owner, repo, number);
-  if (!confirmed.labels.includes(wipLabel)) {
+  if (confirmed.labels.includes(triggerLabel)) {
     return {
       claimed: false,
-      reason: `wip label ${wipLabel} missing after claim`,
+      reason: `trigger label ${triggerLabel} still present after claim`,
     };
   }
   return { claimed: true };
@@ -299,14 +299,12 @@ async function startReview(
     observed_review_id: observed.reviewId,
     observed_review_comment_id: observed.reviewCommentId,
   });
-  // team-lead (batch B/C round): no "started reviewing" PR comment — claim
-  // idempotency never actually depended on it (searchPrs + decidePrActions
-  // check the wip label and this PR's non-terminal work_items rows
-  // directly; commentIssue's marker dedupe was never load-bearing here),
-  // and an unrequested factory narration comment on a human's PR is noise.
-  // Re-discovery once the trigger label falls off now comes from the state
-  // label pr_review_post.ts sets on this PR (team-lead design, 2026-09-26),
-  // not from a factory-authored comment.
+  // No "started reviewing" PR comment: claim idempotency rests on this
+  // PR's non-terminal work_items rows (decidePrActions), never on a
+  // comment, and an unrequested factory narration comment on a human's PR
+  // is noise. Re-discovery once the trigger label has been consumed comes
+  // from the DB (`listTrackedPrs`, 2026-09-27 policy), not from any label
+  // or comment.
   const flowJobId = await wmill.runFlowAsync("f/factory/pr_review", {
     work_item_id: workItemId,
   });
@@ -399,14 +397,59 @@ export async function main(): Promise<{
         viewer: viewer.login,
         reviewLabel: config.review_label,
         fixLabel: config.fix_label,
-        wipLabel: config.wip_label,
-        stateLabels: allStateLabels(config),
       });
       rawCandidates.push(...found);
     } catch (err) {
       failed += 1;
       await recordFailureSafe(`search_prs:${owner.name}`, err, log);
     }
+  }
+
+  // DB-backed rediscovery (2026-09-27 policy): once a PR's trigger label is
+  // consumed at claim time, searchPrs's label queries can no longer find it
+  // again, so listTrackedPrs supplies every PR the factory is still
+  // tracking (kind pr_review/pr_fix, not cancelled, updated within
+  // config.tracked_pr_days) as additional candidates. Deduped against the
+  // search results above by PR key; each tracked PR is re-fetched via getPr
+  // and dropped when it's no longer open (a closed/merged PR just falls out
+  // of tracking — poll_issues.ts's reconcile already handles cancelling its
+  // work_items row, this script never needs to).
+  const seenKeys = new Set(
+    rawCandidates.map((item) => prKey(item.owner, item.repo, item.number)),
+  );
+  try {
+    const tracked = await listTrackedPrs(config.tracked_pr_days);
+    for (const trackedPr of tracked) {
+      const key = prKey(trackedPr.owner, trackedPr.repo, trackedPr.pr_number);
+      if (seenKeys.has(key)) continue;
+      try {
+        const pr = await getPr(
+          client,
+          trackedPr.owner,
+          trackedPr.repo,
+          trackedPr.pr_number,
+        );
+        if (pr.state !== "open") continue;
+        seenKeys.add(key);
+        rawCandidates.push({
+          owner: trackedPr.owner,
+          repo: trackedPr.repo,
+          number: trackedPr.pr_number,
+          title: pr.title,
+          htmlUrl: `https://github.com/${trackedPr.owner}/${trackedPr.repo}/pull/${String(trackedPr.pr_number)}`,
+        });
+      } catch (err) {
+        failed += 1;
+        await recordFailureSafe(
+          `fetch_tracked_pr:${trackedPr.owner}/${trackedPr.repo}#${String(trackedPr.pr_number)}`,
+          err,
+          log,
+        );
+      }
+    }
+  } catch (err) {
+    failed += 1;
+    await recordFailureSafe("list_tracked_prs", err, log);
   }
 
   const allowed = filterByRepoAllowlist(rawCandidates, config.repo_allowlist);
@@ -469,82 +512,88 @@ export async function main(): Promise<{
       continue;
     }
 
-    try {
-      const claimResult = await claimPr(
-        client,
-        candidate.owner,
-        candidate.repo,
-        candidate.number,
-        config.wip_label,
-      );
-      if (!claimResult.claimed) {
-        skipped += 1;
-        await addNotice({
-          kind: "claim_race_lost",
-          message: `${candidate.owner}/${candidate.repo}#${candidate.number}: ${claimResult.reason}`,
-        });
-        continue;
-      }
-
-      // team-lead design (2026-09-26): the PR is now in progress again —
-      // whatever state label a previous cycle left on it (changes-requested
-      // / reviewed / rereview / needs-human) no longer describes its
-      // current state, so it's cleared here rather than left stale until
-      // the new cycle's own terminal step sets the next one.
-      await removeTerminalLabels(
-        client,
-        candidate.owner,
-        candidate.repo,
-        candidate.number,
-        allStateLabels(config),
-        log,
-      );
-
-      if (review.kind === "trigger_review") {
-        await startReview(
-          candidate,
-          viewer.login,
-          context.observed,
-          context.linkedParentWorkItemId,
-        );
-        reviewsStarted += 1;
-        if (review.removeLabel) {
-          await removeLabel(
+    // Review and fix each claim (consume) their own trigger label
+    // independently now (2026-09-27 policy) — a PR can in principle carry
+    // both `review_label` and `fix_label` in the same poll pass, and each
+    // must be handled on its own rather than through one shared "claim".
+    if (review.kind === "trigger_review") {
+      try {
+        if (review.reason === "label") {
+          const claimResult = await claimPr(
             client,
             candidate.owner,
             candidate.repo,
             candidate.number,
             config.review_label,
           );
-        }
-      }
-
-      if (fix.kind === "trigger_fix") {
-        await startFix(
-          candidate,
-          viewer.login,
-          context.prevFixSeed,
-          context.observed,
-          context.linkedParentWorkItemId,
-        );
-        fixesStarted += 1;
-        if (fix.removeLabel) {
-          await removeLabel(
-            client,
-            candidate.owner,
-            candidate.repo,
-            candidate.number,
-            config.fix_label,
+          if (!claimResult.claimed) {
+            skipped += 1;
+            await addNotice({
+              kind: "claim_race_lost",
+              message: `${candidate.owner}/${candidate.repo}#${candidate.number}: ${claimResult.reason}`,
+            });
+          } else {
+            await startReview(
+              candidate,
+              viewer.login,
+              context.observed,
+              context.linkedParentWorkItemId,
+            );
+            reviewsStarted += 1;
+          }
+        } else {
+          // Assignment-triggered (no label involved): nothing to claim.
+          await startReview(
+            candidate,
+            viewer.login,
+            context.observed,
+            context.linkedParentWorkItemId,
           );
+          reviewsStarted += 1;
         }
+      } catch (err) {
+        failed += 1;
+        await recordFailureSafe(
+          `trigger_review:${candidate.owner}/${candidate.repo}#${candidate.number}`,
+          err,
+          log,
+        );
       }
-    } catch (err) {
-      failed += 1;
-      await recordFailureSafe(
-        `trigger:${candidate.owner}/${candidate.repo}#${candidate.number}`,
-        err,
-        log,
-      );
+    }
+
+    if (fix.kind === "trigger_fix") {
+      try {
+        const claimResult = await claimPr(
+          client,
+          candidate.owner,
+          candidate.repo,
+          candidate.number,
+          config.fix_label,
+        );
+        if (!claimResult.claimed) {
+          skipped += 1;
+          await addNotice({
+            kind: "claim_race_lost",
+            message: `${candidate.owner}/${candidate.repo}#${candidate.number}: ${claimResult.reason}`,
+          });
+        } else {
+          await startFix(
+            candidate,
+            viewer.login,
+            context.prevFixSeed,
+            context.observed,
+            context.linkedParentWorkItemId,
+          );
+          fixesStarted += 1;
+        }
+      } catch (err) {
+        failed += 1;
+        await recordFailureSafe(
+          `trigger_fix:${candidate.owner}/${candidate.repo}#${candidate.number}`,
+          err,
+          log,
+        );
+      }
     }
   }
 

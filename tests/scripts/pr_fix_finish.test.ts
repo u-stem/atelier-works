@@ -1,5 +1,5 @@
 // Tests for f/factory/steps/pr_workflow_support.ts's decideFixFinishAction,
-// deriveFallbackReviewers, evaluateRelabelFailure, renderFixReply, and
+// deriveFallbackReviewers, evaluateRerouteGuard, renderFixReply, and
 // shouldAdvanceWatermarks (used by pr_fix_finish.ts).
 
 import { describe, expect, test } from "bun:test";
@@ -7,7 +7,7 @@ import type { FixReply } from "../../f/factory/lib/types.ts";
 import {
   decideFixFinishAction,
   deriveFallbackReviewers,
-  evaluateRelabelFailure,
+  evaluateRerouteGuard,
   renderFixReply,
   shouldAdvanceWatermarks,
 } from "../../f/factory/steps/pr_workflow_support.ts";
@@ -79,13 +79,15 @@ describe("deriveFallbackReviewers", () => {
   });
 });
 
-describe("evaluateRelabelFailure", () => {
-  // DA re-verification (fix round 2 follow-up): an addLabels failure used
-  // to be swallowed and the requirements_gap reroute proceeded to
-  // runFlowAsync anyway, leaving the parent issue's trigger label missing —
-  // this must instead abort the reroute with the failure surfaced.
-  test("surfaces the addLabels error message when the issue has an issue_number", () => {
-    expect(evaluateRelabelFailure(42, "HTTP 403")).toBe("HTTP 403");
+describe("evaluateRerouteGuard", () => {
+  test("allows the reroute when the parent work item has an issue_number", () => {
+    expect(evaluateRerouteGuard(42)).toBeNull();
+  });
+
+  test("blocks the reroute when the parent work item has no issue_number", () => {
+    expect(evaluateRerouteGuard(null)).toBe(
+      "parent work item has no issue_number",
+    );
   });
 });
 

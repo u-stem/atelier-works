@@ -535,8 +535,6 @@ export type ReviewPostMode = "comment_only" | "gated";
 export type FactoryConfig = {
   owners: FactoryOwner[];
   trigger_label: string;
-  wip_label: string;
-  approved_label: string;
   allowed_labeler_associations: LabelerAssociation[];
   model: string;
   max_attempts: number;
@@ -565,17 +563,13 @@ export type FactoryConfig = {
   // existing resource created before this cycle still validates.
   review_label: string;
   fix_label: string;
-  pr_label: string;
-  // State labels (mutually exclusive on a PR the factory has handled — see
-  // pr_workflow_support.ts's setStateLabel/allStateLabels): unlike
-  // review_label/fix_label (human-set triggers, removed at launch), these
-  // are set and swapped by the factory itself so a human sees at a glance
-  // what a PR needs, and poll_prs.ts's searchPrs re-discovers a PR by them
-  // instead of the `commenter:<viewer>` query.
-  changes_requested_label: string;
-  reviewed_label: string;
-  rereview_label: string;
-  needs_human_label: string;
+  /** Days a tracked PR (work_items.kind pr_review/pr_fix) is kept eligible
+   * for DB-backed rediscovery by poll_prs.ts's listTrackedPrs, counted from
+   * its most recent work_items row's updated_at (2026-09-27 policy: PR
+   * trigger labels are consumed at claim time, so this replaces re-search
+   * by state label as the mechanism that finds a PR again once a human
+   * acts on it — approving, adding the fix label, or pushing a fix). */
+  tracked_pr_days: number;
   review_post_mode: ReviewPostMode;
   max_fix_rounds: number;
   allowed_check_commands: string[];
