@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   buildAuditTitle,
   computeAuditPeriod,
+  DAY_MS,
   decideAuditKickoff,
   formatAuditPeriodLabel,
   formatJstDate,
@@ -106,6 +107,28 @@ describe("computeAuditPeriod", () => {
       }),
     ).toBeNull();
   });
+
+  test("starts exactly at the floor with no gap when the previous report ends there", () => {
+    const floor = new Date(END.getTime() - 28 * DAY_MS);
+    const period = computeAuditPeriod({
+      now: NOW,
+      lastPeriodEnd: floor,
+      days: 7,
+      maxLookbackDays: 28,
+    });
+    expect(period?.start).toEqual(floor);
+  });
+
+  test("reports no gap when the previous report ends exactly at the floor", () => {
+    const floor = new Date(END.getTime() - 28 * DAY_MS);
+    const period = computeAuditPeriod({
+      now: NOW,
+      lastPeriodEnd: floor,
+      days: 7,
+      maxLookbackDays: 28,
+    });
+    expect(period?.unaudited_gap_days).toBe(0);
+  });
 });
 
 describe("buildAuditTitle", () => {
@@ -133,6 +156,21 @@ describe("parsePeriodArgs", () => {
       3,
     );
     expect(period.unaudited_gap_days).toBe(3);
+  });
+
+  test("throws on an unparsable date", () => {
+    expect(() =>
+      parsePeriodArgs("not-a-date", "2026-09-28T15:00:00Z", 0),
+    ).toThrow();
+  });
+
+  test("clamps a negative gap to 0", () => {
+    const period = parsePeriodArgs(
+      "2026-09-21T15:00:00Z",
+      "2026-09-28T15:00:00Z",
+      -2,
+    );
+    expect(period.unaudited_gap_days).toBe(0);
   });
 });
 
