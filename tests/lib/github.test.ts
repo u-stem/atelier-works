@@ -201,7 +201,6 @@ describe("searchIssues", () => {
         owner: "acme",
         ownerKind: "user",
         label: "factory",
-        notLabel: "factory:wip",
       },
     );
     expect(items).toEqual([
@@ -225,7 +224,6 @@ describe("searchIssues", () => {
         owner: "acme-org",
         ownerKind: "org",
         label: "factory",
-        notLabel: "factory:wip",
       },
     );
     const argv = fake.calls[0]?.argv.join(" ") ?? "";
@@ -240,7 +238,6 @@ describe("searchIssues", () => {
         owner: "acme",
         ownerKind: "user",
         label: "factory",
-        notLabel: "factory:wip",
       },
     );
     expect(fake.calls[0]?.argv.join(" ")).toContain("per_page=100");
@@ -289,13 +286,12 @@ describe("searchIssues", () => {
         owner: "acme",
         ownerKind: "user",
         label: "factory",
-        notLabel: "factory:wip",
       },
     );
     expect(items.map((item) => item.number)).toEqual([1, 2]);
   });
 
-  test('quotes the label qualifiers (a label name can contain a colon, e.g. "factory:wip")', async () => {
+  test('quotes the label qualifier (a label name can contain a colon, e.g. "factory:review")', async () => {
     const fake = createFakeCommandRunner([ghApiOk({ items: [] })]);
     await searchIssues(
       { run: fake.run, ghToken: "tok" },
@@ -303,12 +299,10 @@ describe("searchIssues", () => {
         owner: "acme",
         ownerKind: "user",
         label: "factory:review",
-        notLabel: "factory:wip",
       },
     );
     const decoded = decodeURIComponent(fake.calls[0]?.argv.join(" ") ?? "");
     expect(decoded).toContain('label:"factory:review"');
-    expect(decoded).toContain('-label:"factory:wip"');
   });
 });
 
@@ -323,6 +317,7 @@ describe("getIssue", () => {
         state: "open",
         user: { login: "alice" },
         labels: ["factory", { name: "priority:high" }],
+        assignees: [],
       }),
     ]);
     const issue = await getIssue(
@@ -332,6 +327,28 @@ describe("getIssue", () => {
       5,
     );
     expect(issue.labels).toEqual(["factory", "priority:high"]);
+  });
+
+  test("collects assignee logins", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        number: 5,
+        title: "t",
+        body: "b",
+        html_url: "https://github.com/acme/widgets/issues/5",
+        state: "open",
+        user: { login: "alice" },
+        labels: [],
+        assignees: [{ login: "factory-bot" }, { login: "alice" }],
+      }),
+    ]);
+    const issue = await getIssue(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      5,
+    );
+    expect(issue.assignees).toEqual(["factory-bot", "alice"]);
   });
 
   test("rejects an owner that isn't a valid GitHub name", async () => {
@@ -449,10 +466,10 @@ describe("getIssueTimeline", () => {
 });
 
 describe("claimIssue", () => {
-  test("succeeds when the re-fetched issue carries the wip label", async () => {
+  test("succeeds when the re-fetched issue is assigned and the trigger label is gone", async () => {
     const fake = createFakeCommandRunner([
-      ok(ghApiStdout(200, {})), // POST labels
       ok(ghApiStdout(200, {})), // POST assignees
+      ok(ghApiStdout(200, {})), // DELETE trigger label
       ghApiOk({
         number: 5,
         title: "t",
@@ -460,7 +477,8 @@ describe("claimIssue", () => {
         html_url: "https://x/5",
         state: "open",
         user: { login: "alice" },
-        labels: ["factory:wip"],
+        labels: [],
+        assignees: [{ login: "factory-bot" }],
       }),
     ]);
     const result = await claimIssue(
@@ -469,14 +487,14 @@ describe("claimIssue", () => {
       "widgets",
       5,
       {
-        wipLabel: "factory:wip",
+        triggerLabel: "factory",
         assignee: "factory-bot",
       },
     );
     expect(result).toEqual({ claimed: true });
   });
 
-  test("reports not claimed when the wip label did not stick (lost a race)", async () => {
+  test("reports not claimed when the assignment did not stick (lost a race)", async () => {
     const fake = createFakeCommandRunner([
       ok(ghApiStdout(200, {})),
       ok(ghApiStdout(200, {})),
@@ -488,6 +506,7 @@ describe("claimIssue", () => {
         state: "open",
         user: { login: "alice" },
         labels: [],
+        assignees: [],
       }),
     ]);
     const result = await claimIssue(
@@ -496,7 +515,35 @@ describe("claimIssue", () => {
       "widgets",
       5,
       {
-        wipLabel: "factory:wip",
+        triggerLabel: "factory",
+        assignee: "factory-bot",
+      },
+    );
+    expect(result.claimed).toBe(false);
+  });
+
+  test("reports not claimed when the trigger label is still present after removal (re-added by another actor)", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(200, {})),
+      ok(ghApiStdout(200, {})),
+      ghApiOk({
+        number: 5,
+        title: "t",
+        body: "b",
+        html_url: "https://x/5",
+        state: "open",
+        user: { login: "alice" },
+        labels: ["factory"],
+        assignees: [{ login: "factory-bot" }],
+      }),
+    ]);
+    const result = await claimIssue(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      5,
+      {
+        triggerLabel: "factory",
         assignee: "factory-bot",
       },
     );
@@ -507,7 +554,7 @@ describe("claimIssue", () => {
     const fake = createFakeCommandRunner([]);
     await expect(
       claimIssue({ run: fake.run, ghToken: "tok" }, "acme", "widgets", 5, {
-        wipLabel: "factory:wip",
+        triggerLabel: "factory",
         assignee: "-evil",
       }),
     ).rejects.toThrow();
@@ -817,6 +864,7 @@ describe("createIssue", () => {
         state: "open",
         user: null,
         labels: [],
+        assignees: [],
       }),
     ]);
     const result = await createIssue(

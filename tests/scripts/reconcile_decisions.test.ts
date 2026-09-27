@@ -12,27 +12,17 @@ describe("decideReconcileAction — issue kind", () => {
   test("cancels when the issue is closed", () => {
     const decision = decideReconcileAction(
       { updated_at: RECENT },
-      { kind: "issue", open: false, hasTriggerLabel: true },
+      { kind: "issue", open: false },
       { state: "running" },
       NOW,
     );
     expect(decision).toEqual({ action: "cancel", reason: "closed" });
   });
 
-  test("cancels when the trigger label was removed", () => {
-    const decision = decideReconcileAction(
-      { updated_at: RECENT },
-      { kind: "issue", open: true, hasTriggerLabel: false },
-      { state: "running" },
-      NOW,
-    );
-    expect(decision).toEqual({ action: "cancel", reason: "label_removed" });
-  });
-
   test("does nothing while the job is still running", () => {
     const decision = decideReconcileAction(
       { updated_at: RECENT },
-      { kind: "issue", open: true, hasTriggerLabel: true },
+      { kind: "issue", open: true },
       { state: "running" },
       NOW,
     );
@@ -42,7 +32,7 @@ describe("decideReconcileAction — issue kind", () => {
   test("does nothing when the job completed successfully but is still within the grace period", () => {
     const decision = decideReconcileAction(
       { updated_at: RECENT },
-      { kind: "issue", open: true, hasTriggerLabel: true },
+      { kind: "issue", open: true },
       { state: "completed", success: true, canceled: false },
       NOW,
     );
@@ -52,7 +42,7 @@ describe("decideReconcileAction — issue kind", () => {
   test("fails as orphaned when a successful completion is past the grace period", () => {
     const decision = decideReconcileAction(
       { updated_at: STALE },
-      { kind: "issue", open: true, hasTriggerLabel: true },
+      { kind: "issue", open: true },
       { state: "completed", success: true, canceled: false },
       NOW,
     );
@@ -62,7 +52,7 @@ describe("decideReconcileAction — issue kind", () => {
   test("fails as orphaned immediately when the job was canceled, even within the grace period", () => {
     const decision = decideReconcileAction(
       { updated_at: RECENT },
-      { kind: "issue", open: true, hasTriggerLabel: true },
+      { kind: "issue", open: true },
       { state: "completed", success: false, canceled: true },
       NOW,
     );
@@ -75,7 +65,7 @@ describe("decideReconcileAction — issue kind", () => {
   test("fails as orphaned immediately when the job failed (not canceled), even within the grace period", () => {
     const decision = decideReconcileAction(
       { updated_at: RECENT },
-      { kind: "issue", open: true, hasTriggerLabel: true },
+      { kind: "issue", open: true },
       { state: "completed", success: false, canceled: false },
       NOW,
     );
@@ -88,7 +78,7 @@ describe("decideReconcileAction — issue kind", () => {
   test("fails as orphaned when the job is absent past the grace period", () => {
     const decision = decideReconcileAction(
       { updated_at: STALE },
-      { kind: "issue", open: true, hasTriggerLabel: true },
+      { kind: "issue", open: true },
       { state: "absent" },
       NOW,
     );

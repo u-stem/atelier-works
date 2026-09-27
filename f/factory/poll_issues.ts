@@ -352,7 +352,6 @@ async function reconcileActiveItems(
         github = {
           kind: "issue",
           open: issue.state === "open",
-          hasTriggerLabel: issue.labels.includes(config.trigger_label),
         };
       } else {
         if (item.pr_number === null) continue;
@@ -395,19 +394,18 @@ async function reconcileActiveItems(
       );
       if (!updated) continue; // a concurrent process already moved it on.
 
-      // Remove wip plus whichever label(s) could have triggered this item,
-      // so a terminal reconcile transition doesn't loop (spec-cycle2.md:
-      // team-lead review fix — fail_orphan in particular would otherwise
-      // get re-claimed on the very next poll since the trigger label is
-      // still present and wip is gone). A human must re-apply the trigger/
-      // review/fix label to start a new cycle.
-      const labelNumber =
-        item.kind === "issue" ? item.issue_number : item.pr_number;
-      if (labelNumber !== null) {
-        const labelsToRemove =
-          item.kind === "issue"
-            ? [config.wip_label, config.trigger_label]
-            : [config.wip_label, config.review_label, config.fix_label];
+      // PR-kind label bookkeeping only (2026-09-27 policy: an Issue's
+      // `factory` trigger label is consumed at claim time, so there is
+      // nothing left to remove here for issue-kind items — status lives
+      // solely in work_items.status. PR label handling is unchanged pending
+      // the follow-up PR that does the same cleanup for PRs).
+      if (item.kind !== "issue" && item.pr_number !== null) {
+        const labelNumber = item.pr_number;
+        const labelsToRemove = [
+          config.wip_label,
+          config.review_label,
+          config.fix_label,
+        ];
         for (const labelName of labelsToRemove) {
           try {
             await removeLabel(
@@ -433,27 +431,25 @@ async function reconcileActiveItems(
         // any other on_error_flow/pr_fix_finish `failed`), while a
         // cancelled item (e.g. the PR closed) leaves nothing for a human to
         // act on, so every state label is cleared instead of set.
-        if (item.kind !== "issue") {
-          if (targetStatus === "failed") {
-            await setStateLabel(
-              client,
-              item.owner,
-              item.repo,
-              labelNumber,
-              config,
-              stateLabelForFixOutcome("failed", config),
-              log,
-            );
-          } else {
-            await removeTerminalLabels(
-              client,
-              item.owner,
-              item.repo,
-              labelNumber,
-              allStateLabels(config),
-              log,
-            );
-          }
+        if (targetStatus === "failed") {
+          await setStateLabel(
+            client,
+            item.owner,
+            item.repo,
+            labelNumber,
+            config,
+            stateLabelForFixOutcome("failed", config),
+            log,
+          );
+        } else {
+          await removeTerminalLabels(
+            client,
+            item.owner,
+            item.repo,
+            labelNumber,
+            allStateLabels(config),
+            log,
+          );
         }
       }
 
@@ -541,7 +537,7 @@ async function claimAndStart(
     candidate.owner,
     candidate.repo,
     candidate.number,
-    { wipLabel: config.wip_label, assignee: viewerLogin },
+    { triggerLabel: config.trigger_label, assignee: viewerLogin },
   );
   if (!claimResult.claimed) {
     await addNotice({
@@ -612,7 +608,6 @@ async function claimAndStart(
 // ---------------------------------------------------------------------------
 
 async function expirePendingApprovals(
-  client: GhClient,
   config: FactoryConfig,
   discordWebhookUrl: string,
   log: Logger,
@@ -636,15 +631,6 @@ async function expirePendingApprovals(
         "approval timed out",
       );
       if (!updated) continue; // the work item already moved on.
-
-      await removeTerminalLabels(
-        client,
-        workItem.owner,
-        workItem.repo,
-        workItem.issue_number,
-        [config.wip_label, config.trigger_label],
-        log,
-      );
 
       await notifySafe(
         discordWebhookUrl,
@@ -722,7 +708,6 @@ export async function main(): Promise<{
         owner: owner.name,
         ownerKind: owner.kind,
         label: config.trigger_label,
-        notLabel: config.wip_label,
       });
       rawCandidates.push(...found);
     } catch (err) {
@@ -786,12 +771,7 @@ export async function main(): Promise<{
     log,
   );
 
-  const expired = await expirePendingApprovals(
-    client,
-    config,
-    discordWebhookUrl,
-    log,
-  );
+  const expired = await expirePendingApprovals(config, discordWebhookUrl, log);
 
   return { claimed, skipped, reconciled, expired, failed };
 }

@@ -2,12 +2,10 @@ import { describe, expect, test } from "bun:test";
 import {
   computeRestartPlan,
   labelsToRestore,
-  restoreStrategy,
 } from "../../f/factory/retry_work_item.ts";
 
 const LABEL_CONFIG = {
   wip_label: "factory:wip",
-  trigger_label: "factory",
   review_label: "factory:review",
   fix_label: "factory:fix",
 };
@@ -78,13 +76,6 @@ describe("computeRestartPlan", () => {
 });
 
 describe("labelsToRestore", () => {
-  test("restores wip + trigger_label for an issue work item", () => {
-    expect(labelsToRestore("issue", LABEL_CONFIG)).toEqual([
-      "factory:wip",
-      "factory",
-    ]);
-  });
-
   test("restores wip + review_label for a pr_review work item", () => {
     expect(labelsToRestore("pr_review", LABEL_CONFIG)).toEqual([
       "factory:wip",
@@ -97,19 +88,5 @@ describe("labelsToRestore", () => {
       "factory:wip",
       "factory:fix",
     ]);
-  });
-});
-
-describe("restoreStrategy", () => {
-  test("issue kind restores via claim_issue (assignee is the documented claim mechanism)", () => {
-    expect(restoreStrategy("issue")).toBe("claim_issue");
-  });
-
-  test("pr_review kind restores via add_labels (no assignee, matches claimPr)", () => {
-    expect(restoreStrategy("pr_review")).toBe("add_labels");
-  });
-
-  test("pr_fix kind restores via add_labels (no assignee, matches claimPr)", () => {
-    expect(restoreStrategy("pr_fix")).toBe("add_labels");
   });
 });

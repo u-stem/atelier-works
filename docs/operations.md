@@ -4,8 +4,10 @@
 
 - Issueを拾ったインスタンスの所有者が、そのIssueの承認を行う。
 - 各インスタンスは稼働前に`f/factory/factory_config`の`instance_name`を必ず設定する(Discord通知・承認Inboxの担当表示に使われる)。
-- 1つのIssueは1つのインスタンスが占有する。claim(assignee設定 + `wip`ラベル付与)に成功したインスタンスだけがそのIssueを処理し、後から来た他インスタンスは撤退する。
-- 処理が終端status(承認済み・要対応・タイムアウト・失敗・レビュー済み・再レビュー依頼・ブロック・キャンセル)になると、`wip`ラベルとトリガーラベル(`factory` / `factory:review` / `factory:fix`)は自動で外れる(承認済みは`factory:approved`に付け替わる)。**もう一度処理させたい場合は、人が改めてラベルを付け直す**(ラベルを残したままにしない設計により、孤児失敗したIssue / PRが自動で無限に再試行されることを防いでいる)。
+- 1つのIssueは1つのインスタンスが占有する。claim(assignee設定 + `factory`ラベルの消費)に成功したインスタンスだけがそのIssueを処理し、後から来た他インスタンスは撤退する。
+- 既知の制約: claim(ラベル消費)の直後にDBへの登録が失敗すると、その Issue はラベルも作業項目も無い状態になり、自動では拾い直されない。Discordの失敗通知を見て人が`factory`ラベルを付け直す。
+- Issueに付くラベルは`factory`のみ(2026-09-27方針変更)。付けると起動し、claim時に外れる(消費される)。以後はどの状態遷移でもIssueのラベルは付け外しされず、状態はConsoleのPipelineタブで確認する。**もう一度処理させたい場合は、人が改めて`factory`ラベルを付け直す**(新しいcycleとして扱われる)。
+- PRは現状維持(次PRで同様に整理予定): claimで`wip`ラベルを付与し、処理が終端status(レビュー済み・再レビュー依頼・ブロック・要対応・タイムアウト・失敗・キャンセル)になると`wip`ラベルとトリガーラベル(`factory:review` / `factory:fix`)が自動で外れる。もう一度処理させたい場合は、人が改めてラベルを付け直す(ラベルを残したままにしない設計により、孤児失敗したPRが自動で無限に再試行されることを防いでいる)。
 
 ## 日常運用
 
@@ -14,7 +16,7 @@
 - **承認はFactory Console App(`f/factory/factory_console`)のInboxタブから行う**。Discord通知に記載されたURL、またはConsoleを直接開き、対象の作業項目を選択して要件定義・図(draw.ioビューアー)・未確定事項を確認したうえで承認 / 却下する(却下時は理由の入力が必須、補足は任意)。承認者は実行ユーザー(`WM_USERNAME`)として記録される。Appを使わない代替手順として、Windmill UIで`f/factory/approval_decide`を直接開き、`approval_request_id`(ConsoleのInboxに記載)/ `decision`(approve / reject) / `reason` / `note`を入力してRunすることもできる(`options`は要件定義承認では空のままでよい)。
 - Issueに自動投稿されるコメントは、要件定義が承認されたときのConsoleリンク1件のみ。着手・承認待ち・却下・期限切れ・失敗・要人手といった運用上の状態はIssueには書かず、Discord通知とConsoleで確認する(GitHubには成果物のみを残す方針、2026-09-27)。
 - Rejectすると要件定義が再生成され(`attempt`が加算される)、再度承認待ちになる。試行回数が上限を超えると`needs_human`になる。
-- 失敗したwork itemはFactory Console AppのFailuresタブから再実行できる(`retry_work_item`)。再実行時は`wip`ラベルと該当するトリガーラベル(`factory` / `factory:review` / `factory:fix`)を再付与して再起動する。
+- 失敗したwork itemはFactory Console AppのFailuresタブから再実行できる(`retry_work_item`)。PR kind(`pr_review` / `pr_fix`)は再実行時に`wip`ラベルと該当するトリガーラベル(`factory:review` / `factory:fix`)を再付与して再起動する。Issue kindはラベルの付け外しをせず、`f/factory/pipeline`を直接再起動する(`factory`ラベルはclaim時に一度だけ消費され、再付与されない)。
 - 通知の種類: `picked` / `awaiting_approval` / `approved` / `rejected` / `needs_human` / `failed` / `expired` / `cancelled` / `self_update`(ホスト操作が必要)/ `daily_summary`(前日のコスト・件数・失敗)。
 
 ## 通知
@@ -87,7 +89,7 @@
   | `factory:needs-human` | 人の対応が必要 | pr_fixが`needs_human` / `blocked` / `failed`で終了したとき、pr_review自体が失敗したとき、またはIssue化提案(`propose_issue`)が1件以上あるとき |
 
   状態ラベルは人への状態表示に加え、`poll_prs`がトリガーラベル脱落後のPRを再発見する手段にもなる(前節「起動条件」参照)。PRがクレームされて新しいレビュー・修正サイクルが始まると、それまでの状態ラベルはすべて一旦外れる。Issue化提案による`factory:needs-human`は例外で、`issue_proposal_apply`が全件を承認 / 却下し終えたときにだけ`factory:rereview`または`factory:reviewed`へ切り替わる(前節「Issue化提案の承認 / 却下」参照)。
-  - ラベルは対象リポジトリに事前作成しなくても、初回付与時にGitHubが既定色(灰色)・説明なしで自動作成する(`factory:wip` / `factory:approved`が実際にそうなっている)。一覧で見分けやすくしたい場合は、対象リポジトリで4つの状態ラベルを色と説明付きで先に作っておく。
+  - ラベルは対象リポジトリに事前作成しなくても、初回付与時にGitHubが既定色(灰色)・説明なしで自動作成する(`factory:wip` / `factory:reviewed`が実際にそうなっている)。一覧で見分けやすくしたい場合は、対象リポジトリで4つの状態ラベルを色と説明付きで先に作っておく。
   - 状態ラベルが付いたPRは以後も`poll_prs`の発見対象であり続けるため、人が新しいcommitをpushするたびに自動で再レビューが起動する(1 pushにつきClaude実行1回)。再レビューを止めたいPRは状態ラベルを手で外す。
   - `review_post_mode: "gated"`ではレビューを投稿しないため状態ラベルも付けない(gatedは検証用の予約モードで、PRはレビュー依頼・assignee経由でのみ再発見される)。
 - 対象は`factory_config`の`repo_allowlist`(未指定なら`owners`に含まれるリポジトリ全体)に含まれるリポジトリのみ。試験的に対象を絞りたい場合は`repo_allowlist`に対象リポジトリを明示する。

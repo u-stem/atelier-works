@@ -17,6 +17,7 @@ function fakeIssue(labels: string[]) {
     html_url: "https://github.com/octo-owner/atelier-works/issues/7",
     state: "open",
     labels,
+    assignees: [],
   };
 }
 

@@ -114,21 +114,22 @@ export function shouldMarkFailed(
 }
 
 /**
- * Same wip + kind-specific trigger label set as retry_work_item.ts's
- * `labelsToRestore` (duplicated here rather than imported — each factory
- * script is meant to stand alone; see this implementer's report for a
- * note on promoting this to a shared spot).
+ * PR-kind label set (same as retry_work_item.ts's `labelsToRestore`,
+ * duplicated here rather than imported — each factory script is meant to
+ * stand alone; see this implementer's report for a note on promoting this
+ * to a shared spot). Issue kind returns an empty array: the Issue's
+ * `factory` trigger label was already consumed at claim time (2026-09-27
+ * policy), so there is nothing left to remove — status lives solely in
+ * work_items.status. PR-kind label handling is unchanged pending the
+ * follow-up PR that does the same cleanup for PRs.
  */
 export function labelsToRemove(
   kind: WorkItemKind,
-  config: Pick<
-    FactoryConfig,
-    "wip_label" | "trigger_label" | "review_label" | "fix_label"
-  >,
+  config: Pick<FactoryConfig, "wip_label" | "review_label" | "fix_label">,
 ): string[] {
   switch (kind) {
     case "issue":
-      return [config.wip_label, config.trigger_label];
+      return [];
     case "pr_review":
       return [config.wip_label, config.review_label];
     case "pr_fix":

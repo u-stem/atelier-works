@@ -4,15 +4,14 @@
 // item's `kind` (issue -> pipeline, pr_review -> pr_review, pr_fix ->
 // pr_fix).
 //
-// devil-advocate fatal fix: a terminal work item has had its wip + trigger
-// label removed (pipeline_* / pr_* terminal transitions, and poll_issues's
-// reconcile). Relaunching the flow without re-adding them first left the
-// GitHub issue/PR still missing the trigger label, so poll_issues's
-// reconcile (lib/poll_support.ts's decideReconcileAction,
-// `!hasTriggerLabel -> cancel`) would see it as "trigger label removed"
-// within its next 5-minute run and immediately cancel the just-restarted
-// flow. Labels are now idempotently re-added before the status transition
-// and `runFlowAsync`.
+// devil-advocate fatal fix (PR kinds only, see 2026-09-27 policy note
+// below): a terminal PR work item has had its wip + trigger label removed
+// (pr_* terminal transitions, and poll_issues's reconcile). Relaunching the
+// flow without re-adding them first left the GitHub PR still missing the
+// trigger label, so poll_issues's reconcile would see it as "trigger label
+// removed" within its next 5-minute run and immediately cancel the
+// just-restarted flow. Labels are now idempotently re-added before the
+// status transition and `runFlowAsync`.
 //
 // devil-advocate note (round 2): the fix above originally reused
 // `claimIssue` for every kind, but that also assigns the factory as
@@ -20,24 +19,25 @@
 // no-assignee decision (an assignee left in place would keep candidating
 // the PR forever via `assignee:<viewer>` search, spec-cycle2.md §7 item
 // 1's own de-dup notwithstanding, since assignment isn't head_sha-scoped).
-// Only issue kind still uses `claimIssue` (its assignee is the intended,
-// documented claim mechanism there); PR kinds (pr_review / pr_fix) use
-// `addLabels` — additive, no assignee.
+// PR kinds (pr_review / pr_fix) use `addLabels` — additive, no assignee.
+//
+// policy change (2026-09-27): issue kind no longer restores any label —
+// the Issue's `factory` trigger label is consumed once, at claim time, and
+// is never re-added automatically (status lives solely in
+// work_items.status). Restarting an issue work item therefore relaunches
+// `f/factory/pipeline` directly with no GitHub side effect at all; only a
+// human re-labeling the Issue starts a brand-new cycle. PR-kind label
+// restoration is unchanged pending the follow-up PR that does the same
+// cleanup for PRs.
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "./lib/config.ts";
 import { getWorkItem, setFlowJobId, updateStatus } from "./lib/db.ts";
-import {
-  addLabels,
-  claimIssue,
-  type GhClient,
-  getViewer,
-} from "./lib/github.ts";
+import { addLabels, type GhClient } from "./lib/github.ts";
 import { type Logger, logger } from "./lib/log.ts";
 import {
   type FactoryConfig,
   isOneOf,
   type WorkItem,
-  type WorkItemKind,
   type WorkItemStatus,
 } from "./lib/types.ts";
 import { runCommand } from "./lib/workspace.ts";
@@ -96,23 +96,18 @@ export function computeRestartPlan(
 }
 
 /**
- * The wip label plus the one kind-specific trigger label that a terminal
- * work item's `kind` had removed (pipeline_* / pr_* terminal transitions,
- * poll_issues's reconcile) — and that must be idempotently re-present
- * before relaunching its flow, or poll_issues's reconcile will read the
- * missing trigger label as "removed" and cancel the restart within its
- * next 5-minute run.
+ * The wip label plus the one kind-specific trigger label that a terminal PR
+ * work item's `kind` had removed (pr_* terminal transitions, poll_issues's
+ * reconcile) — and that must be idempotently re-present before relaunching
+ * its flow, or poll_issues's reconcile will read the missing trigger label
+ * as "removed" and cancel the restart within its next 5-minute run. Issue
+ * kind has no equivalent (2026-09-27 policy — see this file's module doc).
  */
 export function labelsToRestore(
-  kind: WorkItemKind,
-  config: Pick<
-    FactoryConfig,
-    "wip_label" | "trigger_label" | "review_label" | "fix_label"
-  >,
+  kind: "pr_review" | "pr_fix",
+  config: Pick<FactoryConfig, "wip_label" | "review_label" | "fix_label">,
 ): string[] {
   switch (kind) {
-    case "issue":
-      return [config.wip_label, config.trigger_label];
     case "pr_review":
       return [config.wip_label, config.review_label];
     case "pr_fix":
@@ -120,82 +115,34 @@ export function labelsToRestore(
   }
 }
 
-/** The GitHub issue/PR number a work item's labels live under: `issue_number` for kind `issue`, `pr_number` otherwise. Throws if that field is null (a malformed row). */
-function labelableNumber(
-  workItem: Pick<WorkItem, "kind" | "issue_number" | "pr_number">,
-): number {
-  const number =
-    workItem.kind === "issue" ? workItem.issue_number : workItem.pr_number;
-  if (number === null) {
-    throw new Error(
-      `retry_work_item: work item has kind "${workItem.kind}" but no ${
-        workItem.kind === "issue" ? "issue_number" : "pr_number"
-      }`,
-    );
-  }
-  return number;
-}
-
-/**
- * Which GitHub call `restoreLabels` uses for a work item's `kind`: issue
- * kind goes through `claimIssue` (label + assignee + re-fetch confirm —
- * the documented issue claim mechanism, spec-cycle2.md §1 github.ts);
- * PR kinds go through `addLabels` (additive, no assignee — see the
- * devil-advocate round-2 note above `restoreLabels`).
- */
-export function restoreStrategy(
-  kind: WorkItemKind,
-): "claim_issue" | "add_labels" {
-  return kind === "issue" ? "claim_issue" : "add_labels";
-}
-
-async function restoreLabels(
+async function restorePrLabels(
   client: GhClient,
-  workItem: Pick<
-    WorkItem,
-    "owner" | "repo" | "kind" | "issue_number" | "pr_number"
-  >,
+  workItem: Pick<WorkItem, "owner" | "repo" | "pr_number">,
+  kind: "pr_review" | "pr_fix",
   config: FactoryConfig,
   log: Logger,
 ): Promise<void> {
-  const number = labelableNumber(workItem);
-  const labels = labelsToRestore(workItem.kind, config);
-
-  if (restoreStrategy(workItem.kind) === "add_labels") {
-    // team-lead design (2026-09-26): the PR is active again, so any state
-    // label a previous terminal transition left on it (changes-requested /
-    // reviewed / rereview / needs-human) no longer applies — best-effort,
-    // like every other terminal-transition label cleanup.
-    await removeTerminalLabels(
-      client,
-      workItem.owner,
-      workItem.repo,
-      number,
-      allStateLabels(config),
-      log,
+  const number = workItem.pr_number;
+  if (number === null) {
+    throw new Error(
+      `retry_work_item: work item has kind "${kind}" but no pr_number`,
     );
-    await addLabels(client, workItem.owner, workItem.repo, number, labels);
-    return;
   }
+  const labels = labelsToRestore(kind, config);
 
-  const viewer = await getViewer(client);
-  for (const label of labels) {
-    const result = await claimIssue(
-      client,
-      workItem.owner,
-      workItem.repo,
-      number,
-      {
-        wipLabel: label,
-        assignee: viewer.login,
-      },
-    );
-    if (!result.claimed) {
-      throw new Error(
-        `retry_work_item: failed to restore label "${label}" on ${workItem.owner}/${workItem.repo}#${number}: ${result.reason}`,
-      );
-    }
-  }
+  // team-lead design (2026-09-26): the PR is active again, so any state
+  // label a previous terminal transition left on it (changes-requested /
+  // reviewed / rereview / needs-human) no longer applies — best-effort,
+  // like every other terminal-transition label cleanup.
+  await removeTerminalLabels(
+    client,
+    workItem.owner,
+    workItem.repo,
+    number,
+    allStateLabels(config),
+    log,
+  );
+  await addLabels(client, workItem.owner, workItem.repo, number, labels);
 }
 
 export type RetryWorkItemResult = {
@@ -219,7 +166,9 @@ export async function main(work_item_id: number): Promise<RetryWorkItemResult> {
   const ghToken = await wmill.getVariable("f/factory/github_token");
   const client: GhClient = { run: runCommand, ghToken };
 
-  await restoreLabels(client, workItem, config, log);
+  if (workItem.kind !== "issue") {
+    await restorePrLabels(client, workItem, workItem.kind, config, log);
+  }
 
   await updateStatus(
     work_item_id,

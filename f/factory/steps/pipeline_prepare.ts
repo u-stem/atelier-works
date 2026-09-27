@@ -21,9 +21,9 @@
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "../lib/config.ts";
 import { getWorkItem, setAttempt, updateStatus } from "../lib/db.ts";
-import { type GhClient, getIssue, removeLabel } from "../lib/github.ts";
+import { type GhClient, getIssue } from "../lib/github.ts";
 import { logger } from "../lib/log.ts";
-import type { FactoryConfig, WorkItemStatus } from "../lib/types.ts";
+import type { WorkItemStatus } from "../lib/types.ts";
 import { TERMINAL_WORK_ITEM_STATUSES } from "../lib/types.ts";
 import {
   addDetachedWorktree,
@@ -99,27 +99,6 @@ export function shouldReuseWorktree(
  * starting. */
 export function shouldCancelForClosedIssue(issueState: string): boolean {
   return issueState !== "open";
-}
-
-/** The labels to remove on a terminal transition (pure, for testing): wip
- * and trigger (team-lead rule, M5-review-derived — see requirements_apply.ts's
- * module doc for the full rationale). */
-export function terminalLabelsToRemove(
-  config: Pick<FactoryConfig, "wip_label" | "trigger_label">,
-): readonly string[] {
-  return [config.wip_label, config.trigger_label];
-}
-
-async function removeTerminalLabels(
-  client: GhClient,
-  owner: string,
-  repo: string,
-  issueNumber: number,
-  config: Pick<FactoryConfig, "wip_label" | "trigger_label">,
-): Promise<void> {
-  for (const label of terminalLabelsToRemove(config)) {
-    await removeLabel(client, owner, repo, issueNumber, label);
-  }
 }
 
 export async function main(
@@ -222,13 +201,6 @@ export async function main(
       work_item_id,
       "cancelled",
       "issue closed before pipeline started",
-    );
-    await removeTerminalLabels(
-      client,
-      workItem.owner,
-      workItem.repo,
-      workItem.issue_number,
-      config,
     );
     await removeWorktree({
       run: runCommand,

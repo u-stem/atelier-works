@@ -1,6 +1,8 @@
 // Tests for on_error_flow.ts's pure functions:
 // - labelsToRemove: the label set an exception-driven `failed` transition
-//   removes, kept symmetric with retry_work_item.ts's labelsToRestore.
+//   removes. Issue kind is empty (2026-09-27 policy: the `factory` trigger
+//   label is consumed at claim time, so there is nothing left to remove);
+//   PR kinds are kept symmetric with retry_work_item.ts's labelsToRestore.
 // - shouldMarkFailed: whether a stale failure_module run (superseded by a
 //   newer run's setFlowJobId) is entitled to mark the work item `failed`.
 // - shouldSetNeedsHumanLabel: whether the PR state label needs_human_label
@@ -25,11 +27,8 @@ const LABEL_CONFIG = {
 };
 
 describe("labelsToRemove", () => {
-  test("removes wip + trigger_label for an issue work item", () => {
-    expect(labelsToRemove("issue", LABEL_CONFIG)).toEqual([
-      "factory:wip",
-      "factory",
-    ]);
+  test("removes nothing for an issue work item (trigger label already consumed at claim)", () => {
+    expect(labelsToRemove("issue", LABEL_CONFIG)).toEqual([]);
   });
 
   test("removes wip + review_label for a pr_review work item", () => {

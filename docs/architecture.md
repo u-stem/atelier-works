@@ -34,7 +34,7 @@ flowchart TD
     C --> D[generate_requirements: headless Claude が要件定義ドラフトを生成]
     D --> E[request_approval: approval_requests へ pending 行を記録して終了]
     E --> J[人が Console で承認 / 却下]
-    J -->|approve| F[Issue に Console リンクを1件投稿、承認ラベル付与]
+    J -->|approve| F[Issue に Console リンクを1件投稿]
     J -->|reject| G{再試行回数 < 上限}
     G -->|yes| D
     G -->|no| H[needs_human]
@@ -61,9 +61,9 @@ stateDiagram-v2
     rejected --> needs_human: 試行上限超過
     picked --> failed
     requirements_generating --> failed
-    picked --> cancelled: Issueがclosed/ラベル剥奪
-    requirements_generating --> cancelled: Issueがclosed/ラベル剥奪
-    awaiting_approval --> cancelled: Issueがclosed/ラベル剥奪
+    picked --> cancelled: Issueがclosed
+    requirements_generating --> cancelled: Issueがclosed
+    awaiting_approval --> cancelled: Issueがclosed
     approved --> implementing: 工程3(未実装、拡張点)
     implementing --> requirements_generating: gap(工程3実装からのgap、未実装、attempt+1)
     implementing --> pr_open
@@ -98,7 +98,7 @@ stateDiagram-v2
 | `needs_human` | 自動処理を打ち切り人の対応が必要(試行上限超過、requirements_gapの元Issue不在、等) | 2/PRワークフロー |
 | `failed` | 実行時エラーで失敗 | 1/2 |
 | `expired` | 承認タイムアウト(7日、`poll_issues`の期限切れスイープが判定) | 2 |
-| `cancelled` | Issueがclosedまたはラベル剥奪 | 1/2 |
+| `cancelled` | Issueがclosed | 1/2 |
 | `implementing` | 実装中(worktree上で実装 → レビュー → PR作成) | 3(未実装、拡張点) |
 | `pr_open` | 実装が完了しPRを作成した | 3(未実装、拡張点) |
 | `reviewing` | PRレビューを実行中(`kind=pr_review`) | PRワークフロー |
@@ -107,9 +107,11 @@ stateDiagram-v2
 | `rereview_requested` | 修正をpushし再レビューを依頼した(終端、`kind=pr_fix`) | PRワークフロー |
 | `blocked` | 禁止された変更パターンの検出、差分上限超過、または安全策の前提が崩れて中断(`kind=pr_fix`) | PRワークフロー |
 
-work itemを終端status(`approved` / `needs_human` / `expired` / `failed` / `reviewed` / `rereview_requested` / `blocked` / `cancelled`)にする際は、`wip`ラベルに加えてトリガーラベル(Issueの`factory`、PRの`factory:review` / `factory:fix`)も外す(`approved`は`factory`の代わりに`factory:approved`へ付け替える)。トリガーラベルを残すと、孤児失敗したIssue / PRが次回のpollで自動再クレームされ、無限に再試行してしまう。人が改めてラベルを付け直したときだけ新しいサイクル・再実行が始まる。
+**Issue(2026-09-27方針変更)**: `factory`ラベルはclaim時(assignee付与直後)に一度だけ消費する。以降のどの状態遷移(終端遷移を含む)でもIssue側のラベルは付け外ししない — 状態は`work_items.status`のみが正で、GitHubのラベルは「人からFactoryへのトリガー」の役割に限定される。`retry_work_item`のように終端statusから再起動する経路も、Issue側は`runFlowAsync`を呼ぶだけでラベルの再付与は行わない。最初からやり直すには人が改めて`factory`ラベルを付け直す(新しいcycle)。
 
-`retry_work_item`のように終端statusから再度フローを起動する経路は、逆に`runFlowAsync`の前に同じwip + トリガーラベル(kindに応じて`factory` / `factory:review` / `factory:fix`)を冪等に再付与する。付け忘れると、再起動直後のwork itemがラベル無しのまま`poll_issues`のreconcile(5分周期)に「トリガーラベル剥奪」と誤認され、即座に再度`cancelled`にされてしまう。terminal化する経路を新設・変更するときは、対になる再起動経路がラベルを再付与しているかを必ず確認する。
+**PR(現状維持、次PRで同様に整理予定)**: work itemを終端status(`reviewed` / `rereview_requested` / `blocked` / `needs_human` / `failed` / `cancelled`)にする際は、`wip`ラベルに加えてトリガーラベル(`factory:review` / `factory:fix`)も外す。トリガーラベルを残すと、孤児失敗したPRが次回のpollで自動再クレームされ、無限に再試行してしまう。人が改めてラベルを付け直したときだけ新しいサイクル・再実行が始まる。
+
+`retry_work_item`のようにPRのwork itemを終端statusから再度フローを起動する経路は、逆に`runFlowAsync`の前に同じwip + トリガーラベル(kindに応じて`factory:review` / `factory:fix`)を冪等に再付与する。terminal化する経路を新設・変更するときは、対になる再起動経路がラベルを再付与しているかを必ず確認する。
 
 ### 状態遷移の詳細
 

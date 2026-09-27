@@ -67,8 +67,10 @@ export type IssueCandidate = {
    * block a claim on its own. */
   readonly labelerAssociation: string | null;
   /** Whether a non-terminal work_items row already exists for this
-   * (owner, repo, number) — a defensive double-check on top of the
-   * `-label:<wip_label>` search filter (label propagation can lag). */
+   * (owner, repo, number) — a defensive double-check after the trigger
+   * label is consumed on claim, guarding against a duplicate re-claim of
+   * the same issue (`listActive` is the sole source of truth here; there is
+   * no longer a `-label:<wip_label>` search filter to lean on). */
   readonly hasActiveWorkItem: boolean;
 };
 
@@ -198,7 +200,6 @@ export type ReconcileGithubState =
   | {
       readonly kind: "issue";
       readonly open: boolean;
-      readonly hasTriggerLabel: boolean;
     }
   | { readonly kind: "pr"; readonly open: boolean };
 
@@ -226,7 +227,7 @@ export type ReconcileDecision =
   | { readonly action: "none" }
   | {
       readonly action: "cancel";
-      readonly reason: "closed" | "label_removed" | "pr_closed";
+      readonly reason: "closed" | "pr_closed";
     }
   | { readonly action: "fail_orphan"; readonly reason: string };
 
@@ -258,9 +259,6 @@ export function decideReconcileAction(
   if (github.kind === "issue") {
     if (!github.open) {
       return { action: "cancel", reason: "closed" };
-    }
-    if (!github.hasTriggerLabel) {
-      return { action: "cancel", reason: "label_removed" };
     }
   } else if (!github.open) {
     return { action: "cancel", reason: "pr_closed" };

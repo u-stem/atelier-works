@@ -492,19 +492,18 @@ export type SearchIssuesOptions = {
   readonly owner: string;
   readonly ownerKind: FactoryOwnerKind;
   readonly label: string;
-  readonly notLabel: string;
 };
 
-/** `GET /search/issues` (paginated) for open, non-PR issues with `label` and without `notLabel`. */
+/** `GET /search/issues` (paginated) for open, non-PR issues with `label`. */
 export async function searchIssues(
   client: GhClient,
   opts: SearchIssuesOptions,
 ): Promise<IssueSearchItem[]> {
   assertGitHubName(opts.owner);
-  // Quoted (label names can contain a colon, e.g. "factory:wip") — GitHub's
-  // /search/issues currently accepts an unquoted `label:factory:wip` too,
+  // Quoted (label names can contain a colon, e.g. "factory:review") — GitHub's
+  // /search/issues currently accepts an unquoted `label:factory:review` too,
   // but quoting is the documented/safe form and matches searchPrs below.
-  const query = `is:issue state:open ${ownerQualifier(opts.owner, opts.ownerKind)} label:"${opts.label}" -label:"${opts.notLabel}"`;
+  const query = `is:issue state:open ${ownerQualifier(opts.owner, opts.ownerKind)} label:"${opts.label}"`;
   const items = await callGhApiAllSearchItems(
     client,
     `search/issues?q=${encodeURIComponent(query)}&per_page=100`,
@@ -531,6 +530,7 @@ export type Issue = {
   readonly state: string;
   readonly authorLogin: string;
   readonly labels: string[];
+  readonly assignees: string[];
 };
 
 /** `{ name: string }` — shared by label objects (`{ name, ... }` label shape). */
@@ -557,6 +557,7 @@ type IssuePayload = {
   readonly state: string;
   readonly user: { readonly login: string } | null;
   readonly labels: readonly unknown[];
+  readonly assignees: readonly unknown[];
 };
 
 function isIssuePayload(value: unknown): value is IssuePayload {
@@ -569,6 +570,7 @@ function isIssuePayload(value: unknown): value is IssuePayload {
     state: unknown;
     user: unknown;
     labels: unknown;
+    assignees: unknown;
   };
   if (typeof record.number !== "number") return false;
   if (typeof record.title !== "string") return false;
@@ -576,6 +578,7 @@ function isIssuePayload(value: unknown): value is IssuePayload {
   if (typeof record.html_url !== "string") return false;
   if (typeof record.state !== "string") return false;
   if (!Array.isArray(record.labels)) return false;
+  if (!Array.isArray(record.assignees)) return false;
   return true;
 }
 
@@ -605,6 +608,10 @@ export async function getIssue(
     const name = labelName(raw);
     if (name !== null) labels.push(name);
   }
+  const assignees: string[] = [];
+  for (const raw of parsed.assignees) {
+    if (isLoginPayload(raw)) assignees.push(raw.login);
+  }
   return {
     number: parsed.number,
     title: parsed.title,
@@ -613,6 +620,7 @@ export async function getIssue(
     state: parsed.state,
     authorLogin: parsed.user?.login ?? "",
     labels,
+    assignees,
   };
 }
 
@@ -677,7 +685,7 @@ export async function getIssueTimeline(
 }
 
 export type ClaimIssueOptions = {
-  readonly wipLabel: string;
+  readonly triggerLabel: string;
   readonly assignee: string;
 };
 
@@ -686,7 +694,14 @@ export type ClaimIssueResult =
   | { readonly claimed: false; readonly reason: string };
 
 /**
- * Claim an issue: add `wipLabel`, assign `assignee`, then re-fetch to
+ * Claim an issue (best effort: two instances claiming at the same moment
+ * can both pass the confirmation below, since assignee adds are additive
+ * and a 404 on label removal is tolerated — the DB-side
+ * `hasActiveWorkItem` check is what keeps a second work item from being
+ * started for the same issue). Assigns `assignee`, then removes
+ * `triggerLabel` (2026-09-27
+ * policy — the `factory` label is consumed on claim, not replaced with a
+ * `wip` label; status lives only in `work_items.status`). Re-fetches to
  * confirm both stuck (spec-cycle2.md §1 github.ts "claimIssue... 再取得で確認")
  * — guards against a race with another factory instance claiming first.
  */
@@ -699,16 +714,6 @@ export async function claimIssue(
 ): Promise<ClaimIssueResult> {
   validateOwnerRepo(owner, repo);
   assertGitHubName(opts.assignee);
-
-  const labelResponse = await callGhApi(
-    client,
-    `repos/${owner}/${repo}/issues/${number}/labels`,
-    {
-      method: "POST",
-      body: { labels: [opts.wipLabel] },
-    },
-  );
-  ensureSuccess(labelResponse, `POST issue labels ${owner}/${repo}#${number}`);
 
   const assigneeResponse = await callGhApi(
     client,
@@ -723,11 +728,19 @@ export async function claimIssue(
     `POST issue assignees ${owner}/${repo}#${number}`,
   );
 
+  await removeLabel(client, owner, repo, number, opts.triggerLabel);
+
   const confirmed = await getIssue(client, owner, repo, number);
-  if (!confirmed.labels.includes(opts.wipLabel)) {
+  if (!confirmed.assignees.includes(opts.assignee)) {
     return {
       claimed: false,
-      reason: `wip label ${opts.wipLabel} missing after claim`,
+      reason: `assignee ${opts.assignee} missing after claim`,
+    };
+  }
+  if (confirmed.labels.includes(opts.triggerLabel)) {
+    return {
+      claimed: false,
+      reason: `trigger label ${opts.triggerLabel} still present after claim`,
     };
   }
   return { claimed: true };

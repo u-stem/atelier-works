@@ -129,6 +129,6 @@ read -rs 'v?GITHUB_TOKEN: ' && mise set -E local GITHUB_TOKEN="$v"; unset v
 
 ## publicリポジトリでのラベル付与制限
 
-- `factory`ラベルの付与者はOWNER / MEMBER / COLLABORATORのいずれかである場合のみIssueを拾う。`poll_issues`は各Issueのタイムラインから最後にラベルを付けた人の`author_association`を確認し、許可された関係でなければ拾わずにnoticeを出す。これにより、publicリポジトリで第三者が任意にラベルを付けてパイプラインを起動させることを防ぐ。
+- `factory`ラベルの付与者はOWNER / MEMBER / COLLABORATORのいずれかである場合のみIssueを拾う。`poll_issues`は各Issueのタイムラインから最後にラベルを付けた人の`author_association`を確認し、許可された関係でなければ拾わずにnoticeを出す。これにより、publicリポジトリで第三者が任意にラベルを付けてパイプラインを起動させることを防ぐ。この確認は`getIssueTimeline`が`GET .../timeline`(Issueの現在のラベル一覧ではなく、付与・剥奪イベントの履歴)を見て行うため、claim時に`factory`ラベル自体が消費されて(外れて)以降も、`labeled`イベントの記録は残り続け、この確認は引き続き有効に機能する(2026-09-27方針変更: Issueのラベルはclaim時に一度だけ消費される)。
 - GitHub側でもラベルの付与にはtriage以上の権限が必要なため、`labeled`イベントのactorはそもそも書き込み権限を持つ人に限られる。`author_association`の確認は、このGitHub側の制約に加えた補助的な二重チェックという位置づけ。
 - PRのレビュー・コメント投稿者についても同様に制限する。`allowed_labeler_associations`(既定値: `["OWNER", "MEMBER", "COLLABORATOR"]`)に該当しない`author_association`からのレビューコメント・新規コメントは`pr_review` / `pr_fix`フローの起動対象から除外する。
