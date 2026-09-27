@@ -206,7 +206,10 @@ export type ReconcileGithubState =
       readonly kind: "issue";
       readonly open: boolean;
     }
-  | { readonly kind: "pr"; readonly open: boolean };
+  | { readonly kind: "pr"; readonly open: boolean }
+  /** An audit work item has no GitHub object: only the job-state / orphan
+   * checks apply. */
+  | { readonly kind: "audit" };
 
 export type JobState =
   | { readonly state: "running" }
@@ -261,11 +264,10 @@ export function decideReconcileAction(
   now: Date,
   orphanGraceMs: number = DEFAULT_ORPHAN_GRACE_MS,
 ): ReconcileDecision {
-  if (github.kind === "issue") {
-    if (!github.open) {
-      return { action: "cancel", reason: "closed" };
-    }
-  } else if (!github.open) {
+  if (github.kind === "issue" && !github.open) {
+    return { action: "cancel", reason: "closed" };
+  }
+  if (github.kind === "pr" && !github.open) {
     return { action: "cancel", reason: "pr_closed" };
   }
 
@@ -306,6 +308,9 @@ export function isWaitingForHuman(status: WorkItemStatus): boolean {
 export function decideClosureOnly(
   github: ReconcileGithubState,
 ): ReconcileDecision {
+  if (github.kind === "audit") {
+    return { action: "none" };
+  }
   if (github.kind === "issue") {
     return github.open
       ? { action: "none" }

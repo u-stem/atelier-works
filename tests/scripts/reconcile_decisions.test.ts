@@ -143,3 +143,19 @@ describe("decideClosureOnly", () => {
     });
   });
 });
+
+describe("decideReconcileAction — audit kind", () => {
+  test("fails a picked/auditing audit as orphaned once the job is gone past the grace period", () => {
+    const decision = decideReconcileAction(
+      { updated_at: STALE },
+      { kind: "audit" },
+      { state: "absent" },
+      NOW,
+    );
+    expect(decision.action).toBe("fail_orphan");
+  });
+
+  test("never cancels an audit (there is no GitHub object to close)", () => {
+    expect(decideClosureOnly({ kind: "audit" })).toEqual({ action: "none" });
+  });
+});

@@ -331,12 +331,17 @@ async function reconcileActiveItems(
 
   for (const item of active) {
     const label =
-      item.kind === "issue"
-        ? `${item.owner}/${item.repo}#${item.issue_number ?? "?"}`
-        : `${item.owner}/${item.repo}#${item.pr_number ?? "?"}`;
+      item.kind === "audit"
+        ? `${item.owner}/${item.repo} audit#${String(item.id)}`
+        : item.kind === "issue"
+          ? `${item.owner}/${item.repo}#${item.issue_number ?? "?"}`
+          : `${item.owner}/${item.repo}#${item.pr_number ?? "?"}`;
     try {
       let github: ReconcileGithubState;
-      if (item.kind === "issue") {
+      if (item.kind === "audit") {
+        // An audit work item has no GitHub object to check.
+        github = { kind: "audit" };
+      } else if (item.kind === "issue") {
         if (item.issue_number === null) continue;
         const issue = await getIssue(
           client,

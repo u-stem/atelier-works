@@ -64,6 +64,10 @@ export function computeRestartPlan(
         flowPath: "f/factory/pr_fix",
         args: { work_item_id: workItem.id },
       };
+    case "audit":
+      throw new Error(
+        `retry_work_item: work item ${workItem.id} is an audit; audits are not restartable (the next weekly audit covers the failed period, or use 今すぐ監査 in the Console)`,
+      );
   }
 }
 

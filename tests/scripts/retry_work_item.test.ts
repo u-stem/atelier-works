@@ -65,3 +65,16 @@ describe("computeRestartPlan", () => {
     ).toThrow();
   });
 });
+
+describe("computeRestartPlan — audit", () => {
+  test("refuses to restart an audit", () => {
+    expect(() =>
+      computeRestartPlan({
+        id: 6,
+        status: "failed",
+        kind: "audit",
+        attempt: 1,
+      }),
+    ).toThrow(/audit/);
+  });
+});
