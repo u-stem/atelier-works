@@ -7,7 +7,10 @@
 // issue_proposal_apply.ts's own `readWithFactoryLabel`.
 
 import { describe, expect, test } from "bun:test";
-import { readWithFactoryLabel } from "../../f/factory/steps/issue_proposal_apply.ts";
+import {
+  readWithFactoryLabel,
+  resolveFactoryLabel,
+} from "../../f/factory/steps/issue_proposal_apply.ts";
 import {
   appendIssueProposalMarker,
   chooseIssueProposalReplyTarget,
@@ -28,6 +31,42 @@ describe("readWithFactoryLabel", () => {
 
   test("defaults to false when not a boolean", () => {
     expect(readWithFactoryLabel({ with_factory_label: "true" })).toBe(false);
+  });
+});
+
+describe("resolveFactoryLabel", () => {
+  test("applies the label for a pr_fix proposal when requested", () => {
+    expect(
+      resolveFactoryLabel({
+        requested: true,
+        origin: "pr_fix",
+        repoAllowed: true,
+      }).apply,
+    ).toBe(true);
+  });
+
+  test("refuses the label for an audit proposal when factory_repo is not allowed", () => {
+    expect(
+      resolveFactoryLabel({
+        requested: true,
+        origin: "audit",
+        repoAllowed: false,
+      }),
+    ).toEqual({
+      apply: false,
+      reason:
+        "factory_repo is not allowed by factory_config (owners / repo_allowlist)",
+    });
+  });
+
+  test("does nothing when not requested", () => {
+    expect(
+      resolveFactoryLabel({
+        requested: false,
+        origin: "audit",
+        repoAllowed: true,
+      }).apply,
+    ).toBe(false);
   });
 });
 
