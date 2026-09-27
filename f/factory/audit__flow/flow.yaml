@@ -1,0 +1,97 @@
+summary: '[SF-5-2] 運用記録の監査と改善提案'
+description: Factory自身の運用記録(失敗・却下・要人手・コスト・通知・デプロイ)を監査し、監査レポートとFactory自身への改善提案を生成します。提案は承認Inboxで人が承認
+  / 却下し、承認した提案だけがIssueとして起票されます。
+value:
+  modules:
+    - id: audit_prepare
+      summary: '[SF-5-2/1] 証跡の収集と作業領域の準備'
+      value:
+        type: script
+        input_transforms:
+          period_end:
+            type: javascript
+            expr: flow_input.period_end
+          period_start:
+            type: javascript
+            expr: flow_input.period_start
+          unaudited_gap_days:
+            type: javascript
+            expr: flow_input.unaudited_gap_days
+          work_item_id:
+            type: javascript
+            expr: flow_input.work_item_id
+        path: f/factory/steps/audit_prepare
+    - id: audit_generate
+      summary: '[SF-5-2/2] 監査レポートと提案の生成(Claude)'
+      value:
+        type: script
+        input_transforms:
+          evidence_markdown:
+            type: javascript
+            expr: results.audit_prepare.evidence_markdown
+          factory_clone_dir:
+            type: javascript
+            expr: results.audit_prepare.factory_clone_dir
+          metrics:
+            type: javascript
+            expr: results.audit_prepare.metrics
+          period_end:
+            type: javascript
+            expr: flow_input.period_end
+          period_start:
+            type: javascript
+            expr: flow_input.period_start
+          unaudited_gap_days:
+            type: javascript
+            expr: flow_input.unaudited_gap_days
+          work_item_id:
+            type: javascript
+            expr: flow_input.work_item_id
+        path: f/factory/steps/audit_generate
+      retry:
+        constant:
+          attempts: 2
+          seconds: 60
+      skip_if:
+        expr: results.audit_prepare.skip === true
+  failure_module:
+    id: failure
+    value:
+      type: script
+      input_transforms:
+        error:
+          type: javascript
+          expr: error
+        path:
+          type: static
+          value: f/factory/audit
+        work_item_id:
+          type: javascript
+          expr: flow_input.work_item_id
+      path: f/factory/on_error_flow
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  order:
+    - work_item_id
+    - period_start
+    - period_end
+    - unaudited_gap_days
+  properties:
+    period_end:
+      type: string
+      description: 監査対象期間の終端(ISO 8601、この時刻は含みません)。
+    period_start:
+      type: string
+      description: 監査対象期間の開始(ISO 8601)。
+    unaudited_gap_days:
+      type: integer
+      description: 前回のレポートとこの期間の間で監査されなかった日数。
+      default: 0
+    work_item_id:
+      type: integer
+      description: 監査の作業項目のID(audit_kickoffが作成します)。
+  required:
+    - work_item_id
+    - period_start
+    - period_end

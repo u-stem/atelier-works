@@ -1,0 +1,22 @@
+summary: ''
+description: ''
+lock: '!inline f/factory/audit_kickoff.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties:
+    days:
+      type: number
+      description: ''
+      default: 7
+    force:
+      type: boolean
+      description: ''
+      default: false
+    source:
+      type: string
+      description: ''
+      default: manual
+      originalType: string
+  required: []

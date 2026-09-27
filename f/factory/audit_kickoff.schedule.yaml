@@ -1,0 +1,16 @@
+summary: '[SF-5-1] 週次監査の起動'
+description: >-
+  毎週月曜09:30(Asia/Tokyo)に実行します。前回の監査レポート以降の運用記録(失敗・却下・要人手・コスト・通知・デプロイ)に行動につながる記録があれば、監査の作業項目を作成して監査フローを起動します。記録が無い場合、別の監査が実行中の場合、日次予算を超過している場合は何もしません。
+args:
+  days: 7
+  force: false
+  source: schedule
+cron_version: v2
+enabled: true
+is_flow: false
+no_flow_overlap: true
+on_failure: f/factory/on_error_schedule
+schedule: 0 30 9 * * 1
+script_path: f/factory/audit_kickoff
+timezone: Asia/Tokyo
+ws_error_handler_muted: false

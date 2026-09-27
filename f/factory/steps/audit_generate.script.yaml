@@ -1,0 +1,49 @@
+summary: ''
+description: ''
+lock: '!inline f/factory/steps/audit_generate.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties:
+    evidence_markdown:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    factory_clone_dir:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    metrics:
+      type: object
+      description: ''
+      default: null
+      format: resource-record
+    period_end:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    period_start:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    unaudited_gap_days:
+      type: number
+      description: ''
+      default: null
+    work_item_id:
+      type: number
+      description: ''
+      default: null
+  required:
+    - work_item_id
+    - period_start
+    - period_end
+    - unaudited_gap_days
+    - evidence_markdown
+    - metrics
+    - factory_clone_dir

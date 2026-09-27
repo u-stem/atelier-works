@@ -1,0 +1,31 @@
+summary: ''
+description: ''
+lock: '!inline f/factory/steps/audit_prepare.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties:
+    period_end:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    period_start:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    unaudited_gap_days:
+      type: number
+      description: ''
+      default: null
+    work_item_id:
+      type: number
+      description: ''
+      default: null
+  required:
+    - work_item_id
+    - period_start
+    - period_end
+    - unaudited_gap_days
