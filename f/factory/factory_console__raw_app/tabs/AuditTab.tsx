@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Markdown } from "../components/Markdown";
 import { Skeleton } from "../components/Skeleton";
 import { describeError, kickoffAudit, queryConsole } from "../lib/api";
-import { toRows } from "../lib/coerce";
+import { isRecord, numOrNull, toRows } from "../lib/coerce";
 import { collectDeepLinkCandidates, parseAuditDeepLink } from "../lib/deepLink";
 import { type AuditDocRow, toAuditDocRow, toAuditIndexRow } from "../lib/types";
 import { useConsoleQuery } from "../lib/useConsoleQuery";
@@ -21,16 +21,15 @@ const SKIP_REASONS: Record<string, string> = {
 };
 
 function describeKickoff(result: unknown): string {
-  if (typeof result !== "object" || result === null)
-    return "起動結果を読み取れませんでした";
-  const record: Record<string, unknown> = Object.fromEntries(
-    Object.entries(result),
-  );
-  if (record.skipped === true) {
-    const reason = typeof record.reason === "string" ? record.reason : "";
+  if (!isRecord(result)) return "起動結果を読み取れませんでした";
+  if (result.skipped === true) {
+    const reason = typeof result.reason === "string" ? result.reason : "";
     return `スキップしました: ${SKIP_REASONS[reason] ?? reason}`;
   }
-  return `監査を起動しました(work_item_id ${String(record.work_item_id)})`;
+  const workItemId = numOrNull(result.work_item_id);
+  return workItemId === null
+    ? "監査を起動しました"
+    : `監査を起動しました(work_item_id ${workItemId})`;
 }
 
 export function AuditTab(): React.ReactElement {
@@ -40,8 +39,6 @@ export function AuditTab(): React.ReactElement {
     { limit: 100, days: 3650 },
   );
   const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [doc, setDoc] = useState<AuditDocRow | null>(null);
-  const [docError, setDocError] = useState<string | null>(null);
   const [days, setDays] = useState("7");
   const [kickoffMessage, setKickoffMessage] = useState<string | null>(null);
   const [kickoffPending, setKickoffPending] = useState(false);
@@ -50,25 +47,6 @@ export function AuditTab(): React.ReactElement {
     const link = parseAuditDeepLink(collectDeepLinkCandidates());
     if (link !== null) setSelectedId(link.work_item_id);
   }, []);
-
-  useEffect(() => {
-    if (selectedId === null) {
-      setDoc(null);
-      return;
-    }
-    let cancelled = false;
-    setDocError(null);
-    queryConsole("audit_doc", 1, 3650, selectedId)
-      .then((result) => {
-        if (!cancelled) setDoc(toRows(result).map(toAuditDocRow)[0] ?? null);
-      })
-      .catch((caught: unknown) => {
-        if (!cancelled) setDocError(describeError(caught));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedId]);
 
   async function handleKickoff(): Promise<void> {
     setKickoffPending(true);
@@ -169,30 +147,66 @@ export function AuditTab(): React.ReactElement {
               左の一覧からレポートを選択してください。
             </p>
           </div>
-        ) : docError !== null ? (
-          <p className="error-banner">{docError}</p>
-        ) : doc === null ? (
-          <Skeleton />
         ) : (
-          <div className="confluence-doc">
-            <div className="confluence-doc-header">
-              <h1 className="confluence-doc-title">
-                監査レポート {doc.period_label}
-              </h1>
-              <div className="confluence-doc-meta">
-                <span>{doc.work_item_status}</span>
-                {" ・ "}提案{" "}
-                {doc.pending_count + doc.approved_count + doc.rejected_count} 件
-                {" ・ "}work_item_id {doc.work_item_id}
-              </div>
-            </div>
-            <div className="confluence-doc-body">
-              <div className="confluence-doc-content">
-                <Markdown markdown={doc.markdown} />
-              </div>
-            </div>
-          </div>
+          <AuditDetail key={selectedId} workItemId={selectedId} />
         )}
+      </div>
+    </div>
+  );
+}
+
+/** The detail pane for one audit report — fetches "audit_doc" for
+ * `workItemId` and owns its own load state. Mounted with `key={selectedId}`
+ * by the caller (same pattern as RequirementsTab.tsx's `RequirementsDetail`)
+ * so switching the selected report always starts from a clean `doc: null`
+ * state instead of momentarily showing the previous report's content while
+ * the new one loads. */
+function AuditDetail({
+  workItemId,
+}: {
+  workItemId: number;
+}): React.ReactElement {
+  const [doc, setDoc] = useState<AuditDocRow | null>(null);
+  const [docError, setDocError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setDocError(null);
+    queryConsole("audit_doc", 1, 3650, workItemId)
+      .then((result) => {
+        if (!cancelled) setDoc(toRows(result).map(toAuditDocRow)[0] ?? null);
+      })
+      .catch((caught: unknown) => {
+        if (!cancelled) setDocError(describeError(caught));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [workItemId]);
+
+  if (docError !== null) {
+    return <p className="error-banner">{docError}</p>;
+  }
+  if (doc === null) {
+    return <Skeleton />;
+  }
+  return (
+    <div className="confluence-doc">
+      <div className="confluence-doc-header">
+        <h1 className="confluence-doc-title">
+          監査レポート {doc.period_label}
+        </h1>
+        <div className="confluence-doc-meta">
+          <span>{doc.work_item_status}</span>
+          {" ・ "}提案{" "}
+          {doc.pending_count + doc.approved_count + doc.rejected_count} 件
+          {" ・ "}work_item_id {doc.work_item_id}
+        </div>
+      </div>
+      <div className="confluence-doc-body">
+        <div className="confluence-doc-content">
+          <Markdown markdown={doc.markdown} />
+        </div>
       </div>
     </div>
   );
