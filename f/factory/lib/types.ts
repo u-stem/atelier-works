@@ -142,15 +142,20 @@ export function assertBranchName(name: string): void {
 // ---------------------------------------------------------------------------
 
 /** How the work item entered the factory. */
-export type WorkItemSource = "issue" | "manual";
-export const WORK_ITEM_SOURCES: readonly WorkItemSource[] = ["issue", "manual"];
+export type WorkItemSource = "issue" | "manual" | "schedule";
+export const WORK_ITEM_SOURCES: readonly WorkItemSource[] = [
+  "issue",
+  "manual",
+  "schedule",
+];
 
 /** What kind of GitHub object this work item's cycle is driving. */
-export type WorkItemKind = "issue" | "pr_review" | "pr_fix";
+export type WorkItemKind = "issue" | "pr_review" | "pr_fix" | "audit";
 export const WORK_ITEM_KINDS: readonly WorkItemKind[] = [
   "issue",
   "pr_review",
   "pr_fix",
+  "audit",
 ];
 
 /**
@@ -174,7 +179,9 @@ export type WorkItemStatus =
   | "needs_human"
   | "failed"
   | "expired"
-  | "cancelled";
+  | "cancelled"
+  | "auditing"
+  | "audited";
 
 export const WORK_ITEM_STATUSES: readonly WorkItemStatus[] = [
   "picked",
@@ -193,6 +200,8 @@ export const WORK_ITEM_STATUSES: readonly WorkItemStatus[] = [
   "failed",
   "expired",
   "cancelled",
+  "auditing",
+  "audited",
 ];
 
 /** Terminal statuses (docs/architecture.md "状態遷移"; mirrored by the
@@ -210,6 +219,7 @@ export const TERMINAL_WORK_ITEM_STATUSES: readonly WorkItemStatus[] = [
   "reviewed",
   "rereview_requested",
   "blocked",
+  "audited",
 ];
 
 /**
@@ -451,26 +461,29 @@ export type FixRoundRecord = {
 
 export type IssueProposalStatus = "pending" | "approved" | "rejected";
 
-/** One row of factory.issue_proposals. */
-export type IssueProposal = {
+/** What raised this proposal: a pr_fix `propose_issue` reply, or an audit
+ * report (工程5). */
+export type IssueProposalOrigin = "pr_fix" | "audit";
+export const ISSUE_PROPOSAL_ORIGINS: readonly IssueProposalOrigin[] = [
+  "pr_fix",
+  "audit",
+];
+
+type IssueProposalBase = {
   id: number;
   work_item_id: number;
-  /** The GitHub review comment (or plain issue comment) this proposal's
-   * reply is threaded under — the same id as the originating FixReply's
-   * `review_comment_id`. */
-  review_comment_id: number;
-  /** GraphQL review-thread node id, when `pr_fix_finish.ts` could resolve
-   * one for `review_comment_id` — `null` for a plain issue comment, or when
-   * the match attempt failed (e.g. the comment's anchor line moved). */
-  thread_id: string | null;
   title: string;
   body: string;
   status: IssueProposalStatus;
   decided_by: string | null;
   decision_reason: string | null;
-  /** Whether the created Issue also got `factory_config.trigger_label`
-   * (entering the requirements pipeline) — `null` until decided, and on a
-   * rejection (never applicable there). */
+  /** Records the decider's request for `factory_config.trigger_label` on
+   * the Issue this proposal creates (entering the requirements pipeline) —
+   * `null` until decided, and on a rejection (never applicable there).
+   * Whether the label was actually attached is decided separately at apply
+   * time (`resolveFactoryLabel` in steps/issue_proposal_apply.ts), which can
+   * refuse an `audit` proposal's request when `factory_repo` is not allowed
+   * by `factory_config` — this column keeps the requested value regardless. */
   with_factory_label: boolean | null;
   created_issue_number: number | null;
   created_issue_url: string | null;
@@ -479,10 +492,52 @@ export type IssueProposal = {
    * `postIssueComment`) — set by pr_fix_finish.ts at insert time from the
    * same signal it uses to pick its own reply target, so
    * issue_proposal_apply.ts's decision reply can pick the right one
-   * deterministically instead of guessing. */
+   * deterministically instead of guessing. For `origin = "audit"` it is
+   * always `false` and never read. */
   is_inline: boolean;
   created_at: Date;
   decided_at: Date | null;
+};
+
+/** A proposal raised by pr_fix's `propose_issue` reply: threaded under a
+ * GitHub review/issue comment. */
+export type PrFixIssueProposal = IssueProposalBase & {
+  origin: "pr_fix";
+  /** The GitHub review comment (or plain issue comment) this proposal's
+   * reply is threaded under — the same id as the originating FixReply's
+   * `review_comment_id`. */
+  review_comment_id: number;
+  /** GraphQL review-thread node id, when `pr_fix_finish.ts` could resolve
+   * one for `review_comment_id` — `null` for a plain issue comment, or when
+   * the match attempt failed (e.g. the comment's anchor line moved). */
+  thread_id: string | null;
+  audit_report_id: null;
+  position: null;
+};
+
+/** A proposal raised by an audit report (工程5): no GitHub thread, keyed by
+ * (audit_report_id, position) instead. */
+export type AuditIssueProposal = IssueProposalBase & {
+  origin: "audit";
+  review_comment_id: null;
+  thread_id: null;
+  audit_report_id: number;
+  position: number;
+};
+
+/** One row of factory.issue_proposals. */
+export type IssueProposal = PrFixIssueProposal | AuditIssueProposal;
+
+/** One row of factory.audit_reports. */
+export type AuditReport = {
+  id: number;
+  work_item_id: number;
+  period_start: Date;
+  period_end: Date;
+  summary: string;
+  markdown: string;
+  metrics: Record<string, unknown>;
+  created_at: Date;
 };
 
 /** Payload for db.recordFailure: one row of factory.job_failures. */
@@ -584,4 +639,7 @@ export type FactoryConfig = {
    * pr_fix_verify diff before it falls back to needs_human (M6 security
    * review). */
   max_fix_diff_lines: number;
+  /** Upper bound (days) on how far back one audit period may reach when
+   * the previous report is older than that (工程5). */
+  max_lookback_days: number;
 };

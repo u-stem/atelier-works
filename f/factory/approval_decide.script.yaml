@@ -24,6 +24,7 @@ schema:
       type: object
       description: '決定に付随する追加オプション(例: Issue化提案のwith_factory_label)。省略時は空オブジェクトです。'
       default: {}
+      format: resource-record
     reason:
       type: string
       description: 差し戻す理由。承認する場合は空でも構いません。

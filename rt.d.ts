@@ -24,6 +24,7 @@ declare namespace RT {
     worktree_ttl_days: number,
     claude_timeout_sec: number,
     max_fix_diff_lines: number,
+    max_lookback_days: number,
     windmill_public_url: string,
     max_fix_changed_files: number,
     allowed_check_commands: string[],

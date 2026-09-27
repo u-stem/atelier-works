@@ -67,7 +67,8 @@ type DefaultableField =
   | "repo_allowlist"
   | "diff_max_lines"
   | "max_fix_changed_files"
-  | "max_fix_diff_lines";
+  | "max_fix_diff_lines"
+  | "max_lookback_days";
 
 /** Defaults for every field in DefaultableField, typed against FactoryConfig
  * itself so each value is checked without a type assertion. */
@@ -104,6 +105,9 @@ const DEFAULTS: Pick<FactoryConfig, DefaultableField> = {
   // New in the M6 security review: pr_fix_verify diff-size limits.
   max_fix_changed_files: 30,
   max_fix_diff_lines: 1500,
+  // New in 工程5 (audit): bounds how far a first/recovered audit period can
+  // reach back when the previous report's end is older than this.
+  max_lookback_days: 28,
 };
 
 function isFactoryOwner(value: unknown): value is FactoryOwner {
@@ -331,6 +335,11 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
       raw,
       "max_fix_diff_lines",
       DEFAULTS.max_fix_diff_lines,
+    ),
+    max_lookback_days: positiveIntegerField(
+      raw,
+      "max_lookback_days",
+      DEFAULTS.max_lookback_days,
     ),
   };
 }

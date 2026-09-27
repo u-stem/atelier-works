@@ -9,10 +9,12 @@ import { describe, expect, test } from "bun:test";
 import type { ReviewThread } from "../../f/factory/lib/github.ts";
 import type { FixReply } from "../../f/factory/lib/types.ts";
 import {
+  buildAuditProposalBody,
   buildIssueProposalBody,
   buildIssueProposalReason,
   buildIssueProposalTitle,
   decidePostProposalStatus,
+  decidePostProposalTransition,
   matchReviewThreadForComment,
   renderIssueProposalApprovedReply,
   renderIssueProposalRejectedReply,
@@ -195,6 +197,46 @@ describe("buildIssueProposalTitle", () => {
   test("removes half-width spaces between ASCII and Japanese", () => {
     expect(buildIssueProposalTitle("greet と shout の敬称処理を共通化")).toBe(
       "greetとshoutの敬称処理を共通化",
+    );
+  });
+});
+
+describe("buildAuditProposalBody", () => {
+  test("appends the audit-report provenance line", () => {
+    const body = buildAuditProposalBody("本文", "2026-09-22〜2026-09-28");
+    expect(body).toBe(
+      "本文\n\nこのIssueは監査レポート(2026-09-22〜2026-09-28)から起票されました",
+    );
+  });
+});
+
+describe("decidePostProposalTransition", () => {
+  test("keeps the status while proposals are pending", () => {
+    expect(decidePostProposalTransition("audit", 1, false)).toEqual({
+      action: "keep",
+    });
+  });
+
+  test("moves an audit from awaiting_approval to audited", () => {
+    expect(decidePostProposalTransition("audit", 0, false)).toEqual({
+      action: "swap",
+      expectedFrom: "awaiting_approval",
+      toStatus: "audited",
+    });
+  });
+
+  test("moves a pr_fix from needs_human to rereview_requested when a commit was pushed", () => {
+    expect(decidePostProposalTransition("pr_fix", 0, true)).toEqual({
+      action: "swap",
+      expectedFrom: "needs_human",
+      toStatus: "rereview_requested",
+    });
+  });
+
+  test("moves a pr_fix from needs_human to reviewed when nothing was pushed", () => {
+    const transition = decidePostProposalTransition("pr_fix", 0, false);
+    expect(transition.action === "swap" && transition.toStatus).toBe(
+      "reviewed",
     );
   });
 });

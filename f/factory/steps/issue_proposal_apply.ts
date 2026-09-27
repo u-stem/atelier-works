@@ -8,21 +8,42 @@
 // this script only carries out the GitHub/DB side effects once a decision is
 // already on record:
 //
-//   - approve: creates the Issue in the PR's repo (optionally with
+//   - approve: creates the Issue in the target repo (optionally with
 //     `factory_config.trigger_label`, so it enters the requirements
-//     pipeline the same way a human-labeled Issue would), replies in the
-//     review thread naming the new Issue, and resolves the thread.
-//   - reject: replies in the review thread with the human's reason and
-//     leaves the thread open (a human, not the factory, decides what
-//     happens to it next).
+//     pipeline the same way a human-labeled Issue would); for a `pr_fix`
+//     proposal, also replies in the review thread naming the new Issue and
+//     resolves the thread.
+//   - reject: for a `pr_fix` proposal, replies in the review thread with
+//     the human's reason and leaves the thread open (a human, not the
+//     factory, decides what happens to it next).
+//
+// Origin branching (`IssueProposal.origin`, lib/types.ts; 工程5 audit): a
+// `pr_fix` proposal is threaded under a GitHub review/issue comment on its
+// originating PR — the Issue body embeds that PR's URL/number
+// (`buildIssueProposalBody`), and the reply/thread-resolve above run
+// against `review_comment_id`/`thread_id`. An `audit` proposal instead
+// comes from a `factory.audit_reports` row (no originating PR, no thread):
+// the Issue body cites the audited period instead
+// (`buildAuditProposalBody` + `formatAuditPeriodLabel`,
+// lib/audit_support.ts), and the reply/resolve step is skipped outright —
+// there is nothing to reply into. The Issue itself is created in
+// `factory_config.factory_repo` (an `audit` work item's own `owner`/`repo`
+// are set to that repo at creation), so attaching `trigger_label` also
+// requires that repo to be `isRepoAllowed` (lib/config.ts) —
+// `resolveFactoryLabel` below refuses the label (logging a warning) rather
+// than attaching it to a disallowed repo; a `pr_fix` proposal has no such
+// restriction, since its PR's repo was already gated far earlier in that
+// pipeline.
 //
 // Once every pending proposal for the underlying work item has been
-// decided, the work item's status swaps off `needs_human` — to
+// decided, the work item's status swaps off its waiting status
+// (`decidePostProposalTransition`, pr_workflow_support.ts, kind-aware): a
+// `pr_fix`/`pr_review` work item moves off `needs_human` — to
 // `rereview_requested` when the round that produced the proposal(s) also
-// pushed a commit, or `reviewed` when it did not (see
-// decidePostProposalStatus, pr_workflow_support.ts). 2026-09-27 PR label
-// cleanup: this used to also swap a PR state label; there is no more state
-// label to swap.
+// pushed a commit, or `reviewed` when it did not; an `audit` work item
+// moves off `awaiting_approval` straight to `audited` (it has no fix round
+// to check). 2026-09-27 PR label cleanup: this used to also swap a PR
+// state label; there is no more state label to swap.
 //
 // Note (docs/security.md): Issue creation uses the same GitHub PAT as every
 // other factory-authored GitHub call — no separate credential.
@@ -79,11 +100,13 @@
 // on_error_schedule.ts's own self-contained handling).
 
 import * as wmill from "windmill-client@1.817.0";
-import { loadConfig } from "../lib/config.ts";
+import { formatAuditPeriodLabel } from "../lib/audit_support.ts";
+import { isRepoAllowed, loadConfig } from "../lib/config.ts";
 import {
   countPendingIssueProposals,
   decideIssueProposal,
   getApprovalRequest,
+  getAuditReportByWorkItem,
   getIssueProposal,
   getWorkItem,
   latestFixRound,
@@ -103,15 +126,16 @@ import {
   withMarker,
 } from "../lib/github.ts";
 import { type Logger, logger, maskSecrets } from "../lib/log.ts";
-import { isBoolean } from "../lib/types.ts";
+import { type IssueProposalOrigin, isBoolean } from "../lib/types.ts";
 import { runCommand } from "../lib/workspace.ts";
 import {
   appendIssueProposalMarker,
+  buildAuditProposalBody,
   buildIssueProposalBody,
   buildIssueProposalTitle,
   chooseIssueProposalReplyTarget,
   classifyIssueProposalDecision,
-  decidePostProposalStatus,
+  decidePostProposalTransition,
   hasIssueProposalMarker,
   issueProposalMarkerSearchTerm,
   renderIssueProposalApprovedReply,
@@ -121,6 +145,7 @@ import {
 export type IssueProposalApplyResult = {
   readonly ok: boolean;
   readonly status: string;
+  readonly label_applied: boolean;
 };
 
 /** Reads `decision_options.with_factory_label` (a decider-side
@@ -132,6 +157,46 @@ export function readWithFactoryLabel(
   return isBoolean(decisionOptions.with_factory_label)
     ? decisionOptions.with_factory_label
     : false;
+}
+
+/** Whether to attach `factory_config.trigger_label` to the Issue this
+ * approval creates: a `pr_fix` proposal follows the requester's own
+ * checkbox unconditionally, but an `audit` proposal's Issue lands in
+ * whatever repo `factory_config.factory_repo` names — the same repo an
+ * `audit` work item's `owner`/`repo` are set to (工程5) — so it is only
+ * allowed to re-enter the requirements pipeline (via the trigger label)
+ * when that repo is itself allowed by `factory_config` (owners /
+ * repo_allowlist); refusing otherwise, rather than silently dropping the
+ * label, is surfaced to the caller as a `reason` to log (pure, for
+ * testing). */
+export function resolveFactoryLabel(input: {
+  readonly requested: boolean;
+  readonly origin: IssueProposalOrigin;
+  readonly repoAllowed: boolean;
+}): { readonly apply: boolean; readonly reason: string | null } {
+  if (!input.requested) return { apply: false, reason: null };
+  if (input.origin === "audit" && !input.repoAllowed) {
+    return {
+      apply: false,
+      reason:
+        "factory_repo is not allowed by factory_config (owners / repo_allowlist)",
+    };
+  }
+  return { apply: true, reason: null };
+}
+
+/** Narrows `workItem.pr_number` to `number`, throwing the same invariant
+ * violation the original single, unconditional check used to raise — now
+ * only reachable from a `pr_fix` proposal's branches, since an `audit`
+ * proposal's work item legitimately has no `pr_number` (pure aside from the
+ * throw; not itself unit-tested, matching `run`). */
+function requirePrNumber(prNumber: number | null, workItemId: number): number {
+  if (prNumber === null) {
+    throw new Error(
+      `issue_proposal_apply: work item ${workItemId} has no pr_number`,
+    );
+  }
+  return prNumber;
 }
 
 async function run(
@@ -154,7 +219,7 @@ async function run(
       approval_request_id,
       status: request.status,
     });
-    return { ok: true, status: "no_op" };
+    return { ok: true, status: "no_op", label_applied: false };
   }
   if (request.decided_by === null) {
     throw new Error(
@@ -189,7 +254,7 @@ async function run(
       proposal_id,
       created_issue_number: classification.created_issue_number,
     });
-    return { ok: true, status: "no_op" };
+    return { ok: true, status: "no_op", label_applied: false };
   }
 
   const workItem = await getWorkItem(proposal.work_item_id);
@@ -198,41 +263,60 @@ async function run(
       `issue_proposal_apply: work item ${proposal.work_item_id} for issue proposal ${proposal_id} not found`,
     );
   }
-  if (workItem.pr_number === null) {
-    throw new Error(
-      `issue_proposal_apply: work item ${proposal.work_item_id} has no pr_number`,
-    );
-  }
-  const prNumber = workItem.pr_number;
   const owner = workItem.owner;
   const repo = workItem.repo;
   const workItemId = workItem.id;
-  const reviewCommentId = proposal.review_comment_id;
-  const isInline = proposal.is_inline;
-  const threadId = proposal.thread_id;
 
   const config = await loadConfig(() =>
     wmill.getResource("f/factory/factory_config"),
   );
   const ghToken = await wmill.getVariable("f/factory/github_token");
   const client: GhClient = { run: runCommand, ghToken };
-  const prUrl = `https://github.com/${owner}/${repo}/pull/${String(prNumber)}`;
 
-  async function postDecisionReply(body: string): Promise<void> {
-    const target = chooseIssueProposalReplyTarget(isInline);
+  // Issue body: a pr_fix proposal embeds the originating PR's own URL/number
+  // (buildIssueProposalBody); an audit proposal has no PR to link, so it
+  // names the audited period instead (buildAuditProposalBody, sourced from
+  // the audit report this proposal was raised from).
+  let body: string;
+  if (proposal.origin === "pr_fix") {
+    const prNumber = requirePrNumber(workItem.pr_number, proposal.work_item_id);
+    const prUrl = `https://github.com/${owner}/${repo}/pull/${String(prNumber)}`;
+    body = buildIssueProposalBody(proposal.body, prUrl, prNumber);
+  } else {
+    const report = await getAuditReportByWorkItem(workItem.id);
+    if (report === null) {
+      throw new Error(
+        `issue_proposal_apply: audit report for work item ${String(workItem.id)} not found`,
+      );
+    }
+    body = buildAuditProposalBody(
+      proposal.body,
+      formatAuditPeriodLabel(report.period_start, report.period_end),
+    );
+  }
+  body = appendIssueProposalMarker(body, proposal_id);
+
+  async function postDecisionReply(
+    p: { readonly review_comment_id: number; readonly is_inline: boolean },
+    prNumber: number,
+    replyBody: string,
+  ): Promise<void> {
+    const target = chooseIssueProposalReplyTarget(p.is_inline);
     if (target === "inline") {
       await replyReviewComment(
         client,
         owner,
         repo,
         prNumber,
-        reviewCommentId,
-        body,
+        p.review_comment_id,
+        replyBody,
       );
     } else {
-      await postIssueComment(client, owner, repo, prNumber, body);
+      await postIssueComment(client, owner, repo, prNumber, replyBody);
     }
   }
+
+  let labelApplied = false;
 
   if (decision === "approve") {
     // Optimistic lock: only actually transitions the row when it is still
@@ -263,6 +347,9 @@ async function run(
         number: current.created_issue_number,
         htmlUrl: current.created_issue_url ?? "",
       };
+      // The Issue (and any label on it) was already decided by an earlier
+      // call — reflect that recorded decision rather than re-deciding it.
+      labelApplied = current.with_factory_label ?? false;
     } else {
       try {
         const markerSearchTerm = issueProposalMarkerSearchTerm(proposal_id);
@@ -277,17 +364,27 @@ async function run(
           hasIssueProposalMarker(existingIssue.body, proposal_id)
         ) {
           created = existingIssue;
+          // Same rationale as above: the Issue (found via marker search
+          // instead of the DB row) was already created by an earlier,
+          // presumably-crashed call, so nothing new is decided here.
+          labelApplied = current.with_factory_label ?? false;
         } else {
-          const withLabel = current.with_factory_label ?? false;
-          const body = appendIssueProposalMarker(
-            buildIssueProposalBody(proposal.body, prUrl, prNumber),
-            proposal_id,
-          );
+          const labelDecision = resolveFactoryLabel({
+            requested: current.with_factory_label ?? false,
+            origin: proposal.origin,
+            repoAllowed: isRepoAllowed(config, owner, repo),
+          });
+          if (!labelDecision.apply && labelDecision.reason !== null) {
+            log.warn("factory label not applied", {
+              reason: labelDecision.reason,
+            });
+          }
           created = await createIssue(client, owner, repo, {
             title: buildIssueProposalTitle(proposal.title),
             body,
-            ...(withLabel ? { labels: [config.trigger_label] } : {}),
+            ...(labelDecision.apply ? { labels: [config.trigger_label] } : {}),
           });
+          labelApplied = labelDecision.apply;
         }
       } catch (err) {
         // No Issue number is known yet at this point, so the row would
@@ -306,20 +403,31 @@ async function run(
       });
     }
 
-    const replyBody = withMarker(
-      "pr_fix",
-      workItemId,
-      renderIssueProposalApprovedReply(created.number),
-    );
-    await postDecisionReply(replyBody);
-    if (threadId !== null) {
-      try {
-        await resolveReviewThread(client, threadId);
-      } catch (err) {
-        log.warn("failed to resolve the review thread", {
-          thread_id: threadId,
-          error: maskSecrets(err instanceof Error ? err.message : String(err)),
-        });
+    // A pr_fix proposal's reply/resolve targets the GitHub review thread it
+    // was raised from; an audit proposal has neither (no originating PR
+    // comment), so both are skipped for it entirely.
+    if (proposal.origin === "pr_fix") {
+      const prNumber = requirePrNumber(
+        workItem.pr_number,
+        proposal.work_item_id,
+      );
+      const replyBody = withMarker(
+        "pr_fix",
+        workItemId,
+        renderIssueProposalApprovedReply(created.number),
+      );
+      await postDecisionReply(proposal, prNumber, replyBody);
+      if (proposal.thread_id !== null) {
+        try {
+          await resolveReviewThread(client, proposal.thread_id);
+        } catch (err) {
+          log.warn("failed to resolve the review thread", {
+            thread_id: proposal.thread_id,
+            error: maskSecrets(
+              err instanceof Error ? err.message : String(err),
+            ),
+          });
+        }
       }
     }
   } else {
@@ -333,50 +441,64 @@ async function run(
       created_issue_number: null,
       created_issue_url: null,
     });
-    const replyBody = withMarker(
-      "pr_fix",
-      workItemId,
-      renderIssueProposalRejectedReply(reason),
-    );
-    await postDecisionReply(replyBody);
+    if (proposal.origin === "pr_fix") {
+      const prNumber = requirePrNumber(
+        workItem.pr_number,
+        proposal.work_item_id,
+      );
+      const replyBody = withMarker(
+        "pr_fix",
+        workItemId,
+        renderIssueProposalRejectedReply(reason),
+      );
+      await postDecisionReply(proposal, prNumber, replyBody);
+    }
   }
 
   const remaining = await countPendingIssueProposals(workItemId);
-  const round = await latestFixRound(workItemId);
-  const committedThisRound = (round?.commit_shas.length ?? 0) > 0;
-  const statusDecision = decidePostProposalStatus(
+  const committedThisRound =
+    proposal.origin === "pr_fix" &&
+    ((await latestFixRound(workItemId))?.commit_shas.length ?? 0) > 0;
+  const transition = decidePostProposalTransition(
+    workItem.kind,
     remaining,
     committedThisRound,
   );
-  if (statusDecision.action === "swap") {
+  if (transition.action === "swap") {
     await updateStatusIfCurrent(
       workItemId,
-      "needs_human",
-      statusDecision.toStatus,
-      `issue_proposal_apply: every issue proposal decided (${statusDecision.toStatus})`,
+      transition.expectedFrom,
+      transition.toStatus,
+      `issue_proposal_apply: every issue proposal decided (${transition.toStatus})`,
     );
 
     // A tiny window remains between the count above and the status write
     // just made, during which another pr_fix round could record a
-    // brand-new pending proposal for this same work item. Re-checking once
-    // more here catches that: if a new pending proposal appeared, put the
-    // work item straight back to needs_human rather than leaving a status
-    // that implies "nothing pending" when one actually is. Not a full fix (a
-    // still-tinier window remains between this re-check and its own write)
-    // — no transaction machinery, matching the original implementation this
-    // script was ported from.
+    // brand-new pending proposal for this same work item (an audit cannot:
+    // nothing adds proposals to an audit once it is awaiting_approval).
+    // Re-checking
+    // once more here catches that: if a new pending proposal appeared, put
+    // the work item straight back to where it was rather than leaving a
+    // status that implies "nothing pending" when one actually is. Not a
+    // full fix (a still-tinier window remains between this re-check and its
+    // own write) — no transaction machinery, matching the original
+    // implementation this script was ported from.
     const recheck = await countPendingIssueProposals(workItemId);
     if (recheck > 0) {
       await updateStatusIfCurrent(
         workItemId,
-        statusDecision.toStatus,
-        "needs_human",
+        transition.toStatus,
+        transition.expectedFrom,
         "issue_proposal_apply: a new issue proposal appeared during the status swap",
       );
     }
   }
 
-  return { ok: true, status: decision === "approve" ? "approved" : "rejected" };
+  return {
+    ok: true,
+    status: decision === "approve" ? "approved" : "rejected",
+    label_applied: labelApplied,
+  };
 }
 
 export async function main(

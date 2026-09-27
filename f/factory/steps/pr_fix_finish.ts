@@ -379,6 +379,7 @@ export async function main(
         if (proposal === null || proposal === undefined) continue;
         try {
           const proposalId = await insertIssueProposal({
+            origin: "pr_fix",
             work_item_id,
             review_comment_id: reply.review_comment_id,
             thread_id: matchReviewThreadForComment(

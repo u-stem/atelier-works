@@ -21,6 +21,7 @@ import {
   listPrReviewComments,
   listPrReviews,
   listReviewThreads,
+  parseGitHubRepoUrl,
   postIssueComment,
   removeLabel,
   replyReviewComment,
@@ -1965,5 +1966,37 @@ describe("resolveReviewThread", () => {
     await expect(
       resolveReviewThread({ run: fake.run, ghToken: "tok" }, "PRRT_1"),
     ).rejects.toThrow(/Could not resolve to a node/);
+  });
+});
+
+describe("parseGitHubRepoUrl", () => {
+  test("parses an https URL", () => {
+    expect(
+      parseGitHubRepoUrl("https://github.com/octo-owner/atelier-works"),
+    ).toEqual({
+      owner: "octo-owner",
+      repo: "atelier-works",
+    });
+  });
+
+  test("strips a trailing .git", () => {
+    expect(
+      parseGitHubRepoUrl("https://github.com/octo-owner/atelier-works.git")
+        .repo,
+    ).toBe("atelier-works");
+  });
+
+  test("rejects a non-GitHub URL", () => {
+    expect(() => parseGitHubRepoUrl("https://example.com/a/b")).toThrow();
+  });
+
+  test("normalizes an uppercase .GIT suffix and trailing slash", () => {
+    expect(parseGitHubRepoUrl("https://github.com/o/r.GIT/").repo).toBe("r");
+  });
+
+  test("never includes the raw URL (which may carry credentials) in the error message", () => {
+    expect(() =>
+      parseGitHubRepoUrl("https://user:secret@github.com/o/r"),
+    ).toThrow(/^(?!.*secret).*$/);
   });
 });

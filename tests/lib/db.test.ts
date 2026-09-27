@@ -18,6 +18,8 @@ import {
   getWorkItem,
   hasPriorReview,
   insertApprovalRequest,
+  insertAuditReport,
+  insertAuditWorkItem,
   insertCleanupRun,
   insertFixRound,
   insertIssueProposal,
@@ -873,6 +875,7 @@ describe("insertIssueProposal", () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 3 }]]);
     await insertIssueProposal(
       {
+        origin: "pr_fix",
         work_item_id: 1,
         review_comment_id: 101,
         thread_id: "PRRT_1",
@@ -889,6 +892,7 @@ describe("insertIssueProposal", () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 3 }]]);
     await insertIssueProposal(
       {
+        origin: "pr_fix",
         work_item_id: 1,
         review_comment_id: 101,
         thread_id: null,
@@ -906,6 +910,7 @@ describe("insertIssueProposal", () => {
 describe("toIssueProposal", () => {
   test("parses a factory.issue_proposals row", () => {
     const proposal = toIssueProposal({
+      origin: "pr_fix",
       id: 3,
       work_item_id: 1,
       review_comment_id: 101,
@@ -931,6 +936,85 @@ describe("toIssueProposal", () => {
   });
 });
 
+describe("toIssueProposal (origin)", () => {
+  const base = {
+    id: 1,
+    work_item_id: 2,
+    title: "t",
+    body: "b",
+    status: "pending",
+    decided_by: null,
+    decision_reason: null,
+    with_factory_label: null,
+    created_issue_number: null,
+    created_issue_url: null,
+    is_inline: true,
+    created_at: "2026-09-27T00:00:00Z",
+    decided_at: null,
+  };
+
+  test("reads an audit row with a null review_comment_id", () => {
+    const proposal = toIssueProposal({
+      ...base,
+      origin: "audit",
+      review_comment_id: null,
+      thread_id: null,
+      audit_report_id: 7,
+      position: 1,
+    });
+    expect(proposal.origin).toBe("audit");
+  });
+
+  test("rejects a pr_fix row with a null review_comment_id", () => {
+    expect(() =>
+      toIssueProposal({
+        ...base,
+        origin: "pr_fix",
+        review_comment_id: null,
+        thread_id: null,
+        audit_report_id: null,
+        position: null,
+      }),
+    ).toThrow();
+  });
+});
+
+describe("insertIssueProposal (audit)", () => {
+  test("guards the insert with ON CONFLICT (audit_report_id, position) DO NOTHING", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await insertIssueProposal(
+      {
+        origin: "audit",
+        work_item_id: 2,
+        audit_report_id: 7,
+        position: 1,
+        title: "t",
+        body: "b",
+      },
+      sql,
+    );
+    expect(calls[0]?.text).toContain(
+      "ON CONFLICT (audit_report_id, position) DO NOTHING",
+    );
+  });
+
+  test("returns the existing id when the insert conflicted", async () => {
+    const { sql } = createFakeSqlClient([[], [{ id: 9 }]]);
+    const id = await insertIssueProposal(
+      {
+        origin: "audit",
+        work_item_id: 2,
+        audit_report_id: 7,
+        position: 1,
+        title: "t",
+        body: "b",
+      },
+      sql,
+    );
+    expect(id).toBe(9);
+  });
+});
+
 describe("getIssueProposal", () => {
   test("returns null when the proposal does not exist", async () => {
     const { sql } = createFakeSqlClient([[]]);
@@ -942,6 +1026,7 @@ describe("getIssueProposal", () => {
     const { sql } = createFakeSqlClient([
       [
         {
+          origin: "pr_fix",
           id: 3,
           work_item_id: 1,
           review_comment_id: 101,
@@ -970,6 +1055,7 @@ describe("listPendingIssueProposals", () => {
     const { sql, calls } = createFakeSqlClient([
       [
         {
+          origin: "pr_fix",
           id: 3,
           work_item_id: 1,
           review_comment_id: 101,
@@ -1103,6 +1189,58 @@ describe("countPendingIssueProposals", () => {
     const { sql } = createFakeSqlClient([[]]);
     const count = await countPendingIssueProposals(1, sql);
     expect(count).toBe(0);
+  });
+});
+
+describe("insertAuditReport", () => {
+  test("guards the insert with ON CONFLICT (work_item_id) DO NOTHING", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 3 }]]);
+    await insertAuditReport(
+      {
+        work_item_id: 2,
+        period_start: new Date("2026-09-21T15:00:00Z"),
+        period_end: new Date("2026-09-28T15:00:00Z"),
+        summary: "s",
+        markdown: "# r",
+        metrics: { run_count: 1 },
+      },
+      sql,
+    );
+    expect(calls[0]?.text).toContain("ON CONFLICT (work_item_id) DO NOTHING");
+  });
+});
+
+describe("insertAuditWorkItem", () => {
+  test("returns null when the partial unique index rejects a second active audit", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    const id = await insertAuditWorkItem(
+      {
+        owner: "o",
+        repo: "r",
+        title: "監査 2026-09-22〜2026-09-28",
+        source: "schedule",
+        claimed_by: null,
+      },
+      sql,
+    );
+    expect(id).toBeNull();
+  });
+
+  test("pins the ON CONFLICT clause to the audit partial-index predicate", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await insertAuditWorkItem(
+      {
+        owner: "o",
+        repo: "r",
+        title: "監査 2026-09-22〜2026-09-28",
+        source: "schedule",
+        claimed_by: null,
+      },
+      sql,
+    );
+    expect(calls[0]?.text).toContain(
+      "ON CONFLICT (kind) WHERE kind = 'audit' AND status IN ('picked', 'auditing') DO NOTHING",
+    );
   });
 });
 

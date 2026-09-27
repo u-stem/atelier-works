@@ -4,6 +4,9 @@ import {
   assertGitHubName,
   assertSha,
   TERMINAL_WORK_ITEM_STATUSES,
+  WORK_ITEM_KINDS,
+  WORK_ITEM_SOURCES,
+  WORK_ITEM_STATUSES,
 } from "../../f/factory/lib/types.ts";
 
 describe("assertGitHubName", () => {
@@ -137,5 +140,23 @@ describe("TERMINAL_WORK_ITEM_STATUSES", () => {
     // poll_issues's reconcile only inspects non-terminal rows; a missing
     // entry here made it fail a finished pr_fix row as an orphan.
     expect(TERMINAL_WORK_ITEM_STATUSES).toContain("rereview_requested");
+  });
+});
+
+describe("audit work item vocabulary", () => {
+  test("audit is a work item kind", () => {
+    expect(WORK_ITEM_KINDS).toContain("audit");
+  });
+
+  test("schedule is a work item source", () => {
+    expect(WORK_ITEM_SOURCES).toContain("schedule");
+  });
+
+  test("auditing is a status", () => {
+    expect(WORK_ITEM_STATUSES).toContain("auditing");
+  });
+
+  test("audited is terminal", () => {
+    expect(TERMINAL_WORK_ITEM_STATUSES).toContain("audited");
   });
 });

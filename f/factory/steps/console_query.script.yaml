@@ -9,7 +9,7 @@ schema:
   properties:
     attempt:
       type: number
-      description: 'view が requirements_doc のとき、取得する試行番号(省略時は最新)。'
+      description: view が requirements_doc のとき、取得する試行番号(省略時は最新)。
       default: null
     days:
       type: number
@@ -29,7 +29,7 @@ schema:
       originalType: string
     work_item_id:
       type: number
-      description: 'view が requirements_doc のとき必須。対象の work_item_id。'
+      description: view が requirements_doc のとき必須。対象の work_item_id。
       default: null
   required:
     - view
