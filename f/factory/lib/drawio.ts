@@ -3,7 +3,7 @@
 // Encoding follows the diagrams.net URL-fragment convention: the XML is
 // URI-encoded, DEFLATE-compressed (raw, no zlib header — matches pako's
 // `deflateRaw`, confirmed against `node:zlib`'s `deflateRawSync` during the
-// M4 contract smoke), base64-encoded, then made URL-safe. The fragment
+// M4 contract smoke), then standard base64-encoded (see toViewerUrl). The fragment
 // (`#...`) is never sent to the diagrams.net server by the browser, but the
 // resulting URL is shared verbatim in Issue comments / Discord (see
 // docs/security.md "draw.io ビューアーのプライバシー").
@@ -71,15 +71,16 @@ export function validateDrawioXml(xml: string): DrawioValidationResult {
   return { valid: true };
 }
 
-function toUrlSafeBase64(base64: string): string {
-  return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
 /**
  * Encode a draw.io XML document as a `viewer.diagrams.net` URL fragment
- * (encodeURIComponent → raw DEFLATE → base64 → URL-safe). Returns `null`
- * when the encoded fragment exceeds 8KB (spec-cycle2.md §1 drawio.ts) —
- * callers should fall back to embedding the diagram name only.
+ * (encodeURIComponent → raw DEFLATE → standard base64). The viewer decodes
+ * `#R<data>` with `atob()`, which only accepts standard base64: a URL-safe
+ * variant (`-` / `_`, padding stripped) made it fail with "The string to be
+ * decoded is not correctly encoded" (observed in the Console's iframe).
+ * `+`, `/` and `=` are legal inside a URL fragment, so no further escaping
+ * is applied. Returns `null` when the encoded fragment exceeds 8KB
+ * (spec-cycle2.md §1 drawio.ts) — callers should fall back to embedding
+ * the diagram name only.
  */
 export function toViewerUrl(
   xml: string,
@@ -88,13 +89,12 @@ export function toViewerUrl(
   const uriEncoded = encodeURIComponent(xml);
   const deflated = Bun.deflateSync(new TextEncoder().encode(uriEncoded));
   const base64 = Buffer.from(deflated).toString("base64");
-  const urlSafe = toUrlSafeBase64(base64);
 
-  if (byteLength(urlSafe) > MAX_VIEWER_URL_FRAGMENT_BYTES) {
+  if (byteLength(base64) > MAX_VIEWER_URL_FRAGMENT_BYTES) {
     return null;
   }
 
-  return `${baseUrl}?lightbox=1#R${urlSafe}`;
+  return `${baseUrl}?lightbox=1#R${base64}`;
 }
 
 // Matches the drawio-diagram skill's own naming contract

@@ -72,6 +72,14 @@ describe("validateDrawioXml", () => {
 });
 
 describe("toViewerUrl", () => {
+  test("emits a standard base64 fragment that the viewer can pass to atob directly", () => {
+    const url = toViewerUrl(MINIMAL_VALID_XML);
+    const fragment = (url ?? "").split("#R")[1] ?? "";
+    // viewer.diagrams.net decodes `#R<data>` with atob(): URL-safe base64
+    // (`-`, `_`, stripped padding) makes it fail with "not correctly encoded".
+    expect(() => atob(fragment)).not.toThrow();
+  });
+
   test("round-trips through inflateRawSync back to the original XML", () => {
     const url = toViewerUrl(MINIMAL_VALID_XML);
     const fragment = (url ?? "").split("#R")[1] ?? "";
