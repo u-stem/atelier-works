@@ -101,7 +101,7 @@ mise run bootstrap     # workspace 作成、secret 投入、sync push、migratio
 | `mise run push:dry` | `wmill sync push --dry-run`で反映内容を確認するだけ(リモートは変更しない) |
 | `mise run pull` | `wmill sync pull`でリモート(AppのUI編集など)をローカルに取り込む |
 | `mise run migrate` | `wmill datatable migrate up`でData Tableのマイグレーションを適用する |
-| `mise run deploy` | ホスト側checkoutで`git pull --ff-only` → worker imageのビルド → `compose up -d` → `wmill sync push` → migrationまで一括実行する(`self_update`が「ホスト操作が必要」と通知したときに使う。骨格側で実装予定) |
+| `mise run deploy` | ホスト側checkoutで`git pull --ff-only` → worker imageのビルド → `compose up -d` → `wmill sync push` → migrationまで一括実行する(`self_update`が`infra/**`・`mise.toml`の変更で「ホスト操作が必要」と通知したときに使う。`f/`や`migrations/`だけの変更は`self_update`が自動で反映するので不要) |
 | `mise run logs` | `docker compose logs`を呼び出す |
 
 ## 実装 → レビュー → 修正のループ(概要)
