@@ -35,12 +35,10 @@ import {
   clearResumeUrls,
   getWorkItem,
   latestApproval,
-  latestDraft,
   setFlowJobId,
   updateStatusIfCurrent,
 } from "../lib/db.ts";
 import { notify } from "../lib/discord.ts";
-import { renderIssueSection } from "../lib/drawio.ts";
 import {
   commentIssue,
   type GhClient,
@@ -52,6 +50,7 @@ import {
 import { logger, maskSecrets } from "../lib/log.ts";
 import type { FactoryConfig, WorkItem } from "../lib/types.ts";
 import { removeWorktree, runCommand } from "../lib/workspace.ts";
+import { buildInboxUrl } from "./pipeline_request_approval.ts";
 import { describeReason, nextActionFor } from "./pr_workflow_support.ts";
 
 export type PipelineDecideOutcome =
@@ -103,26 +102,13 @@ export function shouldProceed(status: WorkItem["status"]): boolean {
   return status === "awaiting_approval";
 }
 
-/** Builds the "## 図" + requirements markdown body for the approved-comment
- * (pure, for testing). `draft` is null only if pipeline_generate.ts somehow
- * never saved one — defensive, should not happen on the approve path. */
-export function buildApprovedComment(
-  draft: {
-    readonly markdown: string;
-    readonly diagrams: readonly {
-      readonly name: string;
-      readonly drawio_xml: string;
-    }[];
-  } | null,
-): string {
-  if (draft === null) {
-    return "要件定義が承認されました。";
-  }
-  const diagramsSection = renderIssueSection(draft.diagrams);
-  const sections = [draft.markdown, diagramsSection].filter(
-    (section) => section.length > 0,
-  );
-  return sections.join("\n\n");
+/** Builds the one-line "approved" Issue comment (pure, for testing). The
+ * full requirements draft (markdown + diagrams) is never posted to GitHub —
+ * 2026-09-27 policy: GitHub carries only work product, so the Issue gets a
+ * single pointer to the Console instead of the draft body; the draft itself
+ * remains viewable from the factory_console App's Inbox tab. */
+export function buildApprovedComment(consoleUrl: string): string {
+  return `要件定義が承認されました。Console で内容を確認できます: ${consoleUrl}`;
 }
 
 /** Terminal transition: remove both wip and trigger labels (team-lead rule,
@@ -249,20 +235,6 @@ export async function main(
       workItem.issue_number,
       config,
     );
-    const commentBody =
-      missingOutcome === "expired"
-        ? "承認の期限(7 日間)が切れました。人による対応が必要です。`retry_work_item` から再実行できます。"
-        : "承認フローが想定外の経路で再開されました(承認用 URL が直接利用された可能性があります)。人による確認が必要です。";
-    await commentIssue(
-      client,
-      workItem.owner,
-      workItem.repo,
-      workItem.issue_number,
-      `issue-${missingOutcome === "expired" ? "expired" : "needs-human"}-${String(attempt)}`,
-      work_item_id,
-      commentBody,
-      viewer.login,
-    );
     await notifySafe(webhookUrl, {
       kind: "needs_human",
       instance_name: config.instance_name,
@@ -303,7 +275,7 @@ export async function main(
       return { outcome: "no_op" };
     }
     await clearResumeUrls(work_item_id);
-    const draft = await latestDraft(work_item_id);
+    const consoleUrl = buildInboxUrl(config.windmill_public_url);
     await commentIssue(
       client,
       workItem.owner,
@@ -311,7 +283,7 @@ export async function main(
       workItem.issue_number,
       `issue-approved-${String(attempt)}`,
       work_item_id,
-      buildApprovedComment(draft),
+      buildApprovedComment(consoleUrl),
       viewer.login,
     );
     const currentIssue = await getIssue(
@@ -390,16 +362,6 @@ export async function main(
     workItem.repo,
     workItem.issue_number,
     config,
-  );
-  await commentIssue(
-    client,
-    workItem.owner,
-    workItem.repo,
-    workItem.issue_number,
-    `issue-needs-human-${String(attempt)}`,
-    work_item_id,
-    `要件定義が ${String(config.max_attempts)} 回連続で差し戻されました。人による対応が必要です。`,
-    viewer.login,
   );
   await notifySafe(webhookUrl, {
     kind: "needs_human",

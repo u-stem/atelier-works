@@ -21,28 +21,18 @@ describe("shouldProceed", () => {
   });
 });
 
-const VALID_XML =
-  '<mxfile host="app.diagrams.net"><diagram name="d" id="d1"><mxGraphModel><root><mxCell id="0" /><mxCell id="1" parent="0" /></root></mxGraphModel></diagram></mxfile>';
-
 describe("buildApprovedComment", () => {
-  test("falls back to a plain message when there is no draft", () => {
-    expect(buildApprovedComment(null)).toBe("要件定義が承認されました。");
+  const CONSOLE_URL =
+    "http://127.0.0.1:8080/apps/get/f/factory/factory_console";
+
+  test("states that requirements are approved", () => {
+    expect(buildApprovedComment(CONSOLE_URL)).toContain(
+      "要件定義が承認されました",
+    );
   });
 
-  test("includes the draft markdown", () => {
-    const body = buildApprovedComment({
-      markdown: "## 目的\n\n本文",
-      diagrams: [],
-    });
-    expect(body).toContain("## 目的");
-  });
-
-  test("includes a diagram link when the draft has a valid diagram", () => {
-    const body = buildApprovedComment({
-      markdown: "本文",
-      diagrams: [{ name: "d", drawio_xml: VALID_XML }],
-    });
-    expect(body).toContain("## 図");
+  test("includes the console url", () => {
+    expect(buildApprovedComment(CONSOLE_URL)).toContain(CONSOLE_URL);
   });
 });
 

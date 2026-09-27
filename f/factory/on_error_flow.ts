@@ -25,34 +25,22 @@
 //
 // devil-advocate note (round 2): pipeline_generate's own failure path now
 // funnels into on_error_flow rather than handling termination itself
-// (avoids interfering with retry_work_item's status/label bookkeeping), so
-// this handler also posts a human-visible comment when it actually marks a
-// work item `failed` — the GitHub issue otherwise goes silent with only
-// wip/trigger labels removed and no indication why, or that
-// `retry_work_item` can relaunch it. The marker kind
-// (`failed-<resolvedJobId>`) is unique per failure run (not just per work
-// item), so a *different* failure on the same work item still gets its own
-// comment, while `commentIssue`'s own marker+viewer check keeps re-running
-// this exact handler for the exact same failure idempotent.
+// (avoids interfering with retry_work_item's status/label bookkeeping).
 //
-// team-lead decision (2026-09-26): this comment is only posted for `issue`
-// kind work items (see shouldPostFailureComment below). A PR (`pr_review` /
-// `pr_fix`) must carry only the first-pass review itself and replies to
-// review comments — never an operational notice like this one. Label
-// removal still happens for every kind either way, and the Discord
-// `job_failed` notification `main()` sends unconditionally already reaches
-// the operator regardless of kind.
+// policy change (2026-09-27): GitHub carries only work product — operational
+// notices (including a `failed` transition) go to Discord and the Console
+// only, never a GitHub comment. This handler therefore does not post
+// anything to the Issue/PR when it marks a work item `failed`; label
+// removal still happens for every kind, `shouldSetNeedsHumanLabel` still
+// sets the PR state label for a PR kind, and the Discord `job_failed`
+// notification `main()` sends unconditionally already reaches the operator
+// regardless of kind.
 
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "./lib/config.ts";
 import { getWorkItem, recordFailure, updateStatusIfCurrent } from "./lib/db.ts";
 import { notify } from "./lib/discord.ts";
-import {
-  commentIssue,
-  type GhClient,
-  getViewer,
-  removeLabel,
-} from "./lib/github.ts";
+import { type GhClient, removeLabel } from "./lib/github.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import {
   type FactoryConfig,
@@ -149,19 +137,6 @@ export function labelsToRemove(
 }
 
 /**
- * Whether on_error_flow should post a failure comment to the GitHub
- * issue/PR when it marks a work item `failed`. `issue` kind gets it — the
- * only place a human would otherwise learn the pipeline stopped and that
- * `retry_work_item` can relaunch it. PR kinds (`pr_review` / `pr_fix`) do
- * not — team-lead decision (2026-09-26): a PR must carry only the
- * first-pass review itself and replies to review comments, never an
- * operational notice. See the module comment above `handleTerminalFailure`.
- */
-export function shouldPostFailureComment(kind: WorkItemKind): boolean {
-  return kind === "issue";
-}
-
-/**
  * Whether on_error_flow should set the PR state label needs_human_label
  * when it marks a work item `failed` — team-lead design (2026-09-26):
  * needs_human_label covers pr_fix ending in needs_human/blocked/failed *or*
@@ -172,34 +147,23 @@ export function shouldSetNeedsHumanLabel(kind: WorkItemKind): boolean {
   return kind === "pr_review" || kind === "pr_fix";
 }
 
-const MAX_FAILURE_COMMENT_ERROR_LENGTH = 300;
-
-/** Truncates already-masked `text` to at most `max` characters, marking an
- * actual cut with a trailing ellipsis. */
-export function truncateForComment(text: string, max: number): string {
-  if (text.length <= max) return text;
-  if (max <= 1) return "…";
-  return `${text.slice(0, max - 1)}…`;
-}
-
 /**
- * Removes wip + the kind-specific trigger label, sets the needs_human_label
- * state label for a PR kind (team-lead design, 2026-09-26 — see
- * shouldSetNeedsHumanLabel), then posts a failure comment (instance name, a
- * pointer to `retry_work_item`, and the masked error truncated to
- * `MAX_FAILURE_COMMENT_ERROR_LENGTH` chars) — called only after `main()` has
- * actually transitioned the work item to `failed`. Label removal, the state
- * label, and comment-posting are independent best-effort steps (each only
- * warn-logs its own failure) so one failing doesn't skip the others, and
- * none blocks the job_failures record or Discord notification in `main()`.
+ * Removes wip + the kind-specific trigger label, then sets the
+ * needs_human_label state label for a PR kind (team-lead design, 2026-09-26
+ * — see shouldSetNeedsHumanLabel) — called only after `main()` has actually
+ * transitioned the work item to `failed`. No GitHub comment is posted
+ * (2026-09-27 policy: GitHub carries only work product; a `failed` work item
+ * is reported via the Discord `job_failed` notification in `main()` and the
+ * PR state label alone). Label removal and the state label are independent
+ * best-effort steps (each only warn-logs its own failure) so one failing
+ * doesn't skip the other, and neither blocks the job_failures record or
+ * Discord notification in `main()`.
  */
 async function handleTerminalFailure(
   item: Pick<
     WorkItem,
     "id" | "owner" | "repo" | "kind" | "issue_number" | "pr_number"
   >,
-  resolvedJobId: string,
-  message: string,
   log: Logger,
 ): Promise<void> {
   const number = item.kind === "issue" ? item.issue_number : item.pr_number;
@@ -242,26 +206,6 @@ async function handleTerminalFailure(
       stateLabelForFixOutcome("failed", config),
       log,
     );
-  }
-
-  if (shouldPostFailureComment(item.kind)) {
-    try {
-      const viewer = await getViewer(client);
-      await commentIssue(
-        client,
-        item.owner,
-        item.repo,
-        number,
-        `failed-${resolvedJobId}`,
-        item.id,
-        `Factory(インスタンス \`${config.instance_name}\`)でエラーが発生し、この work item を \`failed\` としました。\`retry_work_item\`(work_item_id ${item.id})から再実行できます。\n\nエラー: ${truncateForComment(message, MAX_FAILURE_COMMENT_ERROR_LENGTH)}`,
-        viewer.login,
-      );
-    } catch (err) {
-      log.warn("on_error_flow: failed to post failure comment", {
-        error: maskSecrets(err instanceof Error ? err.message : String(err)),
-      });
-    }
   }
 }
 
@@ -340,7 +284,7 @@ export async function main(
           message,
         );
         if (updated) {
-          await handleTerminalFailure(item, resolvedJobId, message, log);
+          await handleTerminalFailure(item, log);
         }
       }
     } catch (statusErr) {

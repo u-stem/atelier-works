@@ -137,6 +137,6 @@ mise run bootstrap     # workspace 作成、secret 投入、sync push、migratio
 1. サンドボックス用リポジトリでIssueテンプレートからIssueを作成し、`factory`ラベルを付ける。
 2. 5分以内(`poll_issues`の周期)にDiscord通知が届き、Inboxに表示されることを確認する。
 3. 一度Reject(理由付き)し、要件が再生成されて再度通知が来ることを確認する。
-4. Approveし、Issueコメントに要件定義のmarkdownと図のviewer URLが転記され、ラベルが承認済みラベルへ付け替わることを確認する。
+4. Approveし、IssueにConsoleへのリンクを含むコメントが1件だけ投稿され(要件定義本文や図は転記されない)、ラベルが承認済みラベルへ付け替わることを確認する。
 5. Analyticsタブにコスト・トークン数が反映されることを確認する。
 6. 何かしらの変更をself cloneに反映させ、`self_update`スケジュールが最新のSHAを取り込むことを確認する。

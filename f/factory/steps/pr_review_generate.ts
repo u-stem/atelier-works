@@ -18,7 +18,6 @@ import {
 } from "../lib/db.ts";
 import { type NotifyEvent, notify } from "../lib/discord.ts";
 import {
-  commentIssue,
   type GhClient,
   getPr,
   getPrDiff,
@@ -89,8 +88,8 @@ export async function main(
   // pipeline_generate.ts — whose caller (pipeline_decide.ts / on_error_flow)
   // has no separate "post the failure" step — pr_review has no downstream
   // step that handles a non-post outcome, so the needs_human status
-  // transition, label removal, PR comment, and Discord notice all happen
-  // right here rather than being deferred to pr_review_post.ts.
+  // transition, label removal, and Discord notice all happen right here
+  // rather than being deferred to pr_review_post.ts.
   const budgetStatus = await dailyBudgetStatus(config);
   if (budgetStatus.exceeded) {
     log.warn("daily budget exceeded, not starting claude", {
@@ -98,7 +97,6 @@ export async function main(
       spentToday: budgetStatus.spent_usd,
       dailyBudgetUsd: budgetStatus.limit_usd,
     });
-    const viewer = await getViewer(client);
     const moved = await updateStatusIfCurrent(
       work_item_id,
       "reviewing",
@@ -114,22 +112,6 @@ export async function main(
         [config.wip_label, config.review_label],
         log,
       );
-      try {
-        await commentIssue(
-          client,
-          owner,
-          repo,
-          pr_number,
-          `pr_review-budget-${String(attempt)}`,
-          work_item_id,
-          "本日の Claude 利用予算の上限に達したため、レビューを保留しました。人による確認が必要です。",
-          viewer.login,
-        );
-      } catch (err) {
-        log.warn("failed to post pr_review budget-exceeded comment", {
-          error: maskSecrets(err instanceof Error ? err.message : String(err)),
-        });
-      }
       const webhookUrl = await wmill.getVariable(
         "f/factory/discord_webhook_url",
       );

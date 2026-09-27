@@ -13,8 +13,8 @@
 // stored here: factory.requirement_drafts.diagrams only ever holds
 // `{name, drawio_xml}` (see lib/types.ts's Diagram type — no viewer_url
 // field), and the viewer URL is instead derived on demand wherever a draft
-// is rendered (pipeline_decide.ts's approve path, via
-// lib/drawio.ts#renderIssueSection).
+// is rendered (the factory_console App's Inbox tab, via console_query.ts /
+// lib/drawio.ts#toViewerUrl).
 //
 // [major, M6 review round 1] The daily budget guard's own
 // isBudgetExceeded/jstMidnightTodayIso were local here at first; now
@@ -34,12 +34,12 @@
 // `awaiting_approval` — now missing the trigger label, so the next
 // poll_issues reconcile cancels it as if abandoned. So as of round 3, a
 // runClaude failure does *only* `recordAgentRun` (already unconditional,
-// above) and throws — no status/label/comment/notify — letting Windmill's
-// retry re-attempt cleanly, and leaving every terminal transition (status,
-// labels, notification, and — per impl-m5-poll — an Issue comment) to
-// on_error_flow's failure_module alone, which only runs once retries are
-// exhausted. The daily-budget-exceeded path below is unaffected: it
-// returns (never throws), so Windmill's retry never fires for it.
+// above) and throws — no status/label/notify — letting Windmill's retry
+// re-attempt cleanly, and leaving every terminal transition (status,
+// labels, and notification) to on_error_flow's failure_module alone,
+// which only runs once retries are exhausted. The daily-budget-exceeded
+// path below is unaffected: it returns (never throws), so Windmill's
+// retry never fires for it.
 
 import * as wmill from "windmill-client@1.817.0";
 import {
@@ -57,12 +57,7 @@ import {
 } from "../lib/db.ts";
 import { notify } from "../lib/discord.ts";
 import { validateDrawioXml } from "../lib/drawio.ts";
-import {
-  commentIssue,
-  type GhClient,
-  getViewer,
-  removeLabel,
-} from "../lib/github.ts";
+import { type GhClient, removeLabel } from "../lib/github.ts";
 import { logger, maskSecrets } from "../lib/log.ts";
 import { REQUIREMENTS_SCHEMA, requirementsPrompt } from "../lib/prompts.ts";
 import {
@@ -176,10 +171,9 @@ async function removeTerminalLabels(
  * work_items.status first, so a status/label/comment terminal transition
  * here raced with it — see this file's module doc for the full failure
  * sequence. This function now does *nothing* but throw a masked error;
- * every terminal concern (status, labels, notification, and — per
- * impl-m5-poll — an Issue comment) belongs to on_error_flow's
- * failure_module alone, which only runs once Windmill's retries are
- * exhausted.
+ * every terminal concern (status, labels, and notification) belongs to
+ * on_error_flow's failure_module alone, which only runs once Windmill's
+ * retries are exhausted.
  */
 function failGeneration(reason: string, detail: string): never {
   throw new Error(
@@ -199,7 +193,6 @@ export async function main(
   );
   const ghToken = await wmill.getVariable("f/factory/github_token");
   const client: GhClient = { run: runCommand, ghToken };
-  const viewer = await getViewer(client);
   const webhookUrl = await wmill.getVariable("f/factory/discord_webhook_url");
 
   const workItem = await getWorkItem(work_item_id);
@@ -223,16 +216,6 @@ export async function main(
       work_item_id,
       "needs_human",
       `daily budget exceeded ($${budgetStatus.spent_usd.toFixed(2)} >= $${budgetStatus.limit_usd.toFixed(2)})`,
-    );
-    await commentIssue(
-      client,
-      workItem.owner,
-      workItem.repo,
-      workItem.issue_number,
-      `issue-budget-${String(attempt)}`,
-      work_item_id,
-      "本日の Claude 利用予算の上限に達したため、要件生成を保留しました。人による確認が必要です。",
-      viewer.login,
     );
     await removeTerminalLabels(
       client,

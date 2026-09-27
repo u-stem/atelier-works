@@ -151,7 +151,8 @@ M4のゲートでworker内で実測した外部コマンド・APIの挙動。型
 ### `commentIssue`のmarker冪等性
 
 - marker(`<!-- factory:<kind>:<work_item_id> -->`)による冪等性は`(kind, work_item_id)`単位の **first-wins**(先に投稿された1件だけが有効、以降の同じ`kind`での投稿は黙ってno-opになる)。
-- 同じwork itemに対して用途の異なる複数のコメントを投稿する場合(例: 承認待ち通知と承認完了通知)は、`kind`を用途ごとに分ける。例: `issue-awaiting-approval-<attempt>`、`issue-approved-<attempt>`。同じ`kind`を使い回すと2件目以降が投稿されない。
+- attemptごとに再投稿しうるコメントは`kind`にattemptを含めて分ける。例: `issue-approved-<attempt>`。同じ`kind`を使い回すと2件目以降が投稿されない。
+- GitHubに投稿するのは成果物(承認済み要件定義へのリンク、PRレビュー本体、レビューへの返信)だけにする。着手・承認待ち・失敗・期限切れ・要人手のような運用通知はIssue / PRに書かず、DiscordとConsoleで伝える(2026-09-27の方針)。
 
 ## 終端statusではwipラベル・トリガーラベルの両方を外す
 

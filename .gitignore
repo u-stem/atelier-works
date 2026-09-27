@@ -17,3 +17,6 @@ mise.*.local.toml
 
 # *.local.* above also matches this on-purpose committed template; keep it tracked.
 !mise.local.toml.example
+
+# Agent worktrees (Claude Code isolation), never part of the repo
+.claude/worktrees/
