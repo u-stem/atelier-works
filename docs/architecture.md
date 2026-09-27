@@ -134,16 +134,17 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加のみで、ren
 | `work_items` | Issue単位の作業状態。`(owner, repo, issue_number, cycle)`で一意 |
 | `work_item_events` | 状態遷移のイベント履歴 |
 | `requirement_drafts` | 要件定義ドラフト(markdown、図、未確定事項)。attemptごとに保存 |
-| `approvals` | 承認・却下の判断履歴 |
+| `approvals` | 承認・却下の判断履歴。旧テーブル(次のPRで書き込み停止、履歴のみ) |
 | `agent_runs` | Claude実行1回ごとのログ(トークン数、コスト、所要時間、終了コード等) |
 | `job_failures` | フロー実行時のエラー(トークンはマスク済み) |
 | `deployments` | self_updateによるデプロイ結果 |
 | `notices` | 要対応事項(ホスト操作要、PAT失効、SHA不一致など) |
 | `issue_proposals` | pr_fixの`propose_issue`返信が提案するIssue(title / body)と、その承認 / 却下の判断履歴 |
+| `approval_requests` | 承認依頼の汎用テーブル。`kind`は`requirements`(要件定義承認)/ `issue_proposal`(Issue化提案)、`status`は`pending` / `approved` / `rejected` / `expired`。次のPRでsuspendベースの承認を置き換える |
 
 ### view(Appはこれらのみを参照する)
 
-`v_inbox`、`v_pipeline`、`v_agent_cost_daily`、`v_approval_stats`、`v_lead_time`、`v_failures`、`v_notices`、`v_issue_proposals`
+`v_inbox`、`v_pipeline`、`v_agent_cost_daily`、`v_approval_stats`、`v_lead_time`、`v_failures`、`v_notices`、`v_issue_proposals`、`v_approval_requests`
 
 ## フローとスケジュール
 

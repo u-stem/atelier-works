@@ -676,7 +676,8 @@ export async function runConsoleQuery(
       const rows = await sql`
         SELECT day, decision, attempt, decision_count
         FROM factory.v_approval_stats
-        WHERE day >= ${since}::timestamptz
+        WHERE kind = 'requirements'
+          AND day >= ${since}::timestamptz
         ORDER BY day DESC
         LIMIT ${limit}::integer
       `.fetch();

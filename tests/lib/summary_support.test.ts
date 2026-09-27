@@ -91,12 +91,20 @@ describe("getAgentRunSummary", () => {
 });
 
 describe("getApprovalSummary", () => {
-  test("queries factory.approvals", async () => {
+  test("queries factory.approval_requests", async () => {
     const { sql, calls } = createFakeSqlClient([
       [{ approved_count: 2, rejected_count: 1 }],
     ]);
     await getApprovalSummary(RANGE, sql);
-    expect(calls[0]?.text).toContain("FROM factory.approvals");
+    expect(calls[0]?.text).toContain("FROM factory.approval_requests");
+  });
+
+  test("counts only requirement-draft decisions (kind = requirements)", async () => {
+    const { sql, calls } = createFakeSqlClient([
+      [{ approved_count: "0", rejected_count: "0" }],
+    ]);
+    await getApprovalSummary(RANGE, sql);
+    expect(calls[0]?.text).toContain("kind = 'requirements'");
   });
 
   test("parses approved_count and rejected_count", async () => {
