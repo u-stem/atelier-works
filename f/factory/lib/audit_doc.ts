@@ -56,6 +56,13 @@ const MAX_PROPOSALS = 5;
 const HTML_COMMENT_PATTERN = /<!--[\s\S]*?-->/;
 const HTML_COMMENT_GLOBAL_PATTERN = /<!--[\s\S]*?-->/g;
 const URL_PATTERN = /https?:\/\/[^\s)>"']+/g;
+const SEPARATOR_CELL_PATTERN = /^:?-{3,}:?$/;
+/** Characters allowed to immediately follow an allow-listed URL prefix — a
+ * bare `startsWith` would let `https://github.com/octo/atelier-works-evil`
+ * pass for prefix `https://github.com/octo/atelier-works`, so a match must
+ * either equal the prefix exactly or continue with a path/query/fragment
+ * boundary. */
+const URL_PREFIX_BOUNDARY_CHARS = new Set(["/", "?", "#"]);
 
 /**
  * Removes HTML comments from `text` before it's passed to
@@ -67,6 +74,59 @@ const URL_PATTERN = /https?:\/\/[^\s)>"']+/g;
  */
 function stripHtmlComments(text: string): string {
   return text.replace(HTML_COMMENT_GLOBAL_PATTERN, "");
+}
+
+/**
+ * Checks `url` against one allow-listed prefix: an exact match, or a
+ * prefix match followed by a path/query/fragment boundary (`/`, `?`, `#`).
+ * A bare `url.startsWith(prefix)` would also accept a sibling repository
+ * whose name merely starts with the same characters (e.g.
+ * `.../atelier-works-evil` for prefix `.../atelier-works`).
+ */
+function matchesUrlPrefix(url: string, prefix: string): boolean {
+  if (url === prefix) return true;
+  if (!url.startsWith(prefix)) return false;
+  const boundary = url.charAt(prefix.length);
+  return URL_PREFIX_BOUNDARY_CHARS.has(boundary);
+}
+
+/**
+ * Splits a `| a | b |`-style table row into cells, respecting GFM's
+ * escaped-pipe syntax (`\|` is a literal `|`, not a column separator) and
+ * unescaping it in the result. Shaped like `row.split("|")` otherwise
+ * (including the empty leading/trailing cells from the boundary `|`s), so
+ * callers that already index into it (e.g. the title column) don't need
+ * to change.
+ */
+function splitTableRow(row: string): string[] {
+  const cells: string[] = [];
+  let current = "";
+  for (let i = 0; i < row.length; i += 1) {
+    const char = row.charAt(i);
+    if (char === "\\" && row.charAt(i + 1) === "|") {
+      current += "|";
+      i += 1;
+      continue;
+    }
+    if (char === "|") {
+      cells.push(current);
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  cells.push(current);
+  return cells.map((cell) => cell.trim());
+}
+
+/** Checks that `row` is a table separator row (every cell, ignoring the
+ * empty boundary cells from the leading/trailing `|`, matches
+ * `:?-{3,}:?`). */
+function isSeparatorRow(row: string): boolean {
+  const cells = splitTableRow(row).filter((cell) => cell !== "");
+  return (
+    cells.length > 0 && cells.every((cell) => SEPARATOR_CELL_PATTERN.test(cell))
+  );
 }
 
 /**
@@ -115,18 +175,24 @@ function sectionBody(markdown: string, heading: string): string | null {
  * Reads the title column of the 改善提案 section's table, in row order.
  * Returns `[]` when the section's body is just "該当なし" (no proposals
  * this period), and `null` when the section is missing or its table can't
- * be parsed (fewer than a header + separator + one data row).
+ * be parsed (fewer than a header + separator + one data row, or the
+ * second `|` row isn't a valid separator — without this check, a table
+ * missing its separator row would silently misparse its first data row as
+ * the separator).
  */
 export function extractProposalTitles(markdown: string): string[] | null {
   const body = sectionBody(markdown, "改善提案");
   if (body === null) return null;
+  // Exact match only, by design: a partial or padded "該当なし" is more
+  // likely a mistake than the intended sentinel, so it falls through to
+  // table parsing (and null, if it doesn't look like a table) rather than
+  // being accepted as "no proposals" — fail-safe over lenient.
   if (body.trim() === "該当なし") return [];
   const rows = body.split("\n").filter((line) => line.trim().startsWith("|"));
   if (rows.length < 3) return null;
-  return rows.slice(2).map((row) => {
-    const cells = row.split("|").map((cell) => cell.trim());
-    return cells[2] ?? "";
-  });
+  const separatorRow = rows[1] ?? "";
+  if (!isSeparatorRow(separatorRow)) return null;
+  return rows.slice(2).map((row) => splitTableRow(row)[2] ?? "");
 }
 
 /**
@@ -176,9 +242,10 @@ export function validateAuditReport(
  * Validates the audit's structured output (summary + proposals): summary
  * length, per-proposal title/body length, duplicate titles, proposal
  * count, HTML comments, `checkForbiddenSyntax`'s AI-writing-habit checks,
- * and that every URL in a proposal starts with one of
- * `allowedUrlPrefixes` (e.g. this repository's GitHub URL, so the model
- * can't point elsewhere).
+ * and that every URL in a proposal matches one of `allowedUrlPrefixes`
+ * (e.g. this repository's GitHub URL, so the model can't point elsewhere)
+ * at a path/query/fragment boundary, not just as a raw string prefix (see
+ * `matchesUrlPrefix`).
  */
 export function checkAuditOutput(
   output: {
@@ -206,10 +273,11 @@ export function checkAuditOutput(
     if (proposal.body.length > MAX_BODY_CHARS) {
       issues.push(`${label}のbodyが${MAX_BODY_CHARS}字を超えています`);
     }
-    if (seen.has(proposal.title)) {
+    const trimmedTitle = proposal.title.trim();
+    if (seen.has(trimmedTitle)) {
       issues.push(`${label}のtitleが重複しています`);
     }
-    seen.add(proposal.title);
+    seen.add(trimmedTitle);
     const text = `${proposal.title}\n${proposal.body}`;
     issues.push(
       ...checkHtmlComments(text).map((issue) => `${label}: ${issue}`),
@@ -220,7 +288,7 @@ export function checkAuditOutput(
       ),
     );
     for (const url of text.match(URL_PATTERN) ?? []) {
-      if (!allowedUrlPrefixes.some((prefix) => url.startsWith(prefix))) {
+      if (!allowedUrlPrefixes.some((prefix) => matchesUrlPrefix(url, prefix))) {
         issues.push(`${label}に許可されていないURLが含まれています`);
       }
     }
