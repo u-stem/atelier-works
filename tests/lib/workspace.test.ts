@@ -478,7 +478,7 @@ describe("ensureFactoryClone", () => {
   });
 
   test("fetches then checks out -B the configured branch when the clone dir already exists", async () => {
-    const fake = createFakeCommandRunner([ok(), ok()]);
+    const fake = createFakeCommandRunner([ok(), ok(), ok()]);
     const result = await ensureFactoryClone({
       run: fake.run,
       repoUrl: "https://github.com/acme/atelier-works.git",
@@ -494,13 +494,28 @@ describe("ensureFactoryClone", () => {
     expect(fake.calls[0]?.argv).toEqual(
       expect.arrayContaining(["fetch", "origin", "--", "main"]),
     );
-    expect(fake.calls[1]?.argv).toEqual(
+    expect(fake.calls[2]?.argv).toEqual(
       expect.arrayContaining(["checkout", "-B", "main", "origin/main"]),
     );
   });
 
+  test("discards local modifications (reset --hard) between fetch and checkout -B", async () => {
+    const fake = createFakeCommandRunner([ok(), ok(), ok()]);
+    await ensureFactoryClone({
+      run: fake.run,
+      repoUrl: "https://github.com/acme/atelier-works.git",
+      ghToken: "gh-token",
+      branch: "main",
+      exists: async () => true,
+      lockFs: createInMemoryLockFs(),
+    });
+    expect(fake.calls[1]?.argv).toEqual(
+      expect.arrayContaining(["reset", "--hard"]),
+    );
+  });
+
   test("checks out -B the *configured* branch even when the existing clone was left on a different one (M7 re-gate: a prior caller defaulting to main must not stick)", async () => {
-    const fake = createFakeCommandRunner([ok(), ok()]);
+    const fake = createFakeCommandRunner([ok(), ok(), ok()]);
     await ensureFactoryClone({
       run: fake.run,
       repoUrl: "https://github.com/acme/atelier-works.git",
@@ -517,7 +532,7 @@ describe("ensureFactoryClone", () => {
         "feat/factory-foundation",
       ]),
     );
-    expect(fake.calls[1]?.argv).toEqual(
+    expect(fake.calls[2]?.argv).toEqual(
       expect.arrayContaining([
         "checkout",
         "-B",
@@ -542,7 +557,11 @@ describe("ensureFactoryClone", () => {
   });
 
   test("throws when the checkout fails", async () => {
-    const fake = createFakeCommandRunner([ok(), fail("could not checkout")]);
+    const fake = createFakeCommandRunner([
+      ok(),
+      ok(),
+      fail("could not checkout"),
+    ]);
     await expect(
       ensureFactoryClone({
         run: fake.run,
@@ -558,7 +577,7 @@ describe("ensureFactoryClone", () => {
   test("acquires a lock scoped to the clone dir before pulling (security fix, devil-advocate: avoids .git/index.lock races between concurrent flows and poll_issues sharing the same self clone)", async () => {
     const lockFs = createInMemoryLockFs();
     let sawLockDuringRun = false;
-    const fake = createFakeCommandRunner([ok(), ok()]);
+    const fake = createFakeCommandRunner([ok(), ok(), ok()]);
     const runAndCheck: typeof fake.run = async (argv, options) => {
       sawLockDuringRun =
         (await lockFs.read("/workspaces/factory/atelier-works.lock")) !==
