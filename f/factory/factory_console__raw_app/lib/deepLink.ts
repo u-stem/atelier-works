@@ -50,6 +50,31 @@ export function parseDeepLink(
   return null;
 }
 
+// #audit/<work_item_id> — the fragment 工程5's Console links (Issue
+// comment / Discord notification for an audit-sourced approval) use to jump
+// straight to the 監査 tab's detail pane for that audit work item.
+
+export type AuditDeepLink = { readonly work_item_id: number };
+
+const AUDIT_DEEP_LINK_PATTERN = /#audit\/(\d+)/;
+
+/** Parses the first candidate string containing a `#audit/<id>` fragment
+ * (mirrors `parseDeepLink` above, but with no `attempt` suffix). */
+export function parseAuditDeepLink(
+  candidates: readonly string[],
+): AuditDeepLink | null {
+  for (const candidate of candidates) {
+    const match = AUDIT_DEEP_LINK_PATTERN.exec(candidate);
+    const idText = match?.[1];
+    if (idText === undefined) continue;
+    const workItemId = Number(idText);
+    if (Number.isInteger(workItemId) && workItemId > 0) {
+      return { work_item_id: workItemId };
+    }
+  }
+  return null;
+}
+
 /** Gathers every candidate string `parseDeepLink` should try, in priority
  * order: this window's own hash, the parent frame's hash (same-origin
  * embedding only), then the referrer URL. Not unit-tested (thin `window` /
