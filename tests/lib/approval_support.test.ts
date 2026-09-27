@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   APPROVAL_TIMEOUT_SEC,
+  buildAuditConsoleUrl,
   buildConsoleUrl,
   buildRecordedReason,
   classifyExistingDecision,
@@ -111,6 +112,12 @@ describe("buildConsoleUrl", () => {
   test("appends a requirements deep-link fragment when a target is given", () => {
     expect(buildConsoleUrl("http://127.0.0.1:8080", { work_item_id: 42 })).toBe(
       "http://127.0.0.1:8080/apps/get/f/factory/factory_console#requirements/42",
+    );
+  });
+
+  test("buildAuditConsoleUrl appends the #audit fragment", () => {
+    expect(buildAuditConsoleUrl("http://127.0.0.1:8080", 12)).toBe(
+      "http://127.0.0.1:8080/apps/get/f/factory/factory_console#audit/12",
     );
   });
 });

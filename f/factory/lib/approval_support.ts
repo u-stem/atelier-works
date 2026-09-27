@@ -114,6 +114,14 @@ export function buildConsoleUrl(
     : `${base}#requirements/${String(target.work_item_id)}`;
 }
 
+/** Console deep link to one audit report (監査 tab, `#audit/<work_item_id>`). */
+export function buildAuditConsoleUrl(
+  windmillPublicUrl: string,
+  workItemId: number,
+): string {
+  return `${windmillPublicUrl}/apps/get/${FACTORY_CONSOLE_APP_PATH}#audit/${String(workItemId)}`;
+}
+
 /** Which step script handles a decided approval_requests row of this kind
  * (pure, for testing) — approval_decide.ts dispatches to this path via
  * `wmill.runScriptByPathAsync` after recording the decision. */
