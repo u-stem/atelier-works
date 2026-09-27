@@ -95,6 +95,7 @@
 
 ## 更新の反映
 
+- `mise run push` / `mise run deploy`は`wmill sync push`の前にConsole raw appの`npm ci`を実行する(raw appのバンドルに依存が必要なため)。
 - 通常の更新は`git pull`してから`mise run deploy`を実行する(ホスト側checkoutで`git pull --ff-only` → workerイメージのビルド → `docker compose up -d` → `wmill sync push` → migrationを一括実行する)。
 - workerの並列数(`NUM_WORKERS`)のような`infra/docker-compose.yml`の変更は、通常の`git pull`だけでは反映されない。`mise run deploy`を実行してworkerイメージの再ビルドとコンテナの再起動まで行う。
 - `wmill sync push`に **`--include-secrets`を付けてはいけない**。付けるとリポジトリ内の`f/factory/*.variable.yaml`(値は空のままコミットされている)で4つのsecret変数(`claude_oauth_token` / `github_token` / `wmill_token` / `discord_webhook_url`)が空に上書きされる。`mise run push`(`wmill sync push --yes --keep-deleted`)は`--include-secrets`を付けない設定になっている。

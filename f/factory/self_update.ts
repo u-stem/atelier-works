@@ -21,10 +21,12 @@ import { notify } from "./lib/discord.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import {
   assertBranchMatches,
+  buildNpmCiArgv,
   buildWmillArgv,
   buildWmillEnv,
   classifyChangedPaths,
   decideUpdate,
+  RAW_APP_RELATIVE_DIR,
   resolveWmillCliContext,
   truncateOutput,
 } from "./lib/self_update_support.ts";
@@ -313,6 +315,23 @@ export async function main(): Promise<SelfUpdateResult> {
     });
 
     await assertWmillYamlExists(factoryClone.dir);
+
+    // The Console raw app is bundled by `wmill sync push` from this clone,
+    // so its npm dependencies must be present (and current: a dependency
+    // added by a newer commit is missing from a node_modules installed
+    // before it). `npm ci` installs exactly what package-lock.json pins
+    // without rewriting it — see buildNpmCiArgv's doc comment.
+    const rawAppDir = `${factoryClone.dir}/${RAW_APP_RELATIVE_DIR}`;
+    if (await pathExists(`${rawAppDir}/package-lock.json`)) {
+      await runWmillCli(
+        buildNpmCiArgv(rawAppDir),
+        factoryClone.dir,
+        env,
+        log,
+        "npm ci (raw app)",
+        secrets,
+      );
+    }
 
     await runWmillCli(
       buildWmillArgv(

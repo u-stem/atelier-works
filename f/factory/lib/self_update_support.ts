@@ -235,3 +235,23 @@ export function buildWmillEnv(env: WmillEnvInput): Record<string, string> {
 export function truncateOutput(text: string, max: number): string {
   return text.length <= max ? text : text.slice(0, max);
 }
+
+// ---------------------------------------------------------------------------
+// Raw app dependencies: `wmill sync push` bundles the Console raw app in
+// place and resolves its imports from node_modules inside the self clone.
+// ---------------------------------------------------------------------------
+
+/** Repo-relative directory of the Console raw app whose npm dependencies
+ * must be installed before `wmill sync push` can bundle it. */
+export const RAW_APP_RELATIVE_DIR = "f/factory/factory_console__raw_app";
+
+/**
+ * `npm ci` argv for the raw app (pure, for testing): installs exactly what
+ * package-lock.json pins, never rewriting it — a plain `npm install` inside
+ * the self clone is what once left package-lock.json modified and blocked
+ * the next `git checkout -B`. `--no-audit --no-fund` keeps the run quiet
+ * and offline-friendly.
+ */
+export function buildNpmCiArgv(rawAppDir: string): string[] {
+  return ["npm", "ci", "--prefix", rawAppDir, "--no-audit", "--no-fund"];
+}

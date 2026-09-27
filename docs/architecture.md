@@ -250,7 +250,7 @@ WindmillのUIはsummaryでソートされるため、種別を示すタグをsum
 ## 自己更新の仕組み(self_update)
 
 1. worker内のself clone(このリポジトリ自身)をpullする。SHAが変わっていなければ何もしない。
-2. 変更があれば`wmill sync push --yes --keep-deleted`と`wmill datatable migrate up`をworker内から実行し、Windmill側のscript/flow/scheduleとData Tableの定義を最新化する。
+2. 変更があれば、Console raw appの依存を`npm ci`で揃えたうえで`wmill sync push --yes --keep-deleted`と`wmill datatable migrate up`をworker内から実行し、Windmill側のscript/flow/scheduleとData Tableの定義を最新化する。
 3. `infra/**`・`mise.toml`(workerイメージやcompose定義、composeが読むツールのバージョンと環境変数)に変更がある場合は、workerの自己更新だけでは反映できないため`deployments.needs_host_action = true`として記録し、DiscordとダッシュボードのNoticesで「`mise run deploy`を実行してください」と通知する。`mise run deploy`はホスト側checkoutで`git pull --ff-only` → worker imageのビルド → `compose up -d` → `wmill sync push` → migrationの順で実行する。
 4. Claudeが参照するスキル(`.claude/skills/**`)はself cloneを`--add-dir`で直接読むため、pull直後から反映される。
 5. 初回の反映(schedule自体の登録や初回push)は`scripts/bootstrap.sh`がホストから行う。
