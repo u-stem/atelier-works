@@ -1,10 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { inflateRawSync } from "node:zlib";
-import {
-  renderIssueSection,
-  toViewerUrl,
-  validateDrawioXml,
-} from "../../f/factory/lib/drawio.ts";
+import { toViewerUrl, validateDrawioXml } from "../../f/factory/lib/drawio.ts";
 
 const MINIMAL_VALID_XML = [
   '<mxfile host="app.diagrams.net">',
@@ -110,55 +106,5 @@ describe("toViewerUrl", () => {
     );
     const url = toViewerUrl(bigXml);
     expect(url).toBeNull();
-  });
-});
-
-describe("renderIssueSection", () => {
-  test("returns an empty string for no diagrams", () => {
-    const section = renderIssueSection([]);
-    expect(section).toBe("");
-  });
-
-  test("renders a link for a valid diagram", () => {
-    const section = renderIssueSection([
-      { name: "sample", drawio_xml: MINIMAL_VALID_XML },
-    ]);
-    expect(section).toContain("[sample](");
-  });
-
-  test("renders a validation-failure message for an invalid diagram", () => {
-    const section = renderIssueSection([
-      { name: "broken", drawio_xml: "<svg></svg>" },
-    ]);
-    expect(section).toContain("図の検証に失敗しました");
-  });
-
-  test("replaces a name that breaks the markdown link syntax with a safe placeholder", () => {
-    const section = renderIssueSection([
-      { name: "sample](javascript:alert(1))[", drawio_xml: MINIMAL_VALID_XML },
-    ]);
-    expect(section).toContain("[diagram-0](");
-  });
-
-  test("replaces an uppercase/invalid-character name with a safe placeholder", () => {
-    const section = renderIssueSection([
-      { name: "Not Valid!", drawio_xml: MINIMAL_VALID_XML },
-    ]);
-    expect(section).toContain("[diagram-0](");
-  });
-
-  test("keeps a name that already matches [a-z0-9-]{1,64}", () => {
-    const section = renderIssueSection([
-      { name: "issue-intake-flow", drawio_xml: MINIMAL_VALID_XML },
-    ]);
-    expect(section).toContain("[issue-intake-flow](");
-  });
-
-  test("indexes safe placeholders by position across multiple diagrams", () => {
-    const section = renderIssueSection([
-      { name: "ok-one", drawio_xml: MINIMAL_VALID_XML },
-      { name: "Not Valid!", drawio_xml: MINIMAL_VALID_XML },
-    ]);
-    expect(section).toContain("[diagram-1](");
   });
 });

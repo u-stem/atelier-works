@@ -1,8 +1,11 @@
 // PathScript for the suspend step of f/factory/pipeline (spec-cycle2.md §3
 // M6 "request_approval"). Calls wmill.getResumeUrls(), persists resume_url
 // / cancel_url on the work item, flips status to awaiting_approval, and
-// posts the "承認待ち" Issue comment (summary + open_questions from the
-// just-saved draft) plus a Discord approval_requested notification.
+// sends a Discord approval_requested notification. GitHub itself gets no
+// comment at this stage (2026-09-27 policy: GitHub carries only work
+// product; operational notices — including "awaiting approval" — go to
+// Discord/Console only. The Issue does get one comment later, on approval —
+// see pipeline_decide.ts's buildApprovedComment).
 //
 // IMPORTANT — read before changing this step or pipeline_decide.ts (full
 // writeup in this implementer's final report): the flow module's downstream
@@ -52,16 +55,9 @@
 
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "../lib/config.ts";
-import {
-  getWorkItem,
-  latestDraft,
-  setResumeUrls,
-  updateStatus,
-} from "../lib/db.ts";
+import { getWorkItem, setResumeUrls, updateStatus } from "../lib/db.ts";
 import { notify } from "../lib/discord.ts";
-import { commentIssue, type GhClient, getViewer } from "../lib/github.ts";
 import { logger } from "../lib/log.ts";
-import { runCommand } from "../lib/workspace.ts";
 
 // Kept as a single named constant per the security fix's instruction
 // ("定数化して1箇所に") — the exact Windmill App view URL path, so a future
@@ -75,31 +71,6 @@ const FACTORY_CONSOLE_APP_PATH = "f/factory/factory_console";
  * file's module doc). */
 export function buildInboxUrl(windmillPublicUrl: string): string {
   return `${windmillPublicUrl}/apps/get/${FACTORY_CONSOLE_APP_PATH}`;
-}
-
-/** Builds the "承認待ち" Issue comment body: summary + open_questions (if
- * any) from the draft just saved by pipeline_generate.ts, plus the Inbox
- * URL to approve/reject from. */
-export function buildAwaitingApprovalComment(
-  instanceName: string,
-  inboxUrl: string,
-  summary: string | null,
-  openQuestions: readonly string[],
-): string {
-  const lines: string[] = [
-    "要件定義ドラフトが完成し、承認待ちです。",
-    `承認は factory instance \`${instanceName}\` の Inbox から行ってください: ${inboxUrl}`,
-  ];
-  if (summary !== null && summary.length > 0) {
-    lines.push("", "## 要約", summary);
-  }
-  if (openQuestions.length > 0) {
-    lines.push("", "## 未確定事項");
-    for (const question of openQuestions) {
-      lines.push(`- ${question}`);
-    }
-  }
-  return lines.join("\n");
 }
 
 export type PipelineRequestApprovalResult = {
@@ -133,27 +104,7 @@ export async function main(
   await setResumeUrls(work_item_id, urls.resume, urls.cancel);
   await updateStatus(work_item_id, "awaiting_approval", null);
 
-  const ghToken = await wmill.getVariable("f/factory/github_token");
-  const client: GhClient = { run: runCommand, ghToken };
-  const viewer = await getViewer(client);
-  const draft = await latestDraft(work_item_id);
   const inboxUrl = buildInboxUrl(config.windmill_public_url);
-
-  await commentIssue(
-    client,
-    workItem.owner,
-    workItem.repo,
-    workItem.issue_number,
-    `issue-awaiting-approval-${String(attempt)}`,
-    work_item_id,
-    buildAwaitingApprovalComment(
-      config.instance_name,
-      inboxUrl,
-      draft?.summary ?? null,
-      draft?.open_questions ?? [],
-    ),
-    viewer.login,
-  );
 
   const webhookUrl = await wmill.getVariable("f/factory/discord_webhook_url");
   if (webhookUrl.length > 0) {

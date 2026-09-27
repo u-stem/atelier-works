@@ -118,7 +118,7 @@ read -rs 'v?GITHUB_TOKEN: ' && mise set -E local GITHUB_TOKEN="$v"; unset v
 ## draw.ioビューアーのプライバシー
 
 - 要件定義の図は`viewer.diagrams.net`のURL(`#`以降に圧縮したXMLを埋め込む形式)で共有する。URLのフラグメント部分(`#`以降)はブラウザからdiagrams.netのサーバーには送信されない。
-- ただし、生成されたURL自体をIssueコメントやDiscord通知として共有するため、**そのURLを受け取った人は誰でも図の内容を閲覧できる**。対象リポジトリがpublicであっても、図の内容が意図せず外部に見えてよいかを踏まえて運用する。
+- このURLはGitHub(Issue / PRコメント)にもDiscord通知にも投稿しない(2026-09-27の方針変更: GitHubには成果物のみを書く)。図の内容はFactory Console App(`f/factory/factory_console`)のInboxタブからのみ閲覧できるため、閲覧できるのはConsoleへのアクセス権を持つ人に限られる。
 
 ## 承認と権限
 

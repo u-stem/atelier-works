@@ -3,15 +3,15 @@
 // Encoding follows the diagrams.net URL-fragment convention: the XML is
 // URI-encoded, DEFLATE-compressed (raw, no zlib header — matches pako's
 // `deflateRaw`, confirmed against `node:zlib`'s `deflateRawSync` during the
-// M4 contract smoke), then standard base64-encoded (see toViewerUrl). The fragment
-// (`#...`) is never sent to the diagrams.net server by the browser, but the
-// resulting URL is shared verbatim in Issue comments / Discord (see
-// docs/security.md "draw.io ビューアーのプライバシー").
+// M4 contract smoke), then standard base64-encoded (see toViewerUrl). The
+// fragment (`#...`) is never sent to the diagrams.net server by the
+// browser. The resulting URL is never posted to GitHub or Discord (2026-09-27
+// policy) — it is only ever read from the factory_console App's Inbox tab
+// (see steps/console_query.ts), so only someone with Console access can view
+// a diagram (see docs/security.md "draw.io ビューアーのプライバシー").
 //
 // See also: .claude/skills/drawio-diagram/SKILL.md (the generation-side
 // contract: uncompressed XML, 12KB limit, `[a-z0-9-]+` diagram names).
-
-import type { Diagram } from "./types.ts";
 
 const MAX_XML_BYTES = 12 * 1024;
 const MAX_VIEWER_URL_FRAGMENT_BYTES = 8 * 1024;
@@ -95,56 +95,4 @@ export function toViewerUrl(
   }
 
   return `${baseUrl}?lightbox=1#R${base64}`;
-}
-
-// Matches the drawio-diagram skill's own naming contract
-// (`diagrams[].name` は `[a-z0-9-]+` の形式). `diagram.name` ultimately comes
-// from Claude's structured output, which is influenced (indirectly, via the
-// requirements prompt) by untrusted Issue content — a name outside this
-// pattern is replaced with a safe placeholder before being embedded in
-// Markdown, so it can never break out of the `[text](url)` link syntax or
-// inject Markdown/HTML into the rendered Issue comment.
-const SAFE_DIAGRAM_NAME_PATTERN = /^[a-z0-9-]{1,64}$/;
-
-function safeDiagramName(name: string, index: number): string {
-  return SAFE_DIAGRAM_NAME_PATTERN.test(name) ? name : `diagram-${index}`;
-}
-
-/**
- * Render the "## 図" Markdown section embedded in Issue comments (see the
- * factory-requirements skill's output chapter 10). Each diagram becomes a
- * link to its viewer URL, or a Japanese explanation when it can't be
- * rendered (invalid XML or too large to encode). A `name` that doesn't
- * match the drawio-diagram skill's `[a-z0-9-]{1,64}` contract is replaced
- * with `diagram-<index>` (security-audit fix — never trust `name` into
- * Markdown unescaped).
- */
-export function renderIssueSection(diagrams: readonly Diagram[]): string {
-  if (diagrams.length === 0) {
-    return "";
-  }
-
-  const lines: string[] = ["## 図", ""];
-  diagrams.forEach((diagram, index) => {
-    const safeName = safeDiagramName(diagram.name, index);
-    const validation = validateDrawioXml(diagram.drawio_xml);
-    if (!validation.valid) {
-      lines.push(
-        `- **${safeName}**: 図の検証に失敗しました(${validation.reason})`,
-      );
-      return;
-    }
-
-    const url = toViewerUrl(diagram.drawio_xml);
-    if (url === null) {
-      lines.push(
-        `- **${safeName}**: 図が大きすぎるため URL 化できませんでした`,
-      );
-      return;
-    }
-
-    lines.push(`- [${safeName}](${url})`);
-  });
-
-  return lines.join("\n");
 }

@@ -20,10 +20,11 @@
 // unresolved notice must not silently disappear from the tab that exists to
 // surface it.
 //
-// Diagrams are never returned as raw drawio_xml (also used for the Issue
-// comment via lib/drawio.ts's renderIssueSection) — only `{name, viewer_url}`,
-// matching the same viewer_url that would be posted to GitHub, so the App
-// never has to embed or re-derive the XML client-side.
+// Diagrams are never returned as raw drawio_xml — only `{name, viewer_url}`
+// (lib/drawio.ts's toViewerUrl), the same format the App's Inbox tab needs
+// to render a link, so the App never has to embed or re-derive the XML
+// client-side. This is also the only place a diagram's viewer URL is ever
+// exposed — it is never posted to GitHub or Discord (2026-09-27 policy).
 
 import { defaultSqlClient, type SqlClient, type SqlRow } from "../lib/db.ts";
 import { toViewerUrl, validateDrawioXml } from "../lib/drawio.ts";

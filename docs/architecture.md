@@ -33,7 +33,7 @@ flowchart TD
     B --> C[pipeline.flow 起動]
     C --> D[generate_requirements: headless Claude が要件定義ドラフトを生成]
     D --> E[request_approval: 承認 Inbox で suspend]
-    E -->|approve| F[Issue コメントへ転記、承認ラベル付与]
+    E -->|approve| F[Issue に Console リンクを1件投稿、承認ラベル付与]
     E -->|reject| G{再試行回数 < 上限}
     G -->|yes| D
     G -->|no| H[needs_human]
@@ -156,7 +156,7 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加のみで、ren
 | `cleanup_workspaces` | schedule(毎日03:00) | 期限切れworktreeの削除、古いtranscriptの削除 |
 | `daily_summary` | schedule(毎日09:00) | 前日のコスト・件数・失敗をDiscordに通知 |
 
-各scheduleのcronはタイムゾーン`Asia/Tokyo`、Windmillの6フィールド形式で`*.schedule.yaml`に持つ。多重実行防止はadvisory lockを使わず、各scheduleの`no_flow_overlap: true`で行う(前回実行中はスキップする)。複数インスタンスを同時運用する場合の排他はWindmill側ではなくGitHub側のclaim(`wip`ラベル + assignee)で担保する。error handlerで失敗を記録し、すべてのフロー（pipeline / pr_review / pr_fix）の`failed`終端処理（ラベル除去、Issue / PRコメント、Discord通知）は`on_error_flow`に一本化される。承認のタイムアウト(7日)はscheduleではなく`pipeline`のsuspend設定側が持つ。
+各scheduleのcronはタイムゾーン`Asia/Tokyo`、Windmillの6フィールド形式で`*.schedule.yaml`に持つ。多重実行防止はadvisory lockを使わず、各scheduleの`no_flow_overlap: true`で行う(前回実行中はスキップする)。複数インスタンスを同時運用する場合の排他はWindmill側ではなくGitHub側のclaim(`wip`ラベル + assignee)で担保する。error handlerで失敗を記録し、すべてのフロー（pipeline / pr_review / pr_fix）の`failed`終端処理（ラベル除去、Discord通知）は`on_error_flow`に一本化される。承認のタイムアウト(7日)はscheduleではなく`pipeline`のsuspend設定側が持つ。
 
 ## 命名規則
 

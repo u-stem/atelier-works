@@ -1,19 +1,15 @@
 // PathScript step for f/factory/manual_intake__flow: claims the Issue
 // `manual_intake_create_issue` just opened exactly the way poll_issues.ts
 // claims a discovered one (spec-cycle2.md §3 M5, §7 item 1), inserts the
-// work_items row, posts the claim comment, notifies Discord, and starts
-// f/factory/pipeline for it.
+// work_items row, notifies Discord, and starts f/factory/pipeline for it.
+// GitHub itself gets no comment at this stage (2026-09-27 policy: GitHub
+// carries only work product, operational notices go to Discord/Console).
 
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "../lib/config.ts";
 import { insertWorkItem, setFlowJobId } from "../lib/db.ts";
 import { type NotifyEvent, notify } from "../lib/discord.ts";
-import {
-  claimIssue,
-  commentIssue,
-  type GhClient,
-  getViewer,
-} from "../lib/github.ts";
+import { claimIssue, type GhClient, getViewer } from "../lib/github.ts";
 import { type Logger, logger, maskSecrets } from "../lib/log.ts";
 import { assertGitHubName } from "../lib/types.ts";
 import { runCommand } from "../lib/workspace.ts";
@@ -92,17 +88,6 @@ export async function main(
     head_sha: null,
     parent_work_item_id: null,
   });
-
-  await commentIssue(
-    client,
-    owner,
-    repo,
-    issue_number,
-    "issue",
-    workItemId,
-    `Factory インスタンス \`${config.instance_name}\` が担当を開始しました。`,
-    viewer.login,
-  );
 
   const flowJobId = await wmill.runFlowAsync("f/factory/pipeline", {
     work_item_id: workItemId,

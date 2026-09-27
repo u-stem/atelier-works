@@ -3,7 +3,7 @@
 ## 運用ルール
 
 - Issueを拾ったインスタンスの所有者が、そのIssueの承認を行う。
-- 各インスタンスは稼働前に`f/factory/factory_config`の`instance_name`を必ず設定する(Issueコメント・Discord通知・承認Inboxの担当表示に使われる)。
+- 各インスタンスは稼働前に`f/factory/factory_config`の`instance_name`を必ず設定する(Discord通知・承認Inboxの担当表示に使われる)。
 - 1つのIssueは1つのインスタンスが占有する。claim(assignee設定 + `wip`ラベル付与)に成功したインスタンスだけがそのIssueを処理し、後から来た他インスタンスは撤退する。
 - 処理が終端status(承認済み・要対応・タイムアウト・失敗・レビュー済み・再レビュー依頼・ブロック・キャンセル)になると、`wip`ラベルとトリガーラベル(`factory` / `factory:review` / `factory:fix`)は自動で外れる(承認済みは`factory:approved`に付け替わる)。**もう一度処理させたい場合は、人が改めてラベルを付け直す**(ラベルを残したままにしない設計により、孤児失敗したIssue / PRが自動で無限に再試行されることを防いでいる)。
 
@@ -11,7 +11,8 @@
 
 - Issueに`factory`ラベルを付けると拾われる(付与者はOWNER / MEMBER / COLLABORATORのいずれかである必要がある)。
 - 手動フォームからも同じパイプラインにIssueを投入できる想定(`manual_intake`フロー)。
-- **承認はFactory Console App(`f/factory/factory_console`)のInboxタブから行う**。Issueコメントに記載されたInboxのURLを開き、対象の作業項目を選択して要件定義・図(draw.ioビューアー)・未確定事項を確認したうえで承認 / 却下する(却下時は理由の入力が必須、補足は任意)。承認者は実行ユーザー(`WM_USERNAME`)として記録される。Windmillのapproval page URL(承認URL)から直接resumeしない(approvalがスキップされて`needs_human`に落ちる)。Appを使わない代替手順として、Windmill UIで`f/factory/approval_decide`を直接開き、`work_item_id` / `decision`(approve / reject) / `reason` / `note`を入力してRunすることもできる。
+- **承認はFactory Console App(`f/factory/factory_console`)のInboxタブから行う**。Discord通知に記載されたURL、またはConsoleを直接開き、対象の作業項目を選択して要件定義・図(draw.ioビューアー)・未確定事項を確認したうえで承認 / 却下する(却下時は理由の入力が必須、補足は任意)。承認者は実行ユーザー(`WM_USERNAME`)として記録される。Windmillのapproval page URL(承認URL)から直接resumeしない(approvalがスキップされて`needs_human`に落ちる)。Appを使わない代替手順として、Windmill UIで`f/factory/approval_decide`を直接開き、`work_item_id` / `decision`(approve / reject) / `reason` / `note`を入力してRunすることもできる。
+- Issueに自動投稿されるコメントは、要件定義が承認されたときのConsoleリンク1件のみ。着手・承認待ち・却下・期限切れ・失敗・要人手といった運用上の状態はIssueには書かず、Discord通知とConsoleで確認する(GitHubには成果物のみを残す方針、2026-09-27)。
 - Rejectすると要件定義が再生成され(`attempt`が加算される)、再度承認待ちになる。試行回数が上限を超えると`needs_human`になる。
 - 失敗したwork itemはFactory Console AppのFailuresタブから再実行できる(`retry_work_item`)。再実行時は`wip`ラベルと該当するトリガーラベル(`factory` / `factory:review` / `factory:fix`)を再付与して再起動する。
 - 通知の種類: `picked` / `awaiting_approval` / `approved` / `rejected` / `needs_human` / `failed` / `expired` / `cancelled` / `self_update`(ホスト操作が必要)/ `daily_summary`(前日のコスト・件数・失敗)。

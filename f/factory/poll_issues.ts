@@ -29,7 +29,6 @@ import {
 import { type NotifyEvent, notify } from "./lib/discord.ts";
 import {
   claimIssue,
-  commentIssue,
   type GhClient,
   getIssue,
   getIssueTimeline,
@@ -571,17 +570,6 @@ async function claimAndStart(
     head_sha: null,
     parent_work_item_id: null,
   });
-
-  await commentIssue(
-    client,
-    candidate.owner,
-    candidate.repo,
-    candidate.number,
-    "issue",
-    workItemId,
-    `Factory(インスタンス \`${config.instance_name}\`)がこの Issue に着手し、まもなく要件定義の生成を開始します。`,
-    viewerLogin,
-  );
 
   await notifySafe(
     discordWebhookUrl,
