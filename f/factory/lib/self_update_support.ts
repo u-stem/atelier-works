@@ -59,13 +59,16 @@ export function assertBranchMatches(
 /**
  * Paths whose changes worker-side `wmill sync push` / `wmill datatable
  * migrate up` cannot themselves apply — they require a host-side `mise run
- * deploy` (worker image rebuild, compose restart) to take effect.
+ * deploy` (worker image rebuild, compose restart) to take effect. Only the
+ * worker image / compose definition (`infra/**`) and the tool versions and
+ * env compose reads (`mise.toml`) qualify. `scripts/**` (host-side dev
+ * tooling such as bootstrap, doctor, lint) and `mise.local.toml.example`
+ * (a human-facing template) never affect the running worker, so a change
+ * there must not raise a "run `mise run deploy`" notice.
  */
 const HOST_ACTION_PATH_PATTERNS: readonly RegExp[] = [
   /^infra\//,
   /^mise\.toml$/,
-  /^mise\.local\.toml\.example$/,
-  /^scripts\//,
 ];
 
 export type ChangedPathsClassification = {

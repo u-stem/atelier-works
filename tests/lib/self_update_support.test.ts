@@ -69,14 +69,14 @@ describe("classifyChangedPaths", () => {
     expect(result.needs_host_action).toBe(true);
   });
 
-  test("flags mise.local.toml.example as needing host action", () => {
+  test("does not flag mise.local.toml.example (a human-facing template only)", () => {
     const result = classifyChangedPaths(["mise.local.toml.example"]);
-    expect(result.needs_host_action).toBe(true);
+    expect(result.needs_host_action).toBe(false);
   });
 
-  test("flags a path under scripts/ as needing host action", () => {
-    const result = classifyChangedPaths(["scripts/bootstrap.sh"]);
-    expect(result.needs_host_action).toBe(true);
+  test("does not flag a path under scripts/ (host tooling, not worker runtime)", () => {
+    const result = classifyChangedPaths(["scripts/lint-no-type-assertions.ts"]);
+    expect(result.needs_host_action).toBe(false);
   });
 
   test("does not flag a f/factory/** path", () => {
@@ -90,11 +90,9 @@ describe("classifyChangedPaths", () => {
       "infra/worker/Dockerfile",
       "docs/setup.md",
       "scripts/doctor.sh",
+      "mise.toml",
     ]);
-    expect(result.host_paths).toEqual([
-      "infra/worker/Dockerfile",
-      "scripts/doctor.sh",
-    ]);
+    expect(result.host_paths).toEqual(["infra/worker/Dockerfile", "mise.toml"]);
   });
 
   test("returns no host action for an empty path list", () => {
