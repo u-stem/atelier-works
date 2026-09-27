@@ -77,7 +77,9 @@ export async function main(
     return { ok: true, approval_request_id: approvalRequestId };
   }
 
-  const inboxUrl = buildConsoleUrl(config.windmill_public_url);
+  const inboxUrl = buildConsoleUrl(config.windmill_public_url, {
+    work_item_id,
+  });
 
   const webhookUrl = await wmill.getVariable("f/factory/discord_webhook_url");
   if (webhookUrl.length > 0) {

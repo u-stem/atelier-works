@@ -440,7 +440,8 @@ textarea:focus-visible {
 /* Inbox tab                                                              */
 /* ---------------------------------------------------------------------- */
 
-.inbox-tab {
+.inbox-tab,
+.requirements-tab {
   display: grid;
   grid-template-columns: 320px 1fr;
   gap: 20px;
@@ -493,6 +494,19 @@ textarea:focus-visible {
   color: var(--text-muted);
 }
 
+/* Requirements Inbox row preview (requirement_drafts.summary), clamped to 2
+   lines so a long summary doesn't push the "依頼: ..." meta line out of a
+   consistent row height. */
+.inbox-item-summary {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
 .inbox-detail {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -506,17 +520,8 @@ textarea:focus-visible {
   margin-top: 0;
 }
 
-.diagram-viewer {
-  margin-bottom: 12px;
-}
-
-.diagram-iframe {
-  width: 100%;
-  height: 320px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-}
+/* .diagram-viewer's own styling now lives in components/confluence.css
+   (used by components/DrawioViewer.tsx via RequirementsDocument.tsx). */
 
 /* ---------------------------------------------------------------------- */
 /* Tables                                                                 */
@@ -666,7 +671,8 @@ textarea:focus-visible {
 /* ---------------------------------------------------------------------- */
 
 @media (max-width: 900px) {
-  .inbox-tab {
+  .inbox-tab,
+  .requirements-tab {
     grid-template-columns: 1fr;
   }
 

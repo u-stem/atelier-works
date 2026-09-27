@@ -96,9 +96,22 @@ const FACTORY_CONSOLE_APP_PATH = "f/factory/factory_console";
 
 /** The Factory Console App's authenticated Inbox URL (pure, for testing) —
  * the only link ever posted for "go approve/reject this" (no raw suspend
- * capability URL exists anymore to leak). */
-export function buildConsoleUrl(windmillPublicUrl: string): string {
-  return `${windmillPublicUrl}/apps/get/${FACTORY_CONSOLE_APP_PATH}`;
+ * capability URL exists anymore to leak). When `target.work_item_id` is
+ * given, appends a `#requirements/<id>` deep-link fragment so the Console's
+ * 要件定義 tab can jump straight to that work item's requirements document
+ * (see the raw app's `lib/deepLink.ts`) — the App itself decides whether it
+ * can actually read the fragment (opaque-origin raw apps may not be able to
+ * see the parent frame's URL), so this is a best-effort convenience, not a
+ * guarantee; the work_item_id is also written out alongside this URL by
+ * every caller (Issue comment / Discord field) as a manual fallback. */
+export function buildConsoleUrl(
+  windmillPublicUrl: string,
+  target?: { work_item_id: number },
+): string {
+  const base = `${windmillPublicUrl}/apps/get/${FACTORY_CONSOLE_APP_PATH}`;
+  return target === undefined
+    ? base
+    : `${base}#requirements/${String(target.work_item_id)}`;
 }
 
 /** Which step script handles a decided approval_requests row of this kind

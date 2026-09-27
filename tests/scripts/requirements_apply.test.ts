@@ -22,16 +22,20 @@ describe("shouldProceed", () => {
 
 describe("buildApprovedComment", () => {
   const CONSOLE_URL =
-    "http://127.0.0.1:8080/apps/get/f/factory/factory_console";
+    "http://127.0.0.1:8080/apps/get/f/factory/factory_console#requirements/7";
 
   test("states that requirements are approved", () => {
-    expect(buildApprovedComment(CONSOLE_URL)).toContain(
+    expect(buildApprovedComment(CONSOLE_URL, 7)).toContain(
       "要件定義が承認されました",
     );
   });
 
   test("includes the console url", () => {
-    expect(buildApprovedComment(CONSOLE_URL)).toContain(CONSOLE_URL);
+    expect(buildApprovedComment(CONSOLE_URL, 7)).toContain(CONSOLE_URL);
+  });
+
+  test("includes the work_item_id as a manual fallback", () => {
+    expect(buildApprovedComment(CONSOLE_URL, 7)).toContain("work_item_id: 7");
   });
 });
 

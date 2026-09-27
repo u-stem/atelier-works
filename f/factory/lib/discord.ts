@@ -58,6 +58,11 @@ export type NotifyEvent =
       issue_number: number;
       issue_url: string;
       title: string;
+      // Console's 要件定義 deep link (lib/approval_support.ts's
+      // buildConsoleUrl with `{work_item_id}`) — the embed links here
+      // instead of the Issue (still shown as a field) so clicking through
+      // from Discord lands on the approved document, not just the Issue.
+      console_url: string;
     }
   | {
       kind: "needs_human";
@@ -228,10 +233,11 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
       return {
         title: `要件定義承認: #${event.issue_number} ${event.title}`,
         description: "要件定義ドラフトが承認され、Issue に投稿されました。",
-        url: event.issue_url,
+        url: event.console_url,
         fields: [
           instanceField(event.instance_name),
           repoField(event.owner, event.repo),
+          { name: "Issue", value: event.issue_url },
         ],
       };
     case "needs_human": {
