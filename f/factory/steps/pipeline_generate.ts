@@ -71,7 +71,6 @@ import {
 } from "../lib/db.ts";
 import { notify } from "../lib/discord.ts";
 import { validateDrawioXml } from "../lib/drawio.ts";
-import { type GhClient, removeLabel } from "../lib/github.ts";
 import { logger, maskSecrets } from "../lib/log.ts";
 import { REQUIREMENTS_SCHEMA, requirementsPrompt } from "../lib/prompts.ts";
 import { validateRequirementsDoc } from "../lib/requirements_doc.ts";
@@ -82,7 +81,6 @@ import {
 } from "../lib/requirements_template.ts";
 import {
   type Diagram,
-  type FactoryConfig,
   isRecord,
   isString,
   isStringArray,
@@ -190,21 +188,6 @@ async function notifySafe(
   await notify(webhookUrl, event);
 }
 
-/** Terminal transition: remove both wip and trigger labels (team-lead rule,
- * M5-review-derived) so a re-applied trigger label is what starts a fresh
- * cycle, rather than a needs_human/failed issue being silently reclaimed
- * forever by the next poll_issues run. */
-async function removeTerminalLabels(
-  client: GhClient,
-  owner: string,
-  repo: string,
-  issueNumber: number,
-  config: Pick<FactoryConfig, "wip_label" | "trigger_label">,
-): Promise<void> {
-  await removeLabel(client, owner, repo, issueNumber, config.wip_label);
-  await removeLabel(client, owner, repo, issueNumber, config.trigger_label);
-}
-
 /**
  * [major, M6 review round 1, devil-advocate] Originally did the full
  * terminal transition here (status `failed`, Issue comment, label
@@ -260,7 +243,6 @@ export async function main(
     wmill.getResource("f/factory/factory_config"),
   );
   const ghToken = await wmill.getVariable("f/factory/github_token");
-  const client: GhClient = { run: runCommand, ghToken };
   const webhookUrl = await wmill.getVariable("f/factory/discord_webhook_url");
 
   const workItem = await getWorkItem(work_item_id);
@@ -284,13 +266,6 @@ export async function main(
       work_item_id,
       "needs_human",
       `daily budget exceeded ($${budgetStatus.spent_usd.toFixed(2)} >= $${budgetStatus.limit_usd.toFixed(2)})`,
-    );
-    await removeTerminalLabels(
-      client,
-      workItem.owner,
-      workItem.repo,
-      workItem.issue_number,
-      config,
     );
     await notifySafe(webhookUrl, {
       kind: "needs_human",

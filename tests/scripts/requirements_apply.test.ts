@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
   buildApprovedComment,
-  computeApprovedLabels,
   decideRejectedOutcome,
   readRequestAttempt,
   shouldProceed,
@@ -33,42 +32,6 @@ describe("buildApprovedComment", () => {
 
   test("includes the console url", () => {
     expect(buildApprovedComment(CONSOLE_URL)).toContain(CONSOLE_URL);
-  });
-});
-
-const LABEL_CONFIG = {
-  wip_label: "factory:wip",
-  trigger_label: "factory",
-  approved_label: "factory:approved",
-};
-
-describe("computeApprovedLabels", () => {
-  test("drops the wip label", () => {
-    const result = computeApprovedLabels(["factory:wip"], LABEL_CONFIG);
-    expect(result).not.toContain("factory:wip");
-  });
-
-  test("drops the trigger label", () => {
-    const result = computeApprovedLabels(["factory"], LABEL_CONFIG);
-    expect(result).not.toContain("factory");
-  });
-
-  test("adds the approved label", () => {
-    const result = computeApprovedLabels([], LABEL_CONFIG);
-    expect(result).toContain("factory:approved");
-  });
-
-  test("does not duplicate the approved label if already present", () => {
-    const result = computeApprovedLabels(["factory:approved"], LABEL_CONFIG);
-    expect(result).toEqual(["factory:approved"]);
-  });
-
-  test("preserves labels a human added", () => {
-    const result = computeApprovedLabels(
-      ["factory:wip", "factory", "priority:high"],
-      LABEL_CONFIG,
-    );
-    expect(result).toContain("priority:high");
   });
 });
 

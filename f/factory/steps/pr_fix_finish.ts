@@ -35,7 +35,6 @@ import {
 } from "../lib/db.ts";
 import { type NotifyEvent, notify } from "../lib/discord.ts";
 import {
-  addLabels,
   type GhClient,
   getPr,
   getViewer,
@@ -262,46 +261,21 @@ export async function main(
 
     const gapReport = reason ?? summary;
 
-    // team-lead fix round 2 item d [DA critical]: re-apply the parent
-    // issue's wip + trigger labels *before* restarting its pipeline —
-    // they were removed the first time that issue's pipeline reached a
-    // terminal state, and poll_issues's reconcile (every 5 minutes) would
-    // otherwise see an active work item whose issue carries no trigger
-    // label and cancel the flow this step is about to start. Order below
-    // ("label re-apply -> status transition -> runFlowAsync") is the
-    // team-lead's explicit instruction.
-    //
-    // DA re-verification (fix round 2 follow-up): a failure here used to be
-    // swallowed (a warn log only) and the reroute proceeded anyway — the
-    // exact same reconcile-cancel race the re-apply was meant to prevent,
-    // since runFlowAsync would then start a child pipeline on an issue that
-    // still has no trigger label. Symmetric to retry_work_item throwing on
-    // its own failure: abort the reroute and fall back to needs_human
-    // (reason "relabel_failed") instead of proceeding regardless.
-    let addLabelsErrorMessage: string | null = null;
-    if (parentItem.issue_number !== null) {
-      try {
-        await addLabels(
-          client,
-          parentItem.owner,
-          parentItem.repo,
-          parentItem.issue_number,
-          [config.wip_label, config.trigger_label],
-        );
-      } catch (err) {
-        addLabelsErrorMessage = maskSecrets(
-          err instanceof Error ? err.message : String(err),
-        );
-      }
-    }
+    // 2026-09-27 label policy: the parent issue's `factory` label was
+    // consumed on claim and nothing re-applies or removes it any more, so
+    // there is no label to restore before restarting its pipeline (the old
+    // "re-apply wip + trigger" step is gone — it would leave a permanent
+    // trigger label behind and get the issue re-claimed after its next
+    // terminal state). The only remaining precondition is that the parent
+    // work item actually is an issue.
     const relabelFailedReason = evaluateRelabelFailure(
       parentItem.issue_number,
-      addLabelsErrorMessage,
+      null,
     );
 
     if (relabelFailedReason !== null) {
       log.warn(
-        "aborting requirements_gap reroute: could not re-apply parent issue labels",
+        "aborting requirements_gap reroute: parent work item has no issue",
         {
           parent_work_item_id,
           reason: "relabel_failed",

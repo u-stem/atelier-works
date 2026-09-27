@@ -155,8 +155,8 @@ M4のゲートでworker内で実測した外部コマンド・APIの挙動。型
 - attemptごとに再投稿しうるコメントは`kind`にattemptを含めて分ける。例: `issue-approved-<attempt>`。同じ`kind`を使い回すと2件目以降が投稿されない。
 - GitHubに投稿するのは成果物(承認済み要件定義へのリンク、PRレビュー本体、レビューへの返信)だけにする。着手・承認待ち・失敗・期限切れ・要人手のような運用通知はIssue / PRに書かず、DiscordとConsoleで伝える(2026-09-27の方針)。
 
-## 終端statusではwipラベル・トリガーラベルの両方を外す
+## Issueのトリガーラベルはclaim時に消費する(PR側は次PRで整理)
 
-work itemを終端status(`approved` / `needs_human` / `expired` / `failed` / `reviewed` / `rereview_requested` / `blocked` / `cancelled`)にするフローのステップは、必ず対象Issue / PRから`wip`ラベルを外す。外し忘れると、`poll_issues` / `poll_prs`の検索クエリ(`-label:<wip>`)から対象が永久に外れ、二度と拾われなくなる。
+Issueの`factory`ラベルはclaim時(assignee付与直後)に一度だけ消費する(外す)。以降どの状態遷移(終端status: `approved` / `needs_human` / `expired` / `failed` / `cancelled`を含む)でもIssue側のラベルは付け外ししない(2026-09-27方針)。状態は`work_items.status`のみが正で、GitHubのラベルは「人からFactoryへのトリガー」の役割に限定される。再クレーム防止は`listActive`によるDB上のチェックで行い、ラベルの有無には依存しない。最初からやり直すには人が改めて`factory`ラベルを付け直す(新しいcycle)。
 
-**加えて、トリガーラベル(Issueの`factory`、PRの`factory:review` / `factory:fix`)も外す**。`approved`の場合だけは`factory`を外す代わりに`factory:approved`へ付け替える。トリガーラベルを残したままにすると、次回のpollで`label:<trigger> -label:<wip>`の検索条件に再び合致し、孤児失敗したIssue / PRが自動で再クレーム → 再試行を無限に繰り返してしまう。人がラベルを付け直したときだけ新しいサイクル・再実行が始まる設計にする。
+PR側(`pr_review` / `pr_fix`)は現状維持: work itemを終端status(`reviewed` / `rereview_requested` / `blocked`など)にするフローのステップは、必ず対象PRから`wip`ラベルとトリガーラベル(`factory:review` / `factory:fix`)を外す。外し忘れると、`poll_prs`の検索クエリ(`-label:<wip>`)から対象が永久に外れ、二度と拾われなくなる、またはトリガーラベルが残ったまま孤児失敗したPRが自動で再クレーム → 再試行を無限に繰り返してしまう。人がラベルを付け直したときだけ新しいサイクル・再実行が始まる設計にする。PR側もIssue同様にラベル運用を整理する予定(次PR)。

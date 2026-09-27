@@ -59,7 +59,7 @@ export async function main(
   const viewer = await getViewer(client);
 
   const claim = await claimIssue(client, owner, repo, issue_number, {
-    wipLabel: config.wip_label,
+    triggerLabel: config.trigger_label,
     assignee: viewer.login,
   });
   if (!claim.claimed) {

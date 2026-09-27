@@ -1858,17 +1858,13 @@ export function shouldAdvanceWatermarks(kind: PrFixFinishBumpKind): boolean {
 }
 
 /**
- * Whether the parent issue's wip + trigger labels could not be re-applied
- * before a requirements_gap reroute — pure, so the abort-vs-proceed
- * decision itself is unit-testable without faking GitHub I/O (the actual
- * `addLabels` call/catch stays in pr_fix_finish.ts's main()). Either the
- * parent work item has no `issue_number` to label at all, or the
- * `addLabels` call itself failed (its caught, already-`maskSecrets`'d error
- * message) — both are treated the same way: DA re-verification (fix round
- * 2 follow-up) found that swallowing this failure and proceeding to
- * `runFlowAsync` anyway leaves the parent issue without its trigger label,
- * so poll_issues's reconcile (every 5 minutes) cancels the very pipeline
- * this step just started.
+ * Guard for pr_fix_finish.ts's requirements_gap reroute (pure, for
+ * testing): `null` means the reroute may proceed, otherwise the reason it
+ * must fall back to needs_human. Since the 2026-09-27 label policy no
+ * label is re-applied to the parent issue any more, so the only reason
+ * left is a parent work item without an issue number; the
+ * `addLabelsErrorMessage` parameter is kept for the PR-side caller shape
+ * and is always `null` on the issue path.
  */
 export function evaluateRelabelFailure(
   issueNumber: number | null,

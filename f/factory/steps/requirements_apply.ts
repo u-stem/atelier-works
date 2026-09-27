@@ -10,20 +10,20 @@
 // Every branch re-reads the work item's current status first and no-ops on
 // anything other than "awaiting_approval" (a concurrent poll_issues
 // reconcile — or a retried dispatch of this very script — may have already
-// moved the work item on). Both the wip label and the trigger label are
-// removed on every *terminal* transition (approved / needs_human — team-lead
-// rule, M5-review-derived: only a human re-applying the trigger label should
-// start a fresh cycle) but kept on a "reject, retry" transition since the
-// work item's lifecycle continues. The requirements worktree is always
-// removed at the end, regardless of which branch ran.
+// moved the work item on). No Issue labeling happens here at all (2026-09-27
+// policy: the Issue's `factory` trigger label was already consumed at claim
+// time, so there is nothing left to add/remove on any transition — status
+// lives solely in work_items.status; re-labeling the Issue is how a human
+// starts a brand-new cycle). The requirements worktree is always removed at
+// the end, regardless of which branch ran.
 //
 // The CAS (`updateStatusIfCurrent`) runs *before* any GitHub side effect
-// (comment, labels) in every branch — a failed GitHub call must never leave
-// the work item stuck `awaiting_approval` forever with the decision
+// (the approved comment) in every branch — a failed GitHub call must never
+// leave the work item stuck `awaiting_approval` forever with the decision
 // effectively lost, since nothing else re-drives this branch. `commentIssue`
-// is marker-idempotent and setLabels/notify are safe to repeat, so a retried
-// dispatch of this script (e.g. approval_decide.ts's `redispatch` path) can
-// safely redo them.
+// is marker-idempotent and notify is safe to repeat, so a retried dispatch
+// of this script (e.g. approval_decide.ts's `redispatch` path) can safely
+// redo it.
 //
 // Failure handling: this script runs standalone (not as a flow step), so
 // there is no flow-level on_error_flow handler to fall back on — a thrown
@@ -42,21 +42,11 @@ import {
   updateStatusIfCurrent,
 } from "../lib/db.ts";
 import { notify } from "../lib/discord.ts";
-import {
-  commentIssue,
-  type GhClient,
-  getIssue,
-  getViewer,
-  setLabels,
-} from "../lib/github.ts";
+import { commentIssue, type GhClient, getViewer } from "../lib/github.ts";
 import { type Logger, logger, maskSecrets } from "../lib/log.ts";
 import { type FactoryConfig, isNumber, type WorkItem } from "../lib/types.ts";
 import { removeWorktree, runCommand } from "../lib/workspace.ts";
-import {
-  describeReason,
-  nextActionFor,
-  removeTerminalLabels,
-} from "./pr_workflow_support.ts";
+import { describeReason, nextActionFor } from "./pr_workflow_support.ts";
 
 export type RequirementsApplyOutcome =
   | "approved"
@@ -79,25 +69,6 @@ export function shouldProceed(status: WorkItem["status"]): boolean {
  * only work product); the Issue gets a single pointer to the Console. */
 export function buildApprovedComment(consoleUrl: string): string {
   return `要件定義が承認されました。Console で内容を確認できます: ${consoleUrl}`;
-}
-
-/**
- * The full label set to PUT on an approved issue (pure, for testing):
- * `currentLabels` with `wip_label`/`trigger_label` dropped and
- * `approved_label` added (if not already present) — a swap, not the
- * destructive full-replace a bare `setLabels(..., [approved_label])` would
- * be (that would also drop every label a human had added, e.g. `priority`).
- */
-export function computeApprovedLabels(
-  currentLabels: readonly string[],
-  config: Pick<FactoryConfig, "wip_label" | "trigger_label" | "approved_label">,
-): string[] {
-  const kept = currentLabels.filter(
-    (label) => label !== config.wip_label && label !== config.trigger_label,
-  );
-  return kept.includes(config.approved_label)
-    ? kept
-    : [...kept, config.approved_label];
 }
 
 export type RejectedOutcome = "retry" | "needs_human";
@@ -235,19 +206,6 @@ async function run(
       buildApprovedComment(consoleUrl),
       viewer.login,
     );
-    const currentIssue = await getIssue(
-      client,
-      workItem.owner,
-      workItem.repo,
-      workItem.issue_number,
-    );
-    await setLabels(
-      client,
-      workItem.owner,
-      workItem.repo,
-      workItem.issue_number,
-      computeApprovedLabels(currentIssue.labels, config),
-    );
     await notifySafe(webhookUrl, {
       kind: "requirements_approved",
       instance_name: config.instance_name,
@@ -304,14 +262,6 @@ async function run(
     });
     return { outcome: "no_op" };
   }
-  await removeTerminalLabels(
-    client,
-    workItem.owner,
-    workItem.repo,
-    workItem.issue_number,
-    [config.wip_label, config.trigger_label],
-    log,
-  );
   await notifySafe(webhookUrl, {
     kind: "needs_human",
     instance_name: config.instance_name,

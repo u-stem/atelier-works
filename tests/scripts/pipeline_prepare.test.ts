@@ -6,7 +6,6 @@ import {
   isAlreadyTerminal,
   shouldCancelForClosedIssue,
   shouldReuseWorktree,
-  terminalLabelsToRemove,
 } from "../../f/factory/steps/pipeline_prepare.ts";
 
 function fakeEntry(overrides: Partial<WorktreeEntry> = {}): WorktreeEntry {
@@ -99,23 +98,5 @@ describe("shouldCancelForClosedIssue", () => {
 
   test("cancels once the issue is closed", () => {
     expect(shouldCancelForClosedIssue("closed")).toBe(true);
-  });
-});
-
-describe("terminalLabelsToRemove", () => {
-  test("includes the wip label", () => {
-    const labels = terminalLabelsToRemove({
-      wip_label: "factory:wip",
-      trigger_label: "factory",
-    });
-    expect(labels).toContain("factory:wip");
-  });
-
-  test("includes the trigger label", () => {
-    const labels = terminalLabelsToRemove({
-      wip_label: "factory:wip",
-      trigger_label: "factory",
-    });
-    expect(labels).toContain("factory");
   });
 });
