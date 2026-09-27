@@ -552,6 +552,14 @@ export type FactoryConfig = {
   daily_budget_usd: number;
   claude_timeout_sec: number;
   worktree_ttl_days: number;
+  /** Days a terminal-status work item (and everything that cascades from
+   * it: requirement_drafts, approvals, agent_runs, approval_requests, ...)
+   * is kept before cleanup_db.ts deletes it (M7-cont: DB cleanup). */
+  retention_work_items_days: number;
+  /** Days job_failures / deployments / resolved notices rows are kept
+   * before cleanup_db.ts deletes them independently of work_items
+   * (M7-cont: DB cleanup). */
+  retention_logs_days: number;
   factory_repo: string;
   /** Branch of factory_repo self_update.ts tracks (checks out on first
    * clone, then pulls) when updating this Software Factory instance from

@@ -53,8 +53,53 @@ describe("buildEmbed", () => {
       failure_count: 0,
       approved_count: 2,
       rejected_count: 1,
+      cleanup: null,
     });
     expect(embed.description).toBe("エージェント実行 3 件、$1.50 消費。");
+  });
+
+  test("shows a 'no record' DB cleanup field when cleanup is null", () => {
+    const embed = buildEmbed({
+      kind: "daily_summary",
+      instance_name: "local",
+      day: "2026-09-25",
+      run_count: 3,
+      total_cost_usd: 1.5,
+      failure_count: 0,
+      approved_count: 2,
+      rejected_count: 1,
+      cleanup: null,
+    });
+    expect(embed.fields).toContainEqual({
+      name: "DB 掃除",
+      value: "前日の掃除記録なし",
+    });
+  });
+
+  test("summarizes cleanup counts in the DB cleanup field when present", () => {
+    const embed = buildEmbed({
+      kind: "daily_summary",
+      instance_name: "local",
+      day: "2026-09-25",
+      run_count: 3,
+      total_cost_usd: 1.5,
+      failure_count: 0,
+      approved_count: 2,
+      rejected_count: 1,
+      cleanup: {
+        work_items_deleted: 3,
+        approval_requests_deleted: 5,
+        job_failures_deleted: 12,
+        deployments_deleted: 5,
+        notices_deleted: 2,
+        doc_dirs_deleted: 0,
+      },
+    });
+    expect(embed.fields).toContainEqual({
+      name: "DB 掃除",
+      value:
+        "work item 3件、失敗記録 12件、デプロイ記録 5件、通知 2件を削除しました",
+    });
   });
 
   test("truncates a title longer than 256 characters", () => {

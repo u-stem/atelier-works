@@ -95,7 +95,8 @@ function isClaudeResult(value: unknown): value is ClaudeResult {
 | `poll_issues` | 5分毎 | Issueの拾い上げ、claim、reconcile(closed/ラベル剥奪の検出、孤児ジョブの検出)、再投入検出 |
 | `self_update` | 10分毎 | self cloneのpull、変更があれば`wmill sync push`とmigrationの適用 |
 | `cleanup_workspaces` | 毎日03:00 | 期限切れworktreeの削除、古いtranscriptの削除、ディスク使用量の記録 |
-| `daily_summary`(`notify_discord`経由) | 毎日09:00 | 前日のコスト・件数・失敗をDiscordに通知 |
+| `cleanup_db` | 毎日03:30 | 保持期限を過ぎたDBレコード(終端状態の作業項目とその関連データ、失敗記録・デプロイ記録・解決済み通知)の削除 |
+| `daily_summary`(`notify_discord`経由) | 毎日09:00 | 前日のコスト・件数・失敗・DB掃除件数をDiscordに通知 |
 
 - 多重実行防止はadvisory lockを使わない。各`*.schedule.yaml`に`no_flow_overlap: true`を設定し、前回実行中はスキップする。複数インスタンスを同時運用する場合の排他はWindmill側ではなく **GitHub側のclaim**(`wip`ラベル + assigneeの付与、再取得しての確認)で担保する。
 - scheduleにはerror handlerを設定し、失敗を`job_failures`テーブルとDiscord通知に流す(`f/factory/on_error_schedule.ts`)。

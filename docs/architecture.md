@@ -143,6 +143,7 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加のみで、ren
 | `notices` | 要対応事項(ホスト操作要、PAT失効、SHA不一致など) |
 | `issue_proposals` | pr_fixの`propose_issue`返信が提案するIssue(title / body)と、その承認 / 却下の判断履歴 |
 | `approval_requests` | 承認依頼の汎用テーブル。`kind`は`requirements`(要件定義承認)/ `issue_proposal`(Issue化提案)、`status`は`pending` / `approved` / `rejected` / `expired`。次のPRでsuspendベースの承認を置き換える |
+| `cleanup_runs` | `cleanup_db`が実行するたびの削除件数の記録(work item・失敗記録・デプロイ記録・通知など) |
 
 ### view(Appはこれらのみを参照する)
 
@@ -157,7 +158,8 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加のみで、ren
 | `pipeline` | flow | 要件定義生成 → 承認suspend → 承認/却下/タイムアウトの分岐 → 通知 |
 | `self_update` | schedule(10分毎) | self cloneをpullし、変更があれば`wmill sync push`とmigrationを適用する |
 | `cleanup_workspaces` | schedule(毎日03:00) | 期限切れworktreeの削除、古いtranscriptの削除 |
-| `daily_summary` | schedule(毎日09:00) | 前日のコスト・件数・失敗をDiscordに通知 |
+| `cleanup_db` | schedule(毎日03:30) | 保持期限を過ぎたDBのレコード(終端状態の作業項目とその関連データ、失敗記録・デプロイ記録・解決済みの通知)の削除 |
+| `daily_summary` | schedule(毎日09:00) | 前日のコスト・件数・失敗・DB掃除件数をDiscordに通知 |
 
 各scheduleのcronはタイムゾーン`Asia/Tokyo`、Windmillの6フィールド形式で`*.schedule.yaml`に持つ。多重実行防止はadvisory lockを使わず、各scheduleの`no_flow_overlap: true`で行う(前回実行中はスキップする)。複数インスタンスを同時運用する場合の排他はWindmill側ではなくGitHub側のclaim(`wip`ラベル + assignee)で担保する。error handlerで失敗を記録し、すべてのフロー（pipeline / pr_review / pr_fix）の`failed`終端処理（ラベル除去、Discord通知）は`on_error_flow`に一本化される。承認のタイムアウト(7日)はscheduleではなく`pipeline`のsuspend設定側が持つ。
 
@@ -208,6 +210,7 @@ WindmillのUIはsummaryでソートされるため、種別を示すタグをsum
 | `f/factory/notify_daily_summary`(script + schedule) | `[SYS-3] 日次サマリ通知` |
 | `f/factory/on_error_flow` | `[SYS-4] フロー失敗ハンドラ` |
 | `f/factory/on_error_schedule` | `[SYS-5] schedule 失敗ハンドラ` |
+| `f/factory/cleanup_db`(script + schedule) | `[SYS-6] DB を掃除` |
 | `f/factory/lib/config` | `[LIB] 設定の読み込み` |
 | `f/factory/lib/db` | `[LIB] Data Table アクセス` |
 | `f/factory/lib/github` | `[LIB] GitHub API ラッパー` |
@@ -226,6 +229,7 @@ WindmillのUIはsummaryでソートされるため、種別を示すタグをsum
 | `f/factory/lib/cleanup_support` | `[LIB] 作業領域掃除の純粋ロジック` |
 | `f/factory/lib/requirements_template` | `[LIB] 要件定義テンプレートの定義` |
 | `f/factory/lib/requirements_doc` | `[LIB] 要件定義ファイルの検査` |
+| `f/factory/lib/cleanup_db_support` | `[LIB] DB 掃除の純粋ロジック` |
 
 ## PRワークフロー(pr_review / pr_fix)
 

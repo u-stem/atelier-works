@@ -6,6 +6,10 @@ import {
   countPendingIssueProposals,
   decideApprovalRequestIfPending,
   decideIssueProposal,
+  deleteDeploymentsBefore,
+  deleteJobFailuresBefore,
+  deleteResolvedNoticesBefore,
+  deleteTerminalWorkItemsBefore,
   expireApprovalRequestIfPending,
   findApprovalRequestBySubject,
   findApprovedWorkItemForIssue,
@@ -15,6 +19,7 @@ import {
   getWorkItem,
   hasPriorReview,
   insertApprovalRequest,
+  insertCleanupRun,
   insertFixRound,
   insertIssueProposal,
   insertReview,
@@ -1845,5 +1850,109 @@ describe("latestApproval", () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await latestApproval(1, 2, sql);
     expect(calls[0]?.values).toEqual([1, 2]);
+  });
+});
+
+describe("deleteTerminalWorkItemsBefore", () => {
+  const COUNT_ROW = { work_items_deleted: "2", approval_requests_deleted: "3" };
+
+  test("deletes terminal-status work_items via status = ANY(...)", async () => {
+    const { sql, calls } = createFakeSqlClient([[COUNT_ROW]]);
+    await deleteTerminalWorkItemsBefore(NOW, sql);
+    expect(calls[0]?.text).toContain("DELETE FROM factory.work_items");
+  });
+
+  test("counts cascaded approval_requests in the same statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[COUNT_ROW]]);
+    await deleteTerminalWorkItemsBefore(NOW, sql);
+    expect(calls).toHaveLength(1);
+  });
+
+  test("passes olderThan as an ISO string parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[COUNT_ROW]]);
+    await deleteTerminalWorkItemsBefore(NOW, sql);
+    expect(calls[0]?.values).toContain(NOW.toISOString());
+  });
+
+  test("returns the parsed counts", async () => {
+    const { sql } = createFakeSqlClient([[COUNT_ROW]]);
+    const deleted = await deleteTerminalWorkItemsBefore(NOW, sql);
+    expect(deleted).toEqual({
+      work_items_deleted: 2,
+      approval_requests_deleted: 3,
+    });
+  });
+
+  test("returns zero counts when the statement yields no row", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    const deleted = await deleteTerminalWorkItemsBefore(NOW, sql);
+    expect(deleted).toEqual({
+      work_items_deleted: 0,
+      approval_requests_deleted: 0,
+    });
+  });
+});
+
+describe("deleteJobFailuresBefore", () => {
+  test("deletes factory.job_failures rows past occurred_at", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }, { id: 2 }]]);
+    const count = await deleteJobFailuresBefore(NOW, sql);
+    expect(calls[0]?.text).toContain("DELETE FROM factory.job_failures");
+    expect(calls[0]?.text).toContain("occurred_at <=");
+    expect(count).toBe(2);
+  });
+});
+
+describe("deleteDeploymentsBefore", () => {
+  test("deletes factory.deployments rows past occurred_at", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    const count = await deleteDeploymentsBefore(NOW, sql);
+    expect(calls[0]?.text).toContain("DELETE FROM factory.deployments");
+    expect(count).toBe(1);
+  });
+});
+
+describe("deleteResolvedNoticesBefore", () => {
+  test("only deletes resolved notices past created_at", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    const count = await deleteResolvedNoticesBefore(NOW, sql);
+    expect(calls[0]?.text).toContain("DELETE FROM factory.notices");
+    expect(calls[0]?.text).toContain("resolved = true");
+    expect(count).toBe(1);
+  });
+});
+
+describe("insertCleanupRun", () => {
+  test("inserts into factory.cleanup_runs and returns its id", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    const id = await insertCleanupRun(
+      {
+        work_items_deleted: 3,
+        approval_requests_deleted: 5,
+        job_failures_deleted: 12,
+        deployments_deleted: 5,
+        notices_deleted: 2,
+        doc_dirs_deleted: 0,
+      },
+      sql,
+    );
+    expect(calls[0]?.text).toContain("INSERT INTO factory.cleanup_runs");
+    expect(id).toBe(7);
+  });
+
+  test("casts every count to ::integer", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await insertCleanupRun(
+      {
+        work_items_deleted: 3,
+        approval_requests_deleted: 5,
+        job_failures_deleted: 12,
+        deployments_deleted: 5,
+        notices_deleted: 2,
+        doc_dirs_deleted: 0,
+      },
+      sql,
+    );
+    expect(calls[0]?.text).toContain("::integer");
   });
 });

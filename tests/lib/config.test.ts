@@ -199,6 +199,36 @@ describe("parseFactoryConfig", () => {
     const raw = { ...LEGACY_RAW_CONFIG, max_fix_diff_lines: "1500" };
     expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
   });
+
+  test("defaults retention_work_items_days and retention_logs_days when absent (DB cleanup)", () => {
+    const config = parseFactoryConfig(LEGACY_RAW_CONFIG);
+    expect(config).toMatchObject({
+      retention_work_items_days: 90,
+      retention_logs_days: 30,
+    });
+  });
+
+  test("passes through explicit retention_work_items_days / retention_logs_days values", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      retention_work_items_days: 30,
+      retention_logs_days: 7,
+    });
+    expect(config).toMatchObject({
+      retention_work_items_days: 30,
+      retention_logs_days: 7,
+    });
+  });
+
+  test("throws when retention_work_items_days is zero", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, retention_work_items_days: 0 };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when retention_logs_days is not an integer", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, retention_logs_days: 1.5 };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
 });
 
 describe("loadConfig", () => {

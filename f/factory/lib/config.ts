@@ -55,6 +55,8 @@ type DefaultableField =
   | "daily_budget_usd"
   | "claude_timeout_sec"
   | "worktree_ttl_days"
+  | "retention_work_items_days"
+  | "retention_logs_days"
   | "factory_branch"
   | "windmill_public_url"
   | "review_label"
@@ -87,6 +89,11 @@ const DEFAULTS: Pick<FactoryConfig, DefaultableField> = {
   daily_budget_usd: 50,
   claude_timeout_sec: 1800,
   worktree_ttl_days: 7,
+  // New in the DB cleanup addition (2026-09-27): cleanup_db.ts's retention
+  // window for terminal work items (and everything cascading from them) vs.
+  // independent logs (job_failures / deployments / resolved notices).
+  retention_work_items_days: 90,
+  retention_logs_days: 30,
   factory_branch: "main",
   windmill_public_url: "http://127.0.0.1:8080",
   // New in cycle 2 (spec-cycle2.md §7 item 10).
@@ -284,6 +291,16 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
       raw,
       "worktree_ttl_days",
       DEFAULTS.worktree_ttl_days,
+    ),
+    retention_work_items_days: positiveIntegerField(
+      raw,
+      "retention_work_items_days",
+      DEFAULTS.retention_work_items_days,
+    ),
+    retention_logs_days: positiveIntegerField(
+      raw,
+      "retention_logs_days",
+      DEFAULTS.retention_logs_days,
     ),
     factory_repo: requiredStringField(raw, "factory_repo"),
     factory_branch: stringField(raw, "factory_branch", DEFAULTS.factory_branch),

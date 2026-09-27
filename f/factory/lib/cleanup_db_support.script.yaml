@@ -1,0 +1,9 @@
+summary: '[LIB] DB 掃除の純粋ロジック'
+description: 内部ライブラリです。直接実行するものではありません。DB保持期間の掃除処理が使う、保持期限の計算とサマリ整形ロジックです。
+lock: '!inline f/factory/lib/cleanup_db_support.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

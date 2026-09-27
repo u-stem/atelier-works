@@ -5,6 +5,8 @@
 // the global `fetch` and the default `sleep` is a real `setTimeout`-backed
 // wait, used in production for the single 429 retry.
 
+import { type CleanupCounts, summarizeCleanup } from "./cleanup_db_support.ts";
+
 export type DiscordEmbedField = {
   name: string;
   value: string;
@@ -125,6 +127,10 @@ export type NotifyEvent =
       failure_count: number;
       approved_count: number;
       rejected_count: number;
+      // DB cleanup addition (2026-09-27): the prior day's cleanup_db.ts run,
+      // or null when no run is recorded for that day (e.g. the schedule
+      // hasn't run yet on a freshly-bootstrapped instance).
+      cleanup: CleanupCounts | null;
     };
 
 function repoField(owner: string, repo: string): DiscordEmbedField {
@@ -299,6 +305,13 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
           { name: "失敗", value: String(event.failure_count) },
           { name: "承認", value: String(event.approved_count) },
           { name: "却下", value: String(event.rejected_count) },
+          {
+            name: "DB 掃除",
+            value:
+              event.cleanup === null
+                ? "前日の掃除記録なし"
+                : summarizeCleanup(event.cleanup),
+          },
         ],
       };
   }

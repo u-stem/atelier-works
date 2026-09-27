@@ -4,6 +4,7 @@ import {
   computeYesterdayRangeJst,
   getAgentRunSummary,
   getApprovalSummary,
+  getCleanupSummary,
 } from "../../f/factory/lib/summary_support.ts";
 
 type FakeCall = { text: string; values: unknown[] };
@@ -119,5 +120,74 @@ describe("getApprovalSummary", () => {
     const { sql } = createFakeSqlClient([[]]);
     const summary = await getApprovalSummary(RANGE, sql);
     expect(summary).toEqual({ approved_count: 0, rejected_count: 0 });
+  });
+});
+
+describe("getCleanupSummary", () => {
+  test("queries factory.cleanup_runs", async () => {
+    const { sql, calls } = createFakeSqlClient([
+      [
+        {
+          run_count: 1,
+          work_items_deleted: 3,
+          approval_requests_deleted: 5,
+          job_failures_deleted: 12,
+          deployments_deleted: 5,
+          notices_deleted: 2,
+          doc_dirs_deleted: 0,
+        },
+      ],
+    ]);
+    await getCleanupSummary(RANGE, sql);
+    expect(calls[0]?.text).toContain("FROM factory.cleanup_runs");
+  });
+
+  test("sums the sweep counts when a run exists in range", async () => {
+    const { sql } = createFakeSqlClient([
+      [
+        {
+          run_count: 1,
+          work_items_deleted: "3",
+          approval_requests_deleted: "5",
+          job_failures_deleted: "12",
+          deployments_deleted: "5",
+          notices_deleted: "2",
+          doc_dirs_deleted: "0",
+        },
+      ],
+    ]);
+    const summary = await getCleanupSummary(RANGE, sql);
+    expect(summary).toEqual({
+      work_items_deleted: 3,
+      approval_requests_deleted: 5,
+      job_failures_deleted: 12,
+      deployments_deleted: 5,
+      notices_deleted: 2,
+      doc_dirs_deleted: 0,
+    });
+  });
+
+  test("returns null when no cleanup_runs row falls in range", async () => {
+    const { sql } = createFakeSqlClient([
+      [
+        {
+          run_count: 0,
+          work_items_deleted: 0,
+          approval_requests_deleted: 0,
+          job_failures_deleted: 0,
+          deployments_deleted: 0,
+          notices_deleted: 0,
+          doc_dirs_deleted: 0,
+        },
+      ],
+    ]);
+    const summary = await getCleanupSummary(RANGE, sql);
+    expect(summary).toBeNull();
+  });
+
+  test("returns null when the query returns no row at all", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    const summary = await getCleanupSummary(RANGE, sql);
+    expect(summary).toBeNull();
   });
 });

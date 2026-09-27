@@ -18,6 +18,8 @@ schema:
     - daily_budget_usd
     - claude_timeout_sec
     - worktree_ttl_days
+    - retention_work_items_days
+    - retention_logs_days
     - factory_repo
     - factory_branch
     - instance_name
@@ -178,6 +180,16 @@ schema:
       default: []
       items:
         type: string
+    retention_logs_days:
+      type: integer
+      description: >-
+        失敗記録・デプロイ記録・解決済みのお知らせを保持する日数です。この日数を過ぎると自動的に削除されます。
+      default: 30
+    retention_work_items_days:
+      type: integer
+      description: >-
+        終端状態(承認済み・要対応・タイムアウト・失敗・レビュー済み・再レビュー依頼・ブロック・キャンセル)になった作業項目を保持する日数です。この日数を過ぎると、関連する要件定義ドラフトや承認依頼もあわせて自動的に削除されます。
+      default: 90
     rereview_label:
       type: string
       description: >-
