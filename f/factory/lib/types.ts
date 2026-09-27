@@ -295,6 +295,57 @@ export type Approval = {
 };
 
 // ---------------------------------------------------------------------------
+// approval_requests (generalized approval waiting, replacing suspend-based
+// approval per migrations/datatable/main/20260927120000_approval_requests.
+// up.sql). This PR only adds the schema and db.ts accessors — callers still
+// go through factory.approvals / the pipeline.flow suspend step until a
+// follow-up PR switches them over.
+// ---------------------------------------------------------------------------
+
+/** What kind of decision this approval request is waiting on. `subject_id`
+ * points at the matching row in requirement_drafts (`"requirements"`) or
+ * issue_proposals (`"issue_proposal"`). */
+export type ApprovalRequestKind = "requirements" | "issue_proposal";
+export const APPROVAL_REQUEST_KINDS: readonly ApprovalRequestKind[] = [
+  "requirements",
+  "issue_proposal",
+];
+
+export type ApprovalRequestStatus =
+  | "pending"
+  | "approved"
+  | "rejected"
+  | "expired";
+export const APPROVAL_REQUEST_STATUSES: readonly ApprovalRequestStatus[] = [
+  "pending",
+  "approved",
+  "rejected",
+  "expired",
+];
+
+/** One row of factory.approval_requests. */
+export type ApprovalRequest = {
+  id: number;
+  kind: ApprovalRequestKind;
+  work_item_id: number;
+  /** requirement_drafts.id (kind "requirements") or issue_proposals.id
+   * (kind "issue_proposal"). */
+  subject_id: number;
+  status: ApprovalRequestStatus;
+  /** Requester-side metadata, e.g. `{ "attempt": n }` for "requirements". */
+  payload: Record<string, unknown>;
+  /** Decider-side options, e.g. `{ "with_factory_label": bool }` for
+   * "issue_proposal". */
+  decision_options: Record<string, unknown>;
+  requested_at: Date;
+  /** `null` means no deadline (e.g. "issue_proposal"). */
+  expires_at: Date | null;
+  decided_at: Date | null;
+  decided_by: string | null;
+  reason: string | null;
+};
+
+// ---------------------------------------------------------------------------
 // Insert-payload "Record" types: the shape passed to db.ts's recording
 // functions (no `id` / `created_at` — those are assigned by the insert).
 // ---------------------------------------------------------------------------

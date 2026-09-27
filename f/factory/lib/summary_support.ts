@@ -124,18 +124,25 @@ function toApprovalSummary(row: SqlRow | undefined): ApprovalSummary {
   };
 }
 
-/** Aggregates factory.approvals over `range` (spec-cycle2.md §3
- * "承認 / 差し戻し数"). */
+/** Aggregates factory.approval_requests over `range` (spec-cycle2.md §3
+ * "承認 / 差し戻し数"). Reads the generalized approval_requests table
+ * (migrations/datatable/main/20260927120000_approval_requests.up.sql, which
+ * backfills factory.approvals' history) rather than factory.approvals
+ * itself. Restricted to kind = 'requirements' so the KPI keeps its
+ * original meaning (requirement-draft decisions only; issue_proposal rows
+ * live in the same table but are not counted here) — that table is retained for its pre-migration history only and
+ * stops receiving new writes once callers switch over in a follow-up PR. */
 export async function getApprovalSummary(
   range: DayRange,
   sql: SqlClient = defaultSqlClient,
 ): Promise<ApprovalSummary> {
   const rows = await sql`
     SELECT
-      count(*) FILTER (WHERE decision = 'approved') AS approved_count,
-      count(*) FILTER (WHERE decision = 'rejected') AS rejected_count
-    FROM factory.approvals
-    WHERE decided_at >= ${range.start.toISOString()}
+      count(*) FILTER (WHERE status = 'approved') AS approved_count,
+      count(*) FILTER (WHERE status = 'rejected') AS rejected_count
+    FROM factory.approval_requests
+    WHERE kind = 'requirements'
+      AND decided_at >= ${range.start.toISOString()}
       AND decided_at < ${range.end.toISOString()}
   `.fetch();
   return toApprovalSummary(rows[0]);

@@ -19,8 +19,13 @@
 import * as wmill from "windmill-client@1.817.0";
 import {
   type AgentRunRecord,
+  APPROVAL_REQUEST_KINDS,
+  APPROVAL_REQUEST_STATUSES,
   type Approval,
   type ApprovalDecision,
+  type ApprovalRequest,
+  type ApprovalRequestKind,
+  type ApprovalRequestStatus,
   type DeploymentRecord,
   type Diagram,
   type FailureRecord,
@@ -201,6 +206,22 @@ function parseJsonArray(value: unknown, field: string): unknown[] {
     }
   }
   throw new Error(`db: row field "${field}" is not a JSON array`);
+}
+
+function parseJsonObject(
+  value: unknown,
+  field: string,
+): Record<string, unknown> {
+  if (isRecord(value)) {
+    return value;
+  }
+  if (isString(value)) {
+    const parsed: unknown = JSON.parse(value);
+    if (isRecord(parsed)) {
+      return parsed;
+    }
+  }
+  throw new Error(`db: row field "${field}" is not a JSON object`);
 }
 
 function isDiagram(value: unknown): value is Diagram {
@@ -1458,4 +1479,210 @@ export async function latestApproval(
   `.fetch();
   const row = rows[0];
   return row === undefined ? null : toApproval(row);
+}
+
+/** Fetches one factory.requirement_drafts row by id, or `null` if it does
+ * not exist — used by approval_requests readers (kind "requirements") to
+ * resolve `subject_id` into its full draft. */
+export async function getRequirementDraft(
+  id: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<RequirementDraft | null> {
+  const rows =
+    await sql`SELECT * FROM factory.requirement_drafts WHERE id = ${id}`.fetch();
+  const row = rows[0];
+  return row === undefined ? null : toRequirementDraft(row);
+}
+
+// ---------------------------------------------------------------------------
+// approval_requests (generalized approval waiting, replacing suspend-based
+// approval) — see
+// migrations/datatable/main/20260927120000_approval_requests.up.sql. This
+// module only adds schema + accessors; callers still go through
+// factory.approvals / pipeline.flow's suspend step until a follow-up PR
+// switches them over.
+// ---------------------------------------------------------------------------
+
+/** Parses a full factory.approval_requests row (same `SqlRow` contract as
+ * every other `toXxx` parser in this module). */
+export function toApprovalRequest(row: SqlRow): ApprovalRequest {
+  return {
+    id: parseId(row.id, "id"),
+    kind: parseEnum<ApprovalRequestKind>(
+      row.kind,
+      APPROVAL_REQUEST_KINDS,
+      "kind",
+    ),
+    work_item_id: parseId(row.work_item_id, "work_item_id"),
+    subject_id: parseId(row.subject_id, "subject_id"),
+    status: parseEnum<ApprovalRequestStatus>(
+      row.status,
+      APPROVAL_REQUEST_STATUSES,
+      "status",
+    ),
+    payload: parseJsonObject(row.payload, "payload"),
+    decision_options: parseJsonObject(row.decision_options, "decision_options"),
+    requested_at: parseDate(row.requested_at, "requested_at"),
+    expires_at:
+      row.expires_at === null || row.expires_at === undefined
+        ? null
+        : parseDate(row.expires_at, "expires_at"),
+    decided_at:
+      row.decided_at === null || row.decided_at === undefined
+        ? null
+        : parseDate(row.decided_at, "decided_at"),
+    decided_by: parseNullableString(row.decided_by, "decided_by"),
+    reason: parseNullableString(row.reason, "reason"),
+  };
+}
+
+export type NewApprovalRequest = {
+  kind: ApprovalRequestKind;
+  work_item_id: number;
+  subject_id: number;
+  payload: Record<string, unknown>;
+  expires_at: Date | null;
+};
+
+/**
+ * Inserts a factory.approval_requests row and returns its id. Idempotent via
+ * the table's `(kind, subject_id)` unique constraint: `ON CONFLICT DO
+ * NOTHING` makes a retry after a crash (or a concurrent duplicate insert) a
+ * no-op rather than an error, and this function then looks up and returns
+ * the existing row's id via `findApprovalRequestBySubject` so every caller
+ * gets a valid id regardless of which branch fired. The INSERT and the
+ * follow-up SELECT are two statements, not one transaction: a concurrent
+ * decide/expire between them is harmless (the id is stable), but the row
+ * returned may already be past `pending`.
+ */
+export async function insertApprovalRequest(
+  input: NewApprovalRequest,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  const rows = await sql`
+    INSERT INTO factory.approval_requests (
+      kind, work_item_id, subject_id, payload, expires_at
+    ) VALUES (
+      ${input.kind}, ${input.work_item_id}::bigint, ${input.subject_id}::bigint,
+      ${JSON.stringify(input.payload)}::jsonb,
+      ${input.expires_at === null ? null : input.expires_at.toISOString()}::timestamptz
+    )
+    ON CONFLICT (kind, subject_id) DO NOTHING
+    RETURNING id
+  `.fetch();
+  const row = rows[0];
+  if (row !== undefined) {
+    return parseId(row.id, "id");
+  }
+  const existing = await findApprovalRequestBySubject(
+    input.kind,
+    input.subject_id,
+    sql,
+  );
+  if (existing === null) {
+    throw new Error(
+      "db: insertApprovalRequest: conflict but no matching (kind, subject_id) row found",
+    );
+  }
+  return existing.id;
+}
+
+/** Fetches one factory.approval_requests row by id, or `null` if it does
+ * not exist. */
+export async function getApprovalRequest(
+  id: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<ApprovalRequest | null> {
+  const rows =
+    await sql`SELECT * FROM factory.approval_requests WHERE id = ${id}`.fetch();
+  const row = rows[0];
+  return row === undefined ? null : toApprovalRequest(row);
+}
+
+/** Fetches the factory.approval_requests row for a given `(kind,
+ * subject_id)`, or `null` if none exists — the table's natural key, used by
+ * `insertApprovalRequest`'s idempotent-insert fallback and by callers that
+ * only know the subject (e.g. a requirement draft id) rather than the
+ * approval request's own id. */
+export async function findApprovalRequestBySubject(
+  kind: ApprovalRequestKind,
+  subjectId: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<ApprovalRequest | null> {
+  const rows = await sql`
+    SELECT * FROM factory.approval_requests
+    WHERE kind = ${kind} AND subject_id = ${subjectId}::bigint
+  `.fetch();
+  const row = rows[0];
+  return row === undefined ? null : toApprovalRequest(row);
+}
+
+export type ApprovalRequestDecisionInput = {
+  status: "approved" | "rejected";
+  decided_by: string;
+  reason: string | null;
+  /** Decider-side options (e.g. issue_proposal's with_factory_label); defaults to `{}`. */
+  decision_options?: Record<string, unknown>;
+};
+
+/**
+ * Records a human's approve/reject decision on a factory.approval_requests
+ * row — atomically guarded by `WHERE status = 'pending'`, the same
+ * compare-and-swap shape as `decideIssueProposal` / `updateStatusIfCurrent`.
+ * Returns `true` when this call actually performed the transition, `false`
+ * when no row matched (already decided or expired by a concurrent caller).
+ */
+export async function decideApprovalRequestIfPending(
+  id: number,
+  decision: ApprovalRequestDecisionInput,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  const rows = await sql`
+    UPDATE factory.approval_requests
+    SET status = ${decision.status},
+        decided_at = now(),
+        decided_by = ${decision.decided_by},
+        reason = ${decision.reason},
+        decision_options = ${JSON.stringify(decision.decision_options ?? {})}::jsonb
+    WHERE id = ${id} AND status = 'pending'
+    RETURNING id
+  `.fetch();
+  return rows.length > 0;
+}
+
+/**
+ * Marks a factory.approval_requests row expired — atomically guarded by
+ * `WHERE status = 'pending'` (same compare-and-swap shape as
+ * `decideApprovalRequestIfPending`), so a request a human decided in the
+ * same race loses the race cleanly instead of being clobbered back to
+ * "expired". Returns `true` when this call actually performed the
+ * transition, `false` when no row matched.
+ */
+export async function expireApprovalRequestIfPending(
+  id: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  const rows = await sql`
+    UPDATE factory.approval_requests
+    SET status = 'expired', decided_at = now()
+    WHERE id = ${id} AND status = 'pending'
+    RETURNING id
+  `.fetch();
+  return rows.length > 0;
+}
+
+/** Lists every `status = 'pending'` factory.approval_requests row whose
+ * `expires_at` has passed `now` — the timeout sweep's target set for a
+ * follow-up PR's scheduled expiry check (replacing pipeline.flow's suspend
+ * timeout). A request with `expires_at IS NULL` never appears here (no
+ * deadline, e.g. "issue_proposal"). */
+export async function listExpiredPendingApprovalRequests(
+  now: Date,
+  sql: SqlClient = defaultSqlClient,
+): Promise<ApprovalRequest[]> {
+  const rows = await sql`
+    SELECT * FROM factory.approval_requests
+    WHERE status = 'pending' AND expires_at IS NOT NULL AND expires_at <= ${now.toISOString()}::timestamptz
+  `.fetch();
+  return rows.map(toApprovalRequest);
 }

@@ -4,11 +4,17 @@ import {
   bumpWatermarks,
   clearResumeUrls,
   countPendingIssueProposals,
+  decideApprovalRequestIfPending,
   decideIssueProposal,
+  expireApprovalRequestIfPending,
+  findApprovalRequestBySubject,
   findApprovedWorkItemForIssue,
+  getApprovalRequest,
   getIssueProposal,
+  getRequirementDraft,
   getWorkItem,
   hasPriorReview,
+  insertApprovalRequest,
   insertFixRound,
   insertIssueProposal,
   insertReview,
@@ -18,6 +24,7 @@ import {
   latestFixRound,
   latestPrWorkItem,
   listActive,
+  listExpiredPendingApprovalRequests,
   listPendingIssueProposals,
   listStaleTerminalWorkItems,
   nextCycleForIssue,
@@ -38,6 +45,7 @@ import {
   setResumeUrls,
   sumAgentCostSince,
   toApproval,
+  toApprovalRequest,
   toFixRoundRecord,
   toIssueProposal,
   toRequirementDraft,
@@ -1108,6 +1116,255 @@ describe("hasPriorReview", () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await hasPriorReview("octo-owner", "atelier-works", 7, 1, sql);
     expect(calls[0]?.values).toContain(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// approval_requests (generalized approval waiting) — see
+// migrations/datatable/main/20260927120000_approval_requests.up.sql.
+// ---------------------------------------------------------------------------
+
+const APPROVAL_REQUEST_ROW: SqlRow = {
+  id: 5,
+  kind: "requirements",
+  work_item_id: 1,
+  subject_id: 10,
+  status: "pending",
+  payload: { attempt: 1 },
+  decision_options: {},
+  requested_at: NOW.toISOString(),
+  expires_at: null,
+  decided_at: null,
+  decided_by: null,
+  reason: null,
+};
+
+describe("insertApprovalRequest", () => {
+  test("inserts into factory.approval_requests", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    await insertApprovalRequest(
+      {
+        kind: "requirements",
+        work_item_id: 1,
+        subject_id: 10,
+        payload: { attempt: 1 },
+        expires_at: null,
+      },
+      sql,
+    );
+    expect(calls[0]?.text).toContain("INSERT INTO factory.approval_requests");
+  });
+
+  test("guards the insert with ON CONFLICT (kind, subject_id) DO NOTHING", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    await insertApprovalRequest(
+      {
+        kind: "requirements",
+        work_item_id: 1,
+        subject_id: 10,
+        payload: { attempt: 1 },
+        expires_at: null,
+      },
+      sql,
+    );
+    expect(calls[0]?.text).toContain(
+      "ON CONFLICT (kind, subject_id) DO NOTHING",
+    );
+  });
+
+  test("returns the inserted id when the insert wins the race", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 5 }]]);
+    const id = await insertApprovalRequest(
+      {
+        kind: "requirements",
+        work_item_id: 1,
+        subject_id: 10,
+        payload: { attempt: 1 },
+        expires_at: null,
+      },
+      sql,
+    );
+    expect(id).toBe(5);
+  });
+
+  test("is idempotent: looks up the existing row when the conflict fires", async () => {
+    const { sql, calls } = createFakeSqlClient([
+      [], // INSERT ... ON CONFLICT DO NOTHING returns no row
+      [APPROVAL_REQUEST_ROW], // findApprovalRequestBySubject fallback lookup
+    ]);
+    const id = await insertApprovalRequest(
+      {
+        kind: "requirements",
+        work_item_id: 1,
+        subject_id: 10,
+        payload: { attempt: 1 },
+        expires_at: null,
+      },
+      sql,
+    );
+    expect(id).toBe(5);
+    expect(calls[1]?.text).toContain("FROM factory.approval_requests");
+  });
+});
+
+describe("toApprovalRequest", () => {
+  test("parses a factory.approval_requests row", () => {
+    const request = toApprovalRequest(APPROVAL_REQUEST_ROW);
+    expect(request).toMatchObject({
+      id: 5,
+      kind: "requirements",
+      work_item_id: 1,
+      subject_id: 10,
+      status: "pending",
+      payload: { attempt: 1 },
+    });
+  });
+
+  test("throws when a required column is missing", () => {
+    expect(() => toApprovalRequest({ id: 5 })).toThrow();
+  });
+});
+
+describe("getApprovalRequest", () => {
+  test("returns null when the request does not exist", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    const request = await getApprovalRequest(99, sql);
+    expect(request).toBeNull();
+  });
+
+  test("returns the parsed request when found", async () => {
+    const { sql } = createFakeSqlClient([[APPROVAL_REQUEST_ROW]]);
+    const request = await getApprovalRequest(5, sql);
+    expect(request?.id).toBe(5);
+  });
+});
+
+describe("findApprovalRequestBySubject", () => {
+  test("queries by kind and subject_id", async () => {
+    const { sql, calls } = createFakeSqlClient([[APPROVAL_REQUEST_ROW]]);
+    await findApprovalRequestBySubject("requirements", 10, sql);
+    expect(calls[0]?.values).toEqual(["requirements", 10]);
+  });
+
+  test("returns null when no row matches", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    const request = await findApprovalRequestBySubject(
+      "issue_proposal",
+      42,
+      sql,
+    );
+    expect(request).toBeNull();
+  });
+});
+
+describe("decideApprovalRequestIfPending", () => {
+  test("updates status, decided_by, reason, and decision_options", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    const updated = await decideApprovalRequestIfPending(
+      5,
+      {
+        status: "approved",
+        decided_by: "alice",
+        reason: null,
+        decision_options: { with_factory_label: true },
+      },
+      sql,
+    );
+    expect(calls[0]?.text).toContain("UPDATE factory.approval_requests");
+    expect(updated).toBe(true);
+  });
+
+  test("guards the update with WHERE status = 'pending'", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    await decideApprovalRequestIfPending(
+      5,
+      {
+        status: "rejected",
+        decided_by: "alice",
+        reason: "scope外のため",
+        decision_options: {},
+      },
+      sql,
+    );
+    expect(calls[0]?.text).toContain("status = 'pending'");
+  });
+
+  test("returns false when no pending row matched", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    const updated = await decideApprovalRequestIfPending(
+      5,
+      {
+        status: "approved",
+        decided_by: "alice",
+        reason: null,
+        decision_options: {},
+      },
+      sql,
+    );
+    expect(updated).toBe(false);
+  });
+});
+
+describe("expireApprovalRequestIfPending", () => {
+  test("updates status to expired, guarded by WHERE status = 'pending'", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    const expired = await expireApprovalRequestIfPending(5, sql);
+    expect(calls[0]?.text).toContain("status = 'expired'");
+    expect(calls[0]?.text).toContain("status = 'pending'");
+    expect(expired).toBe(true);
+  });
+
+  test("returns false when no pending row matched", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    const expired = await expireApprovalRequestIfPending(5, sql);
+    expect(expired).toBe(false);
+  });
+});
+
+describe("listExpiredPendingApprovalRequests", () => {
+  test("queries pending rows past their deadline", async () => {
+    const { sql, calls } = createFakeSqlClient([[APPROVAL_REQUEST_ROW]]);
+    const now = new Date("2026-10-04T00:00:00.000Z");
+    await listExpiredPendingApprovalRequests(now, sql);
+    expect(calls[0]?.text).toContain("status = 'pending'");
+    expect(calls[0]?.text).toContain("expires_at IS NOT NULL");
+    expect(calls[0]?.text).toContain("expires_at <=");
+  });
+
+  test("returns the parsed rows", async () => {
+    const { sql } = createFakeSqlClient([[APPROVAL_REQUEST_ROW]]);
+    const requests = await listExpiredPendingApprovalRequests(
+      new Date("2026-10-04T00:00:00.000Z"),
+      sql,
+    );
+    expect(requests).toHaveLength(1);
+  });
+});
+
+describe("getRequirementDraft", () => {
+  test("returns null when the draft does not exist", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    const draft = await getRequirementDraft(99, sql);
+    expect(draft).toBeNull();
+  });
+
+  test("returns the parsed draft when found", async () => {
+    const { sql } = createFakeSqlClient([
+      [
+        {
+          id: 10,
+          work_item_id: 1,
+          attempt: 1,
+          summary: "summary",
+          markdown: "# markdown",
+          diagrams: [],
+          open_questions: [],
+          created_at: NOW.toISOString(),
+        },
+      ],
+    ]);
+    const draft = await getRequirementDraft(10, sql);
+    expect(draft?.id).toBe(10);
   });
 });
 
