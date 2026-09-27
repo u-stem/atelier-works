@@ -39,6 +39,7 @@
 // column value (e.g. `"../../etc/passwd.drawio"`) is skipped rather than
 // read (see `readDocFromDisk`).
 
+import { formatAuditPeriodLabel } from "../lib/audit_support.ts";
 import { defaultSqlClient, type SqlClient, type SqlRow } from "../lib/db.ts";
 import { logger } from "../lib/log.ts";
 import {
@@ -52,6 +53,8 @@ import {
   type ApprovalRequestStatus,
   type Diagram,
   type FixReply,
+  ISSUE_PROPOSAL_ORIGINS,
+  type IssueProposalOrigin,
   type IssueProposalStatus,
   isBoolean,
   isNumber,
@@ -75,6 +78,8 @@ const CONSOLE_VIEWS = [
   "fix_rounds",
   "requirements_index",
   "requirements_doc",
+  "audit_index",
+  "audit_doc",
 ] as const;
 
 export type ConsoleView = (typeof CONSOLE_VIEWS)[number];
@@ -350,9 +355,47 @@ export type IssueProposalInboxRow = InboxRowBase & {
   readonly created_issue_number: number | null;
   readonly created_issue_url: string | null;
   readonly claimed_by: string | null;
+  /** What raised this proposal (工程5, `factory.issue_proposals.origin`):
+   * `"pr_fix"` for the pre-existing propose_issue flow, `"audit"` for an
+   * audit-report proposal (see `buildApprovalPayload` in
+   * steps/audit_generate.ts). A row whose `origin` column doesn't parse as
+   * one of `ISSUE_PROPOSAL_ORIGINS` falls back to `"pr_fix"` (pre-audit
+   * rows never carried the column). */
+  readonly origin: IssueProposalOrigin;
+  /** `payload.period_label` (the audit period this proposal came from,
+   * e.g. "2026-09-22〜2026-09-28") — `null` for a `"pr_fix"` origin, which
+   * carries no such payload. */
+  readonly period_label: string | null;
+  /** `payload.factory_label_available === true` — whether the audit run
+   * that raised this proposal could attach the `factory` label to the
+   * Issue it will create. Always `false` for a `"pr_fix"` origin. */
+  readonly factory_label_available: boolean;
 };
 
 export type InboxRow = RequirementsInboxRow | IssueProposalInboxRow;
+
+/** Parses `factory.approval_requests.payload` (jsonb, so the datatable
+ * client may hand back either an already-parsed object or its raw string
+ * form) into a record — `{}` for anything else (a `"pr_fix"` origin's
+ * payload, a malformed value, `null`/`undefined`), so `period_label`/
+ * `factory_label_available` below both fall back to their "no audit
+ * payload" defaults rather than throwing. */
+function asPayloadRecord(value: unknown): Record<string, unknown> {
+  if (isRecord(value)) {
+    return value;
+  }
+  if (isString(value)) {
+    try {
+      const parsed: unknown = JSON.parse(value);
+      if (isRecord(parsed)) {
+        return parsed;
+      }
+    } catch {
+      // Malformed JSON: fall through to the {} default below.
+    }
+  }
+  return {};
+}
 
 function toInboxRow(row: SqlRow): InboxRow {
   const kind = asApprovalRequestKind(row.kind);
@@ -379,6 +422,10 @@ function toInboxRow(row: SqlRow): InboxRow {
       summary: asNullableStr(row.summary, "summary"),
     };
   }
+  const origin = isOneOf(row.origin, ISSUE_PROPOSAL_ORIGINS)
+    ? row.origin
+    : "pr_fix";
+  const payload = asPayloadRecord(row.payload);
   return {
     ...base,
     kind,
@@ -395,6 +442,9 @@ function toInboxRow(row: SqlRow): InboxRow {
       "created_issue_url",
     ),
     claimed_by: asNullableStr(row.claimed_by, "claimed_by"),
+    origin,
+    period_label: isString(payload.period_label) ? payload.period_label : null,
+    factory_label_available: payload.factory_label_available === true,
   };
 }
 
@@ -789,6 +839,70 @@ async function toRequirementsDocRow(
   };
 }
 
+/** One row of the "audit_index" view (監査 tab's list): every
+ * `factory.audit_reports` row (工程5) joined with its owning work item and
+ * its issue_proposals' decision counts, from `factory.v_audit_reports`. */
+export type AuditIndexRow = {
+  readonly audit_report_id: number;
+  readonly work_item_id: number;
+  readonly work_item_status: string;
+  readonly title: string | null;
+  readonly source: string;
+  readonly period_start: string;
+  readonly period_end: string;
+  /** `formatAuditPeriodLabel(period_start, period_end)` — not a DB column
+   * (`factory.v_audit_reports` has no such column), computed here so every
+   * reader (this row and the "requirements"-style audit inbox rows above)
+   * renders the same label from the same two timestamps. */
+  readonly period_label: string;
+  readonly summary: string;
+  readonly pending_count: number;
+  readonly approved_count: number;
+  readonly rejected_count: number;
+  readonly created_at: string;
+};
+
+function toAuditIndexRow(row: SqlRow): AuditIndexRow {
+  const period_start = asIsoDate(row.period_start, "period_start");
+  const period_end = asIsoDate(row.period_end, "period_end");
+  return {
+    audit_report_id: asId(row.audit_report_id, "audit_report_id"),
+    work_item_id: asId(row.work_item_id, "work_item_id"),
+    work_item_status: asStr(row.work_item_status, "work_item_status"),
+    title: asNullableStr(row.title, "title"),
+    source: asStr(row.source, "source"),
+    period_start,
+    period_end,
+    period_label: formatAuditPeriodLabel(
+      new Date(period_start),
+      new Date(period_end),
+    ),
+    summary: asStr(row.summary, "summary"),
+    pending_count: asNumeric(row.pending_count, "pending_count"),
+    approved_count: asNumeric(row.approved_count, "approved_count"),
+    rejected_count: asNumeric(row.rejected_count, "rejected_count"),
+    created_at: asIsoDate(row.created_at, "created_at"),
+  };
+}
+
+/** One row of the "audit_doc" view (監査 tab's detail pane): an
+ * `AuditIndexRow` plus the full report body from `factory.audit_reports`
+ * (never carried on the "audit_index" list row — same rationale as
+ * "requirements_doc" vs. "requirements_index" above: a multi-KB markdown
+ * body should only be fetched once a row is selected). */
+export type AuditDocRow = AuditIndexRow & {
+  readonly markdown: string;
+  readonly metrics: Record<string, unknown>;
+};
+
+function toAuditDocRow(row: SqlRow): AuditDocRow {
+  return {
+    ...toAuditIndexRow(row),
+    markdown: asStr(row.markdown, "markdown"),
+    metrics: isRecord(row.metrics) ? row.metrics : {},
+  };
+}
+
 export type ConsoleQueryRow =
   | InboxRow
   | PipelineRow
@@ -800,7 +914,9 @@ export type ConsoleQueryRow =
   | ReviewRow
   | FixRoundRow
   | RequirementsIndexRow
-  | RequirementsDocRow;
+  | RequirementsDocRow
+  | AuditIndexRow
+  | AuditDocRow;
 
 /**
  * Runs the whitelisted view query for `view` against `sql` (defaulting to
@@ -840,7 +956,8 @@ export async function runConsoleQuery(
           id AS approval_request_id, kind, status, work_item_id, owner, repo,
           title, requested_at, expires_at, issue_number, issue_url,
           draft_attempt, summary, pr_number, proposal_title, proposal_body,
-          proposal_status, created_issue_number, created_issue_url, claimed_by
+          proposal_status, created_issue_number, created_issue_url, claimed_by,
+          origin, audit_report_id, payload
         FROM factory.v_approval_requests
         WHERE status = 'pending'
           OR (kind = 'issue_proposal' AND status = 'approved' AND created_issue_number IS NULL)
@@ -986,6 +1103,35 @@ export async function runConsoleQuery(
         return [];
       }
       return [await toRequirementsDocRow(rows[0], readFile)];
+    }
+    case "audit_index": {
+      const rows = await sql`
+        SELECT
+          audit_report_id, work_item_id, work_item_status, title, source, period_start,
+          period_end, summary, pending_count, approved_count, rejected_count, created_at
+        FROM factory.v_audit_reports
+        WHERE created_at >= ${since}::timestamptz
+        ORDER BY period_end DESC
+        LIMIT ${limit}::integer
+      `.fetch();
+      return rows.map(toAuditIndexRow);
+    }
+    case "audit_doc": {
+      if (workItemId === null) {
+        throw new Error(
+          'console_query: "work_item_id" is required for view "audit_doc"',
+        );
+      }
+      const rows = await sql`
+        SELECT
+          v.audit_report_id, v.work_item_id, v.work_item_status, v.title, v.source,
+          v.period_start, v.period_end, v.summary, v.pending_count, v.approved_count,
+          v.rejected_count, v.created_at, ar.markdown, ar.metrics
+        FROM factory.v_audit_reports v
+        JOIN factory.audit_reports ar ON ar.id = v.audit_report_id
+        WHERE v.work_item_id = ${workItemId}::bigint
+      `.fetch();
+      return rows.map(toAuditDocRow);
     }
   }
 }
