@@ -38,6 +38,19 @@ export function decidePrepareEntry(
   return "skip";
 }
 
+/** Whether to resume or skip after the `picked` → `auditing`
+ * compare-and-swap in `main` reports it did not move the row (pure, for
+ * testing) — a concurrent run or reconcile already changed the status
+ * between the initial `getWorkItem` and this step's write. `auditing`
+ * means that concurrent run already made the transition this step wanted,
+ * so continuing as a resume is safe; anything else means the work item is
+ * no longer startable here. */
+export function decideAfterFailedStart(
+  status: WorkItemStatus,
+): "resume" | "skip" {
+  return status === "auditing" ? "resume" : "skip";
+}
+
 export async function main(
   work_item_id: number,
   period_start: string,
@@ -72,12 +85,32 @@ export async function main(
     };
   }
   if (entry === "start") {
-    await updateStatusIfCurrent(
+    const moved = await updateStatusIfCurrent(
       work_item_id,
       "picked",
       "auditing",
       "audit_prepare: started",
     );
+    if (!moved) {
+      const current = await getWorkItem(work_item_id);
+      if (current === null) {
+        throw new Error(`audit_prepare: no work item with id ${work_item_id}`);
+      }
+      if (decideAfterFailedStart(current.status) === "skip") {
+        log.info("work item is not startable, skipping", {
+          work_item_id,
+          status: current.status,
+        });
+        return {
+          skip: true,
+          reason: `not_startable:${current.status}`,
+          evidence_markdown: "",
+          metrics: {},
+          factory_clone_dir: "",
+        };
+      }
+      log.info("already auditing, resuming", { work_item_id });
+    }
   }
 
   const period = parsePeriodArgs(period_start, period_end, unaudited_gap_days);
