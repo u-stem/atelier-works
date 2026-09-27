@@ -29,6 +29,10 @@
 import { defaultSqlClient, type SqlClient, type SqlRow } from "../lib/db.ts";
 import { toViewerUrl, validateDrawioXml } from "../lib/drawio.ts";
 import {
+  APPROVAL_REQUEST_KINDS,
+  APPROVAL_REQUEST_STATUSES,
+  type ApprovalRequestKind,
+  type ApprovalRequestStatus,
   type Diagram,
   type FixReply,
   type IssueProposalStatus,
@@ -51,7 +55,6 @@ const CONSOLE_VIEWS = [
   "notices",
   "reviews",
   "fix_rounds",
-  "issue_proposals",
 ] as const;
 
 export type ConsoleView = (typeof CONSOLE_VIEWS)[number];
@@ -262,44 +265,103 @@ function parseReplies(value: unknown, field: string): FixReply[] {
 // Per-view row types + parsers.
 // ---------------------------------------------------------------------------
 
-export type InboxRow = {
+function asApprovalRequestKind(value: unknown): ApprovalRequestKind {
+  if (!isOneOf(value, APPROVAL_REQUEST_KINDS)) {
+    throw new Error('console_query: field "kind" has an unexpected value');
+  }
+  return value;
+}
+
+function asApprovalRequestStatus(value: unknown): ApprovalRequestStatus {
+  if (!isOneOf(value, APPROVAL_REQUEST_STATUSES)) {
+    throw new Error('console_query: field "status" has an unexpected value');
+  }
+  return value;
+}
+
+/** Fields every Inbox row carries regardless of `kind` — one row per
+ * `factory.approval_requests` entry (unified requirements + issue_proposal
+ * approvals, replacing the former separate "inbox"/"issue_proposals"
+ * views). */
+export type InboxRowBase = {
+  readonly approval_request_id: number;
+  readonly status: ApprovalRequestStatus;
   readonly work_item_id: number;
   readonly owner: string;
   readonly repo: string;
+  readonly title: string | null;
+  readonly requested_at: string;
+  readonly expires_at: string | null;
+};
+
+export type RequirementsInboxRow = InboxRowBase & {
+  readonly kind: "requirements";
   readonly issue_number: number | null;
   readonly issue_url: string | null;
-  readonly title: string | null;
-  readonly attempt: number;
-  readonly claimed_by: string | null;
-  readonly requirement_draft_id: number;
+  readonly draft_attempt: number;
   readonly summary: string;
   readonly markdown: string;
   readonly diagrams: DiagramLink[];
   readonly open_questions: string[];
-  readonly created_at: string;
-  readonly updated_at: string;
 };
 
+export type IssueProposalInboxRow = InboxRowBase & {
+  readonly kind: "issue_proposal";
+  readonly pr_number: number | null;
+  readonly proposal_title: string;
+  readonly proposal_body: string;
+  readonly proposal_status: IssueProposalStatus;
+  readonly created_issue_number: number | null;
+  readonly created_issue_url: string | null;
+  readonly claimed_by: string | null;
+};
+
+export type InboxRow = RequirementsInboxRow | IssueProposalInboxRow;
+
 function toInboxRow(row: SqlRow): InboxRow {
-  return {
+  const kind = asApprovalRequestKind(row.kind);
+  const base: InboxRowBase = {
+    approval_request_id: asId(row.approval_request_id, "approval_request_id"),
+    status: asApprovalRequestStatus(row.status),
     work_item_id: asId(row.work_item_id, "work_item_id"),
     owner: asStr(row.owner, "owner"),
     repo: asStr(row.repo, "repo"),
-    issue_number: asNullableNumeric(row.issue_number, "issue_number"),
-    issue_url: asNullableStr(row.issue_url, "issue_url"),
     title: asNullableStr(row.title, "title"),
-    attempt: asNumeric(row.attempt, "attempt"),
-    claimed_by: asNullableStr(row.claimed_by, "claimed_by"),
-    requirement_draft_id: asId(
-      row.requirement_draft_id,
-      "requirement_draft_id",
+    requested_at: asIsoDate(row.requested_at, "requested_at"),
+    expires_at:
+      row.expires_at === null || row.expires_at === undefined
+        ? null
+        : asIsoDate(row.expires_at, "expires_at"),
+  };
+  if (kind === "requirements") {
+    return {
+      ...base,
+      kind,
+      issue_number: asNullableNumeric(row.issue_number, "issue_number"),
+      issue_url: asNullableStr(row.issue_url, "issue_url"),
+      draft_attempt: asNumeric(row.draft_attempt, "draft_attempt"),
+      summary: asStr(row.summary, "summary"),
+      markdown: asStr(row.markdown, "markdown"),
+      diagrams: parseDiagramLinks(row.diagrams, "diagrams"),
+      open_questions: parseStringArray(row.open_questions, "open_questions"),
+    };
+  }
+  return {
+    ...base,
+    kind,
+    pr_number: asNullableNumeric(row.pr_number, "pr_number"),
+    proposal_title: asStr(row.proposal_title, "proposal_title"),
+    proposal_body: asStr(row.proposal_body, "proposal_body"),
+    proposal_status: asIssueProposalStatus(row.proposal_status),
+    created_issue_number: asNullableNumeric(
+      row.created_issue_number,
+      "created_issue_number",
     ),
-    summary: asStr(row.summary, "summary"),
-    markdown: asStr(row.markdown, "markdown"),
-    diagrams: parseDiagramLinks(row.diagrams, "diagrams"),
-    open_questions: parseStringArray(row.open_questions, "open_questions"),
-    created_at: asIsoDate(row.created_at, "created_at"),
-    updated_at: asIsoDate(row.updated_at, "updated_at"),
+    created_issue_url: asNullableStr(
+      row.created_issue_url,
+      "created_issue_url",
+    ),
+    claimed_by: asNullableStr(row.claimed_by, "claimed_by"),
   };
 }
 
@@ -544,66 +606,6 @@ function asIssueProposalStatus(value: unknown): IssueProposalStatus {
   return value;
 }
 
-export type IssueProposalRow = {
-  readonly issue_proposal_id: number;
-  readonly work_item_id: number;
-  readonly owner: string;
-  readonly repo: string;
-  readonly pr_number: number | null;
-  readonly pr_title: string | null;
-  readonly claimed_by: string | null;
-  readonly review_comment_id: number;
-  readonly thread_id: string | null;
-  readonly title: string;
-  readonly body: string;
-  readonly status: IssueProposalStatus;
-  readonly decided_by: string | null;
-  readonly decision_reason: string | null;
-  readonly with_factory_label: boolean | null;
-  readonly created_issue_number: number | null;
-  readonly created_issue_url: string | null;
-  readonly is_inline: boolean;
-  readonly created_at: string;
-  readonly decided_at: string | null;
-};
-
-function toIssueProposalRow(row: SqlRow): IssueProposalRow {
-  return {
-    issue_proposal_id: asId(row.issue_proposal_id, "issue_proposal_id"),
-    work_item_id: asId(row.work_item_id, "work_item_id"),
-    owner: asStr(row.owner, "owner"),
-    repo: asStr(row.repo, "repo"),
-    pr_number: asNullableNumeric(row.pr_number, "pr_number"),
-    pr_title: asNullableStr(row.pr_title, "pr_title"),
-    claimed_by: asNullableStr(row.claimed_by, "claimed_by"),
-    review_comment_id: asId(row.review_comment_id, "review_comment_id"),
-    thread_id: asNullableStr(row.thread_id, "thread_id"),
-    title: asStr(row.title, "title"),
-    body: asStr(row.body, "body"),
-    status: asIssueProposalStatus(row.status),
-    decided_by: asNullableStr(row.decided_by, "decided_by"),
-    decision_reason: asNullableStr(row.decision_reason, "decision_reason"),
-    with_factory_label:
-      row.with_factory_label === null || row.with_factory_label === undefined
-        ? null
-        : asBool(row.with_factory_label, "with_factory_label"),
-    created_issue_number: asNullableNumeric(
-      row.created_issue_number,
-      "created_issue_number",
-    ),
-    created_issue_url: asNullableStr(
-      row.created_issue_url,
-      "created_issue_url",
-    ),
-    is_inline: asBool(row.is_inline, "is_inline"),
-    created_at: asIsoDate(row.created_at, "created_at"),
-    decided_at:
-      row.decided_at === null || row.decided_at === undefined
-        ? null
-        : asIsoDate(row.decided_at, "decided_at"),
-  };
-}
-
 export type ConsoleQueryRow =
   | InboxRow
   | PipelineRow
@@ -613,8 +615,7 @@ export type ConsoleQueryRow =
   | FailureRow
   | NoticeRow
   | ReviewRow
-  | FixRoundRow
-  | IssueProposalRow;
+  | FixRoundRow;
 
 /**
  * Runs the whitelisted view query for `view` against `sql` (defaulting to
@@ -636,13 +637,27 @@ export async function runConsoleQuery(
 
   switch (view) {
     case "inbox": {
+      // Not time-windowed (`since`/`days`'s bound is unused here), same
+      // rationale as before this view was unified: a pending approval
+      // request must never silently disappear from the tab that exists to
+      // surface it. Also includes an "approved" issue_proposal request whose
+      // Issue was never created (team-lead fix round, "Keep incomplete
+      // approvals visible in Inbox") — approval_decide.ts records the
+      // approval before creating the Issue, and a failure in between (e.g.
+      // GitHub returning an error) otherwise left that row permanently
+      // invisible to a human, since only `status = 'pending'` would be
+      // selected here.
       const rows = await sql`
         SELECT
-          work_item_id, owner, repo, issue_number, issue_url, title, attempt,
-          claimed_by, requirement_draft_id, summary, markdown, diagrams,
-          open_questions, created_at, updated_at
-        FROM factory.v_inbox
-        ORDER BY updated_at DESC
+          id AS approval_request_id, kind, status, work_item_id, owner, repo,
+          title, requested_at, expires_at, issue_number, issue_url,
+          draft_attempt, summary, markdown, diagrams, open_questions,
+          pr_number, proposal_title, proposal_body, proposal_status,
+          created_issue_number, created_issue_url, claimed_by
+        FROM factory.v_approval_requests
+        WHERE status = 'pending'
+          OR (kind = 'issue_proposal' AND status = 'approved' AND created_issue_number IS NULL)
+        ORDER BY requested_at DESC
         LIMIT ${limit}::integer
       `.fetch();
       return rows.map(toInboxRow);
@@ -740,33 +755,6 @@ export async function runConsoleQuery(
         LIMIT ${limit}::integer
       `.fetch();
       return rows.map(toFixRoundRow);
-    }
-    case "issue_proposals": {
-      // Not time-windowed (`since`/`limit`'s days bound is unused here),
-      // same rationale as "inbox"/"notices": a pending proposal must never
-      // silently disappear from the tab that exists to surface it. Filtered
-      // here (not in factory.v_issue_proposals itself), so the view stays
-      // useful for a future decision-history reader too. Also includes an
-      // "approved" row whose Issue was never created (team-lead fix round,
-      // "Keep incomplete approvals visible in Inbox"): issue_proposal_decide.ts
-      // records the approval before creating the Issue, and a failure in
-      // between (e.g. GitHub returning an error) otherwise left that row
-      // permanently invisible to a human, since only `status = 'pending'`
-      // used to be selected here.
-      const rows = await sql`
-        SELECT
-          issue_proposal_id, work_item_id, owner, repo, pr_number, pr_title,
-          claimed_by, review_comment_id, thread_id, title, body, status,
-          decided_by, decision_reason, with_factory_label,
-          created_issue_number, created_issue_url, is_inline, created_at,
-          decided_at
-        FROM factory.v_issue_proposals
-        WHERE status = 'pending'
-          OR (status = 'approved' AND created_issue_number IS NULL)
-        ORDER BY created_at DESC
-        LIMIT ${limit}::integer
-      `.fetch();
-      return rows.map(toIssueProposalRow);
     }
   }
 }

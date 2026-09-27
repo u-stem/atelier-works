@@ -25,6 +25,7 @@ import {
   addNotice,
   bumpWatermarks,
   getWorkItem,
+  insertApprovalRequest,
   insertFixRound,
   insertIssueProposal,
   setFlowJobId,
@@ -451,7 +452,7 @@ export async function main(
         const proposal = reply.issue_proposal;
         if (proposal === null || proposal === undefined) continue;
         try {
-          await insertIssueProposal({
+          const proposalId = await insertIssueProposal({
             work_item_id,
             review_comment_id: reply.review_comment_id,
             thread_id: matchReviewThreadForComment(
@@ -461,6 +462,13 @@ export async function main(
             title: proposal.title,
             body: proposal.body,
             is_inline: isInline,
+          });
+          await insertApprovalRequest({
+            kind: "issue_proposal",
+            work_item_id,
+            subject_id: proposalId,
+            payload: {},
+            expires_at: null,
           });
         } catch (err) {
           const message = maskSecrets(
@@ -609,9 +617,10 @@ export async function main(
   // User decision (2026-09-26): when this round recorded one or more
   // propose_issue replies, the PR is not ready for re-review yet — a human
   // must first approve or reject the proposed Issue(s) from the Console
-  // Inbox (issue_proposal_decide.ts). The round ends needs_human instead of
+  // Inbox (approval_decide.ts, which dispatches to
+  // steps/issue_proposal_apply.ts). The round ends needs_human instead of
   // rereview_requested, and the reviewer-request step below is skipped
-  // entirely; issue_proposal_decide.ts swaps the label to rereview_label
+  // entirely; issue_proposal_apply.ts swaps the label to rereview_label
   // once every proposal for this work item has been decided.
   // `postFixReplies` above already inserted the factory.issue_proposals
   // row(s) before posting their replies (team-lead fix round, [MUST] #3).

@@ -7,7 +7,7 @@
 //   - FactoryConfig must stay in lockstep with RT.CFactoryConfig (rt.d.ts,
 //     generated from c_factory_config.resource-type.yaml) so loadConfig is a
 //     straight "validate + fill defaults" pass with no field renaming.
-//   - WorkItem / RequirementDraft / Approval / *Record types mirror
+//   - WorkItem / RequirementDraft / ApprovalRequest / *Record types mirror
 //     migrations/datatable/main/*.sql columns 1:1, which keeps db.ts's row
 //     parsing (Parse-don't-validate) a direct field-by-field check instead
 //     of a renaming layer that could silently drift from the schema.
@@ -279,27 +279,11 @@ export type RequirementDraft = {
 };
 
 // ---------------------------------------------------------------------------
-// approvals
-// ---------------------------------------------------------------------------
-
-export type ApprovalDecision = "approved" | "rejected";
-
-export type Approval = {
-  id: number;
-  work_item_id: number;
-  attempt: number;
-  decision: ApprovalDecision;
-  reason: string | null;
-  approver: string;
-  decided_at: Date;
-};
-
-// ---------------------------------------------------------------------------
 // approval_requests (generalized approval waiting, replacing suspend-based
 // approval per migrations/datatable/main/20260927120000_approval_requests.
-// up.sql). This PR only adds the schema and db.ts accessors — callers still
-// go through factory.approvals / the pipeline.flow suspend step until a
-// follow-up PR switches them over.
+// up.sql). Every approval-flow script goes through this table; the former
+// factory.approvals-backed `Approval` type and pipeline.flow's suspend step
+// are gone.
 // ---------------------------------------------------------------------------
 
 /** What kind of decision this approval request is waiting on. `subject_id`
@@ -416,7 +400,7 @@ export type FixOutcome = "done" | "requirements_gap" | "blocked";
  * but out of this PR's scope ("propose_issue" — user decision, 2026-09-26:
  * Claude drafts a candidate GitHub Issue instead of fixing or skipping it,
  * and a human approves/rejects it from the Console Inbox via
- * issue_proposal_decide.ts). Drives pr_workflow_support.ts's
+ * issue_proposal_apply.ts). Drives pr_workflow_support.ts's
  * `renderFixReply` last line (a commit sha for "fixed", "見送り" for
  * "skipped", "Issue化を提案(承認待ち)" for "propose_issue"). Required, not
  * optional: a reply without a decision fails the FixReply type guard
@@ -453,7 +437,7 @@ export type FixRoundRecord = {
 // ---------------------------------------------------------------------------
 // issue_proposals (user decision, 2026-09-26): a pr_fix `"propose_issue"`
 // FixReply's candidate GitHub Issue, awaiting human approval/rejection from
-// the Console Inbox (issue_proposal_decide.ts).
+// the Console Inbox (issue_proposal_apply.ts).
 // ---------------------------------------------------------------------------
 
 export type IssueProposalStatus = "pending" | "approved" | "rejected";
@@ -485,7 +469,7 @@ export type IssueProposal = {
    * `replyReviewComment`) or a plain issue comment (`false`, reply via
    * `postIssueComment`) — set by pr_fix_finish.ts at insert time from the
    * same signal it uses to pick its own reply target, so
-   * issue_proposal_decide.ts's decision reply can pick the right one
+   * issue_proposal_apply.ts's decision reply can pick the right one
    * deterministically instead of guessing. */
   is_inline: boolean;
   created_at: Date;

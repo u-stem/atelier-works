@@ -1,0 +1,446 @@
+// Handler script for a decided `kind = "issue_proposal"` factory.
+// approval_requests row — dispatched by f/factory/approval_decide.ts via
+// `wmill.runScriptByPathAsync` right after it records the human's decision.
+// Replaces the former f/factory/issue_proposal_decide.ts (now deleted),
+// which used to be the manually-invoked, self-contained approve/reject
+// script; approval_decide.ts now owns input validation, idempotency
+// classification at the approval_requests level, and identity derivation —
+// this script only carries out the GitHub/DB side effects once a decision is
+// already on record:
+//
+//   - approve: creates the Issue in the PR's repo (optionally with
+//     `factory_config.trigger_label`, so it enters the requirements
+//     pipeline the same way a human-labeled Issue would), replies in the
+//     review thread naming the new Issue, and resolves the thread.
+//   - reject: replies in the review thread with the human's reason and
+//     leaves the thread open (a human, not the factory, decides what
+//     happens to it next).
+//
+// Once every pending proposal for the underlying work item has been
+// decided, the PR's state label swaps off `needs_human_label` — to
+// `rereview_label` when the round that produced the proposal(s) also pushed
+// a commit, or `reviewed_label` when it did not (see
+// decideIssueProposalLabelSwap, pr_workflow_support.ts).
+//
+// Note (docs/security.md): Issue creation uses the same GitHub PAT as every
+// other factory-authored GitHub call — no separate credential.
+//
+// factory.issue_proposals remains the source of truth for
+// title/body/review_comment_id/thread_id (approval_requests does not
+// duplicate them) and still carries its own status/decided_by/
+// decision_reason/with_factory_label columns, kept in sync here via
+// decideIssueProposal — factory.v_issue_proposals and
+// countPendingIssueProposals both read this table directly, unchanged from
+// before this script existed.
+//
+// Idempotency: a proposal row already read as "pending" is classified via
+// `classifyIssueProposalDecision` (pr_workflow_support.ts) before any write
+// happens, refusing outright a call that would conflict with (or duplicate)
+// an already-completed decision. The approve path itself proceeds in two
+// separate writes so a crash/retried dispatch between them is recoverable:
+// (a) `decideIssueProposal` transitions the row to "approved" — guarded by
+// `WHERE status = 'pending'`, an optimistic lock — with `created_issue_*`
+// still null; (b) once GitHub confirms the Issue exists (created fresh, or
+// found via `findIssueByMarker`'s search for the
+// `<!-- factory:issue_proposal:<id> -->` marker this script embeds in the
+// body), `setIssueProposalCreatedIssue` writes `created_issue_number`/
+// `created_issue_url` back. A retried dispatch that lands after (a) but
+// before (b) resumes at the Issue create-or-reuse step instead of creating a
+// second Issue. The reject path similarly records the decision first, then
+// posts the reply.
+//
+// Keeping an incomplete approval visible: if the Issue create-or-reuse step
+// itself throws — e.g. GitHub returns an error creating the Issue — before
+// any Issue number is known, the row is reverted back to "pending"
+// (`revertIssueProposalToPending`, lib/db.ts) rather than left stuck
+// "approved" with `created_issue_number` still null, which the Console
+// Inbox would otherwise show nowhere. console_query.ts's "inbox" view also
+// surfaces an "approved" row whose Issue was never created, so even the
+// (rarer) case where a later step — `setIssueProposalCreatedIssue`'s own
+// write, the reply, resolving the thread, or the label swap — fails after
+// the Issue already exists on GitHub still leaves the proposal visible for a
+// human to retry; that later case is intentionally never reverted, since the
+// Issue already exists and a revert-then-recreate would risk a duplicate.
+//
+// The GitHub comment a proposal's reply is threaded under
+// (`review_comment_id`) may be either a PR review comment or a plain issue
+// comment (pr_fix's two reply targets — see pr_workflow_support.ts's
+// FixReply doc comment); which kind it is is persisted on the row itself
+// (`is_inline`, set by pr_fix_finish.ts at insert time), so this script
+// picks the reply mechanism deterministically (`chooseIssueProposalReplyTarget`)
+// instead of guessing with a try/replyReviewComment-then-fallback-to-
+// postIssueComment dance.
+//
+// Failure handling: this script runs standalone (not as a flow step), so a
+// thrown error is caught here, recorded to factory.job_failures, and
+// reported to Discord before being re-thrown (mirrors
+// on_error_schedule.ts's own self-contained handling).
+
+import * as wmill from "windmill-client@1.817.0";
+import { loadConfig } from "../lib/config.ts";
+import {
+  countPendingIssueProposals,
+  decideIssueProposal,
+  getApprovalRequest,
+  getIssueProposal,
+  getWorkItem,
+  latestFixRound,
+  recordFailure,
+  revertIssueProposalToPending,
+  setIssueProposalCreatedIssue,
+  updateStatusIfCurrent,
+} from "../lib/db.ts";
+import { notify } from "../lib/discord.ts";
+import {
+  createIssue,
+  findIssueByMarker,
+  type GhClient,
+  postIssueComment,
+  replyReviewComment,
+  resolveReviewThread,
+  withMarker,
+} from "../lib/github.ts";
+import { type Logger, logger, maskSecrets } from "../lib/log.ts";
+import { isBoolean } from "../lib/types.ts";
+import { runCommand } from "../lib/workspace.ts";
+import {
+  appendIssueProposalMarker,
+  buildIssueProposalBody,
+  buildIssueProposalTitle,
+  chooseIssueProposalReplyTarget,
+  classifyIssueProposalDecision,
+  decideIssueProposalLabelSwap,
+  hasIssueProposalMarker,
+  issueProposalMarkerSearchTerm,
+  renderIssueProposalApprovedReply,
+  renderIssueProposalRejectedReply,
+  setStateLabel,
+} from "./pr_workflow_support.ts";
+
+export type IssueProposalApplyResult = {
+  readonly ok: boolean;
+  readonly status: string;
+};
+
+/** Reads `decision_options.with_factory_label` (a decider-side
+ * approval_requests field) with a type guard, defaulting to `false` when
+ * absent or not a boolean (pure, for testing). */
+export function readWithFactoryLabel(
+  decisionOptions: Record<string, unknown>,
+): boolean {
+  return isBoolean(decisionOptions.with_factory_label)
+    ? decisionOptions.with_factory_label
+    : false;
+}
+
+async function run(
+  approval_request_id: number,
+  log: Logger,
+): Promise<IssueProposalApplyResult> {
+  const request = await getApprovalRequest(approval_request_id);
+  if (request === null) {
+    throw new Error(
+      `issue_proposal_apply: no approval request with id ${approval_request_id}`,
+    );
+  }
+  if (request.kind !== "issue_proposal") {
+    throw new Error(
+      `issue_proposal_apply: approval request ${approval_request_id} has kind "${request.kind}", expected "issue_proposal"`,
+    );
+  }
+  if (request.status !== "approved" && request.status !== "rejected") {
+    log.info("approval request is not decided, no-op", {
+      approval_request_id,
+      status: request.status,
+    });
+    return { ok: true, status: "no_op" };
+  }
+  if (request.decided_by === null) {
+    throw new Error(
+      `issue_proposal_apply: approval request ${approval_request_id} is decided but has no decided_by`,
+    );
+  }
+  const decidedBy = request.decided_by;
+  const decision = request.status === "approved" ? "approve" : "reject";
+  const reason = request.reason ?? "";
+  const withFactoryLabel = readWithFactoryLabel(request.decision_options);
+
+  const proposal_id = request.subject_id;
+  const proposal = await getIssueProposal(proposal_id);
+  if (proposal === null) {
+    throw new Error(
+      `issue_proposal_apply: no issue proposal with id ${proposal_id}`,
+    );
+  }
+
+  const classification = classifyIssueProposalDecision(proposal, {
+    decision,
+    reason,
+    with_factory_label: withFactoryLabel,
+  });
+  if (classification.action === "refuse") {
+    throw new Error(`issue_proposal_apply: ${classification.message}`);
+  }
+  if (classification.action === "already_done") {
+    // A redispatch of an identical, fully completed decision (e.g. a
+    // double click in the Console): nothing to do, and not a failure.
+    log.info("issue proposal already applied, no-op", {
+      proposal_id,
+      created_issue_number: classification.created_issue_number,
+    });
+    return { ok: true, status: "no_op" };
+  }
+
+  const workItem = await getWorkItem(proposal.work_item_id);
+  if (workItem === null) {
+    throw new Error(
+      `issue_proposal_apply: work item ${proposal.work_item_id} for issue proposal ${proposal_id} not found`,
+    );
+  }
+  if (workItem.pr_number === null) {
+    throw new Error(
+      `issue_proposal_apply: work item ${proposal.work_item_id} has no pr_number`,
+    );
+  }
+  const prNumber = workItem.pr_number;
+  const owner = workItem.owner;
+  const repo = workItem.repo;
+  const workItemId = workItem.id;
+  const reviewCommentId = proposal.review_comment_id;
+  const isInline = proposal.is_inline;
+  const threadId = proposal.thread_id;
+
+  const config = await loadConfig(() =>
+    wmill.getResource("f/factory/factory_config"),
+  );
+  const ghToken = await wmill.getVariable("f/factory/github_token");
+  const client: GhClient = { run: runCommand, ghToken };
+  const prUrl = `https://github.com/${owner}/${repo}/pull/${String(prNumber)}`;
+
+  async function postDecisionReply(body: string): Promise<void> {
+    const target = chooseIssueProposalReplyTarget(isInline);
+    if (target === "inline") {
+      await replyReviewComment(
+        client,
+        owner,
+        repo,
+        prNumber,
+        reviewCommentId,
+        body,
+      );
+    } else {
+      await postIssueComment(client, owner, repo, prNumber, body);
+    }
+  }
+
+  if (decision === "approve") {
+    // Optimistic lock: only actually transitions the row when it is still
+    // "pending". `classification` above already ruled out every case where
+    // this call would be wrong (a genuine conflict, or an already-completed
+    // approval), so a `false` return here means a concurrent/earlier call
+    // already made the same transition — the rest of this branch still runs
+    // (idempotently) regardless of which of the two won.
+    await decideIssueProposal(proposal_id, {
+      status: "approved",
+      decided_by: decidedBy,
+      decision_reason: null,
+      with_factory_label: withFactoryLabel,
+      created_issue_number: null,
+      created_issue_url: null,
+    });
+
+    const current = await getIssueProposal(proposal_id);
+    if (current === null) {
+      throw new Error(
+        `issue_proposal_apply: issue proposal ${proposal_id} disappeared mid-decision`,
+      );
+    }
+
+    let created: { readonly number: number; readonly htmlUrl: string };
+    if (current.created_issue_number !== null) {
+      created = {
+        number: current.created_issue_number,
+        htmlUrl: current.created_issue_url ?? "",
+      };
+    } else {
+      try {
+        const markerSearchTerm = issueProposalMarkerSearchTerm(proposal_id);
+        const existingIssue = await findIssueByMarker(
+          client,
+          owner,
+          repo,
+          markerSearchTerm,
+        );
+        if (
+          existingIssue !== null &&
+          hasIssueProposalMarker(existingIssue.body, proposal_id)
+        ) {
+          created = existingIssue;
+        } else {
+          const withLabel = current.with_factory_label ?? false;
+          const body = appendIssueProposalMarker(
+            buildIssueProposalBody(proposal.body, prUrl, prNumber),
+            proposal_id,
+          );
+          created = await createIssue(client, owner, repo, {
+            title: buildIssueProposalTitle(proposal.title),
+            body,
+            ...(withLabel ? { labels: [config.trigger_label] } : {}),
+          });
+        }
+      } catch (err) {
+        // No Issue number is known yet at this point, so the row would
+        // otherwise be stuck "approved" with created_issue_number still
+        // null and invisible to a human (see the module doc's "Keeping an
+        // incomplete approval visible" note) — put it back to "pending" so
+        // the Console Inbox shows it again for a retry.
+        await revertIssueProposalToPending(proposal_id);
+        throw new Error(
+          `issue_proposal_apply: Issueの起票に失敗しました: ${maskSecrets(err instanceof Error ? err.message : String(err))}。Inboxから再度承認してください`,
+        );
+      }
+      await setIssueProposalCreatedIssue(proposal_id, {
+        created_issue_number: created.number,
+        created_issue_url: created.htmlUrl,
+      });
+    }
+
+    const replyBody = withMarker(
+      "pr_fix",
+      workItemId,
+      renderIssueProposalApprovedReply(created.number),
+    );
+    await postDecisionReply(replyBody);
+    if (threadId !== null) {
+      try {
+        await resolveReviewThread(client, threadId);
+      } catch (err) {
+        log.warn("failed to resolve the review thread", {
+          thread_id: threadId,
+          error: maskSecrets(err instanceof Error ? err.message : String(err)),
+        });
+      }
+    }
+  } else {
+    // Reject ordering: record the decision first, then reply — same
+    // crash-recoverable shape as approve above.
+    await decideIssueProposal(proposal_id, {
+      status: "rejected",
+      decided_by: decidedBy,
+      decision_reason: reason,
+      with_factory_label: null,
+      created_issue_number: null,
+      created_issue_url: null,
+    });
+    const replyBody = withMarker(
+      "pr_fix",
+      workItemId,
+      renderIssueProposalRejectedReply(reason),
+    );
+    await postDecisionReply(replyBody);
+  }
+
+  const remaining = await countPendingIssueProposals(workItemId);
+  const round = await latestFixRound(workItemId);
+  const committedThisRound = (round?.commit_shas.length ?? 0) > 0;
+  const labelDecision = decideIssueProposalLabelSwap(
+    remaining,
+    committedThisRound,
+  );
+  if (labelDecision.action === "swap") {
+    const label =
+      labelDecision.toStatus === "rereview_requested"
+        ? config.rereview_label
+        : config.reviewed_label;
+    await setStateLabel(client, owner, repo, prNumber, config, label, log);
+    await updateStatusIfCurrent(
+      workItemId,
+      "needs_human",
+      labelDecision.toStatus,
+      `issue_proposal_apply: every issue proposal decided (${labelDecision.toStatus})`,
+    );
+
+    // A tiny window remains between the count above and the label/status
+    // writes just made, during which another pr_fix round could record a
+    // brand-new pending proposal for this same work item. Re-checking once
+    // more here catches that: if a new pending proposal appeared, put the PR
+    // straight back to needs_human_label rather than leaving a state label
+    // that implies "nothing pending" when one actually is. Not a full fix (a
+    // still-tinier window remains between this re-check and its own writes)
+    // — no transaction machinery, matching the original implementation this
+    // script was ported from.
+    const recheck = await countPendingIssueProposals(workItemId);
+    if (recheck > 0) {
+      await setStateLabel(
+        client,
+        owner,
+        repo,
+        prNumber,
+        config,
+        config.needs_human_label,
+        log,
+      );
+      await updateStatusIfCurrent(
+        workItemId,
+        labelDecision.toStatus,
+        "needs_human",
+        "issue_proposal_apply: a new issue proposal appeared during the label swap",
+      );
+    }
+  }
+
+  return { ok: true, status: decision === "approve" ? "approved" : "rejected" };
+}
+
+export async function main(
+  approval_request_id: number,
+): Promise<IssueProposalApplyResult> {
+  const log = logger("issue_proposal_apply");
+  try {
+    return await run(approval_request_id, log);
+  } catch (err) {
+    const message = maskSecrets(
+      err instanceof Error ? err.message : String(err),
+    );
+    log.error("issue_proposal_apply failed", { error: message });
+    try {
+      await recordFailure({
+        work_item_id: null,
+        flow_path: "f/factory/steps/issue_proposal_apply",
+        job_id: process.env.WM_JOB_ID ?? "unknown",
+        step: null,
+        error: message,
+      });
+    } catch (recordErr) {
+      log.error("failed to record failure", {
+        error: maskSecrets(
+          recordErr instanceof Error ? recordErr.message : String(recordErr),
+        ),
+      });
+    }
+    try {
+      const config = await loadConfig(() =>
+        wmill.getResource("f/factory/factory_config"),
+      );
+      const webhookUrl = await wmill.getVariable(
+        "f/factory/discord_webhook_url",
+      );
+      if (webhookUrl.length > 0) {
+        await notify(webhookUrl, {
+          kind: "job_failed",
+          instance_name: config.instance_name,
+          flow_path: "f/factory/steps/issue_proposal_apply",
+          job_id: process.env.WM_JOB_ID ?? "unknown",
+          error: message,
+        });
+      }
+    } catch (notifyErr) {
+      log.error("failed to send discord notification", {
+        error: maskSecrets(
+          notifyErr instanceof Error ? notifyErr.message : String(notifyErr),
+        ),
+      });
+    }
+    throw err;
+  }
+}

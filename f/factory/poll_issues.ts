@@ -16,11 +16,15 @@
 // unpinned "latest" import drifts independently across scripts at
 // `generate-metadata` time).
 import * as wmill from "windmill-client@1.817.0";
+import { expiredRequirementsRequests } from "./lib/approval_support.ts";
 import { loadConfig } from "./lib/config.ts";
 import {
   addNotice,
+  expireApprovalRequestIfPending,
+  getWorkItem,
   insertWorkItem,
   listActive,
+  listExpiredPendingApprovalRequests,
   nextCycleForIssue,
   recordFailure,
   setFlowJobId,
@@ -63,6 +67,8 @@ import {
 } from "./lib/workspace.ts";
 import {
   allStateLabels,
+  describeReason,
+  nextActionFor,
   removeTerminalLabels,
   setStateLabel,
   stateLabelForFixOutcome,
@@ -595,6 +601,81 @@ async function claimAndStart(
 }
 
 // ---------------------------------------------------------------------------
+// Expire pending "requirements" approval requests (replaces pipeline.flow's
+// former suspend timeout: since request_approval no longer waits on
+// anything, nothing else marks a request expired once its deadline passes).
+// "issue_proposal" requests carry no `expires_at` (see
+// insertApprovalRequest's call site in pr_fix_finish.ts) so they never
+// appear in `listExpiredPendingApprovalRequests`'s result to begin with;
+// `expiredRequirementsRequests` narrows the type for the branching below
+// regardless.
+// ---------------------------------------------------------------------------
+
+async function expirePendingApprovals(
+  client: GhClient,
+  config: FactoryConfig,
+  discordWebhookUrl: string,
+  log: Logger,
+): Promise<number> {
+  let count = 0;
+  const expired = await listExpiredPendingApprovalRequests(new Date());
+  const requirementsExpired = expiredRequirementsRequests(expired);
+
+  for (const request of requirementsExpired) {
+    try {
+      const wasExpired = await expireApprovalRequestIfPending(request.id);
+      if (!wasExpired) continue; // a concurrent decision/expiry already handled it.
+
+      const workItem = await getWorkItem(request.work_item_id);
+      if (workItem === null || workItem.issue_number === null) continue;
+
+      const updated = await updateStatusIfCurrent(
+        workItem.id,
+        "awaiting_approval",
+        "expired",
+        "approval timed out",
+      );
+      if (!updated) continue; // the work item already moved on.
+
+      await removeTerminalLabels(
+        client,
+        workItem.owner,
+        workItem.repo,
+        workItem.issue_number,
+        [config.wip_label, config.trigger_label],
+        log,
+      );
+
+      await notifySafe(
+        discordWebhookUrl,
+        {
+          kind: "needs_human",
+          instance_name: config.instance_name,
+          owner: workItem.owner,
+          repo: workItem.repo,
+          url: workItem.issue_url ?? "",
+          reason: describeReason("approval timed out"),
+          target: { kind: "issue", number: workItem.issue_number },
+          next_action: nextActionFor("approval timed out"),
+        },
+        log,
+      );
+
+      count += 1;
+    } catch (err) {
+      await recordFailureSafe(
+        `expire_approval:${String(request.id)}`,
+        err,
+        log,
+        request.work_item_id,
+      );
+    }
+  }
+
+  return count;
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -602,6 +683,7 @@ export async function main(): Promise<{
   claimed: number;
   skipped: number;
   reconciled: number;
+  expired: number;
   failed: number;
 }> {
   const log = logger("poll_issues");
@@ -704,5 +786,12 @@ export async function main(): Promise<{
     log,
   );
 
-  return { claimed, skipped, reconciled, failed };
+  const expired = await expirePendingApprovals(
+    client,
+    config,
+    discordWebhookUrl,
+    log,
+  );
+
+  return { claimed, skipped, reconciled, expired, failed };
 }

@@ -10,28 +10,17 @@
 // starting (spec-cycle2.md §7 item 6).
 //
 // [blocker fix, M6 review round 1] `work_items.attempt` was never updated
-// after insert (it stays 1 forever), so `approval_decide.ts` — which reads
-// `workItem.attempt` from the DB to decide which attempt to record a
-// decision under — always recorded attempt 1, while `pipeline_decide.ts`
-// (correctly) looks up `latestApproval(work_item_id, flow_input.attempt)`
-// for the *real* current attempt (2, 3, ...). From attempt 2 onward this
-// made every human decision invisible to `latestApproval`, so the suspend
-// always looked like a plain timeout. Fixed by persisting `flow_input.
+// after insert (it stays 1 forever), so anything reading `workItem.attempt`
+// back from the DB (e.g. `retry_work_item.ts`'s `workItem.attempt + 1`) saw
+// a stale value from attempt 2 onward. Fixed by persisting `flow_input.
 // attempt` via `db.setAttempt` as early as possible — right after
 // confirming the work item is valid and not terminal, before any
 // failure-prone repo/worktree I/O — so even a run that fails partway still
-// leaves `work_items.attempt` accurate. This also makes
-// `retry_work_item.ts`'s `workItem.attempt + 1` (already committed) correct
-// for a restart after any attempt, not just attempt 1.
+// leaves `work_items.attempt` accurate.
 
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "../lib/config.ts";
-import {
-  clearResumeUrls,
-  getWorkItem,
-  setAttempt,
-  updateStatus,
-} from "../lib/db.ts";
+import { getWorkItem, setAttempt, updateStatus } from "../lib/db.ts";
 import { type GhClient, getIssue, removeLabel } from "../lib/github.ts";
 import { logger } from "../lib/log.ts";
 import type { FactoryConfig, WorkItemStatus } from "../lib/types.ts";
@@ -60,7 +49,7 @@ export type PipelinePrepareResult =
 
 /** Whether this work item has already reached a terminal status (pure, for
  * testing) — pipeline_prepare.ts skips rather than restarting one, since a
- * concurrent poll_issues reconcile or a prior pipeline_decide.ts run may
+ * concurrent poll_issues reconcile or a prior requirements_apply.ts run may
  * have already closed it out. */
 export function isAlreadyTerminal(status: WorkItemStatus): boolean {
   return TERMINAL_WORK_ITEM_STATUSES.includes(status);
@@ -68,7 +57,7 @@ export function isAlreadyTerminal(status: WorkItemStatus): boolean {
 
 /** The read-only detached worktree path for generating requirements against
  * one Issue (pure, for testing) — shared by pipeline_prepare.ts (create/
- * reuse) and pipeline_decide.ts (final removal). */
+ * reuse) and requirements_apply.ts (final removal). */
 export function buildRequirementsWorktreeDir(
   owner: string,
   repo: string,
@@ -113,7 +102,7 @@ export function shouldCancelForClosedIssue(issueState: string): boolean {
 }
 
 /** The labels to remove on a terminal transition (pure, for testing): wip
- * and trigger (team-lead rule, M5-review-derived — see pipeline_decide.ts's
+ * and trigger (team-lead rule, M5-review-derived — see requirements_apply.ts's
  * module doc for the full rationale). */
 export function terminalLabelsToRemove(
   config: Pick<FactoryConfig, "wip_label" | "trigger_label">,
@@ -234,12 +223,6 @@ export async function main(
       "cancelled",
       "issue closed before pipeline started",
     );
-    // [medium, M6 review round 2, devil-advocate, item 13] A later attempt
-    // (this is the reject-and-retry restart path) can reach here still
-    // carrying an earlier attempt's now-consumed resume/cancel URLs from
-    // request_approval — clear them on this terminal transition too, same
-    // as pipeline_decide.ts's own terminal branches (see its module doc).
-    await clearResumeUrls(work_item_id);
     await removeTerminalLabels(
       client,
       workItem.owner,

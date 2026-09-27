@@ -1,0 +1,9 @@
+summary: '[LIB] 承認依頼の純粋ロジック'
+description: 内部ライブラリです。直接実行するものではありません。承認依頼(approval_requests)の判定・URL組み立てなどの純粋ロジックです。
+lock: '!inline f/factory/lib/approval_support.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

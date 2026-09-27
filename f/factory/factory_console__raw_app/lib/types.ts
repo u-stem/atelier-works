@@ -23,7 +23,6 @@ export const CONSOLE_VIEWS = [
   "lead_time",
   "failures",
   "notices",
-  "issue_proposals",
 ] as const;
 
 export type ConsoleView = (typeof CONSOLE_VIEWS)[number];
@@ -49,41 +48,91 @@ function toDiagramLinks(value: unknown): DiagramLink[] {
     .filter((item): item is DiagramLink => item !== null);
 }
 
-export type InboxRow = {
+export type ApprovalRequestKind = "requirements" | "issue_proposal";
+export type ApprovalRequestStatus =
+  | "pending"
+  | "approved"
+  | "rejected"
+  | "expired";
+
+/** Fields every Inbox row carries regardless of `kind` — one row per
+ * `factory.approval_requests` entry (requirements + issue_proposal
+ * approvals unified into a single Inbox tab). */
+export type InboxRowBase = {
+  approval_request_id: number;
+  status: ApprovalRequestStatus;
   work_item_id: number;
   owner: string;
   repo: string;
+  title: string | null;
+  requested_at: string;
+  expires_at: string | null;
+};
+
+export type RequirementsInboxRow = InboxRowBase & {
+  kind: "requirements";
   issue_number: number | null;
   issue_url: string | null;
-  title: string | null;
-  attempt: number;
-  claimed_by: string | null;
-  requirement_draft_id: number;
+  draft_attempt: number;
   summary: string;
   markdown: string;
   diagrams: DiagramLink[];
   open_questions: string[];
-  created_at: string;
-  updated_at: string;
 };
 
+export type IssueProposalInboxRow = InboxRowBase & {
+  kind: "issue_proposal";
+  pr_number: number | null;
+  proposal_title: string;
+  proposal_body: string;
+  proposal_status: string;
+  created_issue_number: number | null;
+  created_issue_url: string | null;
+  claimed_by: string | null;
+};
+
+export type InboxRow = RequirementsInboxRow | IssueProposalInboxRow;
+
 export function toInboxRow(row: Record<string, unknown>): InboxRow {
-  return {
+  const base: InboxRowBase = {
+    approval_request_id: num(row.approval_request_id),
+    status:
+      row.status === "pending" ||
+      row.status === "approved" ||
+      row.status === "rejected" ||
+      row.status === "expired"
+        ? row.status
+        : "pending",
     work_item_id: num(row.work_item_id),
     owner: str(row.owner),
     repo: str(row.repo),
+    title: strOrNull(row.title),
+    requested_at: str(row.requested_at),
+    expires_at: strOrNull(row.expires_at),
+  };
+  if (row.kind === "issue_proposal") {
+    return {
+      ...base,
+      kind: "issue_proposal",
+      pr_number: numOrNull(row.pr_number),
+      proposal_title: str(row.proposal_title),
+      proposal_body: str(row.proposal_body),
+      proposal_status: str(row.proposal_status),
+      created_issue_number: numOrNull(row.created_issue_number),
+      created_issue_url: strOrNull(row.created_issue_url),
+      claimed_by: strOrNull(row.claimed_by),
+    };
+  }
+  return {
+    ...base,
+    kind: "requirements",
     issue_number: numOrNull(row.issue_number),
     issue_url: strOrNull(row.issue_url),
-    title: strOrNull(row.title),
-    attempt: num(row.attempt),
-    claimed_by: strOrNull(row.claimed_by),
-    requirement_draft_id: num(row.requirement_draft_id),
+    draft_attempt: num(row.draft_attempt),
     summary: str(row.summary),
     markdown: str(row.markdown),
     diagrams: toDiagramLinks(row.diagrams),
     open_questions: strArray(row.open_questions),
-    created_at: str(row.created_at),
-    updated_at: str(row.updated_at),
   };
 }
 
@@ -243,50 +292,6 @@ export function toNoticeRow(row: Record<string, unknown>): NoticeRow {
     kind: str(row.kind),
     message: str(row.message),
     resolved: bool(row.resolved),
-    created_at: str(row.created_at),
-  };
-}
-
-export type IssueProposalRow = {
-  issue_proposal_id: number;
-  work_item_id: number;
-  owner: string;
-  repo: string;
-  pr_number: number | null;
-  pr_title: string | null;
-  claimed_by: string | null;
-  review_comment_id: number;
-  thread_id: string | null;
-  title: string;
-  body: string;
-  status: string;
-  // Present (non-null) once issue_proposal_decide.ts has confirmed the
-  // Issue exists on GitHub. A row with status "approved" and this still
-  // null means approval was recorded but Issue creation failed partway
-  // through (team-lead fix round, "Keep incomplete approvals visible in
-  // Inbox") — InboxTab shows a "起票未完了" badge for that case instead of
-  // treating the row as a normal pending proposal.
-  created_issue_number: number | null;
-  created_at: string;
-};
-
-export function toIssueProposalRow(
-  row: Record<string, unknown>,
-): IssueProposalRow {
-  return {
-    issue_proposal_id: num(row.issue_proposal_id),
-    work_item_id: num(row.work_item_id),
-    owner: str(row.owner),
-    repo: str(row.repo),
-    pr_number: numOrNull(row.pr_number),
-    pr_title: strOrNull(row.pr_title),
-    claimed_by: strOrNull(row.claimed_by),
-    review_comment_id: num(row.review_comment_id),
-    thread_id: strOrNull(row.thread_id),
-    title: str(row.title),
-    body: str(row.body),
-    status: str(row.status),
-    created_issue_number: numOrNull(row.created_issue_number),
     created_at: str(row.created_at),
   };
 }

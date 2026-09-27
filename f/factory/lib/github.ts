@@ -1005,7 +1005,7 @@ export type MarkerSearchResult = {
 /**
  * `GET /search/issues` for an open-or-closed issue in `owner/repo` whose
  * body contains the literal `markerText` (quoted phrase search) — team-lead
- * fix round, [MUST] #2: issue_proposal_decide.ts uses this before calling
+ * fix round, [MUST] #2: issue_proposal_apply.ts uses this before calling
  * `createIssue` on an approve decision, so a retry after a crash between
  * recording the decision and creating the Issue reuses the Issue a previous
  * attempt already created instead of duplicating it. The caller passes the

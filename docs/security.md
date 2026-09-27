@@ -45,7 +45,7 @@
 ## GitHub PAT
 
 - fine-grained PATを使う。スコープはIssues R/W、Contents R/W、Metadata R、Pull requests R/Wとする。`pr_fix`の修正pushのためContentsをRead and writeにした。fine-grained PATは権限設定の変更をトークンの値を変えずに反映できるため、既存トークンの権限を更新するだけでよく、再発行(値の再生成)は不要。
-- `issue_proposal_decide`(ユーザー決定2026-09-26、Issue化提案の承認)がIssueを作成する際も、他のGitHub呼び出しと同じ`f/factory/github_token`のPATを使う。別の認証情報は用意しない(Issues R/Wスコープは既に確保済み)。
+- `issue_proposal_apply`(ユーザー決定2026-09-26、Issue化提案の承認結果反映)がIssueを作成する際も、他のGitHub呼び出しと同じ`f/factory/github_token`のPATを使う。別の認証情報は用意しない(Issues R/Wスコープは既に確保済み)。
 - 有効期限は最長1年。`poll_issues`の冒頭で`gh api user`により有効性を確認し、失効していればnoticeを出す。
 - orgリポジトリを対象にする場合、org側のPAT承認が必要になる場合がある点に注意する。
 - 認証は`GH_TOKEN`環境変数と`gh auth git-credential`(gitのcredential helper経由)のみで行う。`gh auth login`の対話ログインや、トークンを埋め込んだclone URL(`https://<token>@github.com/...`)は使わない。

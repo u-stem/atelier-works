@@ -3,14 +3,12 @@
 // matchReviewThreadForComment (pr_fix_finish.ts), and
 // buildIssueProposalReason / buildIssueProposalBody /
 // renderIssueProposalApprovedReply / renderIssueProposalRejectedReply /
-// assertValidIssueProposalDecideInput / decideIssueProposalLabelSwap
-// (issue_proposal_decide.ts).
+// decideIssueProposalLabelSwap (issue_proposal_apply.ts).
 
 import { describe, expect, test } from "bun:test";
 import type { ReviewThread } from "../../f/factory/lib/github.ts";
 import type { FixReply } from "../../f/factory/lib/types.ts";
 import {
-  assertValidIssueProposalDecideInput,
   buildIssueProposalBody,
   buildIssueProposalReason,
   buildIssueProposalTitle,
@@ -170,35 +168,6 @@ describe("renderIssueProposalRejectedReply", () => {
   test("ends with 見送り as the disposition", () => {
     const body = renderIssueProposalRejectedReply("scope外のため");
     expect(body.split("\n").at(-1)).toBe("対応: 見送り");
-  });
-});
-
-describe("assertValidIssueProposalDecideInput", () => {
-  test("allows an approve decision with an empty reason", () => {
-    expect(() =>
-      assertValidIssueProposalDecideInput({ decision: "approve", reason: "" }),
-    ).not.toThrow();
-  });
-
-  test("allows a reject decision with a non-empty reason", () => {
-    expect(() =>
-      assertValidIssueProposalDecideInput({
-        decision: "reject",
-        reason: "scope外のため",
-      }),
-    ).not.toThrow();
-  });
-
-  test("rejects a reject decision with an empty reason", () => {
-    expect(() =>
-      assertValidIssueProposalDecideInput({ decision: "reject", reason: "" }),
-    ).toThrow();
-  });
-
-  test("rejects a reject decision with a whitespace-only reason", () => {
-    expect(() =>
-      assertValidIssueProposalDecideInput({ decision: "reject", reason: "  " }),
-    ).toThrow();
   });
 });
 

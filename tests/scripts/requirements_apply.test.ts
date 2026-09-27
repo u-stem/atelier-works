@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
   buildApprovedComment,
-  classifyMissingApproval,
   computeApprovedLabels,
-  SUSPEND_TIMEOUT_SEC,
+  decideRejectedOutcome,
+  readRequestAttempt,
   shouldProceed,
-} from "../../f/factory/steps/pipeline_decide.ts";
+} from "../../f/factory/steps/requirements_apply.ts";
 
 describe("shouldProceed", () => {
   test("proceeds when status is awaiting_approval", () => {
@@ -72,38 +72,30 @@ describe("computeApprovedLabels", () => {
   });
 });
 
-describe("classifyMissingApproval", () => {
-  const AWAITING_SINCE = new Date("2026-01-01T00:00:00.000Z");
-
-  test("is expired once the full suspend timeout has elapsed", () => {
-    const now = new Date(AWAITING_SINCE.getTime() + SUSPEND_TIMEOUT_SEC * 1000);
-    expect(
-      classifyMissingApproval(now, AWAITING_SINCE, SUSPEND_TIMEOUT_SEC),
-    ).toBe("expired");
+describe("decideRejectedOutcome", () => {
+  test("retries when attempt is below the max", () => {
+    expect(decideRejectedOutcome(1, 3)).toBe("retry");
   });
 
-  test("is expired well after the suspend timeout", () => {
-    const now = new Date(
-      AWAITING_SINCE.getTime() + (SUSPEND_TIMEOUT_SEC + 3600) * 1000,
-    );
-    expect(
-      classifyMissingApproval(now, AWAITING_SINCE, SUSPEND_TIMEOUT_SEC),
-    ).toBe("expired");
+  test("gives up to needs_human once attempt reaches the max", () => {
+    expect(decideRejectedOutcome(3, 3)).toBe("needs_human");
   });
 
-  test("is needs_human when it wakes up well before the timeout could fire", () => {
-    const now = new Date(AWAITING_SINCE.getTime() + 60 * 1000);
-    expect(
-      classifyMissingApproval(now, AWAITING_SINCE, SUSPEND_TIMEOUT_SEC),
-    ).toBe("needs_human");
+  test("gives up to needs_human past the max", () => {
+    expect(decideRejectedOutcome(4, 3)).toBe("needs_human");
+  });
+});
+
+describe("readRequestAttempt", () => {
+  test("reads a numeric attempt from the payload", () => {
+    expect(readRequestAttempt({ attempt: 2 }, 1)).toBe(2);
   });
 
-  test("is needs_human one second before the timeout would have fired", () => {
-    const now = new Date(
-      AWAITING_SINCE.getTime() + (SUSPEND_TIMEOUT_SEC - 1) * 1000,
-    );
-    expect(
-      classifyMissingApproval(now, AWAITING_SINCE, SUSPEND_TIMEOUT_SEC),
-    ).toBe("needs_human");
+  test("falls back when attempt is missing", () => {
+    expect(readRequestAttempt({}, 1)).toBe(1);
+  });
+
+  test("falls back when attempt is not a number", () => {
+    expect(readRequestAttempt({ attempt: "2" }, 1)).toBe(1);
   });
 });

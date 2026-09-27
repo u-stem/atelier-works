@@ -147,8 +147,9 @@ export type WmillCliContext = {
  * ambient Windmill-provided env (never from a caller-supplied argument —
  * these describe *this* job's own workspace, not something a caller picks).
  * `baseUrl` prefers `BASE_INTERNAL_URL`, falling back to `BASE_URL` (same
- * fallback order as approval_decide.ts's `resolveInternalBase`, and for the
- * same reason: measured directly inside a worker job, `BASE_INTERNAL_URL`
+ * fallback order the former suspend-based approval_decide.ts once used for
+ * its own internal-URL resolution, for the same reason: measured directly
+ * inside a worker job, `BASE_INTERNAL_URL`
  * is unset there while `BASE_URL` is set — observed value
  * `http://127.0.0.1:45753/`, a worker-local proxy port, not the host-facing
  * `WM_BASE_URL` `mise.toml` sets for host-side dev use. Confirmed reachable
