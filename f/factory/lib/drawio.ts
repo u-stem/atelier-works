@@ -1,26 +1,20 @@
-// draw.io (mxGraph) XML validation and viewer-URL encoding.
+// draw.io (mxGraph) XML validation.
 //
-// Encoding follows the diagrams.net URL-fragment convention: the XML is
-// URI-encoded, DEFLATE-compressed (raw, no zlib header — matches pako's
-// `deflateRaw`, confirmed against `node:zlib`'s `deflateRawSync` during the
-// M4 contract smoke), then standard base64-encoded (see toViewerUrl). The
-// fragment (`#...`) is never sent to the diagrams.net server by the
-// browser. The resulting URL is never posted to GitHub or Discord (2026-09-27
-// policy). As of the file-per-diagram requirements-doc format (2026-09-27),
-// a diagram's XML lives on disk under pipeline_generate.ts's requirements
-// doc dir, not in the DB — steps/console_query.ts's `toDiagramLink` has no
-// read access to that path yet, so `toViewerUrl` is currently unused
-// pending a follow-up PR wiring inline rendering from the file (see
-// docs/architecture.md, 工程2, and docs/security.md "draw.io ビューアーの
-// プライバシー"); `validateDrawioXml` remains in active use by
-// pipeline_generate.ts's post-generation checks.
+// `validateDrawioXml` is used by pipeline_generate.ts's post-generation
+// checks (uncompressed `<mxfile>` XML, 256KB limit — see
+// .claude/skills/drawio-diagram/SKILL.md for the generation-side contract).
 //
-// See also: .claude/skills/drawio-diagram/SKILL.md (the generation-side
-// contract: uncompressed XML, 256KB limit, `[a-z0-9-]+` diagram names).
+// A diagram's XML lives on disk under pipeline_generate.ts's requirements
+// doc dir (`requirement_drafts.doc_dir`), not in the DB. The Console now
+// renders it inline via the diagrams.net embed viewer
+// (`components/DrawioViewer.tsx`, `f/factory/steps/console_query.ts`'s
+// `requirements_doc` view reads the file back) — the former
+// `toViewerUrl`/URL-fragment encoding this file used to provide (a static
+// `viewer.diagrams.net` link, superseded by the embed viewer) has been
+// removed along with it (see docs/security.md "draw.io ビューアーの
+// プライバシー").
 
 const MAX_XML_BYTES = 256 * 1024;
-const MAX_VIEWER_URL_FRAGMENT_BYTES = 8 * 1024;
-const DEFAULT_VIEWER_BASE_URL = "https://viewer.diagrams.net/";
 
 export type DrawioValidationResult =
   | { readonly valid: true }
@@ -74,30 +68,4 @@ export function validateDrawioXml(xml: string): DrawioValidationResult {
   }
 
   return { valid: true };
-}
-
-/**
- * Encode a draw.io XML document as a `viewer.diagrams.net` URL fragment
- * (encodeURIComponent → raw DEFLATE → standard base64). The viewer decodes
- * `#R<data>` with `atob()`, which only accepts standard base64: a URL-safe
- * variant (`-` / `_`, padding stripped) made it fail with "The string to be
- * decoded is not correctly encoded" (observed in the Console's iframe).
- * `+`, `/` and `=` are legal inside a URL fragment, so no further escaping
- * is applied. Returns `null` when the encoded fragment exceeds 8KB
- * (spec-cycle2.md §1 drawio.ts) — callers should fall back to embedding
- * the diagram name only.
- */
-export function toViewerUrl(
-  xml: string,
-  baseUrl: string = DEFAULT_VIEWER_BASE_URL,
-): string | null {
-  const uriEncoded = encodeURIComponent(xml);
-  const deflated = Bun.deflateSync(new TextEncoder().encode(uriEncoded));
-  const base64 = Buffer.from(deflated).toString("base64");
-
-  if (byteLength(base64) > MAX_VIEWER_URL_FRAGMENT_BYTES) {
-    return null;
-  }
-
-  return `${baseUrl}?lightbox=1#R${base64}`;
 }

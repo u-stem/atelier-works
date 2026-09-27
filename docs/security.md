@@ -118,8 +118,9 @@ read -rs 'v?GITHUB_TOKEN: ' && mise set -E local GITHUB_TOKEN="$v"; unset v
 ## draw.ioビューアーのプライバシー
 
 - 要件定義の図(`<name>.drawio`)は要件定義ファイルと同じworker専用ディレクトリ(`requirement_drafts.doc_dir`以下)に生のXMLとして書かれ、DBの`requirement_drafts.diagrams`列には`{name, file}`という参照だけが入る。GitHub(Issue / PRコメント)にもDiscord通知にも図の内容・URLのいずれも投稿しない(2026-09-27の方針)。
-- Consoleでのインライン描画(`doc_dir`のファイルを読んで表示する)は次のPRで実装する。それまでは`f/factory/steps/console_query.ts`の`toDiagramLink`が図の名前だけを返し、`viewer_url`は常に`null`になる。
-- `f/factory/lib/drawio.ts`の`toViewerUrl`(`viewer.diagrams.net`のURLフラグメントへのエンコード)は上記の接続が済むまで未使用のまま残す。将来これを使う場合も、URLのフラグメント部分(`#`以降)はブラウザからdiagrams.netのサーバーには送信されない設計を維持し、GitHubやDiscordには投稿しない。
+- Consoleでのインライン描画は`f/factory/steps/console_query.ts`の`requirements_doc`ビューが`doc_dir`配下の`requirements.md`と各`<name>.drawio`をファイルから読み戻し(`readDocFromDisk`。`doc_dir`が`REQUIREMENTS_BASE_DIR`配下であることを検査したうえで読む)、Console(raw app)の`components/DrawioViewer.tsx`がXMLをブラウザ内で描画する形で実装済み。図のXMLはWindmillのjob結果としてConsoleのバックエンドランナブル呼び出し経由でフロントエンドに渡るだけで、GitHubやDiscordには一度も送られない。
+- `DrawioViewer.tsx`はdiagrams.net公式の埋め込み用静的ビューアースクリプト(`https://viewer.diagrams.net/js/viewer-static.min.js`)をページに一度だけ読み込み、`<div class="mxgraph" data-mxgraph='{"xml": ...}'>`にXMLをJSONとして渡してブラウザ内で描画する(`window.GraphViewer.processElements()`)。XMLはこのスクリプトを経由して外部サーバーに送信されない(diagrams.net公式の埋め込み方式であり、レンダリングはクライアント側で完結する)。CDNからのスクリプト読み込みがConsoleのCSP(Content Security Policy)で拒否される場合は、`viewer-static.min.js`をこのApp自身の資産としてvendoringし`import`する対応が必要になる(Apache-2.0ライセンス、未実装)。
+- 旧`f/factory/lib/drawio.ts`の`toViewerUrl`(`viewer.diagrams.net`のURLフラグメントへのエンコード、外部リンク方式)は上記のインライン描画実装に伴い削除した(`validateDrawioXml`は生成後の検査用として引き続き使用する)。
 
 ## 承認と権限
 

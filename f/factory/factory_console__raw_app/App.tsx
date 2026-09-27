@@ -5,9 +5,11 @@ import { FailuresTab } from "./tabs/FailuresTab";
 import { InboxTab } from "./tabs/InboxTab";
 import { NoticesTab } from "./tabs/NoticesTab";
 import { PipelineTab } from "./tabs/PipelineTab";
+import { RequirementsTab } from "./tabs/RequirementsTab";
 
 const TABS = [
   { id: "inbox", label: "承認" },
+  { id: "requirements", label: "要件定義" },
   { id: "pipeline", label: "パイプライン" },
   { id: "analytics", label: "分析" },
   { id: "failures", label: "失敗" },
@@ -97,6 +99,9 @@ const App = (): React.ReactElement => {
       </div>
       <main className="factory-console-main">
         {activeTab === "inbox" && <InboxTab key={`inbox-${refreshKey}`} />}
+        {activeTab === "requirements" && (
+          <RequirementsTab key={`requirements-${refreshKey}`} />
+        )}
         {activeTab === "pipeline" && (
           <PipelineTab key={`pipeline-${refreshKey}`} />
         )}

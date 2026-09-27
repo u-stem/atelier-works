@@ -9,7 +9,7 @@ Software FactoryはGitHub Issueを起点に、要件定義から自己改善ま�
 - **GitHub**: Issueの起票・ラベル付け・PR・コメントのやり取り先。`factory`ラベルが付いたIssueが入力になる。
 - **Windmill server / worker**: フローとスケジュールの実行基盤。workerはカスタムイメージで動き、`claude`(Claude Code CLI)、`gh`、`gtr`(git worktree runner)、`wmill`を同梱する。workerはdefaultワーカーグループの1コンテナで、`NUM_WORKERS=3`により内部で3つのワーカープロセスが並列動作する(メモリ上限は1コンテナ分の4096Mのまま)。
 - **Data Tables**: 作業の状態・要件定義ドラフト・承認履歴・実行ログ・失敗記録などを保持するPostgresベースのテーブル群。
-- **App(ダッシュボード)**: 承認Inbox、パイプラインの一覧、コスト等の分析、失敗の再実行、通知一覧を提供するUI。
+- **App(ダッシュボード)**: 承認Inbox、要件定義書の一覧・全文表示(Confluenceの文書ページに近い見た目、図はインライン描画)、パイプラインの一覧、コスト等の分析、失敗の再実行、通知一覧を提供するUI。
 - **Discord**: 各イベント(拾い上げ、承認待ち、承認、却下、要対応、失敗など)をWebhook経由で通知する。
 
 ## パイプライン(工程1 → 5)
@@ -43,7 +43,7 @@ flowchart TD
 
 承認は`approval_requests`テーブルの`pending`行で待つ(Windmillのsuspendステップは使わない)。`request_approval`ステップは`kind = 'requirements'`の`pending`行を記録して即座に終了し、フロー自体はそこで完了する。人がConsoleから承認 / 却下すると`approval_decide`が決定を`approval_requests`へ記録し(`decideApprovalRequestIfPending`による楽観ロック)、`kind`に応じたapplyスクリプト(`steps/requirements_apply` / `steps/issue_proposal_apply`)を`runScriptByPathAsync`で起動して実際の反映処理を行う。期限(7日、`approval_requests.expires_at`)は`poll_issues`のreconcile後に行う期限切れスイープが判定し、`expired`への遷移と通知を行う。
 
-工程2の要件定義書はテンプレート(`.claude/skills/factory-requirements/template.md`)を単一の正とし、生成物は`requirements_doc`で機械検査する。headless ClaudeのカレントディレクトリはIssue単位・試行単位の要件定義ファイル置き場(`/var/lib/factory/requirements/<owner>/<repo>/issue-<N>/wi-<work_item_id>/attempt-<attempt>/`、workerコンテナ専用のvolumeでコミットしない)そのものであり、`requirements.md`(テンプレートのコピー)を`Edit`で埋め、図があれば`<name>.drawio`を`Write`で書く。対象リポジトリのworktreeは`--add-dir`で読み取り専用に見せるだけで、カレントディレクトリにはしない。構造化出力は`{summary, open_questions}`に縮小し、本文と図は生成後にファイルから読み戻して検査・保存する(`f/factory/steps/pipeline_generate.ts`)。Factory ConsoleのbackendランナブルもCLIワーカーと同じworkerコンテナ(defaultワーカーグループ)で同じvolumeを読む前提であり、workerを複数コンテナに分ける場合は共有ストレージが必要になる。図のインライン描画へのConsole側の接続は次のPRで行う。
+工程2の要件定義書はテンプレート(`.claude/skills/factory-requirements/template.md`)を単一の正とし、生成物は`requirements_doc`で機械検査する。headless ClaudeのカレントディレクトリはIssue単位・試行単位の要件定義ファイル置き場(`/var/lib/factory/requirements/<owner>/<repo>/issue-<N>/wi-<work_item_id>/attempt-<attempt>/`、workerコンテナ専用のvolumeでコミットしない)そのものであり、`requirements.md`(テンプレートのコピー)を`Edit`で埋め、図があれば`<name>.drawio`を`Write`で書く。対象リポジトリのworktreeは`--add-dir`で読み取り専用に見せるだけで、カレントディレクトリにはしない。構造化出力は`{summary, open_questions}`に縮小し、本文と図は生成後にファイルから読み戻して検査・保存する(`f/factory/steps/pipeline_generate.ts`)。Factory ConsoleのbackendランナブルもCLIワーカーと同じworkerコンテナ(defaultワーカーグループ)で同じvolumeを読む前提であり、workerを複数コンテナに分ける場合は共有ストレージが必要になる。Console側の接続は`f/factory/steps/console_query.ts`の`requirements_doc`ビュー(query view。`f/factory/lib/requirements_doc.ts`の生成物検査ロジックとは別物)が`doc_dir`から`requirements.md`と各図のファイルを読み戻し、raw appの`components/RequirementsDocument.tsx` / `Markdown.tsx` / `DrawioViewer.tsx`がConfluenceの文書ページに近い見た目で本文・目次・図をインライン描画する形で実装済み(要件定義タブ、およびInboxタブの要件定義詳細の双方から使う)。`doc_dir`が読めない場合(pre-2026-09-27の行など)はDBの`markdown`列にフォールバックする。
 
 ## 状態遷移(work_items.status)
 

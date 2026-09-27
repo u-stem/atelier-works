@@ -19,6 +19,10 @@ export type ConsoleQueryState<T> = {
 export type ConsoleQueryArgs = {
   readonly limit?: number;
   readonly days?: number;
+  /** Only meaningful for the "requirements_doc" view. */
+  readonly work_item_id?: number;
+  /** Only meaningful for the "requirements_doc" view. */
+  readonly attempt?: number;
 };
 
 export function useConsoleQuery<T>(
@@ -30,7 +34,7 @@ export function useConsoleQuery<T>(
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
-  const { limit, days } = args;
+  const { limit, days, work_item_id, attempt } = args;
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: reloadToken is never read inside the effect — bumping it (via reload()) is what forces a refetch, the standard "dummy dependency" hook idiom.
   useEffect(() => {
@@ -38,7 +42,7 @@ export function useConsoleQuery<T>(
     setLoading(true);
     setError(null);
 
-    queryConsole(view, limit, days)
+    queryConsole(view, limit, days, work_item_id, attempt)
       .then((result) => {
         if (cancelled) {
           return;
@@ -60,7 +64,7 @@ export function useConsoleQuery<T>(
     return () => {
       cancelled = true;
     };
-  }, [view, limit, days, reloadToken, toRow]);
+  }, [view, limit, days, work_item_id, attempt, reloadToken, toRow]);
 
   const reload = useCallback(() => {
     setReloadToken((token) => token + 1);

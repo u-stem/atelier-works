@@ -66,9 +66,16 @@ export function shouldProceed(status: WorkItem["status"]): boolean {
 
 /** Builds the one-line "approved" Issue comment (pure, for testing). The
  * draft body is never posted to GitHub (2026-09-27 policy: GitHub carries
- * only work product); the Issue gets a single pointer to the Console. */
-export function buildApprovedComment(consoleUrl: string): string {
-  return `要件定義が承認されました。Console で内容を確認できます: ${consoleUrl}`;
+ * only work product); the Issue gets a single pointer to the Console. The
+ * `work_item_id` is written out alongside the URL as a manual fallback for
+ * when the Console can't read its own deep-link fragment (opaque-origin raw
+ * app — see lib/approval_support.ts's `buildConsoleUrl` doc comment): a
+ * human can still paste it into the 要件定義 tab's work_item_id filter. */
+export function buildApprovedComment(
+  consoleUrl: string,
+  workItemId: number,
+): string {
+  return `要件定義が承認されました。Console で内容を確認できます: ${consoleUrl}(work_item_id: ${String(workItemId)})`;
 }
 
 export type RejectedOutcome = "retry" | "needs_human";
@@ -195,7 +202,9 @@ async function run(
       });
       return { outcome: "no_op" };
     }
-    const consoleUrl = buildConsoleUrl(config.windmill_public_url);
+    const consoleUrl = buildConsoleUrl(config.windmill_public_url, {
+      work_item_id: workItem.id,
+    });
     await commentIssue(
       client,
       workItem.owner,
@@ -203,7 +212,7 @@ async function run(
       workItem.issue_number,
       `issue-approved-${String(attempt)}`,
       workItem.id,
-      buildApprovedComment(consoleUrl),
+      buildApprovedComment(consoleUrl, workItem.id),
       viewer.login,
     );
     await notifySafe(webhookUrl, {
@@ -214,6 +223,7 @@ async function run(
       issue_number: workItem.issue_number,
       issue_url: workItem.issue_url ?? "",
       title: workItem.title ?? "",
+      console_url: consoleUrl,
     });
     await removeReqWorktree(workItem);
     return { outcome: "approved" };

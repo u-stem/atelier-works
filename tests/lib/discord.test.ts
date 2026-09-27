@@ -297,6 +297,41 @@ describe("buildEmbed", () => {
       value: "https://github.com/octo-owner/atelier-works/issues/42",
     });
   });
+
+  test("sets the embed url to the Console deep link on requirements_approved", () => {
+    const embed = buildEmbed({
+      kind: "requirements_approved",
+      instance_name: "local",
+      owner: "octo-owner",
+      repo: "atelier-works",
+      issue_number: 42,
+      issue_url: "https://github.com/octo-owner/atelier-works/issues/42",
+      title: "Add feature",
+      console_url:
+        "http://127.0.0.1:8080/apps/get/f/factory/factory_console#requirements/7",
+    });
+    expect(embed.url).toBe(
+      "http://127.0.0.1:8080/apps/get/f/factory/factory_console#requirements/7",
+    );
+  });
+
+  test("still includes the issue url as a field on requirements_approved", () => {
+    const embed = buildEmbed({
+      kind: "requirements_approved",
+      instance_name: "local",
+      owner: "octo-owner",
+      repo: "atelier-works",
+      issue_number: 42,
+      issue_url: "https://github.com/octo-owner/atelier-works/issues/42",
+      title: "Add feature",
+      console_url:
+        "http://127.0.0.1:8080/apps/get/f/factory/factory_console#requirements/7",
+    });
+    expect(embed.fields).toContainEqual({
+      name: "Issue",
+      value: "https://github.com/octo-owner/atelier-works/issues/42",
+    });
+  });
 });
 
 describe("capEmbedToDiscordLimits", () => {
