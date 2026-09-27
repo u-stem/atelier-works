@@ -24,7 +24,7 @@ locks:
   f/factory/lib/prompts: 282929c191599a34b2f5f277143dd566f11fbd071dab5085bd63c885f2c70801
   f/factory/lib/requirements_doc: 214bf5385f815dae2bf8411f246ba4b93afd26f2a1f9b9547d78f014410a36c1
   f/factory/lib/requirements_template: 1312230f3c59d7a112692d1a38b172a69ca557faf79912920a9f50698730d3c2
-  f/factory/lib/self_update_support: b3547ed7abcb8ac79370e0d6e5d6de7eb0871b3a2661cc9c2841feebcb668879
+  f/factory/lib/self_update_support: 1a212118475fae92e850b84bd647e6b7d3c2045ca607a28e74876687fa103f46
   f/factory/lib/summary_support: 44b5c88e2f397a6ebd75a4f6b048586d18e99a46d9495625f14a38de2d4856cb
   f/factory/lib/types: 9c5f1e3217e98dee52f093958c1d4437d4ce211eb80464917ad84423dd7e51cf
   f/factory/lib/workspace: d576a639f8801aa623ee713d368af9dda8c9849da54003b19fef086abc36469f
@@ -38,7 +38,7 @@ locks:
   f/factory/pr_fix__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/pr_review__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/retry_work_item: e69a42bf57523cb6c2176e9cb42de5b4cdbcf467bde5205c33a51dc44ecb67f3
-  f/factory/self_update: daf541a17b78634d82efb9573d99c76c63b719d0db07a35db79201204c1fae04
+  f/factory/self_update: 9d9778a18081b6a57e316ea328c0f6418510c56af47c08f4da2a6a791378f358
   f/factory/steps/console_query: 20f08e6f57642f37960b2e9e3122f97b91ef24646d60c515d402e508148c7900
   f/factory/steps/issue_proposal_apply: a951d3d0e00f5176b3aa0e72883033e00a0959c4034ee7bc0f803fbc203fe289
   f/factory/steps/manual_intake_create_issue: c5f7b63071f6fc702dd4414881f2953d8c408b43033452bce054fc253e3c6e97

@@ -101,7 +101,7 @@
 - `wmill sync push`に **`--include-secrets`を付けてはいけない**。付けるとリポジトリ内の`f/factory/*.variable.yaml`(値は空のままコミットされている)で4つのsecret変数(`claude_oauth_token` / `github_token` / `wmill_token` / `discord_webhook_url`)が空に上書きされる。`mise run push`(`wmill sync push --yes --keep-deleted`)は`--include-secrets`を付けない設定になっている。
 - secret変数(`f/factory/*.variable.yaml`)とinstance固有の`factory_config` resourceは同期対象外のため、これらの **説明文(description)を変えても`mise run push`では既存instanceに反映されない**。既存instanceではWindmill UI(Variables / Resourcesの編集画面)で説明文だけを更新する。新規instanceはbootstrapがリポジトリの説明文で作成する。
 - `f/factory/deployed_sha`変数も同期対象外(理由は他の2つと異なり、instance固有の設定ではなく`self_update`が書き込む実行時状態のため)。`mise run push`を実行しても値は変わらない。`bootstrap`は初回のみ空値で作成し、既に存在する場合は値を変更しない。値をリセットしたい場合はWindmill UIから直接編集する。
-- `self_update`スケジュール(10分毎)が`infra/`・`mise.toml`の変更を検知すると、DiscordとダッシュボードのNoticesで「`mise run deploy`を実行してください」と通知する。`scripts/`(ホスト側のbootstrap / doctor / lint)や`mise.local.toml.example`の変更はworkerの動作に影響しないため通知しない。`f/`・`migrations/`・`.claude/skills/`の変更は`self_update`が自動で反映するので、ホスト側の操作は不要である。
+- `self_update`スケジュール(10分毎)が`infra/`の変更、または`mise.toml`の`[tools]`・`[env]`セクション(ツールのバージョンとcomposeが読む環境変数)の変更を検知すると、DiscordとダッシュボードのNoticesで「`mise run deploy`を実行してください」と通知する。`mise.toml`の`[tasks.*]`だけの変更、`scripts/`(ホスト側のbootstrap / doctor / lint)、`mise.local.toml.example`の変更はworkerの動作に影響しないため通知しない。`f/`・`migrations/`・`.claude/skills/`の変更は`self_update`が自動で反映するので、ホスト側の操作は不要である。
 
 ### Windmillの`admins`ワークスペースにある組み込み項目
 
