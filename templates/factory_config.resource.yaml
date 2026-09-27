@@ -27,6 +27,8 @@ value:
   daily_budget_usd: 50
   claude_timeout_sec: 1800
   worktree_ttl_days: 7
+  retention_work_items_days: 90
+  retention_logs_days: 30
   factory_repo: https://github.com/<owner>/atelier-works
   factory_branch: main
   instance_name: local

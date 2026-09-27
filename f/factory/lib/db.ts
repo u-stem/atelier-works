@@ -17,6 +17,7 @@
 // `wmill generate-metadata` time, producing a client/server version
 // mismatch.
 import * as wmill from "windmill-client@1.817.0";
+import type { CleanupCounts } from "./cleanup_db_support.ts";
 import {
   type AgentRunRecord,
   APPROVAL_REQUEST_KINDS,
@@ -1685,4 +1686,136 @@ export async function listExpiredPendingApprovalRequests(
     WHERE status = 'pending' AND expires_at IS NOT NULL AND expires_at <= ${now.toISOString()}::timestamptz
   `.fetch();
   return rows.map(toApprovalRequest);
+}
+
+// ---------------------------------------------------------------------------
+// cleanup_db.ts (DB retention cleanup, 2026-09-27 addition). See
+// lib/cleanup_db_support.ts for the pure cutoff-computation / summary
+// formatting logic and cleanup_db.ts for how these are wired together
+// (count-then-delete ordering, per-step error handling).
+// ---------------------------------------------------------------------------
+
+/**
+ * Deletes every terminal-status work item last updated before `olderThan`
+ * (same target set as `listStaleTerminalWorkItems`, as a DELETE) and reports
+ * how many rows went with it. Runs as a single statement: the CTE counts the
+ * approval_requests rows attached to the candidate ids from the statement's
+ * own snapshot, so the count and the delete always describe the same set —
+ * a `retry_work_item` slipping in between two separate queries cannot make
+ * the reported count drift from what was actually removed. Every other
+ * referencing table cascades from this one statement (requirement_drafts /
+ * approvals / agent_runs / work_item_events / approval_requests via
+ * `ON DELETE CASCADE`; job_failures via `ON DELETE SET NULL`, swept
+ * separately by `deleteJobFailuresBefore`).
+ */
+export type TerminalWorkItemsDeleted = {
+  readonly work_items_deleted: number;
+  readonly approval_requests_deleted: number;
+};
+
+export async function deleteTerminalWorkItemsBefore(
+  olderThan: Date,
+  sql: SqlClient = defaultSqlClient,
+): Promise<TerminalWorkItemsDeleted> {
+  const terminal: string[] = [...TERMINAL_WORK_ITEM_STATUSES];
+  const rows = await sql`
+    WITH candidates AS (
+      SELECT id FROM factory.work_items
+      WHERE status = ANY(${terminal}) AND updated_at <= ${olderThan.toISOString()}::timestamptz
+    ),
+    cascaded AS (
+      SELECT COUNT(*) AS approval_requests_count
+      FROM factory.approval_requests
+      WHERE work_item_id IN (SELECT id FROM candidates)
+    ),
+    deleted AS (
+      DELETE FROM factory.work_items
+      WHERE id IN (SELECT id FROM candidates)
+      RETURNING id
+    )
+    SELECT
+      (SELECT COUNT(*) FROM deleted) AS work_items_deleted,
+      (SELECT approval_requests_count FROM cascaded) AS approval_requests_deleted
+  `.fetch();
+  const row = rows[0];
+  if (row === undefined) {
+    return { work_items_deleted: 0, approval_requests_deleted: 0 };
+  }
+  return {
+    work_items_deleted: parseNumericLike(
+      row.work_items_deleted,
+      "work_items_deleted",
+    ),
+    approval_requests_deleted: parseNumericLike(
+      row.approval_requests_deleted,
+      "approval_requests_deleted",
+    ),
+  };
+}
+
+/** Deletes factory.job_failures rows past `olderThan` (`occurred_at`),
+ * independently of work_items (its own FK is `ON DELETE SET NULL`, so a
+ * job_failures row outlives the work item it referenced). Returns the
+ * number of rows deleted. */
+export async function deleteJobFailuresBefore(
+  olderThan: Date,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  const rows = await sql`
+    DELETE FROM factory.job_failures
+    WHERE occurred_at <= ${olderThan.toISOString()}::timestamptz
+    RETURNING id
+  `.fetch();
+  return rows.length;
+}
+
+/** Deletes factory.deployments rows past `olderThan` (`occurred_at`) — this
+ * table has no FK to work_items at all. Returns the number of rows
+ * deleted. */
+export async function deleteDeploymentsBefore(
+  olderThan: Date,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  const rows = await sql`
+    DELETE FROM factory.deployments
+    WHERE occurred_at <= ${olderThan.toISOString()}::timestamptz
+    RETURNING id
+  `.fetch();
+  return rows.length;
+}
+
+/** Deletes already-resolved (`resolved = true`) factory.notices rows past
+ * `olderThan` (`created_at`) — an unresolved notice is never deleted by
+ * cleanup regardless of age. Returns the number of rows deleted. */
+export async function deleteResolvedNoticesBefore(
+  olderThan: Date,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  const rows = await sql`
+    DELETE FROM factory.notices
+    WHERE resolved = true AND created_at <= ${olderThan.toISOString()}::timestamptz
+    RETURNING id
+  `.fetch();
+  return rows.length;
+}
+
+/** Inserts one factory.cleanup_runs row recording a cleanup_db.ts run's
+ * delete counts, and returns its id. */
+export async function insertCleanupRun(
+  counts: CleanupCounts,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  const statement = sql`
+    INSERT INTO factory.cleanup_runs (
+      work_items_deleted, approval_requests_deleted, job_failures_deleted,
+      deployments_deleted, notices_deleted, doc_dirs_deleted
+    ) VALUES (
+      ${counts.work_items_deleted}::integer, ${counts.approval_requests_deleted}::integer,
+      ${counts.job_failures_deleted}::integer, ${counts.deployments_deleted}::integer,
+      ${counts.notices_deleted}::integer, ${counts.doc_dirs_deleted}::integer
+    )
+    RETURNING id
+  `;
+  const row = await fetchOneRow(statement, "insertCleanupRun");
+  return parseId(row.id, "id");
 }

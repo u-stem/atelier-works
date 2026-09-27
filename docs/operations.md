@@ -128,6 +128,15 @@
 - Windmillのデータ(ワークスペース設定、Data Table、ジョブ履歴など)はすべて`db_data`というDocker volume(Postgres)に入っている。バックアップの対象はこのvolume。
 - `docker compose -f infra/docker-compose.yml down -v`は`db_data`を含むすべてのvolumeを削除する破壊的操作である([docs/setup.md](setup.md)のトラブルシュートも参照)。
 
+## 保持期間
+
+- `cleanup_db`スケジュール(毎日03:30)が、保持期限を過ぎたDBのレコードを削除する。
+  - 終端状態(承認済み・要対応・タイムアウト・失敗・レビュー済み・再レビュー依頼・ブロック・キャンセル)になった作業項目は、既定90日(`factory_config`の`retention_work_items_days`)を過ぎると削除される。要件定義ドラフト・承認履歴・承認依頼・状態遷移の履歴(`work_item_events`)・Claude実行の記録(`agent_runs`。コスト分析`v_agent_cost_daily`の元データ)も、外部キーの`ON DELETE CASCADE`によりあわせて削除される。コスト分析を保持期間より長く見たい場合は`retention_work_items_days`を延ばす。
+  - 失敗記録・デプロイ記録・解決済みのお知らせは、作業項目とは独立に既定30日(`retention_logs_days`)を過ぎると削除される(未解決のお知らせは対象外)。
+  - どちらの日数も`f/factory/factory_config`から変更できる。
+  - 既知の制約: 同じIssueの作業項目がすべて削除された後にそのIssueを再度拾うと、cycle番号は1から採番し直される(`nextCycleForIssue`は残っている行の最大値から決めるため)。過去の通知やDiscordの履歴に残るcycle番号とは意味が衝突しうる。
+  - 削除件数は`cleanup_runs`テーブルに記録され、翌朝09:00の日次サマリ通知(Discord)の「DB 掃除」欄に反映される。
+
 ## 未実装の機能
 
 次はまだ実装されていない。実装され次第このドキュメントを更新する。

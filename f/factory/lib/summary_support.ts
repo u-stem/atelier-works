@@ -15,6 +15,7 @@
 // every other lib module, so it is testable with the same fake-sql-client
 // pattern (tests/lib/db.test.ts) and never hits a real database.
 
+import type { CleanupCounts } from "./cleanup_db_support.ts";
 import { defaultSqlClient, type SqlClient, type SqlRow } from "./db.ts";
 import { isNumber, isString } from "./types.ts";
 
@@ -146,4 +147,61 @@ export async function getApprovalSummary(
       AND decided_at < ${range.end.toISOString()}
   `.fetch();
   return toApprovalSummary(rows[0]);
+}
+
+/**
+ * Sums factory.cleanup_runs rows over `range` (cleanup_db.ts, a 03:30
+ * Asia/Tokyo daily schedule, so a "yesterday" range's window always covers
+ * exactly the one run from that morning). Placed here rather than db.ts —
+ * same rationale as getAgentRunSummary/getApprovalSummary above: a bounded
+ * day-range aggregation, not a per-row insert/select. Returns `null` when
+ * no row falls in `range` (e.g. the schedule hasn't run yet on a
+ * freshly-bootstrapped instance) rather than an all-zero CleanupCounts, so
+ * notify_daily_summary.ts's Discord embed can distinguish "nothing to
+ * clean up" from "no record at all".
+ */
+export async function getCleanupSummary(
+  range: DayRange,
+  sql: SqlClient = defaultSqlClient,
+): Promise<CleanupCounts | null> {
+  const rows = await sql`
+    SELECT
+      count(*) AS run_count,
+      coalesce(sum(work_items_deleted), 0) AS work_items_deleted,
+      coalesce(sum(approval_requests_deleted), 0) AS approval_requests_deleted,
+      coalesce(sum(job_failures_deleted), 0) AS job_failures_deleted,
+      coalesce(sum(deployments_deleted), 0) AS deployments_deleted,
+      coalesce(sum(notices_deleted), 0) AS notices_deleted,
+      coalesce(sum(doc_dirs_deleted), 0) AS doc_dirs_deleted
+    FROM factory.cleanup_runs
+    WHERE ran_at >= ${range.start.toISOString()}
+      AND ran_at < ${range.end.toISOString()}
+  `.fetch();
+  const row = rows[0];
+  if (row === undefined || parseNumericLike(row.run_count, "run_count") === 0) {
+    return null;
+  }
+  return {
+    work_items_deleted: parseNumericLike(
+      row.work_items_deleted,
+      "work_items_deleted",
+    ),
+    approval_requests_deleted: parseNumericLike(
+      row.approval_requests_deleted,
+      "approval_requests_deleted",
+    ),
+    job_failures_deleted: parseNumericLike(
+      row.job_failures_deleted,
+      "job_failures_deleted",
+    ),
+    deployments_deleted: parseNumericLike(
+      row.deployments_deleted,
+      "deployments_deleted",
+    ),
+    notices_deleted: parseNumericLike(row.notices_deleted, "notices_deleted"),
+    doc_dirs_deleted: parseNumericLike(
+      row.doc_dirs_deleted,
+      "doc_dirs_deleted",
+    ),
+  };
 }

@@ -34,6 +34,8 @@ declare namespace RT {
     allowed_check_commands: string[],
     max_budget_usd_per_run: number,
     changes_requested_label: string,
+    retention_logs_days: number,
+    retention_work_items_days: number,
     allowed_labeler_associations: string[]
   }
 }

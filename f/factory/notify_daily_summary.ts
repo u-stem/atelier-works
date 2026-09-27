@@ -4,6 +4,7 @@
 // `daily_summary` Discord embed (spec-cycle2.md §3 M5).
 
 import * as wmill from "windmill-client@1.817.0";
+import type { CleanupCounts } from "./lib/cleanup_db_support.ts";
 import { loadConfig } from "./lib/config.ts";
 import { type NotifyEvent, notify } from "./lib/discord.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
@@ -11,6 +12,7 @@ import {
   computeYesterdayRangeJst,
   getAgentRunSummary,
   getApprovalSummary,
+  getCleanupSummary,
 } from "./lib/summary_support.ts";
 
 /** Same treatment as poll_issues.ts's own `notifySafe`: an unset webhook
@@ -37,6 +39,7 @@ export type DailySummaryResult = {
   readonly failure_count: number;
   readonly approved_count: number;
   readonly rejected_count: number;
+  readonly cleanup: CleanupCounts | null;
 };
 
 export async function main(): Promise<DailySummaryResult> {
@@ -46,9 +49,10 @@ export async function main(): Promise<DailySummaryResult> {
   );
   const range = computeYesterdayRangeJst(new Date());
 
-  const [agentRuns, approvals] = await Promise.all([
+  const [agentRuns, approvals, cleanup] = await Promise.all([
     getAgentRunSummary(range),
     getApprovalSummary(range),
+    getCleanupSummary(range),
   ]);
 
   const webhookUrl = await wmill.getVariable("f/factory/discord_webhook_url");
@@ -63,6 +67,7 @@ export async function main(): Promise<DailySummaryResult> {
       failure_count: agentRuns.failure_count,
       approved_count: approvals.approved_count,
       rejected_count: approvals.rejected_count,
+      cleanup,
     },
     log,
   );
@@ -74,5 +79,6 @@ export async function main(): Promise<DailySummaryResult> {
     failure_count: agentRuns.failure_count,
     approved_count: approvals.approved_count,
     rejected_count: approvals.rejected_count,
+    cleanup,
   };
 }
