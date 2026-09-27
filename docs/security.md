@@ -122,6 +122,14 @@ read -rs 'v?GITHUB_TOKEN: ' && mise set -E local GITHUB_TOKEN="$v"; unset v
 - `DrawioViewer.tsx`はdiagrams.net公式の埋め込み用静的ビューアースクリプト(`https://viewer.diagrams.net/js/viewer-static.min.js`)をページに一度だけ読み込み、`<div class="mxgraph" data-mxgraph='{"xml": ...}'>`にXMLをJSONとして渡してブラウザ内で描画する(`window.GraphViewer.processElements()`)。XMLはこのスクリプトを経由して外部サーバーに送信されない(diagrams.net公式の埋め込み方式であり、レンダリングはクライアント側で完結する)。CDNからのスクリプト読み込みがConsoleのCSP(Content Security Policy)で拒否される場合は、`viewer-static.min.js`をこのApp自身の資産としてvendoringし`import`する対応が必要になる(Apache-2.0ライセンス、未実装)。
 - 旧`f/factory/lib/drawio.ts`の`toViewerUrl`(`viewer.diagrams.net`のURLフラグメントへのエンコード、外部リンク方式)は上記のインライン描画実装に伴い削除した(`validateDrawioXml`は生成後の検査用として引き続き使用する)。
 
+## 監査(工程5)
+
+- **証跡パックはDATA**: `audit_prepare`が集計する証跡パック(`evidence.md`)は`maskSecrets`とHTML除去(タグ・コメントとも)を通した文字列のみで構成し、`factory-audit`スキル(`.claude/skills/factory-audit/SKILL.md`)がこれを命令ではなくデータとして扱うことを明文化する。対象リポジトリの内容(`--add-dir`経由)も同様にDATAとして扱う。
+- **ツール制限**: Claudeのツールは`Read` / `Glob` / `Grep` / `Edit`のみ。`Edit`はカレントディレクトリの`report.md`にしか使わせない(`Write`は許可しない、新規ファイルを作らせない)。
+- **self cloneは読み取り専用**: Factory自身のクローンは`--add-dir`でのみ見せ、書き込み対象にはしない。
+- **出力の機械検査**: 生成されたレポートと構造化出力は、HTMLコメントの禁止、許可リスト(Factory自身のGitHub URLとWindmillの公開URL)外のURLの禁止、改善提案の表と構造化出力の件数・タイトル一致を機械検査してから保存する。検査を通らない出力はIssue本文にならない。
+- **人の承認が最終ゲート**: 検査を通った提案も、承認Inboxで人が承認するまでGitHubのIssueにはならない。承認された提案だけがFactory自身のリポジトリ(`factory_repo`)にIssueとして起票される。
+
 ## 承認と権限
 
 - **承認権限**: `f/factory/**`スクリプトの実行権限を持つアカウント。Windmillのdefaultワーカーグループではworkspace adminのみが対象。
