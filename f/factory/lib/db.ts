@@ -25,13 +25,17 @@ import {
   type ApprovalRequest,
   type ApprovalRequestKind,
   type ApprovalRequestStatus,
+  type AuditIssueProposal,
+  type AuditReport,
   type DeploymentRecord,
   type Diagram,
   type FailureRecord,
   type FixOutcome,
   type FixReply,
   type FixRoundRecord,
+  ISSUE_PROPOSAL_ORIGINS,
   type IssueProposal,
+  type IssueProposalOrigin,
   type IssueProposalStatus,
   isBoolean,
   isNumber,
@@ -863,7 +867,8 @@ const ISSUE_PROPOSAL_STATUSES: readonly IssueProposalStatus[] = [
   "rejected",
 ];
 
-export type NewIssueProposal = {
+export type NewPrFixIssueProposal = {
+  origin: "pr_fix";
   work_item_id: number;
   review_comment_id: number;
   thread_id: string | null;
@@ -874,32 +879,78 @@ export type NewIssueProposal = {
   is_inline: boolean;
 };
 
+/** A proposal raised by an audit report (工程5) — keyed by
+ * (audit_report_id, position) instead of a GitHub review comment. */
+export type NewAuditIssueProposal = {
+  origin: "audit";
+  work_item_id: number;
+  audit_report_id: number;
+  position: number;
+  title: string;
+  body: string;
+};
+
+export type NewIssueProposal = NewPrFixIssueProposal | NewAuditIssueProposal;
+
 /** Inserts a factory.issue_proposals row (status "pending") and returns its
- * id. */
+ * id. An audit-origin insert is idempotent on (audit_report_id, position):
+ * a retried audit_apply that already inserted a proposal for that position
+ * gets the existing id back instead of a unique violation. */
 export async function insertIssueProposal(
   proposal: NewIssueProposal,
   sql: SqlClient = defaultSqlClient,
 ): Promise<number> {
-  const statement = sql`
+  if (proposal.origin === "pr_fix") {
+    const statement = sql`
+      INSERT INTO factory.issue_proposals (
+        origin, work_item_id, review_comment_id, thread_id, title, body, is_inline
+      ) VALUES (
+        'pr_fix', ${proposal.work_item_id}::bigint, ${proposal.review_comment_id}::bigint,
+        ${proposal.thread_id}, ${proposal.title}, ${proposal.body}, ${proposal.is_inline}::boolean
+      )
+      RETURNING id
+    `;
+    const row = await fetchOneRow(statement, "insertIssueProposal");
+    return parseId(row.id, "id");
+  }
+  const rows = await sql`
     INSERT INTO factory.issue_proposals (
-      work_item_id, review_comment_id, thread_id, title, body, is_inline
+      origin, work_item_id, audit_report_id, position, title, body, is_inline
     ) VALUES (
-      ${proposal.work_item_id}::bigint, ${proposal.review_comment_id}::bigint,
-      ${proposal.thread_id}, ${proposal.title}, ${proposal.body}, ${proposal.is_inline}::boolean
+      'audit', ${proposal.work_item_id}::bigint, ${proposal.audit_report_id}::bigint,
+      ${proposal.position}::integer, ${proposal.title}, ${proposal.body}, false
     )
+    ON CONFLICT (audit_report_id, position) DO NOTHING
     RETURNING id
-  `;
-  const row = await fetchOneRow(statement, "insertIssueProposal");
+  `.fetch();
+  const inserted = rows[0];
+  if (inserted !== undefined) {
+    return parseId(inserted.id, "id");
+  }
+  const existing = await sql`
+    SELECT id FROM factory.issue_proposals
+    WHERE audit_report_id = ${proposal.audit_report_id}::bigint
+      AND position = ${proposal.position}::integer
+  `.fetch();
+  const row = existing[0];
+  if (row === undefined) {
+    throw new Error(
+      "db: insertIssueProposal: conflict but no matching (audit_report_id, position) row found",
+    );
+  }
   return parseId(row.id, "id");
 }
 
 /** Parses a full factory.issue_proposals row (for future readers). */
 export function toIssueProposal(row: SqlRow): IssueProposal {
-  return {
+  const origin = parseEnum<IssueProposalOrigin>(
+    row.origin,
+    ISSUE_PROPOSAL_ORIGINS,
+    "origin",
+  );
+  const base = {
     id: parseId(row.id, "id"),
     work_item_id: parseId(row.work_item_id, "work_item_id"),
-    review_comment_id: parseId(row.review_comment_id, "review_comment_id"),
-    thread_id: parseNullableString(row.thread_id, "thread_id"),
     title: parseRequiredString(row.title, "title"),
     body: parseRequiredString(row.body, "body"),
     status: parseEnum<IssueProposalStatus>(
@@ -931,6 +982,24 @@ export function toIssueProposal(row: SqlRow): IssueProposal {
       row.decided_at === null || row.decided_at === undefined
         ? null
         : parseDate(row.decided_at, "decided_at"),
+  };
+  if (origin === "pr_fix") {
+    return {
+      ...base,
+      origin,
+      review_comment_id: parseId(row.review_comment_id, "review_comment_id"),
+      thread_id: parseNullableString(row.thread_id, "thread_id"),
+      audit_report_id: null,
+      position: null,
+    };
+  }
+  return {
+    ...base,
+    origin,
+    review_comment_id: null,
+    thread_id: null,
+    audit_report_id: parseId(row.audit_report_id, "audit_report_id"),
+    position: parseRequiredNumber(row.position, "position"),
   };
 }
 
@@ -1804,4 +1873,138 @@ export async function insertCleanupRun(
   `;
   const row = await fetchOneRow(statement, "insertCleanupRun");
   return parseId(row.id, "id");
+}
+
+// ---------------------------------------------------------------------------
+// audit_reports / audit work items (工程5)
+// ---------------------------------------------------------------------------
+
+export type NewAuditReport = {
+  work_item_id: number;
+  period_start: Date;
+  period_end: Date;
+  summary: string;
+  markdown: string;
+  metrics: Record<string, unknown>;
+};
+
+export function toAuditReport(row: SqlRow): AuditReport {
+  return {
+    id: parseId(row.id, "id"),
+    work_item_id: parseId(row.work_item_id, "work_item_id"),
+    period_start: parseDate(row.period_start, "period_start"),
+    period_end: parseDate(row.period_end, "period_end"),
+    summary: parseRequiredString(row.summary, "summary"),
+    markdown: parseRequiredString(row.markdown, "markdown"),
+    metrics: parseJsonObject(row.metrics, "metrics"),
+    created_at: parseDate(row.created_at, "created_at"),
+  };
+}
+
+/** Idempotent on work_item_id: a retried audit_generate that already saved
+ * its report gets the existing id back instead of a unique violation. */
+export async function insertAuditReport(
+  report: NewAuditReport,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  const rows = await sql`
+    INSERT INTO factory.audit_reports (
+      work_item_id, period_start, period_end, summary, markdown, metrics
+    ) VALUES (
+      ${report.work_item_id}::bigint, ${report.period_start.toISOString()}::timestamptz,
+      ${report.period_end.toISOString()}::timestamptz, ${report.summary}, ${report.markdown},
+      ${JSON.stringify(report.metrics)}::jsonb
+    )
+    ON CONFLICT (work_item_id) DO NOTHING
+    RETURNING id
+  `.fetch();
+  const inserted = rows[0];
+  if (inserted !== undefined) {
+    return parseId(inserted.id, "id");
+  }
+  const existing = await getAuditReportByWorkItem(report.work_item_id, sql);
+  if (existing === null) {
+    throw new Error(
+      "db: insertAuditReport: conflict but no row found for work_item_id",
+    );
+  }
+  return existing.id;
+}
+
+export async function getAuditReportByWorkItem(
+  workItemId: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<AuditReport | null> {
+  const rows = await sql`
+    SELECT * FROM factory.audit_reports WHERE work_item_id = ${workItemId}::bigint
+  `.fetch();
+  const row = rows[0];
+  return row === undefined ? null : toAuditReport(row);
+}
+
+export async function latestAuditReport(
+  sql: SqlClient = defaultSqlClient,
+): Promise<AuditReport | null> {
+  const rows = await sql`
+    SELECT * FROM factory.audit_reports ORDER BY period_end DESC, id DESC LIMIT 1
+  `.fetch();
+  const row = rows[0];
+  return row === undefined ? null : toAuditReport(row);
+}
+
+export async function listIssueProposalsByReport(
+  auditReportId: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<AuditIssueProposal[]> {
+  const rows = await sql`
+    SELECT * FROM factory.issue_proposals
+    WHERE audit_report_id = ${auditReportId}::bigint
+    ORDER BY position ASC
+  `.fetch();
+  const result: AuditIssueProposal[] = [];
+  for (const row of rows) {
+    const proposal = toIssueProposal(row);
+    if (proposal.origin === "audit") result.push(proposal);
+  }
+  return result;
+}
+
+export async function listActiveAuditWorkItems(
+  sql: SqlClient = defaultSqlClient,
+): Promise<WorkItem[]> {
+  const rows = await sql`
+    SELECT * FROM factory.work_items
+    WHERE kind = 'audit' AND status IN ('picked', 'auditing')
+    ORDER BY created_at DESC
+  `.fetch();
+  return rows.map(toWorkItem);
+}
+
+export type NewAuditWorkItem = {
+  owner: string;
+  repo: string;
+  title: string;
+  source: "schedule" | "manual";
+  claimed_by: string | null;
+};
+
+/** Inserts the audit work item unless another audit is already
+ * picked/auditing (the partial unique index work_items_active_audit_key
+ * makes the second insert a silent no-op). Returns null in that case. */
+export async function insertAuditWorkItem(
+  input: NewAuditWorkItem,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number | null> {
+  const rows = await sql`
+    INSERT INTO factory.work_items (
+      cycle, source, kind, owner, repo, title, body, status, attempt, claimed_by
+    ) VALUES (
+      1, ${input.source}, 'audit', ${input.owner}, ${input.repo}, ${input.title}, '',
+      'picked', 1, ${input.claimed_by}
+    )
+    ON CONFLICT (kind) WHERE kind = 'audit' AND status IN ('picked', 'auditing') DO NOTHING
+    RETURNING id
+  `.fetch();
+  const row = rows[0];
+  return row === undefined ? null : parseId(row.id, "id");
 }
