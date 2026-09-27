@@ -16,12 +16,18 @@ function formatDateTime(iso: string): string {
 
 export function AuditTab({
   initialWorkItemId,
+  onInitialWorkItemConsumed,
 }: {
   /** A work_item_id to select immediately on mount — set by App.tsx when
    * the Inbox tab's 「レポートを開く」button switches to this tab (see
    * InboxTab.tsx's `onOpenAudit`). `null` when this tab was opened directly
    * (falls back to a `#audit/<id>` deep link, then no selection). */
   initialWorkItemId: number | null;
+  /** Called once the hand-off above has been applied, so App.tsx can clear
+   * it: this tab unmounts on every tab switch, and a stale hand-off would
+   * otherwise re-select the same report on the next mount, overriding a
+   * report the user picked by hand in between. */
+  onInitialWorkItemConsumed: () => void;
 }): React.ReactElement {
   const { rows, loading, error, reload } = useConsoleQuery(
     "audit_index",
@@ -54,13 +60,18 @@ export function AuditTab({
   // notification), neither present leaves the list unselected. Mount-only:
   // App.tsx unmounts this whole tab whenever "audit" isn't the active tab,
   // so `initialWorkItemId` is only ever set once per mount, never changes
-  // afterwards.
+  // afterwards. The hand-off is consumed (cleared in App.tsx) right after
+  // it is applied, so a later remount falls back to the deep link, which
+  // `selectAudit` keeps in sync with whatever the user picked by hand.
   // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally mount-only, see comment above.
   useEffect(() => {
+    if (initialWorkItemId !== null) {
+      selectAudit(initialWorkItemId);
+      onInitialWorkItemConsumed();
+      return;
+    }
     const target =
-      initialWorkItemId ??
-      parseAuditDeepLink(collectDeepLinkCandidates())?.work_item_id ??
-      null;
+      parseAuditDeepLink(collectDeepLinkCandidates())?.work_item_id ?? null;
     if (target !== null) {
       selectAudit(target);
     }

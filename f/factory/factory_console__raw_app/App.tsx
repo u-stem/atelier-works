@@ -120,6 +120,7 @@ const App = (): React.ReactElement => {
           <AuditTab
             key={`audit-${refreshKey}`}
             initialWorkItemId={auditTarget}
+            onInitialWorkItemConsumed={() => setAuditTarget(null)}
           />
         )}
         {activeTab === "pipeline" && (
