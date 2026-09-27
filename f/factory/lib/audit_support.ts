@@ -33,12 +33,23 @@ export type AuditPeriod = {
   readonly unaudited_gap_days: number;
 };
 
+/** Rejects an audit length that isn't a positive integer number of days
+ * (0, negative, fractional, NaN, Infinity) — the kickoff's `days` input
+ * comes straight from a manual run's form, so it's checked before any
+ * period math uses it. */
+export function assertAuditDays(days: number): void {
+  if (!Number.isInteger(days) || days <= 0) {
+    throw new Error("audit_kickoff: days must be a positive integer");
+  }
+}
+
 export function computeAuditPeriod(input: {
   readonly now: Date;
   readonly lastPeriodEnd: Date | null;
   readonly days: number;
   readonly maxLookbackDays: number;
 }): AuditPeriod | null {
+  assertAuditDays(input.days);
   const end = new Date(jstMidnightTodayIso(input.now));
   const floor = new Date(end.getTime() - input.maxLookbackDays * DAY_MS);
   let start: Date;

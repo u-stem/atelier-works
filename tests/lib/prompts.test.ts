@@ -592,6 +592,10 @@ describe("auditPrompt", () => {
   test("mentions the unaudited gap when present", () => {
     expect(auditPrompt({ ...input, unauditedGapDays: 5 })).toContain("5");
   });
+
+  test("does not refer to fenced blocks it never emits", () => {
+    expect(auditPrompt(input)).not.toContain("fenced blocks");
+  });
 });
 
 describe("AUDIT_SCHEMA", () => {

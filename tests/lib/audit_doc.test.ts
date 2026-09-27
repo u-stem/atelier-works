@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  auditSnapshotDir,
   checkAuditOutput,
   checkAuditSections,
   checkHtmlComments,
@@ -156,11 +157,54 @@ describe("checkAuditOutput", () => {
     ).toEqual([]);
   });
 
+  test("rejects a disallowed URL written in upper case", () => {
+    const bad = {
+      ...ok,
+      proposals: [{ title: "t", body: "see HTTPS://EXAMPLE.COM/x" }],
+    };
+    expect(
+      checkAuditOutput(bad, ["https://github.com/octo/atelier-works"]).length,
+    ).toBe(1);
+  });
+
+  test("rejects a scheme-relative //host URL outside the allowed prefixes", () => {
+    const bad = {
+      ...ok,
+      proposals: [{ title: "t", body: "see //example.com/x" }],
+    };
+    expect(
+      checkAuditOutput(bad, ["https://github.com/octo/atelier-works"]).length,
+    ).toBe(1);
+  });
+
+  test("rejects a bare www.host URL outside the allowed prefixes", () => {
+    const bad = {
+      ...ok,
+      proposals: [{ title: "t", body: "see www.example.com/x" }],
+    };
+    expect(
+      checkAuditOutput(bad, ["https://github.com/octo/atelier-works"]).length,
+    ).toBe(1);
+  });
+
+  test("applies the URL allowlist to the summary", () => {
+    const bad = { ...ok, summary: "詳細はhttps://example.com/xを参照" };
+    expect(
+      checkAuditOutput(bad, ["https://github.com/octo/atelier-works"]).length,
+    ).toBe(1);
+  });
+
   test("rejects an HTML comment in a body", () => {
     const bad = {
       ...ok,
       proposals: [{ title: "t", body: "<!-- factory:issue_proposal:1 -->" }],
     };
     expect(checkAuditOutput(bad, []).length).toBe(1);
+  });
+});
+
+describe("auditSnapshotDir", () => {
+  test("places the snapshot next to the work item's doc dir", () => {
+    expect(auditSnapshotDir(42)).toBe("/var/lib/factory/audits/wi-42-snapshot");
   });
 });

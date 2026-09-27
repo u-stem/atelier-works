@@ -217,7 +217,13 @@ export type AuditEvidence = {
   readonly previous_agent_runs: StageStat[];
   readonly failures: FailureGroup[];
   readonly rejections: RejectionRecord[];
+  /** Total rejected approvals in the period — a dedicated count(*), since
+   * `rejections` is capped at 30 rows. */
+  readonly rejected_count: number;
   readonly human_outcomes: HumanOutcome[];
+  /** Total needs_human / blocked / expired transitions in the period — a
+   * dedicated count(*), since `human_outcomes` is capped at 30 groups. */
+  readonly needs_human_count: number;
   readonly fix_round_outcomes: CountByKey[];
   readonly fix_reply_decisions: CountByKey[];
   readonly review_findings: CountByKey[];
@@ -516,9 +522,11 @@ function previousPeriodOf(period: AuditPeriod): { start: Date; end: Date } {
  * Collects the audit's evidence pack: stage-level agent_runs stats for this
  * period and the immediately-preceding period of equal length, plus failure
  * groups, rejections, human-escalation outcomes, fix-round/review/notice/
- * deployment breakdowns, and up to 3 audit reports' worth of past proposals
- * — one query per group, run in this fixed order (documented for the
- * "issues its queries in order" test). Every query that joins to
+ * deployment breakdowns, up to 3 audit reports' worth of past proposals,
+ * and — last — uncapped totals for rejections and human-escalation
+ * outcomes (the list queries above are LIMIT 30, so metrics can't be
+ * derived from their lengths) — one query per group, run in this fixed
+ * order (documented for the "issues its queries in order" test). Every query that joins to
  * work_items excludes the audit process's own rows (`wi.kind <> 'audit'`,
  * or `wi.kind IS NULL OR wi.kind <> 'audit'` where the join is a LEFT JOIN
  * against a nullable work_item_id) — the same exclusion countActionableRecords
@@ -657,6 +665,23 @@ export async function collectAuditEvidence(
     ORDER BY ar.period_end DESC, ip.position ASC
   `.fetch();
 
+  const rejectedCountRows = await sql`
+    SELECT count(*) AS count
+    FROM factory.approval_requests ar
+    JOIN factory.work_items wi ON wi.id = ar.work_item_id
+    WHERE ar.status = 'rejected' AND ar.decided_at >= ${start}::timestamptz AND ar.decided_at < ${end}::timestamptz
+      AND wi.kind <> 'audit'
+  `.fetch();
+
+  const humanOutcomeCountRows = await sql`
+    SELECT count(*) AS count
+    FROM factory.work_item_events wie
+    LEFT JOIN factory.work_items wi ON wi.id = wie.work_item_id
+    WHERE wie.to_status IN ('needs_human', 'blocked', 'expired')
+      AND wie.occurred_at >= ${start}::timestamptz AND wie.occurred_at < ${end}::timestamptz
+      AND (wi.kind IS NULL OR wi.kind <> 'audit')
+  `.fetch();
+
   return {
     period,
     period_label: formatAuditPeriodLabel(period.start, period.end),
@@ -665,7 +690,9 @@ export async function collectAuditEvidence(
     previous_agent_runs: previousAgentRunsRows.map(toStageStat),
     failures: failureRows.map(toFailureGroup),
     rejections: rejectionRows.map(toRejectionRecord),
+    rejected_count: parseNumeric(rejectedCountRows[0]?.count),
     human_outcomes: humanOutcomeRows.map(toHumanOutcome),
+    needs_human_count: parseNumeric(humanOutcomeCountRows[0]?.count),
     fix_round_outcomes: fixRoundOutcomeRows.map(toCountByKey),
     fix_reply_decisions: fixReplyDecisionRows.map(toCountByKey),
     review_findings: reviewFindingRows.map(toCountByKey),
@@ -690,11 +717,8 @@ export function metricsOf(evidence: AuditEvidence): Record<string, unknown> {
     run_count: sumBy(evidence.agent_runs, (stat) => stat.run_count),
     failure_count: sumBy(evidence.agent_runs, (stat) => stat.failure_count),
     total_cost_usd: sumBy(evidence.agent_runs, (stat) => stat.total_cost_usd),
-    rejected_count: evidence.rejections.length,
-    needs_human_count: sumBy(
-      evidence.human_outcomes,
-      (outcome) => outcome.count,
-    ),
+    rejected_count: evidence.rejected_count,
+    needs_human_count: evidence.needs_human_count,
     proposal_history_count: evidence.past_proposals.length,
   };
 }

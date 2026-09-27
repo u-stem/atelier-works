@@ -25,6 +25,14 @@ export const AUDIT_BASE_DIR = "/var/lib/factory/audits";
 export const AUDIT_TEMPLATE_RELATIVE_PATH =
   ".claude/skills/factory-audit/template.md";
 
+/** Directory of the throwaway detached worktree of the factory self clone
+ * that one audit run's headless Claude reads (pure, for testing) — a
+ * sibling of the run's scratch doc dir, so the live self clone that
+ * self_update deploys from is never exposed to the model. */
+export function auditSnapshotDir(workItemId: number): string {
+  return `${AUDIT_BASE_DIR}/wi-${String(workItemId)}-snapshot`;
+}
+
 /** File name of the generated audit report within its directory. */
 export const REPORT_MD_FILENAME = "report.md";
 
@@ -55,7 +63,13 @@ const MAX_BODY_CHARS = 3000;
 const MAX_PROPOSALS = 5;
 const HTML_COMMENT_PATTERN = /<!--[\s\S]*?-->/;
 const HTML_COMMENT_GLOBAL_PATTERN = /<!--[\s\S]*?-->/g;
-const URL_PATTERN = /https?:\/\/[^\s)>"']+/g;
+/** Anything a reader (or a markdown renderer) would take as a link: an
+ * `http(s)://` URL in any letter case, a scheme-relative `//host` (not
+ * preceded by a word char, `:` or `/`, so the `//` inside `https://` or a
+ * doubled path slash doesn't count), and a bare `www.host`. Each match is
+ * normalized by `normalizeUrl` before the allowlist comparison. */
+const URL_PATTERN =
+  /(?:https?:\/\/|(?<![\w:/])\/\/(?=[\w-])|(?<![\w.])www\.)[^\s)>"']*/gi;
 const SEPARATOR_CELL_PATTERN = /^:?-{3,}:?$/;
 /** Characters allowed to immediately follow an allow-listed URL prefix — a
  * bare `startsWith` would let `https://github.com/octo/atelier-works-evil`
@@ -84,10 +98,45 @@ function stripHtmlComments(text: string): string {
  * `.../atelier-works-evil` for prefix `.../atelier-works`).
  */
 function matchesUrlPrefix(url: string, prefix: string): boolean {
-  if (url === prefix) return true;
-  if (!url.startsWith(prefix)) return false;
-  const boundary = url.charAt(prefix.length);
+  const normalizedUrl = normalizeUrl(url);
+  const normalizedPrefix = prefix.toLowerCase();
+  if (normalizedUrl === normalizedPrefix) return true;
+  if (!normalizedUrl.startsWith(normalizedPrefix)) return false;
+  const boundary = normalizedUrl.charAt(normalizedPrefix.length);
   return URL_PREFIX_BOUNDARY_CHARS.has(boundary);
+}
+
+/** Lower-cases a `URL_PATTERN` match and gives a scheme-less form
+ * (`//host`, `www.host`) an explicit `https://`, so it's compared against
+ * the allowlist the same way a full URL is (fail-safe: a form that doesn't
+ * normalize onto an allowed prefix is rejected). */
+function normalizeUrl(url: string): string {
+  const lower = url.toLowerCase();
+  if (lower.startsWith("//")) return `https:${lower}`;
+  if (lower.startsWith("www.")) return `https://${lower}`;
+  return lower;
+}
+
+/** HTML-comment, `checkForbiddenSyntax` and URL-allowlist checks for one
+ * piece of structured-output text that ends up in an Issue (a proposal's
+ * title/body, or the summary), each issue prefixed with `label`. */
+function checkIssueText(
+  text: string,
+  label: string,
+  allowedUrlPrefixes: readonly string[],
+): string[] {
+  const issues = [
+    ...checkHtmlComments(text).map((issue) => `${label}: ${issue}`),
+    ...checkForbiddenSyntax(stripHtmlComments(text)).map(
+      (issue) => `${label}: ${issue}`,
+    ),
+  ];
+  for (const url of text.match(URL_PATTERN) ?? []) {
+    if (!allowedUrlPrefixes.some((prefix) => matchesUrlPrefix(url, prefix))) {
+      issues.push(`${label}に許可されていないURLが含まれています`);
+    }
+  }
+  return issues;
 }
 
 /**
@@ -241,10 +290,12 @@ export function validateAuditReport(
 /**
  * Validates the audit's structured output (summary + proposals): summary
  * length, per-proposal title/body length, duplicate titles, proposal
- * count, HTML comments, `checkForbiddenSyntax`'s AI-writing-habit checks,
- * and that every URL in a proposal matches one of `allowedUrlPrefixes`
- * (e.g. this repository's GitHub URL, so the model can't point elsewhere)
- * at a path/query/fragment boundary, not just as a raw string prefix (see
+ * count, and — for the summary and every proposal alike (`checkIssueText`)
+ * — HTML comments, `checkForbiddenSyntax`'s AI-writing-habit checks, and
+ * that every URL (any letter case, including the scheme-less `//host` and
+ * `www.host` forms) matches one of `allowedUrlPrefixes` (e.g. this
+ * repository's GitHub URL, so the model can't point elsewhere) at a
+ * path/query/fragment boundary, not just as a raw string prefix (see
  * `matchesUrlPrefix`).
  */
 export function checkAuditOutput(
@@ -258,6 +309,7 @@ export function checkAuditOutput(
   if (output.summary.length > MAX_SUMMARY_CHARS) {
     issues.push(`summaryが${MAX_SUMMARY_CHARS}字を超えています`);
   }
+  issues.push(...checkIssueText(output.summary, "summary", allowedUrlPrefixes));
   if (output.proposals.length > MAX_PROPOSALS) {
     issues.push(`提案が${MAX_PROPOSALS}件を超えています`);
   }
@@ -278,20 +330,13 @@ export function checkAuditOutput(
       issues.push(`${label}のtitleが重複しています`);
     }
     seen.add(trimmedTitle);
-    const text = `${proposal.title}\n${proposal.body}`;
     issues.push(
-      ...checkHtmlComments(text).map((issue) => `${label}: ${issue}`),
-    );
-    issues.push(
-      ...checkForbiddenSyntax(stripHtmlComments(text)).map(
-        (issue) => `${label}: ${issue}`,
+      ...checkIssueText(
+        `${proposal.title}\n${proposal.body}`,
+        label,
+        allowedUrlPrefixes,
       ),
     );
-    for (const url of text.match(URL_PATTERN) ?? []) {
-      if (!allowedUrlPrefixes.some((prefix) => matchesUrlPrefix(url, prefix))) {
-        issues.push(`${label}に許可されていないURLが含まれています`);
-      }
-    }
   });
   return issues;
 }

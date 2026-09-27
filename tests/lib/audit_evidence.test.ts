@@ -48,7 +48,9 @@ const EMPTY_EVIDENCE: AuditEvidence = {
   previous_agent_runs: [],
   failures: [],
   rejections: [],
+  rejected_count: 0,
   human_outcomes: [],
+  needs_human_count: 0,
   fix_round_outcomes: [],
   fix_reply_decisions: [],
   review_findings: [],
@@ -329,6 +331,22 @@ describe("metricsOf", () => {
     };
     expect(metricsOf(evidence).run_count).toBe(5);
   });
+
+  test("takes rejected_count from the dedicated count, not the capped list", () => {
+    const evidence: AuditEvidence = {
+      ...EMPTY_EVIDENCE,
+      rejected_count: 45,
+    };
+    expect(metricsOf(evidence).rejected_count).toBe(45);
+  });
+
+  test("takes needs_human_count from the dedicated count, not the capped list", () => {
+    const evidence: AuditEvidence = {
+      ...EMPTY_EVIDENCE,
+      needs_human_count: 52,
+    };
+    expect(metricsOf(evidence).needs_human_count).toBe(52);
+  });
 });
 
 describe("collectAuditEvidence", () => {
@@ -407,6 +425,49 @@ describe("collectAuditEvidence", () => {
     );
     const call = calls.find((c) => c.text.includes("factory.work_item_events"));
     expect(call?.text).toContain("GROUP BY 1, 2");
+  });
+
+  test("reads rejected_count from an uncapped count(*) query (query 14)", async () => {
+    const responses: SqlRow[][] = Array.from({ length: 13 }, () => []);
+    responses.push([{ count: 45 }]);
+    const { sql } = createFakeSqlClient(responses);
+    const evidence = await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(evidence.rejected_count).toBe(45);
+  });
+
+  test("reads needs_human_count from an uncapped count(*) query (query 15)", async () => {
+    const responses: SqlRow[][] = Array.from({ length: 14 }, () => []);
+    responses.push([{ count: 52 }]);
+    const { sql } = createFakeSqlClient(responses);
+    const evidence = await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(evidence.needs_human_count).toBe(52);
+  });
+
+  test("counts rejections without a LIMIT", async () => {
+    const { sql, calls } = createFakeSqlClient([]);
+    await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(calls[13]?.text).not.toContain("LIMIT");
+  });
+
+  test("filters the needs_human count by the same period as the grouped query", async () => {
+    const { sql, calls } = createFakeSqlClient([]);
+    await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(calls[14]?.values).toEqual([
+      PERIOD.start.toISOString(),
+      PERIOD.end.toISOString(),
+    ]);
   });
 
   test("adds a deterministic tie-breaker to the failure-group ORDER BY (F6)", async () => {

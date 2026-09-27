@@ -7,7 +7,10 @@
 // Resume: if audit_reports already has this work item's row (a previous
 // retry saved it and then failed later), Claude is NOT run again — the
 // proposals/approvals/transition are replayed idempotently instead
-// (`finishAudit`, shared by both the fresh-run and resume branches).
+// (`finishAudit`, shared by both the fresh-run and resume branches). The
+// replay first checks that the issue_proposals rows match the saved
+// report's 改善提案 table in count, and throws on a mismatch rather than
+// silently dropping the proposals a partial insert never wrote.
 //
 // Failures throw (no terminal transition here): the flow's failure_module
 // (on_error_flow) owns that, same as pipeline_generate.ts. A post-generation
@@ -24,10 +27,21 @@
 // nothing pending anymore, it swaps straight on to `audited` instead of
 // leaving the work item waiting on proposals nobody can still act on.
 //
+// Snapshot: Claude never sees the live self clone (`factory_clone_dir`, the
+// working tree self_update deploys from) — with `Edit` allowed, a write
+// there would reach the next deploy. Instead, before `runClaude`, this step
+// takes a throwaway detached worktree of the clone's current HEAD
+// (`auditSnapshotDir`, `AUDIT_BASE_DIR`/wi-<id>-snapshot) and reads the
+// template, the factory-audit skill and the `addDirs` tree all from that
+// snapshot, so the whole run sees one consistent tree. `factory_clone_dir`
+// stays the step input only as the source the snapshot is taken from.
+//
 // The scratch doc dir (`AUDIT_BASE_DIR`/wi-<id>) has no DB-recorded
 // `doc_dir` column to read it back later (unlike requirement_drafts) — the
 // validated report.md is saved as `audit_reports.markdown` instead — so it
-// is removed unconditionally in `finally`, success or failure alike.
+// is removed unconditionally in `finally`, success or failure alike, and
+// the snapshot worktree with it. A retry of this step recreates both (a
+// snapshot left behind by a killed run is cleared first).
 
 import * as wmill from "windmill-client@1.817.0";
 import { buildAuditConsoleUrl } from "../lib/approval_support.ts";
@@ -35,8 +49,10 @@ import {
   AUDIT_BASE_DIR,
   AUDIT_TEMPLATE_RELATIVE_PATH,
   type AuditProposal,
+  auditSnapshotDir,
   checkAuditOutput,
   EVIDENCE_MD_FILENAME,
+  extractProposalTitles,
   REPORT_MD_FILENAME,
   validateAuditReport,
 } from "../lib/audit_doc.ts";
@@ -68,16 +84,22 @@ import { type Logger, logger, maskSecrets } from "../lib/log.ts";
 import { AUDIT_SCHEMA, auditPrompt } from "../lib/prompts.ts";
 import {
   type AuditIssueProposal,
+  assertSha,
   type FactoryConfig,
   isRecord,
   isString,
 } from "../lib/types.ts";
 import {
+  addDetachedWorktree,
+  type CommandRunner,
   copyFileTo,
   ensureEmptyDir,
+  pathExists,
+  pruneWorktrees,
   readDirEntries,
   readTextFile,
   removePath,
+  removeWorktree,
   runCommand,
   writeTextFile,
 } from "../lib/workspace.ts";
@@ -140,6 +162,85 @@ export type AuditGenerateResult = {
   readonly outcome: "success" | "resumed" | "skipped";
   readonly proposal_count: number;
 };
+
+// ---------------------------------------------------------------------------
+// Self clone snapshot helpers (local to this script — same "one-off git
+// I/O stays private to the owning script" precedent as self_update.ts's
+// readSelfCloneHeadSha and poll_issues.ts's readRepoHeadSha).
+// ---------------------------------------------------------------------------
+
+function selfCloneGitEnv(): Record<string, string> {
+  const env: Record<string, string> = { GIT_TERMINAL_PROMPT: "0" };
+  if (process.env.HOME !== undefined) env.HOME = process.env.HOME;
+  if (process.env.PATH !== undefined) env.PATH = process.env.PATH;
+  return env;
+}
+
+/** `git rev-parse HEAD` in the self clone — the commit the snapshot is
+ * taken at. Local-only (no `GH_TOKEN` needed). */
+async function readCloneHeadSha(
+  run: CommandRunner,
+  dir: string,
+): Promise<string> {
+  const result = await run(
+    [
+      "git",
+      "-c",
+      "core.hooksPath=/dev/null",
+      "-c",
+      "core.fsmonitor=false",
+      "-c",
+      "credential.helper=",
+      "rev-parse",
+      "HEAD",
+    ],
+    { cwd: dir, env: selfCloneGitEnv() },
+  );
+  if (result.exitCode !== 0) {
+    throw new Error(
+      maskSecrets(
+        `audit_generate: git rev-parse HEAD failed in ${dir}: ${result.stderr.trim()}`,
+      ),
+    );
+  }
+  const sha = result.stdout.trim();
+  assertSha(sha);
+  return sha;
+}
+
+/** Removes the snapshot worktree — used both to clear one left behind by a
+ * killed run before recreating it, and in `finally`. Never throws (a
+ * failure is logged, so it can't mask the step's own error in `finally`):
+ * an existing directory is removed via `git worktree remove --force` and
+ * then from disk regardless, and a final `git worktree prune` drops a
+ * registration whose directory is already gone, which would otherwise
+ * block the next `git worktree add` at the same path. */
+async function removeSnapshot(
+  cloneDir: string,
+  snapshotDir: string,
+  log: Logger,
+): Promise<void> {
+  try {
+    if (await pathExists(snapshotDir)) {
+      try {
+        await removeWorktree({
+          run: runCommand,
+          repoDir: cloneDir,
+          dir: snapshotDir,
+          force: true,
+        });
+      } finally {
+        await removePath(snapshotDir);
+      }
+    }
+    await pruneWorktrees({ run: runCommand, repoDir: cloneDir });
+  } catch (err) {
+    log.warn("audit_generate: snapshot worktree cleanup failed", {
+      snapshot_dir: snapshotDir,
+      error: maskSecrets(String(err)),
+    });
+  }
+}
 
 /** Same treatment as poll_issues.ts's own `notifySafe` (and
  * notify_daily_summary.ts's copy of it): an unset webhook URL is a no-op,
@@ -265,6 +366,18 @@ export async function main(
   const existing = await getAuditReportByWorkItem(work_item_id);
   if (existing !== null) {
     const proposals = await listIssueProposalsByReport(existing.id);
+    // The saved report passed validateAuditReport, so its 改善提案 table
+    // lists exactly the proposals that run inserted; fewer rows here means
+    // the insert loop died partway — replaying finishAudit with only those
+    // would silently drop the rest, so fail loudly instead.
+    const reportTitles = extractProposalTitles(existing.markdown);
+    if (reportTitles === null || proposals.length !== reportTitles.length) {
+      throw new Error(
+        maskSecrets(
+          `audit_generate: proposal rows (${String(proposals.length)}) do not match the saved report (${reportTitles === null ? "unreadable" : String(reportTitles.length)})`,
+        ),
+      );
+    }
     await finishAudit({
       work_item_id,
       proposals,
@@ -278,18 +391,31 @@ export async function main(
   }
 
   const docDir = `${AUDIT_BASE_DIR}/wi-${String(work_item_id)}`;
+  const snapshotDir = auditSnapshotDir(work_item_id);
   let systemPrompt: SystemPromptFile | undefined;
   try {
     await ensureEmptyDir(docDir);
     await writeTextFile(`${docDir}/${EVIDENCE_MD_FILENAME}`, evidence_markdown);
+
+    const ghToken = await wmill.getVariable("f/factory/github_token");
+    const snapshotSha = await readCloneHeadSha(runCommand, factory_clone_dir);
+    await removeSnapshot(factory_clone_dir, snapshotDir, log);
+    await addDetachedWorktree({
+      run: runCommand,
+      repoDir: factory_clone_dir,
+      sha: snapshotSha,
+      dir: snapshotDir,
+      ghToken,
+    });
+
     await copyFileTo(
-      `${factory_clone_dir}/${AUDIT_TEMPLATE_RELATIVE_PATH}`,
+      `${snapshotDir}/${AUDIT_TEMPLATE_RELATIVE_PATH}`,
       `${docDir}/${REPORT_MD_FILENAME}`,
     );
 
     systemPrompt = await buildSystemPrompt({
       skillNames: ["factory-audit"],
-      factoryCloneDir: factory_clone_dir,
+      factoryCloneDir: snapshotDir,
     });
 
     const oauthToken = await wmill.getVariable("f/factory/claude_oauth_token");
@@ -304,7 +430,7 @@ export async function main(
         instanceName: config.instance_name,
         periodLabel: formatAuditPeriodLabel(period.start, period.end),
         unauditedGapDays: period.unaudited_gap_days,
-        factoryRepoDir: factory_clone_dir,
+        factoryRepoDir: snapshotDir,
       }),
       appendSystemPromptFile: systemPrompt.path,
       jsonSchema: AUDIT_SCHEMA,
@@ -316,7 +442,7 @@ export async function main(
       maxTurns: config.max_turns,
       maxBudgetUsd: config.max_budget_usd_per_run,
       cwd: docDir,
-      addDirs: [factory_clone_dir],
+      addDirs: [snapshotDir],
       oauthToken,
       timeoutMs: config.claude_timeout_sec * 1000,
     });
@@ -399,6 +525,7 @@ export async function main(
     return { outcome: "success", proposal_count: proposals.length };
   } finally {
     await removePath(docDir);
+    await removeSnapshot(factory_clone_dir, snapshotDir, log);
     if (systemPrompt !== undefined) {
       await systemPrompt.cleanup();
     }

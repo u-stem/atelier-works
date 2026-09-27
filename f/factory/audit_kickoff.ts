@@ -10,6 +10,7 @@ import * as wmill from "windmill-client@1.817.0";
 import { countActionableRecords } from "./lib/audit_evidence.ts";
 import {
   type AuditKickoffSkip,
+  assertAuditDays,
   buildAuditTitle,
   computeAuditPeriod,
   decideAuditKickoff,
@@ -47,6 +48,7 @@ export async function main(
   force: boolean = false,
   source: string = "manual",
 ): Promise<AuditKickoffResult> {
+  assertAuditDays(days);
   const log = logger("audit_kickoff");
   const config = await loadConfig(() =>
     wmill.getResource("f/factory/factory_config"),

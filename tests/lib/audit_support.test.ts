@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  assertAuditDays,
   buildAuditTitle,
   computeAuditPeriod,
   DAY_MS,
@@ -23,6 +24,20 @@ describe("formatAuditPeriodLabel", () => {
       new Date("2026-09-28T15:00:00Z"),
     );
     expect(label).toBe("2026-09-22〜2026-09-28");
+  });
+});
+
+describe("assertAuditDays", () => {
+  test("rejects zero", () => {
+    expect(() => assertAuditDays(0)).toThrow(
+      "audit_kickoff: days must be a positive integer",
+    );
+  });
+
+  test("rejects a fractional value", () => {
+    expect(() => assertAuditDays(1.5)).toThrow(
+      "audit_kickoff: days must be a positive integer",
+    );
   });
 });
 
