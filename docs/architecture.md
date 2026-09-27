@@ -277,10 +277,10 @@ WindmillのUIはsummaryでソートされるため、種別を示すタグをsum
 
 ## 工程5: 自己改善(監査)
 
-- **起動**: `audit_kickoff`(毎週月曜09:30、Consoleの「今すぐ監査」で前倒し可)が条件を判定し、満たせば作業項目(`kind=audit`)を作成して`audit`フローを起動する。
+- **起動**: `audit_kickoff`(毎週月曜09:30のschedule、Consoleの「今すぐ監査」で前倒し可)が条件を判定し、満たせば作業項目(`kind=audit`)を作成して`audit`フローを起動する。scheduleはConsoleの監査タブが揃うまで無効(`enabled: false`)にしてある。
 - **期間**: 対象期間は前回レポート終了時刻から実行日のJST 00:00まで(実行日当日は含めない)とし、`max_lookback_days`(既定28日)を上限に切り詰める。切り詰めた日数は`unaudited_gap_days`として証跡に記録する。
 - **スキップ条件**: 別の監査が実行中(`picked` / `auditing`)、期間が空、対象期間に行動につながる記録が無い(強制実行時を除く)、日次予算超過のいずれかであれば起動をスキップする。スキップは記録のみで通知しない。
-- **準備**: `audit_prepare`が作業項目を`picked`から`auditing`へ進め、証跡パック(サニタイズ済み)とFactory自身の読み取り専用クローンを用意する。ステップの再試行は`auditing`のまま再開し、二重に状態遷移しない。
+- **準備**: `audit_prepare`が作業項目を`picked`から`auditing`へ進め、証跡パック(サニタイズ済み)を作り、Factory自身のself cloneを同期する(Claudeに渡す使い捨てのスナップショットは`audit_generate`が作る)。ステップの再試行は`auditing`のまま再開し、二重に状態遷移しない。
 - **生成**: `audit_generate`はheadless Claudeにテンプレートと証跡パックを与えレポートと改善提案を生成させ、章立て・改善提案の表・URL許可リストを機械検査してから保存する。保存済みレポートがある再開時はClaudeを再実行せず、提案登録と承認依頼の作成をべき等に再生する。
 - **提案と承認**: 提案は`issue_proposals`(`origin=audit`)として登録し、各提案に承認依頼(`kind=issue_proposal`)を作る。提案が0件なら作業項目は`audited`、1件以上あれば`awaiting_approval`に進み、全提案の承認 / 却下が終わると`audited`になる。
 - **起票**: 承認された提案はFactory自身のリポジトリ(`factory_repo`)にIssueとして起票される。監査は`retry_work_item`による再実行の対象外で、失敗した期間は次回の週次監査か「今すぐ監査」でカバーする。
