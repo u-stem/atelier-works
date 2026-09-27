@@ -19,22 +19,12 @@
 //      listSymlinkTargets/getDiffNumstat below (team-lead fix round 1b items
 //      3/7) remain here since no lib equivalent exists yet.
 //
-// NOTE: addLabels was this file's own local duplicate too, promoted into
-// lib/github.ts mid-cycle (team-lead re-gate's "defer promotion" note
-// predates it) — see the addLabels section below for where it used to live.
-
 import { mkdtemp, readlink, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
+import type { ReviewThread } from "../lib/github.ts";
+import { maskSecrets } from "../lib/log.ts";
 import {
-  addLabels,
-  type GhClient,
-  type ReviewThread,
-  removeLabel,
-} from "../lib/github.ts";
-import { type Logger, maskSecrets } from "../lib/log.ts";
-import {
-  type FactoryConfig,
   type FixOutcome,
   type FixReply,
   type FixReplyDecision,
@@ -135,150 +125,27 @@ export function normalizeJapaneseText(text: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Shared: terminal-transition label cleanup (I/O)
+// Review result (2026-09-27 PR label cleanup): PRs no longer carry a state
+// label the factory sets/swaps — poll_prs.ts's listTrackedPrs rediscovers a
+// PR from work_items instead — so what used to be "which state label to set"
+// is now just a plain result value used for the Discord notification and
+// nothing else (there is no more GitHub side effect here).
 // ---------------------------------------------------------------------------
 
-/**
- * Removes each of `labels` from the PR on a terminal status transition
- * (team-lead rule, 2026-09-26: alongside `wip_label`, also remove the
- * trigger label — `review_label` / `fix_label` — that started this cycle,
- * if a human re-applies it later that's what should trigger a fresh
- * cycle). Idempotent both ways: github.ts's `removeLabel` itself treats an
- * already-absent label (404) as a no-op, and any other failure here is
- * swallowed (logged, not thrown) — cleaning up a label must never fail the
- * step that already committed the status transition.
- */
-export async function removeTerminalLabels(
-  client: GhClient,
-  owner: string,
-  repo: string,
-  number: number,
-  labels: readonly string[],
-  log: Logger,
-): Promise<void> {
-  for (const label of labels) {
-    try {
-      await removeLabel(client, owner, repo, number, label);
-    } catch (err) {
-      log.warn("failed to remove label on terminal transition", {
-        label,
-        error: maskSecrets(err instanceof Error ? err.message : String(err)),
-      });
-    }
-  }
-}
-
-// addLabels (used by pr_fix_finish.ts's requirements_gap reroute — see its
-// call site for why) was this file's own thin `gh api` copy at first, then
-// promoted into lib/github.ts mid-cycle (same signature/behavior); callers
-// import it from there now instead of a local duplicate.
-
-// ---------------------------------------------------------------------------
-// State labels (team-lead design, 2026-09-26): exactly one of four
-// mutually-exclusive labels is present on a PR the factory has handled, so
-// a human sees at a glance what it needs. Unlike review_label/fix_label
-// (human-set triggers, removed at launch), the factory itself sets and
-// swaps these; poll_prs.ts's searchPrs re-discovers a PR by them instead of
-// the `commenter:<viewer>` query.
-// ---------------------------------------------------------------------------
-
-export type StateLabelConfig = Pick<
-  FactoryConfig,
-  | "changes_requested_label"
-  | "reviewed_label"
-  | "rereview_label"
-  | "needs_human_label"
->;
-
-/** Every state label this factory instance knows about, in no particular
- * order — used to clear all of them before setting a new one
- * (setStateLabel), or when a PR leaves the active set entirely (poll_prs.ts
- * on claim, poll_issues.ts's reconcile on cancel). */
-export function allStateLabels(config: StateLabelConfig): string[] {
-  return [
-    config.changes_requested_label,
-    config.reviewed_label,
-    config.rereview_label,
-    config.needs_human_label,
-  ];
-}
-
-/** Decides the state label for a posted review: `changes_requested_label`
- * when at least one finding this round is a `must`, OR when `openMustCount`
+/** Decides a posted review's result: `"changes_requested"` when at least
+ * one finding this round is a `must`, OR when `openMustCount`
  * (pr_workflow_support.ts's `countOpenMustThreads`) is greater than zero —
  * team-lead fix, 2026-09-26: an old `[MUST]` finding left unresolved from a
- * prior round must keep the PR flagged as needing changes even on a round
+ * prior round must still flag the PR as needing changes even on a round
  * that itself posts nothing new (`ReviewBodyMode`'s `"rereview_open"`).
- * `reviewed_label` otherwise (including no findings at all and no open
- * `must` — nothing blocking, awaiting human approval). */
-export function stateLabelForReview(
+ * `"reviewed"` otherwise (including no findings at all and no open `must` —
+ * nothing blocking, awaiting human approval). */
+export function reviewResultFor(
   findings: readonly ReviewFinding[],
   openMustCount: number,
-  config: Pick<StateLabelConfig, "changes_requested_label" | "reviewed_label">,
-): string {
+): "changes_requested" | "reviewed" {
   const hasMustFinding = findings.some((finding) => finding.kind === "must");
-  return hasMustFinding || openMustCount > 0
-    ? config.changes_requested_label
-    : config.reviewed_label;
-}
-
-/** The terminal outcomes of a pr_review/pr_fix cycle that carry a state
- * label: a pushed fix awaiting re-review, or any of the ways a cycle ends
- * up needing a human — pr_fix_finish.ts's guard_blocked/needs_human
- * outcomes, or on_error_flow.ts's exception-driven `failed` transition
- * (either kind: a failed pr_review counts here too). */
-export type PrFixStateOutcome =
-  | "rereview_requested"
-  | "needs_human"
-  | "blocked"
-  | "failed";
-
-export function stateLabelForFixOutcome(
-  outcome: PrFixStateOutcome,
-  config: Pick<StateLabelConfig, "rereview_label" | "needs_human_label">,
-): string {
-  switch (outcome) {
-    case "rereview_requested":
-      return config.rereview_label;
-    case "needs_human":
-    case "blocked":
-    case "failed":
-      return config.needs_human_label;
-  }
-}
-
-/**
- * Sets exactly one state label on a PR: removes the other three
- * (best-effort, warn-log on failure — same shape as removeTerminalLabels)
- * then adds `label`. Best-effort on the add too — a label-set failure must
- * never fail the step that already committed the underlying status
- * transition, matching removeTerminalLabels's own contract.
- */
-export async function setStateLabel(
-  client: GhClient,
-  owner: string,
-  repo: string,
-  number: number,
-  config: StateLabelConfig,
-  label: string,
-  log: Logger,
-): Promise<void> {
-  const otherLabels = allStateLabels(config).filter((each) => each !== label);
-  await removeTerminalLabels(client, owner, repo, number, otherLabels, log);
-  try {
-    await addLabels(client, owner, repo, number, [label]);
-  } catch (err) {
-    // Include the PR coordinates: a PR left without a state label is
-    // invisible to poll_prs's label-based re-discovery, so the operator
-    // must be able to find it from this line alone.
-    log.warn("failed to set state label", {
-      owner,
-      repo,
-      number,
-      label,
-      error: maskSecrets(err instanceof Error ? err.message : String(err)),
-    });
-  }
+  return hasMustFinding || openMustCount > 0 ? "changes_requested" : "reviewed";
 }
 
 // ---------------------------------------------------------------------------
@@ -1860,18 +1727,15 @@ export function shouldAdvanceWatermarks(kind: PrFixFinishBumpKind): boolean {
 /**
  * Guard for pr_fix_finish.ts's requirements_gap reroute (pure, for
  * testing): `null` means the reroute may proceed, otherwise the reason it
- * must fall back to needs_human. Since the 2026-09-27 label policy no
- * label is re-applied to the parent issue any more, so the only reason
- * left is a parent work item without an issue number; the
- * `addLabelsErrorMessage` parameter is kept for the PR-side caller shape
- * and is always `null` on the issue path.
+ * must fall back to needs_human. The 2026-09-27 label cleanup (both Issue
+ * and PR sides) means no label is ever re-applied to the parent issue any
+ * more, so the only remaining precondition is that the parent work item
+ * actually is an issue.
  */
-export function evaluateRelabelFailure(
+export function evaluateRerouteGuard(
   issueNumber: number | null,
-  addLabelsErrorMessage: string | null,
 ): string | null {
-  if (issueNumber === null) return "parent work item has no issue_number";
-  return addLabelsErrorMessage;
+  return issueNumber === null ? "parent work item has no issue_number" : null;
 }
 
 /** Fallback reviewer set when `factory_config.default_reviewers` is empty:
@@ -2248,7 +2112,7 @@ export function classifyIssueProposalDecision(
   return { action: "repost_only" };
 }
 
-export type IssueProposalLabelDecision =
+export type IssueProposalStatusDecision =
   | { readonly action: "keep" }
   | {
       readonly action: "swap";
@@ -2256,18 +2120,21 @@ export type IssueProposalLabelDecision =
     };
 
 /**
- * Decides what issue_proposal_apply.ts should do to the PR's state label
- * after recording one decision (user decision, 2026-09-26): keep the
- * current `needs_human_label` while any proposal for this work item is
- * still pending, otherwise swap to `rereview_label` (a commit was pushed
- * this round — `factory.fix_rounds.commit_shas` non-empty) or
- * `reviewed_label` (nothing was pushed — the round that produced the
- * proposal was itself a `nothing_to_commit` round).
+ * Decides what issue_proposal_apply.ts should do to the work item's status
+ * after recording one decision (user decision, 2026-09-26; 2026-09-27 PR
+ * label cleanup: this used to also swap a PR state label off
+ * `needs_human_label` — there is no state label any more, so this is now
+ * purely a status decision): keep the current `needs_human` status while any
+ * proposal for this work item is still pending, otherwise swap to
+ * `rereview_requested` (a commit was pushed this round —
+ * `factory.fix_rounds.commit_shas` non-empty) or `reviewed` (nothing was
+ * pushed — the round that produced the proposal was itself a
+ * `nothing_to_commit` round).
  */
-export function decideIssueProposalLabelSwap(
+export function decidePostProposalStatus(
   remainingPendingCount: number,
   committedThisRound: boolean,
-): IssueProposalLabelDecision {
+): IssueProposalStatusDecision {
   if (remainingPendingCount > 0) {
     return { action: "keep" };
   }
@@ -2495,7 +2362,7 @@ const REASON_RULES: readonly ReasonRule[] = [
     describe: () => "安全性ガードに失敗しました",
     nextAction: () => GENERIC_NEXT_ACTION,
   },
-  // pr_fix_finish.ts's evaluateRelabelFailure (relabel_failed)
+  // pr_fix_finish.ts's evaluateRerouteGuard (no parent issue_number)
   {
     pattern: /^parent work item has no issue_number$/,
     describe: () => "親の work item に issue_number がありません",
@@ -2562,10 +2429,10 @@ const REASON_RULES: readonly ReasonRule[] = [
 /**
  * The result fields for an early exit (skip / guard_blocked /
  * round_exhausted). The PR coordinates are always taken from the work
- * item: pr_fix_finish.ts needs owner / repo / pr_number to remove the wip
- * label, set the state label and address the Discord notification even
- * when no worktree was prepared (a real run once left a PR stuck with only
- * `factory:wip` and an empty "リポジトリ" field because these were blank).
+ * item: pr_fix_finish.ts needs owner / repo / pr_number to address the
+ * Discord notification even when no worktree was prepared (a real run once
+ * left a notification with an empty "リポジトリ" field because these were
+ * blank).
  */
 export function earlyExitBase(
   workItem: Pick<

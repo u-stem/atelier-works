@@ -1,11 +1,11 @@
 // PathScript step for f/factory/pr_fix: the single terminal step. Routes
 // the merged outcome from whichever of prepare/collect/apply/verify last
 // ran (spec-cycle2.md §3 M6) to the right work-item status transition,
-// GitHub side effects, and Discord notice. Always removes the wip label and
-// the fix_label (team-lead rule, 2026-09-26: idempotent — only a human
-// re-applying the label starts a fresh cycle) on a terminal transition
-// (windmill-script skill); the gtr worktree itself is left in place for
-// cleanup_workspaces (M7) to sweep later.
+// GitHub side effects, and Discord notice. The fix_label trigger was
+// already consumed at claim time (poll_prs.ts, 2026-09-27 PR label
+// cleanup), so there is no label left to remove on a terminal transition;
+// the gtr worktree itself is left in place for cleanup_workspaces (M7) to
+// sweep later.
 //
 // NOTE on fix_round bookkeeping: this task's instructions list
 // "setFixRound(round+1)" as a step here, but poll_prs.ts already sets
@@ -56,17 +56,14 @@ import {
   decideFixFinishAction,
   deriveFallbackReviewers,
   describeReason,
-  evaluateRelabelFailure,
+  evaluateRerouteGuard,
   filterKnownReplies,
   matchReviewThreadForComment,
   nextActionFor,
   type PrFixFinishOutcome,
-  removeTerminalLabels,
   renderFixReply,
   selectProposeIssueReplies,
-  setStateLabel,
   shouldAdvanceWatermarks,
-  stateLabelForFixOutcome,
 } from "./pr_workflow_support.ts";
 
 const ALL_OUTCOMES: readonly PrFixFinishOutcome[] = [
@@ -148,29 +145,10 @@ export async function main(
       reason,
     );
     if (!moved) return;
-    await removeTerminalLabels(
-      client,
-      owner,
-      repo,
-      pr_number,
-      [config.wip_label, config.fix_label],
-      log,
-    );
-    // team-lead design (2026-09-26): every finalizeTerminal call here lands
-    // on "blocked" (guard_blocked) or "needs_human" — both map to
-    // needs_human_label via stateLabelForFixOutcome, so a human sees this PR
-    // needs attention.
-    if (toStatus === "blocked" || toStatus === "needs_human") {
-      await setStateLabel(
-        client,
-        owner,
-        repo,
-        pr_number,
-        config,
-        stateLabelForFixOutcome(toStatus, config),
-        log,
-      );
-    }
+    // 2026-09-27 PR label cleanup: the fix_label trigger was already
+    // consumed at claim time (poll_prs.ts), so there is no label left to
+    // remove here — a human sees this PR needs attention via the Discord
+    // notification below instead.
     // team-lead decision (2026-09-26): operational notices (failure,
     // needs_human, blocked, requirements_gap) are never posted to the PR —
     // it must carry only the first-pass review itself and replies to review
@@ -261,25 +239,22 @@ export async function main(
 
     const gapReport = reason ?? summary;
 
-    // 2026-09-27 label policy: the parent issue's `factory` label was
-    // consumed on claim and nothing re-applies or removes it any more, so
-    // there is no label to restore before restarting its pipeline (the old
-    // "re-apply wip + trigger" step is gone — it would leave a permanent
-    // trigger label behind and get the issue re-claimed after its next
-    // terminal state). The only remaining precondition is that the parent
-    // work item actually is an issue.
-    const relabelFailedReason = evaluateRelabelFailure(
-      parentItem.issue_number,
-      null,
-    );
+    // 2026-09-27 label policy: neither the parent issue's `factory` label
+    // nor this PR's `factory:fix` label are re-applied or removed any more
+    // (both are consumed on claim and nothing restores them) — the old
+    // "re-apply wip + trigger" step is gone, since it would leave a
+    // permanent trigger label behind and get the issue re-claimed after its
+    // next terminal state. The only remaining precondition is that the
+    // parent work item actually is an issue.
+    const rerouteGuardReason = evaluateRerouteGuard(parentItem.issue_number);
 
-    if (relabelFailedReason !== null) {
+    if (rerouteGuardReason !== null) {
       log.warn(
         "aborting requirements_gap reroute: parent work item has no issue",
         {
           parent_work_item_id,
-          reason: "relabel_failed",
-          detail: relabelFailedReason,
+          reason: "no_parent_issue",
+          detail: rerouteGuardReason,
         },
       );
       await finalizeTerminal("needs_human", reason ?? summary);
@@ -314,35 +289,12 @@ export async function main(
     // must carry only the first-pass review and replies to review comments.
     // The reroute is visible via the parent issue's own requirements_gap
     // notice and the Discord notification pipeline_generate posts for it.
-    const moved = await updateStatusIfCurrent(
+    await updateStatusIfCurrent(
       work_item_id,
       "fixing",
       "blocked",
       `requirements_gap: rerouted to work item ${String(parent_work_item_id)}`,
     );
-    if (moved) {
-      await removeTerminalLabels(
-        client,
-        owner,
-        repo,
-        pr_number,
-        [config.wip_label, config.fix_label],
-        log,
-      );
-      // team-lead design (2026-09-26): the PR itself now waits on the
-      // parent issue's requirements being regenerated — needs_human_label
-      // signals that to a human the same as any other needs_human outcome.
-      await setStateLabel(
-        client,
-        owner,
-        repo,
-        pr_number,
-        config,
-        stateLabelForFixOutcome("needs_human", config),
-        log,
-      );
-    }
-
     const childFlowJobId = await wmill.runFlowAsync("f/factory/pipeline", {
       work_item_id: parent_work_item_id,
       attempt: parentItem.attempt + 1,
@@ -594,7 +546,7 @@ export async function main(
   // Inbox (approval_decide.ts, which dispatches to
   // steps/issue_proposal_apply.ts). The round ends needs_human instead of
   // rereview_requested, and the reviewer-request step below is skipped
-  // entirely; issue_proposal_apply.ts swaps the label to rereview_label
+  // entirely; issue_proposal_apply.ts swaps the status to rereview_requested
   // once every proposal for this work item has been decided.
   // `postFixReplies` above already inserted the factory.issue_proposals
   // row(s) before posting their replies (team-lead fix round, [MUST] #3).
@@ -608,23 +560,6 @@ export async function main(
       proposalReason,
     );
     if (moved) {
-      await removeTerminalLabels(
-        client,
-        owner,
-        repo,
-        pr_number,
-        [config.wip_label, config.fix_label],
-        log,
-      );
-      await setStateLabel(
-        client,
-        owner,
-        repo,
-        pr_number,
-        config,
-        stateLabelForFixOutcome("needs_human", config),
-        log,
-      );
       if (webhookUrl.length > 0) {
         try {
           const event: NotifyEvent = {
@@ -710,23 +645,6 @@ export async function main(
     reviewerNote,
   );
   if (moved) {
-    await removeTerminalLabels(
-      client,
-      owner,
-      repo,
-      pr_number,
-      [config.wip_label, config.fix_label],
-      log,
-    );
-    await setStateLabel(
-      client,
-      owner,
-      repo,
-      pr_number,
-      config,
-      stateLabelForFixOutcome("rereview_requested", config),
-      log,
-    );
     if (reviewerNote !== null) {
       try {
         await addNotice({
@@ -749,7 +667,6 @@ export async function main(
           pr_number,
           pr_url: prUrl,
           outcome: "done",
-          state_label: config.rereview_label,
           // team-lead decision (2026-09-26): only a re-review request API
           // failure surfaces here — see the comment above reviewerApiError.
           note:

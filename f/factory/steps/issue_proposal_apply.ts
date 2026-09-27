@@ -17,10 +17,12 @@
 //     happens to it next).
 //
 // Once every pending proposal for the underlying work item has been
-// decided, the PR's state label swaps off `needs_human_label` — to
-// `rereview_label` when the round that produced the proposal(s) also pushed
-// a commit, or `reviewed_label` when it did not (see
-// decideIssueProposalLabelSwap, pr_workflow_support.ts).
+// decided, the work item's status swaps off `needs_human` — to
+// `rereview_requested` when the round that produced the proposal(s) also
+// pushed a commit, or `reviewed` when it did not (see
+// decidePostProposalStatus, pr_workflow_support.ts). 2026-09-27 PR label
+// cleanup: this used to also swap a PR state label; there is no more state
+// label to swap.
 //
 // Note (docs/security.md): Issue creation uses the same GitHub PAT as every
 // other factory-authored GitHub call — no separate credential.
@@ -109,12 +111,11 @@ import {
   buildIssueProposalTitle,
   chooseIssueProposalReplyTarget,
   classifyIssueProposalDecision,
-  decideIssueProposalLabelSwap,
+  decidePostProposalStatus,
   hasIssueProposalMarker,
   issueProposalMarkerSearchTerm,
   renderIssueProposalApprovedReply,
   renderIssueProposalRejectedReply,
-  setStateLabel,
 } from "./pr_workflow_support.ts";
 
 export type IssueProposalApplyResult = {
@@ -343,48 +344,34 @@ async function run(
   const remaining = await countPendingIssueProposals(workItemId);
   const round = await latestFixRound(workItemId);
   const committedThisRound = (round?.commit_shas.length ?? 0) > 0;
-  const labelDecision = decideIssueProposalLabelSwap(
+  const statusDecision = decidePostProposalStatus(
     remaining,
     committedThisRound,
   );
-  if (labelDecision.action === "swap") {
-    const label =
-      labelDecision.toStatus === "rereview_requested"
-        ? config.rereview_label
-        : config.reviewed_label;
-    await setStateLabel(client, owner, repo, prNumber, config, label, log);
+  if (statusDecision.action === "swap") {
     await updateStatusIfCurrent(
       workItemId,
       "needs_human",
-      labelDecision.toStatus,
-      `issue_proposal_apply: every issue proposal decided (${labelDecision.toStatus})`,
+      statusDecision.toStatus,
+      `issue_proposal_apply: every issue proposal decided (${statusDecision.toStatus})`,
     );
 
-    // A tiny window remains between the count above and the label/status
-    // writes just made, during which another pr_fix round could record a
+    // A tiny window remains between the count above and the status write
+    // just made, during which another pr_fix round could record a
     // brand-new pending proposal for this same work item. Re-checking once
-    // more here catches that: if a new pending proposal appeared, put the PR
-    // straight back to needs_human_label rather than leaving a state label
+    // more here catches that: if a new pending proposal appeared, put the
+    // work item straight back to needs_human rather than leaving a status
     // that implies "nothing pending" when one actually is. Not a full fix (a
-    // still-tinier window remains between this re-check and its own writes)
+    // still-tinier window remains between this re-check and its own write)
     // — no transaction machinery, matching the original implementation this
     // script was ported from.
     const recheck = await countPendingIssueProposals(workItemId);
     if (recheck > 0) {
-      await setStateLabel(
-        client,
-        owner,
-        repo,
-        prNumber,
-        config,
-        config.needs_human_label,
-        log,
-      );
       await updateStatusIfCurrent(
         workItemId,
-        labelDecision.toStatus,
+        statusDecision.toStatus,
         "needs_human",
-        "issue_proposal_apply: a new issue proposal appeared during the label swap",
+        "issue_proposal_apply: a new issue proposal appeared during the status swap",
       );
     }
   }

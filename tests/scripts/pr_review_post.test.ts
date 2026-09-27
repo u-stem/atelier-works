@@ -14,6 +14,7 @@ import {
   mapFindingsToReviewComments,
   renderInlineComment,
   renderReviewSummary,
+  reviewResultFor,
   selectThreadsToResolve,
 } from "../../f/factory/steps/pr_workflow_support.ts";
 
@@ -561,5 +562,30 @@ describe("countOpenMustThreads", () => {
   test("does not count a human-authored thread", () => {
     const humanThread = mustThread({ firstCommentAuthorLogin: "alice" });
     expect(countOpenMustThreads([humanThread], "factory-bot", [])).toBe(0);
+  });
+});
+
+describe("reviewResultFor", () => {
+  test("returns changes_requested when a finding is kind must", () => {
+    expect(reviewResultFor([finding({ kind: "must" })], 0)).toBe(
+      "changes_requested",
+    );
+  });
+
+  test("returns reviewed when no finding is kind must", () => {
+    expect(reviewResultFor([finding({ kind: "nits" })], 0)).toBe("reviewed");
+  });
+
+  test("returns reviewed when there are no findings at all", () => {
+    expect(reviewResultFor([], 0)).toBe("reviewed");
+  });
+
+  // team-lead fix (2026-09-26): an old [MUST] left unresolved from a prior
+  // round must keep the PR flagged even when this round's own findings have
+  // no must (ReviewBodyMode's "rereview_open").
+  test("returns changes_requested when openMustCount is greater than zero even with no must findings", () => {
+    expect(reviewResultFor([finding({ kind: "nits" })], 2)).toBe(
+      "changes_requested",
+    );
   });
 });

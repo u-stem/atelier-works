@@ -174,7 +174,7 @@ describe("buildEmbed", () => {
     expect(embed.title).toBe("人による対応が必要です: Issue #42");
   });
 
-  test("states the state label in the pr_fixed description", () => {
+  test("states the outcome in the pr_fixed description", () => {
     const embed = buildEmbed({
       kind: "pr_fixed",
       instance_name: "local",
@@ -183,12 +183,9 @@ describe("buildEmbed", () => {
       pr_number: 7,
       pr_url: "https://github.com/octo-owner/atelier-works/pull/7",
       outcome: "done",
-      state_label: "factory:rereview",
       note: null,
     });
-    expect(embed.description).toBe(
-      "修正をpushしました。状態ラベル: factory:rereview",
-    );
+    expect(embed.description).toBe("修正をpushし、再レビューを依頼しました。");
   });
 
   test("includes an optional 補足 field on pr_fixed when a note is present", () => {
@@ -200,7 +197,6 @@ describe("buildEmbed", () => {
       pr_number: 7,
       pr_url: "https://github.com/octo-owner/atelier-works/pull/7",
       outcome: "done",
-      state_label: "factory:rereview",
       note: "再レビュー依頼のAPI呼び出しに失敗しました: HTTP 500",
     });
     expect(embed.fields).toContainEqual({
@@ -218,13 +214,12 @@ describe("buildEmbed", () => {
       pr_number: 7,
       pr_url: "https://github.com/octo-owner/atelier-works/pull/7",
       outcome: "done",
-      state_label: "factory:rereview",
       note: null,
     });
     expect(embed.fields.some((field) => field.name === "補足")).toBe(false);
   });
 
-  test("states the finding count and state label in the pr_reviewed description", () => {
+  test("states the finding count and result when changes are requested", () => {
     const embed = buildEmbed({
       kind: "pr_reviewed",
       instance_name: "local",
@@ -234,11 +229,24 @@ describe("buildEmbed", () => {
       pr_url: "https://github.com/octo-owner/atelier-works/pull/7",
       verdict: "request_changes",
       finding_count: 3,
-      state_label: "factory:changes-requested",
+      result: "changes_requested",
     });
-    expect(embed.description).toBe(
-      "指摘3件。状態ラベル: factory:changes-requested",
-    );
+    expect(embed.description).toBe("指摘3件。状態: 修正が必要な指摘あり");
+  });
+
+  test("states the finding count and result when no changes are requested", () => {
+    const embed = buildEmbed({
+      kind: "pr_reviewed",
+      instance_name: "local",
+      owner: "octo-owner",
+      repo: "atelier-works",
+      pr_number: 7,
+      pr_url: "https://github.com/octo-owner/atelier-works/pull/7",
+      verdict: "approve",
+      finding_count: 0,
+      result: "reviewed",
+    });
+    expect(embed.description).toBe("指摘0件。状態: 指摘なし(人のApprove待ち)");
   });
 
   test("truncates a field value longer than 1024 characters", () => {

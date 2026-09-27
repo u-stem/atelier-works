@@ -950,26 +950,16 @@ describe("findIssueByMarker", () => {
 });
 
 describe("searchPrs", () => {
-  const STATE_LABELS = [
-    "factory:changes-requested",
-    "factory:reviewed",
-    "factory:rereview",
-    "factory:needs-human",
-  ];
-
   const SEARCH_PRS_OPTS = {
     owner: "acme",
     ownerKind: "user" as const,
     viewer: "factory-bot",
     reviewLabel: "factory:review",
     fixLabel: "factory:fix",
-    wipLabel: "factory:wip",
-    stateLabels: STATE_LABELS,
   };
 
-  // 4 base queries (review-requested, assignee, review label, fix label)
-  // plus one per state label.
-  const QUERY_COUNT = 4 + STATE_LABELS.length;
+  // 4 queries: review-requested, assignee, review label, fix label.
+  const QUERY_COUNT = 4;
 
   function emptyResponses(count: number): CommandResult[] {
     return Array.from({ length: count }, () => ghApiOk({ items: [] }));
@@ -991,11 +981,12 @@ describe("searchPrs", () => {
   // (confirmed empirically: `(review-requested:X OR assignee:X OR
   // label:Y)` always returned 0 results, while each qualifier alone
   // matched) — so searchPrs issues one query per qualifier and merges them:
-  // review-requested, assignee, review label, fix label, and one per PR
-  // state label (team-lead design, 2026-09-26 — replaces the former
-  // commenter:<viewer> re-discovery query; see searchPrs's doc comment).
+  // review-requested, assignee, review label, fix label (2026-09-27 PR
+  // label cleanup: no more wip/state labels — see searchPrs's doc comment;
+  // a PR whose trigger label was already consumed is rediscovered by
+  // poll_prs.ts's listTrackedPrs instead, not by this search).
 
-  test("issues one query per qualifier — review-requested, assignee, review label, fix label, then one per state label — instead of one OR-grouped query", async () => {
+  test("issues one query per qualifier — review-requested, assignee, review label, fix label — instead of one OR-grouped query", async () => {
     const fake = createFakeCommandRunner(emptyResponses(QUERY_COUNT));
     await searchPrs({ run: fake.run, ghToken: "tok" }, SEARCH_PRS_OPTS);
     expect(fake.calls).toHaveLength(QUERY_COUNT);
@@ -1007,10 +998,6 @@ describe("searchPrs", () => {
     expect(decoded[1]).toContain("assignee:factory-bot");
     expect(decoded[2]).toContain('label:"factory:review"');
     expect(decoded[3]).toContain('label:"factory:fix"');
-    expect(decoded[4]).toContain('label:"factory:changes-requested"');
-    expect(decoded[5]).toContain('label:"factory:reviewed"');
-    expect(decoded[6]).toContain('label:"factory:rereview"');
-    expect(decoded[7]).toContain('label:"factory:needs-human"');
   });
 
   test("issues no commenter: query", async () => {
@@ -1023,15 +1010,22 @@ describe("searchPrs", () => {
     }
   });
 
-  test("quotes the wip label qualifier on every query (a label name can contain a colon)", async () => {
+  test("issues no wip-label exclusion (there is no wip label any more)", async () => {
     const fake = createFakeCommandRunner(emptyResponses(QUERY_COUNT));
     await searchPrs({ run: fake.run, ghToken: "tok" }, SEARCH_PRS_OPTS);
-    expect(fake.calls).toHaveLength(QUERY_COUNT);
     for (const call of fake.calls) {
-      expect(decodeURIComponent(call.argv.join(" "))).toContain(
-        '-label:"factory:wip"',
-      );
+      expect(decodeURIComponent(call.argv.join(" "))).not.toContain("-label:");
     }
+  });
+
+  test("quotes the label qualifiers (a label name can contain a colon)", async () => {
+    const fake = createFakeCommandRunner(emptyResponses(QUERY_COUNT));
+    await searchPrs({ run: fake.run, ghToken: "tok" }, SEARCH_PRS_OPTS);
+    const decoded = fake.calls.map((call) =>
+      decodeURIComponent(call.argv.join(" ")),
+    );
+    expect(decoded[2]).toContain('label:"factory:review"');
+    expect(decoded[3]).toContain('label:"factory:fix"');
   });
 
   test("requests per_page=100 on every query", async () => {
@@ -1049,10 +1043,6 @@ describe("searchPrs", () => {
       ghApiOk({ items: [prItem(1, 10)] }), // assignee — same PR again
       ghApiOk({ items: [] }), // review label
       ghApiOk({ items: [] }), // fix label
-      ghApiOk({ items: [prItem(1, 10)] }), // changes-requested — same PR again
-      ghApiOk({ items: [] }), // reviewed
-      ghApiOk({ items: [] }), // rereview
-      ghApiOk({ items: [] }), // needs-human
     ]);
     const items = await searchPrs(
       { run: fake.run, ghToken: "tok" },
@@ -1068,18 +1058,12 @@ describe("searchPrs", () => {
       ghApiOk({ items: [prItem(2, 11)] }),
       ghApiOk({ items: [prItem(3, 12)] }),
       ghApiOk({ items: [prItem(4, 13)] }),
-      ghApiOk({ items: [prItem(5, 14)] }),
-      ghApiOk({ items: [prItem(6, 15)] }),
-      ghApiOk({ items: [prItem(7, 16)] }),
-      ghApiOk({ items: [prItem(8, 17)] }),
     ]);
     const items = await searchPrs(
       { run: fake.run, ghToken: "tok" },
       SEARCH_PRS_OPTS,
     );
-    expect(items.map((item) => item.number)).toEqual([
-      10, 11, 12, 13, 14, 15, 16, 17,
-    ]);
+    expect(items.map((item) => item.number)).toEqual([10, 11, 12, 13]);
   });
 
   test("follows the link header's rel=next page within a single query", async () => {

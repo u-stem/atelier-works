@@ -30,6 +30,7 @@ import {
   listExpiredPendingApprovalRequests,
   listPendingIssueProposals,
   listStaleTerminalWorkItems,
+  listTrackedPrs,
   nextCycleForIssue,
   recordAgentRun,
   recordDeployment,
@@ -1730,6 +1731,52 @@ describe("latestPrWorkItem", () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await latestPrWorkItem("octo-owner", "atelier-works", 7, undefined, sql);
     expect(calls[0]?.text).toContain("ORDER BY created_at DESC, id DESC");
+  });
+});
+
+describe("listTrackedPrs", () => {
+  const TRACKED_ROW: SqlRow = {
+    owner: "octo-owner",
+    repo: "atelier-works",
+    pr_number: 7,
+    head_sha: "abc1234",
+    kind: "pr_review",
+    status: "reviewed",
+    updated_at: NOW.toISOString(),
+  };
+
+  test("parses a tracked PR row", async () => {
+    const { sql } = createFakeSqlClient([[TRACKED_ROW]]);
+    const result = await listTrackedPrs(30, sql);
+    expect(result).toEqual([
+      {
+        owner: "octo-owner",
+        repo: "atelier-works",
+        pr_number: 7,
+        head_sha: "abc1234",
+        kind: "pr_review",
+        status: "reviewed",
+        updated_at: NOW,
+      },
+    ]);
+  });
+
+  test("filters to pr_review/pr_fix kinds via DISTINCT ON per (owner, repo, pr_number)", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listTrackedPrs(30, sql);
+    expect(calls[0]?.text).toContain("DISTINCT ON (owner, repo, pr_number)");
+  });
+
+  test("excludes cancelled rows", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listTrackedPrs(30, sql);
+    expect(calls[0]?.text).toContain("status != 'cancelled'");
+  });
+
+  test("passes withinDays as a bind value for the updated_at cutoff", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listTrackedPrs(45, sql);
+    expect(calls[0]?.values).toContain(45);
   });
 });
 

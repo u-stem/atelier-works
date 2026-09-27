@@ -1,14 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-  computeRestartPlan,
-  labelsToRestore,
-} from "../../f/factory/retry_work_item.ts";
-
-const LABEL_CONFIG = {
-  wip_label: "factory:wip",
-  review_label: "factory:review",
-  fix_label: "factory:fix",
-};
+import { computeRestartPlan } from "../../f/factory/retry_work_item.ts";
 
 describe("computeRestartPlan", () => {
   test("restarts a failed issue work item into pipeline at attempt + 1", () => {
@@ -72,21 +63,5 @@ describe("computeRestartPlan", () => {
         attempt: 1,
       }),
     ).toThrow();
-  });
-});
-
-describe("labelsToRestore", () => {
-  test("restores wip + review_label for a pr_review work item", () => {
-    expect(labelsToRestore("pr_review", LABEL_CONFIG)).toEqual([
-      "factory:wip",
-      "factory:review",
-    ]);
-  });
-
-  test("restores wip + fix_label for a pr_fix work item", () => {
-    expect(labelsToRestore("pr_fix", LABEL_CONFIG)).toEqual([
-      "factory:wip",
-      "factory:fix",
-    ]);
   });
 });

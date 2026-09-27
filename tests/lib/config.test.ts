@@ -11,8 +11,6 @@ import {
 const LEGACY_RAW_CONFIG = {
   owners: [{ name: "octo-owner", kind: "user" }],
   trigger_label: "factory",
-  wip_label: "factory:wip",
-  approved_label: "factory:approved",
   allowed_labeler_associations: ["OWNER", "MEMBER", "COLLABORATOR"],
   model: "claude-opus-5-5",
   max_attempts: 3,
@@ -32,7 +30,6 @@ describe("parseFactoryConfig", () => {
     expect(config).toMatchObject({
       review_label: "factory:review",
       fix_label: "factory:fix",
-      pr_label: "factory:pr",
       review_post_mode: "comment_only",
       max_fix_rounds: 3,
       allowed_check_commands: [],
@@ -42,35 +39,36 @@ describe("parseFactoryConfig", () => {
     });
   });
 
-  test("defaults the four state labels when absent (PR state labels, 2026-09-26)", () => {
+  test("defaults tracked_pr_days to 30 when absent (2026-09-27 PR label cleanup)", () => {
     const config = parseFactoryConfig(LEGACY_RAW_CONFIG);
-    expect(config).toMatchObject({
+    expect(config.tracked_pr_days).toBe(30);
+  });
+
+  test("passes through an explicit tracked_pr_days value", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      tracked_pr_days: 14,
+    });
+    expect(config.tracked_pr_days).toBe(14);
+  });
+
+  test("throws when tracked_pr_days is zero", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, tracked_pr_days: 0 };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("ignores label keys retired by the 2026-09-27 PR label cleanup (wip/approved/pr/state labels) still present on an existing resource", () => {
+    const raw = {
+      ...LEGACY_RAW_CONFIG,
+      wip_label: "factory:wip",
+      approved_label: "factory:approved",
+      pr_label: "factory:pr",
       changes_requested_label: "factory:changes-requested",
       reviewed_label: "factory:reviewed",
       rereview_label: "factory:rereview",
       needs_human_label: "factory:needs-human",
-    });
-  });
-
-  test("passes through explicit values for the four state labels", () => {
-    const config = parseFactoryConfig({
-      ...LEGACY_RAW_CONFIG,
-      changes_requested_label: "custom:changes-requested",
-      reviewed_label: "custom:reviewed",
-      rereview_label: "custom:rereview",
-      needs_human_label: "custom:needs-human",
-    });
-    expect(config).toMatchObject({
-      changes_requested_label: "custom:changes-requested",
-      reviewed_label: "custom:reviewed",
-      rereview_label: "custom:rereview",
-      needs_human_label: "custom:needs-human",
-    });
-  });
-
-  test("throws when reviewed_label is present but not a string", () => {
-    const raw = { ...LEGACY_RAW_CONFIG, reviewed_label: 42 };
-    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+    };
+    expect(() => parseFactoryConfig(raw)).not.toThrow();
   });
 
   test("defaults factory_branch to main when absent (M7)", () => {

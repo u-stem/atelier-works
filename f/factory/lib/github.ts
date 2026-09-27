@@ -1073,29 +1073,16 @@ export type SearchPrsOptions = {
   readonly viewer: string;
   readonly reviewLabel: string;
   readonly fixLabel: string;
-  readonly wipLabel: string;
-  /** The four PR state labels (pr_workflow_support.ts's allStateLabels) —
-   * one `label:"<label>"` query is issued per entry, re-discovering a PR
-   * the factory is already tracking whose trigger label has since fallen
-   * off (team-lead design, 2026-09-26: replaces the former
-   * `commenter:<viewer>` query — see the doc comment below). */
-  readonly stateLabels: readonly string[];
 };
 
 /**
- * `GET /search/issues` scoped to PRs: review-requested, assigned, labeled
- * `reviewLabel` or `fixLabel`, or carrying one of `stateLabels` — excluding
- * `wipLabel` (spec-cycle2.md §7 item 1). The state-label queries re-discover
- * a PR whose trigger label has already fallen off (e.g. review finished and
- * the review label was removed) before a human acts on it (approving,
- * adding the fix label, or pushing a fix themselves) — without them,
- * such a PR would never re-enter the candidate set (E2E gap). This replaces
- * the former `commenter:<viewer>` query (team-lead design, 2026-09-26):
- * `commenter:` re-discovered a PR via the factory's own opening comment,
- * but the factory no longer posts one (see poll_prs.ts's startReview/
- * startFix); the state labels the factory itself sets and swaps are a more
- * precise, human-visible substitute that also doubles as an at-a-glance PR
- * status indicator.
+ * `GET /search/issues` scoped to PRs: review-requested, assigned, or labeled
+ * `reviewLabel` or `fixLabel` (2026-09-27 policy: PR trigger labels —
+ * `factory:review` / `factory:fix` — are consumed at claim time, mirroring
+ * the Issue side's `factory` label; there is no `wip` label and no state
+ * labels to re-discover by, so `poll_prs.ts` re-discovers PRs whose trigger
+ * label has already been consumed via `listTrackedPrs` (DB-backed) instead
+ * of a label search).
  *
  * Runs as one query per qualifier, not one combined
  * `(review-requested:X OR assignee:X OR label:Y OR ...)` query — confirmed
@@ -1111,15 +1098,14 @@ export async function searchPrs(
 ): Promise<PrSearchItem[]> {
   assertGitHubName(opts.owner);
   assertGitHubName(opts.viewer);
-  // Label names can contain a colon (e.g. "factory:wip"), so the label
+  // Label names can contain a colon (e.g. "factory:review"), so the label
   // qualifiers are quoted.
-  const base = `is:pr state:open ${ownerQualifier(opts.owner, opts.ownerKind)} -label:"${opts.wipLabel}"`;
+  const base = `is:pr state:open ${ownerQualifier(opts.owner, opts.ownerKind)}`;
   const queries = [
     `${base} review-requested:${opts.viewer}`,
     `${base} assignee:${opts.viewer}`,
     `${base} label:"${opts.reviewLabel}"`,
     `${base} label:"${opts.fixLabel}"`,
-    ...opts.stateLabels.map((label) => `${base} label:"${label}"`),
   ];
   const resultsByQuery = await Promise.all(
     queries.map((query) =>

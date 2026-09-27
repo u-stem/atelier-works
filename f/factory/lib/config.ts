@@ -45,8 +45,6 @@ const OWNER_KINDS = ["user", "org"];
  * factory_repo, instance_name — see requiredStringField below). */
 type DefaultableField =
   | "trigger_label"
-  | "wip_label"
-  | "approved_label"
   | "allowed_labeler_associations"
   | "model"
   | "max_attempts"
@@ -61,11 +59,7 @@ type DefaultableField =
   | "windmill_public_url"
   | "review_label"
   | "fix_label"
-  | "pr_label"
-  | "changes_requested_label"
-  | "reviewed_label"
-  | "rereview_label"
-  | "needs_human_label"
+  | "tracked_pr_days"
   | "review_post_mode"
   | "max_fix_rounds"
   | "allowed_check_commands"
@@ -79,8 +73,6 @@ type DefaultableField =
  * itself so each value is checked without a type assertion. */
 const DEFAULTS: Pick<FactoryConfig, DefaultableField> = {
   trigger_label: "factory",
-  wip_label: "factory:wip",
-  approved_label: "factory:approved",
   allowed_labeler_associations: ["OWNER", "MEMBER", "COLLABORATOR"],
   model: "claude-opus-5-5",
   max_attempts: 3,
@@ -99,13 +91,10 @@ const DEFAULTS: Pick<FactoryConfig, DefaultableField> = {
   // New in cycle 2 (spec-cycle2.md §7 item 10).
   review_label: "factory:review",
   fix_label: "factory:fix",
-  pr_label: "factory:pr",
-  // New state labels (2026-09-26 design): the factory sets/swaps exactly
-  // one of these on a PR it has handled.
-  changes_requested_label: "factory:changes-requested",
-  reviewed_label: "factory:reviewed",
-  rereview_label: "factory:rereview",
-  needs_human_label: "factory:needs-human",
+  // 2026-09-27 policy: PR trigger labels are consumed at claim time (no
+  // wip/state labels), so DB-backed rediscovery (listTrackedPrs) needs its
+  // own retention window instead.
+  tracked_pr_days: 30,
   review_post_mode: "comment_only",
   max_fix_rounds: 3,
   allowed_check_commands: [],
@@ -266,8 +255,6 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
   return {
     owners,
     trigger_label: stringField(raw, "trigger_label", DEFAULTS.trigger_label),
-    wip_label: stringField(raw, "wip_label", DEFAULTS.wip_label),
-    approved_label: stringField(raw, "approved_label", DEFAULTS.approved_label),
     allowed_labeler_associations: resolvedAllowedLabelerAssociations,
     model: stringField(raw, "model", DEFAULTS.model),
     max_attempts: numberField(raw, "max_attempts", DEFAULTS.max_attempts),
@@ -312,18 +299,10 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
     ),
     review_label: stringField(raw, "review_label", DEFAULTS.review_label),
     fix_label: stringField(raw, "fix_label", DEFAULTS.fix_label),
-    pr_label: stringField(raw, "pr_label", DEFAULTS.pr_label),
-    changes_requested_label: stringField(
+    tracked_pr_days: positiveIntegerField(
       raw,
-      "changes_requested_label",
-      DEFAULTS.changes_requested_label,
-    ),
-    reviewed_label: stringField(raw, "reviewed_label", DEFAULTS.reviewed_label),
-    rereview_label: stringField(raw, "rereview_label", DEFAULTS.rereview_label),
-    needs_human_label: stringField(
-      raw,
-      "needs_human_label",
-      DEFAULTS.needs_human_label,
+      "tracked_pr_days",
+      DEFAULTS.tracked_pr_days,
     ),
     review_post_mode: resolvedReviewPostMode,
     max_fix_rounds: numberField(raw, "max_fix_rounds", DEFAULTS.max_fix_rounds),

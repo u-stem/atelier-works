@@ -84,11 +84,13 @@ export type NotifyEvent =
       pr_url: string;
       verdict: string;
       // team-lead decision (2026-09-26): the description now states what
-      // happened (finding count) and the resulting state label, rather than
-      // the raw verdict text — the state label is what actually tells the
-      // reader whether anything is needed from them.
+      // happened (finding count) and the review's outcome, rather than the
+      // raw verdict text — that's what actually tells the reader whether
+      // anything is needed from them. 2026-09-27 PR label cleanup: there is
+      // no more state label to report (poll_prs.ts rediscovers PRs from the
+      // DB now), so this carries the same reviewResultFor verdict directly.
       finding_count: number;
-      state_label: string;
+      result: "changes_requested" | "reviewed";
     }
   | {
       kind: "pr_fixed";
@@ -98,11 +100,10 @@ export type NotifyEvent =
       pr_number: number;
       pr_url: string;
       outcome: string;
-      // team-lead decision (2026-09-26): same state-oriented description
-      // change as pr_reviewed. `note` carries an optional supplementary
-      // fact (currently: the re-review request's API call failing) that
-      // doesn't warrant its own needs_human notification.
-      state_label: string;
+      // `note` carries an optional supplementary fact (currently: the
+      // re-review request's API call failing) that doesn't warrant its own
+      // needs_human notification. 2026-09-27 PR label cleanup: there is no
+      // more state label to report — `outcome` alone is enough context here.
       note: string | null;
     }
   | {
@@ -247,16 +248,21 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
         ],
       };
     }
-    case "pr_reviewed":
+    case "pr_reviewed": {
+      const stateText =
+        event.result === "changes_requested"
+          ? "修正が必要な指摘あり"
+          : "指摘なし(人のApprove待ち)";
       return {
         title: `PR レビュー完了: #${event.pr_number}`,
-        description: `指摘${String(event.finding_count)}件。状態ラベル: ${event.state_label}`,
+        description: `指摘${String(event.finding_count)}件。状態: ${stateText}`,
         url: event.pr_url,
         fields: [
           instanceField(event.instance_name),
           repoField(event.owner, event.repo),
         ],
       };
+    }
     case "pr_fixed": {
       const fields = [
         instanceField(event.instance_name),
@@ -267,7 +273,7 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
       }
       return {
         title: `PR 修正適用: #${event.pr_number}`,
-        description: `修正をpushしました。状態ラベル: ${event.state_label}`,
+        description: "修正をpushし、再レビューを依頼しました。",
         url: event.pr_url,
         fields,
       };

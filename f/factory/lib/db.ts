@@ -835,9 +835,9 @@ export function toFixRoundRecord(row: SqlRow): FixRoundRecord {
 /** Most recently created factory.fix_rounds row for a work item, or `null`
  * if it has none yet — used by issue_proposal_apply.ts to tell whether the
  * round that produced a pending issue proposal also pushed a commit
- * (`commit_shas` non-empty), which decides whether the PR's state label
- * swaps to `rereview_label` or `reviewed_label` once every proposal for
- * that work item has been decided. */
+ * (`commit_shas` non-empty), which decides whether the work item's status
+ * becomes `rereview_requested` or `reviewed` once every proposal for that
+ * work item has been decided. */
 export async function latestFixRound(
   workItemId: number,
   sql: SqlClient = defaultSqlClient,
@@ -1345,6 +1345,66 @@ export async function latestPrWorkItem(
         `.fetch();
   const row = rows[0];
   return row === undefined ? null : toWorkItem(row);
+}
+
+/** A PR the factory is still tracking, as returned by `listTrackedPrs`. */
+export type TrackedPr = {
+  owner: string;
+  repo: string;
+  pr_number: number;
+  head_sha: string | null;
+  kind: "pr_review" | "pr_fix";
+  status: WorkItemStatus;
+  updated_at: Date;
+};
+
+const TRACKED_PR_KINDS: readonly ("pr_review" | "pr_fix")[] = [
+  "pr_review",
+  "pr_fix",
+];
+
+/**
+ * PRs the factory is still tracking, for `poll_prs.ts`'s DB-backed
+ * rediscovery (2026-09-27 policy: a PR's trigger label — `factory:review` /
+ * `factory:fix` — is consumed at claim time, so there is no label left to
+ * re-search by once a cycle starts; `work_items` is the sole source of
+ * truth for "which PRs is the factory still following"). For each
+ * `(owner, repo, pr_number)` with a `pr_review`/`pr_fix`-kind row, only the
+ * most recently updated row is considered (`DISTINCT ON`); that row is
+ * returned when its status isn't `cancelled` (a cancelled PR — e.g. closed
+ * — is dropped for good) and it was updated within the last `withinDays`
+ * days (`factory_config.tracked_pr_days`) — a PR nobody has touched in that
+ * long falls out of tracking rather than being re-polled forever.
+ */
+export async function listTrackedPrs(
+  withinDays: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<TrackedPr[]> {
+  const kinds: string[] = [...TRACKED_PR_KINDS];
+  const rows = await sql`
+    WITH latest AS (
+      SELECT DISTINCT ON (owner, repo, pr_number)
+        owner, repo, pr_number, head_sha, kind, status, updated_at
+      FROM factory.work_items
+      WHERE kind = ANY(${kinds}) AND pr_number IS NOT NULL
+      ORDER BY owner, repo, pr_number, updated_at DESC
+    )
+    SELECT owner, repo, pr_number, head_sha, kind, status, updated_at
+    FROM latest
+    WHERE status != 'cancelled'
+      AND updated_at >= now() - make_interval(days => ${withinDays}::int)
+    ORDER BY updated_at DESC
+  `.fetch();
+
+  return rows.map((row) => ({
+    owner: parseRequiredString(row.owner, "owner"),
+    repo: parseRequiredString(row.repo, "repo"),
+    pr_number: parseRequiredNumber(row.pr_number, "pr_number"),
+    head_sha: parseNullableString(row.head_sha, "head_sha"),
+    kind: parseEnum(row.kind, TRACKED_PR_KINDS, "kind"),
+    status: parseEnum<WorkItemStatus>(row.status, WORK_ITEM_STATUSES, "status"),
+    updated_at: parseDate(row.updated_at, "updated_at"),
+  }));
 }
 
 /** Total factory.agent_runs cost since `sinceIso` (inclusive), for the

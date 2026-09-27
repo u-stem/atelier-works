@@ -4,47 +4,19 @@
 // item's `kind` (issue -> pipeline, pr_review -> pr_review, pr_fix ->
 // pr_fix).
 //
-// devil-advocate fatal fix (PR kinds only, see 2026-09-27 policy note
-// below): a terminal PR work item has had its wip + trigger label removed
-// (pr_* terminal transitions, and poll_issues's reconcile). Relaunching the
-// flow without re-adding them first left the GitHub PR still missing the
-// trigger label, so poll_issues's reconcile would see it as "trigger label
-// removed" within its next 5-minute run and immediately cancel the
-// just-restarted flow. Labels are now idempotently re-added before the
-// status transition and `runFlowAsync`.
-//
-// devil-advocate note (round 2): the fix above originally reused
-// `claimIssue` for every kind, but that also assigns the factory as
-// GitHub assignee — for PR kinds this contradicts `claimPr`'s
-// no-assignee decision (an assignee left in place would keep candidating
-// the PR forever via `assignee:<viewer>` search, spec-cycle2.md §7 item
-// 1's own de-dup notwithstanding, since assignment isn't head_sha-scoped).
-// PR kinds (pr_review / pr_fix) use `addLabels` — additive, no assignee.
-//
-// policy change (2026-09-27): issue kind no longer restores any label —
-// the Issue's `factory` trigger label is consumed once, at claim time, and
-// is never re-added automatically (status lives solely in
-// work_items.status). Restarting an issue work item therefore relaunches
-// `f/factory/pipeline` directly with no GitHub side effect at all; only a
-// human re-labeling the Issue starts a brand-new cycle. PR-kind label
-// restoration is unchanged pending the follow-up PR that does the same
-// cleanup for PRs.
+// policy change (2026-09-27, PR label cleanup — extends the Issue-side
+// policy from the prior PR to PR kinds): no kind restores any label any
+// more. Every trigger label (`factory` for an issue, `factory:review` /
+// `factory:fix` for a PR) is consumed once, at claim time, and is never
+// re-added automatically — status lives solely in work_items.status, and a
+// restarted PR work item is rediscovered by poll_prs.ts's listTrackedPrs
+// (DB-backed) rather than by a re-applied label. Restarting a work item of
+// any kind therefore relaunches its flow directly with no GitHub side
+// effect at all; only a human re-labeling the Issue/PR starts a brand-new
+// cycle.
 import * as wmill from "windmill-client@1.817.0";
-import { loadConfig } from "./lib/config.ts";
 import { getWorkItem, setFlowJobId, updateStatus } from "./lib/db.ts";
-import { addLabels, type GhClient } from "./lib/github.ts";
-import { type Logger, logger } from "./lib/log.ts";
-import {
-  type FactoryConfig,
-  isOneOf,
-  type WorkItem,
-  type WorkItemStatus,
-} from "./lib/types.ts";
-import { runCommand } from "./lib/workspace.ts";
-import {
-  allStateLabels,
-  removeTerminalLabels,
-} from "./steps/pr_workflow_support.ts";
+import { isOneOf, type WorkItem, type WorkItemStatus } from "./lib/types.ts";
 
 const RESTARTABLE_STATUSES = [
   "failed",
@@ -95,56 +67,6 @@ export function computeRestartPlan(
   }
 }
 
-/**
- * The wip label plus the one kind-specific trigger label that a terminal PR
- * work item's `kind` had removed (pr_* terminal transitions, poll_issues's
- * reconcile) — and that must be idempotently re-present before relaunching
- * its flow, or poll_issues's reconcile will read the missing trigger label
- * as "removed" and cancel the restart within its next 5-minute run. Issue
- * kind has no equivalent (2026-09-27 policy — see this file's module doc).
- */
-export function labelsToRestore(
-  kind: "pr_review" | "pr_fix",
-  config: Pick<FactoryConfig, "wip_label" | "review_label" | "fix_label">,
-): string[] {
-  switch (kind) {
-    case "pr_review":
-      return [config.wip_label, config.review_label];
-    case "pr_fix":
-      return [config.wip_label, config.fix_label];
-  }
-}
-
-async function restorePrLabels(
-  client: GhClient,
-  workItem: Pick<WorkItem, "owner" | "repo" | "pr_number">,
-  kind: "pr_review" | "pr_fix",
-  config: FactoryConfig,
-  log: Logger,
-): Promise<void> {
-  const number = workItem.pr_number;
-  if (number === null) {
-    throw new Error(
-      `retry_work_item: work item has kind "${kind}" but no pr_number`,
-    );
-  }
-  const labels = labelsToRestore(kind, config);
-
-  // team-lead design (2026-09-26): the PR is active again, so any state
-  // label a previous terminal transition left on it (changes-requested /
-  // reviewed / rereview / needs-human) no longer applies — best-effort,
-  // like every other terminal-transition label cleanup.
-  await removeTerminalLabels(
-    client,
-    workItem.owner,
-    workItem.repo,
-    number,
-    allStateLabels(config),
-    log,
-  );
-  await addLabels(client, workItem.owner, workItem.repo, number, labels);
-}
-
 export type RetryWorkItemResult = {
   readonly ok: boolean;
   readonly status: WorkItemStatus;
@@ -152,23 +74,12 @@ export type RetryWorkItemResult = {
 };
 
 export async function main(work_item_id: number): Promise<RetryWorkItemResult> {
-  const log = logger("retry_work_item");
   const workItem = await getWorkItem(work_item_id);
   if (workItem === null) {
     throw new Error(`retry_work_item: no work item with id ${work_item_id}`);
   }
 
   const plan = computeRestartPlan(workItem);
-
-  const config = await loadConfig(() =>
-    wmill.getResource("f/factory/factory_config"),
-  );
-  const ghToken = await wmill.getVariable("f/factory/github_token");
-  const client: GhClient = { run: runCommand, ghToken };
-
-  if (workItem.kind !== "issue") {
-    await restorePrLabels(client, workItem, workItem.kind, config, log);
-  }
 
   await updateStatus(
     work_item_id,

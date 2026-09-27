@@ -98,7 +98,7 @@ function isClaudeResult(value: unknown): value is ClaudeResult {
 | `cleanup_db` | 毎日03:30 | 保持期限を過ぎたDBレコード(終端状態の作業項目とその関連データ、失敗記録・デプロイ記録・解決済み通知)の削除 |
 | `daily_summary`(`notify_discord`経由) | 毎日09:00 | 前日のコスト・件数・失敗・DB掃除件数をDiscordに通知 |
 
-- 多重実行防止はadvisory lockを使わない。各`*.schedule.yaml`に`no_flow_overlap: true`を設定し、前回実行中はスキップする。複数インスタンスを同時運用する場合の排他はWindmill側ではなく **GitHub側のclaim**(`wip`ラベル + assigneeの付与、再取得しての確認)で担保する。
+- 多重実行防止はadvisory lockを使わない。各`*.schedule.yaml`に`no_flow_overlap: true`を設定し、前回実行中はスキップする。複数インスタンスを同時運用する場合の排他はWindmill側ではなく **GitHub側のclaim**(Issueはassigneeの付与、PRはトリガーラベル自体の消費。いずれも再取得しての確認)で担保する。
 - scheduleにはerror handlerを設定し、失敗を`job_failures`テーブルとDiscord通知に流す(`f/factory/on_error_schedule.ts`)。
 - 承認のタイムアウト(7日)は`poll_issues`のreconcile後に行う期限切れスイープが`approval_requests.expires_at`を見て判定する(`pipeline.flow`はsuspendを使わない)。
 
@@ -155,8 +155,8 @@ M4のゲートでworker内で実測した外部コマンド・APIの挙動。型
 - attemptごとに再投稿しうるコメントは`kind`にattemptを含めて分ける。例: `issue-approved-<attempt>`。同じ`kind`を使い回すと2件目以降が投稿されない。
 - GitHubに投稿するのは成果物(承認済み要件定義へのリンク、PRレビュー本体、レビューへの返信)だけにする。着手・承認待ち・失敗・期限切れ・要人手のような運用通知はIssue / PRに書かず、DiscordとConsoleで伝える(2026-09-27の方針)。
 
-## Issueのトリガーラベルはclaim時に消費する(PR側は次PRで整理)
+## Issue・PRとも、トリガーラベルはclaim時に消費する
 
-Issueの`factory`ラベルはclaim時(assignee付与直後)に一度だけ消費する(外す)。以降どの状態遷移(終端status: `approved` / `needs_human` / `expired` / `failed` / `cancelled`を含む)でもIssue側のラベルは付け外ししない(2026-09-27方針)。状態は`work_items.status`のみが正で、GitHubのラベルは「人からFactoryへのトリガー」の役割に限定される。再クレーム防止は`listActive`によるDB上のチェックで行い、ラベルの有無には依存しない。最初からやり直すには人が改めて`factory`ラベルを付け直す(新しいcycle)。
+Issueの`factory`ラベル、PRの`factory:review` / `factory:fix`ラベルは、いずれもclaim時(Issueはassignee付与直後、PRはラベル自体の削除直後)に一度だけ消費する(外す)。以降どの状態遷移(Issueの終端status `approved` / `needs_human` / `expired` / `failed` / `cancelled`、PRの終端status `reviewed` / `rereview_requested` / `blocked` / `needs_human`を含む)でもIssue / PR側のラベルは付け外ししない(2026-09-27方針、Issue側→PR側の順で適用)。状態は`work_items.status`のみが正で、GitHubのラベルは「人からFactoryへのトリガー」の役割に限定される。
 
-PR側(`pr_review` / `pr_fix`)は現状維持: work itemを終端status(`reviewed` / `rereview_requested` / `blocked`など)にするフローのステップは、必ず対象PRから`wip`ラベルとトリガーラベル(`factory:review` / `factory:fix`)を外す。外し忘れると、`poll_prs`の検索クエリ(`-label:<wip>`)から対象が永久に外れ、二度と拾われなくなる、またはトリガーラベルが残ったまま孤児失敗したPRが自動で再クレーム → 再試行を無限に繰り返してしまう。人がラベルを付け直したときだけ新しいサイクル・再実行が始まる設計にする。PR側もIssue同様にラベル運用を整理する予定(次PR)。
+再クレーム防止はDB上のチェックで行い、ラベルの有無には依存しない: Issueは`listActive`、PRは`poll_prs.ts`の`decidePrActions`が参照する`hasActiveReviewingItem`(review)と`listTrackedPrs`によるDB上の状態。トリガーラベルが外れた後にPRを再発見する手段も、GitHub検索(状態ラベル)からDB(`f/factory/lib/db.ts`の`listTrackedPrs` — `kind IN ('pr_review', 'pr_fix')`かつ`status != 'cancelled'`かつ`tracked_pr_days`以内に更新された行)へ置き換えた。最初からやり直すには人が改めてトリガーラベルを付け直す(新しいcycle)。

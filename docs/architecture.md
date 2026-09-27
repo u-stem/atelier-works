@@ -107,11 +107,9 @@ stateDiagram-v2
 | `rereview_requested` | 修正をpushし再レビューを依頼した(終端、`kind=pr_fix`) | PRワークフロー |
 | `blocked` | 禁止された変更パターンの検出、差分上限超過、または安全策の前提が崩れて中断(`kind=pr_fix`) | PRワークフロー |
 
-**Issue(2026-09-27方針変更)**: `factory`ラベルはclaim時(assignee付与直後)に一度だけ消費する。以降のどの状態遷移(終端遷移を含む)でもIssue側のラベルは付け外ししない — 状態は`work_items.status`のみが正で、GitHubのラベルは「人からFactoryへのトリガー」の役割に限定される。`retry_work_item`のように終端statusから再起動する経路も、Issue側は`runFlowAsync`を呼ぶだけでラベルの再付与は行わない。最初からやり直すには人が改めて`factory`ラベルを付け直す(新しいcycle)。
+**Issue・PR共通(2026-09-27方針変更)**: トリガーラベル(Issueの`factory`、PRの`factory:review` / `factory:fix`)はclaim時(Issueはassignee付与直後、PRはトリガーラベル自体の削除直後)に一度だけ消費する。以降のどの状態遷移(終端遷移を含む)でもIssue / PR側のラベルは付け外ししない — 状態は`work_items.status`のみが正で、GitHubのラベルは「人からFactoryへのトリガー」の役割に限定される。`retry_work_item`のように終端statusから再起動する経路も、`runFlowAsync`を呼ぶだけでラベルの再付与は行わない。最初からやり直すには人が改めてトリガーラベルを付け直す(新しいcycle)。
 
-**PR(現状維持、次PRで同様に整理予定)**: work itemを終端status(`reviewed` / `rereview_requested` / `blocked` / `needs_human` / `failed` / `cancelled`)にする際は、`wip`ラベルに加えてトリガーラベル(`factory:review` / `factory:fix`)も外す。トリガーラベルを残すと、孤児失敗したPRが次回のpollで自動再クレームされ、無限に再試行してしまう。人が改めてラベルを付け直したときだけ新しいサイクル・再実行が始まる。
-
-`retry_work_item`のようにPRのwork itemを終端statusから再度フローを起動する経路は、逆に`runFlowAsync`の前に同じwip + トリガーラベル(kindに応じて`factory:review` / `factory:fix`)を冪等に再付与する。terminal化する経路を新設・変更するときは、対になる再起動経路がラベルを再付与しているかを必ず確認する。
+PRは終端statusになってもトリガーラベルの消費以外の付け外しが起きないため、再発見はGitHub検索(`searchPrs`)ではなくDB(`work_items`)側で行う: `poll_prs`の`listTrackedPrs`が`kind IN ('pr_review', 'pr_fix')`かつ`status != 'cancelled'`かつ`tracked_pr_days`(既定30日、`factory_config`)以内に更新された行を再発見し、そのPRがまだopenであることを`getPr`で確認してから候補にする。人が新しいcommitをpushすれば(pr_reviewの場合)、または改めてトリガーラベルを付け直せば、この再発見経路から自動的に次のサイクルが始まる。
 
 ### 状態遷移の詳細
 
@@ -160,7 +158,7 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加のみで、ren
 | `cleanup_db` | schedule(毎日03:30) | 保持期限を過ぎたDBのレコード(終端状態の作業項目とその関連データ、失敗記録・デプロイ記録・解決済みの通知)の削除 |
 | `daily_summary` | schedule(毎日09:00) | 前日のコスト・件数・失敗・DB掃除件数をDiscordに通知 |
 
-各scheduleのcronはタイムゾーン`Asia/Tokyo`、Windmillの6フィールド形式で`*.schedule.yaml`に持つ。多重実行防止はadvisory lockを使わず、各scheduleの`no_flow_overlap: true`で行う(前回実行中はスキップする)。複数インスタンスを同時運用する場合の排他はWindmill側ではなくGitHub側のclaim(`wip`ラベル + assignee)で担保する。error handlerで失敗を記録し、すべてのフロー（pipeline / pr_review / pr_fix）の`failed`終端処理（ラベル除去、Discord通知）は`on_error_flow`に一本化される。承認のタイムアウト(7日)は`poll_issues`のreconcile後に行う期限切れスイープが`approval_requests.expires_at`を見て判定する(`pipeline.flow`はsuspendを使わない)。
+各scheduleのcronはタイムゾーン`Asia/Tokyo`、Windmillの6フィールド形式で`*.schedule.yaml`に持つ。多重実行防止はadvisory lockを使わず、各scheduleの`no_flow_overlap: true`で行う(前回実行中はスキップする)。複数インスタンスを同時運用する場合の排他はWindmill側ではなくGitHub側のclaim(Issueはassignee付与、PRはトリガーラベルの消費。いずれも再取得して確認する)で担保する。error handlerで失敗を記録し、すべてのフロー(pipeline / pr_review / pr_fix)の`failed`終端処理(Discord通知。ラベルはclaim時に既に消費済みのため除去は行わない)は`on_error_flow`に一本化される。承認のタイムアウト(7日)は`poll_issues`のreconcile後に行う期限切れスイープが`approval_requests.expires_at`を見て判定する(`pipeline.flow`はsuspendを使わない)。
 
 ## 命名規則
 
@@ -236,17 +234,17 @@ WindmillのUIはsummaryでソートされるため、種別を示すタグをsum
 工程1→2(Issueの要件定義)とは別に、既存のPR(人が作ったPR、または将来factory自身が作るPR)をレビュー・修正するワークフローを持つ。
 
 - **起動条件**:
-  - `pr_review`: PRに`factory:review`ラベルが付与されたとき(起動時にラベルを外す)、またはPRのreview-requested / assigneeがこのインスタンスのGitHubアカウントで、`head_sha`が未処理のとき。
-  - `pr_fix`: PRに`factory:fix`ラベルが付与されたとき(起動時にラベルを外す)。修正への指示は、ラベルを付ける前にPRへ通常のコメントとして書いておく(他の人間のコメントと同様にフィードバックとして収集される)。
+  - `pr_review`: PRに`factory:review`ラベルが付与されたとき(claim時にラベルを消費)、またはPRのreview-requested / assigneeがこのインスタンスのGitHubアカウントで、`head_sha`が未処理のとき(このパスはラベルを伴わないため消費するものがない)。
+  - `pr_fix`: PRに`factory:fix`ラベルが付与されたとき(claim時にラベルを消費)。修正への指示は、ラベルを付ける前にPRへ通常のコメントとして書いておく(他の人間のコメントと同様にフィードバックとして収集される)。
 - **自己再発火の防止**: factoryが投稿するIssueコメント・PRレビュー・レビュー返信には必ずmarker(`<!-- factory:<kind>:<work_item_id> -->`)を埋め込む。GitHub上の自分のログイン名と一致する投稿、またはmarker付きの投稿は「人間の入力」として扱わず、起動条件の判定から除外する。
 - **作業ディレクトリ**: `/workspaces/<owner>/<repo>/main`はfetch専用(working treeをcheckoutしない)。
   - `pr_review`は`git worktree add --detach /workspaces/<owner>/<repo>/review-<pr>-<sha7> <sha>`でPRごとのdetached worktreeを使い、終了時に削除する。
   - `pr_fix`は`git gtr new`で作るPRブランチのworktreeを使う。
 - **pr_review**: PR本文・差分・変更ファイル一覧(factory製PRなら承認済み要件も)を入力にレビューし、結果は常にGitHubのCOMMENTレビューとして投稿する(スキル内部の`verdict`は記録用で、投稿種別には反映しない)。完了すると`reviewed`(終端)。
 - **pr_fix**: レビュー指摘・未解決コメント・要件を入力に修正し、push後に各コメントへ返信して再レビューを依頼する(`rereview_requested`)。要件変更が必要な場合は自分で要件や設計を書き換えず`requirements_gap`として中断し、元Issueのwork item(`parent_work_item_id`で紐付け)を`requirements_generating`にattempt+1で戻す。安全策の詳細は [docs/security.md](security.md)を参照。
-- **propose_issue(Issue化提案、ユーザー決定2026-09-26)**: pr_fixの各返信は`fixed` / `skipped`に加え`propose_issue`を選べる。指摘は妥当だがこのPRの範囲外という判断で、Claudeは修正を強行せずIssueのtitle/bodyを`factory.issue_proposals`に記録する(`pr_fix_finish`が挿入し、レビューコメントのthread idを`listReviewThreads`でベストエフォート解決する)。1件でも提案があるその回のpr_fixは`rereview_requested`ではなく`needs_human`で終わり(状態ラベルは`needs_human_label`)、Discordに`ConsoleのInboxで提案を承認または却下してください`という通知が飛ぶ。人が`f/factory/approval_decide`(Console Inboxから、kind = issue_proposal)で承認すると、`f/factory/steps/issue_proposal_apply`がその提案のIssueを対象リポジトリに作成してスレッドへ返信・resolveし、却下すると理由を返信してスレッドは開いたままにする(承認・却下いずれも要件定義の承認と同じ「人が判断してから進む」枠組み)。対象work itemの提案がすべて決定すると、状態ラベルはその回でコミットをpushしていれば`rereview_label`、していなければ`reviewed_label`へ切り替わる(`decideIssueProposalLabelSwap`、pr_workflow_support.ts)。返信対象がPRレビューコメントかプレーンなissueコメントかは行挿入時に`is_inline`列へ記録し(`matchReviewThreadForComment`もコメントの`databaseId`で一致させ、`(path, line)`には依存しない)、`issue_proposal_apply`はそれをもとに決定的に返信先を選ぶ。承認は`decided_by`(要件定義の承認と同じfail-closed導出)と`status = 'pending'`条件付きUPDATEによる楽観ロック、作成したIssue本文へ埋め込む`<!-- factory:issue_proposal:<id> -->`マーカー(`findIssueByMarker`で再検索して再利用)によって、途中でクラッシュしても再実行が安全になっている(Issueの二重作成や決定の上書きは起きない)。詳細な手順は [docs/operations.md](operations.md)の「Issue化提案の承認 / 却下」を参照。
+- **propose_issue(Issue化提案、ユーザー決定2026-09-26)**: pr_fixの各返信は`fixed` / `skipped`に加え`propose_issue`を選べる。指摘は妥当だがこのPRの範囲外という判断で、Claudeは修正を強行せずIssueのtitle/bodyを`factory.issue_proposals`に記録する(`pr_fix_finish`が挿入し、レビューコメントのthread idを`listReviewThreads`でベストエフォート解決する)。1件でも提案があるその回のpr_fixは`rereview_requested`ではなく`needs_human`で終わり、Discordに`ConsoleのInboxで提案を承認または却下してください`という通知が飛ぶ。人が`f/factory/approval_decide`(Console Inboxから、kind = issue_proposal)で承認すると、`f/factory/steps/issue_proposal_apply`がその提案のIssueを対象リポジトリに作成してスレッドへ返信・resolveし、却下すると理由を返信してスレッドは開いたままにする(承認・却下いずれも要件定義の承認と同じ「人が判断してから進む」枠組み)。対象work itemの提案がすべて決定すると、status(`work_items.status`)はその回でコミットをpushしていれば`rereview_requested`、していなければ`reviewed`へ切り替わる(`decidePostProposalStatus`、pr_workflow_support.ts)。返信対象がPRレビューコメントかプレーンなissueコメントかは行挿入時に`is_inline`列へ記録し(`matchReviewThreadForComment`もコメントの`databaseId`で一致させ、`(path, line)`には依存しない)、`issue_proposal_apply`はそれをもとに決定的に返信先を選ぶ。承認は`decided_by`(要件定義の承認と同じfail-closed導出)と`status = 'pending'`条件付きUPDATEによる楽観ロック、作成したIssue本文へ埋め込む`<!-- factory:issue_proposal:<id> -->`マーカー(`findIssueByMarker`で再検索して再利用)によって、途中でクラッシュしても再実行が安全になっている(Issueの二重作成や決定の上書きは起きない)。詳細な手順は [docs/operations.md](operations.md)の「Issue化提案の承認 / 却下」を参照。
 - **PRに書くのはレビュー本体と返信のみ**: pr_reviewの指摘・総評、pr_fixの返信のみをPRに投稿し、失敗・要人手・ブロック・requirements_gap・Issue化提案の承認/却下結果といった運用系の内容も、通知はPRに書かずDiscordに送る(Issue化提案の承認/却下自体への返信はPRのスレッドに書く。上記参照)。
-- **状態ラベル**: factoryが扱ったPRには常に高々1つの状態ラベル(`changes_requested_label` / `reviewed_label` / `rereview_label` / `needs_human_label`、いずれも`factory_config`で設定可能)をfactory自身が設定・付け替える。人はこれを見るだけでPRが何を待っているか分かり、`poll_prs`の`searchPrs`はトリガーラベルが外れた後もこの状態ラベルで対象PRを再発見する(詳細は [docs/operations.md](operations.md)の「ラベルと終端状態」を参照)。
+- **DB上の追跡と再発見(2026-09-27方針変更)**: factoryが扱ったPRにトリガーラベル以外のラベルは付かない。人が今このPRが何を待っているか確認するのはConsoleのPipelineタブ(`work_items.status`)で行う。`poll_prs`の`listTrackedPrs`(lib/db.ts)が`kind IN ('pr_review', 'pr_fix')`かつ`status != 'cancelled'`かつ`tracked_pr_days`以内に更新された行をDBから再発見するので、トリガーラベルが外れた後も追跡が続く(詳細は [docs/operations.md](operations.md)の「ラベルと終端状態」を参照)。
 - **watermark**: 処理済みwatermark(`last_review_id` / `last_comment_id` / `last_review_comment_id`)はpr_fixがpushに成功したとき、またはrequirements_gapで元Issueへ差し戻したときにのみ進める。それ以外の終端(`failed` / `needs_human` / `blocked`)では進めず、`retry_work_item`による再実行で同じフィードバックを再収集できるようにする。push成功時にIssue化提案があって`needs_human`に終わる場合も、watermarkは(pushが実際に成功しているため)通常のpush成功と同様に進める。
 
 ## 自己更新の仕組み(self_update)

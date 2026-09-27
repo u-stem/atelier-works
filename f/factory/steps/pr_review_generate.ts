@@ -35,7 +35,6 @@ import {
   isReviewClaudeOutput,
   nextActionFor,
   openFindingsForPrompt,
-  removeTerminalLabels,
 } from "./pr_workflow_support.ts";
 
 const MAX_FINDINGS = 20;
@@ -104,14 +103,9 @@ export async function main(
       `daily budget exceeded ($${budgetStatus.spent_usd.toFixed(2)} >= $${budgetStatus.limit_usd.toFixed(2)})`,
     );
     if (moved) {
-      await removeTerminalLabels(
-        client,
-        owner,
-        repo,
-        pr_number,
-        [config.wip_label, config.review_label],
-        log,
-      );
+      // 2026-09-27 PR label cleanup: the review_label trigger was already
+      // consumed at claim time (poll_prs.ts), so there is no label left to
+      // remove here.
       const webhookUrl = await wmill.getVariable(
         "f/factory/discord_webhook_url",
       );
