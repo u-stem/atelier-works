@@ -969,6 +969,21 @@ export async function ensureFactoryClone(
             fetchResult,
           );
         }
+        // Discard any local modification first. This clone is read-only for
+        // the factory, but `wmill sync push` bundles the raw app in place
+        // and its `npm install` rewrites package-lock.json; a real worker
+        // run then had `checkout -B` refuse to switch ("Your local changes
+        // ... would be overwritten"), stalling self_update for good.
+        const resetResult = await opts.run(buildGitArgv(["reset", "--hard"]), {
+          cwd: dir,
+          env: localGitEnv(opts.home, opts.path),
+        });
+        if (resetResult.exitCode !== 0) {
+          throw gitError(
+            "git reset --hard failed for factory clone",
+            resetResult,
+          );
+        }
         // No `--` here: like `reset --hard` elsewhere in this module,
         // `checkout -B <branch> <start-point>` does not tolerate a `--`
         // before its start-point argument the way most other subcommands
