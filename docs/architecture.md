@@ -253,6 +253,7 @@ WindmillのUIはsummaryでソートされるため、種別を示すタグをsum
 | `f/factory/lib/requirements_doc` | `[LIB] 要件定義ファイルの検査` |
 | `f/factory/lib/cleanup_db_support` | `[LIB] DB 掃除の純粋ロジック` |
 | `f/factory/lib/implement_support` | `[LIB] 実装出力の検証とコミットメッセージ` |
+| `f/factory/lib/protected_paths` | `[LIB] 保護パスの判定` |
 
 ## PRワークフロー(pr_review / pr_fix)
 
