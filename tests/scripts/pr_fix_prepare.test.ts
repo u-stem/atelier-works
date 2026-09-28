@@ -217,7 +217,7 @@ describe("nextActionFor", () => {
         "git push failed: refusing to allow a Personal Access Token to create or update workflow `.github/workflows/ci.yml` without `workflow` scope",
       ),
     ).toBe(
-      "PATにworkflowスコープを追加するか、ワークフローファイルの変更を人がpushしてください",
+      "PATにWorkflows(Read and write)権限を追加するか、ワークフローファイルの変更を人がpushしてください",
     );
   });
 });

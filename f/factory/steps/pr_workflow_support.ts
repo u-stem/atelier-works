@@ -2338,7 +2338,7 @@ const REASON_RULES: readonly ReasonRule[] = [
     describe: () =>
       "PATに`workflow`スコープが無いため、`.github/workflows/**`を含むpushが拒否されました",
     nextAction: () =>
-      "PATにworkflowスコープを追加するか、ワークフローファイルの変更を人がpushしてください",
+      "PATにWorkflows(Read and write)権限を追加するか、ワークフローファイルの変更を人がpushしてください",
   },
   {
     pattern: /^check-fix retry pass failed \((.+)\): (.+)$/,
