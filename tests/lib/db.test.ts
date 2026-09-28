@@ -22,14 +22,17 @@ import {
   insertAuditWorkItem,
   insertCleanupRun,
   insertFixRound,
+  insertImplementRound,
   insertIssueProposal,
   insertReview,
   insertWorkItem,
   latestDraft,
   latestFixRound,
   latestPrWorkItem,
+  latestRequirementsApproval,
   listActive,
   listExpiredPendingApprovalRequests,
+  listImplementRounds,
   listPendingIssueProposals,
   listStaleTerminalWorkItems,
   listTrackedPrs,
@@ -47,10 +50,13 @@ import {
   setHeadSha,
   setIssueProposalCreatedIssue,
   setObservedWatermarks,
+  setWorkItemBranch,
+  setWorkItemPrUrl,
   sumAgentCostSince,
   toApprovalRequest,
   toAuditReport,
   toFixRoundRecord,
+  toImplementRound,
   toIssueProposal,
   toRequirementDraft,
   toReviewRecord,
@@ -2154,5 +2160,240 @@ describe("insertCleanupRun", () => {
       sql,
     );
     expect(calls[0]?.text).toContain("::integer");
+  });
+});
+
+const IMPLEMENT_ROUND_RECORD = {
+  work_item_id: 1,
+  attempt: 2,
+  mode: "fix" as const,
+  outcome: "check_failed" as const,
+  summary: "tests still failing",
+  gap_report: null,
+  check_output: "FAIL tests/lib/foo.test.ts",
+  checks_skipped_reason: null,
+  protected_changes: ["lefthook.yml"],
+  diff_stat: { files: 3, added: 40, deleted: 5 },
+  agent_run_id: 9,
+};
+
+const IMPLEMENT_ROUND_ROW: SqlRow = {
+  id: 11,
+  work_item_id: 1,
+  attempt: 2,
+  round: 3,
+  mode: "fix",
+  outcome: "check_failed",
+  summary: "tests still failing",
+  gap_report: null,
+  check_output: "FAIL tests/lib/foo.test.ts",
+  checks_skipped_reason: null,
+  protected_changes: '["lefthook.yml"]',
+  diff_stat: '{"files":3,"added":40,"deleted":5}',
+  agent_run_id: "9",
+  created_at: NOW.toISOString(),
+};
+
+describe("insertImplementRound", () => {
+  test("inserts into factory.implement_rounds", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 11 }]]);
+    await insertImplementRound(IMPLEMENT_ROUND_RECORD, sql);
+    expect(calls[0]?.text).toContain("INSERT INTO factory.implement_rounds");
+  });
+
+  test("assigns round as COALESCE(MAX(round), 0) + 1 in the same statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 11 }]]);
+    await insertImplementRound(IMPLEMENT_ROUND_RECORD, sql);
+    expect(calls[0]?.text).toContain("COALESCE(MAX(round), 0) + 1");
+  });
+
+  test("serializes protected_changes and diff_stat as JSON parameters", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 11 }]]);
+    await insertImplementRound(IMPLEMENT_ROUND_RECORD, sql);
+    expect(calls[0]?.values).toEqual(
+      expect.arrayContaining([
+        '["lefthook.yml"]',
+        '{"files":3,"added":40,"deleted":5}',
+      ]),
+    );
+  });
+
+  test("passes a null diff_stat through as null (not the string 'null')", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 11 }]]);
+    await insertImplementRound(
+      { ...IMPLEMENT_ROUND_RECORD, diff_stat: null },
+      sql,
+    );
+    expect(calls[0]?.values).not.toContain("null");
+  });
+
+  test("returns the inserted id", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 11 }]]);
+    const id = await insertImplementRound(IMPLEMENT_ROUND_RECORD, sql);
+    expect(id).toBe(11);
+  });
+
+  test("throws when the insert returns no row", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    await expect(
+      insertImplementRound(IMPLEMENT_ROUND_RECORD, sql),
+    ).rejects.toThrow();
+  });
+});
+
+describe("toImplementRound", () => {
+  test("parses a full factory.implement_rounds row including jsonb strings and a numeric-string agent_run_id", () => {
+    expect(toImplementRound(IMPLEMENT_ROUND_ROW)).toEqual({
+      id: 11,
+      work_item_id: 1,
+      attempt: 2,
+      round: 3,
+      mode: "fix",
+      outcome: "check_failed",
+      summary: "tests still failing",
+      gap_report: null,
+      check_output: "FAIL tests/lib/foo.test.ts",
+      checks_skipped_reason: null,
+      protected_changes: ["lefthook.yml"],
+      diff_stat: { files: 3, added: 40, deleted: 5 },
+      agent_run_id: 9,
+      created_at: NOW,
+    });
+  });
+
+  test("parses a null diff_stat", () => {
+    const round = toImplementRound({ ...IMPLEMENT_ROUND_ROW, diff_stat: null });
+    expect(round.diff_stat).toBeNull();
+  });
+
+  test("throws on an outcome outside IMPLEMENT_ROUND_OUTCOMES", () => {
+    expect(() =>
+      toImplementRound({ ...IMPLEMENT_ROUND_ROW, outcome: "blocked" }),
+    ).toThrow();
+  });
+
+  test("throws when protected_changes contains a non-string", () => {
+    expect(() =>
+      toImplementRound({ ...IMPLEMENT_ROUND_ROW, protected_changes: "[1]" }),
+    ).toThrow();
+  });
+
+  test("throws when diff_stat lacks a field", () => {
+    expect(() =>
+      toImplementRound({ ...IMPLEMENT_ROUND_ROW, diff_stat: '{"files":3}' }),
+    ).toThrow();
+  });
+});
+
+describe("listImplementRounds", () => {
+  test("selects the work item's rounds ordered by round ASC", async () => {
+    const { sql, calls } = createFakeSqlClient([[IMPLEMENT_ROUND_ROW]]);
+    await listImplementRounds(1, sql);
+    expect(calls[0]?.text).toContain("ORDER BY round ASC");
+  });
+
+  test("passes work_item_id as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[IMPLEMENT_ROUND_ROW]]);
+    await listImplementRounds(1, sql);
+    expect(calls[0]?.values).toEqual([1]);
+  });
+
+  test("parses every returned row", async () => {
+    const { sql } = createFakeSqlClient([
+      [IMPLEMENT_ROUND_ROW, { ...IMPLEMENT_ROUND_ROW, id: 12, round: 4 }],
+    ]);
+    const rounds = await listImplementRounds(1, sql);
+    expect(rounds.map((round) => round.round)).toEqual([3, 4]);
+  });
+});
+
+describe("setWorkItemBranch", () => {
+  test("updates branch (and updated_at)", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await setWorkItemBranch(1, "factory/issue-42-wi-1", sql);
+    expect(calls[0]?.text).toContain("SET branch =");
+  });
+
+  test("passes branch and id as parameters", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await setWorkItemBranch(1, "factory/issue-42-wi-1", sql);
+    expect(calls[0]?.values).toEqual(["factory/issue-42-wi-1", 1]);
+  });
+
+  test("rejects an invalid branch name before issuing any query", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await setWorkItemBranch(1, "--force", sql).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("setWorkItemPrUrl", () => {
+  test("updates pr_url (and updated_at)", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await setWorkItemPrUrl(
+      1,
+      "https://github.com/octo-owner/atelier-works/pull/7",
+      sql,
+    );
+    expect(calls[0]?.text).toContain("SET pr_url =");
+  });
+
+  test("passes prUrl and id as parameters", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await setWorkItemPrUrl(
+      1,
+      "https://github.com/octo-owner/atelier-works/pull/7",
+      sql,
+    );
+    expect(calls[0]?.values).toEqual([
+      "https://github.com/octo-owner/atelier-works/pull/7",
+      1,
+    ]);
+  });
+});
+
+describe("latestRequirementsApproval", () => {
+  const ROW: SqlRow = {
+    approval_request_id: "31",
+    draft_id: 5,
+    attempt: 2,
+    status: "approved",
+  };
+
+  test("returns null when the work item has no requirements approval request", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await latestRequirementsApproval(1, sql)).toBeNull();
+  });
+
+  test("parses the newest request with its draft's attempt", async () => {
+    const { sql } = createFakeSqlClient([[ROW]]);
+    expect(await latestRequirementsApproval(1, sql)).toEqual({
+      approval_request_id: 31,
+      draft_id: 5,
+      attempt: 2,
+      status: "approved",
+    });
+  });
+
+  test("restricts to kind = 'requirements' joined to requirement_drafts", async () => {
+    const { sql, calls } = createFakeSqlClient([[ROW]]);
+    await latestRequirementsApproval(1, sql);
+    expect(calls[0]?.text).toContain(
+      "JOIN factory.requirement_drafts rd ON rd.id = ar.subject_id",
+    );
+  });
+
+  test("orders by requested_at DESC and takes one row", async () => {
+    const { sql, calls } = createFakeSqlClient([[ROW]]);
+    await latestRequirementsApproval(1, sql);
+    expect(calls[0]?.text).toContain(
+      "ORDER BY ar.requested_at DESC, ar.id DESC",
+    );
+  });
+
+  test("casts work_item_id to ::bigint", async () => {
+    const { sql, calls } = createFakeSqlClient([[ROW]]);
+    await latestRequirementsApproval(1, sql);
+    expect(calls[0]?.text).toContain("ar.work_item_id = ? ::bigint");
   });
 });
