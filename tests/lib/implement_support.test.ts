@@ -17,6 +17,7 @@ import {
   validateImplementOutput,
 } from "../../f/factory/lib/implement_support.ts";
 import { IMPLEMENT_SCHEMA } from "../../f/factory/lib/prompts.ts";
+import { extractLinkedIssueNumbers } from "../../f/factory/steps/pr_workflow_support.ts";
 
 const DONE_OUTPUT: ImplementClaudeOutput = {
   outcome: "done",
@@ -572,6 +573,57 @@ describe("buildImplementPrBody", () => {
     expect(
       body.split("\n").filter((line) => line === "## 関連リンク"),
     ).toHaveLength(1);
+  });
+
+  test("neutralizes a closing keyword in the summary so only the real issue is linked", () => {
+    const body = buildImplementPrBody({
+      ...PR_BODY_INPUT,
+      summary: "既存の不具合も直しました。fixes #5",
+    });
+    expect(extractLinkedIssueNumbers(body, "acme", "widgets")).toEqual([42]);
+  });
+
+  test("escapes an HTML comment opener at the start of a summary line", () => {
+    const body = buildImplementPrBody({
+      ...PR_BODY_INPUT,
+      summary: "概要です。\n<!-- hidden -->",
+    });
+    expect(body).toContain("\n\\<!-- hidden -->\n");
+  });
+
+  test("keeps a reviewer note containing a newline on one list line", () => {
+    const countListLines = (text: string): number =>
+      text.split("\n").filter((line) => line.startsWith("- ")).length;
+    const baseline = countListLines(buildImplementPrBody(PR_BODY_INPUT));
+    const body = buildImplementPrBody({
+      ...PR_BODY_INPUT,
+      notesForReviewer: ["一行目\n- 二行目"],
+    });
+    expect(countListLines(body)).toBe(baseline);
+  });
+
+  test("escapes a mention in a reviewer note", () => {
+    const body = buildImplementPrBody({
+      ...PR_BODY_INPUT,
+      notesForReviewer: ["@octocat please"],
+    });
+    expect(body).toContain("\n- \\@octocat please\n");
+  });
+
+  test("escapes an indented heading line in the summary", () => {
+    const body = buildImplementPrBody({
+      ...PR_BODY_INPUT,
+      summary: "概要です。\n   ## x",
+    });
+    expect(body).toContain("\n   \\## x\n");
+  });
+
+  test("escapes a setext underline line in the summary", () => {
+    const body = buildImplementPrBody({
+      ...PR_BODY_INPUT,
+      summary: "概要です。\n===",
+    });
+    expect(body).toContain("\n\\===\n");
   });
 });
 

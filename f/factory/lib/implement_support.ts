@@ -344,14 +344,84 @@ export type ImplementPrBodyInput = {
   readonly changedPaths: readonly string[];
 };
 
-/** Prefixes a `#`-led line with a backslash so Claude-authored prose can
- * never open a new Markdown section inside the template's structure
- * (GitHub renders `\#` as a literal `#`). */
-function escapeHeadingLines(text: string): string {
-  return text
+/*
+ * Sanitisers for Claude-authored text in the PR body. That text is
+ * untrusted-influenced (Claude reads the issue and the repository), and the
+ * body is both rendered by GitHub and parsed by the factory itself, so three
+ * threats are neutralised:
+ * - heading / HTML-block injection: a `#` heading, a setext underline or a
+ *   raw `<` (`<!--`, `<details>`, ...) could open a new section, hide text
+ *   or restructure the template's sections;
+ * - closing-keyword hijack: `fixes #5` would make GitHub close issue #5 on
+ *   merge and make poll_prs's extractLinkedIssueNumbers link the PR to the
+ *   wrong issue, so every `#<digit>` is escaped (the real `Closes #N` is
+ *   written by buildImplementPrBody itself, outside the sanitised text);
+ * - mentions: `@user` / `@org/team` would notify people.
+ * A backslash is inserted before the offending character (GitHub renders
+ * `\#`, `\<`, `\@` as the literal character). A character already
+ * escaped by an odd run of backslashes is left alone, so our own escapes are
+ * never doubled into `\\#` (which would re-activate the character).
+ */
+
+const ATX_HEADING_LINE = /^(\s{0,3})#/;
+const SETEXT_UNDERLINE_LINE = /^(\s{0,3})(=+|-+)\s*$/;
+const MENTION_START = /^[A-Za-z0-9_]$/;
+const DIGIT = /^[0-9]$/;
+
+function needsInlineEscape(char: string, next: string): boolean {
+  if (char === "<") return true;
+  if (char === "#") return DIGIT.test(next);
+  if (char === "@") return MENTION_START.test(next);
+  return false;
+}
+
+/** Inserts `\` before every `<`, `#<digit>` and `@<word char>` that is not
+ * already escaped (preceded by an odd number of backslashes). */
+function escapeInlineTriggers(text: string): string {
+  let out = "";
+  let backslashes = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text.charAt(i);
+    if (
+      char !== "\\" &&
+      backslashes % 2 === 0 &&
+      needsInlineEscape(char, text.charAt(i + 1))
+    ) {
+      out += "\\";
+    }
+    out += char;
+    backslashes = char === "\\" ? backslashes + 1 : 0;
+  }
+  return out;
+}
+
+function escapeBlockLine(line: string): string {
+  if (ATX_HEADING_LINE.test(line)) {
+    return line.replace(ATX_HEADING_LINE, "$1\\#");
+  }
+  if (SETEXT_UNDERLINE_LINE.test(line)) {
+    return line.replace(/^(\s{0,3})([=-])/, "$1\\$2");
+  }
+  return line;
+}
+
+/** For multi-line Claude-authored prose (the summary): strips `\r`, escapes
+ * ATX heading and setext underline lines, then `<`, `#<digit>` and
+ * `@<word char>` anywhere in the text. */
+export function sanitizePrProse(text: string): string {
+  const blockSafe = text
+    .replaceAll("\r", "")
     .split("\n")
-    .map((line) => (line.startsWith("#") ? `\\${line}` : line))
+    .map(escapeBlockLine)
     .join("\n");
+  return escapeInlineTriggers(blockSafe);
+}
+
+/** For a single-line list item (a reviewer note, a protected-change line):
+ * collapses every whitespace run containing a newline into one space so the
+ * item cannot spill onto new lines, trims, then applies sanitizePrProse. */
+export function sanitizePrLine(text: string): string {
+  return sanitizePrProse(text.replace(/\s*\n\s*/g, " ").trim());
 }
 
 function checkbox(checked: boolean, label: string): string {
@@ -382,14 +452,14 @@ export function buildImplementPrBody(input: ImplementPrBodyInput): string {
   const nothingNeeded =
     !needs.imageRebuild && !needs.migrate && !needs.syncPush;
   const attention = [
-    ...input.protectedChanges.map((line) => `- ${escapeHeadingLines(line)}`),
-    ...input.notesForReviewer.map((line) => `- ${escapeHeadingLines(line)}`),
+    ...input.protectedChanges.map((line) => `- ${sanitizePrLine(line)}`),
+    ...input.notesForReviewer.map((line) => `- ${sanitizePrLine(line)}`),
     `- 要件定義(Console): ${input.requirementsConsoleUrl}`,
   ];
   return [
     "## 概要",
     "",
-    escapeHeadingLines(input.summary.trim()),
+    sanitizePrProse(input.summary.trim()),
     "",
     "## 受入条件",
     "",
