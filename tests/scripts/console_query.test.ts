@@ -315,6 +315,46 @@ describe("runConsoleQuery", () => {
     expect(calls[0]?.values).toContain(50);
   });
 
+  test("pipeline: selects branch and pr_url appended after fix_round (工程3 columns)", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+
+    await runConsoleQuery("pipeline", 50, 7, sql);
+
+    expect(calls[0]?.text).toContain("pr_number, fix_round, branch, pr_url");
+  });
+
+  test("pipeline: parses branch and pr_url, nullable", async () => {
+    const row: SqlRow = {
+      work_item_id: 1,
+      cycle: 1,
+      source: "issue",
+      owner: "octo-owner",
+      repo: "atelier-works",
+      issue_number: 42,
+      issue_url: "https://github.com/octo-owner/atelier-works/issues/42",
+      title: "Add feature",
+      status: "pr_open",
+      attempt: 1,
+      claimed_by: "factory-local",
+      flow_job_id: null,
+      created_at: NOW.toISOString(),
+      updated_at: NOW.toISOString(),
+      kind: "issue",
+      pr_number: null,
+      fix_round: 0,
+      branch: "factory/issue-42-wi-1",
+      pr_url: null,
+    };
+    const { sql } = createFakeSqlClient([[row]]);
+
+    const rows = await runConsoleQuery("pipeline", 200, 30, sql);
+
+    expect(rows[0]).toMatchObject({
+      branch: "factory/issue-42-wi-1",
+      pr_url: null,
+    });
+  });
+
   test("agent_cost_daily: parses nullable aggregate columns", async () => {
     const row: SqlRow = {
       day: NOW.toISOString(),

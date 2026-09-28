@@ -46,7 +46,7 @@ locks:
   f/factory/self_update: 9d9778a18081b6a57e316ea328c0f6418510c56af47c08f4da2a6a791378f358
   f/factory/steps/audit_generate: 006e2e38b6220ee8f31b4b109a0ad69a59aff17646552626ad111e74c9cf45dc
   f/factory/steps/audit_prepare: 16b707a118b4a011e2cc190d855f6eea050dd5d283304711e97f2081f1b54820
-  f/factory/steps/console_query: 074dc80128832014f6125091bc2cedc14ed1d6f5e6a0369c6404038075f609bd
+  f/factory/steps/console_query: f82621162e0a93b01d3db6ff3519c3e3776123bfa1118b812930330accf958b4
   f/factory/steps/issue_proposal_apply: 13731de9fd0f3124ebc773bb989236f0560cddcc706fc59de16292e2bddefe56
   f/factory/steps/manual_intake_create_issue: c5f7b63071f6fc702dd4414881f2953d8c408b43033452bce054fc253e3c6e97
   f/factory/steps/manual_intake_register: 3ad1904dbe07c52ea8dd5fc9c2779a1580ce7d556cfeaaba4cd4beabafe7aa71

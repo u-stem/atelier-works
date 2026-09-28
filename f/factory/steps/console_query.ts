@@ -466,6 +466,11 @@ export type PipelineRow = {
   readonly kind: string;
   readonly pr_number: number | null;
   readonly fix_round: number;
+  /** `work_items.branch` — 工程3's implement branch for an issue-kind row,
+   * `null` otherwise (the Pipeline tab renders a link column in PR-D). */
+  readonly branch: string | null;
+  /** `work_items.pr_url` — the PR 工程3 opened, `null` until `pr_open`. */
+  readonly pr_url: string | null;
 };
 
 function toPipelineRow(row: SqlRow): PipelineRow {
@@ -487,6 +492,8 @@ function toPipelineRow(row: SqlRow): PipelineRow {
     kind: asStr(row.kind, "kind"),
     pr_number: asNullableNumeric(row.pr_number, "pr_number"),
     fix_round: asNumeric(row.fix_round, "fix_round"),
+    branch: asNullableStr(row.branch, "branch"),
+    pr_url: asNullableStr(row.pr_url, "pr_url"),
   };
 }
 
@@ -971,7 +978,7 @@ export async function runConsoleQuery(
         SELECT
           work_item_id, cycle, source, owner, repo, issue_number, issue_url,
           title, status, attempt, claimed_by, flow_job_id, created_at,
-          updated_at, kind, pr_number, fix_round
+          updated_at, kind, pr_number, fix_round, branch, pr_url
         FROM factory.v_pipeline
         WHERE updated_at >= ${since}::timestamptz
         ORDER BY updated_at DESC
