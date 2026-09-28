@@ -1,0 +1,9 @@
+summary: '[LIB] 保護パスの判定'
+description: 内部ライブラリです。pr_fixが停止し、工程3が記録だけする保護パス(CI・フック・エージェント設定・infra)の一覧と判定関数を提供します。
+lock: '!inline f/factory/lib/protected_paths.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

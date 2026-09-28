@@ -25,6 +25,12 @@ import { dirname, join, resolve, sep } from "node:path";
 import type { ReviewThread } from "../lib/github.ts";
 import { maskSecrets } from "../lib/log.ts";
 import {
+  type ChangedPath,
+  type ChangedPathStatus,
+  isNewShellScript,
+  matchesForbiddenPath,
+} from "../lib/protected_paths.ts";
+import {
   type FixOutcome,
   type FixReply,
   type FixReplyDecision,
@@ -43,6 +49,19 @@ import {
   type WorkItemStatus,
 } from "../lib/types.ts";
 import type { CommandRunner } from "../lib/workspace.ts";
+
+// Promoted into lib/protected_paths.ts (工程3: implement_support.ts needs
+// the same classification without a lib -> steps import); re-exported so
+// pr_fix_verify.ts and the existing tests keep importing from here.
+export {
+  type ChangedPath,
+  type ChangedPathStatus,
+  FORBIDDEN_BASENAME_PATTERNS,
+  FORBIDDEN_PATH_PREFIXES,
+  IMPLEMENT_PROTECTED_PATH_PREFIXES,
+  isNewShellScript,
+  matchesForbiddenPath,
+} from "../lib/protected_paths.ts";
 
 // ---------------------------------------------------------------------------
 // Role tags (team-lead decision, 2026-09-26): the factory posts to GitHub
@@ -1045,18 +1064,6 @@ export function isFixClaudeOutput(value: unknown): value is FixClaudeOutput {
 // "pr_fix の安全策"
 // ---------------------------------------------------------------------------
 
-export type ChangedPathStatus =
-  | "added"
-  | "modified"
-  | "deleted"
-  | "typechange"
-  | "unknown";
-
-export type ChangedPath = {
-  readonly path: string;
-  readonly status: ChangedPathStatus;
-};
-
 /** Parses `git status --porcelain` output (XY-prefixed lines; a rename's
  * " -> " arrow is resolved to the new path). Untracked ("??") and staged-add
  * ("A ") both count as "added" — the "new *.sh file" forbidden check only
@@ -1121,57 +1128,6 @@ export function mergeChangedPaths(
     }
   }
   return [...byPath.values()];
-}
-
-// team-lead fix round 1b item 5: widened from the original .claude/**,
-// .agents/**, mise.toml, mise.*.toml, lefthook.yml, .github/workflows/** —
-// covers every other config surface that changes which commands run or
-// what a package manager/git trusts (mise's XDG/dotfile config locations,
-// lefthook's alternate formats and machine-local override, bunfig.toml's
-// install/registry settings, .npmrc's registry/auth settings, and
-// .gitattributes/.gitmodules, which can redirect git filters/submodule
-// URLs).
-const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
-  ".claude/",
-  ".agents/",
-  ".github/workflows/",
-  ".mise/",
-  ".config/mise/",
-  ".lefthook/",
-];
-
-const FORBIDDEN_BASENAME_PATTERNS: readonly RegExp[] = [
-  /^mise\.toml$/,
-  /^mise\..*\.toml$/,
-  /^\.mise\.toml$/,
-  /^lefthook\.yml$/,
-  /^lefthook-local\.yml$/,
-  /^lefthook\.toml$/,
-  /^lefthook\.json$/,
-  /^bunfig\.toml$/,
-  /^\.npmrc$/,
-  /^\.gitattributes$/,
-  /^\.gitmodules$/,
-];
-
-/** docs/security.md "変更してはいけないファイル", widened per team-lead fix
- * round 1b item 5 — see FORBIDDEN_PATH_PREFIXES / FORBIDDEN_BASENAME_PATTERNS
- * above for the full list. Directory entries match by repo-root-relative
- * path prefix; single-file entries match by basename regardless of which
- * directory they appear in. */
-export function matchesForbiddenPath(path: string): boolean {
-  const normalized = path.replace(/^\.\//, "");
-  for (const prefix of FORBIDDEN_PATH_PREFIXES) {
-    if (normalized === prefix.slice(0, -1) || normalized.startsWith(prefix)) {
-      return true;
-    }
-  }
-  const basename = normalized.split("/").pop() ?? normalized;
-  return FORBIDDEN_BASENAME_PATTERNS.some((pattern) => pattern.test(basename));
-}
-
-export function isNewShellScript(entry: ChangedPath): boolean {
-  return entry.status === "added" && /\.sh$/i.test(entry.path);
 }
 
 export type ForbiddenChangeResult = {
