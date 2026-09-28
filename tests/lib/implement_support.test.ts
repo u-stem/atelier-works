@@ -163,6 +163,28 @@ describe("validateImplementOutput", () => {
       validateImplementOutput({ ...GAP_OUTPUT, gap_report: "  \n" }).ok,
     ).toBe(false);
   });
+
+  test("rejects a requirements_gap output with a non-empty commit_subject", () => {
+    expect(
+      validateImplementOutput({ ...GAP_OUTPUT, commit_subject: "feat: x" }).ok,
+    ).toBe(false);
+  });
+
+  test("rejects a requirements_gap output with a non-empty commit_body", () => {
+    expect(
+      validateImplementOutput({ ...GAP_OUTPUT, commit_body: "- x" }).ok,
+    ).toBe(false);
+  });
+
+  test("rejects a done output with a non-null gap_report", () => {
+    expect(
+      validateImplementOutput({ ...DONE_OUTPUT, gap_report: "leftover" }).ok,
+    ).toBe(false);
+  });
+
+  test("accepts a done output with a null gap_report", () => {
+    expect(validateImplementOutput(DONE_OUTPUT).ok).toBe(true);
+  });
 });
 
 describe("buildImplementCommitMessage", () => {

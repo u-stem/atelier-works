@@ -75,12 +75,16 @@ export type ImplementOutputValidation =
 /**
  * `requirements_gap` needs a non-blank `gap_report` (it becomes 工程2's
  * feedback — an empty one would restart requirements generation with
- * nothing to act on). `done` needs a committable `commit_subject`: non-blank,
- * single-line, at most `COMMIT_SUBJECT_MAX_CODEPOINTS` code points (counted
- * by spreading, not `.length`), and not ending in "…" (a sign Claude tried
- * to write past the limit instead of within it — same reasoning as
- * pr_workflow_support.ts's isValidCommitSubject). `commit_body` is free-form
- * and never rejected. `reason` is operator-facing English, recorded on the
+ * nothing to act on) and, mirroring the promise the skill and the prompt
+ * both make Claude, an empty `commit_subject`/`commit_body` (there is no
+ * commit to describe). `done` needs a committable `commit_subject`:
+ * non-blank, single-line, at most `COMMIT_SUBJECT_MAX_CODEPOINTS` code
+ * points (counted by spreading, not `.length`), and not ending in "…" (a
+ * sign Claude tried to write past the limit instead of within it — same
+ * reasoning as pr_workflow_support.ts's isValidCommitSubject); it also
+ * requires a `null` `gap_report` (same skill/prompt promise, the other
+ * direction). `commit_body` is otherwise free-form and never rejected on
+ * its own content. `reason` is operator-facing English, recorded on the
  * implement_rounds row / job log, never shown to Claude.
  */
 export function validateImplementOutput(
@@ -93,7 +97,20 @@ export function validateImplementOutput(
         reason: "requirements_gap outcome without a gap_report",
       };
     }
+    if (output.commit_subject !== "" || output.commit_body !== "") {
+      return {
+        ok: false,
+        reason:
+          "commit_subject and commit_body must be empty when outcome is not done",
+      };
+    }
     return { ok: true };
+  }
+  if (output.gap_report !== null) {
+    return {
+      ok: false,
+      reason: "gap_report must be null when outcome is done",
+    };
   }
   const subject = output.commit_subject;
   if (subject.trim().length === 0) {
