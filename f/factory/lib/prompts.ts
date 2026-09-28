@@ -654,7 +654,7 @@ function implementContextSections(
   ];
   if (requirements.doc_dir !== null) {
     sections.push(
-      `Requirements document directory (read-only): ${requirements.doc_dir}`,
+      `Requirements document directory (read it, never write there): ${requirements.doc_dir}`,
     );
   }
   sections.push(
@@ -683,14 +683,18 @@ function implementContextSections(
       ),
     );
   }
+  sections.push(
+    "",
+    "If this worktree already contains an earlier implementation attempt",
+    "for this issue, do not start over: read what is there, keep what",
+    "already satisfies the approved requirements, and change only what",
+    "differs from them.",
+  );
   if (input.hasPreviousImplementation) {
     sections.push(
       "",
-      "This worktree already contains a previous implementation attempt for",
-      "this issue (the requirements were re-approved or the PR was sent",
-      "back). Do not start over: read what is there, keep what already",
-      "satisfies the approved requirements, and change only what differs",
-      "from them.",
+      "This worktree does contain a previous implementation attempt (the",
+      "requirements were re-approved or the PR was sent back).",
     );
   }
   return sections;
@@ -711,8 +715,8 @@ function implementOutputSections(): string[] {
     'When `outcome` is "done", `gap_report` is `null`.',
     "",
     'When `outcome` is "done", propose `commit_subject`: a non-empty,',
-    "single-line Conventional Commits subject following the target",
-    "repository's own convention when it has one, otherwise",
+    "single-line subject following the target repository's own commit",
+    "convention when it has one, otherwise Conventional Commits",
     '`<type>: <日本語での説明>` (e.g. "feat: CSV出力を追加"). Aim for about 50',
     "characters; a subject over 72 code points (or containing a newline, or",
     'ending in "…", or empty/whitespace-only) is rejected outright.',
@@ -755,10 +759,10 @@ export function implementPrompt(
 
 export type ImplementFixPromptInput = ImplementPromptInput & {
   /** The previous round's failed check runs (`runAllowedCheckCommands` and
-   * the fixed gitleaks check). `outputTail` is already cut to the flow's
-   * 16KB cap by the caller (design §12) and is target-repo output —
-   * untrusted, fenced; `command` is operator-authored (factory_config) and
-   * is named outside the fence, exactly as in `fixPrompt`. */
+   * the fixed gitleaks check). `outputTail` is the tail of the output (the
+   * caller decides how much) and is target-repo output — untrusted,
+   * fenced; `command` is operator-authored (factory_config) and is named
+   * outside the fence, exactly as in `fixPrompt`. */
   checkFailures: readonly CheckFailure[];
   /** This round's 1-based number within `implement_verify`'s loop. */
   round: number;

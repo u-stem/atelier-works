@@ -781,22 +781,38 @@ describe("implementPrompt", () => {
     expect(prompt).not.toContain("Requirements document directory");
   });
 
-  test("mentions the previous implementation only when hasPreviousImplementation is true", () => {
+  test("always includes the conditional instruction to not start over on an earlier attempt", () => {
+    const prompt = implementPrompt(IMPLEMENT_INPUT, FIXED_UUID);
+    expect(prompt).toContain(
+      "If this worktree already contains an earlier implementation attempt",
+    );
+  });
+
+  test("does not assert a previous implementation attempt exists on a fresh worktree", () => {
+    const prompt = implementPrompt(IMPLEMENT_INPUT, FIXED_UUID);
+    expect(prompt).not.toContain(
+      "This worktree does contain a previous implementation attempt",
+    );
+  });
+
+  test("asserts a previous implementation attempt exists when hasPreviousImplementation is true", () => {
     const prompt = implementPrompt(
       { ...IMPLEMENT_INPUT, hasPreviousImplementation: true },
       FIXED_UUID,
     );
-    expect(prompt).toContain("previous implementation attempt");
+    expect(prompt).toContain(
+      "This worktree does contain a previous implementation attempt",
+    );
   });
 
-  test("does not mention a previous implementation on a fresh worktree", () => {
-    const prompt = implementPrompt(IMPLEMENT_INPUT, FIXED_UUID);
-    expect(prompt).not.toContain("previous implementation attempt");
-  });
-
-  test("tells the model it has no Bash and must not commit", () => {
+  test("tells the model it has no Bash", () => {
     const prompt = implementPrompt(IMPLEMENT_INPUT, FIXED_UUID);
     expect(prompt).toContain("You have no Bash");
+  });
+
+  test("tells the model not to commit", () => {
+    const prompt = implementPrompt(IMPLEMENT_INPUT, FIXED_UUID);
+    expect(prompt).toContain("Do not commit");
   });
 
   test("tells the model to set requirements_gap instead of rewriting the requirements", () => {
