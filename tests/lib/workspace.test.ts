@@ -1566,6 +1566,61 @@ describe("commitAndPush", () => {
       ]),
     );
   });
+
+  test("throws (not head_changed) when the remote rejects the push, e.g. a PAT without workflow scope", async () => {
+    const fake = commitAndPushCalls([
+      ok("factory/issue-7-wi-3\n"),
+      ok(),
+      ok(`${HEAD_SHA}\n`),
+      ok(),
+      ok(" M file.ts\n"),
+      ok(),
+      fail(
+        "! [remote rejected] factory/issue-7-wi-3 -> factory/issue-7-wi-3 (refusing to allow a Personal Access Token to create or update workflow `.github/workflows/ci.yml` without `workflow` scope)",
+      ),
+    ]);
+    await expect(
+      commitAndPush({
+        run: fake.run,
+        repoDir: "/repo",
+        dir: "/repo/wt",
+        message: "fix: something",
+        instanceName: "acme-factory",
+        expectedHeadSha: HEAD_SHA,
+        author: TEST_AUTHOR,
+        ghToken: "gh-token",
+        verifyWorktree: noopVerify,
+        lockFs: createInMemoryLockFs(),
+      }),
+    ).rejects.toThrow(/refusing to allow a Personal Access Token/);
+  });
+
+  test("still returns head_changed for a plain '[rejected] ... (non-fast-forward)' push", async () => {
+    const fake = commitAndPushCalls([
+      ok("main\n"),
+      ok(),
+      ok(`${HEAD_SHA}\n`),
+      ok(),
+      ok(" M file.ts\n"),
+      ok(),
+      fail("! [rejected] main -> main (non-fast-forward)"),
+      ok(),
+      ok(`${OTHER_SHA}\n`),
+    ]);
+    const result = await commitAndPush({
+      run: fake.run,
+      repoDir: "/repo",
+      dir: "/repo/wt",
+      message: "fix: something",
+      instanceName: "acme-factory",
+      expectedHeadSha: HEAD_SHA,
+      author: TEST_AUTHOR,
+      ghToken: "gh-token",
+      verifyWorktree: noopVerify,
+      lockFs: createInMemoryLockFs(),
+    });
+    expect(result.outcome).toBe("head_changed");
+  });
 });
 
 describe("repo-wide lock scope (code-review fix)", () => {

@@ -1458,15 +1458,28 @@ export type CommitAndPushResult =
 // A local (non-`--verify`) `rev-parse`/`push` failure due to the remote
 // having moved is reported in the child's stderr with one of these
 // substrings, across git's various phrasings ("[rejected]", "(non-fast-forward)",
-// "hint: ... fetch first"). Matched case-insensitively.
+// "hint: ... fetch first"). Matched case-insensitively. The bare word
+// "rejected" is deliberately not a needle: a server-side refusal
+// ("! [remote rejected] ... (refusing to allow a Personal Access Token to
+// create or update workflow ...)", a declined pre-receive hook) also contains
+// it, and treating that as a race would swallow a permanent failure as
+// `head_changed` instead of surfacing it.
 const PUSH_REJECTED_SUBSTRINGS = [
-  "rejected",
+  "[rejected]",
   "non-fast-forward",
   "fetch first",
 ];
 
+// A "[remote rejected]" line means the server refused the update for its
+// own reasons; it is never a local non-fast-forward race, even if the same
+// stderr happens to contain one of the needles above.
+const REMOTE_REJECTED_SUBSTRING = "[remote rejected]";
+
 function isNonFastForwardRejection(stderr: string): boolean {
   const lower = stderr.toLowerCase();
+  if (lower.includes(REMOTE_REJECTED_SUBSTRING)) {
+    return false;
+  }
   return PUSH_REJECTED_SUBSTRINGS.some((needle) => lower.includes(needle));
 }
 
