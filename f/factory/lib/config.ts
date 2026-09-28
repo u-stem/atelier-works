@@ -121,7 +121,7 @@ const DEFAULTS: Pick<FactoryConfig, DefaultableField> = {
   // reach back when the previous report's end is older than this.
   max_lookback_days: 28,
   // New in 工程3 (implement flow, design §4). implement_enabled stays off
-  // until PR-D's e2e flips it on the remote resource.
+  // until the e2e flips it on the remote resource.
   implement_enabled: false,
   implement_max_rounds: 5,
   implement_max_turns: 80,

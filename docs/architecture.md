@@ -252,6 +252,7 @@ WindmillのUIはsummaryでソートされるため、種別を示すタグをsum
 | `f/factory/lib/requirements_template` | `[LIB] 要件定義テンプレートの定義` |
 | `f/factory/lib/requirements_doc` | `[LIB] 要件定義ファイルの検査` |
 | `f/factory/lib/cleanup_db_support` | `[LIB] DB 掃除の純粋ロジック` |
+| `f/factory/lib/implement_support` | `[LIB] 実装出力の検証とコミットメッセージ` |
 
 ## PRワークフロー(pr_review / pr_fix)
 
@@ -300,7 +301,7 @@ WindmillのUIはsummaryでソートされるため、種別を示すタグをsum
 - `outcome: "requirements_gap"`の場合、実装ステップは要件や設計を自分で書き換えず、`gap_report`(どの要件を満たせないか、理由、要件側で必要な変更案)を添えて中断する。
 - `gap_report`をfeedbackとして工程2(要件定義生成)をattempt+1で自動的に再起動し、生成し直した要件定義に対して再度人の承認を待つ(状態遷移: `implementing → requirements_generating`、理由`gap`)。
 - 実装が要件を満たして完了した場合はPRを作成し`pr_open`へ遷移する(`implementing → pr_open`)。
-- **実装中に要件や設計を書き換えることは禁止する**(実装が要件解釈を勝手に変えて帳尻を合わせることを防ぐ)。この制約は工程3で作成する`factory-implementation`スキルで規定する。
+- **実装中に要件や設計を書き換えることは禁止する**(実装が要件解釈を勝手に変えて帳尻を合わせることを防ぐ)。この制約は`factory-implementation`スキル(`.claude/skills/factory-implementation/SKILL.md`。工程3のheadless Claude実行に`--append-system-prompt-file`で注入する)で規定する。プロンプトは`f/factory/lib/prompts.ts`の`implementPrompt` / `implementFixPrompt`、出力契約は同ファイルの`IMPLEMENT_SCHEMA`と`f/factory/lib/implement_support.ts`の型ガード・検証が担う(フローとステップは後続の変更で追加する)。
 
 ### 工程4: CI監視(未実装、拡張点)
 

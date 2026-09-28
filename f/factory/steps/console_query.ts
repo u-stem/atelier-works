@@ -467,7 +467,8 @@ export type PipelineRow = {
   readonly pr_number: number | null;
   readonly fix_round: number;
   /** `work_items.branch` — 工程3's implement branch for an issue-kind row,
-   * `null` otherwise (the Pipeline tab renders a link column in PR-D). */
+   * `null` otherwise (the Pipeline tab renders a link column for it in a
+   * later change). */
   readonly branch: string | null;
   /** `work_items.pr_url` — the PR 工程3 opened, `null` until `pr_open`. */
   readonly pr_url: string | null;
