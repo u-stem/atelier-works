@@ -154,6 +154,16 @@ describe("describeReason", () => {
       ),
     ).toBe("diffの総行数3001がimplement_max_diff_lines 3000を超えました");
   });
+
+  test("translates a push rejected for a PAT without the workflow scope, wherever the phrase appears", () => {
+    expect(
+      describeReason(
+        "git push failed: ! [remote rejected] factory/issue-7-wi-3 -> factory/issue-7-wi-3 (refusing to allow a Personal Access Token to create or update workflow `.github/workflows/ci.yml` without `workflow` scope)",
+      ),
+    ).toBe(
+      "PATに`workflow`スコープが無いため、`.github/workflows/**`を含むpushが拒否されました",
+    );
+  });
 });
 
 describe("nextActionFor", () => {
@@ -198,6 +208,16 @@ describe("nextActionFor", () => {
   test("tells the operator to decide in the Inbox for an issue-proposal reason", () => {
     expect(nextActionFor("Issue化の提案が1件あります")).toBe(
       "ConsoleのInboxで提案を承認または却下してください",
+    );
+  });
+
+  test("tells the operator to add the workflow scope when a push was rejected for lacking it", () => {
+    expect(
+      nextActionFor(
+        "git push failed: refusing to allow a Personal Access Token to create or update workflow `.github/workflows/ci.yml` without `workflow` scope",
+      ),
+    ).toBe(
+      "PATにworkflowスコープを追加するか、ワークフローファイルの変更を人がpushしてください",
     );
   });
 });

@@ -2328,6 +2328,18 @@ const REASON_RULES: readonly ReasonRule[] = [
     nextAction: () =>
       "最新のheadを確認し、必要なら`factory:fix`を付け直してください",
   },
+  // The implement flow's push (工程3 design §3): a fine-grained PAT without
+  // the `workflow` scope cannot push a commit touching .github/workflows/**.
+  // GitHub's rejection text sits inside git's stderr, so this pattern is
+  // deliberately unanchored (the reason carries the whole push error).
+  {
+    pattern:
+      /refusing to allow a Personal Access Token to create or update workflow/,
+    describe: () =>
+      "PATに`workflow`スコープが無いため、`.github/workflows/**`を含むpushが拒否されました",
+    nextAction: () =>
+      "PATにworkflowスコープを追加するか、ワークフローファイルの変更を人がpushしてください",
+  },
   {
     pattern: /^check-fix retry pass failed \((.+)\): (.+)$/,
     describe: (m) =>
