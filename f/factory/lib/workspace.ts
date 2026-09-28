@@ -1688,10 +1688,11 @@ export async function commitAndPush(
 
 export type PushNewBranchOptions = {
   readonly run: CommandRunner;
-  /** The main repo clone dir (see `ensureRepo`) — derives the shared per-repo lock. */
+  /** The main repo clone dir (see `ensureRepo`) — derives the shared
+   * per-repo lock, and both git calls run here: worktrees share refs and
+   * config with the main clone, so `push -u` from repoDir publishes the
+   * branch `createGtrWorktree` made and sets its upstream just the same. */
   readonly repoDir: string;
-  /** The worktree `createGtrWorktree` created for `branch` (its HEAD is the branch). */
-  readonly worktreeDir: string;
   readonly branch: string;
   readonly ghToken: string;
   readonly home?: string;
@@ -1703,17 +1704,24 @@ export type PushNewBranchOptions = {
 
 export type PushNewBranchResult = { readonly pushed: boolean };
 
+// `git ls-remote --exit-code` exits 2 when no ref matched (and 0 when one
+// did); every other non-zero exit is a real failure (auth, network, ...).
+const LS_REMOTE_NO_MATCH_EXIT_CODE = 2;
+
 /**
- * `git push -u origin <branch>` from `worktreeDir`, right after
+ * `git push -u origin <branch>` from `repoDir`, right after
  * `createGtrWorktree` made the branch locally (工程3 design §0b): with the
  * branch published (even empty), every later step can use the existing
  * `commitAndPush` unchanged — it fetches `origin/<branch>` and compares
  * against `expectedHeadSha` — and `createGtrWorktree`'s reuse path can
  * `reset --hard origin/<branch>` on a retry. A no-op (`pushed: false`) when
- * `origin/<branch>` is already resolvable locally (a retry after the push
- * already happened). Serialized under `repoLockPath(repoDir)` like every
- * other network git op on this repo. The `rev-parse` has no `--` (module
- * doc comment's rev-parse exception); `branch` is validated instead.
+ * the remote already has the branch (a retry after the push already
+ * happened). The remote is asked directly with `git ls-remote --exit-code
+ * --heads origin -- <branch>` (exit 0 = present, 2 = absent, anything else
+ * is an error) rather than trusting the local `origin/<branch>`: `ensureRepo`
+ * fetches without `--prune`, so a stale tracking ref left behind after a
+ * human deleted the branch on GitHub must not suppress the push. Serialized
+ * under `repoLockPath(repoDir)` like every other network git op on this repo.
  */
 export async function pushNewBranch(
   opts: PushNewBranchOptions,
@@ -1726,22 +1734,26 @@ export async function pushNewBranch(
     ...(opts.sleep !== undefined ? { sleep: opts.sleep } : {}),
     ...(opts.now !== undefined ? { now: opts.now } : {}),
     fn: async () => {
+      const env = networkGitEnv(opts.ghToken, opts.home, opts.path);
       const existing = await opts.run(
-        buildGitArgv(["rev-parse", "--verify", `origin/${opts.branch}`]),
-        { cwd: opts.worktreeDir, env: localGitEnv(opts.home, opts.path) },
+        buildGitArgv(
+          ["ls-remote", "--exit-code", "--heads", "origin", "--", opts.branch],
+          { network: true },
+        ),
+        { cwd: opts.repoDir, env },
       );
       if (existing.exitCode === 0) {
         return { pushed: false };
+      }
+      if (existing.exitCode !== LS_REMOTE_NO_MATCH_EXIT_CODE) {
+        throw gitError(`git ls-remote origin ${opts.branch} failed`, existing);
       }
 
       const pushResult = await opts.run(
         buildGitArgv(["push", "-u", "origin", "--", opts.branch], {
           network: true,
         }),
-        {
-          cwd: opts.worktreeDir,
-          env: networkGitEnv(opts.ghToken, opts.home, opts.path),
-        },
+        { cwd: opts.repoDir, env },
       );
       if (pushResult.exitCode !== 0) {
         throw gitError(`git push -u origin ${opts.branch} failed`, pushResult);
