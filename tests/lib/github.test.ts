@@ -2195,6 +2195,18 @@ describe("findOpenPullRequestByHead", () => {
       ),
     ).rejects.toThrow(/expected an array/);
   });
+
+  test("throws when the first element lacks html_url", async () => {
+    const fake = createFakeCommandRunner([ghApiOk([{ number: 12 }])]);
+    await expect(
+      findOpenPullRequestByHead(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        "factory/issue-7-wi-3",
+      ),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
 });
 
 describe("updatePullRequestBody", () => {
@@ -2348,6 +2360,43 @@ describe("ensureLabel", () => {
 
   test("throws when the existence check fails with a non-404 error", async () => {
     const fake = createFakeCommandRunner([
+      ok(ghApiStdout(500, { message: "boom" })),
+    ]);
+    await expect(
+      ensureLabel(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        "factory:review",
+        LABEL_OPTS,
+      ),
+    ).rejects.toThrow(/HTTP 500/);
+  });
+
+  test("throws on a 422 that is not an already_exists validation error", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(404, { message: "Not Found" })),
+      ok(
+        ghApiStdout(422, {
+          message: "Validation Failed",
+          errors: [{ code: "invalid", field: "color" }],
+        }),
+      ),
+    ]);
+    await expect(
+      ensureLabel(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        "factory:review",
+        LABEL_OPTS,
+      ),
+    ).rejects.toThrow(/HTTP 422/);
+  });
+
+  test("throws when the create POST fails with a 500", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(404, { message: "Not Found" })),
       ok(ghApiStdout(500, { message: "boom" })),
     ]);
     await expect(

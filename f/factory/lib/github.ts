@@ -1013,13 +1013,46 @@ export type EnsureLabelOptions = {
 
 export type EnsureLabelResult = { readonly created: boolean };
 
+type ValidationErrorBody = { readonly errors: readonly unknown[] };
+
+function isValidationErrorBody(value: unknown): value is ValidationErrorBody {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as { errors?: unknown };
+  return Array.isArray(record.errors);
+}
+
+function hasAlreadyExistsCode(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  return "code" in value && value.code === "already_exists";
+}
+
+/** Whether a 422 response is GitHub's `already_exists` validation error
+ * (`errors: [{ code: "already_exists", ... }]`). A body that is not valid
+ * JSON counts as "no", so the caller reports the HTTP error instead. */
+function isAlreadyExistsValidationError(
+  response: GhApiResponse,
+  context: string,
+): boolean {
+  let parsed: unknown;
+  try {
+    parsed = parseJsonBody(response, context);
+  } catch {
+    return false;
+  }
+  return (
+    isValidationErrorBody(parsed) && parsed.errors.some(hasAlreadyExistsCode)
+  );
+}
+
 /**
  * Make sure a label named `name` exists in `owner/repo` (工程3 design §2
- * implement_finish: `factory:review` must exist before `addLabels` puts it
- * on the new PR, or GitHub silently drops it). `GET .../labels/{name}`
- * first; a 404 leads to `POST .../labels`. A 422 on the POST means another
- * job created it in between (GitHub's `already_exists` validation error)
- * and is treated as "exists", not as a failure.
+ * implement_finish: `factory:review` is created before `addLabels` puts it
+ * on the new PR, so the label gets the intended colour and description
+ * instead of the defaults GitHub would give a label it creates implicitly).
+ * `GET .../labels/{name}` first; a 404 leads to `POST .../labels`. A 422 on
+ * the POST whose errors include `already_exists` means another job created
+ * it in between and is treated as "exists"; any other 422 (e.g. an invalid
+ * colour) is a failure like every other non-2xx response.
  */
 export async function ensureLabel(
   client: GhClient,
@@ -1045,8 +1078,14 @@ export async function ensureLabel(
       body: { name, color: opts.color, description: opts.description },
     },
   );
-  if (postResponse.status === 422) return { created: false };
-  ensureSuccess(postResponse, `POST label ${owner}/${repo} ${name}`);
+  const postContext = `POST label ${owner}/${repo} ${name}`;
+  if (
+    postResponse.status === 422 &&
+    isAlreadyExistsValidationError(postResponse, postContext)
+  ) {
+    return { created: false };
+  }
+  ensureSuccess(postResponse, postContext);
   return { created: true };
 }
 
