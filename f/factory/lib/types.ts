@@ -744,7 +744,7 @@ export type FactoryConfig = {
    * the previous report is older than that (工程5). */
   max_lookback_days: number;
   // 工程3 (implement flow). All optional on the resource type with defaults
-  // (design §4); `implement_enabled` stays false until the e2e in PR-D.
+  // (design §4); `implement_enabled` stays false until the e2e.
   /** Whether requirements_apply starts the implement flow after approval. */
   implement_enabled: boolean;
   /** Upper bound on implement_verify's rounds (1 implement + N-1 fix). */

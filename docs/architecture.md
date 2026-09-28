@@ -252,6 +252,7 @@ WindmillのUIはsummaryでソートされるため、種別を示すタグをsum
 | `f/factory/lib/requirements_template` | `[LIB] 要件定義テンプレートの定義` |
 | `f/factory/lib/requirements_doc` | `[LIB] 要件定義ファイルの検査` |
 | `f/factory/lib/cleanup_db_support` | `[LIB] DB 掃除の純粋ロジック` |
+| `f/factory/lib/implement_support` | `[LIB] 実装出力の検証とコミットメッセージ` |
 
 ## PRワークフロー(pr_review / pr_fix)
 
