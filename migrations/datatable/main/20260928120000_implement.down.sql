@@ -44,6 +44,9 @@ WHERE status IN ('approved', 'rejected', 'needs_human', 'failed', 'expired', 'ca
 DROP TABLE factory.implement_rounds;
 
 ALTER TABLE factory.work_items
+    DROP CONSTRAINT work_items_implement_columns_issue_only;
+
+ALTER TABLE factory.work_items
     DROP COLUMN pr_url,
     DROP COLUMN branch;
 

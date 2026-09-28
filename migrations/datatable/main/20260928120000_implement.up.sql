@@ -13,6 +13,13 @@ ALTER TABLE factory.work_items
     ADD COLUMN branch text,
     ADD COLUMN pr_url text;
 
+-- pr_number already bundles PR-kind work items; branch/pr_url are how an
+-- issue-kind work item tracks the implement branch and PR it opened, so
+-- only issue rows may carry them.
+ALTER TABLE factory.work_items
+    ADD CONSTRAINT work_items_implement_columns_issue_only
+    CHECK (kind = 'issue' OR (branch IS NULL AND pr_url IS NULL));
+
 COMMENT ON COLUMN factory.work_items.branch IS
     'Implement branch name (factory/issue-<N>-wi-<id>) for kind = issue once 工程3 has created it; NULL before that and for every other kind. cleanup_workspaces.ts matches worktrees by this branch.';
 COMMENT ON COLUMN factory.work_items.pr_url IS
