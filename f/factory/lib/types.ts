@@ -743,4 +743,24 @@ export type FactoryConfig = {
   /** Upper bound (days) on how far back one audit period may reach when
    * the previous report is older than that (工程5). */
   max_lookback_days: number;
+  // 工程3 (implement flow). All optional on the resource type with defaults
+  // (design §4); `implement_enabled` stays false until the e2e in PR-D.
+  /** Whether requirements_apply starts the implement flow after approval. */
+  implement_enabled: boolean;
+  /** Upper bound on implement_verify's rounds (1 implement + N-1 fix). */
+  implement_max_rounds: number;
+  /** Turn limit for one Claude run in the implement flow. */
+  implement_max_turns: number;
+  /** Budget (USD) for one Claude run in the implement flow. */
+  implement_max_budget_usd_per_run: number;
+  /** Timeout (seconds) for one Claude run in the implement flow. */
+  implement_timeout_sec: number;
+  /** Diff-size guard for the implement flow: max changed files. */
+  implement_max_changed_files: number;
+  /** Diff-size guard for the implement flow: max added + deleted lines. */
+  implement_max_diff_lines: number;
+  /** Per-repo check commands (`"<owner>/<repo>": string[]`), overriding
+   * `allowed_check_commands` for that repo — see `checkCommandsFor`
+   * (config.ts). An explicit `[]` means "run no checks for this repo". */
+  check_commands_by_repo: Record<string, string[]>;
 };
