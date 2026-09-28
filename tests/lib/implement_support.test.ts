@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import type { ImplementClaudeOutput } from "../../f/factory/lib/implement_support.ts";
 import {
+  buildImplementBranchName,
   buildImplementCommitMessage,
+  classifyProtectedChanges,
   IMPLEMENT_CLAUDE_OUTCOMES,
   isImplementClaudeOutput,
   validateImplementOutput,
@@ -262,5 +264,79 @@ describe("buildImplementCommitMessage", () => {
       "local",
     );
     expect(message.split("Co-Authored-By").length - 1).toBe(1);
+  });
+});
+
+describe("buildImplementBranchName", () => {
+  test("formats factory/issue-<N>-wi-<id>", () => {
+    expect(buildImplementBranchName(42, 7)).toBe("factory/issue-42-wi-7");
+  });
+
+  test("rejects a non-positive issue number", () => {
+    expect(() => buildImplementBranchName(0, 7)).toThrow();
+  });
+
+  test("rejects a non-integer work item id", () => {
+    expect(() => buildImplementBranchName(42, 7.5)).toThrow();
+  });
+});
+
+describe("classifyProtectedChanges", () => {
+  test("returns an empty list for ordinary source paths", () => {
+    expect(
+      classifyProtectedChanges(["src/index.ts", "tests/index.test.ts"], {
+        packageJsonScriptsChanged: false,
+        newShellScripts: [],
+      }),
+    ).toEqual([]);
+  });
+
+  test("records an infra/** change (implement list, not pr_fix's)", () => {
+    expect(
+      classifyProtectedChanges(["infra/worker/Dockerfile"], {
+        packageJsonScriptsChanged: false,
+        newShellScripts: [],
+      }),
+    ).toEqual(["保護パスを変更: infra/worker/Dockerfile"]);
+  });
+
+  test("records a .github/workflows/** change", () => {
+    expect(
+      classifyProtectedChanges([".github/workflows/ci.yml"], {
+        packageJsonScriptsChanged: false,
+        newShellScripts: [],
+      }),
+    ).toEqual(["保護パスを変更: .github/workflows/ci.yml"]);
+  });
+
+  test("records each new shell script", () => {
+    expect(
+      classifyProtectedChanges(["scripts/run.sh"], {
+        packageJsonScriptsChanged: false,
+        newShellScripts: ["scripts/run.sh"],
+      }),
+    ).toEqual(["新規の*.shを追加: scripts/run.sh"]);
+  });
+
+  test("records a package.json scripts change", () => {
+    expect(
+      classifyProtectedChanges(["package.json"], {
+        packageJsonScriptsChanged: true,
+        newShellScripts: [],
+      }),
+    ).toEqual(["package.jsonのscriptsを変更"]);
+  });
+
+  test("lists protected paths first, then shell scripts, then the scripts flag", () => {
+    expect(
+      classifyProtectedChanges(["scripts/run.sh", "lefthook.yml"], {
+        packageJsonScriptsChanged: true,
+        newShellScripts: ["scripts/run.sh"],
+      }),
+    ).toEqual([
+      "保護パスを変更: lefthook.yml",
+      "新規の*.shを追加: scripts/run.sh",
+      "package.jsonのscriptsを変更",
+    ]);
   });
 });

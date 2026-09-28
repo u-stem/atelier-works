@@ -14,7 +14,17 @@
 // `validateImplementOutput` after `runClaude` succeeds and record `reason`
 // on the implement round before treating it as a fix round.
 
-import { isOneOf, isRecord, isString, isStringArray } from "./types.ts";
+import {
+  IMPLEMENT_PROTECTED_PATH_PREFIXES,
+  matchesForbiddenPath,
+} from "./protected_paths.ts";
+import {
+  assertBranchName,
+  isOneOf,
+  isRecord,
+  isString,
+  isStringArray,
+} from "./types.ts";
 import { withCommitTrailers } from "./workspace.ts";
 
 /** Claude's own two outcomes (IMPLEMENT_SCHEMA). The verify loop's extra
@@ -163,4 +173,70 @@ export function buildImplementCommitMessage(
   const body = output.commit_body.trim();
   const message = body.length === 0 ? subject : `${subject}\n\n${body}`;
   return withCommitTrailers(message, instanceName);
+}
+
+// ---------------------------------------------------------------------------
+// buildImplementBranchName: `factory/issue-<N>-wi-<id>` (design §7)
+// ---------------------------------------------------------------------------
+
+function assertPositiveInteger(value: number, label: string): void {
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(
+      `buildImplementBranchName: ${label} must be a positive integer, got ${String(value)}`,
+    );
+  }
+}
+
+/** The implement branch for one work item. Both numbers come from the DB
+ * (never user text), but the result still goes through `assertBranchName`
+ * so a future caller cannot hand git something it would read as a flag. */
+export function buildImplementBranchName(
+  issueNumber: number,
+  workItemId: number,
+): string {
+  assertPositiveInteger(issueNumber, "issueNumber");
+  assertPositiveInteger(workItemId, "workItemId");
+  const branch = `factory/issue-${String(issueNumber)}-wi-${String(workItemId)}`;
+  assertBranchName(branch);
+  return branch;
+}
+
+// ---------------------------------------------------------------------------
+// classifyProtectedChanges: record (never block) protected-path changes
+// (design §3, §0b)
+// ---------------------------------------------------------------------------
+
+export type ProtectedChangeFlags = {
+  /** steps/pr_workflow_support.ts's packageJsonScriptsChanged, computed by the caller. */
+  readonly packageJsonScriptsChanged: boolean;
+  /** Repo-relative paths of newly added `*.sh` files (the caller filters
+   * its ChangedPath list through protected_paths.ts's isNewShellScript). */
+  readonly newShellScripts: readonly string[];
+};
+
+/**
+ * One human-facing Japanese line per protected change in the diff, using
+ * the implement flow's prefix list (`IMPLEMENT_PROTECTED_PATH_PREFIXES`,
+ * which includes `infra/**`). Unlike pr_fix's detectForbiddenChanges this
+ * never blocks: the result is stored on the implement round, listed in the
+ * PR body's 確認して欲しい点 and the Discord pr_opened notification, and
+ * makes implement_verify skip the check commands for that round.
+ */
+export function classifyProtectedChanges(
+  changedPaths: readonly string[],
+  flags: ProtectedChangeFlags,
+): string[] {
+  const reasons: string[] = [];
+  for (const path of changedPaths) {
+    if (matchesForbiddenPath(path, IMPLEMENT_PROTECTED_PATH_PREFIXES)) {
+      reasons.push(`保護パスを変更: ${path}`);
+    }
+  }
+  for (const path of flags.newShellScripts) {
+    reasons.push(`新規の*.shを追加: ${path}`);
+  }
+  if (flags.packageJsonScriptsChanged) {
+    reasons.push("package.jsonのscriptsを変更");
+  }
+  return reasons;
 }
