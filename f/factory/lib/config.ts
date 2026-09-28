@@ -40,6 +40,9 @@ const LABELER_ASSOCIATIONS: readonly LabelerAssociation[] = [
 ];
 const REVIEW_POST_MODES: readonly ReviewPostMode[] = ["comment_only", "gated"];
 const OWNER_KINDS = ["user", "org"];
+/** Shape a `check_commands_by_repo` key must normalize to — `owner/repo`,
+ * no scheme/host, no extra slashes. See `checkCommandsByRepoField`. */
+const OWNER_SLASH_REPO = /^[^/\s]+\/[^/\s]+$/;
 
 /** Every FactoryConfig field that declares a `default:` in
  * c_factory_config.resource-type.yaml (everything except owners,
@@ -238,15 +241,22 @@ function booleanField(
   return value;
 }
 
-/** Reads `raw[field]` as a `{ [key]: string[] }` record, defaulting to
- * `fallback` when absent; throws when present but not an object whose every
- * value is an array of strings. Rebuilds the record entry by entry so the
- * result is typed without an assertion. */
-function stringArrayRecordField(
+/** Reads `raw.check_commands_by_repo` as a `{ [ownerSlashRepo]: string[] }`
+ * record, defaulting to `fallback` when absent; throws when present but not
+ * an object whose every value is an array of strings, or when a key does
+ * not normalize (via `normalizeRepoUrl`) to `owner/repo` shape. The key
+ * shape is checked fail-closed: `checkCommandsFor` only ever compares a key
+ * against `owner/repo` (see its doc comment — unlike `isRepoAllowed`, it
+ * does not accept a full URL there), so a URL-shaped key would validate
+ * here yet never match there, silently falling back to
+ * `allowed_check_commands` instead of surfacing the config mistake.
+ * Rebuilds the record entry by entry so the result is typed without an
+ * assertion. */
+function checkCommandsByRepoField(
   raw: Record<string, unknown>,
-  field: string,
   fallback: Record<string, string[]>,
 ): Record<string, string[]> {
+  const field = "check_commands_by_repo";
   const value = raw[field];
   if (value === undefined) {
     return fallback;
@@ -261,6 +271,11 @@ function stringArrayRecordField(
     if (!isStringArray(entry)) {
       throw new ConfigValidationError(
         `"${field}"["${key}"] must be an array of strings`,
+      );
+    }
+    if (!OWNER_SLASH_REPO.test(normalizeRepoUrl(key))) {
+      throw new ConfigValidationError(
+        `"${field}" key "${key}" must be "<owner>/<repo>"`,
       );
     }
     result[key] = entry;
@@ -442,9 +457,8 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
       "implement_max_diff_lines",
       DEFAULTS.implement_max_diff_lines,
     ),
-    check_commands_by_repo: stringArrayRecordField(
+    check_commands_by_repo: checkCommandsByRepoField(
       raw,
-      "check_commands_by_repo",
       DEFAULTS.check_commands_by_repo,
     ),
   };
@@ -523,6 +537,11 @@ export function isRepoAllowed(
  * `owner/repo`, else `allowed_check_commands`. An explicit `[]` entry is
  * honoured as "no checks for this repo" rather than falling through, so a
  * repo can opt out of a global command set.
+ *
+ * Keys are `owner/repo` — unlike `isRepoAllowed`, this does not also accept
+ * a full URL (`https://github.com/owner/repo`); `checkCommandsByRepoField`
+ * (config.ts) rejects a URL-shaped key at parse time rather than let it
+ * silently fall through to `allowed_check_commands` here.
  */
 export function checkCommandsFor(
   config: Pick<

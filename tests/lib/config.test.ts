@@ -399,6 +399,26 @@ describe("implement settings (工程3)", () => {
     const raw = { ...LEGACY_RAW_CONFIG, check_commands_by_repo: ["bun test"] };
     expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
   });
+
+  test("throws when a check_commands_by_repo key is a full URL instead of owner/repo", () => {
+    const raw = {
+      ...LEGACY_RAW_CONFIG,
+      check_commands_by_repo: {
+        "https://github.com/octo-owner/atelier-works": ["bun test"],
+      },
+    };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("allows a check_commands_by_repo key with a trailing .git", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      check_commands_by_repo: { "octo-owner/atelier-works.git": ["bun test"] },
+    });
+    expect(config.check_commands_by_repo).toEqual({
+      "octo-owner/atelier-works.git": ["bun test"],
+    });
+  });
 });
 
 describe("checkCommandsFor", () => {

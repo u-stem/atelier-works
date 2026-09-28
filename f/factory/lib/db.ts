@@ -1786,8 +1786,8 @@ export async function latestRequirementsApproval(
   const rows = await sql`
     SELECT ar.id AS approval_request_id, ar.subject_id AS draft_id, rd.attempt, ar.status
     FROM factory.approval_requests ar
-    JOIN factory.requirement_drafts rd ON rd.id = ar.subject_id
-    WHERE ar.kind = 'requirements' AND ar.work_item_id =${workItemId}::bigint
+    JOIN factory.requirement_drafts rd ON rd.id = ar.subject_id AND rd.work_item_id = ar.work_item_id
+    WHERE ar.kind = 'requirements' AND ar.work_item_id = ${workItemId}::bigint
     ORDER BY ar.requested_at DESC, ar.id DESC
     LIMIT 1
   `.fetch();

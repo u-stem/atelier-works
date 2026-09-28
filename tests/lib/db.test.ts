@@ -2325,6 +2325,11 @@ describe("setWorkItemBranch", () => {
     await setWorkItemBranch(1, "--force", sql).catch(() => undefined);
     expect(calls).toHaveLength(0);
   });
+
+  test("throws for an invalid branch name", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    await expect(setWorkItemBranch(1, "--force", sql)).rejects.toThrow();
+  });
 });
 
 describe("setWorkItemPrUrl", () => {
@@ -2378,8 +2383,8 @@ describe("latestRequirementsApproval", () => {
   test("restricts to kind = 'requirements' joined to requirement_drafts", async () => {
     const { sql, calls } = createFakeSqlClient([[ROW]]);
     await latestRequirementsApproval(1, sql);
-    expect(calls[0]?.text).toContain(
-      "JOIN factory.requirement_drafts rd ON rd.id = ar.subject_id",
+    expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(
+      "JOIN factory.requirement_drafts rd ON rd.id = ar.subject_id AND rd.work_item_id = ar.work_item_id",
     );
   });
 
@@ -2394,6 +2399,8 @@ describe("latestRequirementsApproval", () => {
   test("casts work_item_id to ::bigint", async () => {
     const { sql, calls } = createFakeSqlClient([[ROW]]);
     await latestRequirementsApproval(1, sql);
-    expect(calls[0]?.text).toContain("ar.work_item_id = ? ::bigint");
+    expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(
+      "ar.work_item_id = ? ::bigint",
+    );
   });
 });
