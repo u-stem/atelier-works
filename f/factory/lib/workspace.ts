@@ -1737,3 +1737,90 @@ export async function pushNewBranch(
     },
   });
 }
+
+// ---------------------------------------------------------------------------
+// deleteRemoteBranch / currentRemoteHeadSha (implement flow)
+// ---------------------------------------------------------------------------
+
+export type DeleteRemoteBranchOptions = {
+  readonly run: CommandRunner;
+  readonly repoDir: string;
+  readonly branch: string;
+  readonly ghToken: string;
+  readonly home?: string;
+  readonly path?: string;
+  readonly lockFs?: LockFs;
+  readonly sleep?: (ms: number) => Promise<void>;
+  readonly now?: () => Date;
+};
+
+export type DeleteRemoteBranchResult = { readonly deleted: boolean };
+
+// git's own phrasing when `push --delete` names a branch the remote no
+// longer has ("error: unable to delete '<b>': remote ref does not exist").
+const REMOTE_REF_MISSING_SUBSTRING = "remote ref does not exist";
+
+/**
+ * `git push --delete origin <branch>` from the main clone (工程3 design
+ * §0b / §13: a `requirements_gap` exit with no PR yet removes the empty or
+ * half-done branch so the re-implementation after re-approval starts
+ * clean). `deleted: false` (no throw) when the remote ref is already gone.
+ */
+export async function deleteRemoteBranch(
+  opts: DeleteRemoteBranchOptions,
+): Promise<DeleteRemoteBranchResult> {
+  assertBranchName(opts.branch);
+
+  return withRepoLock({
+    lockPath: repoLockPath(opts.repoDir),
+    ...(opts.lockFs !== undefined ? { lockFs: opts.lockFs } : {}),
+    ...(opts.sleep !== undefined ? { sleep: opts.sleep } : {}),
+    ...(opts.now !== undefined ? { now: opts.now } : {}),
+    fn: async () => {
+      const result = await opts.run(
+        buildGitArgv(["push", "--delete", "origin", "--", opts.branch], {
+          network: true,
+        }),
+        {
+          cwd: opts.repoDir,
+          env: networkGitEnv(opts.ghToken, opts.home, opts.path),
+        },
+      );
+      if (result.exitCode === 0) return { deleted: true };
+      if (result.stderr.toLowerCase().includes(REMOTE_REF_MISSING_SUBSTRING)) {
+        return { deleted: false };
+      }
+      throw gitError(`git push --delete origin ${opts.branch} failed`, result);
+    },
+  });
+}
+
+export type CurrentRemoteHeadShaOptions = {
+  readonly run: CommandRunner;
+  readonly repoDir: string;
+  readonly branch: string;
+  readonly home?: string;
+  readonly path?: string;
+};
+
+/**
+ * The sha `origin/<branch>` currently points at in `repoDir`, or `null`
+ * when the remote-tracking ref does not exist locally (never fetched, or
+ * the branch was deleted). Read-only and local-only, like
+ * `resolveDefaultBranchHeadSha`; the caller fetches first when it needs
+ * the remote's current state. The result feeds `commitAndPush`'s
+ * `expectedHeadSha`, so it is validated with `assertSha` here.
+ */
+export async function currentRemoteHeadSha(
+  opts: CurrentRemoteHeadShaOptions,
+): Promise<string | null> {
+  assertBranchName(opts.branch);
+  const result = await opts.run(
+    buildGitArgv(["rev-parse", "--verify", `origin/${opts.branch}`]),
+    { cwd: opts.repoDir, env: localGitEnv(opts.home, opts.path) },
+  );
+  if (result.exitCode !== 0) return null;
+  const sha = result.stdout.trim();
+  assertSha(sha);
+  return sha;
+}

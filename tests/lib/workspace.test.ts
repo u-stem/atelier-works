@@ -9,6 +9,8 @@ import {
   copyFileTo,
   createBunCommandRunner,
   createGtrWorktree,
+  currentRemoteHeadSha,
+  deleteRemoteBranch,
   ensureEmptyDir,
   ensureFactoryClone,
   ensureRepo,
@@ -1841,5 +1843,148 @@ describe("pushNewBranch", () => {
       lockFs,
     });
     expect(sawLockDuringRun).toBe(true);
+  });
+});
+
+describe("deleteRemoteBranch", () => {
+  const BRANCH = "factory/issue-7-wi-3";
+
+  test("returns deleted: true when the push --delete succeeds", async () => {
+    const fake = createFakeCommandRunner([ok()]);
+    const result = await deleteRemoteBranch({
+      run: fake.run,
+      repoDir: "/repo/main",
+      branch: BRANCH,
+      ghToken: "gh-token",
+      lockFs: createInMemoryLockFs(),
+    });
+    expect(result).toEqual({ deleted: true });
+  });
+
+  test("runs git push --delete origin -- <branch>", async () => {
+    const fake = createFakeCommandRunner([ok()]);
+    await deleteRemoteBranch({
+      run: fake.run,
+      repoDir: "/repo/main",
+      branch: BRANCH,
+      ghToken: "gh-token",
+      lockFs: createInMemoryLockFs(),
+    });
+    expect(fake.calls[0]?.argv).toEqual(
+      expect.arrayContaining(["push", "--delete", "origin", "--", BRANCH]),
+    );
+  });
+
+  test("carries GH_TOKEN in env (network operation)", async () => {
+    const fake = createFakeCommandRunner([ok()]);
+    await deleteRemoteBranch({
+      run: fake.run,
+      repoDir: "/repo/main",
+      branch: BRANCH,
+      ghToken: "gh-secret",
+      lockFs: createInMemoryLockFs(),
+    });
+    expect(fake.calls[0]?.options?.env?.GH_TOKEN).toBe("gh-secret");
+  });
+
+  test("returns deleted: false without throwing when the remote ref does not exist", async () => {
+    const fake = createFakeCommandRunner([
+      fail(
+        "error: unable to delete 'factory/issue-7-wi-3': remote ref does not exist\nerror: failed to push some refs",
+      ),
+    ]);
+    const result = await deleteRemoteBranch({
+      run: fake.run,
+      repoDir: "/repo/main",
+      branch: BRANCH,
+      ghToken: "gh-token",
+      lockFs: createInMemoryLockFs(),
+    });
+    expect(result).toEqual({ deleted: false });
+  });
+
+  test("throws a masked error on any other failure", async () => {
+    const fake = createFakeCommandRunner([
+      fail("remote: Permission to acme/widgets.git denied to factory-bot."),
+    ]);
+    await expect(
+      deleteRemoteBranch({
+        run: fake.run,
+        repoDir: "/repo/main",
+        branch: BRANCH,
+        ghToken: "gh-token",
+        lockFs: createInMemoryLockFs(),
+      }),
+    ).rejects.toThrow(/push --delete/);
+  });
+
+  test("rejects an invalid branch name before spawning anything", async () => {
+    const fake = createFakeCommandRunner([]);
+    await expect(
+      deleteRemoteBranch({
+        run: fake.run,
+        repoDir: "/repo/main",
+        branch: "feature..evil",
+        ghToken: "gh-token",
+        lockFs: createInMemoryLockFs(),
+      }),
+    ).rejects.toThrow(/invalid branch name/);
+  });
+});
+
+describe("currentRemoteHeadSha", () => {
+  const BRANCH = "factory/issue-7-wi-3";
+
+  test("returns the trimmed sha origin/<branch> points to", async () => {
+    const fake = createFakeCommandRunner([ok(`${HEAD_SHA}\n`)]);
+    const sha = await currentRemoteHeadSha({
+      run: fake.run,
+      repoDir: "/repo/main",
+      branch: BRANCH,
+    });
+    expect(sha).toBe(HEAD_SHA);
+  });
+
+  test("returns null when origin/<branch> is not resolvable", async () => {
+    const fake = createFakeCommandRunner([
+      fail("fatal: Needed a single revision"),
+    ]);
+    const sha = await currentRemoteHeadSha({
+      run: fake.run,
+      repoDir: "/repo/main",
+      branch: BRANCH,
+    });
+    expect(sha).toBeNull();
+  });
+
+  test("runs git rev-parse --verify origin/<branch> without -- (rev-parse exception)", async () => {
+    const fake = createFakeCommandRunner([ok(`${HEAD_SHA}\n`)]);
+    await currentRemoteHeadSha({
+      run: fake.run,
+      repoDir: "/repo/main",
+      branch: BRANCH,
+    });
+    expect(fake.calls[0]?.argv).not.toContain("--");
+  });
+
+  test("does not include GH_TOKEN in env (local-only read)", async () => {
+    const fake = createFakeCommandRunner([ok(`${HEAD_SHA}\n`)]);
+    await currentRemoteHeadSha({
+      run: fake.run,
+      repoDir: "/repo/main",
+      branch: BRANCH,
+    });
+    expect(fake.calls[0]?.options?.env ?? {}).not.toHaveProperty("GH_TOKEN");
+  });
+
+  test("throws when git prints something that is not a sha", async () => {
+    const fake = createFakeCommandRunner([ok("not-a-sha\n")]);
+    await expect(
+      currentRemoteHeadSha({
+        run: fake.run,
+        repoDir: "/repo/main",
+        branch: BRANCH,
+      }),
+    ).rejects.toThrow();
   });
 });
