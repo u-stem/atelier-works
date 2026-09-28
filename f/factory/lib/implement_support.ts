@@ -16,12 +16,15 @@
 
 import { createHash } from "node:crypto";
 import {
+  type ChangedPath,
   IMPLEMENT_PROTECTED_PATH_PREFIXES,
+  isNewShellScript,
   matchesForbiddenPath,
 } from "./protected_paths.ts";
 import { extractSectionBody } from "./requirements_doc.ts";
 import {
   assertBranchName,
+  type ImplementRoundOutcome,
   isOneOf,
   isRecord,
   isString,
@@ -208,40 +211,46 @@ export function buildImplementBranchName(
 // (design §3, §0b)
 // ---------------------------------------------------------------------------
 
-export type ProtectedChangeFlags = {
-  /** steps/pr_workflow_support.ts's packageJsonScriptsChanged, computed by the caller. */
-  readonly packageJsonScriptsChanged: boolean;
-  /** Repo-relative paths of newly added `*.sh` files (the caller filters
-   * its ChangedPath list through protected_paths.ts's isNewShellScript). */
-  readonly newShellScripts: readonly string[];
-};
-
 /**
  * One human-facing Japanese line per protected change in the diff, using
  * the implement flow's prefix list (`IMPLEMENT_PROTECTED_PATH_PREFIXES`,
- * which includes `infra/**`). Unlike pr_fix's detectForbiddenChanges this
- * never blocks: the result is stored on the implement round, listed in the
- * PR body's 確認して欲しい点 and the Discord pr_opened notification, and
- * makes implement_verify skip the check commands for that round.
+ * which includes `infra/**`): every changed path under a protected prefix
+ * (whatever its status), then every newly added `*.sh` (protected_paths.ts's
+ * isNewShellScript), then the package.json scripts flag
+ * (steps/pr_workflow_support.ts's packageJsonScriptsChanged, computed by the
+ * caller). A new `*.sh` under a protected prefix yields both lines. Unlike
+ * pr_fix's detectForbiddenChanges this never blocks: the result is stored on
+ * the implement round, listed in the PR body's 確認して欲しい点 and the
+ * Discord pr_opened notification, and makes implement_verify skip the check
+ * commands for that round.
  */
 export function classifyProtectedChanges(
-  changedPaths: readonly string[],
-  flags: ProtectedChangeFlags,
-): string[] {
+  changes: readonly ChangedPath[],
+  packageJsonScriptsChanged: boolean,
+): readonly string[] {
   const reasons: string[] = [];
-  for (const path of changedPaths) {
-    if (matchesForbiddenPath(path, IMPLEMENT_PROTECTED_PATH_PREFIXES)) {
-      reasons.push(`保護パスを変更: ${path}`);
+  for (const change of changes) {
+    if (matchesForbiddenPath(change.path, IMPLEMENT_PROTECTED_PATH_PREFIXES)) {
+      reasons.push(`保護パスを変更: ${change.path}`);
     }
   }
-  for (const path of flags.newShellScripts) {
-    reasons.push(`新規の*.shを追加: ${path}`);
+  for (const change of changes) {
+    if (isNewShellScript(change)) {
+      reasons.push(`新規の*.shを追加: ${change.path}`);
+    }
   }
-  if (flags.packageJsonScriptsChanged) {
+  if (packageJsonScriptsChanged) {
     reasons.push("package.jsonのscriptsを変更");
   }
   return reasons;
 }
+
+/** Why a round ran no check commands — one wording shared by the PR body's
+ * 検査未実施, the Discord pr_opened embed and implement_rounds.checks_skipped_reason. */
+export const IMPLEMENT_CHECK_SKIP_REASONS = {
+  protected_paths: "保護パスを変更したため",
+  no_commands: "検査コマンドが未設定のため",
+} as const;
 
 // ---------------------------------------------------------------------------
 // truncateCheckOutput: `implement_rounds.check_output` keeps the first 16KB
@@ -259,16 +268,18 @@ function isContinuationByte(byte: number): boolean {
  * The first `maxBytes` bytes of `text` as valid UTF-8 text: when the byte
  * boundary would split a multi-byte character, the whole character is
  * dropped instead. Measured in bytes (the column's intended limit), not
- * UTF-16 code units. Callers pass the check commands' combined output
- * before `insertImplementRound`; the prompt-side tail is separate
- * (runAllowedCheckCommands's outputTail).
+ * UTF-16 code units. NUL characters are stripped first, because a Postgres
+ * `text` column rejects them. The caller passes the check commands' FULL
+ * combined output after `maskSecrets`, before `insertImplementRound` — not
+ * the prompt-side tail (runAllowedCheckCommands's outputTail).
  */
 export function truncateCheckOutput(
   text: string,
   maxBytes: number = CHECK_OUTPUT_MAX_BYTES,
 ): string {
-  const bytes = new TextEncoder().encode(text);
-  if (bytes.byteLength <= maxBytes) return text;
+  const clean = text.replaceAll("\u0000", "");
+  const bytes = new TextEncoder().encode(clean);
+  if (bytes.byteLength <= maxBytes) return clean;
   let end = maxBytes;
   while (end > 0 && isContinuationByte(bytes[end] ?? 0)) {
     end -= 1;
@@ -542,7 +553,8 @@ export type ImplementRoundExitInput = {
  * checks exit; then the guards — round ceiling, daily budget, and stall
  * detection (the diff or the check output is identical to the previous
  * round's, so another fix round would only spend budget). `continue` means
- * the checks failed and none of the guards fired.
+ * the checks failed and none of the guards fired. roundOutcomeForExit maps
+ * the exit onto the round's `implement_rounds.outcome`.
  */
 export function decideImplementRoundExit(
   state: ImplementRoundExitInput,
@@ -568,8 +580,38 @@ export function decideImplementRoundExit(
   return "continue";
 }
 
+/**
+ * `implement_rounds.outcome` for a round that ended the verify loop with
+ * `exit` (or, for `continue`, a round whose checks failed and that is
+ * followed by a fix round): checks_passed -> done; checks_skipped, stalled
+ * and requirements_gap keep their names; max_rounds, daily_budget and
+ * continue are all rounds whose checks failed -> check_failed.
+ */
+export function roundOutcomeForExit(
+  exit: ImplementRoundExit,
+): ImplementRoundOutcome {
+  switch (exit) {
+    case "checks_passed":
+      return "done";
+    case "checks_skipped":
+      return "checks_skipped";
+    case "stalled":
+      return "stalled";
+    case "requirements_gap":
+      return "requirements_gap";
+    case "max_rounds":
+    case "daily_budget":
+    case "continue":
+      return "check_failed";
+  }
+}
+
 /** sha256 hex of `text` — the stall-detection fingerprint for a round's
- * diff (`git diff` output) and check output. */
+ * diff and check output. The diff fingerprint must include untracked files
+ * (e.g. `git add -A --intent-to-add` then `git diff HEAD`, or the porcelain
+ * status plus the diff): plain `git diff` omits new files, so a round that
+ * only added files would hash like the previous one and report a false
+ * stall. */
 export function stallHash(text: string): string {
   return createHash("sha256").update(text).digest("hex");
 }

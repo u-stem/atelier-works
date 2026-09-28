@@ -1,5 +1,5 @@
-summary: '[LIB] 実装出力の検証とコミットメッセージ'
-description: 内部ライブラリです。工程3の実装出力(Claude)の型ガード・検証と、コミットメッセージの組み立てを提供します。
+summary: '[LIB] 実装フローの純粋関数群'
+description: 内部ライブラリです。工程3の実装出力(Claude)の型ガード・検証、コミットメッセージ、ブランチ名、保護パス変更の分類、検査出力の切り詰め、PR本文、検証ループの終了判定を提供します。
 lock: '!inline f/factory/lib/implement_support.script.lock'
 kind: script
 schema:

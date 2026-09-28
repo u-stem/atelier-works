@@ -9,9 +9,11 @@ import {
   classifyProtectedChanges,
   decideImplementRoundExit,
   extractAcceptanceCriteria,
+  IMPLEMENT_CHECK_SKIP_REASONS,
   IMPLEMENT_CLAUDE_OUTCOMES,
   isImplementClaudeOutput,
   NO_ACCEPTANCE_CRITERIA_NOTE,
+  roundOutcomeForExit,
   stallHash,
   truncateCheckOutput,
   validateImplementOutput,
@@ -293,60 +295,75 @@ describe("buildImplementBranchName", () => {
 describe("classifyProtectedChanges", () => {
   test("returns an empty list for ordinary source paths", () => {
     expect(
-      classifyProtectedChanges(["src/index.ts", "tests/index.test.ts"], {
-        packageJsonScriptsChanged: false,
-        newShellScripts: [],
-      }),
+      classifyProtectedChanges(
+        [
+          { path: "src/index.ts", status: "modified" },
+          { path: "tests/index.test.ts", status: "added" },
+        ],
+        false,
+      ),
     ).toEqual([]);
   });
 
   test("records an infra/** change (implement list, not pr_fix's)", () => {
     expect(
-      classifyProtectedChanges(["infra/worker/Dockerfile"], {
-        packageJsonScriptsChanged: false,
-        newShellScripts: [],
-      }),
+      classifyProtectedChanges(
+        [{ path: "infra/worker/Dockerfile", status: "modified" }],
+        false,
+      ),
     ).toEqual(["保護パスを変更: infra/worker/Dockerfile"]);
   });
 
   test("records a .github/workflows/** change", () => {
     expect(
-      classifyProtectedChanges([".github/workflows/ci.yml"], {
-        packageJsonScriptsChanged: false,
-        newShellScripts: [],
-      }),
+      classifyProtectedChanges(
+        [{ path: ".github/workflows/ci.yml", status: "modified" }],
+        false,
+      ),
     ).toEqual(["保護パスを変更: .github/workflows/ci.yml"]);
   });
 
   test("records each new shell script", () => {
     expect(
-      classifyProtectedChanges(["scripts/run.sh"], {
-        packageJsonScriptsChanged: false,
-        newShellScripts: ["scripts/run.sh"],
-      }),
+      classifyProtectedChanges(
+        [{ path: "scripts/run.sh", status: "added" }],
+        false,
+      ),
     ).toEqual(["新規の*.shを追加: scripts/run.sh"]);
   });
 
   test("records a package.json scripts change", () => {
     expect(
-      classifyProtectedChanges(["package.json"], {
-        packageJsonScriptsChanged: true,
-        newShellScripts: [],
-      }),
+      classifyProtectedChanges(
+        [{ path: "package.json", status: "modified" }],
+        true,
+      ),
     ).toEqual(["package.jsonのscriptsを変更"]);
   });
 
   test("lists protected paths first, then shell scripts, then the scripts flag", () => {
     expect(
-      classifyProtectedChanges(["scripts/run.sh", "lefthook.yml"], {
-        packageJsonScriptsChanged: true,
-        newShellScripts: ["scripts/run.sh"],
-      }),
+      classifyProtectedChanges(
+        [
+          { path: "scripts/run.sh", status: "added" },
+          { path: "lefthook.yml", status: "modified" },
+        ],
+        true,
+      ),
     ).toEqual([
       "保護パスを変更: lefthook.yml",
       "新規の*.shを追加: scripts/run.sh",
       "package.jsonのscriptsを変更",
     ]);
+  });
+
+  test("records a new shell script under a protected path twice, protected first", () => {
+    expect(
+      classifyProtectedChanges(
+        [{ path: "infra/x.sh", status: "added" }],
+        false,
+      ),
+    ).toEqual(["保護パスを変更: infra/x.sh", "新規の*.shを追加: infra/x.sh"]);
   });
 });
 
@@ -378,6 +395,10 @@ describe("truncateCheckOutput", () => {
 
   test("returns an empty string for a ceiling smaller than the first character", () => {
     expect(truncateCheckOutput("あ", 2)).toBe("");
+  });
+
+  test("strips NUL characters (Postgres text rejects them)", () => {
+    expect(truncateCheckOutput("a\u0000b", 16)).toBe("ab");
   });
 });
 
@@ -739,6 +760,50 @@ describe("stallHash", () => {
   test("is the sha256 hex digest of the text", () => {
     expect(stallHash("")).toBe(
       "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    );
+  });
+});
+
+describe("roundOutcomeForExit", () => {
+  test("maps checks_passed to done", () => {
+    expect(roundOutcomeForExit("checks_passed")).toBe("done");
+  });
+
+  test("maps checks_skipped to checks_skipped", () => {
+    expect(roundOutcomeForExit("checks_skipped")).toBe("checks_skipped");
+  });
+
+  test("maps stalled to stalled", () => {
+    expect(roundOutcomeForExit("stalled")).toBe("stalled");
+  });
+
+  test("maps requirements_gap to requirements_gap", () => {
+    expect(roundOutcomeForExit("requirements_gap")).toBe("requirements_gap");
+  });
+
+  test("maps max_rounds to check_failed", () => {
+    expect(roundOutcomeForExit("max_rounds")).toBe("check_failed");
+  });
+
+  test("maps daily_budget to check_failed", () => {
+    expect(roundOutcomeForExit("daily_budget")).toBe("check_failed");
+  });
+
+  test("maps continue to check_failed", () => {
+    expect(roundOutcomeForExit("continue")).toBe("check_failed");
+  });
+});
+
+describe("IMPLEMENT_CHECK_SKIP_REASONS", () => {
+  test("words the protected-path skip", () => {
+    expect(IMPLEMENT_CHECK_SKIP_REASONS.protected_paths).toBe(
+      "保護パスを変更したため",
+    );
+  });
+
+  test("words the no-command skip", () => {
+    expect(IMPLEMENT_CHECK_SKIP_REASONS.no_commands).toBe(
+      "検査コマンドが未設定のため",
     );
   });
 });
