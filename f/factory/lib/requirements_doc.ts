@@ -87,7 +87,10 @@ export function checkSections(markdown: string): string[] {
 // Markdown table parsing (shared by checkRequirementIds / checkDiagramRefs)
 // ---------------------------------------------------------------------------
 
-function extractSectionBody(markdown: string, heading: string): string {
+/** The lines under the `## <heading>` section (up to the next `##`), or
+ * `""` when the heading is absent. Exported for implement_support.ts's
+ * extractAcceptanceCriteria. */
+export function extractSectionBody(markdown: string, heading: string): string {
   const lines = markdown.split("\n");
   const startIndex = lines.findIndex(
     (line) => line.match(H2_HEADING_PATTERN)?.[1] === heading,

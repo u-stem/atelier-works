@@ -18,6 +18,7 @@ import {
   IMPLEMENT_PROTECTED_PATH_PREFIXES,
   matchesForbiddenPath,
 } from "./protected_paths.ts";
+import { extractSectionBody } from "./requirements_doc.ts";
 import {
   assertBranchName,
   isOneOf,
@@ -272,4 +273,147 @@ export function truncateCheckOutput(
     end -= 1;
   }
   return new TextDecoder().decode(bytes.subarray(0, end));
+}
+
+// ---------------------------------------------------------------------------
+// buildImplementPrBody: .github/PULL_REQUEST_TEMPLATE.md's sections filled
+// from the round's results (design §7)
+// ---------------------------------------------------------------------------
+
+export const NO_ACCEPTANCE_CRITERIA_NOTE =
+  "(要件定義に受入条件の節がありません)";
+
+const ACCEPTANCE_CRITERIA_HEADING = "受入条件";
+
+/** The approved requirements document's `## 受入条件` body, verbatim, for
+ * the PR body's 受入条件 section — or a fixed note when the section is
+ * missing or empty (the requirements validator rejects such a document,
+ * but the PR body must never silently render an empty section). */
+export function extractAcceptanceCriteria(markdown: string): string {
+  const body = extractSectionBody(markdown, ACCEPTANCE_CRITERIA_HEADING).trim();
+  return body.length === 0 ? NO_ACCEPTANCE_CRITERIA_NOTE : body;
+}
+
+export type DeployNeeds = {
+  /** `infra/**` changed — worker image rebuild (host-side `mise run deploy`). */
+  readonly imageRebuild: boolean;
+  /** `migrations/**` changed — `wmill datatable migrate up`. */
+  readonly migrate: boolean;
+  /** `f/**` changed — `wmill sync push`. */
+  readonly syncPush: boolean;
+};
+
+/** Mechanical reading of the template's 備考 checklist from the diff's
+ * paths. Only meaningful when the target repo is the factory itself; for
+ * any other repo every flag is false and 上記いずれも不要 is checked. */
+export function classifyDeployNeeds(
+  changedPaths: readonly string[],
+): DeployNeeds {
+  return {
+    imageRebuild: changedPaths.some((path) => path.startsWith("infra/")),
+    migrate: changedPaths.some((path) => path.startsWith("migrations/")),
+    syncPush: changedPaths.some((path) => path.startsWith("f/")),
+  };
+}
+
+export type ImplementCheckSummary =
+  | {
+      readonly kind: "ran";
+      readonly results: readonly {
+        readonly command: string;
+        readonly ok: boolean;
+      }[];
+    }
+  | { readonly kind: "skipped"; readonly reason: string };
+
+export type ImplementPrBodyInput = {
+  /** Claude's `summary` (caller applies normalizeJapaneseText first). */
+  readonly summary: string;
+  /** The approved requirements document (requirement_drafts markdown). */
+  readonly requirementsMarkdown: string;
+  /** The final round's checks. */
+  readonly checks: ImplementCheckSummary;
+  /** classifyProtectedChanges's lines for the final diff. */
+  readonly protectedChanges: readonly string[];
+  /** Claude's `notes_for_reviewer` (caller normalizes first). */
+  readonly notesForReviewer: readonly string[];
+  /** approval_support.ts's buildConsoleUrl(url, { work_item_id }). */
+  readonly requirementsConsoleUrl: string;
+  readonly issueNumber: number;
+  readonly changedPaths: readonly string[];
+};
+
+/** Prefixes a `#`-led line with a backslash so Claude-authored prose can
+ * never open a new Markdown section inside the template's structure
+ * (GitHub renders `\#` as a literal `#`). */
+function escapeHeadingLines(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => (line.startsWith("#") ? `\\${line}` : line))
+    .join("\n");
+}
+
+function checkbox(checked: boolean, label: string): string {
+  return `- [${checked ? "x" : " "}] ${label}`;
+}
+
+function renderChecks(checks: ImplementCheckSummary): string {
+  if (checks.kind === "skipped") {
+    return `検査未実施: ${checks.reason}`;
+  }
+  return checks.results
+    .map((result) => `- ${result.ok ? "pass" : "fail"}: \`${result.command}\``)
+    .join("\n");
+}
+
+/**
+ * The PR body, section for section, per .github/PULL_REQUEST_TEMPLATE.md:
+ * 概要 = summary, 受入条件 = the requirements document's table, 動作確認結果
+ * = the last round's checks (or 検査未実施 with its reason), 確認して欲しい点
+ * = protected changes + reviewer notes + a Console link to the approved
+ * requirements, 関連リンク = `Closes #N` (auto-links the PR work item to the
+ * issue — poll_prs.ts's extractLinkedIssueNumbers reads exactly this), 備考
+ * = the deploy checklist from classifyDeployNeeds. No marker and no
+ * announcement text (design §7: operational notices go to Discord/Console).
+ */
+export function buildImplementPrBody(input: ImplementPrBodyInput): string {
+  const needs = classifyDeployNeeds(input.changedPaths);
+  const nothingNeeded =
+    !needs.imageRebuild && !needs.migrate && !needs.syncPush;
+  const attention = [
+    ...input.protectedChanges.map((line) => `- ${escapeHeadingLines(line)}`),
+    ...input.notesForReviewer.map((line) => `- ${escapeHeadingLines(line)}`),
+    `- 要件定義(Console): ${input.requirementsConsoleUrl}`,
+  ];
+  return [
+    "## 概要",
+    "",
+    escapeHeadingLines(input.summary.trim()),
+    "",
+    "## 受入条件",
+    "",
+    extractAcceptanceCriteria(input.requirementsMarkdown),
+    "",
+    "## 動作確認結果",
+    "",
+    renderChecks(input.checks),
+    "",
+    "## 確認して欲しい点",
+    "",
+    ...attention,
+    "",
+    "## 関連リンク",
+    "",
+    `Closes #${String(input.issueNumber)}`,
+    "",
+    "## 備考",
+    "",
+    "Windmillへの反映の要否:",
+    "",
+    checkbox(needs.syncPush, "`wmill sync push`が必要"),
+    checkbox(needs.migrate, "`wmill datatable migrate up`が必要"),
+    checkbox(needs.imageRebuild, "worker imageのrebuildが必要"),
+    checkbox(nothingNeeded, "上記いずれも不要"),
+    "",
+  ].join("\n");
 }

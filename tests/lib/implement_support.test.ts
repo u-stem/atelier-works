@@ -3,10 +3,14 @@ import type { ImplementClaudeOutput } from "../../f/factory/lib/implement_suppor
 import {
   buildImplementBranchName,
   buildImplementCommitMessage,
+  buildImplementPrBody,
   CHECK_OUTPUT_MAX_BYTES,
+  classifyDeployNeeds,
   classifyProtectedChanges,
+  extractAcceptanceCriteria,
   IMPLEMENT_CLAUDE_OUTCOMES,
   isImplementClaudeOutput,
+  NO_ACCEPTANCE_CRITERIA_NOTE,
   truncateCheckOutput,
   validateImplementOutput,
 } from "../../f/factory/lib/implement_support.ts";
@@ -371,5 +375,200 @@ describe("truncateCheckOutput", () => {
 
   test("returns an empty string for a ceiling smaller than the first character", () => {
     expect(truncateCheckOutput("あ", 2)).toBe("");
+  });
+});
+
+const REQUIREMENTS_MD = [
+  "# 要件定義",
+  "",
+  "## 機能要件",
+  "",
+  "| ID | 要件 |",
+  "| --- | --- |",
+  "| FR-001 | CSVを出力する |",
+  "",
+  "## 受入条件",
+  "",
+  "| ID | 対象要件 | 条件 |",
+  "| --- | --- | --- |",
+  "| AC-001 | FR-001 | Given 一覧 / When 出力 / Then CSVが得られる |",
+  "",
+  "## 未決事項",
+  "",
+  "なし",
+].join("\n");
+
+const PR_BODY_INPUT = {
+  summary: "CSV出力を追加しました。",
+  requirementsMarkdown: REQUIREMENTS_MD,
+  checks: {
+    kind: "ran" as const,
+    results: [
+      { command: "bun test", ok: true },
+      { command: "bunx --bun tsc --noEmit", ok: true },
+    ],
+  },
+  protectedChanges: [],
+  notesForReviewer: ["区切り文字はカンマ固定と仮置きしました。"],
+  requirementsConsoleUrl:
+    "http://127.0.0.1:8080/apps/get/f/factory/factory_console#requirements/7",
+  issueNumber: 42,
+  changedPaths: ["src/export.ts", "tests/export.test.ts"],
+};
+
+describe("extractAcceptanceCriteria", () => {
+  test("returns the 受入条件 section body (table only, trimmed)", () => {
+    expect(extractAcceptanceCriteria(REQUIREMENTS_MD)).toBe(
+      [
+        "| ID | 対象要件 | 条件 |",
+        "| --- | --- | --- |",
+        "| AC-001 | FR-001 | Given 一覧 / When 出力 / Then CSVが得られる |",
+      ].join("\n"),
+    );
+  });
+
+  test("returns the fixed note when the section is missing", () => {
+    expect(extractAcceptanceCriteria("# 要件定義\n\n## 機能要件\n\nx")).toBe(
+      NO_ACCEPTANCE_CRITERIA_NOTE,
+    );
+  });
+
+  test("returns the fixed note when the section is empty", () => {
+    expect(extractAcceptanceCriteria("## 受入条件\n\n\n## 未決事項\n")).toBe(
+      NO_ACCEPTANCE_CRITERIA_NOTE,
+    );
+  });
+});
+
+describe("classifyDeployNeeds", () => {
+  test("flags nothing for ordinary source paths", () => {
+    expect(classifyDeployNeeds(["src/a.ts"])).toEqual({
+      imageRebuild: false,
+      migrate: false,
+      syncPush: false,
+    });
+  });
+
+  test("flags imageRebuild for infra/**", () => {
+    expect(classifyDeployNeeds(["infra/worker/Dockerfile"]).imageRebuild).toBe(
+      true,
+    );
+  });
+
+  test("flags migrate for migrations/**", () => {
+    expect(
+      classifyDeployNeeds(["migrations/datatable/main/20260928120000_x.up.sql"])
+        .migrate,
+    ).toBe(true);
+  });
+
+  test("flags syncPush for f/**", () => {
+    expect(classifyDeployNeeds(["f/factory/lib/db.ts"]).syncPush).toBe(true);
+  });
+});
+
+describe("buildImplementPrBody", () => {
+  test("follows the PR template's section order", () => {
+    const body = buildImplementPrBody(PR_BODY_INPUT);
+    expect(body.split("\n").filter((line) => line.startsWith("## "))).toEqual([
+      "## 概要",
+      "## 受入条件",
+      "## 動作確認結果",
+      "## 確認して欲しい点",
+      "## 関連リンク",
+      "## 備考",
+    ]);
+  });
+
+  test("puts the summary under 概要", () => {
+    expect(buildImplementPrBody(PR_BODY_INPUT)).toContain(
+      "## 概要\n\nCSV出力を追加しました。\n",
+    );
+  });
+
+  test("copies the acceptance criteria table under 受入条件", () => {
+    expect(buildImplementPrBody(PR_BODY_INPUT)).toContain(
+      "## 受入条件\n\n| ID | 対象要件 | 条件 |",
+    );
+  });
+
+  test("lists each check command with pass/fail under 動作確認結果", () => {
+    expect(buildImplementPrBody(PR_BODY_INPUT)).toContain(
+      "## 動作確認結果\n\n- pass: `bun test`\n- pass: `bunx --bun tsc --noEmit`\n",
+    );
+  });
+
+  test("marks a failed check as fail", () => {
+    const body = buildImplementPrBody({
+      ...PR_BODY_INPUT,
+      checks: { kind: "ran", results: [{ command: "bun test", ok: false }] },
+    });
+    expect(body).toContain("- fail: `bun test`");
+  });
+
+  test("states 検査未実施 with the reason when checks were skipped", () => {
+    const body = buildImplementPrBody({
+      ...PR_BODY_INPUT,
+      checks: { kind: "skipped", reason: "保護パスを変更したため" },
+    });
+    expect(body).toContain(
+      "## 動作確認結果\n\n検査未実施: 保護パスを変更したため\n",
+    );
+  });
+
+  test("lists protected changes, reviewer notes, and the Console link under 確認して欲しい点", () => {
+    const body = buildImplementPrBody({
+      ...PR_BODY_INPUT,
+      protectedChanges: ["保護パスを変更: infra/worker/Dockerfile"],
+    });
+    expect(body).toContain(
+      [
+        "## 確認して欲しい点",
+        "",
+        "- 保護パスを変更: infra/worker/Dockerfile",
+        "- 区切り文字はカンマ固定と仮置きしました。",
+        "- 要件定義(Console): http://127.0.0.1:8080/apps/get/f/factory/factory_console#requirements/7",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  test("links the parent issue with Closes #N", () => {
+    expect(buildImplementPrBody(PR_BODY_INPUT)).toContain(
+      "## 関連リンク\n\nCloses #42\n",
+    );
+  });
+
+  test("checks 上記いずれも不要 when no deploy-relevant path changed", () => {
+    expect(buildImplementPrBody(PR_BODY_INPUT)).toContain(
+      [
+        "Windmillへの反映の要否:",
+        "",
+        "- [ ] `wmill sync push`が必要",
+        "- [ ] `wmill datatable migrate up`が必要",
+        "- [ ] worker imageのrebuildが必要",
+        "- [x] 上記いずれも不要",
+      ].join("\n"),
+    );
+  });
+
+  test("checks the sync push box (and not 不要) when f/** changed", () => {
+    const body = buildImplementPrBody({
+      ...PR_BODY_INPUT,
+      changedPaths: ["f/factory/lib/db.ts"],
+    });
+    expect(body).toContain(
+      "- [x] `wmill sync push`が必要\n- [ ] `wmill datatable migrate up`が必要\n- [ ] worker imageのrebuildが必要\n- [ ] 上記いずれも不要",
+    );
+  });
+
+  test("escapes a heading-looking line inside the summary so it cannot inject a section", () => {
+    const body = buildImplementPrBody({
+      ...PR_BODY_INPUT,
+      summary: "概要です。\n## 関連リンク\nCloses #1",
+    });
+    expect(
+      body.split("\n").filter((line) => line === "## 関連リンク"),
+    ).toHaveLength(1);
   });
 });
