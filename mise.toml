@@ -79,6 +79,14 @@ run = "wmill sync pull"
 description = "Apply pending datatable migrations"
 run = "wmill datatable migrate up"
 
+[tasks.metadata]
+description = "Regenerate stale Windmill metadata (locks and schemas)"
+run = "wmill generate-metadata --yes"
+
+[tasks."metadata:check"]
+description = "Fail if Windmill metadata (locks and schemas) is stale"
+run = "scripts/check-metadata-fresh.sh"
+
 [tasks.lint]
 description = "Run biome, wmill lint, and the type-assertion lint script"
 run = """

@@ -108,7 +108,7 @@
 
 - Windmillは起動時に`admins`ワークスペースへ「Synchronize Hub Resource types with instance」などの組み込みscript / scheduleを自動作成する。これらはWindmill本体の一部であり、本リポジトリの管理対象ではない(`mise run push`や`self_update`の同期対象にも含まれない)。summaryが英語のままなのはそのためで、日本語化や削除はしない。
 - Factoryの資産はすべて`factory`ワークスペースの`f/factory/**`にある。
-- ダッシュボードApp(Factory Console、`f/factory/factory_console__raw_app/`)はraw appとしてコードでリポジトリ管理する。編集はWindmill UIではなくリポジトリのソース(`App.tsx` / `tabs/*.tsx` / `backend/*.yaml`等)を直接編集し、`mise run push`でデプロイする。バックエンドrunnableを追加・変更した場合は`wmill generate-metadata`でロック情報を更新してからコミットする。
+- ダッシュボードApp(Factory Console、`f/factory/factory_console__raw_app/`)はraw appとしてコードでリポジトリ管理する。編集はWindmill UIではなくリポジトリのソース(`App.tsx` / `tabs/*.tsx` / `backend/*.yaml`等)を直接編集し、`mise run push`でデプロイする。ロック情報はコミット時にpre-commit hookが自動更新する。
 
 ## 秘密のローテーション
 

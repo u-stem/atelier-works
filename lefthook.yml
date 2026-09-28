@@ -3,19 +3,29 @@
 # Every command goes through `mise exec --` so the hooks work even when mise
 # is not activated in the committer's shell (only `mise` itself must be on PATH).
 pre-commit:
-  parallel: true
-  commands:
-    biome:
-      glob: "*.{ts,json,jsonc}"
-      run: mise exec -- bunx --bun biome check --no-errors-on-unmatched {staged_files}
-    no-type-assertions:
-      glob: "*.ts"
-      run: mise exec -- bun run scripts/lint-no-type-assertions.ts {staged_files}
-    gitleaks:
-      run: mise exec -- gitleaks protect --staged --redact --no-banner
-    wmill-lint:
+  # wmill-metadata runs first and sequentially (not inside the parallel
+  # group) so any lock/schema files it stages are on disk before gitleaks
+  # scans staged content and wmill-lint validates f/.
+  jobs:
+    - name: wmill-metadata
       glob: "f/**"
-      run: mise exec -- wmill lint f
+      tags:
+        - wmill-metadata
+      run: mise exec -- scripts/generate-metadata-staged.sh
+    - group:
+        parallel: true
+        jobs:
+          - name: biome
+            glob: "*.{ts,json,jsonc}"
+            run: mise exec -- bunx --bun biome check --no-errors-on-unmatched {staged_files}
+          - name: no-type-assertions
+            glob: "*.ts"
+            run: mise exec -- bun run scripts/lint-no-type-assertions.ts {staged_files}
+          - name: gitleaks
+            run: mise exec -- gitleaks protect --staged --redact --no-banner
+          - name: wmill-lint
+            glob: "f/**"
+            run: mise exec -- wmill lint f
 
 commit-msg:
   commands:
@@ -26,3 +36,13 @@ pre-push:
   commands:
     check:
       run: mise run check
+    # Backstop for the pre-commit wmill-metadata job. Only runs when the
+    # pushed commits touch Windmill assets or the hash file, so a docs-only
+    # push does not need the local Windmill stack. Skip in an emergency with
+    # LEFTHOOK_EXCLUDE=wmill-metadata-check (then run `mise run metadata`
+    # before the next push).
+    wmill-metadata-check:
+      glob:
+        - "f/**"
+        - "wmill-lock.yaml"
+      run: mise run metadata:check
