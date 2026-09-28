@@ -15,6 +15,7 @@
 // also gets claude.ts's single "fill the required fields" retry.
 
 import { isOneOf, isRecord, isString, isStringArray } from "./types.ts";
+import { withCommitTrailers } from "./workspace.ts";
 
 /** Claude's own two outcomes (IMPLEMENT_SCHEMA). The verify loop's extra
  * `implement_rounds.outcome` values (`check_failed` / `checks_skipped` /
@@ -111,4 +112,29 @@ export function validateImplementOutput(
     return { ok: false, reason: 'commit_subject ends with "…"' };
   }
   return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// buildImplementCommitMessage: subject + body + trailers (design §7)
+// ---------------------------------------------------------------------------
+
+/**
+ * The literal commit message `implement_finish` passes to `commitAndPush`
+ * (workspace.ts): the trimmed `commit_subject`, then — only when
+ * `commit_body` is not blank — a blank line and the trimmed body, then the
+ * `Co-Authored-By` / `Generated-By` trailers via `withCommitTrailers`
+ * (idempotent, so `commitAndPush`'s own call adds nothing more). Callers
+ * run `validateImplementOutput` first; this function does not re-check the
+ * subject. Japanese spacing normalization (`normalizeJapaneseText`, a
+ * steps/pr_workflow_support.ts export) is the caller's job before this —
+ * lib does not import from steps.
+ */
+export function buildImplementCommitMessage(
+  output: Pick<ImplementClaudeOutput, "commit_subject" | "commit_body">,
+  instanceName: string,
+): string {
+  const subject = output.commit_subject.trim();
+  const body = output.commit_body.trim();
+  const message = body.length === 0 ? subject : `${subject}\n\n${body}`;
+  return withCommitTrailers(message, instanceName);
 }

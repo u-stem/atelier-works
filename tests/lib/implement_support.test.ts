@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { ImplementClaudeOutput } from "../../f/factory/lib/implement_support.ts";
 import {
+  buildImplementCommitMessage,
   isImplementClaudeOutput,
   validateImplementOutput,
 } from "../../f/factory/lib/implement_support.ts";
@@ -161,5 +162,60 @@ describe("validateImplementOutput", () => {
     expect(
       validateImplementOutput({ ...GAP_OUTPUT, gap_report: "  \n" }).ok,
     ).toBe(false);
+  });
+});
+
+describe("buildImplementCommitMessage", () => {
+  test("joins subject, body, and both trailers with blank lines", () => {
+    expect(buildImplementCommitMessage(DONE_OUTPUT, "local")).toBe(
+      [
+        "feat: CSV出力を追加する",
+        "",
+        "- 受入条件AC-001のためにエクスポート処理を追加",
+        "",
+        "Co-Authored-By: Claude <noreply@anthropic.com>",
+        "Generated-By: Software Factory (local)",
+      ].join("\n"),
+    );
+  });
+
+  test("omits the body block when commit_body is empty", () => {
+    expect(
+      buildImplementCommitMessage(
+        { commit_subject: "fix: nullチェックを追加する", commit_body: "" },
+        "local",
+      ),
+    ).toBe(
+      "fix: nullチェックを追加する\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nGenerated-By: Software Factory (local)",
+    );
+  });
+
+  test("treats a whitespace-only commit_body as empty", () => {
+    expect(
+      buildImplementCommitMessage(
+        { commit_subject: "fix: subject", commit_body: " \n" },
+        "local",
+      ),
+    ).not.toContain("subject\n\n \n");
+  });
+
+  test("trims surrounding whitespace from the subject", () => {
+    expect(
+      buildImplementCommitMessage(
+        { commit_subject: "  fix: subject  ", commit_body: "" },
+        "local",
+      ).startsWith("fix: subject\n"),
+    ).toBe(true);
+  });
+
+  test("does not double the trailers when the body already carries the co-author trailer", () => {
+    const message = buildImplementCommitMessage(
+      {
+        commit_subject: "fix: subject",
+        commit_body: "Co-Authored-By: Claude <noreply@anthropic.com>",
+      },
+      "local",
+    );
+    expect(message.split("Co-Authored-By").length - 1).toBe(1);
   });
 });
