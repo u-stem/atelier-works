@@ -417,6 +417,7 @@ const PR_BODY_INPUT = {
     "http://127.0.0.1:8080/apps/get/f/factory/factory_console#requirements/7",
   issueNumber: 42,
   changedPaths: ["src/export.ts", "tests/export.test.ts"],
+  deployChecklist: true,
 };
 
 describe("extractAcceptanceCriteria", () => {
@@ -624,6 +625,23 @@ describe("buildImplementPrBody", () => {
       summary: "概要です。\n===",
     });
     expect(body).toContain("\n\\===\n");
+  });
+
+  test("renders 備考 as なし when the deploy checklist is off", () => {
+    const body = buildImplementPrBody({
+      ...PR_BODY_INPUT,
+      deployChecklist: false,
+    });
+    expect(body).toContain("## 備考\n\nなし\n");
+  });
+
+  test("omits the Windmill checklist when the deploy checklist is off", () => {
+    const body = buildImplementPrBody({
+      ...PR_BODY_INPUT,
+      changedPaths: ["f/factory/lib/db.ts"],
+      deployChecklist: false,
+    });
+    expect(body).not.toContain("wmill sync push");
   });
 });
 

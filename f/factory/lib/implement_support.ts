@@ -305,8 +305,10 @@ export type DeployNeeds = {
 };
 
 /** Mechanical reading of the template's 備考 checklist from the diff's
- * paths. Only meaningful when the target repo is the factory itself; for
- * any other repo every flag is false and 上記いずれも不要 is checked. */
+ * paths. Only meaningful for the factory repo itself: another repo may well
+ * have its own `infra/`, `migrations/` or `f/` directories, so the flags
+ * would be set for paths that have nothing to do with Windmill. The caller
+ * gates it with ImplementPrBodyInput's `deployChecklist`. */
 export function classifyDeployNeeds(
   changedPaths: readonly string[],
 ): DeployNeeds {
@@ -342,6 +344,10 @@ export type ImplementPrBodyInput = {
   readonly requirementsConsoleUrl: string;
   readonly issueNumber: number;
   readonly changedPaths: readonly string[];
+  /** true when the target repo is the factory itself (the caller decides):
+   * only then does 備考 carry the Windmill deploy checklist; otherwise it
+   * reads なし. */
+  readonly deployChecklist: boolean;
 };
 
 /*
@@ -428,6 +434,20 @@ function checkbox(checked: boolean, label: string): string {
   return `- [${checked ? "x" : " "}] ${label}`;
 }
 
+function renderDeployChecklist(changedPaths: readonly string[]): string[] {
+  const needs = classifyDeployNeeds(changedPaths);
+  const nothingNeeded =
+    !needs.imageRebuild && !needs.migrate && !needs.syncPush;
+  return [
+    "Windmillへの反映の要否:",
+    "",
+    checkbox(needs.syncPush, "`wmill sync push`が必要"),
+    checkbox(needs.migrate, "`wmill datatable migrate up`が必要"),
+    checkbox(needs.imageRebuild, "worker imageのrebuildが必要"),
+    checkbox(nothingNeeded, "上記いずれも不要"),
+  ];
+}
+
 function renderChecks(checks: ImplementCheckSummary): string {
   if (checks.kind === "skipped") {
     return `検査未実施: ${checks.reason}`;
@@ -444,13 +464,11 @@ function renderChecks(checks: ImplementCheckSummary): string {
  * = protected changes + reviewer notes + a Console link to the approved
  * requirements, 関連リンク = `Closes #N` (auto-links the PR work item to the
  * issue — poll_prs.ts's extractLinkedIssueNumbers reads exactly this), 備考
- * = the deploy checklist from classifyDeployNeeds. No marker and no
+ * = the deploy checklist from classifyDeployNeeds for the factory repo
+ * (`deployChecklist`), なし otherwise. No marker and no
  * announcement text (design §7: operational notices go to Discord/Console).
  */
 export function buildImplementPrBody(input: ImplementPrBodyInput): string {
-  const needs = classifyDeployNeeds(input.changedPaths);
-  const nothingNeeded =
-    !needs.imageRebuild && !needs.migrate && !needs.syncPush;
   const attention = [
     ...input.protectedChanges.map((line) => `- ${sanitizePrLine(line)}`),
     ...input.notesForReviewer.map((line) => `- ${sanitizePrLine(line)}`),
@@ -479,12 +497,9 @@ export function buildImplementPrBody(input: ImplementPrBodyInput): string {
     "",
     "## 備考",
     "",
-    "Windmillへの反映の要否:",
-    "",
-    checkbox(needs.syncPush, "`wmill sync push`が必要"),
-    checkbox(needs.migrate, "`wmill datatable migrate up`が必要"),
-    checkbox(needs.imageRebuild, "worker imageのrebuildが必要"),
-    checkbox(nothingNeeded, "上記いずれも不要"),
+    ...(input.deployChecklist
+      ? renderDeployChecklist(input.changedPaths)
+      : ["なし"]),
     "",
   ].join("\n");
 }
