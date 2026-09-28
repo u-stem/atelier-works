@@ -5,6 +5,7 @@ import {
   FIX_SCHEMA,
   fixPrompt,
   IMPLEMENT_SCHEMA,
+  implementFixPrompt,
   implementPrompt,
   REQUIREMENTS_SCHEMA,
   REVIEW_SCHEMA,
@@ -849,5 +850,52 @@ describe("IMPLEMENT_SCHEMA", () => {
       type: "array",
       items: { type: "string" },
     });
+  });
+});
+
+describe("implementFixPrompt", () => {
+  const FIX_INPUT = {
+    ...IMPLEMENT_INPUT,
+    hasPreviousImplementation: true,
+    checkFailures: [
+      {
+        command: "bun test",
+        outputTail: "UNIQUE_CHECK_OUTPUT_7788\n1 fail",
+      },
+    ],
+    round: 2,
+    maxRounds: 5,
+  };
+
+  test("wraps the check failure output in a nonce-qualified fence", () => {
+    const prompt = implementFixPrompt(FIX_INPUT, FIXED_UUID);
+    expect(prompt).toContain("<<<DATA-test-nonce (check failure 1 output)");
+  });
+
+  test("never lets the check output appear outside a fenced block", () => {
+    const prompt = implementFixPrompt(FIX_INPUT, FIXED_UUID);
+    expect(stripFences(prompt, "test-nonce")).not.toContain(
+      "UNIQUE_CHECK_OUTPUT_7788",
+    );
+  });
+
+  test("names the failed command outside the fence", () => {
+    const prompt = implementFixPrompt(FIX_INPUT, FIXED_UUID);
+    expect(prompt).toContain("Check command failed: bun test");
+  });
+
+  test("states the round number and the round limit", () => {
+    const prompt = implementFixPrompt(FIX_INPUT, FIXED_UUID);
+    expect(prompt).toContain("Round 2 of 5.");
+  });
+
+  test("still fences the approved requirements in fix mode", () => {
+    const prompt = implementFixPrompt(FIX_INPUT, FIXED_UUID);
+    expect(prompt).toContain("<<<DATA-test-nonce (approved requirements)");
+  });
+
+  test("forbids weakening tests or changing the check commands", () => {
+    const prompt = implementFixPrompt(FIX_INPUT, FIXED_UUID);
+    expect(prompt).toContain("Do not weaken or delete a test");
   });
 });

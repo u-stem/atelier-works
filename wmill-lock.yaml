@@ -26,7 +26,7 @@ locks:
   f/factory/lib/github: 920a326caa9b74dbb00f45b090e8f42ad0516a9481b53ddf08fd58120c147612
   f/factory/lib/log: d02443bbbdd8d24f1b90939e569fb010f50784f39f5851bfe1bb4db3bc2b318d
   f/factory/lib/poll_support: 304f9d1dd11c7389331e801eb8a7e59f8cae6335e445140b13fd5acbd0e139b7
-  f/factory/lib/prompts: 91cc9f4230d72d025ada89b5c7ca891ef35e1e1697ccdb17465bbe026865152f
+  f/factory/lib/prompts: bf175aa2dd5d47392b6b96b6068c497249642e1a29d42a8a7430eb8c763080d2
   f/factory/lib/requirements_doc: 214bf5385f815dae2bf8411f246ba4b93afd26f2a1f9b9547d78f014410a36c1
   f/factory/lib/requirements_template: 1312230f3c59d7a112692d1a38b172a69ca557faf79912920a9f50698730d3c2
   f/factory/lib/self_update_support: 1a212118475fae92e850b84bd647e6b7d3c2045ca607a28e74876687fa103f46

@@ -753,6 +753,53 @@ export function implementPrompt(
   return sections.join("\n");
 }
 
+export type ImplementFixPromptInput = ImplementPromptInput & {
+  /** The previous round's failed check runs (`runAllowedCheckCommands` and
+   * the fixed gitleaks check). `outputTail` is already cut to the flow's
+   * 16KB cap by the caller (design §12) and is target-repo output —
+   * untrusted, fenced; `command` is operator-authored (factory_config) and
+   * is named outside the fence, exactly as in `fixPrompt`. */
+  checkFailures: readonly CheckFailure[];
+  /** This round's 1-based number within `implement_verify`'s loop. */
+  round: number;
+  /** `factory_config.implement_max_rounds`. */
+  maxRounds: number;
+};
+
+export function implementFixPrompt(
+  input: ImplementFixPromptInput,
+  deps: PromptDeps = {},
+): string {
+  const uuid = deps.uuid ?? defaultUuid;
+  const nonce = uuid();
+  const sections: string[] = [
+    "You are the implementation stage of a Software Factory pipeline, in",
+    "fix mode: your previous round's changes are in the worktree, and the",
+    "flow's check commands failed on them. Read the failure output below,",
+    "fix its cause with the Read, Glob, Grep, Edit, and Write tools, and",
+    "keep the implementation aligned with the approved requirements.",
+    "Do not weaken or delete a test to make it pass, and do not change the",
+    "check commands' own definitions (mise.toml, package.json scripts, CI",
+    "workflows) to avoid a failure. You have no Bash; do not commit.",
+    `Round ${String(input.round)} of ${String(input.maxRounds)}.`,
+    "",
+    ...implementContextSections(nonce, input),
+  ];
+  input.checkFailures.forEach((failure, index) => {
+    sections.push(
+      "",
+      `Check command failed: ${failure.command}`,
+      dataFence(
+        nonce,
+        `check failure ${String(index + 1)} output`,
+        failure.outputTail,
+      ),
+    );
+  });
+  sections.push(...implementOutputSections());
+  return sections.join("\n");
+}
+
 export const IMPLEMENT_SCHEMA = {
   type: "object",
   properties: {
