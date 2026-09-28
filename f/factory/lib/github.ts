@@ -1005,6 +1005,51 @@ export async function addLabels(
   ensureSuccess(response, `POST issue labels ${owner}/${repo}#${number}`);
 }
 
+export type EnsureLabelOptions = {
+  /** Six hex digits without a leading `#` (GitHub's label API form). */
+  readonly color: string;
+  readonly description: string;
+};
+
+export type EnsureLabelResult = { readonly created: boolean };
+
+/**
+ * Make sure a label named `name` exists in `owner/repo` (工程3 design §2
+ * implement_finish: `factory:review` must exist before `addLabels` puts it
+ * on the new PR, or GitHub silently drops it). `GET .../labels/{name}`
+ * first; a 404 leads to `POST .../labels`. A 422 on the POST means another
+ * job created it in between (GitHub's `already_exists` validation error)
+ * and is treated as "exists", not as a failure.
+ */
+export async function ensureLabel(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  name: string,
+  opts: EnsureLabelOptions,
+): Promise<EnsureLabelResult> {
+  validateOwnerRepo(owner, repo);
+  const getResponse = await callGhApi(
+    client,
+    `repos/${owner}/${repo}/labels/${encodeURIComponent(name)}`,
+  );
+  if (getResponse.status !== 404) {
+    ensureSuccess(getResponse, `GET label ${owner}/${repo} ${name}`);
+    return { created: false };
+  }
+  const postResponse = await callGhApi(
+    client,
+    `repos/${owner}/${repo}/labels`,
+    {
+      method: "POST",
+      body: { name, color: opts.color, description: opts.description },
+    },
+  );
+  if (postResponse.status === 422) return { created: false };
+  ensureSuccess(postResponse, `POST label ${owner}/${repo} ${name}`);
+  return { created: true };
+}
+
 export type CreateIssueOptions = {
   readonly title: string;
   readonly body: string;

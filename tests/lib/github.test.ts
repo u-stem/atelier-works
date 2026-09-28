@@ -6,6 +6,7 @@ import {
   createIssue,
   createPrReview,
   createPullRequest,
+  ensureLabel,
   findIssueByMarker,
   findOpenPullRequestByHead,
   getBranchProtected,
@@ -2238,5 +2239,125 @@ describe("updatePullRequestBody", () => {
         "new body",
       ),
     ).rejects.toThrow(/HTTP 404/);
+  });
+});
+
+describe("ensureLabel", () => {
+  const LABEL_OPTS = {
+    color: "0e8a16",
+    description: "Factoryの自動レビュー対象",
+  };
+
+  test("returns created: false without POSTing when the label already exists", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ name: "factory:review", color: "0e8a16" }),
+    ]);
+    const result = await ensureLabel(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      "factory:review",
+      LABEL_OPTS,
+    );
+    expect(result).toEqual({ created: false });
+  });
+
+  test("makes only the GET call when the label already exists", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ name: "factory:review", color: "0e8a16" }),
+    ]);
+    await ensureLabel(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      "factory:review",
+      LABEL_OPTS,
+    );
+    expect(fake.calls).toHaveLength(1);
+  });
+
+  test("creates the label after a 404 and returns created: true", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(404, { message: "Not Found" })),
+      ok(ghApiStdout(201, { name: "factory:review" })),
+    ]);
+    const result = await ensureLabel(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      "factory:review",
+      LABEL_OPTS,
+    );
+    expect(result).toEqual({ created: true });
+  });
+
+  test("POSTs name/color/description to the labels endpoint", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(404, { message: "Not Found" })),
+      ok(ghApiStdout(201, { name: "factory:review" })),
+    ]);
+    await ensureLabel(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      "factory:review",
+      LABEL_OPTS,
+    );
+    expect(fake.calls[1]?.options?.stdin).toBe(
+      JSON.stringify({
+        name: "factory:review",
+        color: "0e8a16",
+        description: "Factoryの自動レビュー対象",
+      }),
+    );
+  });
+
+  test("URL-encodes the label name in the GET (a label can contain a colon)", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ name: "factory:review" })]);
+    await ensureLabel(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      "factory:review",
+      LABEL_OPTS,
+    );
+    expect(fake.calls[0]?.argv).toContain(
+      "repos/acme/widgets/labels/factory%3Areview",
+    );
+  });
+
+  test("treats a 422 on create as already existing (raced with another job)", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(404, { message: "Not Found" })),
+      ok(
+        ghApiStdout(422, {
+          message: "Validation Failed",
+          errors: [{ code: "already_exists" }],
+        }),
+      ),
+    ]);
+    const result = await ensureLabel(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      "factory:review",
+      LABEL_OPTS,
+    );
+    expect(result).toEqual({ created: false });
+  });
+
+  test("throws when the existence check fails with a non-404 error", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(500, { message: "boom" })),
+    ]);
+    await expect(
+      ensureLabel(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        "factory:review",
+        LABEL_OPTS,
+      ),
+    ).rejects.toThrow(/HTTP 500/);
   });
 });
