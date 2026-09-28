@@ -29,6 +29,8 @@ mise run bootstrap      # ワークスペース作成、secret 投入、sync pus
 
 `bootstrap`はワークスペースIDを小文字の`factory`のまま、表示名だけを`Factory`(ダッシュボードApp「Factory Console」などと表記を揃える)に設定する。
 
+`f/`配下をコミットするとpre-commit hookがローカルWindmillに接続して`wmill generate-metadata`を実行し、`f/`か`wmill-lock.yaml`の変更を含むpushではpre-push hookが同様に接続してstaleなメタデータを検出する。どちらも`mise run up`でスタックを起動しておく必要がある。手動実行は`mise run metadata` / `mise run metadata:check`。
+
 ## 自己更新に関する設定
 
 - `factory_config`リソースの`factory_branch`(既定`main`)は、`self_update`が追跡するこのリポジトリのブランチ名。フォークやフィーチャーブランチで運用したい場合はWindmill UIからこの値を変更する(変更が効くのはworker内のself cloneをまだ作成していない場合のみ。既存のcloneに反映するにはworkerコンテナ内の`/workspaces/factory/atelier-works`を削除して再作成させる)。

@@ -27,13 +27,23 @@
 - Deploy mode: wmill sync push (no git-push deploy)。実務上は`mise run push` =
   `wmill sync push --yes --keep-deleted`を使う。削除を確定させる
   `mise run push:prune`は人が明示的に実行する。
-- Metadata: ask first(`wmill generate-metadata`等でメタデータを書き換える前に
-  必ず確認する)。
+- Metadata: auto。pre-commitフックが`f/`配下のステージ内容に応じて
+  `wmill generate-metadata --yes`を実行し、変更・新規作成されたロック/スキーマ
+  ファイルを自動でステージする(確認は不要)。pre-pushの`metadata:check`は
+  push対象に`f/`か`wmill-lock.yaml`の変更が含まれるときだけ動き、staleな
+  メタデータを検出してpushを止める。どちらもローカルWindmill(`mise run up`)
+  への接続が必要。依存変更を隠さないため`rehash`は使わない。
+  Windmillを起動できない場面では`LEFTHOOK_EXCLUDE=wmill-metadata git commit ...`
+  (pre-commit)/ `LEFTHOOK_EXCLUDE=wmill-metadata-check git push`(pre-push)で
+  一時的に飛ばせるが、次のpush前に`mise run metadata`で追従させる。
+  手動実行は`mise run metadata` / `mise run metadata:check`。
 - `scripts/lint-no-type-assertions.ts`はトークンベースのヒューリスティックのため、
   ネストしたジェネリクス(`Array<Array<Foo>>`のように`>>`が1トークンになる場合)
   では誤検知/検知漏れが起こりうる(詳細はスクリプト冒頭コメント参照)。
 - Git hooksはlefthook(`mise run setup`で`lefthook install`を実行)。
-  pre-commitでbiome・`as`禁止(`lint-no-type-assertions.ts`)・gitleaks・
-  (`f/`があれば)`wmill lint f`、commit-msgでコミットメッセージ規約検査
-  (`scripts/check-commit-msg.sh`)、pre-pushで`mise run check`を実行する。
-  `--no-verify`は使わない。
+  pre-commitで(`f/`配下のステージがあれば)`wmill generate-metadata --yes`
+  (`scripts/generate-metadata-staged.sh`)を先に実行し、続けてbiome・`as`禁止
+  (`lint-no-type-assertions.ts`)・gitleaks・(`f/`があれば)`wmill lint f`を
+  並列実行する。commit-msgでコミットメッセージ規約検査
+  (`scripts/check-commit-msg.sh`)、pre-pushで`mise run check`と
+  `mise run metadata:check`(stale検出)を実行する。`--no-verify`は使わない。
