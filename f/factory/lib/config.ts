@@ -356,20 +356,46 @@ export async function loadConfig(
   return parseFactoryConfig(raw);
 }
 
+/** Normalizes a GitHub HTTPS clone URL for comparison: trims whitespace,
+ * strips a trailing `.git`, strips trailing slashes, and lowercases the
+ * result (GitHub owner/repo segments are case-insensitive). Shared by
+ * `isRepoAllowed` here and `filterByRepoAllowlist` (poll_support.ts). */
+export function normalizeRepoUrl(url: string): string {
+  return url
+    .trim()
+    .replace(/\.git$/i, "")
+    .replace(/\/+$/, "")
+    .toLowerCase();
+}
+
 /**
- * Whether `owner`/`repo` is allowed to be targeted by this factory instance:
- * `owner` must be one of `config.owners` (case-insensitive, as GitHub logins
- * are), and when `config.repo_allowlist` is non-empty the repo's HTTPS
- * clone URL (with or without a trailing `.git`) must appear in it
- * (spec-cycle2.md §7 item 10: "repo_allowlist([] = owners 全体)"). Promoted
- * from f/factory/steps/manual_intake_create_issue.ts's own copy — that
- * call site switches over on its owner's own schedule.
+ * Whether `owner`/`repo` is allowed to be targeted by this factory instance.
+ *
+ * `config.factory_repo` is always allowed regardless of `owners` /
+ * `repo_allowlist`: it is the repo the factory deploys itself from and
+ * files its own audit-driven Issues into, so the self-improvement loop
+ * (工程5 audit → Issue → requirements pipeline) must not depend on that
+ * repo also being listed in `owners`/`repo_allowlist` (2026-09-28 fix —
+ * previously a `factory_repo` left out of `repo_allowlist` silently lost
+ * its `factory` trigger label, see issue_proposal_apply.ts's
+ * `resolveFactoryLabel`).
+ *
+ * Otherwise, `owner` must be one of `config.owners` (case-insensitive, as
+ * GitHub logins are), and when `config.repo_allowlist` is non-empty the
+ * repo's HTTPS clone URL (with or without a trailing `.git`) must appear in
+ * it (spec-cycle2.md §7 item 10: "repo_allowlist([] = owners 全体)").
+ * Promoted from f/factory/steps/manual_intake_create_issue.ts's own copy —
+ * that call site switches over on its owner's own schedule.
  */
 export function isRepoAllowed(
-  config: Pick<FactoryConfig, "owners" | "repo_allowlist">,
+  config: Pick<FactoryConfig, "owners" | "repo_allowlist" | "factory_repo">,
   owner: string,
   repo: string,
 ): boolean {
+  const target = normalizeRepoUrl(`https://github.com/${owner}/${repo}`);
+  if (normalizeRepoUrl(config.factory_repo) === target) {
+    return true;
+  }
   const ownerAllowed = config.owners.some(
     (candidate) => candidate.name.toLowerCase() === owner.toLowerCase(),
   );
@@ -379,12 +405,7 @@ export function isRepoAllowed(
   if (config.repo_allowlist.length === 0) {
     return true;
   }
-  const normalize = (url: string): string =>
-    url
-      .trim()
-      .replace(/\.git$/i, "")
-      .replace(/\/+$/, "")
-      .toLowerCase();
-  const target = normalize(`https://github.com/${owner}/${repo}`);
-  return config.repo_allowlist.some((entry) => normalize(entry) === target);
+  return config.repo_allowlist.some(
+    (entry) => normalizeRepoUrl(entry) === target,
+  );
 }

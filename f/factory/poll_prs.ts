@@ -452,7 +452,7 @@ export async function main(): Promise<{
     await recordFailureSafe("list_tracked_prs", err, log);
   }
 
-  const allowed = filterByRepoAllowlist(rawCandidates, config.repo_allowlist);
+  const allowed = filterByRepoAllowlist(rawCandidates, config);
 
   const contexts: PrCandidateContext[] = [];
   for (const found of allowed) {

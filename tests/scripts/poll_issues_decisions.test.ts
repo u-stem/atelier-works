@@ -27,9 +27,16 @@ function candidate(overrides: Partial<IssueCandidate> = {}): IssueCandidate {
 }
 
 describe("filterByRepoAllowlist", () => {
+  const FACTORY_REPO = "https://github.com/octo-owner/factory";
+
   test("returns every item unchanged when the allowlist is empty", () => {
     const items = [{ owner: "octo-owner", repo: "atelier-works" }];
-    expect(filterByRepoAllowlist(items, [])).toEqual(items);
+    expect(
+      filterByRepoAllowlist(items, {
+        repo_allowlist: [],
+        factory_repo: FACTORY_REPO,
+      }),
+    ).toEqual(items);
   });
 
   test("drops items whose owner/repo is not in a non-empty allowlist", () => {
@@ -37,10 +44,23 @@ describe("filterByRepoAllowlist", () => {
       { owner: "octo-owner", repo: "atelier-works" },
       { owner: "octo-owner", repo: "other-repo" },
     ];
-    const filtered = filterByRepoAllowlist(items, [
-      "https://github.com/octo-owner/atelier-works",
-    ]);
+    const filtered = filterByRepoAllowlist(items, {
+      repo_allowlist: ["https://github.com/octo-owner/atelier-works"],
+      factory_repo: FACTORY_REPO,
+    });
     expect(filtered).toEqual([{ owner: "octo-owner", repo: "atelier-works" }]);
+  });
+
+  test("keeps the factory_repo item even when the allowlist omits it", () => {
+    const items = [
+      { owner: "octo-owner", repo: "atelier-works" },
+      { owner: "octo-owner", repo: "factory" },
+    ];
+    const filtered = filterByRepoAllowlist(items, {
+      repo_allowlist: ["https://github.com/octo-owner/atelier-works"],
+      factory_repo: FACTORY_REPO,
+    });
+    expect(filtered).toEqual(items);
   });
 });
 

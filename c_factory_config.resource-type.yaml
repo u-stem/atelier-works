@@ -157,7 +157,7 @@ schema:
     repo_allowlist:
       type: array
       description: >-
-        この処理が操作してよいリポジトリのURLです。空の場合は、ownersに含まれるリポジトリすべてを対象にします。
+        この処理が操作してよいリポジトリのURLです。空の場合は、ownersに含まれるリポジトリすべてを対象にします。factory_repoはこの一覧に関わらず常に対象です。
       default: []
       items:
         type: string

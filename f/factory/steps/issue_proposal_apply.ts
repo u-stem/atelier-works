@@ -33,7 +33,10 @@
 // `resolveFactoryLabel` below refuses the label (logging a warning) rather
 // than attaching it to a disallowed repo; a `pr_fix` proposal has no such
 // restriction, since its PR's repo was already gated far earlier in that
-// pipeline.
+// pipeline. Since 2026-09-28, `isRepoAllowed` always allows
+// `factory_config.factory_repo` regardless of `owners`/`repo_allowlist`, so
+// this refusal branch is now a defensive guard against a misconfigured
+// `factory_repo` rather than the everyday path.
 //
 // Once every pending proposal for the underlying work item has been
 // decided, the work item's status swaps off its waiting status
@@ -168,7 +171,10 @@ export function readWithFactoryLabel(
  * when that repo is itself allowed by `factory_config` (owners /
  * repo_allowlist); refusing otherwise, rather than silently dropping the
  * label, is surfaced to the caller as a `reason` to log (pure, for
- * testing). */
+ * testing). `isRepoAllowed` (lib/config.ts) always allows
+ * `factory_config.factory_repo` itself, so `repoAllowed` is normally true
+ * here — this `false` branch only fires if `factory_repo` and the
+ * work item's own `owner`/`repo` have somehow diverged. */
 export function resolveFactoryLabel(input: {
   readonly requested: boolean;
   readonly origin: IssueProposalOrigin;

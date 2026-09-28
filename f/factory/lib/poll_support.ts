@@ -22,7 +22,9 @@
 // function inside poll_issues.ts (it's git-workspace I/O, not a decision,
 // and workspace.ts is out of scope for this file to extend).
 
+import { normalizeRepoUrl } from "./config.ts";
 import {
+  type FactoryConfig,
   isOneOf,
   type LabelerAssociation,
   type WorkItem,
@@ -37,20 +39,29 @@ import {
  * `factory_config.repo_allowlist` is a list of HTTPS clone URLs
  * (`https://github.com/<owner>/<repo>`); empty means "no restriction beyond
  * owners" (rt.d.ts / c_factory_config.resource-type.yaml). Case-insensitive
- * match on the owner/repo pair.
+ * match on the owner/repo pair. `config.factory_repo` always passes
+ * regardless of `repo_allowlist`, matching `isRepoAllowed` (lib/config.ts)
+ * — a candidate from the factory's own repo (e.g. an audit-filed Issue)
+ * must reach poll_issues/poll_prs's candidate list even when it is not
+ * separately listed in `repo_allowlist`.
  */
 export function filterByRepoAllowlist<
   T extends { readonly owner: string; readonly repo: string },
->(items: readonly T[], repoAllowlist: readonly string[]): T[] {
-  if (repoAllowlist.length === 0) {
+>(
+  items: readonly T[],
+  config: Pick<FactoryConfig, "repo_allowlist" | "factory_repo">,
+): T[] {
+  if (config.repo_allowlist.length === 0) {
     return [...items];
   }
-  const allowed = new Set(
-    repoAllowlist.map((url) => url.trim().toLowerCase().replace(/\/+$/, "")),
-  );
-  return items.filter((item) =>
-    allowed.has(`https://github.com/${item.owner}/${item.repo}`.toLowerCase()),
-  );
+  const allowed = new Set(config.repo_allowlist.map(normalizeRepoUrl));
+  const factoryRepo = normalizeRepoUrl(config.factory_repo);
+  return items.filter((item) => {
+    const target = normalizeRepoUrl(
+      `https://github.com/${item.owner}/${item.repo}`,
+    );
+    return target === factoryRepo || allowed.has(target);
+  });
 }
 
 // ---------------------------------------------------------------------------

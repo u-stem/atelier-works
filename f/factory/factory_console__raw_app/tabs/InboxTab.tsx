@@ -3,7 +3,7 @@ import { Markdown } from "../components/Markdown";
 import { RequirementsDocumentLoader } from "../components/RequirementsDocument";
 import { Skeleton } from "../components/Skeleton";
 import { decideApproval, describeError } from "../lib/api";
-import { kindLabel } from "../lib/inboxLabels";
+import { defaultWithFactoryLabel, kindLabel } from "../lib/inboxLabels";
 import { type InboxRow, toInboxRow } from "../lib/types";
 import { useConsoleQuery } from "../lib/useConsoleQuery";
 
@@ -52,10 +52,15 @@ export function InboxTab({
   const incomplete = selected !== null && isIncompleteProposal(selected);
 
   function selectRow(approvalRequestId: number): void {
+    const row = rows.find(
+      (candidate) => candidate.approval_request_id === approvalRequestId,
+    );
     setSelectedId(approvalRequestId);
     setReason("");
     setNote("");
-    setWithFactoryLabel(false);
+    setWithFactoryLabel(
+      row === undefined ? false : defaultWithFactoryLabel(row),
+    );
     setActionError(null);
     setActionMessage(null);
   }
