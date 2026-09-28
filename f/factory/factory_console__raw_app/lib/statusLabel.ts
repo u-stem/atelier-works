@@ -15,6 +15,8 @@ const STATUS_LABELS: Record<string, string> = {
   rejected: "却下",
   expired: "期限切れ",
   cancelled: "取消",
+  implementing: "実装中",
+  pr_open: "PR作成済み",
   reviewed: "レビュー済み",
   rereview_requested: "再レビュー依頼済み",
   blocked: "ブロック",
