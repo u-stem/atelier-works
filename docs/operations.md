@@ -17,7 +17,7 @@
 - Issueに自動投稿されるコメントは、要件定義が承認されたときのConsoleリンク1件のみ。着手・承認待ち・却下・期限切れ・失敗・要人手といった運用上の状態はIssueには書かず、Discord通知とConsoleで確認する(GitHubには成果物のみを残す方針、2026-09-27)。
 - Rejectすると要件定義が再生成され(`attempt`が加算される)、再度承認待ちになる。試行回数が上限を超えると`needs_human`になる。
 - 失敗したwork itemはFactory Console AppのFailuresタブから再実行できる(`retry_work_item`)。kindを問わずラベルの付け外しはせず、対応するflow(Issue kindは`f/factory/pipeline`、PR kindは`f/factory/pr_review` / `f/factory/pr_fix`)を直接再起動する(トリガーラベルはclaim時に一度だけ消費され、再付与されない。PR kindは再起動後も`listTrackedPrs`によるDB上の追跡対象であり続ける)。
-- 監査は毎週月曜09:30に自動で走る(`audit_kickoff`schedule)。Consoleの**監査タブ**の「今すぐ監査」で前倒しできる(実行中の監査がある、対象期間が空、新しい記録が無い、日次予算超過のいずれかならスキップ理由が表示される)。監査レポートは監査タブで読む(一覧から選ぶと本文と提案の決定状況が表示される)。Discordの`audit_completed`通知のリンクは`#audit/<work_item_id>`を末尾に付けており、要件定義タブと同じ制約でジャンプが効かない場合は一覧から選ぶ。提案は承認Inboxに「改善提案」として並び、承認するとFactory自身のリポジトリにIssueが起票される。`factory`ラベルを付けて要件定義へ進めるには、`factory_config`の`owners` / `repo_allowlist`に`factory_repo`を含める必要がある(含まれていない場合、Inboxはその選択肢を出さない)。
+- 監査は毎週月曜09:30に自動で走る(`audit_kickoff`schedule)。Consoleの**監査タブ**の「今すぐ監査」で前倒しできる(実行中の監査がある、対象期間が空、新しい記録が無い、日次予算超過のいずれかならスキップ理由が表示される)。監査レポートは監査タブで読む(一覧から選ぶと本文と提案の決定状況が表示される)。Discordの`audit_completed`通知のリンクは`#audit/<work_item_id>`を末尾に付けており、要件定義タブと同じ制約でジャンプが効かない場合は一覧から選ぶ。提案は承認Inboxに「改善提案」として並び、承認するとFactory自身のリポジトリにIssueが起票される。改善提案の承認欄では「起票と同時にfactoryラベルを付けて要件定義に進める」が既定でオンになっており、外せば起票のみになる。`factory_repo`は`repo_allowlist`の内容に関わらず常にFactoryの対象なので、ラベルを付けたIssueはそのまま要件定義に進む。
 - 通知の種類: `picked` / `awaiting_approval` / `approved` / `rejected` / `needs_human` / `failed` / `expired` / `cancelled` / `self_update`(ホスト操作が必要)/ `daily_summary`(前日のコスト・件数・失敗)/ `audit_completed`(監査で改善提案が1件以上生成された)。
 
 ## 通知
@@ -70,7 +70,7 @@
 
 #### Issue化提案の承認 / 却下(ConsoleのInbox)
 
-- ConsoleのInboxタブに、要件定義の承認待ちと並んで「Issue化提案」の種別バッジ付きで一覧表示され、そこから承認 / 却下する。左の一覧でPR番号・PRタイトル・提案タイトル・作成日時・担当者を確認して提案を選ぶと、右に提案本文(Markdown)と操作欄が表示される。「起票と同時にfactoryラベルを付けて要件定義に進める」のチェックボックス(既定オフ)で`with_factory_label`を切り替え、却下時のみ理由欄が必須になる。Appを使わない代替手順として、Windmill UIで`f/factory/approval_decide`を直接開き、`approval_request_id`(ConsoleのInboxに記載)/ `decision`(approve / reject) / `reason`(却下時は必須) / `options`(承認時のみ`{"with_factory_label": true}`のように指定)を入力してRunすることもできる。
+- ConsoleのInboxタブに、要件定義の承認待ちと並んで「Issue化提案」の種別バッジ付きで一覧表示され、そこから承認 / 却下する。左の一覧でPR番号・PRタイトル・提案タイトル・作成日時・担当者を確認して提案を選ぶと、右に提案本文(Markdown)と操作欄が表示される。「起票と同時にfactoryラベルを付けて要件定義に進める」のチェックボックス(Issue化提案は既定オフ、改善提案は既定オン)で`with_factory_label`を切り替え、却下時のみ理由欄が必須になる。Appを使わない代替手順として、Windmill UIで`f/factory/approval_decide`を直接開き、`approval_request_id`(ConsoleのInboxに記載)/ `decision`(approve / reject) / `reason`(却下時は必須) / `options`(承認時のみ`{"with_factory_label": true}`のように指定)を入力してRunすることもできる。
 - **承認**すると、提案の`title` / `body`でIssueを対象リポジトリに作成し(`body`中の`{{pr_url}}`は元PRのURLに置換され、末尾に起票元を示す一文が付く)、レビュースレッドに`Issue #Nを起票しました。`と返信してスレッドを解決(resolve)する。`with_factory_label`を`true`にすると、作成したIssueに`factory_config.trigger_label`(既定`factory`)が付き、そのまま要件定義工程に乗る。ラベルを付けない場合は起票のみで、必要になったら人が後から`factory`ラベルを付ける。
 - **却下**すると、レビュースレッドに`見送りとします。`+ 入力した理由を返信するが、スレッドは開いたままになる(人が改めて判断する)。
 - 対象work itemに未決定の提案が残っていなければ、work itemの状態を`needs_human`から`rereview_requested`(その回でコミットをpushしていた場合)または`reviewed`(pushしていなかった場合)へ自動で切り替える。未決定の提案が他に残っている間は`needs_human`のまま。
@@ -83,7 +83,7 @@
 - 終端状態: `reviewed`(pr_review完了、修正不要・人のApprove待ち) / `rereview_requested`(修正をpushして再レビュー依頼中) / `blocked` / `needs_human`(人の対応が必要。pr_fixが`needs_human` / `blocked` / `failed`で終了したとき、pr_review自体が失敗したとき、またはIssue化提案(`propose_issue`)が1件以上あるとき)。
 - トリガーラベルが外れた後も、`tracked_pr_days`(既定30日、`factory_config`)以内に更新のあったPRは`poll_prs`がDB(`work_items`、`listTrackedPrs`)から再発見し続ける。人が新しいcommitをpushするたびに自動で再レビューが起動する(1 pushにつきClaude実行1回)。これ以上追跡させたくないPRはcloseするか、`tracked_pr_days`を過ぎるまで待つ。
 - `review_post_mode: "gated"`ではレビューを投稿しないため(gatedは検証用の予約モードで、PRはレビュー依頼・assignee経由でのみ再発見される)。
-- 対象は`factory_config`の`repo_allowlist`(未指定なら`owners`に含まれるリポジトリ全体)に含まれるリポジトリのみ。試験的に対象を絞りたい場合は`repo_allowlist`に対象リポジトリを明示する。
+- 対象は`factory_config`の`repo_allowlist`(未指定なら`owners`に含まれるリポジトリ全体)に含まれるリポジトリのみ。`factory_repo`は`repo_allowlist`に関わらず常に対象。試験的に対象を絞りたい場合は`repo_allowlist`に対象リポジトリを明示する。
 
 ### pr_fixの再実行
 

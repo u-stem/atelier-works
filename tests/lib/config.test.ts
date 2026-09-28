@@ -238,19 +238,32 @@ describe("loadConfig", () => {
 
 describe("isRepoAllowed", () => {
   const OWNERS = [{ name: "octo-owner", kind: "user" as const }];
+  const FACTORY_REPO = "https://github.com/octo-owner/factory";
 
   test("rejects an owner not in config.owners", () => {
-    const config = { owners: OWNERS, repo_allowlist: [] };
+    const config = {
+      owners: OWNERS,
+      repo_allowlist: [],
+      factory_repo: FACTORY_REPO,
+    };
     expect(isRepoAllowed(config, "someone-else", "repo")).toBe(false);
   });
 
   test("matches an owner case-insensitively", () => {
-    const config = { owners: OWNERS, repo_allowlist: [] };
+    const config = {
+      owners: OWNERS,
+      repo_allowlist: [],
+      factory_repo: FACTORY_REPO,
+    };
     expect(isRepoAllowed(config, "Octo-Owner", "atelier-works")).toBe(true);
   });
 
   test("allows any repo under an allowed owner when repo_allowlist is empty", () => {
-    const config = { owners: OWNERS, repo_allowlist: [] };
+    const config = {
+      owners: OWNERS,
+      repo_allowlist: [],
+      factory_repo: FACTORY_REPO,
+    };
     expect(isRepoAllowed(config, "octo-owner", "any-repo")).toBe(true);
   });
 
@@ -258,6 +271,7 @@ describe("isRepoAllowed", () => {
     const config = {
       owners: OWNERS,
       repo_allowlist: ["https://github.com/octo-owner/other-repo"],
+      factory_repo: FACTORY_REPO,
     };
     expect(isRepoAllowed(config, "octo-owner", "atelier-works")).toBe(false);
   });
@@ -266,6 +280,7 @@ describe("isRepoAllowed", () => {
     const config = {
       owners: OWNERS,
       repo_allowlist: ["https://github.com/octo-owner/atelier-works"],
+      factory_repo: FACTORY_REPO,
     };
     expect(isRepoAllowed(config, "octo-owner", "atelier-works")).toBe(true);
   });
@@ -274,8 +289,36 @@ describe("isRepoAllowed", () => {
     const config = {
       owners: OWNERS,
       repo_allowlist: ["https://github.com/octo-owner/atelier-works.git"],
+      factory_repo: FACTORY_REPO,
     };
     expect(isRepoAllowed(config, "octo-owner", "atelier-works")).toBe(true);
+  });
+
+  test("allows factory_repo even when repo_allowlist is non-empty and omits it", () => {
+    const config = {
+      owners: OWNERS,
+      repo_allowlist: ["https://github.com/octo-owner/other-repo"],
+      factory_repo: FACTORY_REPO,
+    };
+    expect(isRepoAllowed(config, "octo-owner", "factory")).toBe(true);
+  });
+
+  test("allows factory_repo even when its owner is not in config.owners", () => {
+    const config = {
+      owners: OWNERS,
+      repo_allowlist: [],
+      factory_repo: "https://github.com/other-owner/factory",
+    };
+    expect(isRepoAllowed(config, "other-owner", "factory")).toBe(true);
+  });
+
+  test("normalizes a trailing .git when matching factory_repo", () => {
+    const config = {
+      owners: OWNERS,
+      repo_allowlist: [],
+      factory_repo: "https://github.com/octo-owner/factory.git",
+    };
+    expect(isRepoAllowed(config, "octo-owner", "factory")).toBe(true);
   });
 });
 

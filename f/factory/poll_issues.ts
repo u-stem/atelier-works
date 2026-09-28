@@ -665,7 +665,7 @@ export async function main(): Promise<{
     }
   }
 
-  const allowed = filterByRepoAllowlist(rawCandidates, config.repo_allowlist);
+  const allowed = filterByRepoAllowlist(rawCandidates, config);
   const candidates = await buildIssueCandidates(
     client,
     allowed,

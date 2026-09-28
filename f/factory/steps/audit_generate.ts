@@ -362,6 +362,11 @@ export async function main(
 
   const period = parsePeriodArgs(period_start, period_end, unaudited_gap_days);
   const { owner, repo } = parseGitHubRepoUrl(config.factory_repo);
+  // `owner`/`repo` here are parsed from `config.factory_repo` itself, and
+  // `isRepoAllowed` always allows `factory_repo` regardless of
+  // `owners`/`repo_allowlist`, so this is normally true; the payload field
+  // is kept for the Console-side guard (issue_proposal_apply.ts's
+  // `resolveFactoryLabel`) in case that invariant ever breaks.
   const factoryLabelAvailable = isRepoAllowed(config, owner, repo);
   const webhookUrl = await wmill.getVariable("f/factory/discord_webhook_url");
 
