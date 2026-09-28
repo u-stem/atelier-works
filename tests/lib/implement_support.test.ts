@@ -3,9 +3,11 @@ import type { ImplementClaudeOutput } from "../../f/factory/lib/implement_suppor
 import {
   buildImplementBranchName,
   buildImplementCommitMessage,
+  CHECK_OUTPUT_MAX_BYTES,
   classifyProtectedChanges,
   IMPLEMENT_CLAUDE_OUTCOMES,
   isImplementClaudeOutput,
+  truncateCheckOutput,
   validateImplementOutput,
 } from "../../f/factory/lib/implement_support.ts";
 import { IMPLEMENT_SCHEMA } from "../../f/factory/lib/prompts.ts";
@@ -338,5 +340,36 @@ describe("classifyProtectedChanges", () => {
       "新規の*.shを追加: scripts/run.sh",
       "package.jsonのscriptsを変更",
     ]);
+  });
+});
+
+describe("truncateCheckOutput", () => {
+  test("defaults to a 16KB ceiling", () => {
+    expect(CHECK_OUTPUT_MAX_BYTES).toBe(16384);
+  });
+
+  test("returns short text unchanged", () => {
+    expect(truncateCheckOutput("ok", 16)).toBe("ok");
+  });
+
+  test("keeps exactly maxBytes of ASCII", () => {
+    expect(truncateCheckOutput("abcdefghij", 4)).toBe("abcd");
+  });
+
+  test("never cuts a multi-byte UTF-8 sequence in the middle", () => {
+    expect(truncateCheckOutput("あいうえお", 10)).toBe("あいう");
+  });
+
+  test("keeps a multi-byte sequence that ends exactly at the boundary", () => {
+    expect(truncateCheckOutput("あいうえお", 9)).toBe("あいう");
+  });
+
+  test("the result never exceeds maxBytes when encoded", () => {
+    const result = truncateCheckOutput("𠮷".repeat(100), 10);
+    expect(new TextEncoder().encode(result).byteLength).toBeLessThanOrEqual(10);
+  });
+
+  test("returns an empty string for a ceiling smaller than the first character", () => {
+    expect(truncateCheckOutput("あ", 2)).toBe("");
   });
 });

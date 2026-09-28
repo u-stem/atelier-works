@@ -240,3 +240,36 @@ export function classifyProtectedChanges(
   }
   return reasons;
 }
+
+// ---------------------------------------------------------------------------
+// truncateCheckOutput: `implement_rounds.check_output` keeps the first 16KB
+// (design §5; §12 hand-off asks for a UTF-8-boundary-safe cut)
+// ---------------------------------------------------------------------------
+
+export const CHECK_OUTPUT_MAX_BYTES = 16 * 1024;
+
+/** Whether `byte` is a UTF-8 continuation byte (`10xxxxxx`). */
+function isContinuationByte(byte: number): boolean {
+  return (byte & 0b1100_0000) === 0b1000_0000;
+}
+
+/**
+ * The first `maxBytes` bytes of `text` as valid UTF-8 text: when the byte
+ * boundary would split a multi-byte character, the whole character is
+ * dropped instead. Measured in bytes (the column's intended limit), not
+ * UTF-16 code units. Callers pass the check commands' combined output
+ * before `insertImplementRound`; the prompt-side tail is separate
+ * (runAllowedCheckCommands's outputTail).
+ */
+export function truncateCheckOutput(
+  text: string,
+  maxBytes: number = CHECK_OUTPUT_MAX_BYTES,
+): string {
+  const bytes = new TextEncoder().encode(text);
+  if (bytes.byteLength <= maxBytes) return text;
+  let end = maxBytes;
+  while (end > 0 && isContinuationByte(bytes[end] ?? 0)) {
+    end -= 1;
+  }
+  return new TextDecoder().decode(bytes.subarray(0, end));
+}
