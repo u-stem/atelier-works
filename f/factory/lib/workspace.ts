@@ -1668,3 +1668,72 @@ export async function commitAndPush(
     },
   });
 }
+
+// ---------------------------------------------------------------------------
+// pushNewBranch (implement flow): publish a freshly created local branch
+// ---------------------------------------------------------------------------
+
+export type PushNewBranchOptions = {
+  readonly run: CommandRunner;
+  /** The main repo clone dir (see `ensureRepo`) — derives the shared per-repo lock. */
+  readonly repoDir: string;
+  /** The worktree `createGtrWorktree` created for `branch` (its HEAD is the branch). */
+  readonly worktreeDir: string;
+  readonly branch: string;
+  readonly ghToken: string;
+  readonly home?: string;
+  readonly path?: string;
+  readonly lockFs?: LockFs;
+  readonly sleep?: (ms: number) => Promise<void>;
+  readonly now?: () => Date;
+};
+
+export type PushNewBranchResult = { readonly pushed: boolean };
+
+/**
+ * `git push -u origin <branch>` from `worktreeDir`, right after
+ * `createGtrWorktree` made the branch locally (工程3 design §0b): with the
+ * branch published (even empty), every later step can use the existing
+ * `commitAndPush` unchanged — it fetches `origin/<branch>` and compares
+ * against `expectedHeadSha` — and `createGtrWorktree`'s reuse path can
+ * `reset --hard origin/<branch>` on a retry. A no-op (`pushed: false`) when
+ * `origin/<branch>` is already resolvable locally (a retry after the push
+ * already happened). Serialized under `repoLockPath(repoDir)` like every
+ * other network git op on this repo. The `rev-parse` has no `--` (module
+ * doc comment's rev-parse exception); `branch` is validated instead.
+ */
+export async function pushNewBranch(
+  opts: PushNewBranchOptions,
+): Promise<PushNewBranchResult> {
+  assertBranchName(opts.branch);
+
+  return withRepoLock({
+    lockPath: repoLockPath(opts.repoDir),
+    ...(opts.lockFs !== undefined ? { lockFs: opts.lockFs } : {}),
+    ...(opts.sleep !== undefined ? { sleep: opts.sleep } : {}),
+    ...(opts.now !== undefined ? { now: opts.now } : {}),
+    fn: async () => {
+      const existing = await opts.run(
+        buildGitArgv(["rev-parse", "--verify", `origin/${opts.branch}`]),
+        { cwd: opts.worktreeDir, env: localGitEnv(opts.home, opts.path) },
+      );
+      if (existing.exitCode === 0) {
+        return { pushed: false };
+      }
+
+      const pushResult = await opts.run(
+        buildGitArgv(["push", "-u", "origin", "--", opts.branch], {
+          network: true,
+        }),
+        {
+          cwd: opts.worktreeDir,
+          env: networkGitEnv(opts.ghToken, opts.home, opts.path),
+        },
+      );
+      if (pushResult.exitCode !== 0) {
+        throw gitError(`git push -u origin ${opts.branch} failed`, pushResult);
+      }
+      return { pushed: true };
+    },
+  });
+}

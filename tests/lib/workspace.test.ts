@@ -18,6 +18,7 @@ import {
   listWorktrees,
   pathExists,
   pruneWorktrees,
+  pushNewBranch,
   readDirEntries,
   readGitShowFile,
   readTextFile,
@@ -1687,5 +1688,158 @@ describe("removeEmptyDir", () => {
   test("returns false without throwing for a directory that doesn't exist", async () => {
     const removed = await removeEmptyDir("/nonexistent/path/for/sure");
     expect(removed).toBe(false);
+  });
+});
+
+describe("pushNewBranch", () => {
+  const BRANCH = "factory/issue-7-wi-3";
+
+  test("pushes the branch when origin/<branch> does not exist yet", async () => {
+    const fake = createFakeCommandRunner([
+      fail("fatal: Needed a single revision"), // rev-parse --verify origin/<branch>
+      ok(), // git push -u origin -- <branch>
+    ]);
+    const result = await pushNewBranch({
+      run: fake.run,
+      repoDir: "/repo/main",
+      worktreeDir: "/repo/wt",
+      branch: BRANCH,
+      ghToken: "gh-token",
+      lockFs: createInMemoryLockFs(),
+    });
+    expect(result).toEqual({ pushed: true });
+  });
+
+  test("runs git push -u origin -- <branch>", async () => {
+    const fake = createFakeCommandRunner([
+      fail("fatal: Needed a single revision"),
+      ok(),
+    ]);
+    await pushNewBranch({
+      run: fake.run,
+      repoDir: "/repo/main",
+      worktreeDir: "/repo/wt",
+      branch: BRANCH,
+      ghToken: "gh-token",
+      lockFs: createInMemoryLockFs(),
+    });
+    expect(fake.calls[1]?.argv).toEqual(
+      expect.arrayContaining(["push", "-u", "origin", "--", BRANCH]),
+    );
+  });
+
+  test("the push runs in worktreeDir, not repoDir", async () => {
+    const fake = createFakeCommandRunner([
+      fail("fatal: Needed a single revision"),
+      ok(),
+    ]);
+    await pushNewBranch({
+      run: fake.run,
+      repoDir: "/repo/main",
+      worktreeDir: "/repo/wt",
+      branch: BRANCH,
+      ghToken: "gh-token",
+      lockFs: createInMemoryLockFs(),
+    });
+    expect(fake.calls[1]?.options?.cwd).toBe("/repo/wt");
+  });
+
+  test("is a no-op when origin/<branch> already exists", async () => {
+    const fake = createFakeCommandRunner([ok(`${HEAD_SHA}\n`)]);
+    const result = await pushNewBranch({
+      run: fake.run,
+      repoDir: "/repo/main",
+      worktreeDir: "/repo/wt",
+      branch: BRANCH,
+      ghToken: "gh-token",
+      lockFs: createInMemoryLockFs(),
+    });
+    expect(result).toEqual({ pushed: false });
+  });
+
+  test("does not call git push when origin/<branch> already exists", async () => {
+    const fake = createFakeCommandRunner([ok(`${HEAD_SHA}\n`)]);
+    await pushNewBranch({
+      run: fake.run,
+      repoDir: "/repo/main",
+      worktreeDir: "/repo/wt",
+      branch: BRANCH,
+      ghToken: "gh-token",
+      lockFs: createInMemoryLockFs(),
+    });
+    expect(fake.calls).toHaveLength(1);
+  });
+
+  test("the push call (network) carries GH_TOKEN but the rev-parse call (local) does not", async () => {
+    const fake = createFakeCommandRunner([
+      fail("fatal: Needed a single revision"),
+      ok(),
+    ]);
+    await pushNewBranch({
+      run: fake.run,
+      repoDir: "/repo/main",
+      worktreeDir: "/repo/wt",
+      branch: BRANCH,
+      ghToken: "gh-secret",
+      lockFs: createInMemoryLockFs(),
+    });
+    expect([
+      fake.calls[0]?.options?.env?.GH_TOKEN,
+      fake.calls[1]?.options?.env?.GH_TOKEN,
+    ]).toEqual([undefined, "gh-secret"]);
+  });
+
+  test("throws a masked error when the push fails", async () => {
+    const fake = createFakeCommandRunner([
+      fail("fatal: Needed a single revision"),
+      fail("remote: Permission to acme/widgets.git denied to factory-bot."),
+    ]);
+    await expect(
+      pushNewBranch({
+        run: fake.run,
+        repoDir: "/repo/main",
+        worktreeDir: "/repo/wt",
+        branch: BRANCH,
+        ghToken: "gh-token",
+        lockFs: createInMemoryLockFs(),
+      }),
+    ).rejects.toThrow(/git push -u origin factory\/issue-7-wi-3 failed/);
+  });
+
+  test("rejects an invalid branch name before spawning anything", async () => {
+    const fake = createFakeCommandRunner([]);
+    await expect(
+      pushNewBranch({
+        run: fake.run,
+        repoDir: "/repo/main",
+        worktreeDir: "/repo/wt",
+        branch: "-evil",
+        ghToken: "gh-token",
+        lockFs: createInMemoryLockFs(),
+      }),
+    ).rejects.toThrow(/invalid branch name/);
+  });
+
+  test("is serialized under the same lock path other repo-tree git ops use", async () => {
+    const lockFs = createInMemoryLockFs();
+    let sawLockDuringRun = false;
+    const fake = createFakeCommandRunner([
+      fail("fatal: Needed a single revision"),
+      ok(),
+    ]);
+    const runAndCheck: typeof fake.run = async (argv, options) => {
+      sawLockDuringRun =
+        (await lockFs.read("/repo/main.lock")) !== null || sawLockDuringRun;
+      return fake.run(argv, options);
+    };
+    await pushNewBranch({
+      run: runAndCheck,
+      repoDir: "/repo/main",
+      worktreeDir: "/repo/wt",
+      branch: BRANCH,
+      ghToken: "gh-token",
+      lockFs,
+    });
+    expect(sawLockDuringRun).toBe(true);
   });
 });
