@@ -2,9 +2,11 @@ import { describe, expect, test } from "bun:test";
 import type { ImplementClaudeOutput } from "../../f/factory/lib/implement_support.ts";
 import {
   buildImplementCommitMessage,
+  IMPLEMENT_CLAUDE_OUTCOMES,
   isImplementClaudeOutput,
   validateImplementOutput,
 } from "../../f/factory/lib/implement_support.ts";
+import { IMPLEMENT_SCHEMA } from "../../f/factory/lib/prompts.ts";
 
 const DONE_OUTPUT: ImplementClaudeOutput = {
   outcome: "done",
@@ -23,6 +25,14 @@ const GAP_OUTPUT: ImplementClaudeOutput = {
   commit_body: "",
   notes_for_reviewer: [],
 };
+
+describe("IMPLEMENT_CLAUDE_OUTCOMES", () => {
+  test("matches IMPLEMENT_SCHEMA's outcome enum", () => {
+    expect(IMPLEMENT_CLAUDE_OUTCOMES).toEqual(
+      IMPLEMENT_SCHEMA.properties.outcome.enum,
+    );
+  });
+});
 
 describe("isImplementClaudeOutput", () => {
   test("accepts a well-formed done output", () => {
@@ -99,7 +109,7 @@ describe("validateImplementOutput", () => {
     ).toBe(false);
   });
 
-  test("counts code points, not UTF-16 units (36 astral chars fit)", () => {
+  test("counts code points, not UTF-16 units (66 astral chars fit)", () => {
     const subject = `feat: ${"𠮷".repeat(66)}`;
     expect(
       validateImplementOutput({ ...DONE_OUTPUT, commit_subject: subject }).ok,
@@ -139,14 +149,29 @@ describe("validateImplementOutput", () => {
     ).toBe(false);
   });
 
-  test("accepts a requirements_gap output with a gap_report", () => {
-    expect(validateImplementOutput(GAP_OUTPUT)).toEqual({ ok: true });
+  test("rejects a subject ending with an ellipsis followed by trailing whitespace", () => {
+    expect(
+      validateImplementOutput({
+        ...DONE_OUTPUT,
+        commit_subject: "feat: 長すぎる説明… ",
+      }).ok,
+    ).toBe(false);
   });
 
-  test("accepts a requirements_gap output even though commit_subject is empty", () => {
+  test("rejects a subject containing a control character", () => {
     expect(
-      validateImplementOutput({ ...GAP_OUTPUT, commit_subject: "" }).ok,
-    ).toBe(true);
+      validateImplementOutput({
+        ...DONE_OUTPUT,
+        commit_subject: "feat: \u001bsubject",
+      }),
+    ).toEqual({
+      ok: false,
+      reason: "commit_subject must not contain control characters",
+    });
+  });
+
+  test("accepts a requirements_gap output with a gap_report", () => {
+    expect(validateImplementOutput(GAP_OUTPUT)).toEqual({ ok: true });
   });
 
   test("rejects a requirements_gap output with a null gap_report", () => {
@@ -181,10 +206,6 @@ describe("validateImplementOutput", () => {
       validateImplementOutput({ ...DONE_OUTPUT, gap_report: "leftover" }).ok,
     ).toBe(false);
   });
-
-  test("accepts a done output with a null gap_report", () => {
-    expect(validateImplementOutput(DONE_OUTPUT).ok).toBe(true);
-  });
 });
 
 describe("buildImplementCommitMessage", () => {
@@ -218,7 +239,9 @@ describe("buildImplementCommitMessage", () => {
         { commit_subject: "fix: subject", commit_body: " \n" },
         "local",
       ),
-    ).not.toContain("subject\n\n \n");
+    ).toBe(
+      "fix: subject\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nGenerated-By: Software Factory (local)",
+    );
   });
 
   test("trims surrounding whitespace from the subject", () => {

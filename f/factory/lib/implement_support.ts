@@ -10,9 +10,9 @@
 // mirrors prompts.ts's IMPLEMENT_SCHEMA field by field (what `claude -p
 // --json-schema` already enforces), while `validateImplementOutput` holds
 // the rules the schema cannot express (gap_report required on a gap, a
-// committable subject on done). The implement_generate step (added later)
-// composes them as `runClaude`'s `isStructuredOutput` so a semantic miss
-// also gets claude.ts's single "fill the required fields" retry.
+// committable subject on done). The implement steps call
+// `validateImplementOutput` after `runClaude` succeeds and record `reason`
+// on the implement round before treating it as a fix round.
 
 import { isOneOf, isRecord, isString, isStringArray } from "./types.ts";
 import { withCommitTrailers } from "./workspace.ts";
@@ -77,14 +77,16 @@ export type ImplementOutputValidation =
  * feedback — an empty one would restart requirements generation with
  * nothing to act on) and, mirroring the promise the skill and the prompt
  * both make Claude, an empty `commit_subject`/`commit_body` (there is no
- * commit to describe). `done` needs a committable `commit_subject`:
- * non-blank, single-line, at most `COMMIT_SUBJECT_MAX_CODEPOINTS` code
- * points (counted by spreading, not `.length`), and not ending in "…" (a
- * sign Claude tried to write past the limit instead of within it — same
- * reasoning as pr_workflow_support.ts's isValidCommitSubject); it also
- * requires a `null` `gap_report` (same skill/prompt promise, the other
- * direction). `commit_body` is otherwise free-form and never rejected on
- * its own content. `reason` is operator-facing English, recorded on the
+ * commit to describe). `done` needs a committable `commit_subject`,
+ * judged on its trimmed value: non-blank, single-line, at most
+ * `COMMIT_SUBJECT_MAX_CODEPOINTS` code points (counted by spreading, not
+ * `.length`), not ending in "…" (a sign Claude tried to write past the
+ * limit instead of within it — same reasoning as
+ * pr_workflow_support.ts's isValidCommitSubject), and free of control
+ * characters other than the already-rejected newline; it also requires a
+ * `null` `gap_report` (same skill/prompt promise, the other direction).
+ * `commit_body` is otherwise free-form and never rejected on its own
+ * content. `reason` is operator-facing English, recorded on the
  * implement_rounds row / job log, never shown to Claude.
  */
 export function validateImplementOutput(
@@ -112,8 +114,8 @@ export function validateImplementOutput(
       reason: "gap_report must be null when outcome is done",
     };
   }
-  const subject = output.commit_subject;
-  if (subject.trim().length === 0) {
+  const subject = output.commit_subject.trim();
+  if (subject.length === 0) {
     return { ok: false, reason: "done outcome with an empty commit_subject" };
   }
   if (subject.includes("\n")) {
@@ -127,6 +129,13 @@ export function validateImplementOutput(
   }
   if (subject.endsWith("…")) {
     return { ok: false, reason: 'commit_subject ends with "…"' };
+  }
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: intentionally matching control characters (except \n, already rejected above), to reject them
+  if (/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(subject)) {
+    return {
+      ok: false,
+      reason: "commit_subject must not contain control characters",
+    };
   }
   return { ok: true };
 }
