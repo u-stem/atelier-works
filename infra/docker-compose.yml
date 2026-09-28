@@ -71,6 +71,7 @@ services:
         WM_VERSION: ${WM_VERSION:?run via mise}
         CLAUDE_VERSION: ${CLAUDE_VERSION:?run via mise}
         GH_VERSION: ${GH_VERSION:?run via mise}
+        GITLEAKS_VERSION: ${GITLEAKS_VERSION:?run via mise}
         GTR_REF: ${GTR_REF:?run via mise}
         GTR_COMMIT: ${GTR_COMMIT:?run via mise}
         WMILL_VERSION: ${WMILL_VERSION:?run via mise}
