@@ -1,5 +1,6 @@
-// Prompt assembly for the three headless Claude Code stages (spec-cycle2.md
-// §1, §3 M6): requirements generation, PR review, and PR fix.
+// Prompt assembly for the headless Claude Code stages (spec-cycle2.md §1,
+// §3 M6; 工程3 design §6): requirements generation, PR review, PR fix,
+// implementation (+ its check-failure fix mode), and audit.
 //
 // Every returned string is meant to be passed to `claude -p` via **stdin**
 // (spec-cycle2.md §7 item 13 — the prompt body never goes on argv). Any
@@ -597,5 +598,30 @@ export const AUDIT_SCHEMA = {
     },
   },
   required: ["summary", "proposals"],
+  additionalProperties: false,
+} as const;
+
+// ---------------------------------------------------------------------------
+// implementPrompt / implementFixPrompt (工程3 design §6)
+// ---------------------------------------------------------------------------
+
+export const IMPLEMENT_SCHEMA = {
+  type: "object",
+  properties: {
+    outcome: { type: "string", enum: ["done", "requirements_gap"] },
+    summary: { type: "string" },
+    gap_report: { type: ["string", "null"] },
+    commit_subject: { type: "string" },
+    commit_body: { type: "string" },
+    notes_for_reviewer: { type: "array", items: { type: "string" } },
+  },
+  required: [
+    "outcome",
+    "summary",
+    "gap_report",
+    "commit_subject",
+    "commit_body",
+    "notes_for_reviewer",
+  ],
   additionalProperties: false,
 } as const;

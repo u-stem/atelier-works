@@ -4,6 +4,7 @@ import {
   auditPrompt,
   FIX_SCHEMA,
   fixPrompt,
+  IMPLEMENT_SCHEMA,
   REQUIREMENTS_SCHEMA,
   REVIEW_SCHEMA,
   requirementsPrompt,
@@ -698,5 +699,47 @@ describe("JSON schema constants", () => {
       FIX_SCHEMA.properties.replies.items.properties.issue_proposal;
     expect(issueProposal.required).toEqual(["title", "body"]);
     expect(issueProposal.additionalProperties).toBe(false);
+  });
+});
+
+describe("IMPLEMENT_SCHEMA", () => {
+  test("requires every field (outcome, summary, gap_report, commit_subject, commit_body, notes_for_reviewer)", () => {
+    expect(IMPLEMENT_SCHEMA.required).toEqual([
+      "outcome",
+      "summary",
+      "gap_report",
+      "commit_subject",
+      "commit_body",
+      "notes_for_reviewer",
+    ]);
+  });
+
+  test("forbids additional top-level properties", () => {
+    expect(IMPLEMENT_SCHEMA.additionalProperties).toBe(false);
+  });
+
+  test("outcome enum is done / requirements_gap only (no blocked)", () => {
+    expect(IMPLEMENT_SCHEMA.properties.outcome.enum).toEqual([
+      "done",
+      "requirements_gap",
+    ]);
+  });
+
+  test("gap_report is a nullable string", () => {
+    expect(IMPLEMENT_SCHEMA.properties.gap_report.type).toEqual([
+      "string",
+      "null",
+    ]);
+  });
+
+  test("commit_body is a plain (non-nullable) string", () => {
+    expect(IMPLEMENT_SCHEMA.properties.commit_body).toEqual({ type: "string" });
+  });
+
+  test("notes_for_reviewer is an array of strings", () => {
+    expect(IMPLEMENT_SCHEMA.properties.notes_for_reviewer).toEqual({
+      type: "array",
+      items: { type: "string" },
+    });
   });
 });
