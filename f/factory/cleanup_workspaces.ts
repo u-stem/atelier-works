@@ -13,9 +13,9 @@ import * as wmill from "windmill-client@1.817.0";
 import {
   formatDiskUsageMessage,
   groupByRepo,
+  issueWorktreePaths,
   mainRepoDir,
   parseDiskUsageKb,
-  requirementsWorktreeDir,
   selectOrphanClaudePids,
   terminateOrphans,
 } from "./lib/cleanup_support.ts";
@@ -44,8 +44,9 @@ import { buildReviewWorktreeDir } from "./steps/pr_review_prepare.ts";
 const WORKSPACES_ROOT = "/workspaces";
 
 // ---------------------------------------------------------------------------
-// Worktree cleanup (req-* for issue-kind, review-* for pr_review-kind, gtr
-// branch worktree for pr_fix-kind)
+// Worktree cleanup (req-* and the 工程3 implement-branch worktree for
+// issue-kind, review-* for pr_review-kind, gtr branch worktree for
+// pr_fix-kind)
 // ---------------------------------------------------------------------------
 
 async function removeStaleWorktreesForRepo(
@@ -76,15 +77,15 @@ async function removeStaleWorktreesForRepo(
 
   for (const item of items) {
     try {
-      let targetDir: string | undefined;
-      if (item.kind === "issue" && item.issue_number !== null) {
-        const dir = requirementsWorktreeDir(owner, repo, item.issue_number);
-        targetDir = worktrees.find((entry) => entry.path === dir)?.path;
+      let targetDirs: string[] = [];
+      if (item.kind === "issue") {
+        targetDirs = issueWorktreePaths(owner, repo, item, worktrees);
       } else if (item.kind === "pr_fix" && item.pr_number !== null) {
         const pr = await getPr(ghClient, owner, repo, item.pr_number);
-        targetDir = worktrees.find(
+        const dir = worktrees.find(
           (entry) => entry.branch === pr.headRef,
         )?.path;
+        targetDirs = dir === undefined ? [] : [dir];
       } else if (
         item.kind === "pr_review" &&
         item.pr_number !== null &&
@@ -95,19 +96,22 @@ async function removeStaleWorktreesForRepo(
           item.pr_number,
           item.head_sha.slice(0, 7),
         );
-        targetDir = worktrees.find((entry) => entry.path === dir)?.path;
+        const found = worktrees.find((entry) => entry.path === dir)?.path;
+        targetDirs = found === undefined ? [] : [found];
       }
 
-      if (targetDir === undefined || removedDirs.has(targetDir)) {
-        continue;
+      for (const targetDir of targetDirs) {
+        if (removedDirs.has(targetDir)) {
+          continue;
+        }
+        await removeWorktree({
+          run: runCommand,
+          repoDir,
+          dir: targetDir,
+          force: true,
+        });
+        removedDirs.add(targetDir);
       }
-      await removeWorktree({
-        run: runCommand,
-        repoDir,
-        dir: targetDir,
-        force: true,
-      });
-      removedDirs.add(targetDir);
     } catch (err) {
       log.warn("cleanup: failed to remove a stale worktree", {
         work_item_id: item.id,

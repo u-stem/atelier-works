@@ -148,6 +148,11 @@ export type PipelineRow = {
   kind: string;
   pr_number: number | null;
   fix_round: number;
+  /** 工程3 implement branch (`work_items.branch`), null for other kinds /
+   * before implement started. */
+  branch: string | null;
+  /** PR 工程3 opened (`work_items.pr_url`), null until `pr_open`. */
+  pr_url: string | null;
 };
 
 export function toPipelineRow(row: Record<string, unknown>): PipelineRow {
@@ -169,6 +174,8 @@ export function toPipelineRow(row: Record<string, unknown>): PipelineRow {
     kind: str(row.kind),
     pr_number: numOrNull(row.pr_number),
     fix_round: num(row.fix_round),
+    branch: strOrNull(row.branch),
+    pr_url: strOrNull(row.pr_url),
   };
 }
 

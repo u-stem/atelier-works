@@ -3,6 +3,11 @@ import {
   assertBranchName,
   assertGitHubName,
   assertSha,
+  IMPLEMENT_ROUND_MODES,
+  IMPLEMENT_ROUND_OUTCOMES,
+  isImplementDiffStat,
+  isImplementRoundMode,
+  isImplementRoundOutcome,
   TERMINAL_WORK_ITEM_STATUSES,
   WORK_ITEM_KINDS,
   WORK_ITEM_SOURCES,
@@ -158,5 +163,50 @@ describe("audit work item vocabulary", () => {
 
   test("audited is terminal", () => {
     expect(TERMINAL_WORK_ITEM_STATUSES).toContain("audited");
+  });
+});
+
+describe("implement work item vocabulary (工程3)", () => {
+  test("pr_open is terminal (implement's success end state; keeps it out of listActive/reconcile)", () => {
+    expect(TERMINAL_WORK_ITEM_STATUSES).toContain("pr_open");
+  });
+
+  test("lists implement and fix as the two round modes", () => {
+    expect(IMPLEMENT_ROUND_MODES).toEqual(["implement", "fix"]);
+  });
+
+  test("lists the six round outcomes in the migration's CHECK order", () => {
+    expect(IMPLEMENT_ROUND_OUTCOMES).toEqual([
+      "done",
+      "requirements_gap",
+      "check_failed",
+      "checks_skipped",
+      "stalled",
+      "error",
+    ]);
+  });
+
+  test("isImplementRoundMode accepts fix", () => {
+    expect(isImplementRoundMode("fix")).toBe(true);
+  });
+
+  test("isImplementRoundMode rejects verify", () => {
+    expect(isImplementRoundMode("verify")).toBe(false);
+  });
+
+  test("isImplementRoundOutcome accepts stalled", () => {
+    expect(isImplementRoundOutcome("stalled")).toBe(true);
+  });
+
+  test("isImplementRoundOutcome rejects blocked (a fix_rounds outcome, not an implement one)", () => {
+    expect(isImplementRoundOutcome("blocked")).toBe(false);
+  });
+
+  test("isImplementDiffStat accepts {files, added, deleted}", () => {
+    expect(isImplementDiffStat({ files: 3, added: 10, deleted: 2 })).toBe(true);
+  });
+
+  test("isImplementDiffStat rejects a stat missing deleted", () => {
+    expect(isImplementDiffStat({ files: 3, added: 10 })).toBe(false);
   });
 });

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   formatDiskUsageMessage,
   groupByRepo,
+  issueWorktreePaths,
   mainRepoDir,
   parseDiskUsageKb,
   requirementsWorktreeDir,
@@ -22,6 +23,84 @@ describe("requirementsWorktreeDir", () => {
     expect(requirementsWorktreeDir("octo-owner", "atelier-works", 42)).toBe(
       "/workspaces/octo-owner/atelier-works/req-42",
     );
+  });
+});
+
+describe("issueWorktreePaths", () => {
+  const OWNER = "octo-owner";
+  const REPO = "atelier-works";
+  const entry = (path: string, branch: string | null) => ({
+    path,
+    headSha: "abc1234",
+    branch,
+    bare: false,
+    detached: branch === null,
+  });
+  const MAIN = entry("/workspaces/octo-owner/atelier-works/main", "main");
+  const REQ = entry("/workspaces/octo-owner/atelier-works/req-42", null);
+  const IMPL = entry(
+    "/workspaces/octo-owner/atelier-works/factory-issue-42-wi-7",
+    "factory/issue-42-wi-7",
+  );
+
+  test("returns the req-<N> worktree when it is listed", () => {
+    expect(
+      issueWorktreePaths(OWNER, REPO, { issue_number: 42, branch: null }, [
+        MAIN,
+        REQ,
+      ]),
+    ).toEqual(["/workspaces/octo-owner/atelier-works/req-42"]);
+  });
+
+  test("returns nothing for req-<N> when no such worktree is listed", () => {
+    expect(
+      issueWorktreePaths(OWNER, REPO, { issue_number: 42, branch: null }, [
+        MAIN,
+      ]),
+    ).toEqual([]);
+  });
+
+  test("returns the worktree checked out on work_items.branch (工程3 implement worktree)", () => {
+    expect(
+      issueWorktreePaths(
+        OWNER,
+        REPO,
+        { issue_number: 42, branch: "factory/issue-42-wi-7" },
+        [MAIN, IMPL],
+      ),
+    ).toEqual(["/workspaces/octo-owner/atelier-works/factory-issue-42-wi-7"]);
+  });
+
+  test("returns both the req-<N> and the branch worktree when both exist", () => {
+    expect(
+      issueWorktreePaths(
+        OWNER,
+        REPO,
+        { issue_number: 42, branch: "factory/issue-42-wi-7" },
+        [MAIN, REQ, IMPL],
+      ),
+    ).toEqual([
+      "/workspaces/octo-owner/atelier-works/req-42",
+      "/workspaces/octo-owner/atelier-works/factory-issue-42-wi-7",
+    ]);
+  });
+
+  test("never returns the main clone even when it sits on the item's branch", () => {
+    expect(
+      issueWorktreePaths(OWNER, REPO, { issue_number: null, branch: "main" }, [
+        MAIN,
+      ]),
+    ).toEqual([]);
+  });
+
+  test("returns nothing when the item has neither an issue number nor a branch", () => {
+    expect(
+      issueWorktreePaths(OWNER, REPO, { issue_number: null, branch: null }, [
+        MAIN,
+        REQ,
+        IMPL,
+      ]),
+    ).toEqual([]);
   });
 });
 

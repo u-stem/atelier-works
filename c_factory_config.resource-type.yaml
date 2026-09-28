@@ -34,6 +34,14 @@ schema:
     - max_fix_changed_files
     - max_fix_diff_lines
     - max_lookback_days
+    - implement_enabled
+    - implement_max_rounds
+    - implement_max_turns
+    - implement_max_budget_usd_per_run
+    - implement_timeout_sec
+    - implement_max_changed_files
+    - implement_max_diff_lines
+    - check_commands_by_repo
   properties:
     allowed_check_commands:
       type: array
@@ -56,6 +64,15 @@ schema:
           - OWNER
           - MEMBER
           - COLLABORATOR
+    check_commands_by_repo:
+      type: object
+      description: >-
+        リポジトリ別の検査コマンドです。キーは`<owner>/<repo>`(大文字小文字は区別しない)、値はそのリポジトリの実装(工程3)で実行するコマンドの配列です。エントリが無いリポジトリでは`allowed_check_commands`を使います。空配列を指定するとそのリポジトリでは検査を実行しません。`allowed_check_commands`と同様に隔離されないため、信頼できるリポジトリだけに設定してください。
+      default: {}
+      additionalProperties:
+        type: array
+        items:
+          type: string
     claude_timeout_sec:
       type: integer
       description: Claude Codeの1回の実行を打ち切るまでの制限時間(秒)。
@@ -91,6 +108,38 @@ schema:
       type: string
       description: このラベルが付いたPRは修正処理の対象になります。
       default: factory:fix
+    implement_enabled:
+      type: boolean
+      description: >-
+        要件定義の承認後に実装(工程3)を自動で開始するかどうかです。falseの間は従来どおり`approved`で止まります。
+      default: false
+    implement_max_budget_usd_per_run:
+      type: number
+      description: 実装(工程3)におけるClaude Codeの1回の実行あたりの利用上限(USD)。
+      default: 10
+    implement_max_changed_files:
+      type: integer
+      description: >-
+        実装(工程3)で変更してよいファイル数の上限です。これを超える差分は対応が必要な状態(needs_human)にします。
+      default: 60
+    implement_max_diff_lines:
+      type: integer
+      description: >-
+        実装(工程3)で変更してよい行数(追加+削除)の上限です。これを超える差分は対応が必要な状態(needs_human)にします。
+      default: 3000
+    implement_max_rounds:
+      type: integer
+      description: >-
+        実装(工程3)で検査と修正を繰り返す最大回数です(最初の実装1回+修正)。超えると対応が必要な状態(needs_human)にします。
+      default: 5
+    implement_max_turns:
+      type: integer
+      description: 実装(工程3)におけるClaude Codeの1回の実行あたりの最大ターン数。
+      default: 80
+    implement_timeout_sec:
+      type: integer
+      description: 実装(工程3)におけるClaude Codeの1回の実行を打ち切るまでの制限時間(秒)。
+      default: 3600
     instance_name:
       type: string
       description: >-
@@ -169,7 +218,7 @@ schema:
     retention_work_items_days:
       type: integer
       description: >-
-        終端状態(承認済み・要対応・タイムアウト・失敗・レビュー済み・再レビュー依頼・ブロック・キャンセル)になった作業項目を保持する日数です。この日数を過ぎると、関連する要件定義ドラフトや承認依頼もあわせて自動的に削除されます。
+        終端状態(承認済み・要対応・タイムアウト・失敗・レビュー済み・再レビュー依頼・ブロック・監査完了・PR作成済み・キャンセル)になった作業項目を保持する日数です。この日数を過ぎると、関連する要件定義ドラフトや承認依頼もあわせて自動的に削除されます。
       default: 90
     review_label:
       type: string

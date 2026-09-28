@@ -2,6 +2,8 @@
 // "cleanup_workspaces", §4b). No I/O — see that script for wiring (git
 // worktree operations, `ps`/process signals, `du`).
 
+import type { WorktreeEntry } from "./workspace.ts";
+
 // ---------------------------------------------------------------------------
 // Worktree path naming
 // ---------------------------------------------------------------------------
@@ -28,6 +30,55 @@ export function requirementsWorktreeDir(
   issueNumber: number,
 ): string {
   return `/workspaces/${owner}/${repo}/req-${issueNumber}`;
+}
+
+// ---------------------------------------------------------------------------
+// issueWorktreePaths: which worktrees an issue-kind work item leaves behind
+// ---------------------------------------------------------------------------
+
+/** The two `work_items` columns an issue-kind item's worktrees are keyed
+ * by — structural so a full `WorkItem` (lib/types.ts) can be passed as-is. */
+export type IssueWorktreeSource = {
+  readonly issue_number: number | null;
+  readonly branch: string | null;
+};
+
+/**
+ * Every worktree path cleanup_workspaces.ts should remove for one
+ * issue-kind work item: the detached `req-<N>` requirements worktree
+ * (工程2, `requirementsWorktreeDir`) when it is listed, plus the worktree
+ * checked out on `item.branch` (工程3's implement branch,
+ * `work_items.branch`) when the item has one. `worktrees` is the parsed
+ * `git worktree list --porcelain` output for the repo. The fetch-only
+ * main clone (`mainRepoDir`) is never returned, even if it happens to sit
+ * on that branch. Pure — no I/O.
+ */
+export function issueWorktreePaths(
+  owner: string,
+  repo: string,
+  item: IssueWorktreeSource,
+  worktrees: readonly WorktreeEntry[],
+): string[] {
+  const main = mainRepoDir(owner, repo);
+  const paths: string[] = [];
+  if (item.issue_number !== null) {
+    const reqDir = requirementsWorktreeDir(owner, repo, item.issue_number);
+    if (worktrees.some((entry) => entry.path === reqDir)) {
+      paths.push(reqDir);
+    }
+  }
+  if (item.branch !== null) {
+    for (const entry of worktrees) {
+      if (
+        entry.branch === item.branch &&
+        entry.path !== main &&
+        !paths.includes(entry.path)
+      ) {
+        paths.push(entry.path);
+      }
+    }
+  }
+  return paths;
 }
 
 // ---------------------------------------------------------------------------

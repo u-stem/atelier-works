@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   ConfigValidationError,
+  checkCommandsFor,
   isRepoAllowed,
   loadConfig,
   parseFactoryConfig,
@@ -331,5 +332,122 @@ describe("max_lookback_days", () => {
   test("throws when max_lookback_days is zero", () => {
     const raw = { ...LEGACY_RAW_CONFIG, max_lookback_days: 0 };
     expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+});
+
+describe("implement settings (工程3)", () => {
+  test("defaults the seven scalar implement settings when absent", () => {
+    const config = parseFactoryConfig(LEGACY_RAW_CONFIG);
+    expect(config).toMatchObject({
+      implement_enabled: false,
+      implement_max_rounds: 5,
+      implement_max_turns: 80,
+      implement_max_budget_usd_per_run: 10,
+      implement_timeout_sec: 3600,
+      implement_max_changed_files: 60,
+      implement_max_diff_lines: 3000,
+    });
+  });
+
+  test("defaults check_commands_by_repo to an empty record when absent", () => {
+    const config = parseFactoryConfig(LEGACY_RAW_CONFIG);
+    expect(config.check_commands_by_repo).toEqual({});
+  });
+
+  test("passes through an explicit implement_enabled true", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      implement_enabled: true,
+    });
+    expect(config.implement_enabled).toBe(true);
+  });
+
+  test("throws when implement_enabled is present but not a boolean", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, implement_enabled: "yes" };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when implement_max_rounds is zero", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, implement_max_rounds: 0 };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when implement_timeout_sec is not an integer", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, implement_timeout_sec: 1.5 };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("passes through an explicit check_commands_by_repo record", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      check_commands_by_repo: { "octo-owner/atelier-works": ["bun test"] },
+    });
+    expect(config.check_commands_by_repo).toEqual({
+      "octo-owner/atelier-works": ["bun test"],
+    });
+  });
+
+  test("throws when a check_commands_by_repo value is not an array of strings", () => {
+    const raw = {
+      ...LEGACY_RAW_CONFIG,
+      check_commands_by_repo: { "octo-owner/atelier-works": "bun test" },
+    };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when check_commands_by_repo is an array instead of an object", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, check_commands_by_repo: ["bun test"] };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when a check_commands_by_repo key is a full URL instead of owner/repo", () => {
+    const raw = {
+      ...LEGACY_RAW_CONFIG,
+      check_commands_by_repo: {
+        "https://github.com/octo-owner/atelier-works": ["bun test"],
+      },
+    };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("allows a check_commands_by_repo key with a trailing .git", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      check_commands_by_repo: { "octo-owner/atelier-works.git": ["bun test"] },
+    });
+    expect(config.check_commands_by_repo).toEqual({
+      "octo-owner/atelier-works.git": ["bun test"],
+    });
+  });
+});
+
+describe("checkCommandsFor", () => {
+  const BASE = {
+    allowed_check_commands: ["mise run check"],
+    check_commands_by_repo: {
+      "octo-owner/atelier-works": ["bun install --frozen-lockfile", "bun test"],
+      "Octo-Owner/Widgets.git": [],
+    },
+  };
+
+  test("returns the repo-specific commands when the repo has an entry", () => {
+    expect(checkCommandsFor(BASE, "octo-owner", "atelier-works")).toEqual([
+      "bun install --frozen-lockfile",
+      "bun test",
+    ]);
+  });
+
+  test("falls back to allowed_check_commands when the repo has no entry", () => {
+    expect(checkCommandsFor(BASE, "octo-owner", "gadgets")).toEqual([
+      "mise run check",
+    ]);
+  });
+
+  test("matches the key case-insensitively and ignores a trailing .git (normalizeRepoUrl rules)", () => {
+    expect(checkCommandsFor(BASE, "octo-owner", "widgets")).toEqual([]);
+  });
+
+  test("treats an explicit empty array as 'no checks for this repo', not as a fallback trigger", () => {
+    expect(checkCommandsFor(BASE, "OCTO-OWNER", "WIDGETS")).toHaveLength(0);
   });
 });

@@ -84,6 +84,7 @@ stateDiagram-v2
     cancelled --> [*]
     reviewed --> [*]
     rereview_requested --> [*]
+    pr_open --> [*]
     [*] --> picked: 監査起動(kind=audit)
     picked --> auditing
     auditing --> awaiting_approval: 提案あり
@@ -108,7 +109,7 @@ stateDiagram-v2
 | `expired` | 承認タイムアウト(7日、`poll_issues`の期限切れスイープが判定) | 2 |
 | `cancelled` | Issueがclosed | 1/2 |
 | `implementing` | 実装中(worktree上で実装 → レビュー → PR作成) | 3(未実装、拡張点) |
-| `pr_open` | 実装が完了しPRを作成した | 3(未実装、拡張点) |
+| `pr_open` | 実装が完了しPRを作成した(終端。マージ後の追跡は工程4の課題で、レビュー・修正は`pr_review` / `pr_fix`側のwork itemが担う) | 3(未実装、拡張点) |
 | `reviewing` | PRレビューを実行中(`kind=pr_review`) | PRワークフロー |
 | `reviewed` | PRレビューをCOMMENTとして投稿済み(終端、`kind=pr_review`) | PRワークフロー |
 | `fixing` | レビュー指摘・コメントの修正を実行中(`kind=pr_fix`) | PRワークフロー |
@@ -116,6 +117,8 @@ stateDiagram-v2
 | `blocked` | 禁止された変更パターンの検出、差分上限超過、または安全策の前提が崩れて中断(`kind=pr_fix`) | PRワークフロー |
 | `auditing` | 監査を実行中(`kind=audit`) | 5 |
 | `audited` | 監査完了(終端、`kind=audit`) | 5 |
+
+**終端statusの同期**: 終端status(`approved` / `rejected` / `needs_human` / `failed` / `expired` / `cancelled` / `reviewed` / `rereview_requested` / `blocked` / `audited` / `pr_open`)の一覧は`f/factory/lib/types.ts`の`TERMINAL_WORK_ITEM_STATUSES`と、Data Tableのview`factory.v_lead_time`の`WHERE status IN (...)`の2か所にある。終端statusを増やすときはmigrationで`v_lead_time`を`CREATE OR REPLACE`し、同じPRで`TERMINAL_WORK_ITEM_STATUSES`を更新する(`poll_issues`のreconcileは終端statusを`listActive`から外して孤児判定の対象にしないため、片方だけ更新すると完了済みのwork itemが孤児として`failed`にされる)。
 
 **Issue・PR共通(2026-09-27方針変更)**: トリガーラベル(Issueの`factory`、PRの`factory:review` / `factory:fix`)はclaim時(Issueはassignee付与直後、PRはトリガーラベル自体の削除直後)に一度だけ消費する。以降のどの状態遷移(終端遷移を含む)でもIssue / PR側のラベルは付け外ししない — 状態は`work_items.status`のみが正で、GitHubのラベルは「人からFactoryへのトリガー」の役割に限定される。`retry_work_item`のように終端statusから再起動する経路も、`runFlowAsync`を呼ぶだけでラベルの再付与は行わない。最初からやり直すには人が改めてトリガーラベルを付け直す(新しいcycle)。
 
@@ -140,7 +143,7 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加のみで、ren
 
 | テーブル | 役割 |
 | --- | --- |
-| `work_items` | Issue単位の作業状態。`(owner, repo, issue_number, cycle)`で一意 |
+| `work_items` | Issue単位の作業状態。`(owner, repo, issue_number, cycle)`で一意。工程3用の`branch`(実装ブランチ`factory/issue-<N>-wi-<id>`)と`pr_url`(作成したPRのURL)は`kind=issue`のみが持ち、それ以外はnull。`pr_number`はPR側work item(`pr_review` / `pr_fix`)の束ね方に影響するためIssue側には入れない |
 | `work_item_events` | 状態遷移のイベント履歴 |
 | `requirement_drafts` | 要件定義ドラフト(markdown、図の参照`{name, file}`、未確定事項、`doc_dir`)。attemptごとに保存。図のXML自体はDBではなく`doc_dir`配下のファイルにある |
 | `approvals` | 旧テーブル。過去の承認・却下履歴のみを保持し、新規の書き込みはない(`approval_requests`に統一済み) |
@@ -152,6 +155,7 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加のみで、ren
 | `issue_proposals` | pr_fixの`propose_issue`返信が提案するIssue(title / body)と、その承認 / 却下の判断履歴。`title` / `body` / `review_comment_id` / `thread_id`の一次情報源(`approval_requests`はこれらを複製しない)。`origin`(`pr_fix` / `audit`)。auditは`audit_report_id` / `position`で紐づき`review_comment_id`はnull |
 | `approval_requests` | 承認依頼の汎用テーブル。`kind`は`requirements`(要件定義承認、`subject_id`は`requirement_drafts.id`)/ `issue_proposal`(Issue化提案、`subject_id`は`issue_proposals.id`)、`status`は`pending` / `approved` / `rejected` / `expired`。`approval_decide`が読み書きする唯一のテーブルで、suspendベースの承認と`approvals`テーブルへの書き込みを置き換えた |
 | `cleanup_runs` | `cleanup_db`が実行するたびの削除件数の記録(work item・失敗記録・デプロイ記録・通知など) |
+| `implement_rounds` | 工程3のClaude実行1ラウンドごとの記録。`round`はwork item内で連番(`UNIQUE (work_item_id, round)`)、`mode`(`implement` / `fix`)、`outcome`(`done` / `requirements_gap` / `check_failed` / `checks_skipped` / `stalled` / `error`)、`summary` / `gap_report` / `check_output`(先頭16KB)/ `checks_skipped_reason` / `protected_changes`(jsonb、保護パス変更の一覧)/ `diff_stat`(jsonb `{files, added, deleted}`)/ `agent_run_id`。work itemの削除に連動して消える |
 
 ### view(Appはこれらのみを参照する)
 
@@ -165,7 +169,7 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加のみで、ren
 | `manual_intake` | flow(フォーム起動) | フォーム入力からIssueを作成し同じパイプラインに乗せる |
 | `pipeline` | flow | 要件定義生成 → 承認依頼の記録(`approval_requests`)。承認 / 却下 / タイムアウトの分岐はフロー外(`approval_decide`とpoll_issuesの期限切れスイープ)で行う |
 | `self_update` | schedule(10分毎) | self cloneをpullし、変更があれば`wmill sync push`とmigrationを適用する |
-| `cleanup_workspaces` | schedule(毎日03:00) | 期限切れworktreeの削除、古いtranscriptの削除 |
+| `cleanup_workspaces` | schedule(毎日03:00) | 期限切れworktree(`req-<N>`、`work_items.branch`の実装worktree、review-*、pr_fixのgtr worktree)の削除、孤児化したheadless Claudeプロセスの停止、ディスク使用量の記録 |
 | `cleanup_db` | schedule(毎日03:30) | 保持期限を過ぎたDBのレコード(終端状態の作業項目とその関連データ、失敗記録・デプロイ記録・解決済みの通知)の削除 |
 | `daily_summary` | schedule(毎日09:00) | 前日のコスト・件数・失敗・DB掃除件数をDiscordに通知 |
 | `audit_kickoff` | schedule(毎週月曜09:30) | 前回監査以降の運用記録を集計し、対象があれば監査work itemを作成して`audit`フローを起動 |

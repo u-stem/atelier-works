@@ -125,7 +125,7 @@
 ## 保持期間
 
 - `cleanup_db`スケジュール(毎日03:30)が、保持期限を過ぎたDBのレコードを削除する。
-  - 終端状態(承認済み・要対応・タイムアウト・失敗・レビュー済み・再レビュー依頼・ブロック・キャンセル)になった作業項目は、既定90日(`factory_config`の`retention_work_items_days`)を過ぎると削除される。要件定義ドラフト・承認履歴・承認依頼・状態遷移の履歴(`work_item_events`)・Claude実行の記録(`agent_runs`。コスト分析`v_agent_cost_daily`の元データ)も、外部キーの`ON DELETE CASCADE`によりあわせて削除される。コスト分析を保持期間より長く見たい場合は`retention_work_items_days`を延ばす。
+  - 終端状態(承認済み・要対応・タイムアウト・失敗・レビュー済み・再レビュー依頼・ブロック・キャンセル・PR作成済み(`pr_open`)・監査完了(`audited`))になった作業項目は、既定90日(`factory_config`の`retention_work_items_days`)を過ぎると削除される。`pr_open`の作業項目もPRがopenのままでも90日で削除される。要件定義ドラフト・承認履歴・承認依頼・状態遷移の履歴(`work_item_events`)・Claude実行の記録(`agent_runs`。コスト分析`v_agent_cost_daily`の元データ)も、外部キーの`ON DELETE CASCADE`によりあわせて削除される。コスト分析を保持期間より長く見たい場合は`retention_work_items_days`を延ばす。
   - 作業項目の削除にあわせて、その要件定義ディレクトリ(`requirement_drafts.doc_dir`、workerの`/var/lib/factory/requirements/<owner>/<repo>/issue-<N>/wi-<id>/`以下)もベストエフォートで削除される(DB行の削除とは独立した処理で、削除に失敗しても他の掃除やDB削除自体は止まらない)。
   - 失敗記録・デプロイ記録・解決済みのお知らせは、作業項目とは独立に既定30日(`retention_logs_days`)を過ぎると削除される(未解決のお知らせは対象外)。
   - 監査の作業項目とレポート・提案は終端(`audited`)後90日で削除される(`retention_work_items_days`)。

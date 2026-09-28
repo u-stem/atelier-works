@@ -31,6 +31,14 @@ declare namespace RT {
     max_budget_usd_per_run: number,
     retention_logs_days: number,
     retention_work_items_days: number,
-    allowed_labeler_associations: string[]
+    allowed_labeler_associations: string[],
+    implement_enabled: boolean,
+    implement_max_rounds: number,
+    implement_max_turns: number,
+    implement_max_budget_usd_per_run: number,
+    implement_timeout_sec: number,
+    implement_max_changed_files: number,
+    implement_max_diff_lines: number,
+    check_commands_by_repo: object
   }
 }

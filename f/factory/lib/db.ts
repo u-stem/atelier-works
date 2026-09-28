@@ -27,17 +27,26 @@ import {
   type ApprovalRequestStatus,
   type AuditIssueProposal,
   type AuditReport,
+  assertBranchName,
   type DeploymentRecord,
   type Diagram,
   type FailureRecord,
   type FixOutcome,
   type FixReply,
   type FixRoundRecord,
+  IMPLEMENT_ROUND_MODES,
+  IMPLEMENT_ROUND_OUTCOMES,
+  type ImplementDiffStat,
+  type ImplementRound,
+  type ImplementRoundMode,
+  type ImplementRoundOutcome,
+  type ImplementRoundRecord,
   ISSUE_PROPOSAL_ORIGINS,
   type IssueProposal,
   type IssueProposalOrigin,
   type IssueProposalStatus,
   isBoolean,
+  isImplementDiffStat,
   isNumber,
   isOneOf,
   isRecord,
@@ -300,6 +309,8 @@ function toWorkItem(row: SqlRow): WorkItem {
       row.parent_work_item_id,
       "parent_work_item_id",
     ),
+    branch: parseNullableString(row.branch, "branch"),
+    pr_url: parseNullableString(row.pr_url, "pr_url"),
     created_at: parseDate(row.created_at, "created_at"),
     updated_at: parseDate(row.updated_at, "updated_at"),
   };
@@ -1233,6 +1244,37 @@ export async function setHeadSha(
   `.execute();
 }
 
+/** Records the implement branch (`factory/issue-<N>-wi-<id>`) 工程3's
+ * implement_prepare created or reused for an issue-kind work item.
+ * `assertBranchName` runs first: the name is later interpolated into git /
+ * gh argv, so an invalid one must fail here rather than be persisted. */
+export async function setWorkItemBranch(
+  id: number,
+  branch: string,
+  sql: SqlClient = defaultSqlClient,
+): Promise<void> {
+  assertBranchName(branch);
+  await sql`
+    UPDATE factory.work_items
+    SET branch = ${branch}, updated_at = now()
+    WHERE id = ${id}
+  `.execute();
+}
+
+/** Records the HTML URL of the PR 工程3's implement_finish opened (or
+ * updated) for an issue-kind work item. */
+export async function setWorkItemPrUrl(
+  id: number,
+  prUrl: string,
+  sql: SqlClient = defaultSqlClient,
+): Promise<void> {
+  await sql`
+    UPDATE factory.work_items
+    SET pr_url = ${prUrl}, updated_at = now()
+    WHERE id = ${id}
+  `.execute();
+}
+
 export type WatermarkUpdate = {
   last_review_id?: number;
   last_comment_id?: number;
@@ -1717,6 +1759,57 @@ export async function listExpiredPendingApprovalRequests(
   return rows.map(toApprovalRequest);
 }
 
+/** The newest `kind = 'requirements'` approval request for a work item,
+ * with the attempt of the requirement draft it points at — what
+ * implement_prepare (工程3) and retry_work_item use to decide whether the
+ * work item's current `attempt` has an approval to implement against. */
+export type RequirementsApprovalRef = {
+  readonly approval_request_id: number;
+  /** `approval_requests.subject_id` = `requirement_drafts.id`. */
+  readonly draft_id: number;
+  /** `requirement_drafts.attempt` of that draft. */
+  readonly attempt: number;
+  readonly status: ApprovalRequestStatus;
+};
+
+/**
+ * Most recently requested `kind = 'requirements'` factory.approval_requests
+ * row for `workItemId` (any status — the caller checks `status ===
+ * "approved"` and `attempt === workItem.attempt`), joined to its
+ * requirement draft for the attempt; `null` when the work item never
+ * requested a requirements approval. `id DESC` breaks a same-timestamp tie.
+ */
+export async function latestRequirementsApproval(
+  workItemId: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<RequirementsApprovalRef | null> {
+  const rows = await sql`
+    SELECT ar.id AS approval_request_id, ar.subject_id AS draft_id, rd.attempt, ar.status
+    FROM factory.approval_requests ar
+    JOIN factory.requirement_drafts rd ON rd.id = ar.subject_id AND rd.work_item_id = ar.work_item_id
+    WHERE ar.kind = 'requirements' AND ar.work_item_id = ${workItemId}::bigint
+    ORDER BY ar.requested_at DESC, ar.id DESC
+    LIMIT 1
+  `.fetch();
+  const row = rows[0];
+  if (row === undefined) {
+    return null;
+  }
+  return {
+    approval_request_id: parseId(
+      row.approval_request_id,
+      "approval_request_id",
+    ),
+    draft_id: parseId(row.draft_id, "draft_id"),
+    attempt: parseRequiredNumber(row.attempt, "attempt"),
+    status: parseEnum<ApprovalRequestStatus>(
+      row.status,
+      APPROVAL_REQUEST_STATUSES,
+      "status",
+    ),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // cleanup_db.ts (DB retention cleanup, 2026-09-27 addition). See
 // lib/cleanup_db_support.ts for the pure cutoff-computation / summary
@@ -2007,4 +2100,110 @@ export async function insertAuditWorkItem(
   `.fetch();
   const row = rows[0];
   return row === undefined ? null : parseId(row.id, "id");
+}
+
+// ---------------------------------------------------------------------------
+// implement_rounds (工程3) — see
+// migrations/datatable/main/20260928120000_implement.up.sql.
+// ---------------------------------------------------------------------------
+
+/**
+ * Inserts a factory.implement_rounds row and returns its id. `round` is
+ * assigned inside the same statement as `COALESCE(MAX(round), 0) + 1` over
+ * the work item's existing rounds (an aggregate without GROUP BY always
+ * yields exactly one row, so the first round gets 1). Rounds of one work
+ * item are written sequentially by a single implement flow run, so the
+ * UNIQUE (work_item_id, round) key is a safety net, not a contended lock.
+ */
+export async function insertImplementRound(
+  record: ImplementRoundRecord,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  const diffStat =
+    record.diff_stat === null ? null : JSON.stringify(record.diff_stat);
+  const statement = sql`
+    INSERT INTO factory.implement_rounds (
+      work_item_id, attempt, round, mode, outcome, summary, gap_report,
+      check_output, checks_skipped_reason, protected_changes, diff_stat, agent_run_id
+    )
+    SELECT
+      ${record.work_item_id}::bigint, ${record.attempt}::integer, COALESCE(MAX(round), 0) + 1,
+      ${record.mode}, ${record.outcome}, ${record.summary}, ${record.gap_report},
+      ${record.check_output}, ${record.checks_skipped_reason},
+      ${JSON.stringify(record.protected_changes)}::jsonb, ${diffStat}::jsonb,
+      ${record.agent_run_id}::bigint
+    FROM factory.implement_rounds
+    WHERE work_item_id = ${record.work_item_id}::bigint
+    RETURNING id
+  `;
+  const row = await fetchOneRow(statement, "insertImplementRound");
+  return parseId(row.id, "id");
+}
+
+function parseImplementDiffStat(value: unknown): ImplementDiffStat | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const parsed = parseJsonObject(value, "diff_stat");
+  if (!isImplementDiffStat(parsed)) {
+    throw new Error(
+      'db: row field "diff_stat" is not a {files, added, deleted} object',
+    );
+  }
+  return parsed;
+}
+
+/** Parses a full factory.implement_rounds row. */
+export function toImplementRound(row: SqlRow): ImplementRound {
+  const protectedChanges = parseJsonArray(
+    row.protected_changes,
+    "protected_changes",
+  );
+  if (!protectedChanges.every((item): item is string => isString(item))) {
+    throw new Error(
+      'db: row field "protected_changes" contains a non-string item',
+    );
+  }
+  return {
+    id: parseId(row.id, "id"),
+    work_item_id: parseId(row.work_item_id, "work_item_id"),
+    attempt: parseRequiredNumber(row.attempt, "attempt"),
+    round: parseRequiredNumber(row.round, "round"),
+    mode: parseEnum<ImplementRoundMode>(
+      row.mode,
+      IMPLEMENT_ROUND_MODES,
+      "mode",
+    ),
+    outcome: parseEnum<ImplementRoundOutcome>(
+      row.outcome,
+      IMPLEMENT_ROUND_OUTCOMES,
+      "outcome",
+    ),
+    summary: parseRequiredString(row.summary, "summary"),
+    gap_report: parseNullableString(row.gap_report, "gap_report"),
+    check_output: parseNullableString(row.check_output, "check_output"),
+    checks_skipped_reason: parseNullableString(
+      row.checks_skipped_reason,
+      "checks_skipped_reason",
+    ),
+    protected_changes: protectedChanges,
+    diff_stat: parseImplementDiffStat(row.diff_stat),
+    agent_run_id: parseNullableId(row.agent_run_id, "agent_run_id"),
+    created_at: parseDate(row.created_at, "created_at"),
+  };
+}
+
+/** Every factory.implement_rounds row for a work item, first round first —
+ * the implement flow's own history (round count, stall detection input,
+ * PR-body "確認して欲しい点" aggregation). */
+export async function listImplementRounds(
+  workItemId: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<ImplementRound[]> {
+  const rows = await sql`
+    SELECT * FROM factory.implement_rounds
+    WHERE work_item_id = ${workItemId}
+    ORDER BY round ASC
+  `.fetch();
+  return rows.map(toImplementRound);
 }

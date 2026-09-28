@@ -16,6 +16,7 @@
 import {
   type FactoryConfig,
   type FactoryOwner,
+  isBoolean,
   isNumber,
   isOneOf,
   isRecord,
@@ -39,6 +40,9 @@ const LABELER_ASSOCIATIONS: readonly LabelerAssociation[] = [
 ];
 const REVIEW_POST_MODES: readonly ReviewPostMode[] = ["comment_only", "gated"];
 const OWNER_KINDS = ["user", "org"];
+/** Shape a `check_commands_by_repo` key must normalize to — `owner/repo`,
+ * no scheme/host, no extra slashes. See `checkCommandsByRepoField`. */
+const OWNER_SLASH_REPO = /^[^/\s]+\/[^/\s]+$/;
 
 /** Every FactoryConfig field that declares a `default:` in
  * c_factory_config.resource-type.yaml (everything except owners,
@@ -68,7 +72,15 @@ type DefaultableField =
   | "diff_max_lines"
   | "max_fix_changed_files"
   | "max_fix_diff_lines"
-  | "max_lookback_days";
+  | "max_lookback_days"
+  | "implement_enabled"
+  | "implement_max_rounds"
+  | "implement_max_turns"
+  | "implement_max_budget_usd_per_run"
+  | "implement_timeout_sec"
+  | "implement_max_changed_files"
+  | "implement_max_diff_lines"
+  | "check_commands_by_repo";
 
 /** Defaults for every field in DefaultableField, typed against FactoryConfig
  * itself so each value is checked without a type assertion. */
@@ -108,6 +120,16 @@ const DEFAULTS: Pick<FactoryConfig, DefaultableField> = {
   // New in 工程5 (audit): bounds how far a first/recovered audit period can
   // reach back when the previous report's end is older than this.
   max_lookback_days: 28,
+  // New in 工程3 (implement flow, design §4). implement_enabled stays off
+  // until PR-D's e2e flips it on the remote resource.
+  implement_enabled: false,
+  implement_max_rounds: 5,
+  implement_max_turns: 80,
+  implement_max_budget_usd_per_run: 10,
+  implement_timeout_sec: 3600,
+  implement_max_changed_files: 60,
+  implement_max_diff_lines: 3000,
+  check_commands_by_repo: {},
 };
 
 function isFactoryOwner(value: unknown): value is FactoryOwner {
@@ -200,6 +222,65 @@ function stringArrayField(
     throw new ConfigValidationError(`"${field}" must be an array of strings`);
   }
   return value;
+}
+
+/** Reads `raw[field]`, defaulting to `fallback` when absent; throws when
+ * present but not a boolean. */
+function booleanField(
+  raw: Record<string, unknown>,
+  field: string,
+  fallback: boolean,
+): boolean {
+  const value = raw[field];
+  if (value === undefined) {
+    return fallback;
+  }
+  if (!isBoolean(value)) {
+    throw new ConfigValidationError(`"${field}" must be a boolean`);
+  }
+  return value;
+}
+
+/** Reads `raw.check_commands_by_repo` as a `{ [ownerSlashRepo]: string[] }`
+ * record, defaulting to `fallback` when absent; throws when present but not
+ * an object whose every value is an array of strings, or when a key does
+ * not normalize (via `normalizeRepoUrl`) to `owner/repo` shape. The key
+ * shape is checked fail-closed: `checkCommandsFor` only ever compares a key
+ * against `owner/repo` (see its doc comment — unlike `isRepoAllowed`, it
+ * does not accept a full URL there), so a URL-shaped key would validate
+ * here yet never match there, silently falling back to
+ * `allowed_check_commands` instead of surfacing the config mistake.
+ * Rebuilds the record entry by entry so the result is typed without an
+ * assertion. */
+function checkCommandsByRepoField(
+  raw: Record<string, unknown>,
+  fallback: Record<string, string[]>,
+): Record<string, string[]> {
+  const field = "check_commands_by_repo";
+  const value = raw[field];
+  if (value === undefined) {
+    return fallback;
+  }
+  if (!isRecord(value)) {
+    throw new ConfigValidationError(
+      `"${field}" must be an object of string arrays`,
+    );
+  }
+  const result: Record<string, string[]> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (!isStringArray(entry)) {
+      throw new ConfigValidationError(
+        `"${field}"["${key}"] must be an array of strings`,
+      );
+    }
+    if (!OWNER_SLASH_REPO.test(normalizeRepoUrl(key))) {
+      throw new ConfigValidationError(
+        `"${field}" key "${key}" must be "<owner>/<repo>"`,
+      );
+    }
+    result[key] = entry;
+  }
+  return result;
 }
 
 /** Reads a field with no schema default: throws when absent or malformed. */
@@ -341,6 +422,45 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
       "max_lookback_days",
       DEFAULTS.max_lookback_days,
     ),
+    implement_enabled: booleanField(
+      raw,
+      "implement_enabled",
+      DEFAULTS.implement_enabled,
+    ),
+    implement_max_rounds: positiveIntegerField(
+      raw,
+      "implement_max_rounds",
+      DEFAULTS.implement_max_rounds,
+    ),
+    implement_max_turns: positiveIntegerField(
+      raw,
+      "implement_max_turns",
+      DEFAULTS.implement_max_turns,
+    ),
+    implement_max_budget_usd_per_run: numberField(
+      raw,
+      "implement_max_budget_usd_per_run",
+      DEFAULTS.implement_max_budget_usd_per_run,
+    ),
+    implement_timeout_sec: positiveIntegerField(
+      raw,
+      "implement_timeout_sec",
+      DEFAULTS.implement_timeout_sec,
+    ),
+    implement_max_changed_files: positiveIntegerField(
+      raw,
+      "implement_max_changed_files",
+      DEFAULTS.implement_max_changed_files,
+    ),
+    implement_max_diff_lines: positiveIntegerField(
+      raw,
+      "implement_max_diff_lines",
+      DEFAULTS.implement_max_diff_lines,
+    ),
+    check_commands_by_repo: checkCommandsByRepoField(
+      raw,
+      DEFAULTS.check_commands_by_repo,
+    ),
   };
 }
 
@@ -408,4 +528,34 @@ export function isRepoAllowed(
   return config.repo_allowlist.some(
     (entry) => normalizeRepoUrl(entry) === target,
   );
+}
+
+/**
+ * The check commands the implement flow (工程3) runs for `owner`/`repo`:
+ * the `check_commands_by_repo` entry whose key normalizes (via
+ * `normalizeRepoUrl` — trim, drop a trailing `.git` / `/`, lowercase) to
+ * `owner/repo`, else `allowed_check_commands`. An explicit `[]` entry is
+ * honoured as "no checks for this repo" rather than falling through, so a
+ * repo can opt out of a global command set.
+ *
+ * Keys are `owner/repo` — unlike `isRepoAllowed`, this does not also accept
+ * a full URL (`https://github.com/owner/repo`); `checkCommandsByRepoField`
+ * (config.ts) rejects a URL-shaped key at parse time rather than let it
+ * silently fall through to `allowed_check_commands` here.
+ */
+export function checkCommandsFor(
+  config: Pick<
+    FactoryConfig,
+    "allowed_check_commands" | "check_commands_by_repo"
+  >,
+  owner: string,
+  repo: string,
+): string[] {
+  const target = normalizeRepoUrl(`${owner}/${repo}`);
+  for (const [key, commands] of Object.entries(config.check_commands_by_repo)) {
+    if (normalizeRepoUrl(key) === target) {
+      return commands;
+    }
+  }
+  return config.allowed_check_commands;
 }
