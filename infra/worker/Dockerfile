@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 #
 # Custom Windmill worker image: adds the tools an agentic factory job needs
-# (claude, gh, gtr, wmill) on top of the upstream windmill worker image.
+# (claude, gh, gitleaks, gtr, wmill) on top of the upstream windmill worker image.
 # No secret is baked into this image; credentials are injected at runtime
 # as Windmill secret variables (never baked into the image).
 
@@ -14,6 +14,7 @@ FROM ghcr.io/windmill-labs/windmill:${WM_VERSION}
 
 ARG CLAUDE_VERSION
 ARG GH_VERSION
+ARG GITLEAKS_VERSION
 ARG GTR_REF
 # Commit that GTR_REF (v2.11.1) resolves to, pinned separately so a clone of
 # a moved/re-tagged ref is caught instead of silently trusted.
@@ -49,6 +50,27 @@ RUN set -eux; \
     install -m 0755 "gh_${GH_VERSION}_linux_${gh_arch}/bin/gh" /usr/local/bin/gh; \
     rm -rf "${tarball}" "gh_${GH_VERSION}_checksums.txt" "gh_${GH_VERSION}_linux_${gh_arch}"
 
+# gitleaks: the implement flow's fixed secret scan (run with --redact on
+# every verify round, independent of the target repo's own check commands).
+# Same release-tarball + checksums.txt verification as gh above. The version
+# is the one mise.toml's [tools] pins for the host-side pre-commit hook, so
+# host and worker scan with the same release.
+RUN set -eux; \
+    arch="$(dpkg --print-architecture)"; \
+    case "${arch}" in \
+        amd64) gitleaks_arch=x64 ;; \
+        arm64) gitleaks_arch=arm64 ;; \
+        *) echo "unsupported architecture: ${arch}" >&2; exit 1 ;; \
+    esac; \
+    cd /tmp; \
+    tarball="gitleaks_${GITLEAKS_VERSION}_linux_${gitleaks_arch}.tar.gz"; \
+    curl -fsSL -O "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${tarball}"; \
+    curl -fsSL -O "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_checksums.txt"; \
+    sha256sum -c --ignore-missing "gitleaks_${GITLEAKS_VERSION}_checksums.txt"; \
+    tar -xzf "${tarball}" gitleaks; \
+    install -m 0755 gitleaks /usr/local/bin/gitleaks; \
+    rm -rf "${tarball}" "gitleaks_${GITLEAKS_VERSION}_checksums.txt" gitleaks
+
 # gtr (git-worktree-runner): git-gtr resolves its own symlink target to find
 # /opt/gtr/lib/*.sh, so the launcher must stay a symlink. Copying the file
 # instead of symlinking it breaks it at runtime. GTR_COMMIT pins the exact
@@ -79,6 +101,6 @@ ENV PATH="/root/.local/bin:${PATH}"
 
 # Build-time verification: fail the build immediately if any tool is missing
 # or broken, instead of discovering it at job run time.
-RUN claude --version && gh --version && git gtr version && wmill --version && bun --version
+RUN claude --version && gh --version && gitleaks version && git gtr version && wmill --version && bun --version
 
 CMD ["windmill"]

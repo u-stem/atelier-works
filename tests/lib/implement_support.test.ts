@@ -1,12 +1,25 @@
 import { describe, expect, test } from "bun:test";
 import type { ImplementClaudeOutput } from "../../f/factory/lib/implement_support.ts";
 import {
+  buildImplementBranchName,
   buildImplementCommitMessage,
+  buildImplementPrBody,
+  CHECK_OUTPUT_MAX_BYTES,
+  classifyDeployNeeds,
+  classifyProtectedChanges,
+  decideImplementRoundExit,
+  extractAcceptanceCriteria,
+  IMPLEMENT_CHECK_SKIP_REASONS,
   IMPLEMENT_CLAUDE_OUTCOMES,
   isImplementClaudeOutput,
+  NO_ACCEPTANCE_CRITERIA_NOTE,
+  roundOutcomeForExit,
+  stallHash,
+  truncateCheckOutput,
   validateImplementOutput,
 } from "../../f/factory/lib/implement_support.ts";
 import { IMPLEMENT_SCHEMA } from "../../f/factory/lib/prompts.ts";
+import { extractLinkedIssueNumbers } from "../../f/factory/steps/pr_workflow_support.ts";
 
 const DONE_OUTPUT: ImplementClaudeOutput = {
   outcome: "done",
@@ -262,5 +275,535 @@ describe("buildImplementCommitMessage", () => {
       "local",
     );
     expect(message.split("Co-Authored-By").length - 1).toBe(1);
+  });
+});
+
+describe("buildImplementBranchName", () => {
+  test("formats factory/issue-<N>-wi-<id>", () => {
+    expect(buildImplementBranchName(42, 7)).toBe("factory/issue-42-wi-7");
+  });
+
+  test("rejects a non-positive issue number", () => {
+    expect(() => buildImplementBranchName(0, 7)).toThrow();
+  });
+
+  test("rejects a non-integer work item id", () => {
+    expect(() => buildImplementBranchName(42, 7.5)).toThrow();
+  });
+});
+
+describe("classifyProtectedChanges", () => {
+  test("returns an empty list for ordinary source paths", () => {
+    expect(
+      classifyProtectedChanges(
+        [
+          { path: "src/index.ts", status: "modified" },
+          { path: "tests/index.test.ts", status: "added" },
+        ],
+        false,
+      ),
+    ).toEqual([]);
+  });
+
+  test("records an infra/** change (implement list, not pr_fix's)", () => {
+    expect(
+      classifyProtectedChanges(
+        [{ path: "infra/worker/Dockerfile", status: "modified" }],
+        false,
+      ),
+    ).toEqual(["保護パスを変更: infra/worker/Dockerfile"]);
+  });
+
+  test("records a .github/workflows/** change", () => {
+    expect(
+      classifyProtectedChanges(
+        [{ path: ".github/workflows/ci.yml", status: "modified" }],
+        false,
+      ),
+    ).toEqual(["保護パスを変更: .github/workflows/ci.yml"]);
+  });
+
+  test("records each new shell script", () => {
+    expect(
+      classifyProtectedChanges(
+        [{ path: "scripts/run.sh", status: "added" }],
+        false,
+      ),
+    ).toEqual(["新規の*.shを追加: scripts/run.sh"]);
+  });
+
+  test("records a package.json scripts change", () => {
+    expect(
+      classifyProtectedChanges(
+        [{ path: "package.json", status: "modified" }],
+        true,
+      ),
+    ).toEqual(["package.jsonのscriptsを変更"]);
+  });
+
+  test("lists protected paths first, then shell scripts, then the scripts flag", () => {
+    expect(
+      classifyProtectedChanges(
+        [
+          { path: "scripts/run.sh", status: "added" },
+          { path: "lefthook.yml", status: "modified" },
+        ],
+        true,
+      ),
+    ).toEqual([
+      "保護パスを変更: lefthook.yml",
+      "新規の*.shを追加: scripts/run.sh",
+      "package.jsonのscriptsを変更",
+    ]);
+  });
+
+  test("records a new shell script under a protected path twice, protected first", () => {
+    expect(
+      classifyProtectedChanges(
+        [{ path: "infra/x.sh", status: "added" }],
+        false,
+      ),
+    ).toEqual(["保護パスを変更: infra/x.sh", "新規の*.shを追加: infra/x.sh"]);
+  });
+});
+
+describe("truncateCheckOutput", () => {
+  test("defaults to a 16KB ceiling", () => {
+    expect(CHECK_OUTPUT_MAX_BYTES).toBe(16384);
+  });
+
+  test("returns short text unchanged", () => {
+    expect(truncateCheckOutput("ok", 16)).toBe("ok");
+  });
+
+  test("keeps exactly maxBytes of ASCII", () => {
+    expect(truncateCheckOutput("abcdefghij", 4)).toBe("abcd");
+  });
+
+  test("never cuts a multi-byte UTF-8 sequence in the middle", () => {
+    expect(truncateCheckOutput("あいうえお", 10)).toBe("あいう");
+  });
+
+  test("keeps a multi-byte sequence that ends exactly at the boundary", () => {
+    expect(truncateCheckOutput("あいうえお", 9)).toBe("あいう");
+  });
+
+  test("the result never exceeds maxBytes when encoded", () => {
+    const result = truncateCheckOutput("𠮷".repeat(100), 10);
+    expect(new TextEncoder().encode(result).byteLength).toBeLessThanOrEqual(10);
+  });
+
+  test("returns an empty string for a ceiling smaller than the first character", () => {
+    expect(truncateCheckOutput("あ", 2)).toBe("");
+  });
+
+  test("strips NUL characters (Postgres text rejects them)", () => {
+    expect(truncateCheckOutput("a\u0000b", 16)).toBe("ab");
+  });
+});
+
+const REQUIREMENTS_MD = [
+  "# 要件定義",
+  "",
+  "## 機能要件",
+  "",
+  "| ID | 要件 |",
+  "| --- | --- |",
+  "| FR-001 | CSVを出力する |",
+  "",
+  "## 受入条件",
+  "",
+  "| ID | 対象要件 | 条件 |",
+  "| --- | --- | --- |",
+  "| AC-001 | FR-001 | Given 一覧 / When 出力 / Then CSVが得られる |",
+  "",
+  "## 未決事項",
+  "",
+  "なし",
+].join("\n");
+
+const PR_BODY_INPUT = {
+  summary: "CSV出力を追加しました。",
+  requirementsMarkdown: REQUIREMENTS_MD,
+  checks: {
+    kind: "ran" as const,
+    results: [
+      { command: "bun test", ok: true },
+      { command: "bunx --bun tsc --noEmit", ok: true },
+    ],
+  },
+  protectedChanges: [],
+  notesForReviewer: ["区切り文字はカンマ固定と仮置きしました。"],
+  requirementsConsoleUrl:
+    "http://127.0.0.1:8080/apps/get/f/factory/factory_console#requirements/7",
+  issueNumber: 42,
+  changedPaths: ["src/export.ts", "tests/export.test.ts"],
+  deployChecklist: true,
+};
+
+describe("extractAcceptanceCriteria", () => {
+  test("returns the 受入条件 section body (table only, trimmed)", () => {
+    expect(extractAcceptanceCriteria(REQUIREMENTS_MD)).toBe(
+      [
+        "| ID | 対象要件 | 条件 |",
+        "| --- | --- | --- |",
+        "| AC-001 | FR-001 | Given 一覧 / When 出力 / Then CSVが得られる |",
+      ].join("\n"),
+    );
+  });
+
+  test("returns the fixed note when the section is missing", () => {
+    expect(extractAcceptanceCriteria("# 要件定義\n\n## 機能要件\n\nx")).toBe(
+      NO_ACCEPTANCE_CRITERIA_NOTE,
+    );
+  });
+
+  test("returns the fixed note when the section is empty", () => {
+    expect(extractAcceptanceCriteria("## 受入条件\n\n\n## 未決事項\n")).toBe(
+      NO_ACCEPTANCE_CRITERIA_NOTE,
+    );
+  });
+});
+
+describe("classifyDeployNeeds", () => {
+  test("flags nothing for ordinary source paths", () => {
+    expect(classifyDeployNeeds(["src/a.ts"])).toEqual({
+      imageRebuild: false,
+      migrate: false,
+      syncPush: false,
+    });
+  });
+
+  test("flags imageRebuild for infra/**", () => {
+    expect(classifyDeployNeeds(["infra/worker/Dockerfile"]).imageRebuild).toBe(
+      true,
+    );
+  });
+
+  test("flags migrate for migrations/**", () => {
+    expect(
+      classifyDeployNeeds(["migrations/datatable/main/20260928120000_x.up.sql"])
+        .migrate,
+    ).toBe(true);
+  });
+
+  test("flags syncPush for f/**", () => {
+    expect(classifyDeployNeeds(["f/factory/lib/db.ts"]).syncPush).toBe(true);
+  });
+});
+
+describe("buildImplementPrBody", () => {
+  test("follows the PR template's section order", () => {
+    const body = buildImplementPrBody(PR_BODY_INPUT);
+    expect(body.split("\n").filter((line) => line.startsWith("## "))).toEqual([
+      "## 概要",
+      "## 受入条件",
+      "## 動作確認結果",
+      "## 確認して欲しい点",
+      "## 関連リンク",
+      "## 備考",
+    ]);
+  });
+
+  test("puts the summary under 概要", () => {
+    expect(buildImplementPrBody(PR_BODY_INPUT)).toContain(
+      "## 概要\n\nCSV出力を追加しました。\n",
+    );
+  });
+
+  test("copies the acceptance criteria table under 受入条件", () => {
+    expect(buildImplementPrBody(PR_BODY_INPUT)).toContain(
+      "## 受入条件\n\n| ID | 対象要件 | 条件 |",
+    );
+  });
+
+  test("lists each check command with pass/fail under 動作確認結果", () => {
+    expect(buildImplementPrBody(PR_BODY_INPUT)).toContain(
+      "## 動作確認結果\n\n- pass: `bun test`\n- pass: `bunx --bun tsc --noEmit`\n",
+    );
+  });
+
+  test("marks a failed check as fail", () => {
+    const body = buildImplementPrBody({
+      ...PR_BODY_INPUT,
+      checks: { kind: "ran", results: [{ command: "bun test", ok: false }] },
+    });
+    expect(body).toContain("- fail: `bun test`");
+  });
+
+  test("states 検査未実施 with the reason when checks were skipped", () => {
+    const body = buildImplementPrBody({
+      ...PR_BODY_INPUT,
+      checks: { kind: "skipped", reason: "保護パスを変更したため" },
+    });
+    expect(body).toContain(
+      "## 動作確認結果\n\n検査未実施: 保護パスを変更したため\n",
+    );
+  });
+
+  test("lists protected changes, reviewer notes, and the Console link under 確認して欲しい点", () => {
+    const body = buildImplementPrBody({
+      ...PR_BODY_INPUT,
+      protectedChanges: ["保護パスを変更: infra/worker/Dockerfile"],
+    });
+    expect(body).toContain(
+      [
+        "## 確認して欲しい点",
+        "",
+        "- 保護パスを変更: infra/worker/Dockerfile",
+        "- 区切り文字はカンマ固定と仮置きしました。",
+        "- 要件定義(Console): http://127.0.0.1:8080/apps/get/f/factory/factory_console#requirements/7",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  test("links the parent issue with Closes #N", () => {
+    expect(buildImplementPrBody(PR_BODY_INPUT)).toContain(
+      "## 関連リンク\n\nCloses #42\n",
+    );
+  });
+
+  test("checks 上記いずれも不要 when no deploy-relevant path changed", () => {
+    expect(buildImplementPrBody(PR_BODY_INPUT)).toContain(
+      [
+        "Windmillへの反映の要否:",
+        "",
+        "- [ ] `wmill sync push`が必要",
+        "- [ ] `wmill datatable migrate up`が必要",
+        "- [ ] worker imageのrebuildが必要",
+        "- [x] 上記いずれも不要",
+      ].join("\n"),
+    );
+  });
+
+  test("checks the sync push box (and not 不要) when f/** changed", () => {
+    const body = buildImplementPrBody({
+      ...PR_BODY_INPUT,
+      changedPaths: ["f/factory/lib/db.ts"],
+    });
+    expect(body).toContain(
+      "- [x] `wmill sync push`が必要\n- [ ] `wmill datatable migrate up`が必要\n- [ ] worker imageのrebuildが必要\n- [ ] 上記いずれも不要",
+    );
+  });
+
+  test("escapes a heading-looking line inside the summary so it cannot inject a section", () => {
+    const body = buildImplementPrBody({
+      ...PR_BODY_INPUT,
+      summary: "概要です。\n## 関連リンク\nCloses #1",
+    });
+    expect(
+      body.split("\n").filter((line) => line === "## 関連リンク"),
+    ).toHaveLength(1);
+  });
+
+  test("neutralizes a closing keyword in the summary so only the real issue is linked", () => {
+    const body = buildImplementPrBody({
+      ...PR_BODY_INPUT,
+      summary: "既存の不具合も直しました。fixes #5",
+    });
+    expect(extractLinkedIssueNumbers(body, "acme", "widgets")).toEqual([42]);
+  });
+
+  test("escapes an HTML comment opener at the start of a summary line", () => {
+    const body = buildImplementPrBody({
+      ...PR_BODY_INPUT,
+      summary: "概要です。\n<!-- hidden -->",
+    });
+    expect(body).toContain("\n\\<!-- hidden -->\n");
+  });
+
+  test("keeps a reviewer note containing a newline on one list line", () => {
+    const countListLines = (text: string): number =>
+      text.split("\n").filter((line) => line.startsWith("- ")).length;
+    const baseline = countListLines(buildImplementPrBody(PR_BODY_INPUT));
+    const body = buildImplementPrBody({
+      ...PR_BODY_INPUT,
+      notesForReviewer: ["一行目\n- 二行目"],
+    });
+    expect(countListLines(body)).toBe(baseline);
+  });
+
+  test("escapes a mention in a reviewer note", () => {
+    const body = buildImplementPrBody({
+      ...PR_BODY_INPUT,
+      notesForReviewer: ["@octocat please"],
+    });
+    expect(body).toContain("\n- \\@octocat please\n");
+  });
+
+  test("escapes an indented heading line in the summary", () => {
+    const body = buildImplementPrBody({
+      ...PR_BODY_INPUT,
+      summary: "概要です。\n   ## x",
+    });
+    expect(body).toContain("\n   \\## x\n");
+  });
+
+  test("escapes a setext underline line in the summary", () => {
+    const body = buildImplementPrBody({
+      ...PR_BODY_INPUT,
+      summary: "概要です。\n===",
+    });
+    expect(body).toContain("\n\\===\n");
+  });
+
+  test("renders 備考 as なし when the deploy checklist is off", () => {
+    const body = buildImplementPrBody({
+      ...PR_BODY_INPUT,
+      deployChecklist: false,
+    });
+    expect(body).toContain("## 備考\n\nなし\n");
+  });
+
+  test("omits the Windmill checklist when the deploy checklist is off", () => {
+    const body = buildImplementPrBody({
+      ...PR_BODY_INPUT,
+      changedPaths: ["f/factory/lib/db.ts"],
+      deployChecklist: false,
+    });
+    expect(body).not.toContain("wmill sync push");
+  });
+});
+
+const CONTINUE_STATE = {
+  claudeOutcome: "done" as const,
+  checks: "failed" as const,
+  round: 1,
+  maxRounds: 5,
+  dailyBudgetExceeded: false,
+  checkOutputHash: "h1",
+  previousCheckOutputHash: null,
+  diffHash: "d1",
+  previousDiffHash: null,
+};
+
+describe("decideImplementRoundExit", () => {
+  test("continues when checks failed and no guard fired", () => {
+    expect(decideImplementRoundExit(CONTINUE_STATE)).toBe("continue");
+  });
+
+  test("exits with requirements_gap whenever Claude reported one", () => {
+    expect(
+      decideImplementRoundExit({
+        ...CONTINUE_STATE,
+        claudeOutcome: "requirements_gap",
+        checks: "passed",
+      }),
+    ).toBe("requirements_gap");
+  });
+
+  test("exits with checks_skipped when the round ran no checks", () => {
+    expect(
+      decideImplementRoundExit({ ...CONTINUE_STATE, checks: "skipped" }),
+    ).toBe("checks_skipped");
+  });
+
+  test("exits with checks_passed when the checks passed", () => {
+    expect(
+      decideImplementRoundExit({ ...CONTINUE_STATE, checks: "passed" }),
+    ).toBe("checks_passed");
+  });
+
+  test("exits with max_rounds when the round reached implement_max_rounds", () => {
+    expect(decideImplementRoundExit({ ...CONTINUE_STATE, round: 5 })).toBe(
+      "max_rounds",
+    );
+  });
+
+  test("exits with daily_budget when the daily budget is exceeded", () => {
+    expect(
+      decideImplementRoundExit({
+        ...CONTINUE_STATE,
+        dailyBudgetExceeded: true,
+      }),
+    ).toBe("daily_budget");
+  });
+
+  test("exits with stalled when the diff hash did not change since the previous round", () => {
+    expect(
+      decideImplementRoundExit({ ...CONTINUE_STATE, previousDiffHash: "d1" }),
+    ).toBe("stalled");
+  });
+
+  test("exits with stalled when the check output hash repeats the previous round", () => {
+    expect(
+      decideImplementRoundExit({
+        ...CONTINUE_STATE,
+        previousCheckOutputHash: "h1",
+      }),
+    ).toBe("stalled");
+  });
+
+  test("does not treat a null check output hash as a repeat", () => {
+    expect(
+      decideImplementRoundExit({
+        ...CONTINUE_STATE,
+        checkOutputHash: null,
+        previousCheckOutputHash: null,
+      }),
+    ).toBe("continue");
+  });
+
+  test("prefers max_rounds over stalled when both apply", () => {
+    expect(
+      decideImplementRoundExit({
+        ...CONTINUE_STATE,
+        round: 5,
+        previousDiffHash: "d1",
+      }),
+    ).toBe("max_rounds");
+  });
+});
+
+describe("stallHash", () => {
+  test("is the sha256 hex digest of the text", () => {
+    expect(stallHash("")).toBe(
+      "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    );
+  });
+});
+
+describe("roundOutcomeForExit", () => {
+  test("maps checks_passed to done", () => {
+    expect(roundOutcomeForExit("checks_passed")).toBe("done");
+  });
+
+  test("maps checks_skipped to checks_skipped", () => {
+    expect(roundOutcomeForExit("checks_skipped")).toBe("checks_skipped");
+  });
+
+  test("maps stalled to stalled", () => {
+    expect(roundOutcomeForExit("stalled")).toBe("stalled");
+  });
+
+  test("maps requirements_gap to requirements_gap", () => {
+    expect(roundOutcomeForExit("requirements_gap")).toBe("requirements_gap");
+  });
+
+  test("maps max_rounds to check_failed", () => {
+    expect(roundOutcomeForExit("max_rounds")).toBe("check_failed");
+  });
+
+  test("maps daily_budget to check_failed", () => {
+    expect(roundOutcomeForExit("daily_budget")).toBe("check_failed");
+  });
+
+  test("maps continue to check_failed", () => {
+    expect(roundOutcomeForExit("continue")).toBe("check_failed");
+  });
+});
+
+describe("IMPLEMENT_CHECK_SKIP_REASONS", () => {
+  test("words the protected-path skip", () => {
+    expect(IMPLEMENT_CHECK_SKIP_REASONS.protected_paths).toBe(
+      "保護パスを変更したため",
+    );
+  });
+
+  test("words the no-command skip", () => {
+    expect(IMPLEMENT_CHECK_SKIP_REASONS.no_commands).toBe(
+      "検査コマンドが未設定のため",
+    );
   });
 });

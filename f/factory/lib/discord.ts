@@ -6,6 +6,7 @@
 // wait, used in production for the single 429 retry.
 
 import { type CleanupCounts, summarizeCleanup } from "./cleanup_db_support.ts";
+import type { ImplementDiffStat } from "./types.ts";
 
 export type DiscordEmbedField = {
   name: string;
@@ -145,6 +146,26 @@ export type NotifyEvent =
       proposal_count: number;
       console_url: string;
       work_item_id: number;
+    }
+  | {
+      kind: "pr_opened";
+      instance_name: string;
+      owner: string;
+      repo: string;
+      pr_number: number;
+      pr_url: string;
+      issue_number: number;
+      issue_url: string;
+      // 工程3 design §8: the implement flow never blocks on a protected-path
+      // change — it lists them here (and in the PR body) so a human reviews
+      // them first. `checks` is "passed", or the reason no check command
+      // ran this round (protected paths changed / none configured).
+      protected_changes: string[];
+      checks: "passed" | { skipped: string };
+      rounds: number;
+      total_cost_usd: number;
+      diff_stat: ImplementDiffStat | null;
+      next_action: string;
     };
 
 function repoField(owner: string, repo: string): DiscordEmbedField {
@@ -348,6 +369,36 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
           { name: "work_item_id", value: String(event.work_item_id) },
         ],
       };
+    case "pr_opened": {
+      const checksText =
+        event.checks === "passed"
+          ? "検査: 合格"
+          : `検査未実施: ${event.checks.skipped}`;
+      const diffText =
+        event.diff_stat === null
+          ? "(不明)"
+          : `${String(event.diff_stat.files)}ファイル(+${String(event.diff_stat.added)} / -${String(event.diff_stat.deleted)})`;
+      return {
+        title: `PR 作成: #${String(event.pr_number)}(Issue #${String(event.issue_number)})`,
+        description: `実装をpushしてPRを作成しました。${checksText}`,
+        url: event.pr_url,
+        fields: [
+          { name: "次の操作", value: event.next_action },
+          instanceField(event.instance_name),
+          repoField(event.owner, event.repo),
+          { name: "Issue", value: event.issue_url },
+          {
+            name: "確認して欲しい点",
+            value: event.protected_changes.join("\n") || "(なし)",
+          },
+          {
+            name: "ラウンド / 費用",
+            value: `${String(event.rounds)}回 / $${event.total_cost_usd.toFixed(2)}`,
+          },
+          { name: "差分", value: diffText },
+        ],
+      };
+    }
   }
 }
 

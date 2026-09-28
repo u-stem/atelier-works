@@ -25,6 +25,13 @@ import { dirname, join, resolve, sep } from "node:path";
 import type { ReviewThread } from "../lib/github.ts";
 import { maskSecrets } from "../lib/log.ts";
 import {
+  type ChangedPath,
+  type ChangedPathStatus,
+  isNewShellScript,
+  matchesForbiddenPath,
+} from "../lib/protected_paths.ts";
+import {
+  type FactoryConfig,
   type FixOutcome,
   type FixReply,
   type FixReplyDecision,
@@ -43,6 +50,19 @@ import {
   type WorkItemStatus,
 } from "../lib/types.ts";
 import type { CommandRunner } from "../lib/workspace.ts";
+
+// Promoted into lib/protected_paths.ts (工程3: implement_support.ts needs
+// the same classification without a lib -> steps import); re-exported so
+// pr_fix_verify.ts and the existing tests keep importing from here.
+export {
+  type ChangedPath,
+  type ChangedPathStatus,
+  FORBIDDEN_BASENAME_PATTERNS,
+  FORBIDDEN_PATH_PREFIXES,
+  IMPLEMENT_PROTECTED_PATH_PREFIXES,
+  isNewShellScript,
+  matchesForbiddenPath,
+} from "../lib/protected_paths.ts";
 
 // ---------------------------------------------------------------------------
 // Role tags (team-lead decision, 2026-09-26): the factory posts to GitHub
@@ -1045,18 +1065,6 @@ export function isFixClaudeOutput(value: unknown): value is FixClaudeOutput {
 // "pr_fix の安全策"
 // ---------------------------------------------------------------------------
 
-export type ChangedPathStatus =
-  | "added"
-  | "modified"
-  | "deleted"
-  | "typechange"
-  | "unknown";
-
-export type ChangedPath = {
-  readonly path: string;
-  readonly status: ChangedPathStatus;
-};
-
 /** Parses `git status --porcelain` output (XY-prefixed lines; a rename's
  * " -> " arrow is resolved to the new path). Untracked ("??") and staged-add
  * ("A ") both count as "added" — the "new *.sh file" forbidden check only
@@ -1121,57 +1129,6 @@ export function mergeChangedPaths(
     }
   }
   return [...byPath.values()];
-}
-
-// team-lead fix round 1b item 5: widened from the original .claude/**,
-// .agents/**, mise.toml, mise.*.toml, lefthook.yml, .github/workflows/** —
-// covers every other config surface that changes which commands run or
-// what a package manager/git trusts (mise's XDG/dotfile config locations,
-// lefthook's alternate formats and machine-local override, bunfig.toml's
-// install/registry settings, .npmrc's registry/auth settings, and
-// .gitattributes/.gitmodules, which can redirect git filters/submodule
-// URLs).
-const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
-  ".claude/",
-  ".agents/",
-  ".github/workflows/",
-  ".mise/",
-  ".config/mise/",
-  ".lefthook/",
-];
-
-const FORBIDDEN_BASENAME_PATTERNS: readonly RegExp[] = [
-  /^mise\.toml$/,
-  /^mise\..*\.toml$/,
-  /^\.mise\.toml$/,
-  /^lefthook\.yml$/,
-  /^lefthook-local\.yml$/,
-  /^lefthook\.toml$/,
-  /^lefthook\.json$/,
-  /^bunfig\.toml$/,
-  /^\.npmrc$/,
-  /^\.gitattributes$/,
-  /^\.gitmodules$/,
-];
-
-/** docs/security.md "変更してはいけないファイル", widened per team-lead fix
- * round 1b item 5 — see FORBIDDEN_PATH_PREFIXES / FORBIDDEN_BASENAME_PATTERNS
- * above for the full list. Directory entries match by repo-root-relative
- * path prefix; single-file entries match by basename regardless of which
- * directory they appear in. */
-export function matchesForbiddenPath(path: string): boolean {
-  const normalized = path.replace(/^\.\//, "");
-  for (const prefix of FORBIDDEN_PATH_PREFIXES) {
-    if (normalized === prefix.slice(0, -1) || normalized.startsWith(prefix)) {
-      return true;
-    }
-  }
-  const basename = normalized.split("/").pop() ?? normalized;
-  return FORBIDDEN_BASENAME_PATTERNS.some((pattern) => pattern.test(basename));
-}
-
-export function isNewShellScript(entry: ChangedPath): boolean {
-  return entry.status === "added" && /\.sh$/i.test(entry.path);
 }
 
 export type ForbiddenChangeResult = {
@@ -1425,27 +1382,47 @@ export async function countUntrackedFileLines(
   return parseWcLineCount(result.stdout);
 }
 
+/** Which factory_config keys a diff-size reason names — pr_fix and the
+ * implement flow have separate ceilings (工程3 design §3), and the reason
+ * text must cite the key the operator would actually tune. */
+export type DiffSizeLimitNames = {
+  readonly changedFiles: keyof FactoryConfig;
+  readonly diffLines: keyof FactoryConfig;
+};
+
+export const PR_FIX_DIFF_SIZE_LIMIT_NAMES: DiffSizeLimitNames = {
+  changedFiles: "max_fix_changed_files",
+  diffLines: "max_fix_diff_lines",
+};
+
+export const IMPLEMENT_DIFF_SIZE_LIMIT_NAMES: DiffSizeLimitNames = {
+  changedFiles: "implement_max_changed_files",
+  diffLines: "implement_max_diff_lines",
+};
+
 /** Blocks when the changed-file count or the total added+deleted line count
  * exceeds factory_config's configured ceiling. `changedFileCount` is the
  * caller's already-computed status+diff-name-only union (the same set the
  * forbidden-path check uses) rather than a second file count derived from
  * numstat alone, since numstat doesn't list untracked (newly added) files
- * that `git status --porcelain` does. */
+ * that `git status --porcelain` does. `names` selects which config keys the
+ * reason text cites (default: pr_fix's). */
 export function evaluateDiffSizeGuard(
   changedFileCount: number,
   diffLineTotal: number,
   maxChangedFiles: number,
   maxDiffLines: number,
+  names: DiffSizeLimitNames = PR_FIX_DIFF_SIZE_LIMIT_NAMES,
 ): string[] {
   const reasons: string[] = [];
   if (changedFileCount > maxChangedFiles) {
     reasons.push(
-      `changed file count ${String(changedFileCount)} exceeds max_fix_changed_files ${String(maxChangedFiles)}`,
+      `changed file count ${String(changedFileCount)} exceeds ${names.changedFiles} ${String(maxChangedFiles)}`,
     );
   }
   if (diffLineTotal > maxDiffLines) {
     reasons.push(
-      `diff line total ${String(diffLineTotal)} exceeds max_fix_diff_lines ${String(maxDiffLines)}`,
+      `diff line total ${String(diffLineTotal)} exceeds ${names.diffLines} ${String(maxDiffLines)}`,
     );
   }
   return reasons;
@@ -2322,15 +2299,13 @@ const REASON_RULES: readonly ReasonRule[] = [
     nextAction: () => FORBIDDEN_CHANGE_NEXT_ACTION,
   },
   {
-    pattern: /^changed file count (\d+) exceeds max_fix_changed_files (\d+)$/,
-    describe: (m) =>
-      `変更ファイル数 ${m[1]} が max_fix_changed_files ${m[2]} を超えました`,
+    pattern: /^changed file count (\d+) exceeds (\S+) (\d+)$/,
+    describe: (m) => `変更ファイル数 ${m[1]} が ${m[2]} ${m[3]} を超えました`,
     nextAction: () => DIFF_SIZE_NEXT_ACTION,
   },
   {
-    pattern: /^diff line total (\d+) exceeds max_fix_diff_lines (\d+)$/,
-    describe: (m) =>
-      `diff の総行数 ${m[1]} が max_fix_diff_lines ${m[2]} を超えました`,
+    pattern: /^diff line total (\d+) exceeds (\S+) (\d+)$/,
+    describe: (m) => `diff の総行数 ${m[1]} が ${m[2]} ${m[3]} を超えました`,
     nextAction: () => DIFF_SIZE_NEXT_ACTION,
   },
   // pr_fix_apply.ts / pr_fix_verify.ts / pipeline_generate.ts /
@@ -2352,6 +2327,18 @@ const REASON_RULES: readonly ReasonRule[] = [
     describe: (m) => `修正の実行中に PR の head が ${m[1]} に変わりました`,
     nextAction: () =>
       "最新のheadを確認し、必要なら`factory:fix`を付け直してください",
+  },
+  // The implement flow's push (工程3 design §3): a fine-grained PAT without
+  // the `workflow` scope cannot push a commit touching .github/workflows/**.
+  // GitHub's rejection text sits inside git's stderr, so this pattern is
+  // deliberately unanchored (the reason carries the whole push error).
+  {
+    pattern:
+      /refusing to allow a Personal Access Token to create or update workflow/,
+    describe: () =>
+      "PATに`workflow`スコープが無いため、`.github/workflows/**`を含むpushが拒否されました",
+    nextAction: () =>
+      "PATにWorkflows(Read and write)権限を追加するか、ワークフローファイルの変更を人がpushしてください",
   },
   {
     pattern: /^check-fix retry pass failed \((.+)\): (.+)$/,

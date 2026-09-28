@@ -345,6 +345,112 @@ describe("buildEmbed", () => {
     });
     expect(embed.fields.map((f) => f.name)).toContain("次の操作");
   });
+
+  const PR_OPENED_EVENT = {
+    kind: "pr_opened" as const,
+    instance_name: "local",
+    owner: "octo-owner",
+    repo: "atelier-works",
+    pr_number: 9,
+    pr_url: "https://github.com/octo-owner/atelier-works/pull/9",
+    issue_number: 42,
+    issue_url: "https://github.com/octo-owner/atelier-works/issues/42",
+    protected_changes: [],
+    checks: "passed" as const,
+    rounds: 2,
+    total_cost_usd: 3.456,
+    diff_stat: { files: 3, added: 120, deleted: 8 },
+    next_action: "PRをレビューし、問題なければマージしてください",
+  };
+
+  test("names the PR and the parent issue in the pr_opened title", () => {
+    const embed = buildEmbed(PR_OPENED_EVENT);
+    expect(embed.title).toBe("PR 作成: #9(Issue #42)");
+  });
+
+  test("links the pr_opened embed to the PR", () => {
+    const embed = buildEmbed(PR_OPENED_EVENT);
+    expect(embed.url).toBe(
+      "https://github.com/octo-owner/atelier-works/pull/9",
+    );
+  });
+
+  test("states passed checks in the pr_opened description", () => {
+    const embed = buildEmbed(PR_OPENED_EVENT);
+    expect(embed.description).toBe(
+      "実装をpushしてPRを作成しました。検査: 合格",
+    );
+  });
+
+  test("states the skip reason in the pr_opened description when checks were skipped", () => {
+    const embed = buildEmbed({
+      ...PR_OPENED_EVENT,
+      checks: { skipped: "保護パスを変更したため" },
+    });
+    expect(embed.description).toBe(
+      "実装をpushしてPRを作成しました。検査未実施: 保護パスを変更したため",
+    );
+  });
+
+  test("puts the next action first among the pr_opened fields", () => {
+    const embed = buildEmbed(PR_OPENED_EVENT);
+    expect(embed.fields[0]).toEqual({
+      name: "次の操作",
+      value: "PRをレビューし、問題なければマージしてください",
+    });
+  });
+
+  test("includes the issue url as a field on pr_opened", () => {
+    const embed = buildEmbed(PR_OPENED_EVENT);
+    expect(embed.fields).toContainEqual({
+      name: "Issue",
+      value: "https://github.com/octo-owner/atelier-works/issues/42",
+    });
+  });
+
+  test("lists protected changes one per line on pr_opened", () => {
+    const embed = buildEmbed({
+      ...PR_OPENED_EVENT,
+      protected_changes: [
+        "保護パスを変更: infra/worker/Dockerfile",
+        "package.jsonのscriptsを変更",
+      ],
+    });
+    expect(embed.fields).toContainEqual({
+      name: "確認して欲しい点",
+      value:
+        "保護パスを変更: infra/worker/Dockerfile\npackage.jsonのscriptsを変更",
+    });
+  });
+
+  test("shows (なし) when there are no protected changes", () => {
+    const embed = buildEmbed(PR_OPENED_EVENT);
+    expect(embed.fields).toContainEqual({
+      name: "確認して欲しい点",
+      value: "(なし)",
+    });
+  });
+
+  test("shows rounds and cost on pr_opened", () => {
+    const embed = buildEmbed(PR_OPENED_EVENT);
+    expect(embed.fields).toContainEqual({
+      name: "ラウンド / 費用",
+      value: "2回 / $3.46",
+    });
+  });
+
+  test("summarizes the diff stat on pr_opened", () => {
+    const embed = buildEmbed(PR_OPENED_EVENT);
+    expect(embed.fields).toContainEqual({
+      name: "差分",
+      value: "3ファイル(+120 / -8)",
+    });
+  });
+
+  test("shows (不明) for the diff when no diff stat was recorded", () => {
+    const embed = buildEmbed({ ...PR_OPENED_EVENT, diff_stat: null });
+    expect(embed.fields).toContainEqual({ name: "差分", value: "(不明)" });
+  });
 });
 
 describe("capEmbedToDiscordLimits", () => {

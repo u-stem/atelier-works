@@ -13,6 +13,7 @@ import {
   detectSymlinkChanges,
   evaluateDiffSizeGuard,
   getDiffNumstat,
+  IMPLEMENT_DIFF_SIZE_LIMIT_NAMES,
   isEscapingSymlink,
   isNewShellScript,
   listSymlinkTargets,
@@ -455,6 +456,39 @@ describe("evaluateDiffSizeGuard", () => {
   test("reports both reasons when both limits are exceeded", () => {
     const reasons = evaluateDiffSizeGuard(31, 1501, 30, 1500);
     expect(reasons).toHaveLength(2);
+  });
+
+  test("names the pr_fix config keys in the reason by default", () => {
+    const reasons = evaluateDiffSizeGuard(31, 100, 30, 1500);
+    expect(reasons[0]).toBe(
+      "changed file count 31 exceeds max_fix_changed_files 30",
+    );
+  });
+
+  test("names the implement config key for the file count when given IMPLEMENT_DIFF_SIZE_LIMIT_NAMES", () => {
+    const reasons = evaluateDiffSizeGuard(
+      61,
+      100,
+      60,
+      3000,
+      IMPLEMENT_DIFF_SIZE_LIMIT_NAMES,
+    );
+    expect(reasons[0]).toBe(
+      "changed file count 61 exceeds implement_max_changed_files 60",
+    );
+  });
+
+  test("names the implement config key for the line total when given IMPLEMENT_DIFF_SIZE_LIMIT_NAMES", () => {
+    const reasons = evaluateDiffSizeGuard(
+      5,
+      3001,
+      60,
+      3000,
+      IMPLEMENT_DIFF_SIZE_LIMIT_NAMES,
+    );
+    expect(reasons[0]).toBe(
+      "diff line total 3001 exceeds implement_max_diff_lines 3000",
+    );
   });
 });
 

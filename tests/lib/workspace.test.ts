@@ -9,6 +9,8 @@ import {
   copyFileTo,
   createBunCommandRunner,
   createGtrWorktree,
+  currentRemoteHeadSha,
+  deleteRemoteBranch,
   ensureEmptyDir,
   ensureFactoryClone,
   ensureRepo,
@@ -18,6 +20,7 @@ import {
   listWorktrees,
   pathExists,
   pruneWorktrees,
+  pushNewBranch,
   readDirEntries,
   readGitShowFile,
   readTextFile,
@@ -1563,6 +1566,61 @@ describe("commitAndPush", () => {
       ]),
     );
   });
+
+  test("throws (not head_changed) when the remote rejects the push, e.g. a PAT without workflow scope", async () => {
+    const fake = commitAndPushCalls([
+      ok("factory/issue-7-wi-3\n"),
+      ok(),
+      ok(`${HEAD_SHA}\n`),
+      ok(),
+      ok(" M file.ts\n"),
+      ok(),
+      fail(
+        "! [remote rejected] factory/issue-7-wi-3 -> factory/issue-7-wi-3 (refusing to allow a Personal Access Token to create or update workflow `.github/workflows/ci.yml` without `workflow` scope)",
+      ),
+    ]);
+    await expect(
+      commitAndPush({
+        run: fake.run,
+        repoDir: "/repo",
+        dir: "/repo/wt",
+        message: "fix: something",
+        instanceName: "acme-factory",
+        expectedHeadSha: HEAD_SHA,
+        author: TEST_AUTHOR,
+        ghToken: "gh-token",
+        verifyWorktree: noopVerify,
+        lockFs: createInMemoryLockFs(),
+      }),
+    ).rejects.toThrow(/refusing to allow a Personal Access Token/);
+  });
+
+  test("still returns head_changed for a plain '[rejected] ... (non-fast-forward)' push", async () => {
+    const fake = commitAndPushCalls([
+      ok("main\n"),
+      ok(),
+      ok(`${HEAD_SHA}\n`),
+      ok(),
+      ok(" M file.ts\n"),
+      ok(),
+      fail("! [rejected] main -> main (non-fast-forward)"),
+      ok(),
+      ok(`${OTHER_SHA}\n`),
+    ]);
+    const result = await commitAndPush({
+      run: fake.run,
+      repoDir: "/repo",
+      dir: "/repo/wt",
+      message: "fix: something",
+      instanceName: "acme-factory",
+      expectedHeadSha: HEAD_SHA,
+      author: TEST_AUTHOR,
+      ghToken: "gh-token",
+      verifyWorktree: noopVerify,
+      lockFs: createInMemoryLockFs(),
+    });
+    expect(result.outcome).toBe("head_changed");
+  });
 });
 
 describe("repo-wide lock scope (code-review fix)", () => {
@@ -1687,5 +1745,318 @@ describe("removeEmptyDir", () => {
   test("returns false without throwing for a directory that doesn't exist", async () => {
     const removed = await removeEmptyDir("/nonexistent/path/for/sure");
     expect(removed).toBe(false);
+  });
+});
+
+describe("pushNewBranch", () => {
+  const BRANCH = "factory/issue-7-wi-3";
+  const LS_REMOTE_HIT = `${HEAD_SHA}\trefs/heads/${BRANCH}\n`;
+
+  test("pushes the branch when the remote does not have it yet", async () => {
+    const fake = createFakeCommandRunner([
+      fail("", 2), // ls-remote --exit-code: no matching ref
+      ok(), // git push -u origin -- <branch>
+    ]);
+    const result = await pushNewBranch({
+      run: fake.run,
+      repoDir: "/repo/main",
+      branch: BRANCH,
+      ghToken: "gh-token",
+      lockFs: createInMemoryLockFs(),
+    });
+    expect(result).toEqual({ pushed: true });
+  });
+
+  test("asks the remote with git ls-remote --exit-code --heads origin -- <branch>", async () => {
+    const fake = createFakeCommandRunner([fail("", 2), ok()]);
+    await pushNewBranch({
+      run: fake.run,
+      repoDir: "/repo/main",
+      branch: BRANCH,
+      ghToken: "gh-token",
+      lockFs: createInMemoryLockFs(),
+    });
+    expect(fake.calls[0]?.argv.slice(-6)).toEqual([
+      "ls-remote",
+      "--exit-code",
+      "--heads",
+      "origin",
+      "--",
+      BRANCH,
+    ]);
+  });
+
+  test("runs git push -u origin -- <branch>", async () => {
+    const fake = createFakeCommandRunner([fail("", 2), ok()]);
+    await pushNewBranch({
+      run: fake.run,
+      repoDir: "/repo/main",
+      branch: BRANCH,
+      ghToken: "gh-token",
+      lockFs: createInMemoryLockFs(),
+    });
+    expect(fake.calls[1]?.argv).toEqual(
+      expect.arrayContaining(["push", "-u", "origin", "--", BRANCH]),
+    );
+  });
+
+  test("both the ls-remote and the push run in repoDir", async () => {
+    const fake = createFakeCommandRunner([fail("", 2), ok()]);
+    await pushNewBranch({
+      run: fake.run,
+      repoDir: "/repo/main",
+      branch: BRANCH,
+      ghToken: "gh-token",
+      lockFs: createInMemoryLockFs(),
+    });
+    expect([fake.calls[0]?.options?.cwd, fake.calls[1]?.options?.cwd]).toEqual([
+      "/repo/main",
+      "/repo/main",
+    ]);
+  });
+
+  test("is a no-op when the remote already has the branch", async () => {
+    const fake = createFakeCommandRunner([ok(LS_REMOTE_HIT)]);
+    const result = await pushNewBranch({
+      run: fake.run,
+      repoDir: "/repo/main",
+      branch: BRANCH,
+      ghToken: "gh-token",
+      lockFs: createInMemoryLockFs(),
+    });
+    expect(result).toEqual({ pushed: false });
+  });
+
+  test("does not call git push when the remote already has the branch", async () => {
+    const fake = createFakeCommandRunner([ok(LS_REMOTE_HIT)]);
+    await pushNewBranch({
+      run: fake.run,
+      repoDir: "/repo/main",
+      branch: BRANCH,
+      ghToken: "gh-token",
+      lockFs: createInMemoryLockFs(),
+    });
+    expect(fake.calls).toHaveLength(1);
+  });
+
+  test("both network calls (ls-remote and push) carry GH_TOKEN", async () => {
+    const fake = createFakeCommandRunner([fail("", 2), ok()]);
+    await pushNewBranch({
+      run: fake.run,
+      repoDir: "/repo/main",
+      branch: BRANCH,
+      ghToken: "gh-secret",
+      lockFs: createInMemoryLockFs(),
+    });
+    expect([
+      fake.calls[0]?.options?.env?.GH_TOKEN,
+      fake.calls[1]?.options?.env?.GH_TOKEN,
+    ]).toEqual(["gh-secret", "gh-secret"]);
+  });
+
+  test("throws a masked error when the push fails", async () => {
+    const fake = createFakeCommandRunner([
+      fail("", 2),
+      fail("remote: Permission to acme/widgets.git denied to factory-bot."),
+    ]);
+    await expect(
+      pushNewBranch({
+        run: fake.run,
+        repoDir: "/repo/main",
+        branch: BRANCH,
+        ghToken: "gh-token",
+        lockFs: createInMemoryLockFs(),
+      }),
+    ).rejects.toThrow(/git push -u origin factory\/issue-7-wi-3 failed/);
+  });
+
+  test("throws when ls-remote fails with anything other than exit 2", async () => {
+    const fake = createFakeCommandRunner([
+      fail("fatal: could not read from remote repository", 128),
+    ]);
+    await expect(
+      pushNewBranch({
+        run: fake.run,
+        repoDir: "/repo/main",
+        branch: BRANCH,
+        ghToken: "gh-token",
+        lockFs: createInMemoryLockFs(),
+      }),
+    ).rejects.toThrow(/ls-remote/);
+  });
+
+  test("rejects an invalid branch name before spawning anything", async () => {
+    const fake = createFakeCommandRunner([]);
+    await expect(
+      pushNewBranch({
+        run: fake.run,
+        repoDir: "/repo/main",
+        branch: "-evil",
+        ghToken: "gh-token",
+        lockFs: createInMemoryLockFs(),
+      }),
+    ).rejects.toThrow(/invalid branch name/);
+  });
+
+  test("is serialized under the same lock path other repo-tree git ops use", async () => {
+    const lockFs = createInMemoryLockFs();
+    let sawLockDuringRun = false;
+    const fake = createFakeCommandRunner([fail("", 2), ok()]);
+    const runAndCheck: typeof fake.run = async (argv, options) => {
+      sawLockDuringRun =
+        (await lockFs.read("/repo/main.lock")) !== null || sawLockDuringRun;
+      return fake.run(argv, options);
+    };
+    await pushNewBranch({
+      run: runAndCheck,
+      repoDir: "/repo/main",
+      branch: BRANCH,
+      ghToken: "gh-token",
+      lockFs,
+    });
+    expect(sawLockDuringRun).toBe(true);
+  });
+});
+
+describe("deleteRemoteBranch", () => {
+  const BRANCH = "factory/issue-7-wi-3";
+
+  test("returns deleted: true when the push --delete succeeds", async () => {
+    const fake = createFakeCommandRunner([ok()]);
+    const result = await deleteRemoteBranch({
+      run: fake.run,
+      repoDir: "/repo/main",
+      branch: BRANCH,
+      ghToken: "gh-token",
+      lockFs: createInMemoryLockFs(),
+    });
+    expect(result).toEqual({ deleted: true });
+  });
+
+  test("runs git push --delete origin -- <branch>", async () => {
+    const fake = createFakeCommandRunner([ok()]);
+    await deleteRemoteBranch({
+      run: fake.run,
+      repoDir: "/repo/main",
+      branch: BRANCH,
+      ghToken: "gh-token",
+      lockFs: createInMemoryLockFs(),
+    });
+    expect(fake.calls[0]?.argv).toEqual(
+      expect.arrayContaining(["push", "--delete", "origin", "--", BRANCH]),
+    );
+  });
+
+  test("carries GH_TOKEN in env (network operation)", async () => {
+    const fake = createFakeCommandRunner([ok()]);
+    await deleteRemoteBranch({
+      run: fake.run,
+      repoDir: "/repo/main",
+      branch: BRANCH,
+      ghToken: "gh-secret",
+      lockFs: createInMemoryLockFs(),
+    });
+    expect(fake.calls[0]?.options?.env?.GH_TOKEN).toBe("gh-secret");
+  });
+
+  test("returns deleted: false without throwing when the remote ref does not exist", async () => {
+    const fake = createFakeCommandRunner([
+      fail(
+        "error: unable to delete 'factory/issue-7-wi-3': remote ref does not exist\nerror: failed to push some refs",
+      ),
+    ]);
+    const result = await deleteRemoteBranch({
+      run: fake.run,
+      repoDir: "/repo/main",
+      branch: BRANCH,
+      ghToken: "gh-token",
+      lockFs: createInMemoryLockFs(),
+    });
+    expect(result).toEqual({ deleted: false });
+  });
+
+  test("throws a masked error on any other failure", async () => {
+    const fake = createFakeCommandRunner([
+      fail("remote: Permission to acme/widgets.git denied to factory-bot."),
+    ]);
+    await expect(
+      deleteRemoteBranch({
+        run: fake.run,
+        repoDir: "/repo/main",
+        branch: BRANCH,
+        ghToken: "gh-token",
+        lockFs: createInMemoryLockFs(),
+      }),
+    ).rejects.toThrow(/push --delete/);
+  });
+
+  test("rejects an invalid branch name before spawning anything", async () => {
+    const fake = createFakeCommandRunner([]);
+    await expect(
+      deleteRemoteBranch({
+        run: fake.run,
+        repoDir: "/repo/main",
+        branch: "feature..evil",
+        ghToken: "gh-token",
+        lockFs: createInMemoryLockFs(),
+      }),
+    ).rejects.toThrow(/invalid branch name/);
+  });
+});
+
+describe("currentRemoteHeadSha", () => {
+  const BRANCH = "factory/issue-7-wi-3";
+
+  test("returns the trimmed sha origin/<branch> points to", async () => {
+    const fake = createFakeCommandRunner([ok(`${HEAD_SHA}\n`)]);
+    const sha = await currentRemoteHeadSha({
+      run: fake.run,
+      repoDir: "/repo/main",
+      branch: BRANCH,
+    });
+    expect(sha).toBe(HEAD_SHA);
+  });
+
+  test("returns null when origin/<branch> is not resolvable", async () => {
+    const fake = createFakeCommandRunner([
+      fail("fatal: Needed a single revision"),
+    ]);
+    const sha = await currentRemoteHeadSha({
+      run: fake.run,
+      repoDir: "/repo/main",
+      branch: BRANCH,
+    });
+    expect(sha).toBeNull();
+  });
+
+  test("runs git rev-parse --verify origin/<branch> without -- (rev-parse exception)", async () => {
+    const fake = createFakeCommandRunner([ok(`${HEAD_SHA}\n`)]);
+    await currentRemoteHeadSha({
+      run: fake.run,
+      repoDir: "/repo/main",
+      branch: BRANCH,
+    });
+    expect(fake.calls[0]?.argv).not.toContain("--");
+  });
+
+  test("does not include GH_TOKEN in env (local-only read)", async () => {
+    const fake = createFakeCommandRunner([ok(`${HEAD_SHA}\n`)]);
+    await currentRemoteHeadSha({
+      run: fake.run,
+      repoDir: "/repo/main",
+      branch: BRANCH,
+    });
+    expect(fake.calls[0]?.options?.env ?? {}).not.toHaveProperty("GH_TOKEN");
+  });
+
+  test("throws when git prints something that is not a sha", async () => {
+    const fake = createFakeCommandRunner([ok("not-a-sha\n")]);
+    await expect(
+      currentRemoteHeadSha({
+        run: fake.run,
+        repoDir: "/repo/main",
+        branch: BRANCH,
+      }),
+    ).rejects.toThrow();
   });
 });
