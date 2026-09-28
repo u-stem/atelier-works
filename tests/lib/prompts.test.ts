@@ -899,3 +899,25 @@ describe("implementFixPrompt", () => {
     expect(prompt).toContain("Do not weaken or delete a test");
   });
 });
+
+describe("factory-implementation SKILL.md ⇔ IMPLEMENT_SCHEMA", () => {
+  const SKILL_PATH = `${import.meta.dir}/../../.claude/skills/factory-implementation/SKILL.md`;
+
+  /** The single ```json block under 「出力契約(JSON schema)」. */
+  async function readSkillSchema(): Promise<unknown> {
+    const markdown = await Bun.file(SKILL_PATH).text();
+    const match = markdown.match(/```json\n([\s\S]*?)\n```/);
+    if (match === null || match[1] === undefined) {
+      throw new Error("SKILL.md has no ```json block");
+    }
+    return JSON.parse(match[1]);
+  }
+
+  test("the skill's JSON schema block equals IMPLEMENT_SCHEMA", async () => {
+    expect(await readSkillSchema()).toEqual(IMPLEMENT_SCHEMA);
+  });
+
+  test("the skill lives where buildSystemPrompt looks for it", async () => {
+    expect(await Bun.file(SKILL_PATH).exists()).toBe(true);
+  });
+});
