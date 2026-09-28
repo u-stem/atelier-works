@@ -31,6 +31,7 @@ import {
   matchesForbiddenPath,
 } from "../lib/protected_paths.ts";
 import {
+  type FactoryConfig,
   type FixOutcome,
   type FixReply,
   type FixReplyDecision,
@@ -1381,27 +1382,47 @@ export async function countUntrackedFileLines(
   return parseWcLineCount(result.stdout);
 }
 
+/** Which factory_config keys a diff-size reason names — pr_fix and the
+ * implement flow have separate ceilings (工程3 design §3), and the reason
+ * text must cite the key the operator would actually tune. */
+export type DiffSizeLimitNames = {
+  readonly changedFiles: keyof FactoryConfig;
+  readonly diffLines: keyof FactoryConfig;
+};
+
+export const PR_FIX_DIFF_SIZE_LIMIT_NAMES: DiffSizeLimitNames = {
+  changedFiles: "max_fix_changed_files",
+  diffLines: "max_fix_diff_lines",
+};
+
+export const IMPLEMENT_DIFF_SIZE_LIMIT_NAMES: DiffSizeLimitNames = {
+  changedFiles: "implement_max_changed_files",
+  diffLines: "implement_max_diff_lines",
+};
+
 /** Blocks when the changed-file count or the total added+deleted line count
  * exceeds factory_config's configured ceiling. `changedFileCount` is the
  * caller's already-computed status+diff-name-only union (the same set the
  * forbidden-path check uses) rather than a second file count derived from
  * numstat alone, since numstat doesn't list untracked (newly added) files
- * that `git status --porcelain` does. */
+ * that `git status --porcelain` does. `names` selects which config keys the
+ * reason text cites (default: pr_fix's). */
 export function evaluateDiffSizeGuard(
   changedFileCount: number,
   diffLineTotal: number,
   maxChangedFiles: number,
   maxDiffLines: number,
+  names: DiffSizeLimitNames = PR_FIX_DIFF_SIZE_LIMIT_NAMES,
 ): string[] {
   const reasons: string[] = [];
   if (changedFileCount > maxChangedFiles) {
     reasons.push(
-      `changed file count ${String(changedFileCount)} exceeds max_fix_changed_files ${String(maxChangedFiles)}`,
+      `changed file count ${String(changedFileCount)} exceeds ${names.changedFiles} ${String(maxChangedFiles)}`,
     );
   }
   if (diffLineTotal > maxDiffLines) {
     reasons.push(
-      `diff line total ${String(diffLineTotal)} exceeds max_fix_diff_lines ${String(maxDiffLines)}`,
+      `diff line total ${String(diffLineTotal)} exceeds ${names.diffLines} ${String(maxDiffLines)}`,
     );
   }
   return reasons;
@@ -2278,15 +2299,13 @@ const REASON_RULES: readonly ReasonRule[] = [
     nextAction: () => FORBIDDEN_CHANGE_NEXT_ACTION,
   },
   {
-    pattern: /^changed file count (\d+) exceeds max_fix_changed_files (\d+)$/,
-    describe: (m) =>
-      `変更ファイル数 ${m[1]} が max_fix_changed_files ${m[2]} を超えました`,
+    pattern: /^changed file count (\d+) exceeds (\S+) (\d+)$/,
+    describe: (m) => `変更ファイル数 ${m[1]} が ${m[2]} ${m[3]} を超えました`,
     nextAction: () => DIFF_SIZE_NEXT_ACTION,
   },
   {
-    pattern: /^diff line total (\d+) exceeds max_fix_diff_lines (\d+)$/,
-    describe: (m) =>
-      `diff の総行数 ${m[1]} が max_fix_diff_lines ${m[2]} を超えました`,
+    pattern: /^diff line total (\d+) exceeds (\S+) (\d+)$/,
+    describe: (m) => `diff の総行数 ${m[1]} が ${m[2]} ${m[3]} を超えました`,
     nextAction: () => DIFF_SIZE_NEXT_ACTION,
   },
   // pr_fix_apply.ts / pr_fix_verify.ts / pipeline_generate.ts /

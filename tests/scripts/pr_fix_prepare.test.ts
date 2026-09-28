@@ -140,6 +140,20 @@ describe("describeReason", () => {
       "Issue化の提案が2件あります",
     );
   });
+
+  test("translates the diff-size reason for the pr_fix config key, keeping the key and numbers", () => {
+    expect(
+      describeReason("changed file count 31 exceeds max_fix_changed_files 30"),
+    ).toBe("変更ファイル数31がmax_fix_changed_files 30を超えました");
+  });
+
+  test("translates the diff-size reason for the implement config key too", () => {
+    expect(
+      describeReason(
+        "diff line total 3001 exceeds implement_max_diff_lines 3000",
+      ),
+    ).toBe("diffの総行数3001がimplement_max_diff_lines 3000を超えました");
+  });
 });
 
 describe("nextActionFor", () => {
