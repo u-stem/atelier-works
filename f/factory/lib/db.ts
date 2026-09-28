@@ -300,6 +300,8 @@ function toWorkItem(row: SqlRow): WorkItem {
       row.parent_work_item_id,
       "parent_work_item_id",
     ),
+    branch: parseNullableString(row.branch, "branch"),
+    pr_url: parseNullableString(row.pr_url, "pr_url"),
     created_at: parseDate(row.created_at, "created_at"),
     updated_at: parseDate(row.updated_at, "updated_at"),
   };

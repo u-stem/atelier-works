@@ -208,7 +208,9 @@ export const WORK_ITEM_STATUSES: readonly WorkItemStatus[] = [
  * `factory.v_lead_time` view — keep the two lists in sync via a migration).
  * `rereview_requested` is pr_fix's success end state: leaving it out made
  * poll_issues's reconcile treat a finished pr_fix row as an orphan and
- * fail it once the grace period elapsed. */
+ * fail it once the grace period elapsed. `pr_open` is implement's (工程3)
+ * success end state for the same reason — there is no `done`; merge
+ * tracking is 工程4's concern. */
 export const TERMINAL_WORK_ITEM_STATUSES: readonly WorkItemStatus[] = [
   "approved",
   "rejected",
@@ -220,6 +222,7 @@ export const TERMINAL_WORK_ITEM_STATUSES: readonly WorkItemStatus[] = [
   "rereview_requested",
   "blocked",
   "audited",
+  "pr_open",
 ];
 
 /**
@@ -264,6 +267,14 @@ export type WorkItem = {
   observed_review_comment_id: number | null;
   fix_round: number;
   parent_work_item_id: number | null;
+  /** 工程3's implement branch (`factory/issue-<N>-wi-<id>`) for a
+   * `kind = "issue"` row once implement_prepare created it; `null` before
+   * that and for every other kind. */
+  branch: string | null;
+  /** HTML URL of the PR 工程3 opened (status `pr_open`); `null` until
+   * then. Deliberately not `pr_number` — see the migration's column
+   * comment. */
+  pr_url: string | null;
   created_at: Date;
   updated_at: Date;
 };
@@ -451,6 +462,96 @@ export type FixRoundRecord = {
   outcome: FixOutcome;
   replies: FixReply[];
   commit_shas: string[];
+};
+
+// ---------------------------------------------------------------------------
+// implement_rounds (工程3) — see
+// migrations/datatable/main/20260928120000_implement.up.sql.
+// ---------------------------------------------------------------------------
+
+/** `implement` = the first round against the approved requirements; `fix`
+ * = a round repairing a failed check (implement_verify's loop). */
+export type ImplementRoundMode = "implement" | "fix";
+export const IMPLEMENT_ROUND_MODES: readonly ImplementRoundMode[] = [
+  "implement",
+  "fix",
+];
+
+/** `done` / `requirements_gap` come from Claude's output; `check_failed` /
+ * `checks_skipped` / `stalled` from the verify loop; `error` when the
+ * Claude run itself failed. Mirrors the table's CHECK constraint. */
+export type ImplementRoundOutcome =
+  | "done"
+  | "requirements_gap"
+  | "check_failed"
+  | "checks_skipped"
+  | "stalled"
+  | "error";
+export const IMPLEMENT_ROUND_OUTCOMES: readonly ImplementRoundOutcome[] = [
+  "done",
+  "requirements_gap",
+  "check_failed",
+  "checks_skipped",
+  "stalled",
+  "error",
+];
+
+export function isImplementRoundMode(
+  value: unknown,
+): value is ImplementRoundMode {
+  return isOneOf(value, IMPLEMENT_ROUND_MODES);
+}
+
+export function isImplementRoundOutcome(
+  value: unknown,
+): value is ImplementRoundOutcome {
+  return isOneOf(value, IMPLEMENT_ROUND_OUTCOMES);
+}
+
+/** `implement_rounds.diff_stat`: the worktree diff after a round. */
+export type ImplementDiffStat = {
+  files: number;
+  added: number;
+  deleted: number;
+};
+
+export function isImplementDiffStat(
+  value: unknown,
+): value is ImplementDiffStat {
+  return (
+    isRecord(value) &&
+    isNumber(value.files) &&
+    isNumber(value.added) &&
+    isNumber(value.deleted)
+  );
+}
+
+/** Payload for db.insertImplementRound: one row of factory.implement_rounds
+ * minus `id` / `created_at` / `round` — `round` is assigned by the insert
+ * itself (`COALESCE(MAX(round), 0) + 1` per work item). */
+export type ImplementRoundRecord = {
+  work_item_id: number;
+  attempt: number;
+  mode: ImplementRoundMode;
+  outcome: ImplementRoundOutcome;
+  summary: string;
+  gap_report: string | null;
+  /** First 16KB of the check command output, `null` when no check ran. */
+  check_output: string | null;
+  checks_skipped_reason: string | null;
+  /** Protected paths / new shell scripts / package.json scripts changes
+   * detected in the diff — recorded for the PR body, never blocking. */
+  protected_changes: string[];
+  diff_stat: ImplementDiffStat | null;
+  agent_run_id: number | null;
+};
+
+/** One full row of factory.implement_rounds (as read back by
+ * db.listImplementRounds). */
+export type ImplementRound = ImplementRoundRecord & {
+  id: number;
+  round: number;
+  created_at: Date;
 };
 
 // ---------------------------------------------------------------------------

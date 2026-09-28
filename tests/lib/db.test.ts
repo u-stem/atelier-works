@@ -293,6 +293,29 @@ describe("getWorkItem", () => {
     const item = await getWorkItem(999, sql);
     expect(item).toBeNull();
   });
+
+  test("parses branch and pr_url (工程3 columns)", async () => {
+    const { sql } = createFakeSqlClient([
+      [
+        {
+          ...WORK_ITEM_ROW,
+          branch: "factory/issue-42-wi-1",
+          pr_url: "https://github.com/octo-owner/atelier-works/pull/7",
+        },
+      ],
+    ]);
+    const item = await getWorkItem(1, sql);
+    expect(item).toMatchObject({
+      branch: "factory/issue-42-wi-1",
+      pr_url: "https://github.com/octo-owner/atelier-works/pull/7",
+    });
+  });
+
+  test("reads branch / pr_url as null when the row predates the columns (undefined, not null)", async () => {
+    const { sql } = createFakeSqlClient([[WORK_ITEM_ROW]]);
+    const item = await getWorkItem(1, sql);
+    expect(item).toMatchObject({ branch: null, pr_url: null });
+  });
 });
 
 describe("listActive", () => {
