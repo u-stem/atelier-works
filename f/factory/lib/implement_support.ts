@@ -14,6 +14,7 @@
 // `validateImplementOutput` after `runClaude` succeeds and record `reason`
 // on the implement round before treating it as a fix round.
 
+import { createHash } from "node:crypto";
 import {
   IMPLEMENT_PROTECTED_PATH_PREFIXES,
   matchesForbiddenPath,
@@ -416,4 +417,74 @@ export function buildImplementPrBody(input: ImplementPrBodyInput): string {
     checkbox(nothingNeeded, "上記いずれも不要"),
     "",
   ].join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// decideImplementRoundExit: the verify loop's exit rule (design §2
+// implement_verify, §0 "検証が OK になるまで修正を繰り返す")
+// ---------------------------------------------------------------------------
+
+export type ImplementRoundExit =
+  | "checks_passed"
+  | "checks_skipped"
+  | "max_rounds"
+  | "daily_budget"
+  | "stalled"
+  | "requirements_gap"
+  | "continue";
+
+export type ImplementRoundExitInput = {
+  readonly claudeOutcome: ImplementClaudeOutcome;
+  /** `skipped` = protected paths changed or no check command configured. */
+  readonly checks: "passed" | "failed" | "skipped";
+  /** 1-based round number within this verify loop (not the DB's serial). */
+  readonly round: number;
+  /** factory_config.implement_max_rounds. */
+  readonly maxRounds: number;
+  readonly dailyBudgetExceeded: boolean;
+  /** stallHash of this round's combined check output, `null` when none ran. */
+  readonly checkOutputHash: string | null;
+  readonly previousCheckOutputHash: string | null;
+  /** stallHash of this round's worktree diff. */
+  readonly diffHash: string;
+  readonly previousDiffHash: string | null;
+};
+
+/**
+ * Whether implement_verify runs another fix round. Precedence: Claude's
+ * own `requirements_gap` always ends the loop; a round that ran no checks
+ * exits as `checks_skipped` (design §0b: GitHub CI takes over); passing
+ * checks exit; then the guards — round ceiling, daily budget, and stall
+ * detection (the diff or the check output is identical to the previous
+ * round's, so another fix round would only spend budget). `continue` means
+ * the checks failed and none of the guards fired.
+ */
+export function decideImplementRoundExit(
+  state: ImplementRoundExitInput,
+): ImplementRoundExit {
+  if (state.claudeOutcome === "requirements_gap") return "requirements_gap";
+  if (state.checks === "skipped") return "checks_skipped";
+  if (state.checks === "passed") return "checks_passed";
+  if (state.round >= state.maxRounds) return "max_rounds";
+  if (state.dailyBudgetExceeded) return "daily_budget";
+  if (
+    state.previousDiffHash !== null &&
+    state.diffHash === state.previousDiffHash
+  ) {
+    return "stalled";
+  }
+  if (
+    state.checkOutputHash !== null &&
+    state.previousCheckOutputHash !== null &&
+    state.checkOutputHash === state.previousCheckOutputHash
+  ) {
+    return "stalled";
+  }
+  return "continue";
+}
+
+/** sha256 hex of `text` — the stall-detection fingerprint for a round's
+ * diff (`git diff` output) and check output. */
+export function stallHash(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
 }

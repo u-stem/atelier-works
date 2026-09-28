@@ -7,10 +7,12 @@ import {
   CHECK_OUTPUT_MAX_BYTES,
   classifyDeployNeeds,
   classifyProtectedChanges,
+  decideImplementRoundExit,
   extractAcceptanceCriteria,
   IMPLEMENT_CLAUDE_OUTCOMES,
   isImplementClaudeOutput,
   NO_ACCEPTANCE_CRITERIA_NOTE,
+  stallHash,
   truncateCheckOutput,
   validateImplementOutput,
 } from "../../f/factory/lib/implement_support.ts";
@@ -570,5 +572,103 @@ describe("buildImplementPrBody", () => {
     expect(
       body.split("\n").filter((line) => line === "## 関連リンク"),
     ).toHaveLength(1);
+  });
+});
+
+const CONTINUE_STATE = {
+  claudeOutcome: "done" as const,
+  checks: "failed" as const,
+  round: 1,
+  maxRounds: 5,
+  dailyBudgetExceeded: false,
+  checkOutputHash: "h1",
+  previousCheckOutputHash: null,
+  diffHash: "d1",
+  previousDiffHash: null,
+};
+
+describe("decideImplementRoundExit", () => {
+  test("continues when checks failed and no guard fired", () => {
+    expect(decideImplementRoundExit(CONTINUE_STATE)).toBe("continue");
+  });
+
+  test("exits with requirements_gap whenever Claude reported one", () => {
+    expect(
+      decideImplementRoundExit({
+        ...CONTINUE_STATE,
+        claudeOutcome: "requirements_gap",
+        checks: "passed",
+      }),
+    ).toBe("requirements_gap");
+  });
+
+  test("exits with checks_skipped when the round ran no checks", () => {
+    expect(
+      decideImplementRoundExit({ ...CONTINUE_STATE, checks: "skipped" }),
+    ).toBe("checks_skipped");
+  });
+
+  test("exits with checks_passed when the checks passed", () => {
+    expect(
+      decideImplementRoundExit({ ...CONTINUE_STATE, checks: "passed" }),
+    ).toBe("checks_passed");
+  });
+
+  test("exits with max_rounds when the round reached implement_max_rounds", () => {
+    expect(decideImplementRoundExit({ ...CONTINUE_STATE, round: 5 })).toBe(
+      "max_rounds",
+    );
+  });
+
+  test("exits with daily_budget when the daily budget is exceeded", () => {
+    expect(
+      decideImplementRoundExit({
+        ...CONTINUE_STATE,
+        dailyBudgetExceeded: true,
+      }),
+    ).toBe("daily_budget");
+  });
+
+  test("exits with stalled when the diff hash did not change since the previous round", () => {
+    expect(
+      decideImplementRoundExit({ ...CONTINUE_STATE, previousDiffHash: "d1" }),
+    ).toBe("stalled");
+  });
+
+  test("exits with stalled when the check output hash repeats the previous round", () => {
+    expect(
+      decideImplementRoundExit({
+        ...CONTINUE_STATE,
+        previousCheckOutputHash: "h1",
+      }),
+    ).toBe("stalled");
+  });
+
+  test("does not treat a null check output hash as a repeat", () => {
+    expect(
+      decideImplementRoundExit({
+        ...CONTINUE_STATE,
+        checkOutputHash: null,
+        previousCheckOutputHash: null,
+      }),
+    ).toBe("continue");
+  });
+
+  test("prefers max_rounds over stalled when both apply", () => {
+    expect(
+      decideImplementRoundExit({
+        ...CONTINUE_STATE,
+        round: 5,
+        previousDiffHash: "d1",
+      }),
+    ).toBe("max_rounds");
+  });
+});
+
+describe("stallHash", () => {
+  test("is the sha256 hex digest of the text", () => {
+    expect(stallHash("")).toBe(
+      "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    );
   });
 });
