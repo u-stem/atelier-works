@@ -56,3 +56,59 @@ export function isImplementClaudeOutput(
   if (!isString(value.commit_body)) return false;
   return isStringArray(value.notes_for_reviewer);
 }
+
+// ---------------------------------------------------------------------------
+// validateImplementOutput: the outcome-dependent rules IMPLEMENT_SCHEMA
+// cannot express
+// ---------------------------------------------------------------------------
+
+/** git's subject-line convention, the same ceiling pr_workflow_support.ts
+ * applies to pr_fix's `commit_subject`; the prompt asks Claude to aim for
+ * about 50 so a slightly long subject does not waste a whole run. */
+export const COMMIT_SUBJECT_MAX_CODEPOINTS = 72;
+
+export type ImplementOutputValidation =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly reason: string };
+
+/**
+ * `requirements_gap` needs a non-blank `gap_report` (it becomes 工程2's
+ * feedback — an empty one would restart requirements generation with
+ * nothing to act on). `done` needs a committable `commit_subject`: non-blank,
+ * single-line, at most `COMMIT_SUBJECT_MAX_CODEPOINTS` code points (counted
+ * by spreading, not `.length`), and not ending in "…" (a sign Claude tried
+ * to write past the limit instead of within it — same reasoning as
+ * pr_workflow_support.ts's isValidCommitSubject). `commit_body` is free-form
+ * and never rejected. `reason` is operator-facing English, recorded on the
+ * implement_rounds row / job log, never shown to Claude.
+ */
+export function validateImplementOutput(
+  output: ImplementClaudeOutput,
+): ImplementOutputValidation {
+  if (output.outcome === "requirements_gap") {
+    if (output.gap_report === null || output.gap_report.trim().length === 0) {
+      return {
+        ok: false,
+        reason: "requirements_gap outcome without a gap_report",
+      };
+    }
+    return { ok: true };
+  }
+  const subject = output.commit_subject;
+  if (subject.trim().length === 0) {
+    return { ok: false, reason: "done outcome with an empty commit_subject" };
+  }
+  if (subject.includes("\n")) {
+    return { ok: false, reason: "commit_subject contains a newline" };
+  }
+  if ([...subject].length > COMMIT_SUBJECT_MAX_CODEPOINTS) {
+    return {
+      ok: false,
+      reason: `commit_subject exceeds ${String(COMMIT_SUBJECT_MAX_CODEPOINTS)} code points`,
+    };
+  }
+  if (subject.endsWith("…")) {
+    return { ok: false, reason: 'commit_subject ends with "…"' };
+  }
+  return { ok: true };
+}
