@@ -85,6 +85,13 @@ services:
           # ("can't set distinct values on 'pids_limit' and
           # 'deploy.resources.limits.pids'"), even when only one is set.
           pids: 512
+    # Run docker-init (tini) as PID 1 so orphaned children get reaped. Jobs
+    # spawn git/gh/esbuild subprocesses that outlive their parent (background
+    # maintenance, process-group kills on timeout); without an init they are
+    # reparented to the windmill binary, which never wait()s them, and the
+    # zombies pile up against the pids limit above until every job fails with
+    # EAGAIN (observed 2026-09-28: 430 zombies, 479/512 pids).
+    init: true
     restart: unless-stopped
     # Intentionally NOT privileged and without FAVOR_UNSHARE_PID: the upstream
     # PID-namespace isolation needs --mount-proc via privileged mode, which is a
@@ -118,6 +125,8 @@ services:
         limits:
           memory: 2048M
           pids: 512
+    # Same zombie-reaping rationale as windmill_worker above.
+    init: true
     restart: unless-stopped
     security_opt:
       - "no-new-privileges:true"
