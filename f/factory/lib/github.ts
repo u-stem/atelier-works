@@ -22,7 +22,7 @@ import type {
   GitIdentity,
   LabelerAssociation,
 } from "./types.ts";
-import { assertGitHubName } from "./types.ts";
+import { assertBranchName, assertGitHubName } from "./types.ts";
 import type { CommandRunner } from "./workspace.ts";
 
 /** Validate both halves of an `owner/repo` pair before building any endpoint/URL with them. */
@@ -2099,4 +2099,111 @@ export async function postIssueComment(
     );
   }
   return { id: parsed.id };
+}
+
+// ---------------------------------------------------------------------------
+// Pull request creation / lookup / body update (implement flow, 工程3 design
+// §2 implement_finish): create a PR for a pushed branch, find an existing
+// open PR for the same head (a re-implementation after re-approval updates
+// it instead of creating a second one — GitHub returns 422 for a duplicate
+// head), and rewrite its body.
+// ---------------------------------------------------------------------------
+
+export type PullRequestRef = {
+  readonly number: number;
+  readonly htmlUrl: string;
+};
+
+type PrRefPayload = { readonly number: number; readonly html_url: string };
+
+function isPrRefPayload(value: unknown): value is PrRefPayload {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as { number: unknown; html_url: unknown };
+  return (
+    typeof record.number === "number" && typeof record.html_url === "string"
+  );
+}
+
+export type CreatePullRequestOptions = {
+  readonly head: string;
+  readonly base: string;
+  readonly title: string;
+  readonly body: string;
+  /** Default false. */
+  readonly draft?: boolean;
+};
+
+/** `POST /repos/{owner}/{repo}/pulls`. `head`/`base` are branch names in
+ * the same repository (never `owner:branch` — the factory only opens PRs
+ * from branches it pushed to the target repo itself). */
+export async function createPullRequest(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  opts: CreatePullRequestOptions,
+): Promise<PullRequestRef> {
+  validateOwnerRepo(owner, repo);
+  assertBranchName(opts.head);
+  assertBranchName(opts.base);
+  const context = `POST pr ${owner}/${repo} (${opts.head} -> ${opts.base})`;
+  const response = await callGhApi(client, `repos/${owner}/${repo}/pulls`, {
+    method: "POST",
+    body: {
+      title: opts.title,
+      body: opts.body,
+      head: opts.head,
+      base: opts.base,
+      draft: opts.draft ?? false,
+    },
+  });
+  ensureSuccess(response, context);
+  const parsed = parseJsonBody(response, context);
+  if (!isPrRefPayload(parsed)) {
+    throw new Error(`${context}: unexpected response shape`);
+  }
+  return { number: parsed.number, htmlUrl: parsed.html_url };
+}
+
+/** `GET /repos/{owner}/{repo}/pulls?head=<owner>:<branch>&state=open` —
+ * the first open PR for `head`, or `null`. GitHub's `head` filter requires
+ * the `user:ref-name` form; the user is always this repo's owner here. */
+export async function findOpenPullRequestByHead(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  head: string,
+): Promise<PullRequestRef | null> {
+  validateOwnerRepo(owner, repo);
+  assertBranchName(head);
+  const endpoint = `repos/${owner}/${repo}/pulls?head=${encodeURIComponent(`${owner}:${head}`)}&state=open&per_page=1`;
+  const context = `GET open pr by head ${owner}/${repo}@${head}`;
+  const response = await callGhApi(client, endpoint);
+  ensureSuccess(response, context);
+  const parsed = parseJsonBody(response, context);
+  if (!Array.isArray(parsed)) {
+    throw new Error(`${context}: expected an array response`);
+  }
+  const first = parsed[0];
+  if (first === undefined) return null;
+  if (!isPrRefPayload(first)) {
+    throw new Error(`${context}: unexpected response shape`);
+  }
+  return { number: first.number, htmlUrl: first.html_url };
+}
+
+/** `PATCH /repos/{owner}/{repo}/pulls/{number}` with only `body`. */
+export async function updatePullRequestBody(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  number: number,
+  body: string,
+): Promise<void> {
+  validateOwnerRepo(owner, repo);
+  const response = await callGhApi(
+    client,
+    `repos/${owner}/${repo}/pulls/${number}`,
+    { method: "PATCH", body: { body } },
+  );
+  ensureSuccess(response, `PATCH pr body ${owner}/${repo}#${number}`);
 }

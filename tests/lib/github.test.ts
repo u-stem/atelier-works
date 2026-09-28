@@ -5,7 +5,9 @@ import {
   commentIssue,
   createIssue,
   createPrReview,
+  createPullRequest,
   findIssueByMarker,
+  findOpenPullRequestByHead,
   getBranchProtected,
   getIssue,
   getIssueTimeline,
@@ -30,6 +32,7 @@ import {
   searchIssues,
   searchPrs,
   setLabels,
+  updatePullRequestBody,
   withMarker,
 } from "../../f/factory/lib/github.ts";
 import { isRecord } from "../../f/factory/lib/types.ts";
@@ -1998,5 +2001,242 @@ describe("parseGitHubRepoUrl", () => {
     expect(() =>
       parseGitHubRepoUrl("https://user:secret@github.com/o/r"),
     ).toThrow(/^(?!.*secret).*$/);
+  });
+});
+
+describe("createPullRequest", () => {
+  test("returns the created PR's number and URL", async () => {
+    const fake = createFakeCommandRunner([
+      ok(
+        ghApiStdout(201, {
+          number: 12,
+          html_url: "https://github.com/acme/widgets/pull/12",
+        }),
+      ),
+    ]);
+    const result = await createPullRequest(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      {
+        head: "factory/issue-7-wi-3",
+        base: "main",
+        title: "feat: CSV出力を追加する",
+        body: "## 概要",
+      },
+    );
+    expect(result).toEqual({
+      number: 12,
+      htmlUrl: "https://github.com/acme/widgets/pull/12",
+    });
+  });
+
+  test("POSTs to the pulls endpoint", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(201, { number: 12, html_url: "https://x/12" })),
+    ]);
+    await createPullRequest(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      {
+        head: "factory/issue-7-wi-3",
+        base: "main",
+        title: "t",
+        body: "b",
+      },
+    );
+    expect(fake.calls[0]?.argv).toEqual(
+      expect.arrayContaining(["repos/acme/widgets/pulls", "POST"]),
+    );
+  });
+
+  test("sends head/base/title/body and draft: false by default", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(201, { number: 12, html_url: "https://x/12" })),
+    ]);
+    await createPullRequest(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      {
+        head: "factory/issue-7-wi-3",
+        base: "main",
+        title: "t",
+        body: "b",
+      },
+    );
+    expect(fake.calls[0]?.options?.stdin).toBe(
+      JSON.stringify({
+        title: "t",
+        body: "b",
+        head: "factory/issue-7-wi-3",
+        base: "main",
+        draft: false,
+      }),
+    );
+  });
+
+  test("sends draft: true when requested", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(201, { number: 12, html_url: "https://x/12" })),
+    ]);
+    await createPullRequest(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      {
+        head: "factory/issue-7-wi-3",
+        base: "main",
+        title: "t",
+        body: "b",
+        draft: true,
+      },
+    );
+    expect(fake.calls[0]?.options?.stdin).toContain('"draft":true');
+  });
+
+  test("does not spawn anything for a head branch name starting with a dash", async () => {
+    const fake = createFakeCommandRunner([]);
+    await createPullRequest(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      {
+        head: "-evil",
+        base: "main",
+        title: "t",
+        body: "b",
+      },
+    ).catch(() => undefined);
+    expect(fake.calls).toHaveLength(0);
+  });
+
+  test("throws on a 422 (a PR for this head already exists)", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(422, { message: "A pull request already exists" })),
+    ]);
+    await expect(
+      createPullRequest({ run: fake.run, ghToken: "tok" }, "acme", "widgets", {
+        head: "factory/issue-7-wi-3",
+        base: "main",
+        title: "t",
+        body: "b",
+      }),
+    ).rejects.toThrow(/HTTP 422/);
+  });
+
+  test("rejects a response without number/html_url", async () => {
+    const fake = createFakeCommandRunner([ok(ghApiStdout(201, { id: 1 }))]);
+    await expect(
+      createPullRequest({ run: fake.run, ghToken: "tok" }, "acme", "widgets", {
+        head: "factory/issue-7-wi-3",
+        base: "main",
+        title: "t",
+        body: "b",
+      }),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+});
+
+describe("findOpenPullRequestByHead", () => {
+  test("returns the first open PR whose head matches", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([
+        { number: 12, html_url: "https://github.com/acme/widgets/pull/12" },
+      ]),
+    ]);
+    const result = await findOpenPullRequestByHead(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      "factory/issue-7-wi-3",
+    );
+    expect(result).toEqual({
+      number: 12,
+      htmlUrl: "https://github.com/acme/widgets/pull/12",
+    });
+  });
+
+  test("returns null when no open PR has that head", async () => {
+    const fake = createFakeCommandRunner([ghApiOk([])]);
+    const result = await findOpenPullRequestByHead(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      "factory/issue-7-wi-3",
+    );
+    expect(result).toBeNull();
+  });
+
+  test("queries pulls with head=<owner>:<branch> and state=open", async () => {
+    const fake = createFakeCommandRunner([ghApiOk([])]);
+    await findOpenPullRequestByHead(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      "factory/issue-7-wi-3",
+    );
+    const decoded = decodeURIComponent(fake.calls[0]?.argv.join(" ") ?? "");
+    expect(decoded).toContain(
+      "repos/acme/widgets/pulls?head=acme:factory/issue-7-wi-3&state=open",
+    );
+  });
+
+  test("throws when the response is not an array", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ message: "nope" })]);
+    await expect(
+      findOpenPullRequestByHead(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        "factory/issue-7-wi-3",
+      ),
+    ).rejects.toThrow(/expected an array/);
+  });
+});
+
+describe("updatePullRequestBody", () => {
+  test("PATCHes the pull request endpoint", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ number: 12 })]);
+    await updatePullRequestBody(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+      "new body",
+    );
+    expect(fake.calls[0]?.argv).toEqual(
+      expect.arrayContaining(["repos/acme/widgets/pulls/12", "PATCH"]),
+    );
+  });
+
+  test("sends only the body field", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ number: 12 })]);
+    await updatePullRequestBody(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+      "new body",
+    );
+    expect(fake.calls[0]?.options?.stdin).toBe(
+      JSON.stringify({ body: "new body" }),
+    );
+  });
+
+  test("throws on a non-2xx response", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(404, { message: "Not Found" })),
+    ]);
+    await expect(
+      updatePullRequestBody(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        12,
+        "new body",
+      ),
+    ).rejects.toThrow(/HTTP 404/);
   });
 });
