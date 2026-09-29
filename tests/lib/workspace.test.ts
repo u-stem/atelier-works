@@ -2205,8 +2205,9 @@ describe("mergeBaseSha", () => {
       worktreeDir: "/wt",
       baseBranch: "main",
     });
-    expect(fake.calls[0]?.argv.slice(-3)).toEqual([
+    expect(fake.calls[0]?.argv.slice(-4)).toEqual([
       "merge-base",
+      "--",
       "origin/main",
       "HEAD",
     ]);

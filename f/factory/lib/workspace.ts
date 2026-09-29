@@ -2001,15 +2001,16 @@ export type WorktreeGitOptions = {
 /** `git merge-base origin/<baseBranch> HEAD` in the implement worktree —
  * the point the branch left the default branch. The implement flow
  * compares every round against it, so changes committed earlier on the
- * branch (a needs_human partial push, an existing PR) stay visible. No `--`:
- * `baseBranch` is validated by assertBranchName, the other argument is the
- * literal HEAD. */
+ * branch (a needs_human partial push, an existing PR) stay visible. `--`
+ * precedes the revisions per this module's rule (`git merge-base -- <a> <b>`
+ * resolves the same way as without it; `baseBranch` is additionally
+ * validated by assertBranchName). */
 export async function mergeBaseSha(
   opts: WorktreeGitOptions & { readonly baseBranch: string },
 ): Promise<string> {
   assertBranchName(opts.baseBranch);
   const result = await opts.run(
-    buildGitArgv(["merge-base", `origin/${opts.baseBranch}`, "HEAD"]),
+    buildGitArgv(["merge-base", "--", `origin/${opts.baseBranch}`, "HEAD"]),
     {
       cwd: opts.worktreeDir,
       env: localGitEnv(opts.home, opts.path),
@@ -2179,11 +2180,18 @@ const GITLEAKS_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 
 const defaultCreateGitleaksConfigDir = async (): Promise<GitleaksConfigDir> => {
   const dir = await mkdtemp(join(tmpdir(), "factory-gitleaks-"));
-  await writeFile(
-    join(dir, GITLEAKS_CONFIG_FILE),
-    GITLEAKS_DEFAULT_ONLY_CONFIG,
-    { mode: 0o600 },
-  );
+  try {
+    await writeFile(
+      join(dir, GITLEAKS_CONFIG_FILE),
+      GITLEAKS_DEFAULT_ONLY_CONFIG,
+      { mode: 0o600 },
+    );
+  } catch (err) {
+    // The caller's try/finally only starts once this helper returns, so a
+    // failed write must remove the directory it just created.
+    await rm(dir, { recursive: true, force: true });
+    throw err;
+  }
   return {
     path: dir,
     cleanup: async () => {
