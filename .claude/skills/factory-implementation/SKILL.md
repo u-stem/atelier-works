@@ -41,7 +41,7 @@ worker内のClaudeはheadlessで起動されており、人と対話して回答
 ## 使えるツール
 
 - `Read` / `Glob` / `Grep` / `Edit` / `Write`のみ。**`Bash`は使えない**。
-- 対象リポジトリの検査(lint / typecheck / test相当)を自分で実行することはできない。検査はフロー側のステップが対象リポジトリごとに設定された検査コマンド(`check_commands_by_repo`、無ければ`allowed_check_commands`)とgitleaksを実行し、失敗した場合はその出力がDATAとして次の実行(修正モード)に渡される。
+- 対象リポジトリの検査(lint / typecheck / test相当)を自分で実行することはできない。検査はフロー側のステップが対象リポジトリごとに設定された検査コマンド(`check_commands_by_repo`。設定が無いリポジトリでは実行しない)とgitleaksを実行し、失敗した場合はその出力がDATAとして次の実行(修正モード)に渡される。
 - 書き込みはカレントディレクトリ(対象リポジトリのworktree)に対してだけ行う。要件定義と図が置かれたディレクトリは`--add-dir`で参照できる。ここには書き込まない(読み取り専用として扱う)。
 - `git`操作(commit / branch / stash等)は行わない。行えない。コミットメッセージは構造化出力で提案し、フロー側がコミットとpushを行う。
 
@@ -50,11 +50,13 @@ worker内のClaudeはheadlessで起動されており、人と対話して回答
 次のパスは、CI・フック・エージェント設定・実行コマンドの定義そのものであり、信頼境界(どのコマンドが実行されるか)を変える力を持つ。
 
 - `.claude/**`、`.agents/**`
-- `.github/workflows/**`
+- `.github/**`
 - `mise.toml`、`mise.*.toml`、`.mise.toml`、`.mise/**`、`.config/mise/**`
-- `lefthook.yml`、`lefthook-local.yml`、`lefthook.toml`、`lefthook.json`、`.lefthook/**`
-- `bunfig.toml`、`.npmrc`、`.gitattributes`、`.gitmodules`
-- `package.json`の`scripts`フィールド
+- `lefthook.yml`、`lefthook-local.yml`、`lefthook.toml`、`lefthook.json`、`.lefthook/**`、`.husky/**`、`.githooks/**`
+- `bunfig.toml`、`.npmrc`、`.gitattributes`、`.gitmodules`、`.yarnrc(.yml)`、`.yarn/**`、`.pnpmfile.cjs`
+- すべての`package.json`と、lockfile(`bun.lock`、`package-lock.json`、`pnpm-lock.yaml`、`yarn.lock`等)
+- `.env*`、`.gitleaksignore`、`.gitleaks.toml`、`.tool-versions`、`.node-version`等のランタイムのバージョン指定
+- `*.config.[cm][jt]s`、`.eslintrc*`等のツール設定、`Makefile`等のタスクランナー、`CODEOWNERS`、`.devcontainer/**`
 - 新規に追加する`*.sh`ファイル
 - `infra/**`(Factory自身が対象リポジトリの場合、ここを変えるとホスト側のデプロイ作業が別途必要になる)
 

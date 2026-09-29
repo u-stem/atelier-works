@@ -334,12 +334,27 @@ describe("classifyProtectedChanges", () => {
   });
 
   test("records a package.json scripts change", () => {
+    expect(classifyProtectedChanges([], true)).toEqual([
+      "package.jsonのscriptsを変更",
+    ]);
+  });
+
+  test("records any package.json change as a protected path", () => {
     expect(
       classifyProtectedChanges(
         [{ path: "package.json", status: "modified" }],
-        true,
+        false,
       ),
-    ).toEqual(["package.jsonのscriptsを変更"]);
+    ).toEqual(["保護パスを変更: package.json"]);
+  });
+
+  test("records a lockfile change", () => {
+    expect(
+      classifyProtectedChanges(
+        [{ path: "bun.lock", status: "modified" }],
+        false,
+      ),
+    ).toEqual(["保護パスを変更: bun.lock"]);
   });
 
   test("lists protected paths first, then shell scripts, then the scripts flag", () => {

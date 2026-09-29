@@ -457,7 +457,10 @@ export type ImplementLoopDeps = {
     diffLineTotal: number,
   ) => readonly string[];
   readonly runGitleaks: () => Promise<GitleaksResult>;
-  /** The repo's check commands (checkCommandsFor); only called when there are some. */
+  /** removeIgnoredFiles on the worktree; called right before every
+   * runChecks (never when no check command runs). */
+  readonly removeIgnoredFiles: () => Promise<void>;
+  /** The repo's check commands (implementCheckCommandsFor); only called when there are some. */
   readonly runChecks: () => Promise<readonly LoopCheckResult[]>;
   readonly runFixRound: (
     request: FixRoundRequest,
@@ -560,6 +563,7 @@ async function evaluateChecks(
     } else if (!facts.hasCheckCommands) {
       skipReason = IMPLEMENT_CHECK_SKIP_REASONS.no_commands;
     } else {
+      await deps.removeIgnoredFiles();
       for (const result of await deps.runChecks()) {
         results.push({ command: result.command, ok: result.ok });
         if (result.ok) {
@@ -642,7 +646,8 @@ export async function gitPointerStopReason(
  * base_sha); change inspection; the blocking stops (symlink, then diff
  * size); a round with no difference from the base fails as "no changes"
  * without running any check; otherwise gitleaks, then the check commands
- * (skipped when a protected path changed or none are configured); the exit
+ * (skipped when a protected path changed or none are configured; ignored
+ * files are removed right before them); the exit
  * decision (decideImplementRoundExit, with the staged tree sha as the diff
  * fingerprint); one implement_rounds row per Claude run.
  */

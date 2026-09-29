@@ -35,6 +35,7 @@ import {
   readTextFile,
   readWorktreeGitPointer,
   removeEmptyDir,
+  removeIgnoredFiles,
   removeWorktree,
   resolveDefaultBranchHeadSha,
   resolveDefaultBranchName,
@@ -2460,6 +2461,43 @@ describe("parseNumstatTotals", () => {
     expect(
       parseNumstatTotals("10\t2\ta.ts\n-\t-\timg.png\n2\t1\tb.ts\n").deleted,
     ).toBe(3);
+  });
+});
+
+describe("removeIgnoredFiles", () => {
+  test("removes ignored files only (git clean -fdX)", async () => {
+    const fake = createFakeCommandRunner([ok()]);
+    await removeIgnoredFiles({ run: fake.run, worktreeDir: "/wt" });
+    expect(fake.calls[0]?.argv.slice(-2)).toEqual(["clean", "-fdX"]);
+  });
+
+  test("runs with the hardening flags", async () => {
+    const fake = createFakeCommandRunner([ok()]);
+    await removeIgnoredFiles({ run: fake.run, worktreeDir: "/wt" });
+    expect(fake.calls[0]?.argv.slice(0, 3)).toEqual([
+      "git",
+      "-c",
+      "core.hooksPath=/dev/null",
+    ]);
+  });
+
+  test("runs in the worktree", async () => {
+    const fake = createFakeCommandRunner([ok()]);
+    await removeIgnoredFiles({ run: fake.run, worktreeDir: "/wt" });
+    expect(fake.calls[0]?.options?.cwd).toBe("/wt");
+  });
+
+  test("never passes GH_TOKEN", async () => {
+    const fake = createFakeCommandRunner([ok()]);
+    await removeIgnoredFiles({ run: fake.run, worktreeDir: "/wt" });
+    expect(fake.calls[0]?.options?.env?.GH_TOKEN).toBeUndefined();
+  });
+
+  test("throws when git clean fails", async () => {
+    const fake = createFakeCommandRunner([fail("fatal: boom")]);
+    await expect(
+      removeIgnoredFiles({ run: fake.run, worktreeDir: "/wt" }),
+    ).rejects.toThrow(/git clean -fdX failed/);
   });
 });
 

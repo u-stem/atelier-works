@@ -543,6 +543,28 @@ export function isRepoAllowed(
  * (config.ts) rejects a URL-shaped key at parse time rather than let it
  * silently fall through to `allowed_check_commands` here.
  */
+/**
+ * The check commands the implement flow runs for `owner`/`repo`: ONLY the
+ * repo's explicit `check_commands_by_repo` entry (same normalized key match
+ * as checkCommandsFor), else `[]` — never `allowed_check_commands`. The
+ * commands execute code Claude wrote (tests, sources) as root in the
+ * worker, so each repository has to be opted in by name (docs/security.md
+ * 工程3).
+ */
+export function implementCheckCommandsFor(
+  config: Pick<FactoryConfig, "check_commands_by_repo">,
+  owner: string,
+  repo: string,
+): string[] {
+  const target = normalizeRepoUrl(`${owner}/${repo}`);
+  for (const [key, commands] of Object.entries(config.check_commands_by_repo)) {
+    if (normalizeRepoUrl(key) === target) {
+      return commands;
+    }
+  }
+  return [];
+}
+
 export function checkCommandsFor(
   config: Pick<
     FactoryConfig,

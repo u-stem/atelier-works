@@ -2171,6 +2171,23 @@ async function stageAll(opts: WorktreeGitOptions): Promise<void> {
     throw gitError(`git add -A failed in ${opts.worktreeDir}`, result);
 }
 
+/** `git clean -fdX` in the implement worktree: removes ignored files only
+ * (capital X — untracked, non-ignored files are Claude's work and stay).
+ * Runs before every round's check commands, so nothing a previous command
+ * left in an ignored path (`node_modules/`, build output, caches) — possibly
+ * shaped by Claude's earlier code — carries into the next run; check
+ * commands install their dependencies themselves. */
+export async function removeIgnoredFiles(
+  opts: WorktreeGitOptions,
+): Promise<void> {
+  const result = await opts.run(buildGitArgv(["clean", "-fdX"]), {
+    cwd: opts.worktreeDir,
+    env: localGitEnv(opts.home, opts.path),
+  });
+  if (result.exitCode !== 0)
+    throw gitError(`git clean -fdX failed in ${opts.worktreeDir}`, result);
+}
+
 function countOrZero(text: string | undefined): number {
   if (text === undefined || text === "-") return 0;
   const value = Number(text);

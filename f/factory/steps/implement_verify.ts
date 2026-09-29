@@ -1,12 +1,14 @@
 // PathScript step 3/4 of f/factory/implement (工程3 design §2
 // implement_verify): binds the real I/O into lib/implement_loop.ts's
 // runImplementVerifyLoop — the worktree `.git` pointer check against the
-// context's worktree_git_pointer, staged-worktree fingerprint and change listing
-// against the context's base_sha (the branch's merge-base with the default
-// branch), symlink and package.json-scripts detection, the implement
-// diff-size limits, the fixed gitleaks scan, the repo's check commands
-// (checkCommandsFor), fix rounds with implementFixPrompt (each with a fresh
-// doc_dir copy), and one implement_rounds row per Claude run.
+// context's worktree_git_pointer, staged-worktree fingerprint and change
+// listing against the context's base_sha (the branch's merge-base with the
+// default branch), symlink and package.json-scripts detection, the
+// implement diff-size limits, the fixed gitleaks scan, the repo's check
+// commands (implementCheckCommandsFor: explicit check_commands_by_repo
+// entries only, after removing ignored files), fix rounds with
+// implementFixPrompt (each with a fresh doc_dir copy), and one
+// implement_rounds row per Claude run.
 
 import * as wmill from "windmill-client@1.817.0";
 import {
@@ -14,7 +16,7 @@ import {
   dailyBudgetStatus,
   runClaude,
 } from "../lib/claude.ts";
-import { checkCommandsFor, loadConfig } from "../lib/config.ts";
+import { implementCheckCommandsFor, loadConfig } from "../lib/config.ts";
 import { addNotice, insertImplementRound, recordAgentRun } from "../lib/db.ts";
 import {
   type ChangeInspection,
@@ -36,6 +38,7 @@ import { isOneOf } from "../lib/types.ts";
 import {
   assertWorktreeGitPointer,
   readGitShowFile,
+  removeIgnoredFiles,
   runCommand,
   runGitleaksOnWorktree,
   worktreeFingerprint,
@@ -107,7 +110,13 @@ export async function main(
   const config = await loadConfig(() =>
     wmill.getResource("f/factory/factory_config"),
   );
-  const commands = checkCommandsFor(config, context.owner, context.repo);
+  // Only the repo's explicit check_commands_by_repo entry — never
+  // allowed_check_commands: the commands run Claude-written code.
+  const commands = implementCheckCommandsFor(
+    config,
+    context.owner,
+    context.repo,
+  );
   // Same standing-risk notice as pr_fix_verify: check commands run
   // untrusted target-repo code as root in the worker, unsandboxed.
   if (commands.length > 0) {
@@ -148,6 +157,8 @@ export async function main(
             worktreeDir,
             timeoutMs: GITLEAKS_TIMEOUT_MS,
           }),
+        removeIgnoredFiles: () =>
+          removeIgnoredFiles({ run: runCommand, worktreeDir }),
         runChecks: () =>
           runAllowedCheckCommands(
             runCommand,

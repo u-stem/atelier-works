@@ -535,6 +535,9 @@ function harness(options: HarnessOptions = {}): Harness {
       const failure = options.pointerError;
       if (failure !== undefined && index >= failure.from) throw failure.error;
     },
+    removeIgnoredFiles: async () => {
+      events.push("clean");
+    },
     fingerprint: async () => {
       events.push("fingerprint");
       const value = pick(options.fingerprints ?? [FP_1], calls.fingerprint);
@@ -549,6 +552,7 @@ function harness(options: HarnessOptions = {}): Harness {
       return value;
     },
     runChecks: async () => {
+      events.push("checks");
       const value = pick(options.checks ?? [[PASS]], calls.checks);
       calls.checks += 1;
       return value;
@@ -923,5 +927,29 @@ describe("runImplementVerifyLoop", () => {
       pointerError: { from: 0, error: new Error("EIO") },
     });
     await expect(run(h)).rejects.toThrow("EIO");
+  });
+
+  test("removes ignored files right before the check commands", async () => {
+    const h = harness();
+    await run(h);
+    expect(h.events.slice(-2)).toEqual(["clean", "checks"]);
+  });
+
+  test("removes ignored files again before a fix round's checks", async () => {
+    const h = harness({ checks: [[FAIL], [PASS]], fingerprints: [FP_1, FP_2] });
+    await run(h);
+    expect(h.events.filter((event) => event === "clean")).toHaveLength(2);
+  });
+
+  test("does not remove ignored files when no check command runs", async () => {
+    const h = harness();
+    await run(h, loopInput(outputRound(), { hasCheckCommands: false }));
+    expect(h.events).not.toContain("clean");
+  });
+
+  test("does not remove ignored files in a round that changed a protected path", async () => {
+    const h = harness({ inspection: PROTECTED });
+    await run(h);
+    expect(h.events).not.toContain("clean");
   });
 });

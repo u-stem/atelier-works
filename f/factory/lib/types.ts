@@ -759,8 +759,9 @@ export type FactoryConfig = {
   implement_max_changed_files: number;
   /** Diff-size guard for the implement flow: max added + deleted lines. */
   implement_max_diff_lines: number;
-  /** Per-repo check commands (`"<owner>/<repo>": string[]`), overriding
-   * `allowed_check_commands` for that repo — see `checkCommandsFor`
-   * (config.ts). An explicit `[]` means "run no checks for this repo". */
+  /** Per-repo check commands (`"<owner>/<repo>": string[]`). The implement
+   * flow runs only these (`implementCheckCommandsFor`, config.ts): a repo
+   * without an entry runs no check commands there. `checkCommandsFor`
+   * still falls back to `allowed_check_commands`. */
   check_commands_by_repo: Record<string, string[]>;
 };

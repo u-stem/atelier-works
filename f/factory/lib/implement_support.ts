@@ -17,9 +17,8 @@
 import { createHash } from "node:crypto";
 import {
   type ChangedPath,
-  IMPLEMENT_PROTECTED_PATH_PREFIXES,
   isNewShellScript,
-  matchesForbiddenPath,
+  matchesImplementProtectedPath,
 } from "./protected_paths.ts";
 import { extractSectionBody } from "./requirements_doc.ts";
 import {
@@ -213,12 +212,15 @@ export function buildImplementBranchName(
 
 /**
  * One human-facing Japanese line per protected change in the diff, using
- * the implement flow's prefix list (`IMPLEMENT_PROTECTED_PATH_PREFIXES`,
- * which includes `infra/**`): every changed path under a protected prefix
- * (whatever its status), then every newly added `*.sh` (protected_paths.ts's
- * isNewShellScript), then the package.json scripts flag
- * (steps/pr_workflow_support.ts's packageJsonScriptsChanged, computed by the
- * caller). A new `*.sh` under a protected prefix yields both lines. Unlike
+ * the implement flow's lists (matchesImplementProtectedPath: pr_fix's plus
+ * `.github/**`, `infra/**`, hook / package-manager / devcontainer
+ * directories, lockfiles, tool configuration and any package.json): every
+ * changed protected path (whatever its status), then every newly added
+ * `*.sh` (protected_paths.ts's isNewShellScript), then the package.json
+ * scripts flag (steps/pr_workflow_support.ts's packageJsonScriptsChanged,
+ * computed by the caller — subsumed by the package.json path line since
+ * any package.json change is protected, but kept as the more specific
+ * note). A new `*.sh` under a protected prefix yields both lines. Unlike
  * pr_fix's detectForbiddenChanges this never blocks: the result is stored on
  * the implement round, listed in the PR body's 確認して欲しい点 and the
  * Discord pr_opened notification, and makes implement_verify skip the check
@@ -230,7 +232,7 @@ export function classifyProtectedChanges(
 ): readonly string[] {
   const reasons: string[] = [];
   for (const change of changes) {
-    if (matchesForbiddenPath(change.path, IMPLEMENT_PROTECTED_PATH_PREFIXES)) {
+    if (matchesImplementProtectedPath(change.path)) {
       reasons.push(`保護パスを変更: ${change.path}`);
     }
   }
