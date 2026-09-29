@@ -37,10 +37,11 @@ import type {
   ImplementRoundMode,
   ImplementRoundRecord,
 } from "./types.ts";
-import type {
-  CommandRunner,
-  GitleaksResult,
-  WorktreeFingerprint,
+import {
+  type CommandRunner,
+  type GitleaksResult,
+  type WorktreeFingerprint,
+  WorktreeGitPointerModifiedError,
 } from "./workspace.ts";
 
 export const IMPLEMENT_FLOW_PATH = "f/factory/implement";
@@ -99,6 +100,11 @@ export type ImplementContext = {
   readonly requirements_console_url: string;
   /** Only then does the PR body carry the Windmill deploy checklist. */
   readonly is_factory_repo: boolean;
+  /** `<worktree_dir>/.git`'s bytes right after the worktree was ready
+   * (readWorktreeGitPointer). Every later git command in the worktree is
+   * preceded by assertWorktreeGitPointer against it: a Claude run that
+   * rewrote `.git` could point git at a gitdir whose config runs commands. */
+  readonly worktree_git_pointer: string;
 };
 
 /** implementPrompt / implementFixPrompt's shared input. The approved
@@ -374,6 +380,7 @@ export type ImplementLoopExit =
   | "stalled"
   | "diff_too_large"
   | "symlink"
+  | "git_pointer_modified"
   | "claude_error";
 
 export const IMPLEMENT_LOOP_EXITS: readonly ImplementLoopExit[] = [
@@ -385,6 +392,7 @@ export const IMPLEMENT_LOOP_EXITS: readonly ImplementLoopExit[] = [
   "stalled",
   "diff_too_large",
   "symlink",
+  "git_pointer_modified",
   "claude_error",
 ];
 
@@ -437,6 +445,9 @@ export type FixRoundRequest = {
 };
 
 export type ImplementLoopDeps = {
+  /** assertWorktreeGitPointer against the context's worktree_git_pointer;
+   * throws WorktreeGitPointerModifiedError when a Claude run changed it. */
+  readonly assertGitPointer: () => Promise<void>;
   /** Stages everything and fingerprints it (worktreeFingerprint, against base_sha). */
   readonly fingerprint: () => Promise<WorktreeFingerprint>;
   readonly inspectChanges: () => Promise<ChangeInspection>;
@@ -607,11 +618,27 @@ function reasonForExit(exit: ImplementLoopExit, round: number): string | null {
   }
 }
 
+/** The stop reason when the worktree's `.git` pointer changed; null when it
+ * is intact. Any other error from the check propagates. Shared by the loop
+ * and implement_finish (before preserveWork's scan and the final commit). */
+export async function gitPointerStopReason(
+  assertGitPointer: () => Promise<void>,
+): Promise<string | null> {
+  try {
+    await assertGitPointer();
+    return null;
+  } catch (err) {
+    if (err instanceof WorktreeGitPointerModifiedError) return err.message;
+    throw err;
+  }
+}
+
 /**
  * Checks one Claude round's worktree and either ends the loop or runs a fix
  * round, until the checks pass or skip, a guard fires, or Claude reports a
- * requirements gap. Per round, in this order: record-and-stop for a failed
- * run or a gap; fingerprint (stages everything, measures against
+ * requirements gap. Per round, in this order: the worktree's `.git` pointer
+ * check (a changed pointer stops the loop before any git command runs in
+ * the worktree); record-and-stop for a failed run or a gap; fingerprint (stages everything, measures against
  * base_sha); change inspection; the blocking stops (symlink, then diff
  * size); a round with no difference from the base fails as "no changes"
  * without running any check; otherwise gitleaks, then the check commands
@@ -653,6 +680,21 @@ export async function runImplementVerifyLoop(
       changed_paths: [],
       ...fields,
     });
+
+    const pointerReason = await gitPointerStopReason(deps.assertGitPointer);
+    if (pointerReason !== null) {
+      await deps.recordRound({
+        ...base,
+        outcome: "check_failed",
+        summary: current.kind === "claude_failed" ? "" : current.output.summary,
+        gap_report: null,
+        check_output: truncateCheckOutput(pointerReason),
+        checks_skipped_reason: null,
+        protected_changes: [],
+        diff_stat: null,
+      });
+      return stopped({ exit: "git_pointer_modified", reason: pointerReason });
+    }
 
     if (current.kind === "claude_failed") {
       const reason = `claude run failed (${current.reason}): ${current.detail}`;

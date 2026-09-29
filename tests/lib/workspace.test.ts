@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import {
   addDetachedWorktree,
+  assertWorktreeGitPointer,
   type CommandResult,
   commitAndPush,
   copyFileTo,
@@ -32,6 +33,7 @@ import {
   readGitShowFile,
   readStreamCapped,
   readTextFile,
+  readWorktreeGitPointer,
   removeEmptyDir,
   removeWorktree,
   resolveDefaultBranchHeadSha,
@@ -39,6 +41,7 @@ import {
   runCommand,
   runGitleaksOnWorktree,
   verifyWorktreeGitdir,
+  WorktreeGitPointerModifiedError,
   withCommitTrailers,
   withRepoLock,
   worktreeFingerprint,
@@ -1074,15 +1077,30 @@ describe("createGtrWorktree", () => {
 });
 
 describe("verifyWorktreeGitdir", () => {
+  const WT = "/tmp/repo-worktrees/contract-smoke-branch";
+  const GITDIR = "/tmp/repo/.git/worktrees/contract-smoke-branch";
+  // realpath stand-in: normalizes `..` like the real one (no symlinks here).
+  const normalize = async (path: string): Promise<string> => resolve(path);
+  function files(
+    pointer: string,
+    backPointer = `${WT}/.git\n`,
+  ): (path: string) => Promise<string> {
+    return async (path) => {
+      if (path === `${WT}/.git`) return pointer;
+      if (path.endsWith("/gitdir")) return backPointer;
+      throw new Error(`unexpected read: ${path}`);
+    };
+  }
+
   test("passes when the dir is registered and .git points under the repo's worktrees dir", async () => {
     const fake = createFakeCommandRunner([ok(REAL_WORKTREE_PORCELAIN)]);
     await expect(
       verifyWorktreeGitdir({
         run: fake.run,
         repoDir: "/tmp/repo",
-        dir: "/tmp/repo-worktrees/contract-smoke-branch",
-        readTextFile: async () =>
-          "gitdir: /tmp/repo/.git/worktrees/contract-smoke-branch\n",
+        dir: WT,
+        readTextFile: files(`gitdir: ${GITDIR}\n`),
+        realpath: normalize,
       }),
     ).resolves.toBeUndefined();
   });
@@ -1096,6 +1114,7 @@ describe("verifyWorktreeGitdir", () => {
         dir: "/tmp/not-a-worktree",
         readTextFile: async () =>
           "gitdir: /tmp/repo/.git/worktrees/not-a-worktree\n",
+        realpath: normalize,
       }),
     ).rejects.toThrow(/not registered/);
   });
@@ -1106,11 +1125,156 @@ describe("verifyWorktreeGitdir", () => {
       verifyWorktreeGitdir({
         run: fake.run,
         repoDir: "/tmp/repo",
-        dir: "/tmp/repo-worktrees/contract-smoke-branch",
-        readTextFile: async () =>
+        dir: WT,
+        readTextFile: files(
           "gitdir: /somewhere/else/.git/worktrees/contract-smoke-branch\n",
+        ),
+        realpath: normalize,
       }),
     ).rejects.toThrow(/does not point under/);
+  });
+
+  test("rejects a gitdir that climbs out of the worktrees dir with ..", async () => {
+    const fake = createFakeCommandRunner([ok(REAL_WORKTREE_PORCELAIN)]);
+    await expect(
+      verifyWorktreeGitdir({
+        run: fake.run,
+        repoDir: "/tmp/repo",
+        dir: WT,
+        readTextFile: files(
+          "gitdir: /tmp/repo/.git/worktrees/../../../evil\n",
+          "/tmp/evil/.git\n",
+        ),
+        realpath: normalize,
+      }),
+    ).rejects.toThrow(/does not point under/);
+  });
+
+  test("rejects a gitdir nested below a worktree's own admin dir", async () => {
+    const fake = createFakeCommandRunner([ok(REAL_WORKTREE_PORCELAIN)]);
+    await expect(
+      verifyWorktreeGitdir({
+        run: fake.run,
+        repoDir: "/tmp/repo",
+        dir: WT,
+        readTextFile: files(`gitdir: ${GITDIR}/nested\n`),
+        realpath: normalize,
+      }),
+    ).rejects.toThrow(/does not point under/);
+  });
+
+  test("rejects an admin dir whose back-pointer names another worktree", async () => {
+    const fake = createFakeCommandRunner([ok(REAL_WORKTREE_PORCELAIN)]);
+    await expect(
+      verifyWorktreeGitdir({
+        run: fake.run,
+        repoDir: "/tmp/repo",
+        dir: WT,
+        readTextFile: files(
+          `gitdir: ${GITDIR}\n`,
+          "/tmp/repo-worktrees/other/.git\n",
+        ),
+        realpath: normalize,
+      }),
+    ).rejects.toThrow(/back-pointer/);
+  });
+});
+
+describe("readWorktreeGitPointer", () => {
+  const WT = "/wt";
+  function pointerFs(
+    kind: "file" | "symlink" | "dir",
+    content = "gitdir: /r\n",
+  ) {
+    return {
+      lstat: async () => ({
+        isFile: () => kind === "file",
+        isSymbolicLink: () => kind === "symlink",
+      }),
+      readFile: async () => content,
+    };
+  }
+
+  test("returns the .git file's content", async () => {
+    expect(await readWorktreeGitPointer(WT, pointerFs("file"))).toEqual({
+      content: "gitdir: /r\n",
+    });
+  });
+
+  test("rejects a symlinked .git", async () => {
+    await expect(
+      readWorktreeGitPointer(WT, pointerFs("symlink")),
+    ).rejects.toThrow(/not a regular file/);
+  });
+
+  test("rejects a .git directory", async () => {
+    await expect(readWorktreeGitPointer(WT, pointerFs("dir"))).rejects.toThrow(
+      /not a regular file/,
+    );
+  });
+});
+
+describe("assertWorktreeGitPointer", () => {
+  const WT = "/wt";
+  function pointerFs(kind: "file" | "symlink", content: string) {
+    return {
+      lstat: async () => ({
+        isFile: () => kind === "file",
+        isSymbolicLink: () => kind === "symlink",
+      }),
+      readFile: async () => content,
+    };
+  }
+
+  test("passes when the pointer is unchanged", async () => {
+    await expect(
+      assertWorktreeGitPointer(
+        WT,
+        "gitdir: /r\n",
+        pointerFs("file", "gitdir: /r\n"),
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  test("throws WorktreeGitPointerModifiedError when the content differs", async () => {
+    await expect(
+      assertWorktreeGitPointer(
+        WT,
+        "gitdir: /r\n",
+        pointerFs("file", "gitdir: /evil\n"),
+      ),
+    ).rejects.toBeInstanceOf(WorktreeGitPointerModifiedError);
+  });
+
+  test("throws WorktreeGitPointerModifiedError when .git became a symlink", async () => {
+    await expect(
+      assertWorktreeGitPointer(
+        WT,
+        "gitdir: /r\n",
+        pointerFs("symlink", "gitdir: /r\n"),
+      ),
+    ).rejects.toBeInstanceOf(WorktreeGitPointerModifiedError);
+  });
+
+  test("throws WorktreeGitPointerModifiedError when .git is gone", async () => {
+    await expect(
+      assertWorktreeGitPointer(WT, "gitdir: /r\n", {
+        lstat: async () => {
+          throw new Error("ENOENT");
+        },
+        readFile: async () => "",
+      }),
+    ).rejects.toBeInstanceOf(WorktreeGitPointerModifiedError);
+  });
+
+  test("uses the fixed message", async () => {
+    await expect(
+      assertWorktreeGitPointer(
+        WT,
+        "gitdir: /r\n",
+        pointerFs("file", "gitdir: /evil\n"),
+      ),
+    ).rejects.toThrow(/^worktree git pointer was modified$/);
   });
 });
 

@@ -6,11 +6,12 @@
 
 import { normalizeRepoUrl } from "./config.ts";
 import type { NotifyEvent } from "./discord.ts";
-import type {
-  ImplementContext,
-  ImplementLoopExit,
-  ImplementLoopResult,
-  ImplementPrepareOutcome,
+import {
+  gitPointerStopReason,
+  type ImplementContext,
+  type ImplementLoopExit,
+  type ImplementLoopResult,
+  type ImplementPrepareOutcome,
 } from "./implement_loop.ts";
 import type { ImplementCheckSummary } from "./implement_support.ts";
 import { maskSecrets } from "./log.ts";
@@ -52,6 +53,7 @@ export function decideImplementFinishAction(
     case "cancelled":
       return { kind: "cancel" };
     case "needs_human":
+    case "git_pointer_modified":
       return { kind: "needs_human", preserveWork: false };
     case "checks_passed":
     case "checks_skipped":
@@ -110,16 +112,25 @@ export const IMPLEMENT_FINISH_NO_OUTPUT_REASON =
 export const IMPLEMENT_NO_CHANGES_REASON = "implement produced no changes";
 
 export type PreserveWorkDeps = {
+  /** assertWorktreeGitPointer against the context's worktree_git_pointer. */
+  readonly assertGitPointer: () => Promise<void>;
   /** runGitleaksOnWorktree on the implement worktree. */
   readonly scanForSecrets: () => Promise<GitleaksResult>;
   /** commitAndPush with IMPLEMENT_WIP_COMMIT_MESSAGE and the prepare-time expectedHeadSha. */
   readonly commitAndPush: () => Promise<CommitAndPushResult>;
 };
 
-/** Leaves a stopped loop's work on the branch — but never pushes a change
- * the fixed secret scan flagged, nor one it could not scan. Returns notes
+/** Leaves a stopped loop's work on the branch — but never runs git in a
+ * worktree whose `.git` pointer changed, and never pushes a change the
+ * fixed secret scan flagged, nor one it could not scan. Returns notes
  * (English reasons) to append to the needs_human reason; never throws. */
 export async function preserveWork(deps: PreserveWorkDeps): Promise<string[]> {
+  try {
+    const pointerReason = await gitPointerStopReason(deps.assertGitPointer);
+    if (pointerReason !== null) return [pointerReason];
+  } catch (err) {
+    return [finishFailureReason(err)];
+  }
   let scan: GitleaksResult;
   try {
     scan = await deps.scanForSecrets();

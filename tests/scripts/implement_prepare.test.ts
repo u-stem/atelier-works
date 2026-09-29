@@ -26,6 +26,8 @@ const INPUT: BuildImplementContextInput = {
   worktreeDir: "/workspaces/acme/widgets/factory-issue-7-wi-3",
   factoryCloneDir: "/workspaces/factory/atelier-works",
   expectedHeadSha: BASE,
+  worktreeGitPointer:
+    "gitdir: /workspaces/acme/widgets/main/.git/worktrees/factory-issue-7-wi-3\n",
   existingPr: null,
   config: {
     windmill_public_url: "http://127.0.0.1:8080",
@@ -83,6 +85,12 @@ describe("buildImplementContext", () => {
 
   test("marks a repo that is not the factory repo", () => {
     expect(buildImplementContext(INPUT).is_factory_repo).toBe(false);
+  });
+
+  test("carries the worktree's .git pointer", () => {
+    expect(buildImplementContext(INPUT).worktree_git_pointer).toBe(
+      "gitdir: /workspaces/acme/widgets/main/.git/worktrees/factory-issue-7-wi-3\n",
+    );
   });
 
   test("uses the work item's attempt", () => {

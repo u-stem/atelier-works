@@ -33,9 +33,10 @@ import type {
   AgentRunRecord,
   ImplementRoundRecord,
 } from "../../f/factory/lib/types.ts";
-import type {
-  GitleaksResult,
-  WorktreeFingerprint,
+import {
+  type GitleaksResult,
+  type WorktreeFingerprint,
+  WorktreeGitPointerModifiedError,
 } from "../../f/factory/lib/workspace.ts";
 
 const DONE: ImplementClaudeOutput = {
@@ -81,6 +82,8 @@ const CONTEXT: ImplementContext = {
   requirements_console_url:
     "http://127.0.0.1:8080/apps/get/f/factory/factory_console#requirements/3",
   is_factory_repo: false,
+  worktree_git_pointer:
+    "gitdir: /workspaces/acme/widgets/main/.git/worktrees/factory-issue-7-wi-3\n",
 };
 const AGENT_RUN: AgentRunRecord = {
   work_item_id: 3,
@@ -508,6 +511,8 @@ type HarnessOptions = {
   readonly checks?: readonly (readonly LoopCheckResult[])[];
   readonly fixRounds?: readonly ImplementClaudeRound[];
   readonly budgetExceeded?: boolean;
+  /** Thrown by assertGitPointer from this 0-based call on. */
+  readonly pointerError?: { readonly from: number; readonly error: Error };
 };
 
 type Harness = {
@@ -515,14 +520,23 @@ type Harness = {
   readonly recorded: ImplementRoundRecord[];
   readonly fixRequests: FixRoundRequest[];
   readonly calls: { gitleaks: number; checks: number; fingerprint: number };
+  readonly events: string[];
 };
 
 function harness(options: HarnessOptions = {}): Harness {
   const recorded: ImplementRoundRecord[] = [];
   const fixRequests: FixRoundRequest[] = [];
   const calls = { gitleaks: 0, checks: 0, fingerprint: 0 };
+  const events: string[] = [];
   const deps: ImplementLoopDeps = {
+    assertGitPointer: async () => {
+      const index = events.filter((event) => event === "pointer").length;
+      events.push("pointer");
+      const failure = options.pointerError;
+      if (failure !== undefined && index >= failure.from) throw failure.error;
+    },
     fingerprint: async () => {
+      events.push("fingerprint");
       const value = pick(options.fingerprints ?? [FP_1], calls.fingerprint);
       calls.fingerprint += 1;
       return value;
@@ -552,7 +566,7 @@ function harness(options: HarnessOptions = {}): Harness {
     dailyBudgetExceeded: async () => options.budgetExceeded ?? false,
     log: () => {},
   };
-  return { deps, recorded, fixRequests, calls };
+  return { deps, recorded, fixRequests, calls, events };
 }
 
 function loopInput(
@@ -834,5 +848,80 @@ describe("runImplementVerifyLoop", () => {
     });
     await run(h);
     expect(h.fixRequests).toHaveLength(1);
+  });
+
+  test("checks the worktree's .git pointer before fingerprinting", async () => {
+    const h = harness();
+    await run(h);
+    expect(h.events.slice(0, 2)).toEqual(["pointer", "fingerprint"]);
+  });
+
+  test("checks the .git pointer again after a fix round", async () => {
+    const h = harness({ checks: [[FAIL], [PASS]], fingerprints: [FP_1, FP_2] });
+    await run(h);
+    expect(h.events.filter((event) => event === "pointer")).toHaveLength(2);
+  });
+
+  test("exits git_pointer_modified when the .git pointer changed", async () => {
+    const h = harness({
+      pointerError: { from: 0, error: new WorktreeGitPointerModifiedError() },
+    });
+    expect((await run(h)).exit).toBe("git_pointer_modified");
+  });
+
+  test("runs no git command after a modified .git pointer", async () => {
+    const h = harness({
+      pointerError: { from: 0, error: new WorktreeGitPointerModifiedError() },
+    });
+    await run(h);
+    expect(h.calls.fingerprint).toBe(0);
+  });
+
+  test("uses the pointer error's text as the reason", async () => {
+    const h = harness({
+      pointerError: { from: 0, error: new WorktreeGitPointerModifiedError() },
+    });
+    expect((await run(h)).reason).toBe("worktree git pointer was modified");
+  });
+
+  test("records a modified .git pointer as a check_failed round", async () => {
+    const h = harness({
+      pointerError: { from: 0, error: new WorktreeGitPointerModifiedError() },
+    });
+    await run(h);
+    expect(h.recorded[0]?.outcome).toBe("check_failed");
+  });
+
+  test("records the pointer reason in check_output", async () => {
+    const h = harness({
+      pointerError: { from: 0, error: new WorktreeGitPointerModifiedError() },
+    });
+    await run(h);
+    expect(h.recorded[0]?.check_output).toBe(
+      "worktree git pointer was modified",
+    );
+  });
+
+  test("stops a fix round that modified the .git pointer", async () => {
+    const h = harness({
+      checks: [[FAIL], [PASS]],
+      fingerprints: [FP_1, FP_2],
+      pointerError: { from: 1, error: new WorktreeGitPointerModifiedError() },
+    });
+    expect((await run(h)).exit).toBe("git_pointer_modified");
+  });
+
+  test("checks the .git pointer even after a failed Claude run", async () => {
+    const h = harness({
+      pointerError: { from: 0, error: new WorktreeGitPointerModifiedError() },
+    });
+    expect((await run(h, loopInput(FAILED))).exit).toBe("git_pointer_modified");
+  });
+
+  test("rethrows any other error from the pointer check", async () => {
+    const h = harness({
+      pointerError: { from: 0, error: new Error("EIO") },
+    });
+    await expect(run(h)).rejects.toThrow("EIO");
   });
 });

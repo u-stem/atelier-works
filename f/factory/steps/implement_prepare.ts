@@ -9,6 +9,8 @@
 // branch is already checked out — createGtrWorktree takes its reuse path
 // before that) and publishes the branch empty so every later push can use
 // commitAndPush unchanged (design §0b). Once the worktree is ready it
+// verifies the worktree's `.git` pointer (verifyWorktreeGitdir) and records
+// its bytes (worktree_git_pointer, re-checked after every Claude run), then
 // records the branch's merge-base with the default branch (base_sha), the
 // baseline every verify round is measured against. Returns one
 // ImplementContext for the later steps; a stop returns an outcome and a
@@ -55,8 +57,10 @@ import {
   listWorktrees,
   mergeBaseSha,
   pushNewBranch,
+  readWorktreeGitPointer,
   resolveDefaultBranchName,
   runCommand,
+  verifyWorktreeGitdir,
 } from "../lib/workspace.ts";
 import { evaluateRepoAllowedGuard } from "./pr_workflow_support.ts";
 
@@ -81,6 +85,8 @@ export type BuildImplementContextInput = {
   readonly worktreeDir: string;
   readonly factoryCloneDir: string;
   readonly expectedHeadSha: string;
+  /** readWorktreeGitPointer(worktreeDir).content once the worktree was ready. */
+  readonly worktreeGitPointer: string;
   readonly existingPr: PullRequestRef | null;
   readonly config: Pick<FactoryConfig, "windmill_public_url" | "factory_repo">;
 };
@@ -126,6 +132,7 @@ export function buildImplementContext(
       workItem.owner,
       workItem.repo,
     ),
+    worktree_git_pointer: input.worktreeGitPointer,
   };
 }
 
@@ -223,6 +230,11 @@ export async function main(
       (await pushNewBranch({ run: runCommand, repoDir, branch, ghToken }))
         .pushed,
   });
+  // The baseline for every later pointer check: a pointer a previous run
+  // left redirected must not become the trusted value.
+  await verifyWorktreeGitdir({ run: runCommand, repoDir, dir: worktreeDir });
+  const worktreeGitPointer = (await readWorktreeGitPointer(worktreeDir))
+    .content;
   await setWorkItemBranch(work_item_id, branch);
   const expectedHeadSha = await currentRemoteHeadSha({
     run: runCommand,
@@ -260,6 +272,7 @@ export async function main(
       worktreeDir,
       factoryCloneDir: factoryClone.dir,
       expectedHeadSha,
+      worktreeGitPointer,
       existingPr,
       config,
     }),

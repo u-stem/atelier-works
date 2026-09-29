@@ -324,6 +324,12 @@ describe("describeReason (implement flow)", () => {
       "秘密情報らしき文字列を検出したため、変更をpushしていません",
     );
   });
+
+  test("translates a modified worktree .git pointer", () => {
+    expect(describeReason("worktree git pointer was modified")).toBe(
+      "worktreeのgitの参照先(.gitファイル)が書き換えられました",
+    );
+  });
 });
 
 describe("nextActionFor (implement flow)", () => {
@@ -348,6 +354,12 @@ describe("nextActionFor (implement flow)", () => {
   test("asks to clean the diff when secrets blocked the push", () => {
     expect(nextActionFor("secrets detected, changes not pushed")).toBe(
       "worktreeの差分を確認し、秘密情報を取り除いてから人が対応してください",
+    );
+  });
+
+  test("asks to inspect the branch after a modified .git pointer", () => {
+    expect(nextActionFor("worktree git pointer was modified")).toBe(
+      "実装ブランチとworktreeを人が確認し、不審な変更があればブランチを削除してください",
     );
   });
 });

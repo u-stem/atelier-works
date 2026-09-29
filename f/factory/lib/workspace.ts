@@ -66,11 +66,13 @@
 import {
   access,
   copyFile,
+  lstat,
   mkdir,
   mkdtemp,
   open,
   readdir,
   readFile,
+  realpath,
   rename,
   rm,
   rmdir,
@@ -79,7 +81,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { maskSecrets } from "./log.ts";
 import {
   assertBranchName,
@@ -719,14 +721,20 @@ export type VerifyWorktreeGitdirOptions = {
   readonly repoDir: string;
   readonly dir: string;
   readonly readTextFile?: (path: string) => Promise<string>;
+  readonly realpath?: (path: string) => Promise<string>;
 };
 
 /**
  * Before running git *inside* a worktree directory, confirm it's actually a
- * registered worktree of `repoDir` (per `git worktree list`) and that its
- * `.git` file's `gitdir:` target lives under `<repoDir>/.git/worktrees/`.
- * Throws otherwise — guards against operating on a worktree directory whose
- * `.git` file was redirected elsewhere.
+ * registered worktree of `repoDir` (per `git worktree list`), that its
+ * `.git` file's `gitdir:` target — resolved with realpath, so neither `..`
+ * nor a symlink can smuggle it elsewhere — is a direct child of
+ * `realpath(<repoDir>/.git/worktrees)`, and that the admin dir's `gitdir`
+ * back-pointer (the file `git worktree add` writes) names
+ * `<realpath(dir)>/.git`. Throws otherwise — guards against operating on a
+ * worktree directory whose `.git` file was redirected elsewhere (a
+ * redirected gitdir brings its own `config`, e.g. a `filter.<x>.clean`
+ * command the next `git add` would run).
  */
 export async function verifyWorktreeGitdir(
   opts: VerifyWorktreeGitdirOptions,
@@ -741,18 +749,94 @@ export async function verifyWorktreeGitdir(
 
   const readTextFile =
     opts.readTextFile ?? ((path: string) => readFile(path, "utf8"));
+  const resolveReal = opts.realpath ?? ((path: string) => realpath(path));
   const content = (await readTextFile(`${opts.dir}/.git`)).trim();
   const match = content.match(/^gitdir:\s*(.+)$/);
-  const expectedPrefix = `${opts.repoDir}/.git/worktrees/`;
-  if (
-    match === null ||
-    match[1] === undefined ||
-    !match[1].startsWith(expectedPrefix)
-  ) {
+  const worktreesDir = `${opts.repoDir}/.git/worktrees`;
+  const notUnder = new Error(
+    `worktree ${opts.dir}: .git file does not point under ${worktreesDir}/`,
+  );
+  if (match === null || match[1] === undefined) throw notUnder;
+  let realTarget: string;
+  let realWorktreesDir: string;
+  try {
+    realTarget = await resolveReal(resolve(opts.dir, match[1]));
+    realWorktreesDir = await resolveReal(worktreesDir);
+  } catch {
+    throw notUnder;
+  }
+  if (dirname(realTarget) !== realWorktreesDir) throw notUnder;
+
+  const backPointer = (await readTextFile(`${realTarget}/gitdir`)).trim();
+  const expectedBackPointer = `${await resolveReal(opts.dir)}/.git`;
+  if (backPointer !== expectedBackPointer) {
     throw new Error(
-      `worktree ${opts.dir}: .git file does not point under ${expectedPrefix}`,
+      `worktree ${opts.dir}: the admin dir's gitdir back-pointer names ${backPointer}, not ${expectedBackPointer}`,
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+// Worktree .git pointer snapshot (implement flow, 工程3 design §3)
+// ---------------------------------------------------------------------------
+
+/** The two fs calls readWorktreeGitPointer makes; injectable for tests. */
+export type WorktreeGitPointerFs = {
+  readonly lstat: (path: string) => Promise<{
+    isFile(): boolean;
+    isSymbolicLink(): boolean;
+  }>;
+  readonly readFile: (path: string) => Promise<string>;
+};
+
+const defaultWorktreeGitPointerFs: WorktreeGitPointerFs = {
+  lstat: (path) => lstat(path),
+  readFile: (path) => readFile(path, "utf8"),
+};
+
+export const WORKTREE_GIT_POINTER_MODIFIED_MESSAGE =
+  "worktree git pointer was modified";
+
+/** A Claude run changed (or replaced) the worktree's `.git` file: the next
+ * git command there would read another gitdir's config and hooks. */
+export class WorktreeGitPointerModifiedError extends Error {
+  constructor() {
+    super(WORKTREE_GIT_POINTER_MODIFIED_MESSAGE);
+    this.name = "WorktreeGitPointerModifiedError";
+  }
+}
+
+/** `<worktreeDir>/.git`'s bytes — only when it is a regular file (lstat: not
+ * a symlink, not a directory). implement_prepare records it right after the
+ * worktree is ready, before any Claude run. */
+export async function readWorktreeGitPointer(
+  worktreeDir: string,
+  fs: WorktreeGitPointerFs = defaultWorktreeGitPointerFs,
+): Promise<{ readonly content: string }> {
+  const path = `${worktreeDir}/.git`;
+  const stats = await fs.lstat(path);
+  if (stats.isSymbolicLink() || !stats.isFile()) {
+    throw new Error(`worktree ${worktreeDir}: .git is not a regular file`);
+  }
+  return { content: await fs.readFile(path) };
+}
+
+/** Re-reads `<worktreeDir>/.git` and throws WorktreeGitPointerModifiedError
+ * when it differs from `expected` in any byte, is no longer a regular file,
+ * or cannot be read at all. Call it after every Claude run, before the
+ * first git command in the worktree. */
+export async function assertWorktreeGitPointer(
+  worktreeDir: string,
+  expected: string,
+  fs: WorktreeGitPointerFs = defaultWorktreeGitPointerFs,
+): Promise<void> {
+  let current: string;
+  try {
+    current = (await readWorktreeGitPointer(worktreeDir, fs)).content;
+  } catch {
+    throw new WorktreeGitPointerModifiedError();
+  }
+  if (current !== expected) throw new WorktreeGitPointerModifiedError();
 }
 
 // ---------------------------------------------------------------------------

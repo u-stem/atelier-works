@@ -1,6 +1,7 @@
 // PathScript step 3/4 of f/factory/implement (工程3 design §2
 // implement_verify): binds the real I/O into lib/implement_loop.ts's
-// runImplementVerifyLoop — staged-worktree fingerprint and change listing
+// runImplementVerifyLoop — the worktree `.git` pointer check against the
+// context's worktree_git_pointer, staged-worktree fingerprint and change listing
 // against the context's base_sha (the branch's merge-base with the default
 // branch), symlink and package.json-scripts detection, the implement
 // diff-size limits, the fixed gitleaks scan, the repo's check commands
@@ -33,6 +34,7 @@ import { logger } from "../lib/log.ts";
 import { implementFixPrompt } from "../lib/prompts.ts";
 import { isOneOf } from "../lib/types.ts";
 import {
+  assertWorktreeGitPointer,
   readGitShowFile,
   runCommand,
   runGitleaksOnWorktree,
@@ -123,6 +125,8 @@ export async function main(
   try {
     return await runImplementVerifyLoop(
       {
+        assertGitPointer: () =>
+          assertWorktreeGitPointer(worktreeDir, context.worktree_git_pointer),
         fingerprint: () =>
           worktreeFingerprint({
             run: runCommand,

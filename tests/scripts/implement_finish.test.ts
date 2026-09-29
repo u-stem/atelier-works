@@ -1,9 +1,28 @@
 import { describe, expect, test } from "bun:test";
 import { SECRETS_NOT_PUSHED_REASON } from "../../f/factory/lib/implement_finish_support.ts";
 import {
+  needsHumanBaseReason,
   selectImplementNextAction,
   transitionResult,
 } from "../../f/factory/steps/implement_finish.ts";
+
+describe("needsHumanBaseReason", () => {
+  test("uses the loop's reason for a stop that keeps no work", () => {
+    expect(
+      needsHumanBaseReason("worktree git pointer was modified", null),
+    ).toBe("worktree git pointer was modified");
+  });
+
+  test("uses prepare's reason when the loop did not run", () => {
+    expect(
+      needsHumanBaseReason(null, "no approved requirements for attempt 2"),
+    ).toBe("no approved requirements for attempt 2");
+  });
+
+  test("falls back to a generic reason", () => {
+    expect(needsHumanBaseReason(null, null)).toBe("needs human attention");
+  });
+});
 
 describe("selectImplementNextAction", () => {
   const base = {

@@ -2621,6 +2621,12 @@ const REASON_RULES: readonly ReasonRule[] = [
     nextAction: () =>
       "worktreeの差分を確認し、秘密情報を取り除いてから人が対応してください",
   },
+  {
+    pattern: /^worktree git pointer was modified$/,
+    describe: () => "worktreeのgitの参照先(.gitファイル)が書き換えられました",
+    nextAction: () =>
+      "実装ブランチとworktreeを人が確認し、不審な変更があればブランチを削除してください",
+  },
 ];
 
 /**

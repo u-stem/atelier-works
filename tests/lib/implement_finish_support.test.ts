@@ -16,9 +16,10 @@ import {
   shouldDeleteBranchOnGap,
   toDiscordChecks,
 } from "../../f/factory/lib/implement_finish_support.ts";
-import type {
-  CommitAndPushResult,
-  GitleaksResult,
+import {
+  type CommitAndPushResult,
+  type GitleaksResult,
+  WorktreeGitPointerModifiedError,
 } from "../../f/factory/lib/workspace.ts";
 
 describe("mergeImplementOutcome", () => {
@@ -75,6 +76,13 @@ describe("decideImplementFinishAction", () => {
     expect(decideImplementFinishAction("symlink")).toEqual({
       kind: "needs_human",
       preserveWork: true,
+    });
+  });
+
+  test("keeps nothing after the worktree's .git pointer changed", () => {
+    expect(decideImplementFinishAction("git_pointer_modified")).toEqual({
+      kind: "needs_human",
+      preserveWork: false,
     });
   });
 
@@ -152,12 +160,23 @@ describe("preserveWork", () => {
   function preserveDeps(
     scan: () => Promise<GitleaksResult>,
     push: () => Promise<CommitAndPushResult> = async () => PUSHED,
-  ): { deps: PreserveWorkDeps; pushes: { count: number } } {
+    assertGitPointer: () => Promise<void> = async () => {},
+  ): {
+    deps: PreserveWorkDeps;
+    pushes: { count: number };
+    scans: { count: number };
+  } {
     const pushes = { count: 0 };
+    const scans = { count: 0 };
     return {
       pushes,
+      scans,
       deps: {
-        scanForSecrets: scan,
+        assertGitPointer,
+        scanForSecrets: async () => {
+          scans.count += 1;
+          return scan();
+        },
         commitAndPush: async () => {
           pushes.count += 1;
           return push();
@@ -219,6 +238,39 @@ describe("preserveWork", () => {
     expect(await preserveWork(preserveDeps(CLEAN_SCAN, moved).deps)).toEqual([
       `branch head moved to ${"e".repeat(40)} while implementing`,
     ]);
+  });
+
+  const MODIFIED_POINTER = async (): Promise<void> => {
+    throw new WorktreeGitPointerModifiedError();
+  };
+
+  test("reports a modified .git pointer instead of pushing", async () => {
+    expect(
+      await preserveWork(
+        preserveDeps(CLEAN_SCAN, undefined, MODIFIED_POINTER).deps,
+      ),
+    ).toEqual(["worktree git pointer was modified"]);
+  });
+
+  test("does not scan when the .git pointer changed", async () => {
+    const h = preserveDeps(CLEAN_SCAN, undefined, MODIFIED_POINTER);
+    await preserveWork(h.deps);
+    expect(h.scans.count).toBe(0);
+  });
+
+  test("does not push when the .git pointer changed", async () => {
+    const h = preserveDeps(CLEAN_SCAN, undefined, MODIFIED_POINTER);
+    await preserveWork(h.deps);
+    expect(h.pushes.count).toBe(0);
+  });
+
+  test("reports a failed pointer check as a finish failure", async () => {
+    const broken = async (): Promise<void> => {
+      throw new Error("EIO");
+    };
+    expect(
+      (await preserveWork(preserveDeps(CLEAN_SCAN, undefined, broken).deps))[0],
+    ).toMatch(/^implement finish failed: /);
   });
 
   test("reports a failed push as a finish failure", async () => {

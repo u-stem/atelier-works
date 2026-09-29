@@ -15,10 +15,13 @@
 //     PR uses it, reroute to f/factory/pipeline at attempt+1 (needs_human
 //     past max_attempts) — status updates before runFlowAsync, as in
 //     pr_fix_finish's reroute.
-//   needs_human: after a loop guard, push what is there when gitleaks
-//     passes (preserveWork), so the branch is inspectable; then notice +
-//     Discord.
+//   needs_human: after a loop guard, push what is there when the worktree's
+//     `.git` pointer is unchanged and gitleaks passes (preserveWork), so the
+//     branch is inspectable; then notice + Discord.
 //   cancel: the Issue was closed (by prepare, or re-checked here).
+// Every git command in the worktree (preserveWork's scan and commit, the
+// final commit) is preceded by the `.git` pointer check; a changed pointer
+// ends needs_human without a push.
 
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "../lib/config.ts";
@@ -61,6 +64,7 @@ import {
 } from "../lib/implement_finish_support.ts";
 import {
   GITLEAKS_TIMEOUT_MS,
+  gitPointerStopReason,
   IMPLEMENT_LOOP_EXITS,
   IMPLEMENT_PREPARE_OUTCOMES,
   type ImplementContext,
@@ -73,6 +77,7 @@ import {
 import { logger, maskSecrets } from "../lib/log.ts";
 import { isOneOf, type WorkItemStatus } from "../lib/types.ts";
 import {
+  assertWorktreeGitPointer,
   type CommitAndPushOptions,
   commitAndPush,
   deleteLocalBranch,
@@ -123,6 +128,15 @@ export function selectImplementNextAction(input: {
     return implementNeedsHumanNextAction(input.branch);
   }
   return nextActionFor(input.reason);
+}
+
+/** needs_human's primary reason: the loop's stop reason when the loop ran
+ * (whether or not its work is kept), otherwise prepare's. */
+export function needsHumanBaseReason(
+  loopReason: string | null,
+  prepareReason: string | null,
+): string {
+  return loopReason ?? prepareReason ?? "needs human attention";
 }
 
 function errorText(err: unknown): string {
@@ -259,7 +273,11 @@ export async function main(
     ghToken,
   });
 
+  const assertGitPointer = (ctx: ImplementContext) => (): Promise<void> =>
+    assertWorktreeGitPointer(ctx.worktree_dir, ctx.worktree_git_pointer);
+
   const preserveWorkDeps = (ctx: ImplementContext): PreserveWorkDeps => ({
+    assertGitPointer: assertGitPointer(ctx),
     scanForSecrets: () =>
       runGitleaksOnWorktree({
         run: runCommand,
@@ -271,9 +289,10 @@ export async function main(
   });
 
   if (action.kind === "needs_human") {
-    const baseReason =
-      (action.preserveWork ? loop_result?.reason : prepare_reason) ??
-      "needs human attention";
+    const baseReason = needsHumanBaseReason(
+      loop_result?.reason ?? null,
+      prepare_reason,
+    );
     const notes =
       action.preserveWork && context !== null
         ? await preserveWork(preserveWorkDeps(context))
@@ -389,6 +408,8 @@ export async function main(
     if (output === null || checks === null)
       return { ok: false, reason: IMPLEMENT_FINISH_NO_OUTPUT_REASON };
     try {
+      const pointerReason = await gitPointerStopReason(assertGitPointer(ctx));
+      if (pointerReason !== null) return { ok: false, reason: pointerReason };
       const subject = normalizeJapaneseText(output.commit_subject).trim();
       const message = buildImplementCommitMessage(
         {
