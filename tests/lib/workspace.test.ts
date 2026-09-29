@@ -16,13 +16,16 @@ import {
   ensureRepo,
   factoryCloneLockPath,
   fetchPrHeadRef,
+  isCappedOutput,
   type LockFs,
   listWorktrees,
+  omittedMarker,
   pathExists,
   pruneWorktrees,
   pushNewBranch,
   readDirEntries,
   readGitShowFile,
+  readStreamCapped,
   readTextFile,
   removeEmptyDir,
   removeWorktree,
@@ -2058,5 +2061,80 @@ describe("currentRemoteHeadSha", () => {
         branch: BRANCH,
       }),
     ).rejects.toThrow();
+  });
+});
+
+function streamOf(...parts: string[]): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const part of parts) controller.enqueue(encoder.encode(part));
+      controller.close();
+    },
+  });
+}
+
+describe("readStreamCapped", () => {
+  test("returns the whole text when it fits", async () => {
+    expect(await readStreamCapped(streamOf("abc", "def"), 100)).toBe("abcdef");
+  });
+
+  test("keeps the first and last halves around an omission marker", async () => {
+    expect(await readStreamCapped(streamOf("0123456789"), 4)).toBe(
+      `01${omittedMarker(6)}89`,
+    );
+  });
+
+  test("counts omitted bytes across chunk boundaries", async () => {
+    expect(await readStreamCapped(streamOf("ab", "cd", "ef", "gh"), 4)).toBe(
+      `ab${omittedMarker(4)}gh`,
+    );
+  });
+
+  test("keeps only the tail of a chunk larger than the tail limit", async () => {
+    expect(await readStreamCapped(streamOf("ab", "cdefghij"), 4)).toBe(
+      `ab${omittedMarker(6)}ij`,
+    );
+  });
+});
+
+describe("isCappedOutput", () => {
+  test("detects the omission marker", () => {
+    expect(isCappedOutput(`head${omittedMarker(12)}tail`)).toBe(true);
+  });
+
+  test("does not flag uncapped text", () => {
+    expect(isCappedOutput("[]")).toBe(false);
+  });
+});
+
+describe("createBunCommandRunner maxOutputBytes", () => {
+  test("keeps at most maxOutputBytes of stdout plus the marker", async () => {
+    const result = await runCommand(["sh", "-c", "yes x | head -c 100000"], {
+      maxOutputBytes: 1000,
+    });
+    expect(result.stdout.length).toBeLessThan(1100);
+  });
+
+  test("marks capped stdout with the omission marker", async () => {
+    const result = await runCommand(["sh", "-c", "yes x | head -c 100000"], {
+      maxOutputBytes: 1000,
+    });
+    expect(isCappedOutput(result.stdout)).toBe(true);
+  });
+
+  test("caps stderr independently", async () => {
+    const result = await runCommand(
+      ["sh", "-c", "yes x | head -c 100000 1>&2"],
+      { maxOutputBytes: 1000 },
+    );
+    expect(result.stderr.length).toBeLessThan(1100);
+  });
+
+  test("still reports the exit code", async () => {
+    const result = await runCommand(["sh", "-c", "exit 3"], {
+      maxOutputBytes: 1000,
+    });
+    expect(result.exitCode).toBe(3);
   });
 });

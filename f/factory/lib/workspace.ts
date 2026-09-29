@@ -102,6 +102,13 @@ export type CommandRunOptions = {
   readonly env?: Readonly<Record<string, string>>;
   readonly stdin?: string;
   readonly timeoutMs?: number;
+  /** Per-stream ceiling on the bytes kept from stdout and from stderr
+   * (工程3 design §14: untrusted command output must not rely on post-hoc
+   * truncation alone). The stream is still drained to the end, so the child
+   * never blocks on a full pipe, but only the first and the last half of
+   * this many bytes are kept, joined by `omittedMarker`. Omitted: keep
+   * everything (the previous behaviour). */
+  readonly maxOutputBytes?: number;
 };
 
 export type CommandRunner = (
@@ -140,6 +147,91 @@ function killProcessGroup(pid: number, signal: "SIGTERM" | "SIGKILL"): void {
   }
 }
 
+const OMITTED_MARKER_PATTERN = /\[\.\.\. \d+ bytes omitted \.\.\.\]/;
+
+/** The text readStreamCapped puts between the kept head and tail. */
+export function omittedMarker(bytes: number): string {
+  return `\n[... ${String(bytes)} bytes omitted ...]\n`;
+}
+
+/** Whether readStreamCapped dropped bytes from `text` (a machine-readable
+ * report cut this way must not be parsed). */
+export function isCappedOutput(text: string): boolean {
+  return OMITTED_MARKER_PATTERN.test(text);
+}
+
+/** Reads `stream` to the end, keeping the first `floor(maxBytes / 2)` bytes
+ * in a fixed head buffer and the last `maxBytes - floor(maxBytes / 2)`
+ * bytes in a fixed ring buffer (chunks are copied in; nothing grows with
+ * the stream). When bytes in between were dropped, the two parts are
+ * decoded separately and joined by `omittedMarker(droppedBytes)` (a
+ * multi-byte character cut at either edge decodes to U+FFFD). */
+export async function readStreamCapped(
+  stream: ReadableStream<Uint8Array>,
+  maxBytes: number,
+): Promise<string> {
+  const headLimit = Math.floor(maxBytes / 2);
+  const tailLimit = maxBytes - headLimit;
+  const head = new Uint8Array(headLimit);
+  let headSize = 0;
+  const ring = new Uint8Array(tailLimit);
+  let ringStart = 0;
+  let ringSize = 0;
+  let omitted = 0;
+
+  const pushTail = (bytes: Uint8Array): void => {
+    if (tailLimit === 0) {
+      omitted += bytes.byteLength;
+      return;
+    }
+    if (bytes.byteLength >= tailLimit) {
+      omitted += ringSize + (bytes.byteLength - tailLimit);
+      ring.set(bytes.subarray(bytes.byteLength - tailLimit), 0);
+      ringStart = 0;
+      ringSize = tailLimit;
+      return;
+    }
+    const overflow = ringSize + bytes.byteLength - tailLimit;
+    if (overflow > 0) {
+      ringStart = (ringStart + overflow) % tailLimit;
+      ringSize -= overflow;
+      omitted += overflow;
+    }
+    const writeAt = (ringStart + ringSize) % tailLimit;
+    const firstPart = Math.min(bytes.byteLength, tailLimit - writeAt);
+    ring.set(bytes.subarray(0, firstPart), writeAt);
+    ring.set(bytes.subarray(firstPart), 0);
+    ringSize += bytes.byteLength;
+  };
+
+  const reader = stream.getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    let offset = 0;
+    if (headSize < headLimit) {
+      const take = Math.min(headLimit - headSize, value.byteLength);
+      head.set(value.subarray(0, take), headSize);
+      headSize += take;
+      offset = take;
+    }
+    if (offset < value.byteLength) pushTail(value.subarray(offset));
+  }
+
+  const tail = new Uint8Array(ringSize);
+  const firstPart = Math.min(ringSize, tailLimit - ringStart);
+  tail.set(ring.subarray(ringStart, ringStart + firstPart), 0);
+  tail.set(ring.subarray(0, ringSize - firstPart), firstPart);
+  const decoder = new TextDecoder();
+  if (omitted === 0) {
+    const whole = new Uint8Array(headSize + ringSize);
+    whole.set(head.subarray(0, headSize), 0);
+    whole.set(tail, headSize);
+    return decoder.decode(whole);
+  }
+  return `${decoder.decode(head.subarray(0, headSize))}${omittedMarker(omitted)}${decoder.decode(tail)}`;
+}
+
 export function createBunCommandRunner(
   options: BunCommandRunnerOptions = {},
 ): CommandRunner {
@@ -175,9 +267,13 @@ export function createBunCommandRunner(
       }, killGraceMs);
     }, runOptions.timeoutMs ?? DEFAULT_TIMEOUT_MS);
 
+    const readOutput = (stream: ReadableStream<Uint8Array>): Promise<string> =>
+      runOptions.maxOutputBytes === undefined
+        ? new Response(stream).text()
+        : readStreamCapped(stream, runOptions.maxOutputBytes);
     const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
+      readOutput(proc.stdout),
+      readOutput(proc.stderr),
       proc.exited,
     ]);
     clearTimeout(timer);
