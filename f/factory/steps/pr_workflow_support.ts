@@ -2548,6 +2548,79 @@ const REASON_RULES: readonly ReasonRule[] = [
       `再レビューをリクエストできませんでした: ${describeReason(m[1] ?? "")}`,
     nextAction: (m) => nextActionFor(m[1] ?? ""),
   },
+  // 工程3 implement flow (lib/implement_loop.ts's loop exits,
+  // lib/implement_finish_support.ts, lib/implement_launch_support.ts,
+  // steps/implement_*.ts). Kept after every existing rule so the unanchored
+  // workflow-scope rule above still wins for a push failure wrapped in
+  // "implement finish failed: ...".
+  {
+    pattern: /^implement checks still failing after (\d+) rounds$/,
+    describe: (m) => `${m[1]}ラウンド修正しても検査に通りませんでした`,
+    nextAction: () => CHECK_COMMAND_NEXT_ACTION,
+  },
+  {
+    pattern: /^implement stalled after round (\d+)$/,
+    describe: (m) =>
+      `ラウンド${m[1]}で修正が停滞しました(差分か検査結果が前のラウンドと同じです)`,
+    nextAction: () => CHECK_COMMAND_NEXT_ACTION,
+  },
+  {
+    pattern: /^claude run failed \(([^)]+)\): ([\s\S]+)$/,
+    describe: (m) => `Claudeの実行に失敗しました(${m[1]}): ${m[2]}`,
+    nextAction: () => GENERIC_NEXT_ACTION,
+  },
+  {
+    pattern: /^no approved requirements for attempt (\d+)$/,
+    describe: (m) => `attempt ${m[1]}の承認済み要件定義が見つかりません`,
+    nextAction: () =>
+      "要件定義を承認し直すか、Issueに`factory`ラベルを付け直してください",
+  },
+  {
+    pattern: /^branch head moved to (\S+) while implementing$/,
+    describe: (m) => `実装中にブランチのheadが${m[1]}に変わりました`,
+    nextAction: () =>
+      "ブランチの最新の状態を確認し、必要ならConsoleのFailuresタブから再実行してください",
+  },
+  {
+    pattern: /^implement finish failed: ([\s\S]+)$/,
+    describe: (m) => `コミット・push・PRの作成に失敗しました: ${m[1]}`,
+    nextAction: () => GENERIC_NEXT_ACTION,
+  },
+  {
+    pattern: /^implement finished without a final output$/,
+    describe: () =>
+      "実装は完了と判定されましたが、最終ラウンドの出力がありませんでした",
+    nextAction: () => GENERIC_NEXT_ACTION,
+  },
+  {
+    pattern: /^implement produced no changes$/,
+    describe: () => "実装が変更を生みませんでした",
+    nextAction: () => "要件定義を見直すか、Issueを閉じてください",
+  },
+  {
+    pattern: /^requirements_gap after max_attempts (\d+)$/,
+    describe: (m) =>
+      `要件の不足が報告されましたが、要件定義の試行回数が上限(${m[1]})に達しました`,
+    nextAction: () =>
+      "要件を人が整理し、Issueに追記してから`factory`ラベルを付け直してください",
+  },
+  {
+    pattern: /^implement flow could not be started: ([\s\S]+)$/,
+    describe: (m) => `実装フローを起動できませんでした: ${m[1]}`,
+    nextAction: () => "ConsoleのFailuresタブから再実行してください",
+  },
+  {
+    pattern: /^implement flow job id could not be recorded: ([\s\S]+)$/,
+    describe: (m) => `実装フローのジョブIDを記録できませんでした: ${m[1]}`,
+    nextAction: () => GENERIC_NEXT_ACTION,
+  },
+  {
+    pattern: /^secrets detected, changes not pushed$/,
+    describe: () =>
+      "秘密情報らしき文字列を検出したため、変更をpushしていません",
+    nextAction: () =>
+      "worktreeの差分を確認し、秘密情報を取り除いてから人が対応してください",
+  },
 ];
 
 /**
