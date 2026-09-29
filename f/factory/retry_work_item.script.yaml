@@ -1,5 +1,5 @@
 summary: '[OP-2-2] 作業項目を再実行'
-description: 詰まってしまった作業項目を手動で再実行します。作業項目の種類に応じて対象の処理と目指す状態を切り替え、再開前にラベルを付け直します。
+description: 詰まってしまった作業項目を手動で再実行します。作業項目の種類と承認状況に応じて対象の処理(要件定義・実装・PRレビュー・PR修正)と目指す状態を切り替えます。
 lock: '!inline f/factory/retry_work_item.script.lock'
 kind: script
 schema:
