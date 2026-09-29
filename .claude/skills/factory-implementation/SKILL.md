@@ -55,6 +55,7 @@ worker内のClaudeはheadlessで起動されており、人と対話して回答
 - `lefthook.yml`、`lefthook-local.yml`、`lefthook.toml`、`lefthook.json`、`.lefthook/**`、`.husky/**`、`.githooks/**`
 - `bunfig.toml`、`.npmrc`、`.gitattributes`、`.gitmodules`、`.yarnrc(.yml)`、`.yarn/**`、`.pnpmfile.cjs`
 - すべての`package.json`と、lockfile(`bun.lock`、`package-lock.json`、`pnpm-lock.yaml`、`yarn.lock`等)
+- JavaScript以外のlockfileとmanifest(`uv.lock`、`poetry.lock`、`Pipfile`、`pyproject.toml`、`setup.py`、`requirements*.txt`、`Cargo.toml`、`go.mod`、`Gemfile`、`composer.json`等)
 - `.env*`、`.gitleaksignore`、`.gitleaks.toml`、`.tool-versions`、`.node-version`等のランタイムのバージョン指定
 - `*.config.[cm][jt]s`、`.eslintrc*`等のツール設定、`Makefile`等のタスクランナー、`CODEOWNERS`、`.devcontainer/**`
 - 新規に追加する`*.sh`ファイル

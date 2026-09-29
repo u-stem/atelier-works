@@ -1167,6 +1167,51 @@ describe("verifyWorktreeGitdir", () => {
     ).rejects.toThrow(/does not point under/);
   });
 
+  // git reads the pointer as exactly "gitdir: <path>" minus trailing CR/LF;
+  // any other spacing makes git read a different (relative) directory.
+  const verifyPointer = (pointer: string) =>
+    verifyWorktreeGitdir({
+      run: createFakeCommandRunner([ok(REAL_WORKTREE_PORCELAIN)]).run,
+      repoDir: "/tmp/repo",
+      dir: WT,
+      readTextFile: files(pointer),
+      realpath: normalize,
+    });
+
+  test("rejects two spaces after gitdir:", async () => {
+    await expect(verifyPointer(`gitdir:  ${GITDIR}\n`)).rejects.toThrow(
+      /does not point under/,
+    );
+  });
+
+  test("rejects a trailing space after the path", async () => {
+    await expect(verifyPointer(`gitdir: ${GITDIR} \n`)).rejects.toThrow(
+      /does not point under/,
+    );
+  });
+
+  test("rejects a tab after gitdir:", async () => {
+    await expect(verifyPointer(`gitdir:\t${GITDIR}\n`)).rejects.toThrow(
+      /does not point under/,
+    );
+  });
+
+  test("accepts the canonical pointer without a trailing newline", async () => {
+    await expect(verifyPointer(`gitdir: ${GITDIR}`)).resolves.toBeUndefined();
+  });
+
+  test("accepts the canonical pointer with CRLF", async () => {
+    await expect(
+      verifyPointer(`gitdir: ${GITDIR}\r\n`),
+    ).resolves.toBeUndefined();
+  });
+
+  test("rejects a relative gitdir path", async () => {
+    await expect(
+      verifyPointer("gitdir: ../repo/.git/worktrees/contract-smoke-branch\n"),
+    ).rejects.toThrow(/does not point under/);
+  });
+
   test("rejects an admin dir whose back-pointer names another worktree", async () => {
     const fake = createFakeCommandRunner([ok(REAL_WORKTREE_PORCELAIN)]);
     await expect(
@@ -2630,6 +2675,38 @@ describe("mapDiffLineToFile", () => {
       "+secret",
     ].join("\n");
     expect(mapDiffLineToFile(diff, 6)).toBe("x.md");
+  });
+});
+
+describe("mapDiffLineToFile header names", () => {
+  const mapHeader = (header: string): string | null =>
+    mapDiffLineToFile(
+      ["diff --git a/x b/x", header, "@@ -0,0 +1 @@", "+secret"].join("\n"),
+      4,
+    );
+
+  test("drops the tab git appends to a name with a space", () => {
+    expect(mapHeader("+++ b/my file.txt\t")).toBe("my file.txt");
+  });
+
+  test("drops exactly one trailing tab", () => {
+    expect(mapHeader("+++ b/x\t\t")).toBe("x\t");
+  });
+
+  test("unescapes a tab in a quoted name", () => {
+    expect(mapHeader('+++ "b/a\\tb.txt"')).toBe("a\tb.txt");
+  });
+
+  test("unescapes a newline in a quoted name", () => {
+    expect(mapHeader('+++ "b/a\\nb.txt"')).toBe("a\nb.txt");
+  });
+
+  test("unescapes quotes and backslashes in a quoted name", () => {
+    expect(mapHeader('+++ "b/q\\"x\\\\y"')).toBe('q"x\\y');
+  });
+
+  test("decodes octal UTF-8 bytes in a quoted name", () => {
+    expect(mapHeader('+++ "b/\\346\\227\\245.txt"')).toBe("日.txt");
   });
 });
 

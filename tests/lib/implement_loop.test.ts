@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
   existsSync,
-  lstatSync,
   mkdirSync,
   mkdtempSync,
   symlinkSync,
@@ -327,14 +326,8 @@ describe("isCopyableDocEntry", () => {
     isDirectory: () => kind === "dir",
     isSymbolicLink: () => kind === "symlink",
   });
-  function fs(own: Kind, target: Kind | null = null): DocEntryFs {
-    return {
-      lstat: async () => statOf(own),
-      stat: async () => {
-        if (target === null) throw new Error("ENOENT");
-        return statOf(target);
-      },
-    };
+  function fs(own: Kind): DocEntryFs {
+    return { lstat: async () => statOf(own) };
   }
 
   test("copies a regular file", async () => {
@@ -345,16 +338,8 @@ describe("isCopyableDocEntry", () => {
     expect(await isCopyableDocEntry("/d/sub", fs("dir"))).toBe(true);
   });
 
-  test("copies a symlink to a regular file (materialized)", async () => {
-    expect(await isCopyableDocEntry("/d/l", fs("symlink", "file"))).toBe(true);
-  });
-
-  test("skips a symlink to a directory", async () => {
-    expect(await isCopyableDocEntry("/d/l", fs("symlink", "dir"))).toBe(false);
-  });
-
-  test("skips a dangling symlink", async () => {
-    expect(await isCopyableDocEntry("/d/l", fs("symlink", null))).toBe(false);
+  test("skips every symlink, whatever it points to", async () => {
+    expect(await isCopyableDocEntry("/d/l", fs("symlink"))).toBe(false);
   });
 
   test("skips anything else (fifo, socket, device)", async () => {
@@ -375,10 +360,10 @@ describe("defaultDocDirCopyDeps.copyDir", () => {
     return { source, destination: join(base, "dst") };
   }
 
-  test("materializes a symlinked file as a regular file", async () => {
+  test("does not copy a symlinked file", async () => {
     const { source, destination } = tree();
     await defaultDocDirCopyDeps.copyDir(source, destination);
-    expect(lstatSync(join(destination, "link.txt")).isFile()).toBe(true);
+    expect(existsSync(join(destination, "link.txt"))).toBe(false);
   });
 
   test("does not copy a symlinked directory", async () => {

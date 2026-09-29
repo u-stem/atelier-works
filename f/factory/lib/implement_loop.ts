@@ -7,7 +7,7 @@
 // binds the steps-side helpers (diff-size guard, change listing, symlink
 // detection) into ImplementLoopDeps.
 
-import { access, cp, lstat, mkdtemp, rm, stat } from "node:fs/promises";
+import { access, cp, lstat, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RunClaudeOptions, RunClaudeResult } from "./claude.ts";
@@ -193,35 +193,27 @@ type DocEntryStats = {
   isSymbolicLink(): boolean;
 };
 
-/** isCopyableDocEntry's fs calls; injectable for tests. */
+/** isCopyableDocEntry's fs call; injectable for tests. */
 export type DocEntryFs = {
   readonly lstat: (path: string) => Promise<DocEntryStats>;
-  readonly stat: (path: string) => Promise<DocEntryStats>;
 };
 
 const defaultDocEntryFs: DocEntryFs = {
   lstat: (path) => lstat(path),
-  stat: (path) => stat(path),
 };
 
-/** The doc_dir copy's filter: regular files and real directories, and a
- * symlink only when it resolves to a regular file (copied as that file's
- * content — `dereference: true`). A symlink to a directory (which could
- * pull in an arbitrary tree), a dangling one, and anything that is not a
- * file or directory (FIFO, socket, device) are skipped, so the copy holds
- * no link a Claude `Write` could follow out of it. */
+/** The doc_dir copy's filter: regular files and real directories only.
+ * Every symlink is skipped, whatever it points to — dereferencing one
+ * could materialize a target outside the doc dir (e.g. /proc/self/environ)
+ * in the copy Claude reads — and so is anything that is not a file or
+ * directory (FIFO, socket, device); the copy holds no link a Claude
+ * `Write` could follow out of it. */
 export async function isCopyableDocEntry(
   path: string,
   fs: DocEntryFs = defaultDocEntryFs,
 ): Promise<boolean> {
   const own = await fs.lstat(path);
-  if (own.isFile() || own.isDirectory()) return true;
-  if (!own.isSymbolicLink()) return false;
-  try {
-    return (await fs.stat(path)).isFile();
-  } catch {
-    return false;
-  }
+  return !own.isSymbolicLink() && (own.isFile() || own.isDirectory());
 }
 
 export const defaultDocDirCopyDeps: DocDirCopyDeps = {
@@ -234,7 +226,6 @@ export const defaultDocDirCopyDeps: DocDirCopyDeps = {
   copyDir: (source, destination) =>
     cp(source, destination, {
       recursive: true,
-      dereference: true,
       filter: (entry) => isCopyableDocEntry(entry),
     }),
   removeDir: (path) => rm(path, { recursive: true, force: true }),

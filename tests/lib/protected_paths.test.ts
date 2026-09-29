@@ -110,6 +110,48 @@ describe("matchesImplementProtectedPath", () => {
     );
   });
 
+  test("matches Python lockfiles and manifests", () => {
+    expect(
+      [
+        "uv.lock",
+        "svc/poetry.lock",
+        "Pipfile",
+        "Pipfile.lock",
+        "pyproject.toml",
+        "setup.py",
+        "setup.cfg",
+        "requirements.txt",
+        "requirements-dev.txt",
+      ].every(matchesImplementProtectedPath),
+    ).toBe(true);
+  });
+
+  test("matches Rust's Cargo files", () => {
+    expect(
+      ["Cargo.lock", "crates/core/Cargo.toml"].every(
+        matchesImplementProtectedPath,
+      ),
+    ).toBe(true);
+  });
+
+  test("matches Go's module files", () => {
+    expect(
+      ["go.mod", "tools/go.sum"].every(matchesImplementProtectedPath),
+    ).toBe(true);
+  });
+
+  test("matches Ruby's Gemfile", () => {
+    expect(
+      ["Gemfile", "Gemfile.lock"].every(matchesImplementProtectedPath),
+    ).toBe(true);
+  });
+
+  test("matches PHP's composer files", () => {
+    expect(
+      ["composer.json", "composer.lock"].every(matchesImplementProtectedPath),
+    ).toBe(true);
+  });
+
   test("matches .env files", () => {
     expect(matchesImplementProtectedPath("apps/web/.env.local")).toBe(true);
   });

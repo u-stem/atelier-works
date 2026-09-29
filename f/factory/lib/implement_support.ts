@@ -190,12 +190,20 @@ export function buildImplementCommitMessage(
  * neither link nor close anything once the commit reaches the default
  * branch (`fixes #12` would close issue 12): `owner/repo#12` becomes
  * `owner/repo No.12` and a bare `#12` (not preceded by a word character or
- * `/`) becomes `No.12`. `C#` and `#tag` are left alone. Plain ASCII, no
- * invisible characters. The factory's own `Closes #N` lives in the PR body,
- * and its trailers are appended after this.
+ * `/`) becomes `No.12`; an issue / pull request URL
+ * (`https://github.com/<o>/<r>/issues/<n>`, `.../pull/<n>`) keeps its text
+ * with the host written `github[.]com`, and `GH-12` becomes `GH No.12`.
+ * `C#` and `#tag` are left alone. Plain ASCII, no invisible characters.
+ * The factory's own `Closes #N` lives in the PR body, and its trailers are
+ * appended after this.
  */
 export function neutralizeIssueRefs(text: string): string {
   return text
+    .replace(
+      /(https?:\/\/(?:www\.)?)github\.com(\/[\w.-]+\/[\w.-]+\/(?:issues|pull)\/\d+)/gi,
+      "$1github[.]com$2",
+    )
+    .replace(/\b(GH)-(\d+)/gi, "$1 No.$2")
     .replace(/([\w.-]+\/[\w.-]+)#(\d+)/g, "$1 No.$2")
     .replace(/(?<![\w/])#(\d+)/g, "No.$1");
 }

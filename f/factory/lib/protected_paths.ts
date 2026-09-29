@@ -87,6 +87,17 @@ export const IMPLEMENT_PROTECTED_BASENAME_PATTERNS: readonly RegExp[] = [
   /^\.(eslintrc|babelrc|prettierrc)(\..*)?$/,
   /^(Makefile|[Jj]ustfile|Taskfile\.ya?ml|turbo\.json|nx\.json|deno\.jsonc?|CODEOWNERS|\.pre-commit-config\.yaml)$/,
   /^package\.json$/,
+  // Non-JS lockfiles and manifests: an install step would run what they
+  // name (build scripts, setup.py) or fetch what they pin.
+  /^(uv|poetry)\.lock$/,
+  /^Pipfile(\.lock)?$/,
+  /^pyproject\.toml$/,
+  /^setup\.(py|cfg)$/,
+  /^requirements.*\.txt$/,
+  /^Cargo\.(lock|toml)$/,
+  /^go\.(sum|mod)$/,
+  /^Gemfile(\.lock)?$/,
+  /^composer\.(lock|json)$/,
 ];
 
 function matchesPathLists(

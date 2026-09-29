@@ -304,6 +304,28 @@ describe("neutralizeIssueRefs", () => {
     expect(neutralizeIssueRefs("#tag を追加")).toBe("#tag を追加");
   });
 
+  test("defuses an issue URL", () => {
+    expect(
+      neutralizeIssueRefs("fixes https://github.com/acme/widgets/issues/12"),
+    ).toBe("fixes https://github[.]com/acme/widgets/issues/12");
+  });
+
+  test("defuses a pull request URL", () => {
+    expect(
+      neutralizeIssueRefs("see https://github.com/acme/widgets/pull/7"),
+    ).toBe("see https://github[.]com/acme/widgets/pull/7");
+  });
+
+  test("leaves another GitHub URL untouched", () => {
+    expect(neutralizeIssueRefs("https://github.com/acme/widgets")).toBe(
+      "https://github.com/acme/widgets",
+    );
+  });
+
+  test("rewrites a GH- reference", () => {
+    expect(neutralizeIssueRefs("fixes GH-12")).toBe("fixes GH No.12");
+  });
+
   test("leaves no issue for GitHub to link", () => {
     expect(
       extractLinkedIssueNumbers(

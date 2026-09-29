@@ -81,7 +81,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { maskSecrets } from "./log.ts";
 import {
   assertBranchName,
@@ -736,6 +736,28 @@ export type VerifyWorktreeGitdirOptions = {
  * redirected gitdir brings its own `config`, e.g. a `filter.<x>.clean`
  * command the next `git add` would run).
  */
+/** The admin dir a worktree `.git` file names, read the way git reads it
+ * (the bytes after exactly "gitdir: ", minus one trailing LF or CRLF) — but
+ * only when the file is the canonical form `git worktree add` writes:
+ * an absolute path with no surrounding whitespace or control characters.
+ * Anything else (two spaces, a tab, a trailing space, a relative path)
+ * would make git read a directory other than the one a lenient parse sees,
+ * so it is null. */
+function parseCanonicalGitPointer(content: string): string | null {
+  const body = content.endsWith("\r\n")
+    ? content.slice(0, -2)
+    : content.endsWith("\n")
+      ? content.slice(0, -1)
+      : content;
+  const prefix = "gitdir: ";
+  if (!body.startsWith(prefix)) return null;
+  const path = body.slice(prefix.length);
+  if (!path.startsWith("/")) return null;
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: rejecting control characters is the point
+  if (/[\x00-\x1f\x7f]/.test(path) || path !== path.trimEnd()) return null;
+  return path;
+}
+
 export async function verifyWorktreeGitdir(
   opts: VerifyWorktreeGitdirOptions,
 ): Promise<void> {
@@ -750,17 +772,18 @@ export async function verifyWorktreeGitdir(
   const readTextFile =
     opts.readTextFile ?? ((path: string) => readFile(path, "utf8"));
   const resolveReal = opts.realpath ?? ((path: string) => realpath(path));
-  const content = (await readTextFile(`${opts.dir}/.git`)).trim();
-  const match = content.match(/^gitdir:\s*(.+)$/);
+  const target = parseCanonicalGitPointer(
+    await readTextFile(`${opts.dir}/.git`),
+  );
   const worktreesDir = `${opts.repoDir}/.git/worktrees`;
   const notUnder = new Error(
     `worktree ${opts.dir}: .git file does not point under ${worktreesDir}/`,
   );
-  if (match === null || match[1] === undefined) throw notUnder;
+  if (target === null) throw notUnder;
   let realTarget: string;
   let realWorktreesDir: string;
   try {
-    realTarget = await resolveReal(resolve(opts.dir, match[1]));
+    realTarget = await resolveReal(target);
     realWorktreesDir = await resolveReal(worktreesDir);
   } catch {
     throw notUnder;
@@ -2328,14 +2351,57 @@ function isGitleaksFinding(value: unknown): value is GitleaksFinding {
   );
 }
 
+const C_QUOTE_ESCAPES: Readonly<Record<string, number>> = {
+  a: 0x07,
+  b: 0x08,
+  t: 0x09,
+  n: 0x0a,
+  v: 0x0b,
+  f: 0x0c,
+  r: 0x0d,
+  '"': 0x22,
+  "\\": 0x5c,
+};
+
+/** Undoes git's C-style quoting of a path (the text between the quotes):
+ * `\t \n \" \\` and the other single-letter escapes, and `\NNN` octal
+ * bytes (UTF-8, decoded as a whole). null for a malformed escape. */
+function unquoteCStyle(quoted: string): string | null {
+  const bytes: number[] = [];
+  const encoder = new TextEncoder();
+  for (let i = 0; i < quoted.length; i += 1) {
+    const char = quoted.charAt(i);
+    if (char !== "\\") {
+      bytes.push(...encoder.encode(char));
+      continue;
+    }
+    const next = quoted.charAt(i + 1);
+    const octal = quoted.slice(i + 1, i + 4);
+    if (/^[0-3][0-7]{2}$/.test(octal)) {
+      bytes.push(Number.parseInt(octal, 8));
+      i += 3;
+      continue;
+    }
+    const escaped = C_QUOTE_ESCAPES[next];
+    if (escaped === undefined) return null;
+    bytes.push(escaped);
+    i += 1;
+  }
+  return new TextDecoder().decode(new Uint8Array(bytes));
+}
+
 /** The new-side path of a `+++ ` file header line: the path for
- * `+++ b/<path>` (or git's quoted `+++ "b/<path>"`), null for `+++
- * /dev/null` (a deletion), undefined for any other line. */
-function newPathFromHeader(text: string): string | null | undefined {
+ * `+++ b/<path>` (git appends one tab to a name containing a space; it is
+ * dropped) or git's C-quoted `+++ "b/<path>"` (unescaped), null for
+ * `+++ /dev/null` (a deletion), undefined for any other line. */
+function newPathFromHeader(line: string): string | null | undefined {
+  const text = line.endsWith("\t") ? line.slice(0, -1) : line;
   if (text === "+++ /dev/null") return null;
   if (text.startsWith("+++ b/")) return text.slice("+++ b/".length);
-  if (text.startsWith('+++ "b/') && text.endsWith('"'))
-    return text.slice('+++ "b/'.length, -1);
+  if (text.startsWith('+++ "b/') && text.endsWith('"') && text.length > 7) {
+    const path = unquoteCStyle(text.slice('+++ "b/'.length, -1));
+    return path ?? undefined;
+  }
   return undefined;
 }
 
