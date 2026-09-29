@@ -14,6 +14,7 @@ import {
   isImplementClaudeOutput,
   isRequirementsApprovedForAttempt,
   NO_ACCEPTANCE_CRITERIA_NOTE,
+  neutralizeIssueRefs,
   roundOutcomeForExit,
   stallHash,
   truncateCheckOutput,
@@ -276,6 +277,40 @@ describe("buildImplementCommitMessage", () => {
       "local",
     );
     expect(message.split("Co-Authored-By").length - 1).toBe(1);
+  });
+});
+
+describe("neutralizeIssueRefs", () => {
+  test("rewrites a bare issue reference", () => {
+    expect(neutralizeIssueRefs("fixes #12")).toBe("fixes No.12");
+  });
+
+  test("rewrites a reference right after Japanese text", () => {
+    expect(neutralizeIssueRefs("#3を修正")).toBe("No.3を修正");
+  });
+
+  test("rewrites a cross-repository reference", () => {
+    expect(neutralizeIssueRefs("closes acme/widgets#12")).toBe(
+      "closes acme/widgets No.12",
+    );
+  });
+
+  test("leaves C# untouched", () => {
+    expect(neutralizeIssueRefs("C#のサンプル")).toBe("C#のサンプル");
+  });
+
+  test("leaves a hashtag untouched", () => {
+    expect(neutralizeIssueRefs("#tag を追加")).toBe("#tag を追加");
+  });
+
+  test("leaves no issue for GitHub to link", () => {
+    expect(
+      extractLinkedIssueNumbers(
+        neutralizeIssueRefs("closes #12, fixes acme/widgets#3"),
+        "acme",
+        "widgets",
+      ),
+    ).toEqual([]);
   });
 });
 

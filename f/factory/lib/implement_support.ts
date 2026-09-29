@@ -180,6 +180,25 @@ export function buildImplementCommitMessage(
 }
 
 // ---------------------------------------------------------------------------
+// neutralizeIssueRefs: Claude-written commit text must not reference issues
+// ---------------------------------------------------------------------------
+
+/**
+ * Rewrites GitHub issue references in Claude-written commit text so they
+ * neither link nor close anything once the commit reaches the default
+ * branch (`fixes #12` would close issue 12): `owner/repo#12` becomes
+ * `owner/repo No.12` and a bare `#12` (not preceded by a word character or
+ * `/`) becomes `No.12`. `C#` and `#tag` are left alone. Plain ASCII, no
+ * invisible characters. The factory's own `Closes #N` lives in the PR body,
+ * and its trailers are appended after this.
+ */
+export function neutralizeIssueRefs(text: string): string {
+  return text
+    .replace(/([\w.-]+\/[\w.-]+)#(\d+)/g, "$1 No.$2")
+    .replace(/(?<![\w/])#(\d+)/g, "No.$1");
+}
+
+// ---------------------------------------------------------------------------
 // buildImplementBranchName: `factory/issue-<N>-wi-<id>` (design §7)
 // ---------------------------------------------------------------------------
 

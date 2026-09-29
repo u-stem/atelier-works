@@ -6,7 +6,8 @@
 // failure throws and on_error_flow marks the item failed). `final_status`
 // is the status actually reached — null when a CAS found the item moved on.
 //   open_pr: the worktree must still stage the tree the loop verified
-//     (decideVerifiedTree), then commit (Claude's subject/body, normalized)
+//     (decideVerifiedTree), then commit (Claude's subject/body, normalized,
+//     issue references neutralized — neutralizeIssueRefs)
 //     → push → create or update the PR → factory:review label → pr_url →
 //     pr_open → pr_opened.
 //     Nothing new to commit still opens / updates the PR when the branch
@@ -80,6 +81,7 @@ import {
 import {
   buildImplementCommitMessage,
   buildImplementPrBody,
+  neutralizeIssueRefs,
 } from "../lib/implement_support.ts";
 import { logger, maskSecrets } from "../lib/log.ts";
 import { isOneOf, type WorkItemStatus } from "../lib/types.ts";
@@ -430,11 +432,15 @@ export async function main(
       );
       if (verified.kind === "stop")
         return { ok: false, reason: verified.reason };
-      const subject = normalizeJapaneseText(output.commit_subject).trim();
+      const subject = neutralizeIssueRefs(
+        normalizeJapaneseText(output.commit_subject).trim(),
+      );
       const message = buildImplementCommitMessage(
         {
           commit_subject: subject,
-          commit_body: normalizeJapaneseText(output.commit_body),
+          commit_body: neutralizeIssueRefs(
+            normalizeJapaneseText(output.commit_body),
+          ),
         },
         config.instance_name,
       );
