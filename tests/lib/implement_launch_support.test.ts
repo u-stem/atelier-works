@@ -138,4 +138,31 @@ describe("startImplement", () => {
       await startImplement(launchDeps({ recordFlowJobId: boom }).deps),
     ).toBe("started_without_job_id");
   });
+
+  test("retries recording the flow job id once before giving up", async () => {
+    let tries = 0;
+    expect(
+      await startImplement(
+        launchDeps({
+          recordFlowJobId: async () => {
+            tries += 1;
+            if (tries === 1) throw new Error("transient");
+          },
+        }).deps,
+      ),
+    ).toBe("started");
+  });
+
+  test("tries recording the flow job id twice when it keeps failing", async () => {
+    let tries = 0;
+    await startImplement(
+      launchDeps({
+        recordFlowJobId: async () => {
+          tries += 1;
+          throw new Error("boom");
+        },
+      }).deps,
+    );
+    expect(tries).toBe(2);
+  });
 });

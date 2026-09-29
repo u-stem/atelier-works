@@ -6,6 +6,7 @@ import {
   decideImplementFinishAction,
   decideVerifiedTree,
   gapExhaustedReason,
+  gapReportNoticeDetail,
   IMPLEMENT_NO_CHANGES_REASON,
   implementNeedsHumanNextAction,
   isFactoryRepo,
@@ -235,6 +236,20 @@ describe("decideGapReroute", () => {
 describe("gapExhaustedReason", () => {
   test("names max_attempts", () => {
     expect(gapExhaustedReason(3)).toBe("requirements_gap after max_attempts 3");
+  });
+});
+
+describe("gapReportNoticeDetail", () => {
+  test("carries the gap report", () => {
+    expect(gapReportNoticeDetail("CSVの列定義が要件にありません")).toBe(
+      "差し戻し理由: CSVの列定義が要件にありません",
+    );
+  });
+
+  test("masks a secret in the gap report", () => {
+    expect(gapReportNoticeDetail(`token ghp_${"a".repeat(36)}`)).not.toContain(
+      "a".repeat(36),
+    );
   });
 });
 

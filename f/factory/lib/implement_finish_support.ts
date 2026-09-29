@@ -100,6 +100,18 @@ export function gapExhaustedReason(maxAttempts: number): string {
   return `requirements_gap after max_attempts ${String(maxAttempts)}`;
 }
 
+/** The needs_human reason when the requirements_gap reroute moved the item
+ * to requirements_generating but the pipeline could not be started (or its
+ * job id not recorded). */
+export const REQUIREMENTS_REGENERATION_FAILED_REASON =
+  "requirements regeneration could not be started";
+
+/** The notice / Discord detail that keeps Claude's gap report (masked) when
+ * the reroute could not start, so the human retrying sees why. */
+export function gapReportNoticeDetail(gapReport: string): string {
+  return `差し戻し理由: ${maskSecrets(gapReport)}`;
+}
+
 /** The needs_human reason for any unexpected git / GitHub failure in finish. */
 export function finishFailureReason(err: unknown): string {
   return `implement finish failed: ${maskSecrets(err instanceof Error ? err.message : String(err))}`;

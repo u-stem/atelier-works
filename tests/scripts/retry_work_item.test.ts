@@ -122,11 +122,29 @@ describe("computeRestartPlan — implement", () => {
     ).toBe("f/factory/implement");
   });
 
-  test("falls back to the pipeline for a failed issue while implement is disabled", () => {
-    expect(
+  test("refuses a failed issue with approved requirements while implement is disabled", () => {
+    expect(() =>
       computeRestartPlan(
         { id: 9, status: "failed", kind: "issue", attempt: 2 },
         { implementReady: true, implementEnabled: false },
+      ),
+    ).toThrow(/implement_enabled/);
+  });
+
+  test("refuses a needs_human issue with approved requirements while implement is disabled", () => {
+    expect(() =>
+      computeRestartPlan(
+        { id: 12, status: "needs_human", kind: "issue", attempt: 2 },
+        { implementReady: true, implementEnabled: false },
+      ),
+    ).toThrow(/implement_enabled/);
+  });
+
+  test("still restarts a failed issue without approved requirements into the pipeline", () => {
+    expect(
+      computeRestartPlan(
+        { id: 13, status: "failed", kind: "issue", attempt: 2 },
+        { implementReady: false, implementEnabled: false },
       ).flowPath,
     ).toBe("f/factory/pipeline");
   });

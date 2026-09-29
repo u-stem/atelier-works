@@ -360,6 +360,7 @@ describe("describeReason (implement flow)", () => {
       "worktreeのgitの参照先(.gitファイル)が書き換えられました",
     );
   });
+
   test("translates an active fix run on the PR", () => {
     expect(describeReason("pull request has an active fix run")).toBe(
       "このPRで自動修正が実行中のため実装を止めました",
@@ -370,6 +371,12 @@ describe("describeReason (implement flow)", () => {
     expect(describeReason("parent issue is being re-implemented")).toBe(
       "親Issueの実装をやり直している最中のため修正を止めました",
     );
+  });
+
+  test("translates a requirements regeneration that could not start", () => {
+    expect(
+      describeReason("requirements regeneration could not be started"),
+    ).toBe("要件定義の作り直しを起動できませんでした");
   });
 });
 
@@ -425,6 +432,14 @@ describe("nextActionFor (implement flow)", () => {
   test("waits for the implement flow before re-adding factory:fix", () => {
     expect(nextActionFor("parent issue is being re-implemented")).toBe(
       "実装フローの完了を待ってから再度factory:fixを付けてください",
+    );
+  });
+
+  test("points a failed requirements regeneration at the Failures tab", () => {
+    expect(
+      nextActionFor("requirements regeneration could not be started"),
+    ).toBe(
+      "ConsoleのFailuresタブから再実行してください(差し戻し理由は通知に残っています)",
     );
   });
 });

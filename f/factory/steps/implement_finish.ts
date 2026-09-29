@@ -6,8 +6,9 @@
 // becomes needs_human with its reason (the re-check first keeps the work of
 // a run that would open a PR or keep its work, shouldPreserveBeforeFailing).
 // DB failures throw and on_error_flow marks the item failed, except
-// setWorkItemPrUrl (caught, needs_human). `final_status` is the status
-// actually reached — null when a CAS found the item moved on.
+// setWorkItemPrUrl and the reroute's setFlowJobId (caught, needs_human).
+// `final_status` is the status actually reached — null when a CAS found
+// the item moved on.
 //   open_pr: the worktree must still stage the tree the loop verified
 //     (decideVerifiedTree), then commit (Claude's subject/body, normalized,
 //     issue references neutralized — neutralizeIssueRefs)
@@ -21,7 +22,9 @@
 //   requirements_gap: remove the worktree, delete the branch only when no
 //     PR uses it, reroute to f/factory/pipeline at attempt+1 (needs_human
 //     past max_attempts) — status updates before runFlowAsync, as in
-//     pr_fix_finish's reroute.
+//     pr_fix_finish's reroute; a runFlowAsync / setFlowJobId failure after
+//     that moves requirements_generating → needs_human with the gap report
+//     in the notice.
 //   needs_human: after max_rounds / daily_budget / stalled /
 //     diff_too_large, push what is there when no PR is open, the worktree's
 //     `.git` pointer is unchanged and gitleaks passes (preserveWork), so the
@@ -62,6 +65,7 @@ import {
   decideVerifiedTree,
   finishFailureReason,
   gapExhaustedReason,
+  gapReportNoticeDetail,
   IMPLEMENT_FINISH_NO_OUTPUT_REASON,
   IMPLEMENT_WIP_COMMIT_MESSAGE,
   type ImplementFinishOutcome,
@@ -70,6 +74,7 @@ import {
   PARTIAL_WORK_KEPT_LOCAL_REASON,
   type PreserveWorkDeps,
   preserveWork,
+  REQUIREMENTS_REGENERATION_FAILED_REASON,
   REVIEW_LABEL_STYLE,
   shouldDeleteBranchOnGap,
   shouldPreserveBeforeFailing,
@@ -219,21 +224,32 @@ export async function main(
     }
   };
 
+  /** `from`: the status the CAS expects (implementing, or
+   * requirements_generating after a reroute that could not start);
+   * `detail`: extra text for the notice and Discord (the gap report). */
   const finalizeNeedsHuman = async (
     reason: string,
     nextAction: string,
+    options: {
+      readonly from?: WorkItemStatus;
+      readonly detail?: string;
+    } = {},
   ): Promise<ImplementFinishResult> => {
     const moved = await updateStatusIfCurrent(
       work_item_id,
-      "implementing",
+      options.from ?? "implementing",
       "needs_human",
       reason,
     );
+    const described =
+      options.detail === undefined
+        ? describeReason(reason)
+        : `${describeReason(reason)}\n${options.detail}`;
     if (moved) {
       try {
         await addNotice({
           kind: "implement_needs_human",
-          message: `${owner}/${repo}#${String(issueNumber)} (work item ${String(work_item_id)}): ${describeReason(reason)}`,
+          message: `${owner}/${repo}#${String(issueNumber)} (work item ${String(work_item_id)}): ${described}`,
         });
       } catch (err) {
         log.warn("failed to record the implement_needs_human notice", {
@@ -246,7 +262,7 @@ export async function main(
         owner,
         repo,
         url: issueUrl,
-        reason: describeReason(reason),
+        reason: described,
         target: { kind: "issue", number: issueNumber },
         next_action: nextAction,
       });
@@ -432,12 +448,26 @@ export async function main(
         "requirements_generating",
         "work item moved on before the reroute",
       );
-    const flowJobId = await wmill.runFlowAsync("f/factory/pipeline", {
-      work_item_id,
-      attempt: attempt + 1,
-      feedback: gapReport,
-    });
-    await setFlowJobId(work_item_id, flowJobId);
+    try {
+      const flowJobId = await wmill.runFlowAsync("f/factory/pipeline", {
+        work_item_id,
+        attempt: attempt + 1,
+        feedback: gapReport,
+      });
+      await setFlowJobId(work_item_id, flowJobId);
+    } catch (err) {
+      log.warn("requirements regeneration could not be started", {
+        error: errorText(err),
+      });
+      return finalizeNeedsHuman(
+        REQUIREMENTS_REGENERATION_FAILED_REASON,
+        nextActionFor(REQUIREMENTS_REGENERATION_FAILED_REASON),
+        {
+          from: "requirements_generating",
+          detail: gapReportNoticeDetail(gapReport),
+        },
+      );
+    }
     return transitionResult(true, "requirements_generating", gapReport);
   }
 

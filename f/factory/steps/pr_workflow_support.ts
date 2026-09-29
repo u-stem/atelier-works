@@ -2714,6 +2714,12 @@ const REASON_RULES: readonly ReasonRule[] = [
       "検査コマンドが追跡対象のファイルを書き換えていないか確認し、再実行してください",
   },
   {
+    pattern: /^requirements regeneration could not be started$/,
+    describe: () => "要件定義の作り直しを起動できませんでした",
+    nextAction: () =>
+      "ConsoleのFailuresタブから再実行してください(差し戻し理由は通知に残っています)",
+  },
+  {
     pattern: /^pull request has an active fix run$/,
     describe: () => "このPRで自動修正が実行中のため実装を止めました",
     nextAction: () =>

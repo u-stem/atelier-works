@@ -7,8 +7,9 @@
 //     leave it alone — forcing needs_human would clobber a running flow.
 //   - runFlowAsync throws: implementing → needs_human, job_failures (the
 //     Console Failures tab offers the retry), notice, Discord.
-//   - setFlowJobId throws: the flow is running, so the status stays
-//     implementing; job_failures + notice only.
+//   - setFlowJobId throws (twice — it is retried once): the flow is
+//     running, so the status stays implementing; job_failures + notice
+//     only.
 
 import { maskSecrets } from "./log.ts";
 
@@ -88,7 +89,14 @@ export async function startImplement(
   }
 
   try {
-    await deps.recordFlowJobId(jobId);
+    try {
+      await deps.recordFlowJobId(jobId);
+    } catch (err) {
+      deps.log("startImplement: recordFlowJobId failed; retrying once", {
+        error: messageOf(err),
+      });
+      await deps.recordFlowJobId(jobId);
+    }
     return "started";
   } catch (err) {
     const reason = flowJobIdFailureReason(messageOf(err));

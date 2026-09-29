@@ -2,7 +2,8 @@
 // expired / blocked / approved. The restart flow and target status depend
 // on the work item's kind: issue → implement when its latest requirements
 // approval matches its attempt and implement_enabled is on, else pipeline
-// (an approved issue that cannot go to implement is refused); pr_review →
+// (refused, from any status, when the approval matches but implement_enabled
+// is off; an approved issue that cannot go to implement is refused); pr_review →
 // pr_review; pr_fix → pr_fix. The status move is a CAS from the status read
 // here, so a concurrent change aborts the restart instead of being
 // overwritten.
@@ -75,11 +76,17 @@ export function computeRestartPlan(
           args: { work_item_id: workItem.id },
         };
       }
+      // Approved requirements with the implement flow disabled: the
+      // pipeline would regenerate requirements a human already approved, so
+      // refuse from any status and say how to proceed.
+      if (context.implementReady) {
+        throw new Error(
+          `retry_work_item: work item ${workItem.id} has approved requirements, but implement_enabled is false; enable it to restart the implement flow`,
+        );
+      }
       if (workItem.status === "approved") {
         throw new Error(
-          context.implementReady
-            ? `retry_work_item: work item ${workItem.id} is approved, but implement_enabled is false; enable it to restart the implement flow`
-            : `retry_work_item: work item ${workItem.id} is approved but its latest requirements approval does not match attempt ${workItem.attempt}; nothing to restart`,
+          `retry_work_item: work item ${workItem.id} is approved but its latest requirements approval does not match attempt ${workItem.attempt}; nothing to restart`,
         );
       }
       return {
