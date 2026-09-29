@@ -5,19 +5,38 @@ import type {
 } from "../../f/factory/lib/claude.ts";
 import {
   buildImplementClaudeOptions,
+  type ChangeInspection,
   type DocDirCopyDeps,
+  type FixRoundRequest,
+  GITLEAKS_CHECK_NAME,
+  type ImplementClaudeRound,
   type ImplementClaudeRunInput,
   type ImplementContext,
+  type ImplementLoopDeps,
+  type ImplementLoopInput,
   implementPromptInput,
+  type LoopCheckResult,
+  NO_CHANGES_CHECK_NAME,
   prepareImplementWorktree,
   runImplementClaudeRound,
+  runImplementVerifyLoop,
   toImplementClaudeRound,
   type WorktreePrepDeps,
   withReadOnlyDocDirCopy,
 } from "../../f/factory/lib/implement_loop.ts";
-import type { ImplementClaudeOutput } from "../../f/factory/lib/implement_support.ts";
+import {
+  IMPLEMENT_CHECK_SKIP_REASONS,
+  type ImplementClaudeOutput,
+} from "../../f/factory/lib/implement_support.ts";
 import { IMPLEMENT_SCHEMA } from "../../f/factory/lib/prompts.ts";
-import type { AgentRunRecord } from "../../f/factory/lib/types.ts";
+import type {
+  AgentRunRecord,
+  ImplementRoundRecord,
+} from "../../f/factory/lib/types.ts";
+import type {
+  GitleaksResult,
+  WorktreeFingerprint,
+} from "../../f/factory/lib/workspace.ts";
 
 const DONE: ImplementClaudeOutput = {
   outcome: "done",
@@ -409,5 +428,411 @@ describe("runImplementClaudeRound", () => {
       RUN_INPUT,
     );
     expect(round.agent_run_id).toBe(42);
+  });
+});
+
+const fp = (digit: string, files = 1): WorktreeFingerprint => ({
+  treeSha: digit.repeat(40),
+  diffStat: { files, added: 10, deleted: 1 },
+});
+const FP_1 = fp("1");
+const FP_2 = fp("2");
+const FP_3 = fp("3");
+const FP_EMPTY = fp("9", 0);
+const CLEAN: ChangeInspection = {
+  changes: [{ path: "src/a.ts", status: "modified" }],
+  packageJsonScriptsChanged: false,
+  symlinkReasons: [],
+};
+const PROTECTED: ChangeInspection = {
+  changes: [{ path: ".github/workflows/ci.yml", status: "modified" }],
+  packageJsonScriptsChanged: false,
+  symlinkReasons: [],
+};
+const GITLEAKS_OK: GitleaksResult = { ok: true, output: "" };
+const GITLEAKS_LEAK: GitleaksResult = {
+  ok: false,
+  output: "- github-pat: a.txt:3",
+};
+const PASS: LoopCheckResult = {
+  command: "bun test",
+  ok: true,
+  output: "1 pass",
+  outputTail: "1 pass",
+};
+const FAIL: LoopCheckResult = {
+  command: "bun test",
+  ok: false,
+  output: "1 fail",
+  outputTail: "1 fail",
+};
+const LINT_FAIL: LoopCheckResult = {
+  command: "bunx --bun biome check .",
+  ok: false,
+  output: "lint error",
+  outputTail: "lint error",
+};
+const INVALID: ImplementClaudeRound = {
+  kind: "invalid_output",
+  output: DONE,
+  reason: "commit_subject exceeds 72 code points",
+  agent_run_id: 1,
+  cost_usd: 0.5,
+};
+const FAILED: ImplementClaudeRound = {
+  kind: "claude_failed",
+  reason: "timeout",
+  detail: "timed out",
+  agent_run_id: 9,
+  cost_usd: 0,
+};
+
+function outputRound(
+  output: ImplementClaudeOutput = DONE,
+  agentRunId = 1,
+): ImplementClaudeRound {
+  return { kind: "output", output, agent_run_id: agentRunId, cost_usd: 0.5 };
+}
+
+function pick<T>(list: readonly T[], index: number): T {
+  const value = list[Math.min(index, list.length - 1)];
+  if (value === undefined) throw new Error("harness: empty list");
+  return value;
+}
+
+type HarnessOptions = {
+  readonly fingerprints?: readonly WorktreeFingerprint[];
+  readonly inspection?: ChangeInspection;
+  readonly sizeReasons?: readonly string[];
+  readonly gitleaks?: readonly GitleaksResult[];
+  readonly checks?: readonly (readonly LoopCheckResult[])[];
+  readonly fixRounds?: readonly ImplementClaudeRound[];
+  readonly budgetExceeded?: boolean;
+};
+
+type Harness = {
+  readonly deps: ImplementLoopDeps;
+  readonly recorded: ImplementRoundRecord[];
+  readonly fixRequests: FixRoundRequest[];
+  readonly calls: { gitleaks: number; checks: number; fingerprint: number };
+};
+
+function harness(options: HarnessOptions = {}): Harness {
+  const recorded: ImplementRoundRecord[] = [];
+  const fixRequests: FixRoundRequest[] = [];
+  const calls = { gitleaks: 0, checks: 0, fingerprint: 0 };
+  const deps: ImplementLoopDeps = {
+    fingerprint: async () => {
+      const value = pick(options.fingerprints ?? [FP_1], calls.fingerprint);
+      calls.fingerprint += 1;
+      return value;
+    },
+    inspectChanges: async () => options.inspection ?? CLEAN,
+    diffSizeReasons: () => options.sizeReasons ?? [],
+    runGitleaks: async () => {
+      const value = pick(options.gitleaks ?? [GITLEAKS_OK], calls.gitleaks);
+      calls.gitleaks += 1;
+      return value;
+    },
+    runChecks: async () => {
+      const value = pick(options.checks ?? [[PASS]], calls.checks);
+      calls.checks += 1;
+      return value;
+    },
+    runFixRound: async (request) => {
+      fixRequests.push(request);
+      return pick(
+        options.fixRounds ?? [outputRound(DONE, 2)],
+        fixRequests.length - 1,
+      );
+    },
+    recordRound: async (record) => {
+      recorded.push(record);
+    },
+    dailyBudgetExceeded: async () => options.budgetExceeded ?? false,
+    log: () => {},
+  };
+  return { deps, recorded, fixRequests, calls };
+}
+
+function loopInput(
+  firstRound: ImplementClaudeRound = outputRound(),
+  overrides: Partial<ImplementLoopInput> = {},
+): ImplementLoopInput {
+  return {
+    workItemId: 3,
+    attempt: 1,
+    maxRounds: 5,
+    hasCheckCommands: true,
+    firstRound,
+    ...overrides,
+  };
+}
+
+const run = (h: Harness, input: ImplementLoopInput = loopInput()) =>
+  runImplementVerifyLoop(h.deps, input);
+
+describe("runImplementVerifyLoop", () => {
+  test("exits checks_passed when the first round passes", async () => {
+    expect((await run(harness())).exit).toBe("checks_passed");
+  });
+
+  test("records the first round as mode implement", async () => {
+    const h = harness();
+    await run(h);
+    expect(h.recorded[0]?.mode).toBe("implement");
+  });
+
+  test("records a passing round with outcome done", async () => {
+    const h = harness();
+    await run(h);
+    expect(h.recorded[0]?.outcome).toBe("done");
+  });
+
+  test("returns the passing round's output as final_output", async () => {
+    expect((await run(harness())).final_output).toEqual(DONE);
+  });
+
+  test("lists gitleaks and the commands in the check summary", async () => {
+    expect((await run(harness())).checks).toEqual({
+      kind: "ran",
+      results: [
+        { command: GITLEAKS_CHECK_NAME, ok: true },
+        { command: "bun test", ok: true },
+      ],
+    });
+  });
+
+  test("exits checks_skipped when no check command is configured", async () => {
+    expect(
+      (
+        await run(
+          harness(),
+          loopInput(outputRound(), { hasCheckCommands: false }),
+        )
+      ).exit,
+    ).toBe("checks_skipped");
+  });
+
+  test("does not run check commands in a round that changed a protected path", async () => {
+    const h = harness({ inspection: PROTECTED });
+    await run(h);
+    expect(h.calls.checks).toBe(0);
+  });
+
+  test("records why the checks were skipped", async () => {
+    const h = harness({ inspection: PROTECTED });
+    await run(h);
+    expect(h.recorded[0]?.checks_skipped_reason).toBe(
+      IMPLEMENT_CHECK_SKIP_REASONS.protected_paths,
+    );
+  });
+
+  test("records the protected changes on the round", async () => {
+    const h = harness({ inspection: PROTECTED });
+    await run(h);
+    expect(h.recorded[0]?.protected_changes).toEqual([
+      "保護パスを変更: .github/workflows/ci.yml",
+    ]);
+  });
+
+  test("exits requirements_gap without inspecting the worktree", async () => {
+    const h = harness();
+    await run(h, loopInput(outputRound(GAP)));
+    expect(h.calls.fingerprint).toBe(0);
+  });
+
+  test("carries the gap report on a requirements_gap exit", async () => {
+    expect((await run(harness(), loopInput(outputRound(GAP)))).gap_report).toBe(
+      GAP.gap_report,
+    );
+  });
+
+  test("exits claude_error for a failed run", async () => {
+    expect((await run(harness(), loopInput(FAILED))).exit).toBe("claude_error");
+  });
+
+  test("records an error round for a failed run", async () => {
+    const h = harness();
+    await run(h, loopInput(FAILED));
+    expect(h.recorded[0]?.outcome).toBe("error");
+  });
+
+  test("flags a contract violation on the fix request", async () => {
+    const h = harness();
+    await run(h, loopInput(INVALID));
+    expect(h.fixRequests[0]?.contractViolated).toBe(true);
+  });
+
+  test("keeps the contract rules out of the fenced failures", async () => {
+    const h = harness();
+    await run(h, loopInput(INVALID));
+    expect(h.fixRequests[0]?.failures).toEqual([]);
+  });
+
+  test("records the contract violation's reason in check_output", async () => {
+    const h = harness();
+    await run(h, loopInput(INVALID));
+    expect(h.recorded[0]?.check_output).toContain(
+      "commit_subject exceeds 72 code points",
+    );
+  });
+
+  test("does not pass a done round that changed nothing", async () => {
+    const h = harness({ fingerprints: [FP_EMPTY, FP_2] });
+    await run(h);
+    expect(
+      h.fixRequests[0]?.failures.map((failure) => failure.command),
+    ).toEqual([NO_CHANGES_CHECK_NAME]);
+  });
+
+  test("does not scan an unchanged round for secrets", async () => {
+    const h = harness({ fingerprints: [FP_EMPTY, FP_2] });
+    await run(h);
+    expect(h.calls.gitleaks).toBe(1);
+  });
+
+  test("passes the failing command's tail to the fix round", async () => {
+    const h = harness({ checks: [[FAIL], [PASS]], fingerprints: [FP_1, FP_2] });
+    await run(h);
+    expect(h.fixRequests[0]?.failures).toEqual([
+      { command: "bun test", outputTail: "1 fail" },
+    ]);
+  });
+
+  test("puts failed command output before passed output in check_output", async () => {
+    const h = harness({
+      checks: [[PASS, LINT_FAIL], [PASS]],
+      fingerprints: [FP_1, FP_2],
+    });
+    await run(h);
+    expect(
+      h.recorded[0]?.check_output?.startsWith("$ bunx --bun biome check ."),
+    ).toBe(true);
+  });
+
+  test("records a fix round as mode fix", async () => {
+    const h = harness({ checks: [[FAIL], [PASS]], fingerprints: [FP_1, FP_2] });
+    await run(h);
+    expect(h.recorded[1]?.mode).toBe("fix");
+  });
+
+  test("exits checks_passed after a successful fix round", async () => {
+    expect(
+      (
+        await run(
+          harness({ checks: [[FAIL], [PASS]], fingerprints: [FP_1, FP_2] }),
+        )
+      ).exit,
+    ).toBe("checks_passed");
+  });
+
+  test("counts both Claude runs as rounds", async () => {
+    expect(
+      (
+        await run(
+          harness({ checks: [[FAIL], [PASS]], fingerprints: [FP_1, FP_2] }),
+        )
+      ).rounds,
+    ).toBe(2);
+  });
+
+  test("sums the cost of every round", async () => {
+    expect(
+      (
+        await run(
+          harness({ checks: [[FAIL], [PASS]], fingerprints: [FP_1, FP_2] }),
+        )
+      ).total_cost_usd,
+    ).toBe(1);
+  });
+
+  test("exits max_rounds when the checks keep failing", async () => {
+    const h = harness({ checks: [[FAIL]], fingerprints: [FP_1, FP_2, FP_3] });
+    expect(
+      (await run(h, loopInput(outputRound(), { maxRounds: 2 }))).exit,
+    ).toBe("max_rounds");
+  });
+
+  test("gives max_rounds an English reason describeReason knows", async () => {
+    const h = harness({ checks: [[FAIL]], fingerprints: [FP_1, FP_2, FP_3] });
+    expect(
+      (await run(h, loopInput(outputRound(), { maxRounds: 2 }))).reason,
+    ).toBe("implement checks still failing after 2 rounds");
+  });
+
+  test("exits stalled when the worktree did not change", async () => {
+    expect(
+      (await run(harness({ checks: [[FAIL]], fingerprints: [FP_1] }))).exit,
+    ).toBe("stalled");
+  });
+
+  test("exits daily_budget when the budget is spent", async () => {
+    expect(
+      (await run(harness({ checks: [[FAIL]], budgetExceeded: true }))).exit,
+    ).toBe("daily_budget");
+  });
+
+  test("exits symlink on a symlink change", async () => {
+    const h = harness({
+      inspection: {
+        ...CLEAN,
+        symlinkReasons: ["symlink_change: symlink changed: link"],
+      },
+    });
+    expect((await run(h)).exit).toBe("symlink");
+  });
+
+  test("stops on a symlink change before scanning for secrets", async () => {
+    const h = harness({
+      inspection: {
+        ...CLEAN,
+        symlinkReasons: ["symlink_change: symlink changed: link"],
+      },
+    });
+    await run(h);
+    expect(h.calls.gitleaks).toBe(0);
+  });
+
+  test("exits diff_too_large when the guard fires", async () => {
+    const h = harness({
+      sizeReasons: [
+        "diff line total 4000 exceeds implement_max_diff_lines 3000",
+      ],
+    });
+    expect((await run(h)).exit).toBe("diff_too_large");
+  });
+
+  test("uses the diff-size guard's text as the reason", async () => {
+    const h = harness({
+      sizeReasons: [
+        "diff line total 4000 exceeds implement_max_diff_lines 3000",
+      ],
+    });
+    expect((await run(h)).reason).toBe(
+      "diff line total 4000 exceeds implement_max_diff_lines 3000",
+    );
+  });
+
+  test("treats a gitleaks finding as a failure to fix", async () => {
+    const h = harness({
+      gitleaks: [GITLEAKS_LEAK, GITLEAKS_OK],
+      fingerprints: [FP_1, FP_2],
+    });
+    await run(h);
+    expect(h.fixRequests[0]?.failures[0]).toEqual({
+      command: GITLEAKS_CHECK_NAME,
+      outputTail: "- github-pat: a.txt:3",
+    });
+  });
+
+  test("still fails a protected-path round whose gitleaks scan fails", async () => {
+    const h = harness({
+      inspection: PROTECTED,
+      gitleaks: [GITLEAKS_LEAK, GITLEAKS_OK],
+      fingerprints: [FP_1, FP_2],
+    });
+    await run(h);
+    expect(h.fixRequests).toHaveLength(1);
   });
 });

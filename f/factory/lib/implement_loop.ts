@@ -12,13 +12,36 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RunClaudeOptions, RunClaudeResult } from "./claude.ts";
 import {
+  classifyProtectedChanges,
+  decideImplementRoundExit,
+  IMPLEMENT_CHECK_SKIP_REASONS,
+  type ImplementCheckSummary,
   type ImplementClaudeOutput,
   isImplementClaudeOutput,
+  roundOutcomeForExit,
+  stallHash,
+  truncateCheckOutput,
   validateImplementOutput,
 } from "./implement_support.ts";
-import { IMPLEMENT_SCHEMA, type ImplementPromptInput } from "./prompts.ts";
-import type { AgentRunRecord, Diagram, FactoryConfig } from "./types.ts";
-import type { CommandRunner } from "./workspace.ts";
+import {
+  type CheckFailure,
+  IMPLEMENT_SCHEMA,
+  type ImplementPromptInput,
+} from "./prompts.ts";
+import type { ChangedPath } from "./protected_paths.ts";
+import type {
+  AgentRunRecord,
+  Diagram,
+  FactoryConfig,
+  ImplementDiffStat,
+  ImplementRoundMode,
+  ImplementRoundRecord,
+} from "./types.ts";
+import type {
+  CommandRunner,
+  GitleaksResult,
+  WorktreeFingerprint,
+} from "./workspace.ts";
 
 export const IMPLEMENT_FLOW_PATH = "f/factory/implement";
 export const IMPLEMENT_SKILL_NAME = "factory-implementation";
@@ -334,4 +357,430 @@ export async function runImplementClaudeRound(
   const result = await deps.runClaude(buildImplementClaudeOptions(input));
   const agentRunId = await deps.recordAgentRun(result.agentRun);
   return toImplementClaudeRound(result, agentRunId);
+}
+
+// ---------------------------------------------------------------------------
+// runImplementVerifyLoop (design §2 implement_verify, §0 "検証が OK になるまで")
+// ---------------------------------------------------------------------------
+
+/** How the verify loop ended. decideImplementRoundExit's exits (minus
+ * `continue`) plus the loop's own stops before the checks. */
+export type ImplementLoopExit =
+  | "checks_passed"
+  | "checks_skipped"
+  | "requirements_gap"
+  | "max_rounds"
+  | "daily_budget"
+  | "stalled"
+  | "diff_too_large"
+  | "symlink"
+  | "claude_error";
+
+export const IMPLEMENT_LOOP_EXITS: readonly ImplementLoopExit[] = [
+  "checks_passed",
+  "checks_skipped",
+  "requirements_gap",
+  "max_rounds",
+  "daily_budget",
+  "stalled",
+  "diff_too_large",
+  "symlink",
+  "claude_error",
+];
+
+export const GITLEAKS_TIMEOUT_MS = 5 * 60_000;
+
+/** Names shown to Claude ("Check command failed: <name>") and in the PR
+ * body's 動作確認結果 for the checks the flow itself owns. */
+export const GITLEAKS_CHECK_NAME = "gitleaks (secret scan)";
+export const NO_CHANGES_CHECK_NAME = "change check (factory)";
+const NO_CHANGES_OUTPUT =
+  "no changes produced: the worktree has no difference from the base branch, so nothing was implemented";
+const OUTPUT_CONTRACT_LABEL = "output contract (factory)";
+
+/** implementFixPrompt's outputContractNote for a round after an
+ * invalid_output (design §13: list the semantic rules; the operator-facing
+ * reason stays in the DB). Plain instructions, never fenced. */
+export const IMPLEMENT_OUTPUT_CONTRACT_NOTE = [
+  "Your previous structured output broke the output contract, so the flow could not use it.",
+  '- outcome "done": gap_report is null; commit_subject is one non-empty line of at most 72 code points, not ending in "…", without control characters.',
+  '- outcome "requirements_gap": gap_report is a non-empty string; commit_subject and commit_body are both "".',
+  "Answer again with an output that follows these rules.",
+].join("\n");
+
+const FAILURE_TAIL_CHARS = 2000;
+
+export type ChangeInspection = {
+  /** Every path that differs from the context's base_sha. */
+  readonly changes: readonly ChangedPath[];
+  readonly packageJsonScriptsChanged: boolean;
+  /** Blocking: any symlink creation / change / typechange (design §3). */
+  readonly symlinkReasons: readonly string[];
+};
+
+export type LoopCheckResult = {
+  readonly command: string;
+  readonly ok: boolean;
+  /** Full masked output (DB). */
+  readonly output: string;
+  /** Prompt-side excerpt. */
+  readonly outputTail: string;
+};
+
+export type FixRoundRequest = {
+  /** 1-based round number within this loop (the prompt's "Round n of m"). */
+  readonly round: number;
+  /** Fenced as DATA by implementFixPrompt. */
+  readonly failures: readonly CheckFailure[];
+  /** The previous output broke the contract: pass IMPLEMENT_OUTPUT_CONTRACT_NOTE as outputContractNote. */
+  readonly contractViolated: boolean;
+};
+
+export type ImplementLoopDeps = {
+  /** Stages everything and fingerprints it (worktreeFingerprint, against base_sha). */
+  readonly fingerprint: () => Promise<WorktreeFingerprint>;
+  readonly inspectChanges: () => Promise<ChangeInspection>;
+  /** evaluateDiffSizeGuard bound to the implement limits; blocking. */
+  readonly diffSizeReasons: (
+    changedFileCount: number,
+    diffLineTotal: number,
+  ) => readonly string[];
+  readonly runGitleaks: () => Promise<GitleaksResult>;
+  /** The repo's check commands (checkCommandsFor); only called when there are some. */
+  readonly runChecks: () => Promise<readonly LoopCheckResult[]>;
+  readonly runFixRound: (
+    request: FixRoundRequest,
+  ) => Promise<ImplementClaudeRound>;
+  readonly recordRound: (record: ImplementRoundRecord) => Promise<void>;
+  readonly dailyBudgetExceeded: () => Promise<boolean>;
+  readonly log: (message: string, fields: Record<string, unknown>) => void;
+};
+
+export type ImplementLoopInput = {
+  readonly workItemId: number;
+  readonly attempt: number;
+  /** factory_config.implement_max_rounds. */
+  readonly maxRounds: number;
+  readonly hasCheckCommands: boolean;
+  /** implement_generate's result (round 1, mode implement). */
+  readonly firstRound: ImplementClaudeRound;
+};
+
+export type ImplementLoopResult = {
+  readonly exit: ImplementLoopExit;
+  /** English, for status notes and describeReason; null on a success or gap exit. */
+  readonly reason: string | null;
+  readonly gap_report: string | null;
+  /** Claude runs in this flow run. */
+  readonly rounds: number;
+  readonly total_cost_usd: number;
+  /** The last output that passed validateImplementOutput. */
+  readonly final_output: ImplementClaudeOutput | null;
+  /** The final inspected round's classifyProtectedChanges lines. */
+  readonly protected_changes: string[];
+  /** The final round's checks; null when the loop stopped before them. */
+  readonly checks: ImplementCheckSummary | null;
+  readonly diff_stat: ImplementDiffStat | null;
+  readonly changed_paths: string[];
+};
+
+type ProducedRound = Exclude<
+  ImplementClaudeRound,
+  { readonly kind: "claude_failed" }
+>;
+
+type CheckEvaluation = {
+  readonly state: "passed" | "failed" | "skipped";
+  readonly failures: CheckFailure[];
+  readonly contractViolated: boolean;
+  /** Failed outputs first, then passed ones (implement_rounds.check_output). */
+  readonly outputText: string;
+  /** Failure outputs + the contract reason (stall hash input). */
+  readonly stallText: string;
+  readonly skipReason: string | null;
+  readonly summary: ImplementCheckSummary;
+};
+
+function section(name: string, output: string): string {
+  return `$ ${name}\n${output}`;
+}
+
+async function evaluateChecks(
+  deps: ImplementLoopDeps,
+  round: ProducedRound,
+  facts: {
+    readonly noChanges: boolean;
+    readonly protectedChanged: boolean;
+    readonly hasCheckCommands: boolean;
+  },
+): Promise<CheckEvaluation> {
+  const failures: CheckFailure[] = [];
+  const failedOutputs: string[] = [];
+  const passedOutputs: string[] = [];
+  const stallParts: string[] = [];
+  const results: { readonly command: string; readonly ok: boolean }[] = [];
+  const contractViolated = round.kind === "invalid_output";
+  if (round.kind === "invalid_output") {
+    failedOutputs.push(section(OUTPUT_CONTRACT_LABEL, round.reason));
+    stallParts.push(round.reason);
+  }
+
+  let skipReason: string | null = null;
+  if (facts.noChanges) {
+    failures.push({
+      command: NO_CHANGES_CHECK_NAME,
+      outputTail: NO_CHANGES_OUTPUT,
+    });
+    failedOutputs.push(section(NO_CHANGES_CHECK_NAME, NO_CHANGES_OUTPUT));
+    stallParts.push(NO_CHANGES_OUTPUT);
+  } else {
+    const gitleaks = await deps.runGitleaks();
+    results.push({ command: GITLEAKS_CHECK_NAME, ok: gitleaks.ok });
+    if (!gitleaks.ok) {
+      failures.push({
+        command: GITLEAKS_CHECK_NAME,
+        outputTail: gitleaks.output.slice(-FAILURE_TAIL_CHARS),
+      });
+      failedOutputs.push(section(GITLEAKS_CHECK_NAME, gitleaks.output));
+      stallParts.push(gitleaks.output);
+    }
+    if (facts.protectedChanged) {
+      skipReason = IMPLEMENT_CHECK_SKIP_REASONS.protected_paths;
+    } else if (!facts.hasCheckCommands) {
+      skipReason = IMPLEMENT_CHECK_SKIP_REASONS.no_commands;
+    } else {
+      for (const result of await deps.runChecks()) {
+        results.push({ command: result.command, ok: result.ok });
+        if (result.ok) {
+          passedOutputs.push(section(result.command, result.output));
+        } else {
+          failures.push({
+            command: result.command,
+            outputTail: result.outputTail,
+          });
+          failedOutputs.push(section(result.command, result.output));
+          stallParts.push(result.output);
+        }
+      }
+    }
+  }
+
+  const failed = failures.length > 0 || contractViolated;
+  return {
+    state: failed ? "failed" : skipReason !== null ? "skipped" : "passed",
+    failures,
+    contractViolated,
+    outputText: [...failedOutputs, ...passedOutputs].join("\n\n"),
+    stallText: stallParts.join("\n\n"),
+    skipReason,
+    summary:
+      skipReason !== null
+        ? { kind: "skipped", reason: skipReason }
+        : { kind: "ran", results },
+  };
+}
+
+function blockingStop(
+  symlinkReasons: readonly string[],
+  sizeReasons: readonly string[],
+): {
+  readonly exit: "symlink" | "diff_too_large";
+  readonly reasons: readonly string[];
+} | null {
+  if (symlinkReasons.length > 0)
+    return { exit: "symlink", reasons: symlinkReasons };
+  if (sizeReasons.length > 0)
+    return { exit: "diff_too_large", reasons: sizeReasons };
+  return null;
+}
+
+function reasonForExit(exit: ImplementLoopExit, round: number): string | null {
+  switch (exit) {
+    case "max_rounds":
+      return `implement checks still failing after ${String(round)} rounds`;
+    case "daily_budget":
+      return "daily budget exceeded";
+    case "stalled":
+      return `implement stalled after round ${String(round)}`;
+    default:
+      return null;
+  }
+}
+
+/**
+ * Checks one Claude round's worktree and either ends the loop or runs a fix
+ * round, until the checks pass or skip, a guard fires, or Claude reports a
+ * requirements gap. Per round, in this order: record-and-stop for a failed
+ * run or a gap; fingerprint (stages everything, measures against
+ * base_sha); change inspection; the blocking stops (symlink, then diff
+ * size); a round with no difference from the base fails as "no changes"
+ * without running any check; otherwise gitleaks, then the check commands
+ * (skipped when a protected path changed or none are configured); the exit
+ * decision (decideImplementRoundExit, with the staged tree sha as the diff
+ * fingerprint); one implement_rounds row per Claude run.
+ */
+export async function runImplementVerifyLoop(
+  deps: ImplementLoopDeps,
+  input: ImplementLoopInput,
+): Promise<ImplementLoopResult> {
+  let round = 1;
+  let current: ImplementClaudeRound = input.firstRound;
+  let previousDiffHash: string | null = null;
+  let previousCheckHash: string | null = null;
+  let totalCostUsd = 0;
+  let lastValidOutput: ImplementClaudeOutput | null = null;
+
+  for (;;) {
+    totalCostUsd += current.cost_usd;
+    const mode: ImplementRoundMode = round === 1 ? "implement" : "fix";
+    const base = {
+      work_item_id: input.workItemId,
+      attempt: input.attempt,
+      mode,
+      agent_run_id: current.agent_run_id,
+    };
+    const stopped = (
+      fields: Partial<ImplementLoopResult> & Pick<ImplementLoopResult, "exit">,
+    ): ImplementLoopResult => ({
+      reason: null,
+      gap_report: null,
+      rounds: round,
+      total_cost_usd: totalCostUsd,
+      final_output: lastValidOutput,
+      protected_changes: [],
+      checks: null,
+      diff_stat: null,
+      changed_paths: [],
+      ...fields,
+    });
+
+    if (current.kind === "claude_failed") {
+      const reason = `claude run failed (${current.reason}): ${current.detail}`;
+      await deps.recordRound({
+        ...base,
+        outcome: "error",
+        summary: "",
+        gap_report: null,
+        check_output: truncateCheckOutput(reason),
+        checks_skipped_reason: null,
+        protected_changes: [],
+        diff_stat: null,
+      });
+      return stopped({ exit: "claude_error", reason });
+    }
+    const produced: ProducedRound = current;
+    if (produced.kind === "output") {
+      lastValidOutput = produced.output;
+      if (produced.output.outcome === "requirements_gap") {
+        await deps.recordRound({
+          ...base,
+          outcome: "requirements_gap",
+          summary: produced.output.summary,
+          gap_report: produced.output.gap_report,
+          check_output: null,
+          checks_skipped_reason: null,
+          protected_changes: [],
+          diff_stat: null,
+        });
+        return stopped({
+          exit: "requirements_gap",
+          gap_report: produced.output.gap_report,
+        });
+      }
+    }
+
+    const fingerprint = await deps.fingerprint();
+    const inspection = await deps.inspectChanges();
+    const protectedChanges = [
+      ...classifyProtectedChanges(
+        inspection.changes,
+        inspection.packageJsonScriptsChanged,
+      ),
+    ];
+    const changedPaths = inspection.changes.map((change) => change.path);
+    const stop = blockingStop(
+      inspection.symlinkReasons,
+      deps.diffSizeReasons(
+        inspection.changes.length,
+        fingerprint.diffStat.added + fingerprint.diffStat.deleted,
+      ),
+    );
+    if (stop !== null) {
+      await deps.recordRound({
+        ...base,
+        outcome: "check_failed",
+        summary: produced.output.summary,
+        gap_report: null,
+        check_output: truncateCheckOutput(stop.reasons.join("\n")),
+        checks_skipped_reason: null,
+        protected_changes: protectedChanges,
+        diff_stat: fingerprint.diffStat,
+      });
+      return stopped({
+        exit: stop.exit,
+        reason: stop.reasons.join("; "),
+        protected_changes: protectedChanges,
+        diff_stat: fingerprint.diffStat,
+        changed_paths: changedPaths,
+      });
+    }
+
+    const evaluation = await evaluateChecks(deps, produced, {
+      noChanges: fingerprint.diffStat.files === 0,
+      protectedChanged: protectedChanges.length > 0,
+      hasCheckCommands: input.hasCheckCommands,
+    });
+    const checkHash =
+      evaluation.state === "failed" ? stallHash(evaluation.stallText) : null;
+    const dailyBudgetExceeded =
+      evaluation.state === "failed" ? await deps.dailyBudgetExceeded() : false;
+    const exit = decideImplementRoundExit({
+      claudeOutcome: "done",
+      checks: evaluation.state,
+      round,
+      maxRounds: input.maxRounds,
+      dailyBudgetExceeded,
+      checkOutputHash: checkHash,
+      previousCheckOutputHash: previousCheckHash,
+      diffHash: fingerprint.treeSha,
+      previousDiffHash,
+    });
+    await deps.recordRound({
+      ...base,
+      outcome: roundOutcomeForExit(exit),
+      summary: produced.output.summary,
+      gap_report: null,
+      check_output:
+        evaluation.outputText.length === 0
+          ? null
+          : truncateCheckOutput(evaluation.outputText),
+      checks_skipped_reason: evaluation.skipReason,
+      protected_changes: protectedChanges,
+      diff_stat: fingerprint.diffStat,
+    });
+    if (exit !== "continue") {
+      return stopped({
+        exit,
+        reason: reasonForExit(exit, round),
+        protected_changes: protectedChanges,
+        checks: evaluation.summary,
+        diff_stat: fingerprint.diffStat,
+        changed_paths: changedPaths,
+      });
+    }
+
+    deps.log("implement round failed its checks; starting a fix round", {
+      round,
+      failed: evaluation.failures.map((failure) => failure.command),
+      contract_violated: evaluation.contractViolated,
+    });
+    previousDiffHash = fingerprint.treeSha;
+    previousCheckHash = checkHash;
+    round += 1;
+    current = await deps.runFixRound({
+      round,
+      failures: evaluation.failures,
+      contractViolated: evaluation.contractViolated,
+    });
+  }
 }

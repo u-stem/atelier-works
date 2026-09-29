@@ -914,6 +914,16 @@ describe("implementFixPrompt", () => {
     const prompt = implementFixPrompt(FIX_INPUT, FIXED_UUID);
     expect(prompt).toContain("Do not weaken or delete a test");
   });
+
+  test("renders the output contract note after every DATA fence", () => {
+    const prompt = implementFixPrompt(
+      { ...FIX_INPUT, outputContractNote: "CONTRACT_NOTE_4455" },
+      FIXED_UUID,
+    );
+    expect(prompt.indexOf("CONTRACT_NOTE_4455")).toBeGreaterThan(
+      prompt.lastIndexOf(">>>DATA-test-nonce"),
+    );
+  });
 });
 
 describe("factory-implementation SKILL.md ⇔ IMPLEMENT_SCHEMA", () => {

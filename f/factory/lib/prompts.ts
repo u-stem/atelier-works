@@ -768,6 +768,10 @@ export type ImplementFixPromptInput = ImplementPromptInput & {
   round: number;
   /** `factory_config.implement_max_rounds`. */
   maxRounds: number;
+  /** Factory-authored rules to restate when the previous round's output
+   * broke the output contract — plain instruction text, rendered outside
+   * every DATA fence (it is not target-repo data). */
+  outputContractNote?: string;
 };
 
 export function implementFixPrompt(
@@ -800,6 +804,9 @@ export function implementFixPrompt(
       ),
     );
   });
+  if (input.outputContractNote !== undefined) {
+    sections.push("", input.outputContractNote);
+  }
   sections.push(...implementOutputSections());
   return sections.join("\n");
 }
