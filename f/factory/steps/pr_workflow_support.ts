@@ -1198,6 +1198,74 @@ export async function listChangedPaths(
   return parseGitDiffNameStatusZ(result.stdout);
 }
 
+const SYMLINK_MODE = "120000";
+
+/** The paths of `git diff --raw -z` entries whose old or new mode is
+ * `120000` (a symlink): additions, modifications, deletions, typechanges
+ * either way, and renames / copies (reported by their new path). Records
+ * are `:<oldmode> <newmode> <oldsha> <newsha> <status>\0<path>\0`, with a
+ * second path for `R` / `C`. Paths are NUL-terminated and never C-quoted.
+ * Deduplicated, in git's order. */
+export function parseRawSymlinkPaths(output: string): string[] {
+  const fields = output.split("\u0000");
+  const paths: string[] = [];
+  let index = 0;
+  while (index < fields.length) {
+    const meta = fields[index] ?? "";
+    index += 1;
+    if (!meta.startsWith(":")) continue;
+    const [oldMode, newMode, , , status] = meta.slice(1).split(" ");
+    const kind = (status ?? "").charAt(0);
+    const pathCount = kind === "R" || kind === "C" ? 2 : 1;
+    const path = fields[index + pathCount - 1] ?? "";
+    index += pathCount;
+    if (
+      (oldMode === SYMLINK_MODE || newMode === SYMLINK_MODE) &&
+      path.length > 0 &&
+      !paths.includes(path)
+    ) {
+      paths.push(path);
+    }
+  }
+  return paths;
+}
+
+/** Every path whose symlink-ness is involved in the difference between
+ * `baseSha` and the staged worktree (parseRawSymlinkPaths over `git diff
+ * --cached --raw -z`) — the implement flow's symlink detection, read from
+ * git's modes rather than from the filesystem, so a symlink the worktree no
+ * longer holds (deleted, turned into a file) is still reported. */
+export async function listSymlinkChanges(
+  run: CommandRunner,
+  worktreeDir: string,
+  baseSha: string,
+): Promise<string[]> {
+  assertSha(baseSha);
+  const result = await run(
+    gitHardeningArgv([
+      "diff",
+      "--cached",
+      "--raw",
+      "-z",
+      "--no-ext-diff",
+      baseSha,
+      "--",
+    ]),
+    {
+      cwd: worktreeDir,
+      env: resolvedEnv({ GIT_TERMINAL_PROMPT: "0" }, undefined, undefined),
+    },
+  );
+  if (result.exitCode !== 0) {
+    throw new Error(
+      maskSecrets(
+        `git diff --cached --raw -z failed in ${worktreeDir}: ${result.stderr.trim()}`,
+      ),
+    );
+  }
+  return parseRawSymlinkPaths(result.stdout);
+}
+
 /** Union of `git status --porcelain` (which alone already covers both
  * staged and unstaged changes, tracked and untracked) and
  * `git diff --name-only` (belt-and-suspenders per this task's instructions)

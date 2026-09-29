@@ -44,12 +44,10 @@ import {
   worktreeFingerprint,
 } from "../lib/workspace.ts";
 import {
-  detectEscapingSymlinks,
-  detectSymlinkChanges,
   evaluateDiffSizeGuard,
   IMPLEMENT_DIFF_SIZE_LIMIT_NAMES,
   listChangedPaths,
-  listSymlinkTargets,
+  listSymlinkChanges,
   packageJsonScriptsChanged,
   readWorktreeFileIfExists,
   runAllowedCheckCommands,
@@ -58,7 +56,8 @@ import {
 /** Change listing for one round, after worktreeFingerprint staged
  * everything: every path differing from `baseSha`, package.json scripts
  * changes (every file named exactly package.json, base vs worktree), and
- * the blocking symlink reasons (same two signals as pr_fix_verify). */
+ * the blocking symlink reasons — one per path whose old or new git mode is
+ * a symlink (listSymlinkChanges), whatever the change. */
 async function inspectChanges(
   worktreeDir: string,
   baseSha: string,
@@ -81,18 +80,17 @@ async function inspectChanges(
       break;
     }
   }
-  const symlinkTargets = await listSymlinkTargets(
+  const symlinkPaths = await listSymlinkChanges(
     runCommand,
     worktreeDir,
-    changes.map((entry) => entry.path),
+    baseSha,
   );
   return {
     changes,
     packageJsonScriptsChanged: scriptsChanged,
-    symlinkReasons: [
-      ...detectEscapingSymlinks(worktreeDir, symlinkTargets),
-      ...detectSymlinkChanges(changes, symlinkTargets),
-    ],
+    symlinkReasons: symlinkPaths.map(
+      (path) => `symlink_change: symlink changed: ${path}`,
+    ),
   };
 }
 

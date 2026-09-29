@@ -18,6 +18,7 @@ import {
   isEscapingSymlink,
   isNewShellScript,
   listChangedPaths,
+  listSymlinkChanges,
   listSymlinkTargets,
   matchesForbiddenPath,
   mergeChangedPaths,
@@ -26,6 +27,7 @@ import {
   parseGitDiffNameStatusZ,
   parseGitDiffNumstat,
   parseGitStatusPorcelain,
+  parseRawSymlinkPaths,
   parseSymlinkModePaths,
   parseWcLineCount,
   resolveSymlinkTarget,
@@ -855,5 +857,78 @@ describe("listChangedPaths", () => {
     await expect(listChangedPaths(run, "/wt", BASE)).rejects.toThrow(
       /--name-status/,
     );
+  });
+});
+
+describe("parseRawSymlinkPaths", () => {
+  const Z = "\u0000";
+  const SHA_A = "a".repeat(40);
+  const SHA_B = "b".repeat(40);
+  const ZERO = "0".repeat(40);
+
+  test("reports an added symlink", () => {
+    expect(
+      parseRawSymlinkPaths(`:000000 120000 ${ZERO} ${SHA_A} A${Z}link${Z}`),
+    ).toEqual(["link"]);
+  });
+
+  test("reports a regular file turned into a symlink", () => {
+    expect(
+      parseRawSymlinkPaths(`:100644 120000 ${SHA_A} ${SHA_B} T${Z}conf${Z}`),
+    ).toEqual(["conf"]);
+  });
+
+  test("reports a symlink turned into a regular file", () => {
+    expect(
+      parseRawSymlinkPaths(`:120000 100644 ${SHA_A} ${SHA_B} T${Z}conf${Z}`),
+    ).toEqual(["conf"]);
+  });
+
+  test("reports a renamed symlink by its new path", () => {
+    expect(
+      parseRawSymlinkPaths(
+        `:120000 120000 ${SHA_A} ${SHA_A} R100${Z}old${Z}new${Z}`,
+      ),
+    ).toEqual(["new"]);
+  });
+
+  test("ignores regular files, including after a rename entry", () => {
+    expect(
+      parseRawSymlinkPaths(
+        `:100644 100644 ${SHA_A} ${SHA_A} R100${Z}a${Z}b${Z}:100644 100644 ${SHA_A} ${SHA_B} M${Z}src/x.ts${Z}`,
+      ),
+    ).toEqual([]);
+  });
+});
+
+describe("listSymlinkChanges", () => {
+  const BASE = "b".repeat(40);
+
+  test("diffs the index against the base sha with --raw -z", async () => {
+    const { run, calls } = createFakeCommandRunner([ok("")]);
+    await listSymlinkChanges(run, "/wt", BASE);
+    expect(calls[0]?.argv.slice(-7)).toEqual([
+      "diff",
+      "--cached",
+      "--raw",
+      "-z",
+      "--no-ext-diff",
+      BASE,
+      "--",
+    ]);
+  });
+
+  test("returns the symlink paths git reports", async () => {
+    const { run } = createFakeCommandRunner([
+      ok(
+        `:000000 120000 ${"0".repeat(40)} ${"a".repeat(40)} A\u0000link\u0000`,
+      ),
+    ]);
+    expect(await listSymlinkChanges(run, "/wt", BASE)).toEqual(["link"]);
+  });
+
+  test("throws when git diff fails", async () => {
+    const { run } = createFakeCommandRunner([fail("fatal: bad object")]);
+    await expect(listSymlinkChanges(run, "/wt", BASE)).rejects.toThrow(/--raw/);
   });
 });
