@@ -67,6 +67,7 @@ import {
   access,
   copyFile,
   mkdir,
+  mkdtemp,
   open,
   readdir,
   readFile,
@@ -77,13 +78,18 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
-import { dirname } from "node:path";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { maskSecrets } from "./log.ts";
 import {
   assertBranchName,
   assertGitHubName,
   assertSha,
   type GitIdentity,
+  type ImplementDiffStat,
+  isNumber,
+  isRecord,
+  isString,
 } from "./types.ts";
 
 // ---------------------------------------------------------------------------
@@ -1944,4 +1950,361 @@ export async function currentRemoteHeadSha(
   const sha = result.stdout.trim();
   assertSha(sha);
   return sha;
+}
+
+// ---------------------------------------------------------------------------
+// resolveDefaultBranchName / mergeBaseSha / deleteLocalBranch (implement flow)
+// ---------------------------------------------------------------------------
+
+const ORIGIN_PREFIX = "origin/";
+
+/** The target repo's default branch name from the `ensureRepo` clone's
+ * `refs/remotes/origin/HEAD` symbolic ref (measured: `origin/main` on a
+ * `--no-checkout` clone) — the base the implement flow opens its PR
+ * against, and the ref `git gtr new` branches a new worktree from.
+ * Local-only; `ensureRepo` must have run first. */
+export async function resolveDefaultBranchName(opts: {
+  readonly run: CommandRunner;
+  readonly repoDir: string;
+  readonly home?: string;
+  readonly path?: string;
+}): Promise<string> {
+  const result = await opts.run(
+    buildGitArgv(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]),
+    {
+      cwd: opts.repoDir,
+      env: localGitEnv(opts.home, opts.path),
+    },
+  );
+  if (result.exitCode !== 0) {
+    throw gitError(
+      `git symbolic-ref refs/remotes/origin/HEAD failed in ${opts.repoDir}`,
+      result,
+    );
+  }
+  const ref = result.stdout.trim();
+  if (!ref.startsWith(ORIGIN_PREFIX)) {
+    throw new Error(`unexpected origin/HEAD target: ${JSON.stringify(ref)}`);
+  }
+  const branch = ref.slice(ORIGIN_PREFIX.length);
+  assertBranchName(branch);
+  return branch;
+}
+
+export type WorktreeGitOptions = {
+  readonly run: CommandRunner;
+  readonly worktreeDir: string;
+  readonly home?: string;
+  readonly path?: string;
+};
+
+/** `git merge-base origin/<baseBranch> HEAD` in the implement worktree —
+ * the point the branch left the default branch. The implement flow
+ * compares every round against it, so changes committed earlier on the
+ * branch (a needs_human partial push, an existing PR) stay visible. No `--`:
+ * `baseBranch` is validated by assertBranchName, the other argument is the
+ * literal HEAD. */
+export async function mergeBaseSha(
+  opts: WorktreeGitOptions & { readonly baseBranch: string },
+): Promise<string> {
+  assertBranchName(opts.baseBranch);
+  const result = await opts.run(
+    buildGitArgv(["merge-base", `origin/${opts.baseBranch}`, "HEAD"]),
+    {
+      cwd: opts.worktreeDir,
+      env: localGitEnv(opts.home, opts.path),
+    },
+  );
+  if (result.exitCode !== 0) {
+    throw gitError(
+      `git merge-base origin/${opts.baseBranch} HEAD failed in ${opts.worktreeDir}`,
+      result,
+    );
+  }
+  const sha = result.stdout.trim();
+  assertSha(sha);
+  return sha;
+}
+
+export type DeleteLocalBranchOptions = {
+  readonly run: CommandRunner;
+  readonly repoDir: string;
+  readonly branch: string;
+  readonly home?: string;
+  readonly path?: string;
+  readonly lockFs?: LockFs;
+  readonly sleep?: (ms: number) => Promise<void>;
+  readonly now?: () => Date;
+};
+
+export type DeleteLocalBranchResult = { readonly deleted: boolean };
+
+// git's phrasing for `branch -D` on a missing branch (measured:
+// "error: branch '<b>' not found", exit 1).
+const LOCAL_BRANCH_MISSING_SUBSTRING = "not found";
+
+/** `git branch -D -- <branch>` in the main clone (工程3 design §14:
+ * `removeWorktree` keeps the local branch, so a `requirements_gap` exit with
+ * no PR drops it too, or the re-implementation after re-approval would
+ * start from the stale branch). Remove the worktree first — git refuses to
+ * delete a checked-out branch. */
+export async function deleteLocalBranch(
+  opts: DeleteLocalBranchOptions,
+): Promise<DeleteLocalBranchResult> {
+  assertBranchName(opts.branch);
+  return withRepoLock({
+    lockPath: repoLockPath(opts.repoDir),
+    ...(opts.lockFs !== undefined ? { lockFs: opts.lockFs } : {}),
+    ...(opts.sleep !== undefined ? { sleep: opts.sleep } : {}),
+    ...(opts.now !== undefined ? { now: opts.now } : {}),
+    fn: async () => {
+      const result = await opts.run(
+        buildGitArgv(["branch", "-D", "--", opts.branch]),
+        {
+          cwd: opts.repoDir,
+          env: localGitEnv(opts.home, opts.path),
+        },
+      );
+      if (result.exitCode === 0) return { deleted: true };
+      if (result.stderr.toLowerCase().includes(LOCAL_BRANCH_MISSING_SUBSTRING))
+        return { deleted: false };
+      throw gitError(`git branch -D ${opts.branch} failed`, result);
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// worktreeFingerprint / runGitleaksOnWorktree (implement flow verify loop)
+// ---------------------------------------------------------------------------
+
+async function stageAll(opts: WorktreeGitOptions): Promise<void> {
+  const result = await opts.run(buildGitArgv(["add", "-A"]), {
+    cwd: opts.worktreeDir,
+    env: localGitEnv(opts.home, opts.path),
+  });
+  if (result.exitCode !== 0)
+    throw gitError(`git add -A failed in ${opts.worktreeDir}`, result);
+}
+
+function countOrZero(text: string | undefined): number {
+  if (text === undefined || text === "-") return 0;
+  const value = Number(text);
+  return Number.isFinite(value) ? value : 0;
+}
+
+/** `git diff --numstat` totals: one file per non-blank line, a binary
+ * file's `-` counts contribute 0 (it still counts as a file). */
+export function parseNumstatTotals(stdout: string): ImplementDiffStat {
+  let files = 0;
+  let added = 0;
+  let deleted = 0;
+  for (const line of stdout.split("\n")) {
+    if (line.trim().length === 0) continue;
+    const [addedText, deletedText] = line.split("\t");
+    files += 1;
+    added += countOrZero(addedText);
+    deleted += countOrZero(deletedText);
+  }
+  return { files, added, deleted };
+}
+
+export type WorktreeFingerprint = {
+  /** `git write-tree` of the fully staged worktree: identical iff the
+   * worktree content (untracked files included) is identical. */
+  readonly treeSha: string;
+  /** Staged state vs `baseSha`; `files === 0` means nothing differs from the base. */
+  readonly diffStat: ImplementDiffStat;
+};
+
+/** Stages every change (`git add -A`; harmless for the later
+ * `commitAndPush`, which stages again), fingerprints the staged state with
+ * `git write-tree` (stall detection; design §14: plain `git diff` would
+ * miss new files), and measures it against `baseSha` with
+ * `git diff --cached --numstat` (implement_rounds.diff_stat and the
+ * diff-size guard). */
+export async function worktreeFingerprint(
+  opts: WorktreeGitOptions & { readonly baseSha: string },
+): Promise<WorktreeFingerprint> {
+  assertSha(opts.baseSha);
+  await stageAll(opts);
+  const env = localGitEnv(opts.home, opts.path);
+  const tree = await opts.run(buildGitArgv(["write-tree"]), {
+    cwd: opts.worktreeDir,
+    env,
+  });
+  if (tree.exitCode !== 0)
+    throw gitError(`git write-tree failed in ${opts.worktreeDir}`, tree);
+  const treeSha = tree.stdout.trim();
+  assertSha(treeSha);
+  const numstat = await opts.run(
+    buildGitArgv([
+      "diff",
+      "--cached",
+      "--numstat",
+      "--no-ext-diff",
+      "--no-textconv",
+      opts.baseSha,
+      "--",
+    ]),
+    { cwd: opts.worktreeDir, env },
+  );
+  if (numstat.exitCode !== 0) {
+    throw gitError(
+      `git diff --cached --numstat failed in ${opts.worktreeDir}`,
+      numstat,
+    );
+  }
+  return { treeSha, diffStat: parseNumstatTotals(numstat.stdout) };
+}
+
+export type GitleaksResult = { readonly ok: boolean; readonly output: string };
+
+export type GitleaksConfigDir = {
+  readonly path: string;
+  readonly cleanup: () => Promise<void>;
+};
+
+const GITLEAKS_CONFIG_FILE = "gitleaks.toml";
+
+/** gitleaks' built-in rules with nothing on top, forced with `--config` so a
+ * `.gitleaks.toml` in the target repo (possibly written by Claude) cannot
+ * allowlist anything — and a malformed one cannot abort the scan. The same
+ * private dir is the `--gitleaks-ignore-path`, so a repo `.gitleaksignore`
+ * is not read, and `--ignore-gitleaks-allow` voids inline `gitleaks:allow`
+ * comments (design §3: the scan is independent of the repo's settings). */
+export const GITLEAKS_DEFAULT_ONLY_CONFIG = "[extend]\nuseDefault = true\n";
+
+const GITLEAKS_LEAKS_EXIT_CODE = 1;
+const GITLEAKS_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
+
+const defaultCreateGitleaksConfigDir = async (): Promise<GitleaksConfigDir> => {
+  const dir = await mkdtemp(join(tmpdir(), "factory-gitleaks-"));
+  await writeFile(
+    join(dir, GITLEAKS_CONFIG_FILE),
+    GITLEAKS_DEFAULT_ONLY_CONFIG,
+    { mode: 0o600 },
+  );
+  return {
+    path: dir,
+    cleanup: async () => {
+      await rm(dir, { recursive: true, force: true });
+    },
+  };
+};
+
+type GitleaksFinding = {
+  readonly RuleID: string;
+  readonly File: string;
+  readonly StartLine: number;
+};
+
+function isGitleaksFinding(value: unknown): value is GitleaksFinding {
+  return (
+    isRecord(value) &&
+    isString(value.RuleID) &&
+    isString(value.File) &&
+    isNumber(value.StartLine)
+  );
+}
+
+/** One `- <rule>: <file>:<line>` line per finding of a gitleaks JSON report
+ * — never the matched text, even redacted (design §13). `null` when
+ * `stdout` is not a JSON array. */
+export function formatGitleaksReport(stdout: string): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed)) return null;
+  const lines = parsed
+    .filter(isGitleaksFinding)
+    .map(
+      (finding) =>
+        `- ${finding.RuleID}: ${finding.File}:${String(finding.StartLine)}`,
+    );
+  const unexpected = parsed.length - lines.length;
+  if (unexpected > 0)
+    lines.push(
+      `- (${String(unexpected)} more finding(s) in an unexpected shape)`,
+    );
+  return lines.join("\n");
+}
+
+/**
+ * The implement flow's fixed secret scan (工程3 design §3, §14; flags and
+ * exit codes measured in the worker image, 8.30.1): stages every change
+ * (unstaged changes are not scanned), then `gitleaks git --staged
+ * --redact ... <worktreeDir>` (the repo is the positional argument, not
+ * the cwd). Exit 0 → `ok: true`; exit 1 with a complete JSON report →
+ * `ok: false` with one line per finding (masked); a report cut by the
+ * output cap, exit 1 without JSON, or any other exit (an unknown flag is
+ * 126), a timeout — throws, never read as "no leaks".
+ */
+export async function runGitleaksOnWorktree(
+  opts: WorktreeGitOptions & {
+    readonly timeoutMs: number;
+    readonly createConfigDir?: () => Promise<GitleaksConfigDir>;
+  },
+): Promise<GitleaksResult> {
+  await stageAll(opts);
+  const configDir = await (
+    opts.createConfigDir ?? defaultCreateGitleaksConfigDir
+  )();
+  try {
+    const result = await opts.run(
+      [
+        "gitleaks",
+        "git",
+        "--staged",
+        "--redact",
+        "--no-banner",
+        "--no-color",
+        "--log-level",
+        "error",
+        "--exit-code",
+        String(GITLEAKS_LEAKS_EXIT_CODE),
+        "--report-format",
+        "json",
+        "--report-path",
+        "-",
+        "--config",
+        join(configDir.path, GITLEAKS_CONFIG_FILE),
+        "--gitleaks-ignore-path",
+        configDir.path,
+        "--ignore-gitleaks-allow",
+        opts.worktreeDir,
+      ],
+      {
+        cwd: opts.worktreeDir,
+        env: localGitEnv(opts.home, opts.path),
+        timeoutMs: opts.timeoutMs,
+        maxOutputBytes: GITLEAKS_MAX_OUTPUT_BYTES,
+      },
+    );
+    if (result.timedOut)
+      throw new Error(`gitleaks timed out after ${String(opts.timeoutMs)}ms`);
+    if (result.exitCode === 0) return { ok: true, output: "" };
+    if (result.exitCode === GITLEAKS_LEAKS_EXIT_CODE) {
+      if (isCappedOutput(result.stdout))
+        throw new Error("gitleaks report exceeded the output cap");
+      const report = formatGitleaksReport(result.stdout);
+      if (report !== null) {
+        return {
+          ok: false,
+          output: maskSecrets(
+            report.length === 0 ? "gitleaks reported a leak" : report,
+          ),
+        };
+      }
+    }
+    throw new Error(
+      maskSecrets(
+        `gitleaks failed (exit ${String(result.exitCode)}): ${result.stderr.trim()}`,
+      ),
+    );
+  } finally {
+    await configDir.cleanup();
+  }
 }
