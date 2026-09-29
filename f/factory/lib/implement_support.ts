@@ -28,6 +28,8 @@ import {
   isRecord,
   isString,
   isStringArray,
+  TERMINAL_WORK_ITEM_STATUSES,
+  type WorkItem,
 } from "./types.ts";
 import { withCommitTrailers } from "./workspace.ts";
 
@@ -652,5 +654,25 @@ export function isRequirementsApprovedForAttempt(
     approval !== null &&
     approval.status === "approved" &&
     approval.attempt === attempt
+  );
+}
+
+// ---------------------------------------------------------------------------
+// hasActivePrRun (implement_prepare: implement and pr_fix / pr_review never
+// share the branch's worktree at the same time)
+// ---------------------------------------------------------------------------
+
+export const ACTIVE_PR_RUN_REASON = "pull request has an active fix run";
+
+/** Whether the PR's latest work item (db.latestPrWorkItem, or null) is a
+ * pr_fix or pr_review run that has not reached a terminal status — it may
+ * be using the implement branch's worktree right now. */
+export function hasActivePrRun(
+  item: Pick<WorkItem, "kind" | "status"> | null,
+): boolean {
+  return (
+    item !== null &&
+    (item.kind === "pr_fix" || item.kind === "pr_review") &&
+    !TERMINAL_WORK_ITEM_STATUSES.includes(item.status)
   );
 }

@@ -10,6 +10,7 @@ import {
   describeReason,
   earlyExitBase,
   evaluateFixRoundGuard,
+  evaluateParentImplementingGuard,
   evaluatePrFixSafetyGuards,
   evaluateRepoAllowedGuard,
   nextActionFor,
@@ -95,6 +96,23 @@ describe("evaluateRepoAllowedGuard", () => {
   test("fails when the repo is not allowed", () => {
     const result = evaluateRepoAllowedGuard(false);
     expect(result.ok).toBe(false);
+  });
+});
+
+describe("evaluateParentImplementingGuard", () => {
+  test("passes without a parent work item", () => {
+    expect(evaluateParentImplementingGuard(null)).toEqual({ ok: true });
+  });
+
+  test("passes when the parent is not implementing", () => {
+    expect(evaluateParentImplementingGuard("pr_open")).toEqual({ ok: true });
+  });
+
+  test("blocks while the parent issue is being re-implemented", () => {
+    expect(evaluateParentImplementingGuard("implementing")).toEqual({
+      ok: false,
+      reason: "parent issue is being re-implemented",
+    });
   });
 });
 
@@ -342,6 +360,17 @@ describe("describeReason (implement flow)", () => {
       "worktreeのgitの参照先(.gitファイル)が書き換えられました",
     );
   });
+  test("translates an active fix run on the PR", () => {
+    expect(describeReason("pull request has an active fix run")).toBe(
+      "このPRで自動修正が実行中のため実装を止めました",
+    );
+  });
+
+  test("translates a parent issue being re-implemented", () => {
+    expect(describeReason("parent issue is being re-implemented")).toBe(
+      "親Issueの実装をやり直している最中のため修正を止めました",
+    );
+  });
 });
 
 describe("nextActionFor (implement flow)", () => {
@@ -384,6 +413,18 @@ describe("nextActionFor (implement flow)", () => {
   test("asks to inspect the branch after a modified .git pointer", () => {
     expect(nextActionFor("worktree git pointer was modified")).toBe(
       "実装ブランチとworktreeを人が確認し、不審な変更があればブランチを削除してください",
+    );
+  });
+
+  test("waits for the fix run before re-running the implement flow", () => {
+    expect(nextActionFor("pull request has an active fix run")).toBe(
+      "自動修正の完了を待ってからConsoleのFailuresタブで再実行してください",
+    );
+  });
+
+  test("waits for the implement flow before re-adding factory:fix", () => {
+    expect(nextActionFor("parent issue is being re-implemented")).toBe(
+      "実装フローの完了を待ってから再度factory:fixを付けてください",
     );
   });
 });

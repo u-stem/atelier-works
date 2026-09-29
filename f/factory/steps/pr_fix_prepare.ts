@@ -1,5 +1,7 @@
 // PathScript step for f/factory/pr_fix: loads the work item, checks the
-// fix_round budget and the pre-attempt safety guards (spec-cycle2.md §7
+// fix_round budget, the parent issue not being re-implemented (the implement
+// flow shares the branch's worktree — evaluateParentImplementingGuard), and
+// the pre-attempt safety guards (spec-cycle2.md §7
 // item 3 / docs/security.md "pr_fix の安全策" — PR open, head.repo ==
 // base.repo, not draft, base branch not protected), and — only once those
 // pass — sets up the self clone and a `git gtr` worktree on the PR's head
@@ -20,6 +22,7 @@ import {
 import {
   earlyExitBase,
   evaluateFixRoundGuard,
+  evaluateParentImplementingGuard,
   evaluatePrFixSafetyGuards,
   evaluateRepoAllowedGuard,
   type PrFixGateOutcome,
@@ -88,6 +91,21 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
     return {
       outcome: "round_exhausted",
       reason: roundGuard.reason,
+      ...earlyExitBase(workItem),
+    };
+  }
+
+  // The implement flow re-implementing the parent issue uses this PR's
+  // branch worktree too: never both at once.
+  const parent =
+    workItem.parent_work_item_id === null
+      ? null
+      : await getWorkItem(workItem.parent_work_item_id);
+  const parentGuard = evaluateParentImplementingGuard(parent?.status ?? null);
+  if (!parentGuard.ok) {
+    return {
+      outcome: "guard_blocked",
+      reason: parentGuard.reason,
       ...earlyExitBase(workItem),
     };
   }

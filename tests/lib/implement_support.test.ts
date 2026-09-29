@@ -9,6 +9,7 @@ import {
   classifyProtectedChanges,
   decideImplementRoundExit,
   extractAcceptanceCriteria,
+  hasActivePrRun,
   IMPLEMENT_CHECK_SKIP_REASONS,
   IMPLEMENT_CLAUDE_OUTCOMES,
   isImplementClaudeOutput,
@@ -880,5 +881,39 @@ describe("isRequirementsApprovedForAttempt", () => {
 
   test("rejects a missing request", () => {
     expect(isRequirementsApprovedForAttempt(null, 1)).toBe(false);
+  });
+});
+
+describe("hasActivePrRun", () => {
+  test("is false when the PR has no work item", () => {
+    expect(hasActivePrRun(null)).toBe(false);
+  });
+
+  test("is true for a running pr_fix", () => {
+    expect(hasActivePrRun({ kind: "pr_fix", status: "fixing" })).toBe(true);
+  });
+
+  test("is true for a running pr_review", () => {
+    expect(hasActivePrRun({ kind: "pr_review", status: "reviewing" })).toBe(
+      true,
+    );
+  });
+
+  test("is false for a finished pr_fix", () => {
+    expect(
+      hasActivePrRun({ kind: "pr_fix", status: "rereview_requested" }),
+    ).toBe(false);
+  });
+
+  test("is false for a pr_fix that stopped for a human", () => {
+    expect(hasActivePrRun({ kind: "pr_fix", status: "needs_human" })).toBe(
+      false,
+    );
+  });
+
+  test("is false for an issue work item", () => {
+    expect(hasActivePrRun({ kind: "issue", status: "implementing" })).toBe(
+      false,
+    );
   });
 });

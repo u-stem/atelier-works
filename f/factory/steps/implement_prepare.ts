@@ -1,7 +1,8 @@
 // PathScript step 1/4 of f/factory/implement (工程3 design §2
 // implement_prepare): re-checks everything the approval assumed (status,
 // daily budget, repo allowlist, the Issue still open, an approved
-// requirements draft for the work item's attempt), then prepares the
+// requirements draft for the work item's attempt, no pr_fix / pr_review run
+// active on the branch's open PR — hasActivePrRun), then prepares the
 // implement branch and its gtr worktree (lib/implement_loop.ts's
 // prepareImplementWorktree; git gtr 2.11.1 measured: `gtr new` reuses an
 // existing local branch, checks out origin/<branch> with upstream when only
@@ -23,6 +24,7 @@ import { isRepoAllowed, loadConfig } from "../lib/config.ts";
 import {
   getRequirementDraft,
   getWorkItem,
+  latestPrWorkItem,
   latestRequirementsApproval,
   setWorkItemBranch,
 } from "../lib/db.ts";
@@ -40,7 +42,9 @@ import {
   prepareImplementWorktree,
 } from "../lib/implement_loop.ts";
 import {
+  ACTIVE_PR_RUN_REASON,
   buildImplementBranchName,
+  hasActivePrRun,
   isRequirementsApprovedForAttempt,
 } from "../lib/implement_support.ts";
 import {
@@ -201,6 +205,24 @@ export async function main(
   const draft = await getRequirementDraft(approval.draft_id);
   if (draft === null) return stop("needs_human", noApproval);
 
+  // An open PR on the branch may have a pr_fix / pr_review run using the
+  // same worktree: checked before the worktree is touched (the reuse path
+  // resets and cleans it).
+  const branch = buildImplementBranchName(issueNumber, work_item_id);
+  const existingPr = await findOpenPullRequestByHead(
+    client,
+    workItem.owner,
+    workItem.repo,
+    branch,
+  );
+  if (
+    existingPr !== null &&
+    hasActivePrRun(
+      await latestPrWorkItem(workItem.owner, workItem.repo, existingPr.number),
+    )
+  )
+    return stop("needs_human", ACTIVE_PR_RUN_REASON);
+
   const factoryClone = await ensureFactoryClone({
     run: runCommand,
     repoUrl: config.factory_repo,
@@ -213,7 +235,6 @@ export async function main(
     repo: workItem.repo,
     ghToken,
   });
-  const branch = buildImplementBranchName(issueNumber, work_item_id);
   const baseBranch = await resolveDefaultBranchName({
     run: runCommand,
     repoDir,
@@ -250,12 +271,6 @@ export async function main(
     worktreeDir,
     baseBranch,
   });
-  const existingPr = await findOpenPullRequestByHead(
-    client,
-    workItem.owner,
-    workItem.repo,
-    branch,
-  );
 
   return {
     outcome: "proceed",

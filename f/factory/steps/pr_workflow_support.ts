@@ -759,6 +759,18 @@ export function evaluateRepoAllowedGuard(allowed: boolean): PrFixGuardResult {
       };
 }
 
+/** pr_fix and the implement flow share the PR branch's worktree: while
+ * the parent issue work item (`parent_work_item_id`) is `implementing`
+ * again, a fix run must not touch it. `parentStatus` is null without a
+ * parent (or when the parent row is gone). */
+export function evaluateParentImplementingGuard(
+  parentStatus: WorkItemStatus | null,
+): PrFixGuardResult {
+  return parentStatus === "implementing"
+    ? { ok: false, reason: "parent issue is being re-implemented" }
+    : { ok: true };
+}
+
 // ---------------------------------------------------------------------------
 // pr_fix_collect: new review/comment selection + outcome (pure)
 // ---------------------------------------------------------------------------
@@ -2700,6 +2712,18 @@ const REASON_RULES: readonly ReasonRule[] = [
     describe: () => "検証の後にworktreeが変更されました",
     nextAction: () =>
       "検査コマンドが追跡対象のファイルを書き換えていないか確認し、再実行してください",
+  },
+  {
+    pattern: /^pull request has an active fix run$/,
+    describe: () => "このPRで自動修正が実行中のため実装を止めました",
+    nextAction: () =>
+      "自動修正の完了を待ってからConsoleのFailuresタブで再実行してください",
+  },
+  {
+    pattern: /^parent issue is being re-implemented$/,
+    describe: () => "親Issueの実装をやり直している最中のため修正を止めました",
+    nextAction: () =>
+      "実装フローの完了を待ってから再度factory:fixを付けてください",
   },
   {
     pattern: /^worktree git pointer was modified$/,
