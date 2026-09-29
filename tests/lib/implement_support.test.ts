@@ -12,6 +12,7 @@ import {
   IMPLEMENT_CHECK_SKIP_REASONS,
   IMPLEMENT_CLAUDE_OUTCOMES,
   isImplementClaudeOutput,
+  isRequirementsApprovedForAttempt,
   NO_ACCEPTANCE_CRITERIA_NOTE,
   roundOutcomeForExit,
   stallHash,
@@ -805,5 +806,29 @@ describe("IMPLEMENT_CHECK_SKIP_REASONS", () => {
     expect(IMPLEMENT_CHECK_SKIP_REASONS.no_commands).toBe(
       "検査コマンドが未設定のため",
     );
+  });
+});
+
+describe("isRequirementsApprovedForAttempt", () => {
+  test("accepts an approved request for the same attempt", () => {
+    expect(
+      isRequirementsApprovedForAttempt({ status: "approved", attempt: 2 }, 2),
+    ).toBe(true);
+  });
+
+  test("rejects an approved request for another attempt", () => {
+    expect(
+      isRequirementsApprovedForAttempt({ status: "approved", attempt: 1 }, 2),
+    ).toBe(false);
+  });
+
+  test("rejects a request that is not approved", () => {
+    expect(
+      isRequirementsApprovedForAttempt({ status: "rejected", attempt: 2 }, 2),
+    ).toBe(false);
+  });
+
+  test("rejects a missing request", () => {
+    expect(isRequirementsApprovedForAttempt(null, 1)).toBe(false);
   });
 });

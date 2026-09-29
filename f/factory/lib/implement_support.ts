@@ -615,3 +615,21 @@ export function roundOutcomeForExit(
 export function stallHash(text: string): string {
   return createHash("sha256").update(text).digest("hex");
 }
+
+// ---------------------------------------------------------------------------
+// isRequirementsApprovedForAttempt (design §8: implement_prepare's gate and
+// retry_work_item's implement-vs-pipeline choice)
+// ---------------------------------------------------------------------------
+
+/** Whether `approval` (db.latestRequirementsApproval's row, or null) is an
+ * approved requirements request for exactly `attempt`. */
+export function isRequirementsApprovedForAttempt(
+  approval: { readonly status: string; readonly attempt: number } | null,
+  attempt: number,
+): boolean {
+  return (
+    approval !== null &&
+    approval.status === "approved" &&
+    approval.attempt === attempt
+  );
+}
