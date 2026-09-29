@@ -7,9 +7,11 @@ import {
   mainRepoDir,
   orphanClaudeThresholdSec,
   parseDiskUsageKb,
+  partitionRepoGroups,
   requirementsWorktreeDir,
   selectOrphanClaudePids,
   terminateOrphans,
+  unresolvedHoldersNoticeMessage,
 } from "../../f/factory/lib/cleanup_support.ts";
 
 describe("mainRepoDir", () => {
@@ -346,5 +348,40 @@ describe("orphanClaudeThresholdSec", () => {
         implement_timeout_sec: 3600,
       }),
     ).toBe(3900);
+  });
+});
+
+describe("partitionRepoGroups", () => {
+  const groups = [
+    { owner: "acme", repo: "widgets", items: [1] },
+    { owner: "acme", repo: "gadgets", items: [2] },
+  ];
+  const unresolved = [
+    { owner: "acme", repo: "widgets" },
+    { owner: "acme", repo: "other" },
+  ];
+
+  test("sweeps only the repos whose holders were resolved", () => {
+    expect(
+      partitionRepoGroups(groups, unresolved).sweep.map((g) => g.repo),
+    ).toEqual(["gadgets"]);
+  });
+
+  test("skips a repo with an unresolved holder", () => {
+    expect(
+      partitionRepoGroups(groups, unresolved).skipped.map((g) => g.repo),
+    ).toEqual(["widgets"]);
+  });
+
+  test("sweeps everything when every holder was resolved", () => {
+    expect(partitionRepoGroups(groups, []).sweep).toHaveLength(2);
+  });
+});
+
+describe("unresolvedHoldersNoticeMessage", () => {
+  test("names the skipped repository", () => {
+    expect(unresolvedHoldersNoticeMessage("acme", "widgets")).toContain(
+      "acme/widgets",
+    );
   });
 });

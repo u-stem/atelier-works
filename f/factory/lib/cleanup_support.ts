@@ -161,6 +161,31 @@ export function groupByRepo<
   });
 }
 
+/** Splits the stale-item groups into the repos to sweep and the repos to
+ * skip today: a repo where an active pr_fix's head branch could not be
+ * resolved is skipped (its held worktree is unknown), the rest are swept. */
+export function partitionRepoGroups<T>(
+  groups: readonly RepoGroup<T>[],
+  unresolved: readonly { readonly owner: string; readonly repo: string }[],
+): { readonly sweep: RepoGroup<T>[]; readonly skipped: RepoGroup<T>[] } {
+  const isUnresolved = (group: RepoGroup<T>): boolean =>
+    unresolved.some(
+      (entry) => entry.owner === group.owner && entry.repo === group.repo,
+    );
+  return {
+    sweep: groups.filter((group) => !isUnresolved(group)),
+    skipped: groups.filter(isUnresolved),
+  };
+}
+
+/** The notice for a repo skipped by partitionRepoGroups. */
+export function unresolvedHoldersNoticeMessage(
+  owner: string,
+  repo: string,
+): string {
+  return `${owner}/${repo}で稼働中の自動修正のブランチを確認できなかったため、このリポジトリの作業領域の掃除を見送りました。`;
+}
+
 // ---------------------------------------------------------------------------
 // selectOrphanClaudePids: parse `ps -eo pid,etimes,args`
 // ---------------------------------------------------------------------------
@@ -205,17 +230,18 @@ function isClaudeHeadlessInvocation(args: string): boolean {
 /**
  * Parses `ps -eo pid,etimes,args` output and returns the pids of every
  * headless Claude (`claude -p`) process whose elapsed time (`etimes`,
- * seconds) exceeds `timeoutSec`. A headless Claude process still running
- * past its own `claude_timeout_sec` subprocess timeout (lib/claude.ts's own
- * `runClaude` enforces that timeout on the process it directly spawned)
- * can only mean that enforcement never got the chance to fire — e.g. its
- * parent Windmill job was killed/cancelled first, reparenting the child
- * before it could be signaled — so any such process found here is by
- * definition orphaned and safe to terminate.
+ * seconds) exceeds `thresholdSec` (orphanClaudeThresholdSec: the longer of
+ * claude_timeout_sec and implement_timeout_sec, plus a grace period). A
+ * headless Claude process still running past every per-run subprocess
+ * timeout (lib/claude.ts's `runClaude` enforces its timeout on the process
+ * it directly spawned) can only mean that enforcement never got the chance
+ * to fire — e.g. its parent Windmill job was killed/cancelled first,
+ * reparenting the child before it could be signaled — so any such process
+ * found here is by definition orphaned and safe to terminate.
  */
 export function selectOrphanClaudePids(
   psOutput: string,
-  timeoutSec: number,
+  thresholdSec: number,
 ): number[] {
   return psOutput
     .split("\n")
@@ -223,7 +249,7 @@ export function selectOrphanClaudePids(
     .filter((entry): entry is PsEntry => entry !== null)
     .filter(
       (entry) =>
-        entry.etimes > timeoutSec && isClaudeHeadlessInvocation(entry.args),
+        entry.etimes > thresholdSec && isClaudeHeadlessInvocation(entry.args),
     )
     .map((entry) => entry.pid);
 }
