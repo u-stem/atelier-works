@@ -10,6 +10,7 @@ import {
   describeReason,
   earlyExitBase,
   evaluateFixRoundGuard,
+  evaluateParentImplementingGuard,
   evaluatePrFixSafetyGuards,
   evaluateRepoAllowedGuard,
   nextActionFor,
@@ -95,6 +96,23 @@ describe("evaluateRepoAllowedGuard", () => {
   test("fails when the repo is not allowed", () => {
     const result = evaluateRepoAllowedGuard(false);
     expect(result.ok).toBe(false);
+  });
+});
+
+describe("evaluateParentImplementingGuard", () => {
+  test("passes without a parent work item", () => {
+    expect(evaluateParentImplementingGuard(null)).toEqual({ ok: true });
+  });
+
+  test("passes when the parent is not implementing", () => {
+    expect(evaluateParentImplementingGuard("pr_open")).toEqual({ ok: true });
+  });
+
+  test("blocks while the parent issue is being re-implemented", () => {
+    expect(evaluateParentImplementingGuard("implementing")).toEqual({
+      ok: false,
+      reason: "parent issue is being re-implemented",
+    });
   });
 });
 
@@ -243,5 +261,185 @@ describe("earlyExitBase", () => {
 
   test("leaves the worktree directory empty because none was prepared", () => {
     expect(earlyExitBase(workItem).worktree_dir).toBe("");
+  });
+});
+
+describe("describeReason (implement flow)", () => {
+  test("translates the max-rounds exit", () => {
+    expect(
+      describeReason("implement checks still failing after 5 rounds"),
+    ).toBe("5ラウンド修正しても検査に通りませんでした");
+  });
+
+  test("translates the stall exit", () => {
+    expect(describeReason("implement stalled after round 2")).toBe(
+      "ラウンド2で修正が停滞しました(差分か検査結果が前のラウンドと同じです)",
+    );
+  });
+
+  test("translates a Claude run failure", () => {
+    expect(
+      describeReason("claude run failed (timeout): claude -p timed out"),
+    ).toBe("Claudeの実行に失敗しました(timeout): claude -p timed out");
+  });
+
+  test("translates a missing approval", () => {
+    expect(describeReason("no approved requirements for attempt 2")).toBe(
+      "attempt 2の承認済み要件定義が見つかりません",
+    );
+  });
+
+  test("translates a moved branch head", () => {
+    expect(
+      describeReason(
+        `branch head moved to ${"b".repeat(40)} while implementing`,
+      ),
+    ).toBe(`実装中にブランチのheadが${"b".repeat(40)}に変わりました`);
+  });
+
+  test("translates a finish failure", () => {
+    expect(describeReason("implement finish failed: HTTP 422")).toBe(
+      "コミット・push・PRの作成に失敗しました: HTTP 422",
+    );
+  });
+
+  test("keeps the workflow-scope rule first for a finish failure it explains", () => {
+    expect(
+      describeReason(
+        "implement finish failed: git push failed: ! [remote rejected] (refusing to allow a Personal Access Token to create or update workflow `.github/workflows/ci.yml` without `workflow` scope)",
+      ),
+    ).toBe(
+      "PATに`workflow`スコープが無いため、`.github/workflows/**`を含むpushが拒否されました",
+    );
+  });
+
+  test("translates an implementation without changes", () => {
+    expect(describeReason("implement produced no changes")).toBe(
+      "実装が変更を生みませんでした",
+    );
+  });
+
+  test("translates exhausted requirements attempts", () => {
+    expect(describeReason("requirements_gap after max_attempts 3")).toBe(
+      "要件の不足が報告されましたが、要件定義の試行回数が上限(3)に達しました",
+    );
+  });
+
+  test("translates a launch failure", () => {
+    expect(describeReason("implement flow could not be started: boom")).toBe(
+      "実装フローを起動できませんでした: boom",
+    );
+  });
+
+  test("translates an unrecorded flow job id", () => {
+    expect(
+      describeReason("implement flow job id could not be recorded: boom"),
+    ).toBe("実装フローのジョブIDを記録できませんでした: boom");
+  });
+
+  test("translates secrets that blocked the push", () => {
+    expect(describeReason("secrets detected, changes not pushed")).toBe(
+      "秘密情報らしき文字列を検出したため、変更をpushしていません",
+    );
+  });
+
+  test("translates partial work kept local for an open PR", () => {
+    expect(
+      describeReason("partial work kept local because a pull request is open"),
+    ).toBe("PRがあるため途中の変更はpushせずworktreeに残しました");
+  });
+
+  test("translates a worktree changed after verification", () => {
+    expect(describeReason("worktree changed after verification")).toBe(
+      "検証の後にworktreeが変更されました",
+    );
+  });
+
+  test("translates a modified worktree .git pointer", () => {
+    expect(describeReason("worktree git pointer was modified")).toBe(
+      "worktreeのgitの参照先(.gitファイル)が書き換えられました",
+    );
+  });
+
+  test("translates an active fix run on the PR", () => {
+    expect(describeReason("pull request has an active fix run")).toBe(
+      "このPRで自動修正が実行中のため実装を止めました",
+    );
+  });
+
+  test("translates a parent issue being re-implemented", () => {
+    expect(describeReason("parent issue is being re-implemented")).toBe(
+      "親Issueの実装をやり直している最中のため修正を止めました",
+    );
+  });
+
+  test("translates a requirements regeneration that could not start", () => {
+    expect(
+      describeReason("requirements regeneration could not be started"),
+    ).toBe("要件定義の作り直しを起動できませんでした");
+  });
+});
+
+describe("nextActionFor (implement flow)", () => {
+  test("points a launch failure at the Console Failures tab", () => {
+    expect(nextActionFor("implement flow could not be started: boom")).toBe(
+      "ConsoleのFailuresタブから再実行してください",
+    );
+  });
+
+  test("asks for re-approval when no approval matches", () => {
+    expect(nextActionFor("no approved requirements for attempt 2")).toBe(
+      "要件定義を承認し直すか、Issueに`factory`ラベルを付け直してください",
+    );
+  });
+
+  test("asks to revisit the requirements when nothing was implemented", () => {
+    expect(nextActionFor("implement produced no changes")).toBe(
+      "要件定義を見直すか、Issueを閉じてください",
+    );
+  });
+
+  test("asks to clean the diff when secrets blocked the push", () => {
+    expect(nextActionFor("secrets detected, changes not pushed")).toBe(
+      "worktreeの差分を確認し、秘密情報を取り除いてから人が対応してください",
+    );
+  });
+
+  test("asks to bring kept-local work into the PR by hand", () => {
+    expect(
+      nextActionFor("partial work kept local because a pull request is open"),
+    ).toBe("worktreeの変更を人が確認し、必要ならPRに反映してください");
+  });
+
+  test("asks to check the check commands after a post-verification change", () => {
+    expect(nextActionFor("worktree changed after verification")).toBe(
+      "検査コマンドが追跡対象のファイルを書き換えていないか確認し、再実行してください",
+    );
+  });
+
+  test("asks to inspect the branch after a modified .git pointer", () => {
+    expect(nextActionFor("worktree git pointer was modified")).toBe(
+      "実装ブランチとworktreeを人が確認し、不審な変更があればブランチを削除してください",
+    );
+  });
+
+  test("waits for the fix run before re-running the implement flow", () => {
+    expect(nextActionFor("pull request has an active fix run")).toBe(
+      "自動修正の完了を待ってからConsoleのFailuresタブで再実行してください",
+    );
+  });
+
+  test("waits for the implement flow before re-adding factory:fix", () => {
+    expect(nextActionFor("parent issue is being re-implemented")).toBe(
+      "実装フローの完了を待ってから再度factory:fixを付けてください",
+    );
+  });
+
+  test("points a failed requirements regeneration at the Failures tab", () => {
+    expect(
+      nextActionFor("requirements regeneration could not be started"),
+    ).toBe(
+      "ConsoleのFailuresタブから再実行してください(差し戻し理由は通知に残っています)",
+    );
   });
 });

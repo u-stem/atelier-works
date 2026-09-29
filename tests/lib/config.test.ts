@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   ConfigValidationError,
   checkCommandsFor,
+  implementCheckCommandsFor,
   isRepoAllowed,
   loadConfig,
   parseFactoryConfig,
@@ -449,5 +450,26 @@ describe("checkCommandsFor", () => {
 
   test("treats an explicit empty array as 'no checks for this repo', not as a fallback trigger", () => {
     expect(checkCommandsFor(BASE, "OCTO-OWNER", "WIDGETS")).toHaveLength(0);
+  });
+});
+
+describe("implementCheckCommandsFor", () => {
+  const BASE = {
+    allowed_check_commands: ["mise run check"],
+    check_commands_by_repo: {
+      "Octo-Owner/Atelier-Works.git": ["bun install --frozen-lockfile"],
+    },
+  };
+
+  test("returns the repo's explicit entry (normalized key match)", () => {
+    expect(
+      implementCheckCommandsFor(BASE, "octo-owner", "atelier-works"),
+    ).toEqual(["bun install --frozen-lockfile"]);
+  });
+
+  test("never falls back to allowed_check_commands", () => {
+    expect(implementCheckCommandsFor(BASE, "octo-owner", "gadgets")).toEqual(
+      [],
+    );
   });
 });

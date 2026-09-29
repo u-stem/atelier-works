@@ -1,0 +1,91 @@
+summary: '[SF-3-4] 実装とPR作成'
+description: 承認済みの要件定義をもとに自動で実装し、PRを作成します。実装用のブランチとworktreeを用意してClaudeに実装させ、秘密情報の検査とリポジトリの検査コマンドに通るまで修正を繰り返します。検査に通れば変更をコミットしてpushし、PRを作成して自動レビューに回します。要件を満たせない場合は要件定義からやり直し、上限に達した場合や危険な変更を検知した場合は対応が必要な状態(needs_human)にします。
+value:
+  modules:
+    - id: implement_prepare
+      summary: '[SF-3-4/1] 作業領域の準備'
+      value:
+        type: script
+        input_transforms:
+          work_item_id:
+            type: javascript
+            expr: flow_input.work_item_id
+        path: f/factory/steps/implement_prepare
+    - id: implement_generate
+      summary: '[SF-3-4/2] 実装(Claude)'
+      value:
+        type: script
+        input_transforms:
+          context:
+            type: javascript
+            expr: results.implement_prepare.context
+          work_item_id:
+            type: javascript
+            expr: flow_input.work_item_id
+        path: f/factory/steps/implement_generate
+      skip_if:
+        expr: results.implement_prepare.outcome !== "proceed"
+    - id: implement_verify
+      summary: '[SF-3-4/3] 検証と修正のループ'
+      value:
+        type: script
+        input_transforms:
+          context:
+            type: javascript
+            expr: results.implement_prepare.context
+          first_round:
+            type: javascript
+            expr: results.implement_generate
+          work_item_id:
+            type: javascript
+            expr: flow_input.work_item_id
+        path: f/factory/steps/implement_verify
+      skip_if:
+        expr: results.implement_prepare.outcome !== "proceed"
+    - id: implement_finish
+      summary: '[SF-3-4/4] コミット・push・PR作成'
+      value:
+        type: script
+        input_transforms:
+          context:
+            type: javascript
+            expr: results.implement_prepare.context
+          loop_result:
+            type: javascript
+            expr: 'results.implement_prepare.outcome === "proceed" ? results.implement_verify : null'
+          prepare_outcome:
+            type: javascript
+            expr: results.implement_prepare.outcome
+          prepare_reason:
+            type: javascript
+            expr: results.implement_prepare.reason
+          work_item_id:
+            type: javascript
+            expr: flow_input.work_item_id
+        path: f/factory/steps/implement_finish
+  failure_module:
+    id: failure
+    value:
+      type: script
+      input_transforms:
+        error:
+          type: javascript
+          expr: error
+        path:
+          type: static
+          value: f/factory/implement
+        work_item_id:
+          type: javascript
+          expr: flow_input.work_item_id
+      path: f/factory/on_error_flow
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  order:
+    - work_item_id
+  properties:
+    work_item_id:
+      type: integer
+      description: 実装の対象となる作業項目のID。要件定義の承認後に自動で渡されます。
+  required:
+    - work_item_id

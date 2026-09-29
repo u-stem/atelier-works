@@ -2,6 +2,7 @@
 // "cleanup_workspaces", §4b). No I/O — see that script for wiring (git
 // worktree operations, `ps`/process signals, `du`).
 
+import type { FactoryConfig } from "./types.ts";
 import type { WorktreeEntry } from "./workspace.ts";
 
 // ---------------------------------------------------------------------------
@@ -82,6 +83,47 @@ export function issueWorktreePaths(
 }
 
 // ---------------------------------------------------------------------------
+// excludeActiveWorktrees (工程3 design §12): never remove a worktree an
+// active work item is using. The implement branch is also the PR's head
+// branch, and createGtrWorktree reuses one worktree per branch, so an issue
+// item and a pr_fix item share it: a stale pr_open issue item must not take
+// a running pr_fix's worktree, nor a stale pr_fix item a re-implementation's.
+// ---------------------------------------------------------------------------
+
+/** What an active work item holds: its req-<N> dir (issue_number) and the
+ * worktree on `branch` (an issue item's implement branch, or a pr_fix
+ * item's PR head branch resolved by the caller). */
+export type WorktreeHolder = {
+  readonly owner: string;
+  readonly repo: string;
+  readonly issue_number: number | null;
+  readonly branch: string | null;
+};
+
+/** `targetDirs` minus every path an active holder in owner/repo uses. */
+export function excludeActiveWorktrees(
+  targetDirs: readonly string[],
+  holders: readonly WorktreeHolder[],
+  worktrees: readonly WorktreeEntry[],
+  owner: string,
+  repo: string,
+): string[] {
+  const held = new Set<string>();
+  for (const holder of holders) {
+    if (holder.owner !== owner || holder.repo !== repo) continue;
+    if (holder.issue_number !== null) {
+      held.add(requirementsWorktreeDir(owner, repo, holder.issue_number));
+    }
+    if (holder.branch !== null) {
+      for (const entry of worktrees) {
+        if (entry.branch === holder.branch) held.add(entry.path);
+      }
+    }
+  }
+  return targetDirs.filter((dir) => !held.has(dir));
+}
+
+// ---------------------------------------------------------------------------
 // groupByRepo: batch a stale-item list by (owner, repo)
 // ---------------------------------------------------------------------------
 
@@ -117,6 +159,31 @@ export function groupByRepo<
     }
     return group;
   });
+}
+
+/** Splits the stale-item groups into the repos to sweep and the repos to
+ * skip today: a repo where an active pr_fix's head branch could not be
+ * resolved is skipped (its held worktree is unknown), the rest are swept. */
+export function partitionRepoGroups<T>(
+  groups: readonly RepoGroup<T>[],
+  unresolved: readonly { readonly owner: string; readonly repo: string }[],
+): { readonly sweep: RepoGroup<T>[]; readonly skipped: RepoGroup<T>[] } {
+  const isUnresolved = (group: RepoGroup<T>): boolean =>
+    unresolved.some(
+      (entry) => entry.owner === group.owner && entry.repo === group.repo,
+    );
+  return {
+    sweep: groups.filter((group) => !isUnresolved(group)),
+    skipped: groups.filter(isUnresolved),
+  };
+}
+
+/** The notice for a repo skipped by partitionRepoGroups. */
+export function unresolvedHoldersNoticeMessage(
+  owner: string,
+  repo: string,
+): string {
+  return `${owner}/${repo}で稼働中の自動修正のブランチを確認できなかったため、このリポジトリの作業領域の掃除を見送りました。`;
 }
 
 // ---------------------------------------------------------------------------
@@ -163,17 +230,18 @@ function isClaudeHeadlessInvocation(args: string): boolean {
 /**
  * Parses `ps -eo pid,etimes,args` output and returns the pids of every
  * headless Claude (`claude -p`) process whose elapsed time (`etimes`,
- * seconds) exceeds `timeoutSec`. A headless Claude process still running
- * past its own `claude_timeout_sec` subprocess timeout (lib/claude.ts's own
- * `runClaude` enforces that timeout on the process it directly spawned)
- * can only mean that enforcement never got the chance to fire — e.g. its
- * parent Windmill job was killed/cancelled first, reparenting the child
- * before it could be signaled — so any such process found here is by
- * definition orphaned and safe to terminate.
+ * seconds) exceeds `thresholdSec` (orphanClaudeThresholdSec: the longer of
+ * claude_timeout_sec and implement_timeout_sec, plus a grace period). A
+ * headless Claude process still running past every per-run subprocess
+ * timeout (lib/claude.ts's `runClaude` enforces its timeout on the process
+ * it directly spawned) can only mean that enforcement never got the chance
+ * to fire — e.g. its parent Windmill job was killed/cancelled first,
+ * reparenting the child before it could be signaled — so any such process
+ * found here is by definition orphaned and safe to terminate.
  */
 export function selectOrphanClaudePids(
   psOutput: string,
-  timeoutSec: number,
+  thresholdSec: number,
 ): number[] {
   return psOutput
     .split("\n")
@@ -181,9 +249,24 @@ export function selectOrphanClaudePids(
     .filter((entry): entry is PsEntry => entry !== null)
     .filter(
       (entry) =>
-        entry.etimes > timeoutSec && isClaudeHeadlessInvocation(entry.args),
+        entry.etimes > thresholdSec && isClaudeHeadlessInvocation(entry.args),
     )
     .map((entry) => entry.pid);
+}
+
+const ORPHAN_GRACE_SEC = 300;
+
+/** How long a headless Claude process may run before the sweep treats it
+ * as orphaned: past the longer of the two per-run timeouts (the implement
+ * flow's implement_timeout_sec is the longest, 3600s by default) plus a
+ * grace period, so a live implement run is never terminated. */
+export function orphanClaudeThresholdSec(
+  config: Pick<FactoryConfig, "claude_timeout_sec" | "implement_timeout_sec">,
+): number {
+  return (
+    Math.max(config.claude_timeout_sec, config.implement_timeout_sec) +
+    ORPHAN_GRACE_SEC
+  );
 }
 
 // ---------------------------------------------------------------------------

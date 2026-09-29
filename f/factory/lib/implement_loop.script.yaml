@@ -1,0 +1,9 @@
+summary: '[LIB] 実装フローの検証ループ'
+description: 内部ライブラリです。直接実行するものではありません。実装フローのステップ間の受け渡し、ブランチとworktreeの準備、要件定義ファイルの複製、Claudeの1回分の実行、検査に通るまで修正を繰り返す検証ループを提供します。
+lock: '!inline f/factory/lib/implement_loop.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

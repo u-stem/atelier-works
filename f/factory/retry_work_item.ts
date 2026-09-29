@@ -1,8 +1,12 @@
-// Manual retry of a stuck work item (spec-cycle2.md §3 M6
-// "retry_work_item.ts"). Restartable from failed / needs_human / expired /
-// blocked only; the restart flow and target status depend on the work
-// item's `kind` (issue -> pipeline, pr_review -> pr_review, pr_fix ->
-// pr_fix).
+// Manual retry of a stuck work item. Restartable from failed / needs_human /
+// expired / blocked / approved. The restart flow and target status depend
+// on the work item's kind: issue → implement when its latest requirements
+// approval matches its attempt and implement_enabled is on, else pipeline
+// (refused, from any status, when the approval matches but implement_enabled
+// is off; an approved issue that cannot go to implement is refused); pr_review →
+// pr_review; pr_fix → pr_fix. The status move is a CAS from the status read
+// here, so a concurrent change aborts the restart instead of being
+// overwritten.
 //
 // policy change (2026-09-27, PR label cleanup — extends the Issue-side
 // policy from the prior PR to PR kinds): no kind restores any label any
@@ -15,7 +19,15 @@
 // effect at all; only a human re-labeling the Issue/PR starts a brand-new
 // cycle.
 import * as wmill from "windmill-client@1.817.0";
-import { getWorkItem, setFlowJobId, updateStatus } from "./lib/db.ts";
+import { loadConfig } from "./lib/config.ts";
+import {
+  getWorkItem,
+  latestRequirementsApproval,
+  setFlowJobId,
+  updateStatusIfCurrent,
+} from "./lib/db.ts";
+import { IMPLEMENT_FLOW_PATH } from "./lib/implement_loop.ts";
+import { isRequirementsApprovedForAttempt } from "./lib/implement_support.ts";
 import { isOneOf, type WorkItem, type WorkItemStatus } from "./lib/types.ts";
 
 const RESTARTABLE_STATUSES = [
@@ -23,6 +35,7 @@ const RESTARTABLE_STATUSES = [
   "needs_human",
   "expired",
   "blocked",
+  "approved",
 ] as const;
 
 export type RestartPlan = {
@@ -31,13 +44,22 @@ export type RestartPlan = {
   readonly args: Readonly<Record<string, unknown>>;
 };
 
+/** implementReady: the latest requirements approval is approved for the
+ * work item's current attempt (design §8); implementEnabled:
+ * factory_config.implement_enabled. Both computed by main. */
+export type RestartContext = {
+  readonly implementReady: boolean;
+  readonly implementEnabled: boolean;
+};
+
 /**
  * Given a restartable work item, decides which status to reset it to and
  * which flow to relaunch it with. Throws when `workItem.status` is not one
- * of failed / needs_human / expired / blocked.
+ * of failed / needs_human / expired / blocked / approved.
  */
 export function computeRestartPlan(
   workItem: Pick<WorkItem, "id" | "status" | "kind" | "attempt">,
+  context: RestartContext,
 ): RestartPlan {
   if (!isOneOf(workItem.status, RESTARTABLE_STATUSES)) {
     throw new Error(
@@ -47,6 +69,26 @@ export function computeRestartPlan(
 
   switch (workItem.kind) {
     case "issue":
+      if (context.implementReady && context.implementEnabled) {
+        return {
+          toStatus: "implementing",
+          flowPath: IMPLEMENT_FLOW_PATH,
+          args: { work_item_id: workItem.id },
+        };
+      }
+      // Approved requirements with the implement flow disabled: the
+      // pipeline would regenerate requirements a human already approved, so
+      // refuse from any status and say how to proceed.
+      if (context.implementReady) {
+        throw new Error(
+          `retry_work_item: work item ${workItem.id} has approved requirements, but implement_enabled is false; enable it to restart the implement flow`,
+        );
+      }
+      if (workItem.status === "approved") {
+        throw new Error(
+          `retry_work_item: work item ${workItem.id} is approved but its latest requirements approval does not match attempt ${workItem.attempt}; nothing to restart`,
+        );
+      }
       return {
         toStatus: "requirements_generating",
         flowPath: "f/factory/pipeline",
@@ -78,18 +120,36 @@ export type RetryWorkItemResult = {
 };
 
 export async function main(work_item_id: number): Promise<RetryWorkItemResult> {
+  const config = await loadConfig(() =>
+    wmill.getResource("f/factory/factory_config"),
+  );
   const workItem = await getWorkItem(work_item_id);
   if (workItem === null) {
     throw new Error(`retry_work_item: no work item with id ${work_item_id}`);
   }
 
-  const plan = computeRestartPlan(workItem);
+  const implementReady =
+    workItem.kind === "issue" &&
+    isRequirementsApprovedForAttempt(
+      await latestRequirementsApproval(work_item_id),
+      workItem.attempt,
+    );
+  const plan = computeRestartPlan(workItem, {
+    implementReady,
+    implementEnabled: config.implement_enabled,
+  });
 
-  await updateStatus(
+  const moved = await updateStatusIfCurrent(
     work_item_id,
+    workItem.status,
     plan.toStatus,
     `retry_work_item: restarted from ${workItem.status}`,
   );
+  if (!moved) {
+    throw new Error(
+      `retry_work_item: work item ${work_item_id} is no longer "${workItem.status}"; not restarted`,
+    );
+  }
 
   const flowJobId = await wmill.runFlowAsync(plan.flowPath, plan.args);
   await setFlowJobId(work_item_id, flowJobId);

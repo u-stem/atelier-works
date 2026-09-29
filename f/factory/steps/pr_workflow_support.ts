@@ -31,6 +31,7 @@ import {
   matchesForbiddenPath,
 } from "../lib/protected_paths.ts";
 import {
+  assertSha,
   type FactoryConfig,
   type FixOutcome,
   type FixReply,
@@ -49,7 +50,7 @@ import {
   type WorkItemKind,
   type WorkItemStatus,
 } from "../lib/types.ts";
-import type { CommandRunner } from "../lib/workspace.ts";
+import { type CommandRunner, readGitShowFile } from "../lib/workspace.ts";
 
 // Promoted into lib/protected_paths.ts (工程3: implement_support.ts needs
 // the same classification without a lib -> steps import); re-exported so
@@ -758,6 +759,18 @@ export function evaluateRepoAllowedGuard(allowed: boolean): PrFixGuardResult {
       };
 }
 
+/** pr_fix and the implement flow share the PR branch's worktree: while
+ * the parent issue work item (`parent_work_item_id`) is `implementing`
+ * again, a fix run must not touch it. `parentStatus` is null without a
+ * parent (or when the parent row is gone). */
+export function evaluateParentImplementingGuard(
+  parentStatus: WorkItemStatus | null,
+): PrFixGuardResult {
+  return parentStatus === "implementing"
+    ? { ok: false, reason: "parent issue is being re-implemented" }
+    : { ok: true };
+}
+
 // ---------------------------------------------------------------------------
 // pr_fix_collect: new review/comment selection + outcome (pure)
 // ---------------------------------------------------------------------------
@@ -1108,6 +1121,161 @@ export function parseGitDiffNameOnly(output: string): string[] {
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.length > 0);
+}
+
+function statusFromNameStatus(code: string): ChangedPathStatus {
+  switch (code.charAt(0)) {
+    case "A":
+      return "added";
+    case "M":
+      return "modified";
+    case "D":
+      return "deleted";
+    case "T":
+      return "typechange";
+    default:
+      return "unknown";
+  }
+}
+
+/** `git diff -z --name-status` (工程3 design §14): NUL-separated and never
+ * C-quoted, unlike the newline forms whose quoting of non-ASCII / control
+ * characters let such paths slip past matchesForbiddenPath. A rename
+ * (`R<score>\0old\0new`) becomes a deletion of the old path plus an
+ * addition of the new one, so moving a protected file out of its protected
+ * location is still classified; a copy (`C<score>\0src\0dst`) becomes an
+ * addition of `dst`. */
+export function parseGitDiffNameStatusZ(output: string): ChangedPath[] {
+  const fields = output.split("\u0000");
+  const entries: ChangedPath[] = [];
+  let index = 0;
+  while (index < fields.length) {
+    const code = fields[index] ?? "";
+    index += 1;
+    if (code.length === 0) continue;
+    const kind = code.charAt(0);
+    if (kind === "R" || kind === "C") {
+      const source = fields[index] ?? "";
+      const destination = fields[index + 1] ?? "";
+      index += 2;
+      if (kind === "R" && source.length > 0) {
+        entries.push({ path: source, status: "deleted" });
+      }
+      if (destination.length > 0) {
+        entries.push({ path: destination, status: "added" });
+      }
+      continue;
+    }
+    const path = fields[index] ?? "";
+    index += 1;
+    if (path.length > 0) {
+      entries.push({ path, status: statusFromNameStatus(code) });
+    }
+  }
+  return entries;
+}
+
+/** Every path that differs between `baseSha` (the branch's merge-base with
+ * the default branch) and the staged worktree, from `git diff --cached -z
+ * --name-status`. The implement flow calls this after worktreeFingerprint
+ * staged everything, so commits made earlier on the branch are included. */
+export async function listChangedPaths(
+  run: CommandRunner,
+  worktreeDir: string,
+  baseSha: string,
+): Promise<ChangedPath[]> {
+  assertSha(baseSha);
+  const result = await run(
+    gitHardeningArgv([
+      "diff",
+      "--cached",
+      "-z",
+      "--name-status",
+      "--no-ext-diff",
+      baseSha,
+      "--",
+    ]),
+    {
+      cwd: worktreeDir,
+      env: resolvedEnv({ GIT_TERMINAL_PROMPT: "0" }, undefined, undefined),
+    },
+  );
+  if (result.exitCode !== 0) {
+    throw new Error(
+      maskSecrets(
+        `git diff --cached -z --name-status failed in ${worktreeDir}: ${result.stderr.trim()}`,
+      ),
+    );
+  }
+  return parseGitDiffNameStatusZ(result.stdout);
+}
+
+const SYMLINK_MODE = "120000";
+
+/** The paths of `git diff --raw -z` entries whose old or new mode is
+ * `120000` (a symlink): additions, modifications, deletions, typechanges
+ * either way, and renames / copies (reported by their new path). Records
+ * are `:<oldmode> <newmode> <oldsha> <newsha> <status>\0<path>\0`, with a
+ * second path for `R` / `C`. Paths are NUL-terminated and never C-quoted.
+ * Deduplicated, in git's order. */
+export function parseRawSymlinkPaths(output: string): string[] {
+  const fields = output.split("\u0000");
+  const paths: string[] = [];
+  let index = 0;
+  while (index < fields.length) {
+    const meta = fields[index] ?? "";
+    index += 1;
+    if (!meta.startsWith(":")) continue;
+    const [oldMode, newMode, , , status] = meta.slice(1).split(" ");
+    const kind = (status ?? "").charAt(0);
+    const pathCount = kind === "R" || kind === "C" ? 2 : 1;
+    const path = fields[index + pathCount - 1] ?? "";
+    index += pathCount;
+    if (
+      (oldMode === SYMLINK_MODE || newMode === SYMLINK_MODE) &&
+      path.length > 0 &&
+      !paths.includes(path)
+    ) {
+      paths.push(path);
+    }
+  }
+  return paths;
+}
+
+/** Every path whose symlink-ness is involved in the difference between
+ * `baseSha` and the staged worktree (parseRawSymlinkPaths over `git diff
+ * --cached --raw -z`) — the implement flow's symlink detection, read from
+ * git's modes rather than from the filesystem, so a symlink the worktree no
+ * longer holds (deleted, turned into a file) is still reported. */
+export async function listSymlinkChanges(
+  run: CommandRunner,
+  worktreeDir: string,
+  baseSha: string,
+): Promise<string[]> {
+  assertSha(baseSha);
+  const result = await run(
+    gitHardeningArgv([
+      "diff",
+      "--cached",
+      "--raw",
+      "-z",
+      "--no-ext-diff",
+      baseSha,
+      "--",
+    ]),
+    {
+      cwd: worktreeDir,
+      env: resolvedEnv({ GIT_TERMINAL_PROMPT: "0" }, undefined, undefined),
+    },
+  );
+  if (result.exitCode !== 0) {
+    throw new Error(
+      maskSecrets(
+        `git diff --cached --raw -z failed in ${worktreeDir}: ${result.stderr.trim()}`,
+      ),
+    );
+  }
+  return parseRawSymlinkPaths(result.stdout);
 }
 
 /** Union of `git status --porcelain` (which alone already covers both
@@ -1514,9 +1682,16 @@ export type CheckCommandResult = {
   readonly exitCode: number;
   readonly timedOut: boolean;
   readonly outputTail: string;
+  /** The whole combined stdout+stderr as far as
+   * CHECK_COMMAND_MAX_OUTPUT_BYTES kept it, masked — the implement flow
+   * stores its first 16KB on implement_rounds.check_output
+   * (truncateCheckOutput). `outputTail` stays the prompt-side excerpt. */
+  readonly output: string;
 };
 
 const CHECK_OUTPUT_TAIL_CHARS = 2000;
+
+export const CHECK_COMMAND_MAX_OUTPUT_BYTES = 1024 * 1024;
 
 export type CheckHomeDir = {
   readonly path: string;
@@ -1577,14 +1752,20 @@ export async function runAllowedCheckCommands(
         .split(/\s+/)
         .filter((token) => token.length > 0);
       if (argv.length === 0) continue;
-      const result = await run(argv, { cwd, env, timeoutMs });
-      const combined = `${result.stdout}\n${result.stderr}`.trim();
+      const result = await run(argv, {
+        cwd,
+        env,
+        timeoutMs,
+        maxOutputBytes: CHECK_COMMAND_MAX_OUTPUT_BYTES,
+      });
+      const masked = maskSecrets(`${result.stdout}\n${result.stderr}`.trim());
       results.push({
         command,
         ok: !result.timedOut && result.exitCode === 0,
         exitCode: result.exitCode,
         timedOut: result.timedOut,
-        outputTail: maskSecrets(combined.slice(-CHECK_OUTPUT_TAIL_CHARS)),
+        outputTail: masked.slice(-CHECK_OUTPUT_TAIL_CHARS),
+        output: masked,
       });
     }
     return results;
@@ -2447,6 +2628,115 @@ const REASON_RULES: readonly ReasonRule[] = [
       `再レビューをリクエストできませんでした: ${describeReason(m[1] ?? "")}`,
     nextAction: (m) => nextActionFor(m[1] ?? ""),
   },
+  // 工程3 implement flow (lib/implement_loop.ts's loop exits,
+  // lib/implement_finish_support.ts, lib/implement_launch_support.ts,
+  // steps/implement_*.ts). Kept after every existing rule so the unanchored
+  // workflow-scope rule above still wins for a push failure wrapped in
+  // "implement finish failed: ...".
+  {
+    pattern: /^implement checks still failing after (\d+) rounds$/,
+    describe: (m) => `${m[1]}ラウンド修正しても検査に通りませんでした`,
+    nextAction: () => CHECK_COMMAND_NEXT_ACTION,
+  },
+  {
+    pattern: /^implement stalled after round (\d+)$/,
+    describe: (m) =>
+      `ラウンド${m[1]}で修正が停滞しました(差分か検査結果が前のラウンドと同じです)`,
+    nextAction: () => CHECK_COMMAND_NEXT_ACTION,
+  },
+  {
+    pattern: /^claude run failed \(([^)]+)\): ([\s\S]+)$/,
+    describe: (m) => `Claudeの実行に失敗しました(${m[1]}): ${m[2]}`,
+    nextAction: () => GENERIC_NEXT_ACTION,
+  },
+  {
+    pattern: /^no approved requirements for attempt (\d+)$/,
+    describe: (m) => `attempt ${m[1]}の承認済み要件定義が見つかりません`,
+    nextAction: () =>
+      "要件定義を承認し直すか、Issueに`factory`ラベルを付け直してください",
+  },
+  {
+    pattern: /^branch head moved to (\S+) while implementing$/,
+    describe: (m) => `実装中にブランチのheadが${m[1]}に変わりました`,
+    nextAction: () =>
+      "ブランチの最新の状態を確認し、必要ならConsoleのFailuresタブから再実行してください",
+  },
+  {
+    pattern: /^implement finish failed: ([\s\S]+)$/,
+    describe: (m) => `コミット・push・PRの作成に失敗しました: ${m[1]}`,
+    nextAction: () => GENERIC_NEXT_ACTION,
+  },
+  {
+    pattern: /^implement finished without a final output$/,
+    describe: () =>
+      "実装は完了と判定されましたが、最終ラウンドの出力がありませんでした",
+    nextAction: () => GENERIC_NEXT_ACTION,
+  },
+  {
+    pattern: /^implement produced no changes$/,
+    describe: () => "実装が変更を生みませんでした",
+    nextAction: () => "要件定義を見直すか、Issueを閉じてください",
+  },
+  {
+    pattern: /^requirements_gap after max_attempts (\d+)$/,
+    describe: (m) =>
+      `要件の不足が報告されましたが、要件定義の試行回数が上限(${m[1]})に達しました`,
+    nextAction: () =>
+      "要件を人が整理し、Issueに追記してから`factory`ラベルを付け直してください",
+  },
+  {
+    pattern: /^implement flow could not be started: ([\s\S]+)$/,
+    describe: (m) => `実装フローを起動できませんでした: ${m[1]}`,
+    nextAction: () => "ConsoleのFailuresタブから再実行してください",
+  },
+  {
+    pattern: /^implement flow job id could not be recorded: ([\s\S]+)$/,
+    describe: (m) => `実装フローのジョブIDを記録できませんでした: ${m[1]}`,
+    nextAction: () => GENERIC_NEXT_ACTION,
+  },
+  {
+    pattern: /^secrets detected, changes not pushed$/,
+    describe: () =>
+      "秘密情報らしき文字列を検出したため、変更をpushしていません",
+    nextAction: () =>
+      "worktreeの差分を確認し、秘密情報を取り除いてから人が対応してください",
+  },
+  {
+    pattern: /^partial work kept local because a pull request is open$/,
+    describe: () => "PRがあるため途中の変更はpushせずworktreeに残しました",
+    nextAction: () =>
+      "worktreeの変更を人が確認し、必要ならPRに反映してください",
+  },
+  {
+    pattern: /^worktree changed after verification$/,
+    describe: () => "検証の後にworktreeが変更されました",
+    nextAction: () =>
+      "検査コマンドが追跡対象のファイルを書き換えていないか確認し、再実行してください",
+  },
+  {
+    pattern: /^requirements regeneration could not be started$/,
+    describe: () => "要件定義の作り直しを起動できませんでした",
+    nextAction: () =>
+      "ConsoleのFailuresタブから再実行してください(差し戻し理由は通知に残っています)",
+  },
+  {
+    pattern: /^pull request has an active fix run$/,
+    describe: () => "このPRで自動修正が実行中のため実装を止めました",
+    nextAction: () =>
+      "自動修正の完了を待ってからConsoleのFailuresタブで再実行してください",
+  },
+  {
+    pattern: /^parent issue is being re-implemented$/,
+    describe: () => "親Issueの実装をやり直している最中のため修正を止めました",
+    nextAction: () =>
+      "実装フローの完了を待ってから再度factory:fixを付けてください",
+  },
+  {
+    pattern: /^worktree git pointer was modified$/,
+    describe: () => "worktreeのgitの参照先(.gitファイル)が書き換えられました",
+    nextAction: () =>
+      "実装ブランチとworktreeを人が確認し、不審な変更があればブランチを削除してください",
+  },
 ];
 
 /**
@@ -2588,6 +2878,29 @@ export async function readWorktreeFileIfExists(
   } catch {
     return null;
   }
+}
+
+/** Whether any changed file named exactly `package.json` (at any depth)
+ * has a different `scripts` field in the worktree than at `baseRef` —
+ * shared by pr_fix_verify (`"HEAD"`) and implement_verify (`base_sha`).
+ * Stops at the first changed one. */
+export async function anyPackageJsonScriptsChanged(
+  run: CommandRunner,
+  worktreeDir: string,
+  baseRef: string,
+  changes: readonly ChangedPath[],
+  readFile?: ReadFileFn,
+): Promise<boolean> {
+  for (const entry of changes) {
+    if (entry.path.split("/").pop() !== "package.json") continue;
+    const before = await readGitShowFile(run, worktreeDir, baseRef, entry.path);
+    const after = await readWorktreeFileIfExists(
+      join(worktreeDir, entry.path),
+      readFile,
+    );
+    if (packageJsonScriptsChanged(before, after)) return true;
+  }
+  return false;
 }
 
 // team-lead fix round 2 item a: getBranchProtected / postIssueComment /

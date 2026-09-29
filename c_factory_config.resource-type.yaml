@@ -67,7 +67,7 @@ schema:
     check_commands_by_repo:
       type: object
       description: >-
-        リポジトリ別の検査コマンドです。キーは`<owner>/<repo>`(大文字小文字は区別しない)、値はそのリポジトリの実装(工程3)で実行するコマンドの配列です。エントリが無いリポジトリでは`allowed_check_commands`を使います。空配列を指定するとそのリポジトリでは検査を実行しません。`allowed_check_commands`と同様に隔離されないため、信頼できるリポジトリだけに設定してください。
+        リポジトリ別の検査コマンドです。キーは`<owner>/<repo>`(大文字小文字は区別しない)、値はそのリポジトリの実装(工程3)で実行するコマンドの配列です。エントリが無いリポジトリでは検査コマンドを実行しません(`allowed_check_commands`は使いません)。検査コマンドはClaudeが書いたコードを隔離なしで実行するため、Issueを信頼できる人だけが起票するリポジトリだけに設定してください。
       default: {}
       additionalProperties:
         type: array

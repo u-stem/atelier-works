@@ -16,9 +16,25 @@
 - 要件定義書はConsoleの**要件定義タブ**からも一覧・閲覧できる(承認待ちに限らず、過去に生成されたすべてのattemptを含む)。Issueコメントの承認済みリンクやDiscord通知のリンクは`#requirements/<work_item_id>`という形式のフラグメントを末尾に付けており、これを開くと要件定義タブが自動的にその作業項目を選択する。ただしConsoleはWindmillの管理画面内で動くraw app(サンドボックスされた別オリジン)であるため、埋め込み元のURLを読み取れずこのジャンプが効かない場合がある(実行環境依存、未検証)。その場合はリンク本文に併記されている`work_item_id`を要件定義タブの一覧上部の絞り込み欄に入力して探す(一覧の各行にも`work_item_id`を表示している)か、ブラウザのアドレスバーで開いたConsoleのタブに直接`#requirements/<work_item_id>`を追記する。
 - Issueに自動投稿されるコメントは、要件定義が承認されたときのConsoleリンク1件のみ。着手・承認待ち・却下・期限切れ・失敗・要人手といった運用上の状態はIssueには書かず、Discord通知とConsoleで確認する(GitHubには成果物のみを残す方針、2026-09-27)。
 - Rejectすると要件定義が再生成され(`attempt`が加算される)、再度承認待ちになる。試行回数が上限を超えると`needs_human`になる。
-- 失敗したwork itemはFactory Console AppのFailuresタブから再実行できる(`retry_work_item`)。kindを問わずラベルの付け外しはせず、対応するflow(Issue kindは`f/factory/pipeline`、PR kindは`f/factory/pr_review` / `f/factory/pr_fix`)を直接再起動する(トリガーラベルはclaim時に一度だけ消費され、再付与されない。PR kindは再起動後も`listTrackedPrs`によるDB上の追跡対象であり続ける)。
+- 失敗したwork itemはFactory Console AppのFailuresタブから再実行できる(`retry_work_item`)。kindを問わずラベルの付け外しはせず、対応するflowを直接再起動する: Issue kindは、最新の要件定義の承認がそのwork itemのattemptに一致し、かつ`implement_enabled`が`true`なら`f/factory/implement`(`implementing`から)、そうでなければ`f/factory/pipeline`、PR kindは`f/factory/pr_review` / `f/factory/pr_fix`。再実行できるstatusは`failed` / `needs_human` / `expired` / `blocked` / `approved`(`approved`は実装の起動前に止まった場合のためで、実装フローへ再起動できないときは理由(`implement_enabled`が無効か、承認とattemptの不一致か)を示して拒否する)。承認がattemptに一致しているのに`implement_enabled`が無効な場合は、承認済みの要件定義を作り直さないよう、statusを問わず再実行を拒否する。状態の遷移は読み取ったstatusからのCASで、途中で別の処理がstatusを変えていれば再実行しない。トリガーラベルはclaim時に一度だけ消費され、再付与されない。PR kindは再起動後も`listTrackedPrs`によるDB上の追跡対象であり続ける。
 - 監査は毎週月曜09:30に自動で走る(`audit_kickoff`schedule)。Consoleの**監査タブ**の「今すぐ監査」で前倒しできる(実行中の監査がある、対象期間が空、新しい記録が無い、日次予算超過のいずれかならスキップ理由が表示される)。監査レポートは監査タブで読む(一覧から選ぶと本文と提案の決定状況が表示される)。Discordの`audit_completed`通知のリンクは`#audit/<work_item_id>`を末尾に付けており、要件定義タブと同じ制約でジャンプが効かない場合は一覧から選ぶ。提案は承認Inboxに「改善提案」として並び、承認するとFactory自身のリポジトリにIssueが起票される。改善提案の承認欄では「起票と同時にfactoryラベルを付けて要件定義に進める」が既定でオンになっており、外せば起票のみになる。`factory_repo`は`repo_allowlist`の内容に関わらず常にFactoryの対象なので、ラベルを付けたIssueはそのまま要件定義に進む。
-- 通知の種類: `picked` / `awaiting_approval` / `approved` / `rejected` / `needs_human` / `failed` / `expired` / `cancelled` / `self_update`(ホスト操作が必要)/ `daily_summary`(前日のコスト・件数・失敗)/ `audit_completed`(監査で改善提案が1件以上生成された)。
+- 通知の種類: `picked` / `awaiting_approval` / `approved` / `rejected` / `needs_human` / `failed` / `expired` / `cancelled` / `pr_opened`(実装フローがPRを作成 / 更新した)/ `self_update`(ホスト操作が必要)/ `daily_summary`(前日のコスト・件数・失敗)/ `audit_completed`(監査で改善提案が1件以上生成された)。
+
+## 承認後の自動実装(工程3、`implement`)
+
+- `factory_config`の`implement_enabled`を`true`にすると、要件定義の承認後に`f/factory/implement`が自動で起動する(既定`false`。`false`の間は従来どおり`approved`で止まる)。
+- 実装フローは実装ブランチ`factory/issue-<N>-wi-<work_item_id>`を作ってpushし、検査に通ったらコミットしてPRを作成する(既にPRがあれば本文を更新する)。PRには`factory:review`ラベルが付き、`poll_prs`が自動レビュー(`pr_review`)を起動する。PR本文の`Closes #N`で元のIssueに紐づく。マージは常に人が行う。
+- 検査コマンドはリポジトリごとに`check_commands_by_repo`(`{"<owner>/<repo>": ["bun install --frozen-lockfile", "bun test", ...]}`)で設定する。エントリが無いリポジトリでは検査コマンドを実行しない(`allowed_check_commands`は使わない)。検査の前に毎回`git clean -fdX`で無視ファイル(`node_modules/`等)を消すので、先頭で依存関係をインストールする。worker imageにmiseは無いので、コマンドはworker内で直接動くもの(例: `bun install --frozen-lockfile`、`bun test`、`bunx --bun tsc --noEmit`、`bunx --bun biome check .`)にする。
+- 検査コマンドはClaudeが書いたコードをworker内でrootとして実行するため、`check_commands_by_repo`のエントリは、workerのサンドボックスができるまで、Issueを信頼できる人だけが起票するリポジトリにだけ設定する。実装ブランチのpushで対象リポジトリ自身のCIも人のレビュー前に動くので、そのCIが使えるsecretsの範囲を確認しておく。検査コマンドはサンドボックスなしでworker内でrootとして実行され、実行のたびにnotice `unsandboxed_check_commands`が記録される。秘密情報の検査(gitleaks)は設定に関わらず毎ラウンド実行する。
+- 保護パス(`.claude/**`、`.github/**`、`infra/**`、`mise.toml`、`package.json`、lockfile等)の変更は止めずにPR本文の「確認して欲しい点」とDiscordの`pr_opened`通知に載る。そのラウンドは検査コマンドを実行しない(PR本文の「動作確認結果」に「検査未実施」と理由が出る)ので、GitHub側のCIの結果を確認する。
+- 実装が何も変更を生まなかった場合(分岐点から差分が無いまま完了と報告した場合)はそのラウンドを合格にせず修正を求める。完了時にコミットする新しい変更が無くても、ブランチに分岐点より先のコミット(途中経過のコミットなど)があれば、それを使ってPRを作成または更新する。ブランチに分岐点より先のものが何も無いときだけ`needs_human`(「実装が変更を生みませんでした」)にする。その場合は要件定義を見直すか、Issueを閉じる。
+- ラウンド・予算上限、停滞、差分超過で`needs_human`になった場合は、PRが無く秘密情報の検査に通れば途中の変更が実装ブランチにpushされている。PRがある場合(「PRがあるため途中の変更はpushせずworktreeに残しました」)と、symlink変更・Claude実行失敗・worktreeの`.git`の書き換えで止まった場合は、途中の変更をpushせずworktreeに残す。Discordの`needs_human`通知の「次の操作」に従い、ブランチを確認して人がPRを作る、要件を直す、または不要ならブランチを削除する。原因を取り除いたらConsoleのFailuresタブ(`retry_work_item`)から実装フローを再実行できる。途中経過のコミットは、再実行で実装が完了したときのコミットとは別のコミットとして残る。
+- 実装が`requirements_gap`を返した場合は自動で要件定義の作り直し(attempt+1)に戻り、再承認後に同じブランチ名で実装をやり直す(既にPRがあればそのPRを更新する)。
+- 設定値(既定): `implement_max_rounds`(5)、`implement_max_turns`(80)、`implement_max_budget_usd_per_run`(10)、`implement_timeout_sec`(3600)、`implement_max_changed_files`(60)、`implement_max_diff_lines`(3000)。1 Issueあたりの予算上限は`implement_max_rounds × implement_max_budget_usd_per_run`。差分の上限(`implement_max_changed_files` / `implement_max_diff_lines`)は、既存のPRを更新する場合も含めて、実装ブランチと既定ブランチの分岐点(merge-base)からの差分で測る。
+- 実行時間: 検証ループは最長で`implement_max_rounds × implement_timeout_sec`(既定5時間)と検査コマンドの時間がかかる。検査コマンドのタイムアウトは1コマンドごとに`implement_timeout_sec`である。Windmillのインスタンス設定`job_default_timeout`は未設定(2026-09-29確認)で、この長さでも打ち切られない。インスタンスに既定のタイムアウトを設定する場合は、この値より長くする。`cleanup_workspaces`は`claude_timeout_sec`と`implement_timeout_sec`の長い方に5分を足した時間を超えたheadless Claudeだけを孤児として停止する。
+- 実装フローは1回の実行で、worker(`NUM_WORKERS`の数だけある)の1つを数時間占有する。その間、他のflowが使えるworkerはその分減る。
+- `self_update`は実行中の実装フローを待たずに新しいstepを反映するため、`implement_prepare`と`implement_finish`の間に別のバージョンのstepが動くことがある。実装フローの実行中(`implementing`のwork itemがある間)はmainへのマージとデプロイを避ける。
+- `implement_enabled`を`true`にする前に、Issue #32、#33、#34を解決しておく。
 
 ## 通知
 
@@ -99,7 +115,7 @@
 - `mise run push` / `mise run deploy`は`wmill sync push`の前にConsole raw appの`npm ci`を実行する(raw appのバンドルに依存が必要なため)。
 - 通常の更新は`git pull`してから`mise run deploy`を実行する(ホスト側checkoutで`git pull --ff-only` → workerイメージのビルド → `docker compose up -d` → `wmill sync push` → migrationを一括実行する)。
 - workerの並列数(`NUM_WORKERS`)のような`infra/docker-compose.yml`の変更は、通常の`git pull`だけでは反映されない。`mise run deploy`を実行してworkerイメージの再ビルドとコンテナの再起動まで行う。
-- worker imageに入れるツール(`claude` / `gh` / `gitleaks` / `gtr` / `wmill`)のバージョンは`mise.toml`の`[env]`(`CLAUDE_VERSION` / `GH_VERSION` / `GITLEAKS_VERSION` / `GTR_REF` / `WMILL_VERSION`)で固定し、`infra/worker/Dockerfile`のbuild argとして渡す。ツールの追加やバージョン変更はworker imageのrebuildが必要な変更で、`git pull`だけでは反映されない。`self_update`が`infra/`と`mise.toml`の`[env]`の変更として検知して通知するので、ホスト側で`mise run deploy`を実行する。`gitleaks`は工程3(実装フロー)が毎ラウンドの固定検査として`--redact`付きで実行するためにworker imageに入れている(実装フローの配線は後続の変更で追加する)(ホスト側のpre-commit hookと同じバージョン)。
+- worker imageに入れるツール(`claude` / `gh` / `gitleaks` / `gtr` / `wmill`)のバージョンは`mise.toml`の`[env]`(`CLAUDE_VERSION` / `GH_VERSION` / `GITLEAKS_VERSION` / `GTR_REF` / `WMILL_VERSION`)で固定し、`infra/worker/Dockerfile`のbuild argとして渡す。ツールの追加やバージョン変更はworker imageのrebuildが必要な変更で、`git pull`だけでは反映されない。`self_update`が`infra/`と`mise.toml`の`[env]`の変更として検知して通知するので、ホスト側で`mise run deploy`を実行する。`gitleaks`は工程3(実装フロー)が毎ラウンドの固定検査として`--redact`付きで実行するためにworker imageに入れている(ホスト側のpre-commit hookと同じバージョン)。
 - workerコンテナは`init: true`(docker-init)をPID 1にしてゾンビプロセスを回収する。jobが起こすgit / gh / esbuildの子プロセスは親より長生きすることがあり、initが無いとwindmill本体に付け替えられたまま回収されず、`pids: 512`の上限を食い潰して全jobが`errno=11`(EAGAIN、スレッドや子プロセスを作れない)で失敗する(2026-09-28に430個のゾンビで再現)。同じ症状が出たら`docker compose -f infra/docker-compose.yml exec windmill_worker cat /sys/fs/cgroup/pids.current`で使用量を見て、`docker compose -f infra/docker-compose.yml restart windmill_worker`で復旧する。
 - `wmill sync push`に **`--include-secrets`を付けてはいけない**。付けるとリポジトリ内の`f/factory/*.variable.yaml`(値は空のままコミットされている)で4つのsecret変数(`claude_oauth_token` / `github_token` / `wmill_token` / `discord_webhook_url`)が空に上書きされる。`mise run push`(`wmill sync push --yes --keep-deleted`)は`--include-secrets`を付けない設定になっている。
 - secret変数(`f/factory/*.variable.yaml`)とinstance固有の`factory_config` resourceは同期対象外のため、これらの **説明文(description)を変えても`mise run push`では既存instanceに反映されない**。既存instanceではWindmill UI(Variables / Resourcesの編集画面)で説明文だけを更新する。新規instanceはbootstrapがリポジトリの説明文で作成する。
@@ -138,6 +154,5 @@
 
 次はまだ実装されていない。実装され次第このドキュメントを更新する。
 
-- 工程3の「Issueから実装してPRを作る」フロー(factory自身が実装worktreeを作成してPRを投稿する機能)
 - 工程4のマージ後CI監視
 - Discord双方向化(ボタン操作による承認)

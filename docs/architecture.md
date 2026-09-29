@@ -14,15 +14,14 @@ Software FactoryはGitHub Issueを起点に、要件定義から自己改善ま�
 
 ## パイプライン(工程1 → 5)
 
-実装済みは工程1(作業を拾う)、工程2(要件定義の生成と承認・差し戻し)、工程3の一部(PRレビュー・修正)、
-工程5(自己改善)、ダッシュボード(Factory Console)、自己更新と失敗ハンドラ。工程3の「Issueから実装してPRを作る」、
-工程4は拡張点として後続で実装予定。
+実装済みは工程1(作業を拾う)、工程2(要件定義の生成と承認・差し戻し)、工程3(承認済み要件定義からの実装とPR作成、PRレビュー・修正)、
+工程5(自己改善)、ダッシュボード(Factory Console)、自己更新と失敗ハンドラ。工程3の実装とPR作成は配線済みだが、`factory_config`の`implement_enabled`(既定`false`)を有効にするまで起動しない。工程4は拡張点として後続で実装予定。
 
 | 工程 | 内容 | 状態 |
 | --- | --- | --- |
 | 1. 拾う | `factory`ラベル付きIssueを検知してclaimする | 実装済み |
 | 2. 要件定義 | headless Claudeが要件定義ドラフトを生成し、人が承認・差し戻しする | 実装済み |
-| 3. 実装 | worktree上で実装しPRを作成する | 未実装(拡張点) |
+| 3. 実装 | 承認済みの要件定義からworktree上で実装しPRを作成する(`implement`) | 実装済み(`implement_enabled`で有効化) |
 | 3. PRレビュー・修正 | 既存PRをレビュー・修正する(`pr_review` / `pr_fix`) | 実装済み |
 | 4. CI監視 | マージ後のCIを監視する | 未実装(拡張点) |
 | 5. 自己改善 | 週次で運用記録を監査し、レポートと改善提案(承認後にFactory自身のリポジトリへIssue起票)を作る | 実装済み |
@@ -64,9 +63,12 @@ stateDiagram-v2
     picked --> cancelled: Issueがclosed
     requirements_generating --> cancelled: Issueがclosed
     awaiting_approval --> cancelled: Issueがclosed
-    approved --> implementing: 工程3(未実装、拡張点)
-    implementing --> requirements_generating: gap(工程3実装からのgap、未実装、attempt+1)
-    implementing --> pr_open
+    approved --> implementing: 工程3(implement_enabledが真のとき、またはretry_work_item)
+    implementing --> pr_open: PR作成 / 更新
+    implementing --> requirements_generating: requirements_gap(attempt+1)
+    implementing --> needs_human: ラウンド・予算上限、停滞、symlink、差分超過、変更なし、push / PR作成失敗
+    implementing --> cancelled: Issueがclosed
+    implementing --> failed
     approved --> requirements_generating: gap(pr_fixのrequirements_gap、parent_work_item_id経由、attempt+1)
     [*] --> reviewing: PRレビュー起動(kind=pr_review)
     reviewing --> reviewed
@@ -108,8 +110,8 @@ stateDiagram-v2
 | `failed` | 実行時エラーで失敗 | 1/2 |
 | `expired` | 承認タイムアウト(7日、`poll_issues`の期限切れスイープが判定) | 2 |
 | `cancelled` | Issueがclosed | 1/2 |
-| `implementing` | 実装中(worktree上で実装 → レビュー → PR作成) | 3(未実装、拡張点) |
-| `pr_open` | 実装が完了しPRを作成した(終端。マージ後の追跡は工程4の課題で、レビュー・修正は`pr_review` / `pr_fix`側のwork itemが担う) | 3(未実装、拡張点) |
+| `implementing` | 実装中(worktree上で実装 → 検証と修正のループ → PR作成) | 3 |
+| `pr_open` | 実装が完了しPRを作成した(終端。マージ後の追跡は工程4の課題で、レビュー・修正は`pr_review` / `pr_fix`側のwork itemが担う) | 3 |
 | `reviewing` | PRレビューを実行中(`kind=pr_review`) | PRワークフロー |
 | `reviewed` | PRレビューをCOMMENTとして投稿済み(終端、`kind=pr_review`) | PRワークフロー |
 | `fixing` | レビュー指摘・コメントの修正を実行中(`kind=pr_fix`) | PRワークフロー |
@@ -127,8 +129,11 @@ PRは終端statusになってもトリガーラベルの消費以外の付け外
 ### 状態遷移の詳細
 
 **工程2 (要件定義)から工程3へ:**
-- `approved` → `implementing`(工程3実装ステップで実装を試みる)。
-- `implementing` → `requirements_generating: gap`(工程3実装ステップが`requirements_gap`を返した場合、attempt+1で要件定義を再生成。状態遷移図では省略)。
+- `approved` → `implementing`: `requirements_apply`が承認の副作用(Issueコメント、Discord、`req-<N>` worktreeの削除)の後に、`implement_enabled`が真ならCASで遷移させて`f/factory/implement`を起動する。起動に失敗したら`needs_human`にし、`job_failures`に記録してConsoleのFailuresタブから再実行できるようにする。
+- `implementing` → `pr_open`: 検査に通った(または保護パス変更・検査コマンド未設定で検査を実行しなかった)実装をコミットしてpushし、PRを作成または更新して`factory:review`ラベルを付けた。
+- `implementing` → `requirements_generating`: 実装が`requirements_gap`を返した。worktreeを削除し、PRが無ければ実装ブランチ(リモートとローカル)も削除して、`gap_report`をfeedbackに工程2をattempt+1で再起動する(`max_attempts`を超えたら`needs_human`)。
+- `implementing` → `needs_human`: ラウンド上限・日次予算・停滞・symlink変更・差分超過・Claude実行失敗・変更なし・push / PR作成失敗。秘密情報の検査に通れば途中の変更をブランチにpushしてから止める。この途中経過のコミットと、再実行が成功したときの実装コミットは別コミットになる(1コミットにまとめるのは通常の経路のみ)。
+- `implementing` → `cancelled`: Issueがclosedになった(準備時と完了時に確認する。実行中は`poll_issues`のreconcile)。
 
 **PRワークフローの`requirements_gap`:**
 - `pr_fix`フロー実行中に`outcome: "requirements_gap"`が返された場合、`parent_work_item_id`で元Issueのwork itemを特定する。
@@ -168,6 +173,7 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加のみで、ren
 | `poll_issues` | schedule(5分毎) | Issueの検知・claim・reconcile(closed検知、孤児ジョブ検知)・再投入検出・承認依頼の期限切れスイープ |
 | `manual_intake` | flow(フォーム起動) | フォーム入力からIssueを作成し同じパイプラインに乗せる |
 | `pipeline` | flow | 要件定義生成 → 承認依頼の記録(`approval_requests`)。承認 / 却下 / タイムアウトの分岐はフロー外(`approval_decide`とpoll_issuesの期限切れスイープ)で行う |
+| `implement` | flow | 承認済み要件定義からの実装 → 検証と修正のループ(gitleaksと検査コマンド)→ コミット・push・PR作成。`requirements_apply`が`implement_enabled`のときだけ起動する |
 | `self_update` | schedule(10分毎) | self cloneをpullし、変更があれば`wmill sync push`とmigrationを適用する |
 | `cleanup_workspaces` | schedule(毎日03:00) | 期限切れworktree(`req-<N>`、`work_items.branch`の実装worktree、review-*、pr_fixのgtr worktree)の削除、孤児化したheadless Claudeプロセスの停止、ディスク使用量の記録 |
 | `cleanup_db` | schedule(毎日03:30) | 保持期限を過ぎたDBのレコード(終端状態の作業項目とその関連データ、失敗記録・デプロイ記録・解決済みの通知)の削除 |
@@ -175,7 +181,7 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加のみで、ren
 | `audit_kickoff` | schedule(毎週月曜09:30) | 前回監査以降の運用記録を集計し、対象があれば監査work itemを作成して`audit`フローを起動 |
 | `audit` | flow | 証跡パックの収集と監査レポート・改善提案の生成(headless Claude)、提案の承認登録 |
 
-各scheduleのcronはタイムゾーン`Asia/Tokyo`、Windmillの6フィールド形式で`*.schedule.yaml`に持つ。多重実行防止はadvisory lockを使わず、各scheduleの`no_flow_overlap: true`で行う(前回実行中はスキップする)。複数インスタンスを同時運用する場合の排他はWindmill側ではなくGitHub側のclaim(Issueはassignee付与、PRはトリガーラベルの消費。いずれも再取得して確認する)で担保する。error handlerで失敗を記録し、すべてのフロー(pipeline / pr_review / pr_fix)の`failed`終端処理(Discord通知。ラベルはclaim時に既に消費済みのため除去は行わない)は`on_error_flow`に一本化される。承認のタイムアウト(7日)は`poll_issues`のreconcile後に行う期限切れスイープが`approval_requests.expires_at`を見て判定する(`pipeline.flow`はsuspendを使わない)。
+各scheduleのcronはタイムゾーン`Asia/Tokyo`、Windmillの6フィールド形式で`*.schedule.yaml`に持つ。多重実行防止はadvisory lockを使わず、各scheduleの`no_flow_overlap: true`で行う(前回実行中はスキップする)。複数インスタンスを同時運用する場合の排他はWindmill側ではなくGitHub側のclaim(Issueはassignee付与、PRはトリガーラベルの消費。いずれも再取得して確認する)で担保する。error handlerで失敗を記録し、すべてのフロー(pipeline / implement / pr_review / pr_fix)の`failed`終端処理(Discord通知。ラベルはclaim時に既に消費済みのため除去は行わない)は`on_error_flow`に一本化される。承認のタイムアウト(7日)は`poll_issues`のreconcile後に行う期限切れスイープが`approval_requests.expires_at`を見て判定する(`pipeline.flow`はsuspendを使わない)。
 
 ## 命名規則
 
@@ -218,6 +224,11 @@ WindmillのUIはsummaryでソートされるため、種別を示すタグをsum
 | `f/factory/steps/pr_fix_verify` | `[SF-3-2/4] 変更の検証` |
 | `f/factory/steps/pr_fix_finish` | `[SF-3-2/5] push と再レビュー依頼` |
 | `f/factory/steps/issue_proposal_apply` | `[SF-3-3] Issue化提案の承認結果を反映` |
+| `f/factory/implement__flow` | `[SF-3-4] 実装とPR作成` |
+| `f/factory/steps/implement_prepare` | `[SF-3-4/1] 作業領域の準備` |
+| `f/factory/steps/implement_generate` | `[SF-3-4/2] 実装(Claude)` |
+| `f/factory/steps/implement_verify` | `[SF-3-4/3] 検証と修正のループ` |
+| `f/factory/steps/implement_finish` | `[SF-3-4/4] コミット・push・PR作成` |
 | `f/factory/steps/pr_workflow_support` | `[LIB] PR ワークフロー共通処理` |
 | `f/factory/self_update`(script + schedule) | `[SYS-1] Software Factory 自身を最新化` |
 | `f/factory/cleanup_workspaces`(script + schedule) | `[SYS-2] 作業領域を掃除` |
@@ -254,6 +265,9 @@ WindmillのUIはsummaryでソートされるため、種別を示すタグをsum
 | `f/factory/lib/cleanup_db_support` | `[LIB] DB 掃除の純粋ロジック` |
 | `f/factory/lib/implement_support` | `[LIB] 実装フローの純粋関数群` |
 | `f/factory/lib/protected_paths` | `[LIB] 保護パスの判定` |
+| `f/factory/lib/implement_loop` | `[LIB] 実装フローの検証ループ` |
+| `f/factory/lib/implement_finish_support` | `[LIB] 実装フローの完了処理の判定` |
+| `f/factory/lib/implement_launch_support` | `[LIB] 実装フローの起動判定` |
 
 ## PRワークフロー(pr_review / pr_fix)
 
@@ -294,15 +308,16 @@ WindmillのUIはsummaryでソートされるため、種別を示すタグをsum
 
 ## 拡張点
 
-### 工程3: 実装(未実装、拡張点)
+### 工程3: 実装(配線済み、`implement_enabled`で有効化)
 
-承認後に`gtr`でworktreeを作成して実装し、レビュー・PR作成・CI監視まで進める。書き込み権限を持つClaude実行に対する追加ガードの設計は実装時に確定するが、要件定義(工程2)との整合を保つため、次の設計原則を先に定める。
+`f/factory/implement`フローは配線済みで、`factory_config`の`implement_enabled`(既定`false`)を有効にしたときだけ`requirements_apply`が承認後に起動する。
 
-- **実装からの自動差し戻し**: 実装ステップの出力は`outcome: "done" | "requirements_gap"`と`gap_report`を持つ。
-- `outcome: "requirements_gap"`の場合、実装ステップは要件や設計を自分で書き換えず、`gap_report`(どの要件を満たせないか、理由、要件側で必要な変更案)を添えて中断する。
-- `gap_report`をfeedbackとして工程2(要件定義生成)をattempt+1で自動的に再起動し、生成し直した要件定義に対して再度人の承認を待つ(状態遷移: `implementing → requirements_generating`、理由`gap`)。
-- 実装が要件を満たして完了した場合はPRを作成し`pr_open`へ遷移する(`implementing → pr_open`)。
-- **実装中に要件や設計を書き換えることは禁止する**(実装が要件解釈を勝手に変えて帳尻を合わせることを防ぐ)。この制約は`factory-implementation`スキル(`.claude/skills/factory-implementation/SKILL.md`。工程3のheadless Claude実行に`--append-system-prompt-file`で注入する)で規定する。プロンプトは`f/factory/lib/prompts.ts`の`implementPrompt` / `implementFixPrompt`、出力契約は同ファイルの`IMPLEMENT_SCHEMA`と`f/factory/lib/implement_support.ts`の型ガード・検証が担う(フローとステップは後続の変更で追加する)。
+- **準備**(`implement_prepare`): statusが`implementing`か、日次予算、対象リポジトリ、Issueがopenか、作業項目のattemptに一致する承認済み要件定義があるかを確認し、実装ブランチ`factory/issue-<N>-wi-<id>`のworktreeを`git gtr`で用意して空のブランチをpushする(以後のpushは既存の`commitAndPush`をそのまま使う)。ブランチがデフォルトブランチから分かれた点(`git merge-base`)を比較の基準として後段に渡す。
+- **実装**(`implement_generate`): `factory-implementation`スキルのheadless Claudeをworktree上で1回実行する(`Read,Glob,Grep,Edit,Write`のみ、Bashなし)。承認済み要件定義のディレクトリは実行ごとに一時ディレクトリへ複製したものを読ませ、元のファイルは書き換えられない。モジュールの再試行は付けない。
+- **検証と修正のループ**(`implement_verify`、`lib/implement_loop.ts`): ラウンドごとに、差分をすべてステージして指紋(`git write-tree`)と分岐点からの差分量を取り、分岐点からの変更パス(`git diff -z --name-status`)でsymlink変更と差分超過を検出したら止める。保護パスの変更は記録だけ行う。分岐点から何も変わっていないラウンドは合格にしない。続いてgitleaks(固定検査)と、保護パスを変えていなければリポジトリの検査コマンド(`check_commands_by_repo`に明示されたものだけ。無視ファイルを`git clean -fdX`で消してから)を実行し、失敗していればその出力をDATAとしてClaudeに修正させる。検査に通る、検査を実行しない、ラウンド上限・日次予算・停滞、`requirements_gap`のいずれかで抜け、Claude実行ごとに`implement_rounds`へ1行記録する。検査コマンドは`implement_timeout_sec`をコマンドごとのタイムアウトとして実行される(Claude実行のタイムアウトも同じ値)ため、1ラウンドの最長時間は`(1 + 検査コマンド数) × implement_timeout_sec`になりうる。`flow.yaml`はどのモジュールにもタイムアウトを設定していない。
+- **完了**(`implement_finish`): PRの作成・更新、`requirements_gap`の差し戻し、`needs_human`、`cancelled`を振り分ける(状態遷移の詳細は上記)。既存PRを更新するモードでも、差分サイズの上限(`implement_max_changed_files` / `implement_max_diff_lines`)はデフォルトブランチとのmerge-baseからの累積で測るため、既にPRが大きい場合は上限に達しうる。
+- **実装中に要件や設計を書き換えることは禁止する**。要件を満たせない場合は`requirements_gap`と`gap_report`を返して中断し、工程2をattempt+1で再起動する。この制約は`factory-implementation`スキル(`.claude/skills/factory-implementation/SKILL.md`)で規定し、プロンプトは`f/factory/lib/prompts.ts`の`implementPrompt` / `implementFixPrompt`、出力契約は`IMPLEMENT_SCHEMA`と`f/factory/lib/implement_support.ts`の型ガード・検証が担う。
+- ConsoleのPipelineタブへのブランチ / PRの列の追加と、sandboxリポジトリでのe2eは後続の変更で行い、その後に`implement_enabled`を有効にする。
 
 ### 工程4: CI監視(未実装、拡張点)
 
@@ -312,4 +327,4 @@ WindmillのUIはsummaryでソートされるため、種別を示すタグをsum
 
 ボタンによる承認操作はInteractions Endpointの公開URLが必要なため、共有インスタンス化(VPS等)の際に検討する。
 
-上記のうち、工程3・4の具体的なガード設計や監視scheduleの詳細は実装時に確定する。
+上記のうち、工程4の監視scheduleの詳細は実装時に確定する。工程3のガードは [docs/security.md](security.md)の「工程3(implement)の安全策」を参照。

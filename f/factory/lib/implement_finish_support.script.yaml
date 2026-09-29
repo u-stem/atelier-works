@@ -1,0 +1,9 @@
+summary: '[LIB] 実装フローの完了処理の判定'
+description: 内部ライブラリです。直接実行するものではありません。実装フローの最後のステップが使う分岐の判定、ブランチを残すかどうかの判定、途中経過の保存、通知内容の組み立てを提供します。
+lock: '!inline f/factory/lib/implement_finish_support.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

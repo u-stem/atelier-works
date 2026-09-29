@@ -768,6 +768,10 @@ export type ImplementFixPromptInput = ImplementPromptInput & {
   round: number;
   /** `factory_config.implement_max_rounds`. */
   maxRounds: number;
+  /** Factory-authored rules to restate when the previous round's output
+   * broke the output contract — plain instruction text, rendered outside
+   * every DATA fence (it is not target-repo data). */
+  outputContractNote?: string;
 };
 
 export function implementFixPrompt(
@@ -776,12 +780,27 @@ export function implementFixPrompt(
 ): string {
   const uuid = deps.uuid ?? defaultUuid;
   const nonce = uuid();
+  // Only the output contract was broken: no check failed, so the intro
+  // must not send Claude looking for a failure output that is not there.
+  const intro =
+    input.checkFailures.length === 0
+      ? [
+          "You are the implementation stage of a Software Factory pipeline, in",
+          "fix mode: your previous round's changes are in the worktree, and",
+          "your previous output violated the output contract; the rules it",
+          "broke follow below. Fix your output with the Read, Glob, Grep, Edit,",
+          "and Write tools as needed, and keep the implementation aligned with",
+          "the approved requirements.",
+        ]
+      : [
+          "You are the implementation stage of a Software Factory pipeline, in",
+          "fix mode: your previous round's changes are in the worktree, and the",
+          "flow's check commands failed on them. Read the failure output below,",
+          "fix its cause with the Read, Glob, Grep, Edit, and Write tools, and",
+          "keep the implementation aligned with the approved requirements.",
+        ];
   const sections: string[] = [
-    "You are the implementation stage of a Software Factory pipeline, in",
-    "fix mode: your previous round's changes are in the worktree, and the",
-    "flow's check commands failed on them. Read the failure output below,",
-    "fix its cause with the Read, Glob, Grep, Edit, and Write tools, and",
-    "keep the implementation aligned with the approved requirements.",
+    ...intro,
     "Do not weaken or delete a test to make it pass, and do not change the",
     "check commands' own definitions (mise.toml, package.json scripts, CI",
     "workflows) to avoid a failure. You have no Bash; do not commit.",
@@ -800,6 +819,9 @@ export function implementFixPrompt(
       ),
     );
   });
+  if (input.outputContractNote !== undefined) {
+    sections.push("", input.outputContractNote);
+  }
   sections.push(...implementOutputSections());
   return sections.join("\n");
 }

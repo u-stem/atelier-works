@@ -1,0 +1,9 @@
+summary: '[LIB] 実装フローの起動判定'
+description: 内部ライブラリです。直接実行するものではありません。要件定義の承認後に実装フローを起動する手順と、起動に失敗したときの記録を提供します。
+lock: '!inline f/factory/lib/implement_launch_support.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

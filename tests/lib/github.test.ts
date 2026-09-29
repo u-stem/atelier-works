@@ -33,6 +33,7 @@ import {
   searchIssues,
   searchPrs,
   setLabels,
+  updatePullRequest,
   updatePullRequestBody,
   withMarker,
 } from "../../f/factory/lib/github.ts";
@@ -2206,6 +2207,58 @@ describe("findOpenPullRequestByHead", () => {
         "factory/issue-7-wi-3",
       ),
     ).rejects.toThrow(/unexpected response shape/);
+  });
+});
+
+describe("updatePullRequest", () => {
+  test("sends the title and the body", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ number: 12 })]);
+    await updatePullRequest(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+      {
+        title: "新しいタイトル",
+        body: "new body",
+      },
+    );
+    expect(fake.calls[0]?.options?.stdin).toBe(
+      JSON.stringify({ title: "新しいタイトル", body: "new body" }),
+    );
+  });
+
+  test("sends only the fields given", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ number: 12 })]);
+    await updatePullRequest(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+      {
+        title: "新しいタイトル",
+      },
+    );
+    expect(fake.calls[0]?.options?.stdin).toBe(
+      JSON.stringify({ title: "新しいタイトル" }),
+    );
+  });
+
+  test("throws on a non-2xx response", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(422, { message: "Validation Failed" })),
+    ]);
+    await expect(
+      updatePullRequest(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        12,
+        {
+          title: "t",
+        },
+      ),
+    ).rejects.toThrow(/HTTP 422/);
   });
 });
 

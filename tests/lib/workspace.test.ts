@@ -1,36 +1,54 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import {
   addDetachedWorktree,
+  assertWorktreeGitPointer,
   type CommandResult,
   commitAndPush,
   copyFileTo,
   createBunCommandRunner,
   createGtrWorktree,
   currentRemoteHeadSha,
+  deleteLocalBranch,
   deleteRemoteBranch,
+  dropRemovedDiffLines,
   ensureEmptyDir,
   ensureFactoryClone,
   ensureRepo,
   factoryCloneLockPath,
   fetchPrHeadRef,
+  formatGitleaksReport,
+  type GitleaksConfigDir,
+  isCappedOutput,
   type LockFs,
   listWorktrees,
+  mapDiffLineToFile,
+  mergeBaseSha,
+  omittedMarker,
+  parseNumstatTotals,
   pathExists,
   pruneWorktrees,
   pushNewBranch,
   readDirEntries,
   readGitShowFile,
+  readStreamCapped,
   readTextFile,
+  readWorktreeGitPointer,
   removeEmptyDir,
+  removeIgnoredFiles,
   removeWorktree,
   resolveDefaultBranchHeadSha,
+  resolveDefaultBranchName,
   runCommand,
+  runGitleaksOnWorktree,
+  stagedTreeSha,
   verifyWorktreeGitdir,
+  WorktreeGitPointerModifiedError,
   withCommitTrailers,
   withRepoLock,
+  worktreeFingerprint,
   writeTextFile,
 } from "../../f/factory/lib/workspace.ts";
 import { createFakeCommandRunner, fail, ok } from "./testSupport.ts";
@@ -675,67 +693,180 @@ describe("addDetachedWorktree", () => {
   });
 });
 
+// A registered worktree of /tmp/repo (REAL_WORKTREE_PORCELAIN) and fs
+// stand-ins for its `.git` pointer check: a canonical pointer passes, a
+// redirected one fails verifyWorktreeGitdir.
+const REUSED_REPO = "/tmp/repo";
+const REUSED_WT = "/tmp/repo-worktrees/contract-smoke-branch";
+function pointerFsDeps(pointerOk: boolean): {
+  readonly fs: {
+    readonly readTextFile: (path: string) => Promise<string>;
+    readonly realpath: (path: string) => Promise<string>;
+    readonly removeDir: (path: string) => Promise<void>;
+  };
+  readonly removed: string[];
+} {
+  const removed: string[] = [];
+  return {
+    removed,
+    fs: {
+      readTextFile: async (path) => {
+        if (path === `${REUSED_WT}/.git`) {
+          return pointerOk
+            ? `gitdir: ${REUSED_REPO}/.git/worktrees/contract-smoke-branch\n`
+            : "gitdir: /evil/.git/worktrees/x\n";
+        }
+        if (path.endsWith("/gitdir")) return `${REUSED_WT}/.git\n`;
+        throw new Error(`unexpected read: ${path}`);
+      },
+      realpath: async (path) => resolve(path),
+      removeDir: async (path) => {
+        removed.push(path);
+      },
+    },
+  };
+}
+
 describe("removeWorktree", () => {
+  // [0] git worktree list (the pointer check), [1] remove, [2] prune.
+  const verified = () =>
+    createFakeCommandRunner([ok(REAL_WORKTREE_PORCELAIN), ok(), ok()]);
+
   test("includes --force when requested", async () => {
-    const fake = createFakeCommandRunner([ok(), ok()]);
+    const fake = verified();
     await removeWorktree({
       run: fake.run,
-      repoDir: "/repo",
-      dir: "/repo/wt",
+      repoDir: REUSED_REPO,
+      dir: REUSED_WT,
       force: true,
       lockFs: createInMemoryLockFs(),
+      fs: pointerFsDeps(true).fs,
     });
-    expect(fake.calls[0]?.argv).toContain("--force");
+    expect(fake.calls[1]?.argv).toContain("--force");
   });
 
   test("puts -- before the worktree dir", async () => {
-    const fake = createFakeCommandRunner([ok(), ok()]);
+    const fake = verified();
     await removeWorktree({
       run: fake.run,
-      repoDir: "/repo",
-      dir: "/repo/wt",
+      repoDir: REUSED_REPO,
+      dir: REUSED_WT,
       lockFs: createInMemoryLockFs(),
+      fs: pointerFsDeps(true).fs,
     });
-    const argv = fake.calls[0]?.argv ?? [];
+    const argv = fake.calls[1]?.argv ?? [];
     expect(argv.at(-2)).toBe("--");
   });
 
   test("prunes after removing", async () => {
-    const fake = createFakeCommandRunner([ok(), ok()]);
+    const fake = verified();
     await removeWorktree({
       run: fake.run,
-      repoDir: "/repo",
-      dir: "/repo/wt",
+      repoDir: REUSED_REPO,
+      dir: REUSED_WT,
       lockFs: createInMemoryLockFs(),
+      fs: pointerFsDeps(true).fs,
     });
-    expect(fake.calls[1]?.argv).toContain("prune");
+    expect(fake.calls[2]?.argv).toContain("prune");
   });
 
   test("is serialized under the same lock path ensureRepo would use for this repo", async () => {
     const lockFs = createInMemoryLockFs();
     let sawLockDuringRun = false;
-    const fake = createFakeCommandRunner([
-      {
-        stdout: "",
-        stderr: "",
-        exitCode: 0,
-        timedOut: false,
-      },
-      { stdout: "", stderr: "", exitCode: 0, timedOut: false },
-    ]);
+    const fake = verified();
     // Peek at the lock file mid-flight via a wrapping run that checks the lock exists.
     const runAndCheck: typeof fake.run = async (argv, options) => {
       sawLockDuringRun =
-        (await lockFs.read("/repo/main.lock")) !== null || sawLockDuringRun;
+        (await lockFs.read("/tmp/main.lock")) !== null || sawLockDuringRun;
       return fake.run(argv, options);
     };
     await removeWorktree({
       run: runAndCheck,
-      repoDir: "/repo/main",
-      dir: "/repo/main-wt",
+      repoDir: REUSED_REPO,
+      dir: REUSED_WT,
       lockFs,
+      fs: pointerFsDeps(true).fs,
     });
     expect(sawLockDuringRun).toBe(true);
+  });
+
+  describe("when the .git pointer fails verification", () => {
+    // [0] list (pointer check), [1] list (fallback guard), [2] prune.
+    const unverified = () =>
+      createFakeCommandRunner([
+        ok(REAL_WORKTREE_PORCELAIN),
+        ok(REAL_WORKTREE_PORCELAIN),
+        ok(),
+      ]);
+    const remove = async (
+      run: ReturnType<typeof unverified>["run"],
+      deps = pointerFsDeps(false),
+      repoDir = REUSED_REPO,
+      dir = REUSED_WT,
+    ) =>
+      removeWorktree({
+        run,
+        repoDir,
+        dir,
+        force: true,
+        lockFs: createInMemoryLockFs(),
+        fs: deps.fs,
+      });
+
+    test("does not run git worktree remove", async () => {
+      const fake = unverified();
+      await remove(fake.run);
+      expect(fake.calls.some((call) => call.argv.includes("remove"))).toBe(
+        false,
+      );
+    });
+
+    test("never runs git inside the worktree", async () => {
+      const fake = unverified();
+      await remove(fake.run);
+      expect(fake.calls.some((call) => call.options?.cwd === REUSED_WT)).toBe(
+        false,
+      );
+    });
+
+    test("deletes the directory through the fs", async () => {
+      const deps = pointerFsDeps(false);
+      await remove(unverified().run, deps);
+      expect(deps.removed).toEqual([REUSED_WT]);
+    });
+
+    test("prunes from repoDir", async () => {
+      const fake = unverified();
+      await remove(fake.run);
+      expect(
+        fake.calls.find((call) => call.argv.includes("prune"))?.options?.cwd,
+      ).toBe(REUSED_REPO);
+    });
+
+    test("refuses a directory git worktree list does not report", async () => {
+      await expect(
+        remove(
+          unverified().run,
+          pointerFsDeps(false),
+          REUSED_REPO,
+          "/tmp/repo-worktrees/unknown",
+        ),
+      ).rejects.toThrow(/not a registered worktree/);
+    });
+
+    test("refuses a directory outside the repository's workspace dir", async () => {
+      await expect(
+        remove(unverified().run, pointerFsDeps(false), "/srv/checkout/repo"),
+      ).rejects.toThrow(/outside/);
+    });
+
+    test("deletes nothing when it refuses", async () => {
+      const deps = pointerFsDeps(false);
+      await remove(unverified().run, deps, "/srv/checkout/repo").catch(
+        () => {},
+      );
+      expect(deps.removed).toEqual([]);
+    });
   });
 });
 
@@ -846,16 +977,18 @@ describe("createGtrWorktree", () => {
   test("reuses an existing worktree whose branch matches", async () => {
     const fake = createFakeCommandRunner([
       ok(REAL_WORKTREE_PORCELAIN),
+      ok(REAL_WORKTREE_PORCELAIN),
       ok(),
       ok(),
       ok(),
     ]);
     const result = await createGtrWorktree({
       run: fake.run,
-      repoDir: "/repo",
+      repoDir: REUSED_REPO,
       branch: "contract-smoke-branch",
       ghToken: "gh-token",
       lockFs: createInMemoryLockFs(),
+      fs: pointerFsDeps(true).fs,
     });
     expect(result.hookStatus).toBe("reused");
   });
@@ -863,16 +996,18 @@ describe("createGtrWorktree", () => {
   test("does not call `git gtr new` when reusing", async () => {
     const fake = createFakeCommandRunner([
       ok(REAL_WORKTREE_PORCELAIN),
+      ok(REAL_WORKTREE_PORCELAIN),
       ok(),
       ok(),
       ok(),
     ]);
     await createGtrWorktree({
       run: fake.run,
-      repoDir: "/repo",
+      repoDir: REUSED_REPO,
       branch: "contract-smoke-branch",
       ghToken: "gh-token",
       lockFs: createInMemoryLockFs(),
+      fs: pointerFsDeps(true).fs,
     });
     expect(fake.calls.some((call) => call.argv.includes("gtr"))).toBe(false);
   });
@@ -891,18 +1026,20 @@ describe("createGtrWorktree", () => {
     test("fetches origin/<branch> first", async () => {
       const fake = createFakeCommandRunner([
         ok(REAL_WORKTREE_PORCELAIN),
+        ok(REAL_WORKTREE_PORCELAIN),
         ok(),
         ok(),
         ok(),
       ]);
       await createGtrWorktree({
         run: fake.run,
-        repoDir: "/repo",
+        repoDir: REUSED_REPO,
         branch: "contract-smoke-branch",
         ghToken: "gh-token",
         lockFs: createInMemoryLockFs(),
+        fs: pointerFsDeps(true).fs,
       });
-      const argv = fake.calls[1]?.argv ?? [];
+      const argv = fake.calls[2]?.argv ?? [];
       expect(argv).toEqual(
         expect.arrayContaining([
           "fetch",
@@ -916,18 +1053,20 @@ describe("createGtrWorktree", () => {
     test("then resets --hard to origin/<branch>", async () => {
       const fake = createFakeCommandRunner([
         ok(REAL_WORKTREE_PORCELAIN),
+        ok(REAL_WORKTREE_PORCELAIN),
         ok(),
         ok(),
         ok(),
       ]);
       await createGtrWorktree({
         run: fake.run,
-        repoDir: "/repo",
+        repoDir: REUSED_REPO,
         branch: "contract-smoke-branch",
         ghToken: "gh-token",
         lockFs: createInMemoryLockFs(),
+        fs: pointerFsDeps(true).fs,
       });
-      const argv = fake.calls[2]?.argv ?? [];
+      const argv = fake.calls[3]?.argv ?? [];
       expect(argv).toEqual(
         expect.arrayContaining([
           "reset",
@@ -940,41 +1079,26 @@ describe("createGtrWorktree", () => {
     test("then cleans untracked files", async () => {
       const fake = createFakeCommandRunner([
         ok(REAL_WORKTREE_PORCELAIN),
+        ok(REAL_WORKTREE_PORCELAIN),
         ok(),
         ok(),
         ok(),
       ]);
       await createGtrWorktree({
         run: fake.run,
-        repoDir: "/repo",
+        repoDir: REUSED_REPO,
         branch: "contract-smoke-branch",
         ghToken: "gh-token",
         lockFs: createInMemoryLockFs(),
+        fs: pointerFsDeps(true).fs,
       });
-      const argv = fake.calls[3]?.argv ?? [];
+      const argv = fake.calls[4]?.argv ?? [];
       expect(argv).toEqual(expect.arrayContaining(["clean", "-fd"]));
     });
 
     test("does not put -- before the ref for reset --hard (same rev-parse-like exception as elsewhere)", async () => {
       const fake = createFakeCommandRunner([
         ok(REAL_WORKTREE_PORCELAIN),
-        ok(),
-        ok(),
-        ok(),
-      ]);
-      await createGtrWorktree({
-        run: fake.run,
-        repoDir: "/repo",
-        branch: "contract-smoke-branch",
-        ghToken: "gh-token",
-        lockFs: createInMemoryLockFs(),
-      });
-      const argv = fake.calls[2]?.argv ?? [];
-      expect(argv).not.toContain("--");
-    });
-
-    test("resets and cleans in the worktree dir, not repoDir", async () => {
-      const fake = createFakeCommandRunner([
         ok(REAL_WORKTREE_PORCELAIN),
         ok(),
         ok(),
@@ -982,14 +1106,35 @@ describe("createGtrWorktree", () => {
       ]);
       await createGtrWorktree({
         run: fake.run,
-        repoDir: "/repo",
+        repoDir: REUSED_REPO,
         branch: "contract-smoke-branch",
         ghToken: "gh-token",
         lockFs: createInMemoryLockFs(),
+        fs: pointerFsDeps(true).fs,
+      });
+      const argv = fake.calls[3]?.argv ?? [];
+      expect(argv).not.toContain("--");
+    });
+
+    test("resets and cleans in the worktree dir, not repoDir", async () => {
+      const fake = createFakeCommandRunner([
+        ok(REAL_WORKTREE_PORCELAIN),
+        ok(REAL_WORKTREE_PORCELAIN),
+        ok(),
+        ok(),
+        ok(),
+      ]);
+      await createGtrWorktree({
+        run: fake.run,
+        repoDir: REUSED_REPO,
+        branch: "contract-smoke-branch",
+        ghToken: "gh-token",
+        lockFs: createInMemoryLockFs(),
+        fs: pointerFsDeps(true).fs,
       });
       expect([
-        fake.calls[2]?.options?.cwd,
         fake.calls[3]?.options?.cwd,
+        fake.calls[4]?.options?.cwd,
       ]).toEqual([
         "/tmp/repo-worktrees/contract-smoke-branch",
         "/tmp/repo-worktrees/contract-smoke-branch",
@@ -999,18 +1144,74 @@ describe("createGtrWorktree", () => {
     test("throws a masked error when the reset fails", async () => {
       const fake = createFakeCommandRunner([
         ok(REAL_WORKTREE_PORCELAIN),
+        ok(REAL_WORKTREE_PORCELAIN),
         ok(),
         fail("fatal: could not reset"),
       ]);
       await expect(
         createGtrWorktree({
           run: fake.run,
-          repoDir: "/repo",
+          repoDir: REUSED_REPO,
           branch: "contract-smoke-branch",
           ghToken: "gh-token",
           lockFs: createInMemoryLockFs(),
+          fs: pointerFsDeps(true).fs,
         }),
       ).rejects.toThrow(/reset --hard/);
+    });
+  });
+
+  describe("reuse path when the .git pointer fails verification", () => {
+    const gtrPorcelain = `path\t${REUSED_WT}\nbranch\tcontract-smoke-branch\nhook_status\tnone\n`;
+    // [0] list (reuse lookup), [1] list (pointer check), [2] list (fallback
+    // guard), [3] prune, [4] gtr new.
+    const recreate = async () => {
+      const fake = createFakeCommandRunner([
+        ok(REAL_WORKTREE_PORCELAIN),
+        ok(REAL_WORKTREE_PORCELAIN),
+        ok(REAL_WORKTREE_PORCELAIN),
+        ok(),
+        ok(gtrPorcelain),
+      ]);
+      const deps = pointerFsDeps(false);
+      const result = await createGtrWorktree({
+        run: fake.run,
+        repoDir: REUSED_REPO,
+        branch: "contract-smoke-branch",
+        ghToken: "gh-token",
+        lockFs: createInMemoryLockFs(),
+        fs: deps.fs,
+      });
+      return { fake, deps, result };
+    };
+
+    test("never runs git inside the reused worktree", async () => {
+      const { fake } = await recreate();
+      expect(fake.calls.some((call) => call.options?.cwd === REUSED_WT)).toBe(
+        false,
+      );
+    });
+
+    test("deletes the worktree directory through the fs", async () => {
+      const { deps } = await recreate();
+      expect(deps.removed).toEqual([REUSED_WT]);
+    });
+
+    test("prunes from repoDir", async () => {
+      const { fake } = await recreate();
+      expect(
+        fake.calls.find((call) => call.argv.includes("prune"))?.options?.cwd,
+      ).toBe(REUSED_REPO);
+    });
+
+    test("recreates the worktree with git gtr new", async () => {
+      const { fake } = await recreate();
+      expect(fake.calls.some((call) => call.argv.includes("gtr"))).toBe(true);
+    });
+
+    test("returns the recreated worktree", async () => {
+      const { result } = await recreate();
+      expect(result.hookStatus).toBe("none");
     });
   });
 
@@ -1063,15 +1264,30 @@ describe("createGtrWorktree", () => {
 });
 
 describe("verifyWorktreeGitdir", () => {
+  const WT = "/tmp/repo-worktrees/contract-smoke-branch";
+  const GITDIR = "/tmp/repo/.git/worktrees/contract-smoke-branch";
+  // realpath stand-in: normalizes `..` like the real one (no symlinks here).
+  const normalize = async (path: string): Promise<string> => resolve(path);
+  function files(
+    pointer: string,
+    backPointer = `${WT}/.git\n`,
+  ): (path: string) => Promise<string> {
+    return async (path) => {
+      if (path === `${WT}/.git`) return pointer;
+      if (path.endsWith("/gitdir")) return backPointer;
+      throw new Error(`unexpected read: ${path}`);
+    };
+  }
+
   test("passes when the dir is registered and .git points under the repo's worktrees dir", async () => {
     const fake = createFakeCommandRunner([ok(REAL_WORKTREE_PORCELAIN)]);
     await expect(
       verifyWorktreeGitdir({
         run: fake.run,
         repoDir: "/tmp/repo",
-        dir: "/tmp/repo-worktrees/contract-smoke-branch",
-        readTextFile: async () =>
-          "gitdir: /tmp/repo/.git/worktrees/contract-smoke-branch\n",
+        dir: WT,
+        readTextFile: files(`gitdir: ${GITDIR}\n`),
+        realpath: normalize,
       }),
     ).resolves.toBeUndefined();
   });
@@ -1085,6 +1301,7 @@ describe("verifyWorktreeGitdir", () => {
         dir: "/tmp/not-a-worktree",
         readTextFile: async () =>
           "gitdir: /tmp/repo/.git/worktrees/not-a-worktree\n",
+        realpath: normalize,
       }),
     ).rejects.toThrow(/not registered/);
   });
@@ -1095,11 +1312,201 @@ describe("verifyWorktreeGitdir", () => {
       verifyWorktreeGitdir({
         run: fake.run,
         repoDir: "/tmp/repo",
-        dir: "/tmp/repo-worktrees/contract-smoke-branch",
-        readTextFile: async () =>
+        dir: WT,
+        readTextFile: files(
           "gitdir: /somewhere/else/.git/worktrees/contract-smoke-branch\n",
+        ),
+        realpath: normalize,
       }),
     ).rejects.toThrow(/does not point under/);
+  });
+
+  test("rejects a gitdir that climbs out of the worktrees dir with ..", async () => {
+    const fake = createFakeCommandRunner([ok(REAL_WORKTREE_PORCELAIN)]);
+    await expect(
+      verifyWorktreeGitdir({
+        run: fake.run,
+        repoDir: "/tmp/repo",
+        dir: WT,
+        readTextFile: files(
+          "gitdir: /tmp/repo/.git/worktrees/../../../evil\n",
+          "/tmp/evil/.git\n",
+        ),
+        realpath: normalize,
+      }),
+    ).rejects.toThrow(/does not point under/);
+  });
+
+  test("rejects a gitdir nested below a worktree's own admin dir", async () => {
+    const fake = createFakeCommandRunner([ok(REAL_WORKTREE_PORCELAIN)]);
+    await expect(
+      verifyWorktreeGitdir({
+        run: fake.run,
+        repoDir: "/tmp/repo",
+        dir: WT,
+        readTextFile: files(`gitdir: ${GITDIR}/nested\n`),
+        realpath: normalize,
+      }),
+    ).rejects.toThrow(/does not point under/);
+  });
+
+  // git reads the pointer as exactly "gitdir: <path>" minus trailing CR/LF;
+  // any other spacing makes git read a different (relative) directory.
+  const verifyPointer = (pointer: string) =>
+    verifyWorktreeGitdir({
+      run: createFakeCommandRunner([ok(REAL_WORKTREE_PORCELAIN)]).run,
+      repoDir: "/tmp/repo",
+      dir: WT,
+      readTextFile: files(pointer),
+      realpath: normalize,
+    });
+
+  test("rejects two spaces after gitdir:", async () => {
+    await expect(verifyPointer(`gitdir:  ${GITDIR}\n`)).rejects.toThrow(
+      /does not point under/,
+    );
+  });
+
+  test("rejects a trailing space after the path", async () => {
+    await expect(verifyPointer(`gitdir: ${GITDIR} \n`)).rejects.toThrow(
+      /does not point under/,
+    );
+  });
+
+  test("rejects a tab after gitdir:", async () => {
+    await expect(verifyPointer(`gitdir:\t${GITDIR}\n`)).rejects.toThrow(
+      /does not point under/,
+    );
+  });
+
+  test("accepts the canonical pointer without a trailing newline", async () => {
+    await expect(verifyPointer(`gitdir: ${GITDIR}`)).resolves.toBeUndefined();
+  });
+
+  test("accepts the canonical pointer with CRLF", async () => {
+    await expect(
+      verifyPointer(`gitdir: ${GITDIR}\r\n`),
+    ).resolves.toBeUndefined();
+  });
+
+  test("rejects a relative gitdir path", async () => {
+    await expect(
+      verifyPointer("gitdir: ../repo/.git/worktrees/contract-smoke-branch\n"),
+    ).rejects.toThrow(/does not point under/);
+  });
+
+  test("rejects an admin dir whose back-pointer names another worktree", async () => {
+    const fake = createFakeCommandRunner([ok(REAL_WORKTREE_PORCELAIN)]);
+    await expect(
+      verifyWorktreeGitdir({
+        run: fake.run,
+        repoDir: "/tmp/repo",
+        dir: WT,
+        readTextFile: files(
+          `gitdir: ${GITDIR}\n`,
+          "/tmp/repo-worktrees/other/.git\n",
+        ),
+        realpath: normalize,
+      }),
+    ).rejects.toThrow(/back-pointer/);
+  });
+});
+
+describe("readWorktreeGitPointer", () => {
+  const WT = "/wt";
+  function pointerFs(
+    kind: "file" | "symlink" | "dir",
+    content = "gitdir: /r\n",
+  ) {
+    return {
+      lstat: async () => ({
+        isFile: () => kind === "file",
+        isSymbolicLink: () => kind === "symlink",
+      }),
+      readFile: async () => content,
+    };
+  }
+
+  test("returns the .git file's content", async () => {
+    expect(await readWorktreeGitPointer(WT, pointerFs("file"))).toEqual({
+      content: "gitdir: /r\n",
+    });
+  });
+
+  test("rejects a symlinked .git", async () => {
+    await expect(
+      readWorktreeGitPointer(WT, pointerFs("symlink")),
+    ).rejects.toThrow(/not a regular file/);
+  });
+
+  test("rejects a .git directory", async () => {
+    await expect(readWorktreeGitPointer(WT, pointerFs("dir"))).rejects.toThrow(
+      /not a regular file/,
+    );
+  });
+});
+
+describe("assertWorktreeGitPointer", () => {
+  const WT = "/wt";
+  function pointerFs(kind: "file" | "symlink", content: string) {
+    return {
+      lstat: async () => ({
+        isFile: () => kind === "file",
+        isSymbolicLink: () => kind === "symlink",
+      }),
+      readFile: async () => content,
+    };
+  }
+
+  test("passes when the pointer is unchanged", async () => {
+    await expect(
+      assertWorktreeGitPointer(
+        WT,
+        "gitdir: /r\n",
+        pointerFs("file", "gitdir: /r\n"),
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  test("throws WorktreeGitPointerModifiedError when the content differs", async () => {
+    await expect(
+      assertWorktreeGitPointer(
+        WT,
+        "gitdir: /r\n",
+        pointerFs("file", "gitdir: /evil\n"),
+      ),
+    ).rejects.toBeInstanceOf(WorktreeGitPointerModifiedError);
+  });
+
+  test("throws WorktreeGitPointerModifiedError when .git became a symlink", async () => {
+    await expect(
+      assertWorktreeGitPointer(
+        WT,
+        "gitdir: /r\n",
+        pointerFs("symlink", "gitdir: /r\n"),
+      ),
+    ).rejects.toBeInstanceOf(WorktreeGitPointerModifiedError);
+  });
+
+  test("throws WorktreeGitPointerModifiedError when .git is gone", async () => {
+    await expect(
+      assertWorktreeGitPointer(WT, "gitdir: /r\n", {
+        lstat: async () => {
+          throw new Error("ENOENT");
+        },
+        readFile: async () => "",
+      }),
+    ).rejects.toBeInstanceOf(WorktreeGitPointerModifiedError);
+  });
+
+  test("uses the fixed message", async () => {
+    await expect(
+      assertWorktreeGitPointer(
+        WT,
+        "gitdir: /r\n",
+        pointerFs("file", "gitdir: /evil\n"),
+      ),
+    ).rejects.toThrow(/^worktree git pointer was modified$/);
   });
 });
 
@@ -2058,5 +2465,689 @@ describe("currentRemoteHeadSha", () => {
         branch: BRANCH,
       }),
     ).rejects.toThrow();
+  });
+});
+
+function streamOf(...parts: string[]): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const part of parts) controller.enqueue(encoder.encode(part));
+      controller.close();
+    },
+  });
+}
+
+describe("readStreamCapped", () => {
+  test("returns the whole text when it fits", async () => {
+    expect(await readStreamCapped(streamOf("abc", "def"), 100)).toBe("abcdef");
+  });
+
+  test("keeps the first and last halves around an omission marker", async () => {
+    expect(await readStreamCapped(streamOf("0123456789"), 4)).toBe(
+      `01${omittedMarker(6)}89`,
+    );
+  });
+
+  test("counts omitted bytes across chunk boundaries", async () => {
+    expect(await readStreamCapped(streamOf("ab", "cd", "ef", "gh"), 4)).toBe(
+      `ab${omittedMarker(4)}gh`,
+    );
+  });
+
+  test("keeps only the tail of a chunk larger than the tail limit", async () => {
+    expect(await readStreamCapped(streamOf("ab", "cdefghij"), 4)).toBe(
+      `ab${omittedMarker(6)}ij`,
+    );
+  });
+});
+
+describe("isCappedOutput", () => {
+  test("detects the omission marker", () => {
+    expect(isCappedOutput(`head${omittedMarker(12)}tail`)).toBe(true);
+  });
+
+  test("does not flag uncapped text", () => {
+    expect(isCappedOutput("[]")).toBe(false);
+  });
+});
+
+describe("createBunCommandRunner maxOutputBytes", () => {
+  test("keeps at most maxOutputBytes of stdout plus the marker", async () => {
+    const result = await runCommand(["sh", "-c", "yes x | head -c 100000"], {
+      maxOutputBytes: 1000,
+    });
+    expect(result.stdout.length).toBeLessThan(1100);
+  });
+
+  test("marks capped stdout with the omission marker", async () => {
+    const result = await runCommand(["sh", "-c", "yes x | head -c 100000"], {
+      maxOutputBytes: 1000,
+    });
+    expect(isCappedOutput(result.stdout)).toBe(true);
+  });
+
+  test("caps stderr independently", async () => {
+    const result = await runCommand(
+      ["sh", "-c", "yes x | head -c 100000 1>&2"],
+      { maxOutputBytes: 1000 },
+    );
+    expect(result.stderr.length).toBeLessThan(1100);
+  });
+
+  test("still reports the exit code", async () => {
+    const result = await runCommand(["sh", "-c", "exit 3"], {
+      maxOutputBytes: 1000,
+    });
+    expect(result.exitCode).toBe(3);
+  });
+});
+
+const IMPL_BRANCH = "factory/issue-7-wi-3";
+const BASE_SHA = "b".repeat(40);
+const TREE_SHA = "c".repeat(40);
+
+describe("resolveDefaultBranchName", () => {
+  test("strips origin/ from refs/remotes/origin/HEAD", async () => {
+    const fake = createFakeCommandRunner([ok("origin/main\n")]);
+    expect(
+      await resolveDefaultBranchName({ run: fake.run, repoDir: "/repo/main" }),
+    ).toBe("main");
+  });
+
+  test("runs git symbolic-ref --short refs/remotes/origin/HEAD", async () => {
+    const fake = createFakeCommandRunner([ok("origin/main\n")]);
+    await resolveDefaultBranchName({ run: fake.run, repoDir: "/repo/main" });
+    expect(fake.calls[0]?.argv.slice(-3)).toEqual([
+      "symbolic-ref",
+      "--short",
+      "refs/remotes/origin/HEAD",
+    ]);
+  });
+
+  test("throws when the target is not under origin/", async () => {
+    const fake = createFakeCommandRunner([ok("upstream/main\n")]);
+    await expect(
+      resolveDefaultBranchName({ run: fake.run, repoDir: "/repo/main" }),
+    ).rejects.toThrow(/origin\/HEAD/);
+  });
+
+  test("throws when git fails", async () => {
+    const fake = createFakeCommandRunner([
+      fail("fatal: ref not a symbolic ref"),
+    ]);
+    await expect(
+      resolveDefaultBranchName({ run: fake.run, repoDir: "/repo/main" }),
+    ).rejects.toThrow(/symbolic-ref/);
+  });
+});
+
+describe("mergeBaseSha", () => {
+  test("returns the merge-base of origin/<base> and HEAD", async () => {
+    const fake = createFakeCommandRunner([ok(`${BASE_SHA}\n`)]);
+    expect(
+      await mergeBaseSha({
+        run: fake.run,
+        worktreeDir: "/wt",
+        baseBranch: "main",
+      }),
+    ).toBe(BASE_SHA);
+  });
+
+  test("runs git merge-base origin/<base> HEAD in the worktree", async () => {
+    const fake = createFakeCommandRunner([ok(`${BASE_SHA}\n`)]);
+    await mergeBaseSha({
+      run: fake.run,
+      worktreeDir: "/wt",
+      baseBranch: "main",
+    });
+    expect(fake.calls[0]?.argv.slice(-4)).toEqual([
+      "merge-base",
+      "--",
+      "origin/main",
+      "HEAD",
+    ]);
+  });
+
+  test("throws when git fails", async () => {
+    const fake = createFakeCommandRunner([
+      fail("fatal: Not a valid object name origin/main"),
+    ]);
+    await expect(
+      mergeBaseSha({ run: fake.run, worktreeDir: "/wt", baseBranch: "main" }),
+    ).rejects.toThrow(/merge-base/);
+  });
+});
+
+describe("deleteLocalBranch", () => {
+  test("reports deleted: true when git succeeds", async () => {
+    const fake = createFakeCommandRunner([ok()]);
+    const result = await deleteLocalBranch({
+      run: fake.run,
+      repoDir: "/repo/main",
+      branch: IMPL_BRANCH,
+      lockFs: createInMemoryLockFs(),
+    });
+    expect(result).toEqual({ deleted: true });
+  });
+
+  test("runs git branch -D -- <branch>", async () => {
+    const fake = createFakeCommandRunner([ok()]);
+    await deleteLocalBranch({
+      run: fake.run,
+      repoDir: "/repo/main",
+      branch: IMPL_BRANCH,
+      lockFs: createInMemoryLockFs(),
+    });
+    expect(fake.calls[0]?.argv.slice(-4)).toEqual([
+      "branch",
+      "-D",
+      "--",
+      IMPL_BRANCH,
+    ]);
+  });
+
+  test("reports deleted: false when the branch is already gone", async () => {
+    const fake = createFakeCommandRunner([
+      fail(`error: branch '${IMPL_BRANCH}' not found`),
+    ]);
+    const result = await deleteLocalBranch({
+      run: fake.run,
+      repoDir: "/repo/main",
+      branch: IMPL_BRANCH,
+      lockFs: createInMemoryLockFs(),
+    });
+    expect(result).toEqual({ deleted: false });
+  });
+
+  test("throws on any other failure", async () => {
+    const fake = createFakeCommandRunner([
+      fail(`error: Cannot delete branch '${IMPL_BRANCH}' checked out at '/x'`),
+    ]);
+    await expect(
+      deleteLocalBranch({
+        run: fake.run,
+        repoDir: "/repo/main",
+        branch: IMPL_BRANCH,
+        lockFs: createInMemoryLockFs(),
+      }),
+    ).rejects.toThrow(/branch -D/);
+  });
+});
+
+describe("parseNumstatTotals", () => {
+  test("counts every file, including a binary one", () => {
+    expect(
+      parseNumstatTotals("10\t2\ta.ts\n-\t-\timg.png\n2\t1\tb.ts\n").files,
+    ).toBe(3);
+  });
+
+  test("sums added lines, treating a binary '-' as 0", () => {
+    expect(
+      parseNumstatTotals("10\t2\ta.ts\n-\t-\timg.png\n2\t1\tb.ts\n").added,
+    ).toBe(12);
+  });
+
+  test("sums deleted lines", () => {
+    expect(
+      parseNumstatTotals("10\t2\ta.ts\n-\t-\timg.png\n2\t1\tb.ts\n").deleted,
+    ).toBe(3);
+  });
+});
+
+describe("removeIgnoredFiles", () => {
+  test("removes ignored files only (git clean -fdX)", async () => {
+    const fake = createFakeCommandRunner([ok()]);
+    await removeIgnoredFiles({ run: fake.run, worktreeDir: "/wt" });
+    expect(fake.calls[0]?.argv.slice(-2)).toEqual(["clean", "-fdX"]);
+  });
+
+  test("runs with the hardening flags", async () => {
+    const fake = createFakeCommandRunner([ok()]);
+    await removeIgnoredFiles({ run: fake.run, worktreeDir: "/wt" });
+    expect(fake.calls[0]?.argv.slice(0, 3)).toEqual([
+      "git",
+      "-c",
+      "core.hooksPath=/dev/null",
+    ]);
+  });
+
+  test("runs in the worktree", async () => {
+    const fake = createFakeCommandRunner([ok()]);
+    await removeIgnoredFiles({ run: fake.run, worktreeDir: "/wt" });
+    expect(fake.calls[0]?.options?.cwd).toBe("/wt");
+  });
+
+  test("never passes GH_TOKEN", async () => {
+    const fake = createFakeCommandRunner([ok()]);
+    await removeIgnoredFiles({ run: fake.run, worktreeDir: "/wt" });
+    expect(fake.calls[0]?.options?.env?.GH_TOKEN).toBeUndefined();
+  });
+
+  test("throws when git clean fails", async () => {
+    const fake = createFakeCommandRunner([fail("fatal: boom")]);
+    await expect(
+      removeIgnoredFiles({ run: fake.run, worktreeDir: "/wt" }),
+    ).rejects.toThrow(/git clean -fdX failed/);
+  });
+});
+
+describe("stagedTreeSha", () => {
+  test("stages everything first", async () => {
+    const fake = createFakeCommandRunner([ok(), ok(`${TREE_SHA}\n`)]);
+    await stagedTreeSha({ run: fake.run, worktreeDir: "/wt" });
+    expect(fake.calls[0]?.argv.slice(-2)).toEqual(["add", "-A"]);
+  });
+
+  test("returns the staged tree sha", async () => {
+    const fake = createFakeCommandRunner([ok(), ok(`${TREE_SHA}\n`)]);
+    expect(await stagedTreeSha({ run: fake.run, worktreeDir: "/wt" })).toBe(
+      TREE_SHA,
+    );
+  });
+});
+
+describe("worktreeFingerprint", () => {
+  test("stages everything first", async () => {
+    const fake = createFakeCommandRunner([ok(), ok(`${TREE_SHA}\n`), ok("")]);
+    await worktreeFingerprint({
+      run: fake.run,
+      worktreeDir: "/wt",
+      baseSha: BASE_SHA,
+    });
+    expect(fake.calls[0]?.argv.slice(-2)).toEqual(["add", "-A"]);
+  });
+
+  test("returns the staged tree sha", async () => {
+    const fake = createFakeCommandRunner([ok(), ok(`${TREE_SHA}\n`), ok("")]);
+    const result = await worktreeFingerprint({
+      run: fake.run,
+      worktreeDir: "/wt",
+      baseSha: BASE_SHA,
+    });
+    expect(result.treeSha).toBe(TREE_SHA);
+  });
+
+  test("returns the numstat totals against the base", async () => {
+    const fake = createFakeCommandRunner([
+      ok(),
+      ok(`${TREE_SHA}\n`),
+      ok("3\t1\ta.ts\n"),
+    ]);
+    const result = await worktreeFingerprint({
+      run: fake.run,
+      worktreeDir: "/wt",
+      baseSha: BASE_SHA,
+    });
+    expect(result.diffStat.added).toBe(3);
+  });
+
+  test("diffs the index against the base sha without external diff drivers", async () => {
+    const fake = createFakeCommandRunner([ok(), ok(`${TREE_SHA}\n`), ok("")]);
+    await worktreeFingerprint({
+      run: fake.run,
+      worktreeDir: "/wt",
+      baseSha: BASE_SHA,
+    });
+    expect(fake.calls[2]?.argv.slice(-7)).toEqual([
+      "diff",
+      "--cached",
+      "--numstat",
+      "--no-ext-diff",
+      "--no-textconv",
+      BASE_SHA,
+      "--",
+    ]);
+  });
+
+  test("throws when write-tree fails", async () => {
+    const fake = createFakeCommandRunner([ok(), fail("fatal: unmerged")]);
+    await expect(
+      worktreeFingerprint({
+        run: fake.run,
+        worktreeDir: "/wt",
+        baseSha: BASE_SHA,
+      }),
+    ).rejects.toThrow(/write-tree/);
+  });
+});
+
+describe("mapDiffLineToFile", () => {
+  const DIFF = [
+    "diff --git a/src/a.ts b/src/a.ts",
+    "--- a/src/a.ts",
+    "+++ b/src/a.ts",
+    "@@ -1 +1 @@",
+    "+const a = 1;",
+    "diff --git a/src/b.ts b/src/b.ts",
+    "new file mode 100644",
+    "--- /dev/null",
+    "+++ b/src/b.ts",
+    "@@ -0,0 +1 @@",
+    "+const b = 2;",
+    "diff --git a/old.txt b/old.txt",
+    "deleted file mode 100644",
+    "--- a/old.txt",
+    "+++ /dev/null",
+    "@@ -1 +0,0 @@",
+  ].join("\n");
+
+  test("maps a line to the first file", () => {
+    expect(mapDiffLineToFile(DIFF, 5)).toBe("src/a.ts");
+  });
+
+  test("maps a line to the second file", () => {
+    expect(mapDiffLineToFile(DIFF, 11)).toBe("src/b.ts");
+  });
+
+  test("returns null for a line before any header", () => {
+    expect(mapDiffLineToFile(`note\n${DIFF}`, 1)).toBeNull();
+  });
+
+  test("never names /dev/null for a deleted file", () => {
+    expect(mapDiffLineToFile(DIFF, 16)).toBeNull();
+  });
+
+  test("does not take an added line that looks like a header for one", () => {
+    const diff = [
+      "diff --git a/x.md b/x.md",
+      "--- a/x.md",
+      "+++ b/x.md",
+      "@@ -0,0 +1,2 @@",
+      "+++ b/fake.md",
+      "+secret",
+    ].join("\n");
+    expect(mapDiffLineToFile(diff, 6)).toBe("x.md");
+  });
+});
+
+describe("mapDiffLineToFile header names", () => {
+  const mapHeader = (header: string): string | null =>
+    mapDiffLineToFile(
+      ["diff --git a/x b/x", header, "@@ -0,0 +1 @@", "+secret"].join("\n"),
+      4,
+    );
+
+  test("drops the tab git appends to a name with a space", () => {
+    expect(mapHeader("+++ b/my file.txt\t")).toBe("my file.txt");
+  });
+
+  test("drops exactly one trailing tab", () => {
+    expect(mapHeader("+++ b/x\t\t")).toBe("x\t");
+  });
+
+  test("unescapes a tab in a quoted name", () => {
+    expect(mapHeader('+++ "b/a\\tb.txt"')).toBe("a\tb.txt");
+  });
+
+  test("unescapes a newline in a quoted name", () => {
+    expect(mapHeader('+++ "b/a\\nb.txt"')).toBe("a\nb.txt");
+  });
+
+  test("unescapes quotes and backslashes in a quoted name", () => {
+    expect(mapHeader('+++ "b/q\\"x\\\\y"')).toBe('q"x\\y');
+  });
+
+  test("decodes octal UTF-8 bytes in a quoted name", () => {
+    expect(mapHeader('+++ "b/\\346\\227\\245.txt"')).toBe("日.txt");
+  });
+});
+
+describe("dropRemovedDiffLines", () => {
+  test("drops removed lines inside hunks and keeps headers and added lines", () => {
+    const diff = [
+      "diff --git a/x.md b/x.md",
+      "--- a/x.md",
+      "+++ b/x.md",
+      "@@ -1 +1 @@",
+      "-old secret",
+      "+new line",
+      "--- not a header, a removed line starting with --",
+    ].join("\n");
+    expect(dropRemovedDiffLines(diff)).toBe(
+      [
+        "diff --git a/x.md b/x.md",
+        "--- a/x.md",
+        "+++ b/x.md",
+        "@@ -1 +1 @@",
+        "+new line",
+      ].join("\n"),
+    );
+  });
+});
+
+describe("formatGitleaksReport", () => {
+  const DIFF = [
+    "diff --git a/a.txt b/a.txt",
+    "--- a/a.txt",
+    "+++ b/a.txt",
+    "@@ -0,0 +1 @@",
+    "+token",
+  ].join("\n");
+
+  test("lists the rule and the file mapped from the diff line per finding", () => {
+    const report = JSON.stringify([
+      { RuleID: "github-pat", File: "", StartLine: 5, Secret: "REDACTED" },
+    ]);
+    expect(formatGitleaksReport(report, DIFF)).toBe("- github-pat: a.txt");
+  });
+
+  test("says so when the line maps to no file", () => {
+    const report = JSON.stringify([
+      { RuleID: "github-pat", File: "", StartLine: 1, Secret: "REDACTED" },
+    ]);
+    expect(formatGitleaksReport(report, DIFF)).toBe(
+      "- github-pat: (unknown file)",
+    );
+  });
+
+  test("returns null for output that is not a JSON array", () => {
+    expect(formatGitleaksReport("Error: unknown flag", DIFF)).toBeNull();
+  });
+});
+
+describe("runGitleaksOnWorktree", () => {
+  function configDir(): {
+    factory: () => Promise<GitleaksConfigDir>;
+    state: { cleaned: number };
+  } {
+    const state = { cleaned: 0 };
+    return {
+      state,
+      factory: async () => ({
+        path: "/tmp/fake-gitleaks",
+        cleanup: async () => {
+          state.cleaned += 1;
+        },
+      }),
+    };
+  }
+  const DIFF = [
+    "diff --git a/a.txt b/a.txt",
+    "--- a/a.txt",
+    "+++ b/a.txt",
+    "@@ -1,2 +1,2 @@",
+    "-removed",
+    "+token",
+  ].join("\n");
+  const LEAK = JSON.stringify([
+    {
+      RuleID: "github-pat",
+      File: "",
+      StartLine: 5,
+      Match: "REDACTED",
+      Secret: "REDACTED",
+    },
+  ]);
+  const exit = (stdout: string, exitCode: number) => ({
+    stdout,
+    stderr: "",
+    exitCode,
+    timedOut: false,
+  });
+  const scan = (
+    fake: ReturnType<typeof createFakeCommandRunner>,
+    dir = configDir(),
+  ) =>
+    runGitleaksOnWorktree({
+      run: fake.run,
+      worktreeDir: "/wt",
+      baseSha: BASE_SHA,
+      timeoutMs: 1000,
+      createConfigDir: dir.factory,
+    });
+
+  test("reports ok on exit 0", async () => {
+    expect(
+      (await scan(createFakeCommandRunner([ok(), ok(DIFF), ok("[]")]))).ok,
+    ).toBe(true);
+  });
+
+  test("stages everything before scanning", async () => {
+    const fake = createFakeCommandRunner([ok(), ok(DIFF), ok("[]")]);
+    await scan(fake);
+    expect(fake.calls[0]?.argv.slice(-2)).toEqual(["add", "-A"]);
+  });
+
+  test("diffs the index against the base sha as text, without drivers or context", async () => {
+    const fake = createFakeCommandRunner([ok(), ok(DIFF), ok("[]")]);
+    await scan(fake);
+    expect(fake.calls[1]?.argv.slice(7)).toEqual([
+      "diff",
+      "--cached",
+      "--text",
+      "--no-ext-diff",
+      "--no-textconv",
+      "--no-color",
+      "--src-prefix=a/",
+      "--dst-prefix=b/",
+      "-U0",
+      BASE_SHA,
+      "--",
+    ]);
+  });
+
+  test("diffs with the hardening flags", async () => {
+    const fake = createFakeCommandRunner([ok(), ok(DIFF), ok("[]")]);
+    await scan(fake);
+    expect(fake.calls[1]?.argv.slice(0, 3)).toEqual([
+      "git",
+      "-c",
+      "core.hooksPath=/dev/null",
+    ]);
+  });
+
+  test("caps the diff output", async () => {
+    const fake = createFakeCommandRunner([ok(), ok(DIFF), ok("[]")]);
+    await scan(fake);
+    expect(fake.calls[1]?.options?.maxOutputBytes).toBeGreaterThan(0);
+  });
+
+  test("throws when the diff hit the output cap", async () => {
+    await expect(
+      scan(
+        createFakeCommandRunner([ok(), ok(`+a${omittedMarker(10)}`), ok("[]")]),
+      ),
+    ).rejects.toThrow(/diff exceeded the scan cap/);
+  });
+
+  test("throws when the diff fails", async () => {
+    await expect(
+      scan(createFakeCommandRunner([ok(), fail("fatal: bad object")])),
+    ).rejects.toThrow(/git diff --cached failed/);
+  });
+
+  test("scans stdin with the forced default config and no repository ignore file", async () => {
+    const fake = createFakeCommandRunner([ok(), ok(DIFF), ok("[]")]);
+    await scan(fake);
+    expect(fake.calls[2]?.argv).toEqual([
+      "gitleaks",
+      "stdin",
+      "--redact",
+      "--no-banner",
+      "--no-color",
+      "--log-level",
+      "error",
+      "--exit-code",
+      "1",
+      "--report-format",
+      "json",
+      "--report-path",
+      "-",
+      "--config",
+      "/tmp/fake-gitleaks/gitleaks.toml",
+      "--gitleaks-ignore-path",
+      "/tmp/fake-gitleaks",
+      "--ignore-gitleaks-allow",
+    ]);
+  });
+
+  test("feeds the diff without its removed lines on stdin", async () => {
+    const fake = createFakeCommandRunner([ok(), ok(DIFF), ok("[]")]);
+    await scan(fake);
+    expect(fake.calls[2]?.options?.stdin).toBe(
+      [
+        "diff --git a/a.txt b/a.txt",
+        "--- a/a.txt",
+        "+++ b/a.txt",
+        "@@ -1,2 +1,2 @@",
+        "+token",
+      ].join("\n"),
+    );
+  });
+
+  test("runs gitleaks in the private temp dir, not the worktree", async () => {
+    const fake = createFakeCommandRunner([ok(), ok(DIFF), ok("[]")]);
+    await scan(fake);
+    expect(fake.calls[2]?.options?.cwd).toBe("/tmp/fake-gitleaks");
+  });
+
+  test("returns the findings mapped to files (never the matched text) on exit 1", async () => {
+    expect(
+      (await scan(createFakeCommandRunner([ok(), ok(DIFF), exit(LEAK, 1)])))
+        .output,
+    ).toBe("- github-pat: a.txt");
+  });
+
+  test("reports not ok on exit 1", async () => {
+    expect(
+      (await scan(createFakeCommandRunner([ok(), ok(DIFF), exit(LEAK, 1)]))).ok,
+    ).toBe(false);
+  });
+
+  test("throws when the report hit the output cap", async () => {
+    await expect(
+      scan(
+        createFakeCommandRunner([
+          ok(),
+          ok(DIFF),
+          exit(`[${omittedMarker(10)}]`, 1),
+        ]),
+      ),
+    ).rejects.toThrow(/exceeded the output cap/);
+  });
+
+  test("throws on exit 1 without a JSON report", async () => {
+    await expect(
+      scan(createFakeCommandRunner([ok(), ok(DIFF), fail("Error: boom", 1)])),
+    ).rejects.toThrow(/gitleaks failed/);
+  });
+
+  test("throws on any other exit code (e.g. an unknown flag, 126)", async () => {
+    await expect(
+      scan(
+        createFakeCommandRunner([
+          ok(),
+          ok(DIFF),
+          fail("Error: unknown flag", 126),
+        ]),
+      ),
+    ).rejects.toThrow(/exit 126/);
+  });
+
+  test("removes the config dir afterwards", async () => {
+    const dir = configDir();
+    await scan(createFakeCommandRunner([ok(), ok(DIFF), ok("[]")]), dir);
+    expect(dir.state.cleaned).toBe(1);
   });
 });

@@ -17,9 +17,8 @@
 import { createHash } from "node:crypto";
 import {
   type ChangedPath,
-  IMPLEMENT_PROTECTED_PATH_PREFIXES,
   isNewShellScript,
-  matchesForbiddenPath,
+  matchesImplementProtectedPath,
 } from "./protected_paths.ts";
 import { extractSectionBody } from "./requirements_doc.ts";
 import {
@@ -29,6 +28,8 @@ import {
   isRecord,
   isString,
   isStringArray,
+  TERMINAL_WORK_ITEM_STATUSES,
+  type WorkItem,
 } from "./types.ts";
 import { withCommitTrailers } from "./workspace.ts";
 
@@ -181,6 +182,33 @@ export function buildImplementCommitMessage(
 }
 
 // ---------------------------------------------------------------------------
+// neutralizeIssueRefs: Claude-written commit text must not reference issues
+// ---------------------------------------------------------------------------
+
+/**
+ * Rewrites GitHub issue references in Claude-written commit text so they
+ * neither link nor close anything once the commit reaches the default
+ * branch (`fixes #12` would close issue 12): `owner/repo#12` becomes
+ * `owner/repo No.12` and a bare `#12` (not preceded by a word character or
+ * `/`) becomes `No.12`; an issue / pull request URL
+ * (`https://github.com/<o>/<r>/issues/<n>`, `.../pull/<n>`) keeps its text
+ * with the host written `github[.]com`, and `GH-12` becomes `GH No.12`.
+ * `C#` and `#tag` are left alone. Plain ASCII, no invisible characters.
+ * The factory's own `Closes #N` lives in the PR body, and its trailers are
+ * appended after this.
+ */
+export function neutralizeIssueRefs(text: string): string {
+  return text
+    .replace(
+      /(https?:\/\/(?:www\.)?)github\.com(\/[\w.-]+\/[\w.-]+\/(?:issues|pull)\/\d+)/gi,
+      "$1github[.]com$2",
+    )
+    .replace(/\b(GH)-(\d+)/gi, "$1 No.$2")
+    .replace(/([\w.-]+\/[\w.-]+)#(\d+)/g, "$1 No.$2")
+    .replace(/(?<![\w/])#(\d+)/g, "No.$1");
+}
+
+// ---------------------------------------------------------------------------
 // buildImplementBranchName: `factory/issue-<N>-wi-<id>` (design §7)
 // ---------------------------------------------------------------------------
 
@@ -213,12 +241,15 @@ export function buildImplementBranchName(
 
 /**
  * One human-facing Japanese line per protected change in the diff, using
- * the implement flow's prefix list (`IMPLEMENT_PROTECTED_PATH_PREFIXES`,
- * which includes `infra/**`): every changed path under a protected prefix
- * (whatever its status), then every newly added `*.sh` (protected_paths.ts's
- * isNewShellScript), then the package.json scripts flag
- * (steps/pr_workflow_support.ts's packageJsonScriptsChanged, computed by the
- * caller). A new `*.sh` under a protected prefix yields both lines. Unlike
+ * the implement flow's lists (matchesImplementProtectedPath: pr_fix's plus
+ * `.github/**`, `infra/**`, hook / package-manager / devcontainer
+ * directories, lockfiles, tool configuration and any package.json): every
+ * changed protected path (whatever its status), then every newly added
+ * `*.sh` (protected_paths.ts's isNewShellScript), then the package.json
+ * scripts flag (steps/pr_workflow_support.ts's packageJsonScriptsChanged,
+ * computed by the caller — subsumed by the package.json path line since
+ * any package.json change is protected, but kept as the more specific
+ * note). A new `*.sh` under a protected prefix yields both lines. Unlike
  * pr_fix's detectForbiddenChanges this never blocks: the result is stored on
  * the implement round, listed in the PR body's 確認して欲しい点 and the
  * Discord pr_opened notification, and makes implement_verify skip the check
@@ -230,7 +261,7 @@ export function classifyProtectedChanges(
 ): readonly string[] {
   const reasons: string[] = [];
   for (const change of changes) {
-    if (matchesForbiddenPath(change.path, IMPLEMENT_PROTECTED_PATH_PREFIXES)) {
+    if (matchesImplementProtectedPath(change.path)) {
       reasons.push(`保護パスを変更: ${change.path}`);
     }
   }
@@ -614,4 +645,42 @@ export function roundOutcomeForExit(
  * stall. */
 export function stallHash(text: string): string {
   return createHash("sha256").update(text).digest("hex");
+}
+
+// ---------------------------------------------------------------------------
+// isRequirementsApprovedForAttempt (design §8: implement_prepare's gate and
+// retry_work_item's implement-vs-pipeline choice)
+// ---------------------------------------------------------------------------
+
+/** Whether `approval` (db.latestRequirementsApproval's row, or null) is an
+ * approved requirements request for exactly `attempt`. */
+export function isRequirementsApprovedForAttempt(
+  approval: { readonly status: string; readonly attempt: number } | null,
+  attempt: number,
+): boolean {
+  return (
+    approval !== null &&
+    approval.status === "approved" &&
+    approval.attempt === attempt
+  );
+}
+
+// ---------------------------------------------------------------------------
+// hasActivePrRun (implement_prepare: implement and pr_fix / pr_review never
+// share the branch's worktree at the same time)
+// ---------------------------------------------------------------------------
+
+export const ACTIVE_PR_RUN_REASON = "pull request has an active fix run";
+
+/** Whether the PR's latest work item (db.latestPrWorkItem, or null) is a
+ * pr_fix or pr_review run that has not reached a terminal status — it may
+ * be using the implement branch's worktree right now. */
+export function hasActivePrRun(
+  item: Pick<WorkItem, "kind" | "status"> | null,
+): boolean {
+  return (
+    item !== null &&
+    (item.kind === "pr_fix" || item.kind === "pr_review") &&
+    !TERMINAL_WORK_ITEM_STATUSES.includes(item.status)
+  );
 }

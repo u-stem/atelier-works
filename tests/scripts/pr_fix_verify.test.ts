@@ -7,6 +7,8 @@ import { fixPrompt } from "../../f/factory/lib/prompts.ts";
 import type { RequirementDraft } from "../../f/factory/lib/types.ts";
 import type { CreateCheckHomeDir } from "../../f/factory/steps/pr_workflow_support.ts";
 import {
+  anyPackageJsonScriptsChanged,
+  CHECK_COMMAND_MAX_OUTPUT_BYTES,
   countUntrackedFileLines,
   detectEscapingSymlinks,
   detectForbiddenChanges,
@@ -16,13 +18,17 @@ import {
   IMPLEMENT_DIFF_SIZE_LIMIT_NAMES,
   isEscapingSymlink,
   isNewShellScript,
+  listChangedPaths,
+  listSymlinkChanges,
   listSymlinkTargets,
   matchesForbiddenPath,
   mergeChangedPaths,
   packageJsonScriptsChanged,
   parseGitDiffNameOnly,
+  parseGitDiffNameStatusZ,
   parseGitDiffNumstat,
   parseGitStatusPorcelain,
+  parseRawSymlinkPaths,
   parseSymlinkModePaths,
   parseWcLineCount,
   resolveSymlinkTarget,
@@ -668,6 +674,45 @@ describe("runAllowedCheckCommands", () => {
     const secondHome = second.calls[0]?.options?.env?.HOME;
     expect(firstHome).not.toBe(secondHome);
   });
+
+  test("output carries the whole combined stdout and stderr", async () => {
+    const { run } = createFakeCommandRunner([ok("out-line", "err-line")]);
+    const results = await runAllowedCheckCommands(
+      run,
+      "/work",
+      ["bun test"],
+      1000,
+      fakeCheckHomeDir().factory,
+    );
+    expect(results[0]?.output).toBe("out-line\nerr-line");
+  });
+
+  test("output is masked", async () => {
+    const secret = `sk-ant-${"x".repeat(20)}`;
+    const { run } = createFakeCommandRunner([fail(`leaked ${secret}`)]);
+    const results = await runAllowedCheckCommands(
+      run,
+      "/work",
+      ["bun test"],
+      1000,
+      fakeCheckHomeDir().factory,
+    );
+    expect(results[0]?.output).toBe("leaked ***");
+  });
+
+  test("caps each stream of a check command", async () => {
+    const { run, calls } = createFakeCommandRunner([ok("")]);
+    await runAllowedCheckCommands(
+      run,
+      "/work",
+      ["bun test"],
+      1000,
+      fakeCheckHomeDir().factory,
+    );
+    expect(calls[0]?.options?.maxOutputBytes).toBe(
+      CHECK_COMMAND_MAX_OUTPUT_BYTES,
+    );
+  });
 });
 
 describe("fixPrompt requirements wiring (retry pass)", () => {
@@ -714,5 +759,267 @@ describe("fixPrompt requirements wiring (retry pass)", () => {
 
   test("also includes the check failure output", () => {
     expect(retryPrompt()).toContain("FAIL a.test.ts");
+  });
+});
+
+describe("parseGitDiffNameStatusZ", () => {
+  test("parses an added file", () => {
+    expect(parseGitDiffNameStatusZ("A\u0000src/new.ts\u0000")).toEqual([
+      { path: "src/new.ts", status: "added" },
+    ]);
+  });
+
+  test("keeps a non-ASCII path unquoted", () => {
+    expect(
+      parseGitDiffNameStatusZ("M\u0000.claude/設計.md\u0000")[0]?.path,
+    ).toBe(".claude/設計.md");
+  });
+
+  test("keeps spaces inside a path", () => {
+    expect(parseGitDiffNameStatusZ("A\u0000a b.sh\u0000")[0]?.path).toBe(
+      "a b.sh",
+    );
+  });
+
+  test("parses a modification", () => {
+    expect(parseGitDiffNameStatusZ("M\u0000c.ts\u0000")[0]?.status).toBe(
+      "modified",
+    );
+  });
+
+  test("parses a deletion", () => {
+    expect(parseGitDiffNameStatusZ("D\u0000old.ts\u0000")[0]?.status).toBe(
+      "deleted",
+    );
+  });
+
+  test("parses a typechange", () => {
+    expect(parseGitDiffNameStatusZ("T\u0000link\u0000")[0]?.status).toBe(
+      "typechange",
+    );
+  });
+
+  test("turns a rename into a deletion of the old path", () => {
+    expect(
+      parseGitDiffNameStatusZ(
+        "R087\u0000.github/workflows/ci.yml\u0000docs/ci.yml\u0000",
+      )[0],
+    ).toEqual({
+      path: ".github/workflows/ci.yml",
+      status: "deleted",
+    });
+  });
+
+  test("turns a rename into an addition of the new path", () => {
+    expect(
+      parseGitDiffNameStatusZ(
+        "R087\u0000.github/workflows/ci.yml\u0000docs/ci.yml\u0000",
+      )[1],
+    ).toEqual({
+      path: "docs/ci.yml",
+      status: "added",
+    });
+  });
+
+  test("keeps parsing entries after a rename", () => {
+    expect(
+      parseGitDiffNameStatusZ(
+        "R087\u0000a.yml\u0000b.yml\u0000M\u0000c.ts\u0000",
+      )[2]?.path,
+    ).toBe("c.ts");
+  });
+
+  test("turns a copy into an addition of the new path", () => {
+    expect(parseGitDiffNameStatusZ("C100\u0000a.sh\u0000b.sh\u0000")).toEqual([
+      { path: "b.sh", status: "added" },
+    ]);
+  });
+});
+
+describe("listChangedPaths", () => {
+  const BASE = "b".repeat(40);
+
+  test("diffs the index against the base sha with -z --name-status", async () => {
+    const { run, calls } = createFakeCommandRunner([ok("")]);
+    await listChangedPaths(run, "/wt", BASE);
+    expect(calls[0]?.argv.slice(-7)).toEqual([
+      "diff",
+      "--cached",
+      "-z",
+      "--name-status",
+      "--no-ext-diff",
+      BASE,
+      "--",
+    ]);
+  });
+
+  test("throws when git diff fails", async () => {
+    const { run } = createFakeCommandRunner([fail("fatal: bad object")]);
+    await expect(listChangedPaths(run, "/wt", BASE)).rejects.toThrow(
+      /--name-status/,
+    );
+  });
+});
+
+describe("parseRawSymlinkPaths", () => {
+  const Z = "\u0000";
+  const SHA_A = "a".repeat(40);
+  const SHA_B = "b".repeat(40);
+  const ZERO = "0".repeat(40);
+
+  test("reports an added symlink", () => {
+    expect(
+      parseRawSymlinkPaths(`:000000 120000 ${ZERO} ${SHA_A} A${Z}link${Z}`),
+    ).toEqual(["link"]);
+  });
+
+  test("reports a regular file turned into a symlink", () => {
+    expect(
+      parseRawSymlinkPaths(`:100644 120000 ${SHA_A} ${SHA_B} T${Z}conf${Z}`),
+    ).toEqual(["conf"]);
+  });
+
+  test("reports a symlink turned into a regular file", () => {
+    expect(
+      parseRawSymlinkPaths(`:120000 100644 ${SHA_A} ${SHA_B} T${Z}conf${Z}`),
+    ).toEqual(["conf"]);
+  });
+
+  test("reports a renamed symlink by its new path", () => {
+    expect(
+      parseRawSymlinkPaths(
+        `:120000 120000 ${SHA_A} ${SHA_A} R100${Z}old${Z}new${Z}`,
+      ),
+    ).toEqual(["new"]);
+  });
+
+  test("ignores regular files, including after a rename entry", () => {
+    expect(
+      parseRawSymlinkPaths(
+        `:100644 100644 ${SHA_A} ${SHA_A} R100${Z}a${Z}b${Z}:100644 100644 ${SHA_A} ${SHA_B} M${Z}src/x.ts${Z}`,
+      ),
+    ).toEqual([]);
+  });
+});
+
+describe("listSymlinkChanges", () => {
+  const BASE = "b".repeat(40);
+
+  test("diffs the index against the base sha with --raw -z", async () => {
+    const { run, calls } = createFakeCommandRunner([ok("")]);
+    await listSymlinkChanges(run, "/wt", BASE);
+    expect(calls[0]?.argv.slice(-7)).toEqual([
+      "diff",
+      "--cached",
+      "--raw",
+      "-z",
+      "--no-ext-diff",
+      BASE,
+      "--",
+    ]);
+  });
+
+  test("returns the symlink paths git reports", async () => {
+    const { run } = createFakeCommandRunner([
+      ok(
+        `:000000 120000 ${"0".repeat(40)} ${"a".repeat(40)} A\u0000link\u0000`,
+      ),
+    ]);
+    expect(await listSymlinkChanges(run, "/wt", BASE)).toEqual(["link"]);
+  });
+
+  test("throws when git diff fails", async () => {
+    const { run } = createFakeCommandRunner([fail("fatal: bad object")]);
+    await expect(listSymlinkChanges(run, "/wt", BASE)).rejects.toThrow(/--raw/);
+  });
+});
+
+describe("anyPackageJsonScriptsChanged", () => {
+  const BEFORE = JSON.stringify({ scripts: { test: "bun test" } });
+  const AFTER = JSON.stringify({ scripts: { test: "true" } });
+  const readAfter = async () => AFTER;
+  const readBefore = async () => BEFORE;
+
+  test("is false when no package.json changed", async () => {
+    const { run } = createFakeCommandRunner([]);
+    expect(
+      await anyPackageJsonScriptsChanged(
+        run,
+        "/wt",
+        "HEAD",
+        [{ path: "src/a.ts", status: "modified" }],
+        readAfter,
+      ),
+    ).toBe(false);
+  });
+
+  test("is false when the scripts are unchanged", async () => {
+    const { run } = createFakeCommandRunner([ok(BEFORE)]);
+    expect(
+      await anyPackageJsonScriptsChanged(
+        run,
+        "/wt",
+        "HEAD",
+        [{ path: "package.json", status: "modified" }],
+        readBefore,
+      ),
+    ).toBe(false);
+  });
+
+  test("is true when the scripts changed", async () => {
+    const { run } = createFakeCommandRunner([ok(BEFORE)]);
+    expect(
+      await anyPackageJsonScriptsChanged(
+        run,
+        "/wt",
+        "HEAD",
+        [{ path: "package.json", status: "modified" }],
+        readAfter,
+      ),
+    ).toBe(true);
+  });
+
+  test("considers a nested package.json", async () => {
+    const { run } = createFakeCommandRunner([ok(BEFORE)]);
+    expect(
+      await anyPackageJsonScriptsChanged(
+        run,
+        "/wt",
+        "HEAD",
+        [
+          { path: "src/my-package.json", status: "modified" },
+          { path: "pkg/package.json", status: "modified" },
+        ],
+        readAfter,
+      ),
+    ).toBe(true);
+  });
+
+  test("reads the base version at the given ref", async () => {
+    const { run, calls } = createFakeCommandRunner([ok(BEFORE)]);
+    await anyPackageJsonScriptsChanged(
+      run,
+      "/wt",
+      "HEAD",
+      [{ path: "pkg/package.json", status: "modified" }],
+      readBefore,
+    );
+    expect(calls[0]?.argv.at(-1)).toBe("HEAD:pkg/package.json");
+  });
+
+  test("reads the worktree version under the worktree", async () => {
+    const { run } = createFakeCommandRunner([ok(BEFORE)]);
+    const read: string[] = [];
+    await anyPackageJsonScriptsChanged(
+      run,
+      "/wt",
+      "HEAD",
+      [{ path: "pkg/package.json", status: "modified" }],
+      async (path) => {
+        read.push(path);
+        return BEFORE;
+      },
+    );
+    expect(read).toEqual(["/wt/pkg/package.json"]);
   });
 });

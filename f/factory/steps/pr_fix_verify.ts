@@ -27,8 +27,9 @@ import { type GhClient, getPr } from "../lib/github.ts";
 import { logger } from "../lib/log.ts";
 import { FIX_SCHEMA, fixPrompt } from "../lib/prompts.ts";
 import type { FixOutcome, FixReply } from "../lib/types.ts";
-import { readGitShowFile, runCommand } from "../lib/workspace.ts";
+import { runCommand } from "../lib/workspace.ts";
 import {
+  anyPackageJsonScriptsChanged,
   type CollectedComment,
   type CollectedReview,
   countUntrackedFileLines,
@@ -41,10 +42,8 @@ import {
   isFixClaudeOutput,
   listSymlinkTargets,
   mergeChangedPaths,
-  packageJsonScriptsChanged,
   parseGitDiffNameOnly,
   parseGitStatusPorcelain,
-  readWorktreeFileIfExists,
   runAllowedCheckCommands,
   sumDiffNumstatLines,
 } from "./pr_workflow_support.ts";
@@ -111,23 +110,12 @@ async function checkForbidden(
   // is exactly "package.json" (was: only the first `.endsWith("package.json")`
   // match, which both stopped at one file and could false-match e.g.
   // "my-package.json").
-  let packageJsonChanged = false;
-  for (const entry of changedPaths) {
-    if (entry.path.split("/").pop() !== "package.json") continue;
-    const beforeText = await readGitShowFile(
-      runCommand,
-      worktreeDir,
-      "HEAD",
-      entry.path,
-    );
-    const afterText = await readWorktreeFileIfExists(
-      `${worktreeDir}/${entry.path}`,
-    );
-    if (packageJsonScriptsChanged(beforeText, afterText)) {
-      packageJsonChanged = true;
-      break;
-    }
-  }
+  const packageJsonChanged = await anyPackageJsonScriptsChanged(
+    runCommand,
+    worktreeDir,
+    "HEAD",
+    changedPaths,
+  );
 
   // team-lead fix round 1b item 3: block a changed symlink that resolves
   // outside the worktree. team-lead security re-gate N1/N6 (superset, kept
