@@ -536,7 +536,8 @@ export type ImplementRoundRecord = {
   outcome: ImplementRoundOutcome;
   summary: string;
   gap_report: string | null;
-  /** First 16KB of the check command output, `null` when no check ran. */
+  /** First 16KB of the check output, or the stop reason for a round that
+   * ended before checks ran; `null` when there is neither. */
   check_output: string | null;
   checks_skipped_reason: string | null;
   /** Protected paths / new shell scripts / package.json scripts changes

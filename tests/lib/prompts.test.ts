@@ -924,6 +924,21 @@ describe("implementFixPrompt", () => {
       prompt.lastIndexOf(">>>DATA-test-nonce"),
     );
   });
+  test("does not claim the checks failed when only the output contract was broken", () => {
+    const prompt = implementFixPrompt(
+      { ...FIX_INPUT, checkFailures: [], outputContractNote: "RULES" },
+      FIXED_UUID,
+    );
+    expect(prompt).not.toContain("check commands failed");
+  });
+
+  test("says the previous output broke the output contract", () => {
+    const prompt = implementFixPrompt(
+      { ...FIX_INPUT, checkFailures: [], outputContractNote: "RULES" },
+      FIXED_UUID,
+    );
+    expect(prompt).toContain("violated the output contract");
+  });
 });
 
 describe("factory-implementation SKILL.md ⇔ IMPLEMENT_SCHEMA", () => {

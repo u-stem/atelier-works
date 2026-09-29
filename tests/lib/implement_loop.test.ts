@@ -733,6 +733,41 @@ describe("runImplementVerifyLoop", () => {
     );
   });
 
+  test("notes a passing gitleaks in the summary of skipped checks", async () => {
+    expect((await run(harness({ inspection: PROTECTED }))).checks).toEqual({
+      kind: "skipped",
+      reason: "保護パスを変更したため(gitleaks: 合格)",
+    });
+  });
+
+  test("notes a failing gitleaks in the summary of skipped checks", async () => {
+    expect(
+      (
+        await run(
+          harness({ inspection: PROTECTED, gitleaks: [GITLEAKS_LEAK] }),
+          loopInput(outputRound(), { maxRounds: 1 }),
+        )
+      ).checks,
+    ).toEqual({
+      kind: "skipped",
+      reason: "保護パスを変更したため(gitleaks: 不合格)",
+    });
+  });
+
+  test("lists the failed change check in the summary of a no-changes round", async () => {
+    expect(
+      (
+        await run(
+          harness({ fingerprints: [FP_EMPTY] }),
+          loopInput(outputRound(), { maxRounds: 1 }),
+        )
+      ).checks,
+    ).toEqual({
+      kind: "ran",
+      results: [{ command: NO_CHANGES_CHECK_NAME, ok: false }],
+    });
+  });
+
   test("records the protected changes on the round", async () => {
     const h = harness({ inspection: PROTECTED });
     await run(h);

@@ -585,7 +585,11 @@ async function evaluateChecks(
   }
 
   let skipReason: string | null = null;
+  // The PR body / Discord summary of skipped checks: the protected-path
+  // skip still ran gitleaks, so its outcome is kept in the reason.
+  let summarySkipReason: string | null = null;
   if (facts.noChanges) {
+    results.push({ command: NO_CHANGES_CHECK_NAME, ok: false });
     failures.push({
       command: NO_CHANGES_CHECK_NAME,
       outputTail: NO_CHANGES_OUTPUT,
@@ -605,8 +609,10 @@ async function evaluateChecks(
     }
     if (facts.protectedChanged) {
       skipReason = IMPLEMENT_CHECK_SKIP_REASONS.protected_paths;
+      summarySkipReason = `${skipReason}(gitleaks: ${gitleaks.ok ? "合格" : "不合格"})`;
     } else if (!facts.hasCheckCommands) {
       skipReason = IMPLEMENT_CHECK_SKIP_REASONS.no_commands;
+      summarySkipReason = skipReason;
     } else {
       await deps.removeIgnoredFiles();
       for (const result of await deps.runChecks()) {
@@ -634,8 +640,8 @@ async function evaluateChecks(
     stallText: stallParts.join("\n\n"),
     skipReason,
     summary:
-      skipReason !== null
-        ? { kind: "skipped", reason: skipReason }
+      summarySkipReason !== null
+        ? { kind: "skipped", reason: summarySkipReason }
         : { kind: "ran", results },
   };
 }
