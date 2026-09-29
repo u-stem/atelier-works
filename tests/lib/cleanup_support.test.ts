@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
+  excludeActiveWorktrees,
   formatDiskUsageMessage,
   groupByRepo,
   issueWorktreePaths,
   mainRepoDir,
+  orphanClaudeThresholdSec,
   parseDiskUsageKb,
   requirementsWorktreeDir,
   selectOrphanClaudePids,
@@ -260,5 +262,89 @@ describe("formatDiskUsageMessage", () => {
     expect(formatDiskUsageMessage(2048, "/workspaces")).toBe(
       "/workspaces のディスク使用量は約 2.0 MiB です。",
     );
+  });
+});
+
+describe("excludeActiveWorktrees", () => {
+  const OWNER = "octo-owner";
+  const REPO = "atelier-works";
+  const entry = (path: string, branch: string | null) => ({
+    path,
+    headSha: "abc1234",
+    branch,
+    bare: false,
+    detached: branch === null,
+  });
+  const IMPL = entry(
+    "/workspaces/octo-owner/atelier-works/factory-issue-42-wi-7",
+    "factory/issue-42-wi-7",
+  );
+  const REQ_DIR = "/workspaces/octo-owner/atelier-works/req-42";
+
+  test("drops a worktree whose branch an active work item holds", () => {
+    expect(
+      excludeActiveWorktrees(
+        [IMPL.path],
+        [
+          {
+            owner: OWNER,
+            repo: REPO,
+            issue_number: null,
+            branch: "factory/issue-42-wi-7",
+          },
+        ],
+        [IMPL],
+        OWNER,
+        REPO,
+      ),
+    ).toEqual([]);
+  });
+
+  test("drops the req-<N> dir of an active issue work item", () => {
+    expect(
+      excludeActiveWorktrees(
+        [REQ_DIR],
+        [{ owner: OWNER, repo: REPO, issue_number: 42, branch: null }],
+        [],
+        OWNER,
+        REPO,
+      ),
+    ).toEqual([]);
+  });
+
+  test("ignores a holder in another repo", () => {
+    expect(
+      excludeActiveWorktrees(
+        [IMPL.path],
+        [
+          {
+            owner: OWNER,
+            repo: "other",
+            issue_number: null,
+            branch: "factory/issue-42-wi-7",
+          },
+        ],
+        [IMPL],
+        OWNER,
+        REPO,
+      ),
+    ).toEqual([IMPL.path]);
+  });
+
+  test("keeps a target nobody holds", () => {
+    expect(
+      excludeActiveWorktrees([IMPL.path, REQ_DIR], [], [IMPL], OWNER, REPO),
+    ).toEqual([IMPL.path, REQ_DIR]);
+  });
+});
+
+describe("orphanClaudeThresholdSec", () => {
+  test("waits past the longer of the two Claude timeouts plus a grace period", () => {
+    expect(
+      orphanClaudeThresholdSec({
+        claude_timeout_sec: 1800,
+        implement_timeout_sec: 3600,
+      }),
+    ).toBe(3900);
   });
 });

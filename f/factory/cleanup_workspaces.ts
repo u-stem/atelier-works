@@ -8,19 +8,29 @@
 // by repo, parsing `ps`/`du` output, the SIGTERM->SIGKILL escalation) lives
 // in ./lib/cleanup_support.ts; this file is I/O wiring only, and never lets
 // one stale item's failure stop the rest of the sweep.
+//
+// A worktree an active work item still uses (its req-<N> dir, its implement
+// branch, or an active pr_fix's PR head branch) is never removed
+// (lib/cleanup_support.ts's excludeActiveWorktrees, 工程3 design §12), and a
+// headless Claude process counts as orphaned only past the longer of
+// claude_timeout_sec and implement_timeout_sec plus a grace period
+// (orphanClaudeThresholdSec).
 
 import * as wmill from "windmill-client@1.817.0";
 import {
+  excludeActiveWorktrees,
   formatDiskUsageMessage,
   groupByRepo,
   issueWorktreePaths,
   mainRepoDir,
+  orphanClaudeThresholdSec,
   parseDiskUsageKb,
   selectOrphanClaudePids,
   terminateOrphans,
+  type WorktreeHolder,
 } from "./lib/cleanup_support.ts";
 import { loadConfig } from "./lib/config.ts";
-import { addNotice, listStaleTerminalWorkItems } from "./lib/db.ts";
+import { addNotice, listActive, listStaleTerminalWorkItems } from "./lib/db.ts";
 import { type GhClient, getPr } from "./lib/github.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import type { WorkItem } from "./lib/types.ts";
@@ -54,6 +64,7 @@ async function removeStaleWorktreesForRepo(
   repo: string,
   items: readonly WorkItem[],
   ghClient: GhClient,
+  holders: readonly WorktreeHolder[],
   log: Logger,
 ): Promise<number> {
   const repoDir = mainRepoDir(owner, repo);
@@ -100,7 +111,13 @@ async function removeStaleWorktreesForRepo(
         targetDirs = found === undefined ? [] : [found];
       }
 
-      for (const targetDir of targetDirs) {
+      for (const targetDir of excludeActiveWorktrees(
+        targetDirs,
+        holders,
+        worktrees,
+        owner,
+        repo,
+      )) {
         if (removedDirs.has(targetDir)) {
           continue;
         }
@@ -135,9 +152,52 @@ async function removeStaleWorktreesForRepo(
   return removedDirs.size;
 }
 
+/** Every active work item's WorktreeHolder. A pr_fix item's branch is its
+ * PR's head ref (getPr); if one cannot be resolved, null — the caller then
+ * skips the whole worktree sweep for today rather than guess. */
+async function activeWorktreeHolders(
+  ghClient: GhClient,
+  log: Logger,
+): Promise<WorktreeHolder[] | null> {
+  const holders: WorktreeHolder[] = [];
+  for (const item of await listActive()) {
+    if (item.kind === "issue") {
+      holders.push({
+        owner: item.owner,
+        repo: item.repo,
+        issue_number: item.issue_number,
+        branch: item.branch,
+      });
+    } else if (item.kind === "pr_fix" && item.pr_number !== null) {
+      try {
+        const pr = await getPr(ghClient, item.owner, item.repo, item.pr_number);
+        holders.push({
+          owner: item.owner,
+          repo: item.repo,
+          issue_number: null,
+          branch: pr.headRef,
+        });
+      } catch (err) {
+        log.warn(
+          "cleanup: could not resolve an active pr_fix head branch; skipping the worktree sweep",
+          {
+            work_item_id: item.id,
+            error: maskSecrets(
+              err instanceof Error ? err.message : String(err),
+            ),
+          },
+        );
+        return null;
+      }
+    }
+  }
+  return holders;
+}
+
 async function removeStaleWorktrees(
   staleItems: readonly WorkItem[],
   ghToken: string,
+  holders: readonly WorktreeHolder[],
   log: Logger,
 ): Promise<number> {
   const ghClient: GhClient = { run: runCommand, ghToken };
@@ -149,6 +209,7 @@ async function removeStaleWorktrees(
       group.repo,
       group.items,
       ghClient,
+      holders,
       log,
     );
   }
@@ -225,10 +286,17 @@ export async function main(): Promise<CleanupWorkspacesResult> {
     Date.now() - config.worktree_ttl_days * 24 * 60 * 60 * 1000,
   );
   const staleItems = await listStaleTerminalWorkItems(cutoff);
-  const removedWorktrees = await removeStaleWorktrees(staleItems, ghToken, log);
+  const holders = await activeWorktreeHolders(
+    { run: runCommand, ghToken },
+    log,
+  );
+  const removedWorktrees =
+    holders === null
+      ? 0
+      : await removeStaleWorktrees(staleItems, ghToken, holders, log);
 
   const claudeResult = await terminateOrphanClaudeProcesses(
-    config.claude_timeout_sec,
+    orphanClaudeThresholdSec(config),
     log,
   );
 
