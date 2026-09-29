@@ -42,6 +42,20 @@
 - symlinkは`core.symlinks=false`をmain cloneのconfigに永続化し、pr_fixの検証でsymlinkの新規作成・変更・typechangeは`blocked`として扱う。
 - コミットのauthor / committer情報は、PATが解決するGitHubアカウントのログイン名と、GitHubのnoreplyメールアドレス(`<数値 ID>+<ログイン名>@users.noreply.github.com`)を使う。個人のメールアドレスをどこにも書き込まないための措置で、`git commit`呼び出しの環境変数(`GIT_AUTHOR_*`/`GIT_COMMITTER_*`)としてのみ渡し、git configには書き込まない。
 
+## 工程3(implement)の安全策
+
+`implement`フローはpr_fixと同じくClaudeに書き込みツールを与えるが、PRを作るところまでで止まり、マージは常に人が行う(Factoryはmerge APIを呼ばない)。ガードはpr_fixと次の点で異なる。
+
+- Claudeのツールは`Read,Glob,Grep,Edit,Write`のみで、**`Bash`は与えない**(`--permission-mode dontAsk` + `--allowedTools Edit Write` + `--restricted`)。検査はフロー側が実行する。
+- **承認済み要件定義のファイルは書き換えられない**: Claudeには実行ごとに一時ディレクトリへ複製した要件定義のディレクトリを`--add-dir`で渡し、実行後に削除する。元のファイル(Consoleが表示する承認済みの文書)は渡さない。
+- **保護パスは止めずに明示する**: 保護パス(`f/factory/lib/protected_paths.ts`の`IMPLEMENT_PROTECTED_PATH_PREFIXES`。pr_fixの一覧に`infra/**`を加えたもの)・新規の`*.sh`・`package.json`の`scripts`の変更はPR本文とDiscordに列挙する。そのラウンドは検査コマンドを実行しない(Claudeが書き換えた`mise.toml` / `package.json` scripts / `lefthook.yml`等をworkerで実行すると、Issue本文経由のコード実行経路になるため)。検査はGitHub側のCIが担う。判定はブランチがデフォルトブランチから分かれた点(`git merge-base`)からの差分で行うので、前のラウンドや前回の実行でコミット済みの変更も毎回判定される。renameは元のパスの削除と新しいパスの追加として扱い、保護パスから外への移動も捕まえる。
+- **symlinkの変更は止める**: 新規作成・変更・typechangeは`needs_human`にする。変更パスは`git diff -z --name-status`で取得し、引用符付きのパス(非ASCII・制御文字)でも保護パスの判定を素通りしない。
+- **差分サイズの上限**は工程3専用の`implement_max_changed_files` / `implement_max_diff_lines`で、超えたら`needs_human`にする。
+- **baseブランチが保護ブランチなら止めるガードは適用しない**(実装フローは保護されたbaseに直接pushせず、PRを作るだけのため)。
+- **gitleaksを固定検査にする**: 毎ラウンド、差分をすべてステージしてから`gitleaks git --staged --redact`を実行する。gitleaks既定のルールだけを`--config`で強制し、`--gitleaks-ignore-path`を私有の一時ディレクトリに向け、`--ignore-gitleaks-allow`を付けるので、対象リポジトリの`.gitleaks.toml`(壊れたものを含む)・`.gitleaksignore`・行内の`gitleaks:allow`コメントのいずれでも検出を無効にできない。検出結果はルール名・ファイル・行番号だけをClaudeへの修正依頼とDBに渡し、一致した文字列は渡さない。レポートが出力の上限を超えた場合や終了コードが0 / 1以外の場合は検査の失敗として扱う。`needs_human`で途中の変更をpushするときもgitleaksを再実行し、通らなければ(検査自体が失敗した場合も)pushしない。
+- 検査コマンドの出力はストリームごとに1MiBまでしか保持せず(先頭と末尾を残す)、DBには秘密をマスクした先頭16KB(失敗した検査の出力を先に並べる)を保存する。
+- `.github/workflows/**`を含むpushがPATの`workflow`権限不足で拒否された場合は`needs_human`の理由に載る。
+
 ## GitHub PAT
 
 - fine-grained PATを使う。スコープはIssues R/W、Contents R/W、Metadata R、Pull requests R/Wとする。`pr_fix`の修正pushのためContentsをRead and writeにした。fine-grained PATは権限設定の変更をトークンの値を変えずに反映できるため、既存トークンの権限を更新するだけでよく、再発行(値の再生成)は不要。
