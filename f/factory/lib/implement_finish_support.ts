@@ -40,8 +40,10 @@ export type ImplementFinishAction =
   | { readonly kind: "cancel" }
   | { readonly kind: "open_pr" }
   | { readonly kind: "requirements_gap" }
-  /** `preserveWork`: a worktree exists, so commit + push it (after a
-   * passing gitleaks scan) to leave the branch inspectable. */
+  /** `preserveWork`: the loop stopped on a guard after its checks ran
+   * normally, so its work may be committed + pushed (after the `.git`
+   * pointer check and a passing gitleaks scan) to leave the branch
+   * inspectable — unless a PR is open (shouldPushPartialWork). */
   | { readonly kind: "needs_human"; readonly preserveWork: boolean };
 
 export function decideImplementFinishAction(
@@ -52,7 +54,12 @@ export function decideImplementFinishAction(
       return { kind: "noop" };
     case "cancelled":
       return { kind: "cancel" };
+    // Nothing to keep before a worktree existed; and nothing is pushed
+    // after a stop whose round was never checked (a symlink, a failed
+    // Claude run, a rewritten `.git` pointer).
     case "needs_human":
+    case "symlink":
+    case "claude_error":
     case "git_pointer_modified":
       return { kind: "needs_human", preserveWork: false };
     case "checks_passed":
@@ -64,8 +71,6 @@ export function decideImplementFinishAction(
     case "daily_budget":
     case "stalled":
     case "diff_too_large":
-    case "symlink":
-    case "claude_error":
       return { kind: "needs_human", preserveWork: true };
   }
 }
@@ -107,6 +112,19 @@ export const IMPLEMENT_WIP_COMMIT_MESSAGE =
   "chore: 自動実装の途中経過を保存する\n\n- 検証が完了しなかったため、確認用に途中の変更をpushしました";
 
 export const SECRETS_NOT_PUSHED_REASON = "secrets detected, changes not pushed";
+export const PARTIAL_WORK_KEPT_LOCAL_REASON =
+  "partial work kept local because a pull request is open";
+
+/** Whether a needs_human stop pushes its partial work (preserveWork): only
+ * a stop that keeps its work, and never while a pull request uses the
+ * branch — the push would land unverified changes in the open PR. `hasPr`
+ * is the context's existing_pr_number or the work item's pr_url. */
+export function shouldPushPartialWork(
+  action: ImplementFinishAction,
+  hasPr: boolean,
+): boolean {
+  return action.kind === "needs_human" && action.preserveWork && !hasPr;
+}
 export const IMPLEMENT_FINISH_NO_OUTPUT_REASON =
   "implement finished without a final output";
 export const IMPLEMENT_NO_CHANGES_REASON = "implement produced no changes";

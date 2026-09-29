@@ -2690,6 +2690,12 @@ const REASON_RULES: readonly ReasonRule[] = [
       "worktreeの差分を確認し、秘密情報を取り除いてから人が対応してください",
   },
   {
+    pattern: /^partial work kept local because a pull request is open$/,
+    describe: () => "PRがあるため途中の変更はpushせずworktreeに残しました",
+    nextAction: () =>
+      "worktreeの変更を人が確認し、必要ならPRに反映してください",
+  },
+  {
     pattern: /^worktree changed after verification$/,
     describe: () => "検証の後にworktreeが変更されました",
     nextAction: () =>

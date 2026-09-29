@@ -15,6 +15,7 @@ import {
   prOpenedNextAction,
   SECRETS_NOT_PUSHED_REASON,
   shouldDeleteBranchOnGap,
+  shouldPushPartialWork,
   toDiscordChecks,
 } from "../../f/factory/lib/implement_finish_support.ts";
 import {
@@ -66,17 +67,45 @@ describe("decideImplementFinishAction", () => {
     });
   });
 
-  test("keeps the work of a loop that hit a guard", () => {
+  test("keeps the work of a loop that ran out of rounds", () => {
     expect(decideImplementFinishAction("max_rounds")).toEqual({
       kind: "needs_human",
       preserveWork: true,
     });
   });
 
-  test("keeps the work of a symlink stop", () => {
-    expect(decideImplementFinishAction("symlink")).toEqual({
+  test("keeps the work of a loop stopped by the daily budget", () => {
+    expect(decideImplementFinishAction("daily_budget")).toEqual({
       kind: "needs_human",
       preserveWork: true,
+    });
+  });
+
+  test("keeps the work of a stalled loop", () => {
+    expect(decideImplementFinishAction("stalled")).toEqual({
+      kind: "needs_human",
+      preserveWork: true,
+    });
+  });
+
+  test("keeps the work of a diff that grew too large", () => {
+    expect(decideImplementFinishAction("diff_too_large")).toEqual({
+      kind: "needs_human",
+      preserveWork: true,
+    });
+  });
+
+  test("does not push the work of a symlink stop", () => {
+    expect(decideImplementFinishAction("symlink")).toEqual({
+      kind: "needs_human",
+      preserveWork: false,
+    });
+  });
+
+  test("does not push the work of a failed Claude run", () => {
+    expect(decideImplementFinishAction("claude_error")).toEqual({
+      kind: "needs_human",
+      preserveWork: false,
     });
   });
 
@@ -92,6 +121,29 @@ describe("decideImplementFinishAction", () => {
       kind: "needs_human",
       preserveWork: false,
     });
+  });
+});
+
+describe("shouldPushPartialWork", () => {
+  test("pushes a guard stop's work when no PR is open", () => {
+    expect(
+      shouldPushPartialWork({ kind: "needs_human", preserveWork: true }, false),
+    ).toBe(true);
+  });
+
+  test("keeps a guard stop's work local when a PR is open", () => {
+    expect(
+      shouldPushPartialWork({ kind: "needs_human", preserveWork: true }, true),
+    ).toBe(false);
+  });
+
+  test("never pushes a stop whose work is not kept", () => {
+    expect(
+      shouldPushPartialWork(
+        { kind: "needs_human", preserveWork: false },
+        false,
+      ),
+    ).toBe(false);
   });
 });
 

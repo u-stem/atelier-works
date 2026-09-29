@@ -325,6 +325,12 @@ describe("describeReason (implement flow)", () => {
     );
   });
 
+  test("translates partial work kept local for an open PR", () => {
+    expect(
+      describeReason("partial work kept local because a pull request is open"),
+    ).toBe("PRがあるため途中の変更はpushせずworktreeに残しました");
+  });
+
   test("translates a worktree changed after verification", () => {
     expect(describeReason("worktree changed after verification")).toBe(
       "検証の後にworktreeが変更されました",
@@ -361,6 +367,12 @@ describe("nextActionFor (implement flow)", () => {
     expect(nextActionFor("secrets detected, changes not pushed")).toBe(
       "worktreeの差分を確認し、秘密情報を取り除いてから人が対応してください",
     );
+  });
+
+  test("asks to bring kept-local work into the PR by hand", () => {
+    expect(
+      nextActionFor("partial work kept local because a pull request is open"),
+    ).toBe("worktreeの変更を人が確認し、必要ならPRに反映してください");
   });
 
   test("asks to check the check commands after a post-verification change", () => {

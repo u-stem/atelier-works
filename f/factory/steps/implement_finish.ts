@@ -17,9 +17,11 @@
 //     PR uses it, reroute to f/factory/pipeline at attempt+1 (needs_human
 //     past max_attempts) — status updates before runFlowAsync, as in
 //     pr_fix_finish's reroute.
-//   needs_human: after a loop guard, push what is there when the worktree's
+//   needs_human: after max_rounds / daily_budget / stalled /
+//     diff_too_large, push what is there when no PR is open, the worktree's
 //     `.git` pointer is unchanged and gitleaks passes (preserveWork), so the
-//     branch is inspectable; then notice + Discord.
+//     branch is inspectable; with a PR open the work stays in the worktree
+//     (a note says so); then notice + Discord.
 //   cancel: the Issue was closed (by prepare, or re-checked here).
 // Every git command in the worktree (preserveWork's scan and commit, the
 // final commit) is preceded by the `.git` pointer check; a changed pointer
@@ -60,10 +62,12 @@ import {
   type ImplementFinishOutcome,
   implementNeedsHumanNextAction,
   mergeImplementOutcome,
+  PARTIAL_WORK_KEPT_LOCAL_REASON,
   type PreserveWorkDeps,
   preserveWork,
   REVIEW_LABEL_STYLE,
   shouldDeleteBranchOnGap,
+  shouldPushPartialWork,
 } from "../lib/implement_finish_support.ts";
 import {
   GITLEAKS_TIMEOUT_MS,
@@ -298,10 +302,15 @@ export async function main(
       loop_result?.reason ?? null,
       prepare_reason,
     );
-    const notes =
-      action.preserveWork && context !== null
-        ? await preserveWork(preserveWorkDeps(context))
-        : [];
+    const hasPr =
+      (context !== null && context.existing_pr_number !== null) ||
+      recordedPrUrl !== null;
+    let notes: string[] = [];
+    if (context !== null && shouldPushPartialWork(action, hasPr)) {
+      notes = await preserveWork(preserveWorkDeps(context));
+    } else if (context !== null && action.preserveWork) {
+      notes = [PARTIAL_WORK_KEPT_LOCAL_REASON];
+    }
     const reason = [baseReason, ...notes].join("; ");
     return finalizeNeedsHuman(
       reason,
