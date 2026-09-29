@@ -37,19 +37,17 @@ import { implementFixPrompt } from "../lib/prompts.ts";
 import { isOneOf } from "../lib/types.ts";
 import {
   assertWorktreeGitPointer,
-  readGitShowFile,
   removeIgnoredFiles,
   runCommand,
   runGitleaksOnWorktree,
   worktreeFingerprint,
 } from "../lib/workspace.ts";
 import {
+  anyPackageJsonScriptsChanged,
   evaluateDiffSizeGuard,
   IMPLEMENT_DIFF_SIZE_LIMIT_NAMES,
   listChangedPaths,
   listSymlinkChanges,
-  packageJsonScriptsChanged,
-  readWorktreeFileIfExists,
   runAllowedCheckCommands,
 } from "./pr_workflow_support.ts";
 
@@ -63,23 +61,12 @@ async function inspectChanges(
   baseSha: string,
 ): Promise<ChangeInspection> {
   const changes = await listChangedPaths(runCommand, worktreeDir, baseSha);
-  let scriptsChanged = false;
-  for (const entry of changes) {
-    if (entry.path.split("/").pop() !== "package.json") continue;
-    const before = await readGitShowFile(
-      runCommand,
-      worktreeDir,
-      baseSha,
-      entry.path,
-    );
-    const after = await readWorktreeFileIfExists(
-      `${worktreeDir}/${entry.path}`,
-    );
-    if (packageJsonScriptsChanged(before, after)) {
-      scriptsChanged = true;
-      break;
-    }
-  }
+  const scriptsChanged = await anyPackageJsonScriptsChanged(
+    runCommand,
+    worktreeDir,
+    baseSha,
+    changes,
+  );
   const symlinkPaths = await listSymlinkChanges(
     runCommand,
     worktreeDir,

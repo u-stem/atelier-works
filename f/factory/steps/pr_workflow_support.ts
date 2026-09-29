@@ -50,7 +50,7 @@ import {
   type WorkItemKind,
   type WorkItemStatus,
 } from "../lib/types.ts";
-import type { CommandRunner } from "../lib/workspace.ts";
+import { type CommandRunner, readGitShowFile } from "../lib/workspace.ts";
 
 // Promoted into lib/protected_paths.ts (工程3: implement_support.ts needs
 // the same classification without a lib -> steps import); re-exported so
@@ -2848,6 +2848,29 @@ export async function readWorktreeFileIfExists(
   } catch {
     return null;
   }
+}
+
+/** Whether any changed file named exactly `package.json` (at any depth)
+ * has a different `scripts` field in the worktree than at `baseRef` —
+ * shared by pr_fix_verify (`"HEAD"`) and implement_verify (`base_sha`).
+ * Stops at the first changed one. */
+export async function anyPackageJsonScriptsChanged(
+  run: CommandRunner,
+  worktreeDir: string,
+  baseRef: string,
+  changes: readonly ChangedPath[],
+  readFile?: ReadFileFn,
+): Promise<boolean> {
+  for (const entry of changes) {
+    if (entry.path.split("/").pop() !== "package.json") continue;
+    const before = await readGitShowFile(run, worktreeDir, baseRef, entry.path);
+    const after = await readWorktreeFileIfExists(
+      join(worktreeDir, entry.path),
+      readFile,
+    );
+    if (packageJsonScriptsChanged(before, after)) return true;
+  }
+  return false;
 }
 
 // team-lead fix round 2 item a: getBranchProtected / postIssueComment /

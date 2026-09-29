@@ -7,6 +7,7 @@ import { fixPrompt } from "../../f/factory/lib/prompts.ts";
 import type { RequirementDraft } from "../../f/factory/lib/types.ts";
 import type { CreateCheckHomeDir } from "../../f/factory/steps/pr_workflow_support.ts";
 import {
+  anyPackageJsonScriptsChanged,
   CHECK_COMMAND_MAX_OUTPUT_BYTES,
   countUntrackedFileLines,
   detectEscapingSymlinks,
@@ -930,5 +931,95 @@ describe("listSymlinkChanges", () => {
   test("throws when git diff fails", async () => {
     const { run } = createFakeCommandRunner([fail("fatal: bad object")]);
     await expect(listSymlinkChanges(run, "/wt", BASE)).rejects.toThrow(/--raw/);
+  });
+});
+
+describe("anyPackageJsonScriptsChanged", () => {
+  const BEFORE = JSON.stringify({ scripts: { test: "bun test" } });
+  const AFTER = JSON.stringify({ scripts: { test: "true" } });
+  const readAfter = async () => AFTER;
+  const readBefore = async () => BEFORE;
+
+  test("is false when no package.json changed", async () => {
+    const { run } = createFakeCommandRunner([]);
+    expect(
+      await anyPackageJsonScriptsChanged(
+        run,
+        "/wt",
+        "HEAD",
+        [{ path: "src/a.ts", status: "modified" }],
+        readAfter,
+      ),
+    ).toBe(false);
+  });
+
+  test("is false when the scripts are unchanged", async () => {
+    const { run } = createFakeCommandRunner([ok(BEFORE)]);
+    expect(
+      await anyPackageJsonScriptsChanged(
+        run,
+        "/wt",
+        "HEAD",
+        [{ path: "package.json", status: "modified" }],
+        readBefore,
+      ),
+    ).toBe(false);
+  });
+
+  test("is true when the scripts changed", async () => {
+    const { run } = createFakeCommandRunner([ok(BEFORE)]);
+    expect(
+      await anyPackageJsonScriptsChanged(
+        run,
+        "/wt",
+        "HEAD",
+        [{ path: "package.json", status: "modified" }],
+        readAfter,
+      ),
+    ).toBe(true);
+  });
+
+  test("considers a nested package.json", async () => {
+    const { run } = createFakeCommandRunner([ok(BEFORE)]);
+    expect(
+      await anyPackageJsonScriptsChanged(
+        run,
+        "/wt",
+        "HEAD",
+        [
+          { path: "src/my-package.json", status: "modified" },
+          { path: "pkg/package.json", status: "modified" },
+        ],
+        readAfter,
+      ),
+    ).toBe(true);
+  });
+
+  test("reads the base version at the given ref", async () => {
+    const { run, calls } = createFakeCommandRunner([ok(BEFORE)]);
+    await anyPackageJsonScriptsChanged(
+      run,
+      "/wt",
+      "HEAD",
+      [{ path: "pkg/package.json", status: "modified" }],
+      readBefore,
+    );
+    expect(calls[0]?.argv.at(-1)).toBe("HEAD:pkg/package.json");
+  });
+
+  test("reads the worktree version under the worktree", async () => {
+    const { run } = createFakeCommandRunner([ok(BEFORE)]);
+    const read: string[] = [];
+    await anyPackageJsonScriptsChanged(
+      run,
+      "/wt",
+      "HEAD",
+      [{ path: "pkg/package.json", status: "modified" }],
+      async (path) => {
+        read.push(path);
+        return BEFORE;
+      },
+    );
+    expect(read).toEqual(["/wt/pkg/package.json"]);
   });
 });
