@@ -1,0 +1,20 @@
+summary: '[SF-3-4/2] 実装(Claude)'
+description: 承認済みの要件定義をもとに、Claudeにworktree上で実装させるステップです。Claudeにはシェルの実行を許可せず、ファイルの読み書きだけを許可します。要件定義のファイルは実行ごとの複製を渡します。
+lock: '!inline f/factory/steps/implement_generate.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties:
+    context:
+      type: object
+      description: 準備ステップが用意した実装の前提情報(対象リポジトリ、ブランチ、worktree、承認済みの要件定義など)。
+      default: null
+      format: resource-implement_context
+    work_item_id:
+      type: number
+      description: 実装する作業項目のID。
+      default: null
+  required:
+    - work_item_id
+    - context

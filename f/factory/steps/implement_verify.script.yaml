@@ -1,0 +1,26 @@
+summary: '[SF-3-4/3] 検証と修正のループ'
+description: 実装結果を検証し、問題があればClaudeに修正させて再検証するステップです。ブランチの分岐点からの差分の大きさとシンボリックリンクを確認し、秘密情報の検査とリポジトリの検査コマンドに通るまで、上限の範囲で修正を繰り返します。保護パスを変更したラウンドでは検査コマンドを実行しません。
+lock: '!inline f/factory/steps/implement_verify.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties:
+    context:
+      type: object
+      description: 準備ステップが用意した実装の前提情報。
+      default: null
+      format: resource-implement_context
+    first_round:
+      type: object
+      description: 実装ステップでのClaudeの実行結果。
+      default: null
+      format: resource-implement_claude_round
+    work_item_id:
+      type: number
+      description: 実装する作業項目のID。
+      default: null
+  required:
+    - work_item_id
+    - context
+    - first_round
