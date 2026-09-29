@@ -31,6 +31,7 @@ import {
   matchesForbiddenPath,
 } from "../lib/protected_paths.ts";
 import {
+  assertSha,
   type FactoryConfig,
   type FixOutcome,
   type FixReply,
@@ -1110,6 +1111,93 @@ export function parseGitDiffNameOnly(output: string): string[] {
     .filter((line) => line.length > 0);
 }
 
+function statusFromNameStatus(code: string): ChangedPathStatus {
+  switch (code.charAt(0)) {
+    case "A":
+      return "added";
+    case "M":
+      return "modified";
+    case "D":
+      return "deleted";
+    case "T":
+      return "typechange";
+    default:
+      return "unknown";
+  }
+}
+
+/** `git diff -z --name-status` (工程3 design §14): NUL-separated and never
+ * C-quoted, unlike the newline forms whose quoting of non-ASCII / control
+ * characters let such paths slip past matchesForbiddenPath. A rename
+ * (`R<score>\0old\0new`) becomes a deletion of the old path plus an
+ * addition of the new one, so moving a protected file out of its protected
+ * location is still classified; a copy (`C<score>\0src\0dst`) becomes an
+ * addition of `dst`. */
+export function parseGitDiffNameStatusZ(output: string): ChangedPath[] {
+  const fields = output.split("\u0000");
+  const entries: ChangedPath[] = [];
+  let index = 0;
+  while (index < fields.length) {
+    const code = fields[index] ?? "";
+    index += 1;
+    if (code.length === 0) continue;
+    const kind = code.charAt(0);
+    if (kind === "R" || kind === "C") {
+      const source = fields[index] ?? "";
+      const destination = fields[index + 1] ?? "";
+      index += 2;
+      if (kind === "R" && source.length > 0) {
+        entries.push({ path: source, status: "deleted" });
+      }
+      if (destination.length > 0) {
+        entries.push({ path: destination, status: "added" });
+      }
+      continue;
+    }
+    const path = fields[index] ?? "";
+    index += 1;
+    if (path.length > 0) {
+      entries.push({ path, status: statusFromNameStatus(code) });
+    }
+  }
+  return entries;
+}
+
+/** Every path that differs between `baseSha` (the branch's merge-base with
+ * the default branch) and the staged worktree, from `git diff --cached -z
+ * --name-status`. The implement flow calls this after worktreeFingerprint
+ * staged everything, so commits made earlier on the branch are included. */
+export async function listChangedPaths(
+  run: CommandRunner,
+  worktreeDir: string,
+  baseSha: string,
+): Promise<ChangedPath[]> {
+  assertSha(baseSha);
+  const result = await run(
+    gitHardeningArgv([
+      "diff",
+      "--cached",
+      "-z",
+      "--name-status",
+      "--no-ext-diff",
+      baseSha,
+      "--",
+    ]),
+    {
+      cwd: worktreeDir,
+      env: resolvedEnv({ GIT_TERMINAL_PROMPT: "0" }, undefined, undefined),
+    },
+  );
+  if (result.exitCode !== 0) {
+    throw new Error(
+      maskSecrets(
+        `git diff --cached -z --name-status failed in ${worktreeDir}: ${result.stderr.trim()}`,
+      ),
+    );
+  }
+  return parseGitDiffNameStatusZ(result.stdout);
+}
+
 /** Union of `git status --porcelain` (which alone already covers both
  * staged and unstaged changes, tracked and untracked) and
  * `git diff --name-only` (belt-and-suspenders per this task's instructions)
@@ -1514,9 +1602,16 @@ export type CheckCommandResult = {
   readonly exitCode: number;
   readonly timedOut: boolean;
   readonly outputTail: string;
+  /** The whole combined stdout+stderr as far as
+   * CHECK_COMMAND_MAX_OUTPUT_BYTES kept it, masked — the implement flow
+   * stores its first 16KB on implement_rounds.check_output
+   * (truncateCheckOutput). `outputTail` stays the prompt-side excerpt. */
+  readonly output: string;
 };
 
 const CHECK_OUTPUT_TAIL_CHARS = 2000;
+
+export const CHECK_COMMAND_MAX_OUTPUT_BYTES = 1024 * 1024;
 
 export type CheckHomeDir = {
   readonly path: string;
@@ -1577,14 +1672,20 @@ export async function runAllowedCheckCommands(
         .split(/\s+/)
         .filter((token) => token.length > 0);
       if (argv.length === 0) continue;
-      const result = await run(argv, { cwd, env, timeoutMs });
-      const combined = `${result.stdout}\n${result.stderr}`.trim();
+      const result = await run(argv, {
+        cwd,
+        env,
+        timeoutMs,
+        maxOutputBytes: CHECK_COMMAND_MAX_OUTPUT_BYTES,
+      });
+      const masked = maskSecrets(`${result.stdout}\n${result.stderr}`.trim());
       results.push({
         command,
         ok: !result.timedOut && result.exitCode === 0,
         exitCode: result.exitCode,
         timedOut: result.timedOut,
-        outputTail: maskSecrets(combined.slice(-CHECK_OUTPUT_TAIL_CHARS)),
+        outputTail: masked.slice(-CHECK_OUTPUT_TAIL_CHARS),
+        output: masked,
       });
     }
     return results;

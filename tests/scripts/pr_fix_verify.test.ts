@@ -7,6 +7,7 @@ import { fixPrompt } from "../../f/factory/lib/prompts.ts";
 import type { RequirementDraft } from "../../f/factory/lib/types.ts";
 import type { CreateCheckHomeDir } from "../../f/factory/steps/pr_workflow_support.ts";
 import {
+  CHECK_COMMAND_MAX_OUTPUT_BYTES,
   countUntrackedFileLines,
   detectEscapingSymlinks,
   detectForbiddenChanges,
@@ -16,11 +17,13 @@ import {
   IMPLEMENT_DIFF_SIZE_LIMIT_NAMES,
   isEscapingSymlink,
   isNewShellScript,
+  listChangedPaths,
   listSymlinkTargets,
   matchesForbiddenPath,
   mergeChangedPaths,
   packageJsonScriptsChanged,
   parseGitDiffNameOnly,
+  parseGitDiffNameStatusZ,
   parseGitDiffNumstat,
   parseGitStatusPorcelain,
   parseSymlinkModePaths,
@@ -668,6 +671,45 @@ describe("runAllowedCheckCommands", () => {
     const secondHome = second.calls[0]?.options?.env?.HOME;
     expect(firstHome).not.toBe(secondHome);
   });
+
+  test("output carries the whole combined stdout and stderr", async () => {
+    const { run } = createFakeCommandRunner([ok("out-line", "err-line")]);
+    const results = await runAllowedCheckCommands(
+      run,
+      "/work",
+      ["bun test"],
+      1000,
+      fakeCheckHomeDir().factory,
+    );
+    expect(results[0]?.output).toBe("out-line\nerr-line");
+  });
+
+  test("output is masked", async () => {
+    const secret = `sk-ant-${"x".repeat(20)}`;
+    const { run } = createFakeCommandRunner([fail(`leaked ${secret}`)]);
+    const results = await runAllowedCheckCommands(
+      run,
+      "/work",
+      ["bun test"],
+      1000,
+      fakeCheckHomeDir().factory,
+    );
+    expect(results[0]?.output).toBe("leaked ***");
+  });
+
+  test("caps each stream of a check command", async () => {
+    const { run, calls } = createFakeCommandRunner([ok("")]);
+    await runAllowedCheckCommands(
+      run,
+      "/work",
+      ["bun test"],
+      1000,
+      fakeCheckHomeDir().factory,
+    );
+    expect(calls[0]?.options?.maxOutputBytes).toBe(
+      CHECK_COMMAND_MAX_OUTPUT_BYTES,
+    );
+  });
 });
 
 describe("fixPrompt requirements wiring (retry pass)", () => {
@@ -714,5 +756,104 @@ describe("fixPrompt requirements wiring (retry pass)", () => {
 
   test("also includes the check failure output", () => {
     expect(retryPrompt()).toContain("FAIL a.test.ts");
+  });
+});
+
+describe("parseGitDiffNameStatusZ", () => {
+  test("parses an added file", () => {
+    expect(parseGitDiffNameStatusZ("A\u0000src/new.ts\u0000")).toEqual([
+      { path: "src/new.ts", status: "added" },
+    ]);
+  });
+
+  test("keeps a non-ASCII path unquoted", () => {
+    expect(
+      parseGitDiffNameStatusZ("M\u0000.claude/設計.md\u0000")[0]?.path,
+    ).toBe(".claude/設計.md");
+  });
+
+  test("keeps spaces inside a path", () => {
+    expect(parseGitDiffNameStatusZ("A\u0000a b.sh\u0000")[0]?.path).toBe(
+      "a b.sh",
+    );
+  });
+
+  test("parses a modification", () => {
+    expect(parseGitDiffNameStatusZ("M\u0000c.ts\u0000")[0]?.status).toBe(
+      "modified",
+    );
+  });
+
+  test("parses a deletion", () => {
+    expect(parseGitDiffNameStatusZ("D\u0000old.ts\u0000")[0]?.status).toBe(
+      "deleted",
+    );
+  });
+
+  test("parses a typechange", () => {
+    expect(parseGitDiffNameStatusZ("T\u0000link\u0000")[0]?.status).toBe(
+      "typechange",
+    );
+  });
+
+  test("turns a rename into a deletion of the old path", () => {
+    expect(
+      parseGitDiffNameStatusZ(
+        "R087\u0000.github/workflows/ci.yml\u0000docs/ci.yml\u0000",
+      )[0],
+    ).toEqual({
+      path: ".github/workflows/ci.yml",
+      status: "deleted",
+    });
+  });
+
+  test("turns a rename into an addition of the new path", () => {
+    expect(
+      parseGitDiffNameStatusZ(
+        "R087\u0000.github/workflows/ci.yml\u0000docs/ci.yml\u0000",
+      )[1],
+    ).toEqual({
+      path: "docs/ci.yml",
+      status: "added",
+    });
+  });
+
+  test("keeps parsing entries after a rename", () => {
+    expect(
+      parseGitDiffNameStatusZ(
+        "R087\u0000a.yml\u0000b.yml\u0000M\u0000c.ts\u0000",
+      )[2]?.path,
+    ).toBe("c.ts");
+  });
+
+  test("turns a copy into an addition of the new path", () => {
+    expect(parseGitDiffNameStatusZ("C100\u0000a.sh\u0000b.sh\u0000")).toEqual([
+      { path: "b.sh", status: "added" },
+    ]);
+  });
+});
+
+describe("listChangedPaths", () => {
+  const BASE = "b".repeat(40);
+
+  test("diffs the index against the base sha with -z --name-status", async () => {
+    const { run, calls } = createFakeCommandRunner([ok("")]);
+    await listChangedPaths(run, "/wt", BASE);
+    expect(calls[0]?.argv.slice(-7)).toEqual([
+      "diff",
+      "--cached",
+      "-z",
+      "--name-status",
+      "--no-ext-diff",
+      BASE,
+      "--",
+    ]);
+  });
+
+  test("throws when git diff fails", async () => {
+    const { run } = createFakeCommandRunner([fail("fatal: bad object")]);
+    await expect(listChangedPaths(run, "/wt", BASE)).rejects.toThrow(
+      /--name-status/,
+    );
   });
 });
