@@ -81,7 +81,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { maskSecrets } from "./log.ts";
 import {
   assertBranchName,
@@ -1318,6 +1318,88 @@ export async function addDetachedWorktree(
   });
 }
 
+/** The fs calls behind the `.git` pointer check (verifyWorktreeGitdir) and
+ * the fs-only removal of a worktree that fails it; injectable for tests. */
+export type WorktreeFsDeps = {
+  readonly readTextFile?: (path: string) => Promise<string>;
+  readonly realpath?: (path: string) => Promise<string>;
+  /** `rm -rf`; defaults to `rm(path, { recursive: true, force: true })`. */
+  readonly removeDir?: (path: string) => Promise<void>;
+};
+
+/** Whether `dir`'s `.git` pointer passes verifyWorktreeGitdir. */
+async function worktreePointerVerified(opts: {
+  readonly run: CommandRunner;
+  readonly repoDir: string;
+  readonly dir: string;
+  readonly fs: WorktreeFsDeps | undefined;
+}): Promise<boolean> {
+  try {
+    await verifyWorktreeGitdir({
+      run: opts.run,
+      repoDir: opts.repoDir,
+      dir: opts.dir,
+      ...(opts.fs?.readTextFile !== undefined
+        ? { readTextFile: opts.fs.readTextFile }
+        : {}),
+      ...(opts.fs?.realpath !== undefined
+        ? { realpath: opts.fs.realpath }
+        : {}),
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Deletes a worktree whose `.git` pointer failed verification without
+ * running git inside it (a redirected pointer brings its own config, e.g.
+ * a clean filter): `rm -rf` through the fs, then `git worktree prune` from
+ * `repoDir`. Only a path `git worktree list` (run in `repoDir`) reports,
+ * other than the main clone, and lying strictly under the repository's
+ * workspace dir (`dirname(repoDir)`, e.g. `/workspaces/<owner>/<repo>`) is
+ * deleted; anything else throws. Call under the repo lock. */
+async function discardUnverifiedWorktree(opts: {
+  readonly run: CommandRunner;
+  readonly repoDir: string;
+  readonly dir: string;
+  readonly home?: string;
+  readonly path?: string;
+  readonly fs: WorktreeFsDeps | undefined;
+}): Promise<void> {
+  const entries = await listWorktrees({
+    run: opts.run,
+    repoDir: opts.repoDir,
+    ...(opts.home !== undefined ? { home: opts.home } : {}),
+    ...(opts.path !== undefined ? { path: opts.path } : {}),
+  });
+  if (
+    opts.dir === opts.repoDir ||
+    !entries.some((entry) => entry.path === opts.dir)
+  ) {
+    throw new Error(
+      `refusing to delete ${opts.dir}: not a registered worktree of ${opts.repoDir}`,
+    );
+  }
+  const root = dirname(opts.repoDir);
+  if (resolve(opts.dir) !== opts.dir || !opts.dir.startsWith(`${root}/`)) {
+    throw new Error(
+      `refusing to delete ${opts.dir}: outside the repository's workspace dir ${root}`,
+    );
+  }
+  const removeDir =
+    opts.fs?.removeDir ??
+    ((path: string) => rm(path, { recursive: true, force: true }));
+  await removeDir(opts.dir);
+  const prune = await opts.run(buildGitArgv(["worktree", "prune"]), {
+    cwd: opts.repoDir,
+    env: localGitEnv(opts.home, opts.path),
+  });
+  if (prune.exitCode !== 0) {
+    throw gitError("git worktree prune failed", prune);
+  }
+}
+
 export type RemoveWorktreeOptions = {
   readonly run: CommandRunner;
   readonly repoDir: string;
@@ -1328,9 +1410,14 @@ export type RemoveWorktreeOptions = {
   readonly lockFs?: LockFs;
   readonly sleep?: (ms: number) => Promise<void>;
   readonly now?: () => Date;
+  readonly fs?: WorktreeFsDeps;
 };
 
-/** Serialized under `repoLockPath(repoDir)` (code-review fix), same lock `ensureRepo` uses for this repo. */
+/** Serialized under `repoLockPath(repoDir)` (code-review fix), same lock
+ * `ensureRepo` uses for this repo. `git worktree remove` inspects the
+ * worktree, so it runs only after the `.git` pointer passes
+ * verifyWorktreeGitdir; otherwise the directory is deleted through the fs
+ * (discardUnverifiedWorktree). */
 export async function removeWorktree(
   opts: RemoveWorktreeOptions,
 ): Promise<void> {
@@ -1340,6 +1427,24 @@ export async function removeWorktree(
     ...(opts.sleep !== undefined ? { sleep: opts.sleep } : {}),
     ...(opts.now !== undefined ? { now: opts.now } : {}),
     fn: async () => {
+      if (
+        !(await worktreePointerVerified({
+          run: opts.run,
+          repoDir: opts.repoDir,
+          dir: opts.dir,
+          fs: opts.fs,
+        }))
+      ) {
+        await discardUnverifiedWorktree({
+          run: opts.run,
+          repoDir: opts.repoDir,
+          dir: opts.dir,
+          ...(opts.home !== undefined ? { home: opts.home } : {}),
+          ...(opts.path !== undefined ? { path: opts.path } : {}),
+          fs: opts.fs,
+        });
+        return;
+      }
       const args = [
         "worktree",
         "remove",
@@ -1505,13 +1610,17 @@ export type CreateGtrWorktreeOptions = {
   readonly lockFs?: LockFs;
   readonly sleep?: (ms: number) => Promise<void>;
   readonly now?: () => Date;
+  readonly fs?: WorktreeFsDeps;
 };
 
 /**
  * `git gtr new <branch> --porcelain --yes`, reusing an existing worktree for
  * `branch` if `git worktree list` already has one (spec-cycle2.md §1
  * workspace.ts "既存なら再利用"). Serialized under `repoLockPath(repoDir)`
- * (code-review fix), same lock `ensureRepo` uses for this repo.
+ * (code-review fix), same lock `ensureRepo` uses for this repo. A reused
+ * worktree's `.git` pointer is verified (verifyWorktreeGitdir) before any
+ * git command runs inside it; one that fails is deleted through the fs
+ * (discardUnverifiedWorktree) and recreated with `git gtr new`.
  */
 export async function createGtrWorktree(
   opts: CreateGtrWorktreeOptions,
@@ -1530,7 +1639,27 @@ export async function createGtrWorktree(
         ...(opts.home !== undefined ? { home: opts.home } : {}),
         ...(opts.path !== undefined ? { path: opts.path } : {}),
       });
-      const reused = existing.find((entry) => entry.branch === opts.branch);
+      const found = existing.find((entry) => entry.branch === opts.branch);
+      const reused =
+        found !== undefined &&
+        (await worktreePointerVerified({
+          run: opts.run,
+          repoDir: opts.repoDir,
+          dir: found.path,
+          fs: opts.fs,
+        }))
+          ? found
+          : undefined;
+      if (found !== undefined && reused === undefined) {
+        await discardUnverifiedWorktree({
+          run: opts.run,
+          repoDir: opts.repoDir,
+          dir: found.path,
+          ...(opts.home !== undefined ? { home: opts.home } : {}),
+          ...(opts.path !== undefined ? { path: opts.path } : {}),
+          fs: opts.fs,
+        });
+      }
       if (reused !== undefined) {
         // devil-advocate fix (adopted, fatal): a previous round's
         // timed-out/cancelled Claude run can leave stray edits sitting in

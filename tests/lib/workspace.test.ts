@@ -693,67 +693,180 @@ describe("addDetachedWorktree", () => {
   });
 });
 
+// A registered worktree of /tmp/repo (REAL_WORKTREE_PORCELAIN) and fs
+// stand-ins for its `.git` pointer check: a canonical pointer passes, a
+// redirected one fails verifyWorktreeGitdir.
+const REUSED_REPO = "/tmp/repo";
+const REUSED_WT = "/tmp/repo-worktrees/contract-smoke-branch";
+function pointerFsDeps(pointerOk: boolean): {
+  readonly fs: {
+    readonly readTextFile: (path: string) => Promise<string>;
+    readonly realpath: (path: string) => Promise<string>;
+    readonly removeDir: (path: string) => Promise<void>;
+  };
+  readonly removed: string[];
+} {
+  const removed: string[] = [];
+  return {
+    removed,
+    fs: {
+      readTextFile: async (path) => {
+        if (path === `${REUSED_WT}/.git`) {
+          return pointerOk
+            ? `gitdir: ${REUSED_REPO}/.git/worktrees/contract-smoke-branch\n`
+            : "gitdir: /evil/.git/worktrees/x\n";
+        }
+        if (path.endsWith("/gitdir")) return `${REUSED_WT}/.git\n`;
+        throw new Error(`unexpected read: ${path}`);
+      },
+      realpath: async (path) => resolve(path),
+      removeDir: async (path) => {
+        removed.push(path);
+      },
+    },
+  };
+}
+
 describe("removeWorktree", () => {
+  // [0] git worktree list (the pointer check), [1] remove, [2] prune.
+  const verified = () =>
+    createFakeCommandRunner([ok(REAL_WORKTREE_PORCELAIN), ok(), ok()]);
+
   test("includes --force when requested", async () => {
-    const fake = createFakeCommandRunner([ok(), ok()]);
+    const fake = verified();
     await removeWorktree({
       run: fake.run,
-      repoDir: "/repo",
-      dir: "/repo/wt",
+      repoDir: REUSED_REPO,
+      dir: REUSED_WT,
       force: true,
       lockFs: createInMemoryLockFs(),
+      fs: pointerFsDeps(true).fs,
     });
-    expect(fake.calls[0]?.argv).toContain("--force");
+    expect(fake.calls[1]?.argv).toContain("--force");
   });
 
   test("puts -- before the worktree dir", async () => {
-    const fake = createFakeCommandRunner([ok(), ok()]);
+    const fake = verified();
     await removeWorktree({
       run: fake.run,
-      repoDir: "/repo",
-      dir: "/repo/wt",
+      repoDir: REUSED_REPO,
+      dir: REUSED_WT,
       lockFs: createInMemoryLockFs(),
+      fs: pointerFsDeps(true).fs,
     });
-    const argv = fake.calls[0]?.argv ?? [];
+    const argv = fake.calls[1]?.argv ?? [];
     expect(argv.at(-2)).toBe("--");
   });
 
   test("prunes after removing", async () => {
-    const fake = createFakeCommandRunner([ok(), ok()]);
+    const fake = verified();
     await removeWorktree({
       run: fake.run,
-      repoDir: "/repo",
-      dir: "/repo/wt",
+      repoDir: REUSED_REPO,
+      dir: REUSED_WT,
       lockFs: createInMemoryLockFs(),
+      fs: pointerFsDeps(true).fs,
     });
-    expect(fake.calls[1]?.argv).toContain("prune");
+    expect(fake.calls[2]?.argv).toContain("prune");
   });
 
   test("is serialized under the same lock path ensureRepo would use for this repo", async () => {
     const lockFs = createInMemoryLockFs();
     let sawLockDuringRun = false;
-    const fake = createFakeCommandRunner([
-      {
-        stdout: "",
-        stderr: "",
-        exitCode: 0,
-        timedOut: false,
-      },
-      { stdout: "", stderr: "", exitCode: 0, timedOut: false },
-    ]);
+    const fake = verified();
     // Peek at the lock file mid-flight via a wrapping run that checks the lock exists.
     const runAndCheck: typeof fake.run = async (argv, options) => {
       sawLockDuringRun =
-        (await lockFs.read("/repo/main.lock")) !== null || sawLockDuringRun;
+        (await lockFs.read("/tmp/main.lock")) !== null || sawLockDuringRun;
       return fake.run(argv, options);
     };
     await removeWorktree({
       run: runAndCheck,
-      repoDir: "/repo/main",
-      dir: "/repo/main-wt",
+      repoDir: REUSED_REPO,
+      dir: REUSED_WT,
       lockFs,
+      fs: pointerFsDeps(true).fs,
     });
     expect(sawLockDuringRun).toBe(true);
+  });
+
+  describe("when the .git pointer fails verification", () => {
+    // [0] list (pointer check), [1] list (fallback guard), [2] prune.
+    const unverified = () =>
+      createFakeCommandRunner([
+        ok(REAL_WORKTREE_PORCELAIN),
+        ok(REAL_WORKTREE_PORCELAIN),
+        ok(),
+      ]);
+    const remove = async (
+      run: ReturnType<typeof unverified>["run"],
+      deps = pointerFsDeps(false),
+      repoDir = REUSED_REPO,
+      dir = REUSED_WT,
+    ) =>
+      removeWorktree({
+        run,
+        repoDir,
+        dir,
+        force: true,
+        lockFs: createInMemoryLockFs(),
+        fs: deps.fs,
+      });
+
+    test("does not run git worktree remove", async () => {
+      const fake = unverified();
+      await remove(fake.run);
+      expect(fake.calls.some((call) => call.argv.includes("remove"))).toBe(
+        false,
+      );
+    });
+
+    test("never runs git inside the worktree", async () => {
+      const fake = unverified();
+      await remove(fake.run);
+      expect(fake.calls.some((call) => call.options?.cwd === REUSED_WT)).toBe(
+        false,
+      );
+    });
+
+    test("deletes the directory through the fs", async () => {
+      const deps = pointerFsDeps(false);
+      await remove(unverified().run, deps);
+      expect(deps.removed).toEqual([REUSED_WT]);
+    });
+
+    test("prunes from repoDir", async () => {
+      const fake = unverified();
+      await remove(fake.run);
+      expect(
+        fake.calls.find((call) => call.argv.includes("prune"))?.options?.cwd,
+      ).toBe(REUSED_REPO);
+    });
+
+    test("refuses a directory git worktree list does not report", async () => {
+      await expect(
+        remove(
+          unverified().run,
+          pointerFsDeps(false),
+          REUSED_REPO,
+          "/tmp/repo-worktrees/unknown",
+        ),
+      ).rejects.toThrow(/not a registered worktree/);
+    });
+
+    test("refuses a directory outside the repository's workspace dir", async () => {
+      await expect(
+        remove(unverified().run, pointerFsDeps(false), "/srv/checkout/repo"),
+      ).rejects.toThrow(/outside/);
+    });
+
+    test("deletes nothing when it refuses", async () => {
+      const deps = pointerFsDeps(false);
+      await remove(unverified().run, deps, "/srv/checkout/repo").catch(
+        () => {},
+      );
+      expect(deps.removed).toEqual([]);
+    });
   });
 });
 
@@ -864,16 +977,18 @@ describe("createGtrWorktree", () => {
   test("reuses an existing worktree whose branch matches", async () => {
     const fake = createFakeCommandRunner([
       ok(REAL_WORKTREE_PORCELAIN),
+      ok(REAL_WORKTREE_PORCELAIN),
       ok(),
       ok(),
       ok(),
     ]);
     const result = await createGtrWorktree({
       run: fake.run,
-      repoDir: "/repo",
+      repoDir: REUSED_REPO,
       branch: "contract-smoke-branch",
       ghToken: "gh-token",
       lockFs: createInMemoryLockFs(),
+      fs: pointerFsDeps(true).fs,
     });
     expect(result.hookStatus).toBe("reused");
   });
@@ -881,16 +996,18 @@ describe("createGtrWorktree", () => {
   test("does not call `git gtr new` when reusing", async () => {
     const fake = createFakeCommandRunner([
       ok(REAL_WORKTREE_PORCELAIN),
+      ok(REAL_WORKTREE_PORCELAIN),
       ok(),
       ok(),
       ok(),
     ]);
     await createGtrWorktree({
       run: fake.run,
-      repoDir: "/repo",
+      repoDir: REUSED_REPO,
       branch: "contract-smoke-branch",
       ghToken: "gh-token",
       lockFs: createInMemoryLockFs(),
+      fs: pointerFsDeps(true).fs,
     });
     expect(fake.calls.some((call) => call.argv.includes("gtr"))).toBe(false);
   });
@@ -909,18 +1026,20 @@ describe("createGtrWorktree", () => {
     test("fetches origin/<branch> first", async () => {
       const fake = createFakeCommandRunner([
         ok(REAL_WORKTREE_PORCELAIN),
+        ok(REAL_WORKTREE_PORCELAIN),
         ok(),
         ok(),
         ok(),
       ]);
       await createGtrWorktree({
         run: fake.run,
-        repoDir: "/repo",
+        repoDir: REUSED_REPO,
         branch: "contract-smoke-branch",
         ghToken: "gh-token",
         lockFs: createInMemoryLockFs(),
+        fs: pointerFsDeps(true).fs,
       });
-      const argv = fake.calls[1]?.argv ?? [];
+      const argv = fake.calls[2]?.argv ?? [];
       expect(argv).toEqual(
         expect.arrayContaining([
           "fetch",
@@ -934,18 +1053,20 @@ describe("createGtrWorktree", () => {
     test("then resets --hard to origin/<branch>", async () => {
       const fake = createFakeCommandRunner([
         ok(REAL_WORKTREE_PORCELAIN),
+        ok(REAL_WORKTREE_PORCELAIN),
         ok(),
         ok(),
         ok(),
       ]);
       await createGtrWorktree({
         run: fake.run,
-        repoDir: "/repo",
+        repoDir: REUSED_REPO,
         branch: "contract-smoke-branch",
         ghToken: "gh-token",
         lockFs: createInMemoryLockFs(),
+        fs: pointerFsDeps(true).fs,
       });
-      const argv = fake.calls[2]?.argv ?? [];
+      const argv = fake.calls[3]?.argv ?? [];
       expect(argv).toEqual(
         expect.arrayContaining([
           "reset",
@@ -958,41 +1079,26 @@ describe("createGtrWorktree", () => {
     test("then cleans untracked files", async () => {
       const fake = createFakeCommandRunner([
         ok(REAL_WORKTREE_PORCELAIN),
+        ok(REAL_WORKTREE_PORCELAIN),
         ok(),
         ok(),
         ok(),
       ]);
       await createGtrWorktree({
         run: fake.run,
-        repoDir: "/repo",
+        repoDir: REUSED_REPO,
         branch: "contract-smoke-branch",
         ghToken: "gh-token",
         lockFs: createInMemoryLockFs(),
+        fs: pointerFsDeps(true).fs,
       });
-      const argv = fake.calls[3]?.argv ?? [];
+      const argv = fake.calls[4]?.argv ?? [];
       expect(argv).toEqual(expect.arrayContaining(["clean", "-fd"]));
     });
 
     test("does not put -- before the ref for reset --hard (same rev-parse-like exception as elsewhere)", async () => {
       const fake = createFakeCommandRunner([
         ok(REAL_WORKTREE_PORCELAIN),
-        ok(),
-        ok(),
-        ok(),
-      ]);
-      await createGtrWorktree({
-        run: fake.run,
-        repoDir: "/repo",
-        branch: "contract-smoke-branch",
-        ghToken: "gh-token",
-        lockFs: createInMemoryLockFs(),
-      });
-      const argv = fake.calls[2]?.argv ?? [];
-      expect(argv).not.toContain("--");
-    });
-
-    test("resets and cleans in the worktree dir, not repoDir", async () => {
-      const fake = createFakeCommandRunner([
         ok(REAL_WORKTREE_PORCELAIN),
         ok(),
         ok(),
@@ -1000,14 +1106,35 @@ describe("createGtrWorktree", () => {
       ]);
       await createGtrWorktree({
         run: fake.run,
-        repoDir: "/repo",
+        repoDir: REUSED_REPO,
         branch: "contract-smoke-branch",
         ghToken: "gh-token",
         lockFs: createInMemoryLockFs(),
+        fs: pointerFsDeps(true).fs,
+      });
+      const argv = fake.calls[3]?.argv ?? [];
+      expect(argv).not.toContain("--");
+    });
+
+    test("resets and cleans in the worktree dir, not repoDir", async () => {
+      const fake = createFakeCommandRunner([
+        ok(REAL_WORKTREE_PORCELAIN),
+        ok(REAL_WORKTREE_PORCELAIN),
+        ok(),
+        ok(),
+        ok(),
+      ]);
+      await createGtrWorktree({
+        run: fake.run,
+        repoDir: REUSED_REPO,
+        branch: "contract-smoke-branch",
+        ghToken: "gh-token",
+        lockFs: createInMemoryLockFs(),
+        fs: pointerFsDeps(true).fs,
       });
       expect([
-        fake.calls[2]?.options?.cwd,
         fake.calls[3]?.options?.cwd,
+        fake.calls[4]?.options?.cwd,
       ]).toEqual([
         "/tmp/repo-worktrees/contract-smoke-branch",
         "/tmp/repo-worktrees/contract-smoke-branch",
@@ -1017,18 +1144,74 @@ describe("createGtrWorktree", () => {
     test("throws a masked error when the reset fails", async () => {
       const fake = createFakeCommandRunner([
         ok(REAL_WORKTREE_PORCELAIN),
+        ok(REAL_WORKTREE_PORCELAIN),
         ok(),
         fail("fatal: could not reset"),
       ]);
       await expect(
         createGtrWorktree({
           run: fake.run,
-          repoDir: "/repo",
+          repoDir: REUSED_REPO,
           branch: "contract-smoke-branch",
           ghToken: "gh-token",
           lockFs: createInMemoryLockFs(),
+          fs: pointerFsDeps(true).fs,
         }),
       ).rejects.toThrow(/reset --hard/);
+    });
+  });
+
+  describe("reuse path when the .git pointer fails verification", () => {
+    const gtrPorcelain = `path\t${REUSED_WT}\nbranch\tcontract-smoke-branch\nhook_status\tnone\n`;
+    // [0] list (reuse lookup), [1] list (pointer check), [2] list (fallback
+    // guard), [3] prune, [4] gtr new.
+    const recreate = async () => {
+      const fake = createFakeCommandRunner([
+        ok(REAL_WORKTREE_PORCELAIN),
+        ok(REAL_WORKTREE_PORCELAIN),
+        ok(REAL_WORKTREE_PORCELAIN),
+        ok(),
+        ok(gtrPorcelain),
+      ]);
+      const deps = pointerFsDeps(false);
+      const result = await createGtrWorktree({
+        run: fake.run,
+        repoDir: REUSED_REPO,
+        branch: "contract-smoke-branch",
+        ghToken: "gh-token",
+        lockFs: createInMemoryLockFs(),
+        fs: deps.fs,
+      });
+      return { fake, deps, result };
+    };
+
+    test("never runs git inside the reused worktree", async () => {
+      const { fake } = await recreate();
+      expect(fake.calls.some((call) => call.options?.cwd === REUSED_WT)).toBe(
+        false,
+      );
+    });
+
+    test("deletes the worktree directory through the fs", async () => {
+      const { deps } = await recreate();
+      expect(deps.removed).toEqual([REUSED_WT]);
+    });
+
+    test("prunes from repoDir", async () => {
+      const { fake } = await recreate();
+      expect(
+        fake.calls.find((call) => call.argv.includes("prune"))?.options?.cwd,
+      ).toBe(REUSED_REPO);
+    });
+
+    test("recreates the worktree with git gtr new", async () => {
+      const { fake } = await recreate();
+      expect(fake.calls.some((call) => call.argv.includes("gtr"))).toBe(true);
+    });
+
+    test("returns the recreated worktree", async () => {
+      const { result } = await recreate();
+      expect(result.hookStatus).toBe("none");
     });
   });
 
