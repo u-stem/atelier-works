@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { SECRETS_NOT_PUSHED_REASON } from "../../f/factory/lib/implement_finish_support.ts";
 import {
+  claudeText,
   needsHumanBaseReason,
   selectImplementNextAction,
   transitionResult,
@@ -78,6 +79,16 @@ describe("selectImplementNextAction", () => {
     ).toBe(
       "worktreeの差分を確認し、秘密情報を取り除いてから人が対応してください",
     );
+  });
+});
+
+describe("claudeText", () => {
+  test("masks a secret Claude wrote", () => {
+    expect(claudeText(`token ghp_${"a".repeat(36)}`)).toBe("token ***");
+  });
+
+  test("normalizes the Japanese spacing", () => {
+    expect(claudeText("3 件を追加")).toBe("3件を追加");
   });
 });
 

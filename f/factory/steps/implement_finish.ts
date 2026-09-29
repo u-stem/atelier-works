@@ -10,11 +10,12 @@
 // `final_status` is the status actually reached — null when a CAS found
 // the item moved on.
 //   open_pr: the worktree must still stage the tree the loop verified
-//     (decideVerifiedTree), then commit (Claude's subject/body, normalized,
-//     issue references neutralized — neutralizeIssueRefs)
-//     → push → create or update the PR → pr_url (right away, so a label
-//     failure leaves the PR recorded) → factory:review label → pr_open →
-//     pr_opened.
+//     (decideVerifiedTree), then commit (Claude's subject/body, normalized
+//     and secret-masked — claudeText — with issue references neutralized —
+//     neutralizeIssueRefs)
+//     → push → create the PR, or update an existing PR's title and body
+//     → pr_url (right away, so a label failure leaves the PR recorded) →
+//     factory:review label → pr_open → pr_opened (作成 or 更新).
 //     Nothing new to commit still opens / updates the PR when the branch
 //     is ahead of base_sha (earlier partial-progress commits); only a
 //     branch with nothing beyond the base ends needs_human
@@ -55,7 +56,7 @@ import {
   getViewer,
   gitIdentityForViewer,
   type PullRequestRef,
-  updatePullRequestBody,
+  updatePullRequest,
 } from "../lib/github.ts";
 import {
   buildPrOpenedEvent,
@@ -159,12 +160,24 @@ export function needsHumanBaseReason(
   return loopReason ?? prepareReason ?? "needs human attention";
 }
 
+/** Claude-written text (PR title, commit subject / body, summary, reviewer
+ * notes) before it leaves the worker: Japanese spacing normalized, then
+ * anything that looks like a secret masked. */
+export function claudeText(text: string): string {
+  return maskSecrets(normalizeJapaneseText(text));
+}
+
 function errorText(err: unknown): string {
   return maskSecrets(err instanceof Error ? err.message : String(err));
 }
 
 type PrAttempt =
-  | { readonly ok: true; readonly pr: PullRequestRef }
+  | {
+      readonly ok: true;
+      readonly pr: PullRequestRef;
+      /** false when an existing PR was updated. */
+      readonly created: boolean;
+    }
   | { readonly ok: false; readonly reason: string };
 
 export async function main(
@@ -490,14 +503,12 @@ export async function main(
       if (verified.kind === "stop")
         return { ok: false, reason: verified.reason };
       const subject = neutralizeIssueRefs(
-        normalizeJapaneseText(output.commit_subject).trim(),
+        claudeText(output.commit_subject).trim(),
       );
       const message = buildImplementCommitMessage(
         {
           commit_subject: subject,
-          commit_body: neutralizeIssueRefs(
-            normalizeJapaneseText(output.commit_body),
-          ),
+          commit_body: neutralizeIssueRefs(claudeText(output.commit_body)),
         },
         config.instance_name,
       );
@@ -515,11 +526,11 @@ export async function main(
         ctx.branch,
       );
       const body = buildImplementPrBody({
-        summary: normalizeJapaneseText(output.summary),
+        summary: claudeText(output.summary),
         requirementsMarkdown: ctx.requirements_markdown,
         checks,
         protectedChanges: loop.protected_changes,
-        notesForReviewer: output.notes_for_reviewer.map(normalizeJapaneseText),
+        notesForReviewer: output.notes_for_reviewer.map(claudeText),
         requirementsConsoleUrl: ctx.requirements_console_url,
         issueNumber: ctx.issue_number,
         changedPaths: loop.changed_paths,
@@ -534,7 +545,10 @@ export async function main(
           body,
         });
       } else {
-        await updatePullRequestBody(client, owner, repo, existing.number, body);
+        await updatePullRequest(client, owner, repo, existing.number, {
+          title: subject,
+          body,
+        });
         pr = existing;
       }
       // Recorded before the label so a label failure leaves the PR found.
@@ -553,7 +567,7 @@ export async function main(
         });
       }
       await addLabels(client, owner, repo, pr.number, [config.review_label]);
-      return { ok: true, pr };
+      return { ok: true, pr, created: existing === null };
     } catch (err) {
       return { ok: false, reason: finishFailureReason(err) };
     }
@@ -576,6 +590,7 @@ export async function main(
         pr: opened.pr,
         loop: loop_result,
         checks: loop_result.checks,
+        created: opened.created,
       }),
     );
   }

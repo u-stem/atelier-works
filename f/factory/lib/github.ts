@@ -2275,6 +2275,32 @@ export async function findOpenPullRequestByHead(
   return { number: first.number, htmlUrl: first.html_url };
 }
 
+export type PullRequestUpdate = {
+  readonly title?: string;
+  readonly body?: string;
+};
+
+/** `PATCH /repos/{owner}/{repo}/pulls/{number}` with only the given fields
+ * (`title` and / or `body`). */
+export async function updatePullRequest(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  number: number,
+  update: PullRequestUpdate,
+): Promise<void> {
+  validateOwnerRepo(owner, repo);
+  const fields: Record<string, string> = {};
+  if (update.title !== undefined) fields.title = update.title;
+  if (update.body !== undefined) fields.body = update.body;
+  const response = await callGhApi(
+    client,
+    `repos/${owner}/${repo}/pulls/${number}`,
+    { method: "PATCH", body: fields },
+  );
+  ensureSuccess(response, `PATCH pr ${owner}/${repo}#${number}`);
+}
+
 /** `PATCH /repos/{owner}/{repo}/pulls/{number}` with only `body`. */
 export async function updatePullRequestBody(
   client: GhClient,
@@ -2283,11 +2309,5 @@ export async function updatePullRequestBody(
   number: number,
   body: string,
 ): Promise<void> {
-  validateOwnerRepo(owner, repo);
-  const response = await callGhApi(
-    client,
-    `repos/${owner}/${repo}/pulls/${number}`,
-    { method: "PATCH", body: { body } },
-  );
-  ensureSuccess(response, `PATCH pr body ${owner}/${repo}#${number}`);
+  await updatePullRequest(client, owner, repo, number, { body });
 }

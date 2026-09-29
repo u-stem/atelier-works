@@ -288,6 +288,8 @@ export type PrOpenedEventInput = {
     "protected_changes" | "rounds" | "total_cost_usd" | "diff_stat"
   >;
   readonly checks: ImplementCheckSummary;
+  /** false when an existing PR was updated instead of created. */
+  readonly created: boolean;
 };
 
 export function buildPrOpenedEvent(
@@ -308,5 +310,6 @@ export function buildPrOpenedEvent(
     total_cost_usd: input.loop.total_cost_usd,
     diff_stat: input.loop.diff_stat,
     next_action: prOpenedNextAction(input.loop.protected_changes.length > 0),
+    created: input.created,
   };
 }

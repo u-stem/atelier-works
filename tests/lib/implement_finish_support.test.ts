@@ -503,6 +503,7 @@ describe("buildPrOpenedEvent", () => {
       diff_stat: { files: 1, added: 3, deleted: 1 },
     },
     checks: { kind: "ran", results: [] },
+    created: false,
   });
 
   test("is a pr_opened event", () => {
@@ -511,6 +512,10 @@ describe("buildPrOpenedEvent", () => {
 
   test("carries the PR number", () => {
     expect(event.pr_number).toBe(12);
+  });
+
+  test("carries whether the PR was created", () => {
+    expect(event.created).toBe(false);
   });
 
   test("carries the PR URL", () => {

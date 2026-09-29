@@ -166,6 +166,8 @@ export type NotifyEvent =
       total_cost_usd: number;
       diff_stat: ImplementDiffStat | null;
       next_action: string;
+      /** false when an existing PR was updated (title / body) instead. */
+      created: boolean;
     };
 
 function repoField(owner: string, repo: string): DiscordEmbedField {
@@ -378,9 +380,10 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
         event.diff_stat === null
           ? "(不明)"
           : `${String(event.diff_stat.files)}ファイル(+${String(event.diff_stat.added)} / -${String(event.diff_stat.deleted)})`;
+      const verb = event.created ? "作成" : "更新";
       return {
-        title: `PR 作成: #${String(event.pr_number)}(Issue #${String(event.issue_number)})`,
-        description: `実装をpushしてPRを作成しました。${checksText}`,
+        title: `PR ${verb}: #${String(event.pr_number)}(Issue #${String(event.issue_number)})`,
+        description: `実装をpushしてPRを${verb}しました。${checksText}`,
         url: event.pr_url,
         fields: [
           { name: "次の操作", value: event.next_action },

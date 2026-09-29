@@ -361,11 +361,24 @@ describe("buildEmbed", () => {
     total_cost_usd: 3.456,
     diff_stat: { files: 3, added: 120, deleted: 8 },
     next_action: "PRをレビューし、問題なければマージしてください",
+    created: true,
   };
 
   test("names the PR and the parent issue in the pr_opened title", () => {
     const embed = buildEmbed(PR_OPENED_EVENT);
     expect(embed.title).toBe("PR 作成: #9(Issue #42)");
+  });
+
+  test("says the PR was updated in the title of an existing PR", () => {
+    const embed = buildEmbed({ ...PR_OPENED_EVENT, created: false });
+    expect(embed.title).toBe("PR 更新: #9(Issue #42)");
+  });
+
+  test("says the PR was updated in the description of an existing PR", () => {
+    const embed = buildEmbed({ ...PR_OPENED_EVENT, created: false });
+    expect(embed.description).toBe(
+      "実装をpushしてPRを更新しました。検査: 合格",
+    );
   });
 
   test("links the pr_opened embed to the PR", () => {
