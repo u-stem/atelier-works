@@ -1,0 +1,14 @@
+summary: '[SF-3-4/1] 作業領域の準備'
+description: 実装を始める前の確認と準備を行うステップです。作業項目の状態・日次予算・対象リポジトリ・Issueの状態・承認済みの要件定義を確認したうえで、実装用のブランチとworktreeを用意し、空のブランチをpushします。
+lock: '!inline f/factory/steps/implement_prepare.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties:
+    work_item_id:
+      type: number
+      description: 実装する作業項目のID。
+      default: null
+  required:
+    - work_item_id
