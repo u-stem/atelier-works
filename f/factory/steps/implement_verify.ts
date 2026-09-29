@@ -155,6 +155,7 @@ export async function main(
           runGitleaksOnWorktree({
             run: runCommand,
             worktreeDir,
+            baseSha: context.base_sha,
             timeoutMs: GITLEAKS_TIMEOUT_MS,
           }),
         removeIgnoredFiles: () =>

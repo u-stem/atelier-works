@@ -13,6 +13,7 @@ import {
   currentRemoteHeadSha,
   deleteLocalBranch,
   deleteRemoteBranch,
+  dropRemovedDiffLines,
   ensureEmptyDir,
   ensureFactoryClone,
   ensureRepo,
@@ -23,6 +24,7 @@ import {
   isCappedOutput,
   type LockFs,
   listWorktrees,
+  mapDiffLineToFile,
   mergeBaseSha,
   omittedMarker,
   parseNumstatTotals,
@@ -2566,16 +2568,105 @@ describe("worktreeFingerprint", () => {
   });
 });
 
+describe("mapDiffLineToFile", () => {
+  const DIFF = [
+    "diff --git a/src/a.ts b/src/a.ts",
+    "--- a/src/a.ts",
+    "+++ b/src/a.ts",
+    "@@ -1 +1 @@",
+    "+const a = 1;",
+    "diff --git a/src/b.ts b/src/b.ts",
+    "new file mode 100644",
+    "--- /dev/null",
+    "+++ b/src/b.ts",
+    "@@ -0,0 +1 @@",
+    "+const b = 2;",
+    "diff --git a/old.txt b/old.txt",
+    "deleted file mode 100644",
+    "--- a/old.txt",
+    "+++ /dev/null",
+    "@@ -1 +0,0 @@",
+  ].join("\n");
+
+  test("maps a line to the first file", () => {
+    expect(mapDiffLineToFile(DIFF, 5)).toBe("src/a.ts");
+  });
+
+  test("maps a line to the second file", () => {
+    expect(mapDiffLineToFile(DIFF, 11)).toBe("src/b.ts");
+  });
+
+  test("returns null for a line before any header", () => {
+    expect(mapDiffLineToFile(`note\n${DIFF}`, 1)).toBeNull();
+  });
+
+  test("never names /dev/null for a deleted file", () => {
+    expect(mapDiffLineToFile(DIFF, 16)).toBeNull();
+  });
+
+  test("does not take an added line that looks like a header for one", () => {
+    const diff = [
+      "diff --git a/x.md b/x.md",
+      "--- a/x.md",
+      "+++ b/x.md",
+      "@@ -0,0 +1,2 @@",
+      "+++ b/fake.md",
+      "+secret",
+    ].join("\n");
+    expect(mapDiffLineToFile(diff, 6)).toBe("x.md");
+  });
+});
+
+describe("dropRemovedDiffLines", () => {
+  test("drops removed lines inside hunks and keeps headers and added lines", () => {
+    const diff = [
+      "diff --git a/x.md b/x.md",
+      "--- a/x.md",
+      "+++ b/x.md",
+      "@@ -1 +1 @@",
+      "-old secret",
+      "+new line",
+      "--- not a header, a removed line starting with --",
+    ].join("\n");
+    expect(dropRemovedDiffLines(diff)).toBe(
+      [
+        "diff --git a/x.md b/x.md",
+        "--- a/x.md",
+        "+++ b/x.md",
+        "@@ -1 +1 @@",
+        "+new line",
+      ].join("\n"),
+    );
+  });
+});
+
 describe("formatGitleaksReport", () => {
-  test("lists rule, file and line per finding", () => {
+  const DIFF = [
+    "diff --git a/a.txt b/a.txt",
+    "--- a/a.txt",
+    "+++ b/a.txt",
+    "@@ -0,0 +1 @@",
+    "+token",
+  ].join("\n");
+
+  test("lists the rule and the file mapped from the diff line per finding", () => {
     const report = JSON.stringify([
-      { RuleID: "github-pat", File: "a.txt", StartLine: 3, Secret: "REDACTED" },
+      { RuleID: "github-pat", File: "", StartLine: 5, Secret: "REDACTED" },
     ]);
-    expect(formatGitleaksReport(report)).toBe("- github-pat: a.txt:3");
+    expect(formatGitleaksReport(report, DIFF)).toBe("- github-pat: a.txt");
+  });
+
+  test("says so when the line maps to no file", () => {
+    const report = JSON.stringify([
+      { RuleID: "github-pat", File: "", StartLine: 1, Secret: "REDACTED" },
+    ]);
+    expect(formatGitleaksReport(report, DIFF)).toBe(
+      "- github-pat: (unknown file)",
+    );
   });
 
   test("returns null for output that is not a JSON array", () => {
-    expect(formatGitleaksReport("Error: unknown flag")).toBeNull();
+    expect(formatGitleaksReport("Error: unknown flag", DIFF)).toBeNull();
   });
 });
 
@@ -2595,11 +2686,19 @@ describe("runGitleaksOnWorktree", () => {
       }),
     };
   }
+  const DIFF = [
+    "diff --git a/a.txt b/a.txt",
+    "--- a/a.txt",
+    "+++ b/a.txt",
+    "@@ -1,2 +1,2 @@",
+    "-removed",
+    "+token",
+  ].join("\n");
   const LEAK = JSON.stringify([
     {
       RuleID: "github-pat",
-      File: "a.txt",
-      StartLine: 3,
+      File: "",
+      StartLine: 5,
       Match: "REDACTED",
       Secret: "REDACTED",
     },
@@ -2617,29 +2716,77 @@ describe("runGitleaksOnWorktree", () => {
     runGitleaksOnWorktree({
       run: fake.run,
       worktreeDir: "/wt",
+      baseSha: BASE_SHA,
       timeoutMs: 1000,
       createConfigDir: dir.factory,
     });
 
   test("reports ok on exit 0", async () => {
-    expect((await scan(createFakeCommandRunner([ok(), ok("[]")]))).ok).toBe(
-      true,
-    );
+    expect(
+      (await scan(createFakeCommandRunner([ok(), ok(DIFF), ok("[]")]))).ok,
+    ).toBe(true);
   });
 
   test("stages everything before scanning", async () => {
-    const fake = createFakeCommandRunner([ok(), ok("[]")]);
+    const fake = createFakeCommandRunner([ok(), ok(DIFF), ok("[]")]);
     await scan(fake);
     expect(fake.calls[0]?.argv.slice(-2)).toEqual(["add", "-A"]);
   });
 
-  test("scans staged changes with the forced default config and the worktree as positional argument", async () => {
-    const fake = createFakeCommandRunner([ok(), ok("[]")]);
+  test("diffs the index against the base sha as text, without drivers or context", async () => {
+    const fake = createFakeCommandRunner([ok(), ok(DIFF), ok("[]")]);
     await scan(fake);
-    expect(fake.calls[1]?.argv).toEqual([
-      "gitleaks",
+    expect(fake.calls[1]?.argv.slice(7)).toEqual([
+      "diff",
+      "--cached",
+      "--text",
+      "--no-ext-diff",
+      "--no-textconv",
+      "--no-color",
+      "--src-prefix=a/",
+      "--dst-prefix=b/",
+      "-U0",
+      BASE_SHA,
+      "--",
+    ]);
+  });
+
+  test("diffs with the hardening flags", async () => {
+    const fake = createFakeCommandRunner([ok(), ok(DIFF), ok("[]")]);
+    await scan(fake);
+    expect(fake.calls[1]?.argv.slice(0, 3)).toEqual([
       "git",
-      "--staged",
+      "-c",
+      "core.hooksPath=/dev/null",
+    ]);
+  });
+
+  test("caps the diff output", async () => {
+    const fake = createFakeCommandRunner([ok(), ok(DIFF), ok("[]")]);
+    await scan(fake);
+    expect(fake.calls[1]?.options?.maxOutputBytes).toBeGreaterThan(0);
+  });
+
+  test("throws when the diff hit the output cap", async () => {
+    await expect(
+      scan(
+        createFakeCommandRunner([ok(), ok(`+a${omittedMarker(10)}`), ok("[]")]),
+      ),
+    ).rejects.toThrow(/diff exceeded the scan cap/);
+  });
+
+  test("throws when the diff fails", async () => {
+    await expect(
+      scan(createFakeCommandRunner([ok(), fail("fatal: bad object")])),
+    ).rejects.toThrow(/git diff --cached failed/);
+  });
+
+  test("scans stdin with the forced default config and no repository ignore file", async () => {
+    const fake = createFakeCommandRunner([ok(), ok(DIFF), ok("[]")]);
+    await scan(fake);
+    expect(fake.calls[2]?.argv).toEqual([
+      "gitleaks",
+      "stdin",
       "--redact",
       "--no-banner",
       "--no-color",
@@ -2656,43 +2803,75 @@ describe("runGitleaksOnWorktree", () => {
       "--gitleaks-ignore-path",
       "/tmp/fake-gitleaks",
       "--ignore-gitleaks-allow",
-      "/wt",
     ]);
   });
 
-  test("returns the findings (never the matched text) on exit 1", async () => {
+  test("feeds the diff without its removed lines on stdin", async () => {
+    const fake = createFakeCommandRunner([ok(), ok(DIFF), ok("[]")]);
+    await scan(fake);
+    expect(fake.calls[2]?.options?.stdin).toBe(
+      [
+        "diff --git a/a.txt b/a.txt",
+        "--- a/a.txt",
+        "+++ b/a.txt",
+        "@@ -1,2 +1,2 @@",
+        "+token",
+      ].join("\n"),
+    );
+  });
+
+  test("runs gitleaks in the private temp dir, not the worktree", async () => {
+    const fake = createFakeCommandRunner([ok(), ok(DIFF), ok("[]")]);
+    await scan(fake);
+    expect(fake.calls[2]?.options?.cwd).toBe("/tmp/fake-gitleaks");
+  });
+
+  test("returns the findings mapped to files (never the matched text) on exit 1", async () => {
     expect(
-      (await scan(createFakeCommandRunner([ok(), exit(LEAK, 1)]))).output,
-    ).toBe("- github-pat: a.txt:3");
+      (await scan(createFakeCommandRunner([ok(), ok(DIFF), exit(LEAK, 1)])))
+        .output,
+    ).toBe("- github-pat: a.txt");
   });
 
   test("reports not ok on exit 1", async () => {
     expect(
-      (await scan(createFakeCommandRunner([ok(), exit(LEAK, 1)]))).ok,
+      (await scan(createFakeCommandRunner([ok(), ok(DIFF), exit(LEAK, 1)]))).ok,
     ).toBe(false);
   });
 
   test("throws when the report hit the output cap", async () => {
     await expect(
-      scan(createFakeCommandRunner([ok(), exit(`[${omittedMarker(10)}]`, 1)])),
+      scan(
+        createFakeCommandRunner([
+          ok(),
+          ok(DIFF),
+          exit(`[${omittedMarker(10)}]`, 1),
+        ]),
+      ),
     ).rejects.toThrow(/exceeded the output cap/);
   });
 
   test("throws on exit 1 without a JSON report", async () => {
     await expect(
-      scan(createFakeCommandRunner([ok(), fail("Error: boom", 1)])),
+      scan(createFakeCommandRunner([ok(), ok(DIFF), fail("Error: boom", 1)])),
     ).rejects.toThrow(/gitleaks failed/);
   });
 
   test("throws on any other exit code (e.g. an unknown flag, 126)", async () => {
     await expect(
-      scan(createFakeCommandRunner([ok(), fail("Error: unknown flag", 126)])),
+      scan(
+        createFakeCommandRunner([
+          ok(),
+          ok(DIFF),
+          fail("Error: unknown flag", 126),
+        ]),
+      ),
     ).rejects.toThrow(/exit 126/);
   });
 
   test("removes the config dir afterwards", async () => {
     const dir = configDir();
-    await scan(createFakeCommandRunner([ok(), ok("[]")]), dir);
+    await scan(createFakeCommandRunner([ok(), ok(DIFF), ok("[]")]), dir);
     expect(dir.state.cleaned).toBe(1);
   });
 });

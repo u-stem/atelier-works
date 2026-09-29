@@ -282,6 +282,7 @@ export async function main(
       runGitleaksOnWorktree({
         run: runCommand,
         worktreeDir: ctx.worktree_dir,
+        baseSha: ctx.base_sha,
         timeoutMs: GITLEAKS_TIMEOUT_MS,
       }),
     commitAndPush: async () =>

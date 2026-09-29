@@ -2271,13 +2271,17 @@ const GITLEAKS_CONFIG_FILE = "gitleaks.toml";
 /** gitleaks' built-in rules with nothing on top, forced with `--config` so a
  * `.gitleaks.toml` in the target repo (possibly written by Claude) cannot
  * allowlist anything — and a malformed one cannot abort the scan. The same
- * private dir is the `--gitleaks-ignore-path`, so a repo `.gitleaksignore`
- * is not read, and `--ignore-gitleaks-allow` voids inline `gitleaks:allow`
- * comments (design §3: the scan is independent of the repo's settings). */
+ * private dir is the `--gitleaks-ignore-path` (and the scan's cwd), so a
+ * repo `.gitleaksignore` is not read, and `--ignore-gitleaks-allow` voids
+ * inline `gitleaks:allow` comments (design §3: the scan is independent of
+ * the repo's settings). */
 export const GITLEAKS_DEFAULT_ONLY_CONFIG = "[extend]\nuseDefault = true\n";
 
 const GITLEAKS_LEAKS_EXIT_CODE = 1;
 const GITLEAKS_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
+/** Ceiling on the staged diff fed to gitleaks. A diff cut by the cap would
+ * leave its middle unscanned, so hitting it fails the scan. */
+const GITLEAKS_MAX_DIFF_BYTES = 32 * 1024 * 1024;
 
 const defaultCreateGitleaksConfigDir = async (): Promise<GitleaksConfigDir> => {
   const dir = await mkdtemp(join(tmpdir(), "factory-gitleaks-"));
@@ -2316,10 +2320,79 @@ function isGitleaksFinding(value: unknown): value is GitleaksFinding {
   );
 }
 
-/** One `- <rule>: <file>:<line>` line per finding of a gitleaks JSON report
+/** The new-side path of a `+++ ` file header line: the path for
+ * `+++ b/<path>` (or git's quoted `+++ "b/<path>"`), null for `+++
+ * /dev/null` (a deletion), undefined for any other line. */
+function newPathFromHeader(text: string): string | null | undefined {
+  if (text === "+++ /dev/null") return null;
+  if (text.startsWith("+++ b/")) return text.slice("+++ b/".length);
+  if (text.startsWith('+++ "b/') && text.endsWith('"'))
+    return text.slice('+++ "b/'.length, -1);
+  return undefined;
+}
+
+/**
+ * The file a 1-based `line` of a `git diff` text belongs to: the path of
+ * the nearest preceding `+++ b/<path>` header of the same file section.
+ * Headers are only read between a `diff --git` line and its first `@@`
+ * hunk, so an added line whose content looks like a header (`+++ b/x`
+ * inside a hunk) is never taken for one. null before any header and in a
+ * deleted file's section (`+++ /dev/null`). gitleaks' stdin findings carry
+ * no file name, only this line number.
+ */
+export function mapDiffLineToFile(
+  diffText: string,
+  line: number,
+): string | null {
+  const lines = diffText.split("\n");
+  let file: string | null = null;
+  let inHeader = false;
+  for (const text of lines.slice(0, Math.max(0, line))) {
+    if (text.startsWith("diff --git ")) {
+      inHeader = true;
+      file = null;
+      continue;
+    }
+    if (!inHeader) continue;
+    if (text.startsWith("@@")) {
+      inHeader = false;
+      continue;
+    }
+    const path = newPathFromHeader(text);
+    if (path !== undefined) file = path;
+  }
+  return file;
+}
+
+/** `diffText` without the removed (`-`) lines of its hunks — the scan
+ * checks what the branch adds, as `gitleaks git` did; a removed line
+ * already exists in the base. File headers (`--- a/<path>`) are kept: they
+ * are outside hunks. */
+export function dropRemovedDiffLines(diffText: string): string {
+  let inHunk = false;
+  const kept: string[] = [];
+  for (const text of diffText.split("\n")) {
+    if (text.startsWith("diff --git ")) {
+      inHunk = false;
+    } else if (!inHunk && text.startsWith("@@")) {
+      inHunk = true;
+    } else if (inHunk && text.startsWith("-")) {
+      continue;
+    }
+    kept.push(text);
+  }
+  return kept.join("\n");
+}
+
+/** One `- <rule>: <file>` line per finding of a gitleaks stdin JSON report,
+ * the file mapped from the finding's line in `diffText` (mapDiffLineToFile;
+ * the line within the diff means nothing to a reader, so it is not shown)
  * — never the matched text, even redacted (design §13). `null` when
  * `stdout` is not a JSON array. */
-export function formatGitleaksReport(stdout: string): string | null {
+export function formatGitleaksReport(
+  stdout: string,
+  diffText: string,
+): string | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(stdout);
@@ -2331,7 +2404,7 @@ export function formatGitleaksReport(stdout: string): string | null {
     .filter(isGitleaksFinding)
     .map(
       (finding) =>
-        `- ${finding.RuleID}: ${finding.File}:${String(finding.StartLine)}`,
+        `- ${finding.RuleID}: ${mapDiffLineToFile(diffText, finding.StartLine) ?? "(unknown file)"}`,
     );
   const unexpected = parsed.length - lines.length;
   if (unexpected > 0)
@@ -2342,22 +2415,58 @@ export function formatGitleaksReport(stdout: string): string | null {
 }
 
 /**
- * The implement flow's fixed secret scan (工程3 design §3, §14; flags and
- * exit codes measured in the worker image, 8.30.1): stages every change
- * (unstaged changes are not scanned), then `gitleaks git --staged
- * --redact ... <worktreeDir>` (the repo is the positional argument, not
- * the cwd). Exit 0 → `ok: true`; exit 1 with a complete JSON report →
- * `ok: false` with one line per finding (masked); a report cut by the
- * output cap, exit 1 without JSON, or any other exit (an unknown flag is
- * 126), a timeout — throws, never read as "no leaks".
+ * The implement flow's fixed secret scan (工程3 design §3, §14; gitleaks
+ * 8.30.1 in the worker image): stages every change, takes the staged diff
+ * against `baseSha` (`git diff --cached --text --no-ext-diff --no-textconv
+ * -U0`, so `.gitattributes` binary / `-diff` / textconv settings cannot hide
+ * content, and the whole branch since its merge-base is scanned every
+ * round), drops its removed lines, and pipes it into `gitleaks stdin`
+ * running in the private temp dir — nothing in the repository (ignore
+ * files, attributes, config) reaches gitleaks. Exit 0 → `ok: true`; exit 1
+ * with a complete JSON report → `ok: false` with one line per finding
+ * (masked); a diff or report cut by its output cap, exit 1 without JSON, or
+ * any other exit (an unknown flag is 126), a timeout — throws, never read
+ * as "no leaks".
  */
 export async function runGitleaksOnWorktree(
   opts: WorktreeGitOptions & {
+    readonly baseSha: string;
     readonly timeoutMs: number;
     readonly createConfigDir?: () => Promise<GitleaksConfigDir>;
   },
 ): Promise<GitleaksResult> {
+  assertSha(opts.baseSha);
   await stageAll(opts);
+  const diff = await opts.run(
+    buildGitArgv([
+      "diff",
+      "--cached",
+      "--text",
+      "--no-ext-diff",
+      "--no-textconv",
+      "--no-color",
+      "--src-prefix=a/",
+      "--dst-prefix=b/",
+      "-U0",
+      opts.baseSha,
+      "--",
+    ]),
+    {
+      cwd: opts.worktreeDir,
+      env: localGitEnv(opts.home, opts.path),
+      timeoutMs: opts.timeoutMs,
+      maxOutputBytes: GITLEAKS_MAX_DIFF_BYTES,
+    },
+  );
+  if (diff.timedOut)
+    throw new Error(
+      `git diff --cached timed out after ${String(opts.timeoutMs)}ms`,
+    );
+  if (diff.exitCode !== 0)
+    throw gitError(`git diff --cached failed in ${opts.worktreeDir}`, diff);
+  if (isCappedOutput(diff.stdout))
+    throw new Error("the staged diff exceeded the scan cap");
+  const scanned = dropRemovedDiffLines(diff.stdout);
   const configDir = await (
     opts.createConfigDir ?? defaultCreateGitleaksConfigDir
   )();
@@ -2365,8 +2474,7 @@ export async function runGitleaksOnWorktree(
     const result = await opts.run(
       [
         "gitleaks",
-        "git",
-        "--staged",
+        "stdin",
         "--redact",
         "--no-banner",
         "--no-color",
@@ -2383,11 +2491,11 @@ export async function runGitleaksOnWorktree(
         "--gitleaks-ignore-path",
         configDir.path,
         "--ignore-gitleaks-allow",
-        opts.worktreeDir,
       ],
       {
-        cwd: opts.worktreeDir,
+        cwd: configDir.path,
         env: localGitEnv(opts.home, opts.path),
+        stdin: scanned,
         timeoutMs: opts.timeoutMs,
         maxOutputBytes: GITLEAKS_MAX_OUTPUT_BYTES,
       },
@@ -2398,7 +2506,7 @@ export async function runGitleaksOnWorktree(
     if (result.exitCode === GITLEAKS_LEAKS_EXIT_CODE) {
       if (isCappedOutput(result.stdout))
         throw new Error("gitleaks report exceeded the output cap");
-      const report = formatGitleaksReport(result.stdout);
+      const report = formatGitleaksReport(result.stdout, scanned);
       if (report !== null) {
         return {
           ok: false,
