@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { SECRETS_NOT_PUSHED_REASON } from "../../f/factory/lib/implement_finish_support.ts";
 import {
   needsHumanBaseReason,
@@ -88,5 +90,19 @@ describe("transitionResult", () => {
 
   test("reports no status when the CAS did not move the work item", () => {
     expect(transitionResult(false, "pr_open", null).final_status).toBeNull();
+  });
+});
+
+describe("implement_finish open_pr ordering", () => {
+  const source = readFileSync(
+    join(import.meta.dir, "../../f/factory/steps/implement_finish.ts"),
+    "utf8",
+  );
+
+  // A label failure must not lose the PR: pr_url is recorded first.
+  test("records pr_url before adding the review label", () => {
+    expect(source.indexOf("await setWorkItemPrUrl(")).toBeLessThan(
+      source.indexOf("await addLabels("),
+    );
   });
 });

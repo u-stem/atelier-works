@@ -11,8 +11,9 @@
 //   open_pr: the worktree must still stage the tree the loop verified
 //     (decideVerifiedTree), then commit (Claude's subject/body, normalized,
 //     issue references neutralized — neutralizeIssueRefs)
-//     → push → create or update the PR → factory:review label → pr_url →
-//     pr_open → pr_opened.
+//     → push → create or update the PR → pr_url (right away, so a label
+//     failure leaves the PR recorded) → factory:review label → pr_open →
+//     pr_opened.
 //     Nothing new to commit still opens / updates the PR when the branch
 //     is ahead of base_sha (earlier partial-progress commits); only a
 //     branch with nothing beyond the base ends needs_human
@@ -506,6 +507,8 @@ export async function main(
         await updatePullRequestBody(client, owner, repo, existing.number, body);
         pr = existing;
       }
+      // Recorded before the label so a label failure leaves the PR found.
+      await setWorkItemPrUrl(work_item_id, pr.htmlUrl);
       try {
         await ensureLabel(
           client,
@@ -520,7 +523,6 @@ export async function main(
         });
       }
       await addLabels(client, owner, repo, pr.number, [config.review_label]);
-      await setWorkItemPrUrl(work_item_id, pr.htmlUrl);
       return { ok: true, pr };
     } catch (err) {
       return { ok: false, reason: finishFailureReason(err) };
