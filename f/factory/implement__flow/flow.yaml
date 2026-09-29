@@ -52,7 +52,7 @@ value:
             expr: results.implement_prepare.context
           loop_result:
             type: javascript
-            expr: results.implement_verify ?? null
+            expr: 'results.implement_prepare.outcome === "proceed" ? results.implement_verify : null'
           prepare_outcome:
             type: javascript
             expr: results.implement_prepare.outcome
