@@ -1,4 +1,14 @@
 import { describe, expect, test } from "bun:test";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type {
   ClaudeRunResult,
   RunClaudeResult,
@@ -7,6 +17,8 @@ import {
   buildImplementClaudeOptions,
   type ChangeInspection,
   type DocDirCopyDeps,
+  type DocEntryFs,
+  defaultDocDirCopyDeps,
   type FixRoundRequest,
   GITLEAKS_CHECK_NAME,
   type ImplementClaudeRound,
@@ -15,6 +27,7 @@ import {
   type ImplementLoopDeps,
   type ImplementLoopInput,
   implementPromptInput,
+  isCopyableDocEntry,
   type LoopCheckResult,
   NO_CHANGES_CHECK_NAME,
   prepareImplementWorktree,
@@ -304,6 +317,80 @@ describe("withReadOnlyDocDirCopy", () => {
     const h = copyDeps();
     await withReadOnlyDocDirCopy(null, async () => "x", h.deps);
     expect(h.copied).toEqual([]);
+  });
+});
+
+describe("isCopyableDocEntry", () => {
+  type Kind = "file" | "dir" | "symlink" | "other";
+  const statOf = (kind: Kind) => ({
+    isFile: () => kind === "file",
+    isDirectory: () => kind === "dir",
+    isSymbolicLink: () => kind === "symlink",
+  });
+  function fs(own: Kind, target: Kind | null = null): DocEntryFs {
+    return {
+      lstat: async () => statOf(own),
+      stat: async () => {
+        if (target === null) throw new Error("ENOENT");
+        return statOf(target);
+      },
+    };
+  }
+
+  test("copies a regular file", async () => {
+    expect(await isCopyableDocEntry("/d/a.md", fs("file"))).toBe(true);
+  });
+
+  test("copies a directory", async () => {
+    expect(await isCopyableDocEntry("/d/sub", fs("dir"))).toBe(true);
+  });
+
+  test("copies a symlink to a regular file (materialized)", async () => {
+    expect(await isCopyableDocEntry("/d/l", fs("symlink", "file"))).toBe(true);
+  });
+
+  test("skips a symlink to a directory", async () => {
+    expect(await isCopyableDocEntry("/d/l", fs("symlink", "dir"))).toBe(false);
+  });
+
+  test("skips a dangling symlink", async () => {
+    expect(await isCopyableDocEntry("/d/l", fs("symlink", null))).toBe(false);
+  });
+
+  test("skips anything else (fifo, socket, device)", async () => {
+    expect(await isCopyableDocEntry("/d/fifo", fs("other"))).toBe(false);
+  });
+});
+
+describe("defaultDocDirCopyDeps.copyDir", () => {
+  function tree(): { source: string; destination: string } {
+    const base = mkdtempSync(join(tmpdir(), "doc-copy-test-"));
+    const source = join(base, "src");
+    mkdirSync(join(base, "outside"));
+    writeFileSync(join(base, "outside", "note.txt"), "outside");
+    mkdirSync(source);
+    writeFileSync(join(source, "requirements.md"), "# 要件定義");
+    symlinkSync(join(base, "outside", "note.txt"), join(source, "link.txt"));
+    symlinkSync(join(base, "outside"), join(source, "dirlink"));
+    return { source, destination: join(base, "dst") };
+  }
+
+  test("materializes a symlinked file as a regular file", async () => {
+    const { source, destination } = tree();
+    await defaultDocDirCopyDeps.copyDir(source, destination);
+    expect(lstatSync(join(destination, "link.txt")).isFile()).toBe(true);
+  });
+
+  test("does not copy a symlinked directory", async () => {
+    const { source, destination } = tree();
+    await defaultDocDirCopyDeps.copyDir(source, destination);
+    expect(existsSync(join(destination, "dirlink"))).toBe(false);
+  });
+
+  test("copies regular files", async () => {
+    const { source, destination } = tree();
+    await defaultDocDirCopyDeps.copyDir(source, destination);
+    expect(existsSync(join(destination, "requirements.md"))).toBe(true);
   });
 });
 
