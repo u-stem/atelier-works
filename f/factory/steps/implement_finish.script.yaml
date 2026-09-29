@@ -1,0 +1,35 @@
+summary: '[SF-3-4/4] コミット・push・PR作成'
+description: 実装結果を確定するステップです。検査に通っていれば変更をコミットしてpushし、PRを作成または更新して自動レビューのラベルを付けます。要件を満たせない場合は要件定義からやり直し、上限に達した場合などは秘密情報の検査に通った途中の変更をpushしたうえで対応が必要な状態(needs_human)にします。
+lock: '!inline f/factory/steps/implement_finish.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties:
+    context:
+      type: object
+      description: 準備ステップが用意した実装の前提情報(準備で止まった場合は空)。
+      default: null
+      format: resource-implement_context
+    loop_result:
+      type: object
+      description: 検証ループの結果(準備で止まった場合は空)。
+      default: null
+      format: resource-implement_loop_result
+    prepare_outcome:
+      type: string
+      description: 準備ステップの結果。
+      default: null
+      originalType: string
+    prepare_reason:
+      type: string
+      description: 準備ステップが止まった理由。
+      default: null
+      originalType: string
+    work_item_id:
+      type: number
+      description: 実装する作業項目のID。
+      default: null
+  required:
+    - work_item_id
+    - prepare_outcome
