@@ -87,6 +87,42 @@ describe("buildImplementContext", () => {
     expect(buildImplementContext(INPUT).is_factory_repo).toBe(false);
   });
 
+  test("marks the factory repo when factory_repo names the same repo", () => {
+    expect(
+      buildImplementContext({
+        ...INPUT,
+        config: {
+          ...INPUT.config,
+          factory_repo: "https://github.com/acme/widgets",
+        },
+      }).is_factory_repo,
+    ).toBe(true);
+  });
+
+  test("carries an existing PR's number", () => {
+    expect(
+      buildImplementContext({
+        ...INPUT,
+        existingPr: {
+          number: 9,
+          htmlUrl: "https://github.com/acme/widgets/pull/9",
+        },
+      }).existing_pr_number,
+    ).toBe(9);
+  });
+
+  test("carries an existing PR's url", () => {
+    expect(
+      buildImplementContext({
+        ...INPUT,
+        existingPr: {
+          number: 9,
+          htmlUrl: "https://github.com/acme/widgets/pull/9",
+        },
+      }).existing_pr_url,
+    ).toBe("https://github.com/acme/widgets/pull/9");
+  });
+
   test("carries the worktree's .git pointer", () => {
     expect(buildImplementContext(INPUT).worktree_git_pointer).toBe(
       "gitdir: /workspaces/acme/widgets/main/.git/worktrees/factory-issue-7-wi-3\n",
