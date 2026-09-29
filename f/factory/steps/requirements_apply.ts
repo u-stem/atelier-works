@@ -15,7 +15,9 @@
 // time, so there is nothing left to add/remove on any transition — status
 // lives solely in work_items.status; re-labeling the Issue is how a human
 // starts a brand-new cycle). The requirements worktree is always removed at
-// the end, regardless of which branch ran.
+// the end, regardless of which branch ran. After an approval, and only while
+// `implement_enabled` is on, it then starts the implement flow (工程3;
+// lib/implement_launch_support.ts's startImplement).
 //
 // The CAS (`updateStatusIfCurrent`) runs *before* any GitHub side effect
 // (the approved comment) in every branch — a failed GitHub call must never
@@ -35,6 +37,7 @@ import * as wmill from "windmill-client@1.817.0";
 import { buildConsoleUrl } from "../lib/approval_support.ts";
 import { loadConfig } from "../lib/config.ts";
 import {
+  addNotice,
   getApprovalRequest,
   getWorkItem,
   recordFailure,
@@ -43,6 +46,8 @@ import {
 } from "../lib/db.ts";
 import { notify } from "../lib/discord.ts";
 import { commentIssue, type GhClient, getViewer } from "../lib/github.ts";
+import { startImplement } from "../lib/implement_launch_support.ts";
+import { IMPLEMENT_FLOW_PATH } from "../lib/implement_loop.ts";
 import { type Logger, logger, maskSecrets } from "../lib/log.ts";
 import { type FactoryConfig, isNumber, type WorkItem } from "../lib/types.ts";
 import { removeWorktree, runCommand } from "../lib/workspace.ts";
@@ -56,6 +61,8 @@ export type RequirementsApplyOutcome =
 
 export type RequirementsApplyResult = {
   readonly outcome: RequirementsApplyOutcome;
+  /** Set on the approve branch: whether the implement flow was launched. */
+  readonly implement_started?: boolean;
 };
 
 /** Whether requirements_apply.ts should proceed at all: the work item must
@@ -226,7 +233,57 @@ async function run(
       console_url: consoleUrl,
     });
     await removeReqWorktree(workItem);
-    return { outcome: "approved" };
+    if (!config.implement_enabled)
+      return { outcome: "approved", implement_started: false };
+    const issueNumber = workItem.issue_number;
+    const launched = await startImplement({
+      casToImplementing: () =>
+        updateStatusIfCurrent(workItem.id, "approved", "implementing", null),
+      launchFlow: () =>
+        wmill.runFlowAsync(IMPLEMENT_FLOW_PATH, { work_item_id: workItem.id }),
+      recordFlowJobId: (jobId) => setFlowJobId(workItem.id, jobId),
+      moveToNeedsHuman: async (reason) => {
+        await updateStatusIfCurrent(
+          workItem.id,
+          "implementing",
+          "needs_human",
+          reason,
+        );
+      },
+      recordFailure: async (reason, step) => {
+        await recordFailure({
+          work_item_id: workItem.id,
+          flow_path: IMPLEMENT_FLOW_PATH,
+          job_id: process.env.WM_JOB_ID ?? "unknown",
+          step,
+          error: reason,
+        });
+      },
+      addNotice: async (reason) => {
+        await addNotice({
+          kind: "implement_launch_failed",
+          message: `${workItem.owner}/${workItem.repo}#${String(issueNumber)} (work item ${String(workItem.id)}): ${describeReason(reason)}`,
+        });
+      },
+      notifyNeedsHuman: (reason) =>
+        notifySafe(webhookUrl, {
+          kind: "needs_human",
+          instance_name: config.instance_name,
+          owner: workItem.owner,
+          repo: workItem.repo,
+          url: workItem.issue_url ?? "",
+          reason: describeReason(reason),
+          target: { kind: "issue", number: issueNumber },
+          next_action: nextActionFor(reason),
+        }),
+      log: (message, fields) =>
+        log.warn(message, { work_item_id: workItem.id, ...fields }),
+    });
+    return {
+      outcome: "approved",
+      implement_started:
+        launched === "started" || launched === "started_without_job_id",
+    };
   }
 
   // rejected
