@@ -2,9 +2,12 @@
 // implement_finish, §0b, §13): the single terminal step. Routes prepare's
 // stop or the verify loop's exit to the status transition and its side
 // effects, and never leaves the work item `implementing` on a git / GitHub
-// failure (every such failure becomes needs_human with its reason; a DB
-// failure throws and on_error_flow marks the item failed). `final_status`
-// is the status actually reached — null when a CAS found the item moved on.
+// failure: every git / GitHub failure — including the issue re-check —
+// becomes needs_human with its reason (the re-check first keeps the work of
+// a run that would open a PR or keep its work, shouldPreserveBeforeFailing).
+// DB failures throw and on_error_flow marks the item failed, except
+// setWorkItemPrUrl (caught, needs_human). `final_status` is the status
+// actually reached — null when a CAS found the item moved on.
 //   open_pr: the worktree must still stage the tree the loop verified
 //     (decideVerifiedTree), then commit (Claude's subject/body, normalized,
 //     issue references neutralized — neutralizeIssueRefs)
@@ -68,6 +71,7 @@ import {
   preserveWork,
   REVIEW_LABEL_STYLE,
   shouldDeleteBranchOnGap,
+  shouldPreserveBeforeFailing,
   shouldPushPartialWork,
 } from "../lib/implement_finish_support.ts";
 import {
@@ -263,12 +267,6 @@ export async function main(
 
   if (action.kind === "cancel") return cancel(prepare_reason ?? "issue closed");
 
-  if (context !== null) {
-    const issue = await getIssue(client, owner, repo, issueNumber);
-    if (issue.state !== "open")
-      return cancel("issue closed during implementation");
-  }
-
   const commitOptions = async (
     ctx: ImplementContext,
     message: string,
@@ -299,14 +297,42 @@ export async function main(
       commitAndPush(await commitOptions(ctx, IMPLEMENT_WIP_COMMIT_MESSAGE)),
   });
 
+  const hasPr =
+    (context !== null && context.existing_pr_number !== null) ||
+    recordedPrUrl !== null;
+
+  if (context !== null) {
+    let issueState: string;
+    try {
+      issueState = (await getIssue(client, owner, repo, issueNumber)).state;
+    } catch (err) {
+      let notes: string[] = [];
+      if (shouldPreserveBeforeFailing(action)) {
+        notes = hasPr
+          ? [PARTIAL_WORK_KEPT_LOCAL_REASON]
+          : await preserveWork(preserveWorkDeps(context));
+      }
+      const reason = [finishFailureReason(err), ...notes].join("; ");
+      return finalizeNeedsHuman(
+        reason,
+        selectImplementNextAction({
+          preserveWork: false,
+          outcome,
+          reason,
+          branch: context.branch,
+          notes,
+        }),
+      );
+    }
+    if (issueState !== "open")
+      return cancel("issue closed during implementation");
+  }
+
   if (action.kind === "needs_human") {
     const baseReason = needsHumanBaseReason(
       loop_result?.reason ?? null,
       prepare_reason,
     );
-    const hasPr =
-      (context !== null && context.existing_pr_number !== null) ||
-      recordedPrUrl !== null;
     let notes: string[] = [];
     if (context !== null && shouldPushPartialWork(action, hasPr)) {
       notes = await preserveWork(preserveWorkDeps(context));

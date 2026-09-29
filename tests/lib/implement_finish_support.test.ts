@@ -15,6 +15,7 @@ import {
   prOpenedNextAction,
   SECRETS_NOT_PUSHED_REASON,
   shouldDeleteBranchOnGap,
+  shouldPreserveBeforeFailing,
   shouldPushPartialWork,
   toDiscordChecks,
 } from "../../f/factory/lib/implement_finish_support.ts";
@@ -144,6 +145,38 @@ describe("shouldPushPartialWork", () => {
         false,
       ),
     ).toBe(false);
+  });
+});
+
+describe("shouldPreserveBeforeFailing", () => {
+  test("keeps the work of a run that would open a PR", () => {
+    expect(shouldPreserveBeforeFailing({ kind: "open_pr" })).toBe(true);
+  });
+
+  test("keeps the work of a guard stop that keeps work", () => {
+    expect(
+      shouldPreserveBeforeFailing({ kind: "needs_human", preserveWork: true }),
+    ).toBe(true);
+  });
+
+  test("keeps nothing for a stop whose work is not kept", () => {
+    expect(
+      shouldPreserveBeforeFailing({ kind: "needs_human", preserveWork: false }),
+    ).toBe(false);
+  });
+
+  test("keeps nothing for a requirements gap", () => {
+    expect(shouldPreserveBeforeFailing({ kind: "requirements_gap" })).toBe(
+      false,
+    );
+  });
+
+  test("keeps nothing for a cancel", () => {
+    expect(shouldPreserveBeforeFailing({ kind: "cancel" })).toBe(false);
+  });
+
+  test("keeps nothing for a noop", () => {
+    expect(shouldPreserveBeforeFailing({ kind: "noop" })).toBe(false);
   });
 });
 

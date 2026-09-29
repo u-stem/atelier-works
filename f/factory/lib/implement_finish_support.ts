@@ -125,6 +125,19 @@ export function shouldPushPartialWork(
 ): boolean {
   return action.kind === "needs_human" && action.preserveWork && !hasPr;
 }
+/** Whether a git / GitHub failure before the terminal action (the issue
+ * re-check) should first leave the run's work on the branch: a run that
+ * would open a PR, or a guard stop that keeps its work. A requirements gap,
+ * a cancel or a stop without kept work has nothing to preserve. The caller
+ * still applies the open-PR rule (shouldPushPartialWork). */
+export function shouldPreserveBeforeFailing(
+  action: ImplementFinishAction,
+): boolean {
+  return (
+    action.kind === "open_pr" ||
+    (action.kind === "needs_human" && action.preserveWork)
+  );
+}
 export const IMPLEMENT_FINISH_NO_OUTPUT_REASON =
   "implement finished without a final output";
 export const IMPLEMENT_NO_CHANGES_REASON = "implement produced no changes";
