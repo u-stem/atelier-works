@@ -32,6 +32,9 @@
 - 実装が`requirements_gap`を返した場合は自動で要件定義の作り直し(attempt+1)に戻り、再承認後に同じブランチ名で実装をやり直す(既にPRがあればそのPRを更新する)。
 - 設定値(既定): `implement_max_rounds`(5)、`implement_max_turns`(80)、`implement_max_budget_usd_per_run`(10)、`implement_timeout_sec`(3600)、`implement_max_changed_files`(60)、`implement_max_diff_lines`(3000)。1 Issueあたりの予算上限は`implement_max_rounds × implement_max_budget_usd_per_run`。差分の上限(`implement_max_changed_files` / `implement_max_diff_lines`)は、既存のPRを更新する場合も含めて、実装ブランチと既定ブランチの分岐点(merge-base)からの差分で測る。
 - 実行時間: 検証ループは最長で`implement_max_rounds × implement_timeout_sec`(既定5時間)と検査コマンドの時間がかかる。検査コマンドのタイムアウトは1コマンドごとに`implement_timeout_sec`である。Windmillのインスタンス設定`job_default_timeout`は未設定(2026-09-29確認)で、この長さでも打ち切られない。インスタンスに既定のタイムアウトを設定する場合は、この値より長くする。`cleanup_workspaces`は`claude_timeout_sec`と`implement_timeout_sec`の長い方に5分を足した時間を超えたheadless Claudeだけを孤児として停止する。
+- 実装フローは1回の実行で、worker(`NUM_WORKERS`の数だけある)の1つを数時間占有する。その間、他のflowが使えるworkerはその分減る。
+- `self_update`は実行中の実装フローを待たずに新しいstepを反映するため、`implement_prepare`と`implement_finish`の間に別のバージョンのstepが動くことがある。実装フローの実行中(`implementing`のwork itemがある間)はmainへのマージとデプロイを避ける。
+- `implement_enabled`を`true`にする前に、Issue #32、#33、#34を解決しておく。
 
 ## 通知
 
