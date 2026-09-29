@@ -724,18 +724,6 @@ export type VerifyWorktreeGitdirOptions = {
   readonly realpath?: (path: string) => Promise<string>;
 };
 
-/**
- * Before running git *inside* a worktree directory, confirm it's actually a
- * registered worktree of `repoDir` (per `git worktree list`), that its
- * `.git` file's `gitdir:` target — resolved with realpath, so neither `..`
- * nor a symlink can smuggle it elsewhere — is a direct child of
- * `realpath(<repoDir>/.git/worktrees)`, and that the admin dir's `gitdir`
- * back-pointer (the file `git worktree add` writes) names
- * `<realpath(dir)>/.git`. Throws otherwise — guards against operating on a
- * worktree directory whose `.git` file was redirected elsewhere (a
- * redirected gitdir brings its own `config`, e.g. a `filter.<x>.clean`
- * command the next `git add` would run).
- */
 /** The admin dir a worktree `.git` file names, read the way git reads it
  * (the bytes after exactly "gitdir: ", minus one trailing LF or CRLF) — but
  * only when the file is the canonical form `git worktree add` writes:
@@ -758,6 +746,18 @@ function parseCanonicalGitPointer(content: string): string | null {
   return path;
 }
 
+/**
+ * Before running git *inside* a worktree directory, confirm it's actually a
+ * registered worktree of `repoDir` (per `git worktree list`), that its
+ * `.git` file's `gitdir:` target — resolved with realpath, so neither `..`
+ * nor a symlink can smuggle it elsewhere — is a direct child of
+ * `realpath(<repoDir>/.git/worktrees)`, and that the admin dir's `gitdir`
+ * back-pointer (the file `git worktree add` writes) names
+ * `<realpath(dir)>/.git`. Throws otherwise — guards against operating on a
+ * worktree directory whose `.git` file was redirected elsewhere (a
+ * redirected gitdir brings its own `config`, e.g. a `filter.<x>.clean`
+ * command the next `git add` would run).
+ */
 export async function verifyWorktreeGitdir(
   opts: VerifyWorktreeGitdirOptions,
 ): Promise<void> {
