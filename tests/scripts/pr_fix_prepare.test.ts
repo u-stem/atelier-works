@@ -325,6 +325,12 @@ describe("describeReason (implement flow)", () => {
     );
   });
 
+  test("translates a worktree changed after verification", () => {
+    expect(describeReason("worktree changed after verification")).toBe(
+      "検証の後にworktreeが変更されました",
+    );
+  });
+
   test("translates a modified worktree .git pointer", () => {
     expect(describeReason("worktree git pointer was modified")).toBe(
       "worktreeのgitの参照先(.gitファイル)が書き換えられました",
@@ -354,6 +360,12 @@ describe("nextActionFor (implement flow)", () => {
   test("asks to clean the diff when secrets blocked the push", () => {
     expect(nextActionFor("secrets detected, changes not pushed")).toBe(
       "worktreeの差分を確認し、秘密情報を取り除いてから人が対応してください",
+    );
+  });
+
+  test("asks to check the check commands after a post-verification change", () => {
+    expect(nextActionFor("worktree changed after verification")).toBe(
+      "検査コマンドが追跡対象のファイルを書き換えていないか確認し、再実行してください",
     );
   });
 

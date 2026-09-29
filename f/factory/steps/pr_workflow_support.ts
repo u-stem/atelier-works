@@ -2622,6 +2622,12 @@ const REASON_RULES: readonly ReasonRule[] = [
       "worktreeの差分を確認し、秘密情報を取り除いてから人が対応してください",
   },
   {
+    pattern: /^worktree changed after verification$/,
+    describe: () => "検証の後にworktreeが変更されました",
+    nextAction: () =>
+      "検査コマンドが追跡対象のファイルを書き換えていないか確認し、再実行してください",
+  },
+  {
     pattern: /^worktree git pointer was modified$/,
     describe: () => "worktreeのgitの参照先(.gitファイル)が書き換えられました",
     nextAction: () =>

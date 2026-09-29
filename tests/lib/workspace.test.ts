@@ -43,6 +43,7 @@ import {
   resolveDefaultBranchName,
   runCommand,
   runGitleaksOnWorktree,
+  stagedTreeSha,
   verifyWorktreeGitdir,
   WorktreeGitPointerModifiedError,
   withCommitTrailers,
@@ -2500,6 +2501,21 @@ describe("removeIgnoredFiles", () => {
     await expect(
       removeIgnoredFiles({ run: fake.run, worktreeDir: "/wt" }),
     ).rejects.toThrow(/git clean -fdX failed/);
+  });
+});
+
+describe("stagedTreeSha", () => {
+  test("stages everything first", async () => {
+    const fake = createFakeCommandRunner([ok(), ok(`${TREE_SHA}\n`)]);
+    await stagedTreeSha({ run: fake.run, worktreeDir: "/wt" });
+    expect(fake.calls[0]?.argv.slice(-2)).toEqual(["add", "-A"]);
+  });
+
+  test("returns the staged tree sha", async () => {
+    const fake = createFakeCommandRunner([ok(), ok(`${TREE_SHA}\n`)]);
+    expect(await stagedTreeSha({ run: fake.run, worktreeDir: "/wt" })).toBe(
+      TREE_SHA,
+    );
   });
 });
 

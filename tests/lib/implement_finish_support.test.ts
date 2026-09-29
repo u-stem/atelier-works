@@ -4,6 +4,7 @@ import {
   decideAfterCommit,
   decideGapReroute,
   decideImplementFinishAction,
+  decideVerifiedTree,
   gapExhaustedReason,
   IMPLEMENT_NO_CHANGES_REASON,
   implementNeedsHumanNextAction,
@@ -280,6 +281,28 @@ describe("preserveWork", () => {
     expect(
       (await preserveWork(preserveDeps(CLEAN_SCAN, broken).deps))[0],
     ).toMatch(/^implement finish failed: /);
+  });
+});
+
+describe("decideVerifiedTree", () => {
+  test("proceeds when the worktree still has the verified tree", () => {
+    expect(decideVerifiedTree("c".repeat(40), "c".repeat(40))).toEqual({
+      kind: "proceed",
+    });
+  });
+
+  test("stops when the worktree changed after verification", () => {
+    expect(decideVerifiedTree("c".repeat(40), "d".repeat(40))).toEqual({
+      kind: "stop",
+      reason: "worktree changed after verification",
+    });
+  });
+
+  test("stops when no tree was verified", () => {
+    expect(decideVerifiedTree(null, "d".repeat(40))).toEqual({
+      kind: "stop",
+      reason: "worktree changed after verification",
+    });
   });
 });
 

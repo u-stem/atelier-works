@@ -5,8 +5,10 @@
 // failure (every such failure becomes needs_human with its reason; a DB
 // failure throws and on_error_flow marks the item failed). `final_status`
 // is the status actually reached — null when a CAS found the item moved on.
-//   open_pr: commit (Claude's subject/body, normalized) → push → create or
-//     update the PR → factory:review label → pr_url → pr_open → pr_opened.
+//   open_pr: the worktree must still stage the tree the loop verified
+//     (decideVerifiedTree), then commit (Claude's subject/body, normalized)
+//     → push → create or update the PR → factory:review label → pr_url →
+//     pr_open → pr_opened.
 //     Nothing new to commit still opens / updates the PR when the branch
 //     is ahead of base_sha (earlier partial-progress commits); only a
 //     branch with nothing beyond the base ends needs_human
@@ -50,6 +52,7 @@ import {
   decideAfterCommit,
   decideGapReroute,
   decideImplementFinishAction,
+  decideVerifiedTree,
   finishFailureReason,
   gapExhaustedReason,
   IMPLEMENT_FINISH_NO_OUTPUT_REASON,
@@ -85,6 +88,7 @@ import {
   removeWorktree,
   runCommand,
   runGitleaksOnWorktree,
+  stagedTreeSha,
 } from "../lib/workspace.ts";
 import {
   describeReason,
@@ -411,6 +415,12 @@ export async function main(
     try {
       const pointerReason = await gitPointerStopReason(assertGitPointer(ctx));
       if (pointerReason !== null) return { ok: false, reason: pointerReason };
+      const verified = decideVerifiedTree(
+        loop.verified_tree_sha,
+        await stagedTreeSha({ run: runCommand, worktreeDir: ctx.worktree_dir }),
+      );
+      if (verified.kind === "stop")
+        return { ok: false, reason: verified.reason };
       const subject = normalizeJapaneseText(output.commit_subject).trim();
       const message = buildImplementCommitMessage(
         {

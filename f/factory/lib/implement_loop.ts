@@ -496,6 +496,10 @@ export type ImplementLoopResult = {
   readonly checks: ImplementCheckSummary | null;
   readonly diff_stat: ImplementDiffStat | null;
   readonly changed_paths: string[];
+  /** The staged tree of the round whose checks passed or were skipped (the
+   * round the loop exited on); null for every other exit. implement_finish
+   * commits only when the worktree still stages exactly this tree. */
+  readonly verified_tree_sha: string | null;
 };
 
 type ProducedRound = Exclude<
@@ -683,6 +687,7 @@ export async function runImplementVerifyLoop(
       checks: null,
       diff_stat: null,
       changed_paths: [],
+      verified_tree_sha: null,
       ...fields,
     });
 
@@ -813,6 +818,10 @@ export async function runImplementVerifyLoop(
         checks: evaluation.summary,
         diff_stat: fingerprint.diffStat,
         changed_paths: changedPaths,
+        verified_tree_sha:
+          exit === "checks_passed" || exit === "checks_skipped"
+            ? fingerprint.treeSha
+            : null,
       });
     }
 

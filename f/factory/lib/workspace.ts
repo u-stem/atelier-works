@@ -2218,6 +2218,22 @@ export type WorktreeFingerprint = {
   readonly diffStat: ImplementDiffStat;
 };
 
+/** Stages every change (`git add -A`) and returns `git write-tree` of the
+ * result — the tree a commit made right now would record. implement_finish
+ * compares it with the loop's verified_tree_sha before committing. */
+export async function stagedTreeSha(opts: WorktreeGitOptions): Promise<string> {
+  await stageAll(opts);
+  const tree = await opts.run(buildGitArgv(["write-tree"]), {
+    cwd: opts.worktreeDir,
+    env: localGitEnv(opts.home, opts.path),
+  });
+  if (tree.exitCode !== 0)
+    throw gitError(`git write-tree failed in ${opts.worktreeDir}`, tree);
+  const treeSha = tree.stdout.trim();
+  assertSha(treeSha);
+  return treeSha;
+}
+
 /** Stages every change (`git add -A`; harmless for the later
  * `commitAndPush`, which stages again), fingerprints the staged state with
  * `git write-tree` (stall detection; design §14: plain `git diff` would
@@ -2228,16 +2244,8 @@ export async function worktreeFingerprint(
   opts: WorktreeGitOptions & { readonly baseSha: string },
 ): Promise<WorktreeFingerprint> {
   assertSha(opts.baseSha);
-  await stageAll(opts);
+  const treeSha = await stagedTreeSha(opts);
   const env = localGitEnv(opts.home, opts.path);
-  const tree = await opts.run(buildGitArgv(["write-tree"]), {
-    cwd: opts.worktreeDir,
-    env,
-  });
-  if (tree.exitCode !== 0)
-    throw gitError(`git write-tree failed in ${opts.worktreeDir}`, tree);
-  const treeSha = tree.stdout.trim();
-  assertSha(treeSha);
   const numstat = await opts.run(
     buildGitArgv([
       "diff",

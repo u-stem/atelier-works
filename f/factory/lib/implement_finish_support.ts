@@ -148,6 +148,27 @@ export async function preserveWork(deps: PreserveWorkDeps): Promise<string[]> {
   }
 }
 
+export const WORKTREE_CHANGED_AFTER_VERIFICATION_REASON =
+  "worktree changed after verification";
+
+export type VerifiedTreeDecision =
+  | { readonly kind: "proceed" }
+  | { readonly kind: "stop"; readonly reason: string };
+
+/** The final commit goes ahead only when the worktree, staged again right
+ * before it, is exactly the tree the loop verified (scanned and checked) —
+ * a check command that rewrote a tracked file, or anything else that
+ * changed the worktree after the checks, stops before the push. No
+ * verified tree at all also stops. */
+export function decideVerifiedTree(
+  verifiedTreeSha: string | null,
+  currentTreeSha: string,
+): VerifiedTreeDecision {
+  return verifiedTreeSha !== null && verifiedTreeSha === currentTreeSha
+    ? { kind: "proceed" }
+    : { kind: "stop", reason: WORKTREE_CHANGED_AFTER_VERIFICATION_REASON };
+}
+
 export type AfterCommitDecision =
   | { readonly kind: "proceed" }
   | { readonly kind: "stop"; readonly reason: string };

@@ -56,6 +56,7 @@
 - **差分サイズの上限**は工程3専用の`implement_max_changed_files` / `implement_max_diff_lines`で、超えたら`needs_human`にする。
 - **baseブランチが保護ブランチなら止めるガードは適用しない**(実装フローは保護されたbaseに直接pushせず、PRを作るだけのため)。
 - **gitleaksを固定検査にする**: 毎ラウンド、差分をすべてステージし、ブランチがデフォルトブランチから分かれた点(`git merge-base`)からのステージ済みの差分全体を`git diff --cached --text --no-ext-diff --no-textconv -U0`で取り出して、追加された行を`gitleaks stdin --redact`に標準入力で渡す。gitleaksは私有の一時ディレクトリで実行し、既定のルールだけを`--config`で強制し、`--gitleaks-ignore-path`をその一時ディレクトリに向け、`--ignore-gitleaks-allow`を付ける。対象リポジトリの内容(`.gitleaks.toml`(壊れたものを含む)・`.gitleaksignore`・行内の`gitleaks:allow`コメント・`.gitattributes`の`binary` / `-diff`指定やtextconv)のいずれでも検出を無効にできない。前のラウンドや前回の実行でコミット済みの変更も毎ラウンド検査する。検出結果はルール名とファイル名だけをClaudeへの修正依頼とDBに渡し、一致した文字列は渡さない。検査する差分やレポートが出力の上限を超えた場合や終了コードが0 / 1以外の場合は検査の失敗として扱う。`needs_human`で途中の変更をpushするときもgitleaksを再実行し、通らなければ(検査自体が失敗した場合も)pushしない。
+- **検証したツリーだけをコミットする**: 検査に通った(または検査を実行しなかった)ラウンドのステージ済みのツリー(`git write-tree`)を記録し、完了ステップでコミットする直前にもう一度ステージして一致を確かめる。検査コマンドが追跡対象のファイルを書き換えた場合など、検証の後にworktreeが変わっていればpushせず`needs_human`にする。
 - 検査コマンドの出力はストリームごとに1MiBまでしか保持せず(先頭と末尾を残す)、DBには秘密をマスクした先頭16KB(失敗した検査の出力を先に並べる)を保存する。
 - `.github/workflows/**`を含むpushがPATの`workflow`権限不足で拒否された場合は`needs_human`の理由に載る。
 

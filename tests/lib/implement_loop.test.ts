@@ -952,4 +952,35 @@ describe("runImplementVerifyLoop", () => {
     await run(h);
     expect(h.events).not.toContain("clean");
   });
+
+  test("returns the passing round's tree as verified_tree_sha", async () => {
+    expect((await run(harness())).verified_tree_sha).toBe(FP_1.treeSha);
+  });
+
+  test("returns the skipped round's tree as verified_tree_sha", async () => {
+    expect(
+      (
+        await run(
+          harness(),
+          loopInput(outputRound(), { hasCheckCommands: false }),
+        )
+      ).verified_tree_sha,
+    ).toBe(FP_1.treeSha);
+  });
+
+  test("returns the last passing round's tree after a fix round", async () => {
+    const h = harness({ checks: [[FAIL], [PASS]], fingerprints: [FP_1, FP_2] });
+    expect((await run(h)).verified_tree_sha).toBe(FP_2.treeSha);
+  });
+
+  test("has no verified tree when the checks never passed", async () => {
+    expect(
+      (
+        await run(
+          harness({ checks: [[FAIL]] }),
+          loopInput(outputRound(), { maxRounds: 1 }),
+        )
+      ).verified_tree_sha,
+    ).toBeNull();
+  });
 });
