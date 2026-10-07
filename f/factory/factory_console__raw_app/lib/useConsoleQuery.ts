@@ -1,8 +1,7 @@
-// Shared data-fetching hook for every tab: calls f/factory/steps/
-// console_query.ts through lib/api.ts's `queryConsole`, converts the result
-// via the caller's `toRow` mapper (lib/types.ts), and exposes a `reload()`
-// escape hatch (used after an Approve/Reject/retry action to refresh the
-// list it came from).
+// すべてのタブが共有する、データ取得のフック。
+// `lib/api.ts`の`queryConsole`で`f/factory/steps/console_query.ts`を呼び、
+// 呼び出し側の`toRow`(`lib/types.ts`)で結果を変換する。
+// 承認・却下・再開の操作の後に一覧を取り直せるよう、`reload()`も返す。
 
 import { useCallback, useEffect, useState } from "react";
 import { describeError, queryConsole } from "./api";
@@ -19,9 +18,9 @@ export type ConsoleQueryState<T> = {
 export type ConsoleQueryArgs = {
   readonly limit?: number;
   readonly days?: number;
-  /** Only meaningful for the "requirements_doc" view. */
+  /** "requirements_doc"と"audit_doc"のビューでだけ使う。 */
   readonly work_item_id?: number;
-  /** Only meaningful for the "requirements_doc" view. */
+  /** "requirements_doc"のビューでだけ使う。 */
   readonly attempt?: number;
 };
 
@@ -36,7 +35,7 @@ export function useConsoleQuery<T>(
   const [reloadToken, setReloadToken] = useState(0);
   const { limit, days, work_item_id, attempt } = args;
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: reloadToken is never read inside the effect — bumping it (via reload()) is what forces a refetch, the standard "dummy dependency" hook idiom.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reloadTokenはeffectの中で読まない。reload()で値を増やして再取得させる、依存配列にダミーの値を置く定番の書き方。
   useEffect(() => {
     let cancelled = false;
     setLoading(true);

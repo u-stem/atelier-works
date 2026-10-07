@@ -1,7 +1,6 @@
-// GitHub-style admonition markers (`> [!NOTE]`, `> [!WARNING]`,
-// `> [!IMPORTANT]`) — components/Markdown.tsx's `blockquote` override uses
-// this to turn a matching blockquote into a styled panel instead of a plain
-// quote.
+// GitHub形式の注記(`> [!NOTE]`、`> [!WARNING]`、`> [!IMPORTANT]`)の目印の解析。
+// `components/Markdown.tsx`の`blockquote`の描画がこれを使い、
+// 目印のある引用を、ただの引用ではなく装飾したパネルとして描く。
 
 export type AlertKind = "note" | "warning" | "important";
 
@@ -26,13 +25,13 @@ function toAlertKind(marker: string): AlertKind | null {
   }
 }
 
-/** Strips a GitHub-style `[!NOTE]` (or WARNING/IMPORTANT) marker off the
- * start of `text` (pure, for testing), returning the marker's kind and the
- * remaining text — or `null` when `text` doesn't start with one. Only the
- * plain-text case (the common one: the marker starts the blockquote's very
- * first line, with the rest of the note as follow-on text in the same
- * paragraph) is handled; a marker split across inline formatting is left
- * as-is and simply doesn't match. */
+/**
+ * `text`の先頭にある`[!NOTE]`(または`WARNING`/`IMPORTANT`)の目印を取り除き、
+ * 目印の種類と残りの文字列を返す。先頭に目印が無ければ`null`を返す。
+ * 扱うのは、目印が引用の1行目の先頭にあり、注記の本文が同じ段落に続く
+ * 平文の場合だけである(よくある書き方)。
+ * インラインの書式で分断された目印は一致せず、そのまま残る。
+ */
 export function stripAlertMarker(
   text: string,
 ): { kind: AlertKind; rest: string } | null {

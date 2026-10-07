@@ -1,9 +1,9 @@
-// Frontend-side row shapes, mirroring what
-// f/factory/steps/console_query.ts returns per view. Kept as a separate
-// definition (rather than importing the backend script's types) because the
-// frontend bundle never imports backend TypeScript directly — only through
-// the generated `./wmill` bindings — so this is the frontend's own contract
-// with that script's JSON output, converted defensively via lib/coerce.ts.
+// `f/factory/steps/console_query.ts`がビューごとに返す行の、
+// フロントエンド側の型と変換。
+// フロントエンドのバンドルはバックエンドのTypeScriptを直接importせず、
+// 生成された`./wmill`のバインディング経由でしか呼ばないため、
+// 型を別に定義する。
+// JSONの値は`lib/coerce.ts`で緩く変換する。
 
 import {
   bool,
@@ -38,9 +38,11 @@ export type ApprovalRequestStatus =
   | "rejected"
   | "expired";
 
-/** Fields every Inbox row carries regardless of `kind` — one row per
- * `factory.approval_requests` entry (requirements + issue_proposal
- * approvals unified into a single Inbox tab). */
+/**
+ * 承認タブの行が`kind`によらず持つ項目。
+ * `factory.approval_requests`の1件が1行になる。
+ * `requirements`と`issue_proposal`の承認は、1つの承認タブにまとめて表示する。
+ */
 export type InboxRowBase = {
   approval_request_id: number;
   status: ApprovalRequestStatus;
@@ -52,11 +54,13 @@ export type InboxRowBase = {
   expires_at: string | null;
 };
 
-/** The full document (markdown/diagrams/open_questions) is fetched on
- * demand via the "requirements_doc" view (see `toRequirementsDocRow` below)
- * once a row is selected — not carried on the list row itself. `summary`
- * (cheap, one short string) is carried here so the Inbox list can show a
- * preview without that extra fetch. */
+/**
+ * 要件定義の承認依頼の行。
+ * 文書全体(本文・図・未解決の質問)は一覧の行に含めず、
+ * 行を選んだときに"requirements_doc"ビューで取得する(`toRequirementsDocRow`)。
+ * `summary`は短い文字列1つで軽いため行に含め、
+ * 追加の取得なしに承認タブの一覧でプレビューを出せるようにする。
+ */
 export type RequirementsInboxRow = InboxRowBase & {
   kind: "requirements";
   issue_number: number | null;
@@ -74,14 +78,20 @@ export type IssueProposalInboxRow = InboxRowBase & {
   created_issue_number: number | null;
   created_issue_url: string | null;
   claimed_by: string | null;
-  /** "audit" for a 工程5-sourced proposal (e.g. a period without an
-   * actionable PR), "pr_fix" for the usual PR-review-triggered one. */
+  /**
+   * 提案の出どころ。監査から出た提案(対応すべきPRが無い期間のものなど)は
+   * `"audit"`、通常のPRレビューから出た提案は`"pr_fix"`になる。
+   */
   origin: "pr_fix" | "audit";
-  /** Human-readable audit period (e.g. "2026-09-20〜2026-09-27"), only set
-   * when `origin` is "audit". */
+  /**
+   * 表示用の監査期間(例: "2026-09-20〜2026-09-27")。
+   * `origin`が`"audit"`のときだけ値が入る。
+   */
   period_label: string | null;
-  /** Whether the deciding UI should offer the `with_factory_label` option —
-   * false for an audit-sourced proposal with no matching issue to label. */
+  /**
+   * 承認画面で`with_factory_label`の選択肢を出すかどうか。
+   * 監査から出た提案で、ラベルを付ける対象のIssueが無いときは`false`になる。
+   */
   factory_label_available: boolean;
 };
 
@@ -148,10 +158,12 @@ export type PipelineRow = {
   kind: string;
   pr_number: number | null;
   fix_round: number;
-  /** 工程3 implement branch (`work_items.branch`), null for other kinds /
-   * before implement started. */
+  /**
+   * 実装フローが作るブランチ(`work_items.branch`)。
+   * 実装以外の`kind`と、実装を始める前は`null`。
+   */
   branch: string | null;
-  /** PR 工程3 opened (`work_items.pr_url`), null until `pr_open`. */
+  /** 実装フローが開いたPR(`work_items.pr_url`)。`pr_open`になるまでは`null`。 */
   pr_url: string | null;
 };
 
@@ -297,7 +309,7 @@ export function toNoticeRow(row: Record<string, unknown>): NoticeRow {
   };
 }
 
-/** One row of the "requirements_index" view — the 要件定義 tab's list. */
+/** "requirements_index"ビューの1行。要件定義タブの一覧に使う。 */
 export type RequirementsIndexRow = {
   work_item_id: number;
   owner: string;
@@ -326,8 +338,10 @@ export function toRequirementsIndexRow(
   };
 }
 
-/** A diagram resolved from disk: `name` plus its raw mxGraph XML — see
- * f/factory/steps/console_query.ts's `RequirementsDiagramContent`. */
+/**
+ * ディスクから読んだ図。`name`と、加工していないmxGraphのXMLを持つ
+ * (`f/factory/steps/console_query.ts`の`RequirementsDiagramContent`に対応する)。
+ */
 export type RequirementsDiagram = {
   name: string;
   xml: string;
@@ -355,10 +369,11 @@ function toRequirementsDiagrams(value: unknown): RequirementsDiagram[] {
 
 export type DocDirSource = "file" | "db_fallback";
 
-/** One row of the "requirements_doc" view — a single requirement draft's
- * full document, shared by the 要件定義 tab's detail pane and the Inbox
- * tab's requirements detail (both render it via
- * components/RequirementsDocument.tsx). */
+/**
+ * "requirements_doc"ビューの1行。要件定義の下書き1件の文書全体を持つ。
+ * 要件定義タブの詳細と承認タブの要件定義の詳細が共有し、
+ * どちらも`components/RequirementsDocument.tsx`で描く。
+ */
 export type RequirementsDocRow = {
   work_item_id: number;
   owner: string;
@@ -395,9 +410,11 @@ export function toRequirementsDocRow(
   };
 }
 
-/** One row of the "audit_index" view — the 監査 tab's list. One row per
- * `factory.audit_reports` entry, joined against its work item and the
- * issue_proposal approval counts it produced. */
+/**
+ * "audit_index"ビューの1行。監査タブの一覧に使う。
+ * `factory.audit_reports`の1件が1行で、その作業項目と、
+ * そのレポートから出た`issue_proposal`の承認件数を結合したもの。
+ */
 export type AuditIndexRow = {
   audit_report_id: number;
   work_item_id: number;
@@ -406,8 +423,10 @@ export type AuditIndexRow = {
   source: string;
   period_start: string;
   period_end: string;
-  /** Human-readable period, computed server-side (mirrors
-   * `formatAuditPeriodLabel` in f/factory/lib/audit_support.ts). */
+  /**
+   * 表示用の期間。サーバー側で`f/factory/lib/audit_support.ts`の
+   * `formatAuditPeriodLabel`を使って計算する。
+   */
   period_label: string;
   summary: string;
   pending_count: number;
@@ -434,9 +453,10 @@ export function toAuditIndexRow(row: Record<string, unknown>): AuditIndexRow {
   };
 }
 
-/** One row of the "audit_doc" view — a single audit report's full document,
- * fetched on demand once a row is selected (same pattern as
- * `toRequirementsDocRow` above). */
+/**
+ * "audit_doc"ビューの1行。監査レポート1件の文書全体を持つ。
+ * `toRequirementsDocRow`と同じく、行を選んだときに取得する。
+ */
 export type AuditDocRow = AuditIndexRow & {
   markdown: string;
   metrics: Record<string, unknown>;

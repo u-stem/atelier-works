@@ -1,8 +1,8 @@
-// Maps a raw `work_item_status`/pipeline-`status` column value to its
-// Japanese label for display — used by PipelineTab.tsx and AuditTab.tsx
-// wherever a status column is rendered. An unmapped status (e.g. one this
-// table hasn't been updated for yet) falls back to the raw value so the UI
-// still shows something instead of blanking.
+// 作業項目の状態の値(`work_item_status`やパイプラインの`status`)を、
+// 表示用の日本語に変える。
+// `PipelineTab.tsx`と`AuditTab.tsx`が状態の列を描くときに使う。
+// 表に無い状態(表の更新が追いついていない新しい状態など)は、
+// 表示が空にならないよう元の値をそのまま返す。
 
 const STATUS_LABELS: Record<string, string> = {
   auditing: "監査中",

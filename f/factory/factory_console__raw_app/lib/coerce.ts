@@ -1,15 +1,14 @@
-// Small, permissive coercion helpers for reading fields off the `unknown`
-// values `backend.console_query(...)` resolves to.
+// `backend.console_query(...)`が返す`unknown`の値から項目を読む、緩い変換の関数群。
+// 型が合わない値は例外にせず、安全な既定値に置き換える。
 //
-// This is deliberately looser than the repo's usual "Parse, don't validate"
-// convention (f/factory/lib/db.ts / f/factory/steps/console_query.ts throw
-// on a malformed field): console_query.ts already validates every row
-// strictly before returning it, so a value reaching this App has already
-// passed that check — the only way a field could still be "wrong" here is a
-// job-level failure (network/exception, handled separately via try/catch)
-// or an App bundling mismatch, neither of which a stricter per-field check
-// would surface any better. Coercing to a safe default keeps one odd field
-// from blanking an entire tab.
+// リポジトリの通常の方針(Parse, don't validate)より、意図して緩くしている。
+// `f/factory/lib/db.ts`や`f/factory/steps/console_query.ts`は不正な項目で例外を投げ、
+// `console_query.ts`は返す前にすべての行を厳密に検査している。
+// そのため、このAppに届いた値の項目がそれでも不正になるのは、
+// ジョブ単位の失敗(通信や例外。try/catchで別に扱う)か、
+// Appのバンドルの食い違いのときだけで、
+// どちらも項目ごとに厳しく検査しても見つけやすくはならない。
+// 既定値に置き換えれば、1つの項目のせいでタブ全体が空になることを防げる。
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
