@@ -1,13 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import {
+  assertImplementLease,
   flowJobIdFailureReason,
   holdsImplementLease,
+  ImplementLeaseLostError,
   implementLaunchFailureReason,
   implementLeaseJobId,
   isFlowJobId,
   parseFlowJobId,
   type StartImplementDeps,
   startImplement,
+  stillHoldsImplementLease,
 } from "../../f/factory/lib/implement_launch_support.ts";
 import { describeReason } from "../../f/factory/steps/pr_workflow_support.ts";
 
@@ -369,5 +372,40 @@ describe("holdsImplementLease", () => {
     expect(
       holdsImplementLease({ status: "cancelled", flow_job_id: JOB_A }, JOB_A),
     ).toBe(false);
+  });
+});
+
+describe("stillHoldsImplementLease", () => {
+  test("holds the lease when the re-read item is implementing with this job id", async () => {
+    expect(
+      await stillHoldsImplementLease(
+        async () => ({ status: "implementing", flow_job_id: JOB_A }),
+        JOB_A,
+      ),
+    ).toBe(true);
+  });
+
+  test("does not hold the lease when the item is gone", async () => {
+    expect(await stillHoldsImplementLease(async () => null, JOB_A)).toBe(false);
+  });
+});
+
+describe("assertImplementLease", () => {
+  test("resolves while the lease is held", async () => {
+    await expect(
+      assertImplementLease(
+        async () => ({ status: "implementing", flow_job_id: JOB_A }),
+        JOB_A,
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  test("throws ImplementLeaseLostError once the lease moved", async () => {
+    await expect(
+      assertImplementLease(
+        async () => ({ status: "needs_human", flow_job_id: JOB_A }),
+        JOB_A,
+      ),
+    ).rejects.toBeInstanceOf(ImplementLeaseLostError);
   });
 });

@@ -64,6 +64,39 @@ export function holdsImplementLease(
   return item.status === "implementing" && item.flow_job_id === jobId;
 }
 
+/**
+ * `readItem`で作業項目を読み直し、リースを`jobId`が持っていれば(`holdsImplementLease`)`true`を返す。
+ * 作業項目が無ければ`false`。読み直しの例外はそのまま投げる。
+ */
+export async function stillHoldsImplementLease(
+  readItem: () => Promise<Pick<WorkItem, "status" | "flow_job_id"> | null>,
+  jobId: string,
+): Promise<boolean> {
+  const item = await readItem();
+  return item !== null && holdsImplementLease(item, jobId);
+}
+
+/** implementフローのステップがリースを失っていたことを表す例外。メッセージは`IMPLEMENT_LEASE_LOST_REASON`。 */
+export class ImplementLeaseLostError extends Error {
+  constructor() {
+    super(IMPLEMENT_LEASE_LOST_REASON);
+    this.name = "ImplementLeaseLostError";
+  }
+}
+
+/**
+ * リースを`jobId`が持っていなければ(`stillHoldsImplementLease`が`false`)`ImplementLeaseLostError`を投げる。
+ * implement_finishが外への副作用(push、PRの作成と更新、ラベル、リモートブランチの削除、PRのURLの記録)の直前に呼び、
+ * 実行中にリースが移ったときに、その副作用を行わずに終えるために使う。
+ */
+export async function assertImplementLease(
+  readItem: () => Promise<Pick<WorkItem, "status" | "flow_job_id"> | null>,
+  jobId: string,
+): Promise<void> {
+  if (!(await stillHoldsImplementLease(readItem, jobId)))
+    throw new ImplementLeaseLostError();
+}
+
 export type StartImplementDeps = {
   /** `updateStatusIfCurrentClearingFlowJobId`で`approved`から`implementing`へ移し、`flow_job_id`を空にする。 */
   readonly casToImplementing: () => Promise<boolean>;

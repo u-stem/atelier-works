@@ -289,6 +289,7 @@ export async function withReadOnlyDocDirCopy<T>(
 /**
  * 検証ループが扱う形にした、Claudeの1回の実行の結果。例外としては投げない。
  * 失敗した実行もデータとして扱い、`error`のラウンドとして記録する。
+ * `lease_lost`は、implement_generateがリースを失っていてClaudeを実行しなかったことを表す。
  */
 export type ImplementClaudeRound =
   | {
@@ -311,10 +312,33 @@ export type ImplementClaudeRound =
       readonly detail: string;
       readonly agent_run_id: number;
       readonly cost_usd: number;
-    };
+    }
+  | { readonly kind: "lease_lost" };
 
 export const IMPLEMENT_CLAUDE_ROUND_KINDS: readonly ImplementClaudeRound["kind"][] =
-  ["output", "invalid_output", "claude_failed"];
+  ["output", "invalid_output", "claude_failed", "lease_lost"];
+
+/** Claudeを実際に実行したラウンド(`lease_lost`以外)。 */
+export type ImplementClaudeRunRound = Exclude<
+  ImplementClaudeRound,
+  { readonly kind: "lease_lost" }
+>;
+
+/** implement_generateがリースを失っていたときに返すラウンド。検証ループは何もせずに`lease_lost`で止まる。 */
+export const LEASE_LOST_ROUND: ImplementClaudeRound = { kind: "lease_lost" };
+
+/**
+ * implement_generateの本体。リースを確かめ、持っていれば`runRound`(Claudeの1回の実行)の結果を返す。
+ * 失っていれば`runRound`を呼ばずに`LEASE_LOST_ROUND`を返す。
+ * 同じworktreeを別の実行が使っている間に、Claudeにworktreeを書き換えさせないため。
+ */
+export async function runImplementGenerateRound(deps: {
+  readonly holdsLease: () => Promise<boolean>;
+  readonly runRound: () => Promise<ImplementClaudeRound>;
+}): Promise<ImplementClaudeRound> {
+  if (!(await deps.holdsLease())) return LEASE_LOST_ROUND;
+  return deps.runRound();
+}
 
 /**
  * `runClaude`の結果を`ImplementClaudeRound`に変換する。
@@ -325,7 +349,7 @@ export const IMPLEMENT_CLAUDE_ROUND_KINDS: readonly ImplementClaudeRound["kind"]
 export function toImplementClaudeRound(
   result: RunClaudeResult<ImplementClaudeOutput>,
   agentRunId: number,
-): ImplementClaudeRound {
+): ImplementClaudeRunRound {
   const costUsd = result.agentRun.cost_usd ?? 0;
   if (result.outcome === "failure") {
     return {
@@ -430,7 +454,7 @@ export function buildImplementClaudeOptions(
 export async function runImplementClaudeRound(
   deps: ImplementClaudeRunDeps,
   input: ImplementClaudeRunInput,
-): Promise<ImplementClaudeRound> {
+): Promise<ImplementClaudeRunRound> {
   const result = await deps.runClaude(buildImplementClaudeOptions(input));
   const agentRunId = await deps.recordAgentRun(result.agentRun);
   return toImplementClaudeRound(result, agentRunId);
@@ -445,7 +469,7 @@ export async function runImplementClaudeRound(
  * `decideImplementRoundExit`の終了理由(`continue`を除く)に、
  * 検証の前にループ自身が止まる理由を加えたもの。
  * ループ自身が止まる理由は、シンボリックリンク、差分の大きさ、`.git`ポインタの書き換え、
- * Claudeの実行失敗、修正ラウンドの前にリースを失っていたこと。
+ * Claudeの実行失敗、ラウンドの冒頭か修正ラウンドの前にリースを失っていたこと。
  */
 export type ImplementLoopExit =
   | "checks_passed"
@@ -561,7 +585,7 @@ export type ImplementLoopDeps = {
   readonly dailyBudgetExceeded: () => Promise<boolean>;
   /**
    * 作業項目がまだimplementingで、flow_job_idがこの実行のルートジョブIDならtrueを返す(1回のSELECT)。
-   * 修正ラウンドを始める直前にだけ呼ぶ。
+   * 各ラウンドの冒頭(worktreeに触れる前)と、修正ラウンドを始める直前に呼ぶ。
    */
   readonly holdsLease: () => Promise<boolean>;
   readonly log: (message: string, fields: Record<string, unknown>) => void;
@@ -607,7 +631,7 @@ export type ImplementLoopResult = {
 
 type ProducedRound = Exclude<
   ImplementClaudeRound,
-  { readonly kind: "claude_failed" }
+  { readonly kind: "claude_failed" } | { readonly kind: "lease_lost" }
 >;
 
 type CheckEvaluation = {
@@ -759,20 +783,23 @@ export async function gitPointerStopReason(
  * Claudeが要件の不足を報告したときに終える。
  *
  * 各ラウンドでは次の順に処理する。
- * 1. worktreeの`.git`ポインタを確かめる。変わっていたら、
+ * 1. リースを確かめる。generateがリースを失っていた(`lease_lost`のラウンド)か、
+ *    今リースを持っていなければ、worktreeに触れず、記録もせずにループを止める。
+ *    別の実行が同じworktreeを使っている可能性があるため。
+ * 2. worktreeの`.git`ポインタを確かめる。変わっていたら、
  *    worktreeでgitを1つも実行する前にループを止める。
- * 2. 実行が失敗したか要件の不足が報告されたら、記録して止める。
- * 3. 指紋を取る(すべてをステージし、`base_sha`を基準に測る)。
- * 4. 変更を調べる。
- * 5. 止める条件を確かめる(シンボリックリンク、次に差分の大きさ)。
- * 6. baseとの差が無いラウンドは、検証を実行せずに「変更なし」として失敗させる。
+ * 3. 実行が失敗したか要件の不足が報告されたら、記録して止める。
+ * 4. 指紋を取る(すべてをステージし、`base_sha`を基準に測る)。
+ * 5. 変更を調べる。
+ * 6. 止める条件を確かめる(シンボリックリンク、次に差分の大きさ)。
+ * 7. baseとの差が無いラウンドは、検証を実行せずに「変更なし」として失敗させる。
  *    差があれば、gitleaks、次に検証コマンドを実行する。検証コマンドは、
  *    保護パスが変わったときと未設定のときは実行しない。
  *    実行する直前に、gitが無視するファイルを削除する。
- * 7. 終了を判定する(`decideImplementRoundExit`)。
+ * 8. 終了を判定する(`decideImplementRoundExit`)。
  *    差分の指紋には、ステージしたツリーのshaを使う。
- * 8. 修正ラウンドに進む前にリースを確かめ、失っていれば止める。
- * Claudeの実行ごとに`implement_rounds`へ1行を記録する。
+ * 9. 修正ラウンドに進む前にリースを確かめ、失っていれば止める。
+ * リースを失って止まったラウンドを除き、Claudeの実行ごとに`implement_rounds`へ1行を記録する。
  */
 export async function runImplementVerifyLoop(
   deps: ImplementLoopDeps,
@@ -786,14 +813,6 @@ export async function runImplementVerifyLoop(
   let lastValidOutput: ImplementClaudeOutput | null = null;
 
   for (;;) {
-    totalCostUsd += current.cost_usd;
-    const mode: ImplementRoundMode = round === 1 ? "implement" : "fix";
-    const base = {
-      work_item_id: input.workItemId,
-      attempt: input.attempt,
-      mode,
-      agent_run_id: current.agent_run_id,
-    };
     const stopped = (
       fields: Partial<ImplementLoopResult> & Pick<ImplementLoopResult, "exit">,
     ): ImplementLoopResult => ({
@@ -809,6 +828,28 @@ export async function runImplementVerifyLoop(
       verified_tree_sha: null,
       ...fields,
     });
+    // generateはリースを失っていてClaudeを実行していないので、実行回数に数えない。
+    if (current.kind === "lease_lost")
+      return stopped({
+        exit: "lease_lost",
+        reason: IMPLEMENT_LEASE_LOST_REASON,
+        rounds: round - 1,
+      });
+    totalCostUsd += current.cost_usd;
+    // `.git`ポインタの確認・指紋のためのステージ・ignoredファイルの削除・検査は、どれも
+    // worktreeに触れる。リースを失っていれば別の実行が同じworktreeを使っている可能性があるので、その前に止まる。
+    if (!(await deps.holdsLease()))
+      return stopped({
+        exit: "lease_lost",
+        reason: IMPLEMENT_LEASE_LOST_REASON,
+      });
+    const mode: ImplementRoundMode = round === 1 ? "implement" : "fix";
+    const base = {
+      work_item_id: input.workItemId,
+      attempt: input.attempt,
+      mode,
+      agent_run_id: current.agent_run_id,
+    };
 
     const pointerReason = await gitPointerStopReason(deps.assertGitPointer);
     if (pointerReason !== null) {

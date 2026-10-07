@@ -1,8 +1,10 @@
 // f/factory/implementの4ステップ中4番目(終了処理)で、唯一の終端ステップ。
 // 準備ステップの停止か検証ループの終了を受けて、作業項目の状態遷移と
 // それに伴う副作用(commit、push、PR作成、通知など)を行う。
-// 最初にリースを確かめ、失っていれば何もせずに終わる。状態の遷移はすべてリースを条件にする。
-// 検証ループがリースを失って止まったときもnoopになる。
+// 最初に準備ステップと検証ループの結果からnoopかを判定する(検証ループがリースを失って止まったときもnoop)。
+// noopでなければ作業項目を読んだ直後にリースを確かめ、失っていれば何もせずに終わる。
+// 外への副作用の直前にもリースを確かめ直し、失っていれば同じく何もせずに終わる。
+// 状態の遷移はすべてリースを条件にする。
 
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "../lib/config.ts";
@@ -51,8 +53,10 @@ import {
   shouldPushPartialWork,
 } from "../lib/implement_finish_support.ts";
 import {
+  assertImplementLease,
   holdsImplementLease,
   IMPLEMENT_LEASE_LOST_REASON,
+  ImplementLeaseLostError,
   implementLeaseJobId,
   parseFlowJobId,
 } from "../lib/implement_launch_support.ts";
@@ -205,8 +209,45 @@ type PrAttempt =
  * worktreeでのgitコマンド(`preserveWork`の検査とcommit、最終commit)の前には
  * 必ず`.git`ポインタを照合する。
  * ポインタが変わっていたらpushせずにneeds_humanで終える。
+ *
+ * 外への副作用(途中経過と最終のcommitとpush、worktreeとリモートブランチの削除、
+ * PRの作成と更新、`pr_url`の記録、ラベル)の直前には、作業項目を読み直してリースを確かめる
+ * (`assertImplementLease`)。失っていれば、最初の確認と同じく何もせずに終える。
+ * 取り消しや差し戻しでリースが移った後に、古い実行がpushやPRの操作を続けないため。
  */
 export async function main(
+  work_item_id: number,
+  prepare_outcome: string,
+  prepare_reason: string | null,
+  context: ImplementContext | null,
+  loop_result: ImplementLoopResult | null,
+): Promise<ImplementFinishResult> {
+  try {
+    return await finishImplement(
+      work_item_id,
+      prepare_outcome,
+      prepare_reason,
+      context,
+      loop_result,
+    );
+  } catch (err) {
+    if (!(err instanceof ImplementLeaseLostError)) throw err;
+    logger("implement_finish").warn("implement lease lost while finishing", {
+      work_item_id,
+    });
+    return LEASE_LOST_RESULT;
+  }
+}
+
+/** リースを失ったときの結果。何も遷移させず、人にも知らせない。 */
+const LEASE_LOST_RESULT: ImplementFinishResult = {
+  ok: true,
+  final_status: null,
+  notice: IMPLEMENT_LEASE_LOST_REASON,
+};
+
+/** `main`の本体。リースを失ったと分かった時点で`ImplementLeaseLostError`を投げ、`main`がnoopにする。 */
+async function finishImplement(
   work_item_id: number,
   prepare_outcome: string,
   prepare_reason: string | null,
@@ -255,12 +296,11 @@ export async function main(
       flow_job_id: workItem.flow_job_id,
       lease_job_id: leaseJobId,
     });
-    return {
-      ok: true,
-      final_status: null,
-      notice: IMPLEMENT_LEASE_LOST_REASON,
-    };
+    return LEASE_LOST_RESULT;
   }
+  // 外への副作用の直前に呼ぶ。リースを失っていれば`ImplementLeaseLostError`を投げる。
+  const confirmLease = (): Promise<void> =>
+    assertImplementLease(() => getWorkItem(work_item_id), leaseJobId);
   const owner = workItem.owner;
   const repo = workItem.repo;
   const issueNumber = workItem.issue_number;
@@ -376,8 +416,11 @@ export async function main(
         baseSha: ctx.base_sha,
         timeoutMs: GITLEAKS_TIMEOUT_MS,
       }),
-    commitAndPush: async () =>
-      commitAndPush(await commitOptions(ctx, IMPLEMENT_WIP_COMMIT_MESSAGE)),
+    commitAndPush: async () => {
+      const options = await commitOptions(ctx, IMPLEMENT_WIP_COMMIT_MESSAGE);
+      await confirmLease();
+      return commitAndPush(options);
+    },
   });
 
   const hasPr =
@@ -446,6 +489,8 @@ export async function main(
 
   if (action.kind === "requirements_gap") {
     const gapReport = loop_result.gap_report ?? "";
+    // worktreeは同じ作業項目の次の実行も使うので、リースを持つ間だけ消す。
+    await confirmLease();
     try {
       await removeWorktree({
         run: runCommand,
@@ -477,6 +522,7 @@ export async function main(
         prLookupFailed,
       })
     ) {
+      await confirmLease();
       try {
         await deleteRemoteBranch({
           run: runCommand,
@@ -554,6 +600,8 @@ export async function main(
     if (output === null || checks === null)
       return { ok: false, reason: IMPLEMENT_FINISH_NO_OUTPUT_REASON };
     try {
+      // ステージ・commit・pushの前に確かめる。
+      await confirmLease();
       const pointerReason = await gitPointerStopReason(assertGitPointer(ctx));
       if (pointerReason !== null) return { ok: false, reason: pointerReason };
       const verified = decideVerifiedTree(
@@ -598,6 +646,7 @@ export async function main(
         issueUpdatedAfterIntake,
       });
       let pr: PullRequestRef;
+      await confirmLease();
       if (existing === null) {
         pr = await createPullRequest(client, owner, repo, {
           head: ctx.branch,
@@ -613,7 +662,9 @@ export async function main(
         pr = existing;
       }
       // ラベル付けが失敗してもPRを辿れるように、ラベルより先に記録する。
+      await confirmLease();
       await setWorkItemPrUrl(work_item_id, pr.htmlUrl);
+      await confirmLease();
       try {
         await ensureLabel(
           client,
@@ -630,6 +681,8 @@ export async function main(
       await addLabels(client, owner, repo, pr.number, [config.review_label]);
       return { ok: true, pr, created: existing === null };
     } catch (err) {
+      // リースを失ったときは、needs_humanにせず`main`でnoopにする。
+      if (err instanceof ImplementLeaseLostError) throw err;
       return { ok: false, reason: finishFailureReason(err) };
     }
   };

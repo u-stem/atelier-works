@@ -20,6 +20,7 @@ import {
   shouldPushPartialWork,
   toDiscordChecks,
 } from "../../f/factory/lib/implement_finish_support.ts";
+import { ImplementLeaseLostError } from "../../f/factory/lib/implement_launch_support.ts";
 import {
   type CommitAndPushResult,
   type GitleaksResult,
@@ -307,6 +308,15 @@ describe("preserveWork", () => {
     expect(await preserveWork(preserveDeps(LEAK_SCAN).deps)).toEqual([
       SECRETS_NOT_PUSHED_REASON,
     ]);
+  });
+
+  test("rethrows a lost lease from the push instead of noting it", async () => {
+    const h = preserveDeps(CLEAN_SCAN, async () => {
+      throw new ImplementLeaseLostError();
+    });
+    await expect(preserveWork(h.deps)).rejects.toBeInstanceOf(
+      ImplementLeaseLostError,
+    );
   });
 
   test("does not push when gitleaks finds something", async () => {
