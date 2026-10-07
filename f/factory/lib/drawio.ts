@@ -1,18 +1,7 @@
-// draw.io (mxGraph) XML validation.
-//
-// `validateDrawioXml` is used by pipeline_generate.ts's post-generation
-// checks (uncompressed `<mxfile>` XML, 256KB limit — see
-// .claude/skills/drawio-diagram/SKILL.md for the generation-side contract).
-//
-// A diagram's XML lives on disk under pipeline_generate.ts's requirements
-// doc dir (`requirement_drafts.doc_dir`), not in the DB. The Console now
-// renders it inline via the diagrams.net embed viewer
-// (`components/DrawioViewer.tsx`, `f/factory/steps/console_query.ts`'s
-// `requirements_doc` view reads the file back) — the former
-// `toViewerUrl`/URL-fragment encoding this file used to provide (a static
-// `viewer.diagrams.net` link, superseded by the embed viewer) has been
-// removed along with it (see docs/security.md "draw.io ビューアーの
-// プライバシー").
+// draw.io(mxGraph)のXMLを検証する。
+// 図のXMLはDBではなく要件定義書のディレクトリ
+// (`requirement_drafts.doc_dir`)に置く。
+// Consoleはそれを読み出し、diagrams.netの埋め込みビューアーで表示する。
 
 const MAX_XML_BYTES = 256 * 1024;
 
@@ -25,9 +14,10 @@ function byteLength(text: string): number {
 }
 
 /**
- * Validate a single draw.io/mxGraph XML document against the
- * drawio-diagram skill's contract: `<mxfile>` root, uncompressed, contains
- * at least one `<diagram>`, and no larger than 256KB.
+ * draw.ioのXML文書1件が、drawio-diagramスキルの契約を満たすか検証する。
+ * 契約は、ルートが`<mxfile>`であること、非圧縮であること、
+ * `<diagram>`を1つ以上含むこと、256KB以下であることの4つ。
+ * 満たさないときは、理由を添えて`valid: false`を返す。
  */
 export function validateDrawioXml(xml: string): DrawioValidationResult {
   const size = byteLength(xml);

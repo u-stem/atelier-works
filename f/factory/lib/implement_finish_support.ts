@@ -1,8 +1,7 @@
-// Routing, side-effect ordering and message assembly for implement_finish
-// (工程3 design §2, §0b, §13): which terminal action an outcome leads to,
-// when a requirements_gap may delete the branch, how the work of a stopped
-// loop is left inspectable, the needs_human next action, and the Discord
-// pr_opened event. I/O only through injected deps.
+// implement_finishの判定と文言の組み立てを担う。
+// 結果ごとの終端処理の選び方、副作用の順序、停止したループの作業の残し方、
+// needs_humanの次の操作、Discordの`pr_opened`イベントを扱う。
+// 入出力は注入された依存を通してだけ行う。
 
 import { normalizeRepoUrl } from "./config.ts";
 import type { NotifyEvent } from "./discord.ts";
@@ -17,11 +16,15 @@ import type { ImplementCheckSummary } from "./implement_support.ts";
 import { maskSecrets } from "./log.ts";
 import type { CommitAndPushResult, GitleaksResult } from "./workspace.ts";
 
-/** What finish acts on: prepare's own stop, or the verify loop's exit. */
+/** finishが扱う結果。prepareでの停止か、検証ループの終了のどちらか。 */
 export type ImplementFinishOutcome =
   | Exclude<ImplementPrepareOutcome, "proceed">
   | ImplementLoopExit;
 
+/**
+ * prepareの結果と検証ループの終了を、finishが扱う1つの結果にまとめる。
+ * prepareが`proceed`なのにループの結果が無いときは例外を投げる。
+ */
 export function mergeImplementOutcome(
   prepareOutcome: ImplementPrepareOutcome,
   loopExit: ImplementLoopExit | null,
@@ -40,12 +43,15 @@ export type ImplementFinishAction =
   | { readonly kind: "cancel" }
   | { readonly kind: "open_pr" }
   | { readonly kind: "requirements_gap" }
-  /** `preserveWork`: the loop stopped on a guard after its checks ran
-   * normally, so its work may be committed + pushed (after the `.git`
-   * pointer check and a passing gitleaks scan) to leave the branch
-   * inspectable — unless a PR is open (shouldPushPartialWork). */
+  /**
+   * `preserveWork`は、ループが検証を正常に回した後にガードで止まったことを表す。
+   * このときは、`.git`ポインタの確認とgitleaksの検査を通れば、
+   * 作業をcommitしてpushし、ブランチを確認できる状態にしてよい。
+   * ただし、PRが開いているときはpushしない(`shouldPushPartialWork`)。
+   */
   | { readonly kind: "needs_human"; readonly preserveWork: boolean };
 
+/** finishの結果から、行う終端処理を決める。 */
 export function decideImplementFinishAction(
   outcome: ImplementFinishOutcome,
 ): ImplementFinishAction {
@@ -54,9 +60,9 @@ export function decideImplementFinishAction(
       return { kind: "noop" };
     case "cancelled":
       return { kind: "cancel" };
-    // Nothing to keep before a worktree existed; and nothing is pushed
-    // after a stop whose round was never checked (a symlink, a failed
-    // Claude run, a rewritten `.git` pointer).
+    // worktreeができる前の停止には残す作業が無い。
+    // 検証を経ていないラウンドでの停止(シンボリックリンク、Claudeの実行失敗、
+    // `.git`ポインタの書き換え)の後は何もpushしない。
     case "needs_human":
     case "symlink":
     case "claude_error":
@@ -75,8 +81,11 @@ export function decideImplementFinishAction(
   }
 }
 
-/** Design §13 (overrides §0b): delete the branch only when no PR uses it —
- * deleting a PR's head branch closes the PR. A failed lookup keeps it. */
+/**
+ * requirements_gapのとき、ブランチを削除してよいかを返す。
+ * PRのheadブランチを削除するとPRが閉じるため、PRが使っていないときだけ削除する。
+ * PRの検索に失敗したときは削除しない。
+ */
 export function shouldDeleteBranchOnGap(state: {
   readonly prUrl: string | null;
   readonly openPrNumber: number | null;
@@ -87,8 +96,11 @@ export function shouldDeleteBranchOnGap(state: {
   );
 }
 
-/** Same rule as requirements_apply's decideRejectedOutcome: attempt+1 must
- * not exceed max_attempts. */
+/**
+ * requirements_gapのとき、要件定義へ差し戻すか`needs_human`にするかを決める。
+ * `attempt + 1`が`max_attempts`を超えるなら差し戻さない。
+ * `requirements_apply`の`decideRejectedOutcome`と同じ規則である。
+ */
 export function decideGapReroute(
   attempt: number,
   maxAttempts: number,
@@ -96,30 +108,37 @@ export function decideGapReroute(
   return attempt < maxAttempts ? "reroute" : "needs_human";
 }
 
+/** 差し戻しの回数を使い切ったときの`needs_human`の理由を返す。 */
 export function gapExhaustedReason(maxAttempts: number): string {
   return `requirements_gap after max_attempts ${String(maxAttempts)}`;
 }
 
-/** The needs_human reason when the requirements_gap reroute moved the item
- * to requirements_generating but the pipeline could not be started (or its
- * job id not recorded). */
+/**
+ * requirements_gapの差し戻しで作業項目を`requirements_generating`へ移したが、
+ * パイプラインを起動できなかった(またはジョブIDを記録できなかった)ときの
+ * `needs_human`の理由。
+ */
 export const REQUIREMENTS_REGENERATION_FAILED_REASON =
   "requirements regeneration could not be started";
 
-/** The notice / Discord detail that keeps Claude's gap report (masked) when
- * the reroute could not start, so the human retrying sees why. */
+/**
+ * 差し戻しを起動できなかったとき、noticeとDiscordに載せる詳細を返す。
+ * 再実行する人が理由を分かるよう、Claudeの差し戻し理由を秘密をマスクして残す。
+ */
 export function gapReportNoticeDetail(gapReport: string): string {
   return `差し戻し理由: ${maskSecrets(gapReport)}`;
 }
 
-/** The needs_human reason for any unexpected git / GitHub failure in finish. */
+/** finishでgitやGitHubの操作が想定外に失敗したときの`needs_human`の理由を返す。 */
 export function finishFailureReason(err: unknown): string {
   return `implement finish failed: ${maskSecrets(err instanceof Error ? err.message : String(err))}`;
 }
 
-/** The fixed message for the needs_human "leave the branch inspectable"
- * commit (withCommitTrailers adds the trailers). A separate commit from the
- * final implementation commit of a later successful run. */
+/**
+ * `needs_human`で止まったとき、ブランチを確認できるように残すcommitのメッセージ。
+ * トレーラーは`withCommitTrailers`が付ける。
+ * 後で成功した実行の最終commitとは別のcommitになる。
+ */
 export const IMPLEMENT_WIP_COMMIT_MESSAGE =
   "chore: 自動実装の途中経過を保存する\n\n- 検証が完了しなかったため、確認用に途中の変更をpushしました";
 
@@ -127,21 +146,26 @@ export const SECRETS_NOT_PUSHED_REASON = "secrets detected, changes not pushed";
 export const PARTIAL_WORK_KEPT_LOCAL_REASON =
   "partial work kept local because a pull request is open";
 
-/** Whether a needs_human stop pushes its partial work (preserveWork): only
- * a stop that keeps its work, and never while a pull request uses the
- * branch — the push would land unverified changes in the open PR. `hasPr`
- * is the context's existing_pr_number or the work item's pr_url. */
+/**
+ * `needs_human`での停止時に、途中の作業をpushするかを返す。
+ * pushするのは作業を残す停止(`preserveWork`)のときだけで、
+ * ブランチをPRが使っているときはpushしない。
+ * pushすると、検証していない変更が開いているPRに入るためである。
+ * `hasPr`は、文脈の`existing_pr_number`か作業項目の`pr_url`があるかを表す。
+ */
 export function shouldPushPartialWork(
   action: ImplementFinishAction,
   hasPr: boolean,
 ): boolean {
   return action.kind === "needs_human" && action.preserveWork && !hasPr;
 }
-/** Whether a git / GitHub failure before the terminal action (the issue
- * re-check) should first leave the run's work on the branch: a run that
- * would open a PR, or a guard stop that keeps its work. A requirements gap,
- * a cancel or a stop without kept work has nothing to preserve. The caller
- * still applies the open-PR rule (shouldPushPartialWork). */
+/**
+ * 終端処理の前(Issueの再確認)でgitやGitHubの操作が失敗したとき、
+ * 先に実行の作業をブランチに残すかを返す。
+ * 残すのは、PRを開くはずだった実行と、作業を残すガード停止である。
+ * requirements_gap、キャンセル、作業を残さない停止には残すものが無い。
+ * PRが開いているときの規則(`shouldPushPartialWork`)は呼び出し側が適用する。
+ */
 export function shouldPreserveBeforeFailing(
   action: ImplementFinishAction,
 ): boolean {
@@ -155,18 +179,23 @@ export const IMPLEMENT_FINISH_NO_OUTPUT_REASON =
 export const IMPLEMENT_NO_CHANGES_REASON = "implement produced no changes";
 
 export type PreserveWorkDeps = {
-  /** assertWorktreeGitPointer against the context's worktree_git_pointer. */
+  /** 文脈の`worktree_git_pointer`に対して`assertWorktreeGitPointer`を実行する。 */
   readonly assertGitPointer: () => Promise<void>;
-  /** runGitleaksOnWorktree on the implement worktree. */
+  /** implementのworktreeに`runGitleaksOnWorktree`を実行する。 */
   readonly scanForSecrets: () => Promise<GitleaksResult>;
-  /** commitAndPush with IMPLEMENT_WIP_COMMIT_MESSAGE and the prepare-time expectedHeadSha. */
+  /**
+   * `IMPLEMENT_WIP_COMMIT_MESSAGE`と、prepare時点の`expectedHeadSha`で
+   * `commitAndPush`を実行する。
+   */
   readonly commitAndPush: () => Promise<CommitAndPushResult>;
 };
 
-/** Leaves a stopped loop's work on the branch — but never runs git in a
- * worktree whose `.git` pointer changed, and never pushes a change the
- * fixed secret scan flagged, nor one it could not scan. Returns notes
- * (English reasons) to append to the needs_human reason; never throws. */
+/**
+ * 停止したループの作業をcommitしてブランチにpushする。
+ * `.git`ポインタが変わったworktreeではgitを実行しない。
+ * 秘密の検査で検出された変更や、検査できなかった変更もpushしない。
+ * `needs_human`の理由に付け足す注記(英語)の配列を返し、例外は投げない。
+ */
 export async function preserveWork(deps: PreserveWorkDeps): Promise<string[]> {
   try {
     const pointerReason = await gitPointerStopReason(deps.assertGitPointer);
@@ -198,11 +227,13 @@ export type VerifiedTreeDecision =
   | { readonly kind: "proceed" }
   | { readonly kind: "stop"; readonly reason: string };
 
-/** The final commit goes ahead only when the worktree, staged again right
- * before it, is exactly the tree the loop verified (scanned and checked) —
- * a check command that rewrote a tracked file, or anything else that
- * changed the worktree after the checks, stops before the push. No
- * verified tree at all also stops. */
+/**
+ * 最終commitの直前にステージし直したworktreeが、ループで検証(秘密の検査と
+ * 検証コマンド)したツリーと完全に一致するときだけ、commitへ進む。
+ * 検証コマンドが追跡中のファイルを書き換えたときなど、
+ * 検証後にworktreeが変わったときは、pushの前に止める。
+ * 検証済みのツリーが無いときも止める。
+ */
 export function decideVerifiedTree(
   verifiedTreeSha: string | null,
   currentTreeSha: string,
@@ -216,12 +247,14 @@ export type AfterCommitDecision =
   | { readonly kind: "proceed" }
   | { readonly kind: "stop"; readonly reason: string };
 
-/** What a `done` run's final commitAndPush means for the PR step.
- * `branchAhead` is `context.expected_head_sha !== context.base_sha`: the
- * branch already carries commits past its merge-base (a needs_human partial
- * push, an existing PR's commits). Nothing new to commit on such a branch
- * still yields a PR from those commits, exactly as after a push; only a
- * branch with nothing beyond the base is "no changes". */
+/**
+ * `done`で終わった実行の最終`commitAndPush`の結果から、PRの工程へ進むかを決める。
+ * `branchAhead`は`context.expected_head_sha !== context.base_sha`で、
+ * ブランチがmerge-baseより先のcommit(`needs_human`での途中のpushや、
+ * 既存PRのcommit)をすでに持つことを表す。
+ * そのようなブランチでは新しくcommitするものが無くても、pushした後と同じく
+ * 既存のcommitからPRを作る。baseより先に何も無いときだけ「変更なし」で止める。
+ */
 export function decideAfterCommit(
   result: CommitAndPushResult,
   branchAhead: boolean,
@@ -241,24 +274,28 @@ export function decideAfterCommit(
   }
 }
 
-/** Design §2 implement_finish's needs_human next action. */
+/** implement_finishが`needs_human`で止まったときの、人が次に行う操作を返す。 */
 export function implementNeedsHumanNextAction(branch: string): string {
   return `ブランチ\`${branch}\`を確認してPRを作るか、要件を直してください。不要ならブランチを削除してください`;
 }
 
+/** PRを開いたときの、人が次に行う操作を返す。保護パスの変更があれば先に確認を促す。 */
 export function prOpenedNextAction(hasProtectedChanges: boolean): string {
   return hasProtectedChanges
     ? "保護パスの変更を先に確認し、自動レビューの結果とあわせて人がマージを判断してください"
     : "自動レビューの結果を確認し、問題なければ人がマージしてください";
 }
 
-/** ensureLabel's colour/description for factory:review (review_label). */
+/** `factory:review`ラベル(`review_label`)を`ensureLabel`で作るときの色と説明。 */
 export const REVIEW_LABEL_STYLE = {
   color: "0e8a16",
   description: "Software Factoryの自動レビュー対象",
 } as const;
 
-/** Whether owner/repo is factory_config.factory_repo (PR body 備考 gate). */
+/**
+ * `owner`/`repo`が`factory_config.factory_repo`と同じリポジトリかを返す。
+ * PR本文の備考にWindmillへの反映のチェックリストを載せるかの判定に使う。
+ */
 export function isFactoryRepo(
   factoryRepo: string,
   owner: string,
@@ -288,10 +325,11 @@ export type PrOpenedEventInput = {
     "protected_changes" | "rounds" | "total_cost_usd" | "diff_stat"
   >;
   readonly checks: ImplementCheckSummary;
-  /** false when an existing PR was updated instead of created. */
+  /** 新しく作らずに既存のPRを更新したときは`false`。 */
   readonly created: boolean;
 };
 
+/** Discordへ通知する`pr_opened`イベントを組み立てる。 */
 export function buildPrOpenedEvent(
   input: PrOpenedEventInput,
 ): Extract<NotifyEvent, { kind: "pr_opened" }> {

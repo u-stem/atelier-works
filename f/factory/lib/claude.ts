@@ -1,15 +1,10 @@
-// Headless Claude Code execution (spec-cycle2.md §0, §1 claude.ts, §7 item
-// 13). `runClaude` spawns `claude -p` with the prompt on stdin (never in
-// argv — spec-cycle2.md §7 item 13), parses `--output-format json`, and
-// retries exactly once — with an appended "fill the required fields" note —
-// when the structured output is missing or fails the caller's schema check.
+// Claude Codeをヘッドレス(`claude -p`)で実行し、結果のJSONを解析する。
+// 日次予算のガードもここに置く。
 //
-// JSON field names below (`is_error`, `usage.cache_read_input_tokens`,
-// `modelUsage`, ...) were confirmed against a real `claude -p --json-schema
-// ... --output-format json` invocation inside the worker during the M4
-// contract smoke; see the implementer's report for the full observed shape.
-// `claude_version` is not part of that JSON — it comes from the worker
-// image's `CLAUDE_VERSION` env var (mise.toml `[env]` / Dockerfile ARG).
+// 下のJSONの項目名(`is_error`、`usage.cache_read_input_tokens`、`modelUsage`など)は、
+// worker内で実際に`claude -p --json-schema ... --output-format json`を実行して確かめた。
+// `claude_version`はこのJSONには無く、worker imageの環境変数`CLAUDE_VERSION`
+// (`mise.toml`の`[env]`とDockerfileの`ARG`)から取る。
 
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -20,18 +15,24 @@ import type { AgentRunRecord, FactoryConfig } from "./types.ts";
 import type { CommandRunner } from "./workspace.ts";
 
 // ---------------------------------------------------------------------------
-// buildSystemPrompt: concatenate skill SKILL.md files into a temp file
+// buildSystemPrompt: スキルのSKILL.mdを連結して一時ファイルに書く
 // ---------------------------------------------------------------------------
 
 export type BuildSystemPromptOptions = {
   readonly skillNames: readonly string[];
-  /** The factory self clone dir (see workspace.ts#ensureFactoryClone), e.g. "/workspaces/factory/atelier-works". */
+  /**
+   * Factory自身のクローンのディレクトリ(`workspace.ts`の`ensureFactoryClone`を参照)。
+   * 例: `/workspaces/factory/atelier-works`
+   */
   readonly factoryCloneDir: string;
   readonly readFile?: (path: string) => Promise<string>;
   readonly writeTempFile?: WriteTempFile;
 };
 
-/** The temp file holding the concatenated system prompt, plus how to remove it once the caller is done with every `runClaude` call that needs it. */
+/**
+ * 連結したシステムプロンプトを書いた一時ファイルと、その削除方法。
+ * `cleanup`は、このファイルを使う`runClaude`の呼び出しをすべて終えてから呼ぶ。
+ */
 export type SystemPromptFile = {
   readonly path: string;
   readonly cleanup: () => Promise<void>;
@@ -42,7 +43,11 @@ export type WriteTempFile = (content: string) => Promise<SystemPromptFile>;
 const defaultReadFile = (path: string): Promise<string> =>
   Bun.file(path).text();
 
-/** Writes the prompt to a private (mode 0600) file inside a fresh `mkdtemp` dir — never a predictable shared-/tmp path. */
+/**
+ * プロンプトを、新しく`mkdtemp`で作ったディレクトリの中の
+ * 非公開(mode 0600)のファイルに書く。
+ * 共有の`/tmp`にある推測できるパスは使わない。
+ */
 const defaultWriteTempFile: WriteTempFile = async (content) => {
   const dir = await mkdtemp(join(tmpdir(), "factory-system-prompt-"));
   const path = join(dir, "system-prompt.md");
@@ -56,11 +61,10 @@ const defaultWriteTempFile: WriteTempFile = async (content) => {
 };
 
 /**
- * Read `<factoryCloneDir>/.claude/skills/<name>/SKILL.md` for each
- * `skillNames`, concatenate them, and write the result to a private temp
- * file for `--append-system-prompt-file`. Callers must call the returned
- * `cleanup()` in a `finally` once done with every `runClaude` call that
- * uses this prompt file.
+ * `skillNames`の各スキルの`<factoryCloneDir>/.claude/skills/<name>/SKILL.md`を
+ * 読んで連結し、`--append-system-prompt-file`に渡す非公開の一時ファイルに書く。
+ * 呼び出し側は、このファイルを使う`runClaude`の呼び出しをすべて終えたら、
+ * 返された`cleanup()`を`finally`で呼ぶこと。
  */
 export async function buildSystemPrompt(
   opts: BuildSystemPromptOptions,
@@ -77,7 +81,7 @@ export async function buildSystemPrompt(
 }
 
 // ---------------------------------------------------------------------------
-// parseClaudeJson: raw `claude -p --output-format json` stdout -> ClaudeRunResult
+// parseClaudeJson: `claude -p --output-format json`の標準出力をClaudeRunResultにする
 // ---------------------------------------------------------------------------
 
 export type ClaudeUsage = {
@@ -97,7 +101,10 @@ export type ClaudeRunResult = {
   readonly numTurns: number;
   readonly durationMs: number;
   readonly usage: ClaudeUsage;
-  /** Present (and schema-conformant) only when `is_error` is false and the model returned valid structured output. */
+  /**
+   * `is_error`が`false`で、モデルが正しい構造化出力を返したときだけ値が入り、
+   * スキーマに適合する。
+   */
   readonly structuredOutput: unknown;
 };
 
@@ -161,7 +168,10 @@ function isRawClaudeJson(value: unknown): value is RawClaudeJson {
   return isRawClaudeUsage(record.usage);
 }
 
-/** Parse and narrow `claude -p --output-format json`'s stdout. Throws on invalid JSON or an unexpected shape. */
+/**
+ * `claude -p --output-format json`の標準出力を解析し、型を絞り込む。
+ * JSONとして不正なときと、想定外の形のときは例外を投げる。
+ */
 export function parseClaudeJson(stdout: string): ClaudeRunResult {
   let parsed: unknown;
   try {
@@ -207,23 +217,22 @@ export type RunClaudeOptions<T> = {
   readonly attempt: number;
   readonly model: string;
   readonly prompt: string;
-  /** Path from `buildSystemPrompt`. */
+  /** `buildSystemPrompt`が返したパス。 */
   readonly appendSystemPromptFile: string;
   readonly jsonSchema: Record<string, unknown>;
   readonly isStructuredOutput: (value: unknown) => value is T;
   readonly tools: readonly string[];
   /**
-   * `--allowedTools`: a permission rule narrowing which of `tools` (the
-   * available set) claude may use without asking, e.g. `["Edit", "Write"]`
-   * for pr_fix. Must be a subset of `tools`; `"Bash"` is rejected outright
-   * (pr_fix runs without Bash by design). Omitted or empty: no
-   * `--allowedTools` flag is added.
+   * `--allowedTools`に渡す値。`tools`(使えるツールの集合)のうち、
+   * claudeが確認なしに使ってよいものを絞る権限の規則で、pr_fixなら`["Edit", "Write"]`。
+   * `tools`の部分集合でなければならない。`"Bash"`は含めると例外を投げる
+   * (pr_fixはBashなしで動かす設計のため)。
+   * 省略するか空なら、`--allowedTools`は付けない。
    *
-   * External contract, measured against claude 2.1.282: `--permission-mode
-   * dontAsk` denies Edit/Write automatically, and even `acceptEdits` denies
-   * writes under `--add-dir` paths. Only `dontAsk` + `--allowedTools Edit
-   * Write` (with `--restricted`, always on — see buildClaudeArgv) actually
-   * allowed edits/writes in that measurement.
+   * claude 2.1.282で測った外部の挙動: `--permission-mode dontAsk`は
+   * Edit/Writeを自動で拒否し、`acceptEdits`でも`--add-dir`のパスへの書き込みは拒否する。
+   * 編集と書き込みができたのは、`dontAsk`と`--allowedTools Edit Write`の組み合わせ
+   * (`--restricted`は常に付ける。`buildClaudeArgv`を参照)だけだった。
    */
   readonly allowedTools?: readonly string[];
   readonly permissionMode: string;
@@ -232,24 +241,28 @@ export type RunClaudeOptions<T> = {
   readonly maxBudgetUsd: number;
   readonly cwd: string;
   /**
-   * `--add-dir`: extra directories claude may read from. The measurement in
-   * `allowedTools`'s doc comment showed `acceptEdits` refusing writes under
-   * `--add-dir`; the exact combination pipeline_generate.ts relies on
-   * (`dontAsk` + `--allowedTools Write Edit` + `--add-dir` + `--restricted`,
-   * expecting writes to land only under `cwd`) is verified by its first E2E
-   * run, not by this comment. One `--add-dir <dir>` flag per entry. Omitted
-   * or empty: no `--add-dir` flag is added.
+   * `--add-dir`に渡す、claudeが追加で読めるディレクトリ。
+   * 要素ごとに`--add-dir <dir>`を1つ付ける。
+   * 省略するか空なら、`--add-dir`は付けない。
+   * `allowedTools`の説明にある測定では、
+   * `acceptEdits`は`--add-dir`の下への書き込みを拒否した。
+   * `pipeline_generate.ts`が頼る組み合わせ(`dontAsk`、`--allowedTools Write Edit`、
+   * `--add-dir`、`--restricted`で、書き込みは`cwd`の下にだけ入る想定)は、
+   * このコメントではなく、最初のE2Eの実行で確かめる。
    */
   readonly addDirs?: readonly string[];
   readonly oauthToken: string;
   readonly claudeConfigDir?: string;
   readonly home?: string;
   readonly path?: string;
-  /** Defaults to `process.env.CLAUDE_VERSION` (set by the worker image). */
+  /** 既定は`process.env.CLAUDE_VERSION`(worker imageが設定する)。 */
   readonly claudeVersion?: string;
   readonly timeoutMs: number;
   readonly retryNote?: string;
-  /** Reserved for a future non-root worker execution mode; unused today (spawns as the worker's current user). */
+  /**
+   * 将来、workerをroot以外で実行する方式のために予約している。
+   * 今は使わず、workerの現在のユーザーで起動する。
+   */
   readonly runAs?: { readonly uid: number; readonly gid: number };
 };
 
@@ -315,12 +328,12 @@ function buildAllowedToolsArgs<T>(opts: RunClaudeOptions<T>): string[] {
       );
     }
   }
-  // Each tool name is its own argv element (unlike --tools, which is one
-  // comma-joined argument) — matches claude's --allowedTools flag shape.
+  // claudeの`--allowedTools`の形に合わせ、ツール名ごとに別のargvの要素にする
+  // (カンマで連結した1つの引数にする`--tools`とは異なる)。
   return ["--allowedTools", ...allowedTools];
 }
 
-/** One `--add-dir <dir>` flag per `opts.addDirs` entry (see that field's doc comment). */
+/** `opts.addDirs`の要素ごとに`--add-dir <dir>`を1つ作る(そのフィールドの説明を参照)。 */
 function buildAddDirsArgs<T>(opts: RunClaudeOptions<T>): string[] {
   const addDirs = opts.addDirs ?? [];
   return addDirs.flatMap((dir) => ["--add-dir", dir]);
@@ -345,12 +358,10 @@ function buildClaudeArgv<T>(opts: RunClaudeOptions<T>): string[] {
     "--setting-sources",
     opts.settingSources.join(","),
     "--strict-mcp-config",
-    // Confines the file tools to the working directories (--add-dir
-    // included), drops Bash/PowerShell/REPL/WebFetch unless --tools names
-    // them, and requires a person or the configured permission handler to
-    // approve writes to settings/git/tool-config files. Confirmed present
-    // via `claude --help` during the security-audit follow-up (spec-cycle2
-    // security fixes item 4c).
+    // ファイル操作のツールを作業ディレクトリ(`--add-dir`を含む)の中に閉じ込め、
+    // `--tools`で指定しない限りBash/PowerShell/REPL/WebFetchを外す。
+    // 設定・git・ツールの設定ファイルへの書き込みには、人か、設定した権限の
+    // ハンドラーの承認を求める。このオプションがあることは`claude --help`で確かめた。
     "--restricted",
     "--max-turns",
     String(opts.maxTurns),
@@ -490,11 +501,12 @@ const RETRYABLE_REASONS: readonly RunClaudeFailureReason[] = [
 ];
 
 /**
- * Run `claude -p` headless (spec-cycle2.md §0 flags), parse its JSON
- * output, and retry exactly once — with `retryNote` appended to the prompt
- * — when the output is missing required fields or isn't valid JSON at all
- * (covers "question-only" responses, which fail schema validation the same
- * way). Non-zero exit, timeout, and `is_error: true` are not retried.
+ * `claude -p`をヘッドレスで実行し、出力のJSONを解析する。
+ * プロンプトはargvではなく標準入力で渡す。
+ * 出力に必須のフィールドが欠けているか、JSONとして不正なときは、
+ * `retryNote`をプロンプトに付け足して1回だけ再試行する
+ * (質問だけで終わった応答も同じくスキーマの検査で失敗するので、これで扱える)。
+ * 0以外の終了コード、タイムアウト、`is_error: true`は再試行しない。
  */
 export async function runClaude<T>(
   opts: RunClaudeOptions<T>,
@@ -513,20 +525,17 @@ export async function runClaude<T>(
 }
 
 // ---------------------------------------------------------------------------
-// Daily budget guard (spec-cycle2.md §3 M6 "daily budget guard"). Promoted
-// from f/factory/steps/pipeline_generate.ts's local isBudgetExceeded /
-// jstMidnightTodayIso — pipeline_generate.ts's own migration to this export
-// is that implementer's to do.
+// 日次予算のガード
 // ---------------------------------------------------------------------------
 
 const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 
 /**
- * Start of "today" in JST, as a real-UTC ISO instant. Mirrors
- * lib/summary_support.ts's JST-midnight math but for "today so far" (an
- * open-ended `since`) rather than a full closed [yesterday start, yesterday
- * end) range, so it is kept separate from that module's
- * `computeYesterdayRangeJst`.
+ * `now`を含むJSTの日の0時を、UTCのISO文字列で返す。
+ * 日次予算はJSTの日付で区切るため、UTCの0時は使わない。
+ * `lib/summary_support.ts`にもJSTの0時の計算があるが、あちらは前日の
+ * 閉じた範囲を求め、こちらは「今日のこれまで」(終わりを持たない`since`)を求めるので、
+ * `computeYesterdayRangeJst`とは分けている。
  */
 export function jstMidnightTodayIso(now: Date): string {
   const jstShifted = new Date(now.getTime() + JST_OFFSET_MS);
@@ -538,8 +547,7 @@ export function jstMidnightTodayIso(now: Date): string {
   return new Date(todayJstMidnightUtcMs - JST_OFFSET_MS).toISOString();
 }
 
-/** True once spend-so-far reaches (not just exceeds) the configured daily
- * cap. */
+/** 今日の支出が日次の上限に達したら(超えたときだけでなく)`true`を返す。 */
 export function isBudgetExceeded(
   spentTodayUsd: number,
   dailyBudgetUsd: number,
@@ -554,11 +562,10 @@ export type DailyBudgetStatus = {
 };
 
 /**
- * Daily agent-run cost guard: sums today's (JST) agent_runs cost via
- * db.sumAgentCostSince and compares it to factory_config.daily_budget_usd.
- * `sql` is an addition beyond the requested signature, for the same reason
- * every other db-touching function in this codebase takes one — so tests
- * never hit a real database; defaults to `db.ts`'s `defaultSqlClient`.
+ * 今日(JST)の`agent_runs`の費用を`db.sumAgentCostSince`で合計し、
+ * `factory_config.daily_budget_usd`と比べた結果を返す。
+ * DBに触る他の関数と同じく`sql`を引数で受け取り、テストが本物のDBに触れないようにする。
+ * 既定は`db.ts`の`defaultSqlClient`。
  */
 export async function dailyBudgetStatus(
   config: Pick<FactoryConfig, "daily_budget_usd">,

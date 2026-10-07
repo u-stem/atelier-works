@@ -1,35 +1,26 @@
-// Starting the implement flow after a requirements approval (工程3 design
-// §1): approved → implementing first (approved is terminal, so on_error_flow
-// could not fail a flow that dies before prepare), then runFlowAsync, then
-// setFlowJobId. Every side effect has its own try so one failure never
-// skips the bookkeeping after it, and nothing is thrown:
-//   - CAS false or throwing: someone else (retry_work_item) moved the item;
-//     leave it alone — forcing needs_human would clobber a running flow.
-//   - runFlowAsync throws: implementing → needs_human, job_failures (the
-//     Console Failures tab offers the retry), notice, Discord.
-//   - setFlowJobId throws (twice — it is retried once): the flow is
-//     running, so the status stays implementing; job_failures + notice
-//     only.
+// 要件定義の承認後にimplementフローを起動する処理と、その失敗理由の文言を定義する。
 
 import { maskSecrets } from "./log.ts";
 
+/** implementフローを起動できなかったときの失敗理由の文言を返す。 */
 export function implementLaunchFailureReason(message: string): string {
   return `implement flow could not be started: ${message}`;
 }
 
+/** フローのジョブIDを記録できなかったときの失敗理由の文言を返す。 */
 export function flowJobIdFailureReason(message: string): string {
   return `implement flow job id could not be recorded: ${message}`;
 }
 
 export type StartImplementDeps = {
-  /** updateStatusIfCurrent(approved → implementing). */
+  /** `updateStatusIfCurrent`で`approved`から`implementing`へ移す。 */
   readonly casToImplementing: () => Promise<boolean>;
-  /** runFlowAsync(IMPLEMENT_FLOW_PATH, { work_item_id }). */
+  /** `runFlowAsync(IMPLEMENT_FLOW_PATH, { work_item_id })`でフローを起動する。 */
   readonly launchFlow: () => Promise<string>;
   readonly recordFlowJobId: (jobId: string) => Promise<void>;
-  /** updateStatusIfCurrent(implementing → needs_human, reason). */
+  /** `updateStatusIfCurrent`で`implementing`から`needs_human`へ移す。 */
   readonly moveToNeedsHuman: (reason: string) => Promise<void>;
-  /** recordFailure with flow_path IMPLEMENT_FLOW_PATH and this step name. */
+  /** `flow_path`に`IMPLEMENT_FLOW_PATH`、`step`に引数のstep名を渡して`recordFailure`する。 */
   readonly recordFailure: (reason: string, step: string) => Promise<void>;
   readonly addNotice: (reason: string) => Promise<void>;
   readonly notifyNeedsHuman: (reason: string) => Promise<void>;
@@ -46,6 +37,7 @@ function messageOf(err: unknown): string {
   return maskSecrets(err instanceof Error ? err.message : String(err));
 }
 
+/** `action`を実行し、失敗してもログに残すだけで例外を投げない。 */
 async function attempt(
   deps: StartImplementDeps,
   label: string,
@@ -58,6 +50,22 @@ async function attempt(
   }
 }
 
+/**
+ * 作業項目を`approved`から`implementing`へ移し、implementフローを起動して、
+ * そのジョブIDを記録する。例外は投げず、結果を`StartImplementOutcome`で返す。
+ *
+ * 状態を先に移すのは、`approved`が終端状態だからである。
+ * `approved`のままフローがprepareより前に落ちると、`on_error_flow`は失敗にできない。
+ *
+ * 副作用ごとに`try`を分け、1つが失敗しても後続の記録を飛ばさない。
+ * - 状態の移行が`false`を返すか例外を投げた場合は、`not_moved`を返して何もしない。
+ *   別の処理(`retry_work_item`)が作業項目を動かしたためで、
+ *   ここで`needs_human`へ移すと実行中のフローの状態を上書きしてしまう。
+ * - フローの起動が例外を投げた場合は、`needs_human`へ移し、`job_failures`への記録
+ *   (ConsoleのFailuresタブから再実行できる)、noticeの追加、Discordへの通知を行う。
+ * - ジョブIDの記録が2回とも失敗した場合(1回だけ再試行する)は、
+ *   フローは動いているので`implementing`のままにし、`job_failures`とnoticeだけ残す。
+ */
 export async function startImplement(
   deps: StartImplementDeps,
 ): Promise<StartImplementOutcome> {

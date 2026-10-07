@@ -1,29 +1,25 @@
-// Pure decision logic shared by every script in the generalized
-// approval_requests flow (approval_decide.ts, pipeline_request_approval.ts,
-// steps/requirements_apply.ts, steps/issue_proposal_apply.ts, poll_issues.ts's
-// expiry sweep) — replaces pipeline.flow's suspend-based approval wait
-// (spec: "Generalize approval waiting away from suspend"). No I/O here; every
-// function is exported for unit testing.
+// 承認待ち(`approval_requests`)を扱うスクリプト群が共有する判定ロジック。
+// 入出力は行わず、単体テストのためにすべての関数を公開する。
 
 import type { ApprovalRequest, ApprovalRequestKind } from "./types.ts";
 
-/** How long a "requirements" approval request stays pending before the
- * scheduled expiry sweep (poll_issues.ts) marks it expired — matches the
- * former pipeline.flow suspend step's own 7-day timeout. `"issue_proposal"`
- * requests never expire (no deadline; see `insertApprovalRequest`'s
- * `expires_at: null` at that call site). */
+/**
+ * `requirements`の承認依頼が`pending`のまま待つ秒数(7日)。
+ * これを過ぎると、`poll_issues.ts`の定期処理が期限切れにする。
+ * `issue_proposal`の承認依頼は期限を持たない(`expires_at`が`null`)。
+ */
 export const APPROVAL_TIMEOUT_SEC = 604800;
 
-/** The `expires_at` deadline for a freshly requested "requirements" approval,
- * `APPROVAL_TIMEOUT_SEC` after `now` (pure, for testing). */
+/** 新しい`requirements`承認依頼の期限(`now`の`APPROVAL_TIMEOUT_SEC`秒後)を返す。 */
 export function computeExpiresAt(now: Date): Date {
   return new Date(now.getTime() + APPROVAL_TIMEOUT_SEC * 1000);
 }
 
-/** Whether a `factory.approval_requests` row is a still-`pending` request
- * whose deadline has passed (pure, for testing) — the predicate behind
- * poll_issues.ts's expiry sweep. A request with `expires_at: null` (e.g.
- * "issue_proposal") is never expired. */
+/**
+ * `factory.approval_requests`の行が、`pending`のまま期限を過ぎているかを返す。
+ * `poll_issues.ts`の期限切れ処理が使う判定である。
+ * `expires_at`が`null`の行(`issue_proposal`など)は期限切れにならない。
+ */
 export function isExpired(
   request: Pick<ApprovalRequest, "status" | "expires_at">,
   now: Date,
@@ -41,19 +37,15 @@ export type ExistingDecisionAction =
   | "refuse";
 
 /**
- * Classifies what approval_decide.ts's main() should do about an
- * approval_requests row it just read, given the decision this call is being
- * asked to record (pure, for testing — mirrors the former
- * `classifyExistingApproval` / `classifyIssueProposalDecision` shape used by
- * the two suspend-era scripts this one generalizes):
- *   - `"record_and_dispatch"`: the row is still `pending` — record the
- *     decision, then dispatch to the kind's apply script.
- *   - `"redispatch"`: the row already carries the *same* decision as
- *     requested (an idempotent retry, e.g. the apply script's own dispatch
- *     failed after the decision was recorded) — do not record again, but
- *     still dispatch.
- *   - `"refuse"`: the row carries a *different* decision (a genuine
- *     conflict) or has expired — nothing to do, the caller should throw.
+ * `approval_decide.ts`が読んだ承認依頼の行に対して、
+ * 今回記録しようとしている判断をどう扱うかを決める。
+ * - `"record_and_dispatch"`: 行がまだ`pending`である。
+ *   判断を記録し、種類ごとのapplyスクリプトへ渡す。
+ * - `"redispatch"`: 行に同じ判断がすでに記録されている。
+ *   判断の記録後にapplyスクリプトへの受け渡しが失敗したときの再試行などで、
+ *   冪等に扱うため、記録はし直さずに受け渡しだけ行う。
+ * - `"refuse"`: 行に異なる判断が記録されている(本当の競合)か、期限切れである。
+ *   何もせず、呼び出し側が例外を投げる。
  */
 export function classifyExistingDecision(
   existingStatus: string,
@@ -66,9 +58,8 @@ export function classifyExistingDecision(
 }
 
 /**
- * Folds a caller-supplied `note` into the recorded `reason` (pure, for
- * testing) — moved from the former approval_decide.ts unchanged. `null` when
- * there is nothing to record.
+ * 呼び出し側が渡した`note`を、記録する`reason`にまとめる。
+ * どちらも空なら`null`を返す。
  */
 export function buildRecordedReason(
   reason: string,
@@ -86,24 +77,25 @@ export function buildRecordedReason(
   return parts.length > 0 ? parts.join("\n\n") : null;
 }
 
-// Kept as a single named constant per the original security fix's
-// instruction ("定数化して1箇所に") — the exact Windmill App view URL path, so
-// a future correction (once the real URL can be verified) is a one-line
-// change. Moved here (from the former pipeline_request_approval.ts's
-// buildInboxUrl) since every approval-flow script that posts a link to the
-// Console now shares it, not just the requirements-approval request step.
+/**
+ * Factory ConsoleのWindmill Appのパス。
+ * 承認フローのスクリプトはすべてこの定数からConsoleへのリンクを作る。
+ * 実際のURLを確かめて直す必要が出たときに、1行の変更で済むよう1箇所にまとめている。
+ */
 const FACTORY_CONSOLE_APP_PATH = "f/factory/factory_console";
 
-/** The Factory Console App's authenticated Inbox URL (pure, for testing) —
- * the only link ever posted for "go approve/reject this" (no raw suspend
- * capability URL exists anymore to leak). When `target.work_item_id` is
- * given, appends a `#requirements/<id>` deep-link fragment so the Console's
- * 要件定義 tab can jump straight to that work item's requirements document
- * (see the raw app's `lib/deepLink.ts`) — the App itself decides whether it
- * can actually read the fragment (opaque-origin raw apps may not be able to
- * see the parent frame's URL), so this is a best-effort convenience, not a
- * guarantee; the work_item_id is also written out alongside this URL by
- * every caller (Issue comment / Discord field) as a manual fallback. */
+/**
+ * Factory Console AppのInboxのURLを返す。このURLはログインを求める。
+ * 承認・却下を求めるときに投稿するリンクはこれだけで、
+ * 漏れると困るsuspendの権限付きURLはもう存在しない。
+ *
+ * `target.work_item_id`を渡すと`#requirements/<id>`のフラグメントを付け、
+ * Consoleの要件定義タブがその作業項目の要件定義書を直接開けるようにする
+ * (raw appの`lib/deepLink.ts`を参照)。
+ * ただし、raw appは親フレームのURLを読めない場合があるため、これは保証ではない。
+ * 手で辿れるよう、呼び出し側はどれもURLと一緒に`work_item_id`も書き出す
+ * (IssueのコメントやDiscordのフィールド)。
+ */
 export function buildConsoleUrl(
   windmillPublicUrl: string,
   target?: { work_item_id: number },
@@ -114,7 +106,7 @@ export function buildConsoleUrl(
     : `${base}#requirements/${String(target.work_item_id)}`;
 }
 
-/** Console deep link to one audit report (監査 tab, `#audit/<work_item_id>`). */
+/** 監査レポート1件を開くConsoleのURL(監査タブ、`#audit/<work_item_id>`)を返す。 */
 export function buildAuditConsoleUrl(
   windmillPublicUrl: string,
   workItemId: number,
@@ -122,9 +114,11 @@ export function buildAuditConsoleUrl(
   return `${windmillPublicUrl}/apps/get/${FACTORY_CONSOLE_APP_PATH}#audit/${String(workItemId)}`;
 }
 
-/** Which step script handles a decided approval_requests row of this kind
- * (pure, for testing) — approval_decide.ts dispatches to this path via
- * `wmill.runScriptByPathAsync` after recording the decision. */
+/**
+ * 判断が記録された承認依頼を処理するstepスクリプトのパスを、種類ごとに返す。
+ * `approval_decide.ts`は判断を記録した後、
+ * `wmill.runScriptByPathAsync`でこのパスのスクリプトを起動する。
+ */
 export function handlerPathFor(kind: ApprovalRequestKind): string {
   switch (kind) {
     case "requirements":
@@ -134,13 +128,13 @@ export function handlerPathFor(kind: ApprovalRequestKind): string {
   }
 }
 
-/** Narrows a list of approval_requests-shaped rows to the "requirements"
- * kind (pure, for testing) — poll_issues.ts's expiry sweep only needs to
- * apply requirements-specific side effects (status transition, label
- * cleanup) to this subset; "issue_proposal" requests never carry an
- * `expires_at` so they never appear in the expired set to begin with, but
- * this keeps the sweep's per-kind branching testable independently of that
- * DB-side guarantee. */
+/**
+ * 承認依頼の一覧から`requirements`の種類だけを取り出す。
+ * `poll_issues.ts`の期限切れ処理では、状態の移行やラベルの片付けといった
+ * `requirements`固有の副作用をこの部分集合にだけ適用する。
+ * `issue_proposal`は`expires_at`を持たないので、そもそも期限切れの一覧に入らない。
+ * それでも種類ごとの分岐を、DB側のこの保証とは別にテストできるよう関数にしている。
+ */
 export function expiredRequirementsRequests<
   T extends { kind: ApprovalRequestKind },
 >(requests: readonly T[]): T[] {

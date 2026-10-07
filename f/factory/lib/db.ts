@@ -1,21 +1,15 @@
-// factory schema Data Table access (migrations/datatable/main/*.sql).
+// `factory`スキーマのData Table(`migrations/datatable/main/*.sql`)を読み書きする。
 //
-// All I/O goes through an injected SqlClient so tests never hit a real
-// database — see createFakeSqlClient in tests/lib/db.test.ts for the shape
-// fakes take. The default client adapts `wmill.datatable()` (the real
-// windmill-client tagged-template SQL API; see the write-script-bun skill's
-// windmill-client reference and
-// https://www.windmill.dev/docs/core_concepts/persistent_storage/data_tables.md).
-//
-// Every exported function takes `sql: SqlClient` as its last parameter,
-// defaulting to `defaultSqlClient` (backed by `wmill.datatable()`), per
-// spec-cycle2.md §1's "external I/O must be injectable" rule.
+// テストが本物のDBに触れないよう、入出力はすべて注入した`SqlClient`を通す
+// (偽物の形は`tests/lib/db.test.ts`の`createFakeSqlClient`を参照)。
+// 公開する関数はどれも最後の引数に`sql: SqlClient`を取り、既定値は
+// `wmill.datatable()`(windmill-clientのタグ付きテンプレートのSQL API)を使う
+// `defaultSqlClient`である。
+// 参考: https://www.windmill.dev/docs/core_concepts/persistent_storage/data_tables.md
 
-// Pinned to the deployed Windmill server's version (mise.toml's WM_VERSION)
-// per .claude/skills/windmill-script/SKILL.md — an unpinned import lets
-// dependency resolution drift to whatever's newest on npm at
-// `wmill generate-metadata` time, producing a client/server version
-// mismatch.
+// デプロイしたWindmillサーバーのバージョン(`mise.toml`の`WM_VERSION`)に固定する。
+// 固定しないと、`wmill generate-metadata`の時点でnpmの最新版に解決され、
+// クライアントとサーバーのバージョンが食い違う。
 import * as wmill from "windmill-client@1.817.0";
 import type { CleanupCounts } from "./cleanup_db_support.ts";
 import {
@@ -69,9 +63,9 @@ import {
 } from "./types.ts";
 
 // ---------------------------------------------------------------------------
-// SqlClient: a minimal, easily-fakeable slice of windmill-client's
-// DatatableSqlTemplateFunction (SqlStatement.fetch/execute), used via tagged
-// template syntax: `await sql\`SELECT ... WHERE id = ${id}\`.fetch()`.
+// SqlClient: windmill-clientの`DatatableSqlTemplateFunction`
+// (`SqlStatement.fetch`/`execute`)のうち、偽物を作りやすい最小限の部分。
+// タグ付きテンプレートで使う: `await sql\`SELECT ... WHERE id = ${id}\`.fetch()`
 // ---------------------------------------------------------------------------
 
 export type SqlRow = Record<string, unknown>;
@@ -98,9 +92,11 @@ function toSqlRows(value: unknown): SqlRow[] {
   });
 }
 
-/** Default SqlClient, backed by `wmill.datatable()` (schema "factory" via
- * the "main" data table — table/view names are schema-qualified in every
- * query below). */
+/**
+ * `wmill.datatable()`を使う既定の`SqlClient`。
+ * `main`のData Tableを通して`factory`スキーマに接続するので、
+ * 以下のクエリではテーブル名・ビュー名をすべてスキーマ付きで書く。
+ */
 export const defaultSqlClient: SqlClient = (strings, ...values) => {
   const tag = wmill.datatable();
   const statement = tag(strings, ...values);
@@ -113,9 +109,9 @@ export const defaultSqlClient: SqlClient = (strings, ...values) => {
 };
 
 // ---------------------------------------------------------------------------
-// Row parsing helpers (Parse-don't-validate for every SELECT / RETURNING).
-// bigint/bigserial columns may come back as either a JS number or a numeric
-// string depending on serialization, so id fields accept both.
+// 行の解析の補助関数(SELECTとRETURNINGの結果はすべて解析してから使う)。
+// bigint/bigserialの列は、シリアライズの仕方によってJSの数値でも数字の文字列でも
+// 返りうるので、IDの項目はどちらも受け付ける。
 // ---------------------------------------------------------------------------
 
 function parseId(value: unknown, field: string): number {
@@ -128,9 +124,11 @@ function parseId(value: unknown, field: string): number {
   throw new Error(`db: row field "${field}" is not a valid id`);
 }
 
-/** Same number-or-numeric-string leniency as parseId, for a non-id numeric
- * aggregate (`SUM`/`COUNT`/arithmetic) that may also come back as either
- * depending on serialization. */
+/**
+ * ID以外の数値の集計(`SUM`、`COUNT`、算術)を解析する。
+ * これもシリアライズの仕方でどちらの形でも返りうるので、
+ * `parseId`と同じく数値と数字の文字列の両方を受け付ける。
+ */
 function parseNumericLike(value: unknown, field: string): number {
   if (isNumber(value)) {
     return value;
@@ -240,10 +238,12 @@ function isDiagram(value: unknown): value is Diagram {
   return isRecord(value) && isString(value.name) && isString(value.file);
 }
 
-/** Parses `requirement_drafts.diagrams`. Entries that are not the current
- * `{name, file}` shape (e.g. a pre-redesign `{name, drawio_xml}` row that the
- * doc_dir migration did not reach) are dropped rather than failing the whole
- * row: a draft with no renderable diagrams is still a readable draft. */
+/**
+ * `requirement_drafts.diagrams`を解析する。
+ * 今の`{name, file}`の形でない要素(`doc_dir`への移行が届かなかった
+ * 旧形式の`{name, drawio_xml}`など)は、行全体を失敗させずに捨てる。
+ * 表示できる図が無くても、下書きとしては読めるためである。
+ */
 function parseDiagrams(value: unknown, field: string): Diagram[] {
   const array = parseJsonArray(value, field);
   return array.filter(isDiagram);
@@ -259,7 +259,7 @@ function parseOpenQuestions(value: unknown, field: string): string[] {
   return array;
 }
 
-/** Parses one factory.work_items row. */
+/** `factory.work_items`の1行を解析する。 */
 function toWorkItem(row: SqlRow): WorkItem {
   return {
     id: parseId(row.id, "id"),
@@ -353,7 +353,7 @@ export type NewWorkItem = {
   parent_work_item_id: number | null;
 };
 
-/** Inserts a new factory.work_items row and returns its id. */
+/** `factory.work_items`に新しい行を挿入し、そのIDを返す。 */
 export async function insertWorkItem(
   item: NewWorkItem,
   sql: SqlClient = defaultSqlClient,
@@ -377,26 +377,22 @@ export async function insertWorkItem(
 }
 
 /**
- * Transitions a work item's status and appends an audit row to
- * factory.work_item_events, atomically: a single statement locks the row
- * (`FOR UPDATE`) to read its previous status, updates it, and inserts the
- * event, so a concurrent writer (most notably poll_issues.ts's reconcile,
- * which can cancel a work item out from under an in-flight flow step per
- * spec-cycle2.md §7 item 6) can never interleave with this read-modify-write
- * and produce a wrong `from_status` or a lost update. `previous` must be
- * joined into the UPDATE's `FROM` clause (not referenced as an independent
- * sibling CTE via a scalar subquery in RETURNING) — verified empirically
- * against Postgres 18: the sibling-CTE form silently returns a NULL
- * from_status, because a `SELECT ... FOR UPDATE` CTE referenced only from
- * another data-modifying CTE's RETURNING list is not guaranteed to execute
- * before that CTE touches the same row.
+ * 作業項目の状態を移し、`factory.work_item_events`に監査用の行を追加する。
+ * 該当する作業項目が無ければ例外を投げる。
  *
- * This function does not itself protect against a *flow branch* clobbering
- * a status a concurrent process already moved on from (e.g. resuming a
- * pipeline step after the work item was independently cancelled) — a flow's
- * own branch logic must re-check the current status first (spec-cycle2.md
- * §7 item 6), or use `updateStatusIfCurrent` below for a single atomic
- * compare-and-swap.
+ * 1つの文で、行をロック(`FOR UPDATE`)して前の状態を読み、更新し、イベントを挿入する。
+ * これで、並行する書き込み(とくに、実行中のフローのstepの裏で作業項目を
+ * キャンセルしうる`poll_issues.ts`のreconcile)がこの読み取り・変更・書き込みの
+ * 間に割り込めず、誤った`from_status`や更新の消失が起きない。
+ * `previous`はUPDATEの`FROM`句に結合すること。RETURNINGのスカラー副問い合わせから
+ * 兄弟のCTEとして参照する形は、PostgreSQL 18で試すと黙って`from_status`をNULLにした。
+ * 別のデータ変更CTEのRETURNINGからだけ参照される`SELECT ... FOR UPDATE`のCTEは、
+ * そのCTEが同じ行に触れる前に実行される保証が無いためである。
+ *
+ * この関数自体は、並行する処理がすでに先へ進めた状態を、フローの分岐が
+ * 上書きすることは防がない(独立にキャンセルされた作業項目でpipelineのstepを
+ * 再開する場合など)。フローの分岐は先に現在の状態を確かめ直すか、
+ * 1回の不可分な比較と交換を行う`updateStatusIfCurrent`を使うこと。
  */
 export async function updateStatus(
   id: number,
@@ -427,13 +423,11 @@ export async function updateStatus(
 }
 
 /**
- * Compare-and-swap status transition: updates the row only if its current
- * status is still `expectedFrom`, and records the matching
- * factory.work_item_events row in the same statement. Returns `false`
- * (without throwing or recording anything) when no row matched — the
- * expected outcome when a concurrent process already moved the work item
- * on (e.g. reconcile cancelling it), which is what lets a flow branch use
- * this for idempotent status transitions per spec-cycle2.md §7 item 6.
+ * 比較と交換で状態を移す。現在の状態がまだ`expectedFrom`のときだけ行を更新し、
+ * 同じ文で対応する`factory.work_item_events`の行も記録する。
+ * 一致する行が無ければ、例外も記録もせずに`false`を返す。
+ * 並行する処理がすでに作業項目を先へ進めた(reconcileがキャンセルしたなど)ときに
+ * 起こる想定どおりの結果で、これによりフローの分岐が冪等に状態を移せる。
  */
 export async function updateStatusIfCurrent(
   id: number,
@@ -458,7 +452,7 @@ export async function updateStatusIfCurrent(
   return rows.length > 0;
 }
 
-/** Fetches one factory.work_items row by id, or null if it does not exist. */
+/** `factory.work_items`の行をIDで1件取得する。無ければ`null`を返す。 */
 export async function getWorkItem(
   id: number,
   sql: SqlClient = defaultSqlClient,
@@ -469,8 +463,7 @@ export async function getWorkItem(
   return row === undefined ? null : toWorkItem(row);
 }
 
-/** Lists every work item whose status is not terminal, most recently
- * updated first. */
+/** 状態が終端でない作業項目をすべて、更新の新しい順に返す。 */
 export async function listActive(
   sql: SqlClient = defaultSqlClient,
 ): Promise<WorkItem[]> {
@@ -484,10 +477,10 @@ export async function listActive(
 }
 
 /**
- * Lists every work item in a terminal status whose `updated_at` is at or
- * before `olderThan` — cleanup_workspaces.ts's (M7) TTL sweep target set
- * (`config.worktree_ttl_days` before "now"). Most recently updated first,
- * same as `listActive`.
+ * 状態が終端で、`updated_at`が`olderThan`以前の作業項目をすべて返す。
+ * `cleanup_workspaces.ts`がTTLで掃除する対象
+ * (現在から`config.worktree_ttl_days`より前)である。
+ * `listActive`と同じく、更新の新しい順に並べる。
  */
 export async function listStaleTerminalWorkItems(
   olderThan: Date,
@@ -513,11 +506,11 @@ export type NewRequirementDraft = {
   markdown: string;
   diagrams: Diagram[];
   open_questions: string[];
-  /** See RequirementDraft.doc_dir (types.ts). */
+  /** `RequirementDraft.doc_dir`(`types.ts`)を参照。 */
   doc_dir: string | null;
 };
 
-/** Inserts a factory.requirement_drafts row and returns its id. */
+/** `factory.requirement_drafts`に行を挿入し、そのIDを返す。 */
 export async function saveDraft(
   draft: NewRequirementDraft,
   sql: SqlClient = defaultSqlClient,
@@ -536,7 +529,7 @@ export async function saveDraft(
   return parseId(row.id, "id");
 }
 
-/** Parses a full factory.requirement_drafts row (for future readers). */
+/** `factory.requirement_drafts`の行全体を解析する。 */
 export function toRequirementDraft(row: SqlRow): RequirementDraft {
   return {
     id: parseId(row.id, "id"),
@@ -555,7 +548,7 @@ export function toRequirementDraft(row: SqlRow): RequirementDraft {
 // agent_runs
 // ---------------------------------------------------------------------------
 
-/** Inserts a factory.agent_runs row and returns its id. */
+/** `factory.agent_runs`に行を挿入し、そのIDを返す。 */
 export async function recordAgentRun(
   record: AgentRunRecord,
   sql: SqlClient = defaultSqlClient,
@@ -581,7 +574,7 @@ export async function recordAgentRun(
 // job_failures
 // ---------------------------------------------------------------------------
 
-/** Inserts a factory.job_failures row and returns its id. */
+/** `factory.job_failures`に行を挿入し、そのIDを返す。 */
 export async function recordFailure(
   record: FailureRecord,
   sql: SqlClient = defaultSqlClient,
@@ -599,7 +592,7 @@ export async function recordFailure(
 // deployments
 // ---------------------------------------------------------------------------
 
-/** Inserts a factory.deployments row and returns its id. */
+/** `factory.deployments`に行を挿入し、そのIDを返す。 */
 export async function recordDeployment(
   record: DeploymentRecord,
   sql: SqlClient = defaultSqlClient,
@@ -620,7 +613,7 @@ export async function recordDeployment(
 // notices
 // ---------------------------------------------------------------------------
 
-/** Inserts a factory.notices row and returns its id. */
+/** `factory.notices`に行を挿入し、そのIDを返す。 */
 export async function addNotice(
   record: NoticeRecord,
   sql: SqlClient = defaultSqlClient,
@@ -635,7 +628,7 @@ export async function addNotice(
 }
 
 // ---------------------------------------------------------------------------
-// reviews (migration 2)
+// reviews
 // ---------------------------------------------------------------------------
 
 const REVIEW_VERDICTS: readonly ReviewVerdict[] = [
@@ -656,7 +649,7 @@ const REVIEW_FINDING_KINDS: readonly ReviewFindingKind[] = [
   "q",
 ];
 
-/** Inserts a factory.reviews row and returns its id. */
+/** `factory.reviews`に行を挿入し、そのIDを返す。 */
 export async function insertReview(
   record: ReviewRecord,
   sql: SqlClient = defaultSqlClient,
@@ -673,11 +666,12 @@ export async function insertReview(
   return parseId(row.id, "id");
 }
 
-/** `kind` didn't exist before the review-finding schema change — derives it
- * from `severity` for a pre-existing factory.reviews row (spec-cycle2.md
- * review-format update: at least one real row already exists, so read-back
- * must stay backward-compatible even though write-side validation
- * (REVIEW_SCHEMA) requires all 8 fields going forward). */
+/**
+ * `kind`を持たない既存の`factory.reviews`の行について、`severity`から`kind`を導く。
+ * `kind`は指摘のスキーマを変えたときに加えた項目である。
+ * 書き込み側の検証(`REVIEW_SCHEMA`)は今後8項目すべてを求めるが、
+ * 実データにすでに古い形の行があるので、読み出しは後方互換を保つ。
+ */
 function deriveKindFromSeverity(severity: ReviewSeverity): ReviewFindingKind {
   switch (severity) {
     case "blocker":
@@ -690,9 +684,12 @@ function deriveKindFromSeverity(severity: ReviewSeverity): ReviewFindingKind {
   }
 }
 
-/** Parses one factory.reviews row's `findings` array element, backfilling
- * `kind` (derived from `severity`) and `end_line`/`suggested_code`
- * (defaulted to `null`) when a pre-existing row predates those columns. */
+/**
+ * `factory.reviews`の行の`findings`配列の要素1つを解析する。
+ * それらの項目より前に作られた既存の行では、`kind`を`severity`から導き、
+ * `end_line`と`suggested_code`を`null`で補う。
+ * 形が不正なら例外を投げる。
+ */
 function parseReviewFinding(value: unknown, field: string): ReviewFinding {
   if (
     !isRecord(value) ||
@@ -733,7 +730,7 @@ function parseReviewFinding(value: unknown, field: string): ReviewFinding {
   };
 }
 
-/** Parses a full factory.reviews row (for future readers). */
+/** `factory.reviews`の行全体を解析する。 */
 export function toReviewRecord(row: SqlRow): ReviewRecord {
   const rawFindings = parseJsonArray(row.findings, "findings");
   const findings = rawFindings.map((finding) =>
@@ -753,16 +750,15 @@ export function toReviewRecord(row: SqlRow): ReviewRecord {
 }
 
 /**
- * Whether a factory review of this PR was already recorded before this
- * work item (team-lead decision, 2026-09-26): joins factory.reviews to
- * factory.work_items on work_item_id and filters to rows for the same
- * (owner, repo, pr_number) but a different work_item_id — this in-flight
- * pr_review's own not-yet-inserted row (or a still-uncommitted earlier
- * insert within the same call) never counts as a "prior" review. True for
- * either a posted or a gated-and-recorded prior review — both count as "the
- * factory has reviewed this PR before", which is what selects the
- * re-review-clean vs first-review-clean body (renderReviewSummary's
- * ReviewBodyMode).
+ * このPRについて、この作業項目より前にFactoryのレビューが記録されているかを返す。
+ * `factory.reviews`を`work_item_id`で`factory.work_items`に結合し、
+ * 同じ(owner, repo, pr_number)で`work_item_id`が異なる行に絞る。
+ * そのため、実行中のpr_review自身のまだ挿入していない行(または同じ呼び出しの中で
+ * まだcommitしていない先の挿入)は「前の」レビューに数えない。
+ * 投稿したレビューも、投稿を見送って記録だけしたレビューも、
+ * 「FactoryがこのPRを以前にレビューした」として`true`にする。
+ * この結果で、指摘なしのときの本文を再レビュー用と初回用のどちらにするか
+ * (`renderReviewSummary`の`ReviewBodyMode`)を選ぶ。
  */
 export async function hasPriorReview(
   owner: string,
@@ -785,7 +781,7 @@ export async function hasPriorReview(
 }
 
 // ---------------------------------------------------------------------------
-// fix_rounds (migration 2)
+// fix_rounds
 // ---------------------------------------------------------------------------
 
 const FIX_OUTCOMES: readonly FixOutcome[] = [
@@ -794,7 +790,7 @@ const FIX_OUTCOMES: readonly FixOutcome[] = [
   "blocked",
 ];
 
-/** Inserts a factory.fix_rounds row and returns its id. */
+/** `factory.fix_rounds`に行を挿入し、そのIDを返す。 */
 export async function insertFixRound(
   record: FixRoundRecord,
   sql: SqlClient = defaultSqlClient,
@@ -818,7 +814,7 @@ function isFixReply(value: unknown): value is FixReply {
   );
 }
 
-/** Parses a full factory.fix_rounds row (for future readers). */
+/** `factory.fix_rounds`の行全体を解析する。 */
 export function toFixRoundRecord(row: SqlRow): FixRoundRecord {
   const triggerReviewIds = parseJsonArray(
     row.trigger_review_ids,
@@ -847,12 +843,13 @@ export function toFixRoundRecord(row: SqlRow): FixRoundRecord {
   };
 }
 
-/** Most recently created factory.fix_rounds row for a work item, or `null`
- * if it has none yet — used by issue_proposal_apply.ts to tell whether the
- * round that produced a pending issue proposal also pushed a commit
- * (`commit_shas` non-empty), which decides whether the work item's status
- * becomes `rereview_requested` or `reviewed` once every proposal for that
- * work item has been decided. */
+/**
+ * 作業項目の`factory.fix_rounds`のうち、最も新しく作られた行を返す。無ければ`null`。
+ * `issue_proposal_apply.ts`が、保留中のIssue提案を出したラウンドがcommitもpushしたか
+ * (`commit_shas`が空でないか)を確かめるのに使う。
+ * その作業項目の提案がすべて判断された後に、状態を`rereview_requested`と
+ * `reviewed`のどちらにするかがこれで決まる。
+ */
 export async function latestFixRound(
   workItemId: number,
   sql: SqlClient = defaultSqlClient,
@@ -868,8 +865,7 @@ export async function latestFixRound(
 }
 
 // ---------------------------------------------------------------------------
-// issue_proposals (user decision, 2026-09-26) — see
-// migrations/datatable/main/20260926130000_issue_proposals.up.sql.
+// issue_proposals(`migrations/datatable/main/20260926130000_issue_proposals.up.sql`)
 // ---------------------------------------------------------------------------
 
 const ISSUE_PROPOSAL_STATUSES: readonly IssueProposalStatus[] = [
@@ -885,13 +881,18 @@ export type NewPrFixIssueProposal = {
   thread_id: string | null;
   title: string;
   body: string;
-  /** See IssueProposal.is_inline (types.ts) — whether review_comment_id is a
-   * PR review comment (true) or a plain issue comment (false). */
+  /**
+   * `IssueProposal.is_inline`(`types.ts`)を参照。
+   * `review_comment_id`がPRのレビューコメントなら`true`、
+   * 通常のIssueコメントなら`false`。
+   */
   is_inline: boolean;
 };
 
-/** A proposal raised by an audit report (工程5) — keyed by
- * (audit_report_id, position) instead of a GitHub review comment. */
+/**
+ * 監査レポートが出した提案。GitHubのレビューコメントではなく、
+ * (audit_report_id, position)で特定する。
+ */
 export type NewAuditIssueProposal = {
   origin: "audit";
   work_item_id: number;
@@ -903,10 +904,12 @@ export type NewAuditIssueProposal = {
 
 export type NewIssueProposal = NewPrFixIssueProposal | NewAuditIssueProposal;
 
-/** Inserts a factory.issue_proposals row (status "pending") and returns its
- * id. An audit-origin insert is idempotent on (audit_report_id, position):
- * a retried audit_apply that already inserted a proposal for that position
- * gets the existing id back instead of a unique violation. */
+/**
+ * `factory.issue_proposals`に`pending`の行を挿入し、そのIDを返す。
+ * 監査由来の挿入は(audit_report_id, position)について冪等である。
+ * その位置の提案をすでに挿入したaudit_applyを再試行すると、
+ * 一意制約の違反ではなく既存の行のIDが返る。
+ */
 export async function insertIssueProposal(
   proposal: NewIssueProposal,
   sql: SqlClient = defaultSqlClient,
@@ -952,7 +955,7 @@ export async function insertIssueProposal(
   return parseId(row.id, "id");
 }
 
-/** Parses a full factory.issue_proposals row (for future readers). */
+/** `factory.issue_proposals`の行全体を解析する。 */
 export function toIssueProposal(row: SqlRow): IssueProposal {
   const origin = parseEnum<IssueProposalOrigin>(
     row.origin,
@@ -1014,8 +1017,7 @@ export function toIssueProposal(row: SqlRow): IssueProposal {
   };
 }
 
-/** Fetches one factory.issue_proposals row by id, or `null` if it does not
- * exist. */
+/** `factory.issue_proposals`の行をIDで1件取得する。無ければ`null`を返す。 */
 export async function getIssueProposal(
   id: number,
   sql: SqlClient = defaultSqlClient,
@@ -1026,10 +1028,12 @@ export async function getIssueProposal(
   return row === undefined ? null : toIssueProposal(row);
 }
 
-/** Lists every `status = 'pending'` factory.issue_proposals row for one
- * work item, oldest first — used by issue_proposal_apply.ts to tell
- * whether any proposal is still awaiting a human decision after this one
- * was just decided. */
+/**
+ * 作業項目1件の`status = 'pending'`の`factory.issue_proposals`の行を、
+ * 古い順にすべて返す。
+ * `issue_proposal_apply.ts`が、1件を判断した後に、
+ * まだ人の判断を待つ提案が残っているかを確かめるのに使う。
+ */
 export async function listPendingIssueProposals(
   workItemId: number,
   sql: SqlClient = defaultSqlClient,
@@ -1052,19 +1056,19 @@ export type IssueProposalDecisionInput = {
 };
 
 /**
- * Records a human's approve/reject decision on a factory.issue_proposals
- * row — atomically guarded by `WHERE status = 'pending'` (team-lead fix
- * round, [MUST] #2: the optimistic lock issue_proposal_apply.ts relies on
- * for idempotency). Returns `true` when this call actually performed the
- * transition, `false` when no row matched (the row was no longer "pending" —
- * a concurrent/earlier call already decided it, one way or the other; the
- * caller re-reads the row and re-classifies via
- * `classifyIssueProposalDecision`, pr_workflow_support.ts, to tell an
- * idempotent retry from a genuine conflict). For an approve decision, the
- * first call passes `created_issue_number`/`created_issue_url` as `null` —
- * the Issue is created only after this call locks in the transition;
- * `setIssueProposalCreatedIssue` below writes those two columns back once
- * GitHub confirms creation.
+ * `factory.issue_proposals`の行に、人の承認・却下の判断を記録する。
+ * `WHERE status = 'pending'`で不可分に守る。
+ * `issue_proposal_apply.ts`が冪等性のために頼る楽観ロックである。
+ *
+ * この呼び出しで実際に状態を移したら`true`を返す。
+ * 一致する行が無ければ`false`を返す。並行する呼び出しか前の呼び出しが、
+ * どちらかの判断をすでに記録した場合である。
+ * その場合、呼び出し側は行を読み直し、`pr_workflow_support.ts`の
+ * `classifyIssueProposalDecision`で、冪等な再試行か本当の競合かを見分ける。
+ *
+ * 承認のとき、最初の呼び出しでは`created_issue_number`と`created_issue_url`を
+ * `null`で渡す。Issueはこの呼び出しで状態の移行を確定させた後に作り、
+ * GitHubが作成を確認したら`setIssueProposalCreatedIssue`でこの2列を書き戻す。
  */
 export async function decideIssueProposal(
   id: number,
@@ -1092,14 +1096,14 @@ export type IssueProposalCreatedIssue = {
 };
 
 /**
- * Writes back the Issue issue_proposal_apply.ts created (or reused, via
- * `findIssueByMarker`) for an approved proposal, once GitHub has actually
- * confirmed it — kept as its own write, separate from `decideIssueProposal`'s
- * initial status transition (team-lead fix round, [MUST] #2), so a retry
- * after a crash between the two calls can tell "approved, Issue not yet
- * created" (both columns still null) from "approved, Issue created" (see
- * `classifyIssueProposalDecision`, pr_workflow_support.ts). Does not itself
- * check the row's current status.
+ * 承認された提案について、`issue_proposal_apply.ts`が作った
+ * (または`findIssueByMarker`で見つけて使い回した)Issueを、
+ * GitHubが実際に確認した後で書き戻す。
+ * `decideIssueProposal`の最初の状態の移行とは別の書き込みにしている。
+ * 2つの呼び出しの間で落ちた後の再試行が、「承認済みでIssueは未作成」(2列ともnull)と
+ * 「承認済みでIssueは作成済み」を見分けられるようにするためである
+ * (`pr_workflow_support.ts`の`classifyIssueProposalDecision`を参照)。
+ * 行の現在の状態は確かめない。
  */
 export async function setIssueProposalCreatedIssue(
   id: number,
@@ -1115,22 +1119,19 @@ export async function setIssueProposalCreatedIssue(
 }
 
 /**
- * Reverts an approved factory.issue_proposals row back to "pending" —
- * guarded by `WHERE status = 'approved' AND created_issue_number IS NULL`,
- * so a row whose Issue already exists (a genuine, completed approval) is
- * never touched even if this is called for it by mistake. Used by
- * issue_proposal_apply.ts's approve path (team-lead fix round, "Keep
- * incomplete approvals visible in Inbox"): when the search-for-existing-or-
- * create-Issue step throws before an Issue number is known, the row would
- * otherwise be stuck "approved" with `created_issue_number` still null and
- * invisible to a human — this puts it back in front of them. Clears
- * `decided_by` / `decision_reason` / `with_factory_label` / `decided_at`
- * back to null too, so the reverted row looks exactly like a fresh pending
- * proposal (matching what `insertIssueProposal` leaves them as) rather than
- * a "pending" row that still carries a stale prior decision. Returns `true`
- * when this call actually performed the revert, `false` when no row matched
- * (e.g. a concurrent retry already reverted it, or the Issue was created in
- * the meantime).
+ * 承認済みの`factory.issue_proposals`の行を`pending`に戻す。
+ * `WHERE status = 'approved' AND created_issue_number IS NULL`で守るので、
+ * Issueがすでにある行(本当に完了した承認)は、誤って呼んでも変えない。
+ *
+ * `issue_proposal_apply.ts`の承認の経路で使う。既存のIssueを探すか作るstepが
+ * Issue番号の分かる前に例外を投げると、行は`created_issue_number`がnullのまま
+ * `approved`に留まり、人から見えなくなる。これを人の目の前に戻すためのもの。
+ * `decided_by`、`decision_reason`、`with_factory_label`、`decided_at`もnullに戻し、
+ * 古い判断を持ったままの`pending`ではなく、`insertIssueProposal`が作る
+ * 新しい保留中の提案と同じ見た目にする。
+ *
+ * この呼び出しで実際に戻したら`true`を返す。一致する行が無ければ`false`を返す
+ * (並行する再試行がすでに戻した、その間にIssueが作られたなど)。
  */
 export async function revertIssueProposalToPending(
   id: number,
@@ -1149,12 +1150,12 @@ export async function revertIssueProposalToPending(
   return rows.length > 0;
 }
 
-/** Number of `status = 'pending'` factory.issue_proposals rows for one work
- * item (team-lead fix round, IMO #5: replaces `listPendingIssueProposals`'s
- * full row fetch at the one call site — issue_proposal_apply.ts — that only
- * ever needed the count, and is called a second time after the label swap to
- * catch a proposal that appeared in the tiny window between the two reads —
- * see that script's module doc). */
+/**
+ * 作業項目1件の`status = 'pending'`の`factory.issue_proposals`の行数を返す。
+ * 件数だけが要る`issue_proposal_apply.ts`のために、行全体を取らずに数える。
+ * あちらはラベルの付け替えの後にもう一度呼び、2回の読み取りの間の
+ * わずかな隙に現れた提案を拾う(詳しくはそのスクリプトの冒頭のコメントを参照)。
+ */
 export async function countPendingIssueProposals(
   workItemId: number,
   sql: SqlClient = defaultSqlClient,
@@ -1172,18 +1173,13 @@ export async function countPendingIssueProposals(
 }
 
 // ---------------------------------------------------------------------------
-// M5 promotions (spec-cycle2.md M5). Promoted from the small per-script
-// workarounds M5's implementers wrote against the (then out-of-scope) gap in
-// this file: f/factory/lib/poll_support.ts's setFlowJobId / setFixRound /
-// bumpWatermarks / nextCycleForIssue / latestPrWorkItem, and the local
-// `updateWorkItemFlowJobId` in f/factory/steps/manual_intake_register.ts /
-// f/factory/retry_work_item.ts (all duplicates of the same flow_job_id
-// update this module now owns as setFlowJobId). Call sites switch over on
-// their owners' own schedule.
+// work_itemsの個別の列の更新と、作業項目の検索
 // ---------------------------------------------------------------------------
 
-/** Records the job id `runFlowAsync` returned, right after insert (spec-
- * cycle2.md §7 item 7: "子フロー起動直後に flow_job_id を新 id に更新"). */
+/**
+ * `runFlowAsync`が返したジョブIDを記録する。
+ * 子フローを起動した直後に呼び、`flow_job_id`を新しいIDに更新する。
+ */
 export async function setFlowJobId(
   id: number,
   flowJobId: string,
@@ -1209,11 +1205,11 @@ export async function setFixRound(
 }
 
 /**
- * Updates work_items.attempt. Promoted from an M6 code-review blocker:
- * `attempt` was never written after insert, so anything reading it back
- * (e.g. `retry_work_item.ts`'s `workItem.attempt + 1`) saw a stale value on
- * a second (or later) requirements-generation attempt. pipeline_prepare.ts
- * calls this at the start of the flow, persisting flow_input.attempt.
+ * `work_items.attempt`を更新する。
+ * `pipeline_prepare.ts`がフローの最初に呼び、`flow_input.attempt`を保存する。
+ * これが無いと`attempt`は挿入後に書かれず、読み出す側
+ * (`retry_work_item.ts`の`workItem.attempt + 1`など)が、
+ * 2回目以降の要件定義の生成で古い値を見てしまう。
  */
 export async function setAttempt(
   id: number,
@@ -1227,11 +1223,11 @@ export async function setAttempt(
   `.execute();
 }
 
-/** Updates work_items.head_sha — used when pr_review_prepare's re-check
- * finds the PR moved after the review worktree was already built (spec-
- * cycle2.md §3 M6 pr_review_prepare "else update head_sha and continue"),
- * and when pr_fix_finish records the sha it just pushed. Promoted from
- * f/factory/steps/pr_workflow_support.ts's local version (same SQL). */
+/**
+ * `work_items.head_sha`を更新する。
+ * pr_review_prepareの再確認で、レビュー用のworktreeを作った後にPRが進んでいたと
+ * 分かったときと、pr_fix_finishがpushしたshaを記録するときに使う。
+ */
 export async function setHeadSha(
   id: number,
   headSha: string,
@@ -1244,10 +1240,12 @@ export async function setHeadSha(
   `.execute();
 }
 
-/** Records the implement branch (`factory/issue-<N>-wi-<id>`) 工程3's
- * implement_prepare created or reused for an issue-kind work item.
- * `assertBranchName` runs first: the name is later interpolated into git /
- * gh argv, so an invalid one must fail here rather than be persisted. */
+/**
+ * implement_prepareがIssueの作業項目のために作った(または使い回した)
+ * implementブランチ(`factory/issue-<N>-wi-<id>`)を記録する。
+ * 先に`assertBranchName`を通す。名前は後でgitやghのargvに埋め込むので、
+ * 不正な名前は保存せずにここで失敗させる。
+ */
 export async function setWorkItemBranch(
   id: number,
   branch: string,
@@ -1261,8 +1259,10 @@ export async function setWorkItemBranch(
   `.execute();
 }
 
-/** Records the HTML URL of the PR 工程3's implement_finish opened (or
- * updated) for an issue-kind work item. */
+/**
+ * implement_finishがIssueの作業項目のために開いた(または更新した)PRの
+ * HTMLのURLを記録する。
+ */
 export async function setWorkItemPrUrl(
   id: number,
   prUrl: string,
@@ -1278,19 +1278,21 @@ export async function setWorkItemPrUrl(
 export type WatermarkUpdate = {
   last_review_id?: number;
   last_comment_id?: number;
-  /** Processed watermark for inline PR review comments — separate id space
-   * from issue comments (see last_comment_id). Set by pr_fix_finish. */
+  /**
+   * PRの行内レビューコメントの処理済みの水位。
+   * IDはIssueコメントとは別の空間である(`last_comment_id`を参照)。
+   * pr_fix_finishが設定する。
+   */
   last_review_comment_id?: number;
 };
 
 /**
- * Raises each of `last_review_id` / `last_comment_id` /
- * `last_review_comment_id` to at least the given value (never lowers them —
- * `GREATEST` guards against a stale/out-of-order call), touching only the
- * column(s) `update` provides. Each provided column is updated with its own
- * statement (independent, not required to be atomic with the others — every
- * column's GREATEST is safe regardless of statement ordering). A no-op (no
- * query at all) when none is given.
+ * `last_review_id`、`last_comment_id`、`last_review_comment_id`を、
+ * それぞれ少なくとも指定した値まで引き上げる。`update`で指定した列だけに触れる。
+ * `GREATEST`を使うので値は下がらず、古い呼び出しや順序の入れ替わった呼び出しにも耐える。
+ * 指定した列ごとに別の文で更新する。どの列も`GREATEST`なら文の順序に関係なく
+ * 安全なので、文どうしを不可分にする必要は無い。
+ * どの列も指定しなければ、クエリを1つも実行しない。
  */
 export async function bumpWatermarks(
   id: number,
@@ -1330,14 +1332,13 @@ export type ObservedWatermarkUpdate = {
 };
 
 /**
- * Records the poll-time snapshot watermarks poll_prs observed when it
- * claimed a work item (see migrations/datatable/main/
- * 20260925211232_pr_watermarks_and_inbox.up.sql's column comments):
- * overwrites — not GREATEST, unlike bumpWatermarks — since a fresh claim's
- * observation supersedes any earlier one rather than accumulating. Touches
- * only the column(s) `update` provides, one statement per column (same
- * independence rationale as bumpWatermarks). A no-op (no query) when none is
- * given.
+ * poll_prsが作業項目を確保したときに観測した水位のスナップショットを記録する
+ * (列の意味は`migrations/datatable/main/20260925211232_pr_watermarks_and_inbox.up.sql`の
+ * 列コメントを参照)。
+ * `bumpWatermarks`と違い、`GREATEST`ではなく上書きする。
+ * 新しく確保したときの観測は、前の観測に積み重ねるのではなく置き換えるためである。
+ * `update`で指定した列だけに、列ごとに1つの文で触れる(理由は`bumpWatermarks`と同じ)。
+ * どの列も指定しなければ、クエリを実行しない。
  */
 export async function setObservedWatermarks(
   id: number,
@@ -1367,9 +1368,11 @@ export async function setObservedWatermarks(
   }
 }
 
-/** Next `cycle` number for (owner, repo, issueNumber): one greater than the
- * highest cycle ever recorded (across terminal and active rows alike), or 1
- * if this issue has never had a work item. */
+/**
+ * (owner, repo, issueNumber)の次の`cycle`の番号を返す。
+ * 終端と稼働中の行を問わず、記録された最大のcycleに1を足した値で、
+ * そのIssueに作業項目が1つも無ければ1を返す。
+ */
 export async function nextCycleForIssue(
   owner: string,
   repo: string,
@@ -1395,11 +1398,10 @@ const APPROVED_OR_LATER_STATUSES: readonly WorkItemStatus[] = [
 ];
 
 /**
- * Most recent (by cycle, id as a same-cycle tiebreak) `kind = 'issue'` work
- * item for (owner, repo, issueNumber) whose status has reached `approved`
- * or later (`approved` / `implementing` / `pr_open`) — `null` if none
- * exists. Used to link a human-created PR back to its parent issue's
- * approved requirements.
+ * (owner, repo, issueNumber)の`kind = 'issue'`の作業項目のうち、
+ * 状態が`approved`以降(`approved` / `implementing` / `pr_open`)に達した
+ * 最新のもの(cycleの順、同じcycleならIDの順)を返す。無ければ`null`。
+ * 人が作ったPRを、親のIssueの承認済みの要件定義に結び付けるのに使う。
  */
 export async function findApprovedWorkItemForIssue(
   owner: string,
@@ -1424,14 +1426,15 @@ export type LatestPrWorkItemOpts = {
   kind?: WorkItemKind;
 };
 
-/** Most recent (by created_at, id as a same-second-insert tiebreak)
- * work_items row for this PR — of any kind when `opts.kind` is omitted, or
- * restricted to one kind — `null` if none exists. Returns the full row (not
- * just id/head_sha/fix_round/last_comment_id) so a caller doesn't need a
- * second `getWorkItem` lookup to read e.g. observed_comment_id/
- * last_review_id. Backs both the review path's "unprocessed head_sha" check
- * and the fix path's
- * fix_round / last_comment_id carry-forward. */
+/**
+ * このPRの`work_items`の行のうち、最新のもの(`created_at`の順、
+ * 同じ秒に挿入された行はIDの順)を返す。無ければ`null`。
+ * `opts.kind`を省略すれば種類を問わず、指定すればその種類に絞る。
+ * 呼び出し側が`observed_comment_id`や`last_review_id`などを読むために
+ * もう一度`getWorkItem`を呼ばずに済むよう、行全体を返す。
+ * レビューの経路の「未処理のhead_sha」の確認と、修正の経路での
+ * `fix_round`と`last_comment_id`の引き継ぎに使う。
+ */
 export async function latestPrWorkItem(
   owner: string,
   repo: string,
@@ -1458,7 +1461,7 @@ export async function latestPrWorkItem(
   return row === undefined ? null : toWorkItem(row);
 }
 
-/** A PR the factory is still tracking, as returned by `listTrackedPrs`. */
+/** Factoryがまだ追跡しているPR。`listTrackedPrs`が返す。 */
 export type TrackedPr = {
   owner: string;
   repo: string;
@@ -1475,17 +1478,16 @@ const TRACKED_PR_KINDS: readonly ("pr_review" | "pr_fix")[] = [
 ];
 
 /**
- * PRs the factory is still tracking, for `poll_prs.ts`'s DB-backed
- * rediscovery (2026-09-27 policy: a PR's trigger label — `factory:review` /
- * `factory:fix` — is consumed at claim time, so there is no label left to
- * re-search by once a cycle starts; `work_items` is the sole source of
- * truth for "which PRs is the factory still following"). For each
- * `(owner, repo, pr_number)` with a `pr_review`/`pr_fix`-kind row, only the
- * most recently updated row is considered (`DISTINCT ON`); that row is
- * returned when its status isn't `cancelled` (a cancelled PR — e.g. closed
- * — is dropped for good) and it was updated within the last `withinDays`
- * days (`factory_config.tracked_pr_days`) — a PR nobody has touched in that
- * long falls out of tracking rather than being re-polled forever.
+ * Factoryがまだ追跡しているPRを返す。`poll_prs.ts`がDBからPRを見つけ直すのに使う。
+ * PRの起動ラベル(`factory:review` / `factory:fix`)は確保した時点で外すので、
+ * サイクルが始まった後はラベルで探し直せない。
+ * 「FactoryがどのPRを追い続けているか」の正本は`work_items`だけである。
+ *
+ * `pr_review`か`pr_fix`の行がある`(owner, repo, pr_number)`ごとに、
+ * 最も新しく更新された行だけを見る(`DISTINCT ON`)。その行は、状態が`cancelled`でなく
+ * (閉じたなどでキャンセルしたPRは追跡から外す)、直近`withinDays`日
+ * (`factory_config.tracked_pr_days`)以内に更新されていれば返す。
+ * その期間だれも触れていないPRは、いつまでもポーリングせずに追跡から外す。
  */
 export async function listTrackedPrs(
   withinDays: number,
@@ -1518,8 +1520,10 @@ export async function listTrackedPrs(
   }));
 }
 
-/** Total factory.agent_runs cost since `sinceIso` (inclusive), for the
- * daily budget check against factory_config.daily_budget_usd. */
+/**
+ * `sinceIso`以降(その時刻を含む)の`factory.agent_runs`の費用の合計を返す。
+ * `factory_config.daily_budget_usd`と比べる日次予算の確認に使う。
+ */
 export async function sumAgentCostSince(
   sinceIso: string,
   sql: SqlClient = defaultSqlClient,
@@ -1536,8 +1540,10 @@ export async function sumAgentCostSince(
   return parseNumericLike(row.total_cost_usd, "total_cost_usd");
 }
 
-/** Most recently created factory.requirement_drafts row for a work item, or
- * `null` if it has none yet. */
+/**
+ * 作業項目の`factory.requirement_drafts`のうち、最も新しく作られた行を返す。
+ * 無ければ`null`を返す。
+ */
 export async function latestDraft(
   workItemId: number,
   sql: SqlClient = defaultSqlClient,
@@ -1552,9 +1558,10 @@ export async function latestDraft(
   return row === undefined ? null : toRequirementDraft(row);
 }
 
-/** Fetches one factory.requirement_drafts row by id, or `null` if it does
- * not exist — used by approval_requests readers (kind "requirements") to
- * resolve `subject_id` into its full draft. */
+/**
+ * `factory.requirement_drafts`の行をIDで1件取得する。無ければ`null`を返す。
+ * `requirements`の承認依頼を読む側が、`subject_id`から下書き全体を引くのに使う。
+ */
 export async function getRequirementDraft(
   id: number,
   sql: SqlClient = defaultSqlClient,
@@ -1566,17 +1573,17 @@ export async function getRequirementDraft(
 }
 
 // ---------------------------------------------------------------------------
-// approval_requests (generalized approval waiting, replacing suspend-based
-// approval) — see
-// migrations/datatable/main/20260927120000_approval_requests.up.sql. Every
-// approval-flow script (approval_decide.ts, pipeline_request_approval.ts,
-// steps/requirements_apply.ts, steps/issue_proposal_apply.ts,
-// poll_issues.ts's expiry sweep) goes through this table; factory.approvals
-// and pipeline.flow's suspend step are gone.
+// approval_requests
+// (`migrations/datatable/main/20260927120000_approval_requests.up.sql`)。
+// 承認待ちを扱うスクリプト(approval_decide.ts、pipeline_request_approval.ts、
+// steps/requirements_apply.ts、steps/issue_proposal_apply.ts、poll_issues.tsの
+// 期限切れ処理)はすべてこのテーブルを通す。
 // ---------------------------------------------------------------------------
 
-/** Parses a full factory.approval_requests row (same `SqlRow` contract as
- * every other `toXxx` parser in this module). */
+/**
+ * `factory.approval_requests`の行全体を解析する。
+ * このモジュールの他の`toXxx`と同じく`SqlRow`を受け取る。
+ */
 export function toApprovalRequest(row: SqlRow): ApprovalRequest {
   return {
     id: parseId(row.id, "id"),
@@ -1617,15 +1624,16 @@ export type NewApprovalRequest = {
 };
 
 /**
- * Inserts a factory.approval_requests row and returns its id. Idempotent via
- * the table's `(kind, subject_id)` unique constraint: `ON CONFLICT DO
- * NOTHING` makes a retry after a crash (or a concurrent duplicate insert) a
- * no-op rather than an error, and this function then looks up and returns
- * the existing row's id via `findApprovalRequestBySubject` so every caller
- * gets a valid id regardless of which branch fired. The INSERT and the
- * follow-up SELECT are two statements, not one transaction: a concurrent
- * decide/expire between them is harmless (the id is stable), but the row
- * returned may already be past `pending`.
+ * `factory.approval_requests`に行を挿入し、そのIDを返す。
+ * テーブルの`(kind, subject_id)`の一意制約によって冪等にしている。
+ * `ON CONFLICT DO NOTHING`で、落ちた後の再試行や並行する重複した挿入を
+ * 誤りではなく何もしない処理にし、その後`findApprovalRequestBySubject`で
+ * 既存の行のIDを引いて返す。どちらの経路でも呼び出し側は正しいIDを受け取る。
+ * 衝突したのに一致する行が見つからないときは例外を投げる。
+ *
+ * INSERTと続くSELECTは2つの文で、1つのトランザクションではない。
+ * その間に並行して判断や期限切れが起きても、IDは変わらないので問題ない。
+ * ただし、返る行はすでに`pending`でなくなっているかもしれない。
  */
 export async function insertApprovalRequest(
   input: NewApprovalRequest,
@@ -1659,8 +1667,7 @@ export async function insertApprovalRequest(
   return existing.id;
 }
 
-/** Fetches one factory.approval_requests row by id, or `null` if it does
- * not exist. */
+/** `factory.approval_requests`の行をIDで1件取得する。無ければ`null`を返す。 */
 export async function getApprovalRequest(
   id: number,
   sql: SqlClient = defaultSqlClient,
@@ -1671,11 +1678,11 @@ export async function getApprovalRequest(
   return row === undefined ? null : toApprovalRequest(row);
 }
 
-/** Fetches the factory.approval_requests row for a given `(kind,
- * subject_id)`, or `null` if none exists — the table's natural key, used by
- * `insertApprovalRequest`'s idempotent-insert fallback and by callers that
- * only know the subject (e.g. a requirement draft id) rather than the
- * approval request's own id. */
+/**
+ * `(kind, subject_id)`に対応する`factory.approval_requests`の行を返す。無ければ`null`。
+ * これはテーブルの自然キーである。`insertApprovalRequest`の冪等な挿入の後始末と、
+ * 承認依頼自身のIDではなく対象(要件定義の下書きのIDなど)だけを知る呼び出し側が使う。
+ */
 export async function findApprovalRequestBySubject(
   kind: ApprovalRequestKind,
   subjectId: number,
@@ -1693,16 +1700,19 @@ export type ApprovalRequestDecisionInput = {
   status: "approved" | "rejected";
   decided_by: string;
   reason: string | null;
-  /** Decider-side options (e.g. issue_proposal's with_factory_label); defaults to `{}`. */
+  /**
+   * 判断する側のオプション(`issue_proposal`の`with_factory_label`など)。
+   * 既定値は`{}`。
+   */
   decision_options?: Record<string, unknown>;
 };
 
 /**
- * Records a human's approve/reject decision on a factory.approval_requests
- * row — atomically guarded by `WHERE status = 'pending'`, the same
- * compare-and-swap shape as `decideIssueProposal` / `updateStatusIfCurrent`.
- * Returns `true` when this call actually performed the transition, `false`
- * when no row matched (already decided or expired by a concurrent caller).
+ * `factory.approval_requests`の行に、人の承認・却下の判断を記録する。
+ * `decideIssueProposal`や`updateStatusIfCurrent`と同じ比較と交換の形で、
+ * `WHERE status = 'pending'`によって不可分に守る。
+ * この呼び出しで実際に状態を移したら`true`を返す。一致する行が無ければ
+ * (並行する呼び出しがすでに判断したか期限切れにしたら)`false`を返す。
  */
 export async function decideApprovalRequestIfPending(
   id: number,
@@ -1723,12 +1733,10 @@ export async function decideApprovalRequestIfPending(
 }
 
 /**
- * Marks a factory.approval_requests row expired — atomically guarded by
- * `WHERE status = 'pending'` (same compare-and-swap shape as
- * `decideApprovalRequestIfPending`), so a request a human decided in the
- * same race loses the race cleanly instead of being clobbered back to
- * "expired". Returns `true` when this call actually performed the
- * transition, `false` when no row matched.
+ * `factory.approval_requests`の行を期限切れにする。
+ * `decideApprovalRequestIfPending`と同じく`WHERE status = 'pending'`で不可分に守るので、
+ * 同時に人が判断した依頼は、期限切れで上書きされずにこちらが競合に負ける。
+ * この呼び出しで実際に状態を移したら`true`、一致する行が無ければ`false`を返す。
  */
 export async function expireApprovalRequestIfPending(
   id: number,
@@ -1743,11 +1751,11 @@ export async function expireApprovalRequestIfPending(
   return rows.length > 0;
 }
 
-/** Lists every `status = 'pending'` factory.approval_requests row whose
- * `expires_at` has passed `now` — the timeout sweep's target set for a
- * follow-up PR's scheduled expiry check (replacing pipeline.flow's suspend
- * timeout). A request with `expires_at IS NULL` never appears here (no
- * deadline, e.g. "issue_proposal"). */
+/**
+ * `status = 'pending'`で、`expires_at`が`now`を過ぎた`factory.approval_requests`の行を
+ * すべて返す。`poll_issues.ts`の定期的な期限切れ処理の対象である。
+ * `expires_at IS NULL`の依頼(期限の無い`issue_proposal`など)はここに現れない。
+ */
 export async function listExpiredPendingApprovalRequests(
   now: Date,
   sql: SqlClient = defaultSqlClient,
@@ -1759,25 +1767,26 @@ export async function listExpiredPendingApprovalRequests(
   return rows.map(toApprovalRequest);
 }
 
-/** The newest `kind = 'requirements'` approval request for a work item,
- * with the attempt of the requirement draft it points at — what
- * implement_prepare (工程3) and retry_work_item use to decide whether the
- * work item's current `attempt` has an approval to implement against. */
+/**
+ * 作業項目の最新の`kind = 'requirements'`の承認依頼と、それが指す
+ * 要件定義の下書きのattempt。implement_prepareとretry_work_itemが、
+ * 作業項目の現在の`attempt`に実装してよい承認があるかを判断するのに使う。
+ */
 export type RequirementsApprovalRef = {
   readonly approval_request_id: number;
-  /** `approval_requests.subject_id` = `requirement_drafts.id`. */
+  /** `approval_requests.subject_id`(= `requirement_drafts.id`)。 */
   readonly draft_id: number;
-  /** `requirement_drafts.attempt` of that draft. */
+  /** その下書きの`requirement_drafts.attempt`。 */
   readonly attempt: number;
   readonly status: ApprovalRequestStatus;
 };
 
 /**
- * Most recently requested `kind = 'requirements'` factory.approval_requests
- * row for `workItemId` (any status — the caller checks `status ===
- * "approved"` and `attempt === workItem.attempt`), joined to its
- * requirement draft for the attempt; `null` when the work item never
- * requested a requirements approval. `id DESC` breaks a same-timestamp tie.
+ * `workItemId`の`kind = 'requirements'`の`factory.approval_requests`のうち、
+ * 最も新しく依頼された行を、attemptを得るため要件定義の下書きと結合して返す。
+ * 状態は問わない(`status === "approved"`と`attempt === workItem.attempt`は
+ * 呼び出し側が確かめる)。要件定義の承認を一度も依頼していなければ`null`を返す。
+ * 依頼の時刻が同じときは`id DESC`で決める。
  */
 export async function latestRequirementsApproval(
   workItemId: number,
@@ -1811,29 +1820,11 @@ export async function latestRequirementsApproval(
 }
 
 // ---------------------------------------------------------------------------
-// cleanup_db.ts (DB retention cleanup, 2026-09-27 addition). See
-// lib/cleanup_db_support.ts for the pure cutoff-computation / summary
-// formatting logic and cleanup_db.ts for how these are wired together
-// (count-then-delete ordering, per-step error handling).
+// cleanup_db.ts(DBの保持期間による掃除)が使う削除。
+// 期限の計算と集計の文言は`lib/cleanup_db_support.ts`、
+// 組み立て(数えてから削除する順序、stepごとの例外処理)は`cleanup_db.ts`にある。
 // ---------------------------------------------------------------------------
 
-/**
- * Deletes every terminal-status work item last updated before `olderThan`
- * (same target set as `listStaleTerminalWorkItems`, as a DELETE) and reports
- * how many rows went with it, plus a `{id, owner, repo, issue_number}` ref
- * for each one deleted — cleanup_db.ts uses these to also delete that work
- * item's requirements-doc directories (`lib/cleanup_db_support.ts`'s
- * `docDirsFor`), which live on disk, not in this table. Runs as a single
- * statement: the CTE counts the approval_requests rows attached to the
- * candidate ids from the statement's own snapshot, so the count and the
- * delete always describe the same set — a `retry_work_item` slipping in
- * between two separate queries cannot make the reported count drift from
- * what was actually removed. Every other referencing table cascades from
- * this one statement (requirement_drafts / approvals / agent_runs /
- * work_item_events / approval_requests via `ON DELETE CASCADE`;
- * job_failures via `ON DELETE SET NULL`, swept separately by
- * `deleteJobFailuresBefore`).
- */
 export type DeletedWorkItemRef = {
   readonly id: number;
   readonly owner: string;
@@ -1847,6 +1838,23 @@ export type TerminalWorkItemsDeleted = {
   readonly deleted: readonly DeletedWorkItemRef[];
 };
 
+/**
+ * 状態が終端で、最後の更新が`olderThan`より前の作業項目をすべて削除する
+ * (対象は`listStaleTerminalWorkItems`と同じ)。
+ * 削除した行数と、連鎖して消えた`approval_requests`の行数、
+ * 削除した各行の`{id, owner, repo, issue_number}`を返す。
+ * `cleanup_db.ts`はこれを使って、このテーブルではなくディスクにある
+ * 要件定義書のディレクトリも削除する(`lib/cleanup_db_support.ts`の`docDirsFor`)。
+ *
+ * 1つの文で実行する。CTEが、この文自身のスナップショットで候補のIDに付いた
+ * `approval_requests`の行を数えるので、件数と削除は常に同じ集合を指す。
+ * 2つの別々のクエリの間に`retry_work_item`が割り込んで、
+ * 報告する件数が実際に消えた行とずれることはない。
+ * 参照する他のテーブルはこの1文から連鎖する。
+ * `requirement_drafts` / `approvals` / `agent_runs` / `work_item_events` /
+ * `approval_requests`は`ON DELETE CASCADE`で消える。
+ * `job_failures`は`ON DELETE SET NULL`で、`deleteJobFailuresBefore`が別に掃除する。
+ */
 export async function deleteTerminalWorkItemsBefore(
   olderThan: Date,
   sql: SqlClient = defaultSqlClient,
@@ -1901,10 +1909,11 @@ export async function deleteTerminalWorkItemsBefore(
   };
 }
 
-/** Deletes factory.job_failures rows past `olderThan` (`occurred_at`),
- * independently of work_items (its own FK is `ON DELETE SET NULL`, so a
- * job_failures row outlives the work item it referenced). Returns the
- * number of rows deleted. */
+/**
+ * `occurred_at`が`olderThan`より前の`factory.job_failures`の行を削除し、行数を返す。
+ * 外部キーが`ON DELETE SET NULL`で、参照した作業項目より長く残るので、
+ * `work_items`とは別に削除する。
+ */
 export async function deleteJobFailuresBefore(
   olderThan: Date,
   sql: SqlClient = defaultSqlClient,
@@ -1917,9 +1926,10 @@ export async function deleteJobFailuresBefore(
   return rows.length;
 }
 
-/** Deletes factory.deployments rows past `olderThan` (`occurred_at`) — this
- * table has no FK to work_items at all. Returns the number of rows
- * deleted. */
+/**
+ * `occurred_at`が`olderThan`より前の`factory.deployments`の行を削除し、行数を返す。
+ * このテーブルは`work_items`への外部キーを持たない。
+ */
 export async function deleteDeploymentsBefore(
   olderThan: Date,
   sql: SqlClient = defaultSqlClient,
@@ -1932,9 +1942,11 @@ export async function deleteDeploymentsBefore(
   return rows.length;
 }
 
-/** Deletes already-resolved (`resolved = true`) factory.notices rows past
- * `olderThan` (`created_at`) — an unresolved notice is never deleted by
- * cleanup regardless of age. Returns the number of rows deleted. */
+/**
+ * 解決済み(`resolved = true`)で、`created_at`が`olderThan`より前の
+ * `factory.notices`の行を削除し、行数を返す。
+ * 未解決のnoticeは、古さに関係なく削除しない。
+ */
 export async function deleteResolvedNoticesBefore(
   olderThan: Date,
   sql: SqlClient = defaultSqlClient,
@@ -1947,8 +1959,10 @@ export async function deleteResolvedNoticesBefore(
   return rows.length;
 }
 
-/** Inserts one factory.cleanup_runs row recording a cleanup_db.ts run's
- * delete counts, and returns its id. */
+/**
+ * `cleanup_db.ts`の1回の実行の削除件数を`factory.cleanup_runs`に記録し、
+ * そのIDを返す。
+ */
 export async function insertCleanupRun(
   counts: CleanupCounts,
   sql: SqlClient = defaultSqlClient,
@@ -1969,7 +1983,7 @@ export async function insertCleanupRun(
 }
 
 // ---------------------------------------------------------------------------
-// audit_reports / audit work items (工程5)
+// audit_reportsと監査の作業項目
 // ---------------------------------------------------------------------------
 
 export type NewAuditReport = {
@@ -1994,8 +2008,11 @@ export function toAuditReport(row: SqlRow): AuditReport {
   };
 }
 
-/** Idempotent on work_item_id: a retried audit_generate that already saved
- * its report gets the existing id back instead of a unique violation. */
+/**
+ * 監査レポートを挿入し、そのIDを返す。`work_item_id`について冪等である。
+ * レポートをすでに保存したaudit_generateを再試行すると、
+ * 一意制約の違反ではなく既存の行のIDが返る。
+ */
 export async function insertAuditReport(
   report: NewAuditReport,
   sql: SqlClient = defaultSqlClient,
@@ -2081,9 +2098,11 @@ export type NewAuditWorkItem = {
   claimed_by: string | null;
 };
 
-/** Inserts the audit work item unless another audit is already
- * picked/auditing (the partial unique index work_items_active_audit_key
- * makes the second insert a silent no-op). Returns null in that case. */
+/**
+ * 他の監査が`picked`か`auditing`でなければ、監査の作業項目を挿入してIDを返す。
+ * 他の監査があれば、部分一意インデックス`work_items_active_audit_key`によって
+ * 2件目の挿入は黙って何もせず、`null`を返す。
+ */
 export async function insertAuditWorkItem(
   input: NewAuditWorkItem,
   sql: SqlClient = defaultSqlClient,
@@ -2103,17 +2122,16 @@ export async function insertAuditWorkItem(
 }
 
 // ---------------------------------------------------------------------------
-// implement_rounds (工程3) — see
-// migrations/datatable/main/20260928120000_implement.up.sql.
+// implement_rounds(`migrations/datatable/main/20260928120000_implement.up.sql`)
 // ---------------------------------------------------------------------------
 
 /**
- * Inserts a factory.implement_rounds row and returns its id. `round` is
- * assigned inside the same statement as `COALESCE(MAX(round), 0) + 1` over
- * the work item's existing rounds (an aggregate without GROUP BY always
- * yields exactly one row, so the first round gets 1). Rounds of one work
- * item are written sequentially by a single implement flow run, so the
- * UNIQUE (work_item_id, round) key is a safety net, not a contended lock.
+ * `factory.implement_rounds`に行を挿入し、そのIDを返す。
+ * `round`は同じ文の中で、その作業項目の既存のラウンドに対する
+ * `COALESCE(MAX(round), 0) + 1`として決める
+ * (GROUP BYの無い集計は必ず1行を返すので、最初のラウンドは1になる)。
+ * 1つの作業項目のラウンドは1回のimplementフローの実行が順に書くので、
+ * `UNIQUE (work_item_id, round)`は競合を捌くロックではなく安全網である。
  */
 export async function insertImplementRound(
   record: ImplementRoundRecord,
@@ -2153,7 +2171,7 @@ function parseImplementDiffStat(value: unknown): ImplementDiffStat | null {
   return parsed;
 }
 
-/** Parses a full factory.implement_rounds row. */
+/** `factory.implement_rounds`の行全体を解析する。 */
 export function toImplementRound(row: SqlRow): ImplementRound {
   const protectedChanges = parseJsonArray(
     row.protected_changes,
@@ -2193,9 +2211,11 @@ export function toImplementRound(row: SqlRow): ImplementRound {
   };
 }
 
-/** Every factory.implement_rounds row for a work item, first round first —
- * the implement flow's own history (round count, stall detection input,
- * PR-body "確認して欲しい点" aggregation). */
+/**
+ * 作業項目の`factory.implement_rounds`の行を、最初のラウンドから順にすべて返す。
+ * implementフロー自身の履歴(ラウンド数、停滞検出の入力、
+ * PR本文の「確認して欲しい点」の集約)に使う。
+ */
 export async function listImplementRounds(
   workItemId: number,
   sql: SqlClient = defaultSqlClient,
