@@ -96,7 +96,7 @@ const OVERLOADED_EVIDENCE: AuditEvidence = {
  * 短い失敗行と人の対応行を大量に含む、回帰確認用の根拠データ。
  * 以前の実装は、比率で残す行数を決めたあと、
  * 描画結果を`rendered.slice(0, 12000)`で末尾から切り詰めていた。
- * この入力ではその切り詰めが働き、`ホスト操作要`と`未解決`の行が消え、
+ * この入力ではその切り詰めが働き、`次の起動で反映する変更`と`未解決`の行が消え、
  * 最終行も`- `で始まる行ではなくデータ行の途中で切れた。
  * 旧実装の誤差は残す行の数に比例するため、少数の長い行ではなく
  * 多数の短い行にしている。
@@ -247,9 +247,9 @@ describe("renderEvidenceMarkdown", () => {
   // 回帰確認。報告では、約190字の失敗行30件と人の対応行30件で12,000字を超え、
   // 旧実装の`rendered.slice(0, 12000)`が通知・デプロイの固定行を
   // 途中で(一度は数字の途中で)切った。
-  test("keeps ホスト操作要 for the fix-round-2 regression input (1)", () => {
+  test("keeps 次の起動で反映する変更 for the fix-round-2 regression input (1)", () => {
     const markdown = renderEvidenceMarkdown(REGRESSION_EVIDENCE);
-    expect(markdown).toContain("ホスト操作要: 12件");
+    expect(markdown).toContain("次の起動で反映する変更: 12件");
   });
 
   test("keeps 未解決 for the fix-round-2 regression input (2)", () => {

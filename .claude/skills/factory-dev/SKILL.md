@@ -89,7 +89,7 @@ mise run bootstrap     # workspace 作成、secret 投入、sync push、migratio
 | --- | --- |
 | `mise run setup` | `mise install`の後にJS依存(`bun install --frozen-lockfile`など)を入れる(骨格側で追加予定) |
 | `mise run doctor` | docker / miseの有無、`mise.local.toml`の必須キー、ポートの空き、Windmillの起動状態、workerコンテナ内の`claude`/`gh`/`git gtr`の動作確認を一覧表示する |
-| `mise run up` | `docker compose`(`infra/docker-compose.yml`)でスタックを起動(build込み) |
+| `mise run up` | `docker compose`(`infra/docker-compose.yml`)でスタックを起動(build込み)。ホスト側checkoutからビルドするため、先にmainをpullする |
 | `mise run down` | スタックを停止する |
 | `mise run bootstrap` | 初回のみ: Windmillの初期パスワード変更、workspace作成、secret変数の投入、`wmill sync push`、migration適用を冪等に行う |
 | `mise run check` | `lint` → `typecheck` → `test`を順に実行する(PR前に必ず通す) |

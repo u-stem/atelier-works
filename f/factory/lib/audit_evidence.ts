@@ -322,7 +322,7 @@ function buildEvidenceSections(evidence: AuditEvidence): EvidenceSection[] {
   );
   const deploymentFixed = [
     sanitizeCell(
-      `ホスト操作要: ${evidence.deployments_needing_host_action}件`,
+      `次の起動で反映する変更: ${evidence.deployments_needing_host_action}件`,
       SANITIZE_CELL_MAX,
     ),
   ];
@@ -361,7 +361,7 @@ function buildEvidenceSections(evidence: AuditEvidence): EvidenceSection[] {
  * 調整ループは実際の出力を描画し、本当に収まるまでデータ行を削り続ける。
  *
  * 上限に合わせるために最終的な文字列を途中で切ることはしない。
- * 強制的に切ると、行の途中や`ホスト操作要: N件`のような固定の行の途中、
+ * 強制的に切ると、行の途中や`次の起動で反映する変更: N件`のような固定の行の途中、
  * マルチバイト文字の途中で切れうる。これらは上限を超えた文字列を返すより悪い。
  * 調整ループで削るデータ行が尽きても、節の見出しと固定の行だけで上限を超える
  * 場合は、`EVIDENCE_MAX_CHARS`を超えたまま切らずに返す。

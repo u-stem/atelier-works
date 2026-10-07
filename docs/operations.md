@@ -126,6 +126,7 @@
 - secret変数(`f/factory/*.variable.yaml`)とinstance固有の`factory_config` resourceは同期対象外のため、これらの**説明文(description)を変えても`mise run push`では既存instanceに反映されない**。既存instanceではWindmill UI(Variables / Resourcesの編集画面)で説明文だけを更新する。新規instanceはbootstrapがリポジトリの説明文で作成する。
 - `f/factory/deployed_sha`変数も同期対象外(理由は他の2つと異なり、instance固有の設定ではなく`self_update`が書き込む実行時状態のため)。`mise run push`を実行しても値は変わらない。`bootstrap`は初回のみ空値で作成し、既に存在する場合は値を変更しない。値をリセットしたい場合はWindmill UIから直接編集する。
 - `self_update`スケジュール(10分毎)が`infra/`の変更、または`mise.toml`の`[tools]`・`[env]`セクション(ツールのバージョンとcomposeが読む環境変数)の変更を検知すると、ログと`deployments.needs_host_action`に記録する。通知はせず、次にホスト側で`mise run up`して起動したときに反映される。`mise.toml`の`[tasks.*]`だけの変更、`scripts/`(ホスト側のbootstrap / doctor / lint)、`mise.local.toml.example`の変更はworkerの動作に影響しないため記録しない。`f/`・`migrations/`・`.claude/skills/`の変更は`self_update`が自動で反映するので、ホスト側の操作は不要である。
+- `mise run up`で反映されない変更が2つある。(a) `infra/Caddyfile`はbind mountされたファイルのため、これだけを変えても`up -d`はコンテナを再作成しない。`docker compose -f infra/docker-compose.yml restart caddy`でCaddyを再起動して反映する。(b) `mise.toml`の`[tools]`のうちホスト側のCLIは`mise install`(または`mise run setup`)で反映され、`up`では反映されない。`up`が反映するのは`[env]`のworker imageのツールのバージョンである。
 
 ### Windmillの`admins`ワークスペースにある組み込み項目
 
