@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  acquireImplementLease,
   addNotice,
   bumpWatermarks,
   countPendingIssueProposals,
@@ -47,6 +48,7 @@ import {
   setAttempt,
   setFixRound,
   setFlowJobId,
+  setFlowJobIdIfUnset,
   setHeadSha,
   setIssueProposalCreatedIssue,
   setObservedWatermarks,
@@ -62,6 +64,8 @@ import {
   toReviewRecord,
   updateStatus,
   updateStatusIfCurrent,
+  updateStatusIfCurrentClearingFlowJobId,
+  updateStatusIfLeaseHolder,
 } from "../../f/factory/lib/db.ts";
 
 type FakeCall = { text: string; values: unknown[] };
@@ -273,6 +277,152 @@ describe("updateStatusIfCurrent", () => {
       sql,
     );
     expect(result).toBe(false);
+  });
+});
+
+describe("updateStatusIfCurrentClearingFlowJobId", () => {
+  test("clears flow_job_id in the guarded update", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await updateStatusIfCurrentClearingFlowJobId(
+      1,
+      "approved",
+      "implementing",
+      null,
+      sql,
+    );
+    expect(calls[0]?.text).toContain("flow_job_id = NULL");
+  });
+
+  test("guards the update with the expected status", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await updateStatusIfCurrentClearingFlowJobId(
+      1,
+      "approved",
+      "implementing",
+      null,
+      sql,
+    );
+    expect(calls[0]?.values).toContain("approved");
+  });
+
+  test("records the event in the same statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await updateStatusIfCurrentClearingFlowJobId(
+      1,
+      "approved",
+      "implementing",
+      null,
+      sql,
+    );
+    expect(calls[0]?.text).toContain("INSERT INTO factory.work_item_events");
+  });
+
+  test("returns true when the guarded update matched a row", async () => {
+    const { sql } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    expect(
+      await updateStatusIfCurrentClearingFlowJobId(
+        1,
+        "approved",
+        "implementing",
+        null,
+        sql,
+      ),
+    ).toBe(true);
+  });
+
+  test("returns false when the status no longer matches", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(
+      await updateStatusIfCurrentClearingFlowJobId(
+        1,
+        "approved",
+        "implementing",
+        null,
+        sql,
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("updateStatusIfLeaseHolder", () => {
+  test("guards the update with the expected flow job id", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await updateStatusIfLeaseHolder(
+      1,
+      "implementing",
+      "pr_open",
+      "job-1",
+      "note",
+      sql,
+    );
+    expect(calls[0]?.text).toContain("flow_job_id IS NOT DISTINCT FROM");
+  });
+
+  test("passes the expected flow job id as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await updateStatusIfLeaseHolder(
+      1,
+      "implementing",
+      "pr_open",
+      "job-1",
+      "note",
+      sql,
+    );
+    expect(calls[0]?.values).toContain("job-1");
+  });
+
+  test("passes null to match a work item without a flow job id", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await updateStatusIfLeaseHolder(
+      1,
+      "implementing",
+      "needs_human",
+      null,
+      "note",
+      sql,
+    );
+    expect(calls[0]?.values).toContain(null);
+  });
+
+  test("guards the update with the expected status", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    await updateStatusIfLeaseHolder(
+      1,
+      "implementing",
+      "pr_open",
+      "job-1",
+      "note",
+      sql,
+    );
+    expect(calls[0]?.values).toContain("implementing");
+  });
+
+  test("returns true when the guarded update matched a row", async () => {
+    const { sql } = createFakeSqlClient([[{ work_item_id: 1 }]]);
+    expect(
+      await updateStatusIfLeaseHolder(
+        1,
+        "implementing",
+        "pr_open",
+        "job-1",
+        "note",
+        sql,
+      ),
+    ).toBe(true);
+  });
+
+  test("returns false when another run holds the lease", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(
+      await updateStatusIfLeaseHolder(
+        1,
+        "implementing",
+        "pr_open",
+        "job-1",
+        "note",
+        sql,
+      ),
+    ).toBe(false);
   });
 });
 
@@ -1604,6 +1754,66 @@ describe("setFlowJobId", () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await setFlowJobId(1, "job-123", sql);
     expect(calls[0]?.values).toEqual(["job-123", 1]);
+  });
+});
+
+describe("acquireImplementLease", () => {
+  test("takes the lease only while the work item is implementing", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await acquireImplementLease(1, "job-1", sql);
+    expect(calls[0]?.text).toContain("status = 'implementing'");
+  });
+
+  test("takes the lease only when it is free or already this job's", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await acquireImplementLease(1, "job-1", sql);
+    expect(calls[0]?.text).toContain("flow_job_id IS NULL OR flow_job_id =");
+  });
+
+  test("passes the job id and the work item id as parameters", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await acquireImplementLease(1, "job-1", sql);
+    expect(calls[0]?.values).toEqual(["job-1", 1, "job-1"]);
+  });
+
+  test("returns true when the lease was taken", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 1 }]]);
+    expect(await acquireImplementLease(1, "job-1", sql)).toBe(true);
+  });
+
+  test("returns false when another run holds the lease or the status moved on", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await acquireImplementLease(1, "job-1", sql)).toBe(false);
+  });
+});
+
+describe("setFlowJobIdIfUnset", () => {
+  test("writes only when flow_job_id is free or already this job's", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await setFlowJobIdIfUnset(1, "job-1", sql);
+    expect(calls[0]?.text).toContain("flow_job_id IS NULL OR flow_job_id =");
+  });
+
+  test("does not depend on the status", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await setFlowJobIdIfUnset(1, "job-1", sql);
+    expect(calls[0]?.text).not.toContain("status");
+  });
+
+  test("passes the job id and the work item id as parameters", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await setFlowJobIdIfUnset(1, "job-1", sql);
+    expect(calls[0]?.values).toEqual(["job-1", 1, "job-1"]);
+  });
+
+  test("returns true when the job id was recorded", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 1 }]]);
+    expect(await setFlowJobIdIfUnset(1, "job-1", sql)).toBe(true);
+  });
+
+  test("returns false when another run already holds the lease", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await setFlowJobIdIfUnset(1, "job-1", sql)).toBe(false);
   });
 });
 

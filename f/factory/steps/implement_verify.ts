@@ -9,7 +9,16 @@ import {
   runClaude,
 } from "../lib/claude.ts";
 import { implementCheckCommandsFor, loadConfig } from "../lib/config.ts";
-import { addNotice, insertImplementRound, recordAgentRun } from "../lib/db.ts";
+import {
+  addNotice,
+  getWorkItem,
+  insertImplementRound,
+  recordAgentRun,
+} from "../lib/db.ts";
+import {
+  implementLeaseJobId,
+  stillHoldsImplementLease,
+} from "../lib/implement_launch_support.ts";
 import {
   type ChangeInspection,
   GITLEAKS_TIMEOUT_MS,
@@ -79,13 +88,14 @@ async function inspectChanges(
 
 /**
  * 実装の検証ループを回し、その結果を返す。
- * 各ラウンドで、worktreeの`.git`ポインタが`context.worktree_git_pointer`と
- * 一致するかを確かめ、`context.base_sha`(デフォルトブランチとのmerge-base)
+ * 各ラウンドで、worktreeに触れる前にリースを確かめ(失っていれば止める)、
+ * worktreeの`.git`ポインタが`context.worktree_git_pointer`と一致するかを確かめ、`context.base_sha`(デフォルトブランチとのmerge-base)
  * を基準に変更を調べる。
  * そのうえで、symlink・`package.json`のscripts・差分サイズの上限・gitleaks・
  * 対象リポジトリの検査コマンドで検査する。
  * 検査コマンドはignoredファイルを消してから実行する。
- * 失敗すれば`implementFixPrompt`で修正ラウンドを走らせる。
+ * 失敗すれば、リースを確かめてから(失っていれば止める)`implementFixPrompt`で修正ラウンドを走らせる。
+ * リースの値は、フローのルートジョブID(`implementLeaseJobId`)。
  * 修正ラウンドごとに`doc_dir`の読み取り専用コピーを新しく作り、
  * Claudeの実行1回ごとに`implement_rounds`へ1行記録する。
  * 検査コマンドがあるときは、サンドボックスなしで実行することを
@@ -103,6 +113,8 @@ export async function main(
     );
   }
   const log = logger("implement_verify");
+  // buildSystemPromptの前に取る。投げた場合にsystemPromptの後始末を飛ばさないため。
+  const leaseJobId = implementLeaseJobId(process.env);
   const config = await loadConfig(() =>
     wmill.getResource("f/factory/factory_config"),
   );
@@ -116,7 +128,8 @@ export async function main(
   // `pr_fix_verify`と同じ常設リスクの告知。
   // 検査コマンドは、対象リポジトリの検証されていないコードを、
   // worker内でサンドボックスなしにroot権限で実行する。
-  if (commands.length > 0) {
+  // generateがリースを失っていたときは検査を実行しないので告知しない。
+  if (commands.length > 0 && first_round.kind !== "lease_lost") {
     await addNotice({
       kind: "unsandboxed_check_commands",
       message: `implement_verifyはこれから${String(commands.length)}件の検査コマンドを、サンドボックス分離なしでroot権限により${context.owner}/${context.repo}#${String(context.issue_number)}の未検証コードに対して実行します(work item ${String(work_item_id)})。`,
@@ -195,6 +208,8 @@ export async function main(
         },
         dailyBudgetExceeded: async () =>
           (await dailyBudgetStatus(config)).exceeded,
+        holdsLease: () =>
+          stillHoldsImplementLease(() => getWorkItem(work_item_id), leaseJobId),
         log: (message, fields) => log.info(message, fields),
       },
       {

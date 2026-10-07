@@ -452,6 +452,66 @@ export async function updateStatusIfCurrent(
   return rows.length > 0;
 }
 
+/**
+ * updateStatusIfCurrentと同じ比較と交換で、同じ文でflow_job_idをNULLにする。
+ * 実装フローを始める遷移(approved → implementing、retryからimplementingへ)で使い、
+ * 前のフローのジョブIDを消して新しい実行のimplement_prepareがリースを取れるようにする。
+ * statusがexpectedFromでなければ何も書かずにfalseを返す。
+ */
+export async function updateStatusIfCurrentClearingFlowJobId(
+  id: number,
+  expectedFrom: WorkItemStatus,
+  to: WorkItemStatus,
+  note: string | null = null,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  const statement = sql`
+    WITH updated AS (
+      UPDATE factory.work_items
+      SET status = ${to}, flow_job_id = NULL, updated_at = now()
+      WHERE id = ${id} AND status = ${expectedFrom}
+      RETURNING id
+    )
+    INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note)
+    SELECT updated.id, ${expectedFrom}, ${to}, ${note}
+    FROM updated
+    RETURNING work_item_id
+  `;
+  const rows = await statement.fetch();
+  return rows.length > 0;
+}
+
+/**
+ * updateStatusIfCurrentと同じ比較と交換に、flow_job_idがexpectedFlowJobIdのままであること
+ * (nullならNULLのままであること)を条件として足す。実装フローは自分のルートジョブIDを渡して、
+ * リースを失った実行が状態を動かせないようにする。reconcileとon_error_flowは読み取った時点の値を渡す。
+ * 条件に合わなければ何も書かずにfalseを返す。`::text`は`IS NOT DISTINCT FROM`の両辺の型をtextに固定する。
+ */
+export async function updateStatusIfLeaseHolder(
+  id: number,
+  expectedFrom: WorkItemStatus,
+  to: WorkItemStatus,
+  expectedFlowJobId: string | null,
+  note: string | null = null,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  const statement = sql`
+    WITH updated AS (
+      UPDATE factory.work_items
+      SET status = ${to}, updated_at = now()
+      WHERE id = ${id} AND status = ${expectedFrom}
+        AND flow_job_id IS NOT DISTINCT FROM ${expectedFlowJobId}::text
+      RETURNING id
+    )
+    INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note)
+    SELECT updated.id, ${expectedFrom}, ${to}, ${note}
+    FROM updated
+    RETURNING work_item_id
+  `;
+  const rows = await statement.fetch();
+  return rows.length > 0;
+}
+
 /** `factory.work_items`の行をIDで1件取得する。無ければ`null`を返す。 */
 export async function getWorkItem(
   id: number,
@@ -1190,6 +1250,43 @@ export async function setFlowJobId(
     SET flow_job_id = ${flowJobId}, updated_at = now()
     WHERE id = ${id}
   `.execute();
+}
+
+/**
+ * 実装フローのリースを取る。statusがimplementingで、flow_job_idがNULLか既にjobIdのときだけ
+ * jobIdを書いてtrueを返す。別の実行がリースを持っているか、statusが変わっていればfalseを返し、何も書かない。
+ */
+export async function acquireImplementLease(
+  id: number,
+  jobId: string,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  const rows = await sql`
+    UPDATE factory.work_items
+    SET flow_job_id = ${jobId}, updated_at = now()
+    WHERE id = ${id} AND status = 'implementing'
+      AND (flow_job_id IS NULL OR flow_job_id = ${jobId})
+    RETURNING id
+  `.fetch();
+  return rows.length > 0;
+}
+
+/**
+ * 起動側が`runFlowAsync`の戻り値を記録する。flow_job_idがNULLか既に同じ値のときだけ書いてtrueを返す。
+ * 別の実行が先にリースを取っていればfalseを返し、上書きしない。statusは見ない。
+ */
+export async function setFlowJobIdIfUnset(
+  id: number,
+  flowJobId: string,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  const rows = await sql`
+    UPDATE factory.work_items
+    SET flow_job_id = ${flowJobId}, updated_at = now()
+    WHERE id = ${id} AND (flow_job_id IS NULL OR flow_job_id = ${flowJobId})
+    RETURNING id
+  `.fetch();
+  return rows.length > 0;
 }
 
 export async function setFixRound(

@@ -5,6 +5,7 @@
 
 import { normalizeRepoUrl } from "./config.ts";
 import type { NotifyEvent } from "./discord.ts";
+import { ImplementLeaseLostError } from "./implement_launch_support.ts";
 import {
   gitPointerStopReason,
   type ImplementContext,
@@ -51,12 +52,16 @@ export type ImplementFinishAction =
    */
   | { readonly kind: "needs_human"; readonly preserveWork: boolean };
 
-/** finishの結果から、行う終端処理を決める。 */
+/**
+ * finishの結果から、行う終端処理を決める。
+ * prepareがskipした実行と、検証ループがリースを失って止まった実行は何もしない。
+ */
 export function decideImplementFinishAction(
   outcome: ImplementFinishOutcome,
 ): ImplementFinishAction {
   switch (outcome) {
     case "skip":
+    case "lease_lost":
       return { kind: "noop" };
     case "cancelled":
       return { kind: "cancel" };
@@ -194,20 +199,22 @@ export type PreserveWorkDeps = {
  * 停止したループの作業をcommitしてブランチにpushする。
  * `.git`ポインタが変わったworktreeではgitを実行しない。
  * 秘密の検査で検出された変更や、検査できなかった変更もpushしない。
- * `needs_human`の理由に付け足す注記(英語)の配列を返し、例外は投げない。
+ * `needs_human`の理由に付け足す注記(英語)の配列を返す。
+ * 例外は`ImplementLeaseLostError`(依存がリースを失ったと知らせた)だけを投げ直し、
+ * それ以外は注記にする。リースを失った実行は、注記を付けて人に知らせるのではなく、何もせずに終えるため。
  */
 export async function preserveWork(deps: PreserveWorkDeps): Promise<string[]> {
   try {
     const pointerReason = await gitPointerStopReason(deps.assertGitPointer);
     if (pointerReason !== null) return [pointerReason];
   } catch (err) {
-    return [finishFailureReason(err)];
+    return [failureNoteUnlessLeaseLost(err)];
   }
   let scan: GitleaksResult;
   try {
     scan = await deps.scanForSecrets();
   } catch (err) {
-    return [finishFailureReason(err)];
+    return [failureNoteUnlessLeaseLost(err)];
   }
   if (!scan.ok) return [SECRETS_NOT_PUSHED_REASON];
   try {
@@ -216,8 +223,14 @@ export async function preserveWork(deps: PreserveWorkDeps): Promise<string[]> {
       ? [`branch head moved to ${pushed.currentSha} while implementing`]
       : [];
   } catch (err) {
-    return [finishFailureReason(err)];
+    return [failureNoteUnlessLeaseLost(err)];
   }
+}
+
+/** `err`が`ImplementLeaseLostError`なら投げ直し、そうでなければ`finishFailureReason`の注記を返す。 */
+function failureNoteUnlessLeaseLost(err: unknown): string {
+  if (err instanceof ImplementLeaseLostError) throw err;
+  return finishFailureReason(err);
 }
 
 export const WORKTREE_CHANGED_AFTER_VERIFICATION_REASON =

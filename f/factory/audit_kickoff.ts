@@ -24,6 +24,7 @@ import {
   setFlowJobId,
 } from "./lib/db.ts";
 import { parseGitHubRepoUrl } from "./lib/github.ts";
+import { parseFlowJobId } from "./lib/implement_launch_support.ts";
 import { logger } from "./lib/log.ts";
 
 export type AuditKickoffResult =
@@ -90,12 +91,16 @@ export async function main(
     log.info("audit skipped", { reason: "concurrent_kickoff" });
     return { skipped: true, reason: "concurrent_kickoff" };
   }
-  const flowJobId = await wmill.runFlowAsync("f/factory/audit", {
-    work_item_id: workItemId,
-    period_start: decision.period.start.toISOString(),
-    period_end: decision.period.end.toISOString(),
-    unaudited_gap_days: decision.period.unaudited_gap_days,
-  });
+  // 応答がジョブIDでなければ例外にし、起動の失敗と同じくこのジョブを失敗させる。
+  const flowJobId = parseFlowJobId(
+    await wmill.runFlowAsync("f/factory/audit", {
+      work_item_id: workItemId,
+      period_start: decision.period.start.toISOString(),
+      period_end: decision.period.end.toISOString(),
+      unaudited_gap_days: decision.period.unaudited_gap_days,
+    }),
+    "runFlowAsync",
+  );
   await setFlowJobId(workItemId, flowJobId);
   return {
     skipped: false,

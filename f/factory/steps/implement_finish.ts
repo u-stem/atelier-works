@@ -1,6 +1,10 @@
 // f/factory/implementの4ステップ中4番目(終了処理)で、唯一の終端ステップ。
 // 準備ステップの停止か検証ループの終了を受けて、作業項目の状態遷移と
 // それに伴う副作用(commit、push、PR作成、通知など)を行う。
+// 最初に準備ステップと検証ループの結果からnoopかを判定する(検証ループがリースを失って止まったときもnoop)。
+// noopでなければ作業項目を読んだ直後にリースを確かめ、失っていれば何もせずに終わる。
+// 外への副作用の直前にもリースを確かめ直し、失っていれば同じく何もせずに終わる。
+// 状態の遷移はすべてリースを条件にする。
 
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "../lib/config.ts";
@@ -9,7 +13,7 @@ import {
   getWorkItem,
   setFlowJobId,
   setWorkItemPrUrl,
-  updateStatusIfCurrent,
+  updateStatusIfLeaseHolder,
 } from "../lib/db.ts";
 import { type NotifyEvent, notify } from "../lib/discord.ts";
 import {
@@ -21,6 +25,7 @@ import {
   getIssue,
   getViewer,
   gitIdentityForViewer,
+  type Issue,
   type PullRequestRef,
   updatePullRequest,
 } from "../lib/github.ts";
@@ -48,6 +53,14 @@ import {
   shouldPushPartialWork,
 } from "../lib/implement_finish_support.ts";
 import {
+  assertImplementLease,
+  holdsImplementLease,
+  IMPLEMENT_LEASE_LOST_REASON,
+  ImplementLeaseLostError,
+  implementLeaseJobId,
+  parseFlowJobId,
+} from "../lib/implement_launch_support.ts";
+import {
   GITLEAKS_TIMEOUT_MS,
   gitPointerStopReason,
   IMPLEMENT_LOOP_EXITS,
@@ -58,6 +71,7 @@ import {
 import {
   buildImplementCommitMessage,
   buildImplementPrBody,
+  issueChangedSinceIntake,
   neutralizeIssueRefs,
 } from "../lib/implement_support.ts";
 import { logger, maskSecrets } from "../lib/log.ts";
@@ -183,7 +197,7 @@ type PrAttempt =
  * - requirements_gap: worktreeを消し、ブランチはどのPRも使っていないときだけ消す。
  *   attempt+1で`f/factory/pipeline`へ差し戻す(`max_attempts`を超えたらneeds_human)。
  *   `pr_fix_finish`の差し戻しと同じく、`runFlowAsync`より先に状態を更新する。
- *   その後の`runFlowAsync`か`setFlowJobId`が失敗したら、
+ *   その後の`runFlowAsync`(戻り値がジョブIDでないときを含む)か`setFlowJobId`が失敗したら、
  *   `requirements_generating`からneeds_humanに移し、noticeにギャップの報告を載せる。
  * - needs_human: max_rounds / daily_budget / stalled / diff_too_largeで止まったとき、
  *   PRが無く、worktreeの`.git`ポインタが変わっておらず、gitleaksを通れば、
@@ -195,8 +209,45 @@ type PrAttempt =
  * worktreeでのgitコマンド(`preserveWork`の検査とcommit、最終commit)の前には
  * 必ず`.git`ポインタを照合する。
  * ポインタが変わっていたらpushせずにneeds_humanで終える。
+ *
+ * 外への副作用(途中経過と最終のcommitとpush、worktreeとリモートブランチの削除、
+ * PRの作成と更新、`pr_url`の記録、ラベル)の直前には、作業項目を読み直してリースを確かめる
+ * (`assertImplementLease`)。失っていれば、最初の確認と同じく何もせずに終える。
+ * 取り消しや差し戻しでリースが移った後に、古い実行がpushやPRの操作を続けないため。
  */
 export async function main(
+  work_item_id: number,
+  prepare_outcome: string,
+  prepare_reason: string | null,
+  context: ImplementContext | null,
+  loop_result: ImplementLoopResult | null,
+): Promise<ImplementFinishResult> {
+  try {
+    return await finishImplement(
+      work_item_id,
+      prepare_outcome,
+      prepare_reason,
+      context,
+      loop_result,
+    );
+  } catch (err) {
+    if (!(err instanceof ImplementLeaseLostError)) throw err;
+    logger("implement_finish").warn("implement lease lost while finishing", {
+      work_item_id,
+    });
+    return LEASE_LOST_RESULT;
+  }
+}
+
+/** リースを失ったときの結果。何も遷移させず、人にも知らせない。 */
+const LEASE_LOST_RESULT: ImplementFinishResult = {
+  ok: true,
+  final_status: null,
+  notice: IMPLEMENT_LEASE_LOST_REASON,
+};
+
+/** `main`の本体。リースを失ったと分かった時点で`ImplementLeaseLostError`を投げ、`main`がnoopにする。 */
+async function finishImplement(
   work_item_id: number,
   prepare_outcome: string,
   prepare_reason: string | null,
@@ -222,7 +273,11 @@ export async function main(
   );
   const action = decideImplementFinishAction(outcome);
   if (action.kind === "noop")
-    return { ok: true, final_status: null, notice: prepare_reason };
+    return {
+      ok: true,
+      final_status: null,
+      notice: loop_result?.reason ?? prepare_reason,
+    };
 
   const log = logger("implement_finish");
   const workItem = await getWorkItem(work_item_id);
@@ -231,6 +286,21 @@ export async function main(
       `implement_finish: work item ${String(work_item_id)} is missing or has no issue_number`,
     );
   }
+  // Issueのcloseによる取り消し(cancelJobの失敗は握りつぶされる)やpr_fixの差し戻しで、実行中にリースが移ることがある。
+  // その実行はコミット・push・PR作成の前に止める。
+  const leaseJobId = implementLeaseJobId(process.env);
+  if (!holdsImplementLease(workItem, leaseJobId)) {
+    log.warn("implement lease lost before finishing", {
+      work_item_id,
+      status: workItem.status,
+      flow_job_id: workItem.flow_job_id,
+      lease_job_id: leaseJobId,
+    });
+    return LEASE_LOST_RESULT;
+  }
+  // 外への副作用の直前に呼ぶ。リースを失っていれば`ImplementLeaseLostError`を投げる。
+  const confirmLease = (): Promise<void> =>
+    assertImplementLease(() => getWorkItem(work_item_id), leaseJobId);
   const owner = workItem.owner;
   const repo = workItem.repo;
   const issueNumber = workItem.issue_number;
@@ -257,6 +327,8 @@ export async function main(
    * 作業項目をneeds_humanに遷移させ、遷移できたらnoticeを記録してDiscordへ通知する。
    * `from`はCASで期待する状態(`implementing`、または差し戻しを始められなかった後の
    * `requirements_generating`)。
+   * 状態の遷移はflow_job_idがこの実行のルートジョブIDのときだけ行う。
+   * requirements_generatingからの遷移も、再起動の失敗経路なのでflow_job_idはまだこの実行のID。
    * `detail`はnoticeとDiscordに足す文(ギャップの報告)。
    */
   const finalizeNeedsHuman = async (
@@ -267,10 +339,11 @@ export async function main(
       readonly detail?: string;
     } = {},
   ): Promise<ImplementFinishResult> => {
-    const moved = await updateStatusIfCurrent(
+    const moved = await updateStatusIfLeaseHolder(
       work_item_id,
       options.from ?? "implementing",
       "needs_human",
+      leaseJobId,
       reason,
     );
     const described =
@@ -304,10 +377,11 @@ export async function main(
 
   const cancel = async (note: string): Promise<ImplementFinishResult> =>
     transitionResult(
-      await updateStatusIfCurrent(
+      await updateStatusIfLeaseHolder(
         work_item_id,
         "implementing",
         "cancelled",
+        leaseJobId,
         note,
       ),
       "cancelled",
@@ -342,18 +416,23 @@ export async function main(
         baseSha: ctx.base_sha,
         timeoutMs: GITLEAKS_TIMEOUT_MS,
       }),
-    commitAndPush: async () =>
-      commitAndPush(await commitOptions(ctx, IMPLEMENT_WIP_COMMIT_MESSAGE)),
+    commitAndPush: async () => {
+      const options = await commitOptions(ctx, IMPLEMENT_WIP_COMMIT_MESSAGE);
+      await confirmLease();
+      return commitAndPush(options);
+    },
   });
 
   const hasPr =
     (context !== null && context.existing_pr_number !== null) ||
     recordedPrUrl !== null;
 
+  // openの再確認で取得したIssueを、取り込み時点との比較にも使う(追加のAPI呼び出しをしない)。
+  let issueUpdatedAfterIntake = false;
   if (context !== null) {
-    let issueState: string;
+    let issue: Issue;
     try {
-      issueState = (await getIssue(client, owner, repo, issueNumber)).state;
+      issue = await getIssue(client, owner, repo, issueNumber);
     } catch (err) {
       let notes: string[] = [];
       if (shouldPreserveBeforeFailing(action)) {
@@ -373,8 +452,9 @@ export async function main(
         }),
       );
     }
-    if (issueState !== "open")
+    if (issue.state !== "open")
       return cancel("issue closed during implementation");
+    issueUpdatedAfterIntake = issueChangedSinceIntake(workItem, issue);
   }
 
   if (action.kind === "needs_human") {
@@ -409,6 +489,8 @@ export async function main(
 
   if (action.kind === "requirements_gap") {
     const gapReport = loop_result.gap_report ?? "";
+    // worktreeは同じ作業項目の次の実行も使うので、リースを持つ間だけ消す。
+    await confirmLease();
     try {
       await removeWorktree({
         run: runCommand,
@@ -440,6 +522,7 @@ export async function main(
         prLookupFailed,
       })
     ) {
+      await confirmLease();
       try {
         await deleteRemoteBranch({
           run: runCommand,
@@ -468,10 +551,11 @@ export async function main(
       const reason = gapExhaustedReason(config.max_attempts);
       return finalizeNeedsHuman(reason, nextActionFor(reason));
     }
-    const moved = await updateStatusIfCurrent(
+    const moved = await updateStatusIfLeaseHolder(
       work_item_id,
       "implementing",
       "requirements_generating",
+      leaseJobId,
       `gap: ${gapReport}`,
     );
     if (!moved)
@@ -481,11 +565,14 @@ export async function main(
         "work item moved on before the reroute",
       );
     try {
-      const flowJobId = await wmill.runFlowAsync("f/factory/pipeline", {
-        work_item_id,
-        attempt: attempt + 1,
-        feedback: gapReport,
-      });
+      const flowJobId = parseFlowJobId(
+        await wmill.runFlowAsync("f/factory/pipeline", {
+          work_item_id,
+          attempt: attempt + 1,
+          feedback: gapReport,
+        }),
+        "runFlowAsync",
+      );
       await setFlowJobId(work_item_id, flowJobId);
     } catch (err) {
       log.warn("requirements regeneration could not be started", {
@@ -513,6 +600,8 @@ export async function main(
     if (output === null || checks === null)
       return { ok: false, reason: IMPLEMENT_FINISH_NO_OUTPUT_REASON };
     try {
+      // ステージ・commit・pushの前に確かめる。
+      await confirmLease();
       const pointerReason = await gitPointerStopReason(assertGitPointer(ctx));
       if (pointerReason !== null) return { ok: false, reason: pointerReason };
       const verified = decideVerifiedTree(
@@ -554,8 +643,10 @@ export async function main(
         issueNumber: ctx.issue_number,
         changedPaths: loop.changed_paths,
         deployChecklist: ctx.is_factory_repo,
+        issueUpdatedAfterIntake,
       });
       let pr: PullRequestRef;
+      await confirmLease();
       if (existing === null) {
         pr = await createPullRequest(client, owner, repo, {
           head: ctx.branch,
@@ -571,7 +662,9 @@ export async function main(
         pr = existing;
       }
       // ラベル付けが失敗してもPRを辿れるように、ラベルより先に記録する。
+      await confirmLease();
       await setWorkItemPrUrl(work_item_id, pr.htmlUrl);
+      await confirmLease();
       try {
         await ensureLabel(
           client,
@@ -588,6 +681,8 @@ export async function main(
       await addLabels(client, owner, repo, pr.number, [config.review_label]);
       return { ok: true, pr, created: existing === null };
     } catch (err) {
+      // リースを失ったときは、needs_humanにせず`main`でnoopにする。
+      if (err instanceof ImplementLeaseLostError) throw err;
       return { ok: false, reason: finishFailureReason(err) };
     }
   };
@@ -595,10 +690,11 @@ export async function main(
   const opened = await openPullRequest(context, loop_result);
   if (!opened.ok)
     return finalizeNeedsHuman(opened.reason, nextActionFor(opened.reason));
-  const moved = await updateStatusIfCurrent(
+  const moved = await updateStatusIfLeaseHolder(
     work_item_id,
     "implementing",
     "pr_open",
+    leaseJobId,
     opened.pr.htmlUrl,
   );
   if (moved && loop_result.checks !== null) {

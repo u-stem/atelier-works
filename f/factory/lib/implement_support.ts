@@ -14,6 +14,7 @@ import {
   matchesImplementProtectedPath,
 } from "./protected_paths.ts";
 import { extractSectionBody } from "./requirements_doc.ts";
+import { classifyChangedPaths } from "./self_update_support.ts";
 import {
   assertBranchName,
   type ImplementRoundOutcome,
@@ -341,6 +342,30 @@ export function truncateCheckOutput(
 // buildImplementPrBody: PRテンプレートの各節をラウンドの結果で埋める
 // ---------------------------------------------------------------------------
 
+/** PR本文の「確認して欲しい点」に出す注記。Issueの取り込み後に題名か本文が変わったときだけ出す。 */
+export const ISSUE_UPDATED_AFTER_INTAKE_NOTE =
+  "この実装は要件定義を作ったときのIssueの内容に基づいており、その後にIssueの題名か本文が更新されています。";
+
+/** 改行コードを`\n`に揃え、前後の空白を除く。GitHubの編集画面は内容を変えずに改行コードを`\r\n`にすることがある。 */
+function normalizeIssueText(text: string | null): string {
+  return (text ?? "").replaceAll("\r\n", "\n").trim();
+}
+
+/**
+ * 取り込み時点のIssue(work_items.title / body。要件定義の生成に使った内容)と現在のIssueで、
+ * 題名か本文が違えばtrueを返す。実装のプロンプトは常に取り込み時点の内容を使い、
+ * この判定はPR本文に注記を足すためだけに使う。
+ */
+export function issueChangedSinceIntake(
+  snapshot: { readonly title: string | null; readonly body: string | null },
+  live: { readonly title: string; readonly body: string },
+): boolean {
+  return (
+    normalizeIssueText(snapshot.title) !== normalizeIssueText(live.title) ||
+    normalizeIssueText(snapshot.body) !== normalizeIssueText(live.body)
+  );
+}
+
 export const NO_ACCEPTANCE_CRITERIA_NOTE =
   "(要件定義に受入条件の節がありません)";
 
@@ -359,16 +384,32 @@ export function extractAcceptanceCriteria(markdown: string): string {
 }
 
 export type DeployNeeds = {
-  /** `infra/**`が変わった。workerのimageを作り直す(ホストで`mise run deploy`)。 */
-  readonly imageRebuild: boolean;
-  /** `migrations/**`が変わった。`wmill datatable migrate up`が必要。 */
-  readonly migrate: boolean;
-  /** `f/**`が変わった。`wmill sync push`が必要。 */
-  readonly syncPush: boolean;
+  /**
+   * `f/`・`migrations/`・`.claude/skills/`のいずれかが変わった。
+   * マージ後に`self_update`が自動で反映する。
+   */
+  readonly autoApply: boolean;
+  /**
+   * `infra/`か`mise.toml`が変わった。
+   * `self_update`では反映できず、ホストで`mise run deploy`が必要。
+   */
+  readonly hostDeploy: boolean;
 };
+
+const AUTO_APPLY_PATH_PREFIXES: readonly string[] = [
+  "f/",
+  "migrations/",
+  ".claude/skills/",
+];
 
 /**
  * 差分のパスから、PRテンプレートの「備考」のチェックリストを機械的に判定する。
+ * `autoApply`は`self_update`が自動で反映するパスの有無、
+ * `hostDeploy`は`self_update_support.ts`の`classifyChangedPaths`と同じ基準の
+ * ホスト側`mise run deploy`の要否である。
+ * `mise.toml`は、このフローに変更前後の内容が無く`[tools]`・`[env]`の差分を
+ * 判定できないため、`classifyChangedPaths`に`true`を渡して
+ * 変更があれば必要とみなす(安全側)。
  * 意味があるのはFactory自身のリポジトリだけである。
  * 他のリポジトリにも`infra/`、`migrations/`、`f/`があるかもしれず、
  * Windmillと関係ないパスで項目に印が付いてしまう。
@@ -378,9 +419,10 @@ export function classifyDeployNeeds(
   changedPaths: readonly string[],
 ): DeployNeeds {
   return {
-    imageRebuild: changedPaths.some((path) => path.startsWith("infra/")),
-    migrate: changedPaths.some((path) => path.startsWith("migrations/")),
-    syncPush: changedPaths.some((path) => path.startsWith("f/")),
+    autoApply: changedPaths.some((path) =>
+      AUTO_APPLY_PATH_PREFIXES.some((prefix) => path.startsWith(prefix)),
+    ),
+    hostDeploy: classifyChangedPaths(changedPaths, true).needs_host_action,
   };
 }
 
@@ -415,6 +457,8 @@ export type ImplementPrBodyInput = {
    * それ以外は「なし」にする。
    */
   readonly deployChecklist: boolean;
+  /** trueなら「確認して欲しい点」のConsoleリンクの直前にISSUE_UPDATED_AFTER_INTAKE_NOTEを出す。 */
+  readonly issueUpdatedAfterIntake: boolean;
 };
 
 /*
@@ -508,15 +552,19 @@ function checkbox(checked: boolean, label: string): string {
 
 function renderDeployChecklist(changedPaths: readonly string[]): string[] {
   const needs = classifyDeployNeeds(changedPaths);
-  const nothingNeeded =
-    !needs.imageRebuild && !needs.migrate && !needs.syncPush;
+  const nothingToApply = !needs.autoApply && !needs.hostDeploy;
   return [
-    "Windmillへの反映の要否:",
+    "Windmillへの反映:",
     "",
-    checkbox(needs.syncPush, "`wmill sync push`が必要"),
-    checkbox(needs.migrate, "`wmill datatable migrate up`が必要"),
-    checkbox(needs.imageRebuild, "worker imageのrebuildが必要"),
-    checkbox(nothingNeeded, "上記いずれも不要"),
+    checkbox(
+      needs.autoApply,
+      "マージ後に`self_update`が自動で反映する(`f/`・`migrations/`・`.claude/skills/`の変更)",
+    ),
+    checkbox(
+      needs.hostDeploy,
+      "ホスト側で`mise run deploy`が必要(`infra/`、`mise.toml`の`[tools]`・`[env]`の変更)",
+    ),
+    checkbox(nothingToApply, "反映するものは無い"),
   ];
 }
 
@@ -535,6 +583,7 @@ function renderChecks(checks: ImplementCheckSummary): string {
  * - 受入条件: 要件定義書の表
  * - 動作確認結果: 最後のラウンドの検証結果(実行しなかったときは「検査未実施」と理由)
  * - 確認して欲しい点: 保護対象の変更、レビュアーへの注記、
+ *   Issueの取り込み後の更新の注記(`issueUpdatedAfterIntake`のときだけ)、
  *   承認済みの要件定義を開くConsoleのリンク
  * - 関連リンク: `Closes #N`。PRの作業項目をIssueに結び付ける。
  *   `poll_prs.ts`の`extractLinkedIssueNumbers`はこの形を読む。
@@ -546,6 +595,9 @@ export function buildImplementPrBody(input: ImplementPrBodyInput): string {
   const attention = [
     ...input.protectedChanges.map((line) => `- ${sanitizePrLine(line)}`),
     ...input.notesForReviewer.map((line) => `- ${sanitizePrLine(line)}`),
+    ...(input.issueUpdatedAfterIntake
+      ? [`- ${ISSUE_UPDATED_AFTER_INTAKE_NOTE}`]
+      : []),
     `- 要件定義(Console): ${input.requirementsConsoleUrl}`,
   ];
   return [

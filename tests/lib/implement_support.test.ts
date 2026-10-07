@@ -12,8 +12,10 @@ import {
   hasActivePrRun,
   IMPLEMENT_CHECK_SKIP_REASONS,
   IMPLEMENT_CLAUDE_OUTCOMES,
+  ISSUE_UPDATED_AFTER_INTAKE_NOTE,
   isImplementClaudeOutput,
   isRequirementsApprovedForAttempt,
+  issueChangedSinceIntake,
   NO_ACCEPTANCE_CRITERIA_NOTE,
   neutralizeIssueRefs,
   roundOutcomeForExit,
@@ -513,6 +515,7 @@ const PR_BODY_INPUT = {
   issueNumber: 42,
   changedPaths: ["src/export.ts", "tests/export.test.ts"],
   deployChecklist: true,
+  issueUpdatedAfterIntake: false,
 };
 
 describe("extractAcceptanceCriteria", () => {
@@ -542,27 +545,46 @@ describe("extractAcceptanceCriteria", () => {
 describe("classifyDeployNeeds", () => {
   test("flags nothing for ordinary source paths", () => {
     expect(classifyDeployNeeds(["src/a.ts"])).toEqual({
-      imageRebuild: false,
-      migrate: false,
-      syncPush: false,
+      autoApply: false,
+      hostDeploy: false,
     });
   });
 
-  test("flags imageRebuild for infra/**", () => {
-    expect(classifyDeployNeeds(["infra/worker/Dockerfile"]).imageRebuild).toBe(
+  test("flags autoApply for f/**", () => {
+    expect(classifyDeployNeeds(["f/factory/lib/db.ts"]).autoApply).toBe(true);
+  });
+
+  test("flags autoApply for migrations/**", () => {
+    expect(
+      classifyDeployNeeds(["migrations/datatable/main/20260928120000_x.up.sql"])
+        .autoApply,
+    ).toBe(true);
+  });
+
+  test("flags autoApply for .claude/skills/**", () => {
+    expect(
+      classifyDeployNeeds([".claude/skills/factory-dev/SKILL.md"]).autoApply,
+    ).toBe(true);
+  });
+
+  test("flags hostDeploy for infra/**", () => {
+    expect(classifyDeployNeeds(["infra/worker/Dockerfile"]).hostDeploy).toBe(
       true,
     );
   });
 
-  test("flags migrate for migrations/**", () => {
-    expect(
-      classifyDeployNeeds(["migrations/datatable/main/20260928120000_x.up.sql"])
-        .migrate,
-    ).toBe(true);
+  test("flags hostDeploy for mise.toml", () => {
+    expect(classifyDeployNeeds(["mise.toml"]).hostDeploy).toBe(true);
   });
 
-  test("flags syncPush for f/**", () => {
-    expect(classifyDeployNeeds(["f/factory/lib/db.ts"]).syncPush).toBe(true);
+  test("does not flag hostDeploy for f/**", () => {
+    expect(classifyDeployNeeds(["f/factory/lib/db.ts"]).hostDeploy).toBe(false);
+  });
+
+  test("does not flag autoApply for infra/**", () => {
+    expect(classifyDeployNeeds(["infra/worker/Dockerfile"]).autoApply).toBe(
+      false,
+    );
   });
 });
 
@@ -638,26 +660,65 @@ describe("buildImplementPrBody", () => {
     );
   });
 
-  test("checks 上記いずれも不要 when no deploy-relevant path changed", () => {
+  test("checks only 反映するものは無い when no deploy-relevant path changed", () => {
     expect(buildImplementPrBody(PR_BODY_INPUT)).toContain(
       [
-        "Windmillへの反映の要否:",
+        "Windmillへの反映:",
         "",
-        "- [ ] `wmill sync push`が必要",
-        "- [ ] `wmill datatable migrate up`が必要",
-        "- [ ] worker imageのrebuildが必要",
-        "- [x] 上記いずれも不要",
+        "- [ ] マージ後に`self_update`が自動で反映する(`f/`・`migrations/`・`.claude/skills/`の変更)",
+        "- [ ] ホスト側で`mise run deploy`が必要(`infra/`、`mise.toml`の`[tools]`・`[env]`の変更)",
+        "- [x] 反映するものは無い",
       ].join("\n"),
     );
   });
 
-  test("checks the sync push box (and not 不要) when f/** changed", () => {
+  test("checks only the self_update box when f/** changed", () => {
     const body = buildImplementPrBody({
       ...PR_BODY_INPUT,
       changedPaths: ["f/factory/lib/db.ts"],
     });
     expect(body).toContain(
-      "- [x] `wmill sync push`が必要\n- [ ] `wmill datatable migrate up`が必要\n- [ ] worker imageのrebuildが必要\n- [ ] 上記いずれも不要",
+      "- [x] マージ後に`self_update`が自動で反映する(`f/`・`migrations/`・`.claude/skills/`の変更)\n- [ ] ホスト側で`mise run deploy`が必要(`infra/`、`mise.toml`の`[tools]`・`[env]`の変更)\n- [ ] 反映するものは無い",
+    );
+  });
+
+  test("checks only the self_update box when .claude/skills/** changed", () => {
+    const body = buildImplementPrBody({
+      ...PR_BODY_INPUT,
+      changedPaths: [".claude/skills/factory-dev/SKILL.md"],
+    });
+    expect(body).toContain(
+      "- [x] マージ後に`self_update`が自動で反映する(`f/`・`migrations/`・`.claude/skills/`の変更)\n- [ ] ホスト側で`mise run deploy`が必要(`infra/`、`mise.toml`の`[tools]`・`[env]`の変更)\n- [ ] 反映するものは無い",
+    );
+  });
+
+  test("checks only the host deploy box when infra/** changed", () => {
+    const body = buildImplementPrBody({
+      ...PR_BODY_INPUT,
+      changedPaths: ["infra/worker/Dockerfile"],
+    });
+    expect(body).toContain(
+      "- [ ] マージ後に`self_update`が自動で反映する(`f/`・`migrations/`・`.claude/skills/`の変更)\n- [x] ホスト側で`mise run deploy`が必要(`infra/`、`mise.toml`の`[tools]`・`[env]`の変更)\n- [ ] 反映するものは無い",
+    );
+  });
+
+  test("checks the host deploy box when mise.toml changed", () => {
+    const body = buildImplementPrBody({
+      ...PR_BODY_INPUT,
+      changedPaths: ["mise.toml"],
+    });
+    expect(body).toContain(
+      "- [x] ホスト側で`mise run deploy`が必要(`infra/`、`mise.toml`の`[tools]`・`[env]`の変更)",
+    );
+  });
+
+  test("checks both boxes but not 反映するものは無い when f/** and infra/** changed", () => {
+    const body = buildImplementPrBody({
+      ...PR_BODY_INPUT,
+      changedPaths: ["f/factory/lib/db.ts", "infra/worker/Dockerfile"],
+    });
+    expect(body).toContain(
+      "- [x] マージ後に`self_update`が自動で反映する(`f/`・`migrations/`・`.claude/skills/`の変更)\n- [x] ホスト側で`mise run deploy`が必要(`infra/`、`mise.toml`の`[tools]`・`[env]`の変更)\n- [ ] 反映するものは無い",
     );
   });
 
@@ -736,7 +797,21 @@ describe("buildImplementPrBody", () => {
       changedPaths: ["f/factory/lib/db.ts"],
       deployChecklist: false,
     });
-    expect(body).not.toContain("wmill sync push");
+    expect(body).not.toContain("Windmillへの反映");
+  });
+
+  test("notes an Issue updated after intake just before the Console link", () => {
+    expect(
+      buildImplementPrBody({ ...PR_BODY_INPUT, issueUpdatedAfterIntake: true }),
+    ).toContain(
+      `- ${ISSUE_UPDATED_AFTER_INTAKE_NOTE}\n- 要件定義(Console): http://127.0.0.1:8080/apps/get/f/factory/factory_console#requirements/7`,
+    );
+  });
+
+  test("omits the note when the Issue is unchanged since intake", () => {
+    expect(buildImplementPrBody(PR_BODY_INPUT)).not.toContain(
+      ISSUE_UPDATED_AFTER_INTAKE_NOTE,
+    );
   });
 });
 
@@ -936,6 +1011,72 @@ describe("hasActivePrRun", () => {
   test("is false for an issue work item", () => {
     expect(hasActivePrRun({ kind: "issue", status: "implementing" })).toBe(
       false,
+    );
+  });
+});
+
+describe("issueChangedSinceIntake", () => {
+  const SNAPSHOT = { title: "CSV出力", body: "CSVで出力したい" };
+
+  test("is false when the live Issue matches the snapshot", () => {
+    expect(
+      issueChangedSinceIntake(SNAPSHOT, {
+        title: "CSV出力",
+        body: "CSVで出力したい",
+      }),
+    ).toBe(false);
+  });
+
+  test("is true when the title changed", () => {
+    expect(
+      issueChangedSinceIntake(SNAPSHOT, {
+        title: "CSVとJSON出力",
+        body: "CSVで出力したい",
+      }),
+    ).toBe(true);
+  });
+
+  test("is true when the body changed", () => {
+    expect(
+      issueChangedSinceIntake(SNAPSHOT, {
+        title: "CSV出力",
+        body: "CSVで出力したい\n追加の指示",
+      }),
+    ).toBe(true);
+  });
+
+  test("ignores a CRLF-only difference", () => {
+    expect(
+      issueChangedSinceIntake(
+        { title: "CSV出力", body: "一行目\n二行目" },
+        { title: "CSV出力", body: "一行目\r\n二行目" },
+      ),
+    ).toBe(false);
+  });
+
+  test("ignores surrounding whitespace", () => {
+    expect(
+      issueChangedSinceIntake(SNAPSHOT, {
+        title: "CSV出力",
+        body: "CSVで出力したい\n",
+      }),
+    ).toBe(false);
+  });
+
+  test("treats a missing snapshot body as empty", () => {
+    expect(
+      issueChangedSinceIntake(
+        { title: "CSV出力", body: null },
+        { title: "CSV出力", body: "" },
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("ISSUE_UPDATED_AFTER_INTAKE_NOTE", () => {
+  test("is one polite sentence", () => {
+    expect(ISSUE_UPDATED_AFTER_INTAKE_NOTE).toBe(
+      "この実装は要件定義を作ったときのIssueの内容に基づいており、その後にIssueの題名か本文が更新されています。",
     );
   });
 });

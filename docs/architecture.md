@@ -97,6 +97,8 @@ stateDiagram-v2
 
 `awaiting_approval`の作業項目はflow jobが完了済みのまま人の決定を待つため、`poll_issues`のreconcileはこのstatusに孤児判定(job生死と猶予)を適用せず、Issue / PRのclose検知だけを行う。
 
+reconcileはジョブの状態を`JobService.getJob`で読み、`flow_job_id`が未記録か取得が404なら「見つからない」として猶予(10分と`claude_timeout_sec`の2倍の大きい方)を過ぎてから孤児にする。404以外の取得失敗(Windmill APIの一時的な障害など)は「状態不明」として、Issue / PRのclose検知を除き何もしない。これはすべてのkind(pipeline / implement / pr_review / pr_fix / audit)に適用される。
+
 ### status一覧
 
 | status | 意味 | 工程 |
@@ -129,11 +131,13 @@ PRは終端statusになってもトリガーラベルの消費以外の付け外
 ### 状態遷移の詳細
 
 **工程2(要件定義)から工程3へ:**
-- `approved` → `implementing`: `requirements_apply`が承認の副作用(Issueコメント、Discord、`req-<N>` worktreeの削除)の後に、`implement_enabled`が真ならCASで遷移させて`f/factory/implement`を起動する。起動に失敗したら`needs_human`にし、`job_failures`に記録してConsoleのFailuresタブから再実行できるようにする。
+- `approved` → `implementing`: `requirements_apply`が承認の副作用(Issueコメント、Discord、`req-<N>` worktreeの削除)の後に、`implement_enabled`が真ならCASで遷移させ(同じ文で`flow_job_id`を空にする)、`f/factory/implement`を起動して、`flow_job_id`が空か同じ値のときだけ起動したジョブIDを記録する。`runFlowAsync`はHTTPエラーでも例外を投げないので、戻り値がジョブID(UUID)でなければ起動失敗として扱う。起動に失敗したら、フローがまだリースを取っていなければ`needs_human`にし、`job_failures`に記録してConsoleのFailuresタブから再実行できるようにする。起動はエラーでもフローが既にリースを取っていれば、動いているので何もしない。
 - `implementing` → `pr_open`: 検査に通った(または保護パス変更・検査コマンド未設定で検査を実行しなかった)実装をコミットしてpushし、PRを作成または更新して`factory:review`ラベルを付けた。
 - `implementing` → `requirements_generating`: 実装が`requirements_gap`を返した。worktreeを削除し、PRが無ければ実装ブランチ(リモートとローカル)も削除して、`gap_report`をfeedbackに工程2をattempt+1で再起動する(`max_attempts`を超えたら`needs_human`)。
 - `implementing` → `needs_human`: ラウンド上限・日次予算・停滞・symlink変更・差分超過・Claude実行失敗・変更なし・push / PR作成失敗。秘密情報の検査に通れば途中の変更をブランチにpushしてから止める。この途中経過のコミットと、再実行が成功したときの実装コミットは別コミットになる(1コミットにまとめるのは通常の経路のみ)。
 - `implementing` → `cancelled`: Issueがclosedになった(準備時と完了時に確認する。実行中は`poll_issues`のreconcile)。
+
+**実装フローのリース(二重実行の防止)**: `implementing`の作業項目の`flow_job_id`は実装フローのリースとして扱う。`implement_prepare`は最初に(worktreeに触る前に)、statusが`implementing`で`flow_job_id`が空か自分のルートジョブID(`WM_ROOT_FLOW_JOB_ID`。`runFlowAsync`の戻り値と同じ値)のときだけ自分のIDを書き込み、書き込めなければ何もせずに終わる(読み直した`flow_job_id`と自分のIDをログに残す)。Issueのcloseによる取り消し(`cancelJob`の失敗は無視される)やpr_fixの差し戻しで、実行中にリースが移ることがあるので、`implement_generate`はClaudeを実行する前に、`implement_verify`は各ラウンドの冒頭(worktreeに触れる前)と各修正ラウンドの前に、`implement_finish`は作業項目を読んだ直後と外への副作用(commit・push、worktreeとリモートブランチの削除、PRの作成と更新、`pr_url`の記録、ラベル)の直前にリースを確かめ、失っていれば何もせずに終わる。`implement_finish`の状態の遷移はすべて`flow_job_id`が自分のIDであることを条件にする。`retry_work_item`は記録されたジョブがまだ動いているか状態を読めなければ再実行を拒否する。`poll_issues`のreconcileと`on_error_flow`は、読み取った時点の`flow_job_id`が変わっていないときだけ作業項目を`failed` / `cancelled`にする。Windmillのrerunは新しいジョブIDで最初から走るので、準備の最初で何もせずに終わる。途中のステップからのrestartも新しいジョブIDで走るので、再開したステップの最初のリースの確認(`implement_generate`、`implement_verify`、`implement_finish`)で何もせずに終わる。どちらも、元の実行で進行中のClaudeの実行や検査を中断はしない(再実行は`retry_work_item`を使う)。
 
 **PRワークフローの`requirements_gap`:**
 - `pr_fix`フロー実行中に`outcome: "requirements_gap"`が返された場合、`parent_work_item_id`で元Issueの作業項目を特定する。
@@ -312,10 +316,10 @@ WindmillのUIはsummaryでソートされるため、種別を示すタグをsum
 
 `f/factory/implement`フローは配線済みで、`factory_config`の`implement_enabled`(既定`false`)を有効にしたときだけ`requirements_apply`が承認後に起動する。
 
-- **準備**(`implement_prepare`): statusが`implementing`か、日次予算、対象リポジトリ、Issueがopenか、作業項目のattemptに一致する承認済み要件定義があるかを確認し、実装ブランチ`factory/issue-<N>-wi-<id>`のworktreeを`git gtr`で用意して空のブランチをpushする(以後のpushは既存の`commitAndPush`をそのまま使う)。ブランチがデフォルトブランチから分かれた点(`git merge-base`)を比較の基準として後段に渡す。
-- **実装**(`implement_generate`): `factory-implementation`スキルのheadless Claudeをworktree上で1回実行する(`Read,Glob,Grep,Edit,Write`のみ、Bashなし)。承認済み要件定義のディレクトリは実行ごとに一時ディレクトリへ複製したものを読ませ、元のファイルは書き換えられない。モジュールの再試行は付けない。
-- **検証と修正のループ**(`implement_verify`、`lib/implement_loop.ts`): ラウンドごとに、差分をすべてステージして指紋(`git write-tree`)と分岐点からの差分量を取り、分岐点からの変更パス(`git diff -z --name-status`)でsymlink変更と差分超過を検出したら止める。保護パスの変更は記録だけ行う。分岐点から何も変わっていないラウンドは合格にしない。続いてgitleaks(固定検査)と、保護パスを変えていなければリポジトリの検査コマンド(`check_commands_by_repo`に明示されたものだけ。無視ファイルを`git clean -fdX`で消してから)を実行し、失敗していればその出力をDATAとしてClaudeに修正させる。検査に通る、検査を実行しない、ラウンド上限・日次予算・停滞、`requirements_gap`のいずれかで抜け、Claude実行ごとに`implement_rounds`へ1行記録する。検査コマンドは`implement_timeout_sec`をコマンドごとのタイムアウトとして実行される(Claude実行のタイムアウトも同じ値)ため、1ラウンドの最長時間は`(1 + 検査コマンド数) × implement_timeout_sec`になりうる。`flow.yaml`はどのモジュールにもタイムアウトを設定していない。
-- **完了**(`implement_finish`): PRの作成・更新、`requirements_gap`の差し戻し、`needs_human`、`cancelled`を振り分ける(状態遷移の詳細は上記)。既存PRを更新するモードでも、差分サイズの上限(`implement_max_changed_files` / `implement_max_diff_lines`)はデフォルトブランチとのmerge-baseからの累積で測るため、既にPRが大きい場合は上限に達しうる。
+- **準備**(`implement_prepare`): 最初に`flow_job_id`のリースを取る(取れなければ何もせずに終わる)。statusが`implementing`か、日次予算、対象リポジトリ、Issueがopenか、作業項目のattemptに一致する承認済み要件定義があるかを確認し、実装ブランチ`factory/issue-<N>-wi-<id>`のworktreeを`git gtr`で用意して空のブランチをpushする(以後のpushは既存の`commitAndPush`をそのまま使う)。ブランチがデフォルトブランチから分かれた点(`git merge-base`)を比較の基準として後段に渡す。Claudeに渡すIssueの題名・本文・URLは取り込み時点のもの(`work_items.title` / `body` / `issue_url`。工程2の要件定義生成と同じ入力)で、GitHubのIssueはopenかどうかと、取り込み時点のURLが空のときのURLにだけ使う。
+- **実装**(`implement_generate`): `factory-implementation`スキルのheadless Claudeをworktree上で1回実行する(`Read,Glob,Grep,Edit,Write`のみ、Bashなし)。承認済み要件定義のディレクトリは実行ごとに一時ディレクトリへ複製したものを読ませ、元のファイルは書き換えられない。Claudeを実行する前にリースを確かめ、失っていれば実行せずに、検証ループがそのまま止まる結果(`lease_lost`)を返す。モジュールの再試行は付けない。
+- **検証と修正のループ**(`implement_verify`、`lib/implement_loop.ts`): ラウンドごとに、差分をすべてステージして指紋(`git write-tree`)と分岐点からの差分量を取り、分岐点からの変更パス(`git diff -z --name-status`)でsymlink変更と差分超過を検出したら止める。保護パスの変更は記録だけ行う。分岐点から何も変わっていないラウンドは合格にしない。続いてgitleaks(固定検査)と、保護パスを変えていなければリポジトリの検査コマンド(`check_commands_by_repo`に明示されたものだけ。無視ファイルを`git clean -fdX`で消してから)を実行し、失敗していればその出力をDATAとしてClaudeに修正させる。検査に通る、検査を実行しない、ラウンド上限・日次予算・停滞、`requirements_gap`のいずれかで抜け、Claude実行ごとに`implement_rounds`へ1行記録する。検査コマンドは`implement_timeout_sec`をコマンドごとのタイムアウトとして実行される(Claude実行のタイムアウトも同じ値)ため、1ラウンドの最長時間は`(1 + 検査コマンド数) × implement_timeout_sec`になりうる。`flow.yaml`はどのモジュールにもタイムアウトを設定していない。各ラウンドの冒頭(worktreeに触れる前)と各修正ラウンドの前にリースを確かめ、失っていれば止まる(完了ステップは何もしない)。
+- **完了**(`implement_finish`): PRの作成・更新、`requirements_gap`の差し戻し、`needs_human`、`cancelled`を振り分ける(状態遷移の詳細は上記)。既存PRを更新するモードでも、差分サイズの上限(`implement_max_changed_files` / `implement_max_diff_lines`)はデフォルトブランチとのmerge-baseからの累積で測るため、既にPRが大きい場合は上限に達しうる。作業項目を読んだ直後にリースを確かめ、外への副作用(commit・push、worktreeとリモートブランチの削除、PRの作成と更新、`pr_url`の記録、ラベル)の直前にも確かめ直す。Issueがopenかを確かめるために取得したIssueの題名か本文が取り込み時点と違えば、PR本文の「確認して欲しい点」にその旨を1行書く(通知はしない)。
 - **実装中に要件や設計を書き換えることは禁止する**。要件を満たせない場合は`requirements_gap`と`gap_report`を返して中断し、工程2をattempt+1で再起動する。この制約は`factory-implementation`スキル(`.claude/skills/factory-implementation/SKILL.md`)で規定し、プロンプトは`f/factory/lib/prompts.ts`の`implementPrompt` / `implementFixPrompt`、出力契約は`IMPLEMENT_SCHEMA`と`f/factory/lib/implement_support.ts`の型ガード・検証が担う。
 - ConsoleのPipelineタブへのブランチ / PRの列の追加と、sandboxリポジトリでのe2eは後続の変更で行い、その後に`implement_enabled`を有効にする。
 

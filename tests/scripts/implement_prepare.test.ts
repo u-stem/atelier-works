@@ -6,7 +6,16 @@ import {
 
 const BASE = "b".repeat(40);
 const INPUT: BuildImplementContextInput = {
-  workItem: { id: 3, owner: "acme", repo: "widgets", attempt: 2, pr_url: null },
+  workItem: {
+    id: 3,
+    owner: "acme",
+    repo: "widgets",
+    attempt: 2,
+    pr_url: null,
+    title: "CSV出力",
+    body: "CSVで出力したい",
+    issue_url: "https://github.com/acme/widgets/issues/7",
+  },
   issueNumber: 7,
   issue: {
     title: "CSV出力",
@@ -131,5 +140,70 @@ describe("buildImplementContext", () => {
 
   test("uses the work item's attempt", () => {
     expect(buildImplementContext(INPUT).attempt).toBe(2);
+  });
+
+  test("uses the intake snapshot's title, not the live Issue's", () => {
+    expect(
+      buildImplementContext({
+        ...INPUT,
+        issue: { ...INPUT.issue, title: "書き換えた題名" },
+      }).issue_title,
+    ).toBe("CSV出力");
+  });
+
+  test("uses the intake snapshot's body, not the live Issue's", () => {
+    expect(
+      buildImplementContext({
+        ...INPUT,
+        issue: { ...INPUT.issue, body: "承認後に足した指示" },
+      }).issue_body,
+    ).toBe("CSVで出力したい");
+  });
+
+  test("uses an empty title when the snapshot has none", () => {
+    expect(
+      buildImplementContext({
+        ...INPUT,
+        workItem: { ...INPUT.workItem, title: null },
+      }).issue_title,
+    ).toBe("");
+  });
+
+  test("links the Issue URL recorded at intake, not the live one", () => {
+    expect(
+      buildImplementContext({
+        ...INPUT,
+        issue: {
+          ...INPUT.issue,
+          htmlUrl: "https://github.com/acme/moved/issues/1",
+        },
+      }).issue_url,
+    ).toBe("https://github.com/acme/widgets/issues/7");
+  });
+
+  test("falls back to the live Issue URL when the snapshot has none", () => {
+    expect(
+      buildImplementContext({
+        ...INPUT,
+        workItem: { ...INPUT.workItem, issue_url: null },
+        issue: {
+          ...INPUT.issue,
+          htmlUrl: "https://github.com/acme/moved/issues/1",
+        },
+      }).issue_url,
+    ).toBe("https://github.com/acme/moved/issues/1");
+  });
+
+  test("falls back to the live Issue URL when the snapshot is empty", () => {
+    expect(
+      buildImplementContext({
+        ...INPUT,
+        workItem: { ...INPUT.workItem, issue_url: "" },
+        issue: {
+          ...INPUT.issue,
+          htmlUrl: "https://github.com/acme/moved/issues/1",
+        },
+      }).issue_url,
+    ).toBe("https://github.com/acme/moved/issues/1");
   });
 });

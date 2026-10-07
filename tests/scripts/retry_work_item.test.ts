@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { computeRestartPlan } from "../../f/factory/retry_work_item.ts";
+import { IMPLEMENT_FLOW_PATH } from "../../f/factory/lib/implement_loop.ts";
+import {
+  computeRestartPlan,
+  launchFailureError,
+  retryResult,
+  runningFlowRefusal,
+  usesImplementLease,
+} from "../../f/factory/retry_work_item.ts";
 
 describe("computeRestartPlan", () => {
   test("restarts a failed issue work item into pipeline at attempt + 1", () => {
@@ -165,5 +172,147 @@ describe("computeRestartPlan — implement", () => {
         { implementReady: false, implementEnabled: true },
       ),
     ).toThrow(/approval/);
+  });
+});
+
+describe("runningFlowRefusal", () => {
+  test("refuses while the recorded flow job is running", () => {
+    expect(runningFlowRefusal(7, "job-1", { state: "running" })).toBe(
+      "retry_work_item: work item 7's flow job job-1 is still running; wait for it to finish or cancel it before restarting",
+    );
+  });
+
+  test("refuses when the recorded flow job's state cannot be read", () => {
+    expect(runningFlowRefusal(7, "job-1", { state: "unknown" })).toBe(
+      "retry_work_item: the state of work item 7's flow job job-1 could not be read; try again later",
+    );
+  });
+
+  test("allows a completed flow job", () => {
+    expect(
+      runningFlowRefusal(7, "job-1", {
+        state: "completed",
+        success: false,
+        canceled: false,
+      }),
+    ).toBeNull();
+  });
+
+  test("allows a flow job that no longer exists", () => {
+    expect(runningFlowRefusal(7, "job-1", { state: "absent" })).toBeNull();
+  });
+
+  test("allows a work item without a flow job id", () => {
+    expect(runningFlowRefusal(7, null, { state: "running" })).toBeNull();
+  });
+});
+
+describe("usesImplementLease", () => {
+  test("is true for a restart into the implement flow", () => {
+    expect(usesImplementLease({ flowPath: IMPLEMENT_FLOW_PATH })).toBe(true);
+  });
+
+  test("is false for a restart into the pipeline", () => {
+    expect(usesImplementLease({ flowPath: "f/factory/pipeline" })).toBe(false);
+  });
+});
+
+describe("retryResult", () => {
+  test("is ok when the job id was recorded", () => {
+    expect(retryResult("implementing", "job-1", true).ok).toBe(true);
+  });
+
+  test("reports the recorded job id", () => {
+    expect(retryResult("implementing", "job-1", true).flow_job_id).toBe(
+      "job-1",
+    );
+  });
+
+  test("is not ok when another run already held the lease", () => {
+    expect(retryResult("implementing", "job-1", false).ok).toBe(false);
+  });
+
+  test("reports no recorded job id when another run already held the lease", () => {
+    expect(retryResult("implementing", "job-1", false).flow_job_id).toBeNull();
+  });
+
+  test("still reports the started job id", () => {
+    expect(retryResult("implementing", "job-1", false).started_job_id).toBe(
+      "job-1",
+    );
+  });
+});
+
+describe("launchFailureError", () => {
+  const REASON =
+    "retry_work_item: f/factory/implement could not be started: runFlowAsync did not return a job id: 500";
+  const noLog = () => {};
+
+  test("passes the launch failure reason to the rollback", async () => {
+    const reasons: string[] = [];
+    await launchFailureError(
+      IMPLEMENT_FLOW_PATH,
+      "runFlowAsync did not return a job id: 500",
+      async (reason) => {
+        reasons.push(reason);
+        return true;
+      },
+      noLog,
+    );
+    expect(reasons).toEqual([REASON]);
+  });
+
+  test("returns the launch failure reason after rolling back", async () => {
+    const err = await launchFailureError(
+      IMPLEMENT_FLOW_PATH,
+      "runFlowAsync did not return a job id: 500",
+      async () => true,
+      noLog,
+    );
+    expect(err.message).toBe(REASON);
+  });
+
+  test("keeps the launch failure reason when the rollback throws", async () => {
+    const err = await launchFailureError(
+      IMPLEMENT_FLOW_PATH,
+      "runFlowAsync did not return a job id: 500",
+      async () => {
+        throw new Error("connection refused");
+      },
+      noLog,
+    );
+    expect(err.message).toBe(REASON);
+  });
+
+  test("logs the masked rollback error", async () => {
+    const logged: unknown[] = [];
+    await launchFailureError(
+      IMPLEMENT_FLOW_PATH,
+      "runFlowAsync did not return a job id: 500",
+      async () => {
+        throw new Error(`connection refused ghp_${"A".repeat(36)}`);
+      },
+      (message, fields) => {
+        logged.push({ message, fields });
+      },
+    );
+    expect(logged).toEqual([
+      {
+        message: "needs_human rollback after a failed launch failed",
+        fields: { error: "connection refused ***" },
+      },
+    ]);
+  });
+
+  test("says another run holds the lease when the rollback does not move the item", async () => {
+    const err = await launchFailureError(
+      IMPLEMENT_FLOW_PATH,
+      "runFlowAsync did not return a job id: 500",
+      async () => false,
+      noLog,
+    );
+    expect(err.message).toContain(
+      "returned an error, but another run holds the lease",
+    );
   });
 });

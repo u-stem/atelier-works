@@ -102,7 +102,7 @@ PRは`.github/PULL_REQUEST_TEMPLATE.md`の次の章立てに従う。
 3. **動作確認結果**: lint / typecheck / test / E2Eの実行結果をチェックする。
 4. **確認して欲しい点**: 実装上のトレードオフや不確実な部分を記述する。
 5. **関連リンク**: `Closes #N`形式でIssueを明示する(Factoryはこれで承認済み要件と照合する)。
-6. **備考**: Windmillへの反映(sync push / migrate / image rebuild)の要否を記述する。
+6. **備考**: Windmillへの反映を記述する。`f/`・`migrations/`・`.claude/skills/`の変更はマージ後に`self_update`が自動で反映し、ホスト側で`mise run deploy`が必要なのは`infra/`と`mise.toml`の`[tools]`・`[env]`の変更だけである。
 
 人がClaude Codeで作成するコミットには、トレーラー`Co-Authored-By: Claude <noreply@anthropic.com>`を付ける。
 
@@ -114,4 +114,4 @@ Software Factoryが作成するコミットには、トレーラー`Co-Authored-
 - [ ] 対象範囲外のファイルを「ついで」で変更していない
 - [ ] シークレット・個人情報をコミットしていない
 - [ ] コード変更に伴うdocs / スキルの更新を同じPRに含めている
-- [ ] Windmillへの反映(`sync push` / migration / worker image再ビルド)が必要か明記している
+- [ ] Windmillへの反映(`self_update`の自動反映か、ホスト側の`mise run deploy`か)を明記している

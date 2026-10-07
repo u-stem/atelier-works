@@ -12,6 +12,7 @@ import type {
   ClaudeRunResult,
   RunClaudeResult,
 } from "../../f/factory/lib/claude.ts";
+import { IMPLEMENT_LEASE_LOST_REASON } from "../../f/factory/lib/implement_launch_support.ts";
 import {
   buildImplementClaudeOptions,
   type ChangeInspection,
@@ -27,10 +28,12 @@ import {
   type ImplementLoopInput,
   implementPromptInput,
   isCopyableDocEntry,
+  LEASE_LOST_ROUND,
   type LoopCheckResult,
   NO_CHANGES_CHECK_NAME,
   prepareImplementWorktree,
   runImplementClaudeRound,
+  runImplementGenerateRound,
   runImplementVerifyLoop,
   toImplementClaudeRound,
   type WorktreePrepDeps,
@@ -583,6 +586,8 @@ type HarnessOptions = {
   readonly checks?: readonly (readonly LoopCheckResult[])[];
   readonly fixRounds?: readonly ImplementClaudeRound[];
   readonly budgetExceeded?: boolean;
+  /** `holdsLease`が、0始まりで`from`回目以降の呼び出しでfalseを返す(リースを失った)。 */
+  readonly leaseLostFrom?: number;
   /** `assertGitPointer`が、0始まりで`from`回目以降の呼び出しで投げる例外。 */
   readonly pointerError?: { readonly from: number; readonly error: Error };
 };
@@ -640,6 +645,13 @@ function harness(options: HarnessOptions = {}): Harness {
       recorded.push(record);
     },
     dailyBudgetExceeded: async () => options.budgetExceeded ?? false,
+    holdsLease: async () => {
+      const index = events.filter((event) => event === "lease").length;
+      events.push("lease");
+      return (
+        options.leaseLostFrom === undefined || index < options.leaseLostFrom
+      );
+    },
     log: () => {},
   };
   return { deps, recorded, fixRequests, calls, events };
@@ -964,7 +976,7 @@ describe("runImplementVerifyLoop", () => {
   test("checks the worktree's .git pointer before fingerprinting", async () => {
     const h = harness();
     await run(h);
-    expect(h.events.slice(0, 2)).toEqual(["pointer", "fingerprint"]);
+    expect(h.events.slice(1, 3)).toEqual(["pointer", "fingerprint"]);
   });
 
   test("checks the .git pointer again after a fix round", async () => {
@@ -1089,5 +1101,117 @@ describe("runImplementVerifyLoop", () => {
         )
       ).verified_tree_sha,
     ).toBeNull();
+  });
+
+  test("stops with lease_lost before a fix round once the lease is gone", async () => {
+    const h = harness({ checks: [[FAIL]], leaseLostFrom: 1 });
+    expect((await run(h)).exit).toBe("lease_lost");
+  });
+
+  test("starts no fix round once the lease is gone", async () => {
+    const h = harness({ checks: [[FAIL]], leaseLostFrom: 1 });
+    await run(h);
+    expect(h.fixRequests).toHaveLength(0);
+  });
+
+  test("reports the lease-lost reason", async () => {
+    const h = harness({ checks: [[FAIL]], leaseLostFrom: 1 });
+    expect((await run(h)).reason).toBe(IMPLEMENT_LEASE_LOST_REASON);
+  });
+
+  test("checks the lease at each round start and before the fix round", async () => {
+    const h = harness({ checks: [[FAIL], [PASS]], fingerprints: [FP_1, FP_2] });
+    await run(h);
+    expect(h.events.filter((event) => event === "lease")).toHaveLength(3);
+  });
+
+  test("checks the lease before touching the worktree", async () => {
+    const h = harness();
+    await run(h);
+    expect(h.events[0]).toBe("lease");
+  });
+
+  test("stops with lease_lost when the lease is gone at the start of a round", async () => {
+    const h = harness({ leaseLostFrom: 0 });
+    expect((await run(h)).exit).toBe("lease_lost");
+  });
+
+  test("touches no worktree when the lease is gone at the start of a round", async () => {
+    const h = harness({ leaseLostFrom: 0 });
+    await run(h);
+    expect(h.events).toEqual(["lease"]);
+  });
+
+  test("records no round when the lease is gone at the start of a round", async () => {
+    const h = harness({ leaseLostFrom: 0 });
+    await run(h);
+    expect(h.recorded).toHaveLength(0);
+  });
+
+  test("stops at the start of the round after a fix round once the lease is gone", async () => {
+    const h = harness({
+      checks: [[FAIL], [PASS]],
+      fingerprints: [FP_1, FP_2],
+      leaseLostFrom: 2,
+    });
+    expect((await run(h)).exit).toBe("lease_lost");
+  });
+
+  test("does not fingerprint the fix round's worktree once the lease is gone", async () => {
+    const h = harness({
+      checks: [[FAIL], [PASS]],
+      fingerprints: [FP_1, FP_2],
+      leaseLostFrom: 2,
+    });
+    await run(h);
+    expect(h.calls.fingerprint).toBe(1);
+  });
+
+  test("stops with lease_lost when generate lost the lease", async () => {
+    const h = harness();
+    expect((await run(h, loopInput(LEASE_LOST_ROUND))).exit).toBe("lease_lost");
+  });
+
+  test("touches nothing when generate lost the lease", async () => {
+    const h = harness();
+    await run(h, loopInput(LEASE_LOST_ROUND));
+    expect(h.events).toEqual([]);
+  });
+
+  test("counts no Claude run when generate lost the lease", async () => {
+    const h = harness();
+    expect((await run(h, loopInput(LEASE_LOST_ROUND))).rounds).toBe(0);
+  });
+});
+
+describe("runImplementGenerateRound", () => {
+  test("returns a lease_lost round when the lease is gone", async () => {
+    expect(
+      await runImplementGenerateRound({
+        holdsLease: async () => false,
+        runRound: async () => outputRound(),
+      }),
+    ).toEqual(LEASE_LOST_ROUND);
+  });
+
+  test("does not run Claude when the lease is gone", async () => {
+    let ran = false;
+    await runImplementGenerateRound({
+      holdsLease: async () => false,
+      runRound: async () => {
+        ran = true;
+        return outputRound();
+      },
+    });
+    expect(ran).toBe(false);
+  });
+
+  test("runs the round while the lease is held", async () => {
+    expect(
+      await runImplementGenerateRound({
+        holdsLease: async () => true,
+        runRound: async () => outputRound(DONE, 7),
+      }),
+    ).toEqual(outputRound(DONE, 7));
   });
 });

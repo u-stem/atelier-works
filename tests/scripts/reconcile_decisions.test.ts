@@ -88,6 +88,36 @@ describe("decideReconcileAction — issue kind", () => {
     );
     expect(decision.action).toBe("fail_orphan");
   });
+
+  test("does nothing when the job state cannot be read, even past the grace period", () => {
+    const decision = decideReconcileAction(
+      { updated_at: STALE },
+      { kind: "issue", open: true },
+      { state: "unknown" },
+      NOW,
+    );
+    expect(decision).toEqual({ action: "none" });
+  });
+
+  test("still cancels a closed issue when the job state cannot be read", () => {
+    const decision = decideReconcileAction(
+      { updated_at: RECENT },
+      { kind: "issue", open: false },
+      { state: "unknown" },
+      NOW,
+    );
+    expect(decision).toEqual({ action: "cancel", reason: "closed" });
+  });
+
+  test("waits out the grace period when no flow job is recorded yet", () => {
+    const decision = decideReconcileAction(
+      { updated_at: RECENT },
+      { kind: "issue", open: true },
+      { state: "absent" },
+      NOW,
+    );
+    expect(decision).toEqual({ action: "none" });
+  });
 });
 
 describe("decideReconcileAction — pr kind", () => {
@@ -157,5 +187,15 @@ describe("decideReconcileAction — audit kind", () => {
 
   test("never cancels an audit (there is no GitHub object to close)", () => {
     expect(decideClosureOnly({ kind: "audit" })).toEqual({ action: "none" });
+  });
+
+  test("does not fail an audit as orphaned while its job state cannot be read", () => {
+    const decision = decideReconcileAction(
+      { updated_at: STALE },
+      { kind: "audit" },
+      { state: "unknown" },
+      NOW,
+    );
+    expect(decision.action).toBe("none");
   });
 });

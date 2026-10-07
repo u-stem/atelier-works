@@ -11,11 +11,17 @@ import {
   getWorkItem,
   recordFailure,
   setFlowJobId,
+  setFlowJobIdIfUnset,
   updateStatusIfCurrent,
+  updateStatusIfCurrentClearingFlowJobId,
+  updateStatusIfLeaseHolder,
 } from "../lib/db.ts";
 import { notify } from "../lib/discord.ts";
 import { commentIssue, type GhClient, getViewer } from "../lib/github.ts";
-import { startImplement } from "../lib/implement_launch_support.ts";
+import {
+  parseFlowJobId,
+  startImplement,
+} from "../lib/implement_launch_support.ts";
 import { IMPLEMENT_FLOW_PATH } from "../lib/implement_loop.ts";
 import { type Logger, logger, maskSecrets } from "../lib/log.ts";
 import { type FactoryConfig, isNumber, type WorkItem } from "../lib/types.ts";
@@ -236,18 +242,23 @@ async function run(
     const issueNumber = workItem.issue_number;
     const launched = await startImplement({
       casToImplementing: () =>
-        updateStatusIfCurrent(workItem.id, "approved", "implementing", null),
+        updateStatusIfCurrentClearingFlowJobId(
+          workItem.id,
+          "approved",
+          "implementing",
+          null,
+        ),
       launchFlow: () =>
         wmill.runFlowAsync(IMPLEMENT_FLOW_PATH, { work_item_id: workItem.id }),
-      recordFlowJobId: (jobId) => setFlowJobId(workItem.id, jobId),
-      moveToNeedsHuman: async (reason) => {
-        await updateStatusIfCurrent(
+      recordFlowJobId: (jobId) => setFlowJobIdIfUnset(workItem.id, jobId),
+      moveToNeedsHuman: (reason) =>
+        updateStatusIfLeaseHolder(
           workItem.id,
           "implementing",
           "needs_human",
+          null,
           reason,
-        );
-      },
+        ),
       recordFailure: async (reason, step) => {
         await recordFailure({
           work_item_id: workItem.id,
@@ -303,12 +314,16 @@ async function run(
     // 次の試行のフローは並行して動き、すぐに自身の準備ステップで`work_items`を読み直すため、
     // 起動した時点でここに実行中の処理が残っていてはならない。
     // `setFlowJobId`は`runFlowAsync`が返すidを記録するので、その直後に置くしかない。
+    // 応答がジョブIDでなければ例外にし、起動の失敗と同じく`main`が記録して通知する。
     await removeReqWorktree(workItem);
-    const flowJobId = await wmill.runFlowAsync("f/factory/pipeline", {
-      work_item_id: workItem.id,
-      attempt: attempt + 1,
-      feedback: request.reason ?? "",
-    });
+    const flowJobId = parseFlowJobId(
+      await wmill.runFlowAsync("f/factory/pipeline", {
+        work_item_id: workItem.id,
+        attempt: attempt + 1,
+        feedback: request.reason ?? "",
+      }),
+      "runFlowAsync",
+    );
     await setFlowJobId(workItem.id, flowJobId);
     return { outcome: "retrying" };
   }
