@@ -9,7 +9,16 @@ import {
   runClaude,
 } from "../lib/claude.ts";
 import { implementCheckCommandsFor, loadConfig } from "../lib/config.ts";
-import { addNotice, insertImplementRound, recordAgentRun } from "../lib/db.ts";
+import {
+  addNotice,
+  getWorkItem,
+  insertImplementRound,
+  recordAgentRun,
+} from "../lib/db.ts";
+import {
+  holdsImplementLease,
+  implementLeaseJobId,
+} from "../lib/implement_launch_support.ts";
 import {
   type ChangeInspection,
   GITLEAKS_TIMEOUT_MS,
@@ -85,7 +94,8 @@ async function inspectChanges(
  * そのうえで、symlink・`package.json`のscripts・差分サイズの上限・gitleaks・
  * 対象リポジトリの検査コマンドで検査する。
  * 検査コマンドはignoredファイルを消してから実行する。
- * 失敗すれば`implementFixPrompt`で修正ラウンドを走らせる。
+ * 失敗すれば、リースを確かめてから(失っていれば止める)`implementFixPrompt`で修正ラウンドを走らせる。
+ * リースの値は、フローのルートジョブID(`implementLeaseJobId`)。
  * 修正ラウンドごとに`doc_dir`の読み取り専用コピーを新しく作り、
  * Claudeの実行1回ごとに`implement_rounds`へ1行記録する。
  * 検査コマンドがあるときは、サンドボックスなしで実行することを
@@ -103,6 +113,8 @@ export async function main(
     );
   }
   const log = logger("implement_verify");
+  // buildSystemPromptの前に取る。投げた場合にsystemPromptの後始末を飛ばさないため。
+  const leaseJobId = implementLeaseJobId(process.env);
   const config = await loadConfig(() =>
     wmill.getResource("f/factory/factory_config"),
   );
@@ -195,6 +207,10 @@ export async function main(
         },
         dailyBudgetExceeded: async () =>
           (await dailyBudgetStatus(config)).exceeded,
+        holdsLease: async () => {
+          const item = await getWorkItem(work_item_id);
+          return item !== null && holdsImplementLease(item, leaseJobId);
+        },
         log: (message, fields) => log.info(message, fields),
       },
       {

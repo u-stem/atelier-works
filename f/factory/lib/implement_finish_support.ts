@@ -51,12 +51,16 @@ export type ImplementFinishAction =
    */
   | { readonly kind: "needs_human"; readonly preserveWork: boolean };
 
-/** finishの結果から、行う終端処理を決める。 */
+/**
+ * finishの結果から、行う終端処理を決める。
+ * prepareがskipした実行と、検証ループがリースを失って止まった実行は何もしない。
+ */
 export function decideImplementFinishAction(
   outcome: ImplementFinishOutcome,
 ): ImplementFinishAction {
   switch (outcome) {
     case "skip":
+    case "lease_lost":
       return { kind: "noop" };
     case "cancelled":
       return { kind: "cancel" };

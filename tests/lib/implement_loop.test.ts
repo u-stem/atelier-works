@@ -12,6 +12,7 @@ import type {
   ClaudeRunResult,
   RunClaudeResult,
 } from "../../f/factory/lib/claude.ts";
+import { IMPLEMENT_LEASE_LOST_REASON } from "../../f/factory/lib/implement_launch_support.ts";
 import {
   buildImplementClaudeOptions,
   type ChangeInspection,
@@ -583,6 +584,8 @@ type HarnessOptions = {
   readonly checks?: readonly (readonly LoopCheckResult[])[];
   readonly fixRounds?: readonly ImplementClaudeRound[];
   readonly budgetExceeded?: boolean;
+  /** trueなら`holdsLease`がfalseを返す(リースを失った)。 */
+  readonly leaseLost?: boolean;
   /** `assertGitPointer`が、0始まりで`from`回目以降の呼び出しで投げる例外。 */
   readonly pointerError?: { readonly from: number; readonly error: Error };
 };
@@ -640,6 +643,10 @@ function harness(options: HarnessOptions = {}): Harness {
       recorded.push(record);
     },
     dailyBudgetExceeded: async () => options.budgetExceeded ?? false,
+    holdsLease: async () => {
+      events.push("lease");
+      return options.leaseLost !== true;
+    },
     log: () => {},
   };
   return { deps, recorded, fixRequests, calls, events };
@@ -1089,5 +1096,33 @@ describe("runImplementVerifyLoop", () => {
         )
       ).verified_tree_sha,
     ).toBeNull();
+  });
+
+  test("stops with lease_lost before a fix round once the lease is gone", async () => {
+    const h = harness({ checks: [[FAIL]], leaseLost: true });
+    expect((await run(h)).exit).toBe("lease_lost");
+  });
+
+  test("starts no fix round once the lease is gone", async () => {
+    const h = harness({ checks: [[FAIL]], leaseLost: true });
+    await run(h);
+    expect(h.fixRequests).toHaveLength(0);
+  });
+
+  test("reports the lease-lost reason", async () => {
+    const h = harness({ checks: [[FAIL]], leaseLost: true });
+    expect((await run(h)).reason).toBe(IMPLEMENT_LEASE_LOST_REASON);
+  });
+
+  test("checks the lease before the fix round", async () => {
+    const h = harness({ checks: [[FAIL], [PASS]], fingerprints: [FP_1, FP_2] });
+    await run(h);
+    expect(h.events.filter((event) => event === "lease")).toHaveLength(1);
+  });
+
+  test("does not check the lease when the first round passes", async () => {
+    const h = harness();
+    await run(h);
+    expect(h.events).not.toContain("lease");
   });
 });

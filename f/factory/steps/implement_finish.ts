@@ -224,7 +224,11 @@ export async function main(
   );
   const action = decideImplementFinishAction(outcome);
   if (action.kind === "noop")
-    return { ok: true, final_status: null, notice: prepare_reason };
+    return {
+      ok: true,
+      final_status: null,
+      notice: loop_result?.reason ?? prepare_reason,
+    };
 
   const log = logger("implement_finish");
   const workItem = await getWorkItem(work_item_id);

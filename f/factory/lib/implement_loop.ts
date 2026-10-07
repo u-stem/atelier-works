@@ -8,6 +8,7 @@ import { access, cp, lstat, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RunClaudeOptions, RunClaudeResult } from "./claude.ts";
+import { IMPLEMENT_LEASE_LOST_REASON } from "./implement_launch_support.ts";
 import {
   classifyProtectedChanges,
   decideImplementRoundExit,
@@ -443,6 +444,8 @@ export async function runImplementClaudeRound(
  * 検証ループが終わった理由。
  * `decideImplementRoundExit`の終了理由(`continue`を除く)に、
  * 検証の前にループ自身が止まる理由を加えたもの。
+ * ループ自身が止まる理由は、シンボリックリンク、差分の大きさ、`.git`ポインタの書き換え、
+ * Claudeの実行失敗、修正ラウンドの前にリースを失っていたこと。
  */
 export type ImplementLoopExit =
   | "checks_passed"
@@ -454,7 +457,8 @@ export type ImplementLoopExit =
   | "diff_too_large"
   | "symlink"
   | "git_pointer_modified"
-  | "claude_error";
+  | "claude_error"
+  | "lease_lost";
 
 export const IMPLEMENT_LOOP_EXITS: readonly ImplementLoopExit[] = [
   "checks_passed",
@@ -467,6 +471,7 @@ export const IMPLEMENT_LOOP_EXITS: readonly ImplementLoopExit[] = [
   "symlink",
   "git_pointer_modified",
   "claude_error",
+  "lease_lost",
 ];
 
 export const GITLEAKS_TIMEOUT_MS = 5 * 60_000;
@@ -554,6 +559,11 @@ export type ImplementLoopDeps = {
   ) => Promise<ImplementClaudeRound>;
   readonly recordRound: (record: ImplementRoundRecord) => Promise<void>;
   readonly dailyBudgetExceeded: () => Promise<boolean>;
+  /**
+   * 作業項目がまだimplementingで、flow_job_idがこの実行のルートジョブIDならtrueを返す(1回のSELECT)。
+   * 修正ラウンドを始める直前にだけ呼ぶ。
+   */
+  readonly holdsLease: () => Promise<boolean>;
   readonly log: (message: string, fields: Record<string, unknown>) => void;
 };
 
@@ -761,6 +771,7 @@ export async function gitPointerStopReason(
  *    実行する直前に、gitが無視するファイルを削除する。
  * 7. 終了を判定する(`decideImplementRoundExit`)。
  *    差分の指紋には、ステージしたツリーのshaを使う。
+ * 8. 修正ラウンドに進む前にリースを確かめ、失っていれば止める。
  * Claudeの実行ごとに`implement_rounds`へ1行を記録する。
  */
 export async function runImplementVerifyLoop(
@@ -930,6 +941,19 @@ export async function runImplementVerifyLoop(
           exit === "checks_passed" || exit === "checks_skipped"
             ? fingerprint.treeSha
             : null,
+      });
+    }
+
+    // 修正ラウンドのClaude実行と検査は長い。リースを失っていれば(Issueのcloseで取り消された、
+    // pr_fixの差し戻しで作業項目が別のフローに移ったなど)、以降は何もせずに止まる。
+    if (!(await deps.holdsLease())) {
+      return stopped({
+        exit: "lease_lost",
+        reason: IMPLEMENT_LEASE_LOST_REASON,
+        protected_changes: protectedChanges,
+        checks: evaluation.summary,
+        diff_stat: fingerprint.diffStat,
+        changed_paths: changedPaths,
       });
     }
 

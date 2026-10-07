@@ -124,6 +124,12 @@ describe("decideImplementFinishAction", () => {
       preserveWork: false,
     });
   });
+
+  test("does nothing when the verify loop lost the lease", () => {
+    expect(decideImplementFinishAction("lease_lost")).toEqual({
+      kind: "noop",
+    });
+  });
 });
 
 describe("shouldPushPartialWork", () => {
