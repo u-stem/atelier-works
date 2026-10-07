@@ -21,7 +21,7 @@ locks:
   f/factory/lib/cleanup_db_support: e07aaf144e1897e4cb6c523a22a374d73daaf7f4c2ab72d51621902347f70532
   f/factory/lib/cleanup_support: d4b94884b5209c52858fcd8769fbef6a16a16b2e2a30a5489d169e3416baf108
   f/factory/lib/config: 870cdefc83d20e53d5467af30af8ef0ae5f3bc625b63862c5616687faa9fb03e
-  f/factory/lib/db: f884da09ee5d16a5352b24637e136849866af18cb9fcfe8c46eb86a4139944b4
+  f/factory/lib/db: 4522f30e26fb13e90eff7d3dc7e0c9c10a146fd1486df44ee16e314f600576b3
   f/factory/lib/discord: 60ea23204a64ad687751234b008d3aedd95b85e15eabba5d2d6d9ddfd34d33f2
   f/factory/lib/drawio: 2cecee5d91aed3af41aa34701d512cef2e42d1b48e7c8034a5f4d0b5fee986c5
   f/factory/lib/github: 1767c43cedc818b57515e7536368a5782b6889efab41c6d03e84e7179b78dc63
