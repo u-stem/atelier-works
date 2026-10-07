@@ -1,13 +1,6 @@
-// PathScript step for f/factory/pr_fix: runs headless Claude Code
-// (factory-fix skill, tools Read/Glob/Grep/Edit/Write — no Bash,
-// docs/security.md "pr_fix の安全策") in the gtr worktree pr_fix_prepare.ts
-// built, addressing the reviews/comments pr_fix_collect.ts gathered.
-//
-// team-lead decision (2026-09-26): main() no longer takes a `fix_round`
-// parameter — it used to feed the removed `buildFixCommitMessage`'s
-// round-based fallback subject ("address round N review feedback") for a
-// blank Claude summary; Claude now proposes `commit_subject`/`commit_body`
-// directly (FIX_SCHEMA), so there is nothing left here to compute from it.
+// f/factory/pr_fixの修正ステップ。
+// `pr_fix_prepare.ts`が用意したworktreeでheadlessのClaude Codeを動かし、
+// `pr_fix_collect.ts`が集めたレビューとコメントに対応させる。
 
 import * as wmill from "windmill-client@1.817.0";
 import {
@@ -37,6 +30,14 @@ export type PrFixApplyResult = {
   readonly commit_body: string | null;
 };
 
+/**
+ * factory-fixスキルでClaude Codeを実行し、修正の結果
+ * (outcome、理由、要約、各コメントへの返信、コミットの件名と本文)を返す。
+ * 使えるツールはRead/Glob/Grep/Edit/Writeに限り、Bashは渡さない。
+ * コミットの件名と本文はClaudeが提案したものを使い、`outcome`が"done"のときだけ返す。
+ * 日次予算を超えていればClaudeを起動せず"blocked"を返す。
+ * Claudeの実行が失敗したときは例外を投げる。
+ */
 export async function main(
   work_item_id: number,
   owner: string,
@@ -55,13 +56,10 @@ export async function main(
     wmill.getResource("f/factory/factory_config"),
   );
 
-  // team-lead fix round 1b item 3 / fix round 2 item b: same daily-budget
-  // guard as pipeline_generate.ts (lib/claude.ts's dailyBudgetStatus, same
-  // exceeded check and log.warn shape). Returning "blocked" here (rather
-  // than duplicating pipeline_generate.ts's inline status/label/comment/
-  // notify sequence) reuses pr_fix_finish.ts's existing blocked ->
-  // needs_human handling, the same way every other apply-time failure
-  // already routes through it.
+  // `pipeline_generate.ts`と同じ日次予算の検査。
+  // 状態遷移や通知をここで重複して書かず"blocked"を返すのは、
+  // 修正時の他の失敗と同じく、`pr_fix_finish.ts`の
+  // blockedからneeds_humanへの処理に乗せるため。
   const budgetStatus = await dailyBudgetStatus(config);
   if (budgetStatus.exceeded) {
     log.warn("daily budget exceeded, not starting claude", {
@@ -123,15 +121,13 @@ export async function main(
       jsonSchema: FIX_SCHEMA,
       isStructuredOutput: isFixClaudeOutput,
       tools: ["Read", "Glob", "Grep", "Edit", "Write"],
-      // team-lead fix round 1b item 0, superseded by fix round 2's follow-up
-      // measurement: "dontAsk" alone auto-denies Edit/Write (measured:
-      // `{"edited":false,"written":false,"denied_reason":"write permission
-      // was not granted"}`), and — contrary to the first fix's assumption —
-      // "acceptEdits" was *also* measured to deny writes under `--add-dir`
-      // paths. Only "dontAsk" + `--allowedTools Edit Write` (with
-      // `--restricted`, always on) actually allowed edits/writes in that
-      // measurement, so permissionMode stays "dontAsk" and allowedTools
-      // narrows `tools` down to just the two pr_fix needs.
+      // 実測では、"dontAsk"だけだとEdit/Writeが自動で拒否され
+      // (`{"edited":false,"written":false,"denied_reason":"write permission
+      // was not granted"}`)、"acceptEdits"でも`--add-dir`配下への書き込みが拒否された。
+      // 編集と書き込みが通ったのは、"dontAsk"に`--allowedTools Edit Write`を
+      // 組み合わせたとき(`--restricted`は常に有効)だけだった。
+      // そのため`permissionMode`は"dontAsk"のままにし、
+      // `allowedTools`でpr_fixに必要な2つに絞る。
       permissionMode: "dontAsk",
       allowedTools: ["Edit", "Write"],
       settingSources: ["user"],
@@ -153,14 +149,12 @@ export async function main(
     const output = result.structuredOutput;
     return {
       outcome: output.outcome,
-      // blocked_reason is populated for both "blocked" and
-      // "requirements_gap" (FIX_SCHEMA), null for "done".
+      // `blocked_reason`は"blocked"と"requirements_gap"で値が入り、"done"ではnullになる。
       reason: output.blocked_reason,
       summary: output.summary,
       replies: output.replies,
-      // team-lead decision (2026-09-26): Claude proposes commit_subject/
-      // commit_body directly now (isFixClaudeOutput's guard validates their
-      // shape) — only meaningful when outcome is "done", same as before.
+      // 件名と本文はClaudeの提案で、形は`isFixClaudeOutput`が検証する。
+      // 意味を持つのは`outcome`が"done"のときだけ。
       commit_subject: output.outcome === "done" ? output.commit_subject : null,
       commit_body: output.outcome === "done" ? output.commit_body : null,
     };

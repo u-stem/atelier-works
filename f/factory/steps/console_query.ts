@@ -1,43 +1,6 @@
-// Read-only data source for the factory_console raw app (M8, spec §OP-0-1):
-// exposes every factory.v_* view the App's tabs read (Inbox / Pipeline /
-// Analytics / Failures / Notices) plus two views reserved for a future tab
-// (reviews / fix_rounds, already created by the PR-workflow migration)
-// behind a single script so the App's backend runnable stays a plain
-// `type: script` reference (no inline SQL lives in the App itself).
-//
-// `view` selects which factory.v_* view to read; the SQL text for each is a
-// literal, hard-coded per switch case (never built by concatenating `view`
-// into a query string) so there is no way for a caller-supplied value to
-// reach the query text — only into `${}` bind parameters, which windmill's
-// datatable client parameterizes.
-//
-// `days` bounds a view's own time column (`updated_at` / `day` /
-// `occurred_at` / `created_at`, per view) to the last N days — applied only
-// to views that are unbounded historical logs (pipeline, agent_cost_daily,
-// approval_stats, lead_time, failures, reviews, fix_rounds). `v_inbox` (bound
-// already to `status = 'awaiting_approval'`) and `v_notices` (bound already
-// to `resolved = false`) are not time-windowed: an old pending approval or
-// unresolved notice must not silently disappear from the tab that exists to
-// surface it.
-//
-// A requirements document's own body ("requirements_doc" view) is read back
-// from disk under `requirement_drafts.doc_dir` — this runnable and
-// pipeline_generate.ts (which writes those files) both run in the same
-// worker container (default worker group, see docs/architecture.md, 工程2),
-// so a plain file read works. `doc_dir` is only ever used verbatim as read
-// from the DB row (never built from caller-supplied arguments) and is
-// checked to fall under REQUIREMENTS_BASE_DIR before any read — the
-// `work_item_id`/`attempt` arguments this script *does* accept from the
-// caller only ever reach a `${}` bind parameter, never a path (see
-// `runConsoleQuery`'s "requirements_doc" case). A diagram's XML is never
-// posted to GitHub or Discord (2026-09-27 policy) — it is only read back
-// here for the Console's own inline draw.io viewer
-// (components/DrawioViewer.tsx). Each `diagrams[].file` value read back from
-// the DB is validated against `DIAGRAM_FILE_PATTERN` (the full
-// `<name>.drawio` contract, not just an `.endsWith` suffix check) before it
-// is ever concatenated onto `docDir` — a malformed/corrupted `diagrams`
-// column value (e.g. `"../../etc/passwd.drawio"`) is skipped rather than
-// read (see `readDocFromDisk`).
+// factory_consoleのraw appが読む、読み取り専用のデータ源。
+// Appの各タブが読む`factory.v_*`ビューを1つのスクリプトの背後にまとめ、
+// AppのバックエンドのrunnableをインラインSQLの無い`type: script`の参照のままにする。
 
 import { formatAuditPeriodLabel } from "../lib/audit_support.ts";
 import { defaultSqlClient, type SqlClient, type SqlRow } from "../lib/db.ts";
@@ -91,26 +54,29 @@ const MAX_LIMIT = 2000;
 const MIN_DAYS = 1;
 const MAX_DAYS = 3650;
 
-/** The requirements template's rendered file name inside a doc dir —
- * duplicated from steps/pipeline_generate.ts's own
- * `REQUIREMENTS_MD_FILENAME` (not imported: PathScripts under `steps/`
- * don't cross-import each other's files, `pr_workflow_support.ts` aside; see
- * .claude/skills/windmill-script/SKILL.md's "配置場所"). */
+/**
+ * doc dirの中の要件定義ファイルの名前。
+ * `steps/pipeline_generate.ts`の`REQUIREMENTS_MD_FILENAME`と同じ値を複製している。
+ * `steps/`配下のPathScriptは、`pr_workflow_support.ts`を除いて互いのファイルを
+ * importしないため(`.claude/skills/windmill-script/SKILL.md`の「配置場所」を参照)。
+ */
 const REQUIREMENTS_MD_FILENAME = "requirements.md";
 
-/** Full `diagrams[].file` naming contract: `DIAGRAM_NAME_PATTERN`'s
- * lowercase-alphanumeric-and-hyphens name plus the mandatory `.drawio`
- * extension, anchored end-to-end (not just an `.endsWith(".drawio")`
- * suffix check) — mirrored, rather than shared as one constant, with the
- * Console App's own `components/Markdown.tsx`'s `DRAWIO_IMG_SRC_PATTERN`
- * (the App bundle can't import `steps/` code, see AGENTS.wmill.md's
- * "配置場所"). Guards `readDocFromDisk` against a `file` value built from a
- * corrupted `requirement_drafts.diagrams` JSON column (e.g.
- * `"../../etc/passwd.drawio"`) ever reaching a path concatenation. */
+/**
+ * `diagrams[].file`の名前の規則の全体。
+ * `DIAGRAM_NAME_PATTERN`の名前(英小文字・数字・ハイフン)に必須の`.drawio`を付けたもので、
+ * 末尾一致ではなく先頭から末尾まで固定して照合する。
+ * Console Appの`components/Markdown.tsx`の`DRAWIO_IMG_SRC_PATTERN`と同じ内容を
+ * 二重に持っている。Appのバンドルは`steps/`のコードをimportできないため。
+ * 壊れた`requirement_drafts.diagrams`のJSON列から来た`file`の値
+ * (例: `"../../etc/passwd.drawio"`)が、`readDocFromDisk`でパスの連結に届くのを防ぐ。
+ */
 const DIAGRAM_FILE_PATTERN = /^[a-z0-9-]{1,64}\.drawio$/;
 
-/** Clamps `value` (falling back to `fallback` when absent/non-finite) into
- * `[min, max]`, truncating to an integer (pure, for testing). */
+/**
+ * `value`を整数に切り捨てて`[min, max]`に収めて返す。
+ * 無いか有限でなければ`fallback`を使う。副作用は無い。
+ */
 export function resolveIntArg(
   value: number | undefined,
   fallback: number,
@@ -121,18 +87,19 @@ export function resolveIntArg(
   return Math.min(max, Math.max(min, Math.trunc(raw)));
 }
 
-/** The ISO timestamp `days` days before `now` (pure, for testing) — the
- * lower bound for every time-windowed view's own timestamp column. */
+/**
+ * `now`の`days`日前をISO形式で返す。副作用は無い。
+ * 期間で絞るビューの、時刻の列の下限に使う。
+ */
 export function sinceIso(days: number, now: Date): string {
   return new Date(now.getTime() - days * 24 * 60 * 60 * 1000).toISOString();
 }
 
 // ---------------------------------------------------------------------------
-// Row-parsing helpers (Parse-don't-validate for every view row). Mirrors the
-// helpers in ../lib/db.ts, which are not exported from that module (they
-// parse factory.work_items-family table rows into WorkItem-shaped types, not
-// view rows) — kept small and local rather than promoting them, since this
-// script's row shapes are view-specific projections, not table rows.
+// ビューの行を解析する補助関数(各行をParse-don't-validateで型にする)。
+// `../lib/db.ts`にも似た補助関数があるが、テーブルの行をWorkItemなどの型にするもので
+// exportされていない。
+// ここの行の形はビューごとの射影でテーブルの行ではないため、共通化せず小さく手元に置く。
 // ---------------------------------------------------------------------------
 
 function asId(value: unknown, field: string): number {
@@ -211,13 +178,12 @@ function isDiagram(value: unknown): value is Diagram {
   return isRecord(value) && isString(value.name) && isString(value.file);
 }
 
-/** Parses `requirement_drafts.diagrams` (`{name, file}[]`, pure, for
- * testing) — the reference list read back from the DB before the
- * "requirements_doc" view resolves each `file` against `doc_dir` on disk
- * (see `readDocFromDisk`). No `viewer_url` is derived here (the former
- * `DiagramLink`/`toDiagramLink` shape, dropped along with the URL-fragment
- * viewer it fed — the Console now embeds the XML directly, see
- * components/DrawioViewer.tsx). */
+/**
+ * `requirement_drafts.diagrams`(`{name, file}[]`)を解析して返す。
+ * 要素の形が違えば例外を投げる。
+ * これはDBから読む参照の一覧で、各`file`をディスク上の`doc_dir`と突き合わせるのは
+ * "requirements_doc"ビュー(`readDocFromDisk`)が行う。
+ */
 function parseDiagrams(value: unknown, field: string): Diagram[] {
   const array = asJsonArray(value, field);
   if (!array.every(isDiagram)) {
@@ -295,7 +261,7 @@ function parseReplies(value: unknown, field: string): FixReply[] {
 }
 
 // ---------------------------------------------------------------------------
-// Per-view row types + parsers.
+// ビューごとの行の型と解析関数。
 // ---------------------------------------------------------------------------
 
 function asApprovalRequestKind(value: unknown): ApprovalRequestKind {
@@ -312,10 +278,10 @@ function asApprovalRequestStatus(value: unknown): ApprovalRequestStatus {
   return value;
 }
 
-/** Fields every Inbox row carries regardless of `kind` — one row per
- * `factory.approval_requests` entry (unified requirements + issue_proposal
- * approvals, replacing the former separate "inbox"/"issue_proposals"
- * views). */
+/**
+ * `kind`に関わらずInboxの全行が持つ項目。
+ * 行は`factory.approval_requests`の1件(要件定義とIssue提案の承認依頼)に対応する。
+ */
 export type InboxRowBase = {
   readonly approval_request_id: number;
   readonly status: ApprovalRequestStatus;
@@ -327,22 +293,22 @@ export type InboxRowBase = {
   readonly expires_at: string | null;
 };
 
-/** The requirements full-document fields (markdown, diagrams,
- * open_questions) used to live on this row directly. They are now fetched
- * on demand via the "requirements_doc" view (`RequirementsTab.tsx` /
- * `InboxTab.tsx` both call it once a row is selected) so a full document
- * (which can include multi-KB diagram XML) is never pulled for every row of
- * the Inbox list. `summary` (cheap, one short string) still lives on this
- * row so the Inbox list can show a preview without that extra fetch. */
+/**
+ * 要件定義の承認依頼のInboxの行。
+ * 文書の全体(markdown、図、open_questions)はこの行に持たせず、行を選んだときに
+ * "requirements_doc"ビューで取得する(`RequirementsTab.tsx` / `InboxTab.tsx`)。
+ * 数KBの図のXMLを含みうる文書を、Inboxの一覧の全行について取らないため。
+ */
 export type RequirementsInboxRow = InboxRowBase & {
   readonly kind: "requirements";
   readonly issue_number: number | null;
   readonly issue_url: string | null;
   readonly draft_attempt: number;
-  /** `requirement_drafts.summary` (short, always present for a requirements
-   * row) — unlike `markdown`/`diagrams`/`open_questions`, cheap enough to
-   * carry on every Inbox list row so the list can show a one-line preview
-   * without a second "requirements_doc" fetch per row. */
+  /**
+   * `requirement_drafts.summary`(要件定義の行には必ずある短い文)。
+   * 文書の全体と違って軽いので一覧の全行に持たせ、
+   * 行ごとに"requirements_doc"を取らずに1行のプレビューを出せるようにする。
+   */
   readonly summary: string | null;
 };
 
@@ -355,31 +321,35 @@ export type IssueProposalInboxRow = InboxRowBase & {
   readonly created_issue_number: number | null;
   readonly created_issue_url: string | null;
   readonly claimed_by: string | null;
-  /** What raised this proposal (工程5, `factory.issue_proposals.origin`):
-   * `"pr_fix"` for the pre-existing propose_issue flow, `"audit"` for an
-   * audit-report proposal (see `buildApprovalPayload` in
-   * steps/audit_generate.ts). A row whose `origin` column doesn't parse as
-   * one of `ISSUE_PROPOSAL_ORIGINS` falls back to `"pr_fix"` (pre-audit
-   * rows never carried the column). */
+  /**
+   * 提案の出どころ(`factory.issue_proposals.origin`)。
+   * pr_fixのpropose_issueなら`"pr_fix"`、監査レポートの提案なら`"audit"`
+   * (`steps/audit_generate.ts`の`buildApprovalPayload`を参照)。
+   * `origin`が`ISSUE_PROPOSAL_ORIGINS`のどれでもない行は`"pr_fix"`として扱う。
+   * 監査の導入より前の行には、この列の値が無いため。
+   */
   readonly origin: IssueProposalOrigin;
-  /** `payload.period_label` (the audit period this proposal came from,
-   * e.g. "2026-09-22〜2026-09-28") — `null` for a `"pr_fix"` origin, which
-   * carries no such payload. */
+  /**
+   * `payload.period_label`(提案元の監査の期間。例: "2026-09-22〜2026-09-28")。
+   * `"pr_fix"`の提案はこのpayloadを持たないのでnull。
+   */
   readonly period_label: string | null;
-  /** `payload.factory_label_available === true` — whether the audit run
-   * that raised this proposal could attach the `factory` label to the
-   * Issue it will create. Always `false` for a `"pr_fix"` origin. */
+  /**
+   * `payload.factory_label_available === true`の値。
+   * 提案元の監査が、作るIssueに`factory`ラベルを付けられたかどうか。
+   * `"pr_fix"`の提案では常にfalse。
+   */
   readonly factory_label_available: boolean;
 };
 
 export type InboxRow = RequirementsInboxRow | IssueProposalInboxRow;
 
-/** Parses `factory.approval_requests.payload` (jsonb, so the datatable
- * client may hand back either an already-parsed object or its raw string
- * form) into a record — `{}` for anything else (a `"pr_fix"` origin's
- * payload, a malformed value, `null`/`undefined`), so `period_label`/
- * `factory_label_available` below both fall back to their "no audit
- * payload" defaults rather than throwing. */
+/**
+ * `factory.approval_requests.payload`をレコードにして返す。
+ * jsonbなので、datatableのクライアントは解析済みのオブジェクトか生の文字列のどちらかを返す。
+ * それ以外(`"pr_fix"`の提案のpayload、不正な値、null / undefined)は`{}`を返し、
+ * 後の`period_label` / `factory_label_available`を例外ではなく既定値に落とす。
+ */
 function asPayloadRecord(value: unknown): Record<string, unknown> {
   if (isRecord(value)) {
     return value;
@@ -391,7 +361,7 @@ function asPayloadRecord(value: unknown): Record<string, unknown> {
         return parsed;
       }
     } catch {
-      // Malformed JSON: fall through to the {} default below.
+      // JSONが不正なら、下の`{}`に落とす。
     }
   }
   return {};
@@ -466,11 +436,9 @@ export type PipelineRow = {
   readonly kind: string;
   readonly pr_number: number | null;
   readonly fix_round: number;
-  /** `work_items.branch` — 工程3's implement branch for an issue-kind row,
-   * `null` otherwise (the Pipeline tab renders a link column for it in a
-   * later change). */
+  /** `work_items.branch`。issueのwork itemなら実装用のブランチ、それ以外はnull。 */
   readonly branch: string | null;
-  /** `work_items.pr_url` — the PR 工程3 opened, `null` until `pr_open`. */
+  /** `work_items.pr_url`。実装で開いたPRで、`pr_open`になるまではnull。 */
   readonly pr_url: string | null;
 };
 
@@ -697,9 +665,10 @@ function asIssueProposalStatus(value: unknown): IssueProposalStatus {
   return value;
 }
 
-/** One row of the "requirements_index" view (要件定義 tab's list): every
- * `kind = 'issue'` work item that has at least one requirement draft, with
- * its latest attempt number. */
+/**
+ * "requirements_index"ビュー(要件定義タブの一覧)の1行。
+ * 要件定義の下書きが1つ以上ある`kind = 'issue'`のwork itemと、その最新の試行回数。
+ */
 export type RequirementsIndexRow = {
   readonly work_item_id: number;
   readonly owner: string;
@@ -726,25 +695,25 @@ function toRequirementsIndexRow(row: SqlRow): RequirementsIndexRow {
   };
 }
 
-/** A diagram resolved from disk: its declared `name` plus the raw mxGraph
- * XML read from `doc_dir`/`file` (see `readDocFromDisk`) — distinct from
- * `Diagram` (lib/types.ts's `{name, file}` DB reference), which never
- * carries the XML itself. */
+/**
+ * ディスクから読んだ図。宣言された`name`と、`doc_dir`/`file`から読んだmxGraphのXML。
+ * DBの参照である`Diagram`(`{name, file}`)はXMLを持たない点が異なる。
+ */
 export type RequirementsDiagramContent = {
   readonly name: string;
   readonly xml: string;
 };
 
-/** Where a "requirements_doc" row's `markdown`/`diagrams` came from: `"file"`
- * when the on-disk doc dir was readable, `"db_fallback"` when `doc_dir` is
- * null (pre-2026-09-27 row) or the file is missing/unreadable — the row
- * still returns the DB's own `markdown` column in that case, just with no
- * diagrams (their XML was never in the DB to begin with). */
+/**
+ * "requirements_doc"の行の`markdown`/`diagrams`をどこから得たか。
+ * ディスクのdoc dirを読めたら`"file"`。
+ * `doc_dir`がnull(doc dirを記録する前の行)か、ファイルが無い・読めないときは
+ * `"db_fallback"`で、DBの`markdown`列を返し、図は空にする
+ * (図のXMLはもともとDBに無い)。
+ */
 export type DocDirSource = "file" | "db_fallback";
 
-/** One row of the "requirements_doc" view (要件定義 tab's detail pane and
- * the Inbox tab's requirements detail, both replacing their former
- * inline-in-InboxRow markdown/diagrams/open_questions fields). */
+/** "requirements_doc"ビューの1行。要件定義タブの詳細と、Inboxタブの要件定義の詳細が使う。 */
 export type RequirementsDocRow = {
   readonly work_item_id: number;
   readonly owner: string;
@@ -762,22 +731,23 @@ export type RequirementsDocRow = {
 };
 
 /**
- * Reads a requirements doc dir's `requirements.md` plus every declared
- * diagram file back from disk (pure I/O wrapper, `readFile` injected for
- * testing — see tests/scripts/console_query.test.ts). `docDir` must fall
- * under `REQUIREMENTS_BASE_DIR` — a `doc_dir` value can only ever have come
- * from a `requirement_drafts` row written by
- * requirements_template.ts's `buildRequirementsDocDir`, but this is checked
- * again here defensively before it reaches a file path. Returns `null` (the
- * "db_fallback" case) when that check fails, `doc_dir` doesn't exist, or
- * `requirements.md` itself can't be read; an individual diagram file that
- * fails to read is silently dropped instead of failing the whole document,
- * since a lightbox one diagram cannot render is a smaller problem than the
- * text becoming unreadable. A diagram whose `name`/`file` doesn't match the
- * `DIAGRAM_NAME_PATTERN`/`DIAGRAM_FILE_PATTERN` naming contract is dropped
- * the same way (logged via `logger("console_query").warn`) before its
- * `file` is ever concatenated onto `docDir` — see this module's top
- * comment.
+ * doc dirの`requirements.md`と、宣言された図のファイルをディスクから読んで返す。
+ * `readFile`はテスト用に差し替えられる。
+ * このランナブルと、ファイルを書く`pipeline_generate.ts`は同じworkerのコンテナで動くので、
+ * 普通のファイル読み込みで読める。
+ *
+ * `docDir`は`REQUIREMENTS_BASE_DIR`の下でなければならない。
+ * `doc_dir`はDBの行から読んだ値をそのまま使い、呼び出し元の引数からは組み立てない。
+ * `buildRequirementsDocDir`が書いた値のはずだが、パスに使う前に防御的に確かめ直す。
+ * この確認に失敗したとき、doc dirが無いとき、`requirements.md`が読めないときは
+ * nullを返す("db_fallback"にあたる)。
+ * 図のファイルが1つ読めなくても文書全体は失敗させず、その図だけを黙って落とす。
+ * 図が1つ描けないほうが、本文が読めなくなるより問題が小さいため。
+ * `name`/`file`が`DIAGRAM_NAME_PATTERN`/`DIAGRAM_FILE_PATTERN`の規則に合わない図も、
+ * `file`を`docDir`に連結する前に同じく落とし、警告をログに残す。
+ * 壊れた`diagrams`列の値(例: `"../../etc/passwd.drawio"`)を読ませないため。
+ * 図のXMLはGitHubやDiscordには載せず、Consoleの図ビューア
+ * (`components/DrawioViewer.tsx`)のためだけにここで読む。
  */
 export async function readDocFromDisk(
   docDir: string,
@@ -814,8 +784,7 @@ export async function readDocFromDisk(
       const xml = await readFile(`${docDir}/${diagram.file}`);
       resolvedDiagrams.push({ name: diagram.name, xml });
     } catch {
-      // Missing/unreadable diagram file: drop just this diagram (see this
-      // function's doc comment).
+      // 図のファイルが無いか読めなければ、この図だけを落とす。
     }
   }
   return { markdown, diagrams: resolvedDiagrams };
@@ -847,9 +816,11 @@ async function toRequirementsDocRow(
   };
 }
 
-/** One row of the "audit_index" view (監査 tab's list): every
- * `factory.audit_reports` row (工程5) joined with its owning work item and
- * its issue_proposals' decision counts, from `factory.v_audit_reports`. */
+/**
+ * "audit_index"ビュー(監査タブの一覧)の1行。
+ * `factory.v_audit_reports`から、`factory.audit_reports`の各行に、
+ * 持ち主のwork itemと提案の判断の件数を合わせたもの。
+ */
 export type AuditIndexRow = {
   readonly audit_report_id: number;
   readonly work_item_id: number;
@@ -858,10 +829,11 @@ export type AuditIndexRow = {
   readonly source: string;
   readonly period_start: string;
   readonly period_end: string;
-  /** `formatAuditPeriodLabel(period_start, period_end)` — not a DB column
-   * (`factory.v_audit_reports` has no such column), computed here so every
-   * reader (this row and the "requirements"-style audit inbox rows above)
-   * renders the same label from the same two timestamps. */
+  /**
+   * `formatAuditPeriodLabel(period_start, period_end)`の値。
+   * `factory.v_audit_reports`にこの列は無く、ここで計算する。
+   * 読む側(この行と、上のauditのInboxの行)が、同じ2つの時刻から同じ表記を出すため。
+   */
   readonly period_label: string;
   readonly summary: string;
   readonly pending_count: number;
@@ -893,11 +865,12 @@ function toAuditIndexRow(row: SqlRow): AuditIndexRow {
   };
 }
 
-/** One row of the "audit_doc" view (監査 tab's detail pane): an
- * `AuditIndexRow` plus the full report body from `factory.audit_reports`
- * (never carried on the "audit_index" list row — same rationale as
- * "requirements_doc" vs. "requirements_index" above: a multi-KB markdown
- * body should only be fetched once a row is selected). */
+/**
+ * "audit_doc"ビュー(監査タブの詳細)の1行。
+ * `AuditIndexRow`に、`factory.audit_reports`のレポート本文を加えたもの。
+ * 数KBのMarkdownは行を選んだときだけ取るよう、"audit_index"の一覧の行には持たせない
+ * ("requirements_doc"と"requirements_index"の関係と同じ)。
+ */
 export type AuditDocRow = AuditIndexRow & {
   readonly markdown: string;
   readonly metrics: Record<string, unknown>;
@@ -927,14 +900,19 @@ export type ConsoleQueryRow =
   | AuditDocRow;
 
 /**
- * Runs the whitelisted view query for `view` against `sql` (defaulting to
- * the real datatable client) and returns its parsed rows. The `view` ->
- * SQL-text mapping is a switch over a fixed literal, never a concatenation
- * of `view` into a query — `sql`'s tagged-template only ever receives
- * `limit`/`sinceIso` as bind values. Exported (rather than folded into
- * `main`) so tests can inject a fake `SqlClient` and assert both the query
- * text and the row parsing without a real database (see ../../tests/lib/db.
- * test.ts's `createFakeSqlClient` for the fake shape this expects).
+ * `view`に対応する許可済みのクエリを`sql`(既定は実際のdatatableクライアント)で実行し、
+ * 解析した行を返す。
+ * `view`からSQL文への対応は固定のリテラルに対するswitchで、`view`をクエリに連結しない。
+ * 呼び出し元から来る値(`limit`、期間の下限、`workItemId`、`attempt`)は、
+ * datatableクライアントがパラメータ化する`${}`のバインド値にしか届かない。
+ *
+ * `days`は、履歴として増え続けるビューの時刻の列を直近N日に絞る。
+ * inbox(未決の承認依頼に絞り済み)とnotices(未解決に絞り済み)は期間で絞らない。
+ * 古い未決の承認依頼や未解決のnoticeが、それを見せるためのタブから黙って消えてはならないため。
+ *
+ * "requirements_doc"と"audit_doc"で`workItemId`が無ければ例外を投げる。
+ * テストで偽の`SqlClient`を渡し、実際のDBなしでクエリ文と行の解析を確かめられるよう、
+ * `main`に畳み込まずにexportしている。
  */
 export async function runConsoleQuery(
   view: ConsoleView,
@@ -949,16 +927,10 @@ export async function runConsoleQuery(
 
   switch (view) {
     case "inbox": {
-      // Not time-windowed (`since`/`days`'s bound is unused here), same
-      // rationale as before this view was unified: a pending approval
-      // request must never silently disappear from the tab that exists to
-      // surface it. Also includes an "approved" issue_proposal request whose
-      // Issue was never created (team-lead fix round, "Keep incomplete
-      // approvals visible in Inbox") — approval_decide.ts records the
-      // approval before creating the Issue, and a failure in between (e.g.
-      // GitHub returning an error) otherwise left that row permanently
-      // invisible to a human, since only `status = 'pending'` would be
-      // selected here.
+      // 期間では絞らない。未決の承認依頼が、それを見せるためのタブから黙って消えてはならない。
+      // Issueがまだ作られていない"approved"のIssue提案も含める。
+      // 承認の記録はIssueの作成より先に行うため、その間で失敗する(GitHubがエラーを返すなど)と、
+      // `status = 'pending'`だけを選ぶ条件では、その行が人から永久に見えなくなる。
       const rows = await sql`
         SELECT
           id AS approval_request_id, kind, status, work_item_id, owner, repo,
@@ -1144,11 +1116,12 @@ export async function runConsoleQuery(
   }
 }
 
-/** Narrows an optional numeric arg to a positive integer, or `null` when
- * absent/invalid (pure, for testing) — used for `work_item_id`/`attempt`,
- * which (unlike `limit`/`days`) have no sensible clamped fallback: an
- * invalid value must mean "not given", not be silently coerced into some
- * other id. */
+/**
+ * 省略可能な数値の引数を正の整数に絞って返し、無いか不正ならnullを返す。副作用は無い。
+ * `work_item_id`/`attempt`に使う。
+ * これらは`limit`/`days`と違って範囲に丸めた代わりの値が意味を持たない。
+ * 不正な値は「指定なし」として扱い、黙って別のidに変えてはならない。
+ */
 export function resolvePositiveIntArg(
   value: number | undefined,
 ): number | null {
@@ -1157,6 +1130,11 @@ export function resolvePositiveIntArg(
     : null;
 }
 
+/**
+ * Consoleのタブが読む`view`の行を返す。
+ * `limit`と`days`は範囲に丸め、`work_item_id`/`attempt`は不正なら指定なしとして扱う。
+ * `view`が既知のビューでなければ例外を投げる。
+ */
 export async function main(
   view: string,
   limit: number = DEFAULT_LIMIT,

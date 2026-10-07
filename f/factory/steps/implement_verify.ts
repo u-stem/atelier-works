@@ -1,14 +1,6 @@
-// PathScript step 3/4 of f/factory/implement (工程3 design §2
-// implement_verify): binds the real I/O into lib/implement_loop.ts's
-// runImplementVerifyLoop — the worktree `.git` pointer check against the
-// context's worktree_git_pointer, staged-worktree fingerprint and change
-// listing against the context's base_sha (the branch's merge-base with the
-// default branch), symlink and package.json-scripts detection, the
-// implement diff-size limits, the fixed gitleaks scan, the repo's check
-// commands (implementCheckCommandsFor: explicit check_commands_by_repo
-// entries only, after removing ignored files), fix rounds with
-// implementFixPrompt (each with a fresh doc_dir copy), and one
-// implement_rounds row per Claude run.
+// f/factory/implementの4ステップ中3番目(検証)。
+// `lib/implement_loop.ts`の`runImplementVerifyLoop`に実際の入出力をつなぎ、
+// 検査が通るまでClaudeによる修正ラウンドを繰り返す。
 
 import * as wmill from "windmill-client@1.817.0";
 import {
@@ -51,11 +43,15 @@ import {
   runAllowedCheckCommands,
 } from "./pr_workflow_support.ts";
 
-/** Change listing for one round, after worktreeFingerprint staged
- * everything: every path differing from `baseSha`, package.json scripts
- * changes (every file named exactly package.json, base vs worktree), and
- * the blocking symlink reasons — one per path whose old or new git mode is
- * a symlink (listSymlinkChanges), whatever the change. */
+/**
+ * 1ラウンド分の変更を調べて返す。
+ * `worktreeFingerprint`がすべてをstageした後に呼ぶ前提。
+ * 返すのは、`baseSha`と異なる全パス、`package.json`のscriptsが変わったか
+ * (名前がちょうど`package.json`の全ファイルを、baseとworktreeで比べる)、
+ * symlinkによる停止理由の3つ。
+ * 停止理由は、変更前か変更後のgitのモードがsymlinkであるパスごとに、
+ * 変更の種類を問わず1件ずつ作る。
+ */
 async function inspectChanges(
   worktreeDir: string,
   baseSha: string,
@@ -81,6 +77,21 @@ async function inspectChanges(
   };
 }
 
+/**
+ * 実装の検証ループを回し、その結果を返す。
+ * 各ラウンドで、worktreeの`.git`ポインタが`context.worktree_git_pointer`と
+ * 一致するかを確かめ、`context.base_sha`(デフォルトブランチとのmerge-base)
+ * を基準に変更を調べる。
+ * そのうえで、symlink・`package.json`のscripts・差分サイズの上限・gitleaks・
+ * 対象リポジトリの検査コマンドで検査する。
+ * 検査コマンドはignoredファイルを消してから実行する。
+ * 失敗すれば`implementFixPrompt`で修正ラウンドを走らせる。
+ * 修正ラウンドごとに`doc_dir`の読み取り専用コピーを新しく作り、
+ * Claudeの実行1回ごとに`implement_rounds`へ1行記録する。
+ * 検査コマンドがあるときは、サンドボックスなしで実行することを
+ * noticeとして記録する。
+ * `first_round.kind`が想定外なら例外を投げる。
+ */
 export async function main(
   work_item_id: number,
   context: ImplementContext,
@@ -95,15 +106,16 @@ export async function main(
   const config = await loadConfig(() =>
     wmill.getResource("f/factory/factory_config"),
   );
-  // Only the repo's explicit check_commands_by_repo entry — never
-  // allowed_check_commands: the commands run Claude-written code.
+  // 対象リポジトリの`check_commands_by_repo`に明示した項目だけを使い、
+  // `allowed_check_commands`は使わない。検査コマンドはClaudeが書いたコードを実行するため。
   const commands = implementCheckCommandsFor(
     config,
     context.owner,
     context.repo,
   );
-  // Same standing-risk notice as pr_fix_verify: check commands run
-  // untrusted target-repo code as root in the worker, unsandboxed.
+  // `pr_fix_verify`と同じ常設リスクの告知。
+  // 検査コマンドは、対象リポジトリの検証されていないコードを、
+  // worker内でサンドボックスなしにroot権限で実行する。
   if (commands.length > 0) {
     await addNotice({
       kind: "unsandboxed_check_commands",

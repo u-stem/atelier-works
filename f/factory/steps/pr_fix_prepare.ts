@@ -1,12 +1,5 @@
-// PathScript step for f/factory/pr_fix: loads the work item, checks the
-// fix_round budget, the parent issue not being re-implemented (the implement
-// flow shares the branch's worktree — evaluateParentImplementingGuard), and
-// the pre-attempt safety guards (spec-cycle2.md §7
-// item 3 / docs/security.md "pr_fix の安全策" — PR open, head.repo ==
-// base.repo, not draft, base branch not protected), and — only once those
-// pass — sets up the self clone and a `git gtr` worktree on the PR's head
-// branch (§7 item 2: pr_fix uses a real branch worktree, not detached, so
-// commitAndPush can push back to it).
+// f/factory/pr_fixの準備ステップ。
+// 修正を始めてよいかを検査し、通ればPRのheadブランチのworktreeを用意する。
 
 import * as wmill from "windmill-client@1.817.0";
 import { isRepoAllowed, loadConfig } from "../lib/config.ts";
@@ -43,6 +36,18 @@ export type PrFixPrepareResult = {
   readonly fix_round: number;
 };
 
+/**
+ * work itemを読み、修正ラウンドの上限、対象リポジトリの許可、
+ * 親Issueの再実装中でないこと、PRの安全条件
+ * (open、headとbaseが同じリポジトリ、draftでない、baseブランチが保護されていない)
+ * を順に検査する。
+ * 検査に通らなければ`outcome`に理由を入れて返し、worktreeは作らない。
+ * すべて通ったときだけ、Factoryのself cloneと対象リポジトリのcloneを用意し、
+ * PRのheadブランチに`git gtr`のworktreeを作る。
+ * detachedではなく実ブランチのworktreeにするのは、
+ * `commitAndPush`がそのブランチへpushし直すため。
+ * work itemが無い、またはPR番号が無いときは例外を投げる。
+ */
 export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
   const workItem = await getWorkItem(work_item_id);
   if (workItem === null) {
@@ -68,10 +73,10 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
     wmill.getResource("f/factory/factory_config"),
   );
 
-  // team-lead fix round 1b item 6: defense-in-depth re-check — poll_prs.ts
-  // already filters through filterByRepoAllowlist before a work item is
-  // created, but a factory_config edit afterward could leave a stale item
-  // pointing at a now-disallowed repo.
+  // 多層防御のための再検査。
+  // `poll_prs.ts`はwork itemを作る前に許可リストで絞っているが、
+  // その後に`factory_config`を変えると、許可外になったリポジトリを
+  // 指すwork itemが残りうる。
   const repoGuard = evaluateRepoAllowedGuard(
     isRepoAllowed(config, workItem.owner, workItem.repo),
   );
@@ -95,8 +100,8 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
     };
   }
 
-  // The implement flow re-implementing the parent issue uses this PR's
-  // branch worktree too: never both at once.
+  // 親Issueを再実装するimplementフローも同じブランチのworktreeを使うため、
+  // 両者を同時に動かさない。
   const parent =
     workItem.parent_work_item_id === null
       ? null

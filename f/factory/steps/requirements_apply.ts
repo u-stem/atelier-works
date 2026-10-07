@@ -1,37 +1,6 @@
-// Handler script for a decided `kind = "requirements"` factory.
-// approval_requests row — dispatched by f/factory/approval_decide.ts via
-// `wmill.runScriptByPathAsync` right after it records the human's decision.
-// Replaces the former pipeline.flow suspend step's post-suspend branch
-// (f/factory/steps/pipeline_decide.ts, now deleted): the flow itself no
-// longer waits on anything — `pipeline_request_approval.ts` records the
-// approval_requests row and returns immediately, and this script runs later
-// as an independent job once (and if) a human decides.
-//
-// Every branch re-reads the work item's current status first and no-ops on
-// anything other than "awaiting_approval" (a concurrent poll_issues
-// reconcile — or a retried dispatch of this very script — may have already
-// moved the work item on). No Issue labeling happens here at all (2026-09-27
-// policy: the Issue's `factory` trigger label was already consumed at claim
-// time, so there is nothing left to add/remove on any transition — status
-// lives solely in work_items.status; re-labeling the Issue is how a human
-// starts a brand-new cycle). The requirements worktree is always removed at
-// the end, regardless of which branch ran. After an approval, and only while
-// `implement_enabled` is on, it then starts the implement flow (工程3;
-// lib/implement_launch_support.ts's startImplement).
-//
-// The CAS (`updateStatusIfCurrent`) runs *before* any GitHub side effect
-// (the approved comment) in every branch — a failed GitHub call must never
-// leave the work item stuck `awaiting_approval` forever with the decision
-// effectively lost, since nothing else re-drives this branch. `commentIssue`
-// is marker-idempotent and notify is safe to repeat, so a retried dispatch
-// of this script (e.g. approval_decide.ts's `redispatch` path) can safely
-// redo it.
-//
-// Failure handling: this script runs standalone (not as a flow step), so
-// there is no flow-level on_error_flow handler to fall back on — a thrown
-// error is caught here, recorded to factory.job_failures, and reported to
-// Discord before being re-thrown (mirrors on_error_schedule.ts's own
-// self-contained handling).
+// 判断済みの承認依頼(`factory.approval_requests`の`kind = "requirements"`)を処理する。
+// `f/factory/approval_decide.ts`が人の判断を記録した直後に
+// `wmill.runScriptByPathAsync`で起動する、フローから独立したジョブである。
 
 import * as wmill from "windmill-client@1.817.0";
 import { buildConsoleUrl } from "../lib/approval_support.ts";
@@ -61,23 +30,27 @@ export type RequirementsApplyOutcome =
 
 export type RequirementsApplyResult = {
   readonly outcome: RequirementsApplyOutcome;
-  /** Set on the approve branch: whether the implement flow was launched. */
+  /** 承認したときだけ入る。implementフローを起動したかどうか。 */
   readonly implement_started?: boolean;
 };
 
-/** Whether requirements_apply.ts should proceed at all: the work item must
- * still be exactly `awaiting_approval` (pure, for testing). */
+/**
+ * 処理を進めてよいかを返す。work itemがまだ`awaiting_approval`のときだけ真。
+ * 副作用は無い。
+ */
 export function shouldProceed(status: WorkItem["status"]): boolean {
   return status === "awaiting_approval";
 }
 
-/** Builds the one-line "approved" Issue comment (pure, for testing). The
- * draft body is never posted to GitHub (2026-09-27 policy: GitHub carries
- * only work product); the Issue gets a single pointer to the Console. The
- * `work_item_id` is written out alongside the URL as a manual fallback for
- * when the Console can't read its own deep-link fragment (opaque-origin raw
- * app — see lib/approval_support.ts's `buildConsoleUrl` doc comment): a
- * human can still paste it into the 要件定義 tab's work_item_id filter. */
+/**
+ * 承認を伝える1行のIssueコメントを組み立てる。副作用は無い。
+ * GitHubには成果物だけを載せる方針のため、下書きの本文は投稿せず、
+ * Consoleへのリンクを1つだけ載せる。
+ * URLに加えて`work_item_id`も書くのは、Consoleがディープリンクの
+ * フラグメントを読めないとき(opaque originのraw app。
+ * `lib/approval_support.ts`の`buildConsoleUrl`を参照)の手動の代替手段にするため。
+ * 人はこの値を要件定義タブの`work_item_id`フィルタに貼り付けられる。
+ */
 export function buildApprovedComment(
   consoleUrl: string,
   workItemId: number,
@@ -87,9 +60,11 @@ export function buildApprovedComment(
 
 export type RejectedOutcome = "retry" | "needs_human";
 
-/** Whether a rejected requirements draft should retry (another
- * requirements-generation attempt) or give up to `needs_human` (pure, for
- * testing) — `attempt` is the attempt that was just rejected. */
+/**
+ * 却下された下書きについて、要件定義を生成し直すか(retry)、
+ * 諦めて`needs_human`にするかを返す。副作用は無い。
+ * `attempt`は却下されたばかりの試行回数。
+ */
 export function decideRejectedOutcome(
   attempt: number,
   maxAttempts: number,
@@ -97,11 +72,12 @@ export function decideRejectedOutcome(
   return attempt < maxAttempts ? "retry" : "needs_human";
 }
 
-/** Reads `payload.attempt` (a requester-side approval_requests field) with a
- * type guard, falling back to `fallback` when absent or not a number (pure,
- * for testing) — defensive: every "requirements" request is written by
- * pipeline_request_approval.ts with a numeric `attempt`, but this script
- * must not trust an external DB value's shape without checking. */
+/**
+ * 承認依頼の`payload.attempt`を型ガードで読み、無いか数値でなければ
+ * `fallback`を返す。副作用は無い。
+ * "requirements"の依頼は`pipeline_request_approval.ts`が数値の`attempt`で書くが、
+ * 外部のDBの値の形は確かめずに信用しない。
+ */
 export function readRequestAttempt(
   payload: Record<string, unknown>,
   fallback: number,
@@ -109,6 +85,7 @@ export function readRequestAttempt(
   return isNumber(payload.attempt) ? payload.attempt : fallback;
 }
 
+/** 要件定義用のworktreeを消す。失敗しても警告を記録するだけで投げない。 */
 async function removeReqWorktree(workItem: WorkItem): Promise<void> {
   if (workItem.issue_number === null) return;
   const repoDir = `/workspaces/${workItem.owner}/${workItem.repo}/main`;
@@ -139,6 +116,27 @@ async function notifySafe(
   await notify(webhookUrl, event);
 }
 
+/**
+ * 承認依頼を読み、承認・却下に応じてwork itemを遷移させる。
+ *
+ * どの分岐でも先にwork itemの現在の状態を読み直し、`awaiting_approval`以外なら
+ * 何もしない。並行する`poll_issues`の照合や、このスクリプトの再起動が
+ * 既にwork itemを進めていることがあるため。
+ * Issueのラベルはどの遷移でも付け外ししない。
+ * トリガーの`factory`ラベルは着手時に消費済みで、状態は`work_items.status`だけが持つ。
+ * 人がIssueにラベルを付け直すと、新しいサイクルが始まる。
+ * 要件定義用のworktreeは、どの分岐でも最後に消す。
+ * 承認したときは、`implement_enabled`が有効な場合に限りimplementフローを起動する。
+ *
+ * どの分岐でも、CAS(`updateStatusIfCurrent`)はGitHubへの副作用
+ * (承認コメント)より先に行う。
+ * この分岐を再び動かすものは他に無いため、GitHubの呼び出しが失敗して
+ * work itemが`awaiting_approval`のまま残ると、判断が事実上失われる。
+ * `commentIssue`はマーカーで冪等で、通知は繰り返しても安全なので、
+ * 再起動(`approval_decide.ts`の`redispatch`など)でやり直してよい。
+ *
+ * 承認依頼・work item・Issue番号が無いとき、依頼のkindが違うときは例外を投げる。
+ */
 async function run(
   approval_request_id: number,
   log: Logger,
@@ -181,11 +179,11 @@ async function run(
     );
   }
   if (request.status !== "approved" && request.status !== "rejected") {
-    // Defensive: approval_decide.ts only ever dispatches here right after
-    // recording "approved"/"rejected". An "expired" (or still "pending")
-    // request reaching this script means something raced with the expiry
-    // sweep (poll_issues.ts) — that sweep owns the expired transition, so
-    // this is a no-op here rather than a duplicate/competing one.
+    // 防御的な検査。`approval_decide.ts`は"approved"か"rejected"を
+    // 記録した直後にしかここを起動しない。
+    // "expired"(またはまだ"pending")の依頼が来たなら、
+    // `poll_issues.ts`の期限切れ処理と競合している。
+    // 期限切れへの遷移はその処理が受け持つため、ここでは重ねて遷移させずに何もしない。
     log.info("approval request is not decided, no-op", {
       approval_request_id,
       status: request.status,
@@ -286,7 +284,7 @@ async function run(
     };
   }
 
-  // rejected
+  // ここからは却下のとき。
   const rejectedOutcome = decideRejectedOutcome(attempt, config.max_attempts);
   if (rejectedOutcome === "retry") {
     const updated = await updateStatusIfCurrent(
@@ -301,12 +299,10 @@ async function run(
       });
       return { outcome: "no_op" };
     }
-    // runFlowAsync runs last, after every other local DB/GitHub side effect
-    // (here, just the worktree cleanup) — starting the next attempt's flow
-    // launches a concurrent run that will itself re-read work_items almost
-    // immediately (its own prepare step), so nothing here should still be
-    // in flight once it starts. setFlowJobId necessarily stays right after
-    // runFlowAsync, since it records the id that call returns.
+    // `runFlowAsync`は、他のDB・GitHubへの副作用(ここではworktreeの片付けだけ)の後に呼ぶ。
+    // 次の試行のフローは並行して動き、すぐに自身の準備ステップで`work_items`を読み直すため、
+    // 起動した時点でここに実行中の処理が残っていてはならない。
+    // `setFlowJobId`は`runFlowAsync`が返すidを記録するので、その直後に置くしかない。
     await removeReqWorktree(workItem);
     const flowJobId = await wmill.runFlowAsync("f/factory/pipeline", {
       work_item_id: workItem.id,
@@ -343,6 +339,13 @@ async function run(
   return { outcome: "needs_human" };
 }
 
+/**
+ * `approval_request_id`の承認依頼を処理し、その結果を返す。
+ * このスクリプトはフローのステップではなく単独で動くため、
+ * フローの`on_error_flow`に頼れない。
+ * そのため例外はここで捕まえ、`factory.job_failures`に記録して
+ * Discordへ通知してから投げ直す(`on_error_schedule.ts`と同じ自己完結の処理)。
+ */
 export async function main(
   approval_request_id: number,
 ): Promise<RequirementsApplyResult> {

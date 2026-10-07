@@ -1,106 +1,7 @@
-// Handler script for a decided `kind = "issue_proposal"` factory.
-// approval_requests row — dispatched by f/factory/approval_decide.ts via
-// `wmill.runScriptByPathAsync` right after it records the human's decision.
-// Replaces the former f/factory/issue_proposal_decide.ts (now deleted),
-// which used to be the manually-invoked, self-contained approve/reject
-// script; approval_decide.ts now owns input validation, idempotency
-// classification at the approval_requests level, and identity derivation —
-// this script only carries out the GitHub/DB side effects once a decision is
-// already on record:
-//
-//   - approve: creates the Issue in the target repo (optionally with
-//     `factory_config.trigger_label`, so it enters the requirements
-//     pipeline the same way a human-labeled Issue would); for a `pr_fix`
-//     proposal, also replies in the review thread naming the new Issue and
-//     resolves the thread.
-//   - reject: for a `pr_fix` proposal, replies in the review thread with
-//     the human's reason and leaves the thread open (a human, not the
-//     factory, decides what happens to it next).
-//
-// Origin branching (`IssueProposal.origin`, lib/types.ts; 工程5 audit): a
-// `pr_fix` proposal is threaded under a GitHub review/issue comment on its
-// originating PR — the Issue body embeds that PR's URL/number
-// (`buildIssueProposalBody`), and the reply/thread-resolve above run
-// against `review_comment_id`/`thread_id`. An `audit` proposal instead
-// comes from a `factory.audit_reports` row (no originating PR, no thread):
-// the Issue body cites the audited period instead
-// (`buildAuditProposalBody` + `formatAuditPeriodLabel`,
-// lib/audit_support.ts), and the reply/resolve step is skipped outright —
-// there is nothing to reply into. The Issue itself is created in
-// `factory_config.factory_repo` (an `audit` work item's own `owner`/`repo`
-// are set to that repo at creation), so attaching `trigger_label` also
-// requires that repo to be `isRepoAllowed` (lib/config.ts) —
-// `resolveFactoryLabel` below refuses the label (logging a warning) rather
-// than attaching it to a disallowed repo; a `pr_fix` proposal has no such
-// restriction, since its PR's repo was already gated far earlier in that
-// pipeline. Since 2026-09-28, `isRepoAllowed` always allows
-// `factory_config.factory_repo` regardless of `owners`/`repo_allowlist`, so
-// this refusal branch is now a defensive guard against a misconfigured
-// `factory_repo` rather than the everyday path.
-//
-// Once every pending proposal for the underlying work item has been
-// decided, the work item's status swaps off its waiting status
-// (`decidePostProposalTransition`, pr_workflow_support.ts, kind-aware): a
-// `pr_fix`/`pr_review` work item moves off `needs_human` — to
-// `rereview_requested` when the round that produced the proposal(s) also
-// pushed a commit, or `reviewed` when it did not; an `audit` work item
-// moves off `awaiting_approval` straight to `audited` (it has no fix round
-// to check). 2026-09-27 PR label cleanup: this used to also swap a PR
-// state label; there is no more state label to swap.
-//
-// Note (docs/security.md): Issue creation uses the same GitHub PAT as every
-// other factory-authored GitHub call — no separate credential.
-//
-// factory.issue_proposals remains the source of truth for
-// title/body/review_comment_id/thread_id (approval_requests does not
-// duplicate them) and still carries its own status/decided_by/
-// decision_reason/with_factory_label columns, kept in sync here via
-// decideIssueProposal — factory.v_issue_proposals and
-// countPendingIssueProposals both read this table directly, unchanged from
-// before this script existed.
-//
-// Idempotency: a proposal row already read as "pending" is classified via
-// `classifyIssueProposalDecision` (pr_workflow_support.ts) before any write
-// happens, refusing outright a call that would conflict with (or duplicate)
-// an already-completed decision. The approve path itself proceeds in two
-// separate writes so a crash/retried dispatch between them is recoverable:
-// (a) `decideIssueProposal` transitions the row to "approved" — guarded by
-// `WHERE status = 'pending'`, an optimistic lock — with `created_issue_*`
-// still null; (b) once GitHub confirms the Issue exists (created fresh, or
-// found via `findIssueByMarker`'s search for the
-// `<!-- factory:issue_proposal:<id> -->` marker this script embeds in the
-// body), `setIssueProposalCreatedIssue` writes `created_issue_number`/
-// `created_issue_url` back. A retried dispatch that lands after (a) but
-// before (b) resumes at the Issue create-or-reuse step instead of creating a
-// second Issue. The reject path similarly records the decision first, then
-// posts the reply.
-//
-// Keeping an incomplete approval visible: if the Issue create-or-reuse step
-// itself throws — e.g. GitHub returns an error creating the Issue — before
-// any Issue number is known, the row is reverted back to "pending"
-// (`revertIssueProposalToPending`, lib/db.ts) rather than left stuck
-// "approved" with `created_issue_number` still null, which the Console
-// Inbox would otherwise show nowhere. console_query.ts's "inbox" view also
-// surfaces an "approved" row whose Issue was never created, so even the
-// (rarer) case where a later step — `setIssueProposalCreatedIssue`'s own
-// write, the reply, resolving the thread, or the label swap — fails after
-// the Issue already exists on GitHub still leaves the proposal visible for a
-// human to retry; that later case is intentionally never reverted, since the
-// Issue already exists and a revert-then-recreate would risk a duplicate.
-//
-// The GitHub comment a proposal's reply is threaded under
-// (`review_comment_id`) may be either a PR review comment or a plain issue
-// comment (pr_fix's two reply targets — see pr_workflow_support.ts's
-// FixReply doc comment); which kind it is is persisted on the row itself
-// (`is_inline`, set by pr_fix_finish.ts at insert time), so this script
-// picks the reply mechanism deterministically (`chooseIssueProposalReplyTarget`)
-// instead of guessing with a try/replyReviewComment-then-fallback-to-
-// postIssueComment dance.
-//
-// Failure handling: this script runs standalone (not as a flow step), so a
-// thrown error is caught here, recorded to factory.job_failures, and
-// reported to Discord before being re-thrown (mirrors
-// on_error_schedule.ts's own self-contained handling).
+// 判断済みの承認依頼(`factory.approval_requests`の`kind = "issue_proposal"`)を処理する。
+// `f/factory/approval_decide.ts`が人の判断を記録した直後に
+// `wmill.runScriptByPathAsync`で起動し、判断に応じたGitHubとDBへの副作用を行う。
+// 入力の検証、承認依頼の単位での冪等性の判定、判断者の特定は`approval_decide.ts`が受け持つ。
 
 import * as wmill from "windmill-client@1.817.0";
 import { formatAuditPeriodLabel } from "../lib/audit_support.ts";
@@ -151,9 +52,10 @@ export type IssueProposalApplyResult = {
   readonly label_applied: boolean;
 };
 
-/** Reads `decision_options.with_factory_label` (a decider-side
- * approval_requests field) with a type guard, defaulting to `false` when
- * absent or not a boolean (pure, for testing). */
+/**
+ * 承認依頼の`decision_options.with_factory_label`を型ガードで読み、
+ * 無いか真偽値でなければfalseを返す。副作用は無い。
+ */
 export function readWithFactoryLabel(
   decisionOptions: Record<string, unknown>,
 ): boolean {
@@ -162,19 +64,17 @@ export function readWithFactoryLabel(
     : false;
 }
 
-/** Whether to attach `factory_config.trigger_label` to the Issue this
- * approval creates: a `pr_fix` proposal follows the requester's own
- * checkbox unconditionally, but an `audit` proposal's Issue lands in
- * whatever repo `factory_config.factory_repo` names — the same repo an
- * `audit` work item's `owner`/`repo` are set to (工程5) — so it is only
- * allowed to re-enter the requirements pipeline (via the trigger label)
- * when that repo is itself allowed by `factory_config` (owners /
- * repo_allowlist); refusing otherwise, rather than silently dropping the
- * label, is surfaced to the caller as a `reason` to log (pure, for
- * testing). `isRepoAllowed` (lib/config.ts) always allows
- * `factory_config.factory_repo` itself, so `repoAllowed` is normally true
- * here — this `false` branch only fires if `factory_repo` and the
- * work item's own `owner`/`repo` have somehow diverged. */
+/**
+ * 承認で作るIssueに`factory_config.trigger_label`を付けるかを返す。副作用は無い。
+ * `pr_fix`の提案は、依頼者のチェックボックスに無条件で従う。
+ * `audit`の提案のIssueは`factory_config.factory_repo`(auditのwork itemの
+ * `owner`/`repo`と同じリポジトリ)に作られるため、トリガーラベルで要件定義の
+ * パイプラインに戻してよいのは、そのリポジトリが`factory_config`
+ * (owners / repo_allowlist)で許可されているときだけ。
+ * 許可されていなければラベルを付けず、黙って落とさずに、ログに残す`reason`を返す。
+ * `isRepoAllowed`は`factory_repo`を常に許すため、`repoAllowed`は通常は真になる。
+ * 偽になるのは、`factory_repo`とwork itemの`owner`/`repo`が食い違ったときだけ。
+ */
 export function resolveFactoryLabel(input: {
   readonly requested: boolean;
   readonly origin: IssueProposalOrigin;
@@ -191,11 +91,11 @@ export function resolveFactoryLabel(input: {
   return { apply: true, reason: null };
 }
 
-/** Narrows `workItem.pr_number` to `number`, throwing the same invariant
- * violation the original single, unconditional check used to raise — now
- * only reachable from a `pr_fix` proposal's branches, since an `audit`
- * proposal's work item legitimately has no `pr_number` (pure aside from the
- * throw; not itself unit-tested, matching `run`). */
+/**
+ * `workItem.pr_number`を`number`に絞って返し、nullなら例外を投げる。
+ * `audit`の提案のwork itemには正当に`pr_number`が無いため、
+ * `pr_fix`の提案の分岐からだけ呼ぶ。
+ */
 function requirePrNumber(prNumber: number | null, workItemId: number): number {
   if (prNumber === null) {
     throw new Error(
@@ -205,6 +105,59 @@ function requirePrNumber(prNumber: number | null, workItemId: number): number {
   return prNumber;
 }
 
+/**
+ * 承認依頼が指すIssue提案に、判断の結果を反映する。
+ * - 承認: 対象リポジトリにIssueを作る。指定があれば`factory_config.trigger_label`を付け、
+ *   人がラベルを付けたIssueと同じく要件定義のパイプラインに入れる。
+ *   `pr_fix`の提案なら、レビュースレッドで新しいIssueを知らせる返信をし、スレッドを解決する。
+ * - 却下: `pr_fix`の提案なら、レビュースレッドに人の理由を返信し、スレッドは開いたままにする。
+ *   その後どうするかは、Factoryではなく人が決める。
+ *
+ * 提案の出どころ(`IssueProposal.origin`)による違い:
+ * `pr_fix`の提案は元のPRのコメントにぶら下がり、Issue本文にそのPRのURLと番号を入れ、
+ * 返信とスレッドの解決は`review_comment_id`/`thread_id`に対して行う。
+ * `audit`の提案は`factory.audit_reports`の行から来ており、元のPRもスレッドも無い。
+ * Issue本文には監査の期間を入れ、返信とスレッドの解決は行わない。
+ * `audit`のIssueは`factory_config.factory_repo`に作るため、
+ * トリガーラベルを付けるにはそのリポジトリが許可されている必要がある(`resolveFactoryLabel`)。
+ * `pr_fix`の提案のリポジトリは、パイプラインのずっと手前で検査済み。
+ *
+ * work itemの未決の提案がすべて判断されると、work itemを待ちの状態から進める
+ * (`decidePostProposalTransition`)。
+ * `pr_fix` / `pr_review`のwork itemは`needs_human`から、提案を出したラウンドが
+ * commitをpushしていれば`rereview_requested`へ、していなければ`reviewed`へ進む。
+ * `audit`のwork itemは修正ラウンドが無いので、`awaiting_approval`から`audited`へ進む。
+ *
+ * Issueの作成には、Factoryの他のGitHub呼び出しと同じPATを使い、別の資格情報は使わない。
+ * タイトル・本文・`review_comment_id`・`thread_id`の正本は`factory.issue_proposals`で、
+ * 承認依頼には複製しない。
+ * 提案の行の状態・判断者・理由・`with_factory_label`は、`decideIssueProposal`で
+ * ここから同期する(`factory.v_issue_proposals`と`countPendingIssueProposals`が直接読むため)。
+ *
+ * 冪等性: 書き込みの前に`classifyIssueProposalDecision`で判定し、
+ * 完了済みの判断と食い違う(または重複する)呼び出しは拒否する。
+ * 承認は2回の書き込みに分け、間でクラッシュしたり再起動したりしても回復できるようにする。
+ * (a) `decideIssueProposal`が楽観ロック(`WHERE status = 'pending'`)で行を"approved"にする。
+ * この時点で`created_issue_*`はnullのまま。
+ * (b) GitHubでIssueの存在を確かめたら(新しく作ったか、本文に埋めた
+ * `<!-- factory:issue_proposal:<id> -->`のマーカーを`findIssueByMarker`で見つけたか)、
+ * `setIssueProposalCreatedIssue`が`created_issue_number`/`created_issue_url`を書く。
+ * (a)の後、(b)の前に再起動されたら、Issueを作るか再利用する段階からやり直し、
+ * 2つ目のIssueは作らない。
+ * 却下も同じく、判断を先に記録してから返信する。
+ *
+ * 未完了の承認を見えるままにする: Issueの番号が分かる前にIssueの作成・再利用が失敗したら、
+ * 行を"pending"に戻す(`revertIssueProposalToPending`)。
+ * `created_issue_number`がnullの"approved"のまま残すと、ConsoleのInboxのどこにも出ないため。
+ * `console_query.ts`のinboxも、Issueが作られていない"approved"の行を表示する。
+ * そのため、Issueが既にGitHubにある状態で後の段階(`setIssueProposalCreatedIssue`の書き込み、
+ * 返信、スレッドの解決、状態の切り替え)が失敗しても、提案は人が再試行できるよう見えている。
+ * この場合は意図して"pending"に戻さない。
+ * Issueは既にあり、戻して作り直すと重複するおそれがあるため。
+ *
+ * 承認依頼・Issue提案・work item・判断者・auditのレポートが無いとき、
+ * 依頼のkindが違うとき、判定で拒否されたときは例外を投げる。
+ */
 async function run(
   approval_request_id: number,
   log: Logger,
@@ -254,8 +207,8 @@ async function run(
     throw new Error(`issue_proposal_apply: ${classification.message}`);
   }
   if (classification.action === "already_done") {
-    // A redispatch of an identical, fully completed decision (e.g. a
-    // double click in the Console): nothing to do, and not a failure.
+    // 完了済みの同じ判断が再び届いた(Consoleでのダブルクリックなど)。
+    // することは無く、失敗でもない。
     log.info("issue proposal already applied, no-op", {
       proposal_id,
       created_issue_number: classification.created_issue_number,
@@ -279,10 +232,8 @@ async function run(
   const ghToken = await wmill.getVariable("f/factory/github_token");
   const client: GhClient = { run: runCommand, ghToken };
 
-  // Issue body: a pr_fix proposal embeds the originating PR's own URL/number
-  // (buildIssueProposalBody); an audit proposal has no PR to link, so it
-  // names the audited period instead (buildAuditProposalBody, sourced from
-  // the audit report this proposal was raised from).
+  // `pr_fix`の提案は、Issue本文に元のPRのURLと番号を入れる。
+  // `audit`の提案にはリンクするPRが無いので、提案元の監査レポートの期間を入れる。
   let body: string;
   if (proposal.origin === "pr_fix") {
     const prNumber = requirePrNumber(workItem.pr_number, proposal.work_item_id);
@@ -302,6 +253,13 @@ async function run(
   }
   body = appendIssueProposalMarker(body, proposal_id);
 
+  /**
+   * 提案の元のコメントへ判断の返信を投稿する。
+   * 元のコメントは、PRのレビューコメントか通常のIssueコメントのどちらか
+   * (pr_fixの2種類の返信先)。
+   * どちらかは`pr_fix_finish.ts`が登録時に行の`is_inline`へ保存しているので、
+   * 試して失敗したら切り替えるのではなく、`chooseIssueProposalReplyTarget`で確定的に選ぶ。
+   */
   async function postDecisionReply(
     p: { readonly review_comment_id: number; readonly is_inline: boolean },
     prNumber: number,
@@ -325,12 +283,11 @@ async function run(
   let labelApplied = false;
 
   if (decision === "approve") {
-    // Optimistic lock: only actually transitions the row when it is still
-    // "pending". `classification` above already ruled out every case where
-    // this call would be wrong (a genuine conflict, or an already-completed
-    // approval), so a `false` return here means a concurrent/earlier call
-    // already made the same transition — the rest of this branch still runs
-    // (idempotently) regardless of which of the two won.
+    // 楽観ロック: 行がまだ"pending"のときだけ遷移させる。
+    // この呼び出しが誤りになる場合(本当の食い違いや、完了済みの承認)は
+    // `classification`で除いてあるので、falseが返るのは、並行するか先行する
+    // 呼び出しが同じ遷移を済ませたときだけ。
+    // どちらが勝っても、この分岐の残りは冪等に実行する。
     await decideIssueProposal(proposal_id, {
       status: "approved",
       decided_by: decidedBy,
@@ -353,8 +310,8 @@ async function run(
         number: current.created_issue_number,
         htmlUrl: current.created_issue_url ?? "",
       };
-      // The Issue (and any label on it) was already decided by an earlier
-      // call — reflect that recorded decision rather than re-deciding it.
+      // Issue(と付けたラベル)は先の呼び出しで決まっているので、
+      // 決め直さずに記録済みの判断を反映する。
       labelApplied = current.with_factory_label ?? false;
     } else {
       try {
@@ -370,9 +327,8 @@ async function run(
           hasIssueProposalMarker(existingIssue.body, proposal_id)
         ) {
           created = existingIssue;
-          // Same rationale as above: the Issue (found via marker search
-          // instead of the DB row) was already created by an earlier,
-          // presumably-crashed call, so nothing new is decided here.
+          // 上と同じ理由。DBの行ではなくマーカーの検索で見つけたIssueは、
+          // おそらくクラッシュした先の呼び出しが作ったもので、ここで新たに決めることは無い。
           labelApplied = current.with_factory_label ?? false;
         } else {
           const labelDecision = resolveFactoryLabel({
@@ -393,11 +349,9 @@ async function run(
           labelApplied = labelDecision.apply;
         }
       } catch (err) {
-        // No Issue number is known yet at this point, so the row would
-        // otherwise be stuck "approved" with created_issue_number still
-        // null and invisible to a human (see the module doc's "Keeping an
-        // incomplete approval visible" note) — put it back to "pending" so
-        // the Console Inbox shows it again for a retry.
+        // この時点ではIssueの番号が分からない。
+        // このままだと行は`created_issue_number`がnullの"approved"で止まり、人から見えなくなる。
+        // "pending"に戻し、再試行できるようConsoleのInboxに再び出す。
         await revertIssueProposalToPending(proposal_id);
         throw new Error(
           `issue_proposal_apply: Issueの起票に失敗しました: ${maskSecrets(err instanceof Error ? err.message : String(err))}。Inboxから再度承認してください`,
@@ -409,9 +363,8 @@ async function run(
       });
     }
 
-    // A pr_fix proposal's reply/resolve targets the GitHub review thread it
-    // was raised from; an audit proposal has neither (no originating PR
-    // comment), so both are skipped for it entirely.
+    // `pr_fix`の提案は、提案元のレビュースレッドに返信して解決する。
+    // `audit`の提案には元のPRのコメントが無いので、どちらも行わない。
     if (proposal.origin === "pr_fix") {
       const prNumber = requirePrNumber(
         workItem.pr_number,
@@ -437,8 +390,7 @@ async function run(
       }
     }
   } else {
-    // Reject ordering: record the decision first, then reply — same
-    // crash-recoverable shape as approve above.
+    // 却下も承認と同じく、クラッシュから回復できるよう判断を先に記録してから返信する。
     await decideIssueProposal(proposal_id, {
       status: "rejected",
       decided_by: decidedBy,
@@ -478,17 +430,13 @@ async function run(
       `issue_proposal_apply: every issue proposal decided (${transition.toStatus})`,
     );
 
-    // A tiny window remains between the count above and the status write
-    // just made, during which another pr_fix round could record a
-    // brand-new pending proposal for this same work item (an audit cannot:
-    // nothing adds proposals to an audit once it is awaiting_approval).
-    // Re-checking
-    // once more here catches that: if a new pending proposal appeared, put
-    // the work item straight back to where it was rather than leaving a
-    // status that implies "nothing pending" when one actually is. Not a
-    // full fix (a still-tinier window remains between this re-check and its
-    // own write) — no transaction machinery, matching the original
-    // implementation this script was ported from.
+    // 上で数えてから状態を書くまでのわずかな間に、別のpr_fixのラウンドが
+    // 同じwork itemに新しい未決の提案を登録することがある
+    // (auditでは起きない。awaiting_approvalになった後に提案を足すものは無い)。
+    // ここでもう一度数え、新しい未決の提案があればwork itemを元の状態に戻し、
+    // 未決があるのに「未決無し」を示す状態を残さない。
+    // 完全な対策ではなく、数え直しとその書き込みの間にはさらに短い隙間が残る。
+    // トランザクションは使っていない。
     const recheck = await countPendingIssueProposals(workItemId);
     if (recheck > 0) {
       await updateStatusIfCurrent(
@@ -507,6 +455,12 @@ async function run(
   };
 }
 
+/**
+ * `approval_request_id`の承認依頼を処理し、その結果を返す。
+ * このスクリプトはフローのステップではなく単独で動くため、
+ * 例外はここで捕まえ、`factory.job_failures`に記録して
+ * Discordへ通知してから投げ直す(`on_error_schedule.ts`と同じ自己完結の処理)。
+ */
 export async function main(
   approval_request_id: number,
 ): Promise<IssueProposalApplyResult> {

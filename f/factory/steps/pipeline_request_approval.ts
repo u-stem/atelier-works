@@ -1,15 +1,5 @@
-// PathScript for the "request approval" step of f/factory/pipeline. Records
-// a pending `factory.approval_requests` row (kind "requirements") for the
-// just-generated draft, flips the work item's status to `awaiting_approval`,
-// and posts the "承認待ち" Issue comment (summary + open_questions) plus a
-// Discord approval_requested notification. Unlike the former suspend-based
-// version of this step, the flow does not wait here at all — it returns
-// immediately once the approval request is recorded. A human decides later,
-// entirely out of band, via f/factory/approval_decide.ts, which dispatches
-// to f/factory/steps/requirements_apply.ts once a decision is recorded.
-// poll_issues.ts's scheduled expiry sweep marks a still-pending request
-// expired once `expires_at` (computeExpiresAt, lib/approval_support.ts) has
-// passed.
+// f/factory/pipelineの承認依頼ステップ。
+// 要件定義の下書きへの承認依頼を記録して通知し、人の判断を待たずに返る。
 
 import * as wmill from "windmill-client@1.817.0";
 import { buildConsoleUrl, computeExpiresAt } from "../lib/approval_support.ts";
@@ -28,6 +18,18 @@ export type PipelineRequestApprovalResult = {
   readonly approval_request_id: number;
 };
 
+/**
+ * `attempt`回目の下書きに対する承認依頼(kind "requirements")を
+ * `factory.approval_requests`に記録し、work itemを`awaiting_approval`に進め、
+ * Discordへapproval_requestedを通知する。
+ * work itemが既に`requirements_generating`から動いていたら、
+ * 依頼の記録だけで通知せずに返る。
+ * work item・Issue番号・該当attemptの下書きが無ければ例外を投げる。
+ *
+ * 人の判断は`f/factory/approval_decide.ts`が別途受け付け、
+ * `f/factory/steps/requirements_apply.ts`へ渡す。
+ * `expires_at`を過ぎても未決の依頼は、`poll_issues.ts`の定期処理が期限切れにする。
+ */
 export async function main(
   work_item_id: number,
   attempt: number,

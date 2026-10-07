@@ -1,47 +1,6 @@
-// PathScript step 2/2 of f/factory/audit (工程5). Runs headless Claude with
-// the factory-audit skill inside a scratch doc dir, validates report.md and
-// the structured output, then saves the report, registers each proposal as
-// an issue_proposals row (origin 'audit') plus its approval_requests row,
-// moves the work item on, and notifies Discord.
-//
-// Resume: if audit_reports already has this work item's row (a previous
-// retry saved it and then failed later), Claude is NOT run again — the
-// proposals/approvals/transition are replayed idempotently instead
-// (`finishAudit`, shared by both the fresh-run and resume branches). The
-// replay first checks that the issue_proposals rows match the saved
-// report's 改善提案 table in count, and throws on a mismatch rather than
-// silently dropping the proposals a partial insert never wrote.
-//
-// Failures throw (no terminal transition here): the flow's failure_module
-// (on_error_flow) owns that, same as pipeline_generate.ts. A post-generation
-// validation failure also only throws — Windmill's own step retry re-runs
-// this whole script, and the resume branch above then skips Claude only
-// once a report row actually exists, so a validation failure correctly
-// causes Claude to run again.
-//
-// Post-transition recheck (mirrors issue_proposal_apply.ts's own re-count):
-// between this run inserting every issue_proposals row and its
-// updateStatusIfCurrent call landing, a human could already have decided
-// every one of them via the Console. `decidePostTransition` catches that —
-// if the work item just moved to `awaiting_approval` but a recount finds
-// nothing pending anymore, it swaps straight on to `audited` instead of
-// leaving the work item waiting on proposals nobody can still act on.
-//
-// Snapshot: Claude never sees the live self clone (`factory_clone_dir`, the
-// working tree self_update deploys from) — with `Edit` allowed, a write
-// there would reach the next deploy. Instead, before `runClaude`, this step
-// takes a throwaway detached worktree of the clone's current HEAD
-// (`auditSnapshotDir`, `AUDIT_BASE_DIR`/wi-<id>-snapshot) and reads the
-// template, the factory-audit skill and the `addDirs` tree all from that
-// snapshot, so the whole run sees one consistent tree. `factory_clone_dir`
-// stays the step input only as the source the snapshot is taken from.
-//
-// The scratch doc dir (`AUDIT_BASE_DIR`/wi-<id>) has no DB-recorded
-// `doc_dir` column to read it back later (unlike requirement_drafts) — the
-// validated report.md is saved as `audit_reports.markdown` instead — so it
-// is removed unconditionally in `finally`, success or failure alike, and
-// the snapshot worktree with it. A retry of this step recreates both (a
-// snapshot left behind by a killed run is cleared first).
+// f/factory/auditの2ステップ中2番目(生成)。
+// headlessのClaudeにfactory-auditスキルで監査レポートを書かせ、検証して保存し、
+// 改善提案ごとに承認依頼を登録して、work itemを進めてDiscordへ通知する。
 
 import * as wmill from "windmill-client@1.817.0";
 import { buildAuditConsoleUrl } from "../lib/approval_support.ts";
@@ -146,11 +105,13 @@ export function allowedUrlPrefixesFor(
   return [`https://github.com/${owner}/${repo}`, config.windmill_public_url];
 }
 
-/** Whether the work item should swap off `awaiting_approval` straight to
- * `audited` before this run even returns (pure, for testing): a human
- * decided every proposal this run just inserted in the window between the
- * insert and the `auditing` -> `awaiting_approval` transition, so nothing is
- * actually left pending. `null` means no further transition is needed. */
+/**
+ * 遷移したばかりのwork itemを、`awaiting_approval`からすぐ`audited`へ
+ * 進めるべきかを返す。副作用は無い。
+ * 提案の登録から`auditing`→`awaiting_approval`の遷移までの間に、
+ * 人がConsoleで全提案を判断し終えていると、未決のものが残らないため。
+ * それ以上の遷移が要らなければnullを返す。
+ */
 export function decidePostTransition(
   status: "awaiting_approval" | "audited",
   pendingCount: number,
@@ -166,9 +127,8 @@ export type AuditGenerateResult = {
 };
 
 // ---------------------------------------------------------------------------
-// Self clone snapshot helpers (local to this script — same "one-off git
-// I/O stays private to the owning script" precedent as self_update.ts's
-// readSelfCloneHeadSha and poll_issues.ts's readRepoHeadSha).
+// self cloneのスナップショット用の補助関数。
+// 一度きりのgit操作は共通ライブラリに出さず、使うスクリプトの中に置く。
 // ---------------------------------------------------------------------------
 
 function selfCloneGitEnv(): Record<string, string> {
@@ -178,8 +138,11 @@ function selfCloneGitEnv(): Record<string, string> {
   return env;
 }
 
-/** `git rev-parse HEAD` in the self clone — the commit the snapshot is
- * taken at. Local-only (no `GH_TOKEN` needed). */
+/**
+ * self cloneで`git rev-parse HEAD`を実行し、スナップショットを取るcommitのSHAを返す。
+ * ローカルだけで完結するため`GH_TOKEN`は要らない。
+ * gitが失敗したとき、出力がSHAの形でないときは例外を投げる。
+ */
 async function readCloneHeadSha(
   run: CommandRunner,
   dir: string,
@@ -210,13 +173,15 @@ async function readCloneHeadSha(
   return sha;
 }
 
-/** Removes the snapshot worktree — used both to clear one left behind by a
- * killed run before recreating it, and in `finally`. Never throws (a
- * failure is logged, so it can't mask the step's own error in `finally`):
- * an existing directory is removed via `git worktree remove --force` and
- * then from disk regardless, and a final `git worktree prune` drops a
- * registration whose directory is already gone, which would otherwise
- * block the next `git worktree add` at the same path. */
+/**
+ * スナップショットのworktreeを消す。
+ * 強制終了した実行が残したものを作り直す前に消すときと、`finally`で使う。
+ * `finally`でステップ本来の例外を隠さないよう、失敗はログに残すだけで投げない。
+ * ディレクトリがあれば`git worktree remove --force`をかけ、その成否に関わらず
+ * ディスクからも消す。
+ * 最後に`git worktree prune`で、ディレクトリが既に無い登録を消す。
+ * 残っていると、同じパスへの次の`git worktree add`が失敗する。
+ */
 async function removeSnapshot(
   cloneDir: string,
   snapshotDir: string,
@@ -244,9 +209,11 @@ async function removeSnapshot(
   }
 }
 
-/** Same treatment as poll_issues.ts's own `notifySafe` (and
- * notify_daily_summary.ts's copy of it): an unset webhook URL is a no-op,
- * and a Discord failure is logged (masked) rather than failing the job. */
+/**
+ * Discordへ通知する。webhookのURLが空なら何もしない。
+ * 通知の失敗はジョブを失敗させず、マスクしてログに残す
+ * (`poll_issues.ts`の`notifySafe`と同じ扱い)。
+ */
 async function notifySafe(
   webhookUrl: string,
   event: NotifyEvent,
@@ -260,10 +227,11 @@ async function notifySafe(
   }
 }
 
-/** Steps 7-10 of the module doc: register each proposal's approval request,
- * move the work item off `auditing`, recheck for the
- * already-fully-decided race (`decidePostTransition`), and notify — shared
- * verbatim by the fresh-run and resume branches of `main`. */
+/**
+ * 提案ごとに承認依頼を登録し、work itemを`auditing`から進め、
+ * 全提案が既に判断済みになる競合を確かめ直し(`decidePostTransition`)、通知する。
+ * `main`の新規実行と再開の両方の経路が、そのまま共有する。
+ */
 async function finishAudit(input: {
   readonly work_item_id: number;
   readonly proposals: readonly AuditIssueProposal[];
@@ -329,6 +297,42 @@ async function finishAudit(input: {
   }
 }
 
+/**
+ * 監査レポートを生成・保存し、提案の承認依頼を登録して結果を返す。
+ * work itemが`auditing`でなければ何もせず"skipped"を返す。
+ *
+ * 再開: このwork itemの`audit_reports`の行が既にある(前回の再試行が保存した後に
+ * 失敗した)ときは、Claudeを再び動かさず、提案・承認依頼・遷移を冪等にやり直す。
+ * その前に、`issue_proposals`の行数が保存済みレポートの改善提案の表と一致するかを
+ * 確かめ、一致しなければ例外を投げる。
+ * 途中で止まった登録が書かなかった提案を、黙って落とさないため。
+ *
+ * 失敗は例外を投げるだけで、終端の遷移はしない。
+ * `pipeline_generate.ts`と同じく、フローの`failure_module`(`on_error_flow`)が受け持つ。
+ * 生成後の検証の失敗も例外を投げるだけでよい。
+ * Windmillのステップ再試行がスクリプト全体をやり直し、再開の経路は
+ * レポートの行が実際にあるときだけClaudeを飛ばすので、Claudeが再び動く。
+ *
+ * 遷移後の確かめ直し(`issue_proposal_apply.ts`の数え直しと同じ考え方):
+ * 提案をすべて登録してから`updateStatusIfCurrent`が通るまでの間に、
+ * 人がConsoleで全提案を判断し終えていることがある。
+ * `awaiting_approval`に移った直後に数え直して未決が無ければ、すぐ`audited`に進め、
+ * 誰も対応できない提案の待ちにwork itemを残さない。
+ *
+ * スナップショット: Claudeにはself clone(`factory_clone_dir`。self_updateが
+ * デプロイ元にする作業ツリー)そのものを見せない。
+ * `Edit`を許可しているため、そこへの書き込みが次のデプロイに入ってしまう。
+ * 代わりに`runClaude`の前に、cloneの現在のHEADを使い捨てのdetached worktree
+ * (`auditSnapshotDir`、`AUDIT_BASE_DIR`/wi-<id>-snapshot)に取り出し、
+ * テンプレート、factory-auditスキル、`addDirs`のツリーをすべてそこから読む。
+ * こうして実行全体が一貫した1つのツリーを見る。
+ * `factory_clone_dir`は、スナップショットの取り出し元としてだけ入力に残している。
+ *
+ * 作業用のdoc dir(`AUDIT_BASE_DIR`/wi-<id>)は、requirement_draftsと違って
+ * DBに`doc_dir`を記録せず、検証済みの`report.md`は`audit_reports.markdown`に保存する。
+ * そのため成否に関わらず`finally`で消し、スナップショットのworktreeも一緒に消す。
+ * ステップを再試行すると両方を作り直す(強制終了した実行が残したスナップショットは先に消す)。
+ */
 export async function main(
   work_item_id: number,
   period_start: string,
@@ -362,21 +366,21 @@ export async function main(
 
   const period = parsePeriodArgs(period_start, period_end, unaudited_gap_days);
   const { owner, repo } = parseGitHubRepoUrl(config.factory_repo);
-  // `owner`/`repo` here are parsed from `config.factory_repo` itself, and
-  // `isRepoAllowed` always allows `factory_repo` regardless of
-  // `owners`/`repo_allowlist`, so this is normally true; the payload field
-  // is kept for the Console-side guard (issue_proposal_apply.ts's
-  // `resolveFactoryLabel`) in case that invariant ever breaks.
+  // `owner`/`repo`は`config.factory_repo`から取り出したもので、
+  // `isRepoAllowed`は`owners`/`repo_allowlist`に関わらず`factory_repo`を常に許すため、
+  // 通常は真になる。
+  // それでもpayloadにこの値を残すのは、この前提が崩れたときに
+  // Console側の検査(`issue_proposal_apply.ts`の`resolveFactoryLabel`)が使えるようにするため。
   const factoryLabelAvailable = isRepoAllowed(config, owner, repo);
   const webhookUrl = await wmill.getVariable("f/factory/discord_webhook_url");
 
   const existing = await getAuditReportByWorkItem(work_item_id);
   if (existing !== null) {
     const proposals = await listIssueProposalsByReport(existing.id);
-    // The saved report passed validateAuditReport, so its 改善提案 table
-    // lists exactly the proposals that run inserted; fewer rows here means
-    // the insert loop died partway — replaying finishAudit with only those
-    // would silently drop the rest, so fail loudly instead.
+    // 保存済みのレポートは`validateAuditReport`を通っているので、
+    // 改善提案の表はその実行が登録した提案とちょうど一致する。
+    // 行が足りなければ登録のループが途中で止まっている。
+    // その行だけで`finishAudit`をやり直すと残りを黙って落とすため、例外を投げる。
     const reportTitles = extractProposalTitles(existing.markdown);
     if (reportTitles === null || proposals.length !== reportTitles.length) {
       throw new Error(
@@ -405,11 +409,11 @@ export async function main(
     await writeTextFile(`${docDir}/${EVIDENCE_MD_FILENAME}`, evidence_markdown);
 
     const ghToken = await wmill.getVariable("f/factory/github_token");
-    // Hold the self clone's own lock (the one `ensureFactoryClone` takes)
-    // around every git op on it: the worktree helpers lock a different
-    // file, so this is what keeps `self_update`'s `reset --hard` /
-    // `checkout -B` from racing the snapshot. The helpers' inner lock is
-    // always taken after this outer one, so the order cannot deadlock.
+    // self cloneへのgit操作はすべて、clone自体のロック(`ensureFactoryClone`が取るもの)を
+    // 取ったうえで行う。
+    // worktreeの補助関数は別のファイルをロックするため、`self_update`の
+    // `reset --hard` / `checkout -B`とスナップショットの競合を防ぐのはこのロックになる。
+    // 補助関数の内側のロックは常にこの外側のロックの後に取るので、デッドロックしない。
     await withRepoLock({
       lockPath: factoryCloneLockPath(factory_clone_dir),
       fn: async () => {
