@@ -1,9 +1,9 @@
-// PathScript step for f/factory/manual_intake__flow: claims the Issue
-// `manual_intake_create_issue` just opened exactly the way poll_issues.ts
-// claims a discovered one (spec-cycle2.md §3 M5, §7 item 1), inserts the
-// work_items row, notifies Discord, and starts f/factory/pipeline for it.
-// GitHub itself gets no comment at this stage (2026-09-27 policy: GitHub
-// carries only work product, operational notices go to Discord/Console).
+// f/factory/manual_intakeフローのステップ。
+// `manual_intake_create_issue`が作ったIssueを、`poll_issues.ts`が見つけたIssueと
+// 同じ手順で確保し、`work_items`に行を追加して、f/factory/pipelineを起動し、
+// Discordに通知する。
+// この段階ではGitHubにコメントしない。
+// GitHubには成果物だけを載せ、運用上の通知はDiscordとConsoleに出す方針のため。
 
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "../lib/config.ts";
@@ -14,10 +14,12 @@ import { type Logger, logger, maskSecrets } from "../lib/log.ts";
 import { assertGitHubName } from "../lib/types.ts";
 import { runCommand } from "../lib/workspace.ts";
 
-/** Same treatment as poll_issues.ts's own `notifySafe`: an unset webhook
- * URL is a no-op, and a Discord failure is logged (masked) rather than
- * failing the flow step — a notification hiccup should never block the
- * work item it's reporting on. */
+/**
+ * Discordに通知する。`poll_issues.ts`の`notifySafe`と同じ扱いにしている。
+ * webhookのURLが空なら何もしない。
+ * 送信に失敗しても例外にせず、秘密をマスクして警告ログに残す。
+ * 通知の一時的な失敗で、通知対象のwork itemの処理を止めないため。
+ */
 async function notifySafe(
   webhookUrl: string,
   event: NotifyEvent,

@@ -1,11 +1,11 @@
-// PathScript step 2/4 of f/factory/implement (工程3 design §2
-// implement_generate): one headless Claude run of the factory-implementation
-// skill in the implement worktree, with a fresh copy of the approved
-// requirements directory (withReadOnlyDocDirCopy). No module-level retry in
-// the flow: runClaude already retries a malformed output once, and a flow
-// retry would multiply the budget (design §2). A failed run is returned as
-// data (an ImplementClaudeRound of kind claude_failed); implement_verify
-// records every round on implement_rounds.
+// f/factory/implementフローの4ステップ中2番目。
+// 承認済みの要件ディレクトリの新しいコピーを渡し、実装用worktreeで
+// factory-implementationスキルのClaudeをヘッドレスで1回実行する。
+// 失敗した実行は例外にせず、kindが`claude_failed`の`ImplementClaudeRound`として返す。
+// 各ラウンドの記録は`implement_verify`が`implement_rounds`に書く。
+// フローのモジュールにはリトライを設定しない。
+// `runClaude`が不正な出力を1回だけ再試行しており、
+// フロー側でも再試行すると予算の消費が掛け算で増えるため。
 
 import * as wmill from "windmill-client@1.817.0";
 import { buildSystemPrompt, runClaude } from "../lib/claude.ts";
