@@ -1,6 +1,8 @@
 // f/factory/implementの4ステップ中1番目(準備)。
 // 承認時の前提がまだ成り立つかを確かめ、実装用のブランチとworktreeを用意して、
 // 後続ステップが使う`ImplementContext`を返す。
+// プロンプトに渡すIssueの題名と本文は作業項目の取り込み時点の内容で、
+// GitHubのIssueはopen判定とURLにだけ使う。
 
 import * as wmill from "windmill-client@1.817.0";
 import { buildConsoleUrl } from "../lib/approval_support.ts";
@@ -62,9 +64,10 @@ export type ImplementPrepareResult = {
 export type BuildImplementContextInput = {
   readonly workItem: Pick<
     WorkItem,
-    "id" | "owner" | "repo" | "attempt" | "pr_url"
+    "id" | "owner" | "repo" | "attempt" | "pr_url" | "title" | "body"
   >;
   readonly issueNumber: number;
+  /** 現在のIssue。URLにだけ使う(題名と本文はworkItemの取り込み時点の値を使う)。 */
   readonly issue: Pick<Issue, "title" | "body" | "htmlUrl">;
   readonly draft: Pick<RequirementDraft, "markdown" | "diagrams" | "doc_dir">;
   readonly branch: string;
@@ -95,8 +98,8 @@ export function buildImplementContext(
     repo: workItem.repo,
     issue_number: input.issueNumber,
     issue_url: input.issue.htmlUrl,
-    issue_title: input.issue.title,
-    issue_body: input.issue.body,
+    issue_title: workItem.title ?? "",
+    issue_body: workItem.body ?? "",
     branch: input.branch,
     base_branch: input.baseBranch,
     base_sha: input.baseSha,

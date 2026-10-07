@@ -70,7 +70,9 @@ export type ImplementContext = {
   readonly repo: string;
   readonly issue_number: number;
   readonly issue_url: string;
+  /** 取り込み時点のIssueの題名(work_items.title)。要件定義の生成と同じ入力で、承認後のIssueの書き換えはプロンプトに入らない。 */
   readonly issue_title: string;
+  /** 取り込み時点のIssueの本文(work_items.body)。issue_titleと同じ理由で現在のIssueは使わない。 */
   readonly issue_body: string;
   /** `factory/issue-<N>-wi-<id>`(`buildImplementBranchName`)。 */
   readonly branch: string;
