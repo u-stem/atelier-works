@@ -41,6 +41,7 @@ import {
   removeLabel,
   searchPrs,
 } from "./lib/github.ts";
+import { parseFlowJobId } from "./lib/implement_launch_support.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import {
   decidePrActions,
@@ -291,9 +292,13 @@ async function startReview(
   // 保つ。人のPRに頼まれていない実況コメントを付けても雑音になる。
   // トリガーラベルを消費した後は、ラベルやコメントではなくDB
   // (`listTrackedPrs`)から見つけ直す。
-  const flowJobId = await wmill.runFlowAsync("f/factory/pr_review", {
-    work_item_id: workItemId,
-  });
+  // 応答がジョブIDでなければ例外にし、`main`が起動の失敗と同じく`job_failures`に記録する。
+  const flowJobId = parseFlowJobId(
+    await wmill.runFlowAsync("f/factory/pr_review", {
+      work_item_id: workItemId,
+    }),
+    "runFlowAsync",
+  );
   await setFlowJobId(workItemId, flowJobId);
 }
 
@@ -342,9 +347,13 @@ async function startFix(
   // 「修正ラウンドNを始めた」というPRコメントも投稿しない(理由は
   // `startReview`と同じ)。トリガーラベルを消費した後は、DB
   // (`listTrackedPrs`)から見つけ直す。
-  const flowJobId = await wmill.runFlowAsync("f/factory/pr_fix", {
-    work_item_id: workItemId,
-  });
+  // 応答がジョブIDでなければ例外にする(扱いは`startReview`と同じ)。
+  const flowJobId = parseFlowJobId(
+    await wmill.runFlowAsync("f/factory/pr_fix", {
+      work_item_id: workItemId,
+    }),
+    "runFlowAsync",
+  );
   await setFlowJobId(workItemId, flowJobId);
 }
 

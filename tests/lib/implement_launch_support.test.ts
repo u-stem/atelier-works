@@ -4,6 +4,7 @@ import {
   holdsImplementLease,
   implementLaunchFailureReason,
   implementLeaseJobId,
+  isFlowJobId,
   parseFlowJobId,
   type StartImplementDeps,
   startImplement,
@@ -11,6 +12,16 @@ import {
 import { describeReason } from "../../f/factory/steps/pr_workflow_support.ts";
 
 const JOB_A = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
+
+/** `fn`が投げた例外のメッセージを返す。投げなければテストを失敗させる。 */
+function thrownMessage(fn: () => unknown): string {
+  try {
+    fn();
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err);
+  }
+  throw new Error("expected the function to throw");
+}
 
 function launchDeps(overrides: Partial<StartImplementDeps> = {}): {
   deps: StartImplementDeps;
@@ -288,6 +299,28 @@ describe("parseFlowJobId", () => {
     expect(() => parseFlowJobId("", "WM_ROOT_FLOW_JOB_ID")).toThrow(
       "WM_ROOT_FLOW_JOB_ID did not return a job id",
     );
+  });
+
+  test("returns the job id in lower case", () => {
+    expect(parseFlowJobId(JOB_A.toUpperCase(), "runFlowAsync")).toBe(JOB_A);
+  });
+
+  test("masks a secret before cutting the value to 200 characters", () => {
+    // 200文字目をまたぐトークンは、先に切ると形式に合わなくなりマスクされずに残る。
+    const raw = `${"x".repeat(190)}ghp_${"A".repeat(36)}`;
+    expect(
+      thrownMessage(() => parseFlowJobId(raw, "runFlowAsync")),
+    ).not.toContain("ghp_");
+  });
+});
+
+describe("isFlowJobId", () => {
+  test("accepts a job id", () => {
+    expect(isFlowJobId(JOB_A)).toBe(true);
+  });
+
+  test("rejects a value that is not a job id", () => {
+    expect(isFlowJobId("job-1")).toBe(false);
   });
 });
 

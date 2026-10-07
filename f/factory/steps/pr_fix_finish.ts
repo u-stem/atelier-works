@@ -28,6 +28,7 @@ import {
   requestReviewers,
   withMarker,
 } from "../lib/github.ts";
+import { parseFlowJobId } from "../lib/implement_launch_support.ts";
 import { logger, maskSecrets } from "../lib/log.ts";
 import { type FixReply, isOneOf, type WorkItemStatus } from "../lib/types.ts";
 import { commitAndPush, runCommand } from "../lib/workspace.ts";
@@ -280,11 +281,15 @@ export async function main(
       "blocked",
       `requirements_gap: rerouted to work item ${String(parent_work_item_id)}`,
     );
-    const childFlowJobId = await wmill.runFlowAsync("f/factory/pipeline", {
-      work_item_id: parent_work_item_id,
-      attempt: parentItem.attempt + 1,
-      feedback: gapReport,
-    });
+    // 応答がジョブIDでなければ例外にし、起動の失敗と同じくステップを失敗させて`on_error_flow`に任せる。
+    const childFlowJobId = parseFlowJobId(
+      await wmill.runFlowAsync("f/factory/pipeline", {
+        work_item_id: parent_work_item_id,
+        attempt: parentItem.attempt + 1,
+        feedback: gapReport,
+      }),
+      "runFlowAsync",
+    );
     await setFlowJobId(parent_work_item_id, childFlowJobId);
 
     return { ok: true, final_status: "blocked", notice: gapReport };

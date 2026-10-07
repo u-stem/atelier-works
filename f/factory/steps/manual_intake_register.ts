@@ -10,6 +10,7 @@ import { loadConfig } from "../lib/config.ts";
 import { insertWorkItem, setFlowJobId } from "../lib/db.ts";
 import { type NotifyEvent, notify } from "../lib/discord.ts";
 import { claimIssue, type GhClient, getViewer } from "../lib/github.ts";
+import { parseFlowJobId } from "../lib/implement_launch_support.ts";
 import { type Logger, logger, maskSecrets } from "../lib/log.ts";
 import { assertGitHubName } from "../lib/types.ts";
 import { runCommand } from "../lib/workspace.ts";
@@ -91,10 +92,14 @@ export async function main(
     parent_work_item_id: null,
   });
 
-  const flowJobId = await wmill.runFlowAsync("f/factory/pipeline", {
-    work_item_id: workItemId,
-    attempt: 1,
-  });
+  // 応答がジョブIDでなければ例外にし、起動の失敗と同じくステップを失敗させて`on_error_flow`に任せる。
+  const flowJobId = parseFlowJobId(
+    await wmill.runFlowAsync("f/factory/pipeline", {
+      work_item_id: workItemId,
+      attempt: 1,
+    }),
+    "runFlowAsync",
+  );
   await setFlowJobId(workItemId, flowJobId);
 
   const webhookUrl = await wmill.getVariable("f/factory/discord_webhook_url");

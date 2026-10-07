@@ -2,6 +2,7 @@
 // 各`main()`はこれらを呼び、その結果に従ってI/Oだけを行う。
 
 import { normalizeRepoUrl } from "./config.ts";
+import { isFlowJobId } from "./implement_launch_support.ts";
 import {
   type FactoryConfig,
   isBoolean,
@@ -265,7 +266,10 @@ export function jobStateFromFetchError(err: unknown): JobState {
 }
 
 /**
- * `flowJobId`のジョブの状態を返す。未記録なら`absent`。
+ * `flowJobId`のジョブの状態を返す。未記録か、ジョブIDの形でない(起動の応答本文がそのまま記録された)なら
+ * `getJob`を呼ばずに`absent`。
+ * ジョブIDでない値を取得すると404以外のエラーになり`unknown`が続くので、作業項目がreconcileされず
+ * 再開も拒否されたまま残る。それを避けるため、記録が無いときと同じに扱う。
  * 取得は`getJob`(`JobService.getJob`を包んだもの)で行い、例外は`jobStateFromFetchError`で
  * 読み替えるので、この関数は例外を投げない。
  */
@@ -273,7 +277,7 @@ export async function readJobState(
   getJob: (id: string) => Promise<unknown>,
   flowJobId: string | null,
 ): Promise<JobState> {
-  if (flowJobId === null) return { state: "absent" };
+  if (flowJobId === null || !isFlowJobId(flowJobId)) return { state: "absent" };
   try {
     return jobStateFromJob(await getJob(flowJobId));
   } catch (err) {

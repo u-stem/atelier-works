@@ -10,6 +10,8 @@ import {
   readJobState,
 } from "../../f/factory/lib/poll_support.ts";
 
+const JOB_ID = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
+
 describe("jobStateFromJob", () => {
   test("reads a QueuedJob (queued or actively running) as running", () => {
     expect(jobStateFromJob({ type: "QueuedJob", id: "job-1" })).toEqual({
@@ -96,7 +98,7 @@ describe("readJobState", () => {
 
   test("reads a fetched job", async () => {
     expect(
-      await readJobState(async () => ({ type: "QueuedJob" }), "job-1"),
+      await readJobState(async () => ({ type: "QueuedJob" }), JOB_ID),
     ).toEqual({ state: "running" });
   });
 
@@ -105,15 +107,15 @@ describe("readJobState", () => {
     await readJobState(async (id) => {
       ids.push(id);
       return { type: "QueuedJob" };
-    }, "job-1");
-    expect(ids).toEqual(["job-1"]);
+    }, JOB_ID);
+    expect(ids).toEqual([JOB_ID]);
   });
 
   test("reads a 404 as absent", async () => {
     expect(
       await readJobState(async () => {
         throw Object.assign(new Error("Not Found"), { status: 404 });
-      }, "job-1"),
+      }, JOB_ID),
     ).toEqual({ state: "absent" });
   });
 
@@ -121,7 +123,22 @@ describe("readJobState", () => {
     expect(
       await readJobState(async () => {
         throw new Error("ECONNRESET");
-      }, "job-1"),
+      }, JOB_ID),
     ).toEqual({ state: "unknown" });
+  });
+
+  test("is absent for a flow job id that is not a job id", async () => {
+    expect(
+      await readJobState(async () => ({ type: "QueuedJob" }), "job-1"),
+    ).toEqual({ state: "absent" });
+  });
+
+  test("does not fetch a flow job id that is not a job id", async () => {
+    const ids: string[] = [];
+    await readJobState(async (id) => {
+      ids.push(id);
+      return { type: "QueuedJob" };
+    }, '{"error":"not found"}');
+    expect(ids).toEqual([]);
   });
 });

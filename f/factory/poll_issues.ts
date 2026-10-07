@@ -37,6 +37,7 @@ import {
   type IssueSearchItem,
   searchIssues,
 } from "./lib/github.ts";
+import { parseFlowJobId } from "./lib/implement_launch_support.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import {
   associationFromLabeledEvent,
@@ -474,10 +475,14 @@ async function claimAndStart(
     log,
   );
 
-  const flowJobId = await wmill.runFlowAsync("f/factory/pipeline", {
-    work_item_id: workItemId,
-    attempt: 1,
-  });
+  // 応答がジョブIDでなければ例外にし、`main`が起動の失敗と同じく`job_failures`に記録する。
+  const flowJobId = parseFlowJobId(
+    await wmill.runFlowAsync("f/factory/pipeline", {
+      work_item_id: workItemId,
+      attempt: 1,
+    }),
+    "runFlowAsync",
+  );
   await setFlowJobId(workItemId, flowJobId);
 
   return "claimed";

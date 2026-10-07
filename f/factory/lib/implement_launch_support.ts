@@ -8,19 +8,26 @@ import type { WorkItem } from "./types.ts";
 const JOB_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/** `value`がWindmillのジョブID(UUID。大文字と小文字は区別しない)の形ならtrueを返す。 */
+export function isFlowJobId(value: string): boolean {
+  return JOB_ID_PATTERN.test(value);
+}
+
 /**
- * WindmillのジョブID(UUID)を解析する。前後の空白を除いた値がUUIDの形なら返し、違えば例外を投げる。
+ * WindmillのジョブID(UUID)を解析する。前後の空白を除いた値がUUIDの形なら小文字にして返し、違えば例外を投げる。
+ * 小文字にそろえるのは、リースの判定が文字列の一致で比べるため。
  * `runFlowAsync`はHTTPエラーでも例外を投げずに応答本文を返すので、起動の成否はここで判定する。
- * 例外のメッセージには、秘密をマスクして先頭200文字に切った値を載せる。
+ * 例外のメッセージには、秘密をマスクしてから先頭200文字に切った値を載せる。
+ * 先に切ると、境界をまたぐトークンが形式に合わなくなり、マスクされずに一部が残るため。
  */
 export function parseFlowJobId(raw: string, source: string): string {
   const trimmed = raw.trim();
-  if (!JOB_ID_PATTERN.test(trimmed)) {
+  if (!isFlowJobId(trimmed)) {
     throw new Error(
-      `${source} did not return a job id: ${maskSecrets(trimmed.slice(0, 200))}`,
+      `${source} did not return a job id: ${maskSecrets(trimmed).slice(0, 200)}`,
     );
   }
-  return trimmed;
+  return trimmed.toLowerCase();
 }
 
 /** implementフローを起動できなかったときの失敗理由の文言を返す。 */
