@@ -1,15 +1,12 @@
-// Machine validation for a filled-in audit report (see
-// .claude/skills/factory-audit/template.md and SKILL.md) and for the
-// structured output (summary + improvement proposals) headless Claude
-// produces alongside it. Every function here is a pure function over
-// markdown text / plain data — no I/O, no Windmill/GitHub dependency — so
-// headless Claude's output can be checked the same way in a unit test as
-// it is wired into the audit pipeline (工程5, see docs/architecture.md).
+// headless Claudeが書いた監査レポート(`.claude/skills/factory-audit/`の
+// `template.md`と`SKILL.md`)と、一緒に出す構造化出力(要約と改善提案)を
+// 機械的に検査する。
+// すべてI/OやWindmill・GitHubに依存しない純粋関数のため、監査の
+// パイプライン(工程5)と同じ検査を単体テストでも行える。
 //
-// Each `check*` function returns a list of Japanese-language issue strings
-// (empty when there's nothing to report); `validateAuditReport` aggregates
-// the report-level checks into a single ok/issues result, and
-// `checkAuditOutput` separately validates the structured output.
+// 各`check*`関数は日本語の問題点の一覧を返す(問題が無ければ空)。
+// `validateAuditReport`はレポート単位の検査をまとめて1つの結果にし、
+// `checkAuditOutput`は構造化出力を別に検査する。
 
 import {
   checkForbiddenSyntax,
@@ -17,32 +14,32 @@ import {
   extractH2Headings,
 } from "./requirements_doc.ts";
 
-/** Base directory under which generated audit reports are stored — a
- * worker-only volume (see docs/architecture.md, 工程5). */
+/** 生成した監査レポートを置く基底ディレクトリ。workerだけが使うvolumeにある。 */
 export const AUDIT_BASE_DIR = "/var/lib/factory/audits";
 
-/** Path to the single source-of-truth template, relative to repo root. */
+/** 唯一の基準となるテンプレートのパス(リポジトリのルートからの相対パス)。 */
 export const AUDIT_TEMPLATE_RELATIVE_PATH =
   ".claude/skills/factory-audit/template.md";
 
-/** Directory of the throwaway detached worktree of the factory self clone
- * that one audit run's headless Claude reads (pure, for testing) — a
- * sibling of the run's scratch doc dir, so the live self clone that
- * self_update deploys from is never exposed to the model. */
+/**
+ * 1回の監査でheadless Claudeが読む、factoryのself cloneから作る
+ * 使い捨てのdetached worktreeのディレクトリを返す。
+ * その実行の作業用ディレクトリと同じ階層に置く。
+ * `self_update`がデプロイ元にする稼働中のself cloneを、モデルに見せないためである。
+ */
 export function auditSnapshotDir(workItemId: number): string {
   return `${AUDIT_BASE_DIR}/wi-${String(workItemId)}-snapshot`;
 }
 
-/** File name of the generated audit report within its directory. */
+/** 生成した監査レポートのファイル名。 */
 export const REPORT_MD_FILENAME = "report.md";
 
-/** File name of the collected evidence pack within its directory. */
+/** 集めた根拠資料のファイル名。 */
 export const EVIDENCE_MD_FILENAME = "evidence.md";
 
 /**
- * The fixed `##` section headings of the audit report template, in order.
- * `checkAuditSections` compares a generated document's headings against
- * this list, order included.
+ * 監査レポートのテンプレートが持つ`##`見出しの固定の並び。
+ * `checkAuditSections`は、生成された文書の見出しをこの一覧と順序まで含めて比べる。
  */
 export const AUDIT_SECTIONS: readonly string[] = [
   "対象期間と要約",
@@ -53,8 +50,10 @@ export const AUDIT_SECTIONS: readonly string[] = [
   "見送った論点",
 ];
 
-/** One improvement proposal from the audit's structured output — its
- * title must match a row of the report's 改善提案 table. */
+/**
+ * 監査の構造化出力に含まれる改善提案1件。
+ * タイトルはレポートの改善提案の表のいずれかの行と一致させる。
+ */
 export type AuditProposal = { readonly title: string; readonly body: string };
 
 const MAX_SUMMARY_CHARS = 200;
@@ -63,39 +62,44 @@ const MAX_BODY_CHARS = 3000;
 const MAX_PROPOSALS = 5;
 const HTML_COMMENT_PATTERN = /<!--[\s\S]*?-->/;
 const HTML_COMMENT_GLOBAL_PATTERN = /<!--[\s\S]*?-->/g;
-/** Anything a reader (or a markdown renderer) would take as a link: an
- * `http(s)://` URL in any letter case, a scheme-relative `//host` (not
- * preceded by a word char, `:` or `/`, so the `//` inside `https://` or a
- * doubled path slash doesn't count), and a bare `www.host`. Each match is
- * normalized by `normalizeUrl` before the allowlist comparison. */
+/**
+ * 読み手やMarkdownの描画処理がリンクとみなしうるものすべてに一致する。
+ * 大文字小文字を問わない`http(s)://`のURL、スキームを省いた`//host`、
+ * 裸の`www.host`が対象である。
+ * `//host`は直前が単語文字・`:`・`/`でないものに限り、`https://`の中の
+ * `//`やパス中の連続したスラッシュは数えない。
+ * 一致したものは、許可リストと比べる前に`normalizeUrl`で正規化する。
+ */
 const URL_PATTERN =
   /(?:https?:\/\/|(?<![\w:/])\/\/(?=[\w-])|(?<![\w.])www\.)[^\s)>"']*/gi;
 const SEPARATOR_CELL_PATTERN = /^:?-{3,}:?$/;
-/** Characters allowed to immediately follow an allow-listed URL prefix — a
- * bare `startsWith` would let `https://github.com/octo/atelier-works-evil`
- * pass for prefix `https://github.com/octo/atelier-works`, so a match must
- * either equal the prefix exactly or continue with a path/query/fragment
- * boundary. */
+/**
+ * 許可リストのURLの接頭辞の直後に続いてよい文字。
+ * 単純な`startsWith`では、接頭辞`https://github.com/octo/atelier-works`に対して
+ * `https://github.com/octo/atelier-works-evil`も通ってしまう。
+ * そのため、接頭辞と完全に一致するか、パス・クエリ・フラグメントの
+ * 区切りで続く場合だけを許す。
+ */
 const URL_PREFIX_BOUNDARY_CHARS = new Set(["/", "?", "#"]);
 
 /**
- * Removes HTML comments from `text` before it's passed to
- * `checkForbiddenSyntax`: an HTML comment also happens to match that
- * check's "leftover HTML tag / unfilled placeholder" pattern (both start
- * with `<` and end at the next `>`), so without stripping it first, a
- * single comment would be reported twice — once by `checkHtmlComments`,
- * once by `checkForbiddenSyntax` — for the same underlying issue.
+ * `checkForbiddenSyntax`に渡す前に、`text`からHTMLコメントを取り除く。
+ * HTMLコメントは`<`で始まり次の`>`で終わるため、その検査の
+ * 「残ったHTMLタグ・埋めていないプレースホルダ」のパターンにも一致する。
+ * 取り除かないと、1つのコメントが`checkHtmlComments`と
+ * `checkForbiddenSyntax`の両方で二重に報告される。
  */
 function stripHtmlComments(text: string): string {
   return text.replace(HTML_COMMENT_GLOBAL_PATTERN, "");
 }
 
 /**
- * Checks `url` against one allow-listed prefix: an exact match, or a
- * prefix match followed by a path/query/fragment boundary (`/`, `?`, `#`).
- * A bare `url.startsWith(prefix)` would also accept a sibling repository
- * whose name merely starts with the same characters (e.g.
- * `.../atelier-works-evil` for prefix `.../atelier-works`).
+ * `url`が許可リストの接頭辞1つに当てはまるかを返す。
+ * 完全に一致するか、接頭辞の直後がパス・クエリ・フラグメントの区切り
+ * (`/`、`?`、`#`)である場合に当てはまるとみなす。
+ * 単純な`url.startsWith(prefix)`では、名前の先頭が同じだけの別の
+ * リポジトリ(接頭辞`.../atelier-works`に対する`.../atelier-works-evil`など)も
+ * 通してしまう。
  */
 function matchesUrlPrefix(url: string, prefix: string): boolean {
   const normalizedUrl = normalizeUrl(url);
@@ -106,10 +110,12 @@ function matchesUrlPrefix(url: string, prefix: string): boolean {
   return URL_PREFIX_BOUNDARY_CHARS.has(boundary);
 }
 
-/** Lower-cases a `URL_PATTERN` match and gives a scheme-less form
- * (`//host`, `www.host`) an explicit `https://`, so it's compared against
- * the allowlist the same way a full URL is (fail-safe: a form that doesn't
- * normalize onto an allowed prefix is rejected). */
+/**
+ * `URL_PATTERN`に一致した文字列を小文字にし、スキームの無い形
+ * (`//host`、`www.host`)には`https://`を補う。
+ * こうして完全なURLと同じように許可リストと比べる。
+ * 正規化しても許可された接頭辞に当てはまらない形は、安全側に倒して拒否される。
+ */
 function normalizeUrl(url: string): string {
   const lower = url.toLowerCase();
   if (lower.startsWith("//")) return `https:${lower}`;
@@ -117,9 +123,11 @@ function normalizeUrl(url: string): string {
   return lower;
 }
 
-/** HTML-comment, `checkForbiddenSyntax` and URL-allowlist checks for one
- * piece of structured-output text that ends up in an Issue (a proposal's
- * title/body, or the summary), each issue prefixed with `label`. */
+/**
+ * Issueに載る構造化出力の文字列1つ(提案のタイトルと本文、または要約)に、
+ * HTMLコメント、`checkForbiddenSyntax`、URLの許可リストの検査をかける。
+ * 問題点にはそれぞれ`label`を前置きする。
+ */
 function checkIssueText(
   text: string,
   label: string,
@@ -140,12 +148,11 @@ function checkIssueText(
 }
 
 /**
- * Splits a `| a | b |`-style table row into cells, respecting GFM's
- * escaped-pipe syntax (`\|` is a literal `|`, not a column separator) and
- * unescaping it in the result. Shaped like `row.split("|")` otherwise
- * (including the empty leading/trailing cells from the boundary `|`s), so
- * callers that already index into it (e.g. the title column) don't need
- * to change.
+ * `| a | b |`形式の表の行をセルに分ける。
+ * GFMのエスケープされたパイプ(`\|`は列の区切りではなく文字の`|`)を
+ * 区切りとして扱わず、結果ではエスケープを外す。
+ * それ以外は`row.split("|")`と同じ形(両端の`|`による空のセルも含む)で返すため、
+ * 添字でセルを取り出す呼び出し側(タイトルの列など)を変えずに済む。
  */
 function splitTableRow(row: string): string[] {
   const cells: string[] = [];
@@ -168,9 +175,10 @@ function splitTableRow(row: string): string[] {
   return cells.map((cell) => cell.trim());
 }
 
-/** Checks that `row` is a table separator row (every cell, ignoring the
- * empty boundary cells from the leading/trailing `|`, matches
- * `:?-{3,}:?`). */
+/**
+ * `row`が表の区切り行かを返す。
+ * 両端の`|`による空のセルを除き、すべてのセルが`:?-{3,}:?`に一致すれば区切り行とみなす。
+ */
 function isSeparatorRow(row: string): boolean {
   const cells = splitTableRow(row).filter((cell) => cell !== "");
   return (
@@ -178,10 +186,7 @@ function isSeparatorRow(row: string): boolean {
   );
 }
 
-/**
- * Checks that `markdown`'s `##` headings are exactly `AUDIT_SECTIONS`, in
- * the same order.
- */
+/** `markdown`の`##`見出しが、順序も含めて`AUDIT_SECTIONS`と完全に一致するかを検査する。 */
 export function checkAuditSections(markdown: string): string[] {
   const headings = extractH2Headings(markdown);
   const inOrder =
@@ -195,9 +200,11 @@ export function checkAuditSections(markdown: string): string[] {
   ];
 }
 
-/** Detects a leftover HTML comment (e.g. an internal marker such as
- * `<!-- factory:issue_proposal:1 -->` that must not leak into the report
- * or structured output). */
+/**
+ * 残ったHTMLコメントを検出する。
+ * `<!-- factory:issue_proposal:1 -->`のような内部の目印が、
+ * レポートや構造化出力に漏れてはならないためである。
+ */
 export function checkHtmlComments(text: string): string[] {
   return HTML_COMMENT_PATTERN.test(text)
     ? ["HTMLコメントが含まれています"]
@@ -206,9 +213,10 @@ export function checkHtmlComments(text: string): string[] {
 
 const H2_HEADING_PATTERN = /^##\s+(.*\S)\s*$/;
 
-/** Returns the body lines of the `##`-level section named `heading` (the
- * lines between its heading and the next `##` heading, or end of
- * document), or `null` if no such heading exists. */
+/**
+ * `heading`という名前の`##`の節の本文(その見出しから次の`##`見出し、
+ * または文書の終わりまでの行)を返す。見出しが無ければ`null`を返す。
+ */
 function sectionBody(markdown: string, heading: string): string | null {
   const lines = markdown.split("\n");
   const start = lines.findIndex(
@@ -221,21 +229,20 @@ function sectionBody(markdown: string, heading: string): string | null {
 }
 
 /**
- * Reads the title column of the 改善提案 section's table, in row order.
- * Returns `[]` when the section's body is just "該当なし" (no proposals
- * this period), and `null` when the section is missing or its table can't
- * be parsed (fewer than a header + separator + one data row, or the
- * second `|` row isn't a valid separator — without this check, a table
- * missing its separator row would silently misparse its first data row as
- * the separator).
+ * 改善提案の節にある表のタイトルの列を、行の順に返す。
+ * 節の本文が「該当なし」だけなら(その期間に提案が無い)`[]`を返す。
+ * 節が無いか表を解析できないときは`null`を返す。
+ * 解析できないのは、見出し行・区切り行・データ行1つに満たない場合と、
+ * 2つ目の`|`の行が正しい区切り行でない場合である。後者を確かめないと、
+ * 区切り行の無い表で最初のデータ行を区切り行と取り違えて、気づかないまま
+ * 誤って解析してしまう。
  */
 export function extractProposalTitles(markdown: string): string[] | null {
   const body = sectionBody(markdown, "改善提案");
   if (body === null) return null;
-  // Exact match only, by design: a partial or padded "該当なし" is more
-  // likely a mistake than the intended sentinel, so it falls through to
-  // table parsing (and null, if it doesn't look like a table) rather than
-  // being accepted as "no proposals" — fail-safe over lenient.
+  // 意図して完全一致だけを認める。一部だけや余計な文字を含む「該当なし」は、
+  // 意図した目印より誤りである可能性が高い。そのため「提案なし」とは受け取らず
+  // 表の解析に進め、表に見えなければ`null`にする。寛容さより安全側を優先する。
   if (body.trim() === "該当なし") return [];
   const rows = body.split("\n").filter((line) => line.trim().startsWith("|"));
   if (rows.length < 3) return null;
@@ -245,8 +252,8 @@ export function extractProposalTitles(markdown: string): string[] | null {
 }
 
 /**
- * Checks that the report's 改善提案 table lists exactly the same titles
- * (as a set, regardless of order) as the structured output's `proposals`.
+ * レポートの改善提案の表に並ぶタイトルが、構造化出力の`proposals`の
+ * タイトルと(順序を問わず集合として)完全に一致するかを検査する。
  */
 export function checkProposalTable(
   markdown: string,
@@ -271,8 +278,7 @@ export type AuditReportValidation =
   | { readonly ok: true }
   | { readonly ok: false; readonly issues: string[] };
 
-/** Runs every report-level check and aggregates the results into a single
- * ok/issues verdict for a filled-in audit report. */
+/** 書き終えた監査レポートにレポート単位の検査をすべてかけ、結果を1つの判定にまとめる。 */
 export function validateAuditReport(
   markdown: string,
   proposals: readonly AuditProposal[],
@@ -288,15 +294,15 @@ export function validateAuditReport(
 }
 
 /**
- * Validates the audit's structured output (summary + proposals): summary
- * length, per-proposal title/body length, duplicate titles, proposal
- * count, and — for the summary and every proposal alike (`checkIssueText`)
- * — HTML comments, `checkForbiddenSyntax`'s AI-writing-habit checks, and
- * that every URL (any letter case, including the scheme-less `//host` and
- * `www.host` forms) matches one of `allowedUrlPrefixes` (e.g. this
- * repository's GitHub URL, so the model can't point elsewhere) at a
- * path/query/fragment boundary, not just as a raw string prefix (see
- * `matchesUrlPrefix`).
+ * 監査の構造化出力(要約と提案)を検査する。
+ * 要約の長さ、提案ごとのタイトルと本文の長さ、タイトルの重複、提案の件数を見る。
+ * さらに要約とすべての提案に同じ検査(`checkIssueText`)をかけ、
+ * HTMLコメント、`checkForbiddenSyntax`によるAI文章の癖、URLを確かめる。
+ * URLは大文字小文字を問わず、スキームの無い`//host`や`www.host`も含め、
+ * すべて`allowedUrlPrefixes`のいずれかに当てはまる必要がある
+ * (このリポジトリのGitHubのURLなどを渡し、モデルがほかを指せないようにする)。
+ * 当てはまるかは、単なる文字列の接頭辞ではなく、パス・クエリ・フラグメントの
+ * 区切りまで含めて判定する(`matchesUrlPrefix`を参照)。
  */
 export function checkAuditOutput(
   output: {

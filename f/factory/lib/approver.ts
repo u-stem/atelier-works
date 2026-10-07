@@ -1,12 +1,6 @@
-// Shared fail-closed approver-identity derivation (team-lead fix round,
-// [MUST] #1: the former issue_proposal_decide.ts used to record
-// `process.env.WM_USERNAME ?? "unknown"` as `decided_by` — a decision could
-// silently land under the literal string "unknown" when the job's run
-// context carried no identity at all, defeating the whole point of
-// recording who decided). Used by approval_decide.ts (its module doc's
-// first security-auditor note explains why a caller-supplied argument can
-// never be trusted as identity instead) — the single decision recorder for
-// every approval_requests kind (requirements and issue_proposal alike).
+// 承認の判断を記録するときの承認者を、ジョブの実行コンテキストから導く。
+// 承認依頼の全種別(requirements、issue_proposalなど)の判断を記録する
+// `approval_decide.ts`が使う。
 
 export type ApproverEnv = {
   readonly WM_USERNAME?: string | undefined;
@@ -14,12 +8,13 @@ export type ApproverEnv = {
 };
 
 /**
- * Derives the recorded approver's identity from the job's own Windmill run
- * context (pure, for testing) — never from a caller-supplied argument, which
- * cannot be trusted as identity. `WM_USERNAME` is preferred; `WM_EMAIL` is
- * the fallback for a context where only the email is set. Throws if neither
- * is available: a decision must never be recorded under an unidentified
- * approver (fail closed).
+ * 承認者の識別子を、ジョブ自身のWindmill実行コンテキストから返す。
+ * 呼び出し側が渡す引数は識別子として信用できないため使わない。
+ * `WM_USERNAME`を優先し、メールだけが設定されている場合は`WM_EMAIL`を使う。
+ * どちらも無ければ例外を投げる。
+ * `"unknown"`のような既定値で記録すると、誰が判断したかが残らないため、
+ * 承認者が分からない判断は記録しない(fail closed)。
+ * テストのため、環境変数は引数で受け取る純粋関数にしている。
  */
 export function deriveApprover(env: ApproverEnv): string {
   const username = env.WM_USERNAME;

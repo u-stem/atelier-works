@@ -1,9 +1,9 @@
-// Pure decision/formatting logic for self_update.ts (plan §4 "self_update",
-// §4b). No I/O — see that script for wiring (git/wmill CLI subprocesses,
-// Data Table recording, Discord notification).
+// `self_update.ts`の判定と整形を行う純粋関数群。
+// I/Oは持たない。git・wmill CLIのサブプロセス、Data Tableへの記録、
+// Discordへの通知は`self_update.ts`が行う。
 
 // ---------------------------------------------------------------------------
-// decideUpdate: whether a redeploy is needed at all
+// decideUpdate: 再デプロイが必要かの判定
 // ---------------------------------------------------------------------------
 
 export type UpdateDecision =
@@ -11,10 +11,10 @@ export type UpdateDecision =
   | { readonly outcome: "update" };
 
 /**
- * Compares the self clone's current HEAD sha against the last sha recorded
- * in the `f/factory/deployed_sha` Windmill variable. An empty `deployedSha`
- * (the variable's initial value, before its first successful deploy) always
- * counts as "different", so the very first run always deploys.
+ * self cloneの現在のHEADのSHAを、Windmill変数`f/factory/deployed_sha`に
+ * 記録された前回のSHAと比べる。
+ * 空の`deployedSha`(初回のデプロイが成功する前の変数の初期値)は
+ * 常に「異なる」とみなすため、最初の実行は必ずデプロイする。
  */
 export function decideUpdate(
   currentSha: string,
@@ -26,19 +26,18 @@ export function decideUpdate(
 }
 
 // ---------------------------------------------------------------------------
-// assertBranchMatches: defense-in-depth check on ensureFactoryClone's own
-// postcondition
+// assertBranchMatches: ensureFactoryCloneの事後条件の多層防御としての検査
 // ---------------------------------------------------------------------------
 
 /**
- * Throws unless `actualBranch` equals `expectedBranch` — a defense-in-depth
- * check (M7 re-gate) that `ensureFactoryClone` actually left the self clone
- * on `config.factory_branch`, since a real worker run once found it stuck
- * on `main` before `ensureFactoryClone`'s own re-checkout fix (see
- * lib/workspace.ts's `ensureFactoryClone` module comment for the full
- * incident: a plain `git pull --ff-only` only ever advances whatever branch
- * was already checked out, never switches to or verifies the configured
- * one). `dir` is only used to make the thrown message actionable.
+ * `actualBranch`が`expectedBranch`と異なれば例外を投げる。
+ * `ensureFactoryClone`が本当にself cloneを`config.factory_branch`に
+ * 置いたかを確かめる多層防御である。
+ * `git pull --ff-only`だけではcheckout済みのブランチを進めるだけで、
+ * 設定されたブランチへの切り替えも確認もしないため、実際のworkerで
+ * `main`に留まったままになったことがある
+ * (`lib/workspace.ts`の`ensureFactoryClone`のコメントを参照)。
+ * `dir`は、例外のメッセージから対処できるようにするためだけに使う。
  */
 export function assertBranchMatches(
   actualBranch: string,
@@ -53,34 +52,36 @@ export function assertBranchMatches(
 }
 
 // ---------------------------------------------------------------------------
-// classifyChangedPaths: which changed paths need a host-side `mise run deploy`
+// classifyChangedPaths: ホスト側の`mise run deploy`が必要な変更パスの判定
 // ---------------------------------------------------------------------------
 
 /**
- * Paths whose changes worker-side `wmill sync push` / `wmill datatable
- * migrate up` cannot themselves apply — they require a host-side `mise run
- * deploy` (worker image rebuild, compose restart) to take effect. Only the
- * worker image / compose definition (`infra/**`) qualifies unconditionally.
- * `mise.toml` qualifies only when its `[tools]` (tool versions) or `[env]`
- * (values compose reads) sections changed — a task definition edit does
- * not affect the running worker (see `miseTomlNeedsHostAction`).
- * `scripts/**` (host-side dev tooling) and `mise.local.toml.example` (a
- * human-facing template) never affect the running worker.
+ * worker側の`wmill sync push` / `wmill datatable migrate up`では反映できず、
+ * ホスト側の`mise run deploy`(workerイメージの再ビルド、composeの再起動)が
+ * 必要になるパス。
+ * 無条件に該当するのは、workerイメージとcomposeの定義(`infra/**`)だけである。
+ * `mise.toml`は`[tools]`(ツールのバージョン)か`[env]`(composeが読む値)が
+ * 変わったときに限り該当する。タスク定義の編集は動作中のworkerに
+ * 影響しない(`miseTomlNeedsHostAction`を参照)。
+ * `scripts/**`(ホスト側の開発ツール)と`mise.local.toml.example`
+ * (人向けのひな形)は動作中のworkerに影響しない。
  */
 const HOST_ACTION_PATH_PATTERNS: readonly RegExp[] = [/^infra\//];
 
 export const MISE_TOML_PATH = "mise.toml";
 
-/** Sections of mise.toml whose content the running stack depends on:
- * `[tools]` pins the versions (e.g. the worker image's tool versions) and
- * `[env]` holds the values docker compose interpolates. */
+/**
+ * 動作中のスタックが内容に依存する`mise.toml`のセクション。
+ * `[tools]`はバージョン(workerイメージのツールのバージョンなど)を固定し、
+ * `[env]`はdocker composeが埋め込む値を持つ。
+ */
 const MISE_HOST_SECTIONS: readonly string[] = ["tools", "env"];
 
 /**
- * Extracts the text of the host-relevant sections (`[tools]`, `[env]`) of
- * a mise.toml (pure, for testing): line-based, a `[name]` header starts a
- * section and the next header ends it; blank lines and `#` comments are
- * dropped so a comment-only edit does not count.
+ * `mise.toml`から、ホストに関係するセクション(`[tools]`、`[env]`)の
+ * 内容を取り出す。
+ * 行単位で読み、`[name]`の見出しでセクションが始まり、次の見出しで終わる。
+ * コメントだけの編集を変更と数えないよう、空行と`#`のコメントは落とす。
  */
 export function extractMiseHostSections(toml: string): string {
   const kept: string[] = [];
@@ -99,10 +100,12 @@ export function extractMiseHostSections(toml: string): string {
   return kept.join("\n");
 }
 
-/** Whether a mise.toml change needs a host-side `mise run deploy` (pure,
- * for testing): true only when the `[tools]` / `[env]` sections differ
- * between the two versions. `oldToml === null` (no prior deploy to diff
- * against) is treated conservatively as needing host action. */
+/**
+ * `mise.toml`の変更にホスト側の`mise run deploy`が必要かを返す。
+ * 2つの版で`[tools]` / `[env]`が異なるときに限り`true`を返す。
+ * `oldToml === null`(比べる前回のデプロイが無い)の場合は、
+ * 安全側に倒して必要とみなす。
+ */
 export function miseTomlNeedsHostAction(
   oldToml: string | null,
   newToml: string,
@@ -117,12 +120,13 @@ export type ChangedPathsClassification = {
 };
 
 /**
- * Classifies a list of changed file paths (as reported by `git diff
- * --name-only` / `git ls-tree --name-only`): `host_paths` is the subset
- * that requires a host-side deploy, and `needs_host_action` is whether that
- * subset is non-empty. `miseTomlHostSectionsChanged` is the caller's
- * verdict for mise.toml (from `miseTomlNeedsHostAction`); it only matters
- * when mise.toml is among `paths`.
+ * 変更されたファイルのパスの一覧(`git diff --name-only` /
+ * `git ls-tree --name-only`の出力)を分類する。
+ * `host_paths`はホスト側のデプロイが必要なパス、`needs_host_action`は
+ * それが1つ以上あるかを表す。
+ * `miseTomlHostSectionsChanged`は呼び出し側による`mise.toml`の判定
+ * (`miseTomlNeedsHostAction`の結果)で、`paths`に`mise.toml`が
+ * 含まれるときだけ意味を持つ。
  */
 export function classifyChangedPaths(
   paths: readonly string[],
@@ -137,44 +141,36 @@ export function classifyChangedPaths(
 }
 
 // ---------------------------------------------------------------------------
-// wmill CLI connection: workspace/base-url/token, as argv flags
+// wmill CLIの接続: workspace・base-url・tokenをフラグで渡す
 // ---------------------------------------------------------------------------
 //
-// External contract, measured directly against a live Windmill CE 1.817.0
-// instance from a *blank* `WMILL_CONFIG_DIR` (2026-09-26) — the state every
-// worker container starts in, having never run `wmill workspace add`. This
-// replaces an earlier, unverified assumption that `WM_WORKSPACE` /
-// `WM_BASE_URL` / `WM_TOKEN` env vars alone would let `wmill sync push` /
-// `wmill datatable migrate up` run non-interactively; a real run against
-// the worker failed with "No workspace given and no default set" using
-// that approach. Measured behavior of `wmill sync push --dry-run` (same
-// for `wmill datatable migrate up`) with `WMILL_CONFIG_DIR` pointed at an
-// empty directory:
-//   - `WM_WORKSPACE=<name>` alone IS recognized (as a `--workspace` alias:
-//     "Using workspace override: <name> (selected via --workspace)"), but
-//     still requires a locally *stored* profile matching that workspace —
-//     which does not exist in a blank config dir, so it still fails with
-//     "No workspace profile found for branch '<name>' ... Not a TTY,
-//     cannot create profile interactively."
-//   - `WM_BASE_URL` and `WM_TOKEN` have **no effect at all** — set alone or
-//     together with `WM_WORKSPACE`, the CLI still tries to find a stored
-//     profile and fails the same way.
-//   - Only passing all three as *flags* together —
-//     `--workspace <ws> --base-url <url> --token <token>` — makes the CLI
-//     skip the "look for a stored profile" path entirely (this matches
-//     `wmill sync push --help`'s own text: "If used [--base-url], --token
-//     and --workspace are required and no local remote/workspace already
-//     set will be used"). Confirmed end to end: a dummy token reaches
-//     "Could not authenticate ... Unauthorized" (proving workspace/base-url
-//     resolution succeeded), and the real `f/factory/wmill_token` value
-//     reaches a normal "0 changes to apply" / "No pending migrations to
-//     run" result for `sync push --dry-run` / `datatable migrate up`
-//     respectively.
-// Consequence: the token cannot go through env here (there is no env var
-// this CLI actually reads for it) — it must be a literal argv element,
-// the same accepted exception scripts/bootstrap.sh's module doc documents
-// for `wmill workspace add --token` (its only other way to receive a
-// token non-interactively).
+// workerコンテナは`wmill workspace add`を一度も実行しておらず、
+// `WMILL_CONFIG_DIR`が空の状態で始まる。この状態から、Windmill CE 1.817.0の
+// 実インスタンスに対して`wmill sync push --dry-run`を実行して確かめた結果
+// (2026-09-26。`wmill datatable migrate up`も同じ)は次のとおり。
+//   - `WM_WORKSPACE=<name>`だけでも`--workspace`の別名として認識される
+//     ("Using workspace override: <name> (selected via --workspace)")。
+//     ただし、そのworkspaceに対応するローカルに保存されたプロファイルが
+//     必要で、空の設定ディレクトリには無いため、"No workspace profile found
+//     for branch '<name>' ... Not a TTY, cannot create profile
+//     interactively."で失敗する。
+//   - `WM_BASE_URL`と`WM_TOKEN`は、単独でも`WM_WORKSPACE`と併用しても
+//     まったく効かない。CLIは保存されたプロファイルを探して同じように失敗する。
+//     環境変数だけに頼ると、workerでは"No workspace given and no default
+//     set"で失敗する。
+//   - 3つすべてをフラグ(`--workspace <ws> --base-url <url> --token <token>`)
+//     で同時に渡したときに限り、CLIは保存されたプロファイルを探さない。
+//     `wmill sync push --help`の"If used [--base-url], --token and
+//     --workspace are required and no local remote/workspace already set
+//     will be used"とも一致する。
+//     ダミーのtokenでは"Could not authenticate ... Unauthorized"に達し
+//     (workspaceとbase-urlの解決は成功している)、本物の
+//     `f/factory/wmill_token`では`sync push --dry-run`が"0 changes to
+//     apply"、`datatable migrate up`が"No pending migrations to run"という
+//     正常な結果になることを、通しで確かめた。
+// そのため、このCLIがtokenを読む環境変数は無く、tokenは引数に直接置くしかない。
+// `scripts/bootstrap.sh`の冒頭コメントが`wmill workspace add --token`について
+// 認めている例外(対話なしでtokenを渡す手段がほかに無い)と同じ扱いである。
 
 export type WmillCliContextInput = {
   readonly BASE_INTERNAL_URL?: string | undefined;
@@ -188,21 +184,18 @@ export type WmillCliContext = {
 };
 
 /**
- * Resolves the `--workspace`/`--base-url` values from the job's own
- * ambient Windmill-provided env (never from a caller-supplied argument —
- * these describe *this* job's own workspace, not something a caller picks).
- * `baseUrl` prefers `BASE_INTERNAL_URL`, falling back to `BASE_URL` (same
- * fallback order the former suspend-based approval_decide.ts once used for
- * its own internal-URL resolution, for the same reason: measured directly
- * inside a worker job, `BASE_INTERNAL_URL`
- * is unset there while `BASE_URL` is set — observed value
- * `http://127.0.0.1:45753/`, a worker-local proxy port, not the host-facing
- * `WM_BASE_URL` `mise.toml` sets for host-side dev use. Confirmed reachable
- * end to end: `wmill datatable migrate up` succeeded through it in a real
- * worker run). Throws if either is unresolvable — a worker script must
- * fail loudly here with a clear message, rather than let the `wmill` CLI
- * itself fail with a more confusing "no workspace"/"could not authenticate"
- * error two layers down.
+ * `--workspace` / `--base-url`の値を、Windmillがジョブに与える環境変数から
+ * 決める。
+ * これらは呼び出し側が選ぶものではなく、このジョブ自身のworkspaceを表すため、
+ * 呼び出し側の引数からは決めない。
+ * `baseUrl`は`BASE_INTERNAL_URL`を優先し、無ければ`BASE_URL`を使う。
+ * workerのジョブ内で実測すると`BASE_INTERNAL_URL`は未設定で、
+ * `BASE_URL`には`http://127.0.0.1:45753/`(worker内のプロキシのポート)が
+ * 入っていた。ホスト側の開発用に`mise.toml`が設定する`WM_BASE_URL`とは別物で、
+ * 実際のworkerの実行で`wmill datatable migrate up`がこれを通して成功した。
+ * どちらかが決まらなければ例外を投げる。
+ * 2段下の`wmill` CLIが"no workspace"や"could not authenticate"という
+ * 分かりにくいエラーで失敗するより、ここで明確なメッセージで失敗させる。
  */
 export function resolveWmillCliContext(
   env: WmillCliContextInput,
@@ -223,12 +216,12 @@ export function resolveWmillCliContext(
 }
 
 /**
- * Appends the `--workspace <ws> --base-url <url> --token <token>` flags
- * `wmill` requires to run non-interactively from a blank config dir (see
- * this section's module comment for the measured contract). `token` is
- * always the caller's own, separately-fetched secret — never read from
- * `context`, so it can never be accidentally omitted by a missing/
- * misnamed field.
+ * 空の設定ディレクトリから`wmill`を対話なしで動かすのに必要な
+ * `--workspace <ws> --base-url <url> --token <token>`を`baseArgv`に足す
+ * (実測の結果はこの節の冒頭コメントを参照)。
+ * `token`は呼び出し側が別に取得した秘密情報を必ず引数で受け取り、
+ * `context`からは読まない。フィールドの欠落や名前の誤りで
+ * うっかり抜け落ちることを防ぐためである。
  */
 export function buildWmillArgv(
   baseArgv: readonly string[],
@@ -247,7 +240,7 @@ export function buildWmillArgv(
 }
 
 // ---------------------------------------------------------------------------
-// buildWmillEnv: minimal env for the worker-local `wmill` CLI subprocess
+// buildWmillEnv: worker内の`wmill` CLIのサブプロセスに渡す最小限の環境変数
 // ---------------------------------------------------------------------------
 
 export type WmillEnvInput = {
@@ -256,13 +249,14 @@ export type WmillEnvInput = {
 };
 
 /**
- * Builds the minimal env for the `wmill sync push` / `wmill datatable
- * migrate up` subprocess: only `HOME`/`PATH` (needed for the CLI's own
- * config dir and to locate the `wmill` binary via PATH search) — never the
- * full ambient `process.env`, so nothing else the worker process happens to
- * carry leaks into this subprocess's environment. Workspace/base-url/token
- * are deliberately *not* env vars here — see `buildWmillArgv`'s module
- * comment for why (measured: this CLI does not read them from env at all).
+ * `wmill sync push` / `wmill datatable migrate up`のサブプロセスに渡す
+ * 最小限の環境変数を作る。
+ * 入れるのは`HOME`(CLIの設定ディレクトリ用)と`PATH`(`wmill`本体を探す用)
+ * だけである。`process.env`全体は渡さず、workerのプロセスがたまたま持つ
+ * ほかの値がサブプロセスに漏れないようにする。
+ * workspace・base-url・tokenは意図して環境変数にしない。
+ * このCLIはそれらを環境変数から読まないことを実測で確かめている
+ * (この節の前にある、wmill CLIの接続の節の冒頭コメントを参照)。
  */
 export function buildWmillEnv(env: WmillEnvInput): Record<string, string> {
   const result: Record<string, string> = {};
@@ -272,30 +266,35 @@ export function buildWmillEnv(env: WmillEnvInput): Record<string, string> {
 }
 
 // ---------------------------------------------------------------------------
-// truncateOutput: cap a subprocess's stdout/stderr before logging it
+// truncateOutput: ログに出す前にサブプロセスの出力を切り詰める
 // ---------------------------------------------------------------------------
 
-/** Truncates `text` to at most `max` characters, for logging a subprocess's
- * (already `maskSecrets`-masked) stdout/stderr without an unbounded job log. */
+/**
+ * `text`を最大`max`文字に切り詰める。
+ * `maskSecrets`でマスク済みのサブプロセスの出力をログに出すとき、
+ * ジョブログが際限なく大きくならないようにする。
+ */
 export function truncateOutput(text: string, max: number): string {
   return text.length <= max ? text : text.slice(0, max);
 }
 
 // ---------------------------------------------------------------------------
-// Raw app dependencies: `wmill sync push` bundles the Console raw app in
-// place and resolves its imports from node_modules inside the self clone.
+// raw appの依存: `wmill sync push`はConsoleのraw appをその場でバンドルし、
+// importをself clone内の`node_modules`から解決する。
 // ---------------------------------------------------------------------------
 
-/** Repo-relative directory of the Console raw app whose npm dependencies
- * must be installed before `wmill sync push` can bundle it. */
+/**
+ * Consoleのraw appのディレクトリ(リポジトリからの相対パス)。
+ * `wmill sync push`でバンドルする前に、npmの依存を入れておく必要がある。
+ */
 export const RAW_APP_RELATIVE_DIR = "f/factory/factory_console__raw_app";
 
 /**
- * `npm ci` argv for the raw app (pure, for testing): installs exactly what
- * package-lock.json pins, never rewriting it — a plain `npm install` inside
- * the self clone is what once left package-lock.json modified and blocked
- * the next `git checkout -B`. `--no-audit --no-fund` keeps the run quiet
- * and offline-friendly.
+ * raw appに対する`npm ci`の引数を返す。
+ * `npm ci`は`package-lock.json`が固定するものをそのまま入れ、ファイルを
+ * 書き換えない。self clone内で`npm install`を使うと`package-lock.json`が
+ * 書き換わったまま残り、次の`git checkout -B`を妨げたことがある。
+ * `--no-audit --no-fund`は出力を減らし、オフラインでも動きやすくする。
  */
 export function buildNpmCiArgv(rawAppDir: string): string[] {
   return ["npm", "ci", "--prefix", rawAppDir, "--no-audit", "--no-fund"];

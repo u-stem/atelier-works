@@ -1,7 +1,6 @@
-// Pure decision/formatting logic for cleanup_db.ts (DB retention cleanup,
-// 2026-09-27 addition). No I/O -- see that script for wiring (db.ts calls,
-// config loading, per-step error handling, and the actual filesystem
-// deletes docDirsFor's paths point at).
+// `cleanup_db.ts`(DBの保持期間による掃除)の判定と整形を行う純粋関数群。
+// I/Oは持たない。DB呼び出し、設定の読み込み、工程ごとのエラー処理、
+// `docDirsFor`が返すパスの実際の削除は`cleanup_db.ts`が行う。
 
 import type { DeletedWorkItemRef } from "./db.ts";
 import { assertGitHubName, type FactoryConfig } from "./types.ts";
@@ -9,20 +8,23 @@ import { assertGitHubName, type FactoryConfig } from "./types.ts";
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export type RetentionCutoffs = {
-  /** Terminal-status work_items (and everything cascading from them:
-   * requirement_drafts, approvals, agent_runs, approval_requests, ...)
-   * updated_at at or before this instant are deleted. */
+  /**
+   * `updated_at`がこの時刻以前の、終端状態のwork_itemsを削除する。
+   * カスケードでつながる行(requirement_drafts、approvals、agent_runs、
+   * approval_requestsなど)も一緒に消える。
+   */
   readonly workItemsBefore: Date;
-  /** job_failures / deployments / resolved notices rows whose own timestamp
-   * column is at or before this instant are deleted independently of
-   * work_items. */
+  /**
+   * 自身の時刻列がこの時刻以前の、job_failures、deployments、
+   * 解決済みのnoticesの行を、work_itemsとは独立に削除する。
+   */
   readonly logsBefore: Date;
 };
 
 /**
- * Computes the two retention cutoffs cleanup_db.ts sweeps against, `now`
- * minus each configured retention window (config.retention_work_items_days
- * / config.retention_logs_days).
+ * `cleanup_db.ts`が削除の基準にする2つの時刻を返す。
+ * それぞれ`now`から設定の保持日数
+ * (`retention_work_items_days`、`retention_logs_days`)を引いた時刻になる。
  */
 export function computeRetentionCutoffs(
   now: Date,
@@ -39,28 +41,29 @@ export function computeRetentionCutoffs(
   };
 }
 
-/** One cleanup_db.ts run's delete counts -- mirrors
- * migrations/datatable/main/20260927130000_cleanup_runs.up.sql's columns
- * (minus `id` / `ran_at`, which db.ts's insertCleanupRun fills in). */
+/**
+ * `cleanup_db.ts`の1回の実行で削除した件数。
+ * `cleanup_runs`テーブルの列に対応する。
+ * `id`と`ran_at`は`db.ts`の`insertCleanupRun`が埋めるため含まない。
+ */
 export type CleanupCounts = {
   readonly work_items_deleted: number;
   readonly approval_requests_deleted: number;
   readonly job_failures_deleted: number;
   readonly deployments_deleted: number;
   readonly notices_deleted: number;
-  /** Requirement-definition doc dirs (see docDirsFor) deleted alongside a
-   * deleted work item. */
+  /** work itemの削除に合わせて消した要件定義書のディレクトリ(`docDirsFor`)。 */
   readonly doc_dirs_deleted: number;
 };
 
 /**
- * A one-line Japanese summary of `counts`, for both the cleanup_db.ts job
- * log and the daily_summary Discord embed's "DB 掃除" field. Intentionally
- * omits approval_requests_deleted (a side effect of the work_items delete
- * cascading, not a sweep of its own) and doc_dirs_deleted (a filesystem
- * side effect of the same work_items delete, not a DB sweep of its own) --
- * the four counts shown are each an independent sweep the operator may
- * care about individually.
+ * `counts`を1行の日本語に要約する。
+ * `cleanup_db.ts`のジョブログと、daily_summaryのDiscord embedの
+ * 「DB 掃除」欄の両方で使う。
+ * 表示する4件はそれぞれ独立した掃除で、運用者が個別に気にしうるものに限る。
+ * `approval_requests_deleted`はwork_items削除のカスケードによる副作用、
+ * `doc_dirs_deleted`は同じ削除に伴うファイルシステム上の副作用で、
+ * どちらも独立した掃除ではないため意図的に省く。
  */
 export function summarizeCleanup(counts: CleanupCounts): string {
   return (
@@ -72,31 +75,35 @@ export function summarizeCleanup(counts: CleanupCounts): string {
 }
 
 // ---------------------------------------------------------------------------
-// Requirements-doc directory cleanup (cleanup_db.ts, 2026-09-27 file-per-
-// diagram redesign). Pure path computation only -- cleanup_db.ts does the
-// actual filesystem deletes (best-effort, via lib/workspace.ts's
-// removePath / removeEmptyDir).
+// 要件定義書のディレクトリの掃除。ここではパスを計算するだけで、
+// 実際の削除は`cleanup_db.ts`が`lib/workspace.ts`の`removePath` /
+// `removeEmptyDir`でベストエフォートに行う。
 // ---------------------------------------------------------------------------
 
 export type DocDirsToDelete = {
-  /** The deleted work item's own requirements doc dir, covering every
-   * attempt (`<base>/<owner>/<repo>/issue-<N>/wi-<id>`) -- deleted
-   * recursively. */
+  /**
+   * 削除したwork itemの要件定義書のディレクトリ
+   * (`<base>/<owner>/<repo>/issue-<N>/wi-<id>`)。
+   * すべての試行を含むディレクトリで、再帰的に削除する。
+   */
   readonly wiDir: string;
-  /** Its parent `issue-<N>` directory, which cleanup_db.ts should also
-   * remove but only if it is left empty (a sibling work item for the same
-   * issue may still have its own `wi-<id>` directory under it). */
+  /**
+   * 親の`issue-<N>`ディレクトリ。
+   * 同じIssueの別のwork itemの`wi-<id>`が残っていることがあるため、
+   * `cleanup_db.ts`は空になった場合に限り消す。
+   */
   readonly issueDir: string;
 };
 
 /**
- * Computes the requirements doc dir(s) to delete for each deleted work item
- * (`db.ts`'s `deleteTerminalWorkItemsBefore` return value), skipping items
- * with no `issue_number` (a `pr`-kind work item never had a requirements
- * doc dir in the first place). Mirrors
- * `lib/requirements_template.ts`'s `buildRequirementsDocDir` path scheme up
- * to the `wi-<id>` segment (this deletes every attempt at once, so it does
- * not go one level deeper to a specific `attempt-<k>`).
+ * 削除したwork item(`db.ts`の`deleteTerminalWorkItemsBefore`の戻り値)ごとに、
+ * 消すべき要件定義書のディレクトリを返す。
+ * `issue_number`の無いwork itemは飛ばす
+ * (`pr`種別のwork itemは要件定義書のディレクトリを持たない)。
+ * パスは`lib/requirements_template.ts`の`buildRequirementsDocDir`と
+ * `wi-<id>`の階層までそろえる。
+ * すべての試行をまとめて消すため、`attempt-<k>`の階層までは下りない。
+ * `owner`か`repo`がGitHubの名前として不正なら例外を投げる。
  */
 export function docDirsFor(
   items: readonly DeletedWorkItemRef[],

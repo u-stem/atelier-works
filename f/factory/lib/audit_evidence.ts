@@ -1,18 +1,16 @@
-// Evidence pack for 工程5 (audit): collects factory schema aggregates over
-// an AuditPeriod and renders them as markdown for a headless audit model to
-// read. Split out of ./audit_support.ts (which keeps only period math,
-// title, and kickoff decisions) so this SQL-heavy, sanitization-heavy file
-// can be held in one person's context on its own.
+// 工程5(監査)の証跡パック。`AuditPeriod`の期間についてfactoryスキーマの
+// 集計を集め、headlessの監査モデルが読むMarkdownにする。
+// 期間の計算、タイトル、起動の判定は`./audit_support.ts`が持つ。
 //
-// Every string cell that reaches the rendered markdown passes through
-// sanitizeCell (maskSecrets first, so a leaked token never survives even if
-// a later step's HTML-stripping regex were ever loosened) both when a row
-// is parsed out of the database and again when a line is composed for
-// rendering — the latter also enforces the 300-char per-line budget once
-// several sanitized cells are joined together. Every rendered line — fixed
-// or droppable — is prefixed `- ` so a raw DB value (stage, flow_path, key)
-// can never itself read as a markdown heading (`#`), blockquote (`>`), or
-// fence when a headless model parses the file.
+// 描画するMarkdownに入る文字列のセルは、DBの行を解析するときと、
+// 描画用に行を組み立てるときの2回、`sanitizeCell`を通す。
+// `sanitizeCell`は最初に`maskSecrets`をかけるため、後段のHTMLを取り除く
+// 正規表現が将来ゆるめられても、漏れたトークンは残らない。
+// 組み立て時の2回目は、マスク済みのセルを複数つないだ後で、
+// 1行300字の上限もかける。
+// 描画する行は固定の行も削れる行もすべて`- `で始める。こうすると、
+// DBの生の値(stage、flow_path、keyなど)を、headlessのモデルが
+// Markdownの見出し(`#`)・引用(`>`)・フェンスとして読むことはない。
 
 import {
   type ActionableCounts,
@@ -25,17 +23,19 @@ import { isNumber, isString } from "./types.ts";
 
 const HTML_COMMENT_PATTERN = /<!--[\s\S]*?-->/g;
 const HTML_TAG_PATTERN = /<\/?[a-zA-Z][^>]*>/g;
-// Leftover unpaired comment delimiters — e.g. an unterminated `<!--` with no
-// matching `-->` — that HTML_COMMENT_PATTERN's paired match can't catch.
+// 対になっていないコメントの区切りの残り(`-->`の無い`<!--`など)。
+// 対で一致させる`HTML_COMMENT_PATTERN`では捕まえられない。
 const HTML_COMMENT_FRAGMENT_PATTERN = /<!--|-->/g;
 const SANITIZE_CELL_MAX = 300;
 const EVIDENCE_MAX_CHARS = 12000;
 
-/** Masks secrets, strips HTML comments/tags (including any leftover
- * unpaired `<!--`/`-->` fragment), collapses newlines/pipes/whitespace to
- * single spaces, then truncates to `max` chars with a trailing "…" — the
- * one gate every evidence-pack cell passes through before it can reach a
- * headless model as data. */
+/**
+ * 秘密情報をマスクし、HTMLコメントとタグ(対になっていない`<!--` / `-->`の
+ * 残りも含む)を取り除き、改行・パイプ・連続する空白を1つの空白にまとめる。
+ * そのうえで`max`文字に切り詰め、切り詰めたときは末尾に「…」を付ける。
+ * 証跡パックのすべてのセルは、データとしてheadlessのモデルに届く前に
+ * 必ずここを通る。
+ */
 export function sanitizeCell(text: string, max: number): string {
   const cleaned = maskSecrets(text)
     .replace(HTML_COMMENT_PATTERN, " ")
@@ -48,10 +48,13 @@ export function sanitizeCell(text: string, max: number): string {
   return `${cleaned.slice(0, Math.max(0, max - 1))}…`;
 }
 
-/** One markdown section of the evidence pack. `fixed` lines (always-present
- * metrics, e.g. the audited period or an unresolved-notice count) are never
- * dropped by truncateEvidence; `lines` is the droppable per-record list
- * truncateEvidence may shorten to fit the overall budget. */
+/**
+ * 証跡パックのMarkdownの節1つ。
+ * `fixed`は常に載せる指標(監査の期間、未解決の通知の件数など)で、
+ * `truncateEvidence`は削らない。
+ * `lines`はレコードごとの削れる一覧で、`truncateEvidence`が全体の上限に
+ * 収めるために短くすることがある。
+ */
 export type EvidenceSection = {
   heading: string;
   fixed: string[];
@@ -70,19 +73,20 @@ function joinSections(sections: readonly EvidenceSection[]): string {
   return sections.map(renderSection).join("\n\n");
 }
 
-// Every rendered line — fixed, kept data, or a `省略N行` marker — costs its
-// own length plus a `- ` prefix (2 chars) plus one joining newline (1
-// char): +3. (The real render has one fewer newline than line count per
-// section, since `join("\n")` doesn't add a trailing separator, so this
-// slightly over-estimates — a safe bias for the proportional first pass
-// below, since the fitting loop that follows is the actual correctness
-// guarantee, not this estimate.)
+// 描画する各行(固定の行、残したデータ行、`省略N行`の目印)は、
+// 自身の長さに`- `(2字)とつなぎの改行(1字)を足した分、つまり+3字を使う。
+// 実際の描画では`join("\n")`が末尾に区切りを付けないため、節ごとに改行が
+// 行数より1つ少なく、この見積もりはわずかに多めになる。
+// 下の比例配分の初回処理にとっては安全側の偏りであり、正しさを保証するのは
+// この見積もりではなく、その後の調整ループである。
 const LINE_RENDER_OVERHEAD = 3;
 
-/** One section's truncation state while `truncateEvidence` works: how many
- * of its original droppable lines are still kept, tracked separately from
- * the public `EvidenceSection` shape so the `省略N行` marker can be
- * recomputed cheaply as `keptCount` changes, without re-slicing arrays. */
+/**
+ * `truncateEvidence`の処理中の、節1つの切り詰めの状態。
+ * 元の削れる行のうち何行を残しているかを、公開する`EvidenceSection`とは
+ * 別に持つ。こうすると`keptCount`が変わるたびに配列を切り直さず、
+ * `省略N行`の目印を軽く計算し直せる。
+ */
 type WorkingSection = {
   heading: string;
   fixed: string[];
@@ -106,22 +110,23 @@ function renderWorking(sections: readonly WorkingSection[]): string {
   return joinSections(sections.map(materialize));
 }
 
-/** Keeps `sections` as-is when their fully-rendered length is within
- * `maxChars`; otherwise drops each section's droppable `lines` (never
- * `fixed`) to fit — a fast proportional first pass, then a fitting loop
- * that renders the *actual* output (the same `renderSection`/`joinSections`
- * the caller uses) and, while it is still over `maxChars`, removes one more
- * data line from whichever section currently has the most kept data lines,
- * recomputing that section's `省略N行` marker each time — until it fits or
- * every section has been reduced to zero data lines. This never slices the
- * rendered string: if section headings + `fixed` lines alone already
- * exceed `maxChars` (so the loop runs out of data lines to drop), the
- * result is returned over budget rather than cut, since a hard slice can
- * land mid-line or mid-character (see renderEvidenceMarkdown). The budget
- * is computed against `renderSection`'s own output (headings, `- `
- * prefixes, and the `該当なし` fallback all count), so a caller that also
- * has its own fixed overhead (a banner/title above the sections) must
- * pre-subtract that from `maxChars` itself. */
+/**
+ * 描画した全体の長さが`maxChars`以内なら、`sections`をそのまま返す。
+ * 超える場合は、各節の削れる`lines`を削って収める(`fixed`は削らない)。
+ * まず比例配分で手早く削り、次に調整ループに入る。
+ * 調整ループでは呼び出し側と同じ`renderSection` / `joinSections`で実際の出力を
+ * 描画し、`maxChars`を超えている間、残すデータ行が最も多い節から1行ずつ削る。
+ * 削るたびにその節の`省略N行`の目印を計算し直し、収まるか、すべての節の
+ * データ行が0行になるまで続ける。
+ *
+ * 描画した文字列を途中で切ることはしない。強制的に切ると行や文字の途中で
+ * 切れうるためである(`renderEvidenceMarkdown`を参照)。
+ * 節の見出しと`fixed`の行だけで`maxChars`を超える場合は、削るデータ行が
+ * 尽きるため、上限を超えたまま返す。
+ * 上限は`renderSection`の出力(見出し、`- `の前置き、`該当なし`の代替行を含む)
+ * に対して数える。節の上に独自の固定部分(注意書きやタイトル)を置く
+ * 呼び出し側は、その分を先に`maxChars`から引いておく必要がある。
+ */
 export function truncateEvidence(
   sections: readonly EvidenceSection[],
   maxChars: number,
@@ -172,7 +177,7 @@ export function truncateEvidence(
         targetCount = section.keptCount;
       }
     }
-    if (targetIndex === -1) break; // no data lines left anywhere to drop.
+    if (targetIndex === -1) break; // どの節にも削れるデータ行が残っていない。
     const target = working[targetIndex];
     if (target === undefined) break;
     target.keptCount -= 1;
@@ -217,12 +222,16 @@ export type AuditEvidence = {
   readonly previous_agent_runs: StageStat[];
   readonly failures: FailureGroup[];
   readonly rejections: RejectionRecord[];
-  /** Total rejected approvals in the period — a dedicated count(*), since
-   * `rejections` is capped at 30 rows. */
+  /**
+   * 期間内に却下された承認の総数。
+   * `rejections`は30行までに制限しているため、専用の`count(*)`で数える。
+   */
   readonly rejected_count: number;
   readonly human_outcomes: HumanOutcome[];
-  /** Total needs_human / blocked / expired transitions in the period — a
-   * dedicated count(*), since `human_outcomes` is capped at 30 groups. */
+  /**
+   * 期間内のneeds_human / blocked / expiredへの遷移の総数。
+   * `human_outcomes`は30グループまでに制限しているため、専用の`count(*)`で数える。
+   */
   readonly needs_human_count: number;
   readonly fix_round_outcomes: CountByKey[];
   readonly fix_reply_decisions: CountByKey[];
@@ -343,20 +352,22 @@ function buildEvidenceSections(evidence: AuditEvidence): EvidenceSection[] {
   ];
 }
 
-/** Renders an evidence pack as markdown, starting with a banner stating the
- * file is audit input data, not instructions — followed by a title heading
- * and one `## <heading>` block per section. The section body is truncated
- * to fit `EVIDENCE_MAX_CHARS` total via truncateEvidence (given the budget
- * net of this banner+title header) — including its fitting loop, which
- * renders the actual output and keeps dropping data lines until it truly
- * fits. This never slices the final string to force the cap: a hard slice
- * can land mid-line, or split a fixed line like `ホスト操作要: N件` in
- * half, or split a multi-byte character — all worse than returning an
- * over-budget string. If truncateEvidence's fitting loop ever runs out of
- * data lines to drop and the section headings + fixed lines alone still
- * exceed the budget (which the fixed-content set here is not expected to,
- * by construction — see buildEvidenceSections), the result is returned
- * over `EVIDENCE_MAX_CHARS` uncut rather than truncated. */
+/**
+ * 証跡パックをMarkdownにする。
+ * 先頭に、このファイルが指示ではなく監査の入力データであると述べる注意書きを置き、
+ * タイトルの見出しと、節ごとの`## <heading>`のブロックを続ける。
+ * 節の本文は、注意書きとタイトルの分を差し引いた上限を`truncateEvidence`に渡し、
+ * 全体が`EVIDENCE_MAX_CHARS`に収まるよう切り詰める。`truncateEvidence`の
+ * 調整ループは実際の出力を描画し、本当に収まるまでデータ行を削り続ける。
+ *
+ * 上限に合わせるために最終的な文字列を途中で切ることはしない。
+ * 強制的に切ると、行の途中や`ホスト操作要: N件`のような固定の行の途中、
+ * マルチバイト文字の途中で切れうる。これらは上限を超えた文字列を返すより悪い。
+ * 調整ループで削るデータ行が尽きても、節の見出しと固定の行だけで上限を超える
+ * 場合は、`EVIDENCE_MAX_CHARS`を超えたまま切らずに返す。
+ * ここで載せる固定の内容は、作りからしてそうならない想定である
+ * (`buildEvidenceSections`を参照)。
+ */
 export function renderEvidenceMarkdown(evidence: AuditEvidence): string {
   const title = `# 証跡パック(${evidence.period_label})`;
   const header = `${DATA_NOT_INSTRUCTIONS_BANNER}\n\n${title}\n\n`;
@@ -368,9 +379,12 @@ export function renderEvidenceMarkdown(evidence: AuditEvidence): string {
   return header + joinSections(truncated);
 }
 
-/** Same number-or-numeric-string leniency as db.ts's parseNumericLike, but
- * tolerant rather than throwing: evidence collection must not fail the
- * whole report over one unexpectedly-shaped aggregate cell. */
+/**
+ * `db.ts`の`parseNumericLike`と同じく、数値か数値の文字列を受け付ける。
+ * ただし例外は投げず、解釈できなければ0を返す。
+ * 想定外の形の集計セルが1つあるだけで、証跡の収集とレポート全体を
+ * 失敗させてはならないためである。
+ */
 function parseNumeric(value: unknown): number {
   if (isNumber(value)) return value;
   if (isString(value) && value.length > 0 && Number.isFinite(Number(value))) {
@@ -467,10 +481,12 @@ function toPastProposal(row: SqlRow): PastProposal {
   };
 }
 
-/** Counts records over `period` that would make an audit worth running —
- * excluding the audit process's own records (`kind = 'audit'` work items,
- * `workspace_disk_usage` notices) so a busy audit itself never triggers the
- * next one. */
+/**
+ * `period`の期間で、監査を実行する価値があると判断する材料になるレコードを数える。
+ * 監査の処理自身のレコード(`kind = 'audit'`のwork item、
+ * `workspace_disk_usage`の通知)は除く。
+ * 監査自身の活動が多くても、それで次の監査が起動しないようにするためである。
+ */
 export async function countActionableRecords(
   period: AuditPeriod,
   sql: SqlClient = defaultSqlClient,
@@ -519,23 +535,24 @@ function previousPeriodOf(period: AuditPeriod): { start: Date; end: Date } {
 }
 
 /**
- * Collects the audit's evidence pack: stage-level agent_runs stats for this
- * period and the immediately-preceding period of equal length, plus failure
- * groups, rejections, human-escalation outcomes, fix-round/review/notice/
- * deployment breakdowns, up to 3 audit reports' worth of past proposals,
- * and — last — uncapped totals for rejections and human-escalation
- * outcomes (the list queries above are LIMIT 30, so metrics can't be
- * derived from their lengths) — one query per group, run in this fixed
- * order (documented for the "issues its queries in order" test). Every query that joins to
- * work_items excludes the audit process's own rows (`wi.kind <> 'audit'`,
- * or `wi.kind IS NULL OR wi.kind <> 'audit'` where the join is a LEFT JOIN
- * against a nullable work_item_id) — the same exclusion countActionableRecords
- * applies — so an audit never reports on itself. fix_rounds and reviews have
- * no audit-kind rows by construction (an audit work item is never reviewed
- * or fixed), so they need no such filter. notices and deployments have no
- * work_item_id at all, so exclusion doesn't apply to them either. Every
- * returned string cell is sanitized (sanitizeCell) before being stored on
- * the result.
+ * 監査の証跡パックを集める。集める内容は次のとおりで、グループごとに
+ * 1つのクエリをこの固定の順で実行する(テスト「issues its queries in order」が
+ * この順序を前提にする)。
+ * - この期間と、その直前の同じ長さの期間についての、工程ごとのagent_runsの統計
+ * - 失敗のグループ、却下、人の対応に回った結果
+ * - 修正ラウンド・レビュー・通知・デプロイの内訳
+ * - 過去の監査レポート最大3件分の提案
+ * - 最後に、却下と人の対応に回った結果の上限なしの総数
+ *   (上の一覧のクエリは`LIMIT 30`のため、件数から指標を出せない)
+ *
+ * work_itemsと結合するクエリはすべて、監査の処理自身の行を除く
+ * (`wi.kind <> 'audit'`。null許容の`work_item_id`とLEFT JOINする場合は
+ * `wi.kind IS NULL OR wi.kind <> 'audit'`)。`countActionableRecords`と同じ除外で、
+ * 監査が自分自身について報告しないようにする。
+ * fix_roundsとreviewsには、作りからして監査の行が無い(監査のwork itemは
+ * レビューも修正もされない)ため、この条件は要らない。
+ * noticesとdeploymentsは`work_item_id`を持たないため、除外は当てはまらない。
+ * 返す文字列のセルは、結果に入れる前にすべて`sanitizeCell`を通す。
  */
 export async function collectAuditEvidence(
   input: { period: AuditPeriod; instanceName: string },
@@ -710,8 +727,10 @@ function sumBy<T>(items: readonly T[], pick: (item: T) => number): number {
   return items.reduce((sum, item) => sum + pick(item), 0);
 }
 
-/** Aggregate metrics for factory.audit_reports.metrics (jsonb), computed
- * from an already-collected AuditEvidence. */
+/**
+ * 収集済みの`AuditEvidence`から、`factory.audit_reports.metrics`(jsonb)に
+ * 入れる集計値を計算する。
+ */
 export function metricsOf(evidence: AuditEvidence): Record<string, unknown> {
   return {
     run_count: sumBy(evidence.agent_runs, (stat) => stat.run_count),
