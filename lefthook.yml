@@ -21,6 +21,9 @@ pre-commit:
           - name: no-type-assertions
             glob: "*.ts"
             run: mise exec -- bun run scripts/lint-no-type-assertions.ts {staged_files}
+          - name: no-section-sign
+            glob: "*.{ts,tsx,js,mjs,sh,yaml,yml,toml,sql}"
+            run: mise exec -- bun run scripts/lint-no-section-sign.ts {staged_files}
           - name: gitleaks
             run: mise exec -- gitleaks protect --staged --redact --no-banner
           - name: wmill-lint
