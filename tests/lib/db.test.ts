@@ -202,7 +202,7 @@ describe("updateStatus", () => {
     expect(calls).toHaveLength(1);
   });
 
-  test("locks the row it reads with FOR UPDATE (spec-cycle2.md §7 item 6: races with reconcile's concurrent cancel)", async () => {
+  test("locks the row it reads with FOR UPDATE (races with reconcile's concurrent cancel)", async () => {
     const { sql, calls } = createFakeSqlClient([[{ from_status: "picked" }]]);
     await updateStatus(1, "requirements_generating", null, sql);
     expect(calls[0]?.text).toContain("FOR UPDATE");

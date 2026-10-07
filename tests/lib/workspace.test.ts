@@ -479,7 +479,7 @@ describe("ensureFactoryClone", () => {
     });
   });
 
-  test("clones with --branch <branch> --single-branch (M7 factory_branch, required — no default)", async () => {
+  test("clones with --branch <branch> --single-branch (factory_branch is required — no default)", async () => {
     const fake = createFakeCommandRunner([ok()]);
     await ensureFactoryClone({
       run: fake.run,
@@ -545,7 +545,7 @@ describe("ensureFactoryClone", () => {
     );
   });
 
-  test("checks out -B the *configured* branch even when the existing clone was left on a different one (M7 re-gate: a prior caller defaulting to main must not stick)", async () => {
+  test("checks out -B the *configured* branch even when the existing clone was left on a different one (a prior caller defaulting to main must not stick)", async () => {
     const fake = createFakeCommandRunner([ok(), ok(), ok()]);
     await ensureFactoryClone({
       run: fake.run,

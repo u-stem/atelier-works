@@ -162,7 +162,7 @@ describe("parseFactoryConfig", () => {
     expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
   });
 
-  test("defaults max_fix_changed_files and max_fix_diff_lines when absent (M6 security review)", () => {
+  test("defaults max_fix_changed_files and max_fix_diff_lines when absent", () => {
     const config = parseFactoryConfig(LEGACY_RAW_CONFIG);
     expect(config).toMatchObject({
       max_fix_changed_files: 30,
