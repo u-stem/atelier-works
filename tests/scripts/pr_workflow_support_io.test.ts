@@ -1,14 +1,4 @@
-// Tests for f/factory/steps/pr_workflow_support.ts's small additive I/O
-// helpers not exposed by lib/github.ts, lib/db.ts, or lib/workspace.ts — see
-// that file's header comment for why each exists here. getBranchProtected /
-// postIssueComment / setHeadSha / fetchPrHeadRef / readGitShowFile / addLabels
-// used to be tested here too, but team-lead fix round 2 items a and the
-// re-gate note removed this file's local copies of those six once
-// lib/github.ts, lib/db.ts, and lib/workspace.ts promoted the same functions
-// (same signatures) — they're covered by tests/lib/github.test.ts,
-// tests/lib/db.test.ts, and tests/lib/workspace.test.ts now instead.
-// removeTerminalLabels was removed by the 2026-09-27 PR label cleanup (no
-// more state/wip labels to clear on a terminal transition).
+// `pr_workflow_support.ts`の小さな入出力補助のテスト。
 
 import { describe, expect, test } from "bun:test";
 import { readWorktreeFileIfExists } from "../../f/factory/steps/pr_workflow_support.ts";

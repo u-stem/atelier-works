@@ -10,9 +10,11 @@ import {
   validateRequirementsDoc,
 } from "../../f/factory/lib/requirements_doc.ts";
 
-/** A minimal, fully well-formed requirements document (all 11 sections,
- * one FR/NFR/AC each, no forbidden syntax) — the baseline that individual
- * tests mutate one aspect of. */
+/**
+ * 形式をすべて満たす最小の要件定義書を返す。
+ * 11節すべてを持ち、FR・NFR・ACを1件ずつ含み、禁止された記法を使わない。
+ * 各テストはこれを1か所だけ変えて使う。
+ */
 function baseDoc(): string {
   return [
     "# 要件定義: サンプル",
@@ -108,8 +110,8 @@ describe("checkSections", () => {
   });
 
   test("reports an out-of-order section", () => {
-    // Swap the "## 用語" and "## 利用者と利用シーン" section headings only,
-    // leaving both sections' bodies in place, to force an order violation.
+    // 本文はそのままに「## 用語」と「## 利用者と利用シーン」の見出しだけを入れ替え、
+    // 順序の違反を起こす。
     const swapped = baseDoc()
       .replace("## 用語", "## __TMP__")
       .replace("## 利用者と利用シーン", "## 用語")
@@ -137,9 +139,8 @@ describe("checkRequirementIds", () => {
   });
 
   test("reports a gap in sequential numbering", () => {
-    // Renumber the FR row and its AC reference together (not a global
-    // string replace) so the table stays internally consistent and the
-    // only issue produced is the numbering gap itself.
+    // 文字列全体を置換せず、FRの行とそれを参照するACをまとめて付け替える。
+    // 表の整合を保ち、検出される問題を番号の欠けだけにするため。
     const gapped = baseDoc()
       .replace(
         "| FR-001 | 要件その1 | Must | 根拠その1 |",

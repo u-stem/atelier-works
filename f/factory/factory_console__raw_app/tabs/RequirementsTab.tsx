@@ -35,12 +35,11 @@ export function RequirementsTab(): React.ReactElement {
       ? rows
       : rows.filter((row) => row.work_item_id === parsedWorkItemIdFilter);
 
-  // Deep link support (§6): a Console link posted with a
-  // `#requirements/<id>[/attempt-<k>]` fragment jumps straight to that work
-  // item's document once the index has loaded, instead of requiring a
-  // manual pick from the list. Only runs once (empty deps) — after that the
-  // user's own selection takes over; `setSelected` is a stable setter so an
-  // empty dependency array needs no suppression here.
+  // ディープリンク。`#requirements/<id>[/attempt-<k>]`付きで投稿された
+  // Consoleのリンクから来たときは、一覧から手で選ばせず、一覧の読み込み後に
+  // その作業項目の文書へ直接移る。一度だけ動かし(依存は空)、以後は
+  // 利用者の選択に任せる。`setSelected`は安定したsetterなので、
+  // 依存の配列が空でも抑制の指定は要らない。
   useEffect(() => {
     const link = parseDeepLink(collectDeepLinkCandidates());
     if (link !== null) {
@@ -141,10 +140,12 @@ export function RequirementsTab(): React.ReactElement {
   );
 }
 
-/** The detail pane for one work item: fetches "requirements_doc" for
- * `attempt` (latest when `null`) and offers a plain attempt-number input to
- * switch to a past attempt — the index itself only carries the latest
- * attempt, so past attempts aren't enumerable without re-querying. */
+/**
+ * 作業項目1件の詳細欄。`attempt`(`null`なら最新)の`requirements_doc`を
+ * 取得し、過去のattemptに切り替える番号の入力欄を出す。
+ * 一覧は最新のattemptしか持たず、問い合わせ直さないと過去のattemptを
+ * 列挙できないため、番号で指定させる。
+ */
 function RequirementsDetail({
   workItemId,
   attempt,

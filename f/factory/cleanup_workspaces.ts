@@ -1,22 +1,18 @@
-// cleanup_workspaces: every day at 03:00 Asia/Tokyo (see
-// cleanup_workspaces.schedule.yaml), removes worktrees left behind by
-// terminal work items past `config.worktree_ttl_days`, terminates orphaned
-// headless Claude processes past orphanClaudeThresholdSec, and records
-// `/workspaces`'s disk usage — plan §4 "cleanup_workspaces" / §4b.
+// 毎日03:00(JST)に、`config.worktree_ttl_days`を過ぎた終端状態の作業項目が
+// 残したworktreeを削除し、閾値(`orphanClaudeThresholdSec`)を超えて動いている
+// 孤立したheadless Claudeプロセスを終了させ、`/workspaces`のディスク使用量を記録する。
 //
-// Pure decision/parsing logic (worktree path naming, grouping stale items
-// by repo, parsing `ps`/`du` output, the SIGTERM->SIGKILL escalation) lives
-// in ./lib/cleanup_support.ts; this file is I/O wiring only, and never lets
-// one stale item's failure stop the rest of the sweep.
+// 判断と解析の純粋なロジック(worktreeのパスの命名、古いitemのリポジトリ別の
+// まとめ、`ps`・`du`の出力の解析、SIGTERMからSIGKILLへの切り替え)は
+// `./lib/cleanup_support.ts`にあり、このファイルは入出力をつなぐだけ。
+// 1件の失敗で掃除全体を止めない。
 //
-// A worktree an active work item still uses (its req-<N> dir, its implement
-// branch, or an active pr_fix's PR head branch) is never removed
-// (lib/cleanup_support.ts's excludeActiveWorktrees, 工程3 design §12; a
-// repository whose active pr_fix head cannot be resolved is skipped for the
-// day with a notice — partitionRepoGroups), and a
-// headless Claude process counts as orphaned only past the longer of
-// claude_timeout_sec and implement_timeout_sec plus a grace period
-// (orphanClaudeThresholdSec).
+// 進行中の作業項目が使っているworktree(`req-<N>`のディレクトリ、
+// 実装ブランチ、進行中のpr_fixのPRのheadブランチ)は削除しない
+// (`excludeActiveWorktrees`)。進行中のpr_fixのheadブランチを解決できない
+// リポジトリは、その日の掃除を飛ばしてnoticeを残す(`partitionRepoGroups`)。
+// headless Claudeプロセスを孤立とみなすのは、`claude_timeout_sec`と
+// `implement_timeout_sec`の長い方に猶予を足した時間を過ぎたものだけ。
 
 import * as wmill from "windmill-client@1.817.0";
 import {
@@ -46,21 +42,17 @@ import {
   runCommand,
   type WorktreeEntry,
 } from "./lib/workspace.ts";
-// buildReviewWorktreeDir is reused directly from its owning step (rather
-// than duplicated, unlike requirementsWorktreeDir in lib/cleanup_support.ts
-// — team-lead direction) since, unlike req-* worktrees, a review-* dir's
-// name embeds the reviewed commit's sha, and work_items.head_sha is the
-// single source of truth for that sha already, making a duplicate formula
-// more error-prone to keep in sync than importing the one pr_review_prepare
-// itself uses to create the worktree.
+// `buildReviewWorktreeDir`は、複製せずworktreeを作るstepから直接importする。
+// `req-*`と違い`review-*`のディレクトリ名はレビューしたコミットのshaを含み、
+// そのshaの正本は`work_items.head_sha`にある。式を複製すると同期を保ちにくく、
+// `pr_review_prepare`自身が使う関数を使う方が間違いにくいため。
 import { buildReviewWorktreeDir } from "./steps/pr_review_prepare.ts";
 
 const WORKSPACES_ROOT = "/workspaces";
 
 // ---------------------------------------------------------------------------
-// Worktree cleanup (req-* and the 工程3 implement-branch worktree for
-// issue-kind, review-* for pr_review-kind, gtr branch worktree for
-// pr_fix-kind)
+// worktreeの掃除(issue種別は`req-*`と実装ブランチのworktree、
+// pr_review種別は`review-*`、pr_fix種別はgtrのブランチのworktree)
 // ---------------------------------------------------------------------------
 
 async function removeStaleWorktreesForRepo(
@@ -156,10 +148,12 @@ async function removeStaleWorktreesForRepo(
   return removedDirs.size;
 }
 
-/** Every active work item's WorktreeHolder. A pr_fix item's branch is its
- * PR's head ref (getPr); one that cannot be resolved lands in
- * `unresolved` — the caller then skips that repository's sweep for today
- * rather than guess (partitionRepoGroups), and sweeps the others. */
+/**
+ * 進行中のすべての作業項目について、使っているworktreeの持ち主
+ * (`WorktreeHolder`)を返す。pr_fixのブランチはPRのheadの参照(`getPr`)を使う。
+ * 解決できなかったitemは`unresolved`に入れる。呼び出し側は推測で消さず、
+ * そのリポジトリだけその日の掃除を飛ばし(`partitionRepoGroups`)、他は掃除する。
+ */
 async function activeWorktreeHolders(
   ghClient: GhClient,
   log: Logger,
@@ -205,9 +199,11 @@ async function activeWorktreeHolders(
   return { holders, unresolved };
 }
 
-/** Sweeps the stale items' worktrees repo by repo. The active holders are
- * listed only when there is something stale; a repo with an unresolved
- * holder is skipped with one notice naming it. */
+/**
+ * 古いitemのworktreeをリポジトリごとに掃除し、削除した数を返す。
+ * 進行中の持ち主は、古いitemがあるときだけ一覧にする。
+ * 持ち主を解決できないリポジトリは飛ばし、その名前を載せたnoticeを1件残す。
+ */
 async function removeStaleWorktrees(
   staleItems: readonly WorkItem[],
   ghToken: string,
@@ -249,7 +245,7 @@ async function removeStaleWorktrees(
 }
 
 // ---------------------------------------------------------------------------
-// Orphaned headless Claude processes
+// 孤立したheadless Claudeプロセス
 // ---------------------------------------------------------------------------
 
 async function terminateOrphanClaudeProcesses(
@@ -277,7 +273,7 @@ async function terminateOrphanClaudeProcesses(
 }
 
 // ---------------------------------------------------------------------------
-// Disk usage
+// ディスク使用量
 // ---------------------------------------------------------------------------
 
 async function recordDiskUsage(log: Logger): Promise<number> {

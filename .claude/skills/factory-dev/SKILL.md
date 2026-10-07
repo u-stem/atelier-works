@@ -7,20 +7,20 @@ description: 本リポジトリ (atelier-works) の開発環境をセットア�
 
 ## 前提
 
-- ホストに必要なのは **docker(DesktopまたはOrbStack)とmise** のみ。それ以外(node, bun, gh, windmill-cli)はすべて`mise install`で入る。JSの依存関係(`bun install --frozen-lockfile`など)は`mise install`の後に`mise run setup`が入れる。
+- ホストに必要なのは**docker(DesktopまたはOrbStack)とmise**のみ。それ以外(node, bun, gh, windmill-cli)はすべて`mise install`で入る。JSの依存関係(`bun install --frozen-lockfile`など)は`mise install`の後に`mise run setup`が入れる。
 - 初回は`mise trust`を実行してこのリポジトリの`mise.toml`を信頼する。
 
 ## 秘密情報の設定
 
 - 秘密ではない設定は`mise.toml`の`[env]`に平文でコミットする。
 - 個人の秘密値(`DB_PASSWORD`、`WM_ADMIN_EMAIL`、`WM_ADMIN_PASSWORD`、`GITHUB_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`、`DISCORD_WEBHOOK_URL`)は`.env`を使わず、gitignore済みの`mise.local.toml`に置く。テンプレートは`mise.local.toml.example`。
-- 値の投入は人が行う。推奨コマンド(zsh / bash共通で動く形。値に`!`などの記号を含んでもシェル履歴展開で失敗せず、平文がシェル履歴に残らない):
+- 値の投入は人が行う。推奨コマンドは次のとおり(値に`!`などの記号を含んでもシェル履歴展開で失敗せず、平文がシェル履歴に残らない)。zshでは次のように書く。
 
   ```sh
   read -rs 'v?DB_PASSWORD: ' && mise set -E local DB_PASSWORD="$v"; unset v
   ```
 
-  bashの場合は次のように書く:
+  bashの場合は次のように書く。
 
   ```sh
   read -rs -p 'DB_PASSWORD: ' v && mise set -E local DB_PASSWORD="$v"; unset v
@@ -38,15 +38,15 @@ description: 本リポジトリ (atelier-works) の開発環境をセットア�
 
 ### GitHub Personal Access Token(`GITHUB_TOKEN`)
 
-1. GitHub右上のアイコン → **Settings** → **Developer settings** → **Personal access tokens** → **Fine-grained tokens** → **Generate new token** を開く。
+1. GitHub右上のアイコン → **Settings** → **Developer settings** → **Personal access tokens** → **Fine-grained tokens** → **Generate new token**を開く。
 2. **Token name**: `atelier-works-factory`(複数インスタンスで運用する場合は`atelier-works-factory-<instance_name>`)
 3. **Description**: `Software Factory worker (Issues/PR automation)`
-4. **Resource owner**: 対象リポジトリの所有者(個人アカウントor org)を選ぶ。
+4. **Resource owner**: 対象リポジトリの所有者(個人アカウントまたはorg)を選ぶ。
 5. **Expiration**: Customで1年後(最長)を選ぶ。期限切れは`mise run doctor`と`poll_issues`が検出する。
 6. **Repository access**: Only select repositories → 拾わせるリポジトリ(sandboxリポジトリを含む)を選ぶ。
-7. **Repository permissions** を設定する: Issues = Read and write / Contents = Read and write(`pr_fix`の修正pushに必要)/ Metadata = Read-only(Issues/Contents選択時に自動付与)/ Pull requests = Read and write。
+7. **Repository permissions**を設定する: Issues = Read and write / Contents = Read and write(`pr_fix`の修正pushに必要)/ Metadata = Read-only(Issues/Contents選択時に自動付与)/ Pull requests = Read and write。
 8. **Account permissions**: すべてNo accessのままにする。
-9. **Generate token** を押し、表示された`github_pat_...`を次のコマンドで投入する(orgリポジトリではorg側の承認が必要な場合がある):
+9. **Generate token**を押し、表示された`github_pat_...`を次のコマンドで投入する(orgリポジトリではorg側の承認が必要な場合がある)。
 
    ```sh
    read -rs 'v?GITHUB_TOKEN: ' && mise set -E local GITHUB_TOKEN="$v"; unset v
@@ -55,7 +55,7 @@ description: 本リポジトリ (atelier-works) の開発環境をセットア�
 ### Claude Code OAuthトークン(`CLAUDE_CODE_OAUTH_TOKEN`)
 
 1. ホストにインストール済みのClaude Code CLIで`claude setup-token`を実行する。
-2. 表示されたサブスク長期OAuthトークンを次のコマンドで投入する:
+2. 表示されたサブスク長期OAuthトークンを次のコマンドで投入する。
 
    ```sh
    read -rs 'v?CLAUDE_CODE_OAUTH_TOKEN: ' && mise set -E local CLAUDE_CODE_OAUTH_TOKEN="$v"; unset v
@@ -65,7 +65,7 @@ description: 本リポジトリ (atelier-works) の開発環境をセットア�
 
 1. 通知先のDiscordチャンネルで「チャンネル設定」→「連携サービス」→「ウェブフック」→「新しいウェブフック」を開く。
 2. 名前を`Software Factory`に設定する。
-3. 「ウェブフックURLをコピー」でURLを取得し、次のコマンドで投入する:
+3. 「ウェブフックURLをコピー」でURLを取得し、次のコマンドで投入する。
 
    ```sh
    read -rs 'v?DISCORD_WEBHOOK_URL: ' && mise set -E local DISCORD_WEBHOOK_URL="$v"; unset v

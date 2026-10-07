@@ -78,7 +78,7 @@ describe("runCommand", () => {
 describe("createBunCommandRunner SIGTERM -> SIGKILL escalation", () => {
   test("escalates to SIGKILL after killGraceMs when the process ignores SIGTERM", async () => {
     const run = createBunCommandRunner({ killGraceMs: 30 });
-    // Ignore SIGTERM so the process only dies via the SIGKILL escalation.
+    // SIGTERMを無視させ、SIGKILLへの切り替えでしか終了しないようにする。
     const result = await run(["sh", "-c", "trap '' TERM; sleep 5"], {
       timeoutMs: 30,
     });
@@ -89,8 +89,8 @@ describe("createBunCommandRunner SIGTERM -> SIGKILL escalation", () => {
     const run = createBunCommandRunner({ killGraceMs: 5_000 });
     const start = Date.now();
     await run(["sleep", "5"], { timeoutMs: 30 });
-    // If SIGKILL's 5s grace timer had to fire, this would take >5s; a
-    // process that dies immediately on SIGTERM should return well under it.
+    // SIGKILLまでの5秒の猶予が過ぎるのを待てば5秒を超える。
+    // SIGTERMですぐ終了するプロセスなら、それより十分短く返る。
     expect(Date.now() - start).toBeLessThan(2_000);
   });
 });
@@ -176,7 +176,7 @@ describe("withRepoLock", () => {
     const lockFs: LockFs = {
       tryCreate: async () => false,
       read: async () => JSON.stringify({ token: "someone-else" }),
-      mtimeMs: async () => virtualNowMs, // always "just touched" -> never stale
+      mtimeMs: async () => virtualNowMs, // 常に「更新したばかり」なので古いロックと判定されない
       remove: async () => {},
     };
 
@@ -245,8 +245,8 @@ describe("withRepoLock", () => {
       lockPath: "/tmp/reclaimed.lock",
       lockFs,
       fn: async () => {
-        // Simulate another process reclaiming the lock (different token)
-        // while we were still "running" fn().
+        // `fn()`の実行中に、別のプロセスが別のトークンで
+        // ロックを取り直した状況を再現する。
         store.set(
           "/tmp/reclaimed.lock",
           JSON.stringify({ token: "someone-else" }),
@@ -257,12 +257,11 @@ describe("withRepoLock", () => {
     expect(removeCalls).toBe(0);
   });
 
-  // Real bug (E2E, post-launch fix): `ensureFactoryClone`'s lock path's
-  // parent dir (e.g. `/workspaces/factory/`) doesn't exist yet on a
-  // container's first-ever run, before the clone that would create it —
-  // `tryCreate`'s real `open(path, "wx")` then fails with `ENOENT`
-  // (`pipeline_prepare` crashed on this in E2E), which the lock's own
-  // "already locked" retry logic only ever expected to be `EEXIST`.
+  // コンテナの初回実行では、クローンより前の時点で
+  // `ensureFactoryClone`のロックの親ディレクトリ(例: `/workspaces/factory/`)がまだ無い。
+  // このとき実際の`tryCreate`の`open(path, "wx")`は`ENOENT`で失敗する。
+  // ロック取得の再試行は「ロック済み」を表す`EEXIST`しか想定しておらず、
+  // E2Eでは`pipeline_prepare`がこれで異常終了した。
   test("acquires the lock even when its parent directory doesn't exist yet (mkdir -p first)", async () => {
     let dirEnsured = false;
     const store = new Map<string, string>();
@@ -413,13 +412,12 @@ describe("ensureRepo", () => {
     ).rejects.toThrow();
   });
 
-  // Re-gate fix (adopted, High): `-c core.symlinks=false` on
-  // `addDetachedWorktree`'s `worktree add` (and the `GIT_CONFIG_*` on `git
-  // gtr new`) only applies to that ONE invocation — every later operation
-  // on the same repo (`git status`, `add -A`, `commit`, and critically the
-  // gtr-reuse `reset --hard`) runs with git's default `core.symlinks=true`
-  // unless the setting is persisted into the main clone's config, which
-  // every worktree of it shares.
+  // `addDetachedWorktree`の`worktree add`に付ける`-c core.symlinks=false`と、
+  // `git gtr new`に渡す`GIT_CONFIG_*`は、その1回の呼び出しにしか効かない。
+  // 設定を本体のクローンのconfigに書き込まないと、同じリポジトリでの後続の操作
+  // (`git status`、`add -A`、`commit`、特に再利用時の`reset --hard`)は
+  // gitの既定の`core.symlinks=true`で動く。
+  // 本体のconfigは、そのクローンのすべてのworktreeが共有する。
   test("persists core.symlinks=false into the main clone's config after cloning", async () => {
     const fake = createFakeCommandRunner([ok(), ok(), ok()]);
     await ensureRepo({
@@ -455,11 +453,11 @@ describe("ensureRepo", () => {
 
 describe("factoryCloneLockPath", () => {
   test("is the sibling <dir>.lock file, not the worktree helpers' lock", () => {
-    // Arrange
+    // 準備
     const dir = "/workspaces/factory/atelier-works";
-    // Act
+    // 実行
     const lockPath = factoryCloneLockPath(dir);
-    // Assert
+    // 検証
     expect(lockPath).toBe("/workspaces/factory/atelier-works.lock");
   });
 });
@@ -481,7 +479,7 @@ describe("ensureFactoryClone", () => {
     });
   });
 
-  test("clones with --branch <branch> --single-branch (M7 factory_branch, required — no default)", async () => {
+  test("clones with --branch <branch> --single-branch (factory_branch is required — no default)", async () => {
     const fake = createFakeCommandRunner([ok()]);
     await ensureFactoryClone({
       run: fake.run,
@@ -547,7 +545,7 @@ describe("ensureFactoryClone", () => {
     );
   });
 
-  test("checks out -B the *configured* branch even when the existing clone was left on a different one (M7 re-gate: a prior caller defaulting to main must not stick)", async () => {
+  test("checks out -B the *configured* branch even when the existing clone was left on a different one (a prior caller defaulting to main must not stick)", async () => {
     const fake = createFakeCommandRunner([ok(), ok(), ok()]);
     await ensureFactoryClone({
       run: fake.run,
@@ -693,9 +691,10 @@ describe("addDetachedWorktree", () => {
   });
 });
 
-// A registered worktree of /tmp/repo (REAL_WORKTREE_PORCELAIN) and fs
-// stand-ins for its `.git` pointer check: a canonical pointer passes, a
-// redirected one fails verifyWorktreeGitdir.
+// `/tmp/repo`に登録済みのworktree(`REAL_WORKTREE_PORCELAIN`)と、
+// その`.git`ポインタの検査に使うファイルシステムの代用品。
+// 正規のポインタは`verifyWorktreeGitdir`を通り、
+// 向け先を変えたポインタは失敗する。
 const REUSED_REPO = "/tmp/repo";
 const REUSED_WT = "/tmp/repo-worktrees/contract-smoke-branch";
 function pointerFsDeps(pointerOk: boolean): {
@@ -728,7 +727,7 @@ function pointerFsDeps(pointerOk: boolean): {
 }
 
 describe("removeWorktree", () => {
-  // [0] git worktree list (the pointer check), [1] remove, [2] prune.
+  // [0] `git worktree list`(ポインタの検査)、[1] remove、[2] prune。
   const verified = () =>
     createFakeCommandRunner([ok(REAL_WORKTREE_PORCELAIN), ok(), ok()]);
 
@@ -774,7 +773,7 @@ describe("removeWorktree", () => {
     const lockFs = createInMemoryLockFs();
     let sawLockDuringRun = false;
     const fake = verified();
-    // Peek at the lock file mid-flight via a wrapping run that checks the lock exists.
+    // コマンド実行を包み、実行の途中でロックファイルがあるかを確かめる。
     const runAndCheck: typeof fake.run = async (argv, options) => {
       sawLockDuringRun =
         (await lockFs.read("/tmp/main.lock")) !== null || sawLockDuringRun;
@@ -791,7 +790,7 @@ describe("removeWorktree", () => {
   });
 
   describe("when the .git pointer fails verification", () => {
-    // [0] list (pointer check), [1] list (fallback guard), [2] prune.
+    // [0] list(ポインタの検査)、[1] list(代替の削除経路での安全確認)、[2] prune。
     const unverified = () =>
       createFakeCommandRunner([
         ok(REAL_WORKTREE_PORCELAIN),
@@ -907,8 +906,8 @@ describe("pruneWorktrees", () => {
   });
 });
 
-// Real `git worktree list --porcelain` output captured during the M4
-// contract smoke (spec-cycle2.md §7 item 14), paths genericized.
+// 実際に採取した`git worktree list --porcelain`の出力。
+// パスは一般的な名前に置き換えた。
 const REAL_WORKTREE_PORCELAIN = [
   "worktree /tmp/repo",
   "HEAD c4c85336fb74d3bc13cca578c870a39583722c58",
@@ -1012,16 +1011,16 @@ describe("createGtrWorktree", () => {
     expect(fake.calls.some((call) => call.argv.includes("gtr"))).toBe(false);
   });
 
-  // devil-advocate fix (adopted, fatal): a previous round's timed-out /
-  // cancelled Claude run can leave stray edits sitting in a reused
-  // worktree; without resetting to the branch's current remote state first,
-  // those stray edits would get swept into the *next* round's `git add -A`
-  // (commitAndPush), and — if a human had since pushed to the branch
-  // directly — the reused worktree's stale local history would also make
-  // the next push non-fast-forward. Reusing a worktree now fetches, hard-
-  // resets, and cleans it back to a pristine `origin/<branch>` state before
-  // handing it back. New worktrees (via `git gtr new`) don't need this:
-  // they're freshly created from the current remote state already.
+  // 前のラウンドでClaudeの実行がタイムアウトや中断で終わると、
+  // 再利用するworktreeに余計な編集が残ることがある。
+  // ブランチのリモートの最新状態に戻さないと、その編集が次のラウンドの
+  // `git add -A`(`commitAndPush`)に紛れ込む。
+  // 人がその間にブランチへ直接pushしていれば、古いローカル履歴のせいで
+  // 次のpushがfast-forwardでなくなる。
+  // そのため再利用するworktreeは、fetch、`reset --hard`、cleanで
+  // `origin/<branch>`の状態に戻してから渡す。
+  // `git gtr new`で作る新しいworktreeはリモートの最新状態から作るため、
+  // この処理は要らない。
   describe("reuse path: fetch -> reset --hard -> clean (fixes stale-worktree bug)", () => {
     test("fetches origin/<branch> first", async () => {
       const fake = createFakeCommandRunner([
@@ -1163,8 +1162,8 @@ describe("createGtrWorktree", () => {
 
   describe("reuse path when the .git pointer fails verification", () => {
     const gtrPorcelain = `path\t${REUSED_WT}\nbranch\tcontract-smoke-branch\nhook_status\tnone\n`;
-    // [0] list (reuse lookup), [1] list (pointer check), [2] list (fallback
-    // guard), [3] prune, [4] gtr new.
+    // [0] list(再利用の検索)、[1] list(ポインタの検査)、
+    // [2] list(代替の削除経路での安全確認)、[3] prune、[4] gtr new。
     const recreate = async () => {
       const fake = createFakeCommandRunner([
         ok(REAL_WORKTREE_PORCELAIN),
@@ -1266,7 +1265,8 @@ describe("createGtrWorktree", () => {
 describe("verifyWorktreeGitdir", () => {
   const WT = "/tmp/repo-worktrees/contract-smoke-branch";
   const GITDIR = "/tmp/repo/.git/worktrees/contract-smoke-branch";
-  // realpath stand-in: normalizes `..` like the real one (no symlinks here).
+  // `realpath`の代用品。本物と同じく`..`を正規化する
+  // (ここではシンボリックリンクは無い)。
   const normalize = async (path: string): Promise<string> => resolve(path);
   function files(
     pointer: string,
@@ -1350,8 +1350,8 @@ describe("verifyWorktreeGitdir", () => {
     ).rejects.toThrow(/does not point under/);
   });
 
-  // git reads the pointer as exactly "gitdir: <path>" minus trailing CR/LF;
-  // any other spacing makes git read a different (relative) directory.
+  // gitはポインタを、末尾のCR/LFを除いた"gitdir: <path>"の形でそのまま読む。
+  // 空白の入り方が違うと、gitは別の(相対パスの)ディレクトリとして読む。
   const verifyPointer = (pointer: string) =>
     verifyWorktreeGitdir({
       run: createFakeCommandRunner([ok(REAL_WORKTREE_PORCELAIN)]).run,
@@ -1693,7 +1693,7 @@ describe("commitAndPush", () => {
       ok(),
       ok(`${HEAD_SHA}\n`),
       ok(), // git add -A
-      ok(""), // git status --porcelain (empty = clean)
+      ok(""), // git status --porcelain(空なら変更なし)
     ]);
     const result = await commitAndPush({
       run: fake.run,
@@ -1769,15 +1769,15 @@ describe("commitAndPush", () => {
     const fake = commitAndPushCalls([
       ok("fix/branch\n"), // rev-parse --abbrev-ref HEAD
       ok(), // fetch origin fix/branch
-      ok(`${HEAD_SHA}\n`), // rev-parse --verify origin/fix/branch (matches expectedHeadSha)
+      ok(`${HEAD_SHA}\n`), // rev-parse --verify origin/fix/branch(`expectedHeadSha`と一致する)
       ok(), // git add -A
       ok(" M file.ts\n"), // git status --porcelain
       ok(), // git commit
       fail(
         "! [rejected]        fix/branch -> fix/branch (fetch first)\nerror: failed to push some refs",
       ), // git push
-      ok(), // re-fetch origin fix/branch after rejection
-      ok(`${raceSha}\n`), // rev-parse --verify origin/fix/branch after rejection
+      ok(), // 拒否されたあとにorigin fix/branchを取り直す
+      ok(`${raceSha}\n`), // 拒否されたあとのrev-parse --verify origin/fix/branch
     ]);
     const result = await commitAndPush({
       run: fake.run,
@@ -2161,7 +2161,7 @@ describe("pushNewBranch", () => {
 
   test("pushes the branch when the remote does not have it yet", async () => {
     const fake = createFakeCommandRunner([
-      fail("", 2), // ls-remote --exit-code: no matching ref
+      fail("", 2), // ls-remote --exit-code: 一致するrefが無い
       ok(), // git push -u origin -- <branch>
     ]);
     const result = await pushNewBranch({

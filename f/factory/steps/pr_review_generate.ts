@@ -1,8 +1,8 @@
-// PathScript step for f/factory/pr_review: runs headless Claude Code
-// (factory-review skill, read-only tools) against the PR's diff/changed
-// files/body, plus the approved requirements draft when this PR belongs to
-// a factory-driven cycle (spec-cycle2.md §3 M6, §7 item 2 — cwd is the
-// detached worktree pr_review_prepare.ts built).
+// f/factory/pr_reviewフローのレビュー生成ステップ。
+// factory-reviewスキルと読み取り専用のツールでClaude Codeをヘッドレスで実行し、
+// PRのdiff・変更ファイル・本文をレビューさせる。PRがFactoryの起こしたサイクルに
+// 属するなら、承認済みの要件ドラフトも渡す。cwdは`pr_review_prepare.ts`が作った
+// detachedのworktreeである。
 
 import * as wmill from "windmill-client@1.817.0";
 import {
@@ -81,14 +81,10 @@ export async function main(
   const oauthToken = await wmill.getVariable("f/factory/claude_oauth_token");
   const client: GhClient = { run: runCommand, ghToken };
 
-  // team-lead fix round 1b item 3 / fix round 2 item b: same daily-budget
-  // guard as pipeline_generate.ts (lib/claude.ts's dailyBudgetStatus, same
-  // exceeded check and log.warn shape), run before any Claude call. Unlike
-  // pipeline_generate.ts — whose caller (pipeline.flow, via on_error_flow)
-  // has no separate "post the failure" step — pr_review has no downstream
-  // step that handles a non-post outcome, so the needs_human status
-  // transition, label removal, and Discord notice all happen right here
-  // rather than being deferred to pr_review_post.ts.
+  // Claudeを呼ぶ前に、`pipeline_generate.ts`と同じ日次予算の検査をする
+  // (`lib/claude.ts`の`dailyBudgetStatus`を使い、超過の判定とログの形も同じ)。
+  // pr_reviewには投稿しなかった結果を扱う後続ステップが無いため、
+  // `needs_human`への遷移とDiscordへの通知は`pr_review_post.ts`に回さずここで行う。
   const budgetStatus = await dailyBudgetStatus(config);
   if (budgetStatus.exceeded) {
     log.warn("daily budget exceeded, not starting claude", {
@@ -103,9 +99,8 @@ export async function main(
       `daily budget exceeded ($${budgetStatus.spent_usd.toFixed(2)} >= $${budgetStatus.limit_usd.toFixed(2)})`,
     );
     if (moved) {
-      // 2026-09-27 PR label cleanup: the review_label trigger was already
-      // consumed at claim time (poll_prs.ts), so there is no label left to
-      // remove here.
+      // トリガーの`review_label`は確保の時点で`poll_prs.ts`が外しているので、
+      // ここで外すラベルは無い。
       const webhookUrl = await wmill.getVariable(
         "f/factory/discord_webhook_url",
       );
@@ -148,9 +143,8 @@ export async function main(
       ? null
       : await latestDraft(parent_work_item_id);
 
-  // team-lead decision (2026-09-26): a re-review must not re-post a finding
-  // substantially the same as one that's already open — naturally empty on
-  // a PR's first review, since no threads exist yet.
+  // 再レビューで、未解決の指摘と実質的に同じ指摘を重ねて投稿させないために渡す。
+  // 最初のレビューではスレッドがまだ無いので空になる。
   const openFindings = openFindingsForPrompt(reviewThreads, viewer.login);
 
   const promptText = reviewPrompt({

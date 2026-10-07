@@ -1,10 +1,9 @@
-// audit_kickoff: entry point of 工程5. Runs weekly (audit_kickoff.schedule.yaml,
-// Monday 09:30 Asia/Tokyo, args.source = "schedule") and from the Console's
-// 今すぐ監査 button (source = "manual"). Decides the audit period, skips when
-// there is nothing actionable / another audit is active / the period is
-// empty / the daily budget is exceeded, otherwise inserts the audit work
-// item and starts f/factory/audit. Skips are returned and logged only —
-// never notified (nothing for a human to do).
+// 監査工程の起点。毎週月曜09:30(JST)のスケジュール(`source = "schedule"`)と、
+// Consoleの「今すぐ監査」ボタン(`source = "manual"`)から実行する。
+// 監査期間を決め、対応すべき記録が無い・別の監査が進行中・期間が空・
+// 日次予算を超えた場合は見送る。それ以外は監査の作業項目を挿入して
+// `f/factory/audit`を起動する。
+// 見送りは人がすることが無いので、戻り値とログに残すだけで通知しない。
 
 import * as wmill from "windmill-client@1.817.0";
 import { countActionableRecords } from "./lib/audit_evidence.ts";

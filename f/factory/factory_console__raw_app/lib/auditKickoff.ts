@@ -1,10 +1,8 @@
-// Pure "how should the 今すぐ監査 button's result banner read" mapping for
-// tabs/AuditTab.tsx — kept separate so it can be unit-tested without
-// mounting React. Only handles a *resolved* `kickoffAudit(...)` result: a
-// thrown/rejected call is a different failure mode, rendered via
-// lib/api.ts's `describeError` into its own error banner (see
-// AuditTab.tsx's `handleKickoff`), so this never needs to represent that
-// case.
+// `tabs/AuditTab.tsx`の「今すぐ監査」ボタンを押した後に出す結果の文言を決める関数。
+// Reactをマウントせずに単体テストできるよう分けている。
+// 扱うのは`kickoffAudit(...)`が正常に返した結果だけである。
+// 呼び出しが例外で失敗した場合は、`AuditTab.tsx`の`handleKickoff`が
+// `lib/api.ts`の`describeError`で別のエラー表示にする。
 
 import { isRecord, numOrNull } from "./coerce";
 

@@ -1,16 +1,16 @@
-# Seed template for the f/factory/factory_config resource (c_factory_config
-# resource type). This file is NOT synced (see wmill.yaml excludes) because
-# owners / instance_name / windmill_public_url are instance-specific.
+# リソース`f/factory/factory_config`(リソース型`c_factory_config`)の初期値の
+# テンプレート。`owners`・`instance_name`・`windmill_public_url`はインスタンス
+# 固有なので、このファイルはsyncしない(`wmill.yaml`の`excludes`を参照)。
 #
-# scripts/bootstrap.sh creates the resource from this template only if it
-# does not already exist remotely; once created, edit it via the Windmill UI
-# (or `wmill resource push`), never by re-running bootstrap.
+# `scripts/bootstrap.sh`は、リモートにリソースが無いときだけこのテンプレートから
+# 作る。作った後はWindmill UI(か`wmill resource push`)で編集し、bootstrapの
+# 実行し直しでは変えない。
 #
-# owners: leave empty until a human fills it in via the Windmill UI (empty
-# means the factory polls no repos - safe default). Example entry:
+# owners: 人がWindmill UIで入れるまで空にしておく(空ならFactoryはどの
+# リポジトリもポーリングしないので、安全な既定値)。記入例:
 #   owners:
-#     - name: <GitHub username or org>
-#       kind: user   # or "org"
+#     - name: <GitHubのユーザー名か組織名>
+#       kind: user   # または"org"
 value:
   owners: []
   trigger_label: factory

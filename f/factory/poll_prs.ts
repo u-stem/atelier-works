@@ -1,24 +1,20 @@
-// poll_prs: every 5 minutes (see poll_prs.schedule.yaml), detects pull
-// requests that should enter pr_review.flow or pr_fix.flow — spec-
-// cycle2.md §3 M5, §7 item 1. Reconcile for PR-kind work items (closed/
-// merged, orphan detection) lives in poll_issues.ts, which reconciles
-// every kind; this script only detects and starts new review/fix cycles.
+// 5分ごとに、pr_reviewフローかpr_fixフローに入れるべきPRを検出し、
+// 新しいレビュー・修正のサイクルを始める。PR種別の作業項目のreconcile
+// (クローズ・マージ、孤立の検出)は、全種別を扱う`poll_issues.ts`が行う。
 //
-// Decision logic lives in ./lib/poll_support.ts's decidePrActions (pure);
-// this file is I/O wiring only, and never throws on a single PR's
-// failure — see recordFailureSafe in poll_issues.ts's sibling helper here.
+// 判断は`./lib/poll_support.ts`の`decidePrActions`(純粋関数)にあり、
+// このファイルは入出力をつなぐだけ。1件のPRの失敗では例外を投げない
+// (`recordFailureSafe`を参照)。
 //
-// 2026-09-27 PR label cleanup: a PR carries only its two trigger labels
-// (`factory:review` / `factory:fix`), consumed at claim time — same policy
-// as the Issue side. There is no `wip` label and no state labels any more.
-// claimPr (below) removes whichever trigger label fired this cycle and
-// re-fetches to confirm, mirroring lib/github.ts's claimIssue; the
-// assignment-triggered review path (no label involved) skips claimPr
-// entirely. Once a trigger label is consumed, searchPrs's label queries can
-// no longer find that PR again, so listTrackedPrs (lib/db.ts) supplies
-// DB-backed rediscovery instead — see main() below.
+// PRに付くのは2つのトリガーラベル(`factory:review`・`factory:fix`)だけで、
+// Issueと同じく取得時に消費する。`wip`ラベルも状態ラベルも無い。
+// `claimPr`は今回のサイクルを起こしたトリガーラベルを外し、取り直して
+// 確かめる(`lib/github.ts`の`claimIssue`と同じ方式)。assignで起きるレビューは
+// ラベルが関わらないので`claimPr`を通らない。トリガーラベルを消費すると
+// `searchPrs`のラベル検索ではそのPRを見つけられなくなるため、
+// `listTrackedPrs`がDBから見つけ直す(`main()`を参照)。
 
-// Pinned to 1.817.0 to match the deployed server version (per lib-core).
+// デプロイ先のサーバーの版に合わせて1.817.0に固定する。
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "./lib/config.ts";
 import {
@@ -94,36 +90,33 @@ function activeItemsByPr(active: readonly WorkItem[]): Map<string, WorkItem[]> {
 }
 
 // ---------------------------------------------------------------------------
-// team-lead fix round 2 item f: watermark contract — "observed" (what
-// poll_prs saw when it claimed a work item, set unconditionally every
-// claim) vs "last" (what pr_fix_finish has actually replied to / processed,
-// bumped only on a completed round) are tracked as separate column pairs
-// per id space (review / issue-comment / inline-review-comment — see
-// migrations/datatable/main/20260925211232_pr_watermarks_and_inbox.up.sql's
-// column comments). Kept as sibling structures alongside PrCandidate (the
-// shared lib/poll_support.ts type decidePrActions consumes) rather than
-// widening PrCandidate itself, since decidePrActions has no use for them and
-// this file must not edit lib/poll_support.ts.
+// watermarkの約束。id空間(レビュー・Issueコメント・インラインのレビュー
+// コメント)ごとに、2種類の列を分けて持つ。
+// - observed: 作業項目を取得したときに`poll_prs`が見た値。取得のたびに必ず書く。
+// - last: `pr_fix_finish`が実際に返信・処理した値。ラウンドを完了したときだけ進める。
+// 列の意味は`migrations/datatable/main/20260925211232_pr_watermarks_and_inbox.up.sql`
+// の列コメントを参照。これらは`PrCandidate`を広げず、並べた別の構造で持つ。
+// `PrCandidate`を受け取る`decidePrActions`はこれらを使わないため。
 // ---------------------------------------------------------------------------
 
-/** The new pr_fix row's own last_* 3 columns carry forward from these —
- * the previous *pr_fix-kind* row's own last_* (what that round actually
- * finished processing), never this poll's observed max. */
+/**
+ * 新しいpr_fixの行の`last_*`の3列に引き継ぐ値。
+ * 前回の「pr_fix種別の」行の`last_*`(そのラウンドが処理を終えた位置)を使い、
+ * 今回のポーリングで観測した最大値は使わない。
+ */
 type PrFixSeed = {
   readonly lastReviewId: number;
   readonly lastCommentId: number;
   readonly lastReviewCommentId: number;
 };
 
-/** This poll's own observed max ids, recorded via setObservedWatermarks at
- * claim time regardless of kind (review or fix). No `commentId` here: that
- * field only ever fed `observed_comment_id`, whose sole reader was this
- * function's own (since removed) comment-command re-detection cutoff — removed
- * 2026-09-26 per the user decision that pr_fix starts only via the
- * `fix_label`, never from a comment (see decidePrActions in
- * lib/poll_support.ts). Nothing else in this codebase reads
- * `observed_comment_id`, so it is left uncomputed rather than written with
- * no reader; the column itself is untouched (see the migration). */
+/**
+ * 今回のポーリングで観測した最大のid。種別(レビュー・修正)を問わず、
+ * 取得時に`setObservedWatermarks`で記録する。
+ * `commentId`は持たない。pr_fixはコメントからは始めず`fix_label`だけで
+ * 始めるので、`observed_comment_id`を読む処理がどこにも無いため。
+ * 読み手のいない値は計算しないが、列そのものは残している。
+ */
 type ObservedSeed = {
   readonly reviewId: number;
   readonly reviewCommentId: number;
@@ -133,9 +126,11 @@ type PrCandidateContext = {
   readonly candidate: PrCandidate;
   readonly prevFixSeed: PrFixSeed;
   readonly observed: ObservedSeed;
-  /** The approved-or-later pipeline work item for the issue this PR's body
-   * closes (Closes/Fixes/Resolves #N), if any — becomes the new
-   * pr_review/pr_fix row's parent_work_item_id. */
+  /**
+   * PRの本文が閉じるIssue(`Closes/Fixes/Resolves #N`)に対応する、承認済み
+   * 以降のpipelineの作業項目。あれば、新しいpr_review・pr_fixの行の
+   * `parent_work_item_id`になる。無ければ`null`。
+   */
   readonly linkedParentWorkItemId: number | null;
 };
 
@@ -149,10 +144,8 @@ async function buildPrCandidate(
   viewerLogin: string,
   activeForPr: readonly WorkItem[],
 ): Promise<PrCandidateContext> {
-  // `latestFix` (needed before startFix's carry-forward regardless) is
-  // fetched first; the rest run in parallel off it.
-  // latestPrWorkItem now returns the full WorkItem row directly (lib-core
-  // push), so no follow-up getWorkItem(id) round trip is needed.
+  // `startFix`の引き継ぎに要る`latestFix`を先に取得し、残りはその後に並列で取る。
+  // `latestPrWorkItem`は行全体を返すので、`getWorkItem(id)`で引き直さない。
   const [latestAny, latestFix] = await Promise.all([
     latestPrWorkItem(found.owner, found.repo, found.number),
     latestPrWorkItem(found.owner, found.repo, found.number, { kind: "pr_fix" }),
@@ -171,11 +164,10 @@ async function buildPrCandidate(
     ),
   ]);
 
-  // team-lead: link a human-authored PR to its approved requirements —
-  // the first issue this PR's own body closes (Closes/Fixes/Resolves #N),
-  // if that issue has an approved-or-later pipeline work item, becomes
-  // this new pr_review/pr_fix row's parent_work_item_id the same way a
-  // factory-opened PR already gets one from requirements_apply.ts.
+  // 人が作ったPRも承認済みの要件に結びつける。PRの本文が最初に閉じるIssue
+  // (`Closes/Fixes/Resolves #N`)に承認済み以降のpipelineの作業項目があれば、
+  // それを新しいpr_review・pr_fixの行の`parent_work_item_id`にする。
+  // Factoryが作ったPRが`requirements_apply.ts`で親を得るのと同じ扱い。
   const linkedIssueNumbers = extractLinkedIssueNumbers(
     pr.body,
     found.owner,
@@ -226,17 +218,14 @@ export type ClaimPrResult =
   | { readonly claimed: false; readonly reason: string };
 
 /**
- * Claims a PR by consuming `triggerLabel` — the `review_label` or
- * `fix_label` that fired this cycle — no assignee (2026-09-27 policy,
- * mirrors lib/github.ts's `claimIssue`: assigning the factory's viewer
- * login to a PR would make `assignee:<viewer>` match it in GitHub search
- * forever afterward, turning every PR the factory has ever touched into a
- * standing search hit). Removes the label, then re-fetches to confirm it's
- * actually gone — the same "act then re-fetch to confirm" shape as
- * claimIssue (spec-cycle2.md §1 github.ts "claimIssue... 再取得で確認"), since
- * GitHub's label endpoints can silently no-op under some races. Not called
- * for the assignment-triggered review path (no label involved — see
- * main()).
+ * 今回のサイクルを起こした`triggerLabel`(`review_label`か`fix_label`)を
+ * 消費してPRを取得する。外せなかった、または外した後も残っていたら
+ * `claimed: false`と理由を返す。副作用としてPRからラベルを外す。
+ * assigneeは付けない(`claimIssue`と同じ)。Factoryのログインをassignすると、
+ * GitHub検索の`assignee:<viewer>`にそのPRが以後ずっと当たり続けるため。
+ * ラベルを外した後に取り直して確かめるのは、競合時にGitHubのラベルの
+ * APIが黙って何もしないことがあるため。
+ * assignで起きるレビューはラベルが関わらないので、これを呼ばない。
  */
 export async function claimPr(
   client: GhClient,
@@ -248,9 +237,8 @@ export async function claimPr(
   try {
     await removeLabel(client, owner, repo, number, triggerLabel);
   } catch (err) {
-    // This reason string flows into main()'s claim_race_lost addNotice call
-    // below — mask it the same way every other gh-failure-derived message
-    // in this file already is.
+    // この理由は`main()`の`claim_race_lost`のnoticeに載るので、
+    // ghの失敗に由来する他のメッセージと同じくマスクする。
     return {
       claimed: false,
       reason: `failed to remove trigger label: ${maskSecrets(err instanceof Error ? err.message : String(err))}`,
@@ -292,19 +280,17 @@ async function startReview(
     head_sha: candidate.headSha,
     parent_work_item_id: linkedParentWorkItemId,
   });
-  // team-lead fix round 2 item f: pr_review never consumes last_* (it
-  // doesn't gather "feedback since a watermark" the way pr_fix does) — only
-  // the observed snapshot is recorded here.
+  // pr_reviewはpr_fixと違いwatermark以降の指摘を集めないので、`last_*`を
+  // 使わない。ここでは観測した値だけを記録する。
   await setObservedWatermarks(workItemId, {
     observed_review_id: observed.reviewId,
     observed_review_comment_id: observed.reviewCommentId,
   });
-  // No "started reviewing" PR comment: claim idempotency rests on this
-  // PR's non-terminal work_items rows (decidePrActions), never on a
-  // comment, and an unrequested factory narration comment on a human's PR
-  // is noise. Re-discovery once the trigger label has been consumed comes
-  // from the DB (`listTrackedPrs`, 2026-09-27 policy), not from any label
-  // or comment.
+  // 「レビューを始めた」というPRコメントは投稿しない。取得の冪等性は
+  // コメントではなく、このPRの終端でない作業項目の行(`decidePrActions`)で
+  // 保つ。人のPRに頼まれていない実況コメントを付けても雑音になる。
+  // トリガーラベルを消費した後は、ラベルやコメントではなくDB
+  // (`listTrackedPrs`)から見つけ直す。
   const flowJobId = await wmill.runFlowAsync("f/factory/pr_review", {
     work_item_id: workItemId,
   });
@@ -340,11 +326,10 @@ async function startFix(
     parent_work_item_id: linkedParentWorkItemId,
   });
   await setFixRound(workItemId, round);
-  // team-lead fix round 2 item f: seed the new row's last_* 3 columns by
-  // carrying forward the previous pr_fix-kind row's own last_* (what that
-  // round actually finished processing) — bumpWatermarks's GREATEST-based
-  // UPDATE is a safe seed here since the new row starts at NULL/0 — then
-  // record this poll's own observed snapshot separately.
+  // 新しい行の`last_*`の3列に、前回のpr_fix種別の行の`last_*`(そのラウンドが
+  // 処理を終えた位置)を引き継ぐ。新しい行はNULLか0から始まるので、
+  // `GREATEST`で更新する`bumpWatermarks`で初期値を入れても安全。
+  // 今回観測した値は別に記録する。
   await bumpWatermarks(workItemId, {
     last_review_id: prevFixSeed.lastReviewId,
     last_comment_id: prevFixSeed.lastCommentId,
@@ -354,11 +339,9 @@ async function startFix(
     observed_review_id: observed.reviewId,
     observed_review_comment_id: observed.reviewCommentId,
   });
-  // team-lead (batch B/C round): no "started fixing round N" PR comment —
-  // see startReview's identical note above for why claim idempotency
-  // doesn't depend on it. Re-discovery once the trigger label falls off now
-  // comes from the state label pr_fix_finish.ts sets on this PR (team-lead
-  // design, 2026-09-26), not from a factory-authored comment.
+  // 「修正ラウンドNを始めた」というPRコメントも投稿しない(理由は
+  // `startReview`と同じ)。トリガーラベルを消費した後は、DB
+  // (`listTrackedPrs`)から見つけ直す。
   const flowJobId = await wmill.runFlowAsync("f/factory/pr_fix", {
     work_item_id: workItemId,
   });
@@ -405,15 +388,13 @@ export async function main(): Promise<{
     }
   }
 
-  // DB-backed rediscovery (2026-09-27 policy): once a PR's trigger label is
-  // consumed at claim time, searchPrs's label queries can no longer find it
-  // again, so listTrackedPrs supplies every PR the factory is still
-  // tracking (kind pr_review/pr_fix, not cancelled, updated within
-  // config.tracked_pr_days) as additional candidates. Deduped against the
-  // search results above by PR key; each tracked PR is re-fetched via getPr
-  // and dropped when it's no longer open (a closed/merged PR just falls out
-  // of tracking — poll_issues.ts's reconcile already handles cancelling its
-  // work_items row, this script never needs to).
+  // DBから見つけ直す。トリガーラベルを取得時に消費すると、`searchPrs`の
+  // ラベル検索ではそのPRを見つけられない。そこで`listTrackedPrs`が、
+  // Factoryが追跡中のPR(pr_review・pr_fix種別、取り消されていない、
+  // `config.tracked_pr_days`以内に更新)を候補に足す。上の検索結果とは
+  // PRのキーで重複を除き、`getPr`で取り直して開いていないものは落とす。
+  // 閉じた・マージされたPRの作業項目の取り消しは`poll_issues.ts`の
+  // reconcileが行うので、ここでは扱わない。
   const seenKeys = new Set(
     rawCandidates.map((item) => prKey(item.owner, item.repo, item.number)),
   );
@@ -472,11 +453,8 @@ export async function main(): Promise<{
     }
   }
 
-  // team-lead fix round 2 item f: decidePrActions (lib/poll_support.ts, a
-  // shared pure function this file must not edit) only consumes
-  // PrCandidate — the extra prevFixSeed/observed context is kept in a
-  // sibling map, keyed the same way, rather than widening PrCandidate
-  // itself.
+  // `decidePrActions`は`PrCandidate`だけを受け取る。`prevFixSeed`や
+  // `observed`は`PrCandidate`を広げず、同じキーの別のMapに持つ。
   const contextByKey = new Map(
     contexts.map((context) => [
       prKey(
@@ -502,7 +480,7 @@ export async function main(): Promise<{
       prKey(candidate.owner, candidate.repo, candidate.number),
     );
     if (context === undefined) {
-      // Should never happen — decisions is derived 1:1 from contexts above.
+      // 起きないはず。`decisions`は上の`contexts`から1対1で作っている。
       failed += 1;
       await recordFailureSafe(
         `trigger:${candidate.owner}/${candidate.repo}#${candidate.number}`,
@@ -512,10 +490,9 @@ export async function main(): Promise<{
       continue;
     }
 
-    // Review and fix each claim (consume) their own trigger label
-    // independently now (2026-09-27 policy) — a PR can in principle carry
-    // both `review_label` and `fix_label` in the same poll pass, and each
-    // must be handled on its own rather than through one shared "claim".
+    // レビューと修正は、それぞれ自分のトリガーラベルを別々に消費する。
+    // 1回のポーリングで1つのPRに`review_label`と`fix_label`の両方が
+    // 付いていることがあり、1つの取得にまとめず個別に扱う必要がある。
     if (review.kind === "trigger_review") {
       try {
         if (review.reason === "label") {
@@ -542,7 +519,7 @@ export async function main(): Promise<{
             reviewsStarted += 1;
           }
         } else {
-          // Assignment-triggered (no label involved): nothing to claim.
+          // assignで起きた場合はラベルが関わらず、消費するものが無い。
           await startReview(
             candidate,
             viewer.login,

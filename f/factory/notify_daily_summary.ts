@@ -1,7 +1,6 @@
-// Daily summary notification, 09:00 Asia/Tokyo
-// (notify_daily_summary.schedule.yaml). Aggregates yesterday's agent_runs
-// (count, cost, failures) and approvals (approve/reject counts) and posts a
-// `daily_summary` Discord embed (spec-cycle2.md §3 M5).
+// 毎日09:00(JST)の日次要約の通知。前日の`agent_runs`(件数・費用・失敗)と
+// 要件定義の`approval_requests`(承認・却下の件数)を集計し、
+// Discordに`daily_summary`のembedを投稿する。
 
 import * as wmill from "windmill-client@1.817.0";
 import type { CleanupCounts } from "./lib/cleanup_db_support.ts";
@@ -15,10 +14,11 @@ import {
   getCleanupSummary,
 } from "./lib/summary_support.ts";
 
-/** Same treatment as poll_issues.ts's own `notifySafe`: an unset webhook
- * URL is a no-op, and a Discord failure is logged (masked) rather than
- * failing the job — a notification hiccup should never turn a successful
- * aggregation into a failed schedule run. */
+/**
+ * Discordに通知する。webhookのURLが未設定なら何もしない。
+ * 送信の失敗はマスクしてログに残すだけで、ジョブを失敗させない。
+ * 通知の一時的な失敗で、成功した集計をスケジュール実行の失敗にしないため。
+ */
 async function notifySafe(
   webhookUrl: string,
   event: NotifyEvent,

@@ -1,20 +1,20 @@
-// GitHub REST API access via `gh api` (spec-cycle2.md §1 github.ts, §7 item
-// 1). Every call goes through the injected `run` (`CommandRunner`, from
-// workspace.ts) executing `gh api ...` with an args array — never a shell
-// string, and the token is only ever passed as the `GH_TOKEN` subprocess env
-// var, never as a CLI argument or in a URL.
+// `gh api`を通してGitHubのREST APIを呼ぶ。
+// 呼び出しはすべて、注入された`run`(`workspace.ts`の`CommandRunner`)で
+// `gh api ...`を引数の配列として実行する。シェルの文字列は使わない。
+// トークンはサブプロセスの環境変数`GH_TOKEN`でだけ渡し、
+// コマンドの引数やURLには入れない。
 //
-// Response parsing uses `gh api -i` (status line + headers + body on
-// stdout — confirmed CRLF-terminated headers during the M4 contract smoke)
-// so 403/429 rate-limit headers (`retry-after`, `x-ratelimit-remaining`)
-// are visible without a second request.
+// 応答は`gh api -i`で受け取る(標準出力にステータス行・ヘッダー・本文が出る。
+// ヘッダーの行末がCRLFであることは実際に確かめている)。こうすると、
+// 403/429のレート制限のヘッダー(`retry-after`、`x-ratelimit-remaining`)を
+// 2回目の要求なしに読める。
 //
-// Self-reentry guard (spec-cycle2.md §7 item 1): every comment / review /
-// reply the factory posts carries a `<!-- factory:<kind>:<work_item_id> -->`
-// marker (`withMarker`); `isFactoryPost` (login match via `isOwnPost` AND
-// `hasMarker`) lets pollers tell a human post from a factory one — the
-// factory runs under the same GitHub account as its human operator, so
-// login alone can never make that call.
+// 自己再入の防止: Factoryが投稿するコメント・レビュー・返信には、すべて
+// `<!-- factory:<kind>:<work_item_id> -->`の目印を付ける(`withMarker`)。
+// Factoryは人の運用者と同じGitHubアカウントで動くため、ログイン名だけでは
+// 人の投稿とFactoryの投稿を区別できない。ポーリングする側は
+// `isFactoryPost`(`isOwnPost`によるログイン名の一致と`hasMarker`の両方)で
+// 区別する。
 
 import { maskSecrets } from "./log.ts";
 import type {
@@ -25,7 +25,7 @@ import type {
 import { assertBranchName, assertGitHubName } from "./types.ts";
 import type { CommandRunner } from "./workspace.ts";
 
-/** Validate both halves of an `owner/repo` pair before building any endpoint/URL with them. */
+/** エンドポイントやURLを組み立てる前に、`owner/repo`の両方を検証する。 */
 function validateOwnerRepo(owner: string, repo: string): void {
   assertGitHubName(owner);
   assertGitHubName(repo);
@@ -36,13 +36,14 @@ export type GitHubRepoRef = { readonly owner: string; readonly repo: string };
 const GITHUB_REPO_URL_PATTERN =
   /^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/*$/i;
 
-/** Splits `factory_config.factory_repo` (an https clone URL) into owner /
- * repo. Only the https://github.com form is accepted — the same form
- * isRepoAllowed (lib/config.ts) normalizes against, and this pattern
- * normalizes the same way (case-insensitive host, optional trailing
- * `.git`, any number of trailing slashes). The error message never
- * includes the raw URL — it may carry embedded credentials
- * (`https://user:token@github.com/...`). */
+/**
+ * `factory_config.factory_repo`(httpsのclone URL)をownerとrepoに分ける。
+ * `https://github.com`の形だけを受け付ける。`lib/config.ts`の`isRepoAllowed`が
+ * 正規化に使うのと同じ形で、正規化の仕方(ホスト名の大文字小文字を問わない、
+ * 末尾の`.git`は省略可、末尾のスラッシュはいくつでもよい)もそろえている。
+ * URLに認証情報が埋め込まれていることがある
+ * (`https://user:token@github.com/...`)ため、エラーメッセージに元のURLは入れない。
+ */
 export function parseGitHubRepoUrl(url: string): GitHubRepoRef {
   const match = GITHUB_REPO_URL_PATTERN.exec(url.trim());
   const owner = match?.[1];
@@ -61,7 +62,7 @@ export type GhClient = {
   readonly ghToken: string;
   readonly home?: string;
   readonly path?: string;
-  /** Injected delay for the single rate-limit retry. Defaults to a real `setTimeout`-based sleep. */
+  /** レート制限で1回だけ再試行する前の待機。既定は`setTimeout`による実際の待機。 */
   readonly sleep?: (ms: number) => Promise<void>;
   readonly now?: () => Date;
 };
@@ -79,12 +80,12 @@ const defaultSleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
 // ---------------------------------------------------------------------------
-// Low-level `gh api -i` request/response plumbing
+// `gh api -i`の要求と応答を扱う低レベルの処理
 // ---------------------------------------------------------------------------
 
 export type GhApiResponse = {
   readonly status: number;
-  /** Header names lowercased. */
+  /** ヘッダー名は小文字にそろえる。 */
   readonly headers: ReadonlyMap<string, string>;
   readonly bodyText: string;
 };
@@ -146,7 +147,7 @@ function computeRetryWaitMs(
 
 export type GhApiCallOptions = {
   readonly method?: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
-  /** JSON-serializable request body, sent via `--input -`. */
+  /** JSONに直列化できる要求の本文。`--input -`で渡す。 */
   readonly body?: unknown;
   readonly acceptHeader?: string;
 };
@@ -172,9 +173,9 @@ async function callGhApiOnce(
 }
 
 /**
- * Call `gh api <endpoint>`, retrying exactly once after waiting out a
- * rate-limit response (spec-cycle2.md §1 github.ts). Does not throw on HTTP
- * error status — callers check `response.status` (see `ensureSuccess`).
+ * `gh api <endpoint>`を呼ぶ。レート制限の応答を受けたら、待ってから1回だけ再試行する。
+ * HTTPのエラーのステータスでは例外を投げない。
+ * 呼び出し側が`response.status`を確かめる(`ensureSuccess`を参照)。
  */
 async function callGhApi(
   client: GhClient,
@@ -213,7 +214,7 @@ function parseJsonBody(response: GhApiResponse, context: string): unknown {
 
 function parseNextLinkUrl(linkHeader: string | undefined): string | null {
   if (linkHeader === undefined) return null;
-  // RFC 8288 Link header: `<url1>; rel="prev", <url2>; rel="next", ...`
+  // RFC 8288のLinkヘッダーの形: `<url1>; rel="prev", <url2>; rel="next", ...`
   for (const segment of linkHeader.split(",")) {
     const match = segment.match(/<([^>]+)>;\s*rel="next"/);
     if (match !== null && match[1] !== undefined) return match[1];
@@ -221,16 +222,20 @@ function parseNextLinkUrl(linkHeader: string | undefined): string | null {
   return null;
 }
 
-/** A `link` header's absolute URL -> the relative `gh api` endpoint form used everywhere else in this module. */
+/**
+ * `link`ヘッダーの絶対URLを、このモジュールのほかの箇所で使う
+ * `gh api`の相対エンドポイントの形に変える。
+ */
 function toApiEndpoint(url: string): string {
   return url.replace(/^https?:\/\/[^/]+\//, "");
 }
 
 /**
- * Follow the `link` response header's `rel="next"` pages until exhausted,
- * extracting and concatenating each page's items via `extractPage` (which
- * differs by endpoint shape: a bare JSON array for timeline/comments/
- * reviews, vs a `{ items: [...] }` envelope for `/search/issues`).
+ * 応答の`link`ヘッダーの`rel="next"`をたどって最後のページまで取得し、
+ * 各ページの要素を`extractPage`で取り出してつなげる。
+ * `extractPage`はエンドポイントの応答の形によって変わる
+ * (timeline・comments・reviewsは裸のJSON配列、`/search/issues`は
+ * `{ items: [...] }`で包まれている)。
  */
 async function paginateGhApi<T>(
   client: GhClient,
@@ -252,9 +257,9 @@ async function paginateGhApi<T>(
 }
 
 /**
- * Like `callGhApi`, but follows pagination, concatenating each page's JSON
- * array body. Used wherever an unbounded GitHub collection (timeline,
- * comments, reviews, review comments) could span more than one page.
+ * `callGhApi`と同じだが、ページ送りをたどり、各ページのJSON配列の本文をつなげる。
+ * 件数に上限の無いGitHubのコレクション(timeline、comments、reviews、
+ * review comments)が複数ページにまたがりうる箇所で使う。
  */
 async function callGhApiAll(
   client: GhClient,
@@ -269,15 +274,14 @@ async function callGhApiAll(
 }
 
 // ---------------------------------------------------------------------------
-// Marker helpers (spec-cycle2.md §7 item 1)
+// 目印の補助関数
 // ---------------------------------------------------------------------------
 
-// A marker must be the entire last non-blank line of the text: anchored to
-// a line start/end (`^...$`, multiline) so a quoted marker (`> <!-- ... -->`,
-// which never starts a line with literal `<!--`) never matches, and
-// additionally checked (in `lastMarkerMatch`) to be the very last such line
-// so a marker embedded mid-message — e.g. pasted into a much longer human
-// reply — isn't read as authoritative either.
+// 目印は、本文の空でない最後の行の全体でなければならない。
+// 行頭と行末に固定する(`^...$`、multiline)ため、引用された目印
+// (`> <!-- ... -->`は行頭が`<!--`にならない)には一致しない。
+// さらに`lastMarkerMatch`で本当に最後の行かを確かめ、本文の途中にある目印
+// (人の長い返信に貼り付けられたものなど)も正当なものとして読まない。
 const MARKER_LINE_PATTERN = /^<!--\s*factory:([a-z0-9_-]+):(\d+)\s*-->\s*$/gm;
 
 function lastMarkerMatch(text: string): RegExpExecArray | null {
@@ -299,7 +303,7 @@ function lastMarkerMatch(text: string): RegExpExecArray | null {
   return match;
 }
 
-/** Append a `<!-- factory:<kind>:<work_item_id> -->` marker to `body`. */
+/** `body`の末尾に`<!-- factory:<kind>:<work_item_id> -->`の目印を付ける。 */
 export function withMarker(
   kind: string,
   workItemId: number,
@@ -309,13 +313,12 @@ export function withMarker(
 }
 
 /**
- * Whether `text` ends with a factory marker on its own line. Without
- * `kind`/`workItemId`, matches any factory marker (used to recognize "this
- * post came from the factory itself" regardless of which work item posted
- * it) — but see spec-cycle2.md §7 item 1 / the security-audit fix: a marker
- * alone must never be treated as proof of factory authorship on its own;
- * callers must additionally require `isOwnPost(login, viewer)` (see
- * `isFactoryPost`, which combines both).
+ * `text`が、単独の行にあるFactoryの目印で終わるかを返す。
+ * `kind` / `workItemId`を渡さなければ、どのFactoryの目印にも一致する
+ * (どの作業項目が投稿したかに関係なく、Factory自身の投稿かを見分けるのに使う)。
+ * ただし目印だけをFactoryが書いた証拠として扱ってはならない。
+ * 呼び出し側は`isOwnPost(login, viewer)`もあわせて求める必要がある
+ * (両方を組み合わせた`isFactoryPost`を参照)。
  */
 export function hasMarker(
   text: string,
@@ -329,28 +332,28 @@ export function hasMarker(
   return true;
 }
 
-/** Whether `login` is the factory's own GitHub account. Case-insensitive (GitHub logins are). */
+/**
+ * `login`がFactory自身のGitHubアカウントかを返す。
+ * GitHubのログイン名に合わせ、大文字小文字を区別しない。
+ */
 export function isOwnPost(login: string, viewer: string): boolean {
   return login.toLowerCase() === viewer.toLowerCase();
 }
 
 /**
- * Whether a post (comment/review/review-comment) is one the factory itself
- * made, as opposed to a human's — requires BOTH conditions:
+ * 投稿(コメント、レビュー、レビューコメント)が人ではなくFactory自身のものかを返す。
+ * 次の両方を満たす必要がある。
  *
- * - `isOwnPost(login, viewer)`: login alone is not enough, because the
- *   factory runs under the same GitHub account as its human operator
- *   (shared PAT) — a login match cannot by itself distinguish the
- *   operator's own comment (e.g. a plain instruction comment) from the
- *   factory's.
- * - `hasMarker(body, kind)`: a marker alone is not enough either
- *   (spec-cycle2.md §7 item 1 / security-audit fix) — a third party could
- *   paste a matching `<!-- factory:... -->` line into their own post to
- *   have it ignored.
+ * - `isOwnPost(login, viewer)`: ログイン名だけでは足りない。Factoryは
+ *   人の運用者と同じGitHubアカウント(共有のPAT)で動くため、ログイン名の
+ *   一致だけでは運用者自身のコメント(普通の指示のコメントなど)と
+ *   Factoryのコメントを区別できない。
+ * - `hasMarker(body, kind)`: 目印だけでも足りない。第三者が自分の投稿に
+ *   `<!-- factory:... -->`の行を貼り付けて、投稿を無視させることができるため。
  *
- * Pass `kind` to further require a specific marker kind, e.g. only the
- * factory's own `pr_fix` replies (not its `pr_review` review) should be
- * excluded from pr_fix's feedback collection.
+ * `kind`を渡すと、特定の種類の目印まで求める。例えばpr_fixのフィードバック
+ * 収集から除くべきなのは、Factoryの`pr_fix`の返信だけで、`pr_review`の
+ * レビューは除かない。
  */
 export function isFactoryPost(
   login: string | undefined,
@@ -363,11 +366,13 @@ export function isFactoryPost(
   return hasMarker(body, kind);
 }
 
-/** GitHub's `author_association` value for a comment/review/timeline-event
- * author, or `null` when absent — same type as
- * `LabeledTimelineEvent.authorAssociation` (spec-cycle2.md §7 item 1's
- * `allowed_labeler_associations` check, extended to the pr_fix human-
- * feedback filter). */
+/**
+ * コメント・レビュー・timelineイベントの投稿者についてのGitHubの
+ * `author_association`の値を返す。無ければ`null`。
+ * `LabeledTimelineEvent.authorAssociation`と同じ型で、
+ * `allowed_labeler_associations`の検査と、pr_fixで人のフィードバックを
+ * 絞り込むのに使う。
+ */
 function parseAuthorAssociation(
   value: unknown,
 ): LabelerAssociation | string | null {
@@ -375,12 +380,15 @@ function parseAuthorAssociation(
 }
 
 // ---------------------------------------------------------------------------
-// Viewer
+// Viewer(PATの持ち主のアカウント)
 // ---------------------------------------------------------------------------
 
 export type Viewer = { readonly login: string; readonly id: number };
 
-/** `{ login: string }` — shared by `getViewer` and any GitHub "actor" object (e.g. timeline events). */
+/**
+ * `{ login: string }`。`getViewer`と、GitHubの操作者を表すオブジェクト
+ * (timelineイベントなど)で共有する。
+ */
 type LoginPayload = { readonly login: string };
 
 function isLoginPayload(value: unknown): value is LoginPayload {
@@ -389,7 +397,11 @@ function isLoginPayload(value: unknown): value is LoginPayload {
   return typeof (value as { login: unknown }).login === "string";
 }
 
-/** `GET /user`'s payload shape needed by `getViewer` — a `LoginPayload` plus the numeric account `id` used to build a GitHub noreply commit email (`gitIdentityForViewer`). */
+/**
+ * `getViewer`が必要とする`GET /user`の応答の形。
+ * `LoginPayload`に、GitHubのnoreplyのコミット用メールアドレスを組み立てる
+ * (`gitIdentityForViewer`)ための数値のアカウント`id`を加えたもの。
+ */
 type ViewerPayload = LoginPayload & { readonly id: number };
 
 function isViewerPayload(value: unknown): value is ViewerPayload {
@@ -409,13 +421,13 @@ export async function getViewer(client: GhClient): Promise<Viewer> {
 }
 
 /**
- * The git author/committer identity for a commit the factory makes, derived
- * from the viewer (the GitHub account the PAT resolves to). Uses GitHub's
- * noreply commit-email form (`<numeric id>+<login>@users.noreply.github.com`)
- * so no personal email is ever written to a commit — see docs/security.md's
- * "pr_fix の安全策" section. Pure function; `commitAndPush` (workspace.ts)
- * passes the result through the process env only (`GIT_AUTHOR_*`/
- * `GIT_COMMITTER_*`), never into git config.
+ * Factoryが作るコミットのauthorとcommitterの名義を、viewer
+ * (PATが指すGitHubアカウント)から作る。
+ * 個人のメールアドレスをコミットに書かないよう、GitHubのnoreplyの形
+ * (`<数値のid>+<login>@users.noreply.github.com`)を使う
+ * (`docs/security.md`の「pr_fixの安全策」を参照)。
+ * `workspace.ts`の`commitAndPush`は、結果をプロセスの環境変数
+ * (`GIT_AUTHOR_*` / `GIT_COMMITTER_*`)でだけ渡し、git configには書かない。
  */
 export function gitIdentityForViewer(viewer: Viewer): GitIdentity {
   return {
@@ -425,7 +437,7 @@ export function gitIdentityForViewer(viewer: Viewer): GitIdentity {
 }
 
 // ---------------------------------------------------------------------------
-// Issue search / read / claim / comment / labels
+// Issueの検索・取得・取得宣言・コメント・ラベル
 // ---------------------------------------------------------------------------
 
 function ownerQualifier(owner: string, ownerKind: FactoryOwnerKind): string {
@@ -498,8 +510,8 @@ function isSearchIssuesPayload(value: unknown): value is SearchIssuesPayload {
 }
 
 /**
- * Like `callGhApiAll`, but for the `/search/issues` envelope
- * (`{ items: [...] }` rather than a bare array).
+ * `callGhApiAll`と同じだが、`/search/issues`の包まれた形
+ * (裸の配列ではなく`{ items: [...] }`)を扱う。
  */
 async function callGhApiAllSearchItems(
   client: GhClient,
@@ -519,15 +531,18 @@ export type SearchIssuesOptions = {
   readonly label: string;
 };
 
-/** `GET /search/issues` (paginated) for open, non-PR issues with `label`. */
+/**
+ * `GET /search/issues`で、`label`の付いたPRでない未完了のIssueを
+ * ページ送りしながらすべて取得する。
+ */
 export async function searchIssues(
   client: GhClient,
   opts: SearchIssuesOptions,
 ): Promise<IssueSearchItem[]> {
   assertGitHubName(opts.owner);
-  // Quoted (label names can contain a colon, e.g. "factory:review") — GitHub's
-  // /search/issues currently accepts an unquoted `label:factory:review` too,
-  // but quoting is the documented/safe form and matches searchPrs below.
+  // ラベル名はコロンを含みうる(`factory:review`など)ため引用符で囲む。
+  // 現在の`/search/issues`は引用符なしの`label:factory:review`も受け付けるが、
+  // 引用符で囲む形がドキュメントにある安全な形で、下の`searchPrs`ともそろう。
   const query = `is:issue state:open ${ownerQualifier(opts.owner, opts.ownerKind)} label:"${opts.label}"`;
   const items = await callGhApiAllSearchItems(
     client,
@@ -558,7 +573,7 @@ export type Issue = {
   readonly assignees: string[];
 };
 
-/** `{ name: string }` — shared by label objects (`{ name, ... }` label shape). */
+/** `{ name: string }`。ラベルのオブジェクト(`{ name, ... }`の形)で使う。 */
 type NamedPayload = { readonly name: string };
 
 function isNamedPayload(value: unknown): value is NamedPayload {
@@ -567,7 +582,10 @@ function isNamedPayload(value: unknown): value is NamedPayload {
   return typeof (value as { name: unknown }).name === "string";
 }
 
-/** GitHub returns issue labels as either a bare string or `{ name, ... }`; extract the name either way. */
+/**
+ * GitHubはIssueのラベルを裸の文字列か`{ name, ... }`で返すため、
+ * どちらからも名前を取り出す。
+ */
 function labelName(label: unknown): string | null {
   if (typeof label === "string") return label;
   if (isNamedPayload(label)) return label.name;
@@ -670,13 +688,12 @@ function isTimelineEventPayload(value: unknown): value is TimelineEventPayload {
 }
 
 /**
- * `GET .../timeline` (paginated), returning only the *last* `labeled`
- * event (spec-cycle2.md §7 item 1 security-audit fix: the label may have
- * been removed and re-added by a different actor, so the most recent
- * labeling — not just any labeling — is what `poll_issues` must check
- * against docs/security.md's "public リポジトリでのラベル付与制限"). `null`
- * if the issue was never labeled (shouldn't happen for an issue we found
- * via a label-scoped search, but handled defensively).
+ * `GET .../timeline`をページ送りしながら取得し、最後の`labeled`イベントだけを返す。
+ * ラベルは外されて別の人に付け直されていることがある。そのため
+ * `poll_issues`が`docs/security.md`の「publicリポジトリでのラベル付与制限」に
+ * 照らして確かめるべきなのは、いずれかのラベル付与ではなく最新のラベル付与である。
+ * ラベルが一度も付いていなければ`null`を返す(ラベルで絞った検索で見つけた
+ * Issueでは起こらないはずだが、念のため扱う)。
  */
 export async function getIssueTimeline(
   client: GhClient,
@@ -719,16 +736,16 @@ export type ClaimIssueResult =
   | { readonly claimed: false; readonly reason: string };
 
 /**
- * Claim an issue (best effort: two instances claiming at the same moment
- * can both pass the confirmation below, since assignee adds are additive
- * and a 404 on label removal is tolerated — the DB-side
- * `hasActiveWorkItem` check is what keeps a second work item from being
- * started for the same issue). Assigns `assignee`, then removes
- * `triggerLabel` (2026-09-27
- * policy — the `factory` label is consumed on claim, not replaced with a
- * `wip` label; status lives only in `work_items.status`). Re-fetches to
- * confirm both stuck (spec-cycle2.md §1 github.ts "claimIssue... 再取得で確認")
- * — guards against a race with another factory instance claiming first.
+ * Issueを取得宣言する。`assignee`をassignし、続けて`triggerLabel`を外す。
+ * `factory`ラベルは取得時に消費し、`wip`ラベルなどに付け替えない。
+ * 状態は`work_items.status`にだけ持つ。
+ * 最後にIssueを再取得して両方が反映されたかを確かめ、別のFactoryの
+ * インスタンスが先に取得した競合を検出する。
+ *
+ * これはベストエフォートである。assigneeの追加は上書きではなく追加で、
+ * ラベルを外すときの404も許すため、同時に取得した2つのインスタンスが
+ * どちらもこの確認を通りうる。同じIssueに2つ目の作業項目を始めないよう
+ * 防いでいるのは、DB側の`hasActiveWorkItem`の検査である。
  */
 export async function claimIssue(
   client: GhClient,
@@ -772,12 +789,13 @@ export async function claimIssue(
 }
 
 /**
- * Idempotent (marker-checked) issue comment. `viewer` (the factory's own
- * GitHub login, from `getViewer`) is required: a comment only counts as
- * "already posted by us" when it's both `isOwnPost` *and* carries the
- * marker — a marker alone is not proof of authorship (spec-cycle2.md §7
- * item 1 / security-audit fix), since anyone could paste a matching
- * `<!-- factory:... -->` line into their own comment.
+ * Issueにコメントする。目印で確かめるため冪等である。
+ * 同じ目印の付いたFactory自身のコメントが既にあれば投稿せず、そのidを
+ * `created: false`で返す。
+ * `viewer`(`getViewer`で得たFactory自身のログイン名)は必須である。
+ * 誰でも自分のコメントに`<!-- factory:... -->`の行を貼り付けられるため、
+ * 目印だけでは書いた人の証拠にならない。`isOwnPost`を満たし、かつ目印を
+ * 持つコメントだけを「投稿済み」とみなす。
  */
 export async function commentIssue(
   client: GhClient,
@@ -884,25 +902,27 @@ export type IssueComment = {
 
 export type ListIssueCommentsOptions = {
   readonly viewer: string;
-  /** Only comments with an id greater than this are returned (the caller's
-   * `last_comment_id` high-water mark); omit to return every comment
-   * (excluding the factory's own marker-bearing posts — see
-   * `isFactoryPost`). */
+  /**
+   * これより大きいidのコメントだけを返す(呼び出し側の`last_comment_id`の
+   * 処理済みの位置)。省略するとすべてのコメントを返す
+   * (目印を持つFactory自身の投稿は除く。`isFactoryPost`を参照)。
+   */
   readonly sinceId?: number;
 };
 
 /**
- * `GET .../issues/{number}/comments` (paginated), filtered to non-factory
- * comments newer than `sinceId` — mirrors `listPrReviews`'s shape
- * (`{ items, maxId }`). Feeds pr_fix's human-feedback collection
- * detector (poll_prs.ts): a comment is excluded here only when it is the
- * factory's own post — `isFactoryPost(login, opts.viewer, raw.body)` (any
- * marker kind), i.e. authored by the viewer login AND carrying a factory
- * marker. The factory runs under the same GitHub account as its human
- * operator (shared PAT), so a plain instruction comment typed by the
- * operator has the same login as the factory and is deliberately kept —
- * only a marker-bearing post (the factory's own comment, or an old "review
- * started" announcement) is dropped.
+ * `GET .../issues/{number}/comments`をページ送りしながら取得し、
+ * `sinceId`より新しいFactory以外のコメントに絞って返す。
+ * 戻り値の形は`listPrReviews`と同じ`{ items, maxId }`である。
+ * `poll_prs.ts`がpr_fixで人のフィードバックを見つけるのに使う。
+ *
+ * ここで除くのはFactory自身の投稿だけである。つまり、viewerのログイン名で
+ * 書かれ、かつFactoryの目印を持つもの(`isFactoryPost(login, opts.viewer,
+ * raw.body)`、目印の種類は問わない)である。
+ * Factoryは人の運用者と同じGitHubアカウント(共有のPAT)で動くため、
+ * 運用者が打った普通の指示のコメントもFactoryと同じログイン名になる。
+ * それらは意図して残し、目印を持つ投稿(Factory自身のコメントや、
+ * 古い「レビュー開始」の告知)だけを落とす。
  */
 export async function listIssueComments(
   client: GhClient,
@@ -971,20 +991,15 @@ export async function removeLabel(
       method: "DELETE",
     },
   );
-  if (response.status === 404) return; // already absent — nothing to do
+  if (response.status === 404) return; // 既に無いので何もしない
   ensureSuccess(response, `DELETE issue label ${owner}/${repo}#${number}`);
 }
 
 /**
- * Adds `labels` to an issue/PR without touching any label already on it —
- * GitHub's `POST .../labels` endpoint is additive, unlike `setLabels`'s PUT
- * (replaces the whole set). Promoted from
- * f/factory/steps/pr_workflow_support.ts's local version (same signature
- * and behavior — a bare POST, no re-fetch-to-confirm step). Used by
- * retry_work_item.ts to restore a terminal work item's labels without also
- * assigning anyone (unlike claimIssue, which POSTs an assignee too), and by
- * pr_fix_finish's requirements_gap reroute (re-adding the parent issue's
- * wip/trigger labels before restarting f/factory/pipeline on it).
+ * IssueかPRに`labels`を足す。既に付いているラベルには触れない。
+ * GitHubの`POST .../labels`は追加で、全体を置き換える`setLabels`のPUTとは異なる。
+ * POSTするだけで、再取得による確認はしない。
+ * `claimIssue`と違い、assigneeは設定しない。
  */
 export async function addLabels(
   client: GhClient,
@@ -1006,7 +1021,7 @@ export async function addLabels(
 }
 
 export type EnsureLabelOptions = {
-  /** Six hex digits without a leading `#` (GitHub's label API form). */
+  /** 先頭に`#`を付けない16進数6桁(GitHubのラベルAPIの形)。 */
   readonly color: string;
   readonly description: string;
 };
@@ -1026,9 +1041,11 @@ function hasAlreadyExistsCode(value: unknown): boolean {
   return "code" in value && value.code === "already_exists";
 }
 
-/** Whether a 422 response is GitHub's `already_exists` validation error
- * (`errors: [{ code: "already_exists", ... }]`). A body that is not valid
- * JSON counts as "no", so the caller reports the HTTP error instead. */
+/**
+ * 422の応答が、GitHubの`already_exists`の検証エラー
+ * (`errors: [{ code: "already_exists", ... }]`)かを返す。
+ * 本文が正しいJSONでなければ`false`を返し、呼び出し側がHTTPのエラーとして報告する。
+ */
 function isAlreadyExistsValidationError(
   response: GhApiResponse,
   context: string,
@@ -1045,14 +1062,15 @@ function isAlreadyExistsValidationError(
 }
 
 /**
- * Make sure a label named `name` exists in `owner/repo` (工程3 design §2
- * implement_finish: `factory:review` is created before `addLabels` puts it
- * on the new PR, so the label gets the intended colour and description
- * instead of the defaults GitHub would give a label it creates implicitly).
- * `GET .../labels/{name}` first; a 404 leads to `POST .../labels`. A 422 on
- * the POST whose errors include `already_exists` means another job created
- * it in between and is treated as "exists"; any other 422 (e.g. an invalid
- * colour) is a failure like every other non-2xx response.
+ * `owner/repo`に`name`という名前のラベルがあることを保証する。
+ * `implement_finish`は、新しいPRに`addLabels`で`factory:review`を付ける前に
+ * これを呼ぶ。GitHubが暗黙にラベルを作ると既定の色と説明になるため、
+ * 先に意図した色と説明で作っておく。
+ *
+ * まず`GET .../labels/{name}`を呼び、404なら`POST .../labels`で作る。
+ * POSTが422で、エラーに`already_exists`を含むなら、その間に別のジョブが
+ * 作ったものとみなし「既にある」として扱う。
+ * それ以外の422(色が不正など)は、2xx以外のほかの応答と同じく失敗として例外を投げる。
  */
 export async function ensureLabel(
   client: GhClient,
@@ -1125,23 +1143,22 @@ export type MarkerSearchResult = {
 };
 
 /**
- * `GET /search/issues` for an open-or-closed issue in `owner/repo` whose
- * body contains the literal `markerText` (quoted phrase search) — team-lead
- * fix round, [MUST] #2: issue_proposal_apply.ts uses this before calling
- * `createIssue` on an approve decision, so a retry after a crash between
- * recording the decision and creating the Issue reuses the Issue a previous
- * attempt already created instead of duplicating it. The caller passes the
- * *inner* marker text (`factory:issue_proposal:<id>`, not the full
- * `<!-- ... -->` comment syntax — pr_workflow_support.ts's
- * `issueProposalMarkerSearchTerm`), since GitHub's search treats `<`/`-`/`>`
- * as noise; quoting alone keeps the colon-bearing phrase from being parsed
- * as a `qualifier:value` search operator (mirrors `searchIssues`'s own label
- * quoting). Returns the first match's number/htmlUrl/body — `body` so the
- * caller can additionally confirm the match with an exact-substring check
- * (`hasIssueProposalMarker`) before trusting it, since search is a
- * word/phrase match, not an exact comparison — or `null` when nothing
- * matches. Not restricted to `state:open`, since a previously-created Issue
- * could have been closed independently.
+ * `GET /search/issues`で、本文に`markerText`をそのまま含む`owner/repo`の
+ * Issueを、未完了・完了を問わず探す(引用符で囲んだフレーズ検索)。
+ * 最初に一致したものの番号・`htmlUrl`・本文を返し、無ければ`null`を返す。
+ *
+ * `issue_proposal_apply.ts`は、承認の判断で`createIssue`を呼ぶ前にこれを使う。
+ * 判断の記録とIssueの作成の間で異常終了して再試行したとき、前回の試行で
+ * 作ったIssueを再利用し、重複して作らないためである。
+ * 呼び出し側は`<!-- ... -->`の全体ではなく、内側の目印の文字列
+ * (`factory:issue_proposal:<id>`。`pr_workflow_support.ts`の
+ * `issueProposalMarkerSearchTerm`)を渡す。GitHubの検索は`<` `-` `>`を
+ * 無視するためである。コロンを含むフレーズが`qualifier:value`の検索演算子と
+ * 解釈されないよう、引用符で囲む(`searchIssues`のラベルと同じ扱い)。
+ * 検索は単語やフレーズの一致で、完全な比較ではない。そのため本文も返し、
+ * 呼び出し側が信用する前に部分文字列の完全一致(`hasIssueProposalMarker`)で
+ * 確かめられるようにする。
+ * 前に作ったIssueが別に閉じられていることもあるため、`state:open`には絞らない。
  */
 export async function findIssueByMarker(
   client: GhClient,
@@ -1165,7 +1182,7 @@ export async function findIssueByMarker(
 }
 
 // ---------------------------------------------------------------------------
-// Pull requests
+// プルリクエスト
 // ---------------------------------------------------------------------------
 
 export type PrSearchItem = {
@@ -1185,21 +1202,19 @@ export type SearchPrsOptions = {
 };
 
 /**
- * `GET /search/issues` scoped to PRs: review-requested, assigned, or labeled
- * `reviewLabel` or `fixLabel` (2026-09-27 policy: PR trigger labels —
- * `factory:review` / `factory:fix` — are consumed at claim time, mirroring
- * the Issue side's `factory` label; there is no `wip` label and no state
- * labels to re-discover by, so `poll_prs.ts` re-discovers PRs whose trigger
- * label has already been consumed via `listTrackedPrs` (DB-backed) instead
- * of a label search).
+ * `GET /search/issues`をPRに絞って呼び、レビューを依頼されたPR、assignされたPR、
+ * `reviewLabel`か`fixLabel`の付いたPRを返す。
+ * PRのトリガーラベル(`factory:review` / `factory:fix`)は、Issue側の
+ * `factory`ラベルと同じく取得時に消費する。`wip`ラベルも状態ラベルも無く、
+ * ラベルで再発見できないため、トリガーラベルを消費済みのPRは`poll_prs.ts`が
+ * ラベル検索ではなく`listTrackedPrs`(DBに基づく)で再発見する。
  *
- * Runs as one query per qualifier, not one combined
- * `(review-requested:X OR assignee:X OR label:Y OR ...)` query — confirmed
- * empirically (real-flow E2E failure) that GitHub's `/search/issues` does
- * not support parenthesized OR grouping: the combined query always
- * returned 0 results, while each qualifier alone matched. Results are
- * merged and de-duplicated by the search item's GitHub `id` (a PR can
- * satisfy more than one qualifier at once).
+ * `(review-requested:X OR assignee:X OR label:Y OR ...)`のように1つに
+ * まとめず、条件ごとに1つのクエリを実行する。GitHubの`/search/issues`は
+ * 括弧によるORのまとめに対応していないことを、実際のフローのE2Eの失敗で
+ * 確かめている(まとめたクエリは常に0件を返し、条件ごとなら一致した)。
+ * 1つのPRが複数の条件を同時に満たすことがあるため、結果はGitHubの`id`で
+ * 重複を除いてまとめる。
  */
 export async function searchPrs(
   client: GhClient,
@@ -1207,8 +1222,7 @@ export async function searchPrs(
 ): Promise<PrSearchItem[]> {
   assertGitHubName(opts.owner);
   assertGitHubName(opts.viewer);
-  // Label names can contain a colon (e.g. "factory:review"), so the label
-  // qualifiers are quoted.
+  // ラベル名はコロンを含みうる(`factory:review`など)ため、ラベルの条件は引用符で囲む。
   const base = `is:pr state:open ${ownerQualifier(opts.owner, opts.ownerKind)}`;
   const queries = [
     `${base} review-requested:${opts.viewer}`,
@@ -1359,7 +1373,10 @@ export type PrDiff = {
   readonly totalLines: number;
 };
 
-/** Raw unified diff via the `application/vnd.github.v3.diff` media type, truncated to `maxLines`. */
+/**
+ * メディアタイプ`application/vnd.github.v3.diff`で生のunified diffを取得し、
+ * `maxLines`行に切り詰める。
+ */
 export async function getPrDiff(
   client: GhClient,
   owner: string,
@@ -1425,7 +1442,7 @@ function isPrFilePayload(value: unknown): value is PrFilePayload {
   );
 }
 
-/** `GET .../pulls/{number}/files` (paginated), the PR's changed-file list. */
+/** `GET .../pulls/{number}/files`をページ送りしながら呼び、PRの変更ファイルの一覧を返す。 */
 export async function getPrFiles(
   client: GhClient,
   owner: string,
@@ -1481,19 +1498,20 @@ function isPrReviewPayload(value: unknown): value is PrReviewPayload {
 
 export type ListHumanResult<T> = {
   readonly items: T[];
-  /** Max id seen across ALL reviews/comments (human and factory-authored), for tracking `last_review_id` / `last_comment_id`. */
+  /**
+   * 人とFactoryのどちらが書いたかを問わず、すべてのレビュー・コメントの中で最大のid。
+   * `last_review_id` / `last_comment_id`の追跡に使う。
+   */
   readonly maxId: number;
 };
 
 /**
- * `GET .../reviews` (paginated), filtered so that only the factory's own
- * `pr_fix` replies are excluded —
- * `isFactoryPost(login, viewer, raw.body, "pr_fix")`. The factory's own
- * `pr_review`-kind review (and a human's review) are intentionally kept:
- * adding the fix label after the factory's own review means "fix those
- * findings", so that review must remain visible as feedback rather than
- * being dropped just because its login happens to match the viewer (shared
- * operator account).
+ * `GET .../reviews`をページ送りしながら取得し、Factory自身の`pr_fix`の返信
+ * (`isFactoryPost(login, viewer, raw.body, "pr_fix")`)だけを除いて返す。
+ * Factory自身の`pr_review`のレビューと人のレビューは意図して残す。
+ * Factoryのレビューの後に修正ラベルを付けるのは「その指摘を直せ」という意味である。
+ * 運用者とアカウントを共有していてログイン名がviewerと一致するというだけで
+ * そのレビューを落とさず、フィードバックとして見えるようにしておく必要がある。
  */
 export async function listPrReviews(
   client: GhClient,
@@ -1561,11 +1579,11 @@ function isPrReviewCommentPayload(
 }
 
 /**
- * `GET .../comments` (inline review comments, paginated), filtered the same
- * way as `listPrReviews`: only the factory's own `pr_fix`-kind reply is
- * excluded (`isFactoryPost(login, viewer, raw.body, "pr_fix")`). The
- * factory's own unmarked inline findings from a `pr_review` pass stay
- * visible — pr_fix needs to see them as feedback to act on.
+ * `GET .../comments`(インラインのレビューコメント)をページ送りしながら取得し、
+ * `listPrReviews`と同じく、Factory自身の`pr_fix`の返信
+ * (`isFactoryPost(login, viewer, raw.body, "pr_fix")`)だけを除いて返す。
+ * `pr_review`でFactoryが書いた目印の無いインラインの指摘は残す。
+ * pr_fixはそれを対応すべきフィードバックとして見る必要があるためである。
  */
 export async function listPrReviewComments(
   client: GhClient,
@@ -1605,10 +1623,12 @@ export type ReviewComment = {
   readonly path: string;
   readonly line: number;
   readonly side: "LEFT" | "RIGHT";
-  /** First line of a comment spanning multiple lines — omit for a
-   * single-line comment. When present, `start_side` is always sent as
-   * `"RIGHT"` (every review comment in this project anchors to the new/
-   * head version of the file, never a deletion on the base side). */
+  /**
+   * 複数行にわたるコメントの最初の行。1行だけのコメントでは省く。
+   * 指定したときは`start_side`を常に`"RIGHT"`で送る。このプロジェクトの
+   * レビューコメントは、すべてファイルの新しい側(head)に付け、base側の
+   * 削除行には付けないためである。
+   */
   readonly start_line?: number;
   readonly body: string;
 };
@@ -1619,9 +1639,12 @@ export type CreatePrReviewOptions = {
   readonly comments: readonly ReviewComment[];
 };
 
-/** GitHub Pull Request Review API's `comments[]` shape: same fields as
- * `ReviewComment`, plus `start_side` (only ever present alongside
- * `start_line`, fixed to `"RIGHT"` — not a caller-facing option). */
+/**
+ * GitHubのPull Request Review APIの`comments[]`の形に変える。
+ * `ReviewComment`と同じフィールドに`start_side`を加える。
+ * `start_side`は`start_line`があるときだけ付け、`"RIGHT"`に固定する
+ * (呼び出し側が選ぶオプションではない)。
+ */
 function toReviewCommentPayload(
   comment: ReviewComment,
 ): Record<string, unknown> {
@@ -1714,9 +1737,9 @@ export type RequestReviewersOptions = {
 };
 
 /**
- * Request reviewers, excluding the PR author and the viewer itself. Never
- * throws — a failure here should not fail the caller's flow (spec-cycle2.md
- * §1 github.ts "requestReviewers... 失敗は非致命").
+ * PRの作成者とviewer自身を除いてレビュアーを依頼する。
+ * ここでの失敗で呼び出し側のフローを失敗させないため、例外は投げず、
+ * 失敗は`outcome: "failed"`で返す。
  */
 export async function requestReviewers(
   client: GhClient,
@@ -1761,7 +1784,7 @@ export async function requestReviewers(
 }
 
 // ---------------------------------------------------------------------------
-// Branch protection (promoted from f/factory/steps/pr_workflow_support.ts)
+// ブランチ保護
 // ---------------------------------------------------------------------------
 
 type BranchProtectionPayload = { readonly protected: boolean };
@@ -1775,9 +1798,9 @@ function isBranchProtectionPayload(
 }
 
 /**
- * `GET repos/{owner}/{repo}/branches/{branch}`'s `protected` flag — this
- * endpoint returns `protected: false` (not a 404) for an unprotected
- * branch, unlike the dedicated `/branches/{branch}/protection` endpoint.
+ * `GET repos/{owner}/{repo}/branches/{branch}`の`protected`を返す。
+ * 専用の`/branches/{branch}/protection`と違い、このエンドポイントは
+ * 保護されていないブランチにも404ではなく`protected: false`を返す。
  */
 export async function getBranchProtected(
   client: GhClient,
@@ -1804,18 +1827,13 @@ export async function getBranchProtected(
 }
 
 // ---------------------------------------------------------------------------
-// Plain (non-idempotent) issue comment (promoted from f/factory/steps/
-// pr_workflow_support.ts)
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Review threads (GraphQL) — team-lead decision (2026-09-26): on a
-// re-review with zero findings, pr_review_post.ts resolves the factory's
-// own still-unresolved `pr_review` inline-comment threads on the PR.
-// GitHub's REST API has no thread-resolution endpoint, so this goes through
-// `gh api graphql` instead (same `callGhApi` plumbing, endpoint "graphql").
-// One page (100 threads) is enough for now; a PR with more open review
-// threads than that is far beyond this project's expected review size.
+// レビュースレッド(GraphQL)。再レビューで指摘が0件のとき、
+// `pr_review_post.ts`はPR上でまだ解決していないFactory自身の`pr_review`の
+// インラインコメントのスレッドを解決する。
+// GitHubのREST APIにはスレッドを解決するエンドポイントが無いため、
+// `gh api graphql`を使う(`callGhApi`の処理をエンドポイント`graphql`で使う)。
+// 取得は1ページ(100スレッド)で足りるとしている。それより多くの未解決の
+// スレッドを持つPRは、このプロジェクトで想定するレビューの規模を大きく超える。
 // ---------------------------------------------------------------------------
 
 type GraphqlErrorPayload = {
@@ -1826,9 +1844,11 @@ type GraphqlErrorsPayload = {
   readonly errors: readonly GraphqlErrorPayload[];
 };
 
-/** A non-empty top-level `errors` array — GitHub's GraphQL error envelope. An
- * empty or absent `errors` field means the call actually succeeded, so this
- * intentionally returns `false` for it (an empty array is not an error). */
+/**
+ * 最上位の`errors`が空でない配列か(GitHubのGraphQLのエラーの形か)を返す。
+ * `errors`が空か無ければ呼び出しは成功しているため、意図して`false`を返す
+ * (空の配列はエラーではない)。
+ */
 function isGraphqlErrorsPayload(value: unknown): value is GraphqlErrorsPayload {
   if (typeof value !== "object" || value === null) return false;
   const errors = (value as { errors: unknown }).errors;
@@ -1851,15 +1871,13 @@ function isGraphqlDataPayload(value: unknown): value is GraphqlDataPayload {
 }
 
 /**
- * Shared POST to `gh api graphql` (spec-cycle2.md §1's `ensureSuccess`
- * covers REST's non-2xx-means-failure convention, but GitHub's GraphQL
- * endpoint returns HTTP 200 even for a permission/argument error — the
- * failure is only visible in a top-level `errors` array in the body). This
- * runs `ensureSuccess` first (still needed for genuine transport-level
- * failures), parses the JSON body, and throws when `errors` is a non-empty
- * array so a GraphQL-level failure can never be mistaken for success by a
- * caller that only checked the HTTP status. Returns the `data` field on
- * success.
+ * `gh api graphql`へPOSTする共通の処理。成功すれば`data`フィールドを返す。
+ * `ensureSuccess`はRESTの「2xx以外は失敗」という慣習に合わせたものだが、
+ * GitHubのGraphQLは権限や引数の誤りでもHTTP 200を返し、失敗は本文の
+ * 最上位の`errors`にしか現れない。
+ * そのため、まず`ensureSuccess`を呼び(通信レベルの本当の失敗にはなお必要)、
+ * JSONの本文を解析し、`errors`が空でない配列なら例外を投げる。こうして、
+ * HTTPのステータスだけを確かめた呼び出し側がGraphQLの失敗を成功と取り違えないようにする。
  */
 async function callGhGraphql(
   client: GhClient,
@@ -1886,30 +1904,36 @@ async function callGhGraphql(
 export type ReviewThread = {
   readonly id: string;
   readonly isResolved: boolean;
-  /** The file path and current diff line this thread is anchored to
-   * (team-lead decision, 2026-09-26: needed by pr_workflow_support.ts's
-   * `openFindingsForPrompt`, so a re-review can tell Claude *where* an open
-   * finding is, not just what it said). `line` is GitHub's own
-   * `PullRequestReviewThread.line` — `null` once the thread's anchor is no
-   * longer part of the diff (e.g. the commented-on lines were since
-   * changed again), same as a `ReviewFinding`'s own nullable `line`. */
+  /**
+   * スレッドが付いているファイルのパスと、現在の差分上の行。
+   * 再レビューで未解決の指摘の内容だけでなく場所もClaudeに伝えるため、
+   * `pr_workflow_support.ts`の`openFindingsForPrompt`が使う。
+   * `line`はGitHubの`PullRequestReviewThread.line`で、スレッドの位置が
+   * 差分から外れると(コメントした行がその後また変わったなど)`null`になる。
+   * `ReviewFinding`の`line`がnullを取りうるのと同じである。
+   */
   readonly path: string;
   readonly line: number | null;
   readonly firstCommentAuthorLogin: string;
   readonly firstCommentBody: string;
   readonly lastCommentAuthorLogin: string;
   readonly lastCommentBody: string;
-  /** The first comment's REST id (`databaseId`) — team-lead fix round,
-   * [MUST] #4: `matchReviewThreadForComment` (pr_workflow_support.ts) used
-   * to match a FixReply's `review_comment_id` (a REST id) against a thread
-   * by (path, line) instead, which silently mismatched once a later commit
-   * shifted the diff's line numbers. `null` when GitHub returns no
-   * `databaseId` for the comment (should not happen for a real REST-backed
-   * comment, but the type guard treats it as absent rather than throwing). */
+  /**
+   * 最初のコメントのREST id(`databaseId`)。
+   * `pr_workflow_support.ts`の`matchReviewThreadForComment`が、`FixReply`の
+   * `review_comment_id`(REST id)をスレッドに対応づけるのに使う。
+   * (path, line)で対応づけると、後のコミットで差分の行番号がずれたときに
+   * 気づかないまま別のスレッドと結びつくため、idで対応づける。
+   * GitHubがそのコメントの`databaseId`を返さなければ`null`
+   * (RESTで扱う実際のコメントでは起こらないはずだが、型ガードは例外を投げず
+   * 欠けているものとして扱う)。
+   */
   readonly firstCommentDatabaseId: number | null;
-  /** REST ids of every comment in the thread, first 50 (see the module note
-   * above `listReviewThreads`) — lets `matchReviewThreadForComment` match a
-   * reply that targets a later comment in the thread, not just the first. */
+  /**
+   * スレッド内のコメントのREST id(先頭の50件まで。`listReviewThreads`を参照)。
+   * 最初のコメントだけでなく、スレッドの後ろのコメントへの返信も
+   * `matchReviewThreadForComment`が対応づけられるようにする。
+   */
   readonly allCommentIds: number[];
 };
 
@@ -1939,8 +1963,10 @@ function isReviewThreadsGraphqlPayload(
   return Array.isArray((reviewThreads as { nodes: unknown }).nodes);
 }
 
-/** One `comments(...) { nodes { ... } }` connection — used for both the
- * `firstComments`/`lastComments` GraphQL aliases in the query below. */
+/**
+ * `comments(...) { nodes { ... } }`の接続1つ。下のクエリの別名
+ * `firstComments` / `lastComments` / `allComments`で使う。
+ */
 type ReviewThreadCommentsConnectionPayload = {
   readonly nodes: readonly unknown[];
 };
@@ -2028,23 +2054,25 @@ function isReviewThreadDatabaseIdNodePayload(
 }
 
 /**
- * `GET`-equivalent GraphQL query for a PR's review threads (first 100 — see
- * the module note above): each thread's resolution state, its diff anchor
- * (`path`/`line` — team-lead decision, 2026-09-26: needed by
- * `openFindingsForPrompt`, pr_workflow_support.ts), its first comment's
- * author/body/REST id (`databaseId`), and (via the `lastComments` alias) its
- * last comment's author/body — `selectThreadsToResolve` (pr_workflow_support.ts)
- * needs the latter two to find the factory's own still-unresolved
- * `pr_review` threads whose last word was also the factory's (a human reply
- * left in the thread must block auto-resolve). The `allComments` alias
- * (first 50 comments' REST ids only) backs `matchReviewThreadForComment`
- * (team-lead fix round, [MUST] #4): matching a `FixReply.review_comment_id`
- * (a REST id) against a thread by (path, line) silently mismatched once a
- * later commit shifted the diff's line numbers, so matching is now by id —
- * `firstCommentDatabaseId` for the common case, `allCommentIds` for a reply
- * that targets a later comment in the thread. A thread whose shape doesn't
- * match (including one with no comments at all, which shouldn't happen on
- * GitHub) is skipped rather than throwing.
+ * PRのレビュースレッド(先頭の100件。この節の冒頭コメントを参照)を、
+ * 読み取りのGraphQLクエリで取得する。スレッドごとに次のものを返す。
+ * - 解決済みかどうか
+ * - 差分上の位置(`path` / `line`)。`pr_workflow_support.ts`の
+ *   `openFindingsForPrompt`が使う。
+ * - 最初のコメントの作成者・本文・REST id(`databaseId`)
+ * - 最後のコメントの作成者・本文(別名`lastComments`)。
+ *   `pr_workflow_support.ts`の`selectThreadsToResolve`が、まだ解決していない
+ *   Factory自身の`pr_review`のスレッドのうち、最後の発言もFactoryのものを
+ *   探すのに使う(スレッドに人の返信が残っていれば自動で解決してはならない)。
+ * - コメントのREST id(別名`allComments`、先頭の50件のidだけ)。
+ *   `matchReviewThreadForComment`が使う。`FixReply.review_comment_id`
+ *   (REST id)を(path, line)で対応づけると、後のコミットで差分の行番号が
+ *   ずれたときに気づかないまま取り違えるため、idで対応づける。
+ *   普段は`firstCommentDatabaseId`を、スレッドの後ろのコメントへの返信には
+ *   `allCommentIds`を使う。
+ *
+ * 形が合わないスレッド(GitHubでは起こらないはずの、コメントが1つも無い
+ * スレッドを含む)は、例外を投げずに飛ばす。
  */
 export async function listReviewThreads(
   client: GhClient,
@@ -2125,9 +2153,10 @@ export async function listReviewThreads(
 }
 
 /**
- * Resolves one review thread via GitHub's `resolveReviewThread` GraphQL
- * mutation (no REST equivalent exists). Callers (pr_review_post.ts) treat a
- * failure here as best-effort — warn-log per thread, never fail the step.
+ * GitHubのGraphQLのmutation`resolveReviewThread`で、レビュースレッドを1つ解決する
+ * (RESTに同等のものは無い)。
+ * 呼び出し側の`pr_review_post.ts`はここでの失敗をベストエフォートとして扱い、
+ * スレッドごとに警告のログを出すだけで、ステップは失敗させない。
  */
 export async function resolveReviewThread(
   client: GhClient,
@@ -2148,13 +2177,18 @@ export async function resolveReviewThread(
   );
 }
 
+// ---------------------------------------------------------------------------
+// 冪等でない通常のIssueコメント
+// ---------------------------------------------------------------------------
+
 /**
- * Posts a plain (non-idempotent) issue-level comment. Unlike `commentIssue`
- * (one canonical marker comment per kind+work_item_id, deduplicated), this
- * always creates a new comment and never adds a marker — the caller applies
- * `withMarker` itself when one is needed. Used by pr_fix_finish.ts to reply
- * to a plain issue comment (GitHub has no threaded-reply concept for
- * issue-level comments, unlike PR review comments' `replyReviewComment`).
+ * Issueに通常の(冪等でない)コメントを投稿する。
+ * 種類とwork_item_idごとに目印付きのコメントを1つだけ作り重複を防ぐ
+ * `commentIssue`と違い、常に新しいコメントを作り、目印も付けない。
+ * 目印が必要なら呼び出し側が`withMarker`を使う。
+ * `pr_fix_finish.ts`が通常のIssueコメントに返信するのに使う
+ * (PRのレビューコメントの`replyReviewComment`と違い、GitHubのIssueコメントには
+ * スレッドへの返信という仕組みが無い)。
  */
 export async function postIssueComment(
   client: GhClient,
@@ -2186,11 +2220,10 @@ export async function postIssueComment(
 }
 
 // ---------------------------------------------------------------------------
-// Pull request creation / lookup / body update (implement flow, 工程3 design
-// §2 implement_finish): create a PR for a pushed branch, find an existing
-// open PR for the same head (a re-implementation after re-approval updates
-// it instead of creating a second one — GitHub returns 422 for a duplicate
-// head), and rewrite its body.
+// PRの作成・検索・本文の更新(implementフローの`implement_finish`が使う)。
+// pushしたブランチのPRを作り、同じheadの未完了のPRを探し、本文を書き換える。
+// GitHubは同じheadのPRを重複して作ると422を返すため、再承認後の再実装では
+// 2つ目を作らず既存のPRを更新する。
 // ---------------------------------------------------------------------------
 
 export type PullRequestRef = {
@@ -2213,13 +2246,15 @@ export type CreatePullRequestOptions = {
   readonly base: string;
   readonly title: string;
   readonly body: string;
-  /** Default false. */
+  /** 既定は`false`。 */
   readonly draft?: boolean;
 };
 
-/** `POST /repos/{owner}/{repo}/pulls`. `head`/`base` are branch names in
- * the same repository (never `owner:branch` — the factory only opens PRs
- * from branches it pushed to the target repo itself). */
+/**
+ * `POST /repos/{owner}/{repo}/pulls`でPRを作る。
+ * `head` / `base`は同じリポジトリのブランチ名で、`owner:branch`の形は使わない。
+ * Factoryは自分で対象のリポジトリにpushしたブランチからしかPRを作らないためである。
+ */
 export async function createPullRequest(
   client: GhClient,
   owner: string,
@@ -2248,9 +2283,12 @@ export async function createPullRequest(
   return { number: parsed.number, htmlUrl: parsed.html_url };
 }
 
-/** `GET /repos/{owner}/{repo}/pulls?head=<owner>:<branch>&state=open` —
- * the first open PR for `head`, or `null`. GitHub's `head` filter requires
- * the `user:ref-name` form; the user is always this repo's owner here. */
+/**
+ * `GET /repos/{owner}/{repo}/pulls?head=<owner>:<branch>&state=open`で、
+ * `head`の最初の未完了のPRを返す。無ければ`null`を返す。
+ * GitHubの`head`の絞り込みには`user:ref-name`の形が必要で、
+ * ここでのuserは常にこのリポジトリのownerである。
+ */
 export async function findOpenPullRequestByHead(
   client: GhClient,
   owner: string,
@@ -2280,8 +2318,10 @@ export type PullRequestUpdate = {
   readonly body?: string;
 };
 
-/** `PATCH /repos/{owner}/{repo}/pulls/{number}` with only the given fields
- * (`title` and / or `body`). */
+/**
+ * `PATCH /repos/{owner}/{repo}/pulls/{number}`で、渡したフィールド
+ * (`title`と`body`のどちらかまたは両方)だけを更新する。
+ */
 export async function updatePullRequest(
   client: GhClient,
   owner: string,
@@ -2301,7 +2341,7 @@ export async function updatePullRequest(
   ensureSuccess(response, `PATCH pr ${owner}/${repo}#${number}`);
 }
 
-/** `PATCH /repos/{owner}/{repo}/pulls/{number}` with only `body`. */
+/** `PATCH /repos/{owner}/{repo}/pulls/{number}`で`body`だけを更新する。 */
 export async function updatePullRequestBody(
   client: GhClient,
   owner: string,

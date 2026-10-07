@@ -1,22 +1,12 @@
-// PathScript step 1/4 of f/factory/pipeline (spec-cycle2.md §3 M6
-// "pipeline.flow" / plan §4 "prepare_workspace"). Loads the work item and
-// config, ensures the self clone and the target repo's fetch-only main
-// clone exist, resolves the default branch's head sha, and creates (or
-// reuses) a read-only detached worktree at
-// /workspaces/<owner>/<repo>/req-<issue_number> for the requirements-
-// generation stage to read from. Re-checks the Issue is still open before
-// committing to `requirements_generating` — a poll_issues reconcile could
-// have cancelled the work item between claim and this flow actually
-// starting (spec-cycle2.md §7 item 6).
-//
-// [blocker fix, M6 review round 1] `work_items.attempt` was never updated
-// after insert (it stays 1 forever), so anything reading `workItem.attempt`
-// back from the DB (e.g. `retry_work_item.ts`'s `workItem.attempt + 1`) saw
-// a stale value from attempt 2 onward. Fixed by persisting `flow_input.
-// attempt` via `db.setAttempt` as early as possible — right after
-// confirming the work item is valid and not terminal, before any
-// failure-prone repo/worktree I/O — so even a run that fails partway still
-// leaves `work_items.attempt` accurate.
+// f/factory/pipelineフローの3ステップ中1番目。
+// 作業項目と設定を読み、Factory自身のcloneと、
+// 対象リポジトリのfetchだけを行うmainのcloneを用意する。
+// デフォルトブランチのheadのshaを求め、要件生成ステージが読む
+// 読み取り専用のdetachedのworktreeを
+// `/workspaces/<owner>/<repo>/req-<issue_number>`に作る(既存なら再利用する)。
+// `requirements_generating`に進める前に、Issueがまだopenかを確かめ直す。
+// 確保からこのフローの開始までの間に、`poll_issues`のreconcileが
+// 作業項目を取り消している場合があるため。
 
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "../lib/config.ts";
@@ -47,17 +37,20 @@ export type PipelinePrepareResult =
       readonly head_sha: string;
     };
 
-/** Whether this work item has already reached a terminal status (pure, for
- * testing) — pipeline_prepare.ts skips rather than restarting one, since a
- * concurrent poll_issues reconcile or a prior requirements_apply.ts run may
- * have already closed it out. */
+/**
+ * 作業項目が終了状態に達しているかを返す。テストできるよう純粋関数にしている。
+ * 終了済みなら再開せずに飛ばす。並行する`poll_issues`のreconcileや、
+ * 前回の`requirements_apply.ts`の実行が、すでに終わらせている場合があるため。
+ */
 export function isAlreadyTerminal(status: WorkItemStatus): boolean {
   return TERMINAL_WORK_ITEM_STATUSES.includes(status);
 }
 
-/** The read-only detached worktree path for generating requirements against
- * one Issue (pure, for testing) — shared by pipeline_prepare.ts (create/
- * reuse) and requirements_apply.ts (final removal). */
+/**
+ * 1つのIssueの要件を生成するための、読み取り専用のdetachedのworktreeのパスを返す。
+ * このファイルが作成と再利用に、`requirements_apply.ts`が最後の削除に使うため、
+ * 両者で同じパスになるようここに一本化している。
+ */
 export function buildRequirementsWorktreeDir(
   owner: string,
   repo: string,
@@ -66,8 +59,10 @@ export function buildRequirementsWorktreeDir(
   return `/workspaces/${owner}/${repo}/req-${issueNumber}`;
 }
 
-/** Finds the worktree entry at `worktreeDir` among `entries` (pure, for
- * testing) — `undefined` if none is registered there yet. */
+/**
+ * `entries`から、パスが`worktreeDir`のworktreeを探して返す。
+ * まだ登録されていなければ`undefined`を返す。
+ */
 export function findWorktreeEntry(
   entries: readonly WorktreeEntry[],
   worktreeDir: string,
@@ -76,15 +71,13 @@ export function findWorktreeEntry(
 }
 
 /**
- * Whether an already-registered worktree can be reused as-is (pure, for
- * testing): only when it exists AND is checked out at the target repo's
- * current default-branch head (`headSha`). [major, M6 review round 1,
- * devil-advocate] Previously this checked path membership alone — a stale
- * worktree left over from before the target repo's default branch moved on
- * (or from a superseded earlier attempt) would silently be reused pointing
- * at an old commit, so Claude would read requirements against outdated
- * code. A path match at a different head sha is now treated as stale;
- * main() removes and recreates it instead of reusing it.
+ * 登録済みのworktreeをそのまま再利用できるかを返す。
+ * 再利用するのは、worktreeが存在し、かつ対象リポジトリの
+ * 現在のデフォルトブランチのhead(`headSha`)をcheckoutしているときだけ。
+ * パスが一致するだけで再利用すると、デフォルトブランチが進む前や
+ * 古いattemptで作られたworktreeが古いコミットを指したまま気づかないうちに使われ、
+ * Claudeが古いコードを読んで要件を書いてしまう。
+ * パスが一致してもshaが違うものは古いとみなし、`main`が削除して作り直す。
  */
 export function shouldReuseWorktree(
   entry: WorktreeEntry | undefined,
@@ -93,10 +86,11 @@ export function shouldReuseWorktree(
   return entry !== undefined && entry.headSha === headSha;
 }
 
-/** Whether the Issue's current state means this pipeline run must cancel
- * instead of proceeding (pure, for testing) — a poll_issues reconcile could
- * have missed a close that happened between claim and this flow actually
- * starting. */
+/**
+ * Issueの現在の状態から、このpipelineの実行を進めずに取り消すべきかを返す。
+ * 確保からこのフローの開始までの間にIssueが閉じられても、
+ * `poll_issues`のreconcileが見逃している場合があるため、ここでも確かめる。
+ */
 export function shouldCancelForClosedIssue(issueState: string): boolean {
   return issueState !== "open";
 }
@@ -134,8 +128,9 @@ export async function main(
     );
   }
 
-  // See the blocker-fix module doc above: persist as early as possible,
-  // before any failure-prone repo/worktree I/O below.
+  // `retry_work_item.ts`などは`work_items.attempt`を読んで次のattemptを決める。
+  // 途中で失敗した実行でも値が正しく残るよう、作業項目の検証直後、
+  // 失敗しうるリポジトリやworktreeの操作より前に保存する。
   await setAttempt(work_item_id, attempt);
 
   await ensureFactoryClone({

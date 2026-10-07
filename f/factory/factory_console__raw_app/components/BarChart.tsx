@@ -1,5 +1,5 @@
-// A minimal hand-drawn SVG bar chart — no charting library, per the M8 task
-// (Analytics tab data is small enough that a plain bar chart is enough).
+// グラフのライブラリを使わず、SVGで直接描く最小限の棒グラフ。
+// 分析タブのデータは小さく、単純な棒グラフで足りるため。
 
 import React from "react";
 

@@ -5,7 +5,7 @@
 - Issueを拾ったインスタンスの所有者が、そのIssueの承認を行う。
 - 各インスタンスは稼働前に`f/factory/factory_config`の`instance_name`を必ず設定する(Discord通知・承認Inboxの担当表示に使われる)。
 - 1つのIssueは1つのインスタンスが占有する。claim(assignee設定 + `factory`ラベルの消費)に成功したインスタンスだけがそのIssueを処理し、後から来た他インスタンスは撤退する。
-- 既知の制約: claim(ラベル消費)の直後にDBへの登録が失敗すると、その Issue はラベルも作業項目も無い状態になり、自動では拾い直されない。Discordの失敗通知を見て人が`factory`ラベルを付け直す。
+- 既知の制約: claim(ラベル消費)の直後にDBへの登録が失敗すると、そのIssueはラベルも作業項目も無い状態になり、自動では拾い直されない。Discordの失敗通知を見て人が`factory`ラベルを付け直す。
 - Issue・PRとも、付くラベルはトリガーのみ(2026-09-27方針変更): Issueは`factory`、PRは`factory:review` / `factory:fix`。付けると起動し、claim時に外れる(消費される)。以後はどの状態遷移でもIssue / PRのラベルは付け外しされず、状態はConsoleのPipelineタブで確認する。**もう一度処理させたい場合は、人が改めてトリガーラベルを付け直す**(新しいcycleとして扱われる)。ラベルが外れた後も、`tracked_pr_days`(既定30日)以内に更新があったPRは`poll_prs`がDB(`work_items`)から再発見し続けるため、人が新しいcommitをpushすれば自動で再レビューが起動する。それ以上追跡させたくない場合はPRをcloseするか、`tracked_pr_days`を過ぎるまで待つ。
 
 ## 日常運用
@@ -16,7 +16,7 @@
 - 要件定義書はConsoleの**要件定義タブ**からも一覧・閲覧できる(承認待ちに限らず、過去に生成されたすべてのattemptを含む)。Issueコメントの承認済みリンクやDiscord通知のリンクは`#requirements/<work_item_id>`という形式のフラグメントを末尾に付けており、これを開くと要件定義タブが自動的にその作業項目を選択する。ただしConsoleはWindmillの管理画面内で動くraw app(サンドボックスされた別オリジン)であるため、埋め込み元のURLを読み取れずこのジャンプが効かない場合がある(実行環境依存、未検証)。その場合はリンク本文に併記されている`work_item_id`を要件定義タブの一覧上部の絞り込み欄に入力して探す(一覧の各行にも`work_item_id`を表示している)か、ブラウザのアドレスバーで開いたConsoleのタブに直接`#requirements/<work_item_id>`を追記する。
 - Issueに自動投稿されるコメントは、要件定義が承認されたときのConsoleリンク1件のみ。着手・承認待ち・却下・期限切れ・失敗・要人手といった運用上の状態はIssueには書かず、Discord通知とConsoleで確認する(GitHubには成果物のみを残す方針、2026-09-27)。
 - Rejectすると要件定義が再生成され(`attempt`が加算される)、再度承認待ちになる。試行回数が上限を超えると`needs_human`になる。
-- 失敗したwork itemはFactory Console AppのFailuresタブから再実行できる(`retry_work_item`)。kindを問わずラベルの付け外しはせず、対応するflowを直接再起動する: Issue kindは、最新の要件定義の承認がそのwork itemのattemptに一致し、かつ`implement_enabled`が`true`なら`f/factory/implement`(`implementing`から)、そうでなければ`f/factory/pipeline`、PR kindは`f/factory/pr_review` / `f/factory/pr_fix`。再実行できるstatusは`failed` / `needs_human` / `expired` / `blocked` / `approved`(`approved`は実装の起動前に止まった場合のためで、実装フローへ再起動できないときは理由(`implement_enabled`が無効か、承認とattemptの不一致か)を示して拒否する)。承認がattemptに一致しているのに`implement_enabled`が無効な場合は、承認済みの要件定義を作り直さないよう、statusを問わず再実行を拒否する。状態の遷移は読み取ったstatusからのCASで、途中で別の処理がstatusを変えていれば再実行しない。トリガーラベルはclaim時に一度だけ消費され、再付与されない。PR kindは再起動後も`listTrackedPrs`によるDB上の追跡対象であり続ける。
+- 失敗した作業項目はFactory Console AppのFailuresタブから再実行できる(`retry_work_item`)。kindを問わずラベルの付け外しはせず、対応するflowを直接再起動する: Issue kindは、最新の要件定義の承認がその作業項目のattemptに一致し、かつ`implement_enabled`が`true`なら`f/factory/implement`(`implementing`から)、そうでなければ`f/factory/pipeline`、PR kindは`f/factory/pr_review` / `f/factory/pr_fix`。再実行できるstatusは`failed` / `needs_human` / `expired` / `blocked` / `approved`(`approved`は実装の起動前に止まった場合のためで、実装フローへ再起動できないときは理由(`implement_enabled`が無効か、承認とattemptの不一致か)を示して拒否する)。承認がattemptに一致しているのに`implement_enabled`が無効な場合は、承認済みの要件定義を作り直さないよう、statusを問わず再実行を拒否する。状態の遷移は読み取ったstatusからのCASで、途中で別の処理がstatusを変えていれば再実行しない。トリガーラベルはclaim時に一度だけ消費され、再付与されない。PR kindは再起動後も`listTrackedPrs`によるDB上の追跡対象であり続ける。
 - 監査は毎週月曜09:30に自動で走る(`audit_kickoff`schedule)。Consoleの**監査タブ**の「今すぐ監査」で前倒しできる(実行中の監査がある、対象期間が空、新しい記録が無い、日次予算超過のいずれかならスキップ理由が表示される)。監査レポートは監査タブで読む(一覧から選ぶと本文と提案の決定状況が表示される)。Discordの`audit_completed`通知のリンクは`#audit/<work_item_id>`を末尾に付けており、要件定義タブと同じ制約でジャンプが効かない場合は一覧から選ぶ。提案は承認Inboxに「改善提案」として並び、承認するとFactory自身のリポジトリにIssueが起票される。改善提案の承認欄では「起票と同時にfactoryラベルを付けて要件定義に進める」が既定でオンになっており、外せば起票のみになる。`factory_repo`は`repo_allowlist`の内容に関わらず常にFactoryの対象なので、ラベルを付けたIssueはそのまま要件定義に進む。
 - 通知の種類: `picked` / `awaiting_approval` / `approved` / `rejected` / `needs_human` / `failed` / `expired` / `cancelled` / `pr_opened`(実装フローがPRを作成 / 更新した)/ `self_update`(ホスト操作が必要)/ `daily_summary`(前日のコスト・件数・失敗)/ `audit_completed`(監査で改善提案が1件以上生成された)。
 
@@ -33,7 +33,7 @@
 - 設定値(既定): `implement_max_rounds`(5)、`implement_max_turns`(80)、`implement_max_budget_usd_per_run`(10)、`implement_timeout_sec`(3600)、`implement_max_changed_files`(60)、`implement_max_diff_lines`(3000)。1 Issueあたりの予算上限は`implement_max_rounds × implement_max_budget_usd_per_run`。差分の上限(`implement_max_changed_files` / `implement_max_diff_lines`)は、既存のPRを更新する場合も含めて、実装ブランチと既定ブランチの分岐点(merge-base)からの差分で測る。
 - 実行時間: 検証ループは最長で`implement_max_rounds × implement_timeout_sec`(既定5時間)と検査コマンドの時間がかかる。検査コマンドのタイムアウトは1コマンドごとに`implement_timeout_sec`である。Windmillのインスタンス設定`job_default_timeout`は未設定(2026-09-29確認)で、この長さでも打ち切られない。インスタンスに既定のタイムアウトを設定する場合は、この値より長くする。`cleanup_workspaces`は`claude_timeout_sec`と`implement_timeout_sec`の長い方に5分を足した時間を超えたheadless Claudeだけを孤児として停止する。
 - 実装フローは1回の実行で、worker(`NUM_WORKERS`の数だけある)の1つを数時間占有する。その間、他のflowが使えるworkerはその分減る。
-- `self_update`は実行中の実装フローを待たずに新しいstepを反映するため、`implement_prepare`と`implement_finish`の間に別のバージョンのstepが動くことがある。実装フローの実行中(`implementing`のwork itemがある間)はmainへのマージとデプロイを避ける。
+- `self_update`は実行中の実装フローを待たずに新しいstepを反映するため、`implement_prepare`と`implement_finish`の間に別のバージョンのstepが動くことがある。実装フローの実行中(`implementing`の作業項目がある間)はmainへのマージとデプロイを避ける。
 - `implement_enabled`を`true`にする前に、Issue #32、#33、#34を解決しておく。
 
 ## 通知
@@ -56,21 +56,21 @@
 - 指摘がGitHubのCOMMENTとして投稿される。完了状態は`reviewed`。
 - Factoryはレビューの開始コメントを投稿しない。レビュー指摘(インラインコメント + コード提案)と総評のみを投稿する。
 - 運用者自身のアカウントで投稿するため、総評・インラインコメントとも1行目に`[pr_review 自動レビュー] @<author>`というロールタグ + メンションが付く。
-- レビュー総評はClaudeの自由記述ではなく、次の固定4パターンのいずれかをflowが組み立てて投稿する: (1)指摘を投稿した場合(初回・再レビュー共通、行に紐づけられず投稿できなかった指摘があるだけの場合も含む)は件数 + 「確認お願いします。」(この場合、最終判断の一文は付かない)、(2)このPRへのfactoryレビューが過去にあり指摘0件の再レビューは「修正を確認しました。LGTMです。」+「最終的なApprove判断は人が行ってください。」、(3)初回レビューで指摘0件は「指摘はありません。LGTMです。」+ 同じ最終判断の一文、(4)このPRへのfactoryレビューが過去にあり指摘0件の再レビューだが、過去の`[MUST]`指摘で今回のresolve処理でも解決できなかったものが残っている場合は「新しい指摘はありません。未対応の指摘がN件残っています。確認お願いします。」(最終判断の一文は付かない)。Claudeの`summary`は`factory.reviews`に記録されるのみでGitHubには投稿されない。
-- 再レビューでは、このPRに対するfactory自身の未解決の指摘一覧がClaudeへの入力に含まれる。実質的に同じ内容の指摘は新規指摘として再度投稿されず、新規・変化があった指摘のみ報告される(diffで既に解消済みと判断できるものは何も報告されない。スレッドのresolveは別処理が行う)。
-- スレッドの自動解決(resolve)は、factory自身のインラインコメントスレッドのうち、そのスレッドの最後のコメントもfactoryが書いたものである場合に限られる。スレッド内に人が返信している場合は自動解決の対象にならず、開いたままになる。このPRへのfactoryレビューが過去にある(=再レビューである)たびに、pr_fixがcommit sha付きで「対応: `<sha>`」と返信済みのスレッドをresolveする(「対応: 見送り」「対応: 変更なし」は人の判断が必要なためresolveしない)。加えて指摘0件の再レビュー(上記パターン2・4のいずれでも)では、factory自身の指摘のまま何も返信されていないスレッド(人が手で直した等)もresolveする。初回レビュー(過去のfactoryレビューがない)では何もresolveしない。resolve処理後もなお開いたままの`[MUST]`スレッドが1件以上あると、パターン4になる。
+- レビュー総評はClaudeの自由記述ではなく、次の固定4パターンのいずれかをflowが組み立てて投稿する: (1)指摘を投稿した場合(初回・再レビュー共通、行に紐づけられず投稿できなかった指摘があるだけの場合も含む)は件数 + 「確認お願いします。」(この場合、最終判断の一文は付かない)、(2)このPRへのFactoryレビューが過去にあり指摘0件の再レビューは「修正を確認しました。LGTMです。」+「最終的なApprove判断は人が行ってください。」、(3)初回レビューで指摘0件は「指摘はありません。LGTMです。」+ 同じ最終判断の一文、(4)このPRへのFactoryレビューが過去にあり指摘0件の再レビューだが、過去の`[MUST]`指摘で今回のresolve処理でも解決できなかったものが残っている場合は「新しい指摘はありません。未対応の指摘がN件残っています。確認お願いします。」(最終判断の一文は付かない)。Claudeの`summary`は`factory.reviews`に記録されるのみでGitHubには投稿されない。
+- 再レビューでは、このPRに対するFactory自身の未解決の指摘一覧がClaudeへの入力に含まれる。実質的に同じ内容の指摘は新規指摘として再度投稿されず、新規・変化があった指摘のみ報告される(diffで既に解消済みと判断できるものは何も報告されない。スレッドのresolveは別処理が行う)。
+- スレッドの自動解決(resolve)は、Factory自身のインラインコメントスレッドのうち、そのスレッドの最後のコメントもFactoryが書いたものである場合に限られる。スレッド内に人が返信している場合は自動解決の対象にならず、開いたままになる。このPRへのFactoryレビューが過去にある(=再レビューである)たびに、pr_fixがcommit sha付きで「対応: `<sha>`」と返信済みのスレッドをresolveする(「対応: 見送り」「対応: 変更なし」は人の判断が必要なためresolveしない)。加えて指摘0件の再レビュー(上記パターン2・4のいずれでも)では、Factory自身の指摘のまま何も返信されていないスレッド(人が手で直した等)もresolveする。初回レビュー(過去のFactoryレビューがない)では何もresolveしない。resolve処理後もなお開いたままの`[MUST]`スレッドが1件以上あると、パターン4になる。
 - レビュー形式は`.claude/skills/factory-review/SKILL.md`の「投稿形式」節を参照。
 - 運用通知(失敗・要人手・ブロック)はPRに投稿せずDiscordに送る。
 
 ### PR修正(`pr_fix`)
 
-- PRに`factory:fix`ラベルを付けると実行される。すでにfactoryがレビュー済み(`reviewed`)のPRでも有効。修正への指示は、ラベルを付ける前にPRへ通常のコメントとして書いておく(`pr_fix_collect`が他の人間のコメントと同様にフィードバックとして収集する)。
+- PRに`factory:fix`ラベルを付けると実行される。すでにFactoryがレビュー済み(`reviewed`)のPRでも有効。修正への指示は、ラベルを付ける前にPRへ通常のコメントとして書いておく(`pr_fix_collect`が他の人間のコメントと同様にフィードバックとして収集する)。
 - 運用通知(失敗・要人手・ブロック)はPRに投稿せずDiscordに送る。
 - レビュー指摘・未解決コメントの修正を行い、各コメントへ返信してから再レビューを依頼(`rereview_requested`)。
 - 返信は運用者自身のアカウントで投稿するため、1行目のロールタグ・本文・末尾の対応行(コミットshaまたは「見送り」)という固定構造でflow側がレンダリングする。形式は`.claude/skills/factory-fix/SKILL.md`の「返信形式」節を参照。
 - コミットメッセージはClaudeが提案する件名(`commit_subject`、50文字以内を目安・72文字を超えると拒否・Conventional Commits形式)と任意の本文(`commit_body`、箇条書き)をflowが結合して作る。トレーラー(`Co-Authored-By` / `Generated-By`)はflow側が自動で付与する。コミットメッセージにも英数字と日本語の間のスペース除去が適用される(コードスパン内は除く)。
 - 要件変更が必要な場合は修正を中断し、元のIssueをrequirements_generatingにattempt+1で再起動(`requirements_gap` → 親Issue)。
-- Factory自身の投稿は「viewer(FactoryのGitHubアカウント)と同じログイン **かつ** factoryマーカー付き」の両方で判定する。同一アカウントで運用しているため、人が投稿したコメントはログインが一致してもマーカーが無いのでhuman feedbackとして扱われる。同様にFactory自身の一次レビュー(`pr_review`)とその未解決のインラインコメントもマーカー無し(または`pr_review`マーカー)であればfeedbackとして扱われ、pr_fixはその指摘を修正対象にする。除外されるのはFactory自身の`pr_fix`返信(`pr_fix`マーカー付き)のみ。
+- Factory自身の投稿は「viewer(FactoryのGitHubアカウント)と同じログイン**かつ**Factoryマーカー付き」の両方で判定する。同一アカウントで運用しているため、人が投稿したコメントはログインが一致してもマーカーが無いのでhuman feedbackとして扱われる。同様にFactory自身の一次レビュー(`pr_review`)とその未解決のインラインコメントもマーカー無し(または`pr_review`マーカー)であればfeedbackとして扱われ、pr_fixはその指摘を修正対象にする。除外されるのはFactory自身の`pr_fix`返信(`pr_fix`マーカー付き)のみ。
 
 #### 各コメントへの返信の3値(`decision`)
 
@@ -89,16 +89,16 @@
 - ConsoleのInboxタブに、要件定義の承認待ちと並んで「Issue化提案」の種別バッジ付きで一覧表示され、そこから承認 / 却下する。左の一覧でPR番号・PRタイトル・提案タイトル・作成日時・担当者を確認して提案を選ぶと、右に提案本文(Markdown)と操作欄が表示される。「起票と同時にfactoryラベルを付けて要件定義に進める」のチェックボックス(Issue化提案は既定オフ、改善提案は既定オン)で`with_factory_label`を切り替え、却下時のみ理由欄が必須になる。Appを使わない代替手順として、Windmill UIで`f/factory/approval_decide`を直接開き、`approval_request_id`(ConsoleのInboxに記載)/ `decision`(approve / reject) / `reason`(却下時は必須) / `options`(承認時のみ`{"with_factory_label": true}`のように指定)を入力してRunすることもできる。
 - **承認**すると、提案の`title` / `body`でIssueを対象リポジトリに作成し(`body`中の`{{pr_url}}`は元PRのURLに置換され、末尾に起票元を示す一文が付く)、レビュースレッドに`Issue #Nを起票しました。`と返信してスレッドを解決(resolve)する。`with_factory_label`を`true`にすると、作成したIssueに`factory_config.trigger_label`(既定`factory`)が付き、そのまま要件定義工程に乗る。ラベルを付けない場合は起票のみで、必要になったら人が後から`factory`ラベルを付ける。
 - **却下**すると、レビュースレッドに`見送りとします。`+ 入力した理由を返信するが、スレッドは開いたままになる(人が改めて判断する)。
-- 対象work itemに未決定の提案が残っていなければ、work itemの状態を`needs_human`から`rereview_requested`(その回でコミットをpushしていた場合)または`reviewed`(pushしていなかった場合)へ自動で切り替える。未決定の提案が他に残っている間は`needs_human`のまま。
+- 対象の作業項目に未決定の提案が残っていなければ、作業項目の状態を`needs_human`から`rereview_requested`(その回でコミットをpushしていた場合)または`reviewed`(pushしていなかった場合)へ自動で切り替える。未決定の提案が他に残っている間は`needs_human`のまま。
 - **同じ`decision`での再実行は安全**(冪等)。承認は`status = 'pending'`条件付きのUPDATEで一度だけ決定を記録し、作成したIssueの本文へ`<!-- factory:issue_proposal:<id> -->`というマーカーを埋め込む。途中(決定の記録後、Issue作成前後)でjobが失敗して同じ`proposal_id` / `decision`で再実行しても、このマーカーで既存のIssueを検索して再利用するため、Issueが二重に作られることはない。すでに承認 / 却下が完了している提案に対して異なる`decision`を投げた場合は、上書きせずエラーで拒否する。
 - **起票に失敗した提案はInboxに残る**。Issueの作成自体が失敗した場合は決定前の`pending`に戻り、Issue作成後の返信・スレッド解決・状態遷移が失敗した場合は`承認済み・起票未完了`として(「起票未完了」バッジ付きで)Inboxに表示され続ける。いずれの場合も改めて承認を実行すれば、続きから起票する。
 
 ### ラベルと終端状態(2026-09-27方針変更)
 
-- PRに付くラベルはトリガーのみ(Issueの`factory`と同じ方針): `factory:review`(レビュー起動) / `factory:fix`(修正起動)。人が付与し、claim時に消費されて外れる。以後はどの状態遷移でもPRのラベルは付け外しされない。状態は`work_items.status`のみが正であり、Consoleの Pipeline タブで確認する。このリポジトリ自身の基盤整備PR(foundation PR)には`factory:review` / `factory:fix`のいずれも付けない。
+- PRに付くラベルはトリガーのみ(Issueの`factory`と同じ方針): `factory:review`(レビュー起動) / `factory:fix`(修正起動)。人が付与し、claim時に消費されて外れる。以後はどの状態遷移でもPRのラベルは付け外しされない。状態は`work_items.status`のみが正であり、ConsoleのPipelineタブで確認する。このリポジトリ自身の基盤整備PR(foundation PR)には`factory:review` / `factory:fix`のいずれも付けない。
 - 終端状態: `reviewed`(pr_review完了、修正不要・人のApprove待ち) / `rereview_requested`(修正をpushして再レビュー依頼中) / `blocked` / `needs_human`(人の対応が必要。pr_fixが`needs_human` / `blocked` / `failed`で終了したとき、pr_review自体が失敗したとき、またはIssue化提案(`propose_issue`)が1件以上あるとき)。
 - トリガーラベルが外れた後も、`tracked_pr_days`(既定30日、`factory_config`)以内に更新のあったPRは`poll_prs`がDB(`work_items`、`listTrackedPrs`)から再発見し続ける。人が新しいcommitをpushするたびに自動で再レビューが起動する(1 pushにつきClaude実行1回)。これ以上追跡させたくないPRはcloseするか、`tracked_pr_days`を過ぎるまで待つ。
-- `review_post_mode: "gated"`ではレビューを投稿しないため(gatedは検証用の予約モードで、PRはレビュー依頼・assignee経由でのみ再発見される)。
+- `review_post_mode: "gated"`ではレビューを投稿しない。gatedは検証用の予約モードで、PRはレビュー依頼かassignee経由でのみ再発見される。
 - 対象は`factory_config`の`repo_allowlist`(未指定なら`owners`に含まれるリポジトリ全体)に含まれるリポジトリのみ。`factory_repo`は`repo_allowlist`に関わらず常に対象。試験的に対象を絞りたい場合は`repo_allowlist`に対象リポジトリを明示する。
 
 ### pr_fixの再実行
@@ -118,7 +118,7 @@
 - worker imageに入れるツール(`claude` / `gh` / `gitleaks` / `gtr` / `wmill`)のバージョンは`mise.toml`の`[env]`(`CLAUDE_VERSION` / `GH_VERSION` / `GITLEAKS_VERSION` / `GTR_REF` / `WMILL_VERSION`)で固定し、`infra/worker/Dockerfile`のbuild argとして渡す。ツールの追加やバージョン変更はworker imageのrebuildが必要な変更で、`git pull`だけでは反映されない。`self_update`が`infra/`と`mise.toml`の`[env]`の変更として検知して通知するので、ホスト側で`mise run deploy`を実行する。`gitleaks`は工程3(実装フロー)が毎ラウンドの固定検査として`--redact`付きで実行するためにworker imageに入れている(ホスト側のpre-commit hookと同じバージョン)。
 - workerコンテナは`init: true`(docker-init)をPID 1にしてゾンビプロセスを回収する。jobが起こすgit / gh / esbuildの子プロセスは親より長生きすることがあり、initが無いとwindmill本体に付け替えられたまま回収されず、`pids: 512`の上限を食い潰して全jobが`errno=11`(EAGAIN、スレッドや子プロセスを作れない)で失敗する(2026-09-28に430個のゾンビで再現)。同じ症状が出たら`docker compose -f infra/docker-compose.yml exec windmill_worker cat /sys/fs/cgroup/pids.current`で使用量を見て、`docker compose -f infra/docker-compose.yml restart windmill_worker`で復旧する。
 - `wmill sync push`に **`--include-secrets`を付けてはいけない**。付けるとリポジトリ内の`f/factory/*.variable.yaml`(値は空のままコミットされている)で4つのsecret変数(`claude_oauth_token` / `github_token` / `wmill_token` / `discord_webhook_url`)が空に上書きされる。`mise run push`(`wmill sync push --yes --keep-deleted`)は`--include-secrets`を付けない設定になっている。
-- secret変数(`f/factory/*.variable.yaml`)とinstance固有の`factory_config` resourceは同期対象外のため、これらの **説明文(description)を変えても`mise run push`では既存instanceに反映されない**。既存instanceではWindmill UI(Variables / Resourcesの編集画面)で説明文だけを更新する。新規instanceはbootstrapがリポジトリの説明文で作成する。
+- secret変数(`f/factory/*.variable.yaml`)とinstance固有の`factory_config` resourceは同期対象外のため、これらの**説明文(description)を変えても`mise run push`では既存instanceに反映されない**。既存instanceではWindmill UI(Variables / Resourcesの編集画面)で説明文だけを更新する。新規instanceはbootstrapがリポジトリの説明文で作成する。
 - `f/factory/deployed_sha`変数も同期対象外(理由は他の2つと異なり、instance固有の設定ではなく`self_update`が書き込む実行時状態のため)。`mise run push`を実行しても値は変わらない。`bootstrap`は初回のみ空値で作成し、既に存在する場合は値を変更しない。値をリセットしたい場合はWindmill UIから直接編集する。
 - `self_update`スケジュール(10分毎)が`infra/`の変更、または`mise.toml`の`[tools]`・`[env]`セクション(ツールのバージョンとcomposeが読む環境変数)の変更を検知すると、DiscordとダッシュボードのNoticesで「`mise run deploy`を実行してください」と通知する。`mise.toml`の`[tasks.*]`だけの変更、`scripts/`(ホスト側のbootstrap / doctor / lint)、`mise.local.toml.example`の変更はworkerの動作に影響しないため通知しない。`f/`・`migrations/`・`.claude/skills/`の変更は`self_update`が自動で反映するので、ホスト側の操作は不要である。
 
@@ -130,7 +130,7 @@
 
 ## 秘密のローテーション
 
-1. GitHub PAT / Claude Code OAuthトークンを再発行する(手順は [docs/security.md](security.md)を参照)。
+1. GitHub PAT / Claude Code OAuthトークンを再発行する(手順は[docs/security.md](security.md)を参照)。
 2. 新しい値を`mise set -E local KEY=value`(`read -rs`経由を推奨)で投入する。
 3. `mise run bootstrap`を再実行する。`bootstrap.sh`は冪等なので、既存のWindmill変数は新しい値で上書き更新される。
 

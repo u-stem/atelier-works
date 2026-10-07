@@ -1,8 +1,7 @@
-// Table-of-contents extraction for RequirementsDocument.tsx's right-hand
-// sidebar: pulls every `##`/`###` heading out of a requirements document's
-// markdown and derives the same `id` react-markdown's `h2`/`h3` renderer
-// (components/Markdown.tsx) assigns, so a TOC entry's link (`#<id>`) always
-// matches the heading it points at.
+// 要件定義書のMarkdownから見出しを取り出す。
+// `RequirementsDocument.tsx`の右側の目次に使う。
+// `components/Markdown.tsx`が`h2`/`h3`に付ける`id`と同じ値を作るので、
+// 目次のリンク(`#<id>`)は、指す先の見出しと必ず一致する。
 
 export type Heading = {
   readonly level: 2 | 3;
@@ -12,12 +11,13 @@ export type Heading = {
 
 const HEADING_LINE_PATTERN = /^(##|###)\s+(.+?)\s*$/;
 
-/** Derives a stable slug from a heading's text (pure, for testing) — kept
- * simple (lowercase, non-alphanumeric runs collapsed to `-`) rather than
- * pulling in a slug library, matching what `Markdown.tsx`'s heading
- * renderer computes for the same text so TOC links resolve. Non-ASCII text
- * (this document is Japanese) keeps its characters as-is; only ASCII
- * uppercase and separator characters are normalized. */
+/**
+ * 見出しの文字列から、同じ入力なら常に同じになるスラッグを作って返す。
+ * 小文字にし、空白と`/`を`-`に置き換え、文字・数字・`・`・`-`以外を除く。
+ * 文書は日本語なので、ASCII以外の文字はそのまま残す。
+ * `Markdown.tsx`の見出しも同じ関数で`id`を作るため、目次のリンクが見出しに届く。
+ * スラッグ用のライブラリは使わず、この単純な規則にとどめる。
+ */
 export function slugify(text: string): string {
   return text
     .trim()
@@ -30,19 +30,21 @@ export function slugify(text: string): string {
 
 const TITLE_LINE_PATTERN = /^#\s+(.+?)\s*$/m;
 
-/** Extracts the document's `# ` title line (pure, for testing) — `null`
- * when the markdown has no level-1 heading. Used by
- * components/RequirementsDocument.tsx as the document's page title,
- * falling back to the work item's Issue title when absent. */
+/**
+ * 文書の`# `で始まるタイトル行を取り出す。レベル1の見出しが無ければ`null`を返す。
+ * `components/RequirementsDocument.tsx`がページのタイトルに使い、
+ * `null`のときは作業項目のIssueのタイトルで代える。
+ */
 export function extractTitle(markdown: string): string | null {
   const match = TITLE_LINE_PATTERN.exec(markdown);
   return match?.[1] ?? null;
 }
 
-/** Extracts every `##`/`###` heading from `markdown`, in document order
- * (pure, for testing). A duplicate slug gets a `-2`, `-3`, ... suffix so
- * every `id` in the result is unique (two headings with the same text would
- * otherwise collide on the same anchor). */
+/**
+ * `markdown`から`##`/`###`の見出しをすべて、文書の順に取り出す。
+ * 同じ文字列の見出しが同じアンカーで衝突しないよう、重複したスラッグには
+ * `-2`、`-3`…を付け、結果の`id`をすべて一意にする。
+ */
 export function extractHeadings(markdown: string): Heading[] {
   const seen = new Map<string, number>();
   const headings: Heading[] = [];

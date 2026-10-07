@@ -1,59 +1,6 @@
-// PathScript step 2/4 of f/factory/pipeline (spec-cycle2.md §3 M6
-// "generate_requirements"). Runs the daily budget guard, then headless
-// Claude with the factory-requirements + drawio-diagram skills, writing
-// directly into a per-attempt requirements-doc directory on disk
-// (`REQUIREMENTS_BASE_DIR`/<owner>/<repo>/issue-<N>/wi-<id>/attempt-<k>,
-// see lib/requirements_template.ts's `buildRequirementsDocDir`), then
-// validates and saves the result, and always records the agent_runs row
-// (both on success and on failure).
-//
-// File-per-diagram format (2026-09-27 redesign): Claude's cwd for this run
-// *is* the doc dir, pre-seeded with a copy of
-// `.claude/skills/factory-requirements/template.md` as `requirements.md`
-// (`ensureEmptyDir` + `copyFileTo`, so a retried attempt never sees a
-// previous attempt's stray edits). Claude edits that file in place with
-// Edit and writes any `<name>.drawio` diagrams alongside it with Write —
-// `runClaude`'s `permissionMode: "dontAsk"` + `allowedTools: ["Write",
-// "Edit"]` is the measured combination that allows writes under `cwd` while
-// `--restricted` still confines them there (see lib/claude.ts's
-// `allowedTools` doc comment). The target repository worktree is exposed
-// read-only via `addDirs`, not as `cwd`. Claude's own *structured* output
-// only carries `{summary, open_questions}` now (`REQUIREMENTS_SCHEMA`,
-// lib/prompts.ts) — the requirements markdown and any diagrams are read
-// back from disk after the run, not parsed out of JSON.
-//
-// factory.requirement_drafts.diagrams now stores `{name, file}` per
-// diagram (no XML) — see lib/types.ts's `Diagram` — and the doc dir itself
-// is recorded in `doc_dir` so a later reader (or cleanup_db.ts) can find
-// the files again. The Console's inline diagram rendering from that path is
-// a follow-up PR (see docs/architecture.md, 工程2).
-//
-// [major, M6 review round 1] The daily budget guard's own
-// isBudgetExceeded/jstMidnightTodayIso were local here at first; now
-// promoted to lib/claude.ts's `dailyBudgetStatus`, so every caller reuses
-// the same JST-midnight math and >= comparison.
-//
-// NOTE — runClaude-failure handling does no terminal transition here at
-// all (see failGeneration's doc comment): pipeline__flow/flow.yaml's
-// `generate` module now carries a `retry` (round 2, devil-advocate item 7,
-// for transient Claude 429/5xx), and Windmill's own step retry re-invokes
-// this whole script without checking work_items.status first. Round 2's
-// first fix (consolidate the failure *notification* into on_error_flow,
-// still doing status/label/comment here) turned out to still race with
-// that retry (round 3, devil-advocate re-gate): failGeneration set status
-// `failed` + removed labels + commented, then threw; if the retry then
-// succeeded, request_approval moved the *same* work item on to
-// `awaiting_approval` — now missing the trigger label, so the next
-// poll_issues reconcile cancels it as if abandoned. So as of round 3, a
-// runClaude failure does *only* `recordAgentRun` (already unconditional,
-// above) and throws — no status/label/notify — letting Windmill's retry
-// re-attempt cleanly, and leaving every terminal transition (status,
-// labels, and notification) to on_error_flow's failure_module alone,
-// which only runs once retries are exhausted. The same applies to a
-// post-generation validation failure (invalid requirements.md / diagram):
-// it also only throws via `failGeneration`, retried the same way. The
-// daily-budget-exceeded path below is unaffected: it returns (never
-// throws), so Windmill's retry never fires for it.
+// f/factory/pipelineの3ステップ中2番目(要件定義の生成)。
+// 日次予算を確かめてから、headlessのClaudeに試行ごとのディレクトリへ
+// 要件定義と図を書かせ、検証して下書きとして保存する。
 
 import * as wmill from "windmill-client@1.817.0";
 import {
@@ -96,9 +43,10 @@ import {
 } from "../lib/workspace.ts";
 import { describeReason, nextActionFor } from "./pr_workflow_support.ts";
 
-/** The requirements template's copy, and Claude's only expected `Edit`
- * target, inside the doc dir (see `ensureEmptyDir` / `copyFileTo` in
- * `main`). */
+/**
+ * doc dirに置く要件定義テンプレートの複製のファイル名。
+ * Claudeが`Edit`で編集してよいのはこのファイルだけ。
+ */
 export const REQUIREMENTS_MD_FILENAME = "requirements.md";
 
 const DIAGRAM_FILE_PATTERN = /\.drawio$/;
@@ -118,14 +66,13 @@ export function isRequirementsOutput(
 }
 
 /**
- * Normalizes `feedback` (pure, for testing). [major, M6 review round 1,
- * devil-advocate] This flow's callers other than requirements_apply.ts's
- * reject-and-retry branch (poll_issues, retry_work_item,
- * manual_intake_register) don't pass `feedback` at all — the flow schema's
- * `default: ''` only applies when the flow is started through the UI/form,
- * not via `wmill.runFlowAsync`/the API, so a bare `feedback.length` here
- * would throw a TypeError on `null`/`undefined`. `null` / `undefined` /
- * empty string all mean "no feedback for this attempt".
+ * `feedback`を正規化する。副作用は無い。
+ * null、undefined、空文字列はどれも「この試行へのフィードバック無し」としてnullを返す。
+ * `requirements_apply.ts`の却下・再試行以外の呼び出し元
+ * (poll_issues、retry_work_item、manual_intake_register)は`feedback`を渡さない。
+ * フロースキーマの`default: ''`はUIやフォームから起動したときだけ効き、
+ * `wmill.runFlowAsync`やAPIからの起動では効かないため、
+ * そのまま`feedback.length`を読むとnull / undefinedでTypeErrorになる。
  */
 export function resolveFeedback(
   feedback: string | null | undefined,
@@ -135,23 +82,29 @@ export function resolveFeedback(
     : null;
 }
 
-/** Every `*.drawio` entry in a doc dir listing, in the order `readDirEntries`
- * returned them (pure, for testing). */
+/**
+ * doc dirの一覧から`*.drawio`の項目を、`readDirEntries`が返した順のまま返す。
+ * 副作用は無い。
+ */
 export function listDiagramFiles(entries: readonly string[]): string[] {
   return entries.filter((entry) => DIAGRAM_FILE_PATTERN.test(entry));
 }
 
 export type DocDirEntries = {
-  /** Every `*.drawio` file — see `listDiagramFiles`. */
+  /** すべての`*.drawio`ファイル(`listDiagramFiles`を参照)。 */
   readonly diagramFiles: string[];
-  /** Everything else except `REQUIREMENTS_MD_FILENAME` itself — an
-   * unexpected file or subdirectory Claude created despite the prompt's
-   * "do not create... any other file" instruction. */
+  /**
+   * 図と`REQUIREMENTS_MD_FILENAME`以外のすべての項目。
+   * 他のファイルを作るなというプロンプトの指示に反して、
+   * Claudeが作った想定外のファイルやサブディレクトリにあたる。
+   */
   readonly stray: string[];
 };
 
-/** Splits a doc dir's entries (pure, for testing) into the diagrams to
- * validate/save and anything unexpected to remove and warn about. */
+/**
+ * doc dirの項目を、検証して保存する図と、警告して消す想定外のものに分ける。
+ * 副作用は無い。
+ */
 export function classifyDocDirEntries(
   entries: readonly string[],
 ): DocDirEntries {
@@ -163,15 +116,18 @@ export function classifyDocDirEntries(
   return { diagramFiles, stray };
 }
 
-/** Strips the `.drawio` extension off a diagram file name that already
- * matched `listDiagramFiles`'s pattern (pure, for testing). */
+/**
+ * `listDiagramFiles`のパターンに一致済みの図のファイル名から、
+ * 拡張子`.drawio`を取り除いて返す。副作用は無い。
+ */
 export function diagramNameFromFile(file: string): string {
   return file.slice(0, -".drawio".length);
 }
 
-/** Joins every validation issue (diagram XML + requirements_doc.ts's own
- * checks) into a single failure message for `failGeneration` (pure, for
- * testing). */
+/**
+ * 検証で見つかった問題(図のXMLと`requirements_doc.ts`の検査)をすべてつなぎ、
+ * `failGeneration`に渡す1つの失敗メッセージにする。副作用は無い。
+ */
 export function buildGenerateFailureMessage(issues: readonly string[]): string {
   return `requirements document failed validation: ${issues.join("; ")}`;
 }
@@ -189,24 +145,22 @@ async function notifySafe(
 }
 
 /**
- * [major, M6 review round 1, devil-advocate] Originally did the full
- * terminal transition here (status `failed`, Issue comment, label
- * removal) plus its own Discord `needs_human` notification, then still
- * threw — pipeline__flow's `failure_module` (on_error_flow) then ran too,
- * sending a *second*, differently-worded `job_failed` notification for the
- * same failure. Round 1's fix consolidated just the notification into
- * on_error_flow, keeping status/comment/labels here.
+ * 生成の失敗を、秘密情報をマスクした例外として投げる。
+ * 状態の遷移と通知はここでは一切しない。
  *
- * [major, M6 review round 3, devil-advocate re-gate] That still wasn't
- * enough once round 2 added a step-level `retry` to the `generate` module
- * (pipeline__flow/flow.yaml, for transient Claude 429/5xx): Windmill
- * re-invokes this whole script on retry without checking
- * work_items.status first, so a status/label/comment terminal transition
- * here raced with it — see this file's module doc for the full failure
- * sequence. This function now does *nothing* but throw a masked error;
- * every terminal concern (status, labels, and notification) belongs to
- * on_error_flow's failure_module alone, which only runs once Windmill's
- * retries are exhausted.
+ * `pipeline__flow/flow.yaml`の`generate`モジュールには、Claudeの一時的な
+ * 429 / 5xxに備えた`retry`がある。
+ * Windmillの再試行は`work_items.status`を確かめずにこのスクリプト全体を
+ * 呼び直すため、ここで終端の遷移をすると再試行と競合する。
+ * 例えば、statusを`failed`にしてから投げ、その後に再試行が成功しても、
+ * `request_approval`は状態が`requirements_generating`でない作業項目を
+ * `awaiting_approval`へ進めない。下書きは保存されたのに、作業項目は
+ * `failed`のまま残る。
+ * また、ここで通知すると`on_error_flow`の通知と同じ失敗を二重に知らせることになる。
+ * そのため終端の処理(状態、通知)はすべて、Windmillの再試行を
+ * 使い切った後にだけ動く`on_error_flow`の`failure_module`に任せる。
+ * Claudeの実行の失敗も、生成後の検証の失敗も、ここを通って同じく再試行される。
+ * 日次予算の超過は例外を投げずに返すので、再試行の対象にならない。
  */
 function failGeneration(reason: string, detail: string): never {
   throw new Error(
@@ -214,10 +168,12 @@ function failGeneration(reason: string, detail: string): never {
   );
 }
 
-/** Reads one file Claude was expected to leave in the doc dir. A missing or
- * unreadable file (deleted, or a directory named like a file) is reported
- * with the same wording as every other generation failure so the retry
- * path and the human-facing error stay consistent. */
+/**
+ * Claudeがdoc dirに残すはずのファイルを1つ読んで返す。
+ * ファイルが無い、または読めない(消された、ファイル名のディレクトリがある)ときは、
+ * 他の生成の失敗と同じ書き方の例外を投げる。
+ * 再試行の経路と人が見るエラーの書き方をそろえるため。
+ */
 export async function readDocFile(
   docDir: string,
   fileName: string,
@@ -232,6 +188,28 @@ export async function readDocFile(
   }
 }
 
+/**
+ * 要件定義を生成して下書きとして保存する。
+ * 日次予算を超えていればClaudeを起動せず、作業項目を`needs_human`にして通知し、
+ * "budget_exceeded"を返す(例外は投げない)。
+ * 作業項目かIssue番号が無いとき、Claudeの実行か生成物の検証が失敗したときは
+ * 例外を投げる。Claudeを動かしたときは、成否に関わらず`agent_runs`を記録する。
+ *
+ * doc dir(`buildRequirementsDocDir`)を空にしてからテンプレートを
+ * `requirements.md`として複製し、そこをClaudeの`cwd`にする。
+ * 空にするのは、再試行した試行に前の試行の書きかけを見せないため。
+ * Claudeは`requirements.md`を`Edit`で直接編集し、図を`<name>.drawio`として`Write`で横に置く。
+ * `permissionMode: "dontAsk"`と`allowedTools: ["Write", "Edit"]`の組み合わせは、
+ * `cwd`の下への書き込みを許しつつ`--restricted`でそこに閉じ込めることを実測で確かめたもの
+ * (`lib/claude.ts`の`allowedTools`の説明を参照)。
+ * 対象リポジトリのworktreeは`cwd`ではなく、`addDirs`で読み取り専用として渡す。
+ * Claudeの構造化出力は`{summary, open_questions}`だけで、
+ * 要件定義のMarkdownと図は実行後にディスクから読む。
+ *
+ * `factory.requirement_drafts.diagrams`には図ごとに`{name, file}`を保存し、XMLは保存しない。
+ * doc dir自体も`doc_dir`に記録し、後で読む側(`cleanup_db.ts`など)が
+ * ファイルを見つけられるようにする。
+ */
 export async function main(
   work_item_id: number,
   attempt: number,

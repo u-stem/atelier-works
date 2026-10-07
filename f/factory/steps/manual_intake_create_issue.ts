@@ -1,17 +1,5 @@
-// PathScript step for f/factory/manual_intake__flow: creates the trigger
-// Issue for a manually-submitted task (spec-cycle2.md §3 M5
-// "manual_intake.flow ... Issue テンプレートと同じ Markdown で createIssue").
-//
-// The issue body mirrors .github/ISSUE_TEMPLATE/factory-task.yml's own
-// rendering convention: each form field becomes a "### <label>" heading
-// followed by the answer, and an unanswered optional field renders
-// "_No response_" (this is GitHub's own issue-forms behavior, replicated
-// here since manual_intake builds the body itself rather than going through
-// the GitHub issue-forms UI). Only the two fields manual_intake's own input
-// schema collects (目的 from `body`, 受入基準 from `acceptance_criteria`) are
-// rendered — 背景/制約/対象範囲 are template sections this flow has no input
-// for, so fabricating empty headings for them would misrepresent the
-// submission rather than describe it.
+// f/factory/manual_intake__flowのステップ。
+// 手動で投入されたタスクから、Factoryを起動するIssueを作る。
 
 import * as wmill from "windmill-client@1.817.0";
 import { isRepoAllowed, loadConfig } from "../lib/config.ts";
@@ -26,8 +14,17 @@ export type ManualIntakeIssueInput = {
   readonly acceptance_criteria: string;
 };
 
-/** Renders `input` as an Issue body using factory-task.yml's own section
- * labels (目的 / 受入基準), GitHub-issue-forms style. */
+/**
+ * `input`を、`.github/ISSUE_TEMPLATE/factory-task.yml`と同じ見出し
+ * (目的 / 受入基準)のIssue本文に組み立てる。
+ * 書式はGitHubのissue formsの描画に合わせる。
+ * 各項目を`### <見出し>`と回答で表し、空の項目は`_No response_`にする。
+ * manual_intakeはissue formsを通さずに本文を作るため、この書式を自前で再現する。
+ *
+ * 描画するのは入力にある目的(`body`)と受入基準(`acceptance_criteria`)だけ。
+ * 背景・制約・対象範囲は入力に無いため、空の見出しも作らない。
+ * 作ると、投入内容に無い項目を空欄で回答したように見えてしまう。
+ */
 export function buildManualIntakeIssueBody(
   input: ManualIntakeIssueInput,
 ): string {
@@ -42,9 +39,6 @@ export function buildManualIntakeIssueBody(
   );
 }
 
-// isRepoAllowed moved to ../lib/config.ts (promoted by the lib-core owner;
-// same logic, same trailing-.git normalization) — imported above.
-
 export type ManualIntakeCreateIssueResult = {
   readonly owner: string;
   readonly repo: string;
@@ -54,6 +48,11 @@ export type ManualIntakeCreateIssueResult = {
   readonly body: string;
 };
 
+/**
+ * `owner/repo`にトリガーラベル付きのIssueを作り、作ったIssueの情報を返す。
+ * リポジトリ名が不正なとき、または`factory_config`で許可されていないときは
+ * 例外を投げる。
+ */
 export async function main(
   owner: string,
   repo: string,

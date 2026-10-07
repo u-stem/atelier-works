@@ -1,10 +1,8 @@
-// Tests for f/factory/steps/pr_workflow_support.ts's buildReviewDiffText and
-// isReviewClaudeOutput (used by pr_review_generate.ts), plus a confirmation
-// (team-lead: link a human-authored PR to its approved requirements) that
-// pr_review_generate.ts's existing `requirements` wiring actually reaches
-// lib/prompts.ts's reviewPrompt and activates its requirements-alignment
-// section — prompts.ts itself is untouched, this just calls its real
-// exported reviewPrompt the same way pr_review_generate.ts's main() does.
+// `pr_review_generate.ts`が使う`pr_workflow_support.ts`の`buildReviewDiffText`と
+// `isReviewClaudeOutput`のテスト。
+// あわせて、`pr_review_generate.ts`が渡す`requirements`が`lib/prompts.ts`の
+// `reviewPrompt`に届き、要件との整合を確かめる節が有効になることを、
+// `main()`と同じ呼び方で確かめる。
 
 import { describe, expect, test } from "bun:test";
 import { reviewPrompt } from "../../f/factory/lib/prompts.ts";
@@ -162,10 +160,10 @@ const FAKE_REQUIREMENTS: RequirementDraft = {
 };
 
 describe("reviewPrompt requirements wiring", () => {
-  // Confirms pr_review_generate.ts's existing `requirements` (from
-  // parent_work_item_id -> latestDraft, or now also a Closes-#N-linked
-  // issue's approved draft for a human-authored PR) actually activates
-  // reviewPrompt's requirements-alignment section, end to end.
+  // `pr_review_generate.ts`が渡す`requirements`で、
+  // `reviewPrompt`の要件との整合の節が有効になることを確かめる。
+  // `requirements`は、`parent_work_item_id`から`latestDraft`で引いたもの、
+  // または人が作ったPRなら`Closes #N`でつながるIssueの承認済みの草案である。
   test("includes the approved requirements text when requirements is non-null", () => {
     const prompt = reviewPrompt({
       pr: FAKE_PR,

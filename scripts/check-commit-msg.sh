@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Enforces Conventional Commits on the first line of a commit message:
+# コミットメッセージの1行目がConventional Commitsの形か検査する。
 #   <type>(<scope>)?!?: <description>
-# type is one of: feat, fix, docs, refactor, test, chore.
-# Lines starting with "Merge ", "Revert ", "fixup! ", or "squash! " are
-# exempt (git- and lefthook-generated commits).
+# typeはfeat・fix・docs・refactor・test・choreのどれか。
+# gitやlefthookが作る、"Merge "・"Revert "・"fixup! "・"squash! "で始まる
+# 行は対象外。
 set -euo pipefail
 
 commit_msg_file="${1:-}"

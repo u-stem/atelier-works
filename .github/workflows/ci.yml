@@ -26,11 +26,10 @@ jobs:
         run: mise run check
 
       - name: Determine gitleaks scan range
-        # Scope the scan to the commits this push/PR actually introduces
-        # (full history is available thanks to fetch-depth: 0 above). Falls
-        # back to an empty range (gitleaks then scans full history) when
-        # there is no meaningful diff base, e.g. `before` is all zeros on a
-        # brand new branch push.
+        # 走査範囲を、このpushやPRで入ったコミットに絞る
+        # (上の`fetch-depth: 0`で全履歴を取得している)。
+        # 新しいブランチの初回pushで`before`がすべて0のときなど、
+        # 差分の基点が無い場合は範囲を空にし、gitleaksに全履歴を走査させる。
         id: gitleaks-range
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -50,8 +49,8 @@ jobs:
           echo "range=${range}" >> "$GITHUB_OUTPUT"
 
       - name: Scan for leaked secrets
-        # gitleaks comes from mise.toml's [tools] so the version is pinned in
-        # one place instead of also pinning a separate GitHub Action.
+        # gitleaksは`mise.toml`の`[tools]`から入れる。
+        # 別のGitHub Actionでもバージョンを固定すると、固定箇所が2つになるため。
         env:
           SCAN_RANGE: ${{ steps.gitleaks-range.outputs.range }}
         run: |
@@ -63,12 +62,11 @@ jobs:
           fi
 
       - name: Build worker image
-        # There is no .env file: worker build inputs live in mise.toml's
-        # [env]. `mise exec -c '...'` runs the command through a shell with
-        # that [env] applied, so $WM_VERSION etc. are expanded by mise's
-        # subshell rather than by this step's own shell (which would not have
-        # them). These are the same build args infra/docker-compose.yml passes
-        # to the worker image build.
+        # `.env`は無く、workerのビルド入力は`mise.toml`の`[env]`にある。
+        # `mise exec -c '...'`は`[env]`を適用したシェルでコマンドを実行するので、
+        # `$WM_VERSION`などはこのステップのシェル(値を持たない)ではなく、
+        # miseのサブシェルで展開される。
+        # ビルド引数は`infra/docker-compose.yml`がworkerイメージに渡すものと同じ。
         run: |
           mise exec -c '
             docker build infra/worker \
@@ -82,15 +80,14 @@ jobs:
           '
 
   test-db:
-    # Independent of the `check` job (and its worker image build) so a slow
-    # or flaky Postgres start never blocks/is blocked by the image build.
+    # `check`ジョブ(とworkerイメージのビルド)から独立させる。
+    # Postgresの起動が遅い・不安定なときに、イメージのビルドと互いに待たせないため。
     runs-on: ubuntu-latest
     env:
-      # Scratch-only: migrations/datatable/main/*.{up,down}.sql are applied to
-      # a disposable "factory_test" database that scripts/test-db.sh drops on
-      # exit; the real "windmill" database this password also guards is never
-      # touched. Not a real secret, so it is fine to inline here rather than
-      # route through mise.local.toml (which does not exist in CI).
+      # 使い捨て専用の値。`migrations/datatable/main/*.{up,down}.sql`は、
+      # `scripts/test-db.sh`が終了時に削除する`factory_test`データベースに適用する。
+      # このパスワードが守る本物の`windmill`データベースには触れない。
+      # 本物の秘密ではないので、CIに存在しない`mise.local.toml`を通さず直書きしてよい。
       DB_PASSWORD: ci-dummy-password
     steps:
       - name: Checkout

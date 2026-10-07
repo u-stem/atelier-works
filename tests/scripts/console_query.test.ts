@@ -11,8 +11,11 @@ import {
 
 type FakeCall = { text: string; values: unknown[] };
 
-/** Same shape as tests/lib/db.test.ts's fake — records every tagged-
- * template call and returns one canned row set per call, in call order. */
+/**
+ * タグ付きテンプレートの呼び出しをすべて記録し、
+ * 呼び出し1回ごとに用意した行の集合を順に返す偽の`SqlClient`。
+ * 形は`tests/lib/db.test.ts`と同じ。
+ */
 function createFakeSqlClient(responses: SqlRow[][] = []): {
   sql: SqlClient;
   calls: FakeCall[];
@@ -260,12 +263,11 @@ describe("runConsoleQuery", () => {
     ]);
   });
 
-  // Team-lead fix round ("Keep incomplete approvals visible in Inbox"):
-  // approval_decide.ts records the approval before the issue_proposal apply
-  // script creates the Issue, so a row can be "approved" with
-  // created_issue_number still null when Issue creation failed partway
-  // through — this must still surface in the Inbox for a human to retry, not
-  // disappear once its status leaves "pending".
+  // `approval_decide.ts`は、issue_proposalを適用するスクリプトが
+  // Issueを作る前に承認を記録する。
+  // そのためIssueの作成が途中で失敗すると、状態が"approved"なのに
+  // `created_issue_number`がnullの行が残る。
+  // 人が再試行できるよう、状態が"pending"でなくなってもInboxに出し続ける。
   test("inbox: also includes an approved issue_proposal row whose Issue was never created", async () => {
     const row: SqlRow = {
       approval_request_id: 6,

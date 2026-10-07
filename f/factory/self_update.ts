@@ -1,19 +1,15 @@
-// self_update: every 10 minutes (see self_update.schedule.yaml), pulls the
-// factory's own self clone (`/workspaces/factory/atelier-works`) and, when
-// its HEAD has moved since the last recorded deploy, pushes the new
-// Windmill definitions and applies pending Data Table migrations from
-// inside the worker itself — plan §4 "self_update" / §4b.
+// 10分ごとに、Factory自身のself clone(`/workspaces/factory/atelier-works`)を
+// pullする。前回記録したデプロイからHEADが進んでいれば、worker自身の中から
+// Windmillの定義をpushし、未適用のData Tableのmigrationを適用する。
 //
-// Pure decision/formatting logic (whether a redeploy is needed, which
-// changed paths require a host-side `mise run deploy`, and how to build the
-// minimal env for the `wmill` CLI subprocess) lives in
-// ./lib/self_update_support.ts; this file is I/O wiring only.
+// 判断と整形の純粋なロジック(再デプロイが要るか、どの変更パスがホスト側の
+// `mise run deploy`を要するか、`wmill` CLIの子プロセスに渡す最小のenv)は
+// `./lib/self_update_support.ts`にあり、このファイルは入出力をつなぐだけ。
 //
-// `f/factory/deployed_sha` (a non-secret Windmill variable) is excluded
-// from sync entirely (see wmill.yaml's excludes comment on this path) —
-// scripts/bootstrap.sh creates it once, empty, and only this script's own
-// `wmill.setVariable` call below ever changes its value afterward. An
-// unrelated `wmill sync push` never resets it.
+// `f/factory/deployed_sha`(秘密でないWindmillの変数)はsyncの対象から
+// 完全に外している(`wmill.yaml`の`excludes`のコメントを参照)。
+// `scripts/bootstrap.sh`が空の値で一度だけ作り、以降は下の
+// `wmill.setVariable`だけが値を変える。無関係な`wmill sync push`で戻らない。
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "./lib/config.ts";
 import { addNotice, recordDeployment } from "./lib/db.ts";
@@ -42,9 +38,8 @@ import {
 } from "./lib/workspace.ts";
 
 // ---------------------------------------------------------------------------
-// Self clone git helpers (local to this script — same "one-off git I/O,
-// not a decision, stays private to the owning script" precedent as
-// poll_issues.ts's own readRepoHeadSha; see that file's header comment).
+// self cloneのgit操作。判断を含まない単発のgitの入出力なので、
+// libに出さずこのscriptに閉じる(`poll_issues.ts`の`readRepoHeadSha`と同じ)。
 // ---------------------------------------------------------------------------
 
 const GIT_BASE_ARGV: readonly string[] = [
@@ -64,8 +59,10 @@ function selfCloneGitEnv(): Record<string, string> {
   return env;
 }
 
-/** `git rev-parse HEAD` in the self clone's working tree — the currently
- * checked-out commit. Local-only (no `GH_TOKEN` needed). */
+/**
+ * self cloneでチェックアウト中のコミットのshaを返す(`git rev-parse HEAD`)。
+ * ローカルだけで完結し、`GH_TOKEN`は要らない。gitが失敗したら例外を投げる。
+ */
 export async function readSelfCloneHeadSha(
   run: CommandRunner,
   dir: string,
@@ -84,12 +81,13 @@ export async function readSelfCloneHeadSha(
   return result.stdout.trim();
 }
 
-/** `git rev-parse --abbrev-ref HEAD` in the self clone's working tree — the
- * currently checked-out branch name. Local-only. Used as a defense-in-depth
- * check (M7 re-gate) that `ensureFactoryClone` actually left the clone on
- * `config.factory_branch`, since a real worker run found it stuck on `main`
- * before `ensureFactoryClone`'s own re-checkout fix (see lib/workspace.ts's
- * module comment on that fix for the full incident). */
+/**
+ * self cloneでチェックアウト中のブランチ名を返す
+ * (`git rev-parse --abbrev-ref HEAD`)。ローカルだけで完結する。
+ * `ensureFactoryClone`が本当に`config.factory_branch`に切り替えたかを
+ * 重ねて確かめるために使う。実際のworkerでcloneが`main`に留まったことがある
+ * (経緯は`lib/workspace.ts`のモジュールコメントを参照)。
+ */
 export async function readSelfCloneBranch(
   run: CommandRunner,
   dir: string,
@@ -108,9 +106,11 @@ export async function readSelfCloneBranch(
   return result.stdout.trim();
 }
 
-/** Every file path present in the self clone at `newSha` (`git ls-tree -r
- * --name-only`) — used in place of a diff when there is no prior deployed
- * sha to diff against (plan §4 "old が空なら全ファイル扱い"). */
+/**
+ * self cloneの`newSha`にあるすべてのファイルパスを返す
+ * (`git ls-tree -r --name-only`)。比べる前回デプロイのshaが無いとき、
+ * 差分の代わりに使い、全ファイルを変更として扱う。
+ */
 export async function listAllPaths(
   run: CommandRunner,
   dir: string,
@@ -132,11 +132,13 @@ export async function listAllPaths(
     .filter((line) => line.length > 0);
 }
 
-/** Changed file paths between two commits of the self clone (`git diff
- * --name-only oldSha..newSha`). Both shas are validated via `assertSha`
- * (always internally-derived hex shas here, never external input) — safe
- * to interpolate directly without a `--` separator, same reasoning as this
- * module's sibling git helpers in lib/workspace.ts. */
+/**
+ * self cloneの2つのコミットの間で変わったファイルパスを返す
+ * (`git diff --name-only oldSha..newSha`)。
+ * どちらのshaも`assertSha`で検査し、ここでは常に内部で得た16進のshaで
+ * 外部の入力ではない。そのため`--`で区切らず直接埋め込んでも安全
+ * (`lib/workspace.ts`のgit操作と同じ理由)。
+ */
 export async function diffPaths(
   run: CommandRunner,
   dir: string,
@@ -161,13 +163,11 @@ export async function diffPaths(
 }
 
 /**
- * Throws unless `<dir>/wmill.yaml` exists — defense-in-depth (M7 re-gate):
- * a real worker run once had `wmill sync push` print "No wmill.yaml found.
- * Use 'wmill init' to bootstrap it." (harmlessly, since it then reported
- * "0 changes" and exited 0) because the CLI ran from a working directory
- * that wasn't actually this repo's sync root. Refuse outright rather than
- * risk a silent no-op push next time. `exists` is injectable for testing
- * (default: lib/workspace.ts's `pathExists`).
+ * `<dir>/wmill.yaml`が無ければ例外を投げる。
+ * 実際のworkerで、syncのルートでないディレクトリからCLIを実行し、
+ * `wmill sync push`が"No wmill.yaml found."と表示しつつ"0 changes"で
+ * 正常終了したことがある。何もしないpushが気づかれずに通らないよう、
+ * 最初から拒否する。`exists`はテスト用に差し替えられる(既定は`pathExists`)。
  */
 export async function assertWmillYamlExists(
   dir: string,
@@ -181,8 +181,10 @@ export async function assertWmillYamlExists(
   }
 }
 
-/** `git show <sha>:<path>` in the self clone — the file's content at that
- * commit, or `null` when the file does not exist there. Local-only. */
+/**
+ * self cloneの`sha`の時点の`path`の内容を返す(`git show <sha>:<path>`)。
+ * そのコミットにファイルが無ければ`null`を返す。ローカルだけで完結する。
+ */
 export async function readFileAtSha(
   run: CommandRunner,
   dir: string,
@@ -197,9 +199,11 @@ export async function readFileAtSha(
   return result.exitCode === 0 ? result.stdout : null;
 }
 
-/** Whether the mise.toml change between `oldSha` and `newSha` touches the
- * host-relevant sections (see miseTomlNeedsHostAction). With no prior
- * deploy (`oldSha` empty) this is conservatively `true`. */
+/**
+ * `oldSha`から`newSha`への`mise.toml`の変更が、ホストに関わる節に及ぶかを返す
+ * (`miseTomlNeedsHostAction`を参照)。前回のデプロイが無い(`oldSha`が空)
+ * ときは、安全側に倒して`true`になる。
+ */
 export async function miseTomlHostSectionsChanged(
   run: CommandRunner,
   dir: string,
@@ -227,7 +231,7 @@ async function resolveChangedPaths(
 }
 
 // ---------------------------------------------------------------------------
-// wmill CLI subprocess wiring
+// `wmill` CLIの子プロセスの実行
 // ---------------------------------------------------------------------------
 
 const WMILL_CLI_TIMEOUT_MS = 5 * 60_000;
@@ -247,13 +251,15 @@ function logCommandOutput(
   });
 }
 
-// `secrets` masks the wmill API token in logged output/thrown errors — the
-// token is now a literal argv element (buildWmillArgv's module comment
-// explains why: no env var this CLI reads substitutes for --token), so a
-// CLI error that happens to echo its own invocation back would otherwise
-// leak it. The Windmill API token has no fixed public format `maskSecrets`
-// recognizes unprompted (see lib/log.ts's own doc comment), so it must be
-// passed explicitly here.
+/**
+ * `wmill` CLIを実行し、出力をログに残す。終了コードが0以外か、
+ * タイムアウトしたら例外を投げる。
+ * `secrets`は、ログと例外の文からwmillのAPIトークンを隠すために渡す。
+ * トークンはargvにそのまま入る(`--token`の代わりになる環境変数が無いため。
+ * `buildWmillArgv`のコメントを参照)ので、CLIのエラーが自分の起動引数を
+ * 繰り返すと漏れる。WindmillのAPIトークンには`maskSecrets`が自動で
+ * 見分けられる決まった形式が無いので、明示的に渡す必要がある。
+ */
 async function runWmillCli(
   argv: readonly string[],
   cwd: string,
@@ -305,10 +311,8 @@ export async function main(): Promise<SelfUpdateResult> {
     branch: config.factory_branch,
   });
 
-  // Defense-in-depth (M7 re-gate): verify ensureFactoryClone's own
-  // postcondition actually held, rather than silently trusting it — see
-  // readSelfCloneBranch's doc comment for the real incident this guards
-  // against.
+  // `ensureFactoryClone`の事後条件を鵜呑みにせず、ブランチを重ねて確かめる
+  // (理由は`readSelfCloneBranch`のコメントを参照)。
   const actualBranch = await readSelfCloneBranch(runCommand, factoryClone.dir);
   assertBranchMatches(actualBranch, config.factory_branch, factoryClone.dir);
 
@@ -318,7 +322,7 @@ export async function main(): Promise<SelfUpdateResult> {
   try {
     deployedSha = await wmill.getVariable("f/factory/deployed_sha");
   } catch {
-    deployedSha = ""; // Variable not created yet — treat as "never deployed".
+    deployedSha = ""; // 変数がまだ無いときは、未デプロイとして扱う。
   }
 
   const decision = decideUpdate(currentSha, deployedSha);
@@ -332,9 +336,8 @@ export async function main(): Promise<SelfUpdateResult> {
     sha_to: currentSha,
   });
 
-  // Populated as soon as the token is fetched below, and read by the outer
-  // catch block too (see its own maskSecrets call) — declared here so it is
-  // in scope in both places rather than duplicated.
+  // 下でトークンを取得した時点で埋め、外側のcatchの`maskSecrets`でも使う。
+  // 両方から参照できるよう、ここで宣言する。
   let secrets: string[] = [];
 
   try {
@@ -352,11 +355,10 @@ export async function main(): Promise<SelfUpdateResult> {
 
     await assertWmillYamlExists(factoryClone.dir);
 
-    // The Console raw app is bundled by `wmill sync push` from this clone,
-    // so its npm dependencies must be present (and current: a dependency
-    // added by a newer commit is missing from a node_modules installed
-    // before it). `npm ci` installs exactly what package-lock.json pins
-    // without rewriting it — see buildNpmCiArgv's doc comment.
+    // Consoleのraw appは`wmill sync push`がこのcloneからバンドルするので、
+    // npmの依存が最新の状態で揃っている必要がある(新しいコミットで足した依存は、
+    // それ以前に入れた`node_modules`には無い)。`npm ci`は`package-lock.json`を
+    // 書き換えず、固定された版をそのまま入れる(`buildNpmCiArgv`を参照)。
     const rawAppDir = `${factoryClone.dir}/${RAW_APP_RELATIVE_DIR}`;
     if (await pathExists(`${rawAppDir}/package-lock.json`)) {
       await runWmillCli(

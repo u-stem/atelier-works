@@ -1,21 +1,18 @@
-// Renders a requirements document's markdown body with a
-// "Confluence-document" look: headings/tables/lists/blockquotes via
-// react-markdown + remark-gfm, sanitized by rehype-sanitize so no HTML in
-// the source (which ultimately traces back to untrusted GitHub Issue
-// content summarized by Claude — see f/factory/lib/drawio.ts's own "never
-// trust into Markdown unescaped" note for the sibling case) can inject a
-// script or an `href`/`src` with a dangerous protocol. This never uses
-// `dangerouslySetInnerHTML`: react-markdown turns the sanitized hast tree
-// into React elements directly.
+// 要件定義書のMarkdown本文を、Confluenceの文書のような見た目で描く。
+// 見出し・表・リスト・引用は`react-markdown`と`remark-gfm`で描き、
+// `rehype-sanitize`で無害化する。元の文章は、信頼できないGitHubのIssueの
+// 内容をClaudeが要約したものに由来するため、HTMLでスクリプトや危険な
+// プロトコルの`href`・`src`を差し込めないようにする
+// (同種の注意は`f/factory/lib/drawio.ts`にもある)。
+// `dangerouslySetInnerHTML`は使わない。`react-markdown`が無害化済みの
+// hastの木を直接Reactの要素にする。
 //
-// An embedded diagram reference (`![name](name.drawio)`, the drawio-diagram
-// skill's contract — see f/factory/lib/requirements_template.ts's
-// `DIAGRAM_REF_PATTERN`) is intercepted by the `img` component override and
-// rendered inline via DrawioViewer instead of as a broken `<img>` (no
-// `name.drawio` URL is ever fetchable — it names a file that only exists on
-// the worker's disk). `diagrams` supplies the XML this component looks up
-// by name; a reference to a name not in that list renders a "not found"
-// placeholder rather than a blank/broken image.
+// 埋め込みの図の参照(`![name](name.drawio)`。drawio-diagramスキルの約束で、
+// `f/factory/lib/requirements_template.ts`の`DIAGRAM_REF_PATTERN`を参照)は、
+// `img`の差し替えで受け取り、壊れた`<img>`ではなく`DrawioViewer`で描く。
+// `name.drawio`はworkerのディスクにだけあるファイル名で、URLとして取得できない。
+// XMLは`diagrams`から名前で引き、一覧に無い名前は、空や壊れた画像ではなく
+// 「見つからない」という表示にする。
 
 import React from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
@@ -26,27 +23,31 @@ import { ALERT_LABELS, stripAlertMarker } from "../lib/markdownAlerts";
 import type { RequirementsDiagram } from "../lib/types";
 import { DrawioViewer } from "./DrawioViewer";
 
-// Same naming contract as the generation side
-// (requirements_template.ts's DIAGRAM_NAME_PATTERN / DIAGRAM_REF_PATTERN):
-// lowercase alphanumeric and hyphens, ending in `.drawio`.
+/**
+ * 図のファイル名の形。生成側(`requirements_template.ts`の
+ * `DIAGRAM_NAME_PATTERN`・`DIAGRAM_REF_PATTERN`)と同じく、
+ * 英小文字・数字・ハイフンで、`.drawio`で終わる。
+ */
 const DRAWIO_IMG_SRC_PATTERN = /^[a-z0-9-]{1,64}\.drawio$/;
 
-// Extends the default (GitHub-style) sanitize schema with exactly one
-// allowance: an `img`'s `src` may be a bare `<name>.drawio` relative
-// filename. The default schema's own unrestricted `'src'` entry is dropped
-// (not merged) for `img` — a bare `'src'` string means "any value passes",
-// which would also accept an `http(s)://...` image URL the requirements
-// pipeline never produces; restricting to the one shape this document
-// actually uses keeps the allowance no broader than the contract requires.
-// `javascript:`/`data:` URLs are already rejected two ways here: they don't
-// match this pattern, and (independently) the schema's own
-// `protocols.src = ['http', 'https']` check runs before any attribute
-// allow-list and only exempts protocol-less (relative) values.
-// Derived from rehypeSanitize's own parameter type (rather than importing
-// hast-util-sanitize directly, which is only a transitive dependency here)
-// so this literal is checked against the real `Schema` shape.
+/**
+ * 無害化のスキーマの型。`hast-util-sanitize`は推移的な依存でしかないので
+ * 直接importせず、`rehypeSanitize`の引数の型から導く。
+ * こうして下のリテラルを本物の`Schema`の形で型検査する。
+ */
 type SanitizeSchema = NonNullable<Parameters<typeof rehypeSanitize>[0]>;
 
+/**
+ * 既定(GitHub風)の無害化スキーマに、許可を1つだけ足したもの。
+ * `img`の`src`に、相対のファイル名`<name>.drawio`だけを許す。
+ * `img`については既定の無制限の`'src'`を混ぜずに捨てる。裸の`'src'`は
+ * どんな値でも通すので、要件定義のパイプラインが作らない
+ * `http(s)://...`の画像URLまで受け入れてしまうため。許可は、この文書が
+ * 実際に使う1つの形に絞り、約束より広げない。
+ * `javascript:`・`data:`のURLは2重に拒否される。このパターンに合わないうえ、
+ * それとは別に、スキーマの`protocols.src = ['http', 'https']`の検査が
+ * 属性の許可より先に動き、プロトコルの無い(相対の)値だけを通す。
+ */
 const schema: SanitizeSchema = {
   ...defaultSchema,
   attributes: {
@@ -61,11 +62,12 @@ function isChildrenProp(
   return typeof value === "object" && value !== null && "children" in value;
 }
 
-/** Flattens rendered children back into plain text (pure-ish: only reads
- * React's own element tree) — used to derive a heading's slug the same way
- * lib/extractHeadings.ts's `extractHeadings` derives it from raw markdown,
- * so a table-of-contents link always resolves (see that module's doc
- * comment on why the two computations agree). */
+/**
+ * 描画済みの子要素を平文に戻して返す(Reactの要素の木を読むだけ)。
+ * 見出しのslugを、`lib/extractHeadings.ts`の`extractHeadings`が元の
+ * Markdownから導くのと同じ方法で導き、目次のリンクが必ず飛べるようにする
+ * (2つの計算が一致する理由はそのモジュールのコメントを参照)。
+ */
 function childrenText(children: React.ReactNode): string {
   return React.Children.toArray(children)
     .map((child) => {
@@ -125,10 +127,9 @@ const components: Components = {
     return <DiagramSlot name={name} />;
   },
   p: ({ node, children }) => {
-    // A paragraph containing only a diagram image renders the viewer
-    // directly (via the `img` override above) instead of nesting it inside
-    // a <p> — DrawioViewer's own container is a <div>, and a <div> is not
-    // valid inside a <p> in the DOM.
+    // 図の画像だけを含む段落は、`<p>`で包まず(上の`img`の差し替えで)
+    // ビューアを直接描く。`DrawioViewer`の入れ物は`<div>`で、DOMでは
+    // `<p>`の中に`<div>`を置けないため。
     const soleChild = node?.children.length === 1 ? node.children[0] : null;
     if (
       soleChild !== undefined &&
@@ -142,11 +143,12 @@ const components: Components = {
   },
 };
 
-/** Renders `img`'s diagram lookup against the `diagrams` prop passed down
- * from `Markdown` — implemented as a tiny wrapper component (rather than a
- * closure captured per-render in `components`) so `Markdown` can pass
- * `diagrams` through React context without rebuilding the whole
- * `components` map on every render. */
+/**
+ * `Markdown`に渡された`diagrams`を、`img`の図の検索に届けるcontext。
+ * 描画のたびに`components`の中でクロージャを作らず、小さな包む
+ * コンポーネント(`DiagramSlot`)とcontextで渡すことで、描画ごとに
+ * `components`全体を作り直さずに済む。
+ */
 const DiagramsContext = React.createContext<readonly RequirementsDiagram[]>([]);
 
 function DiagramSlot({ name }: { name: string }): React.ReactElement {

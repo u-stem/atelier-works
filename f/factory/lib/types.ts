@@ -1,23 +1,21 @@
-// Shared domain types for the Software Factory Windmill assets (f/factory/**).
+// Software FactoryのWindmill資産(`f/factory/**`)で共有するドメイン型と、
+// 外部データを絞り込む型ガード・検証関数を置く。
 //
-// These types describe the application's own view of work items, config,
-// and recorded events. They intentionally mirror the underlying Postgres
-// column names / JSON resource field names (snake_case) rather than
-// introducing a separate camelCase naming layer, because:
-//   - FactoryConfig must stay in lockstep with RT.CFactoryConfig (rt.d.ts,
-//     generated from c_factory_config.resource-type.yaml) so loadConfig is a
-//     straight "validate + fill defaults" pass with no field renaming.
-//   - WorkItem / RequirementDraft / ApprovalRequest / *Record types mirror
-//     migrations/datatable/main/*.sql columns 1:1, which keeps db.ts's row
-//     parsing (Parse-don't-validate) a direct field-by-field check instead
-//     of a renaming layer that could silently drift from the schema.
+// フィールド名はcamelCaseに変換せず、Postgresの列名やJSONリソースの
+// フィールド名(snake_case)にそろえる。理由は次の2つ。
+//   - `FactoryConfig`は`RT.CFactoryConfig`(`c_factory_config.resource-type.yaml`
+//     から生成される`rt.d.ts`)と常に一致させる。こうすると`loadConfig`は
+//     名前を変換せず、検証と既定値の補完だけで済む。
+//   - `WorkItem` / `RequirementDraft` / `ApprovalRequest` / `*Record`の各型は
+//     `migrations/datatable/main/*.sql`の列と1対1で対応する。こうすると
+//     `db.ts`の行の解析(Parse-don't-validate)がフィールドごとの検査で済み、
+//     名前を変換する層がスキーマと知らないうちにずれることもない。
 //
-// No `as` is used anywhere in this file or its consumers; external values
-// (DB rows, JSON resources, subprocess output) are narrowed with the type
-// guards below before being treated as one of these types.
+// 外部の値(DBの行、JSONリソース、サブプロセスの出力)は`as`を使わず、
+// 下の型ガードで絞り込んでからこれらの型として扱う。
 
 // ---------------------------------------------------------------------------
-// Small type-guard helpers, reused across lib/*.ts for parsing external data.
+// 外部データの解析で`lib/*.ts`全体から使う小さな型ガード。
 // ---------------------------------------------------------------------------
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
@@ -42,7 +40,7 @@ export function isStringArray(value: unknown): value is string[] {
   );
 }
 
-/** Narrows `value` to one of `allowed`'s string literal members. */
+/** `value`を`allowed`に含まれる文字列リテラルのいずれかに絞り込む。 */
 export function isOneOf<T extends string>(
   value: unknown,
   allowed: readonly T[],
@@ -54,13 +52,12 @@ export function isOneOf<T extends string>(
 }
 
 /**
- * The git author/committer identity `commitAndPush` (workspace.ts) applies
- * to a commit via `GIT_AUTHOR_*`/`GIT_COMMITTER_*` env vars — never written
- * to git config. Shared between github.ts (`gitIdentityForViewer`, which
- * builds one from the PAT's viewer) and workspace.ts (`CommitAndPushOptions.
- * author`), so it lives here rather than in either module, avoiding a
- * circular import (github.ts already imports `CommandRunner` from
- * workspace.ts).
+ * `workspace.ts`の`commitAndPush`がコミットに付けるauthorとcommitterの名義。
+ * `GIT_AUTHOR_*` / `GIT_COMMITTER_*`環境変数で渡し、git configには書かない。
+ * `github.ts`の`gitIdentityForViewer`(PATの持ち主から作る)と
+ * `workspace.ts`の`CommitAndPushOptions.author`の両方で使う。
+ * `github.ts`はすでに`workspace.ts`から`CommandRunner`をimportしているため、
+ * 循環importを避けてどちらのモジュールでもなくここに置く。
  */
 export type GitIdentity = {
   readonly name: string;
@@ -68,17 +65,19 @@ export type GitIdentity = {
 };
 
 // ---------------------------------------------------------------------------
-// Validation assertions for values that get interpolated into subprocess
-// argv or git refs (gh/git/claude command lines built by lib-exec's
-// github.ts / workspace.ts). These throw rather than narrow, since callers
-// need a hard failure — not a silently-skipped value — when GitHub-sourced
-// data would otherwise be passed unchecked to a shell-adjacent API.
+// サブプロセスの引数やgitのrefに埋め込む値の検証。
+// `github.ts` / `workspace.ts`が組み立てるgh・git・claudeのコマンドラインで使う。
+// GitHub由来のデータが検査されないままシェルに近いAPIへ渡りそうなとき、
+// 呼び出し側は値を黙って飛ばすのではなく確実に失敗させる必要がある。
+// そのため型ガードで絞り込むのではなく、例外を投げる。
 // ---------------------------------------------------------------------------
 
-/** A GitHub login or repository name: alphanumeric, `.`/`_`/`-` after the
- * first character, which must be alphanumeric (so `.`/`..`/a leading `-`
- * are already excluded by the pattern; the explicit checks below are a
- * belt-and-suspenders restatement for anyone who only reads the checks). */
+/**
+ * GitHubのログイン名またはリポジトリ名。
+ * 先頭は英数字、2文字目以降は英数字と`.` `_` `-`に限る。
+ * `.`、`..`、先頭の`-`はこのパターンだけで弾ける。
+ * `assertGitHubName`の明示的な検査は、検査だけを読む人のための念押しである。
+ */
 const GITHUB_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 export function assertGitHubName(name: string): void {
@@ -90,8 +89,10 @@ export function assertGitHubName(name: string): void {
   }
 }
 
-/** A git commit SHA (short or full, lowercase hex only — GitHub always
- * returns lowercase). */
+/**
+ * gitのコミットSHA(短縮形か完全形)。
+ * GitHubは常に小文字で返すため、小文字の16進数だけを許す。
+ */
 const SHA_PATTERN = /^[0-9a-f]{7,40}$/;
 
 export function assertSha(sha: string): void {
@@ -100,9 +101,12 @@ export function assertSha(sha: string): void {
   }
 }
 
-// Matches git's own `check-ref-format` restrictions closely enough to stop
-// a malicious branch name from being read as a `git`/`gh` flag or escaping
-// its intended ref path — not a full reimplementation of that command.
+/**
+ * ブランチ名の検査規則。
+ * gitの`check-ref-format`を完全には再現しない。悪意のあるブランチ名が
+ * `git` / `gh`のフラグとして読まれたり、意図したrefのパスから
+ * 抜け出したりするのを防げる程度に、その制約に近づけている。
+ */
 const BRANCH_NAME_RULES: readonly {
   readonly test: (name: string) => boolean;
   readonly reason: string;
@@ -111,7 +115,7 @@ const BRANCH_NAME_RULES: readonly {
   { test: (name) => name.startsWith("-"), reason: "must not start with -" },
   { test: (name) => name.includes(".."), reason: "must not contain .." },
   {
-    // biome-ignore lint/suspicious/noControlCharactersInRegex: intentionally matching control characters, to reject them
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: 制御文字を弾くため、意図して制御文字に一致させる
     test: (name) => /[\x00-\x1f\x7f]/.test(name),
     reason: "must not contain control characters",
   },
@@ -141,7 +145,7 @@ export function assertBranchName(name: string): void {
 // work_items
 // ---------------------------------------------------------------------------
 
-/** How the work item entered the factory. */
+/** 作業項目がFactoryに入った経路。 */
 export type WorkItemSource = "issue" | "manual" | "schedule";
 export const WORK_ITEM_SOURCES: readonly WorkItemSource[] = [
   "issue",
@@ -149,7 +153,7 @@ export const WORK_ITEM_SOURCES: readonly WorkItemSource[] = [
   "schedule",
 ];
 
-/** What kind of GitHub object this work item's cycle is driving. */
+/** 作業項目のサイクルが扱うGitHubの対象の種類。 */
 export type WorkItemKind = "issue" | "pr_review" | "pr_fix" | "audit";
 export const WORK_ITEM_KINDS: readonly WorkItemKind[] = [
   "issue",
@@ -159,9 +163,9 @@ export const WORK_ITEM_KINDS: readonly WorkItemKind[] = [
 ];
 
 /**
- * All statuses a work item can hold, across the requirements pipeline
- * (M6 pipeline.flow), the PR review/fix pipelines (M6 pr_review.flow /
- * pr_fix.flow), and terminal outcomes.
+ * 作業項目が取りうるすべての状態。
+ * 要件定義のパイプライン(`pipeline.flow`)、PRのレビュー・修正の
+ * パイプライン(`pr_review.flow` / `pr_fix.flow`)、終端の結果を含む。
  */
 export type WorkItemStatus =
   | "picked"
@@ -204,13 +208,16 @@ export const WORK_ITEM_STATUSES: readonly WorkItemStatus[] = [
   "audited",
 ];
 
-/** Terminal statuses (docs/architecture.md "状態遷移"; mirrored by the
- * `factory.v_lead_time` view — keep the two lists in sync via a migration).
- * `rereview_requested` is pr_fix's success end state: leaving it out made
- * poll_issues's reconcile treat a finished pr_fix row as an orphan and
- * fail it once the grace period elapsed. `pr_open` is implement's (工程3)
- * success end state for the same reason — there is no `done`; merge
- * tracking is 工程4's concern. */
+/**
+ * 終端の状態(`docs/architecture.md`の「状態遷移」)。
+ * `factory.v_lead_time`ビューも同じ一覧を持つため、変えるときは
+ * migrationで両方をそろえる。
+ * `rereview_requested`はpr_fixの成功の終端である。
+ * ここに入れないと、`poll_issues`の照合が完了したpr_fixの行を孤児とみなし、
+ * 猶予期間を過ぎると失敗にしてしまう。
+ * 同じ理由で、implement(工程3)の成功の終端である`pr_open`も入れる。
+ * `done`という状態は無く、マージの追跡は工程4で扱う。
+ */
 export const TERMINAL_WORK_ITEM_STATUSES: readonly WorkItemStatus[] = [
   "approved",
   "rejected",
@@ -226,10 +233,10 @@ export const TERMINAL_WORK_ITEM_STATUSES: readonly WorkItemStatus[] = [
 ];
 
 /**
- * One row of factory.work_items. issue_number / issue_url / title / body are
- * nullable because a `pr_review` / `pr_fix` kind work item is not backed by
- * an issue (it carries pr_number / title instead); migration 2 relaxes the
- * NOT NULL constraints accordingly (spec-cycle2.md §7 item 8).
+ * `factory.work_items`の1行。
+ * `pr_review` / `pr_fix`種別の作業項目はIssueに基づかず、
+ * 代わりに`pr_number` / `title`を持つ。
+ * そのため`issue_number` / `issue_url` / `title` / `body`はnullを取りうる。
  */
 export type WorkItem = {
   id: number;
@@ -252,28 +259,34 @@ export type WorkItem = {
   head_sha: string | null;
   last_review_id: number | null;
   last_comment_id: number | null;
-  /** Processed watermark: highest inline PR review comment id
-   * pr_fix_finish has replied to. Separate id space from issue comments
-   * (see last_comment_id). */
+  /**
+   * 処理済みの位置。`pr_fix_finish`が返信したPRのインラインレビュー
+   * コメントのうち最大のid。
+   * Issueコメント(`last_comment_id`)とはidの空間が別である。
+   */
   last_review_comment_id: number | null;
-  /** Poll-observed watermark: highest PR review id poll_prs saw when it
-   * claimed this work item. */
+  /** 観測済みの位置。`poll_prs`がこの作業項目を取得したときに見たPRレビューの最大のid。 */
   observed_review_id: number | null;
-  /** Poll-observed watermark: highest issue comment id poll_prs saw when it
-   * claimed this work item. */
+  /** 観測済みの位置。`poll_prs`がこの作業項目を取得したときに見たIssueコメントの最大のid。 */
   observed_comment_id: number | null;
-  /** Poll-observed watermark: highest inline PR review comment id poll_prs
-   * saw when it claimed this work item. */
+  /**
+   * 観測済みの位置。`poll_prs`がこの作業項目を取得したときに見た、
+   * PRのインラインレビューコメントの最大のid。
+   */
   observed_review_comment_id: number | null;
   fix_round: number;
   parent_work_item_id: number | null;
-  /** 工程3's implement branch (`factory/issue-<N>-wi-<id>`) for a
-   * `kind = "issue"` row once implement_prepare created it; `null` before
-   * that and for every other kind. */
+  /**
+   * 工程3の実装ブランチ(`factory/issue-<N>-wi-<id>`)。
+   * `kind = "issue"`の行で、`implement_prepare`が作った後に入る。
+   * それより前と、ほかの種別では`null`。
+   */
   branch: string | null;
-  /** HTML URL of the PR 工程3 opened (status `pr_open`); `null` until
-   * then. Deliberately not `pr_number` — see the migration's column
-   * comment. */
+  /**
+   * 工程3が作ったPRのHTML URL(状態`pr_open`)。それまでは`null`。
+   * `pr_number`は種別をまたいでPR側の作業項目を束ねるキーに使うため、
+   * Issue側の行には持たせず、意図してURLで記録する。
+   */
   pr_url: string | null;
   created_at: Date;
   updated_at: Date;
@@ -283,10 +296,11 @@ export type WorkItem = {
 // requirement_drafts
 // ---------------------------------------------------------------------------
 
-/** One draw.io diagram written alongside a requirements document — `file`
- * is the `<name>.drawio` file's name inside `RequirementDraft.doc_dir`; the
- * XML itself is never stored in the DB (see pipeline_generate.ts's module
- * doc comment). */
+/**
+ * 要件定義書と一緒に書き出すdraw.ioの図1つ。
+ * `file`は`RequirementDraft.doc_dir`の中の`<name>.drawio`のファイル名である。
+ * XML自体はDBに保存しない(`pipeline_generate.ts`の冒頭コメントを参照)。
+ */
 export type Diagram = {
   name: string;
   file: string;
@@ -300,25 +314,26 @@ export type RequirementDraft = {
   markdown: string;
   diagrams: Diagram[];
   open_questions: string[];
-  /** Worker-local directory (see lib/requirements_template.ts's
-   * `buildRequirementsDocDir`) holding `requirements.md` and every diagram
-   * file for this attempt — `null` for a pre-2026-09-27 row generated
-   * before this column existed. */
+  /**
+   * この試行の`requirements.md`とすべての図のファイルを置く、
+   * worker内のディレクトリ(`lib/requirements_template.ts`の
+   * `buildRequirementsDocDir`)。
+   * この列ができる前(2026-09-27より前)に生成された行では`null`。
+   */
   doc_dir: string | null;
   created_at: Date;
 };
 
 // ---------------------------------------------------------------------------
-// approval_requests (generalized approval waiting, replacing suspend-based
-// approval per migrations/datatable/main/20260927120000_approval_requests.
-// up.sql). Every approval-flow script goes through this table; the former
-// factory.approvals-backed `Approval` type and pipeline.flow's suspend step
-// are gone.
+// approval_requests: 種別を問わない承認待ち。
+// 承認を扱うscriptはすべてこのテーブルを通す。
 // ---------------------------------------------------------------------------
 
-/** What kind of decision this approval request is waiting on. `subject_id`
- * points at the matching row in requirement_drafts (`"requirements"`) or
- * issue_proposals (`"issue_proposal"`). */
+/**
+ * 承認依頼が待っている判断の種類。
+ * `subject_id`は、`"requirements"`ならrequirement_drafts、
+ * `"issue_proposal"`ならissue_proposalsの対応する行を指す。
+ */
 export type ApprovalRequestKind = "requirements" | "issue_proposal";
 export const APPROVAL_REQUEST_KINDS: readonly ApprovalRequestKind[] = [
   "requirements",
@@ -337,22 +352,23 @@ export const APPROVAL_REQUEST_STATUSES: readonly ApprovalRequestStatus[] = [
   "expired",
 ];
 
-/** One row of factory.approval_requests. */
+/** `factory.approval_requests`の1行。 */
 export type ApprovalRequest = {
   id: number;
   kind: ApprovalRequestKind;
   work_item_id: number;
-  /** requirement_drafts.id (kind "requirements") or issue_proposals.id
-   * (kind "issue_proposal"). */
+  /**
+   * 種別が`"requirements"`なら`requirement_drafts.id`、
+   * `"issue_proposal"`なら`issue_proposals.id`。
+   */
   subject_id: number;
   status: ApprovalRequestStatus;
-  /** Requester-side metadata, e.g. `{ "attempt": n }` for "requirements". */
+  /** 依頼側のメタデータ。例: `"requirements"`では`{ "attempt": n }`。 */
   payload: Record<string, unknown>;
-  /** Decider-side options, e.g. `{ "with_factory_label": bool }` for
-   * "issue_proposal". */
+  /** 判断側のオプション。例: `"issue_proposal"`では`{ "with_factory_label": bool }`。 */
   decision_options: Record<string, unknown>;
   requested_at: Date;
-  /** `null` means no deadline (e.g. "issue_proposal"). */
+  /** `null`は期限が無いことを表す(`"issue_proposal"`など)。 */
   expires_at: Date | null;
   decided_at: Date | null;
   decided_by: string | null;
@@ -360,11 +376,11 @@ export type ApprovalRequest = {
 };
 
 // ---------------------------------------------------------------------------
-// Insert-payload "Record" types: the shape passed to db.ts's recording
-// functions (no `id` / `created_at` — those are assigned by the insert).
+// 挿入用の`*Record`型。`db.ts`の記録用の関数に渡す形である。
+// `id`と`created_at`は挿入時に決まるため含まない。
 // ---------------------------------------------------------------------------
 
-/** Payload for db.recordAgentRun: one row of factory.agent_runs. */
+/** `db.recordAgentRun`に渡す、`factory.agent_runs`の1行。 */
 export type AgentRunRecord = {
   work_item_id: number;
   stage: string;
@@ -384,36 +400,45 @@ export type AgentRunRecord = {
 
 export type ReviewSeverity = "blocker" | "major" | "minor" | "nit";
 
-/** must = requires a fix before merge; imo = a suggestion/opinion, not
- * blocking; nits = trivial/stylistic; q = a pure question, no change
- * implied. Aligned with (but kept separate from) `severity`, which stays
- * for statistics: blocker/major → must, minor → imo, nit → nits, q
- * regardless of severity. */
+/**
+ * 指摘の分類。
+ * - `must`: マージ前に修正が必要。
+ * - `imo`: 提案や意見で、マージを妨げない。
+ * - `nits`: 些細な点や書き方の好み。
+ * - `q`: 変更を求めない純粋な質問。
+ *
+ * 統計用に残す`severity`とは別の項目だが、対応はそろえる。
+ * blockerとmajorは`must`、minorは`imo`、nitは`nits`に対応し、
+ * `q`はseverityに関係なく付く。
+ */
 export type ReviewFindingKind = "must" | "imo" | "nits" | "q";
 
 export type ReviewFinding = {
   path: string;
-  /** Head (post-diff) line number, same basis as `end_line`. */
+  /** head側(差分適用後)の行番号。`end_line`と同じ基準。 */
   line: number | null;
-  /** Last line of a finding spanning multiple lines, or `null` for a
-   * single-line finding. */
+  /** 複数行にわたる指摘の最終行。1行だけの指摘では`null`。 */
   end_line: number | null;
   severity: ReviewSeverity;
   kind: ReviewFindingKind;
   message: string;
   suggestion: string | null;
-  /** Complete replacement text for lines `line`..`end_line` inclusive,
-   * meant to be posted as a GitHub suggestion block — `null` when no
-   * concrete edit is proposed. */
+  /**
+   * `line`から`end_line`まで(両端を含む)を置き換える全文。
+   * GitHubのsuggestionブロックとして投稿する。
+   * 具体的な修正を提案しないときは`null`。
+   */
   suggested_code: string | null;
 };
 
-/** Overall verdict of a pr_review.flow run (always posted as a COMMENT-event
- * GitHub review per spec-cycle2.md §3 M6; this is the app-level verdict
- * displayed in the review body, not the GitHub review `event`). */
+/**
+ * `pr_review.flow`の実行の総合判定。
+ * GitHubのレビューは常にCOMMENTイベントとして投稿するため、
+ * これはGitHubのレビューの`event`ではなく、レビュー本文に表示する判定である。
+ */
 export type ReviewVerdict = "approve" | "comment" | "request_changes";
 
-/** Payload for db.insertReview: one row of factory.reviews. */
+/** `db.insertReview`に渡す、`factory.reviews`の1行。 */
 export type ReviewRecord = {
   work_item_id: number;
   head_sha: string;
@@ -425,19 +450,23 @@ export type ReviewRecord = {
 
 export type FixOutcome = "done" | "requirements_gap" | "blocked";
 
-/** Whether a fix reply's underlying comment was actually addressed with a
- * code change ("fixed"), deliberately left as-is ("skipped"), or is valid
- * but out of this PR's scope ("propose_issue" — user decision, 2026-09-26:
- * Claude drafts a candidate GitHub Issue instead of fixing or skipping it,
- * and a human approves/rejects it from the Console Inbox via
- * issue_proposal_apply.ts). Drives pr_workflow_support.ts's
- * `renderFixReply` last line (a commit sha for "fixed", "見送り" for
- * "skipped", "Issue化を提案(承認待ち)" for "propose_issue"). Required, not
- * optional: a reply without a decision fails the FixReply type guard
- * (parse-don't-validate). */
+/**
+ * 修正の返信で、元のコメントをどう扱ったか。
+ * - `"fixed"`: コードを変更して対応した。
+ * - `"skipped"`: 意図して変更しなかった。
+ * - `"propose_issue"`: 妥当だがこのPRの範囲外。修正も見送りもせず、
+ *   ClaudeがGitHub Issueの候補を下書きし、人がConsoleのInboxから
+ *   `issue_proposal_apply.ts`を通して承認・却下する。
+ *
+ * `pr_workflow_support.ts`の`renderFixReply`の最終行がこれで決まる
+ * (`"fixed"`はコミットSHA、`"skipped"`は「見送り」、
+ * `"propose_issue"`は「Issue化を提案(承認待ち)」)。
+ * 省略はできず、判断の無い返信は`FixReply`の型ガードで弾く
+ * (parse-don't-validate)。
+ */
 export type FixReplyDecision = "fixed" | "skipped" | "propose_issue";
 
-/** The Issue title/body Claude drafts for a `"propose_issue"` FixReply. */
+/** `"propose_issue"`の`FixReply`でClaudeが下書きするIssueのタイトルと本文。 */
 export type IssueProposalDraft = {
   title: string;
   body: string;
@@ -447,14 +476,16 @@ export type FixReply = {
   review_comment_id: number;
   body: string;
   decision: FixReplyDecision;
-  /** Present (non-null) exactly when `decision` is `"propose_issue"` — see
-   * pr_workflow_support.ts's `isFixReplyShape` type guard. Optional (and
-   * treated the same as `null` by every reader) for backward compatibility
-   * with a reply recorded before this field existed. */
+  /**
+   * `decision`が`"propose_issue"`のときに限りnullでない値を持つ
+   * (`pr_workflow_support.ts`の型ガード`isFixReplyShape`を参照)。
+   * このフィールドができる前に記録された返信と互換を保つため省略可能にしており、
+   * 読む側はすべて省略を`null`と同じに扱う。
+   */
   issue_proposal?: IssueProposalDraft | null;
 };
 
-/** Payload for db.insertFixRound: one row of factory.fix_rounds. */
+/** `db.insertFixRound`に渡す、`factory.fix_rounds`の1行。 */
 export type FixRoundRecord = {
   work_item_id: number;
   round: number;
@@ -465,21 +496,26 @@ export type FixRoundRecord = {
 };
 
 // ---------------------------------------------------------------------------
-// implement_rounds (工程3) — see
-// migrations/datatable/main/20260928120000_implement.up.sql.
+// implement_rounds(工程3)
 // ---------------------------------------------------------------------------
 
-/** `implement` = the first round against the approved requirements; `fix`
- * = a round repairing a failed check (implement_verify's loop). */
+/**
+ * ラウンドの種類。
+ * `implement`は承認済みの要件定義に対する最初のラウンド、
+ * `fix`は失敗した検査を直すラウンド(`implement_verify`のループ)。
+ */
 export type ImplementRoundMode = "implement" | "fix";
 export const IMPLEMENT_ROUND_MODES: readonly ImplementRoundMode[] = [
   "implement",
   "fix",
 ];
 
-/** `done` / `requirements_gap` come from Claude's output; `check_failed` /
- * `checks_skipped` / `stalled` from the verify loop; `error` when the
- * Claude run itself failed. Mirrors the table's CHECK constraint. */
+/**
+ * ラウンドの結果。テーブルのCHECK制約と一致させる。
+ * `done` / `requirements_gap`はClaudeの出力から、
+ * `check_failed` / `checks_skipped` / `stalled`は検証ループから決まる。
+ * `error`はClaudeの実行自体が失敗したときに使う。
+ */
 export type ImplementRoundOutcome =
   | "done"
   | "requirements_gap"
@@ -508,7 +544,7 @@ export function isImplementRoundOutcome(
   return isOneOf(value, IMPLEMENT_ROUND_OUTCOMES);
 }
 
-/** `implement_rounds.diff_stat`: the worktree diff after a round. */
+/** `implement_rounds.diff_stat`。ラウンド後のworktreeの差分の規模。 */
 export type ImplementDiffStat = {
   files: number;
   added: number;
@@ -526,9 +562,11 @@ export function isImplementDiffStat(
   );
 }
 
-/** Payload for db.insertImplementRound: one row of factory.implement_rounds
- * minus `id` / `created_at` / `round` — `round` is assigned by the insert
- * itself (`COALESCE(MAX(round), 0) + 1` per work item). */
+/**
+ * `db.insertImplementRound`に渡す、`factory.implement_rounds`の1行。
+ * `id` / `created_at` / `round`は含まない。
+ * `round`は挿入時に作業項目ごとに`COALESCE(MAX(round), 0) + 1`で決まる。
+ */
 export type ImplementRoundRecord = {
   work_item_id: number;
   attempt: number;
@@ -536,19 +574,23 @@ export type ImplementRoundRecord = {
   outcome: ImplementRoundOutcome;
   summary: string;
   gap_report: string | null;
-  /** First 16KB of the check output, or the stop reason for a round that
-   * ended before checks ran; `null` when there is neither. */
+  /**
+   * 検査の出力の先頭16KB。検査の前に止まったラウンドでは止まった理由。
+   * どちらも無ければ`null`。
+   */
   check_output: string | null;
   checks_skipped_reason: string | null;
-  /** Protected paths / new shell scripts / package.json scripts changes
-   * detected in the diff — recorded for the PR body, never blocking. */
+  /**
+   * 差分から検出した、保護対象のパス・新しいシェルスクリプト・
+   * `package.json`の`scripts`の変更。
+   * PR本文に載せるために記録するだけで、処理は止めない。
+   */
   protected_changes: string[];
   diff_stat: ImplementDiffStat | null;
   agent_run_id: number | null;
 };
 
-/** One full row of factory.implement_rounds (as read back by
- * db.listImplementRounds). */
+/** `db.listImplementRounds`が読み戻す、`factory.implement_rounds`の1行全体。 */
 export type ImplementRound = ImplementRoundRecord & {
   id: number;
   round: number;
@@ -556,15 +598,13 @@ export type ImplementRound = ImplementRoundRecord & {
 };
 
 // ---------------------------------------------------------------------------
-// issue_proposals (user decision, 2026-09-26): a pr_fix `"propose_issue"`
-// FixReply's candidate GitHub Issue, awaiting human approval/rejection from
-// the Console Inbox (issue_proposal_apply.ts).
+// issue_proposals: GitHub Issueの候補。人がConsoleのInboxから
+// (`issue_proposal_apply.ts`を通して)承認・却下するのを待つ。
 // ---------------------------------------------------------------------------
 
 export type IssueProposalStatus = "pending" | "approved" | "rejected";
 
-/** What raised this proposal: a pr_fix `propose_issue` reply, or an audit
- * report (工程5). */
+/** 提案の発生元。pr_fixの`propose_issue`の返信か、監査レポート(工程5)。 */
 export type IssueProposalOrigin = "pr_fix" | "audit";
 export const ISSUE_PROPOSAL_ORIGINS: readonly IssueProposalOrigin[] = [
   "pr_fix",
@@ -579,46 +619,57 @@ type IssueProposalBase = {
   status: IssueProposalStatus;
   decided_by: string | null;
   decision_reason: string | null;
-  /** Records the decider's request for `factory_config.trigger_label` on
-   * the Issue this proposal creates (entering the requirements pipeline) —
-   * `null` until decided, and on a rejection (never applicable there).
-   * Whether the label was actually attached is decided separately at apply
-   * time (`resolveFactoryLabel` in steps/issue_proposal_apply.ts), which can
-   * refuse an `audit` proposal's request when `factory_repo` is not allowed
-   * by `factory_config` — this column keeps the requested value regardless. */
+  /**
+   * この提案から作るIssueに`factory_config.trigger_label`を付けて
+   * 要件定義のパイプラインに乗せるよう、判断者が求めたかどうか。
+   * 判断前と、却下した場合(ラベルが関係しない)は`null`。
+   * 実際にラベルを付けたかは、適用時に`steps/issue_proposal_apply.ts`の
+   * `resolveFactoryLabel`が別に決める。`factory_repo`が`factory_config`で
+   * 許可されていなければ、`audit`の提案の要求を断ることがある。
+   * この列はその場合も求められた値をそのまま残す。
+   */
   with_factory_label: boolean | null;
   created_issue_number: number | null;
   created_issue_url: string | null;
-  /** Whether `review_comment_id` is a PR review comment (`true`, reply via
-   * `replyReviewComment`) or a plain issue comment (`false`, reply via
-   * `postIssueComment`) — set by pr_fix_finish.ts at insert time from the
-   * same signal it uses to pick its own reply target, so
-   * issue_proposal_apply.ts's decision reply can pick the right one
-   * deterministically instead of guessing. For `origin = "audit"` it is
-   * always `false` and never read. */
+  /**
+   * `review_comment_id`がPRのレビューコメントなら`true`
+   * (`replyReviewComment`で返信)、通常のIssueコメントなら`false`
+   * (`postIssueComment`で返信)。
+   * `pr_fix_finish.ts`が自分の返信先を選ぶのと同じ情報から挿入時に決める。
+   * こうすると`issue_proposal_apply.ts`は判断の返信先を推測せず確実に選べる。
+   * `origin = "audit"`では常に`false`で、読まれない。
+   */
   is_inline: boolean;
   created_at: Date;
   decided_at: Date | null;
 };
 
-/** A proposal raised by pr_fix's `propose_issue` reply: threaded under a
- * GitHub review/issue comment. */
+/**
+ * pr_fixの`propose_issue`の返信から生じた提案。
+ * GitHubのレビューコメントかIssueコメントにぶら下がる。
+ */
 export type PrFixIssueProposal = IssueProposalBase & {
   origin: "pr_fix";
-  /** The GitHub review comment (or plain issue comment) this proposal's
-   * reply is threaded under — the same id as the originating FixReply's
-   * `review_comment_id`. */
+  /**
+   * この提案の返信がぶら下がるGitHubのレビューコメント(または通常のIssueコメント)。
+   * 元になった`FixReply`の`review_comment_id`と同じid。
+   */
   review_comment_id: number;
-  /** GraphQL review-thread node id, when `pr_fix_finish.ts` could resolve
-   * one for `review_comment_id` — `null` for a plain issue comment, or when
-   * the match attempt failed (e.g. the comment's anchor line moved). */
+  /**
+   * `pr_fix_finish.ts`が`review_comment_id`から解決できた、
+   * GraphQLのレビュースレッドのノードid。
+   * 通常のIssueコメントの場合と、照合に失敗した場合
+   * (コメントの位置の行が動いたなど)は`null`。
+   */
   thread_id: string | null;
   audit_report_id: null;
   position: null;
 };
 
-/** A proposal raised by an audit report (工程5): no GitHub thread, keyed by
- * (audit_report_id, position) instead. */
+/**
+ * 監査レポート(工程5)から生じた提案。GitHubのスレッドは持たず、
+ * 代わりに`(audit_report_id, position)`で識別する。
+ */
 export type AuditIssueProposal = IssueProposalBase & {
   origin: "audit";
   review_comment_id: null;
@@ -627,10 +678,10 @@ export type AuditIssueProposal = IssueProposalBase & {
   position: number;
 };
 
-/** One row of factory.issue_proposals. */
+/** `factory.issue_proposals`の1行。 */
 export type IssueProposal = PrFixIssueProposal | AuditIssueProposal;
 
-/** One row of factory.audit_reports. */
+/** `factory.audit_reports`の1行。 */
 export type AuditReport = {
   id: number;
   work_item_id: number;
@@ -642,7 +693,7 @@ export type AuditReport = {
   created_at: Date;
 };
 
-/** Payload for db.recordFailure: one row of factory.job_failures. */
+/** `db.recordFailure`に渡す、`factory.job_failures`の1行。 */
 export type FailureRecord = {
   work_item_id: number | null;
   flow_path: string;
@@ -651,7 +702,7 @@ export type FailureRecord = {
   error: string;
 };
 
-/** Payload for db.recordDeployment: one row of factory.deployments. */
+/** `db.recordDeployment`に渡す、`factory.deployments`の1行。 */
 export type DeploymentRecord = {
   sha_from: string | null;
   sha_to: string;
@@ -660,14 +711,14 @@ export type DeploymentRecord = {
   needs_host_action: boolean;
 };
 
-/** Payload for db.addNotice: one row of factory.notices. */
+/** `db.addNotice`に渡す、`factory.notices`の1行。 */
 export type NoticeRecord = {
   kind: string;
   message: string;
 };
 
 // ---------------------------------------------------------------------------
-// factory_config (resource f/factory/factory_config, type c_factory_config)
+// factory_config(リソース`f/factory/factory_config`、型`c_factory_config`)
 // ---------------------------------------------------------------------------
 
 export type FactoryOwnerKind = "user" | "org";
@@ -679,15 +730,19 @@ export type FactoryOwner = {
 
 export type LabelerAssociation = "OWNER" | "MEMBER" | "COLLABORATOR";
 
-/** review_post_mode: "gated" is reserved (spec-cycle2.md §7 item 8) — not
- * implemented by any script in this cycle, but a valid config value. */
+/**
+ * `review_post_mode`の値。
+ * `"gated"`では、`pr_review_post.ts`がレビューを記録するだけでGitHubに投稿しない。
+ * 承認を経て投稿する仕組みはまだ無い。
+ */
 export type ReviewPostMode = "comment_only" | "gated";
 
 /**
- * The fully validated, defaults-filled runtime configuration. Produced by
- * lib/config.ts#loadConfig from the raw c_factory_config resource value
- * (RT.CFactoryConfig, rt.d.ts). All fields are required here — defaulting
- * happens in loadConfig so every consumer gets a complete config.
+ * 検証と既定値の補完を済ませた実行時の設定。
+ * `lib/config.ts`の`loadConfig`が、`c_factory_config`リソースの生の値
+ * (`rt.d.ts`の`RT.CFactoryConfig`)から作る。
+ * 既定値は`loadConfig`で補うため、ここではすべてのフィールドが必須であり、
+ * 使う側は常に完全な設定を受け取る。
  */
 export type FactoryConfig = {
   owners: FactoryOwner[];
@@ -700,69 +755,82 @@ export type FactoryConfig = {
   daily_budget_usd: number;
   claude_timeout_sec: number;
   worktree_ttl_days: number;
-  /** Days a terminal-status work item (and everything that cascades from
-   * it: requirement_drafts, approvals, agent_runs, approval_requests, ...)
-   * is kept before cleanup_db.ts deletes it (M7-cont: DB cleanup). */
+  /**
+   * 終端状態の作業項目を、`cleanup_db.ts`が削除するまで残す日数。
+   * work_itemsを`ON DELETE CASCADE`で参照する表の行も同じく残る。
+   */
   retention_work_items_days: number;
-  /** Days job_failures / deployments / resolved notices rows are kept
-   * before cleanup_db.ts deletes them independently of work_items
-   * (M7-cont: DB cleanup). */
+  /**
+   * job_failures、deployments、解決済みのnoticesの行を、
+   * `cleanup_db.ts`がwork_itemsとは独立に削除するまで残す日数。
+   */
   retention_logs_days: number;
   factory_repo: string;
-  /** Branch of factory_repo self_update.ts tracks (checks out on first
-   * clone, then pulls) when updating this Software Factory instance from
-   * its own repository. */
+  /**
+   * `self_update.ts`がこのSoftware Factory自身のリポジトリから更新するときに
+   * 追う`factory_repo`のブランチ。`ensureFactoryClone`が毎回fetchし、
+   * `checkout -B`でこのブランチのリモートの状態に合わせる。
+   */
   factory_branch: string;
   instance_name: string;
   windmill_public_url: string;
-  // New in cycle 2 (spec-cycle2.md §7 item 10). All optional on the
-  // resource type / remote resource; loadConfig fills defaults so an
-  // existing resource created before this cycle still validates.
+  // 以下はリソース型でもリモートのリソースでも省略可能で、
+  // `loadConfig`が既定値を補う。これらのフィールドを持たない既存の
+  // リソースも検証を通る。
   review_label: string;
   fix_label: string;
-  /** Days a tracked PR (work_items.kind pr_review/pr_fix) is kept eligible
-   * for DB-backed rediscovery by poll_prs.ts's listTrackedPrs, counted from
-   * its most recent work_items row's updated_at (2026-09-27 policy: PR
-   * trigger labels are consumed at claim time, so this replaces re-search
-   * by state label as the mechanism that finds a PR again once a human
-   * acts on it — approving, adding the fix label, or pushing a fix). */
+  /**
+   * 追跡中のPR(`work_items.kind`がpr_review / pr_fix)を、`poll_prs.ts`の
+   * `listTrackedPrs`がDBから再発見する対象に残す日数。
+   * そのPRの最新のwork_itemsの行の`updated_at`から数える。
+   * PRのトリガーラベルは取得時に消費されるため、人が承認・修正ラベルの付与・
+   * 修正のpushなどをした後にPRを再び見つけるには、この再発見を使う。
+   */
   tracked_pr_days: number;
   review_post_mode: ReviewPostMode;
   max_fix_rounds: number;
   allowed_check_commands: string[];
   default_reviewers: string[];
-  /** Empty means "no restriction beyond owners" (spec-cycle2.md §7 item 10). */
+  /** 空なら`owners`以外の制限をかけない。 */
   repo_allowlist: string[];
   diff_max_lines: number;
-  /** Max changed files allowed in one pr_fix_verify diff before it falls
-   * back to needs_human (M6 security review). */
+  /**
+   * `pr_fix_verify`の1回の差分で許す変更ファイル数の上限。
+   * 超えるとneeds_humanに回す(セキュリティ上の制限)。
+   */
   max_fix_changed_files: number;
-  /** Max diff lines (additions + deletions combined) allowed in one
-   * pr_fix_verify diff before it falls back to needs_human (M6 security
-   * review). */
+  /**
+   * `pr_fix_verify`の1回の差分で許す行数(追加と削除の合計)の上限。
+   * 超えるとneeds_humanに回す(セキュリティ上の制限)。
+   */
   max_fix_diff_lines: number;
-  /** Upper bound (days) on how far back one audit period may reach when
-   * the previous report is older than that (工程5). */
+  /**
+   * 監査(工程5)の1期間がさかのぼれる日数の上限。
+   * 前回のレポートがこれより古いときに効く。
+   */
   max_lookback_days: number;
-  // 工程3 (implement flow). All optional on the resource type with defaults
-  // (design §4); `implement_enabled` stays false until the e2e.
-  /** Whether requirements_apply starts the implement flow after approval. */
+  // 工程3(implementフロー)。リソース型ではすべて省略可能で、既定値がある。
+  // `implement_enabled`だけは既定が`false`で、有効にする前提は`docs/operations.md`にある。
+  /** 承認後に`requirements_apply`がimplementフローを起動するか。 */
   implement_enabled: boolean;
-  /** Upper bound on implement_verify's rounds (1 implement + N-1 fix). */
+  /** `implement_verify`のラウンド数の上限(implement 1回とfix N-1回)。 */
   implement_max_rounds: number;
-  /** Turn limit for one Claude run in the implement flow. */
+  /** implementフローでのClaudeの1回の実行のターン数の上限。 */
   implement_max_turns: number;
-  /** Budget (USD) for one Claude run in the implement flow. */
+  /** implementフローでのClaudeの1回の実行の予算(USD)。 */
   implement_max_budget_usd_per_run: number;
-  /** Timeout (seconds) for one Claude run in the implement flow. */
+  /** implementフローでのClaudeの1回の実行のタイムアウト(秒)。 */
   implement_timeout_sec: number;
-  /** Diff-size guard for the implement flow: max changed files. */
+  /** implementフローの差分の規模の上限のうち、変更ファイル数。 */
   implement_max_changed_files: number;
-  /** Diff-size guard for the implement flow: max added + deleted lines. */
+  /** implementフローの差分の規模の上限のうち、追加と削除の行数の合計。 */
   implement_max_diff_lines: number;
-  /** Per-repo check commands (`"<owner>/<repo>": string[]`). The implement
-   * flow runs only these (`implementCheckCommandsFor`, config.ts): a repo
-   * without an entry runs no check commands there. `checkCommandsFor`
-   * still falls back to `allowed_check_commands`. */
+  /**
+   * リポジトリごとの検査コマンド(`"<owner>/<repo>": string[]`)。
+   * implementフローはこれだけを実行する(`config.ts`の
+   * `implementCheckCommandsFor`)。エントリの無いリポジトリでは
+   * 検査コマンドを実行しない。
+   * 一方、`checkCommandsFor`は`allowed_check_commands`にフォールバックする。
+   */
   check_commands_by_repo: Record<string, string[]>;
 };

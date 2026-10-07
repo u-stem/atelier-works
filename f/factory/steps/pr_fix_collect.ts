@@ -1,14 +1,15 @@
-// PathScript step for f/factory/pr_fix: gathers feedback (PR reviews,
-// inline review comments, and issue comments) newer than the work item's
-// last_review_id / last_comment_id watermarks (spec-cycle2.md §7 item 1) —
-// including the factory's own `pr_review`-kind review and its unmarked
-// inline findings (adding the `factory:fix` label after the factory's own
-// review means "fix those findings"), excluding only the factory's own
-// `pr_fix` replies.
-// The "approved requirements" input is fetched directly by
-// pr_fix_apply.ts / pr_fix_verify.ts from parent_work_item_id instead of
-// being threaded through this step's JSON result (a RequirementDraft's
-// created_at:Date wouldn't survive a flow-result JSON round trip anyway).
+// f/factory/pr_fixフローの収集ステップ。
+// 作業項目の`last_review_id` / `last_comment_id`などの処理済み位置より新しい
+// フィードバック(PRのレビュー、インラインのレビューコメント、Issueコメント)を集める。
+// Factory自身の`pr_review`のレビューと、印の無いインラインの指摘も含める。
+// Factoryのレビューの後に`factory:fix`ラベルを付けるのは、
+// その指摘を直させる操作だから。
+// 除外するのはFactory自身の`pr_fix`の返信だけである。
+//
+// 承認済みの要件は、このステップのJSON結果で受け渡さず、
+// `pr_fix_apply.ts` / `pr_fix_verify.ts`が`parent_work_item_id`から直接取得する。
+// `RequirementDraft`の`created_at`は`Date`なので、
+// フロー結果のJSONを経由すると型が保てない。
 
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "../lib/config.ts";
@@ -59,12 +60,10 @@ export async function main(
   }
   const lastReviewId = workItem.last_review_id ?? 0;
   const lastCommentId = workItem.last_comment_id ?? 0;
-  // team-lead fix round 2 item f: inline PR review comments live in a
-  // different GitHub id space from issue comments, so they get their own
-  // watermark rather than sharing last_comment_id (the bug DA found: an
-  // inline comment's id has no ordering relationship to an issue comment's
-  // id, so reusing one watermark for both could wrongly skip or re-surface
-  // either kind).
+  // インラインのレビューコメントは、IssueコメントとはGitHubのid空間が別なので、
+  // `last_comment_id`を共有せず専用の処理済み位置を持つ。
+  // 両者のidには大小関係が無く、1つの位置を共有すると、
+  // どちらの種類も誤って読み飛ばしたり、処理済みのものを再び拾ったりしうる。
   const lastReviewCommentId = workItem.last_review_comment_id ?? 0;
 
   const ghToken = await wmill.getVariable("f/factory/github_token");
@@ -81,11 +80,10 @@ export async function main(
       }),
     ]);
 
-  // team-lead fix round 1b item 1: an author_association outside
-  // config.allowed_labeler_associations is excluded from "human feedback"
-  // just like an untrusted `factory` label would be (spec-cycle2.md §7
-  // item 1) — each selectNew* call reports who it dropped for that reason
-  // alone, logged and recorded as one notice below.
+  // `author_association`が`config.allowed_labeler_associations`に無い投稿者の発言は、
+  // 信頼できない人が付けた`factory`ラベルと同じく、人のフィードバックとして扱わない。
+  // 各`selectNew*`は、この理由だけで除外した投稿者を返す。
+  // それらは下でログに出し、1件のnoticeとして記録する。
   const reviewsSelected = selectNewReviews(
     reviewsResult.items,
     lastReviewId,
@@ -127,9 +125,8 @@ export async function main(
   }
 
   const maxReviewId = Math.max(lastReviewId, reviewsResult.maxId);
-  // team-lead fix round 2 item f: each id space bumps only its own
-  // watermark — issueCommentsResult.maxId (issue comments) no longer feeds
-  // into the same total as reviewCommentsResult.maxId (inline comments).
+  // id空間ごとに、それぞれの処理済み位置だけを進める。
+  // Issueコメントとインラインコメントの最大idを1つにまとめない。
   const maxCommentId = Math.max(lastCommentId, issueCommentsResult.maxId);
   const maxReviewCommentId = Math.max(
     lastReviewCommentId,

@@ -1,16 +1,14 @@
-// Pure helpers for 工程5 (audit): period math, title, and kickoff
-// decisions. The evidence pack (collection + markdown rendering) lives in
-// ./audit_evidence.ts, which imports AuditPeriod / ActionableCounts /
-// formatAuditPeriodLabel from here — kept separate so this file stays small
-// and dependency-free (no SqlClient/maskSecrets needed to decide "should an
-// audit run?").
+// 監査工程の純粋関数(対象期間の計算、タイトル、起動するかの判定)をまとめる。
+// 証跡の収集とMarkdown化は`./audit_evidence.ts`が担う。
+// 監査を起動するかの判定に`SqlClient`や`maskSecrets`を要らなくするため、
+// このファイルは依存を持たない小さなものに保つ。
 
 import { jstMidnightTodayIso } from "./claude.ts";
 
 const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 export const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** `YYYY-MM-DD` of `date`'s JST calendar day (fixed UTC+9, no DST). */
+/** `date`が属するJSTの日付を`YYYY-MM-DD`で返す(UTC+9固定、夏時間なし)。 */
 export function formatJstDate(date: Date): string {
   const shifted = new Date(date.getTime() + JST_OFFSET_MS);
   const year = shifted.getUTCFullYear();
@@ -19,8 +17,11 @@ export function formatJstDate(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
-/** Human label for a `[start, end)` audit period: the last *included* JST
- * day is `end - 1 day`, so a period ending 09-29 00:00 reads "〜09-28". */
+/**
+ * 監査期間`[start, end)`を人が読むラベルにして返す。
+ * 期間に含まれる最後のJSTの日は`end`の前日なので、
+ * 09-29 00:00に終わる期間は「〜09-28」と表示する。
+ */
 export function formatAuditPeriodLabel(start: Date, end: Date): string {
   return `${formatJstDate(start)}〜${formatJstDate(new Date(end.getTime() - DAY_MS))}`;
 }
@@ -28,15 +29,18 @@ export function formatAuditPeriodLabel(start: Date, end: Date): string {
 export type AuditPeriod = {
   readonly start: Date;
   readonly end: Date;
-  /** Days between the previous report's end and this period's start that
-   * max_lookback_days cut off (0 when nothing was cut). */
+  /**
+   * 前回のレポートの終端から今回の期間の始端までのうち、
+   * `max_lookback_days`で切り捨てた日数(切り捨てが無ければ0)。
+   */
   readonly unaudited_gap_days: number;
 };
 
-/** Rejects an audit length that isn't a positive integer number of days
- * (0, negative, fractional, NaN, Infinity) — the kickoff's `days` input
- * comes straight from a manual run's form, so it's checked before any
- * period math uses it. */
+/**
+ * 監査日数が正の整数でなければ(0、負、小数、NaN、Infinity)例外を投げる。
+ * 起動時の`days`は手動実行のフォームからそのまま届くため、
+ * 期間の計算に使う前に確かめる。
+ */
 export function assertAuditDays(days: number): void {
   if (!Number.isInteger(days) || days <= 0) {
     throw new Error("audit_kickoff: days must be a positive integer");
@@ -71,9 +75,11 @@ export function computeAuditPeriod(input: {
   return { start, end, unaudited_gap_days: gapDays };
 }
 
-/** Parses the flow inputs `period_start` / `period_end` (ISO strings) and
- * `unaudited_gap_days` into an AuditPeriod; throws on an inverted or
- * unparsable range. */
+/**
+ * フローの入力`period_start` / `period_end`(ISO文字列)と
+ * `unaudited_gap_days`を`AuditPeriod`に変換する。
+ * 日時を解釈できないときと、始端が終端以降のときは例外を投げる。
+ */
 export function parsePeriodArgs(
   start: string,
   end: string,
@@ -127,7 +133,7 @@ export function decideAuditKickoff(input: {
   readonly activeAuditCount: number;
   readonly period: AuditPeriod | null;
   readonly force: boolean;
-  /** null when the caller skipped counting (force) — still needs budget. */
+  /** 呼び出し側が件数を数えなかったとき(`force`)は`null`。その場合も予算は確かめる。 */
   readonly counts: ActionableCounts | null;
   readonly budgetExceeded: boolean;
 }): AuditKickoffDecision {

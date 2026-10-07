@@ -1,10 +1,7 @@
-// Tests for f/factory/steps/pr_workflow_support.ts's pure helpers backing
-// f/factory/steps/issue_proposal_apply.ts (team-lead fix round, carried over
-// from the former issue_proposal_decide.ts): idempotency classification
-// ([MUST] #2), the marker builder/parser pair used to find (and avoid
-// re-creating) an already-approved proposal's Issue ([MUST] #2), and the
-// deterministic reply-target choice by `is_inline` ([MUST] #4). Also covers
-// issue_proposal_apply.ts's own `readWithFactoryLabel`.
+// `issue_proposal_apply.ts`を支える`pr_workflow_support.ts`の純粋関数と、
+// `issue_proposal_apply.ts`自身の`readWithFactoryLabel`のテスト。
+// 冪等性のための判断の分類、承認済みの提案のIssueを見つけて
+// 二重に作らないための印の生成と判定、`is_inline`による返信先の決定を確かめる。
 
 import { describe, expect, test } from "bun:test";
 import {
@@ -97,13 +94,11 @@ describe("classifyIssueProposalDecision", () => {
     expect(result).toEqual({ action: "repost_only" });
   });
 
-  // `IssueProposalDecisionRow` carries no `with_factory_label` field, so a
-  // retry's `with_factory_label` can never change this classification —
-  // issue_proposal_decide.ts's approve path also reads the *stored*
-  // `current.with_factory_label` (the value recorded by the original
-  // approval), not the value passed to this retry, when it re-attempts
-  // Issue creation: the first approval's choice always wins, whatever a
-  // later retry requests.
+  // `IssueProposalDecisionRow`は`with_factory_label`を持たないため、
+  // 再試行で渡した`with_factory_label`はこの分類を変えない。
+  // `issue_proposal_apply.ts`もIssueの作成をやり直すときは、
+  // 再試行で渡した値ではなく、最初の承認で記録した`current.with_factory_label`を読む。
+  // 後の再試行が何を求めても、最初の承認の選択が優先される。
   test("reposts only regardless of the retry's with_factory_label value", () => {
     const result = classifyIssueProposalDecision(
       { status: "approved", created_issue_number: null },

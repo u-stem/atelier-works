@@ -1,21 +1,6 @@
-// PathScript step 1/4 of f/factory/implement (工程3 design §2
-// implement_prepare): re-checks everything the approval assumed (status,
-// daily budget, repo allowlist, the Issue still open, an approved
-// requirements draft for the work item's attempt, no pr_fix / pr_review run
-// active on the branch's open PR — hasActivePrRun), then prepares the
-// implement branch and its gtr worktree (lib/implement_loop.ts's
-// prepareImplementWorktree; git gtr 2.11.1 measured: `gtr new` reuses an
-// existing local branch, checks out origin/<branch> with upstream when only
-// the remote has it, and prints "already exists" with exit 0 when the
-// branch is already checked out — createGtrWorktree takes its reuse path
-// before that) and publishes the branch empty so every later push can use
-// commitAndPush unchanged (design §0b). Once the worktree is ready it
-// verifies the worktree's `.git` pointer (verifyWorktreeGitdir) and records
-// its bytes (worktree_git_pointer, re-checked after every Claude run), then
-// records the branch's merge-base with the default branch (base_sha), the
-// baseline every verify round is measured against. Returns one
-// ImplementContext for the later steps; a stop returns an outcome and a
-// reason instead, and implement_finish does the status transition.
+// f/factory/implementの4ステップ中1番目(準備)。
+// 承認時の前提がまだ成り立つかを確かめ、実装用のブランチとworktreeを用意して、
+// 後続ステップが使う`ImplementContext`を返す。
 
 import * as wmill from "windmill-client@1.817.0";
 import { buildConsoleUrl } from "../lib/approval_support.ts";
@@ -89,16 +74,18 @@ export type BuildImplementContextInput = {
   readonly worktreeDir: string;
   readonly factoryCloneDir: string;
   readonly expectedHeadSha: string;
-  /** readWorktreeGitPointer(worktreeDir).content once the worktree was ready. */
+  /** worktreeの用意ができた時点での`readWorktreeGitPointer(worktreeDir).content`。 */
   readonly worktreeGitPointer: string;
   readonly existingPr: PullRequestRef | null;
   readonly config: Pick<FactoryConfig, "windmill_public_url" | "factory_repo">;
 };
 
-/** Pure assembly of the context (tests/scripts/implement_prepare.test.ts).
- * `has_previous_implementation` is the prepare-time value (design §13): an
- * open PR, a recorded PR url, or a branch already ahead of the base (e.g. a
- * needs_human run pushed its partial work). */
+/**
+ * 入力から`ImplementContext`を組み立てる。副作用は無い。
+ * `has_previous_implementation`は準備時点の値で、
+ * openなPRがある、PRのURLが記録済み、ブランチがbaseより進んでいる
+ * (例: needs_humanで止まった実行が途中までpushした)のいずれかなら真になる。
+ */
 export function buildImplementContext(
   input: BuildImplementContextInput,
 ): ImplementContext {
@@ -147,6 +134,23 @@ function stop(
   return { outcome, reason, context: null };
 }
 
+/**
+ * 承認時の前提(作業項目の状態、日次予算、リポジトリの許可、Issueがopenか、
+ * 作業項目のattemptに承認済みの要件定義があるか、
+ * ブランチのopenなPRでpr_fix / pr_reviewが動いていないか)を確かめ直す。
+ * 満たさなければ`outcome`と理由を返し、状態の遷移は`implement_finish`に任せる。
+ *
+ * 満たせば、実装用のブランチと`git gtr`のworktreeを用意し、
+ * ブランチを空のままpushしておく。
+ * 先にpushしておくのは、後のpushをすべて`commitAndPush`のまま行えるようにするため。
+ * 続けてworktreeの`.git`ポインタを検証してその内容を記録し、
+ * デフォルトブランチとのmerge-baseを`base_sha`として記録する。
+ * `.git`ポインタはClaudeの実行のたびに照合し、
+ * `base_sha`は各検証ラウンドの差分の基準になる。
+ *
+ * 作業項目やIssue番号が無いとき、push後に`origin/<branch>`を解決できないときは
+ * 例外を投げる。
+ */
 export async function main(
   work_item_id: number,
 ): Promise<ImplementPrepareResult> {
@@ -205,9 +209,8 @@ export async function main(
   const draft = await getRequirementDraft(approval.draft_id);
   if (draft === null) return stop("needs_human", noApproval);
 
-  // An open PR on the branch may have a pr_fix / pr_review run using the
-  // same worktree: checked before the worktree is touched (the reuse path
-  // resets and cleans it).
+  // ブランチのopenなPRでは、pr_fix / pr_reviewが同じworktreeを使っていることがある。
+  // worktreeを再利用する経路はresetとcleanをかけるため、worktreeに触る前に確かめる。
   const branch = buildImplementBranchName(issueNumber, work_item_id);
   const existingPr = await findOpenPullRequestByHead(
     client,
@@ -239,6 +242,11 @@ export async function main(
     run: runCommand,
     repoDir,
   });
+  // git gtr 2.11.1で実測した`gtr new`の動作:
+  // 既存のローカルブランチは再利用し、リモートにだけあるブランチは
+  // upstream付きで`origin/<branch>`をcheckoutし、
+  // 既にcheckout済みのブランチには"already exists"を出してexit 0で終わる。
+  // `createGtrWorktree`は、最後の場合に至る前に自身の再利用経路に入る。
   const worktreeDir = await prepareImplementWorktree({
     hasWorktree: async () =>
       (await listWorktrees({ run: runCommand, repoDir })).some(
@@ -251,8 +259,8 @@ export async function main(
       (await pushNewBranch({ run: runCommand, repoDir, branch, ghToken }))
         .pushed,
   });
-  // The baseline for every later pointer check: a pointer a previous run
-  // left redirected must not become the trusted value.
+  // 以降のポインタ照合の基準値になる。
+  // 前回の実行が書き換えたまま残したポインタを、信頼する値にしてはならない。
   await verifyWorktreeGitdir({ run: runCommand, repoDir, dir: worktreeDir });
   const worktreeGitPointer = (await readWorktreeGitPointer(worktreeDir))
     .content;

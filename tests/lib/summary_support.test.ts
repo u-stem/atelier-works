@@ -9,8 +9,11 @@ import {
 
 type FakeCall = { text: string; values: unknown[] };
 
-/** Same fake-SqlClient shape as tests/lib/db.test.ts: records every
- * tagged-template call and returns one canned row set per call, in order. */
+/**
+ * タグ付きテンプレートの呼び出しをすべて記録し、
+ * 呼び出し1回ごとに用意した行の集合を順に返す偽の`SqlClient`。
+ * 形は`tests/lib/db.test.ts`と同じ。
+ */
 function createFakeSqlClient(responses: SqlRow[][] = []): {
   sql: SqlClient;
   calls: FakeCall[];
@@ -31,7 +34,7 @@ function createFakeSqlClient(responses: SqlRow[][] = []): {
 
 describe("computeYesterdayRangeJst", () => {
   test("labels the JST calendar day before `now`'s JST calendar day", () => {
-    // 2026-09-26T00:05:00Z is 2026-09-26 09:05 JST.
+    // 2026-09-26T00:05:00ZはJSTで2026-09-26 09:05。
     const range = computeYesterdayRangeJst(new Date("2026-09-26T00:05:00Z"));
     expect(range.label).toBe("2026-09-25");
   });
@@ -47,7 +50,7 @@ describe("computeYesterdayRangeJst", () => {
   });
 
   test("a `now` just before JST midnight still resolves to the same JST day", () => {
-    // 2026-09-26T14:59:59Z is 2026-09-26 23:59:59 JST (not yet the 27th).
+    // 2026-09-26T14:59:59ZはJSTで2026-09-26 23:59:59(まだ27日ではない)。
     const range = computeYesterdayRangeJst(new Date("2026-09-26T14:59:59Z"));
     expect(range.label).toBe("2026-09-25");
   });

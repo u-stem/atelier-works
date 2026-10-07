@@ -1,22 +1,21 @@
 {$BASE_URL} {
-        # Default to all interfaces (IPv4 + IPv6) when ADDRESS is unset. A bare
-        # `bind {$ADDRESS}` with an empty value makes Caddy >= 2.9 drop this whole
-        # site, silently disabling the HTTP proxy while the :25 layer4 listener stays up.
+        # `ADDRESS`が未設定なら、すべてのインターフェース(IPv4とIPv6)で待ち受ける。
+        # 値が空の`bind {$ADDRESS}`だと、Caddy 2.9以降はこのサイト全体を捨てる。
+        # :25のlayer4のリスナーは動いたまま、HTTPのプロキシだけが黙って止まる。
         bind {$ADDRESS:0.0.0.0 ::}
 
-        # Extra services: LSP, Multiplayer, Debugger (windmill_extra gateway).
-        # reverse_proxy only reads its first argument as a matcher, so listing
-        # several paths inline turns the rest into upstream addresses. The paths
-        # have to go through a named matcher.
+        # 追加のサービス: LSP、Multiplayer、Debugger(`windmill_extra`のゲートウェイ)。
+        # `reverse_proxy`は最初の引数だけをmatcherとして読むので、パスを並べると
+        # 2つ目以降が転送先のアドレスになる。複数のパスは名前付きmatcherで渡す。
         @extra path /ws/* /ws_mp/* /ws_debug/*
         reverse_proxy @extra http://windmill_extra:3000
 
-        # Search indexer, Enterprise Edition (windmill_indexer:8002)
+        # 検索インデクサ。Enterprise Edition用(windmill_indexer:8002)
         # reverse_proxy /api/srch/* http://windmill_indexer:8002
 
-        # Default: Windmill server
+        # 既定の転送先: Windmillのサーバー
         reverse_proxy /* http://windmill_server:8000
 
-        # TLS with custom certificates
+        # 独自の証明書でTLSを使う場合
         # tls /certs/cert.pem /certs/key.pem
 }

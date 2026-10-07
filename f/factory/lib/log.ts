@@ -1,31 +1,31 @@
-// Structured logging with secret masking.
-//
-// Every log line goes through maskSecrets so a stray token in an error
-// message or a subprocess's stdout never reaches a Windmill job log.
-// Known token *formats* (GitHub PAT, Claude Code OAuth token, Discord
-// webhook URL) are masked unconditionally via regex; opaque tokens with no
-// public format (e.g. the Windmill API token) must be passed explicitly via
-// the `secrets` list so they can be masked by exact match.
+// 秘密情報をマスクする構造化ログ。
+// エラーメッセージやサブプロセスの標準出力に紛れたトークンを、
+// Windmillのジョブログに出さないため、すべてのログ行を`maskSecrets`に通す。
 
-/** Regexes for secret formats that are safe to recognize without being told
- * the exact value (spec-cycle2.md §1 log.ts). */
+/**
+ * 値を教わらなくても形式だけで判別できる秘密情報の正規表現。
+ * 公開された形式を持つトークン(GitHubのPAT、Claude CodeのOAuthトークン、
+ * DiscordのWebhook URL)はこれで常にマスクする。
+ * Windmill APIトークンのように形式が公開されていないトークンは、
+ * 完全一致でマスクするため`secrets`で明示的に渡す必要がある。
+ */
 const SECRET_PATTERNS: readonly RegExp[] = [
-  // GitHub fine-grained PAT: github_pat_ + ~82 base62/underscore chars.
+  // GitHubのfine-grained PAT。`github_pat_`の後に約82字の英数字と`_`が続く。
   /github_pat_[A-Za-z0-9_]{20,}/g,
-  // GitHub classic PAT / OAuth / app / refresh token prefixes.
+  // GitHubのclassic PAT、OAuth、app、refreshトークンの接頭辞。
   /gh[oprsu]_[A-Za-z0-9]{20,}/g,
-  // Claude Code OAuth token.
+  // Claude CodeのOAuthトークン。
   /sk-ant-oat[A-Za-z0-9_-]{10,}/g,
-  // Any other Anthropic API-style secret key, as defense in depth.
+  // 多層防御として、その他のAnthropic API形式の秘密鍵もマスクする。
   /sk-ant-[A-Za-z0-9_-]{10,}/g,
-  // Discord webhook URL: everything after /webhooks/ is the secret.
+  // DiscordのWebhook URL。`/webhooks/`以降がすべて秘密情報にあたる。
   /https:\/\/(?:ptb\.|canary\.)?discord(?:app)?\.com\/api\/webhooks\/\d+\/[A-Za-z0-9_-]+/g,
 ];
 
 /**
- * Replace known secret formats and any explicitly-listed secret value with
- * `***` in `text`. Safe to call on arbitrary text (error messages,
- * subprocess stdout/stderr) before logging or storing it.
+ * `text`の中の既知の形式の秘密情報と、`secrets`で渡した値を`***`に置き換える。
+ * エラーメッセージやサブプロセスの標準出力・標準エラーなど、
+ * 任意の文字列をログ出力や保存の前に通してよい。
  */
 export function maskSecrets(
   text: string,
@@ -57,25 +57,27 @@ export type Logger = {
 };
 
 export type LoggerOptions = {
-  /** Secret values to mask in every log line, in addition to the built-in
-   * known formats (e.g. the Windmill API token, which has no fixed format). */
+  /**
+   * 組み込みの既知の形式に加えて、すべてのログ行でマスクする秘密情報の値。
+   * Windmill APIトークンのように決まった形式を持たないものを渡す。
+   */
   secrets?: readonly string[];
-  /** Where a serialized log line is written. Defaults to `console.log`. */
+  /** 直列化したログ行の書き込み先。既定は`console.log`。 */
   sink?: LogSink;
-  /** Clock injection for deterministic tests. Defaults to `() => new Date()`. */
+  /** テストで時刻を固定するための時計。既定は`() => new Date()`。 */
   now?: () => Date;
 };
 
 /**
- * Create a structured logger for one pipeline stage (e.g. "poll_issues",
- * "generate_requirements"). Every call emits one JSON line via `sink`
- * (default: `console.log`, which Windmill captures as the job log).
+ * パイプラインの1工程(`poll_issues`、`generate_requirements`など)用の
+ * 構造化ロガーを作る。
+ * 呼び出しごとにJSONを1行、`sink`へ書き出す。
+ * 既定の`console.log`の出力は、Windmillがジョブログとして取り込む。
  *
- * Masking is applied to the *entire serialized line*, not field-by-field —
- * `fields` can be an arbitrarily nested object/array (e.g. a captured HTTP
- * request), and a per-field-only pass would miss a secret nested inside a
- * nested object or array element. Running maskSecrets once over the full
- * JSON string catches a secret anywhere in the record, at any depth.
+ * マスクはフィールドごとではなく、直列化した行全体にかける。
+ * `fields`は任意の深さに入れ子になったオブジェクトや配列
+ * (取り込んだHTTPリクエストなど)になりうるため、
+ * フィールドごとのマスクでは入れ子の奥にある秘密情報を見逃す。
  */
 export function logger(stage: string, options: LoggerOptions = {}): Logger {
   const secrets = options.secrets ?? [];

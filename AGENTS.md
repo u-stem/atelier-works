@@ -4,13 +4,17 @@
 
 ## Project-specific instructions
 
+- コメントは日本語で書く(ユーザーレベルの「コード / コメントは英語」より本ルールを
+  優先する)。識別子・テスト名・ログやエラーのメッセージ・プロンプト文字列は英語の
+  まま。`§`や設計文書の章番号、変更の経緯は書かない。書き方は
+  `docs/coding-guidelines.md`の「コメント」、日本語の推敲は`yomiyasu`スキルに従う。
 - Configは`.env`系ファイルではなくmiseで管理する。非秘密の設定は`mise.toml`
   の`[env]`に平文で置く。秘密(`DB_PASSWORD` / `WM_ADMIN_EMAIL` /
   `WM_ADMIN_PASSWORD` / `GITHUB_TOKEN` / `CLAUDE_CODE_OAUTH_TOKEN` /
   `DISCORD_WEBHOOK_URL`)はgitignore済みの`mise.local.toml`に人が投入する。
-  投入先が`mise.local.toml`になること、`-E local`を付けずとも以降の
-  `mise run` / `mise exec`に自動反映されることは実機確認済み。推奨コマンド
-  (値を非表示入力にし、シェル履歴に値を残さない):
+  投入先が`mise.local.toml`になること、`-E local`を付けなくても以降の
+  `mise run` / `mise exec`に自動反映されることは実機確認済み。推奨コマンドは
+  次のとおり(値を非表示入力にし、シェル履歴に値を残さない)。
   - zsh: `read -rs 'v?KEY: ' && mise set -E local KEY="$v"; unset v`
   - bash: `read -rs -p 'KEY: ' v && mise set -E local KEY="$v"; unset v`
   直書きの`mise set -E local KEY=value`は補足手段に留める(記号を含まない値

@@ -12,12 +12,12 @@ function formatDateTime(iso: string): string {
   return Number.isNaN(date.getTime()) ? iso : date.toLocaleString("ja-JP");
 }
 
-/** Whether an issue_proposal row is "approved but the Issue was never
- * created" (team-lead fix round, "Keep incomplete approvals visible in
- * Inbox") — 承認 is safe to re-run (approval_decide.ts's dispatch classifies
- * it as an idempotent retry and resumes the create-or-reuse step), but 却下
- * no longer makes sense once approval is already on record, so that action
- * is hidden for this row. */
+/**
+ * issue_proposalの行が「承認済みだがIssueを作れていない」状態かを返す。
+ * この行は承認タブに残す。承認はやり直しても安全だが(`approval_decide.ts`が
+ * 冪等な再試行と判定し、作成か再利用のstepから再開する)、承認が記録済み
+ * なので却下はもう意味が無く、この行では却下の操作を隠す。
+ */
 function isIncompleteProposal(row: InboxRow): boolean {
   return (
     row.kind === "issue_proposal" &&
@@ -29,9 +29,11 @@ function isIncompleteProposal(row: InboxRow): boolean {
 export function InboxTab({
   onOpenAudit,
 }: {
-  /** Opens the 監査 tab and selects the audit report this proposal came
-   * from (App.tsx wires this to `setAuditTarget` + `setActiveTab("audit")`
-   * — see AuditTab.tsx's `initialWorkItemId` prop). */
+  /**
+   * 監査タブを開き、この提案の元になった監査レポートを選ぶ。
+   * `App.tsx`が`setAuditTarget`と`setActiveTab("audit")`につなぐ
+   * (`AuditTab.tsx`の`initialWorkItemId`を参照)。
+   */
   onOpenAudit: (workItemId: number) => void;
 }): React.ReactElement {
   const { rows, loading, error, reload } = useConsoleQuery(

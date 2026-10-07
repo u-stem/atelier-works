@@ -1,11 +1,8 @@
-// The implement flow's (工程3 design §2) shared contract and verify loop:
-// the ImplementContext implement_prepare hands to every later step, the
-// branch/worktree preparation order, the per-run doc_dir copy, one Claude
-// run turned into an ImplementClaudeRound (generate and every fix round),
-// and runImplementVerifyLoop with every I/O injected so it is unit-testable
-// and reusable by pr_fix later. lib never imports steps: the verify step
-// binds the steps-side helpers (diff-size guard, change listing, symlink
-// detection) into ImplementLoopDeps.
+// implementフローの各stepが共有する契約(`ImplementContext`)と検証ループを定義する。
+// worktreeの準備の順序、実行ごとの`doc_dir`の複製、Claudeの1回の実行の扱いも含む。
+// 検証ループの入出力はすべて注入するので、単体テストでき、pr_fixからも使い回せる。
+// libはstepsをimportしないため、stepsにある補助関数(差分の大きさのガード、
+// 変更の一覧、シンボリックリンクの検出)はverifyのstepが`ImplementLoopDeps`に渡す。
 
 import { access, cp, lstat, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -48,10 +45,10 @@ export const IMPLEMENT_FLOW_PATH = "f/factory/implement";
 export const IMPLEMENT_SKILL_NAME = "factory-implementation";
 
 // ---------------------------------------------------------------------------
-// Flow contract (implement_prepare's result, read by every later step)
+// フローの契約(implement_prepareの結果で、後続のすべてのstepが読む)
 // ---------------------------------------------------------------------------
 
-/** `proceed` runs generate/verify; the others go straight to finish. */
+/** `proceed`ならgenerateとverifyを実行し、それ以外はそのままfinishへ進む。 */
 export type ImplementPrepareOutcome =
   | "proceed"
   | "skip"
@@ -64,8 +61,10 @@ export const IMPLEMENT_PREPARE_OUTCOMES: readonly ImplementPrepareOutcome[] = [
   "needs_human",
 ];
 
-/** Everything later steps need, built once by implement_prepare. snake_case:
- * it crosses the flow as JSON, like every other step result. */
+/**
+ * 後続のstepが必要とするすべての値。implement_prepareが1回だけ作る。
+ * 他のstepの結果と同じくJSONとしてフローを渡るので、項目名はsnake_caseにする。
+ */
 export type ImplementContext = {
   readonly owner: string;
   readonly repo: string;
@@ -73,43 +72,61 @@ export type ImplementContext = {
   readonly issue_url: string;
   readonly issue_title: string;
   readonly issue_body: string;
-  /** `factory/issue-<N>-wi-<id>` (buildImplementBranchName). */
+  /** `factory/issue-<N>-wi-<id>`(`buildImplementBranchName`)。 */
   readonly branch: string;
-  /** The repo's default branch — the PR base. */
+  /** リポジトリのデフォルトブランチ。PRのbaseになる。 */
   readonly base_branch: string;
-  /** `git merge-base origin/<base_branch> HEAD` once the worktree was
-   * ready: every round's change listing and diff size are measured against
-   * it, so commits made earlier on the branch stay visible. */
+  /**
+   * worktreeの準備ができた時点の`git merge-base origin/<base_branch> HEAD`。
+   * 各ラウンドの変更の一覧と差分の大きさはこれを基準に測るので、
+   * ブランチに以前からあるcommitも見える。
+   */
   readonly base_sha: string;
   readonly repo_dir: string;
   readonly worktree_dir: string;
   readonly factory_clone_dir: string;
-  /** origin/<branch> when prepare finished — commitAndPush's expectedHeadSha. */
+  /**
+   * prepareを終えた時点の`origin/<branch>`。
+   * `commitAndPush`の`expectedHeadSha`に使う。
+   */
   readonly expected_head_sha: string;
   readonly existing_pr_number: number | null;
   readonly existing_pr_url: string | null;
-  /** Prepare-time value (design §13): an open PR, work_items.pr_url, or a
-   * branch already ahead of base_sha. */
+  /**
+   * prepare時点の値。開いているPRがあるか、`work_items.pr_url`があるか、
+   * ブランチがすでに`base_sha`より先に進んでいれば`true`。
+   */
   readonly has_previous_implementation: boolean;
   readonly attempt: number;
   readonly requirements_markdown: string;
   readonly requirements_diagrams: Diagram[];
-  /** The approved draft's directory; never mounted itself — every Claude
-   * run gets a fresh copy (withReadOnlyDocDirCopy). */
+  /**
+   * 承認済みの下書きのディレクトリ。これ自体はClaudeに渡さず、
+   * Claudeの実行ごとに新しい複製を渡す(`withReadOnlyDocDirCopy`)。
+   */
   readonly requirements_doc_dir: string | null;
   readonly requirements_console_url: string;
-  /** Only then does the PR body carry the Windmill deploy checklist. */
+  /**
+   * 対象がFactory自身のリポジトリなら`true`。
+   * `true`のときだけ、PR本文にWindmillへの反映のチェックリストを載せる。
+   */
   readonly is_factory_repo: boolean;
-  /** `<worktree_dir>/.git`'s bytes right after the worktree was ready
-   * (readWorktreeGitPointer). Every later git command in the worktree is
-   * preceded by assertWorktreeGitPointer against it: a Claude run that
-   * rewrote `.git` could point git at a gitdir whose config runs commands. */
+  /**
+   * worktreeの準備ができた直後の`<worktree_dir>/.git`の中身(`readWorktreeGitPointer`)。
+   * 以降worktreeでgitを実行する前には、
+   * 必ずこれと比べる`assertWorktreeGitPointer`を通す。
+   * Claudeの実行が`.git`を書き換えると、設定でコマンドを実行するgitdirを
+   * gitに参照させることができるためである。
+   */
   readonly worktree_git_pointer: string;
 };
 
-/** implementPrompt / implementFixPrompt's shared input. The approved
- * markdown is inlined (fenced) by the prompt; `docDir` is the per-run copy
- * of doc_dir (or null) — the path the prompt names and addDirs mounts. */
+/**
+ * `implementPrompt`と`implementFixPrompt`が共有する入力を作る。
+ * 承認済みのMarkdownはプロンプトがコードフェンスで囲んで埋め込む。
+ * `docDir`は実行ごとの`doc_dir`の複製(または`null`)で、
+ * プロンプトが示すパスであり、`addDirs`で渡すパスでもある。
+ */
 export function implementPromptInput(
   context: ImplementContext,
   docDir: string | null,
@@ -135,30 +152,32 @@ export function implementPromptInput(
 }
 
 // ---------------------------------------------------------------------------
-// Branch and worktree preparation order (design §0b)
+// ブランチとworktreeを準備する順序
 // ---------------------------------------------------------------------------
 
 export type WorktreePrepDeps = {
-  /** Whether `git worktree list` already has a worktree on the branch. */
+  /** `git worktree list`に、そのブランチのworktreeがすでにあるかを返す。 */
   readonly hasWorktree: () => Promise<boolean>;
-  /** createGtrWorktree(...).path */
+  /** `createGtrWorktree(...).path`を返す。 */
   readonly createWorktree: () => Promise<string>;
-  /** pushNewBranch(...).pushed — false when origin already had the branch. */
+  /** `pushNewBranch(...).pushed`を返す。originにすでにブランチがあったときは`false`。 */
   readonly publishBranch: () => Promise<boolean>;
 };
 
 /**
- * The implement worktree, published on origin and aligned with it.
- * Measured with git gtr 2.11.1: `gtr new` reuses an existing local branch,
- * otherwise checks out origin/<branch> with upstream when only the remote
- * has it, otherwise branches from origin/<default>; createGtrWorktree's
- * reuse path (fetch → reset --hard origin/<branch> → clean) covers a branch
- * that already has a worktree. So: an existing worktree is published first
- * (a previous run may have died between `gtr new` and the empty push, and
- * the reuse path fetches origin/<branch>), then reused. A new one is
- * created and published; when origin already had the branch it is taken
- * once more through the reuse path, which aligns a stale local branch with
- * origin.
+ * implementのworktreeを用意し、ブランチをoriginに公開して揃えたうえで、そのパスを返す。
+ *
+ * git gtr 2.11.1で測った挙動: `gtr new`はローカルのブランチがあれば使い回す。
+ * 無くてリモートにだけあれば、upstreamを設定して`origin/<branch>`をチェックアウトする。
+ * どちらにも無ければ`origin/<default>`から分岐する。
+ * すでにworktreeがあるブランチは、`createGtrWorktree`の使い回しの経路
+ * (fetch → `reset --hard origin/<branch>` → clean)が扱う。
+ *
+ * そのため、既存のworktreeがあれば先にブランチを公開してから使い回す。
+ * 前回の実行が`gtr new`と空のpushの間で止まった可能性があり、
+ * 使い回しの経路は`origin/<branch>`をfetchするためである。
+ * worktreeが無ければ作ってから公開する。originにすでにブランチがあった場合は、
+ * 使い回しの経路をもう1回通し、古いローカルのブランチをoriginに揃える。
  */
 export async function prepareImplementWorktree(
   deps: WorktreePrepDeps,
@@ -173,14 +192,15 @@ export async function prepareImplementWorktree(
 }
 
 // ---------------------------------------------------------------------------
-// withReadOnlyDocDirCopy: the approved requirements files are never mounted
-// themselves (design §13: `--add-dir` paths may be writable)
+// withReadOnlyDocDirCopy: 承認済みの要件定義のファイル自体はClaudeに渡さない
+// (`--add-dir`のパスには書き込める可能性があるため)
 // ---------------------------------------------------------------------------
 
 export type DocDirCopyDeps = {
-  /** `false` when the approved document is no longer on disk (worker
-   * recreated, old draft) — the prompt still carries the markdown, so the
-   * run proceeds without `--add-dir`. */
+  /**
+   * 承認済みの文書がもうディスクに無い(workerを作り直した、古い下書きなど)ときは`false`。
+   * その場合もプロンプトにMarkdownは載るので、`--add-dir`なしで実行を続ける。
+   */
   readonly pathExists: (path: string) => Promise<boolean>;
   readonly makeTempDir: () => Promise<string>;
   readonly copyDir: (source: string, destination: string) => Promise<void>;
@@ -193,7 +213,10 @@ type DocEntryStats = {
   isSymbolicLink(): boolean;
 };
 
-/** isCopyableDocEntry's fs call; injectable for tests. */
+/**
+ * `isCopyableDocEntry`が使うファイルシステムの呼び出し。
+ * テストのために差し替えられる。
+ */
 export type DocEntryFs = {
   readonly lstat: (path: string) => Promise<DocEntryStats>;
 };
@@ -202,12 +225,14 @@ const defaultDocEntryFs: DocEntryFs = {
   lstat: (path) => lstat(path),
 };
 
-/** The doc_dir copy's filter: regular files and real directories only.
- * Every symlink is skipped, whatever it points to — dereferencing one
- * could materialize a target outside the doc dir (e.g. /proc/self/environ)
- * in the copy Claude reads — and so is anything that is not a file or
- * directory (FIFO, socket, device); the copy holds no link a Claude
- * `Write` could follow out of it. */
+/**
+ * `doc_dir`を複製するときの絞り込み。通常のファイルと本物のディレクトリだけを複製する。
+ * シンボリックリンクは、指す先にかかわらずすべて飛ばす。
+ * 辿ると、doc dirの外にある対象(`/proc/self/environ`など)が、Claudeの読む複製に
+ * 実体として入りうるためである。
+ * ファイルでもディレクトリでもないもの(FIFO、ソケット、デバイス)も飛ばす。
+ * これで、Claudeの`Write`が複製の外へ辿れるリンクは複製に残らない。
+ */
 export async function isCopyableDocEntry(
   path: string,
   fs: DocEntryFs = defaultDocEntryFs,
@@ -231,10 +256,13 @@ export const defaultDocDirCopyDeps: DocDirCopyDeps = {
   removeDir: (path) => rm(path, { recursive: true, force: true }),
 };
 
-/** Runs `fn` with a fresh copy of `docDir` (`<tmp>/requirements`), removed
- * afterwards whether `fn` succeeds or throws. Whatever a Claude run does to
- * the copy cannot reach the approved draft the Console shows. `null` (a
- * draft without doc_dir) is passed through without copying. */
+/**
+ * `docDir`の新しい複製(`<tmp>/requirements`)を渡して`fn`を実行し、
+ * `fn`が成功しても例外を投げても、終わったら複製を削除する。
+ * Claudeの実行が複製に何をしても、Consoleが表示する承認済みの下書きには届かない。
+ * `docDir`が`null`(`doc_dir`の無い下書き)か、ディスクに無いときは、
+ * 複製せずに`null`を渡す。
+ */
 export async function withReadOnlyDocDirCopy<T>(
   docDir: string | null,
   fn: (copy: string | null) => Promise<T>,
@@ -252,11 +280,13 @@ export async function withReadOnlyDocDirCopy<T>(
 }
 
 // ---------------------------------------------------------------------------
-// One Claude run (generate's round 1 and every fix round)
+// Claudeの1回の実行(generateの1ラウンド目と、すべての修正のラウンド)
 // ---------------------------------------------------------------------------
 
-/** One Claude run's result as the verify loop consumes it. Never thrown:
- * a failed run is data too, recorded as an `error` round (design §2). */
+/**
+ * 検証ループが扱う形にした、Claudeの1回の実行の結果。例外としては投げない。
+ * 失敗した実行もデータとして扱い、`error`のラウンドとして記録する。
+ */
 export type ImplementClaudeRound =
   | {
       readonly kind: "output";
@@ -267,7 +297,7 @@ export type ImplementClaudeRound =
   | {
       readonly kind: "invalid_output";
       readonly output: ImplementClaudeOutput;
-      /** validateImplementOutput's operator-facing reason (never shown to Claude). */
+      /** `validateImplementOutput`が返す運用者向けの理由。Claudeには見せない。 */
       readonly reason: string;
       readonly agent_run_id: number;
       readonly cost_usd: number;
@@ -283,9 +313,12 @@ export type ImplementClaudeRound =
 export const IMPLEMENT_CLAUDE_ROUND_KINDS: readonly ImplementClaudeRound["kind"][] =
   ["output", "invalid_output", "claude_failed"];
 
-/** runClaude's result → ImplementClaudeRound. The semantic check runs only
- * after a successful run (design §13: folding it into isStructuredOutput
- * would re-run the whole implementation for a long subject). */
+/**
+ * `runClaude`の結果を`ImplementClaudeRound`に変換する。
+ * 意味の検査は実行が成功した後にだけ行う。
+ * `isStructuredOutput`に含めると、件名が長いといった理由だけで
+ * 実装全体をやり直すことになるためである。
+ */
 export function toImplementClaudeRound(
   result: RunClaudeResult<ImplementClaudeOutput>,
   agentRunId: number,
@@ -343,10 +376,10 @@ export type ImplementClaudeRunInput = {
   readonly attempt: number;
   readonly stage: "implement" | "implement_fix";
   readonly prompt: string;
-  /** buildSystemPrompt([IMPLEMENT_SKILL_NAME])'s file. */
+  /** `buildSystemPrompt([IMPLEMENT_SKILL_NAME])`が作ったファイル。 */
   readonly systemPromptPath: string;
   readonly worktreeDir: string;
-  /** The per-run doc_dir copy (withReadOnlyDocDirCopy), or null. */
+  /** 実行ごとの`doc_dir`の複製(`withReadOnlyDocDirCopy`)か`null`。 */
   readonly docDir: string | null;
   readonly oauthToken: string;
 };
@@ -358,9 +391,12 @@ export type ImplementClaudeRunDeps = {
   readonly recordAgentRun: (record: AgentRunRecord) => Promise<number>;
 };
 
-/** The implement flow's runClaude options (design §2 implement_generate):
- * no Bash, `dontAsk` + `--allowedTools Edit Write` (the combination pr_fix
- * measured to allow writes), cwd = worktree, the doc_dir copy via addDirs. */
+/**
+ * implementフローの`runClaude`のオプションを組み立てる。
+ * Bashは使わせず、`dontAsk`と`--allowedTools Edit Write`
+ * (pr_fixで書き込みができると測った組み合わせ)にする。
+ * `cwd`はworktreeにし、`doc_dir`の複製は`addDirs`で渡す。
+ */
 export function buildImplementClaudeOptions(
   input: ImplementClaudeRunInput,
 ): RunClaudeOptions<ImplementClaudeOutput> {
@@ -387,7 +423,7 @@ export function buildImplementClaudeOptions(
   };
 }
 
-/** Runs Claude once, records the agent run, and returns the round. */
+/** Claudeを1回実行し、agent runをDBに記録して、そのラウンドを返す。 */
 export async function runImplementClaudeRound(
   deps: ImplementClaudeRunDeps,
   input: ImplementClaudeRunInput,
@@ -398,11 +434,14 @@ export async function runImplementClaudeRound(
 }
 
 // ---------------------------------------------------------------------------
-// runImplementVerifyLoop (design §2 implement_verify, §0 "検証が OK になるまで")
+// runImplementVerifyLoop: 検証が通るまで修正を繰り返す
 // ---------------------------------------------------------------------------
 
-/** How the verify loop ended. decideImplementRoundExit's exits (minus
- * `continue`) plus the loop's own stops before the checks. */
+/**
+ * 検証ループが終わった理由。
+ * `decideImplementRoundExit`の終了理由(`continue`を除く)に、
+ * 検証の前にループ自身が止まる理由を加えたもの。
+ */
 export type ImplementLoopExit =
   | "checks_passed"
   | "checks_skipped"
@@ -430,17 +469,21 @@ export const IMPLEMENT_LOOP_EXITS: readonly ImplementLoopExit[] = [
 
 export const GITLEAKS_TIMEOUT_MS = 5 * 60_000;
 
-/** Names shown to Claude ("Check command failed: <name>") and in the PR
- * body's 動作確認結果 for the checks the flow itself owns. */
+/**
+ * フロー自身が持つ検証の名前。
+ * Claudeへの表示("Check command failed: <name>")とPR本文の動作確認結果に使う。
+ */
 export const GITLEAKS_CHECK_NAME = "gitleaks (secret scan)";
 export const NO_CHANGES_CHECK_NAME = "change check (factory)";
 const NO_CHANGES_OUTPUT =
   "no changes produced: the worktree has no difference from the base branch, so nothing was implemented";
 const OUTPUT_CONTRACT_LABEL = "output contract (factory)";
 
-/** implementFixPrompt's outputContractNote for a round after an
- * invalid_output (design §13: list the semantic rules; the operator-facing
- * reason stays in the DB). Plain instructions, never fenced. */
+/**
+ * `invalid_output`の後のラウンドで、`implementFixPrompt`の`outputContractNote`に渡す文。
+ * 意味の規則を並べて示し、運用者向けの理由はDBにだけ残す。
+ * 指示そのものなので、コードフェンスでは囲まない。
+ */
 export const IMPLEMENT_OUTPUT_CONTRACT_NOTE = [
   "Your previous structured output broke the output contract, so the flow could not use it.",
   '- outcome "done": gap_report is null; commit_subject is one non-empty line of at most 72 code points, not ending in "…", without control characters.',
@@ -451,48 +494,58 @@ export const IMPLEMENT_OUTPUT_CONTRACT_NOTE = [
 const FAILURE_TAIL_CHARS = 2000;
 
 export type ChangeInspection = {
-  /** Every path that differs from the context's base_sha. */
+  /** 文脈の`base_sha`と異なるすべてのパス。 */
   readonly changes: readonly ChangedPath[];
   readonly packageJsonScriptsChanged: boolean;
-  /** Blocking: any symlink creation / change / typechange (design §3). */
+  /** シンボリックリンクの作成・変更・種類の変更。1つでもあれば止める。 */
   readonly symlinkReasons: readonly string[];
 };
 
 export type LoopCheckResult = {
   readonly command: string;
   readonly ok: boolean;
-  /** Full masked output (DB). */
+  /** 秘密をマスクした出力の全体(DBに記録する)。 */
   readonly output: string;
-  /** Prompt-side excerpt. */
+  /** プロンプトに載せる抜粋。 */
   readonly outputTail: string;
 };
 
 export type FixRoundRequest = {
-  /** 1-based round number within this loop (the prompt's "Round n of m"). */
+  /** このループの中でのラウンド番号(1始まり)。プロンプトの"Round n of m"に使う。 */
   readonly round: number;
-  /** Fenced as DATA by implementFixPrompt. */
+  /** `implementFixPrompt`がDATAとしてコードフェンスで囲む。 */
   readonly failures: readonly CheckFailure[];
-  /** The previous output broke the contract: pass IMPLEMENT_OUTPUT_CONTRACT_NOTE as outputContractNote. */
+  /**
+   * 前回の出力が契約に違反したことを表す。
+   * `true`なら`IMPLEMENT_OUTPUT_CONTRACT_NOTE`を`outputContractNote`として渡す。
+   */
   readonly contractViolated: boolean;
 };
 
 export type ImplementLoopDeps = {
-  /** assertWorktreeGitPointer against the context's worktree_git_pointer;
-   * throws WorktreeGitPointerModifiedError when a Claude run changed it. */
+  /**
+   * 文脈の`worktree_git_pointer`に対して`assertWorktreeGitPointer`を実行する。
+   * Claudeの実行がポインタを変えていたら`WorktreeGitPointerModifiedError`を投げる。
+   */
   readonly assertGitPointer: () => Promise<void>;
-  /** Stages everything and fingerprints it (worktreeFingerprint, against base_sha). */
+  /** すべてをステージし、`base_sha`を基準に指紋を取る(`worktreeFingerprint`)。 */
   readonly fingerprint: () => Promise<WorktreeFingerprint>;
   readonly inspectChanges: () => Promise<ChangeInspection>;
-  /** evaluateDiffSizeGuard bound to the implement limits; blocking. */
+  /** implementの上限を束縛した`evaluateDiffSizeGuard`。理由が1つでもあれば止める。 */
   readonly diffSizeReasons: (
     changedFileCount: number,
     diffLineTotal: number,
   ) => readonly string[];
   readonly runGitleaks: () => Promise<GitleaksResult>;
-  /** removeIgnoredFiles on the worktree; called right before every
-   * runChecks (never when no check command runs). */
+  /**
+   * worktreeに`removeIgnoredFiles`を実行する。
+   * `runChecks`の直前に毎回呼び、検証コマンドを実行しないときは呼ばない。
+   */
   readonly removeIgnoredFiles: () => Promise<void>;
-  /** The repo's check commands (implementCheckCommandsFor); only called when there are some. */
+  /**
+   * リポジトリの検証コマンド(`implementCheckCommandsFor`)を実行する。
+   * 検証コマンドがあるときだけ呼ぶ。
+   */
   readonly runChecks: () => Promise<readonly LoopCheckResult[]>;
   readonly runFixRound: (
     request: FixRoundRequest,
@@ -505,32 +558,38 @@ export type ImplementLoopDeps = {
 export type ImplementLoopInput = {
   readonly workItemId: number;
   readonly attempt: number;
-  /** factory_config.implement_max_rounds. */
+  /** `factory_config.implement_max_rounds`の値。 */
   readonly maxRounds: number;
   readonly hasCheckCommands: boolean;
-  /** implement_generate's result (round 1, mode implement). */
+  /** implement_generateの結果(1ラウンド目、modeは`implement`)。 */
   readonly firstRound: ImplementClaudeRound;
 };
 
 export type ImplementLoopResult = {
   readonly exit: ImplementLoopExit;
-  /** English, for status notes and describeReason; null on a success or gap exit. */
+  /**
+   * 状態の注記と`describeReason`に使う英語の理由。
+   * 成功かrequirements_gapで終わったときは`null`。
+   */
   readonly reason: string | null;
   readonly gap_report: string | null;
-  /** Claude runs in this flow run. */
+  /** このフローの実行でClaudeを実行した回数。 */
   readonly rounds: number;
   readonly total_cost_usd: number;
-  /** The last output that passed validateImplementOutput. */
+  /** `validateImplementOutput`を通った最後の出力。 */
   readonly final_output: ImplementClaudeOutput | null;
-  /** The final inspected round's classifyProtectedChanges lines. */
+  /** 最後に変更を調べたラウンドの`classifyProtectedChanges`の行。 */
   readonly protected_changes: string[];
-  /** The final round's checks; null when the loop stopped before them. */
+  /** 最後のラウンドの検証結果。検証の前にループが止まったときは`null`。 */
   readonly checks: ImplementCheckSummary | null;
   readonly diff_stat: ImplementDiffStat | null;
   readonly changed_paths: string[];
-  /** The staged tree of the round whose checks passed or were skipped (the
-   * round the loop exited on); null for every other exit. implement_finish
-   * commits only when the worktree still stages exactly this tree. */
+  /**
+   * 検証が通ったか実行しなかったラウンド(ループを終えたラウンド)でステージしたツリー。
+   * それ以外の理由で終わったときは`null`。
+   * implement_finishは、worktreeをステージした結果が
+   * このツリーと完全に一致するときだけcommitする。
+   */
   readonly verified_tree_sha: string | null;
 };
 
@@ -543,9 +602,9 @@ type CheckEvaluation = {
   readonly state: "passed" | "failed" | "skipped";
   readonly failures: CheckFailure[];
   readonly contractViolated: boolean;
-  /** Failed outputs first, then passed ones (implement_rounds.check_output). */
+  /** 失敗した出力、通った出力の順に並べたもの(`implement_rounds.check_output`)。 */
   readonly outputText: string;
-  /** Failure outputs + the contract reason (stall hash input). */
+  /** 失敗した出力と契約違反の理由(停滞検出の指紋の入力)。 */
   readonly stallText: string;
   readonly skipReason: string | null;
   readonly summary: ImplementCheckSummary;
@@ -576,8 +635,8 @@ async function evaluateChecks(
   }
 
   let skipReason: string | null = null;
-  // The PR body / Discord summary of skipped checks: the protected-path
-  // skip still ran gitleaks, so its outcome is kept in the reason.
+  // PR本文とDiscordに載せる、検証を実行しなかった理由。
+  // 保護パスで検証を飛ばすときもgitleaksは実行しているので、その結果も理由に含める。
   let summarySkipReason: string | null = null;
   if (facts.noChanges) {
     results.push({ command: NO_CHANGES_CHECK_NAME, ok: false });
@@ -664,9 +723,12 @@ function reasonForExit(exit: ImplementLoopExit, round: number): string | null {
   }
 }
 
-/** The stop reason when the worktree's `.git` pointer changed; null when it
- * is intact. Any other error from the check propagates. Shared by the loop
- * and implement_finish (before preserveWork's scan and the final commit). */
+/**
+ * worktreeの`.git`ポインタが変わっていれば停止の理由を返し、
+ * 変わっていなければ`null`を返す。
+ * 確認中のそれ以外の例外はそのまま投げる。
+ * ループと、implement_finish(`preserveWork`の秘密の検査と最終commitの前)が共有する。
+ */
 export async function gitPointerStopReason(
   assertGitPointer: () => Promise<void>,
 ): Promise<string | null> {
@@ -680,18 +742,24 @@ export async function gitPointerStopReason(
 }
 
 /**
- * Checks one Claude round's worktree and either ends the loop or runs a fix
- * round, until the checks pass or skip, a guard fires, or Claude reports a
- * requirements gap. Per round, in this order: the worktree's `.git` pointer
- * check (a changed pointer stops the loop before any git command runs in
- * the worktree); record-and-stop for a failed run or a gap; fingerprint (stages everything, measures against
- * base_sha); change inspection; the blocking stops (symlink, then diff
- * size); a round with no difference from the base fails as "no changes"
- * without running any check; otherwise gitleaks, then the check commands
- * (skipped when a protected path changed or none are configured; ignored
- * files are removed right before them); the exit
- * decision (decideImplementRoundExit, with the staged tree sha as the diff
- * fingerprint); one implement_rounds row per Claude run.
+ * Claudeの1ラウンドごとにworktreeを検証し、ループを終えるか修正のラウンドを実行する。
+ * 検証が通るか実行しなかったとき、ガードに当たったとき、
+ * Claudeが要件の不足を報告したときに終える。
+ *
+ * 各ラウンドでは次の順に処理する。
+ * 1. worktreeの`.git`ポインタを確かめる。変わっていたら、
+ *    worktreeでgitを1つも実行する前にループを止める。
+ * 2. 実行が失敗したか要件の不足が報告されたら、記録して止める。
+ * 3. 指紋を取る(すべてをステージし、`base_sha`を基準に測る)。
+ * 4. 変更を調べる。
+ * 5. 止める条件を確かめる(シンボリックリンク、次に差分の大きさ)。
+ * 6. baseとの差が無いラウンドは、検証を実行せずに「変更なし」として失敗させる。
+ *    差があれば、gitleaks、次に検証コマンドを実行する。検証コマンドは、
+ *    保護パスが変わったときと未設定のときは実行しない。
+ *    実行する直前に、gitが無視するファイルを削除する。
+ * 7. 終了を判定する(`decideImplementRoundExit`)。
+ *    差分の指紋には、ステージしたツリーのshaを使う。
+ * Claudeの実行ごとに`implement_rounds`へ1行を記録する。
  */
 export async function runImplementVerifyLoop(
   deps: ImplementLoopDeps,

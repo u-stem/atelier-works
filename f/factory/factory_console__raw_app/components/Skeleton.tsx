@@ -1,6 +1,5 @@
-// A minimal shimmering placeholder shown while a tab's initial data fetch
-// (see lib/useConsoleQuery.ts) is in flight, standing in for the previous
-// plain "読み込み中..." text.
+// タブの最初のデータ取得(`lib/useConsoleQuery.ts`を参照)の間に表示する、
+// 光が流れる最小限のプレースホルダー。
 
 import React from "react";
 
@@ -8,8 +7,10 @@ type SkeletonProps = {
   readonly rows?: number;
 };
 
-// Fixed pool of keys (rather than the array index) so the placeholder rows
-// have stable identities, as biome's noArrayIndexKey rule requires.
+/**
+ * プレースホルダーの行のkey。配列の添字ではなく固定のkeyを使い、
+ * 行の同一性を安定させる(biomeの`noArrayIndexKey`ルールの要求)。
+ */
 const ROW_KEYS = [
   "skeleton-row-1",
   "skeleton-row-2",

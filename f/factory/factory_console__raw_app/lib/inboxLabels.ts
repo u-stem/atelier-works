@@ -1,6 +1,5 @@
-// Pure "how should this Inbox row's kind badge read" mapping — kept
-// separate from tabs/InboxTab.tsx so it can be unit-tested without mounting
-// React.
+// 承認タブの行に出す種類のバッジの文言と、チェックボックスの初期値を決める関数。
+// Reactをマウントせずに単体テストできるよう、`tabs/InboxTab.tsx`から分けている。
 
 import type { InboxRow } from "./types";
 
@@ -9,11 +8,14 @@ export function kindLabel(row: InboxRow): string {
   return row.origin === "audit" ? "改善提案" : "Issue化提案";
 }
 
-/** Default state of the "起票と同時にfactoryラベルを付けて要件定義に進める"
- * checkbox when a row is selected: on for an audit-origin issue_proposal
- * (改善提案 — an audit-sourced Issue is meant to re-enter the requirements
- * pipeline immediately), off otherwise (a pr_fix-origin issue_proposal
- * defaults to filing-only, per the requester's own checkbox). */
+/**
+ * 行を選んだときの「起票と同時にfactoryラベルを付けて要件定義に進める」
+ * チェックボックスの初期値を返す。
+ * 監査から出た`issue_proposal`(改善提案)ではオンにする。
+ * 監査から起票したIssueは、すぐ要件定義の流れに戻す想定だからである。
+ * それ以外はオフにする。PRレビューから出た`issue_proposal`は、
+ * 依頼者自身のチェックボックスに従い、既定では起票だけにする。
+ */
 export function defaultWithFactoryLabel(row: InboxRow): boolean {
   return row.kind === "issue_proposal" && row.origin === "audit";
 }

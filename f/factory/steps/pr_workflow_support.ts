@@ -1,24 +1,10 @@
-// Pure decision logic + small additive I/O helpers for the pr_review /
-// pr_fix step scripts (spec-cycle2.md §3 M6, §7). Owned by the M6b
-// implementer (task boundary: do not edit f/factory/lib/**). Mirrors
-// f/factory/lib/poll_support.ts's split:
-//   1. Pure functions (decideReviewPrepare, evaluatePrFixSafetyGuards,
-//      evaluateFixRoundGuard, decideCollectOutcome, mapFindingsToReviewComments,
-//      detectForbiddenChanges, decideFixFinishAction, ...) — no I/O, fully
-//      testable with plain fakes (tests/scripts/pr_review_*.test.ts,
-//      pr_fix_*.test.ts). Step scripts' main() calls these and only does I/O
-//      based on their output.
-//   2. Small additive I/O helpers for the operations lib/github.ts /
-//      lib/db.ts / lib/workspace.ts still don't expose. getBranchProtected,
-//      postIssueComment, setHeadSha, fetchPrHeadRef, and readGitShowFile
-//      used to be duplicated here (M6b's own thin copies, written before the
-//      lib owners promoted the same functions into github.ts/db.ts/
-//      workspace.ts, same signatures) — team-lead fix round 2 item a removed
-//      the duplicates once that promotion landed; step scripts now import
-//      those five straight from lib. detectEscapingSymlinks/
-//      listSymlinkTargets/getDiffNumstat below (team-lead fix round 1b items
-//      3/7) remain here since no lib equivalent exists yet.
-//
+// pr_reviewとpr_fixのステップスクリプトが使う判断ロジックと、
+// 小さなI/O補助をまとめる。
+// 判断ロジックはI/Oを持たない純粋関数で、偽物の入力だけでテストできる。
+// 各ステップの`main`はこれらを呼び、その結果に従ってI/Oだけを行う。
+// I/O補助(gitの実行やworktreeのファイル読み取りなど)は、
+// `lib/`にまだ同等の関数が無い操作に限って置く。
+
 import { mkdtemp, readlink, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
@@ -52,9 +38,10 @@ import {
 } from "../lib/types.ts";
 import { type CommandRunner, readGitShowFile } from "../lib/workspace.ts";
 
-// Promoted into lib/protected_paths.ts (工程3: implement_support.ts needs
-// the same classification without a lib -> steps import); re-exported so
-// pr_fix_verify.ts and the existing tests keep importing from here.
+// `pr_fix_verify.ts`と既存のテストがこのファイルから読み込めるよう、
+// `lib/protected_paths.ts`の定義を再エクスポートする。
+// 定義を`lib/`に置くのは、`lib/implement_support.ts`も
+// `steps/`を読み込まずに同じ分類を使うため。
 export {
   type ChangedPath,
   type ChangedPathStatus,
@@ -66,12 +53,12 @@ export {
 } from "../lib/protected_paths.ts";
 
 // ---------------------------------------------------------------------------
-// Role tags (team-lead decision, 2026-09-26): the factory posts to GitHub
-// using the operator's own account (not a distinct bot login), so every
-// factory-authored post's first line names which job wrote it — a human
-// reading the PR timeline otherwise cannot tell a factory post from one the
-// operator wrote by hand. Kept here (not factory_config) since the tag text
-// is a fixed part of the posting format, not an operator-tunable setting.
+// 役割タグ。Factoryは専用のbotではなく運用者自身のアカウントで
+// GitHubに投稿するため、投稿の1行目にどのジョブが書いたかを示す。
+// タグが無いと、PRのタイムラインを読む人は、Factoryの投稿と
+// 運用者が手で書いた投稿を見分けられない。
+// タグの文言は投稿形式の固定部分で、運用者が調整する設定ではないので、
+// `factory_config`ではなくここに置く。
 // ---------------------------------------------------------------------------
 
 export const ROLE_TAGS = {
@@ -80,44 +67,49 @@ export const ROLE_TAGS = {
 } as const;
 
 // ---------------------------------------------------------------------------
-// Writing-style normalization (team-lead decision, 2026-09-26): this
-// project's Japanese language rule (CLAUDE.md §3) forbids mixing ASCII and
-// Japanese text with a half-width space between them, but Claude's
-// structured-output prose (finding `message`/`suggestion`, review `summary`,
-// pr_fix reply `body`) sometimes writes one anyway (e.g. "3 件" instead of
-// "3件"). Applied at render time (renderInlineComment/renderReviewSummary/
-// renderFixReply below) rather than trusted from the prompt instructions
-// alone, since Claude's output is untrusted-influenced free text.
+// 日本語の書式の正規化。このプロジェクトの規約では英字と日本語の間に
+// 半角スペースを入れないが、Claudeの構造化出力の文章(指摘の`message`と
+// `suggestion`、レビューの`summary`、pr_fixの返信の`body`)には、
+// ときどきスペースが入る(「3件」が「3 件」になるなど)。
+// Claudeの出力は信頼できない入力の影響を受ける自由文なので、
+// プロンプトの指示だけに頼らず、描画時(下の`renderInlineComment`、
+// `renderReviewSummary`、`renderFixReply`)に直す。
 // ---------------------------------------------------------------------------
 
-// Hiragana, katakana, CJK Unified Ideographs (+ Extension A), CJK
-// symbols/punctuation (、。「」 etc.), and the halfwidth/fullwidth forms
-// block — "a Japanese character" for this rule's purposes.
+/**
+ * この規則で「日本語の文字」とみなす範囲。
+ * ひらがな、カタカナ、CJK統合漢字(拡張Aを含む)、
+ * CJKの記号と句読点(、。「」など)、半角・全角形の各ブロック。
+ */
 const JAPANESE_CHAR_CLASS =
   "\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\u3000-\\u303f\\uff00-\\uffef";
-// An ASCII alphanumeric, or a `)`/`]`/`` ` `` closing character — the shape
-// of character this rule treats as "the end (or start) of an ASCII run".
+/**
+ * この規則で「英字の並びの終わり(または始まり)」とみなす文字。
+ * 英数字と、閉じ文字の`)`、`]`、`` ` ``。
+ */
 const ASCII_BOUNDARY_CLASS = "0-9A-Za-z)\\]`";
 
 const JAPANESE_CHAR_RE = new RegExp(`[${JAPANESE_CHAR_CLASS}]`);
 const ASCII_BOUNDARY_RE = new RegExp(`[${ASCII_BOUNDARY_CLASS}]`);
 
-// A fenced ``` ... ``` block (across lines) or an inline `...` span (never
-// crossing a newline, matching normal Markdown inline-code semantics) —
-// content matched here is left untouched by normalizeJapaneseText below.
+/**
+ * 複数行にわたるフェンス(```...```)のブロックか、
+ * 改行をまたがないインラインの`...`に一致する。
+ * 改行をまたがないのは、Markdownのインラインコードと同じ扱いにするため。
+ * 一致した範囲は`normalizeJapaneseText`が変更しない。
+ */
 const CODE_SEGMENT_PATTERN = /```[\s\S]*?```|`[^`\n]*`/g;
 
 /**
- * Removes a single half-width space directly between an ASCII run (ending
- * or starting with an alphanumeric, `)`, `]`, or a closing backtick) and a
- * Japanese character, in either direction (team-lead decision, 2026-09-26:
- * "N 件" -> "N件", "LGTM です" -> "LGTMです", "`code` です" -> "`code`です").
- * Text inside a fenced ``` block or an inline `backtick span` — including a
- * space immediately inside one — is left completely untouched: the closing
- * backtick of a span still counts as an ASCII boundary character for a
- * space just *outside* it, but a space *inside* the span never is. Only a
- * literal " " character is ever removed; a newline is never touched or
- * crossed.
+ * 英字の並びと日本語の文字の間にある半角スペース1つを、
+ * どちらの順でも取り除く(例: 「N 件」→「N件」、「LGTM です」→「LGTMです」、
+ * 「`code` です」→「`code`です」)。
+ * 英字の並びとは、英数字、`)`、`]`、閉じバッククォートで終わる(始まる)並びを指す。
+ * フェンスのブロックとインラインのバッククォートの中は、
+ * 内側の端にあるスペースも含めて変更しない。
+ * スパンの閉じバッククォートは、その外側のスペースに対しては英字の境界として数えるが、
+ * スパンの内側のスペースは対象にしない。
+ * 取り除くのは`" "`だけで、改行には触れず、改行をまたがない。
  */
 export function normalizeJapaneseText(text: string): string {
   const protectedRanges: Array<readonly [number, number]> = [];
@@ -148,21 +140,20 @@ export function normalizeJapaneseText(text: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Review result (2026-09-27 PR label cleanup): PRs no longer carry a state
-// label the factory sets/swaps — poll_prs.ts's listTrackedPrs rediscovers a
-// PR from work_items instead — so what used to be "which state label to set"
-// is now just a plain result value used for the Discord notification and
-// nothing else (there is no more GitHub side effect here).
+// レビュー結果。PRにはFactoryが付け替える状態ラベルを付けない
+// (`poll_prs.ts`の`listTrackedPrs`は`work_items`からPRを見つけ直す)。
+// そのため結果はDiscordの通知だけに使う値で、GitHubへの副作用は無い。
 // ---------------------------------------------------------------------------
 
-/** Decides a posted review's result: `"changes_requested"` when at least
- * one finding this round is a `must`, OR when `openMustCount`
- * (pr_workflow_support.ts's `countOpenMustThreads`) is greater than zero —
- * team-lead fix, 2026-09-26: an old `[MUST]` finding left unresolved from a
- * prior round must still flag the PR as needing changes even on a round
- * that itself posts nothing new (`ReviewBodyMode`'s `"rereview_open"`).
- * `"reviewed"` otherwise (including no findings at all and no open `must` —
- * nothing blocking, awaiting human approval). */
+/**
+ * 投稿したレビューの結果を返す。
+ * 今回の指摘に`must`が1件でもあるか、`openMustCount`
+ * (`countOpenMustThreads`の値)が0より大きければ`"changes_requested"`を返す。
+ * 前のラウンドから残った未解決の`[MUST]`は、新しい指摘を投稿しないラウンド
+ * (`ReviewBodyMode`の`"rereview_open"`)でも、変更が必要なPRとして扱うため。
+ * それ以外(指摘が無く、未解決の`must`も無い場合を含む)は`"reviewed"`を返す。
+ * これは止める理由が無く、人の承認を待つ状態である。
+ */
 export function reviewResultFor(
   findings: readonly ReviewFinding[],
   openMustCount: number,
@@ -172,17 +163,18 @@ export function reviewResultFor(
 }
 
 // ---------------------------------------------------------------------------
-// pr_review_prepare: decide whether to proceed (pure)
+// pr_review_prepare: 処理を進めるかの判断(純粋関数)
 // ---------------------------------------------------------------------------
 
 export type ReviewPrepareDecision =
   | { readonly skip: true; readonly reason: string }
   | { readonly skip: false };
 
-/** Only proceed when the work item is still a `pr_review` in status
- * `reviewing` — anything else (a race with poll_issues's reconcile
- * cancelling it, or a mis-wired flow_job_id) is skipped, never retried here
- * (spec-cycle2.md §7 item 6). */
+/**
+ * 作業項目がまだ`reviewing`状態の`pr_review`のときだけ処理を進める。
+ * それ以外(`poll_issues`のreconcileが取り消した競合や、
+ * `flow_job_id`の配線の誤り)は飛ばし、ここでは再試行しない。
+ */
 export function decideReviewPrepare(
   workItem: Pick<WorkItem, "kind" | "status">,
 ): ReviewPrepareDecision {
@@ -202,7 +194,7 @@ export function decideReviewPrepare(
 }
 
 // ---------------------------------------------------------------------------
-// pr_review_generate: diff truncation note (pure)
+// pr_review_generate: diffを切り詰めたことの注記(純粋関数)
 // ---------------------------------------------------------------------------
 
 export type PrDiffLike = {
@@ -211,10 +203,12 @@ export type PrDiffLike = {
   readonly totalLines: number;
 };
 
-/** Appends a truncation note to the diff text passed to reviewPrompt when
- * github.ts's getPrDiff cut it short at config.diff_max_lines — the changed
- * files list (passed separately to reviewPrompt) already lets Claude Read
- * the rest; this note just makes the cut explicit in-line. */
+/**
+ * `github.ts`の`getPrDiff`が`config.diff_max_lines`でdiffを切り詰めたとき、
+ * `reviewPrompt`に渡すdiffの末尾に、切り詰めたことの注記を足す。
+ * 残りの部分は、別に渡す変更ファイルの一覧からClaudeが`Read`できる。
+ * 注記は、切り詰めたことを本文の中で明示するためのもの。
+ */
 export function buildReviewDiffText(prDiff: PrDiffLike): string {
   if (!prDiff.truncated) {
     return prDiff.diff;
@@ -223,7 +217,7 @@ export function buildReviewDiffText(prDiff: PrDiffLike): string {
 }
 
 // ---------------------------------------------------------------------------
-// pr_review_generate: Claude structured-output type guard (pure)
+// pr_review_generate: Claudeの構造化出力の型ガード(純粋関数)
 // ---------------------------------------------------------------------------
 
 const REVIEW_VERDICTS: readonly ReviewVerdict[] = [
@@ -265,11 +259,11 @@ function isReviewFindingShape(value: unknown): value is ReviewFinding {
   return true;
 }
 
-/** Matches prompts.ts's REVIEW_SCHEMA exactly (the schema actually passed
- * to `claude -p --json-schema`) — not `.claude/skills/factory-review`'s own
- * JSON-schema section, which predates prompts.ts's ReviewFinding shape
- * (severity blocker/major/minor/nit, not high/medium/low) and is out of
- * date; see the implementer's report. */
+/**
+ * `prompts.ts`の`REVIEW_SCHEMA`と完全に一致する形かを判定する。
+ * 基準にするのは`claude -p --json-schema`に実際に渡すこのスキーマで、
+ * `.claude/skills/factory-review`のJSONスキーマの節ではない。
+ */
 export function isReviewClaudeOutput(
   value: unknown,
 ): value is ReviewClaudeOutput {
@@ -281,7 +275,7 @@ export function isReviewClaudeOutput(
 }
 
 // ---------------------------------------------------------------------------
-// pr_review_post: findings -> inline review comments (pure)
+// pr_review_post: 指摘からインラインのレビューコメントへの変換(純粋関数)
 // ---------------------------------------------------------------------------
 
 export type ReviewCommentLike = {
@@ -292,21 +286,23 @@ export type ReviewCommentLike = {
   readonly body: string;
 };
 
-/** Maps findings to GitHub inline review comments, dropping any finding
- * whose `path` is not among the PR's changed files (GitHub rejects an
- * inline comment on a path outside the diff) or whose `line` can't anchor
- * one (`null` or non-positive) — the dropped findings themselves (not just
- * a count) are returned too, since team-lead's "投稿形式" lists them in the
- * summary comment instead of silently discarding them.
+/**
+ * 指摘をGitHubのインラインのレビューコメントに変換する。
+ * 次の指摘は除く。`path`がPRの変更ファイルに無いもの(diffの外のパスへの
+ * インラインコメントはGitHubが拒否する)と、`line`でコメントの位置を
+ * 決められないもの(`null`か0以下)。
+ * 除いた指摘は、件数だけでなく指摘そのものも返す。
+ * 黙って捨てずに、まとめのコメントに載せるため。
  *
- * A finding with a distinct `end_line` becomes a range-anchored comment
- * (lib/github.ts's `ReviewComment.start_line`): GitHub's Review API takes
- * `start_line` as the first line and `line` as the last, so
- * `start_line = finding.line`, `line = finding.end_line`. An `end_line`
- * before `line` is not a valid range (GitHub rejects the whole review for
- * it), so that case is treated as single-line instead — Claude's own
- * `end_line` is untrusted-influenced output, not a value this function can
- * assume is well-formed. */
+ * `end_line`が別の行を指す指摘は、範囲に固定したコメント
+ * (`lib/github.ts`の`ReviewComment.start_line`)にする。
+ * GitHubのReview APIは`start_line`を最初の行、`line`を最後の行として受け取るので、
+ * `start_line = finding.line`、`line = finding.end_line`とする。
+ * `end_line`が`line`より前だと範囲として不正で、GitHubがレビュー全体を拒否するため、
+ * その場合は1行のコメントとして扱う。
+ * Claudeの`end_line`は信頼できない入力の影響を受ける出力で、
+ * 正しい形だと仮定できない。
+ */
 export function mapFindingsToReviewComments(
   findings: readonly ReviewFinding[],
   prFiles: readonly string[],
@@ -349,14 +345,13 @@ const REVIEW_FINDING_KIND_PREFIXES: Record<ReviewFindingKind, string> = {
 };
 
 /**
- * The fence to wrap a `suggested_code` block in (team-lead fix, 2026-09-26):
- * three backticks, or one more than the longest run of consecutive
- * backticks `code` itself contains, whichever is longer — a fixed
- * ` ```suggestion ` fence would otherwise be prematurely closed (or its
- * nesting broken) by a suggested code snippet that itself contains a
- * ``` ``` ``` (or longer) run, e.g. a snippet that edits a Markdown fenced
- * block. GitHub renders a suggestion fenced with any length >= 3 the same
- * way, so widening the fence never changes how a plain snippet renders.
+ * `suggested_code`のブロックを囲むフェンスを返す。
+ * 長さは3と、`code`に含まれる最長の連続バッククォートより1つ長い数の、大きい方。
+ * 固定の` ```suggestion `のフェンスでは、提案コード自体が3つ以上の
+ * 連続バッククォートを含むとき(Markdownのフェンスを編集する提案など)、
+ * フェンスが途中で閉じたり入れ子が崩れたりする。
+ * GitHubは3以上ならどの長さのフェンスでも提案を同じように表示するので、
+ * フェンスを長くしても普通の提案コードの表示は変わらない。
  */
 export function fenceFor(code: string): string {
   const backtickRuns = code.match(/`+/g);
@@ -367,26 +362,25 @@ export function fenceFor(code: string): string {
   return "`".repeat(Math.max(3, longestRun + 1));
 }
 
-/** Renders `code` as a ` ```suggestion ` block, fenced via `fenceFor` above
- * so the fence itself always survives any backtick run `code` contains. */
+/**
+ * `code`を` ```suggestion `のブロックとして描画する。
+ * フェンスは`fenceFor`で決めるので、`code`がどんな連続バッククォートを含んでも崩れない。
+ */
 function renderSuggestionBlock(code: string): string {
   const fence = fenceFor(code);
   return `\n\n${fence}suggestion\n${code}\n${fence}`;
 }
 
 /**
- * Renders one finding as an inline review-comment body per the
- * factory-review skill's "投稿形式": a role-tag first line (team-lead
- * decision, 2026-09-26: identifies this as a `pr_review` post), then a
- * second line with the `[MUST]`/`[IMO]`/`[NITS]`/`[Q]` prefix (from `kind`)
- * and `message`, an optional `suggestion` note, and `suggested_code` as a
- * ` ```suggestion ` block (see `renderSuggestionBlock`/`fenceFor` above).
- * `mapFindingsToReviewComments` anchors a multi-line finding's
- * `start_line`/`line` to the finding's own `line`/`end_line`, so the block
- * always applies to exactly the range GitHub shows it against — no separate
- * range note is needed in the body. `message`/`suggestion` are passed
- * through `normalizeJapaneseText` (team-lead decision, 2026-09-26) —
- * `suggested_code` is code, not prose, so it is never touched.
+ * 1件の指摘を、factory-reviewスキルの投稿形式に沿ったインラインコメントの本文にする。
+ * 1行目は`pr_review`の投稿と分かる役割タグ、2行目は`kind`に応じた
+ * `[MUST]` / `[IMO]` / `[NITS]` / `[Q]`の接頭辞と`message`。
+ * 続けて、あれば`suggestion`の注記と、`suggested_code`の` ```suggestion `ブロックを置く。
+ * 複数行の指摘は`mapFindingsToReviewComments`が`start_line` / `line`を
+ * 指摘の`line` / `end_line`に合わせるので、ブロックは常にGitHubが表示する範囲に
+ * 適用される。本文に範囲の注記は要らない。
+ * `message`と`suggestion`は`normalizeJapaneseText`を通す。
+ * `suggested_code`は文章ではなくコードなので変更しない。
  */
 export function renderInlineComment(finding: ReviewFinding): string {
   const prefix = REVIEW_FINDING_KIND_PREFIXES[finding.kind];
@@ -403,17 +397,16 @@ export function renderInlineComment(finding: ReviewFinding): string {
 }
 
 /**
- * Which of the four fixed top-level review-comment bodies
- * `renderReviewSummary` renders (team-lead decision, 2026-09-26: the
- * first-pass review body is no longer Claude's free-form `summary` — it's
- * exactly one of these four forms; `"rereview_open"` added 2026-09-26).
- * `hasPriorReview` (db.ts's `hasPriorReview`) distinguishes a genuine
- * re-review of this PR from the very first one. `"rereview_open"` is the
- * re-review counterpart of `"rereview_clean"` for when this round itself
- * found nothing new, but at least one `[MUST]` finding from a prior round is
- * still open after this round's own thread-resolving pass — a bare LGTM
- * body would otherwise read as "nothing left to do" even though an old
- * required finding remains unaddressed.
+ * `renderReviewSummary`が描画する、レビュー本体のコメントの4つの固定形式。
+ * レビューの本文には、Claudeが自由に書いた`summary`を使わず、
+ * 必ずこの4つのどれかにする。
+ * `hasPriorReview`(`db.ts`の`hasPriorReview`)で、
+ * このPRの再レビューか最初のレビューかを区別する。
+ * `"rereview_open"`は`"rereview_clean"`の対になる形式で、このラウンドでは
+ * 新しい指摘が無いが、このラウンドでスレッドを解決した後も前のラウンドの
+ * `[MUST]`の指摘が1件以上残っているときに使う。
+ * そのときにLGTMだけの本文にすると、必須の指摘が残っているのに
+ * 「もう対応は要らない」と読めてしまうため。
  */
 export type ReviewBodyMode =
   | "findings"
@@ -421,21 +414,20 @@ export type ReviewBodyMode =
   | "first_clean"
   | "rereview_open";
 
-/** Selects the body mode purely from whether any finding was actually
- * posted inline or dropped this round, whether a factory review of this PR
- * already exists, and (team-lead fix, 2026-09-26) how many of the factory's
- * own `[MUST]` threads remain open after this round's resolving pass
- * (`openMustCount` — see `countOpenMustThreads`, computed by the caller
- * against the pre-resolve thread list minus the ids it is about to resolve).
- * A dropped finding (one that couldn't be posted inline, e.g. its `path`
- * isn't in the diff) still forces mode `"findings"` even when
- * `postedCommentCount` is 0 (team-lead review finding): `renderReviewSummary`
- * always lists dropped findings below the fixed second line, and an LGTM
- * line must never appear directly above that list. Otherwise, when an open
- * `must` finding remains (`openMustCount > 0`), the would-be clean mode
- * (`"rereview_clean"` or, in principle, `"first_clean"` — though a PR's
- * first review can never have a prior open thread to begin with) is
- * upgraded to `"rereview_open"` instead. */
+/**
+ * 本文の形式を、次の情報だけから選ぶ。このラウンドでインラインに投稿した指摘か
+ * 除いた指摘があるか、このPRにFactoryのレビューがすでにあるか、
+ * このラウンドの解決処理の後もFactory自身の`[MUST]`のスレッドがいくつ残るか
+ * (`openMustCount`。呼び出し側が、解決前のスレッド一覧から解決予定のidを除いて
+ * `countOpenMustThreads`で数える)。
+ * 除いた指摘(`path`がdiffに無いなどでインラインに投稿できなかったもの)があれば、
+ * `postedCommentCount`が0でも`"findings"`にする。
+ * `renderReviewSummary`は固定の2行目の下に除いた指摘を必ず並べるので、
+ * その一覧の直上にLGTMの行を出さないため。
+ * それ以外で未解決の`must`が残っていれば(`openMustCount > 0`)、指摘の無い形式
+ * (`"rereview_clean"`、理屈の上では`"first_clean"`も)の代わりに`"rereview_open"`にする。
+ * ただし、PRの最初のレビューに前の未解決スレッドがあることはない。
+ */
 export function decideReviewBodyMode(
   postedCommentCount: number,
   droppedCount: number,
@@ -448,29 +440,23 @@ export function decideReviewBodyMode(
 }
 
 /**
- * Composes the top-level review comment body per the factory-review
- * skill's "投稿形式": a role-tag + `@author` mention on the first line
- * (team-lead decision, 2026-09-26: identifies this as a `pr_review` post),
- * one of four fixed second lines selected by `mode`, and (when some
- * findings couldn't be posted inline) a bulleted list of them. Claude's own
- * `summary` is never posted here (team-lead decision, 2026-09-26: recorded
- * in factory.reviews / used by Discord only). `verdict` is likewise never
- * included (DB / Discord only, never in the PR body). The caller appends
- * the `<!-- factory:pr_review:<id> -->` marker via github.ts's withMarker.
+ * factory-reviewスキルの投稿形式に沿って、レビュー本体のコメントの本文を組み立てる。
+ * 1行目は`pr_review`の投稿と分かる役割タグと`@author`へのメンション、
+ * 2行目は`mode`で選ぶ4つの固定の文、インラインに投稿できなかった指摘があれば
+ * その箇条書きを続ける。
+ * Claudeの`summary`はここに載せない(`factory.reviews`への記録とDiscordだけに使う)。
+ * `verdict`も同じく載せない(DBとDiscordだけで、PRの本文には出さない)。
+ * `<!-- factory:pr_review:<id> -->`の印は、呼び出し側が`github.ts`の`withMarker`で足す。
  *
- * team-lead decision (2026-09-26, wording pass): mode `"findings"` no
- * longer carries the final-Approve-is-human disclaimer line at all — a
- * finding-carrying post already asks the author to look at it ("確認お願い
- * します。"), so the extra disclaimer was redundant there. The `"rereview_clean"`/
- * `"first_clean"` modes (nothing to fix) keep it as their third line, since
- * an LGTM-shaped post is exactly where a human could otherwise read
- * "nothing more to do" into it. `"rereview_open"` (team-lead fix,
- * 2026-09-26 — see `ReviewBodyMode`'s doc comment) uses `openMustCount` to
- * report how many old `[MUST]` findings are still open and carries no
- * disclaimer either, since it explicitly asks for confirmation already.
- * Every literal string here follows this project's Japanese writing-style
- * rule (CLAUDE.md §3 / docs/coding-guidelines.md): no half-width space
- * between an ASCII/digit run and a Japanese character.
+ * `"findings"`には「最終的なApproveは人が判断する」という免責の行を付けない。
+ * 指摘のある投稿はすでに作成者に確認を求めている(「確認お願いします。」)ので、
+ * 免責は重複になる。
+ * 直すものが無い`"rereview_clean"`と`"first_clean"`は、3行目に免責を付ける。
+ * LGTMの形の投稿こそ、人が「もう何もしなくてよい」と読みかねないため。
+ * `"rereview_open"`は`openMustCount`で残っている`[MUST]`の件数を伝える。
+ * これもすでに確認を求めているので、免責を付けない。
+ * ここの文字列はすべて、英数字と日本語の間に半角スペースを入れない規約に従う
+ * (`docs/coding-guidelines.md`)。
  */
 export function renderReviewSummary(
   authorLogin: string,
@@ -513,13 +499,13 @@ export function renderReviewSummary(
 }
 
 /**
- * Whether `body` is a `pr_fix` reply (renderFixReply) that closes the loop on
- * its own: the first line is the `pr_fix` role tag and some line is the
- * `対応: \`<sha>\`` form (7-40 hex chars in backticks) it renders for a
- * `"fixed"` reply that actually produced a commit. A reply ending
- * `対応: 見送り` (Claude chose not to act) or `対応: 変更なし` (nothing ended up
- * committed) does NOT count — team-lead decision, 2026-09-26: those two
- * outcomes still need a human's judgment, so the thread stays open for one.
+ * `body`が、それだけで対応を完了させる`pr_fix`の返信(`renderFixReply`)かを返す。
+ * 条件は、1行目が`pr_fix`の役割タグで、いずれかの行が
+ * `対応: \`<sha>\``(バッククォートで囲んだ7〜40桁の16進数)の形であること。
+ * この形は、実際にコミットを作った`"fixed"`の返信だけが持つ。
+ * `対応: 見送り`(Claudeが対応しないと判断した)と`対応: 変更なし`(結果として
+ * 何もコミットされなかった)は該当しない。
+ * この2つはまだ人の判断が要るので、スレッドを開いたままにする。
  */
 export function isFixedFixReply(body: string): boolean {
   const lines = body.split("\n");
@@ -528,39 +514,32 @@ export function isFixedFixReply(body: string): boolean {
 }
 
 /**
- * Selects the review threads pr_review_post.ts should resolve on this post
- * (team-lead decision, 2026-09-26, extended 2026-09-26 to every re-review):
- * the factory's own still-unresolved `pr_review` inline-comment threads on
- * this PR — a thread's *first* comment must be authored by `viewer`
- * (case-insensitive, matching isOwnPost's convention) and start with the
- * `pr_review` role tag, mirroring isFactoryPost's login-match-AND-marker rule
- * (the factory runs under the operator's own GitHub account, so login alone
- * can't tell a factory thread from a human one). A thread GitHub already
- * marked resolved is left alone, and a thread a human started (even one the
- * factory later replied in) is never touched, since resolving is scoped to
- * threads the factory itself opened.
+ * `pr_review_post.ts`がこの投稿で解決するレビュースレッドを選ぶ。
+ * 対象は、このPRにあるFactory自身の未解決の`pr_review`のインラインコメントのスレッド。
+ * スレッドの最初のコメントが`viewer`の投稿(大文字小文字を区別しない。
+ * `isOwnPost`と同じ扱い)で、かつ`pr_review`の役割タグで始まること。
+ * これは`isFactoryPost`の「loginが一致し、かつ印がある」規則に合わせている。
+ * Factoryは運用者自身のGitHubアカウントで動くので、loginだけでは
+ * Factoryのスレッドと人のスレッドを見分けられない。
+ * GitHubがすでに解決済みにしたスレッドには触れない。人が始めたスレッドは、
+ * 後でFactoryが返信していても触れない。解決するのはFactory自身が始めたスレッドに限る。
  *
- * team-lead review finding: the thread's *last* comment must also be the
- * factory's own (`viewer`-authored) — a human reply left in the thread (even
- * one after the factory's original finding) means the factory did not have
- * the last word, so the thread stays open for a human to actually resolve.
+ * スレッドの最後のコメントもFactory自身(`viewer`)の投稿である必要がある。
+ * Factoryの指摘の後でも人の返信が残っていれば、最後に発言したのはFactoryではないので、
+ * 人が実際に解決できるよう開いたままにする。
  *
- * `mode` (pr_review_post.ts passes the *pre-`openMustCount`* mode here — see
- * `countOpenMustThreads`'s doc comment below for why — which is always one
- * of `"findings"`/`"rereview_clean"`/`"first_clean"`, never
- * `"rereview_open"` in practice) then decides which viewer-authored last
- * comments count as "addressed" (team-lead decision, 2026-09-26):
- *   - `"rereview_clean"` (re-review, zero findings) — and, defensively,
- *     `"rereview_open"`, which shares its resolving rule: a still-untouched
- *     `pr_review` finding (nothing remained to fix, e.g. a human fixed it by
- *     hand) OR a `pr_fix` reply that names a commit (`isFixedFixReply`).
- *   - `"findings"` (a re-review that still has findings, or a first review):
- *     only a `pr_fix` reply that names a commit — an untouched `pr_review`
- *     finding must stay open here, since this same post may have just left
- *     new findings and only pr_fix's own confirmation closes an old one.
- *   - `"first_clean"` (first review, zero findings): never — there is no
- *     prior factory review for the operator to have addressed anything of,
- *     so nothing is resolved.
+ * `mode`で、`viewer`の最後のコメントのうちどれを「対応済み」とみなすかを決める。
+ * `pr_review_post.ts`は`openMustCount`を反映する前の形式を渡すので
+ * (理由は`countOpenMustThreads`のコメントを参照)、実際には`"findings"`、
+ * `"rereview_clean"`、`"first_clean"`のどれかで、`"rereview_open"`にはならない。
+ *   - `"rereview_clean"`(再レビューで指摘ゼロ)と、念のため同じ規則を使う
+ *     `"rereview_open"`: 手つかずの`pr_review`の指摘(人が手で直したなど、
+ *     もう直すものが無い)か、コミットを示す`pr_fix`の返信(`isFixedFixReply`)。
+ *   - `"findings"`(指摘が残る再レビューか、最初のレビュー): コミットを示す
+ *     `pr_fix`の返信だけ。この投稿で新しい指摘を残したばかりかもしれず、
+ *     古い指摘はpr_fix自身の確認でしか閉じないので、手つかずの指摘は開いたままにする。
+ *   - `"first_clean"`(最初のレビューで指摘ゼロ): 何も解決しない。
+ *     運用者が対応しうる前のFactoryのレビューが存在しないため。
  */
 export function selectThreadsToResolve(
   threads: readonly ReviewThread[],
@@ -588,20 +567,17 @@ export function selectThreadsToResolve(
 }
 
 /**
- * Counts the factory's own still-open `[MUST]` `pr_review` findings on this
- * PR (team-lead fix, 2026-09-26) — used by pr_review_post.ts to decide
- * whether a round that itself posts nothing new should still render
- * `"rereview_open"` instead of a bare LGTM (`decideReviewBodyMode`'s
- * `openMustCount` parameter). Mirrors `selectThreadsToResolve`'s own
- * factory-authorship check on the thread's *first* comment (login match
- * case-insensitive, starts with the `pr_review` role tag) — a thread GitHub
- * already marked resolved, or one this same round is about to resolve
- * (`resolvedIds`, `selectThreadsToResolve`'s own return value, computed
- * against the same pre-resolve `threads` snapshot passed here) does not
- * count as open. Additionally requires the finding's own kind prefix — the
- * first comment's *second* line, `renderInlineComment`'s own format — to be
- * `[MUST]` (`REVIEW_FINDING_KIND_PREFIXES.must`); an `[IMO]`/`[NITS]`/`[Q]`
- * finding never blocks a clean re-review body.
+ * このPRにあるFactory自身の`pr_review`の指摘のうち、未解決の`[MUST]`を数える。
+ * `pr_review_post.ts`が、新しい指摘を投稿しないラウンドでLGTMだけの本文にせず
+ * `"rereview_open"`にするかを決めるのに使う(`decideReviewBodyMode`の`openMustCount`)。
+ * Factoryの投稿かどうかは、`selectThreadsToResolve`と同じく最初のコメントで判定する
+ * (loginが大文字小文字を区別せず一致し、`pr_review`の役割タグで始まる)。
+ * GitHubがすでに解決済みにしたスレッドと、このラウンドで解決する予定のスレッド
+ * (`resolvedIds`。`selectThreadsToResolve`が、ここに渡すのと同じ解決前の`threads`から
+ * 求めた戻り値)は数えない。
+ * さらに、最初のコメントの2行目(`renderInlineComment`の形式での種別の接頭辞)が
+ * `[MUST]`(`REVIEW_FINDING_KIND_PREFIXES.must`)であることを求める。
+ * `[IMO]` / `[NITS]` / `[Q]`の指摘は、指摘の無い再レビューの本文を妨げない。
  */
 export function countOpenMustThreads(
   threads: readonly ReviewThread[],
@@ -629,17 +605,16 @@ export type OpenFindingForPrompt = {
 };
 
 /**
- * Maps the factory's own still-open `pr_review` findings on this PR into
- * `reviewPrompt`'s `openFindings` input (team-lead decision, 2026-09-26): a
- * re-review must not re-post a finding substantially the same as one that's
- * already open, so pr_review_generate.ts passes every such finding back to
- * Claude. Selection mirrors `selectThreadsToResolve`'s own factory-authorship
- * check (login match case-insensitive, first comment starts with the
- * `pr_review` role tag) but is independent of `mode`/last-comment state —
- * this only cares whether the finding itself is still unresolved, not who
- * (if anyone) replied to it since. The role-tag line is stripped from
- * `body` (Claude doesn't need to know how the factory tags its own posts).
- * Naturally empty on a PR's first review, since no threads exist yet.
+ * このPRにあるFactory自身の未解決の`pr_review`の指摘を、
+ * `reviewPrompt`の`openFindings`の入力に変換する。
+ * 再レビューで、未解決の指摘と実質的に同じ指摘を重ねて投稿させないために、
+ * `pr_review_generate.ts`がこれらをすべてClaudeに渡す。
+ * Factoryの投稿かどうかは`selectThreadsToResolve`と同じく判定する
+ * (loginが大文字小文字を区別せず一致し、最初のコメントが`pr_review`の役割タグで始まる)。
+ * ただし`mode`や最後のコメントの状態には関係しない。
+ * ここで気にするのは指摘自体が未解決かどうかで、その後に誰が返信したかではない。
+ * `body`からは役割タグの行を取り除く。Factoryの投稿の付け方をClaudeが知る必要は無いため。
+ * 最初のレビューではスレッドがまだ無いので空になる。
  */
 export function openFindingsForPrompt(
   threads: readonly ReviewThread[],
@@ -659,9 +634,10 @@ export function openFindingsForPrompt(
     }));
 }
 
-/** Strips the `pr_review` role-tag first line from a factory-authored
- * comment body, if present — used by `openFindingsForPrompt` above so
- * Claude sees only the finding's own content. */
+/**
+ * Factoryの投稿の本文から、1行目にある`pr_review`の役割タグの行を取り除く(あれば)。
+ * Claudeに指摘の中身だけを見せるため、`openFindingsForPrompt`が使う。
+ */
 function stripRoleTagLine(body: string): string {
   const newlineIndex = body.indexOf("\n");
   if (newlineIndex === -1) return body;
@@ -670,14 +646,15 @@ function stripRoleTagLine(body: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// pr_fix_prepare: gate outcome (pure)
+// pr_fix_prepare: 関門の結果(純粋関数)
 // ---------------------------------------------------------------------------
 
-/** pr_fix_prepare.ts's own result discriminator — "proceed" signals
- * downstream steps (collect/apply/verify) to run; the other three are
- * terminal and skip straight to pr_fix_finish.ts (see
- * PrFixFinishOutcome / decideFixFinishAction below, which these three
- * values are also members of). */
+/**
+ * `pr_fix_prepare.ts`の結果の判別子。
+ * `"proceed"`なら後続のステップ(collect、apply、verify)を実行する。
+ * 残りの3つは終端で、`pr_fix_finish.ts`に直接進む。
+ * この3つは`PrFixFinishOutcome`の値でもある(下の`decideFixFinishAction`を参照)。
+ */
 export type PrFixGateOutcome =
   | "proceed"
   | "skip"
@@ -685,8 +662,8 @@ export type PrFixGateOutcome =
   | "round_exhausted";
 
 // ---------------------------------------------------------------------------
-// pr_fix_prepare: safety guards (pure) — spec-cycle2.md §7 item 3,
-// docs/security.md "pr_fix の安全策"
+// pr_fix_prepare: 安全のための関門(純粋関数)。
+// 方針は`docs/security.md`の「pr_fixの安全策」を参照。
 // ---------------------------------------------------------------------------
 
 export type PrFixGuardResult =
@@ -701,11 +678,14 @@ export type PrFixSafetyGuardInput = {
   readonly baseProtected: boolean;
 };
 
-/** The four pre-attempt safety guards (spec-cycle2.md §7 item 3): PR open,
- * head.repo == base.repo (no fork push), not draft, base branch not
- * protected. Checked before creating a worktree or running Claude at all —
- * `commitAndPush` (workspace.ts) separately re-verifies the head sha hasn't
- * moved right before the actual push. */
+/**
+ * 修正を試みる前の4つの安全のための関門を判定する。
+ * PRがopenであること、head.repoとbase.repoが同じであること(forkへpushしない)、
+ * draftでないこと、baseブランチが保護されていないこと。
+ * worktreeを作る前、Claudeを実行する前に確かめる。
+ * 実際にpushする直前には、`workspace.ts`の`commitAndPush`が
+ * headのshaが動いていないことを別に確かめ直す。
+ */
 export function evaluatePrFixSafetyGuards(
   input: PrFixSafetyGuardInput,
 ): PrFixGuardResult {
@@ -743,12 +723,14 @@ export function evaluateFixRoundGuard(
   return { ok: true };
 }
 
-/** Defense-in-depth repo allowlist re-check (team-lead fix round 1b item 6):
- * poll_prs.ts already filters candidates through `filterByRepoAllowlist`
- * before a work item is ever created, but a `factory_config` edit after
- * creation (or a manually-inserted row) could leave a stale item pointing
- * at a now-disallowed repo — re-checked here (and in pr_review_prepare.ts)
- * right before any GitHub/workspace I/O against that repo. */
+/**
+ * 多層防御のための、リポジトリの許可リストの再確認。
+ * `poll_prs.ts`は作業項目を作る前に`filterByRepoAllowlist`で候補を絞っているが、
+ * 作成後に`factory_config`が編集されたり、行が手で追加されたりすると、
+ * 許可されなくなったリポジトリを指す作業項目が残りうる。
+ * そのため、そのリポジトリに対するGitHubやworkspaceのI/Oの直前に、
+ * ここと`pr_review_prepare.ts`で確かめ直す。
+ */
 export function evaluateRepoAllowedGuard(allowed: boolean): PrFixGuardResult {
   return allowed
     ? { ok: true }
@@ -759,10 +741,12 @@ export function evaluateRepoAllowedGuard(allowed: boolean): PrFixGuardResult {
       };
 }
 
-/** pr_fix and the implement flow share the PR branch's worktree: while
- * the parent issue work item (`parent_work_item_id`) is `implementing`
- * again, a fix run must not touch it. `parentStatus` is null without a
- * parent (or when the parent row is gone). */
+/**
+ * pr_fixとimplementフローはPRのブランチのworktreeを共有する。
+ * 親のIssueの作業項目(`parent_work_item_id`)が再び`implementing`にある間は、
+ * 修正の実行がworktreeに触れてはならない。
+ * `parentStatus`は、親が無いとき(親の行が消えたときを含む)は`null`。
+ */
 export function evaluateParentImplementingGuard(
   parentStatus: WorkItemStatus | null,
 ): PrFixGuardResult {
@@ -772,7 +756,7 @@ export function evaluateParentImplementingGuard(
 }
 
 // ---------------------------------------------------------------------------
-// pr_fix_collect: new review/comment selection + outcome (pure)
+// pr_fix_collect: 新しいレビューとコメントの選別と、その結果(純粋関数)
 // ---------------------------------------------------------------------------
 
 export type RawPrReview = {
@@ -812,23 +796,26 @@ export type CollectedComment = {
   readonly author: string;
 };
 
-/** Result of a `selectNew*` pass: the items that passed every filter, plus
- * the login of anyone excluded *solely* because their `author_association`
- * wasn't in `allowed_labeler_associations` (team-lead fix round 1b item 1:
- * the caller uses this to log + record a notice, since a silently-dropped
- * "feedback" post from an untrusted account is otherwise invisible). */
+/**
+ * `selectNew*`の結果。すべての条件を通った項目と、
+ * `author_association`が`allowed_labeler_associations`に無いという理由だけで
+ * 除外した投稿者のloginを持つ。
+ * 呼び出し側はこれをログに出しnoticeとして記録する。信頼できないアカウントからの
+ * フィードバックを黙って捨てると、捨てたことが誰にも見えないため。
+ */
 export type SelectResult<T> = {
   readonly items: T[];
   readonly excludedAuthors: string[];
 };
 
-/** Reviews with a non-empty body, newer than the `last_review_id`
- * watermark, from an author whose `author_association` is in
- * `allowedAssociations` — an empty-body review (a bare "approve"/"request
- * changes" click) carries no textual feedback for Claude to act on, and an
- * association outside the allowlist means this human feedback is treated
- * the same as an untrusted `factory` label (spec-cycle2.md §7 item 1,
- * extended by fix round 1b item 1). */
+/**
+ * 本文が空でなく、`last_review_id`の処理済み位置より新しく、
+ * 投稿者の`author_association`が`allowedAssociations`にあるレビューを選ぶ。
+ * 本文が空のレビュー(「approve」や「request changes」を押しただけのもの)には、
+ * Claudeが対応できる文章のフィードバックが無い。
+ * 許可リストに無い`author_association`の人のフィードバックは、
+ * 信頼できない人が付けた`factory`ラベルと同じく扱わない。
+ */
 export function selectNewReviews(
   reviews: readonly RawPrReview[],
   lastReviewId: number,
@@ -853,11 +840,12 @@ export function selectNewReviews(
   return { items, excludedAuthors };
 }
 
-/** Inline review comments newer than the `last_comment_id` watermark, from
- * an allowed author_association. "Unresolved" is approximated by the
- * watermark itself (github.ts has no GraphQL thread-resolution lookup) — a
- * comment id below the watermark was already surfaced to (and replied by) a
- * previous fix round. */
+/**
+ * 処理済み位置(`lastCommentId`)より新しく、許可された`author_association`の
+ * 投稿者によるインラインのレビューコメントを選ぶ。
+ * 「未解決」かどうかは処理済み位置で近似する。
+ * 処理済み位置以下のidのコメントは、前の修正ラウンドですでに扱い、返信済みである。
+ */
 export function selectNewReviewComments(
   comments: readonly RawPrReviewComment[],
   lastCommentId: number,
@@ -882,14 +870,15 @@ export function selectNewReviewComments(
   return { items, excludedAuthors };
 }
 
-/** Plain issue-level comments from an author whose `author_association` is
- * in `allowedAssociations` — github.ts's `listIssueComments` already filters
- * out the factory's own marker-bearing posts and anything older than the
- * `last_comment_id` watermark (`opts.sinceId`). A human writes instructions
- * for a fix as an ordinary comment before adding the `fix_label` (user
- * decision, 2026-09-26: pr_fix has no comment-based trigger of its own, so
- * every comment here is plain feedback for Claude to act on, collected the
- * same way as any other human comment). */
+/**
+ * 投稿者の`author_association`が`allowedAssociations`にある、
+ * Issueレベルの通常のコメントを選ぶ。
+ * Factory自身の印付きの投稿と、`last_comment_id`の処理済み位置(`opts.sinceId`)より
+ * 古いものは、`github.ts`の`listIssueComments`がすでに除いている。
+ * 人は修正の指示を通常のコメントとして書いてから`fix_label`を付ける。
+ * pr_fixにはコメントで起動する仕組みが無いので、ここにあるコメントはすべて、
+ * 他の人のコメントと同じく集める、Claudeが対応するための通常のフィードバックである。
+ */
 export function selectNewIssueComments(
   comments: readonly RawIssueComment[],
   allowedAssociations: readonly LabelerAssociation[],
@@ -914,9 +903,10 @@ export function selectNewIssueComments(
 
 export type CollectOutcome = "proceed" | "no_feedback";
 
-/** No new reviews and no new comments since the watermark -> nothing for
- * Claude to address this round (spec-cycle2.md §3 M6: "nothing to address
- * → ... needs_human with notice \"no actionable feedback\""). */
+/**
+ * 処理済み位置より新しいレビューもコメントも無ければ、
+ * このラウンドでClaudeが対応するものは無いので`"no_feedback"`を返す。
+ */
 export function decideCollectOutcome(
   reviews: readonly CollectedReview[],
   comments: readonly CollectedComment[],
@@ -927,25 +917,24 @@ export function decideCollectOutcome(
 }
 
 // ---------------------------------------------------------------------------
-// pr_fix_apply / pr_fix_verify: commit message composition (pure)
+// pr_fix_apply / pr_fix_verify: コミットメッセージの組み立て(純粋関数)
 // ---------------------------------------------------------------------------
 
-/** Joins a fix round's proposed commit subject and (optional) body into the
- * final commit message text `pr_fix_finish.ts` passes to `commitAndPush`
- * (team-lead decision, 2026-09-26 — supersedes the former
- * `buildFixCommitMessage`, which derived a subject from Claude's `summary`
- * field deterministically; Claude now proposes `commit_subject`/
- * `commit_body` directly in its structured output, see `FixClaudeOutput`,
- * so this is a plain join with no truncation logic of its own —
- * `isFixClaudeOutput`'s guard is what enforces the subject's shape).
- * `commitAndPush`'s own `withCommitTrailers` still appends the
- * Co-Authored-By/Generated-By trailers after this. */
+/**
+ * 修正ラウンドで提案されたコミットの件名と本文(任意)をつなぎ、
+ * `pr_fix_finish.ts`が`commitAndPush`に渡すコミットメッセージにする。
+ * 件名と本文はClaudeが構造化出力の`commit_subject` / `commit_body`で直接提案する
+ * (`FixClaudeOutput`を参照)。そのためここは単純につなぐだけで、切り詰めはしない。
+ * 件名の形は`isFixClaudeOutput`の型ガードが検査する。
+ * Co-Authored-ByとGenerated-Byのトレーラーは、この後に`commitAndPush`の
+ * `withCommitTrailers`が足す。
+ */
 export function composeCommitMessage(
   subject: string,
   body: string | null,
 ): string {
-  // The same Japanese spacing rule as posted review text applies to commit
-  // messages (user decision, 2026-09-26); inline code spans stay untouched.
+  // 投稿するレビューの文章と同じ日本語のスペースの規則を、コミットメッセージにも適用する。
+  // インラインコードのスパンは変更しない。
   const normalizedSubject = normalizeJapaneseText(subject);
   return body === null
     ? normalizedSubject
@@ -953,7 +942,7 @@ export function composeCommitMessage(
 }
 
 // ---------------------------------------------------------------------------
-// pr_fix_apply: Claude structured-output type guard (pure)
+// pr_fix_apply: Claudeの構造化出力の型ガード(純粋関数)
 // ---------------------------------------------------------------------------
 
 const FIX_OUTCOMES: readonly FixOutcome[] = [
@@ -968,10 +957,12 @@ const FIX_REPLY_DECISIONS: readonly FixReplyDecision[] = [
   "propose_issue",
 ];
 
-// team-lead fix (2026-09-26): raised from 60 to git's own subject-line
-// convention of 72 code points — a small margin over the ~50 characters the
-// prompt/skill text asks Claude to aim for, so a subject that runs slightly
-// long doesn't throw away a whole Claude run.
+/**
+ * コミットの件名の上限(コードポイント数)。
+ * gitの件名の慣習である72にしている。
+ * プロンプトとスキルはClaudeに約50字を目安とさせており、それより少し余裕を持たせる。
+ * 件名が少し長いだけで、Claudeの実行1回分を無駄にしないため。
+ */
 const COMMIT_SUBJECT_MAX_CODEPOINTS = 72;
 
 export type FixClaudeOutput = {
@@ -989,14 +980,16 @@ function isIssueProposalDraftShape(
   return isRecord(value) && isString(value.title) && isString(value.body);
 }
 
-/** `decision` is required (team-lead decision, 2026-09-26): a reply without
- * it fails this guard outright rather than being accepted with an implied
- * default, per this codebase's parse-don't-validate convention.
+/**
+ * 返信1件の形を判定する。
+ * `decision`は必須で、無い返信は既定値を補わずにこの型ガードで不合格にする
+ * (parse, don't validateの方針)。
  *
- * `issue_proposal` (user decision, 2026-09-26) must be present (non-null)
- * exactly when `decision` is `"propose_issue"` — `undefined` is treated the
- * same as `null` for every other decision (backward compatibility with a
- * reply recorded before this field existed). */
+ * `issue_proposal`は、`decision`が`"propose_issue"`のときにだけ
+ * `null`以外である必要がある。
+ * それ以外の`decision`では、`undefined`も`null`と同じに扱う。
+ * このフィールドが無かった頃に記録された返信とも互換を保つため。
+ */
 function isFixReplyShape(value: unknown): value is FixReply {
   if (
     !isRecord(value) ||
@@ -1013,20 +1006,15 @@ function isFixReplyShape(value: unknown): value is FixReply {
 }
 
 /**
- * Whether `value` is an acceptable `commit_subject` shape (team-lead
- * decision, 2026-09-26, limit revised 2026-09-26): a string of at most
- * `COMMIT_SUBJECT_MAX_CODEPOINTS` Unicode code points — counted via
- * spreading into an array of code points, not `.length`'s UTF-16 code
- * units, since a description could contain astral-plane characters —
- * containing no newline (a commit subject is always one line), and not
- * ending with "…". The ellipsis check exists because this field replaces
- * the former `buildFixCommitMessage`, which silently truncated an
- * overlong subject and appended "…" itself; Claude now writes the whole
- * subject directly, so a trailing "…" means it tried to write something
- * past the limit rather than keeping the subject itself within it. This
- * shape check alone allows an empty string (`""`) — `isFixClaudeOutput`
- * below additionally requires a non-empty, non-whitespace subject when
- * `outcome` is `"done"`.
+ * `value`が`commit_subject`として受け付けられる形かを返す。
+ * 条件は、`COMMIT_SUBJECT_MAX_CODEPOINTS`以下のUnicodeコードポイントの文字列で、
+ * 改行を含まず(件名は常に1行)、末尾が「…」でないこと。
+ * 長さは`.length`のUTF-16コードユニットではなく、コードポイントの配列に展開して数える。
+ * 説明文にBMP外の文字が入りうるため。
+ * 末尾の「…」を拒否するのは、Claudeは件名を自分で全部書くので、「…」で終わるのは
+ * 件名を上限内に収めずに、上限を超える内容を書こうとしたことを意味するため。
+ * この形の検査だけなら空文字列(`""`)も通る。
+ * `outcome`が`"done"`のときに空や空白だけの件名を拒否するのは、下の`isFixClaudeOutput`。
  */
 function isValidCommitSubject(value: unknown): value is string {
   if (typeof value !== "string") return false;
@@ -1035,24 +1023,19 @@ function isValidCommitSubject(value: unknown): value is string {
   return [...value].length <= COMMIT_SUBJECT_MAX_CODEPOINTS;
 }
 
-/** Matches prompts.ts's FIX_SCHEMA exactly (see isReviewClaudeOutput's note
- * on the same divergence from .claude/skills/factory-fix's own schema
- * section: `blocked_reason` used for both the "blocked" and
- * "requirements_gap" outcomes, and `commit_subject`/`commit_body` — team-lead
- * decision, 2026-09-26 — replacing the former derive-from-`summary`
- * approach).
+/**
+ * `prompts.ts`の`FIX_SCHEMA`と完全に一致する形かを判定する。
+ * `blocked_reason`は`"blocked"`と`"requirements_gap"`の両方の`outcome`で使う。
  *
- * team-lead fix (2026-09-26): when `outcome` is `"done"`, `commit_subject`
- * must additionally be non-empty and not whitespace-only. FIX_SCHEMA's own
- * text asks Claude for `commit_subject: ""` only when there is nothing to
- * commit (any outcome other than "done") — an empty/blank subject on a
- * "done" outcome would otherwise reach pr_fix_finish.ts's
- * `composeCommitMessage` as the commit's subject line, which then promotes
- * the following `Co-Authored-By`/`Generated-By` trailers into the subject
- * (`git commit -m "\n\nCo-Authored-By: ..."`). For every other outcome, `""`
- * is still accepted exactly as before (pr_fix_apply.ts never carries a
- * non-done outcome's `commit_subject` through to an actual commit attempt
- * anyway). */
+ * `outcome`が`"done"`のときは、`commit_subject`が空でなく空白だけでもないことも求める。
+ * `FIX_SCHEMA`の説明は、コミットするものが無いとき(`"done"`以外)にだけ
+ * `commit_subject: ""`を求めている。
+ * `"done"`で件名が空や空白だけだと、それが`pr_fix_finish.ts`の
+ * `composeCommitMessage`で件名の行になり、続く`Co-Authored-By` / `Generated-By`の
+ * トレーラーが件名に繰り上がってしまう(`git commit -m "\n\nCo-Authored-By: ..."`)。
+ * それ以外の`outcome`では`""`を受け付ける。
+ * `pr_fix_apply.ts`は`"done"`以外の`commit_subject`を実際のコミットに使わない。
+ */
 export function isFixClaudeOutput(value: unknown): value is FixClaudeOutput {
   if (!isRecord(value)) return false;
   if (!isOneOf(value.outcome, FIX_OUTCOMES)) return false;
@@ -1074,20 +1057,22 @@ export function isFixClaudeOutput(value: unknown): value is FixClaudeOutput {
 }
 
 // ---------------------------------------------------------------------------
-// pr_fix_verify: forbidden-change detection (pure) — docs/security.md
-// "pr_fix の安全策"
+// pr_fix_verify: 禁止された変更の検出(純粋関数)。
+// 方針は`docs/security.md`の「pr_fixの安全策」を参照。
 // ---------------------------------------------------------------------------
 
-/** Parses `git status --porcelain` output (XY-prefixed lines; a rename's
- * " -> " arrow is resolved to the new path). Untracked ("??") and staged-add
- * ("A ") both count as "added" — the "new *.sh file" forbidden check only
- * fires for these, never for an existing tracked file being edited. `T`
- * (typechange, either side — team-lead security re-gate N1/N6) is its own
- * status: a tracked path whose git object type itself changed (most
- * relevantly regular file <-> symlink) — checked out and given priority
- * over the plain "modified" bucket since a converted-away-from symlink may
- * no longer show mode 120000 in `git ls-files -s` at all, making this the
- * only signal left that a symlink was involved. */
+/**
+ * `git status --porcelain`の出力(XYの接頭辞が付いた行)をパースする。
+ * リネームの`" -> "`は新しいパスに解決する。
+ * 未追跡(`"??"`)とステージ済みの追加(`"A "`)はどちらも`"added"`とする。
+ * 「新しい`*.sh`ファイル」の禁止の検査はこれらにだけ反応し、
+ * 追跡済みの既存ファイルの編集には反応しない。
+ * `T`(どちらの側でもtypechange)は独自の状態として扱う。
+ * gitのオブジェクトの種類自体が変わった追跡済みのパス(主に通常ファイルとsymlinkの間)で、
+ * 普通の`"modified"`より優先する。symlinkから別の種類に変わったパスは
+ * `git ls-files -s`にmode 120000として現れないことがあり、
+ * symlinkが関わったことを示す手がかりがこれしか残らないため。
+ */
 export function parseGitStatusPorcelain(output: string): ChangedPath[] {
   const entries: ChangedPath[] = [];
   for (const rawLine of output.split("\n")) {
@@ -1138,13 +1123,14 @@ function statusFromNameStatus(code: string): ChangedPathStatus {
   }
 }
 
-/** `git diff -z --name-status` (工程3 design §14): NUL-separated and never
- * C-quoted, unlike the newline forms whose quoting of non-ASCII / control
- * characters let such paths slip past matchesForbiddenPath. A rename
- * (`R<score>\0old\0new`) becomes a deletion of the old path plus an
- * addition of the new one, so moving a protected file out of its protected
- * location is still classified; a copy (`C<score>\0src\0dst`) becomes an
- * addition of `dst`. */
+/**
+ * `git diff -z --name-status`の出力をパースする。
+ * 改行区切りの形式は非ASCII文字や制御文字を含むパスをCの形式で引用するため、
+ * そうしたパスが`matchesForbiddenPath`をすり抜ける。NUL区切りの`-z`は引用しない。
+ * リネーム(`R<score>\0old\0new`)は、古いパスの削除と新しいパスの追加にする。
+ * 保護されたファイルを保護された場所の外へ移しても、分類から漏れないようにするため。
+ * コピー(`C<score>\0src\0dst`)は`dst`の追加にする。
+ */
 export function parseGitDiffNameStatusZ(output: string): ChangedPath[] {
   const fields = output.split("\u0000");
   const entries: ChangedPath[] = [];
@@ -1175,10 +1161,12 @@ export function parseGitDiffNameStatusZ(output: string): ChangedPath[] {
   return entries;
 }
 
-/** Every path that differs between `baseSha` (the branch's merge-base with
- * the default branch) and the staged worktree, from `git diff --cached -z
- * --name-status`. The implement flow calls this after worktreeFingerprint
- * staged everything, so commits made earlier on the branch are included. */
+/**
+ * `baseSha`(ブランチとデフォルトブランチのmerge-base)とステージ済みのworktreeで
+ * 異なるすべてのパスを、`git diff --cached -z --name-status`で求める。
+ * implementフローは`worktreeFingerprint`がすべてをステージした後にこれを呼ぶので、
+ * ブランチで先に作ったコミットの変更も含まれる。
+ */
 export async function listChangedPaths(
   run: CommandRunner,
   worktreeDir: string,
@@ -1212,12 +1200,13 @@ export async function listChangedPaths(
 
 const SYMLINK_MODE = "120000";
 
-/** The paths of `git diff --raw -z` entries whose old or new mode is
- * `120000` (a symlink): additions, modifications, deletions, typechanges
- * either way, and renames / copies (reported by their new path). Records
- * are `:<oldmode> <newmode> <oldsha> <newsha> <status>\0<path>\0`, with a
- * second path for `R` / `C`. Paths are NUL-terminated and never C-quoted.
- * Deduplicated, in git's order. */
+/**
+ * `git diff --raw -z`の項目のうち、古いか新しいmodeが`120000`(symlink)のパスを返す。
+ * 対象は追加、変更、削除、どちら向きのtypechange、リネームとコピー(新しいパスで返す)。
+ * 各レコードは`:<oldmode> <newmode> <oldsha> <newsha> <status>\0<path>\0`で、
+ * `R`と`C`には2つ目のパスが続く。パスはNUL終端で、Cの形式で引用されない。
+ * 重複を除き、gitの出力順で返す。
+ */
 export function parseRawSymlinkPaths(output: string): string[] {
   const fields = output.split("\u0000");
   const paths: string[] = [];
@@ -1242,11 +1231,13 @@ export function parseRawSymlinkPaths(output: string): string[] {
   return paths;
 }
 
-/** Every path whose symlink-ness is involved in the difference between
- * `baseSha` and the staged worktree (parseRawSymlinkPaths over `git diff
- * --cached --raw -z`) — the implement flow's symlink detection, read from
- * git's modes rather than from the filesystem, so a symlink the worktree no
- * longer holds (deleted, turned into a file) is still reported. */
+/**
+ * `baseSha`とステージ済みのworktreeの差分で、symlinkであることが関わるすべてのパスを返す
+ * (`git diff --cached --raw -z`に`parseRawSymlinkPaths`を適用する)。
+ * implementフローのsymlinkの検出に使う。
+ * ファイルシステムではなくgitのmodeから読むので、
+ * worktreeにもう無いsymlink(削除されたもの、ファイルに変わったもの)も報告できる。
+ */
 export async function listSymlinkChanges(
   run: CommandRunner,
   worktreeDir: string,
@@ -1278,11 +1269,13 @@ export async function listSymlinkChanges(
   return parseRawSymlinkPaths(result.stdout);
 }
 
-/** Union of `git status --porcelain` (which alone already covers both
- * staged and unstaged changes, tracked and untracked) and
- * `git diff --name-only` (belt-and-suspenders per this task's instructions)
- * — a path present in only the latter is classified "modified" since it is
- * by definition a tracked file already known to git. */
+/**
+ * `git status --porcelain`と`git diff --name-only`の結果の和集合を返す。
+ * `git status --porcelain`だけでステージ済み・未ステージ、追跡済み・未追跡の変更を
+ * すべて含むが、念のため`git diff --name-only`でも確かめる。
+ * 後者にだけあるパスは、定義上gitがすでに知っている追跡済みのファイルなので
+ * `"modified"`とする。
+ */
 export function mergeChangedPaths(
   statusPaths: readonly ChangedPath[],
   diffPaths: readonly string[],
@@ -1304,10 +1297,13 @@ export type ForbiddenChangeResult = {
   readonly reasons: string[];
 };
 
-/** The full forbidden-change check: path-pattern violations, a newly added
- * `*.sh` file, a changed package.json `scripts` field (via the caller-
- * computed flag), and any caller-supplied `extraReasons` (team-lead fix
- * round 1b item 3: escaping-symlink reasons from detectEscapingSymlinks). */
+/**
+ * 禁止された変更をまとめて検査する。
+ * 対象は、パスのパターンへの違反、新しく追加された`*.sh`ファイル、
+ * `package.json`の`scripts`の変更(呼び出し側が求めたフラグで受け取る)、
+ * 呼び出し側が渡す`extraReasons`(`detectEscapingSymlinks`が返す、
+ * worktreeの外を指すsymlinkの理由など)。
+ */
 export function detectForbiddenChanges(
   paths: readonly ChangedPath[],
   packageJsonScriptsChangedFlag: boolean,
@@ -1329,16 +1325,14 @@ export function detectForbiddenChanges(
 }
 
 // ---------------------------------------------------------------------------
-// pr_fix_verify: escaping-symlink detection (pure + I/O) — team-lead fix
-// round 1b item 3. impl-lib-exec is separately adding `core.symlinks=false`
-// to worktree creation (workspace.ts), which stops git itself from
-// materializing a *tracked* symlink as a real OS symlink on checkout; this
-// check is an independent, complementary defense at verify time against any
-// symlink that ends up in the diff regardless of how it got there, since
-// Claude's Write tool follows an existing symlink at its target path rather
-// than replacing it (a plain `fs.writeFile`-style open does not use
-// O_NOFOLLOW), which would otherwise let a write silently land outside the
-// worktree.
+// pr_fix_verify: worktreeの外を指すsymlinkの検出(純粋関数とI/O)。
+// worktreeの作成時には`workspace.ts`が`core.symlinks=false`を設定し、
+// 追跡済みのsymlinkをcheckoutで本物のOSのsymlinkにしないようにしている。
+// この検査はそれとは独立した補完の防御で、どう入り込んだかに関係なく、
+// 差分に現れたsymlinkをverifyの時点で検出する。
+// ClaudeのWriteツールは、対象のパスにある既存のsymlinkを置き換えずにその先へ書き込む
+// (`fs.writeFile`のような通常のopenは`O_NOFOLLOW`を使わない)。
+// そのため検査が無いと、書き込みが気づかないうちにworktreeの外に及ぶ。
 // ---------------------------------------------------------------------------
 
 export type SymlinkTarget = {
@@ -1346,8 +1340,10 @@ export type SymlinkTarget = {
   readonly target: string;
 };
 
-/** Parses `git ls-files -s` output (`<mode> <sha> <stage>\t<path>` per
- * line), returning only the entries whose mode is `120000` (a symlink). */
+/**
+ * `git ls-files -s`の出力(各行が`<mode> <sha> <stage>\t<path>`)をパースし、
+ * modeが`120000`(symlink)の項目のパスだけを返す。
+ */
 export function parseSymlinkModePaths(output: string): string[] {
   const paths: string[] = [];
   for (const line of output.split("\n")) {
@@ -1363,8 +1359,10 @@ export function parseSymlinkModePaths(output: string): string[] {
   return paths;
 }
 
-/** Resolves a symlink's target (as git/the OS would) relative to its own
- * directory inside the worktree, to an absolute path. */
+/**
+ * symlinkの指す先を、worktreeの中のsymlink自身のディレクトリを基準に
+ * (gitやOSと同じように)解決し、絶対パスで返す。
+ */
 export function resolveSymlinkTarget(
   worktreeDir: string,
   symlinkRelPath: string,
@@ -1373,8 +1371,10 @@ export function resolveSymlinkTarget(
   return resolve(dirname(join(worktreeDir, symlinkRelPath)), targetText);
 }
 
-/** Whether a symlink's resolved target falls outside `worktreeDir` —
- * covers both a `..`-relative escape and an absolute-path target. */
+/**
+ * symlinkの解決後の指す先が`worktreeDir`の外にあるかを返す。
+ * `..`による相対パスでの脱出と、絶対パスの指す先の両方を扱う。
+ */
 export function isEscapingSymlink(
   worktreeDir: string,
   symlinkRelPath: string,
@@ -1389,8 +1389,9 @@ export function isEscapingSymlink(
   return resolved !== root && !resolved.startsWith(`${root}${sep}`);
 }
 
-/** Formats one `detectForbiddenChanges`-style reason string per escaping
- * symlink. */
+/**
+ * worktreeの外を指すsymlinkごとに、`detectForbiddenChanges`の形式の理由の文字列を作る。
+ */
 export function detectEscapingSymlinks(
   worktreeDir: string,
   symlinkTargets: readonly SymlinkTarget[],
@@ -1407,19 +1408,18 @@ export function detectEscapingSymlinks(
 }
 
 /**
- * Blocks every symlink creation/modification/typechange unconditionally —
- * team-lead security re-gate N1/N6, a superset of (kept alongside, not
- * replacing) detectEscapingSymlinks's more specific "resolves outside the
- * worktree" reason above. Two independent signals, since a symlink
- * converted *away from* (e.g. replaced by a regular file) may no longer
- * show mode 120000 in `git ls-files -s` at all:
- *   - any changed path that's currently a symlink (present in
- *     `symlinkTargets`, i.e. mode 120000 right now) — covers a new symlink
- *     and an existing symlink whose target changed.
- *   - any changed path `parseGitStatusPorcelain` classified `typechange` —
- *     covers a symlink <-> regular-file conversion either direction, which
- *     `git ls-files -s`'s current-state snapshot alone would miss once the
- *     symlink is gone.
+ * symlinkの作成、変更、typechangeを無条件に止める理由を返す。
+ * 上の`detectEscapingSymlinks`の「worktreeの外に解決される」という個別の理由を
+ * 包含するが、置き換えずに併用する。
+ * symlinkから別の種類に変わったパス(通常ファイルに置き換えられたものなど)は
+ * `git ls-files -s`にmode 120000として現れないことがあるので、
+ * 独立した2つの手がかりを使う。
+ *   - 変更されたパスのうち、現在symlinkであるもの(`symlinkTargets`にある、
+ *     つまり今mode 120000のもの)。新しいsymlinkと、
+ *     指す先が変わった既存のsymlinkを捕まえる。
+ *   - 変更されたパスのうち、`parseGitStatusPorcelain`が`typechange`に分類したもの。
+ *     どちら向きでもsymlinkと通常ファイルの間の変換を捕まえる。
+ *     symlinkが消えた後は、`git ls-files -s`の現在の状態だけでは見逃すため。
  */
 export function detectSymlinkChanges(
   paths: readonly ChangedPath[],
@@ -1440,28 +1440,28 @@ export function detectSymlinkChanges(
 }
 
 // ---------------------------------------------------------------------------
-// pr_fix_verify: diff size limits (pure + I/O) — team-lead fix round 1b
-// item 7. A fix pass touching an unbounded number of files/lines is both a
-// review burden and a bigger blast radius for an automated push; blocking
-// past factory_config.max_fix_changed_files / max_fix_diff_lines gives an
-// explicit, operator-tunable ceiling (defaults 30 files / 1500 total
-// added+deleted lines) alongside the unconditional forbidden-path checks.
+// pr_fix_verify: 差分の大きさの上限(純粋関数とI/O)。
+// 際限なく多くのファイルや行に触れる修正は、レビューの負担になり、
+// 自動pushで影響の及ぶ範囲も大きくなる。
+// `factory_config.max_fix_changed_files` / `max_fix_diff_lines`を超えたら止めることで、
+// 無条件の禁止パスの検査とは別に、運用者が調整できる明示的な上限を設ける
+// (既定は30ファイル、追加と削除の合計1500行)。
 // ---------------------------------------------------------------------------
 
 export type DiffNumstatEntry = {
   readonly path: string;
-  // `git diff --numstat` reports "-" (not a number) for a binary file's
-  // added/deleted counts — kept as `null` rather than coerced to 0 so
-  // sumDiffNumstatLines's caller can tell "no line-level diff available"
-  // apart from "a real 0-line change" if it ever needs to.
+  // `git diff --numstat`はバイナリファイルの追加・削除の行数に"-"を出す。
+  // 0に変換せず`null`で保持し、`sumDiffNumstatLines`の呼び出し側が必要なら
+  // 「行単位の差分が無い」と「本当に0行の変更」を区別できるようにする。
   readonly additions: number | null;
   readonly deletions: number | null;
 };
 
-/** Parses `git diff --numstat` output (`<added>\t<deleted>\t<path>` per
- * line, tab-separated; a rename is reported as a single `path` field
- * containing " => " rather than the porcelain-status arrow, which this
- * parser passes through as-is since only the line counts are used here). */
+/**
+ * `git diff --numstat`の出力(各行がタブ区切りの`<added>\t<deleted>\t<path>`)をパースする。
+ * リネームはporcelainの矢印ではなく`" => "`を含む1つの`path`として出力されるが、
+ * ここでは行数だけを使うので、そのまま通す。
+ */
 export function parseGitDiffNumstat(output: string): DiffNumstatEntry[] {
   const entries: DiffNumstatEntry[] = [];
   for (const line of output.split("\n")) {
@@ -1486,9 +1486,11 @@ function safeInt(raw: string | undefined): number | null {
   return Number.isFinite(value) ? value : null;
 }
 
-/** Sums additions+deletions across every entry (a binary file's `null`
- * counts contribute 0, since `git diff --numstat` gives no line count for
- * one — it's still caught by the changed-file-count half of the guard). */
+/**
+ * すべての項目の追加と削除の行数を合計する。
+ * `git diff --numstat`はバイナリファイルの行数を出さないので、その`null`は0として数える。
+ * バイナリファイルも、上限のうち変更ファイル数の側では数えられる。
+ */
 export function sumDiffNumstatLines(
   entries: readonly DiffNumstatEntry[],
 ): number {
@@ -1500,9 +1502,10 @@ export function sumDiffNumstatLines(
   return total;
 }
 
-/** Reads `git diff --numstat` in `worktreeDir` (unstaged changes against
- * the index, matching the same working-tree state pr_fix_verify's other
- * checks look at). */
+/**
+ * `worktreeDir`で`git diff --numstat`を読む(インデックスに対する未ステージの変更)。
+ * `pr_fix_verify`の他の検査が見るのと同じ作業ツリーの状態に合わせている。
+ */
 export async function getDiffNumstat(
   run: CommandRunner,
   worktreeDir: string,
@@ -1521,24 +1524,25 @@ export async function getDiffNumstat(
   return parseGitDiffNumstat(result.stdout);
 }
 
-/** Parses `wc -l`'s single-line stdout (`<count> <path>`, count
- * right-padded with spaces by `wc` itself) down to the leading integer. */
+/**
+ * `wc -l`の1行の出力(`<count> <path>`。countは`wc`自身が空白で桁揃えする)から、
+ * 先頭の整数を取り出す。
+ */
 export function parseWcLineCount(output: string): number {
   const match = output.trim().match(/^(\d+)/);
   return match?.[1] === undefined ? 0 : Number(match[1]);
 }
 
 /**
- * Counts an untracked (newly added) file's lines via `wc -l` — team-lead
- * fix round 2 item 7 addendum: `git diff --numstat` never lists an
- * untracked file at all (it diffs the working tree against the index, and
- * an untracked file isn't in the index), so its lines would otherwise be
- * invisible to the diff-size guard entirely. `git add -N` (intent-to-add)
- * would make it show up in numstat too, but mutates the worktree's git
- * index as a side effect — `wc -l` has none. A file `wc` can't read (raced/
- * deleted after `git status` reported it, or genuinely binary in some
- * environments) counts as 0 rather than throwing, matching
- * `listSymlinkTargets`'s "the rest of the safety net covers it" stance.
+ * 未追跡の(新しく追加された)ファイルの行数を`wc -l`で数える。
+ * `git diff --numstat`は作業ツリーをインデックスと比べるので、
+ * インデックスに無い未追跡のファイルを一切出さない。
+ * そのままでは、差分の大きさの関門から未追跡ファイルの行数がまったく見えない。
+ * `git add -N`(intent-to-add)ならnumstatにも出るが、副作用として
+ * worktreeのgitのインデックスを書き換える。`wc -l`にはその副作用が無い。
+ * `wc`が読めないファイル(`git status`の後に競合で消えた、環境によってはバイナリなど)は、
+ * 例外にせず0として数える。`listSymlinkTargets`と同じく、
+ * 残りの安全策で防ぐという考え方による。
  */
 export async function countUntrackedFileLines(
   run: CommandRunner,
@@ -1550,9 +1554,11 @@ export async function countUntrackedFileLines(
   return parseWcLineCount(result.stdout);
 }
 
-/** Which factory_config keys a diff-size reason names — pr_fix and the
- * implement flow have separate ceilings (工程3 design §3), and the reason
- * text must cite the key the operator would actually tune. */
+/**
+ * 差分の大きさの理由に書く`factory_config`のキー。
+ * pr_fixとimplementフローでは上限が別なので、理由の文には
+ * 運用者が実際に調整するキーを書く必要がある。
+ */
 export type DiffSizeLimitNames = {
   readonly changedFiles: keyof FactoryConfig;
   readonly diffLines: keyof FactoryConfig;
@@ -1568,13 +1574,16 @@ export const IMPLEMENT_DIFF_SIZE_LIMIT_NAMES: DiffSizeLimitNames = {
   diffLines: "implement_max_diff_lines",
 };
 
-/** Blocks when the changed-file count or the total added+deleted line count
- * exceeds factory_config's configured ceiling. `changedFileCount` is the
- * caller's already-computed status+diff-name-only union (the same set the
- * forbidden-path check uses) rather than a second file count derived from
- * numstat alone, since numstat doesn't list untracked (newly added) files
- * that `git status --porcelain` does. `names` selects which config keys the
- * reason text cites (default: pr_fix's). */
+/**
+ * 変更ファイル数か、追加と削除の合計行数が`factory_config`の上限を超えたら、
+ * 止める理由を返す。
+ * `changedFileCount`には、numstatだけから数え直した値ではなく、
+ * 呼び出し側が求めた`git status`と`git diff --name-only`の和集合
+ * (禁止パスの検査と同じ集合)の件数を渡す。
+ * numstatは、`git status --porcelain`が出す
+ * 未追跡の(新しく追加された)ファイルを出さないため。
+ * `names`で理由の文に書く設定キーを選ぶ(既定はpr_fixのもの)。
+ */
 export function evaluateDiffSizeGuard(
   changedFileCount: number,
   diffLineTotal: number,
@@ -1597,15 +1606,14 @@ export function evaluateDiffSizeGuard(
 }
 
 /**
- * For each of `paths` that `git ls-files -s` reports as a symlink (mode
- * `120000`), reads its on-disk target (the actual current worktree state,
- * not the git blob, since a stale git blob wouldn't reflect a symlink
- * Claude's tools wrote through — though as the module note above explains,
- * Write/Edit alone cannot originate a *new* OS-level symlink; this also
- * catches a pre-existing tracked symlink the diff merely touched). A
- * symlink git reports but that's unreadable on disk (raced/deleted) is
- * skipped rather than thrown — the forbidden-path and
- * `allowed_check_commands` checks are the rest of the safety net.
+ * `paths`のうち`git ls-files -s`がsymlink(mode `120000`)と報告するものについて、
+ * ディスク上の指す先を読む。
+ * gitのblobではなく実際の現在のworktreeの状態を読むのは、Claudeのツールが
+ * symlinkの先へ書き込んだ結果が古いblobには反映されないため。
+ * WriteやEditは既存のsymlinkの先へ書き込むだけで、新しいOSのsymlinkは作れない。
+ * そのため、この関数は差分が触れただけの既存の追跡済みsymlinkも捕まえる。
+ * gitが報告してもディスク上で読めないsymlink(競合で消えたものなど)は、
+ * 例外にせず飛ばす。禁止パスの検査と`allowed_check_commands`の検査が、残りの安全策になる。
  */
 export async function listSymlinkTargets(
   run: CommandRunner,
@@ -1639,13 +1647,14 @@ export async function listSymlinkTargets(
   return targets;
 }
 
-/** Whether package.json's `scripts` object differs between two file
- * contents (either may be `null`, meaning the file didn't exist at that
- * point). Invalid JSON is treated as "no scripts" rather than thrown —
- * package.json content is untrusted target-repo data, never parsed with
- * anything beyond JSON.parse, and a parse failure alone isn't a forbidden
- * change (the check commands will surface a broken package.json on their
- * own). */
+/**
+ * 2つのファイル内容で、`package.json`の`scripts`オブジェクトが異なるかを返す
+ * (どちらも`null`になりえて、その時点でファイルが無かったことを表す)。
+ * 不正なJSONは例外にせず「scriptsが無い」として扱う。
+ * `package.json`の内容は信頼できない対象リポジトリのデータなので`JSON.parse`以外では
+ * パースしない。パースの失敗だけでは禁止された変更ではない
+ * (壊れた`package.json`は検査コマンドが自分で表に出す)。
+ */
 export function packageJsonScriptsChanged(
   beforeText: string | null,
   afterText: string | null,
@@ -1673,7 +1682,7 @@ function extractScripts(text: string | null): Record<string, string> {
 }
 
 // ---------------------------------------------------------------------------
-// pr_fix_verify: run factory_config.allowed_check_commands (I/O)
+// pr_fix_verify: `factory_config.allowed_check_commands`の実行(I/O)
 // ---------------------------------------------------------------------------
 
 export type CheckCommandResult = {
@@ -1682,10 +1691,12 @@ export type CheckCommandResult = {
   readonly exitCode: number;
   readonly timedOut: boolean;
   readonly outputTail: string;
-  /** The whole combined stdout+stderr as far as
-   * CHECK_COMMAND_MAX_OUTPUT_BYTES kept it, masked — the implement flow
-   * stores its first 16KB on implement_rounds.check_output
-   * (truncateCheckOutput). `outputTail` stays the prompt-side excerpt. */
+  /**
+   * stdoutとstderrを合わせた出力のうち、`CHECK_COMMAND_MAX_OUTPUT_BYTES`の範囲で
+   * 残った全体を、秘密をマスクして持つ。implementフローはその先頭16KBを
+   * `implement_rounds.check_output`に保存する(`truncateCheckOutput`)。
+   * プロンプトに載せる抜粋は引き続き`outputTail`を使う。
+   */
   readonly output: string;
 };
 
@@ -1700,13 +1711,15 @@ export type CheckHomeDir = {
 
 export type CreateCheckHomeDir = () => Promise<CheckHomeDir>;
 
-/** Creates a fresh, private temp dir for one `runAllowedCheckCommands` call
- * (team-lead fix round 1b item 8: a fixed `/tmp/factory-home` shared across
- * every run would let one run's check tooling — cache files, a planted
- * config — persist for a later run against a different PR/repo to read,
- * since these commands execute untrusted target-repo code as root with no
- * other isolation). Mirrors claude.ts's buildSystemPrompt/WriteTempFile
- * mkdtemp+cleanup pattern. */
+/**
+ * `runAllowedCheckCommands`の1回の呼び出し用に、新しい非公開の一時ディレクトリを作る。
+ * 検査コマンドは信頼できない対象リポジトリのコードを、他に隔離の無いままrootで実行する。
+ * 全実行で共有する固定の`/tmp/factory-home`だと、ある実行の検査ツールが残した
+ * キャッシュファイルや仕込まれた設定が残り、別のPRやリポジトリに対する
+ * 後の実行に読まれうる。
+ * `claude.ts`の`buildSystemPrompt` / `WriteTempFile`と同じく、
+ * mkdtempと後始末の形にしている。
+ */
 const defaultCreateCheckHomeDir: CreateCheckHomeDir = async () => {
   const dir = await mkdtemp(join(tmpdir(), "factory-check-home-"));
   return {
@@ -1718,19 +1731,19 @@ const defaultCreateCheckHomeDir: CreateCheckHomeDir = async () => {
 };
 
 /**
- * Runs each `allowed_check_commands` entry in `cwd` sequentially, with a
- * minimal explicit env (PATH + a fresh private HOME, no inherited secrets —
- * docs/security.md "env -i PATH=... HOME=..."), removing the HOME dir when
- * done. Never grants mise config trust (no MISE_TRUSTED_CONFIG_PATHS, no
- * `mise --yes trust`); a check command that can't run without it (e.g.
- * `mise run check` against an untrusted target-repo mise.toml) simply fails
- * like any other non-zero exit, which the caller treats as a normal check
- * failure (one Claude retry pass, then `blocked`) — this achieves the same
- * "never execute what needs trust" end state as an explicit pre-check
- * without needing to parse the command for a "depends on mise.toml"
- * heuristic. Commands are split on whitespace into argv (no shell), since
- * `allowed_check_commands` is operator-authored (factory_config), not
- * target-repo content.
+ * `allowed_check_commands`の各項目を、`cwd`で順に実行する。
+ * 環境変数は最小限を明示的に渡し(PATHと新しい非公開のHOMEだけで、秘密は引き継がない。
+ * `docs/security.md`の"env -i PATH=... HOME=...")、終わったらHOMEのディレクトリを消す。
+ * miseの設定の信頼(trust)は決して与えない(`MISE_TRUSTED_CONFIG_PATHS`も
+ * `mise --yes trust`も使わない)。信頼が無いと動かない検査コマンド
+ * (信頼されていない対象リポジトリの`mise.toml`に対する`mise run check`など)は、
+ * 他の0以外の終了と同じく失敗し、呼び出し側は通常の検査の失敗として扱う
+ * (Claudeの再試行を1回してから`blocked`)。
+ * これで、コマンドを解析して「`mise.toml`に依存するか」を推測する事前確認をしなくても、
+ * 「信頼が要るものは実行しない」という同じ結果になる。
+ * コマンドはシェルを使わず、空白で区切ってargvにする。
+ * `allowed_check_commands`は対象リポジトリの内容ではなく、
+ * 運用者が書く設定(`factory_config`)だから。
  */
 export async function runAllowedCheckCommands(
   run: CommandRunner,
@@ -1774,14 +1787,8 @@ export async function runAllowedCheckCommands(
   }
 }
 
-// team-lead fix round 1b item 9: buildCheckFailureSection used to be
-// appended to the retry prompt as unfenced plain text; prompts.ts's
-// fixPrompt now takes a `checkFailures` input and fences the output itself
-// (pr_fix_verify.ts maps CheckCommandResult -> prompts.ts's CheckFailure
-// directly), so this helper is removed rather than left as dead code.
-
 // ---------------------------------------------------------------------------
-// pr_fix_finish: outcome routing (pure)
+// pr_fix_finish: 結果に応じた振り分け(純粋関数)
 // ---------------------------------------------------------------------------
 
 export type PrFixFinishOutcome =
@@ -1802,17 +1809,16 @@ export type PrFixFinalAction =
   | { readonly kind: "needs_human" };
 
 /**
- * Routes the merged outcome (from whichever of prepare/collect/apply/verify
- * last ran) to the terminal action pr_fix_finish.ts should take.
+ * まとめた結果(prepare、collect、apply、verifyのうち最後に動いたものの結果)を、
+ * `pr_fix_finish.ts`が取るべき終端の動作に振り分ける。
  *
- * `guard_blocked` (prepare's PR-open/fork/draft/protected-branch guards)
- * maps to the work_items "blocked" status per docs/security.md ("違反は
- * blocked として中断する"). `blocked` (Claude's own decision, or a
- * forbidden-file/check-command failure surfaced by pr_fix_verify) maps to
- * "needs_human" per this task's explicit instructions ("blocked → needs_human").
- * These are deliberately different terminal statuses for two different
- * failure classes, even though both originate from a "blocked"-shaped
- * upstream result.
+ * `guard_blocked`(prepareの、PRがopen・forkでない・draftでない・
+ * 保護ブランチでないという関門)は、`docs/security.md`の
+ * 「違反はblockedとして中断する」に従い`work_items`の`"blocked"`にする。
+ * `blocked`(Claude自身の判断か、`pr_fix_verify`が検出した禁止ファイルや
+ * 検査コマンドの失敗)は`"needs_human"`にする。
+ * どちらも上流では`"blocked"`の形の結果だが、失敗の種類が違うので、
+ * 意図して別の終端状態にしている。
  */
 export function decideFixFinishAction(
   outcome: PrFixFinishOutcome,
@@ -1836,39 +1842,7 @@ export function decideFixFinishAction(
   }
 }
 
-/**
- * Whether pr_fix_finish.ts should advance the processed watermarks
- * (`last_review_id` / `last_comment_id` / `last_review_comment_id`) for a
- * given terminal outcome of `main()`. team-lead fix (2026-09-26): the
- * watermarks used to be bumped unconditionally at the top of `main()`,
- * before the outcome was known — when a later step then threw (observed:
- * `git commit` failing), the work item became `failed` with its watermarks
- * already past the feedback that triggered this round, so
- * `retry_work_item` re-ran `pr_fix_collect` with nothing left to collect and
- * landed in `needs_human` ("no actionable feedback") instead of actually
- * retrying (docs/operations.md's former "pr_fix の再実行" note documented
- * this as a known limitation; it is a bug, fixed here).
- *
- * The watermarks must only advance once this round's feedback was actually
- * consumed:
- *   - `push_success`: the fix was committed and pushed, and replies were
- *     posted to the comments that triggered it. Still counts as
- *     `push_success` (user decision, 2026-09-26) even when the round also
- *     recorded one or more `propose_issue` proposals and therefore ends
- *     `needs_human` rather than `rereview_requested` — the underlying
- *     comments were replied to (with a proposal, not a fix) either way, so
- *     this round's feedback is consumed the same as any other successful
- *     push.
- *   - `requirements_gap_reroute_success`: the feedback was consumed by
- *     rerouting the parent issue back to `requirements_generating`.
- * Every other terminal kind here — a guard blocking the attempt before it
- * started, `needs_human` from any cause, a failed reroute (no parent /
- * relabel failure), or a push that didn't actually land (missing commit
- * message, moved head, nothing to commit) — must leave the watermarks
- * untouched, so a subsequent `retry_work_item` re-collects the same
- * feedback. An exception anywhere in `main()` (→ `failed`, handled by
- * on_error_flow.ts, not this function) never reaches a bump call either.
- */
+/** `pr_fix_finish.ts`の`main()`が終えた結果の種別。処理済み位置を進めるかの判断に使う。 */
 export type PrFixFinishBumpKind =
   | "guard_blocked"
   | "needs_human"
@@ -1880,17 +1854,43 @@ export type PrFixFinishBumpKind =
   | "push_nothing_to_commit"
   | "push_success";
 
+/**
+ * `pr_fix_finish.ts`が処理済み位置
+ * (`last_review_id` / `last_comment_id` / `last_review_comment_id`)を進めてよいかを、
+ * `main()`の終端の結果の種別から返す。
+ * 処理済み位置は、結果が分かる前に進めてはならない。
+ * 先に進めると、後のステップが例外を投げたとき(`git commit`の失敗などで)作業項目が
+ * `failed`になった時点で、処理済み位置がこのラウンドを起こしたフィードバックを越えている。
+ * すると`retry_work_item`が`pr_fix_collect`を再実行しても集めるものが無く、
+ * 実際には再試行されずに`needs_human`("no actionable feedback")になる。
+ *
+ * 処理済み位置を進めるのは、このラウンドのフィードバックを実際に消化したときだけ。
+ *   - `push_success`: 修正をコミットしてpushし、それを起こしたコメントに返信した。
+ *     ラウンドで`propose_issue`の提案を1件以上記録し、`rereview_requested`ではなく
+ *     `needs_human`で終わる場合も`push_success`に数える。
+ *     どちらにしても元のコメントには(修正でなく提案で)返信しているので、
+ *     他の成功したpushと同じく、このラウンドのフィードバックは消化済みである。
+ *   - `requirements_gap_reroute_success`: 親のIssueを`requirements_generating`に
+ *     差し戻すことで、フィードバックを消化した。
+ * それ以外の終端の種別(試行の開始前に関門が止めた、何らかの原因の`needs_human`、
+ * 失敗した差し戻し(親の作業項目が見つからない、親にIssue番号が無い)、
+ * 実際には反映されなかったpush
+ * (コミットメッセージが無い、headが動いた、コミットするものが無い))では、
+ * 処理済み位置を変えない。
+ * 後の`retry_work_item`が同じフィードバックを集め直せるようにするため。
+ * `main()`のどこかで例外が出た場合(`failed`になり、この関数ではなく
+ * `on_error_flow.ts`が扱う)も、位置を進める呼び出しには届かない。
+ */
 export function shouldAdvanceWatermarks(kind: PrFixFinishBumpKind): boolean {
   return kind === "requirements_gap_reroute_success" || kind === "push_success";
 }
 
 /**
- * Guard for pr_fix_finish.ts's requirements_gap reroute (pure, for
- * testing): `null` means the reroute may proceed, otherwise the reason it
- * must fall back to needs_human. The 2026-09-27 label cleanup (both Issue
- * and PR sides) means no label is ever re-applied to the parent issue any
- * more, so the only remaining precondition is that the parent work item
- * actually is an issue.
+ * `pr_fix_finish.ts`のrequirements_gapの差し戻しの関門。
+ * テストできるよう純粋関数にしている。
+ * `null`なら差し戻してよく、それ以外は`needs_human`に倒す理由を返す。
+ * 親のIssueのトリガーラベルは着手時に消費済みで付け直さないので、残る前提条件は
+ * 親の作業項目が実際にIssueであることだけ。
  */
 export function evaluateRerouteGuard(
   issueNumber: number | null,
@@ -1898,10 +1898,13 @@ export function evaluateRerouteGuard(
   return issueNumber === null ? "parent work item has no issue_number" : null;
 }
 
-/** Fallback reviewer set when `factory_config.default_reviewers` is empty:
- * the humans whose reviews/comments triggered this fix round (github.ts's
- * PullRequest has no "existing requested reviewers" field to read instead —
- * see the implementer's report). Deduplicated, empty logins dropped. */
+/**
+ * `factory_config.default_reviewers`が空のときに使う代わりのレビュアー。
+ * この修正ラウンドを起こしたレビューやコメントの投稿者を使う。
+ * `github.ts`の`PullRequest`には、代わりに読める
+ * 「依頼済みのレビュアー」のフィールドが無いため。
+ * 重複と空のloginを除く。
+ */
 export function deriveFallbackReviewers(
   reviewAuthors: readonly string[],
   commentAuthors: readonly string[],
@@ -1912,26 +1915,28 @@ export function deriveFallbackReviewers(
   return [...set];
 }
 
-// GitHub's own closing-keyword syntax: close/closes/closed, fix/fixes/fixed,
-// resolve/resolves/resolved (case-insensitive), each optionally followed by
-// a colon, then either a bare `#N` (always same-repo, GitHub's own
-// shorthand meaning) or an explicit `owner/repo#N`. Captures ($1,$2) the
-// owner/repo when present so the caller can filter a cross-repo reference
-// out; a fresh RegExp instance is built per call (see below) since a
-// module-level `g`-flag pattern would carry `lastIndex` state across calls.
+/**
+ * GitHubのIssueを閉じるキーワードの構文に一致するパターン。
+ * close/closes/closed、fix/fixes/fixed、resolve/resolves/resolved
+ * (大文字小文字を区別しない)の後に、
+ * 省略できるコロンと、`#N`(GitHubの略記で、常に同じリポジトリを指す)か
+ * 明示的な`owner/repo#N`が続く。
+ * owner/repoがあれば($1、$2)捕まえ、呼び出し側が別リポジトリへの参照を除けるようにする。
+ * 呼び出しごとに新しい`RegExp`を作る(下を参照)。モジュールレベルの`g`フラグ付きの
+ * パターンは、呼び出しをまたいで`lastIndex`の状態を持ち越すため。
+ */
 const LINKED_ISSUE_PATTERN =
   /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b\s*:?\s*(?:([\w.-]+)\/([\w.-]+))?#(\d+)/gi;
 
 /**
- * Extracts the issue numbers a PR body closes via GitHub's own
- * closing-keyword syntax — team-lead's "link a human-authored PR to its
- * approved requirements" feature (poll_prs.ts uses the first result to look
- * up an approved pipeline work item for that issue and set the new
- * pr_review/pr_fix row's `parent_work_item_id`). An explicit `owner/repo#N`
- * reference is only kept when `owner`/`repo` match this PR's own repo
- * (case-insensitive) — a cross-repo reference doesn't link to anything this
- * factory instance can look up. Deduplicated, first-occurrence order
- * preserved.
+ * PRの本文が、GitHubのIssueを閉じるキーワードの構文で閉じるIssueの番号を取り出す。
+ * 人が書いたPRを承認済みの要件に結び付けるために使う(`poll_prs.ts`は最初の結果で
+ * そのIssueの承認済みのpipelineの作業項目を探し、新しいpr_review / pr_fixの行の
+ * `parent_work_item_id`に設定する)。
+ * 明示的な`owner/repo#N`は、`owner` / `repo`がこのPRのリポジトリと一致する
+ * (大文字小文字を区別しない)ときだけ残す。別リポジトリへの参照は、
+ * このFactoryのインスタンスが探せるものに結び付かないため。
+ * 重複を除き、最初に現れた順を保つ。
  */
 export function extractLinkedIssueNumbers(
   body: string,
@@ -1966,13 +1971,13 @@ export function extractLinkedIssueNumbers(
   return result;
 }
 
-/** Drops any reply whose `review_comment_id` isn't one of the comment ids
- * pr_fix_collect.ts actually gathered (team-lead fix round 1b item 10):
- * Claude's structured output is untrusted-influenced (it was asked to
- * address specific comments, but nothing stops it echoing back a
- * hallucinated or attacker-suggested id), and both GitHub reply paths
- * (`replyReviewComment` / `postIssueComment`) would otherwise still act on
- * an id we never actually collected. */
+/**
+ * `review_comment_id`が、`pr_fix_collect.ts`が実際に集めたコメントのidに無い返信を除く。
+ * Claudeの構造化出力は信頼できない入力の影響を受ける。特定のコメントへの対応を
+ * 頼んでいても、幻覚のidや攻撃者が仕込んだidを返すことは防げない。
+ * 除かないと、GitHubへの返信の経路(`replyReviewComment` / `postIssueComment`)の
+ * どちらも、集めていないidに対して動いてしまう。
+ */
 export function filterKnownReplies(
   replies: readonly FixReply[],
   knownCommentIds: ReadonlySet<number>,
@@ -1983,30 +1988,26 @@ export function filterKnownReplies(
 }
 
 /**
- * Renders a pr_fix reply body per the factory-fix skill's "返信形式"
- * (team-lead decision, 2026-09-26, superseding the earlier
- * `appendCommitShaNote`): a role-tag first line, then Claude's own `body`
- * (an explanation only — the "対応しました:"/"対応しません:" prefix this
- * used to require from Claude is now rendered here instead), a blank line,
- * and a final `対応: <sha7>` line — or `対応: 見送り` when `reply.decision`
- * is `"skipped"`, since there is no commit to point to for a reply Claude
- * chose not to act on. `newSha` is `null` on the `nothing_to_commit` path
- * (team-lead fix: pr_fix_finish.ts still posts queued replies even when
- * there was nothing to commit) — a `"fixed"` reply then renders `対応: 変更
- * なし` instead of a sha, since none exists. The caller appends the
- * `<!-- factory:pr_fix:<id> -->` marker via github.ts's withMarker after
- * this, same as before. `reply.body` is passed through
- * `normalizeJapaneseText` (team-lead decision, 2026-09-26).
+ * factory-fixスキルの返信形式に沿って、pr_fixの返信の本文を描画する。
+ * 1行目は役割タグ、次にClaudeの`body`(説明だけ。「対応しました:」「対応しません:」の
+ * 接頭辞はClaudeに書かせず、ここで描画する)、空行、最後に`対応: <sha7>`の行を置く。
+ * `reply.decision`が`"skipped"`なら`対応: 見送り`にする。
+ * Claudeが対応しないと判断した返信には、指すコミットが無いため。
+ * `nothing_to_commit`の経路では`newSha`が`null`になる(`pr_fix_finish.ts`は
+ * コミットするものが無くても、溜めた返信を投稿する)。そのとき`"fixed"`の返信は、
+ * shaが存在しないので`対応: 変更なし`にする。
+ * `<!-- factory:pr_fix:<id> -->`の印は、この後に呼び出し側が
+ * `github.ts`の`withMarker`で足す。
+ * `reply.body`は`normalizeJapaneseText`を通す。
  *
- * When `reply.decision` is `"propose_issue"` (user decision, 2026-09-26),
- * the body instead carries the proposed Issue's title (`提案するIssue:
- * <title>`) and a blockquote of the first 3 lines of its body, ending
- * `対応: Issue化を提案(承認待ち)` — a human approves or rejects the actual
- * Issue creation from the Console Inbox (issue_proposal_apply.ts), which
- * posts its own follow-up reply once decided. A `"propose_issue"` reply
- * with no `issue_proposal` (should not happen once `isFixReplyShape` has
- * validated it, but this function accepts any `FixReply`) falls back to an
- * empty title/body rather than throwing.
+ * `reply.decision`が`"propose_issue"`なら、本文には代わりに、提案するIssueのタイトル
+ * (`提案するIssue: <title>`)と、その本文の先頭3行の引用を載せ、
+ * `対応: Issue化を提案(承認待ち)`で終える。
+ * Issueを実際に作るかは人がConsoleのInboxで承認か却下し(`issue_proposal_apply.ts`)、
+ * 決まった後にそちらが続きの返信を投稿する。
+ * `issue_proposal`の無い`"propose_issue"`の返信は、例外にせず空のタイトルと本文にする。
+ * `isFixReplyShape`の検査を通っていれば起きないが、
+ * この関数は任意の`FixReply`を受け付けるため。
  */
 export function renderFixReply(reply: FixReply, newSha: string | null): string {
   if (reply.decision === "propose_issue") {
@@ -2042,15 +2043,15 @@ export function renderFixReply(reply: FixReply, newSha: string | null): string {
 }
 
 // ---------------------------------------------------------------------------
-// pr_fix_finish / issue_proposal_apply: `propose_issue` replies (user
-// decision, 2026-09-26) — recording a candidate Issue for human
-// approval/rejection.
+// pr_fix_finish / issue_proposal_apply: `propose_issue`の返信。
+// 人が承認か却下するためのIssueの候補を記録する。
 // ---------------------------------------------------------------------------
 
-/** The `FixReply`s Claude marked `"propose_issue"` this round — used by
- * pr_fix_finish.ts to decide how many `factory.issue_proposals` rows to
- * record and whether the round ends `needs_human` instead of
- * `rereview_requested`. */
+/**
+ * Claudeがこのラウンドで`"propose_issue"`とした`FixReply`を返す。
+ * `pr_fix_finish.ts`が、`factory.issue_proposals`に記録する行数と、
+ * ラウンドを`rereview_requested`ではなく`needs_human`で終えるかを決めるのに使う。
+ */
 export function selectProposeIssueReplies(
   replies: readonly FixReply[],
 ): FixReply[] {
@@ -2058,16 +2059,17 @@ export function selectProposeIssueReplies(
 }
 
 /**
- * Finds the review thread containing `reviewCommentId` among `threads` —
- * used by pr_fix_finish.ts to attach a GraphQL thread id to a newly
- * recorded `propose_issue` row, so issue_proposal_apply.ts can resolve it
- * on approval. Matches on comment id (team-lead fix round, [MUST] #4 —
- * supersedes matching by `(path, line)`, which silently mismatched once a
- * later commit shifted the diff's line numbers): `thread.firstCommentDatabaseId`
- * covers the common case cheaply, `thread.allCommentIds` (first 50 comments
- * in the thread — see github.ts's `listReviewThreads`) covers a reply that
- * targets a later comment in the thread. `null` when no thread contains the
- * id — e.g. a plain issue comment, which has no review thread at all.
+ * `threads`から、`reviewCommentId`を含むレビュースレッドを探し、そのidを返す。
+ * `pr_fix_finish.ts`が、新しく記録する`propose_issue`の行に
+ * GraphQLのスレッドidを付けるのに使う。
+ * `issue_proposal_apply.ts`が承認時にそのスレッドを解決できるようにするため。
+ * コメントのidで照合する。`(path, line)`で照合すると、後のコミットでdiffの行番号が
+ * ずれたときに、気づかないうちに別のスレッドと一致してしまう。
+ * よくある場合は`thread.firstCommentDatabaseId`で安く見つかる。
+ * スレッド内の後のコメントへの返信は`thread.allCommentIds`で見つかる。
+ * `allCommentIds`が持つのはスレッドの先頭50件のコメントだけである(`github.ts`の`listReviewThreads`を参照)。
+ * idを含むスレッドが無ければ`null`を返す
+ * (レビュースレッドを持たない通常のIssueコメントなど)。
  */
 export function matchReviewThreadForComment(
   threads: readonly ReviewThread[],
@@ -2081,23 +2083,22 @@ export function matchReviewThreadForComment(
   return match?.id ?? null;
 }
 
-/** The Discord/status_reason text for a round that ends `needs_human`
- * because it recorded one or more pending issue proposals (user decision,
- * 2026-09-26) — matched by a `REASON_RULES` entry below so `describeReason`
- * (unchanged, since this text is already Japanese) and `nextActionFor`
- * (pointed at the Console Inbox) both handle it like every other
- * needs_human reason. */
+/**
+ * 保留中のIssue化の提案を1件以上記録したために`needs_human`で終わるラウンドの、
+ * Discordと`status_reason`に使う文。
+ * 下の`REASON_RULES`の項目に一致するので、他の`needs_human`の理由と同じく
+ * `describeReason`(この文はすでに日本語なので変えない)と
+ * `nextActionFor`(ConsoleのInboxを案内する)が扱う。
+ */
 export function buildIssueProposalReason(count: number): string {
   return `Issue化の提案が${String(count)}件あります`;
 }
 
 /**
- * Substitutes the literal `{{pr_url}}` placeholder in a fix's proposed
- * Issue body (fixPrompt's contract, prompts.ts) with the originating PR's
- * own URL, then appends a fixed footer noting the Issue's origin (user
- * decision, 2026-09-26). The footer has no half-width space between
- * "Issue"/"PR #<N>" and the adjoining Japanese characters, per this
- * project's writing-style rule.
+ * 修正で提案されたIssueの本文にある`{{pr_url}}`を、元のPRのURLに置き換え、
+ * Issueの出どころを示す固定のフッターを足す。
+ * `{{pr_url}}`は`prompts.ts`の`fixPrompt`が定める置き換え文字列。
+ * フッターの「Issue」「PR #<N>」と日本語の間には、規約に従い半角スペースを入れない。
  */
 export function buildIssueProposalBody(
   bodyTemplate: string,
@@ -2105,13 +2106,15 @@ export function buildIssueProposalBody(
   prNumber: number,
 ): string {
   const withUrl = bodyTemplate.split("{{pr_url}}").join(prUrl);
-  // Claude's proposal text follows the same spacing rule as every other
-  // factory-authored text once it becomes a GitHub Issue.
+  // GitHubのIssueになる以上、Claudeの提案の文章にも、Factoryが書く他の文章と
+  // 同じスペースの規則を適用する。
   return `${normalizeJapaneseText(withUrl)}\n\nこのIssueはPR #${String(prNumber)}のレビュー指摘から起票されました`;
 }
 
-/** Issue body for a proposal raised by an audit report (工程5): no PR to
- * link, the provenance line names the audited period instead. */
+/**
+ * 監査レポートから出た提案のIssueの本文を作る。
+ * 結び付けるPRが無いので、出どころの行には監査した期間を書く。
+ */
 export function buildAuditProposalBody(
   bodyTemplate: string,
   periodLabel: string,
@@ -2119,15 +2122,19 @@ export function buildAuditProposalBody(
   return `${normalizeJapaneseText(bodyTemplate)}\n\nこのIssueは監査レポート(${periodLabel})から起票されました`;
 }
 
-/** The Issue title as created on GitHub: Claude's proposal title with the
- * ASCII/Japanese spacing rule applied. */
+/**
+ * GitHubに作るIssueのタイトルを返す。
+ * Claudeの提案のタイトルに、英字と日本語の間のスペースの規則を適用する。
+ */
 export function buildIssueProposalTitle(title: string): string {
   return normalizeJapaneseText(title.trim());
 }
 
-/** Renders the thread reply issue_proposal_apply.ts posts on approval —
- * the caller appends the `<!-- factory:pr_fix:<id> -->` marker via
- * github.ts's withMarker, same as renderFixReply's callers. */
+/**
+ * `issue_proposal_apply.ts`が承認時に投稿する、スレッドへの返信を描画する。
+ * `<!-- factory:pr_fix:<id> -->`の印は、`renderFixReply`の呼び出し側と同じく、
+ * 呼び出し側が`github.ts`の`withMarker`で足す。
+ */
 export function renderIssueProposalApprovedReply(issueNumber: number): string {
   return [
     ROLE_TAGS.pr_fix,
@@ -2137,9 +2144,11 @@ export function renderIssueProposalApprovedReply(issueNumber: number): string {
   ].join("\n");
 }
 
-/** Renders the thread reply issue_proposal_apply.ts posts on rejection —
- * same marker convention as renderIssueProposalApprovedReply. `reason` is
- * the human's own free text, passed through `normalizeJapaneseText`. */
+/**
+ * `issue_proposal_apply.ts`が却下時に投稿する、スレッドへの返信を描画する。
+ * 印の扱いは`renderIssueProposalApprovedReply`と同じ。
+ * `reason`は人が書いた自由文で、`normalizeJapaneseText`を通す。
+ */
 export function renderIssueProposalRejectedReply(reason: string): string {
   return [
     ROLE_TAGS.pr_fix,
@@ -2150,28 +2159,34 @@ export function renderIssueProposalRejectedReply(reason: string): string {
   ].join("\n");
 }
 
-// team-lead fix round, [MUST] #2: builder/parser pair for the
-// `<!-- factory:issue_proposal:<id> -->` marker issue_proposal_apply.ts
-// embeds in a created Issue's body, so a retried approve decision can find
-// (and reuse) the Issue it already created via github.ts's
-// `findIssueByMarker` instead of creating a duplicate.
+/**
+ * `issue_proposal_apply.ts`が作ったIssueの本文に埋める
+ * `<!-- factory:issue_proposal:<id> -->`の印の種別。
+ * 下の作成と判定の関数を対で使い、承認の決定を再試行したときに、
+ * `github.ts`の`findIssueByMarker`で作成済みのIssueを見つけて再利用し、
+ * 重複して作らないようにする。
+ */
 const ISSUE_PROPOSAL_MARKER_KIND = "issue_proposal";
 
-/** The inner marker phrase (no `<!-- -->` comment syntax) — passed to
- * `findIssueByMarker`'s quoted GitHub search, since the comment syntax's
- * `<`/`-`/`>` characters are noise to GitHub's search tokenizer. */
+/**
+ * 印の中身の語句(`<!-- -->`のコメント構文を除いたもの)を返す。
+ * `findIssueByMarker`の引用符付きのGitHub検索に渡す。
+ * コメント構文の`<`、`-`、`>`は、GitHubの検索の字句解析では雑音になるため。
+ */
 export function issueProposalMarkerSearchTerm(proposalId: number): string {
   return `factory:${ISSUE_PROPOSAL_MARKER_KIND}:${String(proposalId)}`;
 }
 
-/** The full `<!-- factory:issue_proposal:<id> -->` marker text embedded in a
- * created Issue's body. */
+/**
+ * 作ったIssueの本文に埋める、`<!-- factory:issue_proposal:<id> -->`の印の全文を返す。
+ */
 export function issueProposalMarkerText(proposalId: number): string {
   return `<!-- ${issueProposalMarkerSearchTerm(proposalId)} -->`;
 }
 
-/** Appends `issueProposalMarkerText`'s marker to a created Issue's body
- * (builder). */
+/**
+ * 作ったIssueの本文の末尾に、`issueProposalMarkerText`の印を足す。
+ */
 export function appendIssueProposalMarker(
   body: string,
   proposalId: number,
@@ -2179,11 +2194,12 @@ export function appendIssueProposalMarker(
   return `${body}\n\n${issueProposalMarkerText(proposalId)}`;
 }
 
-/** Whether `body` contains the exact marker for `proposalId` (parser) — used
- * to confirm a `findIssueByMarker` search hit before trusting it, since a
- * quoted GitHub search phrase is a word/substring match, not an exact
- * comparison (e.g. it could in principle also match a longer id containing
- * this one as a prefix). */
+/**
+ * `body`が`proposalId`の印をそのまま含むかを返す。
+ * `findIssueByMarker`の検索結果を信じる前の確認に使う。
+ * 引用符付きのGitHub検索の語句は、完全一致ではなく単語や部分文字列での一致なので、
+ * 理屈の上では、このidを先頭に含むもっと長いidにも一致しうるため。
+ */
 export function hasIssueProposalMarker(
   body: string,
   proposalId: number,
@@ -2194,11 +2210,9 @@ export function hasIssueProposalMarker(
 export type IssueProposalReplyTarget = "inline" | "issue_comment";
 
 /**
- * Which GitHub reply mechanism issue_proposal_apply.ts should use for a
- * proposal's decision reply (team-lead fix round, [MUST] #4) — deterministic
- * from the row's own persisted `is_inline` flag, replacing a former
- * try-`replyReviewComment`-then-fallback-to-`postIssueComment` guess (the
- * row didn't used to record which kind its `review_comment_id` was).
+ * `issue_proposal_apply.ts`が提案の判断を返信するときに使う、GitHubの返信の仕組みを返す。
+ * 行に保存した`is_inline`のフラグだけから決まる。
+ * `replyReviewComment`を試して失敗したら`postIssueComment`に切り替える推測はしない。
  */
 export function chooseIssueProposalReplyTarget(
   isInline: boolean,
@@ -2214,46 +2228,44 @@ export type IssueProposalDecisionRow = {
 export type IssueProposalDecisionRequest = {
   readonly decision: "approve" | "reject";
   readonly reason: string;
-  /** Not read by `classifyIssueProposalDecision` below (`IssueProposalDecisionRow`
-   * carries no matching field) — a `repost_only` retry's own
-   * `with_factory_label` never changes the classification. It also never
-   * changes which label choice actually applies: issue_proposal_apply.ts's
-   * approve path re-reads the row's already-stored `with_factory_label`
-   * (the first approval's choice) when it resumes Issue creation on a
-   * retry, not this field's value from the retry request. The stored choice
-   * always wins. */
+  /**
+   * 下の`classifyIssueProposalDecision`は読まない(`IssueProposalDecisionRow`に
+   * 対応するフィールドが無い)。
+   * `repost_only`の再試行の`with_factory_label`は、分類を変えない。
+   * 実際に適用するラベルの選択も変えない。`issue_proposal_apply.ts`の承認の経路は、
+   * 再試行でIssueの作成を再開するとき、再試行のリクエストのこの値ではなく、
+   * 行に保存済みの`with_factory_label`(最初の承認の選択)を読み直す。
+   * 保存済みの選択が常に優先される。
+   */
   readonly with_factory_label: boolean;
 };
 
 export type IssueProposalClassification =
   | { readonly action: "proceed" }
   | { readonly action: "repost_only" }
-  /** The same decision was already recorded *and* every side effect
-   * completed (the Issue exists): a harmless redispatch, to be treated as
-   * a silent no_op rather than a failure. */
+  /**
+   * 同じ判断がすでに記録され、かつすべての副作用が完了している(Issueが存在する)。
+   * 無害な再送なので、呼び出し側は失敗にせず、何もしないで終える。
+   */
   | { readonly action: "already_done"; readonly created_issue_number: number }
   | { readonly action: "refuse"; readonly message: string };
 
 /**
- * Classifies what issue_proposal_apply.ts's main() should do about a
- * proposal row it just read, before touching the DB or GitHub at all
- * (team-lead fix round, [MUST] #2 "Approve path must be idempotent" — pure,
- * for testing, mirrors approval_decide.ts's `classifyExistingApproval`):
+ * `issue_proposal_apply.ts`の`main()`が、読んだばかりの提案の行に対して何をすべきかを、
+ * DBやGitHubに触れる前に分類する。承認の経路を冪等にするための判断で、
+ * テストできるよう純粋関数にしている
+ * (`approval_decide.ts`の`classifyExistingApproval`と同じ形)。
  *
- *   - `"proceed"`: the row is still `pending` — this is a fresh decision.
- *   - `"repost_only"`: the row already carries the *same* decision as
- *     `requested`, but its side effects may not have completed (an approve
- *     whose Issue creation crashed before `created_issue_number` was
- *     written back) — main() must not attempt to record the decision again
- *     (`decideIssueProposal`'s own `WHERE status = 'pending'` guard would
- *     make that call a no-op anyway), but should still finish the rest of
- *     the flow (create-or-reuse the Issue, reply, resolve) idempotently.
- *   - `"refuse"`: either the row already carries a *different* decision than
- *     `requested` (a genuine conflict), or it carries the same decision and
- *     its side effects already completed (an approve whose Issue was
- *     already created) — nothing left to do, and doing it again would
- *     create a duplicate Issue/reply. `message` is a ready-to-throw Japanese
- *     sentence.
+ *   - `"proceed"`: 行がまだ`pending`で、新しい判断である。
+ *   - `"repost_only"`: 行がすでに`requested`と同じ判断を持つが、副作用が完了していない
+ *     かもしれない(Issueの作成が`created_issue_number`を書き戻す前に落ちた承認など)。
+ *     `main()`は判断を再び記録しようとしてはならない(`decideIssueProposal`の
+ *     `WHERE status = 'pending'`の条件で、どのみち何も起きない)。
+ *     ただし残りの処理(Issueの作成か再利用、返信、解決)は冪等に最後まで行う。
+ *   - `"already_done"`: 行が同じ承認を持ち、Issueもすでに作られている。
+ *     もうすることは無く、もう一度行うとIssueや返信が重複する。
+ *   - `"refuse"`: 行がすでに`requested`と異なる判断を持つ(本当の衝突)。
+ *     `message`はそのまま例外に使える日本語の文。
  */
 export function classifyIssueProposalDecision(
   row: IssueProposalDecisionRow,
@@ -2289,16 +2301,12 @@ export type IssueProposalStatusDecision =
     };
 
 /**
- * Decides what issue_proposal_apply.ts should do to the work item's status
- * after recording one decision (user decision, 2026-09-26; 2026-09-27 PR
- * label cleanup: this used to also swap a PR state label off
- * `needs_human_label` — there is no state label any more, so this is now
- * purely a status decision): keep the current `needs_human` status while any
- * proposal for this work item is still pending, otherwise swap to
- * `rereview_requested` (a commit was pushed this round —
- * `factory.fix_rounds.commit_shas` non-empty) or `reviewed` (nothing was
- * pushed — the round that produced the proposal was itself a
- * `nothing_to_commit` round).
+ * `issue_proposal_apply.ts`が判断を1件記録した後に、作業項目の状態をどうするかを決める。
+ * この作業項目の提案がまだ1件でも保留中なら、現在の`needs_human`のままにする。
+ * そうでなければ、`rereview_requested`(このラウンドでコミットをpushした。
+ * `factory.fix_rounds.commit_shas`が空でない)か、`reviewed`(何もpushしていない。
+ * 提案を出したラウンド自体が`nothing_to_commit`のラウンドだった)に移す。
+ * PRには状態ラベルを付けないので、作業項目の状態だけを決める。
  */
 export function decidePostProposalStatus(
   remainingPendingCount: number,
@@ -2321,9 +2329,11 @@ export type PostProposalTransition =
       readonly toStatus: WorkItemStatus;
     };
 
-/** Kind-aware successor of decidePostProposalStatus: an audit waits in
- * `awaiting_approval` and ends in `audited`; a pr_fix waits in
- * `needs_human` and ends in rereview_requested / reviewed. */
+/**
+ * `decidePostProposalStatus`と同じ判断に、作業項目の種類ごとの待ち状態と終わりの状態を加える。
+ * auditは`awaiting_approval`で待って`audited`で終わる。
+ * pr_fixは`needs_human`で待って`rereview_requested`か`reviewed`で終わる。
+ */
 export function decidePostProposalTransition(
   kind: WorkItemKind,
   remainingPendingCount: number,
@@ -2347,38 +2357,40 @@ export function decidePostProposalTransition(
 }
 
 // ---------------------------------------------------------------------------
-// describeReason: display-only Japanese translation of a `reason` /
-// `status_reason` string (team-lead follow-up). The `reason` recorded via
-// updateStatusIfCurrent / addNotice must stay in its original English form —
-// other tooling keys off it, and factory.notices/status_reason are meant to
-// stay machine-comparable — but the *same* text shown in a GitHub comment or
-// a Discord notification should read in Japanese like every other
-// human-facing string the factory posts. `describeReason` maps every known
-// guard/outcome reason string produced across pr_workflow_support.ts and the
-// pr_fix_*/pipeline_*/pr_review_generate.ts step scripts to a Japanese
-// sentence for *that display only*; callers keep passing the untranslated
-// value to updateStatusIfCurrent/addNotice. A reason this function doesn't
-// recognize — including Claude's own free-text `summary`/`blocked_reason` —
-// is returned unchanged rather than silently dropped or garbled.
+// describeReason: `reason` / `status_reason`の文字列を、表示のためだけに日本語に訳す。
+// `updateStatusIfCurrent` / `addNotice`で記録する`reason`は、
+// 元の英語の形のまま保つ必要がある。
+// 他のツールがその値を手がかりにしており、`factory.notices`と`status_reason`は
+// 機械的に比べられる状態を保つためのものだから。
+// 一方で、同じ文をGitHubのコメントやDiscordの通知に出すときは、Factoryが投稿する
+// 人向けの他の文字列と同じく日本語で読めるようにする。
+// `describeReason`は、`pr_workflow_support.ts`と、pr_fix_*、pipeline_*、
+// `pr_review_generate.ts`の各ステップが出す既知の関門と結果の理由の文字列を、
+// その表示のためだけに日本語の文へ対応させる。呼び出し側は、訳していない値を
+// 引き続き`updateStatusIfCurrent` / `addNotice`に渡す。
+// この関数が知らない理由(Claude自身の自由文の`summary`や`blocked_reason`を含む)は、
+// 黙って捨てたり崩したりせず、そのまま返す。
 // ---------------------------------------------------------------------------
 
 type ReasonRule = {
   readonly pattern: RegExp;
   readonly describe: (match: RegExpMatchArray) => string;
-  // team-lead decision (2026-09-26): every reason a needs_human
-  // notification carries must also tell the reader what to do about it —
-  // `nextActionFor` below picks this per rule, the same way `describeReason`
-  // picks `describe`. A concrete, one-sentence Japanese instruction; the
-  // generic `GENERIC_NEXT_ACTION` fallback covers a reason with no specific
-  // action of its own (e.g. a bare safety-guard failure) or one this table
-  // doesn't recognize at all.
+  /**
+   * `needs_human`の通知が伝える理由には、読み手が何をすればよいかも必ず添える。
+   * `describeReason`が`describe`を選ぶのと同じく、
+   * 下の`nextActionFor`が規則ごとにこれを選ぶ。
+   * 具体的な日本語の1文の指示にする。
+   * 固有の対応が無い理由(安全のための関門の失敗だけのものなど)と、
+   * この表が知らない理由には、汎用の`GENERIC_NEXT_ACTION`を使う。
+   */
   readonly nextAction: (match: RegExpMatchArray) => string;
 };
 
-// team-lead decision (2026-09-26): pointed at the Console's own
-// Failures/Notices tabs (factory_console__raw_app) — the one place every
-// needs_human work item / notice is listed regardless of cause, so it's a
-// safe default when no more specific action applies.
+/**
+ * 汎用の次の対応。ConsoleのFailuresとNoticesのタブ(`factory_console__raw_app`)を案内する。
+ * 原因に関係なく、`needs_human`の作業項目とnoticeがすべて並ぶ唯一の場所なので、
+ * より具体的な対応が無いときの既定として安全である。
+ */
 const GENERIC_NEXT_ACTION =
   "ConsoleのFailures / Noticesタブで詳細を確認してください";
 
@@ -2398,7 +2410,7 @@ const ISSUE_PROPOSAL_NEXT_ACTION =
   "ConsoleのInboxで提案を承認または却下してください";
 
 const REASON_RULES: readonly ReasonRule[] = [
-  // pr_fix_prepare.ts's evaluatePrFixSafetyGuards / evaluateRepoAllowedGuard
+  // pr_fix_prepare.tsの`evaluatePrFixSafetyGuards` / `evaluateRepoAllowedGuard`
   {
     pattern: /^pull request is not open$/,
     describe: () => "PR がオープンではありません",
@@ -2428,13 +2440,13 @@ const REASON_RULES: readonly ReasonRule[] = [
     nextAction: () =>
       "factory_configのowners / repo_allowlistを見直してください",
   },
-  // pr_fix_prepare.ts's evaluateFixRoundGuard (round_exhausted)
+  // pr_fix_prepare.tsの`evaluateFixRoundGuard`(round_exhausted)
   {
     pattern: /^fix_round (\d+) exceeds max_fix_rounds (\d+)$/,
     describe: (m) => `fix_round ${m[1]} が max_fix_rounds ${m[2]} を超えました`,
     nextAction: () => "残りの指摘は人が対応するか、上限を見直してください",
   },
-  // pr_fix_collect.ts (no_feedback)
+  // pr_fix_collect.ts(no_feedback)
   {
     pattern:
       /^no actionable feedback since the last processed review\/comment$/,
@@ -2442,9 +2454,9 @@ const REASON_RULES: readonly ReasonRule[] = [
       "前回処理したレビュー・コメント以降、対応可能なフィードバックがありません",
     nextAction: () => FACTORY_FIX_RELABEL_ACTION,
   },
-  // pr_fix_verify.ts's detectForbiddenChanges / detectEscapingSymlinks /
-  // detectSymlinkChanges / evaluateDiffSizeGuard (forbidden paths /
-  // symlink_change / diff size)
+  // pr_fix_verify.tsの`detectForbiddenChanges` / `detectEscapingSymlinks` /
+  // `detectSymlinkChanges` / `evaluateDiffSizeGuard`
+  // (禁止パス、symlink_change、差分の大きさ)
   {
     pattern: /^forbidden path changed: (.+)$/,
     describe: (m) => `変更が禁止されたパスです: ${m[1]}`,
@@ -2489,8 +2501,8 @@ const REASON_RULES: readonly ReasonRule[] = [
     describe: (m) => `diff の総行数 ${m[1]} が ${m[2]} ${m[3]} を超えました`,
     nextAction: () => DIFF_SIZE_NEXT_ACTION,
   },
-  // pr_fix_apply.ts / pr_fix_verify.ts / pipeline_generate.ts /
-  // pr_review_generate.ts's daily-budget guard (budget exceeded)
+  // pr_fix_apply.ts、pr_fix_verify.ts、pipeline_generate.ts、
+  // pr_review_generate.tsの日次予算の検査(予算超過)
   {
     pattern: /^daily budget exceeded \(\$([\d.]+) >= \$([\d.]+)\)$/,
     describe: (m) =>
@@ -2502,17 +2514,17 @@ const REASON_RULES: readonly ReasonRule[] = [
     describe: () => "1 日あたりの Claude 利用予算の上限に達しました",
     nextAction: () => DAILY_BUDGET_NEXT_ACTION,
   },
-  // pr_fix_finish.ts's push / retry outcomes (head_changed, etc.)
+  // pr_fix_finish.tsのpushと再試行の結果(head_changedなど)
   {
     pattern: /^PR head moved to (\S+) while the fix was in progress$/,
     describe: (m) => `修正の実行中に PR の head が ${m[1]} に変わりました`,
     nextAction: () =>
       "最新のheadを確認し、必要なら`factory:fix`を付け直してください",
   },
-  // The implement flow's push (工程3 design §3): a fine-grained PAT without
-  // the `workflow` scope cannot push a commit touching .github/workflows/**.
-  // GitHub's rejection text sits inside git's stderr, so this pattern is
-  // deliberately unanchored (the reason carries the whole push error).
+  // implementフローのpush。`workflow`スコープの無いfine-grained PATでは、
+  // `.github/workflows/**`に触れるコミットをpushできない。
+  // GitHubの拒否の文はgitのstderrの中にあり、理由にはpushのエラー全体が入るので、
+  // このパターンは意図して先頭と末尾に固定しない。
   {
     pattern:
       /refusing to allow a Personal Access Token to create or update workflow/,
@@ -2538,13 +2550,11 @@ const REASON_RULES: readonly ReasonRule[] = [
       "完了と報告されましたが、コミットメッセージがありませんでした",
     nextAction: () => "もう一度`factory:fix`を付け直してください",
   },
-  // team-lead fix: pr_fix_finish.ts's nothing_to_commit branch now also
-  // posts the queued replies, so its Discord reason records both halves
-  // (describeReason recurses over a "; "-joined list — see the module note
-  // above — so each half is matched and translated independently here).
-  // nextActionFor (below) only ever needs the first segment's action, since
-  // "no changes to commit" always precedes "replies posted" in that joined
-  // reason — both share the same next action for that reason.
+  // pr_fix_finish.tsの`nothing_to_commit`の分岐は溜めた返信も投稿するので、
+  // Discordの理由には両方を記録する。`describeReason`は`"; "`でつないだ一覧を
+  // 項目ごとに再帰的に訳すので、ここでは各項目に別々に一致させる。
+  // その理由では"no changes to commit"が常に"replies posted"より前にあり、
+  // 両者の次の対応も同じなので、`nextActionFor`は最初の項目の対応だけを使えばよい。
   {
     pattern: /^no changes to commit$/,
     describe: () => "コミットする変更がありませんでした",
@@ -2555,10 +2565,9 @@ const REASON_RULES: readonly ReasonRule[] = [
     describe: () => "返信は投稿済みです",
     nextAction: () => NOTHING_TO_COMMIT_NEXT_ACTION,
   },
-  // pr_fix_finish.ts's buildIssueProposalReason (user decision, 2026-09-26):
-  // already Japanese, so describe() returns it unchanged — this rule exists
-  // so nextActionFor still points at the Console Inbox instead of the
-  // generic fallback.
+  // pr_fix_finish.tsの`buildIssueProposalReason`。すでに日本語なので、
+  // `describe()`はそのまま返す。この規則は、`nextActionFor`が汎用の既定ではなく
+  // ConsoleのInboxを案内するためにある。
   {
     pattern: /^Issue化の提案が(\d+)件あります$/,
     describe: (m) => `Issue化の提案が${m[1]}件あります`,
@@ -2574,14 +2583,14 @@ const REASON_RULES: readonly ReasonRule[] = [
     describe: () => "安全性ガードに失敗しました",
     nextAction: () => GENERIC_NEXT_ACTION,
   },
-  // pr_fix_finish.ts's evaluateRerouteGuard (no parent issue_number)
+  // pr_fix_finish.tsの`evaluateRerouteGuard`(親に`issue_number`が無い)
   {
     pattern: /^parent work item has no issue_number$/,
     describe: () => "親の work item に issue_number がありません",
     nextAction: () => "work itemの状態をConsoleで確認してください",
   },
-  // requirements_apply.ts's rejected/needs_human outcome and
-  // poll_issues.ts's expiry sweep
+  // requirements_apply.tsの差し戻し・needs_humanの結果と、
+  // poll_issues.tsの期限切れの掃除
   {
     pattern: /^rejected (\d+) times$/,
     describe: (m) => `${m[1]} 回連続で差し戻されました`,
@@ -2593,13 +2602,12 @@ const REASON_RULES: readonly ReasonRule[] = [
     describe: () => "承認がタイムアウトしました",
     nextAction: () => "Inboxで承認または却下してください",
   },
-  // pr_fix_finish.ts's post-push reviewer-request outcome (reviewerNote) —
-  // team-lead decision (2026-09-26): none of these three reach a
-  // needs_human notification anymore (skipped_empty / no candidates post no
-  // notification at all; failed folds into the pr_fixed event's own `note`
-  // field instead — see pr_fix_finish.ts), so their nextAction is
-  // exercised only through describeReason/nextActionFor directly (e.g. in
-  // tests), not through a live Discord notification.
+  // pr_fix_finish.tsのpush後のレビュアー依頼の結果(`reviewerNote`)。
+  // この3つはどれも`needs_human`の通知にはもう届かない。
+  // skipped_emptyと候補なしは通知を出さず、失敗は`pr_fixed`のイベントの`note`の
+  // フィールドに含める(`pr_fix_finish.ts`を参照)。
+  // そのためこれらの`nextAction`は、実際のDiscordの通知ではなく、
+  // `describeReason` / `nextActionFor`を直接呼ぶ経路(テストなど)でだけ使われる。
   {
     pattern:
       /^no reviewers to request \(default_reviewers empty and no fallback reviewer authors\)$/,
@@ -2628,11 +2636,11 @@ const REASON_RULES: readonly ReasonRule[] = [
       `再レビューをリクエストできませんでした: ${describeReason(m[1] ?? "")}`,
     nextAction: (m) => nextActionFor(m[1] ?? ""),
   },
-  // 工程3 implement flow (lib/implement_loop.ts's loop exits,
-  // lib/implement_finish_support.ts, lib/implement_launch_support.ts,
-  // steps/implement_*.ts). Kept after every existing rule so the unanchored
-  // workflow-scope rule above still wins for a push failure wrapped in
-  // "implement finish failed: ...".
+  // implementフロー(`lib/implement_loop.ts`のループの終了、
+  // `lib/implement_finish_support.ts`、`lib/implement_launch_support.ts`、
+  // `steps/implement_*.ts`)。既存の規則のすべての後に置く。
+  // "implement finish failed: ..."に包まれたpushの失敗でも、上の先頭と末尾を固定しない
+  // `workflow`スコープの規則が先に一致するようにするため。
   {
     pattern: /^implement checks still failing after (\d+) rounds$/,
     describe: (m) => `${m[1]}ラウンド修正しても検査に通りませんでした`,
@@ -2740,20 +2748,11 @@ const REASON_RULES: readonly ReasonRule[] = [
 ];
 
 /**
- * Maps one factory-authored `reason`/`status_reason` string to Japanese for
- * display in a GitHub comment or Discord notification (pure, for testing) —
- * see the module note above. Recurses over a `"; "`-joined list
- * (pr_fix_verify.ts's `ForbiddenChangeResult.reasons.join("; ")`) so each
- * entry is translated independently; an entry (or the whole string) this
- * function doesn't recognize is returned unchanged.
- */
-/**
- * The result fields for an early exit (skip / guard_blocked /
- * round_exhausted). The PR coordinates are always taken from the work
- * item: pr_fix_finish.ts needs owner / repo / pr_number to address the
- * Discord notification even when no worktree was prepared (a real run once
- * left a notification with an empty "リポジトリ" field because these were
- * blank).
+ * 早期終了(skip、guard_blocked、round_exhausted)のときの結果のフィールドを返す。
+ * PRの位置(owner、repo、pr_number)は常に作業項目から取る。
+ * `pr_fix_finish.ts`は、worktreeを用意しなかったときでも、Discordの通知の宛先に
+ * owner、repo、pr_numberを使うため。これらが空だったせいで、実際の実行で
+ * 「リポジトリ」の欄が空の通知が出たことがある。
  */
 export function earlyExitBase(
   workItem: Pick<
@@ -2792,6 +2791,13 @@ export function earlyExitBase(
   };
 }
 
+/**
+ * Factoryが書いた`reason` / `status_reason`の文字列を1つ、GitHubのコメントや
+ * Discordの通知に表示するために日本語に対応させる。テストできるよう純粋関数にしている。
+ * 記録する`reason`は英語のまま保ち、表示するときだけ訳す。訳した値を記録に渡してはならない。
+ * `"; "`でつないだ一覧(`pr_fix_verify.ts`の`ForbiddenChangeResult.reasons.join("; ")`)は
+ * 項目ごとに再帰的に訳す。知らない項目(または文字列全体)はそのまま返す。
+ */
 export function describeReason(reason: string): string {
   if (reason.includes("; ")) {
     return reason.split("; ").map(describeReason).join("; ");
@@ -2799,8 +2805,8 @@ export function describeReason(reason: string): string {
   for (const rule of REASON_RULES) {
     const match = reason.match(rule.pattern);
     if (match !== null) {
-      // Translations are user-facing text, so the same ASCII/Japanese
-      // spacing rule as posted comments applies to them.
+      // 訳文は利用者に見せる文章なので、投稿するコメントと同じ
+      // 英字と日本語の間のスペースの規則を適用する。
       return normalizeJapaneseText(rule.describe(match));
     }
   }
@@ -2808,17 +2814,15 @@ export function describeReason(reason: string): string {
 }
 
 /**
- * Picks the concrete "次の操作" instruction for a `reason`/`status_reason`
- * string (team-lead decision, 2026-09-26) — used by every needs_human
- * NotifyEvent emitter (pr_fix_finish.ts, pr_review_generate.ts,
- * requirements_apply.ts, pipeline_generate.ts, poll_issues.ts's expiry
- * sweep) alongside `describeReason`.
- * Unlike `describeReason`, this does not translate/join every "; "-joined
- * segment — it returns the *first* segment's matching rule's action (the
- * segment order in every producer here places the primary, actionable
- * reason first; see the module note on the `"no changes to commit; replies
- * posted"` pair above), falling back to `GENERIC_NEXT_ACTION` when no
- * segment matches any rule.
+ * `reason` / `status_reason`の文字列に対する、具体的な「次の操作」の指示を選ぶ。
+ * `needs_human`の`NotifyEvent`を出すすべての箇所(`pr_fix_finish.ts`、
+ * `pr_review_generate.ts`、`requirements_apply.ts`、`pipeline_generate.ts`、
+ * `poll_issues.ts`の期限切れの掃除)が、`describeReason`と併せて使う。
+ * `describeReason`と違い、`"; "`でつないだ各項目を訳してつなぐことはせず、
+ * 規則に一致する最初の項目の対応を返す。ここで理由を作る箇所はどれも、
+ * 主で対応が必要な理由を先頭に置いている(上の`"no changes to commit; replies posted"`の
+ * 対についてのコメントを参照)。
+ * どの項目もどの規則にも一致しなければ`GENERIC_NEXT_ACTION`を返す。
  */
 export function nextActionFor(reason: string): string {
   const segments = reason.includes("; ") ? reason.split("; ") : [reason];
@@ -2834,7 +2838,7 @@ export function nextActionFor(reason: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// I/O: git helpers not exposed by workspace.ts
+// I/O: `workspace.ts`が公開していないgitの補助
 // ---------------------------------------------------------------------------
 
 function gitHardeningArgv(extra: readonly string[]): string[] {
@@ -2867,8 +2871,10 @@ export type ReadFileFn = (path: string) => Promise<string>;
 
 const defaultReadTextFile: ReadFileFn = (path) => Bun.file(path).text();
 
-/** Reads a worktree file directly (not via git), returning `null` if it
- * doesn't exist (e.g. Claude deleted it) rather than throwing. */
+/**
+ * worktreeのファイルを(gitを通さず)直接読む。
+ * ファイルが無ければ(Claudeが削除したなど)、例外にせず`null`を返す。
+ */
 export async function readWorktreeFileIfExists(
   path: string,
   readFile: ReadFileFn = defaultReadTextFile,
@@ -2880,10 +2886,12 @@ export async function readWorktreeFileIfExists(
   }
 }
 
-/** Whether any changed file named exactly `package.json` (at any depth)
- * has a different `scripts` field in the worktree than at `baseRef` —
- * shared by pr_fix_verify (`"HEAD"`) and implement_verify (`base_sha`).
- * Stops at the first changed one. */
+/**
+ * 変更されたファイルのうち、名前がちょうど`package.json`のもの(深さは問わない)で、
+ * worktreeと`baseRef`の`scripts`が異なるものがあるかを返す。
+ * pr_fix_verify(`"HEAD"`)とimplement_verify(`base_sha`)が共有する。
+ * 最初に見つかった時点で止める。
+ */
 export async function anyPackageJsonScriptsChanged(
   run: CommandRunner,
   worktreeDir: string,
@@ -2902,9 +2910,3 @@ export async function anyPackageJsonScriptsChanged(
   }
   return false;
 }
-
-// team-lead fix round 2 item a: getBranchProtected / postIssueComment /
-// setHeadSha / fetchPrHeadRef / readGitShowFile were promoted verbatim into
-// lib/github.ts, lib/db.ts, and lib/workspace.ts (same signatures) — this
-// file's local copies (and their now-dead gh-api-response-parsing support
-// code) are removed; callers import the lib versions instead.

@@ -1,6 +1,6 @@
-// Tests for f/factory/steps/pr_workflow_support.ts's extractLinkedIssueNumbers
-// (team-lead: link a human-authored PR to its approved requirements via a
-// GitHub closing-keyword reference in the PR body — used by poll_prs.ts).
+// `pr_workflow_support.ts`の`extractLinkedIssueNumbers`のテスト。
+// `poll_prs.ts`は、PR本文にあるGitHubのクローズキーワードでの参照を手がかりに、
+// 人が作ったPRを承認済みの要件に結びつける。
 
 import { describe, expect, test } from "bun:test";
 import { extractLinkedIssueNumbers } from "../../f/factory/steps/pr_workflow_support.ts";

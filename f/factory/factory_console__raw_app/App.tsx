@@ -23,10 +23,12 @@ type Theme = "light" | "dark";
 
 const THEME_STORAGE_KEY = "factory-console.theme";
 
-// index.tsx applies the initial theme to <html> synchronously before the
-// first paint (to avoid a flash of the wrong theme). This reads that same
-// attribute back as the source of truth; "light" is only a defensive
-// fallback for the unlikely case the attribute is missing.
+/**
+ * `<html>`の`data-theme`から初期テーマを返す。
+ * `index.tsx`が最初の描画の前に同期的にテーマを適用している(違うテーマが
+ * 一瞬見えるのを防ぐため)ので、その属性を正とする。属性が無いという
+ * まれな場合に備え、`"light"`を返す。
+ */
 function getInitialTheme(): Theme {
   const current = document.documentElement.getAttribute("data-theme");
   return current === "dark" ? "dark" : "light";
@@ -36,9 +38,8 @@ const App = (): React.ReactElement => {
   const [activeTab, setActiveTab] = useState<TabId>("inbox");
   const [theme, setTheme] = useState<Theme>(() => getInitialTheme());
   const [refreshKey, setRefreshKey] = useState(0);
-  // The work_item_id to hand off from the Inbox tab's 「レポートを開く」
-  // button (an audit-origin issue_proposal) to the 監査 tab — see
-  // AuditTab.tsx's `initialWorkItemId` prop.
+  // 承認タブの「レポートを開く」ボタン(監査由来のissue_proposal)から
+  // 監査タブへ渡す`work_item_id`(`AuditTab.tsx`の`initialWorkItemId`を参照)。
   const [auditTarget, setAuditTarget] = useState<number | null>(null);
 
   useEffect(() => {
@@ -46,7 +47,7 @@ const App = (): React.ReactElement => {
     try {
       window.localStorage.setItem(THEME_STORAGE_KEY, theme);
     } catch {
-      // localStorage が使えない環境でも表示上のテーマ切替自体は継続する。
+      // `localStorage`が使えない環境でも、表示上のテーマの切り替えは続ける。
     }
   }, [theme]);
 

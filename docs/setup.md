@@ -4,7 +4,7 @@
 
 - ホストに必要なのはdocker(DesktopまたはOrbStack)とmiseのみ。それ以外(node, bun, gh, windmill-cli)は`mise run setup`(内部で`mise install`)で入る。
 - 初回は`mise trust`でこのリポジトリの`mise.toml`を信頼する。
-- 設定は`.env`系ファイルを使わない。`infra/.env`や`infra/secrets.env`は存在しない。非秘密の設定は`mise.toml`の`[env]`に、秘密はgitignore済みの`mise.local.toml`に置く。
+- 設定に`.env`系ファイルは使わない。`infra/.env`や`infra/secrets.env`は存在しない。非秘密の設定は`mise.toml`の`[env]`に、秘密はgitignore済みの`mise.local.toml`に置く。
 
 ## 資格情報の取得
 

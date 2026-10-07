@@ -1,14 +1,11 @@
-// Machine validation for a filled-in requirements document (see
-// .claude/skills/factory-requirements/template.md and SKILL.md). Every
-// function here is a pure function over markdown text — no I/O, no
-// Windmill/GitHub dependency — so headless Claude's output can be checked
-// the same way in a unit test as it is wired into the pipeline
-// (steps/pipeline_generate.ts's post-generation validation; see
-// docs/architecture.md, 工程2).
+// headless Claudeが書いた要件定義書(`.claude/skills/factory-requirements/`の
+// `template.md`と`SKILL.md`)を機械的に検査する。
+// すべてI/OやWindmill・GitHubに依存しない純粋関数のため、パイプライン
+// (工程2で生成後に`steps/pipeline_generate.ts`が行う検査)と同じ検査を
+// 単体テストでも行える。
 //
-// Each `check*` function returns a list of Japanese-language issue strings
-// (empty when there's nothing to report); `validateRequirementsDoc`
-// aggregates all of them into a single ok/issues result.
+// 各`check*`関数は日本語の問題点の一覧を返す(問題が無ければ空)。
+// `validateRequirementsDoc`はそれらをまとめて1つの結果にする。
 
 import {
   DIAGRAM_NAME_PATTERN,
@@ -22,17 +19,17 @@ import {
 } from "./requirements_template.ts";
 
 // ---------------------------------------------------------------------------
-// Headings
+// 見出し
 // ---------------------------------------------------------------------------
 
 const H2_HEADING_PATTERN = /^##\s+(.*\S)\s*$/;
 
 /**
- * Extracts every `##` (exactly two, not `###`+) heading's text, in the
- * order they appear in `markdown`. Code fences are not special-cased: the
- * document is never expected to contain one (see `checkForbiddenSyntax`),
- * so a `##`-looking line inside a fence would itself be a bug to surface,
- * not something to silently skip.
+ * `markdown`の`##`見出し(`#`がちょうど2つで、`###`以上は含まない)の文字列を、
+ * 現れる順にすべて返す。
+ * コードフェンスは特別扱いしない。文書にコードフェンスがあること自体を
+ * 想定しておらず(`checkForbiddenSyntax`を参照)、フェンス内の`##`に見える行は
+ * 黙って飛ばさず、問題として表に出すべきものだからである。
  */
 export function extractH2Headings(markdown: string): string[] {
   const headings: string[] = [];
@@ -46,9 +43,9 @@ export function extractH2Headings(markdown: string): string[] {
 }
 
 /**
- * Checks that `markdown`'s `##` headings are exactly `REQUIREMENTS_SECTIONS`,
- * in the same order — missing, extra, and out-of-order headings are each
- * reported distinctly.
+ * `markdown`の`##`見出しが、順序も含めて`REQUIREMENTS_SECTIONS`と
+ * 完全に一致するかを検査する。
+ * 見出しの欠落、余分な見出し、順序の違いをそれぞれ区別して報告する。
  */
 export function checkSections(markdown: string): string[] {
   const actual = extractH2Headings(markdown);
@@ -84,12 +81,13 @@ export function checkSections(markdown: string): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// Markdown table parsing (shared by checkRequirementIds / checkDiagramRefs)
+// Markdownの表の解析(`checkRequirementIds` / `checkDiagramRefs`で共有)
 // ---------------------------------------------------------------------------
 
-/** The lines under the `## <heading>` section (up to the next `##`), or
- * `""` when the heading is absent. Exported for implement_support.ts's
- * extractAcceptanceCriteria. */
+/**
+ * `## <heading>`の節の本文(次の`##`までの行)を返す。見出しが無ければ`""`を返す。
+ * `implement_support.ts`の`extractAcceptanceCriteria`も使うためexportしている。
+ */
 export function extractSectionBody(markdown: string, heading: string): string {
   const lines = markdown.split("\n");
   const startIndex = lines.findIndex(
@@ -112,8 +110,10 @@ function isTableSeparatorRow(cells: readonly string[]): boolean {
   return cells.every((cell) => /^:?-+:?$/.test(cell.trim()));
 }
 
-/** Parses every `| a | b |` table in `body`, returning only the data rows
- * (header and separator rows are dropped). Cell values are trimmed. */
+/**
+ * `body`の中の`| a | b |`形式の表を解析し、データ行だけを返す
+ * (見出し行と区切り行は落とす)。セルの値は前後の空白を除く。
+ */
 function extractTableRows(body: string): string[][] {
   const tableLines = body
     .split("\n")
@@ -129,13 +129,16 @@ function extractTableRows(body: string): string[][] {
 }
 
 // ---------------------------------------------------------------------------
-// Requirement / acceptance-criteria IDs
+// 要件と受入条件のID
 // ---------------------------------------------------------------------------
 
 type IdKind = keyof typeof REQUIREMENT_ID_PATTERNS;
 
-/** Validates one ID column (format, duplicates, no-gap numbering from 001)
- * and returns the well-formed, unique IDs found (in table order). */
+/**
+ * IDの列1つを検査し(形式、重複、001から欠番の無い連番)、
+ * 形式が正しく重複の無いIDを表の順に返す。
+ * 見つけた問題点は`issues`に追加する。
+ */
 function checkIdColumn(
   rows: readonly (readonly string[])[],
   kind: IdKind,
@@ -181,10 +184,10 @@ function checkIdColumn(
 }
 
 /**
- * Validates the FR / NFR / AC ID columns in 機能要件 / 非機能要件 / 受入条件:
- * format, uniqueness, no-gap numbering from 001, that every 受入条件's
- * 対象要件 points at an existing FR, and that every FR has at least one
- * 受入条件 referencing it.
+ * 機能要件・非機能要件・受入条件の各節にあるFR / NFR / ACのIDの列を検査する。
+ * 形式、重複の無さ、001から欠番の無い連番を確かめる。
+ * さらに、各受入条件の対象要件が存在するFRを指すことと、
+ * 各FRを参照する受入条件が1つ以上あることも確かめる。
  */
 export function checkRequirementIds(markdown: string): string[] {
   const issues: string[] = [];
@@ -231,23 +234,23 @@ export function checkRequirementIds(markdown: string): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// Forbidden syntax (AI writing habits the skill explicitly bans)
+// 禁止する記法(スキルが明示的に禁じるAI文章の癖)
 // ---------------------------------------------------------------------------
 
 const CODE_FENCE_PATTERN = /```/;
 const BOLD_PATTERN = /\*\*/;
 const EMOJI_PATTERN = /\p{Extended_Pictographic}/u;
-// Excludes markdown autolinks (`<https://...>` / `<http://...>`), which are
-// valid syntax, not a leftover HTML tag or unfilled `<...>` placeholder.
+// Markdownの自動リンク(`<https://...>` / `<http://...>`)は正しい記法であり、
+// 残ったHTMLタグや埋めていない`<...>`のプレースホルダではないため除く。
 const HTML_TAG_OR_PLACEHOLDER_PATTERN = /<(?!https?:\/\/)[^<>\n]+>/g;
 const ALERT_LINE_PATTERN = /^>\s*\[!([A-Za-z]+)\]/;
 const ALLOWED_ALERT_KINDS = new Set(["NOTE", "WARNING", "IMPORTANT"]);
 
 /**
- * Detects the AI writing habits the requirements skill explicitly forbids:
- * code fences, `**` bold, emoji, leftover HTML tags/unfilled `<...>`
- * placeholders, and alert callouts other than
- * `[!NOTE]` / `[!WARNING]` / `[!IMPORTANT]`.
+ * 要件定義のスキルが明示的に禁じるAI文章の癖を検出する。
+ * 対象は、コードフェンス、`**`の太字、絵文字、残ったHTMLタグや
+ * 埋めていない`<...>`のプレースホルダ、`[!NOTE]` / `[!WARNING]` /
+ * `[!IMPORTANT]`以外のアラートである。
  */
 export function checkForbiddenSyntax(markdown: string): string[] {
   const issues: string[] = [];
@@ -285,16 +288,16 @@ export function checkForbiddenSyntax(markdown: string): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// Quotes / alert callouts
+// 引用とアラート
 // ---------------------------------------------------------------------------
 
 const EMPTY_QUOTE_LINE_PATTERN = /^>\s*$/;
 const QUOTE_CONTENT_LINE_PATTERN = /^>\s*\S/;
 
 /**
- * Checks that block quotes carry actual content: no bare `>` line with
- * nothing after it, and every `> [!KIND]` alert heading is immediately
- * followed by a non-empty `>`-prefixed body line.
+ * 引用に中身があるかを検査する。
+ * 後ろに何も無い`>`だけの行が無いことと、`> [!KIND]`のアラートの見出しの
+ * 直後に、`>`で始まる空でない本文の行が続くことを確かめる。
  */
 export function checkQuotes(markdown: string): string[] {
   const issues: string[] = [];
@@ -324,7 +327,7 @@ export function checkQuotes(markdown: string): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// Length / paragraph density
+// 長さと段落の密度
 // ---------------------------------------------------------------------------
 
 function isProseLine(line: string): boolean {
@@ -339,7 +342,7 @@ function isProseLine(line: string): boolean {
   return true;
 }
 
-/** Groups `markdown`'s lines into blank-line-separated blocks. */
+/** `markdown`の行を、空行で区切られたブロックにまとめる。 */
 function splitIntoBlocks(markdown: string): string[][] {
   const blocks: string[][] = [];
   let current: string[] = [];
@@ -360,9 +363,8 @@ function splitIntoBlocks(markdown: string): string[][] {
 }
 
 /**
- * Checks per-line length, total document length, and per-paragraph
- * sentence count (`。`-delimited; tables/headings/quotes/lists/diagram
- * embeds are excluded from the paragraph check).
+ * 1行の長さ、文書全体の長さ、段落ごとの文の数(`。`で区切る)を検査する。
+ * 表・見出し・引用・リスト・図の埋め込みは段落の検査から除く。
  */
 export function checkLengths(markdown: string): string[] {
   const issues: string[] = [];
@@ -398,17 +400,16 @@ export function checkLengths(markdown: string): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// Diagram references
+// 図の参照
 // ---------------------------------------------------------------------------
 
 const DIAGRAM_FILE_NAME_PATTERN = /^(.+)\.drawio$/;
 
 /**
- * Checks that `markdown`'s `![name](name.drawio)` references and
- * `diagramFiles` (the `.drawio` files actually written alongside the
- * document) match up in both directions, that every diagram file name is
- * `[a-z0-9-]{1,64}`, and that the diagram count doesn't exceed
- * `MAX_DIAGRAMS`.
+ * `markdown`の`![name](name.drawio)`の参照と`diagramFiles`
+ * (文書と一緒に実際に書き出された`.drawio`ファイル)が、双方向に対応するかを検査する。
+ * あわせて、図のファイル名がすべて`[a-z0-9-]{1,64}`に従うことと、
+ * 図の数が`MAX_DIAGRAMS`を超えないことも確かめる。
  */
 export function checkDiagramRefs(
   markdown: string,
@@ -458,15 +459,14 @@ export function checkDiagramRefs(
 }
 
 // ---------------------------------------------------------------------------
-// Aggregate
+// 集約
 // ---------------------------------------------------------------------------
 
 export type RequirementsDocValidation =
   | { readonly ok: true }
   | { readonly ok: false; readonly issues: string[] };
 
-/** Runs every check and aggregates the results into a single ok/issues
- * verdict for a filled-in requirements document. */
+/** 書き終えた要件定義書にすべての検査をかけ、結果を1つの判定にまとめる。 */
 export function validateRequirementsDoc(
   markdown: string,
   diagramFiles: readonly string[],

@@ -1,5 +1,5 @@
-// Shared small-test fakes for the lib-exec modules (github.ts, workspace.ts,
-// claude.ts). Not part of the deployed Windmill assets — test-only.
+// コマンドを実行するlibモジュール(`github.ts`、`workspace.ts`、`claude.ts`)の
+// smallテストで共有するフェイク。テスト専用で、Windmillにはデプロイしない。
 
 import type {
   CommandResult,
@@ -18,8 +18,9 @@ export type FakeCommandRunner = {
 };
 
 /**
- * A `CommandRunner` fake that returns `responses` in order, one per call,
- * and records every call's argv/options for assertions.
+ * 呼び出し1回ごとに`responses`を順に返す偽の`CommandRunner`を作る。
+ * 検証のため、各呼び出しのargvとoptionsを`calls`に記録する。
+ * 用意した応答が尽きたあとに呼ばれると例外を投げる。
  */
 export function createFakeCommandRunner(
   responses: readonly CommandResult[],
@@ -53,9 +54,10 @@ export function timeout(stderr = ""): CommandResult {
 }
 
 /**
- * Build a `gh api -i` stdout string (status line + CRLF-terminated headers
- * + blank line + body), matching the real shape captured during the M4
- * contract smoke, for use as a canned `CommandResult.stdout`.
+ * `gh api -i`の標準出力と同じ形の文字列を作る。
+ * ステータス行、CRLFで区切ったヘッダー、空行、本文の順に並べる。
+ * 形は実際の`gh api -i`の出力を採取して合わせた。
+ * 用意する`CommandResult.stdout`として使う。
  */
 export function ghApiStdout(
   status: number,

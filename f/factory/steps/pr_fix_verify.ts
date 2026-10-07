@@ -1,19 +1,6 @@
-// PathScript step for f/factory/pr_fix: when pr_fix_apply.ts reported
-// "done", verifies the change is safe to push — forbidden-file/pattern
-// detection (docs/security.md "変更してはいけないファイル") runs first and
-// unconditionally blocks; only then are factory_config.allowed_check_commands
-// run (minimal env, no secrets, no mise trust). On a check failure, runs
-// ONE more Claude fix pass with the failing check output appended, then
-// re-verifies (forbidden-check + checks) once more — still failing (or
-// still forbidden) ends in "blocked". requirements_gap/blocked from
-// pr_fix_apply.ts pass through unchanged (Claude decided not to produce a
-// commit at all, so there's nothing to verify).
-//
-// team-lead decision (2026-09-26): main() no longer takes a `fix_round`
-// parameter, for the same reason as pr_fix_apply.ts's own — Claude proposes
-// `commit_subject`/`commit_body` directly now (FIX_SCHEMA), so the retry
-// pass below just passes those through instead of deriving one from
-// `fix_round`.
+// f/factory/pr_fixの検証ステップ。
+// `pr_fix_apply.ts`の修正をpushしてよいかを、禁止された変更の検出と
+// 検査コマンドで確かめる。
 
 import * as wmill from "windmill-client@1.817.0";
 import {
@@ -66,6 +53,11 @@ function localGitEnv(): Record<string, string> {
   return env;
 }
 
+/**
+ * worktreeの変更に、禁止されたファイル・パターン、symlink、
+ * `package.json`のscriptsの変更、差分サイズの上限超過が無いかを調べて返す。
+ * gitはhook・fsmonitor・credential helperを無効にして実行する。
+ */
 async function checkForbidden(
   worktreeDir: string,
   maxChangedFiles: number,
@@ -106,10 +98,8 @@ async function checkForbidden(
     parseGitDiffNameOnly(diffResult.stdout),
   );
 
-  // team-lead fix round 1b item 4: check every changed file whose basename
-  // is exactly "package.json" (was: only the first `.endsWith("package.json")`
-  // match, which both stopped at one file and could false-match e.g.
-  // "my-package.json").
+  // basenameがちょうど`package.json`の変更ファイルをすべて調べる。
+  // 末尾一致だと`my-package.json`のような別ファイルにも当たるため使わない。
   const packageJsonChanged = await anyPackageJsonScriptsChanged(
     runCommand,
     worktreeDir,
@@ -117,12 +107,12 @@ async function checkForbidden(
     changedPaths,
   );
 
-  // team-lead fix round 1b item 3: block a changed symlink that resolves
-  // outside the worktree. team-lead security re-gate N1/N6 (superset, kept
-  // alongside): block every symlink creation/modification/typechange
-  // unconditionally, not just an escaping one — detectSymlinkChanges also
-  // catches a symlink<->regular-file typechange, which listSymlinkTargets's
-  // mode-120000 snapshot alone would miss once the symlink side is gone.
+  // worktreeの外を指すsymlinkの変更を止める。
+  // それに加え、外を指すかどうかに関わらず、symlinkの作成・変更・型の変更を
+  // すべて止める(両方の検査を併用する)。
+  // `detectSymlinkChanges`はsymlinkと通常ファイルの間の型の変更も捕まえる。
+  // `listSymlinkTargets`のmode 120000のスナップショットだけでは、
+  // symlink側が消えた後のこの変更を見逃す。
   const symlinkTargets = await listSymlinkTargets(
     runCommand,
     worktreeDir,
@@ -133,14 +123,12 @@ async function checkForbidden(
     ...detectSymlinkChanges(changedPaths, symlinkTargets),
   ];
 
-  // team-lead fix round 1b item 7: block a fix pass that touches more files
-  // or lines than factory_config.max_fix_changed_files / max_fix_diff_lines
-  // allow. changedPaths.length (the same status+diff-name-only union used
-  // for the forbidden-path check above) is used for the file count rather
-  // than a count derived from numstat alone, since numstat omits untracked
-  // (newly added) files. Their line counts are similarly missing from
-  // numstat's total — team-lead fix round 2 item 7 addendum: added via
-  // countUntrackedFileLines (wc -l, no git side effect) instead.
+  // `factory_config.max_fix_changed_files` / `max_fix_diff_lines`を超える
+  // ファイル数・行数を変えた修正を止める。
+  // numstatはuntracked(新規追加)のファイルを含まないため、
+  // ファイル数には禁止パスの検査と同じ`changedPaths.length`を使う。
+  // 新規ファイルの行数もnumstatの合計に入らないため、
+  // `countUntrackedFileLines`(`wc -l`で数え、gitに副作用を与えない)で足す。
   const numstatEntries = await getDiffNumstat(runCommand, worktreeDir);
   const addedEntries = changedPaths.filter((entry) => entry.status === "added");
   const untrackedLineCounts = await Promise.all(
@@ -162,6 +150,17 @@ async function checkForbidden(
   ]);
 }
 
+/**
+ * `pr_fix_apply.ts`が"done"を返したとき、修正をpushしてよいかを検証して結果を返す。
+ * 先に禁止された変更を検出し、見つかれば無条件に"blocked"にする。
+ * 通ったときだけ`factory_config.allowed_check_commands`を実行する
+ * (最小限の環境変数で、秘密情報を渡さず、`mise trust`もしない)。
+ * 検査が失敗したら、失敗の出力を添えてClaudeの修正を1回だけ追加で走らせ、
+ * 禁止された変更の検出と検査をもう一度行う。
+ * それでも失敗する(または禁止された変更がある)ときは"blocked"にする。
+ * `pr_fix_apply.ts`がrequirements_gapかblockedを返したときは、
+ * Claudeがcommitを作らないと判断したため検証するものが無く、そのまま返す。
+ */
 export async function main(
   work_item_id: number,
   owner: string,
@@ -196,11 +195,10 @@ export async function main(
     wmill.getResource("f/factory/factory_config"),
   );
 
-  // team-lead fix round 1b item 2: allowed_check_commands runs untrusted
-  // target-repo code as root inside the worker with no sandbox isolation —
-  // record a notice every time this is about to happen (not just once a
-  // day), so it stays visible in the Notices view rather than being an
-  // undocumented standing risk.
+  // `allowed_check_commands`は、対象リポジトリの検証されていないコードを、
+  // worker内でサンドボックスなしにroot権限で実行する。
+  // この常設リスクを記録に残らないままにせずNoticesの画面に見え続けるよう、
+  // 1日1回ではなく実行のたびにnoticeを記録する。
   if (config.allowed_check_commands.length > 0) {
     await addNotice({
       kind: "unsandboxed_check_commands",
@@ -253,11 +251,9 @@ export async function main(
     };
   }
 
-  // team-lead fix round 1b item 3 / fix round 2 item b: same daily-budget
-  // guard as pipeline_generate.ts (lib/claude.ts's dailyBudgetStatus, same
-  // exceeded check and log.warn shape), before this second Claude call —
-  // "blocked" routes through pr_fix_finish.ts's existing needs_human
-  // handling, same as pr_fix_apply.ts's own budget gate.
+  // 2回目のClaude呼び出しの前に、`pipeline_generate.ts`と同じ日次予算の検査をする。
+  // `pr_fix_apply.ts`の予算検査と同じく"blocked"を返し、
+  // `pr_fix_finish.ts`のneeds_humanの処理に乗せる。
   const budgetStatus = await dailyBudgetStatus(config);
   if (budgetStatus.exceeded) {
     log.warn("daily budget exceeded, not starting the retry claude pass", {
@@ -275,7 +271,7 @@ export async function main(
     };
   }
 
-  // One retry Claude pass with the check failure output appended.
+  // 検査の失敗出力を添えて、Claudeの修正を1回だけ再実行する。
   const ghToken = await wmill.getVariable("f/factory/github_token");
   const oauthToken = await wmill.getVariable("f/factory/claude_oauth_token");
   const client: GhClient = { run: runCommand, ghToken };
@@ -299,10 +295,9 @@ export async function main(
     reviews,
     comments,
     requirements,
-    // team-lead fix round 1b item 9: prompts.ts's fixPrompt now fences the
-    // check-failure output itself (matching every other piece of untrusted
-    // target-repo content) instead of this file appending
-    // buildCheckFailureSection's plain-text section unfenced.
+    // 検査の失敗出力は対象リポジトリ由来の信頼できない内容なので、
+    // 他の同種の内容と同じく`fixPrompt`がフェンスで囲む。
+    // ここで素のテキストとして足さない。
     checkFailures: firstChecks
       .filter((result) => !result.ok)
       .map((result) => ({
@@ -328,10 +323,9 @@ export async function main(
       jsonSchema: FIX_SCHEMA,
       isStructuredOutput: isFixClaudeOutput,
       tools: ["Read", "Glob", "Grep", "Edit", "Write"],
-      // Same fix as pr_fix_apply.ts (team-lead fix round 1b item 0,
-      // superseded by fix round 2's measurement): "dontAsk" +
-      // `--allowedTools Edit Write` is what was actually measured to allow
-      // edits/writes, not "acceptEdits" alone.
+      // `pr_fix_apply.ts`と同じ設定。
+      // 実測で編集と書き込みが通ったのは、"acceptEdits"ではなく
+      // "dontAsk"に`--allowedTools Edit Write`を組み合わせたときだった。
       permissionMode: "dontAsk",
       allowedTools: ["Edit", "Write"],
       settingSources: ["user"],
@@ -400,9 +394,8 @@ export async function main(
       };
     }
 
-    // Claude proposed commit_subject/commit_body directly on this retry
-    // pass too (isFixClaudeOutput's guard already validated their shape),
-    // guaranteed non-null here since retryOutput.outcome === "done".
+    // 再実行でもコミットの件名と本文はClaudeの提案で、形は`isFixClaudeOutput`が検証済み。
+    // `retryOutput.outcome`が"done"なので、ここではnullにならない。
     return {
       outcome: "done",
       reason: null,

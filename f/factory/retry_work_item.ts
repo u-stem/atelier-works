@@ -1,23 +1,14 @@
-// Manual retry of a stuck work item. Restartable from failed / needs_human /
-// expired / blocked / approved. The restart flow and target status depend
-// on the work item's kind: issue → implement when its latest requirements
-// approval matches its attempt and implement_enabled is on, else pipeline
-// (refused, from any status, when the approval matches but implement_enabled
-// is off; an approved issue that cannot go to implement is refused); pr_review →
-// pr_review; pr_fix → pr_fix. The status move is a CAS from the status read
-// here, so a concurrent change aborts the restart instead of being
-// overwritten.
+// 止まった作業項目を手動で再開するscript。`failed`・`needs_human`・
+// `expired`・`blocked`・`approved`から再開でき、再開するフローと遷移先の
+// 状態は種別で決まる(`computeRestartPlan`)。状態の変更はここで読んだ状態を
+// 前提にした比較交換なので、並行して状態が変わったら上書きせず再開をやめる。
 //
-// policy change (2026-09-27, PR label cleanup — extends the Issue-side
-// policy from the prior PR to PR kinds): no kind restores any label any
-// more. Every trigger label (`factory` for an issue, `factory:review` /
-// `factory:fix` for a PR) is consumed once, at claim time, and is never
-// re-added automatically — status lives solely in work_items.status, and a
-// restarted PR work item is rediscovered by poll_prs.ts's listTrackedPrs
-// (DB-backed) rather than by a re-applied label. Restarting a work item of
-// any kind therefore relaunches its flow directly with no GitHub side
-// effect at all; only a human re-labeling the Issue/PR starts a brand-new
-// cycle.
+// どの種別もラベルを付け直さない。トリガーラベル(Issueは`factory`、
+// PRは`factory:review`・`factory:fix`)は取得時に一度だけ消費し、
+// 自動では付け直さない。状態は`work_items.status`にだけあり、再開した
+// PRの作業項目は、ラベルではなく`poll_prs.ts`の`listTrackedPrs`(DBを参照)が
+// 見つけ直す。したがって再開はフローを直接起動するだけで、GitHubには
+// 何の副作用も無い。新しいサイクルを始めるのは、人がラベルを付け直したときだけ。
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "./lib/config.ts";
 import {
@@ -44,18 +35,26 @@ export type RestartPlan = {
   readonly args: Readonly<Record<string, unknown>>;
 };
 
-/** implementReady: the latest requirements approval is approved for the
- * work item's current attempt (design §8); implementEnabled:
- * factory_config.implement_enabled. Both computed by main. */
+/**
+ * 再開先を決めるための文脈。どちらも`main`が計算する。
+ * `implementReady`は、最新の要件承認が現在の`attempt`に対して承認済みか。
+ * `implementEnabled`は`factory_config.implement_enabled`の値。
+ */
 export type RestartContext = {
   readonly implementReady: boolean;
   readonly implementEnabled: boolean;
 };
 
 /**
- * Given a restartable work item, decides which status to reset it to and
- * which flow to relaunch it with. Throws when `workItem.status` is not one
- * of failed / needs_human / expired / blocked / approved.
+ * 再開できる作業項目について、戻す状態と起動するフローを決める。
+ * issueは、要件が現在の`attempt`で承認済みで`implement_enabled`が有効なら
+ * implementフロー、そうでなければpipelineフローで再開する。
+ * pr_reviewとpr_fixは同名のフローで再開する。
+ * 次の場合は例外を投げる。
+ * - `workItem.status`が再開できる状態でない。
+ * - issueの要件が承認済みだが、`implement_enabled`が無効(状態を問わない)。
+ * - `approved`のissueの最新の要件承認が`attempt`と合わない。
+ * - auditである(監査は再開しない)。
  */
 export function computeRestartPlan(
   workItem: Pick<WorkItem, "id" | "status" | "kind" | "attempt">,
@@ -76,9 +75,9 @@ export function computeRestartPlan(
           args: { work_item_id: workItem.id },
         };
       }
-      // Approved requirements with the implement flow disabled: the
-      // pipeline would regenerate requirements a human already approved, so
-      // refuse from any status and say how to proceed.
+      // 要件が承認済みでimplementフローが無効のとき、pipelineで再開すると
+      // 人が承認した要件を作り直してしまう。状態を問わず拒否し、
+      // 進め方をエラーで伝える。
       if (context.implementReady) {
         throw new Error(
           `retry_work_item: work item ${workItem.id} has approved requirements, but implement_enabled is false; enable it to restart the implement flow`,

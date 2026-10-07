@@ -1,9 +1,7 @@
-// The "Confluence-style document page" view of one requirements document —
-// shared by tabs/RequirementsTab.tsx's detail pane and tabs/InboxTab.tsx's
-// requirements detail (which used to render summary/markdown/diagrams/
-// open_questions inline from the Inbox row; both now fetch a
-// `RequirementsDocRow` via the "requirements_doc" console_query view and
-// render it through this one component).
+// 要件定義書1件を、Confluence風の文書ページとして表示する。
+// `tabs/RequirementsTab.tsx`の詳細欄と`tabs/InboxTab.tsx`の要件の詳細で共有し、
+// どちらも`console_query`の`requirements_doc`ビューで`RequirementsDocRow`を
+// 取得して、このコンポーネントで描く。
 
 import React from "react";
 import { extractHeadings, extractTitle } from "../lib/extractHeadings";
@@ -30,9 +28,11 @@ function statusVariant(status: string): StatusVariant {
   return STATUS_VARIANTS[status] ?? "neutral";
 }
 
-/** Table of contents, sticky in the right rail — links scroll the heading
- * into view by id (the same id `Markdown`'s `h2`/`h3` override assigns via
- * `slugify`, see lib/extractHeadings.ts's module doc). */
+/**
+ * 右の欄に固定表示する目次。リンクはidで見出しまでスクロールする。
+ * idは、`Markdown`の`h2`・`h3`の差し替えが`slugify`で付けるものと同じ
+ * (`lib/extractHeadings.ts`のモジュールコメントを参照)。
+ */
 function TableOfContents({
   markdown,
 }: {
@@ -64,8 +64,10 @@ export function RequirementsDocument({
   headerActions,
 }: {
   doc: RequirementsDocRow;
-  /** Extra controls rendered next to the meta row — e.g. RequirementsTab's
-   * attempt selector. Omitted (undefined) renders nothing there. */
+  /**
+   * メタ情報の行の横に描く追加の操作(例: `RequirementsTab`のattemptの選択)。
+   * 省略すると何も描かない。
+   */
   headerActions?: React.ReactNode;
 }): React.ReactElement {
   const title = extractTitle(doc.markdown) ?? doc.title ?? "(無題)";
@@ -128,11 +130,12 @@ export function RequirementsDocument({
   );
 }
 
-/** Fetches one work item's requirements document via the "requirements_doc"
- * console_query view and renders it — the shared load/error/render path
- * behind both tabs/RequirementsTab.tsx's detail pane and
- * tabs/InboxTab.tsx's requirements detail. `attempt: null` fetches the
- * latest attempt. */
+/**
+ * 作業項目1件の要件定義書を`console_query`の`requirements_doc`ビューで
+ * 取得して描く。読み込み・エラー・描画の処理を、`tabs/RequirementsTab.tsx`の
+ * 詳細欄と`tabs/InboxTab.tsx`の要件の詳細で共有する。
+ * `attempt: null`なら最新のattemptを取得する。
+ */
 export function RequirementsDocumentLoader({
   workItemId,
   attempt,

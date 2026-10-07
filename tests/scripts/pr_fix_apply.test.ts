@@ -1,10 +1,8 @@
-// Tests for f/factory/steps/pr_workflow_support.ts's composeCommitMessage
-// and isFixClaudeOutput (used by pr_fix_apply.ts), plus a confirmation
-// (team-lead: link a human-authored PR to its approved requirements) that
-// pr_fix_apply.ts's existing `requirements` wiring actually reaches
-// lib/prompts.ts's fixPrompt and activates its requirements-alignment
-// section — prompts.ts itself is untouched, this just calls its real
-// exported fixPrompt the same way pr_fix_apply.ts's main() does.
+// `pr_fix_apply.ts`が使う`pr_workflow_support.ts`の`composeCommitMessage`と
+// `isFixClaudeOutput`のテスト。
+// あわせて、`pr_fix_apply.ts`が渡す`requirements`が`lib/prompts.ts`の
+// `fixPrompt`に届き、要件との整合を確かめる節が有効になることを、
+// `main()`と同じ呼び方で確かめる。
 
 import { describe, expect, test } from "bun:test";
 import { fixPrompt } from "../../f/factory/lib/prompts.ts";
@@ -83,9 +81,8 @@ describe("isFixClaudeOutput", () => {
     expect(isFixClaudeOutput(output)).toBe(false);
   });
 
-  // team-lead decision (2026-09-26): decision drives renderFixReply's
-  // "対応: <sha>" vs "対応: 見送り" last line, so a reply lacking it must
-  // fail the guard rather than being accepted with an implied default.
+  // `decision`は`renderFixReply`の最終行(「対応: <sha>」か「対応: 見送り」)を決める。
+  // 欠けた返信は、暗黙の既定値で受け入れず、検査で弾く。
   test("rejects a reply missing decision", () => {
     const output = {
       ...VALID_OUTPUT,
@@ -118,8 +115,8 @@ describe("isFixClaudeOutput", () => {
     expect(isFixClaudeOutput(output)).toBe(false);
   });
 
-  // User decision (2026-09-26): a finding valid but out of this PR's scope
-  // gets decision "propose_issue" with a title/body for a candidate Issue.
+  // 妥当だがこのPRの範囲外の指摘には、`decision`を"propose_issue"にし、
+  // Issueの案のタイトルと本文を付ける。
   test("accepts a propose_issue reply with a well-formed issue_proposal", () => {
     const output = {
       ...VALID_OUTPUT,
@@ -202,13 +199,9 @@ describe("isFixClaudeOutput", () => {
     expect(isFixClaudeOutput(output)).toBe(false);
   });
 
-  // team-lead decision (2026-09-26): Claude now proposes commit_subject/
-  // commit_body directly (replacing the former derive-from-summary
-  // approach), so the guard enforces the subject's shape itself.
-  // team-lead fix (2026-09-26): the limit was raised from 60 to 72 code
-  // points (git's own subject-line convention) — the prompt/skill text
-  // still asks Claude to aim for ~50 characters, this is just the outer
-  // limit the guard actually enforces.
+  // `commit_subject`と`commit_body`はClaudeが直接提案するため、件名の形は検査側で強制する。
+  // 上限はgitの件名行の慣習に合わせた72コードポイント。
+  // プロンプトとスキルでは50字程度を目安に求めており、72は検査が強制する外側の上限である。
   test("accepts a commit_subject at exactly the 72 code point limit", () => {
     const output = {
       ...VALID_OUTPUT,
@@ -238,14 +231,11 @@ describe("isFixClaudeOutput", () => {
     expect(isFixClaudeOutput(output)).toBe(false);
   });
 
-  // team-lead fix (2026-09-26): this test was mislabeled — VALID_OUTPUT's
-  // outcome is "done", not a non-done outcome, so it actually exercised (and
-  // passed) the very bug this fix closes: an empty commit_subject reaching a
-  // "done" outcome, which pr_fix_finish.ts's composeCommitMessage would then
-  // turn into a commit whose subject line is blank and whose first
-  // non-blank line is the Co-Authored-By/Generated-By trailers. Corrected to
-  // an actual non-done outcome, which still legitimately has nothing to
-  // commit.
+  // 件名が空でよいのは、コミットするものが無い"done"以外の結果だけである。
+  // `VALID_OUTPUT`の`outcome`は"done"なので、"blocked"に置き換えて確かめる。
+  // "done"で件名が空だと、`pr_fix_finish.ts`が使う`composeCommitMessage`が
+  // 件名行の空いたコミットを作り、最初の空でない行がCo-Authored-By/Generated-Byの
+  // トレーラーになってしまう。
   test("accepts an empty commit_subject for a non-done outcome (nothing to commit)", () => {
     const output = {
       ...VALID_OUTPUT,
@@ -309,10 +299,10 @@ const FAKE_REQUIREMENTS: RequirementDraft = {
 };
 
 describe("fixPrompt requirements wiring", () => {
-  // Confirms pr_fix_apply.ts's existing `requirements` (from
-  // parent_work_item_id -> latestDraft, or now also a Closes-#N-linked
-  // issue's approved draft for a human-authored PR) actually activates
-  // fixPrompt's requirements-alignment section, end to end.
+  // `pr_fix_apply.ts`が渡す`requirements`で、
+  // `fixPrompt`の要件との整合の節が有効になることを確かめる。
+  // `requirements`は、`parent_work_item_id`から`latestDraft`で引いたもの、
+  // または人が作ったPRなら`Closes #N`でつながるIssueの承認済みの草案である。
   test("includes the approved requirements text when requirements is non-null", () => {
     const prompt = fixPrompt({
       pr: FAKE_PR,

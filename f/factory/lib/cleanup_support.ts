@@ -1,30 +1,31 @@
-// Pure decision/parsing logic for cleanup_workspaces.ts (plan §4
-// "cleanup_workspaces", §4b). No I/O — see that script for wiring (git
-// worktree operations, `ps`/process signals, `du`).
+// `cleanup_workspaces.ts`が使う判定と解析の関数をまとめる。
+// 入出力(gitのworktree操作、`ps`とシグナル、`du`)はあちらのスクリプトが行う。
 
 import type { FactoryConfig } from "./types.ts";
 import type { WorktreeEntry } from "./workspace.ts";
 
 // ---------------------------------------------------------------------------
-// Worktree path naming
+// worktreeのパスの組み立て
 // ---------------------------------------------------------------------------
 
-/** The fetch-only main clone dir for a target repo (matches `ensureRepo`'s
- * own `<baseDir>/<owner>/<repo>/main` formula, default `baseDir`
- * "/workspaces" — duplicated here as a plain string formula rather than a
- * call into `ensureRepo` itself, since cleanup_workspaces.ts only needs the
- * deterministic path, never the clone/fetch side effect). */
+/**
+ * 対象リポジトリのfetch専用のメインのクローンのディレクトリを返す。
+ * `ensureRepo`の`<baseDir>/<owner>/<repo>/main`と同じ式
+ * (`baseDir`の既定値は`/workspaces`)。
+ * `cleanup_workspaces.ts`に要るのは決まったパスだけで、
+ * クローンやfetchの副作用は要らないので、`ensureRepo`は呼ばずに式を写している。
+ */
 export function mainRepoDir(owner: string, repo: string): string {
   return `/workspaces/${owner}/${repo}/main`;
 }
 
-/** The read-only detached worktree path for an issue-kind work item's
- * requirements-generation stage — mirrors
- * f/factory/steps/pipeline_prepare.ts's own `buildRequirementsWorktreeDir`
- * (duplicated rather than imported: a top-level script importing from
- * steps/ would blur the "steps are wired by their own flow" boundary the
- * windmill-script skill draws; see poll_support.ts's own header comment for
- * the project's precedent on this kind of small, intentional duplication). */
+/**
+ * Issueの作業項目が要件定義の生成で使う、読み取り専用のdetachedなworktreeのパスを返す。
+ * `f/factory/steps/pipeline_prepare.ts`の`buildRequirementsWorktreeDir`と同じ式。
+ * importせずに写しているのは、トップレベルのスクリプトがsteps/からimportすると、
+ * 「stepsはそれぞれのフローが組み込む」という境界が曖昧になるためである。
+ * 小さく意図的な重複の前例は`poll_support.ts`の冒頭のコメントにある。
+ */
 export function requirementsWorktreeDir(
   owner: string,
   repo: string,
@@ -34,25 +35,25 @@ export function requirementsWorktreeDir(
 }
 
 // ---------------------------------------------------------------------------
-// issueWorktreePaths: which worktrees an issue-kind work item leaves behind
+// issueWorktreePaths: Issueの作業項目が残すworktree
 // ---------------------------------------------------------------------------
 
-/** The two `work_items` columns an issue-kind item's worktrees are keyed
- * by — structural so a full `WorkItem` (lib/types.ts) can be passed as-is. */
+/**
+ * Issueの作業項目のworktreeを特定する`work_items`の2列。
+ * 構造的な型にして、`WorkItem`(`lib/types.ts`)をそのまま渡せるようにしている。
+ */
 export type IssueWorktreeSource = {
   readonly issue_number: number | null;
   readonly branch: string | null;
 };
 
 /**
- * Every worktree path cleanup_workspaces.ts should remove for one
- * issue-kind work item: the detached `req-<N>` requirements worktree
- * (工程2, `requirementsWorktreeDir`) when it is listed, plus the worktree
- * checked out on `item.branch` (工程3's implement branch,
- * `work_items.branch`) when the item has one. `worktrees` is the parsed
- * `git worktree list --porcelain` output for the repo. The fetch-only
- * main clone (`mainRepoDir`) is never returned, even if it happens to sit
- * on that branch. Pure — no I/O.
+ * Issueの作業項目1件について、`cleanup_workspaces.ts`が削除すべきworktreeのパスを返す。
+ * 対象は、一覧にあれば要件定義用のdetachedな`req-<N>`(`requirementsWorktreeDir`)と、
+ * 作業項目にブランチがあれば`item.branch`(implementブランチ、`work_items.branch`)を
+ * チェックアウトしたworktreeである。
+ * `worktrees`は、そのリポジトリの`git worktree list --porcelain`を解析したもの。
+ * fetch専用のメインのクローン(`mainRepoDir`)は、たまたまそのブランチにあっても返さない。
  */
 export function issueWorktreePaths(
   owner: string,
@@ -83,16 +84,19 @@ export function issueWorktreePaths(
 }
 
 // ---------------------------------------------------------------------------
-// excludeActiveWorktrees (工程3 design §12): never remove a worktree an
-// active work item is using. The implement branch is also the PR's head
-// branch, and createGtrWorktree reuses one worktree per branch, so an issue
-// item and a pr_fix item share it: a stale pr_open issue item must not take
-// a running pr_fix's worktree, nor a stale pr_fix item a re-implementation's.
+// excludeActiveWorktrees: 稼働中の作業項目が使っているworktreeは削除しない。
+// implementブランチはPRのheadブランチでもあり、`createGtrWorktree`はブランチごとに
+// worktreeを1つ使い回すので、Issueの作業項目とpr_fixの作業項目が同じworktreeを共有する。
+// 古いpr_openのIssueの作業項目が実行中のpr_fixのworktreeを奪ってはならず、
+// 古いpr_fixの作業項目が再実装のworktreeを奪ってもならない。
 // ---------------------------------------------------------------------------
 
-/** What an active work item holds: its req-<N> dir (issue_number) and the
- * worktree on `branch` (an issue item's implement branch, or a pr_fix
- * item's PR head branch resolved by the caller). */
+/**
+ * 稼働中の作業項目が使っているもの。
+ * `issue_number`から決まる`req-<N>`のディレクトリと、`branch`上のworktreeである。
+ * `branch`はIssueの作業項目ならimplementブランチ、pr_fixの作業項目なら
+ * 呼び出し側が解決したPRのheadブランチ。
+ */
 export type WorktreeHolder = {
   readonly owner: string;
   readonly repo: string;
@@ -100,7 +104,7 @@ export type WorktreeHolder = {
   readonly branch: string | null;
 };
 
-/** `targetDirs` minus every path an active holder in owner/repo uses. */
+/** `targetDirs`から、`owner`/`repo`で稼働中の作業項目が使うパスを除いて返す。 */
 export function excludeActiveWorktrees(
   targetDirs: readonly string[],
   holders: readonly WorktreeHolder[],
@@ -124,7 +128,7 @@ export function excludeActiveWorktrees(
 }
 
 // ---------------------------------------------------------------------------
-// groupByRepo: batch a stale-item list by (owner, repo)
+// groupByRepo: 古い作業項目の一覧を(owner, repo)ごとにまとめる
 // ---------------------------------------------------------------------------
 
 export type RepoGroup<T> = {
@@ -133,10 +137,12 @@ export type RepoGroup<T> = {
   readonly items: T[];
 };
 
-/** Groups `items` by `(owner, repo)`, preserving first-seen order of both
- * the groups and the items within each group — lets cleanup_workspaces.ts
- * call `listWorktrees`/`pruneWorktrees` once per repo instead of once per
- * stale work item. */
+/**
+ * `items`を`(owner, repo)`ごとにまとめる。
+ * グループの順もグループ内の項目の順も、最初に現れた順を保つ。
+ * `cleanup_workspaces.ts`が`listWorktrees`と`pruneWorktrees`を、
+ * 古い作業項目ごとではなくリポジトリごとに1回だけ呼べるようにするためのもの。
+ */
 export function groupByRepo<
   T extends { readonly owner: string; readonly repo: string },
 >(items: readonly T[]): RepoGroup<T>[] {
@@ -161,9 +167,11 @@ export function groupByRepo<
   });
 }
 
-/** Splits the stale-item groups into the repos to sweep and the repos to
- * skip today: a repo where an active pr_fix's head branch could not be
- * resolved is skipped (its held worktree is unknown), the rest are swept. */
+/**
+ * 古い作業項目のグループを、今日掃除するリポジトリと見送るリポジトリに分ける。
+ * 稼働中のpr_fixのheadブランチを解決できなかったリポジトリは、
+ * 使用中のworktreeが分からないので見送り、それ以外を掃除する。
+ */
 export function partitionRepoGroups<T>(
   groups: readonly RepoGroup<T>[],
   unresolved: readonly { readonly owner: string; readonly repo: string }[],
@@ -178,7 +186,7 @@ export function partitionRepoGroups<T>(
   };
 }
 
-/** The notice for a repo skipped by partitionRepoGroups. */
+/** `partitionRepoGroups`で見送ったリポジトリについてのnoticeの文言を返す。 */
 export function unresolvedHoldersNoticeMessage(
   owner: string,
   repo: string,
@@ -187,7 +195,7 @@ export function unresolvedHoldersNoticeMessage(
 }
 
 // ---------------------------------------------------------------------------
-// selectOrphanClaudePids: parse `ps -eo pid,etimes,args`
+// selectOrphanClaudePids: `ps -eo pid,etimes,args`を解析する
 // ---------------------------------------------------------------------------
 
 type PsEntry = {
@@ -196,11 +204,12 @@ type PsEntry = {
   readonly args: string;
 };
 
-/** Parses one `ps -eo pid,etimes,args` data line (`<pid> <etimes>
- * <args...>`, whitespace-separated, `args` free-form). `null` for a line
- * that doesn't start with two numeric fields — in particular the header
- * line (`PID ELAPSED COMMAND` or similar), which is silently dropped this
- * way rather than special-cased. */
+/**
+ * `ps -eo pid,etimes,args`のデータ行1行(`<pid> <etimes> <args...>`)を解析する。
+ * 区切りは空白で、`args`は自由な形式。
+ * 先頭が2つの数値でない行には`null`を返す。
+ * ヘッダー行(`PID ELAPSED COMMAND`など)は、特別扱いせずにこの規則で捨てる。
+ */
 function parsePsLine(line: string): PsEntry | null {
   const match = line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/);
   if (match === null) return null;
@@ -216,9 +225,11 @@ function parsePsLine(line: string): PsEntry | null {
   return { pid, etimes, args };
 }
 
-/** Whether `args` (the full command line `ps` reports for one process)
- * looks like a headless Claude invocation (`claude ... -p ...`), regardless
- * of the binary's path prefix (`/usr/local/bin/claude`) or flag ordering. */
+/**
+ * `args`(`ps`が出すプロセス1つのコマンドライン全体)が、
+ * ヘッドレスなClaudeの起動(`claude ... -p ...`)に見えるかを返す。
+ * バイナリのパスの接頭辞(`/usr/local/bin/claude`)やオプションの順は問わない。
+ */
 function isClaudeHeadlessInvocation(args: string): boolean {
   const tokens = args.split(/\s+/).filter((token) => token.length > 0);
   const command = tokens[0];
@@ -228,16 +239,15 @@ function isClaudeHeadlessInvocation(args: string): boolean {
 }
 
 /**
- * Parses `ps -eo pid,etimes,args` output and returns the pids of every
- * headless Claude (`claude -p`) process whose elapsed time (`etimes`,
- * seconds) exceeds `thresholdSec` (orphanClaudeThresholdSec: the longer of
- * claude_timeout_sec and implement_timeout_sec, plus a grace period). A
- * headless Claude process still running past every per-run subprocess
- * timeout (lib/claude.ts's `runClaude` enforces its timeout on the process
- * it directly spawned) can only mean that enforcement never got the chance
- * to fire — e.g. its parent Windmill job was killed/cancelled first,
- * reparenting the child before it could be signaled — so any such process
- * found here is by definition orphaned and safe to terminate.
+ * `ps -eo pid,etimes,args`の出力を解析し、経過時間(`etimes`、秒)が
+ * `thresholdSec`を超えたヘッドレスなClaude(`claude -p`)のプロセスのpidを返す。
+ * `thresholdSec`は`orphanClaudeThresholdSec`が返す値を渡す。
+ *
+ * `lib/claude.ts`の`runClaude`は、自分が直接起動したプロセスにタイムアウトを課す。
+ * どの実行のタイムアウトも過ぎてまだ動いているなら、その仕組みが働く機会が無かった
+ * ことになる。たとえば、親のWindmillジョブが先に停止・キャンセルされ、
+ * シグナルを送る前に子プロセスの親が付け替わった場合である。
+ * そのため、ここで見つかるプロセスは孤児であり、終了させてよい。
  */
 export function selectOrphanClaudePids(
   psOutput: string,
@@ -256,10 +266,12 @@ export function selectOrphanClaudePids(
 
 const ORPHAN_GRACE_SEC = 300;
 
-/** How long a headless Claude process may run before the sweep treats it
- * as orphaned: past the longer of the two per-run timeouts (the implement
- * flow's implement_timeout_sec is the longest, 3600s by default) plus a
- * grace period, so a live implement run is never terminated. */
+/**
+ * ヘッドレスなClaudeのプロセスを孤児とみなすまでの秒数を返す。
+ * 実行ごとの2つのタイムアウトのうち長いほう(implementフローの
+ * `implement_timeout_sec`が最長で、既定値は3600秒)に猶予を足す。
+ * 動いているimplementの実行を終了させないためである。
+ */
 export function orphanClaudeThresholdSec(
   config: Pick<FactoryConfig, "claude_timeout_sec" | "implement_timeout_sec">,
 ): number {
@@ -270,17 +282,18 @@ export function orphanClaudeThresholdSec(
 }
 
 // ---------------------------------------------------------------------------
-// terminateOrphans: SIGTERM -> wait -> SIGKILL escalation (injectable)
+// terminateOrphans: SIGTERMを送り、待ってからSIGKILLを送る(依存は注入できる)
 // ---------------------------------------------------------------------------
 
 export type TerminateOrphansDeps = {
-  /** Sends `signal` to `pid`. Defaults to `process.kill`. Never needs to
-   * itself guard against an already-exited pid — `terminateOrphans` wraps
-   * every call in a try/catch (a process that already exited between the
-   * `ps` snapshot and this call is not an error). */
+  /**
+   * `pid`に`signal`を送る。既定は`process.kill`。
+   * 終了済みのpidへの対策は要らない。`terminateOrphans`がすべての呼び出しを
+   * try/catchで包むためで、`ps`の取得からこの呼び出しまでの間に
+   * プロセスが終了していても誤りとはしない。
+   */
   readonly kill?: (pid: number, signal: "SIGTERM" | "SIGKILL") => void;
-  /** Whether `pid` is still alive. Defaults to a `process.kill(pid, 0)`
-   * existence check. */
+  /** `pid`がまだ生きているかを返す。既定は`process.kill(pid, 0)`による存在確認。 */
   readonly isAlive?: (pid: number) => boolean;
   readonly sleep?: (ms: number) => Promise<void>;
 };
@@ -314,21 +327,22 @@ function safeKill(
   try {
     kill(pid, signal);
   } catch {
-    // Already exited between the `ps` snapshot and this call — not an error.
+    // `ps`の取得からこの呼び出しまでの間に終了していた。誤りとはしない。
   }
 }
 
 export type TerminateOrphansResult = {
-  /** Every pid this call sent SIGTERM to. */
+  /** SIGTERMを送ったすべてのpid。 */
   readonly terminated: number[];
-  /** The subset still alive after the grace period, sent SIGKILL. */
+  /** そのうち猶予の後も生きていて、SIGKILLを送ったpid。 */
   readonly killed: number[];
 };
 
 /**
- * SIGTERM every pid in `pids`, wait `graceMs` (default 10s), then SIGKILL
- * whichever ones are still alive. `deps` is fully optional/injectable so
- * this stays testable without a real 10-second wait or real OS signals.
+ * `pids`のすべてにSIGTERMを送り、`graceMs`(既定は10秒)待ってから、
+ * まだ生きているものにSIGKILLを送る。
+ * 実際に10秒待ったりOSのシグナルを送ったりせずにテストできるよう、
+ * `deps`はすべて省略でき、差し替えられる。
  */
 export async function terminateOrphans(
   pids: readonly number[],
@@ -351,11 +365,13 @@ export async function terminateOrphans(
 }
 
 // ---------------------------------------------------------------------------
-// Disk usage (`du -sk /workspaces`)
+// ディスク使用量(`du -sk /workspaces`)
 // ---------------------------------------------------------------------------
 
-/** Parses the leading byte-block count (in KiB, per `du`'s `-k` flag) from
- * `du -sk`'s `<size>\t<path>` output. */
+/**
+ * `du -sk`の出力(`<size>\t<path>`)から、先頭のブロック数(`-k`によりKiB単位)を取り出す。
+ * 想定外の出力なら例外を投げる。
+ */
 export function parseDiskUsageKb(duOutput: string): number {
   const match = duOutput.trim().match(/^(\d+)/);
   const sizeText = match?.[1];
@@ -367,8 +383,7 @@ export function parseDiskUsageKb(duOutput: string): number {
   return Number(sizeText);
 }
 
-/** Formats a human-readable (Japanese) disk usage notice message for
- * `factory.notices`, in MiB for readability. */
+/** `factory.notices`に載せるディスク使用量の日本語の文言を、読みやすいMiB単位で返す。 */
 export function formatDiskUsageMessage(usageKb: number, path: string): string {
   const usageMib = (usageKb / 1024).toFixed(1);
   return `${path} のディスク使用量は約 ${usageMib} MiB です。`;

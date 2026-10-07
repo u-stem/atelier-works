@@ -1,8 +1,7 @@
-// Tests for f/factory/lib/approver.ts's deriveApprover (team-lead fix round,
-// [MUST] #1: shared fail-closed approver-identity derivation, used by
-// approval_decide.ts — the single decision recorder for every
-// approval_requests kind — instead of a bare
-// `process.env.WM_USERNAME ?? "unknown"`).
+// `deriveApprover`のテスト。
+// 承認者を識別できないときは`"unknown"`で代用せず、
+// 例外を投げる(fail closed)ことを確かめる。
+// 承認依頼の全種別の判断を記録する`approval_decide.ts`がこの関数を使う。
 
 import { describe, expect, test } from "bun:test";
 import { deriveApprover } from "../../f/factory/lib/approver.ts";

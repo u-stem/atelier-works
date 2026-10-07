@@ -1,18 +1,16 @@
-// Deep-link parsing for "jump straight to a work item's requirements
-// document" — the fragment lib/approval_support.ts's `buildConsoleUrl`
-// appends to every Console link it hands out (Issue comment / Discord
-// notification): `#requirements/<work_item_id>` or
-// `#requirements/<work_item_id>/attempt-<k>`.
+// ConsoleのURLのフラグメントから、開く作業項目を読み取る。
+// `#requirements/<work_item_id>`は要件定義書を、`#audit/<work_item_id>`は監査レポートを指す。
+// 要件定義書のほうは、試行を指す`#requirements/<work_item_id>/attempt-<k>`の形も受け付ける。
+// `f/factory/lib/approval_support.ts`の`buildConsoleUrl`が`#requirements/<work_item_id>`を、
+// `buildAuditConsoleUrl`が`#audit/<work_item_id>`を作り、IssueのコメントやDiscordの通知などに載せる。
+// `attempt-<k>`付きの形を作る処理は無く、手で書いたURLのためにだけ受け付ける。
 //
-// A raw app is served from an opaque/sandboxed origin (see the `raw-app`
-// skill's "wmill client is already authenticated" note on `WM_RAW_APP`), so
-// there is no guarantee this App can read the *embedding* page's URL — only
-// its own `window.location.hash` is reliably readable. `collectDeepLinkCandidates`
-// still tries `window.parent.location.hash` and `document.referrer` (both
-// wrapped in try/catch — a cross-origin `window.parent.location` read throws
-// a `SecurityError`, and `document.referrer` is plain best-effort) since a
-// same-origin embedding (e.g. the Windmill UI's own app-preview iframe) can
-// make either work. Whichever of the three yields a match first wins.
+// raw appは不透明なオリジン(サンドボックス)から配信されるため、
+// 埋め込み元のページのURLを読める保証は無い。
+// 確実に読めるのは自分の`window.location.hash`だけである。
+// それでも、同一オリジンでの埋め込み(WindmillのUIのプレビュー用iframeなど)では
+// `window.parent.location.hash`や`document.referrer`も読めるため、
+// これらも候補にする。候補のうち最初に一致したものを使う。
 
 export type RequirementsDeepLink = {
   readonly work_item_id: number;
@@ -21,8 +19,11 @@ export type RequirementsDeepLink = {
 
 const DEEP_LINK_PATTERN = /#requirements\/(\d+)(?:\/attempt-(\d+))?/;
 
-/** Parses the first candidate string containing a `#requirements/<id>`
- * fragment (pure, for testing) — `null` when none of `candidates` matches. */
+/**
+ * `candidates`のうち`#requirements/<id>`のフラグメントを含む最初の文字列を解析する。
+ * どれも一致しなければ`null`を返す。
+ * `attempt-<k>`が無いか正の整数でなければ、`attempt`は`null`にする。
+ */
 export function parseDeepLink(
   candidates: readonly string[],
 ): RequirementsDeepLink | null {
@@ -50,16 +51,16 @@ export function parseDeepLink(
   return null;
 }
 
-// #audit/<work_item_id> — the fragment 工程5's Console links (Issue
-// comment / Discord notification for an audit-sourced approval) use to jump
-// straight to the 監査 tab's detail pane for that audit work item.
-
 export type AuditDeepLink = { readonly work_item_id: number };
 
 const AUDIT_DEEP_LINK_PATTERN = /#audit\/(\d+)/;
 
-/** Parses the first candidate string containing a `#audit/<id>` fragment
- * (mirrors `parseDeepLink` above, but with no `attempt` suffix). */
+/**
+ * `candidates`のうち`#audit/<id>`のフラグメントを含む最初の文字列を解析する。
+ * このフラグメントは監査から出た承認依頼のリンクに付き、
+ * 監査タブでその監査の作業項目の詳細を開くのに使う。
+ * `parseDeepLink`と同じ規則で、`attempt`の部分は無い。
+ */
 export function parseAuditDeepLink(
   candidates: readonly string[],
 ): AuditDeepLink | null {
@@ -75,17 +76,18 @@ export function parseAuditDeepLink(
   return null;
 }
 
-/** Gathers every candidate string `parseDeepLink` should try, in priority
- * order: this window's own hash, the parent frame's hash (same-origin
- * embedding only), then the referrer URL. Not unit-tested (thin `window` /
- * `document` access with no branching logic of its own) — `parseDeepLink`
- * carries the actual behavior under test. */
+/**
+ * `parseDeepLink`に渡す候補の文字列を、優先する順に集めて返す。
+ * 自分のウィンドウのハッシュ、親フレームのハッシュ
+ * (同一オリジンで埋め込まれたときだけ)、参照元のURLの順。
+ * `window`と`document`を読むだけで分岐を持たないため、単体テストはしない。
+ */
 export function collectDeepLinkCandidates(): string[] {
   const candidates: string[] = [window.location.hash];
   try {
     candidates.push(window.parent.location.hash);
   } catch {
-    // Cross-origin parent frame: window.parent.location throws SecurityError.
+    // 親フレームが別オリジンだと、`window.parent.location`は`SecurityError`を投げる。
   }
   if (document.referrer.length > 0) {
     candidates.push(document.referrer);

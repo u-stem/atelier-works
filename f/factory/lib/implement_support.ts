@@ -1,18 +1,11 @@
-// Pure helpers for the implement flow's Claude output (工程3 design §6):
-// the structured-output shape guard `runClaude` needs, the semantic check
-// the flow applies before committing, and the commit-message assembly.
-// No I/O here; every function is exported for unit testing
-// (tests/lib/implement_support.test.ts). Kept in lib — not in
-// steps/pr_workflow_support.ts, which is pr_review/pr_fix-specific — so the
-// implement steps (added later) share it without a lib -> steps import.
+// implementフローでClaudeの出力を扱う関数をまとめる。
+// 構造化出力の形の検査、commit前の意味の検査、
+// commitメッセージやPR本文の組み立てを担う。
+// 入出力は行わない。stepsからは独立させ、lib→stepsのimportを作らない。
 //
-// Shape vs. semantics are split on purpose: `isImplementClaudeOutput`
-// mirrors prompts.ts's IMPLEMENT_SCHEMA field by field (what `claude -p
-// --json-schema` already enforces), while `validateImplementOutput` holds
-// the rules the schema cannot express (gap_report required on a gap, a
-// committable subject on done). The implement steps call
-// `validateImplementOutput` after `runClaude` succeeds and record `reason`
-// on the implement round before treating it as a fix round.
+// 形と意味の検査は意図して分けている。`isImplementClaudeOutput`は
+// `prompts.ts`の`IMPLEMENT_SCHEMA`(`claude -p --json-schema`が強制する形)を
+// 項目ごとに写したもので、`validateImplementOutput`はスキーマで表せない規則を持つ。
 
 import { createHash } from "node:crypto";
 import {
@@ -33,10 +26,11 @@ import {
 } from "./types.ts";
 import { withCommitTrailers } from "./workspace.ts";
 
-/** Claude's own two outcomes (IMPLEMENT_SCHEMA). The verify loop's extra
- * `implement_rounds.outcome` values (`check_failed` / `checks_skipped` /
- * `stalled` / `error`, types.ts's ImplementRoundOutcome) are the flow's,
- * never Claude's. */
+/**
+ * Claude自身が返す2つの結果(`IMPLEMENT_SCHEMA`)。
+ * `implement_rounds.outcome`のそれ以外の値(`check_failed` / `checks_skipped` /
+ * `stalled` / `error`)は、Claudeではなくフローが付ける。
+ */
 export type ImplementClaudeOutcome = "done" | "requirements_gap";
 export const IMPLEMENT_CLAUDE_OUTCOMES: readonly ImplementClaudeOutcome[] = [
   "done",
@@ -46,22 +40,30 @@ export const IMPLEMENT_CLAUDE_OUTCOMES: readonly ImplementClaudeOutcome[] = [
 export type ImplementClaudeOutput = {
   readonly outcome: ImplementClaudeOutcome;
   readonly summary: string;
-  /** Required (non-null, non-blank) when `outcome` is "requirements_gap";
-   * becomes the feedback for 工程2's attempt+1 (design §1). */
+  /**
+   * `outcome`が`requirements_gap`のときは必須(`null`でも空白だけでもない)。
+   * 要件定義をやり直すときのフィードバックになる。
+   */
   readonly gap_report: string | null;
-  /** Non-empty single line when `outcome` is "done"; `""` otherwise. */
+  /** `outcome`が`done`なら空でない1行、それ以外なら`""`。 */
   readonly commit_subject: string;
-  /** Optional body; `""` means none (IMPLEMENT_SCHEMA is not nullable
-   * here, unlike FIX_SCHEMA's `commit_body`). */
+  /**
+   * 省略できる本文。`""`は本文なしを表す。
+   * `FIX_SCHEMA`の`commit_body`と違い、`IMPLEMENT_SCHEMA`ではnullにできない。
+   */
   readonly commit_body: string;
-  /** Judgment calls, protected-path changes, unwritable paths — rendered
-   * into the PR body's 確認して欲しい点 (design §7). */
+  /**
+   * 判断に迷った点、保護パスの変更、書き込めなかったパスなど。
+   * PR本文の「確認して欲しい点」に載せる。
+   */
   readonly notes_for_reviewer: string[];
 };
 
-/** Matches prompts.ts's IMPLEMENT_SCHEMA exactly (the schema passed to
- * `claude -p --json-schema`). Shape only — see `validateImplementOutput`
- * for the outcome-dependent rules. */
+/**
+ * 値が`prompts.ts`の`IMPLEMENT_SCHEMA`(`claude -p --json-schema`に渡すスキーマ)の
+ * 形に一致するかを返す。形だけを見る。
+ * 結果ごとの規則は`validateImplementOutput`が検査する。
+ */
 export function isImplementClaudeOutput(
   value: unknown,
 ): value is ImplementClaudeOutput {
@@ -75,13 +77,15 @@ export function isImplementClaudeOutput(
 }
 
 // ---------------------------------------------------------------------------
-// validateImplementOutput: the outcome-dependent rules IMPLEMENT_SCHEMA
-// cannot express
+// validateImplementOutput: IMPLEMENT_SCHEMAでは表せない、結果ごとの規則
 // ---------------------------------------------------------------------------
 
-/** git's subject-line convention, the same ceiling pr_workflow_support.ts
- * applies to pr_fix's `commit_subject`; the prompt asks Claude to aim for
- * about 50 so a slightly long subject does not waste a whole run. */
+/**
+ * commitの件名の最大コードポイント数。gitの件名の慣習に合わせた値で、
+ * `pr_workflow_support.ts`がpr_fixの`commit_subject`に課す上限と同じ。
+ * プロンプトでは50字程度を目指すよう求めており、
+ * 件名が少し長いだけで実行全体を無駄にしないよう、上限には余裕を持たせている。
+ */
 export const COMMIT_SUBJECT_MAX_CODEPOINTS = 72;
 
 export type ImplementOutputValidation =
@@ -89,21 +93,26 @@ export type ImplementOutputValidation =
   | { readonly ok: false; readonly reason: string };
 
 /**
- * `requirements_gap` needs a non-blank `gap_report` (it becomes 工程2's
- * feedback — an empty one would restart requirements generation with
- * nothing to act on) and, mirroring the promise the skill and the prompt
- * both make Claude, an empty `commit_subject`/`commit_body` (there is no
- * commit to describe). `done` needs a committable `commit_subject`,
- * judged on its trimmed value: non-blank, single-line, at most
- * `COMMIT_SUBJECT_MAX_CODEPOINTS` code points (counted by spreading, not
- * `.length`), not ending in "…" (a sign Claude tried to write past the
- * limit instead of within it — same reasoning as
- * pr_workflow_support.ts's isValidCommitSubject), and free of control
- * characters other than the already-rejected newline; it also requires a
- * `null` `gap_report` (same skill/prompt promise, the other direction).
- * `commit_body` is otherwise free-form and never rejected on its own
- * content. `reason` is operator-facing English, recorded on the
- * implement_rounds row / job log, never shown to Claude.
+ * Claudeの出力が、スキーマで表せない結果ごとの規則を満たすかを検査する。
+ *
+ * `requirements_gap`のとき:
+ * - `gap_report`が空白でないこと。要件定義へのフィードバックになるため、
+ *   空のままだと手がかりの無いまま要件定義をやり直すことになる。
+ * - `commit_subject`と`commit_body`が空であること。説明するcommitが無いため。
+ *   スキルとプロンプトでClaudeに約束させている内容と揃えている。
+ *
+ * `done`のとき(`commit_subject`は前後の空白を除いて判定する):
+ * - `gap_report`が`null`であること(上と同じ約束の逆向き)。
+ * - `commit_subject`が空白でない1行であること。
+ * - `COMMIT_SUBJECT_MAX_CODEPOINTS`コードポイント以下であること。
+ *   `.length`ではなく、展開して数える。
+ * - 「…」で終わらないこと。上限に収めずに書き切ろうとした兆候だからで、
+ *   `pr_workflow_support.ts`の`isValidCommitSubject`と同じ考え方である。
+ * - 改行(先に拒否済み)以外の制御文字を含まないこと。
+ *
+ * `commit_body`の内容そのものでは拒否しない。
+ * `reason`は運用者向けの英語で、`implement_rounds`の行とジョブのログに記録する。
+ * Claudeには見せない。
  */
 export function validateImplementOutput(
   output: ImplementClaudeOutput,
@@ -146,7 +155,7 @@ export function validateImplementOutput(
   if (subject.endsWith("…")) {
     return { ok: false, reason: 'commit_subject ends with "…"' };
   }
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: intentionally matching control characters (except \n, already rejected above), to reject them
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: 制御文字(先に拒否した\nを除く)を拒否するため、意図して一致させる
   if (/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(subject)) {
     return {
       ok: false,
@@ -157,19 +166,20 @@ export function validateImplementOutput(
 }
 
 // ---------------------------------------------------------------------------
-// buildImplementCommitMessage: subject + body + trailers (design §7)
+// buildImplementCommitMessage: 件名、本文、トレーラーを組み立てる
 // ---------------------------------------------------------------------------
 
 /**
- * The literal commit message `implement_finish` passes to `commitAndPush`
- * (workspace.ts): the trimmed `commit_subject`, then — only when
- * `commit_body` is not blank — a blank line and the trimmed body, then the
- * `Co-Authored-By` / `Generated-By` trailers via `withCommitTrailers`
- * (idempotent, so `commitAndPush`'s own call adds nothing more). Callers
- * run `validateImplementOutput` first; this function does not re-check the
- * subject. Japanese spacing normalization (`normalizeJapaneseText`, a
- * steps/pr_workflow_support.ts export) is the caller's job before this —
- * lib does not import from steps.
+ * `implement_finish`が`commitAndPush`(`workspace.ts`)に渡す
+ * commitメッセージを組み立てる。
+ * 前後の空白を除いた`commit_subject`を置き、`commit_body`が空白でなければ
+ * 空行と前後の空白を除いた本文を続ける。最後に`withCommitTrailers`で
+ * `Co-Authored-By`と`Generated-By`のトレーラーを付ける。
+ * `withCommitTrailers`は冪等なので、`commitAndPush`の中で再び呼ばれても何も増えない。
+ *
+ * 件名は検査し直さないので、呼び出し側が先に`validateImplementOutput`を実行する。
+ * 日本語の空白の正規化(`steps/pr_workflow_support.ts`の`normalizeJapaneseText`)も
+ * 呼び出し側が先に行う。libはstepsからimportしないためである。
  */
 export function buildImplementCommitMessage(
   output: Pick<ImplementClaudeOutput, "commit_subject" | "commit_body">,
@@ -182,20 +192,20 @@ export function buildImplementCommitMessage(
 }
 
 // ---------------------------------------------------------------------------
-// neutralizeIssueRefs: Claude-written commit text must not reference issues
+// neutralizeIssueRefs: Claudeが書いたcommitの文面からIssueへの参照を外す
 // ---------------------------------------------------------------------------
 
 /**
- * Rewrites GitHub issue references in Claude-written commit text so they
- * neither link nor close anything once the commit reaches the default
- * branch (`fixes #12` would close issue 12): `owner/repo#12` becomes
- * `owner/repo No.12` and a bare `#12` (not preceded by a word character or
- * `/`) becomes `No.12`; an issue / pull request URL
- * (`https://github.com/<o>/<r>/issues/<n>`, `.../pull/<n>`) keeps its text
- * with the host written `github[.]com`, and `GH-12` becomes `GH No.12`.
- * `C#` and `#tag` are left alone. Plain ASCII, no invisible characters.
- * The factory's own `Closes #N` lives in the PR body, and its trailers are
- * appended after this.
+ * Claudeが書いたcommitの文面にあるGitHubのIssue参照を書き換え、
+ * commitがデフォルトブランチに入ってもリンクせず、何も閉じないようにする
+ * (`fixes #12`のままだとIssue 12が閉じる)。
+ * - `owner/repo#12`は`owner/repo No.12`にする。
+ * - 単独の`#12`(直前が英数字・`_`・`/`でないもの)は`No.12`にする。
+ * - IssueやPRのURL(`https://github.com/<o>/<r>/issues/<n>`、`.../pull/<n>`)は、
+ *   ホストを`github[.]com`と書き換え、残りはそのまま残す。
+ * - `GH-12`は`GH No.12`にする。
+ * `C#`と`#tag`は変えない。ASCIIだけを使い、不可視の文字は入れない。
+ * Factory自身が書く`Closes #N`はPR本文にあり、トレーラーはこの処理の後に付ける。
  */
 export function neutralizeIssueRefs(text: string): string {
   return text
@@ -209,7 +219,7 @@ export function neutralizeIssueRefs(text: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// buildImplementBranchName: `factory/issue-<N>-wi-<id>` (design §7)
+// buildImplementBranchName: `factory/issue-<N>-wi-<id>`
 // ---------------------------------------------------------------------------
 
 function assertPositiveInteger(value: number, label: string): void {
@@ -220,9 +230,12 @@ function assertPositiveInteger(value: number, label: string): void {
   }
 }
 
-/** The implement branch for one work item. Both numbers come from the DB
- * (never user text), but the result still goes through `assertBranchName`
- * so a future caller cannot hand git something it would read as a flag. */
+/**
+ * 作業項目1件のimplementブランチの名前を返す。
+ * 数値が正の整数でないときと、ブランチ名として不正なときは例外を投げる。
+ * 2つの数値はDB由来で利用者の文字列ではないが、それでも`assertBranchName`を通す。
+ * 将来の呼び出し側が、gitがオプションと解釈する文字列を渡せないようにするためである。
+ */
 export function buildImplementBranchName(
   issueNumber: number,
   workItemId: number,
@@ -235,25 +248,28 @@ export function buildImplementBranchName(
 }
 
 // ---------------------------------------------------------------------------
-// classifyProtectedChanges: record (never block) protected-path changes
-// (design §3, §0b)
+// classifyProtectedChanges: 保護パスの変更を記録する(止めはしない)
 // ---------------------------------------------------------------------------
 
 /**
- * One human-facing Japanese line per protected change in the diff, using
- * the implement flow's lists (matchesImplementProtectedPath: pr_fix's plus
- * `.github/**`, `infra/**`, hook / package-manager / devcontainer
- * directories, lockfiles, tool configuration and any package.json): every
- * changed protected path (whatever its status), then every newly added
- * `*.sh` (protected_paths.ts's isNewShellScript), then the package.json
- * scripts flag (steps/pr_workflow_support.ts's packageJsonScriptsChanged,
- * computed by the caller — subsumed by the package.json path line since
- * any package.json change is protected, but kept as the more specific
- * note). A new `*.sh` under a protected prefix yields both lines. Unlike
- * pr_fix's detectForbiddenChanges this never blocks: the result is stored on
- * the implement round, listed in the PR body's 確認して欲しい点 and the
- * Discord pr_opened notification, and makes implement_verify skip the check
- * commands for that round.
+ * 差分にある保護対象の変更ごとに、人向けの日本語の行を1つずつ返す。
+ * 保護パスの判定にはimplementフロー用の一覧(`matchesImplementProtectedPath`)を使う。
+ * これはpr_fixの一覧に、`.github/**`、`infra/**`、hook・パッケージマネージャー・
+ * devcontainerのディレクトリ、lockfile、ツールの設定、
+ * すべての`package.json`を加えたものである。
+ *
+ * 行は次の順に並べる。
+ * 1. 変更された保護パス(変更の種類は問わない)
+ * 2. 新しく追加された`*.sh`(`protected_paths.ts`の`isNewShellScript`)
+ * 3. `package.json`の`scripts`の変更(呼び出し側が
+ *    `steps/pr_workflow_support.ts`の`packageJsonScriptsChanged`で判定して渡す)
+ * 3は`package.json`の保護パスの行に含まれるが、より具体的な注記として残す。
+ * 保護対象の接頭辞の下に新しい`*.sh`を追加すると、1と2の両方の行が出る。
+ *
+ * pr_fixの`detectForbiddenChanges`と違い、これは処理を止めない。
+ * 結果はimplementのラウンドに保存し、PR本文の「確認して欲しい点」と
+ * Discordの`pr_opened`通知に載せる。
+ * 保護対象の変更があったラウンドでは、implement_verifyが検証コマンドを実行しない。
  */
 export function classifyProtectedChanges(
   changes: readonly ChangedPath[],
@@ -276,33 +292,36 @@ export function classifyProtectedChanges(
   return reasons;
 }
 
-/** Why a round ran no check commands — one wording shared by the PR body's
- * 検査未実施, the Discord pr_opened embed and implement_rounds.checks_skipped_reason. */
+/**
+ * ラウンドで検証コマンドを実行しなかった理由の文言。
+ * PR本文の「検査未実施」、Discordの`pr_opened`、
+ * `implement_rounds.checks_skipped_reason`で同じ文言を使う。
+ */
 export const IMPLEMENT_CHECK_SKIP_REASONS = {
   protected_paths: "保護パスを変更したため",
   no_commands: "検査コマンドが未設定のため",
 } as const;
 
 // ---------------------------------------------------------------------------
-// truncateCheckOutput: `implement_rounds.check_output` keeps the first 16KB
-// (design §5; §12 hand-off asks for a UTF-8-boundary-safe cut)
+// truncateCheckOutput: `implement_rounds.check_output`には先頭16KBだけを残す
 // ---------------------------------------------------------------------------
 
 export const CHECK_OUTPUT_MAX_BYTES = 16 * 1024;
 
-/** Whether `byte` is a UTF-8 continuation byte (`10xxxxxx`). */
+/** `byte`がUTF-8の継続バイト(`10xxxxxx`)かを返す。 */
 function isContinuationByte(byte: number): boolean {
   return (byte & 0b1100_0000) === 0b1000_0000;
 }
 
 /**
- * The first `maxBytes` bytes of `text` as valid UTF-8 text: when the byte
- * boundary would split a multi-byte character, the whole character is
- * dropped instead. Measured in bytes (the column's intended limit), not
- * UTF-16 code units. NUL characters are stripped first, because a Postgres
- * `text` column rejects them. The caller passes the check commands' FULL
- * combined output after `maskSecrets`, before `insertImplementRound` — not
- * the prompt-side tail (runAllowedCheckCommands's outputTail).
+ * `text`の先頭`maxBytes`バイトを、正しいUTF-8の文字列として返す。
+ * バイトの境界がマルチバイト文字を分断するときは、その文字ごと捨てる。
+ * 列の上限はバイト数で決めているため、UTF-16のコード単位ではなくバイトで測る。
+ * PostgreSQLの`text`列はNUL文字を受け付けないので、先にNULを取り除く。
+ *
+ * 呼び出し側は、`maskSecrets`を適用した後の検証コマンドの出力全体を、
+ * `insertImplementRound`の前に渡す。
+ * プロンプト向けの末尾(`runAllowedCheckCommands`の`outputTail`)ではない。
  */
 export function truncateCheckOutput(
   text: string,
@@ -319,8 +338,7 @@ export function truncateCheckOutput(
 }
 
 // ---------------------------------------------------------------------------
-// buildImplementPrBody: .github/PULL_REQUEST_TEMPLATE.md's sections filled
-// from the round's results (design §7)
+// buildImplementPrBody: PRテンプレートの各節をラウンドの結果で埋める
 // ---------------------------------------------------------------------------
 
 export const NO_ACCEPTANCE_CRITERIA_NOTE =
@@ -328,29 +346,34 @@ export const NO_ACCEPTANCE_CRITERIA_NOTE =
 
 const ACCEPTANCE_CRITERIA_HEADING = "受入条件";
 
-/** The approved requirements document's `## 受入条件` body, verbatim, for
- * the PR body's 受入条件 section — or a fixed note when the section is
- * missing or empty (the requirements validator rejects such a document,
- * but the PR body must never silently render an empty section). */
+/**
+ * 承認済みの要件定義書から`## 受入条件`の本文をそのまま取り出す。
+ * PR本文の受入条件の節に使う。
+ * 節が無いか空のときは、固定の注記を返す。
+ * そのような文書は要件定義の検証で弾かれるが、
+ * PR本文で空の節を黙って表示することは避けるためである。
+ */
 export function extractAcceptanceCriteria(markdown: string): string {
   const body = extractSectionBody(markdown, ACCEPTANCE_CRITERIA_HEADING).trim();
   return body.length === 0 ? NO_ACCEPTANCE_CRITERIA_NOTE : body;
 }
 
 export type DeployNeeds = {
-  /** `infra/**` changed — worker image rebuild (host-side `mise run deploy`). */
+  /** `infra/**`が変わった。workerのimageを作り直す(ホストで`mise run deploy`)。 */
   readonly imageRebuild: boolean;
-  /** `migrations/**` changed — `wmill datatable migrate up`. */
+  /** `migrations/**`が変わった。`wmill datatable migrate up`が必要。 */
   readonly migrate: boolean;
-  /** `f/**` changed — `wmill sync push`. */
+  /** `f/**`が変わった。`wmill sync push`が必要。 */
   readonly syncPush: boolean;
 };
 
-/** Mechanical reading of the template's 備考 checklist from the diff's
- * paths. Only meaningful for the factory repo itself: another repo may well
- * have its own `infra/`, `migrations/` or `f/` directories, so the flags
- * would be set for paths that have nothing to do with Windmill. The caller
- * gates it with ImplementPrBodyInput's `deployChecklist`. */
+/**
+ * 差分のパスから、PRテンプレートの「備考」のチェックリストを機械的に判定する。
+ * 意味があるのはFactory自身のリポジトリだけである。
+ * 他のリポジトリにも`infra/`、`migrations/`、`f/`があるかもしれず、
+ * Windmillと関係ないパスで項目に印が付いてしまう。
+ * そのため呼び出し側が`ImplementPrBodyInput`の`deployChecklist`で使うかを決める。
+ */
 export function classifyDeployNeeds(
   changedPaths: readonly string[],
 ): DeployNeeds {
@@ -372,43 +395,44 @@ export type ImplementCheckSummary =
   | { readonly kind: "skipped"; readonly reason: string };
 
 export type ImplementPrBodyInput = {
-  /** Claude's `summary` (caller applies normalizeJapaneseText first). */
+  /** Claudeの`summary`。呼び出し側が先に`normalizeJapaneseText`を適用する。 */
   readonly summary: string;
-  /** The approved requirements document (requirement_drafts markdown). */
+  /** 承認済みの要件定義書(`requirement_drafts`のMarkdown)。 */
   readonly requirementsMarkdown: string;
-  /** The final round's checks. */
+  /** 最後のラウンドの検証結果。 */
   readonly checks: ImplementCheckSummary;
-  /** classifyProtectedChanges's lines for the final diff. */
+  /** 最終の差分に対する`classifyProtectedChanges`の行。 */
   readonly protectedChanges: readonly string[];
-  /** Claude's `notes_for_reviewer` (caller normalizes first). */
+  /** Claudeの`notes_for_reviewer`。呼び出し側が先に正規化する。 */
   readonly notesForReviewer: readonly string[];
-  /** approval_support.ts's buildConsoleUrl(url, { work_item_id }). */
+  /** `approval_support.ts`の`buildConsoleUrl(url, { work_item_id })`の値。 */
   readonly requirementsConsoleUrl: string;
   readonly issueNumber: number;
   readonly changedPaths: readonly string[];
-  /** true when the target repo is the factory itself (the caller decides):
-   * only then does 備考 carry the Windmill deploy checklist; otherwise it
-   * reads なし. */
+  /**
+   * 対象のリポジトリがFactory自身なら`true`(呼び出し側が判定する)。
+   * そのときだけ「備考」にWindmillへの反映のチェックリストを載せ、
+   * それ以外は「なし」にする。
+   */
   readonly deployChecklist: boolean;
 };
 
 /*
- * Sanitisers for Claude-authored text in the PR body. That text is
- * untrusted-influenced (Claude reads the issue and the repository), and the
- * body is both rendered by GitHub and parsed by the factory itself, so three
- * threats are neutralised:
- * - heading / HTML-block injection: a `#` heading, a setext underline or a
- *   raw `<` (`<!--`, `<details>`, ...) could open a new section, hide text
- *   or restructure the template's sections;
- * - closing-keyword hijack: `fixes #5` would make GitHub close issue #5 on
- *   merge and make poll_prs's extractLinkedIssueNumbers link the PR to the
- *   wrong issue, so every `#<digit>` is escaped (the real `Closes #N` is
- *   written by buildImplementPrBody itself, outside the sanitised text);
- * - mentions: `@user` / `@org/team` would notify people.
- * A backslash is inserted before the offending character (GitHub renders
- * `\#`, `\<`, `\@` as the literal character). A character already
- * escaped by an odd run of backslashes is left alone, so our own escapes are
- * never doubled into `\\#` (which would re-activate the character).
+ * PR本文に入れる、Claudeが書いた文字列を無害化する関数群。
+ * ClaudeはIssueとリポジトリを読むので、その文字列は信頼できない入力の影響を受ける。
+ * PR本文はGitHubが表示し、Factory自身も解析するので、次の3つを無害化する。
+ * - 見出しやHTMLブロックの注入: `#`の見出し、setext形式の下線、生の`<`
+ *   (`<!--`や`<details>`など)は、新しい節を開いたり、文字を隠したり、
+ *   テンプレートの節の構造を変えたりできる。
+ * - closing keywordの乗っ取り: `fixes #5`があると、マージ時にGitHubがIssue #5を閉じ、
+ *   `poll_prs`の`extractLinkedIssueNumbers`がPRを誤ったIssueに結び付ける。
+ *   そのため`#<数字>`はすべてエスケープする。
+ *   本物の`Closes #N`は、無害化した文字列の外で`buildImplementPrBody`が書く。
+ * - メンション: `@user`や`@org/team`は人に通知が飛ぶ。
+ * 該当する文字の前にバックスラッシュを入れる(GitHubは`\#`、`\<`、`\@`を
+ * その文字そのものとして表示する)。奇数個のバックスラッシュでエスケープ済みの文字は
+ * そのままにする。自分で入れたエスケープを`\\#`と二重にすると、
+ * 文字の効果が戻ってしまうためである。
  */
 
 const ATX_HEADING_LINE = /^(\s{0,3})#/;
@@ -423,8 +447,10 @@ function needsInlineEscape(char: string, next: string): boolean {
   return false;
 }
 
-/** Inserts `\` before every `<`, `#<digit>` and `@<word char>` that is not
- * already escaped (preceded by an odd number of backslashes). */
+/**
+ * エスケープされていない(直前のバックスラッシュが偶数個の)`<`、`#<数字>`、
+ * `@<英数字か_>`の前に`\`を入れる。
+ */
 function escapeInlineTriggers(text: string): string {
   let out = "";
   let backslashes = 0;
@@ -453,9 +479,11 @@ function escapeBlockLine(line: string): string {
   return line;
 }
 
-/** For multi-line Claude-authored prose (the summary): strips `\r`, escapes
- * ATX heading and setext underline lines, then `<`, `#<digit>` and
- * `@<word char>` anywhere in the text. */
+/**
+ * Claudeが書いた複数行の文章(summary)を無害化する。
+ * `\r`を取り除き、ATX形式の見出しの行とsetext形式の下線の行をエスケープしてから、
+ * 文中のすべての`<`、`#<数字>`、`@<英数字か_>`をエスケープする。
+ */
 export function sanitizePrProse(text: string): string {
   const blockSafe = text
     .replaceAll("\r", "")
@@ -465,9 +493,11 @@ export function sanitizePrProse(text: string): string {
   return escapeInlineTriggers(blockSafe);
 }
 
-/** For a single-line list item (a reviewer note, a protected-change line):
- * collapses every whitespace run containing a newline into one space so the
- * item cannot spill onto new lines, trims, then applies sanitizePrProse. */
+/**
+ * 1行のリスト項目(レビュアーへの注記や保護対象の変更の行)を無害化する。
+ * 項目が次の行にはみ出さないよう、改行を含む空白の並びを1つの空白にまとめ、
+ * 前後の空白を除いてから`sanitizePrProse`を適用する。
+ */
 export function sanitizePrLine(text: string): string {
   return sanitizePrProse(text.replace(/\s*\n\s*/g, " ").trim());
 }
@@ -500,15 +530,17 @@ function renderChecks(checks: ImplementCheckSummary): string {
 }
 
 /**
- * The PR body, section for section, per .github/PULL_REQUEST_TEMPLATE.md:
- * 概要 = summary, 受入条件 = the requirements document's table, 動作確認結果
- * = the last round's checks (or 検査未実施 with its reason), 確認して欲しい点
- * = protected changes + reviewer notes + a Console link to the approved
- * requirements, 関連リンク = `Closes #N` (auto-links the PR work item to the
- * issue — poll_prs.ts's extractLinkedIssueNumbers reads exactly this), 備考
- * = the deploy checklist from classifyDeployNeeds for the factory repo
- * (`deployChecklist`), なし otherwise. No marker and no
- * announcement text (design §7: operational notices go to Discord/Console).
+ * `.github/PULL_REQUEST_TEMPLATE.md`の節の順にPR本文を組み立てる。
+ * - 概要: summary
+ * - 受入条件: 要件定義書の表
+ * - 動作確認結果: 最後のラウンドの検証結果(実行しなかったときは「検査未実施」と理由)
+ * - 確認して欲しい点: 保護対象の変更、レビュアーへの注記、
+ *   承認済みの要件定義を開くConsoleのリンク
+ * - 関連リンク: `Closes #N`。PRの作業項目をIssueに結び付ける。
+ *   `poll_prs.ts`の`extractLinkedIssueNumbers`はこの形を読む。
+ * - 備考: Factory自身のリポジトリ(`deployChecklist`)なら
+ *   `classifyDeployNeeds`による反映のチェックリスト、それ以外は「なし」
+ * マーカーや告知の文は入れない。運用上の告知はDiscordとConsoleに出す。
  */
 export function buildImplementPrBody(input: ImplementPrBodyInput): string {
   const attention = [
@@ -547,8 +579,7 @@ export function buildImplementPrBody(input: ImplementPrBodyInput): string {
 }
 
 // ---------------------------------------------------------------------------
-// decideImplementRoundExit: the verify loop's exit rule (design §2
-// implement_verify, §0 "検証が OK になるまで修正を繰り返す")
+// decideImplementRoundExit: 検証ループの終了条件(検証が通るまで修正を繰り返す)
 // ---------------------------------------------------------------------------
 
 export type ImplementRoundExit =
@@ -562,30 +593,32 @@ export type ImplementRoundExit =
 
 export type ImplementRoundExitInput = {
   readonly claudeOutcome: ImplementClaudeOutcome;
-  /** `skipped` = protected paths changed or no check command configured. */
+  /** `skipped`は、保護パスを変更したか、検証コマンドが未設定であることを表す。 */
   readonly checks: "passed" | "failed" | "skipped";
-  /** 1-based round number within this verify loop (not the DB's serial). */
+  /** この検証ループの中でのラウンド番号(1始まり)。DBの連番ではない。 */
   readonly round: number;
-  /** factory_config.implement_max_rounds. */
+  /** `factory_config.implement_max_rounds`の値。 */
   readonly maxRounds: number;
   readonly dailyBudgetExceeded: boolean;
-  /** stallHash of this round's combined check output, `null` when none ran. */
+  /** このラウンドの検証出力全体の`stallHash`。何も実行しなかったときは`null`。 */
   readonly checkOutputHash: string | null;
   readonly previousCheckOutputHash: string | null;
-  /** stallHash of this round's worktree diff. */
+  /** このラウンドのworktreeの差分の`stallHash`。 */
   readonly diffHash: string;
   readonly previousDiffHash: string | null;
 };
 
 /**
- * Whether implement_verify runs another fix round. Precedence: Claude's
- * own `requirements_gap` always ends the loop; a round that ran no checks
- * exits as `checks_skipped` (design §0b: GitHub CI takes over); passing
- * checks exit; then the guards — round ceiling, daily budget, and stall
- * detection (the diff or the check output is identical to the previous
- * round's, so another fix round would only spend budget). `continue` means
- * the checks failed and none of the guards fired. roundOutcomeForExit maps
- * the exit onto the round's `implement_rounds.outcome`.
+ * implement_verifyが修正のラウンドをもう1回回すか、どの理由で終えるかを決める。
+ * 判定は次の優先順で行う。
+ * 1. Claude自身が`requirements_gap`を返したら、必ずループを終える。
+ * 2. 検証を実行しなかったラウンドは`checks_skipped`で終える(GitHubのCIに任せる)。
+ * 3. 検証が通ったら終える。
+ * 4. ガードとして、ラウンドの上限、日次予算、停滞の検出を確かめる。
+ *    停滞は、差分か検証出力が前のラウンドと同じ状態で、
+ *    もう1回修正しても予算を使うだけになる。
+ * `continue`は、検証が失敗し、どのガードにも当たらなかったことを表す。
+ * 終了の理由から`implement_rounds.outcome`への対応は`roundOutcomeForExit`が決める。
  */
 export function decideImplementRoundExit(
   state: ImplementRoundExitInput,
@@ -612,11 +645,12 @@ export function decideImplementRoundExit(
 }
 
 /**
- * `implement_rounds.outcome` for a round that ended the verify loop with
- * `exit` (or, for `continue`, a round whose checks failed and that is
- * followed by a fix round): checks_passed -> done; checks_skipped, stalled
- * and requirements_gap keep their names; max_rounds, daily_budget and
- * continue are all rounds whose checks failed -> check_failed.
+ * 検証ループを`exit`で終えたラウンドの`implement_rounds.outcome`を返す。
+ * `continue`の場合は、検証が失敗して次に修正のラウンドが続くラウンドの値になる。
+ * - `checks_passed`は`done`にする。
+ * - `checks_skipped`、`stalled`、`requirements_gap`は同じ名前のままにする。
+ * - `max_rounds`、`daily_budget`、`continue`は、どれも検証が失敗したラウンドなので
+ *   `check_failed`にする。
  */
 export function roundOutcomeForExit(
   exit: ImplementRoundExit,
@@ -637,23 +671,27 @@ export function roundOutcomeForExit(
   }
 }
 
-/** sha256 hex of `text` — the stall-detection fingerprint for a round's
- * diff and check output. The diff fingerprint must include untracked files
- * (e.g. `git add -A --intent-to-add` then `git diff HEAD`, or the porcelain
- * status plus the diff): plain `git diff` omits new files, so a round that
- * only added files would hash like the previous one and report a false
- * stall. */
+/**
+ * `text`のsha256を16進で返す。ラウンドの差分と検証出力の停滞検出に使う指紋である。
+ * 差分の指紋には追跡されていないファイルを含めること
+ * (`git add -A --intent-to-add`の後に`git diff HEAD`を取る、
+ * またはporcelainの状態と差分を合わせるなど)。
+ * 素の`git diff`は新しいファイルを含まないので、ファイルを追加しただけのラウンドが
+ * 前のラウンドと同じ指紋になり、誤って停滞と判定してしまう。
+ */
 export function stallHash(text: string): string {
   return createHash("sha256").update(text).digest("hex");
 }
 
 // ---------------------------------------------------------------------------
-// isRequirementsApprovedForAttempt (design §8: implement_prepare's gate and
-// retry_work_item's implement-vs-pipeline choice)
+// isRequirementsApprovedForAttempt: implement_prepareの関門と、
+// retry_work_itemがimplementとpipelineのどちらを再実行するかの判定に使う
 // ---------------------------------------------------------------------------
 
-/** Whether `approval` (db.latestRequirementsApproval's row, or null) is an
- * approved requirements request for exactly `attempt`. */
+/**
+ * `approval`(`db.latestRequirementsApproval`の行か`null`)が、
+ * ちょうど`attempt`回目の要件定義を承認したものかを返す。
+ */
 export function isRequirementsApprovedForAttempt(
   approval: { readonly status: string; readonly attempt: number } | null,
   attempt: number,
@@ -666,15 +704,17 @@ export function isRequirementsApprovedForAttempt(
 }
 
 // ---------------------------------------------------------------------------
-// hasActivePrRun (implement_prepare: implement and pr_fix / pr_review never
-// share the branch's worktree at the same time)
+// hasActivePrRun: implementとpr_fix・pr_reviewが
+// 同じブランチのworktreeを同時に使わないための判定
 // ---------------------------------------------------------------------------
 
 export const ACTIVE_PR_RUN_REASON = "pull request has an active fix run";
 
-/** Whether the PR's latest work item (db.latestPrWorkItem, or null) is a
- * pr_fix or pr_review run that has not reached a terminal status — it may
- * be using the implement branch's worktree right now. */
+/**
+ * PRの最新の作業項目(`db.latestPrWorkItem`か`null`)が、
+ * 終端状態に達していないpr_fixかpr_reviewの実行かを返す。
+ * そのような実行は、今まさにimplementブランチのworktreeを使っているかもしれない。
+ */
 export function hasActivePrRun(
   item: Pick<WorkItem, "kind" | "status"> | null,
 ): boolean {

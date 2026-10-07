@@ -110,7 +110,7 @@ describe("implement_finish open_pr ordering", () => {
     "utf8",
   );
 
-  // A label failure must not lose the PR: pr_url is recorded first.
+  // ラベルの付与に失敗してもPRを見失わないよう、`pr_url`を先に記録する。
   test("records pr_url before adding the review label", () => {
     expect(source.indexOf("await setWorkItemPrUrl(")).toBeLessThan(
       source.indexOf("await addLabels("),

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# test-db.sh - medium test: applies every migrations/datatable/main/*.up.sql
-# to a disposable "factory_test" database inside the compose Postgres
-# container, SELECTs from every view in the factory schema to confirm they
-# compile, then applies the matching *.down.sql files (most recent first) to
-# confirm rollback works. The scratch database is dropped on exit either way
-# - the real `windmill` database is never touched.
+# migrationのmediumテスト。composeのPostgresのコンテナ内の使い捨ての
+# `factory_test`データベースに`migrations/datatable/main/*.up.sql`をすべて
+# 適用し、`factory`スキーマの各ビューからSELECTしてビューが成り立つことを
+# 確かめる。次に対応する`*.down.sql`を新しい順に適用し、戻せることを確かめる。
+# 使い捨てのデータベースは成否を問わず終了時に削除し、本物の`windmill`
+# データベースには触れない。
 #
-# Requires the local stack to be running (`mise run up`). Wired as
-# `mise run test:db`.
+# ローカルのスタックが動いている必要がある(`mise run up`)。
+# `mise run test:db`から呼ぶ。
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
@@ -34,7 +34,7 @@ db_id="$(compose ps -q db 2>/dev/null || true)"
 [ "$(docker inspect -f '{{.State.Running}}' "${db_id}" 2>/dev/null || echo false)" = "true" ] \
   || die "the 'db' service is not running (run 'mise run up' first)"
 
-# psql_exec DBNAME - runs psql against DBNAME, reading the SQL script from stdin.
+# psql_exec DBNAME: 標準入力からSQLを読み、DBNAMEに対してpsqlを実行する。
 psql_exec() {
   compose exec -T db psql -v ON_ERROR_STOP=1 -U postgres -d "$1"
 }
@@ -72,7 +72,7 @@ shopt -s nullglob
 down_files=("${MIGRATIONS_DIR}"/*.down.sql)
 shopt -u nullglob
 if [ ${#down_files[@]} -gt 0 ]; then
-  # Apply down migrations most-recent-first, mirroring `wmill datatable migrate down`.
+  # `wmill datatable migrate down`と同じく、downのmigrationは新しい順に適用する。
   for ((i = ${#down_files[@]} - 1; i >= 0; i--)); do
     down_file="${down_files[${i}]}"
     log "applying $(basename "${down_file}") (rollback check)"

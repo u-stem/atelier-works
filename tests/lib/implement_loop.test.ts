@@ -583,7 +583,7 @@ type HarnessOptions = {
   readonly checks?: readonly (readonly LoopCheckResult[])[];
   readonly fixRounds?: readonly ImplementClaudeRound[];
   readonly budgetExceeded?: boolean;
-  /** Thrown by assertGitPointer from this 0-based call on. */
+  /** `assertGitPointer`が、0始まりで`from`回目以降の呼び出しで投げる例外。 */
   readonly pointerError?: { readonly from: number; readonly error: Error };
 };
 

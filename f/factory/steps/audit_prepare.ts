@@ -1,8 +1,8 @@
-// PathScript step 1/2 of f/factory/audit (工程5). Moves the audit work item
-// to `auditing`, collects the evidence pack from the DB, and makes sure the
-// factory self clone exists for audit_generate's read-only `--add-dir`.
-// No budget guard here: audit_kickoff.ts checks the daily budget before it
-// even creates the work item.
+// f/factory/auditフローの2ステップ中1番目。
+// 監査の作業項目を`auditing`に進め、DBから監査の根拠資料を集め、
+// `audit_generate`が読み取り専用の`--add-dir`で使うFactory自身のcloneを用意する。
+// ここでは日次予算を確かめない。
+// `audit_kickoff.ts`が作業項目を作る前に確かめているため。
 
 import * as wmill from "windmill-client@1.817.0";
 import {
@@ -25,11 +25,13 @@ export type AuditPrepareResult = {
   readonly factory_clone_dir: string;
 };
 
-/** Whether this run enters fresh, resumes a step retry, or must skip
- * (pure, for testing): `picked` starts the transition to `auditing`,
- * `auditing` is a retry of this very step so it must not re-transition,
- * and anything else (already terminal, or a status this step never
- * produces) means the work item is not startable here. */
+/**
+ * 現在の状態から、新規に始めるか(`start`)、
+ * ステップのリトライとして再開するか(`resume`)、飛ばすか(`skip`)を返す。テストできるよう純粋関数にしている。
+ * `picked`なら`auditing`への遷移を始める。
+ * `auditing`はこのステップ自身のリトライなので、遷移をやり直さない。
+ * それ以外(終了済みや、このステップが作らない状態)はここでは開始できない。
+ */
 export function decidePrepareEntry(
   status: WorkItemStatus,
 ): "start" | "resume" | "skip" {
@@ -38,13 +40,14 @@ export function decidePrepareEntry(
   return "skip";
 }
 
-/** Whether to resume or skip after the `picked` → `auditing`
- * compare-and-swap in `main` reports it did not move the row (pure, for
- * testing) — a concurrent run or reconcile already changed the status
- * between the initial `getWorkItem` and this step's write. `auditing`
- * means that concurrent run already made the transition this step wanted,
- * so continuing as a resume is safe; anything else means the work item is
- * no longer startable here. */
+/**
+ * `main`の`picked`→`auditing`のcompare-and-swapで行が更新されなかったときに、
+ * 再開するか飛ばすかを返す。テストできるよう純粋関数にしている。
+ * 更新されないのは、最初の`getWorkItem`からこのステップの書き込みまでの間に、
+ * 並行する実行かreconcileが状態を変えた場合である。
+ * `auditing`なら、並行する実行がこのステップの望む遷移を済ませているので、再開してよい。
+ * それ以外なら、この作業項目はもうここでは開始できない。
+ */
 export function decideAfterFailedStart(
   status: WorkItemStatus,
 ): "resume" | "skip" {

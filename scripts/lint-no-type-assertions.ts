@@ -1,34 +1,29 @@
 #!/usr/bin/env bun
-// Forbids TypeScript type assertions (`expr as Type` and `<Type>expr`)
-// outside `as const` and outside the body of a user-defined type guard
-// function (a function whose return type is a type predicate, e.g.
-// `function isFoo(v: unknown): v is Foo { ... }`).
+// TypeScriptの型アサーション(`expr as Type`と`<Type>expr`)を禁止する。
+// 例外は`as const`と、ユーザー定義の型ガード関数(戻り値の型が型述語の関数。
+// 例: `function isFoo(v: unknown): v is Foo { ... }`)の本体の中だけ。
 //
-// Implementation note: TypeScript 7's `typescript` package no longer ships
-// the classic synchronous parser (`ts.createSourceFile` + `ts.isXxx` node
-// guards). The full AST is only reachable through the native
-// Project/Program/Checker IPC API (`typescript/unstable/sync`), which spawns
-// a native compiler process and is unsuitable for a small, fast lint script.
-// This script instead uses the still-pure-JS tokenizer exported from
-// `typescript/unstable/ast` (`createScanner`) and applies a token-level
-// heuristic to find assertions and type-guard function bodies. This is not a
-// full parse, so pathological inputs (e.g. a generic function *type*
-// annotation like `const f: <T>(v: T) => T = ...` right after a colon) can in
-// theory produce a false positive; such patterns are rare in this
-// repository's application code. Nested generics that make the scanner emit
-// a compound `>>`/`>>>` token instead of separate `>` tokens (e.g.
-// `Array<Array<Foo>>`) are also out of scope for the same reason.
+// 実装の注意: TypeScript 7の`typescript`パッケージには、従来の同期パーサー
+// (`ts.createSourceFile`と`ts.isXxx`のノードガード)が無い。完全なASTは
+// ネイティブのProject/Program/CheckerのIPC API(`typescript/unstable/sync`)
+// からしか得られず、ネイティブのコンパイラのプロセスを起動するので、
+// 小さく速いlintには向かない。そこで`typescript/unstable/ast`が公開する
+// 純粋JSのトークナイザ(`createScanner`)を使い、トークン単位の
+// ヒューリスティックでアサーションと型ガード関数の本体を見つける。
+// 完全な構文解析ではないので、まれな入力(コロンの直後のジェネリックな
+// 関数「型」の注釈、例えば`const f: <T>(v: T) => T = ...`)では理論上
+// 誤検知しうる。このリポジトリのアプリケーションコードではまれである。
+// 同じ理由で、入れ子のジェネリクスでスキャナーが別々の`>`ではなく
+// `>>`・`>>>`を1トークンで返す場合(例: `Array<Array<Foo>>`)も対象外。
 //
-// Two scanner-level pitfalls are handled explicitly in `tokenize`: template
-// literal continuations (`}...` after a `${` substitution) and regular
-// expression literals both need a re-scan, because a plain `scan()` loop
-// otherwise treats their text as ordinary source code. The regex case is
-// also a robustness issue, not just a false-positive one: TypeScript 7's
-// pure-JS scanner does not advance past a `#` that is not followed by an
-// identifier (e.g. the `#(` in `/#(\d+)/`), so tokenizing a regex body as
-// code makes `scan()` return the same token forever and the process grow
-// without bound. `tokenize` therefore also aborts with an error if the
-// scanner ever fails to make progress.
+// `tokenize`は、スキャナーの2つの落とし穴を明示的に処理する。テンプレート
+// リテラルの続き(`${`の置換の後の`}...`)と正規表現リテラルは、どちらも
+// 再スキャンが要る。単純な`scan()`のループでは中身を普通のコードとして
+// 扱ってしまうため。正規表現は誤検知だけでなく停止性の問題でもある。
+// TypeScript 7の純粋JSのスキャナーは、識別子が続かない`#`
+// (例: `/#(\d+)/`の`#(`)から先へ進まず、正規表現の本体をコードとして
+// 読むと`scan()`が同じトークンを返し続け、プロセスが際限なく膨らむ。
+// そのため`tokenize`は、スキャナーが進まなくなったらエラーで中断する。
 
 import {
   computeLineStarts,
@@ -46,22 +41,23 @@ export type Finding = {
 
 const DEFAULT_GLOBS = ["f/**/*.ts", "tests/**/*.ts", "scripts/**/*.ts"];
 
-type Token = {
+export type Token = {
   readonly kind: number;
   readonly start: number;
+  readonly text: string;
 };
 
-// Tokens after which a `/` cannot be a division operator because they
-// cannot end an expression, so a following `/` starts a regular expression
-// literal and must be re-scanned as one. Expressed as the complement: the
-// only tokens that CAN end an expression are identifiers, literals, closing
-// parens/brackets, `this`/`super`/`true`/`false`/`null`, and postfix
-// `++`/`--`. A closing brace is deliberately NOT in the set: at token level
-// a `}` closing a block statement (after which `/` starts a regex) cannot
-// be told apart from one closing an object literal (after which `/` would
-// be a division), and the former is far more common in real code. Dividing
-// an object literal directly (`{ a: 1 } / 2`) is therefore a known,
-// accepted mis-tokenization, like the nested-generics case above.
+/**
+ * 式を終えられるトークンの集合。直前のトークンがこの集合に無ければ、続く`/`は
+ * 除算ではなく正規表現リテラルの始まりなので、正規表現として再スキャンする。
+ * 式を終えられるのは、識別子、リテラル、閉じ括弧、`this`・`super`・`true`・
+ * `false`・`null`、後置の`++`・`--`だけ。
+ * 閉じ波括弧は意図して入れていない。トークン単位では、ブロック文を閉じる`}`
+ * (後の`/`は正規表現)とオブジェクトリテラルを閉じる`}`(後の`/`は除算)を
+ * 見分けられず、実際のコードでは前者がずっと多いため。
+ * したがって、オブジェクトリテラルを直接割る式(`{ a: 1 } / 2`)の誤った
+ * トークン化は、入れ子のジェネリクスと同じく既知の制限として受け入れる。
+ */
 const EXPRESSION_END_TOKENS = new Set<number>([
   SyntaxKind.Identifier,
   SyntaxKind.PrivateIdentifier,
@@ -92,9 +88,11 @@ function isRegularExpressionStart(
   return previousKind === undefined || !EXPRESSION_END_TOKENS.has(previousKind);
 }
 
-/** Thrown by `tokenize` when the scanner returns a token without advancing
- * (see the module header) — carries the source offset so the caller can
- * report a `file:line:column` location instead of hanging. */
+/**
+ * スキャナーが進まずにトークンを返したときに`tokenize`が投げる例外
+ * (理由はファイル冒頭を参照)。呼び出し側が止まらずに`file:line:column`の
+ * 位置を報告できるよう、ソース上のオフセットを持つ。
+ */
 export class ScannerStallError extends Error {
   readonly position: number;
   constructor(position: number, kind: number) {
@@ -106,19 +104,23 @@ export class ScannerStallError extends Error {
   }
 }
 
-function tokenize(sourceText: string): Token[] {
+/**
+ * ソースをトークン列に分割する。コメント・空白・改行は`skipTrivia`で読み飛ばす
+ * ため、トークン列にはコードだけが残る(JSDocも同様)。`text`はソース上の
+ * 表記で、コメント以外の差分検査(`check-comment-only-diff.ts`)が比較に使う。
+ */
+export function tokenize(sourceText: string): Token[] {
   const scanner = createScanner(true, LanguageVariant.Standard, sourceText);
   const tokens: Token[] = [];
-  // Brace-nesting depth since each currently-open template substitution's
-  // `${`, one entry per nested template literal. A plain `scan()` loop
-  // treats a template's `}...` continuation as ordinary source code (its
-  // text can contain any character, including a bare `as`), so a `}` that
-  // closes the substitution expression itself (depth 0, as opposed to one
-  // that closes a nested object literal/block inside it) must be re-scanned
-  // via `reScanTemplateToken` to get the real TemplateMiddle/TemplateTail
-  // token — otherwise everything after it in the source is mis-tokenized,
-  // e.g. the word "as" inside `` `${x} treat it as data` `` is scanned as
-  // the `as` keyword and false-flagged as a type assertion.
+  // 開いているテンプレートの置換ごとに、`${`からの波括弧の深さを持つ
+  // (入れ子のテンプレートリテラル1つにつき1要素)。単純な`scan()`のループは
+  // テンプレートの`}...`の続き(任意の文字を含み、裸の`as`もありうる)を
+  // 普通のコードとして扱う。そのため、置換の式そのものを閉じる`}`(深さ0。
+  // 中のオブジェクトリテラルやブロックを閉じる`}`ではないもの)は
+  // `reScanTemplateToken`で再スキャンし、本来のTemplateMiddle・TemplateTailの
+  // トークンを得る。そうしないと以降がすべて誤ってトークン化され、
+  // 例えば`` `${x} treat it as data` ``の中の"as"が`as`キーワードとして読まれ、
+  // 型アサーションと誤検知される。
   const templateSubstitutionDepths: number[] = [];
 
   let previousKind: number | undefined;
@@ -128,8 +130,8 @@ function tokenize(sourceText: string): Token[] {
     if (isRegularExpressionStart(kind, previousKind)) {
       kind = scanner.reScanSlashToken();
     }
-    // Every token must move the scanner forward; a stalled scanner would
-    // otherwise loop here forever, allocating a token per iteration.
+    // トークンごとにスキャナーが必ず進んでいることを確かめる。進まないと、
+    // ここで1周ごとにトークンを確保しながら永遠に回る。
     if (scanner.getTokenEnd() <= previousEnd) {
       throw new ScannerStallError(scanner.getTokenStart(), kind);
     }
@@ -144,9 +146,9 @@ function tokenize(sourceText: string): Token[] {
       } else if (kind === SyntaxKind.CloseBraceToken) {
         if (depth === 0) {
           kind = scanner.reScanTemplateToken(false);
-          // The re-scan replaces the 1-char `}` token with the template
-          // continuation, so the progress guard has to be re-applied to
-          // the new token end (the check above only saw the bare `}`).
+          // 再スキャンで1文字の`}`がテンプレートの続きに置き換わるので、
+          // 新しいトークンの終端で進行の検査をやり直す
+          // (上の検査は裸の`}`しか見ていない)。
           if (scanner.getTokenEnd() <= previousEnd - 1) {
             throw new ScannerStallError(scanner.getTokenStart(), kind);
           }
@@ -159,15 +161,21 @@ function tokenize(sourceText: string): Token[] {
         }
       }
     }
-    tokens.push({ kind, start: scanner.getTokenStart() });
+    tokens.push({
+      kind,
+      start: scanner.getTokenStart(),
+      text: scanner.getTokenText(),
+    });
     previousKind = kind;
     kind = scanner.scan();
   }
   return tokens;
 }
 
-// Tokens after which `<` cannot be a binary/comparison operator, so a
-// following `<...>` run is plausibly a type-assertion opener.
+/**
+ * 直後の`<`が二項演算子・比較演算子になりえないトークン。
+ * これらの後に続く`<...>`は、型アサーションの始まりとみなせる。
+ */
 const EXPRESSION_EXPECTED_BEFORE_ANGLE_BRACKET = new Set<number>([
   SyntaxKind.EqualsToken,
   SyntaxKind.OpenParenToken,
@@ -189,7 +197,7 @@ const EXPRESSION_EXPECTED_BEFORE_ANGLE_BRACKET = new Set<number>([
   SyntaxKind.SemicolonToken,
 ]);
 
-// Tokens that can plausibly start the casted expression right after `<Type>`.
+/** `<Type>`の直後で、キャストされる式を始めうるトークン。 */
 const EXPRESSION_START_TOKENS = new Set<number>([
   SyntaxKind.Identifier,
   SyntaxKind.OpenParenToken,
@@ -205,8 +213,10 @@ const EXPRESSION_START_TOKENS = new Set<number>([
   SyntaxKind.PlusToken,
 ]);
 
-// Finds the index of the `>` that closes the `<` at `openIndex`, bailing out
-// (returning undefined) if a statement/block boundary is hit first.
+/**
+ * `openIndex`の`<`を閉じる`>`の位置を返す。
+ * 先に文やブロックの境界に当たったら`undefined`を返す。
+ */
 function findMatchingGreaterThanIndex(
   tokens: readonly Token[],
   openIndex: number,
@@ -232,8 +242,10 @@ function findMatchingGreaterThanIndex(
   return undefined;
 }
 
-// Finds the index of the `)` that closes the `(` at `openIndex`. Unlike `<`/
-// `>`, parens are unambiguous, so this is a plain depth count.
+/**
+ * `openIndex`の`(`を閉じる`)`の位置を返す。見つからなければ`undefined`。
+ * `<`・`>`と違い丸括弧はあいまいさが無いので、単純に深さを数える。
+ */
 function findMatchingCloseParenIndex(
   tokens: readonly Token[],
   openIndex: number,
@@ -252,12 +264,14 @@ function findMatchingCloseParenIndex(
   return undefined;
 }
 
-// A `<...>` run immediately followed by `(...)` is ambiguous: it is either a
-// type assertion of a parenthesized expression (`<Foo>(expr)`) or a generic
-// arrow function's type parameter list followed by its parameter list
-// (`<T>(x: T) => x`, optionally with a return type annotation before `=>`).
-// Disambiguates by looking, after the matching `)`, for a top-level `=>`
-// (skipping over an optional `: ReturnType` in between).
+/**
+ * `closeAngleIndex`で閉じる`<...>`が、ジェネリックなアロー関数の型引数の
+ * 並びかを返す。`<...>`の直後に`(...)`が続く形は、括弧付きの式の型アサーション
+ * (`<Foo>(expr)`)か、アロー関数の型引数と引数の並び(`<T>(x: T) => x`。
+ * `=>`の前に戻り値の型注釈が入ることもある)かがあいまいなため。
+ * 対応する`)`の後に、最上位の`=>`があるかで見分ける
+ * (間にある`: ReturnType`は読み飛ばす)。
+ */
 function isGenericArrowFunctionTypeParams(
   tokens: readonly Token[],
   closeAngleIndex: number,
@@ -278,7 +292,7 @@ function isGenericArrowFunctionTypeParams(
   if (afterParen.kind === SyntaxKind.EqualsGreaterThanToken) return true;
   if (afterParen.kind !== SyntaxKind.ColonToken) return false;
 
-  // Skip a return type annotation, looking for a top-level `=>`.
+  // 戻り値の型注釈を読み飛ばし、最上位の`=>`を探す。
   let depth = 0;
   for (let i = closeParenIndex + 2; i < tokens.length; i++) {
     const token = tokens[i];
@@ -322,14 +336,14 @@ const CLOSE_BRACKET_KINDS = new Set<number>([
   SyntaxKind.CloseBracketToken,
 ]);
 
-// Computes, for each token index, the nesting depth of user-defined type
-// guard function bodies the token is inside of (0 = not inside one).
-//
-// Handles both block bodies (`(...): v is Foo { ... }`) and concise arrow
-// bodies (`(...): v is Foo => expr`). A concise body has no braces of its
-// own, so its end is detected via a generic bracket-depth counter: the body
-// ends at the first comma/semicolon at the same depth the body started at,
-// or when an enclosing bracket closes.
+/**
+ * トークンごとに、そのトークンを囲むユーザー定義の型ガード関数の本体の
+ * 入れ子の深さを返す(0は本体の外)。
+ * ブロックの本体(`(...): v is Foo { ... }`)と、簡潔なアロー関数の本体
+ * (`(...): v is Foo => expr`)の両方を扱う。簡潔な本体には自前の波括弧が
+ * 無いので、括弧の深さで終わりを判断する。本体が始まったのと同じ深さで
+ * 最初のカンマかセミコロンが来るか、外側の括弧が閉じたら終わりとする。
+ */
 function computeTypeGuardDepths(tokens: readonly Token[]): number[] {
   const depths: number[] = new Array(tokens.length).fill(0);
   const braceIsTypeGuardBody: boolean[] = [];
@@ -344,9 +358,8 @@ function computeTypeGuardDepths(tokens: readonly Token[]): number[] {
     const token = tokens[i];
     if (token === undefined) continue;
 
-    // Close out a concise (brace-less) type guard body before this token's
-    // own bracket effect is applied, so the boundary token itself is not
-    // counted as part of the guarded region.
+    // このトークン自身の括弧の効果を反映する前に、簡潔な(波括弧の無い)
+    // 型ガードの本体を閉じる。境界のトークンを本体に含めないため。
     if (conciseGuardBaseDepth !== undefined) {
       const closesEnclosingBracket =
         CLOSE_BRACKET_KINDS.has(token.kind) &&
@@ -393,8 +406,8 @@ function computeTypeGuardDepths(tokens: readonly Token[]): number[] {
     ) {
       const next = tokens[i + 1];
       if (next === undefined || next.kind !== SyntaxKind.OpenBraceToken) {
-        // Concise arrow body: the guard applies to the expression that
-        // follows, starting at the current bracket depth.
+        // 簡潔なアロー関数の本体。型ガードは、今の括弧の深さから始まる
+        // 後続の式に及ぶ。
         depth++;
         conciseGuardBaseDepth = generalDepth;
       }
@@ -462,8 +475,8 @@ export function findTypeAssertions(
     if (token.kind === SyntaxKind.AsKeyword) {
       const next = tokens[i + 1];
       if (next !== undefined && next.kind === SyntaxKind.ConstKeyword) continue;
-      // `import * as name` / `export * as name`: a namespace binding, not a
-      // type assertion — the only place `* as` can appear in valid syntax.
+      // `import * as name`・`export * as name`は名前空間の束縛で、型アサーション
+      // ではない。正しい構文で`* as`が現れるのはここだけ。
       const previous = i > 0 ? tokens[i - 1] : undefined;
       if (previous !== undefined && previous.kind === SyntaxKind.AsteriskToken)
         continue;
@@ -508,13 +521,14 @@ export function findTypeAssertions(
   return findings;
 }
 
-// Bun.Glob.scan has no built-in .gitignore/node_modules awareness (unlike
-// e.g. ripgrep), so a nested `node_modules` under `f/**` — which a raw
-// app's own package.json creates once `wmill app lint`/`wmill app dev`
-// installs its frontend dependencies (see .claude/skills/raw-app/SKILL.md)
-// — would otherwise have its third-party `.d.ts` files swept up by the
-// `f/**/*.ts` glob and false-positive on this script's own assertion check
-// (those files are not this repo's code and are gitignored regardless).
+/**
+ * パスが`node_modules`の下にあるかを返す。
+ * `Bun.Glob.scan`は(ripgrepなどと違い)`.gitignore`や`node_modules`を
+ * 考慮しない。`wmill app lint`・`wmill app dev`がraw appのフロントエンドの
+ * 依存を入れると`f/**`の下に`node_modules`ができ、そのままでは
+ * サードパーティの`.d.ts`が`f/`配下のglobに拾われて誤検知する
+ * (このリポジトリのコードではなく、gitignore済みでもある)。
+ */
 function isUnderNodeModules(path: string): boolean {
   return path.split("/").includes("node_modules");
 }

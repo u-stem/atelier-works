@@ -1,7 +1,6 @@
-// Tests for f/factory/steps/pr_workflow_support.ts's
-// mapFindingsToReviewComments, renderInlineComment, and renderReviewSummary
-// (used by pr_review_post.ts) — see .claude/skills/factory-review/SKILL.md's
-// "投稿形式" section for the format these implement.
+// `pr_review_post.ts`が使う`pr_workflow_support.ts`の`mapFindingsToReviewComments`、
+// `renderInlineComment`、`renderReviewSummary`などのテスト。
+// 投稿の書式は`.claude/skills/factory-review/SKILL.md`の「投稿形式」節に従う。
 
 import { describe, expect, test } from "bun:test";
 import type { ReviewThread } from "../../f/factory/lib/github.ts";
@@ -106,9 +105,8 @@ describe("mapFindingsToReviewComments", () => {
     expect(comments[0]?.line).toBe(12);
   });
 
-  // team-lead review finding: an end_line before line is an invalid GitHub
-  // range (rejected outright, taking the whole review down with it) — treat
-  // the finding as single-line instead of sending the invalid range.
+  // `end_line`が`line`より前の範囲はGitHubでは不正で、レビュー全体が拒否される。
+  // 不正な範囲を送らず、1行の指摘として扱う。
   test("an end_line before line has no start_line (treated as single-line)", () => {
     const { comments } = mapFindingsToReviewComments(
       [finding({ line: 10, end_line: 5 })],
@@ -141,9 +139,8 @@ describe("fenceFor", () => {
 });
 
 describe("renderInlineComment", () => {
-  // team-lead decision (2026-09-26): every factory post's first line names
-  // the job that wrote it, since the factory posts under the operator's own
-  // GitHub account.
+  // Factoryは運用者自身のGitHubアカウントで投稿するため、
+  // 投稿の1行目には書いたジョブの名前を入れる。
   test("starts with the pr_review role tag", () => {
     expect(renderInlineComment(finding())).toStartWith(
       "[pr_review 自動レビュー]\n",
@@ -196,10 +193,9 @@ describe("renderInlineComment", () => {
     expect(body).toContain("```suggestion\nconst x = 1;\n```");
   });
 
-  // team-lead fix (2026-09-26): a fixed ```suggestion fence would be
-  // prematurely closed by suggested_code that itself contains a ``` run
-  // (e.g. a snippet that edits a fenced Markdown block) — fenceFor widens
-  // the fence past any backtick run the code contains.
+  // 固定の```suggestionの囲みは、`suggested_code`自体が```を含むと
+  // (Markdownのコードブロックを編集する提案など)途中で閉じてしまう。
+  // `fenceFor`は、コード内のどのバッククォートの連続よりも長い囲みを使う。
   test("uses a longer fence than any backtick run inside suggested_code", () => {
     const body = renderInlineComment(
       finding({ suggested_code: "```js\nconsole.log(1);\n```" }),
@@ -221,15 +217,15 @@ describe("decideReviewBodyMode", () => {
     expect(decideReviewBodyMode(0, 0, false, 0)).toBe("first_clean");
   });
 
-  // team-lead review finding: an LGTM body must never coexist with a
-  // dropped-findings list, so a finding that was dropped (not posted inline)
-  // still forces mode "findings" even though postedCommentCount is 0.
+  // LGTMの本文と、行に紐づけられなかった指摘の一覧を同時に出してはいけない。
+  // そのため指摘が1件でも行に紐づけられなければ、`postedCommentCount`が0でも
+  // モードは"findings"になる。
   test('returns "findings" when nothing was posted but a finding was dropped', () => {
     expect(decideReviewBodyMode(0, 1, true, 0)).toBe("findings");
   });
 
-  // team-lead fix (2026-09-26): a re-review that posts nothing new must not
-  // read as a bare LGTM when an old [MUST] finding is still open.
+  // 再レビューで新しい投稿が無くても、以前の[MUST]の指摘が未解決なら、
+  // 単なるLGTMに読める本文にしない。
   test('returns "rereview_open" when nothing was posted but openMustCount is greater than zero', () => {
     expect(decideReviewBodyMode(0, 0, true, 2)).toBe("rereview_open");
   });
@@ -240,9 +236,8 @@ describe("decideReviewBodyMode", () => {
 });
 
 describe("renderReviewSummary", () => {
-  // team-lead decision (2026-09-26): the role tag and the author mention
-  // share the first line now, since the factory posts under the operator's
-  // own GitHub account.
+  // Factoryは運用者自身のGitHubアカウントで投稿するため、
+  // 役割タグと作者へのメンションを1行目に並べる。
   test("starts with the pr_review role tag and the author mention on one line", () => {
     const body = renderReviewSummary("alice", 0, "first_clean", [], 0);
     expect(body).toStartWith("[pr_review 自動レビュー] @alice\n");
@@ -254,9 +249,8 @@ describe("renderReviewSummary", () => {
     expect(lines[1]).toBe("3件コメントしました。確認お願いします。");
   });
 
-  // team-lead decision (2026-09-26, wording pass): a finding-carrying post
-  // already asks the author to confirm, so the disclaimer line is dropped
-  // entirely for this mode (unlike rereview_clean/first_clean below).
+  // 指摘を含む投稿は作者に確認を求める文をすでに含むため、このモードでは
+  // 免責の行を入れない(後述の`rereview_clean`/`first_clean`とは異なる)。
   test('mode "findings" never includes the final-Approve-is-human disclaimer line', () => {
     const body = renderReviewSummary("alice", 3, "findings", [], 0);
     expect(body).not.toContain("Approve");
@@ -312,9 +306,9 @@ describe("renderReviewSummary", () => {
     expect(body).not.toContain("行に紐づけられなかった指摘");
   });
 
-  // team-lead review finding: mode "findings" (chosen by decideReviewBodyMode
-  // whenever anything was dropped, even with zero posted comments) must never
-  // render an LGTM line alongside the dropped-findings list.
+  // `decideReviewBodyMode`は、投稿したコメントが0件でも、行に紐づけられなかった
+  // 指摘があればモードを"findings"にする。このモードでは、その指摘の一覧と並べて
+  // LGTMの行を出さない。
   test('mode "findings" with zero posted comments never says LGTM', () => {
     const body = renderReviewSummary(
       "alice",
@@ -326,9 +320,8 @@ describe("renderReviewSummary", () => {
     expect(body).not.toContain("LGTM");
   });
 
-  // team-lead fix (2026-09-26): mode "rereview_open" — a re-review with
-  // nothing new but an old [MUST] still unresolved after this round's
-  // resolving pass.
+  // "rereview_open"は、再レビューで新しい指摘が無く、今回の解決処理のあとも
+  // 以前の[MUST]が未解決のまま残っているときのモード。
   test('mode "rereview_open" reports the open MUST count and asks for confirmation on the second line', () => {
     const body = renderReviewSummary("alice", 0, "rereview_open", [], 2);
     const lines = body.split("\n");
@@ -422,10 +415,9 @@ describe("selectThreadsToResolve", () => {
     expect(ids).toEqual(["thread-1"]);
   });
 
-  // team-lead review finding: a human reply left in the thread (even after
-  // the factory's own pr_review finding) must keep it open — the factory
-  // must have had the last word to auto-resolve. Not mode-specific, so
-  // checked once under "rereview_clean".
+  // スレッドに人の返信が残っていれば、Factory自身の`pr_review`の指摘のあとでも、
+  // スレッドを開いたままにする。自動で解決してよいのは、最後の発言がFactoryのときだけ。
+  // モードによらない規則なので、"rereview_clean"で1回だけ確かめる。
   test("skips a thread whose last comment is a human reply", () => {
     const ids = selectThreadsToResolve(
       [
@@ -509,10 +501,9 @@ describe("selectThreadsToResolve", () => {
     });
   });
 
-  // team-lead fix (2026-09-26): "rereview_open" shares "rereview_clean"'s
-  // resolving rule — pr_review_post.ts never actually calls this with
-  // "rereview_open" (it passes the pre-openMustCount mode instead), but the
-  // function's own behavior stays correct either way.
+  // "rereview_open"は"rereview_clean"と同じ解決の規則に従う。
+  // `pr_review_post.ts`は実際には"rereview_open"を渡さず、`openMustCount`を
+  // 反映する前のモードを渡すが、どちらで呼ばれても関数の動作は正しく保つ。
   describe('mode "rereview_open" (defensively, same resolving rule as "rereview_clean")', () => {
     test("resolves a thread whose last comment is still the untouched finding", () => {
       const ids = selectThreadsToResolve(
@@ -580,9 +571,8 @@ describe("reviewResultFor", () => {
     expect(reviewResultFor([], 0)).toBe("reviewed");
   });
 
-  // team-lead fix (2026-09-26): an old [MUST] left unresolved from a prior
-  // round must keep the PR flagged even when this round's own findings have
-  // no must (ReviewBodyMode's "rereview_open").
+  // 今回の指摘に[MUST]が無くても、前のラウンドの[MUST]が未解決なら、
+  // PRを要対応のままにする(`ReviewBodyMode`の"rereview_open"にあたる)。
   test("returns changes_requested when openMustCount is greater than zero even with no must findings", () => {
     expect(reviewResultFor([finding({ kind: "nits" })], 2)).toBe(
       "changes_requested",

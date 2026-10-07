@@ -1,40 +1,6 @@
-// PathScript step 4/4 of f/factory/implement (工程3 design §2
-// implement_finish, §0b, §13): the single terminal step. Routes prepare's
-// stop or the verify loop's exit to the status transition and its side
-// effects, and never leaves the work item `implementing` on a git / GitHub
-// failure: every git / GitHub failure — including the issue re-check —
-// becomes needs_human with its reason (the re-check first keeps the work of
-// a run that would open a PR or keep its work, shouldPreserveBeforeFailing).
-// DB failures throw and on_error_flow marks the item failed, except
-// setWorkItemPrUrl and the reroute's setFlowJobId (caught, needs_human).
-// `final_status` is the status actually reached — null when a CAS found
-// the item moved on.
-//   open_pr: the worktree must still stage the tree the loop verified
-//     (decideVerifiedTree), then commit (Claude's subject/body, normalized
-//     and secret-masked — claudeText — with issue references neutralized —
-//     neutralizeIssueRefs)
-//     → push → create the PR, or update an existing PR's title and body
-//     → pr_url (right away, so a label failure leaves the PR recorded) →
-//     factory:review label → pr_open → pr_opened (作成 or 更新).
-//     Nothing new to commit still opens / updates the PR when the branch
-//     is ahead of base_sha (earlier partial-progress commits); only a
-//     branch with nothing beyond the base ends needs_human
-//     (decideAfterCommit).
-//   requirements_gap: remove the worktree, delete the branch only when no
-//     PR uses it, reroute to f/factory/pipeline at attempt+1 (needs_human
-//     past max_attempts) — status updates before runFlowAsync, as in
-//     pr_fix_finish's reroute; a runFlowAsync / setFlowJobId failure after
-//     that moves requirements_generating → needs_human with the gap report
-//     in the notice.
-//   needs_human: after max_rounds / daily_budget / stalled /
-//     diff_too_large, push what is there when no PR is open, the worktree's
-//     `.git` pointer is unchanged and gitleaks passes (preserveWork), so the
-//     branch is inspectable; with a PR open the work stays in the worktree
-//     (a note says so); then notice + Discord.
-//   cancel: the Issue was closed (by prepare, or re-checked here).
-// Every git command in the worktree (preserveWork's scan and commit, the
-// final commit) is preceded by the `.git` pointer check; a changed pointer
-// ends needs_human without a push.
+// f/factory/implementの4ステップ中4番目(終了処理)で、唯一の終端ステップ。
+// 準備ステップの停止か検証ループの終了を受けて、作業項目の状態遷移と
+// それに伴う副作用(commit、push、PR作成、通知など)を行う。
 
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "../lib/config.ts";
@@ -115,7 +81,7 @@ import {
 
 export type ImplementFinishResult = {
   readonly ok: boolean;
-  /** The status the work item actually moved to; null when nothing moved. */
+  /** 作業項目が実際に遷移した先の状態。遷移しなかったときはnull。 */
   readonly final_status: WorkItemStatus | null;
   readonly notice: string | null;
 };
@@ -128,10 +94,14 @@ export function transitionResult(
   return { ok: true, final_status: moved ? status : null, notice };
 }
 
-/** needs_human's next action: a preservation note (secrets found, head
- * moved, push failed) comes first; then the branch sentence (design §2)
- * after a loop guard left work on the branch, except the budget stop,
- * whose rule says to wait; otherwise the reason's own rule. */
+/**
+ * needs_humanのときに人へ示す次の操作を選ぶ。
+ * 作業の保存に関する注記(秘密情報の検出、headの移動、pushの失敗)があれば
+ * それを最優先にする。
+ * 次に、ループのガードで止まり作業がブランチに残ったときはブランチを案内する文にする。
+ * ただし日次予算での停止は、待つよう案内する理由ごとの文を使うため除く。
+ * それ以外は理由ごとの文を返す。
+ */
 export function selectImplementNextAction(input: {
   readonly preserveWork: boolean;
   readonly outcome: ImplementFinishOutcome;
@@ -151,8 +121,11 @@ export function selectImplementNextAction(input: {
   return nextActionFor(input.reason);
 }
 
-/** needs_human's primary reason: the loop's stop reason when the loop ran
- * (whether or not its work is kept), otherwise prepare's. */
+/**
+ * needs_humanの主な理由を返す。
+ * ループが動いたときは(作業を残したかどうかに関わらず)ループの停止理由、
+ * そうでなければ準備ステップの理由を使う。
+ */
 export function needsHumanBaseReason(
   loopReason: string | null,
   prepareReason: string | null,
@@ -160,9 +133,11 @@ export function needsHumanBaseReason(
   return loopReason ?? prepareReason ?? "needs human attention";
 }
 
-/** Claude-written text (PR title, commit subject / body, summary, reviewer
- * notes) before it leaves the worker: Japanese spacing normalized, then
- * anything that looks like a secret masked. */
+/**
+ * Claudeが書いた文(PRのタイトル、コミットの件名と本文、要約、レビュアーへの注記)を
+ * workerの外へ出す前に整える。
+ * 日本語の空白を正規化したうえで、秘密情報に見えるものをマスクする。
+ */
 export function claudeText(text: string): string {
   return maskSecrets(normalizeJapaneseText(text));
 }
@@ -175,11 +150,52 @@ type PrAttempt =
   | {
       readonly ok: true;
       readonly pr: PullRequestRef;
-      /** false when an existing PR was updated. */
+      /** 既存のPRを更新したときはfalse。 */
       readonly created: boolean;
     }
   | { readonly ok: false; readonly reason: string };
 
+/**
+ * 準備ステップの結果と検証ループの結果から行き先を決め、
+ * 作業項目を遷移させて、その状態と通知文を返す。
+ * `final_status`は実際に遷移した先で、CASで作業項目が既に動いていたと
+ * 分かったときはnullになる。
+ *
+ * git / GitHubの失敗で作業項目を`implementing`のまま残さない。
+ * Issueの再確認を含め、git / GitHubの失敗はすべて理由付きでneeds_humanにする。
+ * PRを開く、または作業を残す予定だった実行では、失敗させる前に作業を保存する
+ * (`shouldPreserveBeforeFailing`)。
+ * DBの失敗は例外を投げ、`on_error_flow`が作業項目をfailedにする。
+ * ただし`setWorkItemPrUrl`と、差し戻し時の`setFlowJobId`の失敗は捕まえて
+ * needs_humanにする。
+ *
+ * 行き先ごとの処理:
+ * - open_pr: worktreeのstageが、ループで検証したtreeと一致することを確かめる
+ *   (`decideVerifiedTree`)。
+ *   次にClaudeの件名と本文を整え(`claudeText`)、Issue参照を無効化して
+ *   (`neutralizeIssueRefs`)commitし、pushする。
+ *   PRを作るか、既存PRのタイトルと本文を更新し、すぐ`pr_url`を記録する。
+ *   その後`factory:review`ラベルを付け、`pr_open`に遷移して
+ *   pr_opened(作成か更新か)を通知する。
+ *   新たにcommitするものが無くても、ブランチが`base_sha`より進んでいれば
+ *   (以前の途中までのcommit)PRを開くか更新する。
+ *   baseより先に何も無いブランチだけがneeds_humanになる(`decideAfterCommit`)。
+ * - requirements_gap: worktreeを消し、ブランチはどのPRも使っていないときだけ消す。
+ *   attempt+1で`f/factory/pipeline`へ差し戻す(`max_attempts`を超えたらneeds_human)。
+ *   `pr_fix_finish`の差し戻しと同じく、`runFlowAsync`より先に状態を更新する。
+ *   その後の`runFlowAsync`か`setFlowJobId`が失敗したら、
+ *   `requirements_generating`からneeds_humanに移し、noticeにギャップの報告を載せる。
+ * - needs_human: max_rounds / daily_budget / stalled / diff_too_largeで止まったとき、
+ *   PRが無く、worktreeの`.git`ポインタが変わっておらず、gitleaksを通れば、
+ *   ブランチを確認できるように今ある作業をpushする(`preserveWork`)。
+ *   PRがあるときは作業をworktreeに残し、その旨を注記する。
+ *   そのうえでnoticeを記録し、Discordへ通知する。
+ * - cancel: Issueが閉じられていた(準備ステップか、ここでの再確認で判明した)。
+ *
+ * worktreeでのgitコマンド(`preserveWork`の検査とcommit、最終commit)の前には
+ * 必ず`.git`ポインタを照合する。
+ * ポインタが変わっていたらpushせずにneeds_humanで終える。
+ */
 export async function main(
   work_item_id: number,
   prepare_outcome: string,
@@ -237,9 +253,12 @@ export async function main(
     }
   };
 
-  /** `from`: the status the CAS expects (implementing, or
-   * requirements_generating after a reroute that could not start);
-   * `detail`: extra text for the notice and Discord (the gap report). */
+  /**
+   * 作業項目をneeds_humanに遷移させ、遷移できたらnoticeを記録してDiscordへ通知する。
+   * `from`はCASで期待する状態(`implementing`、または差し戻しを始められなかった後の
+   * `requirements_generating`)。
+   * `detail`はnoticeとDiscordに足す文(ギャップの報告)。
+   */
   const finalizeNeedsHuman = async (
     reason: string,
     nextAction: string,
@@ -484,7 +503,7 @@ export async function main(
     return transitionResult(true, "requirements_generating", gapReport);
   }
 
-  // action.kind === "open_pr"
+  // ここに来るのは`action.kind === "open_pr"`のときだけ。
   const openPullRequest = async (
     ctx: ImplementContext,
     loop: ImplementLoopResult,
@@ -551,7 +570,7 @@ export async function main(
         });
         pr = existing;
       }
-      // Recorded before the label so a label failure leaves the PR found.
+      // ラベル付けが失敗してもPRを辿れるように、ラベルより先に記録する。
       await setWorkItemPrUrl(work_item_id, pr.htmlUrl);
       try {
         await ensureLabel(
