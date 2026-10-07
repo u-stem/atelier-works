@@ -46,9 +46,10 @@ export type Finding = {
 
 const DEFAULT_GLOBS = ["f/**/*.ts", "tests/**/*.ts", "scripts/**/*.ts"];
 
-type Token = {
+export type Token = {
   readonly kind: number;
   readonly start: number;
+  readonly text: string;
 };
 
 // Tokens after which a `/` cannot be a division operator because they
@@ -106,7 +107,12 @@ export class ScannerStallError extends Error {
   }
 }
 
-function tokenize(sourceText: string): Token[] {
+/**
+ * ソースをトークン列に分割する。コメント・空白・改行は`skipTrivia`で読み飛ばす
+ * ため、トークン列にはコードだけが残る(JSDocも同様)。`text`はソース上の
+ * 表記で、コメント以外の差分検査(`check-comment-only-diff.ts`)が比較に使う。
+ */
+export function tokenize(sourceText: string): Token[] {
   const scanner = createScanner(true, LanguageVariant.Standard, sourceText);
   const tokens: Token[] = [];
   // Brace-nesting depth since each currently-open template substitution's
@@ -159,7 +165,11 @@ function tokenize(sourceText: string): Token[] {
         }
       }
     }
-    tokens.push({ kind, start: scanner.getTokenStart() });
+    tokens.push({
+      kind,
+      start: scanner.getTokenStart(),
+      text: scanner.getTokenText(),
+    });
     previousKind = kind;
     kind = scanner.scan();
   }

@@ -123,3 +123,7 @@ run = "scripts/bootstrap.sh"
 [tasks."test:db"]
 description = "Apply datatable migrations to a scratch database and SELECT from every view"
 run = "scripts/test-db.sh"
+
+[tasks."check:comment-only"]
+description = "Fail if the diff against a base ref (default main) changes anything but comments"
+run = "bun run scripts/check-comment-only-diff.ts"
