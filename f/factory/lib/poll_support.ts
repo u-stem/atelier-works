@@ -127,11 +127,11 @@ export type PrCandidate = {
    * `getIssue`で取得する。
    */
   readonly labels: readonly string[];
-  /** このPRに、終了していない`pr_review`のwork itemがすでにあるか。 */
+  /** このPRに、終了していない`pr_review`の作業項目がすでにあるか。 */
   readonly hasActiveReviewingItem: boolean;
   /**
    * このPRの最新の`work_items`の行(種類と状態は問わない)の`head_sha`。
-   * work itemが一度も無ければ`null`。
+   * 作業項目が一度も無ければ`null`。
    * アサインやレビュー依頼から自動で検出する経路で、
    * 今の`head_sha`が未処理かを判断するのに使う。
    */
@@ -198,7 +198,7 @@ export function decidePrActions(
 }
 
 // ---------------------------------------------------------------------------
-// work itemの状態を実態に合わせる(reconcile)判定
+// 作業項目の状態を実態に合わせる(reconcile)判定
 // ---------------------------------------------------------------------------
 
 export type ReconcileGithubState =
@@ -208,7 +208,7 @@ export type ReconcileGithubState =
     }
   | { readonly kind: "pr"; readonly open: boolean }
   /**
-   * 監査のwork itemにはGitHubのオブジェクトが無く、ジョブの状態と孤立の検査だけを行う。
+   * 監査の作業項目にはGitHubのオブジェクトが無く、ジョブの状態と孤立の検査だけを行う。
    */
   | { readonly kind: "audit" };
 
@@ -243,11 +243,11 @@ export type ReconcileDecision =
 const DEFAULT_ORPHAN_GRACE_MS = 10 * 60_000;
 
 /**
- * work item 1件について、状態を実態に合わせるための判定を返す。
+ * 作業項目1件について、状態を実態に合わせるための判定を返す。
  * IssueまたはPRが閉じていれば取り消す。ジョブが実行中なら何もしない。
  * 取り消されたか失敗したと確かめられたジョブは、孤立の猶予を待たずに`fail_orphan`にする。
  * 自分で終了状態を書くことは無く、待つ意味が無いため。
- * 猶予を待つと、手動で取り消したフローのwork itemが猶予いっぱい
+ * 猶予を待つと、手動で取り消したフローの作業項目が猶予いっぱい
  * (呼び出し側の`poll_issues.ts`では10分と`claude_timeout_sec`の2倍の大きい方で、
  * 既定の設定なら1時間)途中の状態のまま残る。
  * 成功したときと、ジョブが見つからないとき(`absent`)は猶予を待つ。
@@ -291,7 +291,7 @@ export function decideReconcileAction(
 }
 
 /**
- * フローが正常に終わり、work itemが人の判断(承認Inbox)を待っている状態。
+ * フローが正常に終わり、作業項目が人の判断(承認Inbox)を待っている状態。
  * 実行中のジョブが無いので、孤立の猶予による検査を当ててはいけない。
  */
 const HUMAN_WAIT_STATUSES: readonly WorkItemStatus[] = ["awaiting_approval"];
@@ -301,7 +301,7 @@ export function isWaitingForHuman(status: WorkItemStatus): boolean {
 }
 
 /**
- * 人の判断を待っているwork itemの判定を返す。
+ * 人の判断を待っている作業項目の判定を返す。
  * IssueまたはPRが閉じているときだけ取り消し、ジョブの状態は見ない。
  */
 export function decideClosureOnly(

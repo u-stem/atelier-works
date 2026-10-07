@@ -35,7 +35,7 @@ export type RequirementsApplyResult = {
 };
 
 /**
- * 処理を進めてよいかを返す。work itemがまだ`awaiting_approval`のときだけ真。
+ * 処理を進めてよいかを返す。作業項目がまだ`awaiting_approval`のときだけ真。
  * 副作用は無い。
  */
 export function shouldProceed(status: WorkItem["status"]): boolean {
@@ -117,11 +117,11 @@ async function notifySafe(
 }
 
 /**
- * 承認依頼を読み、承認・却下に応じてwork itemを遷移させる。
+ * 承認依頼を読み、承認・却下に応じて作業項目を遷移させる。
  *
- * どの分岐でも先にwork itemの現在の状態を読み直し、`awaiting_approval`以外なら
+ * どの分岐でも先に作業項目の現在の状態を読み直し、`awaiting_approval`以外なら
  * 何もしない。並行する`poll_issues`の照合や、このスクリプトの再起動が
- * 既にwork itemを進めていることがあるため。
+ * 既に作業項目を進めていることがあるため。
  * Issueのラベルはどの遷移でも付け外ししない。
  * トリガーの`factory`ラベルは着手時に消費済みで、状態は`work_items.status`だけが持つ。
  * 人がIssueにラベルを付け直すと、新しいサイクルが始まる。
@@ -131,11 +131,11 @@ async function notifySafe(
  * どの分岐でも、CAS(`updateStatusIfCurrent`)はGitHubへの副作用
  * (承認コメント)より先に行う。
  * この分岐を再び動かすものは他に無いため、GitHubの呼び出しが失敗して
- * work itemが`awaiting_approval`のまま残ると、判断が事実上失われる。
+ * 作業項目が`awaiting_approval`のまま残ると、判断が事実上失われる。
  * `commentIssue`はマーカーで冪等で、通知は繰り返しても安全なので、
  * 再起動(`approval_decide.ts`の`redispatch`など)でやり直してよい。
  *
- * 承認依頼・work item・Issue番号が無いとき、依頼のkindが違うときは例外を投げる。
+ * 承認依頼・作業項目・Issue番号が無いとき、依頼のkindが違うときは例外を投げる。
  */
 async function run(
   approval_request_id: number,

@@ -37,7 +37,7 @@ export function RequirementsTab(): React.ReactElement {
 
   // ディープリンク。`#requirements/<id>[/attempt-<k>]`付きで投稿された
   // Consoleのリンクから来たときは、一覧から手で選ばせず、一覧の読み込み後に
-  // そのwork itemの文書へ直接移る。一度だけ動かし(依存は空)、以後は
+  // その作業項目の文書へ直接移る。一度だけ動かし(依存は空)、以後は
   // 利用者の選択に任せる。`setSelected`は安定したsetterなので、
   // 依存の配列が空でも抑制の指定は要らない。
   useEffect(() => {
@@ -141,7 +141,7 @@ export function RequirementsTab(): React.ReactElement {
 }
 
 /**
- * work item1件の詳細欄。`attempt`(`null`なら最新)の`requirements_doc`を
+ * 作業項目1件の詳細欄。`attempt`(`null`なら最新)の`requirements_doc`を
  * 取得し、過去のattemptに切り替える番号の入力欄を出す。
  * 一覧は最新のattemptしか持たず、問い合わせ直さないと過去のattemptを
  * 列挙できないため、番号で指定させる。

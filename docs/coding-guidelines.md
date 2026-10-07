@@ -45,7 +45,7 @@ export function jstMidnightTodayIso(now: Date): string {
 - 外部由来の値(HTTPレスポンス、`JSON.parse`の結果、サブプロセスのstdoutなど)は**parse, don't validate**の原則で扱う。「型があるかのように決め打ちしてアクセスする」のではなく、型ガード関数でパースしてから使う。
 
 ```ts
-// 悪い例: 決め打ちでアクセスする(as で黙らせている)
+// 悪い例: 決め打ちでアクセスする(`as`で黙らせている)
 const data = JSON.parse(stdout) as { summary: string };
 
 // 良い例: 型ガードでパースしてから使う
@@ -61,7 +61,7 @@ const parsed: unknown = JSON.parse(stdout);
 if (!isClaudeResult(parsed)) {
   throw new Error("unexpected claude output shape");
 }
-// ここから先は parsed が ClaudeResult として扱える
+// ここから先は`parsed`を`ClaudeResult`として扱える
 ```
 
 型ガード関数の内部でオブジェクトの形を確認するために絞り込む箇所は許容されるが、`lint-no-type-assertions`のチェック対象になる。判定ロジック自体は`typeof` / `in` / 配列チェックなどで組み立てる。
@@ -98,10 +98,10 @@ if (!isClaudeResult(parsed)) {
 PRは`.github/PULL_REQUEST_TEMPLATE.md`の次の章立てに従う。
 
 1. **概要**: このPRで何をしたか、なぜ必要かを簡潔に記述する。
-2. **受入条件**: Issueの受入基準をチェックリストで記述する(factoryが作成したPR)。
+2. **受入条件**: Issueの受入基準をチェックリストで記述する(Factoryが作成したPR)。
 3. **動作確認結果**: lint / typecheck / test / E2Eの実行結果をチェックする。
 4. **確認して欲しい点**: 実装上のトレードオフや不確実な部分を記述する。
-5. **関連リンク**: `Closes #N`形式でIssueを明示する(factoryはこれで承認済み要件と照合する)。
+5. **関連リンク**: `Closes #N`形式でIssueを明示する(Factoryはこれで承認済み要件と照合する)。
 6. **備考**: Windmillへの反映(sync push / migrate / image rebuild)の要否を記述する。
 
 人がClaude Codeで作成するコミットには、トレーラー`Co-Authored-By: Claude <noreply@anthropic.com>`を付ける。

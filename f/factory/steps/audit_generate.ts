@@ -1,6 +1,6 @@
 // f/factory/auditの2ステップ中2番目(生成)。
 // headlessのClaudeにfactory-auditスキルで監査レポートを書かせ、検証して保存し、
-// 改善提案ごとに承認依頼を登録して、work itemを進めてDiscordへ通知する。
+// 改善提案ごとに承認依頼を登録して、作業項目を進めてDiscordへ通知する。
 
 import * as wmill from "windmill-client@1.817.0";
 import { buildAuditConsoleUrl } from "../lib/approval_support.ts";
@@ -106,7 +106,7 @@ export function allowedUrlPrefixesFor(
 }
 
 /**
- * 遷移したばかりのwork itemを、`awaiting_approval`からすぐ`audited`へ
+ * 遷移したばかりの作業項目を、`awaiting_approval`からすぐ`audited`へ
  * 進めるべきかを返す。副作用は無い。
  * 提案の登録から`auditing`→`awaiting_approval`の遷移までの間に、
  * 人がConsoleで全提案を判断し終えていると、未決のものが残らないため。
@@ -228,7 +228,7 @@ async function notifySafe(
 }
 
 /**
- * 提案ごとに承認依頼を登録し、work itemを`auditing`から進め、
+ * 提案ごとに承認依頼を登録し、作業項目を`auditing`から進め、
  * 全提案が既に判断済みになる競合を確かめ直し(`decidePostTransition`)、通知する。
  * `main`の新規実行と再開の両方の経路が、そのまま共有する。
  */
@@ -299,9 +299,9 @@ async function finishAudit(input: {
 
 /**
  * 監査レポートを生成・保存し、提案の承認依頼を登録して結果を返す。
- * work itemが`auditing`でなければ何もせず"skipped"を返す。
+ * 作業項目が`auditing`でなければ何もせず"skipped"を返す。
  *
- * 再開: このwork itemの`audit_reports`の行が既にある(前回の再試行が保存した後に
+ * 再開: この作業項目の`audit_reports`の行が既にある(前回の再試行が保存した後に
  * 失敗した)ときは、Claudeを再び動かさず、提案・承認依頼・遷移を冪等にやり直す。
  * その前に、`issue_proposals`の行数が保存済みレポートの改善提案の表と一致するかを
  * 確かめ、一致しなければ例外を投げる。
@@ -317,7 +317,7 @@ async function finishAudit(input: {
  * 提案をすべて登録してから`updateStatusIfCurrent`が通るまでの間に、
  * 人がConsoleで全提案を判断し終えていることがある。
  * `awaiting_approval`に移った直後に数え直して未決が無ければ、すぐ`audited`に進め、
- * 誰も対応できない提案の待ちにwork itemを残さない。
+ * 誰も対応できない提案の待ちに作業項目を残さない。
  *
  * スナップショット: Claudeにはself clone(`factory_clone_dir`。self_updateが
  * デプロイ元にする作業ツリー)そのものを見せない。

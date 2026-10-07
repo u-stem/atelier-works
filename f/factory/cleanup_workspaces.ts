@@ -1,4 +1,4 @@
-// 毎日03:00(JST)に、`config.worktree_ttl_days`を過ぎた終端状態のwork itemが
+// 毎日03:00(JST)に、`config.worktree_ttl_days`を過ぎた終端状態の作業項目が
 // 残したworktreeを削除し、閾値(`orphanClaudeThresholdSec`)を超えて動いている
 // 孤立したheadless Claudeプロセスを終了させ、`/workspaces`のディスク使用量を記録する。
 //
@@ -7,7 +7,7 @@
 // `./lib/cleanup_support.ts`にあり、このファイルは入出力をつなぐだけ。
 // 1件の失敗で掃除全体を止めない。
 //
-// 進行中のwork itemが使っているworktree(`req-<N>`のディレクトリ、
+// 進行中の作業項目が使っているworktree(`req-<N>`のディレクトリ、
 // 実装ブランチ、進行中のpr_fixのPRのheadブランチ)は削除しない
 // (`excludeActiveWorktrees`)。進行中のpr_fixのheadブランチを解決できない
 // リポジトリは、その日の掃除を飛ばしてnoticeを残す(`partitionRepoGroups`)。
@@ -149,7 +149,7 @@ async function removeStaleWorktreesForRepo(
 }
 
 /**
- * 進行中のすべてのwork itemについて、使っているworktreeの持ち主
+ * 進行中のすべての作業項目について、使っているworktreeの持ち主
  * (`WorktreeHolder`)を返す。pr_fixのブランチはPRのheadの参照(`getPr`)を使う。
  * 解決できなかったitemは`unresolved`に入れる。呼び出し側は推測で消さず、
  * そのリポジトリだけその日の掃除を飛ばし(`partitionRepoGroups`)、他は掃除する。

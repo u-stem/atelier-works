@@ -18,7 +18,7 @@ import { runCommand } from "../lib/workspace.ts";
  * Discordに通知する。`poll_issues.ts`の`notifySafe`と同じ扱いにしている。
  * webhookのURLが空なら何もしない。
  * 送信に失敗しても例外にせず、秘密をマスクして警告ログに残す。
- * 通知の一時的な失敗で、通知対象のwork itemの処理を止めないため。
+ * 通知の一時的な失敗で、通知対象の作業項目の処理を止めないため。
  */
 async function notifySafe(
   webhookUrl: string,

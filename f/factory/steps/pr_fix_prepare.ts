@@ -37,7 +37,7 @@ export type PrFixPrepareResult = {
 };
 
 /**
- * work itemを読み、修正ラウンドの上限、対象リポジトリの許可、
+ * 作業項目を読み、修正ラウンドの上限、対象リポジトリの許可、
  * 親Issueの再実装中でないこと、PRの安全条件
  * (open、headとbaseが同じリポジトリ、draftでない、baseブランチが保護されていない)
  * を順に検査する。
@@ -46,7 +46,7 @@ export type PrFixPrepareResult = {
  * PRのheadブランチに`git gtr`のworktreeを作る。
  * detachedではなく実ブランチのworktreeにするのは、
  * `commitAndPush`がそのブランチへpushし直すため。
- * work itemが無い、またはPR番号が無いときは例外を投げる。
+ * 作業項目が無い、またはPR番号が無いときは例外を投げる。
  */
 export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
   const workItem = await getWorkItem(work_item_id);
@@ -74,9 +74,9 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
   );
 
   // 多層防御のための再検査。
-  // `poll_prs.ts`はwork itemを作る前に許可リストで絞っているが、
+  // `poll_prs.ts`は作業項目を作る前に許可リストで絞っているが、
   // その後に`factory_config`を変えると、許可外になったリポジトリを
-  // 指すwork itemが残りうる。
+  // 指す作業項目が残りうる。
   const repoGuard = evaluateRepoAllowedGuard(
     isRepoAllowed(config, workItem.owner, workItem.repo),
   );

@@ -1,5 +1,5 @@
 // f/factory/pr_reviewの投稿ステップ。
-// レビューをGitHubのPRレビューとして投稿して記録し、work itemを"reviewed"に進めて
+// レビューをGitHubのPRレビューとして投稿して記録し、作業項目を"reviewed"に進めて
 // Discordへ通知し、`pr_review_prepare.ts`が作ったdetachedのworktreeを消す。
 
 import * as wmill from "windmill-client@1.817.0";
@@ -52,7 +52,7 @@ export type PrReviewPostResult = {
 /**
  * レビューを投稿・記録し、投稿したかどうかとレビューのidを返す。
  * `skip`が真か`verdict`がnullなら何もせずに返し、
- * work itemが既に"reviewing"でなければ投稿しない。
+ * 作業項目が既に"reviewing"でなければ投稿しない。
  * `verdict`が想定外の値なら例外を投げる。
  * worktreeは成否に関わらず最後に消す。
  *

@@ -153,8 +153,8 @@ async function notifySafe(
  * Windmillの再試行は`work_items.status`を確かめずにこのスクリプト全体を
  * 呼び直すため、ここで終端の遷移をすると再試行と競合する。
  * 例えば、statusを`failed`にしてから投げ、その後に再試行が成功しても、
- * `request_approval`は状態が`requirements_generating`でないwork itemを
- * `awaiting_approval`へ進めない。下書きは保存されたのに、work itemは
+ * `request_approval`は状態が`requirements_generating`でない作業項目を
+ * `awaiting_approval`へ進めない。下書きは保存されたのに、作業項目は
  * `failed`のまま残る。
  * また、ここで通知すると`on_error_flow`の通知と同じ失敗を二重に知らせることになる。
  * そのため終端の処理(状態、通知)はすべて、Windmillの再試行を
@@ -190,9 +190,9 @@ export async function readDocFile(
 
 /**
  * 要件定義を生成して下書きとして保存する。
- * 日次予算を超えていればClaudeを起動せず、work itemを`needs_human`にして通知し、
+ * 日次予算を超えていればClaudeを起動せず、作業項目を`needs_human`にして通知し、
  * "budget_exceeded"を返す(例外は投げない)。
- * work itemかIssue番号が無いとき、Claudeの実行か生成物の検証が失敗したときは
+ * 作業項目かIssue番号が無いとき、Claudeの実行か生成物の検証が失敗したときは
  * 例外を投げる。Claudeを動かしたときは、成否に関わらず`agent_runs`を記録する。
  *
  * doc dir(`buildRequirementsDocDir`)を空にしてからテンプレートを

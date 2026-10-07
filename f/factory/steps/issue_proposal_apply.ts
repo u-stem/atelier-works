@@ -67,13 +67,13 @@ export function readWithFactoryLabel(
 /**
  * 承認で作るIssueに`factory_config.trigger_label`を付けるかを返す。副作用は無い。
  * `pr_fix`の提案は、依頼者のチェックボックスに無条件で従う。
- * `audit`の提案のIssueは`factory_config.factory_repo`(auditのwork itemの
+ * `audit`の提案のIssueは`factory_config.factory_repo`(auditの作業項目の
  * `owner`/`repo`と同じリポジトリ)に作られるため、トリガーラベルで要件定義の
  * パイプラインに戻してよいのは、そのリポジトリが`factory_config`
  * (owners / repo_allowlist)で許可されているときだけ。
  * 許可されていなければラベルを付けず、黙って落とさずに、ログに残す`reason`を返す。
  * `isRepoAllowed`は`factory_repo`を常に許すため、`repoAllowed`は通常は真になる。
- * 偽になるのは、`factory_repo`とwork itemの`owner`/`repo`が食い違ったときだけ。
+ * 偽になるのは、`factory_repo`と作業項目の`owner`/`repo`が食い違ったときだけ。
  */
 export function resolveFactoryLabel(input: {
   readonly requested: boolean;
@@ -93,7 +93,7 @@ export function resolveFactoryLabel(input: {
 
 /**
  * `workItem.pr_number`を`number`に絞って返し、nullなら例外を投げる。
- * `audit`の提案のwork itemには正当に`pr_number`が無いため、
+ * `audit`の提案の作業項目には正当に`pr_number`が無いため、
  * `pr_fix`の提案の分岐からだけ呼ぶ。
  */
 function requirePrNumber(prNumber: number | null, workItemId: number): number {
@@ -122,11 +122,11 @@ function requirePrNumber(prNumber: number | null, workItemId: number): number {
  * トリガーラベルを付けるにはそのリポジトリが許可されている必要がある(`resolveFactoryLabel`)。
  * `pr_fix`の提案のリポジトリは、パイプラインのずっと手前で検査済み。
  *
- * work itemの未決の提案がすべて判断されると、work itemを待ちの状態から進める
+ * 作業項目の未決の提案がすべて判断されると、作業項目を待ちの状態から進める
  * (`decidePostProposalTransition`)。
- * `pr_fix` / `pr_review`のwork itemは`needs_human`から、提案を出したラウンドが
+ * `pr_fix` / `pr_review`の作業項目は`needs_human`から、提案を出したラウンドが
  * commitをpushしていれば`rereview_requested`へ、していなければ`reviewed`へ進む。
- * `audit`のwork itemは修正ラウンドが無いので、`awaiting_approval`から`audited`へ進む。
+ * `audit`の作業項目は修正ラウンドが無いので、`awaiting_approval`から`audited`へ進む。
  *
  * Issueの作成には、Factoryの他のGitHub呼び出しと同じPATを使い、別の資格情報は使わない。
  * タイトル・本文・`review_comment_id`・`thread_id`の正本は`factory.issue_proposals`で、
@@ -155,7 +155,7 @@ function requirePrNumber(prNumber: number | null, workItemId: number): number {
  * この場合は意図して"pending"に戻さない。
  * Issueは既にあり、戻して作り直すと重複するおそれがあるため。
  *
- * 承認依頼・Issue提案・work item・判断者・auditのレポートが無いとき、
+ * 承認依頼・Issue提案・作業項目・判断者・auditのレポートが無いとき、
  * 依頼のkindが違うとき、判定で拒否されたときは例外を投げる。
  */
 async function run(
@@ -431,9 +431,9 @@ async function run(
     );
 
     // 上で数えてから状態を書くまでのわずかな間に、別のpr_fixのラウンドが
-    // 同じwork itemに新しい未決の提案を登録することがある
+    // 同じ作業項目に新しい未決の提案を登録することがある
     // (auditでは起きない。awaiting_approvalになった後に提案を足すものは無い)。
-    // ここでもう一度数え、新しい未決の提案があればwork itemを元の状態に戻し、
+    // ここでもう一度数え、新しい未決の提案があれば作業項目を元の状態に戻し、
     // 未決があるのに「未決無し」を示す状態を残さない。
     // 完全な対策ではなく、数え直しとその書き込みの間にはさらに短い隙間が残る。
     // トランザクションは使っていない。

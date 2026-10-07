@@ -1,6 +1,6 @@
 // f/factory/pr_reviewフローの準備ステップ。
-// work itemがまだ`reviewing`状態の有効なpr_reviewかを確かめ、
-// 古い・取り消されたwork itemなら処理せずに飛ばす。
+// 作業項目がまだ`reviewing`状態の有効なpr_reviewかを確かめ、
+// 古い・取り消された作業項目なら処理せずに飛ばす。
 // fetchだけを行うmainのcloneと、PRのheadコミットを指すdetachedのworktreeを用意する。
 // pr_reviewはmainのcloneでは作業ツリーをcheckoutしない。
 // worktreeを作る間にheadのshaが動いていないかを、最後にもう一度確かめる。
@@ -83,9 +83,9 @@ export async function main(
     wmill.getResource("f/factory/factory_config"),
   );
 
-  // 多層防御のための再確認。`poll_prs.ts`はwork itemを作る前に
+  // 多層防御のための再確認。`poll_prs.ts`は作業項目を作る前に
   // `filterByRepoAllowlist`で絞っているが、その後に`factory_config`が編集されると、
-  // 許可されなくなったリポジトリを指すwork itemが残りうる。
+  // 許可されなくなったリポジトリを指す作業項目が残りうる。
   if (!isRepoAllowed(config, workItem.owner, workItem.repo)) {
     return {
       skip: true,

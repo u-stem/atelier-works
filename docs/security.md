@@ -24,7 +24,7 @@
 
 ## pr_fixの安全策
 
-- Factory自身の投稿かどうかは「投稿者ログインがviewer(Factory自身のGitHubアカウント)と一致**かつ**本文がfactoryマーカーを含む」の両方(`isFactoryPost`)で判定する。Factoryは人と同じGitHubアカウント(共有PAT)で運用されるため、ログイン一致だけでは人の投稿と区別できず、逆にマーカーの有無だけでは第三者が偽装できてしまう(marker alone is not proof of authorship)。この判定により、同一アカウント運用下でも人が投稿したコメントとFactory自身の一次レビュー指摘はpr_fixへのfeedbackとして扱われ、除外されるのはFactory自身の`pr_fix`返信のみとなる。
+- Factory自身の投稿かどうかは「投稿者ログインがviewer(Factory自身のGitHubアカウント)と一致**かつ**本文がFactoryマーカーを含む」の両方(`isFactoryPost`)で判定する。Factoryは人と同じGitHubアカウント(共有PAT)で運用されるため、ログイン一致だけでは人の投稿と区別できず、逆にマーカーの有無だけでは第三者が偽装できてしまう(marker alone is not proof of authorship)。この判定により、同一アカウント運用下でも人が投稿したコメントとFactory自身の一次レビュー指摘はpr_fixへのfeedbackとして扱われ、除外されるのはFactory自身の`pr_fix`返信のみとなる。
 
 `pr_fix`はClaudeに書き込みツール(`Edit`/`Write`)を与える最初のフローであり、次のガードを設ける。
 

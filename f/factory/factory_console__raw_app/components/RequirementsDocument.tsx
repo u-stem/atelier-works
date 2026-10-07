@@ -131,7 +131,7 @@ export function RequirementsDocument({
 }
 
 /**
- * work item1件の要件定義書を`console_query`の`requirements_doc`ビューで
+ * 作業項目1件の要件定義書を`console_query`の`requirements_doc`ビューで
  * 取得して描く。読み込み・エラー・描画の処理を、`tabs/RequirementsTab.tsx`の
  * 詳細欄と`tabs/InboxTab.tsx`の要件の詳細で共有する。
  * `attempt: null`なら最新のattemptを取得する。

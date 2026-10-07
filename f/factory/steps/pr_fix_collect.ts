@@ -1,10 +1,10 @@
 // f/factory/pr_fixフローの収集ステップ。
-// work itemの`last_review_id` / `last_comment_id`などの処理済み位置より新しい
+// 作業項目の`last_review_id` / `last_comment_id`などの処理済み位置より新しい
 // フィードバック(PRのレビュー、インラインのレビューコメント、Issueコメント)を集める。
-// factory自身の`pr_review`のレビューと、印の無いインラインの指摘も含める。
-// factoryのレビューの後に`factory:fix`ラベルを付けるのは、
+// Factory自身の`pr_review`のレビューと、印の無いインラインの指摘も含める。
+// Factoryのレビューの後に`factory:fix`ラベルを付けるのは、
 // その指摘を直させる操作だから。
-// 除外するのはfactory自身の`pr_fix`の返信だけである。
+// 除外するのはFactory自身の`pr_fix`の返信だけである。
 //
 // 承認済みの要件は、このステップのJSON結果で受け渡さず、
 // `pr_fix_apply.ts` / `pr_fix_verify.ts`が`parent_work_item_id`から直接取得する。

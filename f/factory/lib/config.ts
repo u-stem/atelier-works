@@ -90,7 +90,7 @@ const DEFAULTS: Pick<FactoryConfig, DefaultableField> = {
   daily_budget_usd: 50,
   claude_timeout_sec: 1800,
   worktree_ttl_days: 7,
-  // `cleanup_db.ts`の保持期間。前者は終了したwork item(とそこから連鎖して消える行)、
+  // `cleanup_db.ts`の保持期間。前者は終了した作業項目(とそこから連鎖して消える行)、
   // 後者は独立したログ(`job_failures`、`deployments`、解決済みの`notices`)に使う。
   retention_work_items_days: 90,
   retention_logs_days: 30,

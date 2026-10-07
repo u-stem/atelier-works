@@ -135,8 +135,8 @@ function stop(
 }
 
 /**
- * 承認時の前提(work itemの状態、日次予算、リポジトリの許可、Issueがopenか、
- * work itemのattemptに承認済みの要件定義があるか、
+ * 承認時の前提(作業項目の状態、日次予算、リポジトリの許可、Issueがopenか、
+ * 作業項目のattemptに承認済みの要件定義があるか、
  * ブランチのopenなPRでpr_fix / pr_reviewが動いていないか)を確かめ直す。
  * 満たさなければ`outcome`と理由を返し、状態の遷移は`implement_finish`に任せる。
  *
@@ -148,7 +148,7 @@ function stop(
  * `.git`ポインタはClaudeの実行のたびに照合し、
  * `base_sha`は各検証ラウンドの差分の基準になる。
  *
- * work itemやIssue番号が無いとき、push後に`origin/<branch>`を解決できないときは
+ * 作業項目やIssue番号が無いとき、push後に`origin/<branch>`を解決できないときは
  * 例外を投げる。
  */
 export async function main(

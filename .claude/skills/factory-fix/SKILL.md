@@ -105,7 +105,7 @@ Claudeがstructured outputで書くのは次の3フィールドのみ。
 
 ### 将来のPR作成
 
-factoryが実装からPRを作成する工程(工程3)が実装されたときは、PRテンプレート(`.github/PULL_REQUEST_TEMPLATE.md`)に従う。コミットメッセージは上記のトレーラーを含む。
+Factoryが実装からPRを作成する工程(工程3)が実装されたときは、PRテンプレート(`.github/PULL_REQUEST_TEMPLATE.md`)に従う。コミットメッセージは上記のトレーラーを含む。
 
 ## 出力契約(JSON schema)
 

@@ -68,7 +68,7 @@ describe("openFindingsForPrompt", () => {
   });
 
   // `selectThreadsToResolve`と違い、最後に誰が返信したかは見ない。
-  // 人やfactory自身の`pr_fix`が返信しても、GitHubのスレッドが解決されていなければ
+  // 人やFactory自身の`pr_fix`が返信しても、GitHubのスレッドが解決されていなければ
   // 指摘は未解決のままである。
   test("includes a thread even when the last comment is a human reply", () => {
     const findings = openFindingsForPrompt(

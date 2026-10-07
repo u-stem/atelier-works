@@ -1,12 +1,12 @@
 // f/factory/pipelineフローの3ステップ中1番目。
-// work itemと設定を読み、factory自身のcloneと、
+// 作業項目と設定を読み、Factory自身のcloneと、
 // 対象リポジトリのfetchだけを行うmainのcloneを用意する。
 // デフォルトブランチのheadのshaを求め、要件生成ステージが読む
 // 読み取り専用のdetachedのworktreeを
 // `/workspaces/<owner>/<repo>/req-<issue_number>`に作る(既存なら再利用する)。
 // `requirements_generating`に進める前に、Issueがまだopenかを確かめ直す。
 // 確保からこのフローの開始までの間に、`poll_issues`のreconcileが
-// work itemを取り消している場合があるため。
+// 作業項目を取り消している場合があるため。
 
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "../lib/config.ts";
@@ -38,7 +38,7 @@ export type PipelinePrepareResult =
     };
 
 /**
- * work itemが終了状態に達しているかを返す。テストできるよう純粋関数にしている。
+ * 作業項目が終了状態に達しているかを返す。テストできるよう純粋関数にしている。
  * 終了済みなら再開せずに飛ばす。並行する`poll_issues`のreconcileや、
  * 前回の`requirements_apply.ts`の実行が、すでに終わらせている場合があるため。
  */
@@ -129,7 +129,7 @@ export async function main(
   }
 
   // `retry_work_item.ts`などは`work_items.attempt`を読んで次のattemptを決める。
-  // 途中で失敗した実行でも値が正しく残るよう、work itemの検証直後、
+  // 途中で失敗した実行でも値が正しく残るよう、作業項目の検証直後、
   // 失敗しうるリポジトリやworktreeの操作より前に保存する。
   await setAttempt(work_item_id, attempt);
 

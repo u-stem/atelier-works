@@ -1,5 +1,5 @@
 // 5分ごとに、pr_reviewフローかpr_fixフローに入れるべきPRを検出し、
-// 新しいレビュー・修正のサイクルを始める。PR種別のwork itemのreconcile
+// 新しいレビュー・修正のサイクルを始める。PR種別の作業項目のreconcile
 // (クローズ・マージ、孤立の検出)は、全種別を扱う`poll_issues.ts`が行う。
 //
 // 判断は`./lib/poll_support.ts`の`decidePrActions`(純粋関数)にあり、
@@ -92,7 +92,7 @@ function activeItemsByPr(active: readonly WorkItem[]): Map<string, WorkItem[]> {
 // ---------------------------------------------------------------------------
 // watermarkの約束。id空間(レビュー・Issueコメント・インラインのレビュー
 // コメント)ごとに、2種類の列を分けて持つ。
-// - observed: work itemを取得したときに`poll_prs`が見た値。取得のたびに必ず書く。
+// - observed: 作業項目を取得したときに`poll_prs`が見た値。取得のたびに必ず書く。
 // - last: `pr_fix_finish`が実際に返信・処理した値。ラウンドを完了したときだけ進める。
 // 列の意味は`migrations/datatable/main/20260925211232_pr_watermarks_and_inbox.up.sql`
 // の列コメントを参照。これらは`PrCandidate`を広げず、並べた別の構造で持つ。
@@ -128,7 +128,7 @@ type PrCandidateContext = {
   readonly observed: ObservedSeed;
   /**
    * PRの本文が閉じるIssue(`Closes/Fixes/Resolves #N`)に対応する、承認済み
-   * 以降のpipelineのwork item。あれば、新しいpr_review・pr_fixの行の
+   * 以降のpipelineの作業項目。あれば、新しいpr_review・pr_fixの行の
    * `parent_work_item_id`になる。無ければ`null`。
    */
   readonly linkedParentWorkItemId: number | null;
@@ -165,7 +165,7 @@ async function buildPrCandidate(
   ]);
 
   // 人が作ったPRも承認済みの要件に結びつける。PRの本文が最初に閉じるIssue
-  // (`Closes/Fixes/Resolves #N`)に承認済み以降のpipelineのwork itemがあれば、
+  // (`Closes/Fixes/Resolves #N`)に承認済み以降のpipelineの作業項目があれば、
   // それを新しいpr_review・pr_fixの行の`parent_work_item_id`にする。
   // Factoryが作ったPRが`requirements_apply.ts`で親を得るのと同じ扱い。
   const linkedIssueNumbers = extractLinkedIssueNumbers(
@@ -287,7 +287,7 @@ async function startReview(
     observed_review_comment_id: observed.reviewCommentId,
   });
   // 「レビューを始めた」というPRコメントは投稿しない。取得の冪等性は
-  // コメントではなく、このPRの終端でないwork itemの行(`decidePrActions`)で
+  // コメントではなく、このPRの終端でない作業項目の行(`decidePrActions`)で
   // 保つ。人のPRに頼まれていない実況コメントを付けても雑音になる。
   // トリガーラベルを消費した後は、ラベルやコメントではなくDB
   // (`listTrackedPrs`)から見つけ直す。
@@ -393,7 +393,7 @@ export async function main(): Promise<{
   // Factoryが追跡中のPR(pr_review・pr_fix種別、取り消されていない、
   // `config.tracked_pr_days`以内に更新)を候補に足す。上の検索結果とは
   // PRのキーで重複を除き、`getPr`で取り直して開いていないものは落とす。
-  // 閉じた・マージされたPRのwork itemの取り消しは`poll_issues.ts`の
+  // 閉じた・マージされたPRの作業項目の取り消しは`poll_issues.ts`の
   // reconcileが行うので、ここでは扱わない。
   const seenKeys = new Set(
     rawCandidates.map((item) => prKey(item.owner, item.repo, item.number)),

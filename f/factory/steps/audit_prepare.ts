@@ -1,8 +1,8 @@
 // f/factory/auditフローの2ステップ中1番目。
-// 監査のwork itemを`auditing`に進め、DBから監査の根拠資料を集め、
-// `audit_generate`が読み取り専用の`--add-dir`で使うfactory自身のcloneを用意する。
+// 監査の作業項目を`auditing`に進め、DBから監査の根拠資料を集め、
+// `audit_generate`が読み取り専用の`--add-dir`で使うFactory自身のcloneを用意する。
 // ここでは日次予算を確かめない。
-// `audit_kickoff.ts`がwork itemを作る前に確かめているため。
+// `audit_kickoff.ts`が作業項目を作る前に確かめているため。
 
 import * as wmill from "windmill-client@1.817.0";
 import {
@@ -46,7 +46,7 @@ export function decidePrepareEntry(
  * 更新されないのは、最初の`getWorkItem`からこのステップの書き込みまでの間に、
  * 並行する実行かreconcileが状態を変えた場合である。
  * `auditing`なら、並行する実行がこのステップの望む遷移を済ませているので、再開してよい。
- * それ以外なら、このwork itemはもうここでは開始できない。
+ * それ以外なら、この作業項目はもうここでは開始できない。
  */
 export function decideAfterFailedStart(
   status: WorkItemStatus,

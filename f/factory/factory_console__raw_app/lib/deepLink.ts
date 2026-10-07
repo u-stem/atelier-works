@@ -1,8 +1,9 @@
 // ConsoleのURLのフラグメントから、開く作業項目を読み取る。
-// `#requirements/<work_item_id>`(`attempt-<k>`付きも可)は要件定義書を、
-// `#audit/<work_item_id>`は監査レポートを指す。
-// どちらも`f/factory/lib/approval_support.ts`が作り、
-// IssueのコメントやDiscordの通知に載せる。
+// `#requirements/<work_item_id>`は要件定義書を、`#audit/<work_item_id>`は監査レポートを指す。
+// 要件定義書のほうは、試行を指す`#requirements/<work_item_id>/attempt-<k>`の形も受け付ける。
+// `f/factory/lib/approval_support.ts`の`buildConsoleUrl`が`#requirements/<work_item_id>`を、
+// `buildAuditConsoleUrl`が`#audit/<work_item_id>`を作り、IssueのコメントやDiscordの通知などに載せる。
+// `attempt-<k>`付きの形を作る処理は無く、手で書いたURLのためにだけ受け付ける。
 //
 // raw appは不透明なオリジン(サンドボックス)から配信されるため、
 // 埋め込み元のページのURLを読める保証は無い。

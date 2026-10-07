@@ -1,6 +1,6 @@
 // 保護パスの判定を、pr_fixとimplementフローで共有する。
 // pr_fix(`steps/pr_workflow_support.ts`)では一致するとpushを止め
-// (docs/security.md「pr_fix の安全策」)、implementフロー(`lib/implement_support.ts`)では
+// (docs/security.md「pr_fixの安全策」)、implementフロー(`lib/implement_support.ts`)では
 // PR本文とDiscord通知に記録するだけにする。
 // `implement_support`が`steps`からimportしないで済むよう`lib`に置き、
 // `pr_workflow_support.ts`がここの定義をすべて再exportする。
@@ -48,18 +48,16 @@ export const FORBIDDEN_BASENAME_PATTERNS: readonly RegExp[] = [
 ];
 
 /**
- * implementフローが保護するディレクトリ。
- * implementフローはClaudeの変更に対して検査コマンドを実行するため、
- * そのコマンドが何を実行するかを決めるもの
- * (フック、パッケージマネージャーとツールの設定、ロックファイル、
- * すべての`package.json`)を保護する。pr_fixのリストは意図して広げていない。
- * pr_fixのリストの`.github/workflows/`を`.github/`全体(actions、dependabot、CODEOWNERS)に
- * 広げ、次を加える。
+ * implementフローが保護するディレクトリで、pr_fixの一覧に次を加えたもの。
+ * - pr_fixの一覧の`.github/workflows/`を、`.github/`全体(actions、dependabot、CODEOWNERS)に広げる。
  * - `infra/**`: workerのイメージとcomposeの定義。変更するとホスト側で`mise run deploy`が
  *   要るため、レビューする人が知る必要がある。
  * - gitフックのディレクトリ(`.husky/`、`.githooks/`)
  * - `.yarn/`: パッケージマネージャーが実行するプラグインとリリース
  * - `.devcontainer/`
+ *
+ * implementフローはClaudeの変更に対して検査コマンドを実行するため、
+ * 検査コマンドが何を実行するかを決めるディレクトリを保護する。pr_fixの一覧は変えない。
  */
 export const IMPLEMENT_PROTECTED_PATH_PREFIXES: readonly string[] = [
   ...FORBIDDEN_PATH_PREFIXES.map((prefix) =>
@@ -123,7 +121,7 @@ function matchesPathLists(
 }
 
 /**
- * `path`がdocs/security.mdの「変更してはいけないファイル」に当たるかを返す。
+ * `path`がdocs/security.md「pr_fixの安全策」の禁止パスに当たるかを返す。
  * `prefixes`のディレクトリは、リポジトリのルートからの相対パスの前方一致で判定する
  * (ディレクトリ名そのものも一致とみなす)。
  * `FORBIDDEN_BASENAME_PATTERNS`は、ディレクトリを問わずファイル名で判定する。

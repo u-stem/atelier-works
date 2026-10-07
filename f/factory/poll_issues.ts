@@ -1,11 +1,11 @@
 // 5分ごとに、`factory_config.owners`のリポジトリで新しく`trigger_label`が
 // 付いたIssueを取得して`f/factory/pipeline`を起動し、進行中のすべての
-// work item(IssueとPRの両方)をGitHubとWindmillの状態に合わせる。
+// 作業項目(IssueとPRの両方)をGitHubとWindmillの状態に合わせる。
 // 複数インスタンス間の排他は、advisory lockではなくGitHub側の取得だけで行う
 // (Issueはassignee、PRはトリガーラベルの消費。どちらも取り直して確かめる)。
 // 1つのインスタンス内での重複実行は、スケジュールの`no_flow_overlap: true`で防ぐ。
 //
-// 判断(どのIssueを取得・見送るか、進行中のwork itemをどうするか)は
+// 判断(どのIssueを取得・見送るか、進行中の作業項目をどうするか)は
 // `./lib/poll_support.ts`の純粋関数にあり、このファイルは入出力をつなぐだけ。
 // 1件の失敗では例外を投げない(`recordFailureSafe`を参照)。
 
@@ -194,7 +194,7 @@ async function checkDeployedSha(
  * (`getJobState`は404も他のエラーも`null`にまとめて渡すので、
  * 判断はこの関数だけで完結し、単体テストできる)。
  * 取得できたが形が分からない(`type`が無い、未知の値)ときは、`absent`ではなく
- * `running`を返す。完了を確かめられないことを理由にwork itemを取り消したり
+ * `running`を返す。完了を確かめられないことを理由に作業項目を取り消したり
  * 孤立扱いしたりしないためで、`absent`にするのは取得そのものが失敗したときだけ。
  *
  * ジョブの状態を`wmill.getResultMaybe`ではなく`JobService.getJob`で読む理由:
@@ -313,7 +313,7 @@ async function reconcileActiveItems(
     try {
       let github: ReconcileGithubState;
       if (item.kind === "audit") {
-        // 監査のwork itemには、確かめるGitHubのオブジェクトが無い。
+        // 監査の作業項目には、確かめるGitHubのオブジェクトが無い。
         github = { kind: "audit" };
       } else if (item.kind === "issue") {
         if (item.issue_number === null) continue;
@@ -549,7 +549,7 @@ async function expirePendingApprovals(
         "expired",
         "approval timed out",
       );
-      if (!updated) continue; // work itemは既に次の状態に進んでいる。
+      if (!updated) continue; // 作業項目は既に次の状態に進んでいる。
 
       await notifySafe(
         discordWebhookUrl,

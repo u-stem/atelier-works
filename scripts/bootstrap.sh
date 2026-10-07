@@ -109,8 +109,9 @@ if [ "${WM_ADMIN_PASSWORD}" = "changeme" ] || [ "${#WM_ADMIN_PASSWORD}" -lt 12 ]
 fi
 
 # --- 任意の秘密。空でもbootstrapは動き、対応する変数を空で作成・更新する。
-# 人が本当の値を入れるまで、後続のフロー(poll_issues・pipeline・
-# notify_discord)はneeds_humanやnoticeで知らせる ---
+# 人が本当の値を入れるまで、後続のフロー(poll_issues・pipeline)と、
+# Discordへ送るライブラリ関数(`f/factory/lib/discord.ts`の`notify`)を使う処理は、
+# needs_humanやnoticeで知らせる ---
 GITHUB_TOKEN="${GITHUB_TOKEN:-}"
 CLAUDE_CODE_OAUTH_TOKEN="${CLAUDE_CODE_OAUTH_TOKEN:-}"
 DISCORD_WEBHOOK_URL="${DISCORD_WEBHOOK_URL:-}"

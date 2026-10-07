@@ -1,6 +1,6 @@
 // f/factory/pr_reviewフローのレビュー生成ステップ。
 // factory-reviewスキルと読み取り専用のツールでClaude Codeをヘッドレスで実行し、
-// PRのdiff・変更ファイル・本文をレビューさせる。PRがfactoryの起こしたサイクルに
+// PRのdiff・変更ファイル・本文をレビューさせる。PRがFactoryの起こしたサイクルに
 // 属するなら、承認済みの要件ドラフトも渡す。cwdは`pr_review_prepare.ts`が作った
 // detachedのworktreeである。
 

@@ -147,7 +147,7 @@ function fixReply(overrides: Partial<FixReply> = {}): FixReply {
 }
 
 describe("renderFixReply", () => {
-  // factoryは運用者自身のGitHubアカウントで投稿するため、
+  // Factoryは運用者自身のGitHubアカウントで投稿するため、
   // 投稿の1行目には書いたジョブの名前を入れる。
   test("starts with the pr_fix role tag", () => {
     expect(renderFixReply(fixReply(), "abc1234ef")).toStartWith(

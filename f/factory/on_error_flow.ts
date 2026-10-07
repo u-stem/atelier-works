@@ -1,5 +1,5 @@
 // Factoryのフローの`failure_module`から呼ぶ失敗ハンドラ。
-// 失敗を`job_failures`に記録し、work itemを`failed`にして、
+// 失敗を`job_failures`に記録し、作業項目を`failed`にして、
 // Discordに`job_failed`を通知する。
 //
 // `failure_module`は`error`(`message`・`step_id`・`name`・`stack`)と、
@@ -12,7 +12,7 @@
 // `retry_work_item`が行う状態やラベルの管理と干渉しないため。
 //
 // GitHubには成果物だけを載せ、運用上の通知(`failed`への遷移を含む)は
-// DiscordとConsoleにだけ出す。そのため、work itemを`failed`にしても
+// DiscordとConsoleにだけ出す。そのため、作業項目を`failed`にしても
 // IssueやPRには何も投稿しない。ラベルにも触れない。どの種別のトリガー
 // ラベル(Issueは`factory`、PRは`factory:review`・`factory:fix`)も
 // 取得時に消費済みで、外すものも付けるものも無いため。
@@ -64,9 +64,9 @@ export function failureWorkItemRef(
 }
 
 /**
- * この呼び出しがwork itemを`failed`にしてよいかを返す。
+ * この呼び出しが作業項目を`failed`にしてよいかを返す。
  * `rootJobId`はこの呼び出しのフローのルートジョブid(`WM_ROOT_FLOW_JOB_ID`)、
- * `workItemFlowJobId`は`setFlowJobId`でwork itemの行に最後に記録したジョブid。
+ * `workItemFlowJobId`は`setFlowJobId`で作業項目の行に最後に記録したジョブid。
  * 古いフローの`failure_module`が動く前に、却下・再生成、`retry_work_item`、
  * 経路の切り替えで新しいフローが起動していると、2つのidは一致しない。
  * ここで`failed`にすると、新しいフローのprepareのstepが終端状態を見て

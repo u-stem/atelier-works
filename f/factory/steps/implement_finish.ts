@@ -1,5 +1,5 @@
 // f/factory/implementの4ステップ中4番目(終了処理)で、唯一の終端ステップ。
-// 準備ステップの停止か検証ループの終了を受けて、work itemの状態遷移と
+// 準備ステップの停止か検証ループの終了を受けて、作業項目の状態遷移と
 // それに伴う副作用(commit、push、PR作成、通知など)を行う。
 
 import * as wmill from "windmill-client@1.817.0";
@@ -81,7 +81,7 @@ import {
 
 export type ImplementFinishResult = {
   readonly ok: boolean;
-  /** work itemが実際に遷移した先の状態。遷移しなかったときはnull。 */
+  /** 作業項目が実際に遷移した先の状態。遷移しなかったときはnull。 */
   readonly final_status: WorkItemStatus | null;
   readonly notice: string | null;
 };
@@ -157,15 +157,15 @@ type PrAttempt =
 
 /**
  * 準備ステップの結果と検証ループの結果から行き先を決め、
- * work itemを遷移させて、その状態と通知文を返す。
- * `final_status`は実際に遷移した先で、CASでwork itemが既に動いていたと
+ * 作業項目を遷移させて、その状態と通知文を返す。
+ * `final_status`は実際に遷移した先で、CASで作業項目が既に動いていたと
  * 分かったときはnullになる。
  *
- * git / GitHubの失敗でwork itemを`implementing`のまま残さない。
+ * git / GitHubの失敗で作業項目を`implementing`のまま残さない。
  * Issueの再確認を含め、git / GitHubの失敗はすべて理由付きでneeds_humanにする。
  * PRを開く、または作業を残す予定だった実行では、失敗させる前に作業を保存する
  * (`shouldPreserveBeforeFailing`)。
- * DBの失敗は例外を投げ、`on_error_flow`がwork itemをfailedにする。
+ * DBの失敗は例外を投げ、`on_error_flow`が作業項目をfailedにする。
  * ただし`setWorkItemPrUrl`と、差し戻し時の`setFlowJobId`の失敗は捕まえて
  * needs_humanにする。
  *
@@ -254,7 +254,7 @@ export async function main(
   };
 
   /**
-   * work itemをneeds_humanに遷移させ、遷移できたらnoticeを記録してDiscordへ通知する。
+   * 作業項目をneeds_humanに遷移させ、遷移できたらnoticeを記録してDiscordへ通知する。
    * `from`はCASで期待する状態(`implementing`、または差し戻しを始められなかった後の
    * `requirements_generating`)。
    * `detail`はnoticeとDiscordに足す文(ギャップの報告)。

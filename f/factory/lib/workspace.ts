@@ -500,7 +500,7 @@ export type RemoveEmptyDir = (path: string) => Promise<boolean>;
  * 例外は投げない。
  * `cleanup_db.ts`が、
  * 最後の`wi-<id>`を消した後の空の`issue-<N>`をできる範囲で片付けるのに使う。
- * 別のwork itemの`wi-<id>`が残っていれば消さない。
+ * 別の作業項目の`wi-<id>`が残っていれば消さない。
  */
 export const removeEmptyDir: RemoveEmptyDir = async (path) => {
   try {
@@ -1061,8 +1061,6 @@ export type EnsureFactoryCloneOptions = {
    * 呼び出し側はすべて`config.factory_branch`を明示して渡す。
    * 既定値があると、渡し忘れた呼び出し側が、気づかないうちに共有のcloneを
    * 既定値のブランチに固定してしまう。
-   * 以前`branch`を省略可能(既定は`"main"`)にしていたとき、省略した呼び出し側が
-   * 他の呼び出し側の使うcloneを、設定したブランチから何度も戻してしまった。
    */
   readonly branch: string;
   readonly home?: string;
@@ -1098,13 +1096,12 @@ export function factoryCloneLockPath(dir: string): string {
  * `ensureRepo`と違い、このcloneはファイルを直接読む(`claude.ts`の`buildSystemPrompt`が
  * `.claude/skills/<name>/SKILL.md`を読む)ため、作業ツリーが要る。どのフローも最初に呼ぶ。
  *
- * 初回のcloneに限らず毎回、`opts.branch`をfetchして`checkout -B`で強制的に切り替え、
- * 前に何がcheckoutされていても、そのブランチのリモートの今の状態に合わせる。
- * 以前は新しいcloneのときだけ`opts.branch`をcheckoutし、既存のcloneはそのとき
- * checkoutされていたブランチで`git pull --ff-only`していた。
- * そのとき`branch`を省略した呼び出し側(`poll_issues.ts`の`checkDeployedSha`)が
- * 既定の`main`で5分ごとに共有のcloneを戻し、`self_update`が`factory_branch`ではなく
- * 古い`main`の内容をデプロイし続けた。
+ * 初回のcloneに限らず毎回、`opts.branch`をfetchして`checkout -B <branch> origin/<branch>`で
+ * 強制的に切り替え、前に何がcheckoutされていても、そのブランチのリモートの今の状態に合わせる
+ * (必要なら切り替え、同じブランチならhard resetする)。
+ * `git pull --ff-only`は今checkoutしているブランチを進めるだけで、ブランチを切り替えず、
+ * 設定したブランチと食い違っていても気づかないので使わない。
+ * このcloneはfetchして読むだけで、その場で編集しないので、強制的に合わせても失うものは無い。
  *
  * `factoryCloneLockPath(dir)`のロックの下で直列に実行する。
  * `NUM_WORKERS`が2以上だと、各フローの最初のステップと`poll_issues`が同じ`dir`に対して
@@ -1127,16 +1124,6 @@ export async function ensureFactoryClone(
     ...(opts.now !== undefined ? { now: opts.now } : {}),
     fn: async () => {
       if (await exists(dir)) {
-        // `pull --ff-only`ではなく、毎回fetchして`checkout -B`する。
-        // `branch`は、このcloneがそのときcheckoutしているブランチと違うことがある。
-        // `pull --ff-only`は今checkoutしているブランチを進めるだけで、
-        // ブランチを切り替えず、食い違いにも気づかない
-        // (実際のworkerで、cloneが`main`のまま残り、
-        // `self_update`が古い`main`の内容をデプロイした)。
-        // `checkout -B <branch> origin/<branch>`は、前の状態によらず、
-        // 設定したブランチのリモートの今の状態に合わせる
-        // (必要なら切り替え、同じブランチならhard resetする)。
-        // このcloneはfetchして読むだけで、その場で編集しないので安全である。
         const fetchResult = await opts.run(
           buildGitArgv(["fetch", "origin", "--", branch], { network: true }),
           {
@@ -1750,7 +1737,7 @@ export type CommitAndPushOptions = {
   /**
    * `git commit`のauthorとcommitter。その1回の実行だけに、環境変数
    * `GIT_AUTHOR_*`・`GIT_COMMITTER_*`で渡し、gitの設定には書き込まない
-   * (docs/security.md「pr_fix の安全策」)。
+   * (docs/security.md「pr_fixの安全策」)。
    * 呼び出し側は、PATの持ち主から`gitIdentityForViewer`(`github.ts`)で作る。
    */
   readonly author: GitIdentity;

@@ -106,7 +106,10 @@ export type ImplementContext = {
    */
   readonly requirements_doc_dir: string | null;
   readonly requirements_console_url: string;
-  /** `true`のときだけ、PR本文にWindmillへの反映のチェックリストを載せる。 */
+  /**
+   * 対象がFactory自身のリポジトリなら`true`。
+   * `true`のときだけ、PR本文にWindmillへの反映のチェックリストを載せる。
+   */
   readonly is_factory_repo: boolean;
   /**
    * worktreeの準備ができた直後の`<worktree_dir>/.git`の中身(`readWorktreeGitPointer`)。

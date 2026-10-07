@@ -1,6 +1,6 @@
 // f/factory/pr_fixの唯一の終端ステップ。
 // 最後に動いたステップ(prepare / collect / apply / verify)の結果を受けて、
-// work itemの状態遷移、GitHubへの副作用、Discordへの通知を行う。
+// 作業項目の状態遷移、GitHubへの副作用、Discordへの通知を行う。
 
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "../lib/config.ts";
@@ -66,14 +66,14 @@ export type PrFixFinishResult = {
 };
 
 /**
- * `outcome`に応じてwork itemを遷移させ、遷移先と通知文を返す。
+ * `outcome`に応じて作業項目を遷移させ、遷移先と通知文を返す。
  * 修正があればcommitしてpushし、レビューコメントへ返信して再レビューを依頼する。
  * `outcome`が想定外の値なら例外を投げる。
  * トリガーの`fix_label`は着手時に消費済みなので、終端の遷移で外すラベルは無い。
  * gtrのworktreeは消さずに残し、後で`cleanup_workspaces`が片付ける。
  *
  * `fix_round`はここでは増やさない。
- * `poll_prs.ts`がwork itemを作る時点で、その行が表すラウンド番号を
+ * `poll_prs.ts`が作業項目を作る時点で、その行が表すラウンド番号を
  * `fix_round`に入れている(`setFixRound(workItemId, previousFixRound + 1)`)。
  * pr_fixの各回は1行を書き換えていくのではなく、それぞれ別の`work_items`の行になる。
  * `latestPrWorkItem`はPRごとの最新の行の`fix_round`から次のラウンド番号を求めるので、
@@ -129,7 +129,7 @@ export async function main(
   // 進めるのは、requirements_gapの差し戻しに成功したときと、pushに成功したときだけ。
 
   /**
-   * work itemを`fixing`から`toStatus`へ遷移させ、遷移できたらDiscordへ
+   * 作業項目を`fixing`から`toStatus`へ遷移させ、遷移できたらDiscordへ
    * needs_humanを通知する。通知の失敗は警告を記録するだけで投げない。
    */
   async function finalizeTerminal(
@@ -233,7 +233,7 @@ export async function main(
     // どちらも着手時に消費され、戻すものは無い。
     // トリガーラベルを付け直すと残り続け、次に終端の状態になった後で
     // Issueが再び着手されてしまう。
-    // 残る前提条件は、親のwork itemが実際にIssueであることだけ。
+    // 残る前提条件は、親の作業項目が実際にIssueであることだけ。
     const rerouteGuardReason = evaluateRerouteGuard(parentItem.issue_number);
 
     if (rerouteGuardReason !== null) {
@@ -267,7 +267,7 @@ export async function main(
 
     // この分岐の他のDB・GitHubへの副作用は、すべて`runFlowAsync`より先に行う。
     // 子のpipelineフローの起動は、取り消せず外から見える唯一の操作だからである。
-    // 途中で失敗しても、このwork itemの状態を記録しないまま子のフローだけが
+    // 途中で失敗しても、この作業項目の状態を記録しないまま子のフローだけが
     // 動いている、という状態を作らない。
     //
     // PRに載せるのは一次レビューとレビューコメントへの返信だけなので、
@@ -516,7 +516,7 @@ export async function main(
   // 人が先にConsoleのInboxで提案したIssueを承認か却下する必要がある
   // (`approval_decide.ts`が`steps/issue_proposal_apply.ts`へ渡す)。
   // そのためrereview_requestedではなくneeds_humanで終え、下のレビュアー依頼も飛ばす。
-  // このwork itemの全提案が判断されると、`issue_proposal_apply.ts`が
+  // この作業項目の全提案が判断されると、`issue_proposal_apply.ts`が
   // 状態をrereview_requestedに切り替える。
   // `factory.issue_proposals`の行は、上の`postFixReplies`が返信の投稿前に登録済み。
   const proposeIssueReplies = selectProposeIssueReplies(repliesToPost);
@@ -569,7 +569,7 @@ export async function main(
   // `reviewerNote`に何が起きたかを入れ、`work_items.status_reason`と
   // `factory.notices`に残す。
   // 修正自体はpushまで成功しており、影響はレビュアー依頼だけなので、
-  // どの場合もwork itemは"rereview_requested"に進める。
+  // どの場合も作業項目は"rereview_requested"に進める。
   //
   // Discordで知らせるのは、実際のAPIエラー(`outcome === "failed"`)だけ。
   // "skipped_empty"(候補が全員除外された)と候補が無い場合は想定内の結果なので、

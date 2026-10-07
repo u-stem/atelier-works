@@ -51,7 +51,7 @@ export type CleanupCounts = {
   readonly job_failures_deleted: number;
   readonly deployments_deleted: number;
   readonly notices_deleted: number;
-  /** work itemの削除に合わせて消した要件定義書のディレクトリ(`docDirsFor`)。 */
+  /** 作業項目の削除に合わせて消した要件定義書のディレクトリ(`docDirsFor`)。 */
   readonly doc_dirs_deleted: number;
 };
 
@@ -81,24 +81,24 @@ export function summarizeCleanup(counts: CleanupCounts): string {
 
 export type DocDirsToDelete = {
   /**
-   * 削除したwork itemの要件定義書のディレクトリ
+   * 削除した作業項目の要件定義書のディレクトリ
    * (`<base>/<owner>/<repo>/issue-<N>/wi-<id>`)。
    * すべての試行を含むディレクトリで、再帰的に削除する。
    */
   readonly wiDir: string;
   /**
    * 親の`issue-<N>`ディレクトリ。
-   * 同じIssueの別のwork itemの`wi-<id>`が残っていることがあるため、
+   * 同じIssueの別の作業項目の`wi-<id>`が残っていることがあるため、
    * `cleanup_db.ts`は空になった場合に限り消す。
    */
   readonly issueDir: string;
 };
 
 /**
- * 削除したwork item(`db.ts`の`deleteTerminalWorkItemsBefore`の戻り値)ごとに、
+ * 削除した作業項目(`db.ts`の`deleteTerminalWorkItemsBefore`の戻り値)ごとに、
  * 消すべき要件定義書のディレクトリを返す。
- * `issue_number`の無いwork itemは飛ばす
- * (`pr`種別のwork itemは要件定義書のディレクトリを持たない)。
+ * `issue_number`の無い作業項目は飛ばす
+ * (`pr`種別の作業項目は要件定義書のディレクトリを持たない)。
  * パスは`lib/requirements_template.ts`の`buildRequirementsDocDir`と
  * `wi-<id>`の階層までそろえる。
  * すべての試行をまとめて消すため、`attempt-<k>`の階層までは下りない。

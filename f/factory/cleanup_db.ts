@@ -1,8 +1,8 @@
 // 毎日03:30(JST)に、保持期間を過ぎた行を`factory`スキーマから削除する。
 // 放っておくと行が際限なく増えるため。対象は、`config.retention_work_items_days`を
-// 過ぎた終端状態のwork item(と、それを`ON DELETE CASCADE`で参照する表の行)と、
+// 過ぎた終端状態の作業項目(と、それを`ON DELETE CASCADE`で参照する表の行)と、
 // `config.retention_logs_days`を過ぎた`job_failures`・`deployments`・
-// 解決済みのnoticeで、work itemとは別々に掃除する。
+// 解決済みのnoticeで、作業項目とは別々に掃除する。
 //
 // 期限の計算と要約の整形は`./lib/cleanup_db_support.ts`にあり、
 // このファイルは入出力をつなぐだけ。掃除は表ごとに独立しており、
@@ -11,7 +11,7 @@
 // その呼び出しも失敗して`main`の外へ伝わる。
 // こうして、接続障害を全件0件の結果として握りつぶさずに表に出す。
 //
-// work itemの要件定義ディレクトリの削除(`doc_dirs_deleted`)は、DBの掃除ではなく
+// 作業項目の要件定義ディレクトリの削除(`doc_dirs_deleted`)は、DBの掃除ではなく
 // 失敗してもよいファイルの片付け。`deleteTerminalWorkItemsBefore`が成功した後に、
 // それが返した削除済みの行の`{id, owner, repo, issue_number}`を使って実行する。
 // ここでの失敗(DBの削除が実行されなかった場合を含む)も、他の掃除と同じく
@@ -43,7 +43,7 @@ function errorMessage(err: unknown): string {
 }
 
 /**
- * `cutoff`より前の終端状態のwork itemを削除し、件数と削除した行の参照を返す。
+ * `cutoff`より前の終端状態の作業項目を削除し、件数と削除した行の参照を返す。
  * 失敗したらログとnoticeに残し、0件と空の`deleted`を返す。
  * 連鎖削除される`approval_requests`は同じ文の中で数えるので、
  * 2つの件数は常に同じ行の集合を指す。
@@ -74,9 +74,9 @@ async function cleanupWorkItems(
 }
 
 /**
- * 削除したwork itemの要件定義ディレクトリを消し、消せた数を返す。
+ * 削除した作業項目の要件定義ディレクトリを消し、消せた数を返す。
  * `wi-<id>`は中身ごと消し、親の`issue-<N>`は空になった場合だけ消す。
- * 同じIssueの別のwork itemが自分の`wi-<id>`を持っていることがあるため。
+ * 同じIssueの別の作業項目が自分の`wi-<id>`を持っていることがあるため。
  * 1件の失敗はログとnoticeに残して残りを続ける。
  * 残ったディレクトリはディスク使用量の問題にとどまり、
  * 対応するDBの行はどちらにしても削除済みなので、正しさには影響しない。

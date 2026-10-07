@@ -145,7 +145,7 @@ export function assertBranchName(name: string): void {
 // work_items
 // ---------------------------------------------------------------------------
 
-/** work itemがfactoryに入った経路。 */
+/** 作業項目がFactoryに入った経路。 */
 export type WorkItemSource = "issue" | "manual" | "schedule";
 export const WORK_ITEM_SOURCES: readonly WorkItemSource[] = [
   "issue",
@@ -153,7 +153,7 @@ export const WORK_ITEM_SOURCES: readonly WorkItemSource[] = [
   "schedule",
 ];
 
-/** work itemのサイクルが扱うGitHubの対象の種類。 */
+/** 作業項目のサイクルが扱うGitHubの対象の種類。 */
 export type WorkItemKind = "issue" | "pr_review" | "pr_fix" | "audit";
 export const WORK_ITEM_KINDS: readonly WorkItemKind[] = [
   "issue",
@@ -163,7 +163,7 @@ export const WORK_ITEM_KINDS: readonly WorkItemKind[] = [
 ];
 
 /**
- * work itemが取りうるすべての状態。
+ * 作業項目が取りうるすべての状態。
  * 要件定義のパイプライン(`pipeline.flow`)、PRのレビュー・修正の
  * パイプライン(`pr_review.flow` / `pr_fix.flow`)、終端の結果を含む。
  */
@@ -234,7 +234,7 @@ export const TERMINAL_WORK_ITEM_STATUSES: readonly WorkItemStatus[] = [
 
 /**
  * `factory.work_items`の1行。
- * `pr_review` / `pr_fix`種別のwork itemはIssueに基づかず、
+ * `pr_review` / `pr_fix`種別の作業項目はIssueに基づかず、
  * 代わりに`pr_number` / `title`を持つ。
  * そのため`issue_number` / `issue_url` / `title` / `body`はnullを取りうる。
  */
@@ -265,12 +265,12 @@ export type WorkItem = {
    * Issueコメント(`last_comment_id`)とはidの空間が別である。
    */
   last_review_comment_id: number | null;
-  /** 観測済みの位置。`poll_prs`がこのwork itemを取得したときに見たPRレビューの最大のid。 */
+  /** 観測済みの位置。`poll_prs`がこの作業項目を取得したときに見たPRレビューの最大のid。 */
   observed_review_id: number | null;
-  /** 観測済みの位置。`poll_prs`がこのwork itemを取得したときに見たIssueコメントの最大のid。 */
+  /** 観測済みの位置。`poll_prs`がこの作業項目を取得したときに見たIssueコメントの最大のid。 */
   observed_comment_id: number | null;
   /**
-   * 観測済みの位置。`poll_prs`がこのwork itemを取得したときに見た、
+   * 観測済みの位置。`poll_prs`がこの作業項目を取得したときに見た、
    * PRのインラインレビューコメントの最大のid。
    */
   observed_review_comment_id: number | null;
@@ -284,7 +284,7 @@ export type WorkItem = {
   branch: string | null;
   /**
    * 工程3が作ったPRのHTML URL(状態`pr_open`)。それまでは`null`。
-   * `pr_number`は種別をまたいでPR側のwork itemを束ねるキーに使うため、
+   * `pr_number`は種別をまたいでPR側の作業項目を束ねるキーに使うため、
    * Issue側の行には持たせず、意図してURLで記録する。
    */
   pr_url: string | null;
@@ -565,7 +565,7 @@ export function isImplementDiffStat(
 /**
  * `db.insertImplementRound`に渡す、`factory.implement_rounds`の1行。
  * `id` / `created_at` / `round`は含まない。
- * `round`は挿入時にwork itemごとに`COALESCE(MAX(round), 0) + 1`で決まる。
+ * `round`は挿入時に作業項目ごとに`COALESCE(MAX(round), 0) + 1`で決まる。
  */
 export type ImplementRoundRecord = {
   work_item_id: number;
@@ -756,7 +756,7 @@ export type FactoryConfig = {
   claude_timeout_sec: number;
   worktree_ttl_days: number;
   /**
-   * 終端状態のwork itemを、`cleanup_db.ts`が削除するまで残す日数。
+   * 終端状態の作業項目を、`cleanup_db.ts`が削除するまで残す日数。
    * work_itemsを`ON DELETE CASCADE`で参照する表の行も同じく残る。
    */
   retention_work_items_days: number;

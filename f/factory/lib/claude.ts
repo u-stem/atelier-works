@@ -507,6 +507,8 @@ const RETRYABLE_REASONS: readonly RunClaudeFailureReason[] = [
  * `retryNote`をプロンプトに付け足して1回だけ再試行する
  * (質問だけで終わった応答も同じくスキーマの検査で失敗するので、これで扱える)。
  * 0以外の終了コード、タイムアウト、`is_error: true`は再試行しない。
+ * Claudeの実行の失敗は例外にせず、`outcome: "failure"`と`reason`・`detail`で返す。
+ * 再試行したかは成功・失敗とも`retried`で示し、`agentRun`には最後の試行の記録が入る。
  */
 export async function runClaude<T>(
   opts: RunClaudeOptions<T>,

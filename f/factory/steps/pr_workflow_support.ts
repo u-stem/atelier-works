@@ -53,9 +53,9 @@ export {
 } from "../lib/protected_paths.ts";
 
 // ---------------------------------------------------------------------------
-// 役割タグ。factoryは専用のbotではなく運用者自身のアカウントで
+// 役割タグ。Factoryは専用のbotではなく運用者自身のアカウントで
 // GitHubに投稿するため、投稿の1行目にどのジョブが書いたかを示す。
-// タグが無いと、PRのタイムラインを読む人は、factoryの投稿と
+// タグが無いと、PRのタイムラインを読む人は、Factoryの投稿と
 // 運用者が手で書いた投稿を見分けられない。
 // タグの文言は投稿形式の固定部分で、運用者が調整する設定ではないので、
 // `factory_config`ではなくここに置く。
@@ -140,7 +140,7 @@ export function normalizeJapaneseText(text: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// レビュー結果。PRにはfactoryが付け替える状態ラベルを付けない
+// レビュー結果。PRにはFactoryが付け替える状態ラベルを付けない
 // (`poll_prs.ts`の`listTrackedPrs`は`work_items`からPRを見つけ直す)。
 // そのため結果はDiscordの通知だけに使う値で、GitHubへの副作用は無い。
 // ---------------------------------------------------------------------------
@@ -171,7 +171,7 @@ export type ReviewPrepareDecision =
   | { readonly skip: false };
 
 /**
- * work itemがまだ`reviewing`状態の`pr_review`のときだけ処理を進める。
+ * 作業項目がまだ`reviewing`状態の`pr_review`のときだけ処理を進める。
  * それ以外(`poll_issues`のreconcileが取り消した競合や、
  * `flow_job_id`の配線の誤り)は飛ばし、ここでは再試行しない。
  */
@@ -416,8 +416,8 @@ export type ReviewBodyMode =
 
 /**
  * 本文の形式を、次の情報だけから選ぶ。このラウンドでインラインに投稿した指摘か
- * 除いた指摘があるか、このPRにfactoryのレビューがすでにあるか、
- * このラウンドの解決処理の後もfactory自身の`[MUST]`のスレッドがいくつ残るか
+ * 除いた指摘があるか、このPRにFactoryのレビューがすでにあるか、
+ * このラウンドの解決処理の後もFactory自身の`[MUST]`のスレッドがいくつ残るか
  * (`openMustCount`。呼び出し側が、解決前のスレッド一覧から解決予定のidを除いて
  * `countOpenMustThreads`で数える)。
  * 除いた指摘(`path`がdiffに無いなどでインラインに投稿できなかったもの)があれば、
@@ -515,17 +515,17 @@ export function isFixedFixReply(body: string): boolean {
 
 /**
  * `pr_review_post.ts`がこの投稿で解決するレビュースレッドを選ぶ。
- * 対象は、このPRにあるfactory自身の未解決の`pr_review`のインラインコメントのスレッド。
+ * 対象は、このPRにあるFactory自身の未解決の`pr_review`のインラインコメントのスレッド。
  * スレッドの最初のコメントが`viewer`の投稿(大文字小文字を区別しない。
  * `isOwnPost`と同じ扱い)で、かつ`pr_review`の役割タグで始まること。
  * これは`isFactoryPost`の「loginが一致し、かつ印がある」規則に合わせている。
- * factoryは運用者自身のGitHubアカウントで動くので、loginだけでは
- * factoryのスレッドと人のスレッドを見分けられない。
+ * Factoryは運用者自身のGitHubアカウントで動くので、loginだけでは
+ * Factoryのスレッドと人のスレッドを見分けられない。
  * GitHubがすでに解決済みにしたスレッドには触れない。人が始めたスレッドは、
- * 後でfactoryが返信していても触れない。解決するのはfactory自身が始めたスレッドに限る。
+ * 後でFactoryが返信していても触れない。解決するのはFactory自身が始めたスレッドに限る。
  *
- * スレッドの最後のコメントもfactory自身(`viewer`)の投稿である必要がある。
- * factoryの指摘の後でも人の返信が残っていれば、最後に発言したのはfactoryではないので、
+ * スレッドの最後のコメントもFactory自身(`viewer`)の投稿である必要がある。
+ * Factoryの指摘の後でも人の返信が残っていれば、最後に発言したのはFactoryではないので、
  * 人が実際に解決できるよう開いたままにする。
  *
  * `mode`で、`viewer`の最後のコメントのうちどれを「対応済み」とみなすかを決める。
@@ -539,7 +539,7 @@ export function isFixedFixReply(body: string): boolean {
  *     `pr_fix`の返信だけ。この投稿で新しい指摘を残したばかりかもしれず、
  *     古い指摘はpr_fix自身の確認でしか閉じないので、手つかずの指摘は開いたままにする。
  *   - `"first_clean"`(最初のレビューで指摘ゼロ): 何も解決しない。
- *     運用者が対応しうる前のfactoryのレビューが存在しないため。
+ *     運用者が対応しうる前のFactoryのレビューが存在しないため。
  */
 export function selectThreadsToResolve(
   threads: readonly ReviewThread[],
@@ -567,10 +567,10 @@ export function selectThreadsToResolve(
 }
 
 /**
- * このPRにあるfactory自身の`pr_review`の指摘のうち、未解決の`[MUST]`を数える。
+ * このPRにあるFactory自身の`pr_review`の指摘のうち、未解決の`[MUST]`を数える。
  * `pr_review_post.ts`が、新しい指摘を投稿しないラウンドでLGTMだけの本文にせず
  * `"rereview_open"`にするかを決めるのに使う(`decideReviewBodyMode`の`openMustCount`)。
- * factoryの投稿かどうかは、`selectThreadsToResolve`と同じく最初のコメントで判定する
+ * Factoryの投稿かどうかは、`selectThreadsToResolve`と同じく最初のコメントで判定する
  * (loginが大文字小文字を区別せず一致し、`pr_review`の役割タグで始まる)。
  * GitHubがすでに解決済みにしたスレッドと、このラウンドで解決する予定のスレッド
  * (`resolvedIds`。`selectThreadsToResolve`が、ここに渡すのと同じ解決前の`threads`から
@@ -605,15 +605,15 @@ export type OpenFindingForPrompt = {
 };
 
 /**
- * このPRにあるfactory自身の未解決の`pr_review`の指摘を、
+ * このPRにあるFactory自身の未解決の`pr_review`の指摘を、
  * `reviewPrompt`の`openFindings`の入力に変換する。
  * 再レビューで、未解決の指摘と実質的に同じ指摘を重ねて投稿させないために、
  * `pr_review_generate.ts`がこれらをすべてClaudeに渡す。
- * factoryの投稿かどうかは`selectThreadsToResolve`と同じく判定する
+ * Factoryの投稿かどうかは`selectThreadsToResolve`と同じく判定する
  * (loginが大文字小文字を区別せず一致し、最初のコメントが`pr_review`の役割タグで始まる)。
  * ただし`mode`や最後のコメントの状態には関係しない。
  * ここで気にするのは指摘自体が未解決かどうかで、その後に誰が返信したかではない。
- * `body`からは役割タグの行を取り除く。factoryの投稿の付け方をClaudeが知る必要は無いため。
+ * `body`からは役割タグの行を取り除く。Factoryの投稿の付け方をClaudeが知る必要は無いため。
  * 最初のレビューではスレッドがまだ無いので空になる。
  */
 export function openFindingsForPrompt(
@@ -635,7 +635,7 @@ export function openFindingsForPrompt(
 }
 
 /**
- * factoryの投稿の本文から、1行目にある`pr_review`の役割タグの行を取り除く(あれば)。
+ * Factoryの投稿の本文から、1行目にある`pr_review`の役割タグの行を取り除く(あれば)。
  * Claudeに指摘の中身だけを見せるため、`openFindingsForPrompt`が使う。
  */
 function stripRoleTagLine(body: string): string {
@@ -725,9 +725,9 @@ export function evaluateFixRoundGuard(
 
 /**
  * 多層防御のための、リポジトリの許可リストの再確認。
- * `poll_prs.ts`はwork itemを作る前に`filterByRepoAllowlist`で候補を絞っているが、
+ * `poll_prs.ts`は作業項目を作る前に`filterByRepoAllowlist`で候補を絞っているが、
  * 作成後に`factory_config`が編集されたり、行が手で追加されたりすると、
- * 許可されなくなったリポジトリを指すwork itemが残りうる。
+ * 許可されなくなったリポジトリを指す作業項目が残りうる。
  * そのため、そのリポジトリに対するGitHubやworkspaceのI/Oの直前に、
  * ここと`pr_review_prepare.ts`で確かめ直す。
  */
@@ -743,7 +743,7 @@ export function evaluateRepoAllowedGuard(allowed: boolean): PrFixGuardResult {
 
 /**
  * pr_fixとimplementフローはPRのブランチのworktreeを共有する。
- * 親のIssueのwork item(`parent_work_item_id`)が再び`implementing`にある間は、
+ * 親のIssueの作業項目(`parent_work_item_id`)が再び`implementing`にある間は、
  * 修正の実行がworktreeに触れてはならない。
  * `parentStatus`は、親が無いとき(親の行が消えたときを含む)は`null`。
  */
@@ -873,7 +873,7 @@ export function selectNewReviewComments(
 /**
  * 投稿者の`author_association`が`allowedAssociations`にある、
  * Issueレベルの通常のコメントを選ぶ。
- * factory自身の印付きの投稿と、`last_comment_id`の処理済み位置(`opts.sinceId`)より
+ * Factory自身の印付きの投稿と、`last_comment_id`の処理済み位置(`opts.sinceId`)より
  * 古いものは、`github.ts`の`listIssueComments`がすでに除いている。
  * 人は修正の指示を通常のコメントとして書いてから`fix_label`を付ける。
  * pr_fixにはコメントで起動する仕組みが無いので、ここにあるコメントはすべて、
@@ -1608,10 +1608,10 @@ export function evaluateDiffSizeGuard(
 /**
  * `paths`のうち`git ls-files -s`がsymlink(mode `120000`)と報告するものについて、
  * ディスク上の指す先を読む。
- * gitのblobではなく実際の現在のworktreeの状態を読むのは、古いblobには
- * Claudeのツールが書き込んだsymlinkが反映されないため。ただし上の節のコメントの
- * とおり、WriteやEditだけでは新しいOSのsymlinkを作れない。
- * この関数は、差分が触れただけの既存の追跡済みsymlinkも捕まえる。
+ * gitのblobではなく実際の現在のworktreeの状態を読むのは、Claudeのツールが
+ * symlinkの先へ書き込んだ結果が古いblobには反映されないため。
+ * WriteやEditは既存のsymlinkの先へ書き込むだけで、新しいOSのsymlinkは作れない。
+ * そのため、この関数は差分が触れただけの既存の追跡済みsymlinkも捕まえる。
  * gitが報告してもディスク上で読めないsymlink(競合で消えたものなど)は、
  * 例外にせず飛ばす。禁止パスの検査と`allowed_check_commands`の検査が、残りの安全策になる。
  */
@@ -1842,11 +1842,24 @@ export function decideFixFinishAction(
   }
 }
 
+/** `pr_fix_finish.ts`の`main()`が終えた結果の種別。処理済み位置を進めるかの判断に使う。 */
+export type PrFixFinishBumpKind =
+  | "guard_blocked"
+  | "needs_human"
+  | "requirements_gap_needs_human"
+  | "requirements_gap_reroute_failed"
+  | "requirements_gap_reroute_success"
+  | "push_missing_commit_message"
+  | "push_head_changed"
+  | "push_nothing_to_commit"
+  | "push_success";
+
 /**
- * `main()`の終端の結果ごとに、`pr_fix_finish.ts`が処理済み位置
- * (`last_review_id` / `last_comment_id` / `last_review_comment_id`)を進めるかの種別。
+ * `pr_fix_finish.ts`が処理済み位置
+ * (`last_review_id` / `last_comment_id` / `last_review_comment_id`)を進めてよいかを、
+ * `main()`の終端の結果の種別から返す。
  * 処理済み位置は、結果が分かる前に進めてはならない。
- * 先に進めると、後のステップが例外を投げたとき(`git commit`の失敗などで)work itemが
+ * 先に進めると、後のステップが例外を投げたとき(`git commit`の失敗などで)作業項目が
  * `failed`になった時点で、処理済み位置がこのラウンドを起こしたフィードバックを越えている。
  * すると`retry_work_item`が`pr_fix_collect`を再実行しても集めるものが無く、
  * 実際には再試行されずに`needs_human`("no actionable feedback")になる。
@@ -1860,7 +1873,7 @@ export function decideFixFinishAction(
  *   - `requirements_gap_reroute_success`: 親のIssueを`requirements_generating`に
  *     差し戻すことで、フィードバックを消化した。
  * それ以外の終端の種別(試行の開始前に関門が止めた、何らかの原因の`needs_human`、
- * 失敗した差し戻し(親のwork itemが見つからない、親にIssue番号が無い)、
+ * 失敗した差し戻し(親の作業項目が見つからない、親にIssue番号が無い)、
  * 実際には反映されなかったpush
  * (コミットメッセージが無い、headが動いた、コミットするものが無い))では、
  * 処理済み位置を変えない。
@@ -1868,17 +1881,6 @@ export function decideFixFinishAction(
  * `main()`のどこかで例外が出た場合(`failed`になり、この関数ではなく
  * `on_error_flow.ts`が扱う)も、位置を進める呼び出しには届かない。
  */
-export type PrFixFinishBumpKind =
-  | "guard_blocked"
-  | "needs_human"
-  | "requirements_gap_needs_human"
-  | "requirements_gap_reroute_failed"
-  | "requirements_gap_reroute_success"
-  | "push_missing_commit_message"
-  | "push_head_changed"
-  | "push_nothing_to_commit"
-  | "push_success";
-
 export function shouldAdvanceWatermarks(kind: PrFixFinishBumpKind): boolean {
   return kind === "requirements_gap_reroute_success" || kind === "push_success";
 }
@@ -1888,7 +1890,7 @@ export function shouldAdvanceWatermarks(kind: PrFixFinishBumpKind): boolean {
  * テストできるよう純粋関数にしている。
  * `null`なら差し戻してよく、それ以外は`needs_human`に倒す理由を返す。
  * 親のIssueのトリガーラベルは着手時に消費済みで付け直さないので、残る前提条件は
- * 親のwork itemが実際にIssueであることだけ。
+ * 親の作業項目が実際にIssueであることだけ。
  */
 export function evaluateRerouteGuard(
   issueNumber: number | null,
@@ -1929,11 +1931,11 @@ const LINKED_ISSUE_PATTERN =
 /**
  * PRの本文が、GitHubのIssueを閉じるキーワードの構文で閉じるIssueの番号を取り出す。
  * 人が書いたPRを承認済みの要件に結び付けるために使う(`poll_prs.ts`は最初の結果で
- * そのIssueの承認済みのpipelineのwork itemを探し、新しいpr_review / pr_fixの行の
+ * そのIssueの承認済みのpipelineの作業項目を探し、新しいpr_review / pr_fixの行の
  * `parent_work_item_id`に設定する)。
  * 明示的な`owner/repo#N`は、`owner` / `repo`がこのPRのリポジトリと一致する
  * (大文字小文字を区別しない)ときだけ残す。別リポジトリへの参照は、
- * このfactoryのインスタンスが探せるものに結び付かないため。
+ * このFactoryのインスタンスが探せるものに結び付かないため。
  * 重複を除き、最初に現れた順を保つ。
  */
 export function extractLinkedIssueNumbers(
@@ -2064,8 +2066,8 @@ export function selectProposeIssueReplies(
  * コメントのidで照合する。`(path, line)`で照合すると、後のコミットでdiffの行番号が
  * ずれたときに、気づかないうちに別のスレッドと一致してしまう。
  * よくある場合は`thread.firstCommentDatabaseId`で安く見つかる。
- * スレッド内の後のコメントへの返信は`thread.allCommentIds`(スレッドの先頭50件のコメント。`github.ts`の
- * `listReviewThreads`を参照)で見つかる。
+ * スレッド内の後のコメントへの返信は`thread.allCommentIds`で見つかる。
+ * `allCommentIds`が持つのはスレッドの先頭50件のコメントだけである(`github.ts`の`listReviewThreads`を参照)。
  * idを含むスレッドが無ければ`null`を返す
  * (レビュースレッドを持たない通常のIssueコメントなど)。
  */
@@ -2104,7 +2106,7 @@ export function buildIssueProposalBody(
   prNumber: number,
 ): string {
   const withUrl = bodyTemplate.split("{{pr_url}}").join(prUrl);
-  // GitHubのIssueになる以上、Claudeの提案の文章にも、factoryが書く他の文章と
+  // GitHubのIssueになる以上、Claudeの提案の文章にも、Factoryが書く他の文章と
   // 同じスペースの規則を適用する。
   return `${normalizeJapaneseText(withUrl)}\n\nこのIssueはPR #${String(prNumber)}のレビュー指摘から起票されました`;
 }
@@ -2243,7 +2245,7 @@ export type IssueProposalClassification =
   | { readonly action: "repost_only" }
   /**
    * 同じ判断がすでに記録され、かつすべての副作用が完了している(Issueが存在する)。
-   * 無害な再送なので、失敗ではなく何もしない`no_op`として扱う。
+   * 無害な再送なので、呼び出し側は失敗にせず、何もしないで終える。
    */
   | { readonly action: "already_done"; readonly created_issue_number: number }
   | { readonly action: "refuse"; readonly message: string };
@@ -2299,12 +2301,12 @@ export type IssueProposalStatusDecision =
     };
 
 /**
- * `issue_proposal_apply.ts`が判断を1件記録した後に、work itemの状態をどうするかを決める。
- * このwork itemの提案がまだ1件でも保留中なら、現在の`needs_human`のままにする。
+ * `issue_proposal_apply.ts`が判断を1件記録した後に、作業項目の状態をどうするかを決める。
+ * この作業項目の提案がまだ1件でも保留中なら、現在の`needs_human`のままにする。
  * そうでなければ、`rereview_requested`(このラウンドでコミットをpushした。
  * `factory.fix_rounds.commit_shas`が空でない)か、`reviewed`(何もpushしていない。
  * 提案を出したラウンド自体が`nothing_to_commit`のラウンドだった)に移す。
- * PRには状態ラベルを付けないので、work itemの状態だけを決める。
+ * PRには状態ラベルを付けないので、作業項目の状態だけを決める。
  */
 export function decidePostProposalStatus(
   remainingPendingCount: number,
@@ -2328,7 +2330,7 @@ export type PostProposalTransition =
     };
 
 /**
- * work itemの種類を考慮する、`decidePostProposalStatus`の後継。
+ * `decidePostProposalStatus`と同じ判断に、作業項目の種類ごとの待ち状態と終わりの状態を加える。
  * auditは`awaiting_approval`で待って`audited`で終わる。
  * pr_fixは`needs_human`で待って`rereview_requested`か`reviewed`で終わる。
  */
@@ -2360,7 +2362,7 @@ export function decidePostProposalTransition(
 // 元の英語の形のまま保つ必要がある。
 // 他のツールがその値を手がかりにしており、`factory.notices`と`status_reason`は
 // 機械的に比べられる状態を保つためのものだから。
-// 一方で、同じ文をGitHubのコメントやDiscordの通知に出すときは、factoryが投稿する
+// 一方で、同じ文をGitHubのコメントやDiscordの通知に出すときは、Factoryが投稿する
 // 人向けの他の文字列と同じく日本語で読めるようにする。
 // `describeReason`は、`pr_workflow_support.ts`と、pr_fix_*、pipeline_*、
 // `pr_review_generate.ts`の各ステップが出す既知の関門と結果の理由の文字列を、
@@ -2386,7 +2388,7 @@ type ReasonRule = {
 
 /**
  * 汎用の次の対応。ConsoleのFailuresとNoticesのタブ(`factory_console__raw_app`)を案内する。
- * 原因に関係なく、`needs_human`のwork itemとnoticeがすべて並ぶ唯一の場所なので、
+ * 原因に関係なく、`needs_human`の作業項目とnoticeがすべて並ぶ唯一の場所なので、
  * より具体的な対応が無いときの既定として安全である。
  */
 const GENERIC_NEXT_ACTION =
@@ -2747,7 +2749,7 @@ const REASON_RULES: readonly ReasonRule[] = [
 
 /**
  * 早期終了(skip、guard_blocked、round_exhausted)のときの結果のフィールドを返す。
- * PRの位置(owner、repo、pr_number)は常にwork itemから取る。
+ * PRの位置(owner、repo、pr_number)は常に作業項目から取る。
  * `pr_fix_finish.ts`は、worktreeを用意しなかったときでも、Discordの通知の宛先に
  * owner、repo、pr_numberを使うため。これらが空だったせいで、実際の実行で
  * 「リポジトリ」の欄が空の通知が出たことがある。
@@ -2790,9 +2792,9 @@ export function earlyExitBase(
 }
 
 /**
- * factoryが書いた`reason` / `status_reason`の文字列を1つ、GitHubのコメントや
+ * Factoryが書いた`reason` / `status_reason`の文字列を1つ、GitHubのコメントや
  * Discordの通知に表示するために日本語に対応させる。テストできるよう純粋関数にしている。
- * 方針は上の節のコメントを参照。
+ * 記録する`reason`は英語のまま保ち、表示するときだけ訳す。訳した値を記録に渡してはならない。
  * `"; "`でつないだ一覧(`pr_fix_verify.ts`の`ForbiddenChangeResult.reasons.join("; ")`)は
  * 項目ごとに再帰的に訳す。知らない項目(または文字列全体)はそのまま返す。
  */

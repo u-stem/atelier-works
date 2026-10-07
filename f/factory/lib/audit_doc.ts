@@ -22,7 +22,7 @@ export const AUDIT_TEMPLATE_RELATIVE_PATH =
   ".claude/skills/factory-audit/template.md";
 
 /**
- * 1回の監査でheadless Claudeが読む、factoryのself cloneから作る
+ * 1回の監査でheadless Claudeが読む、Factoryのself cloneから作る
  * 使い捨てのdetached worktreeのディレクトリを返す。
  * その実行の作業用ディレクトリと同じ階層に置く。
  * `self_update`がデプロイ元にする稼働中のself cloneを、モデルに見せないためである。

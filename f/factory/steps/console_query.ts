@@ -436,7 +436,7 @@ export type PipelineRow = {
   readonly kind: string;
   readonly pr_number: number | null;
   readonly fix_round: number;
-  /** `work_items.branch`。issueのwork itemなら実装用のブランチ、それ以外はnull。 */
+  /** `work_items.branch`。issueの作業項目なら実装用のブランチ、それ以外はnull。 */
   readonly branch: string | null;
   /** `work_items.pr_url`。実装で開いたPRで、`pr_open`になるまではnull。 */
   readonly pr_url: string | null;
@@ -667,7 +667,7 @@ function asIssueProposalStatus(value: unknown): IssueProposalStatus {
 
 /**
  * "requirements_index"ビュー(要件定義タブの一覧)の1行。
- * 要件定義の下書きが1つ以上ある`kind = 'issue'`のwork itemと、その最新の試行回数。
+ * 要件定義の下書きが1つ以上ある`kind = 'issue'`の作業項目と、その最新の試行回数。
  */
 export type RequirementsIndexRow = {
   readonly work_item_id: number;
@@ -819,7 +819,7 @@ async function toRequirementsDocRow(
 /**
  * "audit_index"ビュー(監査タブの一覧)の1行。
  * `factory.v_audit_reports`から、`factory.audit_reports`の各行に、
- * 持ち主のwork itemと提案の判断の件数を合わせたもの。
+ * 持ち主の作業項目と提案の判断の件数を合わせたもの。
  */
 export type AuditIndexRow = {
   readonly audit_report_id: number;

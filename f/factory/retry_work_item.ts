@@ -1,4 +1,4 @@
-// 止まったwork itemを手動で再開するscript。`failed`・`needs_human`・
+// 止まった作業項目を手動で再開するscript。`failed`・`needs_human`・
 // `expired`・`blocked`・`approved`から再開でき、再開するフローと遷移先の
 // 状態は種別で決まる(`computeRestartPlan`)。状態の変更はここで読んだ状態を
 // 前提にした比較交換なので、並行して状態が変わったら上書きせず再開をやめる。
@@ -6,7 +6,7 @@
 // どの種別もラベルを付け直さない。トリガーラベル(Issueは`factory`、
 // PRは`factory:review`・`factory:fix`)は取得時に一度だけ消費し、
 // 自動では付け直さない。状態は`work_items.status`にだけあり、再開した
-// PRのwork itemは、ラベルではなく`poll_prs.ts`の`listTrackedPrs`(DBを参照)が
+// PRの作業項目は、ラベルではなく`poll_prs.ts`の`listTrackedPrs`(DBを参照)が
 // 見つけ直す。したがって再開はフローを直接起動するだけで、GitHubには
 // 何の副作用も無い。新しいサイクルを始めるのは、人がラベルを付け直したときだけ。
 import * as wmill from "windmill-client@1.817.0";
@@ -46,7 +46,7 @@ export type RestartContext = {
 };
 
 /**
- * 再開できるwork itemについて、戻す状態と起動するフローを決める。
+ * 再開できる作業項目について、戻す状態と起動するフローを決める。
  * issueは、要件が現在の`attempt`で承認済みで`implement_enabled`が有効なら
  * implementフロー、そうでなければpipelineフローで再開する。
  * pr_reviewとpr_fixは同名のフローで再開する。

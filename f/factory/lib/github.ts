@@ -9,10 +9,10 @@
 // 403/429のレート制限のヘッダー(`retry-after`、`x-ratelimit-remaining`)を
 // 2回目の要求なしに読める。
 //
-// 自己再入の防止: factoryが投稿するコメント・レビュー・返信には、すべて
+// 自己再入の防止: Factoryが投稿するコメント・レビュー・返信には、すべて
 // `<!-- factory:<kind>:<work_item_id> -->`の目印を付ける(`withMarker`)。
-// factoryは人の運用者と同じGitHubアカウントで動くため、ログイン名だけでは
-// 人の投稿とfactoryの投稿を区別できない。ポーリングする側は
+// Factoryは人の運用者と同じGitHubアカウントで動くため、ログイン名だけでは
+// 人の投稿とFactoryの投稿を区別できない。ポーリングする側は
 // `isFactoryPost`(`isOwnPost`によるログイン名の一致と`hasMarker`の両方)で
 // 区別する。
 
@@ -313,10 +313,10 @@ export function withMarker(
 }
 
 /**
- * `text`が、単独の行にあるfactoryの目印で終わるかを返す。
- * `kind` / `workItemId`を渡さなければ、どのfactoryの目印にも一致する
- * (どのwork itemが投稿したかに関係なく、factory自身の投稿かを見分けるのに使う)。
- * ただし目印だけをfactoryが書いた証拠として扱ってはならない。
+ * `text`が、単独の行にあるFactoryの目印で終わるかを返す。
+ * `kind` / `workItemId`を渡さなければ、どのFactoryの目印にも一致する
+ * (どの作業項目が投稿したかに関係なく、Factory自身の投稿かを見分けるのに使う)。
+ * ただし目印だけをFactoryが書いた証拠として扱ってはならない。
  * 呼び出し側は`isOwnPost(login, viewer)`もあわせて求める必要がある
  * (両方を組み合わせた`isFactoryPost`を参照)。
  */
@@ -333,7 +333,7 @@ export function hasMarker(
 }
 
 /**
- * `login`がfactory自身のGitHubアカウントかを返す。
+ * `login`がFactory自身のGitHubアカウントかを返す。
  * GitHubのログイン名に合わせ、大文字小文字を区別しない。
  */
 export function isOwnPost(login: string, viewer: string): boolean {
@@ -341,18 +341,18 @@ export function isOwnPost(login: string, viewer: string): boolean {
 }
 
 /**
- * 投稿(コメント、レビュー、レビューコメント)が人ではなくfactory自身のものかを返す。
+ * 投稿(コメント、レビュー、レビューコメント)が人ではなくFactory自身のものかを返す。
  * 次の両方を満たす必要がある。
  *
- * - `isOwnPost(login, viewer)`: ログイン名だけでは足りない。factoryは
+ * - `isOwnPost(login, viewer)`: ログイン名だけでは足りない。Factoryは
  *   人の運用者と同じGitHubアカウント(共有のPAT)で動くため、ログイン名の
  *   一致だけでは運用者自身のコメント(普通の指示のコメントなど)と
- *   factoryのコメントを区別できない。
+ *   Factoryのコメントを区別できない。
  * - `hasMarker(body, kind)`: 目印だけでも足りない。第三者が自分の投稿に
  *   `<!-- factory:... -->`の行を貼り付けて、投稿を無視させることができるため。
  *
  * `kind`を渡すと、特定の種類の目印まで求める。例えばpr_fixのフィードバック
- * 収集から除くべきなのは、factoryの`pr_fix`の返信だけで、`pr_review`の
+ * 収集から除くべきなのは、Factoryの`pr_fix`の返信だけで、`pr_review`の
  * レビューは除かない。
  */
 export function isFactoryPost(
@@ -421,11 +421,11 @@ export async function getViewer(client: GhClient): Promise<Viewer> {
 }
 
 /**
- * factoryが作るコミットのauthorとcommitterの名義を、viewer
+ * Factoryが作るコミットのauthorとcommitterの名義を、viewer
  * (PATが指すGitHubアカウント)から作る。
  * 個人のメールアドレスをコミットに書かないよう、GitHubのnoreplyの形
  * (`<数値のid>+<login>@users.noreply.github.com`)を使う
- * (`docs/security.md`の「pr_fix の安全策」を参照)。
+ * (`docs/security.md`の「pr_fixの安全策」を参照)。
  * `workspace.ts`の`commitAndPush`は、結果をプロセスの環境変数
  * (`GIT_AUTHOR_*` / `GIT_COMMITTER_*`)でだけ渡し、git configには書かない。
  */
@@ -690,7 +690,7 @@ function isTimelineEventPayload(value: unknown): value is TimelineEventPayload {
 /**
  * `GET .../timeline`をページ送りしながら取得し、最後の`labeled`イベントだけを返す。
  * ラベルは外されて別の人に付け直されていることがある。そのため
- * `poll_issues`が`docs/security.md`の「public リポジトリでのラベル付与制限」に
+ * `poll_issues`が`docs/security.md`の「publicリポジトリでのラベル付与制限」に
  * 照らして確かめるべきなのは、いずれかのラベル付与ではなく最新のラベル付与である。
  * ラベルが一度も付いていなければ`null`を返す(ラベルで絞った検索で見つけた
  * Issueでは起こらないはずだが、念のため扱う)。
@@ -739,12 +739,12 @@ export type ClaimIssueResult =
  * Issueを取得宣言する。`assignee`をassignし、続けて`triggerLabel`を外す。
  * `factory`ラベルは取得時に消費し、`wip`ラベルなどに付け替えない。
  * 状態は`work_items.status`にだけ持つ。
- * 最後にIssueを再取得して両方が反映されたかを確かめ、別のfactoryの
+ * 最後にIssueを再取得して両方が反映されたかを確かめ、別のFactoryの
  * インスタンスが先に取得した競合を検出する。
  *
  * これはベストエフォートである。assigneeの追加は上書きではなく追加で、
  * ラベルを外すときの404も許すため、同時に取得した2つのインスタンスが
- * どちらもこの確認を通りうる。同じIssueに2つ目のwork itemを始めないよう
+ * どちらもこの確認を通りうる。同じIssueに2つ目の作業項目を始めないよう
  * 防いでいるのは、DB側の`hasActiveWorkItem`の検査である。
  */
 export async function claimIssue(
@@ -790,9 +790,9 @@ export async function claimIssue(
 
 /**
  * Issueにコメントする。目印で確かめるため冪等である。
- * 同じ目印の付いたfactory自身のコメントが既にあれば投稿せず、そのidを
+ * 同じ目印の付いたFactory自身のコメントが既にあれば投稿せず、そのidを
  * `created: false`で返す。
- * `viewer`(`getViewer`で得たfactory自身のログイン名)は必須である。
+ * `viewer`(`getViewer`で得たFactory自身のログイン名)は必須である。
  * 誰でも自分のコメントに`<!-- factory:... -->`の行を貼り付けられるため、
  * 目印だけでは書いた人の証拠にならない。`isOwnPost`を満たし、かつ目印を
  * 持つコメントだけを「投稿済み」とみなす。
@@ -905,23 +905,23 @@ export type ListIssueCommentsOptions = {
   /**
    * これより大きいidのコメントだけを返す(呼び出し側の`last_comment_id`の
    * 処理済みの位置)。省略するとすべてのコメントを返す
-   * (目印を持つfactory自身の投稿は除く。`isFactoryPost`を参照)。
+   * (目印を持つFactory自身の投稿は除く。`isFactoryPost`を参照)。
    */
   readonly sinceId?: number;
 };
 
 /**
  * `GET .../issues/{number}/comments`をページ送りしながら取得し、
- * `sinceId`より新しいfactory以外のコメントに絞って返す。
+ * `sinceId`より新しいFactory以外のコメントに絞って返す。
  * 戻り値の形は`listPrReviews`と同じ`{ items, maxId }`である。
  * `poll_prs.ts`がpr_fixで人のフィードバックを見つけるのに使う。
  *
- * ここで除くのはfactory自身の投稿だけである。つまり、viewerのログイン名で
- * 書かれ、かつfactoryの目印を持つもの(`isFactoryPost(login, opts.viewer,
+ * ここで除くのはFactory自身の投稿だけである。つまり、viewerのログイン名で
+ * 書かれ、かつFactoryの目印を持つもの(`isFactoryPost(login, opts.viewer,
  * raw.body)`、目印の種類は問わない)である。
- * factoryは人の運用者と同じGitHubアカウント(共有のPAT)で動くため、
- * 運用者が打った普通の指示のコメントもfactoryと同じログイン名になる。
- * それらは意図して残し、目印を持つ投稿(factory自身のコメントや、
+ * Factoryは人の運用者と同じGitHubアカウント(共有のPAT)で動くため、
+ * 運用者が打った普通の指示のコメントもFactoryと同じログイン名になる。
+ * それらは意図して残し、目印を持つ投稿(Factory自身のコメントや、
  * 古い「レビュー開始」の告知)だけを落とす。
  */
 export async function listIssueComments(
@@ -1499,17 +1499,17 @@ function isPrReviewPayload(value: unknown): value is PrReviewPayload {
 export type ListHumanResult<T> = {
   readonly items: T[];
   /**
-   * 人とfactoryのどちらが書いたかを問わず、すべてのレビュー・コメントの中で最大のid。
+   * 人とFactoryのどちらが書いたかを問わず、すべてのレビュー・コメントの中で最大のid。
    * `last_review_id` / `last_comment_id`の追跡に使う。
    */
   readonly maxId: number;
 };
 
 /**
- * `GET .../reviews`をページ送りしながら取得し、factory自身の`pr_fix`の返信
+ * `GET .../reviews`をページ送りしながら取得し、Factory自身の`pr_fix`の返信
  * (`isFactoryPost(login, viewer, raw.body, "pr_fix")`)だけを除いて返す。
- * factory自身の`pr_review`のレビューと人のレビューは意図して残す。
- * factoryのレビューの後に修正ラベルを付けるのは「その指摘を直せ」という意味である。
+ * Factory自身の`pr_review`のレビューと人のレビューは意図して残す。
+ * Factoryのレビューの後に修正ラベルを付けるのは「その指摘を直せ」という意味である。
  * 運用者とアカウントを共有していてログイン名がviewerと一致するというだけで
  * そのレビューを落とさず、フィードバックとして見えるようにしておく必要がある。
  */
@@ -1580,9 +1580,9 @@ function isPrReviewCommentPayload(
 
 /**
  * `GET .../comments`(インラインのレビューコメント)をページ送りしながら取得し、
- * `listPrReviews`と同じく、factory自身の`pr_fix`の返信
+ * `listPrReviews`と同じく、Factory自身の`pr_fix`の返信
  * (`isFactoryPost(login, viewer, raw.body, "pr_fix")`)だけを除いて返す。
- * `pr_review`でfactoryが書いた目印の無いインラインの指摘は残す。
+ * `pr_review`でFactoryが書いた目印の無いインラインの指摘は残す。
  * pr_fixはそれを対応すべきフィードバックとして見る必要があるためである。
  */
 export async function listPrReviewComments(
@@ -1828,7 +1828,7 @@ export async function getBranchProtected(
 
 // ---------------------------------------------------------------------------
 // レビュースレッド(GraphQL)。再レビューで指摘が0件のとき、
-// `pr_review_post.ts`はPR上でまだ解決していないfactory自身の`pr_review`の
+// `pr_review_post.ts`はPR上でまだ解決していないFactory自身の`pr_review`の
 // インラインコメントのスレッドを解決する。
 // GitHubのREST APIにはスレッドを解決するエンドポイントが無いため、
 // `gh api graphql`を使う(`callGhApi`の処理をエンドポイント`graphql`で使う)。
@@ -2062,7 +2062,7 @@ function isReviewThreadDatabaseIdNodePayload(
  * - 最初のコメントの作成者・本文・REST id(`databaseId`)
  * - 最後のコメントの作成者・本文(別名`lastComments`)。
  *   `pr_workflow_support.ts`の`selectThreadsToResolve`が、まだ解決していない
- *   factory自身の`pr_review`のスレッドのうち、最後の発言もfactoryのものを
+ *   Factory自身の`pr_review`のスレッドのうち、最後の発言もFactoryのものを
  *   探すのに使う(スレッドに人の返信が残っていれば自動で解決してはならない)。
  * - コメントのREST id(別名`allComments`、先頭の50件のidだけ)。
  *   `matchReviewThreadForComment`が使う。`FixReply.review_comment_id`
@@ -2253,7 +2253,7 @@ export type CreatePullRequestOptions = {
 /**
  * `POST /repos/{owner}/{repo}/pulls`でPRを作る。
  * `head` / `base`は同じリポジトリのブランチ名で、`owner:branch`の形は使わない。
- * factoryは自分で対象のリポジトリにpushしたブランチからしかPRを作らないためである。
+ * Factoryは自分で対象のリポジトリにpushしたブランチからしかPRを作らないためである。
  */
 export async function createPullRequest(
   client: GhClient,

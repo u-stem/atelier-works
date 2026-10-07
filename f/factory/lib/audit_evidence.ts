@@ -483,7 +483,7 @@ function toPastProposal(row: SqlRow): PastProposal {
 
 /**
  * `period`の期間で、監査を実行する価値があると判断する材料になるレコードを数える。
- * 監査の処理自身のレコード(`kind = 'audit'`のwork item、
+ * 監査の処理自身のレコード(`kind = 'audit'`の作業項目、
  * `workspace_disk_usage`の通知)は除く。
  * 監査自身の活動が多くても、それで次の監査が起動しないようにするためである。
  */
@@ -549,7 +549,7 @@ function previousPeriodOf(period: AuditPeriod): { start: Date; end: Date } {
  * (`wi.kind <> 'audit'`。null許容の`work_item_id`とLEFT JOINする場合は
  * `wi.kind IS NULL OR wi.kind <> 'audit'`)。`countActionableRecords`と同じ除外で、
  * 監査が自分自身について報告しないようにする。
- * fix_roundsとreviewsには、作りからして監査の行が無い(監査のwork itemは
+ * fix_roundsとreviewsには、作りからして監査の行が無い(監査の作業項目は
  * レビューも修正もされない)ため、この条件は要らない。
  * noticesとdeploymentsは`work_item_id`を持たないため、除外は当てはまらない。
  * 返す文字列のセルは、結果に入れる前にすべて`sanitizeCell`を通す。

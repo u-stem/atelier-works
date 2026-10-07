@@ -139,7 +139,7 @@ describe("fenceFor", () => {
 });
 
 describe("renderInlineComment", () => {
-  // factoryは運用者自身のGitHubアカウントで投稿するため、
+  // Factoryは運用者自身のGitHubアカウントで投稿するため、
   // 投稿の1行目には書いたジョブの名前を入れる。
   test("starts with the pr_review role tag", () => {
     expect(renderInlineComment(finding())).toStartWith(
@@ -236,7 +236,7 @@ describe("decideReviewBodyMode", () => {
 });
 
 describe("renderReviewSummary", () => {
-  // factoryは運用者自身のGitHubアカウントで投稿するため、
+  // Factoryは運用者自身のGitHubアカウントで投稿するため、
   // 役割タグと作者へのメンションを1行目に並べる。
   test("starts with the pr_review role tag and the author mention on one line", () => {
     const body = renderReviewSummary("alice", 0, "first_clean", [], 0);
@@ -415,8 +415,8 @@ describe("selectThreadsToResolve", () => {
     expect(ids).toEqual(["thread-1"]);
   });
 
-  // スレッドに人の返信が残っていれば、factory自身の`pr_review`の指摘のあとでも、
-  // スレッドを開いたままにする。自動で解決してよいのは、最後の発言がfactoryのときだけ。
+  // スレッドに人の返信が残っていれば、Factory自身の`pr_review`の指摘のあとでも、
+  // スレッドを開いたままにする。自動で解決してよいのは、最後の発言がFactoryのときだけ。
   // モードによらない規則なので、"rereview_clean"で1回だけ確かめる。
   test("skips a thread whose last comment is a human reply", () => {
     const ids = selectThreadsToResolve(

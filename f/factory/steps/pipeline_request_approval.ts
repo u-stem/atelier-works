@@ -20,11 +20,11 @@ export type PipelineRequestApprovalResult = {
 
 /**
  * `attempt`回目の下書きに対する承認依頼(kind "requirements")を
- * `factory.approval_requests`に記録し、work itemを`awaiting_approval`に進め、
+ * `factory.approval_requests`に記録し、作業項目を`awaiting_approval`に進め、
  * Discordへapproval_requestedを通知する。
- * work itemが既に`requirements_generating`から動いていたら、
+ * 作業項目が既に`requirements_generating`から動いていたら、
  * 依頼の記録だけで通知せずに返る。
- * work item・Issue番号・該当attemptの下書きが無ければ例外を投げる。
+ * 作業項目・Issue番号・該当attemptの下書きが無ければ例外を投げる。
  *
  * 人の判断は`f/factory/approval_decide.ts`が別途受け付け、
  * `f/factory/steps/requirements_apply.ts`へ渡す。
