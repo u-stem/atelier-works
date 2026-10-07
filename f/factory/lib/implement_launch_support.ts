@@ -1,6 +1,27 @@
 // 要件定義の承認後にimplementフローを起動する処理と、その失敗理由の文言を定義する。
+// 作業項目のflow_job_idはimplementフローのリースで、フロー自身のルートジョブIDを持つ実行だけが状態を進められる。
+// リース判定の純関数もここに置く。
 
 import { maskSecrets } from "./log.ts";
+import type { WorkItem } from "./types.ts";
+
+const JOB_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * WindmillのジョブID(UUID)を解析する。前後の空白を除いた値がUUIDの形なら返し、違えば例外を投げる。
+ * `runFlowAsync`はHTTPエラーでも例外を投げずに応答本文を返すので、起動の成否はここで判定する。
+ * 例外のメッセージには、秘密をマスクして先頭200文字に切った値を載せる。
+ */
+export function parseFlowJobId(raw: string, source: string): string {
+  const trimmed = raw.trim();
+  if (!JOB_ID_PATTERN.test(trimmed)) {
+    throw new Error(
+      `${source} did not return a job id: ${maskSecrets(trimmed.slice(0, 200))}`,
+    );
+  }
+  return trimmed;
+}
 
 /** implementフローを起動できなかったときの失敗理由の文言を返す。 */
 export function implementLaunchFailureReason(message: string): string {
@@ -12,14 +33,42 @@ export function flowJobIdFailureReason(message: string): string {
   return `implement flow job id could not be recorded: ${message}`;
 }
 
+/** implementフローのステップがリースを持っていないときの理由。ステップは何も変えずに終わるので、人への通知には使わない。 */
+export const IMPLEMENT_LEASE_LOST_REASON =
+  "another implement run holds the flow_job_id lease";
+
+/**
+ * リースの値にするimplementフロー自身のジョブID(`WM_ROOT_FLOW_JOB_ID`)を返す。
+ * `runFlowAsync`は既定で親ジョブを付けずに起動するので、implementフローはルートジョブになり、
+ * この値は起動側が記録する`runFlowAsync`の戻り値と一致する。
+ * 未設定・空・UUIDでない(フローの外で実行した)ときは例外を投げる。
+ */
+export function implementLeaseJobId(
+  env: Readonly<Record<string, string | undefined>>,
+): string {
+  return parseFlowJobId(env.WM_ROOT_FLOW_JOB_ID ?? "", "WM_ROOT_FLOW_JOB_ID");
+}
+
+/** 作業項目が`implementing`で、`flow_job_id`(リース)が`jobId`のときだけ`true`を返す。 */
+export function holdsImplementLease(
+  item: Pick<WorkItem, "status" | "flow_job_id">,
+  jobId: string,
+): boolean {
+  return item.status === "implementing" && item.flow_job_id === jobId;
+}
+
 export type StartImplementDeps = {
-  /** `updateStatusIfCurrent`で`approved`から`implementing`へ移す。 */
+  /** `updateStatusIfCurrentClearingFlowJobId`で`approved`から`implementing`へ移し、`flow_job_id`を空にする。 */
   readonly casToImplementing: () => Promise<boolean>;
-  /** `runFlowAsync(IMPLEMENT_FLOW_PATH, { work_item_id })`でフローを起動する。 */
+  /** `runFlowAsync(IMPLEMENT_FLOW_PATH, { work_item_id })`の戻り値をそのまま返す。ジョブIDの解析は`startImplement`が行う。 */
   readonly launchFlow: () => Promise<string>;
-  readonly recordFlowJobId: (jobId: string) => Promise<void>;
-  /** `updateStatusIfCurrent`で`implementing`から`needs_human`へ移す。 */
-  readonly moveToNeedsHuman: (reason: string) => Promise<void>;
+  /** `setFlowJobIdIfUnset`でジョブIDを記録する。別の実行が先にリースを取っていれば`false`を返す。 */
+  readonly recordFlowJobId: (jobId: string) => Promise<boolean>;
+  /**
+   * `updateStatusIfLeaseHolder`で、リースが空のときだけ`implementing`から`needs_human`へ移す。
+   * フローが既にリースを取っているか、別の処理が作業項目を動かしていれば`false`を返す。
+   */
+  readonly moveToNeedsHuman: (reason: string) => Promise<boolean>;
   /** `flow_path`に`IMPLEMENT_FLOW_PATH`、`step`に引数のstep名を渡して`recordFailure`する。 */
   readonly recordFailure: (reason: string, step: string) => Promise<void>;
   readonly addNotice: (reason: string) => Promise<void>;
@@ -27,11 +76,16 @@ export type StartImplementDeps = {
   readonly log: (message: string, fields: Record<string, unknown>) => void;
 };
 
+/**
+ * `flow_holds_lease`は、起動がエラーを返したが、フローが既にリースを取っていた
+ * (または別の処理が作業項目を動かしていた)ことを表す。
+ */
 export type StartImplementOutcome =
   | "started"
   | "started_without_job_id"
   | "not_moved"
-  | "launch_failed";
+  | "launch_failed"
+  | "flow_holds_lease";
 
 function messageOf(err: unknown): string {
   return maskSecrets(err instanceof Error ? err.message : String(err));
@@ -56,15 +110,22 @@ async function attempt(
  *
  * 状態を先に移すのは、`approved`が終端状態だからである。
  * `approved`のままフローがprepareより前に落ちると、`on_error_flow`は失敗にできない。
+ * この移行は`flow_job_id`も空にする。`flow_job_id`はimplementフローのリースで、
+ * フローのprepareが自分のルートジョブIDで取る。
  *
  * 副作用ごとに`try`を分け、1つが失敗しても後続の記録を飛ばさない。
  * - 状態の移行が`false`を返すか例外を投げた場合は、`not_moved`を返して何もしない。
  *   別の処理(`retry_work_item`)が作業項目を動かしたためで、
  *   ここで`needs_human`へ移すと実行中のフローの状態を上書きしてしまう。
- * - フローの起動が例外を投げた場合は、`needs_human`へ移し、`job_failures`への記録
- *   (ConsoleのFailuresタブから再実行できる)、noticeの追加、Discordへの通知を行う。
- * - ジョブIDの記録が2回とも失敗した場合(1回だけ再試行する)は、
+ * - フローの起動が例外を投げるか、戻り値がジョブIDでない場合は、
+ *   リースが空のときだけ`needs_human`へ移し、`job_failures`への記録
+ *   (ConsoleのFailuresタブから再実行できる)、noticeの追加、Discordへの通知を行い、`launch_failed`を返す。
+ *   `needs_human`への移行が`false`を返すとき(フローが既にリースを取っている、または別の処理が動かした)は、
+ *   フローが動いているので何も残さず`flow_holds_lease`を返す。
+ *   移行自体が例外を投げたときは、フローが動いている確証がないので、人に知らせて`launch_failed`を返す。
+ * - ジョブIDの記録が2回とも例外を投げた場合(1回だけ再試行する)は、
  *   フローは動いているので`implementing`のままにし、`job_failures`とnoticeだけ残す。
+ *   記録が`false`を返す場合は、別の実行がリースを持つので上書きせず、ログだけ残して`started`を返す。
  */
 export async function startImplement(
   deps: StartImplementDeps,
@@ -82,12 +143,24 @@ export async function startImplement(
 
   let jobId: string;
   try {
-    jobId = await deps.launchFlow();
+    jobId = parseFlowJobId(await deps.launchFlow(), "runFlowAsync");
   } catch (err) {
     const reason = implementLaunchFailureReason(messageOf(err));
-    await attempt(deps, "needs_human transition", () =>
-      deps.moveToNeedsHuman(reason),
-    );
+    let leaseFree = true;
+    try {
+      leaseFree = await deps.moveToNeedsHuman(reason);
+    } catch (moveErr) {
+      deps.log("startImplement: needs_human transition failed", {
+        error: messageOf(moveErr),
+      });
+    }
+    if (!leaseFree) {
+      deps.log(
+        "startImplement: launch reported an error but the flow already holds the lease or the item moved on",
+        { error: reason },
+      );
+      return "flow_holds_lease";
+    }
     await attempt(deps, "recordFailure", () =>
       deps.recordFailure(reason, "launch"),
     );
@@ -97,13 +170,20 @@ export async function startImplement(
   }
 
   try {
+    let recorded: boolean;
     try {
-      await deps.recordFlowJobId(jobId);
+      recorded = await deps.recordFlowJobId(jobId);
     } catch (err) {
       deps.log("startImplement: recordFlowJobId failed; retrying once", {
         error: messageOf(err),
       });
-      await deps.recordFlowJobId(jobId);
+      recorded = await deps.recordFlowJobId(jobId);
+    }
+    if (!recorded) {
+      deps.log(
+        "startImplement: flow job id not recorded; another run holds the lease",
+        { job_id: jobId },
+      );
     }
     return "started";
   } catch (err) {

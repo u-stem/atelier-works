@@ -11,7 +11,10 @@ import {
   getWorkItem,
   recordFailure,
   setFlowJobId,
+  setFlowJobIdIfUnset,
   updateStatusIfCurrent,
+  updateStatusIfCurrentClearingFlowJobId,
+  updateStatusIfLeaseHolder,
 } from "../lib/db.ts";
 import { notify } from "../lib/discord.ts";
 import { commentIssue, type GhClient, getViewer } from "../lib/github.ts";
@@ -236,18 +239,23 @@ async function run(
     const issueNumber = workItem.issue_number;
     const launched = await startImplement({
       casToImplementing: () =>
-        updateStatusIfCurrent(workItem.id, "approved", "implementing", null),
+        updateStatusIfCurrentClearingFlowJobId(
+          workItem.id,
+          "approved",
+          "implementing",
+          null,
+        ),
       launchFlow: () =>
         wmill.runFlowAsync(IMPLEMENT_FLOW_PATH, { work_item_id: workItem.id }),
-      recordFlowJobId: (jobId) => setFlowJobId(workItem.id, jobId),
-      moveToNeedsHuman: async (reason) => {
-        await updateStatusIfCurrent(
+      recordFlowJobId: (jobId) => setFlowJobIdIfUnset(workItem.id, jobId),
+      moveToNeedsHuman: (reason) =>
+        updateStatusIfLeaseHolder(
           workItem.id,
           "implementing",
           "needs_human",
+          null,
           reason,
-        );
-      },
+        ),
       recordFailure: async (reason, step) => {
         await recordFailure({
           work_item_id: workItem.id,
