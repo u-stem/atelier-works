@@ -1,177 +1,177 @@
 # yaml-language-server: $schema=wmill.schema.json
-# wmill.yaml — Windmill CLI configuration
-# Full reference: run "wmill config"
+# wmill.yaml: Windmill CLIの設定
+# 全項目の説明は`wmill config`で見られる。
 
-# Default TypeScript runtime for new scripts
+# 新しいscriptの既定のTypeScriptランタイム
 defaultTs: bun                  # bun or deno
 
-# Glob patterns for files to include in sync
+# syncに含めるファイルのglobパターン
 includes: 
   - "f/**"           # use ** for all, f/** for folder-scoped
 
-# Additional glob patterns merged with includes (useful in workspace overrides)
+# `includes`に足すglobパターン(ワークスペースごとの上書きで使う)
 # extraIncludes: []
 
-# Glob patterns for files to exclude from sync
+# syncから除くファイルのglobパターン
 excludes:
-  # Instance-specific (owners, instance_name, windmill_public_url differ per
-  # deployment): edited via the Windmill UI, not synced from git. See
-  # templates/factory_config.resource.yaml for the seed used on first
-  # bootstrap and scripts/bootstrap.sh for how it is created.
+  # インスタンス固有(`owners`・`instance_name`・`windmill_public_url`は
+  # 環境ごとに違う)なので、gitからsyncせずWindmill UIで編集する。初回の
+  # bootstrapで使う初期値は`templates/factory_config.resource.yaml`、作り方は
+  # `scripts/bootstrap.sh`を参照。
   - "f/factory/factory_config.resource.yaml"
-  # Instance-specific mutable state, not instance-specific config: self_update
-  # writes the deployed sha into this non-secret variable at runtime. If it
-  # synced like an ordinary variable, every unrelated `wmill sync push` would
-  # reset it back to this file's committed empty value, making self_update
-  # treat "unchanged" as "update" and re-push worker-side right as a human's
-  # `mise run deploy` is mid-flight overwriting the same script/flow
-  # definitions from the host side — a real, not just theoretical, race.
-  # scripts/bootstrap.sh creates the variable once on first setup (empty
-  # value, description there); the file stays in the repo only as the
-  # source of that seed description, same as factory_config.resource.yaml
-  # above.
+  # インスタンス固有の設定ではなく、インスタンス固有の変わる状態。
+  # `self_update`が、デプロイしたshaを実行時にこの秘密でない変数へ書く。
+  # 普通の変数のようにsyncすると、無関係な`wmill sync push`のたびに
+  # コミット済みの空の値へ戻る。すると`self_update`が「変化無し」を「更新」と
+  # 取り違え、人がホストから`mise run deploy`で同じscriptやフローの定義を
+  # 上書きしている最中に、worker側からpushし直す。理論上ではなく実際に起きる競合。
+  # `scripts/bootstrap.sh`が初回の設定で一度だけ変数を作る(空の値。説明は
+  # そちらにある)。このファイルは、上の`factory_config.resource.yaml`と同じく、
+  # 初期値の説明の出どころとしてだけリポジトリに残す。
   - "f/factory/deployed_sha.variable.yaml"
 
-# --- What to sync -----------------------------------------------------
-# "skip" options default to false (synced), "include" options default to false (not synced)
+# --- syncする対象 -----------------------------------------------------
+# "skip"の項目の既定はfalse(syncする)、"include"の項目の既定はfalse(syncしない)
 
-# Skip syncing variables
+# 変数をsyncしない
 skipVariables: false
 
-# Skip syncing resources
+# リソースをsyncしない
 skipResources: false
 
-# Skip syncing resource types
+# リソース型をsyncしない
 skipResourceTypes: false
 
-# Skip syncing secrets (true by default for security)
+# 秘密をsyncしない(安全のため既定はtrue)
 skipSecrets: true               # true by default — secrets are not synced for security
 
-# Skip syncing scripts
+# scriptをsyncしない
 skipScripts: false
 
-# Skip syncing flows
+# フローをsyncしない
 skipFlows: false
 
-# Skip syncing apps
+# アプリをsyncしない
 skipApps: false
 
-# Skip syncing folders
+# フォルダをsyncしない
 skipFolders: false
 
-# Skip syncing workspace dependencies
+# ワークスペースの依存をsyncしない
 skipWorkspaceDependencies: false
 
-# Skip syncing data table SQL migrations
+# Data TableのSQLのmigrationをsyncしない
 skipDatatableMigrations: false
 
-# Uncomment to include these (excluded by default):
-# Include schedules in sync
+# 以下はコメントを外すとsyncに含める(既定では除く):
+# スケジュールをsyncに含める
 includeSchedules: true
 
-# Include triggers (http, websocket, kafka, etc.) in sync
+# トリガー(http・websocket・kafkaなど)をsyncに含める
 # includeTriggers: true
 
-# Include workspace users in sync
+# ワークスペースのユーザーをsyncに含める
 # includeUsers: true
 
-# Include workspace groups in sync
+# ワークスペースのグループをsyncに含める
 # includeGroups: true
 
-# Include workspace settings in sync
+# ワークスペースの設定をsyncに含める
 # includeSettings: true
 
-# Include encryption key in sync
+# 暗号鍵をsyncに含める
 # includeKey: true
 
-# --- Sync behavior ----------------------------------------------------
+# --- syncの動作 ----------------------------------------------------
 
-# Number of parallel operations during sync
+# sync中に並列に行う操作の数
 # parallel: 4
 
-# Require lock files for all scripts
+# すべてのscriptにロックファイルを要求する
 # locksRequired: true
 
-# Share one lockfile per workspace dependency file (locks/<depfile>.lock), instead of an identical .script.lock per script
+# scriptごとに同じ内容の`.script.lock`を置かず、ワークスペースの依存ファイルごとに
+# 1つのロックファイル(`locks/<depfile>.lock`)を共有する
 # dedupeLockfiles: true
 
-# Run linting before push
+# push前にlintを実行する
 # lint: true
 
-# Handle secrets as plain text (not recommended)
+# 秘密を平文で扱う(推奨しない)
 # plainSecrets: false
 
-# Default commit message for sync operations
+# sync操作の既定のコミットメッセージ
 # message: "my commit message"
 
-# Branch name to use promotion overrides from during sync
+# sync中にpromotionの上書きを取り出すブランチ名
 # promotion: staging
 
-# Skip validation that current git branch matches a configured branch
+# 今のgitのブランチが設定済みのブランチと一致するかの検証を飛ばす
 # skipBranchValidation: false
 
-# Use __flow/__app/__raw_app suffixes instead of .flow/.app/.raw_app
+# `.flow`・`.app`・`.raw_app`の代わりに`__flow`・`__app`・`__raw_app`の接尾辞を使う
 nonDottedPaths: true            # recommended for new projects
 
-# Sync behavior version — controls ownership handling during push/pull (v1: preserve permissioned_as on update, strip on_behalf_of_email on pull)
+# syncの動作の版。push・pullでの所有者の扱いを決める
+# (v1: 更新時に`permissioned_as`を保ち、pull時に`on_behalf_of_email`を除く)
 syncBehavior: v1                # v1 enables ownership preservation
 
-# --- Codebase bundling (shared libraries) -----------------------------
-# Bundle TypeScript/JavaScript codebases that scripts import from.
-# Each entry is bundled and uploaded so scripts can import shared code.
+# --- コードベースのバンドル(共有ライブラリ) -----------------------------
+# scriptがimportするTypeScript・JavaScriptのコードベースをバンドルする。
+# 各項目をバンドルしてアップロードし、scriptが共有コードをimportできるようにする。
 
-# Codebase bundling configurations for shared libraries
+# 共有ライブラリのバンドルの設定
 codebases: []
 # codebases:
-#   - relative_path: ./shared          # path to the codebase
-#     includes: ["**/*.ts"]            # files to include in bundle
-#     excludes: ["node_modules/**"]    # files to exclude
-#     format: esm                      # bundle format: "cjs" or "esm"
-#     external: ["pg", "axios"]        # dependencies to leave unbundled
-#     assets:                          # static files to copy into bundle
+#   - relative_path: ./shared          # コードベースのパス
+#     includes: ["**/*.ts"]            # バンドルに含めるファイル
+#     excludes: ["node_modules/**"]    # 除くファイル
+#     format: esm                      # バンドルの形式: "cjs"か"esm"
+#     external: ["pg", "axios"]        # バンドルしない依存
+#     assets:                          # バンドルにコピーする静的ファイル
 #       - from: ./static
 #         to: ./dist
-#     # customBundler: ./build.ts      # custom bundler script (replaces esbuild)
-#     # inject: ["./polyfills.ts"]     # files to inject into every entry point
-#     # define:                        # compile-time constants
+#     # customBundler: ./build.ts      # 独自のバンドラーのscript(esbuildの代わり)
+#     # inject: ["./polyfills.ts"]     # すべてのエントリポイントに注入するファイル
+#     # define:                        # コンパイル時の定数
 #     #   API_URL: '"https://api.example.com"'
-#     # banner:                        # text prepended to output files
+#     # banner:                        # 出力ファイルの先頭に足す文字列
 #     #   js: "/* bundled by windmill */"
-#     # loader:                        # esbuild loader overrides
+#     # loader:                        # esbuildのローダーの上書き
 #     #   ".png": "dataurl"
 
-# --- Workspace bindings -----------------------------------------------
-# Map workspace names to Windmill instances and override settings per workspace.
-# The key is a human-friendly workspace name. gitBranch and workspaceId default to the key name.
+# --- ワークスペースの対応づけ -----------------------------------------------
+# ワークスペース名をWindmillのインスタンスに対応づけ、ワークスペースごとに設定を上書きする。
+# キーは人が読みやすいワークスペース名。`gitBranch`と`workspaceId`の既定はキーの名前。
 
-# Map workspace names to Windmill instances and per-workspace sync overrides
+# ワークスペース名とWindmillのインスタンス、ワークスペースごとのsyncの上書きの対応
 workspaces:
   factory:
     baseUrl: http://127.0.0.1:8080
     workspaceId: factory
   # feat/factory-foundation:
-    # baseUrl: https://app.windmill.dev    # Windmill instance URL
-    # workspaceId: my-workspace            # defaults to workspace name
-    # gitBranch: main                        # git branch (defaults to workspace name)
-    # promotionOverrides:                    # overrides applied during --promotion
+    # baseUrl: https://app.windmill.dev    # WindmillのインスタンスのURL
+    # workspaceId: my-workspace            # 既定はワークスペース名
+    # gitBranch: main                        # gitのブランチ(既定はワークスペース名)
+    # promotionOverrides:                    # --promotionのときに適用する上書き
     #   skipSecrets: false
-    # specificItems:                         # items stored per-workspace on disk
-    #                                        # e.g. file.staging.variable.yaml (suffix = workspace name)
+    # specificItems:                         # ディスクにワークスペースごとに置く項目
+    #                                        # 例: file.staging.variable.yaml(接尾辞はワークスペース名)
     #   variables: ["f/my_folder/my_var"]
     #   resources: ["f/my_folder/my_res"]
     #   triggers: ["f/my_folder/my_trigger"]
     #   folders: ["my_folder"]
     #   settings: true
 
-  # Example: staging workspace on a different instance
+  # 例: 別のインスタンスにあるstagingのワークスペース
   # staging:
   #   baseUrl: https://staging.windmill.dev
-  #   workspaceId: staging-workspace          # defaults to 'staging' if omitted
+  #   workspaceId: staging-workspace          # 省略すると'staging'
   #   overrides:
   #     skipSecrets: false
   #     includeSchedules: true
 
-  # Items shared across ALL workspaces
+  # すべてのワークスペースで共有する項目
   # commonSpecificItems:
   #   variables: ["f/shared/api_key"]
   #   resources: ["f/shared/db_conn"]

@@ -1,28 +1,21 @@
-// cleanup_db: every day at 03:30 Asia/Tokyo (see cleanup_db.schedule.yaml),
-// deletes rows past their configured retention window from the `factory`
-// schema, which otherwise grows without bound: terminal-status work items
-// (and everything that cascades from them: requirement_drafts, approvals,
-// agent_runs, approval_requests) past `config.retention_work_items_days`,
-// and job_failures / deployments / resolved notices past
-// `config.retention_logs_days`, each swept independently of work_items.
+// 毎日03:30(JST)に、保持期間を過ぎた行を`factory`スキーマから削除する。
+// 放っておくと行が際限なく増えるため。対象は、`config.retention_work_items_days`を
+// 過ぎた終端状態のwork item(と連鎖削除される`requirement_drafts`・`approvals`・
+// `agent_runs`・`approval_requests`)と、`config.retention_logs_days`を過ぎた
+// `job_failures`・`deployments`・解決済みのnoticeで、work itemとは別々に掃除する。
 //
-// Pure cutoff computation and summary formatting live in
-// ./lib/cleanup_db_support.ts; this file is I/O wiring only. Each sweep is
-// independent: one table's delete failing is logged (job log + a
-// `factory.notices` row) and does not stop the rest from running. A
-// genuine DB-connectivity failure surfaces naturally instead of being
-// swallowed, since the `addNotice` call inside each catch block is itself
-// unguarded — if the database is unreachable, that call fails too and
-// propagates out of `main`, rather than the per-step try/catch silently
-// returning an all-zero result.
+// 期限の計算と要約の整形は`./lib/cleanup_db_support.ts`にあり、
+// このファイルは入出力をつなぐだけ。掃除は表ごとに独立しており、
+// 1つの表の削除が失敗してもログと`factory.notices`の行に残して残りを続ける。
+// 各catchの中の`addNotice`は例外を捕まえないので、DBに接続できないときは
+// その呼び出しも失敗して`main`の外へ伝わる。
+// こうして、接続障害を全件0件の結果として握りつぶさずに表に出す。
 //
-// Deleting a work item's requirements-doc directory (`doc_dirs_deleted`) is
-// best-effort filesystem cleanup, not itself a DB sweep: it runs after
-// `deleteTerminalWorkItemsBefore` succeeds, using the `{id, owner, repo,
-// issue_number}` refs that call already returns for the rows it deleted
-// (`lib/cleanup_db_support.ts`'s `docDirsFor`). A failure here (or the DB
-// delete never running at all) is logged and noticed the same way as the
-// other sweeps, and never blocks the rest of this job.
+// work itemの要件定義ディレクトリの削除(`doc_dirs_deleted`)は、DBの掃除ではなく
+// 失敗してもよいファイルの片付け。`deleteTerminalWorkItemsBefore`が成功した後に、
+// それが返した削除済みの行の`{id, owner, repo, issue_number}`を使って実行する。
+// ここでの失敗(DBの削除が実行されなかった場合を含む)も、他の掃除と同じく
+// ログとnoticeに残し、残りの処理を止めない。
 
 import * as wmill from "windmill-client@1.817.0";
 import {
@@ -50,13 +43,12 @@ function errorMessage(err: unknown): string {
 }
 
 /**
- * Deletes terminal work items past `cutoff`. The approval_requests rows the
- * delete cascades away are counted inside the same statement (see
- * `deleteTerminalWorkItemsBefore`), so the two numbers always describe the
- * same set of rows. `deleted` (the per-item owner/repo/issue_number refs)
- * is what `cleanupDocDirs` below uses to find each item's requirements-doc
- * directory — empty when the delete itself failed, which correctly skips
- * that sweep too (there is nothing to delete `docDirsFor` could compute).
+ * `cutoff`より前の終端状態のwork itemを削除し、件数と削除した行の参照を返す。
+ * 失敗したらログとnoticeに残し、0件と空の`deleted`を返す。
+ * 連鎖削除される`approval_requests`は同じ文の中で数えるので、
+ * 2つの件数は常に同じ行の集合を指す。
+ * `deleted`は`cleanupDocDirs`が要件定義ディレクトリを探すのに使う。
+ * 削除に失敗したときは空になり、ディレクトリの掃除も正しく飛ばされる。
  */
 async function cleanupWorkItems(
   cutoff: Date,
@@ -82,13 +74,12 @@ async function cleanupWorkItems(
 }
 
 /**
- * Best-effort deletes each deleted work item's requirements-doc directory
- * (`docDirsFor`): the `wi-<id>` directory recursively, then its parent
- * `issue-<N>` directory only if that leaves it empty (a sibling work item
- * for the same issue may still have its own `wi-<id>` there). One failure
- * is logged and noticed but does not stop the rest — a stray directory left
- * behind is a disk-usage concern, not a correctness one, and the DB rows it
- * belonged to are already gone either way.
+ * 削除したwork itemの要件定義ディレクトリを消し、消せた数を返す。
+ * `wi-<id>`は中身ごと消し、親の`issue-<N>`は空になった場合だけ消す。
+ * 同じIssueの別のwork itemが自分の`wi-<id>`を持っていることがあるため。
+ * 1件の失敗はログとnoticeに残して残りを続ける。
+ * 残ったディレクトリはディスク使用量の問題にとどまり、
+ * 対応するDBの行はどちらにしても削除済みなので、正しさには影響しない。
  */
 async function cleanupDocDirs(
   deleted: readonly DeletedWorkItemRef[],
@@ -160,10 +151,11 @@ async function cleanupNotices(cutoff: Date, log: Logger): Promise<number> {
   }
 }
 
-/** Records this run in factory.cleanup_runs. A failure here is logged and
- * noticed the same as the sweeps above, but never fails the job — the
- * deletes themselves already succeeded (or were already individually
- * handled) by the time this runs. */
+/**
+ * 今回の実行結果を`factory.cleanup_runs`に記録する。
+ * 失敗しても他の掃除と同じくログとnoticeに残すだけで、ジョブは失敗させない。
+ * この時点で削除そのものは成功しているか、個別に処理済みだから。
+ */
 async function recordRun(counts: CleanupCounts, log: Logger): Promise<void> {
   try {
     await insertCleanupRun(counts);

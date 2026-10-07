@@ -16,7 +16,7 @@ function readStoredTheme(): Theme | null {
     const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
     return isTheme(stored) ? stored : null;
   } catch {
-    // localStorage が使えない環境(プライベートモード等)ではヒントなしとして扱う。
+    // `localStorage`が使えない環境(プライベートモードなど)では、ヒント無しとして扱う。
     return null;
   }
 }
@@ -31,7 +31,7 @@ function readParentFrameHint(): Theme | null {
       ? "dark"
       : "light";
   } catch {
-    // 別オリジン等でアクセスできない場合はヒントなしとして扱う。
+    // 別オリジンなどでアクセスできない場合は、ヒント無しとして扱う。
     return null;
   }
 }
@@ -45,9 +45,11 @@ function readSystemPreference(): Theme {
     : "light";
 }
 
-// Applied before the first paint so switching themes (or reloading with a
-// stored preference) never flashes the opposite theme while React mounts.
-// App.tsx reads this same `data-theme` attribute back as its initial state.
+/**
+ * 最初のテーマを`<html>`の`data-theme`に適用する。最初の描画の前に呼び、
+ * テーマの切り替えや保存済みの設定での再読み込みのとき、Reactのマウント中に
+ * 逆のテーマが一瞬見えないようにする。`App.tsx`はこの属性を初期状態として読む。
+ */
 function applyInitialTheme(): void {
   const theme =
     readStoredTheme() ?? readParentFrameHint() ?? readSystemPreference();

@@ -1,24 +1,20 @@
-// Inline draw.io (mxGraph) diagram rendering via diagrams.net's embeddable
-// "static viewer" script (https://www.diagrams.net/doc/faq/embed-html-options
-// — the `viewer-static.min.js` + `<div class="mxgraph" data-mxgraph='...'>`
-// embedding convention). The XML never leaves the browser except to the
-// diagrams.net CDN serving that one static script file — the diagram
-// content itself is rendered entirely client-side from `data-mxgraph`'s
-// JSON, never posted anywhere (see docs/security.md's draw.io note).
+// diagrams.netの埋め込み用の静的ビューア(`viewer-static.min.js`と
+// `<div class="mxgraph" data-mxgraph='...'>`の規約。
+// https://www.diagrams.net/doc/faq/embed-html-options)で、draw.io(mxGraph)の
+// 図をその場に描く。図の内容は`data-mxgraph`のJSONからブラウザの中だけで描画し、
+// どこにも送らない。外部と通信するのは、静的なスクリプト1つを配信する
+// diagrams.netのCDNへの取得だけ(`docs/security.md`のdraw.ioの節を参照)。
 //
-// The script is loaded at most once per page (module-scope singleton
-// Promise) since every diagram on a document page shares the same
-// `window.GraphViewer` global — a second `<script>` insertion would just
-// re-run the same processElements() sweep redundantly.
+// 文書ページの図はすべて同じ`window.GraphViewer`を共有するので、スクリプトは
+// ページごとに一度だけ読み込む(モジュールスコープの単一のPromise)。
+// `<script>`を2回入れても、同じ`processElements()`をもう一度走らせるだけになる。
 //
-// CSP / cross-origin script loading has not been runtime-verified in this
-// change (no browser available in this environment) — see this component's
-// entry in the implementer's final report for what to check when previewing
-// the app (`wmill app dev`): whether the script tag is blocked by CSP
-// (`Refused to load the script...` in the console) and whether the graph
-// actually renders. If it is blocked, vendoring `viewer-static.min.js` under
-// this app's own files (Apache-2.0 licensed) and importing it as a bundled
-// asset is the fallback (not implemented here).
+// CSPと別オリジンのスクリプトの読み込みは、ブラウザでの実行時には
+// 確かめていない。`wmill app dev`で確かめる点は、CSPがscriptタグを
+// ブロックしないか(コンソールに`Refused to load the script...`が出ないか)と、
+// 図が実際に描かれるか。ブロックされる場合の代替は、
+// `viewer-static.min.js`(Apache-2.0)をこのアプリのファイルとして同梱し、
+// バンドルする資産としてimportすること(未実装)。
 
 import React, { useEffect, useRef, useState } from "react";
 
@@ -30,9 +26,9 @@ type GraphViewerGlobal = {
 
 declare global {
   interface Window {
-    // Set by VIEWER_SCRIPT_URL once loaded — typed `unknown` here since
-    // this app doesn't control that script; narrowed by
-    // `isGraphViewerGlobal` before use.
+    // `VIEWER_SCRIPT_URL`のスクリプトが読み込み後に設定する。このアプリが
+    // 管理していないスクリプトなので`unknown`で受け、使う前に
+    // `isGraphViewerGlobal`で絞り込む。
     GraphViewer?: unknown;
   }
 }
@@ -52,8 +48,10 @@ function getGraphViewerGlobal(): GraphViewerGlobal | null {
 
 let viewerScriptPromise: Promise<void> | null = null;
 
-/** Loads diagrams.net's static-viewer script exactly once for the whole
- * page (module-scope singleton — see this file's module doc comment). */
+/**
+ * diagrams.netの静的ビューアのスクリプトを、ページ全体で一度だけ読み込む
+ * (モジュールスコープの単一のPromise。理由はファイル冒頭を参照)。
+ */
 function loadViewerScript(): Promise<void> {
   if (viewerScriptPromise !== null) {
     return viewerScriptPromise;
@@ -78,10 +76,11 @@ function loadViewerScript(): Promise<void> {
 
 type ViewerState = "loading" | "ready" | "error";
 
-/** Renders one draw.io diagram inline via diagrams.net's embeddable static
- * viewer. `xml` is the raw (uncompressed) mxGraph XML read back from the
- * requirements doc dir by f/factory/steps/console_query.ts's
- * `requirements_doc` view. */
+/**
+ * draw.ioの図を1つ、diagrams.netの埋め込み用の静的ビューアでその場に描く。
+ * `xml`は、`f/factory/steps/console_query.ts`の`requirements_doc`ビューが
+ * 要件定義ディレクトリから読み出した、圧縮していないmxGraphのXML。
+ */
 export function DrawioViewer({
   name,
   xml,

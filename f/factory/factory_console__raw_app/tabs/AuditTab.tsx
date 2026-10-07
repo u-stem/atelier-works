@@ -18,15 +18,19 @@ export function AuditTab({
   initialWorkItemId,
   onInitialWorkItemConsumed,
 }: {
-  /** A work_item_id to select immediately on mount — set by App.tsx when
-   * the Inbox tab's 「レポートを開く」button switches to this tab (see
-   * InboxTab.tsx's `onOpenAudit`). `null` when this tab was opened directly
-   * (falls back to a `#audit/<id>` deep link, then no selection). */
+  /**
+   * マウント直後に選ぶ`work_item_id`。承認タブの「レポートを開く」ボタンで
+   * このタブに切り替えたとき、`App.tsx`が設定する(`InboxTab.tsx`の
+   * `onOpenAudit`を参照)。このタブを直接開いたときは`null`で、
+   * `#audit/<id>`のディープリンクがあればそれを、無ければ何も選ばない。
+   */
   initialWorkItemId: number | null;
-  /** Called once the hand-off above has been applied, so App.tsx can clear
-   * it: this tab unmounts on every tab switch, and a stale hand-off would
-   * otherwise re-select the same report on the next mount, overriding a
-   * report the user picked by hand in between. */
+  /**
+   * 上の受け渡しを反映した後に呼び、`App.tsx`に値を消させる。
+   * このタブはタブを切り替えるたびにアンマウントされるので、古い値が残ると
+   * 次のマウントで同じレポートを選び直し、その間に利用者が手で選んだ
+   * レポートを上書きしてしまう。
+   */
   onInitialWorkItemConsumed: () => void;
 }): React.ReactElement {
   const { rows, loading, error, reload } = useConsoleQuery(
@@ -40,30 +44,30 @@ export function AuditTab({
   const [kickoffError, setKickoffError] = useState<string | null>(null);
   const [kickoffPending, setKickoffPending] = useState(false);
 
-  /** Selects `workItemId` and keeps `location.hash` in sync (`#audit/<id>`)
-   * so the URL stays shareable/reloadable — same fragment format
-   * lib/deepLink.ts's `parseAuditDeepLink` reads back. Wrapped in try/catch
-   * like the rest of this app's `window`/`location` access (see
-   * lib/deepLink.ts's module doc): a sandboxed embedding may disallow
-   * mutating `location.hash`, and that must not block the selection itself. */
+  /**
+   * `workItemId`を選び、`location.hash`(`#audit/<id>`)を合わせる。
+   * URLを共有・再読み込みできるようにするためで、形式は`lib/deepLink.ts`の
+   * `parseAuditDeepLink`が読むものと同じ。このアプリの他の`window`・`location`の
+   * 操作と同じくtry/catchで包む。sandbox化された埋め込みでは
+   * `location.hash`を変えられないことがあり、それで選択まで止めないため。
+   */
   function selectAudit(workItemId: number): void {
     setSelectedId(workItemId);
     try {
       window.location.hash = `audit/${workItemId}`;
     } catch {
-      // Some sandboxed embeddings disallow mutating location.hash.
+      // sandbox化された埋め込みでは`location.hash`を変えられないことがある。
     }
   }
 
-  // Initial selection priority: `initialWorkItemId` (Inbox tab hand-off)
-  // wins over a `#audit/<id>` deep link (Issue comment / Discord
-  // notification), neither present leaves the list unselected. Mount-only:
-  // App.tsx unmounts this whole tab whenever "audit" isn't the active tab,
-  // so `initialWorkItemId` is only ever set once per mount, never changes
-  // afterwards. The hand-off is consumed (cleared in App.tsx) right after
-  // it is applied, so a later remount falls back to the deep link, which
-  // `selectAudit` keeps in sync with whatever the user picked by hand.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally mount-only, see comment above.
+  // 最初の選択は、承認タブからの`initialWorkItemId`を優先し、次に
+  // `#audit/<id>`のディープリンク(Issueのコメント・Discordの通知から)を使う。
+  // どちらも無ければ何も選ばない。マウント時だけ動かす。`App.tsx`は
+  // "audit"が表示中でないときこのタブごとアンマウントするので、
+  // `initialWorkItemId`はマウントごとに一度だけ設定され、後から変わらない。
+  // 受け渡しは反映の直後に消費する(`App.tsx`で消す)ので、再マウント時は
+  // ディープリンクに戻る。ディープリンクは`selectAudit`が利用者の選択に合わせて更新する。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: マウント時だけ動かすため。理由は上のコメントを参照。
   useEffect(() => {
     if (initialWorkItemId !== null) {
       selectAudit(initialWorkItemId);
@@ -189,15 +193,14 @@ export function AuditTab({
   );
 }
 
-/** The detail pane for one audit report — fetches "audit_doc" for
- * `workItemId` and owns its own load state. Mounted with `key={selectedId}`
- * by the caller (same pattern as RequirementsTab.tsx's `RequirementsDetail`)
- * so switching the selected report always starts from a clean `doc: null`
- * state instead of momentarily showing the previous report's content while
- * the new one loads. `loading` is tracked separately from `doc === null` so
- * "still fetching" and "fetched, but no such report" render differently —
- * the latter only appears once the fetch has actually resolved with no
- * row. */
+/**
+ * 監査レポート1件の詳細欄。`workItemId`の`audit_doc`を取得し、読み込みの
+ * 状態を自分で持つ。呼び出し側は`key={selectedId}`を付けてマウントする
+ * (`RequirementsTab.tsx`の`RequirementsDetail`と同じ)。レポートを切り替えたとき、
+ * 読み込み中に前のレポートが一瞬見えないよう、必ず`doc: null`から始めるため。
+ * `loading`は`doc === null`と分けて持ち、「取得中」と「取得したが
+ * レポートが無い」を描き分ける。後者は、取得が行無しで終わった後にだけ出る。
+ */
 function AuditDetail({
   workItemId,
 }: {

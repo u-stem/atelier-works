@@ -1,11 +1,11 @@
-# Managed by mise.toml's `setup` task (`lefthook install`). Do not bypass
-# with `--no-verify`; see AGENTS.md.
-# Every command goes through `mise exec --` so the hooks work even when mise
-# is not activated in the committer's shell (only `mise` itself must be on PATH).
+# `mise.toml`の`setup`タスク(`lefthook install`)で導入する。
+# `--no-verify`で飛ばさない(AGENTS.mdを参照)。
+# どのコマンドも`mise exec --`を通す。コミットする人のシェルでmiseが
+# 有効でなくても動くようにするため(PATHに`mise`があればよい)。
 pre-commit:
-  # wmill-metadata runs first and sequentially (not inside the parallel
-  # group) so any lock/schema files it stages are on disk before gitleaks
-  # scans staged content and wmill-lint validates f/.
+  # wmill-metadataは並列のグループに入れず、先に単独で実行する。
+  # ステージしたロックやスキーマのファイルを、gitleaksがステージ内容を走査し
+  # wmill-lintが`f/`を検査する前にディスクへ揃えておくため。
   jobs:
     - name: wmill-metadata
       glob: "f/**"
@@ -36,11 +36,11 @@ pre-push:
   commands:
     check:
       run: mise run check
-    # Backstop for the pre-commit wmill-metadata job. Only runs when the
-    # pushed commits touch Windmill assets or the hash file, so a docs-only
-    # push does not need the local Windmill stack. Skip in an emergency with
-    # LEFTHOOK_EXCLUDE=wmill-metadata-check (then run `mise run metadata`
-    # before the next push).
+    # pre-commitのwmill-metadataの取りこぼしを止める。pushするコミットが
+    # Windmillの資産かハッシュのファイルに触れるときだけ動くので、
+    # 文書だけのpushにローカルのWindmillは要らない。緊急時は
+    # `LEFTHOOK_EXCLUDE=wmill-metadata-check`で飛ばせる
+    # (その場合は次のpushの前に`mise run metadata`を実行する)。
     wmill-metadata-check:
       glob:
         - "f/**"

@@ -1,33 +1,20 @@
-// Manual (Windmill UI, or the Factory Console App) trigger for approve/
-// reject on any pending `factory.approval_requests` row — generalizes what
-// used to be two separate scripts (the former suspend-era approval_decide.ts
-// for "requirements", and the former issue_proposal_decide.ts for
-// "issue_proposal") into one kind-agnostic decision recorder.
+// `factory.approval_requests`の保留中の行に、承認か却下を記録する
+// 手動実行用のscript。Windmill UIかFactory Console Appから、種別を問わず呼ぶ。
 //
-// Records the decision on the approval_requests row (an atomic
-// compare-and-swap, `decideApprovalRequestIfPending`), then dispatches to
-// the kind's own handler script (`handlerPathFor`, lib/approval_support.ts)
-// via `wmill.runScriptByPathAsync` to carry out the actual GitHub/DB side
-// effects. There is no suspended flow to resume anymore — pipeline.flow's
-// former suspend step is gone; f/factory/steps/pipeline_request_approval.ts
-// just records a pending approval_requests row and returns.
+// 決定は`decideApprovalRequestIfPending`(不可分な比較交換)で行に記録し、
+// 実際のGitHubやDBへの副作用は、種別ごとのハンドラscript(`handlerPathFor`)に
+// `wmill.runScriptByPathAsync`で任せる。再開を待つ中断中のフローは無い。
 //
-// [medium, M6 review round 1b, security-auditor, still applies] The
-// `approver` argument used to be trusted as the recorded identity — a bare
-// caller-supplied string anyone invoking this script could set to anything.
-// It is derived from the job's own Windmill run context (`WM_USERNAME`,
-// falling back to `WM_EMAIL`; see `deriveApprover`) instead, and the
-// `note` argument is demoted to auxiliary free-text context folded into the
-// recorded `reason`, never used as identity.
+// 記録する承認者は、呼び出し側が渡す文字列ではなく、ジョブのWindmill実行文脈
+// (`WM_USERNAME`、無ければ`WM_EMAIL`。`deriveApprover`を参照)から導く。
+// 引数の文字列は誰でも好きな値にできるため、本人の識別に使わない。
+// `note`は補助の自由記述として`reason`に織り込むだけで、識別には使わない。
 //
-// [major, M6 review round 2, devil-advocate, generalized] Two
-// concurrent/duplicate calls for the same approval_requests row must not
-// both record a decision. `classifyExistingDecision`
-// (lib/approval_support.ts) classifies any existing status against the
-// newly requested one: a `pending` row records and dispatches, a matching
-// existing decision re-dispatches only (idempotent retry — e.g. the handler
-// script's own dispatch failed after the decision was recorded), and a
-// conflicting existing decision (or an already-expired row) is refused.
+// 同じ行への並行・重複の呼び出しが、両方とも決定を記録してはならない。
+// `classifyExistingDecision`が既存の状態を今回の決定と比べ、
+// `pending`なら記録して起動し、同じ決定が記録済みなら起動だけをやり直す
+// (決定の記録後にハンドラの起動が失敗した場合の冪等な再試行)。
+// 異なる決定が記録済みの行と、期限切れの行は拒否する。
 
 import * as wmill from "windmill-client@1.817.0";
 import {
@@ -50,8 +37,10 @@ export type ApprovalDecideInput = {
   readonly reason: string;
 };
 
-/** `reason` is required only when rejecting — an approval needs no
- * justification. */
+/**
+ * 入力を検査し、却下なのに`reason`が空白だけなら例外を投げる。
+ * 承認には理由を求めない。
+ */
 export function assertValidApprovalDecideInput(
   input: ApprovalDecideInput,
 ): void {
@@ -115,8 +104,8 @@ export async function main(
       decision_options: options,
     });
     if (!recorded) {
-      // Lost a race between the read above and this write — re-read and
-      // re-classify against the row's now-current status.
+      // 上の読み取りとこの書き込みの間に他の呼び出しが記録した。
+      // 行を読み直し、現在の状態で分類し直す。
       const current = await getApprovalRequest(approval_request_id);
       if (current === null) {
         throw new Error(

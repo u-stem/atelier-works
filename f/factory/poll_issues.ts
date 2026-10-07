@@ -1,21 +1,16 @@
-// poll_issues: every 5 minutes (see poll_issues.schedule.yaml), picks up
-// newly `trigger_label`-ed issues across `factory_config.owners`, claims
-// them, starts f/factory/pipeline, and reconciles every active work item
-// (issue and PR kinds alike) against GitHub/Windmill state — spec-
-// cycle2.md §3 M5, §7. Multi-instance exclusivity comes entirely from the
-// GitHub-side claim (assignee for an issue, trigger-label consumption for a
-// PR — both re-fetch to confirm), not an advisory lock (§7 item 5) —
-// overlap within one instance is prevented by this schedule's
-// `no_flow_overlap: true`.
+// 5分ごとに、`factory_config.owners`のリポジトリで新しく`trigger_label`が
+// 付いたIssueを取得して`f/factory/pipeline`を起動し、進行中のすべての
+// work item(IssueとPRの両方)をGitHubとWindmillの状態に合わせる。
+// 複数インスタンス間の排他は、advisory lockではなくGitHub側の取得だけで行う
+// (Issueはassignee、PRはトリガーラベルの消費。どちらも取り直して確かめる)。
+// 1つのインスタンス内での重複実行は、スケジュールの`no_flow_overlap: true`で防ぐ。
 //
-// Decision logic (which issues to claim / skip, what to do with each
-// active work item) lives in ./lib/poll_support.ts as pure functions; this
-// file is I/O wiring only, and never throws on a single item's failure —
-// see recordFailureSafe.
+// 判断(どのIssueを取得・見送るか、進行中のwork itemをどうするか)は
+// `./lib/poll_support.ts`の純粋関数にあり、このファイルは入出力をつなぐだけ。
+// 1件の失敗では例外を投げない(`recordFailureSafe`を参照)。
 
-// Pinned to 1.817.0 to match the deployed server version (per lib-core; an
-// unpinned "latest" import drifts independently across scripts at
-// `generate-metadata` time).
+// デプロイ先のサーバーの版に合わせて1.817.0に固定する。固定しないと
+// `generate-metadata`のたびにscriptごとに別の最新版へずれていく。
 import * as wmill from "windmill-client@1.817.0";
 import { expiredRequirementsRequests } from "./lib/approval_support.ts";
 import { loadConfig } from "./lib/config.ts";
@@ -70,12 +65,15 @@ import {
 import { describeReason, nextActionFor } from "./steps/pr_workflow_support.ts";
 
 // ---------------------------------------------------------------------------
-// readRepoHeadSha: `git rev-parse HEAD` for the self clone, used only by
-// checkDeployedSha below. This used to live in lib/poll_support.ts, but
-// that file is pure-decision-functions-only (team-lead direction) and this
-// is git-workspace I/O with no other caller, so it's local to this script.
+// self cloneのHEADの取得
 // ---------------------------------------------------------------------------
 
+/**
+ * self cloneのHEADのshaを返す(`git rev-parse HEAD`)。gitが失敗したら
+ * 例外を投げる。`checkDeployedSha`だけが使う。
+ * `lib/poll_support.ts`は判断の純粋関数だけを置く場所で、これは他に呼び手の
+ * いないgitの入出力なので、このscriptに置く。
+ */
 export async function readRepoHeadSha(
   run: CommandRunner,
   dir: string,
@@ -113,7 +111,7 @@ export async function readRepoHeadSha(
 }
 
 // ---------------------------------------------------------------------------
-// Small local helpers
+// 小さな補助関数
 // ---------------------------------------------------------------------------
 
 async function recordFailureSafe(
@@ -152,10 +150,11 @@ async function notifySafe(
   }
 }
 
-/** Best-effort: compares the self clone's HEAD SHA against the
- * `f/factory/deployed_sha` variable, recording a notice on mismatch.
- * Notice-only per spec-cycle2.md §3 M5 — never fails the job, and treats a
- * missing/unset variable as "nothing to compare yet". */
+/**
+ * self cloneのHEADのshaを変数`f/factory/deployed_sha`と比べ、
+ * 食い違えばnoticeを記録する。noticeを残すだけでジョブは失敗させない。
+ * 変数が無い・空のときは、まだ比べる対象が無いとみなす。
+ */
 async function checkDeployedSha(
   config: FactoryConfig,
   ghToken: string,
@@ -174,7 +173,7 @@ async function checkDeployedSha(
     try {
       deployedSha = await wmill.getVariable("f/factory/deployed_sha");
     } catch {
-      return; // Variable doesn't exist yet — self_update (M7) hasn't run.
+      return; // 変数がまだ無い。`self_update`が一度も動いていない。
     }
     if (deployedSha.length === 0 || deployedSha === selfSha) return;
 
@@ -190,50 +189,25 @@ async function checkDeployedSha(
 }
 
 /**
- * Interprets a `JobService.getJob` response's `type` discriminator as a
- * `JobState`. `job` is `null`/non-record for "couldn't fetch" (the
- * exception path in `getJobState` below folds a 404/any other error into
- * this same `null` input, rather than branching separately, so this one
- * function is the whole decision and stays fully unit-testable). A
- * successfully-fetched-but-unrecognized shape (`type` missing or some
- * future third value) defaults to `running`, not `absent` — deliberately:
- * the entire point of this fix is to never again treat "we couldn't
- * positively confirm the job is done" as grounds to cancel/orphan a work
- * item, so an ambiguous *positive* fetch errs toward "leave it alone"
- * while only a *failed* fetch (the job genuinely isn't there) errs toward
- * "absent."
+ * `JobService.getJob`の応答の`type`を`JobState`に読み替える。
+ * 取得できなかったときは`job`が`null`か非レコードになり、`absent`を返す
+ * (`getJobState`は404も他のエラーも`null`にまとめて渡すので、
+ * 判断はこの関数だけで完結し、単体テストできる)。
+ * 取得できたが形が分からない(`type`が無い、未知の値)ときは、`absent`ではなく
+ * `running`を返す。完了を確かめられないことを理由にwork itemを取り消したり
+ * 孤立扱いしたりしないためで、`absent`にするのは取得そのものが失敗したときだけ。
  *
- * devil-advocate fatal fix (E2E, 2026-09-26): `getJobState` previously
- * called `wmill.getResultMaybe(flowJobId)`. A live probe (`f/factory/
- * _probe.ts` + `_probe_sleep.ts`, deleted after recording this finding)
- * against a job independently confirmed `running` via `wmill job get`
- * moments earlier still came back `{ completed: true, success: true,
- * started: true, result: ... }` by the time the probe itself got a worker
- * turn — every trial, including one with a 5-minute target job. This
- * worker pool was also visibly contended throughout testing (`docker
- * compose ps` shows a single `windmill_worker` container; multiple
- * schedules sat `queued` for 5-25+ minutes during the same window), so
- * the exact mechanism (whether `getResultMaybe` itself waits for
- * completion rather than returning a snapshot, or the probe just never
- * got to run until after the target finished) isn't fully isolated — but
- * either way, `getResultMaybe` is not a safe "is this still running right
- * now" check. Left uncorrected, a still-running `pipeline` (e.g. deep in
- * the `generate` step's Claude Code call) would look `absent`/`completed`
- * to `poll_issues` once the reconcile grace elapsed, and get cancelled out
- * from under itself (reproduced twice: 03:00:02 and 03:15:02).
- * `JobService.getJob` instead reads the job's row directly — no
- * result-polling/waiting semantics — so it can't exhibit this.
+ * ジョブの状態を`wmill.getResultMaybe`ではなく`JobService.getJob`で読む理由:
+ * `getResultMaybe`は、`wmill job get`で`running`と確かめた直後のジョブにも
+ * `completed: true`を返したことがある。そのままでは、Claude Codeを呼んでいる
+ * 最中の`pipeline`が猶予の経過後に`absent`・`completed`に見え、
+ * 実行中に取り消された。`getJob`はジョブの行を直接読み、結果を待つ動作が無い。
  *
- * devil-advocate follow-up: a `CompletedJob` also reports `success` /
- * `canceled` (both required fields on the real API), which
- * `decideReconcileAction` uses to skip the orphan grace entirely for a
- * job it can positively confirm was canceled or failed (E2E: a manually
- * canceled `pipeline` job otherwise left its work item stuck for the
- * full grace period before reconcile caught it). If either field is
- * present but somehow not a boolean (shouldn't happen — defensive only),
- * this defaults to `success: true, canceled: false`, i.e. falls back to
- * the grace-respecting path rather than the fast-path — same "don't act
- * on an ambiguous signal" bias as the `type`-missing case above.
+ * `CompletedJob`の`success`と`canceled`は、取り消し・失敗を確かめられた
+ * ジョブについて`decideReconcileAction`が孤立の猶予を飛ばすのに使う。
+ * どちらかが真偽値でない(本来は起きない)ときは`success: true`・
+ * `canceled: false`とし、猶予を守る経路に倒す。あいまいな信号では
+ * 動かないという、`type`が無い場合と同じ方針である。
  */
 export function jobStateFromJob(job: unknown): JobState {
   if (!isRecord(job)) return { state: "absent" };
@@ -263,12 +237,14 @@ async function getJobState(flowJobId: string | null): Promise<JobState> {
   return jobStateFromJob(job);
 }
 
-/** Best-effort removal of pr_review's detached worktrees
- * (`/workspaces/<owner>/<repo>/review-<pr>-<sha7>`, per spec-cycle2.md §7
- * item 2) for a closed/merged PR. pr_fix's `git gtr` worktree (keyed by the
- * PR's branch name, which reconcile doesn't track) is NOT cleaned up here —
- * it is caught by M7's cleanup_workspaces.ts TTL sweep instead; see this
- * implementer's report. */
+/**
+ * 閉じた・マージされたPRについて、pr_reviewのdetachedなworktree
+ * (`/workspaces/<owner>/<repo>/review-<pr>-<sha7>`)を削除する。
+ * 失敗はログに残すだけで例外を投げない。
+ * pr_fixの`git gtr`のworktreeはPRのブランチ名で決まり、reconcileは
+ * ブランチ名を追っていないので、ここでは消さない。
+ * `cleanup_workspaces.ts`が保持期間を過ぎたものを掃除する。
+ */
 async function removePrWorktrees(
   owner: string,
   repo: string,
@@ -306,7 +282,7 @@ async function removePrWorktrees(
 }
 
 // ---------------------------------------------------------------------------
-// Reconcile (all kinds)
+// reconcile(全種別)
 // ---------------------------------------------------------------------------
 
 async function reconcileActiveItems(
@@ -318,12 +294,10 @@ async function reconcileActiveItems(
 ): Promise<number> {
   let count = 0;
   const now = new Date();
-  // Devil-advocate follow-up: 10 minutes is enough slack for the normal
-  // "job finished/absent, work_items row lags behind" case, but not for a
-  // pipeline still legitimately deep in a single Claude Code call — that
-  // alone can run up to `claude_timeout_sec`. Give it two full timeouts'
-  // worth of headroom on top of the 10-minute floor, as insurance should
-  // getJobState itself ever misjudge a run that's taking unusually long.
+  // 孤立とみなすまでの猶予。ジョブは終わった・無いのに行の更新が遅れている
+  // だけなら10分で足りるが、Claude Codeの1回の呼び出しは
+  // `claude_timeout_sec`まで続きうる。`getJobState`が長引く実行を
+  // 見誤った場合に備え、10分を下限に、タイムアウト2回分の余裕を取る。
   const orphanGraceMs = Math.max(
     10 * 60_000,
     config.claude_timeout_sec * 2 * 1000,
@@ -339,7 +313,7 @@ async function reconcileActiveItems(
     try {
       let github: ReconcileGithubState;
       if (item.kind === "audit") {
-        // An audit work item has no GitHub object to check.
+        // 監査のwork itemには、確かめるGitHubのオブジェクトが無い。
         github = { kind: "audit" };
       } else if (item.kind === "issue") {
         if (item.issue_number === null) continue;
@@ -355,7 +329,7 @@ async function reconcileActiveItems(
         };
       } else {
         if (item.pr_number === null) continue;
-        // PR numbers share the issues API's endpoint/label/state shape.
+        // PRの番号もissues APIで引け、ラベルや状態の形も同じ。
         const asIssue = await getIssue(
           client,
           item.owner,
@@ -380,7 +354,7 @@ async function reconcileActiveItems(
         try {
           await wmill.cancelJob(item.flow_job_id, decision.reason);
         } catch {
-          // Already finished/cancelled — nothing to do.
+          // 既に終了・取り消し済みなら、することは無い。
         }
       }
 
@@ -393,14 +367,12 @@ async function reconcileActiveItems(
         targetStatus,
         note,
       );
-      if (!updated) continue; // a concurrent process already moved it on.
+      if (!updated) continue; // 並行する処理が先に状態を進めた。
 
-      // 2026-09-27 PR label cleanup: both an Issue's `factory` trigger label
-      // and a PR's `factory:review` / `factory:fix` trigger label are
-      // consumed at claim time, so there is nothing left to remove here for
-      // either kind — status lives solely in work_items.status, and a PR is
-      // rediscovered from the DB (poll_prs.ts's listTrackedPrs) rather than
-      // by a state label.
+      // Issueの`factory`も、PRの`factory:review`・`factory:fix`も、トリガー
+      // ラベルは取得時に消費済みなので、ここで外すラベルは無い。状態は
+      // `work_items.status`にだけあり、PRは状態ラベルではなくDBから
+      // (`poll_prs.ts`の`listTrackedPrs`で)見つけ直す。
 
       if (
         item.kind !== "issue" &&
@@ -432,7 +404,7 @@ async function reconcileActiveItems(
 }
 
 // ---------------------------------------------------------------------------
-// Claim (new issues)
+// 新しいIssueの取得
 // ---------------------------------------------------------------------------
 
 async function buildIssueCandidates(
@@ -546,14 +518,12 @@ async function claimAndStart(
 }
 
 // ---------------------------------------------------------------------------
-// Expire pending "requirements" approval requests (replaces pipeline.flow's
-// former suspend timeout: since request_approval no longer waits on
-// anything, nothing else marks a request expired once its deadline passes).
-// "issue_proposal" requests carry no `expires_at` (see
-// insertApprovalRequest's call site in pr_fix_finish.ts) so they never
-// appear in `listExpiredPendingApprovalRequests`'s result to begin with;
-// `expiredRequirementsRequests` narrows the type for the branching below
-// regardless.
+// 保留中の"requirements"承認依頼の期限切れ処理。承認依頼の記録は何も待たない
+// ので、期限を過ぎた依頼を期限切れにするのはここだけである。
+// "issue_proposal"の依頼は`expires_at`を持たない(`pr_fix_finish.ts`の
+// `insertApprovalRequest`の呼び出しを参照)ので、そもそも
+// `listExpiredPendingApprovalRequests`の結果に現れない。それでも
+// 下の分岐のために`expiredRequirementsRequests`で型を絞る。
 // ---------------------------------------------------------------------------
 
 async function expirePendingApprovals(
@@ -568,7 +538,7 @@ async function expirePendingApprovals(
   for (const request of requirementsExpired) {
     try {
       const wasExpired = await expireApprovalRequestIfPending(request.id);
-      if (!wasExpired) continue; // a concurrent decision/expiry already handled it.
+      if (!wasExpired) continue; // 並行する決定か期限切れ処理が先に処理した。
 
       const workItem = await getWorkItem(request.work_item_id);
       if (workItem === null || workItem.issue_number === null) continue;
@@ -579,7 +549,7 @@ async function expirePendingApprovals(
         "expired",
         "approval timed out",
       );
-      if (!updated) continue; // the work item already moved on.
+      if (!updated) continue; // work itemは既に次の状態に進んでいる。
 
       await notifySafe(
         discordWebhookUrl,
@@ -631,9 +601,9 @@ export async function main(): Promise<{
   );
   const client: GhClient = { run: runCommand, ghToken };
 
-  // Health check (spec-cycle2.md §3 M5) — lets a broken/expired PAT fail
-  // the whole job loudly via on_error_schedule rather than silently
-  // skipping every issue below.
+  // ヘルスチェック。PATが壊れている・期限切れのとき、下のIssueを
+  // 黙ってすべて飛ばすのではなく、ジョブ全体を失敗させて
+  // `on_error_schedule`で知らせる。
   const viewer = await getViewer(client);
   log.info("health check ok", { login: viewer.login });
 

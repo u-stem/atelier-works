@@ -1,32 +1,23 @@
-// on_error_flow: failure_module handler for factory flows (pipeline.flow,
-// pr_review.flow, pr_fix.flow — M6) — spec-cycle2.md §3 M5, §7 item 11.
+// Factoryのフローの`failure_module`から呼ぶ失敗ハンドラ。
+// 失敗を`job_failures`に記録し、work itemを`failed`にして、
+// Discordに`job_failed`を通知する。
 //
-// A flow's failure_module receives the `error` object (`error.message`,
-// `error.step_id`, `error.name`, `error.stack` per the write-flow skill)
-// plus whatever else its own input_transforms wire in from `flow_input`.
-// This handler expects `work_item_id` to be wired from
-// `flow_input.work_item_id` (spec-cycle2.md §7 item 11: "flow_input.
-// work_item_id を参照"); `path`/`job_id` are accepted for job_failures
-// context but are optional since not every flow's failure_module needs to
-// wire them. The M6 implementer wiring this into a flow's
-// `value.failure_module.value.input_transforms` should map these
-// parameter names 1:1 (see this implementer's report for the open
-// question this leaves for M6).
+// `failure_module`は`error`(`message`・`step_id`・`name`・`stack`)と、
+// `input_transforms`で`flow_input`から渡した値を受け取る。
+// `work_item_id`は`flow_input.work_item_id`から渡す前提で、
+// 引数名と1対1に対応させる。`path`と`job_id`は`job_failures`の文脈として
+// 受け取るが、渡さないフローもあるので省略できる。
 //
-// devil-advocate note (round 2): pipeline_generate's own failure path now
-// funnels into on_error_flow rather than handling termination itself
-// (avoids interfering with retry_work_item's status/label bookkeeping).
+// `pipeline_generate`の失敗も、自分で終了処理をせずここに集める。
+// `retry_work_item`が行う状態やラベルの管理と干渉しないため。
 //
-// policy change (2026-09-27): GitHub carries only work product — operational
-// notices (including a `failed` transition) go to Discord and the Console
-// only, never a GitHub comment. This handler therefore does not post
-// anything to the Issue/PR when it marks a work item `failed`. Nor does it
-// touch any label: every kind's trigger label (`factory` for an issue,
-// `factory:review` / `factory:fix` for a PR) is consumed at claim time
-// (2026-09-27 PR label cleanup, matching the Issue-side policy from the
-// prior PR), so there is nothing left to remove or set here — the DB status
-// transition to `failed` plus the Discord `job_failed` notification
-// `main()` sends unconditionally are what reach the operator.
+// GitHubには成果物だけを載せ、運用上の通知(`failed`への遷移を含む)は
+// DiscordとConsoleにだけ出す。そのため、work itemを`failed`にしても
+// IssueやPRには何も投稿しない。ラベルにも触れない。どの種別のトリガー
+// ラベル(Issueは`factory`、PRは`factory:review`・`factory:fix`)も
+// 取得時に消費済みで、外すものも付けるものも無いため。
+// 運用者に届くのは、DBの`failed`への遷移と、`main()`が必ず送る
+// Discordの`job_failed`通知である。
 
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "./lib/config.ts";
@@ -56,16 +47,13 @@ function errorStepId(error: unknown): string | null {
 }
 
 /**
- * The `work_item_id` value safe to pass to `recordFailure` (a real FK
- * column on `job_failures`). devil-advocate fatal fix, found via a live
- * `wmill flow run` with a bogus `work_item_id`: passing a requested id
- * straight through when no such row exists violates
- * `job_failures_work_item_id_fkey` and silently drops the whole failure
- * record (the insert throws, caught, only warn-logged). `item` is the
- * result of looking `requestedId` up (`null` if it doesn't exist, or was
- * never provided); this returns that confirmed id, or `null` — the caller
- * folds `requestedId` into the recorded error text instead so it isn't
- * lost.
+ * `recordFailure`に渡してよい`work_item_id`を返す。存在を確かめた行のidか、
+ * `null`を返す。`item`は`requestedId`で引いた結果(存在しないか、
+ * 指定が無ければ`null`)。
+ * `job_failures.work_item_id`は外部キーなので、存在しないidをそのまま渡すと
+ * `job_failures_work_item_id_fkey`に違反し、挿入が例外になって失敗の記録
+ * そのものが失われる(例外は捕まえて警告ログに残すだけ)。
+ * `null`を返したとき、呼び出し側は`requestedId`をエラー文に含めて残す。
  */
 export function failureWorkItemRef(
   item: Pick<WorkItem, "id"> | null,
@@ -76,18 +64,15 @@ export function failureWorkItemRef(
 }
 
 /**
- * Whether this on_error_flow invocation is entitled to mark its work item
- * `failed`. `rootJobId` is this invocation's own flow's root job id
- * (`WM_ROOT_FLOW_JOB_ID`); `workItemFlowJobId` is the job id last recorded
- * via `setFlowJobId` on the work_items row. devil-advocate fatal fix: if a
- * reject/regenerate, `retry_work_item`, or reroute already launched a
- * *newer* flow for this work item before the old one's failure_module
- * fires, the two job ids no longer match — marking the item `failed` now
- * would make the newer run's own prepare step see a terminal status and
- * silently skip (dropping the regeneration). A missing signal on either
- * side (never recorded yet, or running outside a flow context) is treated
- * as "nothing to contradict" and allowed through, matching the prior
- * behavior.
+ * この呼び出しがwork itemを`failed`にしてよいかを返す。
+ * `rootJobId`はこの呼び出しのフローのルートジョブid(`WM_ROOT_FLOW_JOB_ID`)、
+ * `workItemFlowJobId`は`setFlowJobId`でwork itemの行に最後に記録したジョブid。
+ * 古いフローの`failure_module`が動く前に、却下・再生成、`retry_work_item`、
+ * 経路の切り替えで新しいフローが起動していると、2つのidは一致しない。
+ * ここで`failed`にすると、新しいフローのprepareのstepが終端状態を見て
+ * 黙って処理を飛ばし、再生成が失われる。
+ * どちらかのidが無い(まだ記録していない、フローの外で動いている)ときは、
+ * 食い違う根拠が無いとみなして許可する。
  */
 export function shouldMarkFailed(
   workItemFlowJobId: string | null,
@@ -165,11 +150,9 @@ export async function main(
           },
         );
       } else {
-        // 2026-09-27 PR label cleanup: every kind's trigger label is
-        // consumed at claim time, so there is no label to remove or state
-        // label to set on this transition any more — the DB status update
-        // alone, plus the Discord job_failed notification below, is what
-        // reaches the operator.
+        // トリガーラベルは取得時に消費済みなので、外すラベルも付ける
+        // 状態ラベルも無い。運用者にはDBの状態更新と、下のDiscordの
+        // `job_failed`通知だけが届く。
         await updateStatusIfCurrent(item.id, item.status, "failed", message);
       }
     } catch (statusErr) {

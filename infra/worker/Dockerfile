@@ -1,14 +1,12 @@
 # syntax=docker/dockerfile:1
 #
-# Custom Windmill worker image: adds the tools an agentic factory job needs
-# (claude, gh, gitleaks, gtr, wmill) on top of the upstream windmill worker image.
-# No secret is baked into this image; credentials are injected at runtime
-# as Windmill secret variables (never baked into the image).
+# 独自のWindmill workerのイメージ。上流のworkerのイメージに、Factoryの
+# ジョブが使う道具(claude・gh・gitleaks・gtr・wmill)を足す。
+# 秘密はイメージに焼き込まず、実行時にWindmillの秘密の変数として渡す。
 
-# Defaults mirror the [env] block in mise.toml; docker-compose.yml always
-# overrides them via explicit build args. The default merely keeps a bare
-# `docker build` (without --build-arg) from resolving FROM to an
-# empty/invalid image name.
+# 既定値は`mise.toml`の`[env]`と同じで、`docker-compose.yml`は常にビルド引数で
+# 上書きする。既定値は、`--build-arg`無しの`docker build`で`FROM`が
+# 空や不正なイメージ名にならないようにするためだけにある。
 ARG WM_VERSION=1.817.0
 FROM ghcr.io/windmill-labs/windmill:${WM_VERSION}
 
@@ -16,13 +14,13 @@ ARG CLAUDE_VERSION
 ARG GH_VERSION
 ARG GITLEAKS_VERSION
 ARG GTR_REF
-# Commit that GTR_REF (v2.11.1) resolves to, pinned separately so a clone of
-# a moved/re-tagged ref is caught instead of silently trusted.
+# `GTR_REF`(v2.11.1)が指すコミット。別に固定し、refが動いた・タグが
+# 付け直された場合に、黙って信用せず検出する。
 ARG GTR_COMMIT=f4df6344a362303e6b47bc92955fef3bba468426
 ARG WMILL_VERSION
 
-# The base image already ships bun, node, npm, git, curl and jq. Only add the
-# packages that are actually missing for what follows.
+# ベースのイメージにはbun・node・npm・git・curl・jqが入っている。
+# 以降の手順で実際に足りないパッケージだけを足す。
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
@@ -31,9 +29,9 @@ RUN apt-get update \
         jq \
     && rm -rf /var/lib/apt/lists/*
 
-# gh CLI: install from the official release tarball (architecture-aware),
-# verified against the release's own checksums.txt so a corrupted or
-# tampered download fails the build instead of being installed silently.
+# gh CLI: 公式のリリースのtarball(アーキテクチャ別)から入れ、リリースの
+# `checksums.txt`で検証する。壊れた・改ざんされたダウンロードを黙って入れず、
+# ビルドを失敗させるため。
 RUN set -eux; \
     arch="$(dpkg --print-architecture)"; \
     case "${arch}" in \
@@ -50,11 +48,11 @@ RUN set -eux; \
     install -m 0755 "gh_${GH_VERSION}_linux_${gh_arch}/bin/gh" /usr/local/bin/gh; \
     rm -rf "${tarball}" "gh_${GH_VERSION}_checksums.txt" "gh_${GH_VERSION}_linux_${gh_arch}"
 
-# gitleaks: the implement flow's fixed secret scan (run with --redact on
-# every verify round, independent of the target repo's own check commands).
-# Same release-tarball + checksums.txt verification as gh above. The version
-# is the one mise.toml's [tools] pins for the host-side pre-commit hook, so
-# host and worker scan with the same release.
+# gitleaks: implementフローが必ず行う秘密の走査に使う(対象リポジトリの
+# 検査コマンドとは別に、検証のラウンドごとに`--redact`付きで実行する)。
+# 上のghと同じく、リリースのtarballと`checksums.txt`で検証する。版は
+# `mise.toml`の`[tools]`がホストのpre-commitフック用に固定しているものと同じで、
+# ホストとworkerが同じリリースで走査する。
 RUN set -eux; \
     arch="$(dpkg --print-architecture)"; \
     case "${arch}" in \
@@ -71,11 +69,10 @@ RUN set -eux; \
     install -m 0755 gitleaks /usr/local/bin/gitleaks; \
     rm -rf "${tarball}" "gitleaks_${GITLEAKS_VERSION}_checksums.txt" gitleaks
 
-# gtr (git-worktree-runner): git-gtr resolves its own symlink target to find
-# /opt/gtr/lib/*.sh, so the launcher must stay a symlink. Copying the file
-# instead of symlinking it breaks it at runtime. GTR_COMMIT pins the exact
-# commit GTR_REF must resolve to, so a moved tag is caught rather than
-# silently trusted.
+# gtr(git-worktree-runner): `git-gtr`は自分のsymlinkの先をたどって
+# `/opt/gtr/lib/*.sh`を探すので、起動用のファイルはsymlinkのままにする。
+# コピーすると実行時に壊れる。`GTR_COMMIT`は`GTR_REF`が指すべきコミットを
+# 固定し、タグが動いた場合に黙って信用せず検出する。
 RUN set -eux; \
     git clone --depth 1 --branch "${GTR_REF}" https://github.com/coderabbitai/git-worktree-runner /opt/gtr; \
     actual_commit="$(git -C /opt/gtr rev-parse HEAD)"; \
@@ -85,13 +82,12 @@ RUN set -eux; \
     fi; \
     ln -s /opt/gtr/bin/git-gtr /usr/local/bin/git-gtr
 
-# Windmill CLI, pinned explicitly (the base image already ships a matching
-# `wmill` via bun; --force lets this npm install take precedence so
-# WMILL_VERSION stays the single source of truth even if it ever diverges
-# from WM_VERSION).
+# Windmill CLIの版を明示的に固定する。ベースのイメージにもbun経由で同じ版の
+# `wmill`があるが、`--force`でこのnpm installを優先させ、`WM_VERSION`と
+# 食い違っても`WMILL_VERSION`だけを正とする。
 RUN npm install -g --force "windmill-cli@${WMILL_VERSION}"
 
-# Claude Code CLI, installed to /root/.local/bin.
+# Claude Code CLI。`/root/.local/bin`に入る。
 ENV DISABLE_AUTOUPDATER=1 \
     CLAUDE_CONFIG_DIR=/var/lib/factory/claude \
     GH_CONFIG_DIR=/var/lib/factory/gh \
@@ -99,8 +95,8 @@ ENV DISABLE_AUTOUPDATER=1 \
 RUN curl -fsSL https://claude.ai/install.sh | bash -s -- "${CLAUDE_VERSION}"
 ENV PATH="/root/.local/bin:${PATH}"
 
-# Build-time verification: fail the build immediately if any tool is missing
-# or broken, instead of discovering it at job run time.
+# ビルド時の検証。道具が欠けている・壊れているとき、ジョブの実行時に
+# 気づくのではなく、その場でビルドを失敗させる。
 RUN claude --version && gh --version && gitleaks version && git gtr version && wmill --version && bun --version
 
 CMD ["windmill"]

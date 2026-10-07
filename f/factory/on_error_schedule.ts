@@ -1,17 +1,12 @@
-// on_error_schedule: on_failure handler for every *.schedule.yaml in
-// f/factory/ (poll_issues.schedule.yaml, poll_prs.schedule.yaml today; M7
-// adds more) — spec-cycle2.md §3 M5, §7 item 11.
+// `f/factory/`のすべてのスケジュールの`on_failure`ハンドラ。
+// 失敗を`job_failures`に記録し、Discordに`job_failed`を通知する。
 //
-// Windmill invokes a schedule's on_failure handler with a fixed set of
-// special arguments. Every one is declared optional here, and this handler
-// never itself throws on a missing/renamed field: the parameter names below
-// (path, is_flow, schedule_path, job_id, error) match Windmill's documented
-// on_failure convention, but spec-cycle2.md §7 item 14's "契約スモーク" only
-// covers claude/gtr/gh/datatable, not this handler's argument shape — this
-// has NOT been empirically verified against a real failure in this worker.
-// Verify once a schedule actually fails in the deployed workspace, and
-// adjust the parameter list/type guards here if it differs (see this
-// implementer's report).
+// Windmillは`on_failure`ハンドラを決まった特殊引数で呼ぶ。引数名
+// (`path`・`is_flow`・`schedule_path`・`job_id`・`error`)はWindmillの
+// 文書にある規約に合わせたが、このworkerで実際の失敗に対して確かめてはいない。
+// そのため引数はすべて省略可能にし、欠けたり名前が変わったりしても
+// このハンドラ自身は例外を投げない。デプロイ先で実際にスケジュールが
+// 失敗したら引数の形を確かめ、違っていれば引数と型ガードを直す。
 
 import * as wmill from "windmill-client";
 import { loadConfig } from "./lib/config.ts";

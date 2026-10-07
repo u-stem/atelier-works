@@ -1,92 +1,85 @@
 #!/usr/bin/env bash
-# bootstrap.sh - first-time (and idempotent re-run) setup of the local
-# Windmill workspace for the Software Factory.
+# Software FactoryのローカルのWindmillワークスペースを初回に設定する。
+# 冪等なので、何度実行し直してもよい。
 #
-# There is no infra/.env or infra/secrets.env: configuration lives in mise's
-# [env] block (non-secret, committed in mise.toml) and in mise.local.toml
-# (gitignored secrets, populated via `mise set -E local KEY=value`). This
-# script is meant to run as a mise task (`mise run bootstrap`) so those
-# values are already present in its environment. It never reads a secrets
-# file and never prints a secret's value - only whether an optional one is
-# set. All direct API calls send their Authorization header from a 0600
-# file inside a 0700 temp dir (see set_auth_token/AUTH_HEADER_FILE) rather
-# than as a curl argument, so a token is never visible in `ps` output
-# either.
+# `infra/.env`も`infra/secrets.env`も無く、設定は`mise.toml`の`[env]`
+# (秘密でないものをコミット)と`mise.local.toml`(gitignore済みの秘密。
+# `mise set -E local KEY=value`で入れる)にある。このスクリプトはmiseの
+# タスク(`mise run bootstrap`)として動かす前提なので、値は既に環境変数にある。
+# 秘密のファイルは読まず、秘密の値も表示しない(任意の秘密は設定の有無だけを出す)。
+# APIを直接呼ぶときの`Authorization`ヘッダーは、curlの引数ではなく0700の
+# 一時ディレクトリ内の0600のファイルから送る(`set_auth_token`・`AUTH_HEADER_FILE`
+# を参照)。こうしてトークンが`ps`の出力にも出ないようにする。
 #
-# The sole exception to never taking a secret as a CLI argument is `wmill
-# workspace add --token`, which has no other way to receive a token in
-# wmill CLI 1.817.0 (see the comment at its call sites).
+# 秘密をCLIの引数で渡さない原則の唯一の例外は`wmill workspace add --token`。
+# wmill CLI 1.817.0には、他にトークンを渡す方法が無い(呼び出し箇所のコメントを参照)。
 #
-# Two tokens are in play. SESSION_TOKEN (from /auth/login) has full account
-# privileges and is used only for the handful of operations that need them:
-# creating the workspace, the superadmin-only instance-database setup, and
-# token list/delete (both account-global, not workspace-scoped - see step
-# 8). PERSISTENT_TOKEN is minted scoped to this one workspace with a
-# 180-day expiry and is what actually drives every Windmill interaction
-# from step 6 onward (`wmill` CLI calls via the workspace profile, direct
-# API calls via the Authorization header) - this was verified end-to-end
-# against a live instance. SESSION_TOKEN is logged out as soon as the
-# token-rotation step that still needs it is done.
+# トークンは2つ使う。`SESSION_TOKEN`(`/auth/login`で得る)はアカウントの全権限を
+# 持ち、それを要る少数の操作だけに使う。ワークスペースの作成、superadminだけが
+# できるインスタンスのデータベースの設定、トークンの一覧と削除(どちらも
+# ワークスペースではなくアカウント全体の操作。手順8を参照)。
+# `PERSISTENT_TOKEN`はこのワークスペースだけに絞り、期限180日で発行する。
+# 手順6以降のWindmillとのやり取りはすべてこれで行う(`wmill` CLIは
+# ワークスペースのプロファイル経由、APIの直接呼び出しは`Authorization`ヘッダー
+# 経由)。この動作は実際のインスタンスで通しで確かめた。`SESSION_TOKEN`は、
+# それを要するトークンの入れ替えが終わったらすぐにログアウトする。
 #
-# Steps (idempotent - safe to re-run):
-#   0. Refuse to run if WM_ADMIN_PASSWORD is the "changeme" default or
-#      shorter than 12 characters.
-#   1. Log in as the instance admin (configured password, falling back to
-#      the Windmill default "changeme" on first run) and, on first run,
-#      change the password to WM_ADMIN_PASSWORD. -> SESSION_TOKEN.
-#   2. `wmill workspace add factory factory $WM_BASE_URL --token <session> --create`
-#      (creates the workspace if missing) using the session token - no
-#      workspace-scoped token exists yet. Then set the workspace's display
-#      name to "Factory" (id stays lowercase "factory") via
-#      `POST .../workspaces/change_workspace_name` - idempotent, safe to
-#      re-run every time.
-#   3. Ensure the instance-backed Postgres database is set up (CREATE
-#      DATABASE + grants for custom_instance_user) via the official
-#      superadmin API (`/settings/{list,setup}_custom_instance_pg_database*`),
-#      using the session token. Idempotent: the API skips CREATE DATABASE
-#      when the database already exists and only (re-)grants permissions,
-#      so this is safe on every run. Without this, `wmill datatable migrate
-#      up` fails with "permission denied for schema public" the first time
-#      a fresh instance-backed datatable is used.
-#   4. Mint a workspace-scoped API token (label factory-bootstrap,
-#      workspace_id factory, 180-day expiry) -> PERSISTENT_TOKEN.
-#   5. `wmill workspace add` again with the session token (a workspace-
-#      scoped token 401s on the `POST /workspaces/exists` check this
-#      command always makes first, confirmed with --verbose - see the
-#      comment at this step), then patch just the `token` field of
-#      $WMILL_CONFIG_DIR/windmill/remotes.ndjson to PERSISTENT_TOKEN so
-#      every `wmill` invocation below actually uses the scoped token.
-#   6. `wmill datatable create` (skipped if a 'main' datatable already exists).
-#   7. Upsert the four secret variables (claude_oauth_token, github_token,
-#      wmill_token, discord_webhook_url) via the variables API. wmill_token
-#      gets PERSISTENT_TOKEN. The other three come from
-#      CLAUDE_CODE_OAUTH_TOKEN / GITHUB_TOKEN / DISCORD_WEBHOOK_URL and may
-#      be empty - a human fills them in later via `mise set -E local` or the
-#      Windmill UI.
-#   8. Rotate out old tokens: `/users/tokens/list` and `/users/tokens/delete`
-#      are account-global, so this runs on the session token (confirmed:
-#      PERSISTENT_TOKEN gets 401 on token/list). Only runs once the new
-#      token is durably saved in two places (the CLI workspace profile via
-#      remotes.ndjson in step 5, and the wmill_token variable in step 7),
-#      so a failure partway through rotation never leaves the instance
-#      without a working token. Deletes every other token labeled
-#      factory-bootstrap.
-#   9. Log the session token out (`/auth/logout`) - nothing below needs it.
-#  10. Create the `factory` folder if missing.
-#  11. Create f/factory/factory_config from templates/factory_config.resource.yaml
-#      if it does not already exist remotely. This resource is instance-specific
-#      (owners, instance_name, windmill_public_url) and excluded from sync (see
-#      wmill.yaml) - bootstrap never overwrites an existing one, so UI edits
-#      always win.
-#  12. Create the non-secret f/factory/deployed_sha variable (empty value) if
-#      it does not already exist remotely - also excluded from sync (see
-#      wmill.yaml), but for a different reason than factory_config: it is
-#      self_update's own runtime state, not instance config, and must never
-#      be reset back to empty by a bootstrap re-run.
+# 手順(冪等で、実行し直しても安全):
+#   0. `WM_ADMIN_PASSWORD`が既定の"changeme"か12文字未満なら実行を拒む。
+#   1. インスタンスの管理者でログインする(設定したパスワードで、初回は
+#      Windmillの既定の"changeme"に戻して試す)。初回はパスワードを
+#      `WM_ADMIN_PASSWORD`に変える。-> `SESSION_TOKEN`
+#   2. セッションのトークンで
+#      `wmill workspace add factory factory $WM_BASE_URL --token <session> --create`
+#      を実行する(無ければワークスペースを作る)。ワークスペース用の
+#      トークンはまだ無いため。続けて`POST .../workspaces/change_workspace_name`で
+#      表示名を"Factory"にする(idは小文字の"factory"のまま)。冪等で、毎回
+#      実行し直してよい。
+#   3. インスタンスが持つPostgresのデータベースを用意する
+#      (`custom_instance_user`への`CREATE DATABASE`と権限付与)。セッションの
+#      トークンで、公式のsuperadmin用API
+#      (`/settings/{list,setup}_custom_instance_pg_database*`)を使う。
+#      データベースが既にあればAPIは`CREATE DATABASE`を飛ばし権限だけを
+#      付与し直すので、毎回実行しても安全。これをしないと、新しいインスタンスの
+#      datatableを初めて使うとき`wmill datatable migrate up`が
+#      "permission denied for schema public"で失敗する。
+#   4. ワークスペースに絞ったAPIトークン(ラベル`factory-bootstrap`、
+#      `workspace_id`は`factory`、期限180日)を発行する。-> `PERSISTENT_TOKEN`
+#   5. セッションのトークンでもう一度`wmill workspace add`を実行する
+#      (このコマンドが最初に必ず行う`POST /workspaces/exists`の確認で、
+#      ワークスペース用のトークンは401になる。`--verbose`で確認済み。
+#      この手順のコメントを参照)。その後
+#      `$WMILL_CONFIG_DIR/windmill/remotes.ndjson`の`token`だけを
+#      `PERSISTENT_TOKEN`に書き換え、以降の`wmill`の呼び出しが
+#      絞ったトークンを使うようにする。
+#   6. `wmill datatable create`を実行する(`main`のdatatableが既にあれば飛ばす)。
+#   7. 4つの秘密の変数(`claude_oauth_token`・`github_token`・`wmill_token`・
+#      `discord_webhook_url`)を変数のAPIで作成・更新する。`wmill_token`には
+#      `PERSISTENT_TOKEN`を入れる。残りの3つは`CLAUDE_CODE_OAUTH_TOKEN`・
+#      `GITHUB_TOKEN`・`DISCORD_WEBHOOK_URL`から取り、空でもよい
+#      (後で人が`mise set -E local`かWindmill UIで入れる)。
+#   8. 古いトークンを入れ替える。`/users/tokens/list`と`/users/tokens/delete`は
+#      アカウント全体の操作なので、セッションのトークンで行う
+#      (`PERSISTENT_TOKEN`ではtoken/listが401になることを確認済み)。
+#      新しいトークンを2か所(手順5の`remotes.ndjson`によるCLIのプロファイルと、
+#      手順7の`wmill_token`変数)に確実に保存した後でだけ動かす。入れ替えの
+#      途中で失敗しても、インスタンスに使えるトークンが無くならないようにするため。
+#      ラベルが`factory-bootstrap`の他のトークンをすべて削除する。
+#   9. セッションのトークンをログアウトする(`/auth/logout`)。以降は使わない。
+#  10. `factory`フォルダが無ければ作る。
+#  11. リモートに無ければ、`templates/factory_config.resource.yaml`から
+#      `f/factory/factory_config`を作る。このリソースはインスタンス固有
+#      (`owners`・`instance_name`・`windmill_public_url`)でsyncの対象外
+#      (`wmill.yaml`を参照)。bootstrapは既存のものを上書きしないので、
+#      UIでの編集が常に優先される。
+#  12. リモートに無ければ、秘密でない変数`f/factory/deployed_sha`を空の値で作る。
+#      これもsyncの対象外(`wmill.yaml`を参照)だが、理由は`factory_config`と違う。
+#      インスタンスの設定ではなく`self_update`の実行時の状態であり、
+#      bootstrapを実行し直しても空に戻してはならないため。
 #  13. `wmill sync push --yes --keep-deleted`
 #  14. `wmill datatable migrate up`
-#  15. `wmill resource-type generate-namespace` (writes rt.d.ts)
-#  16. Print next steps.
+#  15. `wmill resource-type generate-namespace`(`rt.d.ts`を書く)
+#  16. 次の手順を表示する。
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
@@ -105,20 +98,19 @@ require_cmd curl
 require_cmd mise
 require_cmd jq
 
-# --- required, non-secret or instance-secret configuration -----------------
+# --- 必須の設定(秘密でないもの、インスタンスの秘密) -------------------------
 : "${WM_BASE_URL:?run via 'mise run bootstrap' (mise.toml [env] sets this)}"
 : "${WM_ADMIN_EMAIL:?run via 'mise run bootstrap'; set with: mise set -E local WM_ADMIN_EMAIL=...}"
 : "${WM_ADMIN_PASSWORD:?run via 'mise run bootstrap'; set with: mise set -E local WM_ADMIN_PASSWORD=...}"
 
-# --- step 0: refuse to run with a weak/default admin password --------------
+# --- 手順0: 弱い・既定の管理者パスワードでは実行を拒む ----------------------
 if [ "${WM_ADMIN_PASSWORD}" = "changeme" ] || [ "${#WM_ADMIN_PASSWORD}" -lt 12 ]; then
   die "WM_ADMIN_PASSWORD is the 'changeme' default or shorter than 12 characters; set a strong password: mise set -E local WM_ADMIN_PASSWORD=..."
 fi
 
-# --- optional secrets: bootstrap still runs with these empty; the
-# corresponding variable is created/updated empty and downstream flows
-# (poll_issues, pipeline, notify_discord) report needs_human / notices until
-# a human sets the real value ---
+# --- 任意の秘密。空でもbootstrapは動き、対応する変数を空で作成・更新する。
+# 人が本当の値を入れるまで、後続のフロー(poll_issues・pipeline・
+# notify_discord)はneeds_humanやnoticeで知らせる ---
 GITHUB_TOKEN="${GITHUB_TOKEN:-}"
 CLAUDE_CODE_OAUTH_TOKEN="${CLAUDE_CODE_OAUTH_TOKEN:-}"
 DISCORD_WEBHOOK_URL="${DISCORD_WEBHOOK_URL:-}"
@@ -135,26 +127,26 @@ TMP_DIR="$(mktemp -d)"
 chmod 700 "${TMP_DIR}"
 trap 'rm -rf -- "${TMP_DIR}"' EXIT
 RESP_FILE="${TMP_DIR}/resp.txt"
-# Authorization header lives in its own 0600 file inside the 0700 TMP_DIR, so
-# curl reads it via `-H @file` instead of taking the token as a command-line
-# argument (which would otherwise be visible to any local user via `ps`).
+# `Authorization`ヘッダーは、0700の`TMP_DIR`内の専用の0600のファイルに置く。
+# curlは`-H @file`で読むので、トークンをコマンドラインの引数で渡さない
+# (引数だと、同じマシンの誰でも`ps`で見られる)。
 AUTH_HEADER_FILE="${TMP_DIR}/auth_header.txt"
 
-# Run a command with the repo root as cwd and mise's tool PATH/env applied,
-# without using a top-level `cd` (only ever inside this subshell).
+# リポジトリのルートをcwdにし、miseのツールのPATHと環境変数を適用して
+# コマンドを実行する。最上位で`cd`せず、このサブシェルの中だけで移る。
 run_in_repo() {
   (cd -- "${REPO_ROOT}" && mise exec -- "$@")
 }
 
 run_wmill() { run_in_repo wmill "$@"; }
 
-# Evaluate a small bun script with WM_TMP_* env vars (set by the caller as a
-# prefix assignment) visible to it, and the repo as cwd. Values only ever
-# travel through the environment or stdin, never through argv.
+# 小さなbunのスクリプトを、リポジトリをcwdにして評価する。呼び出し側が
+# 前置の代入で設定した`WM_TMP_*`の環境変数がスクリプトから見える。
+# 値は環境変数か標準入力だけで渡し、argvには載せない。
 bun_eval() { run_in_repo bun -e "$1"; }
 
-# Ensure the wmill CLI's config dir (workspace profiles, including tokens in
-# remotes.ndjson) is not group/world readable.
+# wmill CLIの設定ディレクトリ(`remotes.ndjson`のトークンを含むワークスペースの
+# プロファイル)を、グループや他人が読めないようにする。
 harden_wmill_config_dir() {
   if [ -n "${WMILL_CONFIG_DIR:-}" ] && [ -d "${WMILL_CONFIG_DIR}" ]; then
     chmod 700 "${WMILL_CONFIG_DIR}" 2>/dev/null || true
@@ -166,9 +158,9 @@ if ! curl -fsS -o /dev/null --max-time 10 "${WM_BASE_URL%/}/api/version"; then
   die "cannot reach Windmill at ${WM_BASE_URL} (run 'mise run up' first)"
 fi
 
-# set_auth_token TOKEN - updates AUTH_HEADER_FILE (and the AUTH_TOKEN
-# variable, needed by jq-based helpers that read it via the environment, not
-# argv) so subsequent api_* calls authenticate as TOKEN. Pass "" to clear it.
+# set_auth_token TOKEN: 以降の`api_*`の呼び出しがTOKENで認証するよう、
+# `AUTH_HEADER_FILE`と`AUTH_TOKEN`変数を更新する(`AUTH_TOKEN`は、argvでなく
+# 環境変数から読むjqの補助関数が使う)。""を渡すと消す。
 AUTH_TOKEN=""
 set_auth_token() {
   AUTH_TOKEN="$1"
@@ -179,7 +171,7 @@ set_auth_token() {
   fi
 }
 
-# api_post PATH - reads a JSON body from stdin, prints the HTTP status code.
+# api_post PATH: 標準入力からJSONの本文を読み、HTTPのステータスコードを出す。
 api_post() {
   local path="$1"
   local -a headers=(-H 'Content-Type: application/json')
@@ -187,7 +179,7 @@ api_post() {
   curl -sS -o "${RESP_FILE}" -w '%{http_code}' -X POST "${API}${path}" "${headers[@]}" --data-binary @-
 }
 
-# api_get PATH - prints the HTTP status code; body lands in $RESP_FILE.
+# api_get PATH: HTTPのステータスコードを出す。本文は`$RESP_FILE`に入る。
 api_get() {
   local path="$1"
   local -a headers=()
@@ -195,7 +187,7 @@ api_get() {
   curl -sS -o "${RESP_FILE}" -w '%{http_code}' -X GET "${API}${path}" "${headers[@]}"
 }
 
-# api_post_no_body PATH - like api_post but for endpoints that take no body.
+# api_post_no_body PATH: 本文を取らないエンドポイント用の`api_post`。
 api_post_no_body() {
   local path="$1"
   local -a headers=()
@@ -203,7 +195,7 @@ api_post_no_body() {
   curl -sS -o "${RESP_FILE}" -w '%{http_code}' -X POST "${API}${path}" "${headers[@]}"
 }
 
-# api_delete PATH - prints the HTTP status code; body lands in $RESP_FILE.
+# api_delete PATH: HTTPのステータスコードを出す。本文は`$RESP_FILE`に入る。
 api_delete() {
   local path="$1"
   local -a headers=()
@@ -212,7 +204,7 @@ api_delete() {
 }
 
 login_body() {
-  # $1 = password
+  # $1 = パスワード
   WM_TMP_EMAIL="${WM_ADMIN_EMAIL}" WM_TMP_PASSWORD="$1" bun_eval '
     const email = process.env.WM_TMP_EMAIL ?? "";
     const password = process.env.WM_TMP_PASSWORD ?? "";
@@ -227,7 +219,7 @@ setpassword_body() {
   '
 }
 
-# Workspace-scoped, time-limited token body: {label, workspace_id, expiration}.
+# ワークスペースに絞った期限付きトークンの本文: {label, workspace_id, expiration}
 persistent_token_body() {
   WM_TMP_WORKSPACE="${WORKSPACE}" bun_eval '
     const workspace_id = process.env.WM_TMP_WORKSPACE ?? "";
@@ -237,9 +229,9 @@ persistent_token_body() {
 }
 
 variable_create_body() {
-  # $1 = path, $2 = value, $3 = description, $4 = is_secret ("true"/"false",
-  # default "true" - every existing call site below creates a secret; step
-  # 12's deployed_sha is the one non-secret exception and passes "false").
+  # $1 = パス、$2 = 値、$3 = 説明、$4 = is_secret("true"か"false"。既定は"true")。
+  # 呼び出し箇所はどれも秘密を作り、手順12の`deployed_sha`だけが秘密でない
+  # 例外として"false"を渡す。
   local is_secret="${4:-true}"
   WM_TMP_PATH="$1" WM_TMP_VALUE="$2" WM_TMP_DESC="$3" WM_TMP_IS_SECRET="${is_secret}" bun_eval '
     const path = process.env.WM_TMP_PATH ?? "";
@@ -251,7 +243,7 @@ variable_create_body() {
 }
 
 variable_update_body() {
-  # $1 = value, $2 = description
+  # $1 = 値、$2 = 説明
   WM_TMP_VALUE="$1" WM_TMP_DESC="$2" bun_eval '
     const value = process.env.WM_TMP_VALUE ?? "";
     const description = process.env.WM_TMP_DESC ?? "";
@@ -272,7 +264,7 @@ change_workspace_name_body() {
   bun_eval 'process.stdout.write(JSON.stringify({ new_name: "Factory" }));'
 }
 
-# --- step 1: log in, changing the initial admin password on first run -----
+# --- 手順1: ログインし、初回は管理者の初期パスワードを変える ----------------
 status="$(login_body "${WM_ADMIN_PASSWORD}" | api_post /auth/login)"
 if [ "${status}" = "200" ]; then
   SESSION_TOKEN="$(cat "${RESP_FILE}")"
@@ -292,24 +284,23 @@ else
 fi
 set_auth_token "${SESSION_TOKEN}"
 
-# --- step 2: workspace, created with the session token (no scoped token yet) ---
-# `--token` is the CLI's only way to hand it a token non-interactively; it
-# has no stdin/file input mode for this. The value only ever reaches the
-# `wmill` child process's argv, never a raw `curl`/API call.
+# --- 手順2: ワークスペース。絞ったトークンはまだ無いので、セッションのトークンで作る ---
+# 対話無しでCLIにトークンを渡す方法は`--token`しかなく、標準入力やファイルから
+# 渡す方法は無い。値は`wmill`の子プロセスのargvにだけ届き、curlやAPIの
+# 直接呼び出しには載せない。
 run_wmill workspace add "${WORKSPACE}" "${WORKSPACE}" "${WM_BASE_URL}" \
   --token "${SESSION_TOKEN}" --create >&2
 harden_wmill_config_dir
 log "workspace '${WORKSPACE}' ready (using the session token for now)"
 
-# id stays lowercase ("factory"); display name is capitalized ("Factory")
-# to match the UI (Factory Console, etc.). Idempotent - setting the same
-# name again on a re-run is a no-op.
+# idは小文字("factory")のまま、表示名はUI(Factory Consoleなど)に合わせて
+# 先頭を大文字("Factory")にする。冪等で、実行し直して同じ名前を設定しても何も変わらない。
 status="$(change_workspace_name_body | api_post "/w/${WORKSPACE}/workspaces/change_workspace_name")"
 [ "${status}" = "200" ] || die "failed to set workspace display name (status ${status})"
 log "workspace display name set to 'Factory'"
 
-# Prints the resource_path of the 'main' datatable on stdout and exits 0 if
-# it exists; exits 1 (nothing printed) otherwise.
+# `main`のdatatableがあれば、その`resource_path`を標準出力に出して0で終わる。
+# 無ければ何も出さず1で終わる。
 datatable_main_resource_path() {
   local json
   json="$(run_wmill datatable list --json 2>/dev/null || true)"
@@ -333,12 +324,12 @@ datatable_main_resource_path() {
   '
 }
 
-# --- step 3: instance-backed Postgres database (CREATE DATABASE + grants) --
-# Requires superadmin, which the workspace-scoped token minted in step 4
-# deliberately does not have - so this runs on the session token, before
-# that token is minted. "datatable_db" is the resource_path this Windmill
-# version (1.817.0 CE) assigns to a fresh instance-backed datatable; if
-# 'main' already exists, use its real resource_path instead of assuming.
+# --- 手順3: インスタンスが持つPostgresのデータベース(CREATE DATABASEと権限付与) --
+# superadminの権限が要り、手順4で発行するワークスペース用のトークンは意図して
+# それを持たない。そのため、そのトークンを発行する前にセッションのトークンで行う。
+# "datatable_db"は、このWindmillの版(1.817.0 CE)が新しいインスタンスの
+# datatableに割り当てる`resource_path`。`main`が既にあれば、決め打ちせず
+# 実際の`resource_path`を使う。
 INSTANCE_DB_NAME="$(datatable_main_resource_path || true)"
 INSTANCE_DB_NAME="${INSTANCE_DB_NAME:-datatable_db}"
 
@@ -365,11 +356,10 @@ setup_instance_db_body() {
   bun_eval 'process.stdout.write(JSON.stringify({ tag: "datatable" }));'
 }
 
-# Prints a redacted {success, error, logs} summary of a
-# setup_custom_instance_pg_database response to stderr. jq keeps the output
-# to just those three fields (dropping anything else the API might ever
-# add), and the sed pass belt-and-braces masks any postgres:// URL or
-# "password" field that might slip into an error/log string.
+# `setup_custom_instance_pg_database`の応答を、伏せ字にした
+# {success, error, logs}の要約にして標準エラーに出す。jqで3つの項目だけに絞り
+# (APIが将来足すかもしれない他の項目は捨てる)、さらに念のためsedで、
+# エラーやログの文字列に紛れたpostgres://のURLと"password"の項目を伏せる。
 log_setup_db_failure() {
   printf '%s\n' "$1" \
     | jq '{success, error, logs}' \
@@ -400,25 +390,23 @@ else
   fi
 fi
 
-# --- step 4: mint a workspace-scoped, time-limited token --------------------
+# --- 手順4: ワークスペースに絞った期限付きのトークンを発行する --------------
 status="$(persistent_token_body | api_post /users/tokens/create)"
 [ "${status}" = "201" ] || die "failed to create an API token (status ${status})"
 PERSISTENT_TOKEN="$(cat "${RESP_FILE}")"
 log "minted a workspace-scoped API token (label factory-bootstrap, workspace ${WORKSPACE}, 180-day expiry)"
 
-# --- step 5: point the CLI's workspace profile at the scoped token ---------
-# `wmill workspace add` always calls the global `POST /workspaces/exists`
-# first (confirmed with --verbose), which a workspace-scoped token cannot
-# call - it 401s regardless of --create, because that check is not scoped
-# to a workspace. So the CLI call itself has to run on the session token
-# (this is the "step that does not pass on the scoped token" the security
-# review anticipated); we then patch just the `token` field of
-# $WMILL_CONFIG_DIR/windmill/remotes.ndjson in place so every `wmill`
-# invocation below actually uses PERSISTENT_TOKEN. This depends on that
-# file's shape (one JSON object per line, keyed by name/remote/workspaceId/
-# token) as of wmill CLI 1.817.0 - if a future CLI version changes it, the
-# jq step below simply does not match and the CLI keeps using the session
-# token; re-verify this step after any CLI upgrade.
+# --- 手順5: CLIのワークスペースのプロファイルを絞ったトークンに向ける --------
+# `wmill workspace add`は最初に必ずグローバルな`POST /workspaces/exists`を呼ぶ
+# (`--verbose`で確認済み)。この確認はワークスペース単位ではないので、
+# ワークスペース用のトークンでは`--create`の有無に関係なく401になる。
+# そのためCLIの呼び出しはセッションのトークンで行い、その後
+# `$WMILL_CONFIG_DIR/windmill/remotes.ndjson`の`token`だけをその場で書き換え、
+# 以降の`wmill`の呼び出しが`PERSISTENT_TOKEN`を使うようにする。
+# これはwmill CLI 1.817.0時点のファイルの形(1行に1つのJSONオブジェクトで、
+# キーはname・remote・workspaceId・token)に依存する。将来のCLIで形が変わると、
+# 下のjqが一致せず、CLIはセッションのトークンを使い続ける。
+# CLIを更新したら、この手順を確かめ直すこと。
 run_wmill workspace add "${WORKSPACE}" "${WORKSPACE}" "${WM_BASE_URL}" \
   --token "${SESSION_TOKEN}" --create >&2
 harden_wmill_config_dir
@@ -433,13 +421,12 @@ if [ -f "${remotes_file}" ]; then
 else
   die "expected ${remotes_file} to exist after 'wmill workspace add'"
 fi
-# From here on, direct API calls use PERSISTENT_TOKEN too (verifying it is
-# enough for variables/folder/resource calls, same as the CLI calls above
-# now use it via remotes.ndjson). The one exception is token-list/delete
-# during rotation below, which needs the session token (see there).
+# ここからは、APIの直接呼び出しも`PERSISTENT_TOKEN`を使う(変数・フォルダ・
+# リソースの呼び出しにはこれで足りる。上のCLIも`remotes.ndjson`経由でこれを使う)。
+# 唯一の例外は下の入れ替えでのトークンの一覧と削除で、セッションのトークンが要る。
 set_auth_token "${PERSISTENT_TOKEN}"
 
-# --- step 6: datatable -------------------------------------------------------
+# --- 手順6: datatable -----------------------------------------------------------
 if resolved_path="$(datatable_main_resource_path)"; then
   log "datatable 'main' already registered; skipping create"
   if [ "${resolved_path}" != "${INSTANCE_DB_NAME}" ]; then
@@ -454,7 +441,7 @@ else
   fi
 fi
 
-# --- step 7: secret variables ------------------------------------------------
+# --- 手順7: 秘密の変数 ---------------------------------------------------------
 upsert_variable() {
   local path="$1" value="$2" description="$3" status
   status="$(variable_create_body "${path}" "${value}" "${description}" | api_post "/w/${WORKSPACE}/variables/create")"
@@ -477,16 +464,14 @@ upsert_variable "f/factory/wmill_token" "${PERSISTENT_TOKEN}" \
 upsert_variable "f/factory/discord_webhook_url" "${DISCORD_WEBHOOK_URL}" \
   "Discord incoming webhook URL used for pipeline notifications."
 
-# --- step 8: rotate out old factory-bootstrap tokens ------------------------
-# /users/tokens/list and /users/tokens/delete are account-global (no
-# workspace scoping), so a workspace-scoped token 401s on them (confirmed
-# with --verbose against a live instance) - this is the step the security
-# review's "fall back to the session token" clause covers. It runs on the
-# session token, and is why that token cannot be logged out until after
-# this step. Only runs once the new token is durably saved in two places
-# (the CLI workspace profile via remotes.ndjson above, and the
-# wmill_token variable below), so a failure partway through rotation never
-# leaves the instance without a working token.
+# --- 手順8: 古いfactory-bootstrapのトークンを入れ替える ---------------------
+# `/users/tokens/list`と`/users/tokens/delete`はアカウント全体の操作
+# (ワークスペース単位でない)なので、ワークスペース用のトークンでは401になる
+# (実際のインスタンスに対し`--verbose`で確認済み)。そのためセッションの
+# トークンで行い、この手順が終わるまでセッションのトークンをログアウトできない。
+# 新しいトークンを2か所(上の`remotes.ndjson`によるCLIのプロファイルと、
+# `wmill_token`変数)に確実に保存した後でだけ動かす。入れ替えの途中で
+# 失敗しても、インスタンスに使えるトークンが無くならないようにするため。
 rotate_old_bootstrap_tokens() {
   local status
   set_auth_token "${SESSION_TOKEN}"
@@ -496,9 +481,9 @@ rotate_old_bootstrap_tokens() {
     die "failed to list tokens for rotation (status ${status})"
   fi
   local prefixes
-  # Delete every token labeled factory-bootstrap whose prefix is not a
-  # prefix of the token we just minted (i.e. every token except the current
-  # one). The new token is passed via env, never as a jq --arg on argv.
+  # ラベルが`factory-bootstrap`で、接頭辞が今発行したトークンの接頭辞でない
+  # もの(今のトークン以外のすべて)を削除する。新しいトークンは環境変数で渡し、
+  # argvに載るjqの`--arg`では渡さない。
   prefixes="$(WM_TMP_NEW_TOKEN="${PERSISTENT_TOKEN}" jq -r '
     env.WM_TMP_NEW_TOKEN as $new
     | .[]
@@ -524,13 +509,13 @@ rotate_old_bootstrap_tokens() {
 }
 rotate_old_bootstrap_tokens
 
-# --- step 9: log the session token out - no longer needed from here on -----
+# --- 手順9: セッションのトークンをログアウトする。以降は使わない ------------
 set_auth_token "${SESSION_TOKEN}"
 logout_status="$(api_post_no_body /auth/logout)"
 log "session token logged out (status ${logout_status})"
 set_auth_token "${PERSISTENT_TOKEN}"
 
-# --- step 10: folder -----------------------------------------------------------
+# --- 手順10: フォルダ -----------------------------------------------------------
 folder_exists() {
   local status
   status="$(api_get "/w/${WORKSPACE}/folders/exists/factory")"
@@ -545,10 +530,10 @@ else
   log "folder 'factory' created"
 fi
 
-# --- step 11: instance-specific factory_config resource ---------------------
-# Not synced (see wmill.yaml excludes: owners/instance_name/windmill_public_url
-# are per-instance). Seed it from the template once; if it already exists,
-# leave it alone so UI edits are never clobbered by a bootstrap re-run.
+# --- 手順11: インスタンス固有のfactory_configリソース ------------------------
+# syncの対象外(`wmill.yaml`の`excludes`を参照。`owners`・`instance_name`・
+# `windmill_public_url`はインスタンスごとに違う)。テンプレートから一度だけ作り、
+# 既にあれば触らない。bootstrapを実行し直しても、UIでの編集を上書きしないため。
 factory_config_exists() {
   local status
   status="$(api_get "/w/${WORKSPACE}/resources/exists/f/factory/factory_config")"
@@ -562,16 +547,15 @@ else
   log "resource f/factory/factory_config created from templates/factory_config.resource.yaml (owners is empty)"
 fi
 
-# --- step 12: instance-specific deployed_sha variable (create-if-missing) ---
-# Not synced (see wmill.yaml's excludes comment on this path): self_update
-# writes into this non-secret variable at runtime, so - unlike the 4 secrets
-# in step 7, which are fine to overwrite on every bootstrap re-run - it must
-# only ever be created once and never reset back to empty by a later re-run
-# (that would make self_update treat every run as "needs a fresh redeploy",
-# racing a host-side `mise run deploy` mid-flight). Detected via the create
-# call's own response status, the same "non-201 likely means it already
-# exists" signal upsert_variable above relies on - on non-201 this just logs
-# and leaves the existing value alone, it never calls update.
+# --- 手順12: インスタンス固有のdeployed_sha変数(無ければ作る) -------------
+# syncの対象外(`wmill.yaml`の`excludes`のこのパスのコメントを参照)。
+# 秘密でないこの変数には`self_update`が実行時に書き込む。手順7の4つの秘密は
+# 実行し直すたびに上書きしてよいが、これは一度だけ作り、後の実行で空に
+# 戻してはならない。空に戻すと`self_update`が毎回再デプロイが要ると判断し、
+# ホストで進行中の`mise run deploy`と競合する。
+# 存在の判定は作成の応答のステータスで行う(上の`upsert_variable`と同じく、
+# 201以外は既にあるとみなす)。201以外ならログを残すだけで既存の値は触らず、
+# updateは呼ばない。
 deployed_sha_create_status="$(variable_create_body "f/factory/deployed_sha" "" \
   "Software Factory 自身のうち、直近で Windmill に反映済みのコミットです。自己更新処理が自動的に更新します。" \
   "false" | api_post "/w/${WORKSPACE}/variables/create")"
@@ -581,16 +565,15 @@ else
   log "variable f/factory/deployed_sha create returned ${deployed_sha_create_status} (likely already exists); leaving its value alone"
 fi
 
-# --- step 13: push local sync state -----------------------------------------
+# --- 手順13: ローカルのsyncの状態をpushする ------------------------------------
 run_wmill sync push --yes --keep-deleted >&2
 log "sync push complete"
 
-# --- step 14: apply pending data table migrations ----------------------------
-# FACTORY_BOOTSTRAP_SKIP_MIGRATE=1 is an escape hatch to stop bootstrap right
-# before this step (e.g. to manually verify the instance pg database state
-# after step 3 before letting `migrate up` touch it). Deliberately
-# undocumented outside this script - it is for operators who already know
-# why they need it, not a routine flag.
+# --- 手順14: 未適用のData Tableのmigrationを適用する ---------------------------
+# `FACTORY_BOOTSTRAP_SKIP_MIGRATE=1`は、この手順の直前でbootstrapを止める
+# 非常口(例: 手順3の後のインスタンスのデータベースの状態を、`migrate up`が
+# 触る前に手で確かめたいとき)。意図してこのスクリプトの外には書いていない。
+# 必要な理由を分かっている運用者向けで、普段使うフラグではない。
 if [ -n "${FACTORY_BOOTSTRAP_SKIP_MIGRATE:-}" ]; then
   log "FACTORY_BOOTSTRAP_SKIP_MIGRATE is set; skipping 'wmill datatable migrate up'"
 else
@@ -598,7 +581,7 @@ else
   log "datatable migrations applied"
 fi
 
-# --- step 15: regenerate the RT namespace ------------------------------------
+# --- 手順15: リソース型の名前空間を作り直す ------------------------------------
 run_wmill resource-type generate-namespace >&2
 log "rt.d.ts regenerated"
 

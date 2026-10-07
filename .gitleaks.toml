@@ -1,5 +1,5 @@
-# Extends gitleaks' built-in ruleset with atelier-works-specific secret
-# formats that the default rules do not cover.
+# gitleaksの組み込みルールに、既定では検出できない
+# atelier-works固有の秘密の形式を足す。
 [extend]
 useDefault = true
 
@@ -21,7 +21,7 @@ description = "Discord webhook URL"
 regex = '''https://(discord|discordapp)\.com/api/webhooks/[0-9]+/[A-Za-z0-9_-]+'''
 tags = ["discord", "webhook", "atelier-works"]
 [rules.allowlist]
-# Test fixtures use an obviously fake token segment.
+# テストの固定値は、明らかに偽物と分かるトークン部分を使う。
 regexTarget = "line"
 regexes = ['''fake-webhook-token-value''']
 
@@ -32,9 +32,9 @@ regex = '''(?m)^value:[ \t]*("[^"\n]+"|'[^'\n]+'|[^"'\s][^\n]*)[ \t]*\r?\n(?:[^\
 path = '''(^|/)f/.*\.variable\.ya?ml$'''
 tags = ["windmill", "atelier-works"]
 
-# Known false positives:
-# - wmill-lock.yaml holds content hashes of workspace scripts; a hash next to
-#   the module name "discord" trips the built-in discord-api-token rule.
-# - tests use obviously fake webhook URLs as masking fixtures.
+# 既知の誤検知:
+# - `wmill-lock.yaml`はワークスペースのscriptの内容ハッシュを持つ。
+#   モジュール名`discord`の隣のハッシュが、組み込みの`discord-api-token`ルールに当たる。
+# - テストは、マスク処理の固定値として明らかに偽物のwebhook URLを使う。
 [allowlist]
 paths = ['''^wmill-lock\.yaml$''']

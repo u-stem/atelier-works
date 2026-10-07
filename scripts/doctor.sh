@@ -1,17 +1,16 @@
 #!/usr/bin/env bash
-# doctor.sh - environment health check for the local Software Factory stack.
-# Prints an OK/NG table and exits 1 if any check failed.
+# ローカルのSoftware Factoryのスタックの環境を点検する。
+# OK・NGの表を出し、1つでも失敗があれば終了コード1で終わる。
 #
-# There is no infra/.env or infra/secrets.env: configuration lives in mise's
-# [env] block (non-secret, committed in mise.toml) and in mise.local.toml
-# (gitignored secrets, populated via `mise set -E local KEY=value`). This
-# script is meant to run as a mise task (`mise run doctor`) so those values
-# are already present in its environment; it never reads or prints them from
-# a file, and it never prints a secret's value, only whether it is set.
+# `infra/.env`も`infra/secrets.env`も無く、設定は`mise.toml`の`[env]`
+# (秘密でないものをコミット)と`mise.local.toml`(gitignore済みの秘密。
+# `mise set -E local KEY=value`で入れる)にある。このスクリプトはmiseの
+# タスク(`mise run doctor`)として動かす前提なので、値は既に環境変数にある。
+# ファイルから値を読んだり表示したりせず、秘密は値を出さず設定の有無だけを出す。
 set -euo pipefail
 
-# Resolve the repository root from this script's own location so it works
-# regardless of the caller's current directory.
+# 呼び出し側のカレントディレクトリに関係なく動くよう、リポジトリのルートを
+# このスクリプト自身の場所から求める。
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
 
@@ -19,8 +18,8 @@ COMPOSE_FILE="${REPO_ROOT}/infra/docker-compose.yml"
 
 NG_COUNT=0
 
-# Print one result row and track failures.
-# Usage: report <label> <ok|ng> [detail]
+# 結果を1行出し、失敗を数える。
+# 使い方: report <label> <ok|ng> [detail]
 report() {
   local label="$1" status="$2" detail="${3:-}"
   if [[ "${status}" == "ok" ]]; then
@@ -34,7 +33,7 @@ report() {
 echo "=== Software Factory 環境診断 ==="
 echo
 
-# 1. docker CLI と daemon
+# 1. docker CLIとdaemon
 if command -v docker >/dev/null 2>&1; then
   if docker info >/dev/null 2>&1; then
     report "docker" ok "CLI / daemon ともに利用できます"
@@ -52,22 +51,21 @@ else
   report "docker compose" ng "docker compose (v2 プラグイン) が見つかりません"
 fi
 
-# 3. mise の有無
+# 3. miseの有無
 if command -v mise >/dev/null 2>&1; then
   report "mise" ok "$(mise --version 2>/dev/null || true)"
 else
   report "mise" ng "mise コマンドが見つかりません"
 fi
 
-# 4. mise.toml が trust されているか
-# `mise trust --show` は `~/path/to/repo: trusted` のように、ホームディレクトリ
-# 配下は `~` に短縮したディレクトリ単位の行で出力する(ファイル名は付かない)。
-# REPO_ROOT の $HOME 部分を `~` に置換した文字列と、念のため絶対パスの両方で
-# 行全体にマッチさせる。
+# 4. `mise.toml`がtrustされているか
+# `mise trust --show`は`~/path/to/repo: trusted`のように、ホームディレクトリの
+# 下を`~`に縮めたディレクトリ単位の行で出す(ファイル名は付かない)。
+# `REPO_ROOT`の`$HOME`の部分を`~`に置き換えた文字列と、念のため絶対パスの
+# 両方で、行全体に一致させる。
 if command -v mise >/dev/null 2>&1; then
-  # A bare ~ in the replacement is itself tilde-expanded by bash before the
-  # substitution runs, so it would expand back to $HOME and silently no-op.
-  # Escaping it keeps it literal.
+  # 置換後の文字列の裸の`~`は、置換の前にbashがチルダ展開して`$HOME`に戻し、
+  # 何も置き換わらない。エスケープして文字どおりの`~`にする。
   tilde_root="${REPO_ROOT/#$HOME/\~}"
   if mise trust --show 2>/dev/null | grep -qE "^(${tilde_root}|${REPO_ROOT}): *trusted$"; then
     report "mise.toml trust" ok "信頼済みです"
@@ -78,7 +76,7 @@ else
   report "mise.toml trust" ng "mise が無いため確認できません"
 fi
 
-# 5. mise 経由のツール導入確認
+# 5. mise経由でツールが入っているか
 if command -v mise >/dev/null 2>&1; then
   for name in wmill gh bun node; do
     case "${name}" in
@@ -98,9 +96,9 @@ else
 fi
 
 # 6. 必須環境変数が設定されているか。
-# 値そのものはログに一切出さない(存在確認のみ)。mise の [env] / mise.local.toml
-# から渡される想定なので、このスクリプトを直接実行するのではなく
-# `mise run doctor` 経由で実行しているか確認すること。
+# 値そのものはログに一切出さず、有無だけを確かめる。miseの`[env]`と
+# `mise.local.toml`から渡す前提なので、直接ではなく`mise run doctor`で
+# 実行しているかを確かめること。
 required_vars=(
   DB_PASSWORD
   WM_VERSION
@@ -127,14 +125,14 @@ else
   report "環境変数" ok "必須キー ${#required_vars[@]} 件すべて設定されています"
 fi
 
-# 7. mise.local.toml が gitignore されているか(秘密情報の誤コミット防止)
+# 7. `mise.local.toml`がgitignoreされているか(秘密の誤コミットを防ぐ)
 if git -C "${REPO_ROOT}" check-ignore -q mise.local.toml; then
   report "mise.local.toml" ok "gitignore 対象です"
 else
   report "mise.local.toml" ng "gitignore されていません。秘密情報が誤ってコミットされる恐れがあります"
 fi
 
-# 8. ポートの空き、または Windmill が応答しているか
+# 8. ポートが空いているか、またはWindmillが応答しているか
 wm_http_port="${WM_HTTP_PORT:-8080}"
 
 windmill_is_up=0
@@ -149,7 +147,7 @@ else
   report "port ${wm_http_port}" ok "空いています (未起動)"
 fi
 
-# 9. worker コンテナ内のツール確認(スタックが起動している場合のみ)
+# 9. workerのコンテナ内のツールの確認(スタックが起動している場合だけ)
 if command -v docker >/dev/null 2>&1 && [[ -f "${COMPOSE_FILE}" ]]; then
   worker_id="$(docker compose -f "${COMPOSE_FILE}" ps -q windmill_worker 2>/dev/null || true)"
   worker_running=0
@@ -176,7 +174,7 @@ else
   report "worker コンテナ" ng "docker または docker-compose.yml が見つからず確認できません"
 fi
 
-# 10. 初期パスワードのままログインできてしまわないか(Windmill が応答している場合のみ)
+# 10. 初期パスワードのままログインできてしまわないか(Windmillが応答している場合だけ)
 if [[ "${windmill_is_up}" -eq 1 ]]; then
   login_status="$(curl -s -o /dev/null -w '%{http_code}' -X POST \
     "http://127.0.0.1:${wm_http_port}/api/auth/login" \
