@@ -1,6 +1,7 @@
 // f/factory/implementの4ステップ中1番目(準備)。
 // 承認時の前提がまだ成り立つかを確かめ、実装用のブランチとworktreeを用意して、
 // 後続ステップが使う`ImplementContext`を返す。
+// 最初にflow_job_idのリース(実装フローのルートジョブID)を取り、取れなければskipで終わる。
 // プロンプトに渡すIssueの題名と本文は作業項目の取り込み時点の内容で、
 // GitHubのIssueはopen判定とURLにだけ使う。
 
@@ -9,6 +10,7 @@ import { buildConsoleUrl } from "../lib/approval_support.ts";
 import { dailyBudgetStatus } from "../lib/claude.ts";
 import { isRepoAllowed, loadConfig } from "../lib/config.ts";
 import {
+  acquireImplementLease,
   getRequirementDraft,
   getWorkItem,
   latestPrWorkItem,
@@ -24,6 +26,10 @@ import {
 } from "../lib/github.ts";
 import { isFactoryRepo } from "../lib/implement_finish_support.ts";
 import {
+  IMPLEMENT_LEASE_LOST_REASON,
+  implementLeaseJobId,
+} from "../lib/implement_launch_support.ts";
+import {
   type ImplementContext,
   type ImplementPrepareOutcome,
   prepareImplementWorktree,
@@ -34,6 +40,7 @@ import {
   hasActivePrRun,
   isRequirementsApprovedForAttempt,
 } from "../lib/implement_support.ts";
+import { logger } from "../lib/log.ts";
 import {
   assertGitHubName,
   type FactoryConfig,
@@ -142,6 +149,8 @@ function stop(
  * 作業項目のattemptに承認済みの要件定義があるか、
  * ブランチのopenなPRでpr_fix / pr_reviewが動いていないか)を確かめ直す。
  * 満たさなければ`outcome`と理由を返し、状態の遷移は`implement_finish`に任せる。
+ * 作業項目の種類と状態の確認の次に、flow_job_idのリースを取る(`acquireImplementLease`)。
+ * 取れなければ`skip`を返し、worktreeには触れない。
  *
  * 満たせば、実装用のブランチと`git gtr`のworktreeを用意し、
  * ブランチを空のままpushしておく。
@@ -151,8 +160,8 @@ function stop(
  * `.git`ポインタはClaudeの実行のたびに照合し、
  * `base_sha`は各検証ラウンドの差分の基準になる。
  *
- * 作業項目やIssue番号が無いとき、push後に`origin/<branch>`を解決できないときは
- * 例外を投げる。
+ * 作業項目やIssue番号が無いとき、フローのルートジョブIDを得られないとき、
+ * push後に`origin/<branch>`を解決できないときは例外を投げる。
  */
 export async function main(
   work_item_id: number,
@@ -167,6 +176,21 @@ export async function main(
       "skip",
       `work item kind/status is "${workItem.kind}"/"${workItem.status}", not "issue"/"implementing"`,
     );
+  }
+  // worktreeの再利用経路はreset --hardとcleanをするので、それより前にリースを取る。
+  // 取れなければ同じ作業項目の別の実行が動いている(または起動側がneeds_humanにした)ので何もしない。
+  const leaseJobId = implementLeaseJobId(process.env);
+  if (!(await acquireImplementLease(work_item_id, leaseJobId))) {
+    // 起動側の記録とこの実行のIDが食い違っていないかを切り分けられるよう、読み直した値を残す。
+    const current = await getWorkItem(work_item_id);
+    logger("implement_prepare").warn("implement lease not acquired", {
+      work_item_id,
+      status: current?.status ?? null,
+      flow_job_id: current?.flow_job_id ?? null,
+      lease_job_id: leaseJobId,
+      wm_flow_job_id: process.env.WM_FLOW_JOB_ID ?? null,
+    });
+    return stop("skip", IMPLEMENT_LEASE_LOST_REASON);
   }
   const issueNumber = workItem.issue_number;
   if (issueNumber === null)

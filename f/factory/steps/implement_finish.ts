@@ -1,6 +1,8 @@
 // f/factory/implementの4ステップ中4番目(終了処理)で、唯一の終端ステップ。
 // 準備ステップの停止か検証ループの終了を受けて、作業項目の状態遷移と
 // それに伴う副作用(commit、push、PR作成、通知など)を行う。
+// 最初にリースを確かめ、失っていれば何もせずに終わる。状態の遷移はすべてリースを条件にする。
+// 検証ループがリースを失って止まったときもnoopになる。
 
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "../lib/config.ts";
@@ -9,7 +11,7 @@ import {
   getWorkItem,
   setFlowJobId,
   setWorkItemPrUrl,
-  updateStatusIfCurrent,
+  updateStatusIfLeaseHolder,
 } from "../lib/db.ts";
 import { type NotifyEvent, notify } from "../lib/discord.ts";
 import {
@@ -48,6 +50,12 @@ import {
   shouldPreserveBeforeFailing,
   shouldPushPartialWork,
 } from "../lib/implement_finish_support.ts";
+import {
+  holdsImplementLease,
+  IMPLEMENT_LEASE_LOST_REASON,
+  implementLeaseJobId,
+  parseFlowJobId,
+} from "../lib/implement_launch_support.ts";
 import {
   GITLEAKS_TIMEOUT_MS,
   gitPointerStopReason,
@@ -185,7 +193,7 @@ type PrAttempt =
  * - requirements_gap: worktreeを消し、ブランチはどのPRも使っていないときだけ消す。
  *   attempt+1で`f/factory/pipeline`へ差し戻す(`max_attempts`を超えたらneeds_human)。
  *   `pr_fix_finish`の差し戻しと同じく、`runFlowAsync`より先に状態を更新する。
- *   その後の`runFlowAsync`か`setFlowJobId`が失敗したら、
+ *   その後の`runFlowAsync`(戻り値がジョブIDでないときを含む)か`setFlowJobId`が失敗したら、
  *   `requirements_generating`からneeds_humanに移し、noticeにギャップの報告を載せる。
  * - needs_human: max_rounds / daily_budget / stalled / diff_too_largeで止まったとき、
  *   PRが無く、worktreeの`.git`ポインタが変わっておらず、gitleaksを通れば、
@@ -237,6 +245,22 @@ export async function main(
       `implement_finish: work item ${String(work_item_id)} is missing or has no issue_number`,
     );
   }
+  // Issueのcloseによる取り消し(cancelJobの失敗は握りつぶされる)やpr_fixの差し戻しで、実行中にリースが移ることがある。
+  // その実行はコミット・push・PR作成の前に止める。
+  const leaseJobId = implementLeaseJobId(process.env);
+  if (!holdsImplementLease(workItem, leaseJobId)) {
+    log.warn("implement lease lost before finishing", {
+      work_item_id,
+      status: workItem.status,
+      flow_job_id: workItem.flow_job_id,
+      lease_job_id: leaseJobId,
+    });
+    return {
+      ok: true,
+      final_status: null,
+      notice: IMPLEMENT_LEASE_LOST_REASON,
+    };
+  }
   const owner = workItem.owner;
   const repo = workItem.repo;
   const issueNumber = workItem.issue_number;
@@ -263,6 +287,8 @@ export async function main(
    * 作業項目をneeds_humanに遷移させ、遷移できたらnoticeを記録してDiscordへ通知する。
    * `from`はCASで期待する状態(`implementing`、または差し戻しを始められなかった後の
    * `requirements_generating`)。
+   * 状態の遷移はflow_job_idがこの実行のルートジョブIDのときだけ行う。
+   * requirements_generatingからの遷移も、再起動の失敗経路なのでflow_job_idはまだこの実行のID。
    * `detail`はnoticeとDiscordに足す文(ギャップの報告)。
    */
   const finalizeNeedsHuman = async (
@@ -273,10 +299,11 @@ export async function main(
       readonly detail?: string;
     } = {},
   ): Promise<ImplementFinishResult> => {
-    const moved = await updateStatusIfCurrent(
+    const moved = await updateStatusIfLeaseHolder(
       work_item_id,
       options.from ?? "implementing",
       "needs_human",
+      leaseJobId,
       reason,
     );
     const described =
@@ -310,10 +337,11 @@ export async function main(
 
   const cancel = async (note: string): Promise<ImplementFinishResult> =>
     transitionResult(
-      await updateStatusIfCurrent(
+      await updateStatusIfLeaseHolder(
         work_item_id,
         "implementing",
         "cancelled",
+        leaseJobId,
         note,
       ),
       "cancelled",
@@ -477,10 +505,11 @@ export async function main(
       const reason = gapExhaustedReason(config.max_attempts);
       return finalizeNeedsHuman(reason, nextActionFor(reason));
     }
-    const moved = await updateStatusIfCurrent(
+    const moved = await updateStatusIfLeaseHolder(
       work_item_id,
       "implementing",
       "requirements_generating",
+      leaseJobId,
       `gap: ${gapReport}`,
     );
     if (!moved)
@@ -490,11 +519,14 @@ export async function main(
         "work item moved on before the reroute",
       );
     try {
-      const flowJobId = await wmill.runFlowAsync("f/factory/pipeline", {
-        work_item_id,
-        attempt: attempt + 1,
-        feedback: gapReport,
-      });
+      const flowJobId = parseFlowJobId(
+        await wmill.runFlowAsync("f/factory/pipeline", {
+          work_item_id,
+          attempt: attempt + 1,
+          feedback: gapReport,
+        }),
+        "runFlowAsync",
+      );
       await setFlowJobId(work_item_id, flowJobId);
     } catch (err) {
       log.warn("requirements regeneration could not be started", {
@@ -605,10 +637,11 @@ export async function main(
   const opened = await openPullRequest(context, loop_result);
   if (!opened.ok)
     return finalizeNeedsHuman(opened.reason, nextActionFor(opened.reason));
-  const moved = await updateStatusIfCurrent(
+  const moved = await updateStatusIfLeaseHolder(
     work_item_id,
     "implementing",
     "pr_open",
+    leaseJobId,
     opened.pr.htmlUrl,
   );
   if (moved && loop_result.checks !== null) {
