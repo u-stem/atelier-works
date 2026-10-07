@@ -3,6 +3,7 @@ import {
   classifyFile,
   isCommentOnlyChange,
   parseNameStatus,
+  transpiledCode,
 } from "../../scripts/check-comment-only-diff.ts";
 
 // テンプレートリテラルの置換`${x}`を、テスト用ソース文字列の中に書くための断片。
@@ -168,6 +169,70 @@ describe("isCommentOnlyChange for SQL", () => {
     const before = "-- note\nSELECT 1;\n";
     const after = "-- note\nSELECT 2;\n";
     expect(isCommentOnlyChange("a.sql", before, after)).toBe(false);
+  });
+});
+
+describe("isCommentOnlyChange for TSX", () => {
+  test("accepts a changed JSX `{/* */}` comment", () => {
+    const before = "export const A = () => <b>{/* old */}hi</b>;\n";
+    const after = "export const A = () => <b>{/* 新 */}hi</b>;\n";
+    expect(isCommentOnlyChange("a.tsx", before, after)).toBe(true);
+  });
+
+  test("accepts a changed line comment in a file with JSX text", () => {
+    const before = "// old\nexport const A = () => <b>#(x</b>;\n";
+    const after = "// 新\nexport const A = () => <b>#(x</b>;\n";
+    expect(isCommentOnlyChange("a.tsx", before, after)).toBe(true);
+  });
+
+  test("rejects a changed JSX text", () => {
+    const before = "export const A = () => <b>hi</b>;\n";
+    const after = "export const A = () => <b>bye</b>;\n";
+    expect(isCommentOnlyChange("a.tsx", before, after)).toBe(false);
+  });
+
+  test("rejects a changed JSX element name", () => {
+    const before = "export const A = () => <b>hi</b>;\n";
+    const after = "export const A = () => <i>hi</i>;\n";
+    expect(isCommentOnlyChange("a.tsx", before, after)).toBe(false);
+  });
+
+  test("rejects a changed shebang", () => {
+    const before = "#!/usr/bin/env bun\nexport const A = <b />;\n";
+    const after = "#!/usr/bin/env node\nexport const A = <b />;\n";
+    expect(isCommentOnlyChange("a.tsx", before, after)).toBe(false);
+  });
+
+  test("rejects a source that fails to transpile", () => {
+    const before = "export const A = <b>hi</b>;\n";
+    const after = "export const A = <b>hi;\n";
+    expect(isCommentOnlyChange("a.tsx", before, after)).toBe(false);
+  });
+
+  // `)`の後の`/`は除算とみなされ、`#(`でスキャナーが止まる。
+  test("falls back to the transpiler for a ts file the tokenizer cannot scan", () => {
+    const before = "// old\nif (x) /#(\\d+)/.test(y);\n";
+    const after = "// 新\nif (x) /#(\\d+)/.test(y);\n";
+    expect(isCommentOnlyChange("a.ts", before, after)).toBe(true);
+  });
+
+  test("rejects a changed code line in a ts file the tokenizer cannot scan", () => {
+    const before = "if (x) /#(\\d+)/.test(y);\n";
+    const after = "if (x) /#(\\d+)/.test(z);\n";
+    expect(isCommentOnlyChange("a.ts", before, after)).toBe(false);
+  });
+});
+
+describe("transpiledCode", () => {
+  const withComments =
+    "// MARK-line\n/* MARK-block */\n/** MARK-doc */\nexport const A = () => (\n  <b>\n    {/* MARK-jsx */}\n    hi\n  </b>\n); // MARK-trailing\n";
+
+  test("leaves no comment in the output", () => {
+    expect(transpiledCode("a.tsx", withComments)).not.toContain("MARK");
+  });
+
+  test("keeps the code in the output", () => {
+    expect(transpiledCode("a.tsx", withComments)).toContain("hi");
   });
 });
 

@@ -12,8 +12,12 @@
 //   ヒアドキュメントやYAMLのリテラルブロック内の`#`行の変更は見逃す。
 // - [見逃し] tsx内のJSXテキストにある`//`や`/*`はコメントとして読み飛ばされ、
 //   その部分の変更は見逃す。
+// - [見逃し] tsxと、トークン化できないts / jsは、`Bun.Transpiler`がコメントを落とした
+//   出力の比較で判定する。Transpilerは型注釈も落とすため、型だけの変更は見逃す。
+//   未使用のimportの削除など、変換で消えるコードの変更も同様に見逃しうる。
 // - `git diff`は未追跡ファイルを出さないため、未追跡の新規ファイルは対象外。
 
+import { readFileSync } from "node:fs";
 import {
   ScannerStallError,
   type Token,
@@ -58,15 +62,44 @@ function codeTokens(text: string): string[] {
   return tokenize(text).map((t: Token) => `${t.kind}:${t.text}`);
 }
 
-function sameTokens(before: string, after: string): boolean {
+type TranspilerLoader = "tsx" | "ts" | "js";
+
+function loaderOf(path: string): TranspilerLoader {
+  const ext = extensionOf(path);
+  if (ext === ".tsx") return "tsx";
+  if (ext === ".ts") return "ts";
+  return "js";
+}
+
+/**
+ * `Bun.Transpiler`でコメントを落としたコードを返す。構文エラーは例外になる。
+ * 型注釈も落ちるので、この出力の比較は型だけの変更を区別できない。
+ */
+export function transpiledCode(path: string, text: string): string {
+  return new Bun.Transpiler({ loader: loaderOf(path) }).transformSync(text);
+}
+
+function sameTranspiled(path: string, before: string, after: string): boolean {
+  try {
+    return transpiledCode(path, before) === transpiledCode(path, after);
+  } catch {
+    // 変換できないソースは同じと証明できないので、変更ありとして扱う。
+    return false;
+  }
+}
+
+function sameTokens(path: string, before: string, after: string): boolean {
   if (shebangOf(before) !== shebangOf(after)) return false;
+  // tokenizeはJSXを扱えないので、tsxは最初からTranspilerで比べる。
+  if (extensionOf(path) === ".tsx") return sameTranspiled(path, before, after);
   try {
     const a = codeTokens(before);
     const b = codeTokens(after);
     return a.length === b.length && a.every((token, i) => token === b[i]);
   } catch (err) {
-    // トークン化できないファイルは同じと証明できないので、変更ありとして扱う。
-    if (err instanceof ScannerStallError) return false;
+    if (err instanceof ScannerStallError) {
+      return sameTranspiled(path, before, after);
+    }
     throw err;
   }
 }
@@ -95,7 +128,8 @@ function sameLines(a: readonly string[], b: readonly string[]): boolean {
 /**
  * `path`の拡張子に応じた規則で、`before`から`after`への変更がコメント・空白・
  * 空行だけかを返す。比較対象外の拡張子は比較しないので常にtrueを返す。
- * トークン化できないTypeScript/JavaScriptはfalse(変更ありとみなす)。
+ * tsxと、トークン化できないTypeScript/JavaScriptは`Bun.Transpiler`の出力で比べ、
+ * 変換できなければfalse(変更ありとみなす)。
  */
 export function isCommentOnlyChange(
   path: string,
@@ -103,7 +137,7 @@ export function isCommentOnlyChange(
   after: string,
 ): boolean {
   const ext = extensionOf(path);
-  if (TOKEN_EXTENSIONS.has(ext)) return sameTokens(before, after);
+  if (TOKEN_EXTENSIONS.has(ext)) return sameTokens(path, before, after);
   if (HASH_COMMENT_EXTENSIONS.has(ext)) {
     return sameLines(codeLines(before, "#", true), codeLines(after, "#", true));
   }
@@ -181,7 +215,9 @@ async function main(): Promise<void> {
     }
     compared++;
     const before = runGit(["show", `${baseRef}:${path}`], root);
-    const after = await Bun.file(`${root}/${path}`).text();
+    // `await Bun.file().text()`はBun 1.3.2でCPU 0%のまま解決せず止まることがあるため、
+    // 同期で読む。
+    const after = readFileSync(`${root}/${path}`, "utf8");
     if (!isCommentOnlyChange(path, before, after)) offending.push(path);
   }
 
