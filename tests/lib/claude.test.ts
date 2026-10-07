@@ -14,7 +14,7 @@ import { createFakeCommandRunner, fail, timeout } from "./testSupport.ts";
 
 type FakeCall = { text: string; values: unknown[] };
 
-/** Same fake-SqlClient shape as tests/lib/db.test.ts. */
+/** `tests/lib/db.test.ts`と同じ形の偽の`SqlClient`。 */
 function createFakeSqlClient(responses: SqlRow[][] = []): {
   sql: SqlClient;
   calls: FakeCall[];
@@ -424,7 +424,7 @@ describe("runClaude", () => {
           allowedTools: ["Write"],
         }),
       ).rejects.toThrow('allowedTools entry "Write" is not in opts.tools');
-      // Validation must happen before the process is spawned.
+      // 検証はプロセスを起動する前に行う。
       expect(fake.calls).toHaveLength(0);
     });
 
@@ -509,9 +509,9 @@ describe("runClaude", () => {
   });
 
   test("masks a secret-looking value in the invalid_structured_output agentRun.error", async () => {
-    // Both attempts fail schema validation, so the final (returned) failure
-    // carries the masked detail — a successful retry would otherwise
-    // discard the first attempt's error entirely.
+    // 再試行が成功すると最初の試行のエラーは捨てられるため、
+    // 2回ともスキーマ検証に失敗させ、
+    // 最後に返る失敗にマスク済みの詳細が残ることを確かめる。
     const badStdout = claudeJsonStdout({
       structured_output: {
         token: "github_pat_11ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
@@ -564,8 +564,8 @@ describe("isBudgetExceeded", () => {
 
 describe("jstMidnightTodayIso", () => {
   test("returns the JST calendar day's midnight as a real-UTC ISO instant", () => {
-    // 2026-09-26 08:00:00 JST = 2026-09-25 23:00:00 UTC; JST midnight that
-    // day is 2026-09-25 15:00:00 UTC.
+    // 2026-09-26 08:00:00 JSTは2026-09-25 23:00:00 UTC。
+    // その日のJSTの0時は2026-09-25 15:00:00 UTC。
     const now = new Date("2026-09-25T23:00:00.000Z");
     expect(jstMidnightTodayIso(now)).toBe("2026-09-25T15:00:00.000Z");
   });

@@ -1,10 +1,10 @@
-// Tests for f/factory/poll_prs.ts's claimPr (2026-09-27 PR label cleanup:
-// a PR claim consumes whichever trigger label — review_label or fix_label —
-// fired this cycle, mirroring lib/github.ts's claimIssue; no wip label, no
-// assignee). claimPr delegates the actual label DELETE to lib/github.ts's
-// removeLabel, so the fake responses below are `gh api -i`-shaped
-// (ghApiOk/ghApiStdout), matching what removeLabel's own callGhApi expects —
-// not a bare command-exit-code response.
+// `f/factory/poll_prs.ts`の`claimPr`のテスト。
+// `claimPr`は、`lib/github.ts`の`claimIssue`と同じく、このサイクルで発火した
+// トリガーラベル(`review_label`か`fix_label`)を消費する。
+// wipラベルも担当者も付けない。
+// ラベルの削除は`lib/github.ts`の`removeLabel`に任せる。
+// そのため偽の応答は終了コードだけの形ではなく、`removeLabel`の`callGhApi`が
+// 期待する`gh api -i`の形(`ghApiOk`/`ghApiStdout`)で用意する。
 
 import { describe, expect, test } from "bun:test";
 import { claimPr } from "../../f/factory/poll_prs.ts";
@@ -25,7 +25,7 @@ function fakeIssue(labels: string[]) {
 describe("claimPr", () => {
   test("reports claimed when the trigger label is gone after removal", async () => {
     const { run } = createFakeCommandRunner([
-      ghApiOk({}), // DELETE trigger label
+      ghApiOk({}), // DELETE: トリガーラベルを外す
       ghApiOk(fakeIssue([])),
     ]);
     const result = await claimPr(

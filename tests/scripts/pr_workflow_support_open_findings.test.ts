@@ -1,7 +1,6 @@
-// Tests for f/factory/steps/pr_workflow_support.ts's openFindingsForPrompt
-// (team-lead decision, 2026-09-26: a re-review must not re-post a finding
-// substantially the same as one that's already open — used by
-// pr_review_generate.ts to build reviewPrompt's `openFindings` input).
+// `pr_workflow_support.ts`の`openFindingsForPrompt`のテスト。
+// 再レビューでは、未解決の指摘と実質的に同じ指摘を再投稿しない。
+// そのため`pr_review_generate.ts`は、この関数で`reviewPrompt`の`openFindings`を作る。
 
 import { describe, expect, test } from "bun:test";
 import type { ReviewThread } from "../../f/factory/lib/github.ts";
@@ -68,10 +67,9 @@ describe("openFindingsForPrompt", () => {
     expect(findings).toHaveLength(1);
   });
 
-  // team-lead decision (2026-09-26): unlike selectThreadsToResolve, this is
-  // independent of who last replied — a finding is still "open" even if a
-  // human (or the factory's own pr_fix) replied without actually resolving
-  // the GitHub thread.
+  // `selectThreadsToResolve`と違い、最後に誰が返信したかは見ない。
+  // 人やfactory自身の`pr_fix`が返信しても、GitHubのスレッドが解決されていなければ
+  // 指摘は未解決のままである。
   test("includes a thread even when the last comment is a human reply", () => {
     const findings = openFindingsForPrompt(
       [

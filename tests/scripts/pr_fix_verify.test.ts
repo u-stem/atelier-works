@@ -1,5 +1,5 @@
-// Tests for f/factory/steps/pr_workflow_support.ts's forbidden-change
-// detection and allowed_check_commands runner (used by pr_fix_verify.ts).
+// `pr_fix_verify.ts`が使う`pr_workflow_support.ts`の、禁止された変更の検出と
+// `allowed_check_commands`の実行のテスト。
 
 import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
@@ -716,11 +716,10 @@ describe("runAllowedCheckCommands", () => {
 });
 
 describe("fixPrompt requirements wiring (retry pass)", () => {
-  // team-lead: confirms the retry pass's requirements wiring (same
-  // parent_work_item_id -> latestDraft pattern as pr_fix_apply.ts) still
-  // activates fixPrompt's requirements-alignment section when combined
-  // with a non-empty checkFailures — the retry pass is the one caller that
-  // passes both at once.
+  // 再試行で渡す`requirements`(`pr_fix_apply.ts`と同じく`parent_work_item_id`から
+  // `latestDraft`で引く)が、空でない`checkFailures`と一緒でも、
+  // `fixPrompt`の要件との整合の節を有効にすることを確かめる。
+  // 両方を同時に渡す呼び出し元は再試行だけである。
   function retryPrompt(): string {
     const requirements: RequirementDraft = {
       id: 1,

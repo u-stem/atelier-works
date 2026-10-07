@@ -1,9 +1,8 @@
-// Tests for f/factory/steps/pr_workflow_support.ts's
-// evaluatePrFixSafetyGuards and evaluateFixRoundGuard (used by
-// pr_fix_prepare.ts), plus describeReason (the display-only Japanese
-// mapping of those guards' `reason` strings, used by pr_fix_finish.ts /
-// pr_review_generate.ts / pipeline_*.ts when composing a GitHub comment or
-// Discord notification).
+// `pr_fix_prepare.ts`が使う`pr_workflow_support.ts`の`evaluatePrFixSafetyGuards`と
+// `evaluateFixRoundGuard`のテスト。
+// あわせて`describeReason`もテストする。これは検査の`reason`を表示用の日本語に
+// 置き換える関数で、`pr_fix_finish.ts`、`pr_review_generate.ts`、`pipeline_*.ts`が
+// GitHubのコメントやDiscordの通知を作るときに使う。
 
 import { describe, expect, test } from "bun:test";
 import {
@@ -143,16 +142,16 @@ describe("describeReason", () => {
     );
   });
 
-  // team-lead fix: pr_fix_finish.ts's nothing_to_commit branch now also
-  // posts queued replies, so its Discord reason joins both halves.
+  // `pr_fix_finish.ts`は`nothing_to_commit`のときも溜めた返信を投稿するため、
+  // Discordに載せる理由は両方をつないだものになる。
   test("translates each entry of the nothing_to_commit reason", () => {
     expect(describeReason("no changes to commit; replies posted")).toBe(
       "コミットする変更がありませんでした; 返信は投稿済みです",
     );
   });
 
-  // User decision (2026-09-26): buildIssueProposalReason's text is already
-  // Japanese, so describeReason returns it unchanged, keeping the count.
+  // `buildIssueProposalReason`の文は最初から日本語なので、
+  // `describeReason`は件数も含めてそのまま返す。
   test("passes the issue-proposal reason through unchanged (already Japanese)", () => {
     expect(describeReason("Issue化の提案が2件あります")).toBe(
       "Issue化の提案が2件あります",
@@ -185,10 +184,9 @@ describe("describeReason", () => {
 });
 
 describe("nextActionFor", () => {
-  // Every needs_human Discord notification's "次の操作" field (team-lead
-  // decision, 2026-09-26) comes from this function — see its doc comment for
-  // why it picks a single segment's action rather than joining every "; "
-  // segment the way describeReason does.
+  // `needs_human`のDiscord通知の「次の操作」欄は、すべてこの関数が作る。
+  // `describeReason`のように"; "で区切った全区間をつながず、1区間の操作だけを選ぶ理由は、
+  // この関数のコメントを参照。
   test("tells the operator to reopen or withdraw when the PR is not open", () => {
     expect(nextActionFor("pull request is not open")).toBe(
       "PRを再オープンするか、この作業を取り下げてください",

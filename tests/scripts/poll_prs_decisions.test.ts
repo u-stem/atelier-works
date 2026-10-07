@@ -1,5 +1,5 @@
-// Pure decision logic tests for poll_prs.ts's review/fix trigger path
-// (f/factory/lib/poll_support.ts) — spec-cycle2.md §3 M5, §7 item 1.
+// `poll_prs.ts`がレビューと修正を起動する経路で使う、判断の純粋関数
+// (`f/factory/lib/poll_support.ts`)のテスト。
 
 import { describe, expect, test } from "bun:test";
 import {
@@ -90,22 +90,19 @@ describe("decidePrActions — fix", () => {
     });
   });
 
-  // User decision (2026-09-26): pr_fix has no comment-based trigger — the
-  // `fix_label` is the only way to start a fix cycle, regardless of any
-  // comment on the PR.
+  // `pr_fix`はコメントでは起動しない。
+  // PRにどんなコメントがあっても、修正サイクルを始める手段は`fix_label`だけである。
   test("does not trigger fix without the label, even with no other state", () => {
     const [decision] = decidePrActions([candidate()], REVIEW_LABEL, FIX_LABEL);
     expect(decision?.fix).toEqual({ kind: "none" });
   });
 
-  // team-lead: an already-reviewed PR (its pr_review work item finished
-  // long ago, so hasActiveReviewingItem is false — decidePrActions has no
-  // separate "reviewed" concept, only "is a same-kind item currently
-  // active") getting the fix label must still trigger a fix cycle —
-  // searchPrs's per-state-label queries (team-lead design, 2026-09-26) are
-  // what make such a PR reachable again (an E2E gap fixed at the I/O layer,
-  // lib/github.ts), this confirms the pure decision itself imposes no
-  // additional "must still be under active review" requirement.
+  // レビュー済みのPR(`pr_review`の作業項目は終わっており、
+  // `hasActiveReviewingItem`はfalse)に修正ラベルが付いたら、修正サイクルを起動する。
+  // `decidePrActions`は「レビュー済み」を区別せず、
+  // 同じ種別の作業項目が実行中かどうかだけを見る。
+  // こうしたPRを再び見つけるのは入出力側(`lib/github.ts`)の役割で、
+  // ここでは判断そのものが「レビュー中であること」を条件にしていないことを確かめる。
   test("triggers a label-based fix on a PR that already finished a review", () => {
     const [decision] = decidePrActions(
       [

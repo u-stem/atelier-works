@@ -13,9 +13,12 @@ import type { SqlClient, SqlRow } from "../../f/factory/lib/db.ts";
 
 type FakeCall = { text: string; values: unknown[] };
 
-/** Same fake-SqlClient shape as tests/lib/summary_support.test.ts: records
- * every tagged-template call and returns one canned row set per call, in
- * order (repo convention: each test file owns its fake). */
+/**
+ * タグ付きテンプレートの呼び出しをすべて記録し、
+ * 呼び出し1回ごとに用意した行の集合を順に返す偽の`SqlClient`。
+ * 形は`tests/lib/summary_support.test.ts`と同じ。
+ * フェイクは各テストファイルが自前で持つ規約に従う。
+ */
 function createFakeSqlClient(responses: SqlRow[][] = []): {
   sql: SqlClient;
   calls: FakeCall[];
@@ -61,9 +64,10 @@ const EMPTY_EVIDENCE: AuditEvidence = {
   past_proposals: [],
 };
 
-/** An evidence pack large enough that its raw (untruncated) rendering
- * exceeds EVIDENCE_MAX_CHARS by a wide margin, for exercising truncation
- * (R2/R3) end to end. */
+/**
+ * 切り詰めずに描画すると`EVIDENCE_MAX_CHARS`を大きく超える根拠データ。
+ * 切り詰めを描画まで通して確かめるために使う。
+ */
 const OVERLOADED_EVIDENCE: AuditEvidence = {
   ...EMPTY_EVIDENCE,
   period: { ...PERIOD, unaudited_gap_days: 5 },
@@ -89,18 +93,15 @@ const OVERLOADED_EVIDENCE: AuditEvidence = {
 };
 
 /**
- * Reproduces the fix-round-2 regression: many short failure/human-outcome
- * rows (many, short lines — not few, long ones — maximize the *count* of
- * lines the old ratio-based pass kept, which is what the old bug's error
- * scaled with). Confirmed against the pre-fix `audit_evidence.ts` (fix
- * round 1) via `git stash`: that version rendered exactly 12,000 chars —
- * i.e. its `rendered.slice(0, 12000)` tail-clamp actually fired — and the
- * clamped output contained neither `ホスト操作要` nor `未解決` (both cut
- * off), with the final line mid-cut through a data row's padding rather
- * than a complete `- `-prefixed line. This fixture is the smallest one
- * found (during this fix round) that reproduces that failure; it is not
- * required to match the reviewer's originally-reported row count/width,
- * only the same failure mode.
+ * 短い失敗行と人の対応行を大量に含む、回帰確認用の根拠データ。
+ * 以前の実装は、比率で残す行数を決めたあと、
+ * 描画結果を`rendered.slice(0, 12000)`で末尾から切り詰めていた。
+ * この入力ではその切り詰めが働き、`ホスト操作要`と`未解決`の行が消え、
+ * 最終行も`- `で始まる行ではなくデータ行の途中で切れた。
+ * 旧実装の誤差は残す行の数に比例するため、少数の長い行ではなく
+ * 多数の短い行にしている。
+ * 同じ失敗を再現できた最小の入力であり、
+ * 最初に報告された行数や幅と一致させる必要はない。
  */
 const REGRESSION_EVIDENCE: AuditEvidence = {
   ...EMPTY_EVIDENCE,
@@ -164,10 +165,11 @@ describe("truncateEvidence", () => {
   });
 
   test("keeps at least one data line per section when the budget allows it", () => {
-    // Real rendered cost of keeping one 100-char line in each of two
-    // sections is 216 chars (< 220), so the fitting loop below never has
-    // to touch either — even though the pessimistic length+3-per-line
-    // first-pass estimate (206 + 24 fixed overhead = 230) thinks it must.
+    // 2つのセクションに100字の行を1行ずつ残すと、
+    // 実際の描画は216字(< 220)で収まる。
+    // 1行あたり長さ+3で見積もる初回の概算
+    // (206 + 固定分24 = 230)は超過と判定するが、
+    // 後段の調整は実際の描画で判定するため、どちらの行も削らない。
     const sections = [
       { heading: "a", fixed: [], lines: ["x".repeat(100)] },
       { heading: "b", fixed: [], lines: ["y".repeat(100)] },
@@ -176,11 +178,9 @@ describe("truncateEvidence", () => {
   });
 
   test("drops a section to its marker rather than exceeding maxChars (fix round 2)", () => {
-    // Fix round 1's `truncateEvidence` always kept >= 1 data line per
-    // section; that guarantee could exceed maxChars (the bug this fix
-    // addresses). The hard cap now wins: when even one line per section
-    // doesn't fit, sections are reduced all the way to their `省略N行`
-    // marker rather than the rendered output exceeding maxChars.
+    // 各セクションに最低1行を残す保証は、`maxChars`を超える原因になっていた。
+    // 上限を優先し、1行ずつでも収まらないときは、
+    // セクションを`省略N行`の印だけになるまで減らす。
     const sections = [
       { heading: "a", fixed: [], lines: ["x".repeat(500)] },
       { heading: "b", fixed: [], lines: ["y".repeat(500)] },
@@ -244,10 +244,9 @@ describe("renderEvidenceMarkdown", () => {
     expect(markdown.length).toBeLessThanOrEqual(12000);
   });
 
-  // Fix round 2 regression: 30 failure rows + 30 human-outcome rows of
-  // ~190 chars each — reported to exceed 12,000 and have its old
-  // rendered.slice(0, 12000) tail-clamp cut into the 通知/デプロイ fixed
-  // lines (and once, mid-number).
+  // 回帰確認。報告では、約190字の失敗行30件と人の対応行30件で12,000字を超え、
+  // 旧実装の`rendered.slice(0, 12000)`が通知・デプロイの固定行を
+  // 途中で(一度は数字の途中で)切った。
   test("keeps ホスト操作要 for the fix-round-2 regression input (1)", () => {
     const markdown = renderEvidenceMarkdown(REGRESSION_EVIDENCE);
     expect(markdown).toContain("ホスト操作要: 12件");

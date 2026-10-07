@@ -50,9 +50,10 @@ const IMPLEMENT_INPUT = {
   hasPreviousImplementation: false,
 };
 
-/** Removes every `<<<DATA-<nonce> ... >>>DATA-<nonce>` block (inclusive)
- * from `prompt`, so a test can assert something untrusted never appears
- * *outside* a fence. */
+/**
+ * `prompt`から`<<<DATA-<nonce> ... >>>DATA-<nonce>`のブロックを区切りごと取り除く。
+ * 信頼できない入力が区切りの外に出ていないことを確かめるために使う。
+ */
 function stripFences(prompt: string, nonce: string): string {
   const pattern = new RegExp(`<<<DATA-${nonce}[\\s\\S]*?>>>DATA-${nonce}`, "g");
   return prompt.replace(pattern, "");
@@ -142,9 +143,9 @@ describe("requirementsPrompt", () => {
       FIXED_UUID,
     );
     const realCloseTagCount = prompt.split(">>>DATA-test-nonce").length - 1;
-    // The banner mentions the closing tag once, plus 2 real fences (issue
-    // title, issue body) = 3. The fake wrong-nonce markers in the body must
-    // not add a 4th occurrence.
+    // 閉じタグは、冒頭の注意書きに1回、
+    // 本物の区切り2つ(Issueのタイトルと本文)に1回ずつで、計3回現れる。
+    // 本文に仕込んだnonce違いの偽の印で4回目が増えてはいけない。
     expect(realCloseTagCount).toBe(3);
   });
 
@@ -375,8 +376,7 @@ describe("reviewPrompt", () => {
     expect(prompt).toContain("human");
   });
 
-  // team-lead decision (2026-09-26): a re-review must not re-post a finding
-  // substantially the same as one still open.
+  // 再レビューでは、未解決の指摘と実質的に同じ指摘を再投稿しない。
   test("renders the open findings section when openFindings is non-empty", () => {
     const prompt = reviewPrompt(
       {
@@ -641,8 +641,7 @@ describe("JSON schema constants", () => {
     ]);
   });
 
-  // team-lead decision (2026-09-26): Claude proposes the commit subject/body
-  // directly now, replacing the former derive-from-summary approach.
+  // コミットの件名と本文は、要約から導かずにClaudeが直接提案する。
   test("FIX_SCHEMA requires commit_subject and commit_body", () => {
     expect(FIX_SCHEMA.required).toContain("commit_subject");
     expect(FIX_SCHEMA.required).toContain("commit_body");
@@ -698,8 +697,7 @@ describe("JSON schema constants", () => {
     ).toEqual(["fixed", "skipped", "propose_issue"]);
   });
 
-  // User decision (2026-09-26): a "propose_issue" reply drafts a candidate
-  // GitHub Issue instead of fixing or skipping the finding.
+  // `"propose_issue"`の返信は、指摘を修正も見送りもせず、GitHub Issueの案を作る。
   test("FIX_SCHEMA requires issue_proposal on a reply item, nullable object", () => {
     expect(FIX_SCHEMA.properties.replies.items.required).toContain(
       "issue_proposal",
@@ -944,7 +942,7 @@ describe("implementFixPrompt", () => {
 describe("factory-implementation SKILL.md ⇔ IMPLEMENT_SCHEMA", () => {
   const SKILL_PATH = `${import.meta.dir}/../../.claude/skills/factory-implementation/SKILL.md`;
 
-  /** The single ```json block under 「出力契約(JSON schema)」. */
+  /** 「出力契約(JSON schema)」の下にある唯一の```jsonブロックをパースして返す。 */
   async function readSkillSchema(): Promise<unknown> {
     const markdown = await Bun.file(SKILL_PATH).text();
     const match = markdown.match(/```json\n([\s\S]*?)\n```/);

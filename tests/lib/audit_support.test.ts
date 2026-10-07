@@ -12,7 +12,7 @@ import {
 
 describe("formatJstDate", () => {
   test("formats the JST calendar date", () => {
-    // 2026-09-21T15:00:00Z is 2026-09-22 00:00 JST.
+    // 2026-09-21T15:00:00ZはJSTで2026-09-22 00:00。
     expect(formatJstDate(new Date("2026-09-21T15:00:00Z"))).toBe("2026-09-22");
   });
 });
@@ -86,12 +86,9 @@ describe("computeAuditPeriod", () => {
   });
 
   test("clamps the start to max_lookback_days and reports the gap", () => {
-    // NOTE: the brief's Step-1 example expected 59 here, but the floor
-    // (end - 28 days = 2026-08-30T15:00:00Z) minus last
-    // (2026-07-01T15:00:00Z) is an exact 60-day span regardless of
-    // ceil/floor rounding — 59 does not match the brief's own Step-3
-    // algorithm for these inputs. Corrected to 60; flagged to the
-    // controller in the task report.
+    // 下限(終了 - 28日 = 2026-08-30T15:00:00Z)から
+    // 前回の終了(2026-07-01T15:00:00Z)までは、
+    // 切り上げでも切り捨てでもちょうど60日になる。
     const last = new Date("2026-07-01T15:00:00Z");
     const period = computeAuditPeriod({
       now: NOW,

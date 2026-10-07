@@ -142,8 +142,8 @@ describe("assertBranchName", () => {
 
 describe("TERMINAL_WORK_ITEM_STATUSES", () => {
   test("treats rereview_requested as terminal (pr_fix's success end state)", () => {
-    // poll_issues's reconcile only inspects non-terminal rows; a missing
-    // entry here made it fail a finished pr_fix row as an orphan.
+    // `poll_issues`の照合は終端でない行だけを調べる。
+    // ここに含めないと、完了した`pr_fix`の行を孤立した行として失敗にしてしまう。
     expect(TERMINAL_WORK_ITEM_STATUSES).toContain("rereview_requested");
   });
 });

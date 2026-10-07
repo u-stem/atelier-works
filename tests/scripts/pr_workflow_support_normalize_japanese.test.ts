@@ -1,8 +1,7 @@
-// Tests for f/factory/steps/pr_workflow_support.ts's normalizeJapaneseText
-// (team-lead decision, 2026-09-26: this project's Japanese writing-style
-// rule — CLAUDE.md §3 — forbids a half-width space between ASCII and
-// Japanese text; applied to Claude's own structured-output prose at render
-// time in renderInlineComment/renderReviewSummary/renderFixReply).
+// `pr_workflow_support.ts`の`normalizeJapaneseText`のテスト。
+// このプロジェクトの日本語の書式では、英数字と日本語の間に半角スペースを入れない。
+// `renderInlineComment`、`renderReviewSummary`、`renderFixReply`は、
+// Claudeが構造化出力で返した文章を描画するときにこの関数で整える。
 
 import { describe, expect, test } from "bun:test";
 import { normalizeJapaneseText } from "../../f/factory/steps/pr_workflow_support.ts";

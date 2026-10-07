@@ -1,6 +1,6 @@
-// Tests for f/factory/steps/pr_workflow_support.ts's decideFixFinishAction,
-// deriveFallbackReviewers, evaluateRerouteGuard, renderFixReply, and
-// shouldAdvanceWatermarks (used by pr_fix_finish.ts).
+// `pr_fix_finish.ts`が使う`pr_workflow_support.ts`の`decideFixFinishAction`、
+// `deriveFallbackReviewers`、`evaluateRerouteGuard`、`renderFixReply`、
+// `shouldAdvanceWatermarks`のテスト。
 
 import { describe, expect, test } from "bun:test";
 import type { FixReply } from "../../f/factory/lib/types.ts";
@@ -92,11 +92,10 @@ describe("evaluateRerouteGuard", () => {
 });
 
 describe("shouldAdvanceWatermarks", () => {
-  // team-lead fix (2026-09-26): watermarks used to advance unconditionally
-  // before the outcome was known, so a later throw (e.g. `git commit`
-  // failing) left processed watermarks past feedback that was never
-  // actually consumed — a subsequent retry_work_item then found nothing to
-  // collect. Only the two kinds below should advance the watermarks.
+  // 結果が分かる前に既読位置(watermark)を進めると、後で例外が起きたとき
+  // (`git commit`の失敗など)に、処理していないフィードバックまで既読になる。
+  // すると`retry_work_item`で再試行しても集めるものが無くなる。
+  // 既読位置を進めてよいのは、以下の2種類だけである。
   test("advances watermarks when the requirements_gap reroute succeeded", () => {
     expect(shouldAdvanceWatermarks("requirements_gap_reroute_success")).toBe(
       true,
@@ -148,18 +147,16 @@ function fixReply(overrides: Partial<FixReply> = {}): FixReply {
 }
 
 describe("renderFixReply", () => {
-  // team-lead decision (2026-09-26): every factory post's first line names
-  // the job that wrote it, since the factory posts under the operator's own
-  // GitHub account.
+  // factoryは運用者自身のGitHubアカウントで投稿するため、
+  // 投稿の1行目には書いたジョブの名前を入れる。
   test("starts with the pr_fix role tag", () => {
     expect(renderFixReply(fixReply(), "abc1234ef")).toStartWith(
       "[pr_fix 自動返信]\n",
     );
   });
 
-  // team-lead decision (2026-09-26): renderFixReply normalizes the body's
-  // Japanese writing style (normalizeJapaneseText) — the half-width space
-  // between the ASCII "null" and the following katakana is removed.
+  // `renderFixReply`は本文の日本語の書式を`normalizeJapaneseText`で整える。
+  // ASCIIの"null"と続くカタカナの間の半角スペースが消える。
   test("includes the reply body, writing-style normalized", () => {
     expect(renderFixReply(fixReply(), "abc1234ef")).toContain(
       "nullチェックを追加しました",
@@ -176,8 +173,7 @@ describe("renderFixReply", () => {
     expect(body.split("\n").at(-1)).toBe("対応: 見送り");
   });
 
-  // team-lead fix: nothing_to_commit still posts queued replies, with no
-  // commit sha to point to.
+  // `nothing_to_commit`でも、溜めた返信は投稿する。このとき示すコミットのshaは無い。
   test("ends with 変更なし when fixed but there is no sha (nothing to commit)", () => {
     const body = renderFixReply(fixReply({ decision: "fixed" }), null);
     expect(body.split("\n").at(-1)).toBe("対応: 変更なし");
@@ -188,10 +184,9 @@ describe("renderFixReply", () => {
     expect(body.split("\n").at(-1)).toBe("対応: 見送り");
   });
 
-  // User decision (2026-09-26): a finding that is valid but out of this
-  // PR's scope gets a distinct rendering — the proposed Issue's title and a
-  // preview of its body, ending with a dedicated disposition line instead
-  // of a commit sha or 見送り.
+  // 妥当だがこのPRの範囲外の指摘は、別の形で描画する。
+  // 提案するIssueのタイトルと本文の抜粋を載せ、最終行はコミットのshaや「見送り」ではなく、
+  // この場合専用の対応の行にする。
   describe("propose_issue", () => {
     const proposeReply = fixReply({
       decision: "propose_issue",

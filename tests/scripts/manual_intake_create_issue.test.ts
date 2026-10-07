@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { buildManualIntakeIssueBody } from "../../f/factory/steps/manual_intake_create_issue.ts";
 
-// isRepoAllowed moved to f/factory/lib/config.ts (promoted by the lib-core
-// owner) and is covered there by tests/lib/config.test.ts.
+// `isRepoAllowed`は`f/factory/lib/config.ts`にあり、
+// テストは`tests/lib/config.test.ts`にある。
 
 describe("buildManualIntakeIssueBody", () => {
   test("renders the 目的 section from body", () => {

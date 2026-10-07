@@ -1,5 +1,5 @@
-// Pure decision logic tests for poll_issues.ts's reconcile-all-kinds path
-// (f/factory/lib/poll_support.ts) — spec-cycle2.md §3 M5, §7 items 6/7/12.
+// `poll_issues.ts`が全種別の作業項目を照合する経路で使う、判断の純粋関数
+// (`f/factory/lib/poll_support.ts`)のテスト。
 
 import { describe, expect, test } from "bun:test";
 import {
@@ -9,8 +9,8 @@ import {
 } from "../../f/factory/lib/poll_support.ts";
 
 const NOW = new Date("2026-09-26T12:00:00.000Z");
-const RECENT = new Date("2026-09-26T11:59:00.000Z"); // 1 min ago
-const STALE = new Date("2026-09-26T11:45:00.000Z"); // 15 min ago
+const RECENT = new Date("2026-09-26T11:59:00.000Z"); // 1分前
+const STALE = new Date("2026-09-26T11:45:00.000Z"); // 15分前
 
 describe("decideReconcileAction — issue kind", () => {
   test("cancels when the issue is closed", () => {

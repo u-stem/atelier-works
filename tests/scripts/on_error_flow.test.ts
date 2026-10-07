@@ -1,13 +1,11 @@
-// Tests for on_error_flow.ts's pure functions:
-// - shouldMarkFailed: whether a stale failure_module run (superseded by a
-//   newer run's setFlowJobId) is entitled to mark the work item `failed`.
-// - failureWorkItemRef: the FK-safe work_item_id for recordFailure, given
-//   a (possibly null) getWorkItem lookup result.
-// labelsToRemove / shouldSetNeedsHumanLabel were removed by the 2026-09-27
-// PR label cleanup: every kind's trigger label is consumed at claim time
-// (matching the Issue-side policy from the prior PR), so there is no label
-// to remove and no state label to set on a `failed` transition any more.
-// See the devil-advocate notes above each function in on_error_flow.ts.
+// `on_error_flow.ts`の純粋関数のテスト。
+// - `shouldMarkFailed`: 古い`failure_module`の実行が、
+//   作業項目を`failed`にしてよいかを判定する。
+//   古い実行とは、新しい実行の`setFlowJobId`で置き換わったものを指す。
+// - `failureWorkItemRef`: `getWorkItem`の結果(nullのこともある)から、
+//   外部キー制約に反しない`recordFailure`用の`work_item_id`を返す。
+// トリガーラベルはどの種別も取得時に消費するため、`failed`への遷移で
+// 外すラベルも付ける状態ラベルも無い。
 
 import { describe, expect, test } from "bun:test";
 import {

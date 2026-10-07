@@ -66,9 +66,10 @@ import {
 
 type FakeCall = { text: string; values: unknown[] };
 
-/** A fake SqlClient that records every tagged-template call (joined SQL
- * text + interpolated values) and returns one canned row set per call, in
- * call order. */
+/**
+ * タグ付きテンプレートの呼び出し(連結したSQL文と埋め込み値)をすべて記録し、
+ * 呼び出し1回ごとに用意した行の集合を順に返す偽の`SqlClient`。
+ */
 function createFakeSqlClient(responses: SqlRow[][] = []): {
   sql: SqlClient;
   calls: FakeCall[];
@@ -186,7 +187,7 @@ describe("insertWorkItem", () => {
 
   test("casts nullable non-text columns (pr_number/parent_work_item_id) to their real type — a null value otherwise binds as text and fails against the integer/bigint column", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
-    // NEW_WORK_ITEM's pr_number and parent_work_item_id are both null.
+    // `NEW_WORK_ITEM`の`pr_number`と`parent_work_item_id`はどちらもnull。
     await insertWorkItem(NEW_WORK_ITEM, sql);
     const text = calls[0]?.text ?? "";
     expect(text).toContain("::integer");
@@ -1130,9 +1131,8 @@ describe("decideIssueProposal", () => {
     expect(updated).toBe(true);
   });
 
-  // team-lead fix round, [MUST] #2: guarded by `WHERE status = 'pending'` so
-  // it doubles as an optimistic lock — issue_proposal_apply.ts relies on
-  // this to tell a fresh decision from a retry.
+  // `WHERE status = 'pending'`の条件は楽観ロックを兼ねる。
+  // `issue_proposal_apply.ts`は、これで新しい判断と再試行を区別している。
   test("guards the update with WHERE status = 'pending'", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 3 }]]);
     await decideIssueProposal(
@@ -1341,8 +1341,8 @@ describe("hasPriorReview", () => {
 });
 
 // ---------------------------------------------------------------------------
-// approval_requests (generalized approval waiting) — see
-// migrations/datatable/main/20260927120000_approval_requests.up.sql.
+// 承認待ちを種別によらず扱う`approval_requests`の操作。
+// テーブル定義は`migrations/datatable/main/20260927120000_approval_requests.up.sql`。
 // ---------------------------------------------------------------------------
 
 const APPROVAL_REQUEST_ROW: SqlRow = {
@@ -1410,8 +1410,8 @@ describe("insertApprovalRequest", () => {
 
   test("is idempotent: looks up the existing row when the conflict fires", async () => {
     const { sql, calls } = createFakeSqlClient([
-      [], // INSERT ... ON CONFLICT DO NOTHING returns no row
-      [APPROVAL_REQUEST_ROW], // findApprovalRequestBySubject fallback lookup
+      [], // `INSERT ... ON CONFLICT DO NOTHING`は行を返さない
+      [APPROVAL_REQUEST_ROW], // `findApprovalRequestBySubject`で既存の行を引き直す
     ]);
     const id = await insertApprovalRequest(
       {
@@ -1590,7 +1590,7 @@ describe("getRequirementDraft", () => {
 });
 
 // ---------------------------------------------------------------------------
-// M5 promotions (spec-cycle2.md M5, promoted from f/factory/lib/poll_support.ts)
+// 作業項目の進行状態の更新と、ポーリングが使う参照
 // ---------------------------------------------------------------------------
 
 describe("setFlowJobId", () => {

@@ -1,8 +1,7 @@
-// Tests for poll_issues.ts's jobStateFromJob — the pure decision behind
-// getJobState's switch from wmill.getResultMaybe to
-// wmill.JobService.getJob (see the devil-advocate fatal-fix docstring
-// above jobStateFromJob in poll_issues.ts for the E2E reproduction this
-// fixes).
+// `poll_issues.ts`の`jobStateFromJob`のテスト。
+// `getJobState`がジョブの状態を`wmill.JobService.getJob`で読むときの
+// 判断を担う。
+// `wmill.getResultMaybe`を使わない理由は`jobStateFromJob`のコメントを参照。
 
 import { describe, expect, test } from "bun:test";
 import { jobStateFromJob } from "../../f/factory/poll_issues.ts";

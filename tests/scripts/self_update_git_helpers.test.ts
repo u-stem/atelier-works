@@ -1,7 +1,7 @@
-// Tests for self_update.ts's private-ish git helpers (`readSelfCloneHeadSha`,
-// `readSelfCloneBranch`, `listAllPaths`, `diffPaths`) — I/O wiring, tested
-// the same way poll_issues.ts's own `readRepoHeadSha` is (tests/scripts/
-// poll_issues_read_repo_head_sha.test.ts).
+// `self_update.ts`の内部向けのgit補助関数のテスト。
+// 対象は`readSelfCloneHeadSha`、`readSelfCloneBranch`、`listAllPaths`、`diffPaths`。
+// 入出力のつなぎ込みを、`poll_issues.ts`の`readRepoHeadSha`と同じ方法で確かめる
+// (`tests/scripts/poll_issues_read_repo_head_sha.test.ts`)。
 
 import { describe, expect, test } from "bun:test";
 import {

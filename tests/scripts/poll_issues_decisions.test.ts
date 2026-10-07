@@ -1,5 +1,5 @@
-// Pure decision logic tests for poll_issues.ts's claim path
-// (f/factory/lib/poll_support.ts) — spec-cycle2.md §3 M5.
+// `poll_issues.ts`がIssueを取得する経路で使う、判断の純粋関数
+// (`f/factory/lib/poll_support.ts`)のテスト。
 
 import { describe, expect, test } from "bun:test";
 import {

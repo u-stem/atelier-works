@@ -7,8 +7,10 @@ const FLOW = readFileSync(
   "utf8",
 );
 
-/** The text of one module, from its `- id:` line to the next module or
- * the failure module. */
+/**
+ * 1つのモジュールのテキストを返す。
+ * 範囲は`- id:`の行から、次のモジュールか`failure_module`の手前まで。
+ */
 function moduleBlock(id: string): string {
   const start = FLOW.indexOf(`- id: ${id}\n`);
   const rest = FLOW.slice(start + 1);
@@ -16,7 +18,7 @@ function moduleBlock(id: string): string {
   return next === -1 ? rest : rest.slice(0, next);
 }
 
-/** The input_transforms keys of one module, sorted. */
+/** 1つのモジュールの`input_transforms`のキーを並べ替えて返す。 */
 function inputKeys(id: string): string[] {
   return [...moduleBlock(id).matchAll(/^ {10}(\w+):$/gm)]
     .map((m) => m[1] ?? "")

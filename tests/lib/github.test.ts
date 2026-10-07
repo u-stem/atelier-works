@@ -474,8 +474,8 @@ describe("getIssueTimeline", () => {
 describe("claimIssue", () => {
   test("succeeds when the re-fetched issue is assigned and the trigger label is gone", async () => {
     const fake = createFakeCommandRunner([
-      ok(ghApiStdout(200, {})), // POST assignees
-      ok(ghApiStdout(200, {})), // DELETE trigger label
+      ok(ghApiStdout(200, {})), // POST: 担当者を追加する
+      ok(ghApiStdout(200, {})), // DELETE: トリガーラベルを外す
       ghApiOk({
         number: 5,
         title: "t",
@@ -570,8 +570,8 @@ describe("claimIssue", () => {
 describe("commentIssue", () => {
   test("posts a new comment with a marker when none exists yet", async () => {
     const fake = createFakeCommandRunner([
-      ghApiOk([]), // GET existing comments: none
-      ghApiOk({ id: 123 }), // POST comment
+      ghApiOk([]), // GET: 既存のコメントは無い
+      ghApiOk({ id: 123 }), // POST: コメントを投稿する
     ]);
     const result = await commentIssue(
       { run: fake.run, ghToken: "tok" },
@@ -618,7 +618,7 @@ describe("commentIssue", () => {
           user: { login: "someone-else" },
         },
       ]),
-      ghApiOk({ id: 200 }), // POST comment — must still be called
+      ghApiOk({ id: 200 }), // POST: この場合も投稿は呼ばれる
     ]);
     const result = await commentIssue(
       { run: fake.run, ghToken: "tok" },
@@ -964,7 +964,7 @@ describe("searchPrs", () => {
     fixLabel: "factory:fix",
   };
 
-  // 4 queries: review-requested, assignee, review label, fix label.
+  // クエリは4本: レビュー依頼、担当者、レビューラベル、修正ラベル。
   const QUERY_COUNT = 4;
 
   function emptyResponses(count: number): CommandResult[] {
@@ -983,14 +983,13 @@ describe("searchPrs", () => {
     };
   }
 
-  // GitHub's /search/issues does not support parenthesized OR grouping
-  // (confirmed empirically: `(review-requested:X OR assignee:X OR
-  // label:Y)` always returned 0 results, while each qualifier alone
-  // matched) — so searchPrs issues one query per qualifier and merges them:
-  // review-requested, assignee, review label, fix label (2026-09-27 PR
-  // label cleanup: no more wip/state labels — see searchPrs's doc comment;
-  // a PR whose trigger label was already consumed is rediscovered by
-  // poll_prs.ts's listTrackedPrs instead, not by this search).
+  // GitHubの`/search/issues`は括弧でまとめたORに対応しない。
+  // 実際に`(review-requested:X OR assignee:X OR label:Y)`は常に0件を返し、
+  // 修飾子を1つずつ指定すると一致した。
+  // そのため`searchPrs`は修飾子ごとに1本ずつ問い合わせて結果をまとめる。
+  // 対象はレビュー依頼、担当者、レビューラベル、修正ラベルの4つ。
+  // トリガーラベルを消費済みのPRは、この検索ではなく
+  // `poll_prs.ts`の`listTrackedPrs`が拾い直す。
 
   test("issues one query per qualifier — review-requested, assignee, review label, fix label — instead of one OR-grouped query", async () => {
     const fake = createFakeCommandRunner(emptyResponses(QUERY_COUNT));
@@ -1037,7 +1036,7 @@ describe("searchPrs", () => {
   test("requests per_page=100 on every query", async () => {
     const fake = createFakeCommandRunner(emptyResponses(QUERY_COUNT));
     await searchPrs({ run: fake.run, ghToken: "tok" }, SEARCH_PRS_OPTS);
-    expect(fake.calls).toHaveLength(QUERY_COUNT); // all canned responses consumed
+    expect(fake.calls).toHaveLength(QUERY_COUNT); // 用意した応答をすべて消費した
     for (const call of fake.calls) {
       expect(call.argv.join(" ")).toContain("per_page=100");
     }
@@ -1045,16 +1044,16 @@ describe("searchPrs", () => {
 
   test("de-duplicates by PR id when the same PR matches more than one query", async () => {
     const fake = createFakeCommandRunner([
-      ghApiOk({ items: [prItem(1, 10)] }), // review-requested
-      ghApiOk({ items: [prItem(1, 10)] }), // assignee — same PR again
-      ghApiOk({ items: [] }), // review label
-      ghApiOk({ items: [] }), // fix label
+      ghApiOk({ items: [prItem(1, 10)] }), // レビュー依頼
+      ghApiOk({ items: [prItem(1, 10)] }), // 担当者(同じPRがもう一度一致する)
+      ghApiOk({ items: [] }), // レビューラベル
+      ghApiOk({ items: [] }), // 修正ラベル
     ]);
     const items = await searchPrs(
       { run: fake.run, ghToken: "tok" },
       SEARCH_PRS_OPTS,
     );
-    expect(fake.calls).toHaveLength(QUERY_COUNT); // all canned responses consumed
+    expect(fake.calls).toHaveLength(QUERY_COUNT); // 用意した応答をすべて消費した
     expect(items.map((item) => item.number)).toEqual([10]);
   });
 
@@ -1090,7 +1089,7 @@ describe("searchPrs", () => {
       { run: fake.run, ghToken: "tok" },
       SEARCH_PRS_OPTS,
     );
-    expect(fake.calls).toHaveLength(QUERY_COUNT + 1); // 2 pages of query 1 + the rest
+    expect(fake.calls).toHaveLength(QUERY_COUNT + 1); // 1本目のクエリの2ページ分と残りのクエリ
     expect(items.map((item) => item.number)).toEqual([10, 11]);
   });
 });

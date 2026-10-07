@@ -8,8 +8,10 @@ import {
   parseFactoryConfig,
 } from "../../f/factory/lib/config.ts";
 
-/** A resource value shaped like the resource created before spec-cycle2.md
- * §7 item 10 — none of the 9 new fields are present. */
+/**
+ * 9つの設定項目を追加する前に作られたリソースと同じ形の値。
+ * 追加した項目をどれも含まない。
+ */
 const LEGACY_RAW_CONFIG = {
   owners: [{ name: "octo-owner", kind: "user" }],
   trigger_label: "factory",

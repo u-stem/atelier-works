@@ -1,7 +1,5 @@
-// Test for poll_issues.ts's readRepoHeadSha (`git rev-parse HEAD` for the
-// self clone, used by checkDeployedSha). Relocated here from
-// f/factory/lib/poll_support.ts, which is pure-decision-functions-only —
-// see poll_support.ts's header comment.
+// `poll_issues.ts`の`readRepoHeadSha`のテスト。
+// self cloneで`git rev-parse HEAD`を実行し、`checkDeployedSha`が使う。
 
 import { describe, expect, test } from "bun:test";
 import { readRepoHeadSha } from "../../f/factory/poll_issues.ts";

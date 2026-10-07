@@ -1,6 +1,5 @@
-// Tests for f/factory/steps/pr_workflow_support.ts's selectNewReviews,
-// selectNewReviewComments, selectNewIssueComments, and decideCollectOutcome
-// (used by pr_fix_collect.ts).
+// `pr_fix_collect.ts`が使う`pr_workflow_support.ts`の`selectNewReviews`、
+// `selectNewReviewComments`、`selectNewIssueComments`、`decideCollectOutcome`のテスト。
 
 import { describe, expect, test } from "bun:test";
 import {
@@ -175,10 +174,9 @@ describe("selectNewReviewComments", () => {
 });
 
 describe("selectNewIssueComments", () => {
-  // User decision (2026-09-26): pr_fix has no comment-based trigger of its
-  // own (it starts only via the fix_label) — a comment written before the
-  // label is added is plain feedback like any other human comment, verbatim,
-  // even one that happens to look like the old `/factory fix` command.
+  // `pr_fix`はコメントでは起動せず、`fix_label`でだけ始まる。
+  // そのためラベルを付ける前のコメントは、以前の`/factory fix`コマンドに見えるものでも、
+  // 他の人のコメントと同じく、そのままの文面のフィードバックとして扱う。
   test("keeps a comment that looks like the old trigger command as plain feedback", () => {
     const { items } = selectNewIssueComments(
       [

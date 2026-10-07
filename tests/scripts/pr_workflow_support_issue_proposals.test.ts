@@ -1,9 +1,8 @@
-// Tests for f/factory/steps/pr_workflow_support.ts's `propose_issue` pure
-// decision helpers (user decision, 2026-09-26): selectProposeIssueReplies /
-// matchReviewThreadForComment (pr_fix_finish.ts), and
-// buildIssueProposalReason / buildIssueProposalBody /
-// renderIssueProposalApprovedReply / renderIssueProposalRejectedReply /
-// decidePostProposalStatus (issue_proposal_apply.ts).
+// `pr_workflow_support.ts`の、`propose_issue`を扱う純粋関数のテスト。
+// `pr_fix_finish.ts`が使う`selectProposeIssueReplies`と`matchReviewThreadForComment`、
+// `issue_proposal_apply.ts`が使う`buildIssueProposalReason`、`buildIssueProposalBody`、
+// `renderIssueProposalApprovedReply`、`renderIssueProposalRejectedReply`、
+// `decidePostProposalStatus`を確かめる。
 
 import { describe, expect, test } from "bun:test";
 import type { ReviewThread } from "../../f/factory/lib/github.ts";

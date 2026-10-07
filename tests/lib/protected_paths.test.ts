@@ -6,10 +6,10 @@ import {
   matchesForbiddenPath,
   matchesImplementProtectedPath,
 } from "../../f/factory/lib/protected_paths.ts";
-// Namespace import (not a renamed named import) so the pre-commit
-// no-type-assertions lint's token heuristic — which special-cases
-// `import * as name` but not `{ name as alias }` — does not false-positive
-// on this `as`.
+// 名前付きインポートの別名ではなく名前空間インポートにしている。
+// pre-commitの`as`禁止検査はトークン単位のヒューリスティックで、
+// `import * as name`は例外扱いするが`{ name as alias }`は扱わないため、
+// 別名にするとこの`as`を誤検知する。
 import * as prWorkflowSupport from "../../f/factory/steps/pr_workflow_support.ts";
 
 describe("IMPLEMENT_PROTECTED_PATH_PREFIXES", () => {

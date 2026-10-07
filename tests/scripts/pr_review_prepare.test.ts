@@ -1,6 +1,6 @@
-// Tests for f/factory/steps/pr_workflow_support.ts's decideReviewPrepare
-// (used by pr_review_prepare.ts), and for pr_review_prepare.ts's own
-// buildReviewWorktreeDir (also reused by cleanup_workspaces.ts, M7).
+// `pr_review_prepare.ts`が使う`pr_workflow_support.ts`の`decideReviewPrepare`と、
+// `pr_review_prepare.ts`自身の`buildReviewWorktreeDir`のテスト。
+// `buildReviewWorktreeDir`は`cleanup_workspaces.ts`も使う。
 
 import { describe, expect, test } from "bun:test";
 import { buildReviewWorktreeDir } from "../../f/factory/steps/pr_review_prepare.ts";
