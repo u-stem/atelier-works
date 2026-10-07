@@ -21,6 +21,7 @@ import {
   getIssue,
   getViewer,
   gitIdentityForViewer,
+  type Issue,
   type PullRequestRef,
   updatePullRequest,
 } from "../lib/github.ts";
@@ -58,6 +59,7 @@ import {
 import {
   buildImplementCommitMessage,
   buildImplementPrBody,
+  issueChangedSinceIntake,
   neutralizeIssueRefs,
 } from "../lib/implement_support.ts";
 import { logger, maskSecrets } from "../lib/log.ts";
@@ -350,10 +352,12 @@ export async function main(
     (context !== null && context.existing_pr_number !== null) ||
     recordedPrUrl !== null;
 
+  // openの再確認で取得したIssueを、取り込み時点との比較にも使う(追加のAPI呼び出しをしない)。
+  let issueUpdatedAfterIntake = false;
   if (context !== null) {
-    let issueState: string;
+    let issue: Issue;
     try {
-      issueState = (await getIssue(client, owner, repo, issueNumber)).state;
+      issue = await getIssue(client, owner, repo, issueNumber);
     } catch (err) {
       let notes: string[] = [];
       if (shouldPreserveBeforeFailing(action)) {
@@ -373,8 +377,9 @@ export async function main(
         }),
       );
     }
-    if (issueState !== "open")
+    if (issue.state !== "open")
       return cancel("issue closed during implementation");
+    issueUpdatedAfterIntake = issueChangedSinceIntake(workItem, issue);
   }
 
   if (action.kind === "needs_human") {
@@ -554,6 +559,7 @@ export async function main(
         issueNumber: ctx.issue_number,
         changedPaths: loop.changed_paths,
         deployChecklist: ctx.is_factory_repo,
+        issueUpdatedAfterIntake,
       });
       let pr: PullRequestRef;
       if (existing === null) {

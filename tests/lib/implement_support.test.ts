@@ -12,8 +12,10 @@ import {
   hasActivePrRun,
   IMPLEMENT_CHECK_SKIP_REASONS,
   IMPLEMENT_CLAUDE_OUTCOMES,
+  ISSUE_UPDATED_AFTER_INTAKE_NOTE,
   isImplementClaudeOutput,
   isRequirementsApprovedForAttempt,
+  issueChangedSinceIntake,
   NO_ACCEPTANCE_CRITERIA_NOTE,
   neutralizeIssueRefs,
   roundOutcomeForExit,
@@ -513,6 +515,7 @@ const PR_BODY_INPUT = {
   issueNumber: 42,
   changedPaths: ["src/export.ts", "tests/export.test.ts"],
   deployChecklist: true,
+  issueUpdatedAfterIntake: false,
 };
 
 describe("extractAcceptanceCriteria", () => {
@@ -738,6 +741,20 @@ describe("buildImplementPrBody", () => {
     });
     expect(body).not.toContain("wmill sync push");
   });
+
+  test("notes an Issue updated after intake just before the Console link", () => {
+    expect(
+      buildImplementPrBody({ ...PR_BODY_INPUT, issueUpdatedAfterIntake: true }),
+    ).toContain(
+      `- ${ISSUE_UPDATED_AFTER_INTAKE_NOTE}\n- 要件定義(Console): http://127.0.0.1:8080/apps/get/f/factory/factory_console#requirements/7`,
+    );
+  });
+
+  test("omits the note when the Issue is unchanged since intake", () => {
+    expect(buildImplementPrBody(PR_BODY_INPUT)).not.toContain(
+      ISSUE_UPDATED_AFTER_INTAKE_NOTE,
+    );
+  });
 });
 
 const CONTINUE_STATE = {
@@ -936,6 +953,72 @@ describe("hasActivePrRun", () => {
   test("is false for an issue work item", () => {
     expect(hasActivePrRun({ kind: "issue", status: "implementing" })).toBe(
       false,
+    );
+  });
+});
+
+describe("issueChangedSinceIntake", () => {
+  const SNAPSHOT = { title: "CSV出力", body: "CSVで出力したい" };
+
+  test("is false when the live Issue matches the snapshot", () => {
+    expect(
+      issueChangedSinceIntake(SNAPSHOT, {
+        title: "CSV出力",
+        body: "CSVで出力したい",
+      }),
+    ).toBe(false);
+  });
+
+  test("is true when the title changed", () => {
+    expect(
+      issueChangedSinceIntake(SNAPSHOT, {
+        title: "CSVとJSON出力",
+        body: "CSVで出力したい",
+      }),
+    ).toBe(true);
+  });
+
+  test("is true when the body changed", () => {
+    expect(
+      issueChangedSinceIntake(SNAPSHOT, {
+        title: "CSV出力",
+        body: "CSVで出力したい\n追加の指示",
+      }),
+    ).toBe(true);
+  });
+
+  test("ignores a CRLF-only difference", () => {
+    expect(
+      issueChangedSinceIntake(
+        { title: "CSV出力", body: "一行目\n二行目" },
+        { title: "CSV出力", body: "一行目\r\n二行目" },
+      ),
+    ).toBe(false);
+  });
+
+  test("ignores surrounding whitespace", () => {
+    expect(
+      issueChangedSinceIntake(SNAPSHOT, {
+        title: "CSV出力",
+        body: "CSVで出力したい\n",
+      }),
+    ).toBe(false);
+  });
+
+  test("treats a missing snapshot body as empty", () => {
+    expect(
+      issueChangedSinceIntake(
+        { title: "CSV出力", body: null },
+        { title: "CSV出力", body: "" },
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("ISSUE_UPDATED_AFTER_INTAKE_NOTE", () => {
+  test("is one polite sentence", () => {
+    expect(ISSUE_UPDATED_AFTER_INTAKE_NOTE).toBe(
+      "この実装は要件定義を作ったときのIssueの内容に基づいており、その後にIssueの題名か本文が更新されています。",
     );
   });
 });

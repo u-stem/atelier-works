@@ -341,6 +341,30 @@ export function truncateCheckOutput(
 // buildImplementPrBody: PRテンプレートの各節をラウンドの結果で埋める
 // ---------------------------------------------------------------------------
 
+/** PR本文の「確認して欲しい点」に出す注記。Issueの取り込み後に題名か本文が変わったときだけ出す。 */
+export const ISSUE_UPDATED_AFTER_INTAKE_NOTE =
+  "この実装は要件定義を作ったときのIssueの内容に基づいており、その後にIssueの題名か本文が更新されています。";
+
+/** 改行コードを`\n`に揃え、前後の空白を除く。GitHubの編集画面は内容を変えずに改行コードを`\r\n`にすることがある。 */
+function normalizeIssueText(text: string | null): string {
+  return (text ?? "").replaceAll("\r\n", "\n").trim();
+}
+
+/**
+ * 取り込み時点のIssue(work_items.title / body。要件定義の生成に使った内容)と現在のIssueで、
+ * 題名か本文が違えばtrueを返す。実装のプロンプトは常に取り込み時点の内容を使い、
+ * この判定はPR本文に注記を足すためだけに使う。
+ */
+export function issueChangedSinceIntake(
+  snapshot: { readonly title: string | null; readonly body: string | null },
+  live: { readonly title: string; readonly body: string },
+): boolean {
+  return (
+    normalizeIssueText(snapshot.title) !== normalizeIssueText(live.title) ||
+    normalizeIssueText(snapshot.body) !== normalizeIssueText(live.body)
+  );
+}
+
 export const NO_ACCEPTANCE_CRITERIA_NOTE =
   "(要件定義に受入条件の節がありません)";
 
@@ -415,6 +439,8 @@ export type ImplementPrBodyInput = {
    * それ以外は「なし」にする。
    */
   readonly deployChecklist: boolean;
+  /** trueなら「確認して欲しい点」のConsoleリンクの直前にISSUE_UPDATED_AFTER_INTAKE_NOTEを出す。 */
+  readonly issueUpdatedAfterIntake: boolean;
 };
 
 /*
@@ -535,6 +561,7 @@ function renderChecks(checks: ImplementCheckSummary): string {
  * - 受入条件: 要件定義書の表
  * - 動作確認結果: 最後のラウンドの検証結果(実行しなかったときは「検査未実施」と理由)
  * - 確認して欲しい点: 保護対象の変更、レビュアーへの注記、
+ *   Issueの取り込み後の更新の注記(`issueUpdatedAfterIntake`のときだけ)、
  *   承認済みの要件定義を開くConsoleのリンク
  * - 関連リンク: `Closes #N`。PRの作業項目をIssueに結び付ける。
  *   `poll_prs.ts`の`extractLinkedIssueNumbers`はこの形を読む。
@@ -546,6 +573,9 @@ export function buildImplementPrBody(input: ImplementPrBodyInput): string {
   const attention = [
     ...input.protectedChanges.map((line) => `- ${sanitizePrLine(line)}`),
     ...input.notesForReviewer.map((line) => `- ${sanitizePrLine(line)}`),
+    ...(input.issueUpdatedAfterIntake
+      ? [`- ${ISSUE_UPDATED_AFTER_INTAKE_NOTE}`]
+      : []),
     `- 要件定義(Console): ${input.requirementsConsoleUrl}`,
   ];
   return [
