@@ -14,6 +14,7 @@ const INPUT: BuildImplementContextInput = {
     pr_url: null,
     title: "CSV出力",
     body: "CSVで出力したい",
+    issue_url: "https://github.com/acme/widgets/issues/7",
   },
   issueNumber: 7,
   issue: {
@@ -168,9 +169,41 @@ describe("buildImplementContext", () => {
     ).toBe("");
   });
 
-  test("still links the live Issue", () => {
-    expect(buildImplementContext(INPUT).issue_url).toBe(
-      "https://github.com/acme/widgets/issues/7",
-    );
+  test("links the Issue URL recorded at intake, not the live one", () => {
+    expect(
+      buildImplementContext({
+        ...INPUT,
+        issue: {
+          ...INPUT.issue,
+          htmlUrl: "https://github.com/acme/moved/issues/1",
+        },
+      }).issue_url,
+    ).toBe("https://github.com/acme/widgets/issues/7");
+  });
+
+  test("falls back to the live Issue URL when the snapshot has none", () => {
+    expect(
+      buildImplementContext({
+        ...INPUT,
+        workItem: { ...INPUT.workItem, issue_url: null },
+        issue: {
+          ...INPUT.issue,
+          htmlUrl: "https://github.com/acme/moved/issues/1",
+        },
+      }).issue_url,
+    ).toBe("https://github.com/acme/moved/issues/1");
+  });
+
+  test("falls back to the live Issue URL when the snapshot is empty", () => {
+    expect(
+      buildImplementContext({
+        ...INPUT,
+        workItem: { ...INPUT.workItem, issue_url: "" },
+        issue: {
+          ...INPUT.issue,
+          htmlUrl: "https://github.com/acme/moved/issues/1",
+        },
+      }).issue_url,
+    ).toBe("https://github.com/acme/moved/issues/1");
   });
 });

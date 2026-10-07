@@ -2,8 +2,8 @@
 // 承認時の前提がまだ成り立つかを確かめ、実装用のブランチとworktreeを用意して、
 // 後続ステップが使う`ImplementContext`を返す。
 // 最初にflow_job_idのリース(実装フローのルートジョブID)を取り、取れなければskipで終わる。
-// プロンプトに渡すIssueの題名と本文は作業項目の取り込み時点の内容で、
-// GitHubのIssueはopen判定とURLにだけ使う。
+// プロンプトに渡すIssueの題名・本文・URLは作業項目の取り込み時点の内容で、
+// GitHubのIssueはopen判定と、取り込み時点のURLが空のときのURLにだけ使う。
 
 import * as wmill from "windmill-client@1.817.0";
 import { buildConsoleUrl } from "../lib/approval_support.ts";
@@ -71,10 +71,20 @@ export type ImplementPrepareResult = {
 export type BuildImplementContextInput = {
   readonly workItem: Pick<
     WorkItem,
-    "id" | "owner" | "repo" | "attempt" | "pr_url" | "title" | "body"
+    | "id"
+    | "owner"
+    | "repo"
+    | "attempt"
+    | "pr_url"
+    | "title"
+    | "body"
+    | "issue_url"
   >;
   readonly issueNumber: number;
-  /** 現在のIssue。URLにだけ使う(題名と本文はworkItemの取り込み時点の値を使う)。 */
+  /**
+   * 現在のIssue。取り込み時点のURL(`workItem.issue_url`)が空のときのURLにだけ使う
+   * (題名と本文はworkItemの取り込み時点の値を使う)。
+   */
   readonly issue: Pick<Issue, "title" | "body" | "htmlUrl">;
   readonly draft: Pick<RequirementDraft, "markdown" | "diagrams" | "doc_dir">;
   readonly branch: string;
@@ -92,6 +102,7 @@ export type BuildImplementContextInput = {
 
 /**
  * 入力から`ImplementContext`を組み立てる。副作用は無い。
+ * Issueの題名・本文・URLは作業項目の取り込み時点の値を使い、URLが空のときだけ現在のIssueのURLを使う。
  * `has_previous_implementation`は準備時点の値で、
  * openなPRがある、PRのURLが記録済み、ブランチがbaseより進んでいる
  * (例: needs_humanで止まった実行が途中までpushした)のいずれかなら真になる。
@@ -104,7 +115,10 @@ export function buildImplementContext(
     owner: workItem.owner,
     repo: workItem.repo,
     issue_number: input.issueNumber,
-    issue_url: input.issue.htmlUrl,
+    issue_url:
+      workItem.issue_url !== null && workItem.issue_url.length > 0
+        ? workItem.issue_url
+        : input.issue.htmlUrl,
     issue_title: workItem.title ?? "",
     issue_body: workItem.body ?? "",
     branch: input.branch,
