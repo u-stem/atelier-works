@@ -1,17 +1,7 @@
-// Load and validate f/factory/factory_config (resource type c_factory_config,
-// see rt.d.ts's RT.CFactoryConfig and c_factory_config.resource-type.yaml).
-//
-// `getResource` is injected so tests never hit `wmill.getResource`. Callers
-// in Windmill scripts pass `() => wmill.getResource("f/factory/factory_config")`.
-//
-// Fields that have a `default:` in the resource type schema are filled in
-// when absent (this is what lets an existing remote resource created before
-// spec-cycle2.md §7 item 10 still validate: the 9 fields added there are all
-// optional with defaults, as are max_fix_changed_files / max_fix_diff_lines
-// added by the M6 security review). `owners`, `factory_repo`, and
-// `instance_name` have no schema default (they are instance-specific) and
-// are required. A present-but-wrong-shaped value is always a validation
-// error, defaulted or not.
+// リソース`f/factory/factory_config`(リソース型`c_factory_config`)を読み込んで検証する。
+// リソース型のスキーマで`default:`を持つ項目は、値が無ければ既定値で埋める。
+// 項目を後から足しても、
+// それより前に作った既存のリモートのリソースが検証を通るようにするため。
 
 import {
   type FactoryConfig,
@@ -40,13 +30,17 @@ const LABELER_ASSOCIATIONS: readonly LabelerAssociation[] = [
 ];
 const REVIEW_POST_MODES: readonly ReviewPostMode[] = ["comment_only", "gated"];
 const OWNER_KINDS = ["user", "org"];
-/** Shape a `check_commands_by_repo` key must normalize to — `owner/repo`,
- * no scheme/host, no extra slashes. See `checkCommandsByRepoField`. */
+/**
+ * `check_commands_by_repo`のキーを正規化した結果が従う形。
+ * スキームとホストを含まず、スラッシュが1つだけの`owner/repo`。
+ */
 const OWNER_SLASH_REPO = /^[^/\s]+\/[^/\s]+$/;
 
-/** Every FactoryConfig field that declares a `default:` in
- * c_factory_config.resource-type.yaml (everything except owners,
- * factory_repo, instance_name — see requiredStringField below). */
+/**
+ * `c_factory_config.resource-type.yaml`で`default:`を持つ`FactoryConfig`の項目。
+ * `owners`、`factory_repo`、`instance_name`はインスタンスごとに違うため既定値を持たず、
+ * 必須とする。
+ */
 type DefaultableField =
   | "trigger_label"
   | "allowed_labeler_associations"
@@ -82,8 +76,10 @@ type DefaultableField =
   | "implement_max_diff_lines"
   | "check_commands_by_repo";
 
-/** Defaults for every field in DefaultableField, typed against FactoryConfig
- * itself so each value is checked without a type assertion. */
+/**
+ * `DefaultableField`の各項目の既定値。
+ * 型アサーションなしで各値を検査できるよう、`FactoryConfig`そのものに対して型を付ける。
+ */
 const DEFAULTS: Pick<FactoryConfig, DefaultableField> = {
   trigger_label: "factory",
   allowed_labeler_associations: ["OWNER", "MEMBER", "COLLABORATOR"],
@@ -94,19 +90,16 @@ const DEFAULTS: Pick<FactoryConfig, DefaultableField> = {
   daily_budget_usd: 50,
   claude_timeout_sec: 1800,
   worktree_ttl_days: 7,
-  // New in the DB cleanup addition (2026-09-27): cleanup_db.ts's retention
-  // window for terminal work items (and everything cascading from them) vs.
-  // independent logs (job_failures / deployments / resolved notices).
+  // `cleanup_db.ts`の保持期間。前者は終了したwork item(とそこから連鎖して消える行)、
+  // 後者は独立したログ(`job_failures`、`deployments`、解決済みの`notices`)に使う。
   retention_work_items_days: 90,
   retention_logs_days: 30,
   factory_branch: "main",
   windmill_public_url: "http://127.0.0.1:8080",
-  // New in cycle 2 (spec-cycle2.md §7 item 10).
   review_label: "factory:review",
   fix_label: "factory:fix",
-  // 2026-09-27 policy: PR trigger labels are consumed at claim time (no
-  // wip/state labels), so DB-backed rediscovery (listTrackedPrs) needs its
-  // own retention window instead.
+  // PRのトリガーラベルは着手時に外し、作業中や状態を表すラベルも付けない。
+  // そのためDBからPRを再発見する`listTrackedPrs`に、追跡を続ける日数が別に要る。
   tracked_pr_days: 30,
   review_post_mode: "comment_only",
   max_fix_rounds: 3,
@@ -114,14 +107,14 @@ const DEFAULTS: Pick<FactoryConfig, DefaultableField> = {
   default_reviewers: [],
   repo_allowlist: [],
   diff_max_lines: 3000,
-  // New in the M6 security review: pr_fix_verify diff-size limits.
+  // `pr_fix_verify`が許す差分の大きさの上限。
   max_fix_changed_files: 30,
   max_fix_diff_lines: 1500,
-  // New in 工程5 (audit): bounds how far a first/recovered audit period can
-  // reach back when the previous report's end is older than this.
+  // 監査期間をさかのぼれる日数の上限。初回の監査と、前回のレポートの終端が
+  // これより古いときに使う。
   max_lookback_days: 28,
-  // New in 工程3 (implement flow, design §4). implement_enabled stays off
-  // until the e2e flips it on the remote resource.
+  // implementフローの設定。`implement_enabled`は既定で無効にし、
+  // リモートのリソースで有効にする。
   implement_enabled: false,
   implement_max_rounds: 5,
   implement_max_turns: 80,
@@ -160,8 +153,9 @@ function isReviewPostMode(value: unknown): value is ReviewPostMode {
   return isOneOf(value, REVIEW_POST_MODES);
 }
 
-/** Reads `raw[field]`, defaulting to `fallback` when absent; throws when
- * present but not a string. */
+/**
+ * `raw[field]`を返す。値が無ければ`fallback`を返し、文字列でなければ例外を投げる。
+ */
 function stringField(
   raw: Record<string, unknown>,
   field: string,
@@ -192,8 +186,9 @@ function numberField(
   return value;
 }
 
-/** Reads `raw[field]`, defaulting to `fallback` when absent; throws when
- * present but not a positive integer (whole number > 0). */
+/**
+ * `raw[field]`を返す。値が無ければ`fallback`を返し、正の整数でなければ例外を投げる。
+ */
 function positiveIntegerField(
   raw: Record<string, unknown>,
   field: string,
@@ -224,8 +219,9 @@ function stringArrayField(
   return value;
 }
 
-/** Reads `raw[field]`, defaulting to `fallback` when absent; throws when
- * present but not a boolean. */
+/**
+ * `raw[field]`を返す。値が無ければ`fallback`を返し、真偽値でなければ例外を投げる。
+ */
 function booleanField(
   raw: Record<string, unknown>,
   field: string,
@@ -241,17 +237,17 @@ function booleanField(
   return value;
 }
 
-/** Reads `raw.check_commands_by_repo` as a `{ [ownerSlashRepo]: string[] }`
- * record, defaulting to `fallback` when absent; throws when present but not
- * an object whose every value is an array of strings, or when a key does
- * not normalize (via `normalizeRepoUrl`) to `owner/repo` shape. The key
- * shape is checked fail-closed: `checkCommandsFor` only ever compares a key
- * against `owner/repo` (see its doc comment — unlike `isRepoAllowed`, it
- * does not accept a full URL there), so a URL-shaped key would validate
- * here yet never match there, silently falling back to
- * `allowed_check_commands` instead of surfacing the config mistake.
- * Rebuilds the record entry by entry so the result is typed without an
- * assertion. */
+/**
+ * `raw.check_commands_by_repo`を`{ [owner/repo]: string[] }`として返す。
+ * 値が無ければ`fallback`を返す。
+ * オブジェクトでないとき、値に文字列の配列でないものがあるとき、
+ * キーを`normalizeRepoUrl`で正規化しても`owner/repo`の形にならないときは例外を投げる。
+ * キーの形を厳しく検査するのは、
+ * `checkCommandsFor`がキーを`owner/repo`とだけ比べるためである。
+ * URLの形のキーを通すと、どのリポジトリにも一致せず、設定の誤りに気づかないまま
+ * `allowed_check_commands`が使われる。
+ * 型アサーションなしで型を付けるため、エントリーを1つずつ詰め直す。
+ */
 function checkCommandsByRepoField(
   raw: Record<string, unknown>,
   fallback: Record<string, string[]>,
@@ -283,7 +279,10 @@ function checkCommandsByRepoField(
   return result;
 }
 
-/** Reads a field with no schema default: throws when absent or malformed. */
+/**
+ * 既定値を持たない項目`raw[field]`を返す。
+ * 値が無いとき、空の文字列のとき、文字列でないときは例外を投げる。
+ */
 function requiredStringField(
   raw: Record<string, unknown>,
   field: string,
@@ -298,8 +297,9 @@ function requiredStringField(
 }
 
 /**
- * Validate the raw factory_config resource value and fill in defaults for
- * every field that declares one, producing a fully-populated FactoryConfig.
+ * `factory_config`リソースの生の値を検証し、
+ * 既定値を持つ項目を埋めた`FactoryConfig`を返す。
+ * 値があっても型が合わない項目は、既定値の有無によらず`ConfigValidationError`を投げる。
  */
 export function parseFactoryConfig(raw: unknown): FactoryConfig {
   if (!isRecord(raw)) {
@@ -465,9 +465,10 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
 }
 
 /**
- * Fetch and validate the factory_config resource.
- * @param getResource injected resource fetch, e.g.
- *   `() => wmill.getResource("f/factory/factory_config")`.
+ * `factory_config`リソースを取得して検証する。
+ * @param getResource リソースを取得する関数。
+ *   テストで`wmill.getResource`を呼ばないよう注入する。Windmillのスクリプトからは
+ *   `() => wmill.getResource("f/factory/factory_config")`を渡す。
  */
 export async function loadConfig(
   getResource: () => Promise<unknown>,
@@ -476,10 +477,11 @@ export async function loadConfig(
   return parseFactoryConfig(raw);
 }
 
-/** Normalizes a GitHub HTTPS clone URL for comparison: trims whitespace,
- * strips a trailing `.git`, strips trailing slashes, and lowercases the
- * result (GitHub owner/repo segments are case-insensitive). Shared by
- * `isRepoAllowed` here and `filterByRepoAllowlist` (poll_support.ts). */
+/**
+ * GitHubのHTTPSのclone URLを、比較用に正規化して返す。
+ * 前後の空白、末尾の`.git`、末尾のスラッシュを除き、小文字にする。
+ * GitHubのownerとrepoは大文字と小文字を区別しないため。
+ */
 export function normalizeRepoUrl(url: string): string {
   return url
     .trim()
@@ -489,23 +491,19 @@ export function normalizeRepoUrl(url: string): string {
 }
 
 /**
- * Whether `owner`/`repo` is allowed to be targeted by this factory instance.
+ * このFactoryのインスタンスが`owner`/`repo`を対象にしてよいかを返す。
  *
- * `config.factory_repo` is always allowed regardless of `owners` /
- * `repo_allowlist`: it is the repo the factory deploys itself from and
- * files its own audit-driven Issues into, so the self-improvement loop
- * (工程5 audit → Issue → requirements pipeline) must not depend on that
- * repo also being listed in `owners`/`repo_allowlist` (2026-09-28 fix —
- * previously a `factory_repo` left out of `repo_allowlist` silently lost
- * its `factory` trigger label, see issue_proposal_apply.ts's
- * `resolveFactoryLabel`).
+ * `config.factory_repo`は`owners`と`repo_allowlist`によらず常に許す。
+ * Factory自身をデプロイし、監査から起票するリポジトリであり、
+ * 監査からIssue、要件定義へとつながる自己改善の流れを、
+ * `owners`や`repo_allowlist`への記載に左右させないため
+ * (記載が漏れると、起票したIssueに`factory`ラベルが付かなくなる)。
  *
- * Otherwise, `owner` must be one of `config.owners` (case-insensitive, as
- * GitHub logins are), and when `config.repo_allowlist` is non-empty the
- * repo's HTTPS clone URL (with or without a trailing `.git`) must appear in
- * it (spec-cycle2.md §7 item 10: "repo_allowlist([] = owners 全体)").
- * Promoted from f/factory/steps/manual_intake_create_issue.ts's own copy —
- * that call site switches over on its owner's own schedule.
+ * それ以外は、`owner`が`config.owners`のいずれかに一致する必要がある
+ * (GitHubのログイン名と同じく大文字と小文字を区別しない)。
+ * `config.repo_allowlist`が空でなければ、さらにリポジトリのHTTPSのclone URL
+ * (末尾の`.git`の有無は問わない)がそこに含まれる必要がある。
+ * 空のときは`owners`のリポジトリをすべて許す。
  */
 export function isRepoAllowed(
   config: Pick<FactoryConfig, "owners" | "repo_allowlist" | "factory_repo">,
@@ -531,25 +529,12 @@ export function isRepoAllowed(
 }
 
 /**
- * The check commands the implement flow (工程3) runs for `owner`/`repo`:
- * the `check_commands_by_repo` entry whose key normalizes (via
- * `normalizeRepoUrl` — trim, drop a trailing `.git` / `/`, lowercase) to
- * `owner/repo`, else `allowed_check_commands`. An explicit `[]` entry is
- * honoured as "no checks for this repo" rather than falling through, so a
- * repo can opt out of a global command set.
- *
- * Keys are `owner/repo` — unlike `isRepoAllowed`, this does not also accept
- * a full URL (`https://github.com/owner/repo`); `checkCommandsByRepoField`
- * (config.ts) rejects a URL-shaped key at parse time rather than let it
- * silently fall through to `allowed_check_commands` here.
- */
-/**
- * The check commands the implement flow runs for `owner`/`repo`: ONLY the
- * repo's explicit `check_commands_by_repo` entry (same normalized key match
- * as checkCommandsFor), else `[]` — never `allowed_check_commands`. The
- * commands execute code Claude wrote (tests, sources) as root in the
- * worker, so each repository has to be opted in by name (docs/security.md
- * 工程3).
+ * implementフローが`owner`/`repo`に対して実行する検査コマンドを返す。
+ * そのリポジトリを明示した`check_commands_by_repo`のエントリーだけを使い
+ * (キーの照合は`checkCommandsFor`と同じ)、無ければ`[]`を返す。
+ * `allowed_check_commands`は決して使わない。
+ * 検査コマンドはClaudeが書いたコード(テストやソース)をworkerのrootで実行するため、
+ * リポジトリごとに名前を挙げて有効にさせる(docs/security.md)。
  */
 export function implementCheckCommandsFor(
   config: Pick<FactoryConfig, "check_commands_by_repo">,
@@ -565,6 +550,18 @@ export function implementCheckCommandsFor(
   return [];
 }
 
+/**
+ * `owner`/`repo`に対して実行する検査コマンドを返す。
+ * `check_commands_by_repo`のうち、キーを`normalizeRepoUrl`で正規化すると
+ * `owner/repo`に一致するエントリーを使い、無ければ`allowed_check_commands`を返す。
+ * 明示した`[]`のエントリーは「このリポジトリでは検査しない」として扱い、
+ * `allowed_check_commands`には進まない。
+ * リポジトリごとに全体の検査コマンドを外せるようにするため。
+ *
+ * キーは`owner/repo`の形だけを受け付け、`isRepoAllowed`と違って
+ * URL(`https://github.com/owner/repo`)は受け付けない。
+ * URLの形のキーは`checkCommandsByRepoField`が読み込み時に拒否する。
+ */
 export function checkCommandsFor(
   config: Pick<
     FactoryConfig,

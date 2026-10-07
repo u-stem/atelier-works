@@ -1,67 +1,8 @@
-// Clone / fetch / worktree management for target repositories and the
-// factory's own self clone (spec-cycle2.md §1 workspace.ts, §7 items 2 and
-// 9). All subprocess execution goes through the injected `run`
-// (`CommandRunner`) — nothing here spawns `Bun.spawn` directly except the
-// default `runCommand` implementation, so every function is testable with a
-// fake runner.
-//
-// `CommandRunner` / `CommandResult` are defined here (not in types.ts,
-// which predates this module) and re-exported for use by github.ts and
-// claude.ts, which shell out the same way.
-//
-// Security hardening (post-M4 security-audit fixes):
-// - Every git invocation goes through `buildGitArgv`, which resets
-//   `credential.helper` (`-c credential.helper=`, clearing any
-//   system/global helper list) and disables hooks/fsmonitor
-//   (`-c core.hooksPath=/dev/null -c core.fsmonitor=false`) so a
-//   compromised/malicious clone can't run arbitrary hook scripts or an
-//   fsmonitor helper. Only network operations (clone/fetch/push) add back
-//   `-c credential.helper='!gh auth git-credential'` and get `GH_TOKEN` in
-//   their env (`networkGitEnv`); local-only operations (rev-parse, status,
-//   add, commit, worktree, diff) use `localGitEnv`, which never carries the
-//   token.
-// - User-derived positional arguments (URLs, dirs, shas, branches) are
-//   preceded by `--` to stop a value starting with `-` from being
-//   misread as a flag — EXCEPT for `git rev-parse`, which is a documented,
-//   verified exception: `git rev-parse -- <rev>` doesn't work like other
-//   subcommands (it degrades `--verify` to "no revision given", and in
-//   non-`--verify` mode it *echoes* a literal `--` line before the
-//   requested output instead of suppressing option parsing). Verified
-//   empirically; rev-parse calls below rely on `assertSha`/`assertBranchName`
-//   input validation instead for the same "no leading `-`" protection.
-//   `git gtr new` (a third-party subcommand, not core git) also skips `--`
-//   since its own argv handling isn't guaranteed `--`-compatible; branch
-//   names are validated via `assertBranchName` before reaching it either way.
-//   `readGitShowFile`'s `git show <ref>:<path>` is a third exception, for a
-//   different reason: `--` doesn't error there either, it silently changes
-//   what git returns (see that function's doc comment for the verified
-//   behavior) — `ref` is validated via `assertBranchName` instead, which
-//   also protects `path` transitively (it always follows a validated,
-//   `:`-free `ref` and our own inserted `:` in the same argv entry).
-//   `createGtrWorktree`'s reuse-path `git reset --hard <ref>` is a fourth
-//   exception: `--` before the ref there errors outright ("fatal: Cannot
-//   do hard reset with paths" — verified empirically), since `--hard`
-//   mode doesn't take a pathspec at all; `assertBranchName` validation
-//   again stands in for it.
-// - Callers pass GitHub-sourced identifiers (owner, repo, sha, branch)
-//   through `assertGitHubName` / `assertSha` / `assertBranchName`
-//   (types.ts) before they're interpolated into a URL, ref, or directory
-//   path.
-// - `commitAndPush` verifies the worktree it's about to run git in is a
-//   *registered* worktree of the expected repo, and that its `.git` file's
-//   `gitdir:` target actually lives under that repo's
-//   `.git/worktrees/<name>/` — guards against operating on a
-//   worktree directory that was redirected (e.g. a replaced `.git` file)
-//   to point somewhere else.
-//
-// Locking note: `withRepoLock` is a userspace lockfile mutex (atomic
-// exclusive file creation + mtime-based staleness + a per-acquisition
-// token that gates release, so a reclaimed lock is never deleted out from
-// under its new owner), not a literal flock(2) syscall — see the
-// implementer's report for why (Bun/Node have no core flock binding, and
-// wrapping an in-process async callback around the `flock(1)` CLI is
-// fragile). This is enough to serialize concurrent `ensureRepo` calls for
-// the same repo within one worker container.
+// 対象リポジトリとFactory自身のcloneについて、clone・fetch・worktreeを管理する。
+// サブプロセスはすべて注入した`run`(`CommandRunner`)で実行するので、
+// どの関数も偽のrunnerでテストできる。
+// `CommandRunner`と`CommandResult`はここで定義し、同じ方法でコマンドを実行する
+// `github.ts`と`claude.ts`も使う。
 
 import {
   access,
@@ -95,7 +36,7 @@ import {
 } from "./types.ts";
 
 // ---------------------------------------------------------------------------
-// Subprocess execution (shared with github.ts / claude.ts)
+// サブプロセスの実行(`github.ts`、`claude.ts`と共有)
 // ---------------------------------------------------------------------------
 
 export type CommandResult = {
@@ -110,12 +51,13 @@ export type CommandRunOptions = {
   readonly env?: Readonly<Record<string, string>>;
   readonly stdin?: string;
   readonly timeoutMs?: number;
-  /** Per-stream ceiling on the bytes kept from stdout and from stderr
-   * (工程3 design §14: untrusted command output must not rely on post-hoc
-   * truncation alone). The stream is still drained to the end, so the child
-   * never blocks on a full pipe, but only the first and the last half of
-   * this many bytes are kept, joined by `omittedMarker`. Omitted: keep
-   * everything (the previous behaviour). */
+  /**
+   * stdoutとstderrのそれぞれについて、保持するバイト数の上限。
+   * 信頼できないコマンドの出力を、受け取った後の切り詰めだけに頼らないために使う。
+   * パイプが詰まって子プロセスが止まらないよう、ストリームは最後まで読む。
+   * 保持するのは先頭と末尾の半分ずつで、間を`omittedMarker`でつなぐ。
+   * 指定しなければすべて保持する。
+   */
   readonly maxOutputBytes?: number;
 };
 
@@ -128,52 +70,58 @@ const DEFAULT_TIMEOUT_MS = 60_000;
 const DEFAULT_KILL_GRACE_MS = 5_000;
 
 export type BunCommandRunnerOptions = {
-  /** Grace period between SIGTERM and SIGKILL when a command times out. Default 5000ms. */
+  /**
+   * タイムアウトしたときに、SIGTERMを送ってからSIGKILLを送るまでの猶予。既定は5000ms。
+   */
   readonly killGraceMs?: number;
 };
 
 /**
- * Build a `CommandRunner` that spawns via `Bun.spawn`. On timeout, sends
- * SIGTERM first and escalates to SIGKILL after `killGraceMs` (default 5s)
- * if the process hasn't exited by then.
+ * `pid`のプロセスグループ全体に`signal`を送る。すでに終了していれば何もしない。
+ * 直接起動したpidだけにシグナルを送っても、
+ * タイムアウトしたコマンドが止まるとは限らない。
+ * コマンドが自分で子プロセス(パイプラインを実行するシェルや
+ * credential helperなど)を起動していると、その孫プロセスにはシグナルが届かず、
+ * stdoutとstderrのパイプを開いたままにできる。
+ * するとパイプの読み取りが孫プロセスの終了まで終わらず、
+ * 気づかないうちにタイムアウトが効かなくなる。
+ * `sh -c "trap '' TERM; sleep 5"`をpidだけでkillすると、
+ * 5秒経つまで読み取りが終わらないことを確かめた。
+ * そのため`detached: true`(POSIXの`setsid()`)で、
+ * 子プロセスをプロセスグループのリーダーとして起動し、
+ * `process.kill(-pid, signal)`でグループ全体に送る。
  */
-// Signaling only the directly-spawned pid is not enough to guarantee a
-// timed-out command actually stops: if it forked a child of its own (e.g. a
-// shell running a pipeline, or a credential helper), that grandchild is not
-// signaled and can keep the stdout/stderr pipes open — `Promise.all` below
-// then hangs reading those pipes until the grandchild exits on its own,
-// silently defeating the timeout. Verified empirically (`sh -c "trap ''
-// TERM; sleep 5"` killed only by pid: the pipe read didn't resolve until
-// the full 5s naturally elapsed). Fix: spawn `detached: true` (POSIX
-// `setsid()`, making the child its own process-group leader) and signal the
-// whole group via `process.kill(-pid, signal)`.
 function killProcessGroup(pid: number, signal: "SIGTERM" | "SIGKILL"): void {
   try {
     process.kill(-pid, signal);
   } catch {
-    // Already exited — nothing to signal.
+    // すでに終了しているので、送る相手が無い。
   }
 }
 
 const OMITTED_MARKER_PATTERN = /\[\.\.\. \d+ bytes omitted \.\.\.\]/;
 
-/** The text readStreamCapped puts between the kept head and tail. */
+/** `readStreamCapped`が、保持した先頭と末尾の間に入れる文字列を返す。 */
 export function omittedMarker(bytes: number): string {
   return `\n[... ${String(bytes)} bytes omitted ...]\n`;
 }
 
-/** Whether readStreamCapped dropped bytes from `text` (a machine-readable
- * report cut this way must not be parsed). */
+/**
+ * `readStreamCapped`が`text`の途中を捨てたかを返す。
+ * 途中を捨てた機械可読のレポートは解析してはいけない。
+ */
 export function isCappedOutput(text: string): boolean {
   return OMITTED_MARKER_PATTERN.test(text);
 }
 
-/** Reads `stream` to the end, keeping the first `floor(maxBytes / 2)` bytes
- * in a fixed head buffer and the last `maxBytes - floor(maxBytes / 2)`
- * bytes in a fixed ring buffer (chunks are copied in; nothing grows with
- * the stream). When bytes in between were dropped, the two parts are
- * decoded separately and joined by `omittedMarker(droppedBytes)` (a
- * multi-byte character cut at either edge decodes to U+FFFD). */
+/**
+ * `stream`を最後まで読み、先頭の`floor(maxBytes / 2)`バイトと、
+ * 末尾の`maxBytes - floor(maxBytes / 2)`バイトだけを保持して文字列で返す。
+ * 先頭は固定長のバッファ、末尾は固定長のリングバッファにコピーするので、
+ * ストリームが長くてもメモリは増えない。
+ * 間を捨てたときは、2つの部分を別々にデコードし、`omittedMarker(捨てたバイト数)`でつなぐ
+ * (境界で切れたマルチバイト文字はU+FFFDになる)。
+ */
 export async function readStreamCapped(
   stream: ReadableStream<Uint8Array>,
   maxBytes: number,
@@ -240,6 +188,11 @@ export async function readStreamCapped(
   return `${decoder.decode(head.subarray(0, headSize))}${omittedMarker(omitted)}${decoder.decode(tail)}`;
 }
 
+/**
+ * `Bun.spawn`で起動する`CommandRunner`を作って返す。
+ * タイムアウトしたら、まずSIGTERMを送り、`killGraceMs`(既定は5秒)経っても
+ * 終了していなければSIGKILLを送る。
+ */
 export function createBunCommandRunner(
   options: BunCommandRunnerOptions = {},
 ): CommandRunner {
@@ -291,22 +244,54 @@ export function createBunCommandRunner(
   };
 }
 
-/** Default `CommandRunner`: `createBunCommandRunner()` with default settings. */
+/** 既定の`CommandRunner`。既定の設定の`createBunCommandRunner()`。 */
 export const runCommand: CommandRunner = createBunCommandRunner();
 
 // ---------------------------------------------------------------------------
-// git argv / env construction
+// gitのargvと環境変数の組み立て
 // ---------------------------------------------------------------------------
 
 export type GitCommandOptions = {
-  /** Whether this invocation talks to a remote (clone/fetch/push) — adds the gh credential helper and requires `GH_TOKEN` in env. */
+  /**
+   * リモートと通信する操作(clone、fetch、push)か。
+   * `true`ならghのcredential helperを加え、環境変数に`GH_TOKEN`が要る。
+   */
   readonly network?: boolean;
 };
 
 /**
- * Prefix `args` with the common hardening flags: reset `credential.helper`
- * (clearing any system/global helper), disable hooks and fsmonitor, and —
- * for network operations only — add back the gh credential helper.
+ * `args`の前に共通の安全策のオプションを付けた、gitのargvを返す。
+ * `credential.helper`を空にしてシステムやグローバルの設定を消し、
+ * フックとfsmonitorを無効にする。
+ * 悪意のあるcloneに、任意のフックやfsmonitorのヘルパーを実行させないため。
+ * ネットワーク操作のときだけ、ghのcredential helperを加え直す。
+ *
+ * このモジュールのgitの実行では、ほかに次を守る。
+ * - `GH_TOKEN`は、ネットワーク操作(clone、fetch、push)の
+ *   環境変数(`networkGitEnv`)にだけ入れる。
+ *   ローカルだけの操作(rev-parse、status、add、commit、worktree、diff)は
+ *   トークンを持たない`localGitEnv`を使う。
+ * - 利用者に由来する位置引数(URL、ディレクトリ、sha、ブランチ)の前には`--`を置き、
+ *   `-`で始まる値をオプションと誤読させない。例外は次の4つで、代わりに
+ *   `assertSha`や`assertBranchName`の入力検証で、先頭が`-`の値を防ぐ。
+ *   - `git rev-parse`: `-- <rev>`は他のサブコマンドと同じには動かない。
+ *     `--verify`では「リビジョンが無い」扱いになり、`--verify`なしでは
+ *     オプションの解釈を止めずに、出力の前に`--`の行をそのまま出す(実際に確かめた)。
+ *   - `git gtr new`: core gitではない外部のサブコマンドで、`--`を扱える保証が無い。
+ *   - `readGitShowFile`の`git show <ref>:<path>`: `--`を付けてもエラーにならず、
+ *     気づかないうちにgitが返す内容が変わる。`ref`を検証すれば、`path`も守られる
+ *     (`path`は常に、検証済みで`:`を含まない`ref`と、こちらで入れた`:`に続くため)。
+ *   - `createGtrWorktree`の再利用時の`git reset --hard <ref>`: `--hard`はパスを取らず、
+ *     `--`を付けるとエラーになる
+ *     (「fatal: Cannot do hard reset with paths」、実際に確かめた)。
+ * - GitHubに由来する識別子(owner、repo、sha、branch)は、URL・ref・ディレクトリのパスに
+ *   埋め込む前に`assertGitHubName`、`assertSha`、
+ *   `assertBranchName`(`types.ts`)で検証する。
+ * - `commitAndPush`は、gitを実行するworktreeが、
+ *   想定のリポジトリに登録されたworktreeであることと、
+ *   `.git`ファイルの`gitdir:`がそのリポジトリの`.git/worktrees/<name>/`の
+ *   下を指すことを確かめる。
+ *   `.git`ファイルの差し替えなどで別の場所に向けられたworktreeを操作しないため。
  */
 function buildGitArgv(
   args: readonly string[],
@@ -327,7 +312,7 @@ function buildGitArgv(
   ];
 }
 
-/** Env for git operations that never touch the network — no `GH_TOKEN`. */
+/** ネットワークを使わないgitの操作の環境変数を返す。`GH_TOKEN`は含めない。 */
 function localGitEnv(home?: string, path?: string): Record<string, string> {
   const env: Record<string, string> = { GIT_TERMINAL_PROMPT: "0" };
   const resolvedHome = home ?? process.env.HOME;
@@ -337,7 +322,9 @@ function localGitEnv(home?: string, path?: string): Record<string, string> {
   return env;
 }
 
-/** Env for git operations that clone/fetch/push — carries `GH_TOKEN` for the gh credential helper. */
+/**
+ * clone・fetch・pushの環境変数を返す。ghのcredential helperのために`GH_TOKEN`を含める。
+ */
 function networkGitEnv(
   ghToken: string,
   home?: string,
@@ -347,15 +334,13 @@ function networkGitEnv(
 }
 
 /**
- * Convert `overrides` into `GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_<i>` /
- * `GIT_CONFIG_VALUE_<i>` env vars — git reads these the same as `-c
- * key=value` regardless of which git subcommand (or wrapper around git)
- * invoked it, which matters for `git gtr` (security fix, medium): it's a
- * third-party subcommand whose own argv parsing can't be trusted to accept
- * an interspersed `-c` flag the way a direct `git` invocation can (see the
- * "No `--` here" note on `createGtrWorktree`'s `gtr new` call for the same
- * reasoning applied to `--`), so config overrides for it go through env
- * instead. Merge the result into `networkGitEnv(...)`/`localGitEnv(...)`.
+ * `overrides`を環境変数`GIT_CONFIG_COUNT`、`GIT_CONFIG_KEY_<i>`、
+ * `GIT_CONFIG_VALUE_<i>`にして返す。
+ * 結果は`networkGitEnv(...)`や`localGitEnv(...)`に混ぜて使う。
+ * gitはこれらを、どのサブコマンドやラッパーから起動されても`-c key=value`と同じに読む。
+ * `git gtr`は外部のサブコマンドで、
+ * 直接の`git`のように途中の`-c`を受け付けるとは限らないため、
+ * 設定の上書きを環境変数で渡す(`--`を付けないのと同じ理由)。
  */
 function gitConfigEnvOverrides(
   overrides: Readonly<Record<string, string>>,
@@ -371,26 +356,28 @@ function gitConfigEnvOverrides(
   return env;
 }
 
-/** Build a masked `Error` from a failed `CommandResult`, for a consistent `throw` shape across this module. */
+/**
+ * 失敗した`CommandResult`から、秘密を伏せた`Error`を作って返す。
+ * このモジュールで投げる例外の形をそろえるため。
+ */
 function gitError(context: string, result: CommandResult): Error {
   return new Error(maskSecrets(`${context}: ${result.stderr.trim()}`));
 }
 
 /**
- * `git config core.symlinks false`, persisted into `dir`'s config — a
- * re-gate fix (High, adopted): `-c core.symlinks=false` on
- * `addDetachedWorktree`'s `worktree add` (and the `GIT_CONFIG_*` env on
- * `git gtr new`) only applies to that ONE invocation; every later
- * operation on the same repo (`git status`, `add -A`, `commit`, and
- * critically `createGtrWorktree`'s reuse-path `reset --hard`) runs with
- * git's default `core.symlinks=true` unless the setting is persisted —
- * letting `reset --hard` recreate a real symlink from a committed one,
- * which then shows up as a `typechange` in the next commit. Persisting it
- * into the *main* clone's config covers every worktree of this repo, since
- * they all share it (git worktrees read the main clone's `.git/config`).
- * `ensureRepo` calls this after every successful clone/fetch; the
- * per-invocation `-c`/`GIT_CONFIG_*` settings elsewhere are kept too —
- * redundant with this now, but harmless.
+ * `dir`の設定に`core.symlinks false`を書き込む。失敗したら例外を投げる。
+ * `addDetachedWorktree`の`worktree add`に付ける`-c core.symlinks=false`
+ * (と`git gtr new`の`GIT_CONFIG_*`)は、その1回の実行にしか効かない。
+ * 設定を書き込まないと、同じリポジトリでの以後の操作
+ * (`git status`、`add -A`、`commit`、
+ * 特に`createGtrWorktree`の再利用時の`reset --hard`)は、
+ * gitの既定の`core.symlinks=true`で動く。
+ * すると`reset --hard`がコミットされたシンボリックリンクを本物のリンクとして作り直し、
+ * 次のコミットで`typechange`として現れる。
+ * worktreeはどれもメインのcloneの`.git/config`を読むため、
+ * メインのcloneに書けば全worktreeに効く。
+ * `ensureRepo`がclone・fetchの成功のたびに呼ぶ。
+ * 他の箇所の実行ごとの`-c`や`GIT_CONFIG_*`も残してある(今は重複するが害は無い)。
  */
 async function persistNoSymlinksConfig(
   run: CommandRunner,
@@ -408,20 +395,20 @@ async function persistNoSymlinksConfig(
 }
 
 /**
- * The lock path scoping ALL git activity for one repo's directory tree
- * (`ensureRepo`'s main clone plus every worktree under the same parent
- * dir) — `repoDir` is always `<owner-repo-dir>/main`, so its parent is the
- * same `<baseDir>/<owner>/<repo>` directory `ensureRepo` locks. Shared by
- * `addDetachedWorktree` / `createGtrWorktree` / `removeWorktree` /
- * `commitAndPush` (code-review fix: avoid `.git/index.lock` races between
- * concurrent flows touching the same repo).
+ * 1つのリポジトリのディレクトリ配下のgitの操作をすべて直列にするロックのパスを返す。
+ * 配下とは、`ensureRepo`のメインのcloneと、同じ親の下のworktreeである。
+ * `repoDir`は常に`<owner-repo-dir>/main`なので、その親は`ensureRepo`がロックする
+ * `<baseDir>/<owner>/<repo>`と同じになる。
+ * 同じリポジトリを触る並行のフローの間で`.git/index.lock`の競合を避けるため、
+ * `addDetachedWorktree`、`createGtrWorktree`、`removeWorktree`、
+ * `commitAndPush`で共有する。
  */
 function repoLockPath(repoDir: string): string {
   return `${dirname(repoDir)}/main.lock`;
 }
 
 // ---------------------------------------------------------------------------
-// Filesystem existence check (injectable for tests)
+// ファイルの存在確認(テスト用に注入できる)
 // ---------------------------------------------------------------------------
 
 export type PathExists = (path: string) => Promise<boolean>;
@@ -436,18 +423,20 @@ export const pathExists: PathExists = async (path) => {
 };
 
 // ---------------------------------------------------------------------------
-// Plain filesystem helpers (requirements-doc directory management —
-// pipeline_generate.ts writes/reads a docDir per attempt, cleanup_db.ts
-// deletes old ones). Injectable, same rationale as `pathExists` above:
-// every caller takes these as parameters (defaulting to the real
-// implementation here) so tests never touch the real filesystem.
+// 要件定義のディレクトリを扱うファイル操作。
+// `pipeline_generate.ts`が試行ごとのディレクトリを読み書きし、
+// `cleanup_db.ts`が古いものを消す。
+// テストで実際のファイルシステムに触れないよう、呼び出し側は引数で受け取り、
+// 既定でここの実装を使う。
 // ---------------------------------------------------------------------------
 
 export type ReadDir = (path: string) => Promise<string[]>;
 
-/** Lists a directory's entry names (files and subdirectories alike, not
- * recursive) — used by pipeline_generate.ts to find the `.drawio` files
- * Claude wrote alongside `requirements.md`. */
+/**
+ * ディレクトリ直下のエントリー名(ファイルとサブディレクトリの両方)を返す。再帰はしない。
+ * `pipeline_generate.ts`が、
+ * Claudeが`requirements.md`と並べて書いた`.drawio`を探すのに使う。
+ */
 export const readDirEntries: ReadDir = (path) => readdir(path);
 
 export type ReadTextFile = (path: string) => Promise<string>;
@@ -466,8 +455,7 @@ export const copyFileTo: CopyFile = (source, destination) =>
 
 export type RemovePath = (path: string) => Promise<void>;
 
-/** Recursively removes `path` (file or directory); a no-op if it doesn't
- * exist. */
+/** `path`(ファイルまたはディレクトリ)を再帰的に削除する。存在しなければ何もしない。 */
 export const removePath: RemovePath = (path) =>
   rm(path, { recursive: true, force: true });
 
@@ -484,11 +472,9 @@ export type EnsureEmptyDirOptions = {
 };
 
 /**
- * Ensures `dir` exists and is empty: removes it first (recursively) if it
- * already exists, then recreates it. Used by pipeline_generate.ts at the
- * start of every requirements-generation attempt, so a retried attempt
- * never sees a previous attempt's stray `requirements.md` edits or leftover
- * `.drawio` files.
+ * `dir`を空のディレクトリにする。すでにあれば再帰的に削除してから作り直す。
+ * `pipeline_generate.ts`が要件定義の生成の試行のたびに最初に呼ぶ。
+ * 再試行で、前の試行の`requirements.md`の編集や`.drawio`の残りを見せないため。
  */
 export async function ensureEmptyDir(
   dir: string,
@@ -506,12 +492,12 @@ export async function ensureEmptyDir(
 export type RemoveEmptyDir = (path: string) => Promise<boolean>;
 
 /**
- * Removes `path` only if it is an empty directory — returns `true` when it
- * removed it, `false` when the directory was non-empty or didn't exist
- * (both treated as "nothing to do", never thrown). Used by cleanup_db.ts to
- * best-effort prune a now-empty `issue-<N>` requirements directory after
- * deleting its last `wi-<id>` subdirectory, without disturbing it if a
- * sibling work item's own `wi-<id>` directory is still there.
+ * `path`が空のディレクトリのときだけ削除する。削除したら`true`を返す。
+ * 空でないときと存在しないときは、どちらも「することが無い」として`false`を返し、
+ * 例外は投げない。
+ * `cleanup_db.ts`が、
+ * 最後の`wi-<id>`を消した後の空の`issue-<N>`をできる範囲で片付けるのに使う。
+ * 別のwork itemの`wi-<id>`が残っていれば消さない。
  */
 export const removeEmptyDir: RemoveEmptyDir = async (path) => {
   try {
@@ -529,28 +515,26 @@ export const removeEmptyDir: RemoveEmptyDir = async (path) => {
 };
 
 // ---------------------------------------------------------------------------
-// withRepoLock: userspace lockfile mutex
+// withRepoLock: ロックファイルによる排他
 // ---------------------------------------------------------------------------
 
 export type LockFs = {
-  /** Atomically create `lockPath` with `content`; false if it already exists. */
+  /** `content`を書いた`lockPath`をアトミックに作る。すでにあれば`false`を返す。 */
   readonly tryCreate: (lockPath: string, content: string) => Promise<boolean>;
   readonly read: (lockPath: string) => Promise<string | null>;
-  /** File mtime in ms since epoch, or null if the lock doesn't exist. */
+  /** ロックファイルのmtime(エポックからのミリ秒)。無ければ`null`。 */
   readonly mtimeMs: (lockPath: string) => Promise<number | null>;
-  /** Remove the lock (rename-then-unlink internally); no-op if already gone. */
+  /** ロックを削除する(内部ではrenameしてからunlinkする)。すでに無ければ何もしない。 */
   readonly remove: (lockPath: string) => Promise<void>;
   /**
-   * Ensure `lockPath`'s parent directory exists (`mkdir -p` equivalent),
-   * called once before the first `tryCreate` attempt. Real bug (E2E,
-   * post-launch fix): `ensureFactoryClone`'s lock path's parent (e.g.
-   * `/workspaces/factory/`) doesn't exist yet on a container's first-ever
-   * run, before the clone that would create it — `tryCreate`'s
-   * `open(path, "wx")` then fails with `ENOENT`, which it isn't built to
-   * treat as "not locked" (only `EEXIST` means that). Optional: a fake
-   * `LockFs` backed by an in-memory `Map` (as most tests use) has no real
-   * directory hierarchy to create, so it can omit this and `withRepoLock`
-   * just skips the call.
+   * `lockPath`の親ディレクトリを作る(`mkdir -p`に当たる)。
+   * 最初の`tryCreate`の前に1回呼ぶ。
+   * コンテナの初回の実行では、cloneより前なので`ensureFactoryClone`のロックの親
+   * (`/workspaces/factory/`など)がまだ無い。すると`tryCreate`の`open(path, "wx")`が
+   * `ENOENT`で失敗するが、
+   * `tryCreate`が「ロックされている」とみなすのは`EEXIST`だけである。
+   * 省略できる。メモリ上の`Map`で作る偽の`LockFs`(多くのテストが使う)には作るべき
+   * ディレクトリが無いので、省略すれば`withRepoLock`は呼び出しを飛ばす。
    */
   readonly ensureLockDir?: (lockPath: string) => Promise<void>;
 };
@@ -599,9 +583,8 @@ export const defaultLockFs: LockFs = {
     }
   },
   remove: async (lockPath) => {
-    // Rename-then-unlink: if the lock was already replaced/removed by
-    // someone else, the rename itself fails (ENOENT) instead of us
-    // unlinking whatever now occupies `lockPath`.
+    // renameしてからunlinkする。ロックが他の誰かにすでに置き換えられたか消されていれば、
+    // renameが`ENOENT`で失敗するので、今`lockPath`にある別のファイルを消さずに済む。
     const tempPath = `${lockPath}.removing-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     try {
       await rename(lockPath, tempPath);
@@ -615,11 +598,12 @@ export const defaultLockFs: LockFs = {
 
 type LockFileContent = { readonly token: string };
 
-// The predicate's target type is a named alias (not an inline `{...}`
-// literal) so `scripts/lint-no-type-assertions.ts`'s brace-depth heuristic
-// correctly recognizes this whole body as a type-guard region — an inline
-// object-literal return type confuses it into closing the guard region at
-// the literal's own `}` instead of the function body's.
+/**
+ * `value`がロックファイルの中身の形かを返す。
+ * 述語の型は、その場のオブジェクトリテラルの型ではなく名前を付けた別名にする。
+ * `scripts/lint-no-type-assertions.ts`は波括弧の深さで型ガードの範囲を推定するため、
+ * リテラルの型だと、関数本体ではなくリテラルの`}`で型ガードの範囲が終わったと誤認する。
+ */
 function isLockFileContent(value: unknown): value is LockFileContent {
   if (typeof value !== "object" || value === null) return false;
   if (!("token" in value)) return false;
@@ -646,18 +630,25 @@ export type WithRepoLockOptions<T> = {
   readonly lockFs?: LockFs;
   readonly now?: () => Date;
   readonly sleep?: (ms: number) => Promise<void>;
-  /** A lock file whose mtime is older than this is treated as abandoned by a crashed holder. Default 10 minutes. */
+  /**
+   * mtimeがこれより古いロックファイルは、異常終了した持ち主が残したものとみなす。
+   * 既定は10分。
+   */
   readonly staleMs?: number;
   readonly pollMs?: number;
   readonly maxWaitMs?: number;
 };
 
 /**
- * Run `fn` while holding an exclusive lock keyed by `lockPath`. Serializes
- * concurrent callers within one worker container (e.g. two flows both
- * calling `ensureRepo` for the same repo). See the module doc comment for
- * why this is a lockfile mutex rather than a `flock(2)` syscall, and for
- * the token/mtime staleness protocol.
+ * `lockPath`の排他ロックを持ったまま`fn`を実行し、その結果を返す。
+ * 1つのworkerコンテナの中で、並行する呼び出し(同じリポジトリに`ensureRepo`を呼ぶ
+ * 2つのフローなど)を直列にする。待っても取れなければ例外を投げる。
+ *
+ * `flock(2)`ではなく、ロックファイルで排他する(アトミックな排他的作成、mtimeによる
+ * 古さの判定、取得ごとのトークン)。Bun・Nodeの標準にflockのバインディングが無く、
+ * `flock(1)`のCLIでプロセス内の非同期コールバックを包むのは不安定なため。
+ * 解放はトークンが一致するときだけ行うので、古いとみなされて他の持ち主に取り直された
+ * ロックを消すことは無い。
  */
 export async function withRepoLock<T>(
   opts: WithRepoLockOptions<T>,
@@ -667,10 +658,9 @@ export async function withRepoLock<T>(
   const sleep = opts.sleep ?? defaultSleep;
   const staleMs = opts.staleMs ?? 10 * 60_000;
   const pollMs = opts.pollMs ?? 200;
-  // 5 minutes (code-review fix): now shared by every repo-tree git op
-  // (ensureRepo, addDetachedWorktree, createGtrWorktree, removeWorktree,
-  // commitAndPush), not just the initial clone/fetch, so it needs enough
-  // headroom for a slow clone/checkout ahead of it in the queue.
+  // 5分。このロックは最初のclone・fetchだけでなく、リポジトリ配下のgitの操作すべて
+  // (ensureRepo、addDetachedWorktree、createGtrWorktree、removeWorktree、commitAndPush)で
+  // 共有するので、先に並んだ遅いclone・checkoutを待てるだけの余裕が要る。
   const maxWaitMs = opts.maxWaitMs ?? 5 * 60_000;
   const deadline = now().getTime() + maxWaitMs;
   const token = crypto.randomUUID();
@@ -701,9 +691,9 @@ export async function withRepoLock<T>(
   try {
     return await opts.fn();
   } finally {
-    // Only release the lock if it's still ours — if fn() ran long enough
-    // that another waiter reclaimed it as stale, deleting it now would
-    // steal the new owner's lock out from under them.
+    // ロックがまだ自分のものであるときだけ解放する。`fn()`が長引いて、
+    // 待っていた他の呼び出しが古いとみなして取り直していれば、
+    // ここで消すと新しい持ち主のロックを奪ってしまう。
     const current = await lockFs.read(opts.lockPath);
     const currentToken = current !== null ? parseLockToken(current) : null;
     if (currentToken === token) {
@@ -713,7 +703,7 @@ export async function withRepoLock<T>(
 }
 
 // ---------------------------------------------------------------------------
-// Worktree gitdir verification
+// worktreeのgitdirの検証
 // ---------------------------------------------------------------------------
 
 export type VerifyWorktreeGitdirOptions = {
@@ -724,13 +714,14 @@ export type VerifyWorktreeGitdirOptions = {
   readonly realpath?: (path: string) => Promise<string>;
 };
 
-/** The admin dir a worktree `.git` file names, read the way git reads it
- * (the bytes after exactly "gitdir: ", minus one trailing LF or CRLF) — but
- * only when the file is the canonical form `git worktree add` writes:
- * an absolute path with no surrounding whitespace or control characters.
- * Anything else (two spaces, a tab, a trailing space, a relative path)
- * would make git read a directory other than the one a lenient parse sees,
- * so it is null. */
+/**
+ * worktreeの`.git`ファイルが指す管理ディレクトリを、gitと同じ読み方で返す
+ * (ちょうど`gitdir: `の後のバイト列から、末尾のLFかCRLFを1つ除いたもの)。
+ * ただし`git worktree add`が書く正規の形
+ * (前後に空白も制御文字も無い絶対パス)のときだけで、
+ * それ以外(空白が2つ、タブ、末尾の空白、相対パス)は`null`を返す。
+ * 正規でない形では、緩く解釈したディレクトリとgitが読むディレクトリが食い違うため。
+ */
 function parseCanonicalGitPointer(content: string): string | null {
   const body = content.endsWith("\r\n")
     ? content.slice(0, -2)
@@ -741,22 +732,23 @@ function parseCanonicalGitPointer(content: string): string | null {
   if (!body.startsWith(prefix)) return null;
   const path = body.slice(prefix.length);
   if (!path.startsWith("/")) return null;
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: rejecting control characters is the point
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: 制御文字を拒否するのが目的
   if (/[\x00-\x1f\x7f]/.test(path) || path !== path.trimEnd()) return null;
   return path;
 }
 
 /**
- * Before running git *inside* a worktree directory, confirm it's actually a
- * registered worktree of `repoDir` (per `git worktree list`), that its
- * `.git` file's `gitdir:` target — resolved with realpath, so neither `..`
- * nor a symlink can smuggle it elsewhere — is a direct child of
- * `realpath(<repoDir>/.git/worktrees)`, and that the admin dir's `gitdir`
- * back-pointer (the file `git worktree add` writes) names
- * `<realpath(dir)>/.git`. Throws otherwise — guards against operating on a
- * worktree directory whose `.git` file was redirected elsewhere (a
- * redirected gitdir brings its own `config`, e.g. a `filter.<x>.clean`
- * command the next `git add` would run).
+ * worktreeの中でgitを実行する前に、次をすべて確かめる。
+ * どれかが成り立たなければ例外を投げる。
+ * - `git worktree list`で、`repoDir`に登録されたworktreeである。
+ * - `.git`ファイルの`gitdir:`の指す先が、`realpath(<repoDir>/.git/worktrees)`の直下にある
+ *   (`..`やシンボリックリンクで別の場所へ向けられないよう、
+ *   realpathで解決して比べる)。
+ * - 管理ディレクトリの`gitdir`(`git worktree add`が書く逆向きの参照)が、
+ *   `<realpath(dir)>/.git`を指す。
+ * `.git`ファイルが別の場所へ向けられたworktreeを操作しないため。
+ * 向け先のgitdirは独自の`config`を持ち込め、たとえば次の`git add`が実行する
+ * `filter.<x>.clean`のコマンドを仕込める。
  */
 export async function verifyWorktreeGitdir(
   opts: VerifyWorktreeGitdirOptions,
@@ -800,10 +792,10 @@ export async function verifyWorktreeGitdir(
 }
 
 // ---------------------------------------------------------------------------
-// Worktree .git pointer snapshot (implement flow, 工程3 design §3)
+// worktreeの`.git`ファイルのスナップショット(implementフロー)
 // ---------------------------------------------------------------------------
 
-/** The two fs calls readWorktreeGitPointer makes; injectable for tests. */
+/** `readWorktreeGitPointer`が使う2つのファイル操作。テスト用に注入できる。 */
 export type WorktreeGitPointerFs = {
   readonly lstat: (path: string) => Promise<{
     isFile(): boolean;
@@ -820,8 +812,10 @@ const defaultWorktreeGitPointerFs: WorktreeGitPointerFs = {
 export const WORKTREE_GIT_POINTER_MODIFIED_MESSAGE =
   "worktree git pointer was modified";
 
-/** A Claude run changed (or replaced) the worktree's `.git` file: the next
- * git command there would read another gitdir's config and hooks. */
+/**
+ * Claudeの実行がworktreeの`.git`ファイルを変更した(または置き換えた)ことを表す。
+ * そのままだと、そこで次に実行するgitのコマンドが別のgitdirの設定とフックを読む。
+ */
 export class WorktreeGitPointerModifiedError extends Error {
   constructor() {
     super(WORKTREE_GIT_POINTER_MODIFIED_MESSAGE);
@@ -829,9 +823,11 @@ export class WorktreeGitPointerModifiedError extends Error {
   }
 }
 
-/** `<worktreeDir>/.git`'s bytes — only when it is a regular file (lstat: not
- * a symlink, not a directory). implement_prepare records it right after the
- * worktree is ready, before any Claude run. */
+/**
+ * `<worktreeDir>/.git`の中身を返す。
+ * 通常のファイルでなければ(lstatで見てシンボリックリンクかディレクトリなら)例外を投げる。
+ * `implement_prepare`が、worktreeの準備直後、Claudeを実行する前に記録する。
+ */
 export async function readWorktreeGitPointer(
   worktreeDir: string,
   fs: WorktreeGitPointerFs = defaultWorktreeGitPointerFs,
@@ -844,10 +840,12 @@ export async function readWorktreeGitPointer(
   return { content: await fs.readFile(path) };
 }
 
-/** Re-reads `<worktreeDir>/.git` and throws WorktreeGitPointerModifiedError
- * when it differs from `expected` in any byte, is no longer a regular file,
- * or cannot be read at all. Call it after every Claude run, before the
- * first git command in the worktree. */
+/**
+ * `<worktreeDir>/.git`を読み直し、`expected`と1バイトでも違うとき、
+ * 通常のファイルでなくなったとき、
+ * 読めないときは`WorktreeGitPointerModifiedError`を投げる。
+ * Claudeを実行するたびに、そのworktreeで最初のgitのコマンドを実行する前に呼ぶ。
+ */
 export async function assertWorktreeGitPointer(
   worktreeDir: string,
   expected: string,
@@ -863,7 +861,7 @@ export async function assertWorktreeGitPointer(
 }
 
 // ---------------------------------------------------------------------------
-// ensureRepo: fetch-only main clone at /workspaces/<owner>/<repo>/main
+// ensureRepo: /workspaces/<owner>/<repo>/mainの、fetchだけを行うメインのclone
 // ---------------------------------------------------------------------------
 
 export type EnsureRepoOptions = {
@@ -871,7 +869,7 @@ export type EnsureRepoOptions = {
   readonly owner: string;
   readonly repo: string;
   readonly ghToken: string;
-  /** Default "/workspaces". */
+  /** 既定は`"/workspaces"`。 */
   readonly baseDir?: string;
   readonly home?: string;
   readonly path?: string;
@@ -887,10 +885,10 @@ export type EnsureRepoResult = {
 };
 
 /**
- * Ensure a fetch-only clone of `owner/repo` exists at
- * `<baseDir>/<owner>/<repo>/main`. Never checks out a working tree there
- * (spec-cycle2.md §7 item 2) — callers read files via a detached worktree
- * (`addDetachedWorktree`) or a `git gtr` worktree (`createGtrWorktree`).
+ * `<baseDir>/<owner>/<repo>/main`に`owner/repo`のcloneを用意し、すでにあればfetchする。
+ * clone・fetchに失敗したら例外を投げる。
+ * ここには作業ツリーをcheckoutしない。ファイルを読むときは、detachedのworktree
+ * (`addDetachedWorktree`)か`git gtr`のworktree(`createGtrWorktree`)を使う。
  */
 export async function ensureRepo(
   opts: EnsureRepoOptions,
@@ -949,14 +947,12 @@ export async function ensureRepo(
 }
 
 /**
- * The sha `origin/HEAD` currently points at in a fetch-only `ensureRepo`
- * clone at `repoDir` — i.e. the target repo's current default-branch head.
- * Read-only and local-only: no `GH_TOKEN` needed, since `ensureRepo` must
- * already have fetched `origin` before this runs, making `origin/HEAD`
- * locally resolvable. Promoted from the M6 pipeline step's local copy
- * (`pipeline_prepare.ts`'s `resolveDefaultBranchHeadSha`) — same `-c`
- * hardening flags and `rev-parse --verify` (no `--`; see this module's
- * `rev-parse` exception note above) as every other git call here.
+ * `repoDir`の`ensureRepo`のcloneで、`origin/HEAD`が指すsha
+ * (対象リポジトリの既定のブランチの先頭)を返す。解決できなければ例外を投げる。
+ * 読み取りだけのローカルの操作で、`GH_TOKEN`は要らない。
+ * 呼ぶ前に`ensureRepo`が`origin`をfetchしているので、
+ * `origin/HEAD`はローカルで解決できる。
+ * `rev-parse`には`--`を付けない(`buildGitArgv`の例外を参照)。
  */
 export async function resolveDefaultBranchHeadSha(
   run: CommandRunner,
@@ -976,16 +972,13 @@ export async function resolveDefaultBranchHeadSha(
 }
 
 /**
- * `git fetch origin -- pull/<prNumber>/head` in the fetch-only main clone —
- * guarantees the PR's current head commit is fetchable by sha even for a
- * commit that (unlike a branch tip) may not otherwise be reachable from any
- * ref the client already asked for. Promoted from the M6 pr_review step's
- * local copy (`pr_workflow_support.ts`'s `fetchPrHeadRef`). `prNumber` is
- * `number`-typed so it can never itself start with `-` once interpolated
- * after the literal `pull/` prefix, but the refspec still goes after `--`
- * for consistency with every other network git call in this module (and as
- * defense-in-depth against a future caller passing something looser than a
- * validated number).
+ * メインのcloneで`git fetch origin -- pull/<prNumber>/head`を実行する。
+ * 失敗したら例外を投げる。
+ * PRの今の先頭のコミットは、ブランチの先頭と違って、取得済みのどのrefからも
+ * 辿れないことがある。それでもshaで取り出せるようにするため。
+ * `prNumber`は`number`型で、`pull/`の後に埋め込むので`-`で始まることは無いが、
+ * このモジュールの他のネットワーク操作とそろえ、将来の呼び出し側が検証の緩い値を
+ * 渡したときの備えとして、refspecは`--`の後に置く。
  */
 export async function fetchPrHeadRef(
   run: CommandRunner,
@@ -1010,27 +1003,22 @@ export async function fetchPrHeadRef(
 }
 
 /**
- * `git show <ref>:<path>` in `dir` — the file's content at that ref, or
- * `null` when the file doesn't exist there (or `ref` fails validation, or
- * any other error) for a "does this file exist at HEAD" check that
- * shouldn't itself throw. Promoted from the M6 pr_fix step's local copy
- * (`pr_workflow_support.ts`'s `readGitShowFile`).
+ * `dir`で`git show <ref>:<path>`を実行し、`ref`の時点のファイルの中身を返す。
+ * ファイルが無いとき、`ref`が検証を通らないとき、その他のエラーのときは`null`を返す。
+ * 「HEADにこのファイルがあるか」を、例外を投げずに確かめるのに使う。
  *
- * `<ref>:<path>` is a *second*, git-show-specific exception to this
- * module's usual "untrusted positional args go after `--`" rule (see the
- * module doc comment's `rev-parse` exception) — verified empirically:
- * `git show -- HEAD:file.txt` does not error, but silently returns empty
- * output instead of the file's content (git parses the combined
- * `ref:path` token as a pathspec-only filter once it's past `--`, not as
- * an object reference), which would be a *worse* bug than the one `--`
- * is meant to prevent. Since `path` always follows `ref` and a literal
- * `:` inside the same argv entry, an untrusted `path` alone can never
- * make this entry start with `-` or shift the rev/path split (the split
- * happens on our own inserted `:`, not on anything `path` contributes);
- * only `ref` starting with `-` (or containing a stray `:`) is a risk, so
- * `ref` is validated via `assertBranchName` (rejects a leading `-`, `..`,
- * control/whitespace chars, and `:` among others) — caught rather than
- * left to propagate, to preserve this function's "never throws" contract.
+ * `<ref>:<path>`には`--`を付けない(このモジュールの規則の例外)。
+ * `git show -- HEAD:file.txt`はエラーにならず、
+ * ファイルの中身ではなく空の出力を返すことを確かめた。
+ * `--`の後では、gitは`ref:path`を、
+ * オブジェクトの参照ではなくパスの絞り込みとして解釈するためである。
+ * これは`--`で防ごうとする問題より悪い。
+ * `path`は常に`ref`と、同じ引数の中の`:`に続くので、信頼できない`path`だけでは
+ * 引数を`-`で始めることも、refとパスの区切りをずらすこともできない
+ * (区切るのはこちらで入れた`:`である)。
+ * 危険なのは`ref`が`-`で始まるか`:`を含むときだけなので、`assertBranchName`で検証する
+ * (先頭の`-`、`..`、制御文字・空白、`:`などを拒否する)。
+ * 例外を投げない契約を守るため、検証の例外は捕まえて`null`を返す。
  */
 export async function readGitShowFile(
   run: CommandRunner,
@@ -1053,7 +1041,7 @@ export async function readGitShowFile(
 }
 
 // ---------------------------------------------------------------------------
-// ensureFactoryClone: real (checked-out) self clone used to read skills
+// ensureFactoryClone: スキルを読むための、checkout済みのFactory自身のclone
 // ---------------------------------------------------------------------------
 
 const DEFAULT_FACTORY_CLONE_DIR = "/workspaces/factory/atelier-works";
@@ -1062,18 +1050,16 @@ export type EnsureFactoryCloneOptions = {
   readonly run: CommandRunner;
   readonly repoUrl: string;
   readonly ghToken: string;
-  /** Default "/workspaces/factory/atelier-works". */
+  /** 既定は`"/workspaces/factory/atelier-works"`。 */
   readonly dir?: string;
   /**
-   * Branch to check out and keep the clone on (config
-   * `factory_config.factory_branch`, M7) — required, no default. Every
-   * call site must pass `config.factory_branch` explicitly; there is no
-   * safe default to fall back to, since a caller that forgets it would
-   * silently pin the *shared* self clone to whatever this parameter
-   * defaulted to (see this function's own module comment for the real
-   * incident: with an optional `branch` defaulting to "main", one caller
-   * omitting it kept resetting the clone away from the configured branch
-   * out from under every other caller).
+   * checkoutし、cloneを保つブランチ(`factory_config.factory_branch`)。
+   * 必須で、既定値は無い。
+   * 呼び出し側はすべて`config.factory_branch`を明示して渡す。
+   * 既定値があると、渡し忘れた呼び出し側が、気づかないうちに共有のcloneを
+   * 既定値のブランチに固定してしまう。
+   * 以前`branch`を省略可能(既定は`"main"`)にしていたとき、省略した呼び出し側が
+   * 他の呼び出し側の使うcloneを、設定したブランチから何度も戻してしまった。
    */
   readonly branch: string;
   readonly home?: string;
@@ -1090,53 +1076,37 @@ export type EnsureFactoryCloneResult = {
 };
 
 /**
- * The lock path scoping the factory self clone at `dir` — a sibling
- * `<dir>.lock` file, since (unlike `ensureRepo`'s `<baseDir>/<owner>/<repo>/
- * main` clones) there's no shared parent directory of same-repo siblings to
- * key off here; `dir` itself is the one resource to protect. Exported so
- * that other git operations on the self clone (audit_generate's snapshot
- * worktree add/remove) can take the same lock `ensureFactoryClone` takes;
- * the worktree helpers themselves lock `repoLockPath(dir)`, a different
- * file, so without this outer lock `self_update`'s `reset --hard` could
- * race a `worktree add` on the same clone.
+ * `dir`にあるFactory自身のcloneを守るロックのパス(隣の`<dir>.lock`)を返す。
+ * `ensureRepo`の`<baseDir>/<owner>/<repo>/main`と違い、同じリポジトリのものを
+ * まとめる共通の親ディレクトリが無く、守る対象は`dir`そのものだけである。
+ * Factory自身のcloneに対する他のgitの操作(`audit_generate`のスナップショットの
+ * worktreeの追加・削除)が`ensureFactoryClone`と同じロックを取れるよう、exportする。
+ * worktreeの関数がロックするのは別のファイル`repoLockPath(dir)`なので、
+ * この外側のロックが無いと`self_update`の`reset --hard`と`worktree add`が競合しうる。
  */
 export function factoryCloneLockPath(dir: string): string {
   return `${dir}.lock`;
 }
 
 /**
- * Ensure the factory's own self clone exists, with a real (checked-out)
- * working tree, and is up to date on `opts.branch`. Unlike `ensureRepo`,
- * this clone is read for its files directly (`.claude/skills/<name>/
- * SKILL.md` via `claude.ts#buildSystemPrompt`), so it needs a working tree
- * rather than a fetch-only bare clone. Call at the start of every flow
- * (spec-cycle2.md §0).
+ * Factory自身のclone(checkout済みの作業ツリー付き)を用意し、
+ * `opts.branch`の最新に合わせる。
+ * gitの操作に失敗したら例外を投げる。
+ * `ensureRepo`と違い、このcloneはファイルを直接読む(`claude.ts`の`buildSystemPrompt`が
+ * `.claude/skills/<name>/SKILL.md`を読む)ため、作業ツリーが要る。どのフローも最初に呼ぶ。
  *
- * On every call — not just at first clone — this fetches `opts.branch` and
- * force-checks-out onto it (`checkout -B`), converging the clone to that
- * branch's current remote state regardless of what was checked out before
- * (M7 re-gate; see the incident below). Serialized under
- * `factoryCloneLockPath(dir)` (devil-advocate fix, security-auditor-
- * adopted): with `NUM_WORKERS` > 1, every flow's first step and
- * `poll_issues` all call this for the *same* `dir` concurrently; without a
- * lock, two `git fetch`/`git checkout`/`git clone` racing on the same
- * working tree fail on `.git/index.lock`.
+ * 初回のcloneに限らず毎回、`opts.branch`をfetchして`checkout -B`で強制的に切り替え、
+ * 前に何がcheckoutされていても、そのブランチのリモートの今の状態に合わせる。
+ * 以前は新しいcloneのときだけ`opts.branch`をcheckoutし、既存のcloneはそのとき
+ * checkoutされていたブランチで`git pull --ff-only`していた。
+ * そのとき`branch`を省略した呼び出し側(`poll_issues.ts`の`checkDeployedSha`)が
+ * 既定の`main`で5分ごとに共有のcloneを戻し、`self_update`が`factory_branch`ではなく
+ * 古い`main`の内容をデプロイし続けた。
  *
- * Real incident (M7, self_update's own second production run): with an
- * earlier version of this function that only checked out `opts.branch` on
- * a *fresh* clone (an already-existing clone was just `git pull --ff-
- * only`ed on whatever branch it happened to be on), one caller
- * (poll_issues.ts's `checkDeployedSha`, which reads the self clone but
- * doesn't deploy from it) omitted `branch` and got a default of "main" —
- * which, running every 5 minutes, kept resetting the *shared* clone back
- * to `main` in between self_update's own 10-minutely runs, so self_update
- * kept deploying stale `main` content instead of the real
- * `factory_branch`. Fixed two ways: this function now always re-converges
- * to `opts.branch` on every call (this comment), and `branch` has no
- * default (it is a required field on `EnsureFactoryCloneOptions`) so every
- * call site is forced to pass `config.factory_branch` explicitly — a
- * caller can no longer *silently* fall back to a wrong branch for the
- * whole shared clone.
+ * `factoryCloneLockPath(dir)`のロックの下で直列に実行する。
+ * `NUM_WORKERS`が2以上だと、各フローの最初のステップと`poll_issues`が同じ`dir`に対して
+ * 同時に呼ぶ。ロックが無いと、同じ作業ツリーで競合した`git fetch`・`git checkout`・
+ * `git clone`が`.git/index.lock`で失敗する。
  */
 export async function ensureFactoryClone(
   opts: EnsureFactoryCloneOptions,
@@ -1154,22 +1124,16 @@ export async function ensureFactoryClone(
     ...(opts.now !== undefined ? { now: opts.now } : {}),
     fn: async () => {
       if (await exists(dir)) {
-        // Fetch + `checkout -B` (not `pull --ff-only`), unconditionally, on
-        // every call — not just at first clone (security/correctness fix,
-        // M7 re-gate): `branch` (config `factory_branch`) can differ from
-        // whatever branch this clone happened to be on already (e.g. a
-        // *different* caller of ensureFactoryClone that didn't pass
-        // `branch` defaults to "main" and leaves the clone checked out
-        // there), and a plain `pull --ff-only` only ever advances the
-        // *currently checked-out* branch — it neither switches branches nor
-        // notices a mismatch. Verified in a real worker run: this let the
-        // clone stay stuck on `main` while `factory_branch` was the actual
-        // working branch, so self_update deployed stale `main` content.
-        // `checkout -B <branch> origin/<branch>` always converges to the
-        // configured branch's current remote state regardless of what was
-        // checked out before (switching if needed, resetting hard if
-        // already on it) - safe here since this clone is fetch-and-read
-        // only, never edited in place.
+        // `pull --ff-only`ではなく、毎回fetchして`checkout -B`する。
+        // `branch`は、このcloneがそのときcheckoutしているブランチと違うことがある。
+        // `pull --ff-only`は今checkoutしているブランチを進めるだけで、
+        // ブランチを切り替えず、食い違いにも気づかない
+        // (実際のworkerで、cloneが`main`のまま残り、
+        // `self_update`が古い`main`の内容をデプロイした)。
+        // `checkout -B <branch> origin/<branch>`は、前の状態によらず、
+        // 設定したブランチのリモートの今の状態に合わせる
+        // (必要なら切り替え、同じブランチならhard resetする)。
+        // このcloneはfetchして読むだけで、その場で編集しないので安全である。
         const fetchResult = await opts.run(
           buildGitArgv(["fetch", "origin", "--", branch], { network: true }),
           {
@@ -1183,11 +1147,11 @@ export async function ensureFactoryClone(
             fetchResult,
           );
         }
-        // Discard any local modification first. This clone is read-only for
-        // the factory, but `wmill sync push` bundles the raw app in place
-        // and its `npm install` rewrites package-lock.json; a real worker
-        // run then had `checkout -B` refuse to switch ("Your local changes
-        // ... would be overwritten"), stalling self_update for good.
+        // 先にローカルの変更をすべて捨てる。Factoryはこのcloneを読むだけだが、
+        // `wmill sync push`がその場でraw appをバンドルし、その`npm install`が
+        // `package-lock.json`を書き換える。実際のworkerでは、これで`checkout -B`が
+        // 切り替えを拒み(「Your local changes ... would be overwritten」)、
+        // `self_update`がずっと進まなくなった。
         const resetResult = await opts.run(buildGitArgv(["reset", "--hard"]), {
           cwd: dir,
           env: localGitEnv(opts.home, opts.path),
@@ -1198,13 +1162,12 @@ export async function ensureFactoryClone(
             resetResult,
           );
         }
-        // No `--` here: like `reset --hard` elsewhere in this module,
-        // `checkout -B <branch> <start-point>` does not tolerate a `--`
-        // before its start-point argument the way most other subcommands
-        // do — `--` switches `checkout` into "restore these paths" mode,
-        // silently misinterpreting `origin/<branch>` as a pathspec instead
-        // of a ref. `branch` is validated via `assertBranchName` above
-        // instead (rejects a leading `-`, `..`, control/whitespace chars).
+        // ここでは`--`を付けない。このモジュールの`reset --hard`と同じく、
+        // `checkout -B <branch> <start-point>`は起点の前の`--`を受け付けない。
+        // `--`を付けると`checkout`は「パスを復元する」動作になり、
+        // `origin/<branch>`を気づかないうちにrefではなくパスとして解釈する。
+        // 代わりに`branch`を上の`assertBranchName`で検証している
+        // (先頭の`-`、`..`、制御文字・空白を拒否する)。
         const checkoutResult = await opts.run(
           buildGitArgv(["checkout", "-B", branch, `origin/${branch}`]),
           {
@@ -1247,7 +1210,7 @@ export async function ensureFactoryClone(
 }
 
 // ---------------------------------------------------------------------------
-// Detached worktrees (pr_review, requirements generation)
+// detachedのworktree(pr_review、要件定義の生成)
 // ---------------------------------------------------------------------------
 
 export type AddDetachedWorktreeOptions = {
@@ -1264,9 +1227,10 @@ export type AddDetachedWorktreeOptions = {
 };
 
 /**
- * `git worktree add --detach <dir> <sha>`, fetching `sha` first. Serialized
- * under `repoLockPath(repoDir)` (code-review fix), same lock `ensureRepo`
- * uses for this repo.
+ * `sha`をfetchしてから、`git worktree add --detach <dir> <sha>`を実行する。
+ * 失敗したら例外を投げる。
+ * `ensureRepo`がこのリポジトリに使うのと同じ、
+ * `repoLockPath(repoDir)`のロックの下で実行する。
  */
 export async function addDetachedWorktree(
   opts: AddDetachedWorktreeOptions,
@@ -1290,12 +1254,12 @@ export async function addDetachedWorktree(
         throw gitError(`git fetch ${opts.sha} failed`, fetchResult);
       }
 
-      // `-c core.symlinks=false` (security fix, medium): a committed
-      // symlink (e.g. one pointing at `/proc/self/environ` or another
-      // path outside the worktree) would otherwise be checked out as a
-      // real symlink here; this forces it to be checked out as the plain
-      // text of its target path instead, same as `git clone -c
-      // core.symlinks=false`.
+      // `-c core.symlinks=false`を付ける。
+      // 付けないと、コミットされたシンボリックリンク
+      // (`/proc/self/environ`などworktreeの外を指すもの)が、
+      // 本物のリンクとしてcheckoutされる。
+      // 付ければ`git clone -c core.symlinks=false`と同じく、リンク先のパスを書いた
+      // ただのテキストファイルとしてcheckoutされる。
       const addResult = await opts.run(
         buildGitArgv([
           "-c",
@@ -1318,16 +1282,18 @@ export async function addDetachedWorktree(
   });
 }
 
-/** The fs calls behind the `.git` pointer check (verifyWorktreeGitdir) and
- * the fs-only removal of a worktree that fails it; injectable for tests. */
+/**
+ * `.git`ファイルの検査(`verifyWorktreeGitdir`)と、検査に通らないworktreeを
+ * ファイル操作だけで削除するときに使うファイル操作。テスト用に注入できる。
+ */
 export type WorktreeFsDeps = {
   readonly readTextFile?: (path: string) => Promise<string>;
   readonly realpath?: (path: string) => Promise<string>;
-  /** `rm -rf`; defaults to `rm(path, { recursive: true, force: true })`. */
+  /** `rm -rf`に当たる操作。既定は`rm(path, { recursive: true, force: true })`。 */
   readonly removeDir?: (path: string) => Promise<void>;
 };
 
-/** Whether `dir`'s `.git` pointer passes verifyWorktreeGitdir. */
+/** `dir`の`.git`ファイルが`verifyWorktreeGitdir`の検査を通るかを返す。 */
 async function worktreePointerVerified(opts: {
   readonly run: CommandRunner;
   readonly repoDir: string;
@@ -1352,13 +1318,15 @@ async function worktreePointerVerified(opts: {
   }
 }
 
-/** Deletes a worktree whose `.git` pointer failed verification without
- * running git inside it (a redirected pointer brings its own config, e.g.
- * a clean filter): `rm -rf` through the fs, then `git worktree prune` from
- * `repoDir`. Only a path `git worktree list` (run in `repoDir`) reports,
- * other than the main clone, and lying strictly under the repository's
- * workspace dir (`dirname(repoDir)`, e.g. `/workspaces/<owner>/<repo>`) is
- * deleted; anything else throws. Call under the repo lock. */
+/**
+ * `.git`ファイルが検証を通らなかったworktreeを、その中でgitを実行せずに削除する。
+ * 別の場所へ向けられた`.git`ファイルは独自の設定(cleanフィルターなど)を持ち込めるため。
+ * ファイル操作で`rm -rf`してから、`repoDir`で`git worktree prune`を実行する。
+ * 削除するのは、`repoDir`での`git worktree list`に出るメインのclone以外のパスで、
+ * かつリポジトリの作業ディレクトリ
+ * (`dirname(repoDir)`、例: `/workspaces/<owner>/<repo>`)の下にあるものだけで、
+ * それ以外は例外を投げる。リポジトリのロックの下で呼ぶ。
+ */
 async function discardUnverifiedWorktree(opts: {
   readonly run: CommandRunner;
   readonly repoDir: string;
@@ -1413,11 +1381,14 @@ export type RemoveWorktreeOptions = {
   readonly fs?: WorktreeFsDeps;
 };
 
-/** Serialized under `repoLockPath(repoDir)` (code-review fix), same lock
- * `ensureRepo` uses for this repo. `git worktree remove` inspects the
- * worktree, so it runs only after the `.git` pointer passes
- * verifyWorktreeGitdir; otherwise the directory is deleted through the fs
- * (discardUnverifiedWorktree). */
+/**
+ * worktreeを削除する。失敗したら例外を投げる。
+ * `ensureRepo`がこのリポジトリに使うのと同じ、
+ * `repoLockPath(repoDir)`のロックの下で実行する。
+ * `git worktree remove`はworktreeの中を調べるので、`.git`ファイルが
+ * `verifyWorktreeGitdir`の検査を通ったときだけ実行する。
+ * 通らなければ、ファイル操作でディレクトリを削除する(`discardUnverifiedWorktree`)。
+ */
 export async function removeWorktree(
   opts: RemoveWorktreeOptions,
 ): Promise<void> {
@@ -1478,13 +1449,12 @@ export type PruneWorktreesOptions = {
 };
 
 /**
- * `git worktree prune` in `repoDir` on its own — for a standalone sweep
- * (cleanup_workspaces.ts, M7) that isn't itself removing a specific entry
- * via `removeWorktree` (which already prunes after every removal). Clears
- * stale worktree administrative metadata for a working tree directory that
- * no longer exists on disk (e.g. removed outside of git). Serialized under
- * `repoLockPath(repoDir)` (same lock every other worktree-mutating function
- * in this module uses for this repo).
+ * `repoDir`で`git worktree prune`だけを実行する。失敗したら例外を投げる。
+ * gitの外で消されたなど、もうディスクに無い作業ツリーの管理情報を消す。
+ * 特定のworktreeを消すのではない一括の掃除(`cleanup_workspaces.ts`)に使う
+ * (`removeWorktree`は削除のたびにpruneする)。
+ * このモジュールでworktreeを変更する他の関数と同じ、
+ * `repoLockPath(repoDir)`のロックの下で実行する。
  */
 export async function pruneWorktrees(
   opts: PruneWorktreesOptions,
@@ -1573,7 +1543,7 @@ export async function listWorktrees(opts: {
 }
 
 // ---------------------------------------------------------------------------
-// git gtr worktrees (pr_fix)
+// git gtrのworktree(pr_fix)
 // ---------------------------------------------------------------------------
 
 export type GtrWorktree = {
@@ -1614,13 +1584,15 @@ export type CreateGtrWorktreeOptions = {
 };
 
 /**
- * `git gtr new <branch> --porcelain --yes`, reusing an existing worktree for
- * `branch` if `git worktree list` already has one (spec-cycle2.md §1
- * workspace.ts "既存なら再利用"). Serialized under `repoLockPath(repoDir)`
- * (code-review fix), same lock `ensureRepo` uses for this repo. A reused
- * worktree's `.git` pointer is verified (verifyWorktreeGitdir) before any
- * git command runs inside it; one that fails is deleted through the fs
- * (discardUnverifiedWorktree) and recreated with `git gtr new`.
+ * `git gtr new <branch> --porcelain --yes`で`branch`のworktreeを作って返す。
+ * `git worktree list`に`branch`のworktreeがすでにあれば、それを再利用する。
+ * gitの操作に失敗したら例外を投げる。
+ * `ensureRepo`がこのリポジトリに使うのと同じ、
+ * `repoLockPath(repoDir)`のロックの下で実行する。
+ * 再利用するworktreeは、
+ * 中でgitを実行する前に`.git`ファイルを検証する(`verifyWorktreeGitdir`)。
+ * 通らなければファイル操作で削除し(`discardUnverifiedWorktree`)、
+ * `git gtr new`で作り直す。
  */
 export async function createGtrWorktree(
   opts: CreateGtrWorktreeOptions,
@@ -1661,17 +1633,16 @@ export async function createGtrWorktree(
         });
       }
       if (reused !== undefined) {
-        // devil-advocate fix (adopted, fatal): a previous round's
-        // timed-out/cancelled Claude run can leave stray edits sitting in
-        // a reused worktree; without resetting to the branch's current
-        // remote state first, those stray edits would get swept into the
-        // *next* round's `git add -A` (commitAndPush), and — if a human
-        // had since pushed to the branch directly — the reused worktree's
-        // stale local history would also make the next push non-fast-
-        // forward. Fetch, hard-reset, and clean back to a pristine
-        // `origin/<branch>` state before handing the worktree back. New
-        // worktrees (`git gtr new` below) don't need this: they're
-        // created fresh from the current remote state already.
+        // 前のラウンドでタイムアウトしたか取り消されたClaudeの実行が、再利用する
+        // worktreeに編集を残していることがある。
+        // ブランチのリモートの今の状態に戻さないと、
+        // 残った編集が次のラウンドの`git add -A`(`commitAndPush`)に入り込む。
+        // さらに人がブランチに直接pushしていれば、古いローカルの履歴のせいで
+        // 次のpushがfast-forwardでなくなる。
+        // そのため、渡す前にfetch、hard reset、cleanを行い、
+        // `origin/<branch>`のままの状態に戻す。
+        // 下の`git gtr new`で作る新しいworktreeは、
+        // リモートの今の状態から作るので不要である。
         const fetchResult = await opts.run(
           buildGitArgv(["fetch", "origin", "--", opts.branch], {
             network: true,
@@ -1688,12 +1659,10 @@ export async function createGtrWorktree(
           );
         }
 
-        // No `--` here: like `rev-parse`/`show` above, `git reset --hard`
-        // is a fourth documented exception — verified empirically:
-        // `git reset --hard -- <ref>` fails outright ("fatal: Cannot do
-        // hard reset with paths"), since `--hard` mode doesn't accept a
-        // pathspec at all. `opts.branch` is already validated via
-        // `assertBranchName` above.
+        // ここでは`--`を付けない(`buildGitArgv`の例外を参照)。
+        // `--hard`はパスを受け付けず、`git reset --hard -- <ref>`は
+        // 「fatal: Cannot do hard reset with paths」で失敗することを確かめた。
+        // `opts.branch`は上の`assertBranchName`で検証済みである。
         const resetResult = await opts.run(
           buildGitArgv(["reset", "--hard", `origin/${opts.branch}`]),
           { cwd: reused.path, env: localGitEnv(opts.home, opts.path) },
@@ -1705,16 +1674,16 @@ export async function createGtrWorktree(
           );
         }
 
-        // `-fd`, not `-fdx`: this worktree belongs to an arbitrary target
-        // repo whose own `.gitignore` may legitimately exclude heavy,
-        // expensive-to-rebuild artifacts (`node_modules/`, build output,
-        // ...) that a stale/cancelled run wouldn't itself have created —
-        // `-x` would wipe those on every reuse for no correctness benefit.
-        // The actual hazard here (a cancelled run's stray untracked/
-        // modified files leaking into the next round's `git add -A`) is
-        // already fully covered by plain untracked-file cleanup plus the
-        // hard reset above (which already discards modifications to
-        // tracked files).
+        // `-fdx`ではなく`-fd`にする。
+        // このworktreeは任意の対象リポジトリのもので、その`.gitignore`が、
+        // 作り直しに時間のかかる大きな生成物(`node_modules/`やビルドの出力など)を
+        // 正当に除外していることがある。
+        // 取り消された実行が作ったものではないので、
+        // `-x`で再利用のたびに消しても、正しさの面で得るものが無い。
+        // 本当の危険は、取り消された実行が残した未追跡・変更済みのファイルが、
+        // 次のラウンドの`git add -A`に入ることである。
+        // これは、未追跡のファイルの削除と、
+        // 追跡中のファイルの変更を捨てる上のhard resetで防げている。
         const cleanResult = await opts.run(buildGitArgv(["clean", "-fd"]), {
           cwd: reused.path,
           env: localGitEnv(opts.home, opts.path),
@@ -1729,18 +1698,17 @@ export async function createGtrWorktree(
         return { path: reused.path, branch: opts.branch, hookStatus: "reused" };
       }
 
-      // No `--` here: `git gtr` is a third-party subcommand (not core git)
-      // and its own argv parsing isn't guaranteed to honor `--` the way
-      // core git commands do; `assertBranchName` above already rejects a
-      // leading `-`.
+      // ここでは`--`を付けない。`git gtr`はcore gitではない外部のサブコマンドで、
+      // core gitのように`--`を扱える保証が無い。
+      // 先頭の`-`は上の`assertBranchName`ですでに拒否している。
       const result = await opts.run(
         buildGitArgv(["gtr", "new", opts.branch, "--porcelain", "--yes"], {
           network: true,
         }),
         {
           cwd: opts.repoDir,
-          // core.symlinks=false via env, not `-c` (see gitConfigEnvOverrides's
-          // doc comment: `gtr` is a third-party wrapper, not core git).
+          // `core.symlinks=false`は`-c`ではなく環境変数で渡す
+          // (`gitConfigEnvOverrides`を参照。`gtr`はcore gitではない外部のラッパー)。
           env: {
             ...networkGitEnv(opts.ghToken, opts.home, opts.path),
             ...gitConfigEnvOverrides({ "core.symlinks": "false" }),
@@ -1756,25 +1724,31 @@ export async function createGtrWorktree(
 }
 
 // ---------------------------------------------------------------------------
-// commitAndPush (pr_fix)
+// commitAndPush(pr_fix)
 // ---------------------------------------------------------------------------
 
 export type CommitAndPushOptions = {
   readonly run: CommandRunner;
-  /** The main repo clone dir (see `ensureRepo`) this worktree belongs to — used to verify `dir` is a genuine, registered worktree before running git inside it, and to derive the shared per-repo lock. */
+  /**
+   * このworktreeが属するメインのcloneのディレクトリ(`ensureRepo`を参照)。
+   * 中でgitを実行する前に`dir`が本当に登録されたworktreeかを確かめるのと、
+   * リポジトリごとの共有のロックを決めるのに使う。
+   */
   readonly repoDir: string;
   readonly dir: string;
   readonly message: string;
-  /** Factory instance name, embedded in the commit's `Generated-By` trailer (see `withCommitTrailers`). */
+  /**
+   * Factoryのインスタンス名。
+   * コミットの`Generated-By`トレーラーに入れる(`withCommitTrailers`を参照)。
+   */
   readonly instanceName: string;
-  /** The PR branch's remote head SHA observed when the caller started working. */
+  /** 呼び出し側が作業を始めたときに見た、PRのブランチのリモートの先頭のsha。 */
   readonly expectedHeadSha: string;
   /**
-   * The `git commit`'s author/committer identity, passed via
-   * `GIT_AUTHOR_*`/`GIT_COMMITTER_*` env vars for that one invocation only —
-   * never written to git config (see docs/security.md's "pr_fix の安全策").
-   * Callers build this with `gitIdentityForViewer` (github.ts) from the
-   * PAT's own viewer.
+   * `git commit`のauthorとcommitter。その1回の実行だけに、環境変数
+   * `GIT_AUTHOR_*`・`GIT_COMMITTER_*`で渡し、gitの設定には書き込まない
+   * (docs/security.md「pr_fix の安全策」)。
+   * 呼び出し側は、PATの持ち主から`gitIdentityForViewer`(`github.ts`)で作る。
    */
   readonly author: GitIdentity;
   readonly ghToken: string;
@@ -1793,24 +1767,26 @@ export type CommitAndPushResult =
   | { readonly outcome: "head_changed"; readonly currentSha: string }
   | { readonly outcome: "nothing_to_commit" };
 
-// A local (non-`--verify`) `rev-parse`/`push` failure due to the remote
-// having moved is reported in the child's stderr with one of these
-// substrings, across git's various phrasings ("[rejected]", "(non-fast-forward)",
-// "hint: ... fetch first"). Matched case-insensitively. The bare word
-// "rejected" is deliberately not a needle: a server-side refusal
-// ("! [remote rejected] ... (refusing to allow a Personal Access Token to
-// create or update workflow ...)", a declined pre-receive hook) also contains
-// it, and treating that as a race would swallow a permanent failure as
-// `head_changed` instead of surfacing it.
+/**
+ * リモートが進んだために失敗したとき、gitのstderrに出る文字列。
+ * 「[rejected]」「(non-fast-forward)」「hint: ... fetch first」などの
+ * 言い回しに対応する。
+ * 大文字と小文字を区別せずに探す。
+ * 単独の「rejected」は意図して含めない。サーバー側の拒否(「! [remote rejected] ...
+ * (refusing to allow a Personal Access Token to create or update workflow ...)」や、
+ * pre-receiveフックによる拒否)にも含まれ、競合とみなすと、恒久的な失敗を報告せずに
+ * `head_changed`として扱ってしまうため。
+ */
 const PUSH_REJECTED_SUBSTRINGS = [
   "[rejected]",
   "non-fast-forward",
   "fetch first",
 ];
 
-// A "[remote rejected]" line means the server refused the update for its
-// own reasons; it is never a local non-fast-forward race, even if the same
-// stderr happens to contain one of the needles above.
+/**
+ * 「[remote rejected]」の行は、サーバーが独自の理由で更新を拒否したことを表す。
+ * 同じstderrに上の文字列が含まれていても、fast-forwardでないことによる競合ではない。
+ */
 const REMOTE_REJECTED_SUBSTRING = "[remote rejected]";
 
 function isNonFastForwardRejection(stderr: string): boolean {
@@ -1821,8 +1797,7 @@ function isNonFastForwardRejection(stderr: string): boolean {
   return PUSH_REJECTED_SUBSTRINGS.some((needle) => lower.includes(needle));
 }
 
-// User request (product decision, not security/audit-driven): every commit
-// the factory makes should carry Claude attribution trailers.
+/** Factoryが作るコミットにはすべて、Claudeが書いたことを示すトレーラーを付ける。 */
 const CLAUDE_COAUTHOR_TRAILER =
   "Co-Authored-By: Claude <noreply@anthropic.com>";
 
@@ -1831,11 +1806,10 @@ function generatedByTrailer(instanceName: string): string {
 }
 
 /**
- * `GIT_AUTHOR_NAME`/`GIT_AUTHOR_EMAIL`/`GIT_COMMITTER_NAME`/
- * `GIT_COMMITTER_EMAIL` for `author` — merged into the `git commit`
- * invocation's env only (see `CommitAndPushOptions.author`'s doc comment).
- * Never written to git config, so it has no effect on any other git
- * invocation in this module.
+ * `author`から、環境変数`GIT_AUTHOR_NAME`・`GIT_AUTHOR_EMAIL`・`GIT_COMMITTER_NAME`・
+ * `GIT_COMMITTER_EMAIL`を作って返す。
+ * `git commit`の実行の環境変数にだけ混ぜる(`CommitAndPushOptions.author`を参照)。
+ * gitの設定には書き込まないので、このモジュールの他のgitの実行には影響しない。
  */
 function commitIdentityEnv(author: GitIdentity): Record<string, string> {
   return {
@@ -1847,16 +1821,12 @@ function commitIdentityEnv(author: GitIdentity): Record<string, string> {
 }
 
 /**
- * Append the Claude co-author trailer and a `Generated-By: Software
- * Factory (<instanceName>)` trailer to `message`, separated from the rest
- * of the message by a blank line (git trailer convention) — unless
- * `message` already carries the co-author trailer, in which case it's
- * returned unchanged (idempotent: calling this twice, or on an already-
- * trailered message, doesn't double the trailers up). Pure function, no
- * I/O — used by `commitAndPush` before building the `git commit -m`
- * argv; author/committer identity itself is set separately, via
- * `CommitAndPushOptions.author` (`GIT_AUTHOR_*`/`GIT_COMMITTER_*` env vars
- * on the commit invocation only — see that field's doc comment).
+ * `message`の末尾に、Claudeの共同作者のトレーラーと
+ * `Generated-By: Software Factory (<instanceName>)`のトレーラーを付けて返す。
+ * gitのトレーラーの慣習どおり、本文との間は空行で区切る。
+ * `message`にすでに共同作者のトレーラーがあれば、そのまま返す
+ * (冪等で、2回呼んでもトレーラーは重ならない)。
+ * authorとcommitterは別に、`CommitAndPushOptions.author`で設定する。
  */
 export function withCommitTrailers(
   message: string,
@@ -1869,17 +1839,18 @@ export function withCommitTrailers(
 }
 
 /**
- * Verify `dir` is a genuine worktree of `repoDir` (see
- * `verifyWorktreeGitdir`), fetch, verify the remote branch head still
- * matches `expectedHeadSha` (someone else may have pushed while Claude was
- * editing), then commit and push all working-tree changes. Token never
- * appears in the remote URL — auth goes through
- * `-c credential.helper='!gh auth git-credential'` with `GH_TOKEN` in the
- * subprocess env, only for the fetch/push steps. Serialized under
- * `repoLockPath(repoDir)` (code-review fix), same lock `ensureRepo` uses
- * for this repo. If `push` itself is rejected as non-fast-forward (a race
- * that slipped past the earlier head-sha check), re-fetches and returns
- * `{ outcome: "head_changed" }` instead of throwing.
+ * 作業ツリーの変更をすべてコミットしてpushし、結果を返す。
+ * まず`dir`が`repoDir`の本当のworktreeであることを確かめ(`verifyWorktreeGitdir`)、
+ * fetchして、リモートのブランチの先頭がまだ`expectedHeadSha`であることを確かめる
+ * (Claudeが編集している間に他の誰かがpushしたかもしれないため)。
+ * 先頭が変わっていれば`head_changed`、変更が無ければ`nothing_to_commit`を返す。
+ * pushがfast-forwardでないとして拒否されたとき(先頭の確認をすり抜けた競合)も、
+ * 例外を投げず、fetchし直して`head_changed`を返す。それ以外の失敗では例外を投げる。
+ * トークンはリモートのURLに入れない。
+ * 認証は`-c credential.helper='!gh auth git-credential'`と
+ * サブプロセスの環境変数の`GH_TOKEN`で行い、fetchとpushのときだけ渡す。
+ * `ensureRepo`がこのリポジトリに使うのと同じ、
+ * `repoLockPath(repoDir)`のロックの下で実行する。
  */
 export async function commitAndPush(
   opts: CommitAndPushOptions,
@@ -1898,11 +1869,10 @@ export async function commitAndPush(
       const local = localGitEnv(opts.home, opts.path);
       const network = networkGitEnv(opts.ghToken, opts.home, opts.path);
 
-      // No `--` on these `rev-parse` calls: verified empirically that `git
-      // rev-parse -- <rev>` either breaks `--verify` ("Needed a single
-      // revision") or echoes a literal `--` line in non-`--verify` mode —
-      // see the module doc comment. `assertBranchName` below covers the
-      // same "no leading `-`" concern.
+      // これらの`rev-parse`には`--`を付けない(`buildGitArgv`の例外を参照)。
+      // `git rev-parse -- <rev>`は、`--verify`では「Needed a single revision」で失敗し、
+      // `--verify`なしでは`--`の行をそのまま出すことを確かめた。
+      // 先頭の`-`は、下の`assertBranchName`で防ぐ。
       const branchResult = await opts.run(
         buildGitArgv(["rev-parse", "--abbrev-ref", "HEAD"]),
         { cwd: opts.dir, env: local },
@@ -2021,15 +1991,17 @@ export async function commitAndPush(
 }
 
 // ---------------------------------------------------------------------------
-// pushNewBranch (implement flow): publish a freshly created local branch
+// pushNewBranch(implementフロー): 作ったばかりのローカルのブランチを公開する
 // ---------------------------------------------------------------------------
 
 export type PushNewBranchOptions = {
   readonly run: CommandRunner;
-  /** The main repo clone dir (see `ensureRepo`) — derives the shared
-   * per-repo lock, and both git calls run here: worktrees share refs and
-   * config with the main clone, so `push -u` from repoDir publishes the
-   * branch `createGtrWorktree` made and sets its upstream just the same. */
+  /**
+   * メインのcloneのディレクトリ(`ensureRepo`を参照)。
+   * リポジトリごとの共有のロックを決めるのに使い、2つのgitの実行もここで行う。
+   * worktreeはrefと設定をメインのcloneと共有するので、`repoDir`からの`push -u`でも、
+   * `createGtrWorktree`が作ったブランチを公開し、upstreamを同じく設定できる。
+   */
   readonly repoDir: string;
   readonly branch: string;
   readonly ghToken: string;
@@ -2042,24 +2014,26 @@ export type PushNewBranchOptions = {
 
 export type PushNewBranchResult = { readonly pushed: boolean };
 
-// `git ls-remote --exit-code` exits 2 when no ref matched (and 0 when one
-// did); every other non-zero exit is a real failure (auth, network, ...).
+/**
+ * `git ls-remote --exit-code`で、一致するrefが無かったときの終了コード(一致すれば0)。
+ * それ以外の0でない終了コードは、認証やネットワークなどの本当の失敗である。
+ */
 const LS_REMOTE_NO_MATCH_EXIT_CODE = 2;
 
 /**
- * `git push -u origin <branch>` from `repoDir`, right after
- * `createGtrWorktree` made the branch locally (工程3 design §0b): with the
- * branch published (even empty), every later step can use the existing
- * `commitAndPush` unchanged — it fetches `origin/<branch>` and compares
- * against `expectedHeadSha` — and `createGtrWorktree`'s reuse path can
- * `reset --hard origin/<branch>` on a retry. A no-op (`pushed: false`) when
- * the remote already has the branch (a retry after the push already
- * happened). The remote is asked directly with `git ls-remote --exit-code
- * --heads origin -- <branch>` (exit 0 = present, 2 = absent, anything else
- * is an error) rather than trusting the local `origin/<branch>`: `ensureRepo`
- * fetches without `--prune`, so a stale tracking ref left behind after a
- * human deleted the branch on GitHub must not suppress the push. Serialized
- * under `repoLockPath(repoDir)` like every other network git op on this repo.
+ * `createGtrWorktree`がローカルにブランチを作った直後に、`repoDir`から
+ * `git push -u origin <branch>`を実行する。失敗したら例外を投げる。
+ * ブランチを(空でも)公開しておけば、後のステップは`commitAndPush`
+ * (`origin/<branch>`をfetchして`expectedHeadSha`と比べる)をそのまま使え、
+ * 再試行のときは`createGtrWorktree`の再利用の経路で`reset --hard origin/<branch>`できる。
+ * リモートにすでにブランチがあれば(push済みの後の再試行)、何もせず`pushed: false`を返す。
+ * ローカルの`origin/<branch>`を信じず、
+ * `git ls-remote --exit-code --heads origin -- <branch>`で
+ * リモートに直接問い合わせる(0はある、2は無い、それ以外はエラー)。
+ * `ensureRepo`は`--prune`なしでfetchするので、人がGitHubでブランチを消した後に残った
+ * 古い追跡refのせいでpushを飛ばしてはいけないため。
+ * このリポジトリの他のネットワーク操作と同じく、
+ * `repoLockPath(repoDir)`のロックの下で実行する。
  */
 export async function pushNewBranch(
   opts: PushNewBranchOptions,
@@ -2102,7 +2076,7 @@ export async function pushNewBranch(
 }
 
 // ---------------------------------------------------------------------------
-// deleteRemoteBranch / currentRemoteHeadSha (implement flow)
+// deleteRemoteBranch / currentRemoteHeadSha(implementフロー)
 // ---------------------------------------------------------------------------
 
 export type DeleteRemoteBranchOptions = {
@@ -2119,15 +2093,18 @@ export type DeleteRemoteBranchOptions = {
 
 export type DeleteRemoteBranchResult = { readonly deleted: boolean };
 
-// git's own phrasing when `push --delete` names a branch the remote no
-// longer has ("error: unable to delete '<b>': remote ref does not exist").
+/**
+ * `push --delete`で、リモートにもう無いブランチを指定したときにgitが出す文言
+ * (「error: unable to delete '<b>': remote ref does not exist」)。
+ */
 const REMOTE_REF_MISSING_SUBSTRING = "remote ref does not exist";
 
 /**
- * `git push --delete origin <branch>` from the main clone (工程3 design
- * §0b / §13: a `requirements_gap` exit with no PR yet removes the empty or
- * half-done branch so the re-implementation after re-approval starts
- * clean). `deleted: false` (no throw) when the remote ref is already gone.
+ * メインのcloneから`git push --delete origin <branch>`を実行する。
+ * PRが無いまま`requirements_gap`で終わるときに、空か作りかけのブランチを消し、
+ * 再承認後の実装をきれいな状態から始めるために使う。
+ * リモートのrefがすでに無ければ、例外を投げず`deleted: false`を返す。
+ * それ以外の失敗では例外を投げる。
  */
 export async function deleteRemoteBranch(
   opts: DeleteRemoteBranchOptions,
@@ -2167,12 +2144,12 @@ export type CurrentRemoteHeadShaOptions = {
 };
 
 /**
- * The sha `origin/<branch>` currently points at in `repoDir`, or `null`
- * when the remote-tracking ref does not exist locally (never fetched, or
- * the branch was deleted). Read-only and local-only, like
- * `resolveDefaultBranchHeadSha`; the caller fetches first when it needs
- * the remote's current state. The result feeds `commitAndPush`'s
- * `expectedHeadSha`, so it is validated with `assertSha` here.
+ * `repoDir`で`origin/<branch>`が今指すshaを返す。
+ * リモート追跡のrefがローカルに無いときは`null`を返す
+ * (一度もfetchしていない、ブランチが消された)。
+ * `resolveDefaultBranchHeadSha`と同じく読み取りだけのローカルの操作で、
+ * リモートの今の状態が要るときは呼び出し側が先にfetchする。
+ * 結果は`commitAndPush`の`expectedHeadSha`に渡るので、ここで`assertSha`で検証する。
  */
 export async function currentRemoteHeadSha(
   opts: CurrentRemoteHeadShaOptions,
@@ -2189,16 +2166,19 @@ export async function currentRemoteHeadSha(
 }
 
 // ---------------------------------------------------------------------------
-// resolveDefaultBranchName / mergeBaseSha / deleteLocalBranch (implement flow)
+// resolveDefaultBranchName / mergeBaseSha / deleteLocalBranch(implementフロー)
 // ---------------------------------------------------------------------------
 
 const ORIGIN_PREFIX = "origin/";
 
-/** The target repo's default branch name from the `ensureRepo` clone's
- * `refs/remotes/origin/HEAD` symbolic ref (measured: `origin/main` on a
- * `--no-checkout` clone) — the base the implement flow opens its PR
- * against, and the ref `git gtr new` branches a new worktree from.
- * Local-only; `ensureRepo` must have run first. */
+/**
+ * `ensureRepo`のcloneのシンボリックref`refs/remotes/origin/HEAD`から、
+ * 対象リポジトリの既定のブランチ名を返す
+ * (`--no-checkout`のcloneで`origin/main`になることを確かめた)。
+ * implementフローがPRのbaseにし、
+ * `git gtr new`が新しいworktreeの分岐元にするブランチである。
+ * ローカルだけの操作で、先に`ensureRepo`を実行しておく必要がある。
+ */
 export async function resolveDefaultBranchName(opts: {
   readonly run: CommandRunner;
   readonly repoDir: string;
@@ -2234,13 +2214,15 @@ export type WorktreeGitOptions = {
   readonly path?: string;
 };
 
-/** `git merge-base origin/<baseBranch> HEAD` in the implement worktree —
- * the point the branch left the default branch. The implement flow
- * compares every round against it, so changes committed earlier on the
- * branch (a needs_human partial push, an existing PR) stay visible. `--`
- * precedes the revisions per this module's rule (`git merge-base -- <a> <b>`
- * resolves the same way as without it; `baseBranch` is additionally
- * validated by assertBranchName). */
+/**
+ * 実装用のworktreeで`git merge-base origin/<baseBranch> HEAD`を実行し、
+ * ブランチが既定のブランチから分かれた点のshaを返す。失敗したら例外を投げる。
+ * implementフローは毎ラウンドこれと比べるので、ブランチに以前コミットした変更
+ * (`needs_human`での途中のpush、既存のPR)も差分に含まれる。
+ * このモジュールの規則どおりリビジョンの前に`--`を置く
+ * (`git merge-base -- <a> <b>`は`--`なしと同じに解決する)。
+ * `baseBranch`は`assertBranchName`でも検証する。
+ */
 export async function mergeBaseSha(
   opts: WorktreeGitOptions & { readonly baseBranch: string },
 ): Promise<string> {
@@ -2276,15 +2258,19 @@ export type DeleteLocalBranchOptions = {
 
 export type DeleteLocalBranchResult = { readonly deleted: boolean };
 
-// git's phrasing for `branch -D` on a missing branch (measured:
-// "error: branch '<b>' not found", exit 1).
+/**
+ * 無いブランチに`branch -D`したときにgitが出す文言
+ * (「error: branch '<b>' not found」、終了コード1になることを確かめた)。
+ */
 const LOCAL_BRANCH_MISSING_SUBSTRING = "not found";
 
-/** `git branch -D -- <branch>` in the main clone (工程3 design §14:
- * `removeWorktree` keeps the local branch, so a `requirements_gap` exit with
- * no PR drops it too, or the re-implementation after re-approval would
- * start from the stale branch). Remove the worktree first — git refuses to
- * delete a checked-out branch. */
+/**
+ * メインのcloneで`git branch -D -- <branch>`を実行する。
+ * ブランチが無ければ`deleted: false`を返し、それ以外の失敗では例外を投げる。
+ * `removeWorktree`はローカルのブランチを残すので、PRが無いまま`requirements_gap`で
+ * 終わるときはブランチも消す。消さないと、再承認後の実装が古いブランチから始まる。
+ * checkout中のブランチはgitが削除を拒むので、先にworktreeを削除しておく。
+ */
 export async function deleteLocalBranch(
   opts: DeleteLocalBranchOptions,
 ): Promise<DeleteLocalBranchResult> {
@@ -2311,7 +2297,7 @@ export async function deleteLocalBranch(
 }
 
 // ---------------------------------------------------------------------------
-// worktreeFingerprint / runGitleaksOnWorktree (implement flow verify loop)
+// worktreeFingerprint / runGitleaksOnWorktree(implementフローの検証ループ)
 // ---------------------------------------------------------------------------
 
 async function stageAll(opts: WorktreeGitOptions): Promise<void> {
@@ -2323,12 +2309,14 @@ async function stageAll(opts: WorktreeGitOptions): Promise<void> {
     throw gitError(`git add -A failed in ${opts.worktreeDir}`, result);
 }
 
-/** `git clean -fdX` in the implement worktree: removes ignored files only
- * (capital X — untracked, non-ignored files are Claude's work and stay).
- * Runs before every round's check commands, so nothing a previous command
- * left in an ignored path (`node_modules/`, build output, caches) — possibly
- * shaped by Claude's earlier code — carries into the next run; check
- * commands install their dependencies themselves. */
+/**
+ * 実装用のworktreeで`git clean -fdX`を実行し、無視されたファイルだけを消す。
+ * 失敗したら例外を投げる。
+ * 大文字の`X`なので、無視されていない未追跡のファイル(Claudeの作業)は残る。
+ * 毎ラウンドの検査コマンドの前に実行し、前のコマンドが無視されたパス(`node_modules/`、
+ * ビルドの出力、キャッシュ)に残したもの(Claudeの以前のコードの影響を受けうる)を
+ * 次の実行に持ち越さない。検査コマンドは依存を自分でインストールする。
+ */
 export async function removeIgnoredFiles(
   opts: WorktreeGitOptions,
 ): Promise<void> {
@@ -2346,8 +2334,10 @@ function countOrZero(text: string | undefined): number {
   return Number.isFinite(value) ? value : 0;
 }
 
-/** `git diff --numstat` totals: one file per non-blank line, a binary
- * file's `-` counts contribute 0 (it still counts as a file). */
+/**
+ * `git diff --numstat`の出力を集計して返す。空でない1行を1ファイルと数える。
+ * バイナリファイルの`-`は行数を0として足す(ファイル数には数える)。
+ */
 export function parseNumstatTotals(stdout: string): ImplementDiffStat {
   let files = 0;
   let added = 0;
@@ -2363,16 +2353,20 @@ export function parseNumstatTotals(stdout: string): ImplementDiffStat {
 }
 
 export type WorktreeFingerprint = {
-  /** `git write-tree` of the fully staged worktree: identical iff the
-   * worktree content (untracked files included) is identical. */
+  /**
+   * worktreeをすべてステージした状態の`git write-tree`。
+   * worktreeの内容(未追跡のファイルを含む)が同じときに限り、同じ値になる。
+   */
   readonly treeSha: string;
-  /** Staged state vs `baseSha`; `files === 0` means nothing differs from the base. */
+  /** ステージした状態と`baseSha`の差分。`files === 0`ならbaseとの違いは無い。 */
   readonly diffStat: ImplementDiffStat;
 };
 
-/** Stages every change (`git add -A`) and returns `git write-tree` of the
- * result — the tree a commit made right now would record. implement_finish
- * compares it with the loop's verified_tree_sha before committing. */
+/**
+ * すべての変更をステージ(`git add -A`)し、その`git write-tree`を返す。
+ * 今コミットしたら記録されるツリーに当たる。
+ * `implement_finish`がコミットの前に、ループで検証した`verified_tree_sha`と比べる。
+ */
 export async function stagedTreeSha(opts: WorktreeGitOptions): Promise<string> {
   await stageAll(opts);
   const tree = await opts.run(buildGitArgv(["write-tree"]), {
@@ -2386,12 +2380,14 @@ export async function stagedTreeSha(opts: WorktreeGitOptions): Promise<string> {
   return treeSha;
 }
 
-/** Stages every change (`git add -A`; harmless for the later
- * `commitAndPush`, which stages again), fingerprints the staged state with
- * `git write-tree` (stall detection; design §14: plain `git diff` would
- * miss new files), and measures it against `baseSha` with
- * `git diff --cached --numstat` (implement_rounds.diff_stat and the
- * diff-size guard). */
+/**
+ * すべての変更をステージし、その状態の指紋と`baseSha`との差分の大きさを返す。
+ * ステージ(`git add -A`)は、後でもう一度ステージする`commitAndPush`の邪魔にならない。
+ * 指紋は`git write-tree`で取り、進展が止まったことの検出に使う
+ * (ただの`git diff`では新しいファイルを見落とすため)。
+ * 差分の大きさは`git diff --cached --numstat`で測り、`implement_rounds.diff_stat`と
+ * 差分の大きさの上限の検査に使う。
+ */
 export async function worktreeFingerprint(
   opts: WorktreeGitOptions & { readonly baseSha: string },
 ): Promise<WorktreeFingerprint> {
@@ -2428,19 +2424,23 @@ export type GitleaksConfigDir = {
 
 const GITLEAKS_CONFIG_FILE = "gitleaks.toml";
 
-/** gitleaks' built-in rules with nothing on top, forced with `--config` so a
- * `.gitleaks.toml` in the target repo (possibly written by Claude) cannot
- * allowlist anything — and a malformed one cannot abort the scan. The same
- * private dir is the `--gitleaks-ignore-path` (and the scan's cwd), so a
- * repo `.gitleaksignore` is not read, and `--ignore-gitleaks-allow` voids
- * inline `gitleaks:allow` comments (design §3: the scan is independent of
- * the repo's settings). */
+/**
+ * gitleaksの組み込みの規則だけを使う設定。`--config`で強制する。
+ * 対象リポジトリの`.gitleaks.toml`(Claudeが書いたかもしれない)に何も許可させず、
+ * 壊れた`.gitleaks.toml`で検査を中断させないため。
+ * 同じ専用のディレクトリを`--gitleaks-ignore-path`(と検査のcwd)にしてリポジトリの
+ * `.gitleaksignore`を読ませず、
+ * `--ignore-gitleaks-allow`で行内の`gitleaks:allow`を無効にする。
+ * 検査をリポジトリの設定から独立させるため。
+ */
 export const GITLEAKS_DEFAULT_ONLY_CONFIG = "[extend]\nuseDefault = true\n";
 
 const GITLEAKS_LEAKS_EXIT_CODE = 1;
 const GITLEAKS_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
-/** Ceiling on the staged diff fed to gitleaks. A diff cut by the cap would
- * leave its middle unscanned, so hitting it fails the scan. */
+/**
+ * gitleaksに渡すステージ済みの差分の大きさの上限。
+ * 上限で切った差分は途中が検査されないので、上限に達したら検査を失敗にする。
+ */
 const GITLEAKS_MAX_DIFF_BYTES = 32 * 1024 * 1024;
 
 const defaultCreateGitleaksConfigDir = async (): Promise<GitleaksConfigDir> => {
@@ -2452,8 +2452,8 @@ const defaultCreateGitleaksConfigDir = async (): Promise<GitleaksConfigDir> => {
       { mode: 0o600 },
     );
   } catch (err) {
-    // The caller's try/finally only starts once this helper returns, so a
-    // failed write must remove the directory it just created.
+    // 呼び出し側のtry/finallyはこの関数が返ってから始まるので、
+    // 書き込みに失敗したら、作ったばかりのディレクトリをここで消す。
     await rm(dir, { recursive: true, force: true });
     throw err;
   }
@@ -2492,9 +2492,11 @@ const C_QUOTE_ESCAPES: Readonly<Record<string, number>> = {
   "\\": 0x5c,
 };
 
-/** Undoes git's C-style quoting of a path (the text between the quotes):
- * `\t \n \" \\` and the other single-letter escapes, and `\NNN` octal
- * bytes (UTF-8, decoded as a whole). null for a malformed escape. */
+/**
+ * gitがC言語風に引用したパス(引用符の間の文字列)を元に戻して返す。
+ * `\t \n \" \\`などの1文字のエスケープと、`\NNN`の8進数のバイト
+ * (まとめてUTF-8としてデコードする)を戻す。エスケープが不正なら`null`を返す。
+ */
 function unquoteCStyle(quoted: string): string | null {
   const bytes: number[] = [];
   const encoder = new TextEncoder();
@@ -2519,10 +2521,12 @@ function unquoteCStyle(quoted: string): string | null {
   return new TextDecoder().decode(new Uint8Array(bytes));
 }
 
-/** The new-side path of a `+++ ` file header line: the path for
- * `+++ b/<path>` (git appends one tab to a name containing a space; it is
- * dropped) or git's C-quoted `+++ "b/<path>"` (unescaped), null for
- * `+++ /dev/null` (a deletion), undefined for any other line. */
+/**
+ * `+++ `で始まるファイルのヘッダー行から、変更後のパスを返す。
+ * `+++ b/<path>`ならそのパスを返す(空白を含む名前にgitが付ける末尾のタブ1つは除く)。
+ * C言語風に引用された`+++ "b/<path>"`なら、エスケープを戻したパスを返す。
+ * `+++ /dev/null`(削除)なら`null`、それ以外の行なら`undefined`を返す。
+ */
 function newPathFromHeader(line: string): string | null | undefined {
   const text = line.endsWith("\t") ? line.slice(0, -1) : line;
   if (text === "+++ /dev/null") return null;
@@ -2535,13 +2539,12 @@ function newPathFromHeader(line: string): string | null | undefined {
 }
 
 /**
- * The file a 1-based `line` of a `git diff` text belongs to: the path of
- * the nearest preceding `+++ b/<path>` header of the same file section.
- * Headers are only read between a `diff --git` line and its first `@@`
- * hunk, so an added line whose content looks like a header (`+++ b/x`
- * inside a hunk) is never taken for one. null before any header and in a
- * deleted file's section (`+++ /dev/null`). gitleaks' stdin findings carry
- * no file name, only this line number.
+ * `git diff`の文字列の`line`行目(1始まり)が属するファイルのパスを返す。
+ * 同じファイルの区画で、直前にある`+++ b/<path>`のヘッダーのパスである。
+ * gitleaksの`stdin`の検出結果にはファイル名が無く、この行番号しか無いため。
+ * ヘッダーは`diff --git`の行と最初の`@@`のハンクの間でだけ読むので、
+ * ハンクの中のヘッダーに見える追加行(`+++ b/x`)をヘッダーとみなすことは無い。
+ * どのヘッダーより前と、削除されたファイルの区画(`+++ /dev/null`)では`null`を返す。
  */
 export function mapDiffLineToFile(
   diffText: string,
@@ -2567,10 +2570,12 @@ export function mapDiffLineToFile(
   return file;
 }
 
-/** `diffText` without the removed (`-`) lines of its hunks — the scan
- * checks what the branch adds, as `gitleaks git` did; a removed line
- * already exists in the base. File headers (`--- a/<path>`) are kept: they
- * are outside hunks. */
+/**
+ * `diffText`から、ハンクの中の削除行(`-`)を除いて返す。
+ * 削除行はbaseにすでにあるので、`gitleaks git`と同じく、
+ * ブランチが追加するものだけを検査する。
+ * ファイルのヘッダー(`--- a/<path>`)はハンクの外にあるので残る。
+ */
 export function dropRemovedDiffLines(diffText: string): string {
   let inHunk = false;
   const kept: string[] = [];
@@ -2587,11 +2592,13 @@ export function dropRemovedDiffLines(diffText: string): string {
   return kept.join("\n");
 }
 
-/** One `- <rule>: <file>` line per finding of a gitleaks stdin JSON report,
- * the file mapped from the finding's line in `diffText` (mapDiffLineToFile;
- * the line within the diff means nothing to a reader, so it is not shown)
- * — never the matched text, even redacted (design §13). `null` when
- * `stdout` is not a JSON array. */
+/**
+ * gitleaksの`stdin`のJSONのレポートを、検出1件につき`- <rule>: <file>`の1行にして返す。
+ * ファイルは、検出の行番号から`diffText`で引く(`mapDiffLineToFile`)。
+ * 差分の中の行番号は読み手にとって意味が無いので出さない。
+ * 一致した文字列は、伏せたものでも決して出さない。
+ * `stdout`がJSONの配列でなければ`null`を返す。
+ */
 export function formatGitleaksReport(
   stdout: string,
   diffText: string,
@@ -2618,18 +2625,17 @@ export function formatGitleaksReport(
 }
 
 /**
- * The implement flow's fixed secret scan (工程3 design §3, §14; gitleaks
- * 8.30.1 in the worker image): stages every change, takes the staged diff
- * against `baseSha` (`git diff --cached --text --no-ext-diff --no-textconv
- * -U0`, so `.gitattributes` binary / `-diff` / textconv settings cannot hide
- * content, and the whole branch since its merge-base is scanned every
- * round), drops its removed lines, and pipes it into `gitleaks stdin`
- * running in the private temp dir — nothing in the repository (ignore
- * files, attributes, config) reaches gitleaks. Exit 0 → `ok: true`; exit 1
- * with a complete JSON report → `ok: false` with one line per finding
- * (masked); a diff or report cut by its output cap, exit 1 without JSON, or
- * any other exit (an unknown flag is 126), a timeout — throws, never read
- * as "no leaks".
+ * implementフローの固定の秘密情報の検査(workerのイメージのgitleaks 8.30.1)を実行する。
+ * すべての変更をステージし、`baseSha`とのステージ済みの差分を取り、削除行を除いて、
+ * 専用の一時ディレクトリで動く`gitleaks stdin`に渡す。
+ * 差分は`git diff --cached --text --no-ext-diff --no-textconv -U0`で取る。
+ * `.gitattributes`のbinary・`-diff`・textconvの設定で内容を隠させず、
+ * 毎ラウンド、merge-base以降のブランチ全体を検査するため。
+ * リポジトリの中のもの(ignoreファイル、attributes、設定)はgitleaksに届かない。
+ * 終了コード0なら`ok: true`を返す。終了コード1で完全なJSONのレポートがあれば、
+ * 検出1件につき1行(伏せ字済み)の`ok: false`を返す。
+ * 差分かレポートが上限で切れたとき、終了コード1でJSONが無いとき、それ以外の終了コード
+ * (不明なオプションなら126)、タイムアウトのときは例外を投げ、「漏洩なし」とはみなさない。
  */
 export async function runGitleaksOnWorktree(
   opts: WorktreeGitOptions & {

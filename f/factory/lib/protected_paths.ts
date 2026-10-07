@@ -1,14 +1,9 @@
-// Protected-path classification shared by pr_fix (steps/pr_workflow_support.ts,
-// where a match blocks the push — docs/security.md "pr_fix の安全策") and the
-// implement flow (lib/implement_support.ts, where a match is only recorded
-// for the PR body and the Discord notification — 工程3 design §3). Lives in
-// lib so implement_support never imports from steps; pr_workflow_support.ts
-// re-exports everything here, so its existing callers and tests are
-// unchanged. The two lists differ on purpose: the implement flow runs check
-// commands against Claude's changes, so everything that decides what those
-// commands execute (hooks, package-manager and tool configuration,
-// lockfiles, any package.json) is protected there; the pr_fix lists are
-// deliberately not widened.
+// 保護パスの判定を、pr_fixとimplementフローで共有する。
+// pr_fix(`steps/pr_workflow_support.ts`)では一致するとpushを止め
+// (docs/security.md「pr_fix の安全策」)、implementフロー(`lib/implement_support.ts`)では
+// PR本文とDiscord通知に記録するだけにする。
+// `implement_support`が`steps`からimportしないで済むよう`lib`に置き、
+// `pr_workflow_support.ts`がここの定義をすべて再exportする。
 
 export type ChangedPathStatus =
   | "added"
@@ -22,9 +17,13 @@ export type ChangedPath = {
   readonly status: ChangedPathStatus;
 };
 
-// Covers every config surface that changes which commands run or what a
-// package manager / git trusts: agent settings, CI workflows, mise's XDG /
-// dotfile config locations, and lefthook's directory form.
+/**
+ * pr_fixが保護するディレクトリ。
+ * どのコマンドが実行されるか、パッケージマネージャーやgitが何を信頼するかを変える設定を
+ * すべて含める(エージェントの設定、CIのワークフロー、
+ * miseのXDG・ドットファイルの設定場所、
+ * ディレクトリ形式のlefthook設定)。
+ */
 export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
   ".claude/",
   ".agents/",
@@ -48,13 +47,20 @@ export const FORBIDDEN_BASENAME_PATTERNS: readonly RegExp[] = [
   /^\.gitmodules$/,
 ];
 
-/** The implement flow's prefix list: pr_fix's with `.github/workflows/`
- * widened to all of `.github/` (actions, dependabot, CODEOWNERS), plus
- * `infra/**` (worker image and compose definitions — changing them needs a
- * host-side `mise run deploy`, so a reviewer must know), git hook
- * directories (`.husky/`, `.githooks/`), `.yarn/` (plugins and releases the
- * package manager executes) and `.devcontainer/`. pr_fix's own list is
- * unchanged. */
+/**
+ * implementフローが保護するディレクトリ。
+ * implementフローはClaudeの変更に対して検査コマンドを実行するため、
+ * そのコマンドが何を実行するかを決めるもの
+ * (フック、パッケージマネージャーとツールの設定、ロックファイル、
+ * すべての`package.json`)を保護する。pr_fixのリストは意図して広げていない。
+ * pr_fixのリストの`.github/workflows/`を`.github/`全体(actions、dependabot、CODEOWNERS)に
+ * 広げ、次を加える。
+ * - `infra/**`: workerのイメージとcomposeの定義。変更するとホスト側で`mise run deploy`が
+ *   要るため、レビューする人が知る必要がある。
+ * - gitフックのディレクトリ(`.husky/`、`.githooks/`)
+ * - `.yarn/`: パッケージマネージャーが実行するプラグインとリリース
+ * - `.devcontainer/`
+ */
 export const IMPLEMENT_PROTECTED_PATH_PREFIXES: readonly string[] = [
   ...FORBIDDEN_PATH_PREFIXES.map((prefix) =>
     prefix === ".github/workflows/" ? ".github/" : prefix,
@@ -66,12 +72,13 @@ export const IMPLEMENT_PROTECTED_PATH_PREFIXES: readonly string[] = [
   ".devcontainer/",
 ];
 
-/** The implement flow's basename list: pr_fix's plus every file that
- * decides what a check command executes or trusts — env files, the
- * gitleaks configuration, runtime/toolchain pins, package-manager
- * configuration and lockfiles, tool config modules and rc files, task
- * runners, and any package.json (not only its `scripts`). pr_fix's own list
- * is unchanged. */
+/**
+ * implementフローが保護するファイル名。
+ * pr_fixのリストに、検査コマンドが何を実行し何を信頼するかを決めるファイルをすべて加える
+ * (envファイル、gitleaksの設定、ランタイム・ツールチェーンのバージョン指定、
+ * パッケージマネージャーの設定とロックファイル、ツールの設定モジュールとrcファイル、
+ * タスクランナー、`scripts`に限らず`package.json`全体)。
+ */
 export const IMPLEMENT_PROTECTED_BASENAME_PATTERNS: readonly RegExp[] = [
   ...FORBIDDEN_BASENAME_PATTERNS,
   /^\.env(\..*)?$/,
@@ -87,8 +94,8 @@ export const IMPLEMENT_PROTECTED_BASENAME_PATTERNS: readonly RegExp[] = [
   /^\.(eslintrc|babelrc|prettierrc)(\..*)?$/,
   /^(Makefile|[Jj]ustfile|Taskfile\.ya?ml|turbo\.json|nx\.json|deno\.jsonc?|CODEOWNERS|\.pre-commit-config\.yaml)$/,
   /^package\.json$/,
-  // Non-JS lockfiles and manifests: an install step would run what they
-  // name (build scripts, setup.py) or fetch what they pin.
+  // JS以外のロックファイルとマニフェスト。インストール時に、記載された
+  // ビルドスクリプトや`setup.py`が実行され、固定したものが取得される。
   /^(uv|poetry)\.lock$/,
   /^Pipfile(\.lock)?$/,
   /^pyproject\.toml$/,
@@ -115,10 +122,13 @@ function matchesPathLists(
   return basenamePatterns.some((pattern) => pattern.test(basename));
 }
 
-/** docs/security.md "変更してはいけないファイル". Directory entries in
- * `prefixes` match by repo-root-relative path prefix (the bare directory
- * name itself also matches); `FORBIDDEN_BASENAME_PATTERNS` match by
- * basename regardless of directory. `prefixes` defaults to pr_fix's list. */
+/**
+ * `path`がdocs/security.mdの「変更してはいけないファイル」に当たるかを返す。
+ * `prefixes`のディレクトリは、リポジトリのルートからの相対パスの前方一致で判定する
+ * (ディレクトリ名そのものも一致とみなす)。
+ * `FORBIDDEN_BASENAME_PATTERNS`は、ディレクトリを問わずファイル名で判定する。
+ * `prefixes`の既定はpr_fixのリスト。
+ */
 export function matchesForbiddenPath(
   path: string,
   prefixes: readonly string[] = FORBIDDEN_PATH_PREFIXES,
@@ -126,9 +136,11 @@ export function matchesForbiddenPath(
   return matchesPathLists(path, prefixes, FORBIDDEN_BASENAME_PATTERNS);
 }
 
-/** The implement flow's protected-path check: same matching rules as
- * matchesForbiddenPath, with IMPLEMENT_PROTECTED_PATH_PREFIXES and
- * IMPLEMENT_PROTECTED_BASENAME_PATTERNS. */
+/**
+ * `path`がimplementフローの保護パスに当たるかを返す。
+ * 判定の規則は`matchesForbiddenPath`と同じで、リストに
+ * `IMPLEMENT_PROTECTED_PATH_PREFIXES`と`IMPLEMENT_PROTECTED_BASENAME_PATTERNS`を使う。
+ */
 export function matchesImplementProtectedPath(path: string): boolean {
   return matchesPathLists(
     path,

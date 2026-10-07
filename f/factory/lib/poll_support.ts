@@ -1,26 +1,5 @@
-// Pure decision logic for poll_issues.ts / poll_prs.ts (spec-cycle2.md §3
-// M5, §7). Owned by the M5a implementer (team split: do not edit
-// f/factory/lib/{types,config,db,github,workspace,discord,log}.ts).
-//
-// This file holds ONLY pure decision functions (decideIssueActions,
-// decidePrActions, decideReconcileAction, filterByRepoAllowlist,
-// associationFromLabeledEvent) — no I/O, fully testable with plain fakes
-// (tests/scripts/*.test.ts). poll_issues.ts / poll_prs.ts's main() calls
-// these and only does I/O based on their output ("main() should be thin
-// wiring", per the M5a task).
-//
-// History: this file briefly carried small additive I/O helpers
-// (setFlowJobId / setFixRound / bumpWatermarks / nextCycleForIssue /
-// latestPrWorkItem, working around a then-missing db.ts capability, and
-// listIssueComments, working around a then-missing github.ts capability).
-// Both gaps have since been closed upstream — lib-core promoted the first
-// group into db.ts (bumpWatermarks now takes a
-// `{ last_review_id?, last_comment_id? }` options object rather than two
-// positional args) and lib-exec added `listIssueComments` to github.ts — so
-// poll_issues.ts / poll_prs.ts call those directly now. The one-off `git
-// rev-parse HEAD` helper for the deployed_sha check moved to a private
-// function inside poll_issues.ts (it's git-workspace I/O, not a decision,
-// and workspace.ts is out of scope for this file to extend).
+// `poll_issues.ts`と`poll_prs.ts`の判定ロジックを、I/Oを持たない純粋関数としてまとめる。
+// 各`main()`はこれらを呼び、その結果に従ってI/Oだけを行う。
 
 import { normalizeRepoUrl } from "./config.ts";
 import {
@@ -32,18 +11,17 @@ import {
 } from "./types.ts";
 
 // ---------------------------------------------------------------------------
-// filterByRepoAllowlist (pure)
+// リポジトリの許可リストによる絞り込み
 // ---------------------------------------------------------------------------
 
 /**
- * `factory_config.repo_allowlist` is a list of HTTPS clone URLs
- * (`https://github.com/<owner>/<repo>`); empty means "no restriction beyond
- * owners" (rt.d.ts / c_factory_config.resource-type.yaml). Case-insensitive
- * match on the owner/repo pair. `config.factory_repo` always passes
- * regardless of `repo_allowlist`, matching `isRepoAllowed` (lib/config.ts)
- * — a candidate from the factory's own repo (e.g. an audit-filed Issue)
- * must reach poll_issues/poll_prs's candidate list even when it is not
- * separately listed in `repo_allowlist`.
+ * `items`のうち、`factory_config.repo_allowlist`に含まれるリポジトリのものを返す。
+ * `repo_allowlist`はHTTPSのclone URL(`https://github.com/<owner>/<repo>`)のリストで、
+ * 空なら絞り込まない。ownerとrepoの組を、大文字と小文字を区別せずに比べる。
+ * `isRepoAllowed`(`lib/config.ts`)と同じく、
+ * `config.factory_repo`は`repo_allowlist`によらず常に通す。
+ * 監査から起票したIssueなどFactory自身のリポジトリの候補を、`repo_allowlist`に
+ * 載っていなくても`poll_issues`と`poll_prs`の候補に残すため。
  */
 export function filterByRepoAllowlist<
   T extends { readonly owner: string; readonly repo: string },
@@ -65,7 +43,7 @@ export function filterByRepoAllowlist<
 }
 
 // ---------------------------------------------------------------------------
-// Issue claim decisions (pure)
+// Issueに着手するかの判定
 // ---------------------------------------------------------------------------
 
 export type IssueCandidate = {
@@ -75,18 +53,19 @@ export type IssueCandidate = {
   readonly title: string;
   readonly body: string;
   readonly htmlUrl: string;
-  /** `authorAssociation` of the issue's most recent `labeled` timeline
-   * event, or `null` if there is none (see `associationFromLabeledEvent`).
-   * This is a *secondary* check (spec-cycle2.md §3 M5): GitHub itself
-   * normally restricts who can apply a label, so a `null` association
-   * (no timeline event found, or the actor was unresolvable) does not
-   * block a claim on its own. */
+  /**
+   * Issueのタイムラインで最後の`labeled`イベントの`authorAssociation`。無ければ`null`。
+   * これは補助の検査である。
+   * ラベルを付けられる人は通常GitHub自体が制限しているため、
+   * `null`だけでは着手を止めない
+   * (イベントが見つからない、または操作した人を特定できないときに`null`になる)。
+   */
   readonly labelerAssociation: string | null;
-  /** Whether a non-terminal work_items row already exists for this
-   * (owner, repo, number) — a defensive double-check after the trigger
-   * label is consumed on claim, guarding against a duplicate re-claim of
-   * the same issue (`listActive` is the sole source of truth here; there is
-   * no longer a `-label:<wip_label>` search filter to lean on). */
+  /**
+   * この(owner, repo, number)に、終了していない`work_items`の行がすでにあるか。
+   * トリガーラベルは着手時に外すが、同じIssueに重ねて着手しないよう念のため確かめる。
+   * 判断の根拠は`listActive`だけである(作業中ラベルで検索から除く仕組みは無い)。
+   */
   readonly hasActiveWorkItem: boolean;
 };
 
@@ -99,9 +78,12 @@ export type IssueDecision =
     }
   | { readonly action: "skip_active"; readonly candidate: IssueCandidate };
 
-/** Extracts the association to check from a (possibly absent) labeled
- * timeline event — kept as a tiny pure function so poll_issues.ts's main()
- * doesn't need to know `LabeledTimelineEvent`'s shape. */
+/**
+ * `labeled`のタイムラインイベント(無いこともある)から、
+ * 検査に使う`authorAssociation`を返す。
+ * `poll_issues.ts`の`main()`が`LabeledTimelineEvent`の形を知らずに済むよう、
+ * 関数に分けている。
+ */
 export function associationFromLabeledEvent(
   event: { readonly authorAssociation: string | null } | null,
 ): string | null {
@@ -131,7 +113,7 @@ export function decideIssueActions(
 }
 
 // ---------------------------------------------------------------------------
-// PR review/fix trigger decisions (pure) — spec-cycle2.md §7 item 1
+// PRのレビューと修正を始めるかの判定
 // ---------------------------------------------------------------------------
 
 export type PrCandidate = {
@@ -140,22 +122,29 @@ export type PrCandidate = {
   readonly number: number;
   readonly title: string;
   readonly headSha: string;
-  /** Current labels on the PR (fetched via `getIssue` — PR numbers share
-   * the issues API's label endpoint). */
+  /**
+   * PRに今付いているラベル。PRの番号はIssueのAPIのラベルのエンドポイントを共有するため、
+   * `getIssue`で取得する。
+   */
   readonly labels: readonly string[];
-  /** An active (non-terminal) `pr_review` work item already exists for
-   * this PR. */
+  /** このPRに、終了していない`pr_review`のwork itemがすでにあるか。 */
   readonly hasActiveReviewingItem: boolean;
-  /** `head_sha` of the most recent work_items row for this PR (any kind,
-   * any status), or `null` if this PR has never had a work item. Used to
-   * decide whether the current head_sha is "unprocessed" for the
-   * assignment/review-requested auto-detect path. */
+  /**
+   * このPRの最新の`work_items`の行(種類と状態は問わない)の`head_sha`。
+   * work itemが一度も無ければ`null`。
+   * アサインやレビュー依頼から自動で検出する経路で、
+   * 今の`head_sha`が未処理かを判断するのに使う。
+   */
   readonly lastKnownHeadSha: string | null;
-  /** `fix_round` of the most recent work_items row for this PR, 0 if
-   * none — the new pr_fix row's `fix_round` is this plus one. */
+  /**
+   * このPRの最新の`work_items`の行の`fix_round`。無ければ0。
+   * 新しい`pr_fix`の行の`fix_round`は、これに1を足した値になる。
+   */
   readonly previousFixRound: number;
-  /** Max review id observed on this PR in this poll, for bumping the
-   * watermark regardless of whether a trigger fired. */
+  /**
+   * 今回のポーリングでこのPRに見つかったレビューIDの最大値。
+   * トリガーが発火したかによらず、ウォーターマークを進めるのに使う。
+   */
   readonly maxReviewId: number;
 };
 
@@ -178,11 +167,11 @@ export type PrDecision = {
 };
 
 /**
- * spec-cycle2.md §7 item 1: label-triggered review/fix always fires
- * (the label removal itself makes it idempotent); the review auto-detect
- * path (unprocessed head_sha) defers while a pr_review item is already
- * active for this PR. `pr_fix` has no auto-detect path — a human decision
- * (2026-09-26): it starts only via the `fix_label`, never from a comment.
+ * 各PRについて、レビューと修正を始めるかを判定して返す。
+ * ラベルによるレビューと修正は常に始める(ラベルを外すことで冪等になる)。
+ * 未処理の`head_sha`から自動で検出するレビューは、
+ * このPRに実行中の`pr_review`があれば見送る。
+ * `pr_fix`に自動検出の経路は無く、`fix_label`からだけ始め、コメントからは始めない。
  */
 export function decidePrActions(
   candidates: readonly PrCandidate[],
@@ -209,7 +198,7 @@ export function decidePrActions(
 }
 
 // ---------------------------------------------------------------------------
-// Reconcile decisions (pure) — spec-cycle2.md §3 M5, §7 items 6/7/12
+// work itemの状態を実態に合わせる(reconcile)判定
 // ---------------------------------------------------------------------------
 
 export type ReconcileGithubState =
@@ -218,28 +207,29 @@ export type ReconcileGithubState =
       readonly open: boolean;
     }
   | { readonly kind: "pr"; readonly open: boolean }
-  /** An audit work item has no GitHub object: only the job-state / orphan
-   * checks apply. */
+  /**
+   * 監査のwork itemにはGitHubのオブジェクトが無く、ジョブの状態と孤立の検査だけを行う。
+   */
   | { readonly kind: "audit" };
 
 export type JobState =
   | { readonly state: "running" }
-  /** `success`/`canceled` come from the job row itself (`CompletedJob`),
-   * not inferred — devil-advocate follow-up: a manually/automatically
-   * canceled or failed job is definitively never going to write its own
-   * terminal status, so `decideReconcileAction` no longer waits out the
-   * orphan grace for those; a genuinely successful completion still does
-   * (the flow's own terminal step should catch up shortly). */
+  /**
+   * `success`と`canceled`は推測ではなく、ジョブの行(`CompletedJob`)そのものの値。
+   * 取り消されたか失敗したジョブは自分で終了状態を書くことが無いため、
+   * `decideReconcileAction`は猶予を待たない。
+   * 成功したジョブは、フローの最後のステップがまもなく追いつくはずなので猶予を待つ。
+   */
   | {
       readonly state: "completed";
       readonly success: boolean;
       readonly canceled: boolean;
     }
-  /** No `flow_job_id` recorded, or the job lookup found nothing — treated
-   * the same as a *successful* completion for orphan-grace purposes
-   * (still waits out the grace, doesn't fast-path to fail_orphan), since
-   * "we couldn't find it" isn't the same positive signal as "we found it
-   * and it was canceled/failed." */
+  /**
+   * `flow_job_id`が記録されていないか、ジョブを引いても見つからない。
+   * 孤立の猶予については成功と同じに扱い、猶予を待つ(すぐに`fail_orphan`にしない)。
+   * 「見つからない」は、「見つかって、取り消しか失敗だった」ほど確かな根拠ではないため。
+   */
   | { readonly state: "absent" };
 
 export type ReconcileDecision =
@@ -253,20 +243,14 @@ export type ReconcileDecision =
 const DEFAULT_ORPHAN_GRACE_MS = 10 * 60_000;
 
 /**
- * One work item's reconcile decision. `now`/`orphanGraceMs` are parameters
- * (not read from `Date.now()`) so this stays pure and testable.
- *
- * devil-advocate follow-up: a job the reconcile can positively confirm
- * was canceled, or completed unsuccessfully, skips the orphan grace
- * entirely (there is nothing left to wait for — it will never write its
- * own terminal status). E2E reproduction: manually canceling a
- * `pipeline` flow job left its work item stuck `requirements_generating`
- * for the full grace (now up to an hour with the `claude_timeout_sec`-
- * scaled floor) before reconcile finally caught it. A *successful*
- * completion, or the job being unreachable (`absent`), still waits out
- * the grace — the flow's own terminal step should catch up shortly in
- * the success case, and "we couldn't confirm" isn't the same positive
- * signal as "we confirmed it failed/was canceled."
+ * work item 1件について、状態を実態に合わせるための判定を返す。
+ * IssueまたはPRが閉じていれば取り消す。ジョブが実行中なら何もしない。
+ * 取り消されたか失敗したと確かめられたジョブは、孤立の猶予を待たずに`fail_orphan`にする。
+ * 自分で終了状態を書くことは無く、待つ意味が無いため。
+ * 猶予を待つと、手動で取り消したフローのwork itemが猶予いっぱい
+ * (`claude_timeout_sec`に応じて最長1時間)途中の状態のまま残る。
+ * 成功したときと、ジョブが見つからないとき(`absent`)は猶予を待つ。
+ * テストできるよう、`now`と`orphanGraceMs`は`Date.now()`から読まず引数で受け取る。
  */
 export function decideReconcileAction(
   item: Pick<WorkItem, "updated_at">,
@@ -305,17 +289,20 @@ export function decideReconcileAction(
   };
 }
 
-/** Statuses in which the work item's flow has legitimately finished and
- * the item is waiting on a human (approval Inbox). The orphan-grace check
- * must not apply here: there is no running job to be orphaned from. */
+/**
+ * フローが正常に終わり、work itemが人の判断(承認Inbox)を待っている状態。
+ * 実行中のジョブが無いので、孤立の猶予による検査を当ててはいけない。
+ */
 const HUMAN_WAIT_STATUSES: readonly WorkItemStatus[] = ["awaiting_approval"];
 
 export function isWaitingForHuman(status: WorkItemStatus): boolean {
   return HUMAN_WAIT_STATUSES.includes(status);
 }
 
-/** Reconcile decision for a work item that is waiting on a human: only a
- * closed Issue/PR cancels it; the job state is irrelevant. */
+/**
+ * 人の判断を待っているwork itemの判定を返す。
+ * IssueまたはPRが閉じているときだけ取り消し、ジョブの状態は見ない。
+ */
 export function decideClosureOnly(
   github: ReconcileGithubState,
 ): ReconcileDecision {

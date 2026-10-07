@@ -1,19 +1,9 @@
-// Query helpers backing f/factory/notify_daily_summary.ts (spec-cycle2.md
-// §3 M5 "notify_discord.ts ... 前日の agent_runs 集計").
-//
-// db.ts's `sumAgentCostSince(sinceIso)` was considered as a replacement for
-// this file's cost aggregation, but doesn't fit: it's open-ended ("cost
-// since `sinceIso`, up to now" — built for the daily-budget check against
-// factory_config.daily_budget_usd), whereas a daily summary needs a closed
-// `[yesterday 00:00 JST, today 00:00 JST)` window. Calling it with
-// yesterday's start would double-count today's early-morning runs once the
-// 09:00 JST schedule fires. It also has no equivalent for run_count,
-// failure_count, or the approvals table at all. So the day-range
-// aggregations stay here — db.ts (owned by the concurrent M4/M5 lib work)
-// has no bounded day-range query, only per-row insert/select helpers plus
-// that one open-ended sum. Uses the same injected `SqlClient` (db.ts) as
-// every other lib module, so it is testable with the same fake-sql-client
-// pattern (tests/lib/db.test.ts) and never hits a real database.
+// 日次サマリー(`f/factory/notify_daily_summary.ts`)のための、
+// 1日単位の集計クエリをまとめる。
+// `db.ts`の`sumAgentCostSince`は「指定時刻から現在まで」の終端が開いた集計で、
+// 日次サマリーに要る`[前日0時, 当日0時)`(JST)の閉じた範囲を扱えない。
+// 前日の0時を渡すと、09:00 JSTの実行時点で当日早朝の実行まで数えてしまうため、
+// ここで別に集計する。
 
 import type { CleanupCounts } from "./cleanup_db_support.ts";
 import { defaultSqlClient, type SqlClient, type SqlRow } from "./db.ts";
@@ -23,11 +13,11 @@ const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export type DayRange = {
-  /** Inclusive start instant (real UTC), i.e. the JST calendar day's 00:00. */
+  /** 範囲の始端(含む、UTCの時刻)。JSTの日付の0時に当たる。 */
   readonly start: Date;
-  /** Exclusive end instant (real UTC), i.e. the next JST calendar day's 00:00. */
+  /** 範囲の終端(含まない、UTCの時刻)。翌日のJSTの0時に当たる。 */
   readonly end: Date;
-  /** The JST calendar date this range covers, as `YYYY-MM-DD`. */
+  /** 範囲が表すJSTの日付(`YYYY-MM-DD`)。 */
   readonly label: string;
 };
 
@@ -39,10 +29,9 @@ function formatDateUtc(date: Date): string {
 }
 
 /**
- * The JST ("Asia/Tokyo", fixed UTC+9, no DST) calendar day immediately
- * before `now`'s JST calendar day, as a `[start, end)` real-UTC instant
- * range plus a `YYYY-MM-DD` label — what notify_daily_summary.ts (a 09:00
- * Asia/Tokyo daily schedule) means by "yesterday".
+ * `now`が属するJSTの日の前日を、UTCの時刻の範囲`[start, end)`と
+ * `YYYY-MM-DD`のラベルで返す(JSTはUTC+9固定、夏時間なし)。
+ * 毎日09:00(Asia/Tokyo)に動く`notify_daily_summary.ts`の「前日」に当たる。
  */
 export function computeYesterdayRangeJst(now: Date): DayRange {
   const jstShifted = new Date(now.getTime() + JST_OFFSET_MS);
@@ -59,9 +48,11 @@ export function computeYesterdayRangeJst(now: Date): DayRange {
   };
 }
 
-/** Postgres `count(*)` / `sum(...)` results may come back as a JS number or
- * a numeric string depending on serialization (same caveat as db.ts's
- * `parseId`), so this accepts either. */
+/**
+ * `value`を数値にして返す。数値にできなければ例外を投げる。
+ * Postgresの`count(*)`や`sum(...)`の結果は、シリアライズによって
+ * JSの数値でも数字の文字列でも返りうるため、どちらも受け付ける。
+ */
 function parseNumericLike(value: unknown, field: string): number {
   if (isNumber(value)) {
     return value;
@@ -75,9 +66,10 @@ function parseNumericLike(value: unknown, field: string): number {
 export type AgentRunSummary = {
   readonly run_count: number;
   readonly total_cost_usd: number;
-  /** agent_runs rows in `range` whose `exit_code` is not exactly `0`
-   * (covers both a non-zero exit and a NULL exit_code, e.g. a timeout that
-   * never produced one). */
+  /**
+   * `range`内の`agent_runs`のうち、`exit_code`が`0`でない行の数。
+   * 0以外で終わった行に加え、タイムアウトなどで`exit_code`がNULLの行も数える。
+   */
   readonly failure_count: number;
 };
 
@@ -92,8 +84,7 @@ function toAgentRunSummary(row: SqlRow | undefined): AgentRunSummary {
   };
 }
 
-/** Aggregates factory.agent_runs over `range` (spec-cycle2.md §3
- * "件数、コスト、失敗数"). */
+/** `range`内の`factory.agent_runs`を集計し、件数・コスト・失敗数を返す。 */
 export async function getAgentRunSummary(
   range: DayRange,
   sql: SqlClient = defaultSqlClient,
@@ -125,14 +116,11 @@ function toApprovalSummary(row: SqlRow | undefined): ApprovalSummary {
   };
 }
 
-/** Aggregates factory.approval_requests over `range` (spec-cycle2.md §3
- * "承認 / 差し戻し数"). Reads the generalized approval_requests table
- * (migrations/datatable/main/20260927120000_approval_requests.up.sql, which
- * backfills factory.approvals' history) rather than factory.approvals
- * itself. Restricted to kind = 'requirements' so the KPI keeps its
- * original meaning (requirement-draft decisions only; issue_proposal rows
- * live in the same table but are not counted here) — that table is retained for its pre-migration history only and
- * stops receiving new writes once callers switch over in a follow-up PR. */
+/**
+ * `range`内に判断された`factory.approval_requests`を集計し、承認数と差し戻し数を返す。
+ * 指標の意味を要件定義の判断だけに保つため、`kind = 'requirements'`に絞る。
+ * 同じテーブルにある`issue_proposal`の行は数えない。
+ */
 export async function getApprovalSummary(
   range: DayRange,
   sql: SqlClient = defaultSqlClient,
@@ -150,15 +138,13 @@ export async function getApprovalSummary(
 }
 
 /**
- * Sums factory.cleanup_runs rows over `range` (cleanup_db.ts, a 03:30
- * Asia/Tokyo daily schedule, so a "yesterday" range's window always covers
- * exactly the one run from that morning). Placed here rather than db.ts —
- * same rationale as getAgentRunSummary/getApprovalSummary above: a bounded
- * day-range aggregation, not a per-row insert/select. Returns `null` when
- * no row falls in `range` (e.g. the schedule hasn't run yet on a
- * freshly-bootstrapped instance) rather than an all-zero CleanupCounts, so
- * notify_daily_summary.ts's Discord embed can distinguish "nothing to
- * clean up" from "no record at all".
+ * `range`内の`factory.cleanup_runs`の削除件数を合計して返す。
+ * `cleanup_db.ts`は毎日03:30(Asia/Tokyo)に動くため、
+ * 前日の範囲にはその朝の1回分だけが入る。
+ * 範囲に行が無いとき(立ち上げ直後でまだ一度も動いていないときなど)は、
+ * すべて0の`CleanupCounts`ではなく`null`を返す。
+ * 日次サマリーのDiscord埋め込みで、
+ * 「削除するものが無かった」と「記録が無い」を区別するため。
  */
 export async function getCleanupSummary(
   range: DayRange,

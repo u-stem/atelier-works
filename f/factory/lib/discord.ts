@@ -1,9 +1,5 @@
-// Discord webhook notifications (spec-cycle2.md §1, §3, §4).
-//
-// `notify` posts one embed per call. `fetch` and `sleep` are injected so
-// tests never make a real HTTP call or actually wait; the default `fetch` is
-// the global `fetch` and the default `sleep` is a real `setTimeout`-backed
-// wait, used in production for the single 429 retry.
+// Discord webhookへの通知を組み立てて送る。
+// テストで実際のHTTP通信や待機をしないよう、`fetch`と`sleep`は注入できる。
 
 import { type CleanupCounts, summarizeCleanup } from "./cleanup_db_support.ts";
 import type { ImplementDiffStat } from "./types.ts";
@@ -21,10 +17,9 @@ export type DiscordEmbed = {
 };
 
 /**
- * Every notification point named across spec-cycle2.md §3 (M5/M6) and §4
- * (M7). Each variant carries `instance_name` plus whatever identifies the
- * GitHub object involved, so `buildEmbed` can compose a self-contained embed
- * without any other lookup.
+ * Factoryが送る通知の種類。
+ * どの種類も`instance_name`と、対象のGitHubのオブジェクトを特定する値を持つ。
+ * `buildEmbed`が他を引かずに、それだけで完結した埋め込みを作れるようにするため。
  */
 export type NotifyEvent =
   | {
@@ -44,11 +39,12 @@ export type NotifyEvent =
       issue_number: number;
       issue_url: string;
       title: string;
-      // Security fix (M6 review round 1b): never the signed getResumeUrls()
-      // "approvalPage" capability URL — that lets anyone who sees it
-      // resume/cancel the suspended flow without going through
-      // approval_decide.ts (so no factory.approvals row gets recorded).
-      // Only the App's own (authenticated) Inbox URL belongs here.
+      /**
+       * 認証付きのAppのInboxのURLだけを入れる。
+       * `getResumeUrls()`の署名付き`approvalPage`のURLは入れない。
+       * そのURLを見た人は誰でも`approval_decide.ts`を通さずに停止中のフローを
+       * 再開・取消でき、承認の記録が残らないため。
+       */
       inbox_url: string;
     }
   | {
@@ -59,10 +55,12 @@ export type NotifyEvent =
       issue_number: number;
       issue_url: string;
       title: string;
-      // Console's 要件定義 deep link (lib/approval_support.ts's
-      // buildConsoleUrl with `{work_item_id}`) — the embed links here
-      // instead of the Issue (still shown as a field) so clicking through
-      // from Discord lands on the approved document, not just the Issue.
+      /**
+       * Consoleの要件定義ページへのリンク(`lib/approval_support.ts`の
+       * `buildConsoleUrl`に`{work_item_id}`を渡したもの)。
+       * Discordから開いたときに承認済みの文書が表示されるよう、
+       * 埋め込みのリンク先はIssueではなくこちらにする(Issueはフィールドに出す)。
+       */
       console_url: string;
     }
   | {
@@ -72,12 +70,14 @@ export type NotifyEvent =
       repo: string;
       url: string;
       reason: string;
-      // team-lead decision (2026-09-26): every needs_human notification
-      // must name what needs attention and what to do about it — a bare
-      // "人による対応が必要です" title with only instance/repo fields gave the
-      // reader nothing to act on. `target` names the PR/Issue in the title;
-      // `next_action` (pr_workflow_support.ts's `nextActionFor`) is a
-      // concrete one-sentence instruction shown in its own field.
+      /**
+       * `needs_human`の通知には、何に対応が要るかと、何をすればよいかを必ず載せる。
+       * タイトルとインスタンス・リポジトリだけでは、
+       * 読み手が次に何をすべきか分からないため。
+       * `target`はタイトルに出すPRまたはIssue。`next_action`
+       * (`pr_workflow_support.ts`の`nextActionFor`)は具体的な1文の指示で、
+       * 専用のフィールドに出す。
+       */
       target: { kind: "pr" | "issue"; number: number };
       next_action: string;
     }
@@ -89,12 +89,11 @@ export type NotifyEvent =
       pr_number: number;
       pr_url: string;
       verdict: string;
-      // team-lead decision (2026-09-26): the description now states what
-      // happened (finding count) and the review's outcome, rather than the
-      // raw verdict text — that's what actually tells the reader whether
-      // anything is needed from them. 2026-09-27 PR label cleanup: there is
-      // no more state label to report (poll_prs.ts rediscovers PRs from the
-      // DB now), so this carries the same reviewResultFor verdict directly.
+      /**
+       * 説明文には判定の原文ではなく、指摘件数とレビューの結果を出す。
+       * 読み手が自分の対応が要るかを判断できるのはこちらのため。
+       * `result`は`reviewResultFor`の判定をそのまま入れる。
+       */
       finding_count: number;
       result: "changes_requested" | "reviewed";
     }
@@ -106,10 +105,10 @@ export type NotifyEvent =
       pr_number: number;
       pr_url: string;
       outcome: string;
-      // `note` carries an optional supplementary fact (currently: the
-      // re-review request's API call failing) that doesn't warrant its own
-      // needs_human notification. 2026-09-27 PR label cleanup: there is no
-      // more state label to report — `outcome` alone is enough context here.
+      /**
+       * 単独の`needs_human`通知にするほどではない補足(現状は、再レビュー依頼の
+       * API呼び出しが失敗したこと)。無ければ`null`。
+       */
       note: string | null;
     }
   | {
@@ -134,9 +133,10 @@ export type NotifyEvent =
       failure_count: number;
       approved_count: number;
       rejected_count: number;
-      // DB cleanup addition (2026-09-27): the prior day's cleanup_db.ts run,
-      // or null when no run is recorded for that day (e.g. the schedule
-      // hasn't run yet on a freshly-bootstrapped instance).
+      /**
+       * 前日の`cleanup_db.ts`の実行結果。その日の実行記録が無いとき
+       * (立ち上げ直後でまだ一度も動いていないときなど)は`null`。
+       */
       cleanup: CleanupCounts | null;
     }
   | {
@@ -156,17 +156,21 @@ export type NotifyEvent =
       pr_url: string;
       issue_number: number;
       issue_url: string;
-      // 工程3 design §8: the implement flow never blocks on a protected-path
-      // change — it lists them here (and in the PR body) so a human reviews
-      // them first. `checks` is "passed", or the reason no check command
-      // ran this round (protected paths changed / none configured).
+      /**
+       * implementフローは保護パスの変更があっても止まらない。
+       * 人が先に確認できるよう、変更された保護パスをここ(とPR本文)に並べる。
+       */
       protected_changes: string[];
+      /**
+       * 検査に合格したら`"passed"`。今回のラウンドで検査コマンドを実行しなかったときは
+       * その理由(保護パスが変更された、検査コマンドが設定されていない)。
+       */
       checks: "passed" | { skipped: string };
       rounds: number;
       total_cost_usd: number;
       diff_stat: ImplementDiffStat | null;
       next_action: string;
-      /** false when an existing PR was updated (title / body) instead. */
+      /** PRを新しく作らず、既存のPRのタイトルと本文を更新したときは`false`。 */
       created: boolean;
     };
 
@@ -183,9 +187,10 @@ const DESCRIPTION_MAX = 4096;
 const FIELD_VALUE_MAX = 1024;
 const TOTAL_MAX = 6000;
 
-/** Truncates `text` to at most `max` characters, marking any actual cut
- * with a trailing ellipsis (so the result is still exactly `max` chars,
- * not `max` chars of content plus an ellipsis). */
+/**
+ * `text`を`max`文字以内に切り詰めて返す。
+ * 切ったときは末尾を省略記号にし、省略記号を含めてちょうど`max`文字にする。
+ */
 function truncate(text: string, max: number): string {
   if (text.length <= max) {
     return text;
@@ -197,14 +202,13 @@ function truncate(text: string, max: number): string {
 }
 
 /**
- * Caps an embed to Discord's field-level limits (title 256, description
- * 4096, field value 1024), then to its overall 6000-character budget
- * (title + description + every field's name + value combined), trimming
- * the description first since it is the field most likely to carry long,
- * externally-influenced text (an error message, a rejection reason). None
- * of the current NotifyEvent variants can exceed 6000 through the
- * per-field caps alone, but this is defense in depth for any future event
- * kind that combines several long fields.
+ * 埋め込みをDiscordの上限に収めて返す。
+ * まず項目ごとの上限(タイトル256、説明4096、フィールドの値1024)で切り、
+ * 次に全体の上限6000文字(タイトル、説明、全フィールドの名前と値の合計)に収める。
+ * 全体を削るときは説明から削る。エラーメッセージや差し戻し理由など、
+ * 外部の影響を受けた長い文が入りやすいのが説明だからである。
+ * 今の通知の種類はどれも項目ごとの上限だけで6000文字を超えないが、
+ * 長いフィールドを複数持つ種類が増えたときの備えとして全体でも切る。
  */
 export function capEmbedToDiscordLimits(embed: DiscordEmbed): DiscordEmbed {
   const title = truncate(embed.title, TITLE_MAX);
@@ -230,9 +234,10 @@ export function capEmbedToDiscordLimits(embed: DiscordEmbed): DiscordEmbed {
   return { title, description, url: embed.url, fields };
 }
 
-/** Builds the Discord embed for one NotifyEvent, capped to Discord's size
- * limits. Always includes an "instance" field (spec-cycle2.md §1:
- * "instance_name を必ず含む"). */
+/**
+ * 通知1件分のDiscordの埋め込みを、Discordの上限に収めて返す。
+ * どの通知にも、どのインスタンスからの通知かを示すフィールドを含める。
+ */
 export function buildEmbed(event: NotifyEvent): DiscordEmbed {
   return capEmbedToDiscordLimits(buildRawEmbed(event));
 }
@@ -405,9 +410,11 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
   }
 }
 
-/** A narrower shape than `typeof fetch` (which also carries a `preconnect`
- * static member in some lib.dom.d.ts versions) so a plain fake function
- * satisfies it in tests without an unrelated extra property. */
+/**
+ * 注入する`fetch`の型。
+ * `typeof fetch`は`lib.dom.d.ts`の版によって静的メンバー`preconnect`を持つため、
+ * テストのただの偽関数でも満たせるよう、それより狭い型にする。
+ */
 export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
 
 export type NotifyDeps = {
@@ -421,8 +428,11 @@ function defaultSleep(ms: number): Promise<void> {
   });
 }
 
-/** Reads a 429 response's retry delay: prefers the `retry-after` header
- * (seconds), falls back to a JSON `retry_after` body field, defaults to 1s. */
+/**
+ * 429応答の再試行までの待ち時間をミリ秒で返す。
+ * `retry-after`ヘッダー(秒)を優先し、無ければJSON本文の`retry_after`を使い、
+ * どちらも無ければ1秒とする。
+ */
 async function readRetryAfterMs(response: Response): Promise<number> {
   const header = response.headers.get("retry-after");
   if (header !== null) {
@@ -442,17 +452,17 @@ async function readRetryAfterMs(response: Response): Promise<number> {
       return body.retry_after * 1000;
     }
   } catch {
-    // Non-JSON or already-consumed body: fall through to the default.
+    // 本文がJSONでないか読み終えているときは、既定値を使う。
   }
   return 1000;
 }
 
 /**
- * Post `event` as a Discord embed to `webhookUrl`. On a 429 response, waits
- * once (per the response's retry delay) and retries exactly once more.
- * Throws if the final response is not 2xx — the error message never
- * includes `webhookUrl` itself, since its path carries the webhook's
- * secret token.
+ * `event`をDiscordの埋め込みにして`webhookUrl`へ送る。
+ * 429応答なら、応答が示す時間だけ待って1回だけ再送する。
+ * 最終的な応答が2xxでなければ例外を投げる。
+ * webhookのURLのパスには秘密のトークンが入るため、
+ * エラーメッセージに`webhookUrl`は含めない。
  */
 export async function notify(
   webhookUrl: string,
@@ -464,8 +474,8 @@ export async function notify(
   const embed = buildEmbed(event);
   const payload = JSON.stringify({
     embeds: [embed],
-    // Untrusted text (an error message, a rejection reason) can end up in
-    // an embed field; this stops it from ever pinging @everyone/@here/a role.
+    // 埋め込みにはエラーメッセージや差し戻し理由など信頼できない文が入りうるため、
+    // @everyone、@here、ロールへのメンションを一切発生させない。
     allowed_mentions: { parse: [] },
   });
   const requestInit: RequestInit = {
