@@ -1,4 +1,4 @@
-// f/factory/pipelineの4ステップ中2番目(要件定義の生成)。
+// f/factory/pipelineの3ステップ中2番目(要件定義の生成)。
 // 日次予算を確かめてから、headlessのClaudeに試行ごとのディレクトリへ
 // 要件定義と図を書かせ、検証して下書きとして保存する。
 
@@ -146,18 +146,18 @@ async function notifySafe(
 
 /**
  * 生成の失敗を、秘密情報をマスクした例外として投げる。
- * 状態の遷移・ラベル・通知はここでは一切しない。
+ * 状態の遷移と通知はここでは一切しない。
  *
  * `pipeline__flow/flow.yaml`の`generate`モジュールには、Claudeの一時的な
  * 429 / 5xxに備えた`retry`がある。
  * Windmillの再試行は`work_items.status`を確かめずにこのスクリプト全体を
  * 呼び直すため、ここで終端の遷移をすると再試行と競合する。
- * 例えば、statusを`failed`にしてラベルを外してから投げ、その後に再試行が
- * 成功すると、`request_approval`が同じwork itemを`awaiting_approval`へ進める。
- * そのwork itemはトリガーラベルを失っているため、次の`poll_issues`の照合で
- * 放棄されたものとして取り消される。
+ * 例えば、statusを`failed`にしてから投げ、その後に再試行が成功しても、
+ * `request_approval`は状態が`requirements_generating`でないwork itemを
+ * `awaiting_approval`へ進めない。下書きは保存されたのに、work itemは
+ * `failed`のまま残る。
  * また、ここで通知すると`on_error_flow`の通知と同じ失敗を二重に知らせることになる。
- * そのため終端の処理(状態、ラベル、通知)はすべて、Windmillの再試行を
+ * そのため終端の処理(状態、通知)はすべて、Windmillの再試行を
  * 使い切った後にだけ動く`on_error_flow`の`failure_module`に任せる。
  * Claudeの実行の失敗も、生成後の検証の失敗も、ここを通って同じく再試行される。
  * 日次予算の超過は例外を投げずに返すので、再試行の対象にならない。

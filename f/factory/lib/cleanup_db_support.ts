@@ -10,8 +10,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 export type RetentionCutoffs = {
   /**
    * `updated_at`がこの時刻以前の、終端状態のwork_itemsを削除する。
-   * カスケードでつながる行(requirement_drafts、approvals、agent_runs、
-   * approval_requestsなど)も一緒に消える。
+   * work_itemsを`ON DELETE CASCADE`で参照する表の行も一緒に消える。
    */
   readonly workItemsBefore: Date;
   /**

@@ -1,8 +1,8 @@
 // 毎日03:30(JST)に、保持期間を過ぎた行を`factory`スキーマから削除する。
 // 放っておくと行が際限なく増えるため。対象は、`config.retention_work_items_days`を
-// 過ぎた終端状態のwork item(と連鎖削除される`requirement_drafts`・`approvals`・
-// `agent_runs`・`approval_requests`)と、`config.retention_logs_days`を過ぎた
-// `job_failures`・`deployments`・解決済みのnoticeで、work itemとは別々に掃除する。
+// 過ぎた終端状態のwork item(と、それを`ON DELETE CASCADE`で参照する表の行)と、
+// `config.retention_logs_days`を過ぎた`job_failures`・`deployments`・
+// 解決済みのnoticeで、work itemとは別々に掃除する。
 //
 // 期限の計算と要約の整形は`./lib/cleanup_db_support.ts`にあり、
 // このファイルは入出力をつなぐだけ。掃除は表ごとに独立しており、

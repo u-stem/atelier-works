@@ -1,4 +1,4 @@
-// f/factory/pipelineフローの4ステップ中1番目。
+// f/factory/pipelineフローの3ステップ中1番目。
 // work itemと設定を読み、factory自身のcloneと、
 // 対象リポジトリのfetchだけを行うmainのcloneを用意する。
 // デフォルトブランチのheadのshaを求め、要件生成ステージが読む

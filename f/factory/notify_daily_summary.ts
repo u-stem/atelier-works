@@ -1,6 +1,6 @@
 // 毎日09:00(JST)の日次要約の通知。前日の`agent_runs`(件数・費用・失敗)と
-// `approvals`(承認・却下の件数)を集計し、Discordに`daily_summary`の
-// embedを投稿する。
+// 要件定義の`approval_requests`(承認・却下の件数)を集計し、
+// Discordに`daily_summary`のembedを投稿する。
 
 import * as wmill from "windmill-client@1.817.0";
 import type { CleanupCounts } from "./lib/cleanup_db_support.ts";

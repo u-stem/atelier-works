@@ -36,10 +36,13 @@ export const REQUIREMENT_ID_PATTERNS: {
   AC: /^AC-\d{3}$/,
 };
 
-/** 文書全体の文字数の上限の目安(タイトルと表を含む)。 */
+/**
+ * 文書全体の文字数の上限(タイトルと表を含む)。
+ * 超えると`checkLengths`が問題として返し、生成は失敗する。
+ */
 export const MAX_DOC_CHARS = 8000;
 
-/** 1行の文字数の上限の目安。 */
+/** 1行の文字数の上限。超えると`checkLengths`が問題として返し、生成は失敗する。 */
 export const MAX_LINE_CHARS = 200;
 
 /** 1つの要件定義書に埋め込める図の最大数。 */
@@ -64,7 +67,8 @@ export const TEMPLATE_RELATIVE_PATH =
 
 /**
  * 生成した要件定義書を置くディレクトリの基点。
- * workerだけがマウントするボリュームである。
+ * `windmill_worker`だけがマウントするボリューム`factory_state`
+ * (`/var/lib/factory`)の下にある。
  */
 export const REQUIREMENTS_BASE_DIR = "/var/lib/factory/requirements";
 

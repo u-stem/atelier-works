@@ -272,7 +272,7 @@ export type GitCommandOptions = {
  *   ローカルだけの操作(rev-parse、status、add、commit、worktree、diff)は
  *   トークンを持たない`localGitEnv`を使う。
  * - 利用者に由来する位置引数(URL、ディレクトリ、sha、ブランチ)の前には`--`を置き、
- *   `-`で始まる値をオプションと誤読させない。例外は次の4つで、代わりに
+ *   `-`で始まる値をオプションと誤読させない。例外は次の5つで、代わりに
  *   `assertSha`や`assertBranchName`の入力検証で、先頭が`-`の値を防ぐ。
  *   - `git rev-parse`: `-- <rev>`は他のサブコマンドと同じには動かない。
  *     `--verify`では「リビジョンが無い」扱いになり、`--verify`なしでは
@@ -284,6 +284,9 @@ export type GitCommandOptions = {
  *   - `createGtrWorktree`の再利用時の`git reset --hard <ref>`: `--hard`はパスを取らず、
  *     `--`を付けるとエラーになる
  *     (「fatal: Cannot do hard reset with paths」、実際に確かめた)。
+ *   - `ensureFactoryClone`の`git checkout -B <branch> origin/<branch>`: 起点の前に
+ *     `--`を付けると、`checkout`は`origin/<branch>`をrefではなく復元するパスとして扱う。
+ *     `branch`は関数の先頭で`assertBranchName`により検証している。
  * - GitHubに由来する識別子(owner、repo、sha、branch)は、URL・ref・ディレクトリのパスに
  *   埋め込む前に`assertGitHubName`、`assertSha`、
  *   `assertBranchName`(`types.ts`)で検証する。
@@ -1007,7 +1010,7 @@ export async function fetchPrHeadRef(
  * ファイルが無いとき、`ref`が検証を通らないとき、その他のエラーのときは`null`を返す。
  * 「HEADにこのファイルがあるか」を、例外を投げずに確かめるのに使う。
  *
- * `<ref>:<path>`には`--`を付けない(このモジュールの規則の例外)。
+ * `<ref>:<path>`には`--`を付けない(`buildGitArgv`の例外を参照)。
  * `git show -- HEAD:file.txt`はエラーにならず、
  * ファイルの中身ではなく空の出力を返すことを確かめた。
  * `--`の後では、gitは`ref:path`を、
@@ -1162,7 +1165,7 @@ export async function ensureFactoryClone(
             resetResult,
           );
         }
-        // ここでは`--`を付けない。このモジュールの`reset --hard`と同じく、
+        // ここでは`--`を付けない(`buildGitArgv`の例外を参照)。
         // `checkout -B <branch> <start-point>`は起点の前の`--`を受け付けない。
         // `--`を付けると`checkout`は「パスを復元する」動作になり、
         // `origin/<branch>`を気づかないうちにrefではなくパスとして解釈する。

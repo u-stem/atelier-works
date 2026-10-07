@@ -1851,9 +1851,10 @@ export type TerminalWorkItemsDeleted = {
  * 2つの別々のクエリの間に`retry_work_item`が割り込んで、
  * 報告する件数が実際に消えた行とずれることはない。
  * 参照する他のテーブルはこの1文から連鎖する。
- * `requirement_drafts` / `approvals` / `agent_runs` / `work_item_events` /
- * `approval_requests`は`ON DELETE CASCADE`で消える。
- * `job_failures`は`ON DELETE SET NULL`で、`deleteJobFailuresBefore`が別に掃除する。
+ * `work_items`を`ON DELETE CASCADE`で参照する表の行は一緒に消える。
+ * `ON DELETE SET NULL`の`job_failures`は残り、`deleteJobFailuresBefore`が別に掃除する。
+ * 同じく`SET NULL`の`work_items.parent_work_item_id`を持つ子の作業項目も、
+ * 親と一緒には消えない。
  */
 export async function deleteTerminalWorkItemsBefore(
   olderThan: Date,

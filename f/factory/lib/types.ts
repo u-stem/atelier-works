@@ -732,7 +732,8 @@ export type LabelerAssociation = "OWNER" | "MEMBER" | "COLLABORATOR";
 
 /**
  * `review_post_mode`の値。
- * `"gated"`は予約済みで、設定値としては有効だが、実装しているscriptは無い。
+ * `"gated"`では、`pr_review_post.ts`がレビューを記録するだけでGitHubに投稿しない。
+ * 承認を経て投稿する仕組みはまだ無い。
  */
 export type ReviewPostMode = "comment_only" | "gated";
 
@@ -756,8 +757,7 @@ export type FactoryConfig = {
   worktree_ttl_days: number;
   /**
    * 終端状態のwork itemを、`cleanup_db.ts`が削除するまで残す日数。
-   * カスケードでつながる行(requirement_drafts、approvals、agent_runs、
-   * approval_requestsなど)も同じく残る。
+   * work_itemsを`ON DELETE CASCADE`で参照する表の行も同じく残る。
    */
   retention_work_items_days: number;
   /**
@@ -768,7 +768,8 @@ export type FactoryConfig = {
   factory_repo: string;
   /**
    * `self_update.ts`がこのSoftware Factory自身のリポジトリから更新するときに
-   * 追う`factory_repo`のブランチ。初回のcloneでcheckoutし、以降はpullする。
+   * 追う`factory_repo`のブランチ。`ensureFactoryClone`が毎回fetchし、
+   * `checkout -B`でこのブランチのリモートの状態に合わせる。
    */
   factory_branch: string;
   instance_name: string;
@@ -809,7 +810,7 @@ export type FactoryConfig = {
    */
   max_lookback_days: number;
   // 工程3(implementフロー)。リソース型ではすべて省略可能で、既定値がある。
-  // `implement_enabled`はe2eを通すまで`false`のままにする。
+  // `implement_enabled`だけは既定が`false`で、有効にする前提は`docs/operations.md`にある。
   /** 承認後に`requirements_apply`がimplementフローを起動するか。 */
   implement_enabled: boolean;
   /** `implement_verify`のラウンド数の上限(implement 1回とfix N-1回)。 */

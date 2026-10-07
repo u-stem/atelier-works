@@ -2,7 +2,7 @@
 // 小さなI/O補助をまとめる。
 // 判断ロジックはI/Oを持たない純粋関数で、偽物の入力だけでテストできる。
 // 各ステップの`main`はこれらを呼び、その結果に従ってI/Oだけを行う。
-// I/O補助(`detectEscapingSymlinks`、`listSymlinkTargets`、`getDiffNumstat`)は、
+// I/O補助(gitの実行やworktreeのファイル読み取りなど)は、
 // `lib/`にまだ同等の関数が無い操作に限って置く。
 
 import { mkdtemp, readlink, rm } from "node:fs/promises";
@@ -1860,7 +1860,8 @@ export function decideFixFinishAction(
  *   - `requirements_gap_reroute_success`: 親のIssueを`requirements_generating`に
  *     差し戻すことで、フィードバックを消化した。
  * それ以外の終端の種別(試行の開始前に関門が止めた、何らかの原因の`needs_human`、
- * 失敗した差し戻し(親が無い、ラベルの付け直しの失敗)、実際には反映されなかったpush
+ * 失敗した差し戻し(親のwork itemが見つからない、親にIssue番号が無い)、
+ * 実際には反映されなかったpush
  * (コミットメッセージが無い、headが動いた、コミットするものが無い))では、
  * 処理済み位置を変えない。
  * 後の`retry_work_item`が同じフィードバックを集め直せるようにするため。
@@ -1886,7 +1887,7 @@ export function shouldAdvanceWatermarks(kind: PrFixFinishBumpKind): boolean {
  * `pr_fix_finish.ts`のrequirements_gapの差し戻しの関門。
  * テストできるよう純粋関数にしている。
  * `null`なら差し戻してよく、それ以外は`needs_human`に倒す理由を返す。
- * 親のIssueにラベルを付け直すことはもう無いので、残る前提条件は
+ * 親のIssueのトリガーラベルは着手時に消費済みで付け直さないので、残る前提条件は
  * 親のwork itemが実際にIssueであることだけ。
  */
 export function evaluateRerouteGuard(
@@ -2303,7 +2304,7 @@ export type IssueProposalStatusDecision =
  * そうでなければ、`rereview_requested`(このラウンドでコミットをpushした。
  * `factory.fix_rounds.commit_shas`が空でない)か、`reviewed`(何もpushしていない。
  * 提案を出したラウンド自体が`nothing_to_commit`のラウンドだった)に移す。
- * PRの状態ラベルはもう無いので、状態だけを決める。
+ * PRには状態ラベルを付けないので、work itemの状態だけを決める。
  */
 export function decidePostProposalStatus(
   remainingPendingCount: number,
