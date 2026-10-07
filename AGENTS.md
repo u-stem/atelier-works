@@ -4,6 +4,10 @@
 
 ## Project-specific instructions
 
+- コメントは日本語で書く(ユーザーレベルの「コード / コメントは英語」より本ルールを
+  優先する)。識別子・テスト名・ログやエラーのメッセージ・プロンプト文字列は英語の
+  まま。`§`や設計文書の章番号、変更の経緯は書かない。書き方は
+  `docs/coding-guidelines.md`の「コメント」、日本語の推敲は`yomiyasu`スキルに従う。
 - Configは`.env`系ファイルではなくmiseで管理する。非秘密の設定は`mise.toml`
   の`[env]`に平文で置く。秘密(`DB_PASSWORD` / `WM_ADMIN_EMAIL` /
   `WM_ADMIN_PASSWORD` / `GITHUB_TOKEN` / `CLAUDE_CODE_OAUTH_TOKEN` /
