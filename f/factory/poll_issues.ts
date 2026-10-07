@@ -25,6 +25,7 @@ import {
   recordFailure,
   setFlowJobId,
   updateStatusIfCurrent,
+  updateStatusIfLeaseHolder,
 } from "./lib/db.ts";
 import { type NotifyEvent, notify } from "./lib/discord.ts";
 import {
@@ -47,13 +48,9 @@ import {
   isWaitingForHuman,
   type JobState,
   type ReconcileGithubState,
+  readJobState,
 } from "./lib/poll_support.ts";
-import {
-  type FactoryConfig,
-  isBoolean,
-  isRecord,
-  type WorkItem,
-} from "./lib/types.ts";
+import type { FactoryConfig, WorkItem } from "./lib/types.ts";
 import {
   type CommandRunner,
   ensureFactoryClone,
@@ -188,53 +185,18 @@ async function checkDeployedSha(
   }
 }
 
-/**
- * `JobService.getJob`の応答の`type`を`JobState`に読み替える。
- * 取得できなかったときは`job`が`null`か非レコードになり、`absent`を返す
- * (`getJobState`は404も他のエラーも`null`にまとめて渡すので、
- * 判断はこの関数だけで完結し、単体テストできる)。
- * 取得できたが形が分からない(`type`が無い、未知の値)ときは、`absent`ではなく
- * `running`を返す。完了を確かめられないことを理由に作業項目を取り消したり
- * 孤立扱いしたりしないためで、`absent`にするのは取得そのものが失敗したときだけ。
- *
- * ジョブの状態を`wmill.getResultMaybe`ではなく`JobService.getJob`で読む理由:
- * `getResultMaybe`は、`wmill job get`で`running`と確かめた直後のジョブにも
- * `completed: true`を返したことがある。そのままでは、Claude Codeを呼んでいる
- * 最中の`pipeline`が猶予の経過後に`absent`・`completed`に見え、
- * 実行中に取り消された。`getJob`はジョブの行を直接読み、結果を待つ動作が無い。
- *
- * `CompletedJob`の`success`と`canceled`は、取り消し・失敗を確かめられた
- * ジョブについて`decideReconcileAction`が孤立の猶予を飛ばすのに使う。
- * どちらかが真偽値でない(本来は起きない)ときは`success: true`・
- * `canceled: false`とし、猶予を守る経路に倒す。あいまいな信号では
- * 動かないという、`type`が無い場合と同じ方針である。
- */
-export function jobStateFromJob(job: unknown): JobState {
-  if (!isRecord(job)) return { state: "absent" };
-  if (job.type === "CompletedJob") {
-    return {
-      state: "completed",
-      success: isBoolean(job.success) ? job.success : true,
-      canceled: isBoolean(job.canceled) ? job.canceled : false,
-    };
-  }
-  return { state: "running" };
-}
-
+/** `flowJobId`のジョブの状態を返す(`readJobState`に`JobService.getJob`を渡す)。例外は投げない。 */
 async function getJobState(flowJobId: string | null): Promise<JobState> {
-  if (flowJobId === null) return { state: "absent" };
-  let job: unknown = null;
-  try {
-    job = await wmill.JobService.getJob({
-      workspace: process.env.WM_WORKSPACE ?? "",
-      id: flowJobId,
-      noLogs: true,
-      noCode: true,
-    });
-  } catch {
-    job = null;
-  }
-  return jobStateFromJob(job);
+  return readJobState(
+    (id) =>
+      wmill.JobService.getJob({
+        workspace: process.env.WM_WORKSPACE ?? "",
+        id,
+        noLogs: true,
+        noCode: true,
+      }),
+    flowJobId,
+  );
 }
 
 /**
@@ -361,13 +323,17 @@ async function reconcileActiveItems(
       const targetStatus =
         decision.action === "cancel" ? "cancelled" : "failed";
       const note = `reconcile: ${decision.reason}`;
-      const updated = await updateStatusIfCurrent(
+      // 読み取った後にflow_job_idが変わっていれば(実装フローがリースを取った、新しいフローが
+      // 起動されたなど)その実行を止めないよう、観測した値のままのときだけ状態を変える。
+      // 更新できなかったときは、並行する処理が先に状態を進めている。
+      const updated = await updateStatusIfLeaseHolder(
         item.id,
         item.status,
         targetStatus,
+        item.flow_job_id,
         note,
       );
-      if (!updated) continue; // 並行する処理が先に状態を進めた。
+      if (!updated) continue;
 
       // Issueの`factory`も、PRの`factory:review`・`factory:fix`も、トリガー
       // ラベルは取得時に消費済みなので、ここで外すラベルは無い。状態は

@@ -1,10 +1,14 @@
-// `poll_issues.ts`の`jobStateFromJob`のテスト。
-// `getJobState`がジョブの状態を`wmill.JobService.getJob`で読むときの
+// `lib/poll_support.ts`の`jobStateFromJob`・`jobStateFromFetchError`・`readJobState`のテスト。
+// `poll_issues.ts`の`getJobState`がジョブの状態を`wmill.JobService.getJob`で読むときの
 // 判断を担う。
 // `wmill.getResultMaybe`を使わない理由は`jobStateFromJob`のコメントを参照。
 
 import { describe, expect, test } from "bun:test";
-import { jobStateFromJob } from "../../f/factory/poll_issues.ts";
+import {
+  jobStateFromFetchError,
+  jobStateFromJob,
+  readJobState,
+} from "../../f/factory/lib/poll_support.ts";
 
 describe("jobStateFromJob", () => {
   test("reads a QueuedJob (queued or actively running) as running", () => {
@@ -54,11 +58,70 @@ describe("jobStateFromJob", () => {
     });
   });
 
-  test("reads a failed fetch (null, e.g. 404 or any other error) as absent", () => {
-    expect(jobStateFromJob(null)).toEqual({ state: "absent" });
+  test("reads a response that is not an object as unknown", () => {
+    expect(jobStateFromJob(null)).toEqual({ state: "unknown" });
   });
 
   test("defaults an unrecognized-but-present job shape to running, not absent", () => {
     expect(jobStateFromJob({ id: "job-1" })).toEqual({ state: "running" });
+  });
+});
+
+describe("jobStateFromFetchError", () => {
+  test("reads a 404 as absent", () => {
+    expect(
+      jobStateFromFetchError({ status: 404, message: "Not Found" }),
+    ).toEqual({ state: "absent" });
+  });
+
+  test("reads another HTTP error as unknown", () => {
+    expect(jobStateFromFetchError({ status: 500 })).toEqual({
+      state: "unknown",
+    });
+  });
+
+  test("reads a network error as unknown", () => {
+    expect(jobStateFromFetchError(new Error("ECONNREFUSED"))).toEqual({
+      state: "unknown",
+    });
+  });
+});
+
+describe("readJobState", () => {
+  test("is absent when no flow job is recorded", async () => {
+    expect(await readJobState(async () => ({}), null)).toEqual({
+      state: "absent",
+    });
+  });
+
+  test("reads a fetched job", async () => {
+    expect(
+      await readJobState(async () => ({ type: "QueuedJob" }), "job-1"),
+    ).toEqual({ state: "running" });
+  });
+
+  test("passes the flow job id to the fetcher", async () => {
+    const ids: string[] = [];
+    await readJobState(async (id) => {
+      ids.push(id);
+      return { type: "QueuedJob" };
+    }, "job-1");
+    expect(ids).toEqual(["job-1"]);
+  });
+
+  test("reads a 404 as absent", async () => {
+    expect(
+      await readJobState(async () => {
+        throw Object.assign(new Error("Not Found"), { status: 404 });
+      }, "job-1"),
+    ).toEqual({ state: "absent" });
+  });
+
+  test("reads any other fetch failure as unknown", async () => {
+    expect(
+      await readJobState(async () => {
+        throw new Error("ECONNRESET");
+      }, "job-1"),
+    ).toEqual({ state: "unknown" });
   });
 });

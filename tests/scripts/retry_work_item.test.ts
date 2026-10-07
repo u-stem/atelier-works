@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { computeRestartPlan } from "../../f/factory/retry_work_item.ts";
+import { IMPLEMENT_FLOW_PATH } from "../../f/factory/lib/implement_loop.ts";
+import {
+  computeRestartPlan,
+  retryResult,
+  runningFlowRefusal,
+  usesImplementLease,
+} from "../../f/factory/retry_work_item.ts";
 
 describe("computeRestartPlan", () => {
   test("restarts a failed issue work item into pipeline at attempt + 1", () => {
@@ -165,5 +171,73 @@ describe("computeRestartPlan — implement", () => {
         { implementReady: false, implementEnabled: true },
       ),
     ).toThrow(/approval/);
+  });
+});
+
+describe("runningFlowRefusal", () => {
+  test("refuses while the recorded flow job is running", () => {
+    expect(runningFlowRefusal(7, "job-1", { state: "running" })).toBe(
+      "retry_work_item: work item 7's flow job job-1 is still running; wait for it to finish or cancel it before restarting",
+    );
+  });
+
+  test("refuses when the recorded flow job's state cannot be read", () => {
+    expect(runningFlowRefusal(7, "job-1", { state: "unknown" })).toBe(
+      "retry_work_item: the state of work item 7's flow job job-1 could not be read; try again later",
+    );
+  });
+
+  test("allows a completed flow job", () => {
+    expect(
+      runningFlowRefusal(7, "job-1", {
+        state: "completed",
+        success: false,
+        canceled: false,
+      }),
+    ).toBeNull();
+  });
+
+  test("allows a flow job that no longer exists", () => {
+    expect(runningFlowRefusal(7, "job-1", { state: "absent" })).toBeNull();
+  });
+
+  test("allows a work item without a flow job id", () => {
+    expect(runningFlowRefusal(7, null, { state: "running" })).toBeNull();
+  });
+});
+
+describe("usesImplementLease", () => {
+  test("is true for a restart into the implement flow", () => {
+    expect(usesImplementLease({ flowPath: IMPLEMENT_FLOW_PATH })).toBe(true);
+  });
+
+  test("is false for a restart into the pipeline", () => {
+    expect(usesImplementLease({ flowPath: "f/factory/pipeline" })).toBe(false);
+  });
+});
+
+describe("retryResult", () => {
+  test("is ok when the job id was recorded", () => {
+    expect(retryResult("implementing", "job-1", true).ok).toBe(true);
+  });
+
+  test("reports the recorded job id", () => {
+    expect(retryResult("implementing", "job-1", true).flow_job_id).toBe(
+      "job-1",
+    );
+  });
+
+  test("is not ok when another run already held the lease", () => {
+    expect(retryResult("implementing", "job-1", false).ok).toBe(false);
+  });
+
+  test("reports no recorded job id when another run already held the lease", () => {
+    expect(retryResult("implementing", "job-1", false).flow_job_id).toBeNull();
+  });
+
+  test("still reports the started job id", () => {
+    expect(retryResult("implementing", "job-1", false).started_job_id).toBe(
+      "job-1",
+    );
   });
 });

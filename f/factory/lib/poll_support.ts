@@ -4,7 +4,9 @@
 import { normalizeRepoUrl } from "./config.ts";
 import {
   type FactoryConfig,
+  isBoolean,
   isOneOf,
+  isRecord,
   type LabelerAssociation,
   type WorkItem,
   type WorkItemStatus,
@@ -226,11 +228,58 @@ export type JobState =
       readonly canceled: boolean;
     }
   /**
-   * `flow_job_id`が記録されていないか、ジョブを引いても見つからない。
+   * `flow_job_id`が記録されていないか、ジョブの取得が404だった。
    * 孤立の猶予については成功と同じに扱い、猶予を待つ(すぐに`fail_orphan`にしない)。
    * 「見つからない」は、「見つかって、取り消しか失敗だった」ほど確かな根拠ではないため。
    */
-  | { readonly state: "absent" };
+  | { readonly state: "absent" }
+  /** 404以外の理由でジョブを取得できなかった。一時的な失敗で動いているジョブを止めないよう、何もしない。 */
+  | { readonly state: "unknown" };
+
+/**
+ * 取得できた`JobService.getJob`の応答を`JobState`に読み替える。
+ * `CompletedJob`は`success` / `canceled`をそのまま使い、真偽値でなければ成功・未取り消しとみなして猶予を守る経路に倒す。
+ * `QueuedJob`や未知の`type`の記録は`running`とみなし、完了を確かめられないジョブを止めない。記録でない応答は`unknown`。
+ * `getResultMaybe`は実行中のジョブにも`completed`を返したことがあるので、ジョブの行を直接読む`getJob`の応答を前提にする。
+ */
+export function jobStateFromJob(job: unknown): JobState {
+  if (!isRecord(job)) return { state: "unknown" };
+  if (job.type === "CompletedJob") {
+    return {
+      state: "completed",
+      success: isBoolean(job.success) ? job.success : true,
+      canceled: isBoolean(job.canceled) ? job.canceled : false,
+    };
+  }
+  return { state: "running" };
+}
+
+/**
+ * `JobService.getJob`の例外を`JobState`に読み替える。
+ * windmill-clientの`ApiError`の`status`が404なら`absent`(古い完了ジョブはWindmillが消す)、
+ * それ以外(他のHTTPエラー、ネットワークエラー)は`unknown`。
+ */
+export function jobStateFromFetchError(err: unknown): JobState {
+  if (isRecord(err) && err.status === 404) return { state: "absent" };
+  return { state: "unknown" };
+}
+
+/**
+ * `flowJobId`のジョブの状態を返す。未記録なら`absent`。
+ * 取得は`getJob`(`JobService.getJob`を包んだもの)で行い、例外は`jobStateFromFetchError`で
+ * 読み替えるので、この関数は例外を投げない。
+ */
+export async function readJobState(
+  getJob: (id: string) => Promise<unknown>,
+  flowJobId: string | null,
+): Promise<JobState> {
+  if (flowJobId === null) return { state: "absent" };
+  try {
+    return jobStateFromJob(await getJob(flowJobId));
+  } catch (err) {
+    return jobStateFromFetchError(err);
+  }
+}
 
 export type ReconcileDecision =
   | { readonly action: "none" }
@@ -251,6 +300,7 @@ const DEFAULT_ORPHAN_GRACE_MS = 10 * 60_000;
  * (呼び出し側の`poll_issues.ts`では10分と`claude_timeout_sec`の2倍の大きい方で、
  * 既定の設定なら1時間)途中の状態のまま残る。
  * 成功したときと、ジョブが見つからないとき(`absent`)は猶予を待つ。
+ * ジョブの状態を読めない(`unknown`)ときは、close検知を除き何もしない。
  * テストできるよう、`now`と`orphanGraceMs`は`Date.now()`から読まず引数で受け取る。
  */
 export function decideReconcileAction(
@@ -267,7 +317,7 @@ export function decideReconcileAction(
     return { action: "cancel", reason: "pr_closed" };
   }
 
-  if (job.state === "running") {
+  if (job.state === "running" || job.state === "unknown") {
     return { action: "none" };
   }
 

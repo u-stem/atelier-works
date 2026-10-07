@@ -21,7 +21,11 @@
 
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "./lib/config.ts";
-import { getWorkItem, recordFailure, updateStatusIfCurrent } from "./lib/db.ts";
+import {
+  getWorkItem,
+  recordFailure,
+  updateStatusIfLeaseHolder,
+} from "./lib/db.ts";
 import { notify } from "./lib/discord.ts";
 import { logger, maskSecrets } from "./lib/log.ts";
 import {
@@ -153,7 +157,15 @@ export async function main(
         // トリガーラベルは取得時に消費済みなので、外すラベルも付ける
         // 状態ラベルも無い。運用者にはDBの状態更新と、下のDiscordの
         // `job_failed`通知だけが届く。
-        await updateStatusIfCurrent(item.id, item.status, "failed", message);
+        // `shouldMarkFailed`で照合した後にflow_job_idが変わっていれば(新しい実行が起動された、
+        // 実装フローがリースを取ったなど)、その実行の状態を上書きしない。
+        await updateStatusIfLeaseHolder(
+          item.id,
+          item.status,
+          "failed",
+          item.flow_job_id,
+          message,
+        );
       }
     } catch (statusErr) {
       log.error("failed to mark work item failed", {
