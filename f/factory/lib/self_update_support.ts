@@ -52,13 +52,13 @@ export function assertBranchMatches(
 }
 
 // ---------------------------------------------------------------------------
-// classifyChangedPaths: ホスト側の`mise run deploy`が必要な変更パスの判定
+// classifyChangedPaths: 次のホスト側の`mise run up`で反映される変更パスの判定
 // ---------------------------------------------------------------------------
 
 /**
  * worker側の`wmill sync push` / `wmill datatable migrate up`では反映できず、
- * ホスト側の`mise run deploy`(workerイメージの再ビルド、composeの再起動)が
- * 必要になるパス。
+ * 次にホスト側で`mise run up`して起動したとき(workerイメージの再ビルド、
+ * composeの再作成)に反映されるパス。
  * 無条件に該当するのは、workerイメージとcomposeの定義(`infra/**`)だけである。
  * `mise.toml`は`[tools]`(ツールのバージョン)か`[env]`(composeが読む値)が
  * 変わったときに限り該当する。タスク定義の編集は動作中のworkerに
@@ -101,7 +101,7 @@ export function extractMiseHostSections(toml: string): string {
 }
 
 /**
- * `mise.toml`の変更にホスト側の`mise run deploy`が必要かを返す。
+ * `mise.toml`の変更が次のホスト側の起動で反映する対象かを返す。
  * 2つの版で`[tools]` / `[env]`が異なるときに限り`true`を返す。
  * `oldToml === null`(比べる前回のデプロイが無い)の場合は、
  * 安全側に倒して必要とみなす。
@@ -122,7 +122,7 @@ export type ChangedPathsClassification = {
 /**
  * 変更されたファイルのパスの一覧(`git diff --name-only` /
  * `git ls-tree --name-only`の出力)を分類する。
- * `host_paths`はホスト側のデプロイが必要なパス、`needs_host_action`は
+ * `host_paths`は次のホスト側の起動で反映されるパス、`needs_host_action`は
  * それが1つ以上あるかを表す。
  * `miseTomlHostSectionsChanged`は呼び出し側による`mise.toml`の判定
  * (`miseTomlNeedsHostAction`の結果)で、`paths`に`mise.toml`が

@@ -112,12 +112,6 @@ export type NotifyEvent =
       note: string | null;
     }
   | {
-      kind: "deploy_action_needed";
-      instance_name: string;
-      sha: string;
-      changed_paths: string[];
-    }
-  | {
       kind: "job_failed";
       instance_name: string;
       flow_path: string;
@@ -320,19 +314,6 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
         fields,
       };
     }
-    case "deploy_action_needed":
-      return {
-        title: "自己更新にホスト操作が必要です",
-        description: `commit ${event.sha} の反映には mise run deploy の実行が必要です。`,
-        url: null,
-        fields: [
-          instanceField(event.instance_name),
-          {
-            name: "変更パス",
-            value: event.changed_paths.join(", ") || "(なし)",
-          },
-        ],
-      };
     case "job_failed":
       return {
         title: `ジョブ失敗: ${event.flow_path}`,

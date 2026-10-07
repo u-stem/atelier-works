@@ -546,7 +546,7 @@ describe("classifyDeployNeeds", () => {
   test("flags nothing for ordinary source paths", () => {
     expect(classifyDeployNeeds(["src/a.ts"])).toEqual({
       autoApply: false,
-      hostDeploy: false,
+      onNextUp: false,
     });
   });
 
@@ -567,18 +567,18 @@ describe("classifyDeployNeeds", () => {
     ).toBe(true);
   });
 
-  test("flags hostDeploy for infra/**", () => {
-    expect(classifyDeployNeeds(["infra/worker/Dockerfile"]).hostDeploy).toBe(
+  test("flags onNextUp for infra/**", () => {
+    expect(classifyDeployNeeds(["infra/worker/Dockerfile"]).onNextUp).toBe(
       true,
     );
   });
 
-  test("flags hostDeploy for mise.toml", () => {
-    expect(classifyDeployNeeds(["mise.toml"]).hostDeploy).toBe(true);
+  test("flags onNextUp for mise.toml", () => {
+    expect(classifyDeployNeeds(["mise.toml"]).onNextUp).toBe(true);
   });
 
-  test("does not flag hostDeploy for f/**", () => {
-    expect(classifyDeployNeeds(["f/factory/lib/db.ts"]).hostDeploy).toBe(false);
+  test("does not flag onNextUp for f/**", () => {
+    expect(classifyDeployNeeds(["f/factory/lib/db.ts"]).onNextUp).toBe(false);
   });
 
   test("does not flag autoApply for infra/**", () => {
@@ -666,7 +666,7 @@ describe("buildImplementPrBody", () => {
         "Windmillへの反映:",
         "",
         "- [ ] マージ後に`self_update`が自動で反映する(`f/`・`migrations/`・`.claude/skills/`の変更)",
-        "- [ ] ホスト側で`mise run deploy`が必要(`infra/`、`mise.toml`の`[tools]`・`[env]`の変更)",
+        "- [ ] 次に`mise run up`で起動したときに反映される(`infra/`、`mise.toml`の`[tools]`・`[env]`の変更)",
         "- [x] 反映するものは無い",
       ].join("\n"),
     );
@@ -678,7 +678,7 @@ describe("buildImplementPrBody", () => {
       changedPaths: ["f/factory/lib/db.ts"],
     });
     expect(body).toContain(
-      "- [x] マージ後に`self_update`が自動で反映する(`f/`・`migrations/`・`.claude/skills/`の変更)\n- [ ] ホスト側で`mise run deploy`が必要(`infra/`、`mise.toml`の`[tools]`・`[env]`の変更)\n- [ ] 反映するものは無い",
+      "- [x] マージ後に`self_update`が自動で反映する(`f/`・`migrations/`・`.claude/skills/`の変更)\n- [ ] 次に`mise run up`で起動したときに反映される(`infra/`、`mise.toml`の`[tools]`・`[env]`の変更)\n- [ ] 反映するものは無い",
     );
   });
 
@@ -688,7 +688,7 @@ describe("buildImplementPrBody", () => {
       changedPaths: [".claude/skills/factory-dev/SKILL.md"],
     });
     expect(body).toContain(
-      "- [x] マージ後に`self_update`が自動で反映する(`f/`・`migrations/`・`.claude/skills/`の変更)\n- [ ] ホスト側で`mise run deploy`が必要(`infra/`、`mise.toml`の`[tools]`・`[env]`の変更)\n- [ ] 反映するものは無い",
+      "- [x] マージ後に`self_update`が自動で反映する(`f/`・`migrations/`・`.claude/skills/`の変更)\n- [ ] 次に`mise run up`で起動したときに反映される(`infra/`、`mise.toml`の`[tools]`・`[env]`の変更)\n- [ ] 反映するものは無い",
     );
   });
 
@@ -698,7 +698,7 @@ describe("buildImplementPrBody", () => {
       changedPaths: ["infra/worker/Dockerfile"],
     });
     expect(body).toContain(
-      "- [ ] マージ後に`self_update`が自動で反映する(`f/`・`migrations/`・`.claude/skills/`の変更)\n- [x] ホスト側で`mise run deploy`が必要(`infra/`、`mise.toml`の`[tools]`・`[env]`の変更)\n- [ ] 反映するものは無い",
+      "- [ ] マージ後に`self_update`が自動で反映する(`f/`・`migrations/`・`.claude/skills/`の変更)\n- [x] 次に`mise run up`で起動したときに反映される(`infra/`、`mise.toml`の`[tools]`・`[env]`の変更)\n- [ ] 反映するものは無い",
     );
   });
 
@@ -708,7 +708,7 @@ describe("buildImplementPrBody", () => {
       changedPaths: ["mise.toml"],
     });
     expect(body).toContain(
-      "- [x] ホスト側で`mise run deploy`が必要(`infra/`、`mise.toml`の`[tools]`・`[env]`の変更)",
+      "- [x] 次に`mise run up`で起動したときに反映される(`infra/`、`mise.toml`の`[tools]`・`[env]`の変更)",
     );
   });
 
@@ -718,7 +718,7 @@ describe("buildImplementPrBody", () => {
       changedPaths: ["f/factory/lib/db.ts", "infra/worker/Dockerfile"],
     });
     expect(body).toContain(
-      "- [x] マージ後に`self_update`が自動で反映する(`f/`・`migrations/`・`.claude/skills/`の変更)\n- [x] ホスト側で`mise run deploy`が必要(`infra/`、`mise.toml`の`[tools]`・`[env]`の変更)\n- [ ] 反映するものは無い",
+      "- [x] マージ後に`self_update`が自動で反映する(`f/`・`migrations/`・`.claude/skills/`の変更)\n- [x] 次に`mise run up`で起動したときに反映される(`infra/`、`mise.toml`の`[tools]`・`[env]`の変更)\n- [ ] 反映するものは無い",
     );
   });
 

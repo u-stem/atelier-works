@@ -60,11 +60,11 @@ mise run bootstrap
 | --- | --- |
 | `mise run setup` | mise管理ツールの導入 + `bun install --frozen-lockfile` + `lefthook install` |
 | `mise run doctor` | 環境診断(OK / NG一覧) |
-| `mise run up` | ローカルWindmillスタックを起動(build込み) |
+| `mise run up` | ローカルWindmillスタックを起動(build込み)。ホスト側checkoutからビルドするため、先にmainをpullする |
 | `mise run down` | スタックを停止する |
 | `mise run build` | workerイメージのみビルドする |
 | `mise run bootstrap` | 初回セットアップ(ワークスペース作成・secret投入・sync push・migration、冪等) |
-| `mise run deploy` | `git pull --ff-only` → build → up → push → migrateを一括実行する |
+| `mise run deploy` | `git pull --ff-only` → build → up → push → migrateを一括実行する(手動で一括反映したいときの手段) |
 | `mise run check` | `lint` → `typecheck` → `test`を順に実行する |
 | `mise run lint` | biome + `wmill lint` + 型アサーション検出 |
 | `mise run typecheck` | `tsc --noEmit` |

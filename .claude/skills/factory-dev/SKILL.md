@@ -89,7 +89,7 @@ mise run bootstrap     # workspace 作成、secret 投入、sync push、migratio
 | --- | --- |
 | `mise run setup` | `mise install`の後にJS依存(`bun install --frozen-lockfile`など)を入れる(骨格側で追加予定) |
 | `mise run doctor` | docker / miseの有無、`mise.local.toml`の必須キー、ポートの空き、Windmillの起動状態、workerコンテナ内の`claude`/`gh`/`git gtr`の動作確認を一覧表示する |
-| `mise run up` | `docker compose`(`infra/docker-compose.yml`)でスタックを起動(build込み) |
+| `mise run up` | `docker compose`(`infra/docker-compose.yml`)でスタックを起動(build込み)。ホスト側checkoutからビルドするため、先にmainをpullする |
 | `mise run down` | スタックを停止する |
 | `mise run bootstrap` | 初回のみ: Windmillの初期パスワード変更、workspace作成、secret変数の投入、`wmill sync push`、migration適用を冪等に行う |
 | `mise run check` | `lint` → `typecheck` → `test`を順に実行する(PR前に必ず通す) |
@@ -101,7 +101,7 @@ mise run bootstrap     # workspace 作成、secret 投入、sync push、migratio
 | `mise run push:dry` | `wmill sync push --dry-run`で反映内容を確認するだけ(リモートは変更しない) |
 | `mise run pull` | `wmill sync pull`でリモート(AppのUI編集など)をローカルに取り込む |
 | `mise run migrate` | `wmill datatable migrate up`でData Tableのマイグレーションを適用する |
-| `mise run deploy` | ホスト側checkoutで`git pull --ff-only` → worker imageのビルド → `compose up -d` → `wmill sync push` → migrationまで一括実行する(`self_update`が`infra/**`・`mise.toml`の変更で「ホスト操作が必要」と通知したときに使う。`f/`や`migrations/`だけの変更は`self_update`が自動で反映するので不要) |
+| `mise run deploy` | ホスト側checkoutで`git pull --ff-only` → worker imageのビルド → `compose up -d` → `wmill sync push` → migrationまで一括実行する(手動で一括反映したいときの手段。`self_update`は`f/`・`migrations/`・`.claude/skills/`を自動で反映し、`infra/**`・`mise.toml`の変更は次の`mise run up`で反映されるので、必須の手順ではない) |
 | `mise run logs` | `docker compose logs`を呼び出す |
 
 ## 実装 → レビュー → 修正のループ(概要)
@@ -126,7 +126,7 @@ mise run bootstrap     # workspace 作成、secret 投入、sync push、migratio
 - Summary(何を、なぜ)
 - 変更範囲
 - 検証結果(lint / typecheck / test / 該当すればE2E)
-- Windmillへの反映(マージ後に`self_update`が自動で反映するか、`infra/`・`mise.toml`の`[tools]`・`[env]`の変更でホスト側の`mise run deploy`が必要か)
+- Windmillへの反映(マージ後に`self_update`が自動で反映するか、`infra/`・`mise.toml`の`[tools]`・`[env]`の変更が次の`mise run up`で反映されるか)
 
 テンプレートは`.github/PULL_REQUEST_TEMPLATE.md`を参照。
 
