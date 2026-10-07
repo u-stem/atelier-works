@@ -18,7 +18,7 @@
 - 行内のコメントは、その行だけでは意図が分からない箇所に限って書く。コードをそのまま言い換えたコメントは書かない。
 - 次のものは書かない。
   - `§`などのセクション記号と、設計文書・計画書の章番号やファイル名。リポジトリの外にある文書は読み手が辿れない。
-  - 変更の経緯(「〜から移した」「PR #N で追加」など)。経緯はコミットとPRに残す。
+  - 変更の経緯(「〜から移した」「PR #Nで追加」など)。経緯はコミットとPRに残す。
   - TODO。今やるかIssueにする。
 - 既知の制限を説明するためにIssue番号を書くのはよい(例: 「引用されたパスは復元しない(#30)」)。
 
@@ -38,11 +38,11 @@ export function jstMidnightTodayIso(now: Date): string {
 ## TypeScript
 
 - `tsconfig.json`は`strict: true`を必須とする。
-- 型アサーション`as`(`<T>expr`形式含む)は禁止する。例外は次の2つのみ:
+- 型アサーション`as`(`<T>expr`形式含む)は禁止する。例外は次の2つに限る。
   - `as const`
   - 型ガード関数の内部での絞り込み
 - `any`は使わない(biomeの`noExplicitAny`で強制する)。
-- 外部由来の値(HTTPレスポンス、`JSON.parse`の結果、サブプロセスのstdoutなど)は**parse, don't validate** の原則で扱う。「型があるかのように決め打ちしてアクセスする」のではなく、型ガード関数でパースしてから使う。
+- 外部由来の値(HTTPレスポンス、`JSON.parse`の結果、サブプロセスのstdoutなど)は**parse, don't validate**の原則で扱う。「型があるかのように決め打ちしてアクセスする」のではなく、型ガード関数でパースしてから使う。
 
 ```ts
 // 悪い例: 決め打ちでアクセスする(as で黙らせている)
@@ -77,7 +77,7 @@ if (!isClaudeResult(parsed)) {
 本リポジトリ自身のテストはGoogleのテストサイズ分類(small / medium / large)で分ける。
 
 - **small**: 外部依存(DB・ネットワーク・コンテナ)を使わない単体テスト。`bun test`(`mise run test`)。`f/factory/lib/**`の大半はここに属し、外部プロセス起動や`fetch`は注入したダミー実装に差し替える。
-- **medium**: composeのPostgresを使うSQLスモークテストなど、単一マシン内のローカルな依存(DB・コンテナ)を使うテスト。`mise run test:db`(M3で追加)。
+- **medium**: composeのPostgresを使うSQLスモークテストなど、単一マシン内のローカルな依存(DB・コンテナ)を使うテスト。`mise run test:db`。
 - **large**: 実際のIssue起票から確認するE2E。`factory-dev`スキルおよび`mise run doctor` → `up` → `bootstrap`後の手順に従う。
 
 ## Windmill scriptの作法
@@ -95,7 +95,7 @@ if (!isClaudeResult(parsed)) {
 
 ## PRテンプレート
 
-PRは`.github/PULL_REQUEST_TEMPLATE.md`の以下の章立てに従う:
+PRは`.github/PULL_REQUEST_TEMPLATE.md`の次の章立てに従う。
 
 1. **概要**: このPRで何をしたか、なぜ必要かを簡潔に記述する。
 2. **受入条件**: Issueの受入基準をチェックリストで記述する(factoryが作成したPR)。
@@ -104,7 +104,7 @@ PRは`.github/PULL_REQUEST_TEMPLATE.md`の以下の章立てに従う:
 5. **関連リンク**: `Closes #N`形式でIssueを明示する(factoryはこれで承認済み要件と照合する)。
 6. **備考**: Windmillへの反映(sync push / migrate / image rebuild)の要否を記述する。
 
-人がClaude Codeで作成するコミットは、トレーラー`Co-Authored-By: Claude <noreply@anthropic.com>`を付ける。
+人がClaude Codeで作成するコミットには、トレーラー`Co-Authored-By: Claude <noreply@anthropic.com>`を付ける。
 
 Software Factoryが作成するコミットには、トレーラー`Co-Authored-By: Claude <noreply@anthropic.com>`と`Generated-By: Software Factory (<instance_name>)`が自動で付く(`lib/workspace.ts`の`commitAndPush`)。
 

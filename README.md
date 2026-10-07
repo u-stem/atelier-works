@@ -8,22 +8,22 @@ Windmill上のフローとして自動化する「Software Factory」。この�
 
 工程は次の5段階。
 
-1. **拾う** — `factory`ラベル付きIssueを検知してclaimする
-2. **要件定義** — headless Claudeが要件定義ドラフトを生成し、人が承認・差し戻しする
-3. **実装** — worktree上で実装しPRを作成する
-4. **CI監視** — マージ後のCIを監視する
-5. **自己改善** — 失敗や却下の履歴から改善提案をIssue化する
+1. **拾う**: `factory`ラベル付きIssueを検知してclaimする
+2. **要件定義**: headless Claudeが要件定義ドラフトを生成し、人が承認・差し戻しする
+3. **実装**: worktree上で実装しPRを作成する
+4. **CI監視**: マージ後のCIを監視する
+5. **自己改善**: 失敗や却下の履歴から改善提案をIssue化する
 
 **現在のスコープ**: 基盤(docker composeによるWindmillスタック、claude/gh/gtr/wmillを
 同梱したworkerイメージ、Data Table、`doctor` / `bootstrap`)、工程1の自動巡回(`poll_issues` / `poll_prs`)、
 工程2の要件定義と承認、PRワークフロー(工程3の一部: `pr_review` / `pr_fix`)、
 ダッシュボードApp(Factory Console)、自己更新と失敗ハンドラ。
 未実装は工程3の「Issueから実装してPRを作る」、工程4のマージ後CI監視、工程5の自己改善提案、
-Discordの双方向操作(詳細は [docs/architecture.md](docs/architecture.md)と [docs/operations.md](docs/operations.md)を参照)。
+Discordの双方向操作(詳細は[docs/architecture.md](docs/architecture.md)と[docs/operations.md](docs/operations.md)を参照)。
 
 ## 10分で動かす
 
-前提: ホストに **docker**(DesktopまたはOrbStack)と **mise** のみ。
+前提: ホストに**docker**(DesktopまたはOrbStack)と**mise**のみ。
 
 ```bash
 git clone <このリポジトリの URL> atelier-works
@@ -32,8 +32,8 @@ mise trust
 mise run setup
 ```
 
-秘密値を投入する(キー一覧と取得手順は`mise.local.toml.example`を参照。投入は
-シェル履歴に残さない`read -rs`経由を推奨):
+秘密値を投入する。キー一覧と取得手順は`mise.local.toml.example`を参照。投入には、
+値をシェル履歴に残さない`read -rs`経由を推奨する。
 
 ```bash
 read -rs 'v?DB_PASSWORD: ' && mise set -E local DB_PASSWORD="$v"; unset v
@@ -52,7 +52,7 @@ mise run bootstrap
 `owners`(対象リポジトリの所有者)と`instance_name`を設定する。この2項目はgit管理外で、
 `bootstrap`実行時点では空のまま作成される。
 
-詳しい手順・動作確認・トラブルシュートは [docs/setup.md](docs/setup.md)を参照。
+詳しい手順・動作確認・トラブルシュートは[docs/setup.md](docs/setup.md)を参照。
 
 ## 主要miseタスク
 
@@ -101,8 +101,8 @@ atelier-works/
 
 ## ドキュメント
 
-- [セットアップ](docs/setup.md) — 前提、資格情報の取得、起動、動作確認、トラブルシュート
-- [運用](docs/operations.md) — 運用ルール、日常運用、更新の反映、秘密のローテーション、バックアップ
-- [アーキテクチャ](docs/architecture.md) — 全体構成、状態遷移、データモデル、フロー、拡張点
-- [セキュリティ](docs/security.md) — 信頼境界、シークレット取り扱い、資格情報の作成手順
-- [コーディング規約](docs/coding-guidelines.md) — 言語規約、TypeScript、TDD、テストの分類
+- [セットアップ](docs/setup.md): 前提、資格情報の取得、起動、動作確認、トラブルシュート
+- [運用](docs/operations.md): 運用ルール、日常運用、更新の反映、秘密のローテーション、バックアップ
+- [アーキテクチャ](docs/architecture.md): 全体構成、状態遷移、データモデル、フロー、拡張点
+- [セキュリティ](docs/security.md): 信頼境界、シークレット取り扱い、資格情報の作成手順
+- [コーディング規約](docs/coding-guidelines.md): 言語規約、TypeScript、TDD、テストの分類

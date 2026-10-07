@@ -4,7 +4,7 @@
 
 Software FactoryはGitHub Issueを起点に、要件定義から自己改善までをWindmill上のフローとして自動化する仕組みである。
 
-主なコンポーネント:
+主なコンポーネントは次のとおり。
 
 - **GitHub**: Issueの起票・ラベル付け・PR・コメントのやり取り先。`factory`ラベルが付いたIssueが入力になる。
 - **Windmill server / worker**: フローとスケジュールの実行基盤。workerはカスタムイメージで動き、`claude`(Claude Code CLI)、`gh`、`gtr`(git worktree runner)、`wmill`を同梱する。workerはdefaultワーカーグループの1コンテナで、`NUM_WORKERS=3`により内部で3つのワーカープロセスが並列動作する(メモリ上限は1コンテナ分の4096Mのまま)。
@@ -122,13 +122,13 @@ stateDiagram-v2
 
 **終端statusの同期**: 終端status(`approved` / `rejected` / `needs_human` / `failed` / `expired` / `cancelled` / `reviewed` / `rereview_requested` / `blocked` / `audited` / `pr_open`)の一覧は`f/factory/lib/types.ts`の`TERMINAL_WORK_ITEM_STATUSES`と、Data Tableのview`factory.v_lead_time`の`WHERE status IN (...)`の2か所にある。終端statusを増やすときはmigrationで`v_lead_time`を`CREATE OR REPLACE`し、同じPRで`TERMINAL_WORK_ITEM_STATUSES`を更新する(`poll_issues`のreconcileは終端statusを`listActive`から外して孤児判定の対象にしないため、片方だけ更新すると完了済みのwork itemが孤児として`failed`にされる)。
 
-**Issue・PR共通(2026-09-27方針変更)**: トリガーラベル(Issueの`factory`、PRの`factory:review` / `factory:fix`)はclaim時(Issueはassignee付与直後、PRはトリガーラベル自体の削除直後)に一度だけ消費する。以降のどの状態遷移(終端遷移を含む)でもIssue / PR側のラベルは付け外ししない — 状態は`work_items.status`のみが正で、GitHubのラベルは「人からFactoryへのトリガー」の役割に限定される。`retry_work_item`のように終端statusから再起動する経路も、`runFlowAsync`を呼ぶだけでラベルの再付与は行わない。最初からやり直すには人が改めてトリガーラベルを付け直す(新しいcycle)。
+**Issue・PR共通(2026-09-27方針変更)**: トリガーラベル(Issueの`factory`、PRの`factory:review` / `factory:fix`)はclaim時(Issueはassignee付与直後、PRはトリガーラベル自体の削除直後)に一度だけ消費する。以降のどの状態遷移(終端遷移を含む)でもIssue / PR側のラベルは付け外ししない。状態は`work_items.status`のみが正で、GitHubのラベルは「人からFactoryへのトリガー」の役割に限定される。`retry_work_item`のように終端statusから再起動する経路も、`runFlowAsync`を呼ぶだけでラベルの再付与は行わない。最初からやり直すには人が改めてトリガーラベルを付け直す(新しいcycle)。
 
-PRは終端statusになってもトリガーラベルの消費以外の付け外しが起きないため、再発見はGitHub検索(`searchPrs`)ではなくDB(`work_items`)側で行う: `poll_prs`の`listTrackedPrs`が`kind IN ('pr_review', 'pr_fix')`かつ`status != 'cancelled'`かつ`tracked_pr_days`(既定30日、`factory_config`)以内に更新された行を再発見し、そのPRがまだopenであることを`getPr`で確認してから候補にする。人が新しいcommitをpushすれば(pr_reviewの場合)、または改めてトリガーラベルを付け直せば、この再発見経路から自動的に次のサイクルが始まる。
+PRは終端statusになってもトリガーラベルの消費以外の付け外しが起きないため、再発見はGitHub検索(`searchPrs`)ではなくDB(`work_items`)側で行う。`poll_prs`の`listTrackedPrs`が`kind IN ('pr_review', 'pr_fix')`かつ`status != 'cancelled'`かつ`tracked_pr_days`(既定30日、`factory_config`)以内に更新された行を再発見し、そのPRがまだopenであることを`getPr`で確認してから候補にする。人が新しいcommitをpushすれば(pr_reviewの場合)、または改めてトリガーラベルを付け直せば、この再発見経路から自動的に次のサイクルが始まる。
 
 ### 状態遷移の詳細
 
-**工程2 (要件定義)から工程3へ:**
+**工程2(要件定義)から工程3へ:**
 - `approved` → `implementing`: `requirements_apply`が承認の副作用(Issueコメント、Discord、`req-<N>` worktreeの削除)の後に、`implement_enabled`が真ならCASで遷移させて`f/factory/implement`を起動する。起動に失敗したら`needs_human`にし、`job_failures`に記録してConsoleのFailuresタブから再実行できるようにする。
 - `implementing` → `pr_open`: 検査に通った(または保護パス変更・検査コマンド未設定で検査を実行しなかった)実装をコミットしてpushし、PRを作成または更新して`factory:review`ラベルを付けた。
 - `implementing` → `requirements_generating`: 実装が`requirements_gap`を返した。worktreeを削除し、PRが無ければ実装ブランチ(リモートとローカル)も削除して、`gap_report`をfeedbackに工程2をattempt+1で再起動する(`max_attempts`を超えたら`needs_human`)。
@@ -181,7 +181,7 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加のみで、ren
 | `audit_kickoff` | schedule(毎週月曜09:30) | 前回監査以降の運用記録を集計し、対象があれば監査work itemを作成して`audit`フローを起動 |
 | `audit` | flow | 証跡パックの収集と監査レポート・改善提案の生成(headless Claude)、提案の承認登録 |
 
-各scheduleのcronはタイムゾーン`Asia/Tokyo`、Windmillの6フィールド形式で`*.schedule.yaml`に持つ。多重実行防止はadvisory lockを使わず、各scheduleの`no_flow_overlap: true`で行う(前回実行中はスキップする)。複数インスタンスを同時運用する場合の排他はWindmill側ではなくGitHub側のclaim(Issueはassignee付与、PRはトリガーラベルの消費。いずれも再取得して確認する)で担保する。error handlerで失敗を記録し、すべてのフロー(pipeline / implement / pr_review / pr_fix)の`failed`終端処理(Discord通知。ラベルはclaim時に既に消費済みのため除去は行わない)は`on_error_flow`に一本化される。承認のタイムアウト(7日)は`poll_issues`のreconcile後に行う期限切れスイープが`approval_requests.expires_at`を見て判定する(`pipeline.flow`はsuspendを使わない)。
+各scheduleのcronはタイムゾーン`Asia/Tokyo`、Windmillの6フィールド形式で`*.schedule.yaml`に持つ。多重実行防止はadvisory lockを使わず、各scheduleの`no_flow_overlap: true`で行う(前回実行中はスキップする)。複数インスタンスを同時運用する場合の排他はWindmill側ではなくGitHub側のclaim(Issueはassignee付与、PRはトリガーラベルの消費。いずれも再取得して確認する)で確保する。error handlerで失敗を記録し、すべてのフロー(pipeline / implement / pr_review / pr_fix)の`failed`終端処理(Discord通知。ラベルはclaim時に既に消費済みのため除去は行わない)は`on_error_flow`に一本化される。承認のタイムアウト(7日)は`poll_issues`のreconcile後に行う期限切れスイープが`approval_requests.expires_at`を見て判定する(`pipeline.flow`はsuspendを使わない)。
 
 ## 命名規則
 
@@ -281,10 +281,10 @@ WindmillのUIはsummaryでソートされるため、種別を示すタグをsum
   - `pr_review`は`git worktree add --detach /workspaces/<owner>/<repo>/review-<pr>-<sha7> <sha>`でPRごとのdetached worktreeを使い、終了時に削除する。
   - `pr_fix`は`git gtr new`で作るPRブランチのworktreeを使う。
 - **pr_review**: PR本文・差分・変更ファイル一覧(factory製PRなら承認済み要件も)を入力にレビューし、結果は常にGitHubのCOMMENTレビューとして投稿する(スキル内部の`verdict`は記録用で、投稿種別には反映しない)。完了すると`reviewed`(終端)。
-- **pr_fix**: レビュー指摘・未解決コメント・要件を入力に修正し、push後に各コメントへ返信して再レビューを依頼する(`rereview_requested`)。要件変更が必要な場合は自分で要件や設計を書き換えず`requirements_gap`として中断し、元Issueのwork item(`parent_work_item_id`で紐付け)を`requirements_generating`にattempt+1で戻す。安全策の詳細は [docs/security.md](security.md)を参照。
-- **propose_issue(Issue化提案、ユーザー決定2026-09-26)**: pr_fixの各返信は`fixed` / `skipped`に加え`propose_issue`を選べる。指摘は妥当だがこのPRの範囲外という判断で、Claudeは修正を強行せずIssueのtitle/bodyを`factory.issue_proposals`に記録する(`pr_fix_finish`が挿入し、レビューコメントのthread idを`listReviewThreads`でベストエフォート解決する)。1件でも提案があるその回のpr_fixは`rereview_requested`ではなく`needs_human`で終わり、Discordに`ConsoleのInboxで提案を承認または却下してください`という通知が飛ぶ。人が`f/factory/approval_decide`(Console Inboxから、kind = issue_proposal)で承認すると、`f/factory/steps/issue_proposal_apply`がその提案のIssueを対象リポジトリに作成してスレッドへ返信・resolveし、却下すると理由を返信してスレッドは開いたままにする(承認・却下いずれも要件定義の承認と同じ「人が判断してから進む」枠組み)。対象work itemの提案がすべて決定すると、status(`work_items.status`)はその回でコミットをpushしていれば`rereview_requested`、していなければ`reviewed`へ切り替わる(`decidePostProposalStatus`、pr_workflow_support.ts)。返信対象がPRレビューコメントかプレーンなissueコメントかは行挿入時に`is_inline`列へ記録し(`matchReviewThreadForComment`もコメントの`databaseId`で一致させ、`(path, line)`には依存しない)、`issue_proposal_apply`はそれをもとに決定的に返信先を選ぶ。承認は`decided_by`(要件定義の承認と同じfail-closed導出)と`status = 'pending'`条件付きUPDATEによる楽観ロック、作成したIssue本文へ埋め込む`<!-- factory:issue_proposal:<id> -->`マーカー(`findIssueByMarker`で再検索して再利用)によって、途中でクラッシュしても再実行が安全になっている(Issueの二重作成や決定の上書きは起きない)。詳細な手順は [docs/operations.md](operations.md)の「Issue化提案の承認 / 却下」を参照。
-- **PRに書くのはレビュー本体と返信のみ**: pr_reviewの指摘・総評、pr_fixの返信のみをPRに投稿し、失敗・要人手・ブロック・requirements_gap・Issue化提案の承認/却下結果といった運用系の内容も、通知はPRに書かずDiscordに送る(Issue化提案の承認/却下自体への返信はPRのスレッドに書く。上記参照)。
-- **DB上の追跡と再発見(2026-09-27方針変更)**: factoryが扱ったPRにトリガーラベル以外のラベルは付かない。人が今このPRが何を待っているか確認するのはConsoleのPipelineタブ(`work_items.status`)で行う。`poll_prs`の`listTrackedPrs`(lib/db.ts)が`kind IN ('pr_review', 'pr_fix')`かつ`status != 'cancelled'`かつ`tracked_pr_days`以内に更新された行をDBから再発見するので、トリガーラベルが外れた後も追跡が続く(詳細は [docs/operations.md](operations.md)の「ラベルと終端状態」を参照)。
+- **pr_fix**: レビュー指摘・未解決コメント・要件を入力に修正し、push後に各コメントへ返信して再レビューを依頼する(`rereview_requested`)。要件変更が必要な場合は自分で要件や設計を書き換えず`requirements_gap`として中断し、元Issueのwork item(`parent_work_item_id`で紐付け)を`requirements_generating`にattempt+1で戻す。安全策の詳細は[docs/security.md](security.md)を参照。
+- **propose_issue(Issue化提案、ユーザー決定2026-09-26)**: pr_fixの各返信は`fixed` / `skipped`に加え`propose_issue`を選べる。指摘は妥当だがこのPRの範囲外という判断で、Claudeは修正を強行せずIssueのtitle/bodyを`factory.issue_proposals`に記録する(`pr_fix_finish`が挿入し、レビューコメントのthread idを`listReviewThreads`でベストエフォート解決する)。1件でも提案があるその回のpr_fixは`rereview_requested`ではなく`needs_human`で終わり、Discordに`ConsoleのInboxで提案を承認または却下してください`という通知が送られる。人が`f/factory/approval_decide`(Console Inboxから、kind = issue_proposal)で承認すると、`f/factory/steps/issue_proposal_apply`がその提案のIssueを対象リポジトリに作成してスレッドへ返信・resolveし、却下すると理由を返信してスレッドは開いたままにする(承認・却下いずれも要件定義の承認と同じ「人が判断してから進む」枠組み)。対象work itemの提案がすべて決定すると、status(`work_items.status`)はその回でコミットをpushしていれば`rereview_requested`、していなければ`reviewed`へ切り替わる(`decidePostProposalStatus`、pr_workflow_support.ts)。返信対象がPRレビューコメントかプレーンなissueコメントかは行挿入時に`is_inline`列へ記録し(`matchReviewThreadForComment`もコメントの`databaseId`で一致させ、`(path, line)`には依存しない)、`issue_proposal_apply`はそれをもとに決定的に返信先を選ぶ。承認は`decided_by`(要件定義の承認と同じfail-closed導出)と`status = 'pending'`条件付きUPDATEによる楽観ロック、作成したIssue本文へ埋め込む`<!-- factory:issue_proposal:<id> -->`マーカー(`findIssueByMarker`で再検索して再利用)によって、途中でクラッシュしても再実行が安全になっている(Issueの二重作成や決定の上書きは起きない)。詳細な手順は[docs/operations.md](operations.md)の「Issue化提案の承認 / 却下」を参照。
+- **PRに書くのはレビュー本体と返信のみ**: pr_reviewの指摘・総評とpr_fixの返信だけをPRに投稿する。失敗・要人手・ブロック・requirements_gap・Issue化提案の承認/却下結果といった運用系の内容は、PRに書かずDiscordに通知する(Issue化提案の承認/却下自体への返信はPRのスレッドに書く。上記参照)。
+- **DB上の追跡と再発見(2026-09-27方針変更)**: factoryが扱ったPRにトリガーラベル以外のラベルは付かない。人が今このPRが何を待っているか確認するのはConsoleのPipelineタブ(`work_items.status`)で行う。`poll_prs`の`listTrackedPrs`(lib/db.ts)が`kind IN ('pr_review', 'pr_fix')`かつ`status != 'cancelled'`かつ`tracked_pr_days`以内に更新された行をDBから再発見するので、トリガーラベルが外れた後も追跡が続く(詳細は[docs/operations.md](operations.md)の「ラベルと終端状態」を参照)。
 - **watermark**: 処理済みwatermark(`last_review_id` / `last_comment_id` / `last_review_comment_id`)はpr_fixがpushに成功したとき、またはrequirements_gapで元Issueへ差し戻したときにのみ進める。それ以外の終端(`failed` / `needs_human` / `blocked`)では進めず、`retry_work_item`による再実行で同じフィードバックを再収集できるようにする。push成功時にIssue化提案があって`needs_human`に終わる場合も、watermarkは(pushが実際に成功しているため)通常のpush成功と同様に進める。
 
 ## 自己更新の仕組み(self_update)
@@ -301,7 +301,7 @@ WindmillのUIはsummaryでソートされるため、種別を示すタグをsum
 - **期間**: 対象期間は前回レポート終了時刻から実行日のJST 00:00まで(実行日当日は含めない)とし、`max_lookback_days`(既定28日)を上限に切り詰める。切り詰めた日数は`unaudited_gap_days`として証跡に記録する。
 - **スキップ条件**: 別の監査が実行中(`picked` / `auditing`)、期間が空、対象期間に行動につながる記録が無い(強制実行時を除く)、日次予算超過のいずれかであれば起動をスキップする。スキップは記録のみで通知しない。
 - **準備**: `audit_prepare`が作業項目を`picked`から`auditing`へ進め、証跡パック(サニタイズ済み)を作り、Factory自身のself cloneを同期する(Claudeに渡す使い捨てのスナップショットは`audit_generate`が作る)。ステップの再試行は`auditing`のまま再開し、二重に状態遷移しない。
-- **生成**: `audit_generate`はheadless Claudeにテンプレートと証跡パックを与えレポートと改善提案を生成させ、章立て・改善提案の表・URL許可リストを機械検査してから保存する。保存済みレポートがある再開時はClaudeを再実行せず、提案登録と承認依頼の作成をべき等に再生する。
+- **生成**: `audit_generate`はheadless Claudeにテンプレートと証跡パックを与えレポートと改善提案を生成させ、章立て・改善提案の表・URL許可リストを機械検査してから保存する。保存済みレポートがある再開時はClaudeを再実行せず、提案登録と承認依頼の作成だけをべき等にやり直す。
 - **提案と承認**: 提案は`issue_proposals`(`origin=audit`)として登録し、各提案に承認依頼(`kind=issue_proposal`)を作る。提案が0件なら作業項目は`audited`、1件以上あれば`awaiting_approval`に進み、全提案の承認 / 却下が終わると`audited`になる。
 - **起票**: 承認された提案はFactory自身のリポジトリ(`factory_repo`)にIssueとして起票される。監査は`retry_work_item`による再実行の対象外で、失敗した期間は次回の週次監査か「今すぐ監査」でカバーする。
 - **通知**: Discordの`audit_completed`通知は提案が1件以上あるときのみ送る。スキップやゼロ件のレポートは通知しない。
@@ -327,4 +327,4 @@ WindmillのUIはsummaryでソートされるため、種別を示すタグをsum
 
 ボタンによる承認操作はInteractions Endpointの公開URLが必要なため、共有インスタンス化(VPS等)の際に検討する。
 
-上記のうち、工程4の監視scheduleの詳細は実装時に確定する。工程3のガードは [docs/security.md](security.md)の「工程3(implement)の安全策」を参照。
+上記のうち、工程4の監視scheduleの詳細は実装時に確定する。工程3のガードは[docs/security.md](security.md)の「工程3(implement)の安全策」を参照。

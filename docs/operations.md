@@ -5,7 +5,7 @@
 - Issueを拾ったインスタンスの所有者が、そのIssueの承認を行う。
 - 各インスタンスは稼働前に`f/factory/factory_config`の`instance_name`を必ず設定する(Discord通知・承認Inboxの担当表示に使われる)。
 - 1つのIssueは1つのインスタンスが占有する。claim(assignee設定 + `factory`ラベルの消費)に成功したインスタンスだけがそのIssueを処理し、後から来た他インスタンスは撤退する。
-- 既知の制約: claim(ラベル消費)の直後にDBへの登録が失敗すると、その Issue はラベルも作業項目も無い状態になり、自動では拾い直されない。Discordの失敗通知を見て人が`factory`ラベルを付け直す。
+- 既知の制約: claim(ラベル消費)の直後にDBへの登録が失敗すると、そのIssueはラベルも作業項目も無い状態になり、自動では拾い直されない。Discordの失敗通知を見て人が`factory`ラベルを付け直す。
 - Issue・PRとも、付くラベルはトリガーのみ(2026-09-27方針変更): Issueは`factory`、PRは`factory:review` / `factory:fix`。付けると起動し、claim時に外れる(消費される)。以後はどの状態遷移でもIssue / PRのラベルは付け外しされず、状態はConsoleのPipelineタブで確認する。**もう一度処理させたい場合は、人が改めてトリガーラベルを付け直す**(新しいcycleとして扱われる)。ラベルが外れた後も、`tracked_pr_days`(既定30日)以内に更新があったPRは`poll_prs`がDB(`work_items`)から再発見し続けるため、人が新しいcommitをpushすれば自動で再レビューが起動する。それ以上追跡させたくない場合はPRをcloseするか、`tracked_pr_days`を過ぎるまで待つ。
 
 ## 日常運用
@@ -70,7 +70,7 @@
 - 返信は運用者自身のアカウントで投稿するため、1行目のロールタグ・本文・末尾の対応行(コミットshaまたは「見送り」)という固定構造でflow側がレンダリングする。形式は`.claude/skills/factory-fix/SKILL.md`の「返信形式」節を参照。
 - コミットメッセージはClaudeが提案する件名(`commit_subject`、50文字以内を目安・72文字を超えると拒否・Conventional Commits形式)と任意の本文(`commit_body`、箇条書き)をflowが結合して作る。トレーラー(`Co-Authored-By` / `Generated-By`)はflow側が自動で付与する。コミットメッセージにも英数字と日本語の間のスペース除去が適用される(コードスパン内は除く)。
 - 要件変更が必要な場合は修正を中断し、元のIssueをrequirements_generatingにattempt+1で再起動(`requirements_gap` → 親Issue)。
-- Factory自身の投稿は「viewer(FactoryのGitHubアカウント)と同じログイン **かつ** factoryマーカー付き」の両方で判定する。同一アカウントで運用しているため、人が投稿したコメントはログインが一致してもマーカーが無いのでhuman feedbackとして扱われる。同様にFactory自身の一次レビュー(`pr_review`)とその未解決のインラインコメントもマーカー無し(または`pr_review`マーカー)であればfeedbackとして扱われ、pr_fixはその指摘を修正対象にする。除外されるのはFactory自身の`pr_fix`返信(`pr_fix`マーカー付き)のみ。
+- Factory自身の投稿は「viewer(FactoryのGitHubアカウント)と同じログイン**かつ**factoryマーカー付き」の両方で判定する。同一アカウントで運用しているため、人が投稿したコメントはログインが一致してもマーカーが無いのでhuman feedbackとして扱われる。同様にFactory自身の一次レビュー(`pr_review`)とその未解決のインラインコメントもマーカー無し(または`pr_review`マーカー)であればfeedbackとして扱われ、pr_fixはその指摘を修正対象にする。除外されるのはFactory自身の`pr_fix`返信(`pr_fix`マーカー付き)のみ。
 
 #### 各コメントへの返信の3値(`decision`)
 
@@ -95,10 +95,10 @@
 
 ### ラベルと終端状態(2026-09-27方針変更)
 
-- PRに付くラベルはトリガーのみ(Issueの`factory`と同じ方針): `factory:review`(レビュー起動) / `factory:fix`(修正起動)。人が付与し、claim時に消費されて外れる。以後はどの状態遷移でもPRのラベルは付け外しされない。状態は`work_items.status`のみが正であり、Consoleの Pipeline タブで確認する。このリポジトリ自身の基盤整備PR(foundation PR)には`factory:review` / `factory:fix`のいずれも付けない。
+- PRに付くラベルはトリガーのみ(Issueの`factory`と同じ方針): `factory:review`(レビュー起動) / `factory:fix`(修正起動)。人が付与し、claim時に消費されて外れる。以後はどの状態遷移でもPRのラベルは付け外しされない。状態は`work_items.status`のみが正であり、ConsoleのPipelineタブで確認する。このリポジトリ自身の基盤整備PR(foundation PR)には`factory:review` / `factory:fix`のいずれも付けない。
 - 終端状態: `reviewed`(pr_review完了、修正不要・人のApprove待ち) / `rereview_requested`(修正をpushして再レビュー依頼中) / `blocked` / `needs_human`(人の対応が必要。pr_fixが`needs_human` / `blocked` / `failed`で終了したとき、pr_review自体が失敗したとき、またはIssue化提案(`propose_issue`)が1件以上あるとき)。
 - トリガーラベルが外れた後も、`tracked_pr_days`(既定30日、`factory_config`)以内に更新のあったPRは`poll_prs`がDB(`work_items`、`listTrackedPrs`)から再発見し続ける。人が新しいcommitをpushするたびに自動で再レビューが起動する(1 pushにつきClaude実行1回)。これ以上追跡させたくないPRはcloseするか、`tracked_pr_days`を過ぎるまで待つ。
-- `review_post_mode: "gated"`ではレビューを投稿しないため(gatedは検証用の予約モードで、PRはレビュー依頼・assignee経由でのみ再発見される)。
+- `review_post_mode: "gated"`ではレビューを投稿しない。gatedは検証用の予約モードで、PRはレビュー依頼かassignee経由でのみ再発見される。
 - 対象は`factory_config`の`repo_allowlist`(未指定なら`owners`に含まれるリポジトリ全体)に含まれるリポジトリのみ。`factory_repo`は`repo_allowlist`に関わらず常に対象。試験的に対象を絞りたい場合は`repo_allowlist`に対象リポジトリを明示する。
 
 ### pr_fixの再実行
@@ -118,7 +118,7 @@
 - worker imageに入れるツール(`claude` / `gh` / `gitleaks` / `gtr` / `wmill`)のバージョンは`mise.toml`の`[env]`(`CLAUDE_VERSION` / `GH_VERSION` / `GITLEAKS_VERSION` / `GTR_REF` / `WMILL_VERSION`)で固定し、`infra/worker/Dockerfile`のbuild argとして渡す。ツールの追加やバージョン変更はworker imageのrebuildが必要な変更で、`git pull`だけでは反映されない。`self_update`が`infra/`と`mise.toml`の`[env]`の変更として検知して通知するので、ホスト側で`mise run deploy`を実行する。`gitleaks`は工程3(実装フロー)が毎ラウンドの固定検査として`--redact`付きで実行するためにworker imageに入れている(ホスト側のpre-commit hookと同じバージョン)。
 - workerコンテナは`init: true`(docker-init)をPID 1にしてゾンビプロセスを回収する。jobが起こすgit / gh / esbuildの子プロセスは親より長生きすることがあり、initが無いとwindmill本体に付け替えられたまま回収されず、`pids: 512`の上限を食い潰して全jobが`errno=11`(EAGAIN、スレッドや子プロセスを作れない)で失敗する(2026-09-28に430個のゾンビで再現)。同じ症状が出たら`docker compose -f infra/docker-compose.yml exec windmill_worker cat /sys/fs/cgroup/pids.current`で使用量を見て、`docker compose -f infra/docker-compose.yml restart windmill_worker`で復旧する。
 - `wmill sync push`に **`--include-secrets`を付けてはいけない**。付けるとリポジトリ内の`f/factory/*.variable.yaml`(値は空のままコミットされている)で4つのsecret変数(`claude_oauth_token` / `github_token` / `wmill_token` / `discord_webhook_url`)が空に上書きされる。`mise run push`(`wmill sync push --yes --keep-deleted`)は`--include-secrets`を付けない設定になっている。
-- secret変数(`f/factory/*.variable.yaml`)とinstance固有の`factory_config` resourceは同期対象外のため、これらの **説明文(description)を変えても`mise run push`では既存instanceに反映されない**。既存instanceではWindmill UI(Variables / Resourcesの編集画面)で説明文だけを更新する。新規instanceはbootstrapがリポジトリの説明文で作成する。
+- secret変数(`f/factory/*.variable.yaml`)とinstance固有の`factory_config` resourceは同期対象外のため、これらの**説明文(description)を変えても`mise run push`では既存instanceに反映されない**。既存instanceではWindmill UI(Variables / Resourcesの編集画面)で説明文だけを更新する。新規instanceはbootstrapがリポジトリの説明文で作成する。
 - `f/factory/deployed_sha`変数も同期対象外(理由は他の2つと異なり、instance固有の設定ではなく`self_update`が書き込む実行時状態のため)。`mise run push`を実行しても値は変わらない。`bootstrap`は初回のみ空値で作成し、既に存在する場合は値を変更しない。値をリセットしたい場合はWindmill UIから直接編集する。
 - `self_update`スケジュール(10分毎)が`infra/`の変更、または`mise.toml`の`[tools]`・`[env]`セクション(ツールのバージョンとcomposeが読む環境変数)の変更を検知すると、DiscordとダッシュボードのNoticesで「`mise run deploy`を実行してください」と通知する。`mise.toml`の`[tasks.*]`だけの変更、`scripts/`(ホスト側のbootstrap / doctor / lint)、`mise.local.toml.example`の変更はworkerの動作に影響しないため通知しない。`f/`・`migrations/`・`.claude/skills/`の変更は`self_update`が自動で反映するので、ホスト側の操作は不要である。
 
@@ -130,7 +130,7 @@
 
 ## 秘密のローテーション
 
-1. GitHub PAT / Claude Code OAuthトークンを再発行する(手順は [docs/security.md](security.md)を参照)。
+1. GitHub PAT / Claude Code OAuthトークンを再発行する(手順は[docs/security.md](security.md)を参照)。
 2. 新しい値を`mise set -E local KEY=value`(`read -rs`経由を推奨)で投入する。
 3. `mise run bootstrap`を再実行する。`bootstrap.sh`は冪等なので、既存のWindmill変数は新しい値で上書き更新される。
 
