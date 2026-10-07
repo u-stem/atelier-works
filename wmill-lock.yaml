@@ -30,7 +30,7 @@ locks:
   f/factory/lib/implement_loop: 8fb160bff170b151a5710b114671dc4e5a5e2fdb4ae13fbc4e0c6a1f414ca0c1
   f/factory/lib/implement_support: 650fd82610973355cff3cc2f815c7cba73e412bfb9cca8ce295e21cb0e86496b
   f/factory/lib/log: 4396c2ef1d9fe804c3097c0db78c9c27e551c5bb0fdbd7a611c3ca0e5e57a359
-  f/factory/lib/poll_support: 62a6dfdb766dcbfdf7c5f060fc24e0ed121a69ba96ae65489ce88fca4137e7bd
+  f/factory/lib/poll_support: 6e078aa1bba4d185b65a2edc66dbe45cf405504b71c8e2c75710f62f74c83e87
   f/factory/lib/prompts: ee13475a77bf7913e0282e82a7403b55ab91a9c6c5f08b5d2beba781dbe2429c
   f/factory/lib/protected_paths: 0aebdbafc307dc3f36166ea38b8dd57084e3293306578cc1425caae3994b57df
   f/factory/lib/requirements_doc: 595f1b05c1ff72f47f99178ad0ba441c3558d6864b85d153c01e2d94f44a1e17
@@ -44,11 +44,11 @@ locks:
   f/factory/on_error_flow: 57a95c04563e94457f75b5319d76765b344b1faf8fe38f57790c283caca734c0
   f/factory/on_error_schedule: eb97f8fe097db0d70c87f0414791b426ae1cd64c85cc1973ce23144598a4bfa4
   f/factory/pipeline__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
-  f/factory/poll_issues: 9d9dfe3ef7ad2f9999f86ae60b267fc47d642248f9edb4bea082c8eec86f60d2
+  f/factory/poll_issues: 351104759d2bddd6a2a859588f698ca45537b0c47e5ed110277a845e064e0861
   f/factory/poll_prs: 18d16ae1d7e30dbeb5b1b4eacb29b0e2287b865aa35932ff83e1794e3922fb5c
   f/factory/pr_fix__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/pr_review__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
-  f/factory/retry_work_item: 390dba691676b3f1412b208b94096aa299fdcf661955f165b69e1629269b45a3
+  f/factory/retry_work_item: a5cbcf575924f24f13fe658d554aa6c8889bb625a958e694ecbb66f2a392cfce
   f/factory/self_update: 301608b3f7eb13ab15aeb6b6a8f03c69c9da9b7140c03d904b4bb371bf8bfa0c
   f/factory/steps/audit_generate: f769c8f0c70841d656f52b5b4e49896668b446e1b99d68c86031f5303bc21f79
   f/factory/steps/audit_prepare: 3bc36e6c5c703430960a777ad34ca2380d8574db93a5c930486d42cf07a05c81

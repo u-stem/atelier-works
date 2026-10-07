@@ -5,7 +5,7 @@
 // 記録済みのflowジョブがまだ動いている(キュー待ちを含む)か、状態を読めないときは
 // 再開を拒否する。実装フローへの再開は比較交換でflow_job_id(リース)を空にし、
 // 起動したジョブIDは空のときだけ記録する。起動の戻り値がジョブIDでなければ、
-// 状態をneeds_humanに戻して例外を投げる。
+// 状態をneeds_humanに戻して例外を投げる(`launchFailureError`)。
 //
 // どの種別もラベルを付け直さない。トリガーラベル(Issueは`factory`、
 // PRは`factory:review`・`factory:fix`)は取得時に一度だけ消費し、
@@ -174,6 +174,38 @@ export function retryResult(
   };
 }
 
+/**
+ * フローを起動できなかったときに投げる例外を作る。
+ * まず`rollBack`(起動失敗の理由を注記にして`needs_human`へ戻す比較交換)を呼ぶ。
+ * - 戻せたときは、起動失敗の理由を返す。
+ * - `rollBack`が例外を投げたときは、その例外をマスクしてログに残し、起動失敗の理由を返す。
+ *   人が見るエラーを、元の原因である起動の失敗にしておくため。
+ * - `rollBack`が`false`を返したとき(別の実行がリースを持つか、作業項目が先に動いた)は、
+ *   起動の応答はエラーだったが別の実行が動いていることを伝える理由を返す。
+ *   フローは実際には起動していることがあり、「起動できなかった」と伝えると誤解させるため。
+ */
+export async function launchFailureError(
+  flowPath: string,
+  detail: string,
+  rollBack: (reason: string) => Promise<boolean>,
+  log: (message: string, fields: Record<string, unknown>) => void,
+): Promise<Error> {
+  const reason = `retry_work_item: ${flowPath} could not be started: ${detail}`;
+  let rolledBack: boolean;
+  try {
+    rolledBack = await rollBack(reason);
+  } catch (err) {
+    log("needs_human rollback after a failed launch failed", {
+      error: maskSecrets(err instanceof Error ? err.message : String(err)),
+    });
+    return new Error(reason);
+  }
+  if (rolledBack) return new Error(reason);
+  return new Error(
+    `retry_work_item: ${flowPath} returned an error, but another run holds the lease or the work item moved on, so it was not moved to needs_human: ${detail}`,
+  );
+}
+
 export async function main(work_item_id: number): Promise<RetryWorkItemResult> {
   const config = await loadConfig(() =>
     wmill.getResource("f/factory/factory_config"),
@@ -205,6 +237,12 @@ export async function main(work_item_id: number): Promise<RetryWorkItemResult> {
           noCode: true,
         }),
       workItem.flow_job_id,
+      (failure) =>
+        logger("retry_work_item").warn("flow job state could not be read", {
+          work_item_id,
+          flow_job_id: workItem.flow_job_id,
+          ...failure,
+        }),
     ),
   );
   if (refusal !== null) throw new Error(refusal);
@@ -237,17 +275,22 @@ export async function main(work_item_id: number): Promise<RetryWorkItemResult> {
       "runFlowAsync",
     );
   } catch (err) {
-    const reason = `retry_work_item: ${plan.flowPath} could not be started: ${maskSecrets(err instanceof Error ? err.message : String(err))}`;
     // 起動できなかった作業項目を、動くジョブの無いままreconcileの猶予まで残さない。
     // flow_job_idは実装フローなら比較交換で空にした値、それ以外は読み取った値のまま。
-    await updateStatusIfLeaseHolder(
-      work_item_id,
-      plan.toStatus,
-      "needs_human",
-      leased ? null : workItem.flow_job_id,
-      reason,
+    throw await launchFailureError(
+      plan.flowPath,
+      maskSecrets(err instanceof Error ? err.message : String(err)),
+      (reason) =>
+        updateStatusIfLeaseHolder(
+          work_item_id,
+          plan.toStatus,
+          "needs_human",
+          leased ? null : workItem.flow_job_id,
+          reason,
+        ),
+      (message, fields) =>
+        logger("retry_work_item").warn(message, { work_item_id, ...fields }),
     );
-    throw new Error(reason);
   }
 
   let recorded = true;

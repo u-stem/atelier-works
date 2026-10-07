@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { Skeleton } from "../components/Skeleton";
 import { describeError, retryWorkItem } from "../lib/api";
+import { describeRetry } from "../lib/retryResult";
 import { toFailureRow } from "../lib/types";
 import { useConsoleQuery } from "../lib/useConsoleQuery";
 
@@ -18,22 +19,26 @@ export function FailuresTab(): React.ReactElement {
   const [pendingId, setPendingId] = useState<number | null>(null);
   const [rowMessage, setRowMessage] = useState<Record<number, string>>({});
 
-  async function handleRetry(workItemId: number | null): Promise<void> {
+  // 結果の文言は、表示する側(失敗の行)と同じ`job_failure_id`で引けるように記録する。
+  async function handleRetry(
+    jobFailureId: number,
+    workItemId: number | null,
+  ): Promise<void> {
     if (workItemId === null || pendingId !== null) {
       return;
     }
     setPendingId(workItemId);
     try {
-      await retryWorkItem(workItemId);
+      const result = await retryWorkItem(workItemId);
       setRowMessage((previous) => ({
         ...previous,
-        [workItemId]: "再実行を開始しました",
+        [jobFailureId]: describeRetry(result),
       }));
       reload();
     } catch (caught) {
       setRowMessage((previous) => ({
         ...previous,
-        [workItemId]: describeError(caught),
+        [jobFailureId]: describeError(caught),
       }));
     } finally {
       setPendingId(null);
@@ -87,7 +92,7 @@ export function FailuresTab(): React.ReactElement {
               type="button"
               className="btn btn-primary"
               onClick={() => {
-                void handleRetry(row.work_item_id);
+                void handleRetry(row.job_failure_id, row.work_item_id);
               }}
               disabled={row.work_item_id === null || pendingId !== null}
               aria-label="この作業項目を再実行"

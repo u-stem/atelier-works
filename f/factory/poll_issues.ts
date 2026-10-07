@@ -186,8 +186,15 @@ async function checkDeployedSha(
   }
 }
 
-/** `flowJobId`のジョブの状態を返す(`readJobState`に`JobService.getJob`を渡す)。例外は投げない。 */
-async function getJobState(flowJobId: string | null): Promise<JobState> {
+/**
+ * `flowJobId`のジョブの状態を返す(`readJobState`に`JobService.getJob`を渡す)。例外は投げない。
+ * 取得の失敗を`unknown`と読み替えたときは、その作業項目のIDと一緒に警告ログに残す。
+ */
+async function getJobState(
+  workItemId: number,
+  flowJobId: string | null,
+  log: Logger,
+): Promise<JobState> {
   return readJobState(
     (id) =>
       wmill.JobService.getJob({
@@ -197,6 +204,12 @@ async function getJobState(flowJobId: string | null): Promise<JobState> {
         noCode: true,
       }),
     flowJobId,
+    (failure) =>
+      log.warn("flow job state could not be read", {
+        work_item_id: workItemId,
+        flow_job_id: flowJobId,
+        ...failure,
+      }),
   );
 }
 
@@ -307,7 +320,7 @@ async function reconcileActiveItems(
         : decideReconcileAction(
             item,
             github,
-            await getJobState(item.flow_job_id),
+            await getJobState(item.id, item.flow_job_id, log),
             now,
             orphanGraceMs,
           );

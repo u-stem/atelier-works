@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { IMPLEMENT_FLOW_PATH } from "../../f/factory/lib/implement_loop.ts";
 import {
   computeRestartPlan,
+  launchFailureError,
   retryResult,
   runningFlowRefusal,
   usesImplementLease,
@@ -238,6 +239,80 @@ describe("retryResult", () => {
   test("still reports the started job id", () => {
     expect(retryResult("implementing", "job-1", false).started_job_id).toBe(
       "job-1",
+    );
+  });
+});
+
+describe("launchFailureError", () => {
+  const REASON =
+    "retry_work_item: f/factory/implement could not be started: runFlowAsync did not return a job id: 500";
+  const noLog = () => {};
+
+  test("passes the launch failure reason to the rollback", async () => {
+    const reasons: string[] = [];
+    await launchFailureError(
+      IMPLEMENT_FLOW_PATH,
+      "runFlowAsync did not return a job id: 500",
+      async (reason) => {
+        reasons.push(reason);
+        return true;
+      },
+      noLog,
+    );
+    expect(reasons).toEqual([REASON]);
+  });
+
+  test("returns the launch failure reason after rolling back", async () => {
+    const err = await launchFailureError(
+      IMPLEMENT_FLOW_PATH,
+      "runFlowAsync did not return a job id: 500",
+      async () => true,
+      noLog,
+    );
+    expect(err.message).toBe(REASON);
+  });
+
+  test("keeps the launch failure reason when the rollback throws", async () => {
+    const err = await launchFailureError(
+      IMPLEMENT_FLOW_PATH,
+      "runFlowAsync did not return a job id: 500",
+      async () => {
+        throw new Error("connection refused");
+      },
+      noLog,
+    );
+    expect(err.message).toBe(REASON);
+  });
+
+  test("logs the masked rollback error", async () => {
+    const logged: unknown[] = [];
+    await launchFailureError(
+      IMPLEMENT_FLOW_PATH,
+      "runFlowAsync did not return a job id: 500",
+      async () => {
+        throw new Error(`connection refused ghp_${"A".repeat(36)}`);
+      },
+      (message, fields) => {
+        logged.push({ message, fields });
+      },
+    );
+    expect(logged).toEqual([
+      {
+        message: "needs_human rollback after a failed launch failed",
+        fields: { error: "connection refused ***" },
+      },
+    ]);
+  });
+
+  test("says another run holds the lease when the rollback does not move the item", async () => {
+    const err = await launchFailureError(
+      IMPLEMENT_FLOW_PATH,
+      "runFlowAsync did not return a job id: 500",
+      async () => false,
+      noLog,
+    );
+    expect(err.message).toContain(
+      "returned an error, but another run holds the lease",
     );
   });
 });

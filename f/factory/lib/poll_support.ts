@@ -3,9 +3,11 @@
 
 import { normalizeRepoUrl } from "./config.ts";
 import { isFlowJobId } from "./implement_launch_support.ts";
+import { maskSecrets } from "./log.ts";
 import {
   type FactoryConfig,
   isBoolean,
+  isNumber,
   isOneOf,
   isRecord,
   type LabelerAssociation,
@@ -265,6 +267,14 @@ export function jobStateFromFetchError(err: unknown): JobState {
   return { state: "unknown" };
 }
 
+/** ジョブの取得の失敗を`unknown`と読み替えたときに`readJobState`が知らせる内容。 */
+export type JobFetchFailure = {
+  /** 例外の`status`(HTTPのステータス)。無ければ`null`。 */
+  readonly status: number | null;
+  /** 秘密をマスクした例外のメッセージ。 */
+  readonly error: string;
+};
+
 /**
  * `flowJobId`のジョブの状態を返す。未記録か、ジョブIDの形でない(起動の応答本文がそのまま記録された)なら
  * `getJob`を呼ばずに`absent`。
@@ -272,16 +282,26 @@ export function jobStateFromFetchError(err: unknown): JobState {
  * 再開も拒否されたまま残る。それを避けるため、記録が無いときと同じに扱う。
  * 取得は`getJob`(`JobService.getJob`を包んだもの)で行い、例外は`jobStateFromFetchError`で
  * 読み替えるので、この関数は例外を投げない。
+ * 例外を`unknown`と読み替えたときは、`onUnknown`にステータスとマスクしたメッセージを渡す。
+ * `unknown`は何もしない・再開を拒否する判断になるので、続くときに原因をログで追えるようにするため。
  */
 export async function readJobState(
   getJob: (id: string) => Promise<unknown>,
   flowJobId: string | null,
+  onUnknown: (failure: JobFetchFailure) => void = () => {},
 ): Promise<JobState> {
   if (flowJobId === null || !isFlowJobId(flowJobId)) return { state: "absent" };
   try {
     return jobStateFromJob(await getJob(flowJobId));
   } catch (err) {
-    return jobStateFromFetchError(err);
+    const state = jobStateFromFetchError(err);
+    if (state.state === "unknown") {
+      onUnknown({
+        status: isRecord(err) && isNumber(err.status) ? err.status : null,
+        error: maskSecrets(err instanceof Error ? err.message : String(err)),
+      });
+    }
+    return state;
   }
 }
 

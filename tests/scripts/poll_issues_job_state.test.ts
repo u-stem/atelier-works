@@ -127,6 +127,50 @@ describe("readJobState", () => {
     ).toEqual({ state: "unknown" });
   });
 
+  test("reports the masked message of a fetch failure it reads as unknown", async () => {
+    const reported: unknown[] = [];
+    await readJobState(
+      async () => {
+        throw new Error(`ECONNRESET ghp_${"A".repeat(36)}`);
+      },
+      JOB_ID,
+      (fields) => {
+        reported.push(fields);
+      },
+    );
+    expect(reported).toEqual([{ status: null, error: "ECONNRESET ***" }]);
+  });
+
+  test("reports the HTTP status of a fetch failure it reads as unknown", async () => {
+    const reported: unknown[] = [];
+    await readJobState(
+      async () => {
+        throw Object.assign(new Error("Internal Server Error"), {
+          status: 500,
+        });
+      },
+      JOB_ID,
+      (fields) => {
+        reported.push(fields);
+      },
+    );
+    expect(reported).toEqual([{ status: 500, error: "Internal Server Error" }]);
+  });
+
+  test("does not report a 404", async () => {
+    const reported: unknown[] = [];
+    await readJobState(
+      async () => {
+        throw Object.assign(new Error("Not Found"), { status: 404 });
+      },
+      JOB_ID,
+      (fields) => {
+        reported.push(fields);
+      },
+    );
+    expect(reported).toEqual([]);
+  });
+
   test("is absent for a flow job id that is not a job id", async () => {
     expect(
       await readJobState(async () => ({ type: "QueuedJob" }), "job-1"),
