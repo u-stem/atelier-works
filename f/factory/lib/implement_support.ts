@@ -391,9 +391,10 @@ export type DeployNeeds = {
   readonly autoApply: boolean;
   /**
    * `infra/`か`mise.toml`が変わった。
-   * `self_update`では反映できず、ホストで`mise run deploy`が必要。
+   * `self_update`は反映せず、次にホストで`mise run up`して起動したときに
+   * 反映される(通知はしない)。
    */
-  readonly hostDeploy: boolean;
+  readonly onNextUp: boolean;
 };
 
 const AUTO_APPLY_PATH_PREFIXES: readonly string[] = [
@@ -405,8 +406,8 @@ const AUTO_APPLY_PATH_PREFIXES: readonly string[] = [
 /**
  * 差分のパスから、PRテンプレートの「備考」のチェックリストを機械的に判定する。
  * `autoApply`は`self_update`が自動で反映するパスの有無、
- * `hostDeploy`は`self_update_support.ts`の`classifyChangedPaths`と同じ基準の
- * ホスト側`mise run deploy`の要否である。
+ * `onNextUp`は`self_update_support.ts`の`classifyChangedPaths`と同じ基準の
+ * 「次の`mise run up`での起動時に反映される」変更の有無である。
  * `mise.toml`は、このフローに変更前後の内容が無く`[tools]`・`[env]`の差分を
  * 判定できないため、`classifyChangedPaths`に`true`を渡して
  * 変更があれば必要とみなす(安全側)。
@@ -422,7 +423,7 @@ export function classifyDeployNeeds(
     autoApply: changedPaths.some((path) =>
       AUTO_APPLY_PATH_PREFIXES.some((prefix) => path.startsWith(prefix)),
     ),
-    hostDeploy: classifyChangedPaths(changedPaths, true).needs_host_action,
+    onNextUp: classifyChangedPaths(changedPaths, true).needs_host_action,
   };
 }
 
@@ -552,7 +553,7 @@ function checkbox(checked: boolean, label: string): string {
 
 function renderDeployChecklist(changedPaths: readonly string[]): string[] {
   const needs = classifyDeployNeeds(changedPaths);
-  const nothingToApply = !needs.autoApply && !needs.hostDeploy;
+  const nothingToApply = !needs.autoApply && !needs.onNextUp;
   return [
     "Windmillへの反映:",
     "",
@@ -561,8 +562,8 @@ function renderDeployChecklist(changedPaths: readonly string[]): string[] {
       "マージ後に`self_update`が自動で反映する(`f/`・`migrations/`・`.claude/skills/`の変更)",
     ),
     checkbox(
-      needs.hostDeploy,
-      "ホスト側で`mise run deploy`が必要(`infra/`、`mise.toml`の`[tools]`・`[env]`の変更)",
+      needs.onNextUp,
+      "次に`mise run up`で起動したときに反映される(`infra/`、`mise.toml`の`[tools]`・`[env]`の変更)",
     ),
     checkbox(nothingToApply, "反映するものは無い"),
   ];

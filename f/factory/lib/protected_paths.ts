@@ -50,8 +50,8 @@ export const FORBIDDEN_BASENAME_PATTERNS: readonly RegExp[] = [
 /**
  * implementフローが保護するディレクトリで、pr_fixの一覧に次を加えたもの。
  * - pr_fixの一覧の`.github/workflows/`を、`.github/`全体(actions、dependabot、CODEOWNERS)に広げる。
- * - `infra/**`: workerのイメージとcomposeの定義。変更するとホスト側で`mise run deploy`が
- *   要るため、レビューする人が知る必要がある。
+ * - `infra/**`: workerのイメージとcomposeの定義。変更は次にホスト側で
+ *   `mise run up`するまで反映されないため、レビューする人が知る必要がある。
  * - gitフックのディレクトリ(`.husky/`、`.githooks/`)
  * - `.yarn/`: パッケージマネージャーが実行するプラグインとリリース
  * - `.devcontainer/`

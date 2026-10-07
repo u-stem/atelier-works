@@ -64,7 +64,7 @@ mise run bootstrap
 | `mise run down` | スタックを停止する |
 | `mise run build` | workerイメージのみビルドする |
 | `mise run bootstrap` | 初回セットアップ(ワークスペース作成・secret投入・sync push・migration、冪等) |
-| `mise run deploy` | `git pull --ff-only` → build → up → push → migrateを一括実行する |
+| `mise run deploy` | `git pull --ff-only` → build → up → push → migrateを一括実行する(手動で一括反映したいときの手段) |
 | `mise run check` | `lint` → `typecheck` → `test`を順に実行する |
 | `mise run lint` | biome + `wmill lint` + 型アサーション検出 |
 | `mise run typecheck` | `tsc --noEmit` |

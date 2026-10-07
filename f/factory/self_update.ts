@@ -2,9 +2,11 @@
 // pullする。前回記録したデプロイからHEADが進んでいれば、worker自身の中から
 // Windmillの定義をpushし、未適用のData Tableのmigrationを適用する。
 //
-// 判断と整形の純粋なロジック(再デプロイが要るか、どの変更パスがホスト側の
-// `mise run deploy`を要するか、`wmill` CLIの子プロセスに渡す最小のenv)は
-// `./lib/self_update_support.ts`にあり、このファイルは入出力をつなぐだけ。
+// 判断と整形の純粋なロジック(再デプロイが要るか、どの変更パスがworkerの中から
+// は反映できずホスト側の次回起動で反映されるか、`wmill` CLIの子プロセスに渡す
+// 最小のenv)は`./lib/self_update_support.ts`にあり、このファイルは入出力を
+// つなぐだけ。`infra/`と`mise.toml`の変更は次の`mise run up`で反映されるため、
+// 通知はせずログと`deployments`の記録だけを残す。
 //
 // `f/factory/deployed_sha`(秘密でないWindmillの変数)はsyncの対象から
 // 完全に外している(`wmill.yaml`の`excludes`のコメントを参照)。
@@ -12,8 +14,7 @@
 // `wmill.setVariable`だけが値を変える。無関係な`wmill sync push`で戻らない。
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "./lib/config.ts";
-import { addNotice, recordDeployment } from "./lib/db.ts";
-import { notify } from "./lib/discord.ts";
+import { recordDeployment } from "./lib/db.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import {
   assertBranchMatches,
@@ -420,27 +421,12 @@ export async function main(): Promise<SelfUpdateResult> {
     const classification = classifyChangedPaths(changedPaths, miseChanged);
 
     if (classification.needs_host_action) {
-      await addNotice({
-        kind: "needs_host_action",
-        message: `ホスト側で \`mise run deploy\` を実行してください(${classification.host_paths.join(", ")})`,
+      // `infra/`と`mise.toml`の変更はworkerの中からは反映できないが、
+      // 次にホストで`mise run up`して起動したときにビルドされて反映される。
+      // 人の操作は要らないので通知せず、ログと`deployments`の記録だけを残す。
+      log.info("host-side changes will apply on next mise run up", {
+        host_paths: classification.host_paths,
       });
-      try {
-        const webhookUrl = await wmill.getVariable(
-          "f/factory/discord_webhook_url",
-        );
-        if (webhookUrl.length > 0) {
-          await notify(webhookUrl, {
-            kind: "deploy_action_needed",
-            instance_name: config.instance_name,
-            sha: currentSha,
-            changed_paths: classification.host_paths,
-          });
-        }
-      } catch (err) {
-        log.warn("discord notify failed", {
-          error: maskSecrets(err instanceof Error ? err.message : String(err)),
-        });
-      }
     }
 
     const shaFrom = deployedSha.length > 0 ? deployedSha : null;

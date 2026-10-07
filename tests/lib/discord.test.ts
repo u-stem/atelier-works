@@ -251,18 +251,14 @@ describe("buildEmbed", () => {
 
   test("truncates a field value longer than 1024 characters", () => {
     const embed = buildEmbed({
-      kind: "deploy_action_needed",
+      kind: "job_failed",
       instance_name: "local",
-      sha: "abc1234",
-      changed_paths: Array.from(
-        { length: 200 },
-        (_, i) => `f/factory/file-${String(i)}.ts`,
-      ),
+      flow_path: "f/factory/some_flow",
+      job_id: "j".repeat(2000),
+      error: "boom",
     });
-    const changedPathsField = embed.fields.find(
-      (field) => field.name === "変更パス",
-    );
-    expect(changedPathsField?.value).toHaveLength(1024);
+    const jobField = embed.fields.find((field) => field.name === "ジョブ");
+    expect(jobField?.value).toHaveLength(1024);
   });
 
   test("sets the embed url to the inbox url, not a resume/cancel capability url", () => {

@@ -59,7 +59,7 @@ worker内のClaudeはheadlessで起動されており、人と対話して回答
 - `.env*`、`.gitleaksignore`、`.gitleaks.toml`、`.tool-versions`、`.node-version`等のランタイムのバージョン指定
 - `*.config.[cm][jt]s`、`.eslintrc*`等のツール設定、`Makefile`等のタスクランナー、`CODEOWNERS`、`.devcontainer/**`
 - 新規に追加する`*.sh`ファイル
-- `infra/**`(Factory自身が対象リポジトリの場合、ここを変えるとホスト側のデプロイ作業が別途必要になる)
+- `infra/**`(Factory自身が対象リポジトリの場合、ここを変えた内容は次にホスト側で`mise run up`して起動するまで反映されない)
 
 工程3ではこれらの変更を**禁止しない**(Factory自身の改善Issueはこれらを直すことが多い)。ただし次を守る。
 

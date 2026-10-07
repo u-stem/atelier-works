@@ -101,7 +101,7 @@ mise run bootstrap     # workspace 作成、secret 投入、sync push、migratio
 | `mise run push:dry` | `wmill sync push --dry-run`で反映内容を確認するだけ(リモートは変更しない) |
 | `mise run pull` | `wmill sync pull`でリモート(AppのUI編集など)をローカルに取り込む |
 | `mise run migrate` | `wmill datatable migrate up`でData Tableのマイグレーションを適用する |
-| `mise run deploy` | ホスト側checkoutで`git pull --ff-only` → worker imageのビルド → `compose up -d` → `wmill sync push` → migrationまで一括実行する(`self_update`が`infra/**`・`mise.toml`の変更で「ホスト操作が必要」と通知したときに使う。`f/`や`migrations/`だけの変更は`self_update`が自動で反映するので不要) |
+| `mise run deploy` | ホスト側checkoutで`git pull --ff-only` → worker imageのビルド → `compose up -d` → `wmill sync push` → migrationまで一括実行する(手動で一括反映したいときの手段。`self_update`は`f/`・`migrations/`・`.claude/skills/`を自動で反映し、`infra/**`・`mise.toml`の変更は次の`mise run up`で反映されるので、必須の手順ではない) |
 | `mise run logs` | `docker compose logs`を呼び出す |
 
 ## 実装 → レビュー → 修正のループ(概要)
@@ -126,7 +126,7 @@ mise run bootstrap     # workspace 作成、secret 投入、sync push、migratio
 - Summary(何を、なぜ)
 - 変更範囲
 - 検証結果(lint / typecheck / test / 該当すればE2E)
-- Windmillへの反映(マージ後に`self_update`が自動で反映するか、`infra/`・`mise.toml`の`[tools]`・`[env]`の変更でホスト側の`mise run deploy`が必要か)
+- Windmillへの反映(マージ後に`self_update`が自動で反映するか、`infra/`・`mise.toml`の`[tools]`・`[env]`の変更が次の`mise run up`で反映されるか)
 
 テンプレートは`.github/PULL_REQUEST_TEMPLATE.md`を参照。
 

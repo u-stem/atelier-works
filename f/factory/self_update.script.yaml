@@ -1,7 +1,7 @@
 summary: '[SYS-1] Software Factory 自身を最新化'
 description: 10分ごとに実行し、Software
-  Factory自身の最新のコミットを取り込みます。前回反映済みのコミットから変更があれば、Windmillへの反映(script・flow・スケジュールなど)とデータベースの更新を自動的に行います。ホスト側での作業(worker
-  イメージの再ビルドなど)が必要な変更を検知した場合は、その旨を通知とお知らせ一覧に記録します。
+  Factory自身の最新のコミットを取り込みます。前回反映済みのコミットから変更があれば、Windmillへの反映(script・flow・スケジュールなど)とデータベースの更新を自動的に行います。ホスト側の変更(worker
+  イメージの再ビルドなど)は次にホストで起動したときに反映されるため、通知はしません。
 lock: '!inline f/factory/self_update.script.lock'
 kind: script
 schema:

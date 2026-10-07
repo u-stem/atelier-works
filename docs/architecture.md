@@ -159,7 +159,7 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加のみで、ren
 | `agent_runs` | Claude実行1回ごとのログ(トークン数、コスト、所要時間、終了コード等) |
 | `job_failures` | フロー実行時のエラー(トークンはマスク済み) |
 | `deployments` | self_updateによるデプロイ結果 |
-| `notices` | 要対応事項(ホスト操作要、PAT失効、SHA不一致など) |
+| `notices` | 要対応事項(PAT失効、SHA不一致など) |
 | `audit_reports` | 監査1回のレポート。作業項目と1対1、`markdown`が正、`metrics`に証跡の数値 |
 | `issue_proposals` | pr_fixの`propose_issue`返信が提案するIssue(title / body)と、その承認 / 却下の判断履歴。`title` / `body` / `review_comment_id` / `thread_id`の一次情報源(`approval_requests`はこれらを複製しない)。`origin`(`pr_fix` / `audit`)。auditは`audit_report_id` / `position`で紐づき`review_comment_id`はnull |
 | `approval_requests` | 承認依頼の汎用テーブル。`kind`は`requirements`(要件定義承認、`subject_id`は`requirement_drafts.id`)/ `issue_proposal`(Issue化提案、`subject_id`は`issue_proposals.id`)、`status`は`pending` / `approved` / `rejected` / `expired`。`approval_decide`が読み書きする唯一のテーブルで、suspendベースの承認と`approvals`テーブルへの書き込みを置き換えた |
@@ -295,7 +295,7 @@ WindmillのUIはsummaryでソートされるため、種別を示すタグをsum
 
 1. worker内のself clone(このリポジトリ自身)をpullする。SHAが変わっていなければ何もしない。
 2. 変更があれば、Console raw appの依存を`npm ci`で揃えたうえで`wmill sync push --yes --keep-deleted`と`wmill datatable migrate up`をworker内から実行し、Windmill側のscript/flow/scheduleとData Tableの定義を最新化する。
-3. `infra/**`(workerイメージやcompose定義)、または`mise.toml`の`[tools]`(ツールのバージョン)・`[env]`(composeが読む環境変数)セクションに変更がある場合は、workerの自己更新だけでは反映できないため`deployments.needs_host_action = true`として記録し、DiscordとダッシュボードのNoticesで「`mise run deploy`を実行してください」と通知する。`mise run deploy`はホスト側checkoutで`git pull --ff-only` → worker imageのビルド → `compose up -d` → `wmill sync push` → migrationの順で実行する。
+3. `infra/**`(workerイメージやcompose定義)、または`mise.toml`の`[tools]`(ツールのバージョン)・`[env]`(composeが読む環境変数)セクションに変更がある場合は、workerの自己更新だけでは反映できないため`deployments.needs_host_action = true`として記録し、ログに残す。通知はしない。これらの変更は、ホスト側checkoutをpullしたうえで次に`mise run up`(`docker compose up -d --build`)で起動したときに反映される。一括で反映したいときは`mise run deploy`(ホスト側checkoutで`git pull --ff-only` → worker imageのビルド → `compose up -d` → `wmill sync push` → migration)を手動で実行する。
 4. Claudeが参照するスキル(`.claude/skills/**`)はself cloneを`--add-dir`で直接読むため、pull直後から反映される。
 5. 初回の反映(schedule自体の登録や初回push)は`scripts/bootstrap.sh`がホストから行う。
 
