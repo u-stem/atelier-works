@@ -14,6 +14,7 @@ import {
   matchesImplementProtectedPath,
 } from "./protected_paths.ts";
 import { extractSectionBody } from "./requirements_doc.ts";
+import { classifyChangedPaths } from "./self_update_support.ts";
 import {
   assertBranchName,
   type ImplementRoundOutcome,
@@ -383,16 +384,32 @@ export function extractAcceptanceCriteria(markdown: string): string {
 }
 
 export type DeployNeeds = {
-  /** `infra/**`が変わった。workerのimageを作り直す(ホストで`mise run deploy`)。 */
-  readonly imageRebuild: boolean;
-  /** `migrations/**`が変わった。`wmill datatable migrate up`が必要。 */
-  readonly migrate: boolean;
-  /** `f/**`が変わった。`wmill sync push`が必要。 */
-  readonly syncPush: boolean;
+  /**
+   * `f/`・`migrations/`・`.claude/skills/`のいずれかが変わった。
+   * マージ後に`self_update`が自動で反映する。
+   */
+  readonly autoApply: boolean;
+  /**
+   * `infra/`か`mise.toml`が変わった。
+   * `self_update`では反映できず、ホストで`mise run deploy`が必要。
+   */
+  readonly hostDeploy: boolean;
 };
+
+const AUTO_APPLY_PATH_PREFIXES: readonly string[] = [
+  "f/",
+  "migrations/",
+  ".claude/skills/",
+];
 
 /**
  * 差分のパスから、PRテンプレートの「備考」のチェックリストを機械的に判定する。
+ * `autoApply`は`self_update`が自動で反映するパスの有無、
+ * `hostDeploy`は`self_update_support.ts`の`classifyChangedPaths`と同じ基準の
+ * ホスト側`mise run deploy`の要否である。
+ * `mise.toml`は、このフローに変更前後の内容が無く`[tools]`・`[env]`の差分を
+ * 判定できないため、`classifyChangedPaths`に`true`を渡して
+ * 変更があれば必要とみなす(安全側)。
  * 意味があるのはFactory自身のリポジトリだけである。
  * 他のリポジトリにも`infra/`、`migrations/`、`f/`があるかもしれず、
  * Windmillと関係ないパスで項目に印が付いてしまう。
@@ -402,9 +419,10 @@ export function classifyDeployNeeds(
   changedPaths: readonly string[],
 ): DeployNeeds {
   return {
-    imageRebuild: changedPaths.some((path) => path.startsWith("infra/")),
-    migrate: changedPaths.some((path) => path.startsWith("migrations/")),
-    syncPush: changedPaths.some((path) => path.startsWith("f/")),
+    autoApply: changedPaths.some((path) =>
+      AUTO_APPLY_PATH_PREFIXES.some((prefix) => path.startsWith(prefix)),
+    ),
+    hostDeploy: classifyChangedPaths(changedPaths, true).needs_host_action,
   };
 }
 
@@ -534,15 +552,19 @@ function checkbox(checked: boolean, label: string): string {
 
 function renderDeployChecklist(changedPaths: readonly string[]): string[] {
   const needs = classifyDeployNeeds(changedPaths);
-  const nothingNeeded =
-    !needs.imageRebuild && !needs.migrate && !needs.syncPush;
+  const nothingToApply = !needs.autoApply && !needs.hostDeploy;
   return [
-    "Windmillへの反映の要否:",
+    "Windmillへの反映:",
     "",
-    checkbox(needs.syncPush, "`wmill sync push`が必要"),
-    checkbox(needs.migrate, "`wmill datatable migrate up`が必要"),
-    checkbox(needs.imageRebuild, "worker imageのrebuildが必要"),
-    checkbox(nothingNeeded, "上記いずれも不要"),
+    checkbox(
+      needs.autoApply,
+      "マージ後に`self_update`が自動で反映する(`f/`・`migrations/`・`.claude/skills/`の変更)",
+    ),
+    checkbox(
+      needs.hostDeploy,
+      "ホスト側で`mise run deploy`が必要(`infra/`、`mise.toml`の`[tools]`・`[env]`の変更)",
+    ),
+    checkbox(nothingToApply, "反映するものは無い"),
   ];
 }
 

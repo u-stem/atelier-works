@@ -23,9 +23,8 @@ Closes #
 
 ## 備考
 
-Windmillへの反映の要否:
+Windmillへの反映:
 
-- [ ] `wmill sync push`が必要
-- [ ] `wmill datatable migrate up`が必要
-- [ ] worker imageのrebuildが必要
-- [ ] 上記いずれも不要
+- [ ] マージ後に`self_update`が自動で反映する(`f/`・`migrations/`・`.claude/skills/`の変更)
+- [ ] ホスト側で`mise run deploy`が必要(`infra/`、`mise.toml`の`[tools]`・`[env]`の変更)
+- [ ] 反映するものは無い

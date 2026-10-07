@@ -126,7 +126,7 @@ mise run bootstrap     # workspace 作成、secret 投入、sync push、migratio
 - Summary(何を、なぜ)
 - 変更範囲
 - 検証結果(lint / typecheck / test / 該当すればE2E)
-- Windmillへの反映要否(`sync push`が必要か、migrationが必要か、worker imageの再ビルドが必要か)
+- Windmillへの反映(マージ後に`self_update`が自動で反映するか、`infra/`・`mise.toml`の`[tools]`・`[env]`の変更でホスト側の`mise run deploy`が必要か)
 
 テンプレートは`.github/PULL_REQUEST_TEMPLATE.md`を参照。
 
