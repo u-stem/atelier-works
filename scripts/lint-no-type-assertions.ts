@@ -96,15 +96,27 @@ const EXPRESSION_END_TOKENS = new Set<number>([
 
 /**
  * トークン`kind`が式を終えるかを返す。`EXPRESSION_END_TOKENS`に加え、
- * 式の直後に改行を挟まず続く`!`は後置の非nullアサーション(`x!`)なので、
- * 式を終える。`previousEndsExpression`は直前のトークンが式を終えたか。
+ * 次の2つも式を終える。
+ * - `.`・`?.`の直後の名前。キーワードと同じ綴り(`r.from`・`a.default`)でも
+ *   プロパティの名前なので、識別子と同じく扱う。
+ * - 式の直後に改行を挟まず続く`!`。後置の非nullアサーション(`x!`)。
+ * `previousKind`は直前のトークン、`previousEndsExpression`は直前の
+ * トークンが式を終えたか。
  */
 function endsExpression(
   kind: number,
+  previousKind: number | undefined,
   previousEndsExpression: boolean,
   precededByLineBreak: boolean,
 ): boolean {
   if (EXPRESSION_END_TOKENS.has(kind)) return true;
+  if (
+    (previousKind === SyntaxKind.DotToken ||
+      previousKind === SyntaxKind.QuestionDotToken) &&
+    isIdentifierOrKeyword(kind)
+  ) {
+    return true;
+  }
   return (
     kind === SyntaxKind.ExclamationToken &&
     previousEndsExpression &&
@@ -212,9 +224,13 @@ export type TokenizeOptions = {
  * - `<T>(...) =>`の形。型の位置のジェネリックな関数型
  *   (`type F = <T>(x: T) => T`・`const f: <T>(v: T) => T`)で、
  *   式の位置のこの形は`.tsx`ではコンパイルできない。
- * 読み違えるのは、本文が`(...) =>`で始まる要素(`<b>(x) => y</b>`)と、
- * 型の位置の呼び出しシグネチャ(`{ <T>(x: T): T }`)。後者はファイルの
- * 終わりで要素が閉じないので`UnclosedJsxError`になり、黙って漏れはしない。
+ * 次の入力は読み違える。
+ * - 本文が`(...) =>`で始まる要素(`<b>(x) => y</b>`)。コードとして読む。
+ * - 型の位置の呼び出しシグネチャ(`{ <T>(x: T): T }`)と、キーワードと同じ
+ *   綴りの変数を`<`で比べる式(`const from = 1; from < max`)。JSXとして読む。
+ * JSXとして読み違えた要素は、たいていファイルの終わりまで閉じないので
+ * `UnclosedJsxError`になる。ただし、後ろの文字列リテラルなどにある`</`
+ * (`"</a>"`)が読み違えた要素を閉じると、その間のコードは黙って検査から漏れる。
  */
 export function tokenize(
   sourceText: string,
@@ -262,11 +278,11 @@ export function tokenize(
   // 式の位置の`<`(今のトークン)がJSXの要素を始めるかを、先読みで判断する。
   const startsJsxElement = (): boolean =>
     scanner.lookAhead(() => {
-      let name = scanner.scan();
+      const name = scanner.scan();
       if (name === SyntaxKind.GreaterThanToken) return true;
       if (!isIdentifierOrKeyword(name)) return false;
-      // `<const T`の`const`は型引数の修飾子なので読み飛ばす。
-      if (name === SyntaxKind.ConstKeyword) name = scanner.scan();
+      // `<const T`の`const`は型引数の修飾子なので、型引数の名前まで読み飛ばす。
+      if (name === SyntaxKind.ConstKeyword) scanner.scan();
       const afterName = scanner.scan();
       if (
         afterName === SyntaxKind.CommaToken ||
@@ -384,6 +400,7 @@ export function tokenize(
     });
     previousEndsExpression = endsExpression(
       kind,
+      previousKind,
       previousEndsExpression,
       scanner.hasPrecedingLineBreak(),
     );

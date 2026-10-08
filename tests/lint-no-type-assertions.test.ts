@@ -187,6 +187,20 @@ describe("findTypeAssertions", () => {
     expect(findings.map((f) => f.line)).toEqual([2]);
   });
 
+  test("flags an angle-bracket assertion to a nested generic type at its position", () => {
+    const findings = findTypeAssertions(
+      "sample.ts",
+      "const x = <Array<Foo>>y;",
+    );
+    expect(findings.map((f) => [f.line, f.column])).toEqual([[1, 11]]);
+  });
+
+  test("treats a slash after a keyword-named property as division, not a regular expression", () => {
+    const source = "const y = r.type / 2; const t = '/'; const q = z as Foo;";
+    const findings = findTypeAssertions("sample.ts", source);
+    expect(findings).toHaveLength(1);
+  });
+
   test("treats a slash after a non-null assertion as division, not a regular expression", () => {
     const source = 'const r = x! / 2; const t = "/"; const b = y as Foo;';
     const findings = findTypeAssertions("sample.ts", source);
@@ -268,6 +282,21 @@ describe("findTypeAssertions on .tsx", () => {
 
   test("does not treat a comparison after a non-null assertion as JSX", () => {
     const source = "const ok = x! < y;\nconst b = y as Foo;";
+    expect(lines(findTypeAssertions("sample.tsx", source))).toEqual([2]);
+  });
+
+  test("does not treat a comparison after a keyword-named property as JSX", () => {
+    const source = "const ok = r.from < r.to;\nconst b = y as Foo;";
+    expect(lines(findTypeAssertions("sample.tsx", source))).toEqual([2]);
+  });
+
+  test("does not treat a comparison after a reserved-word property as JSX", () => {
+    const source = "const ok = a.default < b;\nconst b = y as Foo;";
+    expect(lines(findTypeAssertions("sample.tsx", source))).toEqual([2]);
+  });
+
+  test("does not treat a comparison after an optional-chained keyword property as JSX", () => {
+    const source = "const ok = a?.type < b;\nconst b = y as Foo;";
     expect(lines(findTypeAssertions("sample.tsx", source))).toEqual([2]);
   });
 
