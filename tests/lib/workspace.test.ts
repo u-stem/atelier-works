@@ -2983,7 +2983,19 @@ describe("removeIgnoredFiles", () => {
   });
 });
 
+/** 出力の読み取りを打ち切った結果(別セッションへ抜けたプロセスがパイプを握っていた)。 */
+function abandoned(stdout: string, exitCode = 0) {
+  return { ...ok(stdout), exitCode, outputAbandoned: true };
+}
+
 describe("stagedTreeSha", () => {
+  test("throws when the write-tree output was abandoned", async () => {
+    const fake = createFakeCommandRunner([ok(), abandoned(`${TREE_SHA}\n`)]);
+    await expect(
+      stagedTreeSha({ run: fake.run, worktreeDir: "/wt" }),
+    ).rejects.toThrow(/write-tree.*abandoned/);
+  });
+
   test("stages everything first", async () => {
     const fake = createFakeCommandRunner([ok(), ok(`${TREE_SHA}\n`)]);
     await stagedTreeSha({ run: fake.run, worktreeDir: "/wt" });
@@ -3060,6 +3072,21 @@ describe("worktreeFingerprint", () => {
         baseSha: BASE_SHA,
       }),
     ).rejects.toThrow(/write-tree/);
+  });
+
+  test("throws when the numstat output was abandoned", async () => {
+    const fake = createFakeCommandRunner([
+      ok(),
+      ok(`${TREE_SHA}\n`),
+      abandoned("3\t1\ta.ts\n"),
+    ]);
+    await expect(
+      worktreeFingerprint({
+        run: fake.run,
+        worktreeDir: "/wt",
+        baseSha: BASE_SHA,
+      }),
+    ).rejects.toThrow(/numstat.*abandoned/);
   });
 });
 
@@ -3306,6 +3333,33 @@ describe("runGitleaksOnWorktree", () => {
     await expect(
       scan(createFakeCommandRunner([ok(), fail("fatal: bad object")])),
     ).rejects.toThrow(/git diff --cached failed/);
+  });
+
+  test("throws when the diff output was abandoned", async () => {
+    await expect(
+      scan(createFakeCommandRunner([ok(), abandoned(DIFF), ok("[]")])),
+    ).rejects.toThrow(/git diff --cached.*abandoned/);
+  });
+
+  test("throws when the gitleaks output was abandoned even on exit 0", async () => {
+    await expect(
+      scan(createFakeCommandRunner([ok(), ok(DIFF), abandoned("")])),
+    ).rejects.toThrow(/gitleaks.*abandoned/);
+  });
+
+  test("throws when the gitleaks report was abandoned", async () => {
+    await expect(
+      scan(createFakeCommandRunner([ok(), ok(DIFF), abandoned(LEAK, 1)])),
+    ).rejects.toThrow(/gitleaks.*abandoned/);
+  });
+
+  test("removes the config dir when the gitleaks output was abandoned", async () => {
+    const dir = configDir();
+    await scan(
+      createFakeCommandRunner([ok(), ok(DIFF), abandoned("")]),
+      dir,
+    ).catch(() => undefined);
+    expect(dir.state.cleaned).toBe(1);
   });
 
   test("scans stdin with the forced default config and no repository ignore file", async () => {

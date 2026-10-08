@@ -513,6 +513,16 @@ function gitError(context: string, result: CommandResult): Error {
 }
 
 /**
+ * 出力を値として判断に使うコマンドで、出力の読み取りを打ち切っていれば(`outputAbandoned`)例外を投げる。
+ * 打ち切った出力は途中で切れていることがあり、終了コードが0でも、検査や照合に使うと見落としになるため。
+ * 対象は、秘密情報の検査に渡す差分とそのレポート、差分の大きさ、検証したツリーの照合に使う`write-tree`である。
+ */
+function assertOutputComplete(context: string, result: CommandResult): void {
+  if (result.outputAbandoned === true)
+    throw new Error(`${context}: output was abandoned`);
+}
+
+/**
  * `dir`の設定に`core.symlinks false`を書き込む。失敗したら例外を投げる。
  * `addDetachedWorktree`の`worktree add`に付ける`-c core.symlinks=false`
  * (と`git gtr new`の`GIT_CONFIG_*`)は、その1回の実行にしか効かない。
@@ -2520,6 +2530,7 @@ export async function stagedTreeSha(opts: WorktreeGitOptions): Promise<string> {
     cwd: opts.worktreeDir,
     env: localGitEnv(opts.home, opts.path),
   });
+  assertOutputComplete(`git write-tree in ${opts.worktreeDir}`, tree);
   if (tree.exitCode !== 0)
     throw gitError(`git write-tree failed in ${opts.worktreeDir}`, tree);
   const treeSha = tree.stdout.trim();
@@ -2552,6 +2563,10 @@ export async function worktreeFingerprint(
       "--",
     ]),
     { cwd: opts.worktreeDir, env },
+  );
+  assertOutputComplete(
+    `git diff --cached --numstat in ${opts.worktreeDir}`,
+    numstat,
   );
   if (numstat.exitCode !== 0) {
     throw gitError(
@@ -2781,8 +2796,8 @@ export function formatGitleaksReport(
  * リポジトリの中のもの(ignoreファイル、attributes、設定)はgitleaksに届かない。
  * 終了コード0なら`ok: true`を返す。終了コード1で完全なJSONのレポートがあれば、
  * 検出1件につき1行(伏せ字済み)の`ok: false`を返す。
- * 差分かレポートが上限で切れたとき、終了コード1でJSONが無いとき、それ以外の終了コード
- * (不明なオプションなら126)、タイムアウトのときは例外を投げ、「漏洩なし」とはみなさない。
+ * 差分かレポートが上限で切れたとき、どちらかの出力の読み取りを打ち切ったとき、終了コード1でJSONが無いとき、
+ * それ以外の終了コード(不明なオプションなら126)、タイムアウトのときは例外を投げ、「漏洩なし」とはみなさない。
  */
 export async function runGitleaksOnWorktree(
   opts: WorktreeGitOptions & {
@@ -2818,6 +2833,7 @@ export async function runGitleaksOnWorktree(
     throw new Error(
       `git diff --cached timed out after ${String(opts.timeoutMs)}ms`,
     );
+  assertOutputComplete(`git diff --cached in ${opts.worktreeDir}`, diff);
   if (diff.exitCode !== 0)
     throw gitError(`git diff --cached failed in ${opts.worktreeDir}`, diff);
   if (isCappedOutput(diff.stdout))
@@ -2858,6 +2874,7 @@ export async function runGitleaksOnWorktree(
     );
     if (result.timedOut)
       throw new Error(`gitleaks timed out after ${String(opts.timeoutMs)}ms`);
+    assertOutputComplete("gitleaks", result);
     if (result.exitCode === 0) return { ok: true, output: "" };
     if (result.exitCode === GITLEAKS_LEAKS_EXIT_CODE) {
       if (isCappedOutput(result.stdout))
