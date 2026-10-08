@@ -25,18 +25,15 @@ import {
   anyPackageJsonScriptsChanged,
   type CollectedComment,
   type CollectedReview,
-  countUntrackedFileLines,
   detectEscapingSymlinks,
   detectForbiddenChanges,
   detectSymlinkChanges,
-  evaluateDiffSizeGuard,
+  evaluateUncommittedDiffSize,
   type ForbiddenChangeResult,
-  getDiffNumstat,
   isFixClaudeOutput,
   listSymlinkTargets,
   listUncommittedChangedPaths,
   runAllowedCheckCommands,
-  sumDiffNumstatLines,
 } from "./pr_workflow_support.ts";
 
 export type PrFixVerifyResult = {
@@ -90,21 +87,10 @@ async function checkForbidden(
 
   // `factory_config.max_fix_changed_files` / `max_fix_diff_lines`を超える
   // ファイル数・行数を変えた修正を止める。
-  // numstatはuntracked(新規追加)のファイルを含まないため、
-  // ファイル数には禁止パスの検査と同じ`changedPaths.length`を使う。
-  // 新規ファイルの行数もnumstatの合計に入らないため、
-  // `countUntrackedFileLines`(`wc -l`で数え、gitに副作用を与えない)で足す。
-  const numstatEntries = await getDiffNumstat(runCommand, worktreeDir);
-  const addedEntries = changedPaths.filter((entry) => entry.status === "added");
-  const untrackedLineCounts = await Promise.all(
-    addedEntries.map((entry) =>
-      countUntrackedFileLines(runCommand, worktreeDir, entry.path),
-    ),
-  );
-  const untrackedLineTotal = untrackedLineCounts.reduce((a, b) => a + b, 0);
-  const diffSizeReasons = evaluateDiffSizeGuard(
-    changedPaths.length,
-    sumDiffNumstatLines(numstatEntries) + untrackedLineTotal,
+  const diffSizeReasons = await evaluateUncommittedDiffSize(
+    runCommand,
+    worktreeDir,
+    changedPaths,
     maxChangedFiles,
     maxDiffLines,
   );
