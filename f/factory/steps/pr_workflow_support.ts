@@ -3416,12 +3416,19 @@ type ReasonRule = {
 export type NextActionFlow = LockOwner["kind"];
 
 /**
- * 汎用の次の対応。ConsoleのFailuresとNoticesのタブ(`factory_console__raw_app`)を案内する。
- * 原因に関係なく、`needs_human`の作業項目とnoticeがすべて並ぶ唯一の場所なので、
- * より具体的な対応が無いときの既定として安全である。
+ * 作業項目を同じ作業項目のまま再実行する操作。どの種別の作業項目にも使える。
+ * ConsoleのFailuresタブはジョブの失敗(`job_failures`)だけを並べ、`needs_human`や`blocked`で止めた作業項目は出ないので、
+ * Windmillで直接実行してもらう。
  */
-const GENERIC_NEXT_ACTION =
-  "ConsoleのFailures / Noticesタブで詳細を確認してください";
+const RETRY_WORK_ITEM_ACTION =
+  "Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください";
+
+/**
+ * 汎用の次の対応。より具体的な対応が無いときの既定にする。
+ * 原因は通知の理由と、ConsoleのNoticesタブ(`factory_console__raw_app`)のnoticeに残る。
+ * 取り除いた後の再実行は、どの種別の作業項目にも使える`retry_work_item`を案内する。
+ */
+const GENERIC_NEXT_ACTION = `通知の理由とConsoleのNoticesタブで原因を確かめ、取り除いてから、${RETRY_WORK_ITEM_ACTION}`;
 
 const FACTORY_FIX_RELABEL_ACTION =
   "対応してほしい指摘をコメントしてから`factory:fix`を付け直してください";
@@ -3431,8 +3438,7 @@ const FORBIDDEN_CHANGE_NEXT_ACTION =
   "差分を確認し、問題なければ人が直接修正してください";
 const DIFF_SIZE_NEXT_ACTION =
   "変更を分割するか、上限を見直してから`factory:fix`を付け直してください";
-const GITHUB_RATE_LIMIT_NEXT_ACTION =
-  "GitHubのrate limitの解除を待ってから、ConsoleのFailuresタブで再実行してください";
+const GITHUB_RATE_LIMIT_NEXT_ACTION = `GitHubのrate limitの解除を待ってから、${RETRY_WORK_ITEM_ACTION}`;
 /** `lib/github.ts`の`GitHubRateLimitError`のメッセージ。1はエンドポイント、2は待ちの説明。 */
 const GITHUB_RATE_LIMIT_REASON_PATTERN = /^GitHub rate limit on (\S+): (.+)$/;
 const DAILY_BUDGET_NEXT_ACTION =
@@ -3447,13 +3453,6 @@ const ISSUE_PROPOSAL_NEXT_ACTION =
 /** 検査やcommitの後にworktreeが変わったとき(実装フローとpr_fixの両方で起きる)の次の操作。 */
 const LEFTOVER_PROCESS_NEXT_ACTION =
   "検査コマンドなどが残したプロセスがworktreeを書き換えていないか確かめ、PRの修正なら`factory:fix`を付け直し、実装ならWindmillで`f/factory/retry_work_item`を作業項目のIDで実行してください";
-/**
- * 作業項目を同じ作業項目のまま再実行する操作。どの種別の作業項目にも使える。
- * ConsoleのFailuresタブはジョブの失敗(`job_failures`)だけを並べ、`needs_human`や`blocked`で止めた作業項目は出ないので、
- * Windmillで直接実行してもらう。
- */
-const RETRY_WORK_ITEM_ACTION =
-  "Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください";
 
 /**
  * 前の実行のプロセスがまだworktreeを使っているときの次の操作。
@@ -3782,7 +3781,7 @@ const REASON_RULES: readonly ReasonRule[] = [
     pattern: /^branch head moved to (\S+) while implementing$/,
     describe: (m) => `実装中にブランチのheadが${m[1]}に変わりました`,
     nextAction: () =>
-      "ブランチの最新の状態を確認し、必要ならConsoleのFailuresタブから再実行してください",
+      `ブランチの最新の状態を確認し、必要なら${RETRY_WORK_ITEM_ACTION}`,
   },
   // `lib/github.ts`の`GitHubRateLimitError`。単独の理由としても、
   // "implement finish failed: ..."の中身としても現れる。
@@ -3828,7 +3827,7 @@ const REASON_RULES: readonly ReasonRule[] = [
   {
     pattern: /^implement flow could not be started: ([\s\S]+)$/,
     describe: (m) => `実装フローを起動できませんでした: ${m[1]}`,
-    nextAction: () => "ConsoleのFailuresタブから再実行してください",
+    nextAction: () => RETRY_WORK_ITEM_ACTION,
   },
   {
     pattern:
@@ -3885,14 +3884,14 @@ const REASON_RULES: readonly ReasonRule[] = [
   {
     pattern: /^requirements regeneration could not be started$/,
     describe: () => "要件定義の作り直しを起動できませんでした",
+    // 承認済みの要件定義のattemptは変わっていないので、再実行は実装フローからやり直す。
     nextAction: () =>
-      "ConsoleのFailuresタブから再実行してください(差し戻し理由は通知に残っています)",
+      `${RETRY_WORK_ITEM_ACTION}(実装からやり直します。差し戻し理由は通知に残っています)`,
   },
   {
     pattern: /^pull request has an active fix run$/,
     describe: () => "このPRで自動修正が実行中のため実装を止めました",
-    nextAction: () =>
-      "自動修正の完了を待ってからConsoleのFailuresタブで再実行してください",
+    nextAction: () => `自動修正の完了を待ってから、${RETRY_WORK_ITEM_ACTION}`,
   },
   {
     pattern: /^parent issue is being re-implemented$/,
@@ -3983,7 +3982,7 @@ const REASON_RULES: readonly ReasonRule[] = [
     describe: (m) =>
       `実装フローの時間設定が、flow.yamlの実装・検証ステップのtimeoutに収まりません(${m[1]})`,
     nextAction: () =>
-      "implement_flow_timeout_sec・implement_timeout_sec・implement_check_timeout_sec・検査コマンド数のいずれかを減らしてから、ConsoleのFailuresタブから再実行してください",
+      `implement_flow_timeout_sec・implement_timeout_sec・implement_check_timeout_sec・検査コマンド数のいずれかを減らしてから、${RETRY_WORK_ITEM_ACTION}`,
   },
   {
     pattern:
@@ -3991,7 +3990,7 @@ const REASON_RULES: readonly ReasonRule[] = [
     describe: (m) =>
       `PR修正の時間設定が、flow.yamlの修正・検証ステップのtimeoutに収まりません(${m[1]})`,
     nextAction: () =>
-      "claude_timeout_secか検査コマンド(allowed_check_commands)の数を減らしてから、ConsoleのFailuresタブから再実行してください",
+      "claude_timeout_secか検査コマンド(allowed_check_commands)の数を減らしてから、`factory:fix`を付け直してください",
   },
   {
     pattern:
@@ -3999,7 +3998,7 @@ const REASON_RULES: readonly ReasonRule[] = [
     describe: (m) =>
       `PRレビューの時間設定が、flow.yamlのレビュー生成ステップのtimeoutに収まりません(${m[1]})`,
     nextAction: () =>
-      "claude_timeout_secを減らしてから、ConsoleのFailuresタブから再実行してください",
+      "claude_timeout_secを減らしてから、`factory:review`を付け直してください",
   },
 ];
 

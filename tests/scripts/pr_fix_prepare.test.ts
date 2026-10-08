@@ -305,7 +305,7 @@ describe("nextActionFor", () => {
         "pr_fix time settings do not fit the flow step timeout: 2 claude runs x (claude_timeout_sec 3286 + 15) + 600 = 7202s exceeds 7200s",
       ),
     ).toBe(
-      "claude_timeout_secか検査コマンド(allowed_check_commands)の数を減らしてから、ConsoleのFailuresタブから再実行してください",
+      "claude_timeout_secか検査コマンド(allowed_check_commands)の数を減らしてから、`factory:fix`を付け直してください",
     );
   });
 
@@ -339,7 +339,7 @@ describe("nextActionFor", () => {
 
   test("falls back to pointing at the Console for an unrecognized reason", () => {
     expect(nextActionFor("some future guard reason nobody mapped yet")).toBe(
-      "ConsoleのFailures / Noticesタブで詳細を確認してください",
+      "通知の理由とConsoleのNoticesタブで原因を確かめ、取り除いてから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
     );
   });
 
@@ -643,9 +643,19 @@ describe("describeReason (implement flow)", () => {
 });
 
 describe("nextActionFor (implement flow)", () => {
-  test("points a launch failure at the Console Failures tab", () => {
+  test("asks to rerun a launch failure with retry_work_item", () => {
     expect(nextActionFor("implement flow could not be started: boom")).toBe(
-      "ConsoleのFailuresタブから再実行してください",
+      "Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+    );
+  });
+
+  test("asks to check the branch and rerun with retry_work_item when its head moved", () => {
+    expect(
+      nextActionFor(
+        "branch head moved to 0123456789abcdef0123456789abcdef01234567 while implementing",
+      ),
+    ).toBe(
+      "ブランチの最新の状態を確認し、必要ならWindmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
     );
   });
 
@@ -715,7 +725,7 @@ describe("nextActionFor (implement flow)", () => {
 
   test("waits for the fix run before re-running the implement flow", () => {
     expect(nextActionFor("pull request has an active fix run")).toBe(
-      "自動修正の完了を待ってからConsoleのFailuresタブで再実行してください",
+      "自動修正の完了を待ってから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
     );
   });
 
@@ -725,11 +735,11 @@ describe("nextActionFor (implement flow)", () => {
     );
   });
 
-  test("points a failed requirements regeneration at the Failures tab", () => {
+  test("asks to rerun a failed requirements regeneration with retry_work_item", () => {
     expect(
       nextActionFor("requirements regeneration could not be started"),
     ).toBe(
-      "ConsoleのFailuresタブから再実行してください(差し戻し理由は通知に残っています)",
+      "Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください(実装からやり直します。差し戻し理由は通知に残っています)",
     );
   });
 
@@ -818,7 +828,9 @@ describe("nextActionFor (implement flow)", () => {
       nextActionFor(
         "claude run failed (timeout): claude -p timed out after 5ms; implement flow deadline passed during round 1",
       ),
-    ).toBe("ConsoleのFailures / Noticesタブで詳細を確認してください");
+    ).toBe(
+      "通知の理由とConsoleのNoticesタブで原因を確かめ、取り除いてから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+    );
   });
 
   test("asks to fix the time settings", () => {
@@ -827,7 +839,7 @@ describe("nextActionFor (implement flow)", () => {
         "implement time settings do not fit the flow step timeout: implement_timeout_sec 21001 + 600 = 21601s exceeds 21600s",
       ),
     ).toBe(
-      "implement_flow_timeout_sec・implement_timeout_sec・implement_check_timeout_sec・検査コマンド数のいずれかを減らしてから、ConsoleのFailuresタブから再実行してください",
+      "implement_flow_timeout_sec・implement_timeout_sec・implement_check_timeout_sec・検査コマンド数のいずれかを減らしてから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
     );
   });
 });
@@ -836,7 +848,7 @@ describe("describeReason / nextActionFor (GitHub rate limit)", () => {
   const RATE_LIMIT =
     "GitHub rate limit on repos/acme/widgets/pulls: needs a 3601s wait, longer than the 120s wait cap (rerun after the limit resets)";
   const RATE_LIMIT_NEXT_ACTION =
-    "GitHubのrate limitの解除を待ってから、ConsoleのFailuresタブで再実行してください";
+    "GitHubのrate limitの解除を待ってから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください";
 
   test("translates a rate limit", () => {
     expect(describeReason(RATE_LIMIT)).toBe(
@@ -862,7 +874,7 @@ describe("describeReason / nextActionFor (GitHub rate limit)", () => {
 
   test("keeps the generic action for a finish failure that is not a rate limit", () => {
     expect(nextActionFor("implement finish failed: HTTP 422")).toBe(
-      "ConsoleのFailures / Noticesタブで詳細を確認してください",
+      "通知の理由とConsoleのNoticesタブで原因を確かめ、取り除いてから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
     );
   });
 
