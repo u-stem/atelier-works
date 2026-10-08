@@ -116,8 +116,9 @@ mise run console:check
 """
 
 [tasks."console:check"]
-description = "Type-check, test, and build the console"
+description = "Check the console lockfile policy, then type-check, test, and build the console"
 run = """
+bun run scripts/check-console-lockfile.ts console/bun.lock
 bun run --cwd console typecheck
 bun run --cwd console test
 bun run --cwd console build
