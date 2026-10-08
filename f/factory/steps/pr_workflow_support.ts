@@ -3810,7 +3810,7 @@ const REASON_RULES: readonly ReasonRule[] = [
     pattern: /^claimed issue could not be registered$/,
     describe: () => "Issueを取得しましたが、作業項目を登録できませんでした",
     nextAction: () =>
-      "原因を失敗タブかジョブのログで確かめて取り除き、Issueに`factory`ラベルを付け直してください",
+      "原因をConsoleの失敗タブかジョブのログで確かめて取り除き、Issueに`factory`ラベルを付け直してください",
   },
   {
     pattern: /^approval timed out$/,

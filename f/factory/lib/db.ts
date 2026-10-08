@@ -728,7 +728,8 @@ export async function addNotice(
  * 状態が変わらない間、スケジュールのたびに同じnoticeが積み上がるのを防ぐため。
  * 解決済みのnoticeは数えないので、解決した後に同じ状況が起きれば再び挿入する。
  * `message`が状態の値(版の組など)を含めば、値が変わったときは新しいnoticeになる。
- * 確認と挿入は1つの文で行う。
+ * 確認と挿入は1つの文で行うが、並行して実行すると重複しうる。
+ * 呼び出し元は、同時に実行しないこと(スケジュールの`no_flow_overlap`)に頼る。
  */
 export async function addNoticeUnlessUnresolved(
   record: NoticeRecord,

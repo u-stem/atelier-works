@@ -142,6 +142,15 @@ describe("registerClaimedIssue", () => {
     expect(JSON.stringify(event)).not.toContain("db down");
   });
 
+  test("rethrows the original error when reading the next cycle fails", async () => {
+    const { deps } = fakeDeps({
+      nextCycleForIssue: async () => {
+        throw new Error("cycle read failed");
+      },
+    });
+    await expect(register(deps)).rejects.toThrow("cycle read failed");
+  });
+
   test("notifies as well when reading the next cycle fails", async () => {
     const event = await sentEvent({
       nextCycleForIssue: async () => {

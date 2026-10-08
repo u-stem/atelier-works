@@ -908,7 +908,7 @@ describe("addNoticeUnlessUnresolved", () => {
     message: "head abc1234 differs from deployed def5678",
   };
 
-  test("inserts only when no unresolved notice has the same kind and message", async () => {
+  test("guards the insert with NOT EXISTS", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 15 }]]);
     await addNoticeUnlessUnresolved(record, sql);
     expect(calls[0]?.text).toContain("WHERE NOT EXISTS");
