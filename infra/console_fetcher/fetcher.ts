@@ -24,6 +24,7 @@ import {
   type CurrentLink,
   chooseArtifact,
   classifyHttpStatus,
+  contentDigest,
   type FetchErrorCode,
   type FetcherConfig,
   type FetcherStatus,
@@ -37,6 +38,7 @@ import {
   parseCurrentLink,
   parseHistory,
   parseManifest,
+  parsePinContent,
   parsePinRevoked,
   parseWorkflowRuns,
   RELEASE_BRANCH,
@@ -47,6 +49,8 @@ import {
   selectReleasesToDelete,
   selectRevokedAssets,
   selectRollbackTarget,
+  type UnpinOptions,
+  type UnpinResult,
   verifyRelease,
   WORKFLOW_FILE,
   type WorkflowRun,
@@ -421,11 +425,14 @@ function parseJsonBytes(data: Uint8Array): unknown {
   }
 }
 
-/** 取得・照合したエントリを返す。照合に通らなければ例外。ボリュームには何も書かない。 */
-async function fetchVerifiedEntries(
+/** 取得・照合したエントリとマニフェストを返す。照合に通らなければ例外。ボリュームには何も書かない。 */
+async function fetchVerifiedRelease(
   deps: FetcherDeps,
   run: WorkflowRun,
-): Promise<readonly ZipEntry[]> {
+): Promise<{
+  readonly entries: readonly ZipEntry[];
+  readonly manifest: ConsoleManifest;
+}> {
   const query = new URLSearchParams({ name: ARTIFACT_NAME, per_page: "10" });
   const artifacts = parseArtifacts(
     await getJson(deps, `/actions/runs/${run.id}/artifacts?${query}`),
@@ -468,7 +475,7 @@ async function fetchVerifiedEntries(
       "release does not match its manifest",
     );
   }
-  return zip.entries;
+  return { entries: zip.entries, manifest };
 }
 
 /** 共有の`assets/`の`target`が`data`と同じ中身の通常のファイルかを返す。無ければ`null`。 */
@@ -605,8 +612,10 @@ async function isCompleteRelease(
  * 戻した元の版(`revoked`)の`releases/<sha>`と、その版だけが参照する共有の`assets/`のファイルを消す。
  * 戻した後も問題の版のassetsを`/console/assets/`から読めるままにしないため、更新日時にかかわらず消す。
  * 配信中の版と、残る版が参照するassetsは消さない。通常のファイルでないassetsも消さない。
- * 消すassetsを決められないとき(`current`を読めないとき、どちらかのマニフェストを読めないとき)は、
- * 版も消さずに警告を出す。版を消すと、残ったassetsを後から決められなくなるため。
+ * 消すassetsを決められないとき(`current`のリンクと、配信中の版と、戻した元の版のマニフェストのどれかを
+ * 読めないとき)は、版も消さずに警告を出す。版を消すと、残ったassetsを後から決められなくなるため。
+ * 配信中でない残る版のマニフェストを読めないときは、その版を無視して消す。
+ * 無視しないと、壊れた版が1つあるだけで、戻した元の版を消せなくなる。
  * 途中で止まっても、同じ`revoked`で呼び直せば続きを消せる。
  * 戻した元の版を残さず消せた(消す版が無かった場合を含む)ときだけ`true`を返す。
  */
@@ -627,6 +636,10 @@ async function removeRevoked(
   const serving = shaOf(current);
   const doomed = present.filter((sha) => sha !== serving);
   if (doomed.length === 0) return true;
+  if (serving !== null && (await readManifest(layout, serving)) === null) {
+    log("revoked_cleanup_skipped", { reason: "current_manifest_unreadable" });
+    return false;
+  }
   const doomedManifests: (ConsoleManifest | null)[] = [];
   for (const sha of doomed) {
     doomedManifests.push(await readManifest(layout, sha));
@@ -680,7 +693,6 @@ async function cleanup(deps: FetcherDeps, layout: Layout): Promise<void> {
     await readCurrentLink(layout),
     LIMITS.releasesToKeep,
     manifests,
-    new Set(parsePinRevoked(await readJsonFile(layout.pin))),
   );
   for (const sha of toDelete) {
     const dir = join(layout.releases, sha);
@@ -755,7 +767,7 @@ export async function runOnce(deps: FetcherDeps): Promise<FetcherStatus> {
           recursive: true,
           force: true,
         });
-        const entries = await fetchVerifiedEntries(deps, run);
+        const { entries } = await fetchVerifiedRelease(deps, run);
         await publishAssets(layout, entries);
         await writeRelease(layout, run.headSha, entries);
       }
@@ -857,6 +869,26 @@ async function readTextOrNull(path: string): Promise<string | null> {
   }
 }
 
+/**
+ * 付け替えに失敗したときに、pinを書く前の状態(`previous`。無ければ無し)へ戻す。
+ * 戻せなくても、呼び出し側が投げる元の失敗を隠さないよう、ログだけを出す。
+ */
+async function restorePin(
+  layout: Layout,
+  previous: string | null,
+  log: Logger,
+): Promise<void> {
+  try {
+    if (previous === null) {
+      await rm(layout.pin, { force: true });
+    } else {
+      await writeAtomically(layout, layout.pin, previous);
+    }
+  } catch (err) {
+    log("pin_restore_failed", { error: describeUnexpectedError(err) });
+  }
+}
+
 /** `removeRevoked`を呼び、失敗を投げずに結果(`done`か`pending`)にする。 */
 async function tryRemoveRevoked(
   layout: Layout,
@@ -875,8 +907,10 @@ async function tryRemoveRevoked(
  * currentを直前の版に戻し、pinを置く。pinがある間、runOnceは付け替えない。
  * 戻す先は、今の版と中身が違う、履歴の直前の版にする。
  * pinを先に置いてから付け替え、同時に動いたrunOnceが新しい版へ戻さないようにする。
- * 付け替えに失敗したときは、pinを元の状態に戻してから失敗を投げる。
+ * 付け替えに失敗したときは、pinを元の状態に戻してから失敗を投げる(戻せなくても元の失敗を投げる)。
  * pinだけが残ると、版が動かないまま自動の付け替えが止まるため。
+ * 戻した元の版の中身(`files`のsha256)は、`rolled_back_content`に記録する。
+ * `unpin`が、新しいcommitが同じ中身の版を作っていないかを確かめるために使う。
  * 履歴には足さない(足すと、次に戻すときに新しい方の版を選んでしまう)。
  * 戻した元の版と、それと中身が同じ版は、pinの`rolled_back_from`に記録して、
  * その版と、その版だけが使うassetsを消す(戻した後も問題のscriptを読めるままにしないため)。
@@ -906,26 +940,30 @@ export async function rollback(
     return { ok: false, reason: "no_previous_release" };
   }
   const previousPin = await readTextOrNull(layout.pin);
+  const previousPinJson = await readJsonFile(layout.pin);
   const revoked = [
     ...new Set([
-      ...parsePinRevoked(await readJsonFile(layout.pin)),
+      ...parsePinRevoked(previousPinJson),
       ...selectIdenticalReleases(currentSha, manifests),
+    ]),
+  ];
+  const currentManifest = manifests.get(currentSha) ?? null;
+  const revokedContent = [
+    ...new Set([
+      ...parsePinContent(previousPinJson),
+      ...(currentManifest === null ? [] : [contentDigest(currentManifest)]),
     ]),
   ];
   const pinnedAt = now().toISOString();
   await writeAtomically(
     layout,
     layout.pin,
-    `${JSON.stringify({ sha: target, pinned_at: pinnedAt, rolled_back_from: revoked })}\n`,
+    `${JSON.stringify({ sha: target, pinned_at: pinnedAt, rolled_back_from: revoked, rolled_back_content: revokedContent })}\n`,
   );
   try {
     await switchCurrent(layout, target);
   } catch (err) {
-    if (previousPin === null) {
-      await rm(layout.pin, { force: true });
-    } else {
-      await writeAtomically(layout, layout.pin, previousPin);
-    }
+    await restorePin(layout, previousPin, log);
     throw err;
   }
   const status: FetcherStatus = {
@@ -951,24 +989,40 @@ export type UnpinDeps = {
   readonly log: Logger;
 };
 
-export type UnpinResult =
-  | { readonly ok: true }
-  | {
-      readonly ok: false;
-      readonly reason: "latest_run_is_revoked";
-      readonly sha: string;
-    }
-  | { readonly ok: false; readonly reason: "lookup_failed" }
-  | { readonly ok: false; readonly reason: "cleanup_incomplete" };
-
-/** 最新の成功した実行のshaを返す。設定が無いときと、問い合わせに失敗したときは`null`。 */
-async function lookupLatestSha(deps: UnpinDeps): Promise<string | null> {
+/** 最新の成功した実行を返す。設定が無いときと、問い合わせに失敗したときは`null`。 */
+async function lookupLatestRun(deps: UnpinDeps): Promise<WorkflowRun | null> {
   if (deps.config === null) return null;
   try {
-    return (await findLatestRun({ ...deps, config: deps.config })).headSha;
+    return await findLatestRun({ ...deps, config: deps.config });
   } catch (err) {
     deps.log("unpin_lookup_failed", {
-      error: err instanceof FetchFailure ? err.code : "filesystem_error",
+      error: err instanceof FetchFailure ? err.code : "unexpected_error",
+    });
+    return null;
+  }
+}
+
+/**
+ * `run`の版の中身(`files`)のsha256を返す。ディスクに版があればそのマニフェストを使い、
+ * 無ければ`run`の成果物を取得して照合する(ボリュームには何も書かない)。分からなければ`null`。
+ */
+async function latestRunDigest(
+  deps: UnpinDeps,
+  layout: Layout,
+  run: WorkflowRun,
+): Promise<string | null> {
+  const onDisk = await readManifest(layout, run.headSha);
+  if (onDisk !== null) return contentDigest(onDisk);
+  if (deps.config === null) return null;
+  try {
+    const { manifest } = await fetchVerifiedRelease(
+      { ...deps, config: deps.config },
+      run,
+    );
+    return contentDigest(manifest);
+  } catch (err) {
+    deps.log("unpin_content_lookup_failed", {
+      error: err instanceof FetchFailure ? err.code : "unexpected_error",
     });
     return null;
   }
@@ -977,35 +1031,60 @@ async function lookupLatestSha(deps: UnpinDeps): Promise<string | null> {
 /**
  * pinを外す。次の取り込み(5分以内)から、最新の版への自動の付け替えに戻る。
  * 外す前に、戻した元の版の削除を終える。
- * 次の取り込みが戻した元の版を最新として取り直すと、問題の版が再び配信される。
- * それを防ぐため、最新の成功した実行が戻した元の版のとき、問い合わせに失敗したとき、
- * 戻した元の版を消せなかったときは、pinを外さずに理由を返す。`force`ならこの確認を飛ばす。
- * 戻した元の版の記録(`rolled_back_from`)が無いpinは、確かめる版が無いので、問い合わせずに外す。
+ * 次の取り込みが最新の実行を取り直したとき、問題の版が再び配信されるのを防ぐため、
+ * 次の場合は、pinを外さずに理由を返す。
+ * - 最新の成功した実行のshaが、戻した元の版のshaである。
+ * - 最新の成功した実行の中身(`files`)が、戻した元の版と同じである。
+ *   Consoleに触れないマージも、同じ中身の版を新しいshaで作るため、shaだけでは見分けられない。
+ * - 最新の実行や、その中身を調べられない(分からないときは外さない)。
+ * - 戻した元の版を消せていない。
+ * `force`は最新の実行についての確認を、`ignoreCleanup`は削除についての確認を飛ばす。
+ * `rolled_back_from`も`rolled_back_content`も無いpinは、確かめる版が無いので、問い合わせずに外す。
+ * 中身を記録していないpinは、shaだけを確かめる。
  */
 export async function unpin(
   deps: UnpinDeps,
-  options: { readonly force: boolean },
+  options: UnpinOptions,
 ): Promise<UnpinResult> {
   const layout = layoutOf(deps.root);
   if (!(await exists(layout.pin))) return { ok: true };
-  const revoked = parsePinRevoked(await readJsonFile(layout.pin));
-  if (!options.force && revoked.length > 0) {
-    const latest = await lookupLatestSha(deps);
-    if (latest === null) return { ok: false, reason: "lookup_failed" };
-    if (revoked.includes(latest)) {
-      return { ok: false, reason: "latest_run_is_revoked", sha: latest };
+  const pin = await readJsonFile(layout.pin);
+  const revoked = parsePinRevoked(pin);
+  const revokedContent = parsePinContent(pin);
+  if (!options.force && (revoked.length > 0 || revokedContent.length > 0)) {
+    const run = await lookupLatestRun(deps);
+    if (run === null) return { ok: false, reason: "lookup_failed" };
+    if (revoked.includes(run.headSha)) {
+      return { ok: false, reason: "latest_run_is_revoked", sha: run.headSha };
+    }
+    if (revokedContent.length > 0) {
+      const digest = await latestRunDigest(deps, layout, run);
+      if (digest === null) {
+        return {
+          ok: false,
+          reason: "content_undeterminable",
+          sha: run.headSha,
+        };
+      }
+      if (revokedContent.includes(digest)) {
+        return {
+          ok: false,
+          reason: "latest_run_has_revoked_content",
+          sha: run.headSha,
+        };
+      }
     }
   }
   let complete = false;
   try {
     complete = await removeRevoked(layout, deps.log, revoked);
   } catch (err) {
-    if (!options.force) throw err;
+    if (!options.ignoreCleanup) throw err;
     deps.log("revoked_cleanup_failed", {
       error: describeUnexpectedError(err),
     });
   }
-  if (!complete && !options.force) {
+  if (!complete && !options.ignoreCleanup) {
     return { ok: false, reason: "cleanup_incomplete" };
   }
   await rm(layout.pin, { force: true });

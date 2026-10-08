@@ -15,6 +15,10 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  contentDigest,
+  parseManifest,
+} from "../../infra/console_fetcher/decide.ts";
+import {
   type FetcherDeps,
   type FetchLike,
   LIMITS,
@@ -120,13 +124,28 @@ function githubWithLatestRun(sha: string, runId: number) {
 }
 
 /** `current`を`sha`の版に向け、`revoked`を記録したpinを置く。`revoked`が無ければ旧形式のpinにする。 */
-async function pinAt(sha: string, revoked?: string[]): Promise<void> {
+async function pinAt(
+  sha: string,
+  revoked?: string[],
+  content?: string[],
+): Promise<void> {
   await rm(join(root, "current"), { recursive: true, force: true });
   await symlink(`releases/${sha}`, join(root, "current"));
   await writeFile(
     join(root, "pin"),
-    `${JSON.stringify({ sha, pinned_at: NOW.toISOString(), ...(revoked === undefined ? {} : { rolled_back_from: revoked }) })}\n`,
+    `${JSON.stringify({ sha, pinned_at: NOW.toISOString(), ...(revoked === undefined ? {} : { rolled_back_from: revoked }), ...(content === undefined ? {} : { rolled_back_content: content }) })}\n`,
   );
+}
+
+/** `releases/<sha>`の中身(`files`)のsha256を返す。 */
+async function digestOfRelease(sha: string): Promise<string> {
+  const manifest = parseManifest(
+    JSON.parse(
+      await readFile(join(root, "releases", sha, "manifest.json"), "utf8"),
+    ),
+  );
+  if (manifest === null) throw new Error("manifest is unreadable");
+  return contentDigest(manifest);
 }
 
 /** `releases/<sha>`を本物のディレクトリでなくし、`switchCurrent`が拒む状態にする。 */
@@ -553,7 +572,7 @@ describe("runOnce with a pin", () => {
     ]);
   });
 
-  test("keeps the revoked assets when a remaining manifest cannot be read", async () => {
+  test("keeps the revoked assets when the manifest of current cannot be read", async () => {
     await deploy(SHA_A, "A", 1);
     await deploy(SHA_B, "B", 2);
     await pinAt(SHA_A, [SHA_B]);
@@ -562,7 +581,7 @@ describe("runOnce with a pin", () => {
     expect(await exists(join(root, "assets/index-B0000000.js"))).toBe(true);
   });
 
-  test("keeps the revoked release when a remaining manifest cannot be read", async () => {
+  test("keeps the revoked release when the manifest of current cannot be read", async () => {
     await deploy(SHA_A, "A", 1);
     await deploy(SHA_B, "B", 2);
     await pinAt(SHA_A, [SHA_B]);
@@ -591,6 +610,52 @@ describe("runOnce with a pin", () => {
       log: (event) => events.push(event),
     });
     expect(events).toContain("revoked_cleanup_skipped");
+  });
+
+  test("removes the revoked assets even when another remaining manifest cannot be read", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await deploy(SHA_C, "C", 3);
+    await pinAt(SHA_A, [SHA_C]);
+    await rm(join(root, "releases", SHA_B, "manifest.json"));
+    await runOnce(deps(githubServing(SHA_C, "C", 3).fetch));
+    expect(await exists(join(root, "assets/index-C0000000.js"))).toBe(false);
+  });
+
+  test("keeps the assets of another remaining release whose manifest can be read", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await deploy(SHA_C, "C", 3);
+    await pinAt(SHA_A, [SHA_C]);
+    await rm(join(root, "releases", SHA_B, "manifest.json"));
+    await runOnce(deps(githubServing(SHA_C, "C", 3).fetch));
+    expect(await exists(join(root, "assets/index-A0000000.js"))).toBe(true);
+  });
+
+  test("logs a warning when the manifest of the revoked release cannot be read", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await pinAt(SHA_A, [SHA_B]);
+    await rm(join(root, "releases", SHA_B, "manifest.json"));
+    const events: string[] = [];
+    await runOnce({
+      ...deps(githubServing(SHA_B, "B", 2).fetch),
+      log: (event) => events.push(event),
+    });
+    expect(events).toContain("revoked_cleanup_skipped");
+  });
+
+  test("does not switch to a release whose asset is not a regular file", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await rm(join(root, "current"));
+    await symlink(`releases/${SHA_A}`, join(root, "current"));
+    const outside = join(root, "outside.js");
+    await writeFile(outside, 'console.log("B")');
+    await rm(join(root, "assets/index-B0000000.js"));
+    await symlink(outside, join(root, "assets/index-B0000000.js"));
+    await runOnce(deps(githubServing(SHA_B, "B", 2).fetch));
+    expect(await readlink(join(root, "current"))).toBe(`releases/${SHA_A}`);
   });
 
   test("does not remove an asset that is not a regular file", async () => {
@@ -795,6 +860,31 @@ describe("rollback", () => {
     ).toEqual([SHA_C, SHA_B]);
   });
 
+  test("records the content digest of the release it rolled back from in the pin", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    const digest = await digestOfRelease(SHA_B);
+    await rollback(root, () => NOW);
+    expect(
+      JSON.parse(await readFile(join(root, "pin"), "utf8")).rolled_back_content,
+    ).toEqual([digest]);
+  });
+
+  test("keeps the content digests of earlier rollbacks in the pin", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await deploy(SHA_C, "C", 3);
+    const digests = [
+      await digestOfRelease(SHA_C),
+      await digestOfRelease(SHA_B),
+    ];
+    await rollback(root, () => NOW);
+    await rollback(root, () => NOW);
+    expect(
+      JSON.parse(await readFile(join(root, "pin"), "utf8")).rolled_back_content,
+    ).toEqual(digests);
+  });
+
   test("downloads the release rolled back from again after unpinning", async () => {
     await deploy(SHA_A, "A", 1);
     await deploy(SHA_B, "B", 2);
@@ -957,7 +1047,7 @@ describe("unpin", () => {
     await deploy(SHA_B, "B", 2);
     await rollback(root, () => NOW);
     expect(
-      await unpin(unpinDeps(githubWithLatestRun(SHA_C, 3).fetch), {
+      await unpin(unpinDeps(githubServing(SHA_C, "C", 3).fetch), {
         force: false,
       }),
     ).toEqual({ ok: true });
@@ -967,7 +1057,7 @@ describe("unpin", () => {
     await deploy(SHA_A, "A", 1);
     await deploy(SHA_B, "B", 2);
     await rollback(root, () => NOW);
-    await unpin(unpinDeps(githubWithLatestRun(SHA_C, 3).fetch), {
+    await unpin(unpinDeps(githubServing(SHA_C, "C", 3).fetch), {
       force: false,
     });
     expect(await exists(join(root, "pin"))).toBe(false);
@@ -1060,12 +1150,131 @@ describe("unpin", () => {
     expect(await exists(join(root, "pin"))).toBe(true);
   });
 
-  test("unpins with force even when the revoked release cannot be removed", async () => {
+  test("unpins with ignoreCleanup even when the revoked release cannot be removed", async () => {
     await deploy(SHA_A, "A", 1);
     await deploy(SHA_B, "B", 2);
     await pinAt(SHA_A, [SHA_B]);
     await rm(join(root, "releases", SHA_A, "manifest.json"));
-    await unpin(unpinDeps(failingFetch), { force: true });
+    await unpin(unpinDeps(githubWithLatestRun(SHA_C, 3).fetch), {
+      force: false,
+      ignoreCleanup: true,
+    });
+    expect(await exists(join(root, "pin"))).toBe(false);
+  });
+
+  test("refuses with force while the revoked release cannot be removed", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await pinAt(SHA_A, [SHA_B]);
+    await rm(join(root, "releases", SHA_A, "manifest.json"));
+    expect(await unpin(unpinDeps(failingFetch), { force: true })).toEqual({
+      ok: false,
+      reason: "cleanup_incomplete",
+    });
+  });
+
+  test("still checks the latest run with ignoreCleanup", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await rollback(root, () => NOW);
+    expect(
+      await unpin(unpinDeps(githubWithLatestRun(SHA_B, 2).fetch), {
+        force: false,
+        ignoreCleanup: true,
+      }),
+    ).toEqual({ ok: false, reason: "latest_run_is_revoked", sha: SHA_B });
+  });
+
+  test("refuses when a new commit has the same files as the release rolled back from", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await rollback(root, () => NOW);
+    expect(
+      await unpin(unpinDeps(githubServing(SHA_C, "B", 3).fetch), {
+        force: false,
+      }),
+    ).toEqual({
+      ok: false,
+      reason: "latest_run_has_revoked_content",
+      sha: SHA_C,
+    });
+  });
+
+  test("keeps the pin when a new commit has the same files as the release rolled back from", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await rollback(root, () => NOW);
+    await unpin(unpinDeps(githubServing(SHA_C, "B", 3).fetch), {
+      force: false,
+    });
+    expect(await exists(join(root, "pin"))).toBe(true);
+  });
+
+  test("refuses when the files of the latest run cannot be read", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await rollback(root, () => NOW);
+    expect(
+      await unpin(unpinDeps(githubWithLatestRun(SHA_C, 3).fetch), {
+        force: false,
+      }),
+    ).toEqual({ ok: false, reason: "content_undeterminable", sha: SHA_C });
+  });
+
+  test("keeps the pin when the files of the latest run cannot be read", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await rollback(root, () => NOW);
+    await unpin(unpinDeps(githubWithLatestRun(SHA_C, 3).fetch), {
+      force: false,
+    });
+    expect(await exists(join(root, "pin"))).toBe(true);
+  });
+
+  test("reads the files of the latest run from the release on disk", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await deploy(SHA_C, "C", 3);
+    await pinAt(SHA_A, [SHA_B], [await digestOfRelease(SHA_B)]);
+    expect(
+      await unpin(unpinDeps(githubWithLatestRun(SHA_C, 3).fetch), {
+        force: false,
+      }),
+    ).toEqual({ ok: true });
+  });
+
+  test("refuses when the release on disk has the revoked files", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await deploy(SHA_C, "B", 3);
+    await pinAt(SHA_A, [SHA_B], [await digestOfRelease(SHA_B)]);
+    expect(
+      await unpin(unpinDeps(githubWithLatestRun(SHA_C, 3).fetch), {
+        force: false,
+      }),
+    ).toEqual({
+      ok: false,
+      reason: "latest_run_has_revoked_content",
+      sha: SHA_C,
+    });
+  });
+
+  test("only compares shas for a pin without content digests", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await pinAt(SHA_A, [SHA_B]);
+    expect(
+      await unpin(unpinDeps(githubWithLatestRun(SHA_C, 3).fetch), {
+        force: false,
+      }),
+    ).toEqual({ ok: true });
+  });
+
+  test("skips the file check with force", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await rollback(root, () => NOW);
+    await unpin(unpinDeps(githubServing(SHA_C, "B", 3).fetch), { force: true });
     expect(await exists(join(root, "pin"))).toBe(false);
   });
 });

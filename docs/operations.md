@@ -602,11 +602,12 @@ mise exec -- docker compose -f infra/docker-compose.yml logs --tail 50 console_f
 版は、配信するファイルの中身(`manifest.json`の`files`)が違うものを3つまで残す。
 版は`main`へのpushのたびに作られ、`console/`に触れないpushでできた版は中身が同じなので、1つと数える。
 無関係なマージが続いても、戻せる版を押し出さないためである。
+数える対象は、直近20回のpushの範囲である(`history.json`が覚えている回数)。
 共有の`assets/`は、残した版から参照されず14日を超えたファイルを消す。
 
 新しい版に問題があれば、直前の版に戻す。
 
-1. `mise run console:rollback`を実行する。取り込みの最中なら「更新中」と出て止まるので、少し待ってやり直す。
+1. `mise run console:rollback`を実行する。取り込みの最中なら`console_fetcher is updating the console right now.`と出て止まるので、少し待ってやり直す。
 2. 戻すと`pin`が置かれ、自動の付け替えが止まる。もう一度実行すると、さらに1つ前に戻る。
 3. `main`に修正を入れてCIが成功したら、`mise run console:unpin`で`pin`を外す。5分以内に最新の版へ戻る。
 
@@ -618,23 +619,34 @@ mise exec -- docker compose -f infra/docker-compose.yml logs --tail 50 console_f
 戻すと、戻した元の版と、それと中身が同じ版を消す。
 その版だけが参照する共有の`assets/`のファイルも、更新日時にかかわらず消す。
 `pin`の間も、問題の版のscriptを`/console/assets/`から読めるままにしないためである。
-消す版のshaは、`pin`の`rolled_back_from`に記録する。
-消し終わらなかったときは、`console:rollback`が「削除は終わっていない」と出し、`console_fetcher`が次の取り込みで続きを消す。
+消す版のshaは`pin`の`rolled_back_from`に、戻した元の版の中身(`files`のsha256)は`rolled_back_content`に記録する。
+消し終わらなかったときは、`console:rollback`が`The rollback succeeded, but removing ...`で始まる文を出す。
+続きは`console_fetcher`が次の取り込みで消す。
 `rolled_back_from`を持たない`pin`では、戻した元の版は消えない。
 消した版のページを開いたままのブラウザは、assetsを読み込めなくなるので、再読み込みが要る。
 
 `pin`を外すと、`console_fetcher`は最新の成功した実行を取り込む。
-最新の実行が戻した元の版のままだと、問題の版が再び配信される。
-それを防ぐため、`console:unpin`は次の場合に`pin`を外さず、理由を出して止まる。
+その実行が戻した元の版と同じ中身だと、問題の版が再び配信される。
+`console/`に触れないマージでも、同じ中身の版が新しいcommitで作られるので、commitのshaだけでは見分けられない。
+`console:unpin`は、最新の成功した実行のshaと、その実行の`files`のsha256を、`pin`の記録と照らす。
+次の場合は`pin`を外さず、理由を出して止まる。
 
 | 状況 | 人がすること |
 | --- | --- |
-| 最新の成功した実行が、戻した元の版か、それと中身が同じ版である | 修正を`main`に入れ、そのCIが成功してからやり直す |
+| 最新の成功した実行のshaが、戻した元の版のshaである | 修正を`main`に入れ、そのCIが成功してからやり直す |
+| 最新の成功した実行の`files`が、戻した元の版と同じである | `console/`を変える修正を`main`に入れ、そのCIが成功してからやり直す |
 | 最新の実行を調べられない(トークンや`CONSOLE_GITHUB_REPO`の不備、ネットワークの失敗) | 原因を直してやり直す |
-| 戻した元の版を消せていない | `console_fetcher`のログの`revoked_cleanup_skipped`か`revoked_cleanup_failed`を確かめ、原因を直してやり直す |
+| 最新の実行の`files`を調べられない(成果物の取得か検証に失敗) | 原因を直してやり直す |
+| 戻した元の版を消せていない | このコマンドの出力か`console_fetcher`のログの`revoked_cleanup_skipped`、`revoked_cleanup_failed`を確かめ、原因を直してやり直す |
 
-問題の版が再び配信されるのを承知の上で外すときは、`mise run console:unpin -- --force`を実行する。
-`--force`は、この確認をすべて飛ばす。
+`rolled_back_content`を持たない`pin`は、shaだけを照らす。
+`rolled_back_from`も持たない`pin`は、照らす版が無いので、問い合わせずに外す。
+
+確認を飛ばすオプションは2つある。
+`mise run console:unpin -- --force`は、最新の実行についての確認(上の表の前の4行)を飛ばす。
+問題の版が再び配信されるのを承知の上で使う。
+`mise run console:unpin -- --ignore-cleanup`は、戻した元の版を消せていない確認を飛ばす。
+`--force`だけでは、この確認は飛ばない。
 
 主な`error`と対処は次のとおり。
 
