@@ -174,8 +174,8 @@ export type WorktreePrepDeps = {
   readonly hasWorktree: () => Promise<boolean>;
   /** `createGtrWorktree(...).path`を返す。 */
   readonly createWorktree: () => Promise<string>;
-  /** `pushNewBranch(...).pushed`を返す。originにすでにブランチがあったときは`false`。 */
-  readonly publishBranch: () => Promise<boolean>;
+  /** `pushNewBranch`を呼ぶ。originにブランチが無ければ、ローカルのブランチを既定のブランチの先頭へ向け直して公開する。 */
+  readonly publishBranch: () => Promise<void>;
 };
 
 /**
@@ -190,18 +190,16 @@ export type WorktreePrepDeps = {
  * そのため、既存のworktreeがあれば先にブランチを公開してから使い回す。
  * 前回の実行が`gtr new`と空のpushの間で止まった可能性があり、
  * 使い回しの経路は`origin/<branch>`をfetchするためである。
- * worktreeが無ければ作ってから公開する。originにすでにブランチがあった場合は、
- * 使い回しの経路をもう1回通し、古いローカルのブランチをoriginに揃える。
+ * worktreeが無ければ作ってから公開する。
+ * 公開の後は、どちらの場合も使い回しの経路を通し、worktreeを`origin/<branch>`に揃える。
+ * `gtr new`が使い回した古いローカルのブランチは、originにブランチがあればその先頭と違いうる。
+ * 無ければ公開がローカルのブランチだけを既定のブランチの先頭へ向け直し、worktreeの中身は古いまま残るためである。
  */
 export async function prepareImplementWorktree(
   deps: WorktreePrepDeps,
 ): Promise<string> {
-  if (await deps.hasWorktree()) {
-    await deps.publishBranch();
-    return deps.createWorktree();
-  }
-  const created = await deps.createWorktree();
-  if (await deps.publishBranch()) return created;
+  if (!(await deps.hasWorktree())) await deps.createWorktree();
+  await deps.publishBranch();
   return deps.createWorktree();
 }
 

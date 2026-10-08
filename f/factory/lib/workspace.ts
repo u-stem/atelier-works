@@ -2523,19 +2523,21 @@ export async function commitAndPush(
 }
 
 // ---------------------------------------------------------------------------
-// pushNewBranch(implementフロー): 作ったばかりのローカルのブランチを公開する
+// pushNewBranch(implementフロー): 実装ブランチを既定のブランチの先頭で公開する
 // ---------------------------------------------------------------------------
 
 export type PushNewBranchOptions = {
   readonly run: CommandRunner;
   /**
    * メインのcloneのディレクトリ(`ensureRepo`を参照)。
-   * リポジトリごとの共有のロックを決めるのに使い、2つのgitの実行もここで行う。
-   * worktreeはrefと設定をメインのcloneと共有するので、`repoDir`からの`push -u`でも、
-   * `createGtrWorktree`が作ったブランチを公開し、upstreamを同じく設定できる。
+   * リポジトリごとの共有のロックを決めるのに使い、gitの実行もすべてここで行う。
+   * worktreeはrefをメインのcloneと共有するので、ここでローカルのブランチを動かせば、
+   * `createGtrWorktree`が作ったworktreeのブランチも動く。
    */
   readonly repoDir: string;
   readonly branch: string;
+  /** 既定のブランチの名前(`resolveDefaultBranchName`)。`origin/<baseBranch>`の先頭を公開する。 */
+  readonly baseBranch: string;
   readonly ghToken: string;
   readonly home?: string;
   readonly path?: string;
@@ -2553,17 +2555,25 @@ export type PushNewBranchResult = { readonly pushed: boolean };
 const LS_REMOTE_NO_MATCH_EXIT_CODE = 2;
 
 /**
- * `createGtrWorktree`がローカルにブランチを作った直後に、`repoDir`から
- * `git push -u origin <branch>`を実行する。失敗したら例外を投げる。
+ * リモートに`branch`が無ければ、既定のブランチの先頭(`refs/remotes/origin/<baseBranch>`)で公開する。
+ * 公開の前に、ローカルの`branch`もその先頭へ`update-ref --no-deref`で向け直す。
+ * pushはローカルのブランチではなく先頭のshaを`refs/heads/<branch>`へ送る。
+ * ローカルのブランチには、検査コマンドが作ったcommitなど、検査していない履歴が残りうるためである
+ * (リモートのブランチだけが消えた後の再実行)。
+ * 向け直しは削除と作り直しより安全なので、こちらを使う。
+ * checkout中のブランチも1回の操作で動かせ、worktreeを消さずに済む。
+ * 途中で失敗しても、ブランチが無い状態や別のcommitを指す状態を残さない。
+ * `--no-deref`は、ローカルのブランチがシンボリックrefにされていても、指す先の別のブランチを動かさないために付ける。
+ * worktreeの中身は動かさないので、呼び出し側は公開の後にworktreeを`origin/<branch>`へそろえる(`prepareImplementWorktree`)。
  * ブランチを(空でも)公開しておけば、後のステップは`commitAndPush`
- * (`origin/<branch>`をfetchして`expectedHeadSha`と比べる)をそのまま使え、
- * 再試行のときは`createGtrWorktree`の再利用の経路で`reset --hard origin/<branch>`できる。
+ * (`origin/<branch>`をfetchして`expectedHeadSha`と比べる)をそのまま使える。
  * リモートにすでにブランチがあれば(push済みの後の再試行)、何もせず`pushed: false`を返す。
  * ローカルの`origin/<branch>`を信じず、
  * `git ls-remote --exit-code --heads origin -- <branch>`で
  * リモートに直接問い合わせる(0はある、2は無い、それ以外はエラー)。
  * `ensureRepo`は`--prune`なしでfetchするので、人がGitHubでブランチを消した後に残った
  * 古い追跡refのせいでpushを飛ばしてはいけないため。
+ * 問い合わせ、先頭の解決、向け直し、pushのどれかが失敗したら例外を投げ、それより後には進まない。
  * このリポジトリの他のネットワーク操作と同じく、
  * `repoLockPath(repoDir)`のロックの下で実行する。
  */
@@ -2571,6 +2581,7 @@ export async function pushNewBranch(
   opts: PushNewBranchOptions,
 ): Promise<PushNewBranchResult> {
   assertBranchName(opts.branch);
+  assertBranchName(opts.baseBranch);
 
   return withRepoLock({
     lockPath: repoLockPath(opts.repoDir),
@@ -2578,13 +2589,14 @@ export async function pushNewBranch(
     ...(opts.sleep !== undefined ? { sleep: opts.sleep } : {}),
     ...(opts.now !== undefined ? { now: opts.now } : {}),
     fn: async () => {
-      const env = networkGitEnv(opts.ghToken, opts.home, opts.path);
+      const network = networkGitEnv(opts.ghToken, opts.home, opts.path);
+      const local = localGitEnv(opts.home, opts.path);
       const existing = await opts.run(
         buildGitArgv(
           ["ls-remote", "--exit-code", "--heads", "origin", "--", opts.branch],
           { network: true },
         ),
-        { cwd: opts.repoDir, env },
+        { cwd: opts.repoDir, env: network },
       );
       if (existing.exitCode === 0) {
         return { pushed: false };
@@ -2593,14 +2605,46 @@ export async function pushNewBranch(
         throw gitError(`git ls-remote origin ${opts.branch} failed`, existing);
       }
 
+      // `rev-parse`には`--`を付けない(`buildGitArgv`の例外を参照)。
+      // 完全なref名で読み、`origin/<baseBranch>`という名前のタグなどと取り違えない。
+      const baseRef = `refs/remotes/origin/${opts.baseBranch}`;
+      const baseResult = await opts.run(
+        buildGitArgv(["rev-parse", "--verify", `${baseRef}^{commit}`]),
+        { cwd: opts.repoDir, env: local },
+      );
+      if (baseResult.exitCode !== 0) {
+        throw gitError(`git rev-parse --verify ${baseRef} failed`, baseResult);
+      }
+      const baseSha = baseResult.stdout.trim();
+      assertSha(baseSha);
+
+      const branchRef = `refs/heads/${opts.branch}`;
+      const moveResult = await opts.run(
+        buildGitArgv([
+          "update-ref",
+          "--no-deref",
+          "-m",
+          "factory: publish the branch at the base",
+          "--",
+          branchRef,
+          baseSha,
+        ]),
+        { cwd: opts.repoDir, env: local },
+      );
+      if (moveResult.exitCode !== 0) {
+        throw gitError(
+          `git update-ref ${branchRef} ${baseSha} failed`,
+          moveResult,
+        );
+      }
+
+      const refspec = `${baseSha}:${branchRef}`;
       const pushResult = await opts.run(
-        buildGitArgv(["push", "-u", "origin", "--", opts.branch], {
-          network: true,
-        }),
-        { cwd: opts.repoDir, env },
+        buildGitArgv(["push", "origin", "--", refspec], { network: true }),
+        { cwd: opts.repoDir, env: network },
       );
       if (pushResult.exitCode !== 0) {
-        throw gitError(`git push -u origin ${opts.branch} failed`, pushResult);
+        throw gitError(`git push origin ${refspec} failed`, pushResult);
       }
       return { pushed: true };
     },

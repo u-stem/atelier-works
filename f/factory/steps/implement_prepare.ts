@@ -197,7 +197,7 @@ function stop(
  * worktreeを前の実行のプロセスがまだ使っていれば、同じ作業項目の前のジョブのものだけを、リースとブランチのPRの修正・レビューを確かめ直してから止める。
  * それ以外のプロセスがいるか、止めても空かなければ、worktreeに触れずに`needs_human`を返す。
  * 満たせば、実装用のブランチと`git gtr`のworktreeを用意し、
- * ブランチを空のままpushしておく。
+ * リモートにブランチが無ければ、既定のブランチの先頭だけを載せた空のブランチとしてpushしておく。
  * 先にpushしておくのは、後のpushをすべて`commitAndPush`のまま行えるようにするため。
  * 続けてworktreeの`.git`ポインタを検証してその内容を記録し、
  * デフォルトブランチとのmerge-baseを`base_sha`として記録する。
@@ -388,9 +388,15 @@ export async function main(
             assertProcessesIdle: ensureIdle,
           })
         ).path,
-      publishBranch: async () =>
-        (await pushNewBranch({ run: runCommand, repoDir, branch, ghToken }))
-          .pushed,
+      publishBranch: async () => {
+        await pushNewBranch({
+          run: runCommand,
+          repoDir,
+          branch,
+          baseBranch,
+          ghToken,
+        });
+      },
     });
   } catch (err) {
     // 理由付きの結果にするのは、確かめ(ensureIdle)と、止める直前の確かめ直しが投げる3種類の例外だけである。
