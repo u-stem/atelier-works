@@ -63,7 +63,7 @@ git pull --ff-only
 docker compose -f infra/docker-compose.yml pull
 docker compose -f infra/docker-compose.yml build windmill_worker console_fetcher
 docker compose -f infra/docker-compose.yml up -d
-npm ci --prefix f/factory/factory_console__raw_app --no-audit --no-fund
+npm ci --prefix f/factory/factory_console__raw_app --no-audit --no-fund --ignore-scripts
 wmill sync push --yes --keep-deleted
 wmill datatable migrate up
 """
@@ -71,7 +71,7 @@ wmill datatable migrate up
 [tasks.push]
 description = "Push local sync state to the Windmill workspace (keeps remote-only items)"
 run = """
-npm ci --prefix f/factory/factory_console__raw_app --no-audit --no-fund
+npm ci --prefix f/factory/factory_console__raw_app --no-audit --no-fund --ignore-scripts
 wmill sync push --yes --keep-deleted
 """
 
