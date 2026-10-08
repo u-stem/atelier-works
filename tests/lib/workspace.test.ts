@@ -2448,13 +2448,38 @@ describe("commitAndPush", () => {
       );
     });
 
-    test("undoes the commit when the committed tree is not the expected tree", async () => {
+    test("undoes the commit back to its own parent when the committed tree is not the expected tree", async () => {
       const fake = committedCalls([ok(`${TREE_SHA}\n`), ok()]);
       await commitAndPush(options(fake.run)).catch(() => {});
       expect(fake.calls.at(-1)?.argv.slice(-4)).toEqual([
         "reset",
         "-q",
-        "HEAD~1",
+        `${NEW_COMMIT}~1`,
+        "--",
+      ]);
+    });
+
+    test("undoes the commit back to the expected head when the local HEAD was required there", async () => {
+      const fake = commitAndPushCalls([
+        ok("fix/branch\n"),
+        ok(),
+        ok(`${HEAD_SHA}\n`),
+        ok(`${HEAD_SHA}\n`), // rev-parse --verify HEAD(ローカルのHEADの確かめ)
+        ok(), // git add -A
+        ok(" M file.ts\n"),
+        ok(), // git commit
+        ok(`${NEW_COMMIT}\n`),
+        ok(`${TREE_SHA}\n`),
+        ok(),
+      ]);
+      await commitAndPush({
+        ...options(fake.run),
+        requireLocalHeadAtExpected: true,
+      }).catch(() => {});
+      expect(fake.calls.at(-1)?.argv.slice(-4)).toEqual([
+        "reset",
+        "-q",
+        HEAD_SHA,
         "--",
       ]);
     });

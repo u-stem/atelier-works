@@ -750,15 +750,14 @@ async function evaluateChecks(
       stallParts.push(gitleaks.output);
     }
     scannedTreeChanged = gitleaks.treeSha !== facts.inspectedTreeSha;
-    if (scannedTreeChanged) {
-      // 判定していないツリーで検証コマンドを動かさない。呼び出し側がラウンドを止める。
-    } else if (facts.protectedChanged) {
+    // 検査したツリーが判定したツリーと違えば、判定していないツリーで検証コマンドを動かさない。呼び出し側がラウンドを止める。
+    if (!scannedTreeChanged && facts.protectedChanged) {
       skipReason = IMPLEMENT_CHECK_SKIP_REASONS.protected_paths;
       summarySkipReason = `${skipReason}(gitleaks: ${gitleaks.ok ? "合格" : "不合格"})`;
-    } else if (!facts.hasCheckCommands) {
+    } else if (!scannedTreeChanged && !facts.hasCheckCommands) {
       skipReason = IMPLEMENT_CHECK_SKIP_REASONS.no_commands;
       summarySkipReason = skipReason;
-    } else {
+    } else if (!scannedTreeChanged) {
       await deps.removeIgnoredFiles();
       for (const result of await deps.runChecks()) {
         results.push({ command: result.command, ok: result.ok });

@@ -2072,8 +2072,11 @@ export type CommitAndPushOptions = {
   readonly inspectStaged?: () => Promise<readonly string[]>;
   /**
    * 渡されたら、commitの後、pushの前に、作ったcommitのツリーがこのshaであることを確かめる。
-   * 違えば`git reset -q HEAD~1`でcommitを取り消し(変更はworktreeに残る)、pushせずに`CommitBlockedError`を投げる。
+   * 違えば`git reset -q`でcommitを取り消し(変更はworktreeに残る)、pushせずに`CommitBlockedError`を投げる。
+   * 戻す先は、`requireLocalHeadAtExpected`があれば`expectedHeadSha`、無ければ作ったcommitの親である。
    * 呼び出し側は、gitleaksが検査したツリーかループで検証したツリーを渡し、検査していない内容をpushしない。
+   * `requireLocalHeadAtExpected`と組み合わせる前提である。無いと、検査コマンドがcommitした履歴まで、
+   * ツリーだけ確かめてpushしうる。
    */
   readonly expectedTreeSha?: string;
 };
@@ -2349,12 +2352,17 @@ export async function commitAndPush(
         }
         if (treeResult.stdout.trim() !== opts.expectedTreeSha) {
           // 確かめていない内容のcommitをローカルにも残さない。変更はworktreeに残る。
+          // 戻す先は`HEAD`からたどらずに明示する。残ったプロセスがHEADを動かしても、別のcommitへ戻さないため。
+          const parent =
+            opts.requireLocalHeadAtExpected === true
+              ? opts.expectedHeadSha
+              : `${newSha}~1`;
           const undoResult = await opts.run(
-            buildGitArgv(["reset", "-q", "HEAD~1", "--"]),
+            buildGitArgv(["reset", "-q", parent, "--"]),
             { cwd: opts.dir, env: local },
           );
           if (undoResult.exitCode !== 0) {
-            throw gitError("git reset -q HEAD~1 failed", undoResult);
+            throw gitError(`git reset -q ${parent} failed`, undoResult);
           }
           throw new CommitBlockedError(COMMITTED_TREE_CHANGED_REASON);
         }

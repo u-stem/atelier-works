@@ -3432,8 +3432,9 @@ const DAILY_BUDGET_NEXT_ACTION =
   "翌日まで待つか、daily_budget_usdを引き上げてください";
 const NOTHING_TO_COMMIT_NEXT_ACTION =
   "返信内容を確認し、必要なら指示をコメントして`factory:fix`を付け直してください";
+/** ローカルのHEADが動いたとき(実装フローとpr_fixの両方で起きる)の次の操作。 */
 const LOCAL_HEAD_NEXT_ACTION =
-  "検査コマンドがコミットやブランチの切り替えをしていないか確かめ、人が修正してください";
+  "検査コマンドがコミットやブランチの切り替えをしていないか確かめて人が直してから、PRの修正なら`factory:fix`を付け直し、実装ならWindmillで`f/factory/retry_work_item`を作業項目のIDで実行してください";
 const ISSUE_PROPOSAL_NEXT_ACTION =
   "ConsoleのInboxで提案を承認または却下してください";
 /** 検査やcommitの後にworktreeが変わったとき(実装フローとpr_fixの両方で起きる)の次の操作。 */
@@ -3870,10 +3871,12 @@ const REASON_RULES: readonly ReasonRule[] = [
     describe: () => "PRのheadが記録されていません",
     nextAction: () => "`factory:fix`を付け直して修正をやり直してください",
   },
-  // pr_fix_verify.tsの`localHeadStopReason`と、pr_fix_finish.tsの`commitAndPush`
+  // pr_fix_verify.tsの`localHeadStopReason`と、`commitAndPush`(pr_fix_finish.tsと、implement_finish.tsの`implementCommitGuards`)。
+  // 理由の文はpr_fixに合わせて"PR head"のままだが、実装フローでは記録したブランチの先頭を指すので、訳はどちらにも合う言い方にする。
   {
     pattern: /^local HEAD (\S+) is not the PR head (\S+)$/,
-    describe: (m) => `worktreeのHEAD(${m[1]})がPRのhead(${m[2]})と異なります`,
+    describe: (m) =>
+      `worktreeのHEAD(${m[1]})が記録したブランチの先頭(${m[2]})と異なります`,
     nextAction: () => LOCAL_HEAD_NEXT_ACTION,
   },
   {

@@ -59,7 +59,7 @@
   - `git add -A`の前に、ローカルのHEADがPRのhead(`head_sha`)である(`commitAndPush`の`requireLocalHeadAtExpected`)。
   - `commitAndPush`の前に、実装フローと同じgitleaksの検査(下の「工程3(implement)の安全策」の「gitleaksを固定検査にする」。基準は`head_sha`で、この修正が足す行だけを検査する)を行う。検査は長くかかりうるので、リポジトリのロックの外で行う。秘密情報らしき文字列が見つかれば`secrets detected, changes not pushed`を理由に止める。検査自体が失敗したときは、何もcommitもpushもせずに失敗させる。
   - `git add -A`の後、commitの前に、ステージした内容を`head_sha`と比べる(`git diff --cached -z --name-status`と`git diff --cached --raw -z`)。禁止パス、新しい`*.sh`、symlinkとgitlink(入れ子のリポジトリ)のmode、要素が`.git`のパス、`package.json`のscripts(ステージした中身を`git show :0:<path>`で読む)のどれかがあれば止める。commitする索引の`git write-tree`がgitleaksの検査したツリーと同じことも確かめ、違えば`worktree changed after the secret scan`を理由にする。どれかに当たれば`git reset -q`でステージを戻してcommitしない。この検査自体が失敗したときも、ステージを戻してから失敗させる。
-  - commitの後、pushの前に、作ったcommitのツリーが検査したツリーであることを確かめ、違えば`git reset -q HEAD~1`でcommitを取り消して`committed tree differs from the inspected tree`を理由にする。pushは`HEAD`ではなく、作ったcommitのshaを`refs/heads/<ブランチ>`へ送る。
+  - commitの後、pushの前に、作ったcommitのツリーが検査したツリーであることを確かめ、違えば`git reset -q <head_sha>`でcommitを取り消して(戻す先は`HEAD`からたどらずに明示する)`committed tree differs from the inspected tree`を理由にする。pushは`HEAD`ではなく、作ったcommitのshaを`refs/heads/<ブランチ>`へ送る。
 - 検証ステップと完了ステップが変更の一覧に使う`git status`と`git diff`(`--raw HEAD`・`--cached --raw`・`--cached --name-status`)には`--ignore-submodules=none`を付け、`.gitmodules`や設定の`ignore = all`でサブモジュール(gitlink)の変更を隠させない。
 - `f/factory/lib/workspace.ts`と`steps/pr_workflow_support.ts`が実行するgit(pr_fixとimplementのworktreeでの操作を含む)には環境変数`GIT_NO_REPLACE_OBJECTS=1`を付け、`refs/replace/`で差し替えられたオブジェクトを読まない。差し替えのrefは検査コマンドが作れるため。
 - `commitAndPush`のfetchはサブモジュールに降りない(`--no-recurse-submodules`)。

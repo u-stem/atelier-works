@@ -531,13 +531,13 @@ describe("describeReason (implement flow)", () => {
     );
   });
 
-  test("translates a local HEAD that moved off the PR head", () => {
+  test("translates a local HEAD that moved off the recorded branch head", () => {
     expect(
       describeReason(
         `local HEAD ${"b".repeat(40)} is not the PR head ${"a".repeat(40)}`,
       ),
     ).toBe(
-      `worktreeのHEAD(${"b".repeat(40)})がPRのhead(${"a".repeat(40)})と異なります`,
+      `worktreeのHEAD(${"b".repeat(40)})が記録したブランチの先頭(${"a".repeat(40)})と異なります`,
     );
   });
 
@@ -561,7 +561,7 @@ describe("describeReason (implement flow)", () => {
 
   test("asks to check the check commands after HEAD moved", () => {
     expect(nextActionFor("local HEAD is not on branch fix/x")).toBe(
-      "検査コマンドがコミットやブランチの切り替えをしていないか確かめ、人が修正してください",
+      "検査コマンドがコミットやブランチの切り替えをしていないか確かめて人が直してから、PRの修正なら`factory:fix`を付け直し、実装ならWindmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
     );
   });
 
