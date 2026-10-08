@@ -61,8 +61,9 @@ mise exec -- sh -c 'test -n "$DB_PASSWORD" && echo ok'
    ```
 
 2. ツール、JavaScriptの依存関係、gitのフックを入れる。
-   中で`mise install`、`bun install --frozen-lockfile`、`lefthook install`を実行する。
+   中で`mise install`、`bun install --frozen-lockfile --ignore-scripts`、`lefthook install`を実行する。
    Consoleの依存は`bun install --cwd console --frozen-lockfile --ignore-scripts`で入れる。
+   どちらも依存のinstall scriptは実行しない。
 
    ```bash
    mise run setup

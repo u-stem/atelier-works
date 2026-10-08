@@ -111,11 +111,15 @@ PRを出す前に必ず通す。
 - `test`は`bun test`で、`console/`を除く。
 - `console:check`は、Console(`console/`)のlockfileの方針を検査し、型検査、テスト、組み立てを行う。
 
-Consoleの依存はルートと分け、`console/bun.lock`で固定する。
+依存は、ルートの`bun.lock`と、Console(`console/`)の`console/bun.lock`に分けて固定する。
 
-- 入れるときは`bun install --cwd console --frozen-lockfile --ignore-scripts`を使う。
-- 足すときは`bun add --cwd console --exact --ignore-scripts <package>`を使う。
-- `--ignore-scripts`を必ず付ける。bunは依存のinstall scriptを既定では実行しないが、既定の信頼する一覧(trustedDependencies)にある有名なパッケージだけは実行するためである。
+| 対象 | 入れるとき | 足すとき |
+| --- | --- | --- |
+| ルート | `bun install --frozen-lockfile --ignore-scripts` | `bun add --exact --ignore-scripts <package>` |
+| Console | `bun install --cwd console --frozen-lockfile --ignore-scripts` | `bun add --cwd console --exact --ignore-scripts <package>` |
+
+どちらも`--ignore-scripts`を必ず付ける。
+bunは依存のinstall scriptを既定では実行しないが、既定の信頼する一覧(trustedDependencies)にある有名なパッケージだけは実行するためである。
 
 ## PRとコミット
 

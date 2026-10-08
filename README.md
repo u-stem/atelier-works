@@ -59,7 +59,7 @@ Discordからの双方向の操作は未実装である。Discordには通知だ
 
 | タスク | 内容 |
 | --- | --- |
-| `mise run setup` | miseで管理するツール、`bun install --frozen-lockfile`、`bun install --cwd console --frozen-lockfile --ignore-scripts`、`lefthook install`をまとめて入れる |
+| `mise run setup` | miseで管理するツール、`bun install --frozen-lockfile --ignore-scripts`、`bun install --cwd console --frozen-lockfile --ignore-scripts`、`lefthook install`をまとめて入れる |
 | `mise run doctor` | 環境を診断し、項目ごとにOKかNGを出す |
 | `mise run up` | ローカルのWindmillのスタックを、ビルドしてから起動する。ホストのcheckoutからビルドするので、先にmainをpullする |
 | `mise run down` | スタックを止める |

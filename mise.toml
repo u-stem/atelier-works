@@ -51,7 +51,7 @@ run = "docker compose -f infra/docker-compose.yml run --rm --no-deps console_fet
 description = "Install mise-managed tools, project dependencies, and git hooks"
 run = """
 mise install
-bun install --frozen-lockfile
+bun install --frozen-lockfile --ignore-scripts
 bun install --cwd console --frozen-lockfile --ignore-scripts
 lefthook install
 """
