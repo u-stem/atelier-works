@@ -1,5 +1,9 @@
 import React, { useEffect, useState } from "react";
 import "./index.css";
+import {
+  collectDeepLinkCandidates,
+  initialTabFromDeepLink,
+} from "./lib/deepLink";
 import { AnalyticsTab } from "./tabs/AnalyticsTab";
 import { AuditTab } from "./tabs/AuditTab";
 import { FailuresTab } from "./tabs/FailuresTab";
@@ -35,7 +39,12 @@ function getInitialTheme(): Theme {
 }
 
 const App = (): React.ReactElement => {
-  const [activeTab, setActiveTab] = useState<TabId>("inbox");
+  // ディープリンク(`#requirements/<id>`・`#audit/<id>`)付きで開かれたときは、
+  // 承認タブを経由せず該当のタブから始める。作業項目の選択は各タブが
+  // マウント時に自分でフラグメントを読んで行うので、`auditTarget`は使わない。
+  const [activeTab, setActiveTab] = useState<TabId>(
+    () => initialTabFromDeepLink(collectDeepLinkCandidates()) ?? "inbox",
+  );
   const [theme, setTheme] = useState<Theme>(() => getInitialTheme());
   const [refreshKey, setRefreshKey] = useState(0);
   // 承認タブの「レポートを開く」ボタン(監査由来のissue_proposal)から

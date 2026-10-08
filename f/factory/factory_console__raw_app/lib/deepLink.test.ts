@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { parseAuditDeepLink, parseDeepLink } from "./deepLink";
+import {
+  initialTabFromDeepLink,
+  parseAuditDeepLink,
+  parseDeepLink,
+} from "./deepLink";
 
 describe("parseDeepLink", () => {
   test("parses a work_item_id from a bare requirements fragment", () => {
@@ -47,5 +51,43 @@ describe("parseAuditDeepLink", () => {
 
   test("ignores a requirements fragment", () => {
     expect(parseAuditDeepLink(["#requirements/12"])).toBeNull();
+  });
+});
+
+describe("initialTabFromDeepLink", () => {
+  test("returns requirements for a requirements fragment", () => {
+    expect(initialTabFromDeepLink(["#requirements/42"])).toBe("requirements");
+  });
+
+  test("returns requirements for a requirements fragment with an attempt", () => {
+    expect(initialTabFromDeepLink(["#requirements/42/attempt-3"])).toBe(
+      "requirements",
+    );
+  });
+
+  test("returns audit for an audit fragment", () => {
+    expect(initialTabFromDeepLink(["#audit/12"])).toBe("audit");
+  });
+
+  test("returns null for an unrelated fragment", () => {
+    expect(initialTabFromDeepLink(["#inbox"])).toBeNull();
+  });
+
+  test("returns null for no candidates", () => {
+    expect(initialTabFromDeepLink([])).toBeNull();
+  });
+
+  test("returns null for an empty candidate", () => {
+    expect(initialTabFromDeepLink([""])).toBeNull();
+  });
+
+  test("uses the first candidate that matches, ignoring earlier non-matches", () => {
+    expect(initialTabFromDeepLink(["", "#audit/5"])).toBe("audit");
+  });
+
+  test("prefers the earlier candidate when both kinds are present", () => {
+    expect(initialTabFromDeepLink(["#audit/5", "#requirements/7"])).toBe(
+      "audit",
+    );
   });
 });
