@@ -21,6 +21,7 @@ import {
   type LogFields,
   recordConfigFailure,
   rollback,
+  runLoopIteration,
   runOnce,
   unpin,
   withLock,
@@ -141,6 +142,13 @@ describe("runOnce", () => {
     expect(
       JSON.parse(await readFile(join(root, "history.json"), "utf8")),
     ).toEqual([SHA_A, SHA_B]);
+  });
+
+  test("reports the switched sha when recording history fails", async () => {
+    // history.jsonをディレクトリにして、読み込みを失敗させる。
+    await mkdir(join(root, "history.json"));
+    const status = await runOnce(deps(githubServing(SHA_A, "A").fetch));
+    expect(status.sha).toBe(SHA_A);
   });
 
   test("does not send the token to the download host", async () => {
@@ -472,6 +480,14 @@ describe("rollback", () => {
     expect(await readlink(join(root, "current"))).toBe(`releases/${SHA_A}`);
   });
 
+  test("switches to the newest recorded release when current is missing from history", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await writeFile(join(root, "history.json"), `${JSON.stringify([SHA_A])}\n`);
+    await rollback(root, () => NOW);
+    expect(await readlink(join(root, "current"))).toBe(`releases/${SHA_A}`);
+  });
+
   test("reports no_previous_release with a single release", async () => {
     await deploy(SHA_A, "A", 1);
     expect(await rollback(root, () => NOW)).toEqual({
@@ -579,5 +595,36 @@ describe("withLock", () => {
       },
     ).catch(() => undefined);
     expect(await exists(join(root, "lock"))).toBe(false);
+  });
+});
+
+describe("runLoopIteration", () => {
+  function failingAction(): Promise<void> {
+    return Promise.reject(new Error("EACCES: permission denied, open 'lock'"));
+  }
+
+  test("does not throw when the iteration fails", async () => {
+    await expect(runLoopIteration(failingAction, () => {})).resolves.toBe(
+      undefined,
+    );
+  });
+
+  test("logs a single filesystem_error line without details", async () => {
+    const lines: [string, LogFields | undefined][] = [];
+    await runLoopIteration(failingAction, (event, fields) => {
+      lines.push([event, fields]);
+    });
+    expect(lines).toEqual([["failed", { error: "filesystem_error" }]]);
+  });
+
+  test("logs nothing when the iteration succeeds", async () => {
+    const lines: string[] = [];
+    await runLoopIteration(
+      async () => {},
+      (event) => {
+        lines.push(event);
+      },
+    );
+    expect(lines).toEqual([]);
   });
 });

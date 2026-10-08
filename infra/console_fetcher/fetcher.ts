@@ -661,8 +661,9 @@ export async function runOnce(deps: FetcherDeps): Promise<FetcherStatus> {
         });
       }
       await switchCurrent(layout, run.headSha);
-      await recordHistory(layout, run.headSha);
+      // 履歴に残せなくても、status.jsonには付け替えた後の版を書く。
       currentSha = run.headSha;
+      await recordHistory(layout, run.headSha);
       deps.log("deployed", { sha: run.headSha, run_id: run.id });
     }
     await cleanup(deps, layout);
@@ -690,6 +691,24 @@ export async function runOnce(deps: FetcherDeps): Promise<FetcherStatus> {
       deps.log("status_write_failed", { error: code });
       return status;
     }
+  }
+}
+
+/**
+ * 5分ごとの繰り返しの1回分を実行する。投げられた例外では止まらず、1行のログにして次の回を待つ。
+ * ロックを作れない(EACCESなど)ときのように、`runOnce`の外で起きた失敗もここで受け止める。
+ * ログには分類した失敗の種類だけを出し、スタックトレースや詳細は出さない。
+ */
+export async function runLoopIteration(
+  action: () => Promise<void>,
+  log: Logger,
+): Promise<void> {
+  try {
+    await action();
+  } catch (err) {
+    const code: FetchErrorCode =
+      err instanceof FetchFailure ? err.code : "filesystem_error";
+    log("failed", { error: code });
   }
 }
 

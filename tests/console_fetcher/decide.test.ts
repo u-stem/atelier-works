@@ -661,6 +661,26 @@ describe("selectRollbackTarget", () => {
   test("returns null when there is no earlier release", () => {
     expect(selectRollbackTarget([SHA_A], SHA_A, new Set([SHA_A]))).toBeNull();
   });
+
+  test("returns the newest release in history when current is missing from history", () => {
+    expect(
+      selectRollbackTarget(
+        [SHA_A, SHA_B, SHA_C],
+        SHA_D,
+        new Set([SHA_A, SHA_B, SHA_C, SHA_D]),
+      ),
+    ).toBe(SHA_C);
+  });
+
+  test("skips a release that no longer exists when current is missing from history", () => {
+    expect(
+      selectRollbackTarget(
+        [SHA_A, SHA_B, SHA_C],
+        SHA_D,
+        new Set([SHA_A, SHA_B, SHA_D]),
+      ),
+    ).toBe(SHA_B);
+  });
 });
 
 describe("isLockStale", () => {

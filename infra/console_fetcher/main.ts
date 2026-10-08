@@ -11,6 +11,7 @@ import {
   type LogFields,
   recordConfigFailure,
   rollback,
+  runLoopIteration,
   runOnce,
   unpin,
   withLock,
@@ -55,7 +56,8 @@ async function main(): Promise<void> {
   }
   if (command === "loop") {
     for (;;) {
-      await once();
+      // 1回分が失敗しても止まらず、ログを1行出して次の回で取り直す。
+      await runLoopIteration(once, log);
       await Bun.sleep(INTERVAL_MS);
     }
   }

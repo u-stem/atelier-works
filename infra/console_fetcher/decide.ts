@@ -436,6 +436,8 @@ export function selectAssetsToDelete(
  * 戻した後にもう一度呼ぶと、さらに1つ前を返す。
  * これは戻す操作とpinを外す操作が履歴に足さないことを前提にする。今の版は履歴の最後の出現で
  * 位置を決めるので、戻した版を足すと、次に戻すときにその前に付け替えた新しい版を返してしまう。
+ * 今の版が履歴に無い(付け替えた後、履歴に書く前に止まった)ときは、履歴の中でまだ残っている
+ * 最も新しい版を返す。
  */
 export function selectRollbackTarget(
   history: readonly string[],
@@ -443,7 +445,8 @@ export function selectRollbackTarget(
   existing: ReadonlySet<string>,
 ): string | null {
   if (currentSha === null) return null;
-  const position = history.lastIndexOf(currentSha);
+  const found = history.lastIndexOf(currentSha);
+  const position = found === -1 ? history.length : found;
   for (let index = position - 1; index >= 0; index--) {
     const sha = history[index];
     if (sha !== undefined && sha !== currentSha && existing.has(sha))
