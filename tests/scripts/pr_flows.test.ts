@@ -1,6 +1,7 @@
 // pr_fixとpr_reviewのflow.yamlが各ステップに付けるWindmillのtimeoutのテスト。
 // 時間設定に左右されるステップの値は、`pr_workflow_support.ts`の定数と一致することを確かめる。
-// GitHubのrate limitの待ちの上限が、どのステップのtimeoutよりも短いことも確かめる。
+// GitHubのrate limitの待ちの上限は、`f/factory/*__flow/flow.yaml`をすべて読み、
+// どのステップのtimeoutよりも短いことを確かめる。
 
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";

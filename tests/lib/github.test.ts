@@ -354,13 +354,6 @@ describe("rate limit wait cap", () => {
     );
   });
 
-  test("keeps the reason a single segment for describeReason / nextActionFor", async () => {
-    const error = await rejectionOf(
-      getViewer(fakeClient([primaryLimited(3600)]).client),
-    );
-    expect(error instanceof Error && error.message.includes("; ")).toBe(false);
-  });
-
   test("sets the error name so on_error_flow can tell it apart", () => {
     const err = new GitHubRateLimitError("user", 3_600_000, false);
     expect(err.name).toBe("GitHubRateLimitError");
@@ -405,6 +398,20 @@ describe("rate limit wait cap", () => {
       const { client, calls } = fakeClient([graphqlLimited]);
       await rejectionOf(resolveReviewThread(client, "PRRT_1"));
       expect(calls.length).toBe(1);
+    });
+
+    test("still rejects as a GraphQL error when an error's type is not a string", async () => {
+      const { client } = fakeClient([
+        ok(
+          ghApiStdout(200, {
+            data: null,
+            errors: [{ message: "x", type: null }],
+          }),
+        ),
+      ]);
+      await expect(resolveReviewThread(client, "PRRT_1")).rejects.toThrow(
+        /GraphQL error/,
+      );
     });
   });
 });

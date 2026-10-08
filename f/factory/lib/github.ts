@@ -181,18 +181,12 @@ function rateLimitDetail(
   requiredWaitMs: number | null,
   retried: boolean,
 ): string {
-  const wait =
-    requiredWaitMs === null
-      ? null
-      : `needs a ${String(Math.ceil(requiredWaitMs / 1000))}s wait`;
-  if (retried) {
-    return wait === null
-      ? "still limited after waiting once"
-      : `still limited after waiting once (${wait})`;
+  if (requiredWaitMs === null) {
+    return retried ? "still limited after waiting once" : "no reset time given";
   }
-  if (wait === null) return "no reset time given";
-  return requiredWaitMs !== null &&
-    requiredWaitMs > GITHUB_RATE_LIMIT_MAX_WAIT_MS
+  const wait = `needs a ${String(Math.ceil(requiredWaitMs / 1000))}s wait`;
+  if (retried) return `still limited after waiting once (${wait})`;
+  return requiredWaitMs > GITHUB_RATE_LIMIT_MAX_WAIT_MS
     ? `${wait}, longer than the ${String(GITHUB_RATE_LIMIT_MAX_WAIT_MS / 1000)}s wait cap`
     : wait;
 }
@@ -1939,8 +1933,11 @@ export async function getBranchProtected(
 
 type GraphqlErrorPayload = {
   readonly message: string;
-  /** エラーの種類(`RATE_LIMITED`など)。GitHubが付けないエラーもある。 */
-  readonly type?: string;
+  /**
+   * エラーの種類(`RATE_LIMITED`など)。GitHubが付けないエラーもある。
+   * 形は確かめない。文字列でないときに型ガードを外すと、エラーの応答を成功と取り違えるため。
+   */
+  readonly type?: unknown;
 };
 
 type GraphqlErrorsPayload = {
@@ -1958,9 +1955,7 @@ function isGraphqlErrorsPayload(value: unknown): value is GraphqlErrorsPayload {
   if (!Array.isArray(errors) || errors.length === 0) return false;
   return errors.every((item) => {
     if (typeof item !== "object" || item === null) return false;
-    const record = item as { message: unknown; type?: unknown };
-    if (typeof record.message !== "string") return false;
-    return record.type === undefined || typeof record.type === "string";
+    return typeof (item as { message: unknown }).message === "string";
   });
 }
 
@@ -2005,7 +2000,7 @@ async function callGhGraphql(
   ensureSuccess(response, context);
   const parsed = parseJsonBody(response, context);
   if (isGraphqlErrorsPayload(parsed)) {
-    // GraphQLの一次レート制限は1時間ごとの点数で、解除はたいてい待ちの上限より先になる。
+    // GraphQLの一次レート制限は1時間ごとの点数で、解除までの待ちはたいてい上限より長い。
     // 拒まれた要求は再送せず、そのまま投げる。
     if (isGraphqlRateLimited(parsed)) {
       throw new GitHubRateLimitError(
