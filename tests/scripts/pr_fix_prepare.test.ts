@@ -424,6 +424,34 @@ describe("describeReason (implement flow)", () => {
       describeReason("implementation of the branch's work item is running"),
     ).toBe("このPRのブランチで実装フローが実行中のため修正を止めました");
   });
+
+  test("translates the deadline that stopped the fix rounds", () => {
+    expect(
+      describeReason("implement flow deadline reached after round 3"),
+    ).toBe(
+      "実装フローの期限(implement_flow_timeout_sec)までに次の修正を終える時間が残っていないため、ラウンド3で修正をやめました",
+    );
+  });
+
+  test("translates a Claude run cut by the deadline", () => {
+    expect(
+      describeReason(
+        "claude run failed (timeout): claude -p timed out after 5ms; implement flow deadline passed during round 1",
+      ),
+    ).toBe(
+      "Claudeの実行に失敗しました(timeout): claude -p timed out after 5ms; 実装フローの期限(implement_flow_timeout_sec)を過ぎたため、ラウンド1のClaudeの実行を打ち切りました",
+    );
+  });
+
+  test("translates time settings that do not fit the step timeout", () => {
+    expect(
+      describeReason(
+        "implement time settings do not fit the flow step timeout: implement_timeout_sec 21001 + 600 = 21601s exceeds 21600s",
+      ),
+    ).toBe(
+      "実装フローの時間設定が、flow.yamlの実装・検証ステップのtimeoutに収まりません(implement_timeout_sec 21001 + 600 = 21601s exceeds 21600s)",
+    );
+  });
 });
 
 describe("nextActionFor (implement flow)", () => {
@@ -511,5 +539,29 @@ describe("nextActionFor (implement flow)", () => {
     expect(
       nextActionFor("implementation of the branch's work item is running"),
     ).toBe("実装フローの完了を待ってから再度factory:fixを付けてください");
+  });
+
+  test("asks to look at the failing checks after the deadline", () => {
+    expect(nextActionFor("implement flow deadline reached after round 3")).toBe(
+      "失敗しているチェックを確認し、人が修正してください",
+    );
+  });
+
+  test("shows the Claude failure's action when the deadline cut the run", () => {
+    expect(
+      nextActionFor(
+        "claude run failed (timeout): claude -p timed out after 5ms; implement flow deadline passed during round 1",
+      ),
+    ).toBe("ConsoleのFailures / Noticesタブで詳細を確認してください");
+  });
+
+  test("asks to fix the time settings", () => {
+    expect(
+      nextActionFor(
+        "implement time settings do not fit the flow step timeout: implement_timeout_sec 21001 + 600 = 21601s exceeds 21600s",
+      ),
+    ).toBe(
+      "implement_flow_timeout_sec・implement_timeout_sec・implement_check_timeout_sec・検査コマンド数のいずれかを減らしてから、ConsoleのFailuresタブから再実行してください",
+    );
   });
 });
