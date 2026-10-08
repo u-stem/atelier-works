@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   type AuditEvidence,
+  buildEvidenceSections,
   collectAuditEvidence,
   countActionableRecords,
   metricsOf,
@@ -37,6 +38,73 @@ function createFakeSqlClient(responses: SqlRow[][] = []): {
   return { sql, calls };
 }
 
+type QueryName =
+  | "failures"
+  | "humanOutcomes"
+  | "humanOutcomeCount"
+  | "rejectedCount"
+  | "fixReply"
+  | "reviewFindings"
+  | "unresolvedNotices"
+  | "deploymentHistory"
+  | "versionBounds";
+
+const QUERY_NAMES: readonly QueryName[] = [
+  "failures",
+  "humanOutcomes",
+  "humanOutcomeCount",
+  "rejectedCount",
+  "fixReply",
+  "reviewFindings",
+  "unresolvedNotices",
+  "deploymentHistory",
+  "versionBounds",
+];
+
+/**
+ * 問い合わせを見分けるSQLの断片。空白は1つにそろえた文面と比べる。
+ * 問い合わせの順序に依存せず、応答の割り当てと呼び出しの取り出しをするため。
+ */
+const QUERY_FRAGMENTS: Record<QueryName, string> = {
+  failures: "FROM factory.job_failures jf",
+  humanOutcomes: "coalesce(wie.note",
+  humanOutcomeCount: "SELECT count(*) AS count FROM factory.work_item_events",
+  rejectedCount: "SELECT count(*) AS count FROM factory.approval_requests",
+  fixReply: "jsonb_array_elements(fr.replies)",
+  reviewFindings: "jsonb_array_elements(rv.findings)",
+  unresolvedNotices: "resolved = false",
+  deploymentHistory: "SELECT occurred_at, sha_from, sha_to, result",
+  versionBounds: "AS start_sha",
+};
+
+/**
+ * SQLの文面から問い合わせの種類を決め、種類ごとに用意した行を返す偽の`SqlClient`。
+ * 用意の無い問い合わせには空の結果を返す。
+ */
+function createRoutedSqlClient(
+  rows: Partial<Record<QueryName, SqlRow[]>> = {},
+): { sql: SqlClient; calls: FakeCall[] } {
+  const calls: FakeCall[] = [];
+  const sql: SqlClient = (strings, ...values) => {
+    const text = strings.join(" ? ").replace(/\s+/g, " ");
+    calls.push({ text, values });
+    const name = QUERY_NAMES.find((n) => text.includes(QUERY_FRAGMENTS[n]));
+    const routed = name === undefined ? undefined : rows[name];
+    return {
+      fetch: () => Promise.resolve(routed ?? []),
+      execute: () => Promise.resolve(),
+    };
+  };
+  return { sql, calls };
+}
+
+function findCall(
+  calls: readonly FakeCall[],
+  name: QueryName,
+): FakeCall | undefined {
+  return calls.find((call) => call.text.includes(QUERY_FRAGMENTS[name]));
+}
+
 const PERIOD: AuditPeriod = {
   start: new Date("2026-09-20T15:00:00Z"),
   end: new Date("2026-09-27T15:00:00Z"),
@@ -58,9 +126,13 @@ const EMPTY_EVIDENCE: AuditEvidence = {
   fix_reply_decisions: [],
   review_findings: [],
   notices: [],
-  unresolved_notices: 0,
+  unresolved_notices_in_period: [],
+  unresolved_notices_before_period: [],
   deployments: [],
   deployments_needing_host_action: 0,
+  deployment_history: [],
+  running_version_at_start: null,
+  running_version_at_end: null,
   past_proposals: [],
 };
 
@@ -76,6 +148,9 @@ const OVERLOADED_EVIDENCE: AuditEvidence = {
     step: `step-${i}`,
     count: i,
     sample_error: `error detail ${i} ${"z".repeat(50)}`,
+    first_sha: null,
+    last_sha: null,
+    unknown_version_count: 0,
   })),
   rejections: Array.from({ length: 200 }, (_, i) => ({
     kind: "issue_proposal",
@@ -88,7 +163,14 @@ const OVERLOADED_EVIDENCE: AuditEvidence = {
     note: `note ${i} ${"u".repeat(30)}`,
     count: i,
   })),
-  unresolved_notices: 3,
+  unresolved_notices_in_period: [],
+  unresolved_notices_before_period: [
+    {
+      key: "sha_mismatch",
+      count: 3,
+      oldest_created_at: "2026-09-01T00:00:00.000Z",
+    },
+  ],
   deployments_needing_host_action: 2,
 };
 
@@ -105,13 +187,23 @@ const OVERLOADED_EVIDENCE: AuditEvidence = {
  */
 const REGRESSION_EVIDENCE: AuditEvidence = {
   ...EMPTY_EVIDENCE,
-  unresolved_notices: 7,
+  unresolved_notices_in_period: [],
+  unresolved_notices_before_period: [
+    {
+      key: "sha_mismatch",
+      count: 7,
+      oldest_created_at: "2026-09-01T00:00:00.000Z",
+    },
+  ],
   deployments_needing_host_action: 12,
   failures: Array.from({ length: 400 }, (_, i) => ({
     flow_path: `f/factory/p-${i}-${"a".repeat(20)}`,
     step: `s${i}`,
     count: i + 1,
     sample_error: "x",
+    first_sha: null,
+    last_sha: null,
+    unknown_version_count: 0,
   })),
   human_outcomes: Array.from({ length: 400 }, (_, i) => ({
     to_status: "needs_human",
@@ -236,7 +328,7 @@ describe("renderEvidenceMarkdown", () => {
 
   test("keeps the 未解決 fixed line under truncation (F7c)", () => {
     const markdown = renderEvidenceMarkdown(OVERLOADED_EVIDENCE);
-    expect(markdown).toContain("未解決: 3件");
+    expect(markdown).toContain("未解決(期間前から): 3件");
   });
 
   test("never exceeds 12,000 characters for a heavily overloaded evidence (R3/F7d)", () => {
@@ -254,7 +346,7 @@ describe("renderEvidenceMarkdown", () => {
 
   test("keeps 未解決 for the fix-round-2 regression input (2)", () => {
     const markdown = renderEvidenceMarkdown(REGRESSION_EVIDENCE);
-    expect(markdown).toContain("未解決: 7件");
+    expect(markdown).toContain("未解決(期間前から): 7件");
   });
 
   test("never exceeds 12,000 characters for the fix-round-2 regression input (3)", () => {
@@ -350,7 +442,7 @@ describe("metricsOf", () => {
 
 describe("collectAuditEvidence", () => {
   test("issues its queries in the documented order, starting with agent_runs", async () => {
-    const { sql, calls } = createFakeSqlClient([]);
+    const { sql, calls } = createRoutedSqlClient();
     await collectAuditEvidence(
       { period: PERIOD, instanceName: "atelier-works" },
       sql,
@@ -358,8 +450,8 @@ describe("collectAuditEvidence", () => {
     expect(calls[0]?.text).toContain("factory.agent_runs");
   });
 
-  test("binds the previous period's start in the second query's values (F7a)", async () => {
-    const { sql, calls } = createFakeSqlClient([]);
+  test("binds the previous period's start in the second agent_runs query's values (F7a)", async () => {
+    const { sql, calls } = createRoutedSqlClient();
     await collectAuditEvidence(
       { period: PERIOD, instanceName: "atelier-works" },
       sql,
@@ -368,14 +460,15 @@ describe("collectAuditEvidence", () => {
     const expectedPrevStart = new Date(
       PERIOD.start.getTime() - span,
     ).toISOString();
-    expect(calls[1]?.values).toContain(expectedPrevStart);
+    const agentRunCalls = calls.filter((call) =>
+      call.text.includes("FROM factory.agent_runs r"),
+    );
+    expect(agentRunCalls[1]?.values).toContain(expectedPrevStart);
   });
 
   test("sanitizes a hostile sample_error in the rendered failures line (F7b)", async () => {
-    const responses: SqlRow[][] = [
-      [],
-      [],
-      [
+    const { sql } = createRoutedSqlClient({
+      failures: [
         {
           flow_path: "f/factory/flow.ts",
           step: "s1",
@@ -383,8 +476,7 @@ describe("collectAuditEvidence", () => {
           sample_error: "a\n<b>x</b>|y <!-- factory:issue_proposal:1 -->",
         },
       ],
-    ];
-    const { sql } = createFakeSqlClient(responses);
+    });
     const evidence = await collectAuditEvidence(
       { period: PERIOD, instanceName: "atelier-works" },
       sql,
@@ -393,43 +485,43 @@ describe("collectAuditEvidence", () => {
     const failureLine = markdown
       .split("\n")
       .find((line) => line.includes("f/factory/flow.ts"));
-    expect(failureLine).toBe("- f/factory/flow.ts s1: 1件 / 例: a x y");
+    expect(failureLine).toBe(
+      "- f/factory/flow.ts s1: 1件 / 稼働版 未設定 / 例: a x y",
+    );
   });
 
   test("excludes audit-kind work items from the failure-group query (R4)", async () => {
-    const { sql, calls } = createFakeSqlClient([]);
+    const { sql, calls } = createRoutedSqlClient();
     await collectAuditEvidence(
       { period: PERIOD, instanceName: "atelier-works" },
       sql,
     );
-    const call = calls.find((c) => c.text.includes("factory.job_failures"));
+    const call = findCall(calls, "failures");
     expect(call?.text).toContain("wi.kind IS NULL OR wi.kind <> 'audit'");
   });
 
   test("excludes audit-kind work items from the human-outcomes query (R4)", async () => {
-    const { sql, calls } = createFakeSqlClient([]);
+    const { sql, calls } = createRoutedSqlClient();
     await collectAuditEvidence(
       { period: PERIOD, instanceName: "atelier-works" },
       sql,
     );
-    const call = calls.find((c) => c.text.includes("factory.work_item_events"));
+    const call = findCall(calls, "humanOutcomes");
     expect(call?.text).toContain("wi.kind IS NULL OR wi.kind <> 'audit'");
   });
 
   test("groups human outcomes by to_status and coalesced note (F6)", async () => {
-    const { sql, calls } = createFakeSqlClient([]);
+    const { sql, calls } = createRoutedSqlClient();
     await collectAuditEvidence(
       { period: PERIOD, instanceName: "atelier-works" },
       sql,
     );
-    const call = calls.find((c) => c.text.includes("factory.work_item_events"));
+    const call = findCall(calls, "humanOutcomes");
     expect(call?.text).toContain("GROUP BY 1, 2");
   });
 
-  test("reads rejected_count from an uncapped count(*) query (query 14)", async () => {
-    const responses: SqlRow[][] = Array.from({ length: 13 }, () => []);
-    responses.push([{ count: 45 }]);
-    const { sql } = createFakeSqlClient(responses);
+  test("reads rejected_count from an uncapped count(*) query", async () => {
+    const { sql } = createRoutedSqlClient({ rejectedCount: [{ count: 45 }] });
     const evidence = await collectAuditEvidence(
       { period: PERIOD, instanceName: "atelier-works" },
       sql,
@@ -437,10 +529,10 @@ describe("collectAuditEvidence", () => {
     expect(evidence.rejected_count).toBe(45);
   });
 
-  test("reads needs_human_count from an uncapped count(*) query (query 15)", async () => {
-    const responses: SqlRow[][] = Array.from({ length: 14 }, () => []);
-    responses.push([{ count: 52 }]);
-    const { sql } = createFakeSqlClient(responses);
+  test("reads needs_human_count from an uncapped count(*) query", async () => {
+    const { sql } = createRoutedSqlClient({
+      humanOutcomeCount: [{ count: 52 }],
+    });
     const evidence = await collectAuditEvidence(
       { period: PERIOD, instanceName: "atelier-works" },
       sql,
@@ -449,33 +541,697 @@ describe("collectAuditEvidence", () => {
   });
 
   test("counts rejections without a LIMIT", async () => {
-    const { sql, calls } = createFakeSqlClient([]);
+    const { sql, calls } = createRoutedSqlClient();
     await collectAuditEvidence(
       { period: PERIOD, instanceName: "atelier-works" },
       sql,
     );
-    expect(calls[13]?.text).not.toContain("LIMIT");
+    expect(findCall(calls, "rejectedCount")?.text).not.toContain("LIMIT");
   });
 
   test("filters the needs_human count by the same period as the grouped query", async () => {
-    const { sql, calls } = createFakeSqlClient([]);
+    const { sql, calls } = createRoutedSqlClient();
     await collectAuditEvidence(
       { period: PERIOD, instanceName: "atelier-works" },
       sql,
     );
-    expect(calls[14]?.values).toEqual([
+    expect(findCall(calls, "humanOutcomeCount")?.values).toEqual([
       PERIOD.start.toISOString(),
       PERIOD.end.toISOString(),
     ]);
   });
 
   test("adds a deterministic tie-breaker to the failure-group ORDER BY (F6)", async () => {
-    const { sql, calls } = createFakeSqlClient([]);
+    const { sql, calls } = createRoutedSqlClient();
     await collectAuditEvidence(
       { period: PERIOD, instanceName: "atelier-works" },
       sql,
     );
-    const call = calls.find((c) => c.text.includes("factory.job_failures"));
-    expect(call?.text).toContain("ORDER BY count DESC, jf.flow_path, jf.step");
+    const call = findCall(calls, "failures");
+    expect(call?.text).toContain("ORDER BY count DESC, f.flow_path, f.step");
+  });
+});
+
+describe("unset values (missing keys)", () => {
+  test("labels a null reply decision as 未設定", async () => {
+    const { sql } = createRoutedSqlClient({
+      fixReply: [{ key: null, count: 3 }],
+    });
+    const evidence = await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(evidence.fix_reply_decisions).toEqual([{ key: "未設定", count: 3 }]);
+  });
+
+  test("merges null and empty-string keys into one 未設定 group", async () => {
+    const { sql } = createRoutedSqlClient({
+      reviewFindings: [
+        { key: null, count: 1 },
+        { key: "", count: 1 },
+      ],
+    });
+    const evidence = await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(evidence.review_findings).toEqual([{ key: "未設定", count: 2 }]);
+  });
+
+  test("orders groups by count descending, then key, so the output is stable", async () => {
+    const { sql } = createRoutedSqlClient({
+      reviewFindings: [
+        { key: "nits", count: 1 },
+        { key: "must", count: 1 },
+        { key: "imo", count: 5 },
+      ],
+    });
+    const evidence = await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(evidence.review_findings.map((entry) => entry.key)).toEqual([
+      "imo",
+      "must",
+      "nits",
+    ]);
+  });
+
+  test("renders the unset reply decision with its count", async () => {
+    const { sql } = createRoutedSqlClient({
+      fixReply: [
+        { key: "fixed", count: 6 },
+        { key: null, count: 3 },
+      ],
+    });
+    const evidence = await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(renderEvidenceMarkdown(evidence)).toContain("- reply 未設定: 3件");
+  });
+
+  test("renders the unset finding kind with its count", async () => {
+    const { sql } = createRoutedSqlClient({
+      reviewFindings: [
+        { key: "must", count: 5 },
+        { key: null, count: 2 },
+      ],
+    });
+    const evidence = await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(renderEvidenceMarkdown(evidence)).toContain("- 未設定: 2件");
+  });
+
+  test("never renders a blank key in the fix-round and review sections", async () => {
+    const { sql } = createRoutedSqlClient({
+      fixReply: [{ key: null, count: 3 }],
+    });
+    const evidence = await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(renderEvidenceMarkdown(evidence)).not.toMatch(/^- reply : /m);
+  });
+
+  test("labels a failure group without a step as 未設定", async () => {
+    const { sql } = createRoutedSqlClient({
+      failures: [
+        {
+          flow_path: "f/factory/flow.ts",
+          step: null,
+          count: 2,
+          sample_error: "e",
+        },
+      ],
+    });
+    const evidence = await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(renderEvidenceMarkdown(evidence)).toContain(
+      "- f/factory/flow.ts 未設定: 2件",
+    );
+  });
+
+  test("labels a human outcome without a note as 未設定", async () => {
+    const { sql } = createRoutedSqlClient({
+      humanOutcomes: [{ to_status: "needs_human", note: "", count: 2 }],
+    });
+    const evidence = await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(renderEvidenceMarkdown(evidence)).toContain(
+      "- needs_human 未設定: 2件",
+    );
+  });
+});
+
+describe("unresolved notices split by period", () => {
+  const rows: SqlRow[] = [
+    {
+      key: "sha_mismatch",
+      bucket: "in_period",
+      count: 3,
+      oldest_created_at: "2026-09-22T00:00:00.000Z",
+    },
+    {
+      key: "host_action",
+      bucket: "in_period",
+      count: 1,
+      oldest_created_at: "2026-09-23T00:00:00.000Z",
+    },
+    {
+      key: "review_failed",
+      bucket: "before_period",
+      count: 5,
+      oldest_created_at: "2026-09-10T00:00:00.000Z",
+    },
+    {
+      key: "sha_mismatch",
+      bucket: "before_period",
+      count: 4,
+      oldest_created_at: "2026-09-12T00:00:00.000Z",
+    },
+  ];
+
+  async function evidenceWith(
+    noticeRows: SqlRow[],
+  ): Promise<{ evidence: AuditEvidence; calls: FakeCall[] }> {
+    const { sql, calls } = createRoutedSqlClient({
+      unresolvedNotices: noticeRows,
+    });
+    const evidence = await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    return { evidence, calls };
+  }
+
+  test("collects the in-period groups with their oldest creation time", async () => {
+    const { evidence } = await evidenceWith(rows);
+    expect(evidence.unresolved_notices_in_period).toEqual([
+      {
+        key: "sha_mismatch",
+        count: 3,
+        oldest_created_at: "2026-09-22T00:00:00.000Z",
+      },
+      {
+        key: "host_action",
+        count: 1,
+        oldest_created_at: "2026-09-23T00:00:00.000Z",
+      },
+    ]);
+  });
+
+  test("collects the groups that were already unresolved before the period", async () => {
+    const { evidence } = await evidenceWith(rows);
+    expect(
+      evidence.unresolved_notices_before_period.map((group) => group.key),
+    ).toEqual(["review_failed", "sha_mismatch"]);
+  });
+
+  test("renders the in-period unresolved count on its own line", async () => {
+    const { evidence } = await evidenceWith(rows);
+    expect(renderEvidenceMarkdown(evidence)).toContain(
+      "- 未解決(期間内に作成): 4件\n",
+    );
+  });
+
+  test("renders the carried-over unresolved count on its own line", async () => {
+    const { evidence } = await evidenceWith(rows);
+    expect(renderEvidenceMarkdown(evidence)).toContain(
+      "- 未解決(期間前から): 9件\n",
+    );
+  });
+
+  test("renders the kind breakdown of the carried-over notices with the oldest time", async () => {
+    const { evidence } = await evidenceWith(rows);
+    expect(renderEvidenceMarkdown(evidence)).toContain(
+      "- 未解決(期間前から) review_failed: 5件 / 最古 2026-09-10T00:00:00.000Z",
+    );
+  });
+
+  test("renders zero for both counts when nothing is unresolved", async () => {
+    const { evidence } = await evidenceWith([]);
+    expect(renderEvidenceMarkdown(evidence)).toContain(
+      "- 未解決(期間内に作成): 0件\n- 未解決(期間前から): 0件",
+    );
+  });
+
+  test("labels a notice kind that is missing as 未設定", async () => {
+    const { evidence } = await evidenceWith([
+      {
+        key: null,
+        bucket: "before_period",
+        count: 2,
+        oldest_created_at: "2026-09-10T00:00:00.000Z",
+      },
+    ]);
+    expect(evidence.unresolved_notices_before_period[0]?.key).toBe("未設定");
+  });
+
+  test("merges groups whose keys are both blank into one 未設定 group", async () => {
+    const { evidence } = await evidenceWith([
+      {
+        key: null,
+        bucket: "before_period",
+        count: 2,
+        oldest_created_at: "2026-09-12T00:00:00.000Z",
+      },
+      {
+        key: "",
+        bucket: "before_period",
+        count: 1,
+        oldest_created_at: "2026-09-10T00:00:00.000Z",
+      },
+    ]);
+    expect(evidence.unresolved_notices_before_period).toEqual([
+      {
+        key: "未設定",
+        count: 3,
+        oldest_created_at: "2026-09-10T00:00:00.000Z",
+      },
+    ]);
+  });
+
+  test("only counts notices created before the end of the period", async () => {
+    const { calls } = await evidenceWith([]);
+    expect(findCall(calls, "unresolvedNotices")?.values).toContain(
+      PERIOD.end.toISOString(),
+    );
+  });
+});
+
+const SHA_A = "aaaaaaa1111111111111111111111111aaaaaaaa";
+const SHA_B = "bbbbbbb2222222222222222222222222bbbbbbbb";
+const SHA_C = "ccccccc3333333333333333333333333cccccccc";
+
+const FAILURE_BASE: SqlRow = {
+  flow_path: "f/factory/flow.ts",
+  step: "s1",
+  count: 2,
+  sample_error: "boom",
+};
+
+async function renderWithFailure(extra: SqlRow, bounds?: SqlRow) {
+  const { sql } = createRoutedSqlClient({
+    failures: [{ ...FAILURE_BASE, ...extra }],
+    versionBounds: bounds === undefined ? [] : [bounds],
+  });
+  const evidence = await collectAuditEvidence(
+    { period: PERIOD, instanceName: "atelier-works" },
+    sql,
+  );
+  return renderEvidenceMarkdown(evidence);
+}
+
+describe("running version of each failure group", () => {
+  test("shows one short version when the failures all happened on it", async () => {
+    const markdown = await renderWithFailure({
+      first_sha: SHA_A,
+      last_sha: SHA_A,
+      unknown_version_count: 0,
+    });
+    expect(markdown).toContain(
+      "- f/factory/flow.ts s1: 2件 / 稼働版 aaaaaaa / 例: boom",
+    );
+  });
+
+  test("shows the first and last versions when the failures span a deployment", async () => {
+    const markdown = await renderWithFailure({
+      first_sha: SHA_A,
+      last_sha: SHA_B,
+      unknown_version_count: 0,
+    });
+    expect(markdown).toContain("稼働版 aaaaaaa → bbbbbbb");
+  });
+
+  test("shows 未設定 when no version could be derived", async () => {
+    const markdown = await renderWithFailure({
+      first_sha: null,
+      last_sha: null,
+      unknown_version_count: 2,
+    });
+    expect(markdown).toContain("稼働版 未設定");
+  });
+
+  test("states how many failures have no derivable version", async () => {
+    const markdown = await renderWithFailure({
+      first_sha: SHA_A,
+      last_sha: SHA_A,
+      unknown_version_count: 1,
+    });
+    expect(markdown).toContain("稼働版 aaaaaaa(版不明1件)");
+  });
+
+  test("flags a group whose last failure ran on a version before the period end", async () => {
+    const markdown = await renderWithFailure(
+      { first_sha: SHA_A, last_sha: SHA_A, unknown_version_count: 0 },
+      { start_sha: SHA_A, end_sha: SHA_B },
+    );
+    expect(markdown).toContain("期間末の版より前の版で発生");
+  });
+
+  test("does not flag a group that ran on the version at the period end", async () => {
+    const markdown = await renderWithFailure(
+      { first_sha: SHA_B, last_sha: SHA_B, unknown_version_count: 0 },
+      { start_sha: SHA_A, end_sha: SHA_B },
+    );
+    expect(markdown).not.toContain("期間末の版より前");
+  });
+
+  test("keeps the version before the sample error so the line cap cannot cut it", async () => {
+    const markdown = await renderWithFailure({
+      first_sha: SHA_A,
+      last_sha: SHA_A,
+      unknown_version_count: 0,
+      sample_error: "e".repeat(500),
+    });
+    expect(markdown).toContain("稼働版 aaaaaaa");
+  });
+
+  test("derives the version only from successful deployments", async () => {
+    const { sql, calls } = createRoutedSqlClient();
+    await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(findCall(calls, "failures")?.text).toContain("d.result = 'success'");
+  });
+
+  test("takes the last success at or before the failure time", async () => {
+    const { sql, calls } = createRoutedSqlClient();
+    await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(findCall(calls, "failures")?.text).toContain(
+      "d.occurred_at <= jf.occurred_at ORDER BY d.occurred_at DESC",
+    );
+  });
+
+  test("falls back to the first success strictly after the failure time", async () => {
+    const { sql, calls } = createRoutedSqlClient();
+    await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(findCall(calls, "failures")?.text).toContain(
+      "d.occurred_at > jf.occurred_at ORDER BY d.occurred_at ASC",
+    );
+  });
+
+  test("falls back to the version a later deployment came from", async () => {
+    const { sql, calls } = createRoutedSqlClient();
+    await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(findCall(calls, "failures")?.text).toContain("d.sha_from");
+  });
+});
+
+describe("deployment history and running versions", () => {
+  const historyRows: SqlRow[] = [
+    {
+      occurred_at: "2026-09-25T03:00:00.000Z",
+      sha_from: SHA_B,
+      sha_to: SHA_C,
+      result: "failed",
+    },
+    {
+      occurred_at: "2026-09-22T03:00:00.000Z",
+      sha_from: SHA_A,
+      sha_to: SHA_B,
+      result: "success",
+    },
+  ];
+
+  async function evidenceWithDeployments(
+    history: SqlRow[],
+    bounds: SqlRow[] = [],
+  ) {
+    const { sql, calls } = createRoutedSqlClient({
+      deploymentHistory: history,
+      versionBounds: bounds,
+    });
+    const evidence = await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    return { evidence, calls };
+  }
+
+  test("lists the deployments newest first so truncation drops the oldest", async () => {
+    const { evidence } = await evidenceWithDeployments(historyRows);
+    expect(evidence.deployment_history.map((entry) => entry.result)).toEqual([
+      "failed",
+      "success",
+    ]);
+  });
+
+  test("renders the newest deployment before the older one", async () => {
+    const { evidence } = await evidenceWithDeployments(historyRows);
+    const markdown = renderEvidenceMarkdown(evidence);
+    expect(
+      markdown.indexOf("2026-09-25T03:00:00.000Z") <
+        markdown.indexOf("2026-09-22T03:00:00.000Z"),
+    ).toBe(true);
+  });
+
+  test("fetches only the latest 30 deployments", async () => {
+    const { calls } = await evidenceWithDeployments([]);
+    expect(findCall(calls, "deploymentHistory")?.text).toContain("LIMIT 30");
+  });
+
+  test("reads the running versions at the period start and end", async () => {
+    const { evidence } = await evidenceWithDeployments(historyRows, [
+      { start_sha: SHA_A, end_sha: SHA_B },
+    ]);
+    expect([
+      evidence.running_version_at_start,
+      evidence.running_version_at_end,
+    ]).toEqual([SHA_A, SHA_B]);
+  });
+
+  test("derives the running versions from successful deployments only", async () => {
+    const { calls } = await evidenceWithDeployments([]);
+    expect(findCall(calls, "versionBounds")?.text).toContain(
+      "result = 'success'",
+    );
+  });
+
+  test("renders the running version at the period start as a fixed line", async () => {
+    const { evidence } = await evidenceWithDeployments(historyRows, [
+      { start_sha: SHA_A, end_sha: SHA_B },
+    ]);
+    expect(renderEvidenceMarkdown(evidence)).toContain(
+      "- 稼働版(期間の開始時点): aaaaaaa\n",
+    );
+  });
+
+  test("renders the running version at the period end as a fixed line", async () => {
+    const { evidence } = await evidenceWithDeployments(historyRows, [
+      { start_sha: SHA_A, end_sha: SHA_B },
+    ]);
+    expect(renderEvidenceMarkdown(evidence)).toContain(
+      "- 稼働版(期間の終了時点): bbbbbbb\n",
+    );
+  });
+
+  test("renders 未設定 for a running version that cannot be derived", async () => {
+    const { evidence } = await evidenceWithDeployments([]);
+    expect(renderEvidenceMarkdown(evidence)).toContain(
+      "- 稼働版(期間の開始時点): 未設定\n",
+    );
+  });
+
+  test("renders a successful deployment as a version change", async () => {
+    const { evidence } = await evidenceWithDeployments(historyRows);
+    expect(renderEvidenceMarkdown(evidence)).toContain(
+      "- 2026-09-22T03:00:00.000Z 成功 aaaaaaa → bbbbbbb",
+    );
+  });
+
+  test("renders a failed deployment as possibly half applied", async () => {
+    const { evidence } = await evidenceWithDeployments(historyRows);
+    expect(renderEvidenceMarkdown(evidence)).toContain(
+      "- 2026-09-25T03:00:00.000Z 失敗(記録上の稼働版は変わらない。途中まで反映した可能性がある) bbbbbbb → ccccccc",
+    );
+  });
+
+  test("renders 未設定 for a deployment without a source version", async () => {
+    const { evidence } = await evidenceWithDeployments([
+      {
+        occurred_at: "2026-09-22T03:00:00.000Z",
+        sha_from: null,
+        sha_to: SHA_B,
+        result: "success",
+      },
+    ]);
+    expect(renderEvidenceMarkdown(evidence)).toContain("成功 未設定 → bbbbbbb");
+  });
+
+  test("states how many older deployments the list leaves out", async () => {
+    const { evidence } = await evidenceWithDeployments(historyRows);
+    const capped: AuditEvidence = {
+      ...evidence,
+      deployments: [{ key: "success", count: 45 }],
+    };
+    expect(renderEvidenceMarkdown(capped)).toContain(
+      "- 一覧に含めない古いデプロイ: 43件",
+    );
+  });
+
+  test("derives the running versions with the same fallback at the period start and end", async () => {
+    const { calls } = await evidenceWithDeployments([]);
+    const text = findCall(calls, "versionBounds")?.text ?? "";
+    expect(text.split("SELECT sha_from").length - 1).toBe(2);
+  });
+
+  test("takes the last success before the period start, then the first at or after it", async () => {
+    const { calls } = await evidenceWithDeployments([]);
+    const text = findCall(calls, "versionBounds")?.text ?? "";
+    expect(
+      text.includes(
+        "occurred_at < ? ::timestamptz ORDER BY occurred_at DESC, id DESC LIMIT 1), (SELECT sha_from FROM factory.deployments WHERE result = 'success' AND occurred_at >= ? ::timestamptz ORDER BY occurred_at ASC, id ASC LIMIT 1) ) AS start_sha",
+      ),
+    ).toBe(true);
+  });
+
+  test("takes the last success before the period end, then the first at or after it", async () => {
+    const { calls } = await evidenceWithDeployments([]);
+    const text = findCall(calls, "versionBounds")?.text ?? "";
+    expect(
+      text.includes(
+        "occurred_at < ? ::timestamptz ORDER BY occurred_at DESC, id DESC LIMIT 1), (SELECT sha_from FROM factory.deployments WHERE result = 'success' AND occurred_at >= ? ::timestamptz ORDER BY occurred_at ASC, id ASC LIMIT 1) ) AS end_sha",
+      ),
+    ).toBe(true);
+  });
+
+  test("counts only successful deployments as needing a host action", async () => {
+    const { calls } = await evidenceWithDeployments([]);
+    const call = calls.find((c) => c.text.includes("AND needs_host_action"));
+    expect(call?.text).toContain("AND result = 'success'");
+  });
+
+  test("binds the period start and end twice each for the version bounds", async () => {
+    const { calls } = await evidenceWithDeployments([]);
+    expect(findCall(calls, "versionBounds")?.values).toEqual([
+      PERIOD.start.toISOString(),
+      PERIOD.start.toISOString(),
+      PERIOD.end.toISOString(),
+      PERIOD.end.toISOString(),
+    ]);
+  });
+
+  test("keeps the running version lines under truncation", () => {
+    const evidence: AuditEvidence = {
+      ...OVERLOADED_EVIDENCE,
+      running_version_at_start: SHA_A,
+      running_version_at_end: SHA_B,
+    };
+    expect(renderEvidenceMarkdown(evidence)).toContain(
+      "- 稼働版(期間の終了時点): bbbbbbb\n",
+    );
+  });
+});
+
+describe("worst-case size", () => {
+  const history = Array.from({ length: 30 }, (_, i) => ({
+    occurred_at: `2026-09-${String(26 - Math.floor(i / 4)).padStart(2, "0")}T${String(23 - (i % 4)).padStart(2, "0")}:00:00.000Z`,
+    sha_from: SHA_A,
+    sha_to: SHA_B,
+    result: i % 2 === 0 ? "success" : "failed",
+  }));
+  const newestDeployment = history[0]?.occurred_at ?? "";
+  const oldestDeployment = history[29]?.occurred_at ?? "";
+  const evidence: AuditEvidence = {
+    ...EMPTY_EVIDENCE,
+    failures: Array.from({ length: 30 }, (_, i) => ({
+      flow_path: `f/factory/flow-${i}-${"y".repeat(60)}`,
+      step: `step-${i}-${"s".repeat(60)}`,
+      count: 30 - i,
+      sample_error: "e".repeat(400),
+      first_sha: SHA_A,
+      last_sha: SHA_B,
+      unknown_version_count: 1,
+    })),
+    rejections: Array.from({ length: 30 }, (_, i) => ({
+      kind: "issue_proposal",
+      title: `title ${i} ${"t".repeat(100)}`,
+      reason: `reason ${i} ${"r".repeat(300)}`,
+      decided_at: "2026-09-21T00:00:00.000Z",
+    })),
+    human_outcomes: Array.from({ length: 30 }, (_, i) => ({
+      to_status: "needs_human",
+      note: `note ${i} ${"n".repeat(300)}`,
+      count: 30 - i,
+    })),
+    deployment_history: history,
+    deployments: [{ key: "success", count: 90 }],
+    running_version_at_start: SHA_A,
+    running_version_at_end: SHA_C,
+  };
+
+  test("the fixture's raw lines alone exceed 12,000 characters, so truncation must run", () => {
+    const rawLength = buildEvidenceSections(evidence)
+      .flatMap((section) => [...section.fixed, ...section.lines])
+      .reduce((total, line) => total + line.length, 0);
+    expect(rawLength).toBeGreaterThan(12000);
+  });
+
+  test("stays within 12,000 characters", () => {
+    expect(renderEvidenceMarkdown(evidence).length).toBeLessThanOrEqual(12000);
+  });
+
+  test("records the omitted rows", () => {
+    expect(renderEvidenceMarkdown(evidence)).toMatch(/- 省略\d+行/);
+  });
+
+  test("keeps the running version at the period end", () => {
+    expect(renderEvidenceMarkdown(evidence)).toContain(
+      "- 稼働版(期間の終了時点): ccccccc\n",
+    );
+  });
+
+  test("keeps the running version at the period start", () => {
+    expect(renderEvidenceMarkdown(evidence)).toContain(
+      "- 稼働版(期間の開始時点): aaaaaaa\n",
+    );
+  });
+
+  test("keeps the newest deployment row", () => {
+    expect(renderEvidenceMarkdown(evidence)).toContain(newestDeployment);
+  });
+
+  test("drops the oldest deployment row first", () => {
+    expect(renderEvidenceMarkdown(evidence)).not.toContain(oldestDeployment);
+  });
+});
+
+describe("truncation order", () => {
+  test("keeps the unresolved notice lines ahead of the period breakdown", () => {
+    const evidence: AuditEvidence = {
+      ...EMPTY_EVIDENCE,
+      notices: Array.from({ length: 400 }, (_, i) => ({
+        key: `kind-${i}-${"k".repeat(30)}`,
+        count: 1,
+      })),
+      unresolved_notices_before_period: [
+        {
+          key: "sha_mismatch",
+          count: 4,
+          oldest_created_at: "2026-09-10T00:00:00.000Z",
+        },
+      ],
+    };
+    expect(renderEvidenceMarkdown(evidence)).toContain(
+      "- 未解決(期間前から) sha_mismatch: 4件",
+    );
   });
 });
