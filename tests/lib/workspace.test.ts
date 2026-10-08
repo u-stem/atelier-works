@@ -1802,10 +1802,15 @@ describe("createGtrWorktree", () => {
 
 describe("ensureHeadOnBranch (real git)", () => {
   /** `git checkout -B`が、他のworktreeでcheckout中のブランチを拒むのはgit 2.43以降である。 */
+  // gitが無い環境でもファイル全体を壊さず、そのテストだけを飛ばす。
   const hostGitRefusesCheckedOutBranch = (() => {
-    const match = /git version (\d+)\.(\d+)/.exec(
-      Bun.spawnSync(["git", "--version"]).stdout.toString(),
-    );
+    let version: string;
+    try {
+      version = Bun.spawnSync(["git", "--version"]).stdout.toString();
+    } catch {
+      return false;
+    }
+    const match = /git version (\d+)\.(\d+)/.exec(version);
     if (match === null) return false;
     const major = Number(match[1]);
     const minor = Number(match[2]);
