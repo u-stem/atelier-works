@@ -97,11 +97,8 @@ export type ReviewerRequestReport = {
   readonly note: string | null;
   /** Discordで知らせる、再レビュー依頼のAPIの失敗。それ以外は`null`。 */
   readonly apiError: string | null;
-  /** noticeの種別。APIの失敗と、依頼先が無い想定内の場合で分ける。 */
-  readonly noticeKind:
-    | "pr_fix_reviewer_request_failed"
-    | "pr_fix_reviewer_request_skipped"
-    | null;
+  /** noticeの種別。noticeを残すのはAPIの失敗だけで、それ以外は`null`。 */
+  readonly noticeKind: "pr_fix_reviewer_request_failed" | null;
 };
 
 /**
@@ -109,9 +106,9 @@ export type ReviewerRequestReport = {
  * 無く(`default_reviewers`が空で、レビュー・コメントの書き手も無い)、
  * 依頼しなかったとき。
  * "failed"と"skipped_empty"は、GitHub上はどちらもレビュアーが依頼されないので、
- * 放っておくと痕跡が残らない。どちらも`note`に残すが、失敗の種別のnoticeと
- * Discordの通知は、実際のAPIエラーのときだけにする。依頼先が無い場合と、
- * 候補が全員除外された場合は想定内なので、別の種別のnoticeに残す。
+ * 放っておくと痕跡が残らない。どちらも`note`に残すが、noticeとDiscordの通知は、
+ * 人が代わりに依頼する必要があるAPIの失敗のときだけにする。依頼先が無い場合と、
+ * 候補が全員除外された場合は想定内で、することが無いので`note`だけに残す。
  */
 export function reportReviewerRequest(
   result: RequestReviewersResult | null,
@@ -120,7 +117,7 @@ export function reportReviewerRequest(
     return {
       note: "no reviewers to request (default_reviewers empty and no fallback reviewer authors)",
       apiError: null,
-      noticeKind: "pr_fix_reviewer_request_skipped",
+      noticeKind: null,
     };
   }
   if (result.outcome === "failed") {
@@ -134,17 +131,23 @@ export function reportReviewerRequest(
     return {
       note: "requested reviewers were all excluded (PR author / factory viewer)",
       apiError: null,
-      noticeKind: "pr_fix_reviewer_request_skipped",
+      noticeKind: null,
     };
   }
   return { note: null, apiError: null, noticeKind: null };
 }
 
+/** 再レビュー依頼のAPIの失敗を、`pr_fixed`通知の補足欄に載せる文にする。 */
+export function reviewerRequestFailedSupplement(apiError: string): string {
+  return `再レビュー依頼のAPI呼び出しに失敗しました: ${apiError}\nGitHubでレビュアーを手動で依頼してください。`;
+}
+
 /**
  * `reviewers`に再レビューを依頼する。依頼先からPRの作成者を除くため、先に
  * `loadAuthorLogin`でPRを読む。依頼先が無ければ何もせず`null`を返す。
- * 呼ぶのはpush・返信・記録が済んだ後なので、PRを読めなくても(rate limitなど)
- * 例外にせず、依頼のAPIの失敗(`outcome: "failed"`)として返す。
+ * 呼ぶのはpush・返信・記録が済んだ後なので、PRを読めなくても(rate limitなど)、
+ * 依頼が例外を投げても(Botや削除済みの作成者の名前など)例外にせず、
+ * 依頼のAPIの失敗(`outcome: "failed"`)として返す。
  */
 export async function requestRereview(
   reviewers: readonly string[],
@@ -164,7 +167,12 @@ export async function requestRereview(
       error: `could not load the PR: ${maskSecrets(message)}`,
     };
   }
-  return deps.request(authorLogin);
+  try {
+    return await deps.request(authorLogin);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { outcome: "failed", error: maskSecrets(message) };
+  }
 }
 
 /**
@@ -826,8 +834,8 @@ export async function main(
       ? config.default_reviewers
       : fallbackReviewers;
 
-  // レビュアー依頼の結果は、`work_items.status_reason`と`factory.notices`に残す
-  // (種別とDiscordへの通知の分け方は`reportReviewerRequest`を参照)。
+  // レビュアー依頼の結果は、`work_items.status_reason`に残す。APIの失敗だけは
+  // `factory.notices`とDiscordにも残す(分け方は`reportReviewerRequest`を参照)。
   // 修正自体はpushまで成功しており、影響はレビュアー依頼だけなので、
   // どの場合も作業項目は"rereview_requested"に進める。
   const reviewerReport = reportReviewerRequest(
@@ -842,21 +850,19 @@ export async function main(
         }),
     }),
   );
-  const reviewerNote = reviewerReport.note;
-  const reviewerApiError = reviewerReport.apiError;
 
   const moved = await updateStatusIfCurrent(
     work_item_id,
     "fixing",
     "rereview_requested",
-    reviewerNote,
+    reviewerReport.note,
   );
   if (moved) {
-    if (reviewerNote !== null && reviewerReport.noticeKind !== null) {
+    if (reviewerReport.note !== null && reviewerReport.noticeKind !== null) {
       try {
         await addNotice({
           kind: reviewerReport.noticeKind,
-          message: `${owner}/${repo}#${String(pr_number)} (work item ${String(work_item_id)}): ${reviewerNote}`,
+          message: `${owner}/${repo}#${String(pr_number)} (work item ${String(work_item_id)}): ${reviewerReport.note}`,
         });
       } catch (err) {
         log.warn("failed to record reviewer-request notice", {
@@ -877,8 +883,8 @@ export async function main(
           // ここに載せるのは再レビュー依頼のAPIの失敗だけ
           // (`reportReviewerRequest`を参照)。
           note:
-            reviewerApiError !== null
-              ? `再レビュー依頼のAPI呼び出しに失敗しました: ${reviewerApiError}`
+            reviewerReport.apiError !== null
+              ? reviewerRequestFailedSupplement(reviewerReport.apiError)
               : null,
         };
         await notify(webhookUrl, event);
@@ -890,5 +896,9 @@ export async function main(
     }
   }
 
-  return { ok: true, final_status: "rereview_requested", notice: reviewerNote };
+  return {
+    ok: true,
+    final_status: "rereview_requested",
+    notice: reviewerReport.note,
+  };
 }

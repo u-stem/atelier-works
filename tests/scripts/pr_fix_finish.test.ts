@@ -16,6 +16,7 @@ import {
 import {
   reportReviewerRequest,
   requestRereview,
+  reviewerRequestFailedSupplement,
 } from "../../f/factory/steps/pr_fix_finish.ts";
 import {
   buildReplyPostFailedNotice,
@@ -567,28 +568,30 @@ describe("renderFixReply", () => {
 });
 
 describe("reportReviewerRequest", () => {
-  test("records an API failure as the failed kind and notifies it", () => {
-    const report = reportReviewerRequest({
-      outcome: "failed",
-      error: "HTTP 422",
+  test("records an API failure as a failed notice and notifies it", () => {
+    expect(
+      reportReviewerRequest({ outcome: "failed", error: "HTTP 422" }),
+    ).toEqual({
+      note: "failed to request reviewers: HTTP 422",
+      apiError: "HTTP 422",
+      noticeKind: "pr_fix_reviewer_request_failed",
     });
-    expect(report.noticeKind).toBe("pr_fix_reviewer_request_failed");
-    expect(report.apiError).toBe("HTTP 422");
-    expect(report.note).toContain("HTTP 422");
   });
 
-  test("records no reviewer candidates as the skipped kind without notifying", () => {
-    const report = reportReviewerRequest(null);
-    expect(report.noticeKind).toBe("pr_fix_reviewer_request_skipped");
-    expect(report.apiError).toBeNull();
-    expect(report.note).toContain("no reviewers to request");
+  test("records no reviewer candidates only as a note, without a notice", () => {
+    expect(reportReviewerRequest(null)).toEqual({
+      note: "no reviewers to request (default_reviewers empty and no fallback reviewer authors)",
+      apiError: null,
+      noticeKind: null,
+    });
   });
 
-  test("records all candidates excluded as the skipped kind without notifying", () => {
-    const report = reportReviewerRequest({ outcome: "skipped_empty" });
-    expect(report.noticeKind).toBe("pr_fix_reviewer_request_skipped");
-    expect(report.apiError).toBeNull();
-    expect(report.note).toContain("all excluded");
+  test("records all candidates excluded only as a note, without a notice", () => {
+    expect(reportReviewerRequest({ outcome: "skipped_empty" })).toEqual({
+      note: "requested reviewers were all excluded (PR author / factory viewer)",
+      apiError: null,
+      noticeKind: null,
+    });
   });
 
   test("records nothing when the reviewers were requested", () => {
@@ -598,59 +601,105 @@ describe("reportReviewerRequest", () => {
   });
 });
 
+describe("reviewerRequestFailedSupplement", () => {
+  test("includes the API error", () => {
+    expect(reviewerRequestFailedSupplement("HTTP 500")).toContain("HTTP 500");
+  });
+
+  test("tells the human to request reviewers manually on GitHub", () => {
+    expect(reviewerRequestFailedSupplement("HTTP 500")).toContain(
+      "GitHubでレビュアーを手動で依頼してください。",
+    );
+  });
+});
+
 describe("requestRereview", () => {
-  const requested = async (): Promise<{
-    outcome: "requested";
-    reviewers: string[];
-  }> => ({
+  const requestedFor = async (
+    authorLogin: string,
+  ): Promise<{ outcome: "requested"; reviewers: string[] }> => ({
     outcome: "requested",
-    reviewers: ["alice"],
+    reviewers: [authorLogin],
   });
 
   test("does nothing when there is no reviewer to request", async () => {
-    let loaded = false;
     const result = await requestRereview([], {
+      loadAuthorLogin: async () => "bob",
+      request: requestedFor,
+    });
+    expect(result).toBeNull();
+  });
+
+  test("does not load the PR when there is no reviewer to request", async () => {
+    let loaded = false;
+    await requestRereview([], {
       loadAuthorLogin: async () => {
         loaded = true;
         return "bob";
       },
-      request: requested,
+      request: requestedFor,
     });
-    expect(result).toBeNull();
     expect(loaded).toBe(false);
   });
 
   test("requests the reviewers with the PR author it loaded", async () => {
-    const authors: string[] = [];
     const result = await requestRereview(["alice"], {
       loadAuthorLogin: async () => "bob",
-      request: async (authorLogin) => {
-        authors.push(authorLogin);
-        return requested();
-      },
+      request: requestedFor,
     });
-    expect(authors).toEqual(["bob"]);
-    expect(result?.outcome).toBe("requested");
+    expect(result).toEqual({ outcome: "requested", reviewers: ["bob"] });
   });
 
   test("reports a failure to load the PR as an API failure instead of throwing", async () => {
-    let requestedCount = 0;
     const result = await requestRereview(["alice"], {
       loadAuthorLogin: async () => {
         throw new Error("rate limited");
       },
-      request: async () => {
-        requestedCount++;
-        return requested();
-      },
+      request: requestedFor,
     });
-    expect(requestedCount).toBe(0);
     expect(result).toEqual({
       outcome: "failed",
       error: "could not load the PR: rate limited",
     });
-    expect(reportReviewerRequest(result).noticeKind).toBe(
-      "pr_fix_reviewer_request_failed",
-    );
+  });
+
+  test("does not request the reviewers when the PR could not be loaded", async () => {
+    let requestedCount = 0;
+    await requestRereview(["alice"], {
+      loadAuthorLogin: async () => {
+        throw new Error("rate limited");
+      },
+      request: async (authorLogin) => {
+        requestedCount++;
+        return requestedFor(authorLogin);
+      },
+    });
+    expect(requestedCount).toBe(0);
+  });
+
+  test("reports a thrown request as an API failure instead of throwing", async () => {
+    const result = await requestRereview(["alice"], {
+      loadAuthorLogin: async () => "dependabot[bot]",
+      request: async () => {
+        throw new Error("invalid GitHub name: dependabot[bot]");
+      },
+    });
+    expect(result).toEqual({
+      outcome: "failed",
+      error: "invalid GitHub name: dependabot[bot]",
+    });
+  });
+
+  test("masks secrets in the error of a thrown request", async () => {
+    const token = `ghp_${"a".repeat(36)}`;
+    const result = await requestRereview(["alice"], {
+      loadAuthorLogin: async () => "bob",
+      request: async () => {
+        throw new Error(`request failed with ${token}`);
+      },
+    });
+    expect(result).toEqual({
+      outcome: "failed",
+      error: "request failed with ***",
+    });
   });
 });
