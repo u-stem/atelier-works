@@ -14,6 +14,7 @@
 // headless Claudeプロセスを孤立とみなすのは、`claude_timeout_sec`と
 // `implement_timeout_sec`の長い方に猶予を足した時間を過ぎたものだけ。
 // プロセスのロックがまだ持たれているか、そのロックの下で起動されたプロセスが残っているworktreeは消さない。
+// 掃除したリポジトリでは、worktreeが無くなったロックファイルも、ロックを取ったまま消す(`removeOrphanLockFiles`)。
 
 import * as wmill from "windmill-client@1.817.0";
 import {
@@ -21,6 +22,7 @@ import {
   formatDiskUsageMessage,
   groupByRepo,
   issueWorktreePaths,
+  lockFileDirs,
   mainRepoDir,
   orphanClaudeThresholdSec,
   parseDiskUsageKb,
@@ -36,7 +38,9 @@ import { type GhClient, getPr } from "./lib/github.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import {
   defaultLockReleaseDeps,
+  defaultOrphanLockFileDeps,
   ensureWorktreeLockFree,
+  removeOrphanLockFiles,
   WorktreeBusyError,
   worktreeLockFor,
 } from "./lib/process_lock.ts";
@@ -62,6 +66,11 @@ const WORKSPACES_ROOT = "/workspaces";
 // pr_review種別は`review-*`、pr_fix種別はgtrのブランチのworktree)
 // ---------------------------------------------------------------------------
 
+type RemovedCounts = {
+  readonly worktrees: number;
+  readonly lockFiles: number;
+};
+
 async function removeStaleWorktreesForRepo(
   owner: string,
   repo: string,
@@ -69,10 +78,10 @@ async function removeStaleWorktreesForRepo(
   ghClient: GhClient,
   holders: readonly WorktreeHolder[],
   log: Logger,
-): Promise<number> {
+): Promise<RemovedCounts> {
   const repoDir = mainRepoDir(owner, repo);
   if (!(await pathExists(repoDir))) {
-    return 0;
+    return { worktrees: 0, lockFiles: 0 };
   }
 
   let worktrees: WorktreeEntry[];
@@ -84,7 +93,7 @@ async function removeStaleWorktreesForRepo(
       repo,
       error: maskSecrets(err instanceof Error ? err.message : String(err)),
     });
-    return 0;
+    return { worktrees: 0, lockFiles: 0 };
   }
 
   const removedDirs = new Set<string>();
@@ -173,7 +182,50 @@ async function removeStaleWorktreesForRepo(
     });
   }
 
-  return removedDirs.size;
+  // 消す前の一覧から親を集めるので、いま消したworktreeのロックファイルも対象になる。
+  const removedLockFiles = await removeOrphanLockFilesForRepo(
+    owner,
+    repo,
+    lockFileDirs(repoDir, worktrees),
+    log,
+  );
+
+  return { worktrees: removedDirs.size, lockFiles: removedLockFiles };
+}
+
+/**
+ * `dirs`で、worktreeが無くなったロックファイルを消し、消した数を返す。
+ * 消せなかったものは警告に残し、関係するプロセスがいたものとロックの下での確かめに通らなかったものは情報として残す。
+ */
+async function removeOrphanLockFilesForRepo(
+  owner: string,
+  repo: string,
+  dirs: readonly string[],
+  log: Logger,
+): Promise<number> {
+  const outcomes = await removeOrphanLockFiles(
+    dirs,
+    defaultOrphanLockFileDeps(runCommand),
+  );
+  for (const outcome of outcomes) {
+    if (outcome.result === "removed") continue;
+    const fields = {
+      owner,
+      repo,
+      path: outcome.path,
+      result: outcome.result,
+      detail: outcome.detail,
+    };
+    if (outcome.result === "failed") {
+      log.warn(
+        "cleanup: failed to remove an orphaned process lock file",
+        fields,
+      );
+    } else {
+      log.info("cleanup: kept an orphaned process lock file", fields);
+    }
+  }
+  return outcomes.filter((outcome) => outcome.result === "removed").length;
 }
 
 /**
@@ -228,7 +280,7 @@ async function activeWorktreeHolders(
 }
 
 /**
- * 古いitemのworktreeをリポジトリごとに掃除し、削除した数を返す。
+ * 古いitemのworktreeをリポジトリごとに掃除し、削除したworktreeとロックファイルの数を返す。
  * 進行中の持ち主は、古いitemがあるときだけ一覧にする。
  * 持ち主を解決できないリポジトリは飛ばし、その名前を載せたnoticeを1件残す。
  */
@@ -236,8 +288,8 @@ async function removeStaleWorktrees(
   staleItems: readonly WorkItem[],
   ghToken: string,
   log: Logger,
-): Promise<number> {
-  if (staleItems.length === 0) return 0;
+): Promise<RemovedCounts> {
+  if (staleItems.length === 0) return { worktrees: 0, lockFiles: 0 };
   const ghClient: GhClient = { run: runCommand, ghToken };
   const { holders, unresolved } = await activeWorktreeHolders(ghClient, log);
   const { sweep, skipped } = partitionRepoGroups(
@@ -258,9 +310,10 @@ async function removeStaleWorktrees(
       });
     }
   }
-  let removed = 0;
+  let worktrees = 0;
+  let lockFiles = 0;
   for (const group of sweep) {
-    removed += await removeStaleWorktreesForRepo(
+    const removed = await removeStaleWorktreesForRepo(
       group.owner,
       group.repo,
       group.items,
@@ -268,8 +321,10 @@ async function removeStaleWorktrees(
       holders,
       log,
     );
+    worktrees += removed.worktrees;
+    lockFiles += removed.lockFiles;
   }
-  return removed;
+  return { worktrees, lockFiles };
 }
 
 // ---------------------------------------------------------------------------
@@ -326,6 +381,7 @@ async function recordDiskUsage(log: Logger): Promise<number> {
 
 export type CleanupWorkspacesResult = {
   readonly removed_worktrees: number;
+  readonly removed_lock_files: number;
   readonly terminated_claude_processes: number;
   readonly killed_claude_processes: number;
   readonly disk_usage_kb: number;
@@ -342,7 +398,7 @@ export async function main(): Promise<CleanupWorkspacesResult> {
     Date.now() - config.worktree_ttl_days * 24 * 60 * 60 * 1000,
   );
   const staleItems = await listStaleTerminalWorkItems(cutoff);
-  const removedWorktrees = await removeStaleWorktrees(staleItems, ghToken, log);
+  const removed = await removeStaleWorktrees(staleItems, ghToken, log);
 
   const claudeResult = await terminateOrphanClaudeProcesses(
     orphanClaudeThresholdSec(config),
@@ -352,7 +408,8 @@ export async function main(): Promise<CleanupWorkspacesResult> {
   const diskUsageKb = await recordDiskUsage(log);
 
   const result: CleanupWorkspacesResult = {
-    removed_worktrees: removedWorktrees,
+    removed_worktrees: removed.worktrees,
+    removed_lock_files: removed.lockFiles,
     terminated_claude_processes: claudeResult.terminated,
     killed_claude_processes: claudeResult.killed,
     disk_usage_kb: diskUsageKb,

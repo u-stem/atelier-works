@@ -4,6 +4,7 @@ import {
   formatDiskUsageMessage,
   groupByRepo,
   issueWorktreePaths,
+  lockFileDirs,
   mainRepoDir,
   orphanClaudeThresholdSec,
   parseDiskUsageKb,
@@ -383,5 +384,34 @@ describe("unresolvedHoldersNoticeMessage", () => {
     expect(unresolvedHoldersNoticeMessage("acme", "widgets")).toContain(
       "acme/widgets",
     );
+  });
+});
+
+describe("lockFileDirs", () => {
+  const REPO_DIR = "/workspaces/acme/widgets/main";
+  const entry = (path: string) => ({
+    path,
+    headSha: "abc1234",
+    branch: null,
+    bare: false,
+    detached: true,
+  });
+
+  test("includes the directory that holds the main clone", () => {
+    expect(lockFileDirs(REPO_DIR, [])).toEqual(["/workspaces/acme/widgets"]);
+  });
+
+  test("includes the parent of each listed worktree once", () => {
+    expect(
+      lockFileDirs(REPO_DIR, [
+        entry(REPO_DIR),
+        entry("/workspaces/acme/widgets/req-4"),
+        entry("/workspaces/acme/widgets/main-worktrees/fix-a"),
+        entry("/workspaces/acme/widgets/main-worktrees/fix-b"),
+      ]),
+    ).toEqual([
+      "/workspaces/acme/widgets",
+      "/workspaces/acme/widgets/main-worktrees",
+    ]);
   });
 });

@@ -4,7 +4,7 @@
 // 次の実行はworktreeに触れる前にロックが空いているかを確かめ、塞がっていれば保持者を/procから特定する。
 
 import { realpathSync } from "node:fs";
-import { readdir, readFile, stat } from "node:fs/promises";
+import { lstat, readdir, readFile, realpath, stat } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { maskSecrets } from "./log.ts";
 import type { CommandResult, CommandRunner } from "./workspace.ts";
@@ -12,6 +12,9 @@ import type { CommandResult, CommandRunner } from "./workspace.ts";
 /** workerのイメージ(Debian)のutil-linuxが入れるflock。PATHに頼らず絶対パスで呼ぶ。 */
 export const FLOCK_PATH = "/usr/bin/flock";
 export const TRUE_PATH = "/usr/bin/true";
+export const SH_PATH = "/bin/sh";
+export const STAT_PATH = "/usr/bin/stat";
+export const RM_PATH = "/usr/bin/rm";
 
 /**
  * ロックが取れなかったときにflockが返す終了コード(`--conflict-exit-code`)。
@@ -68,7 +71,8 @@ export type WorktreeLock = {
  * 親ディレクトリは実体のパス(realpath)にし、シンボリックリンク経由の別名で別のロックファイルを作らない。
  * `worktreeDir`が正規化された絶対パスでないとき、名前が空(ルート)か`.`で始まるときは例外を投げる。親が無いときもrealpathの例外がそのまま出る。
  * `.`で始まる名前を拒むのは、worktreeのディレクトリが隣のロックファイルと同じ名前にならないようにするためである。
- * ロックファイルは意図して削除しない。保持者が開いている間に消すと、次の実行が同じパスに新しいファイルを作ってロックを取れてしまい、古い保持者を排他できなくなるため。
+ * ロックファイルは使っている間は削除しない。保持者が開いている間に消すと、次の実行が同じパスに新しいファイルを作ってロックを取れてしまい、古い保持者を排他できなくなるため。
+ * 削除するのは、worktreeが無くなったロックファイルを掃除がロックを取ったまま消す`removeOrphanLockFiles`だけである。
  */
 export function worktreeLockFor(
   worktreeDir: string,
@@ -304,6 +308,79 @@ export async function probeWorktreeLock(opts: {
   if (result.exitCode === 0) return "free";
   throw new Error(
     `flock probe failed for ${opts.lock.lockPath} (exit ${String(result.exitCode)}): ${maskSecrets(result.stderr.trim())}`,
+  );
+}
+
+/** ロックファイルを消すシェルの終了コード。`WORKTREE_LOCK_BUSY_EXIT_CODE`と同じく、シグナル・sysexits・シェルの値と重ならない値にする。 */
+const REMOVAL_WORKTREE_EXISTS_EXIT_CODE = 214;
+const REMOVAL_REPLACED_EXIT_CODE = 215;
+const REMOVAL_NOT_LOCK_FILE_EXIT_CODE = 216;
+
+/**
+ * ロックを取ったままロックファイルを消すシェルのスクリプト。`$1`はworktree、`$2`はロックファイルのパス。
+ * 空の通常ファイル(シンボリックリンクでない)だけを作らずに開き、そのfdで待たずにロックを取る(取れなければ213)。
+ * ロックを持ったまま、パスが今も開いたファイルと同じdev/inoであること(違えば215)と、worktreeが無いこと(あれば214)を確かめ、rmに置き換わって消す。
+ * fd 9はrmに受け継がれるので、ロックは消し終わるまで放さない。
+ * flockに任せずにfdを開くのは、ファイルを作らず、ロックしたファイルとパスの指すファイルを比べるためである。
+ */
+const REMOVE_LOCK_FILE_SCRIPT = [
+  `[ -f "$2" ] && [ ! -L "$2" ] && [ ! -s "$2" ] || exit ${String(REMOVAL_NOT_LOCK_FILE_EXIT_CODE)}`,
+  `exec 9<"$2"`,
+  `${FLOCK_PATH} --nonblock --conflict-exit-code ${String(WORKTREE_LOCK_BUSY_EXIT_CODE)} 9 || exit $?`,
+  `[ "$(${STAT_PATH} -L -c %d:%i /proc/self/fd/9)" = "$(${STAT_PATH} -c %d:%i -- "$2")" ] || exit ${String(REMOVAL_REPLACED_EXIT_CODE)}`,
+  `if [ -e "$1" ] || [ -L "$1" ]; then exit ${String(REMOVAL_WORKTREE_EXISTS_EXIT_CODE)}; fi`,
+  `exec ${RM_PATH} -f -- "$2"`,
+].join("\n");
+
+/** ロックを取ったままロックファイルを消すシェルのargv。パスはスクリプトに埋め込まず、位置引数で渡す。 */
+export function removeLockFileArgv(lock: WorktreeLock): string[] {
+  return [
+    SH_PATH,
+    "-c",
+    REMOVE_LOCK_FILE_SCRIPT,
+    "sh",
+    lock.worktreeDir,
+    lock.lockPath,
+  ];
+}
+
+/** 削除のシェルがexecで置き換わった後のrmのコマンドライン。 */
+function removalRmCommand(lock: WorktreeLock): string {
+  return [RM_PATH, "-f", "--", lock.lockPath].join(" ");
+}
+
+/**
+ * ロックファイルを消そうとした結果。
+ * "held"はロックが持たれていた、"worktree_exists"はロックを取った時点でworktreeがあった、
+ * "replaced"はパスがロックしたファイルと別のファイルを指していた、"not_lock_file"はパスが空の通常ファイルでなかった(無くなった場合を含む)。
+ */
+export type LockFileRemoval =
+  | "removed"
+  | "held"
+  | "worktree_exists"
+  | "replaced"
+  | "not_lock_file";
+
+/**
+ * ロックファイルを、待たずにロックを取れたときだけ、ロックを持ったまま消す。worktreeが無いことはロックを持った状態で確かめ直す。
+ * 消す前の確かめに通らなければ消さずに理由を返し、シェル自体が失敗すれば例外を投げる。
+ * ロックを持ったまま確かめ直すのは、worktreeを作った実行が古いファイルを開いたままロックを取るのを防ぐためである。
+ * 実行はworktreeを作ってからロックを確かめるので、確かめ直しの時点でworktreeが無ければ、それより後に確かめる実行はこのロックが放された後(消した後)に新しいファイルを開く。
+ */
+export async function removeLockFileUnderLock(opts: {
+  readonly run: CommandRunner;
+  readonly lock: WorktreeLock;
+}): Promise<LockFileRemoval> {
+  const result = await opts.run(removeLockFileArgv(opts.lock));
+  if (isLockConflict(result)) return "held";
+  if (result.exitCode === 0) return "removed";
+  if (result.exitCode === REMOVAL_WORKTREE_EXISTS_EXIT_CODE)
+    return "worktree_exists";
+  if (result.exitCode === REMOVAL_REPLACED_EXIT_CODE) return "replaced";
+  if (result.exitCode === REMOVAL_NOT_LOCK_FILE_EXIT_CODE)
+    return "not_lock_file";
+  throw new Error(
+    `lock file removal failed for ${opts.lock.lockPath} (exit ${String(result.exitCode)}): ${maskSecrets(result.stderr.trim())}`,
   );
 }
 
@@ -674,34 +751,54 @@ export function defaultLockReleaseDeps(
   };
 }
 
-/** タグを持たずにこのロックを持つ、このロックの確かめ(`probeWorktreeLock`)のflockかを返す。 */
-function isProbeOf(holder: LockProcess, lock: WorktreeLock): boolean {
+/** タグを持たずにこのロックを持ち、コマンドラインが`command`と一致するプロセスかを返す。 */
+function isUntaggedHolderRunning(
+  holder: LockProcess,
+  command: string,
+): boolean {
   return (
     holder.holdsLock &&
     !holder.uninspectable &&
     holder.owner === null &&
     holder.lockPath === null &&
-    holder.command === probeArgv(lock).join(" ")
+    holder.command === command
   );
 }
 
+/** このロックの確かめ(`probeWorktreeLock`)のflockかを返す。 */
+function isProbeOf(holder: LockProcess, lock: WorktreeLock): boolean {
+  return isUntaggedHolderRunning(holder, probeArgv(lock).join(" "));
+}
+
+/** このロックファイルを消すシェル(`removeLockFileUnderLock`。分岐したサブシェルも同じコマンドラインを持つ)かを返す。 */
+function isRemovalOf(holder: LockProcess, lock: WorktreeLock): boolean {
+  return isUntaggedHolderRunning(holder, removeLockFileArgv(lock).join(" "));
+}
+
 /**
- * 保持者がすべて、別の実行による一瞬の確かめ(flockと、それがロックを持ったまま起動した`true`)かを返す。
+ * 保持者がすべて、別の実行による一瞬の確かめかロックファイルの削除かを返す。
+ * 確かめはflockと、それがロックを持ったまま起動した`true`からなる。
+ * 削除はシェルと、それがロックを持ったまま起動したコマンド(flock・stat)と、シェルが置き換わったrmからなる。
  * 掃除やpr_fixの準備の確かめと走査が重なっただけで、needs_humanにしないために使う。
  */
 function onlyProbes(
   holders: readonly LockProcess[],
   lock: WorktreeLock,
 ): boolean {
+  const childOf = (
+    holder: LockProcess,
+    isParent: (parent: LockProcess) => boolean,
+  ): boolean =>
+    holders.some((parent) => parent.pid === holder.ppid && isParent(parent));
   return holders.every(
     (holder) =>
       isProbeOf(holder, lock) ||
-      (holder.holdsLock &&
-        holder.owner === null &&
-        holder.command === TRUE_PATH &&
-        holders.some(
-          (parent) => parent.pid === holder.ppid && isProbeOf(parent, lock),
-        )),
+      isRemovalOf(holder, lock) ||
+      isUntaggedHolderRunning(holder, removalRmCommand(lock)) ||
+      (isUntaggedHolderRunning(holder, TRUE_PATH) &&
+        childOf(holder, (parent) => isProbeOf(parent, lock))) ||
+      (isUntaggedHolderRunning(holder, holder.command) &&
+        childOf(holder, (parent) => isRemovalOf(parent, lock))),
   );
 }
 
@@ -790,4 +887,124 @@ export async function ensureWorktreeLockFree(opts: {
     plan = await scanAndPlan({ lock: opts.lock, self, deps: opts.deps });
   }
   throw new WorktreeBusyError(plan.kind === "stop" ? plan.targets : []);
+}
+
+/** `worktreeLockFor`が作る名前(`.<worktreeの名前>.process.lock`)なら、worktreeの名前を返す。違えばnull。 */
+export function worktreeNameOfLockFile(fileName: string): string | null {
+  const name = /^\.(.+)\.process\.lock$/su.exec(fileName)?.[1];
+  if (name === undefined || name.startsWith(".") || name.includes("/"))
+    return null;
+  return name;
+}
+
+export type OrphanLockFileDeps = {
+  readonly realpath: (path: string) => Promise<string>;
+  readonly listDir: (dir: string) => Promise<readonly string[]>;
+  /** パスをlstatで調べる(シンボリックリンクはたどらない)。無ければ"missing"、空の通常ファイルなら"empty_file"。 */
+  readonly entryKind: (
+    path: string,
+  ) => Promise<"missing" | "empty_file" | "other">;
+  readonly scan: (lock: WorktreeLock) => Promise<readonly LockProcess[]>;
+  readonly remove: (lock: WorktreeLock) => Promise<LockFileRemoval>;
+};
+
+/** 実際のファイルシステム、`/proc`の走査、`removeLockFileUnderLock`を束ねた既定の依存を返す。 */
+export function defaultOrphanLockFileDeps(
+  run: CommandRunner,
+): OrphanLockFileDeps {
+  return {
+    realpath: (path) => realpath(path),
+    listDir: (dir) => readdir(dir),
+    entryKind: async (path) => {
+      try {
+        const found = await lstat(path);
+        return found.isFile() && found.size === 0 ? "empty_file" : "other";
+      } catch (err) {
+        if (isGoneError(err)) return "missing";
+        throw err;
+      }
+    },
+    scan: (lock) => scanLockProcesses(lock),
+    remove: (lock) => removeLockFileUnderLock({ run, lock }),
+  };
+}
+
+export type OrphanLockOutcome = {
+  /** ロックファイルのパス。ディレクトリを読めなかったときはディレクトリのパス。 */
+  readonly path: string;
+  /** "in_use"は関係するプロセスがいて消さなかった、"failed"は調べるか消すのに失敗した。 */
+  readonly result: LockFileRemoval | "in_use" | "failed";
+  /** "in_use"なら関係するプロセス、"failed"ならエラーの内容。それ以外はnull。 */
+  readonly detail: string | null;
+};
+
+function errorText(err: unknown): string {
+  return maskSecrets(err instanceof Error ? err.message : String(err));
+}
+
+/** worktreeが無いロックファイル1つを、条件を満たせば消す。候補でなければnullを返す。 */
+async function removeOrphanLockFile(
+  lock: WorktreeLock,
+  deps: OrphanLockFileDeps,
+): Promise<OrphanLockOutcome | null> {
+  if ((await deps.entryKind(lock.lockPath)) !== "empty_file") return null;
+  if ((await deps.entryKind(lock.worktreeDir)) !== "missing") return null;
+  const plan = planLockRelease(await deps.scan(lock), lock, null);
+  if (plan.kind !== "none") {
+    return {
+      path: lock.lockPath,
+      result: "in_use",
+      detail: plan.kind === "busy" ? formatLockHolders(plan.holders) : null,
+    };
+  }
+  return { path: lock.lockPath, result: await deps.remove(lock), detail: null };
+}
+
+/**
+ * `dirs`の各ディレクトリ(realpathにしたもの)の直下で、worktreeが無くなったロックファイルを消し、消したか消さなかった結果を返す。
+ * 対象は`worktreeLockFor`が作る名前の空の通常ファイル(シンボリックリンクでない)で、隣に同じ名前のworktreeが無いものだけである。
+ * `/proc`を走査し、保持者・このロックファイルのタグを持つプロセス・調べられないプロセスがいれば消さない(`planLockRelease`)。
+ * 消すのは`removeLockFileUnderLock`で、待たずにロックを取れたときだけ、ロックを持ったまま消す。
+ * 無いディレクトリは飛ばす。1つの失敗で他を止めず、"failed"として返す。
+ * ロックファイルを消してよいのは、タグでの探索がパスで行われ(消した後も残りを見つけられる)、消す時点でそのファイルのロックを持つプロセスがいないためである。
+ */
+export async function removeOrphanLockFiles(
+  dirs: readonly string[],
+  deps: OrphanLockFileDeps,
+): Promise<OrphanLockOutcome[]> {
+  const outcomes: OrphanLockOutcome[] = [];
+  const seen = new Set<string>();
+  for (const dir of dirs) {
+    let realDir: string;
+    let names: readonly string[];
+    try {
+      realDir = await deps.realpath(dir);
+      if (seen.has(realDir)) continue;
+      seen.add(realDir);
+      names = await deps.listDir(realDir);
+    } catch (err) {
+      if (!isGoneError(err))
+        outcomes.push({ path: dir, result: "failed", detail: errorText(err) });
+      continue;
+    }
+    for (const name of [...names].sort()) {
+      const worktreeName = worktreeNameOfLockFile(name);
+      if (worktreeName === null) continue;
+      const lockPath = join(realDir, name);
+      try {
+        const outcome = await removeOrphanLockFile(
+          worktreeLockFor(join(realDir, worktreeName), () => realDir),
+          deps,
+        );
+        if (outcome !== null) outcomes.push(outcome);
+      } catch (err) {
+        outcomes.push({
+          path: lockPath,
+          result: "failed",
+          detail: errorText(err),
+        });
+      }
+    }
+  }
+  return outcomes;
 }
