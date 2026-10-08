@@ -1,7 +1,6 @@
 // 要件定義のpipelineフローが、作業項目を書き換えてよい実行かを判定する。
 // 作業項目の`flow_job_id`に起動側が記録したジョブIDを、pipelineのリースとして扱う。
 
-import { parseFlowJobId } from "./implement_launch_support.ts";
 import { TERMINAL_WORK_ITEM_STATUSES, type WorkItem } from "./types.ts";
 
 /** pipelineのステップがリースを持っていないときの理由。ステップは何も変えずに終わるので、人への通知には使わない。 */
@@ -18,17 +17,6 @@ export const PIPELINE_LEASE_WAIT_MS = 60_000;
 export const PIPELINE_LEASE_POLL_MS = 2_000;
 
 type LeaseFields = Pick<WorkItem, "status" | "flow_job_id">;
-
-/**
- * リースの値にするpipelineフロー自身のジョブID(`WM_ROOT_FLOW_JOB_ID`)を返す。
- * `runFlowAsync`は親ジョブを付けずに起動するので、この値は起動側が記録する戻り値と一致する。
- * 未設定・空・UUIDでない(フローの外で実行した)ときは例外を投げる。
- */
-export function pipelineLeaseJobId(
-  env: Readonly<Record<string, string | undefined>>,
-): string {
-  return parseFlowJobId(env.WM_ROOT_FLOW_JOB_ID ?? "", "WM_ROOT_FLOW_JOB_ID");
-}
 
 /**
  * 作業項目が終端でなく、`flow_job_id`が`jobId`のときだけ`true`を返す。
@@ -72,11 +60,10 @@ export type AwaitPipelineLeaseDeps<T extends LeaseFields> = {
   readonly pollMs: number;
 };
 
-export type AwaitPipelineLeaseResult<T extends LeaseFields> = {
-  readonly held: boolean;
-  /** 最後に読んだ作業項目。`held`が`true`なら、リースを確かめた時点の値。 */
-  readonly item: T | null;
-};
+/** `held`が`true`なら`item`はリースを確かめた時点の作業項目、`false`なら最後に読んだ作業項目(無ければnull)。 */
+export type AwaitPipelineLeaseResult<T extends LeaseFields> =
+  | { readonly held: true; readonly item: T }
+  | { readonly held: false; readonly item: T | null };
 
 /**
  * 作業項目を読み直し、`flow_job_id`に`jobId`が記録されるのを`timeoutMs`まで待つ(`checkPipelineLease`)。
@@ -95,7 +82,8 @@ export async function awaitPipelineLease<T extends LeaseFields>(
       deps.now() - startedAt,
       deps.timeoutMs,
     );
-    if (check !== "wait") return { held: check === "held", item };
+    if (check === "held" && item !== null) return { held: true, item };
+    if (check !== "wait") return { held: false, item };
     await deps.sleep(deps.pollMs);
   }
 }

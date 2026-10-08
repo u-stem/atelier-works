@@ -13,17 +13,17 @@ import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "../lib/config.ts";
 import {
   getWorkItem,
-  setAttempt,
+  setAttemptIfLeaseHolder,
   updateStatusIfLeaseHolder,
 } from "../lib/db.ts";
 import { type GhClient, getIssue } from "../lib/github.ts";
+import { rootFlowJobId } from "../lib/implement_launch_support.ts";
 import { logger } from "../lib/log.ts";
 import {
   awaitPipelineLease,
   PIPELINE_LEASE_LOST_REASON,
   PIPELINE_LEASE_POLL_MS,
   PIPELINE_LEASE_WAIT_MS,
-  pipelineLeaseJobId,
 } from "../lib/pipeline_lease.ts";
 import type { WorkItemStatus } from "../lib/types.ts";
 import { TERMINAL_WORK_ITEM_STATUSES } from "../lib/types.ts";
@@ -135,7 +135,7 @@ function movedOn(
  * 記録を`PIPELINE_LEASE_WAIT_MS`まで待っても確かめられなければ、何も書かずに`skip`を返す。
  * 失敗扱いにしないのは、別の実行が持ち主なら作業項目はその実行が進めるからである。
  * 状態の書き換えは、リースを確かめた時点の状態と`flow_job_id`のままのときだけ行う比較交換で、
- * 一致しなければ同じく何も書かずに`skip`を返す。
+ * 一致しなければ状態を書き換えずに`skip`を返す(attemptの保存とworktreeの用意は済んでいる)。
  * 作業項目が無い、種類がissueでない、Issue番号が無い、フローのルートジョブIDを得られないときは例外を投げる。
  */
 export async function main(
@@ -173,7 +173,7 @@ export async function main(
 
   // 取り消しに失敗して残った古い実行が、同じreq-<N>のworktreeや状態を書き換えないよう、
   // 作業項目とworktreeに触れる前にリースを確かめる。
-  const leaseJobId = pipelineLeaseJobId(process.env);
+  const leaseJobId = rootFlowJobId(process.env);
   const lease = await awaitPipelineLease({
     readItem: () => getWorkItem(work_item_id),
     jobId: leaseJobId,
@@ -182,7 +182,7 @@ export async function main(
     timeoutMs: PIPELINE_LEASE_WAIT_MS,
     pollMs: PIPELINE_LEASE_POLL_MS,
   });
-  if (!lease.held || lease.item === null) {
+  if (!lease.held) {
     log.warn("pipeline lease not held, skipping", {
       work_item_id,
       status: lease.item?.status ?? null,
@@ -196,7 +196,8 @@ export async function main(
   // `retry_work_item.ts`などは`work_items.attempt`を読んで次のattemptを決める。
   // 途中で失敗した実行でも値が正しく残るよう、リースを確かめた直後、
   // 失敗しうるリポジトリやworktreeの操作より前に保存する。
-  await setAttempt(work_item_id, attempt);
+  if (!(await setAttemptIfLeaseHolder(work_item_id, attempt, leaseJobId)))
+    return movedOn(work_item_id, leaseJobId);
 
   await ensureFactoryClone({
     run: runCommand,

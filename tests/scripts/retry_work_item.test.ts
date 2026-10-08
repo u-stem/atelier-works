@@ -5,7 +5,7 @@ import {
   launchFailureError,
   retryResult,
   runningFlowRefusal,
-  usesImplementLease,
+  usesFlowJobIdLease,
 } from "../../f/factory/retry_work_item.ts";
 
 describe("computeRestartPlan", () => {
@@ -207,13 +207,21 @@ describe("runningFlowRefusal", () => {
   });
 });
 
-describe("usesImplementLease", () => {
+describe("usesFlowJobIdLease", () => {
   test("is true for a restart into the implement flow", () => {
-    expect(usesImplementLease({ flowPath: IMPLEMENT_FLOW_PATH })).toBe(true);
+    expect(usesFlowJobIdLease({ flowPath: IMPLEMENT_FLOW_PATH })).toBe(true);
   });
 
-  test("is false for a restart into the pipeline", () => {
-    expect(usesImplementLease({ flowPath: "f/factory/pipeline" })).toBe(false);
+  test("is true for a restart into the pipeline", () => {
+    expect(usesFlowJobIdLease({ flowPath: "f/factory/pipeline" })).toBe(true);
+  });
+
+  test("is false for a restart into the pr_review flow", () => {
+    expect(usesFlowJobIdLease({ flowPath: "f/factory/pr_review" })).toBe(false);
+  });
+
+  test("is false for a restart into the pr_fix flow", () => {
+    expect(usesFlowJobIdLease({ flowPath: "f/factory/pr_fix" })).toBe(false);
   });
 });
 

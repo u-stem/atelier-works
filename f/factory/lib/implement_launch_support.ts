@@ -45,12 +45,13 @@ export const IMPLEMENT_LEASE_LOST_REASON =
   "another implement run holds the flow_job_id lease";
 
 /**
- * リースの値にするimplementフロー自身のジョブID(`WM_ROOT_FLOW_JOB_ID`)を返す。
- * `runFlowAsync`は既定で親ジョブを付けずに起動するので、implementフローはルートジョブになり、
+ * リースの値にする、このフロー自身のジョブID(`WM_ROOT_FLOW_JOB_ID`)を小文字で返す。
+ * implementフローとpipelineが使う。
+ * `runFlowAsync`は既定で親ジョブを付けずに起動するので、起動したフローはルートジョブになり、
  * この値は起動側が記録する`runFlowAsync`の戻り値と一致する。
  * 未設定・空・UUIDでない(フローの外で実行した)ときは例外を投げる。
  */
-export function implementLeaseJobId(
+export function rootFlowJobId(
   env: Readonly<Record<string, string | undefined>>,
 ): string {
   return parseFlowJobId(env.WM_ROOT_FLOW_JOB_ID ?? "", "WM_ROOT_FLOW_JOB_ID");

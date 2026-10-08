@@ -1335,22 +1335,26 @@ export async function setFixRound(
 }
 
 /**
- * `work_items.attempt`を更新する。
- * `pipeline_prepare.ts`がフローの最初に呼び、`flow_input.attempt`を保存する。
+ * `flow_job_id`が`leaseJobId`のときだけ`work_items.attempt`を更新し、更新したら`true`を返す。
+ * `pipeline_prepare.ts`がリースを確かめた直後に呼び、`flow_input.attempt`を保存する。
  * これが無いと`attempt`は挿入後に書かれず、読み出す側
  * (`retry_work_item.ts`の`workItem.attempt + 1`など)が、
  * 2回目以降の要件定義の生成で古い値を見てしまう。
+ * リースを条件にするのは、リースを失った古い実行が新しい実行のattemptを戻さないため。
  */
-export async function setAttempt(
+export async function setAttemptIfLeaseHolder(
   id: number,
   attempt: number,
+  leaseJobId: string,
   sql: SqlClient = defaultSqlClient,
-): Promise<void> {
-  await sql`
+): Promise<boolean> {
+  const rows = await sql`
     UPDATE factory.work_items
     SET attempt = ${attempt}::integer, updated_at = now()
-    WHERE id = ${id}
-  `.execute();
+    WHERE id = ${id} AND flow_job_id = ${leaseJobId}
+    RETURNING id
+  `.fetch();
+  return rows.length > 0;
 }
 
 /**

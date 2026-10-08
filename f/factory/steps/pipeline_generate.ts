@@ -20,11 +20,11 @@ import {
 } from "../lib/db.ts";
 import { notifyBestEffort } from "../lib/discord.ts";
 import { validateDrawioXml } from "../lib/drawio.ts";
+import { rootFlowJobId } from "../lib/implement_launch_support.ts";
 import { logger, maskSecrets } from "../lib/log.ts";
 import {
   holdsPipelineLease,
   PIPELINE_LEASE_LOST_REASON,
-  pipelineLeaseJobId,
 } from "../lib/pipeline_lease.ts";
 import { REQUIREMENTS_SCHEMA, requirementsPrompt } from "../lib/prompts.ts";
 import { validateRequirementsDoc } from "../lib/requirements_doc.ts";
@@ -237,7 +237,7 @@ export async function main(
   }
 
   // 取り消しに失敗して残った古い実行が、持ち主の試行ディレクトリを空にしないよう、触れる前に確かめる。
-  const leaseJobId = pipelineLeaseJobId(process.env);
+  const leaseJobId = rootFlowJobId(process.env);
   if (!holdsPipelineLease(workItem, leaseJobId)) {
     log.warn(PIPELINE_LEASE_LOST_REASON, {
       work_item_id,

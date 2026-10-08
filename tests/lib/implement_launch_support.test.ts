@@ -5,9 +5,9 @@ import {
   holdsImplementLease,
   ImplementLeaseLostError,
   implementLaunchFailureReason,
-  implementLeaseJobId,
   isFlowJobId,
   parseFlowJobId,
+  rootFlowJobId,
   type StartImplementDeps,
   startImplement,
   stillHoldsImplementLease,
@@ -327,18 +327,24 @@ describe("isFlowJobId", () => {
   });
 });
 
-describe("implementLeaseJobId", () => {
+describe("rootFlowJobId", () => {
   test("returns the root flow job id", () => {
-    expect(implementLeaseJobId({ WM_ROOT_FLOW_JOB_ID: JOB_A })).toBe(JOB_A);
+    expect(rootFlowJobId({ WM_ROOT_FLOW_JOB_ID: JOB_A })).toBe(JOB_A);
+  });
+
+  test("normalizes the root flow job id to lower case", () => {
+    expect(rootFlowJobId({ WM_ROOT_FLOW_JOB_ID: JOB_A.toUpperCase() })).toBe(
+      JOB_A,
+    );
   });
 
   test("throws outside a flow", () => {
-    expect(() => implementLeaseJobId({})).toThrow();
+    expect(() => rootFlowJobId({})).toThrow("WM_ROOT_FLOW_JOB_ID");
   });
 
   test("throws on a root flow job id that is not a job id", () => {
     expect(() =>
-      implementLeaseJobId({ WM_ROOT_FLOW_JOB_ID: "not-a-uuid" }),
+      rootFlowJobId({ WM_ROOT_FLOW_JOB_ID: "not-a-uuid" }),
     ).toThrow();
   });
 });

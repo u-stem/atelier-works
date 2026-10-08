@@ -35,6 +35,8 @@ import {
   type WorkItem,
 } from "./lib/types.ts";
 
+const PIPELINE_FLOW_PATH = "f/factory/pipeline";
+
 function errorMessage(error: unknown): string {
   if (isRecord(error) && isString(error.message)) return error.message;
   if (typeof error === "string") return error;
@@ -77,11 +79,18 @@ export function failureWorkItemRef(
  * 黙って処理を飛ばし、再生成が失われる。
  * どちらかのidが無い(まだ記録していない、フローの外で動いている)ときは、
  * 食い違う根拠が無いとみなして許可する。
+ * ただし`flowPath`がpipeline(`f/factory/pipeline`)のときは、2つのidが一致するときだけ許可する。
+ * pipelineの差し戻しは`flow_job_id`を空にしてから起動するので、空の間に、
+ * 記録されていない古い実行の失敗が新しい実行の作業項目を`failed`にしうるため。
+ * 起動側が記録する前に落ちた作業項目は、reconcileが猶予の後に孤児として扱う。
  */
 export function shouldMarkFailed(
   workItemFlowJobId: string | null,
   rootJobId: string | null,
+  flowPath: string | null,
 ): boolean {
+  if (flowPath === PIPELINE_FLOW_PATH)
+    return workItemFlowJobId !== null && workItemFlowJobId === rootJobId;
   if (workItemFlowJobId === null || rootJobId === null) return true;
   return workItemFlowJobId === rootJobId;
 }
@@ -144,9 +153,9 @@ export async function main(
 
   if (item !== null && !TERMINAL_WORK_ITEM_STATUSES.includes(item.status)) {
     try {
-      if (!shouldMarkFailed(item.flow_job_id, rootJobId)) {
+      if (!shouldMarkFailed(item.flow_job_id, rootJobId, path ?? null)) {
         log.warn(
-          "on_error_flow: skipping status transition — work item's flow_job_id no longer matches this run (a newer run already replaced it)",
+          "on_error_flow: skipping status transition — work item's flow_job_id does not match this run (a newer run replaced it, or a pipeline run was never recorded)",
           {
             work_item_id,
             work_item_flow_job_id: item.flow_job_id,

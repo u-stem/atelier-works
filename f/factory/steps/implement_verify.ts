@@ -16,7 +16,7 @@ import {
   recordAgentRun,
 } from "../lib/db.ts";
 import {
-  implementLeaseJobId,
+  rootFlowJobId,
   stillHoldsImplementLease,
 } from "../lib/implement_launch_support.ts";
 import {
@@ -105,7 +105,7 @@ async function inspectChanges(
  * 検査コマンドは`implement_check_timeout_sec`で打ち切り、期限では切らない。
  * 期限は、修正ラウンドを始めるかどうか(最悪の所要時間が残っているか)とClaude実行の頭打ちに使う。
  * 失敗すれば、リースを確かめてから(失っていれば止める)`implementFixPrompt`で修正ラウンドを走らせる。
- * リースの値は、フローのルートジョブID(`implementLeaseJobId`)。
+ * リースの値は、フローのルートジョブID(`rootFlowJobId`)。
  * 修正ラウンドごとに`doc_dir`の読み取り専用コピーを新しく作り、
  * Claudeの実行1回ごとに`implement_rounds`へ1行記録する。
  * 検査コマンドがあるときは、サンドボックスなしで実行することを
@@ -129,7 +129,7 @@ export async function main(
       : requireDeadlineAt(context.deadline_at, Date.now());
   const log = logger("implement_verify");
   // buildSystemPromptの前に取る。投げた場合にsystemPromptの後始末を飛ばさないため。
-  const leaseJobId = implementLeaseJobId(process.env);
+  const leaseJobId = rootFlowJobId(process.env);
   const config = await loadConfig(() =>
     wmill.getResource("f/factory/factory_config"),
   );

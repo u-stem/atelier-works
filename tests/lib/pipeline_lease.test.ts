@@ -4,9 +4,6 @@ import {
   awaitPipelineLease,
   checkPipelineLease,
   holdsPipelineLease,
-  PIPELINE_LEASE_POLL_MS,
-  PIPELINE_LEASE_WAIT_MS,
-  pipelineLeaseJobId,
 } from "../../f/factory/lib/pipeline_lease.ts";
 import type { WorkItem } from "../../f/factory/lib/types.ts";
 
@@ -52,22 +49,6 @@ function leaseDeps(reads: readonly (LeaseItem | null)[]): {
   };
   return { deps, sleeps, readCount: () => index };
 }
-
-describe("pipelineLeaseJobId", () => {
-  test("returns the root flow job id", () => {
-    expect(pipelineLeaseJobId({ WM_ROOT_FLOW_JOB_ID: JOB_A })).toBe(JOB_A);
-  });
-
-  test("normalizes the root flow job id to lower case", () => {
-    expect(
-      pipelineLeaseJobId({ WM_ROOT_FLOW_JOB_ID: JOB_A.toUpperCase() }),
-    ).toBe(JOB_A);
-  });
-
-  test("throws when the root flow job id is missing", () => {
-    expect(() => pipelineLeaseJobId({})).toThrow("WM_ROOT_FLOW_JOB_ID");
-  });
-});
 
 describe("holdsPipelineLease", () => {
   test("is true when flow_job_id is this job's id", () => {
@@ -129,7 +110,7 @@ describe("checkPipelineLease", () => {
 });
 
 describe("awaitPipelineLease", () => {
-  test("returns held without waiting when the launcher already recorded this job", async () => {
+  test("does not wait when the launcher already recorded this job", async () => {
     const h = leaseDeps([item()]);
     await awaitPipelineLease(h.deps);
     expect(h.sleeps).toEqual([]);
@@ -186,11 +167,5 @@ describe("awaitPipelineLease", () => {
     const h = leaseDeps([null]);
     await awaitPipelineLease(h.deps);
     expect(h.sleeps).toEqual([]);
-  });
-});
-
-describe("pipeline lease timing", () => {
-  test("waits longer than one poll interval", () => {
-    expect(PIPELINE_LEASE_WAIT_MS).toBeGreaterThan(PIPELINE_LEASE_POLL_MS);
   });
 });

@@ -7,6 +7,7 @@ import { buildConsoleUrl, computeExpiresAt } from "../lib/approval_support.ts";
 import { loadConfig } from "../lib/config.ts";
 import {
   addNotice,
+  expireApprovalRequestIfPending,
   getWorkItem,
   insertApprovalRequest,
   latestDraft,
@@ -16,16 +17,40 @@ import {
   type NotifyBestEffortResult,
   notifyBestEffort,
 } from "../lib/discord.ts";
+import { rootFlowJobId } from "../lib/implement_launch_support.ts";
 import { type Logger, logger, maskSecrets } from "../lib/log.ts";
 import {
   holdsPipelineLease,
   PIPELINE_LEASE_LOST_REASON,
-  pipelineLeaseJobId,
 } from "../lib/pipeline_lease.ts";
 
 export type PipelineRequestApprovalResult =
   | { readonly ok: true; readonly approval_request_id: number }
   | { readonly ok: false; readonly reason: string };
+
+/** 承認依頼を記録した後に作業項目へ進めなかったときの理由。 */
+export const APPROVAL_REQUEST_WITHDRAWN_REASON =
+  "work item moved on before approval could be requested; the approval request was expired";
+
+export type AwaitingApprovalDeps = {
+  /** `updateStatusIfLeaseHolder`で、リースを持つまま`requirements_generating`から`awaiting_approval`へ移す。 */
+  readonly casToAwaitingApproval: () => Promise<boolean>;
+  /** 記録した承認依頼を`expireApprovalRequestIfPending`で期限切れにする。 */
+  readonly withdrawRequest: () => Promise<boolean>;
+};
+
+/**
+ * 作業項目を`awaiting_approval`へ移し、移せたら`true`を返す。
+ * 移せなければ(リースが移った、状態が先へ進んだ)、記録した承認依頼を期限切れにして`false`を返す。
+ * 依頼をpendingのまま残すと、古いattemptの下書きを人が承認できてしまうため。
+ */
+export async function moveToAwaitingApproval(
+  deps: AwaitingApprovalDeps,
+): Promise<boolean> {
+  if (await deps.casToAwaitingApproval()) return true;
+  await deps.withdrawRequest();
+  return false;
+}
 
 /**
  * 承認依頼の通知が届かなかったときに残すnoticeの本文を作る。副作用は無い。
@@ -70,7 +95,7 @@ export async function reportApprovalNotifyFailure(
  * Discordへapproval_requestedを通知する。
  * pipelineのリースを持っていなければ、依頼を記録せずに`ok: false`を返す(例外は投げない)。
  * 作業項目が既に`requirements_generating`から動いていたか、記録の後にリースが移っていたら、
- * 依頼の記録だけで通知せずに返る。
+ * 記録した依頼を期限切れにし、通知せずに`ok: false`を返す。
  * 通知が届かなくても失敗せず、Consoleに`approval_notify_failed`のnoticeを残す。
  * 承認依頼は記録済みで、Consoleから判断できるため。
  * 作業項目・Issue番号・該当attemptの下書きが無ければ例外を投げる。
@@ -100,7 +125,7 @@ export async function main(
     );
   }
 
-  const leaseJobId = pipelineLeaseJobId(process.env);
+  const leaseJobId = rootFlowJobId(process.env);
   if (!holdsPipelineLease(workItem, leaseJobId)) {
     log.warn(PIPELINE_LEASE_LOST_REASON, {
       work_item_id,
@@ -126,18 +151,23 @@ export async function main(
     expires_at: computeExpiresAt(new Date()),
   });
 
-  const updated = await updateStatusIfLeaseHolder(
-    work_item_id,
-    "requirements_generating",
-    "awaiting_approval",
-    leaseJobId,
-    null,
-  );
+  const updated = await moveToAwaitingApproval({
+    casToAwaitingApproval: () =>
+      updateStatusIfLeaseHolder(
+        work_item_id,
+        "requirements_generating",
+        "awaiting_approval",
+        leaseJobId,
+        null,
+      ),
+    withdrawRequest: () => expireApprovalRequestIfPending(approvalRequestId),
+  });
   if (!updated) {
     log.info("work item moved on before approval could be requested", {
       work_item_id,
+      approval_request_id: approvalRequestId,
     });
-    return { ok: true, approval_request_id: approvalRequestId };
+    return { ok: false, reason: APPROVAL_REQUEST_WITHDRAWN_REASON };
   }
 
   const inboxUrl = buildConsoleUrl(config.windmill_public_url, {
