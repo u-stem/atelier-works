@@ -36,7 +36,11 @@ import {
   type WorkItemKind,
   type WorkItemStatus,
 } from "../lib/types.ts";
-import { type CommandRunner, readGitShowFile } from "../lib/workspace.ts";
+import {
+  assertOutputComplete,
+  type CommandRunner,
+  readGitShowFile,
+} from "../lib/workspace.ts";
 
 // `pr_fix_verify.ts`と既存のテストがこのファイルから読み込めるよう、
 // `lib/protected_paths.ts`の定義を再エクスポートする。
@@ -1203,6 +1207,10 @@ export async function listChangedPaths(
       env: resolvedEnv({ GIT_TERMINAL_PROMPT: "0" }, undefined, undefined),
     },
   );
+  assertOutputComplete(
+    `git diff --cached -z --name-status in ${worktreeDir}`,
+    result,
+  );
   if (result.exitCode !== 0) {
     throw new Error(
       maskSecrets(
@@ -1274,6 +1282,7 @@ export async function listSymlinkChanges(
       env: resolvedEnv({ GIT_TERMINAL_PROMPT: "0" }, undefined, undefined),
     },
   );
+  assertOutputComplete(`git diff --cached --raw -z in ${worktreeDir}`, result);
   if (result.exitCode !== 0) {
     throw new Error(
       maskSecrets(
@@ -1282,6 +1291,34 @@ export async function listSymlinkChanges(
     );
   }
   return parseRawSymlinkPaths(result.stdout);
+}
+
+/**
+ * worktreeのコミットしていない変更のパスを、`git status --porcelain`と`git diff --name-only`の和集合(`mergeChangedPaths`)で返す。
+ * pr_fixの保護パス・symlink・差分の大きさの判定の入力になるので、どちらかの出力の読み取りを打ち切っていれば例外を投げる。
+ * gitはhook・fsmonitor・credential helperを無効にして実行する。終了コードは見ない。
+ */
+export async function listUncommittedChangedPaths(
+  run: CommandRunner,
+  worktreeDir: string,
+): Promise<ChangedPath[]> {
+  const options = {
+    cwd: worktreeDir,
+    env: resolvedEnv({ GIT_TERMINAL_PROMPT: "0" }, undefined, undefined),
+  };
+  const [statusResult, diffResult] = await Promise.all([
+    run(gitHardeningArgv(["status", "--porcelain"]), options),
+    run(gitHardeningArgv(["diff", "--name-only"]), options),
+  ]);
+  assertOutputComplete(
+    `git status --porcelain in ${worktreeDir}`,
+    statusResult,
+  );
+  assertOutputComplete(`git diff --name-only in ${worktreeDir}`, diffResult);
+  return mergeChangedPaths(
+    parseGitStatusPorcelain(statusResult.stdout),
+    parseGitDiffNameOnly(diffResult.stdout),
+  );
 }
 
 /**
@@ -1529,6 +1566,7 @@ export async function getDiffNumstat(
     cwd: worktreeDir,
     env: resolvedEnv({ GIT_TERMINAL_PROMPT: "0" }, undefined, undefined),
   });
+  assertOutputComplete(`git diff --numstat in ${worktreeDir}`, result);
   if (result.exitCode !== 0) {
     throw new Error(
       maskSecrets(
@@ -1558,6 +1596,7 @@ export function parseWcLineCount(output: string): number {
  * `wc`が読めないファイル(`git status`の後に競合で消えた、環境によってはバイナリなど)は、
  * 例外にせず0として数える。`listSymlinkTargets`と同じく、
  * 残りの安全策で防ぐという考え方による。
+ * 出力の読み取りを打ち切ったときは、数が途中で切れているかもしれないので例外を投げる。
  */
 export async function countUntrackedFileLines(
   run: CommandRunner,
@@ -1565,6 +1604,7 @@ export async function countUntrackedFileLines(
   path: string,
 ): Promise<number> {
   const result = await run(["wc", "-l", "--", path], { cwd: worktreeDir });
+  assertOutputComplete(`wc -l in ${worktreeDir}`, result);
   if (result.exitCode !== 0) return 0;
   return parseWcLineCount(result.stdout);
 }
@@ -1644,6 +1684,7 @@ export async function listSymlinkTargets(
       env: resolvedEnv({ GIT_TERMINAL_PROMPT: "0" }, undefined, undefined),
     },
   );
+  assertOutputComplete(`git ls-files -s in ${worktreeDir}`, result);
   if (result.exitCode !== 0) {
     throw new Error(
       maskSecrets(

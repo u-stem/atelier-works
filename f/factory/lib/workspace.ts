@@ -516,9 +516,13 @@ function gitError(context: string, result: CommandResult): Error {
 /**
  * 出力を値として判断に使うコマンドで、出力の読み取りを打ち切っていれば(`outputAbandoned`)例外を投げる。
  * 打ち切った出力は途中で切れていることがあり、終了コードが0でも、検査や照合に使うと見落としになるため。
- * 対象は、秘密情報の検査に渡す差分とそのレポート、差分の大きさ、検証したツリーの照合に使う`write-tree`である。
+ * 対象は、秘密情報の検査に渡す差分とそのレポート、保護パス・symlink・`package.json`のscriptsの判定に使う変更の一覧と中身、
+ * 差分の大きさ、検証したツリーの照合に使う`write-tree`である。
  */
-function assertOutputComplete(context: string, result: CommandResult): void {
+export function assertOutputComplete(
+  context: string,
+  result: CommandResult,
+): void {
   if (result.outputAbandoned === true)
     throw new Error(`${context}: output was abandoned`);
 }
@@ -1165,6 +1169,7 @@ export async function fetchPrHeadRef(
  * `dir`で`git show <ref>:<path>`を実行し、`ref`の時点のファイルの中身を返す。
  * ファイルが無いとき、`ref`が検証を通らないとき、その他のエラーのときは`null`を返す。
  * 「HEADにこのファイルがあるか」を、例外を投げずに確かめるのに使う。
+ * ただし出力の読み取りを打ち切ったときは例外を投げる。途中で切れた中身を、ファイルの中身としても無いこととしても扱えないため。
  *
  * `<ref>:<path>`には`--`を付けない(`buildGitArgv`の例外を参照)。
  * `git show -- HEAD:file.txt`はエラーにならず、
@@ -1196,6 +1201,7 @@ export async function readGitShowFile(
     cwd: dir,
     env: localGitEnv(home, envPath),
   });
+  assertOutputComplete(`git show ${ref} in ${dir}`, result);
   return result.exitCode === 0 ? result.stdout : null;
 }
 

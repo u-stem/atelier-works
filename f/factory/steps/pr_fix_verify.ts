@@ -33,9 +33,7 @@ import {
   getDiffNumstat,
   isFixClaudeOutput,
   listSymlinkTargets,
-  mergeChangedPaths,
-  parseGitDiffNameOnly,
-  parseGitStatusPorcelain,
+  listUncommittedChangedPaths,
   runAllowedCheckCommands,
   sumDiffNumstatLines,
 } from "./pr_workflow_support.ts";
@@ -49,15 +47,6 @@ export type PrFixVerifyResult = {
   readonly commit_body: string | null;
 };
 
-function localGitEnv(): Record<string, string> {
-  const env: Record<string, string> = { GIT_TERMINAL_PROMPT: "0" };
-  const home = process.env.HOME;
-  if (home !== undefined) env.HOME = home;
-  const path = process.env.PATH;
-  if (path !== undefined) env.PATH = path;
-  return env;
-}
-
 /**
  * worktreeの変更に、禁止されたファイル・パターン、symlink、
  * `package.json`のscriptsの変更、差分サイズの上限超過が無いかを調べて返す。
@@ -68,39 +57,9 @@ async function checkForbidden(
   maxChangedFiles: number,
   maxDiffLines: number,
 ): Promise<ForbiddenChangeResult> {
-  const [statusResult, diffResult] = await Promise.all([
-    runCommand(
-      [
-        "git",
-        "-c",
-        "core.hooksPath=/dev/null",
-        "-c",
-        "core.fsmonitor=false",
-        "-c",
-        "credential.helper=",
-        "status",
-        "--porcelain",
-      ],
-      { cwd: worktreeDir, env: localGitEnv() },
-    ),
-    runCommand(
-      [
-        "git",
-        "-c",
-        "core.hooksPath=/dev/null",
-        "-c",
-        "core.fsmonitor=false",
-        "-c",
-        "credential.helper=",
-        "diff",
-        "--name-only",
-      ],
-      { cwd: worktreeDir, env: localGitEnv() },
-    ),
-  ]);
-  const changedPaths = mergeChangedPaths(
-    parseGitStatusPorcelain(statusResult.stdout),
-    parseGitDiffNameOnly(diffResult.stdout),
+  const changedPaths = await listUncommittedChangedPaths(
+    runCommand,
+    worktreeDir,
   );
 
   // basenameがちょうど`package.json`の変更ファイルをすべて調べる。

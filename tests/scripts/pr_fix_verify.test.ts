@@ -21,6 +21,7 @@ import {
   listChangedPaths,
   listSymlinkChanges,
   listSymlinkTargets,
+  listUncommittedChangedPaths,
   matchesForbiddenPath,
   mergeChangedPaths,
   packageJsonScriptsChanged,
@@ -41,6 +42,11 @@ import {
   ok,
   timeout,
 } from "../lib/testSupport.ts";
+
+/** 出力の読み取りを打ち切った結果(別セッションへ抜けたプロセスがパイプを握っていた)。 */
+function abandoned(stdout: string) {
+  return { ...ok(stdout), outputAbandoned: true };
+}
 
 function fakeCheckHomeDir(path = "/fake-check-home"): {
   readonly factory: CreateCheckHomeDir;
@@ -394,6 +400,13 @@ describe("listSymlinkTargets", () => {
     const { run } = createFakeCommandRunner([fail("not a git repository")]);
     await expect(listSymlinkTargets(run, "/work", ["link"])).rejects.toThrow();
   });
+
+  test("throws when the git ls-files output was abandoned", async () => {
+    const { run } = createFakeCommandRunner([abandoned("")]);
+    await expect(listSymlinkTargets(run, "/work", ["link"])).rejects.toThrow(
+      /ls-files.*abandoned/,
+    );
+  });
 });
 
 describe("parseGitDiffNumstat", () => {
@@ -525,6 +538,13 @@ describe("getDiffNumstat", () => {
     const { run } = createFakeCommandRunner([fail("not a git repository")]);
     await expect(getDiffNumstat(run, "/work")).rejects.toThrow();
   });
+
+  test("throws when the git diff output was abandoned", async () => {
+    const { run } = createFakeCommandRunner([abandoned("3\t1\tsrc/a.ts\n")]);
+    await expect(getDiffNumstat(run, "/work")).rejects.toThrow(
+      /numstat.*abandoned/,
+    );
+  });
 });
 
 describe("parseWcLineCount", () => {
@@ -556,6 +576,13 @@ describe("countUntrackedFileLines", () => {
     const { run, calls } = createFakeCommandRunner([ok("0 a.ts\n")]);
     await countUntrackedFileLines(run, "/work", "a.ts");
     expect(calls[0]?.argv).toEqual(["wc", "-l", "--", "a.ts"]);
+  });
+
+  test("throws when the wc output was abandoned", async () => {
+    const { run } = createFakeCommandRunner([abandoned("1 a.ts\n")]);
+    await expect(countUntrackedFileLines(run, "/work", "a.ts")).rejects.toThrow(
+      /wc -l.*abandoned/,
+    );
   });
 
   test("returns 0 (does not throw) when wc itself fails", async () => {
@@ -872,6 +899,72 @@ describe("listChangedPaths", () => {
       /--name-status/,
     );
   });
+
+  test("throws when the git diff output was abandoned", async () => {
+    const { run } = createFakeCommandRunner([abandoned("M\u0000a.ts\u0000")]);
+    await expect(listChangedPaths(run, "/wt", BASE)).rejects.toThrow(
+      /--name-status.*abandoned/,
+    );
+  });
+});
+
+describe("listUncommittedChangedPaths", () => {
+  test("merges git status --porcelain and git diff --name-only", async () => {
+    const { run } = createFakeCommandRunner([ok("?? new.ts\n"), ok("a.ts\n")]);
+    expect(await listUncommittedChangedPaths(run, "/wt")).toEqual([
+      { path: "new.ts", status: "added" },
+      { path: "a.ts", status: "modified" },
+    ]);
+  });
+
+  test("runs both with the hardening flags in the worktree", async () => {
+    const { run, calls } = createFakeCommandRunner([ok(""), ok("")]);
+    await listUncommittedChangedPaths(run, "/wt");
+    expect(calls.map((call) => [call.argv, call.options?.cwd])).toEqual([
+      [
+        [
+          "git",
+          "-c",
+          "core.hooksPath=/dev/null",
+          "-c",
+          "core.fsmonitor=false",
+          "-c",
+          "credential.helper=",
+          "status",
+          "--porcelain",
+        ],
+        "/wt",
+      ],
+      [
+        [
+          "git",
+          "-c",
+          "core.hooksPath=/dev/null",
+          "-c",
+          "core.fsmonitor=false",
+          "-c",
+          "credential.helper=",
+          "diff",
+          "--name-only",
+        ],
+        "/wt",
+      ],
+    ]);
+  });
+
+  test("throws when the git status output was abandoned", async () => {
+    const { run } = createFakeCommandRunner([abandoned(""), ok("")]);
+    await expect(listUncommittedChangedPaths(run, "/wt")).rejects.toThrow(
+      /git status --porcelain.*abandoned/,
+    );
+  });
+
+  test("throws when the git diff --name-only output was abandoned", async () => {
+    const { run } = createFakeCommandRunner([ok(""), abandoned("")]);
+    await expect(listUncommittedChangedPaths(run, "/wt")).rejects.toThrow(
+      /git diff --name-only.*abandoned/,
+    );
+  });
 });
 
 describe("parseRawSymlinkPaths", () => {
@@ -945,6 +1038,13 @@ describe("listSymlinkChanges", () => {
     const { run } = createFakeCommandRunner([fail("fatal: bad object")]);
     await expect(listSymlinkChanges(run, "/wt", BASE)).rejects.toThrow(/--raw/);
   });
+
+  test("throws when the git diff output was abandoned", async () => {
+    const { run } = createFakeCommandRunner([abandoned("")]);
+    await expect(listSymlinkChanges(run, "/wt", BASE)).rejects.toThrow(
+      /--raw.*abandoned/,
+    );
+  });
 });
 
 describe("anyPackageJsonScriptsChanged", () => {
@@ -977,6 +1077,19 @@ describe("anyPackageJsonScriptsChanged", () => {
         readBefore,
       ),
     ).toBe(false);
+  });
+
+  test("throws when the git show output was abandoned", async () => {
+    const { run } = createFakeCommandRunner([abandoned("{")]);
+    await expect(
+      anyPackageJsonScriptsChanged(
+        run,
+        "/wt",
+        "HEAD",
+        [{ path: "package.json", status: "modified" }],
+        readAfter,
+      ),
+    ).rejects.toThrow(/abandoned/);
   });
 
   test("is true when the scripts changed", async () => {

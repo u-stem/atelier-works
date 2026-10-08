@@ -1879,6 +1879,13 @@ describe("fetchPrHeadRef", () => {
 });
 
 describe("readGitShowFile", () => {
+  test("throws when the output was abandoned", async () => {
+    const fake = createFakeCommandRunner([abandoned("{")]);
+    await expect(
+      readGitShowFile(fake.run, "/repo/wt", "HEAD", "package.json"),
+    ).rejects.toThrow(/git show.*abandoned/);
+  });
+
   test("returns the file's content at the given ref", async () => {
     const fake = createFakeCommandRunner([ok("file contents\n")]);
     const content = await readGitShowFile(
