@@ -10,7 +10,7 @@ import {
   insertReview,
   updateStatusIfCurrent,
 } from "../lib/db.ts";
-import { type NotifyEvent, notify } from "../lib/discord.ts";
+import { type NotifyEvent, notifyBestEffort } from "../lib/discord.ts";
 import {
   createPrReview,
   type GhClient,
@@ -501,26 +501,18 @@ async function postReview(
     // ここで外すラベルも、付けるPRの状態ラベルも無い。
     const result = reviewResultFor(findings, openMustCount);
     const webhookUrl = await wmill.getVariable("f/factory/discord_webhook_url");
-    if (webhookUrl.length > 0) {
-      const event: NotifyEvent = {
-        kind: "pr_reviewed",
-        instance_name: config.instance_name,
-        owner,
-        repo,
-        pr_number,
-        pr_url: `https://github.com/${owner}/${repo}/pull/${String(pr_number)}`,
-        verdict,
-        finding_count: findings.length,
-        result,
-      };
-      try {
-        await notify(webhookUrl, event);
-      } catch (err) {
-        log.warn("discord notify failed", {
-          error: maskSecrets(err instanceof Error ? err.message : String(err)),
-        });
-      }
-    }
+    const event: NotifyEvent = {
+      kind: "pr_reviewed",
+      instance_name: config.instance_name,
+      owner,
+      repo,
+      pr_number,
+      pr_url: `https://github.com/${owner}/${repo}/pull/${String(pr_number)}`,
+      verdict,
+      finding_count: findings.length,
+      result,
+    };
+    await notifyBestEffort(webhookUrl, event, log);
   }
 
   return {

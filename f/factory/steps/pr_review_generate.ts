@@ -17,7 +17,7 @@ import {
   recordAgentRun,
   updateStatusIfCurrent,
 } from "../lib/db.ts";
-import { type NotifyEvent, notify } from "../lib/discord.ts";
+import { type NotifyEvent, notifyBestEffort } from "../lib/discord.ts";
 import {
   type GhClient,
   getPr,
@@ -26,7 +26,7 @@ import {
   getViewer,
   listReviewThreads,
 } from "../lib/github.ts";
-import { logger, maskSecrets } from "../lib/log.ts";
+import { logger } from "../lib/log.ts";
 import { REVIEW_SCHEMA, reviewPrompt } from "../lib/prompts.ts";
 import type { ReviewFinding, ReviewVerdict } from "../lib/types.ts";
 import { runCommand } from "../lib/workspace.ts";
@@ -104,24 +104,17 @@ export async function main(
     // トリガーの`review_label`は確保の時点で`poll_prs.ts`が外しているので、
     // ここで外すラベルは無い。
     const webhookUrl = await wmill.getVariable("f/factory/discord_webhook_url");
-    if (webhookUrl.length === 0) return;
-    try {
-      const event: NotifyEvent = {
-        kind: "needs_human",
-        instance_name: config.instance_name,
-        owner,
-        repo,
-        url: `https://github.com/${owner}/${repo}/pull/${String(pr_number)}`,
-        reason: describeReason(displayReason),
-        target: { kind: "pr", number: pr_number },
-        next_action: nextActionFor(displayReason),
-      };
-      await notify(webhookUrl, event);
-    } catch (err) {
-      log.warn("discord notify failed", {
-        error: maskSecrets(err instanceof Error ? err.message : String(err)),
-      });
-    }
+    const event: NotifyEvent = {
+      kind: "needs_human",
+      instance_name: config.instance_name,
+      owner,
+      repo,
+      url: `https://github.com/${owner}/${repo}/pull/${String(pr_number)}`,
+      reason: describeReason(displayReason),
+      target: { kind: "pr", number: pr_number },
+      next_action: nextActionFor(displayReason),
+    };
+    await notifyBestEffort(webhookUrl, event, log);
   }
 
   // 生成ステップの最悪の所要時間がflow.yamlのtimeoutに収まらない設定では、

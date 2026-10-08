@@ -17,7 +17,7 @@ import {
   updateStatusIfCurrent,
   updateStatusIfLeaseHolderClearingFlowJobId,
 } from "../lib/db.ts";
-import { type NotifyEvent, notify } from "../lib/discord.ts";
+import { type NotifyEvent, notifyBestEffort } from "../lib/discord.ts";
 import {
   type GhClient,
   getPr,
@@ -272,26 +272,18 @@ export async function main(
     // 運用上の知らせ(失敗、needs_human、blocked、requirements_gap)はPRに投稿しない。
     // PRに載せるのは一次レビューとレビューコメントへの返信だけにするため。
     // 人には下のDiscord通知で、このPRに対応が要ることを伝える。
-    if (webhookUrl.length > 0) {
-      try {
-        const event: NotifyEvent = {
-          kind: "needs_human",
-          instance_name: config.instance_name,
-          owner,
-          repo,
-          url: prUrl,
-          // 日本語への変換は表示用。記録する`status_reason`は変換前の英語のまま保つ。
-          reason: describeReason(discordReason),
-          target: { kind: "pr", number: pr_number },
-          next_action: nextActionFor(discordReason, "pr_fix"),
-        };
-        await notify(webhookUrl, event);
-      } catch (err) {
-        log.warn("discord notify failed", {
-          error: maskSecrets(err instanceof Error ? err.message : String(err)),
-        });
-      }
-    }
+    const event: NotifyEvent = {
+      kind: "needs_human",
+      instance_name: config.instance_name,
+      owner,
+      repo,
+      url: prUrl,
+      // 日本語への変換は表示用。記録する`status_reason`は変換前の英語のまま保つ。
+      reason: describeReason(discordReason),
+      target: { kind: "pr", number: pr_number },
+      next_action: nextActionFor(discordReason, "pr_fix"),
+    };
+    await notifyBestEffort(webhookUrl, event, log);
   }
 
   // `finalizeTerminal`で終わる分岐(これと、以降の"needs_human" / "blocked"のすべて)は、
@@ -816,27 +808,17 @@ export async function main(
       proposalReason,
     );
     if (moved) {
-      if (webhookUrl.length > 0) {
-        try {
-          const event: NotifyEvent = {
-            kind: "needs_human",
-            instance_name: config.instance_name,
-            owner,
-            repo,
-            url: prUrl,
-            reason: describeReason(proposalReason),
-            target: { kind: "pr", number: pr_number },
-            next_action: nextActionFor(proposalReason, "pr_fix"),
-          };
-          await notify(webhookUrl, event);
-        } catch (err) {
-          log.warn("discord notify failed", {
-            error: maskSecrets(
-              err instanceof Error ? err.message : String(err),
-            ),
-          });
-        }
-      }
+      const event: NotifyEvent = {
+        kind: "needs_human",
+        instance_name: config.instance_name,
+        owner,
+        repo,
+        url: prUrl,
+        reason: describeReason(proposalReason),
+        target: { kind: "pr", number: pr_number },
+        next_action: nextActionFor(proposalReason, "pr_fix"),
+      };
+      await notifyBestEffort(webhookUrl, event, log);
     }
     return { ok: true, final_status: "needs_human", notice: proposalReason };
   }
@@ -886,30 +868,22 @@ export async function main(
         });
       }
     }
-    if (webhookUrl.length > 0) {
-      try {
-        const event: NotifyEvent = {
-          kind: "pr_fixed",
-          instance_name: config.instance_name,
-          owner,
-          repo,
-          pr_number,
-          pr_url: prUrl,
-          outcome: "done",
-          // ここに載せるのは再レビュー依頼のAPIの失敗だけ
-          // (`reportReviewerRequest`を参照)。
-          note:
-            reviewerReport.apiError !== null
-              ? reviewerRequestFailedSupplement(reviewerReport.apiError)
-              : null,
-        };
-        await notify(webhookUrl, event);
-      } catch (err) {
-        log.warn("discord notify failed", {
-          error: maskSecrets(err instanceof Error ? err.message : String(err)),
-        });
-      }
-    }
+    const event: NotifyEvent = {
+      kind: "pr_fixed",
+      instance_name: config.instance_name,
+      owner,
+      repo,
+      pr_number,
+      pr_url: prUrl,
+      outcome: "done",
+      // ここに載せるのは再レビュー依頼のAPIの失敗だけ
+      // (`reportReviewerRequest`を参照)。
+      note:
+        reviewerReport.apiError !== null
+          ? reviewerRequestFailedSupplement(reviewerReport.apiError)
+          : null,
+    };
+    await notifyBestEffort(webhookUrl, event, log);
   }
 
   return {
