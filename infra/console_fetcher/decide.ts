@@ -326,6 +326,22 @@ export function currentShaFromLink(target: string): string | null {
   return match?.[1] ?? null;
 }
 
+/**
+ * `current`のsymlinkの状態。`none`はリンクが無い、`release`は`releases/<sha>`を指す、
+ * `unknown`はリンクはあるが中身を読めない(配信中かもしれない)ことを表す。
+ */
+export type CurrentLink =
+  | { readonly kind: "none" }
+  | { readonly kind: "release"; readonly sha: string }
+  | { readonly kind: "unknown" };
+
+/** `current`のsymlinkの中身を読む。`target`はリンクが無ければ`null`、あればその中身。 */
+export function parseCurrentLink(target: string | null): CurrentLink {
+  if (target === null) return { kind: "none" };
+  const sha = currentShaFromLink(target);
+  return sha === null ? { kind: "unknown" } : { kind: "release", sha };
+}
+
 /** history.jsonの中身を読む。shaの形でない要素は捨てる。 */
 export function parseHistory(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
@@ -334,6 +350,11 @@ export function parseHistory(value: unknown): string[] {
   );
 }
 
+/**
+ * 付け替えの履歴の末尾に`sha`を足し、古い方から`limit`件を超えた分を捨てる。
+ * 新しく取り込んだ版へ付け替えたときだけ呼ぶ。戻す操作とpinを外す操作では呼ばない
+ * (戻した版を足すと、次に戻すときに`selectRollbackTarget`が新しい方の版を返してしまう)。
+ */
 export function appendHistory(
   history: readonly string[],
   sha: string,
@@ -345,13 +366,15 @@ export function appendHistory(
 /**
  * 消す`releases/<sha>`を返す。付け替えの履歴の新しい方から、重複を除いて`keep`版と、
  * 今の`current`(戻してpinした古い版を含む)を残す。履歴に無い版(付け替える前に止まったもの)は消す。
+ * `current`のリンクを読めない(`unknown`)ときは、どの版を配信中か分からないので何も消さない。
  */
 export function selectReleasesToDelete(
   existing: readonly string[],
   history: readonly string[],
-  currentSha: string | null,
+  current: CurrentLink,
   keep: number,
 ): string[] {
+  if (current.kind === "unknown") return [];
   const kept = new Set<string>();
   for (
     let index = history.length - 1;
@@ -361,14 +384,38 @@ export function selectReleasesToDelete(
     const sha = history[index];
     if (sha !== undefined) kept.add(sha);
   }
-  if (currentSha !== null) kept.add(currentSha);
+  if (current.kind === "release") kept.add(current.sha);
   return existing.filter((sha) => !kept.has(sha));
 }
 
+/** `assets/`の中のファイル。`name`は`assets/`からの相対名(`a.js`)。 */
 export type AssetFile = { readonly name: string; readonly mtimeMs: number };
+
+const ASSETS_PREFIX = "assets/";
+
+/**
+ * 残す版のマニフェストから、参照している共有の`assets/`のファイル名を集める。
+ * 名前は`assets/`からの相対名(マニフェストの`assets/a.js`は`a.js`)にし、`AssetFile.name`と揃える。
+ * 読めなかったマニフェスト(`null`)が1つでもあれば、参照が分からないので`null`を返す。
+ */
+export function referencedAssetNames(
+  manifests: readonly (ConsoleManifest | null)[],
+): ReadonlySet<string> | null {
+  const names = new Set<string>();
+  for (const manifest of manifests) {
+    if (manifest === null) return null;
+    for (const path of manifest.files.keys()) {
+      if (path.startsWith(ASSETS_PREFIX)) {
+        names.add(path.slice(ASSETS_PREFIX.length));
+      }
+    }
+  }
+  return names;
+}
 
 /**
  * 消す共有の`assets/`のファイルを返す。残す版から参照されず、最後の更新から`maxAgeMs`を超えたもの。
+ * `referenced`と`AssetFile.name`はどちらも`assets/`からの相対名で、`referencedAssetNames`で作る。
  * 参照が分からない(`null`。残す版のマニフェストを読めなかった)ときは何も消さない。
  */
 export function selectAssetsToDelete(
@@ -387,6 +434,8 @@ export function selectAssetsToDelete(
 /**
  * 戻す先を返す。履歴の中で今の版より前に付け替えた版のうち、まだ残っている最も新しいもの。
  * 戻した後にもう一度呼ぶと、さらに1つ前を返す。
+ * これは戻す操作とpinを外す操作が履歴に足さないことを前提にする。今の版は履歴の最後の出現で
+ * 位置を決めるので、戻した版を足すと、次に戻すときにその前に付け替えた新しい版を返してしまう。
  */
 export function selectRollbackTarget(
   history: readonly string[],
@@ -406,6 +455,7 @@ export function selectRollbackTarget(
 /**
  * ロックファイルの中身(`{"acquired_at": ISO文字列}`)から、持ち主が止まって残った古いロックかを返す。
  * 中身を読めないロックも古いとみなす(作ってから書くまでの間に止まったもの)。
+ * `staleMs`を超えて未来の時刻のロックも古いとみなす(時計のずれや壊れた日付で取り込みが止まり続けないため)。
  */
 export function isLockStale(
   content: unknown,
@@ -415,5 +465,9 @@ export function isLockStale(
   if (!isRecord(content) || typeof content.acquired_at !== "string")
     return true;
   const acquiredAt = Date.parse(content.acquired_at);
-  return Number.isNaN(acquiredAt) || nowMs - acquiredAt > staleMs;
+  return (
+    Number.isNaN(acquiredAt) ||
+    nowMs - acquiredAt > staleMs ||
+    acquiredAt - nowMs > staleMs
+  );
 }

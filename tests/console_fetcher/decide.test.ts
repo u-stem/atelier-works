@@ -9,11 +9,13 @@ import {
   isLockStale,
   needsDeploy,
   parseArtifacts,
+  parseCurrentLink,
   parseDigest,
   parseFetcherConfig,
   parseHistory,
   parseManifest,
   parseWorkflowRuns,
+  referencedAssetNames,
   selectAssetsToDelete,
   selectLatestRun,
   selectReleasesToDelete,
@@ -450,6 +452,25 @@ describe("currentShaFromLink", () => {
   });
 });
 
+describe("parseCurrentLink", () => {
+  test("reports none when there is no current link", () => {
+    expect(parseCurrentLink(null)).toEqual({ kind: "none" });
+  });
+
+  test("reads the release sha from a relative release link", () => {
+    expect(parseCurrentLink(`releases/${SHA_A}`)).toEqual({
+      kind: "release",
+      sha: SHA_A,
+    });
+  });
+
+  test("reports unknown for a link that is not a release link", () => {
+    expect(parseCurrentLink(`/srv/console/releases/${SHA_A}`)).toEqual({
+      kind: "unknown",
+    });
+  });
+});
+
 describe("history", () => {
   test("keeps only commit shas when parsing", () => {
     expect(parseHistory([SHA_A, "x", 1, SHA_B])).toEqual([SHA_A, SHA_B]);
@@ -470,7 +491,7 @@ describe("selectReleasesToDelete", () => {
       selectReleasesToDelete(
         [SHA_A, SHA_B, SHA_C, SHA_D],
         [SHA_A, SHA_B, SHA_C, SHA_D],
-        SHA_D,
+        { kind: "release", sha: SHA_D },
         3,
       ),
     ).toEqual([SHA_A]);
@@ -481,7 +502,7 @@ describe("selectReleasesToDelete", () => {
       selectReleasesToDelete(
         [SHA_A, SHA_B, SHA_C, SHA_D],
         [SHA_A, SHA_B, SHA_C, SHA_D],
-        SHA_A,
+        { kind: "release", sha: SHA_A },
         3,
       ),
     ).toEqual([]);
@@ -492,16 +513,59 @@ describe("selectReleasesToDelete", () => {
       selectReleasesToDelete(
         [SHA_A, SHA_B, SHA_C],
         [SHA_A, SHA_B, SHA_C, SHA_B],
-        SHA_B,
+        { kind: "release", sha: SHA_B },
         2,
       ),
     ).toEqual([SHA_A]);
   });
 
   test("deletes a release that was never deployed", () => {
-    expect(selectReleasesToDelete([SHA_A, SHA_B], [SHA_A], SHA_A, 3)).toEqual([
-      SHA_B,
-    ]);
+    expect(
+      selectReleasesToDelete(
+        [SHA_A, SHA_B],
+        [SHA_A],
+        { kind: "release", sha: SHA_A },
+        3,
+      ),
+    ).toEqual([SHA_B]);
+  });
+
+  test("keeps only the history when there is no current link", () => {
+    expect(
+      selectReleasesToDelete([SHA_A, SHA_B], [SHA_B], { kind: "none" }, 3),
+    ).toEqual([SHA_A]);
+  });
+
+  test("deletes nothing when the current link is unreadable", () => {
+    expect(
+      selectReleasesToDelete([SHA_A, SHA_B], [SHA_B], { kind: "unknown" }, 3),
+    ).toEqual([]);
+  });
+});
+
+describe("referencedAssetNames", () => {
+  const manifest = {
+    version: 1 as const,
+    sha: SHA_A,
+    files: new Map([
+      ["index.html", HASH_1],
+      ["assets/a.js", HASH_2],
+    ]),
+  };
+
+  test("returns asset names relative to assets/", () => {
+    expect(referencedAssetNames([manifest])).toEqual(new Set(["a.js"]));
+  });
+
+  test("merges the assets of every kept release", () => {
+    const other = { ...manifest, files: new Map([["assets/b.css", HASH_1]]) };
+    expect(referencedAssetNames([manifest, other])).toEqual(
+      new Set(["a.js", "b.css"]),
+    );
+  });
+
+  test("returns null when any kept manifest could not be read", () => {
+    expect(referencedAssetNames([manifest, null])).toBeNull();
   });
 });
 
@@ -584,6 +648,16 @@ describe("selectRollbackTarget", () => {
     ).toBe(SHA_A);
   });
 
+  test("moves forward if a rollback were appended to history, so rollback must not append", () => {
+    expect(
+      selectRollbackTarget(
+        [SHA_A, SHA_B, SHA_C, SHA_B],
+        SHA_B,
+        new Set([SHA_A, SHA_B, SHA_C]),
+      ),
+    ).toBe(SHA_C);
+  });
+
   test("returns null when there is no earlier release", () => {
     expect(selectRollbackTarget([SHA_A], SHA_A, new Set([SHA_A]))).toBeNull();
   });
@@ -601,6 +675,18 @@ describe("isLockStale", () => {
   test("treats a lock older than the limit as stale", () => {
     expect(
       isLockStale({ acquired_at: "2026-10-07T23:50:00Z" }, now, 15 * 60 * 1000),
+    ).toBe(true);
+  });
+
+  test("treats a lock dated slightly in the future as live", () => {
+    expect(
+      isLockStale({ acquired_at: "2026-10-08T00:20:00Z" }, now, 15 * 60 * 1000),
+    ).toBe(false);
+  });
+
+  test("treats a lock dated far in the future as stale", () => {
+    expect(
+      isLockStale({ acquired_at: "2026-10-08T01:00:00Z" }, now, 15 * 60 * 1000),
     ).toBe(true);
   });
 
