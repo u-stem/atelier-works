@@ -227,10 +227,12 @@ describe("prepareImplementWorktree", () => {
         },
         publishBranch: async () => {
           calls.push("publish");
+          return PUBLISHED_BASE_SHA;
         },
       },
     };
   }
+  const PUBLISHED_BASE_SHA = "d".repeat(40);
 
   test("publishes an existing worktree's branch before reusing it", async () => {
     const { deps, calls } = prepDeps(true);
@@ -246,7 +248,14 @@ describe("prepareImplementWorktree", () => {
 
   test("returns the aligned worktree's path", async () => {
     const { deps } = prepDeps(false);
-    expect(await prepareImplementWorktree(deps)).toBe("/wt-2");
+    expect((await prepareImplementWorktree(deps)).worktreeDir).toBe("/wt-2");
+  });
+
+  test("returns the base sha the publish verified against the remote", async () => {
+    const { deps } = prepDeps(true);
+    expect((await prepareImplementWorktree(deps)).baseSha).toBe(
+      PUBLISHED_BASE_SHA,
+    );
   });
 });
 

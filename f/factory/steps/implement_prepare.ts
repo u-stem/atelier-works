@@ -39,6 +39,7 @@ import {
 import {
   type ImplementContext,
   type ImplementPrepareOutcome,
+  type PreparedWorktree,
   prepareImplementWorktree,
 } from "../lib/implement_loop.ts";
 import {
@@ -200,7 +201,7 @@ function stop(
  * リモートにブランチが無ければ、既定のブランチの先頭だけを載せた空のブランチとしてpushしておく。
  * 先にpushしておくのは、後のpushをすべて`commitAndPush`のまま行えるようにするため。
  * 続けてworktreeの`.git`ポインタを検証してその内容を記録し、
- * デフォルトブランチとのmerge-baseを`base_sha`として記録する。
+ * 公開のときにリモートと照合したデフォルトブランチの先頭とのmerge-baseを、`base_sha`として記録する。
  * `.git`ポインタはClaudeの実行のたびに照合し、
  * `base_sha`は各検証ラウンドの差分の基準になる。
  *
@@ -364,9 +365,9 @@ export async function main(
   // upstream付きで`origin/<branch>`をcheckoutし、
   // 既にcheckout済みのブランチには"already exists"を出してexit 0で終わる。
   // `createGtrWorktree`は、最後の場合に至る前に自身の再利用経路に入る。
-  let worktreeDir: string;
+  let prepared: PreparedWorktree;
   try {
-    worktreeDir = await prepareImplementWorktree({
+    prepared = await prepareImplementWorktree({
       hasWorktree: async () => {
         // 親ディレクトリごと消えたworktreeが一覧に残ると、確かめがロックファイルのパスを作れず毎回失敗するので、先に除く。
         await pruneWorktrees({ run: runCommand, repoDir });
@@ -388,15 +389,16 @@ export async function main(
             assertProcessesIdle: ensureIdle,
           })
         ).path,
-      publishBranch: async () => {
-        await pushNewBranch({
-          run: runCommand,
-          repoDir,
-          branch,
-          baseBranch,
-          ghToken,
-        });
-      },
+      publishBranch: async () =>
+        (
+          await pushNewBranch({
+            run: runCommand,
+            repoDir,
+            branch,
+            baseBranch,
+            ghToken,
+          })
+        ).baseSha,
     });
   } catch (err) {
     // 理由付きの結果にするのは、確かめ(ensureIdle)と、止める直前の確かめ直しが投げる3種類の例外だけである。
@@ -414,6 +416,7 @@ export async function main(
       return stop("skip", IMPLEMENT_LEASE_LOST_REASON);
     throw err;
   }
+  const { worktreeDir } = prepared;
   // 以降のポインタ照合の基準値になる。
   // 前回の実行が書き換えたまま残したポインタを、信頼する値にしてはならない。
   await verifyWorktreeGitdir({ run: runCommand, repoDir, dir: worktreeDir });
@@ -429,10 +432,11 @@ export async function main(
     throw new Error(
       `implement_prepare: origin/${branch} is not resolvable after the push`,
     );
+  // 短い名前の`origin/<base>`を引き直さず、公開のときにリモートと照合したshaを使う。
   const baseSha = await mergeBaseSha({
     run: runCommand,
     worktreeDir,
-    baseBranch,
+    baseSha: prepared.baseSha,
   });
 
   return {

@@ -174,12 +174,21 @@ export type WorktreePrepDeps = {
   readonly hasWorktree: () => Promise<boolean>;
   /** `createGtrWorktree(...).path`を返す。 */
   readonly createWorktree: () => Promise<string>;
-  /** `pushNewBranch`を呼ぶ。originにブランチが無ければ、ローカルのブランチを既定のブランチの先頭へ向け直して公開する。 */
-  readonly publishBranch: () => Promise<void>;
+  /**
+   * `pushNewBranch`を呼び、`baseSha`(リモートと照合した既定のブランチの先頭)を返す。
+   * originにブランチが無ければ、ローカルのブランチを既定のブランチの先頭へ向け直して公開する。
+   */
+  readonly publishBranch: () => Promise<string>;
+};
+
+export type PreparedWorktree = {
+  readonly worktreeDir: string;
+  /** `publishBranch`が返した、リモートと照合した既定のブランチの先頭。比較の基準はここから求める。 */
+  readonly baseSha: string;
 };
 
 /**
- * implementのworktreeを用意し、ブランチをoriginに公開して揃えたうえで、そのパスを返す。
+ * implementのworktreeを用意し、ブランチをoriginに公開して揃えたうえで、そのパスと、公開で照合した既定のブランチの先頭を返す。
  *
  * git gtr 2.11.1で測った挙動: `gtr new`はローカルのブランチがあれば使い回す。
  * 無くてリモートにだけあれば、upstreamを設定して`origin/<branch>`をチェックアウトする。
@@ -197,10 +206,10 @@ export type WorktreePrepDeps = {
  */
 export async function prepareImplementWorktree(
   deps: WorktreePrepDeps,
-): Promise<string> {
+): Promise<PreparedWorktree> {
   if (!(await deps.hasWorktree())) await deps.createWorktree();
-  await deps.publishBranch();
-  return deps.createWorktree();
+  const baseSha = await deps.publishBranch();
+  return { worktreeDir: await deps.createWorktree(), baseSha };
 }
 
 // ---------------------------------------------------------------------------

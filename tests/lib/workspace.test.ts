@@ -3579,17 +3579,16 @@ describe("pushNewBranch", () => {
   test("pushes the branch when the remote does not have it yet", async () => {
     const fake = createFakeCommandRunner(missingRemote());
     const result = await push(fake.run);
-    expect(result).toEqual({ pushed: true });
+    expect(result).toEqual({ pushed: true, baseSha: PUSH_BASE_SHA });
   });
 
-  test("asks the remote for HEAD, the branch and the base in one ls-remote", async () => {
+  test("asks the remote for HEAD, the branch and the base in one ls-remote without --", async () => {
     const fake = createFakeCommandRunner(missingRemote());
     await push(fake.run);
-    expect(fake.calls[0]?.argv.slice(-7)).toEqual([
+    expect(fake.calls[0]?.argv.slice(-6)).toEqual([
       "ls-remote",
       "--symref",
       "origin",
-      "--",
       "HEAD",
       `refs/heads/${BRANCH}`,
       "refs/heads/main",
@@ -3647,7 +3646,7 @@ describe("pushNewBranch", () => {
       ok(`${PUSH_BASE_SHA}\n`),
     ]);
     const result = await push(fake.run);
-    expect(result).toEqual({ pushed: false });
+    expect(result).toEqual({ pushed: false, baseSha: PUSH_BASE_SHA });
   });
 
   test("does not move or push when the remote already has the branch", async () => {
@@ -3692,6 +3691,14 @@ describe("pushNewBranch", () => {
 
   test("throws without moving the branch when the local tracking ref differs from the remote's base", async () => {
     const fake = createFakeCommandRunner([lsRemote(), ok(`${BRANCH_SHA}\n`)]);
+    await expect(push(fake.run)).rejects.toThrow(/does not match/);
+  });
+
+  test("throws when the local tracking ref differs even though the remote already has the branch", async () => {
+    const fake = createFakeCommandRunner([
+      lsRemote({ branch: true }),
+      ok(`${BRANCH_SHA}\n`),
+    ]);
     await expect(push(fake.run)).rejects.toThrow(/does not match/);
   });
 
@@ -3797,6 +3804,7 @@ describe("pushNewBranch (real git)", () => {
   type Fixture = {
     readonly origin: string;
     readonly repo: string;
+    readonly worktree: string;
     readonly home: string;
     readonly baseSha: string;
     readonly unscannedSha: string;
@@ -3861,6 +3869,7 @@ describe("pushNewBranch (real git)", () => {
     return {
       origin,
       repo,
+      worktree,
       home,
       baseSha: await git(repo, ["rev-parse", "origin/main"]),
       unscannedSha: await git(repo, ["rev-parse", BRANCH]),
@@ -3951,6 +3960,31 @@ describe("pushNewBranch (real git)", () => {
     );
   });
 
+  test("a refs/heads/origin/<base> shadow ref does not change the comparison base", async () => {
+    const fixture = await setUp();
+    // リモートにブランチを先に作り、ローカルのブランチ(検査していないcommit)を動かさない経路にする。
+    await fixture.git(fixture.repo, [
+      "push",
+      "-q",
+      "origin",
+      `${fixture.baseSha}:refs/heads/${BRANCH}`,
+    ]);
+    await fixture.git(fixture.repo, [
+      "update-ref",
+      "refs/heads/origin/main",
+      fixture.unscannedSha,
+    ]);
+    const published = await publish(fixture);
+    expect(
+      await mergeBaseSha({
+        run: fixture.run,
+        worktreeDir: fixture.worktree,
+        baseSha: published.baseSha,
+        home: fixture.home,
+      }),
+    ).toBe(fixture.baseSha);
+  });
+
   test("throws when the local tracking ref of the base was rewritten", async () => {
     const fixture = await setUp();
     await poisonTrackingRef(fixture);
@@ -3960,6 +3994,7 @@ describe("pushNewBranch (real git)", () => {
   test("pushes nothing when the local tracking ref of the base was rewritten", async () => {
     const fixture = await setUp();
     await poisonTrackingRef(fixture);
+    // 例外を投げることは別のテストで確かめる。ここではpushの有無だけを見る。
     await publish(fixture).catch(() => {});
     expect(await originBranchProbe(fixture)).not.toBe(0);
   });
@@ -4400,38 +4435,55 @@ describe("resolveDefaultBranchName", () => {
 });
 
 describe("mergeBaseSha", () => {
-  test("returns the merge-base of origin/<base> and HEAD", async () => {
+  const VERIFIED_BASE_SHA = "d".repeat(40);
+
+  test("returns the merge-base of the verified base sha and HEAD", async () => {
     const fake = createFakeCommandRunner([ok(`${BASE_SHA}\n`)]);
     expect(
       await mergeBaseSha({
         run: fake.run,
         worktreeDir: "/wt",
-        baseBranch: "main",
+        baseSha: VERIFIED_BASE_SHA,
       }),
     ).toBe(BASE_SHA);
   });
 
-  test("runs git merge-base origin/<base> HEAD in the worktree", async () => {
+  test("runs git merge-base -- <base sha> HEAD in the worktree", async () => {
     const fake = createFakeCommandRunner([ok(`${BASE_SHA}\n`)]);
     await mergeBaseSha({
       run: fake.run,
       worktreeDir: "/wt",
-      baseBranch: "main",
+      baseSha: VERIFIED_BASE_SHA,
     });
     expect(fake.calls[0]?.argv.slice(-4)).toEqual([
       "merge-base",
       "--",
-      "origin/main",
+      VERIFIED_BASE_SHA,
       "HEAD",
     ]);
   });
 
+  test("rejects a base that is not a sha before spawning anything", async () => {
+    const fake = createFakeCommandRunner([]);
+    await expect(
+      mergeBaseSha({
+        run: fake.run,
+        worktreeDir: "/wt",
+        baseSha: "origin/main",
+      }),
+    ).rejects.toThrow(/invalid git SHA/);
+  });
+
   test("throws when git fails", async () => {
     const fake = createFakeCommandRunner([
-      fail("fatal: Not a valid object name origin/main"),
+      fail(`fatal: Not a valid object name ${VERIFIED_BASE_SHA}`),
     ]);
     await expect(
-      mergeBaseSha({ run: fake.run, worktreeDir: "/wt", baseBranch: "main" }),
+      mergeBaseSha({
+        run: fake.run,
+        worktreeDir: "/wt",
+        baseSha: VERIFIED_BASE_SHA,
+      }),
     ).rejects.toThrow(/merge-base/);
   });
 });

@@ -470,6 +470,8 @@ export type GitCommandOptions = {
  *     `--verify`では「リビジョンが無い」扱いになり、`--verify`なしでは
  *     オプションの解釈を止めずに、出力の前に`--`の行をそのまま出す(実際に確かめた)。
  *   - `git gtr new`: core gitではない外部のサブコマンドで、`--`を扱える保証が無い。
+ *   - `pushNewBranch`の`git ls-remote`: リモート名の後の`--`を区切りではなくパターンとして扱う
+ *     (実際に確かめた)。パターンは`HEAD`と、`assertBranchName`で検証したブランチから作った`refs/heads/`で始まるrefである。
  *   - `readGitShowFile`の`git show <ref>:<path>`: `--`を付けてもエラーにならず、
  *     気づかないうちにgitが返す内容が変わる。`ref`を検証すれば、`path`も守られる
  *     (`path`は常に、検証済みで`:`を含まない`ref`と、こちらで入れた`:`に続くため)。
@@ -2564,7 +2566,14 @@ export type PushNewBranchOptions = {
   readonly now?: () => Date;
 };
 
-export type PushNewBranchResult = { readonly pushed: boolean };
+export type PushNewBranchResult = {
+  readonly pushed: boolean;
+  /**
+   * リモートに問い合わせて確かめた、既定のブランチの先頭のsha。
+   * 呼び出し側は比較の基準をこのshaから求め(`mergeBaseSha`)、ローカルの短い名前`origin/<base>`を引き直さない。
+   */
+  readonly baseSha: string;
+};
 
 /** `git ls-remote --symref`の出力を読んだもの。キーはどちらも完全なref名である。 */
 type LsRemoteRefs = {
@@ -2600,7 +2609,7 @@ function parseLsRemoteSymref(stdout: string): LsRemoteRefs {
 
 /**
  * リモートに`branch`が無ければ、リモートの既定のブランチの先頭で公開する。
- * まず`git ls-remote --symref origin -- HEAD refs/heads/<branch> refs/heads/<baseBranch>`の1回で、
+ * まず`git ls-remote --symref origin HEAD refs/heads/<branch> refs/heads/<baseBranch>`の1回で、
  * リモートの`HEAD`の指す先、ブランチの有無、既定のブランチの先頭を読む。
  * 次のどれかに当たれば例外を投げ、ローカルのブランチを動かさず、何もpushしない。
  * - リモートの`HEAD`が`refs/heads/<baseBranch>`でない。
@@ -2608,9 +2617,10 @@ function parseLsRemoteSymref(stdout: string): LsRemoteRefs {
  * - ローカルの追跡ref(`refs/remotes/origin/<baseBranch>`)が、リモートの既定のブランチの先頭と違う。
  * ローカルの`origin/HEAD`と追跡refは、隔離せずrootで動く検査コマンドが書き換えうるためである。
  * `--prune`なしのfetchは、書き換えられた`origin/HEAD`を直さない。
- * 照合は、リモートにブランチがあるときもする。準備は後でこの追跡refから比較の基準を求めるためである。
+ * 照合は、リモートにブランチがあるときもする。返す`baseSha`から準備が比較の基準を求めるので、
+ * そのcommitがローカルにあり(追跡refと同じ)、検査コマンドに差し替えられていないことを確かめるためである。
  *
- * リモートに`branch`があれば(push済みの後の再試行)、何もせず`pushed: false`を返す。
+ * リモートに`branch`があれば(push済みの後の再試行)、ブランチを動かさず`pushed: false`を返す。
  * ローカルの`origin/<branch>`を信じずにリモートへ問い合わせるのは、`ensureRepo`が`--prune`なしでfetchするので、
  * 人がGitHubでブランチを消した後に残った古い追跡refのせいでpushを飛ばしてはいけないためである。
  *
@@ -2647,15 +2657,7 @@ export async function pushNewBranch(
       const remoteBaseRef = `refs/heads/${opts.baseBranch}`;
       const remote = await opts.run(
         buildGitArgv(
-          [
-            "ls-remote",
-            "--symref",
-            "origin",
-            "--",
-            "HEAD",
-            branchRef,
-            remoteBaseRef,
-          ],
+          ["ls-remote", "--symref", "origin", "HEAD", branchRef, remoteBaseRef],
           { network: true },
         ),
         { cwd: opts.repoDir, env: network },
@@ -2702,7 +2704,7 @@ export async function pushNewBranch(
       }
 
       if (refs.shas.has(branchRef)) {
-        return { pushed: false };
+        return { pushed: false, baseSha };
       }
 
       const moveResult = await opts.run(
@@ -2732,7 +2734,7 @@ export async function pushNewBranch(
       if (pushResult.exitCode !== 0) {
         throw gitError(`git push origin ${refspec} failed`, pushResult);
       }
-      return { pushed: true };
+      return { pushed: true, baseSha };
     },
   });
 }
@@ -2877,20 +2879,22 @@ export type WorktreeGitOptions = {
 };
 
 /**
- * 実装用のworktreeで`git merge-base origin/<baseBranch> HEAD`を実行し、
+ * 実装用のworktreeで`git merge-base -- <baseSha> HEAD`を実行し、
  * ブランチが既定のブランチから分かれた点のshaを返す。失敗したら例外を投げる。
+ * `baseSha`には、`pushNewBranch`がリモートと照合した既定のブランチの先頭を渡す。
+ * 短い名前の`origin/<base>`は、検査コマンドが作る`refs/heads/origin/<base>`や`refs/tags/origin/<base>`が先に解決されうるため、引き直さない。
  * implementフローは毎ラウンドこれと比べるので、ブランチに以前コミットした変更
  * (`needs_human`での途中のpush、既存のPR)も差分に含まれる。
  * このモジュールの規則どおりリビジョンの前に`--`を置く
  * (`git merge-base -- <a> <b>`は`--`なしと同じに解決する)。
- * `baseBranch`は`assertBranchName`でも検証する。
+ * `baseSha`は`assertSha`で検証する。
  */
 export async function mergeBaseSha(
-  opts: WorktreeGitOptions & { readonly baseBranch: string },
+  opts: WorktreeGitOptions & { readonly baseSha: string },
 ): Promise<string> {
-  assertBranchName(opts.baseBranch);
+  assertSha(opts.baseSha);
   const result = await opts.run(
-    buildGitArgv(["merge-base", "--", `origin/${opts.baseBranch}`, "HEAD"]),
+    buildGitArgv(["merge-base", "--", opts.baseSha, "HEAD"]),
     {
       cwd: opts.worktreeDir,
       env: localGitEnv(opts.home, opts.path),
@@ -2898,7 +2902,7 @@ export async function mergeBaseSha(
   );
   if (result.exitCode !== 0) {
     throw gitError(
-      `git merge-base origin/${opts.baseBranch} HEAD failed in ${opts.worktreeDir}`,
+      `git merge-base ${opts.baseSha} HEAD failed in ${opts.worktreeDir}`,
       result,
     );
   }
