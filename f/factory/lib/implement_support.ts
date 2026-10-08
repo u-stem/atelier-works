@@ -694,11 +694,20 @@ export function implementDeadlineAt(
   return startedAtMs + flowTimeoutSec * 1000;
 }
 
-/** ステップ間を渡ったcontextのdeadline_atを検証して返す。有限の数でなければ例外を投げる。期限の無い実行を続けず、NaNで全ラウンドが即時timeoutになるのも防ぐ。 */
-export function requireDeadlineAt(value: unknown): number {
+/**
+ * ステップ間を渡ったcontextのdeadline_atを検証して返す。
+ * 有限の数でなく、または現在(`nowMs`)からステップのtimeout(`IMPLEMENT_STEP_TIMEOUT_SEC`)より先であれば例外を投げる。
+ * 期限の無い実行を続けず、NaNで全ラウンドが即時timeoutになるのも、遠すぎる値で期限の見張りが効かなくなるのも防ぐ。
+ */
+export function requireDeadlineAt(value: unknown, nowMs: number): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     throw new Error(
       `implement context has no valid deadline_at: ${String(value)}`,
+    );
+  }
+  if (value > nowMs + IMPLEMENT_STEP_TIMEOUT_SEC * 1000) {
+    throw new Error(
+      `implement context deadline_at is beyond the step timeout: ${String(value)}`,
     );
   }
   return value;
@@ -707,9 +716,11 @@ export function requireDeadlineAt(value: unknown): number {
 /**
  * 修正ラウンド1回の最悪の所要時間(秒)を返す。
  * Claudeがimplement_timeout_secまで、gitleaksとgit・DBの操作が基礎の値まで、すべての検査コマンドがimplement_check_timeout_secと停止の上乗せまでかかった場合である。
- * 期限までの残りがこれ以上のときだけ修正ラウンドを始めるので、Claude・gitleaks・検査コマンドがそれぞれのtimeoutまでかかっても、始めたラウンドは期限までに終わる。
- * 例外は、不正な出力の後のClaudeの再試行1回で、これは期限までの残りで打ち切る。打ち切られたラウンドはclaude_errorで終わり、差分をpushしない。
- * 期限で切られたClaudeの差分は検査を経ずに捨てることになるので、実測ではなく最悪値で判定する。
+ * 期限までの残りがこれ以上のときだけ修正ラウンドを始めるので、Claude・gitleaks・検査コマンドがそれぞれのtimeoutまでかかっても、条件を満たして始めたラウンドは期限までに終わる。
+ * 例外は、不正な出力の後のClaudeの再試行1回で、これだけは期限までの残りで打ち切る。
+ * 再試行したラウンドは、gitleaksと検査コマンドが期限を過ぎて動くことがある。
+ * 再試行が打ち切られたラウンドはclaude_errorで終わり、検査を経ていないのでpushできず、作業項目は`needs_human`になる。
+ * 実測ではなく最悪値で判定するのは、期限で切られたClaudeの差分が検査を経ないためである。
  */
 export function fixRoundWorstCaseSec(
   config: Pick<

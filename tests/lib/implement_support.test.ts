@@ -15,6 +15,7 @@ import {
   fixRoundWorstCaseSec,
   IMPLEMENT_CHECK_SKIP_REASONS,
   IMPLEMENT_CLAUDE_OUTCOMES,
+  IMPLEMENT_STEP_TIMEOUT_SEC,
   ISSUE_UPDATED_AFTER_INTAKE_NOTE,
   implementDeadlineAt,
   implementTimeoutMisfit,
@@ -1131,20 +1132,33 @@ describe("implementDeadlineAt", () => {
 });
 
 describe("requireDeadlineAt", () => {
+  const NOW_MS = 1_000_000;
+  const LIMIT_MS = IMPLEMENT_STEP_TIMEOUT_SEC * 1000;
+
   test("returns a finite deadline", () => {
-    expect(requireDeadlineAt(1_000)).toBe(1_000);
+    expect(requireDeadlineAt(NOW_MS + 1_000, NOW_MS)).toBe(NOW_MS + 1_000);
+  });
+
+  test("accepts a deadline exactly at the step timeout limit", () => {
+    expect(requireDeadlineAt(NOW_MS + LIMIT_MS, NOW_MS)).toBe(
+      NOW_MS + LIMIT_MS,
+    );
+  });
+
+  test("throws for a deadline beyond the step timeout limit", () => {
+    expect(() => requireDeadlineAt(NOW_MS + LIMIT_MS + 1, NOW_MS)).toThrow();
   });
 
   test("throws for a missing deadline", () => {
-    expect(() => requireDeadlineAt(undefined)).toThrow();
+    expect(() => requireDeadlineAt(undefined, NOW_MS)).toThrow();
   });
 
   test("throws for NaN", () => {
-    expect(() => requireDeadlineAt(Number.NaN)).toThrow();
+    expect(() => requireDeadlineAt(Number.NaN, NOW_MS)).toThrow();
   });
 
   test("throws for Infinity", () => {
-    expect(() => requireDeadlineAt(Number.POSITIVE_INFINITY)).toThrow();
+    expect(() => requireDeadlineAt(Number.POSITIVE_INFINITY, NOW_MS)).toThrow();
   });
 });
 

@@ -126,7 +126,7 @@ export async function main(
   const deadlineAt =
     first_round.kind === "lease_lost"
       ? 0
-      : requireDeadlineAt(context.deadline_at);
+      : requireDeadlineAt(context.deadline_at, Date.now());
   const log = logger("implement_verify");
   // buildSystemPromptの前に取る。投げた場合にsystemPromptの後始末を飛ばさないため。
   const leaseJobId = implementLeaseJobId(process.env);
