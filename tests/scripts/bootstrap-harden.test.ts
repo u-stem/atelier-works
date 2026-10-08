@@ -53,6 +53,30 @@ describe("harden_wmill_config_dir", () => {
     });
   }
 
+  test("extracts the function up to its closing brace line", () => {
+    const text = extractFunction("harden_wmill_config_dir");
+
+    expect(text.endsWith("\n}\n")).toBe(true);
+  });
+
+  test("sets the config directory to 700", () => {
+    chmodSync(realConfigDir, 0o755);
+
+    harden(realConfigDir);
+
+    expect(statSync(realConfigDir).mode & 0o777).toBe(0o700);
+  });
+
+  test("sets the linked config directory to 700 when it is a symlink", () => {
+    chmodSync(realConfigDir, 0o755);
+    const linked = join(root, "linked-config");
+    symlinkSync(realConfigDir, linked);
+
+    harden(linked);
+
+    expect(statSync(realConfigDir).mode & 0o777).toBe(0o700);
+  });
+
   test("sets the token file to 600 in a plain config directory", () => {
     harden(realConfigDir);
 

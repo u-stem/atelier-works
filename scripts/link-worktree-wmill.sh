@@ -15,10 +15,18 @@
 # 使えないので、どちらもリンクに置き換える。
 #
 # このフックが非ゼロで終わると`git worktree add`や`git switch`まで失敗する。
-# リンクは補助にすぎないため、どの失敗でも警告だけを出して0で終わる。
+# リンクは補助にすぎないため、コマンドの失敗、未定義変数の参照、非ゼロの終了の
+# どれでも、警告だけを出して0で終わる。EXITのtrapで終了コードを0に置き換える。
 set -euo pipefail
 
-trap 'echo "link-worktree-wmill: skipped because a command failed (line $LINENO)" >&2; exit 0' ERR
+finish() {
+  local rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "link-worktree-wmill: skipped (exit $rc)" >&2
+  fi
+  exit 0
+}
+trap finish EXIT
 
 worktree_root="$(git rev-parse --show-toplevel)"
 cd "$worktree_root"

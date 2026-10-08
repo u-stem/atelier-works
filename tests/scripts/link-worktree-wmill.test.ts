@@ -6,6 +6,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readdirSync,
+  readFileSync,
   readlinkSync,
   realpathSync,
   rmSync,
@@ -49,9 +50,23 @@ function git(cwd: string, args: string[]): void {
   }
 }
 
-function runScript(cwd: string): { exitCode: number; stdout: string } {
-  const result = Bun.spawnSync(["bash", SCRIPT], { cwd, env: cleanEnv() });
+function runScript(
+  cwd: string,
+  script: string = SCRIPT,
+): { exitCode: number; stdout: string } {
+  const result = Bun.spawnSync(["bash", script], { cwd, env: cleanEnv() });
   return { exitCode: result.exitCode, stdout: result.stdout.toString() };
+}
+
+// スクリプトの写しの`from`を`to`に置き換えて`path`に書く。置き換え先が無いと、
+// 失敗を差し込めていないテストが通ってしまうので、見つからなければ投げる。
+function writeInjectedScript(path: string, from: string, to: string): string {
+  const source = readFileSync(SCRIPT, "utf8");
+  if (!source.includes(from)) {
+    throw new Error(`injection point not found: ${from}`);
+  }
+  writeFileSync(path, source.replace(from, to));
+  return path;
 }
 
 // `base`の下にメインのリポジトリを作り、`.wmill`を置いて、リンクされたworktreeを1つ追加する。
@@ -206,6 +221,32 @@ describe("link-worktree-wmill.sh", () => {
     mkdirSync(outside);
 
     const result = runScript(outside);
+
+    expect(result.exitCode).toBe(0);
+  });
+
+  // ERRでは捕まらない失敗(未定義変数の参照と、明示的な非ゼロの終了)を、
+  // スクリプトの写しに差し込んで確かめる。
+  test("exits successfully when the script hits an unbound variable", () => {
+    const injected = writeInjectedScript(
+      join(root, "injected-unbound.sh"),
+      'main_root="$(dirname "$common_dir")"',
+      'main_root="$UNDEFINED_FOR_TEST"',
+    );
+
+    const result = runScript(worktreeDir, injected);
+
+    expect(result.exitCode).toBe(0);
+  });
+
+  test("exits successfully when the script calls exit 1", () => {
+    const injected = writeInjectedScript(
+      join(root, "injected-exit.sh"),
+      'main_wmill="$main_root/.wmill"',
+      "exit 1",
+    );
+
+    const result = runScript(worktreeDir, injected);
 
     expect(result.exitCode).toBe(0);
   });
