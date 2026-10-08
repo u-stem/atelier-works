@@ -77,11 +77,11 @@ NPM_CONFIG_IGNORE_SCRIPTS=true wmill sync push --yes --keep-deleted
 
 [tasks."push:prune"]
 description = "Push and delete remote items that no longer exist locally (manual only)"
-run = "wmill sync push --yes"
+run = "NPM_CONFIG_IGNORE_SCRIPTS=true wmill sync push --yes"
 
 [tasks."push:dry"]
 description = "Dry-run of wmill sync push"
-run = "wmill sync push --dry-run"
+run = "NPM_CONFIG_IGNORE_SCRIPTS=true wmill sync push --dry-run"
 
 [tasks.pull]
 description = "Pull remote Windmill state into the sync root"
