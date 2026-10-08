@@ -17,11 +17,9 @@ const READ_ONLY_AGENTS = [
   "devil-advocate",
 ];
 const FACTORY_DOCS_PRELOADED = ["implementer", "code-reviewer", "doc-writer"];
-const OWNED_DIRS = [
-  ".claude/agents",
-  ".claude/skills/review-loop",
-  "scripts/claude-hooks",
-];
+const OWNED_DIRS = [".claude/agents", ".claude/skills/review-loop"];
+const MODELS = ["sonnet", "opus", "haiku", "fable", "inherit"];
+const WRITE_TOOL = /^(Edit|Write|NotebookEdit)(\(|$)/;
 
 // 外部の設定リポジトリの名前は、このテスト自身が検出されないよう、部品から組み立てる。
 const FORBIDDEN = new RegExp(
@@ -83,14 +81,17 @@ describe(".claude/agents", () => {
     expect(typeof frontmatter(name).description).toBe("string");
   });
 
-  test.each(AGENTS)("pins the model of %s", (name) => {
-    expect(typeof frontmatter(name).model).toBe("string");
+  test.each(AGENTS)("pins the model of %s to a known value", (name) => {
+    const model = frontmatter(name).model;
+    expect(typeof model === "string" && MODELS.includes(model)).toBe(true);
   });
 
-  test.each(READ_ONLY_AGENTS)("keeps %s read-only", (name) => {
-    expect(
-      tools(name).filter((tool) => tool === "Edit" || tool === "Write"),
-    ).toEqual([]);
+  test.each(AGENTS)("lists at least one tool for %s", (name) => {
+    expect(tools(name).length).toBeGreaterThan(0);
+  });
+
+  test.each(READ_ONLY_AGENTS)("keeps %s free of write tools", (name) => {
+    expect(tools(name).filter((tool) => WRITE_TOOL.test(tool))).toEqual([]);
   });
 
   // Skillが無いsubagentは、yomiyasuやfactory-docsを呼べずに飛ばしてしまう。
@@ -104,6 +105,13 @@ describe(".claude/agents", () => {
 
   test("preloads yomiyasu into doc-writer", () => {
     expect(listField("doc-writer", "skills")).toContain("yomiyasu");
+  });
+
+  test.each(AGENTS)("resolves every skill preloaded into %s", (name) => {
+    const missing = listField(name, "skills").filter(
+      (skill) => !existsSync(join(ROOT, ".claude/skills", skill, "SKILL.md")),
+    );
+    expect(missing).toEqual([]);
   });
 });
 
