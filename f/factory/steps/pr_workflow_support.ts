@@ -3860,8 +3860,7 @@ const REASON_RULES: readonly ReasonRule[] = [
       /^implement work item could not be moved to implementing: ([\s\S]+)$/,
     describe: (m) =>
       `作業項目を実装中へ移せなかったため、実装フローを起動していません: ${m[1]}`,
-    nextAction: () =>
-      "`f/factory/retry_work_item`を作業項目のIDで実行して再開してください",
+    nextAction: () => RETRY_WORK_ITEM_ACTION,
   },
   {
     pattern: /^implement flow job id could not be recorded: ([\s\S]+)$/,
@@ -3887,7 +3886,7 @@ const REASON_RULES: readonly ReasonRule[] = [
     pattern: /^worktree changed after verification$/,
     describe: () => "検証の後にworktreeが変更されました",
     nextAction: () =>
-      "検査コマンドが追跡対象のファイルを書き換えていないか確認し、再実行してください",
+      `検査コマンドが追跡対象のファイルを書き換えていないか確認し、${RETRY_WORK_ITEM_ACTION}`,
   },
   // `lib/workspace.ts`の`commitAndPush`の`expectedTreeSha`(実装フローとpr_fixのpush)
   {
@@ -3900,8 +3899,7 @@ const REASON_RULES: readonly ReasonRule[] = [
     pattern: /^worktree changed before the secret scan in round (\d+)$/,
     describe: (m) =>
       `ラウンド${m[1]}で、変更の判定と秘密情報の検査の間にworktreeが変更されました`,
-    nextAction: () =>
-      "検査コマンドなどが残したプロセスがworktreeを書き換えていないか確かめ、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+    nextAction: () => leftoverProcessNextAction("implement"),
   },
   // `lib/workspace.ts`の`scannedTreeStopReasons`(実装フローの途中経過のpushと、pr_fixの完了ステップ)
   {
@@ -3913,7 +3911,7 @@ const REASON_RULES: readonly ReasonRule[] = [
     pattern: /^requirements regeneration could not be started$/,
     describe: () => "要件定義の作り直しを起動できませんでした",
     // 実装フローの差し戻しでは承認済みの要件定義のattemptが変わっていないので、再実行は実装フローからやり直す。
-    // 却下による作り直し(requirements_apply)では要件定義から始まるので、フローを渡されたときだけ添える。
+    // 理由を出すのは実装フローの差し戻しと、却下による作り直し(requirements_apply。要件定義から再開する)なので、実装フローのときだけ添える。
     nextAction: (_m, flow) =>
       flow === "implement"
         ? `${RETRY_WORK_ITEM_ACTION}(実装からやり直します。差し戻し理由は通知に残っています)`

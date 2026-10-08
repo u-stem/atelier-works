@@ -670,6 +670,16 @@ describe("nextActionFor (implement flow)", () => {
     );
   });
 
+  test("asks to rerun with retry_work_item when the work item could not be moved to implementing", () => {
+    expect(
+      nextActionFor(
+        "implement work item could not be moved to implementing: boom",
+      ),
+    ).toBe(
+      "Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+    );
+  });
+
   test("asks to check the branch and rerun with retry_work_item when its head moved", () => {
     expect(
       nextActionFor(
@@ -715,7 +725,7 @@ describe("nextActionFor (implement flow)", () => {
 
   test("asks to check the check commands after a post-verification change", () => {
     expect(nextActionFor("worktree changed after verification")).toBe(
-      "検査コマンドが追跡対象のファイルを書き換えていないか確認し、再実行してください",
+      "検査コマンドが追跡対象のファイルを書き換えていないか確認し、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
     );
   });
 

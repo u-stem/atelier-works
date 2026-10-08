@@ -125,7 +125,7 @@
 
 ### pr_fixの再実行
 
-- `retry_work_item`で`failed` / `needs_human` / `blocked`のpr_fix行を再実行できる。処理済みwatermark(`last_review_id` / `last_comment_id` / `last_review_comment_id`)はpush成功時(または要件定義への差し戻し、`requirements_gap`)にしか進まないため、それ以外の終端(`failed` / `needs_human` / `blocked`)から再実行すると前回と同じフィードバックが再収集される。準備で修正の前に止めた場合(PRがドラフト、親Issueかブランチの実装フローが実行中、worktreeの使用中、時間設定)は、`needs_human`・`blocked`の通知の次の操作も、修正のラウンドを使わない`retry_work_item`での再実行を案内する。修正の後に止めた要件定義への差し戻しの見送りは、新しいラウンドとして`factory:fix`の付け直しを案内する。
+- `retry_work_item`で`failed` / `needs_human` / `blocked`のpr_fix行を再実行できる。処理済みwatermark(`last_review_id` / `last_comment_id` / `last_review_comment_id`)はpush成功時(または要件定義への差し戻し、`requirements_gap`)にしか進まないため、それ以外の終端(`failed` / `needs_human` / `blocked`)から再実行すると前回と同じフィードバックが再収集される。準備で修正の前に止めた場合(PRがドラフト、親Issueかブランチの実装フローが実行中、worktreeの使用中、時間設定)は、`needs_human`・`blocked`の通知の次の操作も、修正のラウンドを使わない`retry_work_item`での再実行を案内する。修正の後に止めた場合(要件定義への差し戻しの見送り、commitしたツリーが検査したツリーと違う、秘密情報の検査の後にworktreeが変わった、worktreeのHEADが動いた)は、新しいラウンドとして`factory:fix`の付け直しを案内する。
 - pr_fixは`factory:fix`ラベルからしか起動しない(コメントやcommitのpushだけでは自動起動しない、2026-09-26のユーザー決定)。次のroundを明示的に始めたいときは、PRに`factory:fix`ラベルを付け直す。
 
 ### 人が作ったPRと要件の紐づけ
