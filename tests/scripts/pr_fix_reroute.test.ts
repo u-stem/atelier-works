@@ -1,9 +1,9 @@
 // `pr_fix_finish.ts`のrequirements_gapの差し戻しで使う`pr_workflow_support.ts`の
-// `evaluateRerouteParentStatus`、`rerouteParentChangedReason`、`withGapReport`、
-// `rerouteRequirementsGap`と、その理由の訳と次の操作のテスト。
+// `evaluateRerouteParentStatus`、`rerouteParentChangedReason`、
+// `rerouteAttemptsExhaustedReason`、`withGapReport`、`rerouteRequirementsGap`と、
+// その理由の訳と次の操作のテスト。
 
 import { describe, expect, test } from "bun:test";
-import { gapExhaustedReason } from "../../f/factory/lib/implement_finish_support.ts";
 import {
   WORK_ITEM_STATUSES,
   type WorkItemStatus,
@@ -15,6 +15,7 @@ import {
   nextActionFor,
   type RerouteGapDeps,
   type RerouteParent,
+  rerouteAttemptsExhaustedReason,
   rerouteParentChangedReason,
   rerouteRequirementsGap,
   withGapReport,
@@ -76,6 +77,14 @@ describe("rerouteParentChangedReason", () => {
   });
 });
 
+describe("rerouteAttemptsExhaustedReason", () => {
+  test("names the parent work item, its issue and max_attempts", () => {
+    expect(rerouteAttemptsExhaustedReason(PARENT, 3)).toBe(
+      "parent work item 7 (issue #12) used up max_attempts 3, requirements_gap not rerouted",
+    );
+  });
+});
+
 describe("withGapReport", () => {
   test("appends the gap report as a separate reason segment", () => {
     expect(withGapReport("refused", "spec is missing X")).toBe(
@@ -116,6 +125,16 @@ describe("describeReason (requirements_gap reroute refusal)", () => {
     );
   });
 
+  test("translates the max_attempts refusal", () => {
+    expect(
+      describeReason(
+        "parent work item 7 (issue #12) used up max_attempts 3, requirements_gap not rerouted",
+      ),
+    ).toBe(
+      "親Issue #12(作業項目7)は要件定義の試行回数が上限(3)に達しているため、要件定義への差し戻しを止めました",
+    );
+  });
+
   test("translates the parent-changed refusal", () => {
     expect(
       describeReason(
@@ -146,6 +165,16 @@ describe("nextActionFor (requirements_gap reroute refusal)", () => {
     );
   });
 
+  test("asks to add the missing requirements to the parent Issue when it used up max_attempts", () => {
+    expect(
+      nextActionFor(
+        "parent work item 7 (issue #12) used up max_attempts 3, requirements_gap not rerouted; spec is missing X",
+      ),
+    ).toBe(
+      "不足している要件を人が整理して親Issueに追記し、親Issueに`factory`ラベルを付け直してください",
+    );
+  });
+
   test("asks to wait for the parent when it changed", () => {
     expect(
       nextActionFor(
@@ -162,6 +191,7 @@ type FakeOptions = {
   readonly launchResult?: string;
   readonly recorded?: boolean;
   readonly cancelThrows?: boolean;
+  readonly recordFailureThrows?: boolean;
 };
 
 /** 呼ばれた依存を`calls`に順に記録する偽の`RerouteGapDeps`。 */
@@ -205,7 +235,9 @@ function fakeDeps(options: FakeOptions = {}): {
     recordFailure: (reason) => {
       calls.push("recordFailure");
       failures.push(reason);
-      return Promise.resolve();
+      return options.recordFailureThrows === true
+        ? Promise.reject(new Error("database unavailable"))
+        : Promise.resolve();
     },
     log: () => {},
   };
@@ -250,7 +282,10 @@ describe("rerouteRequirementsGap", () => {
       3,
       deps,
     );
-    expect(outcome).toEqual({ kind: "refused", reason: gapExhaustedReason(3) });
+    expect(outcome).toEqual({
+      kind: "refused",
+      reason: rerouteAttemptsExhaustedReason(PARENT, 3),
+    });
   });
 
   test("compares against the parent's status and flow job id as read", async () => {
@@ -315,6 +350,16 @@ describe("rerouteRequirementsGap", () => {
     const { deps, calls } = fakeDeps({ recorded: false, cancelThrows: true });
     await rerouteRequirementsGap(PARENT, 3, deps);
     expect(calls).toContain("recordFailure");
+  });
+
+  test("still resolves when recording the failure throws", async () => {
+    const { deps } = fakeDeps({ recorded: false, recordFailureThrows: true });
+    const outcome = await rerouteRequirementsGap(PARENT, 3, deps);
+    expect(outcome).toEqual({
+      kind: "rerouted",
+      jobId: JOB_ID,
+      recorded: false,
+    });
   });
 
   test("reports that the launched job id was not recorded", async () => {

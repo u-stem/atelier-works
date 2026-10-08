@@ -238,16 +238,15 @@ export async function main(
     // トリガーラベルを付け直すと残り続け、次に終端の状態になった後で
     // Issueが再び着手されてしまう。
     // 残る前提条件は、親の作業項目が実際にIssueであることだけ。
-    const parentIssueNumber = parentItem.issue_number;
-    const rerouteGuardReason = evaluateRerouteGuard(parentIssueNumber);
+    const rerouteGuard = evaluateRerouteGuard(parentItem.issue_number);
 
-    if (parentIssueNumber === null || rerouteGuardReason !== null) {
+    if (!rerouteGuard.ok) {
       log.warn(
         "aborting requirements_gap reroute: parent work item has no issue",
         {
           parent_work_item_id,
           reason: "no_parent_issue",
-          detail: rerouteGuardReason,
+          detail: rerouteGuard.reason,
         },
       );
       await finalizeTerminal("needs_human", reason ?? summary);
@@ -264,7 +263,7 @@ export async function main(
     const outcome = await rerouteRequirementsGap(
       {
         id: parentItem.id,
-        issue_number: parentIssueNumber,
+        issue_number: rerouteGuard.issueNumber,
         status: parentItem.status,
         flow_job_id: parentItem.flow_job_id,
         attempt: parentItem.attempt,

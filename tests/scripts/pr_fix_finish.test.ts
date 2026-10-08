@@ -81,14 +81,15 @@ describe("deriveFallbackReviewers", () => {
 });
 
 describe("evaluateRerouteGuard", () => {
-  test("allows the reroute when the parent work item has an issue_number", () => {
-    expect(evaluateRerouteGuard(42)).toBeNull();
+  test("allows the reroute with the parent's issue_number when it has one", () => {
+    expect(evaluateRerouteGuard(42)).toEqual({ ok: true, issueNumber: 42 });
   });
 
   test("blocks the reroute when the parent work item has no issue_number", () => {
-    expect(evaluateRerouteGuard(null)).toBe(
-      "parent work item has no issue_number",
-    );
+    expect(evaluateRerouteGuard(null)).toEqual({
+      ok: false,
+      reason: "parent work item has no issue_number",
+    });
   });
 });
 
