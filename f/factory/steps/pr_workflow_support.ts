@@ -3837,7 +3837,9 @@ const REASON_RULES: readonly ReasonRule[] = [
   {
     pattern: /^implement flow job id could not be recorded: ([\s\S]+)$/,
     describe: (m) => `実装フローのジョブIDを記録できませんでした: ${m[1]}`,
-    nextAction: () => GENERIC_NEXT_ACTION,
+    // 起動したフローは動いており、作業項目は`implementing`のままなので、retry_work_itemは再実行を拒否する。
+    nextAction: () =>
+      "実装フローは動いているので、終わるのを待ち、Consoleのパイプラインタブで作業項目の状態を確認してください",
   },
   {
     pattern: /^secrets detected, changes not pushed$/,

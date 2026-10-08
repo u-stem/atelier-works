@@ -659,6 +659,15 @@ describe("nextActionFor (implement flow)", () => {
     );
   });
 
+  // 作業項目は`implementing`のままフローが動いているので、retry_work_itemは再実行を拒否する。
+  test("asks to wait for the running implement flow when its job id was not recorded", () => {
+    expect(
+      nextActionFor("implement flow job id could not be recorded: boom"),
+    ).toBe(
+      "実装フローは動いているので、終わるのを待ち、Consoleのパイプラインタブで作業項目の状態を確認してください",
+    );
+  });
+
   test("asks for re-approval when no approval matches", () => {
     expect(nextActionFor("no approved requirements for attempt 2")).toBe(
       "要件定義を承認し直すか、Issueに`factory`ラベルを付け直してください",
