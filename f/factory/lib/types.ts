@@ -151,6 +151,20 @@ export function assertBranchName(name: string): void {
   }
 }
 
+/** GitHubのPRのHTMLのURL。ownerとrepoはGitHubで使える文字に限る。 */
+const PULL_REQUEST_URL =
+  /^https:\/\/github\.com\/[A-Za-z0-9][A-Za-z0-9-]{0,38}\/(?!\.\.?\/)[A-Za-z0-9._-]{1,100}\/pull\/[1-9][0-9]*$/;
+
+/**
+ * `url`が`https://github.com/<owner>/<repo>/pull/<n>`の形でなければ例外を投げる。
+ * 記録したURLはConsoleでリンクにするので、別の形のURLは保存しない。
+ */
+export function assertPullRequestUrl(url: string): void {
+  if (!PULL_REQUEST_URL.test(url)) {
+    throw new Error(`invalid pull request url: ${JSON.stringify(url)}`);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // work_items
 // ---------------------------------------------------------------------------

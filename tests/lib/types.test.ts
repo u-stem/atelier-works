@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   assertBranchName,
   assertGitHubName,
+  assertPullRequestUrl,
   assertSha,
   capToDeadline,
   IMPLEMENT_ROUND_MODES,
@@ -138,6 +139,30 @@ describe("assertBranchName", () => {
 
   test("rejects a name ending with .lock", () => {
     expect(() => assertBranchName("feature.lock")).toThrow();
+  });
+});
+
+describe("assertPullRequestUrl", () => {
+  test("accepts a GitHub pull request URL", () => {
+    expect(() =>
+      assertPullRequestUrl("https://github.com/u-stem/factory-sandbox/pull/12"),
+    ).not.toThrow();
+  });
+
+  test.each([
+    ["http scheme", "http://github.com/o/r/pull/1"],
+    ["another host", "https://example.com/o/r/pull/1"],
+    ["issues path", "https://github.com/o/r/issues/1"],
+    ["zero number", "https://github.com/o/r/pull/0"],
+    ["leading zero", "https://github.com/o/r/pull/01"],
+    ["trailing slash", "https://github.com/o/r/pull/1/"],
+    ["query", "https://github.com/o/r/pull/1?x=1"],
+    ["fragment", "https://github.com/o/r/pull/1#x"],
+    ["dot repo", "https://github.com/o/../pull/1"],
+    ["javascript scheme", "javascript:alert(1)//github.com/o/r/pull/1"],
+    ["owner starting with a hyphen", "https://github.com/-o/r/pull/1"],
+  ])("rejects %s", (_name, url) => {
+    expect(() => assertPullRequestUrl(url)).toThrow(/invalid pull request url/);
   });
 });
 

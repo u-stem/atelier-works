@@ -2637,6 +2637,21 @@ describe("setWorkItemPrUrl", () => {
       1,
     ]);
   });
+
+  test("rejects an invalid pull request URL before issuing any query", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await setWorkItemPrUrl(7, "javascript:alert(1)", sql).catch(
+      () => undefined,
+    );
+    expect(calls).toHaveLength(0);
+  });
+
+  test("throws for an invalid pull request URL", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    await expect(
+      setWorkItemPrUrl(7, "https://github.com/o/r/pull/0", sql),
+    ).rejects.toThrow(/invalid pull request url/);
+  });
 });
 
 describe("latestRequirementsApproval", () => {
