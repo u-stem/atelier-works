@@ -20,7 +20,11 @@ jobs:
         uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        # `mise run check`はConsoleの検査(console:check)も含むので、Consoleの依存も入れる。
+        # Consoleの依存のinstall scriptは実行しない。
+        run: |
+          bun install --frozen-lockfile
+          bun install --cwd console --frozen-lockfile --ignore-scripts
 
       - name: Lint, typecheck, and test
         run: mise run check
@@ -115,3 +119,94 @@ jobs:
       - name: Tear down Postgres
         if: always()
         run: mise exec -- docker compose -f infra/docker-compose.yml down -v
+
+  console:
+    # Consoleを組み立て、mainへのpushのときだけ成果物にする。
+    # console_fetcherは、このワークフロー全体が成功した実行の成果物だけを取り込む。
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup mise
+        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+
+      - name: Install root dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Check the console lockfile policy
+        # 依存を入れる前に、取得元がregistryとintegrityに限られることを確かめる。
+        run: bun run scripts/check-console-lockfile.ts console/bun.lock
+
+      - name: Install console dependencies
+        run: bun install --cwd console --frozen-lockfile --ignore-scripts
+
+      - name: Type-check
+        run: bun run --cwd console typecheck
+
+      - name: Lint
+        run: bunx --bun biome check console
+
+      - name: Test
+        run: bun run --cwd console test
+
+      - name: Build
+        run: bun run --cwd console build
+
+      - name: Write the release manifest
+        # 全ファイルのsha256と元のcommitを記録する。console_fetcherはこれと中身を照合する。
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: bun run --cwd console write-manifest dist "$SOURCE_SHA"
+
+      - name: Upload the console build
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: console-dist
+          path: console/dist/
+          retention-days: 30
+          if-no-files-found: error
+          # 同じ実行の「Re-run all jobs」で上げ直しても、名前の衝突で失敗しないようにする。
+          overwrite: true
+
+  caddyfile:
+    # Caddyfileを、composeで使うのと同じイメージで検証する。
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validate the Caddyfile
+        run: |
+          set -euo pipefail
+          image="$(grep -oE 'ghcr\.io/windmill-labs/caddy-l4:[^[:space:]]+' infra/docker-compose.yml)"
+          docker run --rm -e BASE_URL=:80 \
+            -v "$PWD/infra/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            "$image" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+
+  console-fetcher-image:
+    # console_fetcherのイメージを組み立て、composeと同じ制限(読み取り専用のルート、tmpfs、
+    # 権限なし)で1回動かす。トークンが無いので、状態にconfig_missingを書いて終わるはず。
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build the console_fetcher image
+        run: docker build -t console-fetcher-ci infra/console_fetcher
+
+      - name: Run once without configuration
+        run: |
+          set -euo pipefail
+          output="$(docker run --rm --read-only --tmpfs /tmp:size=16m --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            -v console-fetcher-ci:/srv/console console-fetcher-ci once)"
+          echo "$output"
+          grep -q '"error":"config_missing"' <<<"$output"
