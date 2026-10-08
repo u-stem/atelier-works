@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import type { ImplementClaudeOutput } from "../../f/factory/lib/implement_support.ts";
 import {
+  ACTIVE_PR_RUN_REASON,
+  ActivePrRunError,
   buildImplementBranchName,
   buildImplementCommitMessage,
   buildImplementPrBody,
@@ -9,7 +11,6 @@ import {
   classifyProtectedChanges,
   decideImplementRoundExit,
   extractAcceptanceCriteria,
-  hasActivePrRun,
   IMPLEMENT_CHECK_SKIP_REASONS,
   IMPLEMENT_CLAUDE_OUTCOMES,
   ISSUE_UPDATED_AFTER_INTAKE_NOTE,
@@ -18,6 +19,7 @@ import {
   issueChangedSinceIntake,
   NO_ACCEPTANCE_CRITERIA_NOTE,
   neutralizeIssueRefs,
+  parseImplementBranchWorkItemId,
   roundOutcomeForExit,
   stallHash,
   truncateCheckOutput,
@@ -981,37 +983,25 @@ describe("isRequirementsApprovedForAttempt", () => {
   });
 });
 
-describe("hasActivePrRun", () => {
-  test("is false when the PR has no work item", () => {
-    expect(hasActivePrRun(null)).toBe(false);
+describe("parseImplementBranchWorkItemId", () => {
+  test("reads the work item id of an implement branch", () => {
+    expect(parseImplementBranchWorkItemId("factory/issue-7-wi-3")).toBe(3);
   });
 
-  test("is true for a running pr_fix", () => {
-    expect(hasActivePrRun({ kind: "pr_fix", status: "fixing" })).toBe(true);
+  test("returns null for another branch", () => {
+    expect(parseImplementBranchWorkItemId("feature/issue-7-wi-3")).toBeNull();
   });
 
-  test("is true for a running pr_review", () => {
-    expect(hasActivePrRun({ kind: "pr_review", status: "reviewing" })).toBe(
-      true,
-    );
-  });
-
-  test("is false for a finished pr_fix", () => {
+  test("returns null for a branch with extra text", () => {
     expect(
-      hasActivePrRun({ kind: "pr_fix", status: "rereview_requested" }),
-    ).toBe(false);
+      parseImplementBranchWorkItemId("factory/issue-7-wi-3-old"),
+    ).toBeNull();
   });
+});
 
-  test("is false for a pr_fix that stopped for a human", () => {
-    expect(hasActivePrRun({ kind: "pr_fix", status: "needs_human" })).toBe(
-      false,
-    );
-  });
-
-  test("is false for an issue work item", () => {
-    expect(hasActivePrRun({ kind: "issue", status: "implementing" })).toBe(
-      false,
-    );
+describe("ActivePrRunError", () => {
+  test("carries the active run reason", () => {
+    expect(new ActivePrRunError().message).toBe(ACTIVE_PR_RUN_REASON);
   });
 });
 

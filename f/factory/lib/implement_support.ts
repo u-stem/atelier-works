@@ -22,8 +22,6 @@ import {
   isRecord,
   isString,
   isStringArray,
-  TERMINAL_WORK_ITEM_STATUSES,
-  type WorkItem,
 } from "./types.ts";
 import { withCommitTrailers } from "./workspace.ts";
 
@@ -246,6 +244,13 @@ export function buildImplementBranchName(
   const branch = `factory/issue-${String(issueNumber)}-wi-${String(workItemId)}`;
   assertBranchName(branch);
   return branch;
+}
+
+/** 実装ブランチ名(`factory/issue-<N>-wi-<id>`)から作業項目のIDを返す。形が違えばnull。pr_fixが、親の行が無くても同じブランチの実装フローを見つけるのに使う。 */
+export function parseImplementBranchWorkItemId(branch: string): number | null {
+  const match = /^factory\/issue-[1-9]\d*-wi-([1-9]\d*)$/.exec(branch);
+  const id = match?.[1] === undefined ? Number.NaN : Number(match[1]);
+  return Number.isSafeInteger(id) ? id : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -757,23 +762,15 @@ export function isRequirementsApprovedForAttempt(
 }
 
 // ---------------------------------------------------------------------------
-// hasActivePrRun: implementとpr_fix・pr_reviewが
-// 同じブランチのworktreeを同時に使わないための判定
+// ブランチのPRで動いている修正・レビュー
 // ---------------------------------------------------------------------------
 
 export const ACTIVE_PR_RUN_REASON = "pull request has an active fix run";
 
-/**
- * PRの最新の作業項目(`db.latestPrWorkItem`か`null`)が、
- * 終端状態に達していないpr_fixかpr_reviewの実行かを返す。
- * そのような実行は、今まさにimplementブランチのworktreeを使っているかもしれない。
- */
-export function hasActivePrRun(
-  item: Pick<WorkItem, "kind" | "status"> | null,
-): boolean {
-  return (
-    item !== null &&
-    (item.kind === "pr_fix" || item.kind === "pr_review") &&
-    !TERMINAL_WORK_ITEM_STATUSES.includes(item.status)
-  );
+/** ブランチのPRで、終端に達していないpr_fix / pr_reviewがある(`hasUnfinishedPrRun`)。実装フローの準備はworktreeに触れずに止まる。 */
+export class ActivePrRunError extends Error {
+  constructor() {
+    super(ACTIVE_PR_RUN_REASON);
+    this.name = "ActivePrRunError";
+  }
 }

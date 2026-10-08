@@ -23,6 +23,7 @@ import {
   listIssueComments,
   listPrReviewComments,
   listPrReviews,
+  listPullRequestNumbersByHead,
   listReviewThreads,
   parseGitHubRepoUrl,
   postIssueComment,
@@ -2206,6 +2207,66 @@ describe("findOpenPullRequestByHead", () => {
         "factory/issue-7-wi-3",
       ),
     ).rejects.toThrow(/unexpected response shape/);
+  });
+});
+
+describe("listPullRequestNumbersByHead", () => {
+  test("asks for open and closed pull requests", async () => {
+    const fake = createFakeCommandRunner([ghApiOk([])]);
+    await listPullRequestNumbersByHead(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      "factory/issue-7-wi-3",
+    );
+    expect(fake.calls[0]?.argv.some((arg) => arg.includes("state=all"))).toBe(
+      true,
+    );
+  });
+
+  test("returns the numbers of every pull request with that head", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([
+        { number: 12, html_url: "https://github.com/acme/widgets/pull/12" },
+        { number: 9, html_url: "https://github.com/acme/widgets/pull/9" },
+      ]),
+    ]);
+    expect(
+      await listPullRequestNumbersByHead(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        "factory/issue-7-wi-3",
+      ),
+    ).toEqual([12, 9]);
+  });
+
+  test("refuses a page that may not hold every pull request", async () => {
+    const page = Array.from({ length: 100 }, (_, i) => ({
+      number: i + 1,
+      html_url: `https://github.com/acme/widgets/pull/${String(i + 1)}`,
+    }));
+    const fake = createFakeCommandRunner([ghApiOk(page)]);
+    await expect(
+      listPullRequestNumbersByHead(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        "factory/issue-7-wi-3",
+      ),
+    ).rejects.toThrow("100 or more");
+  });
+
+  test("throws on an unexpected item", async () => {
+    const fake = createFakeCommandRunner([ghApiOk([{ title: "x" }])]);
+    await expect(
+      listPullRequestNumbersByHead(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        "factory/issue-7-wi-3",
+      ),
+    ).rejects.toThrow("unexpected response shape");
   });
 });
 

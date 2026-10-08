@@ -1558,6 +1558,40 @@ export async function latestPrWorkItem(
   return row === undefined ? null : toWorkItem(row);
 }
 
+export type PrRunScope = {
+  /** ブランチをheadに持つPRの番号(閉じたものを含む)。 */
+  readonly prNumbers: readonly number[];
+  /** 実装の作業項目のID。pr_fix / pr_reviewの`parent_work_item_id`と照合する。 */
+  readonly parentWorkItemId: number;
+};
+
+/**
+ * `scope`のPRのどれか、または`parent_work_item_id`が実装の作業項目であるもののうち、
+ * 終端状態に達していないpr_fixかpr_reviewの作業項目があれば`true`を返す。
+ * 実装フローの準備が、同じブランチのworktreeを使っているかもしれない実行の有無を確かめるのに使う。
+ * 最新の行だけを見ると、後から作られた終端の行に動いている実行が隠れるため、すべての行を見る。
+ */
+export async function hasUnfinishedPrRun(
+  owner: string,
+  repo: string,
+  scope: PrRunScope,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  const terminal: string[] = [...TERMINAL_WORK_ITEM_STATUSES];
+  const rows = await sql`
+    SELECT id FROM factory.work_items
+    WHERE owner = ${owner} AND repo = ${repo}
+      AND kind IN ('pr_fix', 'pr_review')
+      AND (
+        pr_number = ANY(${[...scope.prNumbers]}::int[])
+        OR parent_work_item_id = ${scope.parentWorkItemId}::bigint
+      )
+      AND NOT (status = ANY(${terminal}))
+    LIMIT 1
+  `.fetch();
+  return rows.length > 0;
+}
+
 /** Factoryがまだ追跡しているPR。`listTrackedPrs`が返す。 */
 export type TrackedPr = {
   owner: string;

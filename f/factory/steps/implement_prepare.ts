@@ -13,7 +13,7 @@ import {
   acquireImplementLease,
   getRequirementDraft,
   getWorkItem,
-  latestPrWorkItem,
+  hasUnfinishedPrRun,
   latestRequirementsApproval,
   setWorkItemBranch,
 } from "../lib/db.ts";
@@ -22,6 +22,7 @@ import {
   type GhClient,
   getIssue,
   type Issue,
+  listPullRequestNumbersByHead,
   type PullRequestRef,
 } from "../lib/github.ts";
 import { isFactoryRepo } from "../lib/implement_finish_support.ts";
@@ -37,7 +38,6 @@ import {
 import {
   ACTIVE_PR_RUN_REASON,
   buildImplementBranchName,
-  hasActivePrRun,
   isRequirementsApprovedForAttempt,
 } from "../lib/implement_support.ts";
 import { logger } from "../lib/log.ts";
@@ -250,8 +250,9 @@ export async function main(
   const draft = await getRequirementDraft(approval.draft_id);
   if (draft === null) return stop("needs_human", noApproval);
 
-  // ブランチのopenなPRでは、pr_fix / pr_reviewが同じworktreeを使っていることがある。
-  // worktreeを再利用する経路はresetとcleanをかけるため、worktreeに触る前に確かめる。
+  // ブランチのPR(閉じたものを含む)で、pr_fix / pr_reviewが同じworktreeを使っていることがある。
+  // worktreeを再利用する経路はresetとcleanをかけるため、worktreeに触る前に、
+  // 最新の行だけでなく終端でない行が1つでもあれば止まる。
   const branch = buildImplementBranchName(issueNumber, work_item_id);
   const existingPr = await findOpenPullRequestByHead(
     client,
@@ -259,12 +260,17 @@ export async function main(
     workItem.repo,
     branch,
   );
-  if (
-    existingPr !== null &&
-    hasActivePrRun(
-      await latestPrWorkItem(workItem.owner, workItem.repo, existingPr.number),
-    )
-  )
+  const hasPrRunOnBranch = async (): Promise<boolean> =>
+    hasUnfinishedPrRun(workItem.owner, workItem.repo, {
+      prNumbers: await listPullRequestNumbersByHead(
+        client,
+        workItem.owner,
+        workItem.repo,
+        branch,
+      ),
+      parentWorkItemId: work_item_id,
+    });
+  if (await hasPrRunOnBranch())
     return stop("needs_human", ACTIVE_PR_RUN_REASON);
 
   const factoryClone = await ensureFactoryClone({
