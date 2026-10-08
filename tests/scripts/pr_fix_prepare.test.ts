@@ -309,6 +309,13 @@ describe("nextActionFor", () => {
     );
   });
 
+  // 修正の前に止めたので、修正のラウンドを使わない同じ作業項目の再実行を案内する。
+  test("asks to mark the PR ready and rerun the same work item when it is a draft", () => {
+    expect(nextActionFor("pull request is a draft")).toBe(
+      "ドラフトを解除してから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+    );
+  });
+
   test("tells the operator to reopen or withdraw when the PR is not open", () => {
     expect(nextActionFor("pull request is not open")).toBe(
       "PRを再オープンするか、この作業を取り下げてください",
@@ -738,9 +745,9 @@ describe("nextActionFor (implement flow)", () => {
     );
   });
 
-  test("waits for the implement flow before re-adding factory:fix", () => {
+  test("waits for the implement flow before rerunning the same pr_fix work item", () => {
     expect(nextActionFor("parent issue is being re-implemented")).toBe(
-      "実装フローの完了を待ってから再度factory:fixを付けてください",
+      "実装フローの完了を待ってから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
     );
   });
 
@@ -821,10 +828,12 @@ describe("nextActionFor (implement flow)", () => {
     );
   });
 
-  test("waits for the branch's implementation before re-adding factory:fix", () => {
+  test("waits for the branch's implementation before rerunning the same pr_fix work item", () => {
     expect(
       nextActionFor("implementation of the branch's work item is running"),
-    ).toBe("実装フローの完了を待ってから再度factory:fixを付けてください");
+    ).toBe(
+      "実装フローの完了を待ってから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+    );
   });
 
   test("asks to look at the failing checks after the deadline", () => {

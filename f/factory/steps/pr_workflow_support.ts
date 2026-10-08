@@ -3483,7 +3483,8 @@ function worktreeLockHeldInRunNextAction(
 }
 
 const REASON_RULES: readonly ReasonRule[] = [
-  // pr_fix_prepare.tsの`evaluatePrFixSafetyGuards` / `evaluateRepoAllowedGuard`
+  // pr_fix_prepare.tsの`evaluatePrFixSafetyGuards` / `evaluateRepoAllowedGuard`。
+  // 準備の関門は修正の前に`blocked`で止めるので、再実行は修正のラウンドを使わない`retry_work_item`にする。
   {
     pattern: /^pull request is not open$/,
     describe: () => "PR がオープンではありません",
@@ -3498,7 +3499,7 @@ const REASON_RULES: readonly ReasonRule[] = [
   {
     pattern: /^pull request is a draft$/,
     describe: () => "PR がドラフトです",
-    nextAction: () => "ドラフトを解除してから`factory:fix`を付け直してください",
+    nextAction: () => `ドラフトを解除してから、${RETRY_WORK_ITEM_ACTION}`,
   },
   {
     pattern: /^base branch is protected$/,
@@ -3663,6 +3664,8 @@ const REASON_RULES: readonly ReasonRule[] = [
     nextAction: () => "work itemの状態をConsoleで確認してください",
   },
   // pr_fix_finish.tsが使う`evaluateRerouteParentStatus`と`rerouteParentChangedReason`。
+  // どれも修正のClaudeがrequirements_gapを返した後に止めるので、そのラウンドは使い終わっている。
+  // 準備で止めた理由と違い、新しいラウンドとして`factory:fix`を付け直してもらう。
   // 実装中の規則を、状態名を取る規則より先に置く。
   {
     pattern:
@@ -3895,8 +3898,7 @@ const REASON_RULES: readonly ReasonRule[] = [
   {
     pattern: /^parent issue is being re-implemented$/,
     describe: () => "親Issueの実装をやり直している最中のため修正を止めました",
-    nextAction: () =>
-      "実装フローの完了を待ってから再度factory:fixを付けてください",
+    nextAction: () => `実装フローの完了を待ってから、${RETRY_WORK_ITEM_ACTION}`,
   },
   {
     pattern: /^worktree git pointer was modified$/,
@@ -3952,8 +3954,7 @@ const REASON_RULES: readonly ReasonRule[] = [
     pattern: /^implementation of the branch's work item is running$/,
     describe: () =>
       "このPRのブランチで実装フローが実行中のため修正を止めました",
-    nextAction: () =>
-      "実装フローの完了を待ってから再度factory:fixを付けてください",
+    nextAction: () => `実装フローの完了を待ってから、${RETRY_WORK_ITEM_ACTION}`,
   },
   {
     pattern: /^worktree lock is held by a process this run left behind$/,
