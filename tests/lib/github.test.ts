@@ -1017,6 +1017,7 @@ describe("claimIssue", () => {
   const OPTS = { triggerLabel: "factory", assignee: "factory-bot" };
   const RETRY_LOG = "claim deferred: trigger label is still present";
   const UNKNOWN_LOG = "claim ownership could not be determined";
+  const ATTEMPT_LOG = "claim re-read attempt failed";
 
   function setup(responses: readonly CommandResult[]) {
     const fake = createFakeCommandRunner(responses);
@@ -1055,6 +1056,15 @@ describe("claimIssue", () => {
   function unlabeled(actor: string, label = "factory") {
     return {
       event: "unlabeled",
+      actor: { login: actor },
+      label: { name: label },
+      created_at: "2026-10-09T00:00:00Z",
+    };
+  }
+
+  function labeled(actor: string, label = "factory") {
+    return {
+      event: "labeled",
       actor: { login: actor },
       label: { name: label },
       created_at: "2026-10-09T00:00:00Z",
@@ -1244,6 +1254,73 @@ describe("claimIssue", () => {
       expect(result).toEqual({ claimed: true, assignee: "confirmed" });
     });
 
+    test("throws ClaimOwnershipUnknownError when a human re-added the label after our stale removal", async () => {
+      const { client, opts } = setup([
+        assigned,
+        serverError,
+        labelAbsent(),
+        ghApiOk([unlabeled("factory-bot"), labeled("alice")]),
+      ]);
+      const claiming = claimIssue(client, "acme", "widgets", 5, opts);
+      await expect(claiming).rejects.toBeInstanceOf(ClaimOwnershipUnknownError);
+    });
+
+    test("claims when our removal comes after the latest labeling", async () => {
+      const { client, opts } = setup([
+        assigned,
+        serverError,
+        labelAbsent(),
+        ghApiOk([
+          unlabeled("alice"),
+          labeled("alice"),
+          unlabeled("factory-bot"),
+        ]),
+      ]);
+      const result = await claimIssue(client, "acme", "widgets", 5, opts);
+      expect(result).toEqual({ claimed: true, assignee: "confirmed" });
+    });
+
+    test("ignores labeled events of other labels", async () => {
+      const { client, opts } = setup([
+        assigned,
+        serverError,
+        labelAbsent(),
+        ghApiOk([unlabeled("factory-bot"), labeled("alice", "other")]),
+      ]);
+      const result = await claimIssue(client, "acme", "widgets", 5, opts);
+      expect(result).toEqual({ claimed: true, assignee: "confirmed" });
+    });
+
+    test("throws ClaimOwnershipUnknownError when a later removal has no actor", async () => {
+      const { client, opts } = setup([
+        assigned,
+        serverError,
+        labelAbsent(),
+        ghApiOk([
+          unlabeled("factory-bot"),
+          { event: "unlabeled", label: { name: "factory" } },
+        ]),
+      ]);
+      const claiming = claimIssue(client, "acme", "widgets", 5, opts);
+      await expect(claiming).rejects.toBeInstanceOf(ClaimOwnershipUnknownError);
+    });
+
+    test("uses the decisive event on the last page of the timeline", async () => {
+      const { client, opts } = setup([
+        assigned,
+        serverError,
+        labelAbsent(),
+        ok(
+          ghApiStdout(200, [unlabeled("alice")], {
+            link: '<https://api.github.com/repos/acme/widgets/issues/5/timeline?page=2>; rel="next"',
+          }),
+        ),
+        ghApiOk([unlabeled("factory-bot")]),
+      ]);
+      const result = await claimIssue(client, "acme", "widgets", 5, opts);
+      expect(result).toEqual({ claimed: true, assignee: "confirmed" });
+    });
+
     test("retries the timeline read before giving up on it", async () => {
       const { client, opts } = setup([
         assigned,
@@ -1348,19 +1425,96 @@ describe("claimIssue", () => {
       expect(warns).toContain(UNKNOWN_LOG);
     });
 
-    test("throws ClaimOwnershipUnknownError when the re-reads stay rate limited", async () => {
+    test("makes a single issue re-read attempt when it is rate limited", async () => {
+      const { fake, client, opts } = setup([
+        assigned,
+        serverError,
+        rateLimited,
+        rateLimited,
+      ]);
+      await claimIssue(client, "acme", "widgets", 5, opts).catch(
+        () => undefined,
+      );
+      expect(fake.calls).toHaveLength(4);
+    });
+
+    test("does not back off after a rate limited issue re-read", async () => {
+      const { client, sleeps, opts } = setup([
+        assigned,
+        serverError,
+        rateLimited,
+        rateLimited,
+      ]);
+      await claimIssue(client, "acme", "widgets", 5, opts).catch(
+        () => undefined,
+      );
+      expect(sleeps).toEqual([1000]); // callGhApi自身のレート制限の待機だけ
+    });
+
+    test("throws ClaimOwnershipUnknownError when the issue re-read is rate limited", async () => {
       const { client, opts } = setup([
         assigned,
         serverError,
         rateLimited,
         rateLimited,
+      ]);
+      const claiming = claimIssue(client, "acme", "widgets", 5, opts);
+      await expect(claiming).rejects.toBeInstanceOf(ClaimOwnershipUnknownError);
+    });
+
+    test("makes a single timeline read attempt when it is rate limited", async () => {
+      const { fake, client, opts } = setup([
+        assigned,
+        serverError,
+        ghApiOk(issueBody([], ["factory-bot"])),
         rateLimited,
         rateLimited,
+      ]);
+      await claimIssue(client, "acme", "widgets", 5, opts).catch(
+        () => undefined,
+      );
+      expect(fake.calls).toHaveLength(5);
+    });
+
+    test("throws ClaimOwnershipUnknownError when the timeline read is rate limited", async () => {
+      const { client, opts } = setup([
+        assigned,
+        serverError,
+        ghApiOk(issueBody([], ["factory-bot"])),
         rateLimited,
         rateLimited,
       ]);
       const claiming = claimIssue(client, "acme", "widgets", 5, opts);
       await expect(claiming).rejects.toBeInstanceOf(ClaimOwnershipUnknownError);
+    });
+
+    test("logs a warning for each failed issue re-read attempt", async () => {
+      const { client, warns, opts } = setup([
+        assigned,
+        serverError,
+        serverError,
+        serverError,
+        serverError,
+      ]);
+      await claimIssue(client, "acme", "widgets", 5, opts).catch(
+        () => undefined,
+      );
+      expect(warns.filter((w) => w === ATTEMPT_LOG)).toHaveLength(3);
+    });
+
+    test("logs a warning for each failed timeline read attempt", async () => {
+      const { client, warns, opts } = setup([
+        assigned,
+        serverError,
+        ghApiOk(issueBody([], ["factory-bot"])),
+        serverError,
+        serverError,
+        serverError,
+      ]);
+      await claimIssue(client, "acme", "widgets", 5, opts).catch(
+        () => undefined,
+      );
+      expect(warns.filter((w) => w === ATTEMPT_LOG)).toHaveLength(3);
     });
   });
 

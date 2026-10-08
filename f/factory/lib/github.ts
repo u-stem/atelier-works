@@ -999,7 +999,7 @@ export type ClaimIssueResult =
  * Issueの読み直しを間隔を空けて繰り返しても、次のどれかになった場合に投げる。
  * - Issueを読み直せなかった。
  * - ラベルが外れていて、タイムラインを読めなかった。
- * - ラベルが外れていて、タイムラインにそのラベルを外した記録が無かった。
+ * - ラベルが外れていて、タイムラインに、最後に付けられた後の削除の記録が無かった。
  * Issueは「ラベルなし」になっていて、作業項目が始まっているかも分からないので、
  * 呼び出し元は人へ知らせる。
  * ラベルを外す前の失敗(assigneeの追加)と、4xxなどの確定した拒否、レート制限は、
@@ -1027,9 +1027,19 @@ function isUndeterminedRemoval(err: unknown): boolean {
  */
 export const CLAIM_REREAD_BACKOFF_MS: readonly number[] = [1000, 2000];
 
-/** `read`を最大`CLAIM_REREAD_BACKOFF_MS.length + 1`回まで試す。GETなので繰り返してよい。 */
+/**
+ * `read`を最大`CLAIM_REREAD_BACKOFF_MS.length + 1`回まで試す。GETなので繰り返してよい。
+ * 失敗した試行は、そのたびに`log`へ警告として残す。
+ * `GitHubRateLimitError`は繰り返さずに投げる。`callGhApi`が上限までの待機と再試行を
+ * 済ませたうえで投げるので、ここで重ねても同じ制限に当たり、待ちが長引くだけである。
+ */
 async function rereadWithRetries<T>(
   client: GhClient,
+  context: {
+    readonly log: Logger | undefined;
+    readonly target: string;
+    readonly what: "issue" | "timeline";
+  },
   read: () => Promise<T>,
 ): Promise<T> {
   const sleep = client.sleep ?? defaultSleep;
@@ -1039,13 +1049,26 @@ async function rereadWithRetries<T>(
     try {
       return await read();
     } catch (err) {
+      context.log?.warn("claim re-read attempt failed", {
+        target: context.target,
+        what: context.what,
+        attempt: attempt + 1,
+        error: maskSecrets(err instanceof Error ? err.message : String(err)),
+      });
+      if (err instanceof GitHubRateLimitError) throw err;
       lastError = err;
     }
   }
   throw lastError;
 }
 
-/** タイムラインの中で、`label`を最後に外した人のログイン名を返す。記録が無ければnull。 */
+/**
+ * タイムラインの中で、`label`を最後に外した人のログイン名を返す。
+ * 返すのは、そのラベルが最後に付けられた後の削除だけである。
+ * ラベルが付け直されると、それより前の削除は今回の取得とは別のサイクルのものなので捨てる。
+ * 付け直しの後に削除の記録がまだ無い場合(タイムラインの反映が遅れている)や、
+ * 最後の削除の実行者が分からない場合は、誰が外したか決められないのでnullを返す。
+ */
 async function lastUnlabeledActor(
   client: GhClient,
   owner: string,
@@ -1053,15 +1076,20 @@ async function lastUnlabeledActor(
   number: number,
   label: string,
 ): Promise<string | null> {
+  validateOwnerRepo(owner, repo);
   const events = await callGhApiAll(
     client,
     `repos/${owner}/${repo}/issues/${number}/timeline?per_page=100`,
   );
   let actor: string | null = null;
   for (const raw of events) {
-    if (!isTimelineEventPayload(raw) || raw.event !== "unlabeled") continue;
+    if (!isTimelineEventPayload(raw)) continue;
+    if (raw.event !== "labeled" && raw.event !== "unlabeled") continue;
     if (labelName(raw.label) !== label) continue;
-    if (isLoginPayload(raw.actor)) actor = raw.actor.login;
+    actor =
+      raw.event === "unlabeled" && isLoginPayload(raw.actor)
+        ? raw.actor.login
+        : null;
   }
   return actor;
 }
@@ -1135,7 +1163,8 @@ export async function claimIssue(
  * 2. ラベルが外れていれば、タイムラインでそのラベルを最後に外した人を調べる。
  *    自分のログイン名なら削除は実行されていたので、取得できたとして返す。
  *    別の人なら`lost`を返す。
- * 3. 読み直しやタイムラインが読めない、または外した記録が無いときは、
+ * 3. 読み直しやタイムラインが読めない(レート制限は繰り返さない)、または最後に付けられた後の
+ *    削除の記録が無いときは、
  *    自分が外したか分からないので`ClaimOwnershipUnknownError`を投げる。
  * 同じPATで動く別のインスタンスは、ログイン名では区別できない(`ClaimIssueResult`を参照)。
  */
@@ -1164,8 +1193,10 @@ async function resolveUndeterminedRemoval(
 
   let reread: Issue;
   try {
-    reread = await rereadWithRetries(client, () =>
-      getIssue(client, owner, repo, number),
+    reread = await rereadWithRetries(
+      client,
+      { log: opts.log, target, what: "issue" },
+      () => getIssue(client, owner, repo, number),
     );
   } catch (err) {
     throw unknown(err);
@@ -1183,8 +1214,10 @@ async function resolveUndeterminedRemoval(
 
   let actor: string | null;
   try {
-    actor = await rereadWithRetries(client, () =>
-      lastUnlabeledActor(client, owner, repo, number, opts.triggerLabel),
+    actor = await rereadWithRetries(
+      client,
+      { log: opts.log, target, what: "timeline" },
+      () => lastUnlabeledActor(client, owner, repo, number, opts.triggerLabel),
     );
   } catch (err) {
     throw unknown(err);

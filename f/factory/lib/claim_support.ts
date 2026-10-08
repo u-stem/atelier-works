@@ -29,3 +29,26 @@ export async function recordAssigneeMissing(
     });
   }
 }
+
+/**
+ * ほかが先にトリガーラベルを外したことをnoticeに残す。記録に失敗しても例外にしない。
+ * 本文は対象と理由だけで決まるので、同じ本文の未解決のnoticeがあれば追加されない。
+ */
+export async function recordClaimRaceLost(
+  target: string,
+  reason: string,
+  addNotice: typeof addNoticeUnlessUnresolved,
+  log: Logger,
+): Promise<void> {
+  try {
+    await addNotice({
+      kind: "claim_race_lost",
+      message: `${target}: ${reason}`,
+    });
+  } catch (err) {
+    log.warn("claim_race_lost notice could not be recorded", {
+      target,
+      error: maskSecrets(err instanceof Error ? err.message : String(err)),
+    });
+  }
+}

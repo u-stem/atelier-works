@@ -6,7 +6,10 @@
 // GitHubには成果物だけを載せ、運用上の通知はDiscordとConsoleに出す方針のため。
 
 import * as wmill from "windmill-client@1.817.0";
-import { recordAssigneeMissing } from "../lib/claim_support.ts";
+import {
+  recordAssigneeMissing,
+  recordClaimRaceLost,
+} from "../lib/claim_support.ts";
 import { loadConfig } from "../lib/config.ts";
 import {
   addNoticeUnlessUnresolved,
@@ -50,6 +53,20 @@ const defaultClaimDeps: ManualIntakeClaimDeps = {
   addNoticeUnlessUnresolved,
 };
 
+/** 取得できず何も始めなかったときの、フローの結果を作る。 */
+export function manualIntakeSkippedResult(
+  issueNumber: number,
+  issueUrl: string,
+  reason: string,
+): ManualIntakeSkippedResult {
+  return {
+    skipped: true,
+    issue_number: issueNumber,
+    issue_url: issueUrl,
+    reason,
+  };
+}
+
 /**
  * 手動投入のIssueを取得し、作業を始めてよいか返す。
  * 取得の所有は、自分のラベルの削除が成功したことで決まる(`claimIssue`を参照)。
@@ -58,6 +75,7 @@ const defaultClaimDeps: ManualIntakeClaimDeps = {
  * - ほかが先にラベルを外した、またはラベルの削除に失敗してラベルが残っているときは、
  *   失敗にせず見送る。ラベルが残っていれば`poll_issues`が扱い、
  *   ほかが外したのならそのインスタンスが扱う。
+ *   前者は`poll_issues`と同じく、`claim_race_lost`のnoticeを残す。
  * - 所有したか判断できなかったときは、`ClaimOwnershipUnknownError`をそのまま投げる。
  *   フローの失敗として`on_error_flow`が人へ知らせる。
  */
@@ -89,6 +107,14 @@ export async function claimManualIntakeIssue(
       outcome: claim.outcome,
       reason: claim.reason,
     });
+    if (claim.outcome === "lost") {
+      await recordClaimRaceLost(
+        target,
+        claim.reason,
+        deps.addNoticeUnlessUnresolved,
+        log,
+      );
+    }
     return { claimed: false, reason: claim.reason };
   }
   if (claim.assignee === "missing") {
@@ -132,7 +158,7 @@ export async function main(
     log,
   });
   if (!claim.claimed) {
-    return { skipped: true, issue_number, issue_url, reason: claim.reason };
+    return manualIntakeSkippedResult(issue_number, issue_url, claim.reason);
   }
 
   const workItemId = await insertWorkItem({

@@ -1,7 +1,9 @@
-// `poll_issues.ts`の`claimIssueWithNotice`と`recordLabelerAssociationDenied`のテスト。
+// `poll_issues.ts`の`claimIssueWithNotice`、`notifyClaimOwnershipUnknown`、
+// `recordLabelerAssociationDenied`のテスト。
 // 取得の所有は、トリガーラベルの削除が成功したことで決まる。
 // 所有できたときは、assigneeが付かなくても作業を続ける。
-// 人へ知らせるのは、所有したかどうかを自動で判断できないときだけである。
+// 人へ知らせるのは、所有したかどうかを自動で判断できないときだけで、
+// 1回のポーリングで該当したIssueは1件の通知にまとめる。
 // 関係の検査で見送るIssueのnoticeは、ポーリングのたびに積み上がらない。
 
 import { describe, expect, test } from "bun:test";
@@ -14,8 +16,10 @@ import type { Logger } from "../../f/factory/lib/log.ts";
 import type { IssueCandidate } from "../../f/factory/lib/poll_support.ts";
 import {
   type ClaimNoticeDeps,
+  type ClaimUnknownNotifyDeps,
   claimIssueWithNotice,
   type LabelerDeniedDeps,
+  notifyClaimOwnershipUnknown,
   recordLabelerAssociationDenied,
 } from "../../f/factory/poll_issues.ts";
 import { ok } from "../lib/testSupport.ts";
@@ -40,7 +44,6 @@ type Sent = { webhookUrl: string; event: NotifyEvent };
 type Fakes = {
   deps: ClaimNoticeDeps;
   notices: Notice[];
-  sent: Sent[];
 };
 
 function fakeDeps(
@@ -48,20 +51,15 @@ function fakeDeps(
   overrides: Partial<ClaimNoticeDeps> = {},
 ): Fakes {
   const notices: Notice[] = [];
-  const sent: Sent[] = [];
   const deps: ClaimNoticeDeps = {
     claimIssue: claim,
     addNoticeUnlessUnresolved: async (record) => {
       notices.push({ kind: record.kind, message: record.message });
       return notices.length;
     },
-    notifyBestEffort: async (webhookUrl, event) => {
-      sent.push({ webhookUrl, event });
-      return { status: "sent" };
-    },
     ...overrides,
   };
-  return { deps, notices, sent };
+  return { deps, notices };
 }
 
 function run(deps: ClaimNoticeDeps, log: Logger = silentLog): Promise<boolean> {
@@ -71,8 +69,6 @@ function run(deps: ClaimNoticeDeps, log: Logger = silentLog): Promise<boolean> {
       candidate: CANDIDATE,
       viewerLogin: "factory-bot",
       triggerLabel: "factory",
-      instanceName: "local",
-      discordWebhookUrl: WEBHOOK,
       log,
     },
     deps,
@@ -120,14 +116,6 @@ const BEFORE_LABEL_FAILS = async (): Promise<ClaimIssueResult> => {
   throw new Error("POST assignees failed");
 };
 
-async function sentEvent(
-  claim: () => Promise<ClaimIssueResult>,
-): Promise<NotifyEvent | undefined> {
-  const { deps, sent } = fakeDeps(claim);
-  await run(deps).catch(() => undefined);
-  return sent[0]?.event;
-}
-
 describe("claimIssueWithNotice when the claim is established", () => {
   test("returns true when the assignee is confirmed", async () => {
     const { deps } = fakeDeps(CLAIMED_CONFIRMED);
@@ -138,12 +126,6 @@ describe("claimIssueWithNotice when the claim is established", () => {
     const { deps, notices } = fakeDeps(CLAIMED_CONFIRMED);
     await run(deps);
     expect(notices).toEqual([]);
-  });
-
-  test("sends no notification when the assignee is confirmed", async () => {
-    const { deps, sent } = fakeDeps(CLAIMED_CONFIRMED);
-    await run(deps);
-    expect(sent).toEqual([]);
   });
 
   test("returns true even when the assignee did not stick", async () => {
@@ -169,12 +151,6 @@ describe("claimIssueWithNotice when the claim is established", () => {
     const { deps, notices } = fakeDeps(CLAIMED_MISSING);
     await run(deps);
     expect(notices[0]?.message).toContain("push権限を持つcollaborator");
-  });
-
-  test("sends no needs_human notification when the assignee did not stick", async () => {
-    const { deps, sent } = fakeDeps(CLAIMED_MISSING);
-    await run(deps);
-    expect(sent).toEqual([]);
   });
 
   test("returns true even when recording the assignee notice fails", async () => {
@@ -235,11 +211,16 @@ describe("claimIssueWithNotice when another instance won", () => {
       },
     ]);
   });
+});
 
-  test("sends no notification", async () => {
-    const { deps, sent } = fakeDeps(LOST);
-    await run(deps);
-    expect(sent).toEqual([]);
+describe("claimIssueWithNotice when recording the lost race fails", () => {
+  test("still returns false", async () => {
+    const { deps } = fakeDeps(LOST, {
+      addNoticeUnlessUnresolved: async () => {
+        throw new Error("db down");
+      },
+    });
+    expect(await run(deps)).toBe(false);
   });
 });
 
@@ -254,12 +235,6 @@ describe("claimIssueWithNotice when the removal failed but the label remains", (
     await run(deps);
     expect(notices).toEqual([]);
   });
-
-  test("sends no notification", async () => {
-    const { deps, sent } = fakeDeps(RETRY);
-    await run(deps);
-    expect(sent).toEqual([]);
-  });
 });
 
 describe("claimIssueWithNotice when the ownership is unknown", () => {
@@ -268,65 +243,161 @@ describe("claimIssueWithNotice when the ownership is unknown", () => {
     await expect(run(deps)).rejects.toBeInstanceOf(ClaimOwnershipUnknownError);
   });
 
-  test("notifies a needs_human event", async () => {
-    const event = await sentEvent(OWNERSHIP_UNKNOWN);
-    expect(event?.kind).toBe("needs_human");
-  });
-
   test("records no notice in the database", async () => {
     const { deps, notices } = fakeDeps(OWNERSHIP_UNKNOWN);
     await run(deps).catch(() => undefined);
     expect(notices).toEqual([]);
   });
+});
+
+describe("notifyClaimOwnershipUnknown", () => {
+  const SINGLE_REASON =
+    "ラベルの削除の結果を確かめられず、Issueを取得できたか分かりません";
+
+  function candidateAt(number: number): IssueCandidate {
+    return {
+      ...CANDIDATE,
+      number,
+      htmlUrl: `https://github.com/octo-owner/atelier-works/issues/${String(number)}`,
+    };
+  }
+
+  function sendDeps(): { deps: ClaimUnknownNotifyDeps; sent: Sent[] } {
+    const sent: Sent[] = [];
+    const deps: ClaimUnknownNotifyDeps = {
+      notifyBestEffort: async (webhookUrl, event) => {
+        sent.push({ webhookUrl, event });
+        return { status: "sent" };
+      },
+    };
+    return { deps, sent };
+  }
+
+  function notify(candidates: IssueCandidate[], deps: ClaimUnknownNotifyDeps) {
+    return notifyClaimOwnershipUnknown(
+      {
+        candidates,
+        instanceName: "local",
+        discordWebhookUrl: WEBHOOK,
+        log: silentLog,
+      },
+      deps,
+    );
+  }
+
+  test("sends nothing when no issue is affected", async () => {
+    const { deps, sent } = sendDeps();
+    await notify([], deps);
+    expect(sent).toEqual([]);
+  });
+
+  test("sends exactly one notification for one affected issue", async () => {
+    const { deps, sent } = sendDeps();
+    await notify([candidateAt(12)], deps);
+    expect(sent).toHaveLength(1);
+  });
 
   test("sends the notification to the configured webhook", async () => {
-    const { deps, sent } = fakeDeps(OWNERSHIP_UNKNOWN);
-    await run(deps).catch(() => undefined);
+    const { deps, sent } = sendDeps();
+    await notify([candidateAt(12)], deps);
     expect(sent[0]?.webhookUrl).toBe(WEBHOOK);
   });
 
+  test("notifies a needs_human event", async () => {
+    const { deps, sent } = sendDeps();
+    await notify([candidateAt(12)], deps);
+    expect(sent[0]?.event.kind).toBe("needs_human");
+  });
+
   test("links to the issue", async () => {
-    const event = await sentEvent(OWNERSHIP_UNKNOWN);
+    const { deps, sent } = sendDeps();
+    await notify([candidateAt(12)], deps);
+    const event = sent[0]?.event;
     expect(event?.kind === "needs_human" ? event.url : null).toBe(
-      CANDIDATE.htmlUrl,
+      candidateAt(12).htmlUrl,
     );
   });
 
   test("targets the issue by number", async () => {
-    const event = await sentEvent(OWNERSHIP_UNKNOWN);
+    const { deps, sent } = sendDeps();
+    await notify([candidateAt(12)], deps);
+    const event = sent[0]?.event;
     expect(event?.kind === "needs_human" ? event.target : null).toEqual({
       kind: "issue",
       number: 12,
     });
   });
 
+  test("explains in the reason that the ownership could not be determined", async () => {
+    const { deps, sent } = sendDeps();
+    await notify([candidateAt(12)], deps);
+    const event = sent[0]?.event;
+    expect(event?.kind === "needs_human" ? event.reason : "").toBe(
+      SINGLE_REASON,
+    );
+  });
+
   test("tells the operator to re-add the trigger label if no work has started", async () => {
-    const event = await sentEvent(OWNERSHIP_UNKNOWN);
+    const { deps, sent } = sendDeps();
+    await notify([candidateAt(12)], deps);
+    const event = sent[0]?.event;
     expect(event?.kind === "needs_human" ? event.next_action : "").toContain(
       "`factory`ラベルを付け直してください",
     );
   });
 
-  test("explains in the reason that the ownership could not be determined", async () => {
-    const event = await sentEvent(OWNERSHIP_UNKNOWN);
+  test("does not put a raw error into the notification", async () => {
+    const { deps, sent } = sendDeps();
+    await notify([candidateAt(12)], deps);
+    expect(JSON.stringify(sent[0]?.event)).not.toContain("HTTP");
+  });
+
+  test("sends exactly one notification for several affected issues", async () => {
+    const { deps, sent } = sendDeps();
+    await notify([candidateAt(1), candidateAt(2), candidateAt(3)], deps);
+    expect(sent).toHaveLength(1);
+  });
+
+  test("lists the link of every affected issue in the reason", async () => {
+    const { deps, sent } = sendDeps();
+    await notify([candidateAt(1), candidateAt(2), candidateAt(3)], deps);
+    const event = sent[0]?.event;
     expect(event?.kind === "needs_human" ? event.reason : "").toBe(
-      "ラベルの削除の結果を確かめられず、Issueを取得できたか分かりません",
+      `${SINGLE_REASON}(3件)\n- https://github.com/octo-owner/atelier-works/issues/1\n- https://github.com/octo-owner/atelier-works/issues/2\n- https://github.com/octo-owner/atelier-works/issues/3`,
     );
   });
 
-  test("does not put the raw error into the notification", async () => {
-    const event = await sentEvent(OWNERSHIP_UNKNOWN);
-    expect(JSON.stringify(event)).not.toContain("HTTP 500");
+  test("targets the first affected issue when several are affected", async () => {
+    const { deps, sent } = sendDeps();
+    await notify([candidateAt(1), candidateAt(2)], deps);
+    const event = sent[0]?.event;
+    expect(event?.kind === "needs_human" ? event.target : null).toEqual({
+      kind: "issue",
+      number: 1,
+    });
   });
 
-  test("still rethrows when the notification fails", async () => {
-    const { deps } = fakeDeps(OWNERSHIP_UNKNOWN, {
-      notifyBestEffort: async () => ({
-        status: "not_sent",
-        reason: "discord down",
-      }),
-    });
-    await expect(run(deps)).rejects.toBeInstanceOf(ClaimOwnershipUnknownError);
+  test("tells the operator to check each listed issue when several are affected", async () => {
+    const { deps, sent } = sendDeps();
+    await notify([candidateAt(1), candidateAt(2)], deps);
+    const event = sent[0]?.event;
+    expect(event?.kind === "needs_human" ? event.next_action : "").toBe(
+      "一覧のIssueそれぞれについて、Consoleの作業項目で作業が始まっているか確かめてください。始まっていなければ、そのIssueに`factory`ラベルを付け直してください",
+    );
+  });
+
+  test("lists at most ten issues and counts the rest", async () => {
+    const { deps, sent } = sendDeps();
+    const many = Array.from({ length: 12 }, (_, i) => candidateAt(i + 1));
+    await notify(many, deps);
+    const event = sent[0]?.event;
+    const lines = (event?.kind === "needs_human" ? event.reason : "").split(
+      "\n",
+    );
+    expect(lines.slice(-2)).toEqual([
+      "- https://github.com/octo-owner/atelier-works/issues/10",
+      "ほか2件",
+    ]);
   });
 });
 
@@ -334,12 +405,6 @@ describe("claimIssueWithNotice when the claim fails before the label is removed"
   test("rethrows the original error", async () => {
     const { deps } = fakeDeps(BEFORE_LABEL_FAILS);
     await expect(run(deps)).rejects.toThrow("POST assignees failed");
-  });
-
-  test("sends no notification", async () => {
-    const { deps, sent } = fakeDeps(BEFORE_LABEL_FAILS);
-    await run(deps).catch(() => undefined);
-    expect(sent).toEqual([]);
   });
 });
 

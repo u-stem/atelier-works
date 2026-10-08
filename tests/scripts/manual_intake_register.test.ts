@@ -12,6 +12,7 @@ import type { Logger } from "../../f/factory/lib/log.ts";
 import {
   claimManualIntakeIssue,
   type ManualIntakeClaimDeps,
+  manualIntakeSkippedResult,
 } from "../../f/factory/steps/manual_intake_register.ts";
 import { ok } from "../lib/testSupport.ts";
 
@@ -141,6 +142,41 @@ describe("claimManualIntakeIssue", () => {
     expect(warns).toEqual(["manual intake skipped the claim"]);
   });
 
+  test("records a claim_race_lost notice when another actor removed the label first", async () => {
+    const { deps, notices } = fakeDeps(LOST);
+    const { log } = recordingLog();
+    await run(deps, log);
+    expect(notices).toEqual([
+      {
+        kind: "claim_race_lost",
+        message:
+          "octo-owner/atelier-works#12: trigger label factory was already removed",
+      },
+    ]);
+  });
+
+  test("records no notice when the label removal failed and the label remains", async () => {
+    const { deps, notices } = fakeDeps(RETRY);
+    const { log } = recordingLog();
+    await run(deps, log);
+    expect(notices).toEqual([]);
+  });
+
+  test("still skips when recording the lost race fails", async () => {
+    const { deps } = fakeDeps(LOST);
+    const failing: ManualIntakeClaimDeps = {
+      ...deps,
+      addNoticeUnlessUnresolved: async () => {
+        throw new Error("db down");
+      },
+    };
+    const { log } = recordingLog();
+    expect(await run(failing, log)).toEqual({
+      claimed: false,
+      reason: "trigger label factory was already removed",
+    });
+  });
+
   test("skips without failing when the label removal failed and the label remains", async () => {
     const { deps } = fakeDeps(RETRY);
     const { log } = recordingLog();
@@ -159,5 +195,22 @@ describe("claimManualIntakeIssue", () => {
     await expect(run(deps, log)).rejects.toBeInstanceOf(
       ClaimOwnershipUnknownError,
     );
+  });
+});
+
+describe("manualIntakeSkippedResult", () => {
+  test("builds the skipped result with the issue and the reason", () => {
+    expect(
+      manualIntakeSkippedResult(
+        12,
+        "https://github.com/octo-owner/atelier-works/issues/12",
+        "trigger label factory was already removed",
+      ),
+    ).toEqual({
+      skipped: true,
+      issue_number: 12,
+      issue_url: "https://github.com/octo-owner/atelier-works/issues/12",
+      reason: "trigger label factory was already removed",
+    });
   });
 });

@@ -13,7 +13,10 @@
 // `generate-metadata`のたびにscriptごとに別の最新版へずれていく。
 import * as wmill from "windmill-client@1.817.0";
 import { expiredRequirementsRequests } from "./lib/approval_support.ts";
-import { recordAssigneeMissing } from "./lib/claim_support.ts";
+import {
+  recordAssigneeMissing,
+  recordClaimRaceLost,
+} from "./lib/claim_support.ts";
 import { loadConfig } from "./lib/config.ts";
 import {
   addNoticeUnlessUnresolved,
@@ -30,7 +33,6 @@ import {
 } from "./lib/db.ts";
 import { notifyBestEffort } from "./lib/discord.ts";
 import {
-  type ClaimIssueResult,
   ClaimOwnershipUnknownError,
   claimIssue,
   type GhClient,
@@ -514,13 +516,11 @@ const CLAIM_OWNERSHIP_UNKNOWN_REASON =
 export type ClaimNoticeDeps = {
   readonly claimIssue: typeof claimIssue;
   readonly addNoticeUnlessUnresolved: typeof addNoticeUnlessUnresolved;
-  readonly notifyBestEffort: typeof notifyBestEffort;
 };
 
 const defaultClaimNoticeDeps: ClaimNoticeDeps = {
   claimIssue,
   addNoticeUnlessUnresolved,
-  notifyBestEffort,
 };
 
 /**
@@ -533,10 +533,9 @@ const defaultClaimNoticeDeps: ClaimNoticeDeps = {
  * - ほかが先にラベルを外したときは、`claim_race_lost`のnoticeを残して引く。
  * - ラベルの削除が失敗してラベルが残っているときは、次のポーリングが拾い直すので、
  *   通知もnoticeもなく引く。
- * - 所有したか判断できなかったときだけ、人の対応待ちの通知(Issueへのリンクと次の操作つき)を
- *   送る。ラベルが外れ、作業項目も無いので、通知が無いと人は気づけない。
- *   DBへの書き込みより先に送り、通知してから元の例外をそのまま投げる。
- *   呼び出し元が`job_failures`に記録する。通知はベストエフォートで、失敗しても元の例外を隠さない。
+ * - 所有したか判断できなかったときは、`ClaimOwnershipUnknownError`をそのまま投げる。
+ *   呼び出し元が`job_failures`に記録し、該当したIssueをまとめて
+ *   `notifyClaimOwnershipUnknown`で人へ知らせる。
  * noticeは同じ本文の未解決のものがあれば追加しない。ラベルが残る間、ポーリングのたびに
  * 積み上がるのを防ぐためで、本文には対象と理由だけを載せ、時刻などの揺れる値を入れない。
  */
@@ -546,8 +545,6 @@ export async function claimIssueWithNotice(
     readonly candidate: IssueCandidate;
     readonly viewerLogin: string;
     readonly triggerLabel: string;
-    readonly instanceName: string;
-    readonly discordWebhookUrl: string;
     readonly log: Logger;
   },
   deps: ClaimNoticeDeps = defaultClaimNoticeDeps,
@@ -555,34 +552,13 @@ export async function claimIssueWithNotice(
   const { candidate, log } = input;
   const target = `${candidate.owner}/${candidate.repo}#${candidate.number}`;
 
-  let claimResult: ClaimIssueResult;
-  try {
-    claimResult = await deps.claimIssue(
-      input.client,
-      candidate.owner,
-      candidate.repo,
-      candidate.number,
-      { triggerLabel: input.triggerLabel, assignee: input.viewerLogin, log },
-    );
-  } catch (err) {
-    if (err instanceof ClaimOwnershipUnknownError) {
-      await deps.notifyBestEffort(
-        input.discordWebhookUrl,
-        {
-          kind: "needs_human",
-          instance_name: input.instanceName,
-          owner: candidate.owner,
-          repo: candidate.repo,
-          url: candidate.htmlUrl,
-          reason: describeReason(CLAIM_OWNERSHIP_UNKNOWN_REASON),
-          target: { kind: "issue", number: candidate.number },
-          next_action: nextActionFor(CLAIM_OWNERSHIP_UNKNOWN_REASON),
-        },
-        log,
-      );
-    }
-    throw err;
-  }
+  const claimResult = await deps.claimIssue(
+    input.client,
+    candidate.owner,
+    candidate.repo,
+    candidate.number,
+    { triggerLabel: input.triggerLabel, assignee: input.viewerLogin, log },
+  );
 
   if (claimResult.claimed) {
     if (claimResult.assignee === "missing") {
@@ -599,12 +575,80 @@ export async function claimIssueWithNotice(
   }
 
   if (claimResult.outcome === "lost") {
-    await deps.addNoticeUnlessUnresolved({
-      kind: "claim_race_lost",
-      message: `${target}: ${claimResult.reason}`,
-    });
+    await recordClaimRaceLost(
+      target,
+      claimResult.reason,
+      deps.addNoticeUnlessUnresolved,
+      log,
+    );
   }
   return false;
+}
+
+export type ClaimUnknownNotifyDeps = {
+  readonly notifyBestEffort: typeof notifyBestEffort;
+};
+
+const defaultClaimUnknownNotifyDeps: ClaimUnknownNotifyDeps = {
+  notifyBestEffort,
+};
+
+/** 所有を判断できなかったIssueの通知に、リンクを並べる最大の件数。 */
+const CLAIM_UNKNOWN_LIST_LIMIT = 10;
+
+/** 複数のIssueが該当したときの、次の操作。個別の文は「このIssue」と書くため使えない。 */
+const CLAIM_UNKNOWN_LIST_NEXT_ACTION =
+  "一覧のIssueそれぞれについて、Consoleの作業項目で作業が始まっているか確かめてください。始まっていなければ、そのIssueに`factory`ラベルを付け直してください";
+
+/**
+ * 1回のポーリングで、取得の所有を判断できなかったIssueを、人の対応待ちとして1件の通知で知らせる。
+ * ラベルが外れ、作業項目も無いので、通知が無いと人は気づけない。
+ * 障害の間は多くのIssueが同時に該当しうるため、Issueごとに送らず、リンクを並べた1件にまとめる。
+ * 並べるのは先頭から`CLAIM_UNKNOWN_LIST_LIMIT`件までで、残りは件数で示す。
+ * 該当が無ければ何も送らない。通知はベストエフォートである。
+ */
+export async function notifyClaimOwnershipUnknown(
+  input: {
+    readonly candidates: readonly IssueCandidate[];
+    readonly instanceName: string;
+    readonly discordWebhookUrl: string;
+    readonly log: Logger;
+  },
+  deps: ClaimUnknownNotifyDeps = defaultClaimUnknownNotifyDeps,
+): Promise<void> {
+  const first = input.candidates[0];
+  if (first === undefined) return;
+
+  const single = describeReason(CLAIM_OWNERSHIP_UNKNOWN_REASON);
+  const many = input.candidates.length > 1;
+  const listed = input.candidates
+    .slice(0, CLAIM_UNKNOWN_LIST_LIMIT)
+    .map((candidate) => `- ${candidate.htmlUrl}`);
+  const rest = input.candidates.length - listed.length;
+  const reason = many
+    ? [
+        `${single}(${String(input.candidates.length)}件)`,
+        ...listed,
+        ...(rest > 0 ? [`ほか${String(rest)}件`] : []),
+      ].join("\n")
+    : single;
+
+  await deps.notifyBestEffort(
+    input.discordWebhookUrl,
+    {
+      kind: "needs_human",
+      instance_name: input.instanceName,
+      owner: first.owner,
+      repo: first.repo,
+      url: first.htmlUrl,
+      reason,
+      target: { kind: "issue", number: first.number },
+      next_action: many
+        ? CLAIM_UNKNOWN_LIST_NEXT_ACTION
+        : nextActionFor(CLAIM_OWNERSHIP_UNKNOWN_REASON),
+    },
+    input.log,
+  );
 }
 
 export type LabelerDeniedDeps = {
@@ -645,8 +689,6 @@ async function claimAndStart(
     candidate,
     viewerLogin,
     triggerLabel: config.trigger_label,
-    instanceName: config.instance_name,
-    discordWebhookUrl,
     log,
   });
   if (!claimed) return "skipped";
@@ -816,6 +858,7 @@ export async function main(): Promise<{
     config.allowed_labeler_associations,
   );
 
+  const ownershipUnknown: IssueCandidate[] = [];
   for (const decision of decisions) {
     const { candidate } = decision;
     if (decision.action === "skip_active") {
@@ -840,6 +883,9 @@ export async function main(): Promise<{
       else skipped += 1;
     } catch (err) {
       failed += 1;
+      if (err instanceof ClaimOwnershipUnknownError) {
+        ownershipUnknown.push(candidate);
+      }
       await recordFailureSafe(
         `claim_issue:${candidate.owner}/${candidate.repo}#${candidate.number}`,
         err,
@@ -847,6 +893,14 @@ export async function main(): Promise<{
       );
     }
   }
+
+  // 所有を判断できなかったIssueは、ほかのDBへの書き込みより先に、1件の通知にまとめて知らせる。
+  await notifyClaimOwnershipUnknown({
+    candidates: ownershipUnknown,
+    instanceName: config.instance_name,
+    discordWebhookUrl,
+    log,
+  });
 
   const reconciled = await reconcileActiveItems(
     client,
