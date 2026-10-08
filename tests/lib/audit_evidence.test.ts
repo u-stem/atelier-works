@@ -479,3 +479,139 @@ describe("collectAuditEvidence", () => {
     expect(call?.text).toContain("ORDER BY count DESC, jf.flow_path, jf.step");
   });
 });
+
+/** `collectAuditEvidence`の応答のうち、指定した位置だけに行を入れる。 */
+function responsesWithRowsAt(
+  index: number,
+  rows: SqlRow[],
+  length = 15,
+): SqlRow[][] {
+  const responses: SqlRow[][] = Array.from({ length }, () => []);
+  responses[index] = rows;
+  return responses;
+}
+
+const FIX_REPLY_INDEX = 6;
+const REVIEW_FINDING_INDEX = 7;
+const FAILURE_INDEX = 2;
+const HUMAN_OUTCOME_INDEX = 4;
+
+describe("unset values (missing keys)", () => {
+  test("labels a null reply decision as 未設定", async () => {
+    const { sql } = createFakeSqlClient(
+      responsesWithRowsAt(FIX_REPLY_INDEX, [{ key: null, count: 3 }]),
+    );
+    const evidence = await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(evidence.fix_reply_decisions).toEqual([{ key: "未設定", count: 3 }]);
+  });
+
+  test("merges null and empty-string keys into one 未設定 group", async () => {
+    const { sql } = createFakeSqlClient(
+      responsesWithRowsAt(REVIEW_FINDING_INDEX, [
+        { key: null, count: 1 },
+        { key: "", count: 1 },
+      ]),
+    );
+    const evidence = await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(evidence.review_findings).toEqual([{ key: "未設定", count: 2 }]);
+  });
+
+  test("orders groups by count descending, then key, so the output is stable", async () => {
+    const { sql } = createFakeSqlClient(
+      responsesWithRowsAt(REVIEW_FINDING_INDEX, [
+        { key: "nits", count: 1 },
+        { key: "must", count: 1 },
+        { key: "imo", count: 5 },
+      ]),
+    );
+    const evidence = await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(evidence.review_findings.map((entry) => entry.key)).toEqual([
+      "imo",
+      "must",
+      "nits",
+    ]);
+  });
+
+  test("renders the unset reply decision with its count", async () => {
+    const { sql } = createFakeSqlClient(
+      responsesWithRowsAt(FIX_REPLY_INDEX, [
+        { key: "fixed", count: 6 },
+        { key: null, count: 3 },
+      ]),
+    );
+    const evidence = await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(renderEvidenceMarkdown(evidence)).toContain("- reply 未設定: 3件");
+  });
+
+  test("renders the unset finding kind with its count", async () => {
+    const { sql } = createFakeSqlClient(
+      responsesWithRowsAt(REVIEW_FINDING_INDEX, [
+        { key: "must", count: 5 },
+        { key: null, count: 2 },
+      ]),
+    );
+    const evidence = await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(renderEvidenceMarkdown(evidence)).toContain("- 未設定: 2件");
+  });
+
+  test("never renders a blank key in the fix-round and review sections", async () => {
+    const { sql } = createFakeSqlClient(
+      responsesWithRowsAt(FIX_REPLY_INDEX, [{ key: null, count: 3 }]),
+    );
+    const evidence = await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(renderEvidenceMarkdown(evidence)).not.toMatch(/^- reply : /m);
+  });
+
+  test("labels a failure group without a step as 未設定", async () => {
+    const { sql } = createFakeSqlClient(
+      responsesWithRowsAt(FAILURE_INDEX, [
+        {
+          flow_path: "f/factory/flow.ts",
+          step: null,
+          count: 2,
+          sample_error: "e",
+        },
+      ]),
+    );
+    const evidence = await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(renderEvidenceMarkdown(evidence)).toContain(
+      "- f/factory/flow.ts 未設定: 2件",
+    );
+  });
+
+  test("labels a human outcome without a note as 未設定", async () => {
+    const { sql } = createFakeSqlClient(
+      responsesWithRowsAt(HUMAN_OUTCOME_INDEX, [
+        { to_status: "needs_human", note: "", count: 2 },
+      ]),
+    );
+    const evidence = await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(renderEvidenceMarkdown(evidence)).toContain(
+      "- needs_human 未設定: 2件",
+    );
+  });
+});
