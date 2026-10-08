@@ -1,5 +1,5 @@
-import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync } from "node:fs";
+import { afterEach, describe, expect, test } from "bun:test";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -182,6 +182,14 @@ describe("worktreeLockFor", () => {
 
   test("refuses a relative path", () => {
     expect(() => worktreeLockFor("repo/wt", (path) => path)).toThrow();
+  });
+
+  test("refuses the root directory", () => {
+    expect(() => worktreeLockFor("/", (path) => path)).toThrow();
+  });
+
+  test("refuses a directory whose name starts with a dot", () => {
+    expect(() => worktreeLockFor("/w/repo/.wt", (path) => path)).toThrow();
   });
 });
 
@@ -634,6 +642,18 @@ describe("isStoppableBy", () => {
   test("refuses a missing owner", () => {
     expect(isStoppableBy(null, THIS_JOB)).toBe(false);
   });
+
+  test("refuses an owner whose job id is unknown", () => {
+    expect(isStoppableBy({ ...OTHER_JOB, jobId: "unknown" }, THIS_JOB)).toBe(
+      false,
+    );
+  });
+
+  test("refuses to stop for a self whose job id is unknown", () => {
+    expect(isStoppableBy(OTHER_JOB, { ...THIS_JOB, jobId: "unknown" })).toBe(
+      false,
+    );
+  });
 });
 
 describe("formatLockHolders", () => {
@@ -654,6 +674,12 @@ describe("formatLockHolders", () => {
     expect(
       formatLockHolders([entry({ command: `claude --token ${token}` })]),
     ).not.toContain(token);
+  });
+
+  test("turns control characters in the command into single spaces", () => {
+    expect(formatLockHolders([entry({ command: "a\r\nb\tc\u0001d" })])).toBe(
+      "pid 42 (3600s, implement:3:job-a) `a b c d`",
+    );
   });
 
   test("cuts a long command", () => {
@@ -763,6 +789,12 @@ describe("stopProcesses", () => {
     const { deps, sent } = signalDeps(new Map([[42, stat(42, "50000")]]), true);
     await stopProcesses([entry({ pgid: 7 })], deps, 300);
     expect(sent.some((item) => item.signal === "SIGKILL")).toBe(false);
+  });
+
+  test("never signals pid 1", async () => {
+    const { deps, sent } = signalDeps(new Map([[1, stat(1, "50000")]]), false);
+    await stopProcesses([entry({ pid: 1, pgid: 1 })], deps, 300);
+    expect(sent).toHaveLength(0);
   });
 });
 
@@ -953,10 +985,65 @@ describe("ensureWorktreeLockFree", () => {
   });
 });
 
+describe("a lock holder whose environment cannot be read", () => {
+  /** pid 10がロックを持つが、environの読み取りだけが失敗する偽の/proc。 */
+  function unreadableEnvironFs(): ProcFs {
+    const base = fakeProcFs({
+      ...SELF_PROCS,
+      "10": {
+        stat: statLine(10, 1, 10, 1),
+        environ: `${LOCK_OWNER_ENV}=implement:3:job-a\0`,
+        fds: { "3": { id: LOCK_ID, fdinfo: FLOCK_LINE } },
+      },
+    });
+    return {
+      ...base,
+      readText: async (path) => {
+        if (path.endsWith("/environ")) throw new Error("EACCES");
+        return base.readText(path);
+      },
+    };
+  }
+
+  test("makes the plan busy", async () => {
+    const entries = await scanLockProcesses(LOCK, unreadableEnvironFs(), 900);
+    expect(planLockRelease(entries, LOCK, THIS_JOB).kind).toBe("busy");
+  });
+
+  test("is not stopped", async () => {
+    const fake = createFakeCommandRunner(busyTimes(4));
+    const stopped: (readonly LockProcess[])[] = [];
+    const deps: LockReleaseDeps = {
+      scan: (lock) => scanLockProcesses(lock, unreadableEnvironFs(), 900),
+      stop: async (targets) => {
+        stopped.push(targets);
+      },
+      sleep: async () => {},
+    };
+    await ensureWorktreeLockFree({
+      run: fake.run,
+      lock: LOCK,
+      policy: { self: THIS_JOB, recheck: async () => {} },
+      deps,
+    }).catch(() => undefined);
+    expect(stopped).toHaveLength(0);
+  });
+});
+
 describe("process lock with the real flock and /proc", () => {
   const supported = process.platform === "linux" && existsSync(FLOCK_PATH);
-  const tempLock = () =>
-    worktreeLockFor(join(mkdtempSync(join(tmpdir(), "factory-lock-")), "wt"));
+  const tempDirs: string[] = [];
+  const tempLock = () => {
+    const dir = mkdtempSync(join(tmpdir(), "factory-lock-"));
+    tempDirs.push(dir);
+    return worktreeLockFor(join(dir, "wt"));
+  };
+
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 
   test.skipIf(!supported)(
     "reports held while a locked command is still running",

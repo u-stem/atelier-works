@@ -33,6 +33,9 @@ export const LOCK_OWNER_ENV = "FACTORY_LOCK_OWNER";
  */
 export const LOCK_PATH_ENV = "FACTORY_LOCK_PATH";
 
+/** ジョブIDが分からないときの持ち主タグのジョブID。このジョブIDのプロセスは止めず、このジョブIDで他を止めもしない。 */
+const UNKNOWN_JOB_ID = "unknown";
+
 export const WORKTREE_BUSY_REASON =
   "worktree is still used by processes from an earlier run";
 export const WORKTREE_LOCK_HELD_IN_RUN_REASON =
@@ -63,7 +66,8 @@ export type WorktreeLock = {
  * worktreeのプロセス排他に使うロックファイルを決めて返す。worktreeの隣に、先頭を`.`にした名前で置く。
  * gitのrefの要素は`.`で始まれないので、ブランチ名から作るworktreeのディレクトリと名前が重ならない。
  * 親ディレクトリは実体のパス(realpath)にし、シンボリックリンク経由の別名で別のロックファイルを作らない。
- * `worktreeDir`が正規化された絶対パスでなければ例外を投げる。親が無いときもrealpathの例外がそのまま出る。
+ * `worktreeDir`が正規化された絶対パスでないとき、名前が空(ルート)か`.`で始まるときは例外を投げる。親が無いときもrealpathの例外がそのまま出る。
+ * `.`で始まる名前を拒むのは、worktreeのディレクトリが隣のロックファイルと同じ名前にならないようにするためである。
  * ロックファイルは意図して削除しない。保持者が開いている間に消すと、次の実行が同じパスに新しいファイルを作ってロックを取れてしまい、古い保持者を排他できなくなるため。
  */
 export function worktreeLockFor(
@@ -75,12 +79,15 @@ export function worktreeLockFor(
       `worktree dir must be a normalized absolute path: ${worktreeDir}`,
     );
   }
+  const name = basename(worktreeDir);
+  if (name === "" || name.startsWith(".")) {
+    throw new Error(
+      `worktree dir name must not be empty or start with a dot: ${worktreeDir}`,
+    );
+  }
   return {
     worktreeDir,
-    lockPath: join(
-      realpath(dirname(worktreeDir)),
-      `.${basename(worktreeDir)}.process.lock`,
-    ),
+    lockPath: join(realpath(dirname(worktreeDir)), `.${name}.process.lock`),
   };
 }
 
@@ -115,7 +122,7 @@ export function lockJobIdFromEnv(
   env: Readonly<Record<string, string | undefined>>,
 ): string {
   const value = env.WM_ROOT_FLOW_JOB_ID ?? "";
-  return /^[0-9A-Za-z-]+$/.test(value) ? value : "unknown";
+  return /^[0-9A-Za-z-]+$/.test(value) ? value : UNKNOWN_JOB_ID;
 }
 
 export type ProcStat = {
@@ -205,9 +212,14 @@ export class WorktreeLockHeldInRunError extends Error {
   }
 }
 
-/** コマンドを、秘密をマスクし、"; "で分けられないようにし、200文字までに切ってから、バッククォートで囲む(中のバッククォートは"'"にする)。 */
+/**
+ * コマンドを、秘密をマスクし、改行などの制御文字の並びを空白1つにし、"; "で分けられないようにし、200文字までに切ってから、バッククォートで囲む(中のバッククォートは"'"にする)。
+ * 制御文字を消すのは、状態の理由と通知を1行に保つためである。
+ */
 function quoteCommand(command: string): string {
   const cut = maskSecrets(command)
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: 制御文字を取り除くための正規表現である。
+    .replace(/[\r\n\t\u0000-\u001f]+/g, " ")
     .replaceAll(";", ",")
     .slice(0, HOLDER_COMMAND_MAX_CHARS)
     .replaceAll("`", "'");
@@ -439,6 +451,7 @@ export async function scanLockProcesses(
  * `owner`を`self`が止めてよいかを返す。
  * 止めてよいのは、同じ作業項目の実装フローで、ジョブIDが自分と異なるもの(終わった実行の生き残り)だけである。
  * 自分は作業項目のリースを持つので、同じ作業項目の別のジョブはいま正当に動いていない。
+ * どちらかのジョブIDが"unknown"なら止めない。ジョブを特定できないタグ同士では、別のジョブかを判断できないため。
  */
 export function isStoppableBy(
   owner: LockOwner | null,
@@ -449,6 +462,8 @@ export function isStoppableBy(
     self.kind === "implement" &&
     owner.kind === "implement" &&
     owner.workItemId === self.workItemId &&
+    owner.jobId !== UNKNOWN_JOB_ID &&
+    self.jobId !== UNKNOWN_JOB_ID &&
     owner.jobId !== self.jobId
   );
 }
@@ -528,10 +543,14 @@ async function signalTargets(
   deps: SignalDeps,
 ): Promise<void> {
   for (const target of targets) {
+    // pid 1以下(initと、0・負値による呼び出し元のグループや全体への送信)には送らない。
+    if (target.pid <= 1) continue;
     if (!(await isSameProcess(deps, target))) continue;
     send(deps, target.pid, signal);
     // ロック付きで起動したflockはグループリーダーなので、fdを閉じてグループに残った子にも届かせる。
-    if (target.pgid === target.pid) send(deps, -target.pid, signal);
+    if (target.pgid === target.pid && target.pgid > 1) {
+      send(deps, -target.pgid, signal);
+    }
   }
 }
 
