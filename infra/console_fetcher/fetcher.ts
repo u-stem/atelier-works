@@ -32,6 +32,7 @@ import {
   isAllowedDownloadUrl,
   isCommitSha,
   isLockStale,
+  isReadablePin,
   MANIFEST_FILE,
   needsDeploy,
   parseArtifacts,
@@ -588,14 +589,10 @@ async function readManifest(
 }
 
 /**
- * `releases/<sha>`が本物のディレクトリで、マニフェストを読め、参照する共有の`assets/`のファイルが
- * すべて通常のファイルとして揃っているかを返す。揃っていない版へ付け替えると、ページが壊れる。
+ * `releases/<sha>`のマニフェストを読め、参照する共有の`assets/`のファイルが
+ * すべて通常のファイルとして揃っているかを返す。揃っていない版を配信すると、ページが壊れる。
  */
-async function isCompleteRelease(
-  layout: Layout,
-  sha: string,
-): Promise<boolean> {
-  if (!(await isRealDirectory(join(layout.releases, sha)))) return false;
+async function hasUsableFiles(layout: Layout, sha: string): Promise<boolean> {
   const manifest = await readManifest(layout, sha);
   if (manifest === null) return false;
   for (const path of manifest.files.keys()) {
@@ -608,6 +605,17 @@ async function isCompleteRelease(
   return true;
 }
 
+/** `releases/<sha>`が本物のディレクトリで、`hasUsableFiles`を満たすかを返す。 */
+async function isCompleteRelease(
+  layout: Layout,
+  sha: string,
+): Promise<boolean> {
+  return (
+    (await isRealDirectory(join(layout.releases, sha))) &&
+    (await hasUsableFiles(layout, sha))
+  );
+}
+
 /**
  * 戻した元の版(`revoked`)の`releases/<sha>`と、その版だけが参照する共有の`assets/`のファイルを消す。
  * 戻した後も問題の版のassetsを`/console/assets/`から読めるままにしないため、更新日時にかかわらず消す。
@@ -616,6 +624,8 @@ async function isCompleteRelease(
  * 読めないとき)は、版も消さずに警告を出す。版を消すと、残ったassetsを後から決められなくなるため。
  * 配信中でない残る版のマニフェストを読めないときは、その版を無視して消す。
  * 無視しないと、壊れた版が1つあるだけで、戻した元の版を消せなくなる。
+ * 無視した版が配信されることは無い。`rollback`は、`hasUsableFiles`を満たさない版を戻し先に選ばず、
+ * 取り込みは、揃っていない版を消して取り直すため。
  * 途中で止まっても、同じ`revoked`で呼び直せば続きを消せる。
  * 戻した元の版を残さず消せた(消す版が無かった場合を含む)ときだけ`true`を返す。
  */
@@ -857,6 +867,8 @@ export type RollbackResult =
       readonly sha: string;
       /** 戻した元の版の削除。`pending`なら、次の取り込みが続きを消す。 */
       readonly cleanup: "done" | "pending";
+      /** 戻した元の版の中身をpinに記録できたか。マニフェストを読めなかったときは`false`。 */
+      readonly contentRecorded: boolean;
     }
   | { readonly ok: false; readonly reason: "no_previous_release" };
 
@@ -905,7 +917,7 @@ async function tryRemoveRevoked(
 
 /**
  * currentを直前の版に戻し、pinを置く。pinがある間、runOnceは付け替えない。
- * 戻す先は、今の版と中身が違う、履歴の直前の版にする。
+ * 戻す先は、今の版と中身が違い、マニフェストとassetsが揃っている、履歴の直前の版にする。
  * pinを先に置いてから付け替え、同時に動いたrunOnceが新しい版へ戻さないようにする。
  * 付け替えに失敗したときは、pinを元の状態に戻してから失敗を投げる(戻せなくても元の失敗を投げる)。
  * pinだけが残ると、版が動かないまま自動の付け替えが止まるため。
@@ -930,10 +942,15 @@ export async function rollback(
   for (const sha of releases) {
     manifests.set(sha, await readManifest(layout, sha));
   }
+  // マニフェストを読めない版と、assetsが欠けた版は、配信できないので戻し先にしない。
+  const usable = new Set<string>();
+  for (const sha of releases) {
+    if (await hasUsableFiles(layout, sha)) usable.add(sha);
+  }
   const target = selectRollbackTarget(
     await readHistory(layout),
     currentSha,
-    new Set(releases),
+    usable,
     manifests,
   );
   if (target === null || currentSha === null) {
@@ -948,6 +965,9 @@ export async function rollback(
     ]),
   ];
   const currentManifest = manifests.get(currentSha) ?? null;
+  if (currentManifest === null) {
+    log("rollback_content_unrecorded", { sha: currentSha });
+  }
   const revokedContent = [
     ...new Set([
       ...parsePinContent(previousPinJson),
@@ -977,6 +997,7 @@ export async function rollback(
     ok: true,
     sha: target,
     cleanup: await tryRemoveRevoked(layout, log, revoked),
+    contentRecorded: currentManifest !== null,
   };
 }
 
@@ -1039,6 +1060,7 @@ async function latestRunDigest(
  * - 最新の実行や、その中身を調べられない(分からないときは外さない)。
  * - 戻した元の版を消せていない。
  * `force`は最新の実行についての確認を、`ignoreCleanup`は削除についての確認を飛ばす。
+ * pinを読めないときも、何を戻したか分からないので外さない(`force`なら外す)。
  * `rolled_back_from`も`rolled_back_content`も無いpinは、確かめる版が無いので、問い合わせずに外す。
  * 中身を記録していないpinは、shaだけを確かめる。
  */
@@ -1049,6 +1071,9 @@ export async function unpin(
   const layout = layoutOf(deps.root);
   if (!(await exists(layout.pin))) return { ok: true };
   const pin = await readJsonFile(layout.pin);
+  if (!options.force && !isReadablePin(pin)) {
+    return { ok: false, reason: "pin_unreadable" };
+  }
   const revoked = parsePinRevoked(pin);
   const revokedContent = parsePinContent(pin);
   if (!options.force && (revoked.length > 0 || revokedContent.length > 0)) {

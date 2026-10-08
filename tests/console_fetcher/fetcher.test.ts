@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   chmod,
+  cp,
   lstat,
   mkdir,
   mkdtemp,
@@ -148,10 +149,13 @@ async function digestOfRelease(sha: string): Promise<string> {
   return contentDigest(manifest);
 }
 
-/** `releases/<sha>`を本物のディレクトリでなくし、`switchCurrent`が拒む状態にする。 */
+/**
+ * `releases/<sha>`を、中身はそのままに、本物のディレクトリでなくす。
+ * マニフェストとassetsは揃っているので、戻し先に選ばれ、`switchCurrent`だけが拒む。
+ */
 async function brokenRelease(sha: string): Promise<void> {
   const outside = join(root, `outside-${sha.slice(0, 4)}`);
-  await mkdir(outside, { recursive: true });
+  await cp(join(root, "releases", sha), outside, { recursive: true });
   await rm(join(root, "releases", sha), { recursive: true, force: true });
   await symlink(outside, join(root, "releases", sha));
 }
@@ -889,7 +893,7 @@ describe("rollback", () => {
     await deploy(SHA_A, "A", 1);
     await deploy(SHA_B, "B", 2);
     await rollback(root, () => NOW);
-    await unpin(unpinDeps(failingFetch), { force: true });
+    await unpin(unpinDeps(failingFetch), { force: true, ignoreCleanup: false });
     await runOnce(deps(githubServing(SHA_B, "B", 2).fetch));
     expect(await readlink(join(root, "current"))).toBe(`releases/${SHA_B}`);
   });
@@ -901,6 +905,7 @@ describe("rollback", () => {
       ok: true,
       sha: SHA_A,
       cleanup: "done",
+      contentRecorded: true,
     });
   });
 
@@ -915,6 +920,7 @@ describe("rollback", () => {
           ok: true,
           sha: SHA_A,
           cleanup: "pending",
+          contentRecorded: true,
         });
       } finally {
         await chmod(join(root, "releases"), 0o755);
@@ -963,6 +969,66 @@ describe("rollback", () => {
     await expect(rollback(root, () => NOW)).rejects.toThrow();
   });
 
+  test("does not roll back to a release whose manifest cannot be read", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await deploy(SHA_C, "C", 3);
+    await rm(join(root, "releases", SHA_B, "manifest.json"));
+    await rollback(root, () => NOW);
+    expect(await readlink(join(root, "current"))).toBe(`releases/${SHA_A}`);
+  });
+
+  test("keeps the assets of the readable releases when it skips an unreadable one", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await deploy(SHA_C, "C", 3);
+    await rm(join(root, "releases", SHA_B, "manifest.json"));
+    await rollback(root, () => NOW);
+    expect(await exists(join(root, "assets/index-A0000000.js"))).toBe(true);
+  });
+
+  test("reports no_previous_release when the only earlier release has an unreadable manifest", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await rm(join(root, "releases", SHA_A, "manifest.json"));
+    expect(await rollback(root, () => NOW)).toEqual({
+      ok: false,
+      reason: "no_previous_release",
+    });
+  });
+
+  test("does not roll back to a release whose assets are missing", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await deploy(SHA_C, "C", 3);
+    await rm(join(root, "assets/index-B0000000.js"));
+    await rollback(root, () => NOW);
+    expect(await readlink(join(root, "current"))).toBe(`releases/${SHA_A}`);
+  });
+
+  test("reports that the content was not recorded when the manifest of current cannot be read", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await rm(join(root, "releases", SHA_B, "manifest.json"));
+    expect(await rollback(root, () => NOW)).toMatchObject({
+      ok: true,
+      contentRecorded: false,
+    });
+  });
+
+  test("logs when the content was not recorded", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await rm(join(root, "releases", SHA_B, "manifest.json"));
+    const events: string[] = [];
+    await rollback(
+      root,
+      () => NOW,
+      (event) => events.push(event),
+    );
+    expect(events).toContain("rollback_content_unrecorded");
+  });
+
   test("reports no_previous_release with a single release", async () => {
     await deploy(SHA_A, "A", 1);
     expect(await rollback(root, () => NOW)).toEqual({
@@ -982,28 +1048,67 @@ describe("rollback", () => {
 describe("unpin", () => {
   test("removes the pin file", async () => {
     await writeFile(join(root, "pin"), "{}");
-    await unpin(unpinDeps(failingFetch), { force: false });
+    await unpin(unpinDeps(failingFetch), {
+      force: false,
+      ignoreCleanup: false,
+    });
     expect(await exists(join(root, "pin"))).toBe(false);
   });
 
   test("does not query GitHub when the pin names no revoked release", async () => {
     await writeFile(join(root, "pin"), "{}");
     const github = githubWithLatestRun(SHA_B, 2);
-    await unpin(unpinDeps(github.fetch), { force: false });
+    await unpin(unpinDeps(github.fetch), {
+      force: false,
+      ignoreCleanup: false,
+    });
     expect(github.calls).toEqual([]);
   });
 
   test("succeeds when there is no pin", async () => {
-    expect(await unpin(unpinDeps(failingFetch), { force: false })).toEqual({
+    expect(
+      await unpin(unpinDeps(failingFetch), {
+        force: false,
+        ignoreCleanup: false,
+      }),
+    ).toEqual({
       ok: true,
     });
+  });
+
+  test("refuses when the pin cannot be parsed", async () => {
+    await writeFile(join(root, "pin"), "not json");
+    expect(
+      await unpin(unpinDeps(failingFetch), {
+        force: false,
+        ignoreCleanup: false,
+      }),
+    ).toEqual({
+      ok: false,
+      reason: "pin_unreadable",
+    });
+  });
+
+  test("keeps a pin that cannot be parsed when refusing", async () => {
+    await writeFile(join(root, "pin"), "not json");
+    await unpin(unpinDeps(failingFetch), {
+      force: false,
+      ignoreCleanup: false,
+    });
+    expect(await exists(join(root, "pin"))).toBe(true);
+  });
+
+  test("removes a pin that cannot be parsed with force", async () => {
+    await writeFile(join(root, "pin"), "not json");
+    await unpin(unpinDeps(failingFetch), { force: true, ignoreCleanup: false });
+    expect(await exists(join(root, "pin"))).toBe(false);
   });
 
   test("does not append to history", async () => {
     await deploy(SHA_A, "A", 1);
     await deploy(SHA_B, "B", 2);
     await rollback(root, () => NOW);
-    await unpin(unpinDeps(failingFetch), { force: true });
+    await unpin(unpinDeps(failingFetch), { force: true, ignoreCleanup: false });
     expect(
       JSON.parse(await readFile(join(root, "history.json"), "utf8")),
     ).toEqual([SHA_A, SHA_B]);
@@ -1016,6 +1121,7 @@ describe("unpin", () => {
     expect(
       await unpin(unpinDeps(githubWithLatestRun(SHA_B, 2).fetch), {
         force: false,
+        ignoreCleanup: false,
       }),
     ).toEqual({ ok: false, reason: "latest_run_is_revoked", sha: SHA_B });
   });
@@ -1026,6 +1132,7 @@ describe("unpin", () => {
     await rollback(root, () => NOW);
     await unpin(unpinDeps(githubWithLatestRun(SHA_B, 2).fetch), {
       force: false,
+      ignoreCleanup: false,
     });
     expect(await exists(join(root, "pin"))).toBe(true);
   });
@@ -1038,6 +1145,7 @@ describe("unpin", () => {
     expect(
       await unpin(unpinDeps(githubWithLatestRun(SHA_B, 2).fetch), {
         force: false,
+        ignoreCleanup: false,
       }),
     ).toEqual({ ok: false, reason: "latest_run_is_revoked", sha: SHA_B });
   });
@@ -1049,6 +1157,7 @@ describe("unpin", () => {
     expect(
       await unpin(unpinDeps(githubServing(SHA_C, "C", 3).fetch), {
         force: false,
+        ignoreCleanup: false,
       }),
     ).toEqual({ ok: true });
   });
@@ -1059,6 +1168,7 @@ describe("unpin", () => {
     await rollback(root, () => NOW);
     await unpin(unpinDeps(githubServing(SHA_C, "C", 3).fetch), {
       force: false,
+      ignoreCleanup: false,
     });
     expect(await exists(join(root, "pin"))).toBe(false);
   });
@@ -1067,7 +1177,12 @@ describe("unpin", () => {
     await deploy(SHA_A, "A", 1);
     await deploy(SHA_B, "B", 2);
     await rollback(root, () => NOW);
-    expect(await unpin(unpinDeps(failingFetch), { force: false })).toEqual({
+    expect(
+      await unpin(unpinDeps(failingFetch), {
+        force: false,
+        ignoreCleanup: false,
+      }),
+    ).toEqual({
       ok: false,
       reason: "lookup_failed",
     });
@@ -1077,7 +1192,10 @@ describe("unpin", () => {
     await deploy(SHA_A, "A", 1);
     await deploy(SHA_B, "B", 2);
     await rollback(root, () => NOW);
-    await unpin(unpinDeps(failingFetch), { force: false });
+    await unpin(unpinDeps(failingFetch), {
+      force: false,
+      ignoreCleanup: false,
+    });
     expect(await exists(join(root, "pin"))).toBe(true);
   });
 
@@ -1086,7 +1204,10 @@ describe("unpin", () => {
     await deploy(SHA_B, "B", 2);
     await rollback(root, () => NOW);
     expect(
-      await unpin(unpinDeps(failingFetch, null), { force: false }),
+      await unpin(unpinDeps(failingFetch, null), {
+        force: false,
+        ignoreCleanup: false,
+      }),
     ).toEqual({ ok: false, reason: "lookup_failed" });
   });
 
@@ -1095,7 +1216,10 @@ describe("unpin", () => {
     await deploy(SHA_B, "B", 2);
     await rollback(root, () => NOW);
     expect(
-      await unpin(unpinDeps(fakeGitHub({ runs: [] }).fetch), { force: false }),
+      await unpin(unpinDeps(fakeGitHub({ runs: [] }).fetch), {
+        force: false,
+        ignoreCleanup: false,
+      }),
     ).toEqual({ ok: false, reason: "lookup_failed" });
   });
 
@@ -1105,6 +1229,7 @@ describe("unpin", () => {
     await rollback(root, () => NOW);
     await unpin(unpinDeps(githubWithLatestRun(SHA_B, 2).fetch), {
       force: true,
+      ignoreCleanup: false,
     });
     expect(await exists(join(root, "pin"))).toBe(false);
   });
@@ -1114,7 +1239,7 @@ describe("unpin", () => {
     await deploy(SHA_B, "B", 2);
     await rollback(root, () => NOW);
     const github = githubWithLatestRun(SHA_B, 2);
-    await unpin(unpinDeps(github.fetch), { force: true });
+    await unpin(unpinDeps(github.fetch), { force: true, ignoreCleanup: false });
     expect(github.calls).toEqual([]);
   });
 
@@ -1123,7 +1248,7 @@ describe("unpin", () => {
     await deploy(SHA_B, "B", 2);
     await pinAt(SHA_A, [SHA_B]);
     await rm(join(root, "assets/index-B0000000.js"));
-    await unpin(unpinDeps(failingFetch), { force: true });
+    await unpin(unpinDeps(failingFetch), { force: true, ignoreCleanup: false });
     expect(await exists(join(root, "releases", SHA_B))).toBe(false);
   });
 
@@ -1135,6 +1260,7 @@ describe("unpin", () => {
     expect(
       await unpin(unpinDeps(githubWithLatestRun(SHA_C, 3).fetch), {
         force: false,
+        ignoreCleanup: false,
       }),
     ).toEqual({ ok: false, reason: "cleanup_incomplete" });
   });
@@ -1146,6 +1272,7 @@ describe("unpin", () => {
     await rm(join(root, "releases", SHA_A, "manifest.json"));
     await unpin(unpinDeps(githubWithLatestRun(SHA_C, 3).fetch), {
       force: false,
+      ignoreCleanup: false,
     });
     expect(await exists(join(root, "pin"))).toBe(true);
   });
@@ -1167,7 +1294,12 @@ describe("unpin", () => {
     await deploy(SHA_B, "B", 2);
     await pinAt(SHA_A, [SHA_B]);
     await rm(join(root, "releases", SHA_A, "manifest.json"));
-    expect(await unpin(unpinDeps(failingFetch), { force: true })).toEqual({
+    expect(
+      await unpin(unpinDeps(failingFetch), {
+        force: true,
+        ignoreCleanup: false,
+      }),
+    ).toEqual({
       ok: false,
       reason: "cleanup_incomplete",
     });
@@ -1192,6 +1324,7 @@ describe("unpin", () => {
     expect(
       await unpin(unpinDeps(githubServing(SHA_C, "B", 3).fetch), {
         force: false,
+        ignoreCleanup: false,
       }),
     ).toEqual({
       ok: false,
@@ -1206,6 +1339,7 @@ describe("unpin", () => {
     await rollback(root, () => NOW);
     await unpin(unpinDeps(githubServing(SHA_C, "B", 3).fetch), {
       force: false,
+      ignoreCleanup: false,
     });
     expect(await exists(join(root, "pin"))).toBe(true);
   });
@@ -1217,6 +1351,7 @@ describe("unpin", () => {
     expect(
       await unpin(unpinDeps(githubWithLatestRun(SHA_C, 3).fetch), {
         force: false,
+        ignoreCleanup: false,
       }),
     ).toEqual({ ok: false, reason: "content_undeterminable", sha: SHA_C });
   });
@@ -1227,6 +1362,7 @@ describe("unpin", () => {
     await rollback(root, () => NOW);
     await unpin(unpinDeps(githubWithLatestRun(SHA_C, 3).fetch), {
       force: false,
+      ignoreCleanup: false,
     });
     expect(await exists(join(root, "pin"))).toBe(true);
   });
@@ -1239,6 +1375,7 @@ describe("unpin", () => {
     expect(
       await unpin(unpinDeps(githubWithLatestRun(SHA_C, 3).fetch), {
         force: false,
+        ignoreCleanup: false,
       }),
     ).toEqual({ ok: true });
   });
@@ -1251,6 +1388,7 @@ describe("unpin", () => {
     expect(
       await unpin(unpinDeps(githubWithLatestRun(SHA_C, 3).fetch), {
         force: false,
+        ignoreCleanup: false,
       }),
     ).toEqual({
       ok: false,
@@ -1266,6 +1404,7 @@ describe("unpin", () => {
     expect(
       await unpin(unpinDeps(githubWithLatestRun(SHA_C, 3).fetch), {
         force: false,
+        ignoreCleanup: false,
       }),
     ).toEqual({ ok: true });
   });
@@ -1274,7 +1413,10 @@ describe("unpin", () => {
     await deploy(SHA_A, "A", 1);
     await deploy(SHA_B, "B", 2);
     await rollback(root, () => NOW);
-    await unpin(unpinDeps(githubServing(SHA_C, "B", 3).fetch), { force: true });
+    await unpin(unpinDeps(githubServing(SHA_C, "B", 3).fetch), {
+      force: true,
+      ignoreCleanup: false,
+    });
     expect(await exists(join(root, "pin"))).toBe(false);
   });
 });

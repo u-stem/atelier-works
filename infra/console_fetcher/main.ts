@@ -9,6 +9,7 @@
 import {
   describeRollbackNotice,
   describeUnpinRefusal,
+  findUnknownUnpinFlags,
   parseFetcherConfig,
   parseUnpinFlags,
 } from "./decide.ts";
@@ -82,7 +83,10 @@ async function main(): Promise<void> {
     console.log(
       `Rolled back to ${locked.value.sha} and pinned it. Run "mise run console:unpin" to resume automatic updates.`,
     );
-    const notice = describeRollbackNotice(locked.value.cleanup);
+    const notice = describeRollbackNotice(
+      locked.value.cleanup,
+      locked.value.contentRecorded,
+    );
     if (notice !== null) console.log(notice);
     return;
   }
@@ -90,7 +94,7 @@ async function main(): Promise<void> {
     const options = parseUnpinFlags(process.argv.slice(3));
     if (options === null) {
       console.error(
-        `Unknown option: ${process.argv.slice(3).join(" ")} (expected --force or --ignore-cleanup)`,
+        `Unknown option: ${findUnknownUnpinFlags(process.argv.slice(3)).join(" ")} (expected --force or --ignore-cleanup)`,
       );
       process.exit(2);
     }

@@ -9,8 +9,10 @@ import {
   currentShaFromLink,
   describeRollbackNotice,
   describeUnpinRefusal,
+  findUnknownUnpinFlags,
   isAllowedDownloadUrl,
   isLockStale,
+  isReadablePin,
   needsDeploy,
   parseArtifacts,
   parseCurrentLink,
@@ -1025,13 +1027,53 @@ describe("describeUnpinRefusal", () => {
 
 describe("describeRollbackNotice", () => {
   test("says the rollback succeeded when the removal is pending", () => {
-    expect(describeRollbackNotice("pending")).toContain(
+    expect(describeRollbackNotice("pending", true)).toContain(
       "The rollback succeeded",
     );
   });
 
-  test("says nothing when the removal is done", () => {
-    expect(describeRollbackNotice("done")).toBeNull();
+  test("says nothing when the removal is done and the content is recorded", () => {
+    expect(describeRollbackNotice("done", true)).toBeNull();
+  });
+
+  test("warns that the content was not recorded", () => {
+    expect(describeRollbackNotice("done", false)).toContain(
+      "could not be recorded",
+    );
+  });
+});
+
+describe("findUnknownUnpinFlags", () => {
+  test("returns only the flags that are not known", () => {
+    expect(
+      findUnknownUnpinFlags(["--force", "--forse", "--ignore-cleanup", "-x"]),
+    ).toEqual(["--forse", "-x"]);
+  });
+
+  test("returns nothing for known flags", () => {
+    expect(findUnknownUnpinFlags(["--force"])).toEqual([]);
+  });
+});
+
+describe("isReadablePin", () => {
+  test("accepts a JSON object", () => {
+    expect(isReadablePin({ sha: SHA_A })).toBe(true);
+  });
+
+  test("rejects a value that could not be parsed", () => {
+    expect(isReadablePin(null)).toBe(false);
+  });
+
+  test("rejects an array", () => {
+    expect(isReadablePin([])).toBe(false);
+  });
+});
+
+describe("describeUnpinRefusal for an unreadable pin", () => {
+  test("offers --force", () => {
+    expect(
+      describeUnpinRefusal({ ok: false, reason: "pin_unreadable" }),
+    ).toContain("--force");
   });
 });
 

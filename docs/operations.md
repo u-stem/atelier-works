@@ -611,8 +611,9 @@ mise exec -- docker compose -f infra/docker-compose.yml logs --tail 50 console_f
 2. 戻すと`pin`が置かれ、自動の付け替えが止まる。もう一度実行すると、さらに1つ前に戻る。
 3. `main`に修正を入れてCIが成功したら、`mise run console:unpin`で`pin`を外す。5分以内に最新の版へ戻る。
 
-戻し先は、中身が今の版と違う最も新しい版である。
+戻し先は、中身が今の版と違い、マニフェストと`assets/`のファイルが揃っている最も新しい版である。
 中身が同じ版へ戻しても、何も変わらないためである。
+揃っていない版は、配信するとページが壊れるので選ばない。
 そのような版が残っていないと、`No previous release with different content to roll back to.`と出て止まる。
 この場合と、残っている版より前に戻したい場合は、`main`で該当のcommitをrevertし、CIを動かす。
 
@@ -624,6 +625,9 @@ mise exec -- docker compose -f infra/docker-compose.yml logs --tail 50 console_f
 続きは`console_fetcher`が次の取り込みで消す。
 `rolled_back_from`を持たない`pin`では、戻した元の版は消えない。
 消した版のページを開いたままのブラウザは、assetsを読み込めなくなるので、再読み込みが要る。
+戻した元の版のマニフェストを読めないと、その版の中身を`pin`に記録できない。
+このとき`console:rollback`は、`The files of the release rolled back from could not be recorded`で始まる文を出す。
+この`pin`は、`console:unpin`がshaだけを照らすので、外す前に最新のCIの結果を確かめる。
 
 `pin`を外すと、`console_fetcher`は最新の成功した実行を取り込む。
 その実行が戻した元の版と同じ中身だと、問題の版が再び配信される。
@@ -633,6 +637,7 @@ mise exec -- docker compose -f infra/docker-compose.yml logs --tail 50 console_f
 
 | 状況 | 人がすること |
 | --- | --- |
+| `pin`を読めない(戻した元の版が分からない) | 最新のCIの結果を確かめ、`--force`で外す |
 | 最新の成功した実行のshaが、戻した元の版のshaである | 修正を`main`に入れ、そのCIが成功してからやり直す |
 | 最新の成功した実行の`files`が、戻した元の版と同じである | `console/`を変える修正を`main`に入れ、そのCIが成功してからやり直す |
 | 最新の実行を調べられない(トークンや`CONSOLE_GITHUB_REPO`の不備、ネットワークの失敗) | 原因を直してやり直す |
@@ -643,10 +648,12 @@ mise exec -- docker compose -f infra/docker-compose.yml logs --tail 50 console_f
 `rolled_back_from`も持たない`pin`は、照らす版が無いので、問い合わせずに外す。
 
 確認を飛ばすオプションは2つある。
-`mise run console:unpin -- --force`は、最新の実行についての確認(上の表の前の4行)を飛ばす。
+`mise run console:unpin -- --force`は、`pin`と最新の実行についての確認(上の表の前の5行)を飛ばす。
 問題の版が再び配信されるのを承知の上で使う。
 `mise run console:unpin -- --ignore-cleanup`は、戻した元の版を消せていない確認を飛ばす。
 `--force`だけでは、この確認は飛ばない。
+`--ignore-cleanup`で外すと、消せていない版の記録は`pin`と一緒に消える。
+その版は、通常の保持で消えるまで残り、その版だけが使う`assets/`のファイルも、版が消えた後の14日の規則で消えるまで残る。
 
 主な`error`と対処は次のとおり。
 

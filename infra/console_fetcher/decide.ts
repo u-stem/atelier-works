@@ -563,7 +563,7 @@ export type UnpinOptions = {
   /** 最新の実行が戻した元の版かを確かめない。 */
   readonly force: boolean;
   /** 戻した元の版を消せていなくても、pinを外す。 */
-  readonly ignoreCleanup?: boolean;
+  readonly ignoreCleanup: boolean;
 };
 
 /** `unpin`の引数を読む。知らない引数があれば`null`。 */
@@ -578,8 +578,19 @@ export function parseUnpinFlags(args: readonly string[]): UnpinOptions | null {
   return { force, ignoreCleanup };
 }
 
+/** `unpin`の引数のうち、知らないものを返す。 */
+export function findUnknownUnpinFlags(args: readonly string[]): string[] {
+  return args.filter((arg) => arg !== "--force" && arg !== "--ignore-cleanup");
+}
+
+/** pinの中身を読めたか(JSONのオブジェクトか)を返す。読めない`pin`は、何を戻したか分からない。 */
+export function isReadablePin(value: unknown): boolean {
+  return isRecord(value);
+}
+
 /** `unpin`がpinを外さなかった理由。 */
 export type UnpinRefusal =
+  | { readonly ok: false; readonly reason: "pin_unreadable" }
   | {
       readonly ok: false;
       readonly reason: "latest_run_is_revoked";
@@ -608,6 +619,8 @@ const IGNORE_CLEANUP_HINT =
 /** pinを外さなかったときに、運用者に見せる文面(理由と次の操作)を返す。 */
 export function describeUnpinRefusal(refusal: UnpinRefusal): string {
   switch (refusal.reason) {
+    case "pin_unreadable":
+      return `Not unpinned: the pin file could not be parsed, so it is unknown which release you rolled back from and whether unpinning would serve it again. ${FORCE_HINT}`;
     case "latest_run_is_revoked":
       return `Not unpinned: the latest successful run on main (${refusal.sha}) is the release you rolled back from, so unpinning would serve it again. Merge a fix into main, wait until its CI succeeds, and run this again. ${FORCE_HINT}`;
     case "latest_run_has_revoked_content":
@@ -621,12 +634,27 @@ export function describeUnpinRefusal(refusal: UnpinRefusal): string {
   }
 }
 
-/** `rollback`の後に、運用者に伝えることがあれば文面を返す。削除が終わっていれば`null`。 */
+/**
+ * `rollback`の後に、運用者に伝えることがあれば文面を返す。無ければ`null`。
+ * 戻した元の版の削除が終わっていないこと(`cleanup`)と、その版の中身をpinに記録できなかったこと
+ * (`contentRecorded`)を伝える。
+ */
 export function describeRollbackNotice(
   cleanup: "done" | "pending",
+  contentRecorded: boolean,
 ): string | null {
-  if (cleanup === "done") return null;
-  return "The rollback succeeded, but removing the release rolled back from did not finish. console_fetcher resumes the removal within 5 minutes.";
+  const notices: string[] = [];
+  if (cleanup === "pending") {
+    notices.push(
+      "The rollback succeeded, but removing the release rolled back from did not finish. console_fetcher resumes the removal within 5 minutes.",
+    );
+  }
+  if (!contentRecorded) {
+    notices.push(
+      "The files of the release rolled back from could not be recorded in the pin, so unpinning cannot tell whether a later commit has the same files. Check the latest build before unpinning.",
+    );
+  }
+  return notices.length === 0 ? null : notices.join("\n");
 }
 
 /**
