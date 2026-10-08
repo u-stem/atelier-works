@@ -3,7 +3,7 @@
 // (docs/security.md「pr_fixの安全策」)、implementフロー(`lib/implement_support.ts`)では
 // PR本文とDiscord通知に記録するだけにする。
 // `implement_support`が`steps`からimportしないで済むよう`lib`に置き、
-// `pr_workflow_support.ts`がここの定義をすべて再exportする。
+// `pr_workflow_support.ts`が判定関数とpr_fixの一覧を再exportする。
 
 export type ChangedPathStatus =
   | "added"

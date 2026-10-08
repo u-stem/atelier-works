@@ -627,7 +627,7 @@ async function finish(
 
 /**
  * 1回分の取り込みを行い、status.jsonに書いた状態を返す。例外は投げない。
- * pinがあればGitHubに問い合わせない。失敗したときはcurrentを変えない。
+ * pinがあればGitHubに問い合わせない。取り込みや検証で失敗したときはcurrentを変えない。
  */
 export async function runOnce(deps: FetcherDeps): Promise<FetcherStatus> {
   const layout = layoutOf(deps.root);

@@ -146,9 +146,9 @@ jobs:
       - name: Setup mise
         uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
         with:
-          # 成果物の組み立てに要るbunだけを入れる。他の[tools]のinstall scriptや
-          # 固定していない依存を、配信物を作るジョブで動かさないため。
-          install_args: bun
+          # 成果物の組み立てに要るbunと、viteとtscを動かすnodeだけを入れる。
+          # 他の[tools]のinstall scriptや固定していない依存を、配信物を作るジョブで動かさないため。
+          install_args: bun node
           # 他のジョブが書いたキャッシュを読まず、このジョブからも書かない。
           cache: false
 
