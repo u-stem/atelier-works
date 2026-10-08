@@ -72,4 +72,4 @@ description: >-
 #   時間の設定と検査コマンドの数は、実装フローのステップのtimeout
 #   (`IMPLEMENT_STEP_TIMEOUT_SEC`)に収まる組み合わせにする。収まらないと、実装の
 #   準備でneeds_humanになる。既定値なら検査コマンドは7件まで、修正ラウンドを
-#   始められる余裕を考えると4件までが目安。計算式は`docs/operations.md`を参照。
+#   始められる余裕を考えると4件までが目安。計算式は`docs/internals/implement.md`を参照。

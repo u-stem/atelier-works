@@ -1,6 +1,6 @@
 // 保護パスの判定を、pr_fixとimplementフローで共有する。
 // pr_fix(`steps/pr_workflow_support.ts`)では一致するとpushを止め
-// (docs/security.md「pr_fixの安全策」)、implementフロー(`lib/implement_support.ts`)では
+// (docs/security.md「PR修正の安全策」)、implementフロー(`lib/implement_support.ts`)では
 // PR本文とDiscord通知に記録するだけにする。
 // `implement_support`が`steps`からimportしないで済むよう`lib`に置き、
 // `pr_workflow_support.ts`が判定関数とpr_fixの一覧を再exportする。
@@ -135,7 +135,7 @@ function matchesPathLists(
 }
 
 /**
- * `path`がdocs/security.md「pr_fixの安全策」の禁止パスに当たるかを返す。
+ * `path`がdocs/security.md「PR修正の安全策」の禁止パスに当たるかを返す。
  * `prefixes`のディレクトリは、リポジトリのルートからの相対パスの前方一致で判定する
  * (ディレクトリ名そのものも一致とみなす)。
  * `FORBIDDEN_EXACT_PATHS`とは完全一致で、`FORBIDDEN_BASENAME_PATTERNS`は

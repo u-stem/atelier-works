@@ -520,7 +520,7 @@ export async function getViewer(client: GhClient): Promise<Viewer> {
  * (PATが指すGitHubアカウント)から作る。
  * 個人のメールアドレスをコミットに書かないよう、GitHubのnoreplyの形
  * (`<数値のid>+<login>@users.noreply.github.com`)を使う
- * (`docs/security.md`の「pr_fixの安全策」を参照)。
+ * (`docs/security.md`の「PR修正の安全策」を参照)。
  * `workspace.ts`の`commitAndPush`は、結果をプロセスの環境変数
  * (`GIT_AUTHOR_*` / `GIT_COMMITTER_*`)でだけ渡し、git configには書かない。
  */
@@ -785,7 +785,7 @@ function isTimelineEventPayload(value: unknown): value is TimelineEventPayload {
 /**
  * `GET .../timeline`をページ送りしながら取得し、最後の`labeled`イベントだけを返す。
  * ラベルは外されて別の人に付け直されていることがある。そのため
- * `poll_issues`が`docs/security.md`の「publicリポジトリでのラベル付与制限」に
+ * `poll_issues`が`docs/security.md`の「ラベル付与の制限」に
  * 照らして確かめるべきなのは、いずれかのラベル付与ではなく最新のラベル付与である。
  * ラベルが一度も付いていなければ`null`を返す(ラベルで絞った検索で見つけた
  * Issueでは起こらないはずだが、念のため扱う)。

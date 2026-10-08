@@ -828,7 +828,7 @@ export type PrFixGateOutcome =
 
 // ---------------------------------------------------------------------------
 // pr_fix_prepare: 安全のための関門(純粋関数)。
-// 方針は`docs/security.md`の「pr_fixの安全策」を参照。
+// 方針は`docs/security.md`の「PR修正の安全策」を参照。
 // ---------------------------------------------------------------------------
 
 export type PrFixGuardResult =
@@ -1327,7 +1327,7 @@ export function isFixClaudeOutput(value: unknown): value is FixClaudeOutput {
 
 // ---------------------------------------------------------------------------
 // pr_fix_verify: 禁止された変更の検出(純粋関数)。
-// 方針は`docs/security.md`の「pr_fixの安全策」を参照。
+// 方針は`docs/security.md`の「PR修正の安全策」を参照。
 // ---------------------------------------------------------------------------
 
 /**
@@ -2592,7 +2592,7 @@ const defaultCreateCheckHomeDir: CreateCheckHomeDir = async () => {
 /**
  * `allowed_check_commands`の各項目を、`cwd`で順に実行する。
  * 環境変数は最小限を明示的に渡し(PATHと新しい非公開のHOMEだけで、秘密は引き継がない。
- * `docs/security.md`の"env -i PATH=... HOME=...")、終わったらHOMEのディレクトリを消す。
+ * `docs/internals/pr-workflow.md`の「検査コマンドの実行」)、終わったらHOMEのディレクトリを消す。
  * miseの設定の信頼(trust)は決して与えない(`MISE_TRUSTED_CONFIG_PATHS`も
  * `mise --yes trust`も使わない)。信頼が無いと動かない検査コマンド
  * (信頼されていない対象リポジトリの`mise.toml`に対する`mise run check`など)は、
@@ -2677,8 +2677,8 @@ export type PrFixFinalAction =
  * `pr_fix_finish.ts`が取るべき終端の動作に振り分ける。
  *
  * `guard_blocked`(prepareの、PRがopen・forkでない・draftでない・
- * 保護ブランチでないという関門)は、`docs/security.md`の
- * 「違反はblockedとして中断する」に従い`work_items`の`"blocked"`にする。
+ * 保護ブランチでないという関門)は、`docs/internals/pr-workflow.md`の
+ * 「準備での確認」のとおり`work_items`の`"blocked"`にする。
  * `blocked`(Claude自身の判断か、`pr_fix_verify`が検出した禁止ファイルや
  * 検査コマンドの失敗)は`"needs_human"`にする。
  * どちらも上流では`"blocked"`の形の結果だが、失敗の種類が違うので、
