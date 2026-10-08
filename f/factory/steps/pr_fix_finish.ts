@@ -34,6 +34,7 @@ import { type FixReply, isOneOf, type WorkItemStatus } from "../lib/types.ts";
 import { commitAndPush, runCommand } from "../lib/workspace.ts";
 import {
   buildIssueProposalReason,
+  buildReplyPostFailedNotice,
   type CollectedComment,
   type CollectedReview,
   composeCommitMessage,
@@ -46,6 +47,7 @@ import {
   matchReviewThreadForComment,
   nextActionFor,
   type PrFixFinishOutcome,
+  type ReplyPostFailure,
   renderFixReply,
   rerouteRequirementsGap,
   selectProposeIssueReplies,
@@ -375,6 +377,10 @@ export async function main(
    * ベストエフォートで求める。取得に失敗したら(rate limitを含む)`thread_id`を付けずに続ける。
    * 通常のIssueコメントにはレビュースレッドが無いので、
    * インラインの提案が1つ以上あるときだけ取得する。
+   * 返信の投稿に失敗しても(rate limitを含む)ステップは止めず、残りの返信を続ける。
+   * 失敗が1件以上あれば、最後に`fix_reply_post_failed`のnoticeを1件だけ記録し、
+   * ConsoleのNoticesタブでPRに人が返信するよう知らせる。Discordには通知しない。
+   * noticeの記録に失敗しても、警告を残して続ける。
    */
   async function postFixReplies(newSha: string | null): Promise<void> {
     const proposeReplies = repliesToPost.filter(
@@ -394,6 +400,7 @@ export async function main(
           },
         )
       : [];
+    const replyFailures: ReplyPostFailure[] = [];
 
     for (const reply of repliesToPost) {
       const original = commentById.get(reply.review_comment_id);
@@ -467,11 +474,33 @@ export async function main(
           await postIssueComment(client, owner, repo, pr_number, body);
         }
       } catch (err) {
+        const message = maskSecrets(
+          err instanceof Error ? err.message : String(err),
+        );
         log.warn("failed to reply to a review comment", {
           review_comment_id: reply.review_comment_id,
-          error: maskSecrets(err instanceof Error ? err.message : String(err)),
+          error: message,
+        });
+        replyFailures.push({
+          reviewCommentId: reply.review_comment_id,
+          error: message,
         });
       }
+    }
+
+    const notice = buildReplyPostFailedNotice(
+      { owner, repo, prNumber: pr_number, workItemId: work_item_id },
+      replyFailures,
+    );
+    if (notice === null) return;
+    try {
+      await addNotice(notice);
+    } catch (noticeErr) {
+      log.warn("failed to record fix_reply_post_failed notice", {
+        error: maskSecrets(
+          noticeErr instanceof Error ? noticeErr.message : String(noticeErr),
+        ),
+      });
     }
   }
 

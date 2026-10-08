@@ -30,6 +30,7 @@ import {
   isRecord,
   isString,
   type LabelerAssociation,
+  type NoticeRecord,
   type ReviewFinding,
   type ReviewFindingKind,
   type ReviewSeverity,
@@ -2507,6 +2508,36 @@ export async function listReviewThreadsBestEffort(
   }
 }
 
+export type ReplyPostFailure = {
+  readonly reviewCommentId: number;
+  readonly error: string;
+};
+
+/**
+ * `pr_fix_finish.ts`の返信の投稿で失敗したものをまとめ、ConsoleのNoticesタブに出す
+ * noticeを1件作る。失敗が無ければnullを返す。
+ * 返信の投稿は失敗してもステップを止めない(pushの後なので)。そのままだと失敗は
+ * ログにしか残らず、人は返信が無いことに気づけないため、件数・id・最初のエラーを載せ、
+ * PRで人が返信するよう案内する。
+ */
+export function buildReplyPostFailedNotice(
+  target: {
+    readonly owner: string;
+    readonly repo: string;
+    readonly prNumber: number;
+    readonly workItemId: number;
+  },
+  failures: readonly ReplyPostFailure[],
+): NoticeRecord | null {
+  const first = failures[0];
+  if (first === undefined) return null;
+  const ids = failures.map((failure) => String(failure.reviewCommentId));
+  return {
+    kind: "fix_reply_post_failed",
+    message: `${target.owner}/${target.repo}#${String(target.prNumber)} (work item ${String(target.workItemId)}): レビューコメントへの返信${String(failures.length)}件の投稿に失敗しました(review_comment_id: ${ids.join(", ")}、最初のエラー: ${first.error})。PRで人が返信してください`,
+  };
+}
+
 /**
  * `threads`から、`reviewCommentId`を含むレビュースレッドを探し、そのidを返す。
  * `pr_fix_finish.ts`が、新しく記録する`propose_issue`の行に
@@ -2851,6 +2882,10 @@ const FORBIDDEN_CHANGE_NEXT_ACTION =
   "差分を確認し、問題なければ人が直接修正してください";
 const DIFF_SIZE_NEXT_ACTION =
   "変更を分割するか、上限を見直してから`factory:fix`を付け直してください";
+const GITHUB_RATE_LIMIT_NEXT_ACTION =
+  "GitHubのrate limitの解除を待ってから、ConsoleのFailuresタブで再実行してください";
+/** `lib/github.ts`の`GitHubRateLimitError`のメッセージ。1はエンドポイント、2は待ちの説明。 */
+const GITHUB_RATE_LIMIT_REASON_PATTERN = /^GitHub rate limit on (\S+): (.+)$/;
 const DAILY_BUDGET_NEXT_ACTION =
   "翌日まで待つか、daily_budget_usdを引き上げてください";
 const NOTHING_TO_COMMIT_NEXT_ACTION =
@@ -3155,10 +3190,28 @@ const REASON_RULES: readonly ReasonRule[] = [
     nextAction: () =>
       "ブランチの最新の状態を確認し、必要ならConsoleのFailuresタブから再実行してください",
   },
+  // `lib/github.ts`の`GitHubRateLimitError`。単独の理由としても、
+  // "implement finish failed: ..."の中身としても現れる。
+  {
+    pattern: GITHUB_RATE_LIMIT_REASON_PATTERN,
+    describe: (m) => `GitHub APIのrate limitに当たりました(${m[1]}): ${m[2]}`,
+    nextAction: () => GITHUB_RATE_LIMIT_NEXT_ACTION,
+  },
+  // 中身がrate limitのときだけ、その規則に訳と次の操作を任せる。
+  // それ以外の中身(HTTPのエラーやgitの失敗など)は、これまでどおり汎用の案内にする。
   {
     pattern: /^implement finish failed: ([\s\S]+)$/,
-    describe: (m) => `コミット・push・PRの作成に失敗しました: ${m[1]}`,
-    nextAction: () => GENERIC_NEXT_ACTION,
+    describe: (m) => {
+      const inner = m[1] ?? "";
+      const detail = GITHUB_RATE_LIMIT_REASON_PATTERN.test(inner)
+        ? describeReason(inner)
+        : inner;
+      return `コミット・push・PRの作成に失敗しました: ${detail}`;
+    },
+    nextAction: (m) =>
+      GITHUB_RATE_LIMIT_REASON_PATTERN.test(m[1] ?? "")
+        ? GITHUB_RATE_LIMIT_NEXT_ACTION
+        : GENERIC_NEXT_ACTION,
   },
   {
     pattern: /^implement finished without a final output$/,

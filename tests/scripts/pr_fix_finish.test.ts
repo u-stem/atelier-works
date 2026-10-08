@@ -1,5 +1,5 @@
-// `pr_fix_finish.ts`が使う`pr_workflow_support.ts`の`decideFixFinishAction`、
-// `deriveFallbackReviewers`、`evaluateRerouteGuard`、`listReviewThreadsBestEffort`、
+// `pr_fix_finish.ts`が使う`pr_workflow_support.ts`の`buildReplyPostFailedNotice`、
+// `decideFixFinishAction`、`deriveFallbackReviewers`、`evaluateRerouteGuard`、`listReviewThreadsBestEffort`、
 // `renderFixReply`、`shouldAdvanceWatermarks`のテスト。
 // requirements_gapの差し戻しの手順は`pr_fix_reroute.test.ts`でテストする。
 
@@ -7,6 +7,7 @@ import { describe, expect, test } from "bun:test";
 import type { ReviewThread } from "../../f/factory/lib/github.ts";
 import type { FixReply } from "../../f/factory/lib/types.ts";
 import {
+  buildReplyPostFailedNotice,
   decideFixFinishAction,
   deriveFallbackReviewers,
   evaluateRerouteGuard,
@@ -104,10 +105,13 @@ describe("listReviewThreadsBestEffort", () => {
     expect(threads).toEqual([thread]);
   });
 
+  const RATE_LIMIT_MESSAGE =
+    "GitHub rate limit on graphql: needs a 601s wait, longer than the 120s wait cap (rerun after the limit resets)";
+
   test("returns an empty list when loading fails (after the push, a failure must not abort the step)", async () => {
     const threads = await listReviewThreadsBestEffort(
       async () => {
-        throw new Error("GitHub rate limit on graphql");
+        throw new Error(RATE_LIMIT_MESSAGE);
       },
       () => {},
     );
@@ -118,13 +122,47 @@ describe("listReviewThreadsBestEffort", () => {
     const reported: string[] = [];
     await listReviewThreadsBestEffort(
       async () => {
-        throw new Error("GitHub rate limit on graphql");
+        throw new Error(RATE_LIMIT_MESSAGE);
       },
       (message) => {
         reported.push(message);
       },
     );
-    expect(reported).toEqual(["GitHub rate limit on graphql"]);
+    expect(reported).toEqual([RATE_LIMIT_MESSAGE]);
+  });
+});
+
+describe("buildReplyPostFailedNotice", () => {
+  const target = {
+    owner: "acme",
+    repo: "widgets",
+    prNumber: 7,
+    workItemId: 42,
+  };
+
+  test("returns null when every reply was posted", () => {
+    expect(buildReplyPostFailedNotice(target, [])).toBeNull();
+  });
+
+  test("uses the fix_reply_post_failed kind", () => {
+    const notice = buildReplyPostFailedNotice(target, [
+      { reviewCommentId: 11, error: "boom" },
+    ]);
+    expect(notice?.kind).toBe("fix_reply_post_failed");
+  });
+
+  test("names the PR, the work item, the count, the ids and the first error, and asks for a manual reply", () => {
+    const notice = buildReplyPostFailedNotice(target, [
+      {
+        reviewCommentId: 11,
+        error:
+          "GitHub rate limit on repos/acme/widgets/pulls/7/comments/11/replies: needs a 3601s wait, longer than the 120s wait cap (rerun after the limit resets)",
+      },
+      { reviewCommentId: 12, error: "boom" },
+    ]);
+    expect(notice?.message).toBe(
+      "acme/widgets#7 (work item 42): レビューコメントへの返信2件の投稿に失敗しました(review_comment_id: 11, 12、最初のエラー: GitHub rate limit on repos/acme/widgets/pulls/7/comments/11/replies: needs a 3601s wait, longer than the 120s wait cap (rerun after the limit resets))。PRで人が返信してください",
+    );
   });
 });
 
