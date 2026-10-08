@@ -38,7 +38,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | --- | --- |
 | `pipeline_generate` | 日次の予算を超えていたので、要件定義の生成を始めなかった |
 | `requirements_apply` | 試行回数の上限まで却下された。承認の後に実装フローを起動できなかった |
-| `poll_issues` | 承認依頼が期限切れになった(理由は`approval timed out`) |
+| `poll_issues` | 承認依頼が期限切れになった(理由は`approval timed out`)。Issueを取得した後に作業項目を登録できなかった(理由は`claimed issue could not be registered`) |
 | `implement_finish` | 実装フローが人の対応待ちで止まった |
 | `pr_review_generate` | レビューの生成を止めた |
 | `pr_fix_finish` | 修正が人の対応待ちで止まった。Issue化の提案がある |

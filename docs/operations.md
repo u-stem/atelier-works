@@ -60,11 +60,14 @@ Windmillで手動投入のフロー(`f/factory/manual_intake`)を開き、フォ
 
 ラベルを外した直後にDBへの登録が失敗すると、そのIssueはラベルと作業項目の両方が無い状態になる。Factoryはこれを自動では拾い直さない。
 
-この場合は、Consoleの**失敗**タブに`claim_issue:<owner>/<repo>#<Issue番号>`の失敗が残る。
-`poll_issues`のジョブ自体は失敗しないので、Discordには通知しない。
-DBへの書き込みも失敗していると、失敗はジョブのログにだけ残る。
-人は**失敗**タブで気づき、そのIssueに`factory`ラベルを付け直す。
+1. Discordの「人による対応が必要です: Issue #<番号>」の通知を開く。リンクはそのIssueである。
+2. 失敗の原因を取り除く。原因は、Consoleの**失敗**タブの`claim_issue:<owner>/<repo>#<Issue番号>`か、`poll_issues`のジョブのログで確かめる。DBへの書き込みも失敗しているときは、**失敗**タブに出ず、ジョブのログにだけ残る。
+3. そのIssueに`factory`ラベルを付け直す。
+
 作業項目が無いので、**再実行**は使えない。
+`poll_issues`のジョブ自体は失敗しない。
+Factoryが自分でラベルを付け直さないのは、付け直した人がFactoryになるためである。
+ラベルを付けられる人の制限(`allowed_labeler_associations`)の検査を、通ってしまう。
 
 ## 要件定義を承認・却下する
 
