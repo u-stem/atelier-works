@@ -3731,7 +3731,7 @@ const REASON_RULES: readonly ReasonRule[] = [
     pattern: /^worktree git pointer was modified$/,
     describe: () => "worktreeのgitの参照先(.gitファイル)が書き換えられました",
     nextAction: () =>
-      "実装ブランチとworktreeを人が確認し、不審な変更があればブランチを削除してください",
+      "ブランチとworktreeを人が確認し、不審な変更があればブランチを削除してください",
   },
   // pr_fixの各ステップ(準備ステップの結果に`worktree_git_pointer`・`head_sha`・`branch`が無い)
   {

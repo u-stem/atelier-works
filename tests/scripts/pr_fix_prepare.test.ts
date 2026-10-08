@@ -651,7 +651,7 @@ describe("nextActionFor (implement flow)", () => {
 
   test("asks to inspect the branch after a modified .git pointer", () => {
     expect(nextActionFor("worktree git pointer was modified")).toBe(
-      "実装ブランチとworktreeを人が確認し、不審な変更があればブランチを削除してください",
+      "ブランチとworktreeを人が確認し、不審な変更があればブランチを削除してください",
     );
   });
 

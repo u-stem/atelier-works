@@ -2,6 +2,7 @@
 // `.git`ポインタとHEADの照合、変更の検査、検査コマンド、再実行の順序を、注入した偽の依存で確かめる。
 
 import { describe, expect, test } from "bun:test";
+import type { CheckFailure } from "../../f/factory/lib/prompts.ts";
 import { WorktreeGitPointerModifiedError } from "../../f/factory/lib/workspace.ts";
 import {
   type PrFixRetryResult,
@@ -84,6 +85,9 @@ function harness(options: HarnessOptions = {}): Harness {
   let inspectIndex = 0;
   let checkIndex = 0;
   const deps: PrFixVerifyDeps = {
+    announceChecks: async () => {
+      calls.push("announceChecks");
+    },
     assertGitPointer: async (expected) => {
       calls.push(`assertGitPointer:${expected === POINTER ? "recorded" : "?"}`);
       const modified = options.pointerModified?.[pointerIndex] ?? false;
@@ -205,6 +209,18 @@ describe("runPrFixVerify: recorded values from the prepare step", () => {
     await runPrFixVerify(h.deps, { ...INPUT, headSha: "" });
     expect(h.calls).toEqual([]);
   });
+
+  test("announces the check commands before the first inspection", async () => {
+    const h = harness();
+    await runPrFixVerify(h.deps, INPUT);
+    expect(h.calls[0]).toBe("announceChecks");
+  });
+
+  test("does not announce check commands when there are none", async () => {
+    const h = harness();
+    await runPrFixVerify(h.deps, { ...INPUT, hasCheckCommands: false });
+    expect(h.calls).not.toContain("announceChecks");
+  });
 });
 
 describe("runPrFixVerify: worktree .git pointer and HEAD", () => {
@@ -220,7 +236,28 @@ describe("runPrFixVerify: worktree .git pointer and HEAD", () => {
   test("does not inspect changes when the pointer changed", async () => {
     const h = harness({ pointerModified: [true] });
     await runPrFixVerify(h.deps, INPUT);
-    expect(h.calls).toEqual(["assertGitPointer:recorded"]);
+    expect(h.calls).toEqual(["announceChecks", "assertGitPointer:recorded"]);
+  });
+
+  test("blocks when a passing check command changed the pointer", async () => {
+    const h = harness({ pointerModified: [false, true] });
+    const result = await runPrFixVerify(h.deps, INPUT);
+    expect([result.reason, result.commit_subject]).toEqual([
+      "worktree git pointer was modified",
+      null,
+    ]);
+  });
+
+  test("blocks when the second passing checks changed the pointer", async () => {
+    const h = harness({
+      checks: [false, true],
+      pointerModified: [false, false, false, true],
+    });
+    const result = await runPrFixVerify(h.deps, INPUT);
+    expect([result.reason, result.commit_subject]).toEqual([
+      "worktree git pointer was modified",
+      null,
+    ]);
   });
 
   test("checks the pointer and HEAD before the first inspection", async () => {
@@ -319,7 +356,12 @@ describe("runPrFixVerify: re-inspection after check commands", () => {
   test("checks the pointer and HEAD again before re-inspecting after the first checks", async () => {
     const h = harness();
     await runPrFixVerify(h.deps, INPUT);
-    expect(h.calls).toEqual([...INSPECTION, "runChecks", ...INSPECTION]);
+    expect(h.calls).toEqual([
+      "announceChecks",
+      ...INSPECTION,
+      "runChecks",
+      ...INSPECTION,
+    ]);
   });
 
   test("returns done with the apply commit after clean re-inspection", async () => {
@@ -348,6 +390,7 @@ describe("runPrFixVerify: re-inspection after check commands", () => {
     const h = harness({ checks: [false, true] });
     await runPrFixVerify(h.deps, INPUT);
     expect(h.calls).toEqual([
+      "announceChecks",
       ...INSPECTION,
       "runChecks",
       "budgetStatus",
@@ -424,18 +467,22 @@ describe("runPrFixVerify: retry after failing checks", () => {
   });
 
   test("passes only the failing checks to the retry", async () => {
-    const h = harness({ checks: [false] });
-    let received: unknown = null;
+    const h = harness();
+    const received: (readonly CheckFailure[])[] = [];
     const deps: PrFixVerifyDeps = {
       ...h.deps,
+      runChecks: async () => [
+        { ...check(true), command: "bun run lint" },
+        { ...check(false), command: "bun test" },
+      ],
       runRetry: async (failures) => {
-        received = failures;
+        received.push(failures);
         return { outcome: "success", output: RETRY_OUTPUT };
       },
     };
     await runPrFixVerify(deps, INPUT);
     expect(received).toEqual([
-      { command: "mise run check", outputTail: "FAIL a.test.ts" },
+      [{ command: "bun test", outputTail: "FAIL a.test.ts" }],
     ]);
   });
 });

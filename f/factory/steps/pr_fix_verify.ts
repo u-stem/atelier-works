@@ -61,6 +61,8 @@ export type PrFixRetryResult =
 
 /** `runPrFixVerify`が使うI/O。テストでは偽物に差し替える。 */
 export type PrFixVerifyDeps = {
+  /** 検査コマンドをサンドボックスなしで実行することをnoticeに記録する。 */
+  readonly announceChecks: () => Promise<void>;
   /** worktreeの`.git`を`expected`と比べ、違えば`WorktreeGitPointerModifiedError`を投げる。 */
   readonly assertGitPointer: (expected: string) => Promise<void>;
   /** worktreeのHEADが`expectedSha`でブランチ`branch`にあるかを確かめ、違えば理由を返す(`localHeadStopReason`)。 */
@@ -109,6 +111,7 @@ export type PrFixVerifyInput = {
  * 検査コマンドは対象リポジトリのコードで、保護パスのファイルやsymlinkを作れるため。
  * 検査が失敗したら、日次予算の範囲で、失敗の出力を添えてClaudeの修正を1回だけ追加で走らせ、
  * 変更の検査と検査コマンドをもう一度行う。それでも失敗するときは"blocked"にする。
+ * 検査コマンドがあれば、準備ステップの記録がそろっていることを確かめた後、最初の検査の前に`announceChecks`を呼ぶ。
  * `assertGitPointer`が`WorktreeGitPointerModifiedError`以外を投げたときは、そのまま投げる。
  */
 export async function runPrFixVerify(
@@ -149,6 +152,8 @@ export async function runPrFixVerify(
       input.apply.replies,
     );
   }
+  // 検査コマンドがあるときは、準備ステップの記録がそろっていることを確かめた後、最初の検査より前に告知する。
+  if (input.hasCheckCommands) await deps.announceChecks();
   /** `.git`とHEADを照合してから変更を調べ、止める理由を返す。問題が無ければnull。 */
   const inspect = async (): Promise<string | null> => {
     const pointerReason = await recordedGitPointerStopReason(
@@ -317,20 +322,20 @@ export async function main(
     wmill.getResource("f/factory/factory_config"),
   );
 
-  // `allowed_check_commands`は、対象リポジトリの検証されていないコードを、
-  // worker内でサンドボックスなしにroot権限で実行する。
-  // この常設リスクを記録に残らないままにせずNoticesの画面に見え続けるよう、
-  // 1日1回ではなく実行のたびにnoticeを記録する。
-  if (config.allowed_check_commands.length > 0) {
-    await addNotice({
-      kind: "unsandboxed_check_commands",
-      message: `pr_fix_verify はこれから ${String(config.allowed_check_commands.length)} 件の allowed_check_commands を、サンドボックス分離なしで root 権限により ${owner}/${repo}#${String(pr_number)} の未検証コードに対して実行します(work item ${String(work_item_id)})。`,
-    });
-  }
   const timeoutMs = config.claude_timeout_sec * 1000;
 
   return await runPrFixVerify(
     {
+      // `allowed_check_commands`は、対象リポジトリの検証されていないコードを、
+      // worker内でサンドボックスなしにroot権限で実行する。
+      // この常設リスクを記録に残らないままにせずNoticesの画面に見え続けるよう、
+      // 1日1回ではなく実行のたびにnoticeを記録する。
+      announceChecks: async () => {
+        await addNotice({
+          kind: "unsandboxed_check_commands",
+          message: `pr_fix_verify はこれから ${String(config.allowed_check_commands.length)} 件の allowed_check_commands を、サンドボックス分離なしで root 権限により ${owner}/${repo}#${String(pr_number)} の未検証コードに対して実行します(work item ${String(work_item_id)})。`,
+        });
+      },
       assertGitPointer: (expected) =>
         assertWorktreeGitPointer(worktree_dir, expected),
       checkHead: (expectedSha, headBranch) =>
