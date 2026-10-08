@@ -263,23 +263,26 @@ export type AuditEvidence = {
   readonly review_findings: CountByKey[];
   readonly notices: CountByKey[];
   /**
-   * 期間内に作成され、期間の終わりの時点で未解決の通知。種別ごと。
+   * 期間内に作成され、集計時点で未解決の通知。種別ごと。
    * 件数は種別ごとの件数の合計で、別に数えた値ではない。
    */
   readonly unresolved_notices_in_period: UnresolvedNoticeGroup[];
-  /** 期間より前に作成され、期間の終わりの時点でも未解決の通知。種別ごと。 */
+  /** 期間の開始より前に作成され、集計時点で未解決の通知。種別ごと。 */
   readonly unresolved_notices_before_period: UnresolvedNoticeGroup[];
   readonly deployments: CountByKey[];
   readonly deployments_needing_host_action: number;
   /**
-   * 期間内のデプロイの記録。古い順で、新しい方から最大30件。
+   * 期間内のデプロイの記録。新しい順で、最大30件。
+   * 描画で行を削るときは末尾から削るため、古い記録から落ちる。
    * 件数の総数は`deployments`の合計で分かる。
    */
   readonly deployment_history: DeploymentEntry[];
   /**
    * 期間の開始と終了の時点で稼働していた版。
    * 成功したデプロイの記録だけから導き、導けなければ`null`。
-   * 失敗したデプロイは稼働版を変えない。
+   * 時刻`T`の直前の稼働版は、`T`より前で最後の成功の反映先とし、
+   * 無ければ`T`以後で最初の成功の反映元とする。開始と終了で同じ規則を使う。
+   * 失敗したデプロイは、記録上は稼働版を変えない。
    */
   readonly running_version_at_start: string | null;
   readonly running_version_at_end: string | null;
@@ -303,7 +306,8 @@ function shortSha(sha: string | null): string {
 
 /**
  * 失敗グループの稼働版を、行に差し込む文字列にする。
- * 版は例の文より前に置く。1行の上限で切られるのは、長くなりうる例の側にするため。
+ * 版は例の文より前に置き、1行の上限で切られるのを例の側に寄せる。
+ * ただし`flow_path`や`step`が長いと、版も切られうる。
  * 最後の失敗が期間末の版と違う版で起きたときは、それを明示する。
  * 修正済みかどうかは記録から導けないので、版の違いだけを示す。
  */
@@ -330,7 +334,7 @@ function formatFailureVersion(
 
 const DEPLOYMENT_RESULT_LABELS: Readonly<Record<string, string>> = {
   success: "成功",
-  failed: "失敗(稼働版は変わらない)",
+  failed: "失敗(記録上の稼働版は変わらない。途中まで反映した可能性がある)",
 };
 
 function formatDeploymentLine(entry: DeploymentEntry): string {
@@ -428,26 +432,40 @@ function buildEvidenceSections(evidence: AuditEvidence): EvidenceSection[] {
     ),
   ];
   const unresolvedLines = [
-    ...unresolvedInPeriod.map((group) => formatUnresolvedLine("期間内", group)),
     ...unresolvedBefore.map((group) =>
       formatUnresolvedLine("期間前から", group),
     ),
+    ...unresolvedInPeriod.map((group) => formatUnresolvedLine("期間内", group)),
   ];
 
+  // 描画で行を削るときは末尾から削る。
+  // 監査が追う未解決の内訳を先に置き、期間内の種別内訳を後に置く。
   const noticeLines = [
+    ...unresolvedLines,
     ...evidence.notices.map((entry) =>
       sanitizeCell(`${entry.key}: ${entry.count}件`, SANITIZE_CELL_MAX),
     ),
-    ...unresolvedLines,
   ];
 
+  // 描画で行を削るときは末尾から削るため、一覧は新しい順にし、
+  // 一覧に含めない古い記録の件数は一覧の末尾に置く。
+  const deploymentTotal = sumBy(evidence.deployments, (entry) => entry.count);
+  const leftOutDeployments =
+    deploymentTotal - evidence.deployment_history.length;
   const deploymentLines = [
     ...evidence.deployments.map((entry) =>
       sanitizeCell(`${entry.key}: ${entry.count}件`, SANITIZE_CELL_MAX),
     ),
     ...evidence.deployment_history.map(formatDeploymentLine),
+    ...(leftOutDeployments > 0
+      ? [
+          sanitizeCell(
+            `一覧に含めない古いデプロイ: ${leftOutDeployments}件`,
+            SANITIZE_CELL_MAX,
+          ),
+        ]
+      : []),
   ];
-  const deploymentTotal = sumBy(evidence.deployments, (entry) => entry.count);
   const deploymentFixed = [
     sanitizeCell(
       `稼働版(期間の開始時点): ${shortSha(evidence.running_version_at_start)}`,
@@ -457,11 +475,6 @@ function buildEvidenceSections(evidence: AuditEvidence): EvidenceSection[] {
       `稼働版(期間の終了時点): ${shortSha(evidence.running_version_at_end)}`,
       SANITIZE_CELL_MAX,
     ),
-    ...(deploymentTotal > evidence.deployment_history.length
-      ? [
-          `デプロイの記録: 全${deploymentTotal}件のうち最新${evidence.deployment_history.length}件を表示`,
-        ]
-      : []),
     sanitizeCell(
       `次の起動で反映する変更: ${evidence.deployments_needing_host_action}件`,
       SANITIZE_CELL_MAX,
@@ -648,14 +661,31 @@ function toUnresolvedNoticeGroups(
   rows: readonly SqlRow[],
   bucket: "in_period" | "before_period",
 ): UnresolvedNoticeGroup[] {
-  return rows
-    .filter((row) => row.bucket === bucket)
-    .map((row) => ({
-      key: unsetIfBlank(parseCellString(row.key)),
-      count: parseNumeric(row.count),
-      oldest_created_at: parseTimestampIso(row.oldest_created_at),
-    }))
-    .sort(compareByCountThenKey);
+  const merged = new Map<string, UnresolvedNoticeGroup>();
+  for (const row of rows) {
+    if (row.bucket !== bucket) continue;
+    const key = unsetIfBlank(parseCellString(row.key));
+    const oldest = parseTimestampIso(row.oldest_created_at);
+    const existing = merged.get(key);
+    if (existing === undefined) {
+      merged.set(key, {
+        key,
+        count: parseNumeric(row.count),
+        oldest_created_at: oldest,
+      });
+      continue;
+    }
+    existing.count += parseNumeric(row.count);
+    // 読み取れなかった時刻(空文字)は、読み取れた時刻より優先しない。
+    if (
+      oldest.length > 0 &&
+      (existing.oldest_created_at.length === 0 ||
+        oldest < existing.oldest_created_at)
+    ) {
+      existing.oldest_created_at = oldest;
+    }
+  }
+  return [...merged.values()].sort(compareByCountThenKey);
 }
 
 function toPastProposal(row: SqlRow): PastProposal {
@@ -869,8 +899,10 @@ export async function collectAuditEvidence(
     GROUP BY kind
   `.fetch();
 
-  // 期間の終わりより後に作った通知は含めない。
-  // 監査を期間の終了後に走らせても、同じ期間なら同じ数になる。
+  // 期間の終わり以後に作った通知は数えない。
+  // 解決したかどうかは集計時点の値で、解決した時刻は記録されない。
+  // 期間の終わりで絞るのは、監査を後から走らせても、
+  // 期間の後に作られた通知で数が増えないようにするため。
   const unresolvedNoticeRows = await sql`
     SELECT kind AS key,
            CASE WHEN created_at >= ${start}::timestamptz THEN 'in_period' ELSE 'before_period' END AS bucket,
@@ -931,8 +963,9 @@ export async function collectAuditEvidence(
     LIMIT 30
   `.fetch();
 
-  // 期間の開始時点の版は、開始前で最後の成功の`sha_to`。
-  // 古い記録が掃除されていれば、期間内で最初の成功の`sha_from`を使う。
+  // 時刻Tの直前の稼働版は、Tより前で最後の成功の`sha_to`。
+  // 無ければ(古い記録が掃除された場合など)、T以後で最初の成功の`sha_from`を使う。
+  // 開始と終了のどちらにも同じ規則を使う。
   const versionBoundsRows = await sql`
     SELECT
       coalesce(
@@ -940,13 +973,17 @@ export async function collectAuditEvidence(
            WHERE result = 'success' AND occurred_at < ${start}::timestamptz
            ORDER BY occurred_at DESC, id DESC LIMIT 1),
         (SELECT sha_from FROM factory.deployments
-           WHERE result = 'success'
-             AND occurred_at >= ${start}::timestamptz AND occurred_at < ${end}::timestamptz
+           WHERE result = 'success' AND occurred_at >= ${start}::timestamptz
            ORDER BY occurred_at ASC, id ASC LIMIT 1)
       ) AS start_sha,
-      (SELECT sha_to FROM factory.deployments
-         WHERE result = 'success' AND occurred_at < ${end}::timestamptz
-         ORDER BY occurred_at DESC, id DESC LIMIT 1) AS end_sha
+      coalesce(
+        (SELECT sha_to FROM factory.deployments
+           WHERE result = 'success' AND occurred_at < ${end}::timestamptz
+           ORDER BY occurred_at DESC, id DESC LIMIT 1),
+        (SELECT sha_from FROM factory.deployments
+           WHERE result = 'success' AND occurred_at >= ${end}::timestamptz
+           ORDER BY occurred_at ASC, id ASC LIMIT 1)
+      ) AS end_sha
   `.fetch();
 
   return {
@@ -976,7 +1013,7 @@ export async function collectAuditEvidence(
     deployments_needing_host_action: parseNumeric(
       deploymentsNeedingHostActionRows[0]?.count,
     ),
-    deployment_history: deploymentHistoryRows.map(toDeploymentEntry).reverse(),
+    deployment_history: deploymentHistoryRows.map(toDeploymentEntry),
     running_version_at_start: parseSha(versionBoundsRows[0]?.start_sha),
     running_version_at_end: parseSha(versionBoundsRows[0]?.end_sha),
     past_proposals: pastProposalRows.map(toPastProposal),

@@ -793,6 +793,30 @@ describe("unresolved notices split by period", () => {
     expect(evidence.unresolved_notices_before_period[0]?.key).toBe("未設定");
   });
 
+  test("merges groups whose keys are both blank into one 未設定 group", async () => {
+    const { evidence } = await evidenceWith([
+      {
+        key: null,
+        bucket: "before_period",
+        count: 2,
+        oldest_created_at: "2026-09-12T00:00:00.000Z",
+      },
+      {
+        key: "",
+        bucket: "before_period",
+        count: 1,
+        oldest_created_at: "2026-09-10T00:00:00.000Z",
+      },
+    ]);
+    expect(evidence.unresolved_notices_before_period).toEqual([
+      {
+        key: "未設定",
+        count: 3,
+        oldest_created_at: "2026-09-10T00:00:00.000Z",
+      },
+    ]);
+  });
+
   test("only counts notices created before the end of the period", async () => {
     const { calls } = await evidenceWith([]);
     expect(findCall(calls, "unresolvedNotices")?.values).toContain(
@@ -939,12 +963,21 @@ describe("deployment history and running versions", () => {
     return { evidence, calls };
   }
 
-  test("lists the deployments oldest first", async () => {
+  test("lists the deployments newest first so truncation drops the oldest", async () => {
     const { evidence } = await evidenceWithDeployments(historyRows);
     expect(evidence.deployment_history.map((entry) => entry.result)).toEqual([
-      "success",
       "failed",
+      "success",
     ]);
+  });
+
+  test("renders the newest deployment before the older one", async () => {
+    const { evidence } = await evidenceWithDeployments(historyRows);
+    const markdown = renderEvidenceMarkdown(evidence);
+    expect(
+      markdown.indexOf("2026-09-25T03:00:00.000Z") <
+        markdown.indexOf("2026-09-22T03:00:00.000Z"),
+    ).toBe(true);
   });
 
   test("fetches only the latest 30 deployments", async () => {
@@ -1001,10 +1034,10 @@ describe("deployment history and running versions", () => {
     );
   });
 
-  test("renders a failed deployment as not applied", async () => {
+  test("renders a failed deployment as possibly half applied", async () => {
     const { evidence } = await evidenceWithDeployments(historyRows);
     expect(renderEvidenceMarkdown(evidence)).toContain(
-      "- 2026-09-25T03:00:00.000Z 失敗(稼働版は変わらない) bbbbbbb → ccccccc",
+      "- 2026-09-25T03:00:00.000Z 失敗(記録上の稼働版は変わらない。途中まで反映した可能性がある) bbbbbbb → ccccccc",
     );
   });
 
@@ -1020,15 +1053,40 @@ describe("deployment history and running versions", () => {
     expect(renderEvidenceMarkdown(evidence)).toContain("成功 未設定 → bbbbbbb");
   });
 
-  test("states that only the latest deployments are listed when the history is capped", async () => {
+  test("never states a displayed count in a fixed line", async () => {
+    const { evidence } = await evidenceWithDeployments(historyRows);
+    const capped: AuditEvidence = {
+      ...evidence,
+      deployments: [{ key: "success", count: 45 }],
+    };
+    expect(renderEvidenceMarkdown(capped)).not.toContain("のうち最新");
+  });
+
+  test("states how many older deployments the list leaves out", async () => {
     const { evidence } = await evidenceWithDeployments(historyRows);
     const capped: AuditEvidence = {
       ...evidence,
       deployments: [{ key: "success", count: 45 }],
     };
     expect(renderEvidenceMarkdown(capped)).toContain(
-      "- デプロイの記録: 全45件のうち最新2件を表示\n",
+      "- 一覧に含めない古いデプロイ: 43件",
     );
+  });
+
+  test("derives the running versions with the same fallback at the period start and end", async () => {
+    const { calls } = await evidenceWithDeployments([]);
+    const text = findCall(calls, "versionBounds")?.text ?? "";
+    expect(text.split("SELECT sha_from").length - 1).toBe(2);
+  });
+
+  test("binds the period start and end twice each for the version bounds", async () => {
+    const { calls } = await evidenceWithDeployments([]);
+    expect(findCall(calls, "versionBounds")?.values).toEqual([
+      PERIOD.start.toISOString(),
+      PERIOD.start.toISOString(),
+      PERIOD.end.toISOString(),
+      PERIOD.end.toISOString(),
+    ]);
   });
 
   test("keeps the running version lines under truncation", () => {
@@ -1039,6 +1097,64 @@ describe("deployment history and running versions", () => {
     };
     expect(renderEvidenceMarkdown(evidence)).toContain(
       "- 稼働版(期間の終了時点): bbbbbbb\n",
+    );
+  });
+});
+
+describe("worst-case size", () => {
+  const history = Array.from({ length: 30 }, (_, i) => ({
+    occurred_at: `2026-09-${String(25 - (i % 5)).padStart(2, "0")}T0${i % 10}:00:00.000Z`,
+    sha_from: SHA_A,
+    sha_to: SHA_B,
+    result: i % 2 === 0 ? "success" : "failed",
+  }));
+  const failures = Array.from({ length: 30 }, (_, i) => ({
+    flow_path: `f/factory/flow-${i}-${"y".repeat(60)}`,
+    step: `step-${i}-${"s".repeat(60)}`,
+    count: 30 - i,
+    sample_error: "e".repeat(400),
+    first_sha: SHA_A,
+    last_sha: SHA_B,
+    unknown_version_count: 1,
+  }));
+  const evidence: AuditEvidence = {
+    ...EMPTY_EVIDENCE,
+    failures,
+    deployment_history: history,
+    deployments: [{ key: "success", count: 90 }],
+    running_version_at_start: SHA_A,
+    running_version_at_end: SHA_C,
+  };
+
+  test("keeps 30 deployments and 30 failure groups within 12,000 characters", () => {
+    expect(renderEvidenceMarkdown(evidence).length).toBeLessThanOrEqual(12000);
+  });
+
+  test("keeps the running version fixed line in that worst case", () => {
+    expect(renderEvidenceMarkdown(evidence)).toContain(
+      "- 稼働版(期間の終了時点): ccccccc\n",
+    );
+  });
+});
+
+describe("truncation order", () => {
+  test("keeps the unresolved notice lines ahead of the period breakdown", () => {
+    const evidence: AuditEvidence = {
+      ...EMPTY_EVIDENCE,
+      notices: Array.from({ length: 400 }, (_, i) => ({
+        key: `kind-${i}-${"k".repeat(30)}`,
+        count: 1,
+      })),
+      unresolved_notices_before_period: [
+        {
+          key: "sha_mismatch",
+          count: 4,
+          oldest_created_at: "2026-09-10T00:00:00.000Z",
+        },
+      ],
+    };
+    expect(renderEvidenceMarkdown(evidence)).toContain(
+      "- 未解決(期間前から) sha_mismatch: 4件",
     );
   });
 });
