@@ -77,6 +77,26 @@ export function parseAuditDeepLink(
 }
 
 /**
+ * ディープリンクが指すタブを返す。どちらのフラグメントも含まなければ`null`。
+ * `App.tsx`が最初に開くタブを決めるのに使う。各タブは、マウントされたときに
+ * 自分のフラグメントを読んで作業項目を選ぶので、ここでは開くタブだけを決める。
+ * 候補は渡された順に調べ、最初に一致したものの種類を採る。
+ */
+export function initialTabFromDeepLink(
+  candidates: readonly string[],
+): "requirements" | "audit" | null {
+  for (const candidate of candidates) {
+    if (parseDeepLink([candidate]) !== null) {
+      return "requirements";
+    }
+    if (parseAuditDeepLink([candidate]) !== null) {
+      return "audit";
+    }
+  }
+  return null;
+}
+
+/**
  * `parseDeepLink`に渡す候補の文字列を、優先する順に集めて返す。
  * 自分のウィンドウのハッシュ、親フレームのハッシュ
  * (同一オリジンで埋め込まれたときだけ)、参照元のURLの順。

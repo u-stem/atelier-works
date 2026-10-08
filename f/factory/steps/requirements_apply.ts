@@ -52,6 +52,8 @@ export function shouldProceed(status: WorkItem["status"]): boolean {
  * 承認を伝える1行のIssueコメントを組み立てる。副作用は無い。
  * GitHubには成果物だけを載せる方針のため、下書きの本文は投稿せず、
  * Consoleへのリンクを1つだけ載せる。
+ * リンクはMarkdownの形で書く。URLを裸で書くと、GitHubの自動リンクが
+ * 直後の`(work_item_id`までURLに含めてしまい、リンクが壊れるため。
  * URLに加えて`work_item_id`も書くのは、Consoleがディープリンクの
  * フラグメントを読めないとき(opaque originのraw app。
  * `lib/approval_support.ts`の`buildConsoleUrl`を参照)の手動の代替手段にするため。
@@ -61,7 +63,7 @@ export function buildApprovedComment(
   consoleUrl: string,
   workItemId: number,
 ): string {
-  return `要件定義が承認されました。Console で内容を確認できます: ${consoleUrl}(work_item_id: ${String(workItemId)})`;
+  return `要件定義が承認されました。[Consoleで要件定義を開く](${consoleUrl})(work_item_id: ${String(workItemId)})`;
 }
 
 export type RejectedOutcome = "retry" | "needs_human";

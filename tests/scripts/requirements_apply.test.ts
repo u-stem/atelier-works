@@ -34,6 +34,12 @@ describe("buildApprovedComment", () => {
     expect(buildApprovedComment(CONSOLE_URL, 7)).toContain(CONSOLE_URL);
   });
 
+  test("wraps the console url in a markdown link so trailing text cannot merge into it", () => {
+    expect(buildApprovedComment(CONSOLE_URL, 7)).toContain(
+      `[Consoleで要件定義を開く](${CONSOLE_URL})`,
+    );
+  });
+
   test("includes the work_item_id as a manual fallback", () => {
     expect(buildApprovedComment(CONSOLE_URL, 7)).toContain("work_item_id: 7");
   });
