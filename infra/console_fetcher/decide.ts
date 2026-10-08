@@ -552,6 +552,13 @@ export type RevokedState = {
 /** 記録する中身のsha256の上限。超えたら古いものから捨てる。 */
 export const REVOKED_DIGEST_LIMIT = 100;
 
+/** `revoked.json`の中身が記録の形(`shas`と`digests`の配列を持つオブジェクト)かを返す。 */
+export function isRevokedStateFile(value: unknown): boolean {
+  return (
+    isRecord(value) && Array.isArray(value.shas) && Array.isArray(value.digests)
+  );
+}
+
 /** `revoked.json`の中身を読む。形の違う要素は捨て、読めなければ空にする。 */
 export function parseRevokedState(value: unknown): RevokedState {
   if (!isRecord(value)) return { shas: [], digests: [] };
@@ -578,6 +585,21 @@ export function mergeRevokedState(
     digests: [...new Set([...state.digests, ...digests])].slice(
       -REVOKED_DIGEST_LIMIT,
     ),
+  };
+}
+
+/**
+ * 記録から`digest`を外す。同じ中身の版(`shas`)も外す。
+ * 戻した元の版と同じ中身が、`main`の最新の成功した実行として意図して配信し直されたときに使う。
+ */
+export function clearRevokedContent(
+  state: RevokedState,
+  digest: string,
+  shas: readonly string[],
+): RevokedState {
+  return {
+    shas: state.shas.filter((sha) => !shas.includes(sha)),
+    digests: state.digests.filter((item) => item !== digest),
   };
 }
 

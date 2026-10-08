@@ -5,6 +5,7 @@ import {
   type ConsoleManifest,
   chooseArtifact,
   classifyHttpStatus,
+  clearRevokedContent,
   contentDigest,
   currentShaFromLink,
   describeRollbackNotice,
@@ -14,6 +15,7 @@ import {
   isLockStale,
   isReadablePin,
   isRevokedRelease,
+  isRevokedStateFile,
   mergeRevokedState,
   needsDeploy,
   parseArtifacts,
@@ -1150,6 +1152,44 @@ describe("mergeRevokedState", () => {
     expect(
       mergeRevokedState({ shas: [], digests }, [], [HASH_2]).digests,
     ).toHaveLength(REVOKED_DIGEST_LIMIT);
+  });
+});
+
+describe("isRevokedStateFile", () => {
+  test("accepts an object with shas and digests arrays", () => {
+    expect(isRevokedStateFile({ shas: [], digests: [] })).toBe(true);
+  });
+
+  test("rejects an object without digests", () => {
+    expect(isRevokedStateFile({ shas: [] })).toBe(false);
+  });
+
+  test("rejects an array", () => {
+    expect(isRevokedStateFile([])).toBe(false);
+  });
+
+  test("rejects a shas field that is not an array", () => {
+    expect(isRevokedStateFile({ shas: "x", digests: [] })).toBe(false);
+  });
+});
+
+describe("clearRevokedContent", () => {
+  test("removes the digest", () => {
+    expect(
+      clearRevokedContent(
+        { shas: [SHA_A], digests: [HASH_1, HASH_2] },
+        HASH_1,
+        [],
+      ).digests,
+    ).toEqual([HASH_2]);
+  });
+
+  test("removes the shas that have the cleared content", () => {
+    expect(
+      clearRevokedContent({ shas: [SHA_A, SHA_B], digests: [HASH_1] }, HASH_1, [
+        SHA_A,
+      ]).shas,
+    ).toEqual([SHA_B]);
   });
 });
 

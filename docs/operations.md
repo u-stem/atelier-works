@@ -629,6 +629,13 @@ mise exec -- docker compose -f infra/docker-compose.yml logs --tail 50 console_f
 消えた版のshaは、整理が記録から外す。
 `rolled_back_from`を持たない`pin`では、戻した元の版は消えない。
 消した版のページを開いたままのブラウザは、assetsを読み込めなくなるので、再読み込みが要る。
+
+`revoked.json`の扱いは次のとおり。
+
+- 壊れているか形が違うときは、`revoked_state_unreadable`をログに出す。`revoked.json.corrupt`へ移し、空の記録で続ける。戻す操作と整理は止まらない。
+- 書けなかったときも、`console:rollback`は成功する。`revoked_record_failed`をログに出す。同じ内容を`pin`が持ち、`console:unpin`が記録し直すためである。
+- 戻した元の版と同じ中身が、`main`の最新の成功した実行として配信し直されると、その中身は記録から外れる。`revoked_digest_cleared`をログに出す。CIを通った中身を意図して配信し直したものとして扱うためで、記録を手で編集する必要は無い。
+
 戻した元の版のマニフェストを読めないと、その版の中身を`pin`に記録できない。
 このとき`console:rollback`は、`The files of the release rolled back from could not be recorded`で始まる文を出す。
 この`pin`は、`console:unpin`がshaだけを照らすので、外す前に最新のCIの結果を確かめる。
@@ -659,6 +666,8 @@ mise exec -- docker compose -f infra/docker-compose.yml logs --tail 50 console_f
 `--ignore-cleanup`で外しても、消せていない版は`revoked.json`に記録が残る。
 `console_fetcher`は、次の取り込みの整理でその版を消し、`console:rollback`もその版を戻し先にしない。
 手で消す必要は無い。
+消せない原因は、上の表の最後の行と同じ見方で確かめる。
+ログに`revoked_cleanup_skipped`が続くときは、原因を直す。
 
 主な`error`と対処は次のとおり。
 

@@ -24,6 +24,7 @@ import {
   type CurrentLink,
   chooseArtifact,
   classifyHttpStatus,
+  clearRevokedContent,
   contentDigest,
   type FetchErrorCode,
   type FetcherConfig,
@@ -34,6 +35,7 @@ import {
   isLockStale,
   isReadablePin,
   isRevokedRelease,
+  isRevokedStateFile,
   MANIFEST_FILE,
   mergeRevokedState,
   needsDeploy,
@@ -47,6 +49,7 @@ import {
   parseWorkflowRuns,
   pruneRevokedState,
   RELEASE_BRANCH,
+  type RevokedState,
   referencedAssetNames,
   selectAssetsToDelete,
   selectIdenticalReleases,
@@ -620,25 +623,92 @@ async function isCompleteRelease(
   return true;
 }
 
-/** `revoked.json`を読む。無いときや読めないときは空の記録。 */
-async function readRevokedState(layout: Layout) {
-  return parseRevokedState(await readJsonFile(layout.revoked));
+const EMPTY_REVOKED_STATE: RevokedState = { shas: [], digests: [] };
+
+/**
+ * `revoked.json`を読む。無ければ空の記録。
+ * あっても記録の形でない(壊れている、読めない)ときは、`revoked_state_unreadable`をログに出し、
+ * 上書きして失われないよう`revoked.json.corrupt`へ移してから、空の記録を返す。
+ * 移せないときは失敗を投げる。
+ */
+async function readRevokedState(
+  layout: Layout,
+  log: Logger,
+): Promise<RevokedState> {
+  let value: unknown;
+  try {
+    const text = await readTextOrNull(layout.revoked);
+    if (text === null) return EMPTY_REVOKED_STATE;
+    value = JSON.parse(text);
+  } catch {
+    value = undefined;
+  }
+  if (isRevokedStateFile(value)) return parseRevokedState(value);
+  log("revoked_state_unreadable", {});
+  await rename(layout.revoked, `${layout.revoked}.corrupt`);
+  return EMPTY_REVOKED_STATE;
+}
+
+/**
+ * `readRevokedState`を呼び、移せない失敗は`revoked_state_move_failed`のログにして空の記録を返す。
+ * 記録を読めなくても、戻す操作と整理は止めない(止めると、緊急の操作が通らなくなる)。
+ */
+async function readRevokedStateOrEmpty(
+  layout: Layout,
+  log: Logger,
+): Promise<RevokedState> {
+  try {
+    return await readRevokedState(layout, log);
+  } catch (err) {
+    log("revoked_state_move_failed", { error: describeUnexpectedError(err) });
+    return EMPTY_REVOKED_STATE;
+  }
 }
 
 /** 戻した元の版のshaと中身を`revoked.json`に足す。足すものが無ければ何もしない。 */
 async function recordRevoked(
   layout: Layout,
+  log: Logger,
   shas: readonly string[],
   digests: readonly string[],
 ): Promise<void> {
   if (shas.length === 0 && digests.length === 0) return;
   await mkdir(layout.tmp, { recursive: true });
   const state = mergeRevokedState(
-    await readRevokedState(layout),
+    await readRevokedState(layout, log),
     shas,
     digests,
   );
   await writeAtomically(layout, layout.revoked, `${JSON.stringify(state)}\n`);
+}
+
+/**
+ * 配信した版(`sha`)の中身が`revoked.json`の中身の記録にあれば、記録から外す。
+ * 戻した元の版と同じ中身が、`main`の最新の成功した実行として配信し直されたとき、
+ * その中身はCIを通って意図して配信されたので、戻し先から外し続けない。
+ * 同じ中身の版のshaも記録から外す。外したら`revoked_digest_cleared`をログに出す。
+ */
+async function clearRevokedDigest(
+  layout: Layout,
+  log: Logger,
+  sha: string,
+): Promise<void> {
+  const deployed = await readManifest(layout, sha);
+  if (deployed === null) return;
+  const digest = contentDigest(deployed);
+  const state = await readRevokedStateOrEmpty(layout, log);
+  if (!state.digests.includes(digest)) return;
+  const same: string[] = [sha];
+  for (const other of state.shas) {
+    const manifest = await readManifest(layout, other);
+    if (manifest !== null && contentDigest(manifest) === digest) {
+      same.push(other);
+    }
+  }
+  await mkdir(layout.tmp, { recursive: true });
+  const next = clearRevokedContent(state, digest, same);
+  await writeAtomically(layout, layout.revoked, `${JSON.stringify(next)}\n`);
+  log("revoked_digest_cleared", { sha });
 }
 
 /**
@@ -717,7 +787,7 @@ async function listAssetFiles(layout: Layout): Promise<AssetFile[]> {
  * `current`はここで読み直し、ディスクの今の状態で残す版を決める。
  */
 async function cleanup(deps: FetcherDeps, layout: Layout): Promise<void> {
-  const revokedState = await readRevokedState(layout);
+  const revokedState = await readRevokedStateOrEmpty(layout, deps.log);
   const manifests = new Map<string, ConsoleManifest | null>();
   for (const sha of (await readdir(layout.releases)).filter(isCommitSha)) {
     manifests.set(sha, await readManifest(layout, sha));
@@ -762,7 +832,8 @@ async function cleanup(deps: FetcherDeps, layout: Layout): Promise<void> {
   for (const name of stale) {
     await rm(join(layout.assets, name), { force: true });
   }
-  const pruned = pruneRevokedState(revokedState, kept);
+  const onDisk = (await readdir(layout.releases)).filter(isCommitSha);
+  const pruned = pruneRevokedState(revokedState, onDisk);
   if (pruned.shas.length !== revokedState.shas.length) {
     await writeAtomically(
       layout,
@@ -844,6 +915,13 @@ export async function runOnce(deps: FetcherDeps): Promise<FetcherStatus> {
       currentSha = run.headSha;
       await recordHistory(layout, run.headSha);
       deps.log("deployed", { sha: run.headSha, run_id: run.id });
+      try {
+        await clearRevokedDigest(layout, deps.log, run.headSha);
+      } catch (err) {
+        deps.log("revoked_digest_clear_failed", {
+          error: describeUnexpectedError(err),
+        });
+      }
     }
     await cleanup(deps, layout);
     return await finish(deps, layout, {
@@ -998,7 +1076,7 @@ export async function rollback(
     manifests.set(sha, await readManifest(layout, sha));
   }
   // 配信できない版と、戻した元の版(後から残った版を含む)は、戻し先にしない。
-  const revokedState = await readRevokedState(layout);
+  const revokedState = await readRevokedStateOrEmpty(layout, log);
   const usable = new Set<string>();
   for (const sha of releases) {
     const manifest = manifests.get(sha) ?? null;
@@ -1051,7 +1129,12 @@ export async function rollback(
     await restorePin(layout, previousPin, log);
     throw err;
   }
-  await recordRevoked(layout, revoked, revokedContent);
+  // pinに同じ内容があり、unpinが記録し直すので、記録できなくても戻す操作は続ける。
+  try {
+    await recordRevoked(layout, log, revoked, revokedContent);
+  } catch (err) {
+    log("revoked_record_failed", { error: describeUnexpectedError(err) });
+  }
   const status: FetcherStatus = {
     state: "pinned",
     sha: target,
@@ -1179,7 +1262,7 @@ export async function unpin(
   if (!complete && !options.ignoreCleanup) {
     return { ok: false, reason: "cleanup_incomplete" };
   }
-  await recordRevoked(layout, revoked, revokedContent);
+  await recordRevoked(layout, deps.log, revoked, revokedContent);
   await rm(layout.pin, { force: true });
   return { ok: true };
 }
