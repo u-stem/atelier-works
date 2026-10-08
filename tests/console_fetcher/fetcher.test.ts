@@ -426,13 +426,26 @@ describe("runOnce", () => {
   test("reuses an existing release without downloading it again", async () => {
     await deploy(SHA_A, "A", 1);
     await deploy(SHA_B, "B", 2);
-    await rollback(root, () => NOW);
-    await unpin(root);
+    await rm(join(root, "current"));
+    await symlink(`releases/${SHA_A}`, join(root, "current"));
     const github = githubServing(SHA_B, "B", 2);
     await runOnce(deps(github.fetch));
     expect(github.calls.map((call) => new URL(call.url).pathname)).toEqual([
       "/repos/o/r/actions/workflows/ci.yml/runs",
     ]);
+  });
+
+  test("removes a release left behind by the pin while pinned", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await rm(join(root, "current"));
+    await symlink(`releases/${SHA_A}`, join(root, "current"));
+    await writeFile(
+      join(root, "pin"),
+      `${JSON.stringify({ sha: SHA_A, pinned_at: NOW.toISOString(), rolled_back_from: [SHA_B] })}\n`,
+    );
+    await runOnce(deps(githubServing(SHA_B, "B", 2).fetch));
+    expect(await exists(join(root, "releases", SHA_B))).toBe(false);
   });
 });
 
@@ -486,6 +499,114 @@ describe("rollback", () => {
     await writeFile(join(root, "history.json"), `${JSON.stringify([SHA_A])}\n`);
     await rollback(root, () => NOW);
     expect(await readlink(join(root, "current"))).toBe(`releases/${SHA_A}`);
+  });
+
+  test("skips a release whose content is identical to current", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await deploy(SHA_C, "B", 3);
+    await rollback(root, () => NOW);
+    expect(await readlink(join(root, "current"))).toBe(`releases/${SHA_A}`);
+  });
+
+  test("reports no_previous_release when every earlier release has the same content", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "A", 2);
+    expect(await rollback(root, () => NOW)).toEqual({
+      ok: false,
+      reason: "no_previous_release",
+    });
+  });
+
+  test("keeps current when no release with different content exists", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "A", 2);
+    await rollback(root, () => NOW);
+    expect(await readlink(join(root, "current"))).toBe(`releases/${SHA_B}`);
+  });
+
+  test("removes the release it rolled back from", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await rollback(root, () => NOW);
+    expect(await readdir(join(root, "releases"))).toEqual([SHA_A]);
+  });
+
+  test("removes releases with the same content as the one it rolled back from", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await deploy(SHA_C, "B", 3);
+    await rollback(root, () => NOW);
+    expect(await readdir(join(root, "releases"))).toEqual([SHA_A]);
+  });
+
+  test("removes the assets used only by the release it rolled back from", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await rollback(root, () => NOW);
+    expect(await exists(join(root, "assets/index-B0000000.js"))).toBe(false);
+  });
+
+  test("keeps the assets of the release it rolled back to", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await rollback(root, () => NOW);
+    expect(await exists(join(root, "assets/index-A0000000.js"))).toBe(true);
+  });
+
+  test("keeps an asset that the release it rolled back to also uses", async () => {
+    const shared = { "assets/shared-00000000.js": "shared" };
+    const zipA = buildRelease(SHA_A, { ...filesFor("A"), ...shared });
+    const zipB = buildRelease(SHA_B, { ...filesFor("B"), ...shared });
+    await runOnce(
+      deps(
+        fakeGitHub({
+          runs: [workflowRun(1, SHA_A)],
+          artifacts: { 1: [artifactJson(101, SHA_A, zipA)] },
+          blobs: { 101: zipA },
+        }).fetch,
+      ),
+    );
+    await runOnce(
+      deps(
+        fakeGitHub({
+          runs: [workflowRun(2, SHA_B)],
+          artifacts: { 2: [artifactJson(102, SHA_B, zipB)] },
+          blobs: { 102: zipB },
+        }).fetch,
+      ),
+    );
+    await rollback(root, () => NOW);
+    expect(await exists(join(root, "assets/shared-00000000.js"))).toBe(true);
+  });
+
+  test("records the release it rolled back from in the pin", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await rollback(root, () => NOW);
+    expect(
+      JSON.parse(await readFile(join(root, "pin"), "utf8")).rolled_back_from,
+    ).toEqual([SHA_B]);
+  });
+
+  test("keeps the releases it rolled back from earlier in the pin", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await deploy(SHA_C, "C", 3);
+    await rollback(root, () => NOW);
+    await rollback(root, () => NOW);
+    expect(
+      JSON.parse(await readFile(join(root, "pin"), "utf8")).rolled_back_from,
+    ).toEqual([SHA_C, SHA_B]);
+  });
+
+  test("downloads the release rolled back from again after unpinning", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await rollback(root, () => NOW);
+    await unpin(root);
+    await runOnce(deps(githubServing(SHA_B, "B", 2).fetch));
+    expect(await readlink(join(root, "current"))).toBe(`releases/${SHA_B}`);
   });
 
   test("reports no_previous_release with a single release", async () => {

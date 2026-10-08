@@ -431,8 +431,20 @@ export function selectAssetsToDelete(
     .map((asset) => asset.name);
 }
 
+/** 2つのマニフェストの`files`(パスとsha256の対応)が過不足なく同じかを返す。 */
+function sameFiles(a: ConsoleManifest, b: ConsoleManifest): boolean {
+  if (a.files.size !== b.files.size) return false;
+  for (const [path, hash] of a.files) {
+    if (b.files.get(path) !== hash) return false;
+  }
+  return true;
+}
+
 /**
- * 戻す先を返す。履歴の中で今の版より前に付け替えた版のうち、まだ残っている最も新しいもの。
+ * 戻す先を返す。履歴の中で今の版より前に付け替えた版のうち、まだ残っていて、
+ * 今の版と`files`の中身が違う最も新しいもの。
+ * Consoleに触れないマージでも版ができるので、中身が同じ版へ戻しても何も変わらない。
+ * どちらかのマニフェストを読めない版は、比べられないので飛ばさない。
  * 戻した後にもう一度呼ぶと、さらに1つ前を返す。
  * これは戻す操作とpinを外す操作が履歴に足さないことを前提にする。今の版は履歴の最後の出現で
  * 位置を決めるので、戻した版を足すと、次に戻すときにその前に付け替えた新しい版を返してしまう。
@@ -443,16 +455,67 @@ export function selectRollbackTarget(
   history: readonly string[],
   currentSha: string | null,
   existing: ReadonlySet<string>,
+  manifests: ReadonlyMap<string, ConsoleManifest | null>,
 ): string | null {
   if (currentSha === null) return null;
+  const currentManifest = manifests.get(currentSha) ?? null;
   const found = history.lastIndexOf(currentSha);
   const position = found === -1 ? history.length : found;
   for (let index = position - 1; index >= 0; index--) {
     const sha = history[index];
-    if (sha !== undefined && sha !== currentSha && existing.has(sha))
-      return sha;
+    if (sha === undefined || sha === currentSha || !existing.has(sha)) continue;
+    const candidate = manifests.get(sha) ?? null;
+    if (
+      currentManifest !== null &&
+      candidate !== null &&
+      sameFiles(currentManifest, candidate)
+    ) {
+      continue;
+    }
+    return sha;
   }
   return null;
+}
+
+/**
+ * `sha`の版と、それと`files`の中身が同じ版を返す(`sha`自身を含む)。
+ * 戻すときに、問題の版と同じassetsを指す版も一緒に外すために使う。
+ * `sha`のマニフェストを読めないときは、比べられないので`sha`だけを返す。
+ */
+export function selectIdenticalReleases(
+  sha: string,
+  manifests: ReadonlyMap<string, ConsoleManifest | null>,
+): string[] {
+  const target = manifests.get(sha) ?? null;
+  const identical = [sha];
+  if (target === null) return identical;
+  for (const [other, manifest] of manifests) {
+    if (other !== sha && manifest !== null && sameFiles(target, manifest)) {
+      identical.push(other);
+    }
+  }
+  return identical;
+}
+
+/** pinの`rolled_back_from`(戻した元の版のsha)を読む。shaの形でない要素は捨て、無ければ空にする。 */
+export function parsePinRevoked(value: unknown): string[] {
+  if (!isRecord(value)) return [];
+  return parseHistory(value.rolled_back_from);
+}
+
+/**
+ * 戻した元の版だけが参照する共有の`assets/`のファイル名(`assets/`からの相対名)を返す。
+ * 残す版のマニフェストを1つでも読めなければ、どれが使われているか分からないので何も返さない。
+ * 取り除いた後の版が読めなくなる事故より、問題の版のassetsが残る方を選ぶ。
+ */
+export function selectRevokedAssets(
+  revoked: readonly ConsoleManifest[],
+  remaining: readonly (ConsoleManifest | null)[],
+): string[] {
+  const stillUsed = referencedAssetNames(remaining);
+  if (stillUsed === null) return [];
+  const candidates = referencedAssetNames(revoked) ?? new Set<string>();
+  return [...candidates].filter((name) => !stillUsed.has(name));
 }
 
 /**

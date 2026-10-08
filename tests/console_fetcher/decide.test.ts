@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   type Artifact,
   appendHistory,
+  type ConsoleManifest,
   chooseArtifact,
   classifyHttpStatus,
   currentShaFromLink,
@@ -14,11 +15,14 @@ import {
   parseFetcherConfig,
   parseHistory,
   parseManifest,
+  parsePinRevoked,
   parseWorkflowRuns,
   referencedAssetNames,
   selectAssetsToDelete,
+  selectIdenticalReleases,
   selectLatestRun,
   selectReleasesToDelete,
+  selectRevokedAssets,
   selectRollbackTarget,
   verifyRelease,
   type WorkflowRun,
@@ -31,6 +35,15 @@ const SHA_D = "d".repeat(40);
 const HASH_1 = "1".repeat(64);
 const HASH_2 = "2".repeat(64);
 const DAY = 24 * 60 * 60 * 1000;
+
+const NO_MANIFESTS: ReadonlyMap<string, ConsoleManifest | null> = new Map();
+
+function manifestOf(
+  sha: string,
+  files: Record<string, string>,
+): ConsoleManifest {
+  return { version: 1, sha, files: new Map(Object.entries(files)) };
+}
 
 function run(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
   return {
@@ -624,6 +637,7 @@ describe("selectRollbackTarget", () => {
         [SHA_A, SHA_B, SHA_C],
         SHA_C,
         new Set([SHA_A, SHA_B, SHA_C]),
+        NO_MANIFESTS,
       ),
     ).toBe(SHA_B);
   });
@@ -634,6 +648,7 @@ describe("selectRollbackTarget", () => {
         [SHA_A, SHA_B, SHA_C],
         SHA_B,
         new Set([SHA_A, SHA_B, SHA_C]),
+        NO_MANIFESTS,
       ),
     ).toBe(SHA_A);
   });
@@ -644,6 +659,7 @@ describe("selectRollbackTarget", () => {
         [SHA_A, SHA_B, SHA_C],
         SHA_C,
         new Set([SHA_A, SHA_C]),
+        NO_MANIFESTS,
       ),
     ).toBe(SHA_A);
   });
@@ -654,12 +670,15 @@ describe("selectRollbackTarget", () => {
         [SHA_A, SHA_B, SHA_C, SHA_B],
         SHA_B,
         new Set([SHA_A, SHA_B, SHA_C]),
+        NO_MANIFESTS,
       ),
     ).toBe(SHA_C);
   });
 
   test("returns null when there is no earlier release", () => {
-    expect(selectRollbackTarget([SHA_A], SHA_A, new Set([SHA_A]))).toBeNull();
+    expect(
+      selectRollbackTarget([SHA_A], SHA_A, new Set([SHA_A]), NO_MANIFESTS),
+    ).toBeNull();
   });
 
   test("returns the newest release in history when current is missing from history", () => {
@@ -668,6 +687,7 @@ describe("selectRollbackTarget", () => {
         [SHA_A, SHA_B, SHA_C],
         SHA_D,
         new Set([SHA_A, SHA_B, SHA_C, SHA_D]),
+        NO_MANIFESTS,
       ),
     ).toBe(SHA_C);
   });
@@ -678,8 +698,157 @@ describe("selectRollbackTarget", () => {
         [SHA_A, SHA_B, SHA_C],
         SHA_D,
         new Set([SHA_A, SHA_B, SHA_D]),
+        NO_MANIFESTS,
       ),
     ).toBe(SHA_B);
+  });
+
+  test("skips a release whose files are identical to current", () => {
+    expect(
+      selectRollbackTarget(
+        [SHA_A, SHA_B, SHA_C],
+        SHA_C,
+        new Set([SHA_A, SHA_B, SHA_C]),
+        new Map([
+          [SHA_A, manifestOf(SHA_A, { "index.html": HASH_1 })],
+          [SHA_B, manifestOf(SHA_B, { "index.html": HASH_2 })],
+          [SHA_C, manifestOf(SHA_C, { "index.html": HASH_2 })],
+        ]),
+      ),
+    ).toBe(SHA_A);
+  });
+
+  test("returns null when every earlier release is identical to current", () => {
+    expect(
+      selectRollbackTarget(
+        [SHA_A, SHA_B],
+        SHA_B,
+        new Set([SHA_A, SHA_B]),
+        new Map([
+          [SHA_A, manifestOf(SHA_A, { "index.html": HASH_1 })],
+          [SHA_B, manifestOf(SHA_B, { "index.html": HASH_1 })],
+        ]),
+      ),
+    ).toBeNull();
+  });
+
+  test("treats a release with an extra file as different from current", () => {
+    expect(
+      selectRollbackTarget(
+        [SHA_A, SHA_B],
+        SHA_B,
+        new Set([SHA_A, SHA_B]),
+        new Map([
+          [
+            SHA_A,
+            manifestOf(SHA_A, { "index.html": HASH_1, "assets/a.js": HASH_1 }),
+          ],
+          [SHA_B, manifestOf(SHA_B, { "index.html": HASH_1 })],
+        ]),
+      ),
+    ).toBe(SHA_A);
+  });
+
+  test("does not skip a release whose manifest could not be read", () => {
+    expect(
+      selectRollbackTarget(
+        [SHA_A, SHA_B],
+        SHA_B,
+        new Set([SHA_A, SHA_B]),
+        new Map([
+          [SHA_A, null],
+          [SHA_B, manifestOf(SHA_B, { "index.html": HASH_1 })],
+        ]),
+      ),
+    ).toBe(SHA_A);
+  });
+
+  test("does not skip any release when the manifest of current could not be read", () => {
+    expect(
+      selectRollbackTarget(
+        [SHA_A, SHA_B],
+        SHA_B,
+        new Set([SHA_A, SHA_B]),
+        new Map([
+          [SHA_A, manifestOf(SHA_A, { "index.html": HASH_1 })],
+          [SHA_B, null],
+        ]),
+      ),
+    ).toBe(SHA_A);
+  });
+});
+
+describe("selectIdenticalReleases", () => {
+  const manifests = new Map([
+    [SHA_A, manifestOf(SHA_A, { "index.html": HASH_1 })],
+    [SHA_B, manifestOf(SHA_B, { "index.html": HASH_2 })],
+    [SHA_C, manifestOf(SHA_C, { "index.html": HASH_2 })],
+  ]);
+
+  test("returns the release itself and every release with the same files", () => {
+    expect(selectIdenticalReleases(SHA_C, manifests).sort()).toEqual([
+      SHA_B,
+      SHA_C,
+    ]);
+  });
+
+  test("returns only the release itself when its manifest could not be read", () => {
+    expect(selectIdenticalReleases(SHA_D, manifests)).toEqual([SHA_D]);
+  });
+});
+
+describe("parsePinRevoked", () => {
+  test("reads the commit shas that were rolled back from", () => {
+    expect(
+      parsePinRevoked({ rolled_back_from: [SHA_A, "x", 1, SHA_B] }),
+    ).toEqual([SHA_A, SHA_B]);
+  });
+
+  test("returns an empty list for a pin without the field", () => {
+    expect(parsePinRevoked({ sha: SHA_A })).toEqual([]);
+  });
+
+  test("returns an empty list for a non-object", () => {
+    expect(parsePinRevoked(null)).toEqual([]);
+  });
+});
+
+describe("selectRevokedAssets", () => {
+  test("returns the assets used only by the revoked releases", () => {
+    expect(
+      selectRevokedAssets(
+        [manifestOf(SHA_B, { "index.html": HASH_1, "assets/bad.js": HASH_1 })],
+        [manifestOf(SHA_A, { "index.html": HASH_2, "assets/good.js": HASH_1 })],
+      ),
+    ).toEqual(["bad.js"]);
+  });
+
+  test("keeps an asset that a remaining release also uses", () => {
+    expect(
+      selectRevokedAssets(
+        [
+          manifestOf(SHA_B, {
+            "index.html": HASH_1,
+            "assets/shared.js": HASH_1,
+          }),
+        ],
+        [
+          manifestOf(SHA_A, {
+            "index.html": HASH_2,
+            "assets/shared.js": HASH_1,
+          }),
+        ],
+      ),
+    ).toEqual([]);
+  });
+
+  test("returns nothing when a remaining manifest could not be read", () => {
+    expect(
+      selectRevokedAssets(
+        [manifestOf(SHA_B, { "index.html": HASH_1, "assets/bad.js": HASH_1 })],
+        [null],
+      ),
+    ).toEqual([]);
   });
 });
 

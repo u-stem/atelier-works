@@ -1,7 +1,7 @@
 // console_fetcherの入口。引数で動作を選ぶ。
 //   loop(既定): 起動直後と、その後5分ごとに取り込む。
 //   once: 1回だけ取り込んで終わる。
-//   rollback: currentを直前の版に戻してpinを置く(mise run console:rollback)。
+//   rollback: currentを中身の違う直前の版に戻してpinを置き、戻した元の版を消す(mise run console:rollback)。
 //   unpin: pinを外す(mise run console:unpin)。
 // ログは1行1つのJSONで標準出力に出す。トークンは出さない。
 // どの動作もボリュームのロックを取ってから行い、同時に動かない。
@@ -68,7 +68,9 @@ async function main(): Promise<void> {
       process.exit(1);
     }
     if (!locked.value.ok) {
-      console.error("No previous release to roll back to.");
+      console.error(
+        "No previous release with different content to roll back to.",
+      );
       process.exit(1);
     }
     console.log(

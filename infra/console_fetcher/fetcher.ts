@@ -37,12 +37,15 @@ import {
   parseCurrentLink,
   parseHistory,
   parseManifest,
+  parsePinRevoked,
   parseWorkflowRuns,
   RELEASE_BRANCH,
   referencedAssetNames,
   selectAssetsToDelete,
+  selectIdenticalReleases,
   selectLatestRun,
   selectReleasesToDelete,
+  selectRevokedAssets,
   selectRollbackTarget,
   verifyRelease,
   WORKFLOW_FILE,
@@ -563,6 +566,55 @@ async function recordHistory(layout: Layout, sha: string): Promise<void> {
   );
 }
 
+async function readManifest(
+  layout: Layout,
+  sha: string,
+): Promise<ConsoleManifest | null> {
+  return parseManifest(
+    await readJsonFile(join(layout.releases, sha, MANIFEST_FILE)),
+  );
+}
+
+/**
+ * 戻した元の版(`revoked`)の`releases/<sha>`と、その版だけが参照する共有の`assets/`のファイルを消す。
+ * 戻した後も問題の版のassetsを`/console/assets/`から読めるままにしないため、更新日時にかかわらず消す。
+ * 配信中の版と、残る版が参照するassetsは消さない。`current`を読めないときと、
+ * 残る版のマニフェストを読めないときは、どれが使われているか分からないので何も消さない。
+ * 途中で止まっても、同じ`revoked`で呼び直せば続きを消せる。
+ */
+async function removeRevoked(
+  layout: Layout,
+  revoked: readonly string[],
+): Promise<void> {
+  const current = await readCurrentLink(layout);
+  if (current.kind === "unknown") return;
+  const serving = shaOf(current);
+  const existing = (await readdirOrEmpty(layout.releases)).filter(isCommitSha);
+  const doomed = existing.filter(
+    (sha) => revoked.includes(sha) && sha !== serving,
+  );
+  if (doomed.length === 0) return;
+  const doomedManifests: ConsoleManifest[] = [];
+  for (const sha of doomed) {
+    const manifest = await readManifest(layout, sha);
+    if (manifest !== null) doomedManifests.push(manifest);
+  }
+  const remaining: (ConsoleManifest | null)[] = [];
+  for (const sha of existing.filter((sha) => !doomed.includes(sha))) {
+    remaining.push(await readManifest(layout, sha));
+  }
+  // 先にassetsを消し、止まったときも続きの版の削除を呼び直せるようにする。
+  for (const name of selectRevokedAssets(doomedManifests, remaining)) {
+    await rm(join(layout.assets, name), { force: true });
+  }
+  for (const sha of doomed) {
+    const dir = join(layout.releases, sha);
+    if (await isRealDirectory(dir)) {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+}
+
 async function listAssetFiles(layout: Layout): Promise<AssetFile[]> {
   const files: AssetFile[] = [];
   for (const name of await readdir(layout.assets)) {
@@ -593,13 +645,7 @@ async function cleanup(deps: FetcherDeps, layout: Layout): Promise<void> {
   }
   const kept = existing.filter((sha) => !toDelete.includes(sha));
   const manifests: (ConsoleManifest | null)[] = [];
-  for (const sha of kept) {
-    manifests.push(
-      parseManifest(
-        await readJsonFile(join(layout.releases, sha, MANIFEST_FILE)),
-      ),
-    );
-  }
+  for (const sha of kept) manifests.push(await readManifest(layout, sha));
   const stale = selectAssetsToDelete(
     await listAssetFiles(layout),
     referencedAssetNames(manifests),
@@ -637,6 +683,11 @@ export async function runOnce(deps: FetcherDeps): Promise<FetcherStatus> {
     await prepareLayout(layout);
     currentSha = shaOf(await readCurrentLink(layout));
     if (await exists(layout.pin)) {
+      // rollbackが途中で止まっていたときのために、戻した元の版の削除を続ける。
+      await removeRevoked(
+        layout,
+        parsePinRevoked(await readJsonFile(layout.pin)),
+      );
       return await finish(deps, layout, {
         state: "pinned",
         sha: currentSha,
@@ -737,8 +788,12 @@ export type RollbackResult =
 
 /**
  * currentを直前の版に戻し、pinを置く。pinがある間、runOnceは付け替えない。
+ * 戻す先は、今の版と中身が違う、履歴の直前の版にする。
  * pinを先に置いてから付け替え、同時に動いたrunOnceが新しい版へ戻さないようにする。
  * 履歴には足さない(足すと、次に戻すときに新しい方の版を選んでしまう)。
+ * 戻した元の版と、それと中身が同じ版は、pinの`rolled_back_from`に記録して、
+ * その版と、その版だけが使うassetsを消す(戻した後も問題のscriptを読めるままにしないため)。
+ * 消した版は、pinを外した後の取り込みで、最新の実行から取り直される。
  */
 export async function rollback(
   root: string,
@@ -747,18 +802,30 @@ export async function rollback(
   const layout = layoutOf(root);
   await mkdir(layout.tmp, { recursive: true });
   const currentSha = shaOf(await readCurrentLink(layout));
-  const releases = await readdirOrEmpty(layout.releases);
+  const releases = (await readdirOrEmpty(layout.releases)).filter(isCommitSha);
+  const manifests = new Map<string, ConsoleManifest | null>();
+  for (const sha of releases)
+    manifests.set(sha, await readManifest(layout, sha));
   const target = selectRollbackTarget(
     await readHistory(layout),
     currentSha,
-    new Set(releases.filter(isCommitSha)),
+    new Set(releases),
+    manifests,
   );
-  if (target === null) return { ok: false, reason: "no_previous_release" };
+  if (target === null || currentSha === null) {
+    return { ok: false, reason: "no_previous_release" };
+  }
+  const revoked = [
+    ...new Set([
+      ...parsePinRevoked(await readJsonFile(layout.pin)),
+      ...selectIdenticalReleases(currentSha, manifests),
+    ]),
+  ];
   const pinnedAt = now().toISOString();
   await writeAtomically(
     layout,
     layout.pin,
-    `${JSON.stringify({ sha: target, pinned_at: pinnedAt })}\n`,
+    `${JSON.stringify({ sha: target, pinned_at: pinnedAt, rolled_back_from: revoked })}\n`,
   );
   await switchCurrent(layout, target);
   const status: FetcherStatus = {
@@ -768,6 +835,7 @@ export async function rollback(
     error: null,
   };
   await writeAtomically(layout, layout.status, `${JSON.stringify(status)}\n`);
+  await removeRevoked(layout, revoked);
   return { ok: true, sha: target };
 }
 

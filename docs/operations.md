@@ -610,7 +610,17 @@ mise exec -- docker compose -f infra/docker-compose.yml logs --tail 50 console_f
 
 版は`main`へのpushのたびに作られる。
 Consoleを変えていないpushでも作られ、直近の3つしか残らないので、戻せるのはその中だけである。
-それより前の状態に戻すには、`main`で該当のcommitをrevertし、CIを動かす。
+戻し先は、配信するファイルの中身(`manifest.json`の`files`)が今の版と違う、最も新しい版にする。
+中身が同じ版へ戻しても、何も変わらないためである。
+そのような版が残っていないと、`No previous release with different content to roll back to.`と出て止まる。
+この場合と、残っている版より前に戻したい場合は、`main`で該当のcommitをrevertし、CIを動かす。
+
+戻すと、戻した元の版と、それと中身が同じ版を消す。
+その版だけが参照する共有の`assets/`のファイルも、更新日時にかかわらず消す。
+`pin`の間も、問題の版のscriptを`/console/assets/`から読めるままにしないためである。
+消した版のページを開いたままのブラウザは、assetsを読み込めなくなるので、再読み込みが要る。
+`pin`を外すと、最新の実行から取り直すので、消した版が再び配信される。
+消す版のshaは、`pin`の`rolled_back_from`に記録する。
 
 主な`error`と対処は次のとおり。
 
