@@ -58,6 +58,7 @@ import {
   listReviewThreadsBestEffort,
   matchReviewThreadForComment,
   nextActionFor,
+  PR_HEAD_NOT_RECORDED_REASON,
   type PrFixFinishOutcome,
   prFixPushGateReason,
   type ReplyPostFailure,
@@ -89,8 +90,8 @@ export type PrFixFinishResult = {
  * `outcome`に応じて作業項目を遷移させ、遷移先と通知文を返す。
  * 修正があればcommitしてpushし、レビューコメントへ返信して再レビューを依頼する。
  * commitの前に、worktreeのロックを持つプロセスが無いこと、`.git`が`worktree_git_pointer`(準備ステップの記録)と一致すること、
- * ローカルのHEADが`head_sha`であること、ステージした内容に保護パス・symlink・gitlink・`package.json`のscriptsの変更が無いことを確かめ、
- * どれかに通らなければcommitせずにneeds_humanにする。準備ステップの結果に`worktree_git_pointer`が無いときも同じにする。
+ * ローカルのHEADが`branch`(準備ステップの記録)にあり`head_sha`であること、ステージした内容に保護パス・symlink・gitlink・`package.json`のscriptsの変更が無いことを確かめ、
+ * どれかに通らなければcommitせずにneeds_humanにする。準備ステップの結果に`worktree_git_pointer`か`branch`が無いときも同じにする。
  * `outcome`が想定外の値なら例外を投げる。
  * トリガーの`fix_label`は着手時に消費済みなので、終端の遷移で外すラベルは無い。
  * gtrのworktreeは消さずに残し、後で`cleanup_workspaces`が片付ける。
@@ -125,6 +126,7 @@ export async function main(
   max_comment_id: number,
   max_review_comment_id: number,
   worktree_git_pointer: string | null = null,
+  branch: string | null = null,
 ): Promise<PrFixFinishResult> {
   if (!isOneOf(outcome, ALL_OUTCOMES)) {
     throw new Error(`pr_fix_finish: unexpected outcome "${outcome}"`);
@@ -560,8 +562,11 @@ export async function main(
         assertWorktreeGitPointer(worktree_dir, expected),
     },
     worktree_git_pointer,
+    branch,
   );
-  if (gateReason !== null) return stopBeforeCommit(gateReason);
+  if (gateReason !== null || branch === null) {
+    return stopBeforeCommit(gateReason ?? PR_HEAD_NOT_RECORDED_REASON);
+  }
 
   let pushResult: CommitAndPushResult;
   try {
@@ -575,6 +580,7 @@ export async function main(
       author: gitIdentityForViewer(viewer),
       ghToken,
       requireLocalHeadAtExpected: true,
+      expectedBranch: branch,
       inspectStaged: () =>
         inspectStagedChanges(runCommand, worktree_dir, head_sha),
     });

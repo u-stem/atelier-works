@@ -385,6 +385,24 @@ describe("runClaude", () => {
     });
   });
 
+  test("returns the first failure with its agent run when beforeRetry throws", async () => {
+    const fake = createFakeCommandRunner([
+      { stdout: "not json", stderr: "", exitCode: 0, timedOut: false },
+    ]);
+    const result = await runClaude({
+      ...baseOptions(fake.run),
+      beforeRetry: async () => {
+        throw new Error("EIO");
+      },
+    });
+    expect(result).toMatchObject({
+      outcome: "failure",
+      reason: "invalid_json",
+      retried: false,
+      agentRun: { stage: baseOptions(fake.run).stage },
+    });
+  });
+
   test("retries when beforeRetry allows it", async () => {
     const fake = createFakeCommandRunner([
       { stdout: "not json", stderr: "", exitCode: 0, timedOut: false },

@@ -1382,6 +1382,7 @@ export function parseGitDiffNameStatusZ(output: string): ChangedPath[] {
  * 異なるすべてのパスを、`git diff --cached -z --name-status`で求める。
  * implementフローは`worktreeFingerprint`がすべてをステージした後にこれを呼ぶので、
  * ブランチで先に作ったコミットの変更も含まれる。
+ * `--ignore-submodules=none`を付け、`.gitmodules`や設定の`ignore`でサブモジュール(gitlink)の変更を隠させない。
  */
 export async function listChangedPaths(
   run: CommandRunner,
@@ -1396,6 +1397,7 @@ export async function listChangedPaths(
       "-z",
       "--name-status",
       "--no-ext-diff",
+      "--ignore-submodules=none",
       baseSha,
       "--",
     ]),
@@ -1483,7 +1485,8 @@ export async function listSymlinkChanges(
 }
 
 /**
- * worktreeで`git diff <modeArgs> -z --no-ext-diff <ref> --`を実行し、標準出力を返す。
+ * worktreeで`git diff <modeArgs> -z --no-ext-diff --ignore-submodules=none <ref> --`を実行し、標準出力を返す。
+ * `.gitmodules`や設定の`ignore`でサブモジュール(gitlink)の変更を隠させない。
  * 失敗したときと、出力の読み取りを打ち切ったときは例外を投げる。
  */
 async function readRawDiff(
@@ -1495,7 +1498,15 @@ async function readRawDiff(
   if (ref !== "HEAD") assertSha(ref);
   const name = `git diff ${modeArgs.join(" ")} -z`;
   const result = await run(
-    gitHardeningArgv(["diff", ...modeArgs, "-z", "--no-ext-diff", ref, "--"]),
+    gitHardeningArgv([
+      "diff",
+      ...modeArgs,
+      "-z",
+      "--no-ext-diff",
+      "--ignore-submodules=none",
+      ref,
+      "--",
+    ]),
     {
       cwd: worktreeDir,
       env: resolvedEnv({ GIT_TERMINAL_PROMPT: "0" }, undefined, undefined),
@@ -1516,6 +1527,7 @@ async function readRawDiff(
  * `git status`には`--untracked-files=all`を付け、未追跡のディレクトリを`dir/`の1件にまとめさせない。
  * まとめられると、まだ無い`.github/`の下に作った`.github/workflows/*.yml`が`.github/`としか現れず、
  * 保護パスや新しい`*.sh`の判定と、新しいファイルの行数の集計から漏れるため。
+ * `git status`には`--ignore-submodules=none`も付け、`.gitmodules`や設定の`ignore`でサブモジュールの変更を隠させない。
  * pr_fixの保護パス・symlink・差分の大きさの判定の入力になるので、どちらかが失敗したとき(終了コードが0以外)と、
  * 出力の読み取りを打ち切ったときは例外を投げる。空の一覧として扱うと、変更を見落とすため。
  * gitはhook・fsmonitor・credential helperを無効にして実行する。
@@ -1535,6 +1547,7 @@ export async function listUncommittedChangedPaths(
         "--porcelain",
         "-z",
         "--untracked-files=all",
+        "--ignore-submodules=none",
       ]),
       options,
     ),
@@ -2345,11 +2358,14 @@ export type PrFixPushGateDeps = {
  * 先にworktreeのロックを確かめ、前のステップのClaudeや検査コマンドが残っていれば`WorktreeBusyError`のmessageを返す。
  * 検証ステップの最後の検査の後に、残ったプロセスがworktreeを書き換えうるため。
  * 次に`.git`を準備ステップの記録と比べる(`recordedGitPointerStopReason`)。
+ * 最後に、準備ステップの結果にPRのブランチ(`recordedBranch`)があることを確かめ、無ければ`PR_HEAD_NOT_RECORDED_REASON`を返す。
+ * `commitAndPush`の`expectedBranch`に渡す値で、無いとpushする先を確かめられないため。
  * それ以外の例外はそのまま投げる。
  */
 export async function prFixPushGateReason(
   deps: PrFixPushGateDeps,
   recordedPointer: string | null,
+  recordedBranch: string | null,
 ): Promise<string | null> {
   try {
     await deps.ensureLockFree();
@@ -2357,7 +2373,14 @@ export async function prFixPushGateReason(
     if (err instanceof WorktreeBusyError) return err.message;
     throw err;
   }
-  return recordedGitPointerStopReason(recordedPointer, deps.assertGitPointer);
+  const pointerReason = await recordedGitPointerStopReason(
+    recordedPointer,
+    deps.assertGitPointer,
+  );
+  if (pointerReason !== null) return pointerReason;
+  return recordedBranch === null || recordedBranch.length === 0
+    ? PR_HEAD_NOT_RECORDED_REASON
+    : null;
 }
 
 /**
@@ -3791,7 +3814,7 @@ const REASON_RULES: readonly ReasonRule[] = [
         ? "前の実行のプロセスがまだworktreeを使っています"
         : `前の実行のプロセスがまだworktreeを使っています(${m[1]})`,
     nextAction: () =>
-      "載っているプロセスが何かを確かめて止めるか、workerを再起動してから(同じworkerの他のジョブも止まります)、ConsoleのFailuresタブから再実行してください",
+      "載っているプロセスが終わるのを待つか止めてから(workerを再起動すると同じworkerの他のジョブも止まります)、PRの修正なら`factory:fix`を付け直し、実装ならWindmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
   },
   {
     pattern: /^implementation of the branch's work item is running$/,
@@ -3963,7 +3986,11 @@ function resolvedEnv(
   home: string | undefined,
   path: string | undefined,
 ): Record<string, string> {
-  const env = { ...base };
+  // `refs/replace/`で差し替えられたオブジェクトを読まない(`lib/workspace.ts`の`localGitEnv`と同じ理由)。
+  const env: Record<string, string> = {
+    ...base,
+    GIT_NO_REPLACE_OBJECTS: "1",
+  };
   const resolvedHome = home ?? process.env.HOME;
   if (resolvedHome !== undefined) env.HOME = resolvedHome;
   const resolvedPath = path ?? process.env.PATH;

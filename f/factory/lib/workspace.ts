@@ -480,7 +480,12 @@ function buildGitArgv(
 
 /** ネットワークを使わないgitの操作の環境変数を返す。`GH_TOKEN`は含めない。 */
 function localGitEnv(home?: string, path?: string): Record<string, string> {
-  const env: Record<string, string> = { GIT_TERMINAL_PROMPT: "0" };
+  // `refs/replace/`で別のオブジェクトに差し替えられた内容を読まない。
+  // 差し替えのrefは対象リポジトリの検査コマンドが作れ、gitが読む内容を検査の前提と食い違わせうるため。
+  const env: Record<string, string> = {
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_NO_REPLACE_OBJECTS: "1",
+  };
   const resolvedHome = home ?? process.env.HOME;
   if (resolvedHome !== undefined) env.HOME = resolvedHome;
   const resolvedPath = path ?? process.env.PATH;
@@ -2054,6 +2059,12 @@ export type CommitAndPushOptions = {
    */
   readonly requireLocalHeadAtExpected?: boolean;
   /**
+   * 渡されたら、fetchの前に`git rev-parse --abbrev-ref HEAD`がこのブランチであることを確かめる。
+   * 違うとき(detachedの`HEAD`を含む)は何もせずに`CommitBlockedError`を投げる。
+   * pr_fixが使う。検査コマンドがブランチを切り替えると、pushする先が準備ステップの見たPRのブランチでなくなるため。
+   */
+  readonly expectedBranch?: string;
+  /**
    * `git add -A`の後、commitの前に、ステージした内容を調べて止める理由を返す。
    * 理由があれば`git reset -q`でステージを戻し、commitせずに`CommitBlockedError`を投げる。
    * pr_fixが、検証ステップの後にworktreeが変わっていないことを、commitする内容そのもので確かめるために使う。
@@ -2156,7 +2167,8 @@ export function withCommitTrailers(
  * 先頭が変わっていれば`head_changed`、変更が無ければ`nothing_to_commit`を返す。
  * pushがfast-forwardでないとして拒否されたとき(先頭の確認をすり抜けた競合)も、
  * 例外を投げず、fetchし直して`head_changed`を返す。それ以外の失敗では例外を投げる。
- * `requireLocalHeadAtExpected`と`inspectStaged`の確かめに通らなければ、commitせずに`CommitBlockedError`を投げる。
+ * `expectedBranch`・`requireLocalHeadAtExpected`・`inspectStaged`の確かめに通らなければ、commitせずに`CommitBlockedError`を投げる。
+ * `inspectStaged`が例外を投げたときも、ステージを戻してからその例外を投げ直す。
  * fetchはサブモジュールに降りない(`--no-recurse-submodules`)。worktreeの`.gitmodules`や設定で、別のリポジトリを取りに行かせないため。
  * トークンはリモートのURLに入れない。
  * 認証は`-c credential.helper='!gh auth git-credential'`と
@@ -2193,6 +2205,14 @@ export async function commitAndPush(
         throw gitError("git rev-parse --abbrev-ref HEAD failed", branchResult);
       }
       const branch = branchResult.stdout.trim();
+      if (
+        opts.expectedBranch !== undefined &&
+        (branch === "HEAD" || branch !== opts.expectedBranch)
+      ) {
+        throw new CommitBlockedError(
+          `local HEAD is not on branch ${opts.expectedBranch}`,
+        );
+      }
       assertBranchName(branch);
 
       const fetchResult = await opts.run(
@@ -2254,8 +2274,7 @@ export async function commitAndPush(
       }
 
       if (opts.inspectStaged !== undefined) {
-        const reasons = await opts.inspectStaged();
-        if (reasons.length > 0) {
+        const unstage = async (): Promise<void> => {
           const resetResult = await opts.run(buildGitArgv(["reset", "-q"]), {
             cwd: opts.dir,
             env: local,
@@ -2263,6 +2282,17 @@ export async function commitAndPush(
           if (resetResult.exitCode !== 0) {
             throw gitError("git reset -q failed", resetResult);
           }
+        };
+        let reasons: readonly string[];
+        try {
+          reasons = await opts.inspectStaged();
+        } catch (err) {
+          // 検査できなかった内容をステージしたまま残さない。
+          await unstage();
+          throw err;
+        }
+        if (reasons.length > 0) {
+          await unstage();
           throw new CommitBlockedError(reasons.join("; "));
         }
       }

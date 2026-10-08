@@ -222,6 +222,19 @@ export async function runPrFixVerify(
       })),
   );
   if (retry.outcome === "failure") {
+    // 失敗した実行が`.git`を書き換えていれば(不正な出力への再試行を`beforeRetry`が止めた場合を含む)、
+    // Claudeの失敗ではなくポインタの書き換えを理由にする。
+    const afterFailureReason = await recordedGitPointerStopReason(
+      pointer,
+      deps.assertGitPointer,
+    );
+    if (afterFailureReason !== null) {
+      return blocked(
+        afterFailureReason,
+        input.apply.summary,
+        input.apply.replies,
+      );
+    }
     return blocked(
       `check-fix retry pass failed (${retry.reason}): ${retry.detail}`,
       input.apply.summary,

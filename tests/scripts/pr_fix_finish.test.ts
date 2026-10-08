@@ -67,7 +67,7 @@ describe("prFixPushGateReason", () => {
         throw new WorktreeBusyError([]);
       },
     });
-    expect(await prFixPushGateReason(deps, POINTER)).toBe(
+    expect(await prFixPushGateReason(deps, POINTER, "fix/x")).toBe(
       "worktree is still used by processes from an earlier run",
     );
   });
@@ -78,7 +78,7 @@ describe("prFixPushGateReason", () => {
         throw new WorktreeBusyError([]);
       },
     });
-    await prFixPushGateReason(deps, POINTER);
+    await prFixPushGateReason(deps, POINTER, "fix/x");
     expect(calls).toEqual(["ensureLockFree"]);
   });
 
@@ -88,14 +88,14 @@ describe("prFixPushGateReason", () => {
         throw new Error("flock failed");
       },
     });
-    await expect(prFixPushGateReason(deps, POINTER)).rejects.toThrow(
+    await expect(prFixPushGateReason(deps, POINTER, "fix/x")).rejects.toThrow(
       "flock failed",
     );
   });
 
   test("stops when no pointer was recorded", async () => {
     const { deps } = gateDeps();
-    expect(await prFixPushGateReason(deps, null)).toBe(
+    expect(await prFixPushGateReason(deps, null, "fix/x")).toBe(
       "worktree git pointer was not recorded",
     );
   });
@@ -106,20 +106,34 @@ describe("prFixPushGateReason", () => {
         throw new WorktreeGitPointerModifiedError();
       },
     });
-    expect(await prFixPushGateReason(deps, POINTER)).toBe(
+    expect(await prFixPushGateReason(deps, POINTER, "fix/x")).toBe(
       "worktree git pointer was modified",
     );
   });
 
   test("checks the lock before the pointer", async () => {
     const { deps, calls } = gateDeps();
-    await prFixPushGateReason(deps, POINTER);
+    await prFixPushGateReason(deps, POINTER, "fix/x");
     expect(calls).toEqual(["ensureLockFree", "assertGitPointer"]);
   });
 
   test("returns null when the lock is free and the pointer is unchanged", async () => {
     const { deps } = gateDeps();
-    expect(await prFixPushGateReason(deps, POINTER)).toBeNull();
+    expect(await prFixPushGateReason(deps, POINTER, "fix/x")).toBeNull();
+  });
+
+  test("stops when no PR branch was recorded", async () => {
+    const { deps } = gateDeps();
+    expect(await prFixPushGateReason(deps, POINTER, null)).toBe(
+      "PR head was not recorded",
+    );
+  });
+
+  test("stops when the recorded PR branch is empty", async () => {
+    const { deps } = gateDeps();
+    expect(await prFixPushGateReason(deps, POINTER, "")).toBe(
+      "PR head was not recorded",
+    );
   });
 });
 

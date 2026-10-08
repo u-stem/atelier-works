@@ -430,6 +430,20 @@ describe("runPrFixVerify: retry after failing checks", () => {
     );
   });
 
+  test("reports a modified pointer instead of the failed retry", async () => {
+    const h = harness({
+      checks: [false],
+      pointerModified: [false, false, true],
+      retry: {
+        outcome: "failure",
+        reason: "invalid_json",
+        detail: "not json",
+      },
+    });
+    const result = await runPrFixVerify(h.deps, INPUT);
+    expect(result.reason).toBe("worktree git pointer was modified");
+  });
+
   test("passes through a retry that did not finish as done", async () => {
     const h = harness({
       checks: [false],

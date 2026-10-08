@@ -839,7 +839,7 @@ export async function gitPointerStopReason(
  *    実行する直前に、gitが無視するファイルを削除する。検査コマンドは期限で切らない。
  * 8. 終了を判定する(`decideImplementRoundExit`)。検査に失敗し、期限までの残りが修正ラウンドの最悪の所要時間に足りなければ`deadline`で止める。
  *    差分の指紋には、ステージしたツリーのshaを使う。
- * 9. 修正ラウンドに進む前にリースを確かめ、失っていれば止める。
+ * 9. 修正ラウンドに進む前にリースを確かめ、失っていれば止める。続けて`.git`ポインタを確かめ、変わっていれば止める。
  * リースを失って止まったラウンドを除き、Claudeの実行ごとに`implement_rounds`へ1行を記録する。
  */
 export async function runImplementVerifyLoop(
@@ -1042,6 +1042,22 @@ export async function runImplementVerifyLoop(
       return stopped({
         exit: "lease_lost",
         reason: IMPLEMENT_LEASE_LOST_REASON,
+        protected_changes: protectedChanges,
+        checks: evaluation.summary,
+        diff_stat: fingerprint.diffStat,
+        changed_paths: changedPaths,
+      });
+    }
+
+    // 検査コマンドの後、修正ラウンドのClaudeを起動する前に`.git`を確かめ直す。
+    // 検査コマンドが`.git`を書き換えていれば、Claudeが起動時に実行するgitがその参照先の設定を読むため。
+    const beforeFixPointerReason = await gitPointerStopReason(
+      deps.assertGitPointer,
+    );
+    if (beforeFixPointerReason !== null) {
+      return stopped({
+        exit: "git_pointer_modified",
+        reason: beforeFixPointerReason,
         protected_changes: protectedChanges,
         checks: evaluation.summary,
         diff_stat: fingerprint.diffStat,

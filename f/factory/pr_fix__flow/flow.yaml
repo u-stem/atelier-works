@@ -167,6 +167,9 @@ value:
           summary:
             type: javascript
             expr: results.pr_fix_verify?.summary ?? ""
+          branch:
+            type: javascript
+            expr: results.pr_fix_prepare.branch ?? null
           comments:
             type: javascript
             expr: results.pr_fix_collect?.comments ?? []

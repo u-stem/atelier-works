@@ -2146,6 +2146,48 @@ describe("commitAndPush", () => {
     ]);
   });
 
+  test("runs local git without replace objects", async () => {
+    const fake = commitAndPushCalls([
+      ok("fix/branch\n"),
+      ok(),
+      ok(`${OTHER_SHA}\n`),
+    ]);
+    await commitAndPush({
+      run: fake.run,
+      repoDir: "/repo",
+      dir: "/repo/wt",
+      message: "fix: something",
+      instanceName: "acme-factory",
+      expectedHeadSha: HEAD_SHA,
+      author: TEST_AUTHOR,
+      ghToken: "gh-token",
+      verifyWorktree: noopVerify,
+      lockFs: createInMemoryLockFs(),
+    });
+    expect(fake.calls[0]?.options?.env?.GIT_NO_REPLACE_OBJECTS).toBe("1");
+  });
+
+  test("runs network git without replace objects", async () => {
+    const fake = commitAndPushCalls([
+      ok("fix/branch\n"),
+      ok(),
+      ok(`${OTHER_SHA}\n`),
+    ]);
+    await commitAndPush({
+      run: fake.run,
+      repoDir: "/repo",
+      dir: "/repo/wt",
+      message: "fix: something",
+      instanceName: "acme-factory",
+      expectedHeadSha: HEAD_SHA,
+      author: TEST_AUTHOR,
+      ghToken: "gh-token",
+      verifyWorktree: noopVerify,
+      lockFs: createInMemoryLockFs(),
+    });
+    expect(fake.calls[1]?.options?.env?.GIT_NO_REPLACE_OBJECTS).toBe("1");
+  });
+
   describe("pr_fix guards", () => {
     /** pr_fixの呼び出しと同じく、ローカルのHEADの確認とステージ済みの変更の検査を有効にする。 */
     function guardedOptions(
@@ -2164,9 +2206,69 @@ describe("commitAndPush", () => {
         verifyWorktree: noopVerify,
         lockFs: createInMemoryLockFs(),
         requireLocalHeadAtExpected: true,
+        expectedBranch: "fix/branch",
         inspectStaged: async () => reasons,
       };
     }
+
+    test("throws CommitBlockedError when HEAD is on another branch", async () => {
+      const fake = commitAndPushCalls([ok("main\n")]);
+      await expect(commitAndPush(guardedOptions(fake.run))).rejects.toThrow(
+        "local HEAD is not on branch fix/branch",
+      );
+    });
+
+    test("throws CommitBlockedError when HEAD is detached", async () => {
+      const fake = commitAndPushCalls([ok("HEAD\n")]);
+      await expect(
+        commitAndPush(guardedOptions(fake.run)),
+      ).rejects.toBeInstanceOf(CommitBlockedError);
+    });
+
+    test("does not fetch when HEAD is on another branch", async () => {
+      const fake = commitAndPushCalls([ok("main\n")]);
+      await commitAndPush(guardedOptions(fake.run)).catch(() => {});
+      expect(fake.calls).toHaveLength(1);
+    });
+
+    test("unstages when the staged inspection throws", async () => {
+      const fake = commitAndPushCalls([
+        ok("fix/branch\n"),
+        ok(),
+        ok(`${HEAD_SHA}\n`),
+        ok(`${HEAD_SHA}\n`),
+        ok(),
+        ok(" M file.ts\n"),
+        ok(), // git reset -q
+      ]);
+      await commitAndPush({
+        ...guardedOptions(fake.run),
+        inspectStaged: async () => {
+          throw new Error("git show failed");
+        },
+      }).catch(() => {});
+      expect(fake.calls.at(-1)?.argv.slice(-2)).toEqual(["reset", "-q"]);
+    });
+
+    test("rethrows the staged inspection's error after unstaging", async () => {
+      const fake = commitAndPushCalls([
+        ok("fix/branch\n"),
+        ok(),
+        ok(`${HEAD_SHA}\n`),
+        ok(`${HEAD_SHA}\n`),
+        ok(),
+        ok(" M file.ts\n"),
+        ok(),
+      ]);
+      await expect(
+        commitAndPush({
+          ...guardedOptions(fake.run),
+          inspectStaged: async () => {
+            throw new Error("git show failed");
+          },
+        }),
+      ).rejects.toThrow("git show failed");
+    });
 
     test("throws CommitBlockedError when the local HEAD moved off the PR head", async () => {
       const fake = commitAndPushCalls([

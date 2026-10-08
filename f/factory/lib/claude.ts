@@ -562,7 +562,7 @@ const RETRYABLE_REASONS: readonly RunClaudeFailureReason[] = [
  * 再試行したかは成功・失敗とも`retried`で示し、`agentRun`には最後の試行の記録が入る。
  * 再試行したときは、最初の試行の記録(費用を含む)を`discardedAgentRun`で返す。
  * `deadlineAt`を過ぎていれば起動せずにtimeoutの失敗を返し、過ぎた後は再試行しない。
- * `beforeRetry`がfalseを返したときも再試行しない。
+ * `beforeRetry`がfalseを返したとき、例外を投げたときも再試行せず、最初の失敗を返す。
  */
 export async function runClaude<T>(
   opts: RunClaudeOptions<T>,
@@ -590,8 +590,15 @@ export async function runClaude<T>(
   if (opts.deadlineAt !== undefined && attemptTimeoutMs(opts) <= 0) {
     return { ...first, retried: false };
   }
-  if (opts.beforeRetry !== undefined && !(await opts.beforeRetry())) {
-    return { ...first, retried: false };
+  if (opts.beforeRetry !== undefined) {
+    // 確かめ自体が失敗しても再試行しない。例外にすると最初の試行の記録(費用)を呼び出し側が記録できないため、最初の失敗を返す。
+    let allowed: boolean;
+    try {
+      allowed = await opts.beforeRetry();
+    } catch {
+      allowed = false;
+    }
+    if (!allowed) return { ...first, retried: false };
   }
 
   const retryPrompt = `${opts.prompt}\n\n${opts.retryNote ?? DEFAULT_RETRY_NOTE}`;

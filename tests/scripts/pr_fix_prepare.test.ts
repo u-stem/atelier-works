@@ -687,7 +687,7 @@ describe("nextActionFor (implement flow)", () => {
         "worktree is still used by processes from an earlier run: pid 42 (3600s, no owner) `x`",
       ),
     ).toBe(
-      "載っているプロセスが何かを確かめて止めるか、workerを再起動してから(同じworkerの他のジョブも止まります)、ConsoleのFailuresタブから再実行してください",
+      "載っているプロセスが終わるのを待つか止めてから(workerを再起動すると同じworkerの他のジョブも止まります)、PRの修正なら`factory:fix`を付け直し、実装ならWindmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
     );
   });
 

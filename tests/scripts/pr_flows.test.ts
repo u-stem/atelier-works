@@ -99,6 +99,12 @@ describe("pr_fix flow.yaml", () => {
     );
   });
 
+  test("passes the PR branch recorded by prepare to the finish step", () => {
+    expect(moduleBlock(PR_FIX_FLOW, "pr_fix_finish")).toContain(
+      "          branch:\n            type: javascript\n            expr: results.pr_fix_prepare.branch ?? null\n",
+    );
+  });
+
   test("passes the .git pointer recorded by prepare to the finish step", () => {
     expect(moduleBlock(PR_FIX_FLOW, "pr_fix_finish")).toContain(
       "          worktree_git_pointer:\n            type: javascript\n            expr: results.pr_fix_prepare.worktree_git_pointer ?? null\n",

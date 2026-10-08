@@ -749,10 +749,25 @@ describe("inspectUncommittedChanges", () => {
       fakePathFs({ links: { "/wt/link": "/dev/zero" } }),
     );
     expect(calls.map((call) => call.argv.slice(7))).toEqual([
-      ["status", "--porcelain", "-z", "--untracked-files=all"],
+      [
+        "status",
+        "--porcelain",
+        "-z",
+        "--untracked-files=all",
+        "--ignore-submodules=none",
+      ],
       ["diff", "--name-only", "-z"],
       ["--literal-pathspecs", "ls-files", "-s", "-z", "--", "link"],
-      ["diff", "--raw", "--no-renames", "-z", "--no-ext-diff", "HEAD", "--"],
+      [
+        "diff",
+        "--raw",
+        "--no-renames",
+        "-z",
+        "--no-ext-diff",
+        "--ignore-submodules=none",
+        "HEAD",
+        "--",
+      ],
     ]);
   });
 
@@ -962,8 +977,26 @@ describe("inspectStagedChanges", () => {
     const { run, calls } = createFakeCommandRunner([ok(""), ok("")]);
     await inspectStagedChanges(run, "/wt", BASE);
     expect(calls.map((call) => call.argv.slice(7))).toEqual([
-      ["diff", "--cached", "-z", "--name-status", "--no-ext-diff", BASE, "--"],
-      ["diff", "--cached", "--raw", "-z", "--no-ext-diff", BASE, "--"],
+      [
+        "diff",
+        "--cached",
+        "-z",
+        "--name-status",
+        "--no-ext-diff",
+        "--ignore-submodules=none",
+        BASE,
+        "--",
+      ],
+      [
+        "diff",
+        "--cached",
+        "--raw",
+        "-z",
+        "--no-ext-diff",
+        "--ignore-submodules=none",
+        BASE,
+        "--",
+      ],
     ]);
   });
 });
@@ -1525,12 +1558,13 @@ describe("listChangedPaths", () => {
   test("diffs the index against the base sha with -z --name-status", async () => {
     const { run, calls } = createFakeCommandRunner([ok("")]);
     await listChangedPaths(run, "/wt", BASE);
-    expect(calls[0]?.argv.slice(-7)).toEqual([
+    expect(calls[0]?.argv.slice(-8)).toEqual([
       "diff",
       "--cached",
       "-z",
       "--name-status",
       "--no-ext-diff",
+      "--ignore-submodules=none",
       BASE,
       "--",
     ]);
@@ -1572,6 +1606,12 @@ describe("listUncommittedChangedPaths", () => {
     expect(detectForbiddenChanges(paths, false).blocked).toBe(true);
   });
 
+  test("runs git without replace objects", async () => {
+    const { run, calls } = createFakeCommandRunner([ok(""), ok("")]);
+    await listUncommittedChangedPaths(run, "/wt");
+    expect(calls[0]?.options?.env?.GIT_NO_REPLACE_OBJECTS).toBe("1");
+  });
+
   test("runs both with -z and the hardening flags in the worktree", async () => {
     const { run, calls } = createFakeCommandRunner([ok(""), ok("")]);
     await listUncommittedChangedPaths(run, "/wt");
@@ -1589,6 +1629,7 @@ describe("listUncommittedChangedPaths", () => {
           "--porcelain",
           "-z",
           "--untracked-files=all",
+          "--ignore-submodules=none",
         ],
         "/wt",
       ],
@@ -1784,6 +1825,28 @@ describe("changed path listing against a real git repository", () => {
     if (result.exitCode !== 0) throw new Error(result.stderr);
   }
 
+  test("the staged check finds a gitlink that .gitmodules ignore = all hides", async () => {
+    const repo = await initRepo();
+    const sub = { ...repo, dir: join(repo.dir, "sub") };
+    mkdirSync(sub.dir);
+    await gitIn(sub, ["init", "-q"]);
+    writeFileSync(join(sub.dir, "a.txt"), "a\n");
+    await gitIn(sub, ["add", "-A"]);
+    await gitIn(sub, ["commit", "-q", "-m", "sub"]);
+    await gitIn(repo, ["add", "sub"]);
+    writeFileSync(
+      join(repo.dir, ".gitmodules"),
+      '[submodule "sub"]\n\tpath = sub\n\turl = ./sub\n\tignore = all\n',
+    );
+    await gitIn(repo, ["add", ".gitmodules"]);
+    const reasons = await inspectStagedChanges(
+      repo.run,
+      repo.dir,
+      repo.baseSha,
+    );
+    expect(reasons).toContain("nested repository or .git path changed: sub");
+  });
+
   test("pr_fix blocks a rewritten tracked symlink under core.symlinks=false", async () => {
     const repo = await initRepo();
     symlinkSync("README.md", join(repo.dir, "link"));
@@ -1848,12 +1911,13 @@ describe("listSymlinkChanges", () => {
   test("diffs the index against the base sha with --raw -z", async () => {
     const { run, calls } = createFakeCommandRunner([ok("")]);
     await listSymlinkChanges(run, "/wt", BASE);
-    expect(calls[0]?.argv.slice(-7)).toEqual([
+    expect(calls[0]?.argv.slice(-8)).toEqual([
       "diff",
       "--cached",
       "--raw",
       "-z",
       "--no-ext-diff",
+      "--ignore-submodules=none",
       BASE,
       "--",
     ]);

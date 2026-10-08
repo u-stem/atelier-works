@@ -183,6 +183,22 @@ export async function main(
     await recordClaudeRuns(result, recordAgentRun);
 
     if (result.outcome !== "success") {
+      // 失敗した実行が`.git`を書き換えていれば(不正な出力への再試行を`beforeRetry`が止めた場合を含む)、
+      // 例外にせずポインタの書き換えを理由に"blocked"を返す。例外にするとフローの再試行が走るため。
+      const afterFailureReason = await recordedGitPointerStopReason(
+        recordedPointer,
+        (expected) => assertWorktreeGitPointer(worktree_dir, expected),
+      );
+      if (afterFailureReason !== null) {
+        return {
+          outcome: "blocked",
+          reason: afterFailureReason,
+          summary: "",
+          replies: [],
+          commit_subject: null,
+          commit_body: null,
+        };
+      }
       throw new Error(
         `pr_fix_apply: claude run failed (${result.reason}): ${result.detail}`,
       );

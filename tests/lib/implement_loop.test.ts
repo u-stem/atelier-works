@@ -1063,10 +1063,42 @@ describe("runImplementVerifyLoop", () => {
     expect(h.events.slice(1, 3)).toEqual(["pointer", "fingerprint"]);
   });
 
-  test("checks the .git pointer again after a fix round", async () => {
+  test("checks the .git pointer before and after a fix round", async () => {
     const h = harness({ checks: [[FAIL], [PASS]], fingerprints: [FP_1, FP_2] });
     await run(h);
-    expect(h.events.filter((event) => event === "pointer")).toHaveLength(2);
+    expect(h.events.filter((event) => event === "pointer")).toHaveLength(3);
+  });
+
+  test("checks the .git pointer right before starting a fix round", async () => {
+    const h = harness({ checks: [[FAIL], [PASS]], fingerprints: [FP_1, FP_2] });
+    await run(h);
+    const afterChecks = h.events.indexOf("checks") + 1;
+    expect(h.events.slice(afterChecks, afterChecks + 2)).toEqual([
+      "lease",
+      "pointer",
+    ]);
+  });
+
+  test("does not start a fix round when the checks changed the .git pointer", async () => {
+    const h = harness({
+      checks: [[FAIL], [PASS]],
+      fingerprints: [FP_1, FP_2],
+      pointerError: { from: 1, error: new WorktreeGitPointerModifiedError() },
+    });
+    await run(h);
+    expect(h.fixRequests).toHaveLength(0);
+  });
+
+  test("exits git_pointer_modified when the checks changed the .git pointer", async () => {
+    const h = harness({
+      checks: [[FAIL], [PASS]],
+      fingerprints: [FP_1, FP_2],
+      pointerError: { from: 1, error: new WorktreeGitPointerModifiedError() },
+    });
+    expect(await run(h)).toMatchObject({
+      exit: "git_pointer_modified",
+      reason: "worktree git pointer was modified",
+    });
   });
 
   test("exits git_pointer_modified when the .git pointer changed", async () => {
@@ -1113,7 +1145,7 @@ describe("runImplementVerifyLoop", () => {
     const h = harness({
       checks: [[FAIL], [PASS]],
       fingerprints: [FP_1, FP_2],
-      pointerError: { from: 1, error: new WorktreeGitPointerModifiedError() },
+      pointerError: { from: 2, error: new WorktreeGitPointerModifiedError() },
     });
     expect((await run(h)).exit).toBe("git_pointer_modified");
   });
