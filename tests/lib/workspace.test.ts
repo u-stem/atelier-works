@@ -58,6 +58,7 @@ import {
   resolveDefaultBranchName,
   runCommand,
   runGitleaksOnWorktree,
+  SpawnError,
   scannedTreeStopReasons,
   stagedTreeSha,
   verifyWorktreeGitdir,
@@ -123,6 +124,24 @@ describe("createBunCommandRunner timeoutMs validation", () => {
   test("rejects a non-finite timeoutMs before spawning", async () => {
     const run = createBunCommandRunner();
     await expect(run(["true"], { timeoutMs: Number.NaN })).rejects.toThrow();
+  });
+});
+
+describe("createBunCommandRunner spawn failure", () => {
+  const MISSING_COMMAND = "/nonexistent/factory-test-command";
+
+  test("rejects with a SpawnError when the command cannot be started", async () => {
+    const run = createBunCommandRunner();
+    await expect(run([MISSING_COMMAND])).rejects.toBeInstanceOf(SpawnError);
+  });
+
+  test("keeps the error code of the failed spawn", async () => {
+    const run = createBunCommandRunner();
+    const error = await run([MISSING_COMMAND]).then(
+      () => null,
+      (err: unknown) => err,
+    );
+    expect(error instanceof SpawnError ? error.code : null).toBe("ENOENT");
   });
 });
 

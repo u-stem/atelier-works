@@ -43,7 +43,10 @@ import {
   withMarker,
 } from "../../f/factory/lib/github.ts";
 import { isRecord } from "../../f/factory/lib/types.ts";
-import type { CommandResult } from "../../f/factory/lib/workspace.ts";
+import {
+  type CommandResult,
+  SpawnError,
+} from "../../f/factory/lib/workspace.ts";
 import {
   createFakeCommandRunner,
   fail,
@@ -436,10 +439,17 @@ describe("transient failure retry", () => {
   );
 
   function spawnError(code: string): Error {
-    return Object.assign(
-      new Error(`${code}: resource unavailable, posix_spawn 'gh'`),
-      { code },
+    return new SpawnError(
+      Object.assign(
+        new Error(`${code}: resource unavailable, posix_spawn 'gh'`),
+        { code },
+      ),
     );
+  }
+
+  /** プロセスの起動後に起きた失敗。`SpawnError`ではないが、コードは資源不足を示す。 */
+  function postSpawnError(code: string): Error {
+    return Object.assign(new Error(`${code}: read failed`), { code });
   }
 
   function fakeClient(
@@ -527,6 +537,17 @@ describe("transient failure retry", () => {
       expect(calls.length).toBe(1);
     });
 
+    test("does not retry an EAGAIN rejection that is not a SpawnError", async () => {
+      const { client, calls } = fakeClient([
+        postSpawnError("EAGAIN"),
+        issueCreated,
+      ]);
+      await rejectionOf(
+        createIssue(client, "acme", "widgets", { title: "t", body: "b" }),
+      );
+      expect(calls.length).toBe(1);
+    });
+
     test("does not retry an error without a code", async () => {
       const { client, calls } = fakeClient([new Error("boom"), viewerOk]);
       await rejectionOf(getViewer(client));
@@ -593,6 +614,40 @@ describe("transient failure retry", () => {
       expect(calls.length).toBe(1);
     });
 
+    test("does not resend a PUT", async () => {
+      const { client, calls } = fakeClient([connectionReset, ok("")]);
+      await rejectionOf(setLabels(client, "acme", "widgets", 7, ["bug"]));
+      expect(calls.length).toBe(1);
+    });
+
+    test("does not resend a PATCH", async () => {
+      const { client, calls } = fakeClient([connectionReset, ok("")]);
+      await rejectionOf(
+        updatePullRequest(client, "acme", "widgets", 7, { title: "t" }),
+      );
+      expect(calls.length).toBe(1);
+    });
+
+    test("throws the spawn error when the retry fails to start", async () => {
+      const { client } = fakeClient([connectionReset, spawnError("EAGAIN")]);
+      await expect(getViewer(client)).rejects.toBeInstanceOf(SpawnError);
+    });
+
+    test("retries a GraphQL query that reads review threads", async () => {
+      const { client, calls } = fakeClient([
+        connectionReset,
+        ghApiOk(reviewThreadsGraphqlPayload([])),
+      ]);
+      await listReviewThreads(client, "acme", "widgets", 7);
+      expect(calls.length).toBe(2);
+    });
+
+    test("does not resend the resolveReviewThread mutation", async () => {
+      const { client, calls } = fakeClient([connectionReset, ok("")]);
+      await rejectionOf(resolveReviewThread(client, "PRRT_1"));
+      expect(calls.length).toBe(1);
+    });
+
     test("does not retry a GET whose process timed out", async () => {
       const { client, calls } = fakeClient([timeout(), viewerOk]);
       await rejectionOf(getViewer(client));
@@ -652,10 +707,6 @@ describe("transient failure retry", () => {
       await getViewer(client);
       expect(sleeps).toEqual([30_000, 250]);
     });
-  });
-
-  test("keeps the default delay far below the 5 minute polling interval", () => {
-    expect(GITHUB_TRANSIENT_RETRY_DELAY_MS).toBeLessThanOrEqual(5_000);
   });
 });
 

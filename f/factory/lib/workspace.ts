@@ -68,6 +68,27 @@ export type CommandRunner = (
   options?: CommandRunOptions,
 ) => Promise<CommandResult>;
 
+/**
+ * プロセスを起動できなかったときに`CommandRunner`が投げる。
+ * `Bun.spawn`の呼び出しだけを包むので、このエラーが出たなら、コマンドは1行も実行されていない。
+ * 起動の後の失敗(出力の読み取りの失敗など)は含まれない。
+ * 呼び出し側は、副作用が起きていないことの根拠にできる。
+ * 元のエラーの`code`(`EAGAIN`、`ENOENT`など)、`errno`、`syscall`を引き継ぐ。
+ */
+export class SpawnError extends Error {
+  readonly code: string | undefined;
+  readonly errno: number | undefined;
+  readonly syscall: string | undefined;
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause));
+    this.name = "SpawnError";
+    const fields = isRecord(cause) ? cause : {};
+    this.code = isString(fields.code) ? fields.code : undefined;
+    this.errno = isNumber(fields.errno) ? fields.errno : undefined;
+    this.syscall = isString(fields.syscall) ? fields.syscall : undefined;
+  }
+}
+
 const DEFAULT_TIMEOUT_MS = 60_000;
 /** setTimeoutが受け付ける上限(2^31-1ミリ秒)。超えると約1ミリ秒に丸められ、即時にタイムアウトしてしまう。 */
 const MAX_TIMER_MS = 2 ** 31 - 1;
@@ -328,6 +349,23 @@ export function boundedTimerMs(ms: number): number {
   return Math.min(Math.max(ms, 0), MAX_TIMER_MS);
 }
 
+/** `Bun.spawn`の呼び出しだけを包み、起動の失敗を`SpawnError`にして投げる。 */
+function spawnProcess(argv: readonly string[], runOptions: CommandRunOptions) {
+  try {
+    return Bun.spawn({
+      cmd: [...argv],
+      ...(runOptions.cwd !== undefined ? { cwd: runOptions.cwd } : {}),
+      env: runOptions.env !== undefined ? { ...runOptions.env } : {},
+      stdin: runOptions.stdin !== undefined ? "pipe" : "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+      detached: true,
+    });
+  } catch (error) {
+    throw new SpawnError(error);
+  }
+}
+
 /**
  * `Bun.spawn`で新しいセッション(プロセスグループ)として起動する`CommandRunner`を作って返す。
  * タイムアウトしたらグループにSIGTERMを送り、`killGraceMs`後にSIGKILLを送る。
@@ -346,15 +384,7 @@ export function createBunCommandRunner(
     const timeoutMs = boundedTimerMs(
       runOptions.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     );
-    const proc = Bun.spawn({
-      cmd: [...argv],
-      ...(runOptions.cwd !== undefined ? { cwd: runOptions.cwd } : {}),
-      env: runOptions.env !== undefined ? { ...runOptions.env } : {},
-      stdin: runOptions.stdin !== undefined ? "pipe" : "ignore",
-      stdout: "pipe",
-      stderr: "pipe",
-      detached: true,
-    });
+    const proc = spawnProcess(argv, runOptions);
 
     if (
       runOptions.stdin !== undefined &&

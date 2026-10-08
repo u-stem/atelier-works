@@ -26,7 +26,11 @@ import type {
   LabelerAssociation,
 } from "./types.ts";
 import { assertBranchName, assertGitHubName } from "./types.ts";
-import type { CommandResult, CommandRunner } from "./workspace.ts";
+import {
+  type CommandResult,
+  type CommandRunner,
+  SpawnError,
+} from "./workspace.ts";
 
 /** エンドポイントやURLを組み立てる前に、`owner/repo`の両方を検証する。 */
 function validateOwnerRepo(owner: string, repo: string): void {
@@ -238,6 +242,12 @@ export type GhApiCallOptions = {
   /** JSONに直列化できる要求の本文。`--input -`で渡す。 */
   readonly body?: unknown;
   readonly acceptHeader?: string;
+  /**
+   * 同じ要求を何度送っても、GitHub上の状態が変わらないか。
+   * 応答の無い通信断で再送してよいかの判断に使う。省略するとGETだけが該当する。
+   * GraphQLの読み取りのqueryはPOSTで送るので、呼び出し側が`true`を明示する。
+   */
+  readonly idempotent?: boolean;
 };
 
 /**
@@ -260,12 +270,14 @@ const TRANSIENT_SPAWN_ERROR_CODES: ReadonlySet<string> = new Set([
   "ENOMEM",
 ]);
 
+/**
+ * `SpawnError`(プロセスを起動する前の失敗)で、コードが資源の一時不足を示すかを返す。
+ * 起動の後に起きた失敗は、同じコードを持っていても、要求が届いた可能性があるので対象にしない。
+ */
 function isTransientSpawnError(error: unknown): boolean {
-  if (typeof error !== "object" || error === null) return false;
-  if (!("code" in error)) return false;
+  if (!(error instanceof SpawnError)) return false;
   return (
-    typeof error.code === "string" &&
-    TRANSIENT_SPAWN_ERROR_CODES.has(error.code)
+    error.code !== undefined && TRANSIENT_SPAWN_ERROR_CODES.has(error.code)
   );
 }
 
@@ -315,7 +327,10 @@ async function attemptGhApi(
 
 /** 同じ要求をもう一度送っても、GitHub上の状態が1回目の成否に左右されないか。 */
 function isIdempotentRequest(options: GhApiCallOptions): boolean {
-  return options.method === undefined || options.method === "GET";
+  return (
+    options.idempotent ??
+    (options.method === undefined || options.method === "GET")
+  );
 }
 
 /**
@@ -324,7 +339,7 @@ function isIdempotentRequest(options: GhApiCallOptions): boolean {
  * - 応答の無い通信断: 要求が届いた後に応答だけが失われたかもしれない。
  *   届いていた場合、コメント・レビュー・ラベル・PRの作成などの変更は二重に実行される。
  *   そのため、何度送っても結果が変わらないGETに限って再試行する。
- *   変更を伴う要求は再試行せず、これまでどおりHTTP 0の失敗として記録する。
+ *   変更を伴う要求は再試行せず、HTTP 0の失敗として記録する。
  */
 function isRetryable(
   attempt: GhApiAttempt,
@@ -2091,16 +2106,20 @@ function isGraphqlDataPayload(value: unknown): value is GraphqlDataPayload {
  * JSONの本文を解析し、`errors`が空でない配列なら例外を投げる
  * (`RATE_LIMITED`なら`GitHubRateLimitError`、それ以外は一般のエラー)。こうして、
  * HTTPのステータスだけを確かめた呼び出し側がGraphQLの失敗を成功と取り違えないようにする。
+ * `idempotent`は、読み取りのqueryなら`true`、mutationなら`false`にする。
+ * `true`のときだけ、応答の無い通信断を再試行する(`isRetryable`を参照)。
  */
 async function callGhGraphql(
   client: GhClient,
   query: string,
   variables: Record<string, unknown>,
   context: string,
+  idempotent: boolean,
 ): Promise<unknown> {
   const response = await callGhApi(client, "graphql", {
     method: "POST",
     body: { query, variables },
+    idempotent,
   });
   ensureSuccess(response, context);
   const parsed = parseJsonBody(response, context);
@@ -2343,6 +2362,7 @@ export async function listReviewThreads(
     query,
     { owner, repo, number },
     context,
+    true,
   );
   if (!isReviewThreadsGraphqlPayload(data)) {
     throw new Error(`${context}: unexpected response shape`);
@@ -2396,6 +2416,7 @@ export async function resolveReviewThread(
     mutation,
     { id: threadId },
     `GraphQL resolveReviewThread ${threadId}`,
+    false,
   );
 }
 
