@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   busyWorktreeNoticeMessage,
+  dirsNotYetVisited,
   excludeActiveWorktrees,
   formatDiskUsageMessage,
   groupByRepo,
@@ -385,6 +386,27 @@ describe("unresolvedHoldersNoticeMessage", () => {
     expect(unresolvedHoldersNoticeMessage("acme", "widgets")).toContain(
       "acme/widgets",
     );
+  });
+});
+
+describe("dirsNotYetVisited", () => {
+  // 同じworktreeは複数の終端の作業項目(実装のpr_openと、ラウンドごとのpr_fix)から選ばれうる。
+  test("drops a worktree already removed in this run", () => {
+    expect(
+      dirsNotYetVisited(["/w/a", "/w/b"], {
+        removed: new Set(["/w/a"]),
+        skippedBusy: new Set(),
+      }),
+    ).toEqual(["/w/b"]);
+  });
+
+  test("drops a worktree already skipped as busy in this run", () => {
+    expect(
+      dirsNotYetVisited(["/w/a", "/w/b"], {
+        removed: new Set(),
+        skippedBusy: new Set(["/w/b"]),
+      }),
+    ).toEqual(["/w/a"]);
   });
 });
 

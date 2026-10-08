@@ -146,6 +146,23 @@ export function excludeActiveWorktrees(
   return targetDirs.filter((dir) => !held.has(dir));
 }
 
+/**
+ * `targetDirs`から、この掃除の実行ですでに扱ったworktree(消したものと、使用中で飛ばしたもの)を除いて返す。
+ * 同じworktreeは複数の終端の作業項目(実装の`pr_open`と、ラウンドごとのpr_fixなど)から選ばれうる。
+ * 除かないと、使用中のworktreeを作業項目の数だけ確かめ直し、同じnoticeを重ねて残すため。
+ */
+export function dirsNotYetVisited(
+  targetDirs: readonly string[],
+  visited: {
+    readonly removed: ReadonlySet<string>;
+    readonly skippedBusy: ReadonlySet<string>;
+  },
+): string[] {
+  return targetDirs.filter(
+    (dir) => !visited.removed.has(dir) && !visited.skippedBusy.has(dir),
+  );
+}
+
 // ---------------------------------------------------------------------------
 // groupByRepo: 古い作業項目の一覧を(owner, repo)ごとにまとめる
 // ---------------------------------------------------------------------------
