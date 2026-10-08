@@ -193,7 +193,8 @@ Consoleは`/console/`でWindmillと同じオリジンから配信する。Consol
 - **取り込むもの**: `main`へのpushで動き、全体が成功した`ci.yml`の実行の成果物`console-dist`だけ。zip全体のsha256をGitHubの`digest`と、展開した全ファイルのsha256を`manifest.json`と照合し、マニフェストが実行のcommitのものであることを確かめてから書く。zipは自前のreaderでメモリ上に展開し、`..`・絶対パス・symlink・通常のファイル以外・暗号化・zip64を拒む。
 - **CIの組み立て**: `bun install --frozen-lockfile --ignore-scripts`で、依存のinstall scriptを実行しない。`console/bun.lock`は`scripts/check-console-lockfile.ts`で、registry由来でsha512のintegrityが付いた依存だけであることを検査する(git・GitHub・tarballのURL、`console/`の外を指す`file:` / `link:`、`trustedDependencies`を拒む)。
 - **ブラウザ側**: `/console/*`の応答(404とfallbackを含む)だけに、`script-src`を`/console/assets/`に絞ったCSP(`'unsafe-inline'`・`'unsafe-eval'`なし)、`frame-ancestors 'none'`、`X-Frame-Options: DENY`、`nosniff`、`Referrer-Policy: same-origin`、`Cross-Origin-Opener-Policy: same-origin`を付ける。Trusted Typesは`Content-Security-Policy-Report-Only`で様子を見る。Windmill(`/`と`/api/*`)にはこれらを付けない。
-- **他のサイトからのAPIの呼び出し**: `/api/*`への要求で`Sec-Fetch-Site`が`cross-site`か`same-site`のものは、Caddyが403にする。他のポートのlocalhostや外部のリンクから、運用者のCookieでAPIを実行させないため。WindmillのフロントエンドはSec-Fetch-Site: same-originを送り、CLI(`wmill`)はこのヘッダーを送らない。Windmill 1.817.0のraw app(旧Console)は既定でsandboxが無く、`backend.*`の呼び出しは`parent.postMessage`を通して同じオリジンの親(WindmillのSPA)が行うので、これも`same-origin`になる。raw appのsandboxを有効にすると、バンドルの取得(`GET /api/w/*/apps_u/get_data/v/*`)がcross-siteになって403になるので、その経路を例外にする必要がある。
+- **CSPとCaddyのパスの解釈の違い**: ブラウザはパスの`%2f`を区切りとみなさないので、`/console/assets/..%2f..%2fapi/...`は`script-src`の`/console/assets/`に合う。一方Caddyは区切りに戻して正規化するので、そのままでは`/api/...`としてWindmillへ転送され、Windmillの応答をscriptとして読ませる経路になる。そこで、生のURIが`/console`で始まる要求はWindmillへ転送せず404にし、Consoleの経路では生のパスに`%2f`か`%5c`(大文字小文字を問わない)があれば400にする。Consoleの画面のURLに符号化した区切りを使ってはいけない。
+- **他のサイトからのAPIの呼び出し**: `/api/*`への要求で`Sec-Fetch-Site`が`cross-site`か`same-site`のものは、Caddyが403にする。他のポートのlocalhostや外部のリンクから、運用者のCookieでAPIを実行させないため。Windmillのフロントエンドからの要求にはブラウザが`Sec-Fetch-Site: same-origin`を付け、CLI(`wmill`)はこのヘッダーを送らない。Windmill 1.817.0のraw app(旧Console)は既定でsandboxが無く、`backend.*`の呼び出しは`parent.postMessage`を通して同じオリジンの親(WindmillのSPA)が行うので、これも`same-origin`になる。raw appのsandboxを有効にすると、バンドルの取得(`GET /api/w/*/apps_u/get_data/v/*`)がcross-siteになって403になるので、その経路を例外にする必要がある。
 - **秘密**: Consoleのバンドルは認証なしで配信されるので、`VITE_*`の変数に秘密を入れない。
 
 残るリスク:
@@ -201,6 +202,9 @@ Consoleは`/console/`でWindmillと同じオリジンから配信する。Consol
 - `main`にマージされたコードは、そのまま運用者のブラウザで動く。Consoleの変更のレビューは、Windmillの管理者権限を持つコードのレビューとして行う。
 - CIの組み立ての途中で動く依存(Viteのプラグインなど)が侵害されると、出力が改ざんされうる。`digest`とマニフェストが保証するのは「GitHubのCIが作ったもの」であることまでで、依存の中身ではない。
 - `Sec-Fetch-Site`をブラウザが送るのは、信頼できるオリジン(localhostかHTTPS)のときだけ。`WM_BIND`を外向きにしてHTTPで公開すると、このヘッダーが届かず防御が効かない。外向きにするならHTTPSにする。
+- `Sec-Fetch-Site`の規則が効くのは`/api/*`だけ。`windmill_extra`の経路(`/ws/*`、`/ws_mp/*`、`/ws_debug/*`)には効かない。
+- 共有の`assets/`には古い版のファイルも残る(どの版からも参照されなくなってから14日で消える)。その間は`script-src`で読み込めるので、XSSの足がかり(script gadget)に使われうる。
+- Trusted TypesのReport-Onlyの方針には報告先が無い。違反はブラウザの開発者ツールのコンソールにしか出ない。
 - `console_fetcher`の外への通信はnetworkでは絞れない。コードが侵害されれば任意の宛先へ出られる。
 - `console_egress`は通常のbridgeなので、`WM_BIND`を外向き(`0.0.0.0`など)にすると、`console_fetcher`からホストのゲートウェイのIP経由でCaddy(つまりWindmill)に届く。`console_fetcher`はWindmillの資格情報を持たないが、認証の要らない経路には届く。
 - `CONSOLE_GITHUB_TOKEN`は`docker inspect`できる人(ホストのdockerを使える人)には見える。

@@ -12,18 +12,30 @@
         }
 }
 
+# CSPはパスの`%2f`を区切りとみなさないが、Caddyは区切りに戻してから振り分ける。
+# `/console/assets/..%2f...`がscript-srcを通ったまま別のファイルを指さないよう、
+# 生のパスに符号化した区切り(`%2f`と`%5c`)があれば400にする。
+(console_reject_encoded_separator) {
+        @encoded_separator expression `{http.request.orig_uri}.matches("(?i)^[^?]*%(2f|5c)")`
+        error @encoded_separator 400
+}
+
 {$BASE_URL} {
         # `ADDRESS`が未設定なら、すべてのインターフェース(IPv4とIPv6)で待ち受ける。
         # 値が空の`bind {$ADDRESS}`だと、Caddy 2.9以降はこのサイト全体を捨てる。
         # :25のlayer4のリスナーは動いたまま、HTTPのプロキシだけが黙って止まる。
         bind {$ADDRESS:0.0.0.0 ::}
 
-        redir /console /console/ 308
+        handle /console {
+                import console_headers
+                redir * /console/ 308
+        }
 
         # Consoleの共有のassets。ハッシュ付きの名前なので長期のキャッシュにする。
         # 無いファイルはindex.htmlに落とさず404にする(handle_errorsが返す)。
         handle_path /console/assets/* {
                 import console_headers
+                import console_reject_encoded_separator
                 root * /srv/console/assets
                 header Cache-Control "public, max-age=31536000, immutable"
                 file_server
@@ -33,6 +45,7 @@
         # index.htmlは毎回確かめさせる(付け替えの後、すぐ新しい版を読ませるため)。
         handle_path /console/* {
                 import console_headers
+                import console_reject_encoded_separator
                 root * /srv/console/current
                 header Cache-Control "no-cache"
                 try_files {path} /index.html
@@ -46,9 +59,10 @@
         }
 
         # 他のサイト(別のポートのlocalhostを含む)から、運用者のCookieでAPIを呼ばせない。
-        # WindmillのフロントエンドはSec-Fetch-Site: same-originを送り、CLIはこのヘッダーを送らない。
-        # ブラウザがこのヘッダーを送るのはlocalhostかHTTPSのときだけなので、
+        # Windmillのフロントエンドからの要求にはブラウザがSec-Fetch-Site: same-originを付け、
+        # CLIはこのヘッダーを送らない。ブラウザがこのヘッダーを送るのはlocalhostかHTTPSのときだけなので、
         # WM_BINDを外向きのHTTPにするとこの防御は効かない(docs/security.mdを参照)。
+        # /ws/*などwindmill_extraの経路には効かない。
         @cross_site_api {
                 path /api/*
                 header Sec-Fetch-Site cross-site
@@ -58,17 +72,24 @@
         # 検索インデクサ。Enterprise Edition用(windmill_indexer:8002)
         # reverse_proxy /api/srch/* http://windmill_indexer:8002
 
+        # 生のURIが/consoleで始まるのに上のConsoleの経路に入らなかった要求
+        # (`/console/..%2fapi/...`のようにCaddyの正規化でConsoleの外に出たもの)は、
+        # Windmillへ転送せず404にする。handle_errorsでもConsoleの応答の判定に使う。
+        @console_raw expression `{http.request.orig_uri}.matches("(?i)^/console")`
+        handle @console_raw {
+                error 404
+        }
+
         # 既定の転送先: Windmillのサーバー
         handle {
                 respond @cross_site_api 403
                 reverse_proxy http://windmill_server:8000
         }
 
-        # file_serverのエラー(Consoleの無いassets、currentがまだ無いとき)にもConsoleのヘッダーを付ける。
-        # Console以外のエラーは、これまでどおりCaddyの既定の応答にする。
+        # Consoleのエラー(無いassets、currentがまだ無いとき、符号化した区切り、上の404)にも
+        # Consoleのヘッダーを付ける。Console以外のエラーはCaddyの既定の応答にする。
         handle_errors {
-                @console path /console /console/*
-                handle @console {
+                handle @console_raw {
                         import console_headers
                         header Cache-Control "no-store"
                         respond "{err.status_code} {err.status_text}" {err.status_code}
