@@ -21,6 +21,7 @@ if [ "${CI:-}" = "true" ]; then
 
 Windmillのメタデータが最新ではありません。
 ローカルでWindmillを起動した状態(`mise run up`)で`mise run metadata`を実行し、更新されたファイルをコミットしてpushし直してください。
+上の出力が古い項目の一覧ではなく、接続やログインのエラーのときは、`Show diagnostics`ステップのサーバーのログを確かめてください。
 MESSAGE
 else
   cat <<'MESSAGE'

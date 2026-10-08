@@ -162,7 +162,8 @@ jobs:
         # ただし`main`へのpushは、差分に関わらず常に検査する。
         # `main`のCIの結論は、`main`全体の状態を表すものとして使うため、
         # pushした範囲だけでなく、ツリー全体を検査した結果でなければならない。
-        # 差分の基点が無いとき(新しいブランチの初回pushなど)と、差分を取れないとき
+        # 新しいブランチの初回push(`before`がすべて0か空)は、`origin/main`とのマージ基点を差分の基点にする。
+        # マージ基点を求められないときと、差分を取れないとき
         # (force pushで`before`が履歴から消えたなど)は、安全側に倒して検査する。
         id: scope
         env:
@@ -185,6 +186,12 @@ jobs:
           elif [ "$EVENT_NAME" = "push" ] && [ "$BEFORE_SHA" != "$zero" ] && [ -n "$BEFORE_SHA" ]; then
             from="$BEFORE_SHA"
             to="$AFTER_SHA"
+          elif [ "$EVENT_NAME" = "push" ]; then
+            # 初回pushの基点。求められなければ`from`は空のままで、検査する。
+            if base="$(git merge-base origin/main "$AFTER_SHA")"; then
+              from="$base"
+              to="$AFTER_SHA"
+            fi
           fi
           run="true"
           if [ -n "$from" ]; then
