@@ -98,6 +98,7 @@ atelier-works/
   lefthook.yml                     # pre-commit、commit-msg、pre-pushのフック
   console/                         # Factory Console(Vite + React)。CIが組み立て、console_fetcherが取り込む
   c_factory_config.resource-type.yaml / rt.d.ts   # factory_configのresource typeと生成した型
+  .claude/agents/                  # Claude Codeのsubagentの定義
   .claude/skills/                  # Claude Codeの自作スキルと、wmillが生成した管理スキル
   .agents/skills/                  # wmillが生成した共有のエージェントスキル
   .github/                         # CI、Issueのテンプレート、PRのテンプレート
