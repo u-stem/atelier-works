@@ -571,6 +571,52 @@ describe("runClaude", () => {
     });
   });
 
+  test("adds the beforeRetry error to the failure detail", async () => {
+    const fake = createFakeCommandRunner([
+      { stdout: "not json", stderr: "", exitCode: 0, timedOut: false },
+    ]);
+    const result = await runClaude({
+      ...baseOptions(fake.run),
+      beforeRetry: async () => {
+        throw new Error("EIO: cannot read .git");
+      },
+    });
+    expect(result).toMatchObject({
+      detail: expect.stringContaining(
+        "retry check failed: EIO: cannot read .git",
+      ),
+    });
+  });
+
+  test("masks a secret-looking value in the beforeRetry error", async () => {
+    const token = `ghp_${"a".repeat(36)}`;
+    const fake = createFakeCommandRunner([
+      { stdout: "not json", stderr: "", exitCode: 0, timedOut: false },
+    ]);
+    const result = await runClaude({
+      ...baseOptions(fake.run),
+      beforeRetry: async () => {
+        throw new Error(`fetch failed with ${token}`);
+      },
+    });
+    expect(result.outcome === "failure" ? result.detail : "").not.toContain(
+      token,
+    );
+  });
+
+  test("keeps the failure detail as is when beforeRetry refuses without an error", async () => {
+    const fake = createFakeCommandRunner([
+      { stdout: "not json", stderr: "", exitCode: 0, timedOut: false },
+    ]);
+    const result = await runClaude({
+      ...baseOptions(fake.run),
+      beforeRetry: async () => false,
+    });
+    expect(result.outcome === "failure" ? result.detail : "").not.toContain(
+      "retry check failed",
+    );
+  });
+
   test("retries when beforeRetry allows it", async () => {
     const fake = createFakeCommandRunner([
       { stdout: "not json", stderr: "", exitCode: 0, timedOut: false },

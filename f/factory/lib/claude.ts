@@ -602,6 +602,7 @@ const RETRYABLE_REASONS: readonly RunClaudeFailureReason[] = [
  * 再試行したときは、最初の試行の記録(費用を含む)を`discardedAgentRun`で返す。
  * `deadlineAt`を過ぎていれば起動せずにtimeoutの失敗を返し、過ぎた後は再試行しない。
  * `beforeRetry`がfalseを返したとき、例外を投げたときも再試行せず、最初の失敗を返す。
+ * 例外を投げたときは、秘密を伏せたメッセージを最初の失敗の`detail`に足す。
  */
 export async function runClaude<T>(
   opts: RunClaudeOptions<T>,
@@ -632,7 +633,17 @@ export async function runClaude<T>(
     }
     retryNote = opts.retryNote ?? DEFAULT_RETRY_NOTE;
   }
-  if (!(await retryAllowed(opts))) return { ...first, retried: false };
+  const decision = await retryDecision(opts);
+  if (!decision.allowed) {
+    if (first.outcome === "failure" && decision.checkError !== null) {
+      return {
+        ...first,
+        detail: `${first.detail} (retry check failed: ${decision.checkError})`,
+        retried: false,
+      };
+    }
+    return { ...first, retried: false };
+  }
 
   const retryPrompt = `${opts.prompt}\n\n${retryNote}`;
   const second = await attemptClaude(opts, retryPrompt);
@@ -681,19 +692,37 @@ async function reviewIssues<T>(
 }
 
 /**
+ * `retryDecision`の結果。再試行しないときの`checkError`は、`beforeRetry`が投げた例外のメッセージ
+ * (`failureDetail`で秘密を伏せ、区切りを置き換えたもの)で、例外が無ければnullである。
+ */
+type RetryDecision =
+  | { readonly allowed: true }
+  | { readonly allowed: false; readonly checkError: string | null };
+
+/**
  * 期限と`beforeRetry`で、再試行してよいかを決める。
  * 確かめ自体が失敗しても再試行しない。例外にすると最初の試行の記録(費用)を
- * 呼び出し側が記録できないため、falseを返して最初の結果を返させる。
+ * 呼び出し側が記録できないため、再試行しない結果にして最初の結果を返させる。
+ * 原因を追えるよう、例外のメッセージを`checkError`で返す。
  */
-async function retryAllowed<T>(opts: RunClaudeOptions<T>): Promise<boolean> {
+async function retryDecision<T>(
+  opts: RunClaudeOptions<T>,
+): Promise<RetryDecision> {
   if (opts.deadlineAt !== undefined && attemptTimeoutMs(opts) <= 0) {
-    return false;
+    return { allowed: false, checkError: null };
   }
-  if (opts.beforeRetry === undefined) return true;
+  if (opts.beforeRetry === undefined) return { allowed: true };
   try {
-    return await opts.beforeRetry();
-  } catch {
-    return false;
+    return (await opts.beforeRetry())
+      ? { allowed: true }
+      : { allowed: false, checkError: null };
+  } catch (err) {
+    return {
+      allowed: false,
+      checkError: failureDetail(
+        err instanceof Error ? err.message : String(err),
+      ),
+    };
   }
 }
 

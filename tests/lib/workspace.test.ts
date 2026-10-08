@@ -2488,7 +2488,7 @@ describe("withCommitTrailers", () => {
 describe("commitAndPush", () => {
   test("returns head_changed when the remote branch moved", async () => {
     const fake = commitAndPushCalls([
-      ok("fix/branch\n"), // rev-parse --abbrev-ref HEAD
+      ok("refs/heads/fix/branch\n"), // symbolic-ref -q HEAD
       ok(), // fetch origin fix/branch
       ok(`${OTHER_SHA}\n`), // rev-parse --verify origin/fix/branch
     ]);
@@ -2509,7 +2509,7 @@ describe("commitAndPush", () => {
 
   test("fetches without recursing into submodules", async () => {
     const fake = commitAndPushCalls([
-      ok("fix/branch\n"),
+      ok("refs/heads/fix/branch\n"),
       ok(),
       ok(`${OTHER_SHA}\n`),
     ]);
@@ -2535,7 +2535,7 @@ describe("commitAndPush", () => {
 
   test("runs local git without replace objects", async () => {
     const fake = commitAndPushCalls([
-      ok("fix/branch\n"),
+      ok("refs/heads/fix/branch\n"),
       ok(),
       ok(`${OTHER_SHA}\n`),
     ]);
@@ -2556,7 +2556,7 @@ describe("commitAndPush", () => {
 
   test("runs network git without replace objects", async () => {
     const fake = commitAndPushCalls([
-      ok("fix/branch\n"),
+      ok("refs/heads/fix/branch\n"),
       ok(),
       ok(`${OTHER_SHA}\n`),
     ]);
@@ -2599,28 +2599,63 @@ describe("commitAndPush", () => {
     }
 
     test("throws CommitBlockedError when HEAD is on another branch", async () => {
-      const fake = commitAndPushCalls([ok("main\n")]);
+      const fake = commitAndPushCalls([ok("refs/heads/main\n")]);
       await expect(commitAndPush(guardedOptions(fake.run))).rejects.toThrow(
         "local HEAD is not on branch fix/branch",
       );
     });
 
     test("throws CommitBlockedError when HEAD is detached", async () => {
-      const fake = commitAndPushCalls([ok("HEAD\n")]);
+      const fake = commitAndPushCalls([fail("", 1)]);
       await expect(
         commitAndPush(guardedOptions(fake.run)),
       ).rejects.toBeInstanceOf(CommitBlockedError);
     });
 
     test("does not fetch when HEAD is on another branch", async () => {
-      const fake = commitAndPushCalls([ok("main\n")]);
+      const fake = commitAndPushCalls([ok("refs/heads/main\n")]);
       await commitAndPush(guardedOptions(fake.run)).catch(() => {});
       expect(fake.calls).toHaveLength(1);
     });
 
+    test("reads the branch with git symbolic-ref -q HEAD", async () => {
+      const fake = commitAndPushCalls([ok("refs/heads/main\n")]);
+      await commitAndPush(guardedOptions(fake.run)).catch(() => {});
+      expect(fake.calls[0]?.argv.slice(-3)).toEqual([
+        "symbolic-ref",
+        "-q",
+        "HEAD",
+      ]);
+    });
+
+    test("throws CommitBlockedError when HEAD is a symbolic ref outside refs/heads", async () => {
+      const fake = commitAndPushCalls([ok("refs/remotes/origin/fix/branch\n")]);
+      await expect(
+        commitAndPush(guardedOptions(fake.run)),
+      ).rejects.toBeInstanceOf(CommitBlockedError);
+    });
+
+    test("throws a git error when symbolic-ref fails for a reason other than a detached HEAD", async () => {
+      const fake = commitAndPushCalls([
+        fail("fatal: not a git repository", 128),
+      ]);
+      await expect(commitAndPush(guardedOptions(fake.run))).rejects.toThrow(
+        /git symbolic-ref -q HEAD failed/,
+      );
+    });
+
+    test("throws a git error when symbolic-ref times out", async () => {
+      const fake = commitAndPushCalls([
+        { stdout: "", stderr: "", exitCode: 1, timedOut: true },
+      ]);
+      await expect(commitAndPush(guardedOptions(fake.run))).rejects.toThrow(
+        /git symbolic-ref -q HEAD failed/,
+      );
+    });
+
     test("unstages when the staged inspection throws", async () => {
       const fake = commitAndPushCalls([
-        ok("fix/branch\n"),
+        ok("refs/heads/fix/branch\n"),
         ok(),
         ok(`${HEAD_SHA}\n`),
         ok(`${HEAD_SHA}\n`),
@@ -2639,7 +2674,7 @@ describe("commitAndPush", () => {
 
     test("rethrows the staged inspection's error after unstaging", async () => {
       const fake = commitAndPushCalls([
-        ok("fix/branch\n"),
+        ok("refs/heads/fix/branch\n"),
         ok(),
         ok(`${HEAD_SHA}\n`),
         ok(`${HEAD_SHA}\n`),
@@ -2659,7 +2694,7 @@ describe("commitAndPush", () => {
 
     test("keeps each stop reason a single reason item", async () => {
       const fake = commitAndPushCalls([
-        ok("fix/branch\n"),
+        ok("refs/heads/fix/branch\n"),
         ok(),
         ok(`${HEAD_SHA}\n`),
         ok(`${HEAD_SHA}\n`),
@@ -2681,7 +2716,7 @@ describe("commitAndPush", () => {
 
     test("throws CommitBlockedError when the local HEAD moved off the PR head", async () => {
       const fake = commitAndPushCalls([
-        ok("fix/branch\n"),
+        ok("refs/heads/fix/branch\n"),
         ok(),
         ok(`${HEAD_SHA}\n`),
         ok(`${OTHER_SHA}\n`), // rev-parse --verify HEAD
@@ -2693,7 +2728,7 @@ describe("commitAndPush", () => {
 
     test("names both shas when the local HEAD moved", async () => {
       const fake = commitAndPushCalls([
-        ok("fix/branch\n"),
+        ok("refs/heads/fix/branch\n"),
         ok(),
         ok(`${HEAD_SHA}\n`),
         ok(`${OTHER_SHA}\n`),
@@ -2705,7 +2740,7 @@ describe("commitAndPush", () => {
 
     test("does not stage anything when the local HEAD moved", async () => {
       const fake = commitAndPushCalls([
-        ok("fix/branch\n"),
+        ok("refs/heads/fix/branch\n"),
         ok(),
         ok(`${HEAD_SHA}\n`),
         ok(`${OTHER_SHA}\n`),
@@ -2718,7 +2753,7 @@ describe("commitAndPush", () => {
 
     test("throws CommitBlockedError with the staged inspection's reasons", async () => {
       const fake = commitAndPushCalls([
-        ok("fix/branch\n"),
+        ok("refs/heads/fix/branch\n"),
         ok(),
         ok(`${HEAD_SHA}\n`),
         ok(`${HEAD_SHA}\n`),
@@ -2735,7 +2770,7 @@ describe("commitAndPush", () => {
 
     test("unstages and does not commit after a staged violation", async () => {
       const fake = commitAndPushCalls([
-        ok("fix/branch\n"),
+        ok("refs/heads/fix/branch\n"),
         ok(),
         ok(`${HEAD_SHA}\n`),
         ok(`${HEAD_SHA}\n`),
@@ -2752,7 +2787,7 @@ describe("commitAndPush", () => {
     test("commits when the local HEAD and the staged changes pass", async () => {
       const newSha = "2222222222222222222222222222222222222c";
       const fake = commitAndPushCalls([
-        ok("fix/branch\n"),
+        ok("refs/heads/fix/branch\n"),
         ok(),
         ok(`${HEAD_SHA}\n`),
         ok(`${HEAD_SHA}\n`),
@@ -2774,7 +2809,7 @@ describe("commitAndPush", () => {
     /** 変更をcommitするところまで進む応答に、commitの後の応答を足す。 */
     function committedCalls(after: readonly CommandResult[]) {
       return commitAndPushCalls([
-        ok("fix/branch\n"),
+        ok("refs/heads/fix/branch\n"),
         ok(),
         ok(`${HEAD_SHA}\n`),
         ok(), // git add -A
@@ -2838,7 +2873,7 @@ describe("commitAndPush", () => {
 
     test("undoes the commit back to the expected head when the local HEAD was required there", async () => {
       const fake = commitAndPushCalls([
-        ok("fix/branch\n"),
+        ok("refs/heads/fix/branch\n"),
         ok(),
         ok(`${HEAD_SHA}\n`),
         ok(`${HEAD_SHA}\n`), // rev-parse --verify HEAD(ローカルのHEADの確かめ)
@@ -2870,7 +2905,7 @@ describe("commitAndPush", () => {
 
   test("returns nothing_to_commit when the working tree is clean", async () => {
     const fake = commitAndPushCalls([
-      ok("fix/branch\n"),
+      ok("refs/heads/fix/branch\n"),
       ok(),
       ok(`${HEAD_SHA}\n`),
       ok(), // git add -A
@@ -2894,7 +2929,7 @@ describe("commitAndPush", () => {
   test("commits and pushes when the remote head matches and there are changes", async () => {
     const newSha = "2222222222222222222222222222222222222c";
     const fake = commitAndPushCalls([
-      ok("fix/branch\n"),
+      ok("refs/heads/fix/branch\n"),
       ok(),
       ok(`${HEAD_SHA}\n`),
       ok(),
@@ -2921,7 +2956,7 @@ describe("commitAndPush", () => {
   test("pushes the new commit by its sha instead of HEAD", async () => {
     const newSha = "2222222222222222222222222222222222222c";
     const fake = commitAndPushCalls([
-      ok("fix/branch\n"),
+      ok("refs/heads/fix/branch\n"),
       ok(),
       ok(`${HEAD_SHA}\n`),
       ok(),
@@ -2950,7 +2985,7 @@ describe("commitAndPush", () => {
 
   test("the git commit call's env carries GIT_AUTHOR_EMAIL from the given author", async () => {
     const fake = commitAndPushCalls([
-      ok("fix/branch\n"),
+      ok("refs/heads/fix/branch\n"),
       ok(),
       ok(`${HEAD_SHA}\n`),
       ok(),
@@ -2978,7 +3013,7 @@ describe("commitAndPush", () => {
   test("returns head_changed (not a throw) when push is rejected as non-fast-forward", async () => {
     const raceSha = "3333333333333333333333333333333333333d";
     const fake = commitAndPushCalls([
-      ok("fix/branch\n"), // rev-parse --abbrev-ref HEAD
+      ok("refs/heads/fix/branch\n"), // symbolic-ref -q HEAD
       ok(), // fetch origin fix/branch
       ok(`${HEAD_SHA}\n`), // rev-parse --verify origin/fix/branch(`expectedHeadSha`と一致する)
       ok(), // git add -A
@@ -3008,7 +3043,7 @@ describe("commitAndPush", () => {
 
   test("recognizes a '(non-fast-forward)' phrased rejection too", async () => {
     const fake = commitAndPushCalls([
-      ok("fix/branch\n"),
+      ok("refs/heads/fix/branch\n"),
       ok(),
       ok(`${HEAD_SHA}\n`),
       ok(),
@@ -3036,7 +3071,7 @@ describe("commitAndPush", () => {
 
   test("still throws on a push failure that isn't a non-fast-forward rejection (e.g. permission denied)", async () => {
     const fake = commitAndPushCalls([
-      ok("fix/branch\n"),
+      ok("refs/heads/fix/branch\n"),
       ok(),
       ok(`${HEAD_SHA}\n`),
       ok(),
@@ -3065,7 +3100,7 @@ describe("commitAndPush", () => {
 
   test("calls verifyWorktree before running any git command", async () => {
     const fake = commitAndPushCalls([
-      ok("fix/branch\n"),
+      ok("refs/heads/fix/branch\n"),
       ok(),
       ok(`${HEAD_SHA}\n`),
       ok(),
@@ -3128,7 +3163,7 @@ describe("commitAndPush", () => {
 
   test("the push call (network) carries GH_TOKEN but the commit call (local) does not", async () => {
     const fake = commitAndPushCalls([
-      ok("fix/branch\n"),
+      ok("refs/heads/fix/branch\n"),
       ok(),
       ok(`${HEAD_SHA}\n`),
       ok(),
@@ -3159,7 +3194,7 @@ describe("commitAndPush", () => {
 
   test("the commit message (argv) carries the Claude co-author and Generated-By trailers", async () => {
     const fake = commitAndPushCalls([
-      ok("fix/branch\n"),
+      ok("refs/heads/fix/branch\n"),
       ok(),
       ok(`${HEAD_SHA}\n`),
       ok(),
@@ -3190,7 +3225,7 @@ describe("commitAndPush", () => {
 
   test("throws (not head_changed) when the remote rejects the push, e.g. a PAT without workflow scope", async () => {
     const fake = commitAndPushCalls([
-      ok("factory/issue-7-wi-3\n"),
+      ok("refs/heads/factory/issue-7-wi-3\n"),
       ok(),
       ok(`${HEAD_SHA}\n`),
       ok(),
@@ -3219,7 +3254,7 @@ describe("commitAndPush", () => {
 
   test("still returns head_changed for a plain '[rejected] ... (non-fast-forward)' push", async () => {
     const fake = commitAndPushCalls([
-      ok("main\n"),
+      ok("refs/heads/main\n"),
       ok(),
       ok(`${HEAD_SHA}\n`),
       ok(),
@@ -3243,6 +3278,132 @@ describe("commitAndPush", () => {
       lockFs: createInMemoryLockFs(),
     });
     expect(result.outcome).toBe("head_changed");
+  });
+
+  test("throws without fetching when HEAD is detached and no branch is expected", async () => {
+    const fake = commitAndPushCalls([fail("", 1)]);
+    await expect(
+      commitAndPush({
+        run: fake.run,
+        repoDir: "/repo",
+        dir: "/repo/wt",
+        message: "fix: something",
+        instanceName: "acme-factory",
+        expectedHeadSha: HEAD_SHA,
+        author: TEST_AUTHOR,
+        ghToken: "gh-token",
+        verifyWorktree: noopVerify,
+        lockFs: createInMemoryLockFs(),
+      }),
+    ).rejects.toThrow(/local HEAD is not on a branch/);
+  });
+});
+
+describe("commitAndPush (real git)", () => {
+  const BRANCH = "fix/branch";
+  const roots: string[] = [];
+  afterAll(() => {
+    for (const root of roots) rmSync(root, { recursive: true, force: true });
+  });
+
+  type Fixture = {
+    readonly repo: string;
+    readonly worktree: string;
+    readonly home: string;
+    readonly headSha: string;
+    readonly run: CommandRunner;
+    readonly git: (cwd: string, args: readonly string[]) => Promise<string>;
+  };
+
+  /**
+   * `main`と`fix/branch`を持つoriginのbareリポジトリと、そのcloneの`fix/branch`のworktreeを作り、worktreeのファイルを1つ変える。
+   * `HOME`を一時ディレクトリに向け、システムの設定も読ませないので、利用者のgitの設定に左右されない。
+   */
+  async function setUp(): Promise<Fixture> {
+    const root = mkdtempSync(join(tmpdir(), "commit-and-push-"));
+    roots.push(root);
+    const origin = join(root, "origin.git");
+    const seed = join(root, "seed");
+    const repo = join(root, "repo");
+    const worktree = join(root, "wt");
+    const home = join(root, "home");
+    mkdirSync(seed);
+    mkdirSync(home);
+    const run: CommandRunner = (argv, options) =>
+      runCommand(argv, {
+        ...options,
+        env: {
+          ...options?.env,
+          PATH: process.env.PATH ?? "",
+          HOME: home,
+          GIT_CONFIG_NOSYSTEM: "1",
+        },
+      });
+    const git = async (
+      cwd: string,
+      args: readonly string[],
+    ): Promise<string> => {
+      const result = await run(
+        [
+          "git",
+          "-c",
+          "user.name=test",
+          "-c",
+          "user.email=test@example.invalid",
+          ...args,
+        ],
+        { cwd },
+      );
+      if (result.exitCode !== 0) {
+        throw new Error(`git ${args.join(" ")} failed: ${result.stderr}`);
+      }
+      return result.stdout.trim();
+    };
+    await git(root, ["init", "-q", "--bare", "-b", "main", origin]);
+    await git(seed, ["init", "-q", "-b", "main"]);
+    writeFileSync(join(seed, "README.md"), "readme\n");
+    await git(seed, ["add", "-A"]);
+    await git(seed, ["commit", "-q", "-m", "init"]);
+    await git(seed, [
+      "push",
+      "-q",
+      origin,
+      `main:refs/heads/${BRANCH}`,
+      "main",
+    ]);
+    await git(root, ["clone", "-q", "--no-checkout", origin, repo]);
+    await git(repo, ["branch", "--no-track", BRANCH, `origin/${BRANCH}`]);
+    await git(repo, ["worktree", "add", "-q", worktree, BRANCH]);
+    writeFileSync(join(worktree, "README.md"), "readme\nchanged\n");
+    return {
+      repo,
+      worktree,
+      home,
+      headSha: await git(repo, ["rev-parse", `origin/${BRANCH}`]),
+      run,
+      git,
+    };
+  }
+
+  test("pushes when a tag has the same name as the branch", async () => {
+    const fixture = await setUp();
+    await fixture.git(fixture.repo, ["tag", BRANCH]);
+    const result = await commitAndPush({
+      run: fixture.run,
+      repoDir: fixture.repo,
+      dir: fixture.worktree,
+      message: "fix: something",
+      instanceName: "acme-factory",
+      expectedHeadSha: fixture.headSha,
+      author: TEST_AUTHOR,
+      ghToken: "gh-token",
+      home: fixture.home,
+      verifyWorktree: noopVerify,
+      lockFs: createInMemoryLockFs(),
+      requireLocalHeadAtExpected: true,
+      expectedBranch: BRANCH,
+    });
+    expect(result.outcome).toBe("pushed");
   });
 });
 
@@ -3280,7 +3441,7 @@ describe("repo-wide lock scope (code-review fix)", () => {
 
     await commitAndPush({
       run: createFakeCommandRunner([
-        ok("fix/branch\n"),
+        ok("refs/heads/fix/branch\n"),
         ok(),
         ok("abc1234\n"),
         ok(""),

@@ -2183,6 +2183,8 @@ export type UncommittedChangeLimits = {
  * - ディスク上の種類(`probeChangedPathsOnDisk`)。未追跡のsymlinkを見つける。
  * - HEADと作業ツリーの`git diff --raw`のmode。`core.symlinks=false`のworktreeでは追跡済みのsymlinkが通常のファイルとして置かれ、
  *   中身を書き換えると指す先が変わるが、`readlink`も`lstat`もsymlinkと報告しないため。
+ * 同じ`git diff --raw`のmodeで、gitlink(入れ子のリポジトリ)の変更も止める。
+ * サブモジュールのディレクトリを消したgitlinkの削除は、ディスクに何も残らず、パスにも`.git`が現れないため。
  * これらのどれかで止めるときは、`package.json`の中身と差分の行数を読まない。
  * どちらもファイルを読むので、symlinkの先(worktreeの外や`/dev/zero`)やFIFOを読みうるため。
  * gitはhook・fsmonitor・credential helperを無効にして実行する。
@@ -2200,17 +2202,10 @@ export async function inspectUncommittedChanges(
     changedPaths.map((entry) => entry.path),
     fs.readlink,
   );
-  const rawSymlinkPaths =
+  const raw =
     changedPaths.length === 0
-      ? []
-      : parseRawSymlinkPaths(
-          await readRawDiff(
-            run,
-            worktreeDir,
-            ["--raw", "--no-renames"],
-            "HEAD",
-          ),
-        );
+      ? ""
+      : await readRawDiff(run, worktreeDir, ["--raw", "--no-renames"], "HEAD");
   const disk = await probeChangedPathsOnDisk(
     worktreeDir,
     changedPaths
@@ -2226,10 +2221,13 @@ export async function inspectUncommittedChanges(
   const stopReasons = [
     ...new Set([
       ...detectNestedRepoPaths(changedPaths),
+      ...parseRawGitlinkPaths(raw).map(
+        (path) => `nested repository or .git path changed: ${path}`,
+      ),
       ...disk.nonRegular.map((path) => `not a regular file: ${path}`),
       ...detectEscapingSymlinks(worktreeDir, symlinkTargets),
       ...detectSymlinkChanges(changedPaths, symlinkTargets),
-      ...rawSymlinkPaths.map(
+      ...parseRawSymlinkPaths(raw).map(
         (path) => `symlink_change: symlink changed: ${path}`,
       ),
     ]),

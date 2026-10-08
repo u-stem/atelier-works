@@ -2168,7 +2168,7 @@ export type CommitAndPushOptions = {
    */
   readonly requireLocalHeadAtExpected?: boolean;
   /**
-   * 渡されたら、fetchの前に`git rev-parse --abbrev-ref HEAD`がこのブランチであることを確かめる。
+   * 渡されたら、fetchの前に`git symbolic-ref -q HEAD`が`refs/heads/<このブランチ>`であることを確かめる。
    * 違うとき(detachedの`HEAD`を含む)は何もせずに`CommitBlockedError`を投げる。
    * pr_fixとimplementフローが使う。検査コマンドがブランチを切り替えると、pushする先が準備ステップの見たブランチでなくなるため。
    */
@@ -2189,6 +2189,9 @@ export type CommitAndPushOptions = {
    */
   readonly expectedTreeSha?: string;
 };
+
+/** `git symbolic-ref HEAD`が、HEADがローカルのブランチにあるときに返すrefの接頭辞。 */
+const LOCAL_BRANCH_REF_PREFIX = "refs/heads/";
 
 export const COMMITTED_TREE_CHANGED_REASON =
   "committed tree differs from the inspected tree";
@@ -2289,6 +2292,7 @@ export function withCommitTrailers(
  * pushがfast-forwardでないとして拒否されたとき(先頭の確認をすり抜けた競合)も、
  * 例外を投げず、fetchし直して`head_changed`を返す。それ以外の失敗では例外を投げる。
  * `expectedBranch`・`requireLocalHeadAtExpected`・`inspectStaged`の確かめに通らなければ、commitせずに`CommitBlockedError`を投げる。
+ * `expectedBranch`が無くても、HEADがローカルのブランチに無ければ(detachedを含む)、fetchの前に例外を投げる。
  * `inspectStaged`が例外を投げたときも、ステージを戻してからその例外を投げ直す。
  * `expectedTreeSha`があれば、作ったcommitのツリーがそれと違うときにcommitを取り消し、pushせずに`CommitBlockedError`を投げる。
  * pushは`HEAD`ではなく作ったcommitのshaを`refs/heads/<branch>`へ送る。commitの後にHEADが動いても、確かめたcommitだけを送るため。
@@ -2316,26 +2320,37 @@ export async function commitAndPush(
       const local = localGitEnv(opts.home, opts.path);
       const network = networkGitEnv(opts.ghToken, opts.home, opts.path);
 
-      // これらの`rev-parse`には`--`を付けない(`buildGitArgv`の例外を参照)。
-      // `git rev-parse -- <rev>`は、`--verify`では「Needed a single revision」で失敗し、
-      // `--verify`なしでは`--`の行をそのまま出すことを確かめた。
-      // 先頭の`-`は、下の`assertBranchName`で防ぐ。
-      const branchResult = await opts.run(
-        buildGitArgv(["rev-parse", "--abbrev-ref", "HEAD"]),
+      // ブランチは`symbolic-ref`で完全なref名として読む。
+      // `rev-parse --abbrev-ref`は、同じ名前のタグがあると`heads/<branch>`を返し、照合を誤らせるため。
+      const headRefResult = await opts.run(
+        buildGitArgv(["symbolic-ref", "-q", "HEAD"]),
         { cwd: opts.dir, env: local },
       );
-      if (branchResult.exitCode !== 0) {
-        throw gitError("git rev-parse --abbrev-ref HEAD failed", branchResult);
+      // `-q`は、HEADがdetachedのときだけ何も出さずに終了コード1を返す。それ以外の失敗はHEADを読めていない。
+      const detached = headRefResult.exitCode === 1 && !headRefResult.timedOut;
+      if (headRefResult.exitCode !== 0 && !detached) {
+        throw gitError("git symbolic-ref -q HEAD failed", headRefResult);
       }
-      const branch = branchResult.stdout.trim();
-      if (
-        opts.expectedBranch !== undefined &&
-        (branch === "HEAD" || branch !== opts.expectedBranch)
-      ) {
+      const headRef = detached ? "" : headRefResult.stdout.trim();
+      const branch = headRef.startsWith(LOCAL_BRANCH_REF_PREFIX)
+        ? headRef.slice(LOCAL_BRANCH_REF_PREFIX.length)
+        : null;
+      if (opts.expectedBranch !== undefined && branch !== opts.expectedBranch) {
         throw new CommitBlockedError(
           `local HEAD is not on branch ${opts.expectedBranch}`,
         );
       }
+      if (branch === null) {
+        throw new Error(
+          maskSecrets(
+            `local HEAD is not on a branch: ${detached ? "detached" : headRef}`,
+          ),
+        );
+      }
+      // 以降の`rev-parse`には`--`を付けない(`buildGitArgv`の例外を参照)。
+      // `git rev-parse -- <rev>`は、`--verify`では「Needed a single revision」で失敗し、
+      // `--verify`なしでは`--`の行をそのまま出すことを確かめた。
+      // 先頭の`-`は、ここの`assertBranchName`で防ぐ。
       assertBranchName(branch);
 
       const fetchResult = await opts.run(

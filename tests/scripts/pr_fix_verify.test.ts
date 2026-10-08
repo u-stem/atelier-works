@@ -1847,6 +1847,26 @@ describe("changed path listing against a real git repository", () => {
     expect(reasons).toContain("nested repository or .git path changed: sub");
   });
 
+  test("pr_fix blocks a gitlink deleted by removing the submodule directory", async () => {
+    const repo = await initRepo();
+    const sub = { ...repo, dir: join(repo.dir, "sub") };
+    mkdirSync(sub.dir);
+    await gitIn(sub, ["init", "-q"]);
+    writeFileSync(join(sub.dir, "a.txt"), "a\n");
+    await gitIn(sub, ["add", "-A"]);
+    await gitIn(sub, ["commit", "-q", "-m", "sub"]);
+    await gitIn(repo, ["add", "sub"]);
+    await gitIn(repo, ["commit", "-q", "-m", "add sub"]);
+    rmSync(sub.dir, { recursive: true, force: true });
+    const result = await inspectUncommittedChanges(repo.run, repo.dir, {
+      maxChangedFiles: 30,
+      maxDiffLines: 1500,
+    });
+    expect(result.reasons).toContain(
+      "nested repository or .git path changed: sub",
+    );
+  });
+
   test("pr_fix blocks a rewritten tracked symlink under core.symlinks=false", async () => {
     const repo = await initRepo();
     symlinkSync("README.md", join(repo.dir, "link"));
