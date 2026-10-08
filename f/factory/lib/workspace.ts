@@ -426,7 +426,8 @@ export type GitCommandOptions = {
  *   - `readGitShowFile`の`git show <ref>:<path>`: `--`を付けてもエラーにならず、
  *     気づかないうちにgitが返す内容が変わる。`ref`を検証すれば、`path`も守られる
  *     (`path`は常に、検証済みで`:`を含まない`ref`と、こちらで入れた`:`に続くため)。
- *   - `createGtrWorktree`の再利用時の`git reset --hard <ref>`: `--hard`はパスを取らず、
+ *   - `createGtrWorktree`の`git reset --hard <ref>`(再利用時と、新しく作ったworktreeで
+ *     プロセスを止めたとき): `--hard`はパスを取らず、
  *     `--`を付けるとエラーになる
  *     (「fatal: Cannot do hard reset with paths」、実際に確かめた)。
  *   - `ensureFactoryClone`の`git checkout -B <branch> origin/<branch>`: 起点の前に
@@ -1728,10 +1729,11 @@ export type CreateGtrWorktreeOptions = {
   readonly fs?: WorktreeFsDeps;
   /**
    * worktreeに触れる前に呼ぶ確かめ。前の実行のプロセスがまだworktreeを使っていれば例外を投げる。
+   * 止めたプロセスがあればtrue、何も止めなければfalseを返す。
    * 呼び出し側は`ensureWorktreeLockFree`(`lib/process_lock.ts`)を渡す。
    * 実装フローは同じ作業項目の前のジョブのプロセスを止め、pr_fixは何も止めない。渡し忘れを型で防ぐため必須にする。
    */
-  readonly assertProcessesIdle: (worktreeDir: string) => Promise<void>;
+  readonly assertProcessesIdle: (worktreeDir: string) => Promise<boolean>;
 };
 
 /**
@@ -1745,6 +1747,8 @@ export type CreateGtrWorktreeOptions = {
  * 通らなければファイル操作で削除し(`discardUnverifiedWorktree`)、
  * `git gtr new`で作り直す。
  * worktreeに触れる前(既存なら検証より前、新規なら`git gtr new`の直後)に`assertProcessesIdle`を呼ぶ。
+ * 新しく作ったworktreeで確かめが何かを止めたときは、`.git`ファイルを検証してから、
+ * 作った時点のブランチの先頭へ`reset --hard`し、`clean -fd`する。止まる前に書き込まれたものを捨てるためである。
  */
 export async function createGtrWorktree(
   opts: CreateGtrWorktreeOptions,
@@ -1882,8 +1886,56 @@ export async function createGtrWorktree(
         throw gitError(`git gtr new ${opts.branch} failed`, result);
       }
       const created = parseGtrPorcelain(result.stdout);
+      // 戻す先にする、作った時点のブランチの先頭。確かめより前にworktreeでgitを実行しないよう、メインのcloneで読む。
+      // `rev-parse`には`--`を付けない(`buildGitArgv`の例外を参照)。`opts.branch`は検証済みである。
+      const headResult = await opts.run(
+        buildGitArgv(["rev-parse", "--verify", `refs/heads/${opts.branch}`]),
+        { cwd: opts.repoDir, env: localGitEnv(opts.home, opts.path) },
+      );
+      if (headResult.exitCode !== 0) {
+        throw gitError(
+          `git rev-parse refs/heads/${opts.branch} failed (gtr new)`,
+          headResult,
+        );
+      }
+      const createdSha = headResult.stdout.trim();
+      assertSha(createdSha);
       // 削除されたworktreeの中で生き残ったClaudeは同じ絶対パスに書き込みうるので、新しく作った場合も確かめる。
-      await opts.assertProcessesIdle(created.path);
+      if (!(await opts.assertProcessesIdle(created.path))) return created;
+      // 止めたプロセスは、止まるまでにworktreeへ書き込んだり`.git`ファイルを書き換えたりしえた。
+      // 中でgitを実行する前にポインタを検証し、作った時点の状態に戻す。
+      // コミットしてブランチを進めていても、checkout中のブランチごと戻るので、refを別に戻す必要は無い。
+      await verifyWorktreeGitdir({
+        run: opts.run,
+        repoDir: opts.repoDir,
+        dir: created.path,
+        ...(opts.fs?.readTextFile !== undefined
+          ? { readTextFile: opts.fs.readTextFile }
+          : {}),
+        ...(opts.fs?.realpath !== undefined
+          ? { realpath: opts.fs.realpath }
+          : {}),
+      });
+      const resetResult = await opts.run(
+        buildGitArgv(["reset", "--hard", createdSha]),
+        { cwd: created.path, env: localGitEnv(opts.home, opts.path) },
+      );
+      if (resetResult.exitCode !== 0) {
+        throw gitError(
+          `git reset --hard ${createdSha} failed (gtr new after stopping processes)`,
+          resetResult,
+        );
+      }
+      const cleanResult = await opts.run(buildGitArgv(["clean", "-fd"]), {
+        cwd: created.path,
+        env: localGitEnv(opts.home, opts.path),
+      });
+      if (cleanResult.exitCode !== 0) {
+        throw gitError(
+          "git clean -fd failed (gtr new after stopping processes)",
+          cleanResult,
+        );
+      }
       return created;
     },
   });

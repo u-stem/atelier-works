@@ -197,14 +197,15 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
       branch: pr.headRef,
       ghToken,
       // pr_fixは実装フローのリースを持たないので、保持者が終わった実行の生き残りと言えない。何も止めずに理由へ載せる。
-      assertProcessesIdle: async (dir) => {
-        await ensureWorktreeLockFree({
-          run: runCommand,
-          lock: worktreeLockFor(dir),
-          policy: null,
-          deps: defaultLockReleaseDeps(),
-        });
-      },
+      assertProcessesIdle: async (dir) =>
+        (
+          await ensureWorktreeLockFree({
+            run: runCommand,
+            lock: worktreeLockFor(dir),
+            policy: null,
+            deps: defaultLockReleaseDeps(),
+          })
+        ).length > 0,
     });
   } catch (err) {
     // pr_fixのprepareにはneeds_humanの出口が無い。blockedはretry_work_itemで再実行できる。

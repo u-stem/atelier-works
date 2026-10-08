@@ -316,7 +316,7 @@ export async function main(
     await assertImplementLease(() => getWorkItem(work_item_id), leaseJobId);
     if (await hasPrRunOnBranch()) throw new ActivePrRunError();
   };
-  const ensureIdle = async (dir: string): Promise<void> => {
+  const ensureIdle = async (dir: string): Promise<boolean> => {
     const stopped = await ensureWorktreeLockFree({
       run: runCommand,
       lock: worktreeLockFor(dir),
@@ -333,6 +333,7 @@ export async function main(
         },
       );
     }
+    return stopped.length > 0;
   };
   // git gtr 2.11.1で実測した`gtr new`の動作:
   // 既存のローカルブランチは再利用し、リモートにだけあるブランチは
@@ -368,7 +369,9 @@ export async function main(
           .pushed,
     });
   } catch (err) {
-    // ここで受ける例外は、確かめ(ensureIdle)が投げたものだけである。worktreeに何をした後かは、どの確かめで投げたかで決まる。
+    // 理由付きの結果にするのは、確かめ(ensureIdle)と、止める直前の確かめ直しが投げる3種類の例外だけである。
+    // それ以外(worktreeの一覧、`git gtr new`、ブランチの公開、reset・cleanなどの失敗)はそのまま投げ直す。
+    // 3種類の例外のとき、worktreeに何をした後かは、どの確かめで投げたかで決まる。
     // 既存のworktreeを見つけた直後の確かめ(公開より前と、createGtrWorktreeのポインタの検証より前)で投げたときは、worktreeには何もしていない。
     // `git gtr new`の直後の確かめで投げたときは、作ったworktreeがリモートから作ったまま残る(次の実行は再利用の経路で確かめ直す)。
     // この場合には、既存のworktreeの`.git`ポインタが検証を通らず、それを削除して作り直した後も含まれるので、元のworktreeはもう無いことがある。
