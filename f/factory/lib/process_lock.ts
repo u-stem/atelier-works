@@ -217,15 +217,38 @@ export class WorktreeLockHeldInRunError extends Error {
   }
 }
 
+/** ロック付きの起動で、ロックファイルのパスとコマンドの前に置くflockの引数。 */
+const LOCKED_LAUNCH_ARGS: readonly string[] = [
+  FLOCK_PATH,
+  "--wait",
+  String(LOCKED_RUN_WAIT_SEC),
+  "--conflict-exit-code",
+  String(WORKTREE_LOCK_BUSY_EXIT_CODE),
+];
+
 /**
- * コマンドを、秘密をマスクし、改行などの制御文字の並びを空白1つにし、"; "で分けられないようにし、200文字までに切ってから、バッククォートで囲む(中のバッククォートは"'"にする)。
- * 制御文字を消すのは、状態の理由と通知を1行に保つためである。
+ * ロック付きで起動したflockのコマンドラインなら、ロックファイルのパスより後(起動したコマンド)だけを返す。それ以外はそのまま返す。
+ * 200文字の表示の大半をflockの引数で埋めないためである。
+ * ロックファイルのパスは空白を含まない(ブランチ名から作るworktreeの名前に空白は入らない)ので、最初の空白までをパスとみなす。
+ */
+function commandUnderLock(command: string): string {
+  const head = `${LOCKED_LAUNCH_ARGS.join(" ")} `;
+  if (!command.startsWith(head)) return command;
+  const rest = command.slice(head.length);
+  const space = rest.indexOf(" ");
+  return space < 0 ? command : rest.slice(space + 1);
+}
+
+/**
+ * コマンドを、秘密をマスクし、制御文字・書式文字・行と段落の区切りの並びを空白1つにし、"; "で分けられないようにし、
+ * 別の保持者に見える", pid "のカンマを空白にし、200文字までに切ってから、バッククォートで囲む(中のバッククォートは"'"にする)。
+ * 制御文字などを消すのは、状態の理由と通知を1行に保ち、双方向テキストの制御で表示を入れ替えさせないためである。
  */
 function quoteCommand(command: string): string {
-  const cut = maskSecrets(command)
-    // biome-ignore lint/suspicious/noControlCharactersInRegex: 制御文字を取り除くための正規表現である。
-    .replace(/[\r\n\t\u0000-\u001f]+/g, " ")
+  const cut = maskSecrets(commandUnderLock(command))
+    .replace(/[\p{Cc}\p{Cf}\u2028\u2029]+/gu, " ")
     .replaceAll(";", ",")
+    .replace(/,(?=\s*pid\s)/giu, " ")
     .slice(0, HOLDER_COMMAND_MAX_CHARS)
     .replaceAll("`", "'");
   return `\`${cut}\``;
@@ -284,6 +307,8 @@ export async function probeWorktreeLock(opts: {
  * コマンドはflockの子として走り、ロックのfdと、持ち主タグ(`FACTORY_LOCK_OWNER`)・ロックファイルのタグ(`FACTORY_LOCK_PATH`)を子孫ごと受け継ぐ(タグは呼び出し側のenvにマージする)。
  * flockの親が殺されても、子孫が生きている間はロックが残る。
  * ロックを`LOCKED_RUN_WAIT_SEC`待っても取れなければ、コマンドは起動されず`WorktreeLockHeldInRunError`を投げる。
+ * argvが空のとき、コマンド名が空か`-`で始まるときは、起動せずに例外を投げる。
+ * flockはロックファイルの次の引数をオプションとして読み、`-c`ならシェルで実行しうるためである。
  * worktreeで長く走るClaudeと検査コマンドに使う(短命なgit・ghには使わない)。
  */
 export function withWorktreeProcessLock(
@@ -292,23 +317,20 @@ export function withWorktreeProcessLock(
   owner: LockOwner,
 ): CommandRunner {
   return async (argv, options) => {
+    const command = argv[0];
+    if (command === undefined || command === "")
+      throw new Error("locked command must not be empty");
+    if (command.startsWith("-"))
+      throw new Error(`locked command must not start with '-': ${command}`);
     const env = {
       ...(options?.env ?? {}),
       [LOCK_OWNER_ENV]: formatLockOwner(owner),
       [LOCK_PATH_ENV]: lock.lockPath,
     };
-    const result = await run(
-      [
-        FLOCK_PATH,
-        "--wait",
-        String(LOCKED_RUN_WAIT_SEC),
-        "--conflict-exit-code",
-        String(WORKTREE_LOCK_BUSY_EXIT_CODE),
-        lock.lockPath,
-        ...argv,
-      ],
-      { ...options, env },
-    );
+    const result = await run([...LOCKED_LAUNCH_ARGS, lock.lockPath, ...argv], {
+      ...options,
+      env,
+    });
     if (isLockConflict(result)) throw new WorktreeLockHeldInRunError();
     return result;
   };

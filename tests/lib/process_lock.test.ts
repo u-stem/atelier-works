@@ -394,6 +394,38 @@ describe("withWorktreeProcessLock", () => {
     ).rejects.toBeInstanceOf(WorktreeLockHeldInRunError);
   });
 
+  test("refuses an empty argv", async () => {
+    const fake = createFakeCommandRunner([ok()]);
+    await expect(
+      withWorktreeProcessLock(fake.run, LOCK, OTHER_JOB)([]),
+    ).rejects.toThrow("locked command must not be empty");
+  });
+
+  test("refuses an empty command name", async () => {
+    const fake = createFakeCommandRunner([ok()]);
+    await expect(
+      withWorktreeProcessLock(fake.run, LOCK, OTHER_JOB)(["", "x"]),
+    ).rejects.toThrow("locked command must not be empty");
+  });
+
+  // flockは、ロックファイルの次の引数が`-c`などのオプションならコマンドとして扱わず、シェルで実行しうる。
+  test("refuses a command that starts with a dash", async () => {
+    const fake = createFakeCommandRunner([ok()]);
+    await expect(
+      withWorktreeProcessLock(fake.run, LOCK, OTHER_JOB)(["-c", "id"]),
+    ).rejects.toThrow("locked command must not start with '-': -c");
+  });
+
+  test("does not run flock for a command that starts with a dash", async () => {
+    const fake = createFakeCommandRunner([ok()]);
+    await withWorktreeProcessLock(
+      fake.run,
+      LOCK,
+      OTHER_JOB,
+    )(["-c", "id"]).catch(() => undefined);
+    expect(fake.calls).toHaveLength(0);
+  });
+
   test("returns a command's own 213 with output as its result", async () => {
     const fake = createFakeCommandRunner([
       fail("boom", WORKTREE_LOCK_BUSY_EXIT_CODE),
@@ -711,6 +743,40 @@ describe("formatLockHolders", () => {
     expect(formatLockHolders([entry({ command: "a\r\nb\tc\u0001d" })])).toBe(
       "pid 42 (3600s, implement:3:job-a) `a b c d`",
     );
+  });
+
+  test("turns other control, format and line separator characters into single spaces", () => {
+    expect(
+      formatLockHolders([
+        entry({
+          command: "a\u007fb\u0085c\u200bd\u202ee\u2066f\u2028g\u2029h",
+        }),
+      ]),
+    ).toBe("pid 42 (3600s, implement:3:job-a) `a b c d e f g h`");
+  });
+
+  test("keeps a command from looking like another holder", () => {
+    expect(
+      formatLockHolders([
+        entry({ command: "sleep 1, pid 1 (0s, implement:3:job-b) `true`" }),
+      ]),
+    ).not.toContain(", pid ");
+  });
+
+  test("keeps a command with a semicolon from looking like another holder", () => {
+    expect(
+      formatLockHolders([entry({ command: "sleep 1;  PID 1 (0s, x)" })]),
+    ).not.toMatch(/,\s*pid\s/i);
+  });
+
+  test("shows only the command run under the lock", () => {
+    expect(
+      formatLockHolders([
+        entry({
+          command: `${FLOCK_PATH} --wait 5 --conflict-exit-code ${String(WORKTREE_LOCK_BUSY_EXIT_CODE)} ${LOCK.lockPath} claude -p --x`,
+        }),
+      ]),
+    ).toBe("pid 42 (3600s, implement:3:job-a) `claude -p --x`");
   });
 
   test("cuts a long command", () => {
