@@ -43,12 +43,14 @@ pre-push:
     check:
       run: mise run check
     # pre-commitのwmill-metadataの取りこぼしを止める。pushするコミットが
-    # Windmillの資産かハッシュのファイルに触れるときだけ動くので、
+    # Windmillの資産、ワークスペースの依存、`wmill.yaml`、ハッシュのファイルに触れるときだけ動くので、
     # 文書だけのpushにローカルのWindmillは要らない。緊急時は
     # `LEFTHOOK_EXCLUDE=wmill-metadata-check`で飛ばせる
     # (その場合は次のpushの前に`mise run metadata`を実行する)。
     wmill-metadata-check:
       glob:
         - "f/**"
+        - "dependencies/**"
+        - "wmill.yaml"
         - "wmill-lock.yaml"
       run: mise run metadata:check

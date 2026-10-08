@@ -106,7 +106,7 @@ mise exec -- sh -c 'test -n "$DB_PASSWORD" && echo ok'
 | --- | --- |
 | pre-commit | `f/`の下をステージしたときは、先に`scripts/generate-metadata-staged.sh`を実行する。メタデータを作り直し、変わったlockとスキーマのファイルをステージする。続けて、biome、`as`の検出、`§`の検出、gitleaks、`wmill lint f`、文書の検査を並列に実行する |
 | commit-msg | `scripts/check-commit-msg.sh`でコミットメッセージの規約を検査する |
-| pre-push | `mise run check`を実行する。pushに`f/`か`wmill-lock.yaml`の変更があれば、`mise run metadata:check`で古いメタデータを見つけてpushを止める |
+| pre-push | `mise run check`を実行する。pushに`f/`、`dependencies/`、`wmill.yaml`、`wmill-lock.yaml`の変更があれば、`mise run metadata:check`で古いメタデータを見つけてpushを止める |
 
 メタデータの作り直しと検査は、ローカルのWindmillに接続する。`mise run up`でスタックを起動しておく。手で実行するときは`mise run metadata`と`mise run metadata:check`を使う。
 
@@ -118,6 +118,26 @@ LEFTHOOK_EXCLUDE=wmill-metadata-check git push
 ```
 
 フックを飛ばしたときは、次のpushの前に`mise run metadata`を実行する。
+
+CIの`metadata`ジョブも、メタデータが最新かを検査する。
+使い捨てのWindmillをdbとサーバーだけで起動し、空のワークスペースを作って`mise run metadata:check`を実行する。
+`main`へのpushでは、変更に関わらず毎回検査する。
+`main`のCIの結果は、`main`全体の状態を表すためである。
+
+PRと`main`以外へのpushでは、次のどれにも触れないとき、検査を飛ばして成功にする。
+
+- メタデータの入力: `f/`、`dependencies/`、`wmill.yaml`、`wmill-lock.yaml`
+- このジョブの定義
+  - `.github/workflows/ci.yml`
+  - `infra/docker-compose.yml`と`infra/docker-compose.ci.yml`
+  - `scripts/ci-metadata-login.sh`と`scripts/check-metadata-fresh.sh`
+  - `mise.toml`
+
+比べる範囲は、PRではマージ基点からの変更、pushでは前回のpushからの変更である。
+新しいブランチの初回pushでは、`origin/main`とのマージ基点からの変更を見る。
+基点や差分を求められないときは、安全のために検査する。
+
+フックを飛ばしてコミットしたPRは、手元で`mise run metadata`を実行してpushし直すまで、このジョブで失敗する。
 
 ## 自己更新の設定
 

@@ -16,10 +16,19 @@ if echo "$output" | grep -q "All metadata up-to-date"; then
 fi
 
 echo "$output"
-cat <<'MESSAGE'
+if [ "${CI:-}" = "true" ]; then
+  cat <<'MESSAGE'
+
+Windmillのメタデータが最新ではありません。
+ローカルでWindmillを起動した状態(`mise run up`)で`mise run metadata`を実行し、更新されたファイルをコミットしてpushし直してください。
+上の出力が古い項目の一覧ではなく、接続やログインのエラーのときは、`Show diagnostics`ステップのサーバーのログを確かめてください。
+MESSAGE
+else
+  cat <<'MESSAGE'
 
 Windmillのメタデータが最新ではありません。
 `git commit`し直すとpre-commitフックが自動更新します。手で更新する場合は`mise run metadata`を実行してください。
 ローカルWindmillに接続できていない場合は`mise run up`で起動してください。
 MESSAGE
+fi
 exit 1
