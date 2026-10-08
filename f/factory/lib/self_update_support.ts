@@ -322,7 +322,19 @@ export const RAW_APP_RELATIVE_DIR = "f/factory/factory_console__raw_app";
  * 書き換えない。self clone内で`npm install`を使うと`package-lock.json`が
  * 書き換わったまま残り、次の`git checkout -B`を妨げたことがある。
  * `--no-audit --no-fund`は出力を減らし、オフラインでも動きやすくする。
+ * `--ignore-scripts`は依存のinstall scriptを動かさない。install scriptは
+ * workerの権限のまま、ネットワークにも出られる状態で動くため。
+ * raw appの依存にinstall scriptを要するものは無く(`package-lock.json`に
+ * `hasInstallScript`が無い)、バンドルは`wmill`が行うので、組み立ては変わらない。
  */
 export function buildNpmCiArgv(rawAppDir: string): string[] {
-  return ["npm", "ci", "--prefix", rawAppDir, "--no-audit", "--no-fund"];
+  return [
+    "npm",
+    "ci",
+    "--prefix",
+    rawAppDir,
+    "--no-audit",
+    "--no-fund",
+    "--ignore-scripts",
+  ];
 }

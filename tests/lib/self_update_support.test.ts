@@ -9,6 +9,7 @@ import {
   extractMiseHostSections,
   miseTomlNeedsHostAction,
   parseNulSeparatedPaths,
+  RAW_APP_RELATIVE_DIR,
   resolveWmillCliContext,
   truncateOutput,
 } from "../../f/factory/lib/self_update_support.ts";
@@ -313,8 +314,34 @@ describe("buildNpmCiArgv", () => {
         "/clone/f/factory/factory_console__raw_app",
         "--no-audit",
         "--no-fund",
+        "--ignore-scripts",
       ],
     );
+  });
+});
+
+describe("raw app dependencies", () => {
+  // `buildNpmCiArgv`は`--ignore-scripts`で依存のinstall scriptを動かさない。
+  // install scriptが無いと組み立てが壊れる依存が入ったら、ここで気づけるようにする。
+  test("contain no package that needs an install script", async () => {
+    const lock: unknown = await Bun.file(
+      `${import.meta.dir}/../../${RAW_APP_RELATIVE_DIR}/package-lock.json`,
+    ).json();
+    const packages =
+      typeof lock === "object" && lock !== null && "packages" in lock
+        ? lock.packages
+        : undefined;
+    expect(typeof packages).toBe("object");
+    const withInstallScript = Object.entries(packages ?? {})
+      .filter(
+        ([, entry]) =>
+          typeof entry === "object" &&
+          entry !== null &&
+          "hasInstallScript" in entry &&
+          entry.hasInstallScript === true,
+      )
+      .map(([path]) => path);
+    expect(withInstallScript).toEqual([]);
   });
 });
 
