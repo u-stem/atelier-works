@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   acquireImplementLease,
   addNotice,
+  addNoticeUnlessUnresolved,
   bumpWatermarks,
   countPendingIssueProposals,
   decideApprovalRequestIfPending,
@@ -898,6 +899,46 @@ describe("addNotice", () => {
       sql,
     );
     expect(calls[0]?.text).toContain("INSERT INTO factory.notices");
+  });
+});
+
+describe("addNoticeUnlessUnresolved", () => {
+  const record = {
+    kind: "deployed_sha_mismatch",
+    message: "head abc1234 differs from deployed def5678",
+  };
+
+  test("inserts only when no unresolved notice has the same kind and message", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 15 }]]);
+    await addNoticeUnlessUnresolved(record, sql);
+    expect(calls[0]?.text).toContain("WHERE NOT EXISTS");
+  });
+
+  test("looks only at unresolved notices", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 15 }]]);
+    await addNoticeUnlessUnresolved(record, sql);
+    expect(calls[0]?.text).toContain("resolved = false");
+  });
+
+  test("passes the kind and the message to both the insert and the existence check", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 15 }]]);
+    await addNoticeUnlessUnresolved(record, sql);
+    expect(calls[0]?.values).toEqual([
+      record.kind,
+      record.message,
+      record.kind,
+      record.message,
+    ]);
+  });
+
+  test("returns the new id when a row was inserted", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 15 }]]);
+    expect(await addNoticeUnlessUnresolved(record, sql)).toBe(15);
+  });
+
+  test("returns null when an unresolved notice already exists", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await addNoticeUnlessUnresolved(record, sql)).toBeNull();
   });
 });
 

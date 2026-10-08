@@ -197,6 +197,9 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 
 `fix_reply_post_failed`は、返信の投稿に1件以上失敗したとき1件だけ残す。Discordには通知しない。`unsandboxed_check_commands`は、検査コマンドを実行するたびに残す。
 `cleanup_worktree_busy`は、1回の掃除でworktreeのパスごとに1件残す。Discordには通知しない。
+`deployed_sha_mismatch`は、self cloneのHEADとデプロイ版が同じ組で、未解決のnoticeがあるあいだは追加しない。
+`poll_issues`が実行されるたびに同じnoticeが積み上がり、ほかの種類が埋もれるためである。
+版の組が変わったときと、既存のnoticeを解決した後に再び食い違ったときは、1件残す。
 
 解決済みのnoticeは、`retention_logs_days`(既定30日)を過ぎるとDBの掃除が消す。未解決のnoticeは消さない。
 

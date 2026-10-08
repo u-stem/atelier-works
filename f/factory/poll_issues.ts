@@ -16,6 +16,7 @@ import { expiredRequirementsRequests } from "./lib/approval_support.ts";
 import { loadConfig } from "./lib/config.ts";
 import {
   addNotice,
+  addNoticeUnlessUnresolved,
   expireApprovalRequestIfPending,
   getWorkItem,
   insertWorkItem,
@@ -44,6 +45,7 @@ import {
   decideClosureOnly,
   decideIssueActions,
   decideReconcileAction,
+  deployedShaMismatchMessage,
   filterByRepoAllowlist,
   type IssueCandidate,
   isWaitingForHuman,
@@ -138,6 +140,7 @@ async function recordFailureSafe(
 /**
  * self cloneのHEADのshaを変数`f/factory/deployed_sha`と比べ、
  * 食い違えばnoticeを記録する。noticeを残すだけでジョブは失敗させない。
+ * 同じ版の組の未解決のnoticeがあれば、新しく記録しない(版の組が変われば記録する)。
  * 変数が無い・空のときは、まだ比べる対象が無いとみなす。
  */
 async function checkDeployedSha(
@@ -162,9 +165,9 @@ async function checkDeployedSha(
     }
     if (deployedSha.length === 0 || deployedSha === selfSha) return;
 
-    await addNotice({
+    await addNoticeUnlessUnresolved({
       kind: "deployed_sha_mismatch",
-      message: `self cloneのHEAD(${selfSha})がf/factory/deployed_sha(${deployedSha})と一致しません`,
+      message: deployedShaMismatchMessage(selfSha, deployedSha),
     });
   } catch (err) {
     log.warn("deployed_sha check failed", {
