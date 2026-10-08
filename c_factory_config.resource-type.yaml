@@ -39,6 +39,8 @@ schema:
     - implement_max_turns
     - implement_max_budget_usd_per_run
     - implement_timeout_sec
+    - implement_check_timeout_sec
+    - implement_flow_timeout_sec
     - implement_max_changed_files
     - implement_max_diff_lines
     - check_commands_by_repo
@@ -108,11 +110,21 @@ schema:
       type: string
       description: このラベルが付いたPRは修正処理の対象になります。
       default: factory:fix
+    implement_check_timeout_sec:
+      type: integer
+      description: >-
+        実装(工程3)で検査コマンド1件を打ち切るまでの制限時間(秒)。フロー全体の期限を過ぎても、検査はこの時間まで走らせます。
+      default: 900
     implement_enabled:
       type: boolean
       description: >-
         要件定義の承認後に実装(工程3)を自動で開始するかどうかです。falseの間は従来どおり`approved`で止まります。
       default: false
+    implement_flow_timeout_sec:
+      type: integer
+      description: >-
+        実装(工程3)の1回の実行の期限(秒)。作業領域の準備を始めてから数えます。検査に失敗した後、期限までの残りが修正1回分の最悪の所要時間に足りなければ、修正をやめて対応が必要な状態(needs_human)にします。Claude Codeの実行はこの残りで打ち切ります。検査コマンドは打ち切りません。implement_timeout_sec・implement_check_timeout_sec・検査コマンド数との組み合わせが実装フローのステップのtimeout(21600秒)に収まらないと、実装の準備でneeds_humanになります。
+      default: 14400
     implement_max_budget_usd_per_run:
       type: number
       description: 実装(工程3)におけるClaude Codeの1回の実行あたりの利用上限(USD)。
