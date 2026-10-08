@@ -134,7 +134,7 @@
 
 ## 更新の反映
 
-- `mise run push` / `mise run deploy`は`wmill sync push`の前にConsole raw appの`npm ci --ignore-scripts`を実行する(raw appのバンドルに依存が必要なため。依存のinstall scriptは動かさない)。
+- `mise run push` / `mise run deploy`は`wmill sync push`の前にConsole raw appの`npm ci --ignore-scripts`を実行する(raw appのバンドルに依存が必要なため)。`wmill sync push`のバンドルが走らせるnpmも`NPM_CONFIG_IGNORE_SCRIPTS=true`で動かし、どちらも依存のinstall scriptは動かさない。
 - `f/`・`migrations/`・`.claude/skills/`の変更は`self_update`が自動で反映する。`infra/`と`mise.toml`の`[tools]`・`[env]`の変更は、ホスト側checkoutを`git pull`したうえで次に`mise run up`で起動したときに反映される(ビルドはホスト側checkoutから行うため、先にmainを取り込む)。通知はしない。
 - Console(`console/`)の変更は、`main`にマージされてCIが通れば、数分で`console_fetcher`が取り込んで反映する(5分ごとに確認する)。`self_update`は関与しない。`infra/console_fetcher/`とCaddyfileの変更は、他の`infra/`と同じく次の`mise run up`で反映される(Caddyfileだけを変えたときは`mise exec -- docker compose -f infra/docker-compose.yml restart caddy`)。
 - 一括で反映したいときは`mise run deploy`を手動で実行する(ホスト側checkoutで`git pull --ff-only` → workerと`console_fetcher`のイメージのビルド → `docker compose up -d` → `wmill sync push` → migrationを一括実行する)。必須の手順ではない。

@@ -282,9 +282,9 @@ describe("buildWmillEnv", () => {
     expect(env).toMatchObject({ HOME: "/home/factory", PATH: "/usr/bin:/bin" });
   });
 
-  test("omits HOME/PATH when unset", () => {
+  test("omits HOME and PATH when unset", () => {
     const env = buildWmillEnv({});
-    expect(Object.keys(env)).not.toContain("HOME");
+    expect(Object.keys(env)).toEqual(["NPM_CONFIG_IGNORE_SCRIPTS"]);
   });
 
   test("never includes a workspace/base-url/token field", () => {
@@ -331,8 +331,6 @@ describe("buildNpmCiArgv", () => {
 });
 
 describe("raw app dependencies", () => {
-  // `buildNpmCiArgv`は`--ignore-scripts`で依存のinstall scriptを動かさない。
-  // install scriptが無いと組み立てが壊れる依存が入ったら、ここで気づけるようにする。
   async function readLockPackages(): Promise<Record<string, unknown>> {
     const lock: unknown = await Bun.file(
       `${import.meta.dir}/../../${RAW_APP_RELATIVE_DIR}/package-lock.json`,
@@ -347,6 +345,8 @@ describe("raw app dependencies", () => {
     return Object.fromEntries(Object.entries(packages));
   }
 
+  // `buildNpmCiArgv`は`--ignore-scripts`で依存のinstall scriptを動かさない。
+  // install scriptが無いと組み立てが壊れる依存が入ったら、ここで気づけるようにする。
   test("lockfile has a packages object", async () => {
     const packages = await readLockPackages();
     expect(Object.keys(packages).length).toBeGreaterThan(0);

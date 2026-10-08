@@ -567,7 +567,8 @@ else
 fi
 
 # --- 手順13: ローカルのsyncの状態をpushする ------------------------------------
-run_wmill sync push --yes --keep-deleted >&2
+# バンドルがraw appに対して走らせるnpmにも、依存のinstall scriptを動かさせない。
+NPM_CONFIG_IGNORE_SCRIPTS=true run_wmill sync push --yes --keep-deleted >&2
 log "sync push complete"
 
 # --- 手順14: 未適用のData Tableのmigrationを適用する ---------------------------
