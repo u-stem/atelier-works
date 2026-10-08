@@ -5,6 +5,7 @@ import {
   decideGapReroute,
   decideImplementFinishAction,
   decideVerifiedTree,
+  finishFailureReason,
   gapExhaustedReason,
   gapReportNoticeDetail,
   IMPLEMENT_NO_CHANGES_REASON,
@@ -19,11 +20,18 @@ import {
   shouldPreserveBeforeFailing,
   shouldPushPartialWork,
   toDiscordChecks,
+  worktreeBusyStopReason,
 } from "../../f/factory/lib/implement_finish_support.ts";
 import { ImplementLeaseLostError } from "../../f/factory/lib/implement_launch_support.ts";
 import {
+  WORKTREE_BUSY_REASON,
+  WorktreeBusyError,
+} from "../../f/factory/lib/process_lock.ts";
+import {
   type CommitAndPushResult,
-  type GitleaksResult,
+  CommitBlockedError,
+  type GitleaksScan,
+  WORKTREE_CHANGED_AFTER_SECRET_SCAN_REASON,
   WorktreeGitPointerModifiedError,
 } from "../../f/factory/lib/workspace.ts";
 
@@ -272,44 +280,103 @@ describe("preserveWork", () => {
     outcome: "pushed",
     newSha: "d".repeat(40),
   };
+  const SCANNED_TREE = "c".repeat(40);
   function preserveDeps(
-    scan: () => Promise<GitleaksResult>,
-    push: () => Promise<CommitAndPushResult> = async () => PUSHED,
+    scan: () => Promise<GitleaksScan>,
+    push: (scannedTreeSha: string) => Promise<CommitAndPushResult> = async () =>
+      PUSHED,
     assertGitPointer: () => Promise<void> = async () => {},
+    ensureLockFree: () => Promise<void> = async () => {},
   ): {
     deps: PreserveWorkDeps;
-    pushes: { count: number };
+    pushes: { count: number; trees: string[] };
     scans: { count: number };
   } {
-    const pushes = { count: 0 };
+    const trees: string[] = [];
+    const pushes = { count: 0, trees };
     const scans = { count: 0 };
     return {
       pushes,
       scans,
       deps: {
+        ensureLockFree,
         assertGitPointer,
         scanForSecrets: async () => {
           scans.count += 1;
           return scan();
         },
-        commitAndPush: async () => {
+        commitAndPush: async (scannedTreeSha) => {
           pushes.count += 1;
-          return push();
+          pushes.trees.push(scannedTreeSha);
+          return push(scannedTreeSha);
         },
       },
     };
   }
-  const CLEAN_SCAN = async (): Promise<GitleaksResult> => ({
+  const CLEAN_SCAN = async (): Promise<GitleaksScan> => ({
     ok: true,
     output: "",
+    treeSha: SCANNED_TREE,
   });
-  const LEAK_SCAN = async (): Promise<GitleaksResult> => ({
+  const LEAK_SCAN = async (): Promise<GitleaksScan> => ({
     ok: false,
     output: "- github-pat: a.txt:3",
+    treeSha: SCANNED_TREE,
   });
-  const BROKEN_SCAN = async (): Promise<GitleaksResult> => {
+  const BROKEN_SCAN = async (): Promise<GitleaksScan> => {
     throw new Error("gitleaks failed (exit 2): boom");
   };
+  const BUSY = async (): Promise<void> => {
+    throw new WorktreeBusyError([]);
+  };
+
+  test("pushes only the tree that the scan checked", async () => {
+    const h = preserveDeps(CLEAN_SCAN);
+    await preserveWork(h.deps);
+    expect(h.pushes.trees).toEqual([SCANNED_TREE]);
+  });
+
+  test("reports a commit stopped by the staged check as its own reason", async () => {
+    const blocked = async (): Promise<CommitAndPushResult> => {
+      throw new CommitBlockedError(WORKTREE_CHANGED_AFTER_SECRET_SCAN_REASON);
+    };
+    expect(await preserveWork(preserveDeps(CLEAN_SCAN, blocked).deps)).toEqual([
+      WORKTREE_CHANGED_AFTER_SECRET_SCAN_REASON,
+    ]);
+  });
+
+  test("reports processes left in the worktree instead of pushing", async () => {
+    expect(
+      await preserveWork(
+        preserveDeps(CLEAN_SCAN, undefined, undefined, BUSY).deps,
+      ),
+    ).toEqual([WORKTREE_BUSY_REASON]);
+  });
+
+  test("does not push when processes are left in the worktree", async () => {
+    const h = preserveDeps(CLEAN_SCAN, undefined, undefined, BUSY);
+    await preserveWork(h.deps);
+    expect(h.pushes.count).toBe(0);
+  });
+
+  test("does not scan when processes are left in the worktree", async () => {
+    const h = preserveDeps(CLEAN_SCAN, undefined, undefined, BUSY);
+    await preserveWork(h.deps);
+    expect(h.scans.count).toBe(0);
+  });
+
+  test("reports a failed lock check as a finish failure", async () => {
+    const broken = async (): Promise<void> => {
+      throw new Error("flock failed");
+    };
+    expect(
+      (
+        await preserveWork(
+          preserveDeps(CLEAN_SCAN, undefined, undefined, broken).deps,
+        )
+      )[0],
+    ).toMatch(/^implement finish failed: /);
+  });
 
   test("reports secrets instead of pushing", async () => {
     expect(await preserveWork(preserveDeps(LEAK_SCAN).deps)).toEqual([
@@ -404,6 +471,40 @@ describe("preserveWork", () => {
     expect(
       (await preserveWork(preserveDeps(CLEAN_SCAN, broken).deps))[0],
     ).toMatch(/^implement finish failed: /);
+  });
+});
+
+describe("worktreeBusyStopReason", () => {
+  test("returns null when no process holds the worktree", async () => {
+    expect(await worktreeBusyStopReason(async () => {})).toBeNull();
+  });
+
+  test("returns the busy reason when processes hold the worktree", async () => {
+    expect(
+      await worktreeBusyStopReason(async () => {
+        throw new WorktreeBusyError([]);
+      }),
+    ).toBe(WORKTREE_BUSY_REASON);
+  });
+
+  test("rethrows any other error", async () => {
+    await expect(
+      worktreeBusyStopReason(async () => {
+        throw new Error("flock failed");
+      }),
+    ).rejects.toThrow("flock failed");
+  });
+});
+
+describe("finishFailureReason", () => {
+  test("keeps an error message a single reason item", () => {
+    expect(
+      finishFailureReason(
+        new Error("git push failed: a; needs human attention"),
+      ),
+    ).toBe(
+      "implement finish failed: git push failed: a, needs human attention",
+    );
   });
 });
 

@@ -5,18 +5,25 @@
 
 import { describe, expect, test } from "bun:test";
 import type { ReviewThread } from "../../f/factory/lib/github.ts";
+import { SECRETS_NOT_PUSHED_REASON } from "../../f/factory/lib/implement_finish_support.ts";
 import { WorktreeBusyError } from "../../f/factory/lib/process_lock.ts";
 import type { FixReply } from "../../f/factory/lib/types.ts";
-import { WorktreeGitPointerModifiedError } from "../../f/factory/lib/workspace.ts";
+import {
+  type GitleaksScan,
+  WORKTREE_CHANGED_AFTER_SECRET_SCAN_REASON,
+  WorktreeGitPointerModifiedError,
+} from "../../f/factory/lib/workspace.ts";
 import {
   buildReplyPostFailedNotice,
   decideFixFinishAction,
   deriveFallbackReviewers,
   evaluateRerouteGuard,
+  inspectStagedWithSecretScan,
   listReviewThreadsBestEffort,
   type PrFixPushGateDeps,
   prFixPushGateReason,
   renderFixReply,
+  type SecretScanInspectionDeps,
   shouldAdvanceWatermarks,
   stopBeforeCommitTerminal,
 } from "../../f/factory/steps/pr_workflow_support.ts";
@@ -134,6 +141,99 @@ describe("prFixPushGateReason", () => {
     expect(await prFixPushGateReason(deps, POINTER, "")).toBe(
       "PR head was not recorded",
     );
+  });
+});
+
+describe("inspectStagedWithSecretScan", () => {
+  const TREE = "c".repeat(40);
+  const CLEAN: GitleaksScan = { ok: true, output: "", treeSha: TREE };
+  const LEAK: GitleaksScan = {
+    ok: false,
+    output: "- github-pat: a.txt",
+    treeSha: TREE,
+  };
+
+  /** 呼ばれた順と、ツリーの確かめに渡ったshaを記録する偽の依存。 */
+  function scanDeps(
+    scan: GitleaksScan,
+    changeReasons: readonly string[] = [],
+    treeReasons: readonly string[] = [],
+  ): {
+    readonly deps: SecretScanInspectionDeps;
+    readonly calls: string[];
+  } {
+    const calls: string[] = [];
+    return {
+      calls,
+      deps: {
+        scanForSecrets: async () => {
+          calls.push("scan");
+          return scan;
+        },
+        inspectChanges: async () => {
+          calls.push("changes");
+          return changeReasons;
+        },
+        inspectTree: async (scannedTreeSha) => {
+          calls.push(`tree ${scannedTreeSha}`);
+          return treeReasons;
+        },
+      },
+    };
+  }
+
+  test("returns no reason when nothing blocks the commit", async () => {
+    expect(await inspectStagedWithSecretScan(scanDeps(CLEAN).deps)).toEqual([]);
+  });
+
+  test("stops on secrets", async () => {
+    expect(await inspectStagedWithSecretScan(scanDeps(LEAK).deps)).toEqual([
+      SECRETS_NOT_PUSHED_REASON,
+    ]);
+  });
+
+  test("puts the secrets first so that its next action is shown", async () => {
+    expect(
+      (
+        await inspectStagedWithSecretScan(
+          scanDeps(LEAK, ["forbidden path changed: mise.toml"]).deps,
+        )
+      )[0],
+    ).toBe(SECRETS_NOT_PUSHED_REASON);
+  });
+
+  test("keeps the reasons of the staged change inspection", async () => {
+    expect(
+      await inspectStagedWithSecretScan(
+        scanDeps(CLEAN, ["forbidden path changed: mise.toml"]).deps,
+      ),
+    ).toEqual(["forbidden path changed: mise.toml"]);
+  });
+
+  test("stops when the staged tree is not the scanned tree", async () => {
+    expect(
+      await inspectStagedWithSecretScan(
+        scanDeps(CLEAN, [], [WORKTREE_CHANGED_AFTER_SECRET_SCAN_REASON]).deps,
+      ),
+    ).toEqual([WORKTREE_CHANGED_AFTER_SECRET_SCAN_REASON]);
+  });
+
+  test("scans first and compares the scanned tree last", async () => {
+    const { deps, calls } = scanDeps(CLEAN);
+    await inspectStagedWithSecretScan(deps);
+    expect(calls).toEqual(["scan", "changes", `tree ${TREE}`]);
+  });
+
+  test("rethrows a failed scan so that nothing is committed", async () => {
+    const { deps } = scanDeps(CLEAN);
+    await expect(
+      inspectStagedWithSecretScan({
+        ...deps,
+        scanForSecrets: async () => {
+          throw new Error("gitleaks failed (exit 2): boom");
+        },
+      }),
+    ).rejects.toThrow("gitleaks failed");
   });
 });
 

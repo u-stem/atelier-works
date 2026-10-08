@@ -44,6 +44,16 @@ export function maskSecrets(
   return masked;
 }
 
+/**
+ * 理由の文字列に埋め込む詳細の中の`"; "`を`", "`に置き換えて返す。
+ * 理由は`"; "`でつないだ項目の一覧として訳され、次の操作も項目ごとに選ばれる。
+ * Claudeや検査コマンドが書ける文(Claudeの結果の文、構造化出力、stderr、ファイル名、プロセスのコマンド)に
+ * 区切りが入ると、別の理由の項目として表示されるため。
+ */
+export function escapeReasonSeparator(text: string): string {
+  return text.replaceAll("; ", ", ");
+}
+
 export type LogLevel = "info" | "warn" | "error";
 
 export type LogFields = Record<string, unknown>;

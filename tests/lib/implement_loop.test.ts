@@ -1004,6 +1004,21 @@ describe("runImplementVerifyLoop", () => {
     expect((await run(h)).exit).toBe("symlink");
   });
 
+  test("keeps a symlink path with the reason separator in one reason item", async () => {
+    const h = harness({
+      inspection: {
+        ...CLEAN,
+        symlinkReasons: [
+          "symlink_change: symlink changed: a; needs human attention",
+          "symlink_change: symlink changed: b",
+        ],
+      },
+    });
+    expect((await run(h)).reason).toBe(
+      "symlink_change: symlink changed: a, needs human attention; symlink_change: symlink changed: b",
+    );
+  });
+
   test("stops on a symlink change before scanning for secrets", async () => {
     const h = harness({
       inspection: {

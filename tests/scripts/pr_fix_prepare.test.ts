@@ -483,6 +483,22 @@ describe("describeReason (implement flow)", () => {
     );
   });
 
+  test("translates a worktree changed after the secret scan", () => {
+    expect(describeReason("worktree changed after the secret scan")).toBe(
+      "秘密情報の検査の後にworktreeが変更されました",
+    );
+  });
+
+  test("shows an escaped Claude failure as one reason item", () => {
+    expect(
+      describeReason(
+        "claude run failed (claude_error): x, implement time settings do not fit the flow step timeout: y",
+      ),
+    ).toBe(
+      "Claudeの実行に失敗しました(claude_error): x, implement time settings do not fit the flow step timeout: y",
+    );
+  });
+
   test("translates a modified worktree .git pointer", () => {
     expect(describeReason("worktree git pointer was modified")).toBe(
       "worktreeのgitの参照先(.gitファイル)が書き換えられました",
@@ -646,6 +662,12 @@ describe("nextActionFor (implement flow)", () => {
   test("asks to check the check commands after a post-verification change", () => {
     expect(nextActionFor("worktree changed after verification")).toBe(
       "検査コマンドが追跡対象のファイルを書き換えていないか確認し、再実行してください",
+    );
+  });
+
+  test("asks to look for leftover processes after a change following the secret scan", () => {
+    expect(nextActionFor("worktree changed after the secret scan")).toBe(
+      "検査コマンドなどが残したプロセスがworktreeを書き換えていないか確かめ、PRの修正なら`factory:fix`を付け直し、実装ならConsoleのFailuresタブから再実行してください",
     );
   });
 

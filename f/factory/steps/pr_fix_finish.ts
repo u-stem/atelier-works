@@ -29,6 +29,7 @@ import {
   requestReviewers,
   withMarker,
 } from "../lib/github.ts";
+import { GITLEAKS_TIMEOUT_MS } from "../lib/implement_loop.ts";
 import { logger, maskSecrets } from "../lib/log.ts";
 import {
   defaultLockReleaseDeps,
@@ -42,6 +43,8 @@ import {
   CommitBlockedError,
   commitAndPush,
   runCommand,
+  runGitleaksOnWorktree,
+  scannedTreeStopReasons,
 } from "../lib/workspace.ts";
 import {
   buildIssueProposalReason,
@@ -55,6 +58,7 @@ import {
   evaluateRerouteGuard,
   filterKnownReplies,
   inspectStagedChanges,
+  inspectStagedWithSecretScan,
   listReviewThreadsBestEffort,
   matchReviewThreadForComment,
   nextActionFor,
@@ -91,7 +95,9 @@ export type PrFixFinishResult = {
  * 修正があればcommitしてpushし、レビューコメントへ返信して再レビューを依頼する。
  * commitの前に、worktreeのロックを持つプロセスが無いこと、`.git`が`worktree_git_pointer`(準備ステップの記録)と一致すること、
  * ローカルのHEADが`branch`(準備ステップの記録)にあり`head_sha`であること、ステージした内容に保護パス・symlink・gitlink・`package.json`のscriptsの変更が無いことを確かめ、
- * どれかに通らなければcommitせずにneeds_humanにする。準備ステップの結果に`worktree_git_pointer`か`branch`が無いときも同じにする。
+ * ステージした差分をgitleaksで検査して秘密情報らしき文字列が無いこと、commitする索引が検査したツリーのままであることも確かめる。
+ * どれかに通らなければcommitせずにneeds_humanにし、理由を`status_reason`に記録する。準備ステップの結果に`worktree_git_pointer`か`branch`が無いときも同じにする。
+ * gitleaksの検査自体が失敗したときは、ステージを戻してから例外を投げ、何もpushしない。
  * `outcome`が想定外の値なら例外を投げる。
  * トリガーの`fix_label`は着手時に消費済みなので、終端の遷移で外すラベルは無い。
  * gtrのworktreeは消さずに残し、後で`cleanup_workspaces`が片付ける。
@@ -582,7 +588,32 @@ export async function main(
       requireLocalHeadAtExpected: true,
       expectedBranch: branch,
       inspectStaged: () =>
-        inspectStagedChanges(runCommand, worktree_dir, head_sha),
+        inspectStagedWithSecretScan({
+          scanForSecrets: async () => {
+            const scan = await runGitleaksOnWorktree({
+              run: runCommand,
+              worktreeDir: worktree_dir,
+              baseSha: head_sha,
+              timeoutMs: GITLEAKS_TIMEOUT_MS,
+            });
+            if (!scan.ok) {
+              // 検出はルール名とファイル名だけで、一致した文字列は含まない。
+              log.warn("gitleaks found secrets in the staged fix", {
+                work_item_id,
+                findings: scan.output,
+              });
+            }
+            return scan;
+          },
+          inspectChanges: () =>
+            inspectStagedChanges(runCommand, worktree_dir, head_sha),
+          inspectTree: (scannedTreeSha) =>
+            scannedTreeStopReasons({
+              run: runCommand,
+              worktreeDir: worktree_dir,
+              scannedTreeSha,
+            }),
+        }),
     });
   } catch (err) {
     if (err instanceof CommitBlockedError) return stopBeforeCommit(err.message);

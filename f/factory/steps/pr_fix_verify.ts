@@ -13,7 +13,7 @@ import {
 import { loadConfig } from "../lib/config.ts";
 import { addNotice, latestDraft, recordAgentRun } from "../lib/db.ts";
 import { type GhClient, getPr } from "../lib/github.ts";
-import { logger } from "../lib/log.ts";
+import { escapeReasonSeparator, logger } from "../lib/log.ts";
 import {
   lockJobIdFromEnv,
   withWorktreeProcessLock,
@@ -164,7 +164,10 @@ export async function runPrFixVerify(
     const headReason = await deps.checkHead(headSha, branch);
     if (headReason !== null) return headReason;
     const forbidden = await deps.inspectChanges();
-    return forbidden.blocked ? forbidden.reasons.join("; ") : null;
+    // 理由のパスはClaudeや検査コマンドが選べるので、区切りで別の理由に見えないようにする。
+    return forbidden.blocked
+      ? forbidden.reasons.map(escapeReasonSeparator).join("; ")
+      : null;
   };
 
   const firstReason = await inspect();

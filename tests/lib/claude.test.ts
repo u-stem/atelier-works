@@ -958,3 +958,45 @@ describe("dailyBudgetStatus", () => {
     expect(calls[0]?.values).toContain("2026-09-25T15:00:00.000Z");
   });
 });
+
+describe("runClaude failure details", () => {
+  const SPOOF =
+    "x; implement time settings do not fit the flow step timeout: y";
+
+  test("does not let stderr add a reason item", async () => {
+    const fake = createFakeCommandRunner([fail(SPOOF)]);
+    const result = await runClaude(baseOptions(fake.run));
+    expect(result.outcome === "failure" ? result.detail : "").not.toContain(
+      "; ",
+    );
+  });
+
+  test("does not let the result text of an error add a reason item", async () => {
+    const fake = createFakeCommandRunner([
+      {
+        stdout: claudeJsonStdout({ is_error: true, result: SPOOF }),
+        stderr: "",
+        exitCode: 0,
+        timedOut: false,
+      },
+    ]);
+    const result = await runClaude(baseOptions(fake.run));
+    expect(result.outcome === "failure" ? result.detail : "").not.toContain(
+      "; ",
+    );
+  });
+
+  test("does not let a structured output that fails the schema add a reason item", async () => {
+    const wrong = {
+      stdout: claudeJsonStdout({ structured_output: { wrong: SPOOF } }),
+      stderr: "",
+      exitCode: 0,
+      timedOut: false,
+    };
+    const fake = createFakeCommandRunner([wrong, wrong]);
+    const result = await runClaude(baseOptions(fake.run));
+    expect(result.outcome === "failure" ? result.detail : "").not.toContain(
+      "; ",
+    );
+  });
+});

@@ -323,6 +323,24 @@ describe("runPrFixVerify: protected paths before the Claude-only result", () => 
     expect(result.reason).toBe("forbidden path changed: mise.toml");
   });
 
+  test("keeps a path with the reason separator in one reason item", async () => {
+    const h = harness({
+      inspections: [
+        {
+          blocked: true,
+          reasons: [
+            "forbidden path changed: a; needs human attention",
+            "new shell script added: b.sh",
+          ],
+        },
+      ],
+    });
+    const result = await runPrFixVerify(h.deps, INPUT);
+    expect(result.reason).toBe(
+      "forbidden path changed: a, needs human attention; new shell script added: b.sh",
+    );
+  });
+
   test("does not run check commands when the first inspection blocks", async () => {
     const h = harness({
       inspections: [forbidden("forbidden path changed: mise.toml")],

@@ -14,8 +14,13 @@ import {
   type ImplementPrepareOutcome,
 } from "./implement_loop.ts";
 import type { ImplementCheckSummary } from "./implement_support.ts";
-import { maskSecrets } from "./log.ts";
-import type { CommitAndPushResult, GitleaksResult } from "./workspace.ts";
+import { escapeReasonSeparator, maskSecrets } from "./log.ts";
+import { WorktreeBusyError } from "./process_lock.ts";
+import {
+  type CommitAndPushResult,
+  CommitBlockedError,
+  type GitleaksScan,
+} from "./workspace.ts";
 
 /** finishが扱う結果。prepareでの停止か、検証ループの終了のどちらか。 */
 export type ImplementFinishOutcome =
@@ -135,9 +140,30 @@ export function gapReportNoticeDetail(gapReport: string): string {
   return `差し戻し理由: ${maskSecrets(gapReport)}`;
 }
 
-/** finishでgitやGitHubの操作が想定外に失敗したときの`needs_human`の理由を返す。 */
+/**
+ * finishでgitやGitHubの操作が想定外に失敗したときの`needs_human`の理由を返す。
+ * エラーの文にはgitのstderrやファイル名が入りうるので、理由の区切りを消す。
+ */
 export function finishFailureReason(err: unknown): string {
-  return `implement finish failed: ${maskSecrets(err instanceof Error ? err.message : String(err))}`;
+  return `implement finish failed: ${escapeReasonSeparator(maskSecrets(err instanceof Error ? err.message : String(err)))}`;
+}
+
+/**
+ * worktreeのロックを持つプロセスが残っていないかを`ensureLockFree`で確かめ、残っていれば止める理由を返す(いなければnull)。
+ * `ensureLockFree`は何も止めずに`WorktreeBusyError`を投げるもの(`ensureWorktreeLockFree`の`policy: null`)を渡す。
+ * 検証ステップの後に残ったClaudeや検査コマンドは、検査とcommitの間にworktreeを書き換えうるため、pushの前に呼ぶ。
+ * それ以外の例外はそのまま投げる。
+ */
+export async function worktreeBusyStopReason(
+  ensureLockFree: () => Promise<void>,
+): Promise<string | null> {
+  try {
+    await ensureLockFree();
+    return null;
+  } catch (err) {
+    if (err instanceof WorktreeBusyError) return err.message;
+    throw err;
+  }
 }
 
 /**
@@ -185,33 +211,42 @@ export const IMPLEMENT_FINISH_NO_OUTPUT_REASON =
 export const IMPLEMENT_NO_CHANGES_REASON = "implement produced no changes";
 
 export type PreserveWorkDeps = {
+  /** worktreeのロックを持つプロセスがいれば、何も止めずに`WorktreeBusyError`を投げる。 */
+  readonly ensureLockFree: () => Promise<void>;
   /** 文脈の`worktree_git_pointer`に対して`assertWorktreeGitPointer`を実行する。 */
   readonly assertGitPointer: () => Promise<void>;
   /** implementのworktreeに`runGitleaksOnWorktree`を実行する。 */
-  readonly scanForSecrets: () => Promise<GitleaksResult>;
+  readonly scanForSecrets: () => Promise<GitleaksScan>;
   /**
    * `IMPLEMENT_WIP_COMMIT_MESSAGE`と、prepare時点の`expectedHeadSha`で
    * `commitAndPush`を実行する。
+   * ステージし直した内容が`scannedTreeSha`と違えば、`inspectStaged`(`scannedTreeStopReasons`)で
+   * commitせずに`CommitBlockedError`を投げる。
    */
-  readonly commitAndPush: () => Promise<CommitAndPushResult>;
+  readonly commitAndPush: (
+    scannedTreeSha: string,
+  ) => Promise<CommitAndPushResult>;
 };
 
 /**
  * 停止したループの作業をcommitしてブランチにpushする。
+ * worktreeのロックを持つプロセスが残っていればpushしない。
  * `.git`ポインタが変わったworktreeではgitを実行しない。
- * 秘密の検査で検出された変更や、検査できなかった変更もpushしない。
+ * 秘密の検査で検出された変更や、検査できなかった変更、検査した後に変わった変更もpushしない。
  * `needs_human`の理由に付け足す注記(英語)の配列を返す。
  * 例外は`ImplementLeaseLostError`(依存がリースを失ったと知らせた)だけを投げ直し、
  * それ以外は注記にする。リースを失った実行は、注記を付けて人に知らせるのではなく、何もせずに終えるため。
  */
 export async function preserveWork(deps: PreserveWorkDeps): Promise<string[]> {
   try {
+    const busyReason = await worktreeBusyStopReason(deps.ensureLockFree);
+    if (busyReason !== null) return [busyReason];
     const pointerReason = await gitPointerStopReason(deps.assertGitPointer);
     if (pointerReason !== null) return [pointerReason];
   } catch (err) {
     return [failureNoteUnlessLeaseLost(err)];
   }
-  let scan: GitleaksResult;
+  let scan: GitleaksScan;
   try {
     scan = await deps.scanForSecrets();
   } catch (err) {
@@ -219,11 +254,12 @@ export async function preserveWork(deps: PreserveWorkDeps): Promise<string[]> {
   }
   if (!scan.ok) return [SECRETS_NOT_PUSHED_REASON];
   try {
-    const pushed = await deps.commitAndPush();
+    const pushed = await deps.commitAndPush(scan.treeSha);
     return pushed.outcome === "head_changed"
       ? [`branch head moved to ${pushed.currentSha} while implementing`]
       : [];
   } catch (err) {
+    if (err instanceof CommitBlockedError) return [err.message];
     return [failureNoteUnlessLeaseLost(err)];
   }
 }

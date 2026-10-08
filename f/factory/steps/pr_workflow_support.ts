@@ -14,10 +14,13 @@ import {
   type ReviewThread,
   withMarker,
 } from "../lib/github.ts";
-import { decideGapReroute } from "../lib/implement_finish_support.ts";
+import {
+  decideGapReroute,
+  SECRETS_NOT_PUSHED_REASON,
+} from "../lib/implement_finish_support.ts";
 import { parseFlowJobId } from "../lib/implement_launch_support.ts";
 import { gitPointerStopReason } from "../lib/implement_loop.ts";
-import { maskSecrets } from "../lib/log.ts";
+import { escapeReasonSeparator, maskSecrets } from "../lib/log.ts";
 import { WorktreeBusyError } from "../lib/process_lock.ts";
 import {
   type ChangedPath,
@@ -49,6 +52,7 @@ import {
 import {
   assertOutputComplete,
   type CommandRunner,
+  type GitleaksScan,
   readGitShowFile,
 } from "../lib/workspace.ts";
 
@@ -2299,6 +2303,35 @@ export async function inspectStagedChanges(
   ]).reasons;
 }
 
+/** `inspectStagedWithSecretScan`が使うI/O。テストでは偽物に差し替える。 */
+export type SecretScanInspectionDeps = {
+  /** `runGitleaksOnWorktree`をPRのhead(`head_sha`)を基準に実行する。すべてをステージし直してから検査する。 */
+  readonly scanForSecrets: () => Promise<GitleaksScan>;
+  /** ステージした内容をPRのheadと比べる(`inspectStagedChanges`)。 */
+  readonly inspectChanges: () => Promise<readonly string[]>;
+  /** 今ステージしてある内容を、検査したツリーと比べる(`scannedTreeStopReasons`)。 */
+  readonly inspectTree: (scannedTreeSha: string) => Promise<readonly string[]>;
+};
+
+/**
+ * pr_fixの完了ステップが`commitAndPush`の`inspectStaged`に渡す検査。止める理由を返す(無ければ空)。
+ * 実装フローと同じgitleaksの検査(ステージした差分、`--redact`)をし、検出があれば`SECRETS_NOT_PUSHED_REASON`を先頭に置く。
+ * `nextActionFor`は先頭の理由の対応を選ぶので、秘密の除去の案内を優先するため。
+ * 続けて保護パスなどの変更を調べ、最後に索引が検査したツリーのままかを確かめる。
+ * 検査はすべてをステージし直すので、変更の判定とcommitする内容が検査した内容と同じであることを最後に保証するため。
+ * 検査自体の失敗はそのまま投げる(`commitAndPush`がステージを戻し、何もcommitしない)。
+ */
+export async function inspectStagedWithSecretScan(
+  deps: SecretScanInspectionDeps,
+): Promise<string[]> {
+  const scan = await deps.scanForSecrets();
+  return [
+    ...(scan.ok ? [] : [SECRETS_NOT_PUSHED_REASON]),
+    ...(await deps.inspectChanges()),
+    ...(await deps.inspectTree(scan.treeSha)),
+  ];
+}
+
 /**
  * 準備ステップの結果に`worktree_git_pointer`が無いときの理由。
  * 照合する基準が無いままworktreeでgitやClaudeを実行しないよう、各ステップは"blocked"にする。
@@ -2711,7 +2744,7 @@ export function rerouteAttemptsExhaustedReason(
  */
 export function withGapReport(reason: string, gapReport: string): string {
   return gapReport.length > 0
-    ? `${reason}; ${gapReport.replaceAll("; ", ", ")}`
+    ? `${reason}; ${escapeReasonSeparator(gapReport)}`
     : reason;
 }
 
@@ -3756,6 +3789,13 @@ const REASON_RULES: readonly ReasonRule[] = [
     describe: () => "検証の後にworktreeが変更されました",
     nextAction: () =>
       "検査コマンドが追跡対象のファイルを書き換えていないか確認し、再実行してください",
+  },
+  // `lib/workspace.ts`の`scannedTreeStopReasons`(実装フローの途中経過のpushと、pr_fixの完了ステップ)
+  {
+    pattern: /^worktree changed after the secret scan$/,
+    describe: () => "秘密情報の検査の後にworktreeが変更されました",
+    nextAction: () =>
+      "検査コマンドなどが残したプロセスがworktreeを書き換えていないか確かめ、PRの修正なら`factory:fix`を付け直し、実装ならConsoleのFailuresタブから再実行してください",
   },
   {
     pattern: /^requirements regeneration could not be started$/,

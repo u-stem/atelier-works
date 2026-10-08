@@ -25,6 +25,7 @@ import {
   truncateCheckOutput,
   validateImplementOutput,
 } from "./implement_support.ts";
+import { escapeReasonSeparator } from "./log.ts";
 import {
   type CheckFailure,
   IMPLEMENT_SCHEMA,
@@ -976,7 +977,8 @@ export async function runImplementVerifyLoop(
       });
       return stopped({
         exit: stop.exit,
-        reason: stop.reasons.join("; "),
+        // 理由のパスはClaudeが選べるので、区切りで別の理由に見えないようにする。
+        reason: stop.reasons.map(escapeReasonSeparator).join("; "),
         protected_changes: protectedChanges,
         diff_stat: fingerprint.diffStat,
         changed_paths: changedPaths,

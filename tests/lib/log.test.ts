@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { logger, maskSecrets } from "../../f/factory/lib/log.ts";
+import {
+  escapeReasonSeparator,
+  logger,
+  maskSecrets,
+} from "../../f/factory/lib/log.ts";
 
 describe("maskSecrets", () => {
   test("masks a GitHub fine-grained PAT", () => {
@@ -161,5 +165,23 @@ describe("logger", () => {
     expect(parsed).toMatchObject({
       fields: { request: { headers: { authorization: "Bearer ***" } } },
     });
+  });
+});
+
+describe("escapeReasonSeparator", () => {
+  test("replaces the reason separator with a comma", () => {
+    expect(
+      escapeReasonSeparator(
+        "boom; implement time settings do not fit the flow step timeout: x",
+      ),
+    ).toBe("boom, implement time settings do not fit the flow step timeout: x");
+  });
+
+  test("leaves a semicolon that is not followed by a space", () => {
+    expect(escapeReasonSeparator("a;b")).toBe("a;b");
+  });
+
+  test("leaves no separator behind in repeated semicolons", () => {
+    expect(escapeReasonSeparator("a;; b; ; c")).not.toContain("; ");
   });
 });
