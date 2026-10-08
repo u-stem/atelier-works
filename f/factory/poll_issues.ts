@@ -706,17 +706,20 @@ export type DecisionHandlers = {
  * 同じ扱いにする。
  * 所有を判断できなかったIssueは集め、ループを抜けるときに必ず1回だけ
  * `notifyOwnershipUnknown`へ渡す。`recordFailure`などが想定外に例外を投げて
- * ループが途中で終わっても、`finally`で通知するため、集めた分の通知は失われない。
- * このときループの例外は、通知の後にそのまま投げられる。
+ * ループが途中で終わっても、集めた分は通知される。
+ * ループの例外は通知の後に投げ直す。通知も例外を投げたときは、原因であるループの例外を残し、
+ * 通知の失敗は`log`に記録する。ループが成功していれば、通知の例外をそのまま投げる。
  */
 export async function processIssueDecisions(
   decisions: readonly IssueDecision[],
   handlers: DecisionHandlers,
+  log?: Logger,
 ): Promise<{ claimed: number; skipped: number; failed: number }> {
   let claimed = 0;
   let skipped = 0;
   let failed = 0;
   const ownershipUnknown: IssueCandidate[] = [];
+  let loopFailure: { readonly error: unknown } | null = null;
   try {
     for (const decision of decisions) {
       const { candidate } = decision;
@@ -747,9 +750,20 @@ export async function processIssueDecisions(
         await handlers.recordFailure(`claim_issue:${where}`, err);
       }
     }
-  } finally {
-    await handlers.notifyOwnershipUnknown(ownershipUnknown);
+  } catch (err) {
+    loopFailure = { error: err };
   }
+  try {
+    await handlers.notifyOwnershipUnknown(ownershipUnknown);
+  } catch (notifyErr) {
+    if (loopFailure === null) throw notifyErr;
+    log?.error("failed to notify claims with unknown ownership", {
+      error: maskSecrets(
+        notifyErr instanceof Error ? notifyErr.message : String(notifyErr),
+      ),
+    });
+  }
+  if (loopFailure !== null) throw loopFailure.error;
   return { claimed, skipped, failed };
 }
 
@@ -936,30 +950,32 @@ export async function main(): Promise<{
   );
 
   // 所有を判断できなかったIssueの通知は、`processIssueDecisions`がループを抜けるときに送る。
-  // この時点では、各Issueの失敗の記録(`recordFailureSafe`、例外を投げない)までが書き込み済みで、
-  // 照合と期限切れの掃除は、まだ始めていない。
-  const processed = await processIssueDecisions(decisions, {
-    claim: (candidate) =>
-      claimAndStart(
-        client,
-        candidate,
-        viewer.login,
-        config,
-        discordWebhookUrl,
-        log,
-      ),
-    recordDenied: (candidate, association) =>
-      recordLabelerAssociationDenied(candidate, association),
-    recordFailure: (step, err) => recordFailureSafe(step, err, log),
-    notifyOwnershipUnknown: (unknown) =>
-      notifyClaimOwnershipUnknown({
-        candidates: unknown,
-        triggerLabel: config.trigger_label,
-        instanceName: config.instance_name,
-        discordWebhookUrl,
-        log,
-      }),
-  });
+  const processed = await processIssueDecisions(
+    decisions,
+    {
+      claim: (candidate) =>
+        claimAndStart(
+          client,
+          candidate,
+          viewer.login,
+          config,
+          discordWebhookUrl,
+          log,
+        ),
+      recordDenied: (candidate, association) =>
+        recordLabelerAssociationDenied(candidate, association),
+      recordFailure: (step, err) => recordFailureSafe(step, err, log),
+      notifyOwnershipUnknown: (unknown) =>
+        notifyClaimOwnershipUnknown({
+          candidates: unknown,
+          triggerLabel: config.trigger_label,
+          instanceName: config.instance_name,
+          discordWebhookUrl,
+          log,
+        }),
+    },
+    log,
+  );
   claimed += processed.claimed;
   skipped += processed.skipped;
   failed += processed.failed;

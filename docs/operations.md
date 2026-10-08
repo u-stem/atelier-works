@@ -52,6 +52,7 @@ Factory自身のリポジトリ(`factory_repo`)は、`repo_allowlist`の内容�
 Issueに`factory`ラベルを付けると、Factoryがそれを拾う。拾うのは、最後にラベルを付けた人が許可された関係(既定ではOWNER、MEMBER、COLLABORATORのいずれか)のときだけである。
 
 許可されていない人がラベルを付けたIssueは拾わない。Consoleの**通知**タブに、ラベル付与者の関係が許可されていない旨(`labeler_association_denied`)が残る。
+このnoticeの記録に失敗してもジョブは止まらず、**失敗**タブに`labeler_denied:<owner>/<repo>#<Issue番号>`として残る。
 
 ### フォームで投入する
 
@@ -116,6 +117,7 @@ Issueにはラベルが無いので、次のポーリングは拾わない。
 4. 始まっていなければ、Issueに`factory`ラベルを付け直す。
 
 原因は、Consoleの**失敗**タブの`claim_issue:<owner>/<repo>#<Issue番号>`か、`poll_issues`のジョブのログで確かめる。
+関係の検査で見送ったIssueのnoticeを記録できなかった失敗は、同じタブに`labeler_denied:<owner>/<repo>#<Issue番号>`で残る。
 
 次の場合は、人の操作は要らない。
 

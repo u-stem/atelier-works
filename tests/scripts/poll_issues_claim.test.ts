@@ -553,83 +553,101 @@ describe("processIssueDecisions", () => {
     expect(result.skipped).toBe(1);
   });
 
-  test("counts an active issue as skipped without claiming it", async () => {
-    const { handlers: h, recorded } = handlers(async () => "claimed");
+  test("counts an active issue as skipped", async () => {
+    const { handlers: h } = handlers(async () => "claimed");
     const result = await processIssueDecisions(
       [{ action: "skip_active", candidate: candidateAt(1) }],
       h,
     );
-    expect([result.skipped, result.claimed, recorded.failures]).toEqual([
-      1,
-      0,
-      [],
-    ]);
+    expect(result.skipped).toBe(1);
   });
 
-  test("records the denied association and counts the issue as skipped", async () => {
+  test("does not claim an active issue", async () => {
+    const { handlers: h } = handlers(async () => "claimed");
+    const result = await processIssueDecisions(
+      [{ action: "skip_active", candidate: candidateAt(1) }],
+      h,
+    );
+    expect(result.claimed).toBe(0);
+  });
+
+  test("records no failure for an active issue", async () => {
     const { handlers: h, recorded } = handlers(async () => "claimed");
-    const result = await processIssueDecisions(
-      [
-        {
-          action: "skip_association",
-          candidate: candidateAt(4),
-          association: "NONE",
-        },
-      ],
+    await processIssueDecisions(
+      [{ action: "skip_active", candidate: candidateAt(1) }],
       h,
     );
-    expect([result.skipped, recorded.denied]).toEqual([1, [4]]);
+    expect(recorded.failures).toEqual([]);
   });
 
-  test("records a failing denial as a failure and goes on with the next issue", async () => {
-    const { handlers: h } = handlers(async () => "claimed", {
-      recordDenied: async () => {
-        throw new Error("db down");
-      },
-    });
+  const denied = (n: number): IssueDecision => ({
+    action: "skip_association",
+    candidate: candidateAt(n),
+    association: "NONE",
+  });
+
+  test("counts a denied association as skipped", async () => {
+    const { handlers: h } = handlers(async () => "claimed");
+    const result = await processIssueDecisions([denied(4)], h);
+    expect(result.skipped).toBe(1);
+  });
+
+  test("records the denied association of the issue", async () => {
+    const { handlers: h, recorded } = handlers(async () => "claimed");
+    await processIssueDecisions([denied(4)], h);
+    expect(recorded.denied).toEqual([4]);
+  });
+
+  const failingDenial: Partial<DecisionHandlers> = {
+    recordDenied: async () => {
+      throw new Error("db down");
+    },
+  };
+
+  test("counts a failing denial as failed", async () => {
+    const { handlers: h } = handlers(async () => "claimed", failingDenial);
     const result = await processIssueDecisions(
-      [
-        {
-          action: "skip_association",
-          candidate: candidateAt(4),
-          association: "NONE",
-        },
-        claimDecision(5),
-      ],
+      [denied(4), claimDecision(5)],
       h,
     );
-    expect([result.failed, result.claimed]).toEqual([1, 1]);
+    expect(result.failed).toBe(1);
+  });
+
+  test("goes on with the next issue after a failing denial", async () => {
+    const { handlers: h } = handlers(async () => "claimed", failingDenial);
+    const result = await processIssueDecisions(
+      [denied(4), claimDecision(5)],
+      h,
+    );
+    expect(result.claimed).toBe(1);
   });
 
   test("names the failing denial step after the issue", async () => {
-    const { handlers: h, recorded } = handlers(async () => "claimed", {
-      recordDenied: async () => {
-        throw new Error("db down");
-      },
-    });
-    await processIssueDecisions(
-      [
-        {
-          action: "skip_association",
-          candidate: candidateAt(4),
-          association: "NONE",
-        },
-      ],
-      h,
+    const { handlers: h, recorded } = handlers(
+      async () => "claimed",
+      failingDenial,
     );
+    await processIssueDecisions([denied(4)], h);
     expect(recorded.failures).toEqual([
       "labeler_denied:octo-owner/atelier-works#4",
     ]);
   });
 
-  test("records a failing claim and counts it as failed", async () => {
-    const { handlers: h, recorded } = handlers(async () => {
-      throw new Error("claim failed");
-    });
+  const failingClaim = async (): Promise<"claimed" | "skipped"> => {
+    throw new Error("claim failed");
+  };
+
+  test("counts a failing claim as failed", async () => {
+    const { handlers: h } = handlers(failingClaim);
     const result = await processIssueDecisions([claimDecision(1)], h);
-    expect([result.failed, recorded.failures]).toEqual([
-      1,
-      ["claim_issue:octo-owner/atelier-works#1"],
+    expect(result.failed).toBe(1);
+  });
+
+  test("records a failing claim under the issue", async () => {
+    const { handlers: h, recorded } = handlers(failingClaim);
+    await processIssueDecisions([claimDecision(1)], h);
+    expect(recorded.failures).toEqual([
+      "claim_issue:octo-owner/atelier-works#1",
     ]);
   });
 
@@ -685,5 +703,56 @@ describe("processIssueDecisions", () => {
       h,
     );
     await expect(processing).rejects.toThrow("db down");
+  });
+
+  const failingNotify: Partial<DecisionHandlers> = {
+    notifyOwnershipUnknown: async () => {
+      throw new Error("discord down");
+    },
+  };
+
+  const laterFailure = (): Partial<DecisionHandlers> => ({
+    recordFailure: async (step) => {
+      if (step.endsWith("#2")) throw new Error("db down");
+    },
+    ...failingNotify,
+  });
+
+  const unknownThenFailing = async (c: IssueCandidate) => {
+    if (c.number === 1) throw new ClaimOwnershipUnknownError("unknown");
+    throw new Error("claim failed");
+  };
+
+  test("rethrows the original loop error when the notification also throws", async () => {
+    const { handlers: h } = handlers(unknownThenFailing, laterFailure());
+    const processing = processIssueDecisions(
+      [claimDecision(1), claimDecision(2)],
+      h,
+    );
+    await expect(processing).rejects.toThrow("db down");
+  });
+
+  test("logs the notification failure when the loop already failed", async () => {
+    const { handlers: h } = handlers(unknownThenFailing, laterFailure());
+    const errors: string[] = [];
+    const log: Logger = {
+      info() {},
+      warn() {},
+      error(message) {
+        errors.push(message);
+      },
+    };
+    await processIssueDecisions(
+      [claimDecision(1), claimDecision(2)],
+      h,
+      log,
+    ).catch(() => undefined);
+    expect(errors).toEqual(["failed to notify claims with unknown ownership"]);
+  });
+
+  test("rethrows the notification error when the loop itself succeeded", async () => {
+    const { handlers: h } = handlers(async () => "claimed", failingNotify);
+    const processing = processIssueDecisions([claimDecision(1)], h);
+    await expect(processing).rejects.toThrow("discord down");
   });
 });
