@@ -184,6 +184,28 @@ Consoleの成果物を取り込む`console_fetcher`だけが使うfine-grained P
 - Caddyは`127.0.0.1`(環境変数`WM_BIND`。既定値`127.0.0.1`は`mise.toml`の`[env]`にある)にのみバインドする。ホスト外部からは到達できない構成が既定であり、外部公開する場合は利用者が明示的に`WM_BIND`を変更する必要がある。
 - 初期管理者アカウントのパスワードは既知の既定値であるため、`scripts/bootstrap.sh`がログイン後に必ずパスワードを`WM_ADMIN_PASSWORD`へ変更する。`WM_ADMIN_PASSWORD`が既定値(`changeme`)か12文字未満なら`bootstrap.sh`は実行を拒否する。`doctor`は既定パスワード(`changeme`)でログインできてしまう状態をNGとして検出する。
 
+## Consoleの配信(console_fetcherとCaddy)
+
+Consoleは`/console/`でWindmillと同じオリジンから配信する。ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者として呼べる。そのため配信物の完全性と、ブラウザ側の制限を次のように守る。
+
+- **書ける場所を1つにする**: 配信物の置き場所`factory_console`(dockerの名前付きボリューム)に書けるのは`console_fetcher`だけ。Caddyは読み取り専用でマウントし、worker(すべてのジョブがrootで動く)はマウントしない。workerのサンドボックスを将来作るときも、**`factory_console`を書き込みでマウントしてはいけない**。書けるコンテナが増えると、運用者のブラウザに居座る改ざんの経路になる。
+- **`console_fetcher`のコンテナ**: uid 1000(非root)、`read_only`、`cap_drop: [ALL]`、`no-new-privileges`、専用のnetwork`console_egress`(DBにもWindmillにも届かない)、第三者のパッケージなし。dockerには外への行き先をドメインで絞る仕組みが無いので、コードが`api.github.com`と、そこからリダイレクトされたAzureのblob storage(`*.blob.core.windows.net`、`https:`のみ)にしか接続しないことで守る。成果物の取得先へはトークンを送らない。
+- **取り込むもの**: `main`へのpushで動き、全体が成功した`ci.yml`の実行の成果物`console-dist`だけ。zip全体のsha256をGitHubの`digest`と、展開した全ファイルのsha256を`manifest.json`と照合し、マニフェストが実行のcommitのものであることを確かめてから書く。zipは自前のreaderでメモリ上に展開し、`..`・絶対パス・symlink・通常のファイル以外・暗号化・zip64を拒む。
+- **CIの組み立て**: `bun install --frozen-lockfile --ignore-scripts`で、依存のinstall scriptを実行しない。`console/bun.lock`は`scripts/check-console-lockfile.ts`で、registry由来でsha512のintegrityが付いた依存だけであることを検査する(git・GitHub・tarballのURL、`console/`の外を指す`file:` / `link:`、`trustedDependencies`を拒む)。
+- **ブラウザ側**: `/console/*`の応答(404とfallbackを含む)だけに、`script-src`を`/console/assets/`に絞ったCSP(`'unsafe-inline'`・`'unsafe-eval'`なし)、`frame-ancestors 'none'`、`X-Frame-Options: DENY`、`nosniff`、`Referrer-Policy: same-origin`、`Cross-Origin-Opener-Policy: same-origin`を付ける。Trusted Typesは`Content-Security-Policy-Report-Only`で様子を見る。Windmill(`/`と`/api/*`)にはこれらを付けない。
+- **他のサイトからのAPIの呼び出し**: `/api/*`への要求で`Sec-Fetch-Site`が`cross-site`か`same-site`のものは、Caddyが403にする。他のポートのlocalhostや外部のリンクから、運用者のCookieでAPIを実行させないため。WindmillのフロントエンドはSec-Fetch-Site: same-originを送り、CLI(`wmill`)はこのヘッダーを送らない。Windmill 1.817.0のraw app(旧Console)は既定でsandboxが無く、`backend.*`の呼び出しは`parent.postMessage`を通して同じオリジンの親(WindmillのSPA)が行うので、これも`same-origin`になる。raw appのsandboxを有効にすると、バンドルの取得(`GET /api/w/*/apps_u/get_data/v/*`)がcross-siteになって403になるので、その経路を例外にする必要がある。
+- **秘密**: Consoleのバンドルは認証なしで配信されるので、`VITE_*`の変数に秘密を入れない。
+
+残るリスク:
+
+- `main`にマージされたコードは、そのまま運用者のブラウザで動く。Consoleの変更のレビューは、Windmillの管理者権限を持つコードのレビューとして行う。
+- CIの組み立ての途中で動く依存(Viteのプラグインなど)が侵害されると、出力が改ざんされうる。`digest`とマニフェストが保証するのは「GitHubのCIが作ったもの」であることまでで、依存の中身ではない。
+- `Sec-Fetch-Site`をブラウザが送るのは、信頼できるオリジン(localhostかHTTPS)のときだけ。`WM_BIND`を外向きにしてHTTPで公開すると、このヘッダーが届かず防御が効かない。外向きにするならHTTPSにする。
+- `console_fetcher`の外への通信はnetworkでは絞れない。コードが侵害されれば任意の宛先へ出られる。
+- `console_egress`は通常のbridgeなので、`WM_BIND`を外向き(`0.0.0.0`など)にすると、`console_fetcher`からホストのゲートウェイのIP経由でCaddy(つまりWindmill)に届く。`console_fetcher`はWindmillの資格情報を持たないが、認証の要らない経路には届く。
+- `CONSOLE_GITHUB_TOKEN`は`docker inspect`できる人(ホストのdockerを使える人)には見える。
+- 成果物の保持は30日。30日以上`main`へのpushが無いと、新しく立ち上げた環境は取り込めない(動作中の環境は今の版を配信し続ける)。そのときは`main`に何かをpushしてCIを動かす。
+
 ## workerコンテナの権限
 
 - workerは`privileged`を付けず、`FAVOR_UNSHARE_PID`も有効にしない。Windmillの公式構成はジョブ隔離のためにこれらを使うことがあるが、このworkerはuntrustedなIssue内容を読むheadless Claudeをサブプロセスとして実行するため、コンテナが万一侵害された場合の影響範囲(ホストへの波及)を優先して最小化する。ジョブ間の隔離は、追加の特権に頼らず、工程ごとのツール制限・read-only方針といった上位の信頼境界設計で確保する。

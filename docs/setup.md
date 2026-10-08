@@ -46,6 +46,7 @@ mise run bootstrap      # ワークスペース作成、secret 投入、sync pus
 | ローカルとリモートの一致 | `mise exec -- wmill sync push --dry-run` | `0 changes` |
 | Data Table migration | `mise run test:db` | 全view(`v_inbox`など7つ)のSELECTとdown migrationのロールバックが成功し、末尾に`[test-db] OK` |
 | Consoleの取り込み | `mise exec -- docker compose -f infra/docker-compose.yml logs --tail 20 console_fetcher` | `"event":"status","state":"ok"`の行(初回は`"event":"deployed"`も)。`config_missing`なら`CONSOLE_GITHUB_TOKEN`の投入と`mise run up`を確かめる |
+| Consoleの配信 | `curl -sI http://127.0.0.1:8080/console/` | `HTTP/1.1 200`と`Content-Security-Policy`。`/`と`/api/version`には`Content-Security-Policy`が付かない |
 
 ## トラブルシュート
 

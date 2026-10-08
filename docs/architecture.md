@@ -10,6 +10,7 @@ Software FactoryはGitHub Issueを起点に、要件定義から自己改善ま�
 - **Windmill server / worker**: フローとスケジュールの実行基盤。workerはカスタムイメージで動き、`claude`(Claude Code CLI)、`gh`、`gtr`(git worktree runner)、`wmill`を同梱する。workerはdefaultワーカーグループの1コンテナで、`NUM_WORKERS=3`により内部で3つのワーカープロセスが並列動作する(メモリ上限は1コンテナ分の4096Mのまま)。
 - **Data Tables**: 作業の状態・要件定義ドラフト・承認履歴・実行ログ・失敗記録などを保持するPostgresベースのテーブル群。
 - **App(ダッシュボード)**: 承認Inbox、要件定義書の一覧・全文表示(Confluenceの文書ページに近い見た目、図はインライン描画)、パイプラインの一覧、コスト等の分析、失敗の再実行、通知一覧、監査(監査レポートの一覧・全文表示と「今すぐ監査」)を提供するUI。
+- **Console(作り直し中)**: `console/`(Vite + React)を、GitHubのCIが組み立てて成果物`console-dist`にする。専用のコンテナ`console_fetcher`が5分ごとに成果物を検証して共有ボリューム`factory_console`に置き、Caddyが`/console/`で配信する。`self_update`とWindmillの同期(`wmill sync`)の対象ではない。安全面は[docs/security.md](security.md)の「Consoleの配信」を参照。
 - **Discord**: 各イベント(拾い上げ、承認待ち、承認、却下、要対応、失敗など)をWebhook経由で通知する。
 
 ## パイプライン(工程1 → 5)
