@@ -46,3 +46,30 @@ value:
 resource_type: c_factory_config
 description: >-
   個人アカウント単体インスタンス向けの初期設定です。ownersとinstance_nameは、この画面から入力してください。
+#
+# 工程3(実装とPR作成)の設定。ここでは値を足さない。必要になったら、Windmill UIで
+# `value`に次のキーを足す。
+#   implement_enabled: true
+#     要件定義の承認後に実装を自動で開始するか。既定はfalseで、falseの間は
+#     承認後に`approved`で止まる(ConsoleのFailuresタブの再実行も拒否される)。
+#     sandboxリポジトリでe2eを済ませてからtrueにする。
+#   check_commands_by_repo:
+#     <owner>/<repo>:
+#       - bun install --frozen-lockfile
+#       - bun test
+#     キーは`<owner>/<repo>`、値は実行するコマンドの配列。ここに書いた
+#     リポジトリだけで検査を実行する(`allowed_check_commands`は使わない)。
+#     Claudeが書いたコードを隔離なしで実行するため、Issueを信頼できる人だけが
+#     起票するリポジトリに限る。検査の前に`git clean -fdX`で`node_modules/`などが
+#     消えるため、依存関係のあるリポジトリは先頭でインストールする。依存関係が
+#     無い(`package.json`が無い)リポジトリなら`bun test`だけでよい。
+#   implement_timeout_sec: 3600
+#     Claude Codeの1回の実行を打ち切るまでの制限時間(秒)。
+#   implement_check_timeout_sec: 900
+#     検査コマンド1件を打ち切るまでの制限時間(秒)。
+#   implement_flow_timeout_sec: 14400
+#     実装1回の期限(秒)。作業領域の準備を始めてから数える。
+#   時間の設定と検査コマンドの数は、実装フローのステップのtimeout
+#   (`IMPLEMENT_STEP_TIMEOUT_SEC`)に収まる組み合わせにする。収まらないと、実装の
+#   準備でneeds_humanになる。既定値なら検査コマンドは7件まで、修正ラウンドを
+#   始められる余裕を考えると4件までが目安。計算式は`docs/operations.md`を参照。

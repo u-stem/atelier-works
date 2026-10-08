@@ -137,6 +137,22 @@ mise run bootstrap     # workspace 作成、secret 投入、sync push、migratio
 1. サンドボックス用リポジトリでIssueテンプレートからIssueを作成し、`factory`ラベルを付ける。
 2. 5分以内(`poll_issues`の周期)にDiscord通知が届き、Inboxに表示されることを確認する。
 3. 一度Reject(理由付き)し、要件が再生成されて再度通知が来ることを確認する。
-4. Approveし、IssueにConsoleへのリンクを含むコメントが1件だけ投稿され(要件定義本文や図は転記されない)、ラベルが承認済みラベルへ付け替わることを確認する。
+4. Approveし、IssueにConsoleへのリンクを含むコメントが1件だけ投稿されること(要件定義本文や図は転記されない)を確認する。ラベルはトリガー専用なので、承認でIssueのラベルは付け替わらない(`docs/operations.md`のラベルの節を参照)。
 5. Analyticsタブにコスト・トークン数が反映されることを確認する。
 6. 何かしらの変更をself cloneに反映させ、`self_update`スケジュールが最新のSHAを取り込むことを確認する。
+
+### 工程3(実装フロー)のE2E
+
+上記の1〜4のあと、sandboxで実装フローを確認する。sandboxは`factory_config.repo_allowlist`にあるsandboxリポジトリを使う。
+
+1. `check_commands_by_repo`にsandboxの検査コマンドを設定する(例: `{"<owner>/<repo>": ["bun install --frozen-lockfile", "bun test"]}`)。検査の前に`git clean -fdX`で`node_modules/`などが消えるため、依存関係のあるリポジトリは先頭でインストールする。依存関係が無い(`package.json`が無い)リポジトリなら`bun test`だけでよい。検査コマンドはClaudeが書いたコードをrootで隔離なしに実行するため、Issueを信頼できる人だけが起票するリポジトリにだけ設定する。`f/factory/factory_config`はgit管理外なので、Windmill UIで編集する。
+2. `implement_enabled`がfalseのままだと、承認後は`approved`で止まる。e2eの間だけtrueにする(Consoleの再実行で起動する場合も、`retry_work_item`はfalseだと拒否するので、先にtrueにする)。`implement_enabled`はインスタンス全体の設定なので、trueの間は`repo_allowlist`の他のリポジトリと、常に対象の`factory_repo`の承認でも実装フローが走る(push、PR作成、対象リポジトリのCIまで進む)。e2eの間はsandbox以外を承認しない。
+3. Issueを起票し、要件定義を生成させ、Consoleで承認する。実装フローが走り、Pipelineタブで`implementing`になり、ブランチ列にブランチが出る。PRができると`pr_open`(成功扱い)になり、PR列にPRが出て、Discordに`pr_opened`の通知が届く。
+4. PR本文の章立て(受入条件、動作確認結果、確認して欲しい点、`Closes #N`)を確かめる。
+5. 実装フローが作ったPRには、`implement_finish`がすでに`factory:review`ラベルを付けている。ラベルを付け直さなくても、`poll_prs`が拾って`pr_review`が自動で走ることを確認する(ラベルを付け直すのは、レビューをもう一度起動したいときだけ)。
+6. 次を確かめる。
+   - 検査コマンドがラウンドで実行されたこと(`implement_rounds`)。
+   - `agent_runs`のコスト。
+   - `--restricted`のClaudeが`.git` / `.gitattributes` / `.gitleaksignore`と要件定義のディレクトリに書けないこと。書けたなら`--restricted`の欠陥として扱い、止めて報告する。書けた場合の結果は経路で違う。`.git`は`needs_human`になる。`.gitattributes`と`.gitleaksignore`は保護パスなので、そのラウンドは検査を飛ばしてPRを作り、PR本文の保護パスの節に載るだけで止まらない(`.gitleaksignore`はgitleaksも読まない)。要件定義はClaudeに書き込めるコピーを渡す設計なので、確かめるのは元の要件定義のディレクトリのファイルが変わっていないこと。
+   - PATにWorkflows権限が無いこと、`.github/workflows/**`を含む変更のpushが拒否され、`needs_human`の理由に載ること。権限は足さない(工程3は`.github/**`の変更を止めずに記録するので、push拒否が実質のガードになる)。
+7. 終わったらPRを閉じ、ブランチを消し、`implement_enabled`をfalseに戻す(有効化はe2eの結果を確かめてから別に行う)。

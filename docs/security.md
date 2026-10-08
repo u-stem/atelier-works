@@ -83,7 +83,7 @@
 
 ## GitHub PAT
 
-- fine-grained PATを使う。スコープはIssues R/W、Contents R/W、Metadata R、Pull requests R/Wとする。`pr_fix`の修正pushのためContentsをRead and writeにした。fine-grained PATは権限設定の変更をトークンの値を変えずに反映できるため、既存トークンの権限を更新するだけでよく、再発行(値の再生成)は不要。
+- fine-grained PATを使う。スコープはIssues R/W、Contents R/W、Metadata R、Pull requests R/Wとする。Workflowsは付けない(工程3は`.github/**`の変更を止めずに記録するので、`.github/workflows/**`を含むpushが拒否されることが実質のガードになる)。`pr_fix`の修正pushのためContentsをRead and writeにした。fine-grained PATは権限設定の変更をトークンの値を変えずに反映できるため、既存トークンの権限を更新するだけでよく、再発行(値の再生成)は不要。
 - `issue_proposal_apply`(ユーザー決定2026-09-26、Issue化提案の承認結果反映)がIssueを作成する際も、他のGitHub呼び出しと同じ`f/factory/github_token`のPATを使う。別の認証情報は用意しない(Issues R/Wスコープは既に確保済み)。
 - 有効期限は最長1年。`poll_issues`の冒頭で`gh api user`により有効性を確認し、失効していればnoticeを出す。
 - orgリポジトリを対象にする場合、org側のPAT承認が必要になる場合がある点に注意する。
@@ -105,6 +105,7 @@ GitHub右上のアイコン → **Settings** → **Developer settings** → **Pe
 | Repository permissions: Contents | Read and write(`pr_fix`の修正pushに必要) |
 | Repository permissions: Metadata | Read-only(Issues/Contentsを選ぶと自動で付与される) |
 | Repository permissions: Pull requests | Read and write |
+| Repository permissions: Workflows | No access(付けない。`.github/workflows/**`を含むpushを拒否させる) |
 | Account permissions | すべてNo access |
 
 生成後に一度だけ表示される`github_pat_...`は、次のコマンドで`GITHUB_TOKEN`として投入する。orgリポジトリではorg側の承認が必要な場合がある。

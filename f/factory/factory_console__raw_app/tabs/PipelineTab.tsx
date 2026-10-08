@@ -1,48 +1,15 @@
 import React, { useMemo, useState } from "react";
 import { Skeleton } from "../components/Skeleton";
+import { issueOrPrLink, prLink, statusVariant } from "../lib/pipelineView";
 import { statusLabel } from "../lib/statusLabel";
-import type { PipelineRow } from "../lib/types";
 import { toPipelineRow } from "../lib/types";
 import { useConsoleQuery } from "../lib/useConsoleQuery";
 
 const ALL = "__all__";
 
-type StatusVariant = "success" | "warning" | "danger" | "neutral";
-
-const SUCCESS_STATUSES = new Set(["approved", "reviewed", "audited"]);
-const DANGER_STATUSES = new Set(["failed", "blocked", "needs_human"]);
-
-function statusVariant(status: string): StatusVariant {
-  if (status === "awaiting_approval") {
-    return "warning";
-  }
-  if (SUCCESS_STATUSES.has(status)) {
-    return "success";
-  }
-  if (DANGER_STATUSES.has(status)) {
-    return "danger";
-  }
-  return "neutral";
-}
-
 function formatDateTime(iso: string): string {
   const date = new Date(iso);
   return Number.isNaN(date.getTime()) ? iso : date.toLocaleString("ja-JP");
-}
-
-type IssueOrPrLink = { readonly label: string; readonly url: string };
-
-function issueOrPrLink(row: PipelineRow): IssueOrPrLink | null {
-  if (row.issue_url !== null && row.issue_number !== null) {
-    return { label: `#${row.issue_number}`, url: row.issue_url };
-  }
-  if (row.pr_number !== null) {
-    return {
-      label: `PR #${row.pr_number}`,
-      url: `https://github.com/${row.owner}/${row.repo}/pull/${row.pr_number}`,
-    };
-  }
-  return null;
 }
 
 export function PipelineTab(): React.ReactElement {
@@ -98,7 +65,7 @@ export function PipelineTab(): React.ReactElement {
             <option value={ALL}>すべて</option>
             {statuses.map((status) => (
               <option key={status} value={status}>
-                {status}
+                {statusLabel(status)}
               </option>
             ))}
           </select>
@@ -130,6 +97,8 @@ export function PipelineTab(): React.ReactElement {
                 <th>ステータス</th>
                 <th>リポジトリ</th>
                 <th>Issue/PR</th>
+                <th>ブランチ</th>
+                <th>PR</th>
                 <th className="numeric">attempt</th>
                 <th className="numeric">fix_round</th>
                 <th>更新</th>
@@ -138,6 +107,7 @@ export function PipelineTab(): React.ReactElement {
             <tbody>
               {filtered.map((row) => {
                 const link = issueOrPrLink(row);
+                const pr = prLink(row.pr_url);
                 return (
                   <tr key={row.work_item_id}>
                     <td className="numeric">{row.work_item_id}</td>
@@ -157,6 +127,16 @@ export function PipelineTab(): React.ReactElement {
                       {link !== null ? (
                         <a href={link.url} target="_blank" rel="noreferrer">
                           {link.label}
+                        </a>
+                      ) : (
+                        "-"
+                      )}
+                    </td>
+                    <td>{row.branch ?? "-"}</td>
+                    <td>
+                      {pr !== null ? (
+                        <a href={pr.url} target="_blank" rel="noreferrer">
+                          {pr.label}
                         </a>
                       ) : (
                         "-"

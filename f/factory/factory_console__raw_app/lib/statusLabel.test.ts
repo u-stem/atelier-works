@@ -17,4 +17,12 @@ describe("statusLabel", () => {
   test("labels pr_open (工程3's terminal state) as PR作成済み", () => {
     expect(statusLabel("pr_open")).toBe("PR作成済み");
   });
+
+  test.each([
+    ["requirements_generating", "要件定義生成中"],
+    ["reviewing", "レビュー中"],
+    ["fixing", "修正中"],
+  ])("labels %s as %s", (status, label) => {
+    expect(statusLabel(status)).toBe(label);
+  });
 });

@@ -22,6 +22,7 @@ import {
   type AuditIssueProposal,
   type AuditReport,
   assertBranchName,
+  assertPullRequestUrl,
   type DeploymentRecord,
   type Diagram,
   type FailureRecord,
@@ -1359,12 +1360,15 @@ export async function setWorkItemBranch(
 /**
  * implement_finishがIssueの作業項目のために開いた(または更新した)PRの
  * HTMLのURLを記録する。
+ * 先に`assertPullRequestUrl`を通す。ConsoleでリンクにするURLなので、
+ * 不正な形は保存せずに失敗させる。
  */
 export async function setWorkItemPrUrl(
   id: number,
   prUrl: string,
   sql: SqlClient = defaultSqlClient,
 ): Promise<void> {
+  assertPullRequestUrl(prUrl);
   await sql`
     UPDATE factory.work_items
     SET pr_url = ${prUrl}, updated_at = now()
