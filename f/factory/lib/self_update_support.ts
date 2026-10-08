@@ -278,15 +278,18 @@ export type WmillEnvInput = {
 /**
  * `wmill sync push` / `wmill datatable migrate up`のサブプロセスに渡す
  * 最小限の環境変数を作る。
- * 入れるのは`HOME`(CLIの設定ディレクトリ用)と`PATH`(`wmill`本体を探す用)
- * だけである。`process.env`全体は渡さず、workerのプロセスがたまたま持つ
- * ほかの値がサブプロセスに漏れないようにする。
+ * 入れるのは`HOME`(CLIの設定ディレクトリ用)と`PATH`(`wmill`本体を探す用)、
+ * それに`NPM_CONFIG_IGNORE_SCRIPTS`である。`process.env`全体は渡さず、
+ * workerのプロセスがたまたま持つほかの値がサブプロセスに漏れないようにする。
+ * `NPM_CONFIG_IGNORE_SCRIPTS`は、`wmill sync push`がraw appのバンドルで
+ * 走らせるnpmにも、依存のinstall scriptを動かさせないためのものである
+ * (`npm ci`の`--ignore-scripts`はそのバンドルには効かない)。
  * workspace・base-url・tokenは意図して環境変数にしない。
  * このCLIはそれらを環境変数から読まないことを実測で確かめている
  * (この節の前にある、wmill CLIの接続の節の冒頭コメントを参照)。
  */
 export function buildWmillEnv(env: WmillEnvInput): Record<string, string> {
-  const result: Record<string, string> = {};
+  const result: Record<string, string> = { NPM_CONFIG_IGNORE_SCRIPTS: "true" };
   if (env.HOME !== undefined) result.HOME = env.HOME;
   if (env.PATH !== undefined) result.PATH = env.PATH;
   return result;
