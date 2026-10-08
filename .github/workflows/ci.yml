@@ -136,11 +136,13 @@ jobs:
     # (常に状態を報告しないと、必須のチェックにできないため)。
     # 関係する変更が無いときは、最初のステップの出力で後続のステップを飛ばして成功にする。
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       # 使い捨て専用の値。`test-db`ジョブと同じく、このジョブが起動するPostgresだけが使う。
       # 本物の秘密ではないので、CIに存在しない`mise.local.toml`を通さず直書きしてよい。
       DB_PASSWORD: ci-dummy-password
-      # 他のジョブが並行して動いても、開発者の`infra`プロジェクトと名前が衝突しないようにする。
+      # GitHubのランナーはジョブごとに別のVMなので、CIの中では衝突しない。
+      # 手元でこのジョブの手順を再現するとき、開発者の`infra`プロジェクトと名前が衝突しないようにする。
       COMPOSE_PROJECT_NAME: metadata-ci
       COMPOSE_FILE: infra/docker-compose.yml:infra/docker-compose.ci.yml
     steps:
@@ -151,13 +153,21 @@ jobs:
           persist-credentials: false
 
       - name: Determine whether the metadata can be stale
-        # このpushやPRが`f/`か`wmill-lock.yaml`に触れるときだけ、後続のステップを動かす。
+        # このpushやPRが、メタデータの入力かこのジョブの定義に触れるときだけ、後続のステップを動かす。
+        # 入力は、`f/`、ルートの`dependencies/`(ワークスペースの依存。ハッシュに入る)、
+        # `wmill.yaml`(走査の範囲や言語を決める)、`wmill-lock.yaml`である。
+        # このジョブ自身の定義(ワークフロー、compose、2つのスクリプト、`mise.toml`)が
+        # 変わったときも、変更が動くことを確かめるために検査する。
         # 範囲の決め方は、上の`check`ジョブの「Determine gitleaks scan range」と同じ。
+        # ただし`main`へのpushは、差分に関わらず常に検査する。
+        # `main`のCIの結論は、`main`全体の状態を表すものとして使うため、
+        # pushした範囲だけでなく、ツリー全体を検査した結果でなければならない。
         # 差分の基点が無いとき(新しいブランチの初回pushなど)と、差分を取れないとき
         # (force pushで`before`が履歴から消えたなど)は、安全側に倒して検査する。
         id: scope
         env:
           EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
           BEFORE_SHA: ${{ github.event.before }}
           AFTER_SHA: ${{ github.sha }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -167,7 +177,9 @@ jobs:
           zero="0000000000000000000000000000000000000000"
           from=""
           to=""
-          if [ "$EVENT_NAME" = "pull_request" ]; then
+          if [ "$EVENT_NAME" = "push" ] && [ "$REF" = "refs/heads/main" ]; then
+            :
+          elif [ "$EVENT_NAME" = "pull_request" ]; then
             from="$BASE_SHA"
             to="$HEAD_SHA"
           elif [ "$EVENT_NAME" = "push" ] && [ "$BEFORE_SHA" != "$zero" ] && [ -n "$BEFORE_SHA" ]; then
@@ -182,7 +194,10 @@ jobs:
             else
               spec="${from}..${to}"
             fi
-            if changed="$(git diff --name-only "$spec" -- f wmill-lock.yaml)"; then
+            if changed="$(git diff --name-only "$spec" -- \
+              f dependencies wmill.yaml wmill-lock.yaml \
+              .github/workflows/ci.yml infra/docker-compose.yml infra/docker-compose.ci.yml \
+              scripts/ci-metadata-login.sh scripts/check-metadata-fresh.sh mise.toml)"; then
               if [ -z "$changed" ]; then
                 run="false"
               fi
@@ -224,6 +239,13 @@ jobs:
       - name: Check that the metadata is up to date
         if: steps.scope.outputs.run == 'true'
         run: mise run metadata:check
+
+      - name: Show diagnostics
+        # ログインやメタデータの検査が失敗したとき、原因を追えるようにサーバーの状態を残す。
+        if: failure() && steps.scope.outputs.run == 'true'
+        run: |
+          mise exec -- docker compose ps
+          mise exec -- docker compose logs --tail 200 windmill_server
 
       - name: Tear down Windmill
         if: always() && steps.scope.outputs.run == 'true'

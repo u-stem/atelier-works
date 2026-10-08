@@ -28,10 +28,10 @@ command -v curl >/dev/null 2>&1 || die "required command not found: curl"
 command -v wmill >/dev/null 2>&1 || die "required command not found: wmill (run via 'mise exec -- scripts/ci-metadata-login.sh')"
 : "${WM_BASE_URL:?run via 'mise exec --' (mise.toml [env] sets this)}"
 
-case "${WM_BASE_URL}" in
-  http://127.0.0.1:* | http://localhost:*) ;;
-  *) die "refusing to use the default credentials against a non-loopback URL: ${WM_BASE_URL}" ;;
-esac
+# globだと`http://127.0.0.1:80@evil.example/`のようなURLが通るので、正規表現で厳密に判定する。
+if ! [[ "${WM_BASE_URL}" =~ ^http://(127\.0\.0\.1|localhost):[0-9]+/?$ ]]; then
+  die "refusing to use the default credentials against a non-loopback URL: ${WM_BASE_URL}"
+fi
 
 WORKSPACE="factory"
 API="${WM_BASE_URL%/}/api"
@@ -41,6 +41,8 @@ token="$(curl -fsS --max-time 30 -X POST "${API}/auth/login" \
   --data-binary '{"email":"admin@windmill.dev","password":"changeme"}')" \
   || die "failed to log in to ${WM_BASE_URL}"
 [ -n "${token}" ] || die "login returned an empty token"
+# 万一ログに出ても伏せられるよう、GitHub Actionsにトークンを秘密として登録する。
+echo "::add-mask::${token}"
 log "logged in with the default admin"
 
 curl -fsS --max-time 30 -o /dev/null -X POST "${API}/workspaces/create" \

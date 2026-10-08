@@ -1,6 +1,8 @@
 # CIの`metadata`ジョブだけが、`docker-compose.yml`に重ねて使う。
 # `wmill generate-metadata --dry-run`がホストから届くよう、サーバーの8000番を
 # `127.0.0.1:8080`に公開する。普段はcaddyが8080番を受けるが、CIはcaddyを起動しない。
+# `127.0.0.1:8080`は、`wmill.yaml`の`baseUrl`と`mise.toml`の`WM_BASE_URL`に合わせる。
+# wmillは`wmill.yaml`の`baseUrl`でワークスペースを引くため、ずれると接続できない。
 # 開発者の手元では使わない(8080番が`infra`プロジェクトのcaddyと衝突するため)。
 services:
   windmill_server:
