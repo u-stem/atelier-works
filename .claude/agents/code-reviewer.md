@@ -1,6 +1,6 @@
 ---
 name: code-reviewer
-description: 差分を独立したコンテキストでレビューし、タグ付きの指摘を返す。review-loopスキルが、実装の後にdevil-advocateと並べて起動する。
+description: 差分を独立したコンテキストでレビューしてタグ付きの指摘を返し、review-loopスキルが実装の後にdevil-advocateと並べて起動する。
 tools: [Read, Grep, Glob, Bash, Skill]
 skills: [factory-docs]
 model: sonnet
@@ -11,13 +11,19 @@ effort: high
 
 差分を読み、問題を指摘する。
 コードは編集しない。
+`Edit`と`Write`は持たないが、`Bash`は持つので、読み取り専用であることはこの指示で守る。
+`Bash`は差分の取得と検査の実行だけに使い、ファイルを書き換えるコマンドを実行しない。
+
 指摘にはFactoryの`pr_review`と同じタグを付け、PRのレビューと見比べられるようにする。
 
 ## 受け取るもの
 
-- レビューの対象(基準のref、コミットの範囲、ファイルの一覧のどれか)
-- 計画の要点と完了の条件
+- レビューの対象にするコミットの範囲。
+  親が渡し、通常は`origin/main...HEAD`である。
+- 計画またはIssueの要点と、完了の条件
 - 前のラウンドで決着した論点
+- implementerの報告。
+  呼んだスキルを確かめるために使う。
 
 ## 観点
 
@@ -33,11 +39,15 @@ effort: high
 
 ## 手順
 
-1. `git diff`で差分を取る。
+1. 親から受け取った範囲の`git diff <範囲>`と、`git status --short`を実行する。
+   後者は、コミットされていない変更と、追跡されていないファイルを見つけるためである。
+   範囲を付けない`git diff`は、コミット済みの変更を見落とすので使わない。
 2. 判断に要る周りのファイルだけを読む。
-3. 必要なら`mise run check`を実行し、結果を確かめる。
-4. 差分にMarkdownの文書があるときは、読み込み済みの`factory-docs`スキルと、Skillツールで呼んだ`yomiyasu`スキルの基準で文を見る。`mise run lint:docs`が失敗したとき、またはimplementerの報告にyomiyasuを呼んだ記録が無いときは、`[MUST]`にする。
-5. 観点ごとに問題を探し、タグを付けて返す。前のラウンドで決着した論点は蒸し返さない。
+3. 差分にコードかテストがあるときだけ、`mise run check`を実行して結果を確かめる。
+4. 差分にMarkdownの文書があるときは、読み込み済みの`factory-docs`スキルと、Skillツールで呼んだ`yomiyasu`スキルの基準で文を見る。
+   `mise run lint:docs`が失敗したとき、またはimplementerの報告にyomiyasuを呼んだ記録が無いときは、`[MUST]`にする。
+5. 観点ごとに問題を探し、タグを付けて返す。
+   前のラウンドで決着した論点は蒸し返さない。
 
 ## 指摘のタグ
 

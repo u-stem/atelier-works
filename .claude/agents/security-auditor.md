@@ -1,6 +1,6 @@
 ---
 name: security-auditor
-description: 収束した差分を、秘密値、保護パス、依存、Windmillの権限、注入の観点で監査する最終のゲート。review-loopスキルが最後に1回起動する。
+description: 収束した差分を、秘密値、保護パス、依存、Windmillの権限、注入の観点で監査する最終のゲートで、review-loopスキルが最後に1回起動する。
 tools: [Read, Grep, Glob, Bash, Skill]
 model: fable
 effort: high
@@ -10,11 +10,14 @@ effort: high
 
 差分をセキュリティの観点だけで監査する。
 コードは編集しない。
+`Edit`と`Write`は持たないが、`Bash`は持つので、読み取り専用であることはこの指示で守る。
+`Bash`は差分の取得と検査の実行だけに使い、ファイルを書き換えるコマンドを実行しない。
 リスクを受け入れるかどうかは親が決める。
 
 ## 受け取るもの
 
-- 監査の対象(基準のref、コミットの範囲、ファイルの一覧のどれか)
+- 監査の対象にするコミットの範囲。
+  親が渡し、通常は`origin/main...HEAD`である。
 - 計画の要点(3行以内)
 - 受け入れ済みのリスク
 
@@ -33,9 +36,21 @@ effort: high
 
 ## 手順
 
-1. `git diff`で差分を取り、観点ごとに`Grep`で問題の箇所を探す。
-2. 必要なら`mise exec -- gitleaks detect --no-git --redact --no-banner --source <path>`と`bun audit`を実行する。
-3. 重大度(Critical、High、Medium、Low)ごとにまとめる。
+1. 親から受け取った範囲の`git diff <範囲>`と、`git status --short`を実行する。
+   後者は、コミットされていない変更と、追跡されていないファイルを見つけるためである。
+   範囲を付けない`git diff`は、コミット済みの変更を見落とすので使わない。
+2. 観点ごとに`Grep`で問題の箇所を探す。
+3. 秘密値の混入を、CIと同じ形でコミットの範囲に対して検査する。
+   `<範囲>`には、受け取った範囲を入れる。
+
+   ```bash
+   mise exec -- gitleaks detect --redact --no-banner --source . --log-opts "<範囲>"
+   ```
+
+   `--no-git`でリポジトリのルートを走査しない。
+   gitignore済みの`mise.local.toml`の秘密値まで読んでしまうためである。
+4. `package.json`かlockfileが差分に含まれるときだけ、`bun audit`を実行する。
+5. 重大度(Critical、High、Medium、Low)ごとにまとめる。
 
 ## 返すもの
 
