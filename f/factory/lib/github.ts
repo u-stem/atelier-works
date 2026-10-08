@@ -9,6 +9,8 @@
 // 403/429のレート制限のヘッダー(`retry-after`、`x-ratelimit-remaining`)を
 // 2回目の要求なしに読める。レート制限の待ちには上限があり、超えるなら
 // 待たずに`GitHubRateLimitError`を投げる(`callGhApi`を参照)。
+// ghプロセスの起動失敗と、応答の無い通信断には、短い待機の後に1回だけ再試行する
+// (`sendGhApi`を参照)。
 //
 // 自己再入の防止: Factoryが投稿するコメント・レビュー・返信には、すべて
 // `<!-- factory:<kind>:<work_item_id> -->`の目印を付ける(`withMarker`)。
@@ -24,7 +26,7 @@ import type {
   LabelerAssociation,
 } from "./types.ts";
 import { assertBranchName, assertGitHubName } from "./types.ts";
-import type { CommandRunner } from "./workspace.ts";
+import type { CommandResult, CommandRunner } from "./workspace.ts";
 
 /** エンドポイントやURLを組み立てる前に、`owner/repo`の両方を検証する。 */
 function validateOwnerRepo(owner: string, repo: string): void {
@@ -68,6 +70,11 @@ export type GhClient = {
    * 待つ時間は`GITHUB_RATE_LIMIT_MAX_WAIT_MS`を超えない。
    */
   readonly sleep?: (ms: number) => Promise<void>;
+  /**
+   * 一時的な失敗(ghプロセスの起動失敗、応答の無い通信断)で再試行する前の待機(ミリ秒)。
+   * 既定は`GITHUB_TRANSIENT_RETRY_DELAY_MS`。待機には`sleep`を使う。
+   */
+  readonly transientRetryDelayMs?: number;
   readonly now?: () => Date;
 };
 
@@ -233,11 +240,53 @@ export type GhApiCallOptions = {
   readonly acceptHeader?: string;
 };
 
-async function callGhApiOnce(
+/**
+ * 一時的な失敗で再試行する前の待機(ミリ秒)の既定値。
+ * 資源の一時不足と瞬間的な通信断を越えるだけの短さにする。
+ * 再試行は1回だけなので、5分ごとのポーリングの周期に対して十分に小さい。
+ */
+export const GITHUB_TRANSIENT_RETRY_DELAY_MS = 2000;
+
+/**
+ * 資源の一時不足を表すプロセス起動のエラーコード。
+ * EAGAINはプロセス数かメモリの一時不足、EMFILE / ENFILEはファイル記述子の枯渇、
+ * ENOMEMはメモリ不足である。いずれも少し待てば解消しうる。
+ * ENOENT(ghが無い)やEACCES(権限が無い)は待っても直らないので含めない。
+ */
+const TRANSIENT_SPAWN_ERROR_CODES: ReadonlySet<string> = new Set([
+  "EAGAIN",
+  "EMFILE",
+  "ENFILE",
+  "ENOMEM",
+]);
+
+function isTransientSpawnError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  if (!("code" in error)) return false;
+  return (
+    typeof error.code === "string" &&
+    TRANSIENT_SPAWN_ERROR_CODES.has(error.code)
+  );
+}
+
+/**
+ * 1回の要求の結果。`spawn_failed`はghプロセスを起動できなかったことを表し、
+ * 要求はGitHubに届いていない。
+ */
+type GhApiAttempt =
+  | { readonly kind: "spawn_failed"; readonly error: unknown }
+  | {
+      readonly kind: "completed";
+      readonly response: GhApiResponse;
+      /** ステータス行が無く、応答が返らなかった(通信断など)。プロセスのtimeoutは含めない。 */
+      readonly noResponse: boolean;
+    };
+
+async function attemptGhApi(
   client: GhClient,
   endpoint: string,
   options: GhApiCallOptions,
-): Promise<GhApiResponse> {
+): Promise<GhApiAttempt> {
   const argv = ["gh", "api", endpoint, "-i"];
   if (options.method !== undefined) argv.push("-X", options.method);
   if (options.acceptHeader !== undefined)
@@ -246,11 +295,66 @@ async function callGhApiOnce(
 
   const stdin =
     options.body !== undefined ? JSON.stringify(options.body) : undefined;
-  const commandResult = await client.run(argv, {
-    env: buildGhEnv(client),
-    ...(stdin !== undefined ? { stdin } : {}),
-  });
-  return parseGhApiOutput(commandResult.stdout);
+  let commandResult: CommandResult;
+  try {
+    commandResult = await client.run(argv, {
+      env: buildGhEnv(client),
+      ...(stdin !== undefined ? { stdin } : {}),
+    });
+  } catch (error) {
+    if (isTransientSpawnError(error)) return { kind: "spawn_failed", error };
+    throw error;
+  }
+  const response = parseGhApiOutput(commandResult.stdout);
+  return {
+    kind: "completed",
+    response,
+    noResponse: response.status === 0 && !commandResult.timedOut,
+  };
+}
+
+/** 同じ要求をもう一度送っても、GitHub上の状態が1回目の成否に左右されないか。 */
+function isIdempotentRequest(options: GhApiCallOptions): boolean {
+  return options.method === undefined || options.method === "GET";
+}
+
+/**
+ * 再試行してよい失敗かを返す。
+ * - プロセスの起動失敗: 要求はGitHubに届いていないので、どの要求でも再試行してよい。
+ * - 応答の無い通信断: 要求が届いた後に応答だけが失われたかもしれない。
+ *   届いていた場合、コメント・レビュー・ラベル・PRの作成などの変更は二重に実行される。
+ *   そのため、何度送っても結果が変わらないGETに限って再試行する。
+ *   変更を伴う要求は再試行せず、これまでどおりHTTP 0の失敗として記録する。
+ */
+function isRetryable(
+  attempt: GhApiAttempt,
+  options: GhApiCallOptions,
+): boolean {
+  if (attempt.kind === "spawn_failed") return true;
+  return attempt.noResponse && isIdempotentRequest(options);
+}
+
+/**
+ * 要求を1回送る。一時的な失敗(`isRetryable`)なら、短く待ってから1回だけ再送する。
+ * 再送も失敗したら、ghの起動失敗はその例外を投げ、応答の無い通信断は
+ * ステータス0の応答として返す(呼び出し側の`ensureSuccess`が失敗にする)。
+ * レート制限は扱わない(`callGhApi`を参照)。
+ */
+async function sendGhApi(
+  client: GhClient,
+  endpoint: string,
+  options: GhApiCallOptions,
+): Promise<GhApiResponse> {
+  const first = await attemptGhApi(client, endpoint, options);
+  if (first.kind === "completed" && !isRetryable(first, options)) {
+    return first.response;
+  }
+  const sleep = client.sleep ?? defaultSleep;
+  await sleep(client.transientRetryDelayMs ?? GITHUB_TRANSIENT_RETRY_DELAY_MS);
+
+  const second = await attemptGhApi(client, endpoint, options);
+  if (second.kind === "spawn_failed") throw second.error;
+  return second.response;
 }
 
 /**
@@ -258,6 +362,7 @@ async function callGhApiOnce(
  * 必要な待ちが`GITHUB_RATE_LIMIT_MAX_WAIT_MS`を超えるときは待たずに、
  * 再試行も拒まれたときはその時点で、`GitHubRateLimitError`を投げる。
  * 待ちがstepのtimeoutより長引いて、副作用の途中でstepが打ち切られることを防ぐ。
+ * ghの起動失敗と応答の無い通信断の再試行は、それぞれの要求の中で行う(`sendGhApi`を参照)。
  * レート制限以外のHTTPのエラーのステータスでは例外を投げない。
  * 呼び出し側が`response.status`を確かめる(`ensureSuccess`を参照)。
  */
@@ -266,7 +371,7 @@ async function callGhApi(
   endpoint: string,
   options: GhApiCallOptions = {},
 ): Promise<GhApiResponse> {
-  const first = await callGhApiOnce(client, endpoint, options);
+  const first = await sendGhApi(client, endpoint, options);
   if (!isRateLimited(first)) return first;
 
   const sleep = client.sleep ?? defaultSleep;
@@ -278,7 +383,7 @@ async function callGhApi(
   }
   await sleep(waitMs);
 
-  const second = await callGhApiOnce(client, endpoint, options);
+  const second = await sendGhApi(client, endpoint, options);
   if (!isRateLimited(second)) return second;
   throw new GitHubRateLimitError(
     endpoint,

@@ -19,11 +19,12 @@ export type FakeCommandRunner = {
 
 /**
  * 呼び出し1回ごとに`responses`を順に返す偽の`CommandRunner`を作る。
+ * 応答が`Error`のときは、プロセスの起動に失敗した場合と同じく、その例外を投げる。
  * 検証のため、各呼び出しのargvとoptionsを`calls`に記録する。
  * 用意した応答が尽きたあとに呼ばれると例外を投げる。
  */
 export function createFakeCommandRunner(
-  responses: readonly CommandResult[],
+  responses: readonly (CommandResult | Error)[],
 ): FakeCommandRunner {
   const calls: FakeCall[] = [];
   let index = 0;
@@ -36,6 +37,7 @@ export function createFakeCommandRunner(
         `createFakeCommandRunner: no canned response for call #${index} (${argv.join(" ")})`,
       );
     }
+    if (result instanceof Error) throw result;
     return result;
   };
   return { run, calls };

@@ -11,6 +11,7 @@ import {
   findOpenPullRequestByHead,
   type GhClient,
   GITHUB_RATE_LIMIT_MAX_WAIT_MS,
+  GITHUB_TRANSIENT_RETRY_DELAY_MS,
   GitHubRateLimitError,
   getBranchProtected,
   getIssue,
@@ -45,9 +46,11 @@ import { isRecord } from "../../f/factory/lib/types.ts";
 import type { CommandResult } from "../../f/factory/lib/workspace.ts";
 import {
   createFakeCommandRunner,
+  fail,
   ghApiOk,
   ghApiStdout,
   ok,
+  timeout,
 } from "./testSupport.ts";
 
 describe("withMarker / hasMarker", () => {
@@ -413,6 +416,246 @@ describe("rate limit wait cap", () => {
         /GraphQL error/,
       );
     });
+  });
+});
+
+describe("transient failure retry", () => {
+  const viewerOk = ghApiOk({ login: "factory-bot", id: 12345 });
+  const issueCreated = ghApiOk({
+    number: 5,
+    title: "t",
+    body: "b",
+    html_url: "https://github.com/acme/widgets/issues/5",
+    state: "open",
+    labels: [],
+    assignees: [],
+  });
+  /** 応答が返る前に接続が切れたときの`gh api -i`の結果(標準出力が空で、終了コードが1)。 */
+  const connectionReset = fail(
+    'Get "https://api.github.com/user": read tcp 10.0.0.2:51234->140.82.112.5:443: read: connection reset by peer',
+  );
+
+  function spawnError(code: string): Error {
+    return Object.assign(
+      new Error(`${code}: resource unavailable, posix_spawn 'gh'`),
+      { code },
+    );
+  }
+
+  function fakeClient(
+    responses: readonly (CommandResult | Error)[],
+    sleeps: number[] = [],
+    transientRetryDelayMs?: number,
+  ): { client: GhClient; calls: readonly unknown[] } {
+    const fake = createFakeCommandRunner(responses);
+    return {
+      client: {
+        run: fake.run,
+        ghToken: "tok",
+        sleep: async (ms) => {
+          sleeps.push(ms);
+        },
+        ...(transientRetryDelayMs !== undefined
+          ? { transientRetryDelayMs }
+          : {}),
+      },
+      calls: fake.calls,
+    };
+  }
+
+  function rejectionOf(promise: Promise<unknown>): Promise<unknown> {
+    return promise.then(
+      () => null,
+      (err: unknown) => err,
+    );
+  }
+
+  describe("when the gh process fails to start", () => {
+    test("succeeds on the retry after an EAGAIN failure", async () => {
+      const { client } = fakeClient([spawnError("EAGAIN"), viewerOk]);
+      const viewer = await getViewer(client);
+      expect(viewer.login).toBe("factory-bot");
+    });
+
+    test("waits the injected delay once before retrying", async () => {
+      const sleeps: number[] = [];
+      const { client } = fakeClient(
+        [spawnError("EAGAIN"), viewerOk],
+        sleeps,
+        250,
+      );
+      await getViewer(client);
+      expect(sleeps).toEqual([250]);
+    });
+
+    test("waits the default delay when none is injected", async () => {
+      const sleeps: number[] = [];
+      const { client } = fakeClient([spawnError("EAGAIN"), viewerOk], sleeps);
+      await getViewer(client);
+      expect(sleeps).toEqual([GITHUB_TRANSIENT_RETRY_DELAY_MS]);
+    });
+
+    test.each(["EMFILE", "ENFILE", "ENOMEM"])(
+      "retries after an %s failure",
+      async (code) => {
+        const { client, calls } = fakeClient([spawnError(code), viewerOk]);
+        await getViewer(client);
+        expect(calls.length).toBe(2);
+      },
+    );
+
+    test("throws the second failure when the retry fails to start too", async () => {
+      const { client } = fakeClient([
+        spawnError("EAGAIN"),
+        spawnError("EMFILE"),
+      ]);
+      await expect(getViewer(client)).rejects.toThrow(/EMFILE/);
+    });
+
+    test("does not start a third process", async () => {
+      const { client, calls } = fakeClient([
+        spawnError("EAGAIN"),
+        spawnError("EAGAIN"),
+      ]);
+      await rejectionOf(getViewer(client));
+      expect(calls.length).toBe(2);
+    });
+
+    test("does not retry a spawn failure that is not transient", async () => {
+      const { client, calls } = fakeClient([spawnError("ENOENT"), viewerOk]);
+      await rejectionOf(getViewer(client));
+      expect(calls.length).toBe(1);
+    });
+
+    test("does not retry an error without a code", async () => {
+      const { client, calls } = fakeClient([new Error("boom"), viewerOk]);
+      await rejectionOf(getViewer(client));
+      expect(calls.length).toBe(1);
+    });
+
+    test("retries a POST because the request never reached GitHub", async () => {
+      const { client, calls } = fakeClient([
+        spawnError("EAGAIN"),
+        issueCreated,
+      ]);
+      await createIssue(client, "acme", "widgets", { title: "t", body: "b" });
+      expect(calls.length).toBe(2);
+    });
+  });
+
+  describe("when no response arrives", () => {
+    test("succeeds on the retry of a GET", async () => {
+      const { client } = fakeClient([connectionReset, viewerOk]);
+      const viewer = await getViewer(client);
+      expect(viewer.login).toBe("factory-bot");
+    });
+
+    test("waits the injected delay once before retrying a GET", async () => {
+      const sleeps: number[] = [];
+      const { client } = fakeClient([connectionReset, viewerOk], sleeps, 250);
+      await getViewer(client);
+      expect(sleeps).toEqual([250]);
+    });
+
+    test("records the second failure when no response arrives again", async () => {
+      const { client } = fakeClient([connectionReset, connectionReset]);
+      await expect(getViewer(client)).rejects.toThrow(/HTTP 0/);
+    });
+
+    test("does not send a third request", async () => {
+      const { client, calls } = fakeClient([
+        connectionReset,
+        connectionReset,
+        viewerOk,
+      ]);
+      await rejectionOf(getViewer(client));
+      expect(calls.length).toBe(2);
+    });
+
+    test("does not resend a POST that may have reached GitHub", async () => {
+      const { client, calls } = fakeClient([connectionReset, issueCreated]);
+      await rejectionOf(
+        createIssue(client, "acme", "widgets", { title: "t", body: "b" }),
+      );
+      expect(calls.length).toBe(1);
+    });
+
+    test("reports HTTP 0 for a POST without resending it", async () => {
+      const { client } = fakeClient([connectionReset, issueCreated]);
+      await expect(
+        createIssue(client, "acme", "widgets", { title: "t", body: "b" }),
+      ).rejects.toThrow(/HTTP 0/);
+    });
+
+    test("does not resend a DELETE", async () => {
+      const { client, calls } = fakeClient([connectionReset, ok("")]);
+      await rejectionOf(removeLabel(client, "acme", "widgets", 7, "bug"));
+      expect(calls.length).toBe(1);
+    });
+
+    test("does not retry a GET whose process timed out", async () => {
+      const { client, calls } = fakeClient([timeout(), viewerOk]);
+      await rejectionOf(getViewer(client));
+      expect(calls.length).toBe(1);
+    });
+  });
+
+  describe("HTTP error responses", () => {
+    test("does not retry a 500", async () => {
+      const { client, calls } = fakeClient([
+        ok(ghApiStdout(500, { message: "boom" })),
+        viewerOk,
+      ]);
+      await rejectionOf(getViewer(client));
+      expect(calls.length).toBe(1);
+    });
+
+    test("does not retry a 404", async () => {
+      const { client, calls } = fakeClient([
+        ok(ghApiStdout(404, { message: "Not Found" })),
+        viewerOk,
+      ]);
+      await rejectionOf(getViewer(client));
+      expect(calls.length).toBe(1);
+    });
+
+    test("does not wait before reporting a 500", async () => {
+      const sleeps: number[] = [];
+      const { client } = fakeClient(
+        [ok(ghApiStdout(500, { message: "boom" }))],
+        sleeps,
+      );
+      await rejectionOf(getViewer(client));
+      expect(sleeps).toEqual([]);
+    });
+  });
+
+  describe("together with the rate limit retry", () => {
+    const limited = ok(
+      ghApiStdout(403, { message: "secondary" }, { "retry-after": "30" }),
+    );
+
+    test("keeps the rate limit wait and adds no transient wait", async () => {
+      const sleeps: number[] = [];
+      const { client } = fakeClient([limited, viewerOk], sleeps);
+      await getViewer(client);
+      expect(sleeps).toEqual([30_000]);
+    });
+
+    test("retries a transient failure after the rate limit wait", async () => {
+      const sleeps: number[] = [];
+      const { client } = fakeClient(
+        [limited, spawnError("EAGAIN"), viewerOk],
+        sleeps,
+        250,
+      );
+      await getViewer(client);
+      expect(sleeps).toEqual([30_000, 250]);
+    });
+  });
+
+  test("keeps the default delay far below the 5 minute polling interval", () => {
+    expect(GITHUB_TRANSIENT_RETRY_DELAY_MS).toBeLessThanOrEqual(5_000);
   });
 });
 
