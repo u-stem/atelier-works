@@ -26,6 +26,7 @@ describe("IMPLEMENT_PROTECTED_PATH_PREFIXES", () => {
       ".githooks/",
       ".yarn/",
       ".devcontainer/",
+      "console/public/",
     ]);
   });
 
@@ -79,6 +80,10 @@ describe("matchesForbiddenPath", () => {
   test("is the same function pr_workflow_support.ts re-exports", () => {
     expect(prWorkflowSupport.matchesForbiddenPath).toBe(matchesForbiddenPath);
   });
+
+  test("leaves pr_fix's matching of console/index.html unchanged", () => {
+    expect(matchesForbiddenPath("console/index.html")).toBe(false);
+  });
 });
 
 describe("matchesImplementProtectedPath", () => {
@@ -102,6 +107,26 @@ describe("matchesImplementProtectedPath", () => {
 
   test("matches infra/", () => {
     expect(matchesImplementProtectedPath("infra/worker/Dockerfile")).toBe(true);
+  });
+
+  test("matches console/index.html", () => {
+    expect(matchesImplementProtectedPath("console/index.html")).toBe(true);
+  });
+
+  test("matches files under console/public/", () => {
+    expect(
+      matchesImplementProtectedPath(
+        "console/public/assets/theme-init-ba7816bf.js",
+      ),
+    ).toBe(true);
+  });
+
+  test("does not match ordinary console sources", () => {
+    expect(matchesImplementProtectedPath("console/src/App.tsx")).toBe(false);
+  });
+
+  test("does not match an index.html outside console/", () => {
+    expect(matchesImplementProtectedPath("docs/index.html")).toBe(false);
   });
 
   test("still matches pr_fix's basename patterns", () => {

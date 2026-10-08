@@ -55,6 +55,7 @@ export const FORBIDDEN_BASENAME_PATTERNS: readonly RegExp[] = [
  * - gitフックのディレクトリ(`.husky/`、`.githooks/`)
  * - `.yarn/`: パッケージマネージャーが実行するプラグインとリリース
  * - `.devcontainer/`
+ * - `console/public/`: Consoleでバンドルを通らずにそのまま配信され、ページの中で動くファイル
  *
  * implementフローはClaudeの変更に対して検査コマンドを実行するため、
  * 検査コマンドが何を実行するかを決めるディレクトリを保護する。pr_fixの一覧は変えない。
@@ -68,6 +69,16 @@ export const IMPLEMENT_PROTECTED_PATH_PREFIXES: readonly string[] = [
   ".githooks/",
   ".yarn/",
   ".devcontainer/",
+  "console/public/",
+];
+
+/**
+ * implementフローが保護する個別のファイル(リポジトリのルートからの相対パス)。
+ * `console/index.html`は、Consoleのすべてのscriptの読み込み元で、バンドルを通らずに配信される。
+ * ファイル名だけでは他の`index.html`と区別できないので、パスで判定する。
+ */
+export const IMPLEMENT_PROTECTED_EXACT_PATHS: readonly string[] = [
+  "console/index.html",
 ];
 
 /**
@@ -138,8 +149,11 @@ export function matchesForbiddenPath(
  * `path`がimplementフローの保護パスに当たるかを返す。
  * 判定の規則は`matchesForbiddenPath`と同じで、リストに
  * `IMPLEMENT_PROTECTED_PATH_PREFIXES`と`IMPLEMENT_PROTECTED_BASENAME_PATTERNS`を使う。
+ * `IMPLEMENT_PROTECTED_EXACT_PATHS`とは完全一致で判定する。
  */
 export function matchesImplementProtectedPath(path: string): boolean {
+  const normalized = path.replace(/^\.\//, "");
+  if (IMPLEMENT_PROTECTED_EXACT_PATHS.includes(normalized)) return true;
   return matchesPathLists(
     path,
     IMPLEMENT_PROTECTED_PATH_PREFIXES,
