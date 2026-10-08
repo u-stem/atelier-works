@@ -75,6 +75,19 @@ if (!isClaudeResult(parsed)) {
 - 読み違えた要素はたいていファイルの終わりまで閉じない。そのときは`UnclosedJsxError`として`file:line:column`を出し、エラーで止まる。書き方を変えて避ける。
 - 後ろの文字列リテラルなどにある`</`(`"</a>"`)が、読み違えた要素を閉じることがある。そのときは、間のコードが黙って検査から漏れる。
 
+## リモート追跡ref
+
+`f/factory/`のコードは、`origin/<branch>`という短い名前でrefを読まない。
+短い名前は、`refs/heads/origin/<branch>`や`refs/tags/origin/<branch>`が先に解決されうる。
+対象リポジトリの検査コマンドはこれらを作れるので、追跡refとは別のcommitを読まされる。
+
+- 追跡refの名前は、`refs/remotes/origin/<branch>`の完全な名前を`remoteTrackingRef`で作る。
+- shaは`readExactRef`(`git show-ref --verify`)で読む。`git rev-parse`は、完全な名前でもrefが無いと別のrefへ解決し直すため使わない。
+- `scripts/lint-no-short-remote-ref.ts`が、`f/factory/`のTypeScriptで先頭が`origin/`の文字列リテラルとテンプレートリテラルを検出する。コメントは見ない。
+
+この検出もトークン単位で読むので、まれな入力では誤検知や見逃しが起こる。
+例外を認める仕組みは設けていない。
+
 ## TDD
 
 - 新機能はテストから、バグ修正は再現テストから、リファクタはテストが緑の状態から始める(Red → Green → Refactor)。

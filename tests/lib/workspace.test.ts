@@ -46,6 +46,7 @@ import {
   RUNNER_MAX_STOP_OVERHEAD_MS,
   readAndVerifyWorktreeGitPointer,
   readDirEntries,
+  readExactRef,
   readGitShowFile,
   readStreamAll,
   readStreamCapped,
@@ -593,7 +594,12 @@ describe("ensureFactoryClone", () => {
   });
 
   test("fetches then checks out -B the configured branch when the clone dir already exists", async () => {
-    const fake = createFakeCommandRunner([ok(), ok(), ok()]);
+    const fake = createFakeCommandRunner([
+      ok(),
+      ok(),
+      ok(`${TRACKING_SHA}\n`),
+      ok(),
+    ]);
     const result = await ensureFactoryClone({
       run: fake.run,
       repoUrl: "https://github.com/acme/atelier-works.git",
@@ -609,7 +615,7 @@ describe("ensureFactoryClone", () => {
     expect(fake.calls[0]?.argv).toEqual(
       expect.arrayContaining(["fetch", "origin", "--", "main"]),
     );
-    expect(fake.calls[2]?.argv).toEqual(
+    expect(fake.calls[3]?.argv).toEqual(
       expect.arrayContaining([
         "checkout",
         "-B",
@@ -620,7 +626,12 @@ describe("ensureFactoryClone", () => {
   });
 
   test("discards local modifications (reset --hard) between fetch and checkout -B", async () => {
-    const fake = createFakeCommandRunner([ok(), ok(), ok()]);
+    const fake = createFakeCommandRunner([
+      ok(),
+      ok(),
+      ok(`${TRACKING_SHA}\n`),
+      ok(),
+    ]);
     await ensureFactoryClone({
       run: fake.run,
       repoUrl: "https://github.com/acme/atelier-works.git",
@@ -635,7 +646,12 @@ describe("ensureFactoryClone", () => {
   });
 
   test("checks out -B the *configured* branch even when the existing clone was left on a different one (a prior caller defaulting to main must not stick)", async () => {
-    const fake = createFakeCommandRunner([ok(), ok(), ok()]);
+    const fake = createFakeCommandRunner([
+      ok(),
+      ok(),
+      ok(`${TRACKING_SHA}\n`),
+      ok(),
+    ]);
     await ensureFactoryClone({
       run: fake.run,
       repoUrl: "https://github.com/acme/atelier-works.git",
@@ -652,7 +668,7 @@ describe("ensureFactoryClone", () => {
         "feat/factory-foundation",
       ]),
     );
-    expect(fake.calls[2]?.argv).toEqual(
+    expect(fake.calls[3]?.argv).toEqual(
       expect.arrayContaining([
         "checkout",
         "-B",
@@ -676,10 +692,26 @@ describe("ensureFactoryClone", () => {
     ).rejects.toThrow();
   });
 
+  test("throws without checking out when the tracking ref does not exist", async () => {
+    const fake = createFakeCommandRunner([ok(), ok(), fail("not a valid ref")]);
+    await ensureFactoryClone({
+      run: fake.run,
+      repoUrl: "https://github.com/acme/atelier-works.git",
+      ghToken: "gh-token",
+      branch: "main",
+      exists: async () => true,
+      lockFs: createInMemoryLockFs(),
+    }).catch(() => undefined);
+    expect(fake.calls.some((call) => call.argv.includes("checkout"))).toBe(
+      false,
+    );
+  });
+
   test("throws when the checkout fails", async () => {
     const fake = createFakeCommandRunner([
       ok(),
       ok(),
+      ok(`${TRACKING_SHA}\n`),
       fail("could not checkout"),
     ]);
     await expect(
@@ -697,7 +729,12 @@ describe("ensureFactoryClone", () => {
   test("acquires a lock scoped to the clone dir before pulling (security fix, devil-advocate: avoids .git/index.lock races between concurrent flows and poll_issues sharing the same self clone)", async () => {
     const lockFs = createInMemoryLockFs();
     let sawLockDuringRun = false;
-    const fake = createFakeCommandRunner([ok(), ok(), ok()]);
+    const fake = createFakeCommandRunner([
+      ok(),
+      ok(),
+      ok(`${TRACKING_SHA}\n`),
+      ok(),
+    ]);
     const runAndCheck: typeof fake.run = async (argv, options) => {
       sawLockDuringRun =
         (await lockFs.read("/workspaces/factory/atelier-works.lock")) !==
@@ -995,6 +1032,9 @@ describe("pruneWorktrees", () => {
   });
 });
 
+// 再利用の経路で、追跡refの読み取りが返すsha。
+const TRACKING_SHA = "c".repeat(40);
+
 // 実際に採取した`git worktree list --porcelain`の出力。
 // パスは一般的な名前に置き換えた。
 const REAL_WORKTREE_PORCELAIN = [
@@ -1075,6 +1115,7 @@ describe("createGtrWorktree", () => {
       ok(REAL_WORKTREE_PORCELAIN),
       ok(REAL_WORKTREE_PORCELAIN),
       ok(),
+      ok(`${TRACKING_SHA}\n`),
       ok(HEAD_ON_REUSED_BRANCH),
       ok(),
       ok(),
@@ -1097,6 +1138,7 @@ describe("createGtrWorktree", () => {
       ok(REAL_WORKTREE_PORCELAIN),
       ok(REAL_WORKTREE_PORCELAIN),
       ok(),
+      ok(`${TRACKING_SHA}\n`),
       ok(HEAD_ON_REUSED_BRANCH),
       ok(),
       ok(),
@@ -1130,6 +1172,7 @@ describe("createGtrWorktree", () => {
         ok(REAL_WORKTREE_PORCELAIN),
         ok(REAL_WORKTREE_PORCELAIN),
         ok(),
+        ok(`${TRACKING_SHA}\n`),
         ok(HEAD_ON_REUSED_BRANCH),
         ok(),
         ok(),
@@ -1154,12 +1197,13 @@ describe("createGtrWorktree", () => {
       );
     });
 
-    test("then resets --hard to refs/remotes/origin/<branch>", async () => {
+    test("reads the tracking ref by its full name with show-ref after the fetch", async () => {
       const fake = createFakeCommandRunner([
         ok(),
         ok(REAL_WORKTREE_PORCELAIN),
         ok(REAL_WORKTREE_PORCELAIN),
         ok(),
+        ok(`${TRACKING_SHA}\n`),
         ok(HEAD_ON_REUSED_BRANCH),
         ok(),
         ok(),
@@ -1173,22 +1217,44 @@ describe("createGtrWorktree", () => {
         lockFs: createInMemoryLockFs(),
         fs: pointerFsDeps(true).fs,
       });
-      const argv = fake.calls[5]?.argv ?? [];
-      expect(argv).toEqual(
-        expect.arrayContaining([
-          "reset",
-          "--hard",
-          "refs/remotes/origin/contract-smoke-branch",
-        ]),
-      );
+      expect(fake.calls[4]?.argv.slice(-5)).toEqual([
+        "show-ref",
+        "--verify",
+        "--hash",
+        "--",
+        "refs/remotes/origin/contract-smoke-branch",
+      ]);
     });
 
-    test("then cleans untracked files", async () => {
+    test("does not reset when the tracking ref does not exist", async () => {
       const fake = createFakeCommandRunner([
         ok(),
         ok(REAL_WORKTREE_PORCELAIN),
         ok(REAL_WORKTREE_PORCELAIN),
         ok(),
+        fail("fatal: not a valid ref"),
+      ]);
+      await createGtrWorktree({
+        run: fake.run,
+        repoDir: REUSED_REPO,
+        branch: "contract-smoke-branch",
+        ghToken: "gh-token",
+        assertProcessesIdle: idle,
+        lockFs: createInMemoryLockFs(),
+        fs: pointerFsDeps(true).fs,
+      }).catch(() => undefined);
+      expect(fake.calls.some((call) => call.argv.includes("reset"))).toBe(
+        false,
+      );
+    });
+
+    test("then resets --hard to the sha read from the tracking ref", async () => {
+      const fake = createFakeCommandRunner([
+        ok(),
+        ok(REAL_WORKTREE_PORCELAIN),
+        ok(REAL_WORKTREE_PORCELAIN),
+        ok(),
+        ok(`${TRACKING_SHA}\n`),
         ok(HEAD_ON_REUSED_BRANCH),
         ok(),
         ok(),
@@ -1203,15 +1269,18 @@ describe("createGtrWorktree", () => {
         fs: pointerFsDeps(true).fs,
       });
       const argv = fake.calls[6]?.argv ?? [];
-      expect(argv).toEqual(expect.arrayContaining(["clean", "-fd"]));
+      expect(argv).toEqual(
+        expect.arrayContaining(["reset", "--hard", TRACKING_SHA]),
+      );
     });
 
-    test("does not put -- before the ref for reset --hard (same rev-parse-like exception as elsewhere)", async () => {
+    test("then cleans untracked files", async () => {
       const fake = createFakeCommandRunner([
         ok(),
         ok(REAL_WORKTREE_PORCELAIN),
         ok(REAL_WORKTREE_PORCELAIN),
         ok(),
+        ok(`${TRACKING_SHA}\n`),
         ok(HEAD_ON_REUSED_BRANCH),
         ok(),
         ok(),
@@ -1225,7 +1294,31 @@ describe("createGtrWorktree", () => {
         lockFs: createInMemoryLockFs(),
         fs: pointerFsDeps(true).fs,
       });
-      const argv = fake.calls[5]?.argv ?? [];
+      const argv = fake.calls[7]?.argv ?? [];
+      expect(argv).toEqual(expect.arrayContaining(["clean", "-fd"]));
+    });
+
+    test("does not put -- before the ref for reset --hard (same rev-parse-like exception as elsewhere)", async () => {
+      const fake = createFakeCommandRunner([
+        ok(),
+        ok(REAL_WORKTREE_PORCELAIN),
+        ok(REAL_WORKTREE_PORCELAIN),
+        ok(),
+        ok(`${TRACKING_SHA}\n`),
+        ok(HEAD_ON_REUSED_BRANCH),
+        ok(),
+        ok(),
+      ]);
+      await createGtrWorktree({
+        run: fake.run,
+        repoDir: REUSED_REPO,
+        branch: "contract-smoke-branch",
+        ghToken: "gh-token",
+        assertProcessesIdle: idle,
+        lockFs: createInMemoryLockFs(),
+        fs: pointerFsDeps(true).fs,
+      });
+      const argv = fake.calls[6]?.argv ?? [];
       expect(argv).not.toContain("--");
     });
 
@@ -1235,6 +1328,7 @@ describe("createGtrWorktree", () => {
         ok(REAL_WORKTREE_PORCELAIN),
         ok(REAL_WORKTREE_PORCELAIN),
         ok(),
+        ok(`${TRACKING_SHA}\n`),
         ok(HEAD_ON_REUSED_BRANCH),
         ok(),
         ok(),
@@ -1249,8 +1343,8 @@ describe("createGtrWorktree", () => {
         fs: pointerFsDeps(true).fs,
       });
       expect([
-        fake.calls[5]?.options?.cwd,
         fake.calls[6]?.options?.cwd,
+        fake.calls[7]?.options?.cwd,
       ]).toEqual([
         "/tmp/repo-worktrees/contract-smoke-branch",
         "/tmp/repo-worktrees/contract-smoke-branch",
@@ -1263,6 +1357,7 @@ describe("createGtrWorktree", () => {
         ok(REAL_WORKTREE_PORCELAIN),
         ok(REAL_WORKTREE_PORCELAIN),
         ok(),
+        ok(`${TRACKING_SHA}\n`),
         ok(HEAD_ON_REUSED_BRANCH),
         fail("fatal: could not reset"),
       ]);
@@ -1283,13 +1378,14 @@ describe("createGtrWorktree", () => {
   // `reset --hard`はHEADが指すブランチを動かす。生き残ったプロセスが別のブランチをcheckoutしていると、
   // そのブランチを動かし、対象のブランチは戻らない。
   describe("reuse path: HEAD must be on the branch before reset --hard", () => {
-    // [0] prune、[1] list(再利用の検索)、[2] list(ポインタの検査)、[3] fetch、[4] symbolic-ref、以降は`rest`。
+    // [0] prune、[1] list(再利用の検索)、[2] list(ポインタの検査)、[3] fetch、[4] show-ref(追跡ref)、[5] symbolic-ref、以降は`rest`。
     const reuse = (head: CommandResult, rest: readonly CommandResult[]) => {
       const fake = createFakeCommandRunner([
         ok(),
         ok(REAL_WORKTREE_PORCELAIN),
         ok(REAL_WORKTREE_PORCELAIN),
         ok(),
+        ok(`${TRACKING_SHA}\n`),
         head,
         ...rest,
       ]);
@@ -1304,7 +1400,7 @@ describe("createGtrWorktree", () => {
       });
       return { fake, created };
     };
-    // [5] checkout、[6] symbolic-ref(切り替えの後)、[7] reset、[8] clean。
+    // [6] checkout、[7] symbolic-ref(切り替えの後)、[8] reset、[9] clean。
     const switched = (): readonly CommandResult[] => [
       ok(),
       ok(HEAD_ON_REUSED_BRANCH),
@@ -1316,15 +1412,15 @@ describe("createGtrWorktree", () => {
       const { fake, created } = reuse(ok(HEAD_ON_REUSED_BRANCH), [ok(), ok()]);
       await created;
       expect({
-        argv: fake.calls[4]?.argv.slice(-3),
-        cwd: fake.calls[4]?.options?.cwd,
+        argv: fake.calls[5]?.argv.slice(-3),
+        cwd: fake.calls[5]?.options?.cwd,
       }).toEqual({ argv: ["symbolic-ref", "-q", "HEAD"], cwd: REUSED_WT });
     });
 
     test("reads HEAD without the network token", async () => {
       const { fake, created } = reuse(ok(HEAD_ON_REUSED_BRANCH), [ok(), ok()]);
       await created;
-      expect(fake.calls[4]?.options?.env?.GH_TOKEN).toBeUndefined();
+      expect(fake.calls[5]?.options?.env?.GH_TOKEN).toBeUndefined();
     });
 
     test("does not check out when HEAD is on the branch", async () => {
@@ -1335,12 +1431,12 @@ describe("createGtrWorktree", () => {
       );
     });
 
-    test("checks out the branch at refs/remotes/origin/<branch> when HEAD is on another branch", async () => {
+    test("checks out the branch at the sha read from the tracking ref when HEAD is on another branch", async () => {
       const { fake, created } = reuse(ok("refs/heads/other\n"), switched());
       await created;
       expect({
-        argv: fake.calls[5]?.argv.slice(-6),
-        cwd: fake.calls[5]?.options?.cwd,
+        argv: fake.calls[6]?.argv.slice(-6),
+        cwd: fake.calls[6]?.options?.cwd,
       }).toEqual({
         argv: [
           "checkout",
@@ -1348,7 +1444,7 @@ describe("createGtrWorktree", () => {
           "--no-track",
           "-B",
           "contract-smoke-branch",
-          "refs/remotes/origin/contract-smoke-branch",
+          TRACKING_SHA,
         ],
         cwd: REUSED_WT,
       });
@@ -1357,16 +1453,16 @@ describe("createGtrWorktree", () => {
     test("checks out the branch when HEAD is detached", async () => {
       const { fake, created } = reuse(fail("", 1), switched());
       await created;
-      expect(fake.calls[5]?.argv).toContain("checkout");
+      expect(fake.calls[6]?.argv).toContain("checkout");
     });
 
     test("still resets --hard after checking out the branch", async () => {
       const { fake, created } = reuse(ok("refs/heads/other\n"), switched());
       await created;
-      expect(fake.calls[7]?.argv.slice(-3)).toEqual([
+      expect(fake.calls[8]?.argv.slice(-3)).toEqual([
         "reset",
         "--hard",
-        "refs/remotes/origin/contract-smoke-branch",
+        TRACKING_SHA,
       ]);
     });
 
@@ -1577,6 +1673,7 @@ describe("createGtrWorktree", () => {
         ok(REAL_WORKTREE_PORCELAIN),
         ok(REAL_WORKTREE_PORCELAIN),
         ok(),
+        ok(`${TRACKING_SHA}\n`),
         ok(HEAD_ON_REUSED_BRANCH),
         ok(),
         ok(),
@@ -1604,6 +1701,7 @@ describe("createGtrWorktree", () => {
         ok(REAL_WORKTREE_PORCELAIN),
         ok(REAL_WORKTREE_PORCELAIN),
         ok(),
+        ok(`${TRACKING_SHA}\n`),
         ok(HEAD_ON_REUSED_BRANCH),
         ok(),
         ok(),
@@ -2329,7 +2427,7 @@ describe("readAndVerifyWorktreeGitPointer", () => {
 });
 
 describe("resolveDefaultBranchHeadSha", () => {
-  test("returns the trimmed sha origin/HEAD points to", async () => {
+  test("returns the trimmed sha refs/remotes/origin/HEAD points to", async () => {
     const fake = createFakeCommandRunner([
       ok("2222222222222222222222222222222222222c\n"),
     ]);
@@ -2337,14 +2435,16 @@ describe("resolveDefaultBranchHeadSha", () => {
     expect(sha).toBe("2222222222222222222222222222222222222c");
   });
 
-  test("runs git rev-parse --verify origin/HEAD without -- (rev-parse exception)", async () => {
+  test("reads refs/remotes/origin/HEAD by its full name with show-ref", async () => {
     const fake = createFakeCommandRunner([ok("abc\n")]);
     await resolveDefaultBranchHeadSha(fake.run, "/repo/main");
-    const argv = fake.calls[0]?.argv ?? [];
-    expect(argv).toEqual(
-      expect.arrayContaining(["rev-parse", "--verify", "origin/HEAD"]),
-    );
-    expect(argv).not.toContain("--");
+    expect(fake.calls[0]?.argv.slice(-5)).toEqual([
+      "show-ref",
+      "--verify",
+      "--hash",
+      "--",
+      "refs/remotes/origin/HEAD",
+    ]);
   });
 
   test("does not include GH_TOKEN in env (local-only, no network)", async () => {
@@ -2354,13 +2454,13 @@ describe("resolveDefaultBranchHeadSha", () => {
     expect(env).not.toHaveProperty("GH_TOKEN");
   });
 
-  test("throws a masked error when rev-parse fails", async () => {
+  test("throws when refs/remotes/origin/HEAD does not exist", async () => {
     const fake = createFakeCommandRunner([
-      fail("fatal: ambiguous argument 'origin/HEAD': unknown revision"),
+      fail("fatal: 'refs/remotes/origin/HEAD' - not a valid ref"),
     ]);
     await expect(
       resolveDefaultBranchHeadSha(fake.run, "/repo/main"),
-    ).rejects.toThrow(/origin\/HEAD/);
+    ).rejects.toThrow(/refs\/remotes\/origin\/HEAD does not exist/);
   });
 });
 
@@ -2495,7 +2595,7 @@ describe("commitAndPush", () => {
     const fake = commitAndPushCalls([
       ok("refs/heads/fix/branch\n"), // symbolic-ref -q HEAD
       ok(), // fetch origin fix/branch
-      ok(`${OTHER_SHA}\n`), // rev-parse --verify origin/fix/branch
+      ok(`${OTHER_SHA}\n`), // show-ref --verify refs/remotes/origin/fix/branch
     ]);
     const result = await commitAndPush({
       run: fake.run,
@@ -2510,6 +2610,55 @@ describe("commitAndPush", () => {
       lockFs: createInMemoryLockFs(),
     });
     expect(result).toEqual({ outcome: "head_changed", currentSha: OTHER_SHA });
+  });
+
+  test("reads the tracking ref by its full name with show-ref", async () => {
+    const fake = commitAndPushCalls([
+      ok("refs/heads/fix/branch\n"),
+      ok(),
+      ok(`${OTHER_SHA}\n`),
+    ]);
+    await commitAndPush({
+      run: fake.run,
+      repoDir: "/repo",
+      dir: "/repo/wt",
+      message: "fix: something",
+      instanceName: "acme-factory",
+      expectedHeadSha: HEAD_SHA,
+      author: TEST_AUTHOR,
+      ghToken: "gh-token",
+      verifyWorktree: noopVerify,
+      lockFs: createInMemoryLockFs(),
+    });
+    expect(fake.calls[2]?.argv.slice(-5)).toEqual([
+      "show-ref",
+      "--verify",
+      "--hash",
+      "--",
+      "refs/remotes/origin/fix/branch",
+    ]);
+  });
+
+  test("throws when the tracking ref does not exist", async () => {
+    const fake = commitAndPushCalls([
+      ok("refs/heads/fix/branch\n"),
+      ok(),
+      fail("fatal: 'refs/remotes/origin/fix/branch' - not a valid ref", 128),
+    ]);
+    await expect(
+      commitAndPush({
+        run: fake.run,
+        repoDir: "/repo",
+        dir: "/repo/wt",
+        message: "fix: something",
+        instanceName: "acme-factory",
+        expectedHeadSha: HEAD_SHA,
+        author: TEST_AUTHOR,
+        ghToken: "gh-token",
+        verifyWorktree: noopVerify,
+        lockFs: createInMemoryLockFs(),
+      }),
+    ).rejects.toThrow(/refs\/remotes\/origin\/fix\/branch does not exist/);
   });
 
   test("fetches without recursing into submodules", async () => {
@@ -3020,7 +3169,7 @@ describe("commitAndPush", () => {
     const fake = commitAndPushCalls([
       ok("refs/heads/fix/branch\n"), // symbolic-ref -q HEAD
       ok(), // fetch origin fix/branch
-      ok(`${HEAD_SHA}\n`), // rev-parse --verify origin/fix/branch(`expectedHeadSha`と一致する)
+      ok(`${HEAD_SHA}\n`), // show-ref --verify refs/remotes/origin/fix/branch(`expectedHeadSha`と一致する)
       ok(), // git add -A
       ok(" M file.ts\n"), // git status --porcelain
       ok(), // git commit
@@ -3029,7 +3178,7 @@ describe("commitAndPush", () => {
         "! [rejected]        fix/branch -> fix/branch (fetch first)\nerror: failed to push some refs",
       ), // git push
       ok(), // 拒否されたあとにorigin fix/branchを取り直す
-      ok(`${raceSha}\n`), // 拒否されたあとのrev-parse --verify origin/fix/branch
+      ok(`${raceSha}\n`), // 拒否されたあとのshow-ref --verify refs/remotes/origin/fix/branch
     ]);
     const result = await commitAndPush({
       run: fake.run,
@@ -3304,7 +3453,7 @@ describe("commitAndPush", () => {
   });
 });
 
-describe("commitAndPush (real git)", () => {
+describe("remote ref reads (real git)", () => {
   const BRANCH = "fix/branch";
   const roots: string[] = [];
   afterAll(() => {
@@ -3479,6 +3628,102 @@ describe("commitAndPush (real git)", () => {
       home: fixture.home,
     });
     expect(sha).toBe(fixture.headSha);
+  });
+
+  /** 追跡refを消し、`refs/heads/`の下に`refs/remotes/...`と同じ綴りのrefだけを置く。 */
+  async function replaceTrackingRefWithHeadsLookalike(
+    fixture: Fixture,
+  ): Promise<void> {
+    await plantShadowRef(fixture, `refs/heads/refs/remotes/origin/${BRANCH}`);
+    await fixture.git(fixture.repo, [
+      "update-ref",
+      "-d",
+      `refs/remotes/origin/${BRANCH}`,
+    ]);
+  }
+
+  test("readExactRef returns the sha of the exact ref", async () => {
+    const fixture = await setUp();
+    const sha = await readExactRef({
+      run: fixture.run,
+      cwd: fixture.repo,
+      env: { HOME: fixture.home },
+      ref: `refs/remotes/origin/${BRANCH}`,
+    });
+    expect(sha).toBe(fixture.headSha);
+  });
+
+  test("readExactRef returns null when only refs/heads/<ref> exists", async () => {
+    const fixture = await setUp();
+    await replaceTrackingRefWithHeadsLookalike(fixture);
+    const sha = await readExactRef({
+      run: fixture.run,
+      cwd: fixture.repo,
+      env: { HOME: fixture.home },
+      ref: `refs/remotes/origin/${BRANCH}`,
+    });
+    expect(sha).toBeNull();
+  });
+
+  test("currentRemoteHeadSha returns null when only refs/heads/refs/remotes/origin/<branch> exists", async () => {
+    const fixture = await setUp();
+    await replaceTrackingRefWithHeadsLookalike(fixture);
+    const sha = await currentRemoteHeadSha({
+      run: fixture.run,
+      repoDir: fixture.repo,
+      branch: BRANCH,
+      home: fixture.home,
+    });
+    expect(sha).toBeNull();
+  });
+
+  test("resolveDefaultBranchHeadSha ignores a refs/heads/origin/HEAD ref", async () => {
+    const fixture = await setUp();
+    await plantShadowRef(fixture, "refs/heads/origin/HEAD");
+    const sha = await resolveDefaultBranchHeadSha(fixture.run, fixture.repo);
+    expect(sha).toBe(fixture.headSha);
+  });
+
+  test("resolveDefaultBranchHeadSha ignores a refs/tags/origin/HEAD tag", async () => {
+    const fixture = await setUp();
+    await plantShadowRef(fixture, "refs/tags/origin/HEAD");
+    const sha = await resolveDefaultBranchHeadSha(fixture.run, fixture.repo);
+    expect(sha).toBe(fixture.headSha);
+  });
+
+  test("resolveDefaultBranchName returns the branch when a refs/heads/origin/main ref exists", async () => {
+    const fixture = await setUp();
+    await plantShadowRef(fixture, "refs/heads/origin/main");
+    const name = await resolveDefaultBranchName({
+      run: fixture.run,
+      repoDir: fixture.repo,
+      home: fixture.home,
+    });
+    expect(name).toBe("main");
+  });
+
+  test("createGtrWorktree reuse resets to the tracking ref despite a refs/heads/origin/<branch> ref", async () => {
+    const fixture = await setUp();
+    await fixture.git(fixture.worktree, [
+      "commit",
+      "-q",
+      "--allow-empty",
+      "-m",
+      "local only",
+    ]);
+    await plantShadowRef(fixture, `refs/heads/origin/${BRANCH}`);
+    await createGtrWorktree({
+      run: fixture.run,
+      repoDir: fixture.repo,
+      branch: BRANCH,
+      ghToken: "gh-token",
+      home: fixture.home,
+      assertProcessesIdle: async () => false,
+      lockFs: createInMemoryLockFs(),
+    });
+    expect(await fixture.git(fixture.worktree, ["rev-parse", "HEAD"])).toBe(
+      fixture.headSha,
+    );
   });
 });
 
@@ -3673,10 +3918,12 @@ describe("pushNewBranch", () => {
   test("reads the local remote-tracking ref of the base to compare", async () => {
     const fake = createFakeCommandRunner(missingRemote());
     await push(fake.run);
-    expect(fake.calls[1]?.argv.slice(-3)).toEqual([
-      "rev-parse",
+    expect(fake.calls[1]?.argv.slice(-5)).toEqual([
+      "show-ref",
       "--verify",
-      "refs/remotes/origin/main^{commit}",
+      "--hash",
+      "--",
+      "refs/remotes/origin/main",
     ]);
   });
 
@@ -3806,9 +4053,11 @@ describe("pushNewBranch", () => {
   test("throws without moving the branch when the tracking ref cannot be read", async () => {
     const fake = createFakeCommandRunner([
       lsRemote(),
-      fail("fatal: Needed a single revision", 128),
+      fail("fatal: 'refs/remotes/origin/main' - not a valid ref", 128),
     ]);
-    await expect(push(fake.run)).rejects.toThrow(/rev-parse/);
+    await expect(push(fake.run)).rejects.toThrow(
+      /refs\/remotes\/origin\/main does not exist/,
+    );
   });
 
   test("throws without pushing when moving the local branch fails", async () => {
@@ -4215,14 +4464,20 @@ describe("currentRemoteHeadSha", () => {
     expect(sha).toBeNull();
   });
 
-  test("runs git rev-parse --verify origin/<branch> without -- (rev-parse exception)", async () => {
+  test("reads refs/remotes/origin/<branch> by its full name with show-ref", async () => {
     const fake = createFakeCommandRunner([ok(`${HEAD_SHA}\n`)]);
     await currentRemoteHeadSha({
       run: fake.run,
       repoDir: "/repo/main",
       branch: BRANCH,
     });
-    expect(fake.calls[0]?.argv).not.toContain("--");
+    expect(fake.calls[0]?.argv.slice(-5)).toEqual([
+      "show-ref",
+      "--verify",
+      "--hash",
+      "--",
+      `refs/remotes/origin/${BRANCH}`,
+    ]);
   });
 
   test("does not include GH_TOKEN in env (local-only read)", async () => {
@@ -4475,28 +4730,27 @@ const BASE_SHA = "b".repeat(40);
 const TREE_SHA = "c".repeat(40);
 
 describe("resolveDefaultBranchName", () => {
-  test("strips origin/ from refs/remotes/origin/HEAD", async () => {
-    const fake = createFakeCommandRunner([ok("origin/main\n")]);
+  test("strips refs/remotes/origin/ from refs/remotes/origin/HEAD", async () => {
+    const fake = createFakeCommandRunner([ok("refs/remotes/origin/main\n")]);
     expect(
       await resolveDefaultBranchName({ run: fake.run, repoDir: "/repo/main" }),
     ).toBe("main");
   });
 
-  test("runs git symbolic-ref --short refs/remotes/origin/HEAD", async () => {
-    const fake = createFakeCommandRunner([ok("origin/main\n")]);
+  test("runs git symbolic-ref refs/remotes/origin/HEAD without --short", async () => {
+    const fake = createFakeCommandRunner([ok("refs/remotes/origin/main\n")]);
     await resolveDefaultBranchName({ run: fake.run, repoDir: "/repo/main" });
-    expect(fake.calls[0]?.argv.slice(-3)).toEqual([
+    expect(fake.calls[0]?.argv.slice(-2)).toEqual([
       "symbolic-ref",
-      "--short",
       "refs/remotes/origin/HEAD",
     ]);
   });
 
-  test("throws when the target is not under origin/", async () => {
-    const fake = createFakeCommandRunner([ok("upstream/main\n")]);
+  test("throws when the target is not under refs/remotes/origin/", async () => {
+    const fake = createFakeCommandRunner([ok("refs/remotes/upstream/main\n")]);
     await expect(
       resolveDefaultBranchName({ run: fake.run, repoDir: "/repo/main" }),
-    ).rejects.toThrow(/origin\/HEAD/);
+    ).rejects.toThrow(/refs\/remotes\/origin\/HEAD target/);
   });
 
   test("throws when git fails", async () => {

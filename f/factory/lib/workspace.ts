@@ -511,6 +511,11 @@ function buildGitArgv(
   ];
 }
 
+const REMOTE_TRACKING_PREFIX = "refs/remotes/origin/";
+
+/** `ensureRepo`のcloneが作る、`origin`の既定のブランチを指すシンボリックref。 */
+const REMOTE_HEAD_REF = `${REMOTE_TRACKING_PREFIX}HEAD`;
+
 /**
  * `origin`の`branch`の追跡refを、完全な名前で返す。
  * 短い名前の`origin/<branch>`は、検査コマンドが作る
@@ -518,7 +523,7 @@ function buildGitArgv(
  * `branch`は呼び出し側が`assertBranchName`で検証済みのものを渡す。
  */
 function remoteTrackingRef(branch: string): string {
-  return `refs/remotes/origin/${branch}`;
+  return `${REMOTE_TRACKING_PREFIX}${branch}`;
 }
 
 /** ネットワークを使わないgitの操作の環境変数を返す。`GH_TOKEN`は含めない。 */
@@ -576,6 +581,35 @@ function gitConfigEnvOverrides(
  */
 function gitError(context: string, result: CommandResult): Error {
   return new Error(maskSecrets(`${context}: ${result.stderr.trim()}`));
+}
+
+/**
+ * `ref`が今指すshaを、名前を完全に一致させて読む。無ければ`null`を返す。
+ * `git show-ref --verify`は`refs/`で始まる完全な名前だけを引き、ほかのrefへ解決し直さない。
+ * `rev-parse`は完全な名前でも、そのrefが無いと`refs/heads/<ref>`などへ解決し直す。
+ * 対象リポジトリの検査コマンドは`refs/heads/refs/remotes/origin/<branch>`のようなrefを作れるので、
+ * 追跡refが無いときに、別のcommitを追跡refの先頭として読んでしまう。
+ * リモート追跡のrefは、この関数で読む(`scripts/lint-no-short-remote-ref.ts`が短い名前を止める)。
+ * 読み取りだけのローカルの操作で、gitが失敗したときも`null`を返す。
+ * 呼び出し側が、refが無いことを必須の前提の違反として扱う。
+ * `--`はrefの前に置く。`show-ref`は`--`を受け付ける。
+ */
+export async function readExactRef(opts: {
+  readonly run: CommandRunner;
+  readonly cwd: string;
+  readonly env: Record<string, string>;
+  readonly ref: string;
+}): Promise<string | null> {
+  if (!opts.ref.startsWith("refs/")) {
+    throw new Error(`not a full ref name: ${JSON.stringify(opts.ref)}`);
+  }
+  const result = await opts.run(
+    buildGitArgv(["show-ref", "--verify", "--hash", "--", opts.ref]),
+    { cwd: opts.cwd, env: opts.env },
+  );
+  if (result.exitCode !== 0) return null;
+  const sha = result.stdout.trim();
+  return sha === "" ? null : sha;
 }
 
 /**
@@ -1220,28 +1254,27 @@ export async function ensureRepo(
 }
 
 /**
- * `repoDir`の`ensureRepo`のcloneで、`origin/HEAD`が指すsha
+ * `repoDir`の`ensureRepo`のcloneで、`refs/remotes/origin/HEAD`が指すsha
  * (対象リポジトリの既定のブランチの先頭)を返す。解決できなければ例外を投げる。
  * 読み取りだけのローカルの操作で、`GH_TOKEN`は要らない。
  * 呼ぶ前に`ensureRepo`が`origin`をfetchしているので、
- * `origin/HEAD`はローカルで解決できる。
- * `rev-parse`には`--`を付けない(`buildGitArgv`の例外を参照)。
+ * `refs/remotes/origin/HEAD`はローカルで解決できる。
+ * 短い名前の`origin/HEAD`は、`refs/heads/origin/HEAD`などが先に解決されうるため使わない(`readExactRef`)。
  */
 export async function resolveDefaultBranchHeadSha(
   run: CommandRunner,
   repoDir: string,
 ): Promise<string> {
-  const result = await run(
-    buildGitArgv(["rev-parse", "--verify", "origin/HEAD"]),
-    { cwd: repoDir, env: localGitEnv() },
-  );
-  if (result.exitCode !== 0) {
-    throw gitError(
-      `git rev-parse --verify origin/HEAD failed in ${repoDir}`,
-      result,
-    );
+  const sha = await readExactRef({
+    run,
+    cwd: repoDir,
+    env: localGitEnv(),
+    ref: REMOTE_HEAD_REF,
+  });
+  if (sha === null) {
+    throw new Error(`${REMOTE_HEAD_REF} does not exist in ${repoDir}`);
   }
-  return result.stdout.trim();
+  return sha;
 }
 
 /**
@@ -1422,6 +1455,20 @@ export async function ensureFactoryClone(
           throw gitError(
             "git reset --hard failed for factory clone",
             resetResult,
+          );
+        }
+        // 追跡refが完全な名前で存在することを確かめてから切り替える。
+        // 無いまま名前を渡すと、別のrefへ解決し直されうる。
+        // 名前のまま渡すのは、上流の設定を残すためである。
+        const tracked = await readExactRef({
+          run: opts.run,
+          cwd: dir,
+          env: localGitEnv(opts.home, opts.path),
+          ref: remoteTrackingRef(branch),
+        });
+        if (tracked === null) {
+          throw new Error(
+            `${remoteTrackingRef(branch)} does not exist in factory clone`,
           );
         }
         // ここでは`--`を付けない(`buildGitArgv`の例外を参照)。
@@ -1981,7 +2028,7 @@ export async function createGtrWorktree(
         // さらに人がブランチに直接pushしていれば、古いローカルの履歴のせいで
         // 次のpushがfast-forwardでなくなる。
         // そのため、渡す前にfetch、hard reset、cleanを行い、
-        // `origin/<branch>`のままの状態に戻す。
+        // `refs/remotes/origin/<branch>`のままの状態に戻す。
         // 下の`git gtr new`で作る新しいworktreeは、
         // リモートの今の状態から作るので不要である。
         const fetchResult = await opts.run(
@@ -2000,11 +2047,26 @@ export async function createGtrWorktree(
           );
         }
 
+        // 追跡refのshaを完全な名前で読み、以降はこのshaに合わせる。
+        // 名前のまま渡すと、追跡refが無いときに別のrefへ解決し直されうる。
+        const trackingSha = await readExactRef({
+          run: opts.run,
+          cwd: opts.repoDir,
+          env: localGitEnv(opts.home, opts.path),
+          ref: remoteTrackingRef(opts.branch),
+        });
+        if (trackingSha === null) {
+          throw new Error(
+            `${remoteTrackingRef(opts.branch)} does not exist (gtr worktree reuse)`,
+          );
+        }
+        assertSha(trackingSha);
+
         await ensureHeadOnBranch({
           run: opts.run,
           dir: reused.path,
           branch: opts.branch,
-          ref: remoteTrackingRef(opts.branch),
+          ref: trackingSha,
           context: "gtr worktree reuse",
           ...(opts.home !== undefined ? { home: opts.home } : {}),
           ...(opts.path !== undefined ? { path: opts.path } : {}),
@@ -2015,12 +2077,12 @@ export async function createGtrWorktree(
         // 「fatal: Cannot do hard reset with paths」で失敗することを確かめた。
         // `opts.branch`は上の`assertBranchName`で検証済みである。
         const resetResult = await opts.run(
-          buildGitArgv(["reset", "--hard", remoteTrackingRef(opts.branch)]),
+          buildGitArgv(["reset", "--hard", trackingSha]),
           { cwd: reused.path, env: localGitEnv(opts.home, opts.path) },
         );
         if (resetResult.exitCode !== 0) {
           throw gitError(
-            `git reset --hard ${remoteTrackingRef(opts.branch)} failed (gtr worktree reuse)`,
+            `git reset --hard ${trackingSha} failed (gtr worktree reuse)`,
             resetResult,
           );
         }
@@ -2376,21 +2438,15 @@ export async function commitAndPush(
         throw gitError(`git fetch origin ${branch} failed`, fetchResult);
       }
 
-      const remoteShaResult = await opts.run(
-        buildGitArgv([
-          "rev-parse",
-          "--verify",
-          `${remoteTrackingRef(branch)}^{commit}`,
-        ]),
-        { cwd: opts.dir, env: local },
-      );
-      if (remoteShaResult.exitCode !== 0) {
-        throw gitError(
-          `git rev-parse --verify ${remoteTrackingRef(branch)} failed`,
-          remoteShaResult,
-        );
+      const remoteSha = await readExactRef({
+        run: opts.run,
+        cwd: opts.dir,
+        env: local,
+        ref: remoteTrackingRef(branch),
+      });
+      if (remoteSha === null) {
+        throw new Error(`${remoteTrackingRef(branch)} does not exist`);
       }
-      const remoteSha = remoteShaResult.stdout.trim();
       if (remoteSha !== opts.expectedHeadSha) {
         return { outcome: "head_changed" as const, currentSha: remoteSha };
       }
@@ -2530,24 +2586,18 @@ export async function commitAndPush(
               refetchResult,
             );
           }
-          const currentShaResult = await opts.run(
-            buildGitArgv([
-              "rev-parse",
-              "--verify",
-              `${remoteTrackingRef(branch)}^{commit}`,
-            ]),
-            { cwd: opts.dir, env: local },
-          );
-          if (currentShaResult.exitCode !== 0) {
-            throw gitError(
-              `git rev-parse --verify ${remoteTrackingRef(branch)} failed (after push rejection)`,
-              currentShaResult,
+          const currentSha = await readExactRef({
+            run: opts.run,
+            cwd: opts.dir,
+            env: local,
+            ref: remoteTrackingRef(branch),
+          });
+          if (currentSha === null) {
+            throw new Error(
+              `${remoteTrackingRef(branch)} does not exist (after push rejection)`,
             );
           }
-          return {
-            outcome: "head_changed" as const,
-            currentSha: currentShaResult.stdout.trim(),
-          };
+          return { outcome: "head_changed" as const, currentSha };
         }
         throw gitError("git push failed", pushResult);
       }
@@ -2573,7 +2623,7 @@ export type PushNewBranchOptions = {
   readonly branch: string;
   /**
    * 既定のブランチの名前(`resolveDefaultBranchName`)。
-   * ローカルの`origin/HEAD`から読んだ値なので、リモートの`HEAD`と照合してから使う。
+   * ローカルの`refs/remotes/origin/HEAD`から読んだ値なので、リモートの`HEAD`と照合してから使う。
    */
   readonly baseBranch: string;
   readonly ghToken: string;
@@ -2699,20 +2749,17 @@ export async function pushNewBranch(
       }
       assertSha(baseSha);
 
-      // `rev-parse`には`--`を付けない(`buildGitArgv`の例外を参照)。
-      // 完全なref名で読み、`origin/<baseBranch>`という名前のタグなどと取り違えない。
-      const trackingRef = `refs/remotes/origin/${opts.baseBranch}`;
-      const trackingResult = await opts.run(
-        buildGitArgv(["rev-parse", "--verify", `${trackingRef}^{commit}`]),
-        { cwd: opts.repoDir, env: local },
-      );
-      if (trackingResult.exitCode !== 0) {
-        throw gitError(
-          `git rev-parse --verify ${trackingRef} failed`,
-          trackingResult,
-        );
+      // 完全なref名を一致させて読み、`origin/<baseBranch>`という名前のタグなどと取り違えない。
+      const trackingRef = remoteTrackingRef(opts.baseBranch);
+      const trackingSha = await readExactRef({
+        run: opts.run,
+        cwd: opts.repoDir,
+        env: local,
+        ref: trackingRef,
+      });
+      if (trackingSha === null) {
+        throw new Error(`${trackingRef} does not exist`);
       }
-      const trackingSha = trackingResult.stdout.trim();
       if (trackingSha !== baseSha) {
         throw new Error(
           maskSecrets(
@@ -2826,8 +2873,7 @@ export type CurrentRemoteHeadShaOptions = {
 };
 
 /**
- * `repoDir`で`refs/remotes/origin/<branch>`が今指すshaを返す。
- * 短い名前の`origin/<branch>`は、`refs/heads/origin/<branch>`などが先に解決されうるため使わない。
+ * `repoDir`で`refs/remotes/origin/<branch>`が今指すshaを返す(`readExactRef`)。
  * リモート追跡のrefがローカルに無いときは`null`を返す
  * (一度もfetchしていない、ブランチが消された)。
  * `resolveDefaultBranchHeadSha`と同じく読み取りだけのローカルの操作で、
@@ -2838,16 +2884,13 @@ export async function currentRemoteHeadSha(
   opts: CurrentRemoteHeadShaOptions,
 ): Promise<string | null> {
   assertBranchName(opts.branch);
-  const result = await opts.run(
-    buildGitArgv([
-      "rev-parse",
-      "--verify",
-      `${remoteTrackingRef(opts.branch)}^{commit}`,
-    ]),
-    { cwd: opts.repoDir, env: localGitEnv(opts.home, opts.path) },
-  );
-  if (result.exitCode !== 0) return null;
-  const sha = result.stdout.trim();
+  const sha = await readExactRef({
+    run: opts.run,
+    cwd: opts.repoDir,
+    env: localGitEnv(opts.home, opts.path),
+    ref: remoteTrackingRef(opts.branch),
+  });
+  if (sha === null) return null;
   assertSha(sha);
   return sha;
 }
@@ -2856,12 +2899,12 @@ export async function currentRemoteHeadSha(
 // resolveDefaultBranchName / mergeBaseSha / deleteLocalBranch(implementフロー)
 // ---------------------------------------------------------------------------
 
-const ORIGIN_PREFIX = "origin/";
-
 /**
  * `ensureRepo`のcloneのシンボリックref`refs/remotes/origin/HEAD`から、
  * 対象リポジトリの既定のブランチ名を返す
- * (`--no-checkout`のcloneで`origin/main`になることを確かめた)。
+ * (`--no-checkout`のcloneで`refs/remotes/origin/main`になることを確かめた)。
+ * `--short`は付けない。`refs/heads/origin/main`があると、
+ * `--short`は曖昧さを避けて`remotes/origin/main`を返し、ブランチ名を読み違えるため。
  * implementフローがPRのbaseにし、
  * `git gtr new`が新しいworktreeの分岐元にするブランチである。
  * ローカルだけの操作で、先に`ensureRepo`を実行しておく必要がある。
@@ -2873,7 +2916,7 @@ export async function resolveDefaultBranchName(opts: {
   readonly path?: string;
 }): Promise<string> {
   const result = await opts.run(
-    buildGitArgv(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]),
+    buildGitArgv(["symbolic-ref", REMOTE_HEAD_REF]),
     {
       cwd: opts.repoDir,
       env: localGitEnv(opts.home, opts.path),
@@ -2881,15 +2924,17 @@ export async function resolveDefaultBranchName(opts: {
   );
   if (result.exitCode !== 0) {
     throw gitError(
-      `git symbolic-ref refs/remotes/origin/HEAD failed in ${opts.repoDir}`,
+      `git symbolic-ref ${REMOTE_HEAD_REF} failed in ${opts.repoDir}`,
       result,
     );
   }
   const ref = result.stdout.trim();
-  if (!ref.startsWith(ORIGIN_PREFIX)) {
-    throw new Error(`unexpected origin/HEAD target: ${JSON.stringify(ref)}`);
+  if (!ref.startsWith(REMOTE_TRACKING_PREFIX)) {
+    throw new Error(
+      `unexpected ${REMOTE_HEAD_REF} target: ${JSON.stringify(ref)}`,
+    );
   }
-  const branch = ref.slice(ORIGIN_PREFIX.length);
+  const branch = ref.slice(REMOTE_TRACKING_PREFIX.length);
   assertBranchName(branch);
   return branch;
 }

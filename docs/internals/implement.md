@@ -597,12 +597,12 @@ pushは`HEAD`ではなく、作ったcommitのshaを送る。
 gitのreflogには残る。
 人がGitHubで消したブランチは、消す前の状態には戻さず、既定のブランチの先頭から作り直す。
 
-既定のブランチの先頭は、ローカルの`origin/HEAD`と追跡refを信じず、`git ls-remote --symref`の1回でリモートに問い合わせる。
+既定のブランチの先頭は、ローカルの`refs/remotes/origin/HEAD`と追跡refを信じず、`git ls-remote --symref`の1回でリモートに問い合わせる。
 問い合わせるのは、リモートの`HEAD`、実装ブランチ、既定のブランチである。
-検査コマンドはメインのcloneの`.git`を書き換えられ、`--prune`なしのfetchは書き換えられた`origin/HEAD`を直さないためである。
+検査コマンドはメインのcloneの`.git`を書き換えられ、`--prune`なしのfetchは書き換えられた`refs/remotes/origin/HEAD`を直さないためである。
 次のどれかに当たれば例外を投げ、ローカルのブランチを動かさず、何もpushしない。
 
-- リモートの`HEAD`が、ローカルの`origin/HEAD`から読んだ既定のブランチでない。
+- リモートの`HEAD`が、ローカルの`refs/remotes/origin/HEAD`から読んだ既定のブランチでない。
 - リモートに既定のブランチが無い。
 - ローカルの追跡ref(`refs/remotes/origin/<base>`)が、リモートの既定のブランチの先頭と違う。
 
@@ -611,6 +611,20 @@ gitのreflogには残る。
 短い名前の`origin/<base>`は引き直さない。
 検査コマンドが作る`refs/heads/origin/<base>`や`refs/tags/origin/<base>`が、追跡refより先に解決されうるためである。
 照合で、そのshaがローカルにあり、追跡refと同じことも確かめる。
+
+ローカルの追跡refは、どの箇所も`refs/remotes/origin/<branch>`の完全な名前で読む。
+読み取りは`readExactRef`に集めている。
+対象は次の箇所である。
+
+- `currentRemoteHeadSha`
+- `commitAndPush`の先頭の照合
+- worktreeを再利用するときの`reset --hard`
+- 準備のステップの既定のブランチの先頭と名前(`refs/remotes/origin/HEAD`)
+
+`git show-ref --verify`は、名前が完全に一致するrefだけを返す。
+`git rev-parse`は完全な名前でも、追跡refが無いと`refs/heads/refs/remotes/origin/<branch>`のようなrefへ解決し直す。
+追跡refの代わりに別のcommitを読んでしまうため、`rev-parse`は使わない。
+`f/factory/`のコードに短い名前の`origin/...`を書くと、`scripts/lint-no-short-remote-ref.ts`が止める。
 
 向け直しの後でpushに失敗したときは、ローカルのブランチが既定のブランチの先頭を指し、worktreeには古いファイルが残る。
 リモートにはまだブランチが無いので、次の実行がもう一度向け直してpushし、再利用の経路でworktreeを`origin/<branch>`へ戻す。
