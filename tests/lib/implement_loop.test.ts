@@ -210,10 +210,10 @@ describe("implementPromptInput", () => {
 });
 
 describe("prepareImplementWorktree", () => {
-  function prepDeps(
-    existing: boolean,
-    pushed: boolean,
-  ): { deps: WorktreePrepDeps; calls: string[] } {
+  function prepDeps(existing: boolean): {
+    deps: WorktreePrepDeps;
+    calls: string[];
+  } {
     const calls: string[] = [];
     let created = 0;
     return {
@@ -227,33 +227,35 @@ describe("prepareImplementWorktree", () => {
         },
         publishBranch: async () => {
           calls.push("publish");
-          return pushed;
+          return PUBLISHED_BASE_SHA;
         },
       },
     };
   }
+  const PUBLISHED_BASE_SHA = "d".repeat(40);
 
   test("publishes an existing worktree's branch before reusing it", async () => {
-    const { deps, calls } = prepDeps(true, false);
+    const { deps, calls } = prepDeps(true);
     await prepareImplementWorktree(deps);
     expect(calls).toEqual(["publish", "create"]);
   });
 
-  test("creates then publishes a new branch", async () => {
-    const { deps, calls } = prepDeps(false, true);
-    await prepareImplementWorktree(deps);
-    expect(calls).toEqual(["create", "publish"]);
-  });
-
-  test("re-takes the worktree through the reuse path when origin already had the branch", async () => {
-    const { deps, calls } = prepDeps(false, false);
+  test("re-takes a new worktree through the reuse path after publishing", async () => {
+    const { deps, calls } = prepDeps(false);
     await prepareImplementWorktree(deps);
     expect(calls).toEqual(["create", "publish", "create"]);
   });
 
   test("returns the aligned worktree's path", async () => {
-    const { deps } = prepDeps(false, false);
-    expect(await prepareImplementWorktree(deps)).toBe("/wt-2");
+    const { deps } = prepDeps(false);
+    expect((await prepareImplementWorktree(deps)).worktreeDir).toBe("/wt-2");
+  });
+
+  test("returns the base sha the publish verified against the remote", async () => {
+    const { deps } = prepDeps(true);
+    expect((await prepareImplementWorktree(deps)).baseSha).toBe(
+      PUBLISHED_BASE_SHA,
+    );
   });
 });
 

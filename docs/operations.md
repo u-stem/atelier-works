@@ -175,6 +175,26 @@ rate limitが原因で人の対応待ちになったときは、通知の次の�
 この作業項目は**失敗**タブに出ないので、解除を待ってからWindmillで`retry_work_item`を実行する。
 待つ時間の上限などの仕組みは[通知とrate limit](internals/notifications.md)を参照する。
 
+### 既定のブランチが食い違って実装フローが失敗するとき
+
+実装フローの準備が、次のエラーで失敗することがある。
+
+```text
+origin HEAD is refs/heads/<新しい既定のブランチ>, not refs/heads/<古い既定のブランチ>
+```
+
+workerにある対象リポジトリのclone(`/workspaces/<owner>/<repo>/main`)の`origin/HEAD`が、GitHubの既定のブランチと違うことが原因である。
+対象リポジトリの既定のブランチの名前を変えたときと、検査コマンドがcloneの`origin/HEAD`を書き換えたときに起きる。
+fetchでは`origin/HEAD`が直らないので、再実行しても同じエラーで失敗する。
+
+GitHubで既定のブランチの名前を確かめ、次のコマンドでcloneの`origin/HEAD`を合わせる。
+
+```bash
+mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker git -C /workspaces/<owner>/<repo>/main remote set-head origin <新しい既定のブランチ>
+```
+
+その後、Consoleの**失敗**タブで**再実行**を押す。
+
 ## 実装フローを有効にして使う
 
 要件定義の承認の後に実装まで進めるには、`factory_config`の`implement_enabled`を`true`にする。既定は`false`で、その間は作業項目が承認済み(`approved`)で止まる。

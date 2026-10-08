@@ -85,7 +85,7 @@ export type ImplementContext = {
   /** リポジトリのデフォルトブランチ。PRのbaseになる。 */
   readonly base_branch: string;
   /**
-   * worktreeの準備ができた時点の`git merge-base origin/<base_branch> HEAD`。
+   * worktreeの準備ができた時点の、リモートと照合したデフォルトブランチの先頭(`pushNewBranch`の`baseSha`)とHEADのmerge-base。
    * 各ラウンドの変更の一覧と差分の大きさはこれを基準に測るので、
    * ブランチに以前からあるcommitも見える。
    */
@@ -174,12 +174,21 @@ export type WorktreePrepDeps = {
   readonly hasWorktree: () => Promise<boolean>;
   /** `createGtrWorktree(...).path`を返す。 */
   readonly createWorktree: () => Promise<string>;
-  /** `pushNewBranch(...).pushed`を返す。originにすでにブランチがあったときは`false`。 */
-  readonly publishBranch: () => Promise<boolean>;
+  /**
+   * `pushNewBranch`を呼び、`baseSha`(リモートと照合した既定のブランチの先頭)を返す。
+   * originにブランチが無ければ、ローカルのブランチを既定のブランチの先頭へ向け直して公開する。
+   */
+  readonly publishBranch: () => Promise<string>;
+};
+
+export type PreparedWorktree = {
+  readonly worktreeDir: string;
+  /** `publishBranch`が返した、リモートと照合した既定のブランチの先頭。比較の基準はここから求める。 */
+  readonly baseSha: string;
 };
 
 /**
- * implementのworktreeを用意し、ブランチをoriginに公開して揃えたうえで、そのパスを返す。
+ * implementのworktreeを用意し、ブランチをoriginに公開して揃えたうえで、そのパスと、公開で照合した既定のブランチの先頭を返す。
  *
  * git gtr 2.11.1で測った挙動: `gtr new`はローカルのブランチがあれば使い回す。
  * 無くてリモートにだけあれば、upstreamを設定して`origin/<branch>`をチェックアウトする。
@@ -190,19 +199,17 @@ export type WorktreePrepDeps = {
  * そのため、既存のworktreeがあれば先にブランチを公開してから使い回す。
  * 前回の実行が`gtr new`と空のpushの間で止まった可能性があり、
  * 使い回しの経路は`origin/<branch>`をfetchするためである。
- * worktreeが無ければ作ってから公開する。originにすでにブランチがあった場合は、
- * 使い回しの経路をもう1回通し、古いローカルのブランチをoriginに揃える。
+ * worktreeが無ければ作ってから公開する。
+ * 公開の後は、どちらの場合も使い回しの経路を通し、worktreeを`origin/<branch>`に揃える。
+ * `gtr new`が使い回した古いローカルのブランチは、originにブランチがあればその先頭と違いうる。
+ * 無ければ公開がローカルのブランチだけを既定のブランチの先頭へ向け直し、worktreeの中身は古いまま残るためである。
  */
 export async function prepareImplementWorktree(
   deps: WorktreePrepDeps,
-): Promise<string> {
-  if (await deps.hasWorktree()) {
-    await deps.publishBranch();
-    return deps.createWorktree();
-  }
-  const created = await deps.createWorktree();
-  if (await deps.publishBranch()) return created;
-  return deps.createWorktree();
+): Promise<PreparedWorktree> {
+  if (!(await deps.hasWorktree())) await deps.createWorktree();
+  const baseSha = await deps.publishBranch();
+  return { worktreeDir: await deps.createWorktree(), baseSha };
 }
 
 // ---------------------------------------------------------------------------

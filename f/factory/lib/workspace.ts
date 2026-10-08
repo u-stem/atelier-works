@@ -470,6 +470,8 @@ export type GitCommandOptions = {
  *     `--verify`では「リビジョンが無い」扱いになり、`--verify`なしでは
  *     オプションの解釈を止めずに、出力の前に`--`の行をそのまま出す(実際に確かめた)。
  *   - `git gtr new`: core gitではない外部のサブコマンドで、`--`を扱える保証が無い。
+ *   - `pushNewBranch`の`git ls-remote`: リモート名の後の`--`を区切りではなくパターンとして扱う
+ *     (実際に確かめた)。パターンは`HEAD`と、`assertBranchName`で検証したブランチから作った`refs/heads/`で始まるrefである。
  *   - `readGitShowFile`の`git show <ref>:<path>`: `--`を付けてもエラーにならず、
  *     気づかないうちにgitが返す内容が変わる。`ref`を検証すれば、`path`も守られる
  *     (`path`は常に、検証済みで`:`を含まない`ref`と、こちらで入れた`:`に続くため)。
@@ -2168,7 +2170,7 @@ export type CommitAndPushOptions = {
    */
   readonly requireLocalHeadAtExpected?: boolean;
   /**
-   * 渡されたら、fetchの前に`git rev-parse --abbrev-ref HEAD`がこのブランチであることを確かめる。
+   * 渡されたら、fetchの前に`git symbolic-ref -q HEAD`が`refs/heads/<このブランチ>`であることを確かめる。
    * 違うとき(detachedの`HEAD`を含む)は何もせずに`CommitBlockedError`を投げる。
    * pr_fixとimplementフローが使う。検査コマンドがブランチを切り替えると、pushする先が準備ステップの見たブランチでなくなるため。
    */
@@ -2189,6 +2191,9 @@ export type CommitAndPushOptions = {
    */
   readonly expectedTreeSha?: string;
 };
+
+/** `git symbolic-ref HEAD`が、HEADがローカルのブランチにあるときに返すrefの接頭辞。 */
+const LOCAL_BRANCH_REF_PREFIX = "refs/heads/";
 
 export const COMMITTED_TREE_CHANGED_REASON =
   "committed tree differs from the inspected tree";
@@ -2289,6 +2294,7 @@ export function withCommitTrailers(
  * pushがfast-forwardでないとして拒否されたとき(先頭の確認をすり抜けた競合)も、
  * 例外を投げず、fetchし直して`head_changed`を返す。それ以外の失敗では例外を投げる。
  * `expectedBranch`・`requireLocalHeadAtExpected`・`inspectStaged`の確かめに通らなければ、commitせずに`CommitBlockedError`を投げる。
+ * `expectedBranch`が無くても、HEADがローカルのブランチに無ければ(detachedを含む)、fetchの前に例外を投げる。
  * `inspectStaged`が例外を投げたときも、ステージを戻してからその例外を投げ直す。
  * `expectedTreeSha`があれば、作ったcommitのツリーがそれと違うときにcommitを取り消し、pushせずに`CommitBlockedError`を投げる。
  * pushは`HEAD`ではなく作ったcommitのshaを`refs/heads/<branch>`へ送る。commitの後にHEADが動いても、確かめたcommitだけを送るため。
@@ -2316,26 +2322,37 @@ export async function commitAndPush(
       const local = localGitEnv(opts.home, opts.path);
       const network = networkGitEnv(opts.ghToken, opts.home, opts.path);
 
-      // これらの`rev-parse`には`--`を付けない(`buildGitArgv`の例外を参照)。
-      // `git rev-parse -- <rev>`は、`--verify`では「Needed a single revision」で失敗し、
-      // `--verify`なしでは`--`の行をそのまま出すことを確かめた。
-      // 先頭の`-`は、下の`assertBranchName`で防ぐ。
-      const branchResult = await opts.run(
-        buildGitArgv(["rev-parse", "--abbrev-ref", "HEAD"]),
+      // ブランチは`symbolic-ref`で完全なref名として読む。
+      // `rev-parse --abbrev-ref`は、同じ名前のタグがあると`heads/<branch>`を返し、照合を誤らせるため。
+      const headRefResult = await opts.run(
+        buildGitArgv(["symbolic-ref", "-q", "HEAD"]),
         { cwd: opts.dir, env: local },
       );
-      if (branchResult.exitCode !== 0) {
-        throw gitError("git rev-parse --abbrev-ref HEAD failed", branchResult);
+      // `-q`は、HEADがdetachedのときだけ何も出さずに終了コード1を返す。それ以外の失敗はHEADを読めていない。
+      const detached = headRefResult.exitCode === 1 && !headRefResult.timedOut;
+      if (headRefResult.exitCode !== 0 && !detached) {
+        throw gitError("git symbolic-ref -q HEAD failed", headRefResult);
       }
-      const branch = branchResult.stdout.trim();
-      if (
-        opts.expectedBranch !== undefined &&
-        (branch === "HEAD" || branch !== opts.expectedBranch)
-      ) {
+      const headRef = detached ? "" : headRefResult.stdout.trim();
+      const branch = headRef.startsWith(LOCAL_BRANCH_REF_PREFIX)
+        ? headRef.slice(LOCAL_BRANCH_REF_PREFIX.length)
+        : null;
+      if (opts.expectedBranch !== undefined && branch !== opts.expectedBranch) {
         throw new CommitBlockedError(
           `local HEAD is not on branch ${opts.expectedBranch}`,
         );
       }
+      if (branch === null) {
+        throw new Error(
+          maskSecrets(
+            `local HEAD is not on a branch: ${detached ? "detached" : headRef}`,
+          ),
+        );
+      }
+      // 以降の`rev-parse`には`--`を付けない(`buildGitArgv`の例外を参照)。
+      // `git rev-parse -- <rev>`は、`--verify`では「Needed a single revision」で失敗し、
+      // `--verify`なしでは`--`の行をそのまま出すことを確かめた。
+      // 先頭の`-`は、ここの`assertBranchName`で防ぐ。
       assertBranchName(branch);
 
       const fetchResult = await opts.run(
@@ -2523,19 +2540,24 @@ export async function commitAndPush(
 }
 
 // ---------------------------------------------------------------------------
-// pushNewBranch(implementフロー): 作ったばかりのローカルのブランチを公開する
+// pushNewBranch(implementフロー): 実装ブランチを既定のブランチの先頭で公開する
 // ---------------------------------------------------------------------------
 
 export type PushNewBranchOptions = {
   readonly run: CommandRunner;
   /**
    * メインのcloneのディレクトリ(`ensureRepo`を参照)。
-   * リポジトリごとの共有のロックを決めるのに使い、2つのgitの実行もここで行う。
-   * worktreeはrefと設定をメインのcloneと共有するので、`repoDir`からの`push -u`でも、
-   * `createGtrWorktree`が作ったブランチを公開し、upstreamを同じく設定できる。
+   * リポジトリごとの共有のロックを決めるのに使い、gitの実行もすべてここで行う。
+   * worktreeはrefをメインのcloneと共有するので、ここでローカルのブランチを動かせば、
+   * `createGtrWorktree`が作ったworktreeのブランチも動く。
    */
   readonly repoDir: string;
   readonly branch: string;
+  /**
+   * 既定のブランチの名前(`resolveDefaultBranchName`)。
+   * ローカルの`origin/HEAD`から読んだ値なので、リモートの`HEAD`と照合してから使う。
+   */
+  readonly baseBranch: string;
   readonly ghToken: string;
   readonly home?: string;
   readonly path?: string;
@@ -2544,26 +2566,76 @@ export type PushNewBranchOptions = {
   readonly now?: () => Date;
 };
 
-export type PushNewBranchResult = { readonly pushed: boolean };
+export type PushNewBranchResult = {
+  readonly pushed: boolean;
+  /**
+   * リモートに問い合わせて確かめた、既定のブランチの先頭のsha。
+   * 呼び出し側は比較の基準をこのshaから求め(`mergeBaseSha`)、ローカルの短い名前`origin/<base>`を引き直さない。
+   */
+  readonly baseSha: string;
+};
+
+/** `git ls-remote --symref`の出力を読んだもの。キーはどちらも完全なref名である。 */
+type LsRemoteRefs = {
+  /** シンボリックrefの名前から、指す先のref名へ(`ref: <target>\t<name>`の行)。 */
+  readonly symrefs: ReadonlyMap<string, string>;
+  /** refの名前から、そのsha(`<sha>\t<name>`の行)。 */
+  readonly shas: ReadonlyMap<string, string>;
+};
+
+const LS_REMOTE_SYMREF_PREFIX = "ref: ";
 
 /**
- * `git ls-remote --exit-code`で、一致するrefが無かったときの終了コード(一致すれば0)。
- * それ以外の0でない終了コードは、認証やネットワークなどの本当の失敗である。
+ * `git ls-remote --symref`の標準出力を読む。
+ * パターンはrefの末尾で一致し、`refs/heads/x/refs/heads/main`のような別のrefも返るので、
+ * 呼び出し側は完全なref名で引く。形の合わない行は無視する。shaの検証は呼び出し側が行う。
  */
-const LS_REMOTE_NO_MATCH_EXIT_CODE = 2;
+function parseLsRemoteSymref(stdout: string): LsRemoteRefs {
+  const symrefs = new Map<string, string>();
+  const shas = new Map<string, string>();
+  for (const line of stdout.split("\n")) {
+    const tab = line.indexOf("\t");
+    if (tab < 0) continue;
+    const left = line.slice(0, tab);
+    const name = line.slice(tab + 1);
+    if (left.startsWith(LS_REMOTE_SYMREF_PREFIX)) {
+      symrefs.set(name, left.slice(LS_REMOTE_SYMREF_PREFIX.length));
+    } else {
+      shas.set(name, left);
+    }
+  }
+  return { symrefs, shas };
+}
 
 /**
- * `createGtrWorktree`がローカルにブランチを作った直後に、`repoDir`から
- * `git push -u origin <branch>`を実行する。失敗したら例外を投げる。
+ * リモートに`branch`が無ければ、リモートの既定のブランチの先頭で公開する。
+ * まず`git ls-remote --symref origin HEAD refs/heads/<branch> refs/heads/<baseBranch>`の1回で、
+ * リモートの`HEAD`の指す先、ブランチの有無、既定のブランチの先頭を読む。
+ * 次のどれかに当たれば例外を投げ、ローカルのブランチを動かさず、何もpushしない。
+ * - リモートの`HEAD`が`refs/heads/<baseBranch>`でない。
+ * - リモートに`refs/heads/<baseBranch>`が無い。
+ * - ローカルの追跡ref(`refs/remotes/origin/<baseBranch>`)が、リモートの既定のブランチの先頭と違う。
+ * ローカルの`origin/HEAD`と追跡refは、隔離せずrootで動く検査コマンドが書き換えうるためである。
+ * `--prune`なしのfetchは、書き換えられた`origin/HEAD`を直さない。
+ * 照合は、リモートにブランチがあるときもする。返す`baseSha`から準備が比較の基準を求めるので、
+ * そのcommitがローカルにあり(追跡refと同じ)、検査コマンドに差し替えられていないことを確かめるためである。
+ *
+ * リモートに`branch`があれば(push済みの後の再試行)、ブランチを動かさず`pushed: false`を返す。
+ * ローカルの`origin/<branch>`を信じずにリモートへ問い合わせるのは、`ensureRepo`が`--prune`なしでfetchするので、
+ * 人がGitHubでブランチを消した後に残った古い追跡refのせいでpushを飛ばしてはいけないためである。
+ *
+ * 無ければ、ローカルの`branch`を先頭へ`update-ref --no-deref`で向け直し、
+ * ローカルのブランチではなく先頭のshaを`refs/heads/<branch>`へpushする。
+ * ローカルのブランチには、検査コマンドが作ったcommitなど、検査していない履歴が残りうるためである
+ * (リモートのブランチだけが消えた後の再実行)。
+ * 削除して作り直さずに向け直すのは、checkout中のブランチも1回の操作で動かせ、worktreeを消さずに済むためである。
+ * `--no-deref`は、ローカルのブランチがシンボリックrefにされていても、指す先の別のブランチを動かさないために付ける。
+ * 向け直しはworktreeの中身を動かさないので、呼び出し側は公開の後にworktreeを`origin/<branch>`へそろえる(`prepareImplementWorktree`)。
+ * 向け直しの後でpushに失敗したときは、ローカルのブランチが先頭を指し、worktreeには古いファイルが残る。
+ * リモートにはまだブランチが無いので、次の実行がもう一度向け直してpushし、再利用の経路でworktreeを`origin/<branch>`へ戻す。
+ *
  * ブランチを(空でも)公開しておけば、後のステップは`commitAndPush`
- * (`origin/<branch>`をfetchして`expectedHeadSha`と比べる)をそのまま使え、
- * 再試行のときは`createGtrWorktree`の再利用の経路で`reset --hard origin/<branch>`できる。
- * リモートにすでにブランチがあれば(push済みの後の再試行)、何もせず`pushed: false`を返す。
- * ローカルの`origin/<branch>`を信じず、
- * `git ls-remote --exit-code --heads origin -- <branch>`で
- * リモートに直接問い合わせる(0はある、2は無い、それ以外はエラー)。
- * `ensureRepo`は`--prune`なしでfetchするので、人がGitHubでブランチを消した後に残った
- * 古い追跡refのせいでpushを飛ばしてはいけないため。
+ * (`origin/<branch>`をfetchして`expectedHeadSha`と比べる)をそのまま使える。
  * このリポジトリの他のネットワーク操作と同じく、
  * `repoLockPath(repoDir)`のロックの下で実行する。
  */
@@ -2571,6 +2643,7 @@ export async function pushNewBranch(
   opts: PushNewBranchOptions,
 ): Promise<PushNewBranchResult> {
   assertBranchName(opts.branch);
+  assertBranchName(opts.baseBranch);
 
   return withRepoLock({
     lockPath: repoLockPath(opts.repoDir),
@@ -2578,31 +2651,90 @@ export async function pushNewBranch(
     ...(opts.sleep !== undefined ? { sleep: opts.sleep } : {}),
     ...(opts.now !== undefined ? { now: opts.now } : {}),
     fn: async () => {
-      const env = networkGitEnv(opts.ghToken, opts.home, opts.path);
-      const existing = await opts.run(
+      const network = networkGitEnv(opts.ghToken, opts.home, opts.path);
+      const local = localGitEnv(opts.home, opts.path);
+      const branchRef = `refs/heads/${opts.branch}`;
+      const remoteBaseRef = `refs/heads/${opts.baseBranch}`;
+      const remote = await opts.run(
         buildGitArgv(
-          ["ls-remote", "--exit-code", "--heads", "origin", "--", opts.branch],
+          ["ls-remote", "--symref", "origin", "HEAD", branchRef, remoteBaseRef],
           { network: true },
         ),
-        { cwd: opts.repoDir, env },
+        { cwd: opts.repoDir, env: network },
       );
-      if (existing.exitCode === 0) {
-        return { pushed: false };
+      assertOutputComplete(`git ls-remote origin in ${opts.repoDir}`, remote);
+      if (remote.exitCode !== 0) {
+        throw gitError(`git ls-remote origin ${opts.branch} failed`, remote);
       }
-      if (existing.exitCode !== LS_REMOTE_NO_MATCH_EXIT_CODE) {
-        throw gitError(`git ls-remote origin ${opts.branch} failed`, existing);
+      const refs = parseLsRemoteSymref(remote.stdout);
+      const remoteHead = refs.symrefs.get("HEAD");
+      if (remoteHead !== remoteBaseRef) {
+        throw new Error(
+          maskSecrets(
+            `origin HEAD is ${remoteHead ?? "unknown"}, not ${remoteBaseRef}`,
+          ),
+        );
+      }
+      const baseSha = refs.shas.get(remoteBaseRef);
+      if (baseSha === undefined) {
+        throw new Error(`origin has no ${remoteBaseRef}`);
+      }
+      assertSha(baseSha);
+
+      // `rev-parse`には`--`を付けない(`buildGitArgv`の例外を参照)。
+      // 完全なref名で読み、`origin/<baseBranch>`という名前のタグなどと取り違えない。
+      const trackingRef = `refs/remotes/origin/${opts.baseBranch}`;
+      const trackingResult = await opts.run(
+        buildGitArgv(["rev-parse", "--verify", `${trackingRef}^{commit}`]),
+        { cwd: opts.repoDir, env: local },
+      );
+      if (trackingResult.exitCode !== 0) {
+        throw gitError(
+          `git rev-parse --verify ${trackingRef} failed`,
+          trackingResult,
+        );
+      }
+      const trackingSha = trackingResult.stdout.trim();
+      if (trackingSha !== baseSha) {
+        throw new Error(
+          maskSecrets(
+            `${trackingRef} (${trackingSha}) does not match origin's ${remoteBaseRef} (${baseSha})`,
+          ),
+        );
       }
 
+      if (refs.shas.has(branchRef)) {
+        return { pushed: false, baseSha };
+      }
+
+      const moveResult = await opts.run(
+        buildGitArgv([
+          "update-ref",
+          "--no-deref",
+          "-m",
+          "factory: publish the branch at the base",
+          "--",
+          branchRef,
+          baseSha,
+        ]),
+        { cwd: opts.repoDir, env: local },
+      );
+      if (moveResult.exitCode !== 0) {
+        throw gitError(
+          `git update-ref ${branchRef} ${baseSha} failed`,
+          moveResult,
+        );
+      }
+
+      const refspec = `${baseSha}:${branchRef}`;
       const pushResult = await opts.run(
-        buildGitArgv(["push", "-u", "origin", "--", opts.branch], {
-          network: true,
-        }),
-        { cwd: opts.repoDir, env },
+        buildGitArgv(["push", "origin", "--", refspec], { network: true }),
+        { cwd: opts.repoDir, env: network },
       );
       if (pushResult.exitCode !== 0) {
-        throw gitError(`git push -u origin ${opts.branch} failed`, pushResult);
+        throw gitError(`git push origin ${refspec} failed`, pushResult);
       }
-      return { pushed: true };
+      return { pushed: true, baseSha };
     },
   });
 }
@@ -2747,20 +2879,22 @@ export type WorktreeGitOptions = {
 };
 
 /**
- * 実装用のworktreeで`git merge-base origin/<baseBranch> HEAD`を実行し、
+ * 実装用のworktreeで`git merge-base -- <baseSha> HEAD`を実行し、
  * ブランチが既定のブランチから分かれた点のshaを返す。失敗したら例外を投げる。
+ * `baseSha`には、`pushNewBranch`がリモートと照合した既定のブランチの先頭を渡す。
+ * 短い名前の`origin/<base>`は、検査コマンドが作る`refs/heads/origin/<base>`や`refs/tags/origin/<base>`が先に解決されうるため、引き直さない。
  * implementフローは毎ラウンドこれと比べるので、ブランチに以前コミットした変更
  * (`needs_human`での途中のpush、既存のPR)も差分に含まれる。
  * このモジュールの規則どおりリビジョンの前に`--`を置く
  * (`git merge-base -- <a> <b>`は`--`なしと同じに解決する)。
- * `baseBranch`は`assertBranchName`でも検証する。
+ * `baseSha`は`assertSha`で検証する。
  */
 export async function mergeBaseSha(
-  opts: WorktreeGitOptions & { readonly baseBranch: string },
+  opts: WorktreeGitOptions & { readonly baseSha: string },
 ): Promise<string> {
-  assertBranchName(opts.baseBranch);
+  assertSha(opts.baseSha);
   const result = await opts.run(
-    buildGitArgv(["merge-base", "--", `origin/${opts.baseBranch}`, "HEAD"]),
+    buildGitArgv(["merge-base", "--", opts.baseSha, "HEAD"]),
     {
       cwd: opts.worktreeDir,
       env: localGitEnv(opts.home, opts.path),
@@ -2768,7 +2902,7 @@ export async function mergeBaseSha(
   );
   if (result.exitCode !== 0) {
     throw gitError(
-      `git merge-base origin/${opts.baseBranch} HEAD failed in ${opts.worktreeDir}`,
+      `git merge-base ${opts.baseSha} HEAD failed in ${opts.worktreeDir}`,
       result,
     );
   }

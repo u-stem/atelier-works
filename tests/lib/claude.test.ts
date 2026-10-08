@@ -181,6 +181,12 @@ function claudeJsonStdout(
   });
 }
 
+/**
+ * スキーマに合わない`structured_output`。失敗の詳細は`JSON.stringify`の先頭500字を載せるので、
+ * 500字目に`;`が来るこの値では、詳細が`;`で終わる。
+ */
+const DETAIL_ENDING_IN_SEMICOLON = `${"a".repeat(498)};tail`;
+
 describe("parseClaudeJson", () => {
   test("parses a well-formed claude -p JSON result", () => {
     const result = parseClaudeJson(claudeJsonStdout());
@@ -569,6 +575,95 @@ describe("runClaude", () => {
       retried: false,
       agentRun: { stage: baseOptions(fake.run).stage },
     });
+  });
+
+  test("adds the beforeRetry error to the failure detail", async () => {
+    const fake = createFakeCommandRunner([
+      { stdout: "not json", stderr: "", exitCode: 0, timedOut: false },
+    ]);
+    const result = await runClaude({
+      ...baseOptions(fake.run),
+      beforeRetry: async () => {
+        throw new Error("EIO: cannot read .git");
+      },
+    });
+    expect(result).toMatchObject({
+      detail: expect.stringContaining(
+        "retry check failed: EIO: cannot read .git",
+      ),
+    });
+  });
+
+  test("masks a secret-looking value in the beforeRetry error", async () => {
+    const token = `ghp_${"a".repeat(36)}`;
+    const fake = createFakeCommandRunner([
+      { stdout: "not json", stderr: "", exitCode: 0, timedOut: false },
+    ]);
+    const result = await runClaude({
+      ...baseOptions(fake.run),
+      beforeRetry: async () => {
+        throw new Error(`fetch failed with ${token}`);
+      },
+    });
+    expect(result.outcome === "failure" ? result.detail : "").not.toContain(
+      token,
+    );
+  });
+
+  test("does not create a reason separator when the first detail ends with a semicolon and beforeRetry throws", async () => {
+    const fake = createFakeCommandRunner([
+      {
+        stdout: claudeJsonStdout({
+          structured_output: DETAIL_ENDING_IN_SEMICOLON,
+        }),
+        stderr: "",
+        exitCode: 0,
+        timedOut: false,
+      },
+    ]);
+    const result = await runClaude({
+      ...baseOptions(fake.run),
+      beforeRetry: async () => {
+        throw new Error("EIO");
+      },
+    });
+    expect(result.outcome === "failure" ? result.detail : "; ").not.toContain(
+      "; ",
+    );
+  });
+
+  test("does not create a reason separator when the retried detail ends with a semicolon", async () => {
+    const fake = createFakeCommandRunner([
+      { stdout: claudeJsonStdout(), stderr: "", exitCode: 0, timedOut: false },
+      {
+        stdout: claudeJsonStdout({
+          structured_output: DETAIL_ENDING_IN_SEMICOLON,
+        }),
+        stderr: "",
+        exitCode: 0,
+        timedOut: false,
+      },
+    ]);
+    const result = await runClaude({
+      ...baseOptions(fake.run),
+      reviewOutput: () => ["issue"],
+    });
+    expect(result.outcome === "failure" ? result.detail : "; ").not.toContain(
+      "; ",
+    );
+  });
+
+  test("keeps the failure detail as is when beforeRetry refuses without an error", async () => {
+    const fake = createFakeCommandRunner([
+      { stdout: "not json", stderr: "", exitCode: 0, timedOut: false },
+    ]);
+    const result = await runClaude({
+      ...baseOptions(fake.run),
+      beforeRetry: async () => false,
+    });
+    expect(result.outcome === "failure" ? result.detail : "").not.toContain(
+      "retry check failed",
+    );
   });
 
   test("retries when beforeRetry allows it", async () => {
