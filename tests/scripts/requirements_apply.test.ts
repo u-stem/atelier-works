@@ -62,6 +62,9 @@ function rejectedDeps(overrides: Partial<RejectedRetryDeps> = {}): {
       needsHumanReasons.push(reason);
       return true;
     },
+    markRestartable: () => {
+      calls.push("mark_restartable");
+    },
     log: () => {},
     ...overrides,
   };
@@ -374,10 +377,34 @@ describe("applyApprovedSideEffects", () => {
 });
 
 describe("relaunchPipelineAfterRejection", () => {
-  test("moves, removes the worktree, launches, then records the job id", async () => {
+  test("moves, marks restartable, removes the worktree, launches, then records the job id", async () => {
     const h = rejectedDeps();
     await relaunchPipelineAfterRejection(h.deps);
-    expect(h.calls).toEqual(["cas", "remove_worktree", "launch", "record"]);
+    expect(h.calls).toEqual([
+      "cas",
+      "mark_restartable",
+      "remove_worktree",
+      "launch",
+      "record",
+    ]);
+  });
+
+  test("does not mark restartable when the CAS throws", async () => {
+    const h = rejectedDeps({ casToGenerating: boom });
+    await rejectionMessage(relaunchPipelineAfterRejection(h.deps));
+    expect(h.calls).not.toContain("mark_restartable");
+  });
+
+  test("does not mark restartable when the CAS did not match", async () => {
+    const h = rejectedDeps({ casToGenerating: async () => false });
+    await relaunchPipelineAfterRejection(h.deps);
+    expect(h.calls).not.toContain("mark_restartable");
+  });
+
+  test("marks restartable before a launch failure is thrown", async () => {
+    const h = rejectedDeps({ launchPipeline: boom });
+    await rejectionMessage(relaunchPipelineAfterRejection(h.deps));
+    expect(h.calls).toContain("mark_restartable");
   });
 
   test("reports retrying when the pipeline was launched", async () => {

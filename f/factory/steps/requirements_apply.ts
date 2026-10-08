@@ -204,6 +204,12 @@ export type RejectedRetryDeps = {
    * 別の実行がリースを取っているか、作業項目が先に動いていれば`false`を返す。
    */
   readonly moveToNeedsHuman: (reason: string) => Promise<boolean>;
+  /**
+   * 比較交換が一致した直後に呼ぶ。以降の失敗は作業項目のIDを付けて記録させる。
+   * 以降の失敗では作業項目が`needs_human`に戻るか、reconcileが`failed`にするので、
+   * ConsoleのFailuresタブから`retry_work_item`で再開できるため。
+   */
+  readonly markRestartable: () => void;
   readonly log: (message: string, fields: Record<string, unknown>) => void;
 };
 
@@ -223,6 +229,7 @@ export async function relaunchPipelineAfterRejection(
   deps: RejectedRetryDeps,
 ): Promise<"not_moved" | "retrying"> {
   if (!(await deps.casToGenerating())) return "not_moved";
+  deps.markRestartable();
   try {
     await deps.removeWorktree();
   } catch (err) {
@@ -345,7 +352,8 @@ async function removeReqWorktree(workItem: WorkItem): Promise<void> {
  * 承認コメントの投稿に失敗しても、noticeを残してimplementフローの起動まで進む。
  *
  * 承認依頼・作業項目・Issue番号が無いとき、依頼のkindが違うときは例外を投げる。
- * 作業項目を読めたら、そのIDを`failure.work_item_id`に書く。`main`が失敗を記録するときに使う。
+ * 却下の作り直しで作業項目を`requirements_generating`へ移せたときだけ、そのIDを`failure.work_item_id`に書く。
+ * `main`が失敗を記録するときに使う。
  */
 async function run(
   approval_request_id: number,
@@ -377,7 +385,6 @@ async function run(
       `requirements_apply: no work item with id ${request.work_item_id}`,
     );
   }
-  failure.work_item_id = workItem.id;
   if (!shouldProceed(workItem.status)) {
     log.info("work item is not awaiting_approval, no-op", {
       work_item_id: workItem.id,
@@ -565,6 +572,9 @@ async function run(
           null,
           reason,
         ),
+      markRestartable: () => {
+        failure.work_item_id = workItem.id;
+      },
       log: (message, fields) =>
         log.warn(message, { work_item_id: workItem.id, ...fields }),
     });
@@ -615,7 +625,11 @@ async function run(
  * フローの`on_error_flow`に頼れない。
  * そのため例外はここで捕まえ、`factory.job_failures`に記録して
  * Discordへ通知してから投げ直す(`on_error_schedule.ts`と同じ自己完結の処理)。
- * 作業項目を読めた後の失敗は、ConsoleのFailuresタブから再実行できるよう、作業項目のIDを付けて記録する。
+ * 作業項目のIDを付けて記録するのは、却下の作り直しで`requirements_generating`へ移した後の失敗だけである。
+ * その作業項目は`retry_work_item`で再開できる状態で終わるので、ConsoleのFailuresタブから再実行できる。
+ * 比較交換より前の失敗では作業項目が`awaiting_approval`のままで、`retry_work_item`では再開できないため、IDを付けない。
+ * その場合は同じ判断で`approval_decide`を実行し直す。
+ * 承認後のimplementフローの起動の失敗は、`startImplement`が作業項目のIDを付けて記録する。
  */
 export async function main(
   approval_request_id: number,
