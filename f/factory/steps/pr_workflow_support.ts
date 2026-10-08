@@ -9,6 +9,8 @@ import { mkdtemp, readlink, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import type { ReviewThread } from "../lib/github.ts";
+import { decideGapReroute } from "../lib/implement_finish_support.ts";
+import { parseFlowJobId } from "../lib/implement_launch_support.ts";
 import { maskSecrets } from "../lib/log.ts";
 import {
   type ChangedPath,
@@ -2124,7 +2126,9 @@ export type PrFixFinishBumpKind =
  *   - `requirements_gap_reroute_success`: 親のIssueを`requirements_generating`に
  *     差し戻すことで、フィードバックを消化した。
  * それ以外の終端の種別(試行の開始前に関門が止めた、何らかの原因の`needs_human`、
- * 失敗した差し戻し(親の作業項目が見つからない、親にIssue番号が無い)、
+ * 失敗した差し戻し(親の作業項目が見つからない、親にIssue番号が無い、
+ * 親が差し戻せる状態にない、親が試行回数を使い切った、
+ * 親が読み取った後に変わって比較交換に負けた)、
  * 実際には反映されなかったpush
  * (コミットメッセージが無い、headが動いた、コミットするものが無い))では、
  * 処理済み位置を変えない。
@@ -2139,14 +2143,189 @@ export function shouldAdvanceWatermarks(kind: PrFixFinishBumpKind): boolean {
 /**
  * `pr_fix_finish.ts`のrequirements_gapの差し戻しの関門。
  * テストできるよう純粋関数にしている。
- * `null`なら差し戻してよく、それ以外は`needs_human`に倒す理由を返す。
+ * 差し戻してよければ親のIssue番号を、そうでなければ`needs_human`に倒す理由を返す。
  * 親のIssueのトリガーラベルは着手時に消費済みで付け直さないので、残る前提条件は
  * 親の作業項目が実際にIssueであることだけ。
  */
 export function evaluateRerouteGuard(
   issueNumber: number | null,
+):
+  | { readonly ok: true; readonly issueNumber: number }
+  | { readonly ok: false; readonly reason: string } {
+  return issueNumber === null
+    ? { ok: false, reason: "parent work item has no issue_number" }
+    : { ok: true, issueNumber };
+}
+
+/**
+ * requirements_gapの差し戻しで、親の作業項目がこの状態のときだけ`requirements_generating`へ移す。
+ * どちらも親のフローが動いていない状態で、`approved`は実装を起動する前、`pr_open`は実装が終わった後である。
+ * 要件定義の生成中や承認待ち、実装中、終端の失敗などで差し戻すと、動いているフローや人の判断を上書きする。
+ */
+export const ALLOWED_REROUTE_PARENT_STATUSES = ["approved", "pr_open"] as const;
+
+/** requirements_gapの差し戻し先の親の作業項目。Issue番号が無い親は差し戻す前に除いておく。 */
+export type RerouteParent = {
+  readonly id: number;
+  readonly issue_number: number;
+  readonly status: WorkItemStatus;
+  readonly flow_job_id: string | null;
+  readonly attempt: number;
+};
+
+function describeRerouteParent(
+  parent: Pick<RerouteParent, "id" | "issue_number">,
+): string {
+  return `parent work item ${String(parent.id)} (issue #${String(parent.issue_number)})`;
+}
+
+/**
+ * `pr_fix_finish.ts`のrequirements_gapの差し戻しで、親の作業項目の状態を見る関門。
+ * 親が`ALLOWED_REROUTE_PARENT_STATUSES`のどれかなら`null`を返し、それ以外は`needs_human`に倒す理由を返す。
+ * 親が`implementing`なら実装フローが動いており、差し戻すとそのリースを奪って結果を失わせるので、理由を分けて実装の完了を待つよう案内する。
+ * `pr_fix_prepare`の同じ確認は開始時の1回だけなので、差し戻す直前にもう一度確かめる。
+ */
+export function evaluateRerouteParentStatus(
+  parent: Pick<RerouteParent, "id" | "issue_number" | "status">,
 ): string | null {
-  return issueNumber === null ? "parent work item has no issue_number" : null;
+  if (isOneOf(parent.status, ALLOWED_REROUTE_PARENT_STATUSES)) return null;
+  if (parent.status === "implementing") {
+    return `${describeRerouteParent(parent)} is being implemented, requirements_gap not rerouted`;
+  }
+  return `${describeRerouteParent(parent)} is ${parent.status}, requirements_gap not rerouted`;
+}
+
+/**
+ * 親の作業項目を読んだ後、差し戻しの比較交換までの間に状態か`flow_job_id`が変わったときの理由。
+ * 並行して別のフローが親を進めたので、差し戻さずに`needs_human`へ倒す。
+ */
+export function rerouteParentChangedReason(
+  parent: Pick<RerouteParent, "id" | "issue_number">,
+): string {
+  return `${describeRerouteParent(parent)} changed before the requirements_gap reroute`;
+}
+
+/**
+ * 親の要件定義の試行回数が`max_attempts`に達していて差し戻せないときの理由。
+ * implementフローの同じ判定の理由(`gapExhaustedReason`)と分けるのは、PRの通知から親のIssueを辿れるようにするため。
+ */
+export function rerouteAttemptsExhaustedReason(
+  parent: Pick<RerouteParent, "id" | "issue_number">,
+  maxAttempts: number,
+): string {
+  return `${describeRerouteParent(parent)} used up max_attempts ${String(maxAttempts)}, requirements_gap not rerouted`;
+}
+
+/**
+ * 差し戻しを止めた理由の後ろに、Claudeが報告した要件の不足を別の区間としてつなぐ。
+ * `describeReason`は区間ごとに訳し、`nextActionFor`は先頭の理由の対応を選ぶ。
+ * 報告の中の`"; "`は`", "`に置き換え、報告が区間を足して訳や次の操作を差し替えられないようにする。
+ */
+export function withGapReport(reason: string, gapReport: string): string {
+  return gapReport.length > 0
+    ? `${reason}; ${gapReport.replaceAll("; ", ", ")}`
+    : reason;
+}
+
+/** 差し戻しで起動したpipelineのジョブIDを親に記録できず、そのジョブを取り消したときの理由。 */
+export function pipelineJobIdNotRecordedReason(
+  parentWorkItemId: number,
+  jobId: string,
+): string {
+  return `pipeline job ${jobId} was cancelled because work item ${String(parentWorkItemId)} already records another flow job`;
+}
+
+export type RerouteGapDeps = {
+  /**
+   * `updateStatusIfLeaseHolderClearingFlowJobId`で、親を読み取った時点の状態と`flow_job_id`のままのときだけ
+   * `requirements_generating`へ移し、`flow_job_id`を空にする。条件に合わなければ`false`を返す。
+   */
+  readonly casParent: (
+    expectedFrom: WorkItemStatus,
+    expectedFlowJobId: string | null,
+  ) => Promise<boolean>;
+  /** このpr_fixの作業項目の処理済み位置を、今回集めたフィードバックの先まで進める。 */
+  readonly bumpWatermarks: () => Promise<void>;
+  /** このpr_fixの作業項目を`fixing`から`blocked`へ移す。 */
+  readonly markBlocked: () => Promise<void>;
+  /** `runFlowAsync("f/factory/pipeline", ...)`の戻り値をそのまま返す。ジョブIDの解析は`rerouteRequirementsGap`が行う。 */
+  readonly launchPipeline: () => Promise<string>;
+  /** `setFlowJobIdIfUnset`で親にジョブIDを記録する。別の実行が先に書いていれば`false`を返す。 */
+  readonly recordFlowJobId: (jobId: string) => Promise<boolean>;
+  readonly cancelJob: (jobId: string, reason: string) => Promise<void>;
+  /** `job_failures`に記録し、ConsoleのFailuresタブから見えるようにする。 */
+  readonly recordFailure: (reason: string) => Promise<void>;
+  readonly log: (message: string, fields: Record<string, unknown>) => void;
+};
+
+export type RerouteGapOutcome =
+  | { readonly kind: "refused"; readonly reason: string }
+  | {
+      readonly kind: "rerouted";
+      readonly jobId: string;
+      readonly recorded: boolean;
+    };
+
+/**
+ * requirements_gapで親の作業項目を要件定義の作り直しへ差し戻す。
+ * 親の状態が許されないか試行回数を使い切っていれば、何も書かずに理由を返す。
+ * 親を比較交換で移せなければ、親が読み取った後に変わったので、同じく何も書かずに理由を返す。
+ * 移せたら、処理済み位置を進め、このpr_fixを`blocked`にしてからpipelineを起動する。
+ * 起動は取り消せず外から見える唯一の操作なので、他の書き込みをすべて済ませた後に行う。
+ * 起動の応答がジョブIDでなければ例外を投げ、ステップの失敗として`on_error_flow`に任せる。
+ * 起動したジョブのIDを記録できなければ(比較交換の後に別の実行が親に書いた)、
+ * pipelineが2つ動かないようそのジョブの取り消しを試み、失敗として記録する。取り消しと記録の失敗はログに残すだけで投げない。
+ */
+export async function rerouteRequirementsGap(
+  parent: RerouteParent,
+  maxAttempts: number,
+  deps: RerouteGapDeps,
+): Promise<RerouteGapOutcome> {
+  const statusReason = evaluateRerouteParentStatus(parent);
+  if (statusReason !== null) return { kind: "refused", reason: statusReason };
+  if (decideGapReroute(parent.attempt, maxAttempts) === "needs_human") {
+    return {
+      kind: "refused",
+      reason: rerouteAttemptsExhaustedReason(parent, maxAttempts),
+    };
+  }
+  if (!(await deps.casParent(parent.status, parent.flow_job_id))) {
+    return { kind: "refused", reason: rerouteParentChangedReason(parent) };
+  }
+
+  // 親Issueの要件定義を作り直すことで今回のフィードバックに対応するため、
+  // 差し戻しでフィードバックを消費したとみなし、ここで処理済み位置を進める。
+  if (shouldAdvanceWatermarks("requirements_gap_reroute_success")) {
+    await deps.bumpWatermarks();
+  }
+  await deps.markBlocked();
+  const jobId = parseFlowJobId(await deps.launchPipeline(), "runFlowAsync");
+
+  const recorded = await deps.recordFlowJobId(jobId);
+  if (!recorded) {
+    const reason = pipelineJobIdNotRecordedReason(parent.id, jobId);
+    deps.log("pipeline flow job id not recorded; cancelling the launched job", {
+      parent_work_item_id: parent.id,
+      started_job_id: jobId,
+    });
+    try {
+      await deps.cancelJob(jobId, reason);
+    } catch (err) {
+      deps.log("failed to cancel the launched pipeline job", {
+        started_job_id: jobId,
+        error: maskSecrets(err instanceof Error ? err.message : String(err)),
+      });
+    }
+    try {
+      await deps.recordFailure(reason);
+    } catch (err) {
+      deps.log("failed to record the pipeline job id failure", {
+        started_job_id: jobId,
+        error: maskSecrets(err instanceof Error ? err.message : String(err)),
+      });
+    }
+  }
+  return { kind: "rerouted", jobId, recorded };
 }
 
 /**
@@ -2839,6 +3018,43 @@ const REASON_RULES: readonly ReasonRule[] = [
     pattern: /^parent work item has no issue_number$/,
     describe: () => "親の work item に issue_number がありません",
     nextAction: () => "work itemの状態をConsoleで確認してください",
+  },
+  // pr_fix_finish.tsが使う`evaluateRerouteParentStatus`と`rerouteParentChangedReason`。
+  // 実装中の規則を、状態名を取る規則より先に置く。
+  {
+    pattern:
+      /^parent work item (\d+) \(issue #(\d+)\) is being implemented, requirements_gap not rerouted$/,
+    describe: (m) =>
+      `親Issue #${m[2]}(作業項目${m[1]})が実装中のため、要件定義への差し戻しを止めました`,
+    nextAction: () =>
+      "実装フローの完了を待ってから再度`factory:fix`を付けてください",
+  },
+  {
+    pattern:
+      /^parent work item (\d+) \(issue #(\d+)\) is ([a-z_]+), requirements_gap not rerouted$/,
+    describe: (m) =>
+      `親Issue #${m[2]}(作業項目${m[1]})の状態が${m[3]}のため、要件定義への差し戻しを止めました`,
+    nextAction: () =>
+      "Consoleで親Issueの作業項目の状態を確認し、要件定義が承認された後に`factory:fix`を付け直してください",
+  },
+  // 下のimplementフローの`requirements_gap after max_attempts`と同じ対応を、修正するPRではなく親Issueに対して行うよう案内する。
+  {
+    pattern:
+      /^parent work item (\d+) \(issue #(\d+)\) used up max_attempts (\d+), requirements_gap not rerouted$/,
+    describe: (m) =>
+      `親Issue #${m[2]}(作業項目${m[1]})は要件定義の試行回数が上限(${m[3]})に達しているため、要件定義への差し戻しを止めました`,
+    nextAction: () =>
+      "不足している要件を人が整理して親Issueに追記し、親Issueに`factory`ラベルを付け直してください",
+  },
+  // 比較交換に負けるのは、読み取った後に親が要件定義の作り直しか実装へ進んだときである。
+  // 次の`poll_prs`は承認以降の親だけを結び付け、`pr_fix_prepare`は親が実装中なら止まるので、両方を待つよう案内する。
+  {
+    pattern:
+      /^parent work item (\d+) \(issue #(\d+)\) changed before the requirements_gap reroute$/,
+    describe: (m) =>
+      `差し戻す前に親Issue #${m[2]}(作業項目${m[1]})の状態が変わったため、要件定義への差し戻しを止めました`,
+    nextAction: () =>
+      "親Issueの要件定義が承認され、実装フローが終わった後に`factory:fix`を付け直してください",
   },
   // requirements_apply.tsの差し戻し・needs_humanの結果と、
   // poll_issues.tsの期限切れの掃除

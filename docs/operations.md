@@ -44,7 +44,7 @@
   pr_fixの再実行では何も止めずに`blocked`になる。この場合は、理由に載ったプロセスが終わるのを待つか、何かを確かめて止めるか、`mise exec -- docker compose -f infra/docker-compose.yml restart windmill_worker`でworkerを再起動してから再実行する。workerの再起動は、同じコンテナで動いているすべてのジョブを止める。
 
   残ったClaudeは、`cleanup_workspaces`の孤児の掃除でも、閾値(`claude_timeout_sec`と`implement_timeout_sec`の長い方に5分を足した時間)を過ぎた後にだけ止まる。検査コマンドの生き残りはこの掃除の対象外である。
-- 実装フローの実行中にリースが移った場合(Issueのcloseによる取り消しで`cancelJob`が失敗した、pr_fixの差し戻しで作業項目が要件定義の作り直しに進んだなど)、実装フローは次のリースの確認(生成ステップのClaude実行前、検証の各ラウンドの冒頭と修正ラウンドの前、完了ステップの最初と外への副作用の直前)で止まり、コミット・push・PR作成をしない。進行中のClaudeの実行や検査は中断しない。worktreeに残った途中の変更は、次の実行の準備で捨てられる。
+- 実装フローの実行中にリースが移った場合(Issueのcloseによる取り消しで`cancelJob`が失敗したなど)、実装フローは次のリースの確認(生成ステップのClaude実行前、検証の各ラウンドの冒頭と修正ラウンドの前、完了ステップの最初と外への副作用の直前)で止まり、コミット・push・PR作成をしない。進行中のClaudeの実行や検査は中断しない。worktreeに残った途中の変更は、次の実行の準備で捨てられる。
 
 ## 通知
 
@@ -81,7 +81,7 @@
 - レビュー指摘・未解決コメントの修正を行い、各コメントへ返信してから再レビューを依頼(`rereview_requested`)。
 - 返信は運用者自身のアカウントで投稿するため、1行目のロールタグ・本文・末尾の対応行(コミットshaまたは「見送り」)という固定構造でflow側がレンダリングする。形式は`.claude/skills/factory-fix/SKILL.md`の「返信形式」節を参照。
 - コミットメッセージはClaudeが提案する件名(`commit_subject`、50文字以内を目安・72文字を超えると拒否・Conventional Commits形式)と任意の本文(`commit_body`、箇条書き)をflowが結合して作る。トレーラー(`Co-Authored-By` / `Generated-By`)はflow側が自動で付与する。コミットメッセージにも英数字と日本語の間のスペース除去が適用される(コードスパン内は除く)。
-- 要件変更が必要な場合は修正を中断し、元のIssueをrequirements_generatingにattempt+1で再起動(`requirements_gap` → 親Issue)。
+- 要件変更が必要な場合は修正を中断し、元のIssueをrequirements_generatingにattempt+1で再起動(`requirements_gap` → 親Issue)。差し戻すのは親Issueの作業項目が`approved`か`pr_open`のときだけで、それ以外の状態(実装中、要件定義の生成中や承認待ちなど)、親の試行回数が`max_attempts`に達しているとき、親の状態が読み取った後に変わったときは差し戻さず、pr_fixの作業項目を`needs_human`にしてDiscordで知らせる。通知の次の操作に従い、実装フローの完了や要件定義の承認を待ってから`factory:fix`を付け直す(要件の不足の報告は通知の理由に載る)。
 - Factory自身の投稿は「viewer(FactoryのGitHubアカウント)と同じログイン**かつ**Factoryマーカー付き」の両方で判定する。同一アカウントで運用しているため、人が投稿したコメントはログインが一致してもマーカーが無いのでhuman feedbackとして扱われる。同様にFactory自身の一次レビュー(`pr_review`)とその未解決のインラインコメントもマーカー無し(または`pr_review`マーカー)であればfeedbackとして扱われ、pr_fixはその指摘を修正対象にする。除外されるのはFactory自身の`pr_fix`返信(`pr_fix`マーカー付き)のみ。
 
 #### 各コメントへの返信の3値(`decision`)

@@ -513,6 +513,38 @@ export async function updateStatusIfLeaseHolder(
   return rows.length > 0;
 }
 
+/**
+ * updateStatusIfLeaseHolderと同じ比較と交換で、同じ文でflow_job_idをNULLにする。
+ * 読み取った後に状態もflow_job_idも変わっていないときだけ別のフローへ引き継ぐために使う。
+ * 起動したジョブIDは、起動の後にsetFlowJobIdIfUnsetで記録する。
+ * それまでの間、終わったジョブのIDが残っているとreconcileが孤児と判定しうるため、ここで空にしておく。
+ * 条件に合わなければ何も書かずにfalseを返す。
+ */
+export async function updateStatusIfLeaseHolderClearingFlowJobId(
+  id: number,
+  expectedFrom: WorkItemStatus,
+  to: WorkItemStatus,
+  expectedFlowJobId: string | null,
+  note: string | null = null,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  const statement = sql`
+    WITH updated AS (
+      UPDATE factory.work_items
+      SET status = ${to}, flow_job_id = NULL, updated_at = now()
+      WHERE id = ${id} AND status = ${expectedFrom}
+        AND flow_job_id IS NOT DISTINCT FROM ${expectedFlowJobId}::text
+      RETURNING id
+    )
+    INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note)
+    SELECT updated.id, ${expectedFrom}, ${to}, ${note}
+    FROM updated
+    RETURNING work_item_id
+  `;
+  const rows = await statement.fetch();
+  return rows.length > 0;
+}
+
 /** `factory.work_items`の行をIDで1件取得する。無ければ`null`を返す。 */
 export async function getWorkItem(
   id: number,
