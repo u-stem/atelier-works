@@ -24,7 +24,7 @@ locks:
   f/factory/lib/db: dce5d8c3e94a41d75b32fb000b0dfce20f709d962875c9288900f33993f7aac6
   f/factory/lib/discord: 956ddb9d455a47bedc5d6866fe2349d1a4d279273df6c6fd61dc83bc99e16da0
   f/factory/lib/drawio: 2cecee5d91aed3af41aa34701d512cef2e42d1b48e7c8034a5f4d0b5fee986c5
-  f/factory/lib/github: bd6f257b2dc4c17295949d8c4ad51cc3bed363a3436bcfa49dfd44296ddec27e
+  f/factory/lib/github: 9b7470e61d9aa2e2b15904469ffa299012aed7c03b14981f6f0af0a3c1feed53
   f/factory/lib/implement_finish_support: 0cfd8666167c14ad9a2c08446a1ed97b4d7f0e6b52a1a8b88a5a7fb4e8f3d7be
   f/factory/lib/implement_launch_support: c15a7f551e5da24829af1c44ef34e4d6a2acf8b64da04f9b1c7e265c5dc19532
   f/factory/lib/implement_loop: 166d9cf89cc0f4b033a88b90014b5721b75de13fc0073e5b35096482f41d37c9
@@ -66,11 +66,11 @@ locks:
   f/factory/steps/pipeline_request_approval: 6754595573dd7ca0e6a7625b1ef268ab5cfdf735321995a393bd483558433a8f
   f/factory/steps/pr_fix_apply: 3031db9235285c7ddda5f472440bfcaafb2065fd399a2cef7f8cf4b52dfc98ea
   f/factory/steps/pr_fix_collect: 61f926ae41697c9e9694962292619ec20cd63ff6a0e11bd401c3e492a5a849ed
-  f/factory/steps/pr_fix_finish: 8a2ef4a9a5e39f47c85b5f0f4a964f998f00b30036931c47b3526ccdedc96e75
+  f/factory/steps/pr_fix_finish: 889cea8d425baa936027537c427f69f572c12b5c0f9cbb057b1016927b76dd1e
   f/factory/steps/pr_fix_prepare: 6826a8355e629173f47194fcf01b094bb3e481a81ce50cb4143b301c9b23d634
   f/factory/steps/pr_fix_verify: ad9999208a6147ea252615137309a6ecd532cf6cf643693910069626b8545166
   f/factory/steps/pr_review_generate: 28dc42d6abfa8048eb7e4506000dd5c1f1e3fc76a2011c07b2aa4af63bd48b79
   f/factory/steps/pr_review_post: ef02ecc4cbbf60951b44ea9f9fe97b8e82821468d87ea96ee09b089207006586
   f/factory/steps/pr_review_prepare: 32adc3bfb128879eb200eccc00adcdaf66ebaeba925a06f49eb7cdf5bc70f065
-  f/factory/steps/pr_workflow_support: 6aa2e62f9debc81574809f701bf9dd5a92f272b0221ac9809d52fa7bd20f1acd
+  f/factory/steps/pr_workflow_support: 2736aa148436f22f07e2e3423c973c43587d2025a2d5546542ec938f4e523c5d
   f/factory/steps/requirements_apply: 73dcb230b8d408779756ff2408b4ec6c28ab50ad6d4a32891ec357cae3e65197
