@@ -159,6 +159,7 @@ export async function main(
  * 再利用するときはスレッドを1つも解決せず、残っている`[MUST]`のスレッドをすべて
  * `"changes_requested"`の判断とDiscordの通知に反映する。
  * 再実行で作り直した指摘は投稿されないので、それを根拠に投稿済みのレビューの指摘を閉じない。
+ * 再利用するときにスレッドの一覧を取得できなければ、記録する前に例外を投げる。
  * 投稿済みのレビューを探すのに要るviewerとレビューの一覧の取得に失敗したら、投稿せずに例外を投げる。
  *
  * `review_post_mode`が"gated"のときは、レビューを記録して"reviewed"に進め
@@ -275,6 +276,7 @@ export type PublishReviewResult = {
  * レビューの総評を組み立ててGitHubに投稿し、pr_fixが対応済みのFactory自身のスレッドを解決する。
  * この作業項目が同じshaに対して投稿済みのレビューがあれば、投稿もスレッドの解決もせずにそのidを返す。
  * そのときの`openMustCount`は、未解決の`[MUST]`のスレッドをすべて数えたもの。
+ * 再利用するときにスレッドの一覧を取得できなければ、例外を投げる。
  * レビューの一覧の取得に失敗したら、投稿せずに例外を投げる。
  * DBとWindmillには触れない(呼び出し側の`postReview`が記録と通知を行う)。
  */
@@ -300,11 +302,16 @@ export async function publishReview(
   // 初回のレビューにはまだスレッドが無く、取得してもAPIを余分に使うだけなので、
   // `priorReview`か、投稿済みのレビューを再利用するときだけ取得する。
   // 再利用するレビューが初回のものでも、その指摘のスレッドは既にある。
-  // ここで失敗してもレビューの投稿は止めない。
+  // 新しく投稿するときは、ここで失敗してもレビューの投稿は止めない。
   // `threads`は空のままになり、`threadIdsToResolve`と`openMustCount`は0になって、
   // `mode`は"findings" / "rereview_clean" / "first_clean"のいずれかに落ちる。
+  // 再利用するときは、失敗したら記録する前に例外を投げて再実行に回す。
+  // 投稿済みのレビューの`[MUST]`を数えられないまま、通知を`reviewed`にしないため。
+  // 再利用するので、この失敗で投稿が起きることは無い。
   let threads: ReviewThread[] = [];
-  if (priorReview || reused) {
+  if (reused) {
+    threads = await listReviewThreads(client, owner, repo, pr_number);
+  } else if (priorReview) {
     try {
       threads = await listReviewThreads(client, owner, repo, pr_number);
     } catch (err) {

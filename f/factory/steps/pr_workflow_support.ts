@@ -521,7 +521,9 @@ export function renderReviewSummary(
  * HTMLのコメントの開始`<!--`を`&lt;!--`に置き換える。
  * 総評に載せるClaudeの出力が、目印に見える行を差し込んだり、
  * 閉じないコメントで後ろの目印を表示から隠したりしないようにする。
- * GitHubの表示では`&lt;!--`も`<!--`と同じ見た目になる。
+ * 通常の文中ではGitHubは`&lt;!--`を`<!--`と表示する。
+ * ただしコードスパンやコードブロックの中では`&lt;!--`がそのまま表示される。
+ * 対象は行に紐づけられなかった指摘の箇条書きだけで、見た目が崩れるだけなので許容する。
  */
 function neutralizeHtmlComment(text: string): string {
   return text.replaceAll("<!--", "&lt;!--");

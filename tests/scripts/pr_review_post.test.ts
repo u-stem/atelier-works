@@ -806,6 +806,13 @@ describe("posting a review once per sha", () => {
     );
   }
 
+  function isListReviewsCall(call: FakeCall): boolean {
+    return (
+      !call.argv.includes("POST") &&
+      call.argv[2]?.startsWith("repos/acme/widgets/pulls/12/reviews") === true
+    );
+  }
+
   function isResolveCall(call: FakeCall): boolean {
     return call.options?.stdin?.includes("resolveReviewThread") === true;
   }
@@ -993,6 +1000,58 @@ describe("posting a review once per sha", () => {
         rerunInput(),
         SILENT,
       ).catch(() => {});
+      expect(fake.calls.some(isCreateReviewCall)).toBe(false);
+    });
+
+    // 再利用するときにスレッドを読めないと、残っている`[MUST]`を数えられず、
+    // 通知が`reviewed`になりうる。記録する前に失敗させ、再実行に回す。
+    test("rejects when listing the threads of a reused review fails", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk([postedReview(55)]),
+        serverError(),
+      ]);
+      await expect(
+        publishReview({ run: fake.run, ghToken: "tok" }, rerunInput(), SILENT),
+      ).rejects.toThrow("HTTP 500");
+    });
+
+    // 投稿済みのレビューが無い再レビューでは、これまでどおりスレッドを解決する。
+    test("resolves a thread selected for resolving when no review for the sha exists", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk([humanReview(1)]),
+        openMustThreads(),
+        ghApiOk({ id: 99 }),
+        ghApiOk({
+          data: {
+            resolveReviewThread: { thread: { id: "PRRT_1", isResolved: true } },
+          },
+        }),
+      ]);
+      await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput(),
+        SILENT,
+      );
+      expect(fake.calls.some(isResolveCall)).toBe(true);
+    });
+
+    test("does not list the reviews when posting is gated", async () => {
+      const fake = createFakeCommandRunner([openMustThreads()]);
+      await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput({ post: false }),
+        SILENT,
+      );
+      expect(fake.calls.some(isListReviewsCall)).toBe(false);
+    });
+
+    test("does not post when posting is gated", async () => {
+      const fake = createFakeCommandRunner([openMustThreads()]);
+      await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput({ post: false }),
+        SILENT,
+      );
       expect(fake.calls.some(isCreateReviewCall)).toBe(false);
     });
   });
