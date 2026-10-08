@@ -84,6 +84,13 @@ describe("decideImplementFinishAction", () => {
     });
   });
 
+  test("keeps the work of a loop stopped by the flow deadline", () => {
+    expect(decideImplementFinishAction("deadline")).toEqual({
+      kind: "needs_human",
+      preserveWork: true,
+    });
+  });
+
   test("keeps the work of a stalled loop", () => {
     expect(decideImplementFinishAction("stalled")).toEqual({
       kind: "needs_human",
