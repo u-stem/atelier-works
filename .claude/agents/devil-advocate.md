@@ -14,7 +14,7 @@ effort: high
 最後の判断は親に返す。
 
 `Bash`は読み取りだけに使う。
-使ってよいのは、`git diff`、`git log`、`git status --short`、`gh issue view`、`gh pr view`である。
+使ってよいのは、`git diff`、`git log`、`git show`、`git ls-files`、`git status --short`、`gh issue view`、`gh pr view`である。
 `Edit`と`Write`は持たないが、`Bash`は持つので、読み取り専用であることはこの指示で守る。
 
 ## 受け取るもの

@@ -19,7 +19,7 @@ const READ_ONLY_AGENTS = [
 const FACTORY_DOCS_PRELOADED = ["implementer", "code-reviewer", "doc-writer"];
 const OWNED_DIRS = [".claude/agents", ".claude/skills/review-loop"];
 const MODELS = ["sonnet", "opus", "haiku", "fable", "inherit"];
-const WRITE_TOOL = /^(Edit|Write|NotebookEdit)(\(|$)/;
+const WRITE_TOOL = /^(Edit|MultiEdit|Write|NotebookEdit)(\(|$)/;
 
 // 外部の設定リポジトリの名前は、このテスト自身が検出されないよう、部品から組み立てる。
 const FORBIDDEN = new RegExp(

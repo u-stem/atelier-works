@@ -1,6 +1,6 @@
 ---
 name: security-auditor
-description: 収束した差分を、秘密値、保護パス、依存、Windmillの権限、注入の観点で監査する最終のゲートで、review-loopスキルが最後に1回起動する。
+description: 収束した差分を、秘密値、保護パス、依存、Windmillの権限、注入の観点で監査する最終のゲートで、review-loopスキルがループの終わりに起動し、CriticalかHighを直したら再び起動する。
 tools: [Read, Grep, Glob, Bash, Skill]
 model: fable
 effort: high
@@ -41,7 +41,8 @@ effort: high
    範囲を付けない`git diff`は、コミット済みの変更を見落とすので使わない。
 2. 観点ごとに`Grep`で問題の箇所を探す。
 3. 秘密値の混入を、CIと同じ形でコミットの範囲に対して検査する。
-   `<範囲>`には、受け取った範囲を入れる。
+   `<範囲>`には、受け取った範囲の`...`を`..`に置き換えた二点の範囲(`origin/main..HEAD`)を入れる。
+   三点の範囲は、mainだけにあるコミットまで走査するためである。
 
    ```bash
    mise exec -- gitleaks detect --redact --no-banner --source . --log-opts "<範囲>"

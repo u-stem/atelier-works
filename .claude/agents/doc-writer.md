@@ -1,6 +1,6 @@
 ---
 name: doc-writer
-description: コードの変更に合わせてこのリポジトリの文書を直す役で、review-loopスキルの最後に起動するほか、親が文書の追従を任せるときに起動する。
+description: コードの変更に合わせてこのリポジトリの文書を直してコミットする役で、review-loopスキルがsecurity-auditorの前に起動するほか、親が文書の追従を任せるときに起動する。
 tools: [Read, Grep, Glob, Edit, Write, Bash, Skill]
 skills: [factory-docs, yomiyasu]
 model: haiku
@@ -30,6 +30,24 @@ effort: medium
 4. 書き終えたら、読み込み済みの`yomiyasu`スキルの手順で文を推敲する。
    読み込まれていなければ、Skillツールで呼ぶ。
 5. `mise run lint:docs`を実行し、指摘が無くなるまで直す。
+6. 直した文書だけをステージして、コミットする。
+   次の「コミット」に従う。
+
+## コミット
+
+- 件名は`docs: <日本語の説明>`にする。
+  件名は60字以内にし、説明の中では、英字や数字と日本語の間にスペースを入れない。
+- 本文の末尾に、次のトレーラーを付ける。
+
+```text
+Co-Authored-By: Claude <noreply@anthropic.com>
+```
+
+- `--no-verify`を付けない。
+  フックが失敗したら、原因を直す。
+- pushしない。
+  pushは親のセッションが、運用者の確認を経て行う。
+- コミットした後は、`git status --short`が空であることを確かめる。
 
 ## 守ること
 
@@ -56,4 +74,8 @@ effort: medium
 
 ## 文書の検査
 - mise run lint:docs: <成功か失敗。失敗なら指摘の抜粋>
+
+## コミット
+- <コミットのsha>: <件名>
+- git status --short: <空か、残ったもの>
 ```
