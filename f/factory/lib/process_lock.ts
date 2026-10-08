@@ -319,30 +319,38 @@ const REMOVAL_NOT_LOCK_FILE_EXIT_CODE = 216;
 /**
  * ロックを取ったままロックファイルを消すシェルのスクリプト。`$1`はworktree、`$2`はロックファイルのパス。
  * 空の通常ファイル(シンボリックリンクでない)だけを作らずに開き、そのfdで待たずにロックを取る(取れなければ213)。
- * ロックを持ったまま、パスが今も開いたファイルと同じdev/inoであること(違えば215)と、worktreeが無いこと(あれば214)を確かめ、rmに置き換わって消す。
+ * 確かめた後に開けなければ216にする(`command`を付けて、開けなかったときにシェルごと終わらせない)。
+ * ロックを持ったまま、パスが今も開いたファイルと同じdev/inoであること(違うか、どちらかのstatが失敗すれば215)と、worktreeが無いこと(あれば214)を確かめ、rmに置き換わって消す。
  * fd 9はrmに受け継がれるので、ロックは消し終わるまで放さない。
  * flockに任せずにfdを開くのは、ファイルを作らず、ロックしたファイルとパスの指すファイルを比べるためである。
  */
 const REMOVE_LOCK_FILE_SCRIPT = [
   `[ -f "$2" ] && [ ! -L "$2" ] && [ ! -s "$2" ] || exit ${String(REMOVAL_NOT_LOCK_FILE_EXIT_CODE)}`,
-  `exec 9<"$2"`,
+  `command exec 9<"$2" || exit ${String(REMOVAL_NOT_LOCK_FILE_EXIT_CODE)}`,
   `${FLOCK_PATH} --nonblock --conflict-exit-code ${String(WORKTREE_LOCK_BUSY_EXIT_CODE)} 9 || exit $?`,
-  `[ "$(${STAT_PATH} -L -c %d:%i /proc/self/fd/9)" = "$(${STAT_PATH} -c %d:%i -- "$2")" ] || exit ${String(REMOVAL_REPLACED_EXIT_CODE)}`,
+  `locked=$(${STAT_PATH} -L -c %d:%i /proc/self/fd/9) && current=$(${STAT_PATH} -c %d:%i -- "$2") && [ -n "$locked" ] && [ "$locked" = "$current" ] || exit ${String(REMOVAL_REPLACED_EXIT_CODE)}`,
   `if [ -e "$1" ] || [ -L "$1" ]; then exit ${String(REMOVAL_WORKTREE_EXISTS_EXIT_CODE)}; fi`,
   `exec ${RM_PATH} -f -- "$2"`,
 ].join("\n");
 
-/** ロックを取ったままロックファイルを消すシェルのargv。パスはスクリプトに埋め込まず、位置引数で渡す。 */
+/**
+ * ロックを取ったままロックファイルを消すシェルのargv。パスはスクリプトに埋め込まず、位置引数で渡す。
+ * worktreeのパスはロックファイルと同じ(realpathにした)親の下で組み立てる。
+ * 削除する側と、別の実行の走査で削除のシェルを見分ける側(`isRemovalOf`)で、親がシンボリックリンクを含んでも同じargvにするためである。
+ */
 export function removeLockFileArgv(lock: WorktreeLock): string[] {
   return [
     SH_PATH,
     "-c",
     REMOVE_LOCK_FILE_SCRIPT,
     "sh",
-    lock.worktreeDir,
+    join(dirname(lock.lockPath), basename(lock.worktreeDir)),
     lock.lockPath,
   ];
 }
+
+/** 削除のシェルの実行時間の上限。確かめと開く間にFIFOなどへ差し替えられても、候補1つで長く止まらないようにする。 */
+const REMOVAL_TIMEOUT_MS = 5_000;
 
 /** 削除のシェルがexecで置き換わった後のrmのコマンドライン。 */
 function removalRmCommand(lock: WorktreeLock): string {
@@ -371,7 +379,14 @@ export async function removeLockFileUnderLock(opts: {
   readonly run: CommandRunner;
   readonly lock: WorktreeLock;
 }): Promise<LockFileRemoval> {
-  const result = await opts.run(removeLockFileArgv(opts.lock));
+  const result = await opts.run(removeLockFileArgv(opts.lock), {
+    timeoutMs: REMOVAL_TIMEOUT_MS,
+  });
+  if (result.timedOut) {
+    throw new Error(
+      `lock file removal timed out after ${String(REMOVAL_TIMEOUT_MS)}ms for ${opts.lock.lockPath}`,
+    );
+  }
   if (isLockConflict(result)) return "held";
   if (result.exitCode === 0) return "removed";
   if (result.exitCode === REMOVAL_WORKTREE_EXISTS_EXIT_CODE)
