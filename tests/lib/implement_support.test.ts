@@ -705,7 +705,7 @@ describe("buildImplementPrBody", () => {
   test("checks only 反映するものは無い when no deploy-relevant path changed", () => {
     expect(buildImplementPrBody(PR_BODY_INPUT)).toContain(
       [
-        "Windmillへの反映:",
+        "### Windmillへの反映",
         "",
         "- [ ] マージ後に`self_update`が自動で反映する(`f/`・`migrations/`・`.claude/skills/`の変更)",
         "- [ ] 次に`mise run up`で起動したときに反映される(`infra/`、`mise.toml`の`[tools]`・`[env]`の変更)",

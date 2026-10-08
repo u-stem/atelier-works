@@ -1,10 +1,11 @@
-# Data table migrations
+# Data Tableのmigration
 
-Migrations under `main/` are managed with `wmill datatable migrate new|up|down` and applied to
-the `factory` schema of the workspace's default (instance-backed) data table.
+FactoryのData Tableのmigrationを置くディレクトリである。migrationを追加する人が読む。
 
-Migrations here are **additive-only**: once a migration has shipped, never edit its `.up.sql` /
-`.down.sql` in place and never rename or drop a column or table in a later migration in a way
-that breaks code depending on the old shape. Add a new migration instead (new column, new table,
-new view). This keeps `wmill datatable migrate up` safe to re-run across every deployed instance
-regardless of which migrations it has already applied.
+`main/`の下のmigrationは、`wmill datatable migrate new`、`up`、`down`で管理する。適用先は、ワークスペースの既定のData Table(インスタンスのDB)にある`factory`スキーマである。
+
+## 追加だけで変更する
+
+一度出荷したmigrationの`.up.sql`と`.down.sql`は書き換えない。後のmigrationでも、古い形に依存するコードを壊す列やテーブルの名前変更や削除はしない。変更が要るときは、新しい列、テーブル、viewを足すmigrationを追加する。
+
+この決まりで、どのmigrationまで適用済みのインスタンスでも、`wmill datatable migrate up`を安全に実行し直せる。

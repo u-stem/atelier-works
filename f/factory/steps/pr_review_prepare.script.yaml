@@ -1,4 +1,4 @@
-summary: '[SF-3-1/1] PR の取得と検証'
+summary: '[SF-3-1/1] PRの取得と検証'
 description: レビュー対象のPRを確認するステップです。レビューしてよい状態か確認したうえで、レビュー用の作業ディレクトリを用意し、次のステップに渡します。
 lock: '!inline f/factory/steps/pr_review_prepare.script.lock'
 kind: script

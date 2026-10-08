@@ -1,4 +1,4 @@
-summary: '[LIB] Data Table アクセス'
+summary: '[LIB] Data Tableアクセス'
 description: 内部ライブラリです。直接実行するものではありません。作業項目などのデータを読み書きするための共通処理です。
 lock: '!inline f/factory/lib/db.script.lock'
 kind: script

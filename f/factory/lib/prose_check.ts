@@ -125,9 +125,11 @@ const PLAIN_ENDING_PATTERN =
 /**
  * 英字の並びの端と日本語の文字の間にある半角スペース1つ。
  * 英字の並びは、英数字か閉じ文字で終わり、英数字か開き文字で始まる。
+ * `]`の後は見ない。`[LIB] 名前`や`[MUST] 指摘`のように、角括弧のタグと本文を
+ * スペースで区切る書式があるため。
  */
 const ASCII_JAPANESE_SPACE_PATTERN = new RegExp(
-  `[${ASCII_BOUNDARY_CLASS}] [${JAPANESE_CHAR_CLASS}]|[${JAPANESE_CHAR_CLASS}] [0-9A-Za-z(\\[\`]`,
+  `[0-9A-Za-z)\`] [${JAPANESE_CHAR_CLASS}]|[${JAPANESE_CHAR_CLASS}] [0-9A-Za-z(\\[\`]`,
 );
 
 /** 同じ長さの空白に置き換え、列の位置を保ったまま検査の対象から外す。 */

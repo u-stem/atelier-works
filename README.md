@@ -1,122 +1,128 @@
-# atelier-works — Software Factory
+# atelier-works
 
-GitHub Issueを起点に、要件定義 → 実装 → PR → CI監視 → マージ後監視 → 自己改善までを
-Windmill上のフローとして自動化する「Software Factory」。このリポジトリを`clone`して
-手順どおりに実行するだけで完結し、グローバル設定や別リポジトリへの依存を持たない。
+GitHubのIssueを起点に、要件定義、実装、PR、マージ後の監視、自己改善までをWindmillのフローとして自動化するSoftware Factoryである。このリポジトリをcloneして手順どおりに実行すれば動き、グローバルの設定やほかのリポジトリには依存しない。初めて来た人は、この文書の後に[セットアップ](docs/setup.md)を読む。
 
-## 概要
+## 工程
 
-工程は次の5段階。
+Factoryは次の5つの工程で動く。
 
-1. **拾う**: `factory`ラベル付きIssueを検知してclaimする
-2. **要件定義**: headless Claudeが要件定義ドラフトを生成し、人が承認・差し戻しする
-3. **実装**: worktree上で実装しPRを作成する
-4. **CI監視**: マージ後のCIを監視する
-5. **自己改善**: 失敗や却下の履歴から改善提案をIssue化する
+| 工程 | 内容 | 状態 |
+| --- | --- | --- |
+| 1. 拾う | `factory`ラベルの付いたIssueと、`factory:review`・`factory:fix`ラベルの付いたPRを定期的に探し、取り込む | 実装済み |
+| 2. 要件定義 | headless Claudeが要件定義のドラフトを書き、人が承認するか差し戻す | 実装済み |
+| 3. 実装とPR | 承認された要件定義からworktreeで実装してPRを作り、PRのレビューと修正を回す | 実装済み。Issueからの実装は`implement_enabled`で有効にする |
+| 4. マージ後の監視 | マージ後のCIを監視する | 未実装 |
+| 5. 自己改善 | 運用の記録を監査し、改善の提案をIssueにする | 実装済み |
 
-**現在のスコープ**:
+工程のほかに、次のものが動く。
 
-- 基盤(docker composeによるWindmillスタック、claude/gh/gtr/wmillを同梱したworkerイメージ、Data Table、`doctor` / `bootstrap`)
-- 工程1の自動巡回(`poll_issues` / `poll_prs`)
-- 工程2の要件定義と承認
-- PRワークフロー(工程3の一部: `pr_review` / `pr_fix`)
-- ダッシュボードApp(Factory Console)
-- 自己更新と失敗ハンドラ
+- Docker Composeで動くWindmillのスタックと、claude・gh・gtr・wmillを入れたworkerのイメージ
+- Data Table、`doctor`、`bootstrap`
+- ダッシュボードのApp(Factory Console)
+- 自己更新と、失敗したジョブの通知
 
-未実装は工程3の「Issueから実装してPRを作る」、工程4のマージ後CI監視、工程5の自己改善提案、
-Discordの双方向操作(詳細は[docs/architecture.md](docs/architecture.md)と[docs/operations.md](docs/operations.md)を参照)。
+Discordからの双方向の操作は未実装である。Discordには通知だけを送る。
 
 ## 10分で動かす
 
-前提: ホストに**docker**(DesktopまたはOrbStack)と**mise**のみ。
+ホストに要るのは、Docker(Docker DesktopかOrbStack)とmiseだけである。
 
-```bash
-git clone <このリポジトリの URL> atelier-works
-cd atelier-works
-mise trust
-mise run setup
-```
+1. cloneしてツールを入れる。
 
-秘密値を投入する。キー一覧と取得手順は`mise.local.toml.example`を参照。投入には、
-値をシェル履歴に残さない`read -rs`経由を推奨する。
+   ```bash
+   git clone <このリポジトリのURL> atelier-works
+   cd atelier-works
+   mise trust
+   mise run setup
+   ```
 
-```bash
-read -rs 'v?DB_PASSWORD: ' && mise set -E local DB_PASSWORD="$v"; unset v
-# 他のキー(WM_ADMIN_EMAIL, WM_ADMIN_PASSWORD, GITHUB_TOKEN,
-# CLAUDE_CODE_OAUTH_TOKEN, DISCORD_WEBHOOK_URL, CONSOLE_GITHUB_TOKEN)も同様に投入する
-```
+2. 秘密値を投入する。キーと取得の手順は[セットアップ](docs/setup.md)の「資格情報を用意する」にある。zshでは次のようにキーごとに実行する。bashのコマンドは[セットアップ](docs/setup.md)の「秘密値を投入する」にある。
 
-```bash
-mise run doctor
-mise run up
-mise run bootstrap
-```
+   ```bash
+   read -rs 'v?DB_PASSWORD: ' && mise set -E local DB_PASSWORD="$v"; unset v
+   ```
 
-ブラウザで <http://127.0.0.1:8080> を開き、`admin@windmill.dev`と設定した
-`WM_ADMIN_PASSWORD`でログインする。Windmill UIで`f/factory/factory_config`を開き、
-`owners`(対象リポジトリの所有者)と`instance_name`を設定する。この2項目はgit管理外で、
-`bootstrap`実行時点では空のまま作成される。
+3. 診断して起動する。
 
-詳しい手順・動作確認・トラブルシュートは[docs/setup.md](docs/setup.md)を参照。
+   ```bash
+   mise run doctor
+   mise run up
+   mise run bootstrap
+   ```
 
-## 主要miseタスク
+4. ブラウザで`http://127.0.0.1:8080`を開き、`admin@windmill.dev`と`WM_ADMIN_PASSWORD`の値でログインする。
+5. Windmillの画面で`f/factory/factory_config`を開き、`owners`(対象リポジトリの所有者)と`instance_name`を設定する。この2つはgitで管理せず、`bootstrap`は空のまま作る。
+
+動作の確かめ方とトラブルシュートは[セットアップ](docs/setup.md)にある。
+
+## miseタスク
 
 | タスク | 内容 |
 | --- | --- |
-| `mise run setup` | mise管理ツールの導入 + `bun install --frozen-lockfile` + `bun install --cwd console --frozen-lockfile --ignore-scripts` + `lefthook install` |
-| `mise run doctor` | 環境診断(OK / NG一覧) |
-| `mise run up` | ローカルWindmillスタックを起動(build込み)。ホスト側checkoutからビルドするため、先にmainをpullする |
-| `mise run down` | スタックを停止する |
-| `mise run build` | workerイメージのみビルドする |
-| `mise run bootstrap` | 初回セットアップ(ワークスペース作成・secret投入・sync push・migration、冪等) |
-| `mise run deploy` | `git pull --ff-only` → build → up → push → migrateを一括実行する(手動で一括反映したいときの手段) |
-| `mise run check` | `lint` → `lint:docs` → `typecheck` → `test` → `console:check`を順に実行する |
-| `mise run console:check` | Console(`console/`)のlockfileの方針を検査し、続けて型検査・テスト・組み立てを行う |
-| `mise run lint` | biome + `wmill lint` + 型アサーション検出 |
-| `mise run lint:docs` | Markdownの文書を検査する |
-| `mise run docs:gen` | 文書の中の生成した範囲を作り直す |
-| `mise run typecheck` | `tsc --noEmit` |
-| `mise run test` | `bun test`(small)。`console/`は除く(Consoleのテストは`mise run console:check`で実行する) |
-| `mise run test:db` | Data Table migrationのSQLスモークテスト(medium) |
-| `mise run push` | `wmill sync push --yes --keep-deleted` |
-| `mise run push:dry` | `wmill sync push --dry-run`(変更しない) |
-| `mise run push:prune` | 削除も反映するpush(手動のみ) |
-| `mise run pull` | `wmill sync pull` |
-| `mise run migrate` | `wmill datatable migrate up` |
-| `mise run metadata` | 古くなったWindmillのメタデータ(lockとスキーマ)を作り直す |
-| `mise run metadata:check` | Windmillのメタデータが古ければ失敗する |
-| `mise run check:comment-only` | 基準のref(既定は`main`)との差分が、コメントの変更だけであることを確かめる |
-| `mise run logs` | スタックのログを追跡する |
+| `mise run setup` | miseで管理するツール、`bun install --frozen-lockfile`、`bun install --cwd console --frozen-lockfile --ignore-scripts`、`lefthook install`をまとめて入れる |
+| `mise run doctor` | 環境を診断し、項目ごとにOKかNGを出す |
+| `mise run up` | ローカルのWindmillのスタックを、ビルドしてから起動する。ホストのcheckoutからビルドするので、先にmainをpullする |
+| `mise run down` | スタックを止める |
+| `mise run build` | workerのイメージだけをビルドする |
+| `mise run logs` | スタックのログを追う |
 | `mise run console:rollback` | Consoleを直前の版に戻して固定する(自動の更新を止める) |
 | `mise run console:unpin` | Consoleの固定を外し、自動の更新に戻す |
+| `mise run bootstrap` | ワークスペースの作成、secret変数の投入、sync push、migrationを行う。何度実行してもよい |
+| `mise run deploy` | `git pull --ff-only`、ビルド、起動、push、migrationを続けて実行する。手で一括して反映したいときに使う |
+| `mise run push` | `wmill sync push --yes --keep-deleted`で、ローカルの変更をWindmillに反映する |
+| `mise run push:dry` | `wmill sync push --dry-run`で、反映する内容だけを確かめる |
+| `mise run push:prune` | ローカルに無いものをWindmillから消すpush。人が明示的に実行する |
+| `mise run pull` | `wmill sync pull`で、Windmillの状態をローカルに取り込む |
+| `mise run migrate` | `wmill datatable migrate up`で、Data Tableのmigrationを適用する |
+| `mise run metadata` | 古くなったWindmillのメタデータ(lockとスキーマ)を作り直す |
+| `mise run metadata:check` | Windmillのメタデータが古ければ失敗する |
+| `mise run check` | `lint`、`lint:docs`、`typecheck`、`test`、`console:check`を順に実行する |
+| `mise run console:check` | Console(`console/`)のlockfileの方針を検査し、続けて型検査、テスト、組み立てを行う |
+| `mise run lint` | biome、`wmill lint`、型アサーションと`§`の検出を実行する |
+| `mise run lint:docs` | Markdownの文書を検査する |
+| `mise run docs:gen` | 文書の中の生成した範囲を作り直す |
+| `mise run typecheck` | `tsc --noEmit`で型を検査する |
+| `mise run test` | `bun test`でsmallのテストを実行する。`console/`は除き、Consoleのテストは`mise run console:check`で実行する |
+| `mise run test:db` | Data Tableのmigrationを使い捨てのDBに適用し、すべてのviewをSELECTする(medium) |
+| `mise run check:comment-only` | 基準のref(既定は`main`)との差分が、コメントの変更だけであることを確かめる |
 
-## リポジトリ構成
+## リポジトリの構成
 
 ```text
 atelier-works/
-  README.md                        # このファイル
-  AGENTS.md / CLAUDE.md             # エージェント向け規約(単一ソースは AGENTS.md)
-  mise.toml                        # ツール管理・タスク定義
-  mise.local.toml.example          # 秘密値投入のテンプレート(値は自分で入れる)
-  wmill.yaml                       # `wmill sync` の設定
-  lefthook.yml                     # pre-commit / commit-msg / pre-push フック
-  console/                         # Factory Console(Vite + React)。CI が組み立て、console_fetcher が取り込む
-  c_factory_config.resource-type.yaml / rt.d.ts   # factory_config の resource type と生成された型
-  .claude/skills/                  # Claude Code のカスタムスキル + wmill が生成した管理スキル
-  .agents/skills/                  # wmill が生成した共有エージェントスキル(Codex 等と共有)
-  docs/                            # ドキュメント
-  f/factory/                       # Windmill の script / flow / resource / variable / schedule
-  infra/                           # docker compose、worker Dockerfile、console_fetcher、Caddyfile
-  migrations/datatable/main/       # Data Table のマイグレーション
-  scripts/                         # doctor.sh / bootstrap.sh / test-db.sh などの運用スクリプト
-  templates/                       # factory_config resource のシードテンプレート(git 管理外の初期値)
-  tests/                           # bun test
+  README.md                        # この文書
+  AGENTS.md / CLAUDE.md            # エージェント向けの指示(本体はAGENTS.md)
+  mise.toml                        # ツールの管理とタスクの定義
+  mise.local.toml.example          # 秘密値のテンプレート(値は人が入れる)
+  wmill.yaml                       # wmill syncの設定
+  lefthook.yml                     # pre-commit、commit-msg、pre-pushのフック
+  console/                         # Factory Console(Vite + React)。CIが組み立て、console_fetcherが取り込む
+  c_factory_config.resource-type.yaml / rt.d.ts   # factory_configのresource typeと生成した型
+  .claude/skills/                  # Claude Codeの自作スキルと、wmillが生成した管理スキル
+  .agents/skills/                  # wmillが生成した共有のエージェントスキル
+  .github/                         # CI、Issueのテンプレート、PRのテンプレート
+  docs/                            # 文書
+  f/factory/                       # Windmillのscript、flow、resource、variable、schedule
+  infra/                           # Docker Compose、workerのDockerfile、console_fetcher、Caddyfile
+  migrations/datatable/main/       # Data Tableのmigration
+  scripts/                         # doctor.sh、bootstrap.sh、test-db.sh、検査のスクリプト
+  templates/                       # factory_configの初期値のテンプレート
+  tests/                           # bun testのテスト
 ```
 
-## ドキュメント
+## 文書
 
-- [セットアップ](docs/setup.md): 前提、資格情報の取得、起動、動作確認、トラブルシュート
-- [運用](docs/operations.md): 運用ルール、日常運用、更新の反映、秘密のローテーション、バックアップ
-- [アーキテクチャ](docs/architecture.md): 全体構成、状態遷移、データモデル、フロー、拡張点
-- [セキュリティ](docs/security.md): 信頼境界、シークレット取り扱い、資格情報の作成手順
-- [コーディング規約](docs/coding-guidelines.md): 言語規約、TypeScript、TDD、テストの分類
+| 文書 | 内容 |
+| --- | --- |
+| [セットアップ](docs/setup.md) | 前提、秘密値の投入、起動、動作の確認、トラブルシュート |
+| [運用](docs/operations.md) | 日常の運用、更新の反映、秘密値のローテーション、バックアップ |
+| [アーキテクチャ](docs/architecture.md) | 全体の構成、状態の遷移、データモデル、フロー |
+| [セキュリティ](docs/security.md) | 信頼境界、秘密値の扱い、資格情報の取得手順、各フローの安全策 |
+| [コーディング規約](docs/coding-guidelines.md) | コメント、TypeScript、TDD、テストの分類 |
+| [文書の書き方](docs/writing-guidelines.md) | 文書とFactoryが生成する文章の書き方 |
+| [作業項目の仕様](docs/internals/work-items.md) | 作業項目と状態の扱い |
+| [要件定義の仕様](docs/internals/requirements.md) | 要件定義の生成と承認の仕組み |
+| [実装フローの仕様](docs/internals/implement.md) | 実装フローの仕組みと安全策の詳細 |
+| [PRワークフローの仕様](docs/internals/pr-workflow.md) | PRのレビューと修正の仕組みと安全策の詳細 |
+| [監査の仕様](docs/internals/audit.md) | 監査と改善提案の仕組み |
+| [通知の仕様](docs/internals/notifications.md) | Discordへの通知の仕組み |

@@ -603,7 +603,7 @@ function renderDeployChecklist(changedPaths: readonly string[]): string[] {
   const nothingToApply =
     !needs.autoApply && !needs.onNextUp && !needs.viaConsoleCi;
   return [
-    "Windmillへの反映:",
+    "### Windmillへの反映",
     "",
     checkbox(
       needs.autoApply,

@@ -1,4 +1,4 @@
-summary: '[SF-3-2/1] worktree の準備と安全確認'
+summary: '[SF-3-2/1] worktreeの準備と安全確認'
 description: 修正作業の準備を行うステップです。PRが修正してよい状態か(オープンかどうか、下書きでないか等)を確認したうえで、PRの最新内容を反映した作業ディレクトリを用意します。試行回数の上限を超えている場合は、ここで処理を止めます。
 lock: '!inline f/factory/steps/pr_fix_prepare.script.lock'
 kind: script

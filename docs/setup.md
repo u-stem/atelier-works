@@ -1,60 +1,151 @@
 # セットアップ
 
+このリポジトリをcloneしてから、ローカルのWindmillでSoftware Factoryを動かすまでの手順を書く。初めて環境を作る人と、作り直す人が読む。
+
 ## 前提
 
-- ホストに必要なのはdocker(DesktopまたはOrbStack)とmiseのみ。それ以外(node, bun, gh, windmill-cli)は`mise run setup`(内部で`mise install`)で入る。
-- 初回は`mise trust`でこのリポジトリの`mise.toml`を信頼する。
-- 設定に`.env`系ファイルは使わない。`infra/.env`や`infra/secrets.env`は存在しない。非秘密の設定は`mise.toml`の`[env]`に、秘密はgitignore済みの`mise.local.toml`に置く。
+ホストに要るのは、Docker(Docker DesktopかOrbStack)とmiseだけである。node、bun、gh、windmill-cliなどほかのツールは、`mise run setup`の中の`mise install`で入る。
 
-## 資格情報の取得
+設定に`.env`系のファイルは使わない。`infra/.env`と`infra/secrets.env`は存在しない。秘密でない設定は`mise.toml`の`[env]`に、秘密値はgitignore済みの`mise.local.toml`に置く。理由は[セキュリティ](security.md)の「シークレットの扱い」にある。
 
-`GITHUB_TOKEN`(GitHub fine-grained PAT)、`CONSOLE_GITHUB_TOKEN`(Consoleの取り込み用のPAT)、`CLAUDE_CODE_OAUTH_TOKEN`、`DISCORD_WEBHOOK_URL`の取得手順は
-[docs/security.md](security.md)の「GitHub PAT」「CONSOLE_GITHUB_TOKENの取得」「CLAUDE_CODE_OAUTH_TOKENの取得」「DISCORD_WEBHOOK_URLの取得」を参照する(ここでは重複させない)。
-取りに行くリポジトリは`mise.toml`の`CONSOLE_GITHUB_REPO`で、フォークで動かすときだけ書き換える。
-`DB_PASSWORD`、`WM_ADMIN_EMAIL`、`WM_ADMIN_PASSWORD`は自分で決めた値でよい。
+## 資格情報を用意する
 
-値の投入コマンドと`mise.local.toml.example`の使い方は`.claude/skills/factory-dev/SKILL.md`の「資格情報の取得手順」を参照(`read -rs`経由で`mise set -E local KEY=value`)。
+`mise.local.toml`に入れる秘密値は次の7つである。キーの一覧は`mise.local.toml.example`にもある。
 
-## 起動
+| キー | 用意の仕方 |
+| --- | --- |
+| `DB_PASSWORD` | 自分で決める |
+| `WM_ADMIN_EMAIL` | Windmillの初期管理者のメールアドレス`admin@windmill.dev`にする。`bootstrap`はこのアドレスと初期パスワードでログインする |
+| `WM_ADMIN_PASSWORD` | 自分で決める。`changeme`と12文字未満は`bootstrap`が拒む |
+| `GITHUB_TOKEN` | [セキュリティ](security.md)の「GitHubのPAT」の手順で取得する |
+| `CLAUDE_CODE_OAUTH_TOKEN` | [セキュリティ](security.md)の「Claude CodeのOAuthトークン」の手順で取得する |
+| `DISCORD_WEBHOOK_URL` | [セキュリティ](security.md)の「DiscordのWebhook URL」の手順で取得する |
+| `CONSOLE_GITHUB_TOKEN` | [セキュリティ](security.md)の「Consoleの取り込み用のPAT」の手順で取得する。`GITHUB_TOKEN`は流用しない |
+
+Consoleを取りに行くリポジトリは、`mise.toml`の`[env]`の`CONSOLE_GITHUB_REPO`にある。
+フォークで動かすときだけ書き換える。
+
+## 秘密値を投入する
+
+秘密値は人が投入する。次のコマンドを使うと、値は画面に表示されず、シェルの履歴にも残らない。`KEY`をキーの名前に置き換え、キーごとに実行する。
+
+zshでは次のように実行する。
 
 ```bash
-mise trust
-mise run setup       # mise install, bun install --frozen-lockfile, lefthook install
-# ここで秘密値を投入する(前節参照)
-mise run doctor       # 環境診断
-mise run up            # docker compose でスタック起動(build 込み)
-mise run bootstrap      # ワークスペース作成、secret 投入、sync push、migration 適用(冪等)
+read -rs 'v?KEY: ' && mise set -E local KEY="$v"; unset v
 ```
 
-`GITHUB_TOKEN` / `CLAUDE_CODE_OAUTH_TOKEN` / `DISCORD_WEBHOOK_URL`を空のまま`bootstrap`を実行しても完了はする(該当するWindmill変数が空で作成される)。ただし`doctor`はこれらが未設定だとNGを報告するため、実運用前には必ず値を投入する。
+bashでは次のように実行する。
 
-`bootstrap`はワークスペースIDを小文字の`factory`のまま、表示名だけを`Factory`(ダッシュボードApp「Factory Console」などと表記を揃える)に設定する。
+```bash
+read -rs -p 'KEY: ' v && mise set -E local KEY="$v"; unset v
+```
 
-`f/`配下をコミットするとpre-commit hookがローカルWindmillに接続して`wmill generate-metadata`を実行し、`f/`か`wmill-lock.yaml`の変更を含むpushではpre-push hookが同様に接続してstaleなメタデータを検出する。どちらも`mise run up`でスタックを起動しておく必要がある。手動実行は`mise run metadata` / `mise run metadata:check`。
+値は`mise.local.toml`の`[env]`に書き込まれる。`-E local`を付けなくても、以降の`mise run`と`mise exec`に反映される。
 
-## 自己更新に関する設定
+値を表示せずに、投入できたかを確かめるには次のように実行する。
 
-- `factory_config`リソースの`factory_branch`(既定`main`)は、`self_update`が追跡するこのリポジトリのブランチ名。フォークやフィーチャーブランチで運用したい場合はWindmill UIからこの値を変更する(変更が効くのはworker内のself cloneをまだ作成していない場合のみ。既存のcloneに反映するにはworkerコンテナ内の`/workspaces/factory/atelier-works`を削除して再作成させる)。
-- `f/factory/deployed_sha`変数は、直近でWindmillに反映済みのコミットSHAを保持する非secret変数。`self_update`が自動的に更新するため、通常は人が編集する必要はない。`factory_config`リソースと同様にsync対象外で、`bootstrap`が初回のみ空値で作成する(既に存在する場合は値を変更しない)。値を手動でリセットしたい場合はWindmill UIから直接編集する。
+```bash
+mise exec -- sh -c 'test -n "$DB_PASSWORD" && echo ok'
+```
 
-## 動作確認コマンドと期待出力
+> [!WARNING]
+> `mise set -E local KEY=value`と値を直接書く方法もあるが、使わない。値がシェルの履歴にそのまま残る。値に`!`などの記号があると、zshの履歴展開で壊れる。
 
-| 確認内容 | コマンド | 期待される出力 |
+## 起動する
+
+1. このリポジトリの`mise.toml`を信頼する。
+
+   ```bash
+   mise trust
+   ```
+
+2. ツール、JavaScriptの依存関係、gitのフックを入れる。
+   中で`mise install`、`bun install --frozen-lockfile`、`lefthook install`を実行する。
+   Consoleの依存は`bun install --cwd console --frozen-lockfile --ignore-scripts`で入れる。
+
+   ```bash
+   mise run setup
+   ```
+
+3. [秘密値を投入する](#秘密値を投入する)の手順で、7つのキーを投入する。
+4. 環境を診断する。
+
+   ```bash
+   mise run doctor
+   ```
+
+5. Docker Composeでスタックを起動する。イメージのビルドも行う。
+
+   ```bash
+   mise run up
+   ```
+
+6. ワークスペースを作り、secret変数を投入し、`wmill sync push`とmigrationを実行する。何度実行しても結果は同じになる。
+
+   ```bash
+   mise run bootstrap
+   ```
+
+7. ブラウザで`http://127.0.0.1:8080`を開き、`WM_ADMIN_EMAIL`と`WM_ADMIN_PASSWORD`でログインする。
+8. Windmillの画面で`f/factory/factory_config`を開き、`owners`(対象リポジトリの所有者)と`instance_name`を設定する。この2つはgitで管理せず、`bootstrap`は空のまま作る。
+
+`GITHUB_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`、`DISCORD_WEBHOOK_URL`が空でも、`bootstrap`は完了する。対応するWindmillの変数が空で作られる。`doctor`はこれらが空だとNGを報告するので、運用を始める前に値を投入する。
+
+`bootstrap`は、ワークスペースのIDを小文字の`factory`のままにし、表示名だけを`Factory`にする。表示名はダッシュボードのApp(Factory Console)などの表記にそろえる。
+
+## gitのフック
+
+`mise run setup`は、lefthookでgitのフックを入れる。フックは`--no-verify`で飛ばさない。
+
+| フック | 実行するもの |
+| --- | --- |
+| pre-commit | `f/`の下をステージしたときは、先に`scripts/generate-metadata-staged.sh`を実行する。メタデータを作り直し、変わったlockとスキーマのファイルをステージする。続けて、biome、`as`の検出、`§`の検出、gitleaks、`wmill lint f`、文書の検査を並列に実行する |
+| commit-msg | `scripts/check-commit-msg.sh`でコミットメッセージの規約を検査する |
+| pre-push | `mise run check`を実行する。pushに`f/`か`wmill-lock.yaml`の変更があれば、`mise run metadata:check`で古いメタデータを見つけてpushを止める |
+
+メタデータの作り直しと検査は、ローカルのWindmillに接続する。`mise run up`でスタックを起動しておく。手で実行するときは`mise run metadata`と`mise run metadata:check`を使う。
+
+Windmillを起動できないときは、メタデータのフックだけを飛ばせる。次のように実行する。
+
+```bash
+LEFTHOOK_EXCLUDE=wmill-metadata git commit
+LEFTHOOK_EXCLUDE=wmill-metadata-check git push
+```
+
+フックを飛ばしたときは、次のpushの前に`mise run metadata`を実行する。
+
+## 自己更新の設定
+
+`factory_config`の`factory_branch`には、`self_update`が追跡するこのリポジトリのブランチの名前を書く。既定値は`main`である。forkやfeatureブランチで運用するときは、Windmillの画面でこの値を変える。
+
+この値が効くのは、workerの中にself cloneをまだ作っていないときだけである。既にあるself cloneに反映するには、workerコンテナの中の`/workspaces/factory/atelier-works`を消して作り直させる。
+
+`f/factory/deployed_sha`は、直近でWindmillに反映したコミットのSHAを持つ、秘密でない変数である。`self_update`が更新するので、普段は人が編集しない。値を戻したいときは、Windmillの画面で直接編集する。
+
+この変数は`factory_config`と同じく同期の対象外である。`bootstrap`は、変数が無いときだけ空の値で作り、あれば値を変えない。
+
+## 動作を確かめる
+
+| 確かめること | コマンド | 期待する出力 |
 | --- | --- | --- |
-| 環境診断 | `mise run doctor` | すべての項目が`OK`。末尾に`=== 全項目 OK ===`、終了コード0 |
-| Windmillサーバーの応答 | `curl http://127.0.0.1:8080/api/version` | `CE v1.817.0` |
+| 環境の診断 | `mise run doctor` | すべての項目が`OK`で、最後に`=== 全項目OK ===`が出る。終了コードは0 |
+| Windmillサーバーの応答 | `curl http://127.0.0.1:8080/api/version` | `CE v`に続いて、`mise.toml`の`WM_VERSION`の値が出る |
 | ローカルとリモートの一致 | `mise exec -- wmill sync push --dry-run` | `0 changes` |
-| Data Table migration | `mise run test:db` | 全view(`v_inbox`など7つ)のSELECTとdown migrationのロールバックが成功し、末尾に`[test-db] OK` |
-| Consoleの取り込み | `mise exec -- docker compose -f infra/docker-compose.yml logs --tail 20 console_fetcher` | `"event":"status","state":"ok"`の行(初回は`"event":"deployed"`も)。`config_missing`なら`CONSOLE_GITHUB_TOKEN`の投入と`mise run up`を確かめる |
-| Consoleの配信 | `curl -sI http://127.0.0.1:8080/console/` | `HTTP/1.1 200`と`Content-Security-Policy`。`/`と`/api/version`には`Content-Security-Policy`が付かない |
+| Data Tableのmigration | `mise run test:db` | すべてのview(`v_inbox`など)のSELECTと、down migrationでの戻しが成功し、最後に`[test-db] OK`が出る |
+| Consoleの取り込み | `mise exec -- docker compose -f infra/docker-compose.yml logs --tail 20 console_fetcher` | `"event":"status","state":"ok"`の行が出る。初回は`"event":"deployed"`も出る。`config_missing`なら、`CONSOLE_GITHUB_TOKEN`の投入と`mise run up`を確かめる |
+| Consoleの配信 | `curl -sI http://127.0.0.1:8080/console/` | `HTTP/1.1 200`と`Content-Security-Policy`が出る。`/`と`/api/version`には`Content-Security-Policy`が付かない |
 
 ## トラブルシュート
 
-| 症状 | 原因・対処 |
+| 症状 | 原因と対処 |
 | --- | --- |
-| ポートが衝突する | `mise.local.toml`で`WM_HTTP_PORT`を別の値に上書きする(例: `read -rs 'v?WM_HTTP_PORT: ' && mise set -E local WM_HTTP_PORT="$v"; unset v`) |
-| `doctor`が「初期パスワード」の項目でNGになる | `WM_ADMIN_PASSWORD`が`changeme`のまま。`mise run bootstrap`を実行するとログイン後に自動でパスワードを変更する |
-| `required variable ... is missing a value: run via mise`というエラーが出る | `docker compose`を`mise run`を経由せず直接実行している。すべて`mise run <task>`または`mise exec -- docker compose ...`で実行する(composeの環境変数はmiseの`[env]` / `mise.local.toml`からしか渡らない) |
-| workerイメージを作り直したい | `mise run build`(`windmill_worker`サービスのみを再ビルドする) |
-| 完全にリセットしたい | `docker compose -f infra/docker-compose.yml down -v`(**注意: `db_data`を含むすべてのvolumeが削除され、Windmillのデータが失われる**) |
-| ホストのCPUアーキテクチャ(arm64 / amd64)が心配 | 対応不要。公式Windmillイメージ・workerイメージのビルドともにarm64 / amd64の両方に対応している |
+| ポートが衝突する | `mise.local.toml`の`WM_HTTP_PORT`で別のポートを指定する。投入は[秘密値を投入する](#秘密値を投入する)と同じコマンドで、`KEY`を`WM_HTTP_PORT`にする |
+| `doctor`が「初期パスワード」でNGになる | パスワードが`changeme`のままである。`mise run bootstrap`がログインした後にパスワードを変える |
+| `required variable ... is missing a value: run via mise`と出る | `docker compose`を`mise run`を通さずに実行している。composeの環境変数はmiseからしか渡らないので、`mise run <task>`か`mise exec -- docker compose ...`で実行する |
+| workerのイメージを作り直したい | `mise run build`で、`windmill_worker`のサービスだけを作り直す |
+| すべてを初期化したい | `docker compose -f infra/docker-compose.yml down -v`を実行する。下の警告を読んでから行う |
+| ホストのCPUアーキテクチャが合うか気になる | 対応は要らない。Windmillの公式イメージとworkerのイメージは、arm64とamd64の両方に対応している |
+
+> [!WARNING]
+> `docker compose -f infra/docker-compose.yml down -v`は、`db_data`を含むすべてのvolumeを消す。Windmillのデータは元に戻せない。

@@ -1,4 +1,4 @@
-summary: '[OP-1-1/1] Issue を作成'
+summary: '[OP-1-1/1] Issueを作成'
 description: 投入されたタイトル・目的・受入基準をもとにGitHub Issueを作成します。作成したIssueの情報を次のステップに渡します。
 lock: '!inline f/factory/steps/manual_intake_create_issue.script.lock'
 kind: script
