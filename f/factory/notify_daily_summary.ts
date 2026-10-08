@@ -5,32 +5,14 @@
 import * as wmill from "windmill-client@1.817.0";
 import type { CleanupCounts } from "./lib/cleanup_db_support.ts";
 import { loadConfig } from "./lib/config.ts";
-import { type NotifyEvent, notify } from "./lib/discord.ts";
-import { type Logger, logger, maskSecrets } from "./lib/log.ts";
+import { notifyBestEffort } from "./lib/discord.ts";
+import { logger } from "./lib/log.ts";
 import {
   computeYesterdayRangeJst,
   getAgentRunSummary,
   getApprovalSummary,
   getCleanupSummary,
 } from "./lib/summary_support.ts";
-
-/**
- * Discordに通知する。webhookのURLが未設定なら何もしない。
- * 送信の失敗はマスクしてログに残すだけで、ジョブを失敗させない。
- * 通知の一時的な失敗で、成功した集計をスケジュール実行の失敗にしないため。
- */
-async function notifySafe(
-  webhookUrl: string,
-  event: NotifyEvent,
-  log: Logger,
-): Promise<void> {
-  if (webhookUrl.length === 0) return;
-  try {
-    await notify(webhookUrl, event);
-  } catch (err) {
-    log.warn("discord notify failed", { error: maskSecrets(String(err)) });
-  }
-}
 
 export type DailySummaryResult = {
   readonly day: string;
@@ -56,7 +38,7 @@ export async function main(): Promise<DailySummaryResult> {
   ]);
 
   const webhookUrl = await wmill.getVariable("f/factory/discord_webhook_url");
-  await notifySafe(
+  await notifyBestEffort(
     webhookUrl,
     {
       kind: "daily_summary",

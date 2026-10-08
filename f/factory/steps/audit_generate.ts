@@ -38,7 +38,7 @@ import {
   recordAgentRun,
   updateStatusIfCurrent,
 } from "../lib/db.ts";
-import { type NotifyEvent, notify } from "../lib/discord.ts";
+import { notifyBestEffort } from "../lib/discord.ts";
 import { parseGitHubRepoUrl } from "../lib/github.ts";
 import { type Logger, logger, maskSecrets } from "../lib/log.ts";
 import { AUDIT_SCHEMA, auditPrompt } from "../lib/prompts.ts";
@@ -211,24 +211,6 @@ async function removeSnapshot(
 }
 
 /**
- * Discordへ通知する。webhookのURLが空なら何もしない。
- * 通知の失敗はジョブを失敗させず、マスクしてログに残す
- * (`poll_issues.ts`の`notifySafe`と同じ扱い)。
- */
-async function notifySafe(
-  webhookUrl: string,
-  event: NotifyEvent,
-  log: Logger,
-): Promise<void> {
-  if (webhookUrl.length === 0) return;
-  try {
-    await notify(webhookUrl, event);
-  } catch (err) {
-    log.warn("discord notify failed", { error: maskSecrets(String(err)) });
-  }
-}
-
-/**
  * 提案ごとに承認依頼を登録し、作業項目を`auditing`から進め、
  * 全提案が既に判断済みになる競合を確かめ直し(`decidePostTransition`)、通知する。
  * `main`の新規実行と再開の両方の経路が、そのまま共有する。
@@ -277,7 +259,7 @@ async function finishAudit(input: {
   }
 
   if (input.proposals.length > 0) {
-    await notifySafe(
+    await notifyBestEffort(
       input.webhookUrl,
       {
         kind: "audit_completed",
