@@ -6,6 +6,7 @@ import * as wmill from "windmill-client@1.817.0";
 import {
   buildSystemPrompt,
   dailyBudgetStatus,
+  recordClaudeRuns,
   runClaude,
 } from "../lib/claude.ts";
 import { loadConfig } from "../lib/config.ts";
@@ -325,7 +326,7 @@ export async function main(
       timeoutMs: config.claude_timeout_sec * 1000,
     });
 
-    await recordAgentRun(result.agentRun);
+    await recordClaudeRuns(result, recordAgentRun);
 
     if (result.outcome === "failure") {
       failGeneration(result.reason, result.detail);
