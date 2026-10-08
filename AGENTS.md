@@ -11,7 +11,8 @@
 - Configは`.env`系ファイルではなくmiseで管理する。非秘密の設定は`mise.toml`
   の`[env]`に平文で置く。秘密(`DB_PASSWORD` / `WM_ADMIN_EMAIL` /
   `WM_ADMIN_PASSWORD` / `GITHUB_TOKEN` / `CLAUDE_CODE_OAUTH_TOKEN` /
-  `DISCORD_WEBHOOK_URL`)はgitignore済みの`mise.local.toml`に人が投入する。
+  `DISCORD_WEBHOOK_URL` / `CONSOLE_GITHUB_TOKEN`)はgitignore済みの
+  `mise.local.toml`に人が投入する。
   投入先が`mise.local.toml`になること、`-E local`を付けなくても以降の
   `mise run` / `mise exec`に自動反映されることは実機確認済み。推奨コマンドは
   次のとおり(値を非表示入力にし、シェル履歴に値を残さない)。

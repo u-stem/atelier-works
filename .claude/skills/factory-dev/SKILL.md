@@ -13,7 +13,7 @@ description: 本リポジトリ (atelier-works) の開発環境をセットア�
 ## 秘密情報の設定
 
 - 秘密ではない設定は`mise.toml`の`[env]`に平文でコミットする。
-- 個人の秘密値(`DB_PASSWORD`、`WM_ADMIN_EMAIL`、`WM_ADMIN_PASSWORD`、`GITHUB_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`、`DISCORD_WEBHOOK_URL`)は`.env`を使わず、gitignore済みの`mise.local.toml`に置く。テンプレートは`mise.local.toml.example`。
+- 個人の秘密値(`DB_PASSWORD`、`WM_ADMIN_EMAIL`、`WM_ADMIN_PASSWORD`、`GITHUB_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`、`DISCORD_WEBHOOK_URL`、`CONSOLE_GITHUB_TOKEN`)は`.env`を使わず、gitignore済みの`mise.local.toml`に置く。テンプレートは`mise.local.toml.example`。
 - 値の投入は人が行う。推奨コマンドは次のとおり(値に`!`などの記号を含んでもシェル履歴展開で失敗せず、平文がシェル履歴に残らない)。zshでは次のように書く。
 
   ```sh
@@ -26,7 +26,7 @@ description: 本リポジトリ (atelier-works) の開発環境をセットア�
   read -rs -p 'DB_PASSWORD: ' v && mise set -E local DB_PASSWORD="$v"; unset v
   ```
 
-  他のキー(`WM_ADMIN_EMAIL`、`WM_ADMIN_PASSWORD`、`GITHUB_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`、`DISCORD_WEBHOOK_URL`)も同様にキー名を差し替えて実行する。`mise set -E local KEY=value`は`mise.local.toml`に`[env]`テーブルとして書き込まれ、`-E local`を付けずとも以降の`mise run` / `mise exec`に自動反映される(実機確認済み)。
+  他のキー(`WM_ADMIN_EMAIL`、`WM_ADMIN_PASSWORD`、`GITHUB_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`、`DISCORD_WEBHOOK_URL`、`CONSOLE_GITHUB_TOKEN`)も同様にキー名を差し替えて実行する。`mise set -E local KEY=value`は`mise.local.toml`に`[env]`テーブルとして書き込まれ、`-E local`を付けずとも以降の`mise run` / `mise exec`に自動反映される(実機確認済み)。
 - Claudeが担当するのは`mise.local.toml.example`(値の無いテンプレート)の更新までとする。実際の値の投入は人の作業であり、必要になったら作業を止めずに上記の投入コマンドを提示したうえで先に進む。
 - 投入した値の存在確認は、値そのものを表示せずに行う: `mise exec -- sh -c 'test -n "$DB_PASSWORD" && echo ok'`
 - 注意: `mise set -E local KEY=value`の直書きは、値に記号(`!`など)を含まない場合に限り動くが、平文のままシェル履歴に残るため推奨しない。
@@ -34,7 +34,7 @@ description: 本リポジトリ (atelier-works) の開発環境をセットア�
 
 ## 資格情報の取得手順
 
-`DB_PASSWORD`、`WM_ADMIN_EMAIL`、`WM_ADMIN_PASSWORD`は自分で決めた値でよい。次の3つは外部サービスから取得する。
+`DB_PASSWORD`、`WM_ADMIN_EMAIL`、`WM_ADMIN_PASSWORD`は自分で決めた値でよい。次の4つは外部サービスから取得する。
 
 ### GitHub Personal Access Token(`GITHUB_TOKEN`)
 
@@ -70,6 +70,21 @@ description: 本リポジトリ (atelier-works) の開発環境をセットア�
    ```sh
    read -rs 'v?DISCORD_WEBHOOK_URL: ' && mise set -E local DISCORD_WEBHOOK_URL="$v"; unset v
    ```
+
+### Consoleの取り込み用のPAT(`CONSOLE_GITHUB_TOKEN`)
+
+1. GitHub右上のアイコン → **Settings** → **Developer settings** → **Personal access tokens** → **Fine-grained tokens** → **Generate new token**を開く。
+2. **Token name**: `atelier-works-console-fetcher`、**Description**: `Factory Console fetcher (read CI artifacts)`
+3. **Resource owner**: このリポジトリの所有者。**Expiration**: Customで1年後(最長)。
+4. **Repository access**: Only select repositories → このリポジトリだけを選ぶ。
+5. **Repository permissions**: Actions = Read-only、Metadata = Read-only(自動で付与される)。ほかは付けない。**Account permissions**はすべてNo access。
+6. **Generate token**を押し、表示された`github_pat_...`を次のコマンドで投入する。`GITHUB_TOKEN`は流用しない(Actionsの読み取り権限が無く403になり、権限も広すぎる)。
+
+   ```sh
+   read -rs 'v?CONSOLE_GITHUB_TOKEN: ' && mise set -E local CONSOLE_GITHUB_TOKEN="$v"; unset v
+   ```
+
+取りに行くリポジトリは`mise.toml`の`[env]`の`CONSOLE_GITHUB_REPO`にある(フォークで動かすときだけ書き換える)。
 
 ## セットアップ手順
 

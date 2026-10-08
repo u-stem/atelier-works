@@ -12,6 +12,8 @@ WM_VERSION = "1.817.0"
 WM_HTTP_PORT = "8080"
 WM_BIND = "127.0.0.1"
 WM_BASE_URL = "http://127.0.0.1:8080"
+# console_fetcherが成果物を取りに行くリポジトリ。フォークで動かすときは書き換える。
+CONSOLE_GITHUB_REPO = "https://github.com/u-stem/atelier-works"
 CLAUDE_VERSION = "2.1.282"
 GH_VERSION = "2.101.0"
 GITLEAKS_VERSION = "8.30.1"
@@ -37,6 +39,14 @@ run = "docker compose -f infra/docker-compose.yml build windmill_worker"
 description = "Tail logs from the local Windmill stack"
 run = "docker compose -f infra/docker-compose.yml logs -f"
 
+[tasks."console:rollback"]
+description = "Switch the console back to the previous release and pin it"
+run = "docker compose -f infra/docker-compose.yml run --rm --no-deps console_fetcher rollback"
+
+[tasks."console:unpin"]
+description = "Remove the console pin so console_fetcher resumes automatic updates"
+run = "docker compose -f infra/docker-compose.yml run --rm --no-deps console_fetcher unpin"
+
 [tasks.setup]
 description = "Install mise-managed tools, project dependencies, and git hooks"
 run = """
@@ -51,7 +61,7 @@ description = "Update checkout, rebuild, restart, push, and migrate"
 run = """
 git pull --ff-only
 docker compose -f infra/docker-compose.yml pull
-docker compose -f infra/docker-compose.yml build windmill_worker
+docker compose -f infra/docker-compose.yml build windmill_worker console_fetcher
 docker compose -f infra/docker-compose.yml up -d
 npm ci --prefix f/factory/factory_console__raw_app --no-audit --no-fund
 wmill sync push --yes --keep-deleted

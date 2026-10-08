@@ -38,7 +38,7 @@ mise run setup
 ```bash
 read -rs 'v?DB_PASSWORD: ' && mise set -E local DB_PASSWORD="$v"; unset v
 # 他のキー(WM_ADMIN_EMAIL, WM_ADMIN_PASSWORD, GITHUB_TOKEN,
-# CLAUDE_CODE_OAUTH_TOKEN, DISCORD_WEBHOOK_URL)も同様に投入する
+# CLAUDE_CODE_OAUTH_TOKEN, DISCORD_WEBHOOK_URL, CONSOLE_GITHUB_TOKEN)も同様に投入する
 ```
 
 ```bash
@@ -77,6 +77,8 @@ mise run bootstrap
 | `mise run pull` | `wmill sync pull` |
 | `mise run migrate` | `wmill datatable migrate up` |
 | `mise run logs` | スタックのログを追跡する |
+| `mise run console:rollback` | Consoleを直前の版に戻して固定する(自動の更新を止める) |
+| `mise run console:unpin` | Consoleの固定を外し、自動の更新に戻す |
 
 ## リポジトリ構成
 
@@ -94,7 +96,7 @@ atelier-works/
   .agents/skills/                  # wmill が生成した共有エージェントスキル(Codex 等と共有)
   docs/                            # ドキュメント
   f/factory/                       # Windmill の script / flow / resource / variable / schedule
-  infra/                           # docker compose、worker Dockerfile、Caddyfile
+  infra/                           # docker compose、worker Dockerfile、console_fetcher、Caddyfile
   migrations/datatable/main/       # Data Table のマイグレーション
   scripts/                         # doctor.sh / bootstrap.sh / test-db.sh などの運用スクリプト
   templates/                       # factory_config resource のシードテンプレート(git 管理外の初期値)

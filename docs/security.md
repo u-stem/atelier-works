@@ -19,7 +19,7 @@
 - エラーメッセージや失敗記録(`job_failures`)に含める前にマスク処理を通す。マスク関数はテストで検証する。
 - `scripts/bootstrap.sh`はシークレットをコマンドライン引数に載せない設計だが、唯一の例外が`wmill workspace add --token <t>`(CLIに他の受け口が無い)。単一ユーザーのローカル環境が前提であれば実害は小さいが、共有マシンで実行する場合は`ps`などでプロセス引数が見えてしまう点に注意する。
 - workerに保持する`f/factory/wmill_token`はワークスペース`factory`に限定した有効期限180日のAPIトークンで、`mise run bootstrap`を再実行するたびに新しいトークンが発行されて置き換わり、旧トークンは失効する(これがローテーション手段になる)。期限切れは、`self_update`スケジュール(工程実装後)の失敗として現れる。
-- ホスト側で必要な秘密値(`DB_PASSWORD`、`WM_ADMIN_EMAIL`、`WM_ADMIN_PASSWORD`、`GITHUB_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`、`DISCORD_WEBHOOK_URL`)は`.env`ファイルを使わない。非秘密の設定は`mise.toml`の`[env]`にコミットし、個人の秘密値はgitignore済みの`mise.local.toml`(テンプレートは`mise.local.toml.example`)に置く。
+- ホスト側で必要な秘密値(`DB_PASSWORD`、`WM_ADMIN_EMAIL`、`WM_ADMIN_PASSWORD`、`GITHUB_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`、`DISCORD_WEBHOOK_URL`、`CONSOLE_GITHUB_TOKEN`)は`.env`ファイルを使わない。非秘密の設定は`mise.toml`の`[env]`にコミットし、個人の秘密値はgitignore済みの`mise.local.toml`(テンプレートは`mise.local.toml.example`)に置く。
 - 値の投入は人が行う。推奨コマンドは`read -rs 'v?KEY: ' && mise set -E local KEY="$v"; unset v`(zsh / bash共通。値に`!`などの記号を含んでもシェル履歴展開で失敗せず、平文がシェル履歴に残らない)。`mise set -E local KEY=value`は`mise.local.toml`に`[env]`テーブルとして書き込まれる(実機確認済み)。Claudeが担当するのは`mise.local.toml.example`(値の無いテンプレート)の更新までで、値の投入は人の作業。必要になったら作業を止めずに投入コマンドを提示して先に進む。具体的な手順は`factory-dev`スキル(`.claude/skills/factory-dev/SKILL.md`)を参照。`mise set -E local KEY=value`の直書きは、値に記号を含まない場合のみ動くが、平文のままシェル履歴に残るため推奨しない。
 - `infra/.env`ファイルは置かない(存在するとDocker Composeが自動的に読み込んでしまうため)。`mise run`タスク経由で解決された環境変数をcomposeファイル内で`${VAR:?run via mise}`として参照し、`mise run`を経由せず直接`docker compose`を叩いた場合はfail-fastで止まるようにする。
 
@@ -161,6 +161,23 @@ read -rs 'v?GITHUB_TOKEN: ' && mise set -E local GITHUB_TOKEN="$v"; unset v
 | 名前 | `Software Factory` |
 | 取得 | 「ウェブフックURLをコピー」でURLを取得する |
 | 投入 | `read -rs 'v?DISCORD_WEBHOOK_URL: ' && mise set -E local DISCORD_WEBHOOK_URL="$v"; unset v` |
+
+## CONSOLE_GITHUB_TOKENの取得
+
+Consoleの成果物を取り込む`console_fetcher`だけが使うfine-grained PAT。Factoryの`GITHUB_TOKEN`は流用しない(Actionsの読み取り権限が無く、他の権限が広すぎる)。
+
+| 項目 | 設定値 |
+| --- | --- |
+| Token name | `atelier-works-console-fetcher` |
+| Description | `Factory Console fetcher (read CI artifacts)` |
+| Resource owner | このリポジトリの所有者 |
+| Expiration | Customで1年後(最長)。期限切れは`console_fetcher`のログと`status.json`に`auth_failed`として出る |
+| Repository access | Only select repositories → このリポジトリだけ |
+| Repository permissions: Actions | Read-only |
+| Repository permissions: Metadata | Read-only(自動で付与される) |
+| それ以外のRepository permissions / Account permissions | No access |
+
+投入は`read -rs 'v?CONSOLE_GITHUB_TOKEN: ' && mise set -E local CONSOLE_GITHUB_TOKEN="$v"; unset v`。値は`console_fetcher`のコンテナの環境変数にだけ渡り、worker・Caddy・Windmillの変数には入らない。
 
 ## Windmillサーバーの公開範囲と初期パスワード
 

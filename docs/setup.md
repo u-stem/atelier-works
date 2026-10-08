@@ -8,8 +8,9 @@
 
 ## 資格情報の取得
 
-`GITHUB_TOKEN`(GitHub fine-grained PAT)、`CLAUDE_CODE_OAUTH_TOKEN`、`DISCORD_WEBHOOK_URL`の取得手順は
-[docs/security.md](security.md)の「GitHub PAT」「CLAUDE_CODE_OAUTH_TOKENの取得」「DISCORD_WEBHOOK_URLの取得」を参照する(ここでは重複させない)。
+`GITHUB_TOKEN`(GitHub fine-grained PAT)、`CONSOLE_GITHUB_TOKEN`(Consoleの取り込み用のPAT)、`CLAUDE_CODE_OAUTH_TOKEN`、`DISCORD_WEBHOOK_URL`の取得手順は
+[docs/security.md](security.md)の「GitHub PAT」「CONSOLE_GITHUB_TOKENの取得」「CLAUDE_CODE_OAUTH_TOKENの取得」「DISCORD_WEBHOOK_URLの取得」を参照する(ここでは重複させない)。
+取りに行くリポジトリは`mise.toml`の`CONSOLE_GITHUB_REPO`で、フォークで動かすときだけ書き換える。
 `DB_PASSWORD`、`WM_ADMIN_EMAIL`、`WM_ADMIN_PASSWORD`は自分で決めた値でよい。
 
 値の投入コマンドと`mise.local.toml.example`の使い方は`.claude/skills/factory-dev/SKILL.md`の「資格情報の取得手順」を参照(`read -rs`経由で`mise set -E local KEY=value`)。
@@ -44,6 +45,7 @@ mise run bootstrap      # ワークスペース作成、secret 投入、sync pus
 | Windmillサーバーの応答 | `curl http://127.0.0.1:8080/api/version` | `CE v1.817.0` |
 | ローカルとリモートの一致 | `mise exec -- wmill sync push --dry-run` | `0 changes` |
 | Data Table migration | `mise run test:db` | 全view(`v_inbox`など7つ)のSELECTとdown migrationのロールバックが成功し、末尾に`[test-db] OK` |
+| Consoleの取り込み | `mise exec -- docker compose -f infra/docker-compose.yml logs --tail 20 console_fetcher` | `"event":"status","state":"ok"`の行(初回は`"event":"deployed"`も)。`config_missing`なら`CONSOLE_GITHUB_TOKEN`の投入と`mise run up`を確かめる |
 
 ## トラブルシュート
 
