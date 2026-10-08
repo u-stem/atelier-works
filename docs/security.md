@@ -253,6 +253,7 @@ workerには`no-new-privileges:true`と、プロセス数の上限(`deploy.resou
 | --- | --- |
 | `mise.local.toml`と、その別名のファイル(`.mise.local.toml`、`mise.*.local.toml`)の`Read`と`Edit` | 秘密値そのものが書かれている |
 | `.env`、`infra/.env`、`infra/secrets.env`の`Read` | 秘密値が書かれうる |
+| `.wmill/`の`remotes.ndjson`の`Read`と`Edit` | wmill CLIのワークスペースのプロファイルで、APIトークンが書かれている |
 | `mise env`とその別名(`mise e`、`mise ev`、`mise env-vars`) | 展開した環境変数の一覧を出力する |
 | `mise config`、`mise cfg`、`mise toml` | 設定値を出力する |
 | 引数なしの`mise set` | 設定値の一覧を出力する |
@@ -263,6 +264,39 @@ workerには`no-new-privileges:true`と、プロセス数の上限(`deploy.resou
 | `docker exec`、`docker container exec`、`docker compose exec` | コンテナの中から環境変数を読める |
 
 値を指定して書き込むだけの`mise set -E local KEY=value`は拒否しない。これらのルールは、`mise run <task>`を通した迂回(タスクの中で秘密値を出力する処理など)は防げない。
+
+## Claude Codeのフック
+
+ClaudeがBashを実行する前に、`.claude/settings.json`が`scripts/claude-hooks/`のフックを動かす。
+ローカルとクラウドのどちらのセッションでも動く。
+FactoryのheadlessなClaudeの実行は`.claude/`を読まないので、このフックは動かない。
+
+| 拒否する操作 | 理由 |
+| --- | --- |
+| 無条件のforce push(`--force`、`-f`、`+`で始まるrefspec) | 公開した履歴を書き換えると、ほかの作業やFactoryの`pr_fix`の変更を消しうる |
+| `main`と`master`へのpush(`--all`と`--mirror`を含む) | mainへの変更は、PRとCIを通してだけ入れる |
+| subagentからのpush | subagentには、pushの前に確認する相手がいない |
+| `--no-verify`、`git commit -n`、`core.hooksPath`の変更、`LEFTHOOK=0` | lefthookの検査を飛ばすと、壊れた変更や秘密値がpushされる |
+| `LEFTHOOK_EXCLUDE`に`wmill-metadata`と`wmill-metadata-check`以外を書くこと | AGENTS.mdが飛ばしてよいとするのは、この2つだけである |
+| 秘密値のファイル(`mise.local.toml`とその別名、`.wmill/`の`remotes.ndjson`、`.env`系)を名前で指すコマンド | `Read`の拒否はBashに効かず、`cat`や`grep`で読むと値が会話の記録に残る |
+| 再帰的な`grep`、`-u`や`--no-ignore`を付けた`rg`、`git grep --no-index` | gitignore済みの秘密値のファイルまで読む |
+
+`--force-with-lease`と`--force-if-includes`は、subagentではないセッションが`main`と`master`以外のブランチへpushするときに限って許す。
+リモートが想定と違えば失敗するので、他の人の変更を上書きせずに、自分のブランチの履歴を直せる。
+
+拒否のメッセージには、代わりの操作を示す。
+再帰的な検索の代わりには、gitignoreを尊重する`rg`、`git grep`、Grepツールを使う。
+
+フックは、コマンドを字句に分けてから判定する。
+引用符の中の文字列やヒアドキュメントの本文には反応しない。
+`ls`や`git check-ignore`のように名前だけを扱うコマンドは、秘密値のファイルの名前を書いても拒否しない。
+
+判定できないときは、拒否する側に倒す。
+字句に分けられないコマンド、push先が実行するまで決まらないコマンド、bunが見つからないとき、フック自身の異常終了がこれに当たる。
+Claude Codeは終了コード2以外のフックの失敗ではツールの呼び出しを止めないので、`scripts/claude-hooks/run.sh`が失敗を終了コード2に揃える。
+
+変数に入れたパスやコマンド、シェルのエイリアス、`find -exec`、スクリプトのファイルの中身は判定しない。
+フックは誤操作を止める仕組みで、意図した迂回は防げない。
 
 ## draw.ioビューアーのプライバシー
 

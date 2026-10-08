@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // Claude CodeのPreToolUse(Bash)フック。取り消しにくいgitの操作と、gitのフックを飛ばす操作を拒否する。
 // - 無条件のforce push(`--force`、`-f`、`+`で始まるrefspec)。
-//   `--force-with-lease`と`--force-if-includes`は、保護しないブランチへのmainセッションのpushに限って許す
+//   `--force-with-lease`と`--force-if-includes`は、subagentではないセッションが保護しないブランチへpushするときに限って許す
 // - 保護するブランチ(`main`、`master`)へのpush
 // - subagentからのpush(subagentには確認する相手がいないため)
 // - `--no-verify`、`git commit -n`、`core.hooksPath`の変更、lefthookを止める環境変数

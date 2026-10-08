@@ -32,6 +32,8 @@
       "Edit(**/.mise.local.toml)",
       "Read(**/mise.*.local.toml)",
       "Edit(**/mise.*.local.toml)",
+      "Read(**/.wmill/**/remotes.ndjson)",
+      "Edit(**/.wmill/**/remotes.ndjson)",
       "Bash(mise env:*)",
       "Bash(mise env)",
       "Bash(mise set)",
@@ -55,6 +57,20 @@
       "Bash(printenv:*)",
       "Bash(env)",
       "Bash(cat mise.local.toml)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PROJECT_DIR}/scripts/claude-hooks/run.sh\" bash-guard",
+            "timeout": 30
+          }
+        ]
+      }
     ]
   }
 }
