@@ -188,6 +188,11 @@ export type LockProcess = {
   readonly lockPath: string | null;
   /** ロックファイルにflockを持つfdがある。falseなら、タグだけを持つ(fdを閉じた子孫など)。 */
   readonly holdsLock: boolean;
+  /**
+   * 生きているのに、environかfdの情報を権限などで読めなかった。trueならownerとlockPathはnullにする。
+   * 持ち主もロックとの関係も分からないので、関係するプロセスとして扱い、止めない。
+   */
+  readonly uninspectable: boolean;
 };
 
 /** 前の実行のプロセスがworktreeを使っている。messageには保持者を載せる(状態の理由と通知にそのまま使う)。 */
@@ -229,8 +234,11 @@ function quoteCommand(command: string): string {
 /** 保持者を状態の理由と通知に載せる1行にする。先頭5件だけを載せ、残りは件数にする。 */
 export function formatLockHolders(holders: readonly LockProcess[]): string {
   const shown = holders.slice(0, HOLDERS_SHOWN).map((holder) => {
-    const owner =
-      holder.owner === null ? "no owner" : formatLockOwner(holder.owner);
+    const owner = holder.uninspectable
+      ? "could not be inspected"
+      : holder.owner === null
+        ? "no owner"
+        : formatLockOwner(holder.owner);
     return `pid ${String(holder.pid)} (${String(holder.elapsedSec)}s, ${owner}) ${quoteCommand(holder.command)}`;
   });
   const rest = holders.length - shown.length;
@@ -334,6 +342,34 @@ async function readTextOr(
   }
 }
 
+/**
+ * `/proc`の読み取りの結果。"gone"はプロセスが終わった(ENOENT / ESRCH)、"unreadable"はそれ以外の失敗である。
+ * CAP_SYS_PTRACEの無いworkerでは、uidを変えたプロセスやダンプ不可にしたプロセスのenvironとfdはEACCES / EPERMで読めない。
+ * それを終わったプロセスと同じに飛ばすと、タグを隠したまま生き残るプロセスを見逃すので分ける。
+ * 他のエラーも、終わったと言えないので"unreadable"にする。
+ */
+type ProcRead<T> =
+  | { readonly kind: "ok"; readonly value: T }
+  | { readonly kind: "gone" }
+  | { readonly kind: "unreadable" };
+
+function isGoneError(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    "code" in err &&
+    (err.code === "ENOENT" || err.code === "ESRCH")
+  );
+}
+
+async function readProc<T>(read: () => Promise<T>): Promise<ProcRead<T>> {
+  try {
+    return { kind: "ok", value: await read() };
+  } catch (err) {
+    return isGoneError(err) ? { kind: "gone" } : { kind: "unreadable" };
+  }
+}
+
 async function readStatOf(fs: ProcFs, pid: number): Promise<ProcStat | null> {
   return parseProcStat(await readTextOr(fs, `/proc/${String(pid)}/stat`, ""));
 }
@@ -358,40 +394,36 @@ async function selfAndAncestors(
   return excluded;
 }
 
-/** pidのfdのうち、ロックファイル(dev/inoで照合)にflockを持つものがあるかを返す。読めないfdは飛ばす。 */
-async function holdsLockFile(
+/**
+ * pidのfdのうち、ロックファイル(dev/inoで照合)にflockを持つものがあるかを返す。
+ * 走査中に閉じたfdとプロセスは持たないものとして飛ばす。fdの一覧・リンク先・fdinfoのどれかが読めなければ"unreadable"を返す。
+ */
+async function lockFdState(
   fs: ProcFs,
   pid: number,
   lockId: string,
-): Promise<boolean> {
-  let fds: string[];
-  try {
-    fds = await fs.readdir(`/proc/${String(pid)}/fd`);
-  } catch {
-    return false;
+): Promise<"held" | "not_held" | "unreadable"> {
+  const fds = await readProc(() => fs.readdir(`/proc/${String(pid)}/fd`));
+  if (fds.kind === "unreadable") return "unreadable";
+  if (fds.kind === "gone") return "not_held";
+  for (const fd of fds.value) {
+    const id = await readProc(() => fs.fileId(`/proc/${String(pid)}/fd/${fd}`));
+    if (id.kind === "unreadable") return "unreadable";
+    if (id.kind === "gone" || id.value !== lockId) continue;
+    const info = await readProc(() =>
+      fs.readText(`/proc/${String(pid)}/fdinfo/${fd}`),
+    );
+    if (info.kind === "unreadable") return "unreadable";
+    if (info.kind === "ok" && hasFlockLine(info.value)) return "held";
   }
-  for (const fd of fds) {
-    let id: string;
-    try {
-      id = await fs.fileId(`/proc/${String(pid)}/fd/${fd}`);
-    } catch {
-      continue;
-    }
-    if (id !== lockId) continue;
-    if (
-      hasFlockLine(
-        await readTextOr(fs, `/proc/${String(pid)}/fdinfo/${fd}`, ""),
-      )
-    )
-      return true;
-  }
-  return false;
+  return "not_held";
 }
 
 /**
  * `/proc`を走査し、ロックファイルにflockを持つプロセスと、持ち主タグかロックファイルのタグを持つプロセスを返す。
  * 保持者の照合はパスではなくdev/inoとfdinfoのFLOCKの行で行う。
- * PID 1、自分と祖先、ゾンビ、読めないプロセス(走査中に終わったもの)は返さない。
+ * PID 1、自分と祖先、ゾンビ、statが読めないか走査中に終わったプロセスは返さない。
+ * 生きているのにenvironかfdの情報を読めないプロセスは、`uninspectable`を付けて返す(タグもロックとの関係も分からないため)。
  * ロックファイルが無ければ、保持者は探さずにタグだけで探す(ロックファイルを消されても残りを見逃さない)。
  */
 export async function scanLockProcesses(
@@ -416,11 +448,23 @@ export async function scanLockProcesses(
     if (excluded.has(pid)) continue;
     const procStat = await readStatOf(fs, pid);
     if (procStat === null || procStat.state === "Z") continue;
-    const environ = await readTextOr(fs, `/proc/${name}/environ`, "");
-    const owner = ownerFromEnviron(environ);
-    const lockPath = lockPathFromEnviron(environ);
-    const holdsLock = lockId !== null && (await holdsLockFile(fs, pid, lockId));
-    if (!holdsLock && owner === null && lockPath === null) continue;
+    const environ = await readProc(() => fs.readText(`/proc/${name}/environ`));
+    if (environ.kind === "gone") continue;
+    const fdState =
+      lockId === null ? "not_held" : await lockFdState(fs, pid, lockId);
+    const uninspectable =
+      environ.kind === "unreadable" || fdState === "unreadable";
+    const owner =
+      environ.kind === "ok" && !uninspectable
+        ? ownerFromEnviron(environ.value)
+        : null;
+    const lockPath =
+      environ.kind === "ok" && !uninspectable
+        ? lockPathFromEnviron(environ.value)
+        : null;
+    const holdsLock = fdState === "held";
+    if (!holdsLock && !uninspectable && owner === null && lockPath === null)
+      continue;
     const command = (await readTextOr(fs, `/proc/${name}/cmdline`, ""))
       .split("\0")
       .filter((part) => part !== "")
@@ -442,6 +486,7 @@ export async function scanLockProcesses(
       owner,
       lockPath,
       holdsLock,
+      uninspectable,
     });
   }
   return found;
@@ -475,9 +520,9 @@ export type LockReleasePlan =
 
 /**
  * 走査の結果から、何を止めるかを決める。
- * 関係するのは、このロックにflockを持つプロセスと、`FACTORY_LOCK_PATH`がこのロックファイルに一致するプロセス(fdを閉じた子孫)である。
- * 後者はロックが空いていても残りうる。別のロックファイルのタグを持つプロセスは関係しない。
- * 関係するプロセスに止めてよくないもの(`self`がnull、タグ無し、pr_fix、他の作業項目、自分のジョブ)が1つでもいれば、何も止めずに"busy"。
+ * 関係するのは、このロックにflockを持つプロセス、`FACTORY_LOCK_PATH`がこのロックファイルに一致するプロセス(fdを閉じた子孫)、調べられないプロセスである。
+ * 2つ目はロックが空いていても残りうる。別のロックファイルのタグを持つプロセスは関係しない。
+ * 関係するプロセスに止めてよくないもの(`self`がnull、タグ無し、調べられないもの、pr_fix、他の作業項目、自分のジョブ)が1つでもいれば、何も止めずに"busy"。
  * 一部だけ止めても排他は戻らず、持ち主の分からないプロセスを止めることになるため。
  * 関係するプロセスがすべて止めてよいものなら"stop"、関係するプロセスが無ければ"none"。
  */
@@ -487,7 +532,8 @@ export function planLockRelease(
   self: LockOwner | null,
 ): LockReleasePlan {
   const related = entries.filter(
-    (item) => item.holdsLock || item.lockPath === lock.lockPath,
+    (item) =>
+      item.holdsLock || item.uninspectable || item.lockPath === lock.lockPath,
   );
   const blockers = related.filter(
     (item) => self === null || !isStoppableBy(item.owner, self),

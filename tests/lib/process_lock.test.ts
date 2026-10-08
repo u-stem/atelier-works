@@ -30,6 +30,7 @@ import {
   WORKTREE_BUSY_REASON,
   WORKTREE_LOCK_BUSY_EXIT_CODE,
   WorktreeBusyError,
+  type WorktreeLock,
   WorktreeLockHeldInRunError,
   withWorktreeProcessLock,
   worktreeLockFor,
@@ -79,6 +80,7 @@ function entry(overrides: Partial<LockProcess> = {}): LockProcess {
     owner: OTHER_JOB,
     lockPath: LOCK.lockPath,
     holdsLock: true,
+    uninspectable: false,
     ...overrides,
   };
 }
@@ -93,11 +95,16 @@ type FakeProc = {
   >;
 };
 
+/** Nodeのfsが投げるのと同じ形(`code`を持つ)の例外。 */
+function errno(code: string): Error {
+  return Object.assign(new Error(code), { code });
+}
+
 /** pidごとの内容を持つ偽の/proc。ロックファイルのdev/inoはLOCK_ID。 */
 function fakeProcFs(procs: Record<string, FakeProc>): ProcFs {
   const proc = (path: string): FakeProc => {
     const found = procs[path.split("/")[2] ?? ""];
-    if (found === undefined) throw new Error("ENOENT");
+    if (found === undefined) throw errno("ENOENT");
     return found;
   };
   return {
@@ -114,13 +121,13 @@ function fakeProcFs(procs: Record<string, FakeProc>): ProcFs {
       if (kind === "cmdline") return p.cmdline ?? "";
       const info = p.fds?.[fd]?.fdinfo;
       if (kind === "fdinfo" && info !== undefined) return info;
-      throw new Error("ENOENT");
+      throw errno("ENOENT");
     },
     fileId: async (path) => {
       if (path === LOCK.lockPath) return LOCK_ID;
       const [, , , , fd = ""] = path.split("/");
       const id = proc(path).fds?.[fd]?.id;
-      if (id === undefined) throw new Error("ENOENT");
+      if (id === undefined) throw errno("ENOENT");
       return id;
     },
   };
@@ -543,6 +550,22 @@ describe("scanLockProcesses", () => {
 describe("planLockRelease", () => {
   const OTHER_LOCK = "/w/repo/.other.process.lock";
 
+  test("is busy for a process that could not be inspected even when nothing holds the lock", () => {
+    const plan = planLockRelease(
+      [
+        entry({
+          owner: null,
+          lockPath: null,
+          holdsLock: false,
+          uninspectable: true,
+        }),
+      ],
+      LOCK,
+      THIS_JOB,
+    );
+    expect(plan.kind).toBe("busy");
+  });
+
   test("stops holders from another job of the same work item", () => {
     expect(planLockRelease([entry()], LOCK, THIS_JOB).kind).toBe("stop");
   });
@@ -667,6 +690,14 @@ describe("formatLockHolders", () => {
     expect(formatLockHolders([entry({ owner: null })])).toBe(
       "pid 42 (3600s, no owner) `claude -p --x`",
     );
+  });
+
+  test("says when a holder could not be inspected", () => {
+    expect(
+      formatLockHolders([
+        entry({ owner: null, lockPath: null, uninspectable: true }),
+      ]),
+    ).toBe("pid 42 (3600s, could not be inspected) `claude -p --x`");
   });
 
   test("masks secrets in the command", () => {
@@ -985,47 +1016,206 @@ describe("ensureWorktreeLockFree", () => {
   });
 });
 
-describe("a lock holder whose environment cannot be read", () => {
-  /** pid 10がロックを持つが、environの読み取りだけが失敗する偽の/proc。 */
-  function unreadableEnvironFs(): ProcFs {
-    const base = fakeProcFs({
-      ...SELF_PROCS,
-      "10": {
-        stat: statLine(10, 1, 10, 1),
-        environ: `${LOCK_OWNER_ENV}=implement:3:job-a\0`,
-        fds: { "3": { id: LOCK_ID, fdinfo: FLOCK_LINE } },
-      },
-    });
+describe("a process that cannot be inspected", () => {
+  /** ロックを持ち、持ち主タグとロックファイルのタグを持つpid 10。 */
+  const TAGGED_HOLDER: FakeProc = {
+    stat: statLine(10, 1, 10, 1),
+    environ: `${LOCK_OWNER_ENV}=implement:3:job-a\0${LOCK_PATH_ENV}=${LOCK.lockPath}\0`,
+    fds: { "3": { id: LOCK_ID, fdinfo: FLOCK_LINE } },
+  };
+
+  /** `path`の読み取り(`method`)だけを`err`で失敗させる偽の/proc。 */
+  function failingProcFs(
+    procs: Record<string, FakeProc>,
+    method: "readdir" | "readText" | "fileId",
+    path: string,
+    err: Error,
+  ): ProcFs {
+    const base = fakeProcFs({ ...SELF_PROCS, ...procs });
+    const failOn =
+      (read: (target: string) => Promise<string>) =>
+      async (target: string): Promise<string> => {
+        if (target === path) throw err;
+        return read(target);
+      };
     return {
-      ...base,
-      readText: async (path) => {
-        if (path.endsWith("/environ")) throw new Error("EACCES");
-        return base.readText(path);
+      readdir: async (target) => {
+        if (method === "readdir" && target === path) throw err;
+        return base.readdir(target);
       },
+      readText: method === "readText" ? failOn(base.readText) : base.readText,
+      fileId: method === "fileId" ? failOn(base.fileId) : base.fileId,
     };
   }
 
+  const scanFailing = (
+    method: "readdir" | "readText" | "fileId",
+    path: string,
+    err: Error,
+    lock: WorktreeLock = LOCK,
+  ) =>
+    scanLockProcesses(
+      lock,
+      failingProcFs({ "10": TAGGED_HOLDER }, method, path, err),
+      900,
+    );
+
+  test("lists a process whose environment cannot be read", async () => {
+    const entries = await scanFailing(
+      "readText",
+      "/proc/10/environ",
+      errno("EACCES"),
+    );
+    expect(entries[0]?.uninspectable).toBe(true);
+  });
+
+  test("does not trust the owner tag of a process whose fds cannot be read", async () => {
+    const entries = await scanFailing("readdir", "/proc/10/fd", errno("EPERM"));
+    expect(entries[0]?.owner).toBeNull();
+  });
+
+  test("does not trust the lock file tag of a process whose fds cannot be read", async () => {
+    const entries = await scanFailing("readdir", "/proc/10/fd", errno("EPERM"));
+    expect(entries[0]?.lockPath).toBeNull();
+  });
+
+  test("lists a process whose fd target cannot be read", async () => {
+    const entries = await scanFailing(
+      "fileId",
+      "/proc/10/fd/3",
+      errno("EACCES"),
+    );
+    expect(entries[0]?.uninspectable).toBe(true);
+  });
+
+  test("lists a process whose fdinfo cannot be read", async () => {
+    const entries = await scanFailing(
+      "readText",
+      "/proc/10/fdinfo/3",
+      errno("EACCES"),
+    );
+    expect(entries[0]?.uninspectable).toBe(true);
+  });
+
+  test("treats a read error without an errno code as uninspectable", async () => {
+    const entries = await scanFailing(
+      "readText",
+      "/proc/10/environ",
+      new Error("boom"),
+    );
+    expect(entries[0]?.uninspectable).toBe(true);
+  });
+
+  test("lists an uninspectable process even when the lock file is gone", async () => {
+    const missing = worktreeLockFor("/nowhere/wt", (path) => path);
+    const entries = await scanFailing(
+      "readText",
+      "/proc/10/environ",
+      errno("EACCES"),
+      missing,
+    );
+    expect(entries[0]?.uninspectable).toBe(true);
+  });
+
+  test("skips a process whose environment is gone", async () => {
+    const entries = await scanFailing(
+      "readText",
+      "/proc/10/environ",
+      errno("ENOENT"),
+    );
+    expect(entries).toHaveLength(0);
+  });
+
+  test("skips a process that exits while its environment is read", async () => {
+    const entries = await scanFailing(
+      "readText",
+      "/proc/10/environ",
+      errno("ESRCH"),
+    );
+    expect(entries).toHaveLength(0);
+  });
+
+  test("does not count a fd that closed during the scan", async () => {
+    const entries = await scanFailing(
+      "fileId",
+      "/proc/10/fd/3",
+      errno("ENOENT"),
+    );
+    expect(entries[0]?.holdsLock).toBe(false);
+  });
+
+  // カーネルスレッドのように、environが空でfdが無いプロセスは関係しない。
+  test("ignores a readable process with an empty environment and no fds", async () => {
+    const entries = await scanLockProcesses(
+      LOCK,
+      fakeProcFs({
+        ...SELF_PROCS,
+        "2": { stat: statLine(2, 0, 0, 1), fds: {} },
+      }),
+      900,
+    );
+    expect(entries).toHaveLength(0);
+  });
+
   test("makes the plan busy", async () => {
-    const entries = await scanLockProcesses(LOCK, unreadableEnvironFs(), 900);
+    const entries = await scanFailing(
+      "readText",
+      "/proc/10/environ",
+      errno("EACCES"),
+    );
     expect(planLockRelease(entries, LOCK, THIS_JOB).kind).toBe("busy");
   });
 
-  test("is not stopped", async () => {
-    const fake = createFakeCommandRunner(busyTimes(4));
-    const stopped: (readonly LockProcess[])[] = [];
+  /** environが読めないpid 10を返し続ける走査で、止めた対象を記録する依存。 */
+  function uninspectableDeps(stopped: (readonly LockProcess[])[]) {
     const deps: LockReleaseDeps = {
-      scan: (lock) => scanLockProcesses(lock, unreadableEnvironFs(), 900),
+      scan: (lock) =>
+        scanLockProcesses(
+          lock,
+          failingProcFs(
+            { "10": TAGGED_HOLDER },
+            "readText",
+            "/proc/10/environ",
+            errno("EACCES"),
+          ),
+          900,
+        ),
       stop: async (targets) => {
         stopped.push(targets);
       },
       sleep: async () => {},
     };
+    return deps;
+  }
+
+  test("throws WorktreeBusyError", async () => {
+    const fake = createFakeCommandRunner(busyTimes(4));
+    await expect(
+      ensureWorktreeLockFree({
+        run: fake.run,
+        lock: LOCK,
+        policy: { self: THIS_JOB, recheck: async () => {} },
+        deps: uninspectableDeps([]),
+      }),
+    ).rejects.toBeInstanceOf(WorktreeBusyError);
+  });
+
+  test("is not stopped", async () => {
+    const fake = createFakeCommandRunner(busyTimes(4));
+    const stopped: (readonly LockProcess[])[] = [];
     await ensureWorktreeLockFree({
       run: fake.run,
       lock: LOCK,
       policy: { self: THIS_JOB, recheck: async () => {} },
-      deps,
-    }).catch(() => undefined);
+      deps: uninspectableDeps(stopped),
+    }).then(
+      () => {
+        throw new Error("expected WorktreeBusyError");
+      },
+      (err: unknown) => {
+        if (!(err instanceof WorktreeBusyError)) throw err;
+      },
+    );
     expect(stopped).toHaveLength(0);
   });
 });
