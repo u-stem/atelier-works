@@ -37,6 +37,73 @@ function createFakeSqlClient(responses: SqlRow[][] = []): {
   return { sql, calls };
 }
 
+type QueryName =
+  | "failures"
+  | "humanOutcomes"
+  | "humanOutcomeCount"
+  | "rejectedCount"
+  | "fixReply"
+  | "reviewFindings"
+  | "unresolvedNotices"
+  | "deploymentHistory"
+  | "versionBounds";
+
+const QUERY_NAMES: readonly QueryName[] = [
+  "failures",
+  "humanOutcomes",
+  "humanOutcomeCount",
+  "rejectedCount",
+  "fixReply",
+  "reviewFindings",
+  "unresolvedNotices",
+  "deploymentHistory",
+  "versionBounds",
+];
+
+/**
+ * 問い合わせを見分けるSQLの断片。空白は1つにそろえた文面と比べる。
+ * 問い合わせの順序に依存せず、応答の割り当てと呼び出しの取り出しをするため。
+ */
+const QUERY_FRAGMENTS: Record<QueryName, string> = {
+  failures: "FROM factory.job_failures jf",
+  humanOutcomes: "coalesce(wie.note",
+  humanOutcomeCount: "SELECT count(*) AS count FROM factory.work_item_events",
+  rejectedCount: "SELECT count(*) AS count FROM factory.approval_requests",
+  fixReply: "jsonb_array_elements(fr.replies)",
+  reviewFindings: "jsonb_array_elements(rv.findings)",
+  unresolvedNotices: "resolved = false",
+  deploymentHistory: "SELECT occurred_at, sha_from, sha_to, result",
+  versionBounds: "AS start_sha",
+};
+
+/**
+ * SQLの文面から問い合わせの種類を決め、種類ごとに用意した行を返す偽の`SqlClient`。
+ * 用意の無い問い合わせには空の結果を返す。
+ */
+function createRoutedSqlClient(
+  rows: Partial<Record<QueryName, SqlRow[]>> = {},
+): { sql: SqlClient; calls: FakeCall[] } {
+  const calls: FakeCall[] = [];
+  const sql: SqlClient = (strings, ...values) => {
+    const text = strings.join(" ? ").replace(/\s+/g, " ");
+    calls.push({ text, values });
+    const name = QUERY_NAMES.find((n) => text.includes(QUERY_FRAGMENTS[n]));
+    const routed = name === undefined ? undefined : rows[name];
+    return {
+      fetch: () => Promise.resolve(routed ?? []),
+      execute: () => Promise.resolve(),
+    };
+  };
+  return { sql, calls };
+}
+
+function findCall(
+  calls: readonly FakeCall[],
+  name: QueryName,
+): FakeCall | undefined {
+  return calls.find((call) => call.text.includes(QUERY_FRAGMENTS[name]));
+}
+
 const PERIOD: AuditPeriod = {
   start: new Date("2026-09-20T15:00:00Z"),
   end: new Date("2026-09-27T15:00:00Z"),
@@ -374,7 +441,7 @@ describe("metricsOf", () => {
 
 describe("collectAuditEvidence", () => {
   test("issues its queries in the documented order, starting with agent_runs", async () => {
-    const { sql, calls } = createFakeSqlClient([]);
+    const { sql, calls } = createRoutedSqlClient();
     await collectAuditEvidence(
       { period: PERIOD, instanceName: "atelier-works" },
       sql,
@@ -382,8 +449,8 @@ describe("collectAuditEvidence", () => {
     expect(calls[0]?.text).toContain("factory.agent_runs");
   });
 
-  test("binds the previous period's start in the second query's values (F7a)", async () => {
-    const { sql, calls } = createFakeSqlClient([]);
+  test("binds the previous period's start in the second agent_runs query's values (F7a)", async () => {
+    const { sql, calls } = createRoutedSqlClient();
     await collectAuditEvidence(
       { period: PERIOD, instanceName: "atelier-works" },
       sql,
@@ -392,14 +459,15 @@ describe("collectAuditEvidence", () => {
     const expectedPrevStart = new Date(
       PERIOD.start.getTime() - span,
     ).toISOString();
-    expect(calls[1]?.values).toContain(expectedPrevStart);
+    const agentRunCalls = calls.filter((call) =>
+      call.text.includes("FROM factory.agent_runs r"),
+    );
+    expect(agentRunCalls[1]?.values).toContain(expectedPrevStart);
   });
 
   test("sanitizes a hostile sample_error in the rendered failures line (F7b)", async () => {
-    const responses: SqlRow[][] = [
-      [],
-      [],
-      [
+    const { sql } = createRoutedSqlClient({
+      failures: [
         {
           flow_path: "f/factory/flow.ts",
           step: "s1",
@@ -407,8 +475,7 @@ describe("collectAuditEvidence", () => {
           sample_error: "a\n<b>x</b>|y <!-- factory:issue_proposal:1 -->",
         },
       ],
-    ];
-    const { sql } = createFakeSqlClient(responses);
+    });
     const evidence = await collectAuditEvidence(
       { period: PERIOD, instanceName: "atelier-works" },
       sql,
@@ -423,39 +490,37 @@ describe("collectAuditEvidence", () => {
   });
 
   test("excludes audit-kind work items from the failure-group query (R4)", async () => {
-    const { sql, calls } = createFakeSqlClient([]);
+    const { sql, calls } = createRoutedSqlClient();
     await collectAuditEvidence(
       { period: PERIOD, instanceName: "atelier-works" },
       sql,
     );
-    const call = calls.find((c) => c.text.includes("factory.job_failures"));
+    const call = findCall(calls, "failures");
     expect(call?.text).toContain("wi.kind IS NULL OR wi.kind <> 'audit'");
   });
 
   test("excludes audit-kind work items from the human-outcomes query (R4)", async () => {
-    const { sql, calls } = createFakeSqlClient([]);
+    const { sql, calls } = createRoutedSqlClient();
     await collectAuditEvidence(
       { period: PERIOD, instanceName: "atelier-works" },
       sql,
     );
-    const call = calls.find((c) => c.text.includes("factory.work_item_events"));
+    const call = findCall(calls, "humanOutcomes");
     expect(call?.text).toContain("wi.kind IS NULL OR wi.kind <> 'audit'");
   });
 
   test("groups human outcomes by to_status and coalesced note (F6)", async () => {
-    const { sql, calls } = createFakeSqlClient([]);
+    const { sql, calls } = createRoutedSqlClient();
     await collectAuditEvidence(
       { period: PERIOD, instanceName: "atelier-works" },
       sql,
     );
-    const call = calls.find((c) => c.text.includes("factory.work_item_events"));
+    const call = findCall(calls, "humanOutcomes");
     expect(call?.text).toContain("GROUP BY 1, 2");
   });
 
-  test("reads rejected_count from an uncapped count(*) query (query 14)", async () => {
-    const responses: SqlRow[][] = Array.from({ length: 13 }, () => []);
-    responses.push([{ count: 45 }]);
-    const { sql } = createFakeSqlClient(responses);
+  test("reads rejected_count from an uncapped count(*) query ", async () => {
+    const { sql } = createRoutedSqlClient({ rejectedCount: [{ count: 45 }] });
     const evidence = await collectAuditEvidence(
       { period: PERIOD, instanceName: "atelier-works" },
       sql,
@@ -463,10 +528,10 @@ describe("collectAuditEvidence", () => {
     expect(evidence.rejected_count).toBe(45);
   });
 
-  test("reads needs_human_count from an uncapped count(*) query (query 15)", async () => {
-    const responses: SqlRow[][] = Array.from({ length: 14 }, () => []);
-    responses.push([{ count: 52 }]);
-    const { sql } = createFakeSqlClient(responses);
+  test("reads needs_human_count from an uncapped count(*) query ", async () => {
+    const { sql } = createRoutedSqlClient({
+      humanOutcomeCount: [{ count: 52 }],
+    });
     const evidence = await collectAuditEvidence(
       { period: PERIOD, instanceName: "atelier-works" },
       sql,
@@ -475,58 +540,42 @@ describe("collectAuditEvidence", () => {
   });
 
   test("counts rejections without a LIMIT", async () => {
-    const { sql, calls } = createFakeSqlClient([]);
+    const { sql, calls } = createRoutedSqlClient();
     await collectAuditEvidence(
       { period: PERIOD, instanceName: "atelier-works" },
       sql,
     );
-    expect(calls[13]?.text).not.toContain("LIMIT");
+    expect(findCall(calls, "rejectedCount")?.text).not.toContain("LIMIT");
   });
 
   test("filters the needs_human count by the same period as the grouped query", async () => {
-    const { sql, calls } = createFakeSqlClient([]);
+    const { sql, calls } = createRoutedSqlClient();
     await collectAuditEvidence(
       { period: PERIOD, instanceName: "atelier-works" },
       sql,
     );
-    expect(calls[14]?.values).toEqual([
+    expect(findCall(calls, "humanOutcomeCount")?.values).toEqual([
       PERIOD.start.toISOString(),
       PERIOD.end.toISOString(),
     ]);
   });
 
   test("adds a deterministic tie-breaker to the failure-group ORDER BY (F6)", async () => {
-    const { sql, calls } = createFakeSqlClient([]);
+    const { sql, calls } = createRoutedSqlClient();
     await collectAuditEvidence(
       { period: PERIOD, instanceName: "atelier-works" },
       sql,
     );
-    const call = calls.find((c) => c.text.includes("factory.job_failures"));
+    const call = findCall(calls, "failures");
     expect(call?.text).toContain("ORDER BY count DESC, f.flow_path, f.step");
   });
 });
 
-/** `collectAuditEvidence`の応答のうち、指定した位置だけに行を入れる。 */
-function responsesWithRowsAt(
-  index: number,
-  rows: SqlRow[],
-  length = 15,
-): SqlRow[][] {
-  const responses: SqlRow[][] = Array.from({ length }, () => []);
-  responses[index] = rows;
-  return responses;
-}
-
-const FIX_REPLY_INDEX = 6;
-const REVIEW_FINDING_INDEX = 7;
-const FAILURE_INDEX = 2;
-const HUMAN_OUTCOME_INDEX = 4;
-
 describe("unset values (missing keys)", () => {
   test("labels a null reply decision as 未設定", async () => {
-    const { sql } = createFakeSqlClient(
-      responsesWithRowsAt(FIX_REPLY_INDEX, [{ key: null, count: 3 }]),
-    );
+    const { sql } = createRoutedSqlClient({
+      fixReply: [{ key: null, count: 3 }],
+    });
     const evidence = await collectAuditEvidence(
       { period: PERIOD, instanceName: "atelier-works" },
       sql,
@@ -535,12 +584,12 @@ describe("unset values (missing keys)", () => {
   });
 
   test("merges null and empty-string keys into one 未設定 group", async () => {
-    const { sql } = createFakeSqlClient(
-      responsesWithRowsAt(REVIEW_FINDING_INDEX, [
+    const { sql } = createRoutedSqlClient({
+      reviewFindings: [
         { key: null, count: 1 },
         { key: "", count: 1 },
-      ]),
-    );
+      ],
+    });
     const evidence = await collectAuditEvidence(
       { period: PERIOD, instanceName: "atelier-works" },
       sql,
@@ -549,13 +598,13 @@ describe("unset values (missing keys)", () => {
   });
 
   test("orders groups by count descending, then key, so the output is stable", async () => {
-    const { sql } = createFakeSqlClient(
-      responsesWithRowsAt(REVIEW_FINDING_INDEX, [
+    const { sql } = createRoutedSqlClient({
+      reviewFindings: [
         { key: "nits", count: 1 },
         { key: "must", count: 1 },
         { key: "imo", count: 5 },
-      ]),
-    );
+      ],
+    });
     const evidence = await collectAuditEvidence(
       { period: PERIOD, instanceName: "atelier-works" },
       sql,
@@ -568,12 +617,12 @@ describe("unset values (missing keys)", () => {
   });
 
   test("renders the unset reply decision with its count", async () => {
-    const { sql } = createFakeSqlClient(
-      responsesWithRowsAt(FIX_REPLY_INDEX, [
+    const { sql } = createRoutedSqlClient({
+      fixReply: [
         { key: "fixed", count: 6 },
         { key: null, count: 3 },
-      ]),
-    );
+      ],
+    });
     const evidence = await collectAuditEvidence(
       { period: PERIOD, instanceName: "atelier-works" },
       sql,
@@ -582,12 +631,12 @@ describe("unset values (missing keys)", () => {
   });
 
   test("renders the unset finding kind with its count", async () => {
-    const { sql } = createFakeSqlClient(
-      responsesWithRowsAt(REVIEW_FINDING_INDEX, [
+    const { sql } = createRoutedSqlClient({
+      reviewFindings: [
         { key: "must", count: 5 },
         { key: null, count: 2 },
-      ]),
-    );
+      ],
+    });
     const evidence = await collectAuditEvidence(
       { period: PERIOD, instanceName: "atelier-works" },
       sql,
@@ -596,9 +645,9 @@ describe("unset values (missing keys)", () => {
   });
 
   test("never renders a blank key in the fix-round and review sections", async () => {
-    const { sql } = createFakeSqlClient(
-      responsesWithRowsAt(FIX_REPLY_INDEX, [{ key: null, count: 3 }]),
-    );
+    const { sql } = createRoutedSqlClient({
+      fixReply: [{ key: null, count: 3 }],
+    });
     const evidence = await collectAuditEvidence(
       { period: PERIOD, instanceName: "atelier-works" },
       sql,
@@ -607,16 +656,16 @@ describe("unset values (missing keys)", () => {
   });
 
   test("labels a failure group without a step as 未設定", async () => {
-    const { sql } = createFakeSqlClient(
-      responsesWithRowsAt(FAILURE_INDEX, [
+    const { sql } = createRoutedSqlClient({
+      failures: [
         {
           flow_path: "f/factory/flow.ts",
           step: null,
           count: 2,
           sample_error: "e",
         },
-      ]),
-    );
+      ],
+    });
     const evidence = await collectAuditEvidence(
       { period: PERIOD, instanceName: "atelier-works" },
       sql,
@@ -627,11 +676,9 @@ describe("unset values (missing keys)", () => {
   });
 
   test("labels a human outcome without a note as 未設定", async () => {
-    const { sql } = createFakeSqlClient(
-      responsesWithRowsAt(HUMAN_OUTCOME_INDEX, [
-        { to_status: "needs_human", note: "", count: 2 },
-      ]),
-    );
+    const { sql } = createRoutedSqlClient({
+      humanOutcomes: [{ to_status: "needs_human", note: "", count: 2 }],
+    });
     const evidence = await collectAuditEvidence(
       { period: PERIOD, instanceName: "atelier-works" },
       sql,
@@ -641,8 +688,6 @@ describe("unset values (missing keys)", () => {
     );
   });
 });
-
-const UNRESOLVED_NOTICE_INDEX = 9;
 
 describe("unresolved notices split by period", () => {
   const rows: SqlRow[] = [
@@ -675,9 +720,9 @@ describe("unresolved notices split by period", () => {
   async function evidenceWith(
     noticeRows: SqlRow[],
   ): Promise<{ evidence: AuditEvidence; calls: FakeCall[] }> {
-    const { sql, calls } = createFakeSqlClient(
-      responsesWithRowsAt(UNRESOLVED_NOTICE_INDEX, noticeRows),
-    );
+    const { sql, calls } = createRoutedSqlClient({
+      unresolvedNotices: noticeRows,
+    });
     const evidence = await collectAuditEvidence(
       { period: PERIOD, instanceName: "atelier-works" },
       sql,
@@ -750,14 +795,12 @@ describe("unresolved notices split by period", () => {
 
   test("only counts notices created before the end of the period", async () => {
     const { calls } = await evidenceWith([]);
-    expect(calls[UNRESOLVED_NOTICE_INDEX]?.values).toContain(
+    expect(findCall(calls, "unresolvedNotices")?.values).toContain(
       PERIOD.end.toISOString(),
     );
   });
 });
 
-const DEPLOYMENT_HISTORY_INDEX = 15;
-const VERSION_BOUNDS_INDEX = 16;
 const SHA_A = "aaaaaaa1111111111111111111111111aaaaaaaa";
 const SHA_B = "bbbbbbb2222222222222222222222222bbbbbbbb";
 const SHA_C = "ccccccc3333333333333333333333333cccccccc";
@@ -770,13 +813,10 @@ const FAILURE_BASE: SqlRow = {
 };
 
 async function renderWithFailure(extra: SqlRow, bounds?: SqlRow) {
-  const responses = responsesWithRowsAt(
-    FAILURE_INDEX,
-    [{ ...FAILURE_BASE, ...extra }],
-    17,
-  );
-  if (bounds !== undefined) responses[VERSION_BOUNDS_INDEX] = [bounds];
-  const { sql } = createFakeSqlClient(responses);
+  const { sql } = createRoutedSqlClient({
+    failures: [{ ...FAILURE_BASE, ...extra }],
+    versionBounds: bounds === undefined ? [] : [bounds],
+  });
   const evidence = await collectAuditEvidence(
     { period: PERIOD, instanceName: "atelier-works" },
     sql,
@@ -850,21 +890,21 @@ describe("running version of each failure group", () => {
   });
 
   test("derives the version only from successful deployments", async () => {
-    const { sql, calls } = createFakeSqlClient([]);
+    const { sql, calls } = createRoutedSqlClient();
     await collectAuditEvidence(
       { period: PERIOD, instanceName: "atelier-works" },
       sql,
     );
-    expect(calls[FAILURE_INDEX]?.text).toContain("d.result = 'success'");
+    expect(findCall(calls, "failures")?.text).toContain("d.result = 'success'");
   });
 
   test("falls back to the version a later deployment came from", async () => {
-    const { sql, calls } = createFakeSqlClient([]);
+    const { sql, calls } = createRoutedSqlClient();
     await collectAuditEvidence(
       { period: PERIOD, instanceName: "atelier-works" },
       sql,
     );
-    expect(calls[FAILURE_INDEX]?.text).toContain("d.sha_from");
+    expect(findCall(calls, "failures")?.text).toContain("d.sha_from");
   });
 });
 
@@ -888,13 +928,10 @@ describe("deployment history and running versions", () => {
     history: SqlRow[],
     bounds: SqlRow[] = [],
   ) {
-    const responses = responsesWithRowsAt(
-      DEPLOYMENT_HISTORY_INDEX,
-      history,
-      17,
-    );
-    responses[VERSION_BOUNDS_INDEX] = bounds;
-    const { sql, calls } = createFakeSqlClient(responses);
+    const { sql, calls } = createRoutedSqlClient({
+      deploymentHistory: history,
+      versionBounds: bounds,
+    });
     const evidence = await collectAuditEvidence(
       { period: PERIOD, instanceName: "atelier-works" },
       sql,
@@ -912,7 +949,7 @@ describe("deployment history and running versions", () => {
 
   test("fetches only the latest 30 deployments", async () => {
     const { calls } = await evidenceWithDeployments([]);
-    expect(calls[DEPLOYMENT_HISTORY_INDEX]?.text).toContain("LIMIT 30");
+    expect(findCall(calls, "deploymentHistory")?.text).toContain("LIMIT 30");
   });
 
   test("reads the running versions at the period start and end", async () => {
@@ -927,7 +964,9 @@ describe("deployment history and running versions", () => {
 
   test("derives the running versions from successful deployments only", async () => {
     const { calls } = await evidenceWithDeployments([]);
-    expect(calls[VERSION_BOUNDS_INDEX]?.text).toContain("result = 'success'");
+    expect(findCall(calls, "versionBounds")?.text).toContain(
+      "result = 'success'",
+    );
   });
 
   test("renders the running version at the period start as a fixed line", async () => {
