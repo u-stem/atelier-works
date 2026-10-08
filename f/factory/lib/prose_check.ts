@@ -98,9 +98,18 @@ const HEADING_PATTERN = /^\s{0,3}#{1,6}\s/;
 const TABLE_ROW_PATTERN = /^\s*\|/;
 const HTML_COMMENT_PATTERN = /^\s*<!--.*-->\s*$/;
 const INLINE_CODE_PATTERN = /`[^`\n]*`/g;
-const LINK_TARGET_PATTERN = /\]\([^)\s]*\)/g;
+/**
+ * リンク先の`](...)`。中身に`(`を許さないのは、閉じない`](`が続く入力で、
+ * 各位置からの照合が行末まで進んで全体が2乗の時間になるのを防ぐため。
+ */
+const LINK_TARGET_PATTERN = /\]\([^()\s]*\)/g;
 const BARE_URL_PATTERN = /https?:\/\/\S+/g;
-const QUOTED_PATTERN = /「[^」]*」|『[^』]*』|"[^"\n]*"/g;
+/**
+ * 「」と『』と""で囲んだ引用。中身に開き括弧を許さないのは、閉じない「が続く入力で、
+ * 各位置からの照合が行末まで進んで全体が2乗の時間になるのを防ぐため。
+ * 入れ子の引用は、内側の引用だけが一致する。
+ */
+const QUOTED_PATTERN = /「[^「」]*」|『[^『』]*』|"[^"\n]*"/g;
 /** 箇条書きの記号とチェックボックス(`- [ ] `)。チェックボックスの`]`は英字として扱わない。 */
 const TASK_LIST_MARKER_PATTERN = /^(\s*(?:[-*+]|\d+\.)\s+)\[[ xX]\]\s/;
 const BOLD_LEAD_ITEM_PATTERN = /^\s*(?:[-*+]|\d+\.)\s+\*\*/;

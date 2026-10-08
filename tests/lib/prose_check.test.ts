@@ -189,3 +189,32 @@ describe("checkProse exemptions", () => {
     expect(found).toEqual([]);
   });
 });
+
+describe("checkProse on adversarial input", () => {
+  test("finishes quickly on a long run of unclosed corner brackets", () => {
+    const line = "「".repeat(100000);
+    const started = performance.now();
+
+    checkProse(line, REPO_DOC_RULES);
+
+    expect(performance.now() - started).toBeLessThan(1000);
+  });
+
+  test("finishes quickly on a long run of unclosed white corner brackets", () => {
+    const line = "『".repeat(100000);
+    const started = performance.now();
+
+    checkProse(line, REPO_DOC_RULES);
+
+    expect(performance.now() - started).toBeLessThan(1000);
+  });
+
+  test("finishes quickly on a long run of unclosed link targets", () => {
+    const line = "](".repeat(50000);
+    const started = performance.now();
+
+    checkProse(line, REPO_DOC_RULES);
+
+    expect(performance.now() - started).toBeLessThan(1000);
+  });
+});
