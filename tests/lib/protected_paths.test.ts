@@ -21,12 +21,12 @@ describe("IMPLEMENT_PROTECTED_PATH_PREFIXES", () => {
       ".mise/",
       ".config/mise/",
       ".lefthook/",
+      "console/public/",
       "infra/",
       ".husky/",
       ".githooks/",
       ".yarn/",
       ".devcontainer/",
-      "console/public/",
     ]);
   });
 
@@ -81,8 +81,26 @@ describe("matchesForbiddenPath", () => {
     expect(prWorkflowSupport.matchesForbiddenPath).toBe(matchesForbiddenPath);
   });
 
-  test("leaves pr_fix's matching of console/index.html unchanged", () => {
-    expect(matchesForbiddenPath("console/index.html")).toBe(false);
+  test("matches console/index.html", () => {
+    expect(matchesForbiddenPath("console/index.html")).toBe(true);
+  });
+
+  test("matches console/index.html after stripping a leading ./", () => {
+    expect(matchesForbiddenPath("./console/index.html")).toBe(true);
+  });
+
+  test("matches files under console/public/", () => {
+    expect(
+      matchesForbiddenPath("console/public/assets/theme-init-ba7816bf.js"),
+    ).toBe(true);
+  });
+
+  test("does not match ordinary console sources", () => {
+    expect(matchesForbiddenPath("console/src/App.tsx")).toBe(false);
+  });
+
+  test("does not match an index.html outside console/", () => {
+    expect(matchesForbiddenPath("docs/index.html")).toBe(false);
   });
 });
 

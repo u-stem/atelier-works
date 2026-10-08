@@ -23,6 +23,7 @@ export type ChangedPath = {
  * すべて含める(エージェントの設定、CIのワークフロー、
  * miseのXDG・ドットファイルの設定場所、
  * ディレクトリ形式のlefthook設定)。
+ * `console/public/`も含める。Consoleでバンドルを通らずにそのまま配信され、ページの中で動くファイルを置く。
  */
 export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
   ".claude/",
@@ -31,7 +32,15 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
   ".mise/",
   ".config/mise/",
   ".lefthook/",
+  "console/public/",
 ];
+
+/**
+ * pr_fixが保護する個別のファイル(リポジトリのルートからの相対パス)。
+ * `console/index.html`は、Consoleのすべてのscriptの読み込み元で、バンドルを通らずに配信される。
+ * ファイル名だけでは他の`index.html`と区別できないので、パスで判定する。
+ */
+export const FORBIDDEN_EXACT_PATHS: readonly string[] = ["console/index.html"];
 
 export const FORBIDDEN_BASENAME_PATTERNS: readonly RegExp[] = [
   /^mise\.toml$/,
@@ -55,7 +64,6 @@ export const FORBIDDEN_BASENAME_PATTERNS: readonly RegExp[] = [
  * - gitフックのディレクトリ(`.husky/`、`.githooks/`)
  * - `.yarn/`: パッケージマネージャーが実行するプラグインとリリース
  * - `.devcontainer/`
- * - `console/public/`: Consoleでバンドルを通らずにそのまま配信され、ページの中で動くファイル
  *
  * implementフローはClaudeの変更に対して検査コマンドを実行するため、
  * 検査コマンドが何を実行するかを決めるディレクトリを保護する。pr_fixの一覧は変えない。
@@ -69,16 +77,11 @@ export const IMPLEMENT_PROTECTED_PATH_PREFIXES: readonly string[] = [
   ".githooks/",
   ".yarn/",
   ".devcontainer/",
-  "console/public/",
 ];
 
-/**
- * implementフローが保護する個別のファイル(リポジトリのルートからの相対パス)。
- * `console/index.html`は、Consoleのすべてのscriptの読み込み元で、バンドルを通らずに配信される。
- * ファイル名だけでは他の`index.html`と区別できないので、パスで判定する。
- */
+/** implementフローが保護する個別のファイル。pr_fixの一覧と同じ。 */
 export const IMPLEMENT_PROTECTED_EXACT_PATHS: readonly string[] = [
-  "console/index.html",
+  ...FORBIDDEN_EXACT_PATHS,
 ];
 
 /**
@@ -135,13 +138,16 @@ function matchesPathLists(
  * `path`がdocs/security.md「pr_fixの安全策」の禁止パスに当たるかを返す。
  * `prefixes`のディレクトリは、リポジトリのルートからの相対パスの前方一致で判定する
  * (ディレクトリ名そのものも一致とみなす)。
- * `FORBIDDEN_BASENAME_PATTERNS`は、ディレクトリを問わずファイル名で判定する。
+ * `FORBIDDEN_EXACT_PATHS`とは完全一致で、`FORBIDDEN_BASENAME_PATTERNS`は
+ * ディレクトリを問わずファイル名で判定する。
  * `prefixes`の既定はpr_fixのリスト。
  */
 export function matchesForbiddenPath(
   path: string,
   prefixes: readonly string[] = FORBIDDEN_PATH_PREFIXES,
 ): boolean {
+  const normalized = path.replace(/^\.\//, "");
+  if (FORBIDDEN_EXACT_PATHS.includes(normalized)) return true;
   return matchesPathLists(path, prefixes, FORBIDDEN_BASENAME_PATTERNS);
 }
 
