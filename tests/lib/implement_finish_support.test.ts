@@ -9,6 +9,7 @@ import {
   gapExhaustedReason,
   gapReportNoticeDetail,
   IMPLEMENT_NO_CHANGES_REASON,
+  implementCommitGuards,
   implementNeedsHumanNextAction,
   isFactoryRepo,
   mergeImplementOutcome,
@@ -122,6 +123,13 @@ describe("decideImplementFinishAction", () => {
 
   test("does not push the work of a failed Claude run", () => {
     expect(decideImplementFinishAction("claude_error")).toEqual({
+      kind: "needs_human",
+      preserveWork: false,
+    });
+  });
+
+  test("keeps nothing after the worktree changed before the secret scan", () => {
+    expect(decideImplementFinishAction("worktree_changed")).toEqual({
       kind: "needs_human",
       preserveWork: false,
     });
@@ -471,6 +479,20 @@ describe("preserveWork", () => {
     expect(
       (await preserveWork(preserveDeps(CLEAN_SCAN, broken).deps))[0],
     ).toMatch(/^implement finish failed: /);
+  });
+});
+
+describe("implementCommitGuards", () => {
+  test("requires the local HEAD to be the recorded branch head", () => {
+    expect(
+      implementCommitGuards("factory/issue-1-wi-2").requireLocalHeadAtExpected,
+    ).toBe(true);
+  });
+
+  test("requires the local HEAD to be on the implement branch", () => {
+    expect(implementCommitGuards("factory/issue-1-wi-2").expectedBranch).toBe(
+      "factory/issue-1-wi-2",
+    );
   });
 });
 

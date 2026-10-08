@@ -481,6 +481,22 @@ describe("runPrFixVerify: retry after failing checks", () => {
     ]);
   });
 
+  test("keeps the retry's blocked_reason a single reason item", async () => {
+    const h = harness({
+      checks: [false],
+      retry: {
+        outcome: "success",
+        output: {
+          ...RETRY_OUTPUT,
+          outcome: "blocked",
+          blocked_reason: "spec unclear; needs human attention",
+        },
+      },
+    });
+    const result = await runPrFixVerify(h.deps, INPUT);
+    expect(result.reason).toBe("spec unclear, needs human attention");
+  });
+
   test("blocks when the checks still fail after the retry", async () => {
     const h = harness({ checks: [false, false] });
     const result = await runPrFixVerify(h.deps, INPUT);

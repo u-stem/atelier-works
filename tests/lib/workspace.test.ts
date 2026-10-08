@@ -12,6 +12,7 @@ import {
   addDetachedWorktree,
   assertWorktreeGitPointer,
   boundedTimerMs,
+  COMMITTED_TREE_CHANGED_REASON,
   type CommandResult,
   type CommandRunner,
   CommitBlockedError,
@@ -2381,11 +2382,87 @@ describe("commitAndPush", () => {
         ok(),
         ok(" M file.ts\n"),
         ok(), // git commit
+        ok(`${newSha}\n`), // rev-parse --verify HEAD
         ok(), // git push
-        ok(`${newSha}\n`),
       ]);
       const result = await commitAndPush(guardedOptions(fake.run));
       expect(result).toEqual({ outcome: "pushed", newSha });
+    });
+  });
+
+  describe("expected tree", () => {
+    const NEW_COMMIT = "2222222222222222222222222222222222222c";
+    const EXPECTED_TREE = "4".repeat(40);
+
+    /** 変更をcommitするところまで進む応答に、commitの後の応答を足す。 */
+    function committedCalls(after: readonly CommandResult[]) {
+      return commitAndPushCalls([
+        ok("fix/branch\n"),
+        ok(),
+        ok(`${HEAD_SHA}\n`),
+        ok(), // git add -A
+        ok(" M file.ts\n"),
+        ok(), // git commit
+        ok(`${NEW_COMMIT}\n`), // rev-parse --verify HEAD
+        ...after,
+      ]);
+    }
+
+    function options(run: ReturnType<typeof commitAndPushCalls>["run"]) {
+      return {
+        run,
+        repoDir: "/repo",
+        dir: "/repo/wt",
+        message: "fix: something",
+        instanceName: "acme-factory",
+        expectedHeadSha: HEAD_SHA,
+        author: TEST_AUTHOR,
+        ghToken: "gh-token",
+        verifyWorktree: noopVerify,
+        lockFs: createInMemoryLockFs(),
+        expectedTreeSha: EXPECTED_TREE,
+      };
+    }
+
+    test("pushes when the committed tree is the expected tree", async () => {
+      const fake = committedCalls([ok(`${EXPECTED_TREE}\n`), ok()]);
+      expect(await commitAndPush(options(fake.run))).toEqual({
+        outcome: "pushed",
+        newSha: NEW_COMMIT,
+      });
+    });
+
+    test("reads the tree of the new commit", async () => {
+      const fake = committedCalls([ok(`${EXPECTED_TREE}\n`), ok()]);
+      await commitAndPush(options(fake.run));
+      expect(fake.calls[7]?.argv.slice(-2)).toEqual([
+        "--verify",
+        `${NEW_COMMIT}^{tree}`,
+      ]);
+    });
+
+    test("stops when the committed tree is not the expected tree", async () => {
+      const fake = committedCalls([ok(`${TREE_SHA}\n`), ok()]);
+      await expect(commitAndPush(options(fake.run))).rejects.toThrow(
+        COMMITTED_TREE_CHANGED_REASON,
+      );
+    });
+
+    test("undoes the commit when the committed tree is not the expected tree", async () => {
+      const fake = committedCalls([ok(`${TREE_SHA}\n`), ok()]);
+      await commitAndPush(options(fake.run)).catch(() => {});
+      expect(fake.calls.at(-1)?.argv.slice(-4)).toEqual([
+        "reset",
+        "-q",
+        "HEAD~1",
+        "--",
+      ]);
+    });
+
+    test("does not push when the committed tree is not the expected tree", async () => {
+      const fake = committedCalls([ok(`${TREE_SHA}\n`), ok()]);
+      await commitAndPush(options(fake.run)).catch(() => {});
+      expect(fake.calls.some((call) => call.argv.includes("push"))).toBe(false);
     });
   });
 
@@ -2421,8 +2498,8 @@ describe("commitAndPush", () => {
       ok(),
       ok(" M file.ts\n"),
       ok(), // git commit
-      ok(), // git push
       ok(`${newSha}\n`), // rev-parse --verify HEAD
+      ok(), // git push
     ]);
     const result = await commitAndPush({
       run: fake.run,
@@ -2439,6 +2516,36 @@ describe("commitAndPush", () => {
     expect(result).toEqual({ outcome: "pushed", newSha });
   });
 
+  test("pushes the new commit by its sha instead of HEAD", async () => {
+    const newSha = "2222222222222222222222222222222222222c";
+    const fake = commitAndPushCalls([
+      ok("fix/branch\n"),
+      ok(),
+      ok(`${HEAD_SHA}\n`),
+      ok(),
+      ok(" M file.ts\n"),
+      ok(), // git commit
+      ok(`${newSha}\n`), // rev-parse --verify HEAD
+      ok(), // git push
+    ]);
+    await commitAndPush({
+      run: fake.run,
+      repoDir: "/repo",
+      dir: "/repo/wt",
+      message: "fix: something",
+      instanceName: "acme-factory",
+      expectedHeadSha: HEAD_SHA,
+      author: TEST_AUTHOR,
+      ghToken: "gh-token",
+      verifyWorktree: noopVerify,
+      lockFs: createInMemoryLockFs(),
+    });
+    expect(fake.calls.at(-1)?.argv.slice(-2)).toEqual([
+      "--",
+      `${newSha}:refs/heads/fix/branch`,
+    ]);
+  });
+
   test("the git commit call's env carries GIT_AUTHOR_EMAIL from the given author", async () => {
     const fake = commitAndPushCalls([
       ok("fix/branch\n"),
@@ -2447,8 +2554,8 @@ describe("commitAndPush", () => {
       ok(),
       ok(" M file.ts\n"),
       ok(), // git commit
-      ok(), // git push
       ok(`${HEAD_SHA}\n`), // rev-parse --verify HEAD
+      ok(), // git push
     ]);
     await commitAndPush({
       run: fake.run,
@@ -2475,6 +2582,7 @@ describe("commitAndPush", () => {
       ok(), // git add -A
       ok(" M file.ts\n"), // git status --porcelain
       ok(), // git commit
+      ok(`${HEAD_SHA}\n`), // rev-parse --verify HEAD
       fail(
         "! [rejected]        fix/branch -> fix/branch (fetch first)\nerror: failed to push some refs",
       ), // git push
@@ -2504,6 +2612,7 @@ describe("commitAndPush", () => {
       ok(),
       ok(" M file.ts\n"),
       ok(),
+      ok(`${HEAD_SHA}\n`),
       fail("! [rejected] fix/branch -> fix/branch (non-fast-forward)"),
       ok(),
       ok(`${OTHER_SHA}\n`),
@@ -2531,6 +2640,7 @@ describe("commitAndPush", () => {
       ok(),
       ok(" M file.ts\n"),
       ok(),
+      ok(`${HEAD_SHA}\n`),
       fail(
         "remote: Permission to acme/widgets.git denied to factory-bot.\nfatal: unable to access",
       ),
@@ -2622,8 +2732,8 @@ describe("commitAndPush", () => {
       ok(),
       ok(" M file.ts\n"),
       ok(),
-      ok(),
       ok(`${HEAD_SHA}\n`),
+      ok(),
     ]);
     await commitAndPush({
       run: fake.run,
@@ -2638,7 +2748,7 @@ describe("commitAndPush", () => {
       lockFs: createInMemoryLockFs(),
     });
     const commitCallEnv = fake.calls[5]?.options?.env; // git commit -m
-    const pushCallEnv = fake.calls[6]?.options?.env; // git push
+    const pushCallEnv = fake.calls[7]?.options?.env; // git push
     expect([commitCallEnv?.GH_TOKEN, pushCallEnv?.GH_TOKEN]).toEqual([
       undefined,
       "gh-secret",
@@ -2653,8 +2763,8 @@ describe("commitAndPush", () => {
       ok(),
       ok(" M file.ts\n"),
       ok(), // git commit
+      ok(`${HEAD_SHA}\n`), // rev-parse --verify HEAD
       ok(), // git push
-      ok(`${HEAD_SHA}\n`),
     ]);
     await commitAndPush({
       run: fake.run,
@@ -2684,6 +2794,7 @@ describe("commitAndPush", () => {
       ok(),
       ok(" M file.ts\n"),
       ok(),
+      ok(`${HEAD_SHA}\n`),
       fail(
         "! [remote rejected] factory/issue-7-wi-3 -> factory/issue-7-wi-3 (refusing to allow a Personal Access Token to create or update workflow `.github/workflows/ci.yml` without `workflow` scope)",
       ),
@@ -2712,6 +2823,7 @@ describe("commitAndPush", () => {
       ok(),
       ok(" M file.ts\n"),
       ok(),
+      ok(`${HEAD_SHA}\n`),
       fail("! [rejected] main -> main (non-fast-forward)"),
       ok(),
       ok(`${OTHER_SHA}\n`),
@@ -4264,8 +4376,9 @@ describe("runGitleaksOnWorktree against a real git repository", () => {
     expect(repo.stdin).toContain("+changed line");
   });
 
-  test("reports no leak to the commit path when the staged tree is unchanged", async () => {
+  test("returns no stop reason when staging again finds the scanned tree", async () => {
     const repo = await scanRepo();
+    await repo.git(["add", "-A"]);
     expect(
       await scannedTreeStopReasons({
         run: repo.run,

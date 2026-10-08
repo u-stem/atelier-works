@@ -28,6 +28,7 @@ import {
 import {
   type CollectedComment,
   type CollectedReview,
+  claudeBlockedReason,
   isFixClaudeOutput,
   recordedGitPointerStopReason,
   WORKTREE_GIT_POINTER_NOT_RECORDED_REASON,
@@ -208,7 +209,7 @@ export async function main(
     return {
       outcome: output.outcome,
       // `blocked_reason`は"blocked"と"requirements_gap"で値が入り、"done"ではnullになる。
-      reason: output.blocked_reason,
+      reason: claudeBlockedReason(output.blocked_reason),
       summary: output.summary,
       replies: output.replies,
       // 件名と本文はClaudeの提案で、形は`isFixClaudeOutput`が検証する。

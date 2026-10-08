@@ -2054,14 +2054,14 @@ export type CommitAndPushOptions = {
   /**
    * trueなら、`git add -A`の前にローカルのHEADが`expectedHeadSha`であることを確かめる。
    * 違えば何もステージせずに`CommitBlockedError`を投げる。
-   * pr_fixが使う。検査コマンドがローカルでcommitすると、そのcommitの変更は作業ツリーの変更として見えず、
-   * 保護パスの判定を経ずにpushされるため。
+   * pr_fixとimplementフローが使う。検査コマンドがローカルでcommitすると、そのcommitの変更は作業ツリーの変更として見えず、
+   * 保護パスの判定や秘密の検査を経ずにpushされるため。
    */
   readonly requireLocalHeadAtExpected?: boolean;
   /**
    * 渡されたら、fetchの前に`git rev-parse --abbrev-ref HEAD`がこのブランチであることを確かめる。
    * 違うとき(detachedの`HEAD`を含む)は何もせずに`CommitBlockedError`を投げる。
-   * pr_fixが使う。検査コマンドがブランチを切り替えると、pushする先が準備ステップの見たPRのブランチでなくなるため。
+   * pr_fixとimplementフローが使う。検査コマンドがブランチを切り替えると、pushする先が準備ステップの見たブランチでなくなるため。
    */
   readonly expectedBranch?: string;
   /**
@@ -2070,7 +2070,16 @@ export type CommitAndPushOptions = {
    * pr_fixが、検証ステップの後にworktreeが変わっていないことを、commitする内容そのもので確かめるために使う。
    */
   readonly inspectStaged?: () => Promise<readonly string[]>;
+  /**
+   * 渡されたら、commitの後、pushの前に、作ったcommitのツリーがこのshaであることを確かめる。
+   * 違えば`git reset -q HEAD~1`でcommitを取り消し(変更はworktreeに残る)、pushせずに`CommitBlockedError`を投げる。
+   * 呼び出し側は、gitleaksが検査したツリーかループで検証したツリーを渡し、検査していない内容をpushしない。
+   */
+  readonly expectedTreeSha?: string;
 };
+
+export const COMMITTED_TREE_CHANGED_REASON =
+  "committed tree differs from the inspected tree";
 
 /**
  * `commitAndPush`が、ローカルのHEADかステージした内容の確かめに通らず、commitしなかったことを表す。
@@ -2169,6 +2178,8 @@ export function withCommitTrailers(
  * 例外を投げず、fetchし直して`head_changed`を返す。それ以外の失敗では例外を投げる。
  * `expectedBranch`・`requireLocalHeadAtExpected`・`inspectStaged`の確かめに通らなければ、commitせずに`CommitBlockedError`を投げる。
  * `inspectStaged`が例外を投げたときも、ステージを戻してからその例外を投げ直す。
+ * `expectedTreeSha`があれば、作ったcommitのツリーがそれと違うときにcommitを取り消し、pushせずに`CommitBlockedError`を投げる。
+ * pushは`HEAD`ではなく作ったcommitのshaを`refs/heads/<branch>`へ送る。commitの後にHEADが動いても、確かめたcommitだけを送るため。
  * fetchはサブモジュールに降りない(`--no-recurse-submodules`)。worktreeの`.gitmodules`や設定で、別のリポジトリを取りに行かせないため。
  * トークンはリモートのURLに入れない。
  * 認証は`-c credential.helper='!gh auth git-credential'`と
@@ -2315,10 +2326,45 @@ export async function commitAndPush(
         throw gitError("git commit failed", commitResult);
       }
 
+      const newShaResult = await opts.run(
+        buildGitArgv(["rev-parse", "--verify", "HEAD"]),
+        { cwd: opts.dir, env: local },
+      );
+      if (newShaResult.exitCode !== 0) {
+        throw gitError("git rev-parse --verify HEAD failed", newShaResult);
+      }
+      const newSha = newShaResult.stdout.trim();
+      assertSha(newSha);
+
+      if (opts.expectedTreeSha !== undefined) {
+        const treeResult = await opts.run(
+          buildGitArgv(["rev-parse", "--verify", `${newSha}^{tree}`]),
+          { cwd: opts.dir, env: local },
+        );
+        if (treeResult.exitCode !== 0) {
+          throw gitError(
+            `git rev-parse --verify ${newSha}^{tree} failed`,
+            treeResult,
+          );
+        }
+        if (treeResult.stdout.trim() !== opts.expectedTreeSha) {
+          // 確かめていない内容のcommitをローカルにも残さない。変更はworktreeに残る。
+          const undoResult = await opts.run(
+            buildGitArgv(["reset", "-q", "HEAD~1", "--"]),
+            { cwd: opts.dir, env: local },
+          );
+          if (undoResult.exitCode !== 0) {
+            throw gitError("git reset -q HEAD~1 failed", undoResult);
+          }
+          throw new CommitBlockedError(COMMITTED_TREE_CHANGED_REASON);
+        }
+      }
+
       const pushResult = await opts.run(
-        buildGitArgv(["push", "origin", "--", `HEAD:${branch}`], {
-          network: true,
-        }),
+        buildGitArgv(
+          ["push", "origin", "--", `${newSha}:refs/heads/${branch}`],
+          { network: true },
+        ),
         { cwd: opts.dir, env: network },
       );
       if (pushResult.exitCode !== 0) {
@@ -2354,17 +2400,7 @@ export async function commitAndPush(
         throw gitError("git push failed", pushResult);
       }
 
-      const newShaResult = await opts.run(
-        buildGitArgv(["rev-parse", "--verify", "HEAD"]),
-        { cwd: opts.dir, env: local },
-      );
-      if (newShaResult.exitCode !== 0) {
-        throw gitError("git rev-parse --verify HEAD failed", newShaResult);
-      }
-      return {
-        outcome: "pushed" as const,
-        newSha: newShaResult.stdout.trim(),
-      };
+      return { outcome: "pushed" as const, newSha };
     },
   });
 }

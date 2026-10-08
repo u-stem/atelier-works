@@ -36,6 +36,7 @@ import {
   runImplementClaudeRound,
   runImplementGenerateRound,
   runImplementVerifyLoop,
+  scannedTreeChangedReason,
   toImplementClaudeRound,
   type WorktreePrepDeps,
   withReadOnlyDocDirCopy,
@@ -662,6 +663,8 @@ type HarnessOptions = {
   readonly inspection?: ChangeInspection;
   readonly sizeReasons?: readonly string[];
   readonly gitleaks?: readonly GitleaksResult[];
+  /** gitleaksが検査したツリー。既定は直前に取った指紋のツリーと同じにする。 */
+  readonly scannedTrees?: readonly string[];
   readonly checks?: readonly (readonly LoopCheckResult[])[];
   readonly fixRounds?: readonly ImplementClaudeRound[];
   readonly budgetExceeded?: boolean;
@@ -686,6 +689,7 @@ function harness(options: HarnessOptions = {}): Harness {
   const fixRequests: FixRoundRequest[] = [];
   const calls = { gitleaks: 0, checks: 0, fingerprint: 0 };
   const events: string[] = [];
+  let lastTreeSha = "";
   const deps: ImplementLoopDeps = {
     assertGitPointer: async () => {
       const index = events.filter((event) => event === "pointer").length;
@@ -700,14 +704,19 @@ function harness(options: HarnessOptions = {}): Harness {
       events.push("fingerprint");
       const value = pick(options.fingerprints ?? [FP_1], calls.fingerprint);
       calls.fingerprint += 1;
+      lastTreeSha = value.treeSha;
       return value;
     },
     inspectChanges: async () => options.inspection ?? CLEAN,
     diffSizeReasons: () => options.sizeReasons ?? [],
     runGitleaks: async () => {
       const value = pick(options.gitleaks ?? [GITLEAKS_OK], calls.gitleaks);
+      const treeSha = pick(
+        options.scannedTrees ?? [lastTreeSha],
+        calls.gitleaks,
+      );
       calls.gitleaks += 1;
-      return value;
+      return { ...value, treeSha };
     },
     runChecks: async () => {
       events.push("checks");
@@ -1002,6 +1011,33 @@ describe("runImplementVerifyLoop", () => {
       },
     });
     expect((await run(h)).exit).toBe("symlink");
+  });
+
+  test("exits worktree_changed when gitleaks scanned another tree than the inspected one", async () => {
+    const h = harness({ scannedTrees: [FP_2.treeSha] });
+    expect((await run(h)).exit).toBe("worktree_changed");
+  });
+
+  test("gives the round when gitleaks scanned another tree", async () => {
+    const h = harness({ scannedTrees: [FP_2.treeSha] });
+    expect((await run(h)).reason).toBe(scannedTreeChangedReason(1));
+  });
+
+  test("does not run check commands when gitleaks scanned another tree", async () => {
+    const h = harness({ scannedTrees: [FP_2.treeSha] });
+    await run(h);
+    expect(h.calls.checks).toBe(0);
+  });
+
+  test("records no verified tree when gitleaks scanned another tree", async () => {
+    const h = harness({ scannedTrees: [FP_2.treeSha] });
+    expect((await run(h)).verified_tree_sha).toBeNull();
+  });
+
+  test("records the round as failed when gitleaks scanned another tree", async () => {
+    const h = harness({ scannedTrees: [FP_2.treeSha] });
+    await run(h);
+    expect(h.recorded.at(-1)?.outcome).toBe("check_failed");
   });
 
   test("keeps a symlink path with the reason separator in one reason item", async () => {

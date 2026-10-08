@@ -15,15 +15,16 @@ import {
 } from "../../f/factory/lib/workspace.ts";
 import {
   buildReplyPostFailedNotice,
+  claudeBlockedReason,
   decideFixFinishAction,
   deriveFallbackReviewers,
   evaluateRerouteGuard,
-  inspectStagedWithSecretScan,
   listReviewThreadsBestEffort,
   type PrFixPushGateDeps,
+  type PrFixSecretScanDeps,
   prFixPushGateReason,
   renderFixReply,
-  type SecretScanInspectionDeps,
+  scanPrFixBeforeCommit,
   shouldAdvanceWatermarks,
   stopBeforeCommitTerminal,
 } from "../../f/factory/steps/pr_workflow_support.ts";
@@ -144,7 +145,19 @@ describe("prFixPushGateReason", () => {
   });
 });
 
-describe("inspectStagedWithSecretScan", () => {
+describe("claudeBlockedReason", () => {
+  test("keeps Claude's reason a single reason item", () => {
+    expect(claudeBlockedReason("spec unclear; needs human attention")).toBe(
+      "spec unclear, needs human attention",
+    );
+  });
+
+  test("keeps a missing reason missing", () => {
+    expect(claudeBlockedReason(null)).toBeNull();
+  });
+});
+
+describe("scanPrFixBeforeCommit", () => {
   const TREE = "c".repeat(40);
   const CLEAN: GitleaksScan = { ok: true, output: "", treeSha: TREE };
   const LEAK: GitleaksScan = {
@@ -159,7 +172,7 @@ describe("inspectStagedWithSecretScan", () => {
     changeReasons: readonly string[] = [],
     treeReasons: readonly string[] = [],
   ): {
-    readonly deps: SecretScanInspectionDeps;
+    readonly deps: PrFixSecretScanDeps;
     readonly calls: string[];
   } {
     const calls: string[] = [];
@@ -182,29 +195,38 @@ describe("inspectStagedWithSecretScan", () => {
     };
   }
 
-  test("returns no reason when nothing blocks the commit", async () => {
-    expect(await inspectStagedWithSecretScan(scanDeps(CLEAN).deps)).toEqual([]);
+  /** 検出が無く、commitへ進むときの`inspectStaged`を呼んで返す。 */
+  async function inspectAfterScan(deps: PrFixSecretScanDeps) {
+    const scanned = await scanPrFixBeforeCommit(deps);
+    if (scanned.kind !== "commit") throw new Error("expected to commit");
+    return scanned.inspectStaged();
+  }
+
+  test("stops before the commit on secrets", async () => {
+    expect(await scanPrFixBeforeCommit(scanDeps(LEAK).deps)).toEqual({
+      kind: "stop",
+      reason: SECRETS_NOT_PUSHED_REASON,
+    });
   });
 
-  test("stops on secrets", async () => {
-    expect(await inspectStagedWithSecretScan(scanDeps(LEAK).deps)).toEqual([
-      SECRETS_NOT_PUSHED_REASON,
-    ]);
+  test("does not inspect the staged changes when it found secrets", async () => {
+    const { deps, calls } = scanDeps(LEAK);
+    await scanPrFixBeforeCommit(deps);
+    expect(calls).toEqual(["scan"]);
   });
 
-  test("puts the secrets first so that its next action is shown", async () => {
-    expect(
-      (
-        await inspectStagedWithSecretScan(
-          scanDeps(LEAK, ["forbidden path changed: mise.toml"]).deps,
-        )
-      )[0],
-    ).toBe(SECRETS_NOT_PUSHED_REASON);
+  test("commits the scanned tree when nothing was found", async () => {
+    const scanned = await scanPrFixBeforeCommit(scanDeps(CLEAN).deps);
+    expect(scanned.kind === "commit" ? scanned.treeSha : null).toBe(TREE);
+  });
+
+  test("returns no reason from the staged inspection when nothing blocks the commit", async () => {
+    expect(await inspectAfterScan(scanDeps(CLEAN).deps)).toEqual([]);
   });
 
   test("keeps the reasons of the staged change inspection", async () => {
     expect(
-      await inspectStagedWithSecretScan(
+      await inspectAfterScan(
         scanDeps(CLEAN, ["forbidden path changed: mise.toml"]).deps,
       ),
     ).toEqual(["forbidden path changed: mise.toml"]);
@@ -212,22 +234,22 @@ describe("inspectStagedWithSecretScan", () => {
 
   test("stops when the staged tree is not the scanned tree", async () => {
     expect(
-      await inspectStagedWithSecretScan(
+      await inspectAfterScan(
         scanDeps(CLEAN, [], [WORKTREE_CHANGED_AFTER_SECRET_SCAN_REASON]).deps,
       ),
     ).toEqual([WORKTREE_CHANGED_AFTER_SECRET_SCAN_REASON]);
   });
 
-  test("scans first and compares the scanned tree last", async () => {
+  test("scans once before the commit and compares the scanned tree last", async () => {
     const { deps, calls } = scanDeps(CLEAN);
-    await inspectStagedWithSecretScan(deps);
+    await inspectAfterScan(deps);
     expect(calls).toEqual(["scan", "changes", `tree ${TREE}`]);
   });
 
   test("rethrows a failed scan so that nothing is committed", async () => {
     const { deps } = scanDeps(CLEAN);
     await expect(
-      inspectStagedWithSecretScan({
+      scanPrFixBeforeCommit({
         ...deps,
         scanForSecrets: async () => {
           throw new Error("gitleaks failed (exit 2): boom");

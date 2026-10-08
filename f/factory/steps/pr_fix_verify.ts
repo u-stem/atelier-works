@@ -30,6 +30,7 @@ import {
   type CheckCommandResult,
   type CollectedComment,
   type CollectedReview,
+  claudeBlockedReason,
   type FixClaudeOutput,
   type ForbiddenChangeResult,
   inspectUncommittedChanges,
@@ -248,7 +249,7 @@ export async function runPrFixVerify(
   if (output.outcome !== "done") {
     return {
       outcome: output.outcome,
-      reason: output.blocked_reason,
+      reason: claudeBlockedReason(output.blocked_reason),
       summary: output.summary,
       replies: output.replies,
       commit_subject: null,

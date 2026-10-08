@@ -41,6 +41,7 @@ import {
   IMPLEMENT_FINISH_NO_OUTPUT_REASON,
   IMPLEMENT_WIP_COMMIT_MESSAGE,
   type ImplementFinishOutcome,
+  implementCommitGuards,
   implementNeedsHumanNextAction,
   mergeImplementOutcome,
   PARTIAL_WORK_KEPT_LOCAL_REASON,
@@ -415,6 +416,7 @@ async function finishImplement(
     expectedHeadSha: ctx.expected_head_sha,
     author: gitIdentityForViewer(await getViewer(client)),
     ghToken,
+    ...implementCommitGuards(ctx.branch),
   });
 
   const assertGitPointer = (ctx: ImplementContext) => (): Promise<void> =>
@@ -445,6 +447,7 @@ async function finishImplement(
       await confirmLease();
       return commitAndPush({
         ...options,
+        expectedTreeSha: scannedTreeSha,
         inspectStaged: () =>
           scannedTreeStopReasons({
             run: runCommand,
@@ -657,6 +660,9 @@ async function finishImplement(
       // `commitAndPush`はステージし直すので、commitする索引そのものが検証したツリーかも確かめる。
       const pushed = await commitAndPush({
         ...(await commitOptions(ctx, message)),
+        ...(loop.verified_tree_sha !== null
+          ? { expectedTreeSha: loop.verified_tree_sha }
+          : {}),
         inspectStaged: async () => {
           const staged = decideVerifiedTree(
             loop.verified_tree_sha,

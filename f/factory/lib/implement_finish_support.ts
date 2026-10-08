@@ -72,11 +72,12 @@ export function decideImplementFinishAction(
       return { kind: "cancel" };
     // worktreeができる前の停止には残す作業が無い。
     // 検証を経ていないラウンドでの停止(シンボリックリンク、Claudeの実行失敗、
-    // `.git`ポインタの書き換え)の後は何もpushしない。
+    // `.git`ポインタの書き換え、判定とgitleaksの間のworktreeの変化)の後は何もpushしない。
     case "needs_human":
     case "symlink":
     case "claude_error":
     case "git_pointer_modified":
+    case "worktree_changed":
       return { kind: "needs_human", preserveWork: false };
     case "checks_passed":
     case "checks_skipped":
@@ -146,6 +147,20 @@ export function gapReportNoticeDetail(gapReport: string): string {
  */
 export function finishFailureReason(err: unknown): string {
   return `implement finish failed: ${escapeReasonSeparator(maskSecrets(err instanceof Error ? err.message : String(err)))}`;
+}
+
+/**
+ * implement_finishの途中経過と最終のcommitで`commitAndPush`に渡す確かめを返す。
+ * ローカルのHEADが準備ステップの記録したブランチの先頭(`expected_head_sha`)で、実装ブランチにあることを求める。
+ * ループはcommitしないので、HEADが動いていれば検査コマンドがcommitしたかブランチを切り替えたことになる。
+ * そのcommitは差分の検査に現れず(後のcommitで消した秘密情報など)、pushすると履歴ごと送られるため、
+ * pushする履歴を記録した先頭と新しい1つのcommitだけにする。
+ */
+export function implementCommitGuards(branch: string): {
+  readonly requireLocalHeadAtExpected: true;
+  readonly expectedBranch: string;
+} {
+  return { requireLocalHeadAtExpected: true, expectedBranch: branch };
 }
 
 /**

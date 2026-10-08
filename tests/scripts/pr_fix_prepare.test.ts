@@ -483,6 +483,20 @@ describe("describeReason (implement flow)", () => {
     );
   });
 
+  test("translates a worktree changed before the secret scan of a round", () => {
+    expect(
+      describeReason("worktree changed before the secret scan in round 2"),
+    ).toBe(
+      "ラウンド2で、変更の判定と秘密情報の検査の間にworktreeが変更されました",
+    );
+  });
+
+  test("translates a committed tree that differs from the inspected one", () => {
+    expect(
+      describeReason("committed tree differs from the inspected tree"),
+    ).toBe("commitしたツリーが、検査したツリーと異なります");
+  });
+
   test("translates a worktree changed after the secret scan", () => {
     expect(describeReason("worktree changed after the secret scan")).toBe(
       "秘密情報の検査の後にworktreeが変更されました",
@@ -665,9 +679,25 @@ describe("nextActionFor (implement flow)", () => {
     );
   });
 
+  test("asks to look for leftover processes after a change before the secret scan", () => {
+    expect(
+      nextActionFor("worktree changed before the secret scan in round 2"),
+    ).toBe(
+      "検査コマンドなどが残したプロセスがworktreeを書き換えていないか確かめ、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+    );
+  });
+
+  test("asks to look for leftover processes after a committed tree differs", () => {
+    expect(
+      nextActionFor("committed tree differs from the inspected tree"),
+    ).toBe(
+      "検査コマンドなどが残したプロセスがworktreeを書き換えていないか確かめ、PRの修正なら`factory:fix`を付け直し、実装ならWindmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+    );
+  });
+
   test("asks to look for leftover processes after a change following the secret scan", () => {
     expect(nextActionFor("worktree changed after the secret scan")).toBe(
-      "検査コマンドなどが残したプロセスがworktreeを書き換えていないか確かめ、PRの修正なら`factory:fix`を付け直し、実装ならConsoleのFailuresタブから再実行してください",
+      "検査コマンドなどが残したプロセスがworktreeを書き換えていないか確かめ、PRの修正なら`factory:fix`を付け直し、実装ならWindmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
     );
   });
 
