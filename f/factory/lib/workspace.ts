@@ -447,8 +447,9 @@ export type GitCommandOptions = {
  *     プロセスを止めたとき): `--hard`はパスを取らず、
  *     `--`を付けるとエラーになる
  *     (「fatal: Cannot do hard reset with paths」、実際に確かめた)。
- *   - `ensureFactoryClone`の`git checkout -B <branch> origin/<branch>`: 起点の前に
- *     `--`を付けると、`checkout`は`origin/<branch>`をrefではなく復元するパスとして扱う。
+ *   - `ensureFactoryClone`の`git checkout -B <branch> origin/<branch>`と、
+ *     `createGtrWorktree`の`git checkout -f --no-track -B <branch> <ref>`: 起点の前に
+ *     `--`を付けると、`checkout`は起点をrefではなく復元するパスとして扱う。
  *     `branch`は関数の先頭で`assertBranchName`により検証している。
  * - GitHubに由来する識別子(owner、repo、sha、branch)は、URL・ref・ディレクトリのパスに
  *   埋め込む前に`assertGitHubName`、`assertSha`、
@@ -1789,6 +1790,62 @@ function parseGtrPorcelain(stdout: string): GtrWorktree {
   return { path, branch, hookStatus };
 }
 
+/**
+ * worktree`dir`のHEADが`refs/heads/<branch>`を指すようにする。`createGtrWorktree`が`reset --hard`の直前に呼ぶ。
+ * `reset --hard`はHEADが指すブランチを動かす。生き残ったプロセスが別のブランチをcheckoutしていると、
+ * そのブランチを動かしてしまい、対象のブランチは戻らないため。
+ * 指していなければ(別のブランチかdetached)、`checkout -f --no-track -B <branch> <ref>`でHEADを対象のブランチへ移し、`ref`に合わせる。
+ * `checkout -B`は、それまでHEADが指していたブランチを動かさず、対象のブランチが他のworktreeでcheckoutされていれば失敗する。
+ * worktreeを作り直さないのは、作り直しにも生き残りの確かめとポインタの検証がもう一度要り、
+ * 再利用するworktreeでは対象リポジトリが無視しているファイル(`node_modules/`など)まで失うためである。
+ * `--no-track`は、起点が`origin/<branch>`のときに上流の設定をメインのcloneの`.git/config`へ書かないために付ける。
+ * HEADを読めないとき、切り替えに失敗したとき、切り替えた後もHEADが指していないときは例外を投げ、resetに進ませない。
+ * `branch`は`assertBranchName`で、`ref`は検証済みの値から作ったものを渡す。
+ */
+async function ensureHeadOnBranch(opts: {
+  readonly run: CommandRunner;
+  readonly dir: string;
+  readonly branch: string;
+  readonly ref: string;
+  /** 例外のメッセージに付ける、呼び出した経路の名前。 */
+  readonly context: string;
+  readonly home?: string;
+  readonly path?: string;
+}): Promise<void> {
+  const expected = `refs/heads/${opts.branch}`;
+  const env = localGitEnv(opts.home, opts.path);
+  const readHead = async (): Promise<string | null> => {
+    const result = await opts.run(
+      buildGitArgv(["symbolic-ref", "-q", "HEAD"]),
+      { cwd: opts.dir, env },
+    );
+    if (result.exitCode === 0) return result.stdout.trim();
+    // `-q`は、HEADがdetachedのときだけ何も出さずに終了コード1を返す。それ以外の失敗はHEADを読めていない。
+    if (result.exitCode === 1 && !result.timedOut) return null;
+    throw gitError(`git symbolic-ref HEAD failed (${opts.context})`, result);
+  };
+  if ((await readHead()) === expected) return;
+  // 起点の前に`--`を付けない(`buildGitArgv`の例外を参照)。
+  const checkout = await opts.run(
+    buildGitArgv(["checkout", "-f", "--no-track", "-B", opts.branch, opts.ref]),
+    { cwd: opts.dir, env },
+  );
+  if (checkout.exitCode !== 0) {
+    throw gitError(
+      `git checkout -f -B ${opts.branch} ${opts.ref} failed (${opts.context})`,
+      checkout,
+    );
+  }
+  const after = await readHead();
+  if (after !== expected) {
+    throw new Error(
+      maskSecrets(
+        `HEAD is not ${expected} after checkout (${opts.context}): ${after ?? "detached"}`,
+      ),
+    );
+  }
+}
+
 export type CreateGtrWorktreeOptions = {
   readonly run: CommandRunner;
   readonly repoDir: string;
@@ -1822,6 +1879,7 @@ export type CreateGtrWorktreeOptions = {
  * worktreeに触れる前(既存なら検証より前、新規なら`git gtr new`の直後)に`assertProcessesIdle`を呼ぶ。
  * 新しく作ったworktreeで確かめが何かを止めたときは、`.git`ファイルを検証してから、
  * 作った時点のブランチの先頭へ`reset --hard`し、`clean -fd`する。止まる前に書き込まれたものを捨てるためである。
+ * 再利用と、何かを止めた新しいworktreeのどちらでも、`reset --hard`の前にHEADを対象のブランチへそろえる(`ensureHeadOnBranch`)。
  */
 export async function createGtrWorktree(
   opts: CreateGtrWorktreeOptions,
@@ -1898,6 +1956,16 @@ export async function createGtrWorktree(
             fetchResult,
           );
         }
+
+        await ensureHeadOnBranch({
+          run: opts.run,
+          dir: reused.path,
+          branch: opts.branch,
+          ref: `origin/${opts.branch}`,
+          context: "gtr worktree reuse",
+          ...(opts.home !== undefined ? { home: opts.home } : {}),
+          ...(opts.path !== undefined ? { path: opts.path } : {}),
+        });
 
         // ここでは`--`を付けない(`buildGitArgv`の例外を参照)。
         // `--hard`はパスを受け付けず、`git reset --hard -- <ref>`は
@@ -1978,6 +2046,7 @@ export async function createGtrWorktree(
       // 止めたプロセスは、止まるまでにworktreeへ書き込んだり`.git`ファイルを書き換えたりしえた。
       // 中でgitを実行する前にポインタを検証し、作った時点の状態に戻す。
       // コミットしてブランチを進めていても、checkout中のブランチごと戻るので、refを別に戻す必要は無い。
+      // 別のブランチをcheckoutしていれば、resetの前に対象のブランチへ戻す(`ensureHeadOnBranch`)。
       await verifyWorktreeGitdir({
         run: opts.run,
         repoDir: opts.repoDir,
@@ -1988,6 +2057,15 @@ export async function createGtrWorktree(
         ...(opts.fs?.realpath !== undefined
           ? { realpath: opts.fs.realpath }
           : {}),
+      });
+      await ensureHeadOnBranch({
+        run: opts.run,
+        dir: created.path,
+        branch: opts.branch,
+        ref: createdSha,
+        context: "gtr new after stopping processes",
+        ...(opts.home !== undefined ? { home: opts.home } : {}),
+        ...(opts.path !== undefined ? { path: opts.path } : {}),
       });
       const resetResult = await opts.run(
         buildGitArgv(["reset", "--hard", createdSha]),
