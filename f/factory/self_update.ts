@@ -135,7 +135,9 @@ export async function listAllPaths(
 /**
  * self cloneの2つのコミットの間で変わったファイルパスを返す
  * (`git diff --name-only -z oldSha..newSha`)。
- * `-z`の理由は`listAllPaths`と同じ。
+ * `-z`の理由は`listAllPaths`と同じ。`--no-renames`を付けるのは、
+ * 改名の検出が有効だと新しい名前だけが列挙され、`infra/`から外へ
+ * 移したファイルを変更として拾えないため(旧名と新名の両方を列挙させる)。
  * どちらのshaも`assertSha`で検査し、ここでは常に内部で得た16進のshaで
  * 外部の入力ではない。そのため`--`で区切らず直接埋め込んでも安全
  * (`lib/workspace.ts`のgit操作と同じ理由)。
@@ -149,7 +151,14 @@ export async function diffPaths(
   assertSha(oldSha);
   assertSha(newSha);
   const result = await run(
-    [...GIT_BASE_ARGV, "diff", "--name-only", "-z", `${oldSha}..${newSha}`],
+    [
+      ...GIT_BASE_ARGV,
+      "diff",
+      "--name-only",
+      "--no-renames",
+      "-z",
+      `${oldSha}..${newSha}`,
+    ],
     { cwd: dir, env: selfCloneGitEnv() },
   );
   if (result.exitCode !== 0) {

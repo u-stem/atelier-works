@@ -178,6 +178,17 @@ describe("diffPaths", () => {
     expect(paths).toEqual(["infra/設定.yml"]);
   });
 
+  test("passes --no-renames to git diff", async () => {
+    const fake = createFakeCommandRunner([ok("")]);
+    await diffPaths(
+      fake.run,
+      "/workspaces/factory/atelier-works",
+      "0000000000000000000000000000000000000a",
+      "0000000000000000000000000000000000000b",
+    );
+    expect(fake.calls[0]?.argv).toContain("--no-renames");
+  });
+
   test("passes -z to git diff", async () => {
     const fake = createFakeCommandRunner([ok("")]);
     await diffPaths(
