@@ -153,6 +153,6 @@ mise run bootstrap     # workspace 作成、secret 投入、sync push、migratio
 6. 次を確かめる。
    - 検査コマンドがラウンドで実行されたこと(`implement_rounds`)。
    - `agent_runs`のコスト。
-   - `--restricted`のClaudeが`.git` / `.gitattributes` / `.gitleaksignore`と要件定義のディレクトリに書けないこと。書けたなら`--restricted`の欠陥として扱い、止めて報告する。書けた場合の結果は経路で違う。`.git`は`needs_human`になる。`.gitattributes`は保護パスなので、検査を飛ばしてPRを作り、PR本文の保護パスの節に載るだけで止まらない。`.gitleaksignore`は保護パスではなく、gitleaksも読まないので、通常の変更としてPRに入る。要件定義はコピーを渡しているので、元のファイルが変わっていないことを確かめる。
+   - `--restricted`のClaudeが`.git` / `.gitattributes` / `.gitleaksignore`と要件定義のディレクトリに書けないこと。書けたなら`--restricted`の欠陥として扱い、止めて報告する。書けた場合の結果は経路で違う。`.git`は`needs_human`になる。`.gitattributes`と`.gitleaksignore`は保護パスなので、そのラウンドは検査を飛ばしてPRを作り、PR本文の保護パスの節に載るだけで止まらない(`.gitleaksignore`はgitleaksも読まない)。要件定義はClaudeに書き込めるコピーを渡す設計なので、確かめるのは元の要件定義のディレクトリのファイルが変わっていないこと。
    - PATにWorkflows権限が無いこと、`.github/workflows/**`を含む変更のpushが拒否され、`needs_human`の理由に載ること。権限は足さない(工程3は`.github/**`の変更を止めずに記録するので、push拒否が実質のガードになる)。
 7. 終わったらPRを閉じ、ブランチを消し、`implement_enabled`をfalseに戻す(有効化はe2eの結果を確かめてから別に行う)。
