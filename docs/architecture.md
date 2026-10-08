@@ -77,7 +77,7 @@ stateDiagram-v2
     fixing --> rereview_requested
     fixing --> blocked
     fixing --> requirements_generating: requirements_gap(親Issueが存在、attempt+1)
-    fixing --> needs_human: requirements_gap(元Issueが分からない場合)
+    fixing --> needs_human: requirements_gap(元Issueが分からない、親が実装中、親が読み取り後に変わった)
     fixing --> cancelled: PRがclosed/merged
     blocked --> needs_human
     needs_human --> [*]
@@ -137,12 +137,13 @@ PRは終端statusになってもトリガーラベルの消費以外の付け外
 - `implementing` → `needs_human`: ラウンド上限・日次予算・フロー全体の期限(修正ラウンドを始める時間が残っていない)・停滞・symlink変更・差分超過・Claude実行失敗・変更なし・push / PR作成失敗・時間設定がstep timeoutに収まらない(準備ステップで止める)。秘密情報の検査に通れば途中の変更をブランチにpushしてから止める。この途中経過のコミットと、再実行が成功したときの実装コミットは別コミットになる(1コミットにまとめるのは通常の経路のみ)。
 - `implementing` → `cancelled`: Issueがclosedになった(準備時と完了時に確認する。実行中は`poll_issues`のreconcile)。
 
-**実装フローのリース(二重実行の防止)**: `implementing`の作業項目の`flow_job_id`は実装フローのリースとして扱う。`implement_prepare`は最初に(worktreeに触る前に)、statusが`implementing`で`flow_job_id`が空か自分のルートジョブID(`WM_ROOT_FLOW_JOB_ID`。`runFlowAsync`の戻り値と同じ値)のときだけ自分のIDを書き込み、書き込めなければ何もせずに終わる(読み直した`flow_job_id`と自分のIDをログに残す)。Issueのcloseによる取り消し(`cancelJob`の失敗は無視される)やpr_fixの差し戻しで、実行中にリースが移ることがあるので、`implement_generate`はClaudeを実行する前に、`implement_verify`は各ラウンドの冒頭(worktreeに触れる前)と各修正ラウンドの前に、`implement_finish`は作業項目を読んだ直後と外への副作用(commit・push、worktreeとリモートブランチの削除、PRの作成と更新、`pr_url`の記録、ラベル)の直前にリースを確かめ、失っていれば何もせずに終わる。`implement_finish`の状態の遷移はすべて`flow_job_id`が自分のIDであることを条件にする。`retry_work_item`は記録されたジョブがまだ動いているか状態を読めなければ再実行を拒否する。`poll_issues`のreconcileと`on_error_flow`は、読み取った時点の`flow_job_id`が変わっていないときだけ作業項目を`failed` / `cancelled`にする。Windmillのrerunは新しいジョブIDで最初から走るので、準備の最初で何もせずに終わる。途中のステップからのrestartも新しいジョブIDで走るので、再開したステップの最初のリースの確認(`implement_generate`、`implement_verify`、`implement_finish`)で何もせずに終わる。どちらも、元の実行で進行中のClaudeの実行や検査を中断はしない(再実行は`retry_work_item`を使う)。
+**実装フローのリース(二重実行の防止)**: `implementing`の作業項目の`flow_job_id`は実装フローのリースとして扱う。`implement_prepare`は最初に(worktreeに触る前に)、statusが`implementing`で`flow_job_id`が空か自分のルートジョブID(`WM_ROOT_FLOW_JOB_ID`。`runFlowAsync`の戻り値と同じ値)のときだけ自分のIDを書き込み、書き込めなければ何もせずに終わる(読み直した`flow_job_id`と自分のIDをログに残す)。Issueのcloseによる取り消し(`cancelJob`の失敗は無視される)などで、実行中にリースが移ることがあるので、`implement_generate`はClaudeを実行する前に、`implement_verify`は各ラウンドの冒頭(worktreeに触れる前)と各修正ラウンドの前に、`implement_finish`は作業項目を読んだ直後と外への副作用(commit・push、worktreeとリモートブランチの削除、PRの作成と更新、`pr_url`の記録、ラベル)の直前にリースを確かめ、失っていれば何もせずに終わる。`implement_finish`の状態の遷移はすべて`flow_job_id`が自分のIDであることを条件にする。`retry_work_item`は記録されたジョブがまだ動いているか状態を読めなければ再実行を拒否する。`poll_issues`のreconcileと`on_error_flow`は、読み取った時点の`flow_job_id`が変わっていないときだけ作業項目を`failed` / `cancelled`にする。Windmillのrerunは新しいジョブIDで最初から走るので、準備の最初で何もせずに終わる。途中のステップからのrestartも新しいジョブIDで走るので、再開したステップの最初のリースの確認(`implement_generate`、`implement_verify`、`implement_finish`)で何もせずに終わる。どちらも、元の実行で進行中のClaudeの実行や検査を中断はしない(再実行は`retry_work_item`を使う)。
 
 **PRワークフローの`requirements_gap`:**
 - `pr_fix`フロー実行中に`outcome: "requirements_gap"`が返された場合、`parent_work_item_id`で元Issueの作業項目を特定する。
-- 元Issueが存在する場合、その作業項目を`requirements_generating`にattempt+1で再起動(issueの工程2に戻す)。
+- 元Issueが存在する場合、その作業項目を`requirements_generating`にattempt+1で再起動(issueの工程2に戻す)。親の状態の書き換えは、読み取った時点の`status`と`flow_job_id`のままであることを条件にした比較交換で行い、同じ文で`flow_job_id`を空にする。起動したpipelineのジョブIDは、`flow_job_id`が空のままのときだけ記録する。
 - 元Issueが見つからない場合(PRがFactory製ではなくmanualで投入された場合など)は`needs_human`に遷移。
+- 親が`implementing`のとき(`pr_fix_prepare`の確認の後に実装フローが動き出した)と、読み取った後に親の`status`か`flow_job_id`が変わって比較交換が失敗したときは、差し戻さずに`pr_fix`の作業項目を`needs_human`にし、PRへのリンクと次の操作をDiscordで知らせる。実行中の実装フローのリースを奪わないためで、watermarkは進めない。
 
 ## データモデル
 

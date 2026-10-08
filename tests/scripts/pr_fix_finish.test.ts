@@ -1,5 +1,6 @@
 // `pr_fix_finish.ts`が使う`pr_workflow_support.ts`の`decideFixFinishAction`、
-// `deriveFallbackReviewers`、`evaluateRerouteGuard`、`renderFixReply`、
+// `deriveFallbackReviewers`、`evaluateRerouteGuard`、`evaluateRerouteParentStatus`、
+// `rerouteParentChangedReason`、`withGapReport`、`renderFixReply`、
 // `shouldAdvanceWatermarks`のテスト。
 
 import { describe, expect, test } from "bun:test";
@@ -7,9 +8,14 @@ import type { FixReply } from "../../f/factory/lib/types.ts";
 import {
   decideFixFinishAction,
   deriveFallbackReviewers,
+  describeReason,
   evaluateRerouteGuard,
+  evaluateRerouteParentStatus,
+  nextActionFor,
   renderFixReply,
+  rerouteParentChangedReason,
   shouldAdvanceWatermarks,
+  withGapReport,
 } from "../../f/factory/steps/pr_workflow_support.ts";
 
 describe("decideFixFinishAction", () => {
@@ -87,6 +93,81 @@ describe("evaluateRerouteGuard", () => {
   test("blocks the reroute when the parent work item has no issue_number", () => {
     expect(evaluateRerouteGuard(null)).toBe(
       "parent work item has no issue_number",
+    );
+  });
+});
+
+describe("evaluateRerouteParentStatus", () => {
+  test("allows the reroute when the parent is not implementing", () => {
+    expect(evaluateRerouteParentStatus(7, "pr_open")).toBeNull();
+  });
+
+  // 実行中の実装フローのリースを奪い、その結果を失わせないため。
+  test("refuses the reroute while the parent is implementing", () => {
+    expect(evaluateRerouteParentStatus(7, "implementing")).toBe(
+      "parent work item 7 is being implemented, requirements_gap not rerouted",
+    );
+  });
+});
+
+describe("rerouteParentChangedReason", () => {
+  test("names the parent work item that changed after it was read", () => {
+    expect(rerouteParentChangedReason(7)).toBe(
+      "parent work item 7 changed before the requirements_gap reroute",
+    );
+  });
+});
+
+describe("withGapReport", () => {
+  test("appends the gap report as a separate reason segment", () => {
+    expect(withGapReport("refused", "spec is missing X")).toBe(
+      "refused; spec is missing X",
+    );
+  });
+
+  test("returns the reason alone when the gap report is empty", () => {
+    expect(withGapReport("refused", "")).toBe("refused");
+  });
+});
+
+describe("describeReason (requirements_gap reroute refusal)", () => {
+  test("translates the parent-implementing refusal", () => {
+    expect(
+      describeReason(
+        "parent work item 7 is being implemented, requirements_gap not rerouted",
+      ),
+    ).toBe(
+      "親Issueの作業項目(7)が実装中のため、要件定義への差し戻しを止めました",
+    );
+  });
+
+  test("translates the parent-changed refusal", () => {
+    expect(
+      describeReason(
+        "parent work item 7 changed before the requirements_gap reroute",
+      ),
+    ).toBe(
+      "差し戻す前に親Issueの作業項目(7)の状態が変わったため、要件定義への差し戻しを止めました",
+    );
+  });
+});
+
+describe("nextActionFor (requirements_gap reroute refusal)", () => {
+  test("asks to wait for the implement flow when the parent is implementing", () => {
+    expect(
+      nextActionFor(
+        "parent work item 7 is being implemented, requirements_gap not rerouted; spec is missing X",
+      ),
+    ).toBe("実装フローの完了を待ってから再度`factory:fix`を付けてください");
+  });
+
+  test("asks to check the parent in the Console when it changed", () => {
+    expect(
+      nextActionFor(
+        "parent work item 7 changed before the requirements_gap reroute; spec is missing X",
+      ),
+    ).toBe(
+      "Consoleで親Issueの作業項目の状態を確認し、必要なら再度`factory:fix`を付けてください",
     );
   });
 });

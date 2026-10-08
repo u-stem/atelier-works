@@ -2150,6 +2150,37 @@ export function evaluateRerouteGuard(
 }
 
 /**
+ * `pr_fix_finish.ts`のrequirements_gapの差し戻しで、親の作業項目の状態を見る関門。
+ * `null`なら差し戻してよく、それ以外は`needs_human`に倒す理由を返す。
+ * 親が`implementing`なら実装フローが動いており、差し戻すとそのリースを奪って結果を失わせる。
+ * `pr_fix_prepare`の同じ確認は開始時の1回だけなので、差し戻す直前にもう一度確かめる。
+ */
+export function evaluateRerouteParentStatus(
+  parentWorkItemId: number,
+  parentStatus: WorkItemStatus,
+): string | null {
+  return parentStatus === "implementing"
+    ? `parent work item ${String(parentWorkItemId)} is being implemented, requirements_gap not rerouted`
+    : null;
+}
+
+/**
+ * 親の作業項目を読んだ後、差し戻しの比較交換までの間に状態か`flow_job_id`が変わったときの理由。
+ * 並行して別のフローが親を進めたので、差し戻さずに`needs_human`へ倒す。
+ */
+export function rerouteParentChangedReason(parentWorkItemId: number): string {
+  return `parent work item ${String(parentWorkItemId)} changed before the requirements_gap reroute`;
+}
+
+/**
+ * 差し戻しを止めた理由の後ろに、Claudeが報告した要件の不足を別の区間としてつなぐ。
+ * `describeReason`は区間ごとに訳し、`nextActionFor`は先頭の理由の対応を選ぶ。
+ */
+export function withGapReport(reason: string, gapReport: string): string {
+  return gapReport.length > 0 ? `${reason}; ${gapReport}` : reason;
+}
+
+/**
  * `factory_config.default_reviewers`が空のときに使う代わりのレビュアー。
  * この修正ラウンドを起こしたレビューやコメントの投稿者を使う。
  * `github.ts`の`PullRequest`には、代わりに読める
@@ -2839,6 +2870,23 @@ const REASON_RULES: readonly ReasonRule[] = [
     pattern: /^parent work item has no issue_number$/,
     describe: () => "親の work item に issue_number がありません",
     nextAction: () => "work itemの状態をConsoleで確認してください",
+  },
+  // pr_fix_finish.tsの`evaluateRerouteParentStatus`と`rerouteParentChangedReason`
+  {
+    pattern:
+      /^parent work item (\d+) is being implemented, requirements_gap not rerouted$/,
+    describe: (m) =>
+      `親Issueの作業項目(${m[1]})が実装中のため、要件定義への差し戻しを止めました`,
+    nextAction: () =>
+      "実装フローの完了を待ってから再度`factory:fix`を付けてください",
+  },
+  {
+    pattern:
+      /^parent work item (\d+) changed before the requirements_gap reroute$/,
+    describe: (m) =>
+      `差し戻す前に親Issueの作業項目(${m[1]})の状態が変わったため、要件定義への差し戻しを止めました`,
+    nextAction: () =>
+      "Consoleで親Issueの作業項目の状態を確認し、必要なら再度`factory:fix`を付けてください",
   },
   // requirements_apply.tsの差し戻し・needs_humanの結果と、
   // poll_issues.tsの期限切れの掃除

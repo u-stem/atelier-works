@@ -11,10 +11,10 @@ import {
   insertApprovalRequest,
   insertFixRound,
   insertIssueProposal,
-  setFlowJobId,
+  setFlowJobIdIfUnset,
   setHeadSha,
-  updateStatus,
   updateStatusIfCurrent,
+  updateStatusIfLeaseHolderClearingFlowJobId,
 } from "../lib/db.ts";
 import { type NotifyEvent, notify } from "../lib/discord.ts";
 import {
@@ -41,13 +41,16 @@ import {
   deriveFallbackReviewers,
   describeReason,
   evaluateRerouteGuard,
+  evaluateRerouteParentStatus,
   filterKnownReplies,
   matchReviewThreadForComment,
   nextActionFor,
   type PrFixFinishOutcome,
   renderFixReply,
+  rerouteParentChangedReason,
   selectProposeIssueReplies,
   shouldAdvanceWatermarks,
+  withGapReport,
 } from "./pr_workflow_support.ts";
 
 const ALL_OUTCOMES: readonly PrFixFinishOutcome[] = [
@@ -132,16 +135,18 @@ export async function main(
   /**
    * 作業項目を`fixing`から`toStatus`へ遷移させ、遷移できたらDiscordへ
    * needs_humanを通知する。通知の失敗は警告を記録するだけで投げない。
+   * `statusNote`は`work_items.status_reason`に記録する値で、省略すると直前のステップの`reason`を使う。
    */
   async function finalizeTerminal(
     toStatus: WorkItemStatus,
     discordReason: string,
+    statusNote: string | null = reason,
   ): Promise<void> {
     const moved = await updateStatusIfCurrent(
       work_item_id,
       "fixing",
       toStatus,
-      reason,
+      statusNote,
     );
     if (!moved) return;
     // トリガーの`fix_label`は`poll_prs.ts`が着手時に消費済みなので、外すラベルは無い。
@@ -156,8 +161,7 @@ export async function main(
           owner,
           repo,
           url: prUrl,
-          // 日本語への変換は表示用。変換前の値は、上の`updateStatusIfCurrent`で
-          // `work_items.status_reason`に記録済み。
+          // 日本語への変換は表示用。記録する`status_reason`は変換前の英語のまま保つ。
           reason: describeReason(discordReason),
           target: { kind: "pr", number: pr_number },
           next_action: nextActionFor(discordReason),
@@ -250,6 +254,35 @@ export async function main(
       return { ok: true, final_status: "needs_human", notice: reason };
     }
 
+    // 親の実装フローが動いている間は差し戻さない。
+    // 読んだ後に親が変わったときも、下の比較交換が失敗するので差し戻さない。
+    // どちらもwatermarkは進めず、人に知らせる。
+    const parentStatusReason = evaluateRerouteParentStatus(
+      parent_work_item_id,
+      parentItem.status,
+    );
+    const rerouted =
+      parentStatusReason === null &&
+      (await updateStatusIfLeaseHolderClearingFlowJobId(
+        parent_work_item_id,
+        parentItem.status,
+        "requirements_generating",
+        parentItem.flow_job_id,
+        `gap: ${gapReport}`,
+      ));
+    if (!rerouted) {
+      const refusal =
+        parentStatusReason ?? rerouteParentChangedReason(parent_work_item_id);
+      log.warn("aborting requirements_gap reroute: parent work item is busy", {
+        parent_work_item_id,
+        parent_status: parentItem.status,
+        detail: refusal,
+      });
+      const refusalWithGap = withGapReport(refusal, gapReport);
+      await finalizeTerminal("needs_human", refusalWithGap, refusalWithGap);
+      return { ok: true, final_status: "needs_human", notice: refusal };
+    }
+
     // 親Issueの要件定義を作り直すことで今回のフィードバックに対応するため、
     // 差し戻しでフィードバックを消費したとみなし、ここでwatermarkを進める。
     if (shouldAdvanceWatermarks("requirements_gap_reroute_success")) {
@@ -259,12 +292,6 @@ export async function main(
         last_review_comment_id: max_review_comment_id,
       });
     }
-
-    await updateStatus(
-      parent_work_item_id,
-      "requirements_generating",
-      `gap: ${gapReport}`,
-    );
 
     // この分岐の他のDB・GitHubへの副作用は、すべて`runFlowAsync`より先に行う。
     // 子のpipelineフローの起動は、取り消せず外から見える唯一の操作だからである。
@@ -290,7 +317,18 @@ export async function main(
       }),
       "runFlowAsync",
     );
-    await setFlowJobId(parent_work_item_id, childFlowJobId);
+    // 比較交換で空にした`flow_job_id`が空のままのときだけ記録し、
+    // その間に別の実行が書いたIDを上書きしない。
+    const recorded = await setFlowJobIdIfUnset(
+      parent_work_item_id,
+      childFlowJobId,
+    );
+    if (!recorded) {
+      log.warn("pipeline flow job id not recorded; another run holds it", {
+        parent_work_item_id,
+        started_job_id: childFlowJobId,
+      });
+    }
 
     return { ok: true, final_status: "blocked", notice: gapReport };
   }
