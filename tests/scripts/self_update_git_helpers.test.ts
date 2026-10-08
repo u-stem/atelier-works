@@ -87,9 +87,9 @@ describe("readSelfCloneBranch", () => {
 });
 
 describe("listAllPaths", () => {
-  test("returns every non-empty line, trimmed", async () => {
+  test("returns every NUL-separated path", async () => {
     const { run } = createFakeCommandRunner([
-      ok("f/factory/self_update.ts\nmise.toml\n"),
+      ok("f/factory/self_update.ts\0mise.toml\0"),
     ]);
     const paths = await listAllPaths(
       run,
@@ -97,6 +97,26 @@ describe("listAllPaths", () => {
       "abc1234567890abc1234567890abc1234567890",
     );
     expect(paths).toEqual(["f/factory/self_update.ts", "mise.toml"]);
+  });
+
+  test("returns a non-ASCII path unquoted", async () => {
+    const { run } = createFakeCommandRunner([ok("infra/設定.yml\0")]);
+    const paths = await listAllPaths(
+      run,
+      "/workspaces/factory/atelier-works",
+      "abc1234567890abc1234567890abc1234567890",
+    );
+    expect(paths).toEqual(["infra/設定.yml"]);
+  });
+
+  test("passes -z to git ls-tree", async () => {
+    const fake = createFakeCommandRunner([ok("")]);
+    await listAllPaths(
+      fake.run,
+      "/workspaces/factory/atelier-works",
+      "abc1234567890abc1234567890abc1234567890",
+    );
+    expect(fake.calls[0]?.argv).toContain("-z");
   });
 
   test("uses git ls-tree -r --name-only with the given sha", async () => {
@@ -136,8 +156,8 @@ describe("listAllPaths", () => {
 });
 
 describe("diffPaths", () => {
-  test("returns every non-empty changed path line, trimmed", async () => {
-    const { run } = createFakeCommandRunner([ok("mise.toml\ninfra/x.yml\n")]);
+  test("returns every NUL-separated changed path", async () => {
+    const { run } = createFakeCommandRunner([ok("mise.toml\0infra/x.yml\0")]);
     const paths = await diffPaths(
       run,
       "/workspaces/factory/atelier-works",
@@ -145,6 +165,39 @@ describe("diffPaths", () => {
       "0000000000000000000000000000000000000b",
     );
     expect(paths).toEqual(["mise.toml", "infra/x.yml"]);
+  });
+
+  test("returns a non-ASCII changed path unquoted", async () => {
+    const { run } = createFakeCommandRunner([ok("infra/設定.yml\0")]);
+    const paths = await diffPaths(
+      run,
+      "/workspaces/factory/atelier-works",
+      "0000000000000000000000000000000000000a",
+      "0000000000000000000000000000000000000b",
+    );
+    expect(paths).toEqual(["infra/設定.yml"]);
+  });
+
+  test("passes --no-renames to git diff", async () => {
+    const fake = createFakeCommandRunner([ok("")]);
+    await diffPaths(
+      fake.run,
+      "/workspaces/factory/atelier-works",
+      "0000000000000000000000000000000000000a",
+      "0000000000000000000000000000000000000b",
+    );
+    expect(fake.calls[0]?.argv).toContain("--no-renames");
+  });
+
+  test("passes -z to git diff", async () => {
+    const fake = createFakeCommandRunner([ok("")]);
+    await diffPaths(
+      fake.run,
+      "/workspaces/factory/atelier-works",
+      "0000000000000000000000000000000000000a",
+      "0000000000000000000000000000000000000b",
+    );
+    expect(fake.calls[0]?.argv).toContain("-z");
   });
 
   test("uses git diff --name-only oldSha..newSha as one range argument", async () => {

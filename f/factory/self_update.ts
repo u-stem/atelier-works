@@ -25,6 +25,7 @@ import {
   decideUpdate,
   MISE_TOML_PATH,
   miseTomlNeedsHostAction,
+  parseNulSeparatedPaths,
   RAW_APP_RELATIVE_DIR,
   resolveWmillCliContext,
   truncateOutput,
@@ -109,8 +110,9 @@ export async function readSelfCloneBranch(
 
 /**
  * self cloneの`newSha`にあるすべてのファイルパスを返す
- * (`git ls-tree -r --name-only`)。比べる前回デプロイのshaが無いとき、
+ * (`git ls-tree -r --name-only -z`)。比べる前回デプロイのshaが無いとき、
  * 差分の代わりに使い、全ファイルを変更として扱う。
+ * `-z`を付けるのは、非ASCIIのパスが引用符つきで出力されないようにするため。
  */
 export async function listAllPaths(
   run: CommandRunner,
@@ -119,7 +121,7 @@ export async function listAllPaths(
 ): Promise<string[]> {
   assertSha(newSha);
   const result = await run(
-    [...GIT_BASE_ARGV, "ls-tree", "-r", "--name-only", newSha],
+    [...GIT_BASE_ARGV, "ls-tree", "-r", "--name-only", "-z", newSha],
     { cwd: dir, env: selfCloneGitEnv() },
   );
   if (result.exitCode !== 0) {
@@ -127,15 +129,15 @@ export async function listAllPaths(
       maskSecrets(`git ls-tree failed in ${dir}: ${result.stderr.trim()}`),
     );
   }
-  return result.stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
+  return parseNulSeparatedPaths(result.stdout);
 }
 
 /**
  * self cloneの2つのコミットの間で変わったファイルパスを返す
- * (`git diff --name-only oldSha..newSha`)。
+ * (`git diff --name-only -z oldSha..newSha`)。
+ * `-z`の理由は`listAllPaths`と同じ。`--no-renames`を付けるのは、
+ * 改名の検出が有効だと新しい名前だけが列挙され、`infra/`から外へ
+ * 移したファイルを変更として拾えないため(旧名と新名の両方を列挙させる)。
  * どちらのshaも`assertSha`で検査し、ここでは常に内部で得た16進のshaで
  * 外部の入力ではない。そのため`--`で区切らず直接埋め込んでも安全
  * (`lib/workspace.ts`のgit操作と同じ理由)。
@@ -149,7 +151,14 @@ export async function diffPaths(
   assertSha(oldSha);
   assertSha(newSha);
   const result = await run(
-    [...GIT_BASE_ARGV, "diff", "--name-only", `${oldSha}..${newSha}`],
+    [
+      ...GIT_BASE_ARGV,
+      "diff",
+      "--name-only",
+      "--no-renames",
+      "-z",
+      `${oldSha}..${newSha}`,
+    ],
     { cwd: dir, env: selfCloneGitEnv() },
   );
   if (result.exitCode !== 0) {
@@ -157,10 +166,7 @@ export async function diffPaths(
       maskSecrets(`git diff failed in ${dir}: ${result.stderr.trim()}`),
     );
   }
-  return result.stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
+  return parseNulSeparatedPaths(result.stdout);
 }
 
 /**
