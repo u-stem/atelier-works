@@ -32,6 +32,12 @@ export type PipelineRequestApprovalResult =
 export const APPROVAL_REQUEST_WITHDRAWN_REASON =
   "work item moved on before approval could be requested; the approval request was expired";
 
+/** 作業項目へ進めず、期限切れにする前に人が依頼を判断していたときの理由。 */
+export const APPROVAL_REQUEST_ALREADY_DECIDED_REASON =
+  "work item moved on before approval could be requested, but the approval request had already been decided";
+
+export type AwaitingApprovalOutcome = "moved" | "withdrawn" | "already_decided";
+
 export type AwaitingApprovalDeps = {
   /** `updateStatusIfLeaseHolder`で、リースを持つまま`requirements_generating`から`awaiting_approval`へ移す。 */
   readonly casToAwaitingApproval: () => Promise<boolean>;
@@ -40,16 +46,16 @@ export type AwaitingApprovalDeps = {
 };
 
 /**
- * 作業項目を`awaiting_approval`へ移し、移せたら`true`を返す。
- * 移せなければ(リースが移った、状態が先へ進んだ)、記録した承認依頼を期限切れにして`false`を返す。
+ * 作業項目を`awaiting_approval`へ移し、移せたら`moved`を返す。
+ * 移せなければ(リースが移った、状態が先へ進んだ)、記録した承認依頼を期限切れにして`withdrawn`を返す。
  * 依頼をpendingのまま残すと、古いattemptの下書きを人が承認できてしまうため。
+ * 期限切れにする前に人が承認か却下をしていたら(期限切れの比較交換が負けたら)`already_decided`を返す。
  */
 export async function moveToAwaitingApproval(
   deps: AwaitingApprovalDeps,
-): Promise<boolean> {
-  if (await deps.casToAwaitingApproval()) return true;
-  await deps.withdrawRequest();
-  return false;
+): Promise<AwaitingApprovalOutcome> {
+  if (await deps.casToAwaitingApproval()) return "moved";
+  return (await deps.withdrawRequest()) ? "withdrawn" : "already_decided";
 }
 
 /**
@@ -151,7 +157,7 @@ export async function main(
     expires_at: computeExpiresAt(new Date()),
   });
 
-  const updated = await moveToAwaitingApproval({
+  const moved = await moveToAwaitingApproval({
     casToAwaitingApproval: () =>
       updateStatusIfLeaseHolder(
         work_item_id,
@@ -162,7 +168,15 @@ export async function main(
       ),
     withdrawRequest: () => expireApprovalRequestIfPending(approvalRequestId),
   });
-  if (!updated) {
+  if (moved === "already_decided") {
+    // 判断の扱いは、作業項目の状態を見るrequirements_applyに任せ、ここでは記録だけ残す。
+    log.warn(APPROVAL_REQUEST_ALREADY_DECIDED_REASON, {
+      work_item_id,
+      approval_request_id: approvalRequestId,
+    });
+    return { ok: false, reason: APPROVAL_REQUEST_ALREADY_DECIDED_REASON };
+  }
+  if (moved === "withdrawn") {
     log.info("work item moved on before approval could be requested", {
       work_item_id,
       approval_request_id: approvalRequestId,

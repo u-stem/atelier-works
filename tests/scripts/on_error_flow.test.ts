@@ -33,6 +33,10 @@ describe("shouldMarkFailed", () => {
     expect(shouldMarkFailed("job-a", null, IMPLEMENT)).toBe(true);
   });
 
+  test("marks failed when the root job id differs only in letter case", () => {
+    expect(shouldMarkFailed("job-a", "JOB-A", IMPLEMENT)).toBe(true);
+  });
+
   test("marks failed when the flow path is unknown and no flow_job_id is recorded", () => {
     expect(shouldMarkFailed(null, "job-a", null)).toBe(true);
   });
@@ -47,6 +51,10 @@ describe("shouldMarkFailed", () => {
 
   test("does not mark a pipeline failed when the root job id is unavailable", () => {
     expect(shouldMarkFailed("job-a", null, PIPELINE)).toBe(false);
+  });
+
+  test("marks a pipeline failed when the root job id differs only in letter case", () => {
+    expect(shouldMarkFailed("job-a", "JOB-A", PIPELINE)).toBe(true);
   });
 
   test("does not mark a pipeline failed when another run's job id is recorded", () => {

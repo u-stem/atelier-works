@@ -28,6 +28,7 @@ import { parseFlowJobId } from "./lib/implement_launch_support.ts";
 import { IMPLEMENT_FLOW_PATH } from "./lib/implement_loop.ts";
 import { isRequirementsApprovedForAttempt } from "./lib/implement_support.ts";
 import { logger, maskSecrets } from "./lib/log.ts";
+import { PIPELINE_FLOW_PATH } from "./lib/pipeline_lease.ts";
 import { type JobState, readJobState } from "./lib/poll_support.ts";
 import { isOneOf, type WorkItem, type WorkItemStatus } from "./lib/types.ts";
 
@@ -100,7 +101,7 @@ export function computeRestartPlan(
       }
       return {
         toStatus: "requirements_generating",
-        flowPath: "f/factory/pipeline",
+        flowPath: PIPELINE_FLOW_PATH,
         args: { work_item_id: workItem.id, attempt: workItem.attempt + 1 },
       };
     case "pr_review":
@@ -133,7 +134,7 @@ export function usesFlowJobIdLease(
 ): boolean {
   return (
     plan.flowPath === IMPLEMENT_FLOW_PATH ||
-    plan.flowPath === "f/factory/pipeline"
+    plan.flowPath === PIPELINE_FLOW_PATH
   );
 }
 

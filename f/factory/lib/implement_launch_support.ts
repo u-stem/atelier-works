@@ -1,6 +1,7 @@
 // 要件定義の承認後にimplementフローを起動する処理と、その失敗理由の文言を定義する。
 // 作業項目のflow_job_idはimplementフローのリースで、フロー自身のルートジョブIDを持つ実行だけが状態を進められる。
 // リース判定の純関数もここに置く。
+// フロー自身のルートジョブIDを返す`rootFlowJobId`は、pipelineのステップもリースの値として使う。
 
 import { maskSecrets } from "./log.ts";
 import type { WorkItem } from "./types.ts";

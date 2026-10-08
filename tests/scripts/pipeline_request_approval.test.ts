@@ -142,7 +142,10 @@ describe("reportApprovalNotifyFailure", () => {
   });
 });
 
-function deps(casResult: boolean): {
+function deps(
+  casResult: boolean,
+  withdrawResult = true,
+): {
   deps: AwaitingApprovalDeps;
   calls: string[];
 } {
@@ -156,15 +159,15 @@ function deps(casResult: boolean): {
       },
       withdrawRequest: async () => {
         calls.push("withdraw");
-        return true;
+        return withdrawResult;
       },
     },
   };
 }
 
 describe("moveToAwaitingApproval", () => {
-  test("returns true when the work item moved to awaiting_approval", async () => {
-    expect(await moveToAwaitingApproval(deps(true).deps)).toBe(true);
+  test("returns moved when the work item moved to awaiting_approval", async () => {
+    expect(await moveToAwaitingApproval(deps(true).deps)).toBe("moved");
   });
 
   test("keeps the approval request when the work item moved", async () => {
@@ -173,8 +176,16 @@ describe("moveToAwaitingApproval", () => {
     expect(h.calls).not.toContain("withdraw");
   });
 
-  test("returns false when the lease or the status changed", async () => {
-    expect(await moveToAwaitingApproval(deps(false).deps)).toBe(false);
+  test("returns withdrawn when the lease or the status changed and the request was expired", async () => {
+    expect(await moveToAwaitingApproval(deps(false, true).deps)).toBe(
+      "withdrawn",
+    );
+  });
+
+  test("returns already_decided when a human decided the request before it could be expired", async () => {
+    expect(await moveToAwaitingApproval(deps(false, false).deps)).toBe(
+      "already_decided",
+    );
   });
 
   test("withdraws the inserted request when the lease or the status changed", async () => {
