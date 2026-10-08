@@ -5,6 +5,7 @@
 
 import React from "react";
 import { extractHeadings, extractTitle } from "../lib/extractHeadings";
+import { safeGitHubUrl } from "../lib/githubLink";
 import { type RequirementsDocRow, toRequirementsDocRow } from "../lib/types";
 import { useConsoleQuery } from "../lib/useConsoleQuery";
 import "./confluence.css";
@@ -71,6 +72,7 @@ export function RequirementsDocument({
   headerActions?: React.ReactNode;
 }): React.ReactElement {
   const title = extractTitle(doc.markdown) ?? doc.title ?? "(無題)";
+  const issueUrl = safeGitHubUrl(doc.issue_url);
 
   return (
     <div className="confluence-doc">
@@ -84,9 +86,13 @@ export function RequirementsDocument({
             <>
               {" "}
               ・{" "}
-              <a href={doc.issue_url} target="_blank" rel="noreferrer">
-                Issue #{doc.issue_number ?? "-"}
-              </a>
+              {issueUrl !== null ? (
+                <a href={issueUrl} target="_blank" rel="noreferrer">
+                  Issue #{doc.issue_number ?? "-"}
+                </a>
+              ) : (
+                <span>Issue #{doc.issue_number ?? "-"}</span>
+              )}
             </>
           )}
           {" ・ "}attempt {doc.attempt}
