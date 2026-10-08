@@ -952,6 +952,26 @@ describe("listUncommittedChangedPaths", () => {
     ]);
   });
 
+  test("throws when git status fails", async () => {
+    const { run } = createFakeCommandRunner([
+      fail("fatal: not a git repository"),
+      ok(""),
+    ]);
+    await expect(listUncommittedChangedPaths(run, "/wt")).rejects.toThrow(
+      /git status --porcelain failed/,
+    );
+  });
+
+  test("throws when git diff --name-only fails", async () => {
+    const { run } = createFakeCommandRunner([
+      ok(""),
+      fail("fatal: not a git repository"),
+    ]);
+    await expect(listUncommittedChangedPaths(run, "/wt")).rejects.toThrow(
+      /git diff --name-only failed/,
+    );
+  });
+
   test("throws when the git status output was abandoned", async () => {
     const { run } = createFakeCommandRunner([abandoned(""), ok("")]);
     await expect(listUncommittedChangedPaths(run, "/wt")).rejects.toThrow(

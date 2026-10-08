@@ -1295,8 +1295,9 @@ export async function listSymlinkChanges(
 
 /**
  * worktreeのコミットしていない変更のパスを、`git status --porcelain`と`git diff --name-only`の和集合(`mergeChangedPaths`)で返す。
- * pr_fixの保護パス・symlink・差分の大きさの判定の入力になるので、どちらかの出力の読み取りを打ち切っていれば例外を投げる。
- * gitはhook・fsmonitor・credential helperを無効にして実行する。終了コードは見ない。
+ * pr_fixの保護パス・symlink・差分の大きさの判定の入力になるので、どちらかが失敗したとき(終了コードが0以外)と、
+ * 出力の読み取りを打ち切ったときは例外を投げる。空の一覧として扱うと、変更を見落とすため。
+ * gitはhook・fsmonitor・credential helperを無効にして実行する。
  */
 export async function listUncommittedChangedPaths(
   run: CommandRunner,
@@ -1315,6 +1316,18 @@ export async function listUncommittedChangedPaths(
     statusResult,
   );
   assertOutputComplete(`git diff --name-only in ${worktreeDir}`, diffResult);
+  for (const [name, result] of [
+    ["git status --porcelain", statusResult],
+    ["git diff --name-only", diffResult],
+  ] as const) {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        maskSecrets(
+          `${name} failed in ${worktreeDir}: ${result.stderr.trim()}`,
+        ),
+      );
+    }
+  }
   return mergeChangedPaths(
     parseGitStatusPorcelain(statusResult.stdout),
     parseGitDiffNameOnly(diffResult.stdout),
