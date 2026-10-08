@@ -73,4 +73,4 @@ locks:
   f/factory/steps/pr_review_post: ef02ecc4cbbf60951b44ea9f9fe97b8e82821468d87ea96ee09b089207006586
   f/factory/steps/pr_review_prepare: 32adc3bfb128879eb200eccc00adcdaf66ebaeba925a06f49eb7cdf5bc70f065
   f/factory/steps/pr_workflow_support: a60dd44a676621493a9c858a7f4083f16391c1ae59438afcf921722dd11d4062
-  f/factory/steps/requirements_apply: 9da5ba4179751b25d26daa94e4ae2621244fdd620092d52994594098a75fbca7
+  f/factory/steps/requirements_apply: 73dcb230b8d408779756ff2408b4ec6c28ab50ad6d4a32891ec357cae3e65197
