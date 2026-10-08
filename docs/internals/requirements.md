@@ -76,7 +76,7 @@ Claudeの出力が検査を通らないときは、問題点をプロンプト�
 
 ## Consoleでの表示
 
-Consoleの要件定義タブと、Inboxタブの要件定義の詳細は、どちらも`f/factory/steps/console_query.ts`の`requirements_doc`ビューを使う。このビューは`requirements_doc.ts`の検査とは別のものである。
+Consoleの**要件定義**タブと、**承認**タブの要件定義の詳細は、どちらも`f/factory/steps/console_query.ts`の`requirements_doc`ビューを使う。このビューは`requirements_doc.ts`の検査とは別のものである。
 
 ビューは、DBの行の`doc_dir`から`requirements.md`と各図のファイルを読み戻す(`readDocFromDisk`)。raw appの`components/RequirementsDocument.tsx`、`Markdown.tsx`、`DrawioViewer.tsx`が、本文、目次、図をページの中に描画する。見た目はConfluenceの文書ページに近い。
 
@@ -117,7 +117,7 @@ Consoleの要件定義タブと、Inboxタブの要件定義の詳細は、ど�
 
 ### 決定の記録
 
-人はConsoleのInboxから承認か却下をする。Consoleは`f/factory/approval_decide`を実行する。却下には理由が必須で、承認には要らない。補足(`note`)は理由に織り込んで記録する。判断側のオプション(`options`)は`decision_options`列に記録する。
+人はConsoleの**承認**タブから承認か却下をする。Consoleは`f/factory/approval_decide`を実行する。却下には理由が必須で、承認には要らない。補足(`note`)は理由に織り込んで記録する。判断側のオプション(`options`)は`decision_options`列に記録する。
 
 `approval_decide`は、行の今の状態と今回の決定を比べて扱いを決める(`classifyExistingDecision`)。
 

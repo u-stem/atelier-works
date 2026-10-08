@@ -49,8 +49,11 @@ read -rs -p 'KEY: ' v && mise set -E local KEY="$v"; unset v
 mise exec -- sh -c 'test -n "$DB_PASSWORD" && echo ok'
 ```
 
+`mise set -E local KEY=value`と値を直接書く方法は、補足の手段にとどめる。
+
 > [!WARNING]
-> `mise set -E local KEY=value`と値を直接書く方法もあるが、使わない。値がシェルの履歴にそのまま残る。値に`!`などの記号があると、zshの履歴展開で壊れる。
+> 値を直接書くと、値がシェルの履歴にそのまま残る。
+> 値に`!`などの記号があると、zshの履歴展開で壊れるので、記号を含まない値にだけ使う。
 
 ## 起動する
 
@@ -145,8 +148,8 @@ LEFTHOOK_EXCLUDE=wmill-metadata-check git push
 | `doctor`が「初期パスワード」でNGになる | パスワードが`changeme`のままである。`mise run bootstrap`がログインした後にパスワードを変える |
 | `required variable ... is missing a value: run via mise`と出る | `docker compose`を`mise run`を通さずに実行している。composeの環境変数はmiseからしか渡らないので、`mise run <task>`か`mise exec -- docker compose ...`で実行する |
 | workerのイメージを作り直したい | `mise run build`で、`windmill_worker`のサービスだけを作り直す |
-| すべてを初期化したい | `docker compose -f infra/docker-compose.yml down -v`を実行する。下の警告を読んでから行う |
+| すべてを初期化したい | `mise exec -- docker compose -f infra/docker-compose.yml down -v`を実行する。下の警告を読んでから行う |
 | ホストのCPUアーキテクチャが合うか気になる | 対応は要らない。Windmillの公式イメージとworkerのイメージは、arm64とamd64の両方に対応している |
 
 > [!WARNING]
-> `docker compose -f infra/docker-compose.yml down -v`は、`db_data`を含むすべてのvolumeを消す。Windmillのデータは元に戻せない。
+> `mise exec -- docker compose -f infra/docker-compose.yml down -v`は、`db_data`を含むすべてのvolumeを消す。Windmillのデータは元に戻せない。

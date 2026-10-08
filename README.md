@@ -16,7 +16,7 @@ Factoryは次の5つの工程で動く。
 
 工程のほかに、次のものが動く。
 
-- Docker Composeで動くWindmillのスタックと、claude・gh・gtr・wmillを入れたworkerのイメージ
+- Docker Composeで動くWindmillのスタックと、claude・gh・gitleaks・gtr・wmillを入れたworkerのイメージ
 - Data Table、`doctor`、`bootstrap`
 - ダッシュボードのApp(Factory Console)
 - 自己更新と、失敗したジョブの通知

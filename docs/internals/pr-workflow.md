@@ -56,7 +56,7 @@ PR修正はラベルからしか起動しない。コメントやcommitのpush�
 
 ### ラベルを外した後の追跡
 
-Factoryが扱ったPRには、トリガーのラベルのほかにラベルを付けない。状態は作業項目の状態(`work_items.status`)だけで表し、ConsoleのPipelineタブに表示する。
+Factoryが扱ったPRには、トリガーのラベルのほかにラベルを付けない。状態は作業項目の状態(`work_items.status`)だけで表し、Consoleの**パイプライン**タブに表示する。
 
 ラベルが外れた後も追跡を続けるため、`poll_prs`はDBからPRを見つけ直す。`f/factory/lib/db.ts`の`listTrackedPrs`が、次の条件をすべて満たす作業項目を返す。
 
@@ -298,7 +298,7 @@ Claudeは`propose_issue`を選んだとき、修正を強行せず、Issueの`ti
 
 ### 承認と却下の反映
 
-人がConsoleのInboxで決定すると、`f/factory/approval_decide`が決定を記録し、`f/factory/steps/issue_proposal_apply`を起動する。承認依頼の種類(`kind`)は`issue_proposal`である。要件定義の承認と同じく、人が判断してから進む仕組みである。
+人がConsoleの**承認**タブで決定すると、`f/factory/approval_decide`が決定を記録し、`f/factory/steps/issue_proposal_apply`を起動する。承認依頼の種類(`kind`)は`issue_proposal`である。要件定義の承認と同じく、人が判断してから進む仕組みである。
 
 | 決定 | 処理 |
 | --- | --- |
@@ -322,7 +322,7 @@ Claudeは`propose_issue`を選んだとき、修正を強行せず、Issueの`ti
 - 作ったIssueの本文に`<!-- factory:issue_proposal:<id> -->`の目印を入れる。再実行では`findIssueByMarker`でこのIssueを探して再利用する。
 - 決定済みの提案に違う決定を送ると、上書きせずにエラーで拒否する。
 
-起票に失敗した提案はInboxに残る。Issueの作成自体が失敗したときは、決定の前の`pending`に戻す。Issueの作成の後の返信、スレッドの解決、状態の遷移が失敗したときは、「承認済み・起票未完了」として残す。どちらも、もう一度承認すれば続きから起票する。
+起票に失敗した提案は**承認**タブに残る。Issueの作成自体が失敗したときは、決定の前の`pending`に戻す。Issueの作成の後の返信、スレッドの解決、状態の遷移が失敗したときは、「承認済み・起票未完了」として残す。どちらも、もう一度承認すれば続きから起票する。
 
 ## watermark
 

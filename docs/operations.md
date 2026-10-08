@@ -60,9 +60,8 @@ Windmillで手動投入のフロー(`f/factory/manual_intake`)を開き、フォ
 
 ラベルを外した直後にDBへの登録が失敗すると、そのIssueはラベルと作業項目の両方が無い状態になる。Factoryはこれを自動では拾い直さない。
 
-この場合は、Consoleの**失敗**タブに`claim_issue:<owner>/<repo>#<Issue番号>`の失敗が残る。
-Discordにもジョブ失敗が届く。
-人がそのIssueに`factory`ラベルを付け直す。
+この場合は、Consoleの**失敗**タブに`claim_issue:<owner>/<repo>#<Issue番号>`の失敗が残り、Discordにジョブ失敗の通知が届く。
+人はこの通知か**失敗**タブで気づき、そのIssueに`factory`ラベルを付け直す。
 
 ## 要件定義を承認・却下する
 
@@ -518,7 +517,7 @@ raw appのバンドルに依存が要るためである。
 
 | 変更 | 反映のしかた |
 | --- | --- |
-| `infra/Caddyfile` | bind mountしたファイルなので、`up -d`はコンテナを作り直さない。`docker compose -f infra/docker-compose.yml restart caddy`でCaddyを再起動する |
+| `infra/Caddyfile` | bind mountしたファイルなので、`up -d`はコンテナを作り直さない。`mise exec -- docker compose -f infra/docker-compose.yml restart caddy`でCaddyを再起動する |
 | `mise.toml`の`[tools]`のうちホスト側のCLI | `mise install`か`mise run setup`で反映する |
 
 `mise run up`が反映するのは、`[env]`に書いたworkerのイメージのツールのバージョンである。
@@ -609,8 +608,8 @@ workerのコンテナは、`init: true`でdocker-initをPID 1にし、終了し�
 同じ症状が出たら、使用量を確かめてからworkerを再起動する。
 
 ```bash
-docker compose -f infra/docker-compose.yml exec windmill_worker cat /sys/fs/cgroup/pids.current
-docker compose -f infra/docker-compose.yml restart windmill_worker
+mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker cat /sys/fs/cgroup/pids.current
+mise exec -- docker compose -f infra/docker-compose.yml restart windmill_worker
 ```
 
 ## 秘密をローテーションする
@@ -625,7 +624,7 @@ docker compose -f infra/docker-compose.yml restart windmill_worker
 Windmillのデータ(ワークスペースの設定、Data Table、ジョブの履歴など)は、すべて`db_data`というDockerのvolume(Postgres)にある。バックアップの対象はこのvolumeである。
 
 > [!WARNING]
-> `docker compose -f infra/docker-compose.yml down -v`は、`db_data`を含むすべてのvolumeを消す。消したデータは戻せない。
+> `mise exec -- docker compose -f infra/docker-compose.yml down -v`は、`db_data`を含むすべてのvolumeを消す。消したデータは戻せない。
 
 ## 保持期間
 
@@ -655,8 +654,3 @@ Claudeの実行の記録は、コスト分析(`v_agent_cost_daily`)の元デー�
 未解決のお知らせは消さない。消した件数は`cleanup_runs`テーブルに記録し、翌朝09:00の日次サマリーの「DB掃除」欄に出す。
 
 同じIssueの作業項目がすべて消えた後にそのIssueを拾い直すと、サイクルの番号は1から振り直す。番号は残っている行の最大値から決めるためである。過去の通知やDiscordの履歴にあるサイクルの番号と重なることがある。
-
-## 未実装の機能
-
-- 工程4のマージ後のCIの監視
-- Discordのボタンによる承認
