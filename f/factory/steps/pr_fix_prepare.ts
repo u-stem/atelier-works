@@ -22,6 +22,7 @@ import {
 } from "../lib/workspace.ts";
 import {
   earlyExitBase,
+  evaluateBranchImplementingGuard,
   evaluateFixRoundGuard,
   evaluateParentImplementingGuard,
   evaluatePrFixSafetyGuards,
@@ -138,7 +139,7 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
   const branchItemId = parseImplementBranchWorkItemId(pr.headRef);
   const branchItem =
     branchItemId === null ? null : await getWorkItem(branchItemId);
-  const branchGuard = evaluateParentImplementingGuard(
+  const branchGuard = evaluateBranchImplementingGuard(
     branchItem !== null &&
       branchItem.kind === "issue" &&
       branchItem.owner === workItem.owner &&

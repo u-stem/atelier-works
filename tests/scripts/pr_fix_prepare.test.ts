@@ -8,6 +8,7 @@ import { describe, expect, test } from "bun:test";
 import {
   describeReason,
   earlyExitBase,
+  evaluateBranchImplementingGuard,
   evaluateFixRoundGuard,
   evaluateParentImplementingGuard,
   evaluatePrFixSafetyGuards,
@@ -111,6 +112,23 @@ describe("evaluateParentImplementingGuard", () => {
     expect(evaluateParentImplementingGuard("implementing")).toEqual({
       ok: false,
       reason: "parent issue is being re-implemented",
+    });
+  });
+});
+
+describe("evaluateBranchImplementingGuard", () => {
+  test("passes without a work item for the branch", () => {
+    expect(evaluateBranchImplementingGuard(null)).toEqual({ ok: true });
+  });
+
+  test("passes when the branch's work item is not implementing", () => {
+    expect(evaluateBranchImplementingGuard("pr_open")).toEqual({ ok: true });
+  });
+
+  test("blocks while the branch's work item is implementing", () => {
+    expect(evaluateBranchImplementingGuard("implementing")).toEqual({
+      ok: false,
+      reason: "implementation of the branch's work item is running",
     });
   });
 });
@@ -400,6 +418,12 @@ describe("describeReason (implement flow)", () => {
       "この実行の検査コマンドなどが残したプロセスが、worktreeのロックを持ち続けています",
     );
   });
+
+  test("translates an implementation running on the PR's branch", () => {
+    expect(
+      describeReason("implementation of the branch's work item is running"),
+    ).toBe("このPRのブランチで実装フローが実行中のため修正を止めました");
+  });
 });
 
 describe("nextActionFor (implement flow)", () => {
@@ -481,5 +505,11 @@ describe("nextActionFor (implement flow)", () => {
     ).toBe(
       "検査コマンドが常駐プロセスを残していないかを確かめ、workerを再起動してから(同じworkerの他のジョブも止まります)、ConsoleのFailuresタブから再実行してください",
     );
+  });
+
+  test("waits for the branch's implementation before re-adding factory:fix", () => {
+    expect(
+      nextActionFor("implementation of the branch's work item is running"),
+    ).toBe("実装フローの完了を待ってから再度factory:fixを付けてください");
   });
 });

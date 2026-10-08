@@ -365,9 +365,10 @@ export async function main(
           .pushed,
     });
   } catch (err) {
-    // ここで受ける例外は、どれもworktreeの中身(ファイル、`.git`ポインタ、HEAD)を書き換える前に起きる。
-    // 既存のworktreeでは、ブランチの公開・ポインタの検証・reset・cleanより前に起きる。
-    // 新しく作るときは`git gtr new`の直後に起き、作ったworktreeはリモートから作ったまま残る(次の実行は再利用の経路で確かめ直す)。
+    // ここで受ける例外は、確かめ(ensureIdle)が投げたものだけである。worktreeに何をした後かは、どの確かめで投げたかで決まる。
+    // 既存のworktreeを見つけた直後の確かめ(公開より前と、createGtrWorktreeのポインタの検証より前)で投げたときは、worktreeには何もしていない。
+    // `git gtr new`の直後の確かめで投げたときは、作ったworktreeがリモートから作ったまま残る(次の実行は再利用の経路で確かめ直す)。
+    // この場合には、既存のworktreeの`.git`ポインタが検証を通らず、それを削除して作り直した後も含まれるので、元のworktreeはもう無いことがある。
     // 公開の後に再利用の経路で確かめ直す場合があるので、空のブランチがpush済みのことはある。
     if (err instanceof WorktreeBusyError)
       return stop("needs_human", err.message);

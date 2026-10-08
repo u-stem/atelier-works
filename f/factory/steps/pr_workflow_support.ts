@@ -755,6 +755,21 @@ export function evaluateParentImplementingGuard(
     : { ok: true };
 }
 
+/**
+ * PRのブランチ名(`factory/issue-<N>-wi-<id>`)から引いた実装の作業項目が実装中なら止める。
+ * 親の行(parent_work_item_id)から引いた場合と理由を分けるのは、親の行が無いPRでも止まったことを読み手が見分けられるようにするためである。
+ */
+export function evaluateBranchImplementingGuard(
+  branchItemStatus: WorkItemStatus | null,
+): PrFixGuardResult {
+  return branchItemStatus === "implementing"
+    ? {
+        ok: false,
+        reason: "implementation of the branch's work item is running",
+      }
+    : { ok: true };
+}
+
 // ---------------------------------------------------------------------------
 // pr_fix_collect: 新しいレビューとコメントの選別と、その結果(純粋関数)
 // ---------------------------------------------------------------------------
@@ -2759,6 +2774,13 @@ const REASON_RULES: readonly ReasonRule[] = [
         : `前の実行のプロセスがまだworktreeを使っています(${m[1]})`,
     nextAction: () =>
       "載っているプロセスが何かを確かめて止めるか、workerを再起動してから(同じworkerの他のジョブも止まります)、ConsoleのFailuresタブから再実行してください",
+  },
+  {
+    pattern: /^implementation of the branch's work item is running$/,
+    describe: () =>
+      "このPRのブランチで実装フローが実行中のため修正を止めました",
+    nextAction: () =>
+      "実装フローの完了を待ってから再度factory:fixを付けてください",
   },
   {
     pattern: /^worktree lock is held by a process this run left behind$/,

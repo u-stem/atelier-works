@@ -1304,9 +1304,10 @@ describe("createGtrWorktree", () => {
     });
 
     test("does not reset a worktree that is still in use", async () => {
+      // 2番目の応答でポインタの検証が通るので、確かめが無ければreset(4番目の呼び出し)まで進む。
       const fake = createFakeCommandRunner([
         ok(REAL_WORKTREE_PORCELAIN),
-        ok(),
+        ok(REAL_WORKTREE_PORCELAIN),
         ok(),
         ok(),
         ok(),
@@ -1343,6 +1344,23 @@ describe("createGtrWorktree", () => {
         },
       });
       expect(checked).toEqual(["/tmp/repo-worktrees/new-branch"]);
+    });
+
+    test("rejects when a newly created worktree is still in use", async () => {
+      const gtrPorcelain =
+        "path\t/tmp/repo-worktrees/new-branch\nbranch\tnew-branch\nhook_status\tnone\n";
+      const fake = createFakeCommandRunner([ok(""), ok(gtrPorcelain)]);
+      const created = createGtrWorktree({
+        run: fake.run,
+        repoDir: "/repo",
+        branch: "new-branch",
+        ghToken: "gh-token",
+        lockFs: createInMemoryLockFs(),
+        assertProcessesIdle: async () => {
+          throw new Error("busy");
+        },
+      });
+      await expect(created).rejects.toThrow("busy");
     });
   });
 });
