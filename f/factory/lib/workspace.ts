@@ -464,7 +464,7 @@ export type GitCommandOptions = {
  *   ローカルだけの操作(rev-parse、status、add、commit、worktree、diff)は
  *   トークンを持たない`localGitEnv`を使う。
  * - 利用者に由来する位置引数(URL、ディレクトリ、sha、ブランチ)の前には`--`を置き、
- *   `-`で始まる値をオプションと誤読させない。例外は次の5つで、代わりに
+ *   `-`で始まる値をオプションと誤読させない。例外は次の6つで、代わりに
  *   `assertSha`や`assertBranchName`の入力検証で、先頭が`-`の値を防ぐ。
  *   - `git rev-parse`: `-- <rev>`は他のサブコマンドと同じには動かない。
  *     `--verify`では「リビジョンが無い」扱いになり、`--verify`なしでは
@@ -590,8 +590,11 @@ function gitError(context: string, result: CommandResult): Error {
  * 対象リポジトリの検査コマンドは`refs/heads/refs/remotes/origin/<branch>`のようなrefを作れるので、
  * 追跡refが無いときに、別のcommitを追跡refの先頭として読んでしまう。
  * リモート追跡のrefは、この関数で読む(`scripts/lint-no-short-remote-ref.ts`が短い名前を止める)。
- * 読み取りだけのローカルの操作で、gitが失敗したときも`null`を返す。
- * 呼び出し側が、refが無いことを必須の前提の違反として扱う。
+ * 読み取りだけのローカルの操作である。
+ * 戻り値が`null`になるのは、gitが「有効なrefではない」と報告したときだけで、
+ * それ以外の失敗(safe.directory、壊れたリポジトリ、ロックなど)はstderrつきで例外にする。
+ * 失敗の理由を「refが無い」に潰さないためである。
+ * メッセージの言語に左右されないよう`LC_ALL=C`で実行する。
  * `--`はrefの前に置く。`show-ref`は`--`を受け付ける。
  */
 export async function readExactRef(opts: {
@@ -605,11 +608,17 @@ export async function readExactRef(opts: {
   }
   const result = await opts.run(
     buildGitArgv(["show-ref", "--verify", "--hash", "--", opts.ref]),
-    { cwd: opts.cwd, env: opts.env },
+    { cwd: opts.cwd, env: { ...opts.env, LC_ALL: "C" } },
   );
-  if (result.exitCode !== 0) return null;
+  if (result.exitCode !== 0) {
+    if (result.stderr.includes("not a valid ref")) return null;
+    throw gitError(`git show-ref --verify ${opts.ref} failed`, result);
+  }
   const sha = result.stdout.trim();
-  return sha === "" ? null : sha;
+  if (sha === "") {
+    throw new Error(`git show-ref --verify ${opts.ref} printed an empty sha`);
+  }
+  return sha;
 }
 
 /**
@@ -1888,7 +1897,7 @@ function parseGtrPorcelain(stdout: string): GtrWorktree {
  * gitが2.43以降なら、対象のブランチが他のworktreeでcheckoutされているときも失敗する(workerのイメージはDebian trixieのgit 2.47)。
  * worktreeを作り直さないのは、作り直しにも生き残りの確かめとポインタの検証がもう一度要り、
  * 再利用するworktreeでは対象リポジトリが無視しているファイル(`node_modules/`など)まで失うためである。
- * `--no-track`は、起点が`origin/<branch>`のときに上流の設定をメインのcloneの`.git/config`へ書かないために付ける。
+ * `--no-track`は、`ref`が追跡ref(`refs/remotes/origin/<branch>`)の名前のときに上流の設定をメインのcloneの`.git/config`へ書かないために付ける。
  * HEADを読めないとき、切り替えに失敗したとき、切り替えた後もHEADが指していないときは例外を投げ、resetに進ませない。
  * `branch`は`assertBranchName`で、`ref`は検証済みの値から作ったものを渡す。
  */
@@ -1957,6 +1966,40 @@ export type CreateGtrWorktreeOptions = {
 };
 
 /**
+ * `git gtr new`が`branch`を作った先頭として正しいshaを、完全な名前で読んで返す。
+ * リモートにブランチがあれば`refs/remotes/origin/<branch>`、無ければ既定のブランチの先頭(`refs/remotes/origin/HEAD`)である。
+ * どちらも読めなければ例外を投げる。
+ */
+async function expectedGtrNewSha(opts: {
+  readonly run: CommandRunner;
+  readonly repoDir: string;
+  readonly branch: string;
+  readonly home?: string;
+  readonly path?: string;
+}): Promise<string> {
+  const env = localGitEnv(opts.home, opts.path);
+  const tracking = await readExactRef({
+    run: opts.run,
+    cwd: opts.repoDir,
+    env,
+    ref: remoteTrackingRef(opts.branch),
+  });
+  const sha =
+    tracking ??
+    (await readExactRef({
+      run: opts.run,
+      cwd: opts.repoDir,
+      env,
+      ref: REMOTE_HEAD_REF,
+    }));
+  if (sha === null) {
+    throw new Error(`${REMOTE_HEAD_REF} does not exist (gtr new)`);
+  }
+  assertSha(sha);
+  return sha;
+}
+
+/**
  * `git gtr new <branch> --porcelain --yes`で`branch`のworktreeを作って返す。
  * `git worktree prune`の後の`git worktree list`に`branch`のworktreeがすでにあれば、それを再利用する。
  * gitの操作に失敗したら例外を投げる。
@@ -1967,8 +2010,10 @@ export type CreateGtrWorktreeOptions = {
  * 通らなければファイル操作で削除し(`discardUnverifiedWorktree`)、
  * `git gtr new`で作り直す。
  * worktreeに触れる前(既存なら検証より前、新規なら`git gtr new`の直後)に`assertProcessesIdle`を呼ぶ。
- * 新しく作ったworktreeで確かめが何かを止めたときは、`.git`ファイルを検証してから、
- * 作った時点のブランチの先頭へ`reset --hard`し、`clean -fd`する。止まる前に書き込まれたものを捨てるためである。
+ * 新しく作ったworktreeは、作ったブランチの先頭を、完全な名前で読んだ値(`expectedGtrNewSha`)と照合する。
+ * `git gtr new`が短い名前の`origin/...`から作るので、違う先頭になっていることがあるためである。
+ * 照合で違ったときと、確かめが何かを止めたときは、`.git`ファイルを検証してから、
+ * 照合したshaへ`reset --hard`し、`clean -fd`する。止まる前に書き込まれたものを捨てるためである。
  * 再利用と、何かを止めた新しいworktreeのどちらでも、`reset --hard`の前にHEADを対象のブランチへそろえる(`ensureHeadOnBranch`)。
  */
 export async function createGtrWorktree(
@@ -2146,10 +2191,18 @@ export async function createGtrWorktree(
       }
       const createdSha = headResult.stdout.trim();
       assertSha(createdSha);
+      // `git gtr new`は、リモートにあるブランチを短い名前の`origin/<branch>`から、
+      // 無いブランチを短い名前の`origin/<既定のブランチ>`から作る(gtr 2.11.1のソースで確かめた)。
+      // 短い名前は`refs/heads/origin/...`などが先に解決されうるので、
+      // 作った先頭を、完全な名前で読んだ値と照合する。
+      // 違えば、検証したshaへ作り直す(下の止めた場合と同じ復元の経路)。
+      const verifiedSha = await expectedGtrNewSha(opts);
+      const misplaced = createdSha !== verifiedSha;
       // 削除されたworktreeの中で生き残ったClaudeは同じ絶対パスに書き込みうるので、新しく作った場合も確かめる。
-      if (!(await opts.assertProcessesIdle(created.path))) return created;
+      const stopped = await opts.assertProcessesIdle(created.path);
+      if (!stopped && !misplaced) return created;
       // 止めたプロセスは、止まるまでにworktreeへ書き込んだり`.git`ファイルを書き換えたりしえた。
-      // 中でgitを実行する前にポインタを検証し、作った時点の状態に戻す。
+      // 中でgitを実行する前にポインタを検証し、検証したshaの状態に戻す。
       // コミットしてブランチを進めていても、checkout中のブランチごと戻るので、refを別に戻す必要は無い。
       // 別のブランチをcheckoutしていれば、resetの前に対象のブランチへ戻す(`ensureHeadOnBranch`)。
       await verifyWorktreeGitdir({
@@ -2167,18 +2220,18 @@ export async function createGtrWorktree(
         run: opts.run,
         dir: created.path,
         branch: opts.branch,
-        ref: createdSha,
-        context: "gtr new after stopping processes",
+        ref: verifiedSha,
+        context: "gtr new restore",
         ...(opts.home !== undefined ? { home: opts.home } : {}),
         ...(opts.path !== undefined ? { path: opts.path } : {}),
       });
       const resetResult = await opts.run(
-        buildGitArgv(["reset", "--hard", createdSha]),
+        buildGitArgv(["reset", "--hard", verifiedSha]),
         { cwd: created.path, env: localGitEnv(opts.home, opts.path) },
       );
       if (resetResult.exitCode !== 0) {
         throw gitError(
-          `git reset --hard ${createdSha} failed (gtr new after stopping processes)`,
+          `git reset --hard ${verifiedSha} failed (gtr new restore)`,
           resetResult,
         );
       }
@@ -2187,10 +2240,7 @@ export async function createGtrWorktree(
         env: localGitEnv(opts.home, opts.path),
       });
       if (cleanResult.exitCode !== 0) {
-        throw gitError(
-          "git clean -fd failed (gtr new after stopping processes)",
-          cleanResult,
-        );
+        throw gitError("git clean -fd failed (gtr new restore)", cleanResult);
       }
       return created;
     },

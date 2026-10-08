@@ -86,6 +86,8 @@ if (!isClaudeResult(parsed)) {
 - `scripts/lint-no-short-remote-ref.ts`が、`f/factory/`のTypeScriptで先頭が`origin/`の文字列リテラルとテンプレートリテラルを検出する。コメントは見ない。
 
 この検出もトークン単位で読むので、まれな入力では誤検知や見逃しが起こる。
+文字列の連結、変数、テンプレートリテラルの中間部に書かれた`origin/`は検出できない。
+`@{upstream}`、`FETCH_HEAD`、`git rev-parse refs/heads/<x>`の読み取りは対象外である。
 例外を認める仕組みは設けていない。
 
 ## TDD

@@ -617,17 +617,27 @@ gitのreflogには残る。
 対象は次の箇所である。
 
 - `currentRemoteHeadSha`
-- `commitAndPush`の先頭の照合
+- `commitAndPush`の先頭の照合と、pushを拒否されたときの再読み取り
 - worktreeを再利用するときの`reset --hard`
+- `pushNewBranch`の、ローカルの追跡refとリモートの照合
+- `ensureFactoryClone`の、ブランチを切り替える前の追跡refの確認
 - 準備のステップの既定のブランチの先頭と名前(`refs/remotes/origin/HEAD`)
 
 `git show-ref --verify`は、名前が完全に一致するrefだけを返す。
 `git rev-parse`は完全な名前でも、追跡refが無いと`refs/heads/refs/remotes/origin/<branch>`のようなrefへ解決し直す。
 追跡refの代わりに別のcommitを読んでしまうため、`rev-parse`は使わない。
+`readExactRef`が`null`を返すのは、gitがrefは有効でないと報告したときだけである。
+safe.directoryやロックの失敗は、理由を隠さずstderrつきで例外にする。
+
+`git gtr new`は、ブランチがリモートとローカルのどちらにも無いとき、短い名前の`origin/<既定のブランチ>`から作る(gtr 2.11.1のソースで確かめた)。
+`refs/heads/origin/<既定のブランチ>`が置かれていると、別のcommitから作られる。
+そのため、作った後にブランチの先頭を、完全な名前で読んだ値と照合する。
+照合の相手は、リモートにブランチがあればその追跡ref、無ければ`refs/remotes/origin/HEAD`である。
+違えば、検証したshaへ`reset --hard`して`clean -fd`をする。
 `f/factory/`のコードに短い名前の`origin/...`を書くと、`scripts/lint-no-short-remote-ref.ts`が止める。
 
 向け直しの後でpushに失敗したときは、ローカルのブランチが既定のブランチの先頭を指し、worktreeには古いファイルが残る。
-リモートにはまだブランチが無いので、次の実行がもう一度向け直してpushし、再利用の経路でworktreeを`origin/<branch>`へ戻す。
+リモートにはまだブランチが無いので、次の実行がもう一度向け直してpushし、再利用の経路でworktreeを追跡ref(`refs/remotes/origin/<branch>`)の先頭へ戻す。
 
 ### pushの前の生き残りのプロセスの確認
 
