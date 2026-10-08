@@ -376,6 +376,30 @@ describe("describeReason (implement flow)", () => {
       describeReason("requirements regeneration could not be started"),
     ).toBe("要件定義の作り直しを起動できませんでした");
   });
+
+  test("translates a worktree still used by an earlier run", () => {
+    expect(
+      describeReason("worktree is still used by processes from an earlier run"),
+    ).toBe("前の実行のプロセスがまだworktreeを使っています");
+  });
+
+  test("keeps the holders when translating a busy worktree", () => {
+    expect(
+      describeReason(
+        "worktree is still used by processes from an earlier run: pid 42 (3600s, pr_fix:9:job-c) `claude -p`",
+      ),
+    ).toBe(
+      "前の実行のプロセスがまだworktreeを使っています(pid 42 (3600s, pr_fix:9:job-c) `claude -p`)",
+    );
+  });
+
+  test("translates a lock this run left held", () => {
+    expect(
+      describeReason("worktree lock is held by a process this run left behind"),
+    ).toBe(
+      "この実行の検査コマンドなどが残したプロセスが、worktreeのロックを持ち続けています",
+    );
+  });
 });
 
 describe("nextActionFor (implement flow)", () => {
@@ -438,6 +462,24 @@ describe("nextActionFor (implement flow)", () => {
       nextActionFor("requirements regeneration could not be started"),
     ).toBe(
       "ConsoleのFailuresタブから再実行してください(差し戻し理由は通知に残っています)",
+    );
+  });
+
+  test("asks to check and stop the earlier run's processes", () => {
+    expect(
+      nextActionFor(
+        "worktree is still used by processes from an earlier run: pid 42 (3600s, no owner) `x`",
+      ),
+    ).toBe(
+      "載っているプロセスが何かを確かめて止めるか、workerを再起動してから(同じworkerの他のジョブも止まります)、ConsoleのFailuresタブから再実行してください",
+    );
+  });
+
+  test("asks to check for daemons the checks left", () => {
+    expect(
+      nextActionFor("worktree lock is held by a process this run left behind"),
+    ).toBe(
+      "検査コマンドが常駐プロセスを残していないかを確かめ、workerを再起動してから(同じworkerの他のジョブも止まります)、ConsoleのFailuresタブから再実行してください",
     );
   });
 });

@@ -713,6 +713,20 @@ describe("runAllowedCheckCommands", () => {
       CHECK_COMMAND_MAX_OUTPUT_BYTES,
     );
   });
+
+  test("marks a command whose output was abandoned as not ok", async () => {
+    const { run } = createFakeCommandRunner([
+      { ...ok("1 pass"), outputAbandoned: true },
+    ]);
+    const results = await runAllowedCheckCommands(
+      run,
+      "/work",
+      ["bun test"],
+      1000,
+      fakeCheckHomeDir().factory,
+    );
+    expect(results[0]?.ok).toBe(false);
+  });
 });
 
 describe("fixPrompt requirements wiring (retry pass)", () => {

@@ -1716,6 +1716,12 @@ export type CreateGtrWorktreeOptions = {
   readonly sleep?: (ms: number) => Promise<void>;
   readonly now?: () => Date;
   readonly fs?: WorktreeFsDeps;
+  /**
+   * worktreeに触れる前に呼ぶ確かめ。前の実行のプロセスがまだworktreeを使っていれば例外を投げる。
+   * 呼び出し側は`ensureWorktreeLockFree`(`lib/process_lock.ts`)を渡す。
+   * 実装フローは同じ作業項目の前のジョブのプロセスを止め、pr_fixは何も止めない。渡し忘れを型で防ぐため必須にする。
+   */
+  readonly assertProcessesIdle: (worktreeDir: string) => Promise<void>;
 };
 
 /**
@@ -1728,6 +1734,7 @@ export type CreateGtrWorktreeOptions = {
  * 中でgitを実行する前に`.git`ファイルを検証する(`verifyWorktreeGitdir`)。
  * 通らなければファイル操作で削除し(`discardUnverifiedWorktree`)、
  * `git gtr new`で作り直す。
+ * worktreeに触れる前(既存なら検証より前、新規なら`git gtr new`の直後)に`assertProcessesIdle`を呼ぶ。
  */
 export async function createGtrWorktree(
   opts: CreateGtrWorktreeOptions,
@@ -1747,6 +1754,8 @@ export async function createGtrWorktree(
         ...(opts.path !== undefined ? { path: opts.path } : {}),
       });
       const found = existing.find((entry) => entry.branch === opts.branch);
+      // 取り消された実行のClaudeや検査が生き残っていれば、ポインタの検証・破棄・reset・cleanのどれもしない。
+      if (found !== undefined) await opts.assertProcessesIdle(found.path);
       const reused =
         found !== undefined &&
         (await worktreePointerVerified({
@@ -1853,7 +1862,10 @@ export async function createGtrWorktree(
       if (result.exitCode !== 0) {
         throw gitError(`git gtr new ${opts.branch} failed`, result);
       }
-      return parseGtrPorcelain(result.stdout);
+      const created = parseGtrPorcelain(result.stdout);
+      // 削除されたworktreeの中で生き残ったClaudeは同じ絶対パスに書き込みうるので、新しく作った場合も確かめる。
+      await opts.assertProcessesIdle(created.path);
+      return created;
     },
   });
 }

@@ -1744,6 +1744,8 @@ const defaultCreateCheckHomeDir: CreateCheckHomeDir = async () => {
  * コマンドはシェルを使わず、空白で区切ってargvにする。
  * `allowed_check_commands`は対象リポジトリの内容ではなく、
  * 運用者が書く設定(`factory_config`)だから。
+ * 出力の読み取りを打ち切ったコマンド(`outputAbandoned`)は、終了コードに関わらず失敗にする。
+ * 別セッションへ抜けたプロセスがworkerに残ったことを検査結果に出すためである。
  */
 export async function runAllowedCheckCommands(
   run: CommandRunner,
@@ -1774,7 +1776,10 @@ export async function runAllowedCheckCommands(
       const masked = maskSecrets(`${result.stdout}\n${result.stderr}`.trim());
       results.push({
         command,
-        ok: !result.timedOut && result.exitCode === 0,
+        ok:
+          !result.timedOut &&
+          result.exitCode === 0 &&
+          result.outputAbandoned !== true,
         exitCode: result.exitCode,
         timedOut: result.timedOut,
         outputTail: masked.slice(-CHECK_OUTPUT_TAIL_CHARS),
@@ -2744,6 +2749,23 @@ const REASON_RULES: readonly ReasonRule[] = [
     describe: () => "worktreeのgitの参照先(.gitファイル)が書き換えられました",
     nextAction: () =>
       "実装ブランチとworktreeを人が確認し、不審な変更があればブランチを削除してください",
+  },
+  {
+    pattern:
+      /^worktree is still used by processes from an earlier run(?:: ([\s\S]+))?$/,
+    describe: (m) =>
+      m[1] === undefined
+        ? "前の実行のプロセスがまだworktreeを使っています"
+        : `前の実行のプロセスがまだworktreeを使っています(${m[1]})`,
+    nextAction: () =>
+      "載っているプロセスが何かを確かめて止めるか、workerを再起動してから(同じworkerの他のジョブも止まります)、ConsoleのFailuresタブから再実行してください",
+  },
+  {
+    pattern: /^worktree lock is held by a process this run left behind$/,
+    describe: () =>
+      "この実行の検査コマンドなどが残したプロセスが、worktreeのロックを持ち続けています",
+    nextAction: () =>
+      "検査コマンドが常駐プロセスを残していないかを確かめ、workerを再起動してから(同じworkerの他のジョブも止まります)、ConsoleのFailuresタブから再実行してください",
   },
 ];
 

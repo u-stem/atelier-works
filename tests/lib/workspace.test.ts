@@ -975,6 +975,9 @@ describe("listWorktrees", () => {
   });
 });
 
+/** プロセスが残っていないとみなす`assertProcessesIdle`。 */
+const idle = async (): Promise<void> => {};
+
 describe("createGtrWorktree", () => {
   test("reuses an existing worktree whose branch matches", async () => {
     const fake = createFakeCommandRunner([
@@ -989,6 +992,7 @@ describe("createGtrWorktree", () => {
       repoDir: REUSED_REPO,
       branch: "contract-smoke-branch",
       ghToken: "gh-token",
+      assertProcessesIdle: idle,
       lockFs: createInMemoryLockFs(),
       fs: pointerFsDeps(true).fs,
     });
@@ -1008,6 +1012,7 @@ describe("createGtrWorktree", () => {
       repoDir: REUSED_REPO,
       branch: "contract-smoke-branch",
       ghToken: "gh-token",
+      assertProcessesIdle: idle,
       lockFs: createInMemoryLockFs(),
       fs: pointerFsDeps(true).fs,
     });
@@ -1038,6 +1043,7 @@ describe("createGtrWorktree", () => {
         repoDir: REUSED_REPO,
         branch: "contract-smoke-branch",
         ghToken: "gh-token",
+        assertProcessesIdle: idle,
         lockFs: createInMemoryLockFs(),
         fs: pointerFsDeps(true).fs,
       });
@@ -1065,6 +1071,7 @@ describe("createGtrWorktree", () => {
         repoDir: REUSED_REPO,
         branch: "contract-smoke-branch",
         ghToken: "gh-token",
+        assertProcessesIdle: idle,
         lockFs: createInMemoryLockFs(),
         fs: pointerFsDeps(true).fs,
       });
@@ -1091,6 +1098,7 @@ describe("createGtrWorktree", () => {
         repoDir: REUSED_REPO,
         branch: "contract-smoke-branch",
         ghToken: "gh-token",
+        assertProcessesIdle: idle,
         lockFs: createInMemoryLockFs(),
         fs: pointerFsDeps(true).fs,
       });
@@ -1111,6 +1119,7 @@ describe("createGtrWorktree", () => {
         repoDir: REUSED_REPO,
         branch: "contract-smoke-branch",
         ghToken: "gh-token",
+        assertProcessesIdle: idle,
         lockFs: createInMemoryLockFs(),
         fs: pointerFsDeps(true).fs,
       });
@@ -1131,6 +1140,7 @@ describe("createGtrWorktree", () => {
         repoDir: REUSED_REPO,
         branch: "contract-smoke-branch",
         ghToken: "gh-token",
+        assertProcessesIdle: idle,
         lockFs: createInMemoryLockFs(),
         fs: pointerFsDeps(true).fs,
       });
@@ -1156,6 +1166,7 @@ describe("createGtrWorktree", () => {
           repoDir: REUSED_REPO,
           branch: "contract-smoke-branch",
           ghToken: "gh-token",
+          assertProcessesIdle: idle,
           lockFs: createInMemoryLockFs(),
           fs: pointerFsDeps(true).fs,
         }),
@@ -1181,6 +1192,7 @@ describe("createGtrWorktree", () => {
         repoDir: REUSED_REPO,
         branch: "contract-smoke-branch",
         ghToken: "gh-token",
+        assertProcessesIdle: idle,
         lockFs: createInMemoryLockFs(),
         fs: deps.fs,
       });
@@ -1226,6 +1238,7 @@ describe("createGtrWorktree", () => {
       repoDir: "/repo",
       branch: "new-branch",
       ghToken: "gh-token",
+      assertProcessesIdle: idle,
       lockFs: createInMemoryLockFs(),
     });
     expect(result).toEqual({
@@ -1243,6 +1256,7 @@ describe("createGtrWorktree", () => {
         repoDir: "/repo",
         branch: "-evil",
         ghToken: "gh-token",
+        assertProcessesIdle: idle,
       }),
     ).rejects.toThrow();
   });
@@ -1256,12 +1270,80 @@ describe("createGtrWorktree", () => {
       repoDir: "/repo",
       branch: "new-branch",
       ghToken: "gh-token",
+      assertProcessesIdle: idle,
       lockFs: createInMemoryLockFs(),
     });
     const env = fake.calls[1]?.options?.env ?? {};
     expect(env.GIT_CONFIG_COUNT).toBe("1");
     expect(env.GIT_CONFIG_KEY_0).toBe("core.symlinks");
     expect(env.GIT_CONFIG_VALUE_0).toBe("false");
+  });
+
+  describe("processes left by an earlier run", () => {
+    test("checks a reused worktree right after listing worktrees", async () => {
+      const fake = createFakeCommandRunner([
+        ok(REAL_WORKTREE_PORCELAIN),
+        ok(REAL_WORKTREE_PORCELAIN),
+        ok(),
+        ok(),
+        ok(),
+      ]);
+      const checked: string[] = [];
+      await createGtrWorktree({
+        run: fake.run,
+        repoDir: REUSED_REPO,
+        branch: "contract-smoke-branch",
+        ghToken: "gh-token",
+        lockFs: createInMemoryLockFs(),
+        fs: pointerFsDeps(true).fs,
+        assertProcessesIdle: async (dir) => {
+          checked.push(`${dir}@${String(fake.calls.length)}`);
+        },
+      });
+      expect(checked).toEqual([`${REUSED_WT}@1`]);
+    });
+
+    test("does not reset a worktree that is still in use", async () => {
+      const fake = createFakeCommandRunner([
+        ok(REAL_WORKTREE_PORCELAIN),
+        ok(),
+        ok(),
+        ok(),
+        ok(),
+      ]);
+      await createGtrWorktree({
+        run: fake.run,
+        repoDir: REUSED_REPO,
+        branch: "contract-smoke-branch",
+        ghToken: "gh-token",
+        lockFs: createInMemoryLockFs(),
+        fs: pointerFsDeps(true).fs,
+        assertProcessesIdle: async () => {
+          throw new Error("busy");
+        },
+      }).catch(() => undefined);
+      expect(fake.calls.some((call) => call.argv.includes("reset"))).toBe(
+        false,
+      );
+    });
+
+    test("checks a newly created worktree", async () => {
+      const gtrPorcelain =
+        "path\t/tmp/repo-worktrees/new-branch\nbranch\tnew-branch\nhook_status\tnone\n";
+      const fake = createFakeCommandRunner([ok(""), ok(gtrPorcelain)]);
+      const checked: string[] = [];
+      await createGtrWorktree({
+        run: fake.run,
+        repoDir: "/repo",
+        branch: "new-branch",
+        ghToken: "gh-token",
+        lockFs: createInMemoryLockFs(),
+        assertProcessesIdle: async (dir) => {
+          checked.push(dir);
+        },
+      });
+      expect(checked).toEqual(["/tmp/repo-worktrees/new-branch"]);
+    });
   });
 });
 

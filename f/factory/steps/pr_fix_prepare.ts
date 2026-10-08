@@ -5,11 +5,19 @@ import * as wmill from "windmill-client@1.817.0";
 import { isRepoAllowed, loadConfig } from "../lib/config.ts";
 import { getWorkItem } from "../lib/db.ts";
 import { type GhClient, getBranchProtected, getPr } from "../lib/github.ts";
+import { parseImplementBranchWorkItemId } from "../lib/implement_support.ts";
+import {
+  defaultLockReleaseDeps,
+  ensureWorktreeLockFree,
+  WorktreeBusyError,
+  worktreeLockFor,
+} from "../lib/process_lock.ts";
 import { assertGitHubName } from "../lib/types.ts";
 import {
   createGtrWorktree,
   ensureFactoryClone,
   ensureRepo,
+  type GtrWorktree,
   runCommand,
 } from "../lib/workspace.ts";
 import {
@@ -46,6 +54,8 @@ export type PrFixPrepareResult = {
  * PRのheadブランチに`git gtr`のworktreeを作る。
  * detachedではなく実ブランチのworktreeにするのは、
  * `commitAndPush`がそのブランチへpushし直すため。
+ * PRのブランチ名から引いた実装の作業項目が`implementing`なら`guard_blocked`を返す。
+ * worktreeを前の実行のプロセスがまだ使っていれば、何も止めずに保持者を理由に載せて`guard_blocked`を返す。
  * 作業項目が無い、またはPR番号が無いときは例外を投げる。
  */
 export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
@@ -124,6 +134,25 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
     workItem.repo,
     workItem.pr_number,
   );
+  // 親の行が無くても(parent_work_item_idがnull)、ブランチ名から実装の作業項目を引き、実装フローの実行中ならworktreeに触れない。
+  const branchItemId = parseImplementBranchWorkItemId(pr.headRef);
+  const branchItem =
+    branchItemId === null ? null : await getWorkItem(branchItemId);
+  const branchGuard = evaluateParentImplementingGuard(
+    branchItem !== null &&
+      branchItem.kind === "issue" &&
+      branchItem.owner === workItem.owner &&
+      branchItem.repo === workItem.repo
+      ? branchItem.status
+      : null,
+  );
+  if (!branchGuard.ok) {
+    return {
+      outcome: "guard_blocked",
+      reason: branchGuard.reason,
+      ...earlyExitBase(workItem),
+    };
+  }
   const baseProtected = await getBranchProtected(
     client,
     workItem.owner,
@@ -159,12 +188,34 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
     ghToken,
   });
 
-  const worktree = await createGtrWorktree({
-    run: runCommand,
-    repoDir,
-    branch: pr.headRef,
-    ghToken,
-  });
+  let worktree: GtrWorktree;
+  try {
+    worktree = await createGtrWorktree({
+      run: runCommand,
+      repoDir,
+      branch: pr.headRef,
+      ghToken,
+      // pr_fixは実装フローのリースを持たないので、保持者が終わった実行の生き残りと言えない。何も止めずに理由へ載せる。
+      assertProcessesIdle: async (dir) => {
+        await ensureWorktreeLockFree({
+          run: runCommand,
+          lock: worktreeLockFor(dir),
+          policy: null,
+          deps: defaultLockReleaseDeps(),
+        });
+      },
+    });
+  } catch (err) {
+    // pr_fixのprepareにはneeds_humanの出口が無い。blockedはretry_work_itemで再実行できる。
+    if (err instanceof WorktreeBusyError) {
+      return {
+        outcome: "guard_blocked",
+        reason: err.message,
+        ...earlyExitBase(workItem),
+      };
+    }
+    throw err;
+  }
 
   return {
     outcome: "proceed",

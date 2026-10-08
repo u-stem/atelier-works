@@ -27,7 +27,9 @@ import {
 } from "../lib/github.ts";
 import { isFactoryRepo } from "../lib/implement_finish_support.ts";
 import {
+  assertImplementLease,
   IMPLEMENT_LEASE_LOST_REASON,
+  ImplementLeaseLostError,
   implementLeaseJobId,
 } from "../lib/implement_launch_support.ts";
 import {
@@ -37,10 +39,19 @@ import {
 } from "../lib/implement_loop.ts";
 import {
   ACTIVE_PR_RUN_REASON,
+  ActivePrRunError,
   buildImplementBranchName,
   isRequirementsApprovedForAttempt,
 } from "../lib/implement_support.ts";
 import { logger } from "../lib/log.ts";
+import {
+  defaultLockReleaseDeps,
+  ensureWorktreeLockFree,
+  formatLockHolders,
+  type LockOwner,
+  WorktreeBusyError,
+  worktreeLockFor,
+} from "../lib/process_lock.ts";
 import {
   assertGitHubName,
   type FactoryConfig,
@@ -161,11 +172,13 @@ function stop(
 /**
  * 承認時の前提(作業項目の状態、日次予算、リポジトリの許可、Issueがopenか、
  * 作業項目のattemptに承認済みの要件定義があるか、
- * ブランチのopenなPRでpr_fix / pr_reviewが動いていないか)を確かめ直す。
+ * ブランチのPR(閉じたものを含む)で終端でないpr_fix / pr_reviewが無いか)を確かめ直す。
  * 満たさなければ`outcome`と理由を返し、状態の遷移は`implement_finish`に任せる。
  * 作業項目の種類と状態の確認の次に、flow_job_idのリースを取る(`acquireImplementLease`)。
  * 取れなければ`skip`を返し、worktreeには触れない。
  *
+ * worktreeを前の実行のプロセスがまだ使っていれば、同じ作業項目の前のジョブのものだけを、リースとブランチのPRの修正・レビューを確かめ直してから止める。
+ * それ以外のプロセスがいるか、止めても空かなければ、worktreeに触れずに`needs_human`を返す。
  * 満たせば、実装用のブランチと`git gtr`のworktreeを用意し、
  * ブランチを空のままpushしておく。
  * 先にpushしておくのは、後のpushをすべて`commitAndPush`のまま行えるようにするため。
@@ -289,23 +302,81 @@ export async function main(
     run: runCommand,
     repoDir,
   });
+  // 止めてよいのは、持ち主タグが「同じ作業項目の実装フローで、この実行とは別のジョブ」のプロセスだけである。
+  // この実行はリースを持つので、同じ作業項目の別のジョブはいま正当に動いておらず、終わった実行の生き残りと言える。
+  // pr_fix・pr_reviewのプロセスやタグの無いプロセスは止めず、needs_humanにする。
+  // 止める直前に、リースとブランチのPRの修正・レビューを確かめ直す。
+  const lockSelf: LockOwner = {
+    kind: "implement",
+    workItemId: work_item_id,
+    jobId: leaseJobId,
+  };
+  const recheckBeforeStop = async (): Promise<void> => {
+    await assertImplementLease(() => getWorkItem(work_item_id), leaseJobId);
+    if (await hasPrRunOnBranch()) throw new ActivePrRunError();
+  };
+  const ensureIdle = async (dir: string): Promise<void> => {
+    const stopped = await ensureWorktreeLockFree({
+      run: runCommand,
+      lock: worktreeLockFor(dir),
+      policy: { self: lockSelf, recheck: recheckBeforeStop },
+      deps: defaultLockReleaseDeps(),
+    });
+    if (stopped.length > 0) {
+      logger("implement_prepare").warn(
+        "stopped processes left by an earlier run",
+        {
+          work_item_id,
+          worktree_dir: dir,
+          processes: formatLockHolders(stopped),
+        },
+      );
+    }
+  };
   // git gtr 2.11.1で実測した`gtr new`の動作:
   // 既存のローカルブランチは再利用し、リモートにだけあるブランチは
   // upstream付きで`origin/<branch>`をcheckoutし、
   // 既にcheckout済みのブランチには"already exists"を出してexit 0で終わる。
   // `createGtrWorktree`は、最後の場合に至る前に自身の再利用経路に入る。
-  const worktreeDir = await prepareImplementWorktree({
-    hasWorktree: async () =>
-      (await listWorktrees({ run: runCommand, repoDir })).some(
-        (entry) => entry.branch === branch,
-      ),
-    createWorktree: async () =>
-      (await createGtrWorktree({ run: runCommand, repoDir, branch, ghToken }))
-        .path,
-    publishBranch: async () =>
-      (await pushNewBranch({ run: runCommand, repoDir, branch, ghToken }))
-        .pushed,
-  });
+  let worktreeDir: string;
+  try {
+    worktreeDir = await prepareImplementWorktree({
+      hasWorktree: async () => {
+        const entry = (await listWorktrees({ run: runCommand, repoDir })).find(
+          (candidate) => candidate.branch === branch,
+        );
+        if (entry === undefined) return false;
+        // 既存のworktreeでは、ブランチの公開(publishBranch)より前に確かめる。
+        await ensureIdle(entry.path);
+        return true;
+      },
+      createWorktree: async () =>
+        (
+          await createGtrWorktree({
+            run: runCommand,
+            repoDir,
+            branch,
+            ghToken,
+            assertProcessesIdle: ensureIdle,
+          })
+        ).path,
+      publishBranch: async () =>
+        (await pushNewBranch({ run: runCommand, repoDir, branch, ghToken }))
+          .pushed,
+    });
+  } catch (err) {
+    // ここで受ける例外は、どれもworktreeの中身(ファイル、`.git`ポインタ、HEAD)を書き換える前に起きる。
+    // 既存のworktreeでは、ブランチの公開・ポインタの検証・reset・cleanより前に起きる。
+    // 新しく作るときは`git gtr new`の直後に起き、作ったworktreeはリモートから作ったまま残る(次の実行は再利用の経路で確かめ直す)。
+    // 公開の後に再利用の経路で確かめ直す場合があるので、空のブランチがpush済みのことはある。
+    if (err instanceof WorktreeBusyError)
+      return stop("needs_human", err.message);
+    if (err instanceof ActivePrRunError)
+      return stop("needs_human", ACTIVE_PR_RUN_REASON);
+    if (err instanceof ImplementLeaseLostError)
+      return stop("skip", IMPLEMENT_LEASE_LOST_REASON);
+    throw err;
+  }
   // 以降のポインタ照合の基準値になる。
   // 前回の実行が書き換えたまま残したポインタを、信頼する値にしてはならない。
   await verifyWorktreeGitdir({ run: runCommand, repoDir, dir: worktreeDir });

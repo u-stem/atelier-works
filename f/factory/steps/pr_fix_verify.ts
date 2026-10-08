@@ -12,6 +12,11 @@ import { loadConfig } from "../lib/config.ts";
 import { addNotice, latestDraft, recordAgentRun } from "../lib/db.ts";
 import { type GhClient, getPr } from "../lib/github.ts";
 import { logger } from "../lib/log.ts";
+import {
+  lockJobIdFromEnv,
+  withWorktreeProcessLock,
+  worktreeLockFor,
+} from "../lib/process_lock.ts";
 import { FIX_SCHEMA, fixPrompt } from "../lib/prompts.ts";
 import type { FixOutcome, FixReply } from "../lib/types.ts";
 import { runCommand } from "../lib/workspace.ts";
@@ -179,6 +184,15 @@ export async function main(
   reviews: CollectedReview[],
   comments: CollectedComment[],
 ): Promise<PrFixVerifyResult> {
+  const lockedRun = withWorktreeProcessLock(
+    runCommand,
+    worktreeLockFor(worktree_dir),
+    {
+      kind: "pr_fix",
+      workItemId: work_item_id,
+      jobId: lockJobIdFromEnv(process.env),
+    },
+  );
   if (apply_outcome !== "done") {
     return {
       outcome: apply_outcome,
@@ -235,7 +249,7 @@ export async function main(
   }
 
   const firstChecks = await runAllowedCheckCommands(
-    runCommand,
+    lockedRun,
     worktree_dir,
     config.allowed_check_commands,
     timeoutMs,
@@ -313,7 +327,7 @@ export async function main(
 
   try {
     const retryResult = await runClaude({
-      run: runCommand,
+      run: lockedRun,
       workItemId: work_item_id,
       stage: "pr_fix_verify_retry",
       attempt,
@@ -378,7 +392,7 @@ export async function main(
     }
 
     const secondChecks = await runAllowedCheckCommands(
-      runCommand,
+      lockedRun,
       worktree_dir,
       config.allowed_check_commands,
       timeoutMs,
