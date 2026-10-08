@@ -132,7 +132,7 @@ PRは終端statusになってもトリガーラベルの消費以外の付け外
 ### 状態遷移の詳細
 
 **工程2(要件定義)から工程3へ:**
-- `approved` → `implementing`: `requirements_apply`が承認の副作用(Issueコメント、Discord、`req-<N>` worktreeの削除)の後に、`implement_enabled`が真ならCASで遷移させ(同じ文で`flow_job_id`を空にする)、`f/factory/implement`を起動して、`flow_job_id`が空か同じ値のときだけ起動したジョブIDを記録する。`runFlowAsync`はHTTPエラーでも例外を投げないので、戻り値がジョブID(UUID)でなければ起動失敗として扱う。起動に失敗したら、フローがまだリースを取っていなければ`needs_human`にし、`job_failures`に記録してConsoleのFailuresタブから再実行できるようにする。起動はエラーでもフローが既にリースを取っていれば、動いているので何もしない。
+- `approved` → `implementing`: `requirements_apply`が承認の副作用(Issueコメント、Discord、`req-<N>` worktreeの削除)の後に(副作用はそれぞれ失敗しても次へ進み、コメントの失敗はConsoleの`approval_comment_failed`のnoticeに残す)、`implement_enabled`が真ならCASで遷移させ(同じ文で`flow_job_id`を空にする)、`f/factory/implement`を起動して、`flow_job_id`が空か同じ値のときだけ起動したジョブIDを記録する。`runFlowAsync`はHTTPエラーでも例外を投げないので、戻り値がジョブID(UUID)でなければ起動失敗として扱う。起動に失敗したら、フローがまだリースを取っていなければ`needs_human`にし、`job_failures`に記録してConsoleのFailuresタブから再実行できるようにする。起動はエラーでもフローが既にリースを取っていれば、動いているので何もしない。
 - `implementing` → `pr_open`: 検査に通った(または保護パス変更・検査コマンド未設定で検査を実行しなかった)実装をコミットしてpushし、PRを作成または更新して`factory:review`ラベルを付けた。
 - `implementing` → `requirements_generating`: 実装が`requirements_gap`を返した。worktreeを削除し、PRが無ければ実装ブランチ(リモートとローカル)も削除して、`gap_report`をfeedbackに工程2をattempt+1で再起動する(`max_attempts`を超えたら`needs_human`)。
 - `implementing` → `needs_human`: ラウンド上限・日次予算・フロー全体の期限(修正ラウンドを始める時間が残っていない)・停滞・symlink変更・差分超過・Claude実行失敗・変更なし・push / PR作成失敗・時間設定がstep timeoutに収まらない(準備ステップで止める)。秘密情報の検査に通れば途中の変更をブランチにpushしてから止める。この途中経過のコミットと、再実行が成功したときの実装コミットは別コミットになる(1コミットにまとめるのは通常の経路のみ)。

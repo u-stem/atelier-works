@@ -20,6 +20,7 @@ import { notify, notifyBestEffort } from "../lib/discord.ts";
 import { commentIssue, type GhClient, getViewer } from "../lib/github.ts";
 import {
   parseFlowJobId,
+  type StartImplementOutcome,
   startImplement,
 } from "../lib/implement_launch_support.ts";
 import { IMPLEMENT_FLOW_PATH } from "../lib/implement_loop.ts";
@@ -64,6 +65,89 @@ export function buildApprovedComment(
   workItemId: number,
 ): string {
   return `要件定義が承認されました。[Consoleで要件定義を開く](${consoleUrl})(work_item_id: ${String(workItemId)})`;
+}
+
+/**
+ * 承認コメントをIssueに投稿できなかったときに残すnoticeの本文を作る。副作用は無い。
+ * 承認は記録済みなので、コメントを投稿し直せることと、要件定義を開くConsoleのリンクを伝える。
+ * URLは末尾に置く。直後に句読点が続くと、リンクに変換するときにURLに含まれてしまうため。
+ */
+export function buildApprovalCommentFailedMessage(
+  target: {
+    readonly owner: string;
+    readonly repo: string;
+    readonly issue_number: number;
+    readonly work_item_id: number;
+  },
+  consoleUrl: string,
+  reason: string,
+): string {
+  return `${target.owner}/${target.repo}#${String(target.issue_number)} (work item ${String(target.work_item_id)}): 承認のコメントをIssueに投稿できませんでした(${reason})。要件定義は承認済みです。コメントはIssueに投稿し直せます。要件定義のConsole: ${consoleUrl}`;
+}
+
+export type ApprovedSideEffectsDeps = {
+  /** 承認を伝えるコメントをIssueに投稿する(`commentIssue`)。 */
+  readonly commentIssue: () => Promise<void>;
+  /** コメントを投稿できなかったときに、`approval_comment_failed`のnoticeを残す。引数は失敗の理由。 */
+  readonly addCommentFailedNotice: (reason: string) => Promise<void>;
+  /** Discordへ`requirements_approved`を通知する(`notifyBestEffort`)。 */
+  readonly notifyApproved: () => Promise<void>;
+  /** 要件定義用のworktreeを消す。 */
+  readonly removeWorktree: () => Promise<void>;
+  /** implementフローを起動する(`startImplement`)。`implement_enabled`が偽なら`null`。 */
+  readonly startImplement: (() => Promise<StartImplementOutcome>) | null;
+  readonly log: (message: string, fields: Record<string, unknown>) => void;
+};
+
+function messageOf(err: unknown): string {
+  return maskSecrets(err instanceof Error ? err.message : String(err));
+}
+
+/**
+ * 作業項目を`approved`へ移した後の副作用を、コメント・通知・worktreeの片付け・implementフローの起動の順に行う。
+ * 副作用ごとに失敗を捕まえ、1つが失敗しても後続を飛ばさない。
+ * 作業項目はもう`awaiting_approval`ではなく、`requirements_apply`を起動し直しても何もしないため、
+ * ここで例外を投げると、implementフローが起動されないまま残る。
+ * コメントの失敗だけは、Issueに承認が伝わらないので、noticeに残して人に知らせる。
+ * 他の失敗はwarnのログだけ残す。
+ * `startImplement`は例外を投げず、結果を戻り値で返すので、ここでは捕まえない。
+ */
+export async function applyApprovedSideEffects(
+  deps: ApprovedSideEffectsDeps,
+): Promise<RequirementsApplyResult> {
+  try {
+    await deps.commentIssue();
+  } catch (err) {
+    const reason = messageOf(err);
+    deps.log("failed to post the approval comment", { error: reason });
+    try {
+      await deps.addCommentFailedNotice(reason);
+    } catch (noticeErr) {
+      deps.log("failed to record the approval comment notice", {
+        error: messageOf(noticeErr),
+      });
+    }
+  }
+  try {
+    await deps.notifyApproved();
+  } catch (err) {
+    deps.log("failed to notify the approval", { error: messageOf(err) });
+  }
+  try {
+    await deps.removeWorktree();
+  } catch (err) {
+    deps.log("failed to remove requirements worktree", {
+      error: messageOf(err),
+    });
+  }
+  if (deps.startImplement === null)
+    return { outcome: "approved", implement_started: false };
+  const launched = await deps.startImplement();
+  return {
+    outcome: "approved",
+    implement_started:
+      launched === "started" || launched === "started_without_job_id",
+  };
 }
 
 export type RejectedOutcome = "retry" | "needs_human";
@@ -136,6 +220,8 @@ async function removeReqWorktree(workItem: WorkItem): Promise<void> {
  * (`approval_decide.ts`の`redispatch`など)しても何もしないので、
  * CASの後で例外を投げると、後続の処理(implementフローの起動など)が行われないまま残る。
  * そのためDiscordへの通知は`notifyBestEffort`で送り、失敗してもwarnを残して続ける。
+ * 承認したときのCASの後の副作用は`applyApprovedSideEffects`が受け持ち、
+ * 承認コメントの投稿に失敗しても、noticeを残してimplementフローの起動まで進む。
  *
  * 承認依頼・作業項目・Issue番号が無いとき、依頼のkindが違うときは例外を投げる。
  */
@@ -212,92 +298,112 @@ async function run(
     const consoleUrl = buildConsoleUrl(config.windmill_public_url, {
       work_item_id: workItem.id,
     });
-    await commentIssue(
-      client,
-      workItem.owner,
-      workItem.repo,
-      workItem.issue_number,
-      `issue-approved-${String(attempt)}`,
-      workItem.id,
-      buildApprovedComment(consoleUrl, workItem.id),
-      viewer.login,
-    );
-    await notifyBestEffort(
-      webhookUrl,
-      {
-        kind: "requirements_approved",
-        instance_name: config.instance_name,
-        owner: workItem.owner,
-        repo: workItem.repo,
-        issue_number: workItem.issue_number,
-        issue_url: workItem.issue_url ?? "",
-        title: workItem.title ?? "",
-        console_url: consoleUrl,
-      },
-      log,
-    );
-    await removeReqWorktree(workItem);
-    if (!config.implement_enabled)
-      return { outcome: "approved", implement_started: false };
     const issueNumber = workItem.issue_number;
-    const launched = await startImplement({
-      casToImplementing: () =>
-        updateStatusIfCurrentClearingFlowJobId(
+    const launchImplement = (): Promise<StartImplementOutcome> =>
+      startImplement({
+        casToImplementing: () =>
+          updateStatusIfCurrentClearingFlowJobId(
+            workItem.id,
+            "approved",
+            "implementing",
+            null,
+          ),
+        launchFlow: () =>
+          wmill.runFlowAsync(IMPLEMENT_FLOW_PATH, {
+            work_item_id: workItem.id,
+          }),
+        recordFlowJobId: (jobId) => setFlowJobIdIfUnset(workItem.id, jobId),
+        moveToNeedsHuman: (reason) =>
+          updateStatusIfLeaseHolder(
+            workItem.id,
+            "implementing",
+            "needs_human",
+            null,
+            reason,
+          ),
+        recordFailure: async (reason, step) => {
+          await recordFailure({
+            work_item_id: workItem.id,
+            flow_path: IMPLEMENT_FLOW_PATH,
+            job_id: process.env.WM_JOB_ID ?? "unknown",
+            step,
+            error: reason,
+          });
+        },
+        addNotice: async (reason) => {
+          await addNotice({
+            kind: "implement_launch_failed",
+            message: `${workItem.owner}/${workItem.repo}#${String(issueNumber)} (work item ${String(workItem.id)}): ${describeReason(reason)}`,
+          });
+        },
+        notifyNeedsHuman: async (reason) => {
+          await notifyBestEffort(
+            webhookUrl,
+            {
+              kind: "needs_human",
+              instance_name: config.instance_name,
+              owner: workItem.owner,
+              repo: workItem.repo,
+              url: workItem.issue_url ?? "",
+              reason: describeReason(reason),
+              target: { kind: "issue", number: issueNumber },
+              next_action: nextActionFor(reason),
+            },
+            log,
+          );
+        },
+        log: (message, fields) =>
+          log.warn(message, { work_item_id: workItem.id, ...fields }),
+      });
+    return await applyApprovedSideEffects({
+      commentIssue: async () => {
+        await commentIssue(
+          client,
+          workItem.owner,
+          workItem.repo,
+          issueNumber,
+          `issue-approved-${String(attempt)}`,
           workItem.id,
-          "approved",
-          "implementing",
-          null,
-        ),
-      launchFlow: () =>
-        wmill.runFlowAsync(IMPLEMENT_FLOW_PATH, { work_item_id: workItem.id }),
-      recordFlowJobId: (jobId) => setFlowJobIdIfUnset(workItem.id, jobId),
-      moveToNeedsHuman: (reason) =>
-        updateStatusIfLeaseHolder(
-          workItem.id,
-          "implementing",
-          "needs_human",
-          null,
-          reason,
-        ),
-      recordFailure: async (reason, step) => {
-        await recordFailure({
-          work_item_id: workItem.id,
-          flow_path: IMPLEMENT_FLOW_PATH,
-          job_id: process.env.WM_JOB_ID ?? "unknown",
-          step,
-          error: reason,
-        });
+          buildApprovedComment(consoleUrl, workItem.id),
+          viewer.login,
+        );
       },
-      addNotice: async (reason) => {
+      addCommentFailedNotice: async (reason) => {
         await addNotice({
-          kind: "implement_launch_failed",
-          message: `${workItem.owner}/${workItem.repo}#${String(issueNumber)} (work item ${String(workItem.id)}): ${describeReason(reason)}`,
+          kind: "approval_comment_failed",
+          message: buildApprovalCommentFailedMessage(
+            {
+              owner: workItem.owner,
+              repo: workItem.repo,
+              issue_number: issueNumber,
+              work_item_id: workItem.id,
+            },
+            consoleUrl,
+            reason,
+          ),
         });
       },
-      notifyNeedsHuman: async (reason) => {
+      notifyApproved: async () => {
         await notifyBestEffort(
           webhookUrl,
           {
-            kind: "needs_human",
+            kind: "requirements_approved",
             instance_name: config.instance_name,
             owner: workItem.owner,
             repo: workItem.repo,
-            url: workItem.issue_url ?? "",
-            reason: describeReason(reason),
-            target: { kind: "issue", number: issueNumber },
-            next_action: nextActionFor(reason),
+            issue_number: issueNumber,
+            issue_url: workItem.issue_url ?? "",
+            title: workItem.title ?? "",
+            console_url: consoleUrl,
           },
           log,
         );
       },
+      removeWorktree: () => removeReqWorktree(workItem),
+      startImplement: config.implement_enabled ? launchImplement : null,
       log: (message, fields) =>
         log.warn(message, { work_item_id: workItem.id, ...fields }),
     });
-    return {
-      outcome: "approved",
-      implement_started:
-        launched === "started" || launched === "started_without_job_id",
-    };
   }
 
   // ここからは却下のとき。
