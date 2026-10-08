@@ -610,7 +610,12 @@ describe("ensureFactoryClone", () => {
       expect.arrayContaining(["fetch", "origin", "--", "main"]),
     );
     expect(fake.calls[2]?.argv).toEqual(
-      expect.arrayContaining(["checkout", "-B", "main", "origin/main"]),
+      expect.arrayContaining([
+        "checkout",
+        "-B",
+        "main",
+        "refs/remotes/origin/main",
+      ]),
     );
   });
 
@@ -652,7 +657,7 @@ describe("ensureFactoryClone", () => {
         "checkout",
         "-B",
         "feat/factory-foundation",
-        "origin/feat/factory-foundation",
+        "refs/remotes/origin/feat/factory-foundation",
       ]),
     );
   });
@@ -1149,7 +1154,7 @@ describe("createGtrWorktree", () => {
       );
     });
 
-    test("then resets --hard to origin/<branch>", async () => {
+    test("then resets --hard to refs/remotes/origin/<branch>", async () => {
       const fake = createFakeCommandRunner([
         ok(),
         ok(REAL_WORKTREE_PORCELAIN),
@@ -1173,7 +1178,7 @@ describe("createGtrWorktree", () => {
         expect.arrayContaining([
           "reset",
           "--hard",
-          "origin/contract-smoke-branch",
+          "refs/remotes/origin/contract-smoke-branch",
         ]),
       );
     });
@@ -1330,7 +1335,7 @@ describe("createGtrWorktree", () => {
       );
     });
 
-    test("checks out the branch at origin/<branch> when HEAD is on another branch", async () => {
+    test("checks out the branch at refs/remotes/origin/<branch> when HEAD is on another branch", async () => {
       const { fake, created } = reuse(ok("refs/heads/other\n"), switched());
       await created;
       expect({
@@ -1343,7 +1348,7 @@ describe("createGtrWorktree", () => {
           "--no-track",
           "-B",
           "contract-smoke-branch",
-          "origin/contract-smoke-branch",
+          "refs/remotes/origin/contract-smoke-branch",
         ],
         cwd: REUSED_WT,
       });
@@ -1361,7 +1366,7 @@ describe("createGtrWorktree", () => {
       expect(fake.calls[7]?.argv.slice(-3)).toEqual([
         "reset",
         "--hard",
-        "origin/contract-smoke-branch",
+        "refs/remotes/origin/contract-smoke-branch",
       ]);
     });
 
@@ -3404,6 +3409,76 @@ describe("commitAndPush (real git)", () => {
       expectedBranch: BRANCH,
     });
     expect(result.outcome).toBe("pushed");
+  });
+
+  /** リモートの先頭とは別のcommitを作り、`shadowRef`にrefとして置く。 */
+  async function plantShadowRef(
+    fixture: Fixture,
+    shadowRef: string,
+  ): Promise<void> {
+    const shadowSha = await fixture.git(fixture.repo, [
+      "commit-tree",
+      `${fixture.headSha}^{tree}`,
+      "-m",
+      "shadow",
+    ]);
+    await fixture.git(fixture.repo, ["update-ref", shadowRef, shadowSha]);
+  }
+
+  function pushFrom(fixture: Fixture) {
+    return commitAndPush({
+      run: fixture.run,
+      repoDir: fixture.repo,
+      dir: fixture.worktree,
+      message: "fix: something",
+      instanceName: "acme-factory",
+      expectedHeadSha: fixture.headSha,
+      author: TEST_AUTHOR,
+      ghToken: "gh-token",
+      home: fixture.home,
+      verifyWorktree: noopVerify,
+      lockFs: createInMemoryLockFs(),
+      requireLocalHeadAtExpected: true,
+      expectedBranch: BRANCH,
+    });
+  }
+
+  test("pushes when a refs/heads/origin/<branch> ref shadows the tracking ref", async () => {
+    const fixture = await setUp();
+    await plantShadowRef(fixture, `refs/heads/origin/${BRANCH}`);
+    const result = await pushFrom(fixture);
+    expect(result.outcome).toBe("pushed");
+  });
+
+  test("pushes when a refs/tags/origin/<branch> tag shadows the tracking ref", async () => {
+    const fixture = await setUp();
+    await plantShadowRef(fixture, `refs/tags/origin/${BRANCH}`);
+    const result = await pushFrom(fixture);
+    expect(result.outcome).toBe("pushed");
+  });
+
+  test("currentRemoteHeadSha ignores a refs/heads/origin/<branch> shadow ref", async () => {
+    const fixture = await setUp();
+    await plantShadowRef(fixture, `refs/heads/origin/${BRANCH}`);
+    const sha = await currentRemoteHeadSha({
+      run: fixture.run,
+      repoDir: fixture.repo,
+      branch: BRANCH,
+      home: fixture.home,
+    });
+    expect(sha).toBe(fixture.headSha);
+  });
+
+  test("currentRemoteHeadSha ignores a refs/tags/origin/<branch> shadow tag", async () => {
+    const fixture = await setUp();
+    await plantShadowRef(fixture, `refs/tags/origin/${BRANCH}`);
+    const sha = await currentRemoteHeadSha({
+      run: fixture.run,
+      repoDir: fixture.repo,
+      branch: BRANCH,
+      home: fixture.home,
+    });
+    expect(sha).toBe(fixture.headSha);
   });
 });
 

@@ -479,7 +479,7 @@ export type GitCommandOptions = {
  *     プロセスを止めたとき): `--hard`はパスを取らず、
  *     `--`を付けるとエラーになる
  *     (「fatal: Cannot do hard reset with paths」、実際に確かめた)。
- *   - `ensureFactoryClone`の`git checkout -B <branch> origin/<branch>`と、
+ *   - `ensureFactoryClone`の`git checkout -B <branch> refs/remotes/origin/<branch>`と、
  *     `createGtrWorktree`の`git checkout -f --no-track -B <branch> <ref>`: 起点の前に
  *     `--`を付けると、`checkout`は起点をrefではなく復元するパスとして扱う。
  *     `branch`は関数の先頭で`assertBranchName`により検証している。
@@ -509,6 +509,16 @@ function buildGitArgv(
       : []),
     ...args,
   ];
+}
+
+/**
+ * `origin`の`branch`の追跡refを、完全な名前で返す。
+ * 短い名前の`origin/<branch>`は、検査コマンドが作る
+ * `refs/heads/origin/<branch>`や`refs/tags/origin/<branch>`が先に解決されうるため、使わない。
+ * `branch`は呼び出し側が`assertBranchName`で検証済みのものを渡す。
+ */
+function remoteTrackingRef(branch: string): string {
+  return `refs/remotes/origin/${branch}`;
 }
 
 /** ネットワークを使わないgitの操作の環境変数を返す。`GH_TOKEN`は含めない。 */
@@ -1358,7 +1368,7 @@ export function factoryCloneLockPath(dir: string): string {
  * `ensureRepo`と違い、このcloneはファイルを直接読む(`claude.ts`の`buildSystemPrompt`が
  * `.claude/skills/<name>/SKILL.md`を読む)ため、作業ツリーが要る。どのフローも最初に呼ぶ。
  *
- * 初回のcloneに限らず毎回、`opts.branch`をfetchして`checkout -B <branch> origin/<branch>`で
+ * 初回のcloneに限らず毎回、`opts.branch`をfetchして`checkout -B <branch> refs/remotes/origin/<branch>`で
  * 強制的に切り替え、前に何がcheckoutされていても、そのブランチのリモートの今の状態に合わせる
  * (必要なら切り替え、同じブランチならhard resetする)。
  * `git pull --ff-only`は今checkoutしているブランチを進めるだけで、ブランチを切り替えず、
@@ -1417,11 +1427,11 @@ export async function ensureFactoryClone(
         // ここでは`--`を付けない(`buildGitArgv`の例外を参照)。
         // `checkout -B <branch> <start-point>`は起点の前の`--`を受け付けない。
         // `--`を付けると`checkout`は「パスを復元する」動作になり、
-        // `origin/<branch>`を気づかないうちにrefではなくパスとして解釈する。
+        // 起点をrefではなくパスとして解釈する。
         // 代わりに`branch`を上の`assertBranchName`で検証している
         // (先頭の`-`、`..`、制御文字・空白を拒否する)。
         const checkoutResult = await opts.run(
-          buildGitArgv(["checkout", "-B", branch, `origin/${branch}`]),
+          buildGitArgv(["checkout", "-B", branch, remoteTrackingRef(branch)]),
           {
             cwd: dir,
             env: localGitEnv(opts.home, opts.path),
@@ -1429,7 +1439,7 @@ export async function ensureFactoryClone(
         );
         if (checkoutResult.exitCode !== 0) {
           throw gitError(
-            `git checkout -B ${branch} origin/${branch} failed for factory clone`,
+            `git checkout -B ${branch} ${remoteTrackingRef(branch)} failed for factory clone`,
             checkoutResult,
           );
         }
@@ -1994,7 +2004,7 @@ export async function createGtrWorktree(
           run: opts.run,
           dir: reused.path,
           branch: opts.branch,
-          ref: `origin/${opts.branch}`,
+          ref: remoteTrackingRef(opts.branch),
           context: "gtr worktree reuse",
           ...(opts.home !== undefined ? { home: opts.home } : {}),
           ...(opts.path !== undefined ? { path: opts.path } : {}),
@@ -2005,12 +2015,12 @@ export async function createGtrWorktree(
         // 「fatal: Cannot do hard reset with paths」で失敗することを確かめた。
         // `opts.branch`は上の`assertBranchName`で検証済みである。
         const resetResult = await opts.run(
-          buildGitArgv(["reset", "--hard", `origin/${opts.branch}`]),
+          buildGitArgv(["reset", "--hard", remoteTrackingRef(opts.branch)]),
           { cwd: reused.path, env: localGitEnv(opts.home, opts.path) },
         );
         if (resetResult.exitCode !== 0) {
           throw gitError(
-            `git reset --hard origin/${opts.branch} failed (gtr worktree reuse)`,
+            `git reset --hard ${remoteTrackingRef(opts.branch)} failed (gtr worktree reuse)`,
             resetResult,
           );
         }
@@ -2367,12 +2377,16 @@ export async function commitAndPush(
       }
 
       const remoteShaResult = await opts.run(
-        buildGitArgv(["rev-parse", "--verify", `origin/${branch}`]),
+        buildGitArgv([
+          "rev-parse",
+          "--verify",
+          `${remoteTrackingRef(branch)}^{commit}`,
+        ]),
         { cwd: opts.dir, env: local },
       );
       if (remoteShaResult.exitCode !== 0) {
         throw gitError(
-          `git rev-parse --verify origin/${branch} failed`,
+          `git rev-parse --verify ${remoteTrackingRef(branch)} failed`,
           remoteShaResult,
         );
       }
@@ -2517,12 +2531,16 @@ export async function commitAndPush(
             );
           }
           const currentShaResult = await opts.run(
-            buildGitArgv(["rev-parse", "--verify", `origin/${branch}`]),
+            buildGitArgv([
+              "rev-parse",
+              "--verify",
+              `${remoteTrackingRef(branch)}^{commit}`,
+            ]),
             { cwd: opts.dir, env: local },
           );
           if (currentShaResult.exitCode !== 0) {
             throw gitError(
-              `git rev-parse --verify origin/${branch} failed (after push rejection)`,
+              `git rev-parse --verify ${remoteTrackingRef(branch)} failed (after push rejection)`,
               currentShaResult,
             );
           }
@@ -2808,7 +2826,8 @@ export type CurrentRemoteHeadShaOptions = {
 };
 
 /**
- * `repoDir`で`origin/<branch>`が今指すshaを返す。
+ * `repoDir`で`refs/remotes/origin/<branch>`が今指すshaを返す。
+ * 短い名前の`origin/<branch>`は、`refs/heads/origin/<branch>`などが先に解決されうるため使わない。
  * リモート追跡のrefがローカルに無いときは`null`を返す
  * (一度もfetchしていない、ブランチが消された)。
  * `resolveDefaultBranchHeadSha`と同じく読み取りだけのローカルの操作で、
@@ -2820,7 +2839,11 @@ export async function currentRemoteHeadSha(
 ): Promise<string | null> {
   assertBranchName(opts.branch);
   const result = await opts.run(
-    buildGitArgv(["rev-parse", "--verify", `origin/${opts.branch}`]),
+    buildGitArgv([
+      "rev-parse",
+      "--verify",
+      `${remoteTrackingRef(opts.branch)}^{commit}`,
+    ]),
     { cwd: opts.repoDir, env: localGitEnv(opts.home, opts.path) },
   );
   if (result.exitCode !== 0) return null;
