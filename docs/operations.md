@@ -81,7 +81,7 @@
 - レビュー指摘・未解決コメントの修正を行い、各コメントへ返信してから再レビューを依頼(`rereview_requested`)。
 - 返信は運用者自身のアカウントで投稿するため、1行目のロールタグ・本文・末尾の対応行(コミットshaまたは「見送り」)という固定構造でflow側がレンダリングする。形式は`.claude/skills/factory-fix/SKILL.md`の「返信形式」節を参照。
 - コミットメッセージはClaudeが提案する件名(`commit_subject`、50文字以内を目安・72文字を超えると拒否・Conventional Commits形式)と任意の本文(`commit_body`、箇条書き)をflowが結合して作る。トレーラー(`Co-Authored-By` / `Generated-By`)はflow側が自動で付与する。コミットメッセージにも英数字と日本語の間のスペース除去が適用される(コードスパン内は除く)。
-- 要件変更が必要な場合は修正を中断し、元のIssueをrequirements_generatingにattempt+1で再起動(`requirements_gap` → 親Issue)。親Issueの実装フローが動いているとき、または親の状態が読み取った後に変わったときは差し戻さず、pr_fixの作業項目を`needs_human`にしてDiscordで知らせる。実装フローの完了を待つか親の状態をConsoleで確かめてから、`factory:fix`を付け直す(要件の不足の報告は通知の理由に載る)。
+- 要件変更が必要な場合は修正を中断し、元のIssueをrequirements_generatingにattempt+1で再起動(`requirements_gap` → 親Issue)。差し戻すのは親Issueの作業項目が`approved`か`pr_open`のときだけで、それ以外の状態(実装中、要件定義の生成中や承認待ちなど)、親の試行回数が`max_attempts`に達しているとき、親の状態が読み取った後に変わったときは差し戻さず、pr_fixの作業項目を`needs_human`にしてDiscordで知らせる。通知の次の操作に従い、実装フローの完了や要件定義の承認を待ってから`factory:fix`を付け直す(要件の不足の報告は通知の理由に載る)。
 - Factory自身の投稿は「viewer(FactoryのGitHubアカウント)と同じログイン**かつ**Factoryマーカー付き」の両方で判定する。同一アカウントで運用しているため、人が投稿したコメントはログインが一致してもマーカーが無いのでhuman feedbackとして扱われる。同様にFactory自身の一次レビュー(`pr_review`)とその未解決のインラインコメントもマーカー無し(または`pr_review`マーカー)であればfeedbackとして扱われ、pr_fixはその指摘を修正対象にする。除外されるのはFactory自身の`pr_fix`返信(`pr_fix`マーカー付き)のみ。
 
 #### 各コメントへの返信の3値(`decision`)

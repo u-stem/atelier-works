@@ -70,14 +70,15 @@ stateDiagram-v2
     implementing --> cancelled: Issueがclosed
     implementing --> failed
     approved --> requirements_generating: gap(pr_fixのrequirements_gap、parent_work_item_id経由、attempt+1)
+    pr_open --> requirements_generating: gap(pr_fixのrequirements_gap、parent_work_item_id経由、attempt+1)
     [*] --> reviewing: PRレビュー起動(kind=pr_review)
     reviewing --> reviewed
     reviewing --> cancelled: PRがclosed/merged
     [*] --> fixing: PR修正起動(kind=pr_fix)
     fixing --> rereview_requested
     fixing --> blocked
-    fixing --> requirements_generating: requirements_gap(親Issueが存在、attempt+1)
-    fixing --> needs_human: requirements_gap(元Issueが分からない、親が実装中、親が読み取り後に変わった)
+    fixing --> blocked: requirements_gap差し戻し成功(親Issueをrequirements_generatingへ)
+    fixing --> needs_human: requirements_gap(元Issueが分からない、親がapproved / pr_open以外、親の試行回数が上限、親が読み取り後に変わった)
     fixing --> cancelled: PRがclosed/merged
     blocked --> needs_human
     needs_human --> [*]
@@ -141,9 +142,9 @@ PRは終端statusになってもトリガーラベルの消費以外の付け外
 
 **PRワークフローの`requirements_gap`:**
 - `pr_fix`フロー実行中に`outcome: "requirements_gap"`が返された場合、`parent_work_item_id`で元Issueの作業項目を特定する。
-- 元Issueが存在する場合、その作業項目を`requirements_generating`にattempt+1で再起動(issueの工程2に戻す)。親の状態の書き換えは、読み取った時点の`status`と`flow_job_id`のままであることを条件にした比較交換で行い、同じ文で`flow_job_id`を空にする。起動したpipelineのジョブIDは、`flow_job_id`が空のままのときだけ記録する。
+- 元Issueが存在し、その作業項目が`approved`か`pr_open`(親のフローが動いていない状態)なら、`requirements_generating`にattempt+1で再起動(issueの工程2に戻す)し、`pr_fix`の作業項目は`blocked`で終わる。親の状態の書き換えは、読み取った時点の`status`と`flow_job_id`のままであることを条件にした比較交換で行い、同じ文で`flow_job_id`を空にする。起動したpipelineのジョブIDは、`flow_job_id`が空のままのときだけ記録する。記録できなければ(比較交換の後に別の実行が親に書いた)、起動したジョブの取り消しを試み、`job_failures`に記録する。
 - 元Issueが見つからない場合(PRがFactory製ではなくmanualで投入された場合など)は`needs_human`に遷移。
-- 親が`implementing`のとき(`pr_fix_prepare`の確認の後に実装フローが動き出した)と、読み取った後に親の`status`か`flow_job_id`が変わって比較交換が失敗したときは、差し戻さずに`pr_fix`の作業項目を`needs_human`にし、PRへのリンクと次の操作をDiscordで知らせる。実行中の実装フローのリースを奪わないためで、watermarkは進めない。
+- 親が`approved` / `pr_open`以外のとき(`implementing`なら`pr_fix_prepare`の確認の後に実装フローが動き出した)、親のattemptが`max_attempts`に達しているとき、読み取った後に親の`status`か`flow_job_id`が変わって比較交換が失敗したときは、差し戻さずに`pr_fix`の作業項目を`needs_human`にし、PRへのリンクと次の操作をDiscordで知らせる。動いているフローや人の判断を上書きしないためで、watermarkは進めない。
 
 ## データモデル
 

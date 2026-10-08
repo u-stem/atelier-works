@@ -11,6 +11,7 @@ import {
   insertApprovalRequest,
   insertFixRound,
   insertIssueProposal,
+  recordFailure,
   setFlowJobIdIfUnset,
   setHeadSha,
   updateStatusIfCurrent,
@@ -28,7 +29,6 @@ import {
   requestReviewers,
   withMarker,
 } from "../lib/github.ts";
-import { parseFlowJobId } from "../lib/implement_launch_support.ts";
 import { logger, maskSecrets } from "../lib/log.ts";
 import { type FixReply, isOneOf, type WorkItemStatus } from "../lib/types.ts";
 import { commitAndPush, runCommand } from "../lib/workspace.ts";
@@ -41,13 +41,12 @@ import {
   deriveFallbackReviewers,
   describeReason,
   evaluateRerouteGuard,
-  evaluateRerouteParentStatus,
   filterKnownReplies,
   matchReviewThreadForComment,
   nextActionFor,
   type PrFixFinishOutcome,
   renderFixReply,
-  rerouteParentChangedReason,
+  rerouteRequirementsGap,
   selectProposeIssueReplies,
   shouldAdvanceWatermarks,
   withGapReport,
@@ -239,9 +238,10 @@ export async function main(
     // トリガーラベルを付け直すと残り続け、次に終端の状態になった後で
     // Issueが再び着手されてしまう。
     // 残る前提条件は、親の作業項目が実際にIssueであることだけ。
-    const rerouteGuardReason = evaluateRerouteGuard(parentItem.issue_number);
+    const parentIssueNumber = parentItem.issue_number;
+    const rerouteGuardReason = evaluateRerouteGuard(parentIssueNumber);
 
-    if (rerouteGuardReason !== null) {
+    if (parentIssueNumber === null || rerouteGuardReason !== null) {
       log.warn(
         "aborting requirements_gap reroute: parent work item has no issue",
         {
@@ -254,80 +254,77 @@ export async function main(
       return { ok: true, final_status: "needs_human", notice: reason };
     }
 
-    // 親の実装フローが動いている間は差し戻さない。
-    // 読んだ後に親が変わったときも、下の比較交換が失敗するので差し戻さない。
-    // どちらもwatermarkは進めず、人に知らせる。
-    const parentStatusReason = evaluateRerouteParentStatus(
-      parent_work_item_id,
-      parentItem.status,
-    );
-    const rerouted =
-      parentStatusReason === null &&
-      (await updateStatusIfLeaseHolderClearingFlowJobId(
-        parent_work_item_id,
-        parentItem.status,
-        "requirements_generating",
-        parentItem.flow_job_id,
-        `gap: ${gapReport}`,
-      ));
-    if (!rerouted) {
-      const refusal =
-        parentStatusReason ?? rerouteParentChangedReason(parent_work_item_id);
-      log.warn("aborting requirements_gap reroute: parent work item is busy", {
-        parent_work_item_id,
-        parent_status: parentItem.status,
-        detail: refusal,
-      });
-      const refusalWithGap = withGapReport(refusal, gapReport);
-      await finalizeTerminal("needs_human", refusalWithGap, refusalWithGap);
-      return { ok: true, final_status: "needs_human", notice: refusal };
-    }
-
-    // 親Issueの要件定義を作り直すことで今回のフィードバックに対応するため、
-    // 差し戻しでフィードバックを消費したとみなし、ここでwatermarkを進める。
-    if (shouldAdvanceWatermarks("requirements_gap_reroute_success")) {
-      await bumpWatermarks(work_item_id, {
-        last_review_id: max_review_id,
-        last_comment_id: max_comment_id,
-        last_review_comment_id: max_review_comment_id,
-      });
-    }
-
-    // この分岐の他のDB・GitHubへの副作用は、すべて`runFlowAsync`より先に行う。
-    // 子のpipelineフローの起動は、取り消せず外から見える唯一の操作だからである。
-    // 途中で失敗しても、この作業項目の状態を記録しないまま子のフローだけが
-    // 動いている、という状態を作らない。
+    // 親が差し戻せる状態にないとき、試行回数を使い切ったとき、読んだ後に変わったときは差し戻さない。
+    // どれもwatermarkは進めず、人に知らせる。
     //
     // PRに載せるのは一次レビューとレビューコメントへの返信だけなので、
-    // ここではPRにコメントしない。
+    // 差し戻しに成功してもPRにはコメントしない。
     // 差し戻しは、親Issueのrequirements_gapのnoticeと、
     // pipeline_generateが送るDiscord通知で分かる。
-    await updateStatusIfCurrent(
-      work_item_id,
-      "fixing",
-      "blocked",
-      `requirements_gap: rerouted to work item ${String(parent_work_item_id)}`,
+    const outcome = await rerouteRequirementsGap(
+      {
+        id: parentItem.id,
+        issue_number: parentIssueNumber,
+        status: parentItem.status,
+        flow_job_id: parentItem.flow_job_id,
+        attempt: parentItem.attempt,
+      },
+      config.max_attempts,
+      {
+        casParent: (expectedFrom, expectedFlowJobId) =>
+          updateStatusIfLeaseHolderClearingFlowJobId(
+            parent_work_item_id,
+            expectedFrom,
+            "requirements_generating",
+            expectedFlowJobId,
+            `gap: ${gapReport}`,
+          ),
+        bumpWatermarks: () =>
+          bumpWatermarks(work_item_id, {
+            last_review_id: max_review_id,
+            last_comment_id: max_comment_id,
+            last_review_comment_id: max_review_comment_id,
+          }),
+        markBlocked: async () => {
+          await updateStatusIfCurrent(
+            work_item_id,
+            "fixing",
+            "blocked",
+            `requirements_gap: rerouted to work item ${String(parent_work_item_id)}`,
+          );
+        },
+        launchPipeline: () =>
+          wmill.runFlowAsync("f/factory/pipeline", {
+            work_item_id: parent_work_item_id,
+            attempt: parentItem.attempt + 1,
+            feedback: gapReport,
+          }),
+        recordFlowJobId: (jobId) =>
+          setFlowJobIdIfUnset(parent_work_item_id, jobId),
+        cancelJob: async (jobId, cancelReason) => {
+          await wmill.cancelJob(jobId, cancelReason);
+        },
+        recordFailure: async (failureReason) => {
+          await recordFailure({
+            work_item_id: parent_work_item_id,
+            flow_path: "f/factory/pipeline",
+            job_id: process.env.WM_JOB_ID ?? "unknown",
+            step: "record_flow_job_id",
+            error: failureReason,
+          });
+        },
+        log: (message, fields) => log.warn(message, fields),
+      },
     );
-    // 応答がジョブIDでなければ例外にし、起動の失敗と同じくステップを失敗させて`on_error_flow`に任せる。
-    const childFlowJobId = parseFlowJobId(
-      await wmill.runFlowAsync("f/factory/pipeline", {
-        work_item_id: parent_work_item_id,
-        attempt: parentItem.attempt + 1,
-        feedback: gapReport,
-      }),
-      "runFlowAsync",
-    );
-    // 比較交換で空にした`flow_job_id`が空のままのときだけ記録し、
-    // その間に別の実行が書いたIDを上書きしない。
-    const recorded = await setFlowJobIdIfUnset(
-      parent_work_item_id,
-      childFlowJobId,
-    );
-    if (!recorded) {
-      log.warn("pipeline flow job id not recorded; another run holds it", {
+    if (outcome.kind === "refused") {
+      log.warn("aborting requirements_gap reroute", {
         parent_work_item_id,
-        started_job_id: childFlowJobId,
+        parent_status: parentItem.status,
+        detail: outcome.reason,
       });
+      const refusalWithGap = withGapReport(outcome.reason, gapReport);
+      await finalizeTerminal("needs_human", refusalWithGap, refusalWithGap);
+      return { ok: true, final_status: "needs_human", notice: outcome.reason };
     }
 
     return { ok: true, final_status: "blocked", notice: gapReport };
