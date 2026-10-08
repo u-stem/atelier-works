@@ -66,7 +66,7 @@ mise run bootstrap
 | `mise run bootstrap` | 初回セットアップ(ワークスペース作成・secret投入・sync push・migration、冪等) |
 | `mise run deploy` | `git pull --ff-only` → build → up → push → migrateを一括実行する(手動で一括反映したいときの手段) |
 | `mise run check` | `lint` → `typecheck` → `test` → `console:check`を順に実行する |
-| `mise run console:check` | Console(`console/`)の型検査・テスト・組み立て |
+| `mise run console:check` | Console(`console/`)のlockfileの方針を検査し、続けて型検査・テスト・組み立てを行う |
 | `mise run lint` | biome + `wmill lint` + 型アサーション検出 |
 | `mise run typecheck` | `tsc --noEmit` |
 | `mise run test` | `bun test`(small)。`console/`は除く(Consoleのテストは`mise run console:check`で実行する) |

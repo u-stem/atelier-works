@@ -149,7 +149,7 @@
 
 - `console_fetcher`は5分ごとに、`main`へのpushで全体が成功した`ci.yml`の最新の実行を探し、その成果物`console-dist`を検証して`factory_console`の`releases/<sha>/`に置き、`current`を付け替える。状態は`status.json`(`state`: `ok` / `failed` / `pinned`、`sha`、`checked_at`、`error`)に書き、ログにも出す。確認は`mise exec -- docker compose -f infra/docker-compose.yml logs --tail 50 console_fetcher`。
 - 版は直近の3つを残す。共有の`assets/`は、残した版から参照されず14日を超えたファイルを消す。
-- 新しい版に問題があれば`mise run console:rollback`で直前の版に戻す(取り込みの最中なら「更新中」と言って止まるので、少し待ってやり直す)。戻すと`pin`が置かれ、自動の付け替えが止まる。もう一度実行すると、さらに1つ前に戻る。直ったら`mise run console:unpin`で`pin`を外す(5分以内に最新の版へ戻る)。
+- 新しい版に問題があれば`mise run console:rollback`で直前の版に戻す(取り込みの最中なら「更新中」と言って止まるので、少し待ってやり直す)。戻すと`pin`が置かれ、自動の付け替えが止まる。もう一度実行すると、さらに1つ前に戻る。版は`main`へのpushのたびに作られ(Consoleを変えていないpushでも作られる)、直近の3つしか残らないので、戻せるのはその中だけ。それより前の状態に戻すには、`main`で該当のcommitをrevertし、CIを動かす。直ったら`mise run console:unpin`で`pin`を外す(5分以内に最新の版へ戻る)。
 - 主な`error`と対処:
   - `config_missing`: `CONSOLE_GITHUB_TOKEN`が無いか、`CONSOLE_GITHUB_REPO`(`mise.toml`)の形が違う。直して`mise run up`する。
   - `auth_failed`: トークンが失効した。再発行して投入し、`mise run up`する。

@@ -199,16 +199,17 @@ Consoleは`/console/`でWindmillと同じオリジンから配信する。Consol
 
 残るリスク:
 
-- `main`にマージされたコードは、そのまま運用者のブラウザで動く。Consoleの変更のレビューは、Windmillの管理者権限を持つコードのレビューとして行う。
+- `main`にpushできる者(FactoryのPATを含む)が書いたコードは、人のレビューを経ずに、そのまま運用者のブラウザで動きうる。今のGitHubのプランではこのリポジトリにbranch protection(rulesets)を設定できず、`main`へのpushを人のレビュー済みのものに限れない。Consoleの変更のレビューは、Windmillの管理者権限を持つコードのレビューとして行う。
 - CIの組み立ての途中で動くもの(miseが入れるbunなどのツール、Viteのプラグインなどの依存)が侵害されると、出力が改ざんされうる。ツールの取得と導入も、この経路に含まれる。`digest`とマニフェストが保証するのは「GitHubのCIが作ったもの」であることまでで、ツールや依存の中身ではない。
 - 信頼の境界は`console`ジョブだけでなく、`ci.yml`のすべてのジョブ(とそこで動くツールや依存)に及ぶ。同じ実行の他のジョブも、ランナーから取れるトークンで成果物`console-dist`を上げ直せるため(`overwrite: true`で、`console_fetcher`はその名前の`id`が最大の成果物を取り込む)。
 - `Sec-Fetch-Site`をブラウザが送るのは、信頼できるオリジン(localhostかHTTPS)のときだけ。`WM_BIND`を外向きにしてHTTPで公開すると、このヘッダーが届かず防御が効かない。外向きにするならHTTPSにする。
 - `Sec-Fetch-Site`の規則が効くのは`/api/*`だけ。`windmill_extra`の経路(`/ws/*`、`/ws_mp/*`、`/ws_debug/*`)には効かない。
-- 共有の`assets/`には古い版のファイルも残る(どの版からも参照されなくなってから14日で消える)。その間は`script-src`で読み込めるので、XSSの足がかり(script gadget)に使われうる。
+- 共有の`assets/`には古い版のファイルも残る(置いてから14日を超え、残している版のどれからも参照されていないものを消す)。その間は`script-src`で読み込めるので、XSSの足がかり(script gadget)に使われうる。
 - Trusted TypesのReport-Onlyの方針には報告先が無い。違反はブラウザの開発者ツールのコンソールにしか出ない。
 - `console_fetcher`の外への通信はnetworkでは絞れない。コードが侵害されれば任意の宛先へ出られる。
-- `console_egress`は通常のbridgeなので、`WM_BIND`を外向き(`0.0.0.0`など)にすると、`console_fetcher`からホストのゲートウェイのIP経由でCaddy(つまりWindmill)に届く。`console_fetcher`はWindmillの資格情報を持たないが、認証の要らない経路には届く。
+- `console_egress`は通常のbridgeで、ホストのloopbackから切り離されない。既定の設定(`WM_BIND=127.0.0.1`)のままでも、`console_fetcher`から`host.docker.internal`経由でホストのloopbackのサービス(Caddy、つまりWindmill)に届く(OrbStackで確認)。`WM_BIND`を外向き(`0.0.0.0`など)にすると、ホストのゲートウェイのIP経由でも届く。`console_fetcher`はWindmillの資格情報を持たないが、認証の要らない経路には届く。
 - `CONSOLE_GITHUB_TOKEN`は`docker inspect`できる人(ホストのdockerを使える人)には見える。
+- 成果物を取りに行くリポジトリ`CONSOLE_GITHUB_REPO`は、コミットされた`mise.toml`にある。これを書き換える変更がマージされると、`console_fetcher`は任意のpublicリポジトリの成果物を取り込みうる。`mise.toml`は保護パス(pr_fixは止め、実装フローはPR本文に明示する)で、マージは人が行うことで抑えている(ただし上記のとおり、`main`へのpushそのものは人に限れない)。
 - 成果物の保持は30日。30日以上`main`へのpushが無いと、新しく立ち上げた環境は取り込めない(動作中の環境は今の版を配信し続ける)。そのときは`main`に何かをpushしてCIを動かす。
 
 ## workerコンテナの権限
