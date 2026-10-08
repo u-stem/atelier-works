@@ -472,25 +472,31 @@ export type RequirementsDocValidation =
   | { readonly ok: true }
   | { readonly ok: false; readonly issues: string[] };
 
-/**
- * `checkForbiddenSyntax`と`checkLengths`が見ない文章の規則。
- * 絵文字と太字はそちらが見るので、二重に報告しない。
- */
-const PROSE_RULES_FOR_DOCUMENTS: ReadonlySet<ProseRuleId> = new Set([
-  "heading-code",
-  "register",
-]);
+/** `markdown`を`REPORT_RULES`で検査し、`rule`の問題だけを「N行目: 内容」の形で返す。 */
+function documentProseIssues(markdown: string, rule: ProseRuleId): string[] {
+  return formatProseIssues(
+    checkProse(markdown, REPORT_RULES).filter((issue) => issue.rule === rule),
+  );
+}
 
 /**
- * 要件定義書と監査レポートの文章を、`factory-writing`スキルの規則
- * (見出しにコード表記を入れない、常体で書く)で検査する。
+ * 要件定義書と監査レポートの文章のうち、生成を失敗にする規則
+ * (見出しにコード表記を入れない)で検査する。
+ * 絵文字と太字は`checkForbiddenSyntax`が見るので、ここでは見ない。
+ * 文体は`documentRegisterIssues`が見る。
  */
 export function checkDocumentProse(markdown: string): string[] {
-  return formatProseIssues(
-    checkProse(markdown, REPORT_RULES).filter((issue) =>
-      PROSE_RULES_FOR_DOCUMENTS.has(issue.rule),
-    ),
-  );
+  return documentProseIssues(markdown, "heading-code");
+}
+
+/**
+ * 要件定義書と監査レポートの文体(常体で書く)を検査する。
+ * 呼び出し側は問題をログに残すだけにし、生成を失敗にしない。
+ * 引用符の無い画面の文言や注記の敬体でも当たるので、これで生成全体をやり直すと、
+ * 費用に見合わないためである。
+ */
+export function documentRegisterIssues(markdown: string): string[] {
+  return documentProseIssues(markdown, "register");
 }
 
 /** 書き終えた要件定義書にすべての検査をかけ、結果を1つの判定にまとめる。 */

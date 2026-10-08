@@ -8,6 +8,8 @@ import {
   AUDIT_BASE_DIR,
   AUDIT_TEMPLATE_RELATIVE_PATH,
   type AuditProposal,
+  auditOutputRegisterIssues,
+  auditReportRegisterIssues,
   auditSnapshotDir,
   checkAuditOutput,
   EVIDENCE_MD_FILENAME,
@@ -122,6 +124,23 @@ export function collectAuditIssues(
   return [
     ...checkAuditOutput(output, allowedUrlPrefixes),
     ...reportIssues.map((issue) => `${REPORT_MD_FILENAME}: ${issue}`),
+  ];
+}
+
+/**
+ * 監査の構造化出力とレポートの本文の文体を検査し、問題を返す(無ければ空)。
+ * 生成は失敗にせず、ログに残すだけにする。
+ * レポートの問題には、`collectAuditIssues`と同じくファイル名を前置きする。
+ */
+export function auditRegisterIssues(
+  output: AuditOutput,
+  markdown: string,
+): string[] {
+  return [
+    ...auditOutputRegisterIssues(output),
+    ...auditReportRegisterIssues(markdown).map(
+      (issue) => `${REPORT_MD_FILENAME}: ${issue}`,
+    ),
   ];
 }
 
@@ -511,6 +530,16 @@ export async function main(
       throw new Error(
         `audit_generate: audit report failed validation: ${issues.join("; ")}`,
       );
+    }
+    const registerIssues = auditRegisterIssues(
+      result.structuredOutput,
+      markdown,
+    );
+    if (registerIssues.length > 0) {
+      log.warn("audit output breaks the writing rules", {
+        work_item_id,
+        issues: registerIssues,
+      });
     }
 
     const reportId = await insertAuditReport({

@@ -27,7 +27,10 @@ import {
   PIPELINE_LEASE_LOST_REASON,
 } from "../lib/pipeline_lease.ts";
 import { REQUIREMENTS_SCHEMA, requirementsPrompt } from "../lib/prompts.ts";
-import { validateRequirementsDoc } from "../lib/requirements_doc.ts";
+import {
+  documentRegisterIssues,
+  validateRequirementsDoc,
+} from "../lib/requirements_doc.ts";
 import {
   buildRequirementsDocDir,
   REQUIREMENTS_BASE_DIR,
@@ -415,6 +418,15 @@ export async function main(
         "invalid_structured_output",
         buildGenerateFailureMessage(issues),
       );
+    }
+    const registerIssues = documentRegisterIssues(markdown);
+    if (registerIssues.length > 0) {
+      log.warn("requirements document breaks the writing rules", {
+        work_item_id,
+        issues: registerIssues.map(
+          (issue) => `${REQUIREMENTS_MD_FILENAME}: ${issue}`,
+        ),
+      });
     }
 
     const diagrams: Diagram[] = classified.diagramFiles.map((file) => ({

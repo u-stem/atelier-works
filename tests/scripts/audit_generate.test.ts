@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   allowedUrlPrefixesFor,
+  auditRegisterIssues,
   buildApprovalPayload,
   collectAuditIssues,
   decideFinalStatus,
@@ -81,7 +82,7 @@ const VALID_REPORT = await Bun.file("tests/fixtures/audit/valid.md").text();
 describe("collectAuditIssues", () => {
   const PREFIXES = ["https://github.com/example-org/atelier-works"];
 
-  test("reports a polite ending in a proposal body", () => {
+  test("does not block on a polite ending in a proposal body", () => {
     const issues = collectAuditIssues(
       {
         summary: "失敗が減った。",
@@ -91,6 +92,47 @@ describe("collectAuditIssues", () => {
       PREFIXES,
     );
 
+    expect(issues.some((issue) => issue.startsWith("提案1: "))).toBe(false);
+  });
+
+  test("reports inline code in a heading of a proposal body", () => {
+    const issues = collectAuditIssues(
+      {
+        summary: "失敗が減った。",
+        proposals: [
+          {
+            title: "通知を減らす",
+            body: "### `notify`の扱い\n\n通知を減らす。",
+          },
+        ],
+      },
+      VALID_REPORT,
+      PREFIXES,
+    );
+
     expect(issues.some((issue) => issue.startsWith("提案1: "))).toBe(true);
+  });
+});
+
+describe("auditRegisterIssues", () => {
+  test("reports a polite ending in a proposal body with its label", () => {
+    const issues = auditRegisterIssues(
+      {
+        summary: "失敗が減った。",
+        proposals: [{ title: "通知を減らす", body: "通知を減らします。" }],
+      },
+      VALID_REPORT,
+    );
+
+    expect(issues.some((issue) => issue.startsWith("提案1: "))).toBe(true);
+  });
+
+  test("reports a polite ending in the report with the file name", () => {
+    const issues = auditRegisterIssues(
+      { summary: "失敗が減った。", proposals: [] },
+      `${VALID_REPORT}\n説明します。\n`,
+    );
+
+    expect(issues.some((issue) => issue.startsWith("report.md: "))).toBe(true);
   });
 });

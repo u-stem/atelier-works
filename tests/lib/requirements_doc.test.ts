@@ -7,6 +7,7 @@ import {
   checkQuotes,
   checkRequirementIds,
   checkSections,
+  documentRegisterIssues,
   extractH2Headings,
   validateRequirementsDoc,
 } from "../../f/factory/lib/requirements_doc.ts";
@@ -351,10 +352,10 @@ describe("validateRequirementsDoc", () => {
 });
 
 describe("checkDocumentProse", () => {
-  test("reports a polite ending in a requirements document", () => {
+  test("does not block on a polite ending because the register is only logged", () => {
     const issues = checkDocumentProse("背景を説明します。");
 
-    expect(issues).toHaveLength(1);
+    expect(issues).toEqual([]);
   });
 
   test("reports inline code in a heading", () => {
@@ -365,6 +366,20 @@ describe("checkDocumentProse", () => {
 
   test("does not repeat the emoji issue that checkForbiddenSyntax reports", () => {
     const issues = checkDocumentProse("完了した。\u{1F389}");
+
+    expect(issues).toEqual([]);
+  });
+});
+
+describe("documentRegisterIssues", () => {
+  test("reports a polite ending in a requirements document", () => {
+    const issues = documentRegisterIssues("背景を説明します。");
+
+    expect(issues).toHaveLength(1);
+  });
+
+  test("does not report inline code in a heading, which checkDocumentProse blocks on", () => {
+    const issues = documentRegisterIssues("### `foo`の扱い");
 
     expect(issues).toEqual([]);
   });

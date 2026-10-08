@@ -12,6 +12,7 @@ import {
   checkDocumentProse,
   checkForbiddenSyntax,
   checkLengths,
+  documentRegisterIssues,
   extractH2Headings,
 } from "./requirements_doc.ts";
 
@@ -297,6 +298,32 @@ export function validateAuditReport(
     ...checkProposalTable(markdown, proposals),
   ];
   return issues.length === 0 ? { ok: true } : { ok: false, issues };
+}
+
+/** 書き終えた監査レポートの文体を検査する。呼び出し側はログに残すだけにする。 */
+export function auditReportRegisterIssues(markdown: string): string[] {
+  return documentRegisterIssues(stripHtmlComments(markdown));
+}
+
+/**
+ * 監査の構造化出力(要約と提案)の文体を検査し、
+ * `checkAuditOutput`と同じラベル(`summary`、`提案N`)を前置きした問題を返す(無ければ空)。
+ * 呼び出し側はログに残すだけにする(`documentRegisterIssues`を参照)。
+ */
+export function auditOutputRegisterIssues(output: {
+  readonly summary: string;
+  readonly proposals: readonly AuditProposal[];
+}): string[] {
+  return [
+    ...documentRegisterIssues(stripHtmlComments(output.summary)).map(
+      (issue) => `summary: ${issue}`,
+    ),
+    ...output.proposals.flatMap((proposal, index) =>
+      documentRegisterIssues(
+        stripHtmlComments(`${proposal.title}\n${proposal.body}`),
+      ).map((issue) => `提案${index + 1}: ${issue}`),
+    ),
+  ];
 }
 
 /**
