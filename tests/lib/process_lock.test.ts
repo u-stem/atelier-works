@@ -1,9 +1,18 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   defaultLockReleaseDeps,
+  defaultOrphanLockFileDeps,
   ensureWorktreeLockFree,
   FLOCK_PATH,
   formatLockHolders,
@@ -16,6 +25,7 @@ import {
   type LockReleaseDeps,
   lockJobIdFromEnv,
   lockPathFromEnviron,
+  type OrphanLockFileDeps,
   ownerFromEnviron,
   type ProcFs,
   type ProcStat,
@@ -23,6 +33,10 @@ import {
   parseProcStat,
   planLockRelease,
   probeWorktreeLock,
+  RM_PATH,
+  removeLockFileArgv,
+  removeLockFileUnderLock,
+  removeOrphanLockFiles,
   type SignalDeps,
   scanLockProcesses,
   stopProcesses,
@@ -34,9 +48,10 @@ import {
   WorktreeLockHeldInRunError,
   withWorktreeProcessLock,
   worktreeLockFor,
+  worktreeNameOfLockFile,
 } from "../../f/factory/lib/process_lock.ts";
 import { runCommand } from "../../f/factory/lib/workspace.ts";
-import { createFakeCommandRunner, fail, ok } from "./testSupport.ts";
+import { createFakeCommandRunner, fail, ok, timeout } from "./testSupport.ts";
 
 const DIR = "/workspaces/acme/widgets/factory-issue-7-wi-3";
 const LOCK = worktreeLockFor(DIR, (path) => path);
@@ -1139,6 +1154,18 @@ describe("a probe by another run", () => {
     expect(calls.scans).toBe(1);
   });
 
+  test("does not treat a tagged true under a probe as part of it", async () => {
+    const taggedTrue = entry({
+      pid: 43,
+      ppid: 42,
+      pgid: 42,
+      command: TRUE_PATH,
+    });
+    const { deps, calls } = fakeDeps([[PROBE, taggedTrue], []]);
+    await ensure(deps).catch(() => undefined);
+    expect(calls.scans).toBe(1);
+  });
+
   test("does not scan again for a lone true that no probe started", async () => {
     const { deps, calls } = fakeDeps([[PROBE_CHILD], []]);
     await ensure(deps).catch(() => undefined);
@@ -1153,6 +1180,394 @@ describe("a probe by another run", () => {
     const { deps, calls } = fakeDeps([[other], []]);
     await ensure(deps).catch(() => undefined);
     expect(calls.scans).toBe(1);
+  });
+});
+
+describe("a lock file removal by the cleanup", () => {
+  /** 掃除がロックを持ったままロックファイルを消すシェル。タグを持たない。 */
+  const REMOVAL = entry({
+    owner: null,
+    lockPath: null,
+    command: removeLockFileArgv(LOCK).join(" "),
+  });
+  /** そのシェルがロックを持ったまま起動したコマンド。 */
+  const REMOVAL_CHILD = entry({
+    pid: 43,
+    ppid: 42,
+    pgid: 42,
+    owner: null,
+    lockPath: null,
+    command: "/usr/bin/stat -L -c %d:%i /proc/self/fd/9",
+  });
+  /** シェルがexecで置き換わった後のrm。 */
+  const REMOVAL_RM = entry({
+    owner: null,
+    lockPath: null,
+    command: `${RM_PATH} -f -- ${LOCK.lockPath}`,
+  });
+  const ensure = (deps: LockReleaseDeps) =>
+    ensureWorktreeLockFree({
+      run: createFakeCommandRunner([ok()]).run,
+      lock: LOCK,
+      policy: null,
+      deps,
+    });
+
+  test("scans again when only a removal holds the lock", async () => {
+    const { deps } = fakeDeps([[REMOVAL], []]);
+    expect(await ensure(deps)).toEqual([]);
+  });
+
+  test("treats a command the removal runs under the lock as part of it", async () => {
+    const { deps } = fakeDeps([[REMOVAL, REMOVAL_CHILD], []]);
+    expect(await ensure(deps)).toEqual([]);
+  });
+
+  test("treats the rm the removal turned into as part of it", async () => {
+    const { deps } = fakeDeps([[REMOVAL_RM], []]);
+    expect(await ensure(deps)).toEqual([]);
+  });
+
+  test("does not scan again for a removal of another lock file", async () => {
+    const other = entry({
+      ...REMOVAL,
+      command: removeLockFileArgv(
+        worktreeLockFor("/w/other", (path) => path),
+      ).join(" "),
+    });
+    const { deps, calls } = fakeDeps([[other], []]);
+    await ensure(deps).catch(() => undefined);
+    expect(calls.scans).toBe(1);
+  });
+
+  test("scans again for a removal of this lock reached through a symlinked parent", async () => {
+    const lock = worktreeLockFor("/w/link/wt", () => "/real");
+    const removal = entry({
+      ...REMOVAL,
+      command: removeLockFileArgv(
+        worktreeLockFor("/real/wt", (path) => path),
+      ).join(" "),
+    });
+    const { deps } = fakeDeps([[removal], []]);
+    expect(
+      await ensureWorktreeLockFree({
+        run: createFakeCommandRunner([ok()]).run,
+        lock,
+        policy: null,
+        deps,
+      }),
+    ).toEqual([]);
+  });
+
+  test("does not scan again for a tagged process under a removal", async () => {
+    const tagged = entry({ pid: 43, ppid: 42, pgid: 42 });
+    const { deps, calls } = fakeDeps([[REMOVAL, tagged], []]);
+    await ensure(deps).catch(() => undefined);
+    expect(calls.scans).toBe(1);
+  });
+});
+
+describe("worktreeNameOfLockFile", () => {
+  test("returns the worktree name of a lock file name", () => {
+    expect(worktreeNameOfLockFile(".factory-issue-7.process.lock")).toBe(
+      "factory-issue-7",
+    );
+  });
+
+  test("keeps dots inside the worktree name", () => {
+    expect(worktreeNameOfLockFile(".v1.2.process.lock")).toBe("v1.2");
+  });
+
+  test("rejects a name without the leading dot", () => {
+    expect(worktreeNameOfLockFile("wt.process.lock")).toBeNull();
+  });
+
+  test("rejects a worktree name that starts with a dot", () => {
+    expect(worktreeNameOfLockFile("..wt.process.lock")).toBeNull();
+  });
+
+  test("rejects an empty worktree name", () => {
+    expect(worktreeNameOfLockFile("..process.lock")).toBeNull();
+  });
+
+  test("rejects another suffix", () => {
+    expect(worktreeNameOfLockFile(".wt.process.lock.bak")).toBeNull();
+  });
+});
+
+describe("removeLockFileUnderLock", () => {
+  test("passes the worktree and the lock file to the removal shell", async () => {
+    const fake = createFakeCommandRunner([ok()]);
+    await removeLockFileUnderLock({ run: fake.run, lock: LOCK });
+    expect(fake.calls[0]?.argv.slice(3)).toEqual([
+      "sh",
+      LOCK.worktreeDir,
+      LOCK.lockPath,
+    ]);
+  });
+
+  test("builds the worktree path under the real parent of the lock file", () => {
+    const lock = worktreeLockFor("/w/link/wt", () => "/real");
+    expect(removeLockFileArgv(lock)[4]).toBe("/real/wt");
+  });
+
+  test("limits how long the removal shell may run", async () => {
+    const fake = createFakeCommandRunner([ok()]);
+    await removeLockFileUnderLock({ run: fake.run, lock: LOCK });
+    expect(fake.calls[0]?.options?.timeoutMs).toBe(5_000);
+  });
+
+  test("throws when the removal shell times out", async () => {
+    const fake = createFakeCommandRunner([timeout()]);
+    await expect(
+      removeLockFileUnderLock({ run: fake.run, lock: LOCK }),
+    ).rejects.toThrow("timed out");
+  });
+
+  test("reports removed when the shell exits 0", async () => {
+    const fake = createFakeCommandRunner([ok()]);
+    expect(await removeLockFileUnderLock({ run: fake.run, lock: LOCK })).toBe(
+      "removed",
+    );
+  });
+
+  test("reports held on the conflict code with no output", async () => {
+    const fake = createFakeCommandRunner([busy()]);
+    expect(await removeLockFileUnderLock({ run: fake.run, lock: LOCK })).toBe(
+      "held",
+    );
+  });
+
+  test("reports a worktree that appeared before the removal", async () => {
+    const fake = createFakeCommandRunner([fail("", 214)]);
+    expect(await removeLockFileUnderLock({ run: fake.run, lock: LOCK })).toBe(
+      "worktree_exists",
+    );
+  });
+
+  test("reports a lock file replaced before the removal", async () => {
+    const fake = createFakeCommandRunner([fail("", 215)]);
+    expect(await removeLockFileUnderLock({ run: fake.run, lock: LOCK })).toBe(
+      "replaced",
+    );
+  });
+
+  test("reports a path that is no longer an empty file", async () => {
+    const fake = createFakeCommandRunner([fail("", 216)]);
+    expect(await removeLockFileUnderLock({ run: fake.run, lock: LOCK })).toBe(
+      "not_lock_file",
+    );
+  });
+
+  test("throws when the shell fails otherwise", async () => {
+    const fake = createFakeCommandRunner([fail("rm: cannot remove", 1)]);
+    await expect(
+      removeLockFileUnderLock({ run: fake.run, lock: LOCK }),
+    ).rejects.toThrow("rm: cannot remove");
+  });
+});
+
+describe("removeOrphanLockFiles", () => {
+  const ROOT = "/workspaces/acme/widgets";
+  const ORPHAN = `${ROOT}/.gone.process.lock`;
+
+  type FakeFs = {
+    readonly files: Record<string, "empty_file" | "other">;
+    readonly dirs: Record<string, readonly string[]>;
+  };
+
+  /** 偽のファイルシステムと走査で掃除を走らせ、消したロックファイルと走査したロックファイルを記録する依存。 */
+  function sweepDeps(
+    fs: FakeFs,
+    opts: {
+      readonly scan?: readonly LockProcess[];
+      readonly removal?: "removed" | "held";
+      readonly realpath?: (path: string) => string;
+      readonly failRemove?: string;
+    } = {},
+  ): { deps: OrphanLockFileDeps; removed: string[]; scans: string[] } {
+    const removed: string[] = [];
+    const scans: string[] = [];
+    return {
+      removed,
+      scans,
+      deps: {
+        realpath: async (path) => {
+          if (opts.realpath !== undefined) return opts.realpath(path);
+          if (fs.dirs[path] === undefined) throw errno("ENOENT");
+          return path;
+        },
+        listDir: async (dir) => {
+          const names = fs.dirs[dir];
+          if (names === undefined) throw errno("ENOENT");
+          return names;
+        },
+        entryKind: async (path) => fs.files[path] ?? "missing",
+        scan: async (lock) => {
+          scans.push(lock.lockPath);
+          return opts.scan ?? [];
+        },
+        remove: async (lock) => {
+          if (lock.lockPath === opts.failRemove)
+            throw new Error("rm: cannot remove");
+          const result = opts.removal ?? "removed";
+          if (result === "removed") removed.push(lock.lockPath);
+          return result;
+        },
+      },
+    };
+  }
+
+  const ONE_ORPHAN: FakeFs = {
+    files: { [ORPHAN]: "empty_file" },
+    dirs: { [ROOT]: [".gone.process.lock"] },
+  };
+  const WORKTREE_STILL_THERE: FakeFs = {
+    files: { [ORPHAN]: "empty_file", [`${ROOT}/gone`]: "other" },
+    dirs: ONE_ORPHAN.dirs,
+  };
+
+  test("removes the lock file of a worktree that no longer exists", async () => {
+    const { deps, removed } = sweepDeps(ONE_ORPHAN);
+    await removeOrphanLockFiles([ROOT], deps);
+    expect(removed).toEqual([ORPHAN]);
+  });
+
+  test("reports the removal", async () => {
+    const { deps } = sweepDeps(ONE_ORPHAN);
+    expect(await removeOrphanLockFiles([ROOT], deps)).toEqual([
+      { path: ORPHAN, result: "removed", detail: null },
+    ]);
+  });
+
+  test("leaves the lock file of a worktree that still exists", async () => {
+    const { deps, removed } = sweepDeps(WORKTREE_STILL_THERE);
+    await removeOrphanLockFiles([ROOT], deps);
+    expect(removed).toEqual([]);
+  });
+
+  test("does not scan for the lock file of a worktree that still exists", async () => {
+    const { deps, scans } = sweepDeps(WORKTREE_STILL_THERE);
+    await removeOrphanLockFiles([ROOT], deps);
+    expect(scans).toEqual([]);
+  });
+
+  test("ignores a file whose name is not a lock file name", async () => {
+    const { deps, removed } = sweepDeps({
+      files: { [`${ROOT}/.gone.lock`]: "empty_file" },
+      dirs: { [ROOT]: [".gone.lock"] },
+    });
+    await removeOrphanLockFiles([ROOT], deps);
+    expect(removed).toEqual([]);
+  });
+
+  test("ignores a lock file name for a worktree name starting with a dot", async () => {
+    const { deps, removed } = sweepDeps({
+      files: { [`${ROOT}/..gone.process.lock`]: "empty_file" },
+      dirs: { [ROOT]: ["..gone.process.lock"] },
+    });
+    await removeOrphanLockFiles([ROOT], deps);
+    expect(removed).toEqual([]);
+  });
+
+  test("ignores a lock file name that is not an empty regular file", async () => {
+    const { deps, removed } = sweepDeps({
+      files: { [ORPHAN]: "other" },
+      dirs: ONE_ORPHAN.dirs,
+    });
+    await removeOrphanLockFiles([ROOT], deps);
+    expect(removed).toEqual([]);
+  });
+
+  test("leaves a lock file that a process holds", async () => {
+    const { deps, removed } = sweepDeps(ONE_ORPHAN, {
+      scan: [entry({ owner: null, lockPath: null, holdsLock: true })],
+    });
+    await removeOrphanLockFiles([ROOT], deps);
+    expect(removed).toEqual([]);
+  });
+
+  test("leaves a lock file named by a leftover's tag", async () => {
+    const { deps, removed } = sweepDeps(ONE_ORPHAN, {
+      scan: [entry({ lockPath: ORPHAN, holdsLock: false })],
+    });
+    await removeOrphanLockFiles([ROOT], deps);
+    expect(removed).toEqual([]);
+  });
+
+  test("reports a lock file kept for a related process as in use", async () => {
+    const { deps } = sweepDeps(ONE_ORPHAN, {
+      scan: [entry({ lockPath: ORPHAN, holdsLock: false })],
+    });
+    const [outcome] = await removeOrphanLockFiles([ROOT], deps);
+    expect(outcome?.result).toBe("in_use");
+  });
+
+  test("leaves a lock file while a process cannot be inspected", async () => {
+    const { deps, removed } = sweepDeps(ONE_ORPHAN, {
+      scan: [
+        entry({
+          owner: null,
+          lockPath: null,
+          holdsLock: false,
+          uninspectable: true,
+        }),
+      ],
+    });
+    await removeOrphanLockFiles([ROOT], deps);
+    expect(removed).toEqual([]);
+  });
+
+  test("ignores a leftover tagged with another lock file", async () => {
+    const { deps, removed } = sweepDeps(ONE_ORPHAN, {
+      scan: [
+        entry({ lockPath: `${ROOT}/.other.process.lock`, holdsLock: false }),
+      ],
+    });
+    await removeOrphanLockFiles([ROOT], deps);
+    expect(removed).toEqual([ORPHAN]);
+  });
+
+  test("reports what the removal under the lock found", async () => {
+    const { deps } = sweepDeps(ONE_ORPHAN, { removal: "held" });
+    const [outcome] = await removeOrphanLockFiles([ROOT], deps);
+    expect(outcome?.result).toBe("held");
+  });
+
+  test("looks in the real path of the directory", async () => {
+    const { deps, scans } = sweepDeps(ONE_ORPHAN, { realpath: () => ROOT });
+    await removeOrphanLockFiles(["/link/widgets"], deps);
+    expect(scans).toEqual([ORPHAN]);
+  });
+
+  test("looks at a directory once even when it is given twice", async () => {
+    const { deps, scans } = sweepDeps(ONE_ORPHAN);
+    await removeOrphanLockFiles([ROOT, ROOT], deps);
+    expect(scans).toEqual([ORPHAN]);
+  });
+
+  test("skips a directory that no longer exists", async () => {
+    const { deps } = sweepDeps(ONE_ORPHAN);
+    expect(await removeOrphanLockFiles([`${ROOT}/gone-dir`], deps)).toEqual([]);
+  });
+
+  test("keeps going after a lock file it could not remove", async () => {
+    const second = `${ROOT}/.later.process.lock`;
+    const { deps, removed } = sweepDeps(
+      {
+        files: { [ORPHAN]: "empty_file", [second]: "empty_file" },
+        dirs: { [ROOT]: [".gone.process.lock", ".later.process.lock"] },
+      },
+      { failRemove: ORPHAN },
+    );
+    await removeOrphanLockFiles([ROOT], deps);
+    expect(removed).toEqual([second]);
+  });
+
+  test("reports a lock file it could not remove as failed", async () => {
+    const { deps } = sweepDeps(ONE_ORPHAN, { failRemove: ORPHAN });
+    const [outcome] = await removeOrphanLockFiles([ROOT], deps);
+    expect(outcome?.result).toBe("failed");
   });
 });
 
@@ -1493,5 +1908,111 @@ describe("process lock with the real flock and /proc", () => {
       expect(outcome).toBeInstanceOf(WorktreeBusyError);
     },
     10_000,
+  );
+
+  test.skipIf(!supported)(
+    "removes a free lock file whose worktree is gone",
+    async () => {
+      const lock = tempLock();
+      writeFileSync(lock.lockPath, "");
+      await removeLockFileUnderLock({ run: runCommand, lock });
+      expect(existsSync(lock.lockPath)).toBe(false);
+    },
+  );
+
+  test.skipIf(!supported)(
+    "keeps a lock file whose worktree exists",
+    async () => {
+      const lock = tempLock();
+      writeFileSync(lock.lockPath, "");
+      mkdirSync(lock.worktreeDir);
+      expect(await removeLockFileUnderLock({ run: runCommand, lock })).toBe(
+        "worktree_exists",
+      );
+    },
+  );
+
+  test.skipIf(!supported)(
+    "does not remove a symlink in place of the lock file",
+    async () => {
+      const lock = tempLock();
+      const target = `${lock.lockPath}.target`;
+      writeFileSync(target, "");
+      symlinkSync(target, lock.lockPath);
+      expect(await removeLockFileUnderLock({ run: runCommand, lock })).toBe(
+        "not_lock_file",
+      );
+    },
+  );
+
+  test.skipIf(!supported)(
+    "does not remove a lock file that is not empty",
+    async () => {
+      const lock = tempLock();
+      writeFileSync(lock.lockPath, "data");
+      expect(await removeLockFileUnderLock({ run: runCommand, lock })).toBe(
+        "not_lock_file",
+      );
+    },
+  );
+
+  test.skipIf(!supported)(
+    "reports a lock file that is already gone as not a lock file",
+    async () => {
+      const lock = tempLock();
+      expect(await removeLockFileUnderLock({ run: runCommand, lock })).toBe(
+        "not_lock_file",
+      );
+    },
+  );
+
+  test.skipIf(!scansAsRoot)(
+    "removes only the orphaned lock file from a directory",
+    async () => {
+      const dir = realpathSync(mkdtempSync(join(tmpdir(), "factory-lock-")));
+      tempDirs.push(dir);
+      writeFileSync(join(dir, ".gone.process.lock"), "");
+      writeFileSync(join(dir, ".kept.process.lock"), "");
+      mkdirSync(join(dir, "kept"));
+      const outcomes = await removeOrphanLockFiles(
+        [dir],
+        defaultOrphanLockFileDeps(runCommand),
+      );
+      expect(outcomes).toEqual([
+        {
+          path: join(dir, ".gone.process.lock"),
+          result: "removed",
+          detail: null,
+        },
+      ]);
+    },
+  );
+
+  test.skipIf(!scansAsRoot)(
+    "keeps the lock file of an existing worktree in the directory",
+    async () => {
+      const dir = realpathSync(mkdtempSync(join(tmpdir(), "factory-lock-")));
+      tempDirs.push(dir);
+      writeFileSync(join(dir, ".kept.process.lock"), "");
+      mkdirSync(join(dir, "kept"));
+      await removeOrphanLockFiles([dir], defaultOrphanLockFileDeps(runCommand));
+      expect(existsSync(join(dir, ".kept.process.lock"))).toBe(true);
+    },
+  );
+
+  test.skipIf(!supported)(
+    "keeps a lock file that a running command holds",
+    async () => {
+      const lock = tempLock();
+      const running = withWorktreeProcessLock(
+        runCommand,
+        lock,
+        OTHER_JOB,
+      )(["/bin/sleep", "1"]);
+      await Bun.sleep(200);
+      const result = await removeLockFileUnderLock({ run: runCommand, lock });
+      await running;
+      expect(result).toBe("held");
+    },
   );
 });

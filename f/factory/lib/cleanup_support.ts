@@ -1,6 +1,7 @@
 // `cleanup_workspaces.ts`が使う判定と解析の関数をまとめる。
 // 入出力(gitのworktree操作、`ps`とシグナル、`du`)はあちらのスクリプトが行う。
 
+import { dirname } from "node:path";
 import type { FactoryConfig } from "./types.ts";
 import type { WorktreeEntry } from "./workspace.ts";
 
@@ -32,6 +33,24 @@ export function requirementsWorktreeDir(
   issueNumber: number,
 ): string {
   return `/workspaces/${owner}/${repo}/req-${issueNumber}`;
+}
+
+/**
+ * リポジトリについて、worktreeのプロセスのロックファイルを探すディレクトリを返す。
+ * ロックファイルはworktreeの隣に置かれるので、メインのクローンの親(`req-<N>`と`review-*`の置き場所)と、一覧にある各worktreeの親を、重複を除いて返す。
+ * `worktrees`は、そのリポジトリの`git worktree list --porcelain`を解析したもの。
+ * 一覧から消えたworktreeの親は分からないので、そこに残るロックファイルは、同じ親に別のworktreeが一覧に載るまで探さない。
+ */
+export function lockFileDirs(
+  repoDir: string,
+  worktrees: readonly WorktreeEntry[],
+): string[] {
+  return [
+    ...new Set([
+      dirname(repoDir),
+      ...worktrees.map((entry) => dirname(entry.path)),
+    ]),
+  ];
 }
 
 // ---------------------------------------------------------------------------

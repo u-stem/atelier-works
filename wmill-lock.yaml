@@ -9,7 +9,7 @@ locks:
   f/factory/audit__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/audit_kickoff: 5bba1bd91cb8206eaf64597fb56a06c851d514ac4b8864eab65c2421d6ed94b5
   f/factory/cleanup_db: 59e0a1b61c54614639b30abb7a9d01c2baea28bc23af95ae6179063cac80e275
-  f/factory/cleanup_workspaces: ac552aea1d88fc9b03d6f57dccf29e03ca9d3f6bfcb22da81407fffd90fb2769
+  f/factory/cleanup_workspaces: cad6d786d4f8856adfda37c3efdde025fb78d4f4bce4178f17b2448ef3f02c17
   f/factory/factory_console__raw_app+__app_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/implement__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/lib/approval_support: 20f96fdb02ddba3ca38eeb6b259ffb0a063acbe3339e68c5a94ceb5e11d14602
@@ -19,7 +19,7 @@ locks:
   f/factory/lib/audit_support: 7e3a1a0e9b438c651812eee365575dbcba2c789388dec74458106c39b3a0d032
   f/factory/lib/claude: 5babf4dfcb5e6f0a3c1c6b0f738fa787ac50645a0a8b1a886d7577f0fe43d9ae
   f/factory/lib/cleanup_db_support: e07aaf144e1897e4cb6c523a22a374d73daaf7f4c2ab72d51621902347f70532
-  f/factory/lib/cleanup_support: d4b94884b5209c52858fcd8769fbef6a16a16b2e2a30a5489d169e3416baf108
+  f/factory/lib/cleanup_support: a02270a5bf1ff02043f4716167c6c090d4688802ef8ba12ea675606a76284377
   f/factory/lib/config: 5922d286a1443ab1057dd2164be94bf49288a7abdbcbfc463d1faf3a362f7d1a
   f/factory/lib/db: 4f6e803a2dea5962579282c466cb41dc7540a1e07f382163d637533862a9ddb9
   f/factory/lib/discord: 956ddb9d455a47bedc5d6866fe2349d1a4d279273df6c6fd61dc83bc99e16da0
@@ -31,7 +31,7 @@ locks:
   f/factory/lib/implement_support: ea228ce96d1122d8bc57c28e7cc28219d8e7455a4a44e9f4b926213e97db1b36
   f/factory/lib/log: 4396c2ef1d9fe804c3097c0db78c9c27e551c5bb0fdbd7a611c3ca0e5e57a359
   f/factory/lib/poll_support: 6e078aa1bba4d185b65a2edc66dbe45cf405504b71c8e2c75710f62f74c83e87
-  f/factory/lib/process_lock: ef6860bf423bd3709cec048e06ecd85b3d8a8b7942c61c63d236c20bbfeee340
+  f/factory/lib/process_lock: 7e5096145f47513a8ecf846ff771725c4089dac7ddfb7fe29bf46ee93ee4755d
   f/factory/lib/prompts: ee13475a77bf7913e0282e82a7403b55ab91a9c6c5f08b5d2beba781dbe2429c
   f/factory/lib/protected_paths: 6f44dabc62f0f1e557e07cabca59185dd019acec811671be5d833e72fde5852b
   f/factory/lib/requirements_doc: 595f1b05c1ff72f47f99178ad0ba441c3558d6864b85d153c01e2d94f44a1e17
