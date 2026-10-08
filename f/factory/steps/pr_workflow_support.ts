@@ -3460,20 +3460,17 @@ const LEFTOVER_PROCESS_NEXT_ACTION =
  * pr_fixのプロセスや持ち主の分からないプロセスが残っているときである。pr_fixの準備は何も止めない。
  * どちらも、理由に載ったプロセスが終わるか止まるまで、再実行しても同じ理由で止まる。
  * workerの再起動は同じworkerのすべてのジョブを止めるので勧めず、載ったプロセスだけを止めてもらう。
+ * 再実行はどちらのフローも`retry_work_item`にする。pr_fixで`factory:fix`を付け直すと、
+ * 何も修正していないのに新しい作業項目で修正のラウンドを1つ使ってしまうため。
  */
-function worktreeBusyNextAction(flow: NextActionFlow | undefined): string {
-  const stop =
-    "理由に載ったプロセスが終わるのを待つか、workerのコンテナでそのプロセスを止めてから、";
-  if (flow === "implement") return `${stop}${RETRY_WORK_ITEM_ACTION}`;
-  if (flow === "pr_fix") return `${stop}\`factory:fix\`を付け直してください`;
-  return `${stop}PRの修正なら\`factory:fix\`を付け直し、実装なら${RETRY_WORK_ITEM_ACTION}`;
-}
+const WORKTREE_BUSY_NEXT_ACTION = `理由に載ったプロセスが終わるのを待つか、workerのコンテナでそのプロセスを止めてから、${RETRY_WORK_ITEM_ACTION}`;
 
 /**
  * 実行中に、この実行の検査コマンドなどが残したプロセスがworktreeのロックを持ち続けていたときの次の操作。
  * 残ったプロセスは、この実行のジョブIDの持ち主タグを持つ。
  * 実装フローは再実行の準備がそれを止めてから続けるので、再実行するだけでよい。
  * pr_fixの準備は何も止めないので、先に人が止める必要がある。
+ * 再実行は、修正のラウンドを使わない`retry_work_item`にする。
  */
 function worktreeLockHeldInRunNextAction(
   flow: NextActionFlow | undefined,
@@ -3481,8 +3478,8 @@ function worktreeLockHeldInRunNextAction(
   if (flow === "implement")
     return `検査コマンドが常駐プロセスを残していないか確かめてから、${RETRY_WORK_ITEM_ACTION}(残ったプロセスは再実行の準備ステップが止めます)`;
   if (flow === "pr_fix")
-    return "検査コマンドが常駐プロセスを残していないか確かめ、残っていればworkerのコンテナで止めてから、`factory:fix`を付け直してください";
-  return `検査コマンドが常駐プロセスを残していないか確かめ、PRの修正なら残ったプロセスをworkerのコンテナで止めてから\`factory:fix\`を付け直し、実装なら${RETRY_WORK_ITEM_ACTION}`;
+    return `検査コマンドが常駐プロセスを残していないか確かめ、残っていればworkerのコンテナで止めてから、${RETRY_WORK_ITEM_ACTION}`;
+  return `検査コマンドが常駐プロセスを残していないか確かめ、PRの修正なら残ったプロセスをworkerのコンテナで止めてから、${RETRY_WORK_ITEM_ACTION}(実装なら残ったプロセスは再実行の準備ステップが止めます)`;
 }
 
 const REASON_RULES: readonly ReasonRule[] = [
@@ -3947,7 +3944,7 @@ const REASON_RULES: readonly ReasonRule[] = [
       m[1] === undefined
         ? "前の実行のプロセスがまだworktreeを使っています"
         : `前の実行のプロセスがまだworktreeを使っています(${m[1]})`,
-    nextAction: (_m, flow) => worktreeBusyNextAction(flow),
+    nextAction: () => WORKTREE_BUSY_NEXT_ACTION,
   },
   {
     pattern: /^implementation of the branch's work item is running$/,
@@ -3990,7 +3987,7 @@ const REASON_RULES: readonly ReasonRule[] = [
     describe: (m) =>
       `PR修正の時間設定が、flow.yamlの修正・検証ステップのtimeoutに収まりません(${m[1]})`,
     nextAction: () =>
-      "claude_timeout_secか検査コマンド(allowed_check_commands)の数を減らしてから、`factory:fix`を付け直してください",
+      `claude_timeout_secか検査コマンド(allowed_check_commands)の数を減らしてから、${RETRY_WORK_ITEM_ACTION}`,
   },
   {
     pattern:
