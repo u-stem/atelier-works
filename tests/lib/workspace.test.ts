@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import {
   existsSync,
   mkdirSync,
@@ -26,6 +26,7 @@ import {
   dropRemovedDiffLines,
   ensureEmptyDir,
   ensureFactoryClone,
+  ensureHeadOnBranch,
   ensureRepo,
   factoryCloneLockPath,
   fetchPrHeadRef,
@@ -1797,6 +1798,157 @@ describe("createGtrWorktree", () => {
       });
     });
   });
+});
+
+describe("ensureHeadOnBranch (real git)", () => {
+  /** `git checkout -B`が、他のworktreeでcheckout中のブランチを拒むのはgit 2.43以降である。 */
+  const hostGitRefusesCheckedOutBranch = (() => {
+    const match = /git version (\d+)\.(\d+)/.exec(
+      Bun.spawnSync(["git", "--version"]).stdout.toString(),
+    );
+    if (match === null) return false;
+    const major = Number(match[1]);
+    const minor = Number(match[2]);
+    return major > 2 || (major === 2 && minor >= 43);
+  })();
+  const roots: string[] = [];
+  afterAll(() => {
+    for (const root of roots) rmSync(root, { recursive: true, force: true });
+  });
+
+  type Fixture = {
+    readonly worktree: string;
+    readonly home: string;
+    readonly mainSha: string;
+    readonly run: CommandRunner;
+    readonly git: (cwd: string, args: readonly string[]) => Promise<string>;
+  };
+
+  /**
+   * `main`・`target`・`other`のブランチを持つリポジトリと、`target`をcheckoutしたworktreeを作る。
+   * 生き残りがworktreeで`other`へ切り替えてコミットした状態にする。
+   * `HOME`を一時ディレクトリに向け、システムの設定も読ませないので、利用者のgitの設定に左右されない。
+   */
+  async function setUp(): Promise<Fixture> {
+    const root = mkdtempSync(join(tmpdir(), "ensure-head-on-branch-"));
+    roots.push(root);
+    const repo = join(root, "repo");
+    const worktree = join(root, "wt");
+    const home = join(root, "home");
+    mkdirSync(repo);
+    mkdirSync(home);
+    const run: CommandRunner = (argv, options) =>
+      runCommand(argv, {
+        ...options,
+        env: {
+          ...options?.env,
+          PATH: process.env.PATH ?? "",
+          HOME: home,
+          GIT_CONFIG_NOSYSTEM: "1",
+        },
+      });
+    const git = async (
+      cwd: string,
+      args: readonly string[],
+    ): Promise<string> => {
+      const result = await run(
+        [
+          "git",
+          "-c",
+          "user.name=test",
+          "-c",
+          "user.email=test@example.invalid",
+          ...args,
+        ],
+        { cwd },
+      );
+      if (result.exitCode !== 0) {
+        throw new Error(`git ${args.join(" ")} failed: ${result.stderr}`);
+      }
+      return result.stdout.trim();
+    };
+    await git(repo, ["init", "-q", "-b", "main"]);
+    await git(repo, ["commit", "-q", "--allow-empty", "-m", "init"]);
+    await git(repo, ["branch", "target"]);
+    await git(repo, ["branch", "other"]);
+    await git(repo, ["worktree", "add", "-q", worktree, "target"]);
+    await git(worktree, ["checkout", "-q", "other"]);
+    await git(worktree, ["commit", "-q", "--allow-empty", "-m", "left"]);
+    return {
+      worktree,
+      home,
+      mainSha: await git(repo, ["rev-parse", "main"]),
+      run,
+      git,
+    };
+  }
+
+  const ensure = (fixture: Fixture, ref: string) =>
+    ensureHeadOnBranch({
+      run: fixture.run,
+      dir: fixture.worktree,
+      branch: "target",
+      ref,
+      context: "test",
+      home: fixture.home,
+    });
+
+  test("does not move the branch HEAD was on", async () => {
+    const fixture = await setUp();
+    const before = await fixture.git(fixture.worktree, ["rev-parse", "other"]);
+    await ensure(fixture, fixture.mainSha);
+    expect(await fixture.git(fixture.worktree, ["rev-parse", "other"])).toBe(
+      before,
+    );
+  });
+
+  test("moves a detached HEAD onto the branch", async () => {
+    const fixture = await setUp();
+    await fixture.git(fixture.worktree, ["checkout", "-q", "--detach"]);
+    await ensure(fixture, fixture.mainSha);
+    expect(await fixture.git(fixture.worktree, ["symbolic-ref", "HEAD"])).toBe(
+      "refs/heads/target",
+    );
+  });
+
+  test("does not record an upstream when switching to origin/<branch>", async () => {
+    const fixture = await setUp();
+    await fixture.git(fixture.worktree, [
+      "remote",
+      "add",
+      "origin",
+      "https://example.invalid/repo.git",
+    ]);
+    await fixture.git(fixture.worktree, [
+      "update-ref",
+      "refs/remotes/origin/target",
+      fixture.mainSha,
+    ]);
+    await ensure(fixture, "origin/target");
+    const merge = await fixture.run(
+      ["git", "config", "--get", "branch.target.merge"],
+      { cwd: fixture.worktree },
+    );
+    expect(merge.stdout).toBe("");
+  });
+
+  test.skipIf(!hostGitRefusesCheckedOutBranch)(
+    "fails when the branch is checked out in another worktree",
+    async () => {
+      const fixture = await setUp();
+      await fixture.git(fixture.worktree, ["checkout", "-q", "--detach"]);
+      await fixture.git(fixture.worktree, [
+        "worktree",
+        "add",
+        "-q",
+        `${fixture.worktree}-2`,
+        "target",
+      ]);
+      await expect(ensure(fixture, fixture.mainSha)).rejects.toThrow(
+        /checkout -f -B/,
+      );
+    },
+  );
 });
 
 describe("verifyWorktreeGitdir", () => {

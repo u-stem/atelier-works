@@ -1795,14 +1795,15 @@ function parseGtrPorcelain(stdout: string): GtrWorktree {
  * `reset --hard`はHEADが指すブランチを動かす。生き残ったプロセスが別のブランチをcheckoutしていると、
  * そのブランチを動かしてしまい、対象のブランチは戻らないため。
  * 指していなければ(別のブランチかdetached)、`checkout -f --no-track -B <branch> <ref>`でHEADを対象のブランチへ移し、`ref`に合わせる。
- * `checkout -B`は、それまでHEADが指していたブランチを動かさず、対象のブランチが他のworktreeでcheckoutされていれば失敗する。
+ * `checkout -B`は、それまでHEADが指していたブランチを動かさない。
+ * gitが2.43以降なら、対象のブランチが他のworktreeでcheckoutされているときも失敗する(workerのイメージはDebian trixieのgit 2.47)。
  * worktreeを作り直さないのは、作り直しにも生き残りの確かめとポインタの検証がもう一度要り、
  * 再利用するworktreeでは対象リポジトリが無視しているファイル(`node_modules/`など)まで失うためである。
  * `--no-track`は、起点が`origin/<branch>`のときに上流の設定をメインのcloneの`.git/config`へ書かないために付ける。
  * HEADを読めないとき、切り替えに失敗したとき、切り替えた後もHEADが指していないときは例外を投げ、resetに進ませない。
  * `branch`は`assertBranchName`で、`ref`は検証済みの値から作ったものを渡す。
  */
-async function ensureHeadOnBranch(opts: {
+export async function ensureHeadOnBranch(opts: {
   readonly run: CommandRunner;
   readonly dir: string;
   readonly branch: string;
