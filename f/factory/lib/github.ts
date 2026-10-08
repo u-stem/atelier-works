@@ -7,7 +7,8 @@
 // 応答は`gh api -i`で受け取る(標準出力にステータス行・ヘッダー・本文が出る。
 // ヘッダーの行末がCRLFであることは実際に確かめている)。こうすると、
 // 403/429のレート制限のヘッダー(`retry-after`、`x-ratelimit-remaining`)を
-// 2回目の要求なしに読める。
+// 2回目の要求なしに読める。レート制限の待ちには上限があり、超えるなら
+// 待たずに`GitHubRateLimitError`を投げる(`callGhApi`を参照)。
 //
 // 自己再入の防止: Factoryが投稿するコメント・レビュー・返信には、すべて
 // `<!-- factory:<kind>:<work_item_id> -->`の目印を付ける(`withMarker`)。
@@ -62,7 +63,10 @@ export type GhClient = {
   readonly ghToken: string;
   readonly home?: string;
   readonly path?: string;
-  /** レート制限で1回だけ再試行する前の待機。既定は`setTimeout`による実際の待機。 */
+  /**
+   * レート制限で1回だけ再試行する前の待機。既定は`setTimeout`による実際の待機。
+   * 待つ時間は`GITHUB_RATE_LIMIT_MAX_WAIT_MS`を超えない。
+   */
   readonly sleep?: (ms: number) => Promise<void>;
   readonly now?: () => Date;
 };
@@ -119,16 +123,89 @@ function parseGhApiOutput(stdout: string): GhApiResponse {
   return { status, headers, bodyText };
 }
 
+/**
+ * rate limitの解除を待つ時間の上限(ミリ秒)。
+ * 1回の待ちはどのstepのtimeoutよりも短い(最も短いのはpr_fixの指摘の収集の600秒)ので、
+ * 1つのstepで何度か待っても打ち切られない。
+ * search APIの1分ごとの上限と、二次レート制限の`retry-after`(多くは60秒)はこの範囲で待てる。
+ * 一次レート制限(1時間ごと)を使い切ったときの`x-ratelimit-reset`までの待ちは収まらないので、
+ * 待たずに`GitHubRateLimitError`を投げる。
+ */
+export const GITHUB_RATE_LIMIT_MAX_WAIT_MS = 120_000;
+
+/**
+ * `x-ratelimit-reset`から求めた待ちに足す余裕(ミリ秒)。
+ * ヘッダーの時刻は秒単位で、workerとGitHubの時計もずれうるため、
+ * 解除の直前に再試行してまた拒まれないようにする。
+ */
+const RATE_LIMIT_RESET_MARGIN_MS = 1000;
+
+/** 応答に解除の時刻を示すヘッダーが無いときに待つ時間(ミリ秒)。 */
+const DEFAULT_RATE_LIMIT_WAIT_MS = 60_000;
+
+/**
+ * rate limitの解除まで待てない(必要な待ちが`GITHUB_RATE_LIMIT_MAX_WAIT_MS`を超える)か、
+ * 待って再試行しても再びrate limitに当たったときに投げる。
+ * GraphQLの一次レート制限(HTTP 200で`errors[].type`が`RATE_LIMITED`)では、待たずに投げる。
+ * 投げるのは要求がGitHubに拒まれた後なので、その要求による副作用は起きていない。
+ * 捕まえない呼び出し側では、`on_error_flow`が`message`を失敗の理由として記録・通知する。
+ * `message`は`"; "`を含まない1つの理由にし、`describeReason` / `nextActionFor`が
+ * 分割せずに扱えるようにする。
+ */
+export class GitHubRateLimitError extends Error {
+  readonly endpoint: string;
+  /**
+   * 解除までに必要な待ち(ミリ秒)。再試行も拒まれたときは、その応答から求めた値。
+   * 応答に解除の時刻を示すヘッダーが無ければnull。
+   */
+  readonly requiredWaitMs: number | null;
+  /** 1回待って再試行した後に投げたか。 */
+  readonly retried: boolean;
+  constructor(
+    endpoint: string,
+    requiredWaitMs: number | null,
+    retried: boolean,
+  ) {
+    super(
+      `GitHub rate limit on ${endpoint}: ${rateLimitDetail(requiredWaitMs, retried)} (rerun after the limit resets)`,
+    );
+    this.name = "GitHubRateLimitError";
+    this.endpoint = endpoint;
+    this.requiredWaitMs = requiredWaitMs;
+    this.retried = retried;
+  }
+}
+
+/** `GitHubRateLimitError`のメッセージの、エンドポイントの後に続く説明を作る。 */
+function rateLimitDetail(
+  requiredWaitMs: number | null,
+  retried: boolean,
+): string {
+  if (requiredWaitMs === null) {
+    return retried ? "still limited after waiting once" : "no reset time given";
+  }
+  const wait = `needs a ${String(Math.ceil(requiredWaitMs / 1000))}s wait`;
+  if (retried) return `still limited after waiting once (${wait})`;
+  return requiredWaitMs > GITHUB_RATE_LIMIT_MAX_WAIT_MS
+    ? `${wait}, longer than the ${String(GITHUB_RATE_LIMIT_MAX_WAIT_MS / 1000)}s wait cap`
+    : wait;
+}
+
 function isRateLimited(response: GhApiResponse): boolean {
   if (response.status !== 403 && response.status !== 429) return false;
   if (response.headers.has("retry-after")) return true;
   return response.headers.get("x-ratelimit-remaining") === "0";
 }
 
-function computeRetryWaitMs(
+/**
+ * rate limitの解除までの待ち(ミリ秒)を、`retry-after`、無ければ`x-ratelimit-reset`
+ * (余裕の`RATE_LIMIT_RESET_MARGIN_MS`を足す)から求める。
+ * どちらも無いか読めなければnullを返す。
+ */
+function rateLimitWaitMs(
   headers: ReadonlyMap<string, string>,
   now: () => Date,
-): number {
+): number | null {
   const retryAfter = headers.get("retry-after");
   if (retryAfter !== undefined) {
     const seconds = Number(retryAfter);
@@ -138,11 +215,15 @@ function computeRetryWaitMs(
   if (reset !== undefined) {
     const resetEpochSeconds = Number(reset);
     if (Number.isFinite(resetEpochSeconds)) {
-      const waitMs = resetEpochSeconds * 1000 - now().getTime();
-      return waitMs > 0 ? waitMs : 0;
+      const untilResetMs = resetEpochSeconds * 1000 - now().getTime();
+      return Math.max(untilResetMs, 0) + RATE_LIMIT_RESET_MARGIN_MS;
     }
   }
-  return 60_000;
+  return null;
+}
+
+function clientNow(client: GhClient): () => Date {
+  return client.now ?? (() => new Date());
 }
 
 export type GhApiCallOptions = {
@@ -174,7 +255,10 @@ async function callGhApiOnce(
 
 /**
  * `gh api <endpoint>`を呼ぶ。レート制限の応答を受けたら、待ってから1回だけ再試行する。
- * HTTPのエラーのステータスでは例外を投げない。
+ * 必要な待ちが`GITHUB_RATE_LIMIT_MAX_WAIT_MS`を超えるときは待たずに、
+ * 再試行も拒まれたときはその時点で、`GitHubRateLimitError`を投げる。
+ * 待ちがstepのtimeoutより長引いて、副作用の途中でstepが打ち切られることを防ぐ。
+ * レート制限以外のHTTPのエラーのステータスでは例外を投げない。
  * 呼び出し側が`response.status`を確かめる(`ensureSuccess`を参照)。
  */
 async function callGhApi(
@@ -186,10 +270,21 @@ async function callGhApi(
   if (!isRateLimited(first)) return first;
 
   const sleep = client.sleep ?? defaultSleep;
-  const now = client.now ?? (() => new Date());
-  await sleep(computeRetryWaitMs(first.headers, now));
+  const now = clientNow(client);
+  const waitMs =
+    rateLimitWaitMs(first.headers, now) ?? DEFAULT_RATE_LIMIT_WAIT_MS;
+  if (waitMs > GITHUB_RATE_LIMIT_MAX_WAIT_MS) {
+    throw new GitHubRateLimitError(endpoint, waitMs, false);
+  }
+  await sleep(waitMs);
 
-  return callGhApiOnce(client, endpoint, options);
+  const second = await callGhApiOnce(client, endpoint, options);
+  if (!isRateLimited(second)) return second;
+  throw new GitHubRateLimitError(
+    endpoint,
+    rateLimitWaitMs(second.headers, now),
+    true,
+  );
 }
 
 function ensureSuccess(response: GhApiResponse, context: string): void {
@@ -1838,6 +1933,11 @@ export async function getBranchProtected(
 
 type GraphqlErrorPayload = {
   readonly message: string;
+  /**
+   * エラーの種類(`RATE_LIMITED`など)。GitHubが付けないエラーもある。
+   * 形は確かめない。文字列でないときに型ガードを外すと、エラーの応答を成功と取り違えるため。
+   */
+  readonly type?: unknown;
 };
 
 type GraphqlErrorsPayload = {
@@ -1853,12 +1953,19 @@ function isGraphqlErrorsPayload(value: unknown): value is GraphqlErrorsPayload {
   if (typeof value !== "object" || value === null) return false;
   const errors = (value as { errors: unknown }).errors;
   if (!Array.isArray(errors) || errors.length === 0) return false;
-  return errors.every(
-    (item) =>
-      typeof item === "object" &&
-      item !== null &&
-      typeof (item as { message: unknown }).message === "string",
-  );
+  return errors.every((item) => {
+    if (typeof item !== "object" || item === null) return false;
+    return typeof (item as { message: unknown }).message === "string";
+  });
+}
+
+/**
+ * GraphQLの一次レート制限の応答かを返す。GitHubはHTTP 200で返し、
+ * `errors[].type`が`RATE_LIMITED`になる(`x-ratelimit-remaining`は0になる)。
+ * RESTのレート制限と違い403/429にならないので、`callGhApi`では見分けられない。
+ */
+function isGraphqlRateLimited(payload: GraphqlErrorsPayload): boolean {
+  return payload.errors.some((error) => error.type === "RATE_LIMITED");
 }
 
 type GraphqlDataPayload = {
@@ -1876,7 +1983,8 @@ function isGraphqlDataPayload(value: unknown): value is GraphqlDataPayload {
  * GitHubのGraphQLは権限や引数の誤りでもHTTP 200を返し、失敗は本文の
  * 最上位の`errors`にしか現れない。
  * そのため、まず`ensureSuccess`を呼び(通信レベルの本当の失敗にはなお必要)、
- * JSONの本文を解析し、`errors`が空でない配列なら例外を投げる。こうして、
+ * JSONの本文を解析し、`errors`が空でない配列なら例外を投げる
+ * (`RATE_LIMITED`なら`GitHubRateLimitError`、それ以外は一般のエラー)。こうして、
  * HTTPのステータスだけを確かめた呼び出し側がGraphQLの失敗を成功と取り違えないようにする。
  */
 async function callGhGraphql(
@@ -1892,6 +2000,15 @@ async function callGhGraphql(
   ensureSuccess(response, context);
   const parsed = parseJsonBody(response, context);
   if (isGraphqlErrorsPayload(parsed)) {
+    // GraphQLの一次レート制限は1時間ごとの点数で、解除までの待ちはたいてい上限より長い。
+    // 拒まれた要求は再送せず、そのまま投げる。
+    if (isGraphqlRateLimited(parsed)) {
+      throw new GitHubRateLimitError(
+        "graphql",
+        rateLimitWaitMs(response.headers, clientNow(client)),
+        false,
+      );
+    }
     const messages = parsed.errors.map((error) => error.message).join("; ");
     throw new Error(`${context}: GraphQL error: ${messages}`);
   }

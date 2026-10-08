@@ -1,9 +1,12 @@
 // pr_fixとpr_reviewのflow.yamlが各ステップに付けるWindmillのtimeoutのテスト。
 // 時間設定に左右されるステップの値は、`pr_workflow_support.ts`の定数と一致することを確かめる。
+// GitHubのrate limitの待ちの上限は、`f/factory/*__flow/flow.yaml`をすべて読み、
+// どのステップのtimeoutよりも短いことを確かめる。
 
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { GITHUB_RATE_LIMIT_MAX_WAIT_MS } from "../../f/factory/lib/github.ts";
 import {
   PR_FIX_APPLY_STEP_TIMEOUT_SEC,
   PR_FIX_VERIFY_STEP_TIMEOUT_SEC,
@@ -70,6 +73,55 @@ describe("pr_fix flow.yaml", () => {
     expect(
       PR_FIX_FLOW.slice(PR_FIX_FLOW.indexOf("failure_module:")),
     ).not.toContain("timeout:");
+  });
+});
+
+describe("GitHub rate limit wait cap", () => {
+  const FACTORY_DIR = join(import.meta.dir, "../../f/factory");
+
+  /** `f/factory/*__flow/flow.yaml`をすべて読み、フロー名と内容を返す。 */
+  const FLOWS: readonly { readonly name: string; readonly text: string }[] =
+    readdirSync(FACTORY_DIR)
+      .filter((entry) => entry.endsWith("__flow"))
+      .sort()
+      .map((entry) => ({
+        name: entry,
+        text: readFileSync(join(FACTORY_DIR, entry, "flow.yaml"), "utf8"),
+      }));
+
+  /** flow.yamlに書いたstatic timeout(秒)をすべて返す。 */
+  function staticTimeoutsSec(flow: string): number[] {
+    return [
+      ...flow.matchAll(/^ {6}timeout:\n {8}type: static\n {8}value: (\d+)$/gm),
+    ].map((match) => Number(match[1]));
+  }
+
+  /** `timeout:`の行の数。static以外の書き方や字下げの違いで読み落とさないよう、形を問わず数える。 */
+  function timeoutLineCount(flow: string): number {
+    return [...flow.matchAll(/^\s*timeout:/gm)].length;
+  }
+
+  for (const flow of FLOWS) {
+    test(`parses every timeout in ${flow.name} as a static timeout`, () => {
+      expect(staticTimeoutsSec(flow.text).length).toBe(
+        timeoutLineCount(flow.text),
+      );
+    });
+  }
+
+  const ALL_TIMEOUTS_SEC = FLOWS.flatMap((flow) =>
+    staticTimeoutsSec(flow.text),
+  );
+
+  test("finds the step timeouts of the pr_fix, pr_review and implement flows", () => {
+    expect(ALL_TIMEOUTS_SEC.length).toBeGreaterThanOrEqual(12);
+  });
+
+  test("stays below the shortest step timeout of every flow", () => {
+    // 1つも読めなければ0として失敗させる(`Math.min()`はInfinityになり、必ず通ってしまう)。
+    const shortestSec =
+      ALL_TIMEOUTS_SEC.length === 0 ? 0 : Math.min(...ALL_TIMEOUTS_SEC);
+    expect(GITHUB_RATE_LIMIT_MAX_WAIT_MS).toBeLessThan(shortestSec * 1000);
   });
 });
 

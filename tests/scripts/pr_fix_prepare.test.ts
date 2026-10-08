@@ -669,3 +669,44 @@ describe("nextActionFor (implement flow)", () => {
     );
   });
 });
+
+describe("describeReason / nextActionFor (GitHub rate limit)", () => {
+  const RATE_LIMIT =
+    "GitHub rate limit on repos/acme/widgets/pulls: needs a 3601s wait, longer than the 120s wait cap (rerun after the limit resets)";
+  const RATE_LIMIT_NEXT_ACTION =
+    "GitHubのrate limitの解除を待ってから、ConsoleのFailuresタブで再実行してください";
+
+  test("translates a rate limit", () => {
+    expect(describeReason(RATE_LIMIT)).toBe(
+      "GitHub APIのrate limitに当たりました(repos/acme/widgets/pulls): needs a 3601s wait, longer than the 120s wait cap (rerun after the limit resets)",
+    );
+  });
+
+  test("asks to wait for the reset and rerun after a rate limit", () => {
+    expect(nextActionFor(RATE_LIMIT)).toBe(RATE_LIMIT_NEXT_ACTION);
+  });
+
+  test("translates the rate limit inside a finish failure", () => {
+    expect(describeReason(`implement finish failed: ${RATE_LIMIT}`)).toBe(
+      "コミット・push・PRの作成に失敗しました: GitHub APIのrate limitに当たりました(repos/acme/widgets/pulls): needs a 3601s wait, longer than the 120s wait cap (rerun after the limit resets)",
+    );
+  });
+
+  test("asks to wait for the reset when a finish failure is a rate limit", () => {
+    expect(nextActionFor(`implement finish failed: ${RATE_LIMIT}`)).toBe(
+      RATE_LIMIT_NEXT_ACTION,
+    );
+  });
+
+  test("keeps the generic action for a finish failure that is not a rate limit", () => {
+    expect(nextActionFor("implement finish failed: HTTP 422")).toBe(
+      "ConsoleのFailures / Noticesタブで詳細を確認してください",
+    );
+  });
+
+  test("keeps the reviewer-config action when the reviewer request hit a rate limit", () => {
+    expect(nextActionFor(`failed to request reviewers: ${RATE_LIMIT}`)).toBe(
+      "GitHubのレビュアー設定を確認し、必要なら再度`factory:fix`を付け直してください",
+    );
+  });
+});
