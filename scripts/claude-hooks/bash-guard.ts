@@ -5,13 +5,14 @@
 // - 保護するブランチ(`main`、`master`)へのpush
 // - subagentからのpush(subagentには確認する相手がいないため)
 // - `--no-verify`、`git commit -n`、`core.hooksPath`の変更、lefthookを止める環境変数
-// - 秘密値のファイルの参照(`secret-files.ts`)
+// - 秘密値のファイルの参照(`guarded-files.ts`)
 // コマンドは字句に分けてから判定するので、引用符の中やヒアドキュメントの本文には反応しない。
 // 字句に分けられないコマンドと、実行するまでpush先が決まらないコマンドは拒否する。
 // `cd`は拒否しない。
 // 使い方: scripts/claude-hooks/run.sh bash-guard(標準入力にフックの入力のJSONを渡す)
 
 import { resolve } from "node:path";
+import { findSecretReference } from "./guarded-files.ts";
 import {
   ALLOW,
   type BashToolInput,
@@ -151,6 +152,8 @@ function checkSimpleCommand(
   input: BashToolInput,
   deps: GuardDeps,
 ): Decision {
+  const secret = findSecretReference(command);
+  if (secret !== null) return deny(secret);
   const { assignments, words } = stripWrappers(command.words);
   const exported =
     words[0]?.text === "export"
