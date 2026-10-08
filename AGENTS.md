@@ -4,9 +4,12 @@
 
 ## Project-specific instructions
 
-本リポジトリでClaudeが守る決まりを書く。ここの決まりは、`AGENTS.wmill.md`の管理された指示とユーザーレベルの設定より優先する。
+本リポジトリでClaudeが守る決まりを書く。
+次の3つは、ユーザーレベルの設定と`AGENTS.wmill.md`の管理された指示より優先する。
+日本語でコメントを書くこと、`//native`を使わないこと、配置先とdeploy方式を聞かないことである。
 
 - コメントは日本語で書く(ユーザーレベルの「コメントは英語」より優先する)。識別子、テスト名、ログとエラーのメッセージ、プロンプトの文字列は英語のままにする。書き方は[コーディング規約](docs/coding-guidelines.md)に従う。
+- コメントに`§`、設計文書の章番号、変更の経緯は書かない。リポジトリの外の文書は読み手が辿れず、経緯はコミットとPRに残すため。
 - 文書は[文書の書き方](docs/writing-guidelines.md)と`factory-docs`スキルに従って書く。日本語の推敲には`yomiyasu`スキルを使う。
 - 設定は`.env`系のファイルを使わず、miseで管理する。秘密でない設定は`mise.toml`の`[env]`に、秘密値はgitignore済みの`mise.local.toml`に置く。
 - 秘密値は人が投入する。Claudeは`mise.local.toml.example`の更新までを行い、値が要るときは[セットアップ](docs/setup.md)の投入コマンドを示して、止まらずに先へ進む。
