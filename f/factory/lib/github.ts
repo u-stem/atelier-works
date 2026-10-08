@@ -2313,6 +2313,39 @@ export async function findOpenPullRequestByHead(
   return { number: first.number, htmlUrl: first.html_url };
 }
 
+/**
+ * headが`owner:head`のPRの番号を、openとclosedの両方から返す(最大99件)。
+ * 閉じたPRでも、その修正・レビューの作業項目が終端に達していなければ同じworktreeを使っていることがあるので、
+ * 実装フローの準備がDBの作業項目と突き合わせるのに使う。応答の形が違えば例外を投げる。
+ * 1ページ(100件)が埋まったら、取りこぼしがありうるので例外を投げる(止まる側)。1つのブランチにPRが100件あることは想定しない。
+ */
+export async function listPullRequestNumbersByHead(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  head: string,
+): Promise<number[]> {
+  validateOwnerRepo(owner, repo);
+  assertBranchName(head);
+  const endpoint = `repos/${owner}/${repo}/pulls?head=${encodeURIComponent(`${owner}:${head}`)}&state=all&per_page=100`;
+  const context = `GET prs by head ${owner}/${repo}@${head}`;
+  const response = await callGhApi(client, endpoint);
+  ensureSuccess(response, context);
+  const parsed = parseJsonBody(response, context);
+  if (!Array.isArray(parsed)) {
+    throw new Error(`${context}: expected an array response`);
+  }
+  if (parsed.length >= 100) {
+    throw new Error(`${context}: 100 or more pull requests share this head`);
+  }
+  return parsed.map((item) => {
+    if (!isPrRefPayload(item)) {
+      throw new Error(`${context}: unexpected response shape`);
+    }
+    return item.number;
+  });
+}
+
 export type PullRequestUpdate = {
   readonly title?: string;
   readonly body?: string;

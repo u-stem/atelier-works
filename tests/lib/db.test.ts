@@ -18,6 +18,7 @@ import {
   getRequirementDraft,
   getWorkItem,
   hasPriorReview,
+  hasUnfinishedPrRun,
   insertApprovalRequest,
   insertAuditReport,
   insertAuditWorkItem,
@@ -67,6 +68,7 @@ import {
   updateStatusIfCurrentClearingFlowJobId,
   updateStatusIfLeaseHolder,
 } from "../../f/factory/lib/db.ts";
+import { TERMINAL_WORK_ITEM_STATUSES } from "../../f/factory/lib/types.ts";
 
 type FakeCall = { text: string; values: unknown[] };
 
@@ -2137,6 +2139,76 @@ describe("latestPrWorkItem", () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await latestPrWorkItem("octo-owner", "atelier-works", 7, undefined, sql);
     expect(calls[0]?.text).toContain("ORDER BY created_at DESC, id DESC");
+  });
+});
+
+describe("hasUnfinishedPrRun", () => {
+  const SCOPE = { prNumbers: [7], parentWorkItemId: 3 };
+
+  test("returns true when an unfinished run exists", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 5 }]]);
+    expect(
+      await hasUnfinishedPrRun("octo-owner", "atelier-works", SCOPE, sql),
+    ).toBe(true);
+  });
+
+  test("returns false when none exists", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(
+      await hasUnfinishedPrRun("octo-owner", "atelier-works", SCOPE, sql),
+    ).toBe(false);
+  });
+
+  test("still asks by the parent without pull request numbers", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasUnfinishedPrRun(
+      "octo-owner",
+      "atelier-works",
+      { prNumbers: [], parentWorkItemId: 3 },
+      sql,
+    );
+    expect(calls).toHaveLength(1);
+  });
+
+  test("looks only at fix and review runs", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasUnfinishedPrRun("octo-owner", "atelier-works", SCOPE, sql);
+    expect(calls[0]?.text).toContain("kind IN ('pr_fix', 'pr_review')");
+  });
+
+  test("passes every pull request number", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasUnfinishedPrRun(
+      "octo-owner",
+      "atelier-works",
+      { prNumbers: [7, 9], parentWorkItemId: 3 },
+      sql,
+    );
+    expect(calls[0]?.values).toContainEqual([7, 9]);
+  });
+
+  test("casts the pull request numbers to an integer array", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasUnfinishedPrRun("octo-owner", "atelier-works", SCOPE, sql);
+    expect(calls[0]?.text).toContain("::int[]");
+  });
+
+  test("also matches runs whose parent is the implement work item", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasUnfinishedPrRun("octo-owner", "atelier-works", SCOPE, sql);
+    expect(calls[0]?.text).toContain("parent_work_item_id =");
+  });
+
+  test("excludes the terminal statuses", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasUnfinishedPrRun("octo-owner", "atelier-works", SCOPE, sql);
+    expect(calls[0]?.values).toContainEqual([...TERMINAL_WORK_ITEM_STATUSES]);
+  });
+
+  test("does not stop at the latest row", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasUnfinishedPrRun("octo-owner", "atelier-works", SCOPE, sql);
+    expect(calls[0]?.text).not.toContain("ORDER BY");
   });
 });
 

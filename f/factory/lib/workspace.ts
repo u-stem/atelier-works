@@ -44,6 +44,8 @@ export type CommandResult = {
   readonly stderr: string;
   readonly exitCode: number;
   readonly timedOut: boolean;
+  /** 終了とプロセスグループの停止の後も出力パイプが閉じず、読み取りを打ち切った。別セッションへ抜けたプロセスが握っている場合に起き、そのプロセスは止められていない。打ち切っていなければ付かない。 */
+  readonly outputAbandoned?: boolean;
 };
 
 export type CommandRunOptions = {
@@ -68,13 +70,27 @@ export type CommandRunner = (
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 const DEFAULT_KILL_GRACE_MS = 5_000;
+const DEFAULT_OUTPUT_DRAIN_MS = 2_000;
+const GROUP_POLL_MS = 50;
+const POST_KILL_WAIT_MS = 1_000;
+
+/**
+ * 既定設定のランナーが、タイムアウトの発火から返るまでに上乗せしうる最大時間(ms)。
+ * SIGKILLまでの猶予、終了後のグループ停止の猶予、SIGKILL後の待ち、出力待ちの合計。
+ */
+export const RUNNER_MAX_STOP_OVERHEAD_MS =
+  DEFAULT_KILL_GRACE_MS * 2 + POST_KILL_WAIT_MS + DEFAULT_OUTPUT_DRAIN_MS;
 
 export type BunCommandRunnerOptions = {
-  /**
-   * タイムアウトしたときに、SIGTERMを送ってからSIGKILLを送るまでの猶予。既定は5000ms。
-   */
+  /** タイムアウト時と、終了後に残ったプロセスを止めるときの、SIGTERMからSIGKILLまでの猶予。既定は5000ms。 */
   readonly killGraceMs?: number;
+  /** 先頭プロセスの終了とグループの停止の後、出力の読み取り完了を待つ上限。超えたら読み取りを打ち切る。既定は2000ms。 */
+  readonly outputDrainMs?: number;
 };
+
+/** 読み取りを打ち切ったときにstderrの末尾へ足す注記。 */
+export const OUTPUT_ABANDONED_NOTE =
+  "\n[factory: stopped reading output still held open by a process outside the command's process group]\n";
 
 /**
  * `pid`のプロセスグループ全体に`signal`を送る。すでに終了していれば何もしない。
@@ -90,6 +106,7 @@ export type BunCommandRunnerOptions = {
  * そのため`detached: true`(POSIXの`setsid()`)で、
  * 子プロセスをプロセスグループのリーダーとして起動し、
  * `process.kill(-pid, signal)`でグループ全体に送る。
+ * 先頭プロセスの終了後も、グループに残ったプロセスに使う(`reapProcessGroup`)。
  */
 function killProcessGroup(pid: number, signal: "SIGTERM" | "SIGKILL"): void {
   try {
@@ -97,6 +114,109 @@ function killProcessGroup(pid: number, signal: "SIGTERM" | "SIGKILL"): void {
   } catch {
     // すでに終了しているので、送る相手が無い。
   }
+}
+
+/** プロセスグループにメンバーが残っているかを返す。回収前のゾンビしか残っていない間もtrueを返す(workerはtiniが親を失った子をすぐ回収する)。 */
+function processGroupAlive(pid: number): boolean {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** グループが消えるまで、最大waitMsのあいだGROUP_POLL_MS刻みで待つ。消えればtrueを返す。 */
+async function waitGroupGone(pid: number, waitMs: number): Promise<boolean> {
+  const deadline = Date.now() + waitMs;
+  while (Date.now() < deadline) {
+    await Bun.sleep(GROUP_POLL_MS);
+    if (!processGroupAlive(pid)) return true;
+  }
+  return !processGroupAlive(pid);
+}
+
+/**
+ * 先頭プロセスの終了後、グループに残ったプロセスを止める。誰も残っていなければ何もしない。
+ * 残っていればSIGTERMを送り、graceMsのあいだ消えるのを待つ。残ればSIGKILLを送り、最大POST_KILL_WAIT_MS待ってから戻る。
+ * SIGKILLの後も待つのは、戻った直後のロックの確かめや次のコマンドに、回収前のプロセスが見えないようにするためである。
+ * メンバーが残っている間、グループIDは別のプロセスのPIDとして再利用されない。
+ * ポーリングの間にメンバーが全員回収され、同じ番号を得たプロセスが自分でグループを作っていれば送信がそこへ届きうるが、
+ * PIDはpid_maxまで順に払い出されるので数秒で戻るのは一周したときだけで、既存のタイムアウト時のSIGKILLタイマーと同じ水準の危険である。
+ */
+async function reapProcessGroup(pid: number, graceMs: number): Promise<void> {
+  if (!processGroupAlive(pid)) return;
+  killProcessGroup(pid, "SIGTERM");
+  if (await waitGroupGone(pid, graceMs)) return;
+  killProcessGroup(pid, "SIGKILL");
+  await waitGroupGone(pid, POST_KILL_WAIT_MS);
+}
+
+/** promiseがms以内に確定すればtrueを返す。rejectも確定として扱う(結果は呼び出し側で改めてawaitする)。 */
+async function settlesWithin(
+  promise: Promise<unknown>,
+  ms: number,
+): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<boolean>((resolve) => {
+    timer = setTimeout(() => resolve(false), ms);
+  });
+  try {
+    return await Promise.race([
+      promise.then(
+        () => true,
+        () => true,
+      ),
+      expired,
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+/** signalが中断されたらreaderを取り消す(保留中のreadはdone: trueで返る)。戻り値は登録を外す関数。 */
+function cancelOnAbort(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  signal: AbortSignal | undefined,
+): () => void {
+  if (signal === undefined) return () => {};
+  const cancel = (): void => {
+    reader.cancel().catch(() => {});
+  };
+  if (signal.aborted) {
+    cancel();
+    return () => {};
+  }
+  signal.addEventListener("abort", cancel, { once: true });
+  return () => signal.removeEventListener("abort", cancel);
+}
+
+/** streamを終わりまで(またはsignalが中断されるまで)読み、読めた分をUTF-8として返す。上限は無い。 */
+export async function readStreamAll(
+  stream: ReadableStream<Uint8Array>,
+  signal?: AbortSignal,
+): Promise<string> {
+  const reader = stream.getReader();
+  const release = cancelOnAbort(reader, signal);
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      size += value.byteLength;
+    }
+  } finally {
+    release();
+  }
+  const whole = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    whole.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(whole);
 }
 
 const OMITTED_MARKER_PATTERN = /\[\.\.\. \d+ bytes omitted \.\.\.\]/;
@@ -121,10 +241,12 @@ export function isCappedOutput(text: string): boolean {
  * ストリームが長くてもメモリは増えない。
  * 間を捨てたときは、2つの部分を別々にデコードし、`omittedMarker(捨てたバイト数)`でつなぐ
  * (境界で切れたマルチバイト文字はU+FFFDになる)。
+ * signalが中断されたら、それまでに保持した分で返す。
  */
 export async function readStreamCapped(
   stream: ReadableStream<Uint8Array>,
   maxBytes: number,
+  signal?: AbortSignal,
 ): Promise<string> {
   const headLimit = Math.floor(maxBytes / 2);
   const tailLimit = maxBytes - headLimit;
@@ -161,17 +283,22 @@ export async function readStreamCapped(
   };
 
   const reader = stream.getReader();
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    let offset = 0;
-    if (headSize < headLimit) {
-      const take = Math.min(headLimit - headSize, value.byteLength);
-      head.set(value.subarray(0, take), headSize);
-      headSize += take;
-      offset = take;
+  const release = cancelOnAbort(reader, signal);
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      let offset = 0;
+      if (headSize < headLimit) {
+        const take = Math.min(headLimit - headSize, value.byteLength);
+        head.set(value.subarray(0, take), headSize);
+        headSize += take;
+        offset = take;
+      }
+      if (offset < value.byteLength) pushTail(value.subarray(offset));
     }
-    if (offset < value.byteLength) pushTail(value.subarray(offset));
+  } finally {
+    release();
   }
 
   const tail = new Uint8Array(ringSize);
@@ -189,14 +316,17 @@ export async function readStreamCapped(
 }
 
 /**
- * `Bun.spawn`で起動する`CommandRunner`を作って返す。
- * タイムアウトしたら、まずSIGTERMを送り、`killGraceMs`(既定は5秒)経っても
- * 終了していなければSIGKILLを送る。
+ * `Bun.spawn`で新しいセッション(プロセスグループ)として起動する`CommandRunner`を作って返す。
+ * タイムアウトしたらグループにSIGTERMを送り、`killGraceMs`後にSIGKILLを送る。
+ * 先頭プロセスが終わったら、正常終了でもグループに残ったプロセスを止める(`reapProcessGroup`)。
+ * 出力が`outputDrainMs`待っても閉じなければ読み取りを打ち切り、`outputAbandoned`を付ける。
+ * 別セッションへ抜けたプロセスにはグループへのkillが届かず、パイプを握ったままだと読み取りもtimeoutも終わらないためである。
  */
 export function createBunCommandRunner(
   options: BunCommandRunnerOptions = {},
 ): CommandRunner {
   const killGraceMs = options.killGraceMs ?? DEFAULT_KILL_GRACE_MS;
+  const outputDrainMs = options.outputDrainMs ?? DEFAULT_OUTPUT_DRAIN_MS;
 
   return async (argv, runOptions = {}) => {
     const proc = Bun.spawn({
@@ -228,19 +358,34 @@ export function createBunCommandRunner(
       }, killGraceMs);
     }, runOptions.timeoutMs ?? DEFAULT_TIMEOUT_MS);
 
+    const abort = new AbortController();
     const readOutput = (stream: ReadableStream<Uint8Array>): Promise<string> =>
       runOptions.maxOutputBytes === undefined
-        ? new Response(stream).text()
-        : readStreamCapped(stream, runOptions.maxOutputBytes);
-    const [stdout, stderr, exitCode] = await Promise.all([
+        ? readStreamAll(stream, abort.signal)
+        : readStreamCapped(stream, runOptions.maxOutputBytes, abort.signal);
+    const outputs = Promise.all([
       readOutput(proc.stdout),
       readOutput(proc.stderr),
-      proc.exited,
     ]);
+    // 先頭プロセスの終了を待つ間にrejectしても未処理扱いにしない(結果は下で改めてawaitする)。
+    outputs.catch(() => {});
+
+    const exitCode = await proc.exited;
     clearTimeout(timer);
     if (killTimer !== undefined) clearTimeout(killTimer);
+    await reapProcessGroup(proc.pid, killGraceMs);
+    const drained = await settlesWithin(outputs, outputDrainMs);
+    if (!drained) abort.abort();
+    const [stdout, stderr] = await outputs;
 
-    return { stdout, stderr, exitCode, timedOut };
+    if (drained) return { stdout, stderr, exitCode, timedOut };
+    return {
+      stdout,
+      stderr: `${stderr}${OUTPUT_ABANDONED_NOTE}`,
+      exitCode,
+      timedOut,
+      outputAbandoned: true,
+    };
   };
 }
 
@@ -281,7 +426,8 @@ export type GitCommandOptions = {
  *   - `readGitShowFile`の`git show <ref>:<path>`: `--`を付けてもエラーにならず、
  *     気づかないうちにgitが返す内容が変わる。`ref`を検証すれば、`path`も守られる
  *     (`path`は常に、検証済みで`:`を含まない`ref`と、こちらで入れた`:`に続くため)。
- *   - `createGtrWorktree`の再利用時の`git reset --hard <ref>`: `--hard`はパスを取らず、
+ *   - `createGtrWorktree`の`git reset --hard <ref>`(再利用時と、新しく作ったworktreeで
+ *     プロセスを止めたとき): `--hard`はパスを取らず、
  *     `--`を付けるとエラーになる
  *     (「fatal: Cannot do hard reset with paths」、実際に確かめた)。
  *   - `ensureFactoryClone`の`git checkout -B <branch> origin/<branch>`: 起点の前に
@@ -365,6 +511,20 @@ function gitConfigEnvOverrides(
  */
 function gitError(context: string, result: CommandResult): Error {
   return new Error(maskSecrets(`${context}: ${result.stderr.trim()}`));
+}
+
+/**
+ * 出力を値として判断に使うコマンドで、出力の読み取りを打ち切っていれば(`outputAbandoned`)例外を投げる。
+ * 打ち切った出力は途中で切れていることがあり、終了コードが0でも、検査や照合に使うと見落としになるため。
+ * 対象は、秘密情報の検査に渡す差分とそのレポート、保護パス・symlink・`package.json`のscriptsの判定に使う変更の一覧と中身、
+ * 差分の大きさ、検証したツリーの照合に使う`write-tree`である。
+ */
+export function assertOutputComplete(
+  context: string,
+  result: CommandResult,
+): void {
+  if (result.outputAbandoned === true)
+    throw new Error(`${context}: output was abandoned`);
 }
 
 /**
@@ -1009,6 +1169,7 @@ export async function fetchPrHeadRef(
  * `dir`で`git show <ref>:<path>`を実行し、`ref`の時点のファイルの中身を返す。
  * ファイルが無いとき、`ref`が検証を通らないとき、その他のエラーのときは`null`を返す。
  * 「HEADにこのファイルがあるか」を、例外を投げずに確かめるのに使う。
+ * ただし出力の読み取りを打ち切ったときは例外を投げる。途中で切れた中身を、ファイルの中身としても無いこととしても扱えないため。
  *
  * `<ref>:<path>`には`--`を付けない(`buildGitArgv`の例外を参照)。
  * `git show -- HEAD:file.txt`はエラーにならず、
@@ -1040,6 +1201,7 @@ export async function readGitShowFile(
     cwd: dir,
     env: localGitEnv(home, envPath),
   });
+  assertOutputComplete(`git show ${ref} in ${dir}`, result);
   return result.exitCode === 0 ? result.stdout : null;
 }
 
@@ -1571,11 +1733,18 @@ export type CreateGtrWorktreeOptions = {
   readonly sleep?: (ms: number) => Promise<void>;
   readonly now?: () => Date;
   readonly fs?: WorktreeFsDeps;
+  /**
+   * worktreeに触れる前に呼ぶ確かめ。前の実行のプロセスがまだworktreeを使っていれば例外を投げる。
+   * 止めたプロセスがあればtrue、何も止めなければfalseを返す。
+   * 呼び出し側は`ensureWorktreeLockFree`(`lib/process_lock.ts`)を渡す。
+   * 実装フローは同じ作業項目の前のジョブのプロセスを止め、pr_fixは何も止めない。渡し忘れを型で防ぐため必須にする。
+   */
+  readonly assertProcessesIdle: (worktreeDir: string) => Promise<boolean>;
 };
 
 /**
  * `git gtr new <branch> --porcelain --yes`で`branch`のworktreeを作って返す。
- * `git worktree list`に`branch`のworktreeがすでにあれば、それを再利用する。
+ * `git worktree prune`の後の`git worktree list`に`branch`のworktreeがすでにあれば、それを再利用する。
  * gitの操作に失敗したら例外を投げる。
  * `ensureRepo`がこのリポジトリに使うのと同じ、
  * `repoLockPath(repoDir)`のロックの下で実行する。
@@ -1583,6 +1752,9 @@ export type CreateGtrWorktreeOptions = {
  * 中でgitを実行する前に`.git`ファイルを検証する(`verifyWorktreeGitdir`)。
  * 通らなければファイル操作で削除し(`discardUnverifiedWorktree`)、
  * `git gtr new`で作り直す。
+ * worktreeに触れる前(既存なら検証より前、新規なら`git gtr new`の直後)に`assertProcessesIdle`を呼ぶ。
+ * 新しく作ったworktreeで確かめが何かを止めたときは、`.git`ファイルを検証してから、
+ * 作った時点のブランチの先頭へ`reset --hard`し、`clean -fd`する。止まる前に書き込まれたものを捨てるためである。
  */
 export async function createGtrWorktree(
   opts: CreateGtrWorktreeOptions,
@@ -1595,6 +1767,15 @@ export async function createGtrWorktree(
     ...(opts.sleep !== undefined ? { sleep: opts.sleep } : {}),
     ...(opts.now !== undefined ? { now: opts.now } : {}),
     fn: async () => {
+      // ディレクトリが消えたworktreeを一覧から除く。親ディレクトリごと消えたものが残ると、
+      // 確かめ(assertProcessesIdle)がロックファイルのパスを作れず、作り直しに進めないため。
+      const prune = await opts.run(buildGitArgv(["worktree", "prune"]), {
+        cwd: opts.repoDir,
+        env: localGitEnv(opts.home, opts.path),
+      });
+      if (prune.exitCode !== 0) {
+        throw gitError("git worktree prune failed", prune);
+      }
       const existing = await listWorktrees({
         run: opts.run,
         repoDir: opts.repoDir,
@@ -1602,6 +1783,8 @@ export async function createGtrWorktree(
         ...(opts.path !== undefined ? { path: opts.path } : {}),
       });
       const found = existing.find((entry) => entry.branch === opts.branch);
+      // 取り消された実行のClaudeや検査が生き残っていれば、ポインタの検証・破棄・reset・cleanのどれもしない。
+      if (found !== undefined) await opts.assertProcessesIdle(found.path);
       const reused =
         found !== undefined &&
         (await worktreePointerVerified({
@@ -1708,7 +1891,58 @@ export async function createGtrWorktree(
       if (result.exitCode !== 0) {
         throw gitError(`git gtr new ${opts.branch} failed`, result);
       }
-      return parseGtrPorcelain(result.stdout);
+      const created = parseGtrPorcelain(result.stdout);
+      // 戻す先にする、作った時点のブランチの先頭。確かめより前にworktreeでgitを実行しないよう、メインのcloneで読む。
+      // `rev-parse`には`--`を付けない(`buildGitArgv`の例外を参照)。`opts.branch`は検証済みである。
+      const headResult = await opts.run(
+        buildGitArgv(["rev-parse", "--verify", `refs/heads/${opts.branch}`]),
+        { cwd: opts.repoDir, env: localGitEnv(opts.home, opts.path) },
+      );
+      if (headResult.exitCode !== 0) {
+        throw gitError(
+          `git rev-parse refs/heads/${opts.branch} failed (gtr new)`,
+          headResult,
+        );
+      }
+      const createdSha = headResult.stdout.trim();
+      assertSha(createdSha);
+      // 削除されたworktreeの中で生き残ったClaudeは同じ絶対パスに書き込みうるので、新しく作った場合も確かめる。
+      if (!(await opts.assertProcessesIdle(created.path))) return created;
+      // 止めたプロセスは、止まるまでにworktreeへ書き込んだり`.git`ファイルを書き換えたりしえた。
+      // 中でgitを実行する前にポインタを検証し、作った時点の状態に戻す。
+      // コミットしてブランチを進めていても、checkout中のブランチごと戻るので、refを別に戻す必要は無い。
+      await verifyWorktreeGitdir({
+        run: opts.run,
+        repoDir: opts.repoDir,
+        dir: created.path,
+        ...(opts.fs?.readTextFile !== undefined
+          ? { readTextFile: opts.fs.readTextFile }
+          : {}),
+        ...(opts.fs?.realpath !== undefined
+          ? { realpath: opts.fs.realpath }
+          : {}),
+      });
+      const resetResult = await opts.run(
+        buildGitArgv(["reset", "--hard", createdSha]),
+        { cwd: created.path, env: localGitEnv(opts.home, opts.path) },
+      );
+      if (resetResult.exitCode !== 0) {
+        throw gitError(
+          `git reset --hard ${createdSha} failed (gtr new after stopping processes)`,
+          resetResult,
+        );
+      }
+      const cleanResult = await opts.run(buildGitArgv(["clean", "-fd"]), {
+        cwd: created.path,
+        env: localGitEnv(opts.home, opts.path),
+      });
+      if (cleanResult.exitCode !== 0) {
+        throw gitError(
+          "git clean -fd failed (gtr new after stopping processes)",
+          cleanResult,
+        );
+      }
+      return created;
     },
   });
 }
@@ -2363,6 +2597,7 @@ export async function stagedTreeSha(opts: WorktreeGitOptions): Promise<string> {
     cwd: opts.worktreeDir,
     env: localGitEnv(opts.home, opts.path),
   });
+  assertOutputComplete(`git write-tree in ${opts.worktreeDir}`, tree);
   if (tree.exitCode !== 0)
     throw gitError(`git write-tree failed in ${opts.worktreeDir}`, tree);
   const treeSha = tree.stdout.trim();
@@ -2395,6 +2630,10 @@ export async function worktreeFingerprint(
       "--",
     ]),
     { cwd: opts.worktreeDir, env },
+  );
+  assertOutputComplete(
+    `git diff --cached --numstat in ${opts.worktreeDir}`,
+    numstat,
   );
   if (numstat.exitCode !== 0) {
     throw gitError(
@@ -2624,8 +2863,8 @@ export function formatGitleaksReport(
  * リポジトリの中のもの(ignoreファイル、attributes、設定)はgitleaksに届かない。
  * 終了コード0なら`ok: true`を返す。終了コード1で完全なJSONのレポートがあれば、
  * 検出1件につき1行(伏せ字済み)の`ok: false`を返す。
- * 差分かレポートが上限で切れたとき、終了コード1でJSONが無いとき、それ以外の終了コード
- * (不明なオプションなら126)、タイムアウトのときは例外を投げ、「漏洩なし」とはみなさない。
+ * 差分かレポートが上限で切れたとき、どちらかの出力の読み取りを打ち切ったとき、終了コード1でJSONが無いとき、
+ * それ以外の終了コード(不明なオプションなら126)、タイムアウトのときは例外を投げ、「漏洩なし」とはみなさない。
  */
 export async function runGitleaksOnWorktree(
   opts: WorktreeGitOptions & {
@@ -2661,6 +2900,7 @@ export async function runGitleaksOnWorktree(
     throw new Error(
       `git diff --cached timed out after ${String(opts.timeoutMs)}ms`,
     );
+  assertOutputComplete(`git diff --cached in ${opts.worktreeDir}`, diff);
   if (diff.exitCode !== 0)
     throw gitError(`git diff --cached failed in ${opts.worktreeDir}`, diff);
   if (isCappedOutput(diff.stdout))
@@ -2701,6 +2941,7 @@ export async function runGitleaksOnWorktree(
     );
     if (result.timedOut)
       throw new Error(`gitleaks timed out after ${String(opts.timeoutMs)}ms`);
+    assertOutputComplete("gitleaks", result);
     if (result.exitCode === 0) return { ok: true, output: "" };
     if (result.exitCode === GITLEAKS_LEAKS_EXIT_CODE) {
       if (isCappedOutput(result.stdout))

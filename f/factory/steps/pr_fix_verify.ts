@@ -12,6 +12,11 @@ import { loadConfig } from "../lib/config.ts";
 import { addNotice, latestDraft, recordAgentRun } from "../lib/db.ts";
 import { type GhClient, getPr } from "../lib/github.ts";
 import { logger } from "../lib/log.ts";
+import {
+  lockJobIdFromEnv,
+  withWorktreeProcessLock,
+  worktreeLockFor,
+} from "../lib/process_lock.ts";
 import { FIX_SCHEMA, fixPrompt } from "../lib/prompts.ts";
 import type { FixOutcome, FixReply } from "../lib/types.ts";
 import { runCommand } from "../lib/workspace.ts";
@@ -28,9 +33,7 @@ import {
   getDiffNumstat,
   isFixClaudeOutput,
   listSymlinkTargets,
-  mergeChangedPaths,
-  parseGitDiffNameOnly,
-  parseGitStatusPorcelain,
+  listUncommittedChangedPaths,
   runAllowedCheckCommands,
   sumDiffNumstatLines,
 } from "./pr_workflow_support.ts";
@@ -44,15 +47,6 @@ export type PrFixVerifyResult = {
   readonly commit_body: string | null;
 };
 
-function localGitEnv(): Record<string, string> {
-  const env: Record<string, string> = { GIT_TERMINAL_PROMPT: "0" };
-  const home = process.env.HOME;
-  if (home !== undefined) env.HOME = home;
-  const path = process.env.PATH;
-  if (path !== undefined) env.PATH = path;
-  return env;
-}
-
 /**
  * worktreeの変更に、禁止されたファイル・パターン、symlink、
  * `package.json`のscriptsの変更、差分サイズの上限超過が無いかを調べて返す。
@@ -63,39 +57,9 @@ async function checkForbidden(
   maxChangedFiles: number,
   maxDiffLines: number,
 ): Promise<ForbiddenChangeResult> {
-  const [statusResult, diffResult] = await Promise.all([
-    runCommand(
-      [
-        "git",
-        "-c",
-        "core.hooksPath=/dev/null",
-        "-c",
-        "core.fsmonitor=false",
-        "-c",
-        "credential.helper=",
-        "status",
-        "--porcelain",
-      ],
-      { cwd: worktreeDir, env: localGitEnv() },
-    ),
-    runCommand(
-      [
-        "git",
-        "-c",
-        "core.hooksPath=/dev/null",
-        "-c",
-        "core.fsmonitor=false",
-        "-c",
-        "credential.helper=",
-        "diff",
-        "--name-only",
-      ],
-      { cwd: worktreeDir, env: localGitEnv() },
-    ),
-  ]);
-  const changedPaths = mergeChangedPaths(
-    parseGitStatusPorcelain(statusResult.stdout),
-    parseGitDiffNameOnly(diffResult.stdout),
+  const changedPaths = await listUncommittedChangedPaths(
+    runCommand,
+    worktreeDir,
   );
 
   // basenameがちょうど`package.json`の変更ファイルをすべて調べる。
@@ -179,6 +143,15 @@ export async function main(
   reviews: CollectedReview[],
   comments: CollectedComment[],
 ): Promise<PrFixVerifyResult> {
+  const lockedRun = withWorktreeProcessLock(
+    runCommand,
+    worktreeLockFor(worktree_dir),
+    {
+      kind: "pr_fix",
+      workItemId: work_item_id,
+      jobId: lockJobIdFromEnv(process.env),
+    },
+  );
   if (apply_outcome !== "done") {
     return {
       outcome: apply_outcome,
@@ -235,7 +208,7 @@ export async function main(
   }
 
   const firstChecks = await runAllowedCheckCommands(
-    runCommand,
+    lockedRun,
     worktree_dir,
     config.allowed_check_commands,
     timeoutMs,
@@ -313,7 +286,7 @@ export async function main(
 
   try {
     const retryResult = await runClaude({
-      run: runCommand,
+      run: lockedRun,
       workItemId: work_item_id,
       stage: "pr_fix_verify_retry",
       attempt,
@@ -378,7 +351,7 @@ export async function main(
     }
 
     const secondChecks = await runAllowedCheckCommands(
-      runCommand,
+      lockedRun,
       worktree_dir,
       config.allowed_check_commands,
       timeoutMs,

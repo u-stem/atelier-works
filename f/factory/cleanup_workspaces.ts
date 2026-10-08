@@ -13,6 +13,7 @@
 // リポジトリは、その日の掃除を飛ばしてnoticeを残す(`partitionRepoGroups`)。
 // headless Claudeプロセスを孤立とみなすのは、`claude_timeout_sec`と
 // `implement_timeout_sec`の長い方に猶予を足した時間を過ぎたものだけ。
+// プロセスのロックがまだ持たれているか、そのロックの下で起動されたプロセスが残っているworktreeは消さない。
 
 import * as wmill from "windmill-client@1.817.0";
 import {
@@ -33,6 +34,12 @@ import { loadConfig } from "./lib/config.ts";
 import { addNotice, listActive, listStaleTerminalWorkItems } from "./lib/db.ts";
 import { type GhClient, getPr } from "./lib/github.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
+import {
+  defaultLockReleaseDeps,
+  ensureWorktreeLockFree,
+  WorktreeBusyError,
+  worktreeLockFor,
+} from "./lib/process_lock.ts";
 import type { WorkItem } from "./lib/types.ts";
 import {
   listWorktrees,
@@ -115,6 +122,27 @@ async function removeStaleWorktreesForRepo(
         repo,
       )) {
         if (removedDirs.has(targetDir)) {
+          continue;
+        }
+        // 生き残りのプロセス(ロックの保持者か、このロックファイルのタグを持つ残り)がいるworktreeは消さない。
+        // 対象は終端状態で待つ処理が無く、翌日また試せる。止めるのは、持ち主タグとリースで根拠がある実装フローの準備だけにする。
+        // ロックファイルのパスを作れない(親が無い)ときの例外は、項目ごとの例外処理が受けて消さずに進む。
+        try {
+          await ensureWorktreeLockFree({
+            run: runCommand,
+            lock: worktreeLockFor(targetDir),
+            policy: null,
+            deps: defaultLockReleaseDeps(),
+          });
+        } catch (err) {
+          if (!(err instanceof WorktreeBusyError)) throw err;
+          log.warn("cleanup: skipping a worktree still used by processes", {
+            work_item_id: item.id,
+            owner,
+            repo,
+            worktree_dir: targetDir,
+            reason: err.message,
+          });
           continue;
         }
         await removeWorktree({

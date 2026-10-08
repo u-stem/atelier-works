@@ -8,6 +8,7 @@ import { describe, expect, test } from "bun:test";
 import {
   describeReason,
   earlyExitBase,
+  evaluateBranchImplementingGuard,
   evaluateFixRoundGuard,
   evaluateParentImplementingGuard,
   evaluatePrFixSafetyGuards,
@@ -111,6 +112,23 @@ describe("evaluateParentImplementingGuard", () => {
     expect(evaluateParentImplementingGuard("implementing")).toEqual({
       ok: false,
       reason: "parent issue is being re-implemented",
+    });
+  });
+});
+
+describe("evaluateBranchImplementingGuard", () => {
+  test("passes without a work item for the branch", () => {
+    expect(evaluateBranchImplementingGuard(null)).toEqual({ ok: true });
+  });
+
+  test("passes when the branch's work item is not implementing", () => {
+    expect(evaluateBranchImplementingGuard("pr_open")).toEqual({ ok: true });
+  });
+
+  test("blocks while the branch's work item is implementing", () => {
+    expect(evaluateBranchImplementingGuard("implementing")).toEqual({
+      ok: false,
+      reason: "implementation of the branch's work item is running",
     });
   });
 });
@@ -376,6 +394,36 @@ describe("describeReason (implement flow)", () => {
       describeReason("requirements regeneration could not be started"),
     ).toBe("要件定義の作り直しを起動できませんでした");
   });
+
+  test("translates a worktree still used by an earlier run", () => {
+    expect(
+      describeReason("worktree is still used by processes from an earlier run"),
+    ).toBe("前の実行のプロセスがまだworktreeを使っています");
+  });
+
+  test("keeps the holders when translating a busy worktree", () => {
+    expect(
+      describeReason(
+        "worktree is still used by processes from an earlier run: pid 42 (3600s, pr_fix:9:job-c) `claude -p`",
+      ),
+    ).toBe(
+      "前の実行のプロセスがまだworktreeを使っています(pid 42 (3600s, pr_fix:9:job-c) `claude -p`)",
+    );
+  });
+
+  test("translates a lock this run left held", () => {
+    expect(
+      describeReason("worktree lock is held by a process this run left behind"),
+    ).toBe(
+      "この実行の検査コマンドなどが残したプロセスが、worktreeのロックを持ち続けています",
+    );
+  });
+
+  test("translates an implementation running on the PR's branch", () => {
+    expect(
+      describeReason("implementation of the branch's work item is running"),
+    ).toBe("このPRのブランチで実装フローが実行中のため修正を止めました");
+  });
 });
 
 describe("nextActionFor (implement flow)", () => {
@@ -439,5 +487,29 @@ describe("nextActionFor (implement flow)", () => {
     ).toBe(
       "ConsoleのFailuresタブから再実行してください(差し戻し理由は通知に残っています)",
     );
+  });
+
+  test("asks to check and stop the earlier run's processes", () => {
+    expect(
+      nextActionFor(
+        "worktree is still used by processes from an earlier run: pid 42 (3600s, no owner) `x`",
+      ),
+    ).toBe(
+      "載っているプロセスが何かを確かめて止めるか、workerを再起動してから(同じworkerの他のジョブも止まります)、ConsoleのFailuresタブから再実行してください",
+    );
+  });
+
+  test("asks to check for daemons the checks left", () => {
+    expect(
+      nextActionFor("worktree lock is held by a process this run left behind"),
+    ).toBe(
+      "検査コマンドが常駐プロセスを残していないかを確かめ、workerを再起動してから(同じworkerの他のジョブも止まります)、ConsoleのFailuresタブから再実行してください",
+    );
+  });
+
+  test("waits for the branch's implementation before re-adding factory:fix", () => {
+    expect(
+      nextActionFor("implementation of the branch's work item is running"),
+    ).toBe("実装フローの完了を待ってから再度factory:fixを付けてください");
   });
 });

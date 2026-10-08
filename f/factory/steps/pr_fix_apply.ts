@@ -12,6 +12,11 @@ import { loadConfig } from "../lib/config.ts";
 import { latestDraft, recordAgentRun } from "../lib/db.ts";
 import { type GhClient, getPr } from "../lib/github.ts";
 import { logger } from "../lib/log.ts";
+import {
+  lockJobIdFromEnv,
+  withWorktreeProcessLock,
+  worktreeLockFor,
+} from "../lib/process_lock.ts";
 import { FIX_SCHEMA, fixPrompt } from "../lib/prompts.ts";
 import type { FixOutcome, FixReply } from "../lib/types.ts";
 import { runCommand } from "../lib/workspace.ts";
@@ -111,7 +116,11 @@ export async function main(
 
   try {
     const result = await runClaude({
-      run: runCommand,
+      run: withWorktreeProcessLock(runCommand, worktreeLockFor(worktree_dir), {
+        kind: "pr_fix",
+        workItemId: work_item_id,
+        jobId: lockJobIdFromEnv(process.env),
+      }),
       workItemId: work_item_id,
       stage: "pr_fix",
       attempt,

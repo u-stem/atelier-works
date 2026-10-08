@@ -34,6 +34,10 @@ import {
   withReadOnlyDocDirCopy,
 } from "../lib/implement_loop.ts";
 import { logger } from "../lib/log.ts";
+import {
+  withWorktreeProcessLock,
+  worktreeLockFor,
+} from "../lib/process_lock.ts";
 import { implementFixPrompt } from "../lib/prompts.ts";
 import { isOneOf } from "../lib/types.ts";
 import {
@@ -141,6 +145,16 @@ export async function main(
     factoryCloneDir: context.factory_clone_dir,
   });
   const worktreeDir = context.worktree_dir;
+  // Claudeと検査コマンドはworktreeのロックと持ち主タグを付けて走らせる。取り消されても生き残る間は、次の実行がworktreeに触れない。
+  const lockedRun = withWorktreeProcessLock(
+    runCommand,
+    worktreeLockFor(worktreeDir),
+    {
+      kind: "implement",
+      workItemId: work_item_id,
+      jobId: leaseJobId,
+    },
+  );
   try {
     return await runImplementVerifyLoop(
       {
@@ -172,7 +186,7 @@ export async function main(
           removeIgnoredFiles({ run: runCommand, worktreeDir }),
         runChecks: () =>
           runAllowedCheckCommands(
-            runCommand,
+            lockedRun,
             worktreeDir,
             commands,
             config.implement_timeout_sec * 1000,
@@ -182,7 +196,7 @@ export async function main(
             runImplementClaudeRound(
               { runClaude, recordAgentRun },
               {
-                run: runCommand,
+                run: lockedRun,
                 config,
                 workItemId: work_item_id,
                 attempt: context.attempt,

@@ -25,7 +25,7 @@
 - `factory_config`の`implement_enabled`を`true`にすると、要件定義の承認後に`f/factory/implement`が自動で起動する(既定`false`。`false`の間は従来どおり`approved`で止まる)。
 - 実装フローは実装ブランチ`factory/issue-<N>-wi-<work_item_id>`を作ってpushし、検査に通ったらコミットしてPRを作成する(既にPRがあれば本文を更新する)。PRには`factory:review`ラベルが付き、`poll_prs`が自動レビュー(`pr_review`)を起動する。PR本文の`Closes #N`で元のIssueに紐づく。マージは常に人が行う。
 - 検査コマンドはリポジトリごとに`check_commands_by_repo`(`{"<owner>/<repo>": ["bun install --frozen-lockfile", "bun test", ...]}`)で設定する。エントリが無いリポジトリでは検査コマンドを実行しない(`allowed_check_commands`は使わない)。検査の前に毎回`git clean -fdX`で無視ファイル(`node_modules/`等)を消すので、先頭で依存関係をインストールする。worker imageにmiseは無いので、コマンドはworker内で直接動くもの(例: `bun install --frozen-lockfile`、`bun test`、`bunx --bun tsc --noEmit`、`bunx --bun biome check .`)にする。
-- 検査コマンドはClaudeが書いたコードをworker内でrootとして実行するため、`check_commands_by_repo`のエントリは、workerのサンドボックスができるまで、Issueを信頼できる人だけが起票するリポジトリにだけ設定する。実装ブランチのpushで対象リポジトリ自身のCIも人のレビュー前に動くので、そのCIが使えるsecretsの範囲を確認しておく。検査コマンドはサンドボックスなしでworker内でrootとして実行され、実行のたびにnotice `unsandboxed_check_commands`が記録される。秘密情報の検査(gitleaks)は設定に関わらず毎ラウンド実行する。
+- 検査コマンドはClaudeが書いたコードをworker内でrootとして実行するため、`check_commands_by_repo`のエントリは、workerのサンドボックスができるまで、Issueを信頼できる人だけが起票するリポジトリにだけ設定する。実装ブランチのpushで対象リポジトリ自身のCIも人のレビュー前に動くので、そのCIが使えるsecretsの範囲を確認しておく。検査コマンドはサンドボックスなしでworker内でrootとして実行され、実行のたびにnotice `unsandboxed_check_commands`が記録される。秘密情報の検査(gitleaks)は設定に関わらず毎ラウンド実行する。検査コマンドは常駐デーモンを残さないこと。ロックのfdを持ったまま残ると、以降のラウンドがロックを取れずに失敗する。fdを閉じて残ったものも、次の準備やpr_fixを止める。
 - 保護パス(`.claude/**`、`.github/**`、`infra/**`、`mise.toml`、`package.json`、lockfile等)の変更は止めずにPR本文の「確認して欲しい点」とDiscordの`pr_opened`通知に載る。そのラウンドは検査コマンドを実行しない(PR本文の「動作確認結果」に「検査未実施」と理由が出る)ので、GitHub側のCIの結果を確認する。
 - 実装が何も変更を生まなかった場合(分岐点から差分が無いまま完了と報告した場合)はそのラウンドを合格にせず修正を求める。完了時にコミットする新しい変更が無くても、ブランチに分岐点より先のコミット(途中経過のコミットなど)があれば、それを使ってPRを作成または更新する。ブランチに分岐点より先のものが何も無いときだけ`needs_human`(「実装が変更を生みませんでした」)にする。その場合は要件定義を見直すか、Issueを閉じる。
 - ラウンド・予算上限、停滞、差分超過で`needs_human`になった場合は、PRが無く秘密情報の検査に通れば途中の変更が実装ブランチにpushされている。PRがある場合(「PRがあるため途中の変更はpushせずworktreeに残しました」)と、symlink変更・Claude実行失敗・worktreeの`.git`の書き換えで止まった場合は、途中の変更をpushせずworktreeに残す。Discordの`needs_human`通知の「次の操作」に従い、ブランチを確認して人がPRを作る、要件を直す、または不要ならブランチを削除する。原因を取り除いたらConsoleのFailuresタブ(`retry_work_item`)から実装フローを再実行できる。途中経過のコミットは、再実行で実装が完了したときのコミットとは別のコミットとして残る。
@@ -36,7 +36,13 @@
 - `self_update`は実行中の実装フローを待たずに新しいstepを反映するため、`implement_prepare`と`implement_finish`の間に別のバージョンのstepが動くことがある。実装フローの実行中(`implementing`の作業項目がある間)はmainへのマージとデプロイを避ける。
 - 実装はIssueを取り込んだ時点の題名と本文(要件定義を作ったときと同じ内容)を使う。承認後にIssueを書き換えても実装には反映されず、現在のIssueが取り込み時点と違えばPR本文の「確認して欲しい点」に注記が出る。
 - 承認の前にIssueの内容を直したいときは、Issueを書き換えるのではなく、ConsoleのInboxで却下し、直したい内容を却下理由(feedback)に書いて要件定義を作り直させる。承認の後に作り直すときは、先に既存のPRを閉じてから、Issueにトリガーラベルを付け直す(新しいサイクルとして別の作業項目・別のブランチ・別のPRになるため、旧PRを残すと重複する)。
-- 実装フローを再実行するときは、ConsoleのFailuresタブ(`retry_work_item`)を使う。Windmillのrerunは新しいジョブIDで最初から走るため、準備ステップの最初で何もせずに終わる(`flow_job_id`のリース)。途中のステップからのrestartも新しいジョブIDで走るため、再開したステップ(生成・検証・完了)の最初のリースの確認で何もせずに終わる。どちらも、元の実行で進行中のClaudeの実行や検査を中断はしない。同じ作業項目で実装フローが重ねて起動された場合(起動の応答が失敗したが実際には動いていた場合など)も、後の実行は同じく何もせずに終わる。
+- 実装フローを再実行するときは、ConsoleのFailuresタブ(`retry_work_item`)を使う。Windmillのrerunは新しいジョブIDで最初から走るため、準備ステップの最初で何もせずに終わる(`flow_job_id`のリース)。途中のステップからのrestartも新しいジョブIDで走るため、再開したステップ(生成・検証・完了)の最初のリースの確認で何もせずに終わる。どちらも、元の実行で進行中のClaudeの実行や検査を中断はしない。同じ作業項目で実装フローが重ねて起動された場合(起動の応答が失敗したが実際には動いていた場合など)も、後の実行は同じく何もせずに終わる。Windmillで取り消した実行のClaudeや検査コマンドは止まらずに残る。
+
+  実装フローの再実行では、準備ステップが、同じ作業項目の前の実装フローのジョブが起動したプロセスを見つけて止めてから続ける。それ以外のプロセス(pr_fixのもの、持ち主の分からないもの)がworktreeを使っていれば`needs_human`になり、理由に残っているプロセスが載る。
+
+  pr_fixの再実行では何も止めずに`blocked`になる。この場合は、理由に載ったプロセスが終わるのを待つか、何かを確かめて止めるか、`mise exec -- docker compose -f infra/docker-compose.yml restart windmill_worker`でworkerを再起動してから再実行する。workerの再起動は、同じコンテナで動いているすべてのジョブを止める。
+
+  残ったClaudeは、`cleanup_workspaces`の孤児の掃除でも、閾値(`claude_timeout_sec`と`implement_timeout_sec`の長い方に5分を足した時間)を過ぎた後にだけ止まる。検査コマンドの生き残りはこの掃除の対象外である。
 - 実装フローの実行中にリースが移った場合(Issueのcloseによる取り消しで`cancelJob`が失敗した、pr_fixの差し戻しで作業項目が要件定義の作り直しに進んだなど)、実装フローは次のリースの確認(生成ステップのClaude実行前、検証の各ラウンドの冒頭と修正ラウンドの前、完了ステップの最初と外への副作用の直前)で止まり、コミット・push・PR作成をしない。進行中のClaudeの実行や検査は中断しない。worktreeに残った途中の変更は、次の実行の準備で捨てられる。
 - `implement_enabled`を`true`にする前に、Issue #33を解決しておく。
 

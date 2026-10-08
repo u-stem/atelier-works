@@ -36,7 +36,11 @@ import {
   type WorkItemKind,
   type WorkItemStatus,
 } from "../lib/types.ts";
-import { type CommandRunner, readGitShowFile } from "../lib/workspace.ts";
+import {
+  assertOutputComplete,
+  type CommandRunner,
+  readGitShowFile,
+} from "../lib/workspace.ts";
 
 // `pr_fix_verify.ts`と既存のテストがこのファイルから読み込めるよう、
 // `lib/protected_paths.ts`の定義を再エクスポートする。
@@ -755,6 +759,21 @@ export function evaluateParentImplementingGuard(
     : { ok: true };
 }
 
+/**
+ * PRのブランチ名(`factory/issue-<N>-wi-<id>`)から引いた実装の作業項目が実装中なら止める。
+ * 親の行(parent_work_item_id)から引いた場合と理由を分けるのは、親の行が無いPRでも止まったことを読み手が見分けられるようにするためである。
+ */
+export function evaluateBranchImplementingGuard(
+  branchItemStatus: WorkItemStatus | null,
+): PrFixGuardResult {
+  return branchItemStatus === "implementing"
+    ? {
+        ok: false,
+        reason: "implementation of the branch's work item is running",
+      }
+    : { ok: true };
+}
+
 // ---------------------------------------------------------------------------
 // pr_fix_collect: 新しいレビューとコメントの選別と、その結果(純粋関数)
 // ---------------------------------------------------------------------------
@@ -1188,6 +1207,10 @@ export async function listChangedPaths(
       env: resolvedEnv({ GIT_TERMINAL_PROMPT: "0" }, undefined, undefined),
     },
   );
+  assertOutputComplete(
+    `git diff --cached -z --name-status in ${worktreeDir}`,
+    result,
+  );
   if (result.exitCode !== 0) {
     throw new Error(
       maskSecrets(
@@ -1259,6 +1282,7 @@ export async function listSymlinkChanges(
       env: resolvedEnv({ GIT_TERMINAL_PROMPT: "0" }, undefined, undefined),
     },
   );
+  assertOutputComplete(`git diff --cached --raw -z in ${worktreeDir}`, result);
   if (result.exitCode !== 0) {
     throw new Error(
       maskSecrets(
@@ -1267,6 +1291,47 @@ export async function listSymlinkChanges(
     );
   }
   return parseRawSymlinkPaths(result.stdout);
+}
+
+/**
+ * worktreeのコミットしていない変更のパスを、`git status --porcelain`と`git diff --name-only`の和集合(`mergeChangedPaths`)で返す。
+ * pr_fixの保護パス・symlink・差分の大きさの判定の入力になるので、どちらかが失敗したとき(終了コードが0以外)と、
+ * 出力の読み取りを打ち切ったときは例外を投げる。空の一覧として扱うと、変更を見落とすため。
+ * gitはhook・fsmonitor・credential helperを無効にして実行する。
+ */
+export async function listUncommittedChangedPaths(
+  run: CommandRunner,
+  worktreeDir: string,
+): Promise<ChangedPath[]> {
+  const options = {
+    cwd: worktreeDir,
+    env: resolvedEnv({ GIT_TERMINAL_PROMPT: "0" }, undefined, undefined),
+  };
+  const [statusResult, diffResult] = await Promise.all([
+    run(gitHardeningArgv(["status", "--porcelain"]), options),
+    run(gitHardeningArgv(["diff", "--name-only"]), options),
+  ]);
+  assertOutputComplete(
+    `git status --porcelain in ${worktreeDir}`,
+    statusResult,
+  );
+  assertOutputComplete(`git diff --name-only in ${worktreeDir}`, diffResult);
+  for (const [name, result] of [
+    ["git status --porcelain", statusResult],
+    ["git diff --name-only", diffResult],
+  ] as const) {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        maskSecrets(
+          `${name} failed in ${worktreeDir}: ${result.stderr.trim()}`,
+        ),
+      );
+    }
+  }
+  return mergeChangedPaths(
+    parseGitStatusPorcelain(statusResult.stdout),
+    parseGitDiffNameOnly(diffResult.stdout),
+  );
 }
 
 /**
@@ -1514,6 +1579,7 @@ export async function getDiffNumstat(
     cwd: worktreeDir,
     env: resolvedEnv({ GIT_TERMINAL_PROMPT: "0" }, undefined, undefined),
   });
+  assertOutputComplete(`git diff --numstat in ${worktreeDir}`, result);
   if (result.exitCode !== 0) {
     throw new Error(
       maskSecrets(
@@ -1543,6 +1609,7 @@ export function parseWcLineCount(output: string): number {
  * `wc`が読めないファイル(`git status`の後に競合で消えた、環境によってはバイナリなど)は、
  * 例外にせず0として数える。`listSymlinkTargets`と同じく、
  * 残りの安全策で防ぐという考え方による。
+ * 出力の読み取りを打ち切ったときは、数が途中で切れているかもしれないので例外を投げる。
  */
 export async function countUntrackedFileLines(
   run: CommandRunner,
@@ -1550,6 +1617,7 @@ export async function countUntrackedFileLines(
   path: string,
 ): Promise<number> {
   const result = await run(["wc", "-l", "--", path], { cwd: worktreeDir });
+  assertOutputComplete(`wc -l in ${worktreeDir}`, result);
   if (result.exitCode !== 0) return 0;
   return parseWcLineCount(result.stdout);
 }
@@ -1629,6 +1697,7 @@ export async function listSymlinkTargets(
       env: resolvedEnv({ GIT_TERMINAL_PROMPT: "0" }, undefined, undefined),
     },
   );
+  assertOutputComplete(`git ls-files -s in ${worktreeDir}`, result);
   if (result.exitCode !== 0) {
     throw new Error(
       maskSecrets(
@@ -1744,6 +1813,8 @@ const defaultCreateCheckHomeDir: CreateCheckHomeDir = async () => {
  * コマンドはシェルを使わず、空白で区切ってargvにする。
  * `allowed_check_commands`は対象リポジトリの内容ではなく、
  * 運用者が書く設定(`factory_config`)だから。
+ * 出力の読み取りを打ち切ったコマンド(`outputAbandoned`)は、終了コードに関わらず失敗にする。
+ * 別セッションへ抜けたプロセスがworkerに残ったことを検査結果に出すためである。
  */
 export async function runAllowedCheckCommands(
   run: CommandRunner,
@@ -1774,7 +1845,10 @@ export async function runAllowedCheckCommands(
       const masked = maskSecrets(`${result.stdout}\n${result.stderr}`.trim());
       results.push({
         command,
-        ok: !result.timedOut && result.exitCode === 0,
+        ok:
+          !result.timedOut &&
+          result.exitCode === 0 &&
+          result.outputAbandoned !== true,
         exitCode: result.exitCode,
         timedOut: result.timedOut,
         outputTail: masked.slice(-CHECK_OUTPUT_TAIL_CHARS),
@@ -2744,6 +2818,30 @@ const REASON_RULES: readonly ReasonRule[] = [
     describe: () => "worktreeのgitの参照先(.gitファイル)が書き換えられました",
     nextAction: () =>
       "実装ブランチとworktreeを人が確認し、不審な変更があればブランチを削除してください",
+  },
+  {
+    pattern:
+      /^worktree is still used by processes from an earlier run(?:: ([\s\S]+))?$/,
+    describe: (m) =>
+      m[1] === undefined
+        ? "前の実行のプロセスがまだworktreeを使っています"
+        : `前の実行のプロセスがまだworktreeを使っています(${m[1]})`,
+    nextAction: () =>
+      "載っているプロセスが何かを確かめて止めるか、workerを再起動してから(同じworkerの他のジョブも止まります)、ConsoleのFailuresタブから再実行してください",
+  },
+  {
+    pattern: /^implementation of the branch's work item is running$/,
+    describe: () =>
+      "このPRのブランチで実装フローが実行中のため修正を止めました",
+    nextAction: () =>
+      "実装フローの完了を待ってから再度factory:fixを付けてください",
+  },
+  {
+    pattern: /^worktree lock is held by a process this run left behind$/,
+    describe: () =>
+      "この実行の検査コマンドなどが残したプロセスが、worktreeのロックを持ち続けています",
+    nextAction: () =>
+      "検査コマンドが常駐プロセスを残していないかを確かめ、workerを再起動してから(同じworkerの他のジョブも止まります)、ConsoleのFailuresタブから再実行してください",
   },
 ];
 

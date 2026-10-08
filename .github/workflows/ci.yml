@@ -67,9 +67,11 @@ jobs:
         # `$WM_VERSION`などはこのステップのシェル(値を持たない)ではなく、
         # miseのサブシェルで展開される。
         # ビルド引数は`infra/docker-compose.yml`がworkerイメージに渡すものと同じ。
+        # 次のステップで使うので、タグを付ける。
         run: |
           mise exec -c '
             docker build infra/worker \
+              --tag factory-worker-ci \
               --build-arg WM_VERSION=$WM_VERSION \
               --build-arg CLAUDE_VERSION=$CLAUDE_VERSION \
               --build-arg GH_VERSION=$GH_VERSION \
@@ -78,6 +80,14 @@ jobs:
               --build-arg GTR_COMMIT=$GTR_COMMIT \
               --build-arg WMILL_VERSION=$WMILL_VERSION
           '
+
+      - name: Test the process lock in the worker image
+        # /procを全件走査するプロセスロックのテストは、rootでないと`mise run check`では飛ばされる。
+        # workerと同じ条件で走らせる。同じイメージを使い、自分のPID名前空間の中でrootとして動かす。
+        # `--init`はworkerの`init: true`に合わせる。PID 1のtiniが、止めた保持者の孤児を回収するため。
+        # bunがPID 1だと孤児がゾンビのまま残り、保持者を止める処理がその終了を待ち続ける。
+        # このテストファイルは外部パッケージを使わないので、`node_modules`は要らない。
+        run: docker run --rm --init --entrypoint bun -v "$PWD:/src" -w /src factory-worker-ci test tests/lib/process_lock.test.ts
 
   test-db:
     # `check`ジョブ(とworkerイメージのビルド)から独立させる。

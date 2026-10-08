@@ -3,6 +3,7 @@
 // factory-implementationスキルのClaudeをヘッドレスで1回実行する。
 // 失敗した実行は例外にせず、kindが`claude_failed`の`ImplementClaudeRound`として返す。
 // Claudeを実行する前にリースを確かめ、失っていれば何もせずにkindが`lease_lost`のラウンドを返す。
+// Claudeはworktreeのロックと持ち主タグを付けて実行し、ロックが取れなければ例外で止まる。
 // 各ラウンドの記録は`implement_verify`が`implement_rounds`に書く。
 // フローのモジュールにはリトライを設定しない。
 // `runClaude`が不正な出力を1回だけ再試行しており、
@@ -25,6 +26,10 @@ import {
   runImplementGenerateRound,
   withReadOnlyDocDirCopy,
 } from "../lib/implement_loop.ts";
+import {
+  withWorktreeProcessLock,
+  worktreeLockFor,
+} from "../lib/process_lock.ts";
 import { implementPrompt } from "../lib/prompts.ts";
 import { runCommand } from "../lib/workspace.ts";
 
@@ -54,7 +59,15 @@ export async function main(
             runImplementClaudeRound(
               { runClaude, recordAgentRun },
               {
-                run: runCommand,
+                run: withWorktreeProcessLock(
+                  runCommand,
+                  worktreeLockFor(context.worktree_dir),
+                  {
+                    kind: "implement",
+                    workItemId: work_item_id,
+                    jobId: leaseJobId,
+                  },
+                ),
                 config,
                 workItemId: work_item_id,
                 attempt: context.attempt,
