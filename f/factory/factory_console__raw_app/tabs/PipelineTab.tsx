@@ -2,7 +2,6 @@ import React, { useMemo, useState } from "react";
 import { Skeleton } from "../components/Skeleton";
 import { issueOrPrLink, prLink, statusVariant } from "../lib/pipelineView";
 import { statusLabel } from "../lib/statusLabel";
-import type { PipelineRow } from "../lib/types";
 import { toPipelineRow } from "../lib/types";
 import { useConsoleQuery } from "../lib/useConsoleQuery";
 

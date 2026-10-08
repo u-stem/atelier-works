@@ -16,6 +16,7 @@ type StatusVariant = "success" | "warning" | "danger" | "neutral";
 
 const STATUS_VARIANTS: Record<string, StatusVariant> = {
   approved: "success",
+  pr_open: "success",
   awaiting_approval: "warning",
   requirements_generating: "warning",
   rejected: "danger",
