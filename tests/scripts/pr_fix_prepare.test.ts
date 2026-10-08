@@ -1,10 +1,11 @@
-// `pr_fix_prepare.ts`が使う`pr_workflow_support.ts`の`evaluatePrFixSafetyGuards`と
-// `evaluateFixRoundGuard`のテスト。
+// `pr_fix_prepare.ts`が使う`pr_workflow_support.ts`の`evaluatePrFixSafetyGuards`、
+// `evaluateFixRoundGuard`、`prFixTimeoutMisfit`のテスト。
 // あわせて`describeReason`もテストする。これは検査の`reason`を表示用の日本語に
 // 置き換える関数で、`pr_fix_finish.ts`、`pr_review_generate.ts`、`pipeline_*.ts`が
 // GitHubのコメントやDiscordの通知を作るときに使う。
 
 import { describe, expect, test } from "bun:test";
+import { RUNNER_MAX_STOP_OVERHEAD_MS } from "../../f/factory/lib/workspace.ts";
 import {
   describeReason,
   earlyExitBase,
@@ -14,6 +15,8 @@ import {
   evaluatePrFixSafetyGuards,
   evaluateRepoAllowedGuard,
   nextActionFor,
+  PR_COMMAND_STOP_OVERHEAD_SEC,
+  prFixTimeoutMisfit,
 } from "../../f/factory/steps/pr_workflow_support.ts";
 
 const SAFE_INPUT = {
@@ -133,7 +136,98 @@ describe("evaluateBranchImplementingGuard", () => {
   });
 });
 
+describe("prFixTimeoutMisfit", () => {
+  const FOUR_CHECKS = ["bun test", "bun run lint", "bun run typecheck", "x"];
+
+  test("accepts the defaults with four check commands", () => {
+    expect(
+      prFixTimeoutMisfit({
+        claude_timeout_sec: 1800,
+        allowed_check_commands: FOUR_CHECKS,
+      }),
+    ).toBeNull();
+  });
+
+  test("rejects five check commands with the defaults", () => {
+    expect(
+      prFixTimeoutMisfit({
+        claude_timeout_sec: 1800,
+        allowed_check_commands: [...FOUR_CHECKS, "y"],
+      }),
+    ).toBe(
+      "pr_fix time settings do not fit the flow step timeout: (2 claude runs + 2 x 5 check commands) x (claude_timeout_sec 1800 + 15) + 600 = 22380s exceeds 21600s",
+    );
+  });
+
+  test("accepts the largest Claude timeout that fits four check commands in the verify step", () => {
+    expect(
+      prFixTimeoutMisfit({
+        claude_timeout_sec: 2085,
+        allowed_check_commands: FOUR_CHECKS,
+      }),
+    ).toBeNull();
+  });
+
+  test("rejects a Claude timeout one second over the verify step with four check commands", () => {
+    expect(
+      prFixTimeoutMisfit({
+        claude_timeout_sec: 2086,
+        allowed_check_commands: FOUR_CHECKS,
+      }),
+    ).toBe(
+      "pr_fix time settings do not fit the flow step timeout: (2 claude runs + 2 x 4 check commands) x (claude_timeout_sec 2086 + 15) + 600 = 21610s exceeds 21600s",
+    );
+  });
+
+  test("rejects a Claude timeout that cannot fit in the apply step", () => {
+    expect(
+      prFixTimeoutMisfit({
+        claude_timeout_sec: 3286,
+        allowed_check_commands: [],
+      }),
+    ).toBe(
+      "pr_fix time settings do not fit the flow step timeout: 2 claude runs x (claude_timeout_sec 3286 + 15) + 600 = 7202s exceeds 7200s",
+    );
+  });
+
+  test("accepts the largest Claude timeout that fits in the apply step", () => {
+    expect(
+      prFixTimeoutMisfit({
+        claude_timeout_sec: 3285,
+        allowed_check_commands: [],
+      }),
+    ).toBeNull();
+  });
+
+  test("does not contain the separator describeReason splits on", () => {
+    expect(
+      prFixTimeoutMisfit({
+        claude_timeout_sec: 1800,
+        allowed_check_commands: [...FOUR_CHECKS, "y"],
+      }),
+    ).not.toContain("; ");
+  });
+});
+
+describe("PR_COMMAND_STOP_OVERHEAD_SEC", () => {
+  test("covers the runner's worst stop overhead", () => {
+    expect(PR_COMMAND_STOP_OVERHEAD_SEC * 1000).toBeGreaterThanOrEqual(
+      RUNNER_MAX_STOP_OVERHEAD_MS,
+    );
+  });
+});
+
 describe("describeReason", () => {
+  test("translates time settings that do not fit the pr_fix step timeouts", () => {
+    expect(
+      describeReason(
+        "pr_fix time settings do not fit the flow step timeout: 2 claude runs x (claude_timeout_sec 3286 + 15) + 600 = 7202s exceeds 7200s",
+      ),
+    ).toBe(
+      "PR修正の時間設定が、flow.yamlの修正・検証ステップのtimeoutに収まりません(2 claude runs x (claude_timeout_sec 3286 + 15) + 600 = 7202s exceeds 7200s)",
+    );
+  });
+
   test("translates a static safety-guard reason", () => {
     expect(describeReason("pull request is a draft")).toBe("PRがドラフトです");
   });
@@ -205,6 +299,16 @@ describe("nextActionFor", () => {
   // `needs_human`のDiscord通知の「次の操作」欄は、すべてこの関数が作る。
   // `describeReason`のように"; "で区切った全区間をつながず、1区間の操作だけを選ぶ理由は、
   // この関数のコメントを参照。
+  test("asks to fix the pr_fix time settings", () => {
+    expect(
+      nextActionFor(
+        "pr_fix time settings do not fit the flow step timeout: 2 claude runs x (claude_timeout_sec 3286 + 15) + 600 = 7202s exceeds 7200s",
+      ),
+    ).toBe(
+      "claude_timeout_secか検査コマンド(allowed_check_commands)の数を減らしてから、ConsoleのFailuresタブから再実行してください",
+    );
+  });
+
   test("tells the operator to reopen or withdraw when the PR is not open", () => {
     expect(nextActionFor("pull request is not open")).toBe(
       "PRを再オープンするか、この作業を取り下げてください",

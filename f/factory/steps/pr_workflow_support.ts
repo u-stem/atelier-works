@@ -775,6 +775,95 @@ export function evaluateBranchImplementingGuard(
 }
 
 // ---------------------------------------------------------------------------
+// flow.yamlのstep timeoutと時間設定の整合(純粋関数)
+// ---------------------------------------------------------------------------
+
+/** flow.yamlのpr_fix_applyのtimeout(秒)。変えるときはflow.yamlと同じ変更で変える(tests/scripts/pr_flows.test.tsが一致を確かめる)。 */
+export const PR_FIX_APPLY_STEP_TIMEOUT_SEC = 7_200;
+
+/** flow.yamlのpr_fix_verifyのtimeout(秒)。変えるときはflow.yamlと同じ変更で変える(tests/scripts/pr_flows.test.tsが一致を確かめる)。 */
+export const PR_FIX_VERIFY_STEP_TIMEOUT_SEC = 21_600;
+
+/** flow.yamlのpr_review_generateのtimeout(秒)。変えるときはflow.yamlと同じ変更で変える(tests/scripts/pr_flows.test.tsが一致を確かめる)。 */
+export const PR_REVIEW_GENERATE_STEP_TIMEOUT_SEC = 7_200;
+
+/**
+ * Claudeを使うステップのうち、Claudeと検査コマンド以外にかかりうる時間(秒)。
+ * GitHub API・git・DBの操作の余裕である。
+ * これらのステップはrepoのロックを取らないので、その待ちは含めない。
+ */
+export const PR_STEP_OVERRUN_BASE_SEC = 600;
+
+/** Claude 1回か検査コマンド1件が、timeoutの後に上乗せしうる停止と出力待ちの時間(秒)。ランナーの最大13秒を切り上げた値。worktreeのロックを待つ時間はコマンドのtimeoutの内側で数えるので含めない。 */
+export const PR_COMMAND_STOP_OVERHEAD_SEC = 15;
+
+export const PR_FIX_TIMEOUT_MISFIT_REASON =
+  "pr_fix time settings do not fit the flow step timeout";
+
+export const PR_REVIEW_TIMEOUT_MISFIT_REASON =
+  "pr_review time settings do not fit the flow step timeout";
+
+/** `claude_timeout_sec`で打ち切るClaudeの1回の実行の上限に、ランナーの停止の上乗せを足した秒数を返す。 */
+function perRunSec(claudeTimeoutSec: number): number {
+  return claudeTimeoutSec + PR_COMMAND_STOP_OVERHEAD_SEC;
+}
+
+/**
+ * Claudeを1回だけ実行するステップ(pr_fix_apply、pr_review_generate)の時間設定が、そのstep timeoutに収まらなければ理由を返し、収まればnullを返す。
+ * runClaudeは不正な出力の後に1回だけ再試行するので、Claudeは`claude_timeout_sec`まで2回走りうる。
+ */
+function singleClaudeStepMisfit(
+  reasonPrefix: string,
+  claudeTimeoutSec: number,
+  stepTimeoutSec: number,
+): string | null {
+  const total = 2 * perRunSec(claudeTimeoutSec) + PR_STEP_OVERRUN_BASE_SEC;
+  if (total <= stepTimeoutSec) return null;
+  return `${reasonPrefix}: 2 claude runs x (claude_timeout_sec ${String(claudeTimeoutSec)} + ${String(PR_COMMAND_STOP_OVERHEAD_SEC)}) + ${String(PR_STEP_OVERRUN_BASE_SEC)} = ${String(total)}s exceeds ${String(stepTimeoutSec)}s`;
+}
+
+/**
+ * pr_fixの時間設定が、flow.yamlの修正・検証ステップのtimeoutに収まらなければ理由を返し、収まればnullを返す。
+ * 収まらない設定で動かすと、アプリ側のtimeoutより先にWindmillがステップを打ち切り、作業項目は理由の分からない`failed`になるため、準備ステップで止める。
+ * 修正ステップはClaude 1回(不正な出力への再試行を含めて2回)で見積もる。
+ * 検証ステップは、検査コマンドがあるときだけ、全件の検査を2回とClaude 1回(同じく2回)で見積もる。
+ * 検査コマンドもClaudeと同じ`claude_timeout_sec`で打ち切る。
+ * 検査コマンドが無ければ、検証ステップは検査もClaudeも実行しない。
+ * 理由は`describeReason`が"; "で分けないよう、セミコロンを含めない。
+ */
+export function prFixTimeoutMisfit(
+  config: Pick<FactoryConfig, "claude_timeout_sec" | "allowed_check_commands">,
+): string | null {
+  const applyMisfit = singleClaudeStepMisfit(
+    PR_FIX_TIMEOUT_MISFIT_REASON,
+    config.claude_timeout_sec,
+    PR_FIX_APPLY_STEP_TIMEOUT_SEC,
+  );
+  if (applyMisfit !== null) return applyMisfit;
+  const checkCount = config.allowed_check_commands.length;
+  if (checkCount === 0) return null;
+  const verifyTotal =
+    (2 + 2 * checkCount) * perRunSec(config.claude_timeout_sec) +
+    PR_STEP_OVERRUN_BASE_SEC;
+  if (verifyTotal <= PR_FIX_VERIFY_STEP_TIMEOUT_SEC) return null;
+  return `${PR_FIX_TIMEOUT_MISFIT_REASON}: (2 claude runs + 2 x ${String(checkCount)} check commands) x (claude_timeout_sec ${String(config.claude_timeout_sec)} + ${String(PR_COMMAND_STOP_OVERHEAD_SEC)}) + ${String(PR_STEP_OVERRUN_BASE_SEC)} = ${String(verifyTotal)}s exceeds ${String(PR_FIX_VERIFY_STEP_TIMEOUT_SEC)}s`;
+}
+
+/**
+ * pr_reviewの時間設定が、flow.yamlのレビュー生成ステップのtimeoutに収まらなければ理由を返し、収まればnullを返す。
+ * 生成ステップがClaudeを起動する前に確かめ、収まらなければ`needs_human`にする。
+ */
+export function prReviewTimeoutMisfit(
+  config: Pick<FactoryConfig, "claude_timeout_sec">,
+): string | null {
+  return singleClaudeStepMisfit(
+    PR_REVIEW_TIMEOUT_MISFIT_REASON,
+    config.claude_timeout_sec,
+    PR_REVIEW_GENERATE_STEP_TIMEOUT_SEC,
+  );
+}
+
+// ---------------------------------------------------------------------------
 // pr_fix_collect: 新しいレビューとコメントの選別と、その結果(純粋関数)
 // ---------------------------------------------------------------------------
 
@@ -2952,6 +3041,22 @@ const REASON_RULES: readonly ReasonRule[] = [
       `実装フローの時間設定が、flow.yamlの実装・検証ステップのtimeoutに収まりません(${m[1]})`,
     nextAction: () =>
       "implement_flow_timeout_sec・implement_timeout_sec・implement_check_timeout_sec・検査コマンド数のいずれかを減らしてから、ConsoleのFailuresタブから再実行してください",
+  },
+  {
+    pattern:
+      /^pr_fix time settings do not fit the flow step timeout: ([\s\S]+)$/,
+    describe: (m) =>
+      `PR修正の時間設定が、flow.yamlの修正・検証ステップのtimeoutに収まりません(${m[1]})`,
+    nextAction: () =>
+      "claude_timeout_secか検査コマンド(allowed_check_commands)の数を減らしてから、ConsoleのFailuresタブから再実行してください",
+  },
+  {
+    pattern:
+      /^pr_review time settings do not fit the flow step timeout: ([\s\S]+)$/,
+    describe: (m) =>
+      `PRレビューの時間設定が、flow.yamlのレビュー生成ステップのtimeoutに収まりません(${m[1]})`,
+    nextAction: () =>
+      "claude_timeout_secを減らしてから、ConsoleのFailuresタブから再実行してください",
   },
 ];
 

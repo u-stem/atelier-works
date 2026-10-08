@@ -36,6 +36,7 @@ import {
   isReviewClaudeOutput,
   nextActionFor,
   openFindingsForPrompt,
+  prReviewTimeoutMisfit,
 } from "./pr_workflow_support.ts";
 
 const MAX_FINDINGS = 20;
@@ -82,10 +83,60 @@ export async function main(
   const oauthToken = await wmill.getVariable("f/factory/claude_oauth_token");
   const client: GhClient = { run: runCommand, ghToken };
 
+  /**
+   * Claudeを起動せずに作業項目を`reviewing`から`needs_human`へ遷移させ、遷移できたらDiscordへ通知する。
+   * pr_reviewには投稿しなかった結果を扱う後続ステップが無いため、`pr_review_post.ts`に回さずここで行う。
+   * `statusReason`は記録する理由、`displayReason`は通知の表示と次の操作を選ぶ理由である。
+   * 通知の失敗は警告を記録するだけで投げない。
+   */
+  async function moveToNeedsHuman(
+    statusReason: string,
+    displayReason: string,
+  ): Promise<void> {
+    const moved = await updateStatusIfCurrent(
+      work_item_id,
+      "reviewing",
+      "needs_human",
+      statusReason,
+    );
+    if (!moved) return;
+    // トリガーの`review_label`は確保の時点で`poll_prs.ts`が外しているので、
+    // ここで外すラベルは無い。
+    const webhookUrl = await wmill.getVariable("f/factory/discord_webhook_url");
+    if (webhookUrl.length === 0) return;
+    try {
+      const event: NotifyEvent = {
+        kind: "needs_human",
+        instance_name: config.instance_name,
+        owner,
+        repo,
+        url: `https://github.com/${owner}/${repo}/pull/${String(pr_number)}`,
+        reason: describeReason(displayReason),
+        target: { kind: "pr", number: pr_number },
+        next_action: nextActionFor(displayReason),
+      };
+      await notify(webhookUrl, event);
+    } catch (err) {
+      log.warn("discord notify failed", {
+        error: maskSecrets(err instanceof Error ? err.message : String(err)),
+      });
+    }
+  }
+
+  // 生成ステップの最悪の所要時間がflow.yamlのtimeoutに収まらない設定では、
+  // Windmillがアプリ側のtimeoutより先にステップを打ち切るため、Claudeを起動しない。
+  const timeoutMisfit = prReviewTimeoutMisfit(config);
+  if (timeoutMisfit !== null) {
+    log.warn("time settings do not fit the step timeout, not starting claude", {
+      work_item_id,
+      reason: timeoutMisfit,
+    });
+    await moveToNeedsHuman(timeoutMisfit, timeoutMisfit);
+    return SKIPPED_RESULT;
+  }
+
   // Claudeを呼ぶ前に、`pipeline_generate.ts`と同じ日次予算の検査をする
   // (`lib/claude.ts`の`dailyBudgetStatus`を使い、超過の判定とログの形も同じ)。
-  // pr_reviewには投稿しなかった結果を扱う後続ステップが無いため、
-  // `needs_human`への遷移とDiscordへの通知は`pr_review_post.ts`に回さずここで行う。
   const budgetStatus = await dailyBudgetStatus(config);
   if (budgetStatus.exceeded) {
     log.warn("daily budget exceeded, not starting claude", {
@@ -93,40 +144,10 @@ export async function main(
       spentToday: budgetStatus.spent_usd,
       dailyBudgetUsd: budgetStatus.limit_usd,
     });
-    const moved = await updateStatusIfCurrent(
-      work_item_id,
-      "reviewing",
-      "needs_human",
+    await moveToNeedsHuman(
       `daily budget exceeded ($${budgetStatus.spent_usd.toFixed(2)} >= $${budgetStatus.limit_usd.toFixed(2)})`,
+      "daily budget exceeded",
     );
-    if (moved) {
-      // トリガーの`review_label`は確保の時点で`poll_prs.ts`が外しているので、
-      // ここで外すラベルは無い。
-      const webhookUrl = await wmill.getVariable(
-        "f/factory/discord_webhook_url",
-      );
-      if (webhookUrl.length > 0) {
-        try {
-          const event: NotifyEvent = {
-            kind: "needs_human",
-            instance_name: config.instance_name,
-            owner,
-            repo,
-            url: `https://github.com/${owner}/${repo}/pull/${String(pr_number)}`,
-            reason: describeReason("daily budget exceeded"),
-            target: { kind: "pr", number: pr_number },
-            next_action: nextActionFor("daily budget exceeded"),
-          };
-          await notify(webhookUrl, event);
-        } catch (err) {
-          log.warn("discord notify failed", {
-            error: maskSecrets(
-              err instanceof Error ? err.message : String(err),
-            ),
-          });
-        }
-      }
-    }
     return { ...SKIPPED_RESULT, budget_exceeded: true };
   }
 

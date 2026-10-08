@@ -12,6 +12,9 @@ value:
             type: javascript
             expr: flow_input.work_item_id
         path: f/factory/steps/pr_fix_prepare
+      timeout:
+        type: static
+        value: 1800
     - id: pr_fix_collect
       summary: '[SF-3-2/2] 指摘の収集'
       value:
@@ -32,6 +35,9 @@ value:
         path: f/factory/steps/pr_fix_collect
       skip_if:
         expr: results.pr_fix_prepare.outcome !== "proceed"
+      timeout:
+        type: static
+        value: 600
     - id: pr_fix_apply
       summary: '[SF-3-2/3] 修正の適用(Claude)'
       value:
@@ -78,6 +84,9 @@ value:
       skip_if:
         expr: results.pr_fix_prepare.outcome !== "proceed" ||
           results.pr_fix_collect?.outcome !== "proceed"
+      timeout:
+        type: static
+        value: 7200
     - id: pr_fix_verify
       summary: '[SF-3-2/4] 変更の検証'
       value:
@@ -135,6 +144,9 @@ value:
       skip_if:
         expr: results.pr_fix_prepare.outcome !== "proceed" ||
           results.pr_fix_collect?.outcome !== "proceed"
+      timeout:
+        type: static
+        value: 21600
     - id: pr_fix_finish
       summary: '[SF-3-2/5] push と再レビュー依頼'
       value:
@@ -207,6 +219,9 @@ value:
             type: javascript
             expr: results.pr_fix_prepare.worktree_dir
         path: f/factory/steps/pr_fix_finish
+      timeout:
+        type: static
+        value: 5400
   failure_module:
     id: failure
     value:

@@ -21,7 +21,7 @@ import {
   resolveReviewThread,
   withMarker,
 } from "../lib/github.ts";
-import { logger, maskSecrets } from "../lib/log.ts";
+import { type Logger, logger, maskSecrets } from "../lib/log.ts";
 import {
   isOneOf,
   type ReviewFinding,
@@ -49,12 +49,89 @@ export type PrReviewPostResult = {
   readonly posted_review_id: string | null;
 };
 
+/** `main`の引数をまとめたもの。名前は`main`の引数と同じにする。 */
+export type PrReviewPostInput = {
+  readonly work_item_id: number;
+  readonly skip: boolean;
+  readonly owner: string;
+  readonly repo: string;
+  readonly pr_number: number;
+  readonly review_sha: string;
+  readonly summary: string;
+  readonly verdict: string | null;
+  readonly findings: ReviewFinding[];
+  readonly pr_files: string[];
+  readonly worktree_dir: string;
+  readonly repo_dir: string;
+};
+
+export type PrReviewPostDeps = {
+  /** `repoDir`のcloneから、reviewのdetachedのworktree`dir`を消す。 */
+  readonly removeReviewWorktree: (
+    repoDir: string,
+    dir: string,
+  ) => Promise<void>;
+  readonly log: Logger;
+};
+
+const SKIPPED_POST: PrReviewPostResult = {
+  skip: true,
+  posted: false,
+  posted_review_id: null,
+};
+
+/**
+ * `main`の引数で`runPrReviewPost`を呼ぶ。
+ * Windmillは`main`の引数から入力のスキーマを作るので、差し替えられる依存は`runPrReviewPost`に分けている。
+ */
+export async function main(
+  work_item_id: number,
+  skip: boolean,
+  owner: string,
+  repo: string,
+  pr_number: number,
+  review_sha: string,
+  summary: string,
+  verdict: string | null,
+  findings: ReviewFinding[],
+  pr_files: string[],
+  worktree_dir: string,
+  repo_dir: string,
+): Promise<PrReviewPostResult> {
+  return runPrReviewPost(
+    {
+      work_item_id,
+      skip,
+      owner,
+      repo,
+      pr_number,
+      review_sha,
+      summary,
+      verdict,
+      findings,
+      pr_files,
+      worktree_dir,
+      repo_dir,
+    },
+    {
+      removeReviewWorktree: (repoDir, dir) =>
+        removeWorktree({ run: runCommand, repoDir, dir, force: true }),
+      log: logger("pr_review_post"),
+    },
+  );
+}
+
 /**
  * レビューを投稿・記録し、投稿したかどうかとレビューのidを返す。
- * `skip`が真か`verdict`がnullなら何もせずに返し、
+ * `worktree_dir`が空でなければ、投稿の有無や成否に関わらず最後にreviewのworktreeを消す。
+ * 生成ステップが早く抜けた(日次予算の超過や、時間設定がstep timeoutに収まらない)ときも消すのは、
+ * 残ると同じshaを再実行したときに`git worktree add`が既存のパスで失敗するためである。
+ * 準備ステップが飛ばした実行はworktreeを作っていない(`worktree_dir`が空)ので、何も消さない。
+ * 削除の失敗は警告を記録するだけで投げない。
+ *
+ * `skip`が真か`verdict`がnullなら投稿せずに返し、
  * 作業項目が既に"reviewing"でなければ投稿しない。
  * `verdict`が想定外の値なら例外を投げる。
- * worktreeは成否に関わらず最後に消す。
  *
  * GitHubのレビューのeventは常にCOMMENTで、approve / request_changesは使わない
  * (factory-reviewスキルの方針)。`verdict`は`factory.reviews`とDiscordにだけ残す。
@@ -77,24 +154,46 @@ export type PrReviewPostResult = {
  * noticeを残すが、`createPrReview`は呼ばない。
  * "gated"は予約済みの値で、承認を経て投稿するUIはまだ無い。
  */
-export async function main(
-  work_item_id: number,
-  skip: boolean,
-  owner: string,
-  repo: string,
-  pr_number: number,
-  review_sha: string,
-  summary: string,
-  verdict: string | null,
-  findings: ReviewFinding[],
-  pr_files: string[],
-  worktree_dir: string,
-  repo_dir: string,
+export async function runPrReviewPost(
+  input: PrReviewPostInput,
+  deps: PrReviewPostDeps,
 ): Promise<PrReviewPostResult> {
-  const log = logger("pr_review_post");
+  try {
+    return await postReview(input, deps.log);
+  } finally {
+    if (input.worktree_dir !== "") {
+      try {
+        await deps.removeReviewWorktree(input.repo_dir, input.worktree_dir);
+      } catch (err) {
+        deps.log.warn("failed to remove review worktree", {
+          worktree_dir: input.worktree_dir,
+          error: maskSecrets(err instanceof Error ? err.message : String(err)),
+        });
+      }
+    }
+  }
+}
+
+/** `runPrReviewPost`のworktreeの削除を除いた本体。 */
+async function postReview(
+  input: PrReviewPostInput,
+  log: Logger,
+): Promise<PrReviewPostResult> {
+  const {
+    work_item_id,
+    skip,
+    owner,
+    repo,
+    pr_number,
+    review_sha,
+    summary,
+    verdict,
+    findings,
+    pr_files,
+  } = input;
 
   if (skip || verdict === null) {
-    return { skip: true, posted: false, posted_review_id: null };
+    return SKIPPED_POST;
   }
   if (!isOneOf(verdict, REVIEW_VERDICTS)) {
     throw new Error(`pr_review_post: unexpected verdict "${verdict}"`);
@@ -106,191 +205,169 @@ export async function main(
   const ghToken = await wmill.getVariable("f/factory/github_token");
   const client: GhClient = { run: runCommand, ghToken };
 
-  try {
-    const currentItem = await getWorkItem(work_item_id);
-    if (currentItem === null) {
-      throw new Error(`pr_review_post: no work item with id ${work_item_id}`);
-    }
-    if (currentItem.status !== "reviewing") {
-      log.warn("work item is no longer reviewing; not posting", {
-        work_item_id,
-        status: currentItem.status,
-      });
-      return { skip: true, posted: false, posted_review_id: null };
-    }
-
-    const { comments, droppedFindings } = mapFindingsToReviewComments(
-      findings,
-      pr_files,
-    );
-    const pr = await getPr(client, owner, repo, pr_number);
-    const priorReview = await hasPriorReview(
-      owner,
-      repo,
-      pr_number,
+  const currentItem = await getWorkItem(work_item_id);
+  if (currentItem === null) {
+    throw new Error(`pr_review_post: no work item with id ${work_item_id}`);
+  }
+  if (currentItem.status !== "reviewing") {
+    log.warn("work item is no longer reviewing; not posting", {
       work_item_id,
-    );
-
-    // スレッドの一覧、`selectThreadsToResolve`が解決するid、
-    // 解決後に残るFactory自身の`[MUST]`スレッドの数は、すべて本文の種類より先に決める。
-    // 新しい指摘が無くても古い`[MUST]`が未解決なら、
-    // 単なるLGTMではなく`"rereview_open"`にするため。
-    // 初回のレビューにはまだスレッドが無く、取得してもAPIを余分に使うだけなので、
-    // `priorReview`のときだけ取得する。
-    // ここで失敗してもレビューの投稿は止めない。
-    // `threads`は空のままになり、`threadIdsToResolve`と`openMustCount`は0になって、
-    // `mode`は"findings" / "rereview_clean" / "first_clean"のいずれかに落ちる。
-    let threads: ReviewThread[] = [];
-    let viewerLogin = "";
-    if (priorReview) {
-      try {
-        const viewer = await getViewer(client);
-        viewerLogin = viewer.login;
-        threads = await listReviewThreads(client, owner, repo, pr_number);
-      } catch (err) {
-        log.warn("failed to list review threads for resolving", {
-          owner,
-          repo,
-          number: pr_number,
-          error: maskSecrets(err instanceof Error ? err.message : String(err)),
-        });
-      }
-    }
-    // `resolveMode`は`openMustCount`を0として求めるので、
-    // `selectThreadsToResolve`が扱える"findings" / "rereview_clean" / "first_clean"の
-    // いずれかに必ずなる。
-    // "rereview_open"になりうるのは、実際の`openMustCount`を渡す2回目の
-    // `decideReviewBodyMode`だけ。
-    const resolveMode = decideReviewBodyMode(
-      comments.length,
-      droppedFindings.length,
-      priorReview,
-      0,
-    );
-    const threadIdsToResolve = selectThreadsToResolve(
-      threads,
-      viewerLogin,
-      resolveMode,
-    );
-    const openMustCount = countOpenMustThreads(
-      threads,
-      viewerLogin,
-      threadIdsToResolve,
-    );
-    const mode = decideReviewBodyMode(
-      comments.length,
-      droppedFindings.length,
-      priorReview,
-      openMustCount,
-    );
-    const body = withMarker(
-      "pr_review",
-      work_item_id,
-      renderReviewSummary(
-        pr.authorLogin,
-        comments.length,
-        mode,
-        droppedFindings,
-        openMustCount,
-      ),
-    );
-
-    let postedReviewId: string | null = null;
-    let notice: string | null = null;
-    if (config.review_post_mode === "comment_only") {
-      const created = await createPrReview(client, owner, repo, pr_number, {
-        event: "COMMENT",
-        body,
-        comments,
-      });
-      postedReviewId = String(created.id);
-
-      // 再レビューのたびに、pr_fixが対応済みのFactory自身のスレッドを解決する。
-      // 投稿済みのレビューの扱いを妨げないよう、解決に失敗してもステップは失敗させない。
-      // `threadIdsToResolve`は、本文の種類を決めたのと同じ解決前の`threads`から求めてある。
-      for (const threadId of threadIdsToResolve) {
-        try {
-          await resolveReviewThread(client, threadId);
-        } catch (err) {
-          log.warn("failed to resolve review thread", {
-            owner,
-            repo,
-            number: pr_number,
-            threadId,
-            error: maskSecrets(
-              err instanceof Error ? err.message : String(err),
-            ),
-          });
-        }
-      }
-    } else {
-      notice = "review_post_mode is gated: recorded without posting";
-    }
-
-    await insertReview({
-      work_item_id,
-      head_sha: review_sha,
-      verdict,
-      summary,
-      findings,
-      posted_review_id: postedReviewId,
+      status: currentItem.status,
     });
+    return { skip: true, posted: false, posted_review_id: null };
+  }
 
-    const moved = await updateStatusIfCurrent(
-      work_item_id,
-      "reviewing",
-      "reviewed",
-      notice,
-    );
-    if (moved) {
-      // トリガーの`review_label`は`poll_prs.ts`が着手時に消費済みなので、
-      // ここで外すラベルも、付けるPRの状態ラベルも無い。
-      const result = reviewResultFor(findings, openMustCount);
-      const webhookUrl = await wmill.getVariable(
-        "f/factory/discord_webhook_url",
-      );
-      if (webhookUrl.length > 0) {
-        const event: NotifyEvent = {
-          kind: "pr_reviewed",
-          instance_name: config.instance_name,
-          owner,
-          repo,
-          pr_number,
-          pr_url: `https://github.com/${owner}/${repo}/pull/${String(pr_number)}`,
-          verdict,
-          finding_count: findings.length,
-          result,
-        };
-        try {
-          await notify(webhookUrl, event);
-        } catch (err) {
-          log.warn("discord notify failed", {
-            error: maskSecrets(
-              err instanceof Error ? err.message : String(err),
-            ),
-          });
-        }
-      }
-    }
+  const { comments, droppedFindings } = mapFindingsToReviewComments(
+    findings,
+    pr_files,
+  );
+  const pr = await getPr(client, owner, repo, pr_number);
+  const priorReview = await hasPriorReview(
+    owner,
+    repo,
+    pr_number,
+    work_item_id,
+  );
 
-    return {
-      skip: false,
-      posted: postedReviewId !== null,
-      posted_review_id: postedReviewId,
-    };
-  } finally {
+  // スレッドの一覧、`selectThreadsToResolve`が解決するid、
+  // 解決後に残るFactory自身の`[MUST]`スレッドの数は、すべて本文の種類より先に決める。
+  // 新しい指摘が無くても古い`[MUST]`が未解決なら、
+  // 単なるLGTMではなく`"rereview_open"`にするため。
+  // 初回のレビューにはまだスレッドが無く、取得してもAPIを余分に使うだけなので、
+  // `priorReview`のときだけ取得する。
+  // ここで失敗してもレビューの投稿は止めない。
+  // `threads`は空のままになり、`threadIdsToResolve`と`openMustCount`は0になって、
+  // `mode`は"findings" / "rereview_clean" / "first_clean"のいずれかに落ちる。
+  let threads: ReviewThread[] = [];
+  let viewerLogin = "";
+  if (priorReview) {
     try {
-      await removeWorktree({
-        run: runCommand,
-        repoDir: repo_dir,
-        dir: worktree_dir,
-        force: true,
-      });
+      const viewer = await getViewer(client);
+      viewerLogin = viewer.login;
+      threads = await listReviewThreads(client, owner, repo, pr_number);
     } catch (err) {
-      log.warn("failed to remove review worktree", {
-        worktree_dir,
+      log.warn("failed to list review threads for resolving", {
+        owner,
+        repo,
+        number: pr_number,
         error: maskSecrets(err instanceof Error ? err.message : String(err)),
       });
     }
   }
+  // `resolveMode`は`openMustCount`を0として求めるので、
+  // `selectThreadsToResolve`が扱える"findings" / "rereview_clean" / "first_clean"の
+  // いずれかに必ずなる。
+  // "rereview_open"になりうるのは、実際の`openMustCount`を渡す2回目の
+  // `decideReviewBodyMode`だけ。
+  const resolveMode = decideReviewBodyMode(
+    comments.length,
+    droppedFindings.length,
+    priorReview,
+    0,
+  );
+  const threadIdsToResolve = selectThreadsToResolve(
+    threads,
+    viewerLogin,
+    resolveMode,
+  );
+  const openMustCount = countOpenMustThreads(
+    threads,
+    viewerLogin,
+    threadIdsToResolve,
+  );
+  const mode = decideReviewBodyMode(
+    comments.length,
+    droppedFindings.length,
+    priorReview,
+    openMustCount,
+  );
+  const body = withMarker(
+    "pr_review",
+    work_item_id,
+    renderReviewSummary(
+      pr.authorLogin,
+      comments.length,
+      mode,
+      droppedFindings,
+      openMustCount,
+    ),
+  );
+
+  let postedReviewId: string | null = null;
+  let notice: string | null = null;
+  if (config.review_post_mode === "comment_only") {
+    const created = await createPrReview(client, owner, repo, pr_number, {
+      event: "COMMENT",
+      body,
+      comments,
+    });
+    postedReviewId = String(created.id);
+
+    // 再レビューのたびに、pr_fixが対応済みのFactory自身のスレッドを解決する。
+    // 投稿済みのレビューの扱いを妨げないよう、解決に失敗してもステップは失敗させない。
+    // `threadIdsToResolve`は、本文の種類を決めたのと同じ解決前の`threads`から求めてある。
+    for (const threadId of threadIdsToResolve) {
+      try {
+        await resolveReviewThread(client, threadId);
+      } catch (err) {
+        log.warn("failed to resolve review thread", {
+          owner,
+          repo,
+          number: pr_number,
+          threadId,
+          error: maskSecrets(err instanceof Error ? err.message : String(err)),
+        });
+      }
+    }
+  } else {
+    notice = "review_post_mode is gated: recorded without posting";
+  }
+
+  await insertReview({
+    work_item_id,
+    head_sha: review_sha,
+    verdict,
+    summary,
+    findings,
+    posted_review_id: postedReviewId,
+  });
+
+  const moved = await updateStatusIfCurrent(
+    work_item_id,
+    "reviewing",
+    "reviewed",
+    notice,
+  );
+  if (moved) {
+    // トリガーの`review_label`は`poll_prs.ts`が着手時に消費済みなので、
+    // ここで外すラベルも、付けるPRの状態ラベルも無い。
+    const result = reviewResultFor(findings, openMustCount);
+    const webhookUrl = await wmill.getVariable("f/factory/discord_webhook_url");
+    if (webhookUrl.length > 0) {
+      const event: NotifyEvent = {
+        kind: "pr_reviewed",
+        instance_name: config.instance_name,
+        owner,
+        repo,
+        pr_number,
+        pr_url: `https://github.com/${owner}/${repo}/pull/${String(pr_number)}`,
+        verdict,
+        finding_count: findings.length,
+        result,
+      };
+      try {
+        await notify(webhookUrl, event);
+      } catch (err) {
+        log.warn("discord notify failed", {
+          error: maskSecrets(err instanceof Error ? err.message : String(err)),
+        });
+      }
+    }
+  }
+
+  return {
+    skip: false,
+    posted: postedReviewId !== null,
+    posted_review_id: postedReviewId,
+  };
 }
