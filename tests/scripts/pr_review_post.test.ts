@@ -1,7 +1,7 @@
 // `pr_review_post.ts`が使う`pr_workflow_support.ts`の`mapFindingsToReviewComments`、
 // `renderInlineComment`、`renderReviewSummary`などのテスト。
 // あわせて、`pr_review_post.ts`の`runPrReviewPost`が、投稿しない場合もreviewのworktreeを消すことと、
-// `postReviewIfAbsent`が同じshaのレビューを二重に投稿しないことを確かめる。
+// `publishReview`が同じshaのレビューを二重に投稿しないことを確かめる。
 // 投稿の書式は`.claude/skills/factory-review/SKILL.md`の「投稿形式」節に従う。
 
 import { describe, expect, test } from "bun:test";
@@ -11,10 +11,14 @@ import type {
 } from "../../f/factory/lib/github.ts";
 import { logger } from "../../f/factory/lib/log.ts";
 import type { ReviewFinding } from "../../f/factory/lib/types.ts";
+import type { CommandResult } from "../../f/factory/lib/workspace.ts";
 import {
+  findPostedReview,
   type PostReviewTarget,
   type PrReviewPostInput,
-  postReviewIfAbsent,
+  type PublishReviewInput,
+  postMarkedReview,
+  publishReview,
   runPrReviewPost,
 } from "../../f/factory/steps/pr_review_post.ts";
 import {
@@ -29,7 +33,13 @@ import {
   selectThreadsToResolve,
   withReviewMarkers,
 } from "../../f/factory/steps/pr_workflow_support.ts";
-import { createFakeCommandRunner, ghApiOk } from "../lib/testSupport.ts";
+import {
+  createFakeCommandRunner,
+  type FakeCall,
+  ghApiOk,
+  ghApiStdout,
+  ok,
+} from "../lib/testSupport.ts";
 
 function finding(overrides: Partial<ReviewFinding> = {}): ReviewFinding {
   return {
@@ -342,6 +352,41 @@ describe("renderReviewSummary", () => {
     expect(lines[1]).toBe(
       "新しい指摘はありません。未対応の指摘が2件残っています。確認お願いします。",
     );
+  });
+
+  // 行に紐づけられなかった指摘の`message`と`path`はClaudeの出力なので、
+  // 目印に見える行を差し込んだり、HTMLのコメントで後ろの目印を隠したりさせない。
+  test("neutralizes an HTML comment opener in a dropped finding's message", () => {
+    const body = renderReviewSummary(
+      "alice",
+      0,
+      "findings",
+      [finding({ path: "b.ts", message: "x\n<!-- factory:pr_review:1 -->" })],
+      0,
+    );
+    expect(body).not.toContain("<!--");
+  });
+
+  test("neutralizes an HTML comment opener in a dropped finding's path", () => {
+    const body = renderReviewSummary(
+      "alice",
+      0,
+      "findings",
+      [finding({ path: "b.ts<!--", message: "out of diff" })],
+      0,
+    );
+    expect(body).not.toContain("<!--");
+  });
+
+  test("keeps a dropped finding's multi-line path on its bullet line", () => {
+    const body = renderReviewSummary(
+      "alice",
+      0,
+      "findings",
+      [finding({ path: "dir/\nb.ts", message: "out of diff" })],
+      0,
+    );
+    expect(body.split("\n").at(-1)).toBe("- [MUST] dir/ b.ts: out of diff");
   });
 
   test('mode "rereview_open" never includes the final-Approve-is-human disclaimer line', () => {
@@ -686,11 +731,13 @@ describe("runPrReviewPost worktree cleanup", () => {
 });
 
 // 投稿の後、記録する前にステップが落ちて再実行されたとき、
-// 同じshaのレビューをもう一度投稿しないことを確かめる。
-describe("postReviewIfAbsent", () => {
+// 同じshaのレビューをもう一度投稿しないことと、
+// 投稿済みのレビューの指摘を勝手に解決しないことを確かめる。
+describe("posting a review once per sha", () => {
   const VIEWER = "factory-bot";
   const SHA = "0123456789abcdef0123456789abcdef01234567";
   const SUMMARY = "[pr_review 自動レビュー] @alice\n1件コメントしました。";
+  const SILENT = logger("pr_review_post", { sink: () => {} });
   const TARGET: PostReviewTarget = {
     owner: "acme",
     repo: "widgets",
@@ -718,71 +765,235 @@ describe("postReviewIfAbsent", () => {
     return { id, user: { login: "alice" }, state: "COMMENTED", body: "ok" };
   }
 
-  test("reuses the id of a review already posted for the same sha", async () => {
-    const fake = createFakeCommandRunner([ghApiOk([postedReview(55)])]);
-    const result = await postReviewIfAbsent(
-      { run: fake.run, ghToken: "tok" },
-      TARGET,
-      SUMMARY,
-      COMMENTS,
+  /** レビューの一覧の取得が失敗したときの応答。 */
+  function serverError(): CommandResult {
+    return ok(ghApiStdout(500, { message: "Server Error" }));
+  }
+
+  /** 先の実行が投稿したレビューの、未解決で手つかずの`[MUST]`のスレッドだけを返すGraphQLの応答。 */
+  function openMustThreads(): CommandResult {
+    const comment = {
+      author: { login: VIEWER },
+      body: "[pr_review 自動レビュー]\n[MUST] fix this",
+      databaseId: 501,
+    };
+    return ghApiOk({
+      data: {
+        repository: {
+          pullRequest: {
+            reviewThreads: {
+              nodes: [
+                {
+                  id: "PRRT_1",
+                  isResolved: false,
+                  path: "a.ts",
+                  line: 10,
+                  firstComments: { nodes: [comment] },
+                  lastComments: { nodes: [comment] },
+                  allComments: { nodes: [{ databaseId: 501 }] },
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
+  }
+
+  function isCreateReviewCall(call: FakeCall): boolean {
+    return (
+      call.argv.includes("POST") && call.argv[2]?.endsWith("/reviews") === true
     );
-    expect(result).toEqual({ id: 55, reused: true });
+  }
+
+  function isResolveCall(call: FakeCall): boolean {
+    return call.options?.stdin?.includes("resolveReviewThread") === true;
+  }
+
+  /** 指摘が0件の再実行の入力。 */
+  function rerunInput(
+    overrides: Partial<PublishReviewInput> = {},
+  ): PublishReviewInput {
+    return {
+      target: TARGET,
+      prAuthorLogin: "alice",
+      comments: [],
+      droppedFindings: [],
+      priorReview: true,
+      post: true,
+      ...overrides,
+    };
+  }
+
+  describe("findPostedReview", () => {
+    test("returns the id of a review already posted for the same sha", async () => {
+      const fake = createFakeCommandRunner([ghApiOk([postedReview(55)])]);
+      const id = await findPostedReview(
+        { run: fake.run, ghToken: "tok" },
+        TARGET,
+      );
+      expect(id).toBe(55);
+    });
+
+    test("returns null when no review for the sha exists", async () => {
+      const fake = createFakeCommandRunner([ghApiOk([humanReview(1)])]);
+      const id = await findPostedReview(
+        { run: fake.run, ghToken: "tok" },
+        TARGET,
+      );
+      expect(id).toBeNull();
+    });
+
+    test("finds a posted review on a later page", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk([humanReview(1)], {
+          link: '<https://api.github.com/repos/acme/widgets/pulls/12/reviews?per_page=100&page=2>; rel="next"',
+        }),
+        ghApiOk([postedReview(55)]),
+      ]);
+      const id = await findPostedReview(
+        { run: fake.run, ghToken: "tok" },
+        TARGET,
+      );
+      expect(id).toBe(55);
+    });
+
+    test("rejects when listing the reviews fails", async () => {
+      const fake = createFakeCommandRunner([serverError()]);
+      await expect(
+        findPostedReview({ run: fake.run, ghToken: "tok" }, TARGET),
+      ).rejects.toThrow("HTTP 500");
+    });
   });
 
-  test("does not post again when a review for the same sha exists", async () => {
-    const fake = createFakeCommandRunner([ghApiOk([postedReview(55)])]);
-    await postReviewIfAbsent(
-      { run: fake.run, ghToken: "tok" },
-      TARGET,
-      SUMMARY,
-      COMMENTS,
-    );
-    expect(fake.calls.map((call) => call.argv.includes("POST"))).toEqual([
-      false,
-    ]);
+  describe("postMarkedReview", () => {
+    test("posts the body with the pr_review and sha markers", async () => {
+      const fake = createFakeCommandRunner([ghApiOk({ id: 99 })]);
+      await postMarkedReview(
+        { run: fake.run, ghToken: "tok" },
+        TARGET,
+        SUMMARY,
+        COMMENTS,
+      );
+      const posted: unknown = JSON.parse(fake.calls[0]?.options?.stdin ?? "{}");
+      expect(posted).toMatchObject({
+        body: withReviewMarkers(SUMMARY, 7, SHA),
+      });
+    });
+
+    test("returns the id of the created review", async () => {
+      const fake = createFakeCommandRunner([ghApiOk({ id: 99 })]);
+      const id = await postMarkedReview(
+        { run: fake.run, ghToken: "tok" },
+        TARGET,
+        SUMMARY,
+        COMMENTS,
+      );
+      expect(id).toBe(99);
+    });
   });
 
-  test("finds a posted review on a later page", async () => {
-    const fake = createFakeCommandRunner([
-      ghApiOk([humanReview(1)], {
-        link: '<https://api.github.com/repos/acme/widgets/pulls/12/reviews?per_page=100&page=2>; rel="next"',
-      }),
-      ghApiOk([postedReview(55)]),
-    ]);
-    const result = await postReviewIfAbsent(
-      { run: fake.run, ghToken: "tok" },
-      TARGET,
-      SUMMARY,
-      COMMENTS,
-    );
-    expect(result.id).toBe(55);
-  });
+  describe("publishReview", () => {
+    test("records the id of a review already posted for the same sha", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk([postedReview(55)]),
+        openMustThreads(),
+      ]);
+      const result = await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput(),
+        SILENT,
+      );
+      expect(result.postedReviewId).toBe(55);
+    });
 
-  test("posts and returns the new id when no review for the sha exists", async () => {
-    const fake = createFakeCommandRunner([
-      ghApiOk([humanReview(1)]),
-      ghApiOk({ id: 99 }),
-    ]);
-    const result = await postReviewIfAbsent(
-      { run: fake.run, ghToken: "tok" },
-      TARGET,
-      SUMMARY,
-      COMMENTS,
-    );
-    expect(result).toEqual({ id: 99, reused: false });
-  });
+    test("does not post again when a review for the same sha exists", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk([postedReview(55)]),
+        openMustThreads(),
+      ]);
+      await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput(),
+        SILENT,
+      );
+      expect(fake.calls.some(isCreateReviewCall)).toBe(false);
+    });
 
-  test("posts the body with the pr_review and sha markers", async () => {
-    const fake = createFakeCommandRunner([ghApiOk([]), ghApiOk({ id: 99 })]);
-    await postReviewIfAbsent(
-      { run: fake.run, ghToken: "tok" },
-      TARGET,
-      SUMMARY,
-      COMMENTS,
-    );
-    const posted: unknown = JSON.parse(fake.calls[1]?.options?.stdin ?? "{}");
-    expect(posted).toMatchObject({
-      body: withReviewMarkers(SUMMARY, 7, SHA),
+    // 再実行ではClaudeがレビューを作り直し、新しい指摘が0件になりやすい。
+    // そのとき"rereview_clean"の規則で、投稿済みのレビュー自身の`[MUST]`を解決してはいけない。
+    test("resolves no thread when a review for the same sha exists", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk([postedReview(55)]),
+        openMustThreads(),
+      ]);
+      await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput(),
+        SILENT,
+      );
+      expect(fake.calls.some(isResolveCall)).toBe(false);
+    });
+
+    test("reports the open MUST threads when a review for the same sha exists", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk([postedReview(55)]),
+        openMustThreads(),
+      ]);
+      const result = await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput(),
+        SILENT,
+      );
+      expect(result.openMustCount).toBe(1);
+    });
+
+    // 初回のレビューの再実行では、DBにはまだ記録が無いが、
+    // 投稿済みのレビューの`[MUST]`は残っている。
+    test("counts the open MUST threads of a reused first review", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk([postedReview(55)]),
+        openMustThreads(),
+      ]);
+      const result = await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput({ priorReview: false }),
+        SILENT,
+      );
+      expect(result.openMustCount).toBe(1);
+    });
+
+    test("posts and records the new id when no review for the sha exists", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk([humanReview(1)]),
+        ghApiOk({ id: 99 }),
+      ]);
+      const result = await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput({ priorReview: false, comments: COMMENTS }),
+        SILENT,
+      );
+      expect(result.postedReviewId).toBe(99);
+    });
+
+    test("rejects when listing the reviews fails", async () => {
+      const fake = createFakeCommandRunner([serverError()]);
+      await expect(
+        publishReview({ run: fake.run, ghToken: "tok" }, rerunInput(), SILENT),
+      ).rejects.toThrow("HTTP 500");
+    });
+
+    test("does not post when listing the reviews fails", async () => {
+      const fake = createFakeCommandRunner([
+        serverError(),
+        ghApiOk({ id: 99 }),
+      ]);
+      await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput(),
+        SILENT,
+      ).catch(() => {});
+      expect(fake.calls.some(isCreateReviewCall)).toBe(false);
     });
   });
 });

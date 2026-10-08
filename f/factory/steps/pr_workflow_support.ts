@@ -9,7 +9,6 @@ import { mkdtemp, readlink, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import {
-  hasMarker,
   isOwnPost,
   type PrReview,
   type ReviewThread,
@@ -457,6 +456,9 @@ export function decideReviewBodyMode(
  * 1行目は`pr_review`の投稿と分かる役割タグと`@author`へのメンション、
  * 2行目は`mode`で選ぶ4つの固定の文、インラインに投稿できなかった指摘があれば
  * その箇条書きを続ける。
+ * 箇条書きの`path`は改行を空白にまとめて1行にし、`path`と`message`の`<!--`は
+ * `neutralizeHtmlComment`で無害にする。どちらもClaudeの出力で、
+ * 本文の末尾の目印を偽ったり隠したりさせないため。
  * Claudeの`summary`はここに載せない(`factory.reviews`への記録とDiscordだけに使う)。
  * `verdict`も同じく載せない(DBとDiscordだけで、PRの本文には出さない)。
  * `<!-- factory:pr_review:<id> -->`とレビューしたshaの印は、呼び出し側が`withReviewMarkers`で足す。
@@ -503,12 +505,26 @@ export function renderReviewSummary(
     lines.push("", "(行に紐づけられなかった指摘)");
     for (const finding of droppedFindings) {
       const prefix = REVIEW_FINDING_KIND_PREFIXES[finding.kind];
-      lines.push(
-        `- ${prefix} ${finding.path}: ${normalizeJapaneseText(finding.message)}`,
+      const path = neutralizeHtmlComment(
+        finding.path.replace(/\s*[\r\n]+\s*/g, " "),
       );
+      const message = neutralizeHtmlComment(
+        normalizeJapaneseText(finding.message),
+      );
+      lines.push(`- ${prefix} ${path}: ${message}`);
     }
   }
   return lines.join("\n");
+}
+
+/**
+ * HTMLのコメントの開始`<!--`を`&lt;!--`に置き換える。
+ * 総評に載せるClaudeの出力が、目印に見える行を差し込んだり、
+ * 閉じないコメントで後ろの目印を表示から隠したりしないようにする。
+ * GitHubの表示では`&lt;!--`も`<!--`と同じ見た目になる。
+ */
+function neutralizeHtmlComment(text: string): string {
+  return text.replaceAll("<!--", "&lt;!--");
 }
 
 /**
@@ -696,9 +712,11 @@ export type PostedReviewCandidate = Pick<
 /**
  * この作業項目が`reviewSha`に対して投稿済みのレビューを探し、最初に見つかったもののidを返す。
  * 無ければnullを返す。
- * 投稿者が`viewer`で(大文字小文字を区別しない)、本文の最後の行が
- * この作業項目の`pr_review`の目印で、本文に`reviewSha`の目印の行があるものを投稿済みとみなす。
+ * 投稿者が`viewer`で(大文字小文字を区別しない)、本文が`withReviewMarkers`の足す
+ * 2つの目印(`reviewSha`の目印と、この作業項目の`pr_review`の目印)でこの順に終わるものを
+ * 投稿済みとみなす。末尾の空白は無視し、改行のCRLFはLFとして比べる。
  * 目印は誰でも本文に貼り付けられるので、投稿者も確かめる。
+ * 目印の位置まで確かめるのは、本文の途中に貼られたshaの目印に一致させないため。
  * shaの目印の無いレビューは、どのshaに対するものか分からないので一致させない。
  */
 export function findPostedReviewId(
@@ -707,12 +725,11 @@ export function findPostedReviewId(
   workItemId: number,
   reviewSha: string,
 ): number | null {
-  const shaLine = reviewShaMarkerLine(reviewSha);
+  const trailer = withReviewMarkers("", workItemId, reviewSha);
   const found = reviews.find(
     (review) =>
       isOwnPost(review.authorLogin, viewer) &&
-      hasMarker(review.body, "pr_review", workItemId) &&
-      review.body.split("\n").some((line) => line.trim() === shaLine),
+      review.body.replace(/\r\n/g, "\n").replace(/\s+$/, "").endsWith(trailer),
   );
   return found === undefined ? null : found.id;
 }

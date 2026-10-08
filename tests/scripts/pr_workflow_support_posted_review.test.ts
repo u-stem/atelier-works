@@ -95,4 +95,28 @@ describe("findPostedReviewId", () => {
   test("returns null when there are no reviews", () => {
     expect(findPostedReviewId([], VIEWER, 7, SHA)).toBeNull();
   });
+
+  // 本文の途中に貼り付けられたshaの目印は、投稿済みの証拠にならない。
+  test("returns null when the sha marker is in the middle of the body", () => {
+    const forged = withMarker(
+      "pr_review",
+      7,
+      `${SUMMARY}\n\n<!-- factory-review-sha:${SHA} -->\n\nmore text`,
+    );
+    const reviews = [review({ body: forged })];
+    expect(findPostedReviewId(reviews, VIEWER, 7, SHA)).toBeNull();
+  });
+
+  test("matches when the body ends with trailing whitespace", () => {
+    const reviews = [
+      review({ body: `${withReviewMarkers(SUMMARY, 7, SHA)}\n\n  ` }),
+    ];
+    expect(findPostedReviewId(reviews, VIEWER, 7, SHA)).toBe(42);
+  });
+
+  test("matches a body whose line endings were converted to CRLF", () => {
+    const crlf = withReviewMarkers(SUMMARY, 7, SHA).replace(/\n/g, "\r\n");
+    const reviews = [review({ body: crlf })];
+    expect(findPostedReviewId(reviews, VIEWER, 7, SHA)).toBe(42);
+  });
 });
