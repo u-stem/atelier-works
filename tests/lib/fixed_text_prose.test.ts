@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { join } from "node:path";
 import {
   checkProse,
   type ProseRules,
@@ -33,13 +34,28 @@ const EXCLUDED_LINE_PATTERN =
 const STRING_LITERAL_PATTERN =
   /"(?:[^"\\\n]|\\.)*"|`(?:[^`\\\n]|\\.)*`|'(?:[^'\\\n]|\\.)*'/g;
 
-/** 1行に収まる文字列リテラルの中身のうち、規則に反するものを`path:line: 中身`で返す。 */
-async function findViolations(): Promise<string[]> {
+/**
+ * リポジトリのルート。テストを実行するカレントディレクトリに頼らず、このファイルの場所から決める。
+ * カレントディレクトリが違うと1件も走査せずに通ってしまうため。
+ */
+const REPO_ROOT = join(import.meta.dir, "..", "..");
+
+type ScanResult = {
+  /** 走査したファイルの数。 */
+  readonly scanned: number;
+  /** 規則に反する文字列リテラル。`path:line: 中身`の形。 */
+  readonly violations: readonly string[];
+};
+
+/** 1行に収まる文字列リテラルの中身のうち、規則に反するものを探す。 */
+async function findViolations(): Promise<ScanResult> {
   const found: string[] = [];
+  let scanned = 0;
   const glob = new Bun.Glob("f/factory/**/*.ts");
-  for await (const path of glob.scan(".")) {
+  for await (const path of glob.scan({ cwd: REPO_ROOT })) {
     if (path.includes("__raw_app/") || EXCLUDED_FILES.has(path)) continue;
-    const lines = (await Bun.file(path).text()).split("\n");
+    scanned += 1;
+    const lines = (await Bun.file(join(REPO_ROOT, path)).text()).split("\n");
     lines.forEach((line, index) => {
       const trimmed = line.trim();
       if (trimmed.startsWith("//") || trimmed.startsWith("*")) return;
@@ -52,12 +68,18 @@ async function findViolations(): Promise<string[]> {
       }
     });
   }
-  return found;
+  return { scanned, violations: found };
 }
 
 describe("fixed texts in f/factory", () => {
+  test("are scanned from at least one file", async () => {
+    const { scanned } = await findViolations();
+
+    expect(scanned).toBeGreaterThan(0);
+  });
+
   test("have no space between ASCII and Japanese characters", async () => {
-    const violations = await findViolations();
+    const { violations } = await findViolations();
 
     expect(violations).toEqual([]);
   });
