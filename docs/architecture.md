@@ -300,7 +300,7 @@ WindmillのUIはsummaryでソートされるため、種別を示すタグをsum
 ## 自己更新の仕組み(self_update)
 
 1. worker内のself clone(このリポジトリ自身)をpullする。SHAが変わっていなければ何もしない。
-2. 変更があれば、Console raw appの依存を`npm ci`で揃えたうえで`wmill sync push --yes --keep-deleted`と`wmill datatable migrate up`をworker内から実行し、Windmill側のscript/flow/scheduleとData Tableの定義を最新化する。
+2. 変更があれば、Console raw appの依存をinstall scriptを動かさない`npm ci --ignore-scripts`で揃えたうえで`wmill sync push --yes --keep-deleted`と`wmill datatable migrate up`をworker内から実行し、Windmill側のscript/flow/scheduleとData Tableの定義を最新化する。
 3. `infra/**`(workerイメージやcompose定義)、または`mise.toml`の`[tools]`(ツールのバージョン)・`[env]`(composeが読む環境変数)セクションに変更がある場合は、workerの自己更新だけでは反映できないため`deployments.needs_host_action = true`として記録し、ログに残す。通知はしない。これらの変更は、ホスト側checkoutをpullしたうえで次に`mise run up`(`docker compose up -d --build`)で起動したときに反映される。一括で反映したいときは`mise run deploy`(ホスト側checkoutで`git pull --ff-only` → worker imageのビルド → `compose up -d` → `wmill sync push` → migration)を手動で実行する。
 4. `console/`(Console)の変更は`self_update`の対象ではない。マージ後にCIが成果物`console-dist`を作り、`console_fetcher`が数分で取り込む。`classifyChangedPaths`は`console_paths`として分けて返し、実装フローのPR本文の「備考」に印を付ける。
 5. Claudeが参照するスキル(`.claude/skills/**`)はself cloneを`--add-dir`で直接読むため、pull直後から反映される。
