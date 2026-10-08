@@ -141,6 +141,33 @@ export function reportReviewerRequest(
 }
 
 /**
+ * `reviewers`に再レビューを依頼する。依頼先からPRの作成者を除くため、先に
+ * `loadAuthorLogin`でPRを読む。依頼先が無ければ何もせず`null`を返す。
+ * 呼ぶのはpush・返信・記録が済んだ後なので、PRを読めなくても(rate limitなど)
+ * 例外にせず、依頼のAPIの失敗(`outcome: "failed"`)として返す。
+ */
+export async function requestRereview(
+  reviewers: readonly string[],
+  deps: {
+    readonly loadAuthorLogin: () => Promise<string>;
+    readonly request: (authorLogin: string) => Promise<RequestReviewersResult>;
+  },
+): Promise<RequestReviewersResult | null> {
+  if (reviewers.length === 0) return null;
+  let authorLogin: string;
+  try {
+    authorLogin = await deps.loadAuthorLogin();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+      outcome: "failed",
+      error: `could not load the PR: ${maskSecrets(message)}`,
+    };
+  }
+  return deps.request(authorLogin);
+}
+
+/**
  * `outcome`に応じて作業項目を遷移させ、遷移先と通知文を返す。
  * 修正があればcommitしてpushし、レビューコメントへ返信して再レビューを依頼する。
  * commitの前に、worktreeのロックを持つプロセスが無いこと、`.git`が`worktree_git_pointer`(準備ステップの記録)と一致すること、
@@ -790,7 +817,6 @@ export async function main(
     return { ok: true, final_status: "needs_human", notice: proposalReason };
   }
 
-  const pr = await getPr(client, owner, repo, pr_number);
   const fallbackReviewers = deriveFallbackReviewers(
     reviews.map((review) => review.author),
     comments.map((comment) => comment.author),
@@ -805,13 +831,16 @@ export async function main(
   // 修正自体はpushまで成功しており、影響はレビュアー依頼だけなので、
   // どの場合も作業項目は"rereview_requested"に進める。
   const reviewerReport = reportReviewerRequest(
-    reviewersToRequest.length === 0
-      ? null
-      : await requestReviewers(client, owner, repo, pr_number, {
+    await requestRereview(reviewersToRequest, {
+      loadAuthorLogin: async () =>
+        (await getPr(client, owner, repo, pr_number)).authorLogin,
+      request: (authorLogin) =>
+        requestReviewers(client, owner, repo, pr_number, {
           reviewers: reviewersToRequest,
-          authorLogin: pr.authorLogin,
+          authorLogin,
           viewer: viewer.login,
         }),
+    }),
   );
   const reviewerNote = reviewerReport.note;
   const reviewerApiError = reviewerReport.apiError;

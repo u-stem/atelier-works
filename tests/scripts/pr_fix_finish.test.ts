@@ -1,6 +1,6 @@
 // `pr_fix_finish.ts`が使う`pr_workflow_support.ts`の`buildReplyPostFailedNotice`、
 // `decideFixFinishAction`、`deriveFallbackReviewers`、`evaluateRerouteGuard`、`listReviewThreadsBestEffort`、
-// `renderFixReply`、`shouldAdvanceWatermarks`と、`pr_fix_finish.ts`の`reportReviewerRequest`のテスト。
+// `renderFixReply`、`shouldAdvanceWatermarks`と、`pr_fix_finish.ts`の`reportReviewerRequest`、`requestRereview`のテスト。
 // requirements_gapの差し戻しの手順は`pr_fix_reroute.test.ts`でテストする。
 
 import { describe, expect, test } from "bun:test";
@@ -13,7 +13,10 @@ import {
   WORKTREE_CHANGED_AFTER_SECRET_SCAN_REASON,
   WorktreeGitPointerModifiedError,
 } from "../../f/factory/lib/workspace.ts";
-import { reportReviewerRequest } from "../../f/factory/steps/pr_fix_finish.ts";
+import {
+  reportReviewerRequest,
+  requestRereview,
+} from "../../f/factory/steps/pr_fix_finish.ts";
 import {
   buildReplyPostFailedNotice,
   claudeBlockedReason,
@@ -592,5 +595,62 @@ describe("reportReviewerRequest", () => {
     expect(
       reportReviewerRequest({ outcome: "requested", reviewers: ["alice"] }),
     ).toEqual({ note: null, apiError: null, noticeKind: null });
+  });
+});
+
+describe("requestRereview", () => {
+  const requested = async (): Promise<{
+    outcome: "requested";
+    reviewers: string[];
+  }> => ({
+    outcome: "requested",
+    reviewers: ["alice"],
+  });
+
+  test("does nothing when there is no reviewer to request", async () => {
+    let loaded = false;
+    const result = await requestRereview([], {
+      loadAuthorLogin: async () => {
+        loaded = true;
+        return "bob";
+      },
+      request: requested,
+    });
+    expect(result).toBeNull();
+    expect(loaded).toBe(false);
+  });
+
+  test("requests the reviewers with the PR author it loaded", async () => {
+    const authors: string[] = [];
+    const result = await requestRereview(["alice"], {
+      loadAuthorLogin: async () => "bob",
+      request: async (authorLogin) => {
+        authors.push(authorLogin);
+        return requested();
+      },
+    });
+    expect(authors).toEqual(["bob"]);
+    expect(result?.outcome).toBe("requested");
+  });
+
+  test("reports a failure to load the PR as an API failure instead of throwing", async () => {
+    let requestedCount = 0;
+    const result = await requestRereview(["alice"], {
+      loadAuthorLogin: async () => {
+        throw new Error("rate limited");
+      },
+      request: async () => {
+        requestedCount++;
+        return requested();
+      },
+    });
+    expect(requestedCount).toBe(0);
+    expect(result).toEqual({
+      outcome: "failed",
+      error: "could not load the PR: rate limited",
+    });
+    expect(reportReviewerRequest(result).noticeKind).toBe(
+      "pr_fix_reviewer_request_failed",
+    );
   });
 });
