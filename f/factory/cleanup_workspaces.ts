@@ -13,11 +13,13 @@
 // リポジトリは、その日の掃除を飛ばしてnoticeを残す(`partitionRepoGroups`)。
 // headless Claudeプロセスを孤立とみなすのは、`claude_timeout_sec`と
 // `implement_timeout_sec`の長い方に猶予を足した時間を過ぎたものだけ。
-// プロセスのロックがまだ持たれているか、そのロックの下で起動されたプロセスが残っているworktreeは消さない。
+// プロセスのロックがまだ持たれているか、そのロックの下で起動されたプロセスが残っているworktreeは消さず、noticeを残す。
 // 掃除したリポジトリでは、worktreeが無くなったロックファイルも、ロックを取ったまま消す(`removeOrphanLockFiles`)。
 
 import * as wmill from "windmill-client@1.817.0";
 import {
+  busyWorktreeNoticeMessage,
+  dirsNotYetVisited,
   excludeActiveWorktrees,
   formatDiskUsageMessage,
   groupByRepo,
@@ -71,6 +73,29 @@ type RemovedCounts = {
   readonly lockFiles: number;
 };
 
+/**
+ * 生き残りのプロセスが使っているので消さなかったworktreeを、ConsoleのNoticesタブに残す(Discordには送らない)。
+ * 人がプロセスを止めない限り毎日飛ばし続け、ログだけでは運用者に見えないためである。
+ * 記録に失敗しても掃除は続ける。
+ */
+async function recordBusyWorktreeNotice(
+  input: Parameters<typeof busyWorktreeNoticeMessage>[0],
+  log: Logger,
+): Promise<void> {
+  try {
+    await addNotice({
+      kind: "cleanup_worktree_busy",
+      message: busyWorktreeNoticeMessage(input),
+    });
+  } catch (err) {
+    log.warn("cleanup: failed to record the busy-worktree notice", {
+      work_item_id: input.workItemId,
+      worktree_dir: input.worktreeDir,
+      error: maskSecrets(err instanceof Error ? err.message : String(err)),
+    });
+  }
+}
+
 async function removeStaleWorktreesForRepo(
   owner: string,
   repo: string,
@@ -97,6 +122,7 @@ async function removeStaleWorktreesForRepo(
   }
 
   const removedDirs = new Set<string>();
+  const skippedBusyDirs = new Set<string>();
 
   for (const item of items) {
     try {
@@ -123,16 +149,11 @@ async function removeStaleWorktreesForRepo(
         targetDirs = found === undefined ? [] : [found];
       }
 
-      for (const targetDir of excludeActiveWorktrees(
-        targetDirs,
-        holders,
-        worktrees,
-        owner,
-        repo,
+      // 1つの作業項目が選ぶworktreeは互いに異なるので、作業項目ごとに除けば足りる。
+      for (const targetDir of dirsNotYetVisited(
+        excludeActiveWorktrees(targetDirs, holders, worktrees, owner, repo),
+        { removed: removedDirs, skippedBusy: skippedBusyDirs },
       )) {
-        if (removedDirs.has(targetDir)) {
-          continue;
-        }
         // 生き残りのプロセス(ロックの保持者か、このロックファイルのタグを持つ残り)がいるworktreeは消さない。
         // 対象は終端状態で待つ処理が無く、翌日また試せる。止めるのは、持ち主タグとリースで根拠がある実装フローの準備だけにする。
         // ロックファイルのパスを作れない(親が無い)ときの例外は、項目ごとの例外処理が受けて消さずに進む。
@@ -145,6 +166,7 @@ async function removeStaleWorktreesForRepo(
           });
         } catch (err) {
           if (!(err instanceof WorktreeBusyError)) throw err;
+          skippedBusyDirs.add(targetDir);
           log.warn("cleanup: skipping a worktree still used by processes", {
             work_item_id: item.id,
             owner,
@@ -152,6 +174,16 @@ async function removeStaleWorktreesForRepo(
             worktree_dir: targetDir,
             reason: err.message,
           });
+          await recordBusyWorktreeNotice(
+            {
+              owner,
+              repo,
+              workItemId: item.id,
+              worktreeDir: targetDir,
+              reason: maskSecrets(err.message),
+            },
+            log,
+          );
           continue;
         }
         await removeWorktree({

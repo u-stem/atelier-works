@@ -21,7 +21,7 @@ import {
 import { parseFlowJobId } from "../lib/implement_launch_support.ts";
 import { gitPointerStopReason } from "../lib/implement_loop.ts";
 import { escapeReasonSeparator, maskSecrets } from "../lib/log.ts";
-import { WorktreeBusyError } from "../lib/process_lock.ts";
+import { type LockOwner, WorktreeBusyError } from "../lib/process_lock.ts";
 import {
   type ChangedPath,
   type ChangedPathStatus,
@@ -3404,17 +3404,31 @@ type ReasonRule = {
    * 具体的な日本語の1文の指示にする。
    * 固有の対応が無い理由(安全のための関門の失敗だけのものなど)と、
    * この表が知らない理由には、汎用の`GENERIC_NEXT_ACTION`を使う。
+   * `flow`は理由を出したフロー(`nextActionFor`の引数)。フローによって取れる操作が違う理由だけが使う。
    */
-  readonly nextAction: (match: RegExpMatchArray) => string;
+  readonly nextAction: (
+    match: RegExpMatchArray,
+    flow: NextActionFlow | undefined,
+  ) => string;
 };
 
+/** 次の操作がフローによって違う理由のための、理由を出したフローの種類。 */
+export type NextActionFlow = LockOwner["kind"];
+
 /**
- * 汎用の次の対応。ConsoleのFailuresとNoticesのタブ(`factory_console__raw_app`)を案内する。
- * 原因に関係なく、`needs_human`の作業項目とnoticeがすべて並ぶ唯一の場所なので、
- * より具体的な対応が無いときの既定として安全である。
+ * 作業項目を同じ作業項目のまま再実行する操作。どの種別の作業項目にも使える。
+ * ConsoleのFailuresタブはジョブの失敗(`job_failures`)だけを並べ、`needs_human`や`blocked`で止めた作業項目は出ないので、
+ * Windmillで直接実行してもらう。
  */
-const GENERIC_NEXT_ACTION =
-  "ConsoleのFailures / Noticesタブで詳細を確認してください";
+const RETRY_WORK_ITEM_ACTION =
+  "Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください";
+
+/**
+ * 汎用の次の対応。より具体的な対応が無いときの既定にする。
+ * 原因は通知の理由と、ConsoleのNoticesタブ(`factory_console__raw_app`)のnoticeに残る。
+ * 取り除いた後の再実行は、どの種別の作業項目にも使える`retry_work_item`を案内する。
+ */
+const GENERIC_NEXT_ACTION = `通知の理由とConsoleのNoticesタブで原因を確かめ、取り除いてから、${RETRY_WORK_ITEM_ACTION}`;
 
 const FACTORY_FIX_RELABEL_ACTION =
   "対応してほしい指摘をコメントしてから`factory:fix`を付け直してください";
@@ -3424,25 +3438,79 @@ const FORBIDDEN_CHANGE_NEXT_ACTION =
   "差分を確認し、問題なければ人が直接修正してください";
 const DIFF_SIZE_NEXT_ACTION =
   "変更を分割するか、上限を見直してから`factory:fix`を付け直してください";
-const GITHUB_RATE_LIMIT_NEXT_ACTION =
-  "GitHubのrate limitの解除を待ってから、ConsoleのFailuresタブで再実行してください";
+const GITHUB_RATE_LIMIT_NEXT_ACTION = `GitHubのrate limitの解除を待ってから、${RETRY_WORK_ITEM_ACTION}`;
 /** `lib/github.ts`の`GitHubRateLimitError`のメッセージ。1はエンドポイント、2は待ちの説明。 */
 const GITHUB_RATE_LIMIT_REASON_PATTERN = /^GitHub rate limit on (\S+): (.+)$/;
 const DAILY_BUDGET_NEXT_ACTION =
   "翌日まで待つか、daily_budget_usdを引き上げてください";
 const NOTHING_TO_COMMIT_NEXT_ACTION =
   "返信内容を確認し、必要なら指示をコメントして`factory:fix`を付け直してください";
-/** ローカルのHEADが動いたとき(実装フローとpr_fixの両方で起きる)の次の操作。 */
-const LOCAL_HEAD_NEXT_ACTION =
-  "検査コマンドがコミットやブランチの切り替えをしていないか確かめて人が直してから、PRの修正なら`factory:fix`を付け直し、実装ならWindmillで`f/factory/retry_work_item`を作業項目のIDで実行してください";
 const ISSUE_PROPOSAL_NEXT_ACTION =
   "ConsoleのInboxで提案を承認または却下してください";
+
+/**
+ * 確かめる内容`check`の後に、フローごとの再実行を続けた次の操作を返す。
+ * 実装フローは`retry_work_item`で同じ作業項目を再実行する。
+ * pr_fixでこれを使う理由はどれも修正のClaudeを実行した後に止めるので、そのラウンドは使い終わっており、
+ * 新しいラウンドとして`factory:fix`を付け直してもらう。
+ * フローが分からなければ両方を並べる。
+ */
+function afterFixWorkRerun(
+  check: string,
+  flow: NextActionFlow | undefined,
+): string {
+  if (flow === "implement") return `${check}、${RETRY_WORK_ITEM_ACTION}`;
+  if (flow === "pr_fix") return `${check}、\`factory:fix\`を付け直してください`;
+  return `${check}、PRの修正なら\`factory:fix\`を付け直し、実装なら${RETRY_WORK_ITEM_ACTION}`;
+}
+
+/** ローカルのHEADが動いたとき(実装フローとpr_fixの両方で起きる)の次の操作。 */
+function localHeadNextAction(flow: NextActionFlow | undefined): string {
+  return afterFixWorkRerun(
+    "検査コマンドがコミットやブランチの切り替えをしていないか確かめて人が直してから",
+    flow,
+  );
+}
+
 /** 検査やcommitの後にworktreeが変わったとき(実装フローとpr_fixの両方で起きる)の次の操作。 */
-const LEFTOVER_PROCESS_NEXT_ACTION =
-  "検査コマンドなどが残したプロセスがworktreeを書き換えていないか確かめ、PRの修正なら`factory:fix`を付け直し、実装ならWindmillで`f/factory/retry_work_item`を作業項目のIDで実行してください";
+function leftoverProcessNextAction(flow: NextActionFlow | undefined): string {
+  return afterFixWorkRerun(
+    "検査コマンドなどが残したプロセスがworktreeを書き換えていないか確かめ",
+    flow,
+  );
+}
+
+/**
+ * 前の実行のプロセスがまだworktreeを使っているときの次の操作。
+ * 実装フローの準備は同じ作業項目の前の実装のプロセスを止めてから続けるので、この理由で止まるのは、
+ * pr_fixのプロセスや持ち主の分からないプロセスが残っているときである。pr_fixの準備は何も止めない。
+ * どちらも、理由に載ったプロセスが終わるか止まるまで、再実行しても同じ理由で止まる。
+ * workerの再起動は同じworkerのすべてのジョブを止めるので勧めず、載ったプロセスだけを止めてもらう。
+ * 再実行はどちらのフローも`retry_work_item`にする。pr_fixで`factory:fix`を付け直すと、
+ * 何も修正していないのに新しい作業項目で修正のラウンドを1つ使ってしまうため。
+ */
+const WORKTREE_BUSY_NEXT_ACTION = `理由に載ったプロセスが終わるのを待つか、workerのコンテナでそのプロセスを止めてから、${RETRY_WORK_ITEM_ACTION}`;
+
+/**
+ * 実行中に、この実行の検査コマンドなどが残したプロセスがworktreeのロックを持ち続けていたときの次の操作。
+ * 残ったプロセスは、この実行のジョブIDの持ち主タグを持つ。
+ * 実装フローは再実行の準備がそれを止めてから続けるので、再実行するだけでよい。
+ * pr_fixの準備は何も止めないので、先に人が止める必要がある。
+ * 再実行は、修正のラウンドを使わない`retry_work_item`にする。
+ */
+function worktreeLockHeldInRunNextAction(
+  flow: NextActionFlow | undefined,
+): string {
+  if (flow === "implement")
+    return `検査コマンドが常駐プロセスを残していないか確かめてから、${RETRY_WORK_ITEM_ACTION}(残ったプロセスは再実行の準備ステップが止めます)`;
+  if (flow === "pr_fix")
+    return `検査コマンドが常駐プロセスを残していないか確かめ、残っていればworkerのコンテナで止めてから、${RETRY_WORK_ITEM_ACTION}`;
+  return `検査コマンドが常駐プロセスを残していないか確かめ、PRの修正なら残ったプロセスをworkerのコンテナで止めてから、${RETRY_WORK_ITEM_ACTION}(実装なら残ったプロセスは再実行の準備ステップが止めます)`;
+}
 
 const REASON_RULES: readonly ReasonRule[] = [
-  // pr_fix_prepare.tsの`evaluatePrFixSafetyGuards` / `evaluateRepoAllowedGuard`
+  // pr_fix_prepare.tsの`evaluatePrFixSafetyGuards` / `evaluateRepoAllowedGuard`。
+  // 準備の関門は修正の前に`blocked`で止めるので、再実行は修正のラウンドを使わない`retry_work_item`にする。
   {
     pattern: /^pull request is not open$/,
     describe: () => "PR がオープンではありません",
@@ -3457,7 +3525,7 @@ const REASON_RULES: readonly ReasonRule[] = [
   {
     pattern: /^pull request is a draft$/,
     describe: () => "PR がドラフトです",
-    nextAction: () => "ドラフトを解除してから`factory:fix`を付け直してください",
+    nextAction: () => `ドラフトを解除してから、${RETRY_WORK_ITEM_ACTION}`,
   },
   {
     pattern: /^base branch is protected$/,
@@ -3622,6 +3690,8 @@ const REASON_RULES: readonly ReasonRule[] = [
     nextAction: () => "work itemの状態をConsoleで確認してください",
   },
   // pr_fix_finish.tsが使う`evaluateRerouteParentStatus`と`rerouteParentChangedReason`。
+  // どれも修正のClaudeがrequirements_gapを返した後に止めるので、そのラウンドは使い終わっている。
+  // 準備で止めた理由と違い、新しいラウンドとして`factory:fix`を付け直してもらう。
   // 実装中の規則を、状態名を取る規則より先に置く。
   {
     pattern:
@@ -3704,7 +3774,7 @@ const REASON_RULES: readonly ReasonRule[] = [
     pattern: /^could not request re-review: (.+)$/,
     describe: (m) =>
       `再レビューをリクエストできませんでした: ${describeReason(m[1] ?? "")}`,
-    nextAction: (m) => nextActionFor(m[1] ?? ""),
+    nextAction: (m, flow) => nextActionFor(m[1] ?? "", flow),
   },
   // implementフロー(`lib/implement_loop.ts`のループの終了、
   // `lib/implement_finish_support.ts`、`lib/implement_launch_support.ts`、
@@ -3737,7 +3807,7 @@ const REASON_RULES: readonly ReasonRule[] = [
     pattern: /^branch head moved to (\S+) while implementing$/,
     describe: (m) => `実装中にブランチのheadが${m[1]}に変わりました`,
     nextAction: () =>
-      "ブランチの最新の状態を確認し、必要ならConsoleのFailuresタブから再実行してください",
+      `ブランチの最新の状態を確認し、必要なら${RETRY_WORK_ITEM_ACTION}`,
   },
   // `lib/github.ts`の`GitHubRateLimitError`。単独の理由としても、
   // "implement finish failed: ..."の中身としても現れる。
@@ -3783,20 +3853,21 @@ const REASON_RULES: readonly ReasonRule[] = [
   {
     pattern: /^implement flow could not be started: ([\s\S]+)$/,
     describe: (m) => `実装フローを起動できませんでした: ${m[1]}`,
-    nextAction: () => "ConsoleのFailuresタブから再実行してください",
+    nextAction: () => RETRY_WORK_ITEM_ACTION,
   },
   {
     pattern:
       /^implement work item could not be moved to implementing: ([\s\S]+)$/,
     describe: (m) =>
       `作業項目を実装中へ移せなかったため、実装フローを起動していません: ${m[1]}`,
-    nextAction: () =>
-      "`f/factory/retry_work_item`を作業項目のIDで実行して再開してください",
+    nextAction: () => RETRY_WORK_ITEM_ACTION,
   },
   {
     pattern: /^implement flow job id could not be recorded: ([\s\S]+)$/,
     describe: (m) => `実装フローのジョブIDを記録できませんでした: ${m[1]}`,
-    nextAction: () => GENERIC_NEXT_ACTION,
+    // 起動したフローは動いており、作業項目は`implementing`のままなので、retry_work_itemは再実行を拒否する。
+    nextAction: () =>
+      "実装フローは動いているので、終わるのを待ち、Consoleのパイプラインタブで作業項目の状態を確認してください",
   },
   {
     pattern: /^secrets detected, changes not pushed$/,
@@ -3815,45 +3886,46 @@ const REASON_RULES: readonly ReasonRule[] = [
     pattern: /^worktree changed after verification$/,
     describe: () => "検証の後にworktreeが変更されました",
     nextAction: () =>
-      "検査コマンドが追跡対象のファイルを書き換えていないか確認し、再実行してください",
+      `検査コマンドが追跡対象のファイルを書き換えていないか確認し、${RETRY_WORK_ITEM_ACTION}`,
   },
   // `lib/workspace.ts`の`commitAndPush`の`expectedTreeSha`(実装フローとpr_fixのpush)
   {
     pattern: /^committed tree differs from the inspected tree$/,
     describe: () => "commitしたツリーが、検査したツリーと異なります",
-    nextAction: () => LEFTOVER_PROCESS_NEXT_ACTION,
+    nextAction: (_m, flow) => leftoverProcessNextAction(flow),
   },
   // `lib/implement_loop.ts`の`scannedTreeChangedReason`(実装フローの検証ループ)
   {
     pattern: /^worktree changed before the secret scan in round (\d+)$/,
     describe: (m) =>
       `ラウンド${m[1]}で、変更の判定と秘密情報の検査の間にworktreeが変更されました`,
-    nextAction: () =>
-      "検査コマンドなどが残したプロセスがworktreeを書き換えていないか確かめ、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+    nextAction: () => leftoverProcessNextAction("implement"),
   },
   // `lib/workspace.ts`の`scannedTreeStopReasons`(実装フローの途中経過のpushと、pr_fixの完了ステップ)
   {
     pattern: /^worktree changed after the secret scan$/,
     describe: () => "秘密情報の検査の後にworktreeが変更されました",
-    nextAction: () => LEFTOVER_PROCESS_NEXT_ACTION,
+    nextAction: (_m, flow) => leftoverProcessNextAction(flow),
   },
   {
     pattern: /^requirements regeneration could not be started$/,
     describe: () => "要件定義の作り直しを起動できませんでした",
-    nextAction: () =>
-      "ConsoleのFailuresタブから再実行してください(差し戻し理由は通知に残っています)",
+    // 実装フローの差し戻しでは承認済みの要件定義のattemptが変わっていないので、再実行は実装フローからやり直す。
+    // 理由を出すのは実装フローの差し戻しと、却下による作り直し(requirements_apply。要件定義から再開する)なので、実装フローのときだけ添える。
+    nextAction: (_m, flow) =>
+      flow === "implement"
+        ? `${RETRY_WORK_ITEM_ACTION}(実装からやり直します。差し戻し理由は通知に残っています)`
+        : RETRY_WORK_ITEM_ACTION,
   },
   {
     pattern: /^pull request has an active fix run$/,
     describe: () => "このPRで自動修正が実行中のため実装を止めました",
-    nextAction: () =>
-      "自動修正の完了を待ってからConsoleのFailuresタブで再実行してください",
+    nextAction: () => `自動修正の完了を待ってから、${RETRY_WORK_ITEM_ACTION}`,
   },
   {
     pattern: /^parent issue is being re-implemented$/,
     describe: () => "親Issueの実装をやり直している最中のため修正を止めました",
-    nextAction: () =>
-      "実装フローの完了を待ってから再度factory:fixを付けてください",
+    nextAction: () => `実装フローの完了を待ってから、${RETRY_WORK_ITEM_ACTION}`,
   },
   {
     pattern: /^worktree git pointer was modified$/,
@@ -3878,12 +3950,12 @@ const REASON_RULES: readonly ReasonRule[] = [
     pattern: /^local HEAD (\S+) is not the PR head (\S+)$/,
     describe: (m) =>
       `worktreeのHEAD(${m[1]})が記録したブランチの先頭(${m[2]})と異なります`,
-    nextAction: () => LOCAL_HEAD_NEXT_ACTION,
+    nextAction: (_m, flow) => localHeadNextAction(flow),
   },
   {
     pattern: /^local HEAD is not on branch (.+)$/,
     describe: (m) => `worktreeのHEADがブランチ${m[1]}にありません`,
-    nextAction: () => LOCAL_HEAD_NEXT_ACTION,
+    nextAction: (_m, flow) => localHeadNextAction(flow),
   },
   // pr_fix_verify.tsの`inspectUncommittedChanges`と、pr_fix_finish.tsの`inspectStagedChanges`
   {
@@ -3903,22 +3975,19 @@ const REASON_RULES: readonly ReasonRule[] = [
       m[1] === undefined
         ? "前の実行のプロセスがまだworktreeを使っています"
         : `前の実行のプロセスがまだworktreeを使っています(${m[1]})`,
-    nextAction: () =>
-      "載っているプロセスが終わるのを待つか止めてから(workerを再起動すると同じworkerの他のジョブも止まります)、PRの修正なら`factory:fix`を付け直し、実装ならWindmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+    nextAction: () => WORKTREE_BUSY_NEXT_ACTION,
   },
   {
     pattern: /^implementation of the branch's work item is running$/,
     describe: () =>
       "このPRのブランチで実装フローが実行中のため修正を止めました",
-    nextAction: () =>
-      "実装フローの完了を待ってから再度factory:fixを付けてください",
+    nextAction: () => `実装フローの完了を待ってから、${RETRY_WORK_ITEM_ACTION}`,
   },
   {
     pattern: /^worktree lock is held by a process this run left behind$/,
     describe: () =>
       "この実行の検査コマンドなどが残したプロセスが、worktreeのロックを持ち続けています",
-    nextAction: () =>
-      "検査コマンドが常駐プロセスを残していないかを確かめ、workerを再起動してから(同じworkerの他のジョブも止まります)、ConsoleのFailuresタブから再実行してください",
+    nextAction: (_m, flow) => worktreeLockHeldInRunNextAction(flow),
   },
   {
     pattern: /^implement flow deadline reached after round (\d+)$/,
@@ -3940,7 +4009,7 @@ const REASON_RULES: readonly ReasonRule[] = [
     describe: (m) =>
       `実装フローの時間設定が、flow.yamlの実装・検証ステップのtimeoutに収まりません(${m[1]})`,
     nextAction: () =>
-      "implement_flow_timeout_sec・implement_timeout_sec・implement_check_timeout_sec・検査コマンド数のいずれかを減らしてから、ConsoleのFailuresタブから再実行してください",
+      `implement_flow_timeout_sec・implement_timeout_sec・implement_check_timeout_sec・検査コマンド数のいずれかを減らしてから、${RETRY_WORK_ITEM_ACTION}`,
   },
   {
     pattern:
@@ -3948,7 +4017,7 @@ const REASON_RULES: readonly ReasonRule[] = [
     describe: (m) =>
       `PR修正の時間設定が、flow.yamlの修正・検証ステップのtimeoutに収まりません(${m[1]})`,
     nextAction: () =>
-      "claude_timeout_secか検査コマンド(allowed_check_commands)の数を減らしてから、ConsoleのFailuresタブから再実行してください",
+      `claude_timeout_secか検査コマンド(allowed_check_commands)の数を減らしてから、${RETRY_WORK_ITEM_ACTION}`,
   },
   {
     pattern:
@@ -3956,7 +4025,7 @@ const REASON_RULES: readonly ReasonRule[] = [
     describe: (m) =>
       `PRレビューの時間設定が、flow.yamlのレビュー生成ステップのtimeoutに収まりません(${m[1]})`,
     nextAction: () =>
-      "claude_timeout_secを減らしてから、ConsoleのFailuresタブから再実行してください",
+      "claude_timeout_secを減らしてから、`factory:review`を付け直してください",
   },
 ];
 
@@ -4040,14 +4109,17 @@ export function describeReason(reason: string): string {
  * 主で対応が必要な理由を先頭に置いている(上の`"no changes to commit; replies posted"`の
  * 対についてのコメントを参照)。
  * どの項目もどの規則にも一致しなければ`GENERIC_NEXT_ACTION`を返す。
+ * `flow`には理由を出したフローを渡す。worktreeのプロセスの排他の理由のように、
+ * フローによって取れる操作が違う理由では、そのフローの操作だけを返す。
+ * 省略すると、それらの理由では両方のフローの操作を並べた文を返す。
  */
-export function nextActionFor(reason: string): string {
+export function nextActionFor(reason: string, flow?: NextActionFlow): string {
   const segments = reason.includes("; ") ? reason.split("; ") : [reason];
   for (const segment of segments) {
     for (const rule of REASON_RULES) {
       const match = segment.match(rule.pattern);
       if (match !== null) {
-        return rule.nextAction(match);
+        return rule.nextAction(match, flow);
       }
     }
   }

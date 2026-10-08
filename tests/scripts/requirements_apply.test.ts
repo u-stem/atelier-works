@@ -228,7 +228,7 @@ describe("buildImplementLaunchNoticeMessage", () => {
         implementCasFailureReason("boom"),
       ),
     ).toContain(
-      "`f/factory/retry_work_item`を作業項目のIDで実行して再開してください",
+      "Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
     );
   });
 });

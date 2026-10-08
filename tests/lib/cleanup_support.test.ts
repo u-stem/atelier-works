@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
+  busyWorktreeNoticeMessage,
+  dirsNotYetVisited,
   excludeActiveWorktrees,
   formatDiskUsageMessage,
   groupByRepo,
@@ -383,6 +385,44 @@ describe("unresolvedHoldersNoticeMessage", () => {
   test("names the skipped repository", () => {
     expect(unresolvedHoldersNoticeMessage("acme", "widgets")).toContain(
       "acme/widgets",
+    );
+  });
+});
+
+describe("dirsNotYetVisited", () => {
+  // 同じworktreeは複数の終端の作業項目(実装のpr_openと、ラウンドごとのpr_fix)から選ばれうる。
+  test("drops a worktree already removed in this run", () => {
+    expect(
+      dirsNotYetVisited(["/w/a", "/w/b"], {
+        removed: new Set(["/w/a"]),
+        skippedBusy: new Set(),
+      }),
+    ).toEqual(["/w/b"]);
+  });
+
+  test("drops a worktree already skipped as busy in this run", () => {
+    expect(
+      dirsNotYetVisited(["/w/a", "/w/b"], {
+        removed: new Set(),
+        skippedBusy: new Set(["/w/b"]),
+      }),
+    ).toEqual(["/w/a"]);
+  });
+});
+
+describe("busyWorktreeNoticeMessage", () => {
+  test("names the worktree and its processes, and says how to let the sweep remove it", () => {
+    expect(
+      busyWorktreeNoticeMessage({
+        owner: "acme",
+        repo: "widgets",
+        workItemId: 7,
+        worktreeDir: "/workspaces/acme/widgets/factory-issue-7-wi-7",
+        reason:
+          "worktree is still used by processes from an earlier run: pid 42 (3600s, implement:7:job-a) `bun test`",
+      }),
+    ).toBe(
+      "acme/widgetsの作業項目7のworktree(/workspaces/acme/widgets/factory-issue-7-wi-7)は、プロセスがまだ使っているため削除しませんでした(worktree is still used by processes from an earlier run: pid 42 (3600s, implement:7:job-a) `bun test`)。使っているプロセス(検査コマンドの生き残りなど)をworkerのコンテナで止めると、次の掃除で削除されます。",
     );
   });
 });

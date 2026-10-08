@@ -282,7 +282,7 @@ export async function main(
           // 日本語への変換は表示用。記録する`status_reason`は変換前の英語のまま保つ。
           reason: describeReason(discordReason),
           target: { kind: "pr", number: pr_number },
-          next_action: nextActionFor(discordReason),
+          next_action: nextActionFor(discordReason, "pr_fix"),
         };
         await notify(webhookUrl, event);
       } catch (err) {
@@ -814,7 +814,7 @@ export async function main(
             url: prUrl,
             reason: describeReason(proposalReason),
             target: { kind: "pr", number: pr_number },
-            next_action: nextActionFor(proposalReason),
+            next_action: nextActionFor(proposalReason, "pr_fix"),
           };
           await notify(webhookUrl, event);
         } catch (err) {

@@ -146,6 +146,23 @@ export function excludeActiveWorktrees(
   return targetDirs.filter((dir) => !held.has(dir));
 }
 
+/**
+ * `targetDirs`から、この掃除の実行ですでに扱ったworktree(消したものと、使用中で飛ばしたもの)を除いて返す。
+ * 同じworktreeは複数の終端の作業項目(実装の`pr_open`と、ラウンドごとのpr_fixなど)から選ばれうる。
+ * 除かないと、使用中のworktreeを作業項目の数だけ確かめ直し、同じnoticeを重ねて残すため。
+ */
+export function dirsNotYetVisited(
+  targetDirs: readonly string[],
+  visited: {
+    readonly removed: ReadonlySet<string>;
+    readonly skippedBusy: ReadonlySet<string>;
+  },
+): string[] {
+  return targetDirs.filter(
+    (dir) => !visited.removed.has(dir) && !visited.skippedBusy.has(dir),
+  );
+}
+
 // ---------------------------------------------------------------------------
 // groupByRepo: 古い作業項目の一覧を(owner, repo)ごとにまとめる
 // ---------------------------------------------------------------------------
@@ -211,6 +228,21 @@ export function unresolvedHoldersNoticeMessage(
   repo: string,
 ): string {
   return `${owner}/${repo}で稼働中の自動修正のブランチを確認できなかったため、このリポジトリの作業領域の掃除を見送りました。`;
+}
+
+/**
+ * 前の実行のプロセスがまだ使っているので消さなかったworktreeについてのnoticeの文言を返す。
+ * 掃除は誰のプロセスも止めないので、人が止めない限り毎日同じworktreeを飛ばし続ける。
+ * 運用者が止めるプロセスを選べるよう、保持者を載せた`reason`(`WorktreeBusyError`のメッセージ)をそのまま含める。
+ */
+export function busyWorktreeNoticeMessage(input: {
+  readonly owner: string;
+  readonly repo: string;
+  readonly workItemId: number;
+  readonly worktreeDir: string;
+  readonly reason: string;
+}): string {
+  return `${input.owner}/${input.repo}の作業項目${String(input.workItemId)}のworktree(${input.worktreeDir})は、プロセスがまだ使っているため削除しませんでした(${input.reason})。使っているプロセス(検査コマンドの生き残りなど)をworkerのコンテナで止めると、次の掃除で削除されます。`;
 }
 
 // ---------------------------------------------------------------------------

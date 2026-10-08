@@ -46,7 +46,7 @@ describe("prReviewTimeoutMisfit", () => {
         "pr_review time settings do not fit the flow step timeout: 2 claude runs x (claude_timeout_sec 3286 + 15) + 600 = 7202s exceeds 7200s",
       ),
     ).toBe(
-      "claude_timeout_secを減らしてから、ConsoleのFailuresタブから再実行してください",
+      "claude_timeout_secを減らしてから、`factory:review`を付け直してください",
     );
   });
 });

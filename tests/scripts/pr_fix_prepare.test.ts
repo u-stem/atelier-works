@@ -305,7 +305,14 @@ describe("nextActionFor", () => {
         "pr_fix time settings do not fit the flow step timeout: 2 claude runs x (claude_timeout_sec 3286 + 15) + 600 = 7202s exceeds 7200s",
       ),
     ).toBe(
-      "claude_timeout_secか検査コマンド(allowed_check_commands)の数を減らしてから、ConsoleのFailuresタブから再実行してください",
+      "claude_timeout_secか検査コマンド(allowed_check_commands)の数を減らしてから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+    );
+  });
+
+  // 修正の前に止めたので、修正のラウンドを使わない同じ作業項目の再実行を案内する。
+  test("asks to mark the PR ready and rerun the same work item when it is a draft", () => {
+    expect(nextActionFor("pull request is a draft")).toBe(
+      "ドラフトを解除してから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
     );
   });
 
@@ -339,7 +346,7 @@ describe("nextActionFor", () => {
 
   test("falls back to pointing at the Console for an unrecognized reason", () => {
     expect(nextActionFor("some future guard reason nobody mapped yet")).toBe(
-      "ConsoleのFailures / Noticesタブで詳細を確認してください",
+      "通知の理由とConsoleのNoticesタブで原因を確かめ、取り除いてから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
     );
   });
 
@@ -565,6 +572,20 @@ describe("describeReason (implement flow)", () => {
     );
   });
 
+  test("asks the implement flow to rerun the work item after HEAD moved", () => {
+    expect(
+      nextActionFor("local HEAD is not on branch fix/x", "implement"),
+    ).toBe(
+      "検査コマンドがコミットやブランチの切り替えをしていないか確かめて人が直してから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+    );
+  });
+
+  test("asks pr_fix to re-add factory:fix after HEAD moved", () => {
+    expect(nextActionFor("local HEAD is not on branch fix/x", "pr_fix")).toBe(
+      "検査コマンドがコミットやブランチの切り替えをしていないか確かめて人が直してから、`factory:fix`を付け直してください",
+    );
+  });
+
   test("translates an active fix run on the PR", () => {
     expect(describeReason("pull request has an active fix run")).toBe(
       "このPRで自動修正が実行中のため実装を止めました",
@@ -643,9 +664,38 @@ describe("describeReason (implement flow)", () => {
 });
 
 describe("nextActionFor (implement flow)", () => {
-  test("points a launch failure at the Console Failures tab", () => {
+  test("asks to rerun a launch failure with retry_work_item", () => {
     expect(nextActionFor("implement flow could not be started: boom")).toBe(
-      "ConsoleのFailuresタブから再実行してください",
+      "Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+    );
+  });
+
+  test("asks to rerun with retry_work_item when the work item could not be moved to implementing", () => {
+    expect(
+      nextActionFor(
+        "implement work item could not be moved to implementing: boom",
+      ),
+    ).toBe(
+      "Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+    );
+  });
+
+  test("asks to check the branch and rerun with retry_work_item when its head moved", () => {
+    expect(
+      nextActionFor(
+        "branch head moved to 0123456789abcdef0123456789abcdef01234567 while implementing",
+      ),
+    ).toBe(
+      "ブランチの最新の状態を確認し、必要ならWindmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+    );
+  });
+
+  // 作業項目は`implementing`のままフローが動いているので、retry_work_itemは再実行を拒否する。
+  test("asks to wait for the running implement flow when its job id was not recorded", () => {
+    expect(
+      nextActionFor("implement flow job id could not be recorded: boom"),
+    ).toBe(
+      "実装フローは動いているので、終わるのを待ち、Consoleのパイプラインタブで作業項目の状態を確認してください",
     );
   });
 
@@ -675,7 +725,7 @@ describe("nextActionFor (implement flow)", () => {
 
   test("asks to check the check commands after a post-verification change", () => {
     expect(nextActionFor("worktree changed after verification")).toBe(
-      "検査コマンドが追跡対象のファイルを書き換えていないか確認し、再実行してください",
+      "検査コマンドが追跡対象のファイルを書き換えていないか確認し、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
     );
   });
 
@@ -701,6 +751,42 @@ describe("nextActionFor (implement flow)", () => {
     );
   });
 
+  test("asks the implement flow to rerun the work item after a committed tree differs", () => {
+    expect(
+      nextActionFor(
+        "committed tree differs from the inspected tree",
+        "implement",
+      ),
+    ).toBe(
+      "検査コマンドなどが残したプロセスがworktreeを書き換えていないか確かめ、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+    );
+  });
+
+  // 修正のClaudeを実行した後に止めたので、新しいラウンドとして付け直してもらう。
+  test("asks pr_fix to re-add factory:fix after a committed tree differs", () => {
+    expect(
+      nextActionFor("committed tree differs from the inspected tree", "pr_fix"),
+    ).toBe(
+      "検査コマンドなどが残したプロセスがworktreeを書き換えていないか確かめ、`factory:fix`を付け直してください",
+    );
+  });
+
+  test("asks the implement flow to rerun the work item after a change following the secret scan", () => {
+    expect(
+      nextActionFor("worktree changed after the secret scan", "implement"),
+    ).toBe(
+      "検査コマンドなどが残したプロセスがworktreeを書き換えていないか確かめ、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+    );
+  });
+
+  test("asks pr_fix to re-add factory:fix after a change following the secret scan", () => {
+    expect(
+      nextActionFor("worktree changed after the secret scan", "pr_fix"),
+    ).toBe(
+      "検査コマンドなどが残したプロセスがworktreeを書き換えていないか確かめ、`factory:fix`を付け直してください",
+    );
+  });
+
   test("asks to inspect the branch after a modified .git pointer", () => {
     expect(nextActionFor("worktree git pointer was modified")).toBe(
       "ブランチとworktreeを人が確認し、不審な変更があればブランチを削除してください",
@@ -715,46 +801,111 @@ describe("nextActionFor (implement flow)", () => {
 
   test("waits for the fix run before re-running the implement flow", () => {
     expect(nextActionFor("pull request has an active fix run")).toBe(
-      "自動修正の完了を待ってからConsoleのFailuresタブで再実行してください",
+      "自動修正の完了を待ってから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
     );
   });
 
-  test("waits for the implement flow before re-adding factory:fix", () => {
+  test("waits for the implement flow before rerunning the same pr_fix work item", () => {
     expect(nextActionFor("parent issue is being re-implemented")).toBe(
-      "実装フローの完了を待ってから再度factory:fixを付けてください",
+      "実装フローの完了を待ってから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
     );
   });
 
-  test("points a failed requirements regeneration at the Failures tab", () => {
+  test("tells the implement flow that rerunning a failed requirements regeneration restarts implementation", () => {
+    expect(
+      nextActionFor(
+        "requirements regeneration could not be started",
+        "implement",
+      ),
+    ).toBe(
+      "Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください(実装からやり直します。差し戻し理由は通知に残っています)",
+    );
+  });
+
+  // 却下による作り直し(requirements_apply)の再実行は、実装ではなく要件定義から始まる。
+  test("does not claim a restart from implementation when the flow is unknown", () => {
     expect(
       nextActionFor("requirements regeneration could not be started"),
     ).toBe(
-      "ConsoleのFailuresタブから再実行してください(差し戻し理由は通知に残っています)",
+      "Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
     );
   });
 
-  test("asks to check and stop the earlier run's processes", () => {
+  test("asks to stop the earlier run's processes and rerun the work item when the flow is unknown", () => {
     expect(
       nextActionFor(
         "worktree is still used by processes from an earlier run: pid 42 (3600s, no owner) `x`",
       ),
     ).toBe(
-      "載っているプロセスが終わるのを待つか止めてから(workerを再起動すると同じworkerの他のジョブも止まります)、PRの修正なら`factory:fix`を付け直し、実装ならWindmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+      "理由に載ったプロセスが終わるのを待つか、workerのコンテナでそのプロセスを止めてから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
     );
   });
 
-  test("asks to check for daemons the checks left", () => {
+  test("asks the implement flow to stop the earlier run's processes and rerun the work item", () => {
+    expect(
+      nextActionFor(
+        "worktree is still used by processes from an earlier run: pid 42 (3600s, pr_fix:9:job-c) `x`",
+        "implement",
+      ),
+    ).toBe(
+      "理由に載ったプロセスが終わるのを待つか、workerのコンテナでそのプロセスを止めてから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+    );
+  });
+
+  // `factory:fix`の付け直しは新しい作業項目で修正のラウンドを1つ使うので、同じ作業項目を再実行してもらう。
+  test("asks pr_fix to stop the earlier run's processes and rerun the same work item", () => {
+    expect(
+      nextActionFor(
+        "worktree is still used by processes from an earlier run: pid 42 (3600s, pr_fix:9:job-c) `x`",
+        "pr_fix",
+      ),
+    ).toBe(
+      "理由に載ったプロセスが終わるのを待つか、workerのコンテナでそのプロセスを止めてから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+    );
+  });
+
+  test("asks to check for daemons the checks left and covers both flows when the flow is unknown", () => {
     expect(
       nextActionFor("worktree lock is held by a process this run left behind"),
     ).toBe(
-      "検査コマンドが常駐プロセスを残していないかを確かめ、workerを再起動してから(同じworkerの他のジョブも止まります)、ConsoleのFailuresタブから再実行してください",
+      "検査コマンドが常駐プロセスを残していないか確かめ、PRの修正なら残ったプロセスをworkerのコンテナで止めてから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください(実装なら残ったプロセスは再実行の準備ステップが止めます)",
     );
   });
 
-  test("waits for the branch's implementation before re-adding factory:fix", () => {
+  test("tells the implement flow that a rerun stops what its own run left behind", () => {
+    expect(
+      nextActionFor(
+        "worktree lock is held by a process this run left behind",
+        "implement",
+      ),
+    ).toBe(
+      "検査コマンドが常駐プロセスを残していないか確かめてから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください(残ったプロセスは再実行の準備ステップが止めます)",
+    );
+  });
+
+  test("asks pr_fix to stop what its run left behind before rerunning the same work item", () => {
+    expect(
+      nextActionFor(
+        "worktree lock is held by a process this run left behind",
+        "pr_fix",
+      ),
+    ).toBe(
+      "検査コマンドが常駐プロセスを残していないか確かめ、残っていればworkerのコンテナで止めてから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+    );
+  });
+
+  test("keeps the flow-independent action for other reasons when a flow is given", () => {
+    expect(nextActionFor("pull request is not open", "pr_fix")).toBe(
+      "PRを再オープンするか、この作業を取り下げてください",
+    );
+  });
+
+  test("waits for the branch's implementation before rerunning the same pr_fix work item", () => {
     expect(
       nextActionFor("implementation of the branch's work item is running"),
-    ).toBe("実装フローの完了を待ってから再度factory:fixを付けてください");
+    ).toBe(
+      "実装フローの完了を待ってから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+    );
   });
 
   test("asks to look at the failing checks after the deadline", () => {
@@ -768,7 +919,9 @@ describe("nextActionFor (implement flow)", () => {
       nextActionFor(
         "claude run failed (timeout): claude -p timed out after 5ms; implement flow deadline passed during round 1",
       ),
-    ).toBe("ConsoleのFailures / Noticesタブで詳細を確認してください");
+    ).toBe(
+      "通知の理由とConsoleのNoticesタブで原因を確かめ、取り除いてから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+    );
   });
 
   test("asks to fix the time settings", () => {
@@ -777,7 +930,7 @@ describe("nextActionFor (implement flow)", () => {
         "implement time settings do not fit the flow step timeout: implement_timeout_sec 21001 + 600 = 21601s exceeds 21600s",
       ),
     ).toBe(
-      "implement_flow_timeout_sec・implement_timeout_sec・implement_check_timeout_sec・検査コマンド数のいずれかを減らしてから、ConsoleのFailuresタブから再実行してください",
+      "implement_flow_timeout_sec・implement_timeout_sec・implement_check_timeout_sec・検査コマンド数のいずれかを減らしてから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
     );
   });
 });
@@ -786,7 +939,7 @@ describe("describeReason / nextActionFor (GitHub rate limit)", () => {
   const RATE_LIMIT =
     "GitHub rate limit on repos/acme/widgets/pulls: needs a 3601s wait, longer than the 120s wait cap (rerun after the limit resets)";
   const RATE_LIMIT_NEXT_ACTION =
-    "GitHubのrate limitの解除を待ってから、ConsoleのFailuresタブで再実行してください";
+    "GitHubのrate limitの解除を待ってから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください";
 
   test("translates a rate limit", () => {
     expect(describeReason(RATE_LIMIT)).toBe(
@@ -812,7 +965,7 @@ describe("describeReason / nextActionFor (GitHub rate limit)", () => {
 
   test("keeps the generic action for a finish failure that is not a rate limit", () => {
     expect(nextActionFor("implement finish failed: HTTP 422")).toBe(
-      "ConsoleのFailures / Noticesタブで詳細を確認してください",
+      "通知の理由とConsoleのNoticesタブで原因を確かめ、取り除いてから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
     );
   });
 
