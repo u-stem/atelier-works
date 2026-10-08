@@ -201,6 +201,22 @@ export type FailureGroup = {
   step: string | null;
   count: number;
   sample_error: string;
+  /**
+   * グループの最初と最後の失敗が起きたときに稼働していた版(コミットSHA)。
+   * 成功したデプロイの記録から導けない失敗は数に入れない。
+   * 1件も導けなければどちらも`null`。
+   */
+  first_sha: string | null;
+  last_sha: string | null;
+  /** 稼働版を導けなかった失敗の件数。 */
+  unknown_version_count: number;
+};
+/** デプロイ1回の記録。`sha_from`は記録に無ければ`null`。 */
+export type DeploymentEntry = {
+  occurred_at: string;
+  sha_from: string | null;
+  sha_to: string;
+  result: string;
 };
 export type RejectionRecord = {
   kind: string;
@@ -255,6 +271,18 @@ export type AuditEvidence = {
   readonly unresolved_notices_before_period: UnresolvedNoticeGroup[];
   readonly deployments: CountByKey[];
   readonly deployments_needing_host_action: number;
+  /**
+   * 期間内のデプロイの記録。古い順で、新しい方から最大30件。
+   * 件数の総数は`deployments`の合計で分かる。
+   */
+  readonly deployment_history: DeploymentEntry[];
+  /**
+   * 期間の開始と終了の時点で稼働していた版。
+   * 成功したデプロイの記録だけから導き、導けなければ`null`。
+   * 失敗したデプロイは稼働版を変えない。
+   */
+  readonly running_version_at_start: string | null;
+  readonly running_version_at_end: string | null;
   readonly past_proposals: PastProposal[];
 };
 
@@ -263,6 +291,54 @@ const DATA_NOT_INSTRUCTIONS_BANNER =
 
 function unsetIfBlank(value: string | null): string {
   return value === null || value.length === 0 ? UNSET_LABEL : value;
+}
+
+const SHORT_SHA_LENGTH = 7;
+
+function shortSha(sha: string | null): string {
+  return sha === null || sha.length === 0
+    ? UNSET_LABEL
+    : sha.slice(0, SHORT_SHA_LENGTH);
+}
+
+/**
+ * 失敗グループの稼働版を、行に差し込む文字列にする。
+ * 版は例の文より前に置く。1行の上限で切られるのは、長くなりうる例の側にするため。
+ * 最後の失敗が期間末の版と違う版で起きたときは、それを明示する。
+ * 修正済みかどうかは記録から導けないので、版の違いだけを示す。
+ */
+function formatFailureVersion(
+  failure: FailureGroup,
+  endSha: string | null,
+): string {
+  const { first_sha: first, last_sha: last } = failure;
+  const span =
+    first === last || first === null || last === null
+      ? shortSha(first ?? last)
+      : `${shortSha(first)} → ${shortSha(last)}`;
+  const known = first !== null || last !== null;
+  const unknown =
+    known && failure.unknown_version_count > 0
+      ? `(版不明${failure.unknown_version_count}件)`
+      : "";
+  const older =
+    last !== null && endSha !== null && last !== endSha
+      ? ` / 期間末の版より前の版で発生`
+      : "";
+  return ` / 稼働版 ${span}${unknown}${older}`;
+}
+
+const DEPLOYMENT_RESULT_LABELS: Readonly<Record<string, string>> = {
+  success: "成功",
+  failed: "失敗(稼働版は変わらない)",
+};
+
+function formatDeploymentLine(entry: DeploymentEntry): string {
+  const label = DEPLOYMENT_RESULT_LABELS[entry.result] ?? entry.result;
+  return sanitizeCell(
+    `${entry.occurred_at} ${label} ${shortSha(entry.sha_from)} → ${shortSha(entry.sha_to)}`,
+    SANITIZE_CELL_MAX,
+  );
 }
 
 function formatUnresolvedLine(
@@ -307,7 +383,7 @@ function buildEvidenceSections(evidence: AuditEvidence): EvidenceSection[] {
 
   const failureLines = evidence.failures.map((failure) =>
     sanitizeCell(
-      `${failure.flow_path} ${unsetIfBlank(failure.step)}: ${failure.count}件 / 例: ${failure.sample_error}`,
+      `${failure.flow_path} ${unsetIfBlank(failure.step)}: ${failure.count}件${formatFailureVersion(failure, evidence.running_version_at_end)} / 例: ${failure.sample_error}`,
       SANITIZE_CELL_MAX,
     ),
   );
@@ -365,10 +441,27 @@ function buildEvidenceSections(evidence: AuditEvidence): EvidenceSection[] {
     ...unresolvedLines,
   ];
 
-  const deploymentLines = evidence.deployments.map((entry) =>
-    sanitizeCell(`${entry.key}: ${entry.count}件`, SANITIZE_CELL_MAX),
-  );
+  const deploymentLines = [
+    ...evidence.deployments.map((entry) =>
+      sanitizeCell(`${entry.key}: ${entry.count}件`, SANITIZE_CELL_MAX),
+    ),
+    ...evidence.deployment_history.map(formatDeploymentLine),
+  ];
+  const deploymentTotal = sumBy(evidence.deployments, (entry) => entry.count);
   const deploymentFixed = [
+    sanitizeCell(
+      `稼働版(期間の開始時点): ${shortSha(evidence.running_version_at_start)}`,
+      SANITIZE_CELL_MAX,
+    ),
+    sanitizeCell(
+      `稼働版(期間の終了時点): ${shortSha(evidence.running_version_at_end)}`,
+      SANITIZE_CELL_MAX,
+    ),
+    ...(deploymentTotal > evidence.deployment_history.length
+      ? [
+          `デプロイの記録: 全${deploymentTotal}件のうち最新${evidence.deployment_history.length}件を表示`,
+        ]
+      : []),
     sanitizeCell(
       `次の起動で反映する変更: ${evidence.deployments_needing_host_action}件`,
       SANITIZE_CELL_MAX,
@@ -484,6 +577,24 @@ function toFailureGroup(row: SqlRow): FailureGroup {
     step: parseNullableCellString(row.step),
     count: parseNumeric(row.count),
     sample_error: parseCellString(row.sample_error),
+    first_sha: parseSha(row.first_sha),
+    last_sha: parseSha(row.last_sha),
+    unknown_version_count: parseNumeric(row.unknown_version_count),
+  };
+}
+
+/** コミットSHAのセル。値が無いか空文字なら`null`にする。 */
+function parseSha(value: unknown): string | null {
+  const sha = parseNullableCellString(value);
+  return sha === null || sha.length === 0 ? null : sha;
+}
+
+function toDeploymentEntry(row: SqlRow): DeploymentEntry {
+  return {
+    occurred_at: parseTimestampIso(row.occurred_at),
+    sha_from: parseSha(row.sha_from),
+    sha_to: parseCellString(row.sha_to),
+    result: parseCellString(row.result),
   };
 }
 
@@ -626,8 +737,9 @@ function previousPeriodOf(period: AuditPeriod): { start: Date; end: Date } {
  * - 失敗のグループ、却下、人の対応に回った結果
  * - 修正ラウンド・レビュー・通知・デプロイの内訳
  * - 過去の監査レポート最大3件分の提案
- * - 最後に、却下と人の対応に回った結果の上限なしの総数
+ * - 却下と人の対応に回った結果の上限なしの総数
  *   (上の一覧のクエリは`LIMIT 30`のため、件数から指標を出せない)
+ * - 最後に、期間内のデプロイの記録と、期間の開始・終了時点の稼働版
  *
  * work_itemsと結合するクエリはすべて、監査の処理自身の行を除く
  * (`wi.kind <> 'audit'`。null許容の`work_item_id`とLEFT JOINする場合は
@@ -677,14 +789,33 @@ export async function collectAuditEvidence(
     ORDER BY r.stage
   `.fetch();
 
+  // 失敗ごとの稼働版は、成功したデプロイの記録から導く。
+  // 失敗の時刻以前で最後の成功の`sha_to`を使い、無ければ(古い記録が
+  // 掃除された場合など)、その後で最初の成功の`sha_from`を使う。
+  // どちらも無ければ版は`null`で、`unknown_version_count`に数える。
   const failureRows = await sql`
-    SELECT jf.flow_path, jf.step, count(*) AS count, min(jf.error) AS sample_error
-    FROM factory.job_failures jf
-    LEFT JOIN factory.work_items wi ON wi.id = jf.work_item_id
-    WHERE jf.occurred_at >= ${start}::timestamptz AND jf.occurred_at < ${end}::timestamptz
-      AND (wi.kind IS NULL OR wi.kind <> 'audit')
-    GROUP BY jf.flow_path, jf.step
-    ORDER BY count DESC, jf.flow_path, jf.step
+    WITH f AS (
+      SELECT jf.flow_path, jf.step, jf.error, jf.occurred_at,
+             coalesce(
+               (SELECT d.sha_to FROM factory.deployments d
+                  WHERE d.result = 'success' AND d.occurred_at <= jf.occurred_at
+                  ORDER BY d.occurred_at DESC, d.id DESC LIMIT 1),
+               (SELECT d.sha_from FROM factory.deployments d
+                  WHERE d.result = 'success' AND d.occurred_at > jf.occurred_at
+                  ORDER BY d.occurred_at ASC, d.id ASC LIMIT 1)
+             ) AS sha
+      FROM factory.job_failures jf
+      LEFT JOIN factory.work_items wi ON wi.id = jf.work_item_id
+      WHERE jf.occurred_at >= ${start}::timestamptz AND jf.occurred_at < ${end}::timestamptz
+        AND (wi.kind IS NULL OR wi.kind <> 'audit')
+    )
+    SELECT f.flow_path, f.step, count(*) AS count, min(f.error) AS sample_error,
+           (array_agg(f.sha ORDER BY f.occurred_at ASC) FILTER (WHERE f.sha IS NOT NULL))[1] AS first_sha,
+           (array_agg(f.sha ORDER BY f.occurred_at DESC) FILTER (WHERE f.sha IS NOT NULL))[1] AS last_sha,
+           count(*) FILTER (WHERE f.sha IS NULL) AS unknown_version_count
+    FROM f
+    GROUP BY f.flow_path, f.step
+    ORDER BY count DESC, f.flow_path, f.step
     LIMIT 30
   `.fetch();
 
@@ -792,6 +923,32 @@ export async function collectAuditEvidence(
       AND (wi.kind IS NULL OR wi.kind <> 'audit')
   `.fetch();
 
+  const deploymentHistoryRows = await sql`
+    SELECT occurred_at, sha_from, sha_to, result
+    FROM factory.deployments
+    WHERE occurred_at >= ${start}::timestamptz AND occurred_at < ${end}::timestamptz
+    ORDER BY occurred_at DESC, id DESC
+    LIMIT 30
+  `.fetch();
+
+  // 期間の開始時点の版は、開始前で最後の成功の`sha_to`。
+  // 古い記録が掃除されていれば、期間内で最初の成功の`sha_from`を使う。
+  const versionBoundsRows = await sql`
+    SELECT
+      coalesce(
+        (SELECT sha_to FROM factory.deployments
+           WHERE result = 'success' AND occurred_at < ${start}::timestamptz
+           ORDER BY occurred_at DESC, id DESC LIMIT 1),
+        (SELECT sha_from FROM factory.deployments
+           WHERE result = 'success'
+             AND occurred_at >= ${start}::timestamptz AND occurred_at < ${end}::timestamptz
+           ORDER BY occurred_at ASC, id ASC LIMIT 1)
+      ) AS start_sha,
+      (SELECT sha_to FROM factory.deployments
+         WHERE result = 'success' AND occurred_at < ${end}::timestamptz
+         ORDER BY occurred_at DESC, id DESC LIMIT 1) AS end_sha
+  `.fetch();
+
   return {
     period,
     period_label: formatAuditPeriodLabel(period.start, period.end),
@@ -819,6 +976,9 @@ export async function collectAuditEvidence(
     deployments_needing_host_action: parseNumeric(
       deploymentsNeedingHostActionRows[0]?.count,
     ),
+    deployment_history: deploymentHistoryRows.map(toDeploymentEntry).reverse(),
+    running_version_at_start: parseSha(versionBoundsRows[0]?.start_sha),
+    running_version_at_end: parseSha(versionBoundsRows[0]?.end_sha),
     past_proposals: pastProposalRows.map(toPastProposal),
   };
 }

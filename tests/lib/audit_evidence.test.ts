@@ -62,6 +62,9 @@ const EMPTY_EVIDENCE: AuditEvidence = {
   unresolved_notices_before_period: [],
   deployments: [],
   deployments_needing_host_action: 0,
+  deployment_history: [],
+  running_version_at_start: null,
+  running_version_at_end: null,
   past_proposals: [],
 };
 
@@ -77,6 +80,9 @@ const OVERLOADED_EVIDENCE: AuditEvidence = {
     step: `step-${i}`,
     count: i,
     sample_error: `error detail ${i} ${"z".repeat(50)}`,
+    first_sha: null,
+    last_sha: null,
+    unknown_version_count: 0,
   })),
   rejections: Array.from({ length: 200 }, (_, i) => ({
     kind: "issue_proposal",
@@ -127,6 +133,9 @@ const REGRESSION_EVIDENCE: AuditEvidence = {
     step: `s${i}`,
     count: i + 1,
     sample_error: "x",
+    first_sha: null,
+    last_sha: null,
+    unknown_version_count: 0,
   })),
   human_outcomes: Array.from({ length: 400 }, (_, i) => ({
     to_status: "needs_human",
@@ -408,7 +417,9 @@ describe("collectAuditEvidence", () => {
     const failureLine = markdown
       .split("\n")
       .find((line) => line.includes("f/factory/flow.ts"));
-    expect(failureLine).toBe("- f/factory/flow.ts s1: 1件 / 例: a x y");
+    expect(failureLine).toBe(
+      "- f/factory/flow.ts s1: 1件 / 稼働版 未設定 / 例: a x y",
+    );
   });
 
   test("excludes audit-kind work items from the failure-group query (R4)", async () => {
@@ -491,7 +502,7 @@ describe("collectAuditEvidence", () => {
       sql,
     );
     const call = calls.find((c) => c.text.includes("factory.job_failures"));
-    expect(call?.text).toContain("ORDER BY count DESC, jf.flow_path, jf.step");
+    expect(call?.text).toContain("ORDER BY count DESC, f.flow_path, f.step");
   });
 });
 
@@ -741,6 +752,254 @@ describe("unresolved notices split by period", () => {
     const { calls } = await evidenceWith([]);
     expect(calls[UNRESOLVED_NOTICE_INDEX]?.values).toContain(
       PERIOD.end.toISOString(),
+    );
+  });
+});
+
+const DEPLOYMENT_HISTORY_INDEX = 15;
+const VERSION_BOUNDS_INDEX = 16;
+const SHA_A = "aaaaaaa1111111111111111111111111aaaaaaaa";
+const SHA_B = "bbbbbbb2222222222222222222222222bbbbbbbb";
+const SHA_C = "ccccccc3333333333333333333333333cccccccc";
+
+const FAILURE_BASE: SqlRow = {
+  flow_path: "f/factory/flow.ts",
+  step: "s1",
+  count: 2,
+  sample_error: "boom",
+};
+
+async function renderWithFailure(extra: SqlRow, bounds?: SqlRow) {
+  const responses = responsesWithRowsAt(
+    FAILURE_INDEX,
+    [{ ...FAILURE_BASE, ...extra }],
+    17,
+  );
+  if (bounds !== undefined) responses[VERSION_BOUNDS_INDEX] = [bounds];
+  const { sql } = createFakeSqlClient(responses);
+  const evidence = await collectAuditEvidence(
+    { period: PERIOD, instanceName: "atelier-works" },
+    sql,
+  );
+  return renderEvidenceMarkdown(evidence);
+}
+
+describe("running version of each failure group", () => {
+  test("shows one short version when the failures all happened on it", async () => {
+    const markdown = await renderWithFailure({
+      first_sha: SHA_A,
+      last_sha: SHA_A,
+      unknown_version_count: 0,
+    });
+    expect(markdown).toContain(
+      "- f/factory/flow.ts s1: 2件 / 稼働版 aaaaaaa / 例: boom",
+    );
+  });
+
+  test("shows the first and last versions when the failures span a deployment", async () => {
+    const markdown = await renderWithFailure({
+      first_sha: SHA_A,
+      last_sha: SHA_B,
+      unknown_version_count: 0,
+    });
+    expect(markdown).toContain("稼働版 aaaaaaa → bbbbbbb");
+  });
+
+  test("shows 未設定 when no version could be derived", async () => {
+    const markdown = await renderWithFailure({
+      first_sha: null,
+      last_sha: null,
+      unknown_version_count: 2,
+    });
+    expect(markdown).toContain("稼働版 未設定");
+  });
+
+  test("states how many failures have no derivable version", async () => {
+    const markdown = await renderWithFailure({
+      first_sha: SHA_A,
+      last_sha: SHA_A,
+      unknown_version_count: 1,
+    });
+    expect(markdown).toContain("稼働版 aaaaaaa(版不明1件)");
+  });
+
+  test("flags a group whose last failure ran on a version before the period end", async () => {
+    const markdown = await renderWithFailure(
+      { first_sha: SHA_A, last_sha: SHA_A, unknown_version_count: 0 },
+      { start_sha: SHA_A, end_sha: SHA_B },
+    );
+    expect(markdown).toContain("期間末の版より前の版で発生");
+  });
+
+  test("does not flag a group that ran on the version at the period end", async () => {
+    const markdown = await renderWithFailure(
+      { first_sha: SHA_B, last_sha: SHA_B, unknown_version_count: 0 },
+      { start_sha: SHA_A, end_sha: SHA_B },
+    );
+    expect(markdown).not.toContain("期間末の版より前");
+  });
+
+  test("keeps the version before the sample error so the line cap cannot cut it", async () => {
+    const markdown = await renderWithFailure({
+      first_sha: SHA_A,
+      last_sha: SHA_A,
+      unknown_version_count: 0,
+      sample_error: "e".repeat(500),
+    });
+    expect(markdown).toContain("稼働版 aaaaaaa");
+  });
+
+  test("derives the version only from successful deployments", async () => {
+    const { sql, calls } = createFakeSqlClient([]);
+    await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(calls[FAILURE_INDEX]?.text).toContain("d.result = 'success'");
+  });
+
+  test("falls back to the version a later deployment came from", async () => {
+    const { sql, calls } = createFakeSqlClient([]);
+    await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(calls[FAILURE_INDEX]?.text).toContain("d.sha_from");
+  });
+});
+
+describe("deployment history and running versions", () => {
+  const historyRows: SqlRow[] = [
+    {
+      occurred_at: "2026-09-25T03:00:00.000Z",
+      sha_from: SHA_B,
+      sha_to: SHA_C,
+      result: "failed",
+    },
+    {
+      occurred_at: "2026-09-22T03:00:00.000Z",
+      sha_from: SHA_A,
+      sha_to: SHA_B,
+      result: "success",
+    },
+  ];
+
+  async function evidenceWithDeployments(
+    history: SqlRow[],
+    bounds: SqlRow[] = [],
+  ) {
+    const responses = responsesWithRowsAt(
+      DEPLOYMENT_HISTORY_INDEX,
+      history,
+      17,
+    );
+    responses[VERSION_BOUNDS_INDEX] = bounds;
+    const { sql, calls } = createFakeSqlClient(responses);
+    const evidence = await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    return { evidence, calls };
+  }
+
+  test("lists the deployments oldest first", async () => {
+    const { evidence } = await evidenceWithDeployments(historyRows);
+    expect(evidence.deployment_history.map((entry) => entry.result)).toEqual([
+      "success",
+      "failed",
+    ]);
+  });
+
+  test("fetches only the latest 30 deployments", async () => {
+    const { calls } = await evidenceWithDeployments([]);
+    expect(calls[DEPLOYMENT_HISTORY_INDEX]?.text).toContain("LIMIT 30");
+  });
+
+  test("reads the running versions at the period start and end", async () => {
+    const { evidence } = await evidenceWithDeployments(historyRows, [
+      { start_sha: SHA_A, end_sha: SHA_B },
+    ]);
+    expect([
+      evidence.running_version_at_start,
+      evidence.running_version_at_end,
+    ]).toEqual([SHA_A, SHA_B]);
+  });
+
+  test("derives the running versions from successful deployments only", async () => {
+    const { calls } = await evidenceWithDeployments([]);
+    expect(calls[VERSION_BOUNDS_INDEX]?.text).toContain("result = 'success'");
+  });
+
+  test("renders the running version at the period start as a fixed line", async () => {
+    const { evidence } = await evidenceWithDeployments(historyRows, [
+      { start_sha: SHA_A, end_sha: SHA_B },
+    ]);
+    expect(renderEvidenceMarkdown(evidence)).toContain(
+      "- 稼働版(期間の開始時点): aaaaaaa\n",
+    );
+  });
+
+  test("renders the running version at the period end as a fixed line", async () => {
+    const { evidence } = await evidenceWithDeployments(historyRows, [
+      { start_sha: SHA_A, end_sha: SHA_B },
+    ]);
+    expect(renderEvidenceMarkdown(evidence)).toContain(
+      "- 稼働版(期間の終了時点): bbbbbbb\n",
+    );
+  });
+
+  test("renders 未設定 for a running version that cannot be derived", async () => {
+    const { evidence } = await evidenceWithDeployments([]);
+    expect(renderEvidenceMarkdown(evidence)).toContain(
+      "- 稼働版(期間の開始時点): 未設定\n",
+    );
+  });
+
+  test("renders a successful deployment as a version change", async () => {
+    const { evidence } = await evidenceWithDeployments(historyRows);
+    expect(renderEvidenceMarkdown(evidence)).toContain(
+      "- 2026-09-22T03:00:00.000Z 成功 aaaaaaa → bbbbbbb",
+    );
+  });
+
+  test("renders a failed deployment as not applied", async () => {
+    const { evidence } = await evidenceWithDeployments(historyRows);
+    expect(renderEvidenceMarkdown(evidence)).toContain(
+      "- 2026-09-25T03:00:00.000Z 失敗(稼働版は変わらない) bbbbbbb → ccccccc",
+    );
+  });
+
+  test("renders 未設定 for a deployment without a source version", async () => {
+    const { evidence } = await evidenceWithDeployments([
+      {
+        occurred_at: "2026-09-22T03:00:00.000Z",
+        sha_from: null,
+        sha_to: SHA_B,
+        result: "success",
+      },
+    ]);
+    expect(renderEvidenceMarkdown(evidence)).toContain("成功 未設定 → bbbbbbb");
+  });
+
+  test("states that only the latest deployments are listed when the history is capped", async () => {
+    const { evidence } = await evidenceWithDeployments(historyRows);
+    const capped: AuditEvidence = {
+      ...evidence,
+      deployments: [{ key: "success", count: 45 }],
+    };
+    expect(renderEvidenceMarkdown(capped)).toContain(
+      "- デプロイの記録: 全45件のうち最新2件を表示\n",
+    );
+  });
+
+  test("keeps the running version lines under truncation", () => {
+    const evidence: AuditEvidence = {
+      ...OVERLOADED_EVIDENCE,
+      running_version_at_start: SHA_A,
+      running_version_at_end: SHA_B,
+    };
+    expect(renderEvidenceMarkdown(evidence)).toContain(
+      "- 稼働版(期間の終了時点): bbbbbbb\n",
     );
   });
 });
