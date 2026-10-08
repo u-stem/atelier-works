@@ -8,6 +8,7 @@ import {
   decideUpdate,
   extractMiseHostSections,
   miseTomlNeedsHostAction,
+  parseNulSeparatedPaths,
   resolveWmillCliContext,
   truncateOutput,
 } from "../../f/factory/lib/self_update_support.ts";
@@ -58,7 +59,45 @@ describe("assertBranchMatches", () => {
   });
 });
 
+describe("parseNulSeparatedPaths", () => {
+  test("splits NUL-separated output and drops the trailing empty entry", () => {
+    expect(parseNulSeparatedPaths("mise.toml\0infra/x.yml\0")).toEqual([
+      "mise.toml",
+      "infra/x.yml",
+    ]);
+  });
+
+  test("returns an empty list for empty output", () => {
+    expect(parseNulSeparatedPaths("")).toEqual([]);
+  });
+
+  test("keeps non-ASCII paths verbatim", () => {
+    expect(parseNulSeparatedPaths("infra/設定.yml\0")).toEqual([
+      "infra/設定.yml",
+    ]);
+  });
+
+  test("keeps a path containing a newline as one entry", () => {
+    expect(parseNulSeparatedPaths("a\nb.txt\0")).toEqual(["a\nb.txt"]);
+  });
+
+  test("accepts output without a trailing NUL", () => {
+    expect(parseNulSeparatedPaths("mise.toml")).toEqual(["mise.toml"]);
+  });
+});
+
 describe("classifyChangedPaths", () => {
+  test("flags a non-ASCII path under infra/ as needing host action", () => {
+    const result = classifyChangedPaths(
+      parseNulSeparatedPaths("infra/設定.yml\0"),
+      false,
+    );
+    expect(result).toEqual({
+      needs_host_action: true,
+      host_paths: ["infra/設定.yml"],
+    });
+  });
+
   test("flags a path under infra/ as needing host action", () => {
     const result = classifyChangedPaths(["infra/docker-compose.yml"], false);
     expect(result).toEqual({

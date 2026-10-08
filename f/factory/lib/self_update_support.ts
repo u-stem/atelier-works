@@ -114,14 +114,26 @@ export function miseTomlNeedsHostAction(
   return extractMiseHostSections(oldToml) !== extractMiseHostSections(newToml);
 }
 
+/**
+ * `-z`付きのgitが出力するパス一覧(NULで区切り、末尾もNULで終わる)を
+ * 配列にする。空の出力は空配列になる。
+ * `-z`なしだと、非ASCIIや制御文字を含むパスは`core.quotepath`により
+ * 引用符つきのエスケープ表記で出力され、`infra/`の判定に一致しなくなる。
+ * `-z`ではパスがそのまま出力されるため、改行を含むパスも1件として扱える。
+ */
+export function parseNulSeparatedPaths(output: string): string[] {
+  return output.split("\0").filter((path) => path.length > 0);
+}
+
 export type ChangedPathsClassification = {
   readonly needs_host_action: boolean;
   readonly host_paths: string[];
 };
 
 /**
- * 変更されたファイルのパスの一覧(`git diff --name-only` /
- * `git ls-tree --name-only`の出力)を分類する。
+ * 変更されたファイルのパスの一覧(`git diff --name-only -z` /
+ * `git ls-tree --name-only -z`の出力を`parseNulSeparatedPaths`で配列にしたもの)
+ * を分類する。
  * `host_paths`は次のホスト側の起動で反映されるパス、`needs_host_action`は
  * それが1つ以上あるかを表す。
  * `miseTomlHostSectionsChanged`は呼び出し側による`mise.toml`の判定
