@@ -730,13 +730,13 @@ describe("runClaude", () => {
     expect(result.discardedAgentRun?.cost_usd).toBe(0.5);
   });
 
-  test("returns the first attempt's run record when stdout was not valid JSON", async () => {
+  test("records no cost for the first attempt when stdout was not valid JSON", async () => {
     const fake = createFakeCommandRunner([
       { stdout: "not json", stderr: "", exitCode: 0, timedOut: false },
       { stdout: claudeJsonStdout(), stderr: "", exitCode: 0, timedOut: false },
     ]);
     const result = await runClaude(baseOptions(fake.run));
-    expect(result.discardedAgentRun?.exit_code).toBe(0);
+    expect(result.discardedAgentRun?.cost_usd).toBeNull();
   });
 
   test("returns no discarded run record without a retry", async () => {
