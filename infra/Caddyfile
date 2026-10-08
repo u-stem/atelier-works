@@ -26,37 +26,13 @@
         # :25のlayer4のリスナーは動いたまま、HTTPのプロキシだけが黙って止まる。
         bind {$ADDRESS:0.0.0.0 ::}
 
-        handle /console {
-                import console_headers
-                redir * /console/ 308
-        }
-
-        # Consoleの共有のassets。ハッシュ付きの名前なので長期のキャッシュにする。
-        # 無いファイルはindex.htmlに落とさず404にする(handle_errorsが返す)。
-        handle_path /console/assets/* {
-                import console_headers
-                import console_reject_encoded_separator
-                root * /srv/console/assets
-                header Cache-Control "public, max-age=31536000, immutable"
-                file_server
-        }
-
-        # Consoleの本体。今の版(current)を返し、無いパスはSPAのindex.htmlに落とす。
-        # index.htmlは毎回確かめさせる(付け替えの後、すぐ新しい版を読ませるため)。
-        handle_path /console/* {
-                import console_headers
-                import console_reject_encoded_separator
-                root * /srv/console/current
-                header Cache-Control "no-cache"
-                try_files {path} /index.html
-                file_server
-        }
+        # 元のパス(パーセント符号を戻しただけで正規化していないもの)が/consoleか/console/で
+        # 始まる要求。CSPは符号を戻してから比べるので(`/%63onsole/`も`/console/`に合う)、
+        # 生のURIではなくこれで判定する。handle_errorsでもConsoleの応答の判定に使う。
+        @console_raw expression `{http.request.orig_uri.path}.matches("(?i)^/+console(/|$)")`
 
         # 追加のサービス: LSP、Multiplayer、Debugger(`windmill_extra`のゲートウェイ)。
         @extra path /ws/* /ws_mp/* /ws_debug/*
-        handle @extra {
-                reverse_proxy http://windmill_extra:3000
-        }
 
         # 他のサイト(別のポートのlocalhostを含む)から、運用者のCookieでAPIを呼ばせない。
         # Windmillのフロントエンドからの要求にはブラウザがSec-Fetch-Site: same-originを付け、
@@ -69,23 +45,57 @@
                 header Sec-Fetch-Site same-site
         }
 
-        # 検索インデクサ。Enterprise Edition用(windmill_indexer:8002)
-        # reverse_proxy /api/srch/* http://windmill_indexer:8002
+        # Caddyはhandleをmatcherの種類で並べ替えるので、routeで書いた順に評価させる。
+        # Consoleの経路と@console_rawを、どのreverse_proxyよりも先に置く。
+        route {
+                handle /console {
+                        import console_headers
+                        redir * /console/ 308
+                }
 
-        # 元のパスが/console/で始まるのに上のConsoleの経路に入らなかった要求
-        # (`/console/..%2fapi/...`のようにCaddyの正規化でConsoleの外に出たもの)は、
-        # Windmillへ転送せず404にする。handle_errorsでもConsoleの応答の判定に使う。
-        # CSPはパーセント符号を戻してから比べるので(`/%63onsole/`も`/console/`に合う)、
-        # 生のURIではなく、符号を戻しただけで正規化していない元のパスで判定する。
-        @console_raw expression `{http.request.orig_uri.path}.matches("(?i)^/+console(/|$)")`
-        handle @console_raw {
-                error 404
-        }
+                # Consoleの共有のassets。ハッシュ付きの名前なので長期のキャッシュにする。
+                # 無いファイルはindex.htmlに落とさず404にする(handle_errorsが返す)。
+                handle_path /console/assets/* {
+                        import console_headers
+                        import console_reject_encoded_separator
+                        root * /srv/console/assets
+                        header Cache-Control "public, max-age=31536000, immutable"
+                        file_server
+                }
 
-        # 既定の転送先: Windmillのサーバー
-        handle {
-                respond @cross_site_api 403
-                reverse_proxy http://windmill_server:8000
+                # Consoleの本体。今の版(current)を返し、無いパスはSPAのindex.htmlに落とす。
+                # index.htmlは毎回確かめさせる(付け替えの後、すぐ新しい版を読ませるため)。
+                handle_path /console/* {
+                        import console_headers
+                        import console_reject_encoded_separator
+                        root * /srv/console/current
+                        header Cache-Control "no-cache"
+                        try_files {path} /index.html
+                        file_server
+                }
+
+                # 元のパスが/console/で始まるのに上のConsoleの経路に入らなかった要求
+                # (`/console/..%2fws/...`のようにCaddyの正規化でConsoleの外に出たもの)は、
+                # どの転送先にも渡さず404にする。
+                handle @console_raw {
+                        error 404
+                }
+
+                handle @cross_site_api {
+                        respond 403
+                }
+
+                handle @extra {
+                        reverse_proxy http://windmill_extra:3000
+                }
+
+                # 検索インデクサ。Enterprise Edition用(windmill_indexer:8002)
+                # reverse_proxy /api/srch/* http://windmill_indexer:8002
+
+                # 既定の転送先: Windmillのサーバー
+                handle {
+                        reverse_proxy http://windmill_server:8000
+                }
         }
 
         # Consoleのエラー(無いassets、currentがまだ無いとき、符号化した区切り、上の404)にも
