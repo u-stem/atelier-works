@@ -284,18 +284,25 @@ export type RunClaudeFailureReason =
   | "invalid_structured_output"
   | "claude_error";
 
+/**
+ * `runClaude`の結果。`agentRun`は最後の試行の記録で、再試行したときは捨てた最初の試行の記録が
+ * `discardedAgentRun`に入る(再試行しなかったときは持たない)。
+ * 最初の試行にも費用がかかっているので、結果を記録する側は両方を`recordClaudeRuns`で記録する。
+ */
 export type RunClaudeResult<T> =
   | {
       readonly outcome: "success";
       readonly structuredOutput: T;
       readonly raw: ClaudeRunResult;
       readonly agentRun: AgentRunRecord;
+      readonly discardedAgentRun?: AgentRunRecord;
       readonly retried: boolean;
     }
   | {
       readonly outcome: "failure";
       readonly reason: RunClaudeFailureReason;
       readonly agentRun: AgentRunRecord;
+      readonly discardedAgentRun?: AgentRunRecord;
       readonly detail: string;
       readonly retried: boolean;
     };
@@ -543,6 +550,7 @@ const RETRYABLE_REASONS: readonly RunClaudeFailureReason[] = [
  * 0以外の終了コード、タイムアウト、`is_error: true`は再試行しない。
  * Claudeの実行の失敗は例外にせず、`outcome: "failure"`と`reason`・`detail`で返す。
  * 再試行したかは成功・失敗とも`retried`で示し、`agentRun`には最後の試行の記録が入る。
+ * 再試行したときは、最初の試行の記録(費用を含む)を`discardedAgentRun`で返す。
  * `deadlineAt`を過ぎていれば起動せずにtimeoutの失敗を返し、過ぎた後は再試行しない。
  */
 export async function runClaude<T>(
@@ -574,7 +582,23 @@ export async function runClaude<T>(
 
   const retryPrompt = `${opts.prompt}\n\n${opts.retryNote ?? DEFAULT_RETRY_NOTE}`;
   const second = await attemptClaude(opts, retryPrompt);
-  return { ...second, retried: true };
+  return { ...second, discardedAgentRun: first.agentRun, retried: true };
+}
+
+/**
+ * `runClaude`の結果の実行記録を`record`で記録し、最後の試行の行のIDを返す。
+ * 再試行したときは、捨てた最初の試行を先に記録する。
+ * 最初の試行の費用も`agent_runs`と日次予算の集計に載せるため、
+ * `result.agentRun`だけを記録せず、結果の記録は必ずこの関数を通す。
+ */
+export async function recordClaudeRuns<T>(
+  result: RunClaudeResult<T>,
+  record: (agentRun: AgentRunRecord) => Promise<number>,
+): Promise<number> {
+  if (result.discardedAgentRun !== undefined) {
+    await record(result.discardedAgentRun);
+  }
+  return record(result.agentRun);
 }
 
 // ---------------------------------------------------------------------------

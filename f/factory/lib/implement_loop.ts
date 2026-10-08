@@ -7,7 +7,11 @@
 import { access, cp, lstat, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { RunClaudeOptions, RunClaudeResult } from "./claude.ts";
+import {
+  type RunClaudeOptions,
+  type RunClaudeResult,
+  recordClaudeRuns,
+} from "./claude.ts";
 import { IMPLEMENT_LEASE_LOST_REASON } from "./implement_launch_support.ts";
 import {
   classifyProtectedChanges,
@@ -356,7 +360,9 @@ export function toImplementClaudeRound(
   result: RunClaudeResult<ImplementClaudeOutput>,
   agentRunId: number,
 ): ImplementClaudeRunRound {
-  const costUsd = result.agentRun.cost_usd ?? 0;
+  // 再試行で捨てた最初の試行の費用も、このラウンドにかかった費用に数える。
+  const costUsd =
+    (result.discardedAgentRun?.cost_usd ?? 0) + (result.agentRun.cost_usd ?? 0);
   if (result.outcome === "failure") {
     return {
       kind: "claude_failed",
@@ -465,7 +471,7 @@ export async function runImplementClaudeRound(
   input: ImplementClaudeRunInput,
 ): Promise<ImplementClaudeRunRound> {
   const result = await deps.runClaude(buildImplementClaudeOptions(input));
-  const agentRunId = await deps.recordAgentRun(result.agentRun);
+  const agentRunId = await recordClaudeRuns(result, deps.recordAgentRun);
   return toImplementClaudeRound(result, agentRunId);
 }
 

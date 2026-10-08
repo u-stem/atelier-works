@@ -424,6 +424,24 @@ describe("toImplementClaudeRound", () => {
   test("accepts a requirements_gap output as a valid round", () => {
     expect(toImplementClaudeRound(success(GAP), 13).kind).toBe("output");
   });
+
+  test("adds the discarded attempt's cost to the round cost", () => {
+    const retried: RunClaudeResult<ImplementClaudeOutput> = {
+      ...success(DONE),
+      retried: true,
+      discardedAgentRun: { ...AGENT_RUN, cost_usd: 0.75 },
+    };
+    expect(toImplementClaudeRound(retried, 11).cost_usd).toBe(2);
+  });
+
+  test("adds the discarded attempt's cost to a failed round", () => {
+    const retriedFailure: RunClaudeResult<ImplementClaudeOutput> = {
+      ...FAILURE,
+      retried: true,
+      discardedAgentRun: { ...AGENT_RUN, cost_usd: 0.75 },
+    };
+    expect(toImplementClaudeRound(retriedFailure, 12).cost_usd).toBe(0.75);
+  });
 });
 
 describe("buildImplementClaudeOptions", () => {
@@ -507,6 +525,44 @@ describe("runImplementClaudeRound", () => {
       RUN_INPUT,
     );
     expect(recorded).toHaveLength(1);
+  });
+
+  test("records the discarded attempt too when Claude retried", async () => {
+    const recorded: AgentRunRecord[] = [];
+    await runImplementClaudeRound(
+      {
+        runClaude: async () => ({
+          ...success(DONE),
+          retried: true,
+          discardedAgentRun: { ...AGENT_RUN, cost_usd: 0.75 },
+        }),
+        recordAgentRun: async (record) => {
+          recorded.push(record);
+          return 42;
+        },
+      },
+      RUN_INPUT,
+    );
+    expect(recorded.map((record) => record.cost_usd)).toEqual([0.75, 1.25]);
+  });
+
+  test("puts the final attempt's recorded id on a retried round", async () => {
+    let nextId = 40;
+    const round = await runImplementClaudeRound(
+      {
+        runClaude: async () => ({
+          ...success(DONE),
+          retried: true,
+          discardedAgentRun: { ...AGENT_RUN, cost_usd: 0.75 },
+        }),
+        recordAgentRun: async () => {
+          nextId += 1;
+          return nextId;
+        },
+      },
+      RUN_INPUT,
+    );
+    expect(round.agent_run_id).toBe(42);
   });
 
   test("puts the recorded id on the round", async () => {

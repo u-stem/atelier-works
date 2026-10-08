@@ -6,6 +6,7 @@ import * as wmill from "windmill-client@1.817.0";
 import {
   buildSystemPrompt,
   dailyBudgetStatus,
+  recordClaudeRuns,
   runClaude,
 } from "../lib/claude.ts";
 import { loadConfig } from "../lib/config.ts";
@@ -309,7 +310,7 @@ export async function main(
       timeoutMs,
     });
 
-    await recordAgentRun(retryResult.agentRun);
+    await recordClaudeRuns(retryResult, recordAgentRun);
 
     if (retryResult.outcome !== "success") {
       return {

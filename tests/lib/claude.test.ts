@@ -8,9 +8,12 @@ import {
   jstMidnightTodayIso,
   parseClaudeJson,
   type RunClaudeOptions,
+  type RunClaudeResult,
+  recordClaudeRuns,
   runClaude,
 } from "../../f/factory/lib/claude.ts";
 import type { SqlClient, SqlRow } from "../../f/factory/lib/db.ts";
+import type { AgentRunRecord } from "../../f/factory/lib/types.ts";
 import { createFakeCommandRunner, fail, timeout } from "./testSupport.ts";
 
 type FakeCall = { text: string; values: unknown[] };
@@ -658,6 +661,183 @@ describe("runClaude", () => {
       now: () => 0,
     });
     expect(result.retried).toBe(true);
+  });
+
+  test("returns the first attempt's run record when it retries", async () => {
+    const fake = createFakeCommandRunner([
+      {
+        stdout: claudeJsonStdout({
+          total_cost_usd: 0.5,
+          structured_output: { wrong: "shape" },
+        }),
+        stderr: "",
+        exitCode: 0,
+        timedOut: false,
+      },
+      { stdout: claudeJsonStdout(), stderr: "", exitCode: 0, timedOut: false },
+    ]);
+    const result = await runClaude(baseOptions(fake.run));
+    expect(result.discardedAgentRun?.cost_usd).toBe(0.5);
+  });
+
+  test("marks the first attempt's run record with why it was discarded", async () => {
+    const fake = createFakeCommandRunner([
+      {
+        stdout: claudeJsonStdout({ structured_output: { wrong: "shape" } }),
+        stderr: "",
+        exitCode: 0,
+        timedOut: false,
+      },
+      { stdout: claudeJsonStdout(), stderr: "", exitCode: 0, timedOut: false },
+    ]);
+    const result = await runClaude(baseOptions(fake.run));
+    expect(result.discardedAgentRun?.error).toContain(
+      "structured_output does not match the expected schema",
+    );
+  });
+
+  test("keeps the final attempt's run record in agentRun when it retries", async () => {
+    const fake = createFakeCommandRunner([
+      {
+        stdout: claudeJsonStdout({
+          total_cost_usd: 0.5,
+          structured_output: { wrong: "shape" },
+        }),
+        stderr: "",
+        exitCode: 0,
+        timedOut: false,
+      },
+      { stdout: claudeJsonStdout(), stderr: "", exitCode: 0, timedOut: false },
+    ]);
+    const result = await runClaude(baseOptions(fake.run));
+    expect(result.agentRun.cost_usd).toBe(0.0123);
+  });
+
+  test("returns the first attempt's run record when the retry also fails", async () => {
+    const fake = createFakeCommandRunner([
+      {
+        stdout: claudeJsonStdout({
+          total_cost_usd: 0.5,
+          structured_output: { wrong: "shape" },
+        }),
+        stderr: "",
+        exitCode: 0,
+        timedOut: false,
+      },
+      { stdout: "still not json", stderr: "", exitCode: 0, timedOut: false },
+    ]);
+    const result = await runClaude(baseOptions(fake.run));
+    expect(result.discardedAgentRun?.cost_usd).toBe(0.5);
+  });
+
+  test("returns the first attempt's run record when stdout was not valid JSON", async () => {
+    const fake = createFakeCommandRunner([
+      { stdout: "not json", stderr: "", exitCode: 0, timedOut: false },
+      { stdout: claudeJsonStdout(), stderr: "", exitCode: 0, timedOut: false },
+    ]);
+    const result = await runClaude(baseOptions(fake.run));
+    expect(result.discardedAgentRun?.exit_code).toBe(0);
+  });
+
+  test("returns no discarded run record without a retry", async () => {
+    const fake = createFakeCommandRunner([
+      { stdout: claudeJsonStdout(), stderr: "", exitCode: 0, timedOut: false },
+    ]);
+    const result = await runClaude(baseOptions(fake.run));
+    expect(result.discardedAgentRun).toBeUndefined();
+  });
+
+  test("returns no discarded run record for a non-retryable failure", async () => {
+    const fake = createFakeCommandRunner([fail("boom")]);
+    const result = await runClaude(baseOptions(fake.run));
+    expect(result.discardedAgentRun).toBeUndefined();
+  });
+
+  test("returns no discarded run record when the deadline stops the retry", async () => {
+    const fake = createFakeCommandRunner([
+      { stdout: "not json", stderr: "", exitCode: 0, timedOut: false },
+      { stdout: claudeJsonStdout(), stderr: "", exitCode: 0, timedOut: false },
+    ]);
+    let clock = 0;
+    const run: typeof fake.run = async (argv, options) => {
+      const result = await fake.run(argv, options);
+      clock = 61_000;
+      return result;
+    };
+    const result = await runClaude({
+      ...baseOptions(run),
+      deadlineAt: 60_000,
+      now: () => clock,
+    });
+    expect(result.discardedAgentRun).toBeUndefined();
+  });
+});
+
+function runRecord(costUsd: number | null): AgentRunRecord {
+  return {
+    work_item_id: 1,
+    stage: "generate_requirements",
+    attempt: 1,
+    model: "claude-sonnet-5",
+    claude_version: null,
+    input_tokens: null,
+    output_tokens: null,
+    cache_read_tokens: null,
+    cost_usd: costUsd,
+    num_turns: null,
+    duration_ms: null,
+    session_id: null,
+    exit_code: 0,
+    error: null,
+  };
+}
+
+function successResult(
+  agentRun: AgentRunRecord,
+  discardedAgentRun?: AgentRunRecord,
+): RunClaudeResult<OkPayload> {
+  return {
+    outcome: "success",
+    structuredOutput: { ok: true },
+    raw: parseClaudeJson(claudeJsonStdout()),
+    agentRun,
+    retried: discardedAgentRun !== undefined,
+    ...(discardedAgentRun === undefined ? {} : { discardedAgentRun }),
+  };
+}
+
+describe("recordClaudeRuns", () => {
+  test("records the discarded attempt before the final attempt", async () => {
+    const costs: (number | null)[] = [];
+    await recordClaudeRuns(
+      successResult(runRecord(0.2), runRecord(0.5)),
+      async (record) => {
+        costs.push(record.cost_usd);
+        return 1;
+      },
+    );
+    expect(costs).toEqual([0.5, 0.2]);
+  });
+
+  test("records only the final attempt when nothing was discarded", async () => {
+    const costs: (number | null)[] = [];
+    await recordClaudeRuns(successResult(runRecord(0.2)), async (record) => {
+      costs.push(record.cost_usd);
+      return 1;
+    });
+    expect(costs).toEqual([0.2]);
+  });
+
+  test("returns the id of the final attempt's row", async () => {
+    let nextId = 10;
+    const id = await recordClaudeRuns(
+      successResult(runRecord(0.2), runRecord(0.5)),
+      async () => {
+        nextId += 1;
+        return nextId;
+      },
+    );
+    expect(id).toBe(12);
   });
 });
 

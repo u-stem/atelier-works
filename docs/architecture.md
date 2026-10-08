@@ -156,7 +156,7 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加のみで、ren
 | `work_item_events` | 状態遷移のイベント履歴 |
 | `requirement_drafts` | 要件定義ドラフト(markdown、図の参照`{name, file}`、未確定事項、`doc_dir`)。attemptごとに保存。図のXML自体はDBではなく`doc_dir`配下のファイルにある |
 | `approvals` | 旧テーブル。過去の承認・却下履歴のみを保持し、新規の書き込みはない(`approval_requests`に統一済み) |
-| `agent_runs` | Claude実行1回ごとのログ(トークン数、コスト、所要時間、終了コード等) |
+| `agent_runs` | Claude実行1回ごとのログ(トークン数、コスト、所要時間、終了コード等)。不正な出力を再試行したときは、捨てた最初の試行も同じ`attempt`の別の行として記録し、費用を日次予算の集計とコスト分析に含める |
 | `job_failures` | フロー実行時のエラー(トークンはマスク済み) |
 | `deployments` | self_updateによるデプロイ結果 |
 | `notices` | 要対応事項(PAT失効、SHA不一致など) |

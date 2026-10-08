@@ -22,6 +22,7 @@ import {
 } from "../lib/audit_support.ts";
 import {
   buildSystemPrompt,
+  recordClaudeRuns,
   runClaude,
   type SystemPromptFile,
 } from "../lib/claude.ts";
@@ -471,7 +472,7 @@ export async function main(
       timeoutMs: config.claude_timeout_sec * 1000,
     });
 
-    await recordAgentRun(result.agentRun);
+    await recordClaudeRuns(result, recordAgentRun);
 
     if (result.outcome === "failure") {
       throw new Error(
