@@ -44,7 +44,7 @@ PRの修正(`pr_fix`)と実装(`implement`)のフローは、Claudeが対象リ�
 Consoleの表示と次の操作は、この区切りで分けた項目ごとに選ぶ。
 Claudeや検査コマンドが書ける詳細と、pr_fixのClaudeが理由として書く`blocked_reason`は、区切りを`", "`に置き換えてから理由に入れる。
 区切りを差し込んで、別の理由の訳文を表示させたり、既知の理由を足して次の操作を選ばせたりできないようにするためである。
-置き換える詳細の範囲は[通知の仕様](internals/notifications.md)にある。
+置き換える詳細の範囲は[通知とrate limit](internals/notifications.md)にある。
 
 残るリスクとして、Claudeは`blocked_reason`の全体を既知の理由と同じ文にできる。
 そのときは、その理由の訳文と次の操作が表示される。

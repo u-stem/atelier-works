@@ -69,7 +69,7 @@ description: 本リポジトリ(atelier-works)の開発環境をセットアッ�
 
 `implement_enabled`については、次の点に注意する。
 
-- falseのままだと、承認した作業項目は`approved`で止まる。Consoleの再実行(`retry_work_item`)も、falseなら拒否する。
+- falseのままだと、承認した作業項目は`approved`で止まる。`retry_work_item`での再実行も、falseなら拒否する。
 - インスタンス全体の設定なので、trueの間は`repo_allowlist`のほかのリポジトリと`factory_repo`でも、承認すると実装フローが走る。pushとPRの作成、対象リポジトリのCIまで進むので、E2Eの間はsandbox以外を承認しない。
 
 | 確かめること | 期待する結果 |
