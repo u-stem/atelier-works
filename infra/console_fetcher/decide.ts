@@ -363,9 +363,20 @@ export function appendHistory(
   return [...history, sha].slice(-limit);
 }
 
+/** 版の中身を表す文字列。`files`が同じ版は同じ文字列になる。 */
+function contentKey(manifest: ConsoleManifest): string {
+  return JSON.stringify([...manifest.files].sort());
+}
+
 /**
- * 消す`releases/<sha>`を返す。付け替えの履歴の新しい方から、重複を除いて`keep`版と、
- * 今の`current`(戻してpinした古い版を含む)を残す。履歴に無い版(付け替える前に止まったもの)は消す。
+ * 消す`releases/<sha>`を返す。付け替えの履歴の新しい方から、`keep`個の「中身の違う版」と、
+ * 今の`current`(戻してpinした古い版を含む)を残す。
+ * Consoleに触れないマージでも中身の同じ版ができるので、`files`が同じ版は1つと数える
+ * (数えないと、無関係なマージが続いたとき、戻せる版が履歴から押し出される)。
+ * 数えた中身と同じ版は、数が`keep`を超えても残す。
+ * 残っていない版と`excluded`(戻した元の版)は数えない。
+ * マニフェストを読めない版は、比べられないので1つの版と数える。
+ * 履歴に無い版(付け替える前に止まったもの)は消す。
  * `current`のリンクを読めない(`unknown`)ときは、どの版を配信中か分からないので何も消さない。
  */
 export function selectReleasesToDelete(
@@ -373,16 +384,23 @@ export function selectReleasesToDelete(
   history: readonly string[],
   current: CurrentLink,
   keep: number,
+  manifests: ReadonlyMap<string, ConsoleManifest | null>,
+  excluded: ReadonlySet<string>,
 ): string[] {
   if (current.kind === "unknown") return [];
+  const present = new Set(existing);
   const kept = new Set<string>();
-  for (
-    let index = history.length - 1;
-    index >= 0 && kept.size < keep;
-    index--
-  ) {
+  const versions = new Set<string>();
+  for (let index = history.length - 1; index >= 0; index--) {
     const sha = history[index];
-    if (sha !== undefined) kept.add(sha);
+    if (sha === undefined || !present.has(sha) || excluded.has(sha)) continue;
+    const manifest = manifests.get(sha) ?? null;
+    const key = manifest === null ? `sha:${sha}` : contentKey(manifest);
+    if (!versions.has(key)) {
+      if (versions.size >= keep) continue;
+      versions.add(key);
+    }
+    kept.add(sha);
   }
   if (current.kind === "release") kept.add(current.sha);
   return existing.filter((sha) => !kept.has(sha));
@@ -505,16 +523,16 @@ export function parsePinRevoked(value: unknown): string[] {
 
 /**
  * 戻した元の版だけが参照する共有の`assets/`のファイル名(`assets/`からの相対名)を返す。
- * 残す版のマニフェストを1つでも読めなければ、どれが使われているか分からないので何も返さない。
- * 取り除いた後の版が読めなくなる事故より、問題の版のassetsが残る方を選ぶ。
+ * どれが使われているか分からないとき(どちらかのマニフェストを読めなかったとき)は`null`を返す。
+ * 呼び出し側は、`null`のときに版を消さず、次の回に確かめ直す。
  */
 export function selectRevokedAssets(
-  revoked: readonly ConsoleManifest[],
+  revoked: readonly (ConsoleManifest | null)[],
   remaining: readonly (ConsoleManifest | null)[],
-): string[] {
+): string[] | null {
   const stillUsed = referencedAssetNames(remaining);
-  if (stillUsed === null) return [];
-  const candidates = referencedAssetNames(revoked) ?? new Set<string>();
+  const candidates = referencedAssetNames(revoked);
+  if (stillUsed === null || candidates === null) return null;
   return [...candidates].filter((name) => !stillUsed.has(name));
 }
 

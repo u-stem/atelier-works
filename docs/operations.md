@@ -599,18 +599,18 @@ mise exec -- docker compose -f infra/docker-compose.yml restart caddy
 mise exec -- docker compose -f infra/docker-compose.yml logs --tail 50 console_fetcher
 ```
 
-版は直近の3つを残す。
+版は、配信するファイルの中身(`manifest.json`の`files`)が違うものを3つまで残す。
+版は`main`へのpushのたびに作られ、`console/`に触れないpushでできた版は中身が同じなので、1つと数える。
+無関係なマージが続いても、戻せる版を押し出さないためである。
 共有の`assets/`は、残した版から参照されず14日を超えたファイルを消す。
 
 新しい版に問題があれば、直前の版に戻す。
 
 1. `mise run console:rollback`を実行する。取り込みの最中なら「更新中」と出て止まるので、少し待ってやり直す。
 2. 戻すと`pin`が置かれ、自動の付け替えが止まる。もう一度実行すると、さらに1つ前に戻る。
-3. 直ったら`mise run console:unpin`で`pin`を外す。5分以内に最新の版へ戻る。
+3. `main`に修正を入れてCIが成功したら、`mise run console:unpin`で`pin`を外す。5分以内に最新の版へ戻る。
 
-版は`main`へのpushのたびに作られる。
-Consoleを変えていないpushでも作られ、直近の3つしか残らないので、戻せるのはその中だけである。
-戻し先は、配信するファイルの中身(`manifest.json`の`files`)が今の版と違う、最も新しい版にする。
+戻し先は、中身が今の版と違う最も新しい版である。
 中身が同じ版へ戻しても、何も変わらないためである。
 そのような版が残っていないと、`No previous release with different content to roll back to.`と出て止まる。
 この場合と、残っている版より前に戻したい場合は、`main`で該当のcommitをrevertし、CIを動かす。
@@ -618,9 +618,23 @@ Consoleを変えていないpushでも作られ、直近の3つしか残らな�
 戻すと、戻した元の版と、それと中身が同じ版を消す。
 その版だけが参照する共有の`assets/`のファイルも、更新日時にかかわらず消す。
 `pin`の間も、問題の版のscriptを`/console/assets/`から読めるままにしないためである。
-消した版のページを開いたままのブラウザは、assetsを読み込めなくなるので、再読み込みが要る。
-`pin`を外すと、最新の実行から取り直すので、消した版が再び配信される。
 消す版のshaは、`pin`の`rolled_back_from`に記録する。
+消し終わらなかったときは、`console:rollback`が「削除は終わっていない」と出し、`console_fetcher`が次の取り込みで続きを消す。
+`rolled_back_from`を持たない`pin`では、戻した元の版は消えない。
+消した版のページを開いたままのブラウザは、assetsを読み込めなくなるので、再読み込みが要る。
+
+`pin`を外すと、`console_fetcher`は最新の成功した実行を取り込む。
+最新の実行が戻した元の版のままだと、問題の版が再び配信される。
+それを防ぐため、`console:unpin`は次の場合に`pin`を外さず、理由を出して止まる。
+
+| 状況 | 人がすること |
+| --- | --- |
+| 最新の成功した実行が、戻した元の版か、それと中身が同じ版である | 修正を`main`に入れ、そのCIが成功してからやり直す |
+| 最新の実行を調べられない(トークンや`CONSOLE_GITHUB_REPO`の不備、ネットワークの失敗) | 原因を直してやり直す |
+| 戻した元の版を消せていない | `console_fetcher`のログの`revoked_cleanup_skipped`か`revoked_cleanup_failed`を確かめ、原因を直してやり直す |
+
+問題の版が再び配信されるのを承知の上で外すときは、`mise run console:unpin -- --force`を実行する。
+`--force`は、この確認をすべて飛ばす。
 
 主な`error`と対処は次のとおり。
 

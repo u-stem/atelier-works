@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
+  chmod,
   lstat,
   mkdir,
   mkdtemp,
@@ -23,6 +24,7 @@ import {
   rollback,
   runLoopIteration,
   runOnce,
+  type UnpinDeps,
   unpin,
   withLock,
 } from "../../infra/console_fetcher/fetcher.ts";
@@ -100,6 +102,43 @@ function conflictingGitHub() {
     blobs: { 102: zip },
   });
 }
+
+function unpinDeps(
+  fetch: FetchLike,
+  config: UnpinDeps["config"] = CONFIG,
+): UnpinDeps {
+  return { fetch, now: () => NOW, root, config, log: () => {} };
+}
+
+const failingFetch: FetchLike = async () => {
+  throw new Error("network down");
+};
+
+/** 実行の一覧だけを返し、成果物は配らないGitHub。 */
+function githubWithLatestRun(sha: string, runId: number) {
+  return fakeGitHub({ runs: [workflowRun(runId, sha)] });
+}
+
+/** `current`を`sha`の版に向け、`revoked`を記録したpinを置く。`revoked`が無ければ旧形式のpinにする。 */
+async function pinAt(sha: string, revoked?: string[]): Promise<void> {
+  await rm(join(root, "current"), { recursive: true, force: true });
+  await symlink(`releases/${sha}`, join(root, "current"));
+  await writeFile(
+    join(root, "pin"),
+    `${JSON.stringify({ sha, pinned_at: NOW.toISOString(), ...(revoked === undefined ? {} : { rolled_back_from: revoked }) })}\n`,
+  );
+}
+
+/** `releases/<sha>`を本物のディレクトリでなくし、`switchCurrent`が拒む状態にする。 */
+async function brokenRelease(sha: string): Promise<void> {
+  const outside = join(root, `outside-${sha.slice(0, 4)}`);
+  await mkdir(outside, { recursive: true });
+  await rm(join(root, "releases", sha), { recursive: true, force: true });
+  await symlink(outside, join(root, "releases", sha));
+}
+
+/** 管理者(root)は書き込みの権限の制限を受けないので、権限で失敗を起こすテストは飛ばす。 */
+const itFailsOnPermission = process.getuid?.() === 0 ? test.skip : test;
 
 describe("runOnce", () => {
   test("points current at the new release with a relative link", async () => {
@@ -447,6 +486,162 @@ describe("runOnce", () => {
     await runOnce(deps(githubServing(SHA_B, "B", 2).fetch));
     expect(await exists(join(root, "releases", SHA_B))).toBe(false);
   });
+
+  test("keeps an older version after unrelated merges produce identical releases", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await deploy(SHA_C, "B", 3);
+    await deploy(SHA_D, "B", 4);
+    await deploy(SHA_E, "B", 5);
+    expect(await exists(join(root, "releases", SHA_A))).toBe(true);
+  });
+
+  test("refetches an existing release whose assets are missing", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await rm(join(root, "current"));
+    await symlink(`releases/${SHA_A}`, join(root, "current"));
+    await rm(join(root, "assets/index-B0000000.js"));
+    await runOnce(deps(githubServing(SHA_B, "B", 2).fetch));
+    expect(await exists(join(root, "assets/index-B0000000.js"))).toBe(true);
+  });
+});
+
+describe("runOnce with a pin", () => {
+  test("removes the assets used only by a revoked release", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await pinAt(SHA_A, [SHA_B]);
+    await runOnce(deps(githubServing(SHA_B, "B", 2).fetch));
+    expect(await exists(join(root, "assets/index-B0000000.js"))).toBe(false);
+  });
+
+  test("stays pinned after removing a revoked release", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await pinAt(SHA_A, [SHA_B]);
+    const status = await runOnce(deps(githubServing(SHA_B, "B", 2).fetch));
+    expect(status.state).toBe("pinned");
+  });
+
+  test("keeps a revoked release when current cannot be read", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await pinAt(SHA_A, [SHA_B]);
+    await rm(join(root, "current"));
+    await mkdir(join(root, "current"));
+    await runOnce(deps(githubServing(SHA_B, "B", 2).fetch));
+    expect(await exists(join(root, "releases", SHA_B))).toBe(true);
+  });
+
+  test("keeps the live release when rolled_back_from names it", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await pinAt(SHA_A, [SHA_A]);
+    await runOnce(deps(githubServing(SHA_B, "B", 2).fetch));
+    expect(await exists(join(root, "releases", SHA_A))).toBe(true);
+  });
+
+  test("keeps every release when the pin has no rolled_back_from", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await pinAt(SHA_A);
+    await runOnce(deps(githubServing(SHA_B, "B", 2).fetch));
+    expect((await readdir(join(root, "releases"))).sort()).toEqual([
+      SHA_A,
+      SHA_B,
+    ]);
+  });
+
+  test("keeps the revoked assets when a remaining manifest cannot be read", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await pinAt(SHA_A, [SHA_B]);
+    await rm(join(root, "releases", SHA_A, "manifest.json"));
+    await runOnce(deps(githubServing(SHA_B, "B", 2).fetch));
+    expect(await exists(join(root, "assets/index-B0000000.js"))).toBe(true);
+  });
+
+  test("keeps the revoked release when a remaining manifest cannot be read", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await pinAt(SHA_A, [SHA_B]);
+    await rm(join(root, "releases", SHA_A, "manifest.json"));
+    await runOnce(deps(githubServing(SHA_B, "B", 2).fetch));
+    expect(await exists(join(root, "releases", SHA_B))).toBe(true);
+  });
+
+  test("keeps the revoked release when its own manifest cannot be read", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await pinAt(SHA_A, [SHA_B]);
+    await rm(join(root, "releases", SHA_B, "manifest.json"));
+    await runOnce(deps(githubServing(SHA_B, "B", 2).fetch));
+    expect(await exists(join(root, "releases", SHA_B))).toBe(true);
+  });
+
+  test("logs a warning when the assets to remove cannot be determined", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await pinAt(SHA_A, [SHA_B]);
+    await rm(join(root, "releases", SHA_A, "manifest.json"));
+    const events: string[] = [];
+    await runOnce({
+      ...deps(githubServing(SHA_B, "B", 2).fetch),
+      log: (event) => events.push(event),
+    });
+    expect(events).toContain("revoked_cleanup_skipped");
+  });
+
+  test("does not remove an asset that is not a regular file", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await pinAt(SHA_A, [SHA_B]);
+    const outside = join(root, "outside.js");
+    await writeFile(outside, "outside");
+    await rm(join(root, "assets/index-B0000000.js"));
+    await symlink(outside, join(root, "assets/index-B0000000.js"));
+    await runOnce(deps(githubServing(SHA_B, "B", 2).fetch));
+    expect(
+      (await lstat(join(root, "assets/index-B0000000.js"))).isSymbolicLink(),
+    ).toBe(true);
+  });
+
+  itFailsOnPermission(
+    "stays pinned when removing a revoked release fails",
+    async () => {
+      await deploy(SHA_A, "A", 1);
+      await deploy(SHA_B, "B", 2);
+      await pinAt(SHA_A, [SHA_B]);
+      await chmod(join(root, "releases"), 0o555);
+      try {
+        const status = await runOnce(deps(githubServing(SHA_B, "B", 2).fetch));
+        expect(status.state).toBe("pinned");
+      } finally {
+        await chmod(join(root, "releases"), 0o755);
+      }
+    },
+  );
+
+  itFailsOnPermission(
+    "logs a failure when removing a revoked release fails",
+    async () => {
+      await deploy(SHA_A, "A", 1);
+      await deploy(SHA_B, "B", 2);
+      await pinAt(SHA_A, [SHA_B]);
+      await chmod(join(root, "releases"), 0o555);
+      const events: string[] = [];
+      try {
+        await runOnce({
+          ...deps(githubServing(SHA_B, "B", 2).fetch),
+          log: (event) => events.push(event),
+        });
+      } finally {
+        await chmod(join(root, "releases"), 0o755);
+      }
+      expect(events).toContain("revoked_cleanup_failed");
+    },
+  );
 });
 
 describe("recordConfigFailure", () => {
@@ -604,9 +799,78 @@ describe("rollback", () => {
     await deploy(SHA_A, "A", 1);
     await deploy(SHA_B, "B", 2);
     await rollback(root, () => NOW);
-    await unpin(root);
+    await unpin(unpinDeps(failingFetch), { force: true });
     await runOnce(deps(githubServing(SHA_B, "B", 2).fetch));
     expect(await readlink(join(root, "current"))).toBe(`releases/${SHA_B}`);
+  });
+
+  test("reports the cleanup as done", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    expect(await rollback(root, () => NOW)).toEqual({
+      ok: true,
+      sha: SHA_A,
+      cleanup: "done",
+    });
+  });
+
+  itFailsOnPermission(
+    "reports the cleanup as pending when removing fails",
+    async () => {
+      await deploy(SHA_A, "A", 1);
+      await deploy(SHA_B, "B", 2);
+      await chmod(join(root, "releases"), 0o555);
+      try {
+        expect(await rollback(root, () => NOW)).toEqual({
+          ok: true,
+          sha: SHA_A,
+          cleanup: "pending",
+        });
+      } finally {
+        await chmod(join(root, "releases"), 0o755);
+      }
+    },
+  );
+
+  itFailsOnPermission(
+    "keeps current switched when removing fails",
+    async () => {
+      await deploy(SHA_A, "A", 1);
+      await deploy(SHA_B, "B", 2);
+      await chmod(join(root, "releases"), 0o555);
+      try {
+        await rollback(root, () => NOW);
+      } finally {
+        await chmod(join(root, "releases"), 0o755);
+      }
+      expect(await readlink(join(root, "current"))).toBe(`releases/${SHA_A}`);
+    },
+  );
+
+  test("removes the new pin when switching current fails", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await brokenRelease(SHA_A);
+    await rollback(root, () => NOW).catch(() => {});
+    expect(await exists(join(root, "pin"))).toBe(false);
+  });
+
+  test("restores the previous pin when switching current fails", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await deploy(SHA_C, "C", 3);
+    await rollback(root, () => NOW);
+    const before = await readFile(join(root, "pin"), "utf8");
+    await brokenRelease(SHA_A);
+    await rollback(root, () => NOW).catch(() => {});
+    expect(await readFile(join(root, "pin"), "utf8")).toBe(before);
+  });
+
+  test("rejects when switching current fails", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await brokenRelease(SHA_A);
+    await expect(rollback(root, () => NOW)).rejects.toThrow();
   });
 
   test("reports no_previous_release with a single release", async () => {
@@ -628,18 +892,181 @@ describe("rollback", () => {
 describe("unpin", () => {
   test("removes the pin file", async () => {
     await writeFile(join(root, "pin"), "{}");
-    await unpin(root);
+    await unpin(unpinDeps(failingFetch), { force: false });
     expect(await exists(join(root, "pin"))).toBe(false);
+  });
+
+  test("does not query GitHub when the pin names no revoked release", async () => {
+    await writeFile(join(root, "pin"), "{}");
+    const github = githubWithLatestRun(SHA_B, 2);
+    await unpin(unpinDeps(github.fetch), { force: false });
+    expect(github.calls).toEqual([]);
+  });
+
+  test("succeeds when there is no pin", async () => {
+    expect(await unpin(unpinDeps(failingFetch), { force: false })).toEqual({
+      ok: true,
+    });
   });
 
   test("does not append to history", async () => {
     await deploy(SHA_A, "A", 1);
     await deploy(SHA_B, "B", 2);
     await rollback(root, () => NOW);
-    await unpin(root);
+    await unpin(unpinDeps(failingFetch), { force: true });
     expect(
       JSON.parse(await readFile(join(root, "history.json"), "utf8")),
     ).toEqual([SHA_A, SHA_B]);
+  });
+
+  test("refuses while the latest run is the release rolled back from", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await rollback(root, () => NOW);
+    expect(
+      await unpin(unpinDeps(githubWithLatestRun(SHA_B, 2).fetch), {
+        force: false,
+      }),
+    ).toEqual({ ok: false, reason: "latest_run_is_revoked", sha: SHA_B });
+  });
+
+  test("keeps the pin when refusing because the latest run is revoked", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await rollback(root, () => NOW);
+    await unpin(unpinDeps(githubWithLatestRun(SHA_B, 2).fetch), {
+      force: false,
+    });
+    expect(await exists(join(root, "pin"))).toBe(true);
+  });
+
+  test("refuses while the latest run has the same content as the release rolled back from", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await deploy(SHA_C, "B", 3);
+    await rollback(root, () => NOW);
+    expect(
+      await unpin(unpinDeps(githubWithLatestRun(SHA_B, 2).fetch), {
+        force: false,
+      }),
+    ).toEqual({ ok: false, reason: "latest_run_is_revoked", sha: SHA_B });
+  });
+
+  test("unpins once a newer run has succeeded", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await rollback(root, () => NOW);
+    expect(
+      await unpin(unpinDeps(githubWithLatestRun(SHA_C, 3).fetch), {
+        force: false,
+      }),
+    ).toEqual({ ok: true });
+  });
+
+  test("removes the pin once a newer run has succeeded", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await rollback(root, () => NOW);
+    await unpin(unpinDeps(githubWithLatestRun(SHA_C, 3).fetch), {
+      force: false,
+    });
+    expect(await exists(join(root, "pin"))).toBe(false);
+  });
+
+  test("refuses when the latest run cannot be looked up", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await rollback(root, () => NOW);
+    expect(await unpin(unpinDeps(failingFetch), { force: false })).toEqual({
+      ok: false,
+      reason: "lookup_failed",
+    });
+  });
+
+  test("keeps the pin when the latest run cannot be looked up", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await rollback(root, () => NOW);
+    await unpin(unpinDeps(failingFetch), { force: false });
+    expect(await exists(join(root, "pin"))).toBe(true);
+  });
+
+  test("refuses when the GitHub settings are missing", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await rollback(root, () => NOW);
+    expect(
+      await unpin(unpinDeps(failingFetch, null), { force: false }),
+    ).toEqual({ ok: false, reason: "lookup_failed" });
+  });
+
+  test("refuses when no successful run exists", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await rollback(root, () => NOW);
+    expect(
+      await unpin(unpinDeps(fakeGitHub({ runs: [] }).fetch), { force: false }),
+    ).toEqual({ ok: false, reason: "lookup_failed" });
+  });
+
+  test("unpins with force while the latest run is revoked", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await rollback(root, () => NOW);
+    await unpin(unpinDeps(githubWithLatestRun(SHA_B, 2).fetch), {
+      force: true,
+    });
+    expect(await exists(join(root, "pin"))).toBe(false);
+  });
+
+  test("does not query GitHub with force", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await rollback(root, () => NOW);
+    const github = githubWithLatestRun(SHA_B, 2);
+    await unpin(unpinDeps(github.fetch), { force: true });
+    expect(github.calls).toEqual([]);
+  });
+
+  test("removes the revoked release left behind before releasing the pin", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await pinAt(SHA_A, [SHA_B]);
+    await rm(join(root, "assets/index-B0000000.js"));
+    await unpin(unpinDeps(failingFetch), { force: true });
+    expect(await exists(join(root, "releases", SHA_B))).toBe(false);
+  });
+
+  test("refuses while the revoked release cannot be removed", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await pinAt(SHA_A, [SHA_B]);
+    await rm(join(root, "releases", SHA_A, "manifest.json"));
+    expect(
+      await unpin(unpinDeps(githubWithLatestRun(SHA_C, 3).fetch), {
+        force: false,
+      }),
+    ).toEqual({ ok: false, reason: "cleanup_incomplete" });
+  });
+
+  test("keeps the pin while the revoked release cannot be removed", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await pinAt(SHA_A, [SHA_B]);
+    await rm(join(root, "releases", SHA_A, "manifest.json"));
+    await unpin(unpinDeps(githubWithLatestRun(SHA_C, 3).fetch), {
+      force: false,
+    });
+    expect(await exists(join(root, "pin"))).toBe(true);
+  });
+
+  test("unpins with force even when the revoked release cannot be removed", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await pinAt(SHA_A, [SHA_B]);
+    await rm(join(root, "releases", SHA_A, "manifest.json"));
+    await unpin(unpinDeps(failingFetch), { force: true });
+    expect(await exists(join(root, "pin"))).toBe(false);
   });
 });
 

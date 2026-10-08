@@ -499,6 +499,8 @@ describe("history", () => {
 });
 
 describe("selectReleasesToDelete", () => {
+  const none = new Set<string>();
+
   test("keeps the newest three deployed releases", () => {
     expect(
       selectReleasesToDelete(
@@ -506,6 +508,8 @@ describe("selectReleasesToDelete", () => {
         [SHA_A, SHA_B, SHA_C, SHA_D],
         { kind: "release", sha: SHA_D },
         3,
+        NO_MANIFESTS,
+        none,
       ),
     ).toEqual([SHA_A]);
   });
@@ -517,6 +521,8 @@ describe("selectReleasesToDelete", () => {
         [SHA_A, SHA_B, SHA_C, SHA_D],
         { kind: "release", sha: SHA_A },
         3,
+        NO_MANIFESTS,
+        none,
       ),
     ).toEqual([]);
   });
@@ -528,6 +534,8 @@ describe("selectReleasesToDelete", () => {
         [SHA_A, SHA_B, SHA_C, SHA_B],
         { kind: "release", sha: SHA_B },
         2,
+        NO_MANIFESTS,
+        none,
       ),
     ).toEqual([SHA_A]);
   });
@@ -539,19 +547,122 @@ describe("selectReleasesToDelete", () => {
         [SHA_A],
         { kind: "release", sha: SHA_A },
         3,
+        NO_MANIFESTS,
+        none,
       ),
     ).toEqual([SHA_B]);
   });
 
   test("keeps only the history when there is no current link", () => {
     expect(
-      selectReleasesToDelete([SHA_A, SHA_B], [SHA_B], { kind: "none" }, 3),
+      selectReleasesToDelete(
+        [SHA_A, SHA_B],
+        [SHA_B],
+        { kind: "none" },
+        3,
+        NO_MANIFESTS,
+        none,
+      ),
     ).toEqual([SHA_A]);
   });
 
   test("deletes nothing when the current link is unreadable", () => {
     expect(
-      selectReleasesToDelete([SHA_A, SHA_B], [SHA_B], { kind: "unknown" }, 3),
+      selectReleasesToDelete(
+        [SHA_A, SHA_B],
+        [SHA_B],
+        { kind: "unknown" },
+        3,
+        NO_MANIFESTS,
+        none,
+      ),
+    ).toEqual([]);
+  });
+
+  test("counts releases with identical files as one version", () => {
+    const manifests = new Map([
+      [SHA_A, manifestOf(SHA_A, { "index.html": HASH_1 })],
+      [SHA_B, manifestOf(SHA_B, { "index.html": HASH_2 })],
+      [SHA_C, manifestOf(SHA_C, { "index.html": HASH_2 })],
+      [SHA_D, manifestOf(SHA_D, { "index.html": HASH_2 })],
+    ]);
+    expect(
+      selectReleasesToDelete(
+        [SHA_A, SHA_B, SHA_C, SHA_D],
+        [SHA_A, SHA_B, SHA_C, SHA_D],
+        { kind: "release", sha: SHA_D },
+        2,
+        manifests,
+        none,
+      ),
+    ).toEqual([]);
+  });
+
+  test("deletes the oldest distinct version beyond the limit", () => {
+    const manifests = new Map([
+      [SHA_A, manifestOf(SHA_A, { "index.html": HASH_1 })],
+      [SHA_B, manifestOf(SHA_B, { "index.html": HASH_2 })],
+      [
+        SHA_C,
+        manifestOf(SHA_C, { "assets/c.js": HASH_1, "index.html": HASH_2 }),
+      ],
+      [
+        SHA_D,
+        manifestOf(SHA_D, { "assets/c.js": HASH_1, "index.html": HASH_2 }),
+      ],
+    ]);
+    expect(
+      selectReleasesToDelete(
+        [SHA_A, SHA_B, SHA_C, SHA_D],
+        [SHA_A, SHA_B, SHA_C, SHA_D],
+        { kind: "release", sha: SHA_D },
+        2,
+        manifests,
+        none,
+      ),
+    ).toEqual([SHA_A]);
+  });
+
+  test("counts a release whose manifest could not be read as its own version", () => {
+    expect(
+      selectReleasesToDelete(
+        [SHA_A, SHA_B, SHA_C],
+        [SHA_A, SHA_B, SHA_C],
+        { kind: "release", sha: SHA_C },
+        2,
+        new Map([
+          [SHA_A, null],
+          [SHA_B, null],
+          [SHA_C, null],
+        ]),
+        none,
+      ),
+    ).toEqual([SHA_A]);
+  });
+
+  test("does not count a revoked release toward the limit", () => {
+    expect(
+      selectReleasesToDelete(
+        [SHA_A, SHA_B, SHA_C, SHA_D],
+        [SHA_A, SHA_B, SHA_C, SHA_D],
+        { kind: "release", sha: SHA_C },
+        2,
+        NO_MANIFESTS,
+        new Set([SHA_D]),
+      ),
+    ).toEqual([SHA_A, SHA_D]);
+  });
+
+  test("does not count a release that no longer exists toward the limit", () => {
+    expect(
+      selectReleasesToDelete(
+        [SHA_A, SHA_B],
+        [SHA_A, SHA_B, SHA_C, SHA_D],
+        { kind: "release", sha: SHA_B },
+        2,
+        NO_MANIFESTS,
+        none,
+      ),
     ).toEqual([]);
   });
 });
@@ -842,13 +953,22 @@ describe("selectRevokedAssets", () => {
     ).toEqual([]);
   });
 
-  test("returns nothing when a remaining manifest could not be read", () => {
+  test("returns null when a remaining manifest could not be read", () => {
     expect(
       selectRevokedAssets(
         [manifestOf(SHA_B, { "index.html": HASH_1, "assets/bad.js": HASH_1 })],
         [null],
       ),
-    ).toEqual([]);
+    ).toBeNull();
+  });
+
+  test("returns null when a revoked manifest could not be read", () => {
+    expect(
+      selectRevokedAssets(
+        [null],
+        [manifestOf(SHA_A, { "index.html": HASH_2, "assets/good.js": HASH_1 })],
+      ),
+    ).toBeNull();
   });
 });
 

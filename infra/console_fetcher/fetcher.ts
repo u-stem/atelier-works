@@ -566,46 +566,84 @@ async function recordHistory(layout: Layout, sha: string): Promise<void> {
   );
 }
 
+/** 版のマニフェストを読む。無いとき、壊れているとき、読めないときは`null`。 */
 async function readManifest(
   layout: Layout,
   sha: string,
 ): Promise<ConsoleManifest | null> {
-  return parseManifest(
-    await readJsonFile(join(layout.releases, sha, MANIFEST_FILE)),
-  );
+  try {
+    return parseManifest(
+      await readJsonFile(join(layout.releases, sha, MANIFEST_FILE)),
+    );
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * `releases/<sha>`が本物のディレクトリで、マニフェストを読め、参照する共有の`assets/`のファイルが
+ * すべて通常のファイルとして揃っているかを返す。揃っていない版へ付け替えると、ページが壊れる。
+ */
+async function isCompleteRelease(
+  layout: Layout,
+  sha: string,
+): Promise<boolean> {
+  if (!(await isRealDirectory(join(layout.releases, sha)))) return false;
+  const manifest = await readManifest(layout, sha);
+  if (manifest === null) return false;
+  for (const path of manifest.files.keys()) {
+    if (!path.startsWith(ASSETS_PREFIX)) continue;
+    const stat = await lstatOrNull(
+      join(layout.assets, path.slice(ASSETS_PREFIX.length)),
+    );
+    if (stat === null || !stat.isFile()) return false;
+  }
+  return true;
 }
 
 /**
  * 戻した元の版(`revoked`)の`releases/<sha>`と、その版だけが参照する共有の`assets/`のファイルを消す。
  * 戻した後も問題の版のassetsを`/console/assets/`から読めるままにしないため、更新日時にかかわらず消す。
- * 配信中の版と、残る版が参照するassetsは消さない。`current`を読めないときと、
- * 残る版のマニフェストを読めないときは、どれが使われているか分からないので何も消さない。
+ * 配信中の版と、残る版が参照するassetsは消さない。通常のファイルでないassetsも消さない。
+ * 消すassetsを決められないとき(`current`を読めないとき、どちらかのマニフェストを読めないとき)は、
+ * 版も消さずに警告を出す。版を消すと、残ったassetsを後から決められなくなるため。
  * 途中で止まっても、同じ`revoked`で呼び直せば続きを消せる。
+ * 戻した元の版を残さず消せた(消す版が無かった場合を含む)ときだけ`true`を返す。
  */
 async function removeRevoked(
   layout: Layout,
+  log: Logger,
   revoked: readonly string[],
-): Promise<void> {
+): Promise<boolean> {
   const current = await readCurrentLink(layout);
-  if (current.kind === "unknown") return;
-  const serving = shaOf(current);
   const existing = (await readdirOrEmpty(layout.releases)).filter(isCommitSha);
-  const doomed = existing.filter(
-    (sha) => revoked.includes(sha) && sha !== serving,
-  );
-  if (doomed.length === 0) return;
-  const doomedManifests: ConsoleManifest[] = [];
+  const present = existing.filter((sha) => revoked.includes(sha));
+  if (current.kind === "unknown") {
+    if (present.length > 0) {
+      log("revoked_cleanup_skipped", { reason: "current_unreadable" });
+    }
+    return present.length === 0;
+  }
+  const serving = shaOf(current);
+  const doomed = present.filter((sha) => sha !== serving);
+  if (doomed.length === 0) return true;
+  const doomedManifests: (ConsoleManifest | null)[] = [];
   for (const sha of doomed) {
-    const manifest = await readManifest(layout, sha);
-    if (manifest !== null) doomedManifests.push(manifest);
+    doomedManifests.push(await readManifest(layout, sha));
   }
   const remaining: (ConsoleManifest | null)[] = [];
   for (const sha of existing.filter((sha) => !doomed.includes(sha))) {
     remaining.push(await readManifest(layout, sha));
   }
+  const names = selectRevokedAssets(doomedManifests, remaining);
+  if (names === null) {
+    log("revoked_cleanup_skipped", { reason: "assets_undeterminable" });
+    return false;
+  }
   // 先にassetsを消し、止まったときも続きの版の削除を呼び直せるようにする。
-  for (const name of selectRevokedAssets(doomedManifests, remaining)) {
-    await rm(join(layout.assets, name), { force: true });
+  for (const name of names) {
+    const path = join(layout.assets, name);
+    if ((await lstatOrNull(path))?.isFile()) await rm(path, { force: true });
   }
   for (const sha of doomed) {
     const dir = join(layout.releases, sha);
@@ -613,6 +651,7 @@ async function removeRevoked(
       await rm(dir, { recursive: true, force: true });
     }
   }
+  return true;
 }
 
 async function listAssetFiles(layout: Layout): Promise<AssetFile[]> {
@@ -626,15 +665,22 @@ async function listAssetFiles(layout: Layout): Promise<AssetFile[]> {
 
 /**
  * 古い版と、どの版からも参照されない古いassetを消す。削除はsymlinkをたどらない。
+ * 残す版は、中身の違う版を`releasesToKeep`個まで数えて決める。
  * `current`はここで読み直し、ディスクの今の状態で残す版を決める。
  */
 async function cleanup(deps: FetcherDeps, layout: Layout): Promise<void> {
   const existing = (await readdir(layout.releases)).filter(isCommitSha);
+  const manifests = new Map<string, ConsoleManifest | null>();
+  for (const sha of existing) {
+    manifests.set(sha, await readManifest(layout, sha));
+  }
   const toDelete = selectReleasesToDelete(
     existing,
     await readHistory(layout),
     await readCurrentLink(layout),
     LIMITS.releasesToKeep,
+    manifests,
+    new Set(parsePinRevoked(await readJsonFile(layout.pin))),
   );
   for (const sha of toDelete) {
     const dir = join(layout.releases, sha);
@@ -644,11 +690,9 @@ async function cleanup(deps: FetcherDeps, layout: Layout): Promise<void> {
     }
   }
   const kept = existing.filter((sha) => !toDelete.includes(sha));
-  const manifests: (ConsoleManifest | null)[] = [];
-  for (const sha of kept) manifests.push(await readManifest(layout, sha));
   const stale = selectAssetsToDelete(
     await listAssetFiles(layout),
-    referencedAssetNames(manifests),
+    referencedAssetNames(kept.map((sha) => manifests.get(sha) ?? null)),
     deps.now().getTime(),
     LIMITS.assetMaxAgeMs,
   );
@@ -684,10 +728,18 @@ export async function runOnce(deps: FetcherDeps): Promise<FetcherStatus> {
     currentSha = shaOf(await readCurrentLink(layout));
     if (await exists(layout.pin)) {
       // rollbackが途中で止まっていたときのために、戻した元の版の削除を続ける。
-      await removeRevoked(
-        layout,
-        parsePinRevoked(await readJsonFile(layout.pin)),
-      );
+      // 削除に失敗しても、pinの状態は変えず、次の回に続きを消す。
+      try {
+        await removeRevoked(
+          layout,
+          deps.log,
+          parsePinRevoked(await readJsonFile(layout.pin)),
+        );
+      } catch (err) {
+        deps.log("revoked_cleanup_failed", {
+          error: describeUnexpectedError(err),
+        });
+      }
       return await finish(deps, layout, {
         state: "pinned",
         sha: currentSha,
@@ -697,7 +749,12 @@ export async function runOnce(deps: FetcherDeps): Promise<FetcherStatus> {
     }
     const run = await findLatestRun(deps);
     if (needsDeploy(currentSha, run.headSha)) {
-      if (!(await isRealDirectory(join(layout.releases, run.headSha)))) {
+      // assetsが欠けた版(戻した元の版の削除が途中で止まったものなど)は、消して取り直す。
+      if (!(await isCompleteRelease(layout, run.headSha))) {
+        await rm(join(layout.releases, run.headSha), {
+          recursive: true,
+          force: true,
+        });
         const entries = await fetchVerifiedEntries(deps, run);
         await publishAssets(layout, entries);
         await writeRelease(layout, run.headSha, entries);
@@ -783,29 +840,62 @@ export async function recordConfigFailure(
 }
 
 export type RollbackResult =
-  | { readonly ok: true; readonly sha: string }
+  | {
+      readonly ok: true;
+      readonly sha: string;
+      /** 戻した元の版の削除。`pending`なら、次の取り込みが続きを消す。 */
+      readonly cleanup: "done" | "pending";
+    }
   | { readonly ok: false; readonly reason: "no_previous_release" };
+
+async function readTextOrNull(path: string): Promise<string | null> {
+  try {
+    return await readFile(path, "utf8");
+  } catch (err) {
+    if (hasErrorCode(err, "ENOENT")) return null;
+    throw err;
+  }
+}
+
+/** `removeRevoked`を呼び、失敗を投げずに結果(`done`か`pending`)にする。 */
+async function tryRemoveRevoked(
+  layout: Layout,
+  log: Logger,
+  revoked: readonly string[],
+): Promise<"done" | "pending"> {
+  try {
+    return (await removeRevoked(layout, log, revoked)) ? "done" : "pending";
+  } catch (err) {
+    log("revoked_cleanup_failed", { error: describeUnexpectedError(err) });
+    return "pending";
+  }
+}
 
 /**
  * currentを直前の版に戻し、pinを置く。pinがある間、runOnceは付け替えない。
  * 戻す先は、今の版と中身が違う、履歴の直前の版にする。
  * pinを先に置いてから付け替え、同時に動いたrunOnceが新しい版へ戻さないようにする。
+ * 付け替えに失敗したときは、pinを元の状態に戻してから失敗を投げる。
+ * pinだけが残ると、版が動かないまま自動の付け替えが止まるため。
  * 履歴には足さない(足すと、次に戻すときに新しい方の版を選んでしまう)。
  * 戻した元の版と、それと中身が同じ版は、pinの`rolled_back_from`に記録して、
  * その版と、その版だけが使うassetsを消す(戻した後も問題のscriptを読めるままにしないため)。
+ * 消すのに失敗しても戻す操作は成功とし、`cleanup: "pending"`を返す。続きは次の取り込みが消す。
  * 消した版は、pinを外した後の取り込みで、最新の実行から取り直される。
  */
 export async function rollback(
   root: string,
   now: () => Date,
+  log: Logger = () => {},
 ): Promise<RollbackResult> {
   const layout = layoutOf(root);
   await mkdir(layout.tmp, { recursive: true });
   const currentSha = shaOf(await readCurrentLink(layout));
   const releases = (await readdirOrEmpty(layout.releases)).filter(isCommitSha);
   const manifests = new Map<string, ConsoleManifest | null>();
-  for (const sha of releases)
+  for (const sha of releases) {
     manifests.set(sha, await readManifest(layout, sha));
+  }
   const target = selectRollbackTarget(
     await readHistory(layout),
     currentSha,
@@ -815,6 +905,7 @@ export async function rollback(
   if (target === null || currentSha === null) {
     return { ok: false, reason: "no_previous_release" };
   }
+  const previousPin = await readTextOrNull(layout.pin);
   const revoked = [
     ...new Set([
       ...parsePinRevoked(await readJsonFile(layout.pin)),
@@ -827,7 +918,16 @@ export async function rollback(
     layout.pin,
     `${JSON.stringify({ sha: target, pinned_at: pinnedAt, rolled_back_from: revoked })}\n`,
   );
-  await switchCurrent(layout, target);
+  try {
+    await switchCurrent(layout, target);
+  } catch (err) {
+    if (previousPin === null) {
+      await rm(layout.pin, { force: true });
+    } else {
+      await writeAtomically(layout, layout.pin, previousPin);
+    }
+    throw err;
+  }
   const status: FetcherStatus = {
     state: "pinned",
     sha: target,
@@ -835,13 +935,81 @@ export async function rollback(
     error: null,
   };
   await writeAtomically(layout, layout.status, `${JSON.stringify(status)}\n`);
-  await removeRevoked(layout, revoked);
-  return { ok: true, sha: target };
+  return {
+    ok: true,
+    sha: target,
+    cleanup: await tryRemoveRevoked(layout, log, revoked),
+  };
 }
 
-/** pinを外す。次の取り込み(5分以内)から、最新の版への自動の付け替えに戻る。 */
-export async function unpin(root: string): Promise<void> {
-  await rm(layoutOf(root).pin, { force: true });
+export type UnpinDeps = {
+  readonly fetch: FetchLike;
+  readonly now: () => Date;
+  readonly root: string;
+  /** GitHubの設定。無ければ最新の実行を確かめられないので、`force`なしでは外せない。 */
+  readonly config: FetcherConfig | null;
+  readonly log: Logger;
+};
+
+export type UnpinResult =
+  | { readonly ok: true }
+  | {
+      readonly ok: false;
+      readonly reason: "latest_run_is_revoked";
+      readonly sha: string;
+    }
+  | { readonly ok: false; readonly reason: "lookup_failed" }
+  | { readonly ok: false; readonly reason: "cleanup_incomplete" };
+
+/** 最新の成功した実行のshaを返す。設定が無いときと、問い合わせに失敗したときは`null`。 */
+async function lookupLatestSha(deps: UnpinDeps): Promise<string | null> {
+  if (deps.config === null) return null;
+  try {
+    return (await findLatestRun({ ...deps, config: deps.config })).headSha;
+  } catch (err) {
+    deps.log("unpin_lookup_failed", {
+      error: err instanceof FetchFailure ? err.code : "filesystem_error",
+    });
+    return null;
+  }
+}
+
+/**
+ * pinを外す。次の取り込み(5分以内)から、最新の版への自動の付け替えに戻る。
+ * 外す前に、戻した元の版の削除を終える。
+ * 次の取り込みが戻した元の版を最新として取り直すと、問題の版が再び配信される。
+ * それを防ぐため、最新の成功した実行が戻した元の版のとき、問い合わせに失敗したとき、
+ * 戻した元の版を消せなかったときは、pinを外さずに理由を返す。`force`ならこの確認を飛ばす。
+ * 戻した元の版の記録(`rolled_back_from`)が無いpinは、確かめる版が無いので、問い合わせずに外す。
+ */
+export async function unpin(
+  deps: UnpinDeps,
+  options: { readonly force: boolean },
+): Promise<UnpinResult> {
+  const layout = layoutOf(deps.root);
+  if (!(await exists(layout.pin))) return { ok: true };
+  const revoked = parsePinRevoked(await readJsonFile(layout.pin));
+  if (!options.force && revoked.length > 0) {
+    const latest = await lookupLatestSha(deps);
+    if (latest === null) return { ok: false, reason: "lookup_failed" };
+    if (revoked.includes(latest)) {
+      return { ok: false, reason: "latest_run_is_revoked", sha: latest };
+    }
+  }
+  let complete = false;
+  try {
+    complete = await removeRevoked(layout, deps.log, revoked);
+  } catch (err) {
+    if (!options.force) throw err;
+    deps.log("revoked_cleanup_failed", {
+      error: describeUnexpectedError(err),
+    });
+  }
+  if (!complete && !options.force) {
+    return { ok: false, reason: "cleanup_incomplete" };
+  }
+  await rm(layout.pin, { force: true });
+  return { ok: true };
 }
 
 export type LockResult<T> =
