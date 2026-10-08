@@ -2,8 +2,12 @@ import { describe, expect, test } from "bun:test";
 import {
   buildEmbed,
   capEmbedToDiscordLimits,
+  DISCORD_RETRY_MAX_WAIT_MS,
+  type NotifyDeps,
+  type NotifyEvent,
   notify,
 } from "../../f/factory/lib/discord.ts";
+import type { Logger } from "../../f/factory/lib/log.ts";
 
 function jsonResponse(
   status: number,
@@ -12,6 +16,66 @@ function jsonResponse(
 ): Response {
   return new Response(JSON.stringify(body), { status, headers });
 }
+
+const WEBHOOK_URL = "https://discord.example/webhooks/1/token";
+
+const JOB_FAILED_EVENT: NotifyEvent = {
+  kind: "job_failed",
+  instance_name: "local",
+  flow_path: "f/factory/poll_issues",
+  job_id: "job-1",
+  error: "boom",
+};
+
+type FakeDiscord = {
+  readonly deps: NotifyDeps;
+  readonly requestCount: () => number;
+  readonly sleeps: number[];
+  readonly warnings: string[];
+};
+
+/**
+ * 応答を順に返す偽のDiscordを作る。
+ * 待ちは実際には待たずに長さだけを記録し、warnのメッセージも記録する。
+ * 応答を使い切った後は最後の応答を返し続ける。
+ */
+function fakeDiscord(responses: readonly (() => Response)[]): FakeDiscord {
+  let count = 0;
+  const sleeps: number[] = [];
+  const warnings: string[] = [];
+  const log: Logger = {
+    info: () => {},
+    warn: (message) => {
+      warnings.push(message);
+    },
+    error: () => {},
+  };
+  const deps: NotifyDeps = {
+    fetch: async () => {
+      const next = responses[Math.min(count, responses.length - 1)];
+      count += 1;
+      if (next === undefined) throw new Error("no fake response configured");
+      return next();
+    },
+    sleep: async (ms) => {
+      sleeps.push(ms);
+    },
+    log,
+  };
+  return { deps, requestCount: () => count, sleeps, warnings };
+}
+
+const rateLimitedFor = (seconds: number) => () =>
+  jsonResponse(
+    429,
+    { retry_after: seconds },
+    { "retry-after": String(seconds) },
+  );
+
+const rateLimitedByBodyFor = (seconds: number) => () =>
+  jsonResponse(429, { retry_after: seconds });
+
+const ok = () => jsonResponse(204, {});
 
 describe("buildEmbed", () => {
   test("always includes an instance field", () => {
@@ -702,5 +766,114 @@ describe("notify", () => {
 
     const parsed: unknown = JSON.parse(sentBody ?? "{}");
     expect(parsed).toMatchObject({ allowed_mentions: { parse: [] } });
+  });
+});
+
+describe("notify rate limit wait cap", () => {
+  test("keeps the wait cap well below the shortest flow step timeout of 600s", () => {
+    expect(DISCORD_RETRY_MAX_WAIT_MS).toBeLessThanOrEqual(60_000);
+  });
+
+  test("waits exactly the cap when retry-after equals the cap", async () => {
+    const discord = fakeDiscord([
+      rateLimitedFor(DISCORD_RETRY_MAX_WAIT_MS / 1000),
+      ok,
+    ]);
+
+    await notify(WEBHOOK_URL, JOB_FAILED_EVENT, discord.deps);
+
+    expect(discord.sleeps).toEqual([DISCORD_RETRY_MAX_WAIT_MS]);
+  });
+
+  test("resends after waiting exactly the cap", async () => {
+    const discord = fakeDiscord([
+      rateLimitedFor(DISCORD_RETRY_MAX_WAIT_MS / 1000),
+      ok,
+    ]);
+
+    await notify(WEBHOOK_URL, JOB_FAILED_EVENT, discord.deps);
+
+    expect(discord.requestCount()).toBe(2);
+  });
+
+  test("does not sleep when retry-after exceeds the cap", async () => {
+    const discord = fakeDiscord([
+      rateLimitedFor(DISCORD_RETRY_MAX_WAIT_MS / 1000 + 1),
+      ok,
+    ]);
+
+    await notify(WEBHOOK_URL, JOB_FAILED_EVENT, discord.deps);
+
+    expect(discord.sleeps).toEqual([]);
+  });
+
+  test("does not resend when retry-after exceeds the cap", async () => {
+    const discord = fakeDiscord([
+      rateLimitedFor(DISCORD_RETRY_MAX_WAIT_MS / 1000 + 1),
+      ok,
+    ]);
+
+    await notify(WEBHOOK_URL, JOB_FAILED_EVENT, discord.deps);
+
+    expect(discord.requestCount()).toBe(1);
+  });
+
+  test("resolves without throwing when retry-after exceeds the cap", async () => {
+    const discord = fakeDiscord([
+      rateLimitedFor(DISCORD_RETRY_MAX_WAIT_MS / 1000 + 1),
+      ok,
+    ]);
+
+    await expect(
+      notify(WEBHOOK_URL, JOB_FAILED_EVENT, discord.deps),
+    ).resolves.toBeUndefined();
+  });
+
+  test("logs a warning when giving up because retry-after exceeds the cap", async () => {
+    const discord = fakeDiscord([
+      rateLimitedFor(DISCORD_RETRY_MAX_WAIT_MS / 1000 + 1),
+      ok,
+    ]);
+
+    await notify(WEBHOOK_URL, JOB_FAILED_EVENT, discord.deps);
+
+    expect(discord.warnings).toEqual([
+      "discord notify skipped: rate limit wait exceeds cap",
+    ]);
+  });
+
+  test("applies the cap to retry_after in the body when the header is missing", async () => {
+    const discord = fakeDiscord([
+      rateLimitedByBodyFor(DISCORD_RETRY_MAX_WAIT_MS / 1000 + 1),
+      ok,
+    ]);
+
+    await notify(WEBHOOK_URL, JOB_FAILED_EVENT, discord.deps);
+
+    expect(discord.sleeps).toEqual([]);
+  });
+
+  test("does not log a warning when the wait is within the cap", async () => {
+    const discord = fakeDiscord([rateLimitedFor(2), ok]);
+
+    await notify(WEBHOOK_URL, JOB_FAILED_EVENT, discord.deps);
+
+    expect(discord.warnings).toEqual([]);
+  });
+
+  test("throws when the retry is rate limited again", async () => {
+    const discord = fakeDiscord([rateLimitedFor(1), rateLimitedFor(1)]);
+
+    await expect(
+      notify(WEBHOOK_URL, JOB_FAILED_EVENT, discord.deps),
+    ).rejects.toThrow("discord webhook failed: HTTP 429");
+  });
+
+  test("does not send a third request when the retry is rate limited again", async () => {
+    const discord = fakeDiscord([rateLimitedFor(1), rateLimitedFor(1), ok]);
+
+    await notify(WEBHOOK_URL, JOB_FAILED_EVENT, discord.deps).catch(() => {});
+
+    expect(discord.requestCount()).toBe(2);
   });
 });

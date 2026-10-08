@@ -51,6 +51,7 @@
 
 - 通知は行動が必要なものだけ送る。例えば再レビュー依頼の対象レビュアーが全員除外されて誰にも依頼できなかった場合、`pr_fixed`通知自体がすでに再レビュー依頼という結果を伝えているため、追加の通知はしない(再レビュー依頼のAPI呼び出し自体が失敗した場合は、`pr_fixed`通知の補足欄に記録する)。
 - `needs_human`通知には対象(PR / Issue番号)・起きたこと・次の操作(何をすればよいか)が必ず載る。
+- Discordのrate limit(HTTP 429)に当たると、`retry-after`(無ければ本文の`retry_after`、どちらも無ければ1秒)だけ待って1回だけ再送する。待つのは最大30秒(`f/factory/lib/discord.ts`の`DISCORD_RETRY_MAX_WAIT_MS`。どのフローのステップのtimeoutよりも十分に短い)で、それより長く待つ必要があるときは、待たず再送もせずにその通知を諦め、ジョブログに`discord notify skipped: rate limit wait exceeds cap`のwarnを残す。このときフローは失敗しない。再送も拒まれたときなど、その他の送信の失敗の扱いは呼び出し側による(多くはwarnを残して続ける)。諦めた通知は再送されないので、ConsoleとGitHubで状態を確かめる。
 
 ## PRの使い方(pr_review / pr_fix)
 

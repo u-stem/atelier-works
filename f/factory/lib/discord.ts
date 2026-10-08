@@ -2,6 +2,7 @@
 // テストで実際のHTTP通信や待機をしないよう、`fetch`と`sleep`は注入できる。
 
 import { type CleanupCounts, summarizeCleanup } from "./cleanup_db_support.ts";
+import { type Logger, logger } from "./log.ts";
 import type { ImplementDiffStat } from "./types.ts";
 
 export type DiscordEmbedField = {
@@ -400,8 +401,24 @@ export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
 
 export type NotifyDeps = {
   fetch?: FetchLike;
+  /**
+   * 429応答で1回だけ再送する前の待機。既定は`setTimeout`による実際の待機。
+   * 待つ時間は`DISCORD_RETRY_MAX_WAIT_MS`を超えない。
+   */
   sleep?: (ms: number) => Promise<void>;
+  /** 通知を諦めたときにwarnを残す先。既定は`logger("discord")`。 */
+  log?: Logger;
 };
+
+/**
+ * 429応答の再送までに待つ時間の上限(ミリ秒)。
+ * Discordの`retry-after`はふつう数秒なので、通常の429はこの範囲で待てる。
+ * これより長い待ちは、チャンネルやアカウント全体の制限に当たっているときで、
+ * 待っても再送が通る見込みが薄いので、通知を諦める。
+ * 最も短いstepのtimeout(pr_fixの指摘の収集の600秒)より十分に短くし、
+ * 1つのstepで何度か通知しても打ち切られないようにする。
+ */
+export const DISCORD_RETRY_MAX_WAIT_MS = 30_000;
 
 function defaultSleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -441,9 +458,12 @@ async function readRetryAfterMs(response: Response): Promise<number> {
 /**
  * `event`をDiscordの埋め込みにして`webhookUrl`へ送る。
  * 429応答なら、応答が示す時間だけ待って1回だけ再送する。
- * 最終的な応答が2xxでなければ例外を投げる。
+ * 示された待ちが`DISCORD_RETRY_MAX_WAIT_MS`を超えるときは、待たず再送もせずに
+ * warnを残して正常に戻る。待ちがstepのtimeoutより長引いて打ち切られることを防ぎ、
+ * 例外を捕まえない呼び出し側でも、通知を諦めただけでフローを失敗させないため。
+ * それ以外で最終的な応答が2xxでなければ(再送も429なら含めて)例外を投げる。
  * webhookのURLのパスには秘密のトークンが入るため、
- * エラーメッセージに`webhookUrl`は含めない。
+ * エラーメッセージとログに`webhookUrl`は含めない。
  */
 export async function notify(
   webhookUrl: string,
@@ -452,6 +472,7 @@ export async function notify(
 ): Promise<void> {
   const doFetch = deps.fetch ?? fetch;
   const doSleep = deps.sleep ?? defaultSleep;
+  const log = deps.log ?? logger("discord");
   const embed = buildEmbed(event);
   const payload = JSON.stringify({
     embeds: [embed],
@@ -468,6 +489,14 @@ export async function notify(
   let response = await doFetch(webhookUrl, requestInit);
   if (response.status === 429) {
     const retryAfterMs = await readRetryAfterMs(response);
+    if (retryAfterMs > DISCORD_RETRY_MAX_WAIT_MS) {
+      log.warn("discord notify skipped: rate limit wait exceeds cap", {
+        kind: event.kind,
+        retry_after_ms: retryAfterMs,
+        max_wait_ms: DISCORD_RETRY_MAX_WAIT_MS,
+      });
+      return;
+    }
     await doSleep(retryAfterMs);
     response = await doFetch(webhookUrl, requestInit);
   }
