@@ -48,6 +48,22 @@ export function filterByRepoAllowlist<
 }
 
 // ---------------------------------------------------------------------------
+// デプロイ版の不一致
+// ---------------------------------------------------------------------------
+
+/**
+ * self cloneのHEADと記録済みのデプロイ版が食い違うときのnoticeの本文。
+ * 両方の版を含めるので、本文が同じなら版の組が同じである。
+ * 重複して登録しない判定(`addNoticeUnlessUnresolved`)は本文の一致で行う。
+ */
+export function deployedShaMismatchMessage(
+  selfSha: string,
+  deployedSha: string,
+): string {
+  return `self cloneのHEAD(${selfSha})がf/factory/deployed_sha(${deployedSha})と一致しません`;
+}
+
+// ---------------------------------------------------------------------------
 // Issueに着手するかの判定
 // ---------------------------------------------------------------------------
 

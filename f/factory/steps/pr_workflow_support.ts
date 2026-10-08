@@ -3804,6 +3804,14 @@ const REASON_RULES: readonly ReasonRule[] = [
     nextAction: () =>
       "要件を人が整理し、Issueに追記してから`factory`ラベルを付け直してください",
   },
+  // poll_issues.tsの`registerClaimedIssue`。取得でトリガーラベルは外れ、作業項目は無い。
+  // 作業項目が無いので、再実行の`retry_work_item`ではなくラベルの付け直しで拾い直す。
+  {
+    pattern: /^claimed issue could not be registered$/,
+    describe: () => "Issueを取得しましたが、作業項目を登録できませんでした",
+    nextAction: () =>
+      "原因をConsoleの失敗タブかジョブのログで確かめて取り除き、Issueに`factory`ラベルを付け直してください",
+  },
   {
     pattern: /^approval timed out$/,
     describe: () => "承認がタイムアウトしました",

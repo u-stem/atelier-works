@@ -16,6 +16,7 @@ import { expiredRequirementsRequests } from "./lib/approval_support.ts";
 import { loadConfig } from "./lib/config.ts";
 import {
   addNotice,
+  addNoticeUnlessUnresolved,
   expireApprovalRequestIfPending,
   getWorkItem,
   insertWorkItem,
@@ -44,6 +45,7 @@ import {
   decideClosureOnly,
   decideIssueActions,
   decideReconcileAction,
+  deployedShaMismatchMessage,
   filterByRepoAllowlist,
   type IssueCandidate,
   isWaitingForHuman,
@@ -138,6 +140,7 @@ async function recordFailureSafe(
 /**
  * self cloneのHEADのshaを変数`f/factory/deployed_sha`と比べ、
  * 食い違えばnoticeを記録する。noticeを残すだけでジョブは失敗させない。
+ * 同じ版の組の未解決のnoticeがあれば、新しく記録しない(版の組が変われば記録する)。
  * 変数が無い・空のときは、まだ比べる対象が無いとみなす。
  */
 async function checkDeployedSha(
@@ -162,9 +165,9 @@ async function checkDeployedSha(
     }
     if (deployedSha.length === 0 || deployedSha === selfSha) return;
 
-    await addNotice({
+    await addNoticeUnlessUnresolved({
       kind: "deployed_sha_mismatch",
-      message: `self cloneのHEAD(${selfSha})がf/factory/deployed_sha(${deployedSha})と一致しません`,
+      message: deployedShaMismatchMessage(selfSha, deployedSha),
     });
   } catch (err) {
     log.warn("deployed_sha check failed", {
@@ -412,6 +415,93 @@ async function buildIssueCandidates(
   return candidates;
 }
 
+/**
+ * Issueを取得した後に、作業項目を登録できなかったときの`reason`。
+ * `describeReason`と`nextActionFor`が通知の文にする。
+ */
+const REGISTER_FAILED_REASON = "claimed issue could not be registered";
+
+export type RegisterClaimedIssueDeps = {
+  readonly nextCycleForIssue: typeof nextCycleForIssue;
+  readonly insertWorkItem: typeof insertWorkItem;
+  readonly notifyBestEffort: typeof notifyBestEffort;
+};
+
+const defaultRegisterDeps: RegisterClaimedIssueDeps = {
+  nextCycleForIssue,
+  insertWorkItem,
+  notifyBestEffort,
+};
+
+/**
+ * 取得したIssueの作業項目を登録し、そのIDを返す。
+ * 登録に失敗したときは、人の対応待ちの通知(Issueへのリンクと次の操作つき)を
+ * 送ってから、元の例外をそのまま投げる。呼び出し元が`job_failures`に記録する。
+ * 取得の時点でトリガーラベルは外れていて、作業項目も無いので、
+ * このIssueを次のポーリングは拾わない。通知が無いと、人は失敗タブを
+ * 見に行かない限り気づけず、失敗タブには再実行できる作業項目も無い。
+ * 取得を自動で戻さないのは、次の2つの害があるためである。
+ * Factory自身のPATがラベルを付け直すと、直近のラベル付与者がFactoryになり、
+ * 付与者の関係の検査が人ではなくFactoryに対して行われる。
+ * また、DBの障害が続く間は、取得と失敗をポーリングのたびに繰り返す。
+ * 通知はベストエフォートで、失敗しても元の例外を隠さない。
+ */
+export async function registerClaimedIssue(
+  input: {
+    readonly candidate: IssueCandidate;
+    readonly viewerLogin: string;
+    readonly instanceName: string;
+    readonly discordWebhookUrl: string;
+    readonly log: Logger;
+  },
+  deps: RegisterClaimedIssueDeps = defaultRegisterDeps,
+): Promise<number> {
+  const { candidate } = input;
+  try {
+    const cycle = await deps.nextCycleForIssue(
+      candidate.owner,
+      candidate.repo,
+      candidate.number,
+    );
+    return await deps.insertWorkItem({
+      cycle,
+      source: "issue",
+      kind: "issue",
+      owner: candidate.owner,
+      repo: candidate.repo,
+      issue_number: candidate.number,
+      issue_url: candidate.htmlUrl,
+      pr_number: null,
+      title: candidate.title,
+      body: candidate.body,
+      status: "picked",
+      attempt: 1,
+      claimed_by: input.viewerLogin,
+      flow_job_id: null,
+      resume_url: null,
+      cancel_url: null,
+      head_sha: null,
+      parent_work_item_id: null,
+    });
+  } catch (err) {
+    await deps.notifyBestEffort(
+      input.discordWebhookUrl,
+      {
+        kind: "needs_human",
+        instance_name: input.instanceName,
+        owner: candidate.owner,
+        repo: candidate.repo,
+        url: candidate.htmlUrl,
+        reason: describeReason(REGISTER_FAILED_REASON),
+        target: { kind: "issue", number: candidate.number },
+        next_action: nextActionFor(REGISTER_FAILED_REASON),
+      },
+      input.log,
+    );
+    throw err;
+  }
+}
+
 async function claimAndStart(
   client: GhClient,
   candidate: IssueCandidate,
@@ -435,30 +525,12 @@ async function claimAndStart(
     return "skipped";
   }
 
-  const cycle = await nextCycleForIssue(
-    candidate.owner,
-    candidate.repo,
-    candidate.number,
-  );
-  const workItemId = await insertWorkItem({
-    cycle,
-    source: "issue",
-    kind: "issue",
-    owner: candidate.owner,
-    repo: candidate.repo,
-    issue_number: candidate.number,
-    issue_url: candidate.htmlUrl,
-    pr_number: null,
-    title: candidate.title,
-    body: candidate.body,
-    status: "picked",
-    attempt: 1,
-    claimed_by: viewerLogin,
-    flow_job_id: null,
-    resume_url: null,
-    cancel_url: null,
-    head_sha: null,
-    parent_work_item_id: null,
+  const workItemId = await registerClaimedIssue({
+    candidate,
+    viewerLogin,
+    instanceName: config.instance_name,
+    discordWebhookUrl,
+    log,
   });
 
   await notifyBestEffort(
