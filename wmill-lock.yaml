@@ -17,7 +17,7 @@ locks:
   f/factory/lib/audit_doc: e6b74b4c7816639ea1e29517caf56ec85340a68764a4a66fd34f4ec51ee00344
   f/factory/lib/audit_evidence: 4f8ec23c2c7965d4312728abc5fb6e789bbfefcb0c6205a499ffdccd7f799eae
   f/factory/lib/audit_support: 7e3a1a0e9b438c651812eee365575dbcba2c789388dec74458106c39b3a0d032
-  f/factory/lib/claude: 300b379c3a001278c0a940fe5f17d0ede37eccd21602f5d8489faa4a881b2906
+  f/factory/lib/claude: 045bbaa1eb0a10dbfa20cb7a4c85b4aa6acbd7e064d3b8aa24198af9558b5d59
   f/factory/lib/cleanup_db_support: e07aaf144e1897e4cb6c523a22a374d73daaf7f4c2ab72d51621902347f70532
   f/factory/lib/cleanup_support: d4b94884b5209c52858fcd8769fbef6a16a16b2e2a30a5489d169e3416baf108
   f/factory/lib/config: 5922d286a1443ab1057dd2164be94bf49288a7abdbcbfc463d1faf3a362f7d1a

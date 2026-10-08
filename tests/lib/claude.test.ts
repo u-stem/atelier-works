@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { access } from "node:fs/promises";
 import {
   buildSystemPrompt,
+  CLAUDE_NOT_STARTED_DETAIL,
   dailyBudgetStatus,
   isBudgetExceeded,
   jstMidnightTodayIso,
@@ -549,6 +550,114 @@ describe("runClaude", () => {
       runAs: { uid: 1000, gid: 1000 },
     });
     expect(result.outcome).toBe("success");
+  });
+
+  test("caps the attempt's timeout at the time left before deadlineAt", async () => {
+    const fake = createFakeCommandRunner([
+      { stdout: claudeJsonStdout(), stderr: "", exitCode: 0, timedOut: false },
+    ]);
+    await runClaude({
+      ...baseOptions(fake.run),
+      deadlineAt: 31_000,
+      now: () => 1_000,
+    });
+    expect(fake.calls[0]?.options?.timeoutMs).toBe(30_000);
+  });
+
+  test("keeps timeoutMs when deadlineAt is further away", async () => {
+    const fake = createFakeCommandRunner([
+      { stdout: claudeJsonStdout(), stderr: "", exitCode: 0, timedOut: false },
+    ]);
+    await runClaude({
+      ...baseOptions(fake.run),
+      deadlineAt: 1_000_000,
+      now: () => 0,
+    });
+    expect(fake.calls[0]?.options?.timeoutMs).toBe(60_000);
+  });
+
+  test("reports the capped timeout when the attempt times out", async () => {
+    const fake = createFakeCommandRunner([timeout()]);
+    const result = await runClaude({
+      ...baseOptions(fake.run),
+      deadlineAt: 6_000,
+      now: () => 1_000,
+    });
+    expect(result.outcome === "failure" ? result.detail : "").toBe(
+      "claude -p timed out after 5000ms",
+    );
+  });
+
+  test("does not start Claude past the deadline", async () => {
+    const fake = createFakeCommandRunner([]);
+    await runClaude({
+      ...baseOptions(fake.run),
+      deadlineAt: 1_000,
+      now: () => 1_000,
+    });
+    expect(fake.calls).toHaveLength(0);
+  });
+
+  test("reports a timeout when Claude was not started", async () => {
+    const fake = createFakeCommandRunner([]);
+    const result = await runClaude({
+      ...baseOptions(fake.run),
+      deadlineAt: 1_000,
+      now: () => 2_000,
+    });
+    expect(result.outcome === "failure" ? result.reason : null).toBe("timeout");
+  });
+
+  test("records why Claude was not started", async () => {
+    const fake = createFakeCommandRunner([]);
+    const result = await runClaude({
+      ...baseOptions(fake.run),
+      deadlineAt: 1_000,
+      now: () => 2_000,
+    });
+    expect(result.agentRun.error).toBe(CLAUDE_NOT_STARTED_DETAIL);
+  });
+
+  test("does not start Claude for a deadline that is not a finite number", async () => {
+    const fake = createFakeCommandRunner([]);
+    await runClaude({
+      ...baseOptions(fake.run),
+      deadlineAt: Number.NaN,
+      now: () => 0,
+    });
+    expect(fake.calls).toHaveLength(0);
+  });
+
+  test("does not retry a malformed output once the deadline has passed", async () => {
+    const fake = createFakeCommandRunner([
+      { stdout: "not json", stderr: "", exitCode: 0, timedOut: false },
+      { stdout: claudeJsonStdout(), stderr: "", exitCode: 0, timedOut: false },
+    ]);
+    let clock = 0;
+    const run: typeof fake.run = async (argv, options) => {
+      const result = await fake.run(argv, options);
+      clock = 61_000;
+      return result;
+    };
+    await runClaude({
+      ...baseOptions(run),
+      deadlineAt: 60_000,
+      now: () => clock,
+    });
+    expect(fake.calls).toHaveLength(1);
+  });
+
+  test("retries a malformed output while time is left", async () => {
+    const fake = createFakeCommandRunner([
+      { stdout: "not json", stderr: "", exitCode: 0, timedOut: false },
+      { stdout: claudeJsonStdout(), stderr: "", exitCode: 0, timedOut: false },
+    ]);
+    const result = await runClaude({
+      ...baseOptions(fake.run),
+      deadlineAt: 1_000_000,
+      now: () => 0,
+    });
+    expect(result.retried).toBe(true);
   });
 });
 

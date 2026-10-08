@@ -11,7 +11,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defaultSqlClient, type SqlClient, sumAgentCostSince } from "./db.ts";
 import { maskSecrets } from "./log.ts";
-import type { AgentRunRecord, FactoryConfig } from "./types.ts";
+import {
+  type AgentRunRecord,
+  capToDeadline,
+  type FactoryConfig,
+} from "./types.ts";
 import type { CommandRunner } from "./workspace.ts";
 
 // ---------------------------------------------------------------------------
@@ -258,6 +262,13 @@ export type RunClaudeOptions<T> = {
   /** 既定は`process.env.CLAUDE_VERSION`(worker imageが設定する)。 */
   readonly claudeVersion?: string;
   readonly timeoutMs: number;
+  /**
+   * 実行全体の期限(epoch ms)。各試行のタイムアウトをtimeoutMsと残り時間の短い方にする。
+   * 残りが0以下(期限が有限の数でない場合を含む)ならClaudeを起動せず、不正な出力への再試行もしない。省略時は期限なし。
+   */
+  readonly deadlineAt?: number;
+  /** 現在時刻(epoch ms)を返す。既定はDate.now。 */
+  readonly now?: () => number;
   readonly retryNote?: string;
   /**
    * 将来、workerをroot以外で実行する方式のために予約している。
@@ -386,21 +397,26 @@ type ClaudeAttemptResult<T> =
       readonly detail: string;
     };
 
-async function attemptClaude<T>(
+/** 期限が残っていなかったためClaudeを起動しなかったときの詳細。 */
+export const CLAUDE_NOT_STARTED_DETAIL =
+  "claude -p not started: no time left before the deadline";
+
+/** この試行のタイムアウト(ms)を返す。deadlineAtがあれば残り時間で頭打ちにする。 */
+function attemptTimeoutMs<T>(opts: RunClaudeOptions<T>): number {
+  if (opts.deadlineAt === undefined) return opts.timeoutMs;
+  return capToDeadline(
+    opts.timeoutMs,
+    opts.deadlineAt,
+    (opts.now ?? Date.now)(),
+  );
+}
+
+/** 1回の試行のエージェント実行記録の土台を返す(トークン・コストは未設定)。 */
+function baseAgentRunFor<T>(
   opts: RunClaudeOptions<T>,
-  promptText: string,
-): Promise<ClaudeAttemptResult<T>> {
-  const env = buildClaudeEnv(opts);
-  const argv = buildClaudeArgv(opts);
-
-  const commandResult = await opts.run(argv, {
-    cwd: opts.cwd,
-    env,
-    stdin: promptText,
-    timeoutMs: opts.timeoutMs,
-  });
-
-  const baseAgentRun: AgentRunRecord = {
+  exitCode: number | null,
+): AgentRunRecord {
+  return {
     work_item_id: opts.workItemId,
     stage: opts.stage,
     attempt: opts.attempt,
@@ -413,12 +429,30 @@ async function attemptClaude<T>(
     num_turns: null,
     duration_ms: null,
     session_id: null,
-    exit_code: commandResult.exitCode,
+    exit_code: exitCode,
     error: null,
   };
+}
+
+async function attemptClaude<T>(
+  opts: RunClaudeOptions<T>,
+  promptText: string,
+): Promise<ClaudeAttemptResult<T>> {
+  const env = buildClaudeEnv(opts);
+  const argv = buildClaudeArgv(opts);
+  const timeoutMs = attemptTimeoutMs(opts);
+
+  const commandResult = await opts.run(argv, {
+    cwd: opts.cwd,
+    env,
+    stdin: promptText,
+    timeoutMs,
+  });
+
+  const baseAgentRun = baseAgentRunFor(opts, commandResult.exitCode);
 
   if (commandResult.timedOut) {
-    const detail = maskSecrets(`claude -p timed out after ${opts.timeoutMs}ms`);
+    const detail = maskSecrets(`claude -p timed out after ${timeoutMs}ms`);
     return {
       outcome: "failure",
       reason: "timeout",
@@ -509,15 +543,32 @@ const RETRYABLE_REASONS: readonly RunClaudeFailureReason[] = [
  * 0以外の終了コード、タイムアウト、`is_error: true`は再試行しない。
  * Claudeの実行の失敗は例外にせず、`outcome: "failure"`と`reason`・`detail`で返す。
  * 再試行したかは成功・失敗とも`retried`で示し、`agentRun`には最後の試行の記録が入る。
+ * `deadlineAt`を過ぎていれば起動せずにtimeoutの失敗を返し、過ぎた後は再試行しない。
  */
 export async function runClaude<T>(
   opts: RunClaudeOptions<T>,
 ): Promise<RunClaudeResult<T>> {
+  if (opts.deadlineAt !== undefined && attemptTimeoutMs(opts) <= 0) {
+    return {
+      outcome: "failure",
+      reason: "timeout",
+      agentRun: {
+        ...baseAgentRunFor(opts, null),
+        error: CLAUDE_NOT_STARTED_DETAIL,
+      },
+      detail: CLAUDE_NOT_STARTED_DETAIL,
+      retried: false,
+    };
+  }
+
   const first = await attemptClaude(opts, opts.prompt);
   if (first.outcome === "success") {
     return { ...first, retried: false };
   }
   if (!RETRYABLE_REASONS.includes(first.reason)) {
+    return { ...first, retried: false };
+  }
+  if (opts.deadlineAt !== undefined && attemptTimeoutMs(opts) <= 0) {
     return { ...first, retried: false };
   }
 
