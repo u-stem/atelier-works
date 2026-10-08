@@ -32,7 +32,7 @@ import {
   worktreeLockFor,
 } from "../lib/process_lock.ts";
 import { implementPrompt } from "../lib/prompts.ts";
-import { runCommand } from "../lib/workspace.ts";
+import { runCommand, worktreeGitPointerMatches } from "../lib/workspace.ts";
 
 export async function main(
   work_item_id: number,
@@ -81,6 +81,11 @@ export async function main(
                 docDir,
                 oauthToken,
                 deadlineAt,
+                beforeRetry: () =>
+                  worktreeGitPointerMatches(
+                    context.worktree_dir,
+                    context.worktree_git_pointer,
+                  ),
               },
             ),
         );

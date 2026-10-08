@@ -7,6 +7,7 @@ import {
   assertWorktreeGitPointer,
   boundedTimerMs,
   type CommandResult,
+  CommitBlockedError,
   commitAndPush,
   copyFileTo,
   createBunCommandRunner,
@@ -34,6 +35,7 @@ import {
   pruneWorktrees,
   pushNewBranch,
   RUNNER_MAX_STOP_OVERHEAD_MS,
+  readAndVerifyWorktreeGitPointer,
   readDirEntries,
   readGitShowFile,
   readStreamAll,
@@ -53,6 +55,7 @@ import {
   withCommitTrailers,
   withRepoLock,
   worktreeFingerprint,
+  worktreeGitPointerMatches,
   writeTextFile,
 } from "../../f/factory/lib/workspace.ts";
 import { createFakeCommandRunner, fail, ok } from "./testSupport.ts";
@@ -1847,6 +1850,92 @@ describe("assertWorktreeGitPointer", () => {
   });
 });
 
+describe("worktreeGitPointerMatches", () => {
+  const WT = "/wt";
+  const pointerFs = (content: string) => ({
+    lstat: async () => ({ isFile: () => true, isSymbolicLink: () => false }),
+    readFile: async () => content,
+  });
+
+  test("is true when the pointer is unchanged", async () => {
+    expect(
+      await worktreeGitPointerMatches(
+        WT,
+        "gitdir: /r\n",
+        pointerFs("gitdir: /r\n"),
+      ),
+    ).toBe(true);
+  });
+
+  test("is false when the pointer changed", async () => {
+    expect(
+      await worktreeGitPointerMatches(
+        WT,
+        "gitdir: /r\n",
+        pointerFs("gitdir: /evil\n"),
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("readAndVerifyWorktreeGitPointer", () => {
+  const WT = "/tmp/repo-worktrees/contract-smoke-branch";
+  const GOOD = "gitdir: /tmp/repo/.git/worktrees/contract-smoke-branch\n";
+  const EVIL = "gitdir: /tmp/evil/.git\n";
+  const normalize = async (path: string): Promise<string> => resolve(path);
+  /** `.git`を2回目以降に読むと別の中身を返す。読み直していれば検証と記録が食い違う。 */
+  function flippingRead(first: string, later: string) {
+    let reads = 0;
+    return async (path: string): Promise<string> => {
+      if (path === `${WT}/.git`) {
+        reads += 1;
+        return reads === 1 ? first : later;
+      }
+      if (path.endsWith("/gitdir")) return `${WT}/.git\n`;
+      throw new Error(`unexpected read: ${path}`);
+    };
+  }
+
+  test("records the same bytes it verified", async () => {
+    const read = flippingRead(GOOD, EVIL);
+    const recorded = await readAndVerifyWorktreeGitPointer({
+      run: createFakeCommandRunner([ok(REAL_WORKTREE_PORCELAIN)]).run,
+      repoDir: "/tmp/repo",
+      dir: WT,
+      readTextFile: read,
+      realpath: normalize,
+      pointerFs: {
+        lstat: async () => ({
+          isFile: () => true,
+          isSymbolicLink: () => false,
+        }),
+        readFile: read,
+      },
+    });
+    expect(recorded).toBe(GOOD);
+  });
+
+  test("rejects a pointer that does not verify", async () => {
+    const read = flippingRead(EVIL, GOOD);
+    await expect(
+      readAndVerifyWorktreeGitPointer({
+        run: createFakeCommandRunner([ok(REAL_WORKTREE_PORCELAIN)]).run,
+        repoDir: "/tmp/repo",
+        dir: WT,
+        readTextFile: read,
+        realpath: normalize,
+        pointerFs: {
+          lstat: async () => ({
+            isFile: () => true,
+            isSymbolicLink: () => false,
+          }),
+          readFile: read,
+        },
+      }),
+    ).rejects.toThrow(/does not point under/);
+  });
+});
+
 describe("resolveDefaultBranchHeadSha", () => {
   test("returns the trimmed sha origin/HEAD points to", async () => {
     const fake = createFakeCommandRunner([
@@ -2029,6 +2118,142 @@ describe("commitAndPush", () => {
       lockFs: createInMemoryLockFs(),
     });
     expect(result).toEqual({ outcome: "head_changed", currentSha: OTHER_SHA });
+  });
+
+  test("fetches without recursing into submodules", async () => {
+    const fake = commitAndPushCalls([
+      ok("fix/branch\n"),
+      ok(),
+      ok(`${OTHER_SHA}\n`),
+    ]);
+    await commitAndPush({
+      run: fake.run,
+      repoDir: "/repo",
+      dir: "/repo/wt",
+      message: "fix: something",
+      instanceName: "acme-factory",
+      expectedHeadSha: HEAD_SHA,
+      author: TEST_AUTHOR,
+      ghToken: "gh-token",
+      verifyWorktree: noopVerify,
+      lockFs: createInMemoryLockFs(),
+    });
+    expect(fake.calls[1]?.argv.slice(-4)).toEqual([
+      "--no-recurse-submodules",
+      "origin",
+      "--",
+      "fix/branch",
+    ]);
+  });
+
+  describe("pr_fix guards", () => {
+    /** pr_fixの呼び出しと同じく、ローカルのHEADの確認とステージ済みの変更の検査を有効にする。 */
+    function guardedOptions(
+      run: ReturnType<typeof commitAndPushCalls>["run"],
+      reasons: readonly string[] = [],
+    ) {
+      return {
+        run,
+        repoDir: "/repo",
+        dir: "/repo/wt",
+        message: "fix: something",
+        instanceName: "acme-factory",
+        expectedHeadSha: HEAD_SHA,
+        author: TEST_AUTHOR,
+        ghToken: "gh-token",
+        verifyWorktree: noopVerify,
+        lockFs: createInMemoryLockFs(),
+        requireLocalHeadAtExpected: true,
+        inspectStaged: async () => reasons,
+      };
+    }
+
+    test("throws CommitBlockedError when the local HEAD moved off the PR head", async () => {
+      const fake = commitAndPushCalls([
+        ok("fix/branch\n"),
+        ok(),
+        ok(`${HEAD_SHA}\n`),
+        ok(`${OTHER_SHA}\n`), // rev-parse --verify HEAD
+      ]);
+      await expect(
+        commitAndPush(guardedOptions(fake.run)),
+      ).rejects.toBeInstanceOf(CommitBlockedError);
+    });
+
+    test("names both shas when the local HEAD moved", async () => {
+      const fake = commitAndPushCalls([
+        ok("fix/branch\n"),
+        ok(),
+        ok(`${HEAD_SHA}\n`),
+        ok(`${OTHER_SHA}\n`),
+      ]);
+      await expect(commitAndPush(guardedOptions(fake.run))).rejects.toThrow(
+        `local HEAD ${OTHER_SHA} is not the PR head ${HEAD_SHA}`,
+      );
+    });
+
+    test("does not stage anything when the local HEAD moved", async () => {
+      const fake = commitAndPushCalls([
+        ok("fix/branch\n"),
+        ok(),
+        ok(`${HEAD_SHA}\n`),
+        ok(`${OTHER_SHA}\n`),
+      ]);
+      await commitAndPush(guardedOptions(fake.run)).catch(() => {});
+      expect(fake.calls.map((call) => call.argv.includes("add"))).not.toContain(
+        true,
+      );
+    });
+
+    test("throws CommitBlockedError with the staged inspection's reasons", async () => {
+      const fake = commitAndPushCalls([
+        ok("fix/branch\n"),
+        ok(),
+        ok(`${HEAD_SHA}\n`),
+        ok(`${HEAD_SHA}\n`),
+        ok(), // git add -A
+        ok(" M mise.toml\n"),
+        ok(), // git reset -q
+      ]);
+      await expect(
+        commitAndPush(
+          guardedOptions(fake.run, ["forbidden path changed: mise.toml"]),
+        ),
+      ).rejects.toThrow(/^forbidden path changed: mise.toml$/);
+    });
+
+    test("unstages and does not commit after a staged violation", async () => {
+      const fake = commitAndPushCalls([
+        ok("fix/branch\n"),
+        ok(),
+        ok(`${HEAD_SHA}\n`),
+        ok(`${HEAD_SHA}\n`),
+        ok(),
+        ok(" M mise.toml\n"),
+        ok(),
+      ]);
+      await commitAndPush(
+        guardedOptions(fake.run, ["forbidden path changed: mise.toml"]),
+      ).catch(() => {});
+      expect(fake.calls.at(-1)?.argv.slice(-2)).toEqual(["reset", "-q"]);
+    });
+
+    test("commits when the local HEAD and the staged changes pass", async () => {
+      const newSha = "2222222222222222222222222222222222222c";
+      const fake = commitAndPushCalls([
+        ok("fix/branch\n"),
+        ok(),
+        ok(`${HEAD_SHA}\n`),
+        ok(`${HEAD_SHA}\n`),
+        ok(),
+        ok(" M file.ts\n"),
+        ok(), // git commit
+        ok(), // git push
+        ok(`${newSha}\n`),
+      ]);
+      const result = await commitAndPush(guardedOptions(fake.run));
+      expect(result).toEqual({ outcome: "pushed", newSha });
+    });
   });
 
   test("returns nothing_to_commit when the working tree is clean", async () => {

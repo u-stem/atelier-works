@@ -170,6 +170,7 @@ const RUN_INPUT: ImplementClaudeRunInput = {
   docDir: "/tmp/copy/requirements",
   oauthToken: "token",
   deadlineAt: 1_900_000_000_000,
+  beforeRetry: async () => false,
 };
 
 describe("implementPromptInput", () => {
@@ -478,6 +479,12 @@ describe("buildImplementClaudeOptions", () => {
     expect(
       buildImplementClaudeOptions({ ...RUN_INPUT, docDir: null }).addDirs,
     ).toEqual([]);
+  });
+
+  test("passes the pre-retry .git pointer check to runClaude", () => {
+    expect(buildImplementClaudeOptions(RUN_INPUT).beforeRetry).toBe(
+      RUN_INPUT.beforeRetry,
+    );
   });
 
   test("runs in the worktree", () => {

@@ -13,7 +13,6 @@ import {
 import { loadConfig } from "../lib/config.ts";
 import { addNotice, latestDraft, recordAgentRun } from "../lib/db.ts";
 import { type GhClient, getPr } from "../lib/github.ts";
-import { gitPointerStopReason } from "../lib/implement_loop.ts";
 import { logger } from "../lib/log.ts";
 import {
   lockJobIdFromEnv,
@@ -22,7 +21,11 @@ import {
 } from "../lib/process_lock.ts";
 import { type CheckFailure, FIX_SCHEMA, fixPrompt } from "../lib/prompts.ts";
 import type { FixOutcome, FixReply } from "../lib/types.ts";
-import { assertWorktreeGitPointer, runCommand } from "../lib/workspace.ts";
+import {
+  assertWorktreeGitPointer,
+  runCommand,
+  worktreeGitPointerMatches,
+} from "../lib/workspace.ts";
 import {
   type CheckCommandResult,
   type CollectedComment,
@@ -31,7 +34,11 @@ import {
   type ForbiddenChangeResult,
   inspectUncommittedChanges,
   isFixClaudeOutput,
+  localHeadStopReason,
+  PR_HEAD_NOT_RECORDED_REASON,
+  recordedGitPointerStopReason,
   runAllowedCheckCommands,
+  WORKTREE_GIT_POINTER_NOT_RECORDED_REASON,
 } from "./pr_workflow_support.ts";
 
 export type PrFixVerifyResult = {
@@ -42,14 +49,6 @@ export type PrFixVerifyResult = {
   readonly commit_subject: string | null;
   readonly commit_body: string | null;
 };
-
-/**
- * 準備ステップが`.git`の中身を渡さなかったときの理由。
- * 準備ステップが記録しない版のまま実行中だったフローが、この版の検証ステップに来たときに起きる。
- * 照合する基準が無いままgitを実行しないよう、"blocked"にする。
- */
-export const WORKTREE_GIT_POINTER_NOT_RECORDED_REASON =
-  "worktree git pointer was not recorded";
 
 /** 検査コマンドの失敗を添えたClaudeの再実行の結果。 */
 export type PrFixRetryResult =
@@ -64,6 +63,11 @@ export type PrFixRetryResult =
 export type PrFixVerifyDeps = {
   /** worktreeの`.git`を`expected`と比べ、違えば`WorktreeGitPointerModifiedError`を投げる。 */
   readonly assertGitPointer: (expected: string) => Promise<void>;
+  /** worktreeのHEADが`expectedSha`でブランチ`branch`にあるかを確かめ、違えば理由を返す(`localHeadStopReason`)。 */
+  readonly checkHead: (
+    expectedSha: string,
+    branch: string,
+  ) => Promise<string | null>;
   /** コミットしていない変更を調べる(`inspectUncommittedChanges`)。gitを実行する。 */
   readonly inspectChanges: () => Promise<ForbiddenChangeResult>;
   /** `allowed_check_commands`を実行する。 */
@@ -77,8 +81,12 @@ export type PrFixVerifyDeps = {
 };
 
 export type PrFixVerifyInput = {
-  /** 準備ステップが記録した`.git`の中身。記録が無ければnullか空文字列。 */
+  /** 準備ステップが記録した`.git`の中身。準備ステップの結果に無ければnullか空文字列。 */
   readonly worktreeGitPointer: string | null;
+  /** 準備ステップが見たPRのheadのsha。無ければnullか空文字列。 */
+  readonly headSha: string | null;
+  /** PRのheadブランチ。準備ステップの結果に無ければnullか空文字列。 */
+  readonly branch: string | null;
   readonly hasCheckCommands: boolean;
   /** `pr_fix_apply.ts`が"done"で返した結果。 */
   readonly apply: {
@@ -91,9 +99,11 @@ export type PrFixVerifyInput = {
 
 /**
  * `pr_fix_apply.ts`が"done"を返した修正を、pushしてよいかを検証して結果を返す。
- * worktreeでgitを実行する前には毎回、`.git`が準備ステップの記録と一致することを確かめる。
- * 記録が無いか一致しなければ、gitを実行せずに"blocked"にする。
+ * worktreeで変更を調べる前には毎回、`.git`が準備ステップの記録と一致することを確かめ、
+ * 続けてHEADが記録したPRのheadでそのブランチにあることを確かめる(`checkHead`)。
+ * 記録が無いか一致しなければ、変更を調べずに"blocked"にする。
  * 変わった`.git`の参照先が持ち込むconfigのfilter等を、次のgitがrootで実行するため。
+ * HEADが動いていると、HEADを基準にした変更の一覧からローカルのcommitの変更が漏れるため。
  * 禁止された変更が見つかれば無条件に"blocked"にする。
  * 変更は、Claudeの実行の後と、検査コマンドが通った後(commitの直前)の両方で調べる。
  * 検査コマンドは対象リポジトリのコードで、保護パスのファイルやsymlinkを作れるため。
@@ -117,20 +127,37 @@ export async function runPrFixVerify(
     commit_subject: null,
     commit_body: null,
   });
-  const recorded = input.worktreeGitPointer;
-  if (recorded === null || recorded.length === 0) {
+  const pointer = input.worktreeGitPointer;
+  if (pointer === null || pointer.length === 0) {
     return blocked(
       WORKTREE_GIT_POINTER_NOT_RECORDED_REASON,
       input.apply.summary,
       input.apply.replies,
     );
   }
-  /** `.git`を照合してから変更を調べ、止める理由を返す。問題が無ければnull。 */
+  const headSha = input.headSha;
+  const branch = input.branch;
+  if (
+    headSha === null ||
+    headSha.length === 0 ||
+    branch === null ||
+    branch.length === 0
+  ) {
+    return blocked(
+      PR_HEAD_NOT_RECORDED_REASON,
+      input.apply.summary,
+      input.apply.replies,
+    );
+  }
+  /** `.git`とHEADを照合してから変更を調べ、止める理由を返す。問題が無ければnull。 */
   const inspect = async (): Promise<string | null> => {
-    const pointerReason = await gitPointerStopReason(() =>
-      deps.assertGitPointer(recorded),
+    const pointerReason = await recordedGitPointerStopReason(
+      pointer,
+      deps.assertGitPointer,
     );
     if (pointerReason !== null) return pointerReason;
+    const headReason = await deps.checkHead(headSha, branch);
+    if (headReason !== null) return headReason;
     const forbidden = await deps.inspectChanges();
     return forbidden.blocked ? forbidden.reasons.join("; ") : null;
   };
@@ -172,6 +199,15 @@ export async function runPrFixVerify(
     );
   }
 
+  // 検査コマンドの後、Claudeをもう一度起動する前にも`.git`を確かめる。
+  // Claudeは起動時にcwdでgitを実行しうるため。
+  const beforeRetryReason = await recordedGitPointerStopReason(
+    pointer,
+    deps.assertGitPointer,
+  );
+  if (beforeRetryReason !== null) {
+    return blocked(beforeRetryReason, input.apply.summary, input.apply.replies);
+  }
   const retry = await deps.runRetry(
     firstChecks
       .filter((result) => !result.ok)
@@ -232,8 +268,8 @@ export async function runPrFixVerify(
  * 検査コマンドは最小限の環境変数で、秘密情報を渡さず、`mise trust`もせずに実行する。
  * `pr_fix_apply.ts`がrequirements_gapかblockedを返したときは、
  * Claudeがcommitを作らないと判断したため検証するものが無く、そのまま返す。
- * `worktree_git_pointer`は`pr_fix_prepare.ts`が記録した`.git`の中身。
- * 記録しない版の準備ステップから来たフローでは渡らないので、既定をnullにして"blocked"で止める。
+ * `worktree_git_pointer`・`head_sha`・`branch`は`pr_fix_prepare.ts`が記録した`.git`の中身、PRのheadのsha、headブランチ。
+ * 準備ステップの結果にこれらが無いときは渡らないので、既定をnullにして"blocked"で止める。
  */
 export async function main(
   work_item_id: number,
@@ -253,6 +289,8 @@ export async function main(
   reviews: CollectedReview[],
   comments: CollectedComment[],
   worktree_git_pointer: string | null = null,
+  head_sha: string | null = null,
+  branch: string | null = null,
 ): Promise<PrFixVerifyResult> {
   const lockedRun = withWorktreeProcessLock(
     runCommand,
@@ -295,6 +333,8 @@ export async function main(
     {
       assertGitPointer: (expected) =>
         assertWorktreeGitPointer(worktree_dir, expected),
+      checkHead: (expectedSha, headBranch) =>
+        localHeadStopReason(runCommand, worktree_dir, expectedSha, headBranch),
       inspectChanges: () =>
         inspectUncommittedChanges(runCommand, worktree_dir, {
           maxChangedFiles: config.max_fix_changed_files,
@@ -365,6 +405,10 @@ export async function main(
             cwd: worktree_dir,
             oauthToken,
             timeoutMs,
+            beforeRetry: () =>
+              worktree_git_pointer === null
+                ? Promise.resolve(false)
+                : worktreeGitPointerMatches(worktree_dir, worktree_git_pointer),
           });
           await recordClaudeRuns(retryResult, recordAgentRun);
           return retryResult.outcome === "success"
@@ -382,6 +426,8 @@ export async function main(
     },
     {
       worktreeGitPointer: worktree_git_pointer,
+      headSha: head_sha,
+      branch,
       hasCheckCommands: config.allowed_check_commands.length > 0,
       apply: {
         summary: apply_summary,

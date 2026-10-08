@@ -1,5 +1,5 @@
-// `pr_fix_verify.ts`の`runPrFixVerify`のテスト。
-// `.git`ポインタの照合、変更の検査、検査コマンド、再実行の順序を、注入した偽の依存で確かめる。
+// `pr_fix_verify.ts`の`runPrFixVerify`と、pr_fixの各ステップが共有する`.git`ポインタの確認のテスト。
+// `.git`ポインタとHEADの照合、変更の検査、検査コマンド、再実行の順序を、注入した偽の依存で確かめる。
 
 import { describe, expect, test } from "bun:test";
 import { WorktreeGitPointerModifiedError } from "../../f/factory/lib/workspace.ts";
@@ -9,13 +9,15 @@ import {
   type PrFixVerifyInput,
   runPrFixVerify,
 } from "../../f/factory/steps/pr_fix_verify.ts";
-import type {
-  CheckCommandResult,
-  FixClaudeOutput,
-  ForbiddenChangeResult,
+import {
+  type CheckCommandResult,
+  type FixClaudeOutput,
+  type ForbiddenChangeResult,
+  recordedGitPointerStopReason,
 } from "../../f/factory/steps/pr_workflow_support.ts";
 
 const POINTER = "gitdir: /workspaces/o/r/main/.git/worktrees/fix-1\n";
+const HEAD_SHA = "a".repeat(40);
 
 const CLEAN: ForbiddenChangeResult = { blocked: false, reasons: [] };
 
@@ -45,6 +47,8 @@ const RETRY_OUTPUT: FixClaudeOutput = {
 
 const INPUT: PrFixVerifyInput = {
   worktreeGitPointer: POINTER,
+  headSha: HEAD_SHA,
+  branch: "fix/x",
   hasCheckCommands: true,
   apply: {
     summary: "apply summary",
@@ -63,6 +67,8 @@ type Harness = {
 type HarnessOptions = {
   /** `assertGitPointer`の呼び出しごとの結果。`true`は不一致を表す。尽きたら一致とする。 */
   readonly pointerModified?: readonly boolean[];
+  /** `checkHead`の呼び出しごとの結果。尽きたらnull(一致)を返す。 */
+  readonly headReasons?: readonly (string | null)[];
   /** `inspectChanges`の呼び出しごとの結果。尽きたら`CLEAN`を返す。 */
   readonly inspections?: readonly ForbiddenChangeResult[];
   /** `runChecks`の呼び出しごとの結果。尽きたら成功を返す。 */
@@ -74,6 +80,7 @@ type HarnessOptions = {
 function harness(options: HarnessOptions = {}): Harness {
   const calls: string[] = [];
   let pointerIndex = 0;
+  let headIndex = 0;
   let inspectIndex = 0;
   let checkIndex = 0;
   const deps: PrFixVerifyDeps = {
@@ -82,6 +89,14 @@ function harness(options: HarnessOptions = {}): Harness {
       const modified = options.pointerModified?.[pointerIndex] ?? false;
       pointerIndex += 1;
       if (modified) throw new WorktreeGitPointerModifiedError();
+    },
+    checkHead: async (expectedSha, branch) => {
+      calls.push(
+        `checkHead:${expectedSha === HEAD_SHA && branch === "fix/x" ? "recorded" : "?"}`,
+      );
+      const reason = options.headReasons?.[headIndex] ?? null;
+      headIndex += 1;
+      return reason;
     },
     inspectChanges: async () => {
       calls.push("inspectChanges");
@@ -112,7 +127,58 @@ function harness(options: HarnessOptions = {}): Harness {
   return { deps, calls };
 }
 
-describe("runPrFixVerify: worktree .git pointer", () => {
+/** 1回分の照合と検査の呼び出し。 */
+const INSPECTION = [
+  "assertGitPointer:recorded",
+  "checkHead:recorded",
+  "inspectChanges",
+];
+
+describe("recordedGitPointerStopReason", () => {
+  const matches = async (): Promise<void> => {};
+
+  test("stops when no pointer was recorded", async () => {
+    expect(await recordedGitPointerStopReason(null, matches)).toBe(
+      "worktree git pointer was not recorded",
+    );
+  });
+
+  test("stops when the recorded pointer is empty", async () => {
+    expect(await recordedGitPointerStopReason("", matches)).toBe(
+      "worktree git pointer was not recorded",
+    );
+  });
+
+  test("does not read .git when no pointer was recorded", async () => {
+    let called = false;
+    await recordedGitPointerStopReason(null, async () => {
+      called = true;
+    });
+    expect(called).toBe(false);
+  });
+
+  test("stops when the pointer changed", async () => {
+    expect(
+      await recordedGitPointerStopReason(POINTER, async () => {
+        throw new WorktreeGitPointerModifiedError();
+      }),
+    ).toBe("worktree git pointer was modified");
+  });
+
+  test("passes the recorded pointer to the check", async () => {
+    const received: string[] = [];
+    await recordedGitPointerStopReason(POINTER, async (expected) => {
+      received.push(expected);
+    });
+    expect(received).toEqual([POINTER]);
+  });
+
+  test("returns null when the pointer is unchanged", async () => {
+    expect(await recordedGitPointerStopReason(POINTER, matches)).toBeNull();
+  });
+});
+
+describe("runPrFixVerify: recorded values from the prepare step", () => {
   test("blocks when the pointer was not recorded", async () => {
     const h = harness();
     const result = await runPrFixVerify(h.deps, {
@@ -128,6 +194,20 @@ describe("runPrFixVerify: worktree .git pointer", () => {
     expect(h.calls).toEqual([]);
   });
 
+  test("blocks when the PR branch was not recorded", async () => {
+    const h = harness();
+    const result = await runPrFixVerify(h.deps, { ...INPUT, branch: null });
+    expect(result.reason).toBe("PR head was not recorded");
+  });
+
+  test("runs no git when the PR head sha was not recorded", async () => {
+    const h = harness();
+    await runPrFixVerify(h.deps, { ...INPUT, headSha: "" });
+    expect(h.calls).toEqual([]);
+  });
+});
+
+describe("runPrFixVerify: worktree .git pointer and HEAD", () => {
   test("blocks when the pointer changed after the Claude run", async () => {
     const h = harness({ pointerModified: [true] });
     const result = await runPrFixVerify(h.deps, INPUT);
@@ -143,10 +223,31 @@ describe("runPrFixVerify: worktree .git pointer", () => {
     expect(h.calls).toEqual(["assertGitPointer:recorded"]);
   });
 
-  test("compares the pointer with the recorded value before the first inspection", async () => {
+  test("checks the pointer and HEAD before the first inspection", async () => {
     const h = harness();
     await runPrFixVerify(h.deps, { ...INPUT, hasCheckCommands: false });
-    expect(h.calls).toEqual(["assertGitPointer:recorded", "inspectChanges"]);
+    expect(h.calls).toEqual(INSPECTION);
+  });
+
+  test("blocks when HEAD moved off the PR head", async () => {
+    const reason = `local HEAD ${"b".repeat(40)} is not the PR head ${HEAD_SHA}`;
+    const h = harness({ headReasons: [reason] });
+    const result = await runPrFixVerify(h.deps, INPUT);
+    expect(result.reason).toBe(reason);
+  });
+
+  test("does not list changes when HEAD moved", async () => {
+    const h = harness({ headReasons: ["local HEAD is not on branch fix/x"] });
+    await runPrFixVerify(h.deps, INPUT);
+    expect(h.calls).not.toContain("inspectChanges");
+  });
+
+  test("blocks when a check command moved HEAD", async () => {
+    const h = harness({
+      headReasons: [null, "local HEAD is not on branch fix/x"],
+    });
+    const result = await runPrFixVerify(h.deps, INPUT);
+    expect(result.reason).toBe("local HEAD is not on branch fix/x");
   });
 
   test("rethrows an unexpected error from the pointer check", async () => {
@@ -160,8 +261,17 @@ describe("runPrFixVerify: worktree .git pointer", () => {
     await expect(runPrFixVerify(deps, INPUT)).rejects.toThrow("boom");
   });
 
-  test("blocks when the retry Claude run changed the pointer", async () => {
+  test("blocks without a retry when the failing checks changed the pointer", async () => {
     const h = harness({ pointerModified: [false, true], checks: [false] });
+    await runPrFixVerify(h.deps, INPUT);
+    expect(h.calls).not.toContain("runRetry");
+  });
+
+  test("blocks when the retry Claude run changed the pointer", async () => {
+    const h = harness({
+      pointerModified: [false, false, true],
+      checks: [false],
+    });
     const result = await runPrFixVerify(h.deps, INPUT);
     expect(result.reason).toBe("worktree git pointer was modified");
   });
@@ -206,16 +316,10 @@ describe("runPrFixVerify: re-inspection after check commands", () => {
     expect(result.reason).toBe("forbidden path changed: .claude/x.md");
   });
 
-  test("checks the pointer again before re-inspecting after the first checks", async () => {
+  test("checks the pointer and HEAD again before re-inspecting after the first checks", async () => {
     const h = harness();
     await runPrFixVerify(h.deps, INPUT);
-    expect(h.calls).toEqual([
-      "assertGitPointer:recorded",
-      "inspectChanges",
-      "runChecks",
-      "assertGitPointer:recorded",
-      "inspectChanges",
-    ]);
+    expect(h.calls).toEqual([...INSPECTION, "runChecks", ...INSPECTION]);
   });
 
   test("returns done with the apply commit after clean re-inspection", async () => {
@@ -244,16 +348,14 @@ describe("runPrFixVerify: re-inspection after check commands", () => {
     const h = harness({ checks: [false, true] });
     await runPrFixVerify(h.deps, INPUT);
     expect(h.calls).toEqual([
-      "assertGitPointer:recorded",
-      "inspectChanges",
+      ...INSPECTION,
       "runChecks",
       "budgetStatus",
+      "assertGitPointer:recorded",
       "runRetry",
-      "assertGitPointer:recorded",
-      "inspectChanges",
+      ...INSPECTION,
       "runChecks",
-      "assertGitPointer:recorded",
-      "inspectChanges",
+      ...INSPECTION,
     ]);
   });
 

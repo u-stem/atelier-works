@@ -108,7 +108,7 @@ Claudeは`--restricted`と`--permission-mode dontAsk`で起動されており、
 ## コミットメッセージ
 
 - `outcome: "done"`のとき、`commit_subject`と`commit_body`を提案する。commitとpushはフロー側が行い、1コミットにまとめる。
-- `commit_subject`: 1行。対象リポジトリにコミットメッセージの規約(`CONTRIBUTING.md`、commitlint設定、直近のコミット履歴等)があればそれに従う。無ければConventional Commits(`<type>: <日本語での説明>`)形式にする。50文字以内を目安にし、72 codepointsを超える、改行を含む、末尾が「…」、空文字列・空白のみの場合は拒否される(フロー側で切り詰めない)。
+- `commit_subject`: 1行。対象リポジトリにコミットメッセージの規約(`CONTRIBUTING.md`、commitlint設定等)があればそれに従う。無ければConventional Commits(`<type>: <日本語での説明>`)形式にする。50文字以内を目安にし、72 codepointsを超える、改行を含む、末尾が「…」、空文字列・空白のみの場合は拒否される(フロー側で切り詰めない)。
 - `commit_body`: 「なぜ」を書く(何を変えたかはdiffで分かる)。箇条書き(`- ...`、1行1要点)。書くことが無ければ空文字列`""`にする。
 - `outcome`が`"done"`以外のときは`commit_subject`と`commit_body`を空文字列`""`にする(コミットするものがないため)。
 - トレーラー`Co-Authored-By: Claude <noreply@anthropic.com>`と`Generated-By: Software Factory (<instance_name>)`はフロー側が自動で付与する。自分で書かない。

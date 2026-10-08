@@ -423,6 +423,11 @@ export type ImplementClaudeRunInput = {
   readonly oauthToken: string;
   /** フロー全体の期限(epoch ms)。runClaudeが各試行のタイムアウトをこの残り時間で頭打ちにし、残りが無ければ起動しない。 */
   readonly deadlineAt: number;
+  /**
+   * runClaudeが不正な出力への再試行でClaudeを起動し直す前に、worktreeの`.git`が記録と一致するかを返す。
+   * falseなら再試行しない(`RunClaudeOptions.beforeRetry`)。
+   */
+  readonly beforeRetry: () => Promise<boolean>;
 };
 
 export type ImplementClaudeRunDeps = {
@@ -462,6 +467,7 @@ export function buildImplementClaudeOptions(
     oauthToken: input.oauthToken,
     timeoutMs: input.config.implement_timeout_sec * 1000,
     deadlineAt: input.deadlineAt,
+    beforeRetry: input.beforeRetry,
   };
 }
 

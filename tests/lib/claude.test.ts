@@ -348,6 +348,55 @@ describe("runClaude", () => {
     );
   });
 
+  test("turns off the git status snapshot so claude runs no git at startup", async () => {
+    const fake = createFakeCommandRunner([
+      { stdout: claudeJsonStdout(), stderr: "", exitCode: 0, timedOut: false },
+    ]);
+    await runClaude(baseOptions(fake.run));
+    expect(
+      fake.calls[0]?.options?.env?.CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS,
+    ).toBe("1");
+  });
+
+  test("does not retry when beforeRetry refuses", async () => {
+    const fake = createFakeCommandRunner([
+      { stdout: "not json", stderr: "", exitCode: 0, timedOut: false },
+      { stdout: claudeJsonStdout(), stderr: "", exitCode: 0, timedOut: false },
+    ]);
+    await runClaude({
+      ...baseOptions(fake.run),
+      beforeRetry: async () => false,
+    });
+    expect(fake.calls).toHaveLength(1);
+  });
+
+  test("returns the first failure unretried when beforeRetry refuses", async () => {
+    const fake = createFakeCommandRunner([
+      { stdout: "not json", stderr: "", exitCode: 0, timedOut: false },
+    ]);
+    const result = await runClaude({
+      ...baseOptions(fake.run),
+      beforeRetry: async () => false,
+    });
+    expect(result).toMatchObject({
+      outcome: "failure",
+      reason: "invalid_json",
+      retried: false,
+    });
+  });
+
+  test("retries when beforeRetry allows it", async () => {
+    const fake = createFakeCommandRunner([
+      { stdout: "not json", stderr: "", exitCode: 0, timedOut: false },
+      { stdout: claudeJsonStdout(), stderr: "", exitCode: 0, timedOut: false },
+    ]);
+    const result = await runClaude({
+      ...baseOptions(fake.run),
+      beforeRetry: async () => true,
+    });
+    expect(result).toMatchObject({ outcome: "success", retried: true });
+  });
+
   test("defaults claude_version from the claudeVersion option", async () => {
     const fake = createFakeCommandRunner([
       { stdout: claudeJsonStdout(), stderr: "", exitCode: 0, timedOut: false },

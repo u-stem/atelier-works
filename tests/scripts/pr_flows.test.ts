@@ -75,8 +75,32 @@ describe("pr_fix flow.yaml", () => {
     ).not.toContain("timeout:");
   });
 
+  test("passes the .git pointer recorded by prepare to the apply step", () => {
+    expect(moduleBlock(PR_FIX_FLOW, "pr_fix_apply")).toContain(
+      "          worktree_git_pointer:\n            type: javascript\n            expr: results.pr_fix_prepare.worktree_git_pointer ?? null\n",
+    );
+  });
+
   test("passes the .git pointer recorded by prepare to the verify step", () => {
     expect(moduleBlock(PR_FIX_FLOW, "pr_fix_verify")).toContain(
+      "          worktree_git_pointer:\n            type: javascript\n            expr: results.pr_fix_prepare.worktree_git_pointer ?? null\n",
+    );
+  });
+
+  test("passes the PR branch recorded by prepare to the verify step", () => {
+    expect(moduleBlock(PR_FIX_FLOW, "pr_fix_verify")).toContain(
+      "          branch:\n            type: javascript\n            expr: results.pr_fix_prepare.branch ?? null\n",
+    );
+  });
+
+  test("passes the PR head recorded by prepare to the verify step", () => {
+    expect(moduleBlock(PR_FIX_FLOW, "pr_fix_verify")).toContain(
+      "          head_sha:\n            type: javascript\n            expr: results.pr_fix_prepare.head_sha\n",
+    );
+  });
+
+  test("passes the .git pointer recorded by prepare to the finish step", () => {
+    expect(moduleBlock(PR_FIX_FLOW, "pr_fix_finish")).toContain(
       "          worktree_git_pointer:\n            type: javascript\n            expr: results.pr_fix_prepare.worktree_git_pointer ?? null\n",
     );
   });

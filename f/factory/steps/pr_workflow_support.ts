@@ -16,7 +16,9 @@ import {
 } from "../lib/github.ts";
 import { decideGapReroute } from "../lib/implement_finish_support.ts";
 import { parseFlowJobId } from "../lib/implement_launch_support.ts";
+import { gitPointerStopReason } from "../lib/implement_loop.ts";
 import { maskSecrets } from "../lib/log.ts";
+import { WorktreeBusyError } from "../lib/process_lock.ts";
 import {
   type ChangedPath,
   type ChangedPathStatus,
@@ -1417,6 +1419,7 @@ export async function listChangedPaths(
 }
 
 const SYMLINK_MODE = "120000";
+const GITLINK_MODE = "160000";
 
 /**
  * `git diff --raw -z`の項目のうち、古いか新しいmodeが`120000`(symlink)のパスを返す。
@@ -1426,6 +1429,19 @@ const SYMLINK_MODE = "120000";
  * 重複を除き、gitの出力順で返す。
  */
 export function parseRawSymlinkPaths(output: string): string[] {
+  return parseRawModePaths(output, SYMLINK_MODE);
+}
+
+/**
+ * `git diff --raw -z`の項目のうち、古いか新しいmodeが`160000`(gitlink。入れ子のリポジトリ)のパスを返す。
+ * 読み方は`parseRawSymlinkPaths`と同じ。
+ */
+export function parseRawGitlinkPaths(output: string): string[] {
+  return parseRawModePaths(output, GITLINK_MODE);
+}
+
+/** `git diff --raw -z`の項目のうち、古いか新しいmodeが`mode`のパスを、重複を除いて出力順に返す。 */
+function parseRawModePaths(output: string, mode: string): string[] {
   const fields = output.split("\u0000");
   const paths: string[] = [];
   let index = 0;
@@ -1439,7 +1455,7 @@ export function parseRawSymlinkPaths(output: string): string[] {
     const path = fields[index + pathCount - 1] ?? "";
     index += pathCount;
     if (
-      (oldMode === SYMLINK_MODE || newMode === SYMLINK_MODE) &&
+      (oldMode === mode || newMode === mode) &&
       path.length > 0 &&
       !paths.includes(path)
     ) {
@@ -1461,31 +1477,37 @@ export async function listSymlinkChanges(
   worktreeDir: string,
   baseSha: string,
 ): Promise<string[]> {
-  assertSha(baseSha);
+  return parseRawSymlinkPaths(
+    await readRawDiff(run, worktreeDir, ["--cached", "--raw"], baseSha),
+  );
+}
+
+/**
+ * worktreeで`git diff <modeArgs> -z --no-ext-diff <ref> --`を実行し、標準出力を返す。
+ * 失敗したときと、出力の読み取りを打ち切ったときは例外を投げる。
+ */
+async function readRawDiff(
+  run: CommandRunner,
+  worktreeDir: string,
+  modeArgs: readonly string[],
+  ref: string,
+): Promise<string> {
+  if (ref !== "HEAD") assertSha(ref);
+  const name = `git diff ${modeArgs.join(" ")} -z`;
   const result = await run(
-    gitHardeningArgv([
-      "diff",
-      "--cached",
-      "--raw",
-      "-z",
-      "--no-ext-diff",
-      baseSha,
-      "--",
-    ]),
+    gitHardeningArgv(["diff", ...modeArgs, "-z", "--no-ext-diff", ref, "--"]),
     {
       cwd: worktreeDir,
       env: resolvedEnv({ GIT_TERMINAL_PROMPT: "0" }, undefined, undefined),
     },
   );
-  assertOutputComplete(`git diff --cached --raw -z in ${worktreeDir}`, result);
+  assertOutputComplete(`${name} in ${worktreeDir}`, result);
   if (result.exitCode !== 0) {
     throw new Error(
-      maskSecrets(
-        `git diff --cached --raw -z failed in ${worktreeDir}: ${result.stderr.trim()}`,
-      ),
+      maskSecrets(`${name} failed in ${worktreeDir}: ${result.stderr.trim()}`),
     );
   }
-  return parseRawSymlinkPaths(result.stdout);
+  return result.stdout;
 }
 
 /**
@@ -1980,13 +2002,15 @@ export async function listSymlinkTargets(
   return targets;
 }
 
-/** `listOnDiskSymlinkTargets`が使う2つのファイル操作。テスト用に注入できる。 */
-export type SymlinkProbeFs = {
-  readonly lstat: (path: string) => Promise<{ isSymbolicLink(): boolean }>;
+/** `probeChangedPathsOnDisk`が使う2つのファイル操作。テスト用に注入できる。 */
+export type PathProbeFs = {
+  readonly lstat: (
+    path: string,
+  ) => Promise<{ isSymbolicLink(): boolean; isFile(): boolean }>;
   readonly readlink: (path: string) => Promise<string>;
 };
 
-const defaultSymlinkProbeFs: SymlinkProbeFs = {
+const defaultPathProbeFs: PathProbeFs = {
   lstat: (path) => lstat(path),
   readlink: (path) => readlink(path),
 };
@@ -2001,31 +2025,63 @@ function isMissingPathError(err: unknown): boolean {
   );
 }
 
+/** `probeChangedPathsOnDisk`の結果。 */
+export type DiskProbe = {
+  /** ディスク上で今symlinkであるパスと、その指す先。 */
+  readonly symlinks: SymlinkTarget[];
+  /** 通常のファイルでもsymlinkでもないパス(ディレクトリ・FIFO・デバイスなど)。 */
+  readonly nonRegular: string[];
+};
+
 /**
- * `paths`のうち、ディスク上で今symlinkであるもの(`lstat`で見る)について指す先を読む。
+ * `paths`を`lstat`で1つずつ調べ、symlink(指す先も読む)と、通常のファイルでもsymlinkでもないものを返す。
  * `listSymlinkTargets`は索引にあるパスしか見ないので、未追跡の新しいsymlinkを報告しない。
  * そうしたsymlinkも`git add -A`でcommitに入るため、こちらで補う。
  * 検査コマンドはOSのsymlinkを作れるので、`core.symlinks=false`では防げない。
+ * 通常のファイルでないものは、中身を読むとFIFOで止まったり、デバイスを読み続けたりするので、読む前に見つける。
  * 無くなったパス(ENOENT / ENOTDIR)は飛ばし、それ以外の失敗は例外を投げる。
- * 読めないパスをsymlinkでないとみなすと、判定を素通りさせるため。
+ * 読めないパスを通常のファイルとみなすと、判定を素通りさせるため。
  */
-export async function listOnDiskSymlinkTargets(
+export async function probeChangedPathsOnDisk(
   worktreeDir: string,
   paths: readonly string[],
-  fs: SymlinkProbeFs = defaultSymlinkProbeFs,
-): Promise<SymlinkTarget[]> {
-  const targets: SymlinkTarget[] = [];
+  fs: PathProbeFs = defaultPathProbeFs,
+): Promise<DiskProbe> {
+  const symlinks: SymlinkTarget[] = [];
+  const nonRegular: string[] = [];
   for (const path of paths) {
     const fullPath = join(worktreeDir, path);
     try {
-      if (!(await fs.lstat(fullPath)).isSymbolicLink()) continue;
-      targets.push({ path, target: await fs.readlink(fullPath) });
+      const stats = await fs.lstat(fullPath);
+      if (stats.isSymbolicLink()) {
+        symlinks.push({ path, target: await fs.readlink(fullPath) });
+      } else if (!stats.isFile()) {
+        nonRegular.push(path);
+      }
     } catch (err) {
       if (isMissingPathError(err)) continue;
       throw err;
     }
   }
-  return targets;
+  return { symlinks, nonRegular };
+}
+
+/**
+ * 入れ子のリポジトリか`.git`に関わる変更パスごとに止める理由を返す。
+ * 対象は、末尾が`/`のパス(`git status`が未追跡の入れ子のリポジトリを`dir/`の1件にまとめたもの)と、
+ * どこかの要素が`.git`のパス(大文字と小文字を区別しない)。
+ * `git add -A`は入れ子のリポジトリをgitlinkとして入れ、中のファイルは保護パスの判定に現れないため。
+ */
+export function detectNestedRepoPaths(paths: readonly ChangedPath[]): string[] {
+  return paths
+    .filter(
+      (entry) =>
+        entry.path.endsWith("/") ||
+        entry.path
+          .split("/")
+          .some((segment) => segment.toLowerCase() === ".git"),
+    )
+    .map((entry) => `nested repository or .git path changed: ${entry.path}`);
 }
 
 /** `inspectUncommittedChanges`が見る差分の大きさの上限。 */
@@ -2035,19 +2091,22 @@ export type UncommittedChangeLimits = {
 };
 
 /**
- * worktreeのコミットしていない変更に、禁止されたファイル・パターン、symlink、
- * `package.json`のscriptsの変更、差分サイズの上限超過が無いかを調べて返す。
- * symlinkは索引のmode(`listSymlinkTargets`)とディスク上の種類(`listOnDiskSymlinkTargets`)の両方で探し、
- * worktreeの外を指すもの(`detectEscapingSymlinks`)と、作成・変更・型の変更(`detectSymlinkChanges`)をすべて止める。
- * symlinkが見つかったときは`package.json`の中身と差分の行数を読まない。
- * どちらもファイルをsymlinkの先まで読むので、worktreeの外や`/dev/zero`のような終わらない先を読みうるため。
+ * worktreeのコミットしていない変更に、禁止されたファイル・パターン、symlink、入れ子のリポジトリ、
+ * 通常のファイルでないもの、`package.json`のscriptsの変更、差分サイズの上限超過が無いかを調べて返す。
+ * symlinkは次の3つで探し、worktreeの外を指すもの(`detectEscapingSymlinks`)と、作成・変更・削除・型の変更をすべて止める。
+ * - 索引のmode(`listSymlinkTargets`)
+ * - ディスク上の種類(`probeChangedPathsOnDisk`)。未追跡のsymlinkを見つける。
+ * - HEADと作業ツリーの`git diff --raw`のmode。`core.symlinks=false`のworktreeでは追跡済みのsymlinkが通常のファイルとして置かれ、
+ *   中身を書き換えると指す先が変わるが、`readlink`も`lstat`もsymlinkと報告しないため。
+ * これらのどれかで止めるときは、`package.json`の中身と差分の行数を読まない。
+ * どちらもファイルを読むので、symlinkの先(worktreeの外や`/dev/zero`)やFIFOを読みうるため。
  * gitはhook・fsmonitor・credential helperを無効にして実行する。
  */
 export async function inspectUncommittedChanges(
   run: CommandRunner,
   worktreeDir: string,
   limits: UncommittedChangeLimits,
-  fs: SymlinkProbeFs = defaultSymlinkProbeFs,
+  fs: PathProbeFs = defaultPathProbeFs,
 ): Promise<ForbiddenChangeResult> {
   const changedPaths = await listUncommittedChangedPaths(run, worktreeDir);
   const indexTargets = await listSymlinkTargets(
@@ -2056,7 +2115,18 @@ export async function inspectUncommittedChanges(
     changedPaths.map((entry) => entry.path),
     fs.readlink,
   );
-  const diskTargets = await listOnDiskSymlinkTargets(
+  const rawSymlinkPaths =
+    changedPaths.length === 0
+      ? []
+      : parseRawSymlinkPaths(
+          await readRawDiff(
+            run,
+            worktreeDir,
+            ["--raw", "--no-renames"],
+            "HEAD",
+          ),
+        );
+  const disk = await probeChangedPathsOnDisk(
     worktreeDir,
     changedPaths
       .filter((entry) => entry.status !== "deleted")
@@ -2066,14 +2136,21 @@ export async function inspectUncommittedChanges(
   const indexPaths = new Set(indexTargets.map((entry) => entry.path));
   const symlinkTargets = [
     ...indexTargets,
-    ...diskTargets.filter((entry) => !indexPaths.has(entry.path)),
+    ...disk.symlinks.filter((entry) => !indexPaths.has(entry.path)),
   ];
-  const symlinkReasons = [
-    ...detectEscapingSymlinks(worktreeDir, symlinkTargets),
-    ...detectSymlinkChanges(changedPaths, symlinkTargets),
+  const stopReasons = [
+    ...new Set([
+      ...detectNestedRepoPaths(changedPaths),
+      ...disk.nonRegular.map((path) => `not a regular file: ${path}`),
+      ...detectEscapingSymlinks(worktreeDir, symlinkTargets),
+      ...detectSymlinkChanges(changedPaths, symlinkTargets),
+      ...rawSymlinkPaths.map(
+        (path) => `symlink_change: symlink changed: ${path}`,
+      ),
+    ]),
   ];
-  if (symlinkReasons.length > 0) {
-    return detectForbiddenChanges(changedPaths, false, symlinkReasons);
+  if (stopReasons.length > 0) {
+    return detectForbiddenChanges(changedPaths, false, stopReasons);
   }
 
   // basenameがちょうど`package.json`の変更ファイルをすべて調べる。
@@ -2096,6 +2173,174 @@ export async function inspectUncommittedChanges(
     packageJsonChanged,
     diffSizeReasons,
   );
+}
+
+/**
+ * worktreeのHEADが、準備ステップで記録したPRのhead(`expectedSha`)で、ブランチ`branch`にあるかを確かめる。
+ * 違えば止める理由を返し、合っていればnullを返す。
+ * 検査コマンドがローカルでcommitやブランチの切り替えをすると、HEADを基準にした変更の一覧から
+ * そのcommitの変更が消え、保護パスの判定を経ずにpushされるため。
+ * `git rev-parse --verify HEAD`が失敗したときと、`git symbolic-ref -q HEAD`が0と1以外で終わったときは例外を投げる
+ * (1はdetachedのHEADで、止める理由にする)。
+ */
+export async function localHeadStopReason(
+  run: CommandRunner,
+  worktreeDir: string,
+  expectedSha: string,
+  branch: string,
+): Promise<string | null> {
+  const options = {
+    cwd: worktreeDir,
+    env: resolvedEnv({ GIT_TERMINAL_PROMPT: "0" }, undefined, undefined),
+  };
+  const shaResult = await run(
+    gitHardeningArgv(["rev-parse", "--verify", "HEAD"]),
+    options,
+  );
+  if (shaResult.exitCode !== 0) {
+    throw new Error(
+      maskSecrets(
+        `git rev-parse --verify HEAD failed in ${worktreeDir}: ${shaResult.stderr.trim()}`,
+      ),
+    );
+  }
+  const sha = shaResult.stdout.trim();
+  if (sha !== expectedSha) {
+    return `local HEAD ${sha} is not the PR head ${expectedSha}`;
+  }
+  const refResult = await run(
+    gitHardeningArgv(["symbolic-ref", "-q", "HEAD"]),
+    options,
+  );
+  if (refResult.exitCode !== 0 && refResult.exitCode !== 1) {
+    throw new Error(
+      maskSecrets(
+        `git symbolic-ref -q HEAD failed in ${worktreeDir}: ${refResult.stderr.trim()}`,
+      ),
+    );
+  }
+  return refResult.exitCode === 0 &&
+    refResult.stdout.trim() === `refs/heads/${branch}`
+    ? null
+    : `local HEAD is not on branch ${branch}`;
+}
+
+/**
+ * 索引にある`path`の中身(`git show :0:<path>`)を返す。索引に無ければnullを返す。
+ * 出力の読み取りを打ち切ったときは例外を投げる。
+ */
+async function readStagedFile(
+  run: CommandRunner,
+  worktreeDir: string,
+  path: string,
+): Promise<string | null> {
+  const result = await run(gitHardeningArgv(["show", `:0:${path}`]), {
+    cwd: worktreeDir,
+    env: resolvedEnv({ GIT_TERMINAL_PROMPT: "0" }, undefined, undefined),
+  });
+  assertOutputComplete(`git show :0:${path} in ${worktreeDir}`, result);
+  return result.exitCode === 0 ? result.stdout : null;
+}
+
+/**
+ * ステージした内容を`baseSha`と比べ、commitしてはいけない変更ごとに止める理由を返す(無ければ空)。
+ * 見るのは、保護パスと新しい`*.sh`(`detectForbiddenChanges`)、symlinkとgitlinkのmode(`git diff --cached --raw -z`)、
+ * 入れ子のリポジトリか`.git`のパス、`package.json`のscriptsの変更(ステージした中身を`git show :0:<path>`で読む)。
+ * pr_fixの完了ステップが`git add -A`の後、commitの前に呼ぶ。
+ * 検証ステップの最後の検査の後にworktreeが変わっても、commitする内容そのもので判定するため。
+ * ファイルシステムを読まないので、symlinkの先やFIFOに触れない。
+ */
+export async function inspectStagedChanges(
+  run: CommandRunner,
+  worktreeDir: string,
+  baseSha: string,
+): Promise<string[]> {
+  const changes = await listChangedPaths(run, worktreeDir, baseSha);
+  const raw = await readRawDiff(
+    run,
+    worktreeDir,
+    ["--cached", "--raw"],
+    baseSha,
+  );
+  const modeReasons = [
+    ...detectNestedRepoPaths(changes),
+    ...parseRawGitlinkPaths(raw).map(
+      (path) => `nested repository or .git path changed: ${path}`,
+    ),
+    ...parseRawSymlinkPaths(raw).map(
+      (path) => `symlink_change: symlink changed: ${path}`,
+    ),
+  ];
+  let scriptsChanged = false;
+  for (const entry of changes) {
+    if (entry.path.split("/").pop() !== "package.json") continue;
+    const before = await readGitShowFile(run, worktreeDir, baseSha, entry.path);
+    const after = await readStagedFile(run, worktreeDir, entry.path);
+    if (packageJsonScriptsChanged(before, after)) {
+      scriptsChanged = true;
+      break;
+    }
+  }
+  return detectForbiddenChanges(changes, scriptsChanged, [
+    ...new Set(modeReasons),
+  ]).reasons;
+}
+
+/**
+ * 準備ステップの結果に`worktree_git_pointer`が無いときの理由。
+ * 照合する基準が無いままworktreeでgitやClaudeを実行しないよう、各ステップは"blocked"にする。
+ */
+export const WORKTREE_GIT_POINTER_NOT_RECORDED_REASON =
+  "worktree git pointer was not recorded";
+
+/**
+ * 準備ステップの結果に`head_sha`か`branch`が無いときの理由。
+ * HEADを照合する基準が無いままworktreeでgitを実行しないよう、検証ステップは"blocked"にする。
+ */
+export const PR_HEAD_NOT_RECORDED_REASON = "PR head was not recorded";
+
+/**
+ * 準備ステップが記録した`.git`の中身`recorded`でworktreeの`.git`を確かめ、止める理由を返す(問題が無ければnull)。
+ * `recorded`がnullか空なら`.git`を読まずに`WORKTREE_GIT_POINTER_NOT_RECORDED_REASON`を返す。
+ * `assertGitPointer`が`WorktreeGitPointerModifiedError`を投げれば、その理由を返し、それ以外の例外はそのまま投げる。
+ * pr_fixの修正・検証・完了の各ステップが、Claudeの起動とworktreeでのgitの実行の前に呼ぶ。
+ */
+export async function recordedGitPointerStopReason(
+  recorded: string | null,
+  assertGitPointer: (expected: string) => Promise<void>,
+): Promise<string | null> {
+  if (recorded === null || recorded.length === 0) {
+    return WORKTREE_GIT_POINTER_NOT_RECORDED_REASON;
+  }
+  return gitPointerStopReason(() => assertGitPointer(recorded));
+}
+
+/** `prFixPushGateReason`が使うI/O。テストでは偽物に差し替える。 */
+export type PrFixPushGateDeps = {
+  /** worktreeのロックを持つプロセスがいれば`WorktreeBusyError`を投げる(何も止めない)。 */
+  readonly ensureLockFree: () => Promise<void>;
+  /** worktreeの`.git`を`expected`と比べ、違えば`WorktreeGitPointerModifiedError`を投げる。 */
+  readonly assertGitPointer: (expected: string) => Promise<void>;
+};
+
+/**
+ * pr_fixの完了ステップがcommitとpushの前に、worktreeに触れてよいかを確かめ、止める理由を返す(問題が無ければnull)。
+ * 先にworktreeのロックを確かめ、前のステップのClaudeや検査コマンドが残っていれば`WorktreeBusyError`のmessageを返す。
+ * 検証ステップの最後の検査の後に、残ったプロセスがworktreeを書き換えうるため。
+ * 次に`.git`を準備ステップの記録と比べる(`recordedGitPointerStopReason`)。
+ * それ以外の例外はそのまま投げる。
+ */
+export async function prFixPushGateReason(
+  deps: PrFixPushGateDeps,
+  recordedPointer: string | null,
+): Promise<string | null> {
+  try {
+    await deps.ensureLockFree();
+  } catch (err) {
+    if (err instanceof WorktreeBusyError) return err.message;
+    throw err;
+  }
+  return recordedGitPointerStopReason(recordedPointer, deps.assertGitPointer);
 }
 
 /**
@@ -3092,6 +3337,8 @@ const DAILY_BUDGET_NEXT_ACTION =
   "翌日まで待つか、daily_budget_usdを引き上げてください";
 const NOTHING_TO_COMMIT_NEXT_ACTION =
   "返信内容を確認し、必要なら指示をコメントして`factory:fix`を付け直してください";
+const LOCAL_HEAD_NEXT_ACTION =
+  "検査コマンドがコミットやブランチの切り替えをしていないか確かめ、人が修正してください";
 const ISSUE_PROPOSAL_NEXT_ACTION =
   "ConsoleのInboxで提案を承認または却下してください";
 
@@ -3486,11 +3733,38 @@ const REASON_RULES: readonly ReasonRule[] = [
     nextAction: () =>
       "実装ブランチとworktreeを人が確認し、不審な変更があればブランチを削除してください",
   },
-  // pr_fix_verify.ts(準備ステップが`.git`の中身を渡さなかった)
+  // pr_fixの各ステップ(準備ステップの結果に`worktree_git_pointer`・`head_sha`・`branch`が無い)
   {
     pattern: /^worktree git pointer was not recorded$/,
     describe: () => "worktreeのgitの参照先(.gitファイル)が記録されていません",
     nextAction: () => "`factory:fix`を付け直して修正をやり直してください",
+  },
+  {
+    pattern: /^PR head was not recorded$/,
+    describe: () => "PRのheadが記録されていません",
+    nextAction: () => "`factory:fix`を付け直して修正をやり直してください",
+  },
+  // pr_fix_verify.tsの`localHeadStopReason`と、pr_fix_finish.tsの`commitAndPush`
+  {
+    pattern: /^local HEAD (\S+) is not the PR head (\S+)$/,
+    describe: (m) => `worktreeのHEAD(${m[1]})がPRのhead(${m[2]})と異なります`,
+    nextAction: () => LOCAL_HEAD_NEXT_ACTION,
+  },
+  {
+    pattern: /^local HEAD is not on branch (.+)$/,
+    describe: (m) => `worktreeのHEADがブランチ${m[1]}にありません`,
+    nextAction: () => LOCAL_HEAD_NEXT_ACTION,
+  },
+  // pr_fix_verify.tsの`inspectUncommittedChanges`と、pr_fix_finish.tsの`inspectStagedChanges`
+  {
+    pattern: /^not a regular file: (.+)$/,
+    describe: (m) => `通常のファイルではないものが変更されました: ${m[1]}`,
+    nextAction: () => FORBIDDEN_CHANGE_NEXT_ACTION,
+  },
+  {
+    pattern: /^nested repository or \.git path changed: (.+)$/,
+    describe: (m) => `入れ子のリポジトリか.gitのパスが変更されました: ${m[1]}`,
+    nextAction: () => FORBIDDEN_CHANGE_NEXT_ACTION,
   },
   {
     pattern:
@@ -3583,6 +3857,7 @@ export function earlyExitBase(
   readonly repo_dir: string;
   readonly factory_clone_dir: string;
   readonly worktree_git_pointer: string | null;
+  readonly branch: string;
   readonly parent_work_item_id: number | null;
   readonly attempt: number;
   readonly fix_round: number;
@@ -3596,6 +3871,7 @@ export function earlyExitBase(
     repo_dir: "",
     factory_clone_dir: "",
     worktree_git_pointer: null,
+    branch: "",
     parent_work_item_id: workItem.parent_work_item_id,
     attempt: workItem.attempt,
     fix_round: workItem.fix_round,

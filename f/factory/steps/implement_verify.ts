@@ -50,6 +50,7 @@ import {
   runCommand,
   runGitleaksOnWorktree,
   worktreeFingerprint,
+  worktreeGitPointerMatches,
 } from "../lib/workspace.ts";
 import {
   anyPackageJsonScriptsChanged,
@@ -226,6 +227,11 @@ export async function main(
                 docDir,
                 oauthToken,
                 deadlineAt,
+                beforeRetry: () =>
+                  worktreeGitPointerMatches(
+                    worktreeDir,
+                    context.worktree_git_pointer,
+                  ),
               },
             ),
           ),
