@@ -128,6 +128,107 @@ jobs:
         if: always()
         run: mise exec -- docker compose -f infra/docker-compose.yml down -v
 
+  metadata:
+    # Windmillのメタデータ(ロック、スキーマ、`wmill-lock.yaml`のハッシュ)が最新かを確かめる。
+    # ローカルのpre-pushは、Windmillを起動できないときに`LEFTHOOK_EXCLUDE`で飛ばせる。
+    # 飛ばしたコミットが古いメタデータのままマージされると、mainの自動反映がそれを配る。
+    # `check`ジョブから独立させ、jobレベルの`paths`では絞らない
+    # (常に状態を報告しないと、必須のチェックにできないため)。
+    # 関係する変更が無いときは、最初のステップの出力で後続のステップを飛ばして成功にする。
+    runs-on: ubuntu-latest
+    env:
+      # 使い捨て専用の値。`test-db`ジョブと同じく、このジョブが起動するPostgresだけが使う。
+      # 本物の秘密ではないので、CIに存在しない`mise.local.toml`を通さず直書きしてよい。
+      DB_PASSWORD: ci-dummy-password
+      # 他のジョブが並行して動いても、開発者の`infra`プロジェクトと名前が衝突しないようにする。
+      COMPOSE_PROJECT_NAME: metadata-ci
+      COMPOSE_FILE: infra/docker-compose.yml:infra/docker-compose.ci.yml
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Determine whether the metadata can be stale
+        # このpushやPRが`f/`か`wmill-lock.yaml`に触れるときだけ、後続のステップを動かす。
+        # 範囲の決め方は、上の`check`ジョブの「Determine gitleaks scan range」と同じ。
+        # 差分の基点が無いとき(新しいブランチの初回pushなど)と、差分を取れないとき
+        # (force pushで`before`が履歴から消えたなど)は、安全側に倒して検査する。
+        id: scope
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          zero="0000000000000000000000000000000000000000"
+          from=""
+          to=""
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            from="$BASE_SHA"
+            to="$HEAD_SHA"
+          elif [ "$EVENT_NAME" = "push" ] && [ "$BEFORE_SHA" != "$zero" ] && [ -n "$BEFORE_SHA" ]; then
+            from="$BEFORE_SHA"
+            to="$AFTER_SHA"
+          fi
+          run="true"
+          if [ -n "$from" ]; then
+            # PRはマージ基点からの変更(3点)、pushは直前の先頭からの変更(2点)で見る。
+            if [ "$EVENT_NAME" = "pull_request" ]; then
+              spec="${from}...${to}"
+            else
+              spec="${from}..${to}"
+            fi
+            if changed="$(git diff --name-only "$spec" -- f wmill-lock.yaml)"; then
+              if [ -z "$changed" ]; then
+                run="false"
+              fi
+            fi
+          fi
+          echo "run=${run}" >> "$GITHUB_OUTPUT"
+          echo "metadata check needed: ${run}"
+
+      - name: Setup mise
+        if: steps.scope.outputs.run == 'true'
+        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+
+      - name: Start Windmill (db and server only)
+        # `docker-compose.ci.yml`が、サーバーを`127.0.0.1:8080`に公開する。
+        # `metadata:check`は`generate-metadata --dry-run`で、workerを必要としない。
+        if: steps.scope.outputs.run == 'true'
+        run: mise exec -- docker compose up -d --wait db windmill_server
+
+      - name: Wait for the Windmill API
+        if: steps.scope.outputs.run == 'true'
+        run: |
+          set -euo pipefail
+          base_url="$(mise exec -- printenv WM_BASE_URL)"
+          for _ in $(seq 1 60); do
+            if curl -fsS -o /dev/null --max-time 5 "${base_url}/api/version"; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Windmill did not become ready at ${base_url}" >&2
+          mise exec -- docker compose logs --tail 50 windmill_server >&2
+          exit 1
+
+      - name: Register an empty workspace
+        # 既定の管理者で空のワークスペース`factory`を作る。使い捨てのサーバー専用の手順。
+        if: steps.scope.outputs.run == 'true'
+        run: mise exec -- scripts/ci-metadata-login.sh
+
+      - name: Check that the metadata is up to date
+        if: steps.scope.outputs.run == 'true'
+        run: mise run metadata:check
+
+      - name: Tear down Windmill
+        if: always() && steps.scope.outputs.run == 'true'
+        run: mise exec -- docker compose down -v
+
   console:
     # Consoleを組み立て、mainへのpushのときだけ成果物にする。
     # console_fetcherは、このワークフロー全体が成功した実行の成果物だけを取り込む。

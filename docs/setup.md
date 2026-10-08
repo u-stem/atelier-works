@@ -119,6 +119,11 @@ LEFTHOOK_EXCLUDE=wmill-metadata-check git push
 
 フックを飛ばしたときは、次のpushの前に`mise run metadata`を実行する。
 
+CIの`metadata`ジョブも、メタデータが最新かを検査する。
+使い捨てのWindmillをdbとサーバーだけで起動し、空のワークスペースを作って`mise run metadata:check`を実行する。
+pushやPRが`f/`か`wmill-lock.yaml`に触れないときは、検査を飛ばして成功にする。
+フックを飛ばしてコミットしたPRは、手元で`mise run metadata`を実行してpushし直すまで、このジョブで失敗する。
+
 ## 自己更新の設定
 
 `factory_config`の`factory_branch`には、`self_update`が追跡するこのリポジトリのブランチの名前を書く。既定値は`main`である。forkやfeatureブランチで運用するときは、Windmillの画面でこの値を変える。
