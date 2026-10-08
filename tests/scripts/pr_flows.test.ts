@@ -23,9 +23,11 @@ const PR_REVIEW_FLOW = readFlow("pr_review");
 /**
  * 1つのモジュールのテキストを返す。
  * 範囲は`- id:`の行から、次のモジュールか`failure_module`の手前まで。
+ * モジュールが無ければ例外を投げる。先頭から切り出して別のモジュールの値を読まないため。
  */
 function moduleBlock(flow: string, id: string): string {
   const start = flow.indexOf(`- id: ${id}\n`);
+  if (start === -1) throw new Error(`module ${id} not found in flow.yaml`);
   const rest = flow.slice(start + 1);
   const next = rest.search(/\n\s+- id: |\n {2}failure_module:/);
   return next === -1 ? rest : rest.slice(0, next);
@@ -60,8 +62,8 @@ describe("pr_fix flow.yaml", () => {
     );
   });
 
-  test("bounds the finish step at 1800 seconds", () => {
-    expect(moduleTimeoutSec(PR_FIX_FLOW, "pr_fix_finish")).toBe(1800);
+  test("bounds the finish step at 5400 seconds", () => {
+    expect(moduleTimeoutSec(PR_FIX_FLOW, "pr_fix_finish")).toBe(5400);
   });
 
   test("puts no timeout on the failure module", () => {
@@ -82,8 +84,8 @@ describe("pr_review flow.yaml", () => {
     );
   });
 
-  test("bounds the post step at 1800 seconds", () => {
-    expect(moduleTimeoutSec(PR_REVIEW_FLOW, "pr_review_post")).toBe(1800);
+  test("bounds the post step at 5400 seconds", () => {
+    expect(moduleTimeoutSec(PR_REVIEW_FLOW, "pr_review_post")).toBe(5400);
   });
 
   test("puts no timeout on the failure module", () => {

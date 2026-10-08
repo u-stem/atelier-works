@@ -106,7 +106,7 @@ value:
         expr: results.pr_review_prepare.skip === true
       timeout:
         type: static
-        value: 1800
+        value: 5400
   failure_module:
     id: failure
     value:

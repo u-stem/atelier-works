@@ -221,7 +221,7 @@ value:
         path: f/factory/steps/pr_fix_finish
       timeout:
         type: static
-        value: 1800
+        value: 5400
   failure_module:
     id: failure
     value:

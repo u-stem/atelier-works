@@ -159,6 +159,26 @@ describe("prFixTimeoutMisfit", () => {
     );
   });
 
+  test("accepts the largest Claude timeout that fits four check commands in the verify step", () => {
+    expect(
+      prFixTimeoutMisfit({
+        claude_timeout_sec: 2085,
+        allowed_check_commands: FOUR_CHECKS,
+      }),
+    ).toBeNull();
+  });
+
+  test("rejects a Claude timeout one second over the verify step with four check commands", () => {
+    expect(
+      prFixTimeoutMisfit({
+        claude_timeout_sec: 2086,
+        allowed_check_commands: FOUR_CHECKS,
+      }),
+    ).toBe(
+      "pr_fix time settings do not fit the flow step timeout: (2 claude runs + 2 x 4 check commands) x (claude_timeout_sec 2086 + 15) + 600 = 21610s exceeds 21600s",
+    );
+  });
+
   test("rejects a Claude timeout that cannot fit in the apply step", () => {
     expect(
       prFixTimeoutMisfit({

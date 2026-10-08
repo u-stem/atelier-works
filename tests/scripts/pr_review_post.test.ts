@@ -1,10 +1,16 @@
 // `pr_review_post.ts`が使う`pr_workflow_support.ts`の`mapFindingsToReviewComments`、
 // `renderInlineComment`、`renderReviewSummary`などのテスト。
+// あわせて、`pr_review_post.ts`の`runPrReviewPost`が、投稿しない場合もreviewのworktreeを消すことを確かめる。
 // 投稿の書式は`.claude/skills/factory-review/SKILL.md`の「投稿形式」節に従う。
 
 import { describe, expect, test } from "bun:test";
 import type { ReviewThread } from "../../f/factory/lib/github.ts";
+import { logger } from "../../f/factory/lib/log.ts";
 import type { ReviewFinding } from "../../f/factory/lib/types.ts";
+import {
+  type PrReviewPostInput,
+  runPrReviewPost,
+} from "../../f/factory/steps/pr_review_post.ts";
 import {
   countOpenMustThreads,
   decideReviewBodyMode,
@@ -577,5 +583,96 @@ describe("reviewResultFor", () => {
     expect(reviewResultFor([finding({ kind: "nits" })], 2)).toBe(
       "changes_requested",
     );
+  });
+});
+
+describe("runPrReviewPost worktree cleanup", () => {
+  const REPO_DIR = "/workspaces/acme/widgets/main";
+  const WORKTREE_DIR = "/workspaces/acme/widgets/review-1-abc1234";
+  const SILENT = logger("pr_review_post", { sink: () => {} });
+
+  /** 生成ステップが早く抜けたときの入力。verdictがnullになる。 */
+  function earlyExitInput(
+    overrides: Partial<PrReviewPostInput> = {},
+  ): PrReviewPostInput {
+    return {
+      work_item_id: 1,
+      skip: false,
+      owner: "acme",
+      repo: "widgets",
+      pr_number: 1,
+      review_sha: "abc1234",
+      summary: "",
+      verdict: null,
+      findings: [],
+      pr_files: [],
+      worktree_dir: WORKTREE_DIR,
+      repo_dir: REPO_DIR,
+      ...overrides,
+    };
+  }
+
+  /** 呼ばれた引数を記録する偽の削除関数を返す。 */
+  function recordingRemover(): {
+    readonly calls: [string, string][];
+    readonly remove: (repoDir: string, dir: string) => Promise<void>;
+  } {
+    const calls: [string, string][] = [];
+    return {
+      calls,
+      remove: async (repoDir, dir) => {
+        calls.push([repoDir, dir]);
+      },
+    };
+  }
+
+  test("removes the review worktree when generation ended early", async () => {
+    const remover = recordingRemover();
+    await runPrReviewPost(earlyExitInput(), {
+      removeReviewWorktree: remover.remove,
+      log: SILENT,
+    });
+    expect(remover.calls).toEqual([[REPO_DIR, WORKTREE_DIR]]);
+  });
+
+  test("returns the skipped result when generation ended early", async () => {
+    const remover = recordingRemover();
+    const result = await runPrReviewPost(earlyExitInput(), {
+      removeReviewWorktree: remover.remove,
+      log: SILENT,
+    });
+    expect(result).toEqual({
+      skip: true,
+      posted: false,
+      posted_review_id: null,
+    });
+  });
+
+  test("does not remove anything when prepare made no worktree", async () => {
+    const remover = recordingRemover();
+    await runPrReviewPost(
+      earlyExitInput({ skip: true, worktree_dir: "", repo_dir: "" }),
+      { removeReviewWorktree: remover.remove, log: SILENT },
+    );
+    expect(remover.calls).toEqual([]);
+  });
+
+  test("still returns the skipped result when removing the worktree fails", async () => {
+    const result = await runPrReviewPost(earlyExitInput(), {
+      removeReviewWorktree: async () => {
+        throw new Error("git worktree remove failed");
+      },
+      log: SILENT,
+    });
+    expect(result.skip).toBe(true);
+  });
+
+  test("removes the review worktree when the verdict is unexpected", async () => {
+    const remover = recordingRemover();
+    await runPrReviewPost(earlyExitInput({ verdict: "lgtm" }), {
+      removeReviewWorktree: remover.remove,
+      log: SILENT,
+    }).catch(() => {});
+    expect(remover.calls).toEqual([[REPO_DIR, WORKTREE_DIR]]);
   });
 });
