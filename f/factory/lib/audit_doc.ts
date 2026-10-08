@@ -308,6 +308,7 @@ export function auditReportRegisterIssues(markdown: string): string[] {
 /**
  * 監査の構造化出力(要約と提案)の文体を検査し、
  * `checkAuditOutput`と同じラベル(`summary`、`提案N`)を前置きした問題を返す(無ければ空)。
+ * 要約はレポートの一部なので常体、提案はIssueとしてGitHubに投稿して人が読むので敬体で検査する。
  * 呼び出し側はログに残すだけにする(`documentRegisterIssues`を参照)。
  */
 export function auditOutputRegisterIssues(output: {
@@ -321,6 +322,7 @@ export function auditOutputRegisterIssues(output: {
     ...output.proposals.flatMap((proposal, index) =>
       documentRegisterIssues(
         stripHtmlComments(`${proposal.title}\n${proposal.body}`),
+        "polite",
       ).map((issue) => `提案${index + 1}: ${issue}`),
     ),
   ];

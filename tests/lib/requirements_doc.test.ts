@@ -378,6 +378,12 @@ describe("documentRegisterIssues", () => {
     expect(issues).toHaveLength(1);
   });
 
+  test("reports a plain ending when the polite form is expected", () => {
+    const issues = documentRegisterIssues("通知を減らす必要がある。", "polite");
+
+    expect(issues).toHaveLength(1);
+  });
+
   test("does not report inline code in a heading, which checkDocumentProse blocks on", () => {
     const issues = documentRegisterIssues("### `foo`の扱い");
 

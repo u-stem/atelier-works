@@ -115,7 +115,21 @@ describe("collectAuditIssues", () => {
 });
 
 describe("auditRegisterIssues", () => {
-  test("reports a polite ending in a proposal body with its label", () => {
+  test("reports a plain ending in a proposal body, which is posted to GitHub in the polite form", () => {
+    const issues = auditRegisterIssues(
+      {
+        summary: "失敗が減った。",
+        proposals: [
+          { title: "通知を減らす", body: "通知を減らす必要がある。" },
+        ],
+      },
+      VALID_REPORT,
+    );
+
+    expect(issues.some((issue) => issue.startsWith("提案1: "))).toBe(true);
+  });
+
+  test("does not report a polite ending in a proposal body", () => {
     const issues = auditRegisterIssues(
       {
         summary: "失敗が減った。",
@@ -124,7 +138,16 @@ describe("auditRegisterIssues", () => {
       VALID_REPORT,
     );
 
-    expect(issues.some((issue) => issue.startsWith("提案1: "))).toBe(true);
+    expect(issues.some((issue) => issue.startsWith("提案1: "))).toBe(false);
+  });
+
+  test("reports a polite ending in the summary, which is part of the report", () => {
+    const issues = auditRegisterIssues(
+      { summary: "失敗が減りました。", proposals: [] },
+      VALID_REPORT,
+    );
+
+    expect(issues.some((issue) => issue.startsWith("summary: "))).toBe(true);
   });
 
   test("reports a polite ending in the report with the file name", () => {

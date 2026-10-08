@@ -10,7 +10,9 @@
 import {
   checkProse,
   formatProseIssues,
+  type ProseRegister,
   type ProseRuleId,
+  type ProseRules,
   REPORT_RULES,
 } from "./prose_check.ts";
 import {
@@ -472,10 +474,14 @@ export type RequirementsDocValidation =
   | { readonly ok: true }
   | { readonly ok: false; readonly issues: string[] };
 
-/** `markdown`を`REPORT_RULES`で検査し、`rule`の問題だけを「N行目: 内容」の形で返す。 */
-function documentProseIssues(markdown: string, rule: ProseRuleId): string[] {
+/** `markdown`を`rules`で検査し、`rule`の問題だけを「N行目: 内容」の形で返す。 */
+function documentProseIssues(
+  markdown: string,
+  rule: ProseRuleId,
+  rules: ProseRules = REPORT_RULES,
+): string[] {
   return formatProseIssues(
-    checkProse(markdown, REPORT_RULES).filter((issue) => issue.rule === rule),
+    checkProse(markdown, rules).filter((issue) => issue.rule === rule),
   );
 }
 
@@ -490,13 +496,20 @@ export function checkDocumentProse(markdown: string): string[] {
 }
 
 /**
- * 要件定義書と監査レポートの文体(常体で書く)を検査する。
+ * 生成した文書の文体を検査する。既定は常体(要件定義書と監査レポート)で、
+ * GitHubに投稿して人が読む文章(監査の改善提案)は`"polite"`を渡して敬体で検査する。
  * 呼び出し側は問題をログに残すだけにし、生成を失敗にしない。
- * 引用符の無い画面の文言や注記の敬体でも当たるので、これで生成全体をやり直すと、
+ * 引用符の無い画面の文言や注記の別の文体でも当たるので、これで生成全体をやり直すと、
  * 費用に見合わないためである。
  */
-export function documentRegisterIssues(markdown: string): string[] {
-  return documentProseIssues(markdown, "register");
+export function documentRegisterIssues(
+  markdown: string,
+  register: ProseRegister = "plain",
+): string[] {
+  return documentProseIssues(markdown, "register", {
+    ...REPORT_RULES,
+    register,
+  });
 }
 
 /** 書き終えた要件定義書にすべての検査をかけ、結果を1つの判定にまとめる。 */
