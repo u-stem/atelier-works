@@ -1,6 +1,6 @@
 ---
 name: factory-docs
-description: 本リポジトリ(atelier-works)のMarkdown文書(README、AGENTS.md、docs/、自作スキル、各ディレクトリのREADME)を新しく書く、直す、整理するときに使う。コードの変更に合わせて文書を更新するときも使う。
+description: 本リポジトリ(atelier-works)のMarkdown文書(README、AGENTS.md、docs/、自作スキル、subagentの定義(.claude/agents/)、各ディレクトリのREADME)を新しく書く、直す、整理するときに使う。コードの変更に合わせて文書を更新するときも使う。
 ---
 
 # このリポジトリの文書の書き方(factory-docs)
