@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   checkDiagramRefs,
+  checkDocumentProse,
   checkForbiddenSyntax,
   checkLengths,
   checkQuotes,
@@ -346,5 +347,25 @@ describe("validateRequirementsDoc", () => {
       "reservation-flow.drawio",
     ]);
     expect(result.ok).toBe(true);
+  });
+});
+
+describe("checkDocumentProse", () => {
+  test("reports a polite ending in a requirements document", () => {
+    const issues = checkDocumentProse("背景を説明します。");
+
+    expect(issues).toHaveLength(1);
+  });
+
+  test("reports inline code in a heading", () => {
+    const issues = checkDocumentProse("### `foo`の扱い");
+
+    expect(issues).toHaveLength(1);
+  });
+
+  test("does not repeat the emoji issue that checkForbiddenSyntax reports", () => {
+    const issues = checkDocumentProse("完了した。\u{1F389}");
+
+    expect(issues).toEqual([]);
   });
 });

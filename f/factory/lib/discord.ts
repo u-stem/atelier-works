@@ -241,9 +241,9 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
   switch (event.kind) {
     case "issue_claimed":
       return {
-        title: `Issue 着手: #${event.issue_number} ${event.title}`,
+        title: `Issue着手: #${event.issue_number} ${event.title}`,
         description:
-          "Factory がこの Issue に着手し、要件定義の生成を開始しました。",
+          "FactoryがこのIssueに着手し、要件定義の生成を開始しました。",
         url: event.issue_url,
         fields: [
           instanceField(event.instance_name),
@@ -264,7 +264,7 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
     case "requirements_approved":
       return {
         title: `要件定義承認: #${event.issue_number} ${event.title}`,
-        description: "要件定義ドラフトが承認され、Issue に投稿されました。",
+        description: "要件定義ドラフトが承認され、Issueに投稿されました。",
         url: event.console_url,
         fields: [
           instanceField(event.instance_name),
@@ -291,7 +291,7 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
           ? "修正が必要な指摘あり"
           : "指摘なし(人のApprove待ち)";
       return {
-        title: `PR レビュー完了: #${event.pr_number}`,
+        title: `PRレビュー完了: #${event.pr_number}`,
         description: `指摘${String(event.finding_count)}件。状態: ${stateText}`,
         url: event.pr_url,
         fields: [
@@ -309,7 +309,7 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
         fields.push({ name: "補足", value: event.note });
       }
       return {
-        title: `PR 修正適用: #${event.pr_number}`,
+        title: `PR修正適用: #${event.pr_number}`,
         description: "修正をpushし、再レビューを依頼しました。",
         url: event.pr_url,
         fields,
@@ -328,7 +328,7 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
     case "daily_summary":
       return {
         title: `日次サマリー: ${event.day}`,
-        description: `エージェント実行 ${event.run_count} 件、$${event.total_cost_usd.toFixed(2)} 消費。`,
+        description: `エージェント実行${event.run_count}件、$${event.total_cost_usd.toFixed(2)}消費。`,
         url: null,
         fields: [
           instanceField(event.instance_name),
@@ -336,7 +336,7 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
           { name: "承認", value: String(event.approved_count) },
           { name: "却下", value: String(event.rejected_count) },
           {
-            name: "DB 掃除",
+            name: "DB掃除",
             value:
               event.cleanup === null
                 ? "前日の掃除記録なし"
@@ -369,7 +369,7 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
           : `${String(event.diff_stat.files)}ファイル(+${String(event.diff_stat.added)} / -${String(event.diff_stat.deleted)})`;
       const verb = event.created ? "作成" : "更新";
       return {
-        title: `PR ${verb}: #${String(event.pr_number)}(Issue #${String(event.issue_number)})`,
+        title: `PR${verb}: #${String(event.pr_number)}(Issue #${String(event.issue_number)})`,
         description: `実装をpushしてPRを${verb}しました。${checksText}`,
         url: event.pr_url,
         fields: [

@@ -265,7 +265,7 @@ describe("parseDiskUsageKb", () => {
 describe("formatDiskUsageMessage", () => {
   test("formats the usage in MiB with one decimal place", () => {
     expect(formatDiskUsageMessage(2048, "/workspaces")).toBe(
-      "/workspaces のディスク使用量は約 2.0 MiB です。",
+      "/workspacesのディスク使用量は約2.0 MiBです。",
     );
   });
 });

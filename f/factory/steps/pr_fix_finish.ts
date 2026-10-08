@@ -58,6 +58,7 @@ import {
   describeReason,
   evaluateRerouteGuard,
   filterKnownReplies,
+  fixOutputProseIssues,
   inspectStagedChanges,
   listReviewThreadsBestEffort,
   matchReviewThreadForComment,
@@ -465,6 +466,17 @@ export async function main(
   // Co-Authored-By / Generated-Byのトレーラーは、この後`commitAndPush`の
   // `withCommitTrailers`が足す。
   const commitMessage = composeCommitMessage(commit_subject, commit_body);
+  const proseIssues = fixOutputProseIssues(
+    replies,
+    commit_subject,
+    commit_body,
+  );
+  if (proseIssues.length > 0) {
+    log.warn("pr_fix output breaks the writing rules", {
+      work_item_id,
+      issues: proseIssues,
+    });
+  }
 
   const commentById = new Map(comments.map((comment) => [comment.id, comment]));
   // 実際に集めたコメントの`review_comment_id`を指す返信だけを扱う。

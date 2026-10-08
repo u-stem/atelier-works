@@ -24,7 +24,7 @@ export function validateDrawioXml(xml: string): DrawioValidationResult {
   if (size > MAX_XML_BYTES) {
     return {
       valid: false,
-      reason: `XML が 256KB を超えています(${size} bytes)`,
+      reason: `XMLが256KBを超えています(${size} bytes)`,
     };
   }
 
@@ -39,7 +39,7 @@ export function validateDrawioXml(xml: string): DrawioValidationResult {
     return {
       valid: false,
       reason:
-        '<mxfile> に compressed="true" が指定されています(非圧縮の XML にしてください)',
+        '<mxfile>にcompressed="true"が指定されています(非圧縮のXMLにしてください)',
     };
   }
 
@@ -53,7 +53,7 @@ export function validateDrawioXml(xml: string): DrawioValidationResult {
     return {
       valid: false,
       reason:
-        "diagram の内容が圧縮されているようです(非圧縮の <mxGraphModel> を渡してください)",
+        "diagramの内容が圧縮されているようです(非圧縮の<mxGraphModel>を渡してください)",
     };
   }
 

@@ -67,9 +67,9 @@ export type CleanupCounts = {
 export function summarizeCleanup(counts: CleanupCounts): string {
   return (
     `work item ${String(counts.work_items_deleted)}件、` +
-    `失敗記録 ${String(counts.job_failures_deleted)}件、` +
-    `デプロイ記録 ${String(counts.deployments_deleted)}件、` +
-    `通知 ${String(counts.notices_deleted)}件を削除しました`
+    `失敗記録${String(counts.job_failures_deleted)}件、` +
+    `デプロイ記録${String(counts.deployments_deleted)}件、` +
+    `通知${String(counts.notices_deleted)}件を削除しました`
   );
 }
 

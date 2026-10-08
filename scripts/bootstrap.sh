@@ -558,7 +558,7 @@ fi
 # 201以外は既にあるとみなす)。201以外ならログを残すだけで既存の値は触らず、
 # updateは呼ばない。
 deployed_sha_create_status="$(variable_create_body "f/factory/deployed_sha" "" \
-  "Software Factory 自身のうち、直近で Windmill に反映済みのコミットです。自己更新処理が自動的に更新します。" \
+  "Software Factory自身のうち、直近でWindmillに反映済みのコミットです。自己更新処理が自動的に更新します。" \
   "false" | api_post "/w/${WORKSPACE}/variables/create")"
 if [ "${deployed_sha_create_status}" = "201" ]; then
   log "variable f/factory/deployed_sha created (empty)"

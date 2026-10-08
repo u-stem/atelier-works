@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   allowedUrlPrefixesFor,
   buildApprovalPayload,
+  collectAuditIssues,
   decideFinalStatus,
   decidePostTransition,
   isAuditOutput,
@@ -72,5 +73,24 @@ describe("decidePostTransition", () => {
 
   test("stays put while a proposal is still pending", () => {
     expect(decidePostTransition("awaiting_approval", 1)).toBeNull();
+  });
+});
+
+const VALID_REPORT = await Bun.file("tests/fixtures/audit/valid.md").text();
+
+describe("collectAuditIssues", () => {
+  const PREFIXES = ["https://github.com/example-org/atelier-works"];
+
+  test("reports a polite ending in a proposal body", () => {
+    const issues = collectAuditIssues(
+      {
+        summary: "失敗が減った。",
+        proposals: [{ title: "通知を減らす", body: "通知を減らします。" }],
+      },
+      VALID_REPORT,
+      PREFIXES,
+    );
+
+    expect(issues.some((issue) => issue.startsWith("提案1: "))).toBe(true);
   });
 });

@@ -9,6 +9,11 @@
 
 import { createHash } from "node:crypto";
 import {
+  COMMIT_MESSAGE_RULES,
+  checkProseFields,
+  GITHUB_PROSE_RULES,
+} from "./prose_check.ts";
+import {
   type ChangedPath,
   isNewShellScript,
   matchesImplementProtectedPath,
@@ -58,6 +63,34 @@ export type ImplementClaudeOutput = {
    */
   readonly notes_for_reviewer: string[];
 };
+
+/**
+ * 実装の出力のうちPRとコミットに載る文章を、`factory-writing`スキルの規則で検査する。
+ * 規則に反していても採用は止めない。PRを作れるかは文章の書き方より重いので、
+ * 呼び出し側は問題をログに残すだけにする。
+ */
+export function implementOutputProseIssues(
+  output: ImplementClaudeOutput,
+): string[] {
+  return checkProseFields([
+    { label: "summary", text: output.summary, rules: GITHUB_PROSE_RULES },
+    ...output.notes_for_reviewer.map((note, index) => ({
+      label: `notes_for_reviewer[${index}]`,
+      text: note,
+      rules: GITHUB_PROSE_RULES,
+    })),
+    {
+      label: "commit_subject",
+      text: output.commit_subject,
+      rules: COMMIT_MESSAGE_RULES,
+    },
+    {
+      label: "commit_body",
+      text: output.commit_body,
+      rules: COMMIT_MESSAGE_RULES,
+    },
+  ]);
+}
 
 /**
  * 値が`prompts.ts`の`IMPLEMENT_SCHEMA`(`claude -p --json-schema`に渡すスキーマ)の

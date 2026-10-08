@@ -18,6 +18,7 @@ import {
   IMPLEMENT_STEP_TIMEOUT_SEC,
   ISSUE_UPDATED_AFTER_INTAKE_NOTE,
   implementDeadlineAt,
+  implementOutputProseIssues,
   implementTimeoutMisfit,
   isImplementClaudeOutput,
   isRequirementsApprovedForAttempt,
@@ -1247,5 +1248,20 @@ describe("CHECK_COMMAND_STOP_OVERHEAD_SEC", () => {
     expect(CHECK_COMMAND_STOP_OVERHEAD_SEC * 1000).toBeGreaterThanOrEqual(
       RUNNER_MAX_STOP_OVERHEAD_MS,
     );
+  });
+});
+
+describe("implementOutputProseIssues", () => {
+  test("reports a plain ending in the summary that goes into the PR body", () => {
+    const issues = implementOutputProseIssues({
+      outcome: "done",
+      summary: "検索を追加した。",
+      gap_report: null,
+      commit_subject: "feat: 検索を追加",
+      commit_body: "",
+      notes_for_reviewer: [],
+    });
+
+    expect(issues).toHaveLength(1);
   });
 });

@@ -150,7 +150,7 @@ describe("buildEmbed", () => {
       rejected_count: 1,
       cleanup: null,
     });
-    expect(embed.description).toBe("エージェント実行 3 件、$1.50 消費。");
+    expect(embed.description).toBe("エージェント実行3件、$1.50消費。");
   });
 
   test("shows a 'no record' DB cleanup field when cleanup is null", () => {
@@ -166,7 +166,7 @@ describe("buildEmbed", () => {
       cleanup: null,
     });
     expect(embed.fields).toContainEqual({
-      name: "DB 掃除",
+      name: "DB掃除",
       value: "前日の掃除記録なし",
     });
   });
@@ -191,9 +191,9 @@ describe("buildEmbed", () => {
       },
     });
     expect(embed.fields).toContainEqual({
-      name: "DB 掃除",
+      name: "DB掃除",
       value:
-        "work item 3件、失敗記録 12件、デプロイ記録 5件、通知 2件を削除しました",
+        "work item 3件、失敗記録12件、デプロイ記録5件、通知2件を削除しました",
     });
   });
 
@@ -457,12 +457,12 @@ describe("buildEmbed", () => {
 
   test("names the PR and the parent issue in the pr_opened title", () => {
     const embed = buildEmbed(PR_OPENED_EVENT);
-    expect(embed.title).toBe("PR 作成: #9(Issue #42)");
+    expect(embed.title).toBe("PR作成: #9(Issue #42)");
   });
 
   test("says the PR was updated in the title of an existing PR", () => {
     const embed = buildEmbed({ ...PR_OPENED_EVENT, created: false });
-    expect(embed.title).toBe("PR 更新: #9(Issue #42)");
+    expect(embed.title).toBe("PR更新: #9(Issue #42)");
   });
 
   test("says the PR was updated in the description of an existing PR", () => {

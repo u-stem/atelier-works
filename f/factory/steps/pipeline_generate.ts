@@ -189,6 +189,44 @@ export async function readDocFile(
 }
 
 /**
+ * doc dirの要件定義書と図を読み、検査で見つかった問題を返す(無ければ空)。
+ * 図のXMLの検査と`validateRequirementsDoc`をまとめて行う。
+ * 再試行でClaudeがどのファイルを直せばよいか分かるよう、要件定義書の問題にはファイル名を前置きする。
+ * `runClaude`の`reviewOutput`(問題を伝えて1回だけ書き直させる)と、
+ * 生成後の最終的な検査の両方がこれを使う。
+ * ファイルを読めないときは`readDocFile`と同じ例外を投げる。
+ */
+async function collectDocIssues(docDir: string): Promise<string[]> {
+  const classified = classifyDocDirEntries(await readDirEntries(docDir));
+  const markdown = await readDocFile(
+    docDir,
+    REQUIREMENTS_MD_FILENAME,
+    readTextFile,
+  );
+
+  const diagramIssues: string[] = [];
+  for (const diagramFile of classified.diagramFiles) {
+    const xml = await readDocFile(docDir, diagramFile, readTextFile);
+    const validation = validateDrawioXml(xml);
+    if (!validation.valid) {
+      diagramIssues.push(
+        `図「${diagramFile}」のXMLが不正です: ${validation.reason}`,
+      );
+    }
+  }
+
+  const docValidation = validateRequirementsDoc(
+    markdown,
+    classified.diagramFiles,
+  );
+  const docIssues = docValidation.ok ? [] : docValidation.issues;
+  return [
+    ...diagramIssues,
+    ...docIssues.map((issue) => `${REQUIREMENTS_MD_FILENAME}: ${issue}`),
+  ];
+}
+
+/**
  * 要件定義を生成して下書きとして保存する。
  * 最初と下書きの保存の直前にpipelineのリースを確かめ、持っていなければ何も書かずに
  * "lease_lost"を返す(例外は投げない)。
@@ -346,6 +384,7 @@ export async function main(
       addDirs: [worktree_dir],
       oauthToken,
       timeoutMs: config.claude_timeout_sec * 1000,
+      reviewOutput: () => collectDocIssues(docDir),
     });
 
     await recordClaudeRuns(result, recordAgentRun);
@@ -370,25 +409,7 @@ export async function main(
       readTextFile,
     );
 
-    const diagramIssues: string[] = [];
-    for (const diagramFile of classified.diagramFiles) {
-      const xml = await readDocFile(docDir, diagramFile, readTextFile);
-      const validation = validateDrawioXml(xml);
-      if (!validation.valid) {
-        diagramIssues.push(
-          `図「${diagramFile}」のXMLが不正です: ${validation.reason}`,
-        );
-      }
-    }
-
-    const docValidation = validateRequirementsDoc(
-      markdown,
-      classified.diagramFiles,
-    );
-    const issues = [
-      ...diagramIssues,
-      ...(docValidation.ok ? [] : docValidation.issues),
-    ];
+    const issues = await collectDocIssues(docDir);
     if (issues.length > 0) {
       failGeneration(
         "invalid_structured_output",

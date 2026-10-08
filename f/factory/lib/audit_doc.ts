@@ -9,6 +9,7 @@
 // `checkAuditOutput`は構造化出力を別に検査する。
 
 import {
+  checkDocumentProse,
   checkForbiddenSyntax,
   checkLengths,
   extractH2Headings,
@@ -125,7 +126,8 @@ function normalizeUrl(url: string): string {
 
 /**
  * Issueに載る構造化出力の文字列1つ(提案のタイトルと本文、または要約)に、
- * HTMLコメント、`checkForbiddenSyntax`、URLの許可リストの検査をかける。
+ * HTMLコメント、`checkForbiddenSyntax`、文章の規則(`checkDocumentProse`)、
+ * URLの許可リストの検査をかける。
  * 問題点にはそれぞれ`label`を前置きする。
  */
 function checkIssueText(
@@ -136,6 +138,9 @@ function checkIssueText(
   const issues = [
     ...checkHtmlComments(text).map((issue) => `${label}: ${issue}`),
     ...checkForbiddenSyntax(stripHtmlComments(text)).map(
+      (issue) => `${label}: ${issue}`,
+    ),
+    ...checkDocumentProse(stripHtmlComments(text)).map(
       (issue) => `${label}: ${issue}`,
     ),
   ];
@@ -288,6 +293,7 @@ export function validateAuditReport(
     ...checkForbiddenSyntax(stripHtmlComments(markdown)),
     ...checkHtmlComments(markdown),
     ...checkLengths(markdown),
+    ...checkDocumentProse(stripHtmlComments(markdown)),
     ...checkProposalTable(markdown, proposals),
   ];
   return issues.length === 0 ? { ok: true } : { ok: false, issues };

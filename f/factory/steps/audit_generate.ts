@@ -107,6 +107,25 @@ export function allowedUrlPrefixesFor(
 }
 
 /**
+ * 監査の構造化出力と、書き終えたレポートの本文にかける検査をまとめ、問題を返す(無ければ空)。
+ * `runClaude`の`reviewOutput`(問題を伝えて1回だけ書き直させる)と、
+ * 生成後の最終的な検査の両方がこれを使う。
+ * 再試行でClaudeがどこを直せばよいか分かるよう、レポートの問題にはファイル名を前置きする。
+ */
+export function collectAuditIssues(
+  output: AuditOutput,
+  markdown: string,
+  allowedUrlPrefixes: readonly string[],
+): string[] {
+  const reportValidation = validateAuditReport(markdown, output.proposals);
+  const reportIssues = reportValidation.ok ? [] : reportValidation.issues;
+  return [
+    ...checkAuditOutput(output, allowedUrlPrefixes),
+    ...reportIssues.map((issue) => `${REPORT_MD_FILENAME}: ${issue}`),
+  ];
+}
+
+/**
  * 遷移したばかりの作業項目を、`awaiting_approval`からすぐ`audited`へ
  * 進めるべきかを返す。副作用は無い。
  * 提案の登録から`auditing`→`awaiting_approval`の遷移までの間に、
@@ -452,6 +471,12 @@ export async function main(
       addDirs: [snapshotDir],
       oauthToken,
       timeoutMs: config.claude_timeout_sec * 1000,
+      reviewOutput: async (output) =>
+        collectAuditIssues(
+          output,
+          await readTextFile(`${docDir}/${REPORT_MD_FILENAME}`),
+          allowedUrlPrefixesFor(config),
+        ),
     });
 
     await recordClaudeRuns(result, recordAgentRun);
@@ -477,18 +502,11 @@ export async function main(
 
     const markdown = await readTextFile(`${docDir}/${REPORT_MD_FILENAME}`);
 
-    const structuredIssues = checkAuditOutput(
+    const issues = collectAuditIssues(
       result.structuredOutput,
+      markdown,
       allowedUrlPrefixesFor(config),
     );
-    const reportValidation = validateAuditReport(
-      markdown,
-      result.structuredOutput.proposals,
-    );
-    const issues = [
-      ...structuredIssues,
-      ...(reportValidation.ok ? [] : reportValidation.issues),
-    ];
     if (issues.length > 0) {
       throw new Error(
         `audit_generate: audit report failed validation: ${issues.join("; ")}`,

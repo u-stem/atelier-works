@@ -29,6 +29,9 @@ pre-commit:
           - name: wmill-lint
             glob: "f/**"
             run: mise exec -- wmill lint f
+          - name: lint-docs
+            glob: "*.md"
+            run: mise exec -- bun run scripts/lint-docs.ts {staged_files}
 
 commit-msg:
   commands:

@@ -14,10 +14,15 @@ Windmill上のフローとして自動化する「Software Factory」。この�
 4. **CI監視**: マージ後のCIを監視する
 5. **自己改善**: 失敗や却下の履歴から改善提案をIssue化する
 
-**現在のスコープ**: 基盤(docker composeによるWindmillスタック、claude/gh/gtr/wmillを
-同梱したworkerイメージ、Data Table、`doctor` / `bootstrap`)、工程1の自動巡回(`poll_issues` / `poll_prs`)、
-工程2の要件定義と承認、PRワークフロー(工程3の一部: `pr_review` / `pr_fix`)、
-ダッシュボードApp(Factory Console)、自己更新と失敗ハンドラ。
+**現在のスコープ**:
+
+- 基盤(docker composeによるWindmillスタック、claude/gh/gtr/wmillを同梱したworkerイメージ、Data Table、`doctor` / `bootstrap`)
+- 工程1の自動巡回(`poll_issues` / `poll_prs`)
+- 工程2の要件定義と承認
+- PRワークフロー(工程3の一部: `pr_review` / `pr_fix`)
+- ダッシュボードApp(Factory Console)
+- 自己更新と失敗ハンドラ
+
 未実装は工程3の「Issueから実装してPRを作る」、工程4のマージ後CI監視、工程5の自己改善提案、
 Discordの双方向操作(詳細は[docs/architecture.md](docs/architecture.md)と[docs/operations.md](docs/operations.md)を参照)。
 
@@ -65,9 +70,11 @@ mise run bootstrap
 | `mise run build` | workerイメージのみビルドする |
 | `mise run bootstrap` | 初回セットアップ(ワークスペース作成・secret投入・sync push・migration、冪等) |
 | `mise run deploy` | `git pull --ff-only` → build → up → push → migrateを一括実行する(手動で一括反映したいときの手段) |
-| `mise run check` | `lint` → `typecheck` → `test` → `console:check`を順に実行する |
+| `mise run check` | `lint` → `lint:docs` → `typecheck` → `test` → `console:check`を順に実行する |
 | `mise run console:check` | Console(`console/`)のlockfileの方針を検査し、続けて型検査・テスト・組み立てを行う |
 | `mise run lint` | biome + `wmill lint` + 型アサーション検出 |
+| `mise run lint:docs` | Markdownの文書を検査する |
+| `mise run docs:gen` | 文書の中の生成した範囲を作り直す |
 | `mise run typecheck` | `tsc --noEmit` |
 | `mise run test` | `bun test`(small)。`console/`は除く(Consoleのテストは`mise run console:check`で実行する) |
 | `mise run test:db` | Data Table migrationのSQLスモークテスト(medium) |
@@ -76,13 +83,16 @@ mise run bootstrap
 | `mise run push:prune` | 削除も反映するpush(手動のみ) |
 | `mise run pull` | `wmill sync pull` |
 | `mise run migrate` | `wmill datatable migrate up` |
+| `mise run metadata` | 古くなったWindmillのメタデータ(lockとスキーマ)を作り直す |
+| `mise run metadata:check` | Windmillのメタデータが古ければ失敗する |
+| `mise run check:comment-only` | 基準のref(既定は`main`)との差分が、コメントの変更だけであることを確かめる |
 | `mise run logs` | スタックのログを追跡する |
 | `mise run console:rollback` | Consoleを直前の版に戻して固定する(自動の更新を止める) |
 | `mise run console:unpin` | Consoleの固定を外し、自動の更新に戻す |
 
 ## リポジトリ構成
 
-```
+```text
 atelier-works/
   README.md                        # このファイル
   AGENTS.md / CLAUDE.md             # エージェント向け規約(単一ソースは AGENTS.md)

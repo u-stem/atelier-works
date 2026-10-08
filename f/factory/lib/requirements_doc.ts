@@ -8,6 +8,12 @@
 // `validateRequirementsDoc`はそれらをまとめて1つの結果にする。
 
 import {
+  checkProse,
+  formatProseIssues,
+  type ProseRuleId,
+  REPORT_RULES,
+} from "./prose_check.ts";
+import {
   DIAGRAM_NAME_PATTERN,
   DIAGRAM_REF_PATTERN,
   MAX_DIAGRAMS,
@@ -466,6 +472,27 @@ export type RequirementsDocValidation =
   | { readonly ok: true }
   | { readonly ok: false; readonly issues: string[] };
 
+/**
+ * `checkForbiddenSyntax`と`checkLengths`が見ない文章の規則。
+ * 絵文字と太字はそちらが見るので、二重に報告しない。
+ */
+const PROSE_RULES_FOR_DOCUMENTS: ReadonlySet<ProseRuleId> = new Set([
+  "heading-code",
+  "register",
+]);
+
+/**
+ * 要件定義書と監査レポートの文章を、`factory-writing`スキルの規則
+ * (見出しにコード表記を入れない、常体で書く)で検査する。
+ */
+export function checkDocumentProse(markdown: string): string[] {
+  return formatProseIssues(
+    checkProse(markdown, REPORT_RULES).filter((issue) =>
+      PROSE_RULES_FOR_DOCUMENTS.has(issue.rule),
+    ),
+  );
+}
+
 /** 書き終えた要件定義書にすべての検査をかけ、結果を1つの判定にまとめる。 */
 export function validateRequirementsDoc(
   markdown: string,
@@ -477,6 +504,7 @@ export function validateRequirementsDoc(
     ...checkForbiddenSyntax(markdown),
     ...checkQuotes(markdown),
     ...checkLengths(markdown),
+    ...checkDocumentProse(markdown),
     ...checkDiagramRefs(markdown, diagramFiles),
   ];
   if (issues.length === 0) {

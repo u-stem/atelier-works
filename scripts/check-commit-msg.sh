@@ -29,8 +29,8 @@ cat >&2 <<'MESSAGE'
 コミットメッセージが規約(Conventional Commits)に沿っていません。
 
 形式: <type>(<scope>)?: <説明>
-  type は feat / fix / docs / refactor / test / chore のいずれか
-  例:   feat: Issue 取り込みスクリプトを追加
+  typeはfeat / fix / docs / refactor / test / choreのいずれか
+  例:   feat: Issue取り込みスクリプトを追加
   例:   fix(scripts): 型アサーション検出の誤検知を修正
 
 Merge / Revert / fixup! / squash! で始まるコミットは対象外です。

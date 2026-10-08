@@ -67,7 +67,7 @@ async function cleanupWorkItems(
     });
     await addNotice({
       kind: "cleanup_db_failed",
-      message: `終端 work item の削除に失敗しました: ${message}`,
+      message: `終端work itemの削除に失敗しました: ${message}`,
     });
     return { work_items_deleted: 0, approval_requests_deleted: 0, deleted: [] };
   }
