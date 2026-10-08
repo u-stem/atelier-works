@@ -575,7 +575,20 @@ describe("classifyDeployNeeds", () => {
     expect(classifyDeployNeeds(["src/a.ts"])).toEqual({
       autoApply: false,
       onNextUp: false,
+      viaConsoleCi: false,
     });
+  });
+
+  test("flags viaConsoleCi for console/**", () => {
+    expect(classifyDeployNeeds(["console/src/App.tsx"]).viaConsoleCi).toBe(
+      true,
+    );
+  });
+
+  test("does not flag viaConsoleCi for infra/console_fetcher/**", () => {
+    expect(
+      classifyDeployNeeds(["infra/console_fetcher/main.ts"]).viaConsoleCi,
+    ).toBe(false);
   });
 
   test("flags autoApply for f/**", () => {
@@ -695,6 +708,7 @@ describe("buildImplementPrBody", () => {
         "",
         "- [ ] マージ後に`self_update`が自動で反映する(`f/`・`migrations/`・`.claude/skills/`の変更)",
         "- [ ] 次に`mise run up`で起動したときに反映される(`infra/`、`mise.toml`の`[tools]`・`[env]`の変更)",
+        "- [ ] マージ後、CIが通れば数分で`console_fetcher`が反映する(`console/`の変更)",
         "- [x] 反映するものは無い",
       ].join("\n"),
     );
@@ -706,7 +720,7 @@ describe("buildImplementPrBody", () => {
       changedPaths: ["f/factory/lib/db.ts"],
     });
     expect(body).toContain(
-      "- [x] マージ後に`self_update`が自動で反映する(`f/`・`migrations/`・`.claude/skills/`の変更)\n- [ ] 次に`mise run up`で起動したときに反映される(`infra/`、`mise.toml`の`[tools]`・`[env]`の変更)\n- [ ] 反映するものは無い",
+      "- [x] マージ後に`self_update`が自動で反映する(`f/`・`migrations/`・`.claude/skills/`の変更)\n- [ ] 次に`mise run up`で起動したときに反映される(`infra/`、`mise.toml`の`[tools]`・`[env]`の変更)\n- [ ] マージ後、CIが通れば数分で`console_fetcher`が反映する(`console/`の変更)\n- [ ] 反映するものは無い",
     );
   });
 
@@ -716,7 +730,7 @@ describe("buildImplementPrBody", () => {
       changedPaths: [".claude/skills/factory-dev/SKILL.md"],
     });
     expect(body).toContain(
-      "- [x] マージ後に`self_update`が自動で反映する(`f/`・`migrations/`・`.claude/skills/`の変更)\n- [ ] 次に`mise run up`で起動したときに反映される(`infra/`、`mise.toml`の`[tools]`・`[env]`の変更)\n- [ ] 反映するものは無い",
+      "- [x] マージ後に`self_update`が自動で反映する(`f/`・`migrations/`・`.claude/skills/`の変更)\n- [ ] 次に`mise run up`で起動したときに反映される(`infra/`、`mise.toml`の`[tools]`・`[env]`の変更)\n- [ ] マージ後、CIが通れば数分で`console_fetcher`が反映する(`console/`の変更)\n- [ ] 反映するものは無い",
     );
   });
 
@@ -726,7 +740,7 @@ describe("buildImplementPrBody", () => {
       changedPaths: ["infra/worker/Dockerfile"],
     });
     expect(body).toContain(
-      "- [ ] マージ後に`self_update`が自動で反映する(`f/`・`migrations/`・`.claude/skills/`の変更)\n- [x] 次に`mise run up`で起動したときに反映される(`infra/`、`mise.toml`の`[tools]`・`[env]`の変更)\n- [ ] 反映するものは無い",
+      "- [ ] マージ後に`self_update`が自動で反映する(`f/`・`migrations/`・`.claude/skills/`の変更)\n- [x] 次に`mise run up`で起動したときに反映される(`infra/`、`mise.toml`の`[tools]`・`[env]`の変更)\n- [ ] マージ後、CIが通れば数分で`console_fetcher`が反映する(`console/`の変更)\n- [ ] 反映するものは無い",
     );
   });
 
@@ -740,13 +754,23 @@ describe("buildImplementPrBody", () => {
     );
   });
 
+  test("checks only the console box when console/** changed", () => {
+    const body = buildImplementPrBody({
+      ...PR_BODY_INPUT,
+      changedPaths: ["console/src/App.tsx"],
+    });
+    expect(body).toContain(
+      "- [ ] 次に`mise run up`で起動したときに反映される(`infra/`、`mise.toml`の`[tools]`・`[env]`の変更)\n- [x] マージ後、CIが通れば数分で`console_fetcher`が反映する(`console/`の変更)\n- [ ] 反映するものは無い",
+    );
+  });
+
   test("checks both boxes but not 反映するものは無い when f/** and infra/** changed", () => {
     const body = buildImplementPrBody({
       ...PR_BODY_INPUT,
       changedPaths: ["f/factory/lib/db.ts", "infra/worker/Dockerfile"],
     });
     expect(body).toContain(
-      "- [x] マージ後に`self_update`が自動で反映する(`f/`・`migrations/`・`.claude/skills/`の変更)\n- [x] 次に`mise run up`で起動したときに反映される(`infra/`、`mise.toml`の`[tools]`・`[env]`の変更)\n- [ ] 反映するものは無い",
+      "- [x] マージ後に`self_update`が自動で反映する(`f/`・`migrations/`・`.claude/skills/`の変更)\n- [x] 次に`mise run up`で起動したときに反映される(`infra/`、`mise.toml`の`[tools]`・`[env]`の変更)\n- [ ] マージ後、CIが通れば数分で`console_fetcher`が反映する(`console/`の変更)\n- [ ] 反映するものは無い",
     );
   });
 

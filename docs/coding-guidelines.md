@@ -105,7 +105,7 @@ PRは`.github/PULL_REQUEST_TEMPLATE.md`の次の章立てに従う。
 3. **動作確認結果**: lint / typecheck / test / E2Eの実行結果をチェックする。
 4. **確認して欲しい点**: 実装上のトレードオフや不確実な部分を記述する。
 5. **関連リンク**: `Closes #N`形式でIssueを明示する(Factoryはこれで承認済み要件と照合する)。
-6. **備考**: Windmillへの反映を記述する。`f/`・`migrations/`・`.claude/skills/`の変更はマージ後に`self_update`が自動で反映し、`infra/`と`mise.toml`の`[tools]`・`[env]`の変更は次に`mise run up`で起動したときに反映される(通知はしない)。
+6. **備考**: Windmillへの反映を記述する。`f/`・`migrations/`・`.claude/skills/`の変更はマージ後に`self_update`が自動で反映し、`infra/`と`mise.toml`の`[tools]`・`[env]`の変更は次に`mise run up`で起動したときに反映される(通知はしない)。`console/`の変更は、マージ後にCIが通れば数分で`console_fetcher`が反映する。
 
 人がClaude Codeで作成するコミットには、トレーラー`Co-Authored-By: Claude <noreply@anthropic.com>`を付ける。
 

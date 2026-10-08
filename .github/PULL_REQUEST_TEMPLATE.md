@@ -27,4 +27,5 @@ Windmillへの反映:
 
 - [ ] マージ後に`self_update`が自動で反映する(`f/`・`migrations/`・`.claude/skills/`の変更)
 - [ ] 次に`mise run up`で起動したときに反映される(`infra/`、`mise.toml`の`[tools]`・`[env]`の変更)
+- [ ] マージ後、CIが通れば数分で`console_fetcher`が反映する(`console/`の変更)
 - [ ] 反映するものは無い
