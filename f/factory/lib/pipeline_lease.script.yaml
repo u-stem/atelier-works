@@ -1,0 +1,9 @@
+summary: '[LIB] 要件定義フローのリース判定'
+description: 内部ライブラリです。直接実行するものではありません。要件定義のフローが作業項目を書き換えてよい実行かを、作業項目に記録されたジョブIDで判定します。
+lock: '!inline f/factory/lib/pipeline_lease.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

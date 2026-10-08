@@ -1,5 +1,6 @@
 // f/factory/pipelineの承認依頼ステップ。
 // 要件定義の下書きへの承認依頼を記録して通知し、人の判断を待たずに返る。
+// pipelineのリース(`flow_job_id`がこのフローのジョブID)を持たなければ、何も書かずに終わる。
 
 import * as wmill from "windmill-client@1.817.0";
 import { buildConsoleUrl, computeExpiresAt } from "../lib/approval_support.ts";
@@ -9,18 +10,22 @@ import {
   getWorkItem,
   insertApprovalRequest,
   latestDraft,
-  updateStatusIfCurrent,
+  updateStatusIfLeaseHolder,
 } from "../lib/db.ts";
 import {
   type NotifyBestEffortResult,
   notifyBestEffort,
 } from "../lib/discord.ts";
 import { type Logger, logger, maskSecrets } from "../lib/log.ts";
+import {
+  holdsPipelineLease,
+  PIPELINE_LEASE_LOST_REASON,
+  pipelineLeaseJobId,
+} from "../lib/pipeline_lease.ts";
 
-export type PipelineRequestApprovalResult = {
-  readonly ok: true;
-  readonly approval_request_id: number;
-};
+export type PipelineRequestApprovalResult =
+  | { readonly ok: true; readonly approval_request_id: number }
+  | { readonly ok: false; readonly reason: string };
 
 /**
  * 承認依頼の通知が届かなかったときに残すnoticeの本文を作る。副作用は無い。
@@ -63,7 +68,8 @@ export async function reportApprovalNotifyFailure(
  * `attempt`回目の下書きに対する承認依頼(kind "requirements")を
  * `factory.approval_requests`に記録し、作業項目を`awaiting_approval`に進め、
  * Discordへapproval_requestedを通知する。
- * 作業項目が既に`requirements_generating`から動いていたら、
+ * pipelineのリースを持っていなければ、依頼を記録せずに`ok: false`を返す(例外は投げない)。
+ * 作業項目が既に`requirements_generating`から動いていたか、記録の後にリースが移っていたら、
  * 依頼の記録だけで通知せずに返る。
  * 通知が届かなくても失敗せず、Consoleに`approval_notify_failed`のnoticeを残す。
  * 承認依頼は記録済みで、Consoleから判断できるため。
@@ -94,6 +100,17 @@ export async function main(
     );
   }
 
+  const leaseJobId = pipelineLeaseJobId(process.env);
+  if (!holdsPipelineLease(workItem, leaseJobId)) {
+    log.warn(PIPELINE_LEASE_LOST_REASON, {
+      work_item_id,
+      status: workItem.status,
+      flow_job_id: workItem.flow_job_id,
+      lease_job_id: leaseJobId,
+    });
+    return { ok: false, reason: PIPELINE_LEASE_LOST_REASON };
+  }
+
   const draft = await latestDraft(work_item_id);
   if (draft === null || draft.attempt !== attempt) {
     throw new Error(
@@ -109,10 +126,11 @@ export async function main(
     expires_at: computeExpiresAt(new Date()),
   });
 
-  const updated = await updateStatusIfCurrent(
+  const updated = await updateStatusIfLeaseHolder(
     work_item_id,
     "requirements_generating",
     "awaiting_approval",
+    leaseJobId,
     null,
   );
   if (!updated) {

@@ -1,6 +1,7 @@
 // f/factory/pipelineの3ステップ中2番目(要件定義の生成)。
 // 日次予算を確かめてから、headlessのClaudeに試行ごとのディレクトリへ
 // 要件定義と図を書かせ、検証して下書きとして保存する。
+// pipelineのリース(`flow_job_id`がこのフローのジョブID)を持たなければ、何も書かずに終わる。
 
 import * as wmill from "windmill-client@1.817.0";
 import {
@@ -15,11 +16,16 @@ import {
   latestDraft,
   recordAgentRun,
   saveDraft,
-  updateStatus,
+  updateStatusIfLeaseHolder,
 } from "../lib/db.ts";
 import { notifyBestEffort } from "../lib/discord.ts";
 import { validateDrawioXml } from "../lib/drawio.ts";
 import { logger, maskSecrets } from "../lib/log.ts";
+import {
+  holdsPipelineLease,
+  PIPELINE_LEASE_LOST_REASON,
+  pipelineLeaseJobId,
+} from "../lib/pipeline_lease.ts";
 import { REQUIREMENTS_SCHEMA, requirementsPrompt } from "../lib/prompts.ts";
 import { validateRequirementsDoc } from "../lib/requirements_doc.ts";
 import {
@@ -135,7 +141,8 @@ export function buildGenerateFailureMessage(issues: readonly string[]): string {
 
 export type PipelineGenerateResult =
   | { readonly outcome: "success" }
-  | { readonly outcome: "budget_exceeded" };
+  | { readonly outcome: "budget_exceeded" }
+  | { readonly outcome: "lease_lost" };
 
 /**
  * 生成の失敗を、秘密情報をマスクした例外として投げる。
@@ -183,8 +190,11 @@ export async function readDocFile(
 
 /**
  * 要件定義を生成して下書きとして保存する。
+ * 最初と下書きの保存の直前にpipelineのリースを確かめ、持っていなければ何も書かずに
+ * "lease_lost"を返す(例外は投げない)。
  * 日次予算を超えていればClaudeを起動せず、作業項目を`needs_human`にして通知し、
- * "budget_exceeded"を返す(例外は投げない)。
+ * "budget_exceeded"を返す(例外は投げない)。この遷移もリースを条件にした比較交換で、
+ * 一致しなければ通知せずに"lease_lost"を返す。
  * 作業項目かIssue番号が無いとき、Claudeの実行か生成物の検証が失敗したときは
  * 例外を投げる。Claudeを動かしたときは、成否に関わらず`agent_runs`を記録する。
  *
@@ -226,6 +236,18 @@ export async function main(
     );
   }
 
+  // 取り消しに失敗して残った古い実行が、持ち主の試行ディレクトリを空にしないよう、触れる前に確かめる。
+  const leaseJobId = pipelineLeaseJobId(process.env);
+  if (!holdsPipelineLease(workItem, leaseJobId)) {
+    log.warn(PIPELINE_LEASE_LOST_REASON, {
+      work_item_id,
+      status: workItem.status,
+      flow_job_id: workItem.flow_job_id,
+      lease_job_id: leaseJobId,
+    });
+    return { outcome: "lease_lost" };
+  }
+
   const budgetStatus = await dailyBudgetStatus(config);
   if (budgetStatus.exceeded) {
     log.warn("daily budget exceeded, not starting claude", {
@@ -233,11 +255,14 @@ export async function main(
       spentToday: budgetStatus.spent_usd,
       dailyBudgetUsd: budgetStatus.limit_usd,
     });
-    await updateStatus(
+    const moved = await updateStatusIfLeaseHolder(
       work_item_id,
+      "requirements_generating",
       "needs_human",
+      leaseJobId,
       `daily budget exceeded ($${budgetStatus.spent_usd.toFixed(2)} >= $${budgetStatus.limit_usd.toFixed(2)})`,
     );
+    if (!moved) return { outcome: "lease_lost" };
     // 状態は`needs_human`に記録済みなので、通知が届かなくてもstepを失敗させない。
     await notifyBestEffort(
       webhookUrl,
@@ -375,6 +400,17 @@ export async function main(
       name: diagramNameFromFile(file),
       file,
     }));
+
+    // 生成の間にリースが移っていれば、持ち主の下書きより新しい下書きを残さない。
+    const current = await getWorkItem(work_item_id);
+    if (current === null || !holdsPipelineLease(current, leaseJobId)) {
+      log.warn(PIPELINE_LEASE_LOST_REASON, {
+        work_item_id,
+        flow_job_id: current?.flow_job_id ?? null,
+        lease_job_id: leaseJobId,
+      });
+      return { outcome: "lease_lost" };
+    }
 
     await saveDraft({
       work_item_id,

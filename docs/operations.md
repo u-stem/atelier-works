@@ -45,6 +45,7 @@
   pr_fixの再実行では何も止めずに`blocked`になる。この場合は、理由に載ったプロセスが終わるのを待つか、何かを確かめて止めるか、`mise exec -- docker compose -f infra/docker-compose.yml restart windmill_worker`でworkerを再起動してから再実行する。workerの再起動は、同じコンテナで動いているすべてのジョブを止める。
 
   残ったClaudeは、`cleanup_workspaces`の孤児の掃除でも、閾値(`claude_timeout_sec`と`implement_timeout_sec`の長い方に5分を足した時間)を過ぎた後にだけ止まる。検査コマンドの生き残りはこの掃除の対象外である。
+- 要件定義のフロー(`f/factory/pipeline`)も、再実行はConsoleのFailuresタブ(`retry_work_item`)を使う。Windmillのrerunや、Windmillの画面からの直接の実行は、作業項目の`flow_job_id`にそのジョブIDが記録されないので、準備ステップが記録を最大60秒待ってから何もせずに終わる(作業項目は`failed`にならない)。差し戻しの取り消しに失敗して同じ作業項目でpipelineが2本動いた場合も、記録されていない方は同じく何もせずに終わる。
 - 実装フローの実行中にリースが移った場合(Issueのcloseによる取り消しで`cancelJob`が失敗したなど)、実装フローは次のリースの確認(生成ステップのClaude実行前、検証の各ラウンドの冒頭と修正ラウンドの前、完了ステップの最初と外への副作用の直前)で止まり、コミット・push・PR作成をしない。進行中のClaudeの実行や検査は中断しない。worktreeに残った途中の変更は、次の実行の準備で捨てられる。
 
 ## 通知

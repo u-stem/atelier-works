@@ -7,12 +7,24 @@
 // `requirements_generating`に進める前に、Issueがまだopenかを確かめ直す。
 // 確保からこのフローの開始までの間に、`poll_issues`のreconcileが
 // 作業項目を取り消している場合があるため。
+// 作業項目に触れるのは、`flow_job_id`にこのフローのジョブIDが記録されているとき(pipelineのリース)だけ。
 
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "../lib/config.ts";
-import { getWorkItem, setAttempt, updateStatus } from "../lib/db.ts";
+import {
+  getWorkItem,
+  setAttempt,
+  updateStatusIfLeaseHolder,
+} from "../lib/db.ts";
 import { type GhClient, getIssue } from "../lib/github.ts";
 import { logger } from "../lib/log.ts";
+import {
+  awaitPipelineLease,
+  PIPELINE_LEASE_LOST_REASON,
+  PIPELINE_LEASE_POLL_MS,
+  PIPELINE_LEASE_WAIT_MS,
+  pipelineLeaseJobId,
+} from "../lib/pipeline_lease.ts";
 import type { WorkItemStatus } from "../lib/types.ts";
 import { TERMINAL_WORK_ITEM_STATUSES } from "../lib/types.ts";
 import {
@@ -95,6 +107,37 @@ export function shouldCancelForClosedIssue(issueState: string): boolean {
   return issueState !== "open";
 }
 
+/**
+ * 状態の比較交換が一致しなかったときの理由。
+ * 準備の途中でリースが別の実行に移ったか、reconcileなどが作業項目を先へ進めた。
+ */
+export const PIPELINE_PREPARE_MOVED_ON_REASON =
+  "work item status or flow_job_id changed during prepare";
+
+/** 状態の比較交換が一致しなかったことをログに残し、何も書かずに終える結果を返す。 */
+function movedOn(
+  workItemId: number,
+  leaseJobId: string,
+): PipelinePrepareResult {
+  logger("pipeline_prepare").warn(
+    "work item moved on during prepare, skipping",
+    {
+      work_item_id: workItemId,
+      lease_job_id: leaseJobId,
+    },
+  );
+  return { skip: true, reason: PIPELINE_PREPARE_MOVED_ON_REASON };
+}
+
+/**
+ * 作業項目を検証し、pipelineのリースを確かめてから作業領域を用意する。
+ * リースは起動側が`flow_job_id`に記録したこのフローのジョブIDで、
+ * 記録を`PIPELINE_LEASE_WAIT_MS`まで待っても確かめられなければ、何も書かずに`skip`を返す。
+ * 失敗扱いにしないのは、別の実行が持ち主なら作業項目はその実行が進めるからである。
+ * 状態の書き換えは、リースを確かめた時点の状態と`flow_job_id`のままのときだけ行う比較交換で、
+ * 一致しなければ同じく何も書かずに`skip`を返す。
+ * 作業項目が無い、種類がissueでない、Issue番号が無い、フローのルートジョブIDを得られないときは例外を投げる。
+ */
 export async function main(
   work_item_id: number,
   attempt: number,
@@ -128,8 +171,30 @@ export async function main(
     );
   }
 
+  // 取り消しに失敗して残った古い実行が、同じreq-<N>のworktreeや状態を書き換えないよう、
+  // 作業項目とworktreeに触れる前にリースを確かめる。
+  const leaseJobId = pipelineLeaseJobId(process.env);
+  const lease = await awaitPipelineLease({
+    readItem: () => getWorkItem(work_item_id),
+    jobId: leaseJobId,
+    now: () => Date.now(),
+    sleep: (ms) => Bun.sleep(ms),
+    timeoutMs: PIPELINE_LEASE_WAIT_MS,
+    pollMs: PIPELINE_LEASE_POLL_MS,
+  });
+  if (!lease.held || lease.item === null) {
+    log.warn("pipeline lease not held, skipping", {
+      work_item_id,
+      status: lease.item?.status ?? null,
+      flow_job_id: lease.item?.flow_job_id ?? null,
+      lease_job_id: leaseJobId,
+    });
+    return { skip: true, reason: PIPELINE_LEASE_LOST_REASON };
+  }
+  const leasedStatus = lease.item.status;
+
   // `retry_work_item.ts`などは`work_items.attempt`を読んで次のattemptを決める。
-  // 途中で失敗した実行でも値が正しく残るよう、作業項目の検証直後、
+  // 途中で失敗した実行でも値が正しく残るよう、リースを確かめた直後、
   // 失敗しうるリポジトリやworktreeの操作より前に保存する。
   await setAttempt(work_item_id, attempt);
 
@@ -192,11 +257,15 @@ export async function main(
       work_item_id,
       issue_number: workItem.issue_number,
     });
-    await updateStatus(
+    const cancelled = await updateStatusIfLeaseHolder(
       work_item_id,
+      leasedStatus,
       "cancelled",
+      leaseJobId,
       "issue closed before pipeline started",
     );
+    // 一致しなければworktreeは今の持ち主が使っているかもしれないので、消さずに終わる。
+    if (!cancelled) return movedOn(work_item_id, leaseJobId);
     await removeWorktree({
       run: runCommand,
       repoDir: repo.dir,
@@ -206,7 +275,14 @@ export async function main(
     return { skip: true, reason: "issue_closed" };
   }
 
-  await updateStatus(work_item_id, "requirements_generating", null);
+  const started = await updateStatusIfLeaseHolder(
+    work_item_id,
+    leasedStatus,
+    "requirements_generating",
+    leaseJobId,
+    null,
+  );
+  if (!started) return movedOn(work_item_id, leaseJobId);
 
   return {
     skip: false,
