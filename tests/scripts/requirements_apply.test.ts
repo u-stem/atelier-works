@@ -1,17 +1,72 @@
 import { describe, expect, test } from "bun:test";
 import {
+  implementCasFailureReason,
+  implementLaunchFailureReason,
+} from "../../f/factory/lib/implement_launch_support.ts";
+import {
   type ApprovedSideEffectsDeps,
   applyApprovedSideEffects,
   buildApprovalCommentFailedMessage,
   buildApprovedComment,
+  buildImplementLaunchNoticeMessage,
   decideRejectedOutcome,
+  type RejectedRetryDeps,
   readRequestAttempt,
+  relaunchPipelineAfterRejection,
   shouldProceed,
 } from "../../f/factory/steps/requirements_apply.ts";
 
 const boom = async (): Promise<never> => {
   throw new Error("boom");
 };
+
+const JOB_A = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
+const GITHUB_TOKEN = "ghp_0123456789abcdefghijklmnopqrstuvwxyz";
+
+/** `promise`が拒否されたときの例外のメッセージを返す。解決したらテストを失敗させる。 */
+async function rejectionMessage(promise: Promise<unknown>): Promise<string> {
+  try {
+    await promise;
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err);
+  }
+  throw new Error("expected the promise to reject");
+}
+
+/** 却下後の作り直しの偽の依存を作る。`overrides`で個別に差し替える。 */
+function rejectedDeps(overrides: Partial<RejectedRetryDeps> = {}): {
+  deps: RejectedRetryDeps;
+  calls: string[];
+  needsHumanReasons: string[];
+} {
+  const calls: string[] = [];
+  const needsHumanReasons: string[] = [];
+  const deps: RejectedRetryDeps = {
+    casToGenerating: async () => {
+      calls.push("cas");
+      return true;
+    },
+    removeWorktree: async () => {
+      calls.push("remove_worktree");
+    },
+    launchPipeline: async () => {
+      calls.push("launch");
+      return JOB_A;
+    },
+    recordFlowJobId: async () => {
+      calls.push("record");
+      return true;
+    },
+    moveToNeedsHuman: async (reason) => {
+      calls.push("needs_human");
+      needsHumanReasons.push(reason);
+      return true;
+    },
+    log: () => {},
+    ...overrides,
+  };
+  return { deps, calls, needsHumanReasons };
+}
 
 /** 呼び出しを`calls`に記録する偽の依存を作る。`overrides`で個別に差し替える。 */
 function approvedDeps(overrides: Partial<ApprovedSideEffectsDeps> = {}): {
@@ -116,10 +171,62 @@ describe("buildApprovalCommentFailedMessage", () => {
     ).toContain(CONSOLE_URL);
   });
 
-  test("says that the comment can be posted again", () => {
+  test("tells a person to post the comment", () => {
     expect(
       buildApprovalCommentFailedMessage(TARGET, CONSOLE_URL, "boom"),
-    ).toContain("投稿し直せます");
+    ).toContain("人が投稿してください");
+  });
+
+  test("says that the implement flow launch continues", () => {
+    expect(
+      buildApprovalCommentFailedMessage(TARGET, CONSOLE_URL, "boom"),
+    ).toContain("implementフローの起動は続けます");
+  });
+
+  test("ends with the console url", () => {
+    expect(
+      buildApprovalCommentFailedMessage(TARGET, CONSOLE_URL, "boom").endsWith(
+        CONSOLE_URL,
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("buildImplementLaunchNoticeMessage", () => {
+  const TARGET = {
+    owner: "octo",
+    repo: "widgets",
+    issue_number: 42,
+    work_item_id: 7,
+  };
+
+  test("names the issue and the work item", () => {
+    expect(
+      buildImplementLaunchNoticeMessage(
+        TARGET,
+        implementLaunchFailureReason("boom"),
+      ),
+    ).toContain("octo/widgets#42 (work item 7): ");
+  });
+
+  test("translates the reason", () => {
+    expect(
+      buildImplementLaunchNoticeMessage(
+        TARGET,
+        implementLaunchFailureReason("boom"),
+      ),
+    ).toContain("実装フローを起動できませんでした: boom");
+  });
+
+  test("tells the person to restart with retry_work_item when the CAS failed", () => {
+    expect(
+      buildImplementLaunchNoticeMessage(
+        TARGET,
+        implementCasFailureReason("boom"),
+      ),
+    ).toContain(
+      "`f/factory/retry_work_item`を作業項目のIDで実行して再開してください",
+    );
   });
 });
 
@@ -191,6 +298,55 @@ describe("applyApprovedSideEffects", () => {
     expect(h.calls).toContain("remove_worktree");
   });
 
+  test("removes the worktree when the notification throws", async () => {
+    const h = approvedDeps({ notifyApproved: boom });
+    await applyApprovedSideEffects(h.deps);
+    expect(h.calls).toContain("remove_worktree");
+  });
+
+  test("notifies and removes the worktree when the notice cannot be recorded", async () => {
+    const h = approvedDeps({
+      commentIssue: boom,
+      addCommentFailedNotice: boom,
+    });
+    await applyApprovedSideEffects(h.deps);
+    expect(h.calls).toEqual(["notify", "remove_worktree", "implement"]);
+  });
+
+  test("masks secrets in the reason passed to the notice", async () => {
+    const h = approvedDeps({
+      commentIssue: async () => {
+        throw new Error(`gh api failed with token ${GITHUB_TOKEN}`);
+      },
+    });
+    await applyApprovedSideEffects(h.deps);
+    expect(h.notices.join("\n")).not.toContain(GITHUB_TOKEN);
+  });
+
+  test("does not start implement when implement is disabled", async () => {
+    const h = approvedDeps({ startImplement: null });
+    await applyApprovedSideEffects(h.deps);
+    expect(h.calls).not.toContain("implement");
+  });
+
+  test("reports that implement did not start when the work item was not moved", async () => {
+    const h = approvedDeps({ startImplement: async () => "not_moved" });
+    const result = await applyApprovedSideEffects(h.deps);
+    expect(result.implement_started).toBe(false);
+  });
+
+  test("reports that implement did not start when the flow already holds the lease", async () => {
+    const h = approvedDeps({ startImplement: async () => "flow_holds_lease" });
+    const result = await applyApprovedSideEffects(h.deps);
+    expect(result.implement_started).toBe(false);
+  });
+
+  test("reports that implement did not start when the CAS failed", async () => {
+    const h = approvedDeps({ startImplement: async () => "cas_failed" });
+    const result = await applyApprovedSideEffects(h.deps);
+    expect(result.implement_started).toBe(false);
+  });
+
   test("reports that implement started", async () => {
     const result = await applyApprovedSideEffects(approvedDeps().deps);
     expect(result).toEqual({ outcome: "approved", implement_started: true });
@@ -214,6 +370,111 @@ describe("applyApprovedSideEffects", () => {
     const h = approvedDeps({ startImplement: null });
     const result = await applyApprovedSideEffects(h.deps);
     expect(result).toEqual({ outcome: "approved", implement_started: false });
+  });
+});
+
+describe("relaunchPipelineAfterRejection", () => {
+  test("moves, removes the worktree, launches, then records the job id", async () => {
+    const h = rejectedDeps();
+    await relaunchPipelineAfterRejection(h.deps);
+    expect(h.calls).toEqual(["cas", "remove_worktree", "launch", "record"]);
+  });
+
+  test("reports retrying when the pipeline was launched", async () => {
+    expect(await relaunchPipelineAfterRejection(rejectedDeps().deps)).toBe(
+      "retrying",
+    );
+  });
+
+  test("reports not_moved when the CAS did not match", async () => {
+    const h = rejectedDeps({ casToGenerating: async () => false });
+    expect(await relaunchPipelineAfterRejection(h.deps)).toBe("not_moved");
+  });
+
+  test("does not launch when the CAS did not match", async () => {
+    const h = rejectedDeps({ casToGenerating: async () => false });
+    await relaunchPipelineAfterRejection(h.deps);
+    expect(h.calls).not.toContain("launch");
+  });
+
+  test("launches when the worktree removal throws", async () => {
+    const h = rejectedDeps({ removeWorktree: boom });
+    await relaunchPipelineAfterRejection(h.deps);
+    expect(h.calls).toContain("launch");
+  });
+
+  test("moves the work item to needs_human when the launch throws", async () => {
+    const h = rejectedDeps({ launchPipeline: boom });
+    await rejectionMessage(relaunchPipelineAfterRejection(h.deps));
+    expect(h.needsHumanReasons).toEqual([
+      "requirements regeneration could not be started",
+    ]);
+  });
+
+  test("throws the launch failure when the launch throws", async () => {
+    const h = rejectedDeps({ launchPipeline: boom });
+    expect(await rejectionMessage(relaunchPipelineAfterRejection(h.deps))).toBe(
+      "requirements_apply: f/factory/pipeline could not be started: boom",
+    );
+  });
+
+  test("moves the work item to needs_human when the launch does not return a job id", async () => {
+    const h = rejectedDeps({ launchPipeline: async () => "Internal error" });
+    await rejectionMessage(relaunchPipelineAfterRejection(h.deps));
+    expect(h.calls).toContain("needs_human");
+  });
+
+  test("does not record a job id when the launch fails", async () => {
+    const h = rejectedDeps({ launchPipeline: boom });
+    await rejectionMessage(relaunchPipelineAfterRejection(h.deps));
+    expect(h.calls).not.toContain("record");
+  });
+
+  test("masks secrets in the launch failure", async () => {
+    const h = rejectedDeps({
+      launchPipeline: async () => {
+        throw new Error(`failed with ${GITHUB_TOKEN}`);
+      },
+    });
+    expect(
+      await rejectionMessage(relaunchPipelineAfterRejection(h.deps)),
+    ).not.toContain(GITHUB_TOKEN);
+  });
+
+  test("moves the work item to needs_human when recording the job id throws", async () => {
+    const h = rejectedDeps({ recordFlowJobId: boom });
+    await rejectionMessage(relaunchPipelineAfterRejection(h.deps));
+    expect(h.calls).toContain("needs_human");
+  });
+
+  test("throws the record failure when recording the job id throws", async () => {
+    const h = rejectedDeps({ recordFlowJobId: boom });
+    expect(await rejectionMessage(relaunchPipelineAfterRejection(h.deps))).toBe(
+      `requirements_apply: f/factory/pipeline job ${JOB_A} could not be recorded: boom`,
+    );
+  });
+
+  test("does not move to needs_human when another run already holds the lease", async () => {
+    const h = rejectedDeps({ recordFlowJobId: async () => false });
+    await relaunchPipelineAfterRejection(h.deps);
+    expect(h.calls).not.toContain("needs_human");
+  });
+
+  test("still throws the launch failure when the needs_human rollback throws", async () => {
+    const h = rejectedDeps({ launchPipeline: boom, moveToNeedsHuman: boom });
+    expect(await rejectionMessage(relaunchPipelineAfterRejection(h.deps))).toBe(
+      "requirements_apply: f/factory/pipeline could not be started: boom",
+    );
+  });
+
+  test("says another run holds the lease when the needs_human rollback does not match", async () => {
+    const h = rejectedDeps({
+      launchPipeline: boom,
+      moveToNeedsHuman: async () => false,
+    });
+    expect(
+      await rejectionMessage(relaunchPipelineAfterRejection(h.deps)),
+    ).toContain("another run holds the lease or the work item moved on");
   });
 });
 

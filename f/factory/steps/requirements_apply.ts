@@ -10,7 +10,6 @@ import {
   getApprovalRequest,
   getWorkItem,
   recordFailure,
-  setFlowJobId,
   setFlowJobIdIfUnset,
   updateStatusIfCurrent,
   updateStatusIfCurrentClearingFlowJobId,
@@ -18,6 +17,7 @@ import {
 } from "../lib/db.ts";
 import { notify, notifyBestEffort } from "../lib/discord.ts";
 import { commentIssue, type GhClient, getViewer } from "../lib/github.ts";
+import { REQUIREMENTS_REGENERATION_FAILED_REASON } from "../lib/implement_finish_support.ts";
 import {
   parseFlowJobId,
   type StartImplementOutcome,
@@ -25,6 +25,7 @@ import {
 } from "../lib/implement_launch_support.ts";
 import { IMPLEMENT_FLOW_PATH } from "../lib/implement_loop.ts";
 import { type Logger, logger, maskSecrets } from "../lib/log.ts";
+import { PIPELINE_FLOW_PATH } from "../lib/pipeline_lease.ts";
 import { type FactoryConfig, isNumber, type WorkItem } from "../lib/types.ts";
 import { removeWorktree, runCommand } from "../lib/workspace.ts";
 import { describeReason, nextActionFor } from "./pr_workflow_support.ts";
@@ -69,7 +70,7 @@ export function buildApprovedComment(
 
 /**
  * 承認コメントをIssueに投稿できなかったときに残すnoticeの本文を作る。副作用は無い。
- * 承認は記録済みなので、コメントを投稿し直せることと、要件定義を開くConsoleのリンクを伝える。
+ * コメントを自動で投稿し直す処理は無いので、必要なら人が投稿するよう伝え、載せるConsoleのリンクを添える。
  * URLは末尾に置く。直後に句読点が続くと、リンクに変換するときにURLに含まれてしまうため。
  */
 export function buildApprovalCommentFailedMessage(
@@ -82,7 +83,23 @@ export function buildApprovalCommentFailedMessage(
   consoleUrl: string,
   reason: string,
 ): string {
-  return `${target.owner}/${target.repo}#${String(target.issue_number)} (work item ${String(target.work_item_id)}): 承認のコメントをIssueに投稿できませんでした(${reason})。要件定義は承認済みです。コメントはIssueに投稿し直せます。要件定義のConsole: ${consoleUrl}`;
+  return `${target.owner}/${target.repo}#${String(target.issue_number)} (work item ${String(target.work_item_id)}): 承認のコメントをIssueに投稿できませんでした(${reason})。要件定義は承認済みで、implementフローの起動は続けます。必要なら、次のリンクを載せたコメントをIssueに人が投稿してください。要件定義のConsole: ${consoleUrl}`;
+}
+
+/**
+ * implementフローを起動できなかったときに残すnoticeの本文を作る。副作用は無い。
+ * 理由を訳し、次の操作を添える。
+ */
+export function buildImplementLaunchNoticeMessage(
+  target: {
+    readonly owner: string;
+    readonly repo: string;
+    readonly issue_number: number;
+    readonly work_item_id: number;
+  },
+  reason: string,
+): string {
+  return `${target.owner}/${target.repo}#${String(target.issue_number)} (work item ${String(target.work_item_id)}): ${describeReason(reason)}。${nextActionFor(reason)}。`;
 }
 
 export type ApprovedSideEffectsDeps = {
@@ -92,7 +109,10 @@ export type ApprovedSideEffectsDeps = {
   readonly addCommentFailedNotice: (reason: string) => Promise<void>;
   /** Discordへ`requirements_approved`を通知する(`notifyBestEffort`)。 */
   readonly notifyApproved: () => Promise<void>;
-  /** 要件定義用のworktreeを消す。 */
+  /**
+   * 要件定義用のworktreeを消す(`removeReqWorktree`)。
+   * 失敗してもwarnを残すだけで投げない約束だが、約束が破られても後続を止めないよう、呼び出し側でも捕まえる。
+   */
   readonly removeWorktree: () => Promise<void>;
   /** implementフローを起動する(`startImplement`)。`implement_enabled`が偽なら`null`。 */
   readonly startImplement: (() => Promise<StartImplementOutcome>) | null;
@@ -164,6 +184,107 @@ export function decideRejectedOutcome(
   return attempt < maxAttempts ? "retry" : "needs_human";
 }
 
+export type RejectedRetryDeps = {
+  /**
+   * `updateStatusIfCurrentClearingFlowJobId`で`awaiting_approval`から`requirements_generating`へ移し、
+   * `flow_job_id`を空にする。条件に合わなければ`false`を返す。
+   */
+  readonly casToGenerating: () => Promise<boolean>;
+  /**
+   * 要件定義用のworktreeを消す(`removeReqWorktree`)。
+   * 失敗してもwarnを残すだけで投げない約束だが、約束が破られても起動を止めないよう、呼び出し側でも捕まえる。
+   */
+  readonly removeWorktree: () => Promise<void>;
+  /** `runFlowAsync(PIPELINE_FLOW_PATH, ...)`の戻り値をそのまま返す。ジョブIDの解析は呼び出し先が行う。 */
+  readonly launchPipeline: () => Promise<string>;
+  /** `setFlowJobIdIfUnset`でジョブIDを記録する。別の実行が先にリースを取っていれば`false`を返す。 */
+  readonly recordFlowJobId: (jobId: string) => Promise<boolean>;
+  /**
+   * `updateStatusIfLeaseHolder`で、リースが空のときだけ`requirements_generating`から`needs_human`へ移す。
+   * 別の実行がリースを取っているか、作業項目が先に動いていれば`false`を返す。
+   */
+  readonly moveToNeedsHuman: (reason: string) => Promise<boolean>;
+  readonly log: (message: string, fields: Record<string, unknown>) => void;
+};
+
+/**
+ * 却下された要件定義を作り直すため、作業項目を`requirements_generating`へ移してpipelineを起動する。
+ * 比較交換が一致しなければ何もせずに`not_moved`を返す。
+ *
+ * 比較交換で`flow_job_id`(pipelineのリース)を空にし、起動したジョブIDは空のときだけ記録する。
+ * pipelineは起動するとすぐ準備ステップで作業項目を読み直すので、worktreeの片付けは起動より先に行う。
+ * 起動に失敗したか、ジョブIDを記録できなかった(記録が例外を投げた)ときは、
+ * リースが空のときだけ`needs_human`へ戻してから例外を投げる。
+ * 記録されないpipelineは準備ステップで何もせずに終わるので、戻さないと動くジョブの無いまま
+ * reconcileの猶予まで残るため。例外は`main`が`job_failures`に記録して通知する。
+ * 記録が`false`を返す(別の実行がリースを持つ)ときは、その実行が進めているので、ログだけ残して`retrying`を返す。
+ */
+export async function relaunchPipelineAfterRejection(
+  deps: RejectedRetryDeps,
+): Promise<"not_moved" | "retrying"> {
+  if (!(await deps.casToGenerating())) return "not_moved";
+  try {
+    await deps.removeWorktree();
+  } catch (err) {
+    deps.log("failed to remove requirements worktree", {
+      error: messageOf(err),
+    });
+  }
+
+  let jobId: string;
+  try {
+    jobId = parseFlowJobId(await deps.launchPipeline(), "runFlowAsync");
+  } catch (err) {
+    throw await rollBackToNeedsHuman(
+      deps,
+      `requirements_apply: ${PIPELINE_FLOW_PATH} could not be started: ${messageOf(err)}`,
+    );
+  }
+
+  let recorded: boolean;
+  try {
+    recorded = await deps.recordFlowJobId(jobId);
+  } catch (err) {
+    throw await rollBackToNeedsHuman(
+      deps,
+      `requirements_apply: ${PIPELINE_FLOW_PATH} job ${jobId} could not be recorded: ${messageOf(err)}`,
+    );
+  }
+  if (!recorded) {
+    deps.log("pipeline flow job id not recorded; another run holds the lease", {
+      started_job_id: jobId,
+    });
+  }
+  return "retrying";
+}
+
+/**
+ * `REQUIREMENTS_REGENERATION_FAILED_REASON`を理由にして`needs_human`へ戻し、投げる例外を返す。
+ * 戻す比較交換が例外を投げたときはログに残し、元の失敗をそのまま返す。
+ * 一致しなかったとき(別の実行がリースを持つか、作業項目が先に動いた)は、そのことを伝える例外を返す。
+ * 起動は実際には成功していることがあり、「起動できなかった」と伝えると誤解させるため。
+ */
+async function rollBackToNeedsHuman(
+  deps: RejectedRetryDeps,
+  failure: string,
+): Promise<Error> {
+  let rolledBack: boolean;
+  try {
+    rolledBack = await deps.moveToNeedsHuman(
+      REQUIREMENTS_REGENERATION_FAILED_REASON,
+    );
+  } catch (err) {
+    deps.log("needs_human rollback after a failed relaunch failed", {
+      error: messageOf(err),
+    });
+    return new Error(failure);
+  }
+  if (rolledBack) return new Error(failure);
+  return new Error(
+    `${failure}; another run holds the lease or the work item moved on, so it was not moved to needs_human`,
+  );
+}
+
 /**
  * 承認依頼の`payload.attempt`を型ガードで読み、無いか数値でなければ
  * `fallback`を返す。副作用は無い。
@@ -224,10 +345,12 @@ async function removeReqWorktree(workItem: WorkItem): Promise<void> {
  * 承認コメントの投稿に失敗しても、noticeを残してimplementフローの起動まで進む。
  *
  * 承認依頼・作業項目・Issue番号が無いとき、依頼のkindが違うときは例外を投げる。
+ * 作業項目を読めたら、そのIDを`failure.work_item_id`に書く。`main`が失敗を記録するときに使う。
  */
 async function run(
   approval_request_id: number,
   log: Logger,
+  failure: { work_item_id: number | null },
 ): Promise<RequirementsApplyResult> {
   const config: FactoryConfig = await loadConfig(() =>
     wmill.getResource("f/factory/factory_config"),
@@ -254,6 +377,7 @@ async function run(
       `requirements_apply: no work item with id ${request.work_item_id}`,
     );
   }
+  failure.work_item_id = workItem.id;
   if (!shouldProceed(workItem.status)) {
     log.info("work item is not awaiting_approval, no-op", {
       work_item_id: workItem.id,
@@ -333,7 +457,15 @@ async function run(
         addNotice: async (reason) => {
           await addNotice({
             kind: "implement_launch_failed",
-            message: `${workItem.owner}/${workItem.repo}#${String(issueNumber)} (work item ${String(workItem.id)}): ${describeReason(reason)}`,
+            message: buildImplementLaunchNoticeMessage(
+              {
+                owner: workItem.owner,
+                repo: workItem.repo,
+                issue_number: issueNumber,
+                work_item_id: workItem.id,
+              },
+              reason,
+            ),
           });
         },
         notifyNeedsHuman: async (reason) => {
@@ -409,33 +541,39 @@ async function run(
   // ここからは却下のとき。
   const rejectedOutcome = decideRejectedOutcome(attempt, config.max_attempts);
   if (rejectedOutcome === "retry") {
-    const updated = await updateStatusIfCurrent(
-      workItem.id,
-      "awaiting_approval",
-      "requirements_generating",
-      request.reason,
-    );
-    if (!updated) {
+    const relaunched = await relaunchPipelineAfterRejection({
+      casToGenerating: () =>
+        updateStatusIfCurrentClearingFlowJobId(
+          workItem.id,
+          "awaiting_approval",
+          "requirements_generating",
+          request.reason,
+        ),
+      removeWorktree: () => removeReqWorktree(workItem),
+      launchPipeline: () =>
+        wmill.runFlowAsync(PIPELINE_FLOW_PATH, {
+          work_item_id: workItem.id,
+          attempt: attempt + 1,
+          feedback: request.reason ?? "",
+        }),
+      recordFlowJobId: (jobId) => setFlowJobIdIfUnset(workItem.id, jobId),
+      moveToNeedsHuman: (reason) =>
+        updateStatusIfLeaseHolder(
+          workItem.id,
+          "requirements_generating",
+          "needs_human",
+          null,
+          reason,
+        ),
+      log: (message, fields) =>
+        log.warn(message, { work_item_id: workItem.id, ...fields }),
+    });
+    if (relaunched === "not_moved") {
       log.info("work item moved on before retry could be started", {
         work_item_id: workItem.id,
       });
       return { outcome: "no_op" };
     }
-    // `runFlowAsync`は、他のDB・GitHubへの副作用(ここではworktreeの片付けだけ)の後に呼ぶ。
-    // 次の試行のフローは並行して動き、すぐに自身の準備ステップで`work_items`を読み直すため、
-    // 起動した時点でここに実行中の処理が残っていてはならない。
-    // `setFlowJobId`は`runFlowAsync`が返すidを記録するので、その直後に置くしかない。
-    // 応答がジョブIDでなければ例外にし、起動の失敗と同じく`main`が記録して通知する。
-    await removeReqWorktree(workItem);
-    const flowJobId = parseFlowJobId(
-      await wmill.runFlowAsync("f/factory/pipeline", {
-        work_item_id: workItem.id,
-        attempt: attempt + 1,
-        feedback: request.reason ?? "",
-      }),
-      "runFlowAsync",
-    );
-    await setFlowJobId(workItem.id, flowJobId);
     return { outcome: "retrying" };
   }
 
@@ -477,13 +615,15 @@ async function run(
  * フローの`on_error_flow`に頼れない。
  * そのため例外はここで捕まえ、`factory.job_failures`に記録して
  * Discordへ通知してから投げ直す(`on_error_schedule.ts`と同じ自己完結の処理)。
+ * 作業項目を読めた後の失敗は、ConsoleのFailuresタブから再実行できるよう、作業項目のIDを付けて記録する。
  */
 export async function main(
   approval_request_id: number,
 ): Promise<RequirementsApplyResult> {
   const log = logger("requirements_apply");
+  const failure: { work_item_id: number | null } = { work_item_id: null };
   try {
-    return await run(approval_request_id, log);
+    return await run(approval_request_id, log, failure);
   } catch (err) {
     const message = maskSecrets(
       err instanceof Error ? err.message : String(err),
@@ -491,7 +631,7 @@ export async function main(
     log.error("requirements_apply failed", { error: message });
     try {
       await recordFailure({
-        work_item_id: null,
+        work_item_id: failure.work_item_id,
         flow_path: "f/factory/steps/requirements_apply",
         job_id: process.env.WM_JOB_ID ?? "unknown",
         step: null,
