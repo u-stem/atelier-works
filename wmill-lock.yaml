@@ -37,7 +37,7 @@ locks:
   f/factory/lib/protected_paths: 3a9f4425a38960bfc51184e772a7d309ffca70166a0c57561c691019bd0f16ee
   f/factory/lib/requirements_doc: 595f1b05c1ff72f47f99178ad0ba441c3558d6864b85d153c01e2d94f44a1e17
   f/factory/lib/requirements_template: a54db2de115a37d3ed3fed16aa1ea6a990792ac6a7c4fa5652051f0634adc09a
-  f/factory/lib/self_update_support: 1c412e51ab8d460196dabf1b8ca932901c7e510d64c87ffa33cd0585d3675be6
+  f/factory/lib/self_update_support: 0df8c848434c5268a1e6a10b0dc2a4afc9694f56dda5f963573967871e46efa0
   f/factory/lib/summary_support: ea64ca2867b8848cc841ced0582b90a84203ec99db297b7126cc2e8b6a33b0e8
   f/factory/lib/types: 6295771e7e0bb57750a9ea157458ee02d5855a73ac8f914688649a1c0cd01434
   f/factory/lib/workspace: e8b9eae605547b89405c8ab4ab5e66ca4169c10b0670df3930233eb53b49f1a4

@@ -63,25 +63,25 @@ git pull --ff-only
 docker compose -f infra/docker-compose.yml pull
 docker compose -f infra/docker-compose.yml build windmill_worker console_fetcher
 docker compose -f infra/docker-compose.yml up -d
-npm ci --prefix f/factory/factory_console__raw_app --no-audit --no-fund
-wmill sync push --yes --keep-deleted
+npm ci --prefix f/factory/factory_console__raw_app --no-audit --no-fund --ignore-scripts
+NPM_CONFIG_IGNORE_SCRIPTS=true wmill sync push --yes --keep-deleted
 wmill datatable migrate up
 """
 
 [tasks.push]
 description = "Push local sync state to the Windmill workspace (keeps remote-only items)"
 run = """
-npm ci --prefix f/factory/factory_console__raw_app --no-audit --no-fund
-wmill sync push --yes --keep-deleted
+npm ci --prefix f/factory/factory_console__raw_app --no-audit --no-fund --ignore-scripts
+NPM_CONFIG_IGNORE_SCRIPTS=true wmill sync push --yes --keep-deleted
 """
 
 [tasks."push:prune"]
 description = "Push and delete remote items that no longer exist locally (manual only)"
-run = "wmill sync push --yes"
+run = "NPM_CONFIG_IGNORE_SCRIPTS=true wmill sync push --yes"
 
 [tasks."push:dry"]
 description = "Dry-run of wmill sync push"
-run = "wmill sync push --dry-run"
+run = "NPM_CONFIG_IGNORE_SCRIPTS=true wmill sync push --dry-run"
 
 [tasks.pull]
 description = "Pull remote Windmill state into the sync root"

@@ -217,6 +217,12 @@ Consoleは`/console/`でWindmillと同じオリジンから配信する。Consol
 - 成果物を取りに行くリポジトリ`CONSOLE_GITHUB_REPO`は、コミットされた`mise.toml`にある。これを書き換える変更がマージされると、`console_fetcher`は任意のpublicリポジトリの成果物を取り込みうる。`mise.toml`は保護パス(pr_fixは止め、実装フローはPR本文に明示する)で、マージは人が行うことで抑えている(ただし上記のとおり、`main`へのpushそのものは人に限れない)。
 - 成果物の保持は30日。30日以上`main`へのpushが無いと、新しく立ち上げた環境は取り込めない(動作中の環境は今の版を配信し続ける)。そのときは`main`に何かをpushしてCIを動かす。
 
+## self_updateの依存インストール
+
+- `self_update`はConsole raw appの依存を`npm ci --ignore-scripts`で入れる。依存のinstall scriptは、workerの権限のままネットワークにも出られる状態で動くため、動かさない。
+- `wmill sync push`のバンドルがraw appに対して走らせるnpmには`--ignore-scripts`が効かない。そのため、`wmill`のサブプロセスの環境変数に`NPM_CONFIG_IGNORE_SCRIPTS=true`を渡し、そのnpmもinstall scriptを動かさないようにする。
+- raw appの`package-lock.json`にinstall scriptを要する依存(`hasInstallScript`)は無い。そのような依存を足すとコントラクトテスト(`tests/lib/self_update_support.test.ts`)が落ちるので、足す前に、install scriptなしで組み立てが通るかを確かめる。
+
 ## workerコンテナの権限
 
 - workerは`privileged`を付けず、`FAVOR_UNSHARE_PID`も有効にしない。Windmillの公式構成はジョブ隔離のためにこれらを使うことがあるが、このworkerはuntrustedなIssue内容を読むheadless Claudeをサブプロセスとして実行するため、コンテナが万一侵害された場合の影響範囲(ホストへの波及)を優先して最小化する。ジョブ間の隔離は、追加の特権に頼らず、工程ごとのツール制限・read-only方針といった上位の信頼境界設計で確保する。
