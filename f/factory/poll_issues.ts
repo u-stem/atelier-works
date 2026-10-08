@@ -52,6 +52,7 @@ import {
   deployedShaMismatchMessage,
   filterByRepoAllowlist,
   type IssueCandidate,
+  type IssueDecision,
   isWaitingForHuman,
   type JobState,
   type ReconcileGithubState,
@@ -596,20 +597,28 @@ const defaultClaimUnknownNotifyDeps: ClaimUnknownNotifyDeps = {
 /** 所有を判断できなかったIssueの通知に、リンクを並べる最大の件数。 */
 const CLAIM_UNKNOWN_LIST_LIMIT = 10;
 
-/** 複数のIssueが該当したときの、次の操作。個別の文は「このIssue」と書くため使えない。 */
-const CLAIM_UNKNOWN_LIST_NEXT_ACTION =
-  "一覧のIssueそれぞれについて、Consoleの作業項目で作業が始まっているか確かめてください。始まっていなければ、そのIssueに`factory`ラベルを付け直してください";
+/**
+ * 複数のIssueが該当したときの、次の操作。個別の文は「このIssue」と書くため使えない。
+ * 個別の文(`nextActionFor`)は理由の規則の表が持ち、ラベル名を引数に取れないので、
+ * 既定の`factory`と書いてある。ラベル名を変えている場合は、こちらだけが設定に合う。
+ */
+function claimUnknownListNextAction(triggerLabel: string): string {
+  return `一覧のIssueそれぞれについて、Consoleの作業項目で作業が始まっているか確かめてください。始まっていなければ、そのIssueに\`${triggerLabel}\`ラベルを付け直してください`;
+}
 
 /**
  * 1回のポーリングで、取得の所有を判断できなかったIssueを、人の対応待ちとして1件の通知で知らせる。
  * ラベルが外れ、作業項目も無いので、通知が無いと人は気づけない。
  * 障害の間は多くのIssueが同時に該当しうるため、Issueごとに送らず、リンクを並べた1件にまとめる。
  * 並べるのは先頭から`CLAIM_UNKNOWN_LIST_LIMIT`件までで、残りは件数で示す。
+ * 各行は`owner/repo#番号 URL`で、複数のリポジトリにまたがっても対象が分かる。
+ * タイトルと`url`には、先頭のIssueを載せる。
  * 該当が無ければ何も送らない。通知はベストエフォートである。
  */
 export async function notifyClaimOwnershipUnknown(
   input: {
     readonly candidates: readonly IssueCandidate[];
+    readonly triggerLabel: string;
     readonly instanceName: string;
     readonly discordWebhookUrl: string;
     readonly log: Logger;
@@ -623,7 +632,10 @@ export async function notifyClaimOwnershipUnknown(
   const many = input.candidates.length > 1;
   const listed = input.candidates
     .slice(0, CLAIM_UNKNOWN_LIST_LIMIT)
-    .map((candidate) => `- ${candidate.htmlUrl}`);
+    .map(
+      (candidate) =>
+        `- ${candidate.owner}/${candidate.repo}#${String(candidate.number)} ${candidate.htmlUrl}`,
+    );
   const rest = input.candidates.length - listed.length;
   const reason = many
     ? [
@@ -644,7 +656,7 @@ export async function notifyClaimOwnershipUnknown(
       reason,
       target: { kind: "issue", number: first.number },
       next_action: many
-        ? CLAIM_UNKNOWN_LIST_NEXT_ACTION
+        ? claimUnknownListNextAction(input.triggerLabel)
         : nextActionFor(CLAIM_OWNERSHIP_UNKNOWN_REASON),
     },
     input.log,
@@ -674,6 +686,71 @@ export async function recordLabelerAssociationDenied(
     kind: "labeler_association_denied",
     message: `${candidate.owner}/${candidate.repo}#${candidate.number}: 直近のラベル付与者のassociation "${association ?? "unknown"}" はallowed_labeler_associationsに含まれていません`,
   });
+}
+
+export type DecisionHandlers = {
+  readonly claim: (candidate: IssueCandidate) => Promise<"claimed" | "skipped">;
+  readonly recordDenied: (
+    candidate: IssueCandidate,
+    association: string | null,
+  ) => Promise<void>;
+  readonly recordFailure: (step: string, err: unknown) => Promise<void>;
+  readonly notifyOwnershipUnknown: (
+    candidates: readonly IssueCandidate[],
+  ) => Promise<void>;
+};
+
+/**
+ * 判定した各Issueを順に処理し、結果の件数を返す。
+ * 1件の失敗は`recordFailure`に渡して次へ進む。関係の検査で見送るIssueのnotice記録も、
+ * 同じ扱いにする。
+ * 所有を判断できなかったIssueは集め、ループを抜けるときに必ず1回だけ
+ * `notifyOwnershipUnknown`へ渡す。`recordFailure`などが想定外に例外を投げて
+ * ループが途中で終わっても、`finally`で通知するため、集めた分の通知は失われない。
+ * このときループの例外は、通知の後にそのまま投げられる。
+ */
+export async function processIssueDecisions(
+  decisions: readonly IssueDecision[],
+  handlers: DecisionHandlers,
+): Promise<{ claimed: number; skipped: number; failed: number }> {
+  let claimed = 0;
+  let skipped = 0;
+  let failed = 0;
+  const ownershipUnknown: IssueCandidate[] = [];
+  try {
+    for (const decision of decisions) {
+      const { candidate } = decision;
+      const where = `${candidate.owner}/${candidate.repo}#${String(candidate.number)}`;
+      if (decision.action === "skip_active") {
+        skipped += 1;
+        continue;
+      }
+      if (decision.action === "skip_association") {
+        try {
+          await handlers.recordDenied(candidate, decision.association);
+          skipped += 1;
+        } catch (err) {
+          failed += 1;
+          await handlers.recordFailure(`labeler_denied:${where}`, err);
+        }
+        continue;
+      }
+      try {
+        const outcome = await handlers.claim(candidate);
+        if (outcome === "claimed") claimed += 1;
+        else skipped += 1;
+      } catch (err) {
+        failed += 1;
+        if (err instanceof ClaimOwnershipUnknownError) {
+          ownershipUnknown.push(candidate);
+        }
+        await handlers.recordFailure(`claim_issue:${where}`, err);
+      }
+    }
+  } finally {
+    await handlers.notifyOwnershipUnknown(ownershipUnknown);
+  }
+  return { claimed, skipped, failed };
 }
 
 async function claimAndStart(
@@ -858,49 +935,34 @@ export async function main(): Promise<{
     config.allowed_labeler_associations,
   );
 
-  const ownershipUnknown: IssueCandidate[] = [];
-  for (const decision of decisions) {
-    const { candidate } = decision;
-    if (decision.action === "skip_active") {
-      skipped += 1;
-      continue;
-    }
-    if (decision.action === "skip_association") {
-      skipped += 1;
-      await recordLabelerAssociationDenied(candidate, decision.association);
-      continue;
-    }
-    try {
-      const outcome = await claimAndStart(
+  // 所有を判断できなかったIssueの通知は、`processIssueDecisions`がループを抜けるときに送る。
+  // この時点では、各Issueの失敗の記録(`recordFailureSafe`、例外を投げない)までが書き込み済みで、
+  // 照合と期限切れの掃除は、まだ始めていない。
+  const processed = await processIssueDecisions(decisions, {
+    claim: (candidate) =>
+      claimAndStart(
         client,
         candidate,
         viewer.login,
         config,
         discordWebhookUrl,
         log,
-      );
-      if (outcome === "claimed") claimed += 1;
-      else skipped += 1;
-    } catch (err) {
-      failed += 1;
-      if (err instanceof ClaimOwnershipUnknownError) {
-        ownershipUnknown.push(candidate);
-      }
-      await recordFailureSafe(
-        `claim_issue:${candidate.owner}/${candidate.repo}#${candidate.number}`,
-        err,
+      ),
+    recordDenied: (candidate, association) =>
+      recordLabelerAssociationDenied(candidate, association),
+    recordFailure: (step, err) => recordFailureSafe(step, err, log),
+    notifyOwnershipUnknown: (unknown) =>
+      notifyClaimOwnershipUnknown({
+        candidates: unknown,
+        triggerLabel: config.trigger_label,
+        instanceName: config.instance_name,
+        discordWebhookUrl,
         log,
-      );
-    }
-  }
-
-  // 所有を判断できなかったIssueは、ほかのDBへの書き込みより先に、1件の通知にまとめて知らせる。
-  await notifyClaimOwnershipUnknown({
-    candidates: ownershipUnknown,
-    instanceName: config.instance_name,
-    discordWebhookUrl,
-    log,
+      }),
   });
+  claimed += processed.claimed;
+  skipped += processed.skipped;
+  failed += processed.failed;
 
   const reconciled = await reconcileActiveItems(
     client,

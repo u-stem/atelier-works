@@ -3812,6 +3812,7 @@ const REASON_RULES: readonly ReasonRule[] = [
   },
   // poll_issues.tsの`claimIssueWithNotice`。ラベルの削除が応答の無い失敗かサーバーエラーで終わり、
   // 読み直しでも自分が外したか判断できなかった。ラベルは無く、作業項目が始まっているかも分からない。
+  // この表は設定を受け取れないので、ラベル名は既定の`factory`で書く(ほかの行も同じ)。
   {
     pattern: /^claim ownership could not be determined$/,
     describe: () =>

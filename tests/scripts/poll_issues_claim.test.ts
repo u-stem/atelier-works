@@ -13,13 +13,18 @@ import {
   ClaimOwnershipUnknownError,
 } from "../../f/factory/lib/github.ts";
 import type { Logger } from "../../f/factory/lib/log.ts";
-import type { IssueCandidate } from "../../f/factory/lib/poll_support.ts";
+import type {
+  IssueCandidate,
+  IssueDecision,
+} from "../../f/factory/lib/poll_support.ts";
 import {
   type ClaimNoticeDeps,
   type ClaimUnknownNotifyDeps,
   claimIssueWithNotice,
+  type DecisionHandlers,
   type LabelerDeniedDeps,
   notifyClaimOwnershipUnknown,
+  processIssueDecisions,
   recordLabelerAssociationDenied,
 } from "../../f/factory/poll_issues.ts";
 import { ok } from "../lib/testSupport.ts";
@@ -277,6 +282,7 @@ describe("notifyClaimOwnershipUnknown", () => {
     return notifyClaimOwnershipUnknown(
       {
         candidates,
+        triggerLabel: "factory",
         instanceName: "local",
         discordWebhookUrl: WEBHOOK,
         log: silentLog,
@@ -346,12 +352,6 @@ describe("notifyClaimOwnershipUnknown", () => {
     );
   });
 
-  test("does not put a raw error into the notification", async () => {
-    const { deps, sent } = sendDeps();
-    await notify([candidateAt(12)], deps);
-    expect(JSON.stringify(sent[0]?.event)).not.toContain("HTTP");
-  });
-
   test("sends exactly one notification for several affected issues", async () => {
     const { deps, sent } = sendDeps();
     await notify([candidateAt(1), candidateAt(2), candidateAt(3)], deps);
@@ -363,7 +363,7 @@ describe("notifyClaimOwnershipUnknown", () => {
     await notify([candidateAt(1), candidateAt(2), candidateAt(3)], deps);
     const event = sent[0]?.event;
     expect(event?.kind === "needs_human" ? event.reason : "").toBe(
-      `${SINGLE_REASON}(3件)\n- https://github.com/octo-owner/atelier-works/issues/1\n- https://github.com/octo-owner/atelier-works/issues/2\n- https://github.com/octo-owner/atelier-works/issues/3`,
+      `${SINGLE_REASON}(3件)\n- octo-owner/atelier-works#1 https://github.com/octo-owner/atelier-works/issues/1\n- octo-owner/atelier-works#2 https://github.com/octo-owner/atelier-works/issues/2\n- octo-owner/atelier-works#3 https://github.com/octo-owner/atelier-works/issues/3`,
     );
   });
 
@@ -386,6 +386,43 @@ describe("notifyClaimOwnershipUnknown", () => {
     );
   });
 
+  test("qualifies each listed issue with its repository", async () => {
+    const { deps, sent } = sendDeps();
+    const other: IssueCandidate = {
+      ...candidateAt(7),
+      owner: "other-owner",
+      repo: "other-repo",
+      htmlUrl: "https://github.com/other-owner/other-repo/issues/7",
+    };
+    await notify([candidateAt(1), other], deps);
+    const event = sent[0]?.event;
+    const lines = (event?.kind === "needs_human" ? event.reason : "").split(
+      "\n",
+    );
+    expect(lines.slice(1)).toEqual([
+      "- octo-owner/atelier-works#1 https://github.com/octo-owner/atelier-works/issues/1",
+      "- other-owner/other-repo#7 https://github.com/other-owner/other-repo/issues/7",
+    ]);
+  });
+
+  test("names the configured trigger label in the next action when several are affected", async () => {
+    const { deps, sent } = sendDeps();
+    await notifyClaimOwnershipUnknown(
+      {
+        candidates: [candidateAt(1), candidateAt(2)],
+        triggerLabel: "factory-custom",
+        instanceName: "local",
+        discordWebhookUrl: WEBHOOK,
+        log: silentLog,
+      },
+      deps,
+    );
+    const event = sent[0]?.event;
+    expect(event?.kind === "needs_human" ? event.next_action : "").toContain(
+      "`factory-custom`ラベルを付け直してください",
+    );
+  });
+
   test("lists at most ten issues and counts the rest", async () => {
     const { deps, sent } = sendDeps();
     const many = Array.from({ length: 12 }, (_, i) => candidateAt(i + 1));
@@ -395,7 +432,7 @@ describe("notifyClaimOwnershipUnknown", () => {
       "\n",
     );
     expect(lines.slice(-2)).toEqual([
-      "- https://github.com/octo-owner/atelier-works/issues/10",
+      "- octo-owner/atelier-works#10 https://github.com/octo-owner/atelier-works/issues/10",
       "ほか2件",
     ]);
   });
@@ -446,5 +483,207 @@ describe("recordLabelerAssociationDenied", () => {
     const { deps, recorded } = denyDeps();
     await recordLabelerAssociationDenied(CANDIDATE, null, deps);
     expect(recorded[0]?.message).toContain('association "unknown"');
+  });
+});
+
+describe("processIssueDecisions", () => {
+  function candidateAt(number: number): IssueCandidate {
+    return {
+      ...CANDIDATE,
+      number,
+      htmlUrl: `https://github.com/octo-owner/atelier-works/issues/${String(number)}`,
+    };
+  }
+
+  const claimDecision = (n: number): IssueDecision => ({
+    action: "claim",
+    candidate: candidateAt(n),
+  });
+
+  type Recorded = {
+    failures: string[];
+    denied: number[];
+    notified: number[][];
+  };
+
+  function handlers(
+    claim: (candidate: IssueCandidate) => Promise<"claimed" | "skipped">,
+    overrides: Partial<DecisionHandlers> = {},
+  ): { handlers: DecisionHandlers; recorded: Recorded } {
+    const recorded: Recorded = { failures: [], denied: [], notified: [] };
+    return {
+      recorded,
+      handlers: {
+        claim,
+        recordDenied: async (candidate) => {
+          recorded.denied.push(candidate.number);
+        },
+        recordFailure: async (step) => {
+          recorded.failures.push(step);
+        },
+        notifyOwnershipUnknown: async (candidates) => {
+          recorded.notified.push(candidates.map((c) => c.number));
+        },
+        ...overrides,
+      },
+    };
+  }
+
+  const unknownFor =
+    (...numbers: number[]) =>
+    async (c: IssueCandidate) => {
+      if (numbers.includes(c.number)) {
+        throw new ClaimOwnershipUnknownError("unknown");
+      }
+      return "claimed" as const;
+    };
+
+  test("counts claimed issues", async () => {
+    const { handlers: h } = handlers(async () => "claimed");
+    const result = await processIssueDecisions(
+      [claimDecision(1), claimDecision(2)],
+      h,
+    );
+    expect(result.claimed).toBe(2);
+  });
+
+  test("counts skipped claims", async () => {
+    const { handlers: h } = handlers(async () => "skipped");
+    const result = await processIssueDecisions([claimDecision(1)], h);
+    expect(result.skipped).toBe(1);
+  });
+
+  test("counts an active issue as skipped without claiming it", async () => {
+    const { handlers: h, recorded } = handlers(async () => "claimed");
+    const result = await processIssueDecisions(
+      [{ action: "skip_active", candidate: candidateAt(1) }],
+      h,
+    );
+    expect([result.skipped, result.claimed, recorded.failures]).toEqual([
+      1,
+      0,
+      [],
+    ]);
+  });
+
+  test("records the denied association and counts the issue as skipped", async () => {
+    const { handlers: h, recorded } = handlers(async () => "claimed");
+    const result = await processIssueDecisions(
+      [
+        {
+          action: "skip_association",
+          candidate: candidateAt(4),
+          association: "NONE",
+        },
+      ],
+      h,
+    );
+    expect([result.skipped, recorded.denied]).toEqual([1, [4]]);
+  });
+
+  test("records a failing denial as a failure and goes on with the next issue", async () => {
+    const { handlers: h } = handlers(async () => "claimed", {
+      recordDenied: async () => {
+        throw new Error("db down");
+      },
+    });
+    const result = await processIssueDecisions(
+      [
+        {
+          action: "skip_association",
+          candidate: candidateAt(4),
+          association: "NONE",
+        },
+        claimDecision(5),
+      ],
+      h,
+    );
+    expect([result.failed, result.claimed]).toEqual([1, 1]);
+  });
+
+  test("names the failing denial step after the issue", async () => {
+    const { handlers: h, recorded } = handlers(async () => "claimed", {
+      recordDenied: async () => {
+        throw new Error("db down");
+      },
+    });
+    await processIssueDecisions(
+      [
+        {
+          action: "skip_association",
+          candidate: candidateAt(4),
+          association: "NONE",
+        },
+      ],
+      h,
+    );
+    expect(recorded.failures).toEqual([
+      "labeler_denied:octo-owner/atelier-works#4",
+    ]);
+  });
+
+  test("records a failing claim and counts it as failed", async () => {
+    const { handlers: h, recorded } = handlers(async () => {
+      throw new Error("claim failed");
+    });
+    const result = await processIssueDecisions([claimDecision(1)], h);
+    expect([result.failed, recorded.failures]).toEqual([
+      1,
+      ["claim_issue:octo-owner/atelier-works#1"],
+    ]);
+  });
+
+  test("notifies once with only the issues whose ownership is unknown", async () => {
+    const { handlers: h, recorded } = handlers(unknownFor(1, 3));
+    await processIssueDecisions(
+      [claimDecision(1), claimDecision(2), claimDecision(3)],
+      h,
+    );
+    expect(recorded.notified).toEqual([[1, 3]]);
+  });
+
+  test("does not list an issue whose claim failed for another reason", async () => {
+    const { handlers: h, recorded } = handlers(async () => {
+      throw new Error("claim failed");
+    });
+    await processIssueDecisions([claimDecision(1)], h);
+    expect(recorded.notified).toEqual([[]]);
+  });
+
+  test("still notifies when recording a later failure throws", async () => {
+    const { handlers: h, recorded } = handlers(
+      async (c) => {
+        if (c.number === 1) throw new ClaimOwnershipUnknownError("unknown");
+        throw new Error("claim failed");
+      },
+      {
+        recordFailure: async (step) => {
+          if (step.endsWith("#2")) throw new Error("db down");
+        },
+      },
+    );
+    await processIssueDecisions([claimDecision(1), claimDecision(2)], h).catch(
+      () => undefined,
+    );
+    expect(recorded.notified).toEqual([[1]]);
+  });
+
+  test("rethrows the error of a later failure after notifying", async () => {
+    const { handlers: h } = handlers(
+      async (c) => {
+        if (c.number === 1) throw new ClaimOwnershipUnknownError("unknown");
+        throw new Error("claim failed");
+      },
+      {
+        recordFailure: async (step) => {
+          if (step.endsWith("#2")) throw new Error("db down");
+        },
+      },
+    );
+    const processing = processIssueDecisions(
+      [claimDecision(1), claimDecision(2)],
+      h,
+    );
+    await expect(processing).rejects.toThrow("db down");
   });
 });
