@@ -33,6 +33,14 @@ const DEPENDENCY_FIELDS: readonly string[] = [
   "peerDependencies",
 ];
 
+// `npm:<name>`または`npm:<name>@<指定>`。名前はスコープ付きでもよい。
+const NPM_ALIAS = /^npm:((?:@[A-Za-z0-9._-]+\/)?[A-Za-z0-9._-]+)(?:@(.+))?$/;
+
+// 演算子(`^~<>=v`と空白)の後に数字が来る版・範囲。`+`はbuild metadata、`|`と`*`は範囲の記法。
+const SEMVER_RANGE = /^[\^~<>=v ]*\d[0-9A-Za-z.+~^<>=|* -]*$/;
+
+const DIST_TAG = /^[A-Za-z][A-Za-z0-9_-]*$/;
+
 const SHA512_INTEGRITY = /^sha512-[A-Za-z0-9+/]+={0,2}$/;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -51,10 +59,16 @@ function isInsideConsole(path: string): boolean {
 
 /**
  * 依存の指定(package.jsonの値、またはbun.lockの`name@resolution`の`resolution`)を分類する。
- * `/`を含む指定は、`npm:`の別名を除いてGitHubの省略形かパスなので拒む。
+ * 許可リスト方式で、次のどれにも当てはまらない形はすべて`forbidden`にする。
+ * - semverの版または範囲(先頭の演算子の後に数字が来る。`19.3.0`、`^1.2.0`、`>=1 <2 || 3.x`)
+ * - dist-tag(英字で始まり、英数字・`_`・`-`だけ。`latest`)。`.`を許さないので`foo.tgz`は通らない
+ * - `npm:<name>`・`npm:<name>@<指定>`(中の指定が再帰的にregistryであること)
+ * - `file:`・`link:`でconsole/の中を指す相対パス(`local`)
+ * `:`・`/`・`@`・`#`は上のどの形にも現れないので、URLやGitHubの省略形は自然に弾かれる。
  */
 export function classifySpecifier(specifier: string): SpecifierKind {
-  if (FORBIDDEN_PREFIXES.some((prefix) => specifier.startsWith(prefix))) {
+  const lower = specifier.toLowerCase();
+  if (FORBIDDEN_PREFIXES.some((prefix) => lower.startsWith(prefix))) {
     return "forbidden";
   }
   for (const prefix of LOCAL_PREFIXES) {
@@ -64,8 +78,16 @@ export function classifySpecifier(specifier: string): SpecifierKind {
         : "forbidden";
     }
   }
-  if (specifier.startsWith("npm:")) return "registry";
-  return specifier.includes("/") ? "forbidden" : "registry";
+  const alias = NPM_ALIAS.exec(specifier);
+  if (alias !== null) {
+    const inner = alias[2];
+    if (inner === undefined) return "registry";
+    return classifySpecifier(inner) === "registry" ? "registry" : "forbidden";
+  }
+  if (SEMVER_RANGE.test(specifier) || DIST_TAG.test(specifier)) {
+    return "registry";
+  }
+  return "forbidden";
 }
 
 /**
@@ -138,6 +160,48 @@ function checkWorkspaces(workspaces: unknown): LockfileViolation[] {
   return violations;
 }
 
+const KNOWN_TOP_LEVEL_KEYS: ReadonlySet<string> = new Set([
+  "lockfileVersion",
+  "configVersion",
+  "workspaces",
+  "packages",
+  "overrides",
+  "catalog",
+  "catalogs",
+  "trustedDependencies",
+  "patchedDependencies",
+]);
+
+/** 名前から指定への対応表を検査し、registry以外を指す値を違反にする。 */
+function checkSpecifierMap(prefix: string, map: unknown): LockfileViolation[] {
+  if (!isRecord(map)) {
+    return [{ key: prefix, reason: `${prefix} is malformed` }];
+  }
+  const violations: LockfileViolation[] = [];
+  for (const [name, specifier] of Object.entries(map)) {
+    if (
+      typeof specifier !== "string" ||
+      classifySpecifier(specifier) === "forbidden"
+    ) {
+      violations.push({
+        key: `${prefix}.${name}`,
+        reason:
+          "specifier must be a registry version or a path inside console/",
+      });
+    }
+  }
+  return violations;
+}
+
+function checkCatalogs(catalogs: unknown): LockfileViolation[] {
+  if (!isRecord(catalogs)) {
+    return [{ key: "catalogs", reason: "catalogs is malformed" }];
+  }
+  return Object.entries(catalogs).flatMap(([name, catalog]) =>
+    checkSpecifierMap(`catalogs.${name}`, catalog),
+  );
+}
+
 /** 解析済みのbun.lock全体を検査し、違反の一覧を返す。 */
 export function checkConsoleLockfile(lock: unknown): LockfileViolation[] {
   if (!isRecord(lock)) {
@@ -150,11 +214,31 @@ export function checkConsoleLockfile(lock: unknown): LockfileViolation[] {
       reason: "lockfileVersion is missing",
     });
   }
+  for (const key of Object.keys(lock)) {
+    if (!KNOWN_TOP_LEVEL_KEYS.has(key)) {
+      violations.push({ key, reason: "unknown top-level key" });
+    }
+  }
   if ("trustedDependencies" in lock) {
     violations.push({
       key: "trustedDependencies",
       reason: "trustedDependencies lets dependency install scripts run",
     });
+  }
+  if ("patchedDependencies" in lock) {
+    violations.push({
+      key: "patchedDependencies",
+      reason: "patchedDependencies applies code that the registry did not ship",
+    });
+  }
+  if ("overrides" in lock) {
+    violations.push(...checkSpecifierMap("overrides", lock.overrides));
+  }
+  if ("catalog" in lock) {
+    violations.push(...checkSpecifierMap("catalog", lock.catalog));
+  }
+  if ("catalogs" in lock) {
+    violations.push(...checkCatalogs(lock.catalogs));
   }
   violations.push(...checkWorkspaces(lock.workspaces));
   const packages = lock.packages;

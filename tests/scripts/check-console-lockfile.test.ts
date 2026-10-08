@@ -69,6 +69,34 @@ describe("classifySpecifier", () => {
   test("forbids file: to the home directory", () => {
     expect(classifySpecifier("file:~/x")).toBe("forbidden");
   });
+
+  test("forbids an upper-case FILE: prefix", () => {
+    expect(classifySpecifier("FILE:x")).toBe("forbidden");
+  });
+
+  test("forbids an ssh: URL", () => {
+    expect(classifySpecifier("ssh:x")).toBe("forbidden");
+  });
+
+  test("forbids a bare tarball file name", () => {
+    expect(classifySpecifier("foo.tgz")).toBe("forbidden");
+  });
+
+  test("forbids an npm alias to a GitHub shorthand", () => {
+    expect(classifySpecifier("npm:x@github:o/r")).toBe("forbidden");
+  });
+
+  test("forbids a catalog: reference", () => {
+    expect(classifySpecifier("catalog:")).toBe("forbidden");
+  });
+
+  test("treats a dist-tag as a registry dependency", () => {
+    expect(classifySpecifier("latest")).toBe("registry");
+  });
+
+  test("treats a hyphen range as a registry dependency", () => {
+    expect(classifySpecifier(">=1.0.0 <2.0.0 || 3.x")).toBe("registry");
+  });
 });
 
 describe("checkPackageEntry", () => {
@@ -111,6 +139,16 @@ describe("checkPackageEntry", () => {
 
   test("accepts a file: dependency inside console/", () => {
     expect(checkPackageEntry(["x@file:./vendor/x", {}])).toBeNull();
+  });
+
+  test("rejects an npm alias that hides a git dependency", () => {
+    expect(
+      checkPackageEntry(["x@npm:y@git+https://h/r", "", {}, INTEGRITY]),
+    ).not.toBeNull();
+  });
+
+  test("rejects an upper-case FILE: dependency", () => {
+    expect(checkPackageEntry(["x@FILE:foo", "", {}, INTEGRITY])).not.toBeNull();
   });
 
   test("rejects a malformed entry", () => {
@@ -162,6 +200,60 @@ describe("checkConsoleLockfile", () => {
     expect(
       checkConsoleLockfile(lock).map((violation) => violation.key),
     ).toEqual(["trustedDependencies"]);
+  });
+
+  test("reports patchedDependencies", () => {
+    const lock = lockWith({});
+    lock.patchedDependencies = { "react@19.3.0": "patches/react.patch" };
+    expect(
+      checkConsoleLockfile(lock).map((violation) => violation.key),
+    ).toEqual(["patchedDependencies"]);
+  });
+
+  test("reports an override that points at GitHub", () => {
+    const lock = lockWith({});
+    lock.overrides = { react: "github:o/r" };
+    expect(
+      checkConsoleLockfile(lock).map((violation) => violation.key),
+    ).toEqual(["overrides.react"]);
+  });
+
+  test("accepts an override to a registry version", () => {
+    const lock = lockWith({});
+    lock.overrides = { react: "19.3.0" };
+    expect(checkConsoleLockfile(lock)).toEqual([]);
+  });
+
+  test("reports a catalog entry that points at a tarball", () => {
+    const lock = lockWith({});
+    lock.catalog = { react: "https://example.com/x.tgz" };
+    expect(
+      checkConsoleLockfile(lock).map((violation) => violation.key),
+    ).toEqual(["catalog.react"]);
+  });
+
+  test("reports a named catalog entry that points at git", () => {
+    const lock = lockWith({});
+    lock.catalogs = { ui: { react: "git+https://h/r" } };
+    expect(
+      checkConsoleLockfile(lock).map((violation) => violation.key),
+    ).toEqual(["catalogs.ui.react"]);
+  });
+
+  test("reports a malformed overrides value", () => {
+    const lock = lockWith({});
+    lock.overrides = "react";
+    expect(
+      checkConsoleLockfile(lock).map((violation) => violation.key),
+    ).toEqual(["overrides"]);
+  });
+
+  test("reports an unknown top-level key", () => {
+    const lock = lockWith({});
+    lock.mystery = {};
+    expect(
+      checkConsoleLockfile(lock).map((violation) => violation.key),
+    ).toEqual(["mystery"]);
   });
 
   test("reports a lockfile that is not an object", () => {
