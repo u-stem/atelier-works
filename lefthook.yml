@@ -33,6 +33,14 @@ pre-commit:
             glob: "*.md"
             run: mise exec -- bun run scripts/lint-docs.ts {staged_files}
 
+# リンクされたgit worktreeに、メイン作業ツリーの`.wmill`(wmillのログインプロファイル)を
+# シンボリックリンクで張る。`git worktree add`もこのフックを起こす。
+# メイン作業ツリーでは何もしない。
+post-checkout:
+  commands:
+    link-worktree-wmill:
+      run: scripts/link-worktree-wmill.sh
+
 commit-msg:
   commands:
     check-message:

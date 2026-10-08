@@ -151,7 +151,8 @@ bun_eval() { run_in_repo bun -e "$1"; }
 harden_wmill_config_dir() {
   if [ -n "${WMILL_CONFIG_DIR:-}" ] && [ -d "${WMILL_CONFIG_DIR}" ]; then
     chmod 700 "${WMILL_CONFIG_DIR}" 2>/dev/null || true
-    find "${WMILL_CONFIG_DIR}" -type f -name 'remotes*.ndjson' -exec chmod 600 {} + 2>/dev/null || true
+    # git worktreeでは設定ディレクトリがシンボリックリンクなので、`-H`で開始点のリンクをたどる。
+    find -H "${WMILL_CONFIG_DIR}" -type f -name 'remotes*.ndjson' -exec chmod 600 {} + 2>/dev/null || true
   fi
 }
 

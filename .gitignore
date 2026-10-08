@@ -1,6 +1,7 @@
 node_modules/
 console/dist/
-.wmill/
+# 末尾にスラッシュを付けない。git worktreeに張る`.wmill`のシンボリックリンクも除外するため。
+.wmill
 infra/.env
 infra/secrets.env
 .env

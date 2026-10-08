@@ -105,6 +105,7 @@ mise exec -- sh -c 'test -n "$DB_PASSWORD" && echo ok'
 | フック | 実行するもの |
 | --- | --- |
 | pre-commit | `f/`の下をステージしたときは、先に`scripts/generate-metadata-staged.sh`を実行する。メタデータを作り直し、変わったlockとスキーマのファイルをステージする。続けて、biome、`as`の検出、`§`の検出、gitleaks、`wmill lint f`、文書の検査を並列に実行する |
+| post-checkout | リンクされたgit worktreeでは、`scripts/link-worktree-wmill.sh`が`.wmill`をメイン作業ツリーの`.wmill`へのシンボリックリンクにする。メイン作業ツリーでは何もしない |
 | commit-msg | `scripts/check-commit-msg.sh`でコミットメッセージの規約を検査する |
 | pre-push | `mise run check`を実行する。pushに`f/`、`dependencies/`、`wmill.yaml`、`wmill-lock.yaml`の変更があれば、`mise run metadata:check`で古いメタデータを見つけてpushを止める |
 
@@ -138,6 +139,32 @@ PRと`main`以外へのpushでは、次のどれにも触れないとき、検�
 基点や差分を求められないときは、安全のために検査する。
 
 フックを飛ばしてコミットしたPRは、手元で`mise run metadata`を実行してpushし直すまで、このジョブで失敗する。
+
+### git worktreeのログイン情報
+
+`.wmill`はwmillのログインプロファイルを置くディレクトリで、gitで管理しない。
+`git worktree add`で作った作業ツリーには存在しないため、そのままではメタデータのフックが「No workspace profile found」で失敗する。
+post-checkoutのフックは、メイン作業ツリーの`.wmill`へのシンボリックリンクを作業ツリーに張って、この失敗を防ぐ。
+
+リンクを張るのは、メイン作業ツリーに`.wmill`があり、作業ツリーの`.wmill`が次のどれかのときだけである。
+
+- 存在しない
+- 空のディレクトリ
+- リンク先が無いシンボリックリンク
+
+空でないディレクトリと、リンク先があるシンボリックリンクは、作業ツリー自身のログイン情報を消さないために残す。
+リンクを張れなかったときも、フックは警告だけを出して成功で終わる。
+フックが失敗するとcheckoutまで失敗するためである。
+
+ログイン情報は複製せず、すべての作業ツリーで共有する。
+1回のログインで、すべての作業ツリーのメタデータのフックが動くようにするためである。
+そのため、1つの作業ツリーで再ログイン、`mise run bootstrap`、接続先のワークスペースの切り替えのどれかを行うと、ほかのすべての作業ツリーにも反映される。
+`mise run bootstrap`がトークンのファイルに行う権限の制限も、リンクをたどって共有先のディレクトリに及ぶ。
+メイン作業ツリーに`.wmill`が無いときは、先にメイン作業ツリーで`mise run bootstrap`を実行する。
+
+既存のクローンでは、`mise run setup`(または`lefthook install`)を再実行すると、post-checkoutのフックが入る。
+フックを入れる前に作った作業ツリーには、次のcheckoutでリンクが張られる。
+すぐに張るときは、その作業ツリーで`scripts/link-worktree-wmill.sh`を実行する。
 
 ## 自己更新の設定
 

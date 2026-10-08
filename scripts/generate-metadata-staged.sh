@@ -30,7 +30,8 @@ before_hashes_file="$(mktemp)"
 after_hashes_file="$(mktemp)"
 before_untracked_file="$(mktemp)"
 after_untracked_file="$(mktemp)"
-trap 'rm -f "$before_hashes_file" "$after_hashes_file" "$before_untracked_file" "$after_untracked_file"' EXIT
+wmill_output_file="$(mktemp)"
+trap 'rm -f "$before_hashes_file" "$after_hashes_file" "$before_untracked_file" "$after_untracked_file" "$wmill_output_file"' EXIT
 
 # 追跡中のファイル(`wmill-lock.yaml`と`f/`)ごとに`<path>\t<hash>`を
 # `git ls-files`の順で書き、前後のファイルを行ごとに比べられるようにする。
@@ -50,9 +51,16 @@ hash_tracked_files() {
 hash_tracked_files "$before_hashes_file"
 git ls-files --others --exclude-standard -z -- f >"$before_untracked_file"
 
-if ! wmill generate-metadata --yes; then
-  cat >&2 <<'MESSAGE'
+# 失敗の原因を出力から見分けるため、出力を残しながらそのまま表示する。
+if ! wmill generate-metadata --yes 2>&1 | tee "$wmill_output_file"; then
+  if grep -q "No workspace profile found" "$wmill_output_file"; then
+    "$repo_root/scripts/print-wmill-profile-hint.sh" >&2
+  else
+    cat >&2 <<'MESSAGE'
 ローカルWindmillに接続できませんでした。`mise run up`で起動してから再度コミットしてください。
+MESSAGE
+  fi
+  cat >&2 <<'MESSAGE'
 このpre-commitフックを一時的に飛ばす場合は`LEFTHOOK_EXCLUDE=wmill-metadata git commit ...`を使ってください(push前に`mise run metadata`で追従させること)。
 MESSAGE
   exit 1
