@@ -9,6 +9,8 @@ import {
   ensureLabel,
   findIssueByMarker,
   findOpenPullRequestByHead,
+  GITHUB_RATE_LIMIT_MAX_WAIT_MS,
+  GitHubRateLimitError,
   getBranchProtected,
   getIssue,
   getIssueTimeline,
@@ -170,6 +172,168 @@ describe("getViewer", () => {
     await expect(getViewer({ run: fake.run, ghToken: "tok" })).rejects.toThrow(
       /unexpected response shape/,
     );
+  });
+});
+
+describe("rate limit wait cap", () => {
+  const NOW = new Date("2026-10-08T00:00:00Z");
+  const nowEpochSeconds = NOW.getTime() / 1000;
+
+  /** `x-ratelimit-reset`が今から`seconds`秒後を指す一次レート制限の応答。 */
+  function primaryLimited(seconds: number): CommandResult {
+    return ok(
+      ghApiStdout(
+        403,
+        { message: "API rate limit exceeded" },
+        {
+          "x-ratelimit-remaining": "0",
+          "x-ratelimit-reset": String(nowEpochSeconds + seconds),
+        },
+      ),
+    );
+  }
+
+  /** `retry-after`が`seconds`秒の二次レート制限の応答。 */
+  function secondaryLimited(seconds: number): CommandResult {
+    return ok(
+      ghApiStdout(
+        403,
+        { message: "secondary rate limit" },
+        { "retry-after": String(seconds) },
+      ),
+    );
+  }
+
+  const viewerOk = ghApiOk({ login: "factory-bot", id: 12345 });
+
+  test("waits the retry-after duration when it is within the cap", async () => {
+    const sleeps: number[] = [];
+    const fake = createFakeCommandRunner([secondaryLimited(30), viewerOk]);
+    await getViewer({
+      run: fake.run,
+      ghToken: "tok",
+      now: () => NOW,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+    });
+    expect(sleeps).toEqual([30_000]);
+  });
+
+  test("waits exactly the cap when the reset is exactly the cap away", async () => {
+    const sleeps: number[] = [];
+    const fake = createFakeCommandRunner([
+      primaryLimited(GITHUB_RATE_LIMIT_MAX_WAIT_MS / 1000),
+      viewerOk,
+    ]);
+    await getViewer({
+      run: fake.run,
+      ghToken: "tok",
+      now: () => NOW,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+    });
+    expect(sleeps).toEqual([GITHUB_RATE_LIMIT_MAX_WAIT_MS]);
+  });
+
+  test("throws GitHubRateLimitError when the reset is beyond the cap", async () => {
+    const fake = createFakeCommandRunner([primaryLimited(3600)]);
+    await expect(
+      getViewer({
+        run: fake.run,
+        ghToken: "tok",
+        now: () => NOW,
+        sleep: async () => {},
+      }),
+    ).rejects.toBeInstanceOf(GitHubRateLimitError);
+  });
+
+  test("does not sleep when the reset is beyond the cap", async () => {
+    const sleeps: number[] = [];
+    const fake = createFakeCommandRunner([primaryLimited(3600)]);
+    await getViewer({
+      run: fake.run,
+      ghToken: "tok",
+      now: () => NOW,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+    }).catch(() => {});
+    expect(sleeps).toEqual([]);
+  });
+
+  test("does not resend a POST when the wait is beyond the cap", async () => {
+    const fake = createFakeCommandRunner([primaryLimited(3600)]);
+    await createPrReview(
+      { run: fake.run, ghToken: "tok", now: () => NOW, sleep: async () => {} },
+      "acme",
+      "widgets",
+      7,
+      { event: "COMMENT", body: "review", comments: [] },
+    ).catch(() => {});
+    expect(fake.calls.length).toBe(1);
+  });
+
+  test("throws GitHubRateLimitError when retry-after is beyond the cap", async () => {
+    const fake = createFakeCommandRunner([
+      secondaryLimited(GITHUB_RATE_LIMIT_MAX_WAIT_MS / 1000 + 1),
+    ]);
+    await expect(
+      getViewer({
+        run: fake.run,
+        ghToken: "tok",
+        now: () => NOW,
+        sleep: async () => {},
+      }),
+    ).rejects.toBeInstanceOf(GitHubRateLimitError);
+  });
+
+  test("throws GitHubRateLimitError when the retry is rate limited again", async () => {
+    const fake = createFakeCommandRunner([
+      secondaryLimited(1),
+      secondaryLimited(1),
+    ]);
+    await expect(
+      getViewer({
+        run: fake.run,
+        ghToken: "tok",
+        now: () => NOW,
+        sleep: async () => {},
+      }),
+    ).rejects.toBeInstanceOf(GitHubRateLimitError);
+  });
+
+  test("names the endpoint and the required wait in the error message", async () => {
+    const fake = createFakeCommandRunner([primaryLimited(3600)]);
+    await expect(
+      getViewer({
+        run: fake.run,
+        ghToken: "tok",
+        now: () => NOW,
+        sleep: async () => {},
+      }),
+    ).rejects.toThrow(/GitHub rate limit on user: resets in 3600s/);
+  });
+
+  test("says the request was retried once when the retry is rate limited again", async () => {
+    const fake = createFakeCommandRunner([
+      secondaryLimited(1),
+      secondaryLimited(5),
+    ]);
+    await expect(
+      getViewer({
+        run: fake.run,
+        ghToken: "tok",
+        now: () => NOW,
+        sleep: async () => {},
+      }),
+    ).rejects.toThrow(/still limited after waiting once \(resets in 5s\)/);
+  });
+
+  test("sets the error name so on_error_flow can tell it apart", () => {
+    const err = new GitHubRateLimitError("user", 3_600_000, false);
+    expect(err.name).toBe("GitHubRateLimitError");
   });
 });
 

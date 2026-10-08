@@ -1,9 +1,11 @@
 // pr_fixとpr_reviewのflow.yamlが各ステップに付けるWindmillのtimeoutのテスト。
 // 時間設定に左右されるステップの値は、`pr_workflow_support.ts`の定数と一致することを確かめる。
+// GitHubのrate limitの待ちの上限が、どのステップのtimeoutよりも短いことも確かめる。
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { GITHUB_RATE_LIMIT_MAX_WAIT_MS } from "../../f/factory/lib/github.ts";
 import {
   PR_FIX_APPLY_STEP_TIMEOUT_SEC,
   PR_FIX_VERIFY_STEP_TIMEOUT_SEC,
@@ -70,6 +72,24 @@ describe("pr_fix flow.yaml", () => {
     expect(
       PR_FIX_FLOW.slice(PR_FIX_FLOW.indexOf("failure_module:")),
     ).not.toContain("timeout:");
+  });
+});
+
+describe("GitHub rate limit wait cap", () => {
+  /** flow.yamlに書いたstatic timeout(秒)をすべて返す。 */
+  function staticTimeoutsSec(flow: string): number[] {
+    return [
+      ...flow.matchAll(/^ {6}timeout:\n {8}type: static\n {8}value: (\d+)$/gm),
+    ].map((match) => Number(match[1]));
+  }
+
+  test("stays below the shortest step timeout of the pr_fix, pr_review and implement flows", () => {
+    const shortestSec = Math.min(
+      ...staticTimeoutsSec(PR_FIX_FLOW),
+      ...staticTimeoutsSec(PR_REVIEW_FLOW),
+      ...staticTimeoutsSec(readFlow("implement")),
+    );
+    expect(GITHUB_RATE_LIMIT_MAX_WAIT_MS).toBeLessThan(shortestSec * 1000);
   });
 });
 

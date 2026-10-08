@@ -1,14 +1,16 @@
 // `pr_fix_finish.ts`が使う`pr_workflow_support.ts`の`decideFixFinishAction`、
-// `deriveFallbackReviewers`、`evaluateRerouteGuard`、`renderFixReply`、
-// `shouldAdvanceWatermarks`のテスト。
+// `deriveFallbackReviewers`、`evaluateRerouteGuard`、`listReviewThreadsBestEffort`、
+// `renderFixReply`、`shouldAdvanceWatermarks`のテスト。
 // requirements_gapの差し戻しの手順は`pr_fix_reroute.test.ts`でテストする。
 
 import { describe, expect, test } from "bun:test";
+import type { ReviewThread } from "../../f/factory/lib/github.ts";
 import type { FixReply } from "../../f/factory/lib/types.ts";
 import {
   decideFixFinishAction,
   deriveFallbackReviewers,
   evaluateRerouteGuard,
+  listReviewThreadsBestEffort,
   renderFixReply,
   shouldAdvanceWatermarks,
 } from "../../f/factory/steps/pr_workflow_support.ts";
@@ -77,6 +79,52 @@ describe("deriveFallbackReviewers", () => {
 
   test("returns an empty array when there are no authors", () => {
     expect(deriveFallbackReviewers([], [])).toEqual([]);
+  });
+});
+
+describe("listReviewThreadsBestEffort", () => {
+  const thread: ReviewThread = {
+    id: "T_1",
+    isResolved: false,
+    path: "src/a.ts",
+    line: 3,
+    firstCommentAuthorLogin: "factory-bot",
+    firstCommentBody: "[MUST] fix this",
+    lastCommentAuthorLogin: "factory-bot",
+    lastCommentBody: "[MUST] fix this",
+    firstCommentDatabaseId: 11,
+    allCommentIds: [11],
+  };
+
+  test("returns the loaded threads", async () => {
+    const threads = await listReviewThreadsBestEffort(
+      async () => [thread],
+      () => {},
+    );
+    expect(threads).toEqual([thread]);
+  });
+
+  test("returns an empty list when loading fails (after the push, a failure must not abort the step)", async () => {
+    const threads = await listReviewThreadsBestEffort(
+      async () => {
+        throw new Error("GitHub rate limit on graphql");
+      },
+      () => {},
+    );
+    expect(threads).toEqual([]);
+  });
+
+  test("reports the failure message", async () => {
+    const reported: string[] = [];
+    await listReviewThreadsBestEffort(
+      async () => {
+        throw new Error("GitHub rate limit on graphql");
+      },
+      (message) => {
+        reported.push(message);
+      },
+    );
+    expect(reported).toEqual(["GitHub rate limit on graphql"]);
   });
 });
 

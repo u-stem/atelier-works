@@ -2489,6 +2489,25 @@ export function selectProposeIssueReplies(
 }
 
 /**
+ * `load`でレビュースレッドを取得し、失敗したら`onError`に理由を渡して空の一覧を返す。
+ * `pr_fix_finish.ts`はpushの後にスレッドを取得する。ここで例外を投げてstepが失敗すると、
+ * pushしたのに返信・記録・状態の遷移が無いまま残り、再実行で同じ修正をやり直しうる。
+ * スレッドは`propose_issue`の行に付けるidを求めるためのベストエフォートの情報なので、
+ * 取れなければidを付けずに続ける。
+ */
+export async function listReviewThreadsBestEffort(
+  load: () => Promise<ReviewThread[]>,
+  onError: (message: string) => void,
+): Promise<ReviewThread[]> {
+  try {
+    return await load();
+  } catch (err) {
+    onError(maskSecrets(err instanceof Error ? err.message : String(err)));
+    return [];
+  }
+}
+
+/**
  * `threads`から、`reviewCommentId`を含むレビュースレッドを探し、そのidを返す。
  * `pr_fix_finish.ts`が、新しく記録する`propose_issue`の行に
  * GraphQLのスレッドidを付けるのに使う。

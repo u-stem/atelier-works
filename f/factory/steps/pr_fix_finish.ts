@@ -42,6 +42,7 @@ import {
   describeReason,
   evaluateRerouteGuard,
   filterKnownReplies,
+  listReviewThreadsBestEffort,
   matchReviewThreadForComment,
   nextActionFor,
   type PrFixFinishOutcome,
@@ -371,7 +372,7 @@ export async function main(
    * 行を登録した後に返信の投稿が失敗しても、致命的ではない。
    * GitHubに返信が出るかどうかに関わらず、提案はConsoleのInboxに見えている。
    * `thread_id`は、このラウンドの全提案で共有する1回の`listReviewThreads`から
-   * ベストエフォートで求める。
+   * ベストエフォートで求める。取得に失敗したら(rate limitを含む)`thread_id`を付けずに続ける。
    * 通常のIssueコメントにはレビュースレッドが無いので、
    * インラインの提案が1つ以上あるときだけ取得する。
    */
@@ -384,7 +385,14 @@ export async function main(
       return original !== undefined && original.path.length > 0;
     });
     const threads = hasInlineProposal
-      ? await listReviewThreads(client, owner, repo, pr_number)
+      ? await listReviewThreadsBestEffort(
+          () => listReviewThreads(client, owner, repo, pr_number),
+          (message) => {
+            log.warn("failed to list review threads for issue proposals", {
+              error: message,
+            });
+          },
+        )
       : [];
 
     for (const reply of repliesToPost) {
