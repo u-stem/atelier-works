@@ -13,6 +13,8 @@ import {
   isAllowedDownloadUrl,
   isLockStale,
   isReadablePin,
+  isRevokedRelease,
+  mergeRevokedState,
   needsDeploy,
   parseArtifacts,
   parseCurrentLink,
@@ -22,14 +24,18 @@ import {
   parseManifest,
   parsePinContent,
   parsePinRevoked,
+  parseRevokedState,
   parseUnpinFlags,
   parseWorkflowRuns,
+  pruneRevokedState,
+  REVOKED_DIGEST_LIMIT,
   referencedAssetNames,
   selectAssetsToDelete,
   selectIdenticalReleases,
   selectLatestRun,
   selectReleasesToDelete,
   selectRevokedAssets,
+  selectRevokedReleases,
   selectRollbackTarget,
   verifyRelease,
   type WorkflowRun,
@@ -50,6 +56,11 @@ function manifestOf(
   files: Record<string, string>,
 ): ConsoleManifest {
   return { version: 1, sha, files: new Map(Object.entries(files)) };
+}
+
+/** `index.html`だけを持つ版の中身のsha256。 */
+function contentDigestOf(indexHash: string): string {
+  return contentDigest(manifestOf(SHA_A, { "index.html": indexHash }));
 }
 
 function run(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
@@ -1074,6 +1085,127 @@ describe("describeUnpinRefusal for an unreadable pin", () => {
     expect(
       describeUnpinRefusal({ ok: false, reason: "pin_unreadable" }),
     ).toContain("--force");
+  });
+
+  test("tells the operator to check the latest CI result first", () => {
+    expect(
+      describeUnpinRefusal({ ok: false, reason: "pin_unreadable" }),
+    ).toContain("Check the latest CI result first.");
+  });
+});
+
+describe("parseRevokedState", () => {
+  test("reads the shas and the content digests", () => {
+    expect(
+      parseRevokedState({ shas: [SHA_A, "x"], digests: [HASH_1, 1, "y"] }),
+    ).toEqual({ shas: [SHA_A], digests: [HASH_1] });
+  });
+
+  test("returns an empty state for a missing file", () => {
+    expect(parseRevokedState(null)).toEqual({ shas: [], digests: [] });
+  });
+
+  test("drops duplicates", () => {
+    expect(parseRevokedState({ shas: [SHA_A, SHA_A], digests: [] })).toEqual({
+      shas: [SHA_A],
+      digests: [],
+    });
+  });
+});
+
+describe("mergeRevokedState", () => {
+  test("adds the new shas and digests to the state", () => {
+    expect(
+      mergeRevokedState(
+        { shas: [SHA_A], digests: [HASH_1] },
+        [SHA_B],
+        [HASH_2],
+      ),
+    ).toEqual({ shas: [SHA_A, SHA_B], digests: [HASH_1, HASH_2] });
+  });
+
+  test("does not repeat an entry that is already recorded", () => {
+    expect(
+      mergeRevokedState(
+        { shas: [SHA_A], digests: [HASH_1] },
+        [SHA_A],
+        [HASH_1],
+      ),
+    ).toEqual({ shas: [SHA_A], digests: [HASH_1] });
+  });
+
+  test("keeps the newest digests beyond the limit", () => {
+    const digests = Array.from({ length: REVOKED_DIGEST_LIMIT }, (_, i) =>
+      i.toString(16).padStart(64, "0"),
+    );
+    expect(
+      mergeRevokedState({ shas: [], digests }, [], [HASH_2]).digests.at(-1),
+    ).toBe(HASH_2);
+  });
+
+  test("caps the number of digests", () => {
+    const digests = Array.from({ length: REVOKED_DIGEST_LIMIT }, (_, i) =>
+      i.toString(16).padStart(64, "0"),
+    );
+    expect(
+      mergeRevokedState({ shas: [], digests }, [], [HASH_2]).digests,
+    ).toHaveLength(REVOKED_DIGEST_LIMIT);
+  });
+});
+
+describe("isRevokedRelease", () => {
+  const state = { shas: [SHA_A], digests: [contentDigestOf(HASH_2)] };
+
+  test("matches a revoked sha", () => {
+    expect(isRevokedRelease(SHA_A, null, state)).toBe(true);
+  });
+
+  test("matches a release with revoked files under a new sha", () => {
+    expect(
+      isRevokedRelease(
+        SHA_B,
+        manifestOf(SHA_B, { "index.html": HASH_2 }),
+        state,
+      ),
+    ).toBe(true);
+  });
+
+  test("does not match a release with other files", () => {
+    expect(
+      isRevokedRelease(
+        SHA_B,
+        manifestOf(SHA_B, { "index.html": HASH_1 }),
+        state,
+      ),
+    ).toBe(false);
+  });
+
+  test("does not match a release whose manifest could not be read", () => {
+    expect(isRevokedRelease(SHA_B, null, state)).toBe(false);
+  });
+});
+
+describe("selectRevokedReleases", () => {
+  test("returns the existing releases that are revoked by sha or by files", () => {
+    const manifests = new Map([
+      [SHA_A, manifestOf(SHA_A, { "index.html": HASH_1 })],
+      [SHA_B, manifestOf(SHA_B, { "index.html": HASH_2 })],
+      [SHA_C, manifestOf(SHA_C, { "index.html": HASH_1 })],
+    ]);
+    expect(
+      selectRevokedReleases([SHA_A, SHA_B, SHA_C], manifests, {
+        shas: [SHA_A],
+        digests: [contentDigestOf(HASH_2)],
+      }),
+    ).toEqual([SHA_A, SHA_B]);
+  });
+});
+
+describe("pruneRevokedState", () => {
+  test("drops the shas whose releases are gone", () => {
+    expect(
+      pruneRevokedState({ shas: [SHA_A, SHA_B], digests: [HASH_1] }, [SHA_B]),
+    ).toEqual({ shas: [SHA_B], digests: [HASH_1] });
   });
 });
 

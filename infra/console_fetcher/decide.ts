@@ -539,6 +539,82 @@ export function parsePinContent(value: unknown): string[] {
 }
 
 /**
+ * 戻した元の版の記録(`revoked.json`)。`pin`を外しても残り、戻した元の版が
+ * 後から戻し先に選ばれたり、保持の対象として残ったりしないようにする。
+ */
+export type RevokedState = {
+  /** 戻した元の版のsha。消えた版は整理で外す。 */
+  readonly shas: readonly string[];
+  /** 戻した元の版の中身(`files`のsha256)。同じ中身の新しい版を見分けるために残す。 */
+  readonly digests: readonly string[];
+};
+
+/** 記録する中身のsha256の上限。超えたら古いものから捨てる。 */
+export const REVOKED_DIGEST_LIMIT = 100;
+
+/** `revoked.json`の中身を読む。形の違う要素は捨て、読めなければ空にする。 */
+export function parseRevokedState(value: unknown): RevokedState {
+  if (!isRecord(value)) return { shas: [], digests: [] };
+  const digests = Array.isArray(value.digests)
+    ? value.digests.filter(
+        (item): item is string =>
+          typeof item === "string" && SHA256_HEX.test(item),
+      )
+    : [];
+  return {
+    shas: [...new Set(parseHistory(value.shas))],
+    digests: [...new Set(digests)],
+  };
+}
+
+/** 記録に`shas`と`digests`を足す。すでにあるものは重ねず、中身は`REVOKED_DIGEST_LIMIT`個まで残す。 */
+export function mergeRevokedState(
+  state: RevokedState,
+  shas: readonly string[],
+  digests: readonly string[],
+): RevokedState {
+  return {
+    shas: [...new Set([...state.shas, ...shas])],
+    digests: [...new Set([...state.digests, ...digests])].slice(
+      -REVOKED_DIGEST_LIMIT,
+    ),
+  };
+}
+
+/** 版が戻した元の版かを返す。shaが記録にあるか、マニフェストを読めて中身が記録にあるとき。 */
+export function isRevokedRelease(
+  sha: string,
+  manifest: ConsoleManifest | null,
+  state: RevokedState,
+): boolean {
+  if (state.shas.includes(sha)) return true;
+  return manifest !== null && state.digests.includes(contentDigest(manifest));
+}
+
+/** 残っている版のうち、戻した元の版を返す。 */
+export function selectRevokedReleases(
+  existing: readonly string[],
+  manifests: ReadonlyMap<string, ConsoleManifest | null>,
+  state: RevokedState,
+): string[] {
+  return existing.filter((sha) =>
+    isRevokedRelease(sha, manifests.get(sha) ?? null, state),
+  );
+}
+
+/** 消えた版のshaを記録から外す。中身は、同じ中身の新しい版を見分けるために残す。 */
+export function pruneRevokedState(
+  state: RevokedState,
+  existing: readonly string[],
+): RevokedState {
+  const present = new Set(existing);
+  return {
+    shas: state.shas.filter((sha) => present.has(sha)),
+    digests: state.digests,
+  };
+}
+
+/**
  * 戻した元の版だけが参照する共有の`assets/`のファイル名(`assets/`からの相対名)を返す。
  * 戻した元の版のマニフェストを読めないときは、何を消すか分からないので`null`を返す。
  * 呼び出し側は、`null`のときに版を消さず、次の回に確かめ直す。
@@ -620,7 +696,7 @@ const IGNORE_CLEANUP_HINT =
 export function describeUnpinRefusal(refusal: UnpinRefusal): string {
   switch (refusal.reason) {
     case "pin_unreadable":
-      return `Not unpinned: the pin file could not be parsed, so it is unknown which release you rolled back from and whether unpinning would serve it again. ${FORCE_HINT}`;
+      return `Not unpinned: the pin file could not be parsed, so it is unknown which release you rolled back from and whether unpinning would serve it again. Check the latest CI result first. ${FORCE_HINT}`;
     case "latest_run_is_revoked":
       return `Not unpinned: the latest successful run on main (${refusal.sha}) is the release you rolled back from, so unpinning would serve it again. Merge a fix into main, wait until its CI succeeds, and run this again. ${FORCE_HINT}`;
     case "latest_run_has_revoked_content":

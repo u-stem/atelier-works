@@ -33,7 +33,9 @@ import {
   isCommitSha,
   isLockStale,
   isReadablePin,
+  isRevokedRelease,
   MANIFEST_FILE,
+  mergeRevokedState,
   needsDeploy,
   parseArtifacts,
   parseCurrentLink,
@@ -41,7 +43,9 @@ import {
   parseManifest,
   parsePinContent,
   parsePinRevoked,
+  parseRevokedState,
   parseWorkflowRuns,
+  pruneRevokedState,
   RELEASE_BRANCH,
   referencedAssetNames,
   selectAssetsToDelete,
@@ -49,6 +53,7 @@ import {
   selectLatestRun,
   selectReleasesToDelete,
   selectRevokedAssets,
+  selectRevokedReleases,
   selectRollbackTarget,
   type UnpinOptions,
   type UnpinResult,
@@ -107,6 +112,7 @@ type Layout = {
   readonly tmp: string;
   readonly current: string;
   readonly pin: string;
+  readonly revoked: string;
   readonly status: string;
   readonly history: string;
   readonly lock: string;
@@ -120,6 +126,7 @@ function layoutOf(root: string): Layout {
     tmp: join(root, "tmp"),
     current: join(root, "current"),
     pin: join(root, "pin"),
+    revoked: join(root, "revoked.json"),
     status: join(root, "status.json"),
     history: join(root, "history.json"),
     lock: join(root, "lock"),
@@ -589,13 +596,21 @@ async function readManifest(
 }
 
 /**
- * `releases/<sha>`のマニフェストを読め、参照する共有の`assets/`のファイルが
- * すべて通常のファイルとして揃っているかを返す。揃っていない版を配信すると、ページが壊れる。
+ * `releases/<sha>`が配信できる版かを返す。本物のディレクトリで、マニフェストを読め、
+ * 参照する共有の`assets/`のファイルがすべて通常のファイルとして揃っているとき。
+ * 揃っていない版を配信すると、ページが壊れる。取り込みの再利用と、戻し先の選択が同じ定義を使う。
+ * 読み込み済みのマニフェストがあれば`manifest`に渡す(渡さなければ読む)。
  */
-async function hasUsableFiles(layout: Layout, sha: string): Promise<boolean> {
-  const manifest = await readManifest(layout, sha);
-  if (manifest === null) return false;
-  for (const path of manifest.files.keys()) {
+async function isCompleteRelease(
+  layout: Layout,
+  sha: string,
+  manifest?: ConsoleManifest | null,
+): Promise<boolean> {
+  if (!(await isRealDirectory(join(layout.releases, sha)))) return false;
+  const parsed =
+    manifest === undefined ? await readManifest(layout, sha) : manifest;
+  if (parsed === null) return false;
+  for (const path of parsed.files.keys()) {
     if (!path.startsWith(ASSETS_PREFIX)) continue;
     const stat = await lstatOrNull(
       join(layout.assets, path.slice(ASSETS_PREFIX.length)),
@@ -605,15 +620,25 @@ async function hasUsableFiles(layout: Layout, sha: string): Promise<boolean> {
   return true;
 }
 
-/** `releases/<sha>`が本物のディレクトリで、`hasUsableFiles`を満たすかを返す。 */
-async function isCompleteRelease(
+/** `revoked.json`を読む。無いときや読めないときは空の記録。 */
+async function readRevokedState(layout: Layout) {
+  return parseRevokedState(await readJsonFile(layout.revoked));
+}
+
+/** 戻した元の版のshaと中身を`revoked.json`に足す。足すものが無ければ何もしない。 */
+async function recordRevoked(
   layout: Layout,
-  sha: string,
-): Promise<boolean> {
-  return (
-    (await isRealDirectory(join(layout.releases, sha))) &&
-    (await hasUsableFiles(layout, sha))
+  shas: readonly string[],
+  digests: readonly string[],
+): Promise<void> {
+  if (shas.length === 0 && digests.length === 0) return;
+  await mkdir(layout.tmp, { recursive: true });
+  const state = mergeRevokedState(
+    await readRevokedState(layout),
+    shas,
+    digests,
   );
+  await writeAtomically(layout, layout.revoked, `${JSON.stringify(state)}\n`);
 }
 
 /**
@@ -624,7 +649,7 @@ async function isCompleteRelease(
  * 読めないとき)は、版も消さずに警告を出す。版を消すと、残ったassetsを後から決められなくなるため。
  * 配信中でない残る版のマニフェストを読めないときは、その版を無視して消す。
  * 無視しないと、壊れた版が1つあるだけで、戻した元の版を消せなくなる。
- * 無視した版が配信されることは無い。`rollback`は、`hasUsableFiles`を満たさない版を戻し先に選ばず、
+ * 無視した版が配信されることは無い。`rollback`は、`isCompleteRelease`を満たさない版を戻し先に選ばず、
  * 取り込みは、揃っていない版を消して取り直すため。
  * 途中で止まっても、同じ`revoked`で呼び直せば続きを消せる。
  * 戻した元の版を残さず消せた(消す版が無かった場合を含む)ときだけ`true`を返す。
@@ -692,11 +717,27 @@ async function listAssetFiles(layout: Layout): Promise<AssetFile[]> {
  * `current`はここで読み直し、ディスクの今の状態で残す版を決める。
  */
 async function cleanup(deps: FetcherDeps, layout: Layout): Promise<void> {
-  const existing = (await readdir(layout.releases)).filter(isCommitSha);
+  const revokedState = await readRevokedState(layout);
   const manifests = new Map<string, ConsoleManifest | null>();
-  for (const sha of existing) {
+  for (const sha of (await readdir(layout.releases)).filter(isCommitSha)) {
     manifests.set(sha, await readManifest(layout, sha));
   }
+  // 戻した元の版は、保持の数え方にかかわらず先に消す。
+  const revoked = selectRevokedReleases(
+    [...manifests.keys()],
+    manifests,
+    revokedState,
+  );
+  if (revoked.length > 0) {
+    try {
+      await removeRevoked(layout, deps.log, revoked);
+    } catch (err) {
+      deps.log("revoked_cleanup_failed", {
+        error: describeUnexpectedError(err),
+      });
+    }
+  }
+  const existing = (await readdir(layout.releases)).filter(isCommitSha);
   const toDelete = selectReleasesToDelete(
     existing,
     await readHistory(layout),
@@ -720,6 +761,14 @@ async function cleanup(deps: FetcherDeps, layout: Layout): Promise<void> {
   );
   for (const name of stale) {
     await rm(join(layout.assets, name), { force: true });
+  }
+  const pruned = pruneRevokedState(revokedState, kept);
+  if (pruned.shas.length !== revokedState.shas.length) {
+    await writeAtomically(
+      layout,
+      layout.revoked,
+      `${JSON.stringify(pruned)}\n`,
+    );
   }
 }
 
@@ -917,7 +966,9 @@ async function tryRemoveRevoked(
 
 /**
  * currentを直前の版に戻し、pinを置く。pinがある間、runOnceは付け替えない。
- * 戻す先は、今の版と中身が違い、マニフェストとassetsが揃っている、履歴の直前の版にする。
+ * 戻す先は、今の版と中身が違い、配信できる(`isCompleteRelease`)、履歴の直前の版にする。
+ * 戻した元の版(`revoked.json`の記録にあるshaか中身の版)は、`pin`を外した後も戻し先にしない。
+ * `switchTo`は付け替えの代わりに呼ぶ関数で、テストが付け替えの失敗を再現するために差し替える。
  * pinを先に置いてから付け替え、同時に動いたrunOnceが新しい版へ戻さないようにする。
  * 付け替えに失敗したときは、pinを元の状態に戻してから失敗を投げる(戻せなくても元の失敗を投げる)。
  * pinだけが残ると、版が動かないまま自動の付け替えが止まるため。
@@ -927,14 +978,18 @@ async function tryRemoveRevoked(
  * 戻した元の版と、それと中身が同じ版は、pinの`rolled_back_from`に記録して、
  * その版と、その版だけが使うassetsを消す(戻した後も問題のscriptを読めるままにしないため)。
  * 消すのに失敗しても戻す操作は成功とし、`cleanup: "pending"`を返す。続きは次の取り込みが消す。
+ * 戻した元の版のshaと中身は、`revoked.json`にも記録する(`pin`を外しても残る)。
  * 消した版は、pinを外した後の取り込みで、最新の実行から取り直される。
  */
 export async function rollback(
   root: string,
   now: () => Date,
   log: Logger = () => {},
+  switchTo?: (sha: string) => Promise<void>,
 ): Promise<RollbackResult> {
   const layout = layoutOf(root);
+  const switchCurrentTo =
+    switchTo ?? ((sha: string) => switchCurrent(layout, sha));
   await mkdir(layout.tmp, { recursive: true });
   const currentSha = shaOf(await readCurrentLink(layout));
   const releases = (await readdirOrEmpty(layout.releases)).filter(isCommitSha);
@@ -942,10 +997,17 @@ export async function rollback(
   for (const sha of releases) {
     manifests.set(sha, await readManifest(layout, sha));
   }
-  // マニフェストを読めない版と、assetsが欠けた版は、配信できないので戻し先にしない。
+  // 配信できない版と、戻した元の版(後から残った版を含む)は、戻し先にしない。
+  const revokedState = await readRevokedState(layout);
   const usable = new Set<string>();
   for (const sha of releases) {
-    if (await hasUsableFiles(layout, sha)) usable.add(sha);
+    const manifest = manifests.get(sha) ?? null;
+    if (
+      !isRevokedRelease(sha, manifest, revokedState) &&
+      (await isCompleteRelease(layout, sha, manifest))
+    ) {
+      usable.add(sha);
+    }
   }
   const target = selectRollbackTarget(
     await readHistory(layout),
@@ -958,6 +1020,9 @@ export async function rollback(
   }
   const previousPin = await readTextOrNull(layout.pin);
   const previousPinJson = await readJsonFile(layout.pin);
+  if (previousPin !== null && !isReadablePin(previousPinJson)) {
+    log("rollback_previous_pin_unreadable", {});
+  }
   const revoked = [
     ...new Set([
       ...parsePinRevoked(previousPinJson),
@@ -981,11 +1046,12 @@ export async function rollback(
     `${JSON.stringify({ sha: target, pinned_at: pinnedAt, rolled_back_from: revoked, rolled_back_content: revokedContent })}\n`,
   );
   try {
-    await switchCurrent(layout, target);
+    await switchCurrentTo(target);
   } catch (err) {
     await restorePin(layout, previousPin, log);
     throw err;
   }
+  await recordRevoked(layout, revoked, revokedContent);
   const status: FetcherStatus = {
     state: "pinned",
     sha: target,
@@ -1051,7 +1117,8 @@ async function latestRunDigest(
 
 /**
  * pinを外す。次の取り込み(5分以内)から、最新の版への自動の付け替えに戻る。
- * 外す前に、戻した元の版の削除を終える。
+ * 外す前に、戻した元の版の削除を終え、その版のshaと中身を`revoked.json`に記録する。
+ * 記録は`pin`を外しても残り、取り込みの整理が、消せなかった版を先に消す。
  * 次の取り込みが最新の実行を取り直したとき、問題の版が再び配信されるのを防ぐため、
  * 次の場合は、pinを外さずに理由を返す。
  * - 最新の成功した実行のshaが、戻した元の版のshaである。
@@ -1112,6 +1179,7 @@ export async function unpin(
   if (!complete && !options.ignoreCleanup) {
     return { ok: false, reason: "cleanup_incomplete" };
   }
+  await recordRevoked(layout, revoked, revokedContent);
   await rm(layout.pin, { force: true });
   return { ok: true };
 }

@@ -160,6 +160,24 @@ async function brokenRelease(sha: string): Promise<void> {
   await symlink(outside, join(root, "releases", sha));
 }
 
+/** 付け替えに必ず失敗する`switchCurrent`の代わり。 */
+async function failingSwitch(): Promise<void> {
+  throw new Error("switch failed");
+}
+
+/** `revoked.json`を読む。 */
+async function readRevoked(): Promise<{ shas: string[]; digests: string[] }> {
+  return JSON.parse(await readFile(join(root, "revoked.json"), "utf8"));
+}
+
+/** `revoked.json`を書く。 */
+async function writeRevoked(shas: string[], digests: string[] = []) {
+  await writeFile(
+    join(root, "revoked.json"),
+    `${JSON.stringify({ shas, digests })}\n`,
+  );
+}
+
 /** 管理者(root)は書き込みの権限の制限を受けないので、権限で失敗を起こすテストは飛ばす。 */
 const itFailsOnPermission = process.getuid?.() === 0 ? test.skip : test;
 
@@ -527,6 +545,58 @@ describe("runOnce", () => {
     await rm(join(root, "assets/index-B0000000.js"));
     await runOnce(deps(githubServing(SHA_B, "B", 2).fetch));
     expect(await exists(join(root, "assets/index-B0000000.js"))).toBe(true);
+  });
+
+  test("removes a revoked release during retention", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await deploy(SHA_C, "C", 3);
+    await writeRevoked([SHA_A]);
+    await runOnce(deps(githubServing(SHA_C, "C", 3).fetch));
+    expect(await exists(join(root, "releases", SHA_A))).toBe(false);
+  });
+
+  test("removes the assets only a revoked release used during retention", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await deploy(SHA_C, "C", 3);
+    await writeRevoked([SHA_A]);
+    await runOnce(deps(githubServing(SHA_C, "C", 3).fetch));
+    expect(await exists(join(root, "assets/index-A0000000.js"))).toBe(false);
+  });
+
+  test("removes a release with revoked files during retention", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await deploy(SHA_C, "C", 3);
+    await writeRevoked([], [await digestOfRelease(SHA_A)]);
+    await runOnce(deps(githubServing(SHA_C, "C", 3).fetch));
+    expect(await exists(join(root, "releases", SHA_A))).toBe(false);
+  });
+
+  test("keeps the current release even when it is revoked", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await writeRevoked([SHA_B]);
+    await runOnce(deps(githubServing(SHA_B, "B", 2).fetch));
+    expect(await exists(join(root, "releases", SHA_B))).toBe(true);
+  });
+
+  test("prunes the revoked shas whose releases are gone", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await writeRevoked([SHA_A, SHA_D]);
+    await runOnce(deps(githubServing(SHA_B, "B", 2).fetch));
+    expect((await readRevoked()).shas).toEqual([]);
+  });
+
+  test("keeps the revoked digests when pruning", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    const digest = await digestOfRelease(SHA_A);
+    await writeRevoked([SHA_A], [digest]);
+    await runOnce(deps(githubServing(SHA_B, "B", 2).fetch));
+    expect((await readRevoked()).digests).toEqual([digest]);
   });
 });
 
@@ -943,11 +1013,24 @@ describe("rollback", () => {
     },
   );
 
+  test("skips a symlinked release and chooses the next valid one", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await deploy(SHA_C, "C", 3);
+    await brokenRelease(SHA_B);
+    await rollback(root, () => NOW);
+    expect(await readlink(join(root, "current"))).toBe(`releases/${SHA_A}`);
+  });
+
   test("removes the new pin when switching current fails", async () => {
     await deploy(SHA_A, "A", 1);
     await deploy(SHA_B, "B", 2);
-    await brokenRelease(SHA_A);
-    await rollback(root, () => NOW).catch(() => {});
+    await rollback(
+      root,
+      () => NOW,
+      () => {},
+      failingSwitch,
+    ).catch(() => {});
     expect(await exists(join(root, "pin"))).toBe(false);
   });
 
@@ -957,16 +1040,102 @@ describe("rollback", () => {
     await deploy(SHA_C, "C", 3);
     await rollback(root, () => NOW);
     const before = await readFile(join(root, "pin"), "utf8");
-    await brokenRelease(SHA_A);
-    await rollback(root, () => NOW).catch(() => {});
+    await rollback(
+      root,
+      () => NOW,
+      () => {},
+      failingSwitch,
+    ).catch(() => {});
     expect(await readFile(join(root, "pin"), "utf8")).toBe(before);
   });
 
   test("rejects when switching current fails", async () => {
     await deploy(SHA_A, "A", 1);
     await deploy(SHA_B, "B", 2);
-    await brokenRelease(SHA_A);
-    await expect(rollback(root, () => NOW)).rejects.toThrow();
+    await expect(
+      rollback(
+        root,
+        () => NOW,
+        () => {},
+        failingSwitch,
+      ),
+    ).rejects.toThrow("switch failed");
+  });
+
+  test("does not record the revoked state when switching current fails", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await rollback(
+      root,
+      () => NOW,
+      () => {},
+      failingSwitch,
+    ).catch(() => {});
+    expect(await exists(join(root, "revoked.json"))).toBe(false);
+  });
+
+  test("records the rolled back shas in the revoked state", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await rollback(root, () => NOW);
+    expect((await readRevoked()).shas).toEqual([SHA_B]);
+  });
+
+  test("records the content digest in the revoked state", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    const digest = await digestOfRelease(SHA_B);
+    await rollback(root, () => NOW);
+    expect((await readRevoked()).digests).toEqual([digest]);
+  });
+
+  test("keeps the revoked state after unpinning", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await rollback(root, () => NOW);
+    await unpin(unpinDeps(failingFetch), { force: true, ignoreCleanup: false });
+    expect((await readRevoked()).shas).toEqual([SHA_B]);
+  });
+
+  test("does not roll back to a release whose sha is revoked", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await deploy(SHA_C, "C", 3);
+    await writeRevoked([SHA_B]);
+    await rollback(root, () => NOW);
+    expect(await readlink(join(root, "current"))).toBe(`releases/${SHA_A}`);
+  });
+
+  test("does not roll back to a release whose files are revoked", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await deploy(SHA_C, "C", 3);
+    await writeRevoked([], [await digestOfRelease(SHA_B)]);
+    await rollback(root, () => NOW);
+    expect(await readlink(join(root, "current"))).toBe(`releases/${SHA_A}`);
+  });
+
+  test("logs when the previous pin cannot be read", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await writeFile(join(root, "pin"), "not json");
+    const events: string[] = [];
+    await rollback(
+      root,
+      () => NOW,
+      (event) => events.push(event),
+    );
+    expect(events).toContain("rollback_previous_pin_unreadable");
+  });
+
+  test("keeps the earlier revoked records when the previous pin cannot be read", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await deploy(SHA_C, "C", 3);
+    await rollback(root, () => NOW);
+    await writeFile(join(root, "pin"), "not json");
+    await rollback(root, () => NOW);
+    expect((await readRevoked()).shas).toEqual([SHA_C, SHA_B]);
   });
 
   test("does not roll back to a release whose manifest cannot be read", async () => {
@@ -1102,6 +1271,14 @@ describe("unpin", () => {
     await writeFile(join(root, "pin"), "not json");
     await unpin(unpinDeps(failingFetch), { force: true, ignoreCleanup: false });
     expect(await exists(join(root, "pin"))).toBe(false);
+  });
+
+  test("records the revoked releases of the pin in the revoked state when unpinning", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await pinAt(SHA_A, [SHA_B], [await digestOfRelease(SHA_B)]);
+    await unpin(unpinDeps(failingFetch), { force: true, ignoreCleanup: false });
+    expect((await readRevoked()).shas).toEqual([SHA_B]);
   });
 
   test("does not append to history", async () => {
