@@ -65,6 +65,7 @@ import {
   ensureRepo,
   listWorktrees,
   mergeBaseSha,
+  pruneWorktrees,
   pushNewBranch,
   readWorktreeGitPointer,
   resolveDefaultBranchName,
@@ -342,6 +343,8 @@ export async function main(
   try {
     worktreeDir = await prepareImplementWorktree({
       hasWorktree: async () => {
+        // 親ディレクトリごと消えたworktreeが一覧に残ると、確かめがロックファイルのパスを作れず毎回失敗するので、先に除く。
+        await pruneWorktrees({ run: runCommand, repoDir });
         const entry = (await listWorktrees({ run: runCommand, repoDir })).find(
           (candidate) => candidate.branch === branch,
         );

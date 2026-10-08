@@ -981,6 +981,7 @@ const idle = async (): Promise<void> => {};
 describe("createGtrWorktree", () => {
   test("reuses an existing worktree whose branch matches", async () => {
     const fake = createFakeCommandRunner([
+      ok(),
       ok(REAL_WORKTREE_PORCELAIN),
       ok(REAL_WORKTREE_PORCELAIN),
       ok(),
@@ -1001,6 +1002,7 @@ describe("createGtrWorktree", () => {
 
   test("does not call `git gtr new` when reusing", async () => {
     const fake = createFakeCommandRunner([
+      ok(),
       ok(REAL_WORKTREE_PORCELAIN),
       ok(REAL_WORKTREE_PORCELAIN),
       ok(),
@@ -1032,34 +1034,7 @@ describe("createGtrWorktree", () => {
   describe("reuse path: fetch -> reset --hard -> clean (fixes stale-worktree bug)", () => {
     test("fetches origin/<branch> first", async () => {
       const fake = createFakeCommandRunner([
-        ok(REAL_WORKTREE_PORCELAIN),
-        ok(REAL_WORKTREE_PORCELAIN),
         ok(),
-        ok(),
-        ok(),
-      ]);
-      await createGtrWorktree({
-        run: fake.run,
-        repoDir: REUSED_REPO,
-        branch: "contract-smoke-branch",
-        ghToken: "gh-token",
-        assertProcessesIdle: idle,
-        lockFs: createInMemoryLockFs(),
-        fs: pointerFsDeps(true).fs,
-      });
-      const argv = fake.calls[2]?.argv ?? [];
-      expect(argv).toEqual(
-        expect.arrayContaining([
-          "fetch",
-          "origin",
-          "--",
-          "contract-smoke-branch",
-        ]),
-      );
-    });
-
-    test("then resets --hard to origin/<branch>", async () => {
-      const fake = createFakeCommandRunner([
         ok(REAL_WORKTREE_PORCELAIN),
         ok(REAL_WORKTREE_PORCELAIN),
         ok(),
@@ -1078,15 +1053,17 @@ describe("createGtrWorktree", () => {
       const argv = fake.calls[3]?.argv ?? [];
       expect(argv).toEqual(
         expect.arrayContaining([
-          "reset",
-          "--hard",
-          "origin/contract-smoke-branch",
+          "fetch",
+          "origin",
+          "--",
+          "contract-smoke-branch",
         ]),
       );
     });
 
-    test("then cleans untracked files", async () => {
+    test("then resets --hard to origin/<branch>", async () => {
       const fake = createFakeCommandRunner([
+        ok(),
         ok(REAL_WORKTREE_PORCELAIN),
         ok(REAL_WORKTREE_PORCELAIN),
         ok(),
@@ -1103,11 +1080,18 @@ describe("createGtrWorktree", () => {
         fs: pointerFsDeps(true).fs,
       });
       const argv = fake.calls[4]?.argv ?? [];
-      expect(argv).toEqual(expect.arrayContaining(["clean", "-fd"]));
+      expect(argv).toEqual(
+        expect.arrayContaining([
+          "reset",
+          "--hard",
+          "origin/contract-smoke-branch",
+        ]),
+      );
     });
 
-    test("does not put -- before the ref for reset --hard (same rev-parse-like exception as elsewhere)", async () => {
+    test("then cleans untracked files", async () => {
       const fake = createFakeCommandRunner([
+        ok(),
         ok(REAL_WORKTREE_PORCELAIN),
         ok(REAL_WORKTREE_PORCELAIN),
         ok(),
@@ -1123,12 +1107,35 @@ describe("createGtrWorktree", () => {
         lockFs: createInMemoryLockFs(),
         fs: pointerFsDeps(true).fs,
       });
-      const argv = fake.calls[3]?.argv ?? [];
+      const argv = fake.calls[5]?.argv ?? [];
+      expect(argv).toEqual(expect.arrayContaining(["clean", "-fd"]));
+    });
+
+    test("does not put -- before the ref for reset --hard (same rev-parse-like exception as elsewhere)", async () => {
+      const fake = createFakeCommandRunner([
+        ok(),
+        ok(REAL_WORKTREE_PORCELAIN),
+        ok(REAL_WORKTREE_PORCELAIN),
+        ok(),
+        ok(),
+        ok(),
+      ]);
+      await createGtrWorktree({
+        run: fake.run,
+        repoDir: REUSED_REPO,
+        branch: "contract-smoke-branch",
+        ghToken: "gh-token",
+        assertProcessesIdle: idle,
+        lockFs: createInMemoryLockFs(),
+        fs: pointerFsDeps(true).fs,
+      });
+      const argv = fake.calls[4]?.argv ?? [];
       expect(argv).not.toContain("--");
     });
 
     test("resets and cleans in the worktree dir, not repoDir", async () => {
       const fake = createFakeCommandRunner([
+        ok(),
         ok(REAL_WORKTREE_PORCELAIN),
         ok(REAL_WORKTREE_PORCELAIN),
         ok(),
@@ -1145,8 +1152,8 @@ describe("createGtrWorktree", () => {
         fs: pointerFsDeps(true).fs,
       });
       expect([
-        fake.calls[3]?.options?.cwd,
         fake.calls[4]?.options?.cwd,
+        fake.calls[5]?.options?.cwd,
       ]).toEqual([
         "/tmp/repo-worktrees/contract-smoke-branch",
         "/tmp/repo-worktrees/contract-smoke-branch",
@@ -1155,6 +1162,7 @@ describe("createGtrWorktree", () => {
 
     test("throws a masked error when the reset fails", async () => {
       const fake = createFakeCommandRunner([
+        ok(),
         ok(REAL_WORKTREE_PORCELAIN),
         ok(REAL_WORKTREE_PORCELAIN),
         ok(),
@@ -1176,10 +1184,11 @@ describe("createGtrWorktree", () => {
 
   describe("reuse path when the .git pointer fails verification", () => {
     const gtrPorcelain = `path\t${REUSED_WT}\nbranch\tcontract-smoke-branch\nhook_status\tnone\n`;
-    // [0] list(再利用の検索)、[1] list(ポインタの検査)、
-    // [2] list(代替の削除経路での安全確認)、[3] prune、[4] gtr new。
+    // [0] prune(一覧の前)、[1] list(再利用の検索)、[2] list(ポインタの検査)、
+    // [3] list(代替の削除経路での安全確認)、[4] prune、[5] gtr new。
     const recreate = async () => {
       const fake = createFakeCommandRunner([
+        ok(),
         ok(REAL_WORKTREE_PORCELAIN),
         ok(REAL_WORKTREE_PORCELAIN),
         ok(REAL_WORKTREE_PORCELAIN),
@@ -1214,7 +1223,8 @@ describe("createGtrWorktree", () => {
     test("prunes from repoDir", async () => {
       const { fake } = await recreate();
       expect(
-        fake.calls.find((call) => call.argv.includes("prune"))?.options?.cwd,
+        fake.calls.findLast((call) => call.argv.includes("prune"))?.options
+          ?.cwd,
       ).toBe(REUSED_REPO);
     });
 
@@ -1232,7 +1242,7 @@ describe("createGtrWorktree", () => {
   test("parses a real captured `git gtr new --porcelain` sample when creating", async () => {
     const gtrPorcelain =
       "path\t/tmp/repo-worktrees/new-branch\nbranch\tnew-branch\nhook_status\tnone\n";
-    const fake = createFakeCommandRunner([ok(""), ok(gtrPorcelain)]);
+    const fake = createFakeCommandRunner([ok(), ok(""), ok(gtrPorcelain)]);
     const result = await createGtrWorktree({
       run: fake.run,
       repoDir: "/repo",
@@ -1246,6 +1256,39 @@ describe("createGtrWorktree", () => {
       branch: "new-branch",
       hookStatus: "none",
     });
+  });
+
+  // 親ディレクトリごと消えたworktreeが一覧に残っていると、ロックファイルのパスを作れず毎回失敗するため。
+  test("prunes stale worktree entries before listing", async () => {
+    const gtrPorcelain =
+      "path\t/tmp/repo-worktrees/new-branch\nbranch\tnew-branch\nhook_status\tnone\n";
+    const fake = createFakeCommandRunner([ok(), ok(""), ok(gtrPorcelain)]);
+    await createGtrWorktree({
+      run: fake.run,
+      repoDir: "/repo",
+      branch: "new-branch",
+      ghToken: "gh-token",
+      assertProcessesIdle: idle,
+      lockFs: createInMemoryLockFs(),
+    });
+    expect([
+      fake.calls[0]?.argv.slice(-2),
+      fake.calls[0]?.options?.cwd,
+    ]).toEqual([["worktree", "prune"], "/repo"]);
+  });
+
+  test("throws when the prune before listing fails", async () => {
+    const fake = createFakeCommandRunner([fail("fatal: prune")]);
+    await expect(
+      createGtrWorktree({
+        run: fake.run,
+        repoDir: "/repo",
+        branch: "new-branch",
+        ghToken: "gh-token",
+        assertProcessesIdle: idle,
+        lockFs: createInMemoryLockFs(),
+      }),
+    ).rejects.toThrow(/git worktree prune failed/);
   });
 
   test("rejects a branch name starting with a dash", async () => {
@@ -1264,7 +1307,7 @@ describe("createGtrWorktree", () => {
   test("passes core.symlinks=false to git gtr new via GIT_CONFIG_* env vars (gtr's own argv can't carry -c)", async () => {
     const gtrPorcelain =
       "path\t/tmp/repo-worktrees/new-branch\nbranch\tnew-branch\nhook_status\tnone\n";
-    const fake = createFakeCommandRunner([ok(""), ok(gtrPorcelain)]);
+    const fake = createFakeCommandRunner([ok(), ok(""), ok(gtrPorcelain)]);
     await createGtrWorktree({
       run: fake.run,
       repoDir: "/repo",
@@ -1273,7 +1316,7 @@ describe("createGtrWorktree", () => {
       assertProcessesIdle: idle,
       lockFs: createInMemoryLockFs(),
     });
-    const env = fake.calls[1]?.options?.env ?? {};
+    const env = fake.calls[2]?.options?.env ?? {};
     expect(env.GIT_CONFIG_COUNT).toBe("1");
     expect(env.GIT_CONFIG_KEY_0).toBe("core.symlinks");
     expect(env.GIT_CONFIG_VALUE_0).toBe("false");
@@ -1282,6 +1325,7 @@ describe("createGtrWorktree", () => {
   describe("processes left by an earlier run", () => {
     test("checks a reused worktree right after listing worktrees", async () => {
       const fake = createFakeCommandRunner([
+        ok(),
         ok(REAL_WORKTREE_PORCELAIN),
         ok(REAL_WORKTREE_PORCELAIN),
         ok(),
@@ -1300,12 +1344,13 @@ describe("createGtrWorktree", () => {
           checked.push(`${dir}@${String(fake.calls.length)}`);
         },
       });
-      expect(checked).toEqual([`${REUSED_WT}@1`]);
+      expect(checked).toEqual([`${REUSED_WT}@2`]);
     });
 
     test("does not reset a worktree that is still in use", async () => {
-      // 2番目の応答でポインタの検証が通るので、確かめが無ければreset(4番目の呼び出し)まで進む。
+      // 3番目の応答でポインタの検証が通るので、確かめが無ければreset(5番目の呼び出し)まで進む。
       const fake = createFakeCommandRunner([
+        ok(),
         ok(REAL_WORKTREE_PORCELAIN),
         ok(REAL_WORKTREE_PORCELAIN),
         ok(),
@@ -1331,7 +1376,7 @@ describe("createGtrWorktree", () => {
     test("checks a newly created worktree", async () => {
       const gtrPorcelain =
         "path\t/tmp/repo-worktrees/new-branch\nbranch\tnew-branch\nhook_status\tnone\n";
-      const fake = createFakeCommandRunner([ok(""), ok(gtrPorcelain)]);
+      const fake = createFakeCommandRunner([ok(), ok(""), ok(gtrPorcelain)]);
       const checked: string[] = [];
       await createGtrWorktree({
         run: fake.run,
@@ -1349,7 +1394,7 @@ describe("createGtrWorktree", () => {
     test("rejects when a newly created worktree is still in use", async () => {
       const gtrPorcelain =
         "path\t/tmp/repo-worktrees/new-branch\nbranch\tnew-branch\nhook_status\tnone\n";
-      const fake = createFakeCommandRunner([ok(""), ok(gtrPorcelain)]);
+      const fake = createFakeCommandRunner([ok(), ok(""), ok(gtrPorcelain)]);
       const created = createGtrWorktree({
         run: fake.run,
         repoDir: "/repo",

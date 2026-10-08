@@ -1736,7 +1736,7 @@ export type CreateGtrWorktreeOptions = {
 
 /**
  * `git gtr new <branch> --porcelain --yes`で`branch`のworktreeを作って返す。
- * `git worktree list`に`branch`のworktreeがすでにあれば、それを再利用する。
+ * `git worktree prune`の後の`git worktree list`に`branch`のworktreeがすでにあれば、それを再利用する。
  * gitの操作に失敗したら例外を投げる。
  * `ensureRepo`がこのリポジトリに使うのと同じ、
  * `repoLockPath(repoDir)`のロックの下で実行する。
@@ -1757,6 +1757,15 @@ export async function createGtrWorktree(
     ...(opts.sleep !== undefined ? { sleep: opts.sleep } : {}),
     ...(opts.now !== undefined ? { now: opts.now } : {}),
     fn: async () => {
+      // ディレクトリが消えたworktreeを一覧から除く。親ディレクトリごと消えたものが残ると、
+      // 確かめ(assertProcessesIdle)がロックファイルのパスを作れず、作り直しに進めないため。
+      const prune = await opts.run(buildGitArgv(["worktree", "prune"]), {
+        cwd: opts.repoDir,
+        env: localGitEnv(opts.home, opts.path),
+      });
+      if (prune.exitCode !== 0) {
+        throw gitError("git worktree prune failed", prune);
+      }
       const existing = await listWorktrees({
         run: opts.run,
         repoDir: opts.repoDir,
