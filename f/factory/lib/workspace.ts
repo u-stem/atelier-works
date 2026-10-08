@@ -80,7 +80,7 @@ export class SpawnError extends Error {
   readonly errno: number | undefined;
   readonly syscall: string | undefined;
   constructor(cause: unknown) {
-    super(cause instanceof Error ? cause.message : String(cause));
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
     this.name = "SpawnError";
     const fields = isRecord(cause) ? cause : {};
     this.code = isString(fields.code) ? fields.code : undefined;

@@ -143,6 +143,20 @@ describe("createBunCommandRunner spawn failure", () => {
     );
     expect(error instanceof SpawnError ? error.code : null).toBe("ENOENT");
   });
+
+  test("keeps the original error as the cause", () => {
+    const original = Object.assign(new Error("EAGAIN: try again"), {
+      code: "EAGAIN",
+    });
+    expect(new SpawnError(original).cause).toBe(original);
+  });
+
+  test("keeps the original message", () => {
+    const original = Object.assign(new Error("EAGAIN: try again"), {
+      code: "EAGAIN",
+    });
+    expect(new SpawnError(original).message).toBe("EAGAIN: try again");
+  });
 });
 
 describe("createBunCommandRunner SIGTERM -> SIGKILL escalation", () => {

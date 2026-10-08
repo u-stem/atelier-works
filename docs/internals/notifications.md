@@ -248,7 +248,7 @@ rate limitのほかに、次の2つの一時的な失敗は、`f/factory/lib/git
 
 | 失敗 | 判定 | 再試行する要求 |
 | --- | --- | --- |
-| ghプロセスの起動失敗 | 起動を担う`SpawnError`で、コードが`EAGAIN`、`EMFILE`、`ENFILE`、`ENOMEM`(資源の一時不足) | すべての要求 |
+| ghプロセスの起動失敗 | `Bun.spawn`の失敗を表す`SpawnError`で、コードが`EAGAIN`、`EMFILE`、`ENFILE`、`ENOMEM`(資源の一時不足) | すべての要求 |
 | ステータス行の無い失敗(通信断など) | 標準出力にステータス行が無く(HTTP 0)、プロセスがtimeoutしていない | GETと、読み取りのGraphQL(`listReviewThreads`) |
 
 待つ時間は2秒(`GITHUB_TRANSIENT_RETRY_DELAY_MS`)である。テストでは`GhClient`の`transientRetryDelayMs`と`sleep`で差し替える。再試行は要求ごとに1回までで、rate limitの再試行とは別に数える。rate limitの待ちの上限は変わらない。

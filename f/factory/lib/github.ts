@@ -338,8 +338,9 @@ function isIdempotentRequest(options: GhApiCallOptions): boolean {
  * - プロセスの起動失敗: 要求はGitHubに届いていないので、どの要求でも再試行してよい。
  * - 応答の無い通信断: 要求が届いた後に応答だけが失われたかもしれない。
  *   届いていた場合、コメント・レビュー・ラベル・PRの作成などの変更は二重に実行される。
- *   そのため、何度送っても結果が変わらないGETに限って再試行する。
- *   変更を伴う要求は再試行せず、HTTP 0の失敗として記録する。
+ *   そのため、冪等な要求だけを再試行する。冪等かどうかは`options.idempotent`で決め、
+ *   省略したときはGET(メソッドの指定なしを含む)を冪等とみなす。
+ *   冪等でない要求は再試行せず、HTTP 0の失敗として記録する。
  */
 function isRetryable(
   attempt: GhApiAttempt,
