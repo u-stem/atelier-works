@@ -279,6 +279,18 @@ function isLockConflict(result: CommandResult): boolean {
   );
 }
 
+/** ロックを待たずに取れるかを確かめるflockのargv。ロックを取れたら`true`を起動してすぐ放す。 */
+function probeArgv(lock: WorktreeLock): string[] {
+  return [
+    FLOCK_PATH,
+    "--nonblock",
+    "--conflict-exit-code",
+    String(WORKTREE_LOCK_BUSY_EXIT_CODE),
+    lock.lockPath,
+    TRUE_PATH,
+  ];
+}
+
 /**
  * worktreeのロックを待たずに取れるかを確かめ、すぐ放す。
  * 空いていれば"free"、塞がっていれば"held"を返し、flock自体が失敗すれば例外を投げる。
@@ -287,14 +299,7 @@ export async function probeWorktreeLock(opts: {
   readonly run: CommandRunner;
   readonly lock: WorktreeLock;
 }): Promise<"free" | "held"> {
-  const result = await opts.run([
-    FLOCK_PATH,
-    "--nonblock",
-    "--conflict-exit-code",
-    String(WORKTREE_LOCK_BUSY_EXIT_CODE),
-    opts.lock.lockPath,
-    TRUE_PATH,
-  ]);
+  const result = await opts.run(probeArgv(opts.lock));
   if (isLockConflict(result)) return "held";
   if (result.exitCode === 0) return "free";
   throw new Error(
@@ -669,6 +674,56 @@ export function defaultLockReleaseDeps(
   };
 }
 
+/** タグを持たずにこのロックを持つ、このロックの確かめ(`probeWorktreeLock`)のflockかを返す。 */
+function isProbeOf(holder: LockProcess, lock: WorktreeLock): boolean {
+  return (
+    holder.holdsLock &&
+    !holder.uninspectable &&
+    holder.owner === null &&
+    holder.lockPath === null &&
+    holder.command === probeArgv(lock).join(" ")
+  );
+}
+
+/**
+ * 保持者がすべて、別の実行による一瞬の確かめ(flockと、それがロックを持ったまま起動した`true`)かを返す。
+ * 掃除やpr_fixの準備の確かめと走査が重なっただけで、needs_humanにしないために使う。
+ */
+function onlyProbes(
+  holders: readonly LockProcess[],
+  lock: WorktreeLock,
+): boolean {
+  return holders.every(
+    (holder) =>
+      isProbeOf(holder, lock) ||
+      (holder.holdsLock &&
+        holder.owner === null &&
+        holder.command === TRUE_PATH &&
+        holders.some(
+          (parent) => parent.pid === holder.ppid && isProbeOf(parent, lock),
+        )),
+  );
+}
+
+/**
+ * `/proc`を走査して`planLockRelease`で決める。
+ * "busy"の理由が別の実行の確かめだけなら、300ms待って1回だけ走査し直す。
+ */
+async function scanAndPlan(opts: {
+  readonly lock: WorktreeLock;
+  readonly self: LockOwner | null;
+  readonly deps: LockReleaseDeps;
+}): Promise<LockReleasePlan> {
+  const plan = planLockRelease(
+    await opts.deps.scan(opts.lock),
+    opts.lock,
+    opts.self,
+  );
+  if (plan.kind !== "busy" || !onlyProbes(plan.holders, opts.lock)) return plan;
+  await opts.deps.sleep(PROBE_RETRY_MS);
+  return planLockRelease(await opts.deps.scan(opts.lock), opts.lock, opts.self);
+}
+
 /** ロックを確かめ、塞がっていれば300msおきに3回まで確かめ直す。別の実行の一瞬の確かめと重なっただけの場合を除くため。 */
 async function heldAfterRetries(opts: {
   readonly run: CommandRunner;
@@ -706,6 +761,7 @@ async function releasedWithin(opts: {
  * `policy`がnullなら何も止めず、関係するプロセス(保持者か、このロックファイルのタグを持つ残り)がいれば`WorktreeBusyError`を投げる。
  * `policy`があり、関係するプロセスがすべて止めてよいものなら、`policy.recheck`を呼んでから止め、ロックが空くのを確かめて走査し直す。
  * 止めてよい残りがまだ見つかれば、合わせて`STOP_ROUNDS`回まで止め直す。
+ * 走査で塞いでいるのが別の実行の確かめだけなら、1回だけ走査し直してから決める。
  * 止められないものがいる、止め直しても残る、塞がっているのに保持者が見えない、止めた後もロックが空かない場合は`WorktreeBusyError`を投げる。
  * flock自体の失敗と`policy.recheck`の例外はそのまま投げる。
  */
@@ -716,11 +772,8 @@ export async function ensureWorktreeLockFree(opts: {
   readonly deps: LockReleaseDeps;
 }): Promise<readonly LockProcess[]> {
   let lockHeld = await heldAfterRetries(opts);
-  let plan = planLockRelease(
-    await opts.deps.scan(opts.lock),
-    opts.lock,
-    opts.policy?.self ?? null,
-  );
+  const self = opts.policy?.self ?? null;
+  let plan = await scanAndPlan({ lock: opts.lock, self, deps: opts.deps });
   const stopped: LockProcess[] = [];
   for (let round = 0; round <= STOP_ROUNDS; round += 1) {
     if (plan.kind === "busy") throw new WorktreeBusyError(plan.holders);
@@ -734,11 +787,7 @@ export async function ensureWorktreeLockFree(opts: {
     await opts.deps.stop(plan.targets);
     stopped.push(...plan.targets);
     lockHeld = !(await releasedWithin(opts));
-    plan = planLockRelease(
-      await opts.deps.scan(opts.lock),
-      opts.lock,
-      opts.policy.self,
-    );
+    plan = await scanAndPlan({ lock: opts.lock, self, deps: opts.deps });
   }
   throw new WorktreeBusyError(plan.kind === "stop" ? plan.targets : []);
 }

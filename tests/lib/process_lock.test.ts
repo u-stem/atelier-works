@@ -1082,6 +1082,80 @@ describe("ensureWorktreeLockFree", () => {
   });
 });
 
+describe("a probe by another run", () => {
+  /** 別の実行がロックを一瞬だけ確かめているflock。タグを持たない。 */
+  const PROBE = entry({
+    owner: null,
+    lockPath: null,
+    command: `${FLOCK_PATH} --nonblock --conflict-exit-code ${String(WORKTREE_LOCK_BUSY_EXIT_CODE)} ${LOCK.lockPath} ${TRUE_PATH}`,
+  });
+  /** 確かめのflockがロックを持ったまま起動した`true`。 */
+  const PROBE_CHILD = entry({
+    pid: 43,
+    ppid: 42,
+    pgid: 42,
+    owner: null,
+    lockPath: null,
+    command: TRUE_PATH,
+  });
+  const ensure = (deps: LockReleaseDeps) =>
+    ensureWorktreeLockFree({
+      run: createFakeCommandRunner([ok()]).run,
+      lock: LOCK,
+      policy: null,
+      deps,
+    });
+
+  test("scans again when only a probe holds the lock", async () => {
+    const { deps, calls } = fakeDeps([[PROBE], []]);
+    await ensure(deps);
+    expect(calls.scans).toBe(2);
+  });
+
+  test("is free once the probe is gone", async () => {
+    const { deps } = fakeDeps([[PROBE], []]);
+    expect(await ensure(deps)).toEqual([]);
+  });
+
+  test("treats the command flock runs under a probe as part of it", async () => {
+    const { deps } = fakeDeps([[PROBE, PROBE_CHILD], []]);
+    expect(await ensure(deps)).toEqual([]);
+  });
+
+  test("is busy when the probe is still there on the second scan", async () => {
+    const { deps } = fakeDeps([[PROBE]]);
+    await expect(ensure(deps)).rejects.toBeInstanceOf(WorktreeBusyError);
+  });
+
+  test("scans again only once", async () => {
+    const { deps, calls } = fakeDeps([[PROBE]]);
+    await ensure(deps).catch(() => undefined);
+    expect(calls.scans).toBe(2);
+  });
+
+  test("does not scan again for a holder that is not a probe", async () => {
+    const { deps, calls } = fakeDeps([[entry({ owner: null })], []]);
+    await ensure(deps).catch(() => undefined);
+    expect(calls.scans).toBe(1);
+  });
+
+  test("does not scan again for a lone true that no probe started", async () => {
+    const { deps, calls } = fakeDeps([[PROBE_CHILD], []]);
+    await ensure(deps).catch(() => undefined);
+    expect(calls.scans).toBe(1);
+  });
+
+  test("does not scan again for a probe of another lock file", async () => {
+    const other = entry({
+      ...PROBE,
+      command: `${FLOCK_PATH} --nonblock --conflict-exit-code ${String(WORKTREE_LOCK_BUSY_EXIT_CODE)} /w/.other.process.lock ${TRUE_PATH}`,
+    });
+    const { deps, calls } = fakeDeps([[other], []]);
+    await ensure(deps).catch(() => undefined);
+    expect(calls.scans).toBe(1);
+  });
+});
+
 describe("a process that cannot be inspected", () => {
   /** ロックを持ち、持ち主タグとロックファイルのタグを持つpid 10。 */
   const TAGGED_HOLDER: FakeProc = {
