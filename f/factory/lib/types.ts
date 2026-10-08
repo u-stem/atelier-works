@@ -151,9 +151,14 @@ export function assertBranchName(name: string): void {
   }
 }
 
-/** GitHubのPRのHTMLのURL。ownerとrepoはGitHubで使える文字に限る。 */
+/**
+ * GitHubのPRのHTMLのURL。
+ * ownerは先頭が英数字で、2文字目以降は英数字・`_`・`-`の最大39文字、
+ * repoは英数字・`.`・`_`・`-`の1〜100文字(`.`と`..`は除く)に限る。
+ * Consoleの`lib/githubLink.ts`の正規表現のowner・repoと同じ形に保つこと。
+ */
 const PULL_REQUEST_URL =
-  /^https:\/\/github\.com\/[A-Za-z0-9][A-Za-z0-9-]{0,38}\/(?!\.\.?\/)[A-Za-z0-9._-]{1,100}\/pull\/[1-9][0-9]*$/;
+  /^https:\/\/github\.com\/[A-Za-z0-9][A-Za-z0-9_-]{0,38}\/(?!\.\.?\/)[A-Za-z0-9._-]{1,100}\/pull\/[1-9][0-9]*$/;
 
 /**
  * `url`が`https://github.com/<owner>/<repo>/pull/<n>`の形でなければ例外を投げる。

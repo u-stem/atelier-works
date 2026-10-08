@@ -38,6 +38,7 @@ export type PipelineLink = { readonly label: string; readonly url: string };
  * Issue/PR列のリンクを返す。
  * IssueのURLと番号があればIssueを、無ければPR番号から組み立てたPRを指す。
  * URLがGitHubのIssue/PRの形でなければ、次の候補へ進まずnullを返す。
+ * 壊れたIssueのURLを、別物であるPRへのリンクで隠さないため。
  */
 export function issueOrPrLink(
   row: Pick<

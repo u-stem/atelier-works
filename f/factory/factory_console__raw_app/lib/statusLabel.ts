@@ -9,6 +9,7 @@ const STATUS_LABELS: Record<string, string> = {
   audited: "監査完了",
   awaiting_approval: "承認待ち",
   picked: "着手",
+  requirements_generating: "要件定義生成中",
   failed: "失敗",
   needs_human: "要人手",
   approved: "承認済み",
@@ -17,7 +18,9 @@ const STATUS_LABELS: Record<string, string> = {
   cancelled: "取消",
   implementing: "実装中",
   pr_open: "PR作成済み",
+  reviewing: "レビュー中",
   reviewed: "レビュー済み",
+  fixing: "修正中",
   rereview_requested: "再レビュー依頼済み",
   blocked: "ブロック",
 };

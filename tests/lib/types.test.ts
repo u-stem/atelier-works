@@ -149,6 +149,12 @@ describe("assertPullRequestUrl", () => {
     ).not.toThrow();
   });
 
+  test("accepts an owner containing an underscore", () => {
+    expect(() =>
+      assertPullRequestUrl("https://github.com/octo_user/r/pull/1"),
+    ).not.toThrow();
+  });
+
   test.each([
     ["http scheme", "http://github.com/o/r/pull/1"],
     ["another host", "https://example.com/o/r/pull/1"],
@@ -161,6 +167,7 @@ describe("assertPullRequestUrl", () => {
     ["dot repo", "https://github.com/o/../pull/1"],
     ["javascript scheme", "javascript:alert(1)//github.com/o/r/pull/1"],
     ["owner starting with a hyphen", "https://github.com/-o/r/pull/1"],
+    ["owner starting with an underscore", "https://github.com/_o/r/pull/1"],
   ])("rejects %s", (_name, url) => {
     expect(() => assertPullRequestUrl(url)).toThrow(/invalid pull request url/);
   });
