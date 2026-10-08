@@ -109,6 +109,16 @@ export function allowedUrlPrefixesFor(
 }
 
 /**
+ * 監査の検査に通らずに再試行するとき、問題の一覧の前に付け足す文。
+ * 再試行は新しいセッションで動くので、前回書いたレポートが残っていることを伝えて直させる。
+ * 改善提案は構造化出力で、ファイルに残らないので、前回の提案の中身を保って出し直させる。
+ */
+export const AUDIT_REVIEW_RETRY_NOTE = [
+  "前回書いたファイルがカレントディレクトリに残っているので、作り直さずにそれを編集して直してください。",
+  "前回の構造化出力の改善提案も、これらの検査に通りませんでした。提案の中身は保ったまま、指摘された点だけを直して返してください。",
+].join("\n");
+
+/**
  * 監査の構造化出力と、書き終えたレポートの本文にかける検査をまとめ、問題を返す(無ければ空)。
  * `runClaude`の`reviewOutput`(問題を伝えて1回だけ書き直させる)と、
  * 生成後の最終的な検査の両方がこれを使う。
@@ -496,6 +506,7 @@ export async function main(
           await readTextFile(`${docDir}/${REPORT_MD_FILENAME}`),
           allowedUrlPrefixesFor(config),
         ),
+      reviewRetryNote: AUDIT_REVIEW_RETRY_NOTE,
     });
 
     await recordClaudeRuns(result, recordAgentRun);

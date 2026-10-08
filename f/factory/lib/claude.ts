@@ -300,6 +300,13 @@ export type RunClaudeOptions<T> = {
     output: T,
   ) => Promise<readonly string[]> | readonly string[];
   /**
+   * `reviewOutput`の問題で再試行するときに、問題の一覧の前に付け足す文。
+   * 再試行は新しいセッションで動き、前回の作業を覚えていない。
+   * 前回書いたファイルをどう扱うかなど、成果物ごとの指示を呼び出し側が渡す。
+   * 不正な出力への再試行には付け足さない。
+   */
+  readonly reviewRetryNote?: string;
+  /**
    * 将来、workerをroot以外で実行する方式のために予約している。
    * 今は使わず、workerの現在のユーザーで起動する。
    */
@@ -614,10 +621,11 @@ export async function runClaude<T>(
 
   const first = await attemptClaude(opts, opts.prompt);
   let retryNote: string;
+  let firstIssues: readonly string[] = [];
   if (first.outcome === "success") {
-    const issues = await reviewIssues(opts, first.structuredOutput);
-    if (issues.length === 0) return { ...first, retried: false };
-    retryNote = buildOutputIssuesNote(issues);
+    firstIssues = await reviewIssues(opts, first.structuredOutput);
+    if (firstIssues.length === 0) return { ...first, retried: false };
+    retryNote = buildOutputIssuesNote(firstIssues, opts.reviewRetryNote);
   } else {
     if (!RETRYABLE_REASONS.includes(first.reason)) {
       return { ...first, retried: false };
@@ -628,6 +636,15 @@ export async function runClaude<T>(
 
   const retryPrompt = `${opts.prompt}\n\n${retryNote}`;
   const second = await attemptClaude(opts, retryPrompt);
+  if (second.outcome === "failure" && firstIssues.length > 0) {
+    // 再試行が別の理由(タイムアウトなど)で失敗しても、再試行に至った最初の問題を失敗の記録に残す。
+    return {
+      ...second,
+      detail: `${second.detail} (first attempt output issues: ${failureDetail(firstIssues.join(" / "))})`,
+      discardedAgentRun: first.agentRun,
+      retried: true,
+    };
+  }
   return { ...second, discardedAgentRun: first.agentRun, retried: true };
 }
 
@@ -635,10 +652,17 @@ export async function runClaude<T>(
 export const OUTPUT_ISSUES_NOTE_HEADER =
   "前回の出力には次の問題がありました。作業の内容は変えずに、これらの点だけを直した出力を返してください。";
 
-/** `reviewOutput`が見つけた問題を、再試行のプロンプトに付け足す文にする。 */
-export function buildOutputIssuesNote(issues: readonly string[]): string {
+/**
+ * `reviewOutput`が見つけた問題を、再試行のプロンプトに付け足す文にする。
+ * `callerNote`があれば、前置きと問題の一覧の間に入れる。
+ */
+export function buildOutputIssuesNote(
+  issues: readonly string[],
+  callerNote?: string,
+): string {
   return [
     OUTPUT_ISSUES_NOTE_HEADER,
+    ...(callerNote === undefined ? [] : [callerNote]),
     ...issues.map((issue) => `- ${issue}`),
   ].join("\n");
 }

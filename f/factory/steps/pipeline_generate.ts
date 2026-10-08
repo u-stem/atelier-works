@@ -192,6 +192,14 @@ export async function readDocFile(
 }
 
 /**
+ * 要件定義書の検査に通らずに再試行するとき、問題の一覧の前に付け足す文。
+ * 再試行は新しいセッションで動くので、前回書いたファイルが残っていることを伝え、
+ * テンプレートから書き直させずに直させる。
+ */
+export const REQUIREMENTS_REVIEW_RETRY_NOTE =
+  "前回書いたファイルがカレントディレクトリに残っているので、作り直さずにそれを編集して直してください。";
+
+/**
  * doc dirの要件定義書と図を読み、検査で見つかった問題を返す(無ければ空)。
  * 図のXMLの検査と`validateRequirementsDoc`をまとめて行う。
  * 再試行でClaudeがどのファイルを直せばよいか分かるよう、要件定義書の問題にはファイル名を前置きする。
@@ -388,6 +396,7 @@ export async function main(
       oauthToken,
       timeoutMs: config.claude_timeout_sec * 1000,
       reviewOutput: () => collectDocIssues(docDir),
+      reviewRetryNote: REQUIREMENTS_REVIEW_RETRY_NOTE,
     });
 
     await recordClaudeRuns(result, recordAgentRun);

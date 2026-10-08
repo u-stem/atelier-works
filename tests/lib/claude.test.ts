@@ -354,6 +354,59 @@ describe("runClaude", () => {
     expect(secondStdin).toContain("- 1行目: 絵文字があります");
   });
 
+  test("adds the caller's reviewRetryNote to a retry for reviewOutput issues", async () => {
+    const fake = createFakeCommandRunner([
+      { stdout: claudeJsonStdout(), stderr: "", exitCode: 0, timedOut: false },
+      { stdout: claudeJsonStdout(), stderr: "", exitCode: 0, timedOut: false },
+    ]);
+    await runClaude({
+      ...baseOptions(fake.run),
+      reviewOutput: () => ["issue"],
+      reviewRetryNote: "edit the file you wrote last time",
+    });
+    const secondStdin = fake.calls[1]?.options?.stdin ?? "";
+    expect(secondStdin).toContain("edit the file you wrote last time");
+  });
+
+  test("does not add reviewRetryNote to a retry for an invalid output", async () => {
+    const fake = createFakeCommandRunner([
+      { stdout: "not json", stderr: "", exitCode: 0, timedOut: false },
+      { stdout: claudeJsonStdout(), stderr: "", exitCode: 0, timedOut: false },
+    ]);
+    await runClaude({
+      ...baseOptions(fake.run),
+      reviewRetryNote: "edit the file you wrote last time",
+    });
+    const secondStdin = fake.calls[1]?.options?.stdin ?? "";
+    expect(secondStdin).not.toContain("edit the file you wrote last time");
+  });
+
+  test("keeps the first attempt's issues in the detail when the retry for them times out", async () => {
+    const fake = createFakeCommandRunner([
+      { stdout: claudeJsonStdout(), stderr: "", exitCode: 0, timedOut: false },
+      { stdout: "", stderr: "", exitCode: 124, timedOut: true },
+    ]);
+    const result = await runClaude({
+      ...baseOptions(fake.run),
+      reviewOutput: () => ["1行目: 見出しにコード表記があります"],
+    });
+    const detail = result.outcome === "failure" ? result.detail : "";
+    expect(detail).toContain("1行目: 見出しにコード表記があります");
+  });
+
+  test("escapes the reason separator in the first attempt's issues kept in the detail", async () => {
+    const fake = createFakeCommandRunner([
+      { stdout: claudeJsonStdout(), stderr: "", exitCode: 0, timedOut: false },
+      { stdout: "", stderr: "", exitCode: 124, timedOut: true },
+    ]);
+    const result = await runClaude({
+      ...baseOptions(fake.run),
+      reviewOutput: () => ["a; b"],
+    });
+    const detail = result.outcome === "failure" ? result.detail : "";
+    expect(detail).not.toContain("; ");
+  });
+
   test("returns the retry result even when reviewOutput still finds issues", async () => {
     const fake = createFakeCommandRunner([
       { stdout: claudeJsonStdout(), stderr: "", exitCode: 0, timedOut: false },
