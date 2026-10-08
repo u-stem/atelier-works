@@ -43,6 +43,11 @@ schema:
       type: number
       description: この処理の実行回数。
       default: null
+    branch:
+      type: string
+      description: ''
+      default: null
+      originalType: string
     comments:
       type: array
       description: 収集したPRコメントの一覧。
@@ -54,6 +59,11 @@ schema:
     factory_clone_dir:
       type: string
       description: Software Factory自身の複製を置いた作業ディレクトリのパス。
+      default: null
+      originalType: string
+    head_sha:
+      type: string
+      description: ''
       default: null
       originalType: string
     owner:
@@ -89,6 +99,11 @@ schema:
     worktree_dir:
       type: string
       description: この処理で使う作業用ディレクトリのパス。
+      default: null
+      originalType: string
+    worktree_git_pointer:
+      type: string
+      description: ''
       default: null
       originalType: string
   required:
