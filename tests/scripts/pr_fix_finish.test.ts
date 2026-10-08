@@ -1,6 +1,6 @@
 // `pr_fix_finish.ts`が使う`pr_workflow_support.ts`の`buildReplyPostFailedNotice`、
 // `decideFixFinishAction`、`deriveFallbackReviewers`、`evaluateRerouteGuard`、`listReviewThreadsBestEffort`、
-// `renderFixReply`、`shouldAdvanceWatermarks`のテスト。
+// `renderFixReply`、`shouldAdvanceWatermarks`と、`pr_fix_finish.ts`の`reportReviewerRequest`のテスト。
 // requirements_gapの差し戻しの手順は`pr_fix_reroute.test.ts`でテストする。
 
 import { describe, expect, test } from "bun:test";
@@ -13,6 +13,7 @@ import {
   WORKTREE_CHANGED_AFTER_SECRET_SCAN_REASON,
   WorktreeGitPointerModifiedError,
 } from "../../f/factory/lib/workspace.ts";
+import { reportReviewerRequest } from "../../f/factory/steps/pr_fix_finish.ts";
 import {
   buildReplyPostFailedNotice,
   claudeBlockedReason,
@@ -559,5 +560,37 @@ describe("renderFixReply", () => {
       });
       expect(() => renderFixReply(reply, null)).not.toThrow();
     });
+  });
+});
+
+describe("reportReviewerRequest", () => {
+  test("records an API failure as the failed kind and notifies it", () => {
+    const report = reportReviewerRequest({
+      outcome: "failed",
+      error: "HTTP 422",
+    });
+    expect(report.noticeKind).toBe("pr_fix_reviewer_request_failed");
+    expect(report.apiError).toBe("HTTP 422");
+    expect(report.note).toContain("HTTP 422");
+  });
+
+  test("records no reviewer candidates as the skipped kind without notifying", () => {
+    const report = reportReviewerRequest(null);
+    expect(report.noticeKind).toBe("pr_fix_reviewer_request_skipped");
+    expect(report.apiError).toBeNull();
+    expect(report.note).toContain("no reviewers to request");
+  });
+
+  test("records all candidates excluded as the skipped kind without notifying", () => {
+    const report = reportReviewerRequest({ outcome: "skipped_empty" });
+    expect(report.noticeKind).toBe("pr_fix_reviewer_request_skipped");
+    expect(report.apiError).toBeNull();
+    expect(report.note).toContain("all excluded");
+  });
+
+  test("records nothing when the reviewers were requested", () => {
+    expect(
+      reportReviewerRequest({ outcome: "requested", reviewers: ["alice"] }),
+    ).toEqual({ note: null, apiError: null, noticeKind: null });
   });
 });
