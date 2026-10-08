@@ -3493,7 +3493,7 @@ const RETRY_WORK_ITEM_ACTION =
 
 /**
  * 汎用の次の対応。より具体的な対応が無いときの既定にする。
- * 原因は通知の理由と、ConsoleのNoticesタブ(`factory_console__raw_app`)のnoticeに残る。
+ * 原因は通知の理由と、Consoleの通知タブ(`factory_console__raw_app`)のnoticeに残る。
  * 取り除いた後の再実行は、どの種別の作業項目にも使える`retry_work_item`を案内する。
  */
 const GENERIC_NEXT_ACTION = `通知の理由とConsoleの通知タブで原因を確かめ、取り除いてから、${RETRY_WORK_ITEM_ACTION}`;
