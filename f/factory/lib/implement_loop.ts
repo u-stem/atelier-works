@@ -191,7 +191,8 @@ export type PreparedWorktree = {
  * implementのworktreeを用意し、ブランチをoriginに公開して揃えたうえで、そのパスと、公開で照合した既定のブランチの先頭を返す。
  *
  * git gtr 2.11.1で測った挙動: `gtr new`はローカルのブランチがあれば使い回す。
- * 無くてリモートにだけあれば、upstreamを設定して`origin/<branch>`をチェックアウトする。
+ * 無くてリモートにだけあれば、リモートの追跡ブランチからローカルのブランチを作る。
+ * 短い名前の`origin/<branch>`が曖昧なときは、gitがその作成を拒むので、続くworktreeの追加が追跡refから作る。
  * どちらにも無ければ`origin/<default>`から分岐する。
  * すでにworktreeがあるブランチは、`createGtrWorktree`の使い回しの経路
  * (fetch → `reset --hard origin/<branch>` → clean)が扱う。

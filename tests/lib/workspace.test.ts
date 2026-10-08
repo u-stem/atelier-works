@@ -1647,6 +1647,34 @@ describe("createGtrWorktree", () => {
     ).rejects.toThrow();
   });
 
+  test("runs git gtr new with --no-hooks so no hook runs in a tree gtr may have created at a wrong commit", async () => {
+    const gtrPorcelain =
+      "path\t/tmp/repo-worktrees/new-branch\nbranch\tnew-branch\nhook_status\tdisabled\n";
+    const fake = createFakeCommandRunner([
+      ok(),
+      ok(""),
+      ok(gtrPorcelain),
+      ok(`${NEW_HEAD_SHA}\n`),
+      ok(`${NEW_HEAD_SHA}\n`),
+    ]);
+    await createGtrWorktree({
+      run: fake.run,
+      repoDir: "/repo",
+      branch: "new-branch",
+      ghToken: "gh-token",
+      assertProcessesIdle: idle,
+      lockFs: createInMemoryLockFs(),
+    });
+    expect(fake.calls[2]?.argv.slice(-6)).toEqual([
+      "gtr",
+      "new",
+      "new-branch",
+      "--porcelain",
+      "--yes",
+      "--no-hooks",
+    ]);
+  });
+
   test("passes core.symlinks=false to git gtr new via GIT_CONFIG_* env vars (gtr's own argv can't carry -c)", async () => {
     const gtrPorcelain =
       "path\t/tmp/repo-worktrees/new-branch\nbranch\tnew-branch\nhook_status\tnone\n";
@@ -1818,7 +1846,7 @@ describe("createGtrWorktree", () => {
         });
       });
 
-      test("records the branch head before checking processes", async () => {
+      test("checks processes right after recording the branch head", async () => {
         const fake = createFakeCommandRunner(responses());
         const checkedAt: number[] = [];
         await createGtrWorktree({
@@ -1833,7 +1861,7 @@ describe("createGtrWorktree", () => {
             return false;
           },
         });
-        expect(checkedAt).toEqual([5]);
+        expect(checkedAt).toEqual([4]);
       });
 
       test("resets the worktree to the recorded commit", async () => {
@@ -3878,6 +3906,47 @@ describe("remote ref reads (real git)", () => {
         "rev-parse",
         "refs/remotes/origin/main",
       ]),
+    );
+  });
+
+  test("createGtrWorktree resets a pre-existing local branch that differs from the tracking ref", async () => {
+    const fixture = await setUp();
+    await fixture.git(fixture.worktree, [
+      "commit",
+      "-q",
+      "--allow-empty",
+      "-m",
+      "local only",
+    ]);
+    await fixture.git(fixture.repo, [
+      "worktree",
+      "remove",
+      "--force",
+      fixture.worktree,
+    ]);
+    const path = `${fixture.worktree}-new`;
+    // gtrはローカルのブランチがあればそのまま使うので、`git worktree add`だけを行う。
+    const run: CommandRunner = async (argv, options) => {
+      if (!argv.includes("gtr")) return fixture.run(argv, options);
+      await fixture.git(fixture.repo, ["worktree", "add", "-q", path, BRANCH]);
+      return {
+        stdout: `path\t${realpathSync(path)}\nbranch\t${BRANCH}\nhook_status\tdisabled\n`,
+        stderr: "",
+        exitCode: 0,
+        timedOut: false,
+      };
+    };
+    const created = await createGtrWorktree({
+      run,
+      repoDir: fixture.repo,
+      branch: BRANCH,
+      ghToken: "gh-token",
+      home: fixture.home,
+      assertProcessesIdle: async () => false,
+      lockFs: createInMemoryLockFs(),
+    });
+    expect(await fixture.git(created.path, ["rev-parse", "HEAD"])).toBe(
+      fixture.headSha,
     );
   });
 

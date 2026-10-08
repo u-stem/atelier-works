@@ -2156,13 +2156,17 @@ export async function createGtrWorktree(
         return { path: reused.path, branch: opts.branch, hookStatus: "reused" };
       }
 
+      // `--no-hooks`で、gtrのpostCreateフックを動かさない。
+      // 下の照合で作り直す前の、誤ったcommitのtreeの中で、フックのコマンドを実行させないためである。
+      // gtrのコピーはメインのcloneから読むので、そのtreeは読まない。
       // ここでは`--`を付けない。`git gtr`はcore gitではない外部のサブコマンドで、
       // core gitのように`--`を扱える保証が無い。
       // 先頭の`-`は上の`assertBranchName`ですでに拒否している。
       const result = await opts.run(
-        buildGitArgv(["gtr", "new", opts.branch, "--porcelain", "--yes"], {
-          network: true,
-        }),
+        buildGitArgv(
+          ["gtr", "new", opts.branch, "--porcelain", "--yes", "--no-hooks"],
+          { network: true },
+        ),
         {
           cwd: opts.repoDir,
           // `core.symlinks=false`は`-c`ではなく環境変数で渡す
@@ -2196,10 +2200,18 @@ export async function createGtrWorktree(
       // 短い名前は`refs/heads/origin/...`などが先に解決されうるので、
       // 作った先頭を、完全な名前で読んだ値と照合する。
       // 違えば、検証したshaへ作り直す(下の止めた場合と同じ復元の経路)。
-      const verifiedSha = await expectedGtrNewSha(opts);
-      const misplaced = createdSha !== verifiedSha;
+      // すでにあったローカルのブランチが追跡refと違うときも、使い回しの経路と同じく追跡refへそろえる。
+      // gtrは既定のブランチを設定から取ることがあるが、照合は常に`refs/remotes/origin/HEAD`と比べる。
       // 削除されたworktreeの中で生き残ったClaudeは同じ絶対パスに書き込みうるので、新しく作った場合も確かめる。
       const stopped = await opts.assertProcessesIdle(created.path);
+      const verifiedSha = await expectedGtrNewSha({
+        run: opts.run,
+        repoDir: opts.repoDir,
+        branch: opts.branch,
+        ...(opts.home !== undefined ? { home: opts.home } : {}),
+        ...(opts.path !== undefined ? { path: opts.path } : {}),
+      });
+      const misplaced = createdSha !== verifiedSha;
       if (!stopped && !misplaced) return created;
       // 止めたプロセスは、止まるまでにworktreeへ書き込んだり`.git`ファイルを書き換えたりしえた。
       // 中でgitを実行する前にポインタを検証し、検証したshaの状態に戻す。

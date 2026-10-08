@@ -634,6 +634,13 @@ safe.directoryやロックの失敗は、理由を隠さずstderrつきで例外
 そのため、作った後にブランチの先頭を、完全な名前で読んだ値と照合する。
 照合の相手は、リモートにブランチがあればその追跡ref、無ければ`refs/remotes/origin/HEAD`である。
 違えば、検証したshaへ`reset --hard`して`clean -fd`をする。
+すでにあったローカルのブランチが追跡refと違うときも、使い回しの経路と同じく追跡refへそろえる。
+gtrは既定のブランチを`gtr.defaultBranch`、`GTR_DEFAULT_BRANCH`、`.gtrconfig`から取ることがある。
+照合は常に`refs/remotes/origin/HEAD`と比べ、違えばそこへ戻す。
+
+`git gtr new`には`--no-hooks`を付け、gtrのpostCreateフックを動かさない。
+照合で作り直す前の、誤ったcommitのtreeの中で、フックのコマンドを実行させないためである。
+gtrのファイルのコピーはメインのcloneから読むので、そのtreeは読まない。
 `f/factory/`のコードに短い名前の`origin/...`を書くと、`scripts/lint-no-short-remote-ref.ts`が止める。
 
 向け直しの後でpushに失敗したときは、ローカルのブランチが既定のブランチの先頭を指し、worktreeには古いファイルが残る。
