@@ -17,7 +17,7 @@ import {
   saveDraft,
   updateStatus,
 } from "../lib/db.ts";
-import { notify } from "../lib/discord.ts";
+import { notifyBestEffort } from "../lib/discord.ts";
 import { validateDrawioXml } from "../lib/drawio.ts";
 import { logger, maskSecrets } from "../lib/log.ts";
 import { REQUIREMENTS_SCHEMA, requirementsPrompt } from "../lib/prompts.ts";
@@ -137,14 +137,6 @@ export type PipelineGenerateResult =
   | { readonly outcome: "success" }
   | { readonly outcome: "budget_exceeded" };
 
-async function notifySafe(
-  webhookUrl: string,
-  event: Parameters<typeof notify>[1],
-): Promise<void> {
-  if (webhookUrl.length === 0) return;
-  await notify(webhookUrl, event);
-}
-
 /**
  * 生成の失敗を、秘密情報をマスクした例外として投げる。
  * 状態の遷移と通知はここでは一切しない。
@@ -246,16 +238,21 @@ export async function main(
       "needs_human",
       `daily budget exceeded ($${budgetStatus.spent_usd.toFixed(2)} >= $${budgetStatus.limit_usd.toFixed(2)})`,
     );
-    await notifySafe(webhookUrl, {
-      kind: "needs_human",
-      instance_name: config.instance_name,
-      owner: workItem.owner,
-      repo: workItem.repo,
-      url: workItem.issue_url ?? "",
-      reason: describeReason("daily budget exceeded"),
-      target: { kind: "issue", number: workItem.issue_number },
-      next_action: nextActionFor("daily budget exceeded"),
-    });
+    // 状態は`needs_human`に記録済みなので、通知が届かなくてもstepを失敗させない。
+    await notifyBestEffort(
+      webhookUrl,
+      {
+        kind: "needs_human",
+        instance_name: config.instance_name,
+        owner: workItem.owner,
+        repo: workItem.repo,
+        url: workItem.issue_url ?? "",
+        reason: describeReason("daily budget exceeded"),
+        target: { kind: "issue", number: workItem.issue_number },
+        next_action: nextActionFor("daily budget exceeded"),
+      },
+      log,
+    );
     return { outcome: "budget_exceeded" };
   }
 
