@@ -18,7 +18,9 @@ import {
   ensureFactoryClone,
   ensureRepo,
   type GtrWorktree,
+  readWorktreeGitPointer,
   runCommand,
+  verifyWorktreeGitdir,
 } from "../lib/workspace.ts";
 import {
   earlyExitBase,
@@ -41,6 +43,12 @@ export type PrFixPrepareResult = {
   readonly worktree_dir: string;
   readonly repo_dir: string;
   readonly factory_clone_dir: string;
+  /**
+   * worktreeを用意した直後の`<worktree_dir>/.git`の中身(`readWorktreeGitPointer`)。
+   * 検証ステップは、Claudeの実行の後にworktreeでgitを実行する前に、必ずこれと比べる。
+   * worktreeを用意しなかったときはnull。
+   */
+  readonly worktree_git_pointer: string | null;
   readonly parent_work_item_id: number | null;
   readonly attempt: number;
   readonly fix_round: number;
@@ -57,6 +65,8 @@ export type PrFixPrepareResult = {
  * PRのheadブランチに`git gtr`のworktreeを作る。
  * detachedではなく実ブランチのworktreeにするのは、
  * `commitAndPush`がそのブランチへpushし直すため。
+ * 作ったworktreeは`.git`ファイルを検証し(`verifyWorktreeGitdir`)、その中身を`worktree_git_pointer`として返す。
+ * 検証に通らなければ例外を投げる。
  * PRのブランチ名から引いた実装の作業項目が`implementing`なら`guard_blocked`を返す。
  * worktreeを前の実行のプロセスがまだ使っていれば、何も止めずに保持者を理由に載せて`guard_blocked`を返す。
  * 作業項目が無い、またはPR番号が無いときは例外を投げる。
@@ -231,6 +241,15 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
     }
     throw err;
   }
+  // 以降のポインタ照合の基準値になる。
+  // 前回の実行が書き換えたまま残したポインタを、信頼する値にしてはならない。
+  await verifyWorktreeGitdir({
+    run: runCommand,
+    repoDir,
+    dir: worktree.path,
+  });
+  const worktreeGitPointer = (await readWorktreeGitPointer(worktree.path))
+    .content;
 
   return {
     outcome: "proceed",
@@ -242,6 +261,7 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
     worktree_dir: worktree.path,
     repo_dir: repoDir,
     factory_clone_dir: factoryClone.dir,
+    worktree_git_pointer: worktreeGitPointer,
     parent_work_item_id: workItem.parent_work_item_id,
     attempt: workItem.attempt,
     fix_round: workItem.fix_round,

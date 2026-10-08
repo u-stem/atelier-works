@@ -30,9 +30,11 @@ import {
   evaluateUncommittedDiffSize,
   getDiffNumstat,
   IMPLEMENT_DIFF_SIZE_LIMIT_NAMES,
+  inspectUncommittedChanges,
   isEscapingSymlink,
   isNewShellScript,
   listChangedPaths,
+  listOnDiskSymlinkTargets,
   listSymlinkChanges,
   listSymlinkTargets,
   listUncommittedChangedPaths,
@@ -48,6 +50,7 @@ import {
   parseWcLineCount,
   resolveSymlinkTarget,
   runAllowedCheckCommands,
+  type SymlinkProbeFs,
   sumDiffNumstatLines,
 } from "../../f/factory/steps/pr_workflow_support.ts";
 import {
@@ -534,6 +537,153 @@ describe("listSymlinkTargets", () => {
     await expect(listSymlinkTargets(run, "/work", ["link"])).rejects.toThrow(
       /ls-files.*abandoned/,
     );
+  });
+});
+
+/** `code`付きの、Nodeのfsが投げるのと同じ形のエラーを作る。 */
+function errnoError(code: string): Error {
+  return Object.assign(new Error(code), { code });
+}
+
+/**
+ * `links`に載ったパスだけをsymlinkとして返す偽のfs。
+ * `missing`に載ったパスはlstatがENOENTで失敗する。
+ */
+function fakeSymlinkFs(
+  links: Readonly<Record<string, string>>,
+  missing: readonly string[] = [],
+): SymlinkProbeFs & { readonly lstatCalls: string[] } {
+  const lstatCalls: string[] = [];
+  return {
+    lstatCalls,
+    lstat: async (path) => {
+      lstatCalls.push(path);
+      if (missing.includes(path)) throw errnoError("ENOENT");
+      return { isSymbolicLink: () => links[path] !== undefined };
+    },
+    readlink: async (path) => {
+      const target = links[path];
+      if (target === undefined) throw errnoError("EINVAL");
+      return target;
+    },
+  };
+}
+
+describe("listOnDiskSymlinkTargets", () => {
+  test("pairs a path that is a symlink on disk with its target", async () => {
+    const fs = fakeSymlinkFs({ "/wt/link": "/etc/passwd" });
+    const targets = await listOnDiskSymlinkTargets("/wt", ["link"], fs);
+    expect(targets).toEqual([{ path: "link", target: "/etc/passwd" }]);
+  });
+
+  test("skips a path that is not a symlink", async () => {
+    const fs = fakeSymlinkFs({});
+    const targets = await listOnDiskSymlinkTargets("/wt", ["src/a.ts"], fs);
+    expect(targets).toEqual([]);
+  });
+
+  test("skips a path that no longer exists", async () => {
+    const fs = fakeSymlinkFs({}, ["/wt/gone.ts"]);
+    const targets = await listOnDiskSymlinkTargets("/wt", ["gone.ts"], fs);
+    expect(targets).toEqual([]);
+  });
+
+  test("throws when lstat fails for another reason", async () => {
+    const fs: SymlinkProbeFs = {
+      lstat: async () => {
+        throw errnoError("EACCES");
+      },
+      readlink: async () => "",
+    };
+    await expect(
+      listOnDiskSymlinkTargets("/wt", ["secret"], fs),
+    ).rejects.toThrow(/EACCES/);
+  });
+
+  test("lstats each path under the worktree", async () => {
+    const fs = fakeSymlinkFs({});
+    await listOnDiskSymlinkTargets("/wt", ["a/b.ts"], fs);
+    expect(fs.lstatCalls).toEqual(["/wt/a/b.ts"]);
+  });
+});
+
+describe("inspectUncommittedChanges", () => {
+  const LIMITS = { maxChangedFiles: 30, maxDiffLines: 1500 };
+
+  test("blocks an untracked symlink that git ls-files does not list", async () => {
+    const { run } = createFakeCommandRunner([
+      ok("?? link\u0000"),
+      ok(""),
+      ok(""),
+    ]);
+    const result = await inspectUncommittedChanges(
+      run,
+      "/wt",
+      LIMITS,
+      fakeSymlinkFs({ "/wt/link": "docs/readme.md" }),
+    );
+    expect(result.reasons).toEqual(["symlink_change: symlink changed: link"]);
+  });
+
+  test("reports a tracked symlink only once", async () => {
+    const { run } = createFakeCommandRunner([
+      ok(" M link\u0000"),
+      ok("link\u0000"),
+      ok("120000 abc123 0\tlink\u0000"),
+    ]);
+    const result = await inspectUncommittedChanges(
+      run,
+      "/wt",
+      LIMITS,
+      fakeSymlinkFs({ "/wt/link": "/etc/passwd" }),
+    );
+    expect(result.reasons).toEqual([
+      "symlink escapes the worktree: link -> /etc/passwd",
+      "symlink_change: symlink changed: link",
+    ]);
+  });
+
+  test("does not count lines through a symlink once it is blocked", async () => {
+    const { run, calls } = createFakeCommandRunner([
+      ok("?? link\u0000"),
+      ok(""),
+      ok(""),
+    ]);
+    await inspectUncommittedChanges(
+      run,
+      "/wt",
+      LIMITS,
+      fakeSymlinkFs({ "/wt/link": "/dev/zero" }),
+    );
+    expect(calls.map((call) => call.argv[0] === "wc")).not.toContain(true);
+  });
+
+  test("does not lstat a deleted path", async () => {
+    const fs = fakeSymlinkFs({});
+    const { run } = createFakeCommandRunner([
+      ok(" D old.ts\u0000"),
+      ok("old.ts\u0000"),
+      ok(""),
+      ok(""),
+    ]);
+    await inspectUncommittedChanges(run, "/wt", LIMITS, fs);
+    expect(fs.lstatCalls).toEqual([]);
+  });
+
+  test("passes an ordinary modified file", async () => {
+    const { run } = createFakeCommandRunner([
+      ok(" M src/a.ts\u0000"),
+      ok("src/a.ts\u0000"),
+      ok(""),
+      ok("1\t1\tsrc/a.ts\u0000"),
+    ]);
+    const result = await inspectUncommittedChanges(
+      run,
+      "/wt",
+      LIMITS,
+      fakeSymlinkFs({}),
+    );
+    expect(result.blocked).toBe(false);
   });
 });
 
@@ -1325,6 +1475,16 @@ describe("changed path listing against a real git repository", () => {
     await stageAll(repo);
     const targets = await listSymlinkTargets(repo.run, repo.dir, ["ab"]);
     expect(targets).toEqual([{ path: "ab", target: "/etc/passwd" }]);
+  });
+
+  test("pr_fix blocks a new symlink that is still untracked", async () => {
+    const repo = await initRepo();
+    symlinkSync("README.md", join(repo.dir, "link"));
+    const result = await inspectUncommittedChanges(repo.run, repo.dir, {
+      maxChangedFiles: 30,
+      maxDiffLines: 1500,
+    });
+    expect(result.reasons).toEqual(["symlink_change: symlink changed: link"]);
   });
 });
 

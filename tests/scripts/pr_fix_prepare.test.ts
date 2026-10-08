@@ -382,6 +382,10 @@ describe("earlyExitBase", () => {
   test("leaves the worktree directory empty because none was prepared", () => {
     expect(earlyExitBase(workItem).worktree_dir).toBe("");
   });
+
+  test("records no .git pointer when no worktree was prepared", () => {
+    expect(earlyExitBase(workItem).worktree_git_pointer).toBeNull();
+  });
 });
 
 describe("describeReason (implement flow)", () => {
@@ -478,6 +482,12 @@ describe("describeReason (implement flow)", () => {
   test("translates a modified worktree .git pointer", () => {
     expect(describeReason("worktree git pointer was modified")).toBe(
       "worktreeのgitの参照先(.gitファイル)が書き換えられました",
+    );
+  });
+
+  test("translates a .git pointer that was not recorded", () => {
+    expect(describeReason("worktree git pointer was not recorded")).toBe(
+      "worktreeのgitの参照先(.gitファイル)が記録されていません",
     );
   });
 
@@ -598,6 +608,12 @@ describe("nextActionFor (implement flow)", () => {
   test("asks to inspect the branch after a modified .git pointer", () => {
     expect(nextActionFor("worktree git pointer was modified")).toBe(
       "実装ブランチとworktreeを人が確認し、不審な変更があればブランチを削除してください",
+    );
+  });
+
+  test("asks to relabel after a .git pointer that was not recorded", () => {
+    expect(nextActionFor("worktree git pointer was not recorded")).toBe(
+      "`factory:fix`を付け直して修正をやり直してください",
     );
   });
 

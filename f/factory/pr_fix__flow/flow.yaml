@@ -140,6 +140,9 @@ value:
           worktree_dir:
             type: javascript
             expr: results.pr_fix_prepare.worktree_dir
+          worktree_git_pointer:
+            type: javascript
+            expr: results.pr_fix_prepare.worktree_git_pointer ?? null
         path: f/factory/steps/pr_fix_verify
       skip_if:
         expr: results.pr_fix_prepare.outcome !== "proceed" ||

@@ -5,7 +5,7 @@
 // I/O補助(gitの実行やworktreeのファイル読み取りなど)は、
 // `lib/`にまだ同等の関数が無い操作に限って置く。
 
-import { mkdtemp, readlink, rm } from "node:fs/promises";
+import { lstat, mkdtemp, readlink, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import {
@@ -1980,6 +1980,124 @@ export async function listSymlinkTargets(
   return targets;
 }
 
+/** `listOnDiskSymlinkTargets`が使う2つのファイル操作。テスト用に注入できる。 */
+export type SymlinkProbeFs = {
+  readonly lstat: (path: string) => Promise<{ isSymbolicLink(): boolean }>;
+  readonly readlink: (path: string) => Promise<string>;
+};
+
+const defaultSymlinkProbeFs: SymlinkProbeFs = {
+  lstat: (path) => lstat(path),
+  readlink: (path) => readlink(path),
+};
+
+/** パスが無いことを表すfsのエラー(ENOENT / ENOTDIR)かを返す。 */
+function isMissingPathError(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    "code" in err &&
+    (err.code === "ENOENT" || err.code === "ENOTDIR")
+  );
+}
+
+/**
+ * `paths`のうち、ディスク上で今symlinkであるもの(`lstat`で見る)について指す先を読む。
+ * `listSymlinkTargets`は索引にあるパスしか見ないので、未追跡の新しいsymlinkを報告しない。
+ * そうしたsymlinkも`git add -A`でcommitに入るため、こちらで補う。
+ * 検査コマンドはOSのsymlinkを作れるので、`core.symlinks=false`では防げない。
+ * 無くなったパス(ENOENT / ENOTDIR)は飛ばし、それ以外の失敗は例外を投げる。
+ * 読めないパスをsymlinkでないとみなすと、判定を素通りさせるため。
+ */
+export async function listOnDiskSymlinkTargets(
+  worktreeDir: string,
+  paths: readonly string[],
+  fs: SymlinkProbeFs = defaultSymlinkProbeFs,
+): Promise<SymlinkTarget[]> {
+  const targets: SymlinkTarget[] = [];
+  for (const path of paths) {
+    const fullPath = join(worktreeDir, path);
+    try {
+      if (!(await fs.lstat(fullPath)).isSymbolicLink()) continue;
+      targets.push({ path, target: await fs.readlink(fullPath) });
+    } catch (err) {
+      if (isMissingPathError(err)) continue;
+      throw err;
+    }
+  }
+  return targets;
+}
+
+/** `inspectUncommittedChanges`が見る差分の大きさの上限。 */
+export type UncommittedChangeLimits = {
+  readonly maxChangedFiles: number;
+  readonly maxDiffLines: number;
+};
+
+/**
+ * worktreeのコミットしていない変更に、禁止されたファイル・パターン、symlink、
+ * `package.json`のscriptsの変更、差分サイズの上限超過が無いかを調べて返す。
+ * symlinkは索引のmode(`listSymlinkTargets`)とディスク上の種類(`listOnDiskSymlinkTargets`)の両方で探し、
+ * worktreeの外を指すもの(`detectEscapingSymlinks`)と、作成・変更・型の変更(`detectSymlinkChanges`)をすべて止める。
+ * symlinkが見つかったときは`package.json`の中身と差分の行数を読まない。
+ * どちらもファイルをsymlinkの先まで読むので、worktreeの外や`/dev/zero`のような終わらない先を読みうるため。
+ * gitはhook・fsmonitor・credential helperを無効にして実行する。
+ */
+export async function inspectUncommittedChanges(
+  run: CommandRunner,
+  worktreeDir: string,
+  limits: UncommittedChangeLimits,
+  fs: SymlinkProbeFs = defaultSymlinkProbeFs,
+): Promise<ForbiddenChangeResult> {
+  const changedPaths = await listUncommittedChangedPaths(run, worktreeDir);
+  const indexTargets = await listSymlinkTargets(
+    run,
+    worktreeDir,
+    changedPaths.map((entry) => entry.path),
+    fs.readlink,
+  );
+  const diskTargets = await listOnDiskSymlinkTargets(
+    worktreeDir,
+    changedPaths
+      .filter((entry) => entry.status !== "deleted")
+      .map((entry) => entry.path),
+    fs,
+  );
+  const indexPaths = new Set(indexTargets.map((entry) => entry.path));
+  const symlinkTargets = [
+    ...indexTargets,
+    ...diskTargets.filter((entry) => !indexPaths.has(entry.path)),
+  ];
+  const symlinkReasons = [
+    ...detectEscapingSymlinks(worktreeDir, symlinkTargets),
+    ...detectSymlinkChanges(changedPaths, symlinkTargets),
+  ];
+  if (symlinkReasons.length > 0) {
+    return detectForbiddenChanges(changedPaths, false, symlinkReasons);
+  }
+
+  // basenameがちょうど`package.json`の変更ファイルをすべて調べる。
+  // 末尾一致だと`my-package.json`のような別ファイルにも当たるため使わない。
+  const packageJsonChanged = await anyPackageJsonScriptsChanged(
+    run,
+    worktreeDir,
+    "HEAD",
+    changedPaths,
+  );
+  const diffSizeReasons = await evaluateUncommittedDiffSize(
+    run,
+    worktreeDir,
+    changedPaths,
+    limits.maxChangedFiles,
+    limits.maxDiffLines,
+  );
+  return detectForbiddenChanges(
+    changedPaths,
+    packageJsonChanged,
+    diffSizeReasons,
+  );
+}
+
 /**
  * 2つのファイル内容で、`package.json`の`scripts`オブジェクトが異なるかを返す
  * (どちらも`null`になりえて、その時点でファイルが無かったことを表す)。
@@ -3368,6 +3486,12 @@ const REASON_RULES: readonly ReasonRule[] = [
     nextAction: () =>
       "実装ブランチとworktreeを人が確認し、不審な変更があればブランチを削除してください",
   },
+  // pr_fix_verify.ts(準備ステップが`.git`の中身を渡さなかった)
+  {
+    pattern: /^worktree git pointer was not recorded$/,
+    describe: () => "worktreeのgitの参照先(.gitファイル)が記録されていません",
+    nextAction: () => "`factory:fix`を付け直して修正をやり直してください",
+  },
   {
     pattern:
       /^worktree is still used by processes from an earlier run(?:: ([\s\S]+))?$/,
@@ -3458,6 +3582,7 @@ export function earlyExitBase(
   readonly worktree_dir: string;
   readonly repo_dir: string;
   readonly factory_clone_dir: string;
+  readonly worktree_git_pointer: string | null;
   readonly parent_work_item_id: number | null;
   readonly attempt: number;
   readonly fix_round: number;
@@ -3470,6 +3595,7 @@ export function earlyExitBase(
     worktree_dir: "",
     repo_dir: "",
     factory_clone_dir: "",
+    worktree_git_pointer: null,
     parent_work_item_id: workItem.parent_work_item_id,
     attempt: workItem.attempt,
     fix_round: workItem.fix_round,
