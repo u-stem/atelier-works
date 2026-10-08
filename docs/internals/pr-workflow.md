@@ -498,6 +498,8 @@ PR修正のClaudeに渡すツールは`Read,Glob,Grep,Edit,Write`だけで、`Ba
 - `mise.toml`、`mise.*.toml`、`.mise.toml`
 - `lefthook.yml`、`lefthook-local.yml`、`lefthook.toml`、`lefthook.json`
 - `bunfig.toml`、`.npmrc`、`.gitattributes`、`.gitmodules`
+- markdownlintとmarkdownlint-cli2の設定(`.markdownlint.*`と`.markdownlint-cli2.*`。拡張子は`jsonc?`、`ya?ml`、`[cm]?js`)
+- textlintの設定(`.textlintrc`と`.textlintrc.*`)
 - `package.json`の`scripts`の変更
 - 新しく追加した`*.sh`
 
@@ -514,6 +516,10 @@ PR修正のClaudeに渡すツールは`Read,Glob,Grep,Edit,Write`だけで、`Ba
 
 `console/public/`と`console/index.html`は、Consoleでバンドルを通らずにそのまま配信され、ページの中で動く。
 `console/index.html`はファイル名だけではほかの`index.html`と区別できないので、パスで判定する。
+
+markdownlint-cli2の設定は、`customRules`、`markdownItPlugins`、`modulePaths`で任意のモジュールを`import()`できる。
+textlintの設定は、`rules`の名前からモジュールを解決して読み込む。
+どちらもpre-commitの文書の検査と`mise run check`が読むので、書き換えられると、人の手元とCIでコードを実行される。
 
 ### 変更パスの取得
 

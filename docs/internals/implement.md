@@ -481,6 +481,8 @@ lockfileは保護パスなので、Claudeが書き換えたラウンドでは検
 | タスクランナーなど | `Makefile`、`Justfile`、`Taskfile.yml`、`turbo.json`、`nx.json`、`deno.json`、`CODEOWNERS`、`.pre-commit-config.yaml` |
 | JavaScript以外のlockfileとmanifest | `uv.lock`、`poetry.lock`、`Pipfile`、`pyproject.toml`、`setup.py`、`setup.cfg`、`requirements*.txt`、`Cargo.toml`、`Cargo.lock`、`go.mod`、`go.sum`、`Gemfile`、`composer.json`、`composer.lock` |
 
+PR修正の一覧そのものの中身は、[PRワークフロー](pr-workflow.md)の[禁止パスによる停止](pr-workflow.md#禁止パスによる停止)にある。markdownlint-cli2とtextlintの設定は、PR修正の一覧に含まれる。
+
 `infra/`を加えるのは、workerのイメージとcomposeの定義の変更が、次にホストで`mise run up`するまで反映されないからである。レビューする人がその変更を知る必要がある。
 
 保護パスの一覧は、Factory自身に限らず、実装フローが扱うすべてのリポジトリに効く。

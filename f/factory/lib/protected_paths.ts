@@ -42,6 +42,11 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  */
 export const FORBIDDEN_EXACT_PATHS: readonly string[] = ["console/index.html"];
 
+/**
+ * pr_fixが保護するファイル名(ディレクトリを問わない)。
+ * markdownlint-cli2とtextlintの設定も含める。どちらも設定から任意のモジュールを読み込めて、
+ * pre-commitと`mise run check`が読むので、書き換えられるとコードを実行されるため。
+ */
 export const FORBIDDEN_BASENAME_PATTERNS: readonly RegExp[] = [
   /^mise\.toml$/,
   /^mise\..*\.toml$/,
@@ -54,6 +59,8 @@ export const FORBIDDEN_BASENAME_PATTERNS: readonly RegExp[] = [
   /^\.npmrc$/,
   /^\.gitattributes$/,
   /^\.gitmodules$/,
+  /^\.markdownlint(-cli2)?\.(jsonc?|ya?ml|[cm]?js)$/,
+  /^\.textlintrc(\..*)?$/,
 ];
 
 /**
