@@ -72,10 +72,12 @@
         # 検索インデクサ。Enterprise Edition用(windmill_indexer:8002)
         # reverse_proxy /api/srch/* http://windmill_indexer:8002
 
-        # 生のURIが/consoleで始まるのに上のConsoleの経路に入らなかった要求
+        # 元のパスが/console/で始まるのに上のConsoleの経路に入らなかった要求
         # (`/console/..%2fapi/...`のようにCaddyの正規化でConsoleの外に出たもの)は、
         # Windmillへ転送せず404にする。handle_errorsでもConsoleの応答の判定に使う。
-        @console_raw expression `{http.request.orig_uri}.matches("(?i)^/console")`
+        # CSPはパーセント符号を戻してから比べるので(`/%63onsole/`も`/console/`に合う)、
+        # 生のURIではなく、符号を戻しただけで正規化していない元のパスで判定する。
+        @console_raw expression `{http.request.orig_uri.path}.matches("(?i)^/+console(/|$)")`
         handle @console_raw {
                 error 404
         }
