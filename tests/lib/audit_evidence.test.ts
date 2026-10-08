@@ -58,7 +58,8 @@ const EMPTY_EVIDENCE: AuditEvidence = {
   fix_reply_decisions: [],
   review_findings: [],
   notices: [],
-  unresolved_notices: 0,
+  unresolved_notices_in_period: [],
+  unresolved_notices_before_period: [],
   deployments: [],
   deployments_needing_host_action: 0,
   past_proposals: [],
@@ -88,7 +89,14 @@ const OVERLOADED_EVIDENCE: AuditEvidence = {
     note: `note ${i} ${"u".repeat(30)}`,
     count: i,
   })),
-  unresolved_notices: 3,
+  unresolved_notices_in_period: [],
+  unresolved_notices_before_period: [
+    {
+      key: "sha_mismatch",
+      count: 3,
+      oldest_created_at: "2026-09-01T00:00:00.000Z",
+    },
+  ],
   deployments_needing_host_action: 2,
 };
 
@@ -105,7 +113,14 @@ const OVERLOADED_EVIDENCE: AuditEvidence = {
  */
 const REGRESSION_EVIDENCE: AuditEvidence = {
   ...EMPTY_EVIDENCE,
-  unresolved_notices: 7,
+  unresolved_notices_in_period: [],
+  unresolved_notices_before_period: [
+    {
+      key: "sha_mismatch",
+      count: 7,
+      oldest_created_at: "2026-09-01T00:00:00.000Z",
+    },
+  ],
   deployments_needing_host_action: 12,
   failures: Array.from({ length: 400 }, (_, i) => ({
     flow_path: `f/factory/p-${i}-${"a".repeat(20)}`,
@@ -236,7 +251,7 @@ describe("renderEvidenceMarkdown", () => {
 
   test("keeps the 未解決 fixed line under truncation (F7c)", () => {
     const markdown = renderEvidenceMarkdown(OVERLOADED_EVIDENCE);
-    expect(markdown).toContain("未解決: 3件");
+    expect(markdown).toContain("未解決(期間前から): 3件");
   });
 
   test("never exceeds 12,000 characters for a heavily overloaded evidence (R3/F7d)", () => {
@@ -254,7 +269,7 @@ describe("renderEvidenceMarkdown", () => {
 
   test("keeps 未解決 for the fix-round-2 regression input (2)", () => {
     const markdown = renderEvidenceMarkdown(REGRESSION_EVIDENCE);
-    expect(markdown).toContain("未解決: 7件");
+    expect(markdown).toContain("未解決(期間前から): 7件");
   });
 
   test("never exceeds 12,000 characters for the fix-round-2 regression input (3)", () => {
@@ -612,6 +627,120 @@ describe("unset values (missing keys)", () => {
     );
     expect(renderEvidenceMarkdown(evidence)).toContain(
       "- needs_human 未設定: 2件",
+    );
+  });
+});
+
+const UNRESOLVED_NOTICE_INDEX = 9;
+
+describe("unresolved notices split by period", () => {
+  const rows: SqlRow[] = [
+    {
+      key: "sha_mismatch",
+      bucket: "in_period",
+      count: 3,
+      oldest_created_at: "2026-09-22T00:00:00.000Z",
+    },
+    {
+      key: "host_action",
+      bucket: "in_period",
+      count: 1,
+      oldest_created_at: "2026-09-23T00:00:00.000Z",
+    },
+    {
+      key: "review_failed",
+      bucket: "before_period",
+      count: 5,
+      oldest_created_at: "2026-09-10T00:00:00.000Z",
+    },
+    {
+      key: "sha_mismatch",
+      bucket: "before_period",
+      count: 4,
+      oldest_created_at: "2026-09-12T00:00:00.000Z",
+    },
+  ];
+
+  async function evidenceWith(
+    noticeRows: SqlRow[],
+  ): Promise<{ evidence: AuditEvidence; calls: FakeCall[] }> {
+    const { sql, calls } = createFakeSqlClient(
+      responsesWithRowsAt(UNRESOLVED_NOTICE_INDEX, noticeRows),
+    );
+    const evidence = await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    return { evidence, calls };
+  }
+
+  test("collects the in-period groups with their oldest creation time", async () => {
+    const { evidence } = await evidenceWith(rows);
+    expect(evidence.unresolved_notices_in_period).toEqual([
+      {
+        key: "sha_mismatch",
+        count: 3,
+        oldest_created_at: "2026-09-22T00:00:00.000Z",
+      },
+      {
+        key: "host_action",
+        count: 1,
+        oldest_created_at: "2026-09-23T00:00:00.000Z",
+      },
+    ]);
+  });
+
+  test("collects the groups that were already unresolved before the period", async () => {
+    const { evidence } = await evidenceWith(rows);
+    expect(
+      evidence.unresolved_notices_before_period.map((group) => group.key),
+    ).toEqual(["review_failed", "sha_mismatch"]);
+  });
+
+  test("renders the in-period unresolved count on its own line", async () => {
+    const { evidence } = await evidenceWith(rows);
+    expect(renderEvidenceMarkdown(evidence)).toContain(
+      "- 未解決(期間内に作成): 4件\n",
+    );
+  });
+
+  test("renders the carried-over unresolved count on its own line", async () => {
+    const { evidence } = await evidenceWith(rows);
+    expect(renderEvidenceMarkdown(evidence)).toContain(
+      "- 未解決(期間前から): 9件\n",
+    );
+  });
+
+  test("renders the kind breakdown of the carried-over notices with the oldest time", async () => {
+    const { evidence } = await evidenceWith(rows);
+    expect(renderEvidenceMarkdown(evidence)).toContain(
+      "- 未解決(期間前から) review_failed: 5件 / 最古 2026-09-10T00:00:00.000Z",
+    );
+  });
+
+  test("renders zero for both counts when nothing is unresolved", async () => {
+    const { evidence } = await evidenceWith([]);
+    expect(renderEvidenceMarkdown(evidence)).toContain(
+      "- 未解決(期間内に作成): 0件\n- 未解決(期間前から): 0件",
+    );
+  });
+
+  test("labels a notice kind that is missing as 未設定", async () => {
+    const { evidence } = await evidenceWith([
+      {
+        key: null,
+        bucket: "before_period",
+        count: 2,
+        oldest_created_at: "2026-09-10T00:00:00.000Z",
+      },
+    ]);
+    expect(evidence.unresolved_notices_before_period[0]?.key).toBe("未設定");
+  });
+
+  test("only counts notices created before the end of the period", async () => {
+    const { calls } = await evidenceWith([]);
+    expect(calls[UNRESOLVED_NOTICE_INDEX]?.values).toContain(
+      PERIOD.end.toISOString(),
     );
   });
 });

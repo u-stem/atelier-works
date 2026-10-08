@@ -210,6 +210,12 @@ export type RejectionRecord = {
 };
 export type HumanOutcome = { to_status: string; note: string; count: number };
 export type CountByKey = { key: string; count: number };
+/** 未解決の通知の、種別ごとの件数と最も古い作成時刻。 */
+export type UnresolvedNoticeGroup = {
+  key: string;
+  count: number;
+  oldest_created_at: string;
+};
 export type PastProposal = {
   title: string;
   status: string;
@@ -240,7 +246,13 @@ export type AuditEvidence = {
   readonly fix_reply_decisions: CountByKey[];
   readonly review_findings: CountByKey[];
   readonly notices: CountByKey[];
-  readonly unresolved_notices: number;
+  /**
+   * 期間内に作成され、期間の終わりの時点で未解決の通知。種別ごと。
+   * 件数は種別ごとの件数の合計で、別に数えた値ではない。
+   */
+  readonly unresolved_notices_in_period: UnresolvedNoticeGroup[];
+  /** 期間より前に作成され、期間の終わりの時点でも未解決の通知。種別ごと。 */
+  readonly unresolved_notices_before_period: UnresolvedNoticeGroup[];
   readonly deployments: CountByKey[];
   readonly deployments_needing_host_action: number;
   readonly past_proposals: PastProposal[];
@@ -251,6 +263,16 @@ const DATA_NOT_INSTRUCTIONS_BANNER =
 
 function unsetIfBlank(value: string | null): string {
   return value === null || value.length === 0 ? UNSET_LABEL : value;
+}
+
+function formatUnresolvedLine(
+  label: string,
+  group: UnresolvedNoticeGroup,
+): string {
+  return sanitizeCell(
+    `未解決(${label}) ${group.key}: ${group.count}件 / 最古 ${group.oldest_created_at}`,
+    SANITIZE_CELL_MAX,
+  );
 }
 
 function formatStageLine(stat: StageStat, previous: StageStat | undefined) {
@@ -317,11 +339,30 @@ function buildEvidenceSections(evidence: AuditEvidence): EvidenceSection[] {
     sanitizeCell(`${entry.key}: ${entry.count}件`, SANITIZE_CELL_MAX),
   );
 
-  const noticeLines = evidence.notices.map((entry) =>
-    sanitizeCell(`${entry.key}: ${entry.count}件`, SANITIZE_CELL_MAX),
-  );
+  const unresolvedInPeriod = evidence.unresolved_notices_in_period;
+  const unresolvedBefore = evidence.unresolved_notices_before_period;
   const noticeFixed = [
-    sanitizeCell(`未解決: ${evidence.unresolved_notices}件`, SANITIZE_CELL_MAX),
+    sanitizeCell(
+      `未解決(期間内に作成): ${sumBy(unresolvedInPeriod, (group) => group.count)}件`,
+      SANITIZE_CELL_MAX,
+    ),
+    sanitizeCell(
+      `未解決(期間前から): ${sumBy(unresolvedBefore, (group) => group.count)}件`,
+      SANITIZE_CELL_MAX,
+    ),
+  ];
+  const unresolvedLines = [
+    ...unresolvedInPeriod.map((group) => formatUnresolvedLine("期間内", group)),
+    ...unresolvedBefore.map((group) =>
+      formatUnresolvedLine("期間前から", group),
+    ),
+  ];
+
+  const noticeLines = [
+    ...evidence.notices.map((entry) =>
+      sanitizeCell(`${entry.key}: ${entry.count}件`, SANITIZE_CELL_MAX),
+    ),
+    ...unresolvedLines,
   ];
 
   const deploymentLines = evidence.deployments.map((entry) =>
@@ -476,10 +517,34 @@ function toCountsByKey(rows: readonly SqlRow[]): CountByKey[] {
   }
   return [...totals.entries()]
     .map(([key, count]) => ({ key, count }))
-    .sort(
-      (a, b) =>
-        b.count - a.count || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0),
-    );
+    .sort(compareByCountThenKey);
+}
+
+function compareByCountThenKey(
+  a: { key: string; count: number },
+  b: { key: string; count: number },
+): number {
+  if (a.count !== b.count) return b.count - a.count;
+  if (a.key < b.key) return -1;
+  return a.key > b.key ? 1 : 0;
+}
+
+/**
+ * 未解決の通知の行を、期間内に作成したものと期間前から残るものに分ける。
+ * `bucket`は問い合わせが決める(`in_period` / `before_period`)。
+ */
+function toUnresolvedNoticeGroups(
+  rows: readonly SqlRow[],
+  bucket: "in_period" | "before_period",
+): UnresolvedNoticeGroup[] {
+  return rows
+    .filter((row) => row.bucket === bucket)
+    .map((row) => ({
+      key: unsetIfBlank(parseCellString(row.key)),
+      count: parseNumeric(row.count),
+      oldest_created_at: parseTimestampIso(row.oldest_created_at),
+    }))
+    .sort(compareByCountThenKey);
 }
 
 function toPastProposal(row: SqlRow): PastProposal {
@@ -673,8 +738,17 @@ export async function collectAuditEvidence(
     GROUP BY kind
   `.fetch();
 
+  // 期間の終わりより後に作った通知は含めない。
+  // 監査を期間の終了後に走らせても、同じ期間なら同じ数になる。
   const unresolvedNoticeRows = await sql`
-    SELECT count(*) AS count FROM factory.notices WHERE resolved = false
+    SELECT kind AS key,
+           CASE WHEN created_at >= ${start}::timestamptz THEN 'in_period' ELSE 'before_period' END AS bucket,
+           count(*) AS count,
+           min(created_at) AS oldest_created_at
+    FROM factory.notices
+    WHERE resolved = false AND created_at < ${end}::timestamptz
+    GROUP BY 1, 2
+    ORDER BY 2, count DESC, 1
   `.fetch();
 
   const deploymentRows = await sql`
@@ -733,7 +807,14 @@ export async function collectAuditEvidence(
     fix_reply_decisions: toCountsByKey(fixReplyDecisionRows),
     review_findings: toCountsByKey(reviewFindingRows),
     notices: toCountsByKey(noticeRows),
-    unresolved_notices: parseNumeric(unresolvedNoticeRows[0]?.count),
+    unresolved_notices_in_period: toUnresolvedNoticeGroups(
+      unresolvedNoticeRows,
+      "in_period",
+    ),
+    unresolved_notices_before_period: toUnresolvedNoticeGroups(
+      unresolvedNoticeRows,
+      "before_period",
+    ),
     deployments: toCountsByKey(deploymentRows),
     deployments_needing_host_action: parseNumeric(
       deploymentsNeedingHostActionRows[0]?.count,
