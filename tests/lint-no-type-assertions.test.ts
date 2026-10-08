@@ -8,10 +8,10 @@ describe("DEFAULT_GLOBS", () => {
   test("covers the console and console_fetcher TypeScript sources", () => {
     expect(DEFAULT_GLOBS).toEqual(
       expect.arrayContaining([
-        "console/*.ts",
-        "console/src/**/*.ts",
-        "console/scripts/**/*.ts",
-        "infra/console_fetcher/**/*.ts",
+        "console/*.{ts,tsx}",
+        "console/src/**/*.{ts,tsx}",
+        "console/scripts/**/*.{ts,tsx}",
+        "infra/console_fetcher/**/*.{ts,tsx}",
       ]),
     );
   });
@@ -171,5 +171,85 @@ describe("findTypeAssertions", () => {
     expect(() => findTypeAssertions("sample.ts", "#(")).toThrow(
       /sample\.ts:1:1/,
     );
+  });
+});
+
+describe("findTypeAssertions on .tsx", () => {
+  const lines = (findings: readonly { line: number }[]) =>
+    findings.map((f) => f.line);
+
+  test("flags an `as` assertion inside a JSX attribute expression", () => {
+    const findings = findTypeAssertions(
+      "sample.tsx",
+      "const a = <Foo value={x as Bar} />;",
+    );
+    expect(findings).toHaveLength(1);
+  });
+
+  test("flags an `as` assertion inside a JSX child expression", () => {
+    const findings = findTypeAssertions(
+      "sample.tsx",
+      "const a = <div>{(x as Bar).name}</div>;",
+    );
+    expect(findings).toHaveLength(1);
+  });
+
+  test("ignores `as` in JSX text, attribute strings, and attribute names", () => {
+    const source = [
+      "const a = (",
+      '  <Link as="a" title="treat it as data" data-as-of="x">',
+      "    Read this as plain text, don't worry / about it",
+      "    <>nested as text</>",
+      "  </Link>",
+      ");",
+      "const b = 1;",
+    ].join("\n");
+    expect(findTypeAssertions("sample.tsx", source)).toHaveLength(0);
+  });
+
+  test("resumes ordinary checks after a JSX element ends", () => {
+    const source = [
+      "const a = <div>as text</div>;",
+      "const b = <br />;",
+      "const c = y as Foo;",
+    ].join("\n");
+    expect(lines(findTypeAssertions("sample.tsx", source))).toEqual([3]);
+  });
+
+  test("tracks nested elements and expressions", () => {
+    const source = [
+      "const a = (",
+      "  <ul>",
+      "    {items.map((item) => (",
+      "      <li key={item.id}>{item.label} as text</li>",
+      "    ))}",
+      "    <li>{flag ? <b>yes</b> : `as ${n}`}</li>",
+      "  </ul>",
+      ");",
+      "const c = y as Foo;",
+    ].join("\n");
+    expect(lines(findTypeAssertions("sample.tsx", source))).toEqual([9]);
+  });
+
+  test("treats generic arrow functions as code, not JSX", () => {
+    const source = [
+      "const id = <T,>(v: T) => v as Foo;",
+      "const pick = <T extends object>(v: T) => v;",
+    ].join("\n");
+    expect(lines(findTypeAssertions("sample.tsx", source))).toEqual([1]);
+  });
+
+  test("does not treat a less-than comparison as JSX", () => {
+    const source = "const ok = a < b;\nconst c = y as Foo;";
+    expect(lines(findTypeAssertions("sample.tsx", source))).toEqual([2]);
+  });
+
+  test("allows an assertion inside a type guard in a .tsx file", () => {
+    const source = [
+      "function isFoo(v: unknown): v is Foo {",
+      '  return (v as Foo).kind === "foo";',
+      "}",
+    ].join("\n");
+    expect(findTypeAssertions("sample.tsx", source)).toHaveLength(0);
   });
 });

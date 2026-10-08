@@ -41,17 +41,16 @@ export type Finding = {
 
 /**
  * 引数が無いときに検査するファイル。
- * `.tsx`は含めない。このスキャナーはJSXの本文を通常のコードとして読み、
- * 本文の"as"などを誤検知するため。
+ * `console/`は`node_modules`を歩かないよう、ソースのあるディレクトリだけを挙げる。
  */
 export const DEFAULT_GLOBS: readonly string[] = [
-  "f/**/*.ts",
-  "tests/**/*.ts",
-  "scripts/**/*.ts",
-  "console/*.ts",
-  "console/src/**/*.ts",
-  "console/scripts/**/*.ts",
-  "infra/console_fetcher/**/*.ts",
+  "f/**/*.{ts,tsx}",
+  "tests/**/*.{ts,tsx}",
+  "scripts/**/*.{ts,tsx}",
+  "console/*.{ts,tsx}",
+  "console/src/**/*.{ts,tsx}",
+  "console/scripts/**/*.{ts,tsx}",
+  "infra/console_fetcher/**/*.{ts,tsx}",
 ];
 
 export type Token = {
@@ -118,13 +117,90 @@ export class ScannerStallError extends Error {
 }
 
 /**
+ * JSXの読み取り中の文脈。`tokenize`は、これを積んだスタックの先頭で
+ * 次のトークンの読み方を決める。
+ * - `tag`: `<`・`</`から`>`までのタグの中。名前は`-`を含みうるので
+ *   `scanJsxIdentifier`で読み、`=`の後の値は`scanJsxAttributeValue`で読む
+ *   (JSXの属性の文字列はエスケープを持たない)。`closing`は閉じタグか。
+ * - `children`: 開きタグと閉じタグの間。`scanJsxToken`で読み、本文は
+ *   JsxTextの1トークンになる(本文の"as"を`as`キーワードと誤読しない)。
+ * - `expression`: JSXの中の`{...}`。普通のコードとして読み、
+ *   `braceDepth`で自分を閉じる`}`を見分ける。
+ */
+type JsxFrame =
+  | { readonly kind: "tag"; readonly closing: boolean }
+  | { readonly kind: "children" }
+  | { kind: "expression"; braceDepth: number };
+
+function isIdentifierOrKeyword(kind: number): boolean {
+  return (
+    kind === SyntaxKind.Identifier ||
+    (kind >= SyntaxKind.FirstKeyword && kind <= SyntaxKind.LastKeyword)
+  );
+}
+
+export type TokenizeOptions = {
+  /** `.tsx`のときtrue。JSXの要素を読み分ける。 */
+  readonly jsx?: boolean;
+};
+
+/**
  * ソースをトークン列に分割する。コメント・空白・改行は`skipTrivia`で読み飛ばす
  * ため、トークン列にはコードだけが残る(JSDocも同様)。`text`はソース上の
  * 表記で、コメント以外の差分検査(`check-comment-only-diff.ts`)が比較に使う。
+ *
+ * `jsx`のときは、式の位置の`<`の後に名前か`>`が続けばJSXの要素の始まりと
+ * みなし、`JsxFrame`のスタックで要素の終わりまで読み分ける。ジェネリックな
+ * アロー関数の型引数(`<T,>(x) =>`・`<T extends U>(x) =>`)はJSXとみなさない。
+ * 型注釈の中のジェネリックな関数型(`const f: <T>(v: T) => T`)はJSXと
+ * 読み違えうるが、`.ts`での既知の制限と同じくまれなので受け入れる。
  */
-export function tokenize(sourceText: string): Token[] {
-  const scanner = createScanner(true, LanguageVariant.Standard, sourceText);
+export function tokenize(
+  sourceText: string,
+  options: TokenizeOptions = {},
+): Token[] {
+  const jsx = options.jsx ?? false;
+  const scanner = createScanner(
+    true,
+    jsx ? LanguageVariant.JSX : LanguageVariant.Standard,
+    sourceText,
+  );
   const tokens: Token[] = [];
+  const jsxFrames: JsxFrame[] = [];
+  let previousKind: number | undefined;
+
+  // 式の位置の`<`(今のトークン)がJSXの要素を始めるかを、先読みで判断する。
+  const startsJsxElement = (): boolean =>
+    scanner.lookAhead(() => {
+      const name = scanner.scan();
+      if (name === SyntaxKind.GreaterThanToken) return true;
+      if (!isIdentifierOrKeyword(name)) return false;
+      const afterName = scanner.scan();
+      return (
+        afterName !== SyntaxKind.CommaToken &&
+        afterName !== SyntaxKind.ExtendsKeyword
+      );
+    });
+
+  // JSXの文脈に応じて次のトークンを読む。
+  const scanNext = (): number => {
+    const top = jsxFrames.at(-1);
+    if (top?.kind === "children") return scanner.scanJsxToken();
+    if (top?.kind === "tag") {
+      if (previousKind === SyntaxKind.EqualsToken) {
+        return scanner.scanJsxAttributeValue();
+      }
+      const kind = scanner.scan();
+      // タグの名前・属性の名前は、キーワードと同じ綴り(`<Link as="a">`の
+      // `as`など)でも名前なので、Identifierとして扱う。
+      if (isIdentifierOrKeyword(kind)) {
+        scanner.scanJsxIdentifier();
+        return SyntaxKind.Identifier;
+      }
+      return kind;
+    }
+    return scanner.scan();
+  };
   // 開いているテンプレートの置換ごとに、`${`からの波括弧の深さを持つ
   // (入れ子のテンプレートリテラル1つにつき1要素)。単純な`scan()`のループは
   // テンプレートの`}...`の続き(任意の文字を含み、裸の`as`もありうる)を
@@ -136,11 +212,13 @@ export function tokenize(sourceText: string): Token[] {
   // 型アサーションと誤検知される。
   const templateSubstitutionDepths: number[] = [];
 
-  let previousKind: number | undefined;
   let previousEnd = -1;
   let kind = scanner.scan();
   while (kind !== SyntaxKind.EndOfFile) {
-    if (isRegularExpressionStart(kind, previousKind)) {
+    const jsxTop = jsxFrames.at(-1);
+    const inJsxMarkup = jsxTop?.kind === "tag" || jsxTop?.kind === "children";
+    // タグの中の`/`は自己終了の`/>`の一部で、正規表現ではない。
+    if (!inJsxMarkup && isRegularExpressionStart(kind, previousKind)) {
       kind = scanner.reScanSlashToken();
     }
     // トークンごとにスキャナーが必ず進んでいることを確かめる。進まないと、
@@ -174,15 +252,74 @@ export function tokenize(sourceText: string): Token[] {
         }
       }
     }
+    if (jsx) updateJsxFrames(jsxFrames, kind, previousKind, startsJsxElement);
     tokens.push({
       kind,
       start: scanner.getTokenStart(),
       text: scanner.getTokenText(),
     });
     previousKind = kind;
-    kind = scanner.scan();
+    kind = scanNext();
   }
   return tokens;
+}
+
+/**
+ * 読んだトークン`kind`に応じて、JSXの文脈のスタックを進める。
+ * `startsJsxElement`は、コードの中の`<`がJSXの要素を始めるかの先読み。
+ */
+function updateJsxFrames(
+  frames: JsxFrame[],
+  kind: number,
+  previousKind: number | undefined,
+  startsJsxElement: () => boolean,
+): void {
+  const top = frames.at(-1);
+
+  if (top === undefined || top.kind === "expression") {
+    if (
+      kind === SyntaxKind.LessThanToken &&
+      (previousKind === undefined ||
+        !EXPRESSION_END_TOKENS.has(previousKind)) &&
+      startsJsxElement()
+    ) {
+      frames.push({ kind: "tag", closing: false });
+    } else if (top !== undefined && kind === SyntaxKind.OpenBraceToken) {
+      top.braceDepth++;
+    } else if (top !== undefined && kind === SyntaxKind.CloseBraceToken) {
+      if (top.braceDepth === 0) {
+        frames.pop();
+      } else {
+        top.braceDepth--;
+      }
+    }
+    return;
+  }
+
+  if (top.kind === "children") {
+    if (kind === SyntaxKind.LessThanToken) {
+      frames.push({ kind: "tag", closing: false });
+    } else if (kind === SyntaxKind.LessThanSlashToken) {
+      frames.push({ kind: "tag", closing: true });
+    } else if (kind === SyntaxKind.OpenBraceToken) {
+      frames.push({ kind: "expression", braceDepth: 0 });
+    }
+    return;
+  }
+
+  // タグの中。
+  if (kind === SyntaxKind.OpenBraceToken) {
+    frames.push({ kind: "expression", braceDepth: 0 });
+  } else if (kind === SyntaxKind.GreaterThanToken) {
+    frames.pop();
+    if (top.closing) {
+      // 閉じタグで、その要素の本文も終わる。
+      frames.pop();
+    } else if (previousKind !== SyntaxKind.SlashToken) {
+      // 自己終了でない開きタグの後は本文が続く。
+      frames.push({ kind: "children" });
+    }
+  }
 }
 
 /**
@@ -464,9 +601,10 @@ export function findTypeAssertions(
   sourceText: string,
 ): Finding[] {
   const lineStarts = computeLineStarts(sourceText);
+  const jsx = fileName.endsWith(".tsx");
   let tokens: Token[];
   try {
-    tokens = tokenize(sourceText);
+    tokens = tokenize(sourceText, { jsx });
   } catch (err) {
     if (err instanceof ScannerStallError) {
       const { line, column } = positionToLineAndColumn(
@@ -504,7 +642,9 @@ export function findTypeAssertions(
       continue;
     }
 
-    if (token.kind === SyntaxKind.LessThanToken) {
+    // `.tsx`では`<Type>expr`の構文が無く(JSXと衝突するため)、`<`はJSXか
+    // ジェネリクスなので検査しない。
+    if (!jsx && token.kind === SyntaxKind.LessThanToken) {
       const previous = i > 0 ? tokens[i - 1] : undefined;
       const isExpressionContext =
         previous === undefined ||

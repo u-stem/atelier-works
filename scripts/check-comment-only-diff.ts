@@ -90,7 +90,7 @@ function sameTranspiled(path: string, before: string, after: string): boolean {
 
 function sameTokens(path: string, before: string, after: string): boolean {
   if (shebangOf(before) !== shebangOf(after)) return false;
-  // tokenizeはJSXを扱えないので、tsxは最初からTranspilerで比べる。
+  // tokenizeのJSXの読み分けはヒューリスティックなので、tsxは最初からTranspilerで比べる。
   if (extensionOf(path) === ".tsx") return sameTranspiled(path, before, after);
   try {
     const a = codeTokens(before);
