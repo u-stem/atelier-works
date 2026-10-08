@@ -1090,12 +1090,14 @@ export function isFixClaudeOutput(value: unknown): value is FixClaudeOutput {
  * リネームは新しいパスに加えて、元のパスを`"deleted"`として返す。
  * 保護されたファイルを保護された場所の外へ移しても、検査から漏れないようにするため。
  * コピーの元のパスは変わっていないので返さない。
- * 未追跡(`"??"`)とステージ済みの追加(`"A "`)はどちらも`"added"`とする。
- * 「新しい`*.sh`ファイル」の禁止の検査はこれらにだけ反応し、
+ * 未追跡(`"??"`)、ステージ済みの追加(`"A "`)、リネームとコピーの新しいパスは`"added"`とする。
+ * 「新しい`*.sh`ファイル」の禁止の検査と新しいファイルの行数の集計はこれらにだけ反応し、
  * 追跡済みの既存ファイルの編集には反応しない。
+ * リネームとコピーを含めるのは、implementフローの`parseGitDiffNameStatusZ`と同じく、
+ * 名前を変えて`*.sh`を作る変更も新しいファイルとして扱うため。
  * `T`(どちらの側でもtypechange)は独自の状態として扱う。
  * gitのオブジェクトの種類自体が変わった追跡済みのパス(主に通常ファイルとsymlinkの間)で、
- * 普通の`"modified"`より優先する。symlinkから別の種類に変わったパスは
+ * リネームや普通の`"modified"`より優先する。symlinkから別の種類に変わったパスは
  * `git ls-files -s`にmode 120000として現れないことがあり、
  * symlinkが関わったことを示す手がかりがこれしか残らないため。
  */
@@ -1108,8 +1110,9 @@ export function parseGitStatusPorcelainZ(output: string): ChangedPath[] {
     index += 1;
     const xy = record.slice(0, 2);
     const path = record.slice(3);
+    const renamedOrCopied = xy.includes("R") || xy.includes("C");
     let source = "";
-    if (xy.includes("R") || xy.includes("C")) {
+    if (renamedOrCopied) {
       source = fields[index] ?? "";
       index += 1;
     }
@@ -1120,9 +1123,11 @@ export function parseGitStatusPorcelainZ(output: string): ChangedPath[] {
       status = "added";
     } else if (xy.includes("T")) {
       status = "typechange";
+    } else if (renamedOrCopied) {
+      status = "added";
     } else if (xy.includes("D")) {
       status = "deleted";
-    } else if (xy.includes("M") || xy.includes("R") || xy.includes("C")) {
+    } else if (xy.includes("M")) {
       status = "modified";
     }
     entries.push({ path, status });
@@ -1706,6 +1711,44 @@ export function evaluateDiffSizeGuard(
     );
   }
   return reasons;
+}
+
+/**
+ * pr_fixのコミットしていない変更が、差分の大きさの上限を超えていれば止める理由を返す。
+ * ファイル数には`changedPaths`(禁止パスの検査と同じ集合)の件数を使う。
+ * 行数は`git diff --numstat -z`の合計に、`"added"`のパスごとの`wc -l`の行数を足す。
+ * numstatは未追跡のファイルを出さないため。
+ * ファイル数がすでに上限を超えていれば、行数を数えずにファイル数の理由だけを返す。
+ * 未追跡のファイルが大量にあると、`wc -l`をその数だけ起動することになるため。
+ */
+export async function evaluateUncommittedDiffSize(
+  run: CommandRunner,
+  worktreeDir: string,
+  changedPaths: readonly ChangedPath[],
+  maxChangedFiles: number,
+  maxDiffLines: number,
+): Promise<string[]> {
+  if (changedPaths.length > maxChangedFiles) {
+    return evaluateDiffSizeGuard(
+      changedPaths.length,
+      0,
+      maxChangedFiles,
+      maxDiffLines,
+    );
+  }
+  const numstatEntries = await getDiffNumstat(run, worktreeDir);
+  const untrackedLineCounts = await Promise.all(
+    changedPaths
+      .filter((entry) => entry.status === "added")
+      .map((entry) => countUntrackedFileLines(run, worktreeDir, entry.path)),
+  );
+  const untrackedLineTotal = untrackedLineCounts.reduce((a, b) => a + b, 0);
+  return evaluateDiffSizeGuard(
+    changedPaths.length,
+    sumDiffNumstatLines(numstatEntries) + untrackedLineTotal,
+    maxChangedFiles,
+    maxDiffLines,
+  );
 }
 
 /**
