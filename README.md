@@ -58,7 +58,7 @@ mise run bootstrap
 
 | タスク | 内容 |
 | --- | --- |
-| `mise run setup` | mise管理ツールの導入 + `bun install --frozen-lockfile` + `lefthook install` |
+| `mise run setup` | mise管理ツールの導入 + `bun install --frozen-lockfile` + `bun install --cwd console --frozen-lockfile --ignore-scripts` + `lefthook install` |
 | `mise run doctor` | 環境診断(OK / NG一覧) |
 | `mise run up` | ローカルWindmillスタックを起動(build込み)。ホスト側checkoutからビルドするため、先にmainをpullする |
 | `mise run down` | スタックを停止する |
@@ -69,7 +69,7 @@ mise run bootstrap
 | `mise run console:check` | Console(`console/`)の型検査・テスト・組み立て |
 | `mise run lint` | biome + `wmill lint` + 型アサーション検出 |
 | `mise run typecheck` | `tsc --noEmit` |
-| `mise run test` | `bun test`(small) |
+| `mise run test` | `bun test`(small)。`console/`は除く(Consoleのテストは`mise run console:check`で実行する) |
 | `mise run test:db` | Data Table migrationのSQLスモークテスト(medium) |
 | `mise run push` | `wmill sync push --yes --keep-deleted` |
 | `mise run push:dry` | `wmill sync push --dry-run`(変更しない) |
