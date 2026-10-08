@@ -66,7 +66,7 @@ stateDiagram-v2
     approved --> implementing: 工程3(implement_enabledが真のとき、またはretry_work_item)
     implementing --> pr_open: PR作成 / 更新
     implementing --> requirements_generating: requirements_gap(attempt+1)
-    implementing --> needs_human: ラウンド・予算上限、停滞、symlink、差分超過、変更なし、push / PR作成失敗
+    implementing --> needs_human: ラウンド・予算上限、停滞、symlink、差分超過、変更なし、push / PR作成失敗、前の実行のプロセスがworktreeを使用中、PRの修正・レビューが実行中
     implementing --> cancelled: Issueがclosed
     implementing --> failed
     approved --> requirements_generating: gap(pr_fixのrequirements_gap、parent_work_item_id経由、attempt+1)
