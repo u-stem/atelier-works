@@ -62,3 +62,23 @@ CLAUDE_CODE_OAUTH_TOKEN = ""
 # 「ウェブフック URL をコピー」を押す。
 #   read -rs 'v?DISCORD_WEBHOOK_URL: ' && mise set -E local DISCORD_WEBHOOK_URL="$v"; unset v
 DISCORD_WEBHOOK_URL = ""
+
+# Console の成果物(CI の artifact)を取り込む console_fetcher 専用の
+# fine-grained personal access token。このリポジトリだけを対象にする。
+# GITHUB_TOKEN(Factory の広い権限の PAT)は流用せず、console_fetcher の
+# コンテナだけに渡す。
+# 手順: GitHub 右上のアイコン → Settings → Developer settings →
+# Personal access tokens → Fine-grained tokens → Generate new token。
+#   - Token name: atelier-works-console-fetcher
+#   - Description: Factory Console fetcher (read CI artifacts)
+#   - Resource owner: このリポジトリの所有者
+#   - Expiration: Custom で 1 年後(最長)。期限切れは console_fetcher の
+#     ログと status.json に auth_failed として出る
+#   - Repository access: Only select repositories → このリポジトリだけ
+#   - Repository permissions:
+#       Actions = Read-only
+#       Metadata = Read-only(自動で付与される)
+#       ほかはすべて No access
+#   - Account permissions: すべて No access
+#   read -rs 'v?CONSOLE_GITHUB_TOKEN: ' && mise set -E local CONSOLE_GITHUB_TOKEN="$v"; unset v
+CONSOLE_GITHUB_TOKEN = ""

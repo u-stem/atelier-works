@@ -109,6 +109,7 @@ required_vars=(
   GITHUB_TOKEN
   CLAUDE_CODE_OAUTH_TOKEN
   DISCORD_WEBHOOK_URL
+  CONSOLE_GITHUB_TOKEN
 )
 missing_vars=()
 for key in "${required_vars[@]}"; do

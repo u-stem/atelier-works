@@ -1,20 +1,112 @@
+# /console/*の応答だけに付けるヘッダー。404とfallbackにも付ける(handle_errorsでも使う)。
+# script-srcは/console/assets/に絞る。CSPのパスにはオリジンが要るので、ブラウザが使った
+# オリジン(scheme://host:port)をplaceholderで入れる。
+(console_headers) {
+        header {
+                Content-Security-Policy "default-src 'self'; script-src {http.request.scheme}://{http.request.hostport}/console/assets/; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-src 'self'; frame-ancestors 'none'; worker-src 'none'"
+                Content-Security-Policy-Report-Only "require-trusted-types-for 'script'"
+                X-Content-Type-Options "nosniff"
+                Referrer-Policy "same-origin"
+                X-Frame-Options "DENY"
+                Cross-Origin-Opener-Policy "same-origin"
+        }
+}
+
+# CSPはパスの`%2f`を区切りとみなさないが、Caddyは区切りに戻してから振り分ける。
+# `/console/assets/..%2f...`がscript-srcを通ったまま別のファイルを指さないよう、
+# 生のパスに符号化した区切り(`%2f`と`%5c`)があれば400にする。
+(console_reject_encoded_separator) {
+        @encoded_separator expression `{http.request.orig_uri}.matches("(?i)^[^?]*%(2f|5c)")`
+        error @encoded_separator 400
+}
+
 {$BASE_URL} {
         # `ADDRESS`が未設定なら、すべてのインターフェース(IPv4とIPv6)で待ち受ける。
         # 値が空の`bind {$ADDRESS}`だと、Caddy 2.9以降はこのサイト全体を捨てる。
         # :25のlayer4のリスナーは動いたまま、HTTPのプロキシだけが黙って止まる。
         bind {$ADDRESS:0.0.0.0 ::}
 
+        # 元のパス(パーセント符号を戻しただけで正規化していないもの)が/consoleか/console/で
+        # 始まる要求。CSPは符号を戻してから比べるので(`/%63onsole/`も`/console/`に合う)、
+        # 生のURIではなくこれで判定する。handle_errorsでもConsoleの応答の判定に使う。
+        @console_raw expression `{http.request.orig_uri.path}.matches("(?i)^/+console(/|$)")`
+
         # 追加のサービス: LSP、Multiplayer、Debugger(`windmill_extra`のゲートウェイ)。
-        # `reverse_proxy`は最初の引数だけをmatcherとして読むので、パスを並べると
-        # 2つ目以降が転送先のアドレスになる。複数のパスは名前付きmatcherで渡す。
         @extra path /ws/* /ws_mp/* /ws_debug/*
-        reverse_proxy @extra http://windmill_extra:3000
 
-        # 検索インデクサ。Enterprise Edition用(windmill_indexer:8002)
-        # reverse_proxy /api/srch/* http://windmill_indexer:8002
+        # 他のサイト(別のポートのlocalhostを含む)から、運用者のCookieでAPIを呼ばせない。
+        # Windmillのフロントエンドからの要求にはブラウザがSec-Fetch-Site: same-originを付け、
+        # CLIはこのヘッダーを送らない。ブラウザがこのヘッダーを送るのはlocalhostかHTTPSのときだけなので、
+        # WM_BINDを外向きのHTTPにするとこの防御は効かない(docs/security.mdを参照)。
+        # /ws/*などwindmill_extraの経路には効かない。
+        @cross_site_api {
+                path /api/*
+                header Sec-Fetch-Site cross-site
+                header Sec-Fetch-Site same-site
+        }
 
-        # 既定の転送先: Windmillのサーバー
-        reverse_proxy /* http://windmill_server:8000
+        # Caddyはhandleをmatcherの種類で並べ替えるので、routeで書いた順に評価させる。
+        # Consoleの経路と@console_rawを、どのreverse_proxyよりも先に置く。
+        route {
+                handle /console {
+                        import console_headers
+                        redir * /console/ 308
+                }
+
+                # Consoleの共有のassets。ハッシュ付きの名前なので長期のキャッシュにする。
+                # 無いファイルはindex.htmlに落とさず404にする(handle_errorsが返す)。
+                handle_path /console/assets/* {
+                        import console_headers
+                        import console_reject_encoded_separator
+                        root * /srv/console/assets
+                        header Cache-Control "public, max-age=31536000, immutable"
+                        file_server
+                }
+
+                # Consoleの本体。今の版(current)を返し、無いパスはSPAのindex.htmlに落とす。
+                # index.htmlは毎回確かめさせる(付け替えの後、すぐ新しい版を読ませるため)。
+                handle_path /console/* {
+                        import console_headers
+                        import console_reject_encoded_separator
+                        root * /srv/console/current
+                        header Cache-Control "no-cache"
+                        try_files {path} /index.html
+                        file_server
+                }
+
+                # 元のパスが/console/で始まるのに上のConsoleの経路に入らなかった要求
+                # (`/console/..%2fws/...`のようにCaddyの正規化でConsoleの外に出たもの)は、
+                # どの転送先にも渡さず404にする。
+                handle @console_raw {
+                        error 404
+                }
+
+                handle @cross_site_api {
+                        respond 403
+                }
+
+                handle @extra {
+                        reverse_proxy http://windmill_extra:3000
+                }
+
+                # 検索インデクサ。Enterprise Edition用(windmill_indexer:8002)
+                # reverse_proxy /api/srch/* http://windmill_indexer:8002
+
+                # 既定の転送先: Windmillのサーバー
+                handle {
+                        reverse_proxy http://windmill_server:8000
+                }
+        }
+
+        # Consoleのエラー(無いassets、currentがまだ無いとき、符号化した区切り、上の404)にも
+        # Consoleのヘッダーを付ける。Console以外のエラーはCaddyの既定の応答にする。
+        handle_errors {
+                handle @console_raw {
+                        import console_headers
+                        header Cache-Control "no-store"
+                        respond "{err.status_code} {err.status_text}" {err.status_code}
+                }
+        }
 
         # 独自の証明書でTLSを使う場合
         # tls /certs/cert.pem /certs/key.pem

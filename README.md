@@ -38,7 +38,7 @@ mise run setup
 ```bash
 read -rs 'v?DB_PASSWORD: ' && mise set -E local DB_PASSWORD="$v"; unset v
 # 他のキー(WM_ADMIN_EMAIL, WM_ADMIN_PASSWORD, GITHUB_TOKEN,
-# CLAUDE_CODE_OAUTH_TOKEN, DISCORD_WEBHOOK_URL)も同様に投入する
+# CLAUDE_CODE_OAUTH_TOKEN, DISCORD_WEBHOOK_URL, CONSOLE_GITHUB_TOKEN)も同様に投入する
 ```
 
 ```bash
@@ -58,17 +58,18 @@ mise run bootstrap
 
 | タスク | 内容 |
 | --- | --- |
-| `mise run setup` | mise管理ツールの導入 + `bun install --frozen-lockfile` + `lefthook install` |
+| `mise run setup` | mise管理ツールの導入 + `bun install --frozen-lockfile` + `bun install --cwd console --frozen-lockfile --ignore-scripts` + `lefthook install` |
 | `mise run doctor` | 環境診断(OK / NG一覧) |
 | `mise run up` | ローカルWindmillスタックを起動(build込み)。ホスト側checkoutからビルドするため、先にmainをpullする |
 | `mise run down` | スタックを停止する |
 | `mise run build` | workerイメージのみビルドする |
 | `mise run bootstrap` | 初回セットアップ(ワークスペース作成・secret投入・sync push・migration、冪等) |
 | `mise run deploy` | `git pull --ff-only` → build → up → push → migrateを一括実行する(手動で一括反映したいときの手段) |
-| `mise run check` | `lint` → `typecheck` → `test`を順に実行する |
+| `mise run check` | `lint` → `typecheck` → `test` → `console:check`を順に実行する |
+| `mise run console:check` | Console(`console/`)のlockfileの方針を検査し、続けて型検査・テスト・組み立てを行う |
 | `mise run lint` | biome + `wmill lint` + 型アサーション検出 |
 | `mise run typecheck` | `tsc --noEmit` |
-| `mise run test` | `bun test`(small) |
+| `mise run test` | `bun test`(small)。`console/`は除く(Consoleのテストは`mise run console:check`で実行する) |
 | `mise run test:db` | Data Table migrationのSQLスモークテスト(medium) |
 | `mise run push` | `wmill sync push --yes --keep-deleted` |
 | `mise run push:dry` | `wmill sync push --dry-run`(変更しない) |
@@ -76,6 +77,8 @@ mise run bootstrap
 | `mise run pull` | `wmill sync pull` |
 | `mise run migrate` | `wmill datatable migrate up` |
 | `mise run logs` | スタックのログを追跡する |
+| `mise run console:rollback` | Consoleを直前の版に戻して固定する(自動の更新を止める) |
+| `mise run console:unpin` | Consoleの固定を外し、自動の更新に戻す |
 
 ## リポジトリ構成
 
@@ -87,12 +90,13 @@ atelier-works/
   mise.local.toml.example          # 秘密値投入のテンプレート(値は自分で入れる)
   wmill.yaml                       # `wmill sync` の設定
   lefthook.yml                     # pre-commit / commit-msg / pre-push フック
+  console/                         # Factory Console(Vite + React)。CI が組み立て、console_fetcher が取り込む
   c_factory_config.resource-type.yaml / rt.d.ts   # factory_config の resource type と生成された型
   .claude/skills/                  # Claude Code のカスタムスキル + wmill が生成した管理スキル
   .agents/skills/                  # wmill が生成した共有エージェントスキル(Codex 等と共有)
   docs/                            # ドキュメント
   f/factory/                       # Windmill の script / flow / resource / variable / schedule
-  infra/                           # docker compose、worker Dockerfile、Caddyfile
+  infra/                           # docker compose、worker Dockerfile、console_fetcher、Caddyfile
   migrations/datatable/main/       # Data Table のマイグレーション
   scripts/                         # doctor.sh / bootstrap.sh / test-db.sh などの運用スクリプト
   templates/                       # factory_config resource のシードテンプレート(git 管理外の初期値)

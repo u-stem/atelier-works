@@ -52,7 +52,7 @@ export function assertBranchMatches(
 }
 
 // ---------------------------------------------------------------------------
-// classifyChangedPaths: 次のホスト側の`mise run up`で反映される変更パスの判定
+// classifyChangedPaths: 次のホスト側の`mise run up`で反映される変更パスと、CI経由で反映されるConsoleの変更パスの判定
 // ---------------------------------------------------------------------------
 
 /**
@@ -67,6 +67,12 @@ export function assertBranchMatches(
  * (人向けのひな形)は動作中のworkerに影響しない。
  */
 const HOST_ACTION_PATH_PATTERNS: readonly RegExp[] = [/^infra\//];
+
+/**
+ * Console(`console/`)のパス。`self_update`もホスト側の`mise run up`も関与せず、
+ * mainへのマージの後、CIが組み立てた成果物を`console_fetcher`が取り込んで反映する。
+ */
+const CONSOLE_CI_PATH_PATTERNS: readonly RegExp[] = [/^console\//];
 
 export const MISE_TOML_PATH = "mise.toml";
 
@@ -128,6 +134,7 @@ export function parseNulSeparatedPaths(output: string): string[] {
 export type ChangedPathsClassification = {
   readonly needs_host_action: boolean;
   readonly host_paths: string[];
+  readonly console_paths: string[];
 };
 
 /**
@@ -136,6 +143,7 @@ export type ChangedPathsClassification = {
  * を分類する。
  * `host_paths`は次のホスト側の起動で反映されるパス、`needs_host_action`は
  * それが1つ以上あるかを表す。
+ * `console_paths`は、マージ後にCIと`console_fetcher`が反映するConsoleのパス。
  * `miseTomlHostSectionsChanged`は呼び出し側による`mise.toml`の判定
  * (`miseTomlNeedsHostAction`の結果)で、`paths`に`mise.toml`が
  * 含まれるときだけ意味を持つ。
@@ -149,7 +157,14 @@ export function classifyChangedPaths(
       HOST_ACTION_PATH_PATTERNS.some((pattern) => pattern.test(path)) ||
       (path === MISE_TOML_PATH && miseTomlHostSectionsChanged),
   );
-  return { needs_host_action: hostPaths.length > 0, host_paths: hostPaths };
+  const consolePaths = paths.filter((path) =>
+    CONSOLE_CI_PATH_PATTERNS.some((pattern) => pattern.test(path)),
+  );
+  return {
+    needs_host_action: hostPaths.length > 0,
+    host_paths: hostPaths,
+    console_paths: consolePaths,
+  };
 }
 
 // ---------------------------------------------------------------------------

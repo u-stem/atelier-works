@@ -39,7 +39,20 @@ export type Finding = {
   readonly message: string;
 };
 
-const DEFAULT_GLOBS = ["f/**/*.ts", "tests/**/*.ts", "scripts/**/*.ts"];
+/**
+ * 引数が無いときに検査するファイル。
+ * `.tsx`は含めない。このスキャナーはJSXの本文を通常のコードとして読み、
+ * 本文の"as"などを誤検知するため。
+ */
+export const DEFAULT_GLOBS: readonly string[] = [
+  "f/**/*.ts",
+  "tests/**/*.ts",
+  "scripts/**/*.ts",
+  "console/*.ts",
+  "console/src/**/*.ts",
+  "console/scripts/**/*.ts",
+  "infra/console_fetcher/**/*.ts",
+];
 
 export type Token = {
   readonly kind: number;

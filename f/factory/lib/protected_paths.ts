@@ -3,7 +3,7 @@
 // (docs/security.md「pr_fixの安全策」)、implementフロー(`lib/implement_support.ts`)では
 // PR本文とDiscord通知に記録するだけにする。
 // `implement_support`が`steps`からimportしないで済むよう`lib`に置き、
-// `pr_workflow_support.ts`がここの定義をすべて再exportする。
+// `pr_workflow_support.ts`が判定関数とpr_fixの一覧を再exportする。
 
 export type ChangedPathStatus =
   | "added"
@@ -23,6 +23,7 @@ export type ChangedPath = {
  * すべて含める(エージェントの設定、CIのワークフロー、
  * miseのXDG・ドットファイルの設定場所、
  * ディレクトリ形式のlefthook設定)。
+ * `console/public/`も含める。Consoleでバンドルを通らずにそのまま配信され、ページの中で動くファイルを置く。
  */
 export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
   ".claude/",
@@ -31,7 +32,15 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
   ".mise/",
   ".config/mise/",
   ".lefthook/",
+  "console/public/",
 ];
+
+/**
+ * pr_fixが保護する個別のファイル(リポジトリのルートからの相対パス)。
+ * `console/index.html`は、Consoleのすべてのscriptの読み込み元で、バンドルを通らずに配信される。
+ * ファイル名だけでは他の`index.html`と区別できないので、パスで判定する。
+ */
+export const FORBIDDEN_EXACT_PATHS: readonly string[] = ["console/index.html"];
 
 export const FORBIDDEN_BASENAME_PATTERNS: readonly RegExp[] = [
   /^mise\.toml$/,
@@ -68,6 +77,11 @@ export const IMPLEMENT_PROTECTED_PATH_PREFIXES: readonly string[] = [
   ".githooks/",
   ".yarn/",
   ".devcontainer/",
+];
+
+/** implementフローが保護する個別のファイル。pr_fixの一覧と同じ。 */
+export const IMPLEMENT_PROTECTED_EXACT_PATHS: readonly string[] = [
+  ...FORBIDDEN_EXACT_PATHS,
 ];
 
 /**
@@ -124,13 +138,16 @@ function matchesPathLists(
  * `path`がdocs/security.md「pr_fixの安全策」の禁止パスに当たるかを返す。
  * `prefixes`のディレクトリは、リポジトリのルートからの相対パスの前方一致で判定する
  * (ディレクトリ名そのものも一致とみなす)。
- * `FORBIDDEN_BASENAME_PATTERNS`は、ディレクトリを問わずファイル名で判定する。
+ * `FORBIDDEN_EXACT_PATHS`とは完全一致で、`FORBIDDEN_BASENAME_PATTERNS`は
+ * ディレクトリを問わずファイル名で判定する。
  * `prefixes`の既定はpr_fixのリスト。
  */
 export function matchesForbiddenPath(
   path: string,
   prefixes: readonly string[] = FORBIDDEN_PATH_PREFIXES,
 ): boolean {
+  const normalized = path.replace(/^\.\//, "");
+  if (FORBIDDEN_EXACT_PATHS.includes(normalized)) return true;
   return matchesPathLists(path, prefixes, FORBIDDEN_BASENAME_PATTERNS);
 }
 
@@ -138,8 +155,11 @@ export function matchesForbiddenPath(
  * `path`がimplementフローの保護パスに当たるかを返す。
  * 判定の規則は`matchesForbiddenPath`と同じで、リストに
  * `IMPLEMENT_PROTECTED_PATH_PREFIXES`と`IMPLEMENT_PROTECTED_BASENAME_PATTERNS`を使う。
+ * `IMPLEMENT_PROTECTED_EXACT_PATHS`とは完全一致で判定する。
  */
 export function matchesImplementProtectedPath(path: string): boolean {
+  const normalized = path.replace(/^\.\//, "");
+  if (IMPLEMENT_PROTECTED_EXACT_PATHS.includes(normalized)) return true;
   return matchesPathLists(
     path,
     IMPLEMENT_PROTECTED_PATH_PREFIXES,

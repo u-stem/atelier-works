@@ -10,6 +10,7 @@ Software FactoryはGitHub Issueを起点に、要件定義から自己改善ま�
 - **Windmill server / worker**: フローとスケジュールの実行基盤。workerはカスタムイメージで動き、`claude`(Claude Code CLI)、`gh`、`gtr`(git worktree runner)、`wmill`を同梱する。workerはdefaultワーカーグループの1コンテナで、`NUM_WORKERS=3`により内部で3つのワーカープロセスが並列動作する(メモリ上限は1コンテナ分の4096Mのまま)。
 - **Data Tables**: 作業の状態・要件定義ドラフト・承認履歴・実行ログ・失敗記録などを保持するPostgresベースのテーブル群。
 - **App(ダッシュボード)**: 承認Inbox、要件定義書の一覧・全文表示(Confluenceの文書ページに近い見た目、図はインライン描画)、パイプラインの一覧、コスト等の分析、失敗の再実行、通知一覧、監査(監査レポートの一覧・全文表示と「今すぐ監査」)を提供するUI。
+- **Console(作り直し中)**: `console/`(Vite + React)を、GitHubのCIが組み立てて成果物`console-dist`にする。専用のコンテナ`console_fetcher`が5分ごとに成果物を検証して共有ボリューム`factory_console`に置き、Caddyが`/console/`で配信する。`self_update`とWindmillの同期(`wmill sync`)の対象ではない。安全面は[docs/security.md](security.md)の「Consoleの配信」を参照。
 - **Discord**: 各イベント(拾い上げ、承認待ち、承認、却下、要対応、失敗など)をWebhook経由で通知する。
 
 ## パイプライン(工程1 → 5)
@@ -301,8 +302,9 @@ WindmillのUIはsummaryでソートされるため、種別を示すタグをsum
 1. worker内のself clone(このリポジトリ自身)をpullする。SHAが変わっていなければ何もしない。
 2. 変更があれば、Console raw appの依存を`npm ci`で揃えたうえで`wmill sync push --yes --keep-deleted`と`wmill datatable migrate up`をworker内から実行し、Windmill側のscript/flow/scheduleとData Tableの定義を最新化する。
 3. `infra/**`(workerイメージやcompose定義)、または`mise.toml`の`[tools]`(ツールのバージョン)・`[env]`(composeが読む環境変数)セクションに変更がある場合は、workerの自己更新だけでは反映できないため`deployments.needs_host_action = true`として記録し、ログに残す。通知はしない。これらの変更は、ホスト側checkoutをpullしたうえで次に`mise run up`(`docker compose up -d --build`)で起動したときに反映される。一括で反映したいときは`mise run deploy`(ホスト側checkoutで`git pull --ff-only` → worker imageのビルド → `compose up -d` → `wmill sync push` → migration)を手動で実行する。
-4. Claudeが参照するスキル(`.claude/skills/**`)はself cloneを`--add-dir`で直接読むため、pull直後から反映される。
-5. 初回の反映(schedule自体の登録や初回push)は`scripts/bootstrap.sh`がホストから行う。
+4. `console/`(Console)の変更は`self_update`の対象ではない。マージ後にCIが成果物`console-dist`を作り、`console_fetcher`が数分で取り込む。`classifyChangedPaths`は`console_paths`として分けて返し、実装フローのPR本文の「備考」に印を付ける。
+5. Claudeが参照するスキル(`.claude/skills/**`)はself cloneを`--add-dir`で直接読むため、pull直後から反映される。
+6. 初回の反映(schedule自体の登録や初回push)は`scripts/bootstrap.sh`がホストから行う。
 
 ## 工程5: 自己改善(監査)
 

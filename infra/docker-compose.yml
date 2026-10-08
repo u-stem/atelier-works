@@ -4,6 +4,9 @@
 # miseのタスクか子プロセス(`mise run ...`や`mise exec -- docker compose ...`)
 # としてdocker composeを起動したときだけ。miseを通さずに起動すると、空の値で
 # 黙って動かず、`:?`の後のメッセージですぐに失敗する。
+# 例外として、`CONSOLE_GITHUB_TOKEN`だけは`${CONSOLE_GITHUB_TOKEN:-}`(未設定なら空)にしている。
+# 人がトークンを投入する前でも、composeの解釈(CIのtest-dbジョブや`mise run up`)を止めないため。
+# 値が空なら、`console_fetcher`が`status.json`とログに`config_missing`を出して待つ。
 x-logging: &default-logging
   driver: "json-file"
   options:
@@ -167,6 +170,8 @@ services:
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
+      # Consoleの配信物。書けるのはconsole_fetcherだけにし、Caddyは読み取り専用にする。
+      - factory_console:/srv/console:ro
     ports:
       # `WM_BIND`と`WM_HTTP_PORT`には既定値を置かない。miseの`[env]`で設定する
       # (既定では`WM_BIND=127.0.0.1`でlocalhostだけ)。値が無ければ、
@@ -174,6 +179,39 @@ services:
       - "${WM_BIND:?run via mise}:${WM_HTTP_PORT:?run via mise}:80"
     environment:
       - BASE_URL=:80
+    logging: *default-logging
+
+  ## Consoleの成果物をGitHubのCIから取り込み、factory_consoleに置く。
+  ## 配信中のJSを書き換えられるのはこのコンテナだけにする(workerのジョブはrootで動くため、
+  ## workerに書かせると運用者のブラウザに居座る改ざんの経路になる)。
+  ## DBにもWindmillにも届かないよう、専用のnetworkだけに置く。外へは出られるが、
+  ## 接続先(api.github.comと成果物の取得先)はコードで限る。
+  console_fetcher:
+    build:
+      context: ./console_fetcher
+    init: true
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - "no-new-privileges:true"
+    tmpfs:
+      - /tmp:size=16m
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          memory: 256M
+          pids: 64
+    environment:
+      # トークンだけは未設定でも起動する(ファイル冒頭のコメントを参照)。
+      - CONSOLE_GITHUB_TOKEN=${CONSOLE_GITHUB_TOKEN:-}
+      - CONSOLE_GITHUB_REPO=${CONSOLE_GITHUB_REPO:?run via mise}
+    volumes:
+      - factory_console:/srv/console
+    networks:
+      - console_egress
     logging: *default-logging
 
 volumes:
@@ -184,3 +222,10 @@ volumes:
   lsp_cache: null
   factory_workspaces: null
   factory_state: null
+  factory_console: null
+
+networks:
+  # console_fetcherだけの外向きのnetwork。他のサービスは既定のnetwork(default)にいるので、
+  # ここからDBやWindmillには届かない。
+  console_egress:
+    driver: bridge

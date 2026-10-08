@@ -95,6 +95,7 @@ describe("classifyChangedPaths", () => {
     expect(result).toEqual({
       needs_host_action: true,
       host_paths: ["infra/設定.yml"],
+      console_paths: [],
     });
   });
 
@@ -103,6 +104,7 @@ describe("classifyChangedPaths", () => {
     expect(result).toEqual({
       needs_host_action: true,
       host_paths: ["infra/docker-compose.yml"],
+      console_paths: [],
     });
   });
 
@@ -131,7 +133,11 @@ describe("classifyChangedPaths", () => {
 
   test("does not flag a f/factory/** path", () => {
     const result = classifyChangedPaths(["f/factory/self_update.ts"], false);
-    expect(result).toEqual({ needs_host_action: false, host_paths: [] });
+    expect(result).toEqual({
+      needs_host_action: false,
+      host_paths: [],
+      console_paths: [],
+    });
   });
 
   test("returns only the matching subset in host_paths, in order", () => {
@@ -152,7 +158,29 @@ describe("classifyChangedPaths", () => {
     expect(classifyChangedPaths([], false)).toEqual({
       needs_host_action: false,
       host_paths: [],
+      console_paths: [],
     });
+  });
+
+  test("collects paths under console/ into console_paths", () => {
+    const result = classifyChangedPaths(
+      ["console/src/App.tsx", "f/factory/self_update.ts", "console/bun.lock"],
+      false,
+    );
+    expect(result.console_paths).toEqual([
+      "console/src/App.tsx",
+      "console/bun.lock",
+    ]);
+  });
+
+  test("does not treat console/ as needing host action", () => {
+    const result = classifyChangedPaths(["console/index.html"], false);
+    expect(result.needs_host_action).toBe(false);
+  });
+
+  test("does not match a path that merely contains 'console/' mid-string", () => {
+    const result = classifyChangedPaths(["f/factory/console/x.ts"], false);
+    expect(result.console_paths).toEqual([]);
   });
 
   test("does not match a path that merely contains 'infra/' mid-string", () => {

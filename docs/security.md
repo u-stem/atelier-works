@@ -19,7 +19,7 @@
 - エラーメッセージや失敗記録(`job_failures`)に含める前にマスク処理を通す。マスク関数はテストで検証する。
 - `scripts/bootstrap.sh`はシークレットをコマンドライン引数に載せない設計だが、唯一の例外が`wmill workspace add --token <t>`(CLIに他の受け口が無い)。単一ユーザーのローカル環境が前提であれば実害は小さいが、共有マシンで実行する場合は`ps`などでプロセス引数が見えてしまう点に注意する。
 - workerに保持する`f/factory/wmill_token`はワークスペース`factory`に限定した有効期限180日のAPIトークンで、`mise run bootstrap`を再実行するたびに新しいトークンが発行されて置き換わり、旧トークンは失効する(これがローテーション手段になる)。期限切れは、`self_update`スケジュール(工程実装後)の失敗として現れる。
-- ホスト側で必要な秘密値(`DB_PASSWORD`、`WM_ADMIN_EMAIL`、`WM_ADMIN_PASSWORD`、`GITHUB_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`、`DISCORD_WEBHOOK_URL`)は`.env`ファイルを使わない。非秘密の設定は`mise.toml`の`[env]`にコミットし、個人の秘密値はgitignore済みの`mise.local.toml`(テンプレートは`mise.local.toml.example`)に置く。
+- ホスト側で必要な秘密値(`DB_PASSWORD`、`WM_ADMIN_EMAIL`、`WM_ADMIN_PASSWORD`、`GITHUB_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`、`DISCORD_WEBHOOK_URL`、`CONSOLE_GITHUB_TOKEN`)は`.env`ファイルを使わない。非秘密の設定は`mise.toml`の`[env]`にコミットし、個人の秘密値はgitignore済みの`mise.local.toml`(テンプレートは`mise.local.toml.example`)に置く。
 - 値の投入は人が行う。推奨コマンドは`read -rs 'v?KEY: ' && mise set -E local KEY="$v"; unset v`(zsh / bash共通。値に`!`などの記号を含んでもシェル履歴展開で失敗せず、平文がシェル履歴に残らない)。`mise set -E local KEY=value`は`mise.local.toml`に`[env]`テーブルとして書き込まれる(実機確認済み)。Claudeが担当するのは`mise.local.toml.example`(値の無いテンプレート)の更新までで、値の投入は人の作業。必要になったら作業を止めずに投入コマンドを提示して先に進む。具体的な手順は`factory-dev`スキル(`.claude/skills/factory-dev/SKILL.md`)を参照。`mise set -E local KEY=value`の直書きは、値に記号を含まない場合のみ動くが、平文のままシェル履歴に残るため推奨しない。
 - `infra/.env`ファイルは置かない(存在するとDocker Composeが自動的に読み込んでしまうため)。`mise run`タスク経由で解決された環境変数をcomposeファイル内で`${VAR:?run via mise}`として参照し、`mise run`を経由せず直接`docker compose`を叩いた場合はfail-fastで止まるようにする。
 
@@ -36,7 +36,7 @@
   - `--restricted`: Bash等のコード実行ツールとWebFetchを外し、fileツールを作業ディレクトリ(`--add-dir`含む)に閉じる。ネットワークは遮断しない。
 - 対象リポジトリの標準チェック(lint / typecheck / test相当)はClaude自身に実行させない。フロー側のステップが`factory_config.allowed_check_commands[]`(例: `["mise run check"]`)を実行する。対象repoのコードをworkerコンテナ内でrootとして実行する。envの最小化は隔離ではなく、同一uidのため`/proc`経由でジョブトークンに到達しうる。サンドボックス(別コンテナ / 非root / network none)の実装まで既定`[]`を維持し、非空にすると実行ごとにnotice `unsandboxed_check_commands`が記録される。結果を2回目のClaude実行(修正)への入力として渡す。
 - 対象リポジトリが定義するコマンドの中身(`allowed_check_commands`が指す先、対象リポジトリの`mise.toml` / `package.json`のscripts等)は**untrusted**として扱う。worker内のmiseは対象リポジトリの`mise.toml`をtrustしない(`mise --yes trust`を行わない)。`mise.toml`に依存しないコマンドか`MISE_TRUSTED_CONFIG_PATHS`を使わずに実行できないコマンドは、実行せず`blocked`として報告する。
-- 修正の差分に次のいずれかが含まれる場合は **`blocked`** として中断する: `.claude/**`、`.agents/**`、`mise.toml`、`mise.*.toml`、`lefthook.yml`、`.github/workflows/**`、`package.json`の`scripts`変更、新規の`*.sh`ファイル追加。上記は代表例で、完全な一覧は`f/factory/lib/protected_paths.ts`(`FORBIDDEN_PATH_PREFIXES` / `FORBIDDEN_BASENAME_PATTERNS`)に定義し、`steps/pr_workflow_support.ts`が再exportして参照する(lib化で一覧の内容は変えていない。工程3が記録だけに使う`infra/**`入りの一覧は別定数`IMPLEMENT_PROTECTED_PATH_PREFIXES`で、pr_fixの判定には使わない)。
+- 修正の差分に次のいずれかが含まれる場合は **`blocked`** として中断する: `.claude/**`、`.agents/**`、`mise.toml`、`mise.*.toml`、`lefthook.yml`、`.github/workflows/**`、`console/public/**`と`console/index.html`(Consoleでバンドルを通らずに配信されるファイル)、`package.json`の`scripts`変更、新規の`*.sh`ファイル追加。上記は代表例で、完全な一覧は`f/factory/lib/protected_paths.ts`(`FORBIDDEN_PATH_PREFIXES` / `FORBIDDEN_EXACT_PATHS` / `FORBIDDEN_BASENAME_PATTERNS`)に定義し、`steps/pr_workflow_support.ts`が判定関数を再exportして参照する(工程3が記録だけに使う`infra/**`入りの一覧は別定数`IMPLEMENT_PROTECTED_PATH_PREFIXES`で、pr_fixの判定には使わない)。
 - 変更パスは`git status --porcelain -z --untracked-files=all --ignore-submodules=none`と`git diff --name-only -z`の和集合で取り、symlinkのモード(`git ls-files -s -z`)と差分行数(`git diff --numstat -z`)もNUL区切りで読む。引用符付きのパス(非ASCII・制御文字)でも、禁止パス・symlink・差分の大きさの判定を素通りしない。未追跡のディレクトリは`dir/`の1件にまとめず中のファイルを1件ずつ判定するので、まだ無い`.github/`の下に作ったworkflowも止める。renameは新しいパスと元のパスの両方を判定するので、禁止パスへの移動も外への移動も止める。symlinkのモードを引くときは`--literal-pathspecs`でパスを文字どおりに渡し、`*`や`[`を含む名前を別のファイルに一致させない。symlinkは次の3つで探し、どれかで見つかれば`blocked`にする。
   - 索引のmode(`git ls-files -s -z`)
   - 削除以外の変更パスの`lstat`。未追跡の新しいsymlink(検査コマンドが作ったものなど)を見つける。
@@ -100,7 +100,7 @@
 - **承認済み要件定義のファイルは書き換えられない**: Claudeには実行ごとに一時ディレクトリへ複製した要件定義のディレクトリを`--add-dir`で渡し、実行後に削除する。元のファイル(Consoleが表示する承認済みの文書)は渡さない。複製には通常のファイルとディレクトリだけを写し、シンボリックリンクはリンク先に関わらず写さない(リンク先を実体化すると`/proc/self/environ`のような文書の外のファイルが複製に入りうるため)。通常ファイル以外(FIFO等)も写さないので、複製の中にClaudeの`Write`が外へたどれるリンクは残らない。
 - **検査コマンドはClaudeが書いたコードを実行する**: 検査コマンド(テスト等)は、Claudeが書いたテストやソースをworkerコンテナ内でrootとして、サンドボックスなしで実行する。このため実装フローが実行するのは、そのリポジトリについて`check_commands_by_repo`に明示されたコマンドだけで、`allowed_check_commands`には落とさない(エントリが無ければ検査コマンドを実行しない)。worker側のサンドボックスができるまでは、Issueを信頼できる人だけが起票するリポジトリにだけこのエントリを設定する。検査コマンドの実行前には毎回`git clean -fdX`で無視ファイル(`node_modules/`やビルド成果物)を消すので、検査コマンドは依存関係のインストールから行う(例: 先頭に`bun install --frozen-lockfile`)。lockfileは保護パスなので、Claudeが書き換えたラウンドでは検査コマンドを実行しない。検査コマンドは常駐デーモン(バックグラウンドで動き続けるサーバーなど)を残さないこと。ロックのfdを持ったまま残ると、以降のラウンドがロックを取れずに失敗する。fdを閉じて残ったものも、次の準備やpr_fixを止める。
 - **実装ブランチのpushで対象リポジトリのCIが動く**: 実装ブランチのpushとPRの作成により、対象リポジトリ自身の`push` / `pull_request`のCIが、人のレビューより前にClaudeが書いたコードを、そのリポジトリのsecretsを使える状態で実行しうる。対象リポジトリのCIの権限とsecretsの範囲はこの前提で設定する。
-- **保護パスは止めずに明示する**: 保護パス(`f/factory/lib/protected_paths.ts`の`IMPLEMENT_PROTECTED_PATH_PREFIXES`と`IMPLEMENT_PROTECTED_BASENAME_PATTERNS`。pr_fixの一覧の`.github/workflows/**`を`.github/**`に広げ、`infra/**`・`.husky/**`・`.githooks/**`・`.yarn/**`・`.devcontainer/**`、`.env*`・gitleaksの設定・ランタイムのバージョン指定・パッケージマネージャーの設定とlockfile・`*.config.[cm][jt]s`等のツール設定・タスクランナー・`CODEOWNERS`・すべての`package.json`・JavaScript以外のlockfileとmanifest(`uv.lock`・`poetry.lock`・`Pipfile`・`pyproject.toml`・`setup.py` / `setup.cfg`・`requirements*.txt`・`Cargo.toml` / `Cargo.lock`・`go.mod` / `go.sum`・`Gemfile`・`composer.json` / `composer.lock`)を加えたもの)・新規の`*.sh`・`package.json`の`scripts`の変更はPR本文とDiscordに列挙する。そのラウンドは検査コマンドを実行しない(Claudeが書き換えた`mise.toml` / `package.json` scripts / `lefthook.yml`等をworkerで実行すると、Issue本文経由のコード実行経路になるため)。検査はGitHub側のCIが担う。判定はブランチがデフォルトブランチから分かれた点(`git merge-base`)からの差分で行うので、前のラウンドや前回の実行でコミット済みの変更も毎回判定される。renameは元のパスの削除と新しいパスの追加として扱い、保護パスから外への移動も捕まえる。
+- **保護パスは止めずに明示する**: 保護パス(`f/factory/lib/protected_paths.ts`の`IMPLEMENT_PROTECTED_PATH_PREFIXES`・`IMPLEMENT_PROTECTED_EXACT_PATHS`・`IMPLEMENT_PROTECTED_BASENAME_PATTERNS`。pr_fixの一覧の`.github/workflows/**`を`.github/**`に広げ、`infra/**`・`.husky/**`・`.githooks/**`・`.yarn/**`・`.devcontainer/**`、`.env*`・gitleaksの設定・ランタイムのバージョン指定・パッケージマネージャーの設定とlockfile・`*.config.[cm][jt]s`等のツール設定・タスクランナー・`CODEOWNERS`・すべての`package.json`・JavaScript以外のlockfileとmanifest(`uv.lock`・`poetry.lock`・`Pipfile`・`pyproject.toml`・`setup.py` / `setup.cfg`・`requirements*.txt`・`Cargo.toml` / `Cargo.lock`・`go.mod` / `go.sum`・`Gemfile`・`composer.json` / `composer.lock`)を加えたもの)・新規の`*.sh`・`package.json`の`scripts`の変更はPR本文とDiscordに列挙する。そのラウンドは検査コマンドを実行しない(Claudeが書き換えた`mise.toml` / `package.json` scripts / `lefthook.yml`等をworkerで実行すると、Issue本文経由のコード実行経路になるため)。検査はGitHub側のCIが担う。判定はブランチがデフォルトブランチから分かれた点(`git merge-base`)からの差分で行うので、前のラウンドや前回の実行でコミット済みの変更も毎回判定される。renameは元のパスの削除と新しいパスの追加として扱い、保護パスから外への移動も捕まえる。保護パスの一覧はFactory自身に限らず、実装フローが扱うすべてのリポジトリに効く。他のリポジトリに`infra/`・`console/public/`・`console/index.html`などがあれば、それに触れたラウンドは検査コマンドを実行しない(GitHub側のCIの結果を見る)。
 - **symlinkの変更は止める**: 分岐点からのステージ済みの差分(`git diff --cached --raw -z`)で変更前か変更後のモードが`120000`のエントリ(新規作成・変更・削除・typechange・rename)があれば`needs_human`にする。ファイルシステムではなくgitのモードで判定するので、worktreeに残っていないsymlinkも捕まえる。変更パスは`git diff -z --name-status`で取得し、引用符付きのパス(非ASCII・制御文字)でも保護パスの判定を素通りしない。
 - **worktreeの`.git`ファイルの書き換えを止める**: Claudeは`Edit` / `Write`でworktree直下の`.git`(gitdirへの参照)も書き換えられる。参照先を別のディレクトリに向けると、そこに置いた`config`のfilter等を次の`git add`がrootで実行する。準備ステップでworktreeを作った直後に参照先を検証し(`.git`がgitの書く正規の形`gitdir: <絶対パス>`そのものであること。空白の数やタブが違うとgitは別のディレクトリを読むため拒否する。そのうえで`realpath`で解決した先が`<main clone>/.git/worktrees/`の直下で、その`gitdir`の戻り参照がworktreeを指すこと)、`.git`の中身を記録する。以降はClaudeの実行のたびに、worktreeでgitを実行する前(各ラウンドの冒頭、途中経過のpushと最終コミットの前)に`.git`が記録と一致する通常ファイルであることを確かめ、違えば何も実行せずに`needs_human`にする(途中の変更もpushしない)。Claudeの不正な出力への再試行の前と、検査コマンドの後に修正ラウンドのClaudeを起動する前にも確かめ、違えば再試行・起動しない。既存のworktreeを再利用するとき(実装フローとpr_fix)は、中でgitを実行する前に同じ検証を行い、通らなければworktreeの中でgitを使わずにディレクトリを削除し(`git worktree list`が報告し、かつリポジトリの作業ディレクトリ配下にあるパスに限る)、`git worktree prune`のあとで作り直す。worktreeを消すとき(要件定義への差し戻しや掃除)も、検証に通らなければ`git worktree remove`を使わずに同じ方法で消す。
 - **差分サイズの上限**は工程3専用の`implement_max_changed_files` / `implement_max_diff_lines`で、超えたら`needs_human`にする。
@@ -162,10 +162,55 @@ read -rs 'v?GITHUB_TOKEN: ' && mise set -E local GITHUB_TOKEN="$v"; unset v
 | 取得 | 「ウェブフックURLをコピー」でURLを取得する |
 | 投入 | `read -rs 'v?DISCORD_WEBHOOK_URL: ' && mise set -E local DISCORD_WEBHOOK_URL="$v"; unset v` |
 
+## CONSOLE_GITHUB_TOKENの取得
+
+Consoleの成果物を取り込む`console_fetcher`だけが使うfine-grained PAT。Factoryの`GITHUB_TOKEN`は流用しない(Actionsの読み取り権限が無く、他の権限が広すぎる)。
+
+| 項目 | 設定値 |
+| --- | --- |
+| Token name | `atelier-works-console-fetcher` |
+| Description | `Factory Console fetcher (read CI artifacts)` |
+| Resource owner | このリポジトリの所有者 |
+| Expiration | Customで1年後(最長)。期限切れは`console_fetcher`のログと`status.json`に`auth_failed`として出る |
+| Repository access | Only select repositories → このリポジトリだけ |
+| Repository permissions: Actions | Read-only |
+| Repository permissions: Metadata | Read-only(自動で付与される) |
+| それ以外のRepository permissions / Account permissions | No access |
+
+投入は`read -rs 'v?CONSOLE_GITHUB_TOKEN: ' && mise set -E local CONSOLE_GITHUB_TOKEN="$v"; unset v`。値は`console_fetcher`のコンテナの環境変数にだけ渡り、worker・Caddy・Windmillの変数には入らない。
+
 ## Windmillサーバーの公開範囲と初期パスワード
 
 - Caddyは`127.0.0.1`(環境変数`WM_BIND`。既定値`127.0.0.1`は`mise.toml`の`[env]`にある)にのみバインドする。ホスト外部からは到達できない構成が既定であり、外部公開する場合は利用者が明示的に`WM_BIND`を変更する必要がある。
 - 初期管理者アカウントのパスワードは既知の既定値であるため、`scripts/bootstrap.sh`がログイン後に必ずパスワードを`WM_ADMIN_PASSWORD`へ変更する。`WM_ADMIN_PASSWORD`が既定値(`changeme`)か12文字未満なら`bootstrap.sh`は実行を拒否する。`doctor`は既定パスワード(`changeme`)でログインできてしまう状態をNGとして検出する。
+
+## Consoleの配信(console_fetcherとCaddy)
+
+Consoleは`/console/`でWindmillと同じオリジンから配信する。ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者として呼べる。そのため配信物の完全性と、ブラウザ側の制限を次のように守る。
+
+- **書ける場所を1つにする**: 配信物の置き場所`factory_console`(dockerの名前付きボリューム)に書けるのは`console_fetcher`だけ。Caddyは読み取り専用でマウントし、worker(すべてのジョブがrootで動く)はマウントしない。workerのサンドボックスを将来作るときも、**`factory_console`を書き込みでマウントしてはいけない**。書けるコンテナが増えると、運用者のブラウザに居座る改ざんの経路になる。
+- **`console_fetcher`のコンテナ**: uid 1000(非root)、`read_only`、`cap_drop: [ALL]`、`no-new-privileges`、専用のnetwork`console_egress`(DBにもWindmillにも届かない)、第三者のパッケージなし。dockerには外への行き先をドメインで絞る仕組みが無いので、コードが`api.github.com`と、そこからリダイレクトされたAzureのblob storage(`*.blob.core.windows.net`、`https:`のみ)にしか接続しないことで守る。成果物の取得先へはトークンを送らない。
+- **取り込むもの**: `main`へのpushで動き、全体が成功した`ci.yml`の実行の成果物`console-dist`だけ。zip全体のsha256をGitHubの`digest`と、展開した全ファイルのsha256を`manifest.json`と照合し、マニフェストが実行のcommitのものであることを確かめてから書く。zipは自前のreaderでメモリ上に展開し、`..`・絶対パス・symlink・通常のファイル以外・暗号化・zip64を拒む。
+- **CIの組み立て**: `ci.yml`の`console`ジョブが組み立てる。miseで入れるツールはbunと、viteとtscを動かすnodeだけにし(他の`[tools]`とそのinstall scriptを動かさない)、miseのキャッシュを読み書きしない。ルートと`console/`の依存は`bun install --frozen-lockfile --ignore-scripts`で入れ、依存のinstall scriptを実行しない。`console/bun.lock`は`scripts/check-console-lockfile.ts`で、registry由来でsha512のintegrityが付いた依存だけであることを検査する(git・GitHub・tarballのURL、`console/`の外を指す`file:` / `link:`、`trustedDependencies`を拒む)。
+- **ブラウザ側**: `/console/*`の応答(404とfallbackを含む)だけに、`script-src`を`/console/assets/`に絞ったCSP(`'unsafe-inline'`・`'unsafe-eval'`なし)、`frame-ancestors 'none'`、`X-Frame-Options: DENY`、`nosniff`、`Referrer-Policy: same-origin`、`Cross-Origin-Opener-Policy: same-origin`を付ける。Trusted Typesは`Content-Security-Policy-Report-Only`で様子を見る。Windmill(`/`と`/api/*`)にはこれらを付けない。
+- **CSPとCaddyのパスの解釈の違い**: ブラウザはパスの`%2f`を区切りとみなさないので、`/console/assets/..%2f..%2fapi/...`は`script-src`の`/console/assets/`に合う。一方Caddyは区切りに戻して正規化するので、そのままでは`/api/...`や`/ws/...`としてWindmillや`windmill_extra`へ転送され、その応答をscriptとして読ませる経路になる。CSPはパーセント符号を戻してから比べるので、`/%63onsole/assets/...`のように文字を符号化したURLも`/console/assets/`に合う。そこで、パーセント符号を戻しただけで正規化していない元のパスが`/console/`で始まる要求(`/console`そのものを含み、大文字小文字と先頭の`/`の重複を区別しない)は、どの転送先(`windmill_server`・`windmill_extra`)にも渡らない。Consoleの経路で返すか、404にする。Caddyは`handle`をmatcherの種類で並べ替えるので、Caddyfileでは`route`で順序を固定し、Consoleの経路とこの404をどの`reverse_proxy`よりも先に評価させている。あわせて、Consoleの経路では生のパスに`%2f`か`%5c`(大文字小文字を問わない)があれば400にする。Consoleの画面のURLに符号化した区切りを使ってはいけない。
+- **他のサイトからのAPIの呼び出し**: `/api/*`への要求で`Sec-Fetch-Site`が`cross-site`か`same-site`のものは、Caddyが403にする。他のポートのlocalhostや外部のリンクから、運用者のCookieでAPIを実行させないため。Windmillのフロントエンドからの要求にはブラウザが`Sec-Fetch-Site: same-origin`を付け、CLI(`wmill`)はこのヘッダーを送らない。Windmill 1.817.0のraw app(旧Console)は既定でsandboxが無く、`backend.*`の呼び出しは`parent.postMessage`を通して同じオリジンの親(WindmillのSPA)が行うので、これも`same-origin`になる。raw appのsandboxを有効にすると、バンドルの取得(`GET /api/w/*/apps_u/get_data/v/*`)がcross-siteになって403になるので、その経路を例外にする必要がある。
+- **秘密**: Consoleのバンドルは認証なしで配信されるので、`VITE_*`の変数に秘密を入れない。
+
+残るリスク:
+
+- `main`にpushできる者(FactoryのPATを含む)が書いたコードは、人のレビューを経ずに、そのまま運用者のブラウザで動きうる。今のGitHubのプランではこのリポジトリにbranch protection(rulesets)を設定できず、`main`へのpushを人のレビュー済みのものに限れない。Consoleの変更のレビューは、Windmillの管理者権限を持つコードのレビューとして行う。
+- CIの組み立ての途中で動くもの(miseが入れるbunなどのツール、Viteのプラグインなどの依存)が侵害されると、出力が改ざんされうる。ツールの取得と導入も、この経路に含まれる。`digest`とマニフェストが保証するのは「GitHubのCIが作ったもの」であることまでで、ツールや依存の中身ではない。
+- 信頼の境界は`console`ジョブだけでなく、`ci.yml`のすべてのジョブ(とそこで動くツールや依存)に及ぶ。同じ実行の他のジョブも、ランナーから取れるトークンで成果物`console-dist`を上げ直せるため(`overwrite: true`で、`console_fetcher`はその名前の`id`が最大の成果物を取り込む)。
+- `Sec-Fetch-Site`をブラウザが送るのは、信頼できるオリジン(localhostかHTTPS)のときだけ。`WM_BIND`を外向きにしてHTTPで公開すると、このヘッダーが届かず防御が効かない。外向きにするならHTTPSにする。
+- `Sec-Fetch-Site`の規則が効くのは`/api/*`だけ。`windmill_extra`の経路(`/ws/*`、`/ws_mp/*`、`/ws_debug/*`)には効かない。
+- 共有の`assets/`には古い版のファイルも残る(置いてから14日を超え、残している版のどれからも参照されていないものを消す)。その間は`script-src`で読み込めるので、XSSの足がかり(script gadget)に使われうる。
+- Trusted TypesのReport-Onlyの方針には報告先が無い。違反はブラウザの開発者ツールのコンソールにしか出ない。
+- `console_fetcher`の外への通信はnetworkでは絞れない。コードが侵害されれば任意の宛先へ出られる。
+- `console_egress`は通常のbridgeで、ホストのloopbackから切り離されない。既定の設定(`WM_BIND=127.0.0.1`)のままでも、`console_fetcher`から`host.docker.internal`経由でホストのloopbackのサービス(Caddy、つまりWindmill)に届く(OrbStackで確認)。`WM_BIND`を外向き(`0.0.0.0`など)にすると、ホストのゲートウェイのIP経由でも届く。`console_fetcher`はWindmillの資格情報を持たないが、認証の要らない経路には届く。
+- `CONSOLE_GITHUB_TOKEN`は`docker inspect`できる人(ホストのdockerを使える人)には見える。
+- 成果物を取りに行くリポジトリ`CONSOLE_GITHUB_REPO`は、コミットされた`mise.toml`にある。これを書き換える変更がマージされると、`console_fetcher`は任意のpublicリポジトリの成果物を取り込みうる。`mise.toml`は保護パス(pr_fixは止め、実装フローはPR本文に明示する)で、マージは人が行うことで抑えている(ただし上記のとおり、`main`へのpushそのものは人に限れない)。
+- 成果物の保持は30日。30日以上`main`へのpushが無いと、新しく立ち上げた環境は取り込めない(動作中の環境は今の版を配信し続ける)。そのときは`main`に何かをpushしてCIを動かす。
 
 ## workerコンテナの権限
 

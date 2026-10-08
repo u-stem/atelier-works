@@ -401,6 +401,11 @@ export type DeployNeeds = {
    * 反映される(通知はしない)。
    */
   readonly onNextUp: boolean;
+  /**
+   * `console/`が変わった。マージ後、CIが組み立てた成果物を`console_fetcher`が
+   * 数分で取り込んで反映する(`self_update`も`mise run up`も関与しない)。
+   */
+  readonly viaConsoleCi: boolean;
 };
 
 const AUTO_APPLY_PATH_PREFIXES: readonly string[] = [
@@ -417,6 +422,7 @@ const AUTO_APPLY_PATH_PREFIXES: readonly string[] = [
  * `mise.toml`は、このフローに変更前後の内容が無く`[tools]`・`[env]`の差分を
  * 判定できないため、`classifyChangedPaths`に`true`を渡して
  * 変更があれば必要とみなす(安全側)。
+ * `viaConsoleCi`は`console/`の変更の有無で、マージ後にCIと`console_fetcher`が反映する。
  * 意味があるのはFactory自身のリポジトリだけである。
  * 他のリポジトリにも`infra/`、`migrations/`、`f/`があるかもしれず、
  * Windmillと関係ないパスで項目に印が付いてしまう。
@@ -425,11 +431,13 @@ const AUTO_APPLY_PATH_PREFIXES: readonly string[] = [
 export function classifyDeployNeeds(
   changedPaths: readonly string[],
 ): DeployNeeds {
+  const classification = classifyChangedPaths(changedPaths, true);
   return {
     autoApply: changedPaths.some((path) =>
       AUTO_APPLY_PATH_PREFIXES.some((prefix) => path.startsWith(prefix)),
     ),
-    onNextUp: classifyChangedPaths(changedPaths, true).needs_host_action,
+    onNextUp: classification.needs_host_action,
+    viaConsoleCi: classification.console_paths.length > 0,
   };
 }
 
@@ -559,7 +567,8 @@ function checkbox(checked: boolean, label: string): string {
 
 function renderDeployChecklist(changedPaths: readonly string[]): string[] {
   const needs = classifyDeployNeeds(changedPaths);
-  const nothingToApply = !needs.autoApply && !needs.onNextUp;
+  const nothingToApply =
+    !needs.autoApply && !needs.onNextUp && !needs.viaConsoleCi;
   return [
     "Windmillへの反映:",
     "",
@@ -570,6 +579,10 @@ function renderDeployChecklist(changedPaths: readonly string[]): string[] {
     checkbox(
       needs.onNextUp,
       "次に`mise run up`で起動したときに反映される(`infra/`、`mise.toml`の`[tools]`・`[env]`の変更)",
+    ),
+    checkbox(
+      needs.viaConsoleCi,
+      "マージ後、CIが通れば数分で`console_fetcher`が反映する(`console/`の変更)",
     ),
     checkbox(nothingToApply, "反映するものは無い"),
   ];
