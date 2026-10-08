@@ -1,14 +1,20 @@
 // `pr_review_post.ts`が使う`pr_workflow_support.ts`の`mapFindingsToReviewComments`、
 // `renderInlineComment`、`renderReviewSummary`などのテスト。
-// あわせて、`pr_review_post.ts`の`runPrReviewPost`が、投稿しない場合もreviewのworktreeを消すことを確かめる。
+// あわせて、`pr_review_post.ts`の`runPrReviewPost`が、投稿しない場合もreviewのworktreeを消すことと、
+// `postReviewIfAbsent`が同じshaのレビューを二重に投稿しないことを確かめる。
 // 投稿の書式は`.claude/skills/factory-review/SKILL.md`の「投稿形式」節に従う。
 
 import { describe, expect, test } from "bun:test";
-import type { ReviewThread } from "../../f/factory/lib/github.ts";
+import type {
+  ReviewComment,
+  ReviewThread,
+} from "../../f/factory/lib/github.ts";
 import { logger } from "../../f/factory/lib/log.ts";
 import type { ReviewFinding } from "../../f/factory/lib/types.ts";
 import {
+  type PostReviewTarget,
   type PrReviewPostInput,
+  postReviewIfAbsent,
   runPrReviewPost,
 } from "../../f/factory/steps/pr_review_post.ts";
 import {
@@ -21,7 +27,9 @@ import {
   renderReviewSummary,
   reviewResultFor,
   selectThreadsToResolve,
+  withReviewMarkers,
 } from "../../f/factory/steps/pr_workflow_support.ts";
+import { createFakeCommandRunner, ghApiOk } from "../lib/testSupport.ts";
 
 function finding(overrides: Partial<ReviewFinding> = {}): ReviewFinding {
   return {
@@ -674,5 +682,107 @@ describe("runPrReviewPost worktree cleanup", () => {
       log: SILENT,
     }).catch(() => {});
     expect(remover.calls).toEqual([[REPO_DIR, WORKTREE_DIR]]);
+  });
+});
+
+// 投稿の後、記録する前にステップが落ちて再実行されたとき、
+// 同じshaのレビューをもう一度投稿しないことを確かめる。
+describe("postReviewIfAbsent", () => {
+  const VIEWER = "factory-bot";
+  const SHA = "0123456789abcdef0123456789abcdef01234567";
+  const SUMMARY = "[pr_review 自動レビュー] @alice\n1件コメントしました。";
+  const TARGET: PostReviewTarget = {
+    owner: "acme",
+    repo: "widgets",
+    pr_number: 12,
+    work_item_id: 7,
+    review_sha: SHA,
+    viewer_login: VIEWER,
+  };
+  const COMMENTS: ReviewComment[] = [
+    { path: "a.ts", line: 10, side: "RIGHT", body: "[MUST] fix" },
+  ];
+
+  /** 先の実行が投稿した、このshaのレビュー。 */
+  function postedReview(id: number): unknown {
+    return {
+      id,
+      user: { login: VIEWER },
+      state: "COMMENTED",
+      body: withReviewMarkers(SUMMARY, 7, SHA),
+    };
+  }
+
+  /** 人のレビュー。 */
+  function humanReview(id: number): unknown {
+    return { id, user: { login: "alice" }, state: "COMMENTED", body: "ok" };
+  }
+
+  test("reuses the id of a review already posted for the same sha", async () => {
+    const fake = createFakeCommandRunner([ghApiOk([postedReview(55)])]);
+    const result = await postReviewIfAbsent(
+      { run: fake.run, ghToken: "tok" },
+      TARGET,
+      SUMMARY,
+      COMMENTS,
+    );
+    expect(result).toEqual({ id: 55, reused: true });
+  });
+
+  test("does not post again when a review for the same sha exists", async () => {
+    const fake = createFakeCommandRunner([ghApiOk([postedReview(55)])]);
+    await postReviewIfAbsent(
+      { run: fake.run, ghToken: "tok" },
+      TARGET,
+      SUMMARY,
+      COMMENTS,
+    );
+    expect(fake.calls.map((call) => call.argv.includes("POST"))).toEqual([
+      false,
+    ]);
+  });
+
+  test("finds a posted review on a later page", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([humanReview(1)], {
+        link: '<https://api.github.com/repos/acme/widgets/pulls/12/reviews?per_page=100&page=2>; rel="next"',
+      }),
+      ghApiOk([postedReview(55)]),
+    ]);
+    const result = await postReviewIfAbsent(
+      { run: fake.run, ghToken: "tok" },
+      TARGET,
+      SUMMARY,
+      COMMENTS,
+    );
+    expect(result.id).toBe(55);
+  });
+
+  test("posts and returns the new id when no review for the sha exists", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([humanReview(1)]),
+      ghApiOk({ id: 99 }),
+    ]);
+    const result = await postReviewIfAbsent(
+      { run: fake.run, ghToken: "tok" },
+      TARGET,
+      SUMMARY,
+      COMMENTS,
+    );
+    expect(result).toEqual({ id: 99, reused: false });
+  });
+
+  test("posts the body with the pr_review and sha markers", async () => {
+    const fake = createFakeCommandRunner([ghApiOk([]), ghApiOk({ id: 99 })]);
+    await postReviewIfAbsent(
+      { run: fake.run, ghToken: "tok" },
+      TARGET,
+      SUMMARY,
+      COMMENTS,
+    );
+    const posted: unknown = JSON.parse(fake.calls[1]?.options?.stdin ?? "{}");
+    expect(posted).toMatchObject({
+      body: withReviewMarkers(SUMMARY, 7, SHA),
+    });
   });
 });

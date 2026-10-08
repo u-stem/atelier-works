@@ -16,10 +16,11 @@ import {
   type GhClient,
   getPr,
   getViewer,
+  listPrReviews,
   listReviewThreads,
+  type ReviewComment,
   type ReviewThread,
   resolveReviewThread,
-  withMarker,
 } from "../lib/github.ts";
 import { type Logger, logger, maskSecrets } from "../lib/log.ts";
 import {
@@ -31,10 +32,12 @@ import { removeWorktree, runCommand } from "../lib/workspace.ts";
 import {
   countOpenMustThreads,
   decideReviewBodyMode,
+  findPostedReviewId,
   mapFindingsToReviewComments,
   renderReviewSummary,
   reviewResultFor,
   selectThreadsToResolve,
+  withReviewMarkers,
 } from "./pr_workflow_support.ts";
 
 const REVIEW_VERDICTS: readonly ReviewVerdict[] = [
@@ -150,6 +153,11 @@ export async function main(
  * ベストエフォートで解決する。
  * 初回のレビューでは対応済みのものが無いため解決しない。
  *
+ * 投稿の前に、この作業項目が同じ`review_sha`に対して投稿済みのレビューがPRにあるかを確かめ
+ * (`postReviewIfAbsent`)、あれば投稿せずにそのidで記録する。
+ * 投稿の後、記録する前にステップが落ちて再実行されても、レビューを二重に投稿しないため。
+ * 投稿済みのレビューを探すのに要るviewerとレビューの一覧の取得に失敗したら、投稿せずに例外を投げる。
+ *
  * `review_post_mode`が"gated"のときは、レビューを記録して"reviewed"に進め
  * noticeを残すが、`createPrReview`は呼ばない。
  * "gated"は予約済みの値で、承認を経て投稿するUIはまだ無い。
@@ -172,6 +180,57 @@ export async function runPrReviewPost(
       }
     }
   }
+}
+
+/** `postReviewIfAbsent`が投稿するレビューの宛先と、投稿済みかを見分ける手がかり。 */
+export type PostReviewTarget = {
+  readonly owner: string;
+  readonly repo: string;
+  readonly pr_number: number;
+  readonly work_item_id: number;
+  readonly review_sha: string;
+  /** Factory自身のGitHubアカウントのlogin。投稿済みのレビューの投稿者と照らし合わせる。 */
+  readonly viewer_login: string;
+};
+
+/**
+ * この作業項目が`review_sha`に対して投稿済みのレビューがPRに無ければ、COMMENTのレビューを投稿する。
+ * 本文は`summaryBody`に`withReviewMarkers`で目印を足したもの。
+ * 投稿済みのレビューがあれば投稿せずに、そのidを`reused: true`で返す。
+ * 投稿の後、記録する前にステップが落ちても(DBのエラー、workerの停止、step timeout)、
+ * 再実行で同じレビューを二重に投稿しないため。
+ * レビューの一覧の取得に失敗したら、投稿せずに例外を投げる。
+ */
+export async function postReviewIfAbsent(
+  client: GhClient,
+  target: PostReviewTarget,
+  summaryBody: string,
+  comments: readonly ReviewComment[],
+): Promise<{ readonly id: number; readonly reused: boolean }> {
+  const { owner, repo, pr_number, work_item_id, review_sha, viewer_login } =
+    target;
+  const reviews = await listPrReviews(
+    client,
+    owner,
+    repo,
+    pr_number,
+    viewer_login,
+  );
+  const existingId = findPostedReviewId(
+    reviews.items,
+    viewer_login,
+    work_item_id,
+    review_sha,
+  );
+  if (existingId !== null) {
+    return { id: existingId, reused: true };
+  }
+  const created = await createPrReview(client, owner, repo, pr_number, {
+    event: "COMMENT",
+    body: withReviewMarkers(summaryBody, work_item_id, review_sha),
+    comments,
+  });
+  return { id: created.id, reused: false };
 }
 
 /** `runPrReviewPost`のworktreeの削除を除いた本体。 */
@@ -222,6 +281,8 @@ async function postReview(
     pr_files,
   );
   const pr = await getPr(client, owner, repo, pr_number);
+  // 投稿済みのレビューを探すのに要るので、取得に失敗したら投稿せずにステップを失敗させる。
+  const viewerLogin = (await getViewer(client)).login;
   const priorReview = await hasPriorReview(
     owner,
     repo,
@@ -239,11 +300,8 @@ async function postReview(
   // `threads`は空のままになり、`threadIdsToResolve`と`openMustCount`は0になって、
   // `mode`は"findings" / "rereview_clean" / "first_clean"のいずれかに落ちる。
   let threads: ReviewThread[] = [];
-  let viewerLogin = "";
   if (priorReview) {
     try {
-      const viewer = await getViewer(client);
-      viewerLogin = viewer.login;
       threads = await listReviewThreads(client, owner, repo, pr_number);
     } catch (err) {
       log.warn("failed to list review threads for resolving", {
@@ -281,31 +339,44 @@ async function postReview(
     priorReview,
     openMustCount,
   );
-  const body = withMarker(
-    "pr_review",
-    work_item_id,
-    renderReviewSummary(
-      pr.authorLogin,
-      comments.length,
-      mode,
-      droppedFindings,
-      openMustCount,
-    ),
+  const summaryBody = renderReviewSummary(
+    pr.authorLogin,
+    comments.length,
+    mode,
+    droppedFindings,
+    openMustCount,
   );
 
   let postedReviewId: string | null = null;
   let notice: string | null = null;
   if (config.review_post_mode === "comment_only") {
-    const created = await createPrReview(client, owner, repo, pr_number, {
-      event: "COMMENT",
-      body,
+    const posted = await postReviewIfAbsent(
+      client,
+      {
+        owner,
+        repo,
+        pr_number,
+        work_item_id,
+        review_sha,
+        viewer_login: viewerLogin,
+      },
+      summaryBody,
       comments,
-    });
-    postedReviewId = String(created.id);
+    );
+    postedReviewId = String(posted.id);
+    if (posted.reused) {
+      log.info("review for this sha was already posted; recording it", {
+        work_item_id,
+        review_sha,
+        posted_review_id: posted.id,
+      });
+    }
 
     // 再レビューのたびに、pr_fixが対応済みのFactory自身のスレッドを解決する。
     // 投稿済みのレビューの扱いを妨げないよう、解決に失敗してもステップは失敗させない。
     // `threadIdsToResolve`は、本文の種類を決めたのと同じ解決前の`threads`から求めてある。
+    // 前の実行が投稿した後に落ちて再実行したときも、ここで解決をやり直す。
+    // 前の実行が解決済みにしたスレッドは`selectThreadsToResolve`が除くので、二重に解決しない。
     for (const threadId of threadIdsToResolve) {
       try {
         await resolveReviewThread(client, threadId);

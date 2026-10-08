@@ -8,7 +8,13 @@
 import { mkdtemp, readlink, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
-import type { ReviewThread } from "../lib/github.ts";
+import {
+  hasMarker,
+  isOwnPost,
+  type PrReview,
+  type ReviewThread,
+  withMarker,
+} from "../lib/github.ts";
 import { decideGapReroute } from "../lib/implement_finish_support.ts";
 import { parseFlowJobId } from "../lib/implement_launch_support.ts";
 import { maskSecrets } from "../lib/log.ts";
@@ -453,7 +459,7 @@ export function decideReviewBodyMode(
  * その箇条書きを続ける。
  * Claudeの`summary`はここに載せない(`factory.reviews`への記録とDiscordだけに使う)。
  * `verdict`も同じく載せない(DBとDiscordだけで、PRの本文には出さない)。
- * `<!-- factory:pr_review:<id> -->`の印は、呼び出し側が`github.ts`の`withMarker`で足す。
+ * `<!-- factory:pr_review:<id> -->`とレビューしたshaの印は、呼び出し側が`withReviewMarkers`で足す。
  *
  * `"findings"`には「最終的なApproveは人が判断する」という免責の行を付けない。
  * 指摘のある投稿はすでに作成者に確認を求めている(「確認お願いします。」)ので、
@@ -650,6 +656,65 @@ function stripRoleTagLine(body: string): string {
   if (newlineIndex === -1) return body;
   if (body.slice(0, newlineIndex) !== ROLE_TAGS.pr_review) return body;
   return body.slice(newlineIndex + 1);
+}
+
+/**
+ * レビュー本文に入れる、レビューしたcommitのshaの目印の行。
+ * GitHubのレビューの`commit_id`は投稿した時点のPRのheadで、
+ * レビューしたshaと一致するとは限らないため、本文に残す。
+ * `factory:`ではなく`factory-review-sha:`で始めるのは、shaがすべて数字のときに
+ * `github.ts`の`hasMarker`が読むFactoryの目印の形にならないようにするため。
+ */
+function reviewShaMarkerLine(reviewSha: string): string {
+  return `<!-- factory-review-sha:${reviewSha} -->`;
+}
+
+/**
+ * レビューの本文に、レビューしたshaの目印と`<!-- factory:pr_review:<id> -->`の目印を足す。
+ * shaの目印は`pr_review`の目印の前に置き、`pr_review`の目印が本文の最後の行であることを保つ。
+ * pr_fixの指摘の収集やFactory自身の投稿の判定は、最後の行の目印だけを読むので、
+ * shaの目印を足しても読み方は変わらない。
+ */
+export function withReviewMarkers(
+  body: string,
+  workItemId: number,
+  reviewSha: string,
+): string {
+  return withMarker(
+    "pr_review",
+    workItemId,
+    `${body}\n\n${reviewShaMarkerLine(reviewSha)}`,
+  );
+}
+
+/** `findPostedReviewId`が見るレビューの項目。 */
+export type PostedReviewCandidate = Pick<
+  PrReview,
+  "id" | "authorLogin" | "body"
+>;
+
+/**
+ * この作業項目が`reviewSha`に対して投稿済みのレビューを探し、最初に見つかったもののidを返す。
+ * 無ければnullを返す。
+ * 投稿者が`viewer`で(大文字小文字を区別しない)、本文の最後の行が
+ * この作業項目の`pr_review`の目印で、本文に`reviewSha`の目印の行があるものを投稿済みとみなす。
+ * 目印は誰でも本文に貼り付けられるので、投稿者も確かめる。
+ * shaの目印の無いレビューは、どのshaに対するものか分からないので一致させない。
+ */
+export function findPostedReviewId(
+  reviews: readonly PostedReviewCandidate[],
+  viewer: string,
+  workItemId: number,
+  reviewSha: string,
+): number | null {
+  const shaLine = reviewShaMarkerLine(reviewSha);
+  const found = reviews.find(
+    (review) =>
+      isOwnPost(review.authorLogin, viewer) &&
+      hasMarker(review.body, "pr_review", workItemId) &&
+      review.body.split("\n").some((line) => line.trim() === shaLine),
+  );
+  return found === undefined ? null : found.id;
 }
 
 // ---------------------------------------------------------------------------
