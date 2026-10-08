@@ -26,13 +26,16 @@ import {
   listWorktrees,
   mapDiffLineToFile,
   mergeBaseSha,
+  OUTPUT_ABANDONED_NOTE,
   omittedMarker,
   parseNumstatTotals,
   pathExists,
   pruneWorktrees,
   pushNewBranch,
+  RUNNER_MAX_STOP_OVERHEAD_MS,
   readDirEntries,
   readGitShowFile,
+  readStreamAll,
   readStreamCapped,
   readTextFile,
   readWorktreeGitPointer,
@@ -2512,6 +2515,43 @@ describe("isCappedOutput", () => {
   });
 });
 
+/** 1回enqueueした後に閉じないストリーム。読み取りは取り消すまで終わらない。 */
+function openStreamOf(text: string): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(text));
+    },
+  });
+}
+
+describe("readStreamAll", () => {
+  test("returns the whole text of a closed stream", async () => {
+    expect(await readStreamAll(streamOf("abc", "def"))).toBe("abcdef");
+  });
+
+  test("returns what it read when the signal aborts", async () => {
+    const controller = new AbortController();
+    const reading = readStreamAll(openStreamOf("abc"), controller.signal);
+    await Bun.sleep(10);
+    controller.abort();
+    expect(await reading).toBe("abc");
+  });
+});
+
+describe("readStreamCapped with a signal", () => {
+  test("returns what it kept when the signal aborts", async () => {
+    const controller = new AbortController();
+    const reading = readStreamCapped(
+      openStreamOf("abc"),
+      100,
+      controller.signal,
+    );
+    await Bun.sleep(10);
+    controller.abort();
+    expect(await reading).toBe("abc");
+  });
+});
+
 describe("createBunCommandRunner maxOutputBytes", () => {
   test("keeps at most maxOutputBytes of stdout plus the marker", async () => {
     const result = await runCommand(["sh", "-c", "yes x | head -c 100000"], {
@@ -2540,6 +2580,117 @@ describe("createBunCommandRunner maxOutputBytes", () => {
       maxOutputBytes: 1000,
     });
     expect(result.exitCode).toBe(3);
+  });
+});
+
+/** 新しいセッションでsleepを起動して標準出力・標準エラーを握らせたまま終了する。sleepのPIDを出力する。 */
+const ESCAPE_SCRIPT =
+  'const p = Bun.spawn({ cmd: ["/bin/sleep", "10"], detached: true, stdin: "ignore", stdout: "inherit", stderr: "inherit" }); p.unref(); console.log(String(p.pid));';
+/** ESCAPE_SCRIPTの後も先頭プロセスが終わらない。 */
+const ESCAPE_AND_WAIT_SCRIPT = `${ESCAPE_SCRIPT} await Bun.sleep(10_000);`;
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** ESCAPE_SCRIPTが抜けさせたsleepを止める(テストの後始末)。 */
+function killEscaped(stdout: string): void {
+  const pid = Number(stdout.trim().split("\n")[0]);
+  if (!Number.isInteger(pid) || pid <= 0) return;
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch {
+    // 既に終わっている。
+  }
+}
+
+describe("createBunCommandRunner process-group cleanup", () => {
+  test("stops a background process the command left in its group", async () => {
+    const run = createBunCommandRunner({ killGraceMs: 1_000 });
+    const result = await run([
+      "sh",
+      "-c",
+      "sleep 30 >/dev/null 2>&1 & echo $!",
+    ]);
+    expect(isAlive(Number(result.stdout.trim()))).toBe(false);
+  });
+
+  test("does not wait for the drain window when nothing is left", async () => {
+    const run = createBunCommandRunner({
+      killGraceMs: 5_000,
+      outputDrainMs: 5_000,
+    });
+    const start = Date.now();
+    await run(["echo", "hi"]);
+    expect(Date.now() - start).toBeLessThan(2_000);
+  });
+
+  test("does not mark an ordinary command as abandoned", async () => {
+    const result = await runCommand(["echo", "hi"]);
+    expect(result.outputAbandoned).toBeUndefined();
+  });
+
+  test("returns soon after exit when a process in a new session holds stdout", async () => {
+    const run = createBunCommandRunner({
+      killGraceMs: 100,
+      outputDrainMs: 200,
+    });
+    const start = Date.now();
+    const result = await run([process.execPath, "-e", ESCAPE_SCRIPT]);
+    killEscaped(result.stdout);
+    expect(Date.now() - start).toBeLessThan(5_000);
+  });
+
+  test("marks the output as abandoned", async () => {
+    const run = createBunCommandRunner({
+      killGraceMs: 100,
+      outputDrainMs: 200,
+    });
+    const result = await run([process.execPath, "-e", ESCAPE_SCRIPT]);
+    killEscaped(result.stdout);
+    expect(result.outputAbandoned).toBe(true);
+  });
+
+  test("keeps the output read before abandoning it", async () => {
+    const run = createBunCommandRunner({
+      killGraceMs: 100,
+      outputDrainMs: 200,
+    });
+    const result = await run([process.execPath, "-e", ESCAPE_SCRIPT]);
+    killEscaped(result.stdout);
+    expect(Number(result.stdout.trim())).toBeGreaterThan(0);
+  });
+
+  test("appends the abandon note to stderr", async () => {
+    const run = createBunCommandRunner({
+      killGraceMs: 100,
+      outputDrainMs: 200,
+    });
+    const result = await run([process.execPath, "-e", ESCAPE_SCRIPT]);
+    killEscaped(result.stdout);
+    expect(result.stderr.endsWith(OUTPUT_ABANDONED_NOTE)).toBe(true);
+  });
+
+  test("times out a command whose escaped process holds stdout", async () => {
+    const run = createBunCommandRunner({
+      killGraceMs: 100,
+      outputDrainMs: 200,
+    });
+    const start = Date.now();
+    const result = await run([process.execPath, "-e", ESCAPE_AND_WAIT_SCRIPT], {
+      timeoutMs: 200,
+    });
+    killEscaped(result.stdout);
+    expect(Date.now() - start).toBeLessThan(5_000);
+  });
+
+  test("bounds the worst stop overhead by its parts", () => {
+    expect(RUNNER_MAX_STOP_OVERHEAD_MS).toBe(13_000);
   });
 });
 

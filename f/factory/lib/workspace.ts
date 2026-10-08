@@ -44,6 +44,8 @@ export type CommandResult = {
   readonly stderr: string;
   readonly exitCode: number;
   readonly timedOut: boolean;
+  /** 終了とプロセスグループの停止の後も出力パイプが閉じず、読み取りを打ち切った。別セッションへ抜けたプロセスが握っている場合に起き、そのプロセスは止められていない。打ち切っていなければ付かない。 */
+  readonly outputAbandoned?: boolean;
 };
 
 export type CommandRunOptions = {
@@ -68,13 +70,27 @@ export type CommandRunner = (
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 const DEFAULT_KILL_GRACE_MS = 5_000;
+const DEFAULT_OUTPUT_DRAIN_MS = 2_000;
+const GROUP_POLL_MS = 50;
+const POST_KILL_WAIT_MS = 1_000;
+
+/**
+ * 既定設定のランナーが、タイムアウトの発火から返るまでに上乗せしうる最大時間(ms)。
+ * SIGKILLまでの猶予、終了後のグループ停止の猶予、SIGKILL後の待ち、出力待ちの合計。
+ */
+export const RUNNER_MAX_STOP_OVERHEAD_MS =
+  DEFAULT_KILL_GRACE_MS * 2 + POST_KILL_WAIT_MS + DEFAULT_OUTPUT_DRAIN_MS;
 
 export type BunCommandRunnerOptions = {
-  /**
-   * タイムアウトしたときに、SIGTERMを送ってからSIGKILLを送るまでの猶予。既定は5000ms。
-   */
+  /** タイムアウト時と、終了後に残ったプロセスを止めるときの、SIGTERMからSIGKILLまでの猶予。既定は5000ms。 */
   readonly killGraceMs?: number;
+  /** 先頭プロセスの終了とグループの停止の後、出力の読み取り完了を待つ上限。超えたら読み取りを打ち切る。既定は2000ms。 */
+  readonly outputDrainMs?: number;
 };
+
+/** 読み取りを打ち切ったときにstderrの末尾へ足す注記。 */
+export const OUTPUT_ABANDONED_NOTE =
+  "\n[factory: stopped reading output still held open by a process outside the command's process group]\n";
 
 /**
  * `pid`のプロセスグループ全体に`signal`を送る。すでに終了していれば何もしない。
@@ -90,6 +106,7 @@ export type BunCommandRunnerOptions = {
  * そのため`detached: true`(POSIXの`setsid()`)で、
  * 子プロセスをプロセスグループのリーダーとして起動し、
  * `process.kill(-pid, signal)`でグループ全体に送る。
+ * 先頭プロセスの終了後も、グループに残ったプロセスに使う(`reapProcessGroup`)。
  */
 function killProcessGroup(pid: number, signal: "SIGTERM" | "SIGKILL"): void {
   try {
@@ -97,6 +114,109 @@ function killProcessGroup(pid: number, signal: "SIGTERM" | "SIGKILL"): void {
   } catch {
     // すでに終了しているので、送る相手が無い。
   }
+}
+
+/** プロセスグループにメンバーが残っているかを返す。回収前のゾンビしか残っていない間もtrueを返す(workerはtiniが親を失った子をすぐ回収する)。 */
+function processGroupAlive(pid: number): boolean {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** グループが消えるまで、最大waitMsのあいだGROUP_POLL_MS刻みで待つ。消えればtrueを返す。 */
+async function waitGroupGone(pid: number, waitMs: number): Promise<boolean> {
+  const deadline = Date.now() + waitMs;
+  while (Date.now() < deadline) {
+    await Bun.sleep(GROUP_POLL_MS);
+    if (!processGroupAlive(pid)) return true;
+  }
+  return !processGroupAlive(pid);
+}
+
+/**
+ * 先頭プロセスの終了後、グループに残ったプロセスを止める。誰も残っていなければ何もしない。
+ * 残っていればSIGTERMを送り、graceMsのあいだ消えるのを待つ。残ればSIGKILLを送り、最大POST_KILL_WAIT_MS待ってから戻る。
+ * SIGKILLの後も待つのは、戻った直後のロックの確かめや次のコマンドに、回収前のプロセスが見えないようにするためである。
+ * メンバーが残っている間、グループIDは別のプロセスのPIDとして再利用されない。
+ * ポーリングの間にメンバーが全員回収され、同じ番号を得たプロセスが自分でグループを作っていれば送信がそこへ届きうるが、
+ * PIDはpid_maxまで順に払い出されるので数秒で戻るのは一周したときだけで、既存のタイムアウト時のSIGKILLタイマーと同じ水準の危険である。
+ */
+async function reapProcessGroup(pid: number, graceMs: number): Promise<void> {
+  if (!processGroupAlive(pid)) return;
+  killProcessGroup(pid, "SIGTERM");
+  if (await waitGroupGone(pid, graceMs)) return;
+  killProcessGroup(pid, "SIGKILL");
+  await waitGroupGone(pid, POST_KILL_WAIT_MS);
+}
+
+/** promiseがms以内に確定すればtrueを返す。rejectも確定として扱う(結果は呼び出し側で改めてawaitする)。 */
+async function settlesWithin(
+  promise: Promise<unknown>,
+  ms: number,
+): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<boolean>((resolve) => {
+    timer = setTimeout(() => resolve(false), ms);
+  });
+  try {
+    return await Promise.race([
+      promise.then(
+        () => true,
+        () => true,
+      ),
+      expired,
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+/** signalが中断されたらreaderを取り消す(保留中のreadはdone: trueで返る)。戻り値は登録を外す関数。 */
+function cancelOnAbort(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  signal: AbortSignal | undefined,
+): () => void {
+  if (signal === undefined) return () => {};
+  const cancel = (): void => {
+    reader.cancel().catch(() => {});
+  };
+  if (signal.aborted) {
+    cancel();
+    return () => {};
+  }
+  signal.addEventListener("abort", cancel, { once: true });
+  return () => signal.removeEventListener("abort", cancel);
+}
+
+/** streamを終わりまで(またはsignalが中断されるまで)読み、読めた分をUTF-8として返す。上限は無い。 */
+export async function readStreamAll(
+  stream: ReadableStream<Uint8Array>,
+  signal?: AbortSignal,
+): Promise<string> {
+  const reader = stream.getReader();
+  const release = cancelOnAbort(reader, signal);
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      size += value.byteLength;
+    }
+  } finally {
+    release();
+  }
+  const whole = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    whole.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(whole);
 }
 
 const OMITTED_MARKER_PATTERN = /\[\.\.\. \d+ bytes omitted \.\.\.\]/;
@@ -121,10 +241,12 @@ export function isCappedOutput(text: string): boolean {
  * ストリームが長くてもメモリは増えない。
  * 間を捨てたときは、2つの部分を別々にデコードし、`omittedMarker(捨てたバイト数)`でつなぐ
  * (境界で切れたマルチバイト文字はU+FFFDになる)。
+ * signalが中断されたら、それまでに保持した分で返す。
  */
 export async function readStreamCapped(
   stream: ReadableStream<Uint8Array>,
   maxBytes: number,
+  signal?: AbortSignal,
 ): Promise<string> {
   const headLimit = Math.floor(maxBytes / 2);
   const tailLimit = maxBytes - headLimit;
@@ -161,17 +283,22 @@ export async function readStreamCapped(
   };
 
   const reader = stream.getReader();
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    let offset = 0;
-    if (headSize < headLimit) {
-      const take = Math.min(headLimit - headSize, value.byteLength);
-      head.set(value.subarray(0, take), headSize);
-      headSize += take;
-      offset = take;
+  const release = cancelOnAbort(reader, signal);
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      let offset = 0;
+      if (headSize < headLimit) {
+        const take = Math.min(headLimit - headSize, value.byteLength);
+        head.set(value.subarray(0, take), headSize);
+        headSize += take;
+        offset = take;
+      }
+      if (offset < value.byteLength) pushTail(value.subarray(offset));
     }
-    if (offset < value.byteLength) pushTail(value.subarray(offset));
+  } finally {
+    release();
   }
 
   const tail = new Uint8Array(ringSize);
@@ -189,14 +316,17 @@ export async function readStreamCapped(
 }
 
 /**
- * `Bun.spawn`で起動する`CommandRunner`を作って返す。
- * タイムアウトしたら、まずSIGTERMを送り、`killGraceMs`(既定は5秒)経っても
- * 終了していなければSIGKILLを送る。
+ * `Bun.spawn`で新しいセッション(プロセスグループ)として起動する`CommandRunner`を作って返す。
+ * タイムアウトしたらグループにSIGTERMを送り、`killGraceMs`後にSIGKILLを送る。
+ * 先頭プロセスが終わったら、正常終了でもグループに残ったプロセスを止める(`reapProcessGroup`)。
+ * 出力が`outputDrainMs`待っても閉じなければ読み取りを打ち切り、`outputAbandoned`を付ける。
+ * 別セッションへ抜けたプロセスにはグループへのkillが届かず、パイプを握ったままだと読み取りもtimeoutも終わらないためである。
  */
 export function createBunCommandRunner(
   options: BunCommandRunnerOptions = {},
 ): CommandRunner {
   const killGraceMs = options.killGraceMs ?? DEFAULT_KILL_GRACE_MS;
+  const outputDrainMs = options.outputDrainMs ?? DEFAULT_OUTPUT_DRAIN_MS;
 
   return async (argv, runOptions = {}) => {
     const proc = Bun.spawn({
@@ -228,19 +358,34 @@ export function createBunCommandRunner(
       }, killGraceMs);
     }, runOptions.timeoutMs ?? DEFAULT_TIMEOUT_MS);
 
+    const abort = new AbortController();
     const readOutput = (stream: ReadableStream<Uint8Array>): Promise<string> =>
       runOptions.maxOutputBytes === undefined
-        ? new Response(stream).text()
-        : readStreamCapped(stream, runOptions.maxOutputBytes);
-    const [stdout, stderr, exitCode] = await Promise.all([
+        ? readStreamAll(stream, abort.signal)
+        : readStreamCapped(stream, runOptions.maxOutputBytes, abort.signal);
+    const outputs = Promise.all([
       readOutput(proc.stdout),
       readOutput(proc.stderr),
-      proc.exited,
     ]);
+    // 先頭プロセスの終了を待つ間にrejectしても未処理扱いにしない(結果は下で改めてawaitする)。
+    outputs.catch(() => {});
+
+    const exitCode = await proc.exited;
     clearTimeout(timer);
     if (killTimer !== undefined) clearTimeout(killTimer);
+    await reapProcessGroup(proc.pid, killGraceMs);
+    const drained = await settlesWithin(outputs, outputDrainMs);
+    if (!drained) abort.abort();
+    const [stdout, stderr] = await outputs;
 
-    return { stdout, stderr, exitCode, timedOut };
+    if (drained) return { stdout, stderr, exitCode, timedOut };
+    return {
+      stdout,
+      stderr: `${stderr}${OUTPUT_ABANDONED_NOTE}`,
+      exitCode,
+      timedOut,
+      outputAbandoned: true,
+    };
   };
 }
 
