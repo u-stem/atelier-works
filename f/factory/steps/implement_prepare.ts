@@ -34,7 +34,7 @@ import {
   assertImplementLease,
   IMPLEMENT_LEASE_LOST_REASON,
   ImplementLeaseLostError,
-  implementLeaseJobId,
+  rootFlowJobId,
 } from "../lib/implement_launch_support.ts";
 import {
   type ImplementContext,
@@ -224,7 +224,7 @@ export async function main(
   }
   // worktreeの再利用経路はreset --hardとcleanをするので、それより前にリースを取る。
   // 取れなければ同じ作業項目の別の実行が動いている(または起動側がneeds_humanにした)ので何もしない。
-  const leaseJobId = implementLeaseJobId(process.env);
+  const leaseJobId = rootFlowJobId(process.env);
   if (!(await acquireImplementLease(work_item_id, leaseJobId))) {
     // 起動側の記録とこの実行のIDが食い違っていないかを切り分けられるよう、読み直した値を残す。
     const current = await getWorkItem(work_item_id);

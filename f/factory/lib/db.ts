@@ -455,8 +455,10 @@ export async function updateStatusIfCurrent(
 
 /**
  * updateStatusIfCurrentと同じ比較と交換で、同じ文でflow_job_idをNULLにする。
- * 実装フローを始める遷移(approved → implementing、retryからimplementingへ)で使い、
- * 前のフローのジョブIDを消して新しい実行のimplement_prepareがリースを取れるようにする。
+ * 実装フローかpipelineを始める遷移(approved → implementing、retry_work_itemの再起動)で使う。
+ * 実装フローでは、前のフローのジョブIDを消して新しい実行のimplement_prepareがリースを取れるようにする。
+ * pipelineでは、起動したジョブIDを空のときだけ記録できるようにする。
+ * 記録までの間、reconcileは終わった前のジョブではなく未記録の実行として扱い、猶予を待つ。
  * statusがexpectedFromでなければ何も書かずにfalseを返す。
  */
 export async function updateStatusIfCurrentClearingFlowJobId(
@@ -1335,22 +1337,27 @@ export async function setFixRound(
 }
 
 /**
- * `work_items.attempt`を更新する。
- * `pipeline_prepare.ts`がフローの最初に呼び、`flow_input.attempt`を保存する。
+ * `flow_job_id`が`leaseJobId`のときだけ`work_items.attempt`を更新し、更新したら`true`を返す。
+ * `pipeline_prepare.ts`がリースを確かめた直後に呼び、`flow_input.attempt`を保存する。
  * これが無いと`attempt`は挿入後に書かれず、読み出す側
  * (`retry_work_item.ts`の`workItem.attempt + 1`など)が、
  * 2回目以降の要件定義の生成で古い値を見てしまう。
+ * リースを条件にするのは、リースを失った古い実行が新しい実行のattemptを戻さないため。
+ * 終端の状態かどうかは見ない。終端になった作業項目を進めないのは、続く状態の比較交換の役目である。
  */
-export async function setAttempt(
+export async function setAttemptIfLeaseHolder(
   id: number,
   attempt: number,
+  leaseJobId: string,
   sql: SqlClient = defaultSqlClient,
-): Promise<void> {
-  await sql`
+): Promise<boolean> {
+  const rows = await sql`
     UPDATE factory.work_items
     SET attempt = ${attempt}::integer, updated_at = now()
-    WHERE id = ${id}
-  `.execute();
+    WHERE id = ${id} AND flow_job_id = ${leaseJobId}
+    RETURNING id
+  `.fetch();
+  return rows.length > 0;
 }
 
 /**

@@ -57,8 +57,8 @@ import {
   holdsImplementLease,
   IMPLEMENT_LEASE_LOST_REASON,
   ImplementLeaseLostError,
-  implementLeaseJobId,
   parseFlowJobId,
+  rootFlowJobId,
 } from "../lib/implement_launch_support.ts";
 import {
   GITLEAKS_TIMEOUT_MS,
@@ -288,7 +288,7 @@ async function finishImplement(
   }
   // Issueのcloseによる取り消し(cancelJobの失敗は握りつぶされる)やpr_fixの差し戻しで、実行中にリースが移ることがある。
   // その実行はコミット・push・PR作成の前に止める。
-  const leaseJobId = implementLeaseJobId(process.env);
+  const leaseJobId = rootFlowJobId(process.env);
   if (!holdsImplementLease(workItem, leaseJobId)) {
     log.warn("implement lease lost before finishing", {
       work_item_id,

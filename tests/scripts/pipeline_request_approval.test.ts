@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import type { LogFields, Logger } from "../../f/factory/lib/log.ts";
 import {
+  type AwaitingApprovalDeps,
   buildApprovalNotifyFailedMessage,
+  moveToAwaitingApproval,
   reportApprovalNotifyFailure,
 } from "../../f/factory/steps/pipeline_request_approval.ts";
 
@@ -137,5 +139,58 @@ describe("reportApprovalNotifyFailure", () => {
     expect(JSON.stringify(warnings[0]?.fields)).not.toContain(
       "fake-webhook-token-value",
     );
+  });
+});
+
+function deps(
+  casResult: boolean,
+  withdrawResult = true,
+): {
+  deps: AwaitingApprovalDeps;
+  calls: string[];
+} {
+  const calls: string[] = [];
+  return {
+    calls,
+    deps: {
+      casToAwaitingApproval: async () => {
+        calls.push("cas");
+        return casResult;
+      },
+      withdrawRequest: async () => {
+        calls.push("withdraw");
+        return withdrawResult;
+      },
+    },
+  };
+}
+
+describe("moveToAwaitingApproval", () => {
+  test("returns moved when the work item moved to awaiting_approval", async () => {
+    expect(await moveToAwaitingApproval(deps(true).deps)).toBe("moved");
+  });
+
+  test("keeps the approval request when the work item moved", async () => {
+    const h = deps(true);
+    await moveToAwaitingApproval(h.deps);
+    expect(h.calls).not.toContain("withdraw");
+  });
+
+  test("returns withdrawn when the lease or the status changed and the request was expired", async () => {
+    expect(await moveToAwaitingApproval(deps(false, true).deps)).toBe(
+      "withdrawn",
+    );
+  });
+
+  test("returns already_decided when a human decided the request before it could be expired", async () => {
+    expect(await moveToAwaitingApproval(deps(false, false).deps)).toBe(
+      "already_decided",
+    );
+  });
+
+  test("withdraws the inserted request when the lease or the status changed", async () => {
+    const h = deps(false);
+    await moveToAwaitingApproval(h.deps);
+    expect(h.calls).toEqual(["cas", "withdraw"]);
   });
 });

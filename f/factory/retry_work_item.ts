@@ -3,7 +3,7 @@
 // 状態は種別で決まる(`computeRestartPlan`)。状態の変更はここで読んだ状態を
 // 前提にした比較交換なので、並行して状態が変わったら上書きせず再開をやめる。
 // 記録済みのflowジョブがまだ動いている(キュー待ちを含む)か、状態を読めないときは
-// 再開を拒否する。実装フローへの再開は比較交換でflow_job_id(リース)を空にし、
+// 再開を拒否する。実装フローとpipelineへの再開は比較交換でflow_job_id(リース)を空にし、
 // 起動したジョブIDは空のときだけ記録する。起動の戻り値がジョブIDでなければ、
 // 状態をneeds_humanに戻して例外を投げる(`launchFailureError`)。
 //
@@ -28,6 +28,7 @@ import { parseFlowJobId } from "./lib/implement_launch_support.ts";
 import { IMPLEMENT_FLOW_PATH } from "./lib/implement_loop.ts";
 import { isRequirementsApprovedForAttempt } from "./lib/implement_support.ts";
 import { logger, maskSecrets } from "./lib/log.ts";
+import { PIPELINE_FLOW_PATH } from "./lib/pipeline_lease.ts";
 import { type JobState, readJobState } from "./lib/poll_support.ts";
 import { isOneOf, type WorkItem, type WorkItemStatus } from "./lib/types.ts";
 
@@ -100,7 +101,7 @@ export function computeRestartPlan(
       }
       return {
         toStatus: "requirements_generating",
-        flowPath: "f/factory/pipeline",
+        flowPath: PIPELINE_FLOW_PATH,
         args: { work_item_id: workItem.id, attempt: workItem.attempt + 1 },
       };
     case "pr_review":
@@ -122,11 +123,19 @@ export function computeRestartPlan(
   }
 }
 
-/** 実装フローへの再開ならtrueを返す。そのときは比較交換でリースを空け、ジョブIDは空のときだけ記録する。 */
-export function usesImplementLease(
+/**
+ * flow_job_idをリースとして扱うフロー(実装フローとpipeline)への再開ならtrueを返す。
+ * そのときは比較交換でリースを空け、ジョブIDは空のときだけ記録する。
+ * 空けておくと、記録までの間にreconcileが終わった前のジョブを見て再開を孤児と判定せず、
+ * 未記録として猶予を待つ。
+ */
+export function usesFlowJobIdLease(
   plan: Pick<RestartPlan, "flowPath">,
 ): boolean {
-  return plan.flowPath === IMPLEMENT_FLOW_PATH;
+  return (
+    plan.flowPath === IMPLEMENT_FLOW_PATH ||
+    plan.flowPath === PIPELINE_FLOW_PATH
+  );
 }
 
 /**
@@ -247,7 +256,7 @@ export async function main(work_item_id: number): Promise<RetryWorkItemResult> {
   );
   if (refusal !== null) throw new Error(refusal);
 
-  const leased = usesImplementLease(plan);
+  const leased = usesFlowJobIdLease(plan);
   const note = `retry_work_item: restarted from ${workItem.status}`;
   const moved = leased
     ? await updateStatusIfCurrentClearingFlowJobId(
@@ -276,7 +285,7 @@ export async function main(work_item_id: number): Promise<RetryWorkItemResult> {
     );
   } catch (err) {
     // 起動できなかった作業項目を、動くジョブの無いままreconcileの猶予まで残さない。
-    // flow_job_idは実装フローなら比較交換で空にした値、それ以外は読み取った値のまま。
+    // flow_job_idはリースを使うフローなら比較交換で空にした値、それ以外は読み取った値のまま。
     throw await launchFailureError(
       plan.flowPath,
       maskSecrets(err instanceof Error ? err.message : String(err)),

@@ -46,7 +46,7 @@ import {
   type SqlClient,
   type SqlRow,
   saveDraft,
-  setAttempt,
+  setAttemptIfLeaseHolder,
   setFixRound,
   setFlowJobId,
   setFlowJobIdIfUnset,
@@ -1924,23 +1924,39 @@ describe("setFixRound", () => {
   });
 });
 
-describe("setAttempt", () => {
+describe("setAttemptIfLeaseHolder", () => {
   test("updates attempt", async () => {
-    const { sql, calls } = createFakeSqlClient([[]]);
-    await setAttempt(1, 2, sql);
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await setAttemptIfLeaseHolder(1, 2, "job-1", sql);
     expect(calls[0]?.text).toContain("SET attempt");
   });
 
-  test("passes attempt and id as parameters", async () => {
-    const { sql, calls } = createFakeSqlClient([[]]);
-    await setAttempt(1, 2, sql);
-    expect(calls[0]?.values).toEqual([2, 1]);
+  test("guards the update with the lease holder's flow job id", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await setAttemptIfLeaseHolder(1, 2, "job-1", sql);
+    expect(calls[0]?.text).toContain("AND flow_job_id =");
+  });
+
+  test("passes attempt, id and the job id as parameters", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await setAttemptIfLeaseHolder(1, 2, "job-1", sql);
+    expect(calls[0]?.values).toEqual([2, 1, "job-1"]);
   });
 
   test("casts attempt to ::integer", async () => {
-    const { sql, calls } = createFakeSqlClient([[]]);
-    await setAttempt(1, 2, sql);
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await setAttemptIfLeaseHolder(1, 2, "job-1", sql);
     expect(calls[0]?.text).toContain("::integer");
+  });
+
+  test("returns true when the lease holder's row was updated", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 1 }]]);
+    expect(await setAttemptIfLeaseHolder(1, 2, "job-1", sql)).toBe(true);
+  });
+
+  test("returns false when another run holds the lease", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await setAttemptIfLeaseHolder(1, 2, "job-1", sql)).toBe(false);
   });
 });
 

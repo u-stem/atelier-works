@@ -1,26 +1,62 @@
 // f/factory/pipelineの承認依頼ステップ。
 // 要件定義の下書きへの承認依頼を記録して通知し、人の判断を待たずに返る。
+// pipelineのリース(`flow_job_id`がこのフローのジョブID)を持たなければ、何も書かずに終わる。
 
 import * as wmill from "windmill-client@1.817.0";
 import { buildConsoleUrl, computeExpiresAt } from "../lib/approval_support.ts";
 import { loadConfig } from "../lib/config.ts";
 import {
   addNotice,
+  expireApprovalRequestIfPending,
   getWorkItem,
   insertApprovalRequest,
   latestDraft,
-  updateStatusIfCurrent,
+  updateStatusIfLeaseHolder,
 } from "../lib/db.ts";
 import {
   type NotifyBestEffortResult,
   notifyBestEffort,
 } from "../lib/discord.ts";
+import { rootFlowJobId } from "../lib/implement_launch_support.ts";
 import { type Logger, logger, maskSecrets } from "../lib/log.ts";
+import {
+  holdsPipelineLease,
+  PIPELINE_LEASE_LOST_REASON,
+} from "../lib/pipeline_lease.ts";
 
-export type PipelineRequestApprovalResult = {
-  readonly ok: true;
-  readonly approval_request_id: number;
+export type PipelineRequestApprovalResult =
+  | { readonly ok: true; readonly approval_request_id: number }
+  | { readonly ok: false; readonly reason: string };
+
+/** 承認依頼を記録した後に作業項目へ進めなかったときの理由。 */
+export const APPROVAL_REQUEST_WITHDRAWN_REASON =
+  "work item moved on before approval could be requested; the approval request was expired";
+
+/** 作業項目へ進めず、期限切れにする前に人が依頼を判断していたときの理由。 */
+export const APPROVAL_REQUEST_ALREADY_DECIDED_REASON =
+  "work item moved on before approval could be requested, but the approval request had already been decided";
+
+export type AwaitingApprovalOutcome = "moved" | "withdrawn" | "already_decided";
+
+export type AwaitingApprovalDeps = {
+  /** `updateStatusIfLeaseHolder`で、リースを持つまま`requirements_generating`から`awaiting_approval`へ移す。 */
+  readonly casToAwaitingApproval: () => Promise<boolean>;
+  /** 記録した承認依頼を`expireApprovalRequestIfPending`で期限切れにする。 */
+  readonly withdrawRequest: () => Promise<boolean>;
 };
+
+/**
+ * 作業項目を`awaiting_approval`へ移し、移せたら`moved`を返す。
+ * 移せなければ(リースが移った、状態が先へ進んだ)、記録した承認依頼を期限切れにして`withdrawn`を返す。
+ * 依頼をpendingのまま残すと、古いattemptの下書きを人が承認できてしまうため。
+ * 期限切れにする前に人が承認か却下をしていたら(期限切れの比較交換が負けたら)`already_decided`を返す。
+ */
+export async function moveToAwaitingApproval(
+  deps: AwaitingApprovalDeps,
+): Promise<AwaitingApprovalOutcome> {
+  if (await deps.casToAwaitingApproval()) return "moved";
+  return (await deps.withdrawRequest()) ? "withdrawn" : "already_decided";
+}
 
 /**
  * 承認依頼の通知が届かなかったときに残すnoticeの本文を作る。副作用は無い。
@@ -63,8 +99,9 @@ export async function reportApprovalNotifyFailure(
  * `attempt`回目の下書きに対する承認依頼(kind "requirements")を
  * `factory.approval_requests`に記録し、作業項目を`awaiting_approval`に進め、
  * Discordへapproval_requestedを通知する。
- * 作業項目が既に`requirements_generating`から動いていたら、
- * 依頼の記録だけで通知せずに返る。
+ * pipelineのリースを持っていなければ、依頼を記録せずに`ok: false`を返す(例外は投げない)。
+ * 作業項目が既に`requirements_generating`から動いていたか、記録の後にリースが移っていたら、
+ * 記録した依頼を期限切れにし、通知せずに`ok: false`を返す。
  * 通知が届かなくても失敗せず、Consoleに`approval_notify_failed`のnoticeを残す。
  * 承認依頼は記録済みで、Consoleから判断できるため。
  * 作業項目・Issue番号・該当attemptの下書きが無ければ例外を投げる。
@@ -94,6 +131,17 @@ export async function main(
     );
   }
 
+  const leaseJobId = rootFlowJobId(process.env);
+  if (!holdsPipelineLease(workItem, leaseJobId)) {
+    log.warn(PIPELINE_LEASE_LOST_REASON, {
+      work_item_id,
+      status: workItem.status,
+      flow_job_id: workItem.flow_job_id,
+      lease_job_id: leaseJobId,
+    });
+    return { ok: false, reason: PIPELINE_LEASE_LOST_REASON };
+  }
+
   const draft = await latestDraft(work_item_id);
   if (draft === null || draft.attempt !== attempt) {
     throw new Error(
@@ -109,17 +157,31 @@ export async function main(
     expires_at: computeExpiresAt(new Date()),
   });
 
-  const updated = await updateStatusIfCurrent(
-    work_item_id,
-    "requirements_generating",
-    "awaiting_approval",
-    null,
-  );
-  if (!updated) {
+  const moved = await moveToAwaitingApproval({
+    casToAwaitingApproval: () =>
+      updateStatusIfLeaseHolder(
+        work_item_id,
+        "requirements_generating",
+        "awaiting_approval",
+        leaseJobId,
+        null,
+      ),
+    withdrawRequest: () => expireApprovalRequestIfPending(approvalRequestId),
+  });
+  if (moved === "already_decided") {
+    // 判断の扱いは、作業項目の状態を見るrequirements_applyに任せ、ここでは記録だけ残す。
+    log.warn(APPROVAL_REQUEST_ALREADY_DECIDED_REASON, {
+      work_item_id,
+      approval_request_id: approvalRequestId,
+    });
+    return { ok: false, reason: APPROVAL_REQUEST_ALREADY_DECIDED_REASON };
+  }
+  if (moved === "withdrawn") {
     log.info("work item moved on before approval could be requested", {
       work_item_id,
+      approval_request_id: approvalRequestId,
     });
-    return { ok: true, approval_request_id: approvalRequestId };
+    return { ok: false, reason: APPROVAL_REQUEST_WITHDRAWN_REASON };
   }
 
   const inboxUrl = buildConsoleUrl(config.windmill_public_url, {

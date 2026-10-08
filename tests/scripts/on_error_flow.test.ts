@@ -13,21 +13,52 @@ import {
   shouldMarkFailed,
 } from "../../f/factory/on_error_flow.ts";
 
+const IMPLEMENT = "f/factory/implement";
+const PIPELINE = "f/factory/pipeline";
+
 describe("shouldMarkFailed", () => {
   test("marks failed when the work item's flow_job_id matches the root job id", () => {
-    expect(shouldMarkFailed("job-a", "job-a")).toBe(true);
+    expect(shouldMarkFailed("job-a", "job-a", IMPLEMENT)).toBe(true);
   });
 
   test("does not mark failed when a newer run's job id has replaced it", () => {
-    expect(shouldMarkFailed("job-b", "job-a")).toBe(false);
+    expect(shouldMarkFailed("job-b", "job-a", IMPLEMENT)).toBe(false);
   });
 
   test("marks failed when the work item has no recorded flow_job_id yet", () => {
-    expect(shouldMarkFailed(null, "job-a")).toBe(true);
+    expect(shouldMarkFailed(null, "job-a", IMPLEMENT)).toBe(true);
   });
 
   test("marks failed when the root job id is unavailable", () => {
-    expect(shouldMarkFailed("job-a", null)).toBe(true);
+    expect(shouldMarkFailed("job-a", null, IMPLEMENT)).toBe(true);
+  });
+
+  test("marks failed when the root job id differs only in letter case", () => {
+    expect(shouldMarkFailed("job-a", "JOB-A", IMPLEMENT)).toBe(true);
+  });
+
+  test("marks failed when the flow path is unknown and no flow_job_id is recorded", () => {
+    expect(shouldMarkFailed(null, "job-a", null)).toBe(true);
+  });
+
+  test("marks a pipeline failed when flow_job_id matches the root job id", () => {
+    expect(shouldMarkFailed("job-a", "job-a", PIPELINE)).toBe(true);
+  });
+
+  test("does not mark a pipeline failed while no flow_job_id is recorded", () => {
+    expect(shouldMarkFailed(null, "job-a", PIPELINE)).toBe(false);
+  });
+
+  test("does not mark a pipeline failed when the root job id is unavailable", () => {
+    expect(shouldMarkFailed("job-a", null, PIPELINE)).toBe(false);
+  });
+
+  test("marks a pipeline failed when the root job id differs only in letter case", () => {
+    expect(shouldMarkFailed("job-a", "JOB-A", PIPELINE)).toBe(true);
+  });
+
+  test("does not mark a pipeline failed when another run's job id is recorded", () => {
+    expect(shouldMarkFailed("job-b", "job-a", PIPELINE)).toBe(false);
   });
 });
 

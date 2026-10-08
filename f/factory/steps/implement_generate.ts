@@ -14,7 +14,7 @@ import { buildSystemPrompt, runClaude } from "../lib/claude.ts";
 import { loadConfig } from "../lib/config.ts";
 import { getWorkItem, recordAgentRun } from "../lib/db.ts";
 import {
-  implementLeaseJobId,
+  rootFlowJobId,
   stillHoldsImplementLease,
 } from "../lib/implement_launch_support.ts";
 import {
@@ -38,7 +38,7 @@ export async function main(
   work_item_id: number,
   context: ImplementContext,
 ): Promise<ImplementClaudeRound> {
-  const leaseJobId = implementLeaseJobId(process.env);
+  const leaseJobId = rootFlowJobId(process.env);
   return runImplementGenerateRound({
     holdsLease: () =>
       stillHoldsImplementLease(() => getWorkItem(work_item_id), leaseJobId),
