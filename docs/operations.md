@@ -135,7 +135,7 @@
 - `mise run push` / `mise run deploy`は`wmill sync push`の前にConsole raw appの`npm ci`を実行する(raw appのバンドルに依存が必要なため)。
 - `f/`・`migrations/`・`.claude/skills/`の変更は`self_update`が自動で反映する。`infra/`と`mise.toml`の`[tools]`・`[env]`の変更は、ホスト側checkoutを`git pull`したうえで次に`mise run up`で起動したときに反映される(ビルドはホスト側checkoutから行うため、先にmainを取り込む)。通知はしない。
 - Console(`console/`)の変更は、`main`にマージされてCIが通れば、数分で`console_fetcher`が取り込んで反映する(5分ごとに確認する)。`self_update`は関与しない。`infra/console_fetcher/`とCaddyfileの変更は、他の`infra/`と同じく次の`mise run up`で反映される(Caddyfileだけを変えたときは`mise exec -- docker compose -f infra/docker-compose.yml restart caddy`)。
-- 一括で反映したいときは`mise run deploy`を手動で実行する(ホスト側checkoutで`git pull --ff-only` → workerイメージのビルド → `docker compose up -d` → `wmill sync push` → migrationを一括実行する)。必須の手順ではない。
+- 一括で反映したいときは`mise run deploy`を手動で実行する(ホスト側checkoutで`git pull --ff-only` → workerと`console_fetcher`のイメージのビルド → `docker compose up -d` → `wmill sync push` → migrationを一括実行する)。必須の手順ではない。
 - workerの並列数(`NUM_WORKERS`)のような`infra/docker-compose.yml`の変更は、通常の`git pull`だけでは反映されず、次の`mise run up`でworkerイメージの再ビルドとコンテナの再作成まで行われる。すぐ反映したいときは`mise run up`か`mise run deploy`を実行する。
 - worker imageに入れるツール(`claude` / `gh` / `gitleaks` / `gtr` / `wmill`)のバージョンは`mise.toml`の`[env]`(`CLAUDE_VERSION` / `GH_VERSION` / `GITLEAKS_VERSION` / `GTR_REF` / `WMILL_VERSION`)で固定し、`infra/worker/Dockerfile`のbuild argとして渡す。ツールの追加やバージョン変更はworker imageのrebuildが必要な変更で、`git pull`だけでは反映されない。`self_update`は`infra/`と`mise.toml`の`[env]`の変更として検知してログと`deployments`に記録するが通知はしないので、次の`mise run up`で反映される。`gitleaks`は工程3(実装フロー)が毎ラウンドの固定検査として`--redact`付きで実行するためにworker imageに入れている(ホスト側のpre-commit hookと同じバージョン)。
 - workerコンテナは`init: true`(docker-init)をPID 1にしてゾンビプロセスを回収する。jobが起こすgit / gh / esbuildの子プロセスは親より長生きすることがあり、initが無いとwindmill本体に付け替えられたまま回収されず、`pids: 512`の上限を食い潰して全jobが`errno=11`(EAGAIN、スレッドや子プロセスを作れない)で失敗する(2026-09-28に430個のゾンビで再現)。同じ症状が出たら`docker compose -f infra/docker-compose.yml exec windmill_worker cat /sys/fs/cgroup/pids.current`で使用量を見て、`docker compose -f infra/docker-compose.yml restart windmill_worker`で復旧する。
@@ -154,6 +154,7 @@
   - `config_missing`: `CONSOLE_GITHUB_TOKEN`が無いか、`CONSOLE_GITHUB_REPO`(`mise.toml`)の形が違う。直して`mise run up`する。
   - `auth_failed`: トークンが失効した。再発行して投入し、`mise run up`する。
   - `forbidden` / `not_found`: トークンの対象リポジトリか権限(Actions: Read)が違う。`mise.toml`の`CONSOLE_GITHUB_REPO`も確かめる。
+  - `rate_limited`: GitHub APIの呼び出し回数の上限に達した。待ってから自動で再試行される(何もしなくてよい)。上限が戻る時刻は見ず、5分ごとの次の確認でそのまま再試行する。その間も今の版を配信し続ける。
   - `no_successful_run` / `artifact_missing` / `artifact_expired`: 取り込める成果物が無い。CIの結果を確かめ、必要なら`main`にpushしてCIを動かす。
   - `digest_mismatch` / `manifest_mismatch` / `zip_unsafe_entry` / `unexpected_redirect`: 検証に失敗した。今の版を配信し続けるので急ぎではないが、原因を調べる。
   - `asset_conflict`: 新しい版の`assets/`のファイルが、既にある同じ名前のファイルと中身が違う(`console/public/assets/`の名前の付け替え忘れなど)。置き換えると配信中の版が壊れるので取り込まない。名前を直したcommitを`main`に入れる。
