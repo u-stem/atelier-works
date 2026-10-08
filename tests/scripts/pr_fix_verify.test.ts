@@ -115,6 +115,14 @@ describe("parseGitStatusPorcelainZ", () => {
     ]);
   });
 
+  test("prefers typechange over rename for the new path (RT)", () => {
+    const entries = parseGitStatusPorcelainZ("RT new\u0000old\u0000");
+    expect(entries).toEqual([
+      { path: "new", status: "typechange" },
+      { path: "old", status: "deleted" },
+    ]);
+  });
+
   test("keeps the old path of a rename as a deletion", () => {
     const entries = parseGitStatusPorcelainZ("R  new.ts\u0000old.ts\u0000");
     expect(entries[1]).toEqual({ path: "old.ts", status: "deleted" });
