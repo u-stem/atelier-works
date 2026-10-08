@@ -25,12 +25,12 @@ import {
   matchesForbiddenPath,
   mergeChangedPaths,
   packageJsonScriptsChanged,
-  parseGitDiffNameOnly,
+  parseGitDiffNameOnlyZ,
   parseGitDiffNameStatusZ,
-  parseGitDiffNumstat,
-  parseGitStatusPorcelain,
+  parseGitDiffNumstatZ,
+  parseGitStatusPorcelainZ,
   parseRawSymlinkPaths,
-  parseSymlinkModePaths,
+  parseSymlinkModePathsZ,
   parseWcLineCount,
   resolveSymlinkTarget,
   runAllowedCheckCommands,
@@ -62,47 +62,81 @@ function fakeCheckHomeDir(path = "/fake-check-home"): {
   return { factory, state };
 }
 
-describe("parseGitStatusPorcelain", () => {
+describe("parseGitStatusPorcelainZ", () => {
   test("parses an untracked file as added", () => {
-    const entries = parseGitStatusPorcelain("?? new-file.sh\n");
+    const entries = parseGitStatusPorcelainZ("?? new-file.sh\u0000");
     expect(entries).toEqual([{ path: "new-file.sh", status: "added" }]);
   });
 
   test("parses a modified tracked file", () => {
-    const entries = parseGitStatusPorcelain(" M src/index.ts\n");
+    const entries = parseGitStatusPorcelainZ(" M src/index.ts\u0000");
     expect(entries[0]?.status).toBe("modified");
   });
 
   test("parses a deleted file", () => {
-    const entries = parseGitStatusPorcelain(" D old.ts\n");
+    const entries = parseGitStatusPorcelainZ(" D old.ts\u0000");
     expect(entries[0]?.status).toBe("deleted");
   });
 
   test("resolves a rename to its new path", () => {
-    const entries = parseGitStatusPorcelain("R  old.ts -> new.ts\n");
+    const entries = parseGitStatusPorcelainZ("R  new.ts\u0000old.ts\u0000");
     expect(entries[0]?.path).toBe("new.ts");
   });
 
-  test("ignores blank lines", () => {
-    const entries = parseGitStatusPorcelain("\n\n");
+  test("keeps the old path of a rename as a deletion", () => {
+    const entries = parseGitStatusPorcelainZ("R  new.ts\u0000old.ts\u0000");
+    expect(entries[1]).toEqual({ path: "old.ts", status: "deleted" });
+  });
+
+  test("keeps parsing entries after a rename", () => {
+    const entries = parseGitStatusPorcelainZ(
+      "R  new.ts\u0000old.ts\u0000 M c.ts\u0000",
+    );
+    expect(entries[2]?.path).toBe("c.ts");
+  });
+
+  test("does not report the source of a copy", () => {
+    const entries = parseGitStatusPorcelainZ("C  b.ts\u0000a.ts\u0000");
+    expect(entries.map((entry) => entry.path)).toEqual(["b.ts"]);
+  });
+
+  test("keeps a non-ASCII path unquoted", () => {
+    const entries = parseGitStatusPorcelainZ(
+      "?? .github/workflows/日本語.yml\u0000",
+    );
+    expect(entries[0]?.path).toBe(".github/workflows/日本語.yml");
+  });
+
+  test("keeps spaces inside a path", () => {
+    const entries = parseGitStatusPorcelainZ(" M a b.ts\u0000");
+    expect(entries[0]?.path).toBe("a b.ts");
+  });
+
+  test("ignores empty output", () => {
+    const entries = parseGitStatusPorcelainZ("");
     expect(entries).toHaveLength(0);
   });
 
   test("parses an unstaged typechange ( T)", () => {
-    const entries = parseGitStatusPorcelain(" T link-or-file\n");
+    const entries = parseGitStatusPorcelainZ(" T link-or-file\u0000");
     expect(entries[0]?.status).toBe("typechange");
   });
 
   test("parses a staged typechange (T )", () => {
-    const entries = parseGitStatusPorcelain("T  link-or-file\n");
+    const entries = parseGitStatusPorcelainZ("T  link-or-file\u0000");
     expect(entries[0]?.status).toBe("typechange");
   });
 });
 
-describe("parseGitDiffNameOnly", () => {
-  test("splits output into trimmed paths", () => {
-    const paths = parseGitDiffNameOnly("a.ts\nb.ts\n");
+describe("parseGitDiffNameOnlyZ", () => {
+  test("splits NUL-separated output into paths", () => {
+    const paths = parseGitDiffNameOnlyZ("a.ts\u0000b.ts\u0000");
     expect(paths).toEqual(["a.ts", "b.ts"]);
+  });
+
+  test("keeps a non-ASCII path unquoted", () => {
+    const paths = parseGitDiffNameOnlyZ(".claude/設計.md\u0000");
+    expect(paths).toEqual([".claude/設計.md"]);
   });
 });
 
@@ -251,6 +285,30 @@ describe("detectForbiddenChanges", () => {
     ]);
     expect(result.blocked).toBe(true);
   });
+
+  test("is blocked for a non-ASCII path under a forbidden directory", () => {
+    const paths = parseGitStatusPorcelainZ(
+      "?? .github/workflows/日本語.yml\u0000",
+    );
+    const result = detectForbiddenChanges(paths, false);
+    expect(result.blocked).toBe(true);
+  });
+
+  test("is blocked when a file is renamed into a forbidden directory", () => {
+    const paths = parseGitStatusPorcelainZ(
+      "R  .claude/設定.md\u0000notes.md\u0000",
+    );
+    const result = detectForbiddenChanges(paths, false);
+    expect(result.blocked).toBe(true);
+  });
+
+  test("is blocked when a file is renamed out of a forbidden directory", () => {
+    const paths = parseGitStatusPorcelainZ(
+      "R  docs/ci.yml\u0000.github/workflows/ci.yml\u0000",
+    );
+    const result = detectForbiddenChanges(paths, false);
+    expect(result.blocked).toBe(true);
+  });
 });
 
 describe("packageJsonScriptsChanged", () => {
@@ -277,17 +335,24 @@ describe("packageJsonScriptsChanged", () => {
   });
 });
 
-describe("parseSymlinkModePaths", () => {
+describe("parseSymlinkModePathsZ", () => {
   test("keeps only mode 120000 (symlink) entries", () => {
     const output = [
       "100644 abc123 0\tsrc/a.ts",
       "120000 def456 0\tsrc/link",
-    ].join("\n");
-    expect(parseSymlinkModePaths(output)).toEqual(["src/link"]);
+      "",
+    ].join("\u0000");
+    expect(parseSymlinkModePathsZ(output)).toEqual(["src/link"]);
   });
 
-  test("ignores blank lines", () => {
-    expect(parseSymlinkModePaths("\n\n")).toEqual([]);
+  test("keeps a non-ASCII path unquoted", () => {
+    expect(parseSymlinkModePathsZ("120000 def456 0\tリンク\u0000")).toEqual([
+      "リンク",
+    ]);
+  });
+
+  test("ignores empty output", () => {
+    expect(parseSymlinkModePathsZ("")).toEqual([]);
   });
 });
 
@@ -380,8 +445,22 @@ describe("listSymlinkTargets", () => {
     expect(calls).toHaveLength(0);
   });
 
+  test("runs git ls-files -s -z for the given paths", async () => {
+    const { run, calls } = createFakeCommandRunner([ok("")]);
+    await listSymlinkTargets(run, "/work", ["リンク"]);
+    expect(calls[0]?.argv.slice(-5)).toEqual([
+      "ls-files",
+      "-s",
+      "-z",
+      "--",
+      "リンク",
+    ]);
+  });
+
   test("pairs each symlink path with its readLink target", async () => {
-    const { run } = createFakeCommandRunner([ok("120000 abc123 0\tlink\n")]);
+    const { run } = createFakeCommandRunner([
+      ok("120000 abc123 0\tlink\u0000"),
+    ]);
     const targets = await listSymlinkTargets(run, "/work", ["link"], () =>
       Promise.resolve("/etc/passwd"),
     );
@@ -389,7 +468,9 @@ describe("listSymlinkTargets", () => {
   });
 
   test("skips a symlink whose target can't be read on disk", async () => {
-    const { run } = createFakeCommandRunner([ok("120000 abc123 0\tlink\n")]);
+    const { run } = createFakeCommandRunner([
+      ok("120000 abc123 0\tlink\u0000"),
+    ]);
     const targets = await listSymlinkTargets(run, "/work", ["link"], () =>
       Promise.reject(new Error("ENOENT")),
     );
@@ -409,26 +490,47 @@ describe("listSymlinkTargets", () => {
   });
 });
 
-describe("parseGitDiffNumstat", () => {
+describe("parseGitDiffNumstatZ", () => {
   test("parses added/deleted counts per file", () => {
-    const entries = parseGitDiffNumstat("3\t1\tsrc/a.ts\n");
+    const entries = parseGitDiffNumstatZ("3\t1\tsrc/a.ts\u0000");
     expect(entries).toEqual([{ path: "src/a.ts", additions: 3, deletions: 1 }]);
   });
 
   test("treats a binary file's dash counts as null", () => {
-    const entries = parseGitDiffNumstat("-\t-\tassets/logo.png\n");
+    const entries = parseGitDiffNumstatZ("-\t-\tassets/logo.png\u0000");
     expect(entries).toEqual([
       { path: "assets/logo.png", additions: null, deletions: null },
     ]);
   });
 
-  test("ignores blank lines", () => {
-    expect(parseGitDiffNumstat("\n\n")).toEqual([]);
+  test("ignores empty output", () => {
+    expect(parseGitDiffNumstatZ("")).toEqual([]);
   });
 
   test("parses multiple files", () => {
-    const entries = parseGitDiffNumstat("1\t0\ta.ts\n2\t2\tb.ts\n");
+    const entries = parseGitDiffNumstatZ("1\t0\ta.ts\u00002\t2\tb.ts\u0000");
     expect(entries).toHaveLength(2);
+  });
+
+  test("keeps a non-ASCII path unquoted", () => {
+    const entries = parseGitDiffNumstatZ("2\t0\t日本語.txt\u0000");
+    expect(entries[0]?.path).toBe("日本語.txt");
+  });
+
+  test("resolves a rename to its new path", () => {
+    const entries = parseGitDiffNumstatZ(
+      "1\t2\t\u0000docs/ci.yml\u0000docs/設定.yml\u0000",
+    );
+    expect(entries).toEqual([
+      { path: "docs/設定.yml", additions: 1, deletions: 2 },
+    ]);
+  });
+
+  test("keeps parsing entries after a rename", () => {
+    const entries = parseGitDiffNumstatZ(
+      "0\t0\t\u0000a.ts\u0000b.ts\u00004\t0\tc.ts\u0000",
+    );
+    expect(entries[1]?.path).toBe("c.ts");
   });
 });
 
@@ -512,13 +614,13 @@ describe("evaluateDiffSizeGuard", () => {
 });
 
 describe("getDiffNumstat", () => {
-  test("parses the command's stdout via parseGitDiffNumstat", async () => {
-    const { run } = createFakeCommandRunner([ok("3\t1\tsrc/a.ts\n")]);
+  test("parses the command's stdout via parseGitDiffNumstatZ", async () => {
+    const { run } = createFakeCommandRunner([ok("3\t1\tsrc/a.ts\u0000")]);
     const entries = await getDiffNumstat(run, "/work");
     expect(entries).toEqual([{ path: "src/a.ts", additions: 3, deletions: 1 }]);
   });
 
-  test("runs git diff --numstat in the worktree", async () => {
+  test("runs git diff --numstat -z in the worktree", async () => {
     const { run, calls } = createFakeCommandRunner([ok("")]);
     await getDiffNumstat(run, "/work");
     expect(calls[0]?.argv).toEqual([
@@ -531,6 +633,7 @@ describe("getDiffNumstat", () => {
       "credential.helper=",
       "diff",
       "--numstat",
+      "-z",
     ]);
   });
 
@@ -540,7 +643,9 @@ describe("getDiffNumstat", () => {
   });
 
   test("throws when the git diff output was abandoned", async () => {
-    const { run } = createFakeCommandRunner([abandoned("3\t1\tsrc/a.ts\n")]);
+    const { run } = createFakeCommandRunner([
+      abandoned("3\t1\tsrc/a.ts\u0000"),
+    ]);
     await expect(getDiffNumstat(run, "/work")).rejects.toThrow(
       /numstat.*abandoned/,
     );
@@ -909,15 +1014,27 @@ describe("listChangedPaths", () => {
 });
 
 describe("listUncommittedChangedPaths", () => {
-  test("merges git status --porcelain and git diff --name-only", async () => {
-    const { run } = createFakeCommandRunner([ok("?? new.ts\n"), ok("a.ts\n")]);
+  test("merges git status --porcelain -z and git diff --name-only -z", async () => {
+    const { run } = createFakeCommandRunner([
+      ok("?? new.ts\u0000"),
+      ok("a.ts\u0000"),
+    ]);
     expect(await listUncommittedChangedPaths(run, "/wt")).toEqual([
       { path: "new.ts", status: "added" },
       { path: "a.ts", status: "modified" },
     ]);
   });
 
-  test("runs both with the hardening flags in the worktree", async () => {
+  test("returns a non-ASCII path that detectForbiddenChanges blocks", async () => {
+    const { run } = createFakeCommandRunner([
+      ok("?? .github/workflows/日本語.yml\u0000"),
+      ok(""),
+    ]);
+    const paths = await listUncommittedChangedPaths(run, "/wt");
+    expect(detectForbiddenChanges(paths, false).blocked).toBe(true);
+  });
+
+  test("runs both with -z and the hardening flags in the worktree", async () => {
     const { run, calls } = createFakeCommandRunner([ok(""), ok("")]);
     await listUncommittedChangedPaths(run, "/wt");
     expect(calls.map((call) => [call.argv, call.options?.cwd])).toEqual([
@@ -932,6 +1049,7 @@ describe("listUncommittedChangedPaths", () => {
           "credential.helper=",
           "status",
           "--porcelain",
+          "-z",
         ],
         "/wt",
       ],
@@ -946,6 +1064,7 @@ describe("listUncommittedChangedPaths", () => {
           "credential.helper=",
           "diff",
           "--name-only",
+          "-z",
         ],
         "/wt",
       ],
@@ -958,7 +1077,7 @@ describe("listUncommittedChangedPaths", () => {
       ok(""),
     ]);
     await expect(listUncommittedChangedPaths(run, "/wt")).rejects.toThrow(
-      /git status --porcelain failed/,
+      /git status --porcelain -z failed/,
     );
   });
 
@@ -968,21 +1087,21 @@ describe("listUncommittedChangedPaths", () => {
       fail("fatal: not a git repository"),
     ]);
     await expect(listUncommittedChangedPaths(run, "/wt")).rejects.toThrow(
-      /git diff --name-only failed/,
+      /git diff --name-only -z failed/,
     );
   });
 
   test("throws when the git status output was abandoned", async () => {
     const { run } = createFakeCommandRunner([abandoned(""), ok("")]);
     await expect(listUncommittedChangedPaths(run, "/wt")).rejects.toThrow(
-      /git status --porcelain.*abandoned/,
+      /git status --porcelain -z.*abandoned/,
     );
   });
 
   test("throws when the git diff --name-only output was abandoned", async () => {
     const { run } = createFakeCommandRunner([ok(""), abandoned("")]);
     await expect(listUncommittedChangedPaths(run, "/wt")).rejects.toThrow(
-      /git diff --name-only.*abandoned/,
+      /git diff --name-only -z.*abandoned/,
     );
   });
 });

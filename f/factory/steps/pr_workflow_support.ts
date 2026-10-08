@@ -1081,8 +1081,15 @@ export function isFixClaudeOutput(value: unknown): value is FixClaudeOutput {
 // ---------------------------------------------------------------------------
 
 /**
- * `git status --porcelain`の出力(XYの接頭辞が付いた行)をパースする。
- * リネームの`" -> "`は新しいパスに解決する。
+ * `git status --porcelain -z`の出力をパースする。
+ * 各レコードは`XY <path>\0`で、リネームとコピーには元のパスが`\0`区切りで続く
+ * (`XY <新しいパス>\0<元のパス>\0`)。
+ * 改行区切りの形式は非ASCII文字や制御文字を含むパスをCの形式で引用し、
+ * そうしたパスが`matchesForbiddenPath`をすり抜けるので、引用しない`-z`を読む。
+ * パスは前後の空白も含めてそのまま使う。
+ * リネームは新しいパスに加えて、元のパスを`"deleted"`として返す。
+ * 保護されたファイルを保護された場所の外へ移しても、検査から漏れないようにするため。
+ * コピーの元のパスは変わっていないので返さない。
  * 未追跡(`"??"`)とステージ済みの追加(`"A "`)はどちらも`"added"`とする。
  * 「新しい`*.sh`ファイル」の禁止の検査はこれらにだけ反応し、
  * 追跡済みの既存ファイルの編集には反応しない。
@@ -1092,17 +1099,20 @@ export function isFixClaudeOutput(value: unknown): value is FixClaudeOutput {
  * `git ls-files -s`にmode 120000として現れないことがあり、
  * symlinkが関わったことを示す手がかりがこれしか残らないため。
  */
-export function parseGitStatusPorcelain(output: string): ChangedPath[] {
+export function parseGitStatusPorcelainZ(output: string): ChangedPath[] {
+  const fields = output.split("\u0000");
   const entries: ChangedPath[] = [];
-  for (const rawLine of output.split("\n")) {
-    if (rawLine.trim().length === 0) continue;
-    const xy = rawLine.slice(0, 2);
-    let rest = rawLine.slice(3);
-    const arrowIndex = rest.indexOf(" -> ");
-    if (arrowIndex !== -1) {
-      rest = rest.slice(arrowIndex + 4);
+  let index = 0;
+  while (index < fields.length) {
+    const record = fields[index] ?? "";
+    index += 1;
+    const xy = record.slice(0, 2);
+    const path = record.slice(3);
+    let source = "";
+    if (xy.includes("R") || xy.includes("C")) {
+      source = fields[index] ?? "";
+      index += 1;
     }
-    const path = rest.trim();
     if (path.length === 0) continue;
 
     let status: ChangedPathStatus = "unknown";
@@ -1116,15 +1126,19 @@ export function parseGitStatusPorcelain(output: string): ChangedPath[] {
       status = "modified";
     }
     entries.push({ path, status });
+    if (xy.includes("R") && source.length > 0) {
+      entries.push({ path: source, status: "deleted" });
+    }
   }
   return entries;
 }
 
-export function parseGitDiffNameOnly(output: string): string[] {
-  return output
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
+/**
+ * `git diff --name-only -z`の出力(NUL終端のパスの並び)をパースする。
+ * `-z`はパスを引用しないので、非ASCII文字を含むパスもそのまま返る。
+ */
+export function parseGitDiffNameOnlyZ(output: string): string[] {
+  return output.split("\u0000").filter((path) => path.length > 0);
 }
 
 function statusFromNameStatus(code: string): ChangedPathStatus {
@@ -1294,7 +1308,8 @@ export async function listSymlinkChanges(
 }
 
 /**
- * worktreeのコミットしていない変更のパスを、`git status --porcelain`と`git diff --name-only`の和集合(`mergeChangedPaths`)で返す。
+ * worktreeのコミットしていない変更のパスを、`git status --porcelain -z`と`git diff --name-only -z`の和集合(`mergeChangedPaths`)で返す。
+ * パスを引用させないため、どちらもNUL区切りの`-z`で読む。
  * pr_fixの保護パス・symlink・差分の大きさの判定の入力になるので、どちらかが失敗したとき(終了コードが0以外)と、
  * 出力の読み取りを打ち切ったときは例外を投げる。空の一覧として扱うと、変更を見落とすため。
  * gitはhook・fsmonitor・credential helperを無効にして実行する。
@@ -1308,17 +1323,17 @@ export async function listUncommittedChangedPaths(
     env: resolvedEnv({ GIT_TERMINAL_PROMPT: "0" }, undefined, undefined),
   };
   const [statusResult, diffResult] = await Promise.all([
-    run(gitHardeningArgv(["status", "--porcelain"]), options),
-    run(gitHardeningArgv(["diff", "--name-only"]), options),
+    run(gitHardeningArgv(["status", "--porcelain", "-z"]), options),
+    run(gitHardeningArgv(["diff", "--name-only", "-z"]), options),
   ]);
   assertOutputComplete(
-    `git status --porcelain in ${worktreeDir}`,
+    `git status --porcelain -z in ${worktreeDir}`,
     statusResult,
   );
-  assertOutputComplete(`git diff --name-only in ${worktreeDir}`, diffResult);
+  assertOutputComplete(`git diff --name-only -z in ${worktreeDir}`, diffResult);
   for (const [name, result] of [
-    ["git status --porcelain", statusResult],
-    ["git diff --name-only", diffResult],
+    ["git status --porcelain -z", statusResult],
+    ["git diff --name-only -z", diffResult],
   ] as const) {
     if (result.exitCode !== 0) {
       throw new Error(
@@ -1329,14 +1344,14 @@ export async function listUncommittedChangedPaths(
     }
   }
   return mergeChangedPaths(
-    parseGitStatusPorcelain(statusResult.stdout),
-    parseGitDiffNameOnly(diffResult.stdout),
+    parseGitStatusPorcelainZ(statusResult.stdout),
+    parseGitDiffNameOnlyZ(diffResult.stdout),
   );
 }
 
 /**
- * `git status --porcelain`と`git diff --name-only`の結果の和集合を返す。
- * `git status --porcelain`だけでステージ済み・未ステージ、追跡済み・未追跡の変更を
+ * `git status --porcelain -z`と`git diff --name-only -z`の結果の和集合を返す。
+ * `git status`だけでステージ済み・未ステージ、追跡済み・未追跡の変更を
  * すべて含むが、念のため`git diff --name-only`でも確かめる。
  * 後者にだけあるパスは、定義上gitがすでに知っている追跡済みのファイルなので
  * `"modified"`とする。
@@ -1406,17 +1421,18 @@ export type SymlinkTarget = {
 };
 
 /**
- * `git ls-files -s`の出力(各行が`<mode> <sha> <stage>\t<path>`)をパースし、
+ * `git ls-files -s -z`の出力(各レコードが`<mode> <sha> <stage>\t<path>\0`)をパースし、
  * modeが`120000`(symlink)の項目のパスだけを返す。
+ * `-z`はパスを引用しないので、非ASCII文字を含むパスもそのまま返り、
+ * 変更パスの一覧と突き合わせられる。
  */
-export function parseSymlinkModePaths(output: string): string[] {
+export function parseSymlinkModePathsZ(output: string): string[] {
   const paths: string[] = [];
-  for (const line of output.split("\n")) {
-    if (line.trim().length === 0) continue;
-    const tabIndex = line.indexOf("\t");
+  for (const record of output.split("\u0000")) {
+    const tabIndex = record.indexOf("\t");
     if (tabIndex === -1) continue;
-    const mode = line.slice(0, tabIndex).trim().split(/\s+/)[0];
-    const path = line.slice(tabIndex + 1).trim();
+    const mode = record.slice(0, tabIndex).trim().split(/\s+/)[0];
+    const path = record.slice(tabIndex + 1);
     if (mode === "120000" && path.length > 0) {
       paths.push(path);
     }
@@ -1482,7 +1498,7 @@ export function detectEscapingSymlinks(
  *   - 変更されたパスのうち、現在symlinkであるもの(`symlinkTargets`にある、
  *     つまり今mode 120000のもの)。新しいsymlinkと、
  *     指す先が変わった既存のsymlinkを捕まえる。
- *   - 変更されたパスのうち、`parseGitStatusPorcelain`が`typechange`に分類したもの。
+ *   - 変更されたパスのうち、`parseGitStatusPorcelainZ`が`typechange`に分類したもの。
  *     どちら向きでもsymlinkと通常ファイルの間の変換を捕まえる。
  *     symlinkが消えた後は、`git ls-files -s`の現在の状態だけでは見逃すため。
  */
@@ -1523,18 +1539,26 @@ export type DiffNumstatEntry = {
 };
 
 /**
- * `git diff --numstat`の出力(各行がタブ区切りの`<added>\t<deleted>\t<path>`)をパースする。
- * リネームはporcelainの矢印ではなく`" => "`を含む1つの`path`として出力されるが、
- * ここでは行数だけを使うので、そのまま通す。
+ * `git diff --numstat -z`の出力をパースする。
+ * 各レコードは`<added>\t<deleted>\t<path>\0`で、リネームとコピーはパスの欄が空になり、
+ * 元のパスと新しいパスが`\0`区切りで続く(`<added>\t<deleted>\t\0<元>\0<新>\0`)。
+ * リネームとコピーは新しいパスで返す。
  */
-export function parseGitDiffNumstat(output: string): DiffNumstatEntry[] {
+export function parseGitDiffNumstatZ(output: string): DiffNumstatEntry[] {
+  const fields = output.split("\u0000");
   const entries: DiffNumstatEntry[] = [];
-  for (const line of output.split("\n")) {
-    if (line.trim().length === 0) continue;
-    const parts = line.split("\t");
+  let index = 0;
+  while (index < fields.length) {
+    const record = fields[index] ?? "";
+    index += 1;
+    const parts = record.split("\t");
     if (parts.length < 3) continue;
     const [addRaw, delRaw, ...pathParts] = parts;
-    const path = pathParts.join("\t").trim();
+    let path = pathParts.join("\t");
+    if (path.length === 0) {
+      path = fields[index + 1] ?? "";
+      index += 2;
+    }
     if (path.length === 0) continue;
     entries.push({
       path,
@@ -1568,26 +1592,26 @@ export function sumDiffNumstatLines(
 }
 
 /**
- * `worktreeDir`で`git diff --numstat`を読む(インデックスに対する未ステージの変更)。
+ * `worktreeDir`で`git diff --numstat -z`を読む(インデックスに対する未ステージの変更)。
  * `pr_fix_verify`の他の検査が見るのと同じ作業ツリーの状態に合わせている。
  */
 export async function getDiffNumstat(
   run: CommandRunner,
   worktreeDir: string,
 ): Promise<DiffNumstatEntry[]> {
-  const result = await run(gitHardeningArgv(["diff", "--numstat"]), {
+  const result = await run(gitHardeningArgv(["diff", "--numstat", "-z"]), {
     cwd: worktreeDir,
     env: resolvedEnv({ GIT_TERMINAL_PROMPT: "0" }, undefined, undefined),
   });
-  assertOutputComplete(`git diff --numstat in ${worktreeDir}`, result);
+  assertOutputComplete(`git diff --numstat -z in ${worktreeDir}`, result);
   if (result.exitCode !== 0) {
     throw new Error(
       maskSecrets(
-        `git diff --numstat failed in ${worktreeDir}: ${result.stderr.trim()}`,
+        `git diff --numstat -z failed in ${worktreeDir}: ${result.stderr.trim()}`,
       ),
     );
   }
-  return parseGitDiffNumstat(result.stdout);
+  return parseGitDiffNumstatZ(result.stdout);
 }
 
 /**
@@ -1691,21 +1715,21 @@ export async function listSymlinkTargets(
 ): Promise<SymlinkTarget[]> {
   if (paths.length === 0) return [];
   const result = await run(
-    gitHardeningArgv(["ls-files", "-s", "--", ...paths]),
+    gitHardeningArgv(["ls-files", "-s", "-z", "--", ...paths]),
     {
       cwd: worktreeDir,
       env: resolvedEnv({ GIT_TERMINAL_PROMPT: "0" }, undefined, undefined),
     },
   );
-  assertOutputComplete(`git ls-files -s in ${worktreeDir}`, result);
+  assertOutputComplete(`git ls-files -s -z in ${worktreeDir}`, result);
   if (result.exitCode !== 0) {
     throw new Error(
       maskSecrets(
-        `git ls-files -s failed in ${worktreeDir}: ${result.stderr.trim()}`,
+        `git ls-files -s -z failed in ${worktreeDir}: ${result.stderr.trim()}`,
       ),
     );
   }
-  const symlinkPaths = parseSymlinkModePaths(result.stdout);
+  const symlinkPaths = parseSymlinkModePathsZ(result.stdout);
   const targets: SymlinkTarget[] = [];
   for (const path of symlinkPaths) {
     try {

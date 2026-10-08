@@ -33,7 +33,10 @@ import {
 } from "../../f/factory/lib/implement_support.ts";
 import { IMPLEMENT_SCHEMA } from "../../f/factory/lib/prompts.ts";
 import { RUNNER_MAX_STOP_OVERHEAD_MS } from "../../f/factory/lib/workspace.ts";
-import { extractLinkedIssueNumbers } from "../../f/factory/steps/pr_workflow_support.ts";
+import {
+  extractLinkedIssueNumbers,
+  parseGitDiffNameStatusZ,
+} from "../../f/factory/steps/pr_workflow_support.ts";
 
 const DONE_OUTPUT: ImplementClaudeOutput = {
   outcome: "done",
@@ -449,6 +452,22 @@ describe("classifyProtectedChanges", () => {
         false,
       ),
     ).toEqual(["保護パスを変更: infra/x.sh", "新規の*.shを追加: infra/x.sh"]);
+  });
+
+  test("records a non-ASCII infra/** path from git diff -z --name-status", () => {
+    const changes = parseGitDiffNameStatusZ("A\u0000infra/設定.yml\u0000");
+    expect(classifyProtectedChanges(changes, false)).toEqual([
+      "保護パスを変更: infra/設定.yml",
+    ]);
+  });
+
+  test("records a rename into a protected path from git diff -z --name-status", () => {
+    const changes = parseGitDiffNameStatusZ(
+      "R100\u0000notes.yml\u0000.github/日本語.yml\u0000",
+    );
+    expect(classifyProtectedChanges(changes, false)).toEqual([
+      "保護パスを変更: .github/日本語.yml",
+    ]);
   });
 });
 
