@@ -18,7 +18,24 @@ import {
   prFixPushGateReason,
   renderFixReply,
   shouldAdvanceWatermarks,
+  stopBeforeCommitTerminal,
 } from "../../f/factory/steps/pr_workflow_support.ts";
+
+describe("stopBeforeCommitTerminal", () => {
+  const REASON = "forbidden path changed: mise.toml";
+
+  test("records the stop reason as status_reason", () => {
+    expect(stopBeforeCommitTerminal(REASON).statusNote).toBe(REASON);
+  });
+
+  test("notifies the stop reason", () => {
+    expect(stopBeforeCommitTerminal(REASON).discordReason).toBe(REASON);
+  });
+
+  test("moves the work item to needs_human", () => {
+    expect(stopBeforeCommitTerminal(REASON).toStatus).toBe("needs_human");
+  });
+});
 
 describe("prFixPushGateReason", () => {
   const POINTER = "gitdir: /r/.git/worktrees/fix-1\n";

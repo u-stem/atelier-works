@@ -2315,6 +2315,23 @@ export async function recordedGitPointerStopReason(
   return gitPointerStopReason(() => assertGitPointer(recorded));
 }
 
+/**
+ * pr_fixの完了ステップがcommitの前に止めたとき(`prFixPushGateReason`か`CommitBlockedError`)の遷移を返す。
+ * `statusNote`(`work_items.status_reason`に記録する値)にも止めた理由を入れる。
+ * このとき直前のステップの`reason`はdoneでnullなので、それを使うと理由が記録に残らないため。
+ */
+export function stopBeforeCommitTerminal(stopReason: string): {
+  readonly toStatus: "needs_human";
+  readonly discordReason: string;
+  readonly statusNote: string;
+} {
+  return {
+    toStatus: "needs_human",
+    discordReason: stopReason,
+    statusNote: stopReason,
+  };
+}
+
 /** `prFixPushGateReason`が使うI/O。テストでは偽物に差し替える。 */
 export type PrFixPushGateDeps = {
   /** worktreeのロックを持つプロセスがいれば`WorktreeBusyError`を投げる(何も止めない)。 */

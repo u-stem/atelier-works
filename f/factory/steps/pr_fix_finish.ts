@@ -65,6 +65,7 @@ import {
   rerouteRequirementsGap,
   selectProposeIssueReplies,
   shouldAdvanceWatermarks,
+  stopBeforeCommitTerminal,
   withGapReport,
 } from "./pr_workflow_support.ts";
 
@@ -521,7 +522,7 @@ export async function main(
     }
   }
 
-  /** commitせずに止めたラウンドを記録し、needs_humanにする。 */
+  /** commitせずに止めたラウンドを記録し、止めた理由を`status_reason`に入れてneeds_humanにする。 */
   async function stopBeforeCommit(
     stopReason: string,
   ): Promise<PrFixFinishResult> {
@@ -533,8 +534,13 @@ export async function main(
       replies,
       commit_shas: [],
     });
-    await finalizeTerminal("needs_human", stopReason);
-    return { ok: true, final_status: "needs_human", notice: stopReason };
+    const terminal = stopBeforeCommitTerminal(stopReason);
+    await finalizeTerminal(
+      terminal.toStatus,
+      terminal.discordReason,
+      terminal.statusNote,
+    );
+    return { ok: true, final_status: terminal.toStatus, notice: stopReason };
   }
 
   // 検証ステップの最後の検査とこのcommitは別のジョブなので、その間にworktreeが変わっていないことを確かめる。
