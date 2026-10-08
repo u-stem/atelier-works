@@ -3536,7 +3536,7 @@ describe("pushNewBranch", () => {
   const BRANCH = "factory/issue-7-wi-3";
   const PUSH_BASE_SHA = "a".repeat(40);
   const BRANCH_SHA = "c".repeat(40);
-  /** `git ls-remote --symref origin -- HEAD <branch> <base>`の出力。 */
+  /** `git ls-remote --symref origin HEAD <branch> <base>`の出力。 */
   const lsRemote = (
     options: {
       readonly head?: string;

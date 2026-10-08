@@ -85,7 +85,7 @@ export type ImplementContext = {
   /** リポジトリのデフォルトブランチ。PRのbaseになる。 */
   readonly base_branch: string;
   /**
-   * worktreeの準備ができた時点の`git merge-base origin/<base_branch> HEAD`。
+   * worktreeの準備ができた時点の、リモートと照合したデフォルトブランチの先頭(`pushNewBranch`の`baseSha`)とHEADのmerge-base。
    * 各ラウンドの変更の一覧と差分の大きさはこれを基準に測るので、
    * ブランチに以前からあるcommitも見える。
    */
