@@ -602,13 +602,15 @@ describe("reportReviewerRequest", () => {
 });
 
 describe("reviewerRequestFailedSupplement", () => {
-  test("includes the API error", () => {
-    expect(reviewerRequestFailedSupplement("HTTP 500")).toContain("HTTP 500");
+  test("puts the manual-request instruction first so truncation keeps it", () => {
+    expect(reviewerRequestFailedSupplement("HTTP 500")).toStartWith(
+      "GitHubでレビュアーを手動で依頼してください。\n",
+    );
   });
 
-  test("tells the human to request reviewers manually on GitHub", () => {
-    expect(reviewerRequestFailedSupplement("HTTP 500")).toContain(
-      "GitHubでレビュアーを手動で依頼してください。",
+  test("ends with the API error", () => {
+    expect(reviewerRequestFailedSupplement("HTTP 500")).toEndWith(
+      "再レビュー依頼のAPI呼び出しに失敗しました: HTTP 500",
     );
   });
 });

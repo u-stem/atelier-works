@@ -137,9 +137,13 @@ export function reportReviewerRequest(
   return { note: null, apiError: null, noticeKind: null };
 }
 
-/** 再レビュー依頼のAPIの失敗を、`pr_fixed`通知の補足欄に載せる文にする。 */
+/**
+ * 再レビュー依頼のAPIの失敗を、`pr_fixed`通知の補足欄に載せる文にする。
+ * Discordはフィールドの値を1024文字で切るので、エラーが長くても人のすることが
+ * 残るよう、依頼の指示を先に置く。
+ */
 export function reviewerRequestFailedSupplement(apiError: string): string {
-  return `再レビュー依頼のAPI呼び出しに失敗しました: ${apiError}\nGitHubでレビュアーを手動で依頼してください。`;
+  return `GitHubでレビュアーを手動で依頼してください。\n再レビュー依頼のAPI呼び出しに失敗しました: ${apiError}`;
 }
 
 /**
