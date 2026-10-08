@@ -3534,11 +3534,34 @@ describe("removeEmptyDir", () => {
 
 describe("pushNewBranch", () => {
   const BRANCH = "factory/issue-7-wi-3";
-  const LS_REMOTE_HIT = `${HEAD_SHA}\trefs/heads/${BRANCH}\n`;
   const PUSH_BASE_SHA = "a".repeat(40);
-  /** リモートにブランチが無いときの、ls-remote・基準の解決・update-ref・pushの応答。 */
+  const BRANCH_SHA = "c".repeat(40);
+  /** `git ls-remote --symref origin -- HEAD <branch> <base>`の出力。 */
+  const lsRemote = (
+    options: {
+      readonly head?: string;
+      readonly base?: string | null;
+      readonly branch?: boolean;
+    } = {},
+  ): CommandResult =>
+    ok(
+      [
+        `ref: ${options.head ?? "refs/heads/main"}\tHEAD`,
+        `${PUSH_BASE_SHA}\tHEAD`,
+        ...(options.base === null
+          ? []
+          : [`${options.base ?? PUSH_BASE_SHA}\trefs/heads/main`]),
+        // パターンは末尾で一致するので、名前の終わりが同じ別のrefも返りうる。
+        `${BRANCH_SHA}\trefs/heads/x/refs/heads/main`,
+        ...(options.branch === true
+          ? [`${BRANCH_SHA}\trefs/heads/${BRANCH}`]
+          : []),
+        "",
+      ].join("\n"),
+    );
+  /** リモートにブランチが無いときの、問い合わせ・追跡refの読み取り・update-ref・pushの応答。 */
   const missingRemote = (): CommandResult[] => [
-    fail("", 2), // ls-remote --exit-code: 一致するrefが無い
+    lsRemote(),
     ok(`${PUSH_BASE_SHA}\n`), // rev-parse --verify refs/remotes/origin/main^{commit}
     ok(), // update-ref
     ok(), // push
@@ -3559,20 +3582,21 @@ describe("pushNewBranch", () => {
     expect(result).toEqual({ pushed: true });
   });
 
-  test("asks the remote with git ls-remote --exit-code --heads origin -- <branch>", async () => {
+  test("asks the remote for HEAD, the branch and the base in one ls-remote", async () => {
     const fake = createFakeCommandRunner(missingRemote());
     await push(fake.run);
-    expect(fake.calls[0]?.argv.slice(-6)).toEqual([
+    expect(fake.calls[0]?.argv.slice(-7)).toEqual([
       "ls-remote",
-      "--exit-code",
-      "--heads",
+      "--symref",
       "origin",
       "--",
-      BRANCH,
+      "HEAD",
+      `refs/heads/${BRANCH}`,
+      "refs/heads/main",
     ]);
   });
 
-  test("resolves the base from the remote-tracking ref of the default branch", async () => {
+  test("reads the local remote-tracking ref of the base to compare", async () => {
     const fake = createFakeCommandRunner(missingRemote());
     await push(fake.run);
     expect(fake.calls[1]?.argv.slice(-3)).toEqual([
@@ -3582,7 +3606,7 @@ describe("pushNewBranch", () => {
     ]);
   });
 
-  test("points the local branch itself at the base before pushing", async () => {
+  test("points the local branch itself at the remote's base before pushing", async () => {
     const fake = createFakeCommandRunner(missingRemote());
     await push(fake.run);
     expect(fake.calls[2]?.argv).toEqual(
@@ -3596,7 +3620,7 @@ describe("pushNewBranch", () => {
     );
   });
 
-  test("pushes the base sha rather than the local branch", async () => {
+  test("pushes the remote's base sha rather than the local branch", async () => {
     const fake = createFakeCommandRunner(missingRemote());
     await push(fake.run);
     expect(fake.calls[3]?.argv.slice(-3)).toEqual([
@@ -3618,15 +3642,21 @@ describe("pushNewBranch", () => {
   });
 
   test("is a no-op when the remote already has the branch", async () => {
-    const fake = createFakeCommandRunner([ok(LS_REMOTE_HIT)]);
+    const fake = createFakeCommandRunner([
+      lsRemote({ branch: true }),
+      ok(`${PUSH_BASE_SHA}\n`),
+    ]);
     const result = await push(fake.run);
     expect(result).toEqual({ pushed: false });
   });
 
-  test("does not touch the local branch when the remote already has it", async () => {
-    const fake = createFakeCommandRunner([ok(LS_REMOTE_HIT)]);
+  test("does not move or push when the remote already has the branch", async () => {
+    const fake = createFakeCommandRunner([
+      lsRemote({ branch: true }),
+      ok(`${PUSH_BASE_SHA}\n`),
+    ]);
     await push(fake.run);
-    expect(fake.calls).toHaveLength(1);
+    expect(fake.calls).toHaveLength(2);
   });
 
   test("only the network calls (ls-remote and push) carry GH_TOKEN", async () => {
@@ -3650,7 +3680,7 @@ describe("pushNewBranch", () => {
 
   test("throws a masked error when the push fails", async () => {
     const fake = createFakeCommandRunner([
-      fail("", 2),
+      lsRemote(),
       ok(`${PUSH_BASE_SHA}\n`),
       ok(),
       fail("remote: Permission to acme/widgets.git denied to factory-bot."),
@@ -3660,29 +3690,55 @@ describe("pushNewBranch", () => {
     );
   });
 
-  test("throws without pushing when the base cannot be resolved", async () => {
+  test("throws without moving the branch when the local tracking ref differs from the remote's base", async () => {
+    const fake = createFakeCommandRunner([lsRemote(), ok(`${BRANCH_SHA}\n`)]);
+    await expect(push(fake.run)).rejects.toThrow(/does not match/);
+  });
+
+  test("throws when the remote does not have the base branch", async () => {
+    const fake = createFakeCommandRunner([lsRemote({ base: null })]);
+    await expect(push(fake.run)).rejects.toThrow(
+      /origin has no refs\/heads\/main/,
+    );
+  });
+
+  test("throws when the remote's HEAD is not the base branch", async () => {
     const fake = createFakeCommandRunner([
-      fail("", 2),
+      lsRemote({ head: "refs/heads/trunk" }),
+    ]);
+    await expect(push(fake.run)).rejects.toThrow(/origin HEAD/);
+  });
+
+  test("throws when the remote's base is not a sha", async () => {
+    const fake = createFakeCommandRunner([lsRemote({ base: "not-a-sha" })]);
+    await expect(push(fake.run)).rejects.toThrow(/invalid git SHA/);
+  });
+
+  test("throws when the ls-remote output was abandoned", async () => {
+    const fake = createFakeCommandRunner([
+      { ...lsRemote(), outputAbandoned: true },
+    ]);
+    await expect(push(fake.run)).rejects.toThrow(/abandoned/);
+  });
+
+  test("throws without moving the branch when the tracking ref cannot be read", async () => {
+    const fake = createFakeCommandRunner([
+      lsRemote(),
       fail("fatal: Needed a single revision", 128),
     ]);
     await expect(push(fake.run)).rejects.toThrow(/rev-parse/);
   });
 
-  test("throws without pushing when the base is not a sha", async () => {
-    const fake = createFakeCommandRunner([fail("", 2), ok("not-a-sha\n")]);
-    await expect(push(fake.run)).rejects.toThrow(/invalid git SHA/);
-  });
-
   test("throws without pushing when moving the local branch fails", async () => {
     const fake = createFakeCommandRunner([
-      fail("", 2),
+      lsRemote(),
       ok(`${PUSH_BASE_SHA}\n`),
       fail("fatal: cannot lock ref"),
     ]);
     await expect(push(fake.run)).rejects.toThrow(/update-ref/);
   });
 
-  test("throws when ls-remote fails with anything other than exit 2", async () => {
+  test("throws when ls-remote fails", async () => {
     const fake = createFakeCommandRunner([
       fail("fatal: could not read from remote repository", 128),
     ]);
@@ -3749,7 +3805,7 @@ describe("pushNewBranch (real git)", () => {
   };
 
   /**
-   * `main`だけを持つoriginのbareリポジトリと、その`--no-checkout`のclone、実装ブランチのworktreeを作る。
+   * `main`と`other`を持つoriginのbareリポジトリと、その`--no-checkout`のclone、実装ブランチのworktreeを作る。
    * worktreeのブランチには、検査していないcommitを1つ載せる。
    * リモートのブランチを消した後に、検査コマンドのcommitがローカルのブランチに残った状態を表す。
    * `HOME`を一時ディレクトリに向け、システムの設定も読ませないので、利用者のgitの設定に左右されない。
@@ -3797,7 +3853,7 @@ describe("pushNewBranch (real git)", () => {
     await git(root, ["init", "-q", "--bare", "-b", "main", origin]);
     await git(seed, ["init", "-q", "-b", "main"]);
     await git(seed, ["commit", "-q", "--allow-empty", "-m", "init"]);
-    await git(seed, ["push", "-q", origin, "main"]);
+    await git(seed, ["push", "-q", origin, "main", "main:refs/heads/other"]);
     await git(root, ["clone", "-q", "--no-checkout", origin, repo]);
     await git(repo, ["branch", "--no-track", BRANCH, "origin/main"]);
     await git(repo, ["worktree", "add", "-q", worktree, BRANCH]);
@@ -3813,16 +3869,41 @@ describe("pushNewBranch (real git)", () => {
     };
   }
 
-  const publish = (fixture: Fixture) =>
+  const publish = (fixture: Fixture, baseBranch = "main") =>
     pushNewBranch({
       run: fixture.run,
       repoDir: fixture.repo,
       branch: BRANCH,
-      baseBranch: "main",
+      baseBranch,
       ghToken: "gh-token",
       home: fixture.home,
       lockFs: createInMemoryLockFs(),
     });
+
+  /** 実装フローの準備と同じく、メインのcloneの`origin/HEAD`から既定のブランチの名前を読む。 */
+  const defaultBranch = (fixture: Fixture) =>
+    resolveDefaultBranchName({
+      run: fixture.run,
+      repoDir: fixture.repo,
+      home: fixture.home,
+    });
+
+  /** 検査コマンドが書き換えうる、ローカルの追跡refを検査していないcommitに向ける。 */
+  const poisonTrackingRef = (fixture: Fixture) =>
+    fixture.git(fixture.repo, [
+      "update-ref",
+      "refs/remotes/origin/main",
+      fixture.unscannedSha,
+    ]);
+
+  /** originに`BRANCH`があれば終了コード0を返す。 */
+  const originBranchProbe = async (fixture: Fixture) =>
+    (
+      await fixture.run(
+        ["git", "rev-parse", "--verify", "-q", `refs/heads/${BRANCH}`],
+        { cwd: fixture.origin },
+      )
+    ).exitCode;
 
   test("publishes the branch at the base", async () => {
     const fixture = await setUp();
@@ -3852,7 +3933,7 @@ describe("pushNewBranch (real git)", () => {
 
   test("does not move the branch a symbolic local branch points to", async () => {
     const fixture = await setUp();
-    await fixture.git(fixture.repo, ["branch", "-q", "other", BRANCH]);
+    await fixture.git(fixture.repo, ["branch", "-q", "other-local", BRANCH]);
     await fixture.git(fixture.repo, [
       "worktree",
       "remove",
@@ -3862,12 +3943,54 @@ describe("pushNewBranch (real git)", () => {
     await fixture.git(fixture.repo, [
       "symbolic-ref",
       `refs/heads/${BRANCH}`,
-      "refs/heads/other",
+      "refs/heads/other-local",
     ]);
     await publish(fixture);
-    expect(await fixture.git(fixture.repo, ["rev-parse", "other"])).toBe(
+    expect(await fixture.git(fixture.repo, ["rev-parse", "other-local"])).toBe(
       fixture.unscannedSha,
     );
+  });
+
+  test("throws when the local tracking ref of the base was rewritten", async () => {
+    const fixture = await setUp();
+    await poisonTrackingRef(fixture);
+    await expect(publish(fixture)).rejects.toThrow(/does not match/);
+  });
+
+  test("pushes nothing when the local tracking ref of the base was rewritten", async () => {
+    const fixture = await setUp();
+    await poisonTrackingRef(fixture);
+    await publish(fixture).catch(() => {});
+    expect(await originBranchProbe(fixture)).not.toBe(0);
+  });
+
+  test("throws when origin/HEAD was pointed at a branch origin does not have", async () => {
+    const fixture = await setUp();
+    await fixture.git(fixture.repo, [
+      "update-ref",
+      "refs/remotes/origin/evil",
+      fixture.unscannedSha,
+    ]);
+    await fixture.git(fixture.repo, [
+      "symbolic-ref",
+      "refs/remotes/origin/HEAD",
+      "refs/remotes/origin/evil",
+    ]);
+    await expect(
+      publish(fixture, await defaultBranch(fixture)),
+    ).rejects.toThrow(/origin HEAD/);
+  });
+
+  test("throws when origin/HEAD was pointed at another branch origin has", async () => {
+    const fixture = await setUp();
+    await fixture.git(fixture.repo, [
+      "symbolic-ref",
+      "refs/remotes/origin/HEAD",
+      "refs/remotes/origin/other",
+    ]);
+    await expect(
+      publish(fixture, await defaultBranch(fixture)),
+    ).rejects.toThrow(/origin HEAD/);
   });
 });
 
