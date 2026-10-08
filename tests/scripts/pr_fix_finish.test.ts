@@ -1,6 +1,6 @@
 // `pr_fix_finish.ts`が使う`pr_workflow_support.ts`の`buildReplyPostFailedNotice`、
 // `decideFixFinishAction`、`deriveFallbackReviewers`、`evaluateRerouteGuard`、`listReviewThreadsBestEffort`、
-// `renderFixReply`、`shouldAdvanceWatermarks`のテスト。
+// `renderFixReply`、`shouldAdvanceWatermarks`と、`pr_fix_finish.ts`の`reportReviewerRequest`、`requestRereview`のテスト。
 // requirements_gapの差し戻しの手順は`pr_fix_reroute.test.ts`でテストする。
 
 import { describe, expect, test } from "bun:test";
@@ -13,6 +13,11 @@ import {
   WORKTREE_CHANGED_AFTER_SECRET_SCAN_REASON,
   WorktreeGitPointerModifiedError,
 } from "../../f/factory/lib/workspace.ts";
+import {
+  reportReviewerRequest,
+  requestRereview,
+  reviewerRequestFailedSupplement,
+} from "../../f/factory/steps/pr_fix_finish.ts";
 import {
   buildReplyPostFailedNotice,
   claudeBlockedReason,
@@ -558,6 +563,145 @@ describe("renderFixReply", () => {
         issue_proposal: null,
       });
       expect(() => renderFixReply(reply, null)).not.toThrow();
+    });
+  });
+});
+
+describe("reportReviewerRequest", () => {
+  test("records an API failure as a failed notice and notifies it", () => {
+    expect(
+      reportReviewerRequest({ outcome: "failed", error: "HTTP 422" }),
+    ).toEqual({
+      note: "failed to request reviewers: HTTP 422",
+      apiError: "HTTP 422",
+      noticeKind: "pr_fix_reviewer_request_failed",
+    });
+  });
+
+  test("records no reviewer candidates only as a note, without a notice", () => {
+    expect(reportReviewerRequest(null)).toEqual({
+      note: "no reviewers to request (default_reviewers empty and no fallback reviewer authors)",
+      apiError: null,
+      noticeKind: null,
+    });
+  });
+
+  test("records all candidates excluded only as a note, without a notice", () => {
+    expect(reportReviewerRequest({ outcome: "skipped_empty" })).toEqual({
+      note: "requested reviewers were all excluded (PR author / factory viewer)",
+      apiError: null,
+      noticeKind: null,
+    });
+  });
+
+  test("records nothing when the reviewers were requested", () => {
+    expect(
+      reportReviewerRequest({ outcome: "requested", reviewers: ["alice"] }),
+    ).toEqual({ note: null, apiError: null, noticeKind: null });
+  });
+});
+
+describe("reviewerRequestFailedSupplement", () => {
+  test("puts the manual-request instruction first so truncation keeps it", () => {
+    expect(reviewerRequestFailedSupplement("HTTP 500")).toStartWith(
+      "GitHubでレビュアーを手動で依頼してください。\n",
+    );
+  });
+
+  test("ends with the API error", () => {
+    expect(reviewerRequestFailedSupplement("HTTP 500")).toEndWith(
+      "再レビュー依頼のAPI呼び出しに失敗しました: HTTP 500",
+    );
+  });
+});
+
+describe("requestRereview", () => {
+  const requestedFor = async (
+    authorLogin: string,
+  ): Promise<{ outcome: "requested"; reviewers: string[] }> => ({
+    outcome: "requested",
+    reviewers: [authorLogin],
+  });
+
+  test("does nothing when there is no reviewer to request", async () => {
+    const result = await requestRereview([], {
+      loadAuthorLogin: async () => "bob",
+      request: requestedFor,
+    });
+    expect(result).toBeNull();
+  });
+
+  test("does not load the PR when there is no reviewer to request", async () => {
+    let loaded = false;
+    await requestRereview([], {
+      loadAuthorLogin: async () => {
+        loaded = true;
+        return "bob";
+      },
+      request: requestedFor,
+    });
+    expect(loaded).toBe(false);
+  });
+
+  test("requests the reviewers with the PR author it loaded", async () => {
+    const result = await requestRereview(["alice"], {
+      loadAuthorLogin: async () => "bob",
+      request: requestedFor,
+    });
+    expect(result).toEqual({ outcome: "requested", reviewers: ["bob"] });
+  });
+
+  test("reports a failure to load the PR as an API failure instead of throwing", async () => {
+    const result = await requestRereview(["alice"], {
+      loadAuthorLogin: async () => {
+        throw new Error("rate limited");
+      },
+      request: requestedFor,
+    });
+    expect(result).toEqual({
+      outcome: "failed",
+      error: "could not load the PR: rate limited",
+    });
+  });
+
+  test("does not request the reviewers when the PR could not be loaded", async () => {
+    let requestedCount = 0;
+    await requestRereview(["alice"], {
+      loadAuthorLogin: async () => {
+        throw new Error("rate limited");
+      },
+      request: async (authorLogin) => {
+        requestedCount++;
+        return requestedFor(authorLogin);
+      },
+    });
+    expect(requestedCount).toBe(0);
+  });
+
+  test("reports a thrown request as an API failure instead of throwing", async () => {
+    const result = await requestRereview(["alice"], {
+      loadAuthorLogin: async () => "dependabot[bot]",
+      request: async () => {
+        throw new Error("invalid GitHub name: dependabot[bot]");
+      },
+    });
+    expect(result).toEqual({
+      outcome: "failed",
+      error: "invalid GitHub name: dependabot[bot]",
+    });
+  });
+
+  test("masks secrets in the error of a thrown request", async () => {
+    const token = `ghp_${"a".repeat(36)}`;
+    const result = await requestRereview(["alice"], {
+      loadAuthorLogin: async () => "bob",
+      request: async () => {
+        throw new Error(`request failed with ${token}`);
+      },
+    });
+    expect(result).toEqual({
+      outcome: "failed",
+      error: "request failed with ***",
     });
   });
 });

@@ -3671,7 +3671,8 @@ const REASON_RULES: readonly ReasonRule[] = [
     describe: () => "承認がタイムアウトしました",
     nextAction: () => "Inboxで承認または却下してください",
   },
-  // pr_fix_finish.tsのpush後のレビュアー依頼の結果(`reviewerNote`)。
+  // pr_fix_finish.tsのpush後のレビュアー依頼の結果(`reportReviewerRequest`の`note`で、
+  // 作業項目の`status_reason`に残す文)。
   // この3つはどれも`needs_human`の通知にはもう届かない。
   // skipped_emptyと候補なしは通知を出さず、失敗は`pr_fixed`のイベントの`note`の
   // フィールドに含める(`pr_fix_finish.ts`を参照)。
