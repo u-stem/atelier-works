@@ -181,6 +181,12 @@ function claudeJsonStdout(
   });
 }
 
+/**
+ * スキーマに合わない`structured_output`。失敗の詳細は`JSON.stringify`の先頭500字を載せるので、
+ * 500字目に`;`が来るこの値では、詳細が`;`で終わる。
+ */
+const DETAIL_ENDING_IN_SEMICOLON = `${"a".repeat(498)};tail`;
+
 describe("parseClaudeJson", () => {
   test("parses a well-formed claude -p JSON result", () => {
     const result = parseClaudeJson(claudeJsonStdout());
@@ -601,6 +607,49 @@ describe("runClaude", () => {
     });
     expect(result.outcome === "failure" ? result.detail : "").not.toContain(
       token,
+    );
+  });
+
+  test("does not create a reason separator when the first detail ends with a semicolon and beforeRetry throws", async () => {
+    const fake = createFakeCommandRunner([
+      {
+        stdout: claudeJsonStdout({
+          structured_output: DETAIL_ENDING_IN_SEMICOLON,
+        }),
+        stderr: "",
+        exitCode: 0,
+        timedOut: false,
+      },
+    ]);
+    const result = await runClaude({
+      ...baseOptions(fake.run),
+      beforeRetry: async () => {
+        throw new Error("EIO");
+      },
+    });
+    expect(result.outcome === "failure" ? result.detail : "; ").not.toContain(
+      "; ",
+    );
+  });
+
+  test("does not create a reason separator when the retried detail ends with a semicolon", async () => {
+    const fake = createFakeCommandRunner([
+      { stdout: claudeJsonStdout(), stderr: "", exitCode: 0, timedOut: false },
+      {
+        stdout: claudeJsonStdout({
+          structured_output: DETAIL_ENDING_IN_SEMICOLON,
+        }),
+        stderr: "",
+        exitCode: 0,
+        timedOut: false,
+      },
+    ]);
+    const result = await runClaude({
+      ...baseOptions(fake.run),
+      reviewOutput: () => ["issue"],
+    });
+    expect(result.outcome === "failure" ? result.detail : "; ").not.toContain(
+      "; ",
     );
   });
 

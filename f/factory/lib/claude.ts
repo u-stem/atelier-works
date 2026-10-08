@@ -638,7 +638,10 @@ export async function runClaude<T>(
     if (first.outcome === "failure" && decision.checkError !== null) {
       return {
         ...first,
-        detail: `${first.detail} (retry check failed: ${decision.checkError})`,
+        // つないだ後の全体で区切りを置き換え、`;`で終わる詳細が区切りを作らないようにする。
+        detail: escapeReasonSeparator(
+          `${first.detail} (retry check failed: ${decision.checkError})`,
+        ),
         retried: false,
       };
     }
@@ -651,7 +654,9 @@ export async function runClaude<T>(
     // 再試行が別の理由(タイムアウトなど)で失敗しても、再試行に至った最初の問題を失敗の記録に残す。
     return {
       ...second,
-      detail: `${second.detail} (first attempt output issues: ${failureDetail(firstIssues.join(" / "))})`,
+      detail: escapeReasonSeparator(
+        `${second.detail} (first attempt output issues: ${failureDetail(firstIssues.join(" / "))})`,
+      ),
       discardedAgentRun: first.agentRun,
       retried: true,
     };
