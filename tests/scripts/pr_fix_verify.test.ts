@@ -2,9 +2,18 @@
 // `allowed_check_commands`の実行のテスト。
 
 import { describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fixPrompt } from "../../f/factory/lib/prompts.ts";
 import type { RequirementDraft } from "../../f/factory/lib/types.ts";
+import { runCommand } from "../../f/factory/lib/workspace.ts";
 import type { CreateCheckHomeDir } from "../../f/factory/steps/pr_workflow_support.ts";
 import {
   anyPackageJsonScriptsChanged,
@@ -445,10 +454,11 @@ describe("listSymlinkTargets", () => {
     expect(calls).toHaveLength(0);
   });
 
-  test("runs git ls-files -s -z for the given paths", async () => {
+  test("runs git ls-files -s -z for the given paths as literal pathspecs", async () => {
     const { run, calls } = createFakeCommandRunner([ok("")]);
     await listSymlinkTargets(run, "/work", ["リンク"]);
-    expect(calls[0]?.argv.slice(-5)).toEqual([
+    expect(calls[0]?.argv.slice(-6)).toEqual([
+      "--literal-pathspecs",
       "ls-files",
       "-s",
       "-z",
@@ -1050,6 +1060,7 @@ describe("listUncommittedChangedPaths", () => {
           "status",
           "--porcelain",
           "-z",
+          "--untracked-files=all",
         ],
         "/wt",
       ],
@@ -1103,6 +1114,74 @@ describe("listUncommittedChangedPaths", () => {
     await expect(listUncommittedChangedPaths(run, "/wt")).rejects.toThrow(
       /git diff --name-only -z.*abandoned/,
     );
+  });
+});
+
+/**
+ * テスト用の一時ディレクトリでgitを実行し、失敗したら例外を投げる。
+ * 利用者のグローバル設定のhookや署名に左右されないよう、それらを無効にする。
+ */
+async function gitInRepo(
+  dir: string,
+  args: readonly string[],
+): Promise<string> {
+  const result = await runCommand(
+    [
+      "git",
+      "-c",
+      "core.hooksPath=/dev/null",
+      "-c",
+      "commit.gpgsign=false",
+      "-c",
+      "user.name=test",
+      "-c",
+      "user.email=test@example.invalid",
+      ...args,
+    ],
+    { cwd: dir },
+  );
+  if (result.exitCode !== 0) {
+    throw new Error(`git ${args.join(" ")} failed: ${result.stderr}`);
+  }
+  return result.stdout.trim();
+}
+
+/** `README.md`だけをコミットした一時リポジトリを作り、そのパスとコミットのshaを返す。 */
+async function initRepo(): Promise<{ dir: string; baseSha: string }> {
+  const dir = mkdtempSync(join(tmpdir(), "pr-fix-verify-git-"));
+  await gitInRepo(dir, ["init", "-q"]);
+  writeFileSync(join(dir, "README.md"), "readme\n");
+  await gitInRepo(dir, ["add", "-A"]);
+  await gitInRepo(dir, ["commit", "-q", "-m", "init"]);
+  return { dir, baseSha: await gitInRepo(dir, ["rev-parse", "HEAD"]) };
+}
+
+describe("changed path listing against a real git repository", () => {
+  test("pr_fix blocks a new file under a protected directory that did not exist", async () => {
+    const { dir } = await initRepo();
+    mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+    writeFileSync(join(dir, ".github", "workflows", "new.yml"), "on: push\n");
+    const paths = await listUncommittedChangedPaths(runCommand, dir);
+    expect(detectForbiddenChanges(paths, false).blocked).toBe(true);
+  });
+
+  test("the implement flow lists each file under a new directory", async () => {
+    const { dir, baseSha } = await initRepo();
+    mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+    writeFileSync(join(dir, ".github", "workflows", "new.yml"), "on: push\n");
+    await gitInRepo(dir, ["add", "-A"]);
+    const changes = await listChangedPaths(runCommand, dir, baseSha);
+    expect(changes).toEqual([
+      { path: ".github/workflows/new.yml", status: "added" },
+    ]);
+  });
+
+  test("listSymlinkTargets does not treat a path with glob characters as a pattern", async () => {
+    const { dir } = await initRepo();
+    symlinkSync("/etc/passwd", join(dir, "ab"));
+    await gitInRepo(dir, ["add", "-A"]);
+    const targets = await listSymlinkTargets(runCommand, dir, ["a*", "[a]b"]);
+    expect(targets).toEqual([]);
   });
 });
 

@@ -1310,6 +1310,9 @@ export async function listSymlinkChanges(
 /**
  * worktreeのコミットしていない変更のパスを、`git status --porcelain -z`と`git diff --name-only -z`の和集合(`mergeChangedPaths`)で返す。
  * パスを引用させないため、どちらもNUL区切りの`-z`で読む。
+ * `git status`には`--untracked-files=all`を付け、未追跡のディレクトリを`dir/`の1件にまとめさせない。
+ * まとめられると、まだ無い`.github/`の下に作った`.github/workflows/*.yml`が`.github/`としか現れず、
+ * 保護パスや新しい`*.sh`の判定と、新しいファイルの行数の集計から漏れるため。
  * pr_fixの保護パス・symlink・差分の大きさの判定の入力になるので、どちらかが失敗したとき(終了コードが0以外)と、
  * 出力の読み取りを打ち切ったときは例外を投げる。空の一覧として扱うと、変更を見落とすため。
  * gitはhook・fsmonitor・credential helperを無効にして実行する。
@@ -1323,7 +1326,15 @@ export async function listUncommittedChangedPaths(
     env: resolvedEnv({ GIT_TERMINAL_PROMPT: "0" }, undefined, undefined),
   };
   const [statusResult, diffResult] = await Promise.all([
-    run(gitHardeningArgv(["status", "--porcelain", "-z"]), options),
+    run(
+      gitHardeningArgv([
+        "status",
+        "--porcelain",
+        "-z",
+        "--untracked-files=all",
+      ]),
+      options,
+    ),
     run(gitHardeningArgv(["diff", "--name-only", "-z"]), options),
   ]);
   assertOutputComplete(
@@ -1706,6 +1717,9 @@ export function evaluateDiffSizeGuard(
  * そのため、この関数は差分が触れただけの既存の追跡済みsymlinkも捕まえる。
  * gitが報告してもディスク上で読めないsymlink(競合で消えたものなど)は、
  * 例外にせず飛ばす。禁止パスの検査と`allowed_check_commands`の検査が、残りの安全策になる。
+ * `paths`は`--literal-pathspecs`で文字どおりのパスとして渡す。
+ * `*`や`[`を含むファイル名がglobとして別のファイルに一致し、
+ * 変更していないsymlinkを報告しないようにするため。
  */
 export async function listSymlinkTargets(
   run: CommandRunner,
@@ -1715,7 +1729,14 @@ export async function listSymlinkTargets(
 ): Promise<SymlinkTarget[]> {
   if (paths.length === 0) return [];
   const result = await run(
-    gitHardeningArgv(["ls-files", "-s", "-z", "--", ...paths]),
+    gitHardeningArgv([
+      "--literal-pathspecs",
+      "ls-files",
+      "-s",
+      "-z",
+      "--",
+      ...paths,
+    ]),
     {
       cwd: worktreeDir,
       env: resolvedEnv({ GIT_TERMINAL_PROMPT: "0" }, undefined, undefined),
