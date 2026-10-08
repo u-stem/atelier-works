@@ -15,7 +15,6 @@ import * as wmill from "windmill-client@1.817.0";
 import { expiredRequirementsRequests } from "./lib/approval_support.ts";
 import { loadConfig } from "./lib/config.ts";
 import {
-  addNotice,
   addNoticeUnlessUnresolved,
   expireApprovalRequestIfPending,
   getWorkItem,
@@ -30,8 +29,8 @@ import {
 } from "./lib/db.ts";
 import { notifyBestEffort } from "./lib/discord.ts";
 import {
-  ClaimConfirmationError,
   type ClaimIssueResult,
+  ClaimOwnershipUnknownError,
   claimIssue,
   type GhClient,
   getIssue,
@@ -505,33 +504,40 @@ export async function registerClaimedIssue(
 }
 
 /**
- * 取得でトリガーラベルが外れた後に、取得を確認できなかったときの`reason`。
- * 確認の読み取りの失敗と、確認でassigneeが付いていなかった場合の両方に使う。
+ * 取得でトリガーラベルを外した結果を、所有したか判断できなかったときの`reason`。
  * `describeReason`と`nextActionFor`が通知の文にする。
  */
-const CLAIM_UNCONFIRMED_REASON = "claimed issue could not be confirmed";
+const CLAIM_OWNERSHIP_UNKNOWN_REASON =
+  "claim ownership could not be determined";
 
 export type ClaimNoticeDeps = {
   readonly claimIssue: typeof claimIssue;
-  readonly addNotice: typeof addNotice;
+  readonly addNoticeUnlessUnresolved: typeof addNoticeUnlessUnresolved;
   readonly notifyBestEffort: typeof notifyBestEffort;
 };
 
 const defaultClaimNoticeDeps: ClaimNoticeDeps = {
   claimIssue,
-  addNotice,
+  addNoticeUnlessUnresolved,
   notifyBestEffort,
 };
 
 /**
- * Issueを取得し、取得できたかを返す(取得できなければfalse)。
- * トリガーラベルを外した後に取得を確認できなかったときは、人の対応待ちの通知
- * (Issueへのリンクと次の操作つき)を送る。確認の読み取りが失敗した場合は、
- * 通知してから元の例外を投げ、呼び出し元が`job_failures`に記録する。
- * ラベルが外れ、作業項目も無いので、次のポーリングはこのIssueを拾わない。
- * 通知が無いと、人は失敗タブを見に行かない限り気づけない。
- * ラベルが残っている間の失敗は、次のポーリングが拾い直すので通知しない。
- * 通知はベストエフォートで、失敗しても元の例外を隠さない。
+ * Issueを取得し、作業を始めてよいか(取得できたか)を返す。
+ * 取得の所有は、自分のラベルの削除が成功したことで決まる(`claimIssue`を参照)。
+ * - 取得できたときは、assigneeが付いていなくても作業を続ける。
+ *   付いていないときだけ、確認の手がかりを`claim_assignee_missing`のnoticeに残す。
+ *   このnoticeの記録は、失敗しても取得を妨げない。ラベルは既に外れているので、
+ *   ここで例外にすると、ラベルも作業項目も無いIssueが残る。
+ * - ほかが先にラベルを外したときは、`claim_race_lost`のnoticeを残して引く。
+ * - ラベルの削除が失敗してラベルが残っているときは、次のポーリングが拾い直すので、
+ *   通知もnoticeもなく引く。
+ * - 所有したか判断できなかったときだけ、人の対応待ちの通知(Issueへのリンクと次の操作つき)を
+ *   送る。ラベルが外れ、作業項目も無いので、通知が無いと人は気づけない。
+ *   DBへの書き込みより先に送り、通知してから元の例外をそのまま投げる。
+ *   呼び出し元が`job_failures`に記録する。通知はベストエフォートで、失敗しても元の例外を隠さない。
+ * noticeは同じ本文の未解決のものがあれば追加しない。ラベルが残る間、ポーリングのたびに
+ * 積み上がるのを防ぐためで、本文には対象と理由だけを載せ、時刻などの揺れる値を入れない。
  */
 export async function claimIssueWithNotice(
   input: {
@@ -545,22 +551,8 @@ export async function claimIssueWithNotice(
   },
   deps: ClaimNoticeDeps = defaultClaimNoticeDeps,
 ): Promise<boolean> {
-  const { candidate } = input;
-  const notifyUnconfirmed = () =>
-    deps.notifyBestEffort(
-      input.discordWebhookUrl,
-      {
-        kind: "needs_human",
-        instance_name: input.instanceName,
-        owner: candidate.owner,
-        repo: candidate.repo,
-        url: candidate.htmlUrl,
-        reason: describeReason(CLAIM_UNCONFIRMED_REASON),
-        target: { kind: "issue", number: candidate.number },
-        next_action: nextActionFor(CLAIM_UNCONFIRMED_REASON),
-      },
-      input.log,
-    );
+  const { candidate, log } = input;
+  const target = `${candidate.owner}/${candidate.repo}#${candidate.number}`;
 
   let claimResult: ClaimIssueResult;
   try {
@@ -572,17 +564,70 @@ export async function claimIssueWithNotice(
       { triggerLabel: input.triggerLabel, assignee: input.viewerLogin },
     );
   } catch (err) {
-    if (err instanceof ClaimConfirmationError) await notifyUnconfirmed();
+    if (err instanceof ClaimOwnershipUnknownError) {
+      await deps.notifyBestEffort(
+        input.discordWebhookUrl,
+        {
+          kind: "needs_human",
+          instance_name: input.instanceName,
+          owner: candidate.owner,
+          repo: candidate.repo,
+          url: candidate.htmlUrl,
+          reason: describeReason(CLAIM_OWNERSHIP_UNKNOWN_REASON),
+          target: { kind: "issue", number: candidate.number },
+          next_action: nextActionFor(CLAIM_OWNERSHIP_UNKNOWN_REASON),
+        },
+        log,
+      );
+    }
     throw err;
   }
-  if (claimResult.claimed) return true;
 
-  await deps.addNotice({
-    kind: "claim_race_lost",
-    message: `${candidate.owner}/${candidate.repo}#${candidate.number}: ${claimResult.reason}`,
-  });
-  if (claimResult.labelConsumed) await notifyUnconfirmed();
+  if (claimResult.claimed) {
+    if (claimResult.assignee === "missing") {
+      await recordAssigneeMissing(target, input.viewerLogin, deps, log);
+    } else if (claimResult.assignee === "unknown") {
+      log.warn("claim assignee could not be confirmed", { target });
+    }
+    return true;
+  }
+
+  if (claimResult.outcome === "lost") {
+    await deps.addNoticeUnlessUnresolved({
+      kind: "claim_race_lost",
+      message: `${target}: ${claimResult.reason}`,
+    });
+  } else {
+    log.warn("claim deferred to the next poll", {
+      target,
+      reason: claimResult.reason,
+    });
+  }
   return false;
+}
+
+/**
+ * assigneeを設定できなかったことをnoticeに残す。記録に失敗しても例外にしない。
+ * 設定できない主な原因は、Factoryのユーザーがリポジトリのpush権限を持たないことである。
+ * GitHubは権限の無いユーザーへのassigneeの追加を、成功の応答のまま無視する。
+ */
+async function recordAssigneeMissing(
+  target: string,
+  viewerLogin: string,
+  deps: ClaimNoticeDeps,
+  log: Logger,
+): Promise<void> {
+  try {
+    await deps.addNoticeUnlessUnresolved({
+      kind: "claim_assignee_missing",
+      message: `${target}: assigneeに${viewerLogin}を設定できませんでしたが、作業は続けます。${viewerLogin}がこのリポジトリのpush権限を持つcollaboratorか確かめてください`,
+    });
+  } catch (err) {
+    log.warn("claim_assignee_missing notice could not be recorded", {
+      target,
+      error: maskSecrets(err instanceof Error ? err.message : String(err)),
+    });
+  }
 }
 
 export type LabelerDeniedDeps = {

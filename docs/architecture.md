@@ -252,7 +252,7 @@ cronはWindmillの6フィールドの形式で、タイムゾーンは`Asia/Toky
 | `cleanup_workspaces` | 期限を過ぎたworktree(`req-<N>`、実装ブランチのworktree、`review-*`、pr_fixのgtrのworktree)、worktreeが無くなったプロセスのロックファイル、孤児になったheadless Claudeのプロセス。生き残りのプロセスが使っているworktreeは消さず、noticeを残す。ディスクの使用量も記録する |
 | `notify_daily_summary` | 前日のコスト、件数、失敗、DBの掃除の件数 |
 
-複数のインスタンスを同時に動かすときの排他は、GitHub側のclaimで取る。Issueはassigneeを付けてからラベルを消費し、PRはトリガーラベルを消費する。どちらも取り直して確かめる。
+複数のインスタンスを同時に動かすときの排他は、GitHub側のclaimで取る。Issueはassigneeを追加してからトリガーラベルを外し、外す要求に成功したインスタンスが受け持つ。PRはトリガーラベルを消費し、取り直して確かめる。
 
 ## 命名規則
 

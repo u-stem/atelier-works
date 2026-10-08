@@ -8,7 +8,7 @@
 
 | 対象 | トリガーラベル | 消費する時点 |
 | --- | --- | --- |
-| Issue | `factory` | claimでassigneeを付けた直後 |
+| Issue | `factory` | claimでトリガーラベルを外した直後 |
 | PR | `factory:review`、`factory:fix` | claimでトリガーラベルを外した直後 |
 
 トリガーラベルはclaimのときに一度だけ消費する。その後の状態遷移では、終端への遷移を含めてIssueとPRのラベルを変えない。再実行(`retry_work_item`)も、フローを起動するだけでラベルを付け直さない。

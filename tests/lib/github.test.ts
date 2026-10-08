@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   addLabels,
-  ClaimConfirmationError,
+  ClaimOwnershipUnknownError,
   claimIssue,
   commentIssue,
   createIssue,
@@ -1011,190 +1011,148 @@ describe("getIssueTimeline", () => {
 });
 
 describe("claimIssue", () => {
-  test("succeeds when the re-fetched issue is assigned and the trigger label is gone", async () => {
+  const CLIENT = (fake: { run: GhClient["run"] }): GhClient => ({
+    run: fake.run,
+    ghToken: "tok",
+  });
+  const OPTS = { triggerLabel: "factory", assignee: "factory-bot" };
+
+  function issueBody(labels: string[], assignees: string[]) {
+    return {
+      number: 5,
+      title: "t",
+      body: "b",
+      html_url: "https://x/5",
+      state: "open",
+      user: { login: "alice" },
+      labels,
+      assignees: assignees.map((login) => ({ login })),
+    };
+  }
+
+  const assigned = ok(ghApiStdout(200, {})); // POST: 担当者を追加する
+  const deleted = ok(ghApiStdout(200, {})); // DELETE: トリガーラベルを外す
+  const labelGone = ok(ghApiStdout(404, { message: "Not Found" }));
+  const forbidden = ok(ghApiStdout(403, { message: "forbidden" }));
+  const serverError = ok(ghApiStdout(500, { message: "boom" }));
+
+  test("succeeds with the assignee confirmed when the re-fetched issue is assigned", async () => {
     const fake = createFakeCommandRunner([
-      ok(ghApiStdout(200, {})), // POST: 担当者を追加する
-      ok(ghApiStdout(200, {})), // DELETE: トリガーラベルを外す
-      ghApiOk({
-        number: 5,
-        title: "t",
-        body: "b",
-        html_url: "https://x/5",
-        state: "open",
-        user: { login: "alice" },
-        labels: [],
-        assignees: [{ login: "factory-bot" }],
-      }),
+      assigned,
+      deleted,
+      ghApiOk(issueBody([], ["factory-bot"])),
     ]);
-    const result = await claimIssue(
-      { run: fake.run, ghToken: "tok" },
-      "acme",
-      "widgets",
-      5,
-      {
-        triggerLabel: "factory",
-        assignee: "factory-bot",
-      },
-    );
-    expect(result).toEqual({ claimed: true });
+    const result = await claimIssue(CLIENT(fake), "acme", "widgets", 5, OPTS);
+    expect(result).toEqual({ claimed: true, assignee: "confirmed" });
   });
 
-  test("reports not claimed when the assignment did not stick (lost a race)", async () => {
+  test("still claims when the assignment did not stick, reporting the assignee as missing", async () => {
     const fake = createFakeCommandRunner([
-      ok(ghApiStdout(200, {})),
-      ok(ghApiStdout(200, {})),
-      ghApiOk({
-        number: 5,
-        title: "t",
-        body: "b",
-        html_url: "https://x/5",
-        state: "open",
-        user: { login: "alice" },
-        labels: [],
-        assignees: [],
-      }),
+      assigned,
+      deleted,
+      ghApiOk(issueBody([], [])),
     ]);
-    const result = await claimIssue(
-      { run: fake.run, ghToken: "tok" },
-      "acme",
-      "widgets",
-      5,
-      {
-        triggerLabel: "factory",
-        assignee: "factory-bot",
-      },
-    );
-    expect(result.claimed).toBe(false);
+    const result = await claimIssue(CLIENT(fake), "acme", "widgets", 5, OPTS);
+    expect(result).toEqual({ claimed: true, assignee: "missing" });
   });
 
-  test("reports not claimed when the trigger label is still present after removal (re-added by another actor)", async () => {
+  test("still claims when the trigger label was re-added by another actor after our removal", async () => {
     const fake = createFakeCommandRunner([
-      ok(ghApiStdout(200, {})),
-      ok(ghApiStdout(200, {})),
-      ghApiOk({
-        number: 5,
-        title: "t",
-        body: "b",
-        html_url: "https://x/5",
-        state: "open",
-        user: { login: "alice" },
-        labels: ["factory"],
-        assignees: [{ login: "factory-bot" }],
-      }),
+      assigned,
+      deleted,
+      ghApiOk(issueBody(["factory"], ["factory-bot"])),
     ]);
-    const result = await claimIssue(
-      { run: fake.run, ghToken: "tok" },
-      "acme",
-      "widgets",
-      5,
-      {
-        triggerLabel: "factory",
-        assignee: "factory-bot",
-      },
-    );
-    expect(result.claimed).toBe(false);
+    const result = await claimIssue(CLIENT(fake), "acme", "widgets", 5, OPTS);
+    expect(result).toEqual({ claimed: true, assignee: "confirmed" });
   });
 
-  test("reports the trigger label as consumed when the assignment did not stick", async () => {
-    const fake = createFakeCommandRunner([
-      ok(ghApiStdout(200, {})),
-      ok(ghApiStdout(200, {})),
-      ghApiOk({
-        number: 5,
-        title: "t",
-        body: "b",
-        html_url: "https://x/5",
-        state: "open",
-        user: { login: "alice" },
-        labels: [],
-        assignees: [],
-      }),
-    ]);
-    const result = await claimIssue(
-      { run: fake.run, ghToken: "tok" },
-      "acme",
-      "widgets",
-      5,
-      { triggerLabel: "factory", assignee: "factory-bot" },
-    );
-    expect(result).toMatchObject({ claimed: false, labelConsumed: true });
+  test("still claims when the confirmation read fails, reporting the assignee as unknown", async () => {
+    const fake = createFakeCommandRunner([assigned, deleted, serverError]);
+    const result = await claimIssue(CLIENT(fake), "acme", "widgets", 5, OPTS);
+    expect(result).toEqual({ claimed: true, assignee: "unknown" });
   });
 
-  test("reports the trigger label as not consumed when it is still present", async () => {
-    const fake = createFakeCommandRunner([
-      ok(ghApiStdout(200, {})),
-      ok(ghApiStdout(200, {})),
-      ghApiOk({
-        number: 5,
-        title: "t",
-        body: "b",
-        html_url: "https://x/5",
-        state: "open",
-        user: { login: "alice" },
-        labels: ["factory"],
-        assignees: [{ login: "factory-bot" }],
-      }),
-    ]);
-    const result = await claimIssue(
-      { run: fake.run, ghToken: "tok" },
-      "acme",
-      "widgets",
-      5,
-      { triggerLabel: "factory", assignee: "factory-bot" },
-    );
-    expect(result).toMatchObject({ claimed: false, labelConsumed: false });
+  test("reports a lost race when the label was already gone (404)", async () => {
+    const fake = createFakeCommandRunner([assigned, labelGone]);
+    const result = await claimIssue(CLIENT(fake), "acme", "widgets", 5, OPTS);
+    expect(result).toEqual({
+      claimed: false,
+      outcome: "lost",
+      reason: "trigger label factory was already removed",
+    });
   });
 
-  test("throws a ClaimConfirmationError when the confirmation read fails after the label was removed", async () => {
-    const fake = createFakeCommandRunner([
-      ok(ghApiStdout(200, {})),
-      ok(ghApiStdout(200, {})),
-      ok(ghApiStdout(500, { message: "boom" })),
-    ]);
-    const claiming = claimIssue(
-      { run: fake.run, ghToken: "tok" },
-      "acme",
-      "widgets",
-      5,
-      { triggerLabel: "factory", assignee: "factory-bot" },
-    );
-    await expect(claiming).rejects.toBeInstanceOf(ClaimConfirmationError);
+  test("does not read the issue again after a lost race", async () => {
+    const fake = createFakeCommandRunner([assigned, labelGone]);
+    await claimIssue(CLIENT(fake), "acme", "widgets", 5, OPTS);
+    expect(fake.calls).toHaveLength(2);
   });
 
-  test("keeps the original failure in the ClaimConfirmationError message", async () => {
+  test("asks to retry later when the removal failed and the label is still present", async () => {
     const fake = createFakeCommandRunner([
-      ok(ghApiStdout(200, {})),
-      ok(ghApiStdout(200, {})),
-      ok(ghApiStdout(500, { message: "boom" })),
+      assigned,
+      serverError,
+      ghApiOk(issueBody(["factory"], ["factory-bot"])),
     ]);
-    const claiming = claimIssue(
-      { run: fake.run, ghToken: "tok" },
-      "acme",
-      "widgets",
-      5,
-      { triggerLabel: "factory", assignee: "factory-bot" },
-    );
-    await expect(claiming).rejects.toThrow(/HTTP 500/);
+    const result = await claimIssue(CLIENT(fake), "acme", "widgets", 5, OPTS);
+    expect(result).toEqual({
+      claimed: false,
+      outcome: "retry",
+      reason:
+        "trigger label factory removal failed and the label is still present",
+    });
   });
 
-  test("does not wrap a failure that happens before the label is removed", async () => {
+  test("throws ClaimOwnershipUnknownError when the removal failed and the label is gone", async () => {
     const fake = createFakeCommandRunner([
-      ok(ghApiStdout(500, { message: "boom" })),
+      assigned,
+      serverError,
+      ghApiOk(issueBody([], ["factory-bot"])),
     ]);
-    const claiming = claimIssue(
-      { run: fake.run, ghToken: "tok" },
-      "acme",
-      "widgets",
-      5,
-      { triggerLabel: "factory", assignee: "factory-bot" },
-    ).catch((err: unknown) => err);
-    expect(await claiming).not.toBeInstanceOf(ClaimConfirmationError);
+    const claiming = claimIssue(CLIENT(fake), "acme", "widgets", 5, OPTS);
+    await expect(claiming).rejects.toBeInstanceOf(ClaimOwnershipUnknownError);
+  });
+
+  test("throws ClaimOwnershipUnknownError when the removal got no response and the re-read fails", async () => {
+    const fake = createFakeCommandRunner([assigned, ok(""), serverError]);
+    const claiming = claimIssue(CLIENT(fake), "acme", "widgets", 5, OPTS);
+    await expect(claiming).rejects.toBeInstanceOf(ClaimOwnershipUnknownError);
+  });
+
+  test("keeps the removal failure in the ClaimOwnershipUnknownError message", async () => {
+    const fake = createFakeCommandRunner([assigned, serverError, serverError]);
+    const claiming = claimIssue(CLIENT(fake), "acme", "widgets", 5, OPTS);
+    await expect(claiming).rejects.toThrow(/DELETE issue label.*HTTP 500/);
+  });
+
+  test("rethrows a definitive client error from the removal without wrapping it", async () => {
+    const fake = createFakeCommandRunner([assigned, forbidden]);
+    const claiming = claimIssue(CLIENT(fake), "acme", "widgets", 5, OPTS).catch(
+      (err: unknown) => err,
+    );
+    expect(await claiming).not.toBeInstanceOf(ClaimOwnershipUnknownError);
+  });
+
+  test("does not read the issue again after a definitive client error from the removal", async () => {
+    const fake = createFakeCommandRunner([assigned, forbidden]);
+    await claimIssue(CLIENT(fake), "acme", "widgets", 5, OPTS).catch(
+      () => undefined,
+    );
+    expect(fake.calls).toHaveLength(2);
+  });
+
+  test("does not wrap a failure of the assignment", async () => {
+    const fake = createFakeCommandRunner([serverError]);
+    const claiming = claimIssue(CLIENT(fake), "acme", "widgets", 5, OPTS).catch(
+      (err: unknown) => err,
+    );
+    expect(await claiming).not.toBeInstanceOf(ClaimOwnershipUnknownError);
   });
 
   test("rejects an assignee that isn't a valid GitHub name before making any call", async () => {
     const fake = createFakeCommandRunner([]);
     await expect(
-      claimIssue({ run: fake.run, ghToken: "tok" }, "acme", "widgets", 5, {
+      claimIssue(CLIENT(fake), "acme", "widgets", 5, {
         triggerLabel: "factory",
         assignee: "-evil",
       }),
@@ -1414,7 +1372,7 @@ describe("setLabels / removeLabel", () => {
     expect(fake.calls[0]?.argv).toContain("PUT");
   });
 
-  test("removeLabel does not throw when the label is already absent (404)", async () => {
+  test("removeLabel reports absent without throwing when the label is already gone (404)", async () => {
     const fake = createFakeCommandRunner([
       ok(ghApiStdout(404, { message: "Not Found" })),
     ]);
@@ -1426,7 +1384,48 @@ describe("setLabels / removeLabel", () => {
         5,
         "factory:wip",
       ),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe("absent");
+  });
+
+  test("removeLabel reports removed when the DELETE succeeds (2xx)", async () => {
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, []))]);
+    await expect(
+      removeLabel(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        5,
+        "factory:wip",
+      ),
+    ).resolves.toBe("removed");
+  });
+
+  test("removeLabel throws on a server error", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(500, { message: "boom" })),
+    ]);
+    await expect(
+      removeLabel(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        5,
+        "factory:wip",
+      ),
+    ).rejects.toThrow(/HTTP 500/);
+  });
+
+  test("removeLabel throws on a response-less failure (HTTP 0)", async () => {
+    const fake = createFakeCommandRunner([ok("")]);
+    await expect(
+      removeLabel(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        5,
+        "factory:wip",
+      ),
+    ).rejects.toThrow(/HTTP 0/);
   });
 });
 
