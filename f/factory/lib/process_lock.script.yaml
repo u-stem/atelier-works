@@ -1,0 +1,9 @@
+summary: '[LIB] worktree単位のプロセス排他'
+description: 内部ライブラリです。直接実行するものではありません。worktreeで動くClaudeと検査コマンドをロックの下で起動し、前の実行のプロセスが残っていないかを確かめます。
+lock: '!inline f/factory/lib/process_lock.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []
