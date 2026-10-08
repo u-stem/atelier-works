@@ -8,7 +8,12 @@
 import { mkdtemp, readlink, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
-import type { ReviewThread } from "../lib/github.ts";
+import {
+  isOwnPost,
+  type PrReview,
+  type ReviewThread,
+  withMarker,
+} from "../lib/github.ts";
 import { decideGapReroute } from "../lib/implement_finish_support.ts";
 import { parseFlowJobId } from "../lib/implement_launch_support.ts";
 import { maskSecrets } from "../lib/log.ts";
@@ -451,9 +456,12 @@ export function decideReviewBodyMode(
  * 1行目は`pr_review`の投稿と分かる役割タグと`@author`へのメンション、
  * 2行目は`mode`で選ぶ4つの固定の文、インラインに投稿できなかった指摘があれば
  * その箇条書きを続ける。
+ * 箇条書きの`path`は改行を空白にまとめて1行にし、`path`と`message`の`<!--`は
+ * `neutralizeHtmlComment`で無害にする。どちらもClaudeの出力で、
+ * 本文の末尾の目印を偽ったり隠したりさせないため。
  * Claudeの`summary`はここに載せない(`factory.reviews`への記録とDiscordだけに使う)。
  * `verdict`も同じく載せない(DBとDiscordだけで、PRの本文には出さない)。
- * `<!-- factory:pr_review:<id> -->`の印は、呼び出し側が`github.ts`の`withMarker`で足す。
+ * `<!-- factory:pr_review:<id> -->`とレビューしたshaの印は、呼び出し側が`withReviewMarkers`で足す。
  *
  * `"findings"`には「最終的なApproveは人が判断する」という免責の行を付けない。
  * 指摘のある投稿はすでに作成者に確認を求めている(「確認お願いします。」)ので、
@@ -497,12 +505,28 @@ export function renderReviewSummary(
     lines.push("", "(行に紐づけられなかった指摘)");
     for (const finding of droppedFindings) {
       const prefix = REVIEW_FINDING_KIND_PREFIXES[finding.kind];
-      lines.push(
-        `- ${prefix} ${finding.path}: ${normalizeJapaneseText(finding.message)}`,
+      const path = neutralizeHtmlComment(
+        finding.path.replace(/\s*[\r\n]+\s*/g, " "),
       );
+      const message = neutralizeHtmlComment(
+        normalizeJapaneseText(finding.message),
+      );
+      lines.push(`- ${prefix} ${path}: ${message}`);
     }
   }
   return lines.join("\n");
+}
+
+/**
+ * HTMLのコメントの開始`<!--`を`&lt;!--`に置き換える。
+ * 総評に載せるClaudeの出力が、目印に見える行を差し込んだり、
+ * 閉じないコメントで後ろの目印を表示から隠したりしないようにする。
+ * 通常の文中ではGitHubは`&lt;!--`を`<!--`と表示する。
+ * ただしコードスパンやコードブロックの中では`&lt;!--`がそのまま表示される。
+ * 対象は行に紐づけられなかった指摘の箇条書きだけで、見た目が崩れるだけなので許容する。
+ */
+function neutralizeHtmlComment(text: string): string {
+  return text.replaceAll("<!--", "&lt;!--");
 }
 
 /**
@@ -650,6 +674,66 @@ function stripRoleTagLine(body: string): string {
   if (newlineIndex === -1) return body;
   if (body.slice(0, newlineIndex) !== ROLE_TAGS.pr_review) return body;
   return body.slice(newlineIndex + 1);
+}
+
+/**
+ * レビュー本文に入れる、レビューしたcommitのshaの目印の行。
+ * GitHubのレビューの`commit_id`は投稿した時点のPRのheadで、
+ * レビューしたshaと一致するとは限らないため、本文に残す。
+ * `factory:`ではなく`factory-review-sha:`で始めるのは、shaがすべて数字のときに
+ * `github.ts`の`hasMarker`が読むFactoryの目印の形にならないようにするため。
+ */
+function reviewShaMarkerLine(reviewSha: string): string {
+  return `<!-- factory-review-sha:${reviewSha} -->`;
+}
+
+/**
+ * レビューの本文に、レビューしたshaの目印と`<!-- factory:pr_review:<id> -->`の目印を足す。
+ * shaの目印は`pr_review`の目印の前に置き、`pr_review`の目印が本文の最後の行であることを保つ。
+ * pr_fixの指摘の収集やFactory自身の投稿の判定は、最後の行の目印だけを読むので、
+ * shaの目印を足しても読み方は変わらない。
+ */
+export function withReviewMarkers(
+  body: string,
+  workItemId: number,
+  reviewSha: string,
+): string {
+  return withMarker(
+    "pr_review",
+    workItemId,
+    `${body}\n\n${reviewShaMarkerLine(reviewSha)}`,
+  );
+}
+
+/** `findPostedReviewId`が見るレビューの項目。 */
+export type PostedReviewCandidate = Pick<
+  PrReview,
+  "id" | "authorLogin" | "body"
+>;
+
+/**
+ * この作業項目が`reviewSha`に対して投稿済みのレビューを探し、最初に見つかったもののidを返す。
+ * 無ければnullを返す。
+ * 投稿者が`viewer`で(大文字小文字を区別しない)、本文が`withReviewMarkers`の足す
+ * 2つの目印(`reviewSha`の目印と、この作業項目の`pr_review`の目印)でこの順に終わるものを
+ * 投稿済みとみなす。末尾の空白は無視し、改行のCRLFはLFとして比べる。
+ * 目印は誰でも本文に貼り付けられるので、投稿者も確かめる。
+ * 目印の位置まで確かめるのは、本文の途中に貼られたshaの目印に一致させないため。
+ * shaの目印の無いレビューは、どのshaに対するものか分からないので一致させない。
+ */
+export function findPostedReviewId(
+  reviews: readonly PostedReviewCandidate[],
+  viewer: string,
+  workItemId: number,
+  reviewSha: string,
+): number | null {
+  const trailer = withReviewMarkers("", workItemId, reviewSha);
+  const found = reviews.find(
+    (review) =>
+      isOwnPost(review.authorLogin, viewer) &&
+      review.body.replace(/\r\n/g, "\n").replace(/\s+$/, "").endsWith(trailer),
+  );
+  return found === undefined ? null : found.id;
 }
 
 // ---------------------------------------------------------------------------
