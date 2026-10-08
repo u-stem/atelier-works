@@ -13,6 +13,7 @@
 // 引数があれば、そのうち対象のファイルだけを検査する(pre-commitで使う)。
 
 import { existsSync, readFileSync } from "node:fs";
+import { isAbsolute } from "node:path";
 import { checkProse, REPO_DOC_RULES } from "../f/factory/lib/prose_check.ts";
 import { runDocsGen } from "./docs-gen.ts";
 
@@ -70,6 +71,15 @@ export function lintDocText(path: string, markdown: string): string[] {
   );
 }
 
+/**
+ * 外部の検査コマンドに渡すパスにする。
+ * 相対パスに`./`を付け、`--fix.md`のような名前のファイルをオプションとして読ませない。
+ */
+export function toToolPath(path: string): string {
+  if (isAbsolute(path) || path.startsWith("./")) return path;
+  return `./${path}`;
+}
+
 function listCandidateDocs(): string[] {
   const result = Bun.spawnSync([
     "git",
@@ -114,8 +124,9 @@ function main(): void {
 
   let ok = problems.length === 0;
   if (targets.length > 0) {
-    ok = runTool(["node_modules/.bin/markdownlint-cli2", ...targets]) && ok;
-    ok = runTool(["node_modules/.bin/textlint", ...targets]) && ok;
+    const toolPaths = targets.map(toToolPath);
+    ok = runTool(["node_modules/.bin/markdownlint-cli2", ...toolPaths]) && ok;
+    ok = runTool(["node_modules/.bin/textlint", ...toolPaths]) && ok;
   }
 
   const genProblems = runDocsGen(false);

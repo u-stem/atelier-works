@@ -3,6 +3,7 @@ import {
   blankFrontmatter,
   isTargetDoc,
   lintDocText,
+  toToolPath,
 } from "../../scripts/lint-docs.ts";
 
 describe("isTargetDoc", () => {
@@ -37,5 +38,19 @@ describe("lintDocText", () => {
     const problems = lintDocText("docs/a.md", "# 見出し\n\n再実行します。\n");
 
     expect(problems[0]).toStartWith("docs/a.md:3: [register] ");
+  });
+});
+
+describe("toToolPath", () => {
+  test("prefixes a relative path so that a leading dash is not read as an option", () => {
+    expect(toToolPath("--fix.md")).toBe("./--fix.md");
+  });
+
+  test("leaves a path that already starts with ./ unchanged", () => {
+    expect(toToolPath("./docs/a.md")).toBe("./docs/a.md");
+  });
+
+  test("leaves an absolute path unchanged", () => {
+    expect(toToolPath("/repo/docs/a.md")).toBe("/repo/docs/a.md");
   });
 });
