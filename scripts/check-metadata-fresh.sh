@@ -16,6 +16,8 @@ if echo "$output" | grep -q "All metadata up-to-date"; then
 fi
 
 echo "$output"
+# CIでは`ci-metadata-login.sh`がプロファイルを登録するので、プロファイル不在の案内は
+# ローカルの分岐にだけ置く。
 if [ "${CI:-}" = "true" ]; then
   cat <<'MESSAGE'
 
@@ -24,11 +26,8 @@ Windmillのメタデータが最新ではありません。
 上の出力が古い項目の一覧ではなく、接続やログインのエラーのときは、`Show diagnostics`ステップのサーバーのログを確かめてください。
 MESSAGE
 elif echo "$output" | grep -q "No workspace profile found"; then
-  cat <<'MESSAGE'
-
-wmillのワークスペースのプロファイルがありません(`.wmill`にログイン情報がありません)。
-`mise run bootstrap`でログインしてください。git worktreeの中では、`.wmill`がメイン作業ツリーの`.wmill`へのリンクになっているかを確かめてください(`scripts/link-worktree-wmill.sh`で張れます)。
-MESSAGE
+  echo
+  "$repo_root/scripts/print-wmill-profile-hint.sh"
 else
   cat <<'MESSAGE'
 

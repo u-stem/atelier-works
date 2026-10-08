@@ -54,10 +54,7 @@ git ls-files --others --exclude-standard -z -- f >"$before_untracked_file"
 # 失敗の原因を出力から見分けるため、出力を残しながらそのまま表示する。
 if ! wmill generate-metadata --yes 2>&1 | tee "$wmill_output_file"; then
   if grep -q "No workspace profile found" "$wmill_output_file"; then
-    cat >&2 <<'MESSAGE'
-wmillのワークスペースのプロファイルがありません(`.wmill`にログイン情報がありません)。
-`mise run bootstrap`でログインしてください。git worktreeの中では、`.wmill`がメイン作業ツリーの`.wmill`へのリンクになっているかを確かめてください(`scripts/link-worktree-wmill.sh`で張れます)。
-MESSAGE
+    "$repo_root/scripts/print-wmill-profile-hint.sh" >&2
   else
     cat >&2 <<'MESSAGE'
 ローカルWindmillに接続できませんでした。`mise run up`で起動してから再度コミットしてください。

@@ -10,9 +10,15 @@
 # post-checkoutを起こす。認証情報は複製せず、リンクだけを張る。
 #
 # 何もしない場合: メイン作業ツリーで動いたとき、メイン側に`.wmill`が無いとき、
-# 作業ツリーの`.wmill`が空でないディレクトリまたはシンボリックリンクのとき。
-# 空のディレクトリはwmillが自動で作った可能性があるので、リンクに置き換える。
+# 作業ツリーの`.wmill`が空でないディレクトリか、リンク先がある有効なシンボリックリンクのとき。
+# 空のディレクトリはwmillが自動で作った可能性があり、リンク先が無いシンボリックリンクは
+# 使えないので、どちらもリンクに置き換える。
+#
+# このフックが非ゼロで終わると`git worktree add`や`git switch`まで失敗する。
+# リンクは補助にすぎないため、どの失敗でも警告だけを出して0で終わる。
 set -euo pipefail
+
+trap 'echo "link-worktree-wmill: skipped because a command failed (line $LINENO)" >&2; exit 0' ERR
 
 worktree_root="$(git rev-parse --show-toplevel)"
 cd "$worktree_root"
@@ -39,9 +45,13 @@ if [ ! -d "$main_wmill" ]; then
   exit 0
 fi
 
-# 壊れたリンクも含め、既存のシンボリックリンクには触れない。
+# リンク先がある既存のシンボリックリンクには触れない。
+# リンク先が無いリンクは使えないので、消して張り直す。
 if [ -L .wmill ]; then
-  exit 0
+  if [ -e .wmill ]; then
+    exit 0
+  fi
+  rm .wmill
 fi
 
 if [ -e .wmill ]; then
