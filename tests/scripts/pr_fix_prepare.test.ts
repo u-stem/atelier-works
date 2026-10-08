@@ -334,7 +334,7 @@ describe("nextActionFor", () => {
 
   test("tells the operator to check the Inbox when approval timed out", () => {
     expect(nextActionFor("approval timed out")).toBe(
-      "Inboxで承認または却下してください",
+      "Consoleの承認タブで承認または却下してください",
     );
   });
 
@@ -346,13 +346,13 @@ describe("nextActionFor", () => {
 
   test("falls back to pointing at the Console for an unrecognized reason", () => {
     expect(nextActionFor("some future guard reason nobody mapped yet")).toBe(
-      "通知の理由とConsoleのNoticesタブで原因を確かめ、取り除いてから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+      "通知の理由とConsoleの通知タブで原因を確かめ、取り除いてから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
     );
   });
 
   test("tells the operator to decide in the Inbox for an issue-proposal reason", () => {
     expect(nextActionFor("Issue化の提案が1件あります")).toBe(
-      "ConsoleのInboxで提案を承認または却下してください",
+      "Consoleの承認タブで提案を承認または却下してください",
     );
   });
 
@@ -920,7 +920,7 @@ describe("nextActionFor (implement flow)", () => {
         "claude run failed (timeout): claude -p timed out after 5ms; implement flow deadline passed during round 1",
       ),
     ).toBe(
-      "通知の理由とConsoleのNoticesタブで原因を確かめ、取り除いてから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+      "通知の理由とConsoleの通知タブで原因を確かめ、取り除いてから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
     );
   });
 
@@ -965,7 +965,7 @@ describe("describeReason / nextActionFor (GitHub rate limit)", () => {
 
   test("keeps the generic action for a finish failure that is not a rate limit", () => {
     expect(nextActionFor("implement finish failed: HTTP 422")).toBe(
-      "通知の理由とConsoleのNoticesタブで原因を確かめ、取り除いてから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+      "通知の理由とConsoleの通知タブで原因を確かめ、取り除いてから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
     );
   });
 

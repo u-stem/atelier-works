@@ -51,7 +51,7 @@ description: >-
 # `value`に次のキーを足す。
 #   implement_enabled: true
 #     要件定義の承認後に実装を自動で開始するか。既定はfalseで、falseの間は
-#     承認後に`approved`で止まる(ConsoleのFailuresタブの再実行も拒否される)。
+#     承認後に`approved`で止まる(retry_work_itemでの再実行も拒否される)。
 #     sandboxリポジトリでe2eを済ませてからtrueにする。
 #   check_commands_by_repo:
 #     <owner>/<repo>:

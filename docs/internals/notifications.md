@@ -76,7 +76,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 
 - 同じ理由でも、実装フローとPRの修正で次の操作が変わるものは、フロー(`NextActionFlow`)を渡して選ぶ。
 - 再実行を案内するときは、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行するよう書く。人の対応待ちとブロックの作業項目は、Consoleの**失敗**タブに出ないためである。
-- どの規則にも当たらない理由では、`GENERIC_NEXT_ACTION`の文になる。通知の理由とConsoleのNoticesタブで原因を確かめて取り除き、`retry_work_item`を実行するよう求める文である。
+- どの規則にも当たらない理由では、`GENERIC_NEXT_ACTION`の文になる。通知の理由とConsoleの**通知**タブで原因を確かめて取り除き、`retry_work_item`を実行するよう求める文である。
 
 ### 理由の区切りを無効にする
 

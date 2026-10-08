@@ -352,7 +352,7 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
         fields: [
           {
             name: "次の操作",
-            value: "承認Inboxで提案を承認または却下してください",
+            value: "Consoleの承認タブで提案を承認または却下してください",
           },
           instanceField(event.instance_name),
           { name: "work_item_id", value: String(event.work_item_id) },

@@ -106,7 +106,7 @@ Issue受付から承認までの簡易フロー図を示す。
         <mxCell id="n2" value="claim して要件生成" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
           <mxGeometry x="40" y="160" width="160" height="60" as="geometry" />
         </mxCell>
-        <mxCell id="n3" value="承認待ち(Inbox)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1">
+        <mxCell id="n3" value="承認待ち(承認タブ)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1">
           <mxGeometry x="40" y="280" width="160" height="60" as="geometry" />
         </mxCell>
         <mxCell id="n4" value="承認済み" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">

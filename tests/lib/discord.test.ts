@@ -247,11 +247,11 @@ describe("buildEmbed", () => {
       url: "https://github.com/octo-owner/atelier-works/issues/42",
       reason: "承認がタイムアウトしました",
       target: { kind: "issue", number: 42 },
-      next_action: "Inboxで承認または却下してください",
+      next_action: "Consoleの承認タブで承認または却下してください",
     });
     expect(embed.fields).toContainEqual({
       name: "次の操作",
-      value: "Inboxで承認または却下してください",
+      value: "Consoleの承認タブで承認または却下してください",
     });
   });
 
@@ -264,7 +264,7 @@ describe("buildEmbed", () => {
       url: "https://github.com/octo-owner/atelier-works/issues/42",
       reason: "承認がタイムアウトしました",
       target: { kind: "issue", number: 42 },
-      next_action: "Inboxで承認または却下してください",
+      next_action: "Consoleの承認タブで承認または却下してください",
     });
     expect(embed.title).toBe("人による対応が必要です: Issue #42");
   });
@@ -435,6 +435,22 @@ describe("buildEmbed", () => {
       work_item_id: 12,
     });
     expect(embed.fields.map((f) => f.name)).toContain("次の操作");
+  });
+
+  test("audit_completed points to the 承認 tab of the Console", () => {
+    const embed = buildEmbed({
+      kind: "audit_completed",
+      instance_name: "local",
+      period_label: "2026-09-22〜2026-09-28",
+      proposal_count: 2,
+      console_url:
+        "http://127.0.0.1:8080/apps/get/f/factory/factory_console#audit/12",
+      work_item_id: 12,
+    });
+    expect(embed.fields).toContainEqual({
+      name: "次の操作",
+      value: "Consoleの承認タブで提案を承認または却下してください",
+    });
   });
 
   const PR_OPENED_EVENT = {

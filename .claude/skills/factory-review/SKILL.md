@@ -146,7 +146,7 @@ GitHub APIの制約から、PRレビューの投稿種別は常に`COMMENT`に�
 ### summary
 
 `summary`はレビュー全体の要約である。
-GitHubには投稿されず、記録用としてData Table(`factory.reviews`)に保存され、人がInboxやダッシュボードで読む。
+GitHubには投稿されず、記録用としてData Table(`factory.reviews`)に保存され、人がConsoleで読む。
 免責文(「最終判断は人が行う」など)はflow側が定型で付けるため、`summary`には書かない。
 
 ### findings

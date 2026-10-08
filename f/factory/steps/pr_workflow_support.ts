@@ -3496,7 +3496,7 @@ const RETRY_WORK_ITEM_ACTION =
  * 原因は通知の理由と、ConsoleのNoticesタブ(`factory_console__raw_app`)のnoticeに残る。
  * 取り除いた後の再実行は、どの種別の作業項目にも使える`retry_work_item`を案内する。
  */
-const GENERIC_NEXT_ACTION = `通知の理由とConsoleのNoticesタブで原因を確かめ、取り除いてから、${RETRY_WORK_ITEM_ACTION}`;
+const GENERIC_NEXT_ACTION = `通知の理由とConsoleの通知タブで原因を確かめ、取り除いてから、${RETRY_WORK_ITEM_ACTION}`;
 
 const FACTORY_FIX_RELABEL_ACTION =
   "対応してほしい指摘をコメントしてから`factory:fix`を付け直してください";
@@ -3514,7 +3514,7 @@ const DAILY_BUDGET_NEXT_ACTION =
 const NOTHING_TO_COMMIT_NEXT_ACTION =
   "返信内容を確認し、必要なら指示をコメントして`factory:fix`を付け直してください";
 const ISSUE_PROPOSAL_NEXT_ACTION =
-  "ConsoleのInboxで提案を承認または却下してください";
+  "Consoleの承認タブで提案を承認または却下してください";
 
 /**
  * 確かめる内容`check`の後に、フローごとの再実行を続けた次の操作を返す。
@@ -3807,7 +3807,7 @@ const REASON_RULES: readonly ReasonRule[] = [
   {
     pattern: /^approval timed out$/,
     describe: () => "承認がタイムアウトしました",
-    nextAction: () => "Inboxで承認または却下してください",
+    nextAction: () => "Consoleの承認タブで承認または却下してください",
   },
   // pr_fix_finish.tsのpush後のレビュアー依頼の結果(`reportReviewerRequest`の`note`で、
   // 作業項目の`status_reason`に残す文)。

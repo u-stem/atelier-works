@@ -354,7 +354,7 @@ async function run(
         // "pending"に戻し、再試行できるようConsoleのInboxに再び出す。
         await revertIssueProposalToPending(proposal_id);
         throw new Error(
-          `issue_proposal_apply: Issueの起票に失敗しました: ${maskSecrets(err instanceof Error ? err.message : String(err))}。Inboxから再度承認してください`,
+          `issue_proposal_apply: Issueの起票に失敗しました: ${maskSecrets(err instanceof Error ? err.message : String(err))}。Consoleの承認タブから再度承認してください`,
         );
       }
       await setIssueProposalCreatedIssue(proposal_id, {
