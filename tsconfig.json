@@ -20,7 +20,13 @@
       "windmill-client@*": ["./node_modules/windmill-client"]
     }
   },
-  "include": ["f/**/*.ts", "tests/**/*.ts", "scripts/**/*.ts", "rt.d.ts"],
+  "include": [
+    "f/**/*.ts",
+    "tests/**/*.ts",
+    "scripts/**/*.ts",
+    "infra/console_fetcher/**/*.ts",
+    "rt.d.ts"
+  ],
   // f/factory/factory_console__raw_app/** (M8) is excluded: it is a
   // structurally separate frontend package (its own package.json — react /
   // react-dom / @types — installed into its own node_modules, bundled by
