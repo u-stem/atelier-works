@@ -25,6 +25,12 @@ jobs:
       - name: Lint, typecheck, and test
         run: mise run check
 
+      - name: Test the process lock as root in a private PID namespace
+        # /procを全件走査するプロセスロックのテストは、rootでないと上のステップでは飛ばされる。
+        # workerと同じく、自分のPID名前空間の中でrootとして動かす(ホストのカーネルスレッドなどを見せないため)。
+        # `sudo`は`PATH`を差し替えるので、miseが入れたbunは絶対パスで渡す。
+        run: sudo unshare --pid --fork --mount-proc "$(mise which bun)" test tests/lib/process_lock.test.ts
+
       - name: Determine gitleaks scan range
         # 走査範囲を、このpushやPRで入ったコミットに絞る
         # (上の`fetch-depth: 0`で全履歴を取得している)。

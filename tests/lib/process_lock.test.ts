@@ -1382,6 +1382,10 @@ describe("a process that cannot be inspected", () => {
 
 describe("process lock with the real flock and /proc", () => {
   const supported = process.platform === "linux" && existsSync(FLOCK_PATH);
+  // /procを全件走査するテストはrootでだけ走らせる。
+  // 走査は、見えるプロセスをすべて読めることを前提にする(workerは自分のPID名前空間の中でrootとして動く)。
+  // 非rootでホストのPID名前空間を見ると、カーネルスレッドや他のユーザーのプロセスが読めず、保持者と同じく扱われるため。
+  const scansAsRoot = supported && process.getuid?.() === 0;
   const tempDirs: string[] = [];
   const tempLock = () => {
     const dir = mkdtempSync(join(tmpdir(), "factory-lock-"));
@@ -1424,7 +1428,7 @@ describe("process lock with the real flock and /proc", () => {
     },
   );
 
-  test.skipIf(!supported)(
+  test.skipIf(!scansAsRoot)(
     "finds the running holder with its owner tag",
     async () => {
       const lock = tempLock();
@@ -1444,7 +1448,7 @@ describe("process lock with the real flock and /proc", () => {
     },
   );
 
-  test.skipIf(!supported)(
+  test.skipIf(!scansAsRoot)(
     "stops a holder left by another job of the same work item",
     async () => {
       const lock = tempLock();
@@ -1466,7 +1470,7 @@ describe("process lock with the real flock and /proc", () => {
   );
 
   // 保持者は、塞がりの確かめ直しと走査が終わるまで生きている必要があるので5秒走らせる。その終了を待つので、テストの時間切れを既定の5秒より延ばす。
-  test.skipIf(!supported)(
+  test.skipIf(!scansAsRoot)(
     "leaves a holder of another work item running",
     async () => {
       const lock = tempLock();
