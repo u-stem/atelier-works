@@ -92,7 +92,9 @@ if (!isClaudeResult(parsed)) {
 
 ## 検証コマンド
 
-- `mise run check`で`lint`(`biome check` + `wmill lint f` + 型アサーション検出)→ `typecheck`(`tsc --noEmit`)→ `test`(`bun test`)を順に実行する。PRを出す前に必ず緑にする。
+- `mise run check`で`lint`(`biome check` + `wmill lint f` + 型アサーション検出)→ `typecheck`(`tsc --noEmit`)→ `test`(`bun test`、`console/`を除く)→ `console:check`(Consoleの型検査・テスト・組み立て)を順に実行する。PRを出す前に必ず緑にする。
+- Console(`console/`)の依存はルートと分け、`console/bun.lock`で固定する。入れるときは`bun install --cwd console --frozen-lockfile --ignore-scripts`を、足すときは`bun add --cwd console --exact --ignore-scripts <package>`を使う。bunは依存のinstall scriptを既定では実行しないが、既定の信頼する一覧(trustedDependencies)にある有名なパッケージだけは実行するため、`--ignore-scripts`で止める。
+- 型アサーション検出は`.tsx`を対象にしない(スキャナーがJSXの本文を誤って読むため)。`.tsx`では`as`を書かず、判定は`.ts`の純粋関数に切り出す。
 
 ## PRテンプレート
 

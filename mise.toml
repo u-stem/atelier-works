@@ -42,6 +42,7 @@ description = "Install mise-managed tools, project dependencies, and git hooks"
 run = """
 mise install
 bun install --frozen-lockfile
+bun install --cwd console --frozen-lockfile --ignore-scripts
 lefthook install
 """
 
@@ -102,15 +103,24 @@ description = "Type-check the repository"
 run = "bunx --bun tsc --noEmit"
 
 [tasks.test]
-description = "Run the test suite"
-run = "bun test"
+description = "Run the test suite (the console has its own suite in console:check)"
+run = "bun test --path-ignore-patterns 'console/**'"
 
 [tasks.check]
-description = "Run lint, typecheck, and test in order"
+description = "Run lint, typecheck, test, and the console checks in order"
 run = """
 mise run lint
 mise run typecheck
 mise run test
+mise run console:check
+"""
+
+[tasks."console:check"]
+description = "Type-check, test, and build the console"
+run = """
+bun run --cwd console typecheck
+bun run --cwd console test
+bun run --cwd console build
 """
 
 [tasks.doctor]

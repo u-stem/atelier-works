@@ -1,0 +1,42 @@
+@import "tailwindcss";
+
+/*
+ * 色の定義はここの変数だけにする。light-dark()は、要素のcolor-schemeに従って値を選ぶ。
+ * 既定はOSの設定に従い、htmlにdata-themeがあればその色に固定する。
+ * data-themeは、theme-initのscriptとテーマの切り替えのボタンが設定する。
+ */
+:root {
+  color-scheme: light dark;
+  --background: light-dark(oklch(1 0 0), oklch(0.145 0 0));
+  --foreground: light-dark(oklch(0.145 0 0), oklch(0.985 0 0));
+  --muted: light-dark(oklch(0.97 0 0), oklch(0.269 0 0));
+  --muted-foreground: light-dark(oklch(0.45 0 0), oklch(0.75 0 0));
+  --primary: light-dark(oklch(0.205 0 0), oklch(0.922 0 0));
+  --primary-foreground: light-dark(oklch(0.985 0 0), oklch(0.205 0 0));
+  --border: light-dark(oklch(0.922 0 0), oklch(0.371 0 0));
+  --ring: light-dark(oklch(0.556 0 0), oklch(0.708 0 0));
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-border: var(--border);
+  --color-ring: var(--ring);
+}
+
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+}

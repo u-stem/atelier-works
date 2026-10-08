@@ -1,5 +1,21 @@
 import { describe, expect, test } from "bun:test";
-import { findTypeAssertions } from "../scripts/lint-no-type-assertions.ts";
+import {
+  DEFAULT_GLOBS,
+  findTypeAssertions,
+} from "../scripts/lint-no-type-assertions.ts";
+
+describe("DEFAULT_GLOBS", () => {
+  test("covers the console and console_fetcher TypeScript sources", () => {
+    expect(DEFAULT_GLOBS).toEqual(
+      expect.arrayContaining([
+        "console/*.ts",
+        "console/src/**/*.ts",
+        "console/scripts/**/*.ts",
+        "infra/console_fetcher/**/*.ts",
+      ]),
+    );
+  });
+});
 
 describe("findTypeAssertions", () => {
   test("flags an `as` type assertion", () => {

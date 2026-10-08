@@ -65,7 +65,8 @@ mise run bootstrap
 | `mise run build` | workerイメージのみビルドする |
 | `mise run bootstrap` | 初回セットアップ(ワークスペース作成・secret投入・sync push・migration、冪等) |
 | `mise run deploy` | `git pull --ff-only` → build → up → push → migrateを一括実行する(手動で一括反映したいときの手段) |
-| `mise run check` | `lint` → `typecheck` → `test`を順に実行する |
+| `mise run check` | `lint` → `typecheck` → `test` → `console:check`を順に実行する |
+| `mise run console:check` | Console(`console/`)の型検査・テスト・組み立て |
 | `mise run lint` | biome + `wmill lint` + 型アサーション検出 |
 | `mise run typecheck` | `tsc --noEmit` |
 | `mise run test` | `bun test`(small) |
@@ -87,6 +88,7 @@ atelier-works/
   mise.local.toml.example          # 秘密値投入のテンプレート(値は自分で入れる)
   wmill.yaml                       # `wmill sync` の設定
   lefthook.yml                     # pre-commit / commit-msg / pre-push フック
+  console/                         # Factory Console(Vite + React)。CI が組み立て、console_fetcher が取り込む
   c_factory_config.resource-type.yaml / rt.d.ts   # factory_config の resource type と生成された型
   .claude/skills/                  # Claude Code のカスタムスキル + wmill が生成した管理スキル
   .agents/skills/                  # wmill が生成した共有エージェントスキル(Codex 等と共有)

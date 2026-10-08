@@ -36,5 +36,26 @@
   },
   "javascript": {
     "jsxRuntime": "reactClassic"
-  }
+  },
+  "css": {
+    "parser": {
+      "tailwindDirectives": true
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["console/**"],
+      "javascript": {
+        "jsxRuntime": "transparent"
+      },
+      "linter": {
+        "rules": {
+          "security": {
+            "noDangerouslySetInnerHtml": "error",
+            "noGlobalEval": "error"
+          }
+        }
+      }
+    }
+  ]
 }
