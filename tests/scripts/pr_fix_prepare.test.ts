@@ -483,6 +483,36 @@ describe("describeReason (implement flow)", () => {
     );
   });
 
+  test("translates a worktree changed before the secret scan of a round", () => {
+    expect(
+      describeReason("worktree changed before the secret scan in round 2"),
+    ).toBe(
+      "ラウンド2で、変更の判定と秘密情報の検査の間にworktreeが変更されました",
+    );
+  });
+
+  test("translates a committed tree that differs from the inspected one", () => {
+    expect(
+      describeReason("committed tree differs from the inspected tree"),
+    ).toBe("commitしたツリーが、検査したツリーと異なります");
+  });
+
+  test("translates a worktree changed after the secret scan", () => {
+    expect(describeReason("worktree changed after the secret scan")).toBe(
+      "秘密情報の検査の後にworktreeが変更されました",
+    );
+  });
+
+  test("shows an escaped Claude failure as one reason item", () => {
+    expect(
+      describeReason(
+        "claude run failed (claude_error): x, implement time settings do not fit the flow step timeout: y",
+      ),
+    ).toBe(
+      "Claudeの実行に失敗しました(claude_error): x, implement time settings do not fit the flow step timeout: y",
+    );
+  });
+
   test("translates a modified worktree .git pointer", () => {
     expect(describeReason("worktree git pointer was modified")).toBe(
       "worktreeのgitの参照先(.gitファイル)が書き換えられました",
@@ -501,13 +531,13 @@ describe("describeReason (implement flow)", () => {
     );
   });
 
-  test("translates a local HEAD that moved off the PR head", () => {
+  test("translates a local HEAD that moved off the recorded branch head", () => {
     expect(
       describeReason(
         `local HEAD ${"b".repeat(40)} is not the PR head ${"a".repeat(40)}`,
       ),
     ).toBe(
-      `worktreeのHEAD(${"b".repeat(40)})がPRのhead(${"a".repeat(40)})と異なります`,
+      `worktreeのHEAD(${"b".repeat(40)})が記録したブランチの先頭(${"a".repeat(40)})と異なります`,
     );
   });
 
@@ -531,7 +561,7 @@ describe("describeReason (implement flow)", () => {
 
   test("asks to check the check commands after HEAD moved", () => {
     expect(nextActionFor("local HEAD is not on branch fix/x")).toBe(
-      "検査コマンドがコミットやブランチの切り替えをしていないか確かめ、人が修正してください",
+      "検査コマンドがコミットやブランチの切り替えをしていないか確かめて人が直してから、PRの修正なら`factory:fix`を付け直し、実装ならWindmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
     );
   });
 
@@ -646,6 +676,28 @@ describe("nextActionFor (implement flow)", () => {
   test("asks to check the check commands after a post-verification change", () => {
     expect(nextActionFor("worktree changed after verification")).toBe(
       "検査コマンドが追跡対象のファイルを書き換えていないか確認し、再実行してください",
+    );
+  });
+
+  test("asks to look for leftover processes after a change before the secret scan", () => {
+    expect(
+      nextActionFor("worktree changed before the secret scan in round 2"),
+    ).toBe(
+      "検査コマンドなどが残したプロセスがworktreeを書き換えていないか確かめ、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+    );
+  });
+
+  test("asks to look for leftover processes after a committed tree differs", () => {
+    expect(
+      nextActionFor("committed tree differs from the inspected tree"),
+    ).toBe(
+      "検査コマンドなどが残したプロセスがworktreeを書き換えていないか確かめ、PRの修正なら`factory:fix`を付け直し、実装ならWindmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+    );
+  });
+
+  test("asks to look for leftover processes after a change following the secret scan", () => {
+    expect(nextActionFor("worktree changed after the secret scan")).toBe(
+      "検査コマンドなどが残したプロセスがworktreeを書き換えていないか確かめ、PRの修正なら`factory:fix`を付け直し、実装ならWindmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
     );
   });
 

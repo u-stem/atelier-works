@@ -23,7 +23,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { maskSecrets } from "./log.ts";
+import { escapeReasonSeparator, maskSecrets } from "./log.ts";
 import {
   assertBranchName,
   assertGitHubName,
@@ -2054,14 +2054,14 @@ export type CommitAndPushOptions = {
   /**
    * trueなら、`git add -A`の前にローカルのHEADが`expectedHeadSha`であることを確かめる。
    * 違えば何もステージせずに`CommitBlockedError`を投げる。
-   * pr_fixが使う。検査コマンドがローカルでcommitすると、そのcommitの変更は作業ツリーの変更として見えず、
-   * 保護パスの判定を経ずにpushされるため。
+   * pr_fixとimplementフローが使う。検査コマンドがローカルでcommitすると、そのcommitの変更は作業ツリーの変更として見えず、
+   * 保護パスの判定や秘密の検査を経ずにpushされるため。
    */
   readonly requireLocalHeadAtExpected?: boolean;
   /**
    * 渡されたら、fetchの前に`git rev-parse --abbrev-ref HEAD`がこのブランチであることを確かめる。
    * 違うとき(detachedの`HEAD`を含む)は何もせずに`CommitBlockedError`を投げる。
-   * pr_fixが使う。検査コマンドがブランチを切り替えると、pushする先が準備ステップの見たPRのブランチでなくなるため。
+   * pr_fixとimplementフローが使う。検査コマンドがブランチを切り替えると、pushする先が準備ステップの見たブランチでなくなるため。
    */
   readonly expectedBranch?: string;
   /**
@@ -2070,7 +2070,19 @@ export type CommitAndPushOptions = {
    * pr_fixが、検証ステップの後にworktreeが変わっていないことを、commitする内容そのもので確かめるために使う。
    */
   readonly inspectStaged?: () => Promise<readonly string[]>;
+  /**
+   * 渡されたら、commitの後、pushの前に、作ったcommitのツリーがこのshaであることを確かめる。
+   * 違えば`git reset -q`でcommitを取り消し(変更はworktreeに残る)、pushせずに`CommitBlockedError`を投げる。
+   * 戻す先は、`requireLocalHeadAtExpected`があれば`expectedHeadSha`、無ければ作ったcommitの親である。
+   * 呼び出し側は、gitleaksが検査したツリーかループで検証したツリーを渡し、検査していない内容をpushしない。
+   * `requireLocalHeadAtExpected`と組み合わせる前提である。無いと、検査コマンドがcommitした履歴まで、
+   * ツリーだけ確かめてpushしうる。
+   */
+  readonly expectedTreeSha?: string;
 };
+
+export const COMMITTED_TREE_CHANGED_REASON =
+  "committed tree differs from the inspected tree";
 
 /**
  * `commitAndPush`が、ローカルのHEADかステージした内容の確かめに通らず、commitしなかったことを表す。
@@ -2169,6 +2181,8 @@ export function withCommitTrailers(
  * 例外を投げず、fetchし直して`head_changed`を返す。それ以外の失敗では例外を投げる。
  * `expectedBranch`・`requireLocalHeadAtExpected`・`inspectStaged`の確かめに通らなければ、commitせずに`CommitBlockedError`を投げる。
  * `inspectStaged`が例外を投げたときも、ステージを戻してからその例外を投げ直す。
+ * `expectedTreeSha`があれば、作ったcommitのツリーがそれと違うときにcommitを取り消し、pushせずに`CommitBlockedError`を投げる。
+ * pushは`HEAD`ではなく作ったcommitのshaを`refs/heads/<branch>`へ送る。commitの後にHEADが動いても、確かめたcommitだけを送るため。
  * fetchはサブモジュールに降りない(`--no-recurse-submodules`)。worktreeの`.gitmodules`や設定で、別のリポジトリを取りに行かせないため。
  * トークンはリモートのURLに入れない。
  * 認証は`-c credential.helper='!gh auth git-credential'`と
@@ -2293,7 +2307,10 @@ export async function commitAndPush(
         }
         if (reasons.length > 0) {
           await unstage();
-          throw new CommitBlockedError(reasons.join("; "));
+          // 理由に埋め込まれたファイル名などが、区切りで別の理由に見えないようにする。
+          throw new CommitBlockedError(
+            reasons.map(escapeReasonSeparator).join("; "),
+          );
         }
       }
 
@@ -2312,10 +2329,50 @@ export async function commitAndPush(
         throw gitError("git commit failed", commitResult);
       }
 
+      const newShaResult = await opts.run(
+        buildGitArgv(["rev-parse", "--verify", "HEAD"]),
+        { cwd: opts.dir, env: local },
+      );
+      if (newShaResult.exitCode !== 0) {
+        throw gitError("git rev-parse --verify HEAD failed", newShaResult);
+      }
+      const newSha = newShaResult.stdout.trim();
+      assertSha(newSha);
+
+      if (opts.expectedTreeSha !== undefined) {
+        const treeResult = await opts.run(
+          buildGitArgv(["rev-parse", "--verify", `${newSha}^{tree}`]),
+          { cwd: opts.dir, env: local },
+        );
+        if (treeResult.exitCode !== 0) {
+          throw gitError(
+            `git rev-parse --verify ${newSha}^{tree} failed`,
+            treeResult,
+          );
+        }
+        if (treeResult.stdout.trim() !== opts.expectedTreeSha) {
+          // 確かめていない内容のcommitをローカルにも残さない。変更はworktreeに残る。
+          // 戻す先は`HEAD`からたどらずに明示する。残ったプロセスがHEADを動かしても、別のcommitへ戻さないため。
+          const parent =
+            opts.requireLocalHeadAtExpected === true
+              ? opts.expectedHeadSha
+              : `${newSha}~1`;
+          const undoResult = await opts.run(
+            buildGitArgv(["reset", "-q", parent, "--"]),
+            { cwd: opts.dir, env: local },
+          );
+          if (undoResult.exitCode !== 0) {
+            throw gitError(`git reset -q ${parent} failed`, undoResult);
+          }
+          throw new CommitBlockedError(COMMITTED_TREE_CHANGED_REASON);
+        }
+      }
+
       const pushResult = await opts.run(
-        buildGitArgv(["push", "origin", "--", `HEAD:${branch}`], {
-          network: true,
-        }),
+        buildGitArgv(
+          ["push", "origin", "--", `${newSha}:refs/heads/${branch}`],
+          { network: true },
+        ),
         { cwd: opts.dir, env: network },
       );
       if (pushResult.exitCode !== 0) {
@@ -2351,17 +2408,7 @@ export async function commitAndPush(
         throw gitError("git push failed", pushResult);
       }
 
-      const newShaResult = await opts.run(
-        buildGitArgv(["rev-parse", "--verify", "HEAD"]),
-        { cwd: opts.dir, env: local },
-      );
-      if (newShaResult.exitCode !== 0) {
-        throw gitError("git rev-parse --verify HEAD failed", newShaResult);
-      }
-      return {
-        outcome: "pushed" as const,
-        newSha: newShaResult.stdout.trim(),
-      };
+      return { outcome: "pushed" as const, newSha };
     },
   });
 }
@@ -2745,6 +2792,14 @@ export type WorktreeFingerprint = {
  */
 export async function stagedTreeSha(opts: WorktreeGitOptions): Promise<string> {
   await stageAll(opts);
+  return indexTreeSha(opts);
+}
+
+/**
+ * ステージし直さずに、今の索引の`git write-tree`を返す。
+ * `commitAndPush`の`inspectStaged`から呼び、commitする索引そのものを調べるのに使う。
+ */
+export async function indexTreeSha(opts: WorktreeGitOptions): Promise<string> {
   const tree = await opts.run(buildGitArgv(["write-tree"]), {
     cwd: opts.worktreeDir,
     env: localGitEnv(opts.home, opts.path),
@@ -2755,6 +2810,22 @@ export async function stagedTreeSha(opts: WorktreeGitOptions): Promise<string> {
   const treeSha = tree.stdout.trim();
   assertSha(treeSha);
   return treeSha;
+}
+
+export const WORKTREE_CHANGED_AFTER_SECRET_SCAN_REASON =
+  "worktree changed after the secret scan";
+
+/**
+ * 今ステージしてある内容(`git write-tree`)が、秘密の検査をしたツリー`scannedTreeSha`と違えば止める理由を返す(同じなら空)。
+ * ステージし直さない。`commitAndPush`の`inspectStaged`から呼び、commitする索引そのものを比べるため。
+ * 検査とcommitの間に、残ったプロセスがworktreeを書き換えても、検査していない内容をpushしない。
+ */
+export async function scannedTreeStopReasons(
+  opts: WorktreeGitOptions & { readonly scannedTreeSha: string },
+): Promise<string[]> {
+  return (await indexTreeSha(opts)) === opts.scannedTreeSha
+    ? []
+    : [WORKTREE_CHANGED_AFTER_SECRET_SCAN_REASON];
 }
 
 /**
@@ -2797,6 +2868,12 @@ export async function worktreeFingerprint(
 }
 
 export type GitleaksResult = { readonly ok: boolean; readonly output: string };
+
+/**
+ * `runGitleaksOnWorktree`の結果。`treeSha`は検査した差分の変更後のツリー(`git write-tree`)。
+ * commitの直前に`scannedTreeStopReasons`で比べ、検査した内容だけをpushするために使う。
+ */
+export type GitleaksScan = GitleaksResult & { readonly treeSha: string };
 
 export type GitleaksConfigDir = {
   readonly path: string;
@@ -3006,16 +3083,17 @@ export function formatGitleaksReport(
 }
 
 /**
- * implementフローの固定の秘密情報の検査(workerのイメージのgitleaks 8.30.1)を実行する。
- * すべての変更をステージし、`baseSha`とのステージ済みの差分を取り、削除行を除いて、
+ * 固定の秘密情報の検査(workerのイメージのgitleaks 8.30.1)を実行する。implementフローとpr_fixが使う。
+ * すべての変更をステージしてそのツリーを`git write-tree`で記録し、`baseSha`とそのツリーの差分を取り、削除行を除いて、
  * 専用の一時ディレクトリで動く`gitleaks stdin`に渡す。
- * 差分は`git diff --cached --text --no-ext-diff --no-textconv -U0`で取る。
+ * 差分は`git diff --text --no-ext-diff --no-textconv -U0 <baseSha> <tree>`で取る。
+ * 索引ではなく記録したツリーと比べるのは、返す`treeSha`が検査した内容とちょうど一致するようにするため。
  * `.gitattributes`のbinary・`-diff`・textconvの設定で内容を隠させず、
  * 毎ラウンド、merge-base以降のブランチ全体を検査するため。
  * リポジトリの中のもの(ignoreファイル、attributes、設定)はgitleaksに届かない。
  * 終了コード0なら`ok: true`を返す。終了コード1で完全なJSONのレポートがあれば、
- * 検出1件につき1行(伏せ字済み)の`ok: false`を返す。
- * 差分かレポートが上限で切れたとき、どちらかの出力の読み取りを打ち切ったとき、終了コード1でJSONが無いとき、
+ * 検出1件につき1行(伏せ字済み)の`ok: false`を返す。どちらも検査したツリーの`treeSha`を添える。
+ * 差分かレポートが上限で切れたとき、どれかの出力の読み取りを打ち切ったとき、終了コード1でJSONが無いとき、
  * それ以外の終了コード(不明なオプションなら126)、タイムアウトのときは例外を投げ、「漏洩なし」とはみなさない。
  */
 export async function runGitleaksOnWorktree(
@@ -3024,13 +3102,12 @@ export async function runGitleaksOnWorktree(
     readonly timeoutMs: number;
     readonly createConfigDir?: () => Promise<GitleaksConfigDir>;
   },
-): Promise<GitleaksResult> {
+): Promise<GitleaksScan> {
   assertSha(opts.baseSha);
-  await stageAll(opts);
+  const treeSha = await stagedTreeSha(opts);
   const diff = await opts.run(
     buildGitArgv([
       "diff",
-      "--cached",
       "--text",
       "--no-ext-diff",
       "--no-textconv",
@@ -3039,6 +3116,7 @@ export async function runGitleaksOnWorktree(
       "--dst-prefix=b/",
       "-U0",
       opts.baseSha,
+      treeSha,
       "--",
     ]),
     {
@@ -3050,11 +3128,17 @@ export async function runGitleaksOnWorktree(
   );
   if (diff.timedOut)
     throw new Error(
-      `git diff --cached timed out after ${String(opts.timeoutMs)}ms`,
+      `git diff of the staged tree timed out after ${String(opts.timeoutMs)}ms`,
     );
-  assertOutputComplete(`git diff --cached in ${opts.worktreeDir}`, diff);
+  assertOutputComplete(
+    `git diff of the staged tree in ${opts.worktreeDir}`,
+    diff,
+  );
   if (diff.exitCode !== 0)
-    throw gitError(`git diff --cached failed in ${opts.worktreeDir}`, diff);
+    throw gitError(
+      `git diff of the staged tree failed in ${opts.worktreeDir}`,
+      diff,
+    );
   if (isCappedOutput(diff.stdout))
     throw new Error("the staged diff exceeded the scan cap");
   const scanned = dropRemovedDiffLines(diff.stdout);
@@ -3094,7 +3178,7 @@ export async function runGitleaksOnWorktree(
     if (result.timedOut)
       throw new Error(`gitleaks timed out after ${String(opts.timeoutMs)}ms`);
     assertOutputComplete("gitleaks", result);
-    if (result.exitCode === 0) return { ok: true, output: "" };
+    if (result.exitCode === 0) return { ok: true, output: "", treeSha };
     if (result.exitCode === GITLEAKS_LEAKS_EXIT_CODE) {
       if (isCappedOutput(result.stdout))
         throw new Error("gitleaks report exceeded the output cap");
@@ -3105,6 +3189,7 @@ export async function runGitleaksOnWorktree(
           output: maskSecrets(
             report.length === 0 ? "gitleaks reported a leak" : report,
           ),
+          treeSha,
         };
       }
     }

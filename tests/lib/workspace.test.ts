@@ -1,12 +1,20 @@
-import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { afterEach, describe, expect, test } from "bun:test";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
   addDetachedWorktree,
   assertWorktreeGitPointer,
   boundedTimerMs,
+  COMMITTED_TREE_CHANGED_REASON,
   type CommandResult,
+  type CommandRunner,
   CommitBlockedError,
   commitAndPush,
   copyFileTo,
@@ -49,8 +57,10 @@ import {
   resolveDefaultBranchName,
   runCommand,
   runGitleaksOnWorktree,
+  scannedTreeStopReasons,
   stagedTreeSha,
   verifyWorktreeGitdir,
+  WORKTREE_CHANGED_AFTER_SECRET_SCAN_REASON,
   WorktreeGitPointerModifiedError,
   withCommitTrailers,
   withRepoLock,
@@ -2270,6 +2280,28 @@ describe("commitAndPush", () => {
       ).rejects.toThrow("git show failed");
     });
 
+    test("keeps each stop reason a single reason item", async () => {
+      const fake = commitAndPushCalls([
+        ok("fix/branch\n"),
+        ok(),
+        ok(`${HEAD_SHA}\n`),
+        ok(`${HEAD_SHA}\n`),
+        ok(),
+        ok(" M file.ts\n"),
+        ok(), // git reset -q
+      ]);
+      await expect(
+        commitAndPush(
+          guardedOptions(fake.run, [
+            "forbidden path changed: a; needs human attention",
+            "new shell script added: b.sh",
+          ]),
+        ),
+      ).rejects.toThrow(
+        "forbidden path changed: a, needs human attention; new shell script added: b.sh",
+      );
+    });
+
     test("throws CommitBlockedError when the local HEAD moved off the PR head", async () => {
       const fake = commitAndPushCalls([
         ok("fix/branch\n"),
@@ -2350,11 +2382,112 @@ describe("commitAndPush", () => {
         ok(),
         ok(" M file.ts\n"),
         ok(), // git commit
+        ok(`${newSha}\n`), // rev-parse --verify HEAD
         ok(), // git push
-        ok(`${newSha}\n`),
       ]);
       const result = await commitAndPush(guardedOptions(fake.run));
       expect(result).toEqual({ outcome: "pushed", newSha });
+    });
+  });
+
+  describe("expected tree", () => {
+    const NEW_COMMIT = "2222222222222222222222222222222222222c";
+    const EXPECTED_TREE = "4".repeat(40);
+
+    /** 変更をcommitするところまで進む応答に、commitの後の応答を足す。 */
+    function committedCalls(after: readonly CommandResult[]) {
+      return commitAndPushCalls([
+        ok("fix/branch\n"),
+        ok(),
+        ok(`${HEAD_SHA}\n`),
+        ok(), // git add -A
+        ok(" M file.ts\n"),
+        ok(), // git commit
+        ok(`${NEW_COMMIT}\n`), // rev-parse --verify HEAD
+        ...after,
+      ]);
+    }
+
+    function options(run: ReturnType<typeof commitAndPushCalls>["run"]) {
+      return {
+        run,
+        repoDir: "/repo",
+        dir: "/repo/wt",
+        message: "fix: something",
+        instanceName: "acme-factory",
+        expectedHeadSha: HEAD_SHA,
+        author: TEST_AUTHOR,
+        ghToken: "gh-token",
+        verifyWorktree: noopVerify,
+        lockFs: createInMemoryLockFs(),
+        expectedTreeSha: EXPECTED_TREE,
+      };
+    }
+
+    test("pushes when the committed tree is the expected tree", async () => {
+      const fake = committedCalls([ok(`${EXPECTED_TREE}\n`), ok()]);
+      expect(await commitAndPush(options(fake.run))).toEqual({
+        outcome: "pushed",
+        newSha: NEW_COMMIT,
+      });
+    });
+
+    test("reads the tree of the new commit", async () => {
+      const fake = committedCalls([ok(`${EXPECTED_TREE}\n`), ok()]);
+      await commitAndPush(options(fake.run));
+      expect(fake.calls[7]?.argv.slice(-2)).toEqual([
+        "--verify",
+        `${NEW_COMMIT}^{tree}`,
+      ]);
+    });
+
+    test("stops when the committed tree is not the expected tree", async () => {
+      const fake = committedCalls([ok(`${TREE_SHA}\n`), ok()]);
+      await expect(commitAndPush(options(fake.run))).rejects.toThrow(
+        COMMITTED_TREE_CHANGED_REASON,
+      );
+    });
+
+    test("undoes the commit back to its own parent when the committed tree is not the expected tree", async () => {
+      const fake = committedCalls([ok(`${TREE_SHA}\n`), ok()]);
+      await commitAndPush(options(fake.run)).catch(() => {});
+      expect(fake.calls.at(-1)?.argv.slice(-4)).toEqual([
+        "reset",
+        "-q",
+        `${NEW_COMMIT}~1`,
+        "--",
+      ]);
+    });
+
+    test("undoes the commit back to the expected head when the local HEAD was required there", async () => {
+      const fake = commitAndPushCalls([
+        ok("fix/branch\n"),
+        ok(),
+        ok(`${HEAD_SHA}\n`),
+        ok(`${HEAD_SHA}\n`), // rev-parse --verify HEAD(ローカルのHEADの確かめ)
+        ok(), // git add -A
+        ok(" M file.ts\n"),
+        ok(), // git commit
+        ok(`${NEW_COMMIT}\n`),
+        ok(`${TREE_SHA}\n`),
+        ok(),
+      ]);
+      await commitAndPush({
+        ...options(fake.run),
+        requireLocalHeadAtExpected: true,
+      }).catch(() => {});
+      expect(fake.calls.at(-1)?.argv.slice(-4)).toEqual([
+        "reset",
+        "-q",
+        HEAD_SHA,
+        "--",
+      ]);
+    });
+
+    test("does not push when the committed tree is not the expected tree", async () => {
+      const fake = committedCalls([ok(`${TREE_SHA}\n`), ok()]);
+      await commitAndPush(options(fake.run)).catch(() => {});
+      expect(fake.calls.some((call) => call.argv.includes("push"))).toBe(false);
     });
   });
 
@@ -2390,8 +2523,8 @@ describe("commitAndPush", () => {
       ok(),
       ok(" M file.ts\n"),
       ok(), // git commit
-      ok(), // git push
       ok(`${newSha}\n`), // rev-parse --verify HEAD
+      ok(), // git push
     ]);
     const result = await commitAndPush({
       run: fake.run,
@@ -2408,6 +2541,36 @@ describe("commitAndPush", () => {
     expect(result).toEqual({ outcome: "pushed", newSha });
   });
 
+  test("pushes the new commit by its sha instead of HEAD", async () => {
+    const newSha = "2222222222222222222222222222222222222c";
+    const fake = commitAndPushCalls([
+      ok("fix/branch\n"),
+      ok(),
+      ok(`${HEAD_SHA}\n`),
+      ok(),
+      ok(" M file.ts\n"),
+      ok(), // git commit
+      ok(`${newSha}\n`), // rev-parse --verify HEAD
+      ok(), // git push
+    ]);
+    await commitAndPush({
+      run: fake.run,
+      repoDir: "/repo",
+      dir: "/repo/wt",
+      message: "fix: something",
+      instanceName: "acme-factory",
+      expectedHeadSha: HEAD_SHA,
+      author: TEST_AUTHOR,
+      ghToken: "gh-token",
+      verifyWorktree: noopVerify,
+      lockFs: createInMemoryLockFs(),
+    });
+    expect(fake.calls.at(-1)?.argv.slice(-2)).toEqual([
+      "--",
+      `${newSha}:refs/heads/fix/branch`,
+    ]);
+  });
+
   test("the git commit call's env carries GIT_AUTHOR_EMAIL from the given author", async () => {
     const fake = commitAndPushCalls([
       ok("fix/branch\n"),
@@ -2416,8 +2579,8 @@ describe("commitAndPush", () => {
       ok(),
       ok(" M file.ts\n"),
       ok(), // git commit
-      ok(), // git push
       ok(`${HEAD_SHA}\n`), // rev-parse --verify HEAD
+      ok(), // git push
     ]);
     await commitAndPush({
       run: fake.run,
@@ -2444,6 +2607,7 @@ describe("commitAndPush", () => {
       ok(), // git add -A
       ok(" M file.ts\n"), // git status --porcelain
       ok(), // git commit
+      ok(`${HEAD_SHA}\n`), // rev-parse --verify HEAD
       fail(
         "! [rejected]        fix/branch -> fix/branch (fetch first)\nerror: failed to push some refs",
       ), // git push
@@ -2473,6 +2637,7 @@ describe("commitAndPush", () => {
       ok(),
       ok(" M file.ts\n"),
       ok(),
+      ok(`${HEAD_SHA}\n`),
       fail("! [rejected] fix/branch -> fix/branch (non-fast-forward)"),
       ok(),
       ok(`${OTHER_SHA}\n`),
@@ -2500,6 +2665,7 @@ describe("commitAndPush", () => {
       ok(),
       ok(" M file.ts\n"),
       ok(),
+      ok(`${HEAD_SHA}\n`),
       fail(
         "remote: Permission to acme/widgets.git denied to factory-bot.\nfatal: unable to access",
       ),
@@ -2591,8 +2757,8 @@ describe("commitAndPush", () => {
       ok(),
       ok(" M file.ts\n"),
       ok(),
-      ok(),
       ok(`${HEAD_SHA}\n`),
+      ok(),
     ]);
     await commitAndPush({
       run: fake.run,
@@ -2607,7 +2773,7 @@ describe("commitAndPush", () => {
       lockFs: createInMemoryLockFs(),
     });
     const commitCallEnv = fake.calls[5]?.options?.env; // git commit -m
-    const pushCallEnv = fake.calls[6]?.options?.env; // git push
+    const pushCallEnv = fake.calls[7]?.options?.env; // git push
     expect([commitCallEnv?.GH_TOKEN, pushCallEnv?.GH_TOKEN]).toEqual([
       undefined,
       "gh-secret",
@@ -2622,8 +2788,8 @@ describe("commitAndPush", () => {
       ok(),
       ok(" M file.ts\n"),
       ok(), // git commit
+      ok(`${HEAD_SHA}\n`), // rev-parse --verify HEAD
       ok(), // git push
-      ok(`${HEAD_SHA}\n`),
     ]);
     await commitAndPush({
       run: fake.run,
@@ -2653,6 +2819,7 @@ describe("commitAndPush", () => {
       ok(),
       ok(" M file.ts\n"),
       ok(),
+      ok(`${HEAD_SHA}\n`),
       fail(
         "! [remote rejected] factory/issue-7-wi-3 -> factory/issue-7-wi-3 (refusing to allow a Personal Access Token to create or update workflow `.github/workflows/ci.yml` without `workflow` scope)",
       ),
@@ -2681,6 +2848,7 @@ describe("commitAndPush", () => {
       ok(),
       ok(" M file.ts\n"),
       ok(),
+      ok(`${HEAD_SHA}\n`),
       fail("! [rejected] main -> main (non-fast-forward)"),
       ok(),
       ok(`${OTHER_SHA}\n`),
@@ -3578,6 +3746,51 @@ describe("stagedTreeSha", () => {
   });
 });
 
+describe("scannedTreeStopReasons", () => {
+  test("returns no reason when the staged tree is the scanned tree", async () => {
+    const fake = createFakeCommandRunner([ok(`${TREE_SHA}\n`)]);
+    expect(
+      await scannedTreeStopReasons({
+        run: fake.run,
+        worktreeDir: "/wt",
+        scannedTreeSha: TREE_SHA,
+      }),
+    ).toEqual([]);
+  });
+
+  test("stops when the staged tree differs from the scanned tree", async () => {
+    const fake = createFakeCommandRunner([ok(`${BASE_SHA}\n`)]);
+    expect(
+      await scannedTreeStopReasons({
+        run: fake.run,
+        worktreeDir: "/wt",
+        scannedTreeSha: TREE_SHA,
+      }),
+    ).toEqual([WORKTREE_CHANGED_AFTER_SECRET_SCAN_REASON]);
+  });
+
+  test("reads the staged tree without staging again", async () => {
+    const fake = createFakeCommandRunner([ok(`${TREE_SHA}\n`)]);
+    await scannedTreeStopReasons({
+      run: fake.run,
+      worktreeDir: "/wt",
+      scannedTreeSha: TREE_SHA,
+    });
+    expect(fake.calls.map((call) => call.argv.at(-1))).toEqual(["write-tree"]);
+  });
+
+  test("throws when the write-tree output was abandoned", async () => {
+    const fake = createFakeCommandRunner([abandoned(`${TREE_SHA}\n`)]);
+    await expect(
+      scannedTreeStopReasons({
+        run: fake.run,
+        worktreeDir: "/wt",
+        scannedTreeSha: TREE_SHA,
+      }),
+    ).rejects.toThrow(/write-tree.*abandoned/);
+  });
+});
+
 describe("worktreeFingerprint", () => {
   test("stages everything first", async () => {
     const fake = createFakeCommandRunner([ok(), ok(`${TREE_SHA}\n`), ok("")]);
@@ -3808,6 +4021,7 @@ describe("runGitleaksOnWorktree", () => {
       }),
     };
   }
+  const TREE = `${TREE_SHA}\n`;
   const DIFF = [
     "diff --git a/a.txt b/a.txt",
     "--- a/a.txt",
@@ -3845,22 +4059,59 @@ describe("runGitleaksOnWorktree", () => {
 
   test("reports ok on exit 0", async () => {
     expect(
-      (await scan(createFakeCommandRunner([ok(), ok(DIFF), ok("[]")]))).ok,
+      (
+        await scan(
+          createFakeCommandRunner([ok(), ok(TREE), ok(DIFF), ok("[]")]),
+        )
+      ).ok,
     ).toBe(true);
   });
 
   test("stages everything before scanning", async () => {
-    const fake = createFakeCommandRunner([ok(), ok(DIFF), ok("[]")]);
+    const fake = createFakeCommandRunner([ok(), ok(TREE), ok(DIFF), ok("[]")]);
     await scan(fake);
     expect(fake.calls[0]?.argv.slice(-2)).toEqual(["add", "-A"]);
   });
 
-  test("diffs the index against the base sha as text, without drivers or context", async () => {
-    const fake = createFakeCommandRunner([ok(), ok(DIFF), ok("[]")]);
+  test("writes the staged tree right after staging", async () => {
+    const fake = createFakeCommandRunner([ok(), ok(TREE), ok(DIFF), ok("[]")]);
     await scan(fake);
-    expect(fake.calls[1]?.argv.slice(7)).toEqual([
+    expect(fake.calls[1]?.argv.slice(-1)).toEqual(["write-tree"]);
+  });
+
+  test("returns the scanned tree sha", async () => {
+    expect(
+      (
+        await scan(
+          createFakeCommandRunner([ok(), ok(TREE), ok(DIFF), ok("[]")]),
+        )
+      ).treeSha,
+    ).toBe(TREE_SHA);
+  });
+
+  test("returns the scanned tree sha with the findings", async () => {
+    expect(
+      (
+        await scan(
+          createFakeCommandRunner([ok(), ok(TREE), ok(DIFF), exit(LEAK, 1)]),
+        )
+      ).treeSha,
+    ).toBe(TREE_SHA);
+  });
+
+  test("throws when the write-tree output was abandoned", async () => {
+    await expect(
+      scan(
+        createFakeCommandRunner([ok(), abandoned(TREE), ok(DIFF), ok("[]")]),
+      ),
+    ).rejects.toThrow(/write-tree.*abandoned/);
+  });
+
+  test("diffs the scanned tree against the base sha as text, without drivers or context", async () => {
+    const fake = createFakeCommandRunner([ok(), ok(TREE), ok(DIFF), ok("[]")]);
+    await scan(fake);
+    expect(fake.calls[2]?.argv.slice(7)).toEqual([
       "diff",
-      "--cached",
       "--text",
       "--no-ext-diff",
       "--no-textconv",
@@ -3869,14 +4120,15 @@ describe("runGitleaksOnWorktree", () => {
       "--dst-prefix=b/",
       "-U0",
       BASE_SHA,
+      TREE_SHA,
       "--",
     ]);
   });
 
   test("diffs with the hardening flags", async () => {
-    const fake = createFakeCommandRunner([ok(), ok(DIFF), ok("[]")]);
+    const fake = createFakeCommandRunner([ok(), ok(TREE), ok(DIFF), ok("[]")]);
     await scan(fake);
-    expect(fake.calls[1]?.argv.slice(0, 3)).toEqual([
+    expect(fake.calls[2]?.argv.slice(0, 3)).toEqual([
       "git",
       "-c",
       "core.hooksPath=/dev/null",
@@ -3884,56 +4136,67 @@ describe("runGitleaksOnWorktree", () => {
   });
 
   test("caps the diff output", async () => {
-    const fake = createFakeCommandRunner([ok(), ok(DIFF), ok("[]")]);
+    const fake = createFakeCommandRunner([ok(), ok(TREE), ok(DIFF), ok("[]")]);
     await scan(fake);
-    expect(fake.calls[1]?.options?.maxOutputBytes).toBeGreaterThan(0);
+    expect(fake.calls[2]?.options?.maxOutputBytes).toBeGreaterThan(0);
   });
 
   test("throws when the diff hit the output cap", async () => {
     await expect(
       scan(
-        createFakeCommandRunner([ok(), ok(`+a${omittedMarker(10)}`), ok("[]")]),
+        createFakeCommandRunner([
+          ok(),
+          ok(TREE),
+          ok(`+a${omittedMarker(10)}`),
+          ok("[]"),
+        ]),
       ),
     ).rejects.toThrow(/diff exceeded the scan cap/);
   });
 
   test("throws when the diff fails", async () => {
     await expect(
-      scan(createFakeCommandRunner([ok(), fail("fatal: bad object")])),
-    ).rejects.toThrow(/git diff --cached failed/);
+      scan(
+        createFakeCommandRunner([ok(), ok(TREE), fail("fatal: bad object")]),
+      ),
+    ).rejects.toThrow(/git diff of the staged tree failed/);
   });
 
   test("throws when the diff output was abandoned", async () => {
     await expect(
-      scan(createFakeCommandRunner([ok(), abandoned(DIFF), ok("[]")])),
-    ).rejects.toThrow(/git diff --cached.*abandoned/);
+      scan(
+        createFakeCommandRunner([ok(), ok(TREE), abandoned(DIFF), ok("[]")]),
+      ),
+    ).rejects.toThrow(/git diff of the staged tree.*abandoned/);
   });
 
   test("throws when the gitleaks output was abandoned even on exit 0", async () => {
     await expect(
-      scan(createFakeCommandRunner([ok(), ok(DIFF), abandoned("")])),
+      scan(createFakeCommandRunner([ok(), ok(TREE), ok(DIFF), abandoned("")])),
     ).rejects.toThrow(/gitleaks.*abandoned/);
   });
 
   test("throws when the gitleaks report was abandoned", async () => {
     await expect(
-      scan(createFakeCommandRunner([ok(), ok(DIFF), abandoned(LEAK, 1)])),
+      scan(
+        createFakeCommandRunner([ok(), ok(TREE), ok(DIFF), abandoned(LEAK, 1)]),
+      ),
     ).rejects.toThrow(/gitleaks.*abandoned/);
   });
 
   test("removes the config dir when the gitleaks output was abandoned", async () => {
     const dir = configDir();
     await scan(
-      createFakeCommandRunner([ok(), ok(DIFF), abandoned("")]),
+      createFakeCommandRunner([ok(), ok(TREE), ok(DIFF), abandoned("")]),
       dir,
     ).catch(() => undefined);
     expect(dir.state.cleaned).toBe(1);
   });
 
   test("scans stdin with the forced default config and no repository ignore file", async () => {
-    const fake = createFakeCommandRunner([ok(), ok(DIFF), ok("[]")]);
+    const fake = createFakeCommandRunner([ok(), ok(TREE), ok(DIFF), ok("[]")]);
     await scan(fake);
-    expect(fake.calls[2]?.argv).toEqual([
+    expect(fake.calls[3]?.argv).toEqual([
       "gitleaks",
       "stdin",
       "--redact",
@@ -3956,9 +4219,9 @@ describe("runGitleaksOnWorktree", () => {
   });
 
   test("feeds the diff without its removed lines on stdin", async () => {
-    const fake = createFakeCommandRunner([ok(), ok(DIFF), ok("[]")]);
+    const fake = createFakeCommandRunner([ok(), ok(TREE), ok(DIFF), ok("[]")]);
     await scan(fake);
-    expect(fake.calls[2]?.options?.stdin).toBe(
+    expect(fake.calls[3]?.options?.stdin).toBe(
       [
         "diff --git a/a.txt b/a.txt",
         "--- a/a.txt",
@@ -3970,21 +4233,28 @@ describe("runGitleaksOnWorktree", () => {
   });
 
   test("runs gitleaks in the private temp dir, not the worktree", async () => {
-    const fake = createFakeCommandRunner([ok(), ok(DIFF), ok("[]")]);
+    const fake = createFakeCommandRunner([ok(), ok(TREE), ok(DIFF), ok("[]")]);
     await scan(fake);
-    expect(fake.calls[2]?.options?.cwd).toBe("/tmp/fake-gitleaks");
+    expect(fake.calls[3]?.options?.cwd).toBe("/tmp/fake-gitleaks");
   });
 
   test("returns the findings mapped to files (never the matched text) on exit 1", async () => {
     expect(
-      (await scan(createFakeCommandRunner([ok(), ok(DIFF), exit(LEAK, 1)])))
-        .output,
+      (
+        await scan(
+          createFakeCommandRunner([ok(), ok(TREE), ok(DIFF), exit(LEAK, 1)]),
+        )
+      ).output,
     ).toBe("- github-pat: a.txt");
   });
 
   test("reports not ok on exit 1", async () => {
     expect(
-      (await scan(createFakeCommandRunner([ok(), ok(DIFF), exit(LEAK, 1)]))).ok,
+      (
+        await scan(
+          createFakeCommandRunner([ok(), ok(TREE), ok(DIFF), exit(LEAK, 1)]),
+        )
+      ).ok,
     ).toBe(false);
   });
 
@@ -3993,6 +4263,7 @@ describe("runGitleaksOnWorktree", () => {
       scan(
         createFakeCommandRunner([
           ok(),
+          ok(TREE),
           ok(DIFF),
           exit(`[${omittedMarker(10)}]`, 1),
         ]),
@@ -4002,7 +4273,14 @@ describe("runGitleaksOnWorktree", () => {
 
   test("throws on exit 1 without a JSON report", async () => {
     await expect(
-      scan(createFakeCommandRunner([ok(), ok(DIFF), fail("Error: boom", 1)])),
+      scan(
+        createFakeCommandRunner([
+          ok(),
+          ok(TREE),
+          ok(DIFF),
+          fail("Error: boom", 1),
+        ]),
+      ),
     ).rejects.toThrow(/gitleaks failed/);
   });
 
@@ -4011,6 +4289,7 @@ describe("runGitleaksOnWorktree", () => {
       scan(
         createFakeCommandRunner([
           ok(),
+          ok(TREE),
           ok(DIFF),
           fail("Error: unknown flag", 126),
         ]),
@@ -4020,7 +4299,130 @@ describe("runGitleaksOnWorktree", () => {
 
   test("removes the config dir afterwards", async () => {
     const dir = configDir();
-    await scan(createFakeCommandRunner([ok(), ok(DIFF), ok("[]")]), dir);
+    await scan(
+      createFakeCommandRunner([ok(), ok(TREE), ok(DIFF), ok("[]")]),
+      dir,
+    );
     expect(dir.state.cleaned).toBe(1);
+  });
+});
+
+// 一時ディレクトリのリポジトリで実際のgitを実行して確かめる。gitleaksだけは偽物にする。
+describe("runGitleaksOnWorktree against a real git repository", () => {
+  const tempDirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  type ScannedRepo = {
+    readonly dir: string;
+    readonly treeSha: string;
+    readonly stdin: string;
+    readonly run: CommandRunner;
+    readonly git: (args: readonly string[]) => Promise<string>;
+  };
+
+  /**
+   * `README.md`だけをコミットした一時リポジトリに変更を加え、検査を実行する。
+   * `HOME`を一時ディレクトリに向け、システムの設定も読ませないので、利用者のgitの設定に左右されない。
+   * gitleaksの実行は起動せずに、渡された標準入力を記録して「検出なし」を返す。
+   */
+  async function scanRepo(): Promise<ScannedRepo> {
+    const root = mkdtempSync(join(tmpdir(), "gitleaks-tree-"));
+    tempDirs.push(root);
+    const dir = join(root, "repo");
+    const home = join(root, "home");
+    mkdirSync(dir);
+    mkdirSync(home);
+    let stdin = "";
+    const run: CommandRunner = async (argv, options) => {
+      if (argv[0] === "gitleaks") {
+        stdin = options?.stdin ?? "";
+        return ok("[]");
+      }
+      return runCommand(argv, {
+        ...options,
+        env: {
+          ...options?.env,
+          PATH: process.env.PATH ?? "",
+          HOME: home,
+          GIT_CONFIG_NOSYSTEM: "1",
+        },
+      });
+    };
+    const git = async (args: readonly string[]): Promise<string> => {
+      const result = await run(
+        [
+          "git",
+          "-c",
+          "user.name=test",
+          "-c",
+          "user.email=test@example.invalid",
+          ...args,
+        ],
+        { cwd: dir },
+      );
+      if (result.exitCode !== 0) {
+        throw new Error(`git ${args.join(" ")} failed: ${result.stderr}`);
+      }
+      return result.stdout.trim();
+    };
+    await git(["init", "-q"]);
+    writeFileSync(join(dir, "README.md"), "readme\n");
+    await git(["add", "-A"]);
+    await git(["commit", "-q", "-m", "init"]);
+    const baseSha = await git(["rev-parse", "HEAD"]);
+    writeFileSync(join(dir, "README.md"), "readme\nchanged line\n");
+    writeFileSync(join(dir, "new.txt"), "added line\n");
+    const scanned = await runGitleaksOnWorktree({
+      run,
+      worktreeDir: dir,
+      baseSha,
+      timeoutMs: 10_000,
+    });
+    return { dir, treeSha: scanned.treeSha, stdin, run, git };
+  }
+
+  test("returns the tree that git write-tree records for the staged worktree", async () => {
+    const repo = await scanRepo();
+    expect(repo.treeSha).toBe(await repo.git(["write-tree"]));
+  });
+
+  test("feeds the lines added in the scanned tree to gitleaks", async () => {
+    const repo = await scanRepo();
+    expect(repo.stdin).toContain("+added line");
+  });
+
+  test("feeds the changed lines of tracked files to gitleaks", async () => {
+    const repo = await scanRepo();
+    expect(repo.stdin).toContain("+changed line");
+  });
+
+  test("returns no stop reason when staging again finds the scanned tree", async () => {
+    const repo = await scanRepo();
+    await repo.git(["add", "-A"]);
+    expect(
+      await scannedTreeStopReasons({
+        run: repo.run,
+        worktreeDir: repo.dir,
+        scannedTreeSha: repo.treeSha,
+      }),
+    ).toEqual([]);
+  });
+
+  test("stops the commit when a file is staged after the scan", async () => {
+    const repo = await scanRepo();
+    writeFileSync(join(repo.dir, "late.txt"), "written after the scan\n");
+    await repo.git(["add", "-A"]);
+    expect(
+      await scannedTreeStopReasons({
+        run: repo.run,
+        worktreeDir: repo.dir,
+        scannedTreeSha: repo.treeSha,
+      }),
+    ).toEqual([WORKTREE_CHANGED_AFTER_SECRET_SCAN_REASON]);
   });
 });

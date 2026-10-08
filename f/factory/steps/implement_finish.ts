@@ -41,6 +41,7 @@ import {
   IMPLEMENT_FINISH_NO_OUTPUT_REASON,
   IMPLEMENT_WIP_COMMIT_MESSAGE,
   type ImplementFinishOutcome,
+  implementCommitGuards,
   implementNeedsHumanNextAction,
   mergeImplementOutcome,
   PARTIAL_WORK_KEPT_LOCAL_REASON,
@@ -51,6 +52,7 @@ import {
   shouldDeleteBranchOnGap,
   shouldPreserveBeforeFailing,
   shouldPushPartialWork,
+  worktreeBusyStopReason,
 } from "../lib/implement_finish_support.ts";
 import {
   assertImplementLease,
@@ -75,16 +77,24 @@ import {
   neutralizeIssueRefs,
 } from "../lib/implement_support.ts";
 import { logger, maskSecrets } from "../lib/log.ts";
+import {
+  defaultLockReleaseDeps,
+  ensureWorktreeLockFree,
+  worktreeLockFor,
+} from "../lib/process_lock.ts";
 import { isOneOf, type WorkItemStatus } from "../lib/types.ts";
 import {
   assertWorktreeGitPointer,
   type CommitAndPushOptions,
+  CommitBlockedError,
   commitAndPush,
   deleteLocalBranch,
   deleteRemoteBranch,
+  indexTreeSha,
   removeWorktree,
   runCommand,
   runGitleaksOnWorktree,
+  scannedTreeStopReasons,
   stagedTreeSha,
 } from "../lib/workspace.ts";
 import {
@@ -209,6 +219,10 @@ type PrAttempt =
  * worktreeでのgitコマンド(`preserveWork`の検査とcommit、最終commit)の前には
  * 必ず`.git`ポインタを照合する。
  * ポインタが変わっていたらpushせずにneeds_humanで終える。
+ * その前に、worktreeのロックを持つプロセス(前のステップのClaudeや検査コマンドの生き残り)がいないことも確かめ、
+ * いればpushせずにneeds_humanで終える。
+ * commitの直前には、`commitAndPush`がステージし直した索引のツリーを、途中経過ではgitleaksが検査したツリーと、
+ * 最終commitではループで検証したツリーと比べ、違えばcommitしない。
  *
  * 外への副作用(途中経過と最終のcommitとpush、worktreeとリモートブランチの削除、
  * PRの作成と更新、`pr_url`の記録、ラベル)の直前には、作業項目を読み直してリースを確かめる
@@ -402,12 +416,24 @@ async function finishImplement(
     expectedHeadSha: ctx.expected_head_sha,
     author: gitIdentityForViewer(await getViewer(client)),
     ghToken,
+    ...implementCommitGuards(ctx.branch),
   });
 
   const assertGitPointer = (ctx: ImplementContext) => (): Promise<void> =>
     assertWorktreeGitPointer(ctx.worktree_dir, ctx.worktree_git_pointer);
 
+  // 前のステップのClaudeや検査コマンドが残っていれば、何も止めずに`WorktreeBusyError`を投げる。
+  const ensureLockFree = (ctx: ImplementContext) => async (): Promise<void> => {
+    await ensureWorktreeLockFree({
+      run: runCommand,
+      lock: worktreeLockFor(ctx.worktree_dir),
+      policy: null,
+      deps: defaultLockReleaseDeps(),
+    });
+  };
+
   const preserveWorkDeps = (ctx: ImplementContext): PreserveWorkDeps => ({
+    ensureLockFree: ensureLockFree(ctx),
     assertGitPointer: assertGitPointer(ctx),
     scanForSecrets: () =>
       runGitleaksOnWorktree({
@@ -416,10 +442,19 @@ async function finishImplement(
         baseSha: ctx.base_sha,
         timeoutMs: GITLEAKS_TIMEOUT_MS,
       }),
-    commitAndPush: async () => {
+    commitAndPush: async (scannedTreeSha) => {
       const options = await commitOptions(ctx, IMPLEMENT_WIP_COMMIT_MESSAGE);
       await confirmLease();
-      return commitAndPush(options);
+      return commitAndPush({
+        ...options,
+        expectedTreeSha: scannedTreeSha,
+        inspectStaged: () =>
+          scannedTreeStopReasons({
+            run: runCommand,
+            worktreeDir: ctx.worktree_dir,
+            scannedTreeSha,
+          }),
+      });
     },
   });
 
@@ -602,6 +637,8 @@ async function finishImplement(
     try {
       // ステージ・commit・pushの前に確かめる。
       await confirmLease();
+      const busyReason = await worktreeBusyStopReason(ensureLockFree(ctx));
+      if (busyReason !== null) return { ok: false, reason: busyReason };
       const pointerReason = await gitPointerStopReason(assertGitPointer(ctx));
       if (pointerReason !== null) return { ok: false, reason: pointerReason };
       const verified = decideVerifiedTree(
@@ -620,7 +657,23 @@ async function finishImplement(
         },
         config.instance_name,
       );
-      const pushed = await commitAndPush(await commitOptions(ctx, message));
+      // `commitAndPush`はステージし直すので、commitする索引そのものが検証したツリーかも確かめる。
+      const pushed = await commitAndPush({
+        ...(await commitOptions(ctx, message)),
+        ...(loop.verified_tree_sha !== null
+          ? { expectedTreeSha: loop.verified_tree_sha }
+          : {}),
+        inspectStaged: async () => {
+          const staged = decideVerifiedTree(
+            loop.verified_tree_sha,
+            await indexTreeSha({
+              run: runCommand,
+              worktreeDir: ctx.worktree_dir,
+            }),
+          );
+          return staged.kind === "stop" ? [staged.reason] : [];
+        },
+      });
       const afterCommit = decideAfterCommit(
         pushed,
         ctx.expected_head_sha !== ctx.base_sha,
@@ -683,6 +736,9 @@ async function finishImplement(
     } catch (err) {
       // リースを失ったときは、needs_humanにせず`main`でnoopにする。
       if (err instanceof ImplementLeaseLostError) throw err;
+      // ステージした内容の確かめで止めたときは、その理由をそのまま使う。
+      if (err instanceof CommitBlockedError)
+        return { ok: false, reason: err.message };
       return { ok: false, reason: finishFailureReason(err) };
     }
   };

@@ -14,10 +14,13 @@ import {
   type ReviewThread,
   withMarker,
 } from "../lib/github.ts";
-import { decideGapReroute } from "../lib/implement_finish_support.ts";
+import {
+  decideGapReroute,
+  SECRETS_NOT_PUSHED_REASON,
+} from "../lib/implement_finish_support.ts";
 import { parseFlowJobId } from "../lib/implement_launch_support.ts";
 import { gitPointerStopReason } from "../lib/implement_loop.ts";
-import { maskSecrets } from "../lib/log.ts";
+import { escapeReasonSeparator, maskSecrets } from "../lib/log.ts";
 import { WorktreeBusyError } from "../lib/process_lock.ts";
 import {
   type ChangedPath,
@@ -49,6 +52,7 @@ import {
 import {
   assertOutputComplete,
   type CommandRunner,
+  type GitleaksScan,
   readGitShowFile,
 } from "../lib/workspace.ts";
 
@@ -2300,6 +2304,57 @@ export async function inspectStagedChanges(
 }
 
 /**
+ * Claudeが書いた`blocked_reason`を、状態の理由に使える形にして返す(無ければnull)。
+ * 区切りの`"; "`を`", "`に置き換え、知っている理由を後ろに足して次の操作を選ばせないようにする。
+ * 理由そのものを既知の理由と同じ文にされることは防げない。
+ */
+export function claudeBlockedReason(reason: string | null): string | null {
+  return reason === null ? null : escapeReasonSeparator(reason);
+}
+
+/** `scanPrFixBeforeCommit`が使うI/O。テストでは偽物に差し替える。 */
+export type PrFixSecretScanDeps = {
+  /** `runGitleaksOnWorktree`をPRのhead(`head_sha`)を基準に実行する。すべてをステージし直してから検査する。 */
+  readonly scanForSecrets: () => Promise<GitleaksScan>;
+  /** ステージした内容をPRのheadと比べる(`inspectStagedChanges`)。 */
+  readonly inspectChanges: () => Promise<readonly string[]>;
+  /** 今ステージしてある内容を、検査したツリーと比べる(`scannedTreeStopReasons`)。 */
+  readonly inspectTree: (scannedTreeSha: string) => Promise<readonly string[]>;
+};
+
+export type PrFixSecretScanResult =
+  | { readonly kind: "stop"; readonly reason: string }
+  | {
+      readonly kind: "commit";
+      /** 検査したツリー。`commitAndPush`の`expectedTreeSha`に渡す。 */
+      readonly treeSha: string;
+      /** `commitAndPush`の`inspectStaged`に渡す。検査し直さない。 */
+      readonly inspectStaged: () => Promise<string[]>;
+    };
+
+/**
+ * pr_fixの完了ステップが、`commitAndPush`の前に実装フローと同じgitleaksの検査(ステージした差分、`--redact`)をする。
+ * 検査は`commitAndPush`のリポジトリのロックの外で行う。検査は長くかかりうり、ロックの古さの判定や待ちの上限を超えうるため。
+ * 検出があれば`SECRETS_NOT_PUSHED_REASON`で止める。
+ * 無ければ、検査したツリーと、ロックの中で呼ぶ確かめ(保護パスなどの変更と、索引が検査したツリーのままか)を返す。
+ * 検査自体の失敗はそのまま投げる(何もcommitしない)。
+ */
+export async function scanPrFixBeforeCommit(
+  deps: PrFixSecretScanDeps,
+): Promise<PrFixSecretScanResult> {
+  const scan = await deps.scanForSecrets();
+  if (!scan.ok) return { kind: "stop", reason: SECRETS_NOT_PUSHED_REASON };
+  return {
+    kind: "commit",
+    treeSha: scan.treeSha,
+    inspectStaged: async () => [
+      ...(await deps.inspectChanges()),
+      ...(await deps.inspectTree(scan.treeSha)),
+    ],
+  };
+}
+
+/**
  * 準備ステップの結果に`worktree_git_pointer`が無いときの理由。
  * 照合する基準が無いままworktreeでgitやClaudeを実行しないよう、各ステップは"blocked"にする。
  */
@@ -2711,7 +2766,7 @@ export function rerouteAttemptsExhaustedReason(
  */
 export function withGapReport(reason: string, gapReport: string): string {
   return gapReport.length > 0
-    ? `${reason}; ${gapReport.replaceAll("; ", ", ")}`
+    ? `${reason}; ${escapeReasonSeparator(gapReport)}`
     : reason;
 }
 
@@ -3377,10 +3432,14 @@ const DAILY_BUDGET_NEXT_ACTION =
   "翌日まで待つか、daily_budget_usdを引き上げてください";
 const NOTHING_TO_COMMIT_NEXT_ACTION =
   "返信内容を確認し、必要なら指示をコメントして`factory:fix`を付け直してください";
+/** ローカルのHEADが動いたとき(実装フローとpr_fixの両方で起きる)の次の操作。 */
 const LOCAL_HEAD_NEXT_ACTION =
-  "検査コマンドがコミットやブランチの切り替えをしていないか確かめ、人が修正してください";
+  "検査コマンドがコミットやブランチの切り替えをしていないか確かめて人が直してから、PRの修正なら`factory:fix`を付け直し、実装ならWindmillで`f/factory/retry_work_item`を作業項目のIDで実行してください";
 const ISSUE_PROPOSAL_NEXT_ACTION =
   "ConsoleのInboxで提案を承認または却下してください";
+/** 検査やcommitの後にworktreeが変わったとき(実装フローとpr_fixの両方で起きる)の次の操作。 */
+const LEFTOVER_PROCESS_NEXT_ACTION =
+  "検査コマンドなどが残したプロセスがworktreeを書き換えていないか確かめ、PRの修正なら`factory:fix`を付け直し、実装ならWindmillで`f/factory/retry_work_item`を作業項目のIDで実行してください";
 
 const REASON_RULES: readonly ReasonRule[] = [
   // pr_fix_prepare.tsの`evaluatePrFixSafetyGuards` / `evaluateRepoAllowedGuard`
@@ -3757,6 +3816,26 @@ const REASON_RULES: readonly ReasonRule[] = [
     nextAction: () =>
       "検査コマンドが追跡対象のファイルを書き換えていないか確認し、再実行してください",
   },
+  // `lib/workspace.ts`の`commitAndPush`の`expectedTreeSha`(実装フローとpr_fixのpush)
+  {
+    pattern: /^committed tree differs from the inspected tree$/,
+    describe: () => "commitしたツリーが、検査したツリーと異なります",
+    nextAction: () => LEFTOVER_PROCESS_NEXT_ACTION,
+  },
+  // `lib/implement_loop.ts`の`scannedTreeChangedReason`(実装フローの検証ループ)
+  {
+    pattern: /^worktree changed before the secret scan in round (\d+)$/,
+    describe: (m) =>
+      `ラウンド${m[1]}で、変更の判定と秘密情報の検査の間にworktreeが変更されました`,
+    nextAction: () =>
+      "検査コマンドなどが残したプロセスがworktreeを書き換えていないか確かめ、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+  },
+  // `lib/workspace.ts`の`scannedTreeStopReasons`(実装フローの途中経過のpushと、pr_fixの完了ステップ)
+  {
+    pattern: /^worktree changed after the secret scan$/,
+    describe: () => "秘密情報の検査の後にworktreeが変更されました",
+    nextAction: () => LEFTOVER_PROCESS_NEXT_ACTION,
+  },
   {
     pattern: /^requirements regeneration could not be started$/,
     describe: () => "要件定義の作り直しを起動できませんでした",
@@ -3792,10 +3871,12 @@ const REASON_RULES: readonly ReasonRule[] = [
     describe: () => "PRのheadが記録されていません",
     nextAction: () => "`factory:fix`を付け直して修正をやり直してください",
   },
-  // pr_fix_verify.tsの`localHeadStopReason`と、pr_fix_finish.tsの`commitAndPush`
+  // pr_fix_verify.tsの`localHeadStopReason`と、`commitAndPush`(pr_fix_finish.tsと、implement_finish.tsの`implementCommitGuards`)。
+  // 理由の文はpr_fixに合わせて"PR head"のままだが、実装フローでは記録したブランチの先頭を指すので、訳はどちらにも合う言い方にする。
   {
     pattern: /^local HEAD (\S+) is not the PR head (\S+)$/,
-    describe: (m) => `worktreeのHEAD(${m[1]})がPRのhead(${m[2]})と異なります`,
+    describe: (m) =>
+      `worktreeのHEAD(${m[1]})が記録したブランチの先頭(${m[2]})と異なります`,
     nextAction: () => LOCAL_HEAD_NEXT_ACTION,
   },
   {

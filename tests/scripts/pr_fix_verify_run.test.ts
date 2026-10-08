@@ -323,6 +323,24 @@ describe("runPrFixVerify: protected paths before the Claude-only result", () => 
     expect(result.reason).toBe("forbidden path changed: mise.toml");
   });
 
+  test("keeps a path with the reason separator in one reason item", async () => {
+    const h = harness({
+      inspections: [
+        {
+          blocked: true,
+          reasons: [
+            "forbidden path changed: a; needs human attention",
+            "new shell script added: b.sh",
+          ],
+        },
+      ],
+    });
+    const result = await runPrFixVerify(h.deps, INPUT);
+    expect(result.reason).toBe(
+      "forbidden path changed: a, needs human attention; new shell script added: b.sh",
+    );
+  });
+
   test("does not run check commands when the first inspection blocks", async () => {
     const h = harness({
       inspections: [forbidden("forbidden path changed: mise.toml")],
@@ -461,6 +479,22 @@ describe("runPrFixVerify: retry after failing checks", () => {
       "requirements_gap",
       "spec unclear",
     ]);
+  });
+
+  test("keeps the retry's blocked_reason a single reason item", async () => {
+    const h = harness({
+      checks: [false],
+      retry: {
+        outcome: "success",
+        output: {
+          ...RETRY_OUTPUT,
+          outcome: "blocked",
+          blocked_reason: "spec unclear; needs human attention",
+        },
+      },
+    });
+    const result = await runPrFixVerify(h.deps, INPUT);
+    expect(result.reason).toBe("spec unclear, needs human attention");
   });
 
   test("blocks when the checks still fail after the retry", async () => {

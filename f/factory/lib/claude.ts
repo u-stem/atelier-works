@@ -10,7 +10,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defaultSqlClient, type SqlClient, sumAgentCostSince } from "./db.ts";
-import { maskSecrets } from "./log.ts";
+import { escapeReasonSeparator, maskSecrets } from "./log.ts";
 import {
   type AgentRunRecord,
   capToDeadline,
@@ -451,6 +451,15 @@ function baseAgentRunFor<T>(
   };
 }
 
+/**
+ * 失敗の詳細を、秘密をマスクし、理由の区切りを消して返す。
+ * 詳細は呼び出し側で`needs_human`や`blocked`の理由に埋め込まれ、
+ * stderr・結果の文・構造化出力はClaudeが書けるため。
+ */
+function failureDetail(text: string): string {
+  return escapeReasonSeparator(maskSecrets(text));
+}
+
 async function attemptClaude<T>(
   opts: RunClaudeOptions<T>,
   promptText: string,
@@ -469,7 +478,7 @@ async function attemptClaude<T>(
   const baseAgentRun = baseAgentRunFor(opts, commandResult.exitCode);
 
   if (commandResult.timedOut) {
-    const detail = maskSecrets(`claude -p timed out after ${timeoutMs}ms`);
+    const detail = failureDetail(`claude -p timed out after ${timeoutMs}ms`);
     return {
       outcome: "failure",
       reason: "timeout",
@@ -479,7 +488,7 @@ async function attemptClaude<T>(
   }
 
   if (commandResult.exitCode !== 0) {
-    const detail = maskSecrets(commandResult.stderr.slice(-2000));
+    const detail = failureDetail(commandResult.stderr.slice(-2000));
     return {
       outcome: "failure",
       reason: "non_zero_exit",
@@ -492,7 +501,7 @@ async function attemptClaude<T>(
   try {
     parsed = parseClaudeJson(commandResult.stdout);
   } catch (err) {
-    const detail = maskSecrets(
+    const detail = failureDetail(
       err instanceof Error ? err.message : String(err),
     );
     return {
@@ -515,7 +524,7 @@ async function attemptClaude<T>(
   };
 
   if (parsed.isError) {
-    const detail = maskSecrets(
+    const detail = failureDetail(
       `claude reported an error (subtype=${parsed.subtype}): ${parsed.resultText.slice(0, 500)}`,
     );
     return {
@@ -527,7 +536,7 @@ async function attemptClaude<T>(
   }
 
   if (!opts.isStructuredOutput(parsed.structuredOutput)) {
-    const detail = maskSecrets(
+    const detail = failureDetail(
       `structured_output does not match the expected schema: ${JSON.stringify(parsed.structuredOutput).slice(0, 500)}`,
     );
     return {

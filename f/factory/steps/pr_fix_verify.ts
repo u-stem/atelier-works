@@ -13,7 +13,7 @@ import {
 import { loadConfig } from "../lib/config.ts";
 import { addNotice, latestDraft, recordAgentRun } from "../lib/db.ts";
 import { type GhClient, getPr } from "../lib/github.ts";
-import { logger } from "../lib/log.ts";
+import { escapeReasonSeparator, logger } from "../lib/log.ts";
 import {
   lockJobIdFromEnv,
   withWorktreeProcessLock,
@@ -30,6 +30,7 @@ import {
   type CheckCommandResult,
   type CollectedComment,
   type CollectedReview,
+  claudeBlockedReason,
   type FixClaudeOutput,
   type ForbiddenChangeResult,
   inspectUncommittedChanges,
@@ -164,7 +165,10 @@ export async function runPrFixVerify(
     const headReason = await deps.checkHead(headSha, branch);
     if (headReason !== null) return headReason;
     const forbidden = await deps.inspectChanges();
-    return forbidden.blocked ? forbidden.reasons.join("; ") : null;
+    // 理由のパスはClaudeや検査コマンドが選べるので、区切りで別の理由に見えないようにする。
+    return forbidden.blocked
+      ? forbidden.reasons.map(escapeReasonSeparator).join("; ")
+      : null;
   };
 
   const firstReason = await inspect();
@@ -245,7 +249,7 @@ export async function runPrFixVerify(
   if (output.outcome !== "done") {
     return {
       outcome: output.outcome,
-      reason: output.blocked_reason,
+      reason: claudeBlockedReason(output.blocked_reason),
       summary: output.summary,
       replies: output.replies,
       commit_subject: null,

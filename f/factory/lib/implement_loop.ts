@@ -25,6 +25,7 @@ import {
   truncateCheckOutput,
   validateImplementOutput,
 } from "./implement_support.ts";
+import { escapeReasonSeparator } from "./log.ts";
 import {
   type CheckFailure,
   IMPLEMENT_SCHEMA,
@@ -41,7 +42,7 @@ import type {
 } from "./types.ts";
 import {
   type CommandRunner,
-  type GitleaksResult,
+  type GitleaksScan,
   type WorktreeFingerprint,
   WorktreeGitPointerModifiedError,
 } from "./workspace.ts";
@@ -490,6 +491,7 @@ export async function runImplementClaudeRound(
  * `decideImplementRoundExit`の終了理由(`continue`を除く)に、
  * 検証の前にループ自身が止まる理由を加えたもの。
  * ループ自身が止まる理由は、シンボリックリンク、差分の大きさ、`.git`ポインタの書き換え、
+ * 変更の判定とgitleaksの検査の間のworktreeの変化、
  * Claudeの実行失敗、ラウンドの冒頭か修正ラウンドの前にリースを失っていたこと。
  */
 export type ImplementLoopExit =
@@ -503,6 +505,7 @@ export type ImplementLoopExit =
   | "diff_too_large"
   | "symlink"
   | "git_pointer_modified"
+  | "worktree_changed"
   | "claude_error"
   | "lease_lost";
 
@@ -517,6 +520,7 @@ export const IMPLEMENT_LOOP_EXITS: readonly ImplementLoopExit[] = [
   "diff_too_large",
   "symlink",
   "git_pointer_modified",
+  "worktree_changed",
   "claude_error",
   "lease_lost",
 ];
@@ -526,6 +530,14 @@ export const GITLEAKS_TIMEOUT_MS = 5 * 60_000;
 /** 期限までに次の修正ラウンドを終える時間が残っておらず、修正をやめたときの理由を返す(describeReasonが訳す)。 */
 export function deadlineReason(round: number): string {
   return `implement flow deadline reached after round ${String(round)}`;
+}
+
+/**
+ * gitleaksが検査したツリーが、そのラウンドで指紋を取り変更を判定したツリーと違ったときの理由を返す(describeReasonが訳す)。
+ * 検証済みとして記録できるのは、判定と検査の両方を経たツリーだけなので、そのラウンドで止める。
+ */
+export function scannedTreeChangedReason(round: number): string {
+  return `worktree changed before the secret scan in round ${String(round)}`;
 }
 
 /** Claudeの実行が期限で打ち切られた(または期限後で起動しなかった)ときに、失敗の理由へ添える文字列を返す(describeReasonが訳す)。 */
@@ -600,7 +612,7 @@ export type ImplementLoopDeps = {
     changedFileCount: number,
     diffLineTotal: number,
   ) => readonly string[];
-  readonly runGitleaks: () => Promise<GitleaksResult>;
+  readonly runGitleaks: () => Promise<GitleaksScan>;
   /**
    * worktreeに`removeIgnoredFiles`を実行する。
    * `runChecks`の直前に毎回呼び、検証コマンドを実行しないときは呼ばない。
@@ -683,6 +695,8 @@ type CheckEvaluation = {
   readonly stallText: string;
   readonly skipReason: string | null;
   readonly summary: ImplementCheckSummary;
+  /** gitleaksが検査したツリーが、変更を判定したツリーと違った。このときは検証コマンドを実行しない。 */
+  readonly scannedTreeChanged: boolean;
 };
 
 function section(name: string, output: string): string {
@@ -696,6 +710,8 @@ async function evaluateChecks(
     readonly noChanges: boolean;
     readonly protectedChanged: boolean;
     readonly hasCheckCommands: boolean;
+    /** 指紋を取って変更を判定したツリー。gitleaksが検査したツリーと比べる。 */
+    readonly inspectedTreeSha: string;
   },
 ): Promise<CheckEvaluation> {
   const failures: CheckFailure[] = [];
@@ -713,6 +729,7 @@ async function evaluateChecks(
   // PR本文とDiscordに載せる、検証を実行しなかった理由。
   // 保護パスで検証を飛ばすときもgitleaksは実行しているので、その結果も理由に含める。
   let summarySkipReason: string | null = null;
+  let scannedTreeChanged = false;
   if (facts.noChanges) {
     results.push({ command: NO_CHANGES_CHECK_NAME, ok: false });
     failures.push({
@@ -732,13 +749,15 @@ async function evaluateChecks(
       failedOutputs.push(section(GITLEAKS_CHECK_NAME, gitleaks.output));
       stallParts.push(gitleaks.output);
     }
-    if (facts.protectedChanged) {
+    scannedTreeChanged = gitleaks.treeSha !== facts.inspectedTreeSha;
+    // 検査したツリーが判定したツリーと違えば、判定していないツリーで検証コマンドを動かさない。呼び出し側がラウンドを止める。
+    if (!scannedTreeChanged && facts.protectedChanged) {
       skipReason = IMPLEMENT_CHECK_SKIP_REASONS.protected_paths;
       summarySkipReason = `${skipReason}(gitleaks: ${gitleaks.ok ? "合格" : "不合格"})`;
-    } else if (!facts.hasCheckCommands) {
+    } else if (!scannedTreeChanged && !facts.hasCheckCommands) {
       skipReason = IMPLEMENT_CHECK_SKIP_REASONS.no_commands;
       summarySkipReason = skipReason;
-    } else {
+    } else if (!scannedTreeChanged) {
       await deps.removeIgnoredFiles();
       for (const result of await deps.runChecks()) {
         results.push({ command: result.command, ok: result.ok });
@@ -768,6 +787,7 @@ async function evaluateChecks(
       summarySkipReason !== null
         ? { kind: "skipped", reason: summarySkipReason }
         : { kind: "ran", results },
+    scannedTreeChanged,
   };
 }
 
@@ -976,7 +996,8 @@ export async function runImplementVerifyLoop(
       });
       return stopped({
         exit: stop.exit,
-        reason: stop.reasons.join("; "),
+        // 理由のパスはClaudeが選べるので、区切りで別の理由に見えないようにする。
+        reason: stop.reasons.map(escapeReasonSeparator).join("; "),
         protected_changes: protectedChanges,
         diff_stat: fingerprint.diffStat,
         changed_paths: changedPaths,
@@ -987,7 +1008,28 @@ export async function runImplementVerifyLoop(
       noChanges: fingerprint.diffStat.files === 0,
       protectedChanged: protectedChanges.length > 0,
       hasCheckCommands: input.hasCheckCommands,
+      inspectedTreeSha: fingerprint.treeSha,
     });
+    if (evaluation.scannedTreeChanged) {
+      const reason = scannedTreeChangedReason(round);
+      await deps.recordRound({
+        ...base,
+        outcome: "check_failed",
+        summary: produced.output.summary,
+        gap_report: null,
+        check_output: truncateCheckOutput(reason),
+        checks_skipped_reason: null,
+        protected_changes: protectedChanges,
+        diff_stat: fingerprint.diffStat,
+      });
+      return stopped({
+        exit: "worktree_changed",
+        reason,
+        protected_changes: protectedChanges,
+        diff_stat: fingerprint.diffStat,
+        changed_paths: changedPaths,
+      });
+    }
     const checkHash =
       evaluation.state === "failed" ? stallHash(evaluation.stallText) : null;
     const dailyBudgetExceeded =
