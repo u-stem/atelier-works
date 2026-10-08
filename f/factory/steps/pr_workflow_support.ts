@@ -3810,6 +3810,14 @@ const REASON_RULES: readonly ReasonRule[] = [
     nextAction: () =>
       "原因をConsoleの失敗タブかジョブのログで確かめて取り除き、Issueに`factory`ラベルを付け直してください",
   },
+  // poll_issues.tsの`claimIssueWithNotice`。トリガーラベルを外した後に取得を確認できなかった。
+  // 確認の読み取りの失敗でも、assigneeが付いていなかった場合でも、ラベルと作業項目が無い点は同じ。
+  {
+    pattern: /^claimed issue could not be confirmed$/,
+    describe: () => "Issueを取得しましたが、取得後の状態を確認できませんでした",
+    nextAction: () =>
+      "Issueのassigneeとラベルの状態を確かめ、原因を取り除いてから`factory`ラベルを付け直してください",
+  },
   {
     pattern: /^approval timed out$/,
     describe: () => "承認がタイムアウトしました",

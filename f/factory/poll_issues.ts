@@ -30,6 +30,8 @@ import {
 } from "./lib/db.ts";
 import { notifyBestEffort } from "./lib/discord.ts";
 import {
+  ClaimConfirmationError,
+  type ClaimIssueResult,
   claimIssue,
   type GhClient,
   getIssue,
@@ -502,6 +504,112 @@ export async function registerClaimedIssue(
   }
 }
 
+/**
+ * 取得でトリガーラベルが外れた後に、取得を確認できなかったときの`reason`。
+ * 確認の読み取りの失敗と、確認でassigneeが付いていなかった場合の両方に使う。
+ * `describeReason`と`nextActionFor`が通知の文にする。
+ */
+const CLAIM_UNCONFIRMED_REASON = "claimed issue could not be confirmed";
+
+export type ClaimNoticeDeps = {
+  readonly claimIssue: typeof claimIssue;
+  readonly addNotice: typeof addNotice;
+  readonly notifyBestEffort: typeof notifyBestEffort;
+};
+
+const defaultClaimNoticeDeps: ClaimNoticeDeps = {
+  claimIssue,
+  addNotice,
+  notifyBestEffort,
+};
+
+/**
+ * Issueを取得し、取得できたかを返す(取得できなければfalse)。
+ * トリガーラベルを外した後に取得を確認できなかったときは、人の対応待ちの通知
+ * (Issueへのリンクと次の操作つき)を送る。確認の読み取りが失敗した場合は、
+ * 通知してから元の例外を投げ、呼び出し元が`job_failures`に記録する。
+ * ラベルが外れ、作業項目も無いので、次のポーリングはこのIssueを拾わない。
+ * 通知が無いと、人は失敗タブを見に行かない限り気づけない。
+ * ラベルが残っている間の失敗は、次のポーリングが拾い直すので通知しない。
+ * 通知はベストエフォートで、失敗しても元の例外を隠さない。
+ */
+export async function claimIssueWithNotice(
+  input: {
+    readonly client: GhClient;
+    readonly candidate: IssueCandidate;
+    readonly viewerLogin: string;
+    readonly triggerLabel: string;
+    readonly instanceName: string;
+    readonly discordWebhookUrl: string;
+    readonly log: Logger;
+  },
+  deps: ClaimNoticeDeps = defaultClaimNoticeDeps,
+): Promise<boolean> {
+  const { candidate } = input;
+  const notifyUnconfirmed = () =>
+    deps.notifyBestEffort(
+      input.discordWebhookUrl,
+      {
+        kind: "needs_human",
+        instance_name: input.instanceName,
+        owner: candidate.owner,
+        repo: candidate.repo,
+        url: candidate.htmlUrl,
+        reason: describeReason(CLAIM_UNCONFIRMED_REASON),
+        target: { kind: "issue", number: candidate.number },
+        next_action: nextActionFor(CLAIM_UNCONFIRMED_REASON),
+      },
+      input.log,
+    );
+
+  let claimResult: ClaimIssueResult;
+  try {
+    claimResult = await deps.claimIssue(
+      input.client,
+      candidate.owner,
+      candidate.repo,
+      candidate.number,
+      { triggerLabel: input.triggerLabel, assignee: input.viewerLogin },
+    );
+  } catch (err) {
+    if (err instanceof ClaimConfirmationError) await notifyUnconfirmed();
+    throw err;
+  }
+  if (claimResult.claimed) return true;
+
+  await deps.addNotice({
+    kind: "claim_race_lost",
+    message: `${candidate.owner}/${candidate.repo}#${candidate.number}: ${claimResult.reason}`,
+  });
+  if (claimResult.labelConsumed) await notifyUnconfirmed();
+  return false;
+}
+
+export type LabelerDeniedDeps = {
+  readonly addNoticeUnlessUnresolved: typeof addNoticeUnlessUnresolved;
+};
+
+const defaultLabelerDeniedDeps: LabelerDeniedDeps = {
+  addNoticeUnlessUnresolved,
+};
+
+/**
+ * 関係の検査で見送ったIssueのnoticeを残す。
+ * 見送りではラベルを外さないので、ラベルが付いている間はポーリングのたびに
+ * 同じ状況になる。本文は対象と関係だけで決まり、時刻などの揺れる値を含まないため、
+ * 同じ本文の未解決のnoticeがあれば登録しない。
+ */
+export async function recordLabelerAssociationDenied(
+  candidate: IssueCandidate,
+  association: string | null,
+  deps: LabelerDeniedDeps = defaultLabelerDeniedDeps,
+): Promise<void> {
+  await deps.addNoticeUnlessUnresolved({
+    kind: "labeler_association_denied",
+    message: `${candidate.owner}/${candidate.repo}#${candidate.number}: 直近のラベル付与者のassociation "${association ?? "unknown"}" はallowed_labeler_associationsに含まれていません`,
+  });
+}
+
 async function claimAndStart(
   client: GhClient,
   candidate: IssueCandidate,
@@ -510,20 +618,16 @@ async function claimAndStart(
   discordWebhookUrl: string,
   log: Logger,
 ): Promise<"claimed" | "skipped"> {
-  const claimResult = await claimIssue(
+  const claimed = await claimIssueWithNotice({
     client,
-    candidate.owner,
-    candidate.repo,
-    candidate.number,
-    { triggerLabel: config.trigger_label, assignee: viewerLogin },
-  );
-  if (!claimResult.claimed) {
-    await addNotice({
-      kind: "claim_race_lost",
-      message: `${candidate.owner}/${candidate.repo}#${candidate.number}: ${claimResult.reason}`,
-    });
-    return "skipped";
-  }
+    candidate,
+    viewerLogin,
+    triggerLabel: config.trigger_label,
+    instanceName: config.instance_name,
+    discordWebhookUrl,
+    log,
+  });
+  if (!claimed) return "skipped";
 
   const workItemId = await registerClaimedIssue({
     candidate,
@@ -698,10 +802,7 @@ export async function main(): Promise<{
     }
     if (decision.action === "skip_association") {
       skipped += 1;
-      await addNotice({
-        kind: "labeler_association_denied",
-        message: `${candidate.owner}/${candidate.repo}#${candidate.number}: 直近のラベル付与者のassociation "${decision.association ?? "unknown"}" はallowed_labeler_associationsに含まれていません`,
-      });
+      await recordLabelerAssociationDenied(candidate, decision.association);
       continue;
     }
     try {

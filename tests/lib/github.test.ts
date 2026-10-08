@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   addLabels,
+  ClaimConfirmationError,
   claimIssue,
   commentIssue,
   createIssue,
@@ -1092,6 +1093,102 @@ describe("claimIssue", () => {
       },
     );
     expect(result.claimed).toBe(false);
+  });
+
+  test("reports the trigger label as consumed when the assignment did not stick", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(200, {})),
+      ok(ghApiStdout(200, {})),
+      ghApiOk({
+        number: 5,
+        title: "t",
+        body: "b",
+        html_url: "https://x/5",
+        state: "open",
+        user: { login: "alice" },
+        labels: [],
+        assignees: [],
+      }),
+    ]);
+    const result = await claimIssue(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      5,
+      { triggerLabel: "factory", assignee: "factory-bot" },
+    );
+    expect(result).toMatchObject({ claimed: false, labelConsumed: true });
+  });
+
+  test("reports the trigger label as not consumed when it is still present", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(200, {})),
+      ok(ghApiStdout(200, {})),
+      ghApiOk({
+        number: 5,
+        title: "t",
+        body: "b",
+        html_url: "https://x/5",
+        state: "open",
+        user: { login: "alice" },
+        labels: ["factory"],
+        assignees: [{ login: "factory-bot" }],
+      }),
+    ]);
+    const result = await claimIssue(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      5,
+      { triggerLabel: "factory", assignee: "factory-bot" },
+    );
+    expect(result).toMatchObject({ claimed: false, labelConsumed: false });
+  });
+
+  test("throws a ClaimConfirmationError when the confirmation read fails after the label was removed", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(200, {})),
+      ok(ghApiStdout(200, {})),
+      ok(ghApiStdout(500, { message: "boom" })),
+    ]);
+    const claiming = claimIssue(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      5,
+      { triggerLabel: "factory", assignee: "factory-bot" },
+    );
+    await expect(claiming).rejects.toBeInstanceOf(ClaimConfirmationError);
+  });
+
+  test("keeps the original failure in the ClaimConfirmationError message", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(200, {})),
+      ok(ghApiStdout(200, {})),
+      ok(ghApiStdout(500, { message: "boom" })),
+    ]);
+    const claiming = claimIssue(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      5,
+      { triggerLabel: "factory", assignee: "factory-bot" },
+    );
+    await expect(claiming).rejects.toThrow(/HTTP 500/);
+  });
+
+  test("does not wrap a failure that happens before the label is removed", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(500, { message: "boom" })),
+    ]);
+    const claiming = claimIssue(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      5,
+      { triggerLabel: "factory", assignee: "factory-bot" },
+    ).catch((err: unknown) => err);
+    expect(await claiming).not.toBeInstanceOf(ClaimConfirmationError);
   });
 
   test("rejects an assignee that isn't a valid GitHub name before making any call", async () => {

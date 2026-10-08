@@ -949,7 +949,30 @@ export type ClaimIssueOptions = {
 
 export type ClaimIssueResult =
   | { readonly claimed: true }
-  | { readonly claimed: false; readonly reason: string };
+  | {
+      readonly claimed: false;
+      readonly reason: string;
+      /**
+       * 取得の確認の時点で、トリガーラベルが外れていたか。
+       * trueのときは次のポーリングがこのIssueを拾わないので、
+       * 呼び出し元が人へ知らせないと、止まったことに誰も気づけない。
+       */
+      readonly labelConsumed: boolean;
+    };
+
+/**
+ * `claimIssue`が、トリガーラベルを外した後の確認の読み取りに失敗したときの例外。
+ * この時点でラベルは外れているので、Issueは「ラベルなし・作業項目なし」になる。
+ * ラベルを外す前の失敗(assigneeの追加やラベルの削除)はこの例外にせず、
+ * 元の例外のまま投げる。その場合はラベルが残り、次のポーリングが拾い直す。
+ * `message`は元の失敗の文を含み、元の例外は`cause`に残る。
+ */
+export class ClaimConfirmationError extends Error {
+  constructor(message: string, options?: { readonly cause?: unknown }) {
+    super(message, options);
+    this.name = "ClaimConfirmationError";
+  }
+}
 
 /**
  * Issueを取得宣言する。`assignee`をassignし、続けて`triggerLabel`を外す。
@@ -957,6 +980,7 @@ export type ClaimIssueResult =
  * 状態は`work_items.status`にだけ持つ。
  * 最後にIssueを再取得して両方が反映されたかを確かめ、別のFactoryの
  * インスタンスが先に取得した競合を検出する。
+ * 再取得の読み取りが失敗したときは`ClaimConfirmationError`を投げる。
  *
  * これはベストエフォートである。assigneeの追加は上書きではなく追加で、
  * ラベルを外すときの404も許すため、同時に取得した2つのインスタンスが
@@ -988,17 +1012,29 @@ export async function claimIssue(
 
   await removeLabel(client, owner, repo, number, opts.triggerLabel);
 
-  const confirmed = await getIssue(client, owner, repo, number);
+  let confirmed: Issue;
+  try {
+    confirmed = await getIssue(client, owner, repo, number);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new ClaimConfirmationError(
+      `claim confirmation failed for ${owner}/${repo}#${number}: ${detail}`,
+      { cause: err },
+    );
+  }
+  const labelConsumed = !confirmed.labels.includes(opts.triggerLabel);
   if (!confirmed.assignees.includes(opts.assignee)) {
     return {
       claimed: false,
       reason: `assignee ${opts.assignee} missing after claim`,
+      labelConsumed,
     };
   }
-  if (confirmed.labels.includes(opts.triggerLabel)) {
+  if (!labelConsumed) {
     return {
       claimed: false,
       reason: `trigger label ${opts.triggerLabel} still present after claim`,
+      labelConsumed,
     };
   }
   return { claimed: true };

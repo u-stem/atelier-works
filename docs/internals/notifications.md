@@ -38,7 +38,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | --- | --- |
 | `pipeline_generate` | 日次の予算を超えていたので、要件定義の生成を始めなかった |
 | `requirements_apply` | 試行回数の上限まで却下された。承認の後に実装フローを起動できなかった |
-| `poll_issues` | 承認依頼が期限切れになった(理由は`approval timed out`)。Issueを取得した後に作業項目を登録できなかった(理由は`claimed issue could not be registered`) |
+| `poll_issues` | 承認依頼が期限切れになった(理由は`approval timed out`)。Issueを取得した後に作業項目を登録できなかった(理由は`claimed issue could not be registered`)。トリガーラベルを外した後に取得を確認できなかった(理由は`claimed issue could not be confirmed`) |
 | `implement_finish` | 実装フローが人の対応待ちで止まった |
 | `pr_review_generate` | レビューの生成を止めた |
 | `pr_fix_finish` | 修正が人の対応待ちで止まった。Issue化の提案がある |
@@ -197,6 +197,7 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 
 `fix_reply_post_failed`は、返信の投稿に1件以上失敗したとき1件だけ残す。Discordには通知しない。`unsandboxed_check_commands`は、検査コマンドを実行するたびに残す。
 `cleanup_worktree_busy`は、1回の掃除でworktreeのパスごとに1件残す。Discordには通知しない。
+`labeler_association_denied`は、同じ本文の未解決のnoticeがあるあいだは追加しない。ラベルが付いている間、ポーリングのたびに積み上がるのを防ぐためである。
 `deployed_sha_mismatch`は、self cloneのHEADとデプロイ版が同じ組で、未解決のnoticeがあるあいだは追加しない。
 `poll_issues`が実行されるたびに同じnoticeが積み上がり、ほかの種類が埋もれるためである。
 版の組が変わったときと、既存のnoticeを解決した後に再び食い違ったときは、1件残す。
