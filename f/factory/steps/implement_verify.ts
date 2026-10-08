@@ -33,6 +33,10 @@ import {
   runImplementVerifyLoop,
   withReadOnlyDocDirCopy,
 } from "../lib/implement_loop.ts";
+import {
+  fixRoundWorstCaseSec,
+  requireDeadlineAt,
+} from "../lib/implement_support.ts";
 import { logger } from "../lib/log.ts";
 import {
   withWorktreeProcessLock,
@@ -98,6 +102,8 @@ async function inspectChanges(
  * そのうえで、symlink・`package.json`のscripts・差分サイズの上限・gitleaks・
  * 対象リポジトリの検査コマンドで検査する。
  * 検査コマンドはignoredファイルを消してから実行する。
+ * 検査コマンドは`implement_check_timeout_sec`で打ち切り、期限では切らない。
+ * 期限は、修正ラウンドを始めるかどうか(最悪の所要時間が残っているか)とClaude実行の頭打ちに使う。
  * 失敗すれば、リースを確かめてから(失っていれば止める)`implementFixPrompt`で修正ラウンドを走らせる。
  * リースの値は、フローのルートジョブID(`implementLeaseJobId`)。
  * 修正ラウンドごとに`doc_dir`の読み取り専用コピーを新しく作り、
@@ -116,6 +122,11 @@ export async function main(
       `implement_verify: unexpected round kind "${String(first_round.kind)}"`,
     );
   }
+  // generateがリースを失っていたらループは何もせずに止まるので、期限は検証しない。
+  const deadlineAt =
+    first_round.kind === "lease_lost"
+      ? 0
+      : requireDeadlineAt(context.deadline_at, Date.now());
   const log = logger("implement_verify");
   // buildSystemPromptの前に取る。投げた場合にsystemPromptの後始末を飛ばさないため。
   const leaseJobId = implementLeaseJobId(process.env);
@@ -189,7 +200,7 @@ export async function main(
             lockedRun,
             worktreeDir,
             commands,
-            config.implement_timeout_sec * 1000,
+            config.implement_check_timeout_sec * 1000,
           ),
         runFixRound: (request) =>
           withReadOnlyDocDirCopy(context.requirements_doc_dir, (docDir) =>
@@ -214,6 +225,7 @@ export async function main(
                 worktreeDir,
                 docDir,
                 oauthToken,
+                deadlineAt,
               },
             ),
           ),
@@ -224,6 +236,7 @@ export async function main(
           (await dailyBudgetStatus(config)).exceeded,
         holdsLease: () =>
           stillHoldsImplementLease(() => getWorkItem(work_item_id), leaseJobId),
+        now: Date.now,
         log: (message, fields) => log.info(message, fields),
       },
       {
@@ -232,6 +245,9 @@ export async function main(
         maxRounds: config.implement_max_rounds,
         hasCheckCommands: commands.length > 0,
         firstRound: first_round,
+        deadlineAt,
+        fixRoundRequiredMs:
+          fixRoundWorstCaseSec(config, commands.length) * 1000,
       },
     );
   } finally {

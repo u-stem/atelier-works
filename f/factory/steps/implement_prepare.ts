@@ -8,7 +8,11 @@
 import * as wmill from "windmill-client@1.817.0";
 import { buildConsoleUrl } from "../lib/approval_support.ts";
 import { dailyBudgetStatus } from "../lib/claude.ts";
-import { isRepoAllowed, loadConfig } from "../lib/config.ts";
+import {
+  implementCheckCommandsFor,
+  isRepoAllowed,
+  loadConfig,
+} from "../lib/config.ts";
 import {
   acquireImplementLease,
   getRequirementDraft,
@@ -41,6 +45,8 @@ import {
   ACTIVE_PR_RUN_REASON,
   ActivePrRunError,
   buildImplementBranchName,
+  implementDeadlineAt,
+  implementTimeoutMisfit,
   isRequirementsApprovedForAttempt,
 } from "../lib/implement_support.ts";
 import { logger } from "../lib/log.ts";
@@ -109,7 +115,12 @@ export type BuildImplementContextInput = {
   /** worktreeの用意ができた時点での`readWorktreeGitPointer(worktreeDir).content`。 */
   readonly worktreeGitPointer: string;
   readonly existingPr: PullRequestRef | null;
-  readonly config: Pick<FactoryConfig, "windmill_public_url" | "factory_repo">;
+  /** mainが始まった時刻(epoch ms)。フロー全体の期限の起点。 */
+  readonly startedAt: number;
+  readonly config: Pick<
+    FactoryConfig,
+    "windmill_public_url" | "factory_repo" | "implement_flow_timeout_sec"
+  >;
 };
 
 /**
@@ -160,6 +171,10 @@ export function buildImplementContext(
       workItem.repo,
     ),
     worktree_git_pointer: input.worktreeGitPointer,
+    deadline_at: implementDeadlineAt(
+      input.startedAt,
+      input.config.implement_flow_timeout_sec,
+    ),
   };
 }
 
@@ -171,7 +186,8 @@ function stop(
 }
 
 /**
- * 承認時の前提(作業項目の状態、日次予算、リポジトリの許可、Issueがopenか、
+ * 承認時の前提(作業項目の状態、日次予算、リポジトリの許可、
+ * 時間設定がflow.yamlのstep timeoutに収まるか、Issueがopenか、
  * 作業項目のattemptに承認済みの要件定義があるか、
  * ブランチのPR(閉じたものを含む)で終端でないpr_fix / pr_reviewが無いか)を確かめ直す。
  * 満たさなければ`outcome`と理由を返し、状態の遷移は`implement_finish`に任せる。
@@ -194,6 +210,7 @@ function stop(
 export async function main(
   work_item_id: number,
 ): Promise<ImplementPrepareResult> {
+  const startedAt = Date.now();
   const workItem = await getWorkItem(work_item_id);
   if (workItem === null)
     throw new Error(
@@ -242,6 +259,13 @@ export async function main(
     isRepoAllowed(config, workItem.owner, workItem.repo),
   );
   if (!repoGuard.ok) return stop("needs_human", repoGuard.reason);
+  // 時間設定がflow.yamlのstep timeoutに収まらなければ、Windmillがアプリ側の期限より先にステップを打ち切りうるので始めない。
+  // 設定全体ではなく実装フローの入口で確かめるのは、検査コマンド数がリポジトリごとに違い、他のスクリプトを止めないためである。
+  const misfit = implementTimeoutMisfit(
+    config,
+    implementCheckCommandsFor(config, workItem.owner, workItem.repo).length,
+  );
+  if (misfit !== null) return stop("needs_human", misfit);
 
   const ghToken = await wmill.getVariable("f/factory/github_token");
   const client: GhClient = { run: runCommand, ghToken };
@@ -422,6 +446,7 @@ export async function main(
       expectedHeadSha,
       worktreeGitPointer,
       existingPr,
+      startedAt,
       config,
     }),
   };

@@ -199,7 +199,7 @@ type PrAttempt =
  *   `pr_fix_finish`の差し戻しと同じく、`runFlowAsync`より先に状態を更新する。
  *   その後の`runFlowAsync`(戻り値がジョブIDでないときを含む)か`setFlowJobId`が失敗したら、
  *   `requirements_generating`からneeds_humanに移し、noticeにギャップの報告を載せる。
- * - needs_human: max_rounds / daily_budget / stalled / diff_too_largeで止まったとき、
+ * - needs_human: max_rounds / daily_budget / deadline / stalled / diff_too_largeで止まったとき、
  *   PRが無く、worktreeの`.git`ポインタが変わっておらず、gitleaksを通れば、
  *   ブランチを確認できるように今ある作業をpushする(`preserveWork`)。
  *   PRがあるときは作業をworktreeに残し、その旨を注記する。

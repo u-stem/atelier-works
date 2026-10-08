@@ -38,9 +38,11 @@ const INPUT: BuildImplementContextInput = {
   worktreeGitPointer:
     "gitdir: /workspaces/acme/widgets/main/.git/worktrees/factory-issue-7-wi-3\n",
   existingPr: null,
+  startedAt: 1_000,
   config: {
     windmill_public_url: "http://127.0.0.1:8080",
     factory_repo: "https://github.com/acme/atelier-works",
+    implement_flow_timeout_sec: 14_400,
   },
 };
 
@@ -90,6 +92,10 @@ describe("buildImplementContext", () => {
     expect(buildImplementContext(INPUT).requirements_console_url).toBe(
       "http://127.0.0.1:8080/apps/get/f/factory/factory_console#requirements/3",
     );
+  });
+
+  test("sets the flow deadline from the start time", () => {
+    expect(buildImplementContext(INPUT).deadline_at).toBe(14_401_000);
   });
 
   test("marks a repo that is not the factory repo", () => {

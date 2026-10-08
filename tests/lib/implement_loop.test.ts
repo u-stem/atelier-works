@@ -18,6 +18,7 @@ import {
   type ChangeInspection,
   type DocDirCopyDeps,
   type DocEntryFs,
+  deadlinePassedReason,
   defaultDocDirCopyDeps,
   type FixRoundRequest,
   GITLEAKS_CHECK_NAME,
@@ -99,6 +100,7 @@ const CONTEXT: ImplementContext = {
   is_factory_repo: false,
   worktree_git_pointer:
     "gitdir: /workspaces/acme/widgets/main/.git/worktrees/factory-issue-7-wi-3\n",
+  deadline_at: 1_900_000_000_000,
 };
 const AGENT_RUN: AgentRunRecord = {
   work_item_id: 3,
@@ -167,6 +169,7 @@ const RUN_INPUT: ImplementClaudeRunInput = {
   worktreeDir: CONTEXT.worktree_dir,
   docDir: "/tmp/copy/requirements",
   oauthToken: "token",
+  deadlineAt: 1_900_000_000_000,
 };
 
 describe("implementPromptInput", () => {
@@ -424,6 +427,12 @@ describe("toImplementClaudeRound", () => {
 });
 
 describe("buildImplementClaudeOptions", () => {
+  test("passes the flow deadline to runClaude", () => {
+    expect(buildImplementClaudeOptions(RUN_INPUT).deadlineAt).toBe(
+      1_900_000_000_000,
+    );
+  });
+
   test("gives Claude no Bash", () => {
     expect(buildImplementClaudeOptions(RUN_INPUT).tools).toEqual([
       "Read",
@@ -564,6 +573,13 @@ const FAILED: ImplementClaudeRound = {
   agent_run_id: 9,
   cost_usd: 0,
 };
+const FAILED_EXIT: ImplementClaudeRound = {
+  kind: "claude_failed",
+  reason: "non_zero_exit",
+  detail: "exit 1",
+  agent_run_id: 9,
+  cost_usd: 0,
+};
 
 function outputRound(
   output: ImplementClaudeOutput = DONE,
@@ -590,6 +606,8 @@ type HarnessOptions = {
   readonly leaseLostFrom?: number;
   /** `assertGitPointer`が、0始まりで`from`回目以降の呼び出しで投げる例外。 */
   readonly pointerError?: { readonly from: number; readonly error: Error };
+  /** `now`が返す時刻(epoch ms)。既定は0。 */
+  readonly now?: number;
 };
 
 type Harness = {
@@ -652,6 +670,7 @@ function harness(options: HarnessOptions = {}): Harness {
         options.leaseLostFrom === undefined || index < options.leaseLostFrom
       );
     },
+    now: () => options.now ?? 0,
     log: () => {},
   };
   return { deps, recorded, fixRequests, calls, events };
@@ -667,6 +686,8 @@ function loopInput(
     maxRounds: 5,
     hasCheckCommands: true,
     firstRound,
+    deadlineAt: Number.MAX_SAFE_INTEGER,
+    fixRoundRequiredMs: 7_860_000,
     ...overrides,
   };
 }
@@ -1181,6 +1202,104 @@ describe("runImplementVerifyLoop", () => {
   test("counts no Claude run when generate lost the lease", async () => {
     const h = harness();
     expect((await run(h, loopInput(LEASE_LOST_ROUND))).rounds).toBe(0);
+  });
+
+  test("exits deadline when the time left is under the worst-case fix round", async () => {
+    const h = harness({ checks: [[FAIL]] });
+    expect(
+      (await run(h, loopInput(outputRound(), { deadlineAt: 7_859_999 }))).exit,
+    ).toBe("deadline");
+  });
+
+  test("starts a fix round when the time left covers the worst-case fix round", async () => {
+    const h = harness({ checks: [[FAIL], [PASS]], fingerprints: [FP_1, FP_2] });
+    await run(h, loopInput(outputRound(), { deadlineAt: 7_860_000 }));
+    expect(h.fixRequests).toHaveLength(1);
+  });
+
+  test("measures the time left from now", async () => {
+    const h = harness({ checks: [[FAIL]], now: 1 });
+    expect(
+      (await run(h, loopInput(outputRound(), { deadlineAt: 7_860_000 }))).exit,
+    ).toBe("deadline");
+  });
+
+  test("gives the deadline exit an English reason describeReason knows", async () => {
+    const h = harness({ checks: [[FAIL]] });
+    expect(
+      (await run(h, loopInput(outputRound(), { deadlineAt: 0 }))).reason,
+    ).toBe("implement flow deadline reached after round 1");
+  });
+
+  test("does not start a fix round at the deadline", async () => {
+    const h = harness({ checks: [[FAIL]] });
+    await run(h, loopInput(outputRound(), { deadlineAt: 0 }));
+    expect(h.fixRequests).toHaveLength(0);
+  });
+
+  test("records the round stopped by the deadline as check_failed", async () => {
+    const h = harness({ checks: [[FAIL]] });
+    await run(h, loopInput(outputRound(), { deadlineAt: 0 }));
+    expect(h.recorded[0]?.outcome).toBe("check_failed");
+  });
+
+  test("still runs the check commands past the deadline", async () => {
+    const h = harness({ checks: [[FAIL]] });
+    await run(h, loopInput(outputRound(), { deadlineAt: 0 }));
+    expect(h.calls.checks).toBe(1);
+  });
+
+  test("still opens a PR when the checks pass past the deadline", async () => {
+    expect(
+      (await run(harness(), loopInput(outputRound(), { deadlineAt: 0 }))).exit,
+    ).toBe("checks_passed");
+  });
+
+  test("keeps claude_error for a Claude run cut by the deadline", async () => {
+    expect(
+      (await run(harness(), loopInput(FAILED, { deadlineAt: 0 }))).exit,
+    ).toBe("claude_error");
+  });
+
+  test("notes the deadline on a Claude timeout past it", async () => {
+    expect(
+      (await run(harness(), loopInput(FAILED, { deadlineAt: 0 }))).reason,
+    ).toBe(
+      `claude run failed (timeout): timed out; ${deadlinePassedReason(1)}`,
+    );
+  });
+
+  test("leaves a Claude timeout before the deadline as it was", async () => {
+    expect((await run(harness(), loopInput(FAILED))).reason).toBe(
+      "claude run failed (timeout): timed out",
+    );
+  });
+
+  test("does not blame the deadline for a Claude failure other than a timeout", async () => {
+    expect(
+      (await run(harness(), loopInput(FAILED_EXIT, { deadlineAt: 0 }))).reason,
+    ).toBe("claude run failed (non_zero_exit): exit 1");
+  });
+
+  test("prefers the round-start lease check over the deadline", async () => {
+    const h = harness({ checks: [[FAIL]], leaseLostFrom: 0 });
+    expect(
+      (await run(h, loopInput(outputRound(), { deadlineAt: 0 }))).exit,
+    ).toBe("lease_lost");
+  });
+
+  test("decides the deadline before the lease check ahead of a fix round", async () => {
+    const h = harness({ checks: [[FAIL]], leaseLostFrom: 1 });
+    expect(
+      (await run(h, loopInput(outputRound(), { deadlineAt: 0 }))).exit,
+    ).toBe("deadline");
+  });
+
+  test("stops a lease-lost first round without looking at the deadline", async () => {
+    expect(
+      (await run(harness(), loopInput(LEASE_LOST_ROUND, { deadlineAt: 0 })))
+        .exit,
+    ).toBe("lease_lost");
   });
 });
 

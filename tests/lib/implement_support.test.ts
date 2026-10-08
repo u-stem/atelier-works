@@ -6,26 +6,33 @@ import {
   buildImplementBranchName,
   buildImplementCommitMessage,
   buildImplementPrBody,
+  CHECK_COMMAND_STOP_OVERHEAD_SEC,
   CHECK_OUTPUT_MAX_BYTES,
   classifyDeployNeeds,
   classifyProtectedChanges,
   decideImplementRoundExit,
   extractAcceptanceCriteria,
+  fixRoundWorstCaseSec,
   IMPLEMENT_CHECK_SKIP_REASONS,
   IMPLEMENT_CLAUDE_OUTCOMES,
+  IMPLEMENT_STEP_TIMEOUT_SEC,
   ISSUE_UPDATED_AFTER_INTAKE_NOTE,
+  implementDeadlineAt,
+  implementTimeoutMisfit,
   isImplementClaudeOutput,
   isRequirementsApprovedForAttempt,
   issueChangedSinceIntake,
   NO_ACCEPTANCE_CRITERIA_NOTE,
   neutralizeIssueRefs,
   parseImplementBranchWorkItemId,
+  requireDeadlineAt,
   roundOutcomeForExit,
   stallHash,
   truncateCheckOutput,
   validateImplementOutput,
 } from "../../f/factory/lib/implement_support.ts";
 import { IMPLEMENT_SCHEMA } from "../../f/factory/lib/prompts.ts";
+import { RUNNER_MAX_STOP_OVERHEAD_MS } from "../../f/factory/lib/workspace.ts";
 import { extractLinkedIssueNumbers } from "../../f/factory/steps/pr_workflow_support.ts";
 
 const DONE_OUTPUT: ImplementClaudeOutput = {
@@ -823,6 +830,7 @@ const CONTINUE_STATE = {
   round: 1,
   maxRounds: 5,
   dailyBudgetExceeded: false,
+  deadlineReached: false,
   checkOutputHash: "h1",
   previousCheckOutputHash: null,
   diffHash: "d1",
@@ -905,6 +913,42 @@ describe("decideImplementRoundExit", () => {
       }),
     ).toBe("max_rounds");
   });
+
+  test("exits with deadline when no time is left for a fix round", () => {
+    expect(
+      decideImplementRoundExit({ ...CONTINUE_STATE, deadlineReached: true }),
+    ).toBe("deadline");
+  });
+
+  test("prefers daily_budget over deadline", () => {
+    expect(
+      decideImplementRoundExit({
+        ...CONTINUE_STATE,
+        dailyBudgetExceeded: true,
+        deadlineReached: true,
+      }),
+    ).toBe("daily_budget");
+  });
+
+  test("prefers deadline over stalled", () => {
+    expect(
+      decideImplementRoundExit({
+        ...CONTINUE_STATE,
+        previousDiffHash: "d1",
+        deadlineReached: true,
+      }),
+    ).toBe("deadline");
+  });
+
+  test("prefers checks_passed over deadline", () => {
+    expect(
+      decideImplementRoundExit({
+        ...CONTINUE_STATE,
+        checks: "passed",
+        deadlineReached: true,
+      }),
+    ).toBe("checks_passed");
+  });
 });
 
 describe("stallHash", () => {
@@ -942,6 +986,10 @@ describe("roundOutcomeForExit", () => {
 
   test("maps continue to check_failed", () => {
     expect(roundOutcomeForExit("continue")).toBe("check_failed");
+  });
+
+  test("maps deadline to check_failed", () => {
+    expect(roundOutcomeForExit("deadline")).toBe("check_failed");
   });
 });
 
@@ -1067,6 +1115,94 @@ describe("ISSUE_UPDATED_AFTER_INTAKE_NOTE", () => {
   test("is one polite sentence", () => {
     expect(ISSUE_UPDATED_AFTER_INTAKE_NOTE).toBe(
       "この実装は要件定義を作ったときのIssueの内容に基づいており、その後にIssueの題名か本文が更新されています。",
+    );
+  });
+});
+
+const TIME_SETTINGS = {
+  implement_flow_timeout_sec: 14_400,
+  implement_timeout_sec: 3_600,
+  implement_check_timeout_sec: 900,
+};
+
+describe("implementDeadlineAt", () => {
+  test("adds the flow timeout to the start time", () => {
+    expect(implementDeadlineAt(1_000, 14_400)).toBe(14_401_000);
+  });
+});
+
+describe("requireDeadlineAt", () => {
+  const NOW_MS = 1_000_000;
+  const LIMIT_MS = IMPLEMENT_STEP_TIMEOUT_SEC * 1000;
+
+  test("returns a finite deadline", () => {
+    expect(requireDeadlineAt(NOW_MS + 1_000, NOW_MS)).toBe(NOW_MS + 1_000);
+  });
+
+  test("accepts a deadline exactly at the step timeout limit", () => {
+    expect(requireDeadlineAt(NOW_MS + LIMIT_MS, NOW_MS)).toBe(
+      NOW_MS + LIMIT_MS,
+    );
+  });
+
+  test("throws for a deadline beyond the step timeout limit", () => {
+    expect(() => requireDeadlineAt(NOW_MS + LIMIT_MS + 1, NOW_MS)).toThrow();
+  });
+
+  test("throws for a missing deadline", () => {
+    expect(() => requireDeadlineAt(undefined, NOW_MS)).toThrow();
+  });
+
+  test("throws for NaN", () => {
+    expect(() => requireDeadlineAt(Number.NaN, NOW_MS)).toThrow();
+  });
+
+  test("throws for Infinity", () => {
+    expect(() => requireDeadlineAt(Number.POSITIVE_INFINITY, NOW_MS)).toThrow();
+  });
+});
+
+describe("fixRoundWorstCaseSec", () => {
+  test("adds Claude, the base overrun and every check command run to its timeout", () => {
+    expect(fixRoundWorstCaseSec(TIME_SETTINGS, 4)).toBe(7_860);
+  });
+
+  test("leaves Claude and the base overrun without check commands", () => {
+    expect(fixRoundWorstCaseSec(TIME_SETTINGS, 0)).toBe(4_200);
+  });
+});
+
+describe("implementTimeoutMisfit", () => {
+  test("accepts the defaults with seven check commands", () => {
+    expect(implementTimeoutMisfit(TIME_SETTINGS, 7)).toBeNull();
+  });
+
+  test("rejects eight check commands with the defaults", () => {
+    expect(implementTimeoutMisfit(TIME_SETTINGS, 8)).toBe(
+      "implement time settings do not fit the flow step timeout: implement_flow_timeout_sec 14400 + 600 + 8 check commands x (implement_check_timeout_sec 900 + 15) = 22320s exceeds 21600s",
+    );
+  });
+
+  test("rejects a Claude timeout that cannot fit in the step", () => {
+    expect(
+      implementTimeoutMisfit(
+        { ...TIME_SETTINGS, implement_timeout_sec: 21_001 },
+        0,
+      ),
+    ).toBe(
+      "implement time settings do not fit the flow step timeout: implement_timeout_sec 21001 + 600 = 21601s exceeds 21600s",
+    );
+  });
+
+  test("does not contain the separator describeReason splits on", () => {
+    expect(implementTimeoutMisfit(TIME_SETTINGS, 8)).not.toContain("; ");
+  });
+});
+
+describe("CHECK_COMMAND_STOP_OVERHEAD_SEC", () => {
+  test("covers the runner's worst stop overhead", () => {
+    expect(CHECK_COMMAND_STOP_OVERHEAD_SEC * 1000).toBeGreaterThanOrEqual(
+      RUNNER_MAX_STOP_OVERHEAD_MS,
     );
   });
 });

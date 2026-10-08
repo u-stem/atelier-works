@@ -37,6 +37,8 @@ declare namespace RT {
     implement_max_turns: number,
     implement_max_budget_usd_per_run: number,
     implement_timeout_sec: number,
+    implement_check_timeout_sec: number,
+    implement_flow_timeout_sec: number,
     implement_max_changed_files: number,
     implement_max_diff_lines: number,
     check_commands_by_repo: object

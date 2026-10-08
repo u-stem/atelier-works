@@ -80,6 +80,7 @@ export function decideImplementFinishAction(
       return { kind: "requirements_gap" };
     case "max_rounds":
     case "daily_budget":
+    case "deadline":
     case "stalled":
     case "diff_too_large":
       return { kind: "needs_human", preserveWork: true };

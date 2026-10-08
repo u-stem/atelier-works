@@ -17,6 +17,7 @@ import { extractSectionBody } from "./requirements_doc.ts";
 import { classifyChangedPaths } from "./self_update_support.ts";
 import {
   assertBranchName,
+  type FactoryConfig,
   type ImplementRoundOutcome,
   isOneOf,
   isRecord,
@@ -645,6 +646,7 @@ export type ImplementRoundExit =
   | "checks_skipped"
   | "max_rounds"
   | "daily_budget"
+  | "deadline"
   | "stalled"
   | "requirements_gap"
   | "continue";
@@ -658,6 +660,8 @@ export type ImplementRoundExitInput = {
   /** `factory_config.implement_max_rounds`の値。 */
   readonly maxRounds: number;
   readonly dailyBudgetExceeded: boolean;
+  /** 検査に失敗した後、期限までの残りが修正ラウンドの最悪の所要時間(fixRoundWorstCaseSec)に足りない。 */
+  readonly deadlineReached: boolean;
   /** このラウンドの検証出力全体の`stallHash`。何も実行しなかったときは`null`。 */
   readonly checkOutputHash: string | null;
   readonly previousCheckOutputHash: string | null;
@@ -666,13 +670,112 @@ export type ImplementRoundExitInput = {
   readonly previousDiffHash: string | null;
 };
 
+/** flow.yamlの実装・検証ステップ(implement_generate / implement_verify)のtimeout(秒)。上げるときはflow.yamlと同じ変更で上げる(tests/scripts/implement_flow.test.tsが一致を確かめる)。 */
+export const IMPLEMENT_STEP_TIMEOUT_SEC = 21_600;
+
+/**
+ * 1ラウンドのうち、Claudeと検査コマンド以外にかかりうる時間(秒)。
+ * gitleaks(最大300秒)と、gitとDBの操作の余裕300秒。
+ * 生成・検証ステップの操作はrepoのロックを取らないので、その待ちは含めない(待つのは準備と完了で、それぞれのstep timeoutの中で待つ)。
+ */
+export const IMPLEMENT_OVERRUN_BASE_SEC = 600;
+
+/** 検査コマンド1件がtimeoutの後に上乗せしうる停止と出力待ちの時間(秒)。ランナーの最大13秒を切り上げた値。worktreeのロックを待つ時間はコマンドのtimeoutの内側で数えるので含めない。 */
+export const CHECK_COMMAND_STOP_OVERHEAD_SEC = 15;
+
+export const IMPLEMENT_TIMEOUT_MISFIT_REASON =
+  "implement time settings do not fit the flow step timeout";
+
+/** 実装フローの期限(epoch ms)を返す。準備を始めた時刻にimplement_flow_timeout_secを足す。 */
+export function implementDeadlineAt(
+  startedAtMs: number,
+  flowTimeoutSec: number,
+): number {
+  return startedAtMs + flowTimeoutSec * 1000;
+}
+
+/**
+ * ステップ間を渡ったcontextのdeadline_atを検証して返す。
+ * 有限の数でなく、または現在(`nowMs`)からステップのtimeout(`IMPLEMENT_STEP_TIMEOUT_SEC`)より先であれば例外を投げる。
+ * 期限の無い実行を続けず、NaNで全ラウンドが即時timeoutになるのも、遠すぎる値で期限の見張りが効かなくなるのも防ぐ。
+ */
+export function requireDeadlineAt(value: unknown, nowMs: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(
+      `implement context has no valid deadline_at: ${String(value)}`,
+    );
+  }
+  if (value > nowMs + IMPLEMENT_STEP_TIMEOUT_SEC * 1000) {
+    throw new Error(
+      `implement context deadline_at is beyond the step timeout: ${String(value)}`,
+    );
+  }
+  return value;
+}
+
+/**
+ * 修正ラウンド1回の最悪の所要時間(秒)を返す。
+ * Claudeがimplement_timeout_secまで、gitleaksとgit・DBの操作が基礎の値まで、すべての検査コマンドがimplement_check_timeout_secと停止の上乗せまでかかった場合である。
+ * 期限までの残りがこれ以上のときだけ修正ラウンドを始めるので、Claude・gitleaks・検査コマンドがそれぞれのtimeoutまでかかっても、条件を満たして始めたラウンドは期限までに終わる。
+ * 例外は、不正な出力の後のClaudeの再試行1回で、これだけは期限までの残りで打ち切る。
+ * 再試行したラウンドは、gitleaksと検査コマンドが期限を過ぎて動くことがある。
+ * 再試行が打ち切られたラウンドはclaude_errorで終わり、検査を経ていないのでpushできず、作業項目は`needs_human`になる。
+ * 実測ではなく最悪値で判定するのは、期限で切られたClaudeの差分が検査を経ないためである。
+ */
+export function fixRoundWorstCaseSec(
+  config: Pick<
+    FactoryConfig,
+    "implement_timeout_sec" | "implement_check_timeout_sec"
+  >,
+  checkCommandCount: number,
+): number {
+  return (
+    config.implement_timeout_sec +
+    IMPLEMENT_OVERRUN_BASE_SEC +
+    checkCommandCount *
+      (config.implement_check_timeout_sec + CHECK_COMMAND_STOP_OVERHEAD_SEC)
+  );
+}
+
+/**
+ * 実装フローの時間設定が、flow.yamlの実装・検証ステップのtimeoutに収まらなければ理由を返し、収まればnullを返す。
+ * 検証ステップは、期限の直前に始まった最初のラウンドの検査部分を期限の後も走らせうる。
+ * そのため、期限と、1ラウンド分のgitleaks・git・DB・検査コマンドの和で見積もる(git・DBの操作には個別の上限が無いので、和で余裕を取る)。
+ * Claude 1回は、期限の頭打ちが効かない場合でもステップに収まることを確かめる。
+ * 理由は`describeReason`が"; "で分けないよう、セミコロンを含めない。
+ */
+export function implementTimeoutMisfit(
+  config: Pick<
+    FactoryConfig,
+    | "implement_flow_timeout_sec"
+    | "implement_timeout_sec"
+    | "implement_check_timeout_sec"
+  >,
+  checkCommandCount: number,
+): string | null {
+  const perCommand =
+    config.implement_check_timeout_sec + CHECK_COMMAND_STOP_OVERHEAD_SEC;
+  const verifyTotal =
+    config.implement_flow_timeout_sec +
+    IMPLEMENT_OVERRUN_BASE_SEC +
+    checkCommandCount * perCommand;
+  if (verifyTotal > IMPLEMENT_STEP_TIMEOUT_SEC) {
+    return `${IMPLEMENT_TIMEOUT_MISFIT_REASON}: implement_flow_timeout_sec ${String(config.implement_flow_timeout_sec)} + ${String(IMPLEMENT_OVERRUN_BASE_SEC)} + ${String(checkCommandCount)} check commands x (implement_check_timeout_sec ${String(config.implement_check_timeout_sec)} + ${String(CHECK_COMMAND_STOP_OVERHEAD_SEC)}) = ${String(verifyTotal)}s exceeds ${String(IMPLEMENT_STEP_TIMEOUT_SEC)}s`;
+  }
+  const claudeTotal = config.implement_timeout_sec + IMPLEMENT_OVERRUN_BASE_SEC;
+  if (claudeTotal > IMPLEMENT_STEP_TIMEOUT_SEC) {
+    return `${IMPLEMENT_TIMEOUT_MISFIT_REASON}: implement_timeout_sec ${String(config.implement_timeout_sec)} + ${String(IMPLEMENT_OVERRUN_BASE_SEC)} = ${String(claudeTotal)}s exceeds ${String(IMPLEMENT_STEP_TIMEOUT_SEC)}s`;
+  }
+  return null;
+}
+
 /**
  * implement_verifyが修正のラウンドをもう1回回すか、どの理由で終えるかを決める。
  * 判定は次の優先順で行う。
  * 1. Claude自身が`requirements_gap`を返したら、必ずループを終える。
  * 2. 検証を実行しなかったラウンドは`checks_skipped`で終える(GitHubのCIに任せる)。
  * 3. 検証が通ったら終える。
- * 4. ガードとして、ラウンドの上限、日次予算、停滞の検出を確かめる。
+ * 4. ガードとして、ラウンド上限、日次予算、フロー全体の期限、停滞の検出を確かめる。
  *    停滞は、差分か検証出力が前のラウンドと同じ状態で、
  *    もう1回修正しても予算を使うだけになる。
  * `continue`は、検証が失敗し、どのガードにも当たらなかったことを表す。
@@ -686,6 +789,7 @@ export function decideImplementRoundExit(
   if (state.checks === "passed") return "checks_passed";
   if (state.round >= state.maxRounds) return "max_rounds";
   if (state.dailyBudgetExceeded) return "daily_budget";
+  if (state.deadlineReached) return "deadline";
   if (
     state.previousDiffHash !== null &&
     state.diffHash === state.previousDiffHash
@@ -707,7 +811,7 @@ export function decideImplementRoundExit(
  * `continue`の場合は、検証が失敗して次に修正のラウンドが続くラウンドの値になる。
  * - `checks_passed`は`done`にする。
  * - `checks_skipped`、`stalled`、`requirements_gap`は同じ名前のままにする。
- * - `max_rounds`、`daily_budget`、`continue`は、どれも検証が失敗したラウンドなので
+ * - `max_rounds`、`daily_budget`、`deadline`、`continue`は、どれも検証が失敗したラウンドなので
  *   `check_failed`にする。
  */
 export function roundOutcomeForExit(
@@ -724,6 +828,7 @@ export function roundOutcomeForExit(
       return "requirements_gap";
     case "max_rounds":
     case "daily_budget":
+    case "deadline":
     case "continue":
       return "check_failed";
   }

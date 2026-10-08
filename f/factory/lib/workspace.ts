@@ -69,6 +69,8 @@ export type CommandRunner = (
 ) => Promise<CommandResult>;
 
 const DEFAULT_TIMEOUT_MS = 60_000;
+/** setTimeoutが受け付ける上限(2^31-1ミリ秒)。超えると約1ミリ秒に丸められ、即時にタイムアウトしてしまう。 */
+const MAX_TIMER_MS = 2 ** 31 - 1;
 const DEFAULT_KILL_GRACE_MS = 5_000;
 const DEFAULT_OUTPUT_DRAIN_MS = 2_000;
 const GROUP_POLL_MS = 50;
@@ -316,6 +318,17 @@ export async function readStreamCapped(
 }
 
 /**
+ * タイマーに渡すミリ秒を、setTimeoutが正しく扱える範囲(0以上2^31-1以下)に収めて返す。
+ * 上限を超える値は上限にそろえ、負の値は0にする。有限でない値は期限が不定になるので例外を投げる。
+ */
+export function boundedTimerMs(ms: number): number {
+  if (!Number.isFinite(ms)) {
+    throw new Error(`timer duration must be finite: ${String(ms)}`);
+  }
+  return Math.min(Math.max(ms, 0), MAX_TIMER_MS);
+}
+
+/**
  * `Bun.spawn`で新しいセッション(プロセスグループ)として起動する`CommandRunner`を作って返す。
  * タイムアウトしたらグループにSIGTERMを送り、`killGraceMs`後にSIGKILLを送る。
  * 先頭プロセスが終わったら、正常終了でもグループに残ったプロセスを止める(`reapProcessGroup`)。
@@ -329,6 +342,10 @@ export function createBunCommandRunner(
   const outputDrainMs = options.outputDrainMs ?? DEFAULT_OUTPUT_DRAIN_MS;
 
   return async (argv, runOptions = {}) => {
+    // 起動の前に確かめる。不正な値でプロセスを起動して取り残さないため。
+    const timeoutMs = boundedTimerMs(
+      runOptions.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    );
     const proc = Bun.spawn({
       cmd: [...argv],
       ...(runOptions.cwd !== undefined ? { cwd: runOptions.cwd } : {}),
@@ -356,7 +373,7 @@ export function createBunCommandRunner(
       killTimer = setTimeout(() => {
         killProcessGroup(proc.pid, "SIGKILL");
       }, killGraceMs);
-    }, runOptions.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+    }, timeoutMs);
 
     const abort = new AbortController();
     const readOutput = (stream: ReadableStream<Uint8Array>): Promise<string> =>

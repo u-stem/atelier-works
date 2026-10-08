@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import {
   addDetachedWorktree,
   assertWorktreeGitPointer,
+  boundedTimerMs,
   type CommandResult,
   commitAndPush,
   copyFileTo,
@@ -75,6 +76,39 @@ describe("runCommand", () => {
   test("kills the process and reports timedOut after the timeout elapses", async () => {
     const result = await runCommand(["sleep", "5"], { timeoutMs: 50 });
     expect(result.timedOut).toBe(true);
+  });
+});
+
+describe("boundedTimerMs", () => {
+  test("keeps a value within the timer range", () => {
+    expect(boundedTimerMs(1_500)).toBe(1_500);
+  });
+
+  test("keeps zero as an immediate timeout", () => {
+    expect(boundedTimerMs(0)).toBe(0);
+  });
+
+  test("clamps a value that would overflow setTimeout", () => {
+    expect(boundedTimerMs(2 ** 31)).toBe(2 ** 31 - 1);
+  });
+
+  test("raises a negative value to zero", () => {
+    expect(boundedTimerMs(-5)).toBe(0);
+  });
+
+  test("throws for NaN", () => {
+    expect(() => boundedTimerMs(Number.NaN)).toThrow();
+  });
+
+  test("throws for Infinity", () => {
+    expect(() => boundedTimerMs(Number.POSITIVE_INFINITY)).toThrow();
+  });
+});
+
+describe("createBunCommandRunner timeoutMs validation", () => {
+  test("rejects a non-finite timeoutMs before spawning", async () => {
+    const run = createBunCommandRunner();
+    await expect(run(["true"], { timeoutMs: Number.NaN })).rejects.toThrow();
   });
 });
 

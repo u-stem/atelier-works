@@ -380,6 +380,38 @@ describe("implement settings (工程3)", () => {
     expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
   });
 
+  test("defaults implement_check_timeout_sec to 900", () => {
+    expect(
+      parseFactoryConfig(LEGACY_RAW_CONFIG).implement_check_timeout_sec,
+    ).toBe(900);
+  });
+
+  test("defaults implement_flow_timeout_sec to 14400", () => {
+    expect(
+      parseFactoryConfig(LEGACY_RAW_CONFIG).implement_flow_timeout_sec,
+    ).toBe(14400);
+  });
+
+  test("passes through an explicit implement_check_timeout_sec", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, implement_check_timeout_sec: 300 };
+    expect(parseFactoryConfig(raw).implement_check_timeout_sec).toBe(300);
+  });
+
+  test("throws when implement_check_timeout_sec is zero", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, implement_check_timeout_sec: 0 };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when implement_flow_timeout_sec is not an integer", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, implement_flow_timeout_sec: 1.5 };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("accepts a flow timeout longer than the implement step timeout", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, implement_flow_timeout_sec: 30_000 };
+    expect(parseFactoryConfig(raw).implement_flow_timeout_sec).toBe(30_000);
+  });
+
   test("passes through an explicit check_commands_by_repo record", () => {
     const config = parseFactoryConfig({
       ...LEGACY_RAW_CONFIG,

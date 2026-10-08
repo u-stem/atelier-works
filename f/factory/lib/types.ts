@@ -101,6 +101,16 @@ export function assertSha(sha: string): void {
   }
 }
 
+/** 期限(epoch ms)までの残り時間でtimeoutMsを頭打ちにする。期限を過ぎているか、期限が有限の数でなければ0を返す(期限の分からない実行を始めない)。 */
+export function capToDeadline(
+  timeoutMs: number,
+  deadlineAt: number,
+  nowMs: number,
+): number {
+  if (!Number.isFinite(deadlineAt)) return 0;
+  return Math.max(0, Math.min(timeoutMs, deadlineAt - nowMs));
+}
+
 /**
  * ブランチ名の検査規則。
  * gitの`check-ref-format`を完全には再現しない。悪意のあるブランチ名が
@@ -821,6 +831,14 @@ export type FactoryConfig = {
   implement_max_budget_usd_per_run: number;
   /** implementフローでのClaudeの1回の実行のタイムアウト(秒)。 */
   implement_timeout_sec: number;
+  /** 実装フローの検査コマンド1件のタイムアウト(秒)。フロー全体の期限では短く切らない。 */
+  implement_check_timeout_sec: number;
+  /**
+   * 実装フロー1回の実行の期限(秒)。準備の開始から数える。
+   * 修正ラウンドを始めるかどうかと、Claude実行の頭打ちにだけ効く。
+   * flow.yamlのstep timeoutとの整合は、実装フローの準備で確かめる(`implementTimeoutMisfit`)。
+   */
+  implement_flow_timeout_sec: number;
   /** implementフローの差分の規模の上限のうち、変更ファイル数。 */
   implement_max_changed_files: number;
   /** implementフローの差分の規模の上限のうち、追加と削除の行数の合計。 */

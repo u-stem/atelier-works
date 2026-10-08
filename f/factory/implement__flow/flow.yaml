@@ -11,6 +11,9 @@ value:
             type: javascript
             expr: flow_input.work_item_id
         path: f/factory/steps/implement_prepare
+      timeout:
+        type: static
+        value: 3600
     - id: implement_generate
       summary: '[SF-3-4/2] 実装(Claude)'
       value:
@@ -25,6 +28,9 @@ value:
         path: f/factory/steps/implement_generate
       skip_if:
         expr: results.implement_prepare.outcome !== "proceed"
+      timeout:
+        type: static
+        value: 21600
     - id: implement_verify
       summary: '[SF-3-4/3] 検証と修正のループ'
       value:
@@ -42,6 +48,9 @@ value:
         path: f/factory/steps/implement_verify
       skip_if:
         expr: results.implement_prepare.outcome !== "proceed"
+      timeout:
+        type: static
+        value: 21600
     - id: implement_finish
       summary: '[SF-3-4/4] コミット・push・PR作成'
       value:
@@ -63,6 +72,9 @@ value:
             type: javascript
             expr: flow_input.work_item_id
         path: f/factory/steps/implement_finish
+      timeout:
+        type: static
+        value: 1800
   failure_module:
     id: failure
     value:

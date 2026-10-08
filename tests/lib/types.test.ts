@@ -3,6 +3,7 @@ import {
   assertBranchName,
   assertGitHubName,
   assertSha,
+  capToDeadline,
   IMPLEMENT_ROUND_MODES,
   IMPLEMENT_ROUND_OUTCOMES,
   isImplementDiffStat,
@@ -208,5 +209,23 @@ describe("implement work item vocabulary (工程3)", () => {
 
   test("isImplementDiffStat rejects a stat missing deleted", () => {
     expect(isImplementDiffStat({ files: 3, added: 10 })).toBe(false);
+  });
+});
+
+describe("capToDeadline", () => {
+  test("keeps the timeout when the deadline is further away", () => {
+    expect(capToDeadline(1_000, 10_000, 0)).toBe(1_000);
+  });
+
+  test("caps the timeout at the time left", () => {
+    expect(capToDeadline(1_000, 10_500, 10_000)).toBe(500);
+  });
+
+  test("returns 0 past the deadline", () => {
+    expect(capToDeadline(1_000, 10_000, 12_000)).toBe(0);
+  });
+
+  test("returns 0 for a deadline that is not a finite number", () => {
+    expect(capToDeadline(1_000, Number.NaN, 0)).toBe(0);
   });
 });

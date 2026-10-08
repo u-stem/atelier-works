@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { GITLEAKS_TIMEOUT_MS } from "../../f/factory/lib/implement_loop.ts";
+import {
+  IMPLEMENT_OVERRUN_BASE_SEC,
+  IMPLEMENT_STEP_TIMEOUT_SEC,
+} from "../../f/factory/lib/implement_support.ts";
 
 const FLOW = readFileSync(
   join(import.meta.dir, "../../f/factory/implement__flow/flow.yaml"),
@@ -23,6 +28,14 @@ function inputKeys(id: string): string[] {
   return [...moduleBlock(id).matchAll(/^ {10}(\w+):$/gm)]
     .map((m) => m[1] ?? "")
     .sort();
+}
+
+/** モジュールのstatic timeout(秒)。無ければnull。 */
+function moduleTimeoutSec(id: string): number | null {
+  const match = moduleBlock(id).match(
+    /^ {6}timeout:\n {8}type: static\n {8}value: (\d+)$/m,
+  );
+  return match?.[1] === undefined ? null : Number(match[1]);
 }
 
 describe("implement flow.yaml", () => {
@@ -87,5 +100,37 @@ describe("implement flow.yaml", () => {
 
   test("has no module-level retry", () => {
     expect(FLOW).not.toContain("retry:");
+  });
+
+  test("bounds the prepare step at 3600 seconds", () => {
+    expect(moduleTimeoutSec("implement_prepare")).toBe(3600);
+  });
+
+  test("bounds the finish step at 1800 seconds", () => {
+    expect(moduleTimeoutSec("implement_finish")).toBe(1800);
+  });
+
+  test("bounds the generate step at IMPLEMENT_STEP_TIMEOUT_SEC", () => {
+    expect(moduleTimeoutSec("implement_generate")).toBe(
+      IMPLEMENT_STEP_TIMEOUT_SEC,
+    );
+  });
+
+  test("bounds the verify step at IMPLEMENT_STEP_TIMEOUT_SEC", () => {
+    expect(moduleTimeoutSec("implement_verify")).toBe(
+      IMPLEMENT_STEP_TIMEOUT_SEC,
+    );
+  });
+
+  test("puts no timeout on the failure module", () => {
+    expect(FLOW.slice(FLOW.indexOf("failure_module:"))).not.toContain(
+      "timeout:",
+    );
+  });
+
+  test("reserves at least the gitleaks timeout in the overrun base", () => {
+    expect(IMPLEMENT_OVERRUN_BASE_SEC).toBeGreaterThanOrEqual(
+      GITLEAKS_TIMEOUT_MS / 1000,
+    );
   });
 });

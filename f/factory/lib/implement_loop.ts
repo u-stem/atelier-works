@@ -122,6 +122,12 @@ export type ImplementContext = {
    * gitに参照させることができるためである。
    */
   readonly worktree_git_pointer: string;
+  /**
+   * フロー全体の期限(epoch ms、implementDeadlineAt)。
+   * 修正ラウンドを始めるかどうかとClaude実行の頭打ちにだけ使い、検査コマンドは切らない。
+   * 実装フローの再実行はretry_work_itemだけで、そのとき期限も取り直す。
+   */
+  readonly deadline_at: number;
 };
 
 /**
@@ -409,6 +415,8 @@ export type ImplementClaudeRunInput = {
   /** 実行ごとの`doc_dir`の複製(`withReadOnlyDocDirCopy`)か`null`。 */
   readonly docDir: string | null;
   readonly oauthToken: string;
+  /** フロー全体の期限(epoch ms)。runClaudeが各試行のタイムアウトをこの残り時間で頭打ちにし、残りが無ければ起動しない。 */
+  readonly deadlineAt: number;
 };
 
 export type ImplementClaudeRunDeps = {
@@ -447,6 +455,7 @@ export function buildImplementClaudeOptions(
     addDirs: input.docDir === null ? [] : [input.docDir],
     oauthToken: input.oauthToken,
     timeoutMs: input.config.implement_timeout_sec * 1000,
+    deadlineAt: input.deadlineAt,
   };
 }
 
@@ -477,6 +486,7 @@ export type ImplementLoopExit =
   | "requirements_gap"
   | "max_rounds"
   | "daily_budget"
+  | "deadline"
   | "stalled"
   | "diff_too_large"
   | "symlink"
@@ -490,6 +500,7 @@ export const IMPLEMENT_LOOP_EXITS: readonly ImplementLoopExit[] = [
   "requirements_gap",
   "max_rounds",
   "daily_budget",
+  "deadline",
   "stalled",
   "diff_too_large",
   "symlink",
@@ -499,6 +510,16 @@ export const IMPLEMENT_LOOP_EXITS: readonly ImplementLoopExit[] = [
 ];
 
 export const GITLEAKS_TIMEOUT_MS = 5 * 60_000;
+
+/** 期限までに次の修正ラウンドを終える時間が残っておらず、修正をやめたときの理由を返す(describeReasonが訳す)。 */
+export function deadlineReason(round: number): string {
+  return `implement flow deadline reached after round ${String(round)}`;
+}
+
+/** Claudeの実行が期限で打ち切られた(または期限後で起動しなかった)ときに、失敗の理由へ添える文字列を返す(describeReasonが訳す)。 */
+export function deadlinePassedReason(round: number): string {
+  return `implement flow deadline passed during round ${String(round)}`;
+}
 
 /**
  * フロー自身が持つ検証の名前。
@@ -588,6 +609,8 @@ export type ImplementLoopDeps = {
    * 各ラウンドの冒頭(worktreeに触れる前)と、修正ラウンドを始める直前に呼ぶ。
    */
   readonly holdsLease: () => Promise<boolean>;
+  /** 現在時刻(epoch ms)。期限までの残りを測る。 */
+  readonly now: () => number;
   readonly log: (message: string, fields: Record<string, unknown>) => void;
 };
 
@@ -599,6 +622,10 @@ export type ImplementLoopInput = {
   readonly hasCheckCommands: boolean;
   /** implement_generateの結果(1ラウンド目、modeは`implement`)。 */
   readonly firstRound: ImplementClaudeRound;
+  /** フロー全体の期限(epoch ms)。 */
+  readonly deadlineAt: number;
+  /** 修正ラウンドを始めるのに要る残り時間(ms)。fixRoundWorstCaseSecをmsにした値。 */
+  readonly fixRoundRequiredMs: number;
 };
 
 export type ImplementLoopResult = {
@@ -752,6 +779,8 @@ function reasonForExit(exit: ImplementLoopExit, round: number): string | null {
       return `implement checks still failing after ${String(round)} rounds`;
     case "daily_budget":
       return "daily budget exceeded";
+    case "deadline":
+      return deadlineReason(round);
     case "stalled":
       return `implement stalled after round ${String(round)}`;
     default:
@@ -795,8 +824,8 @@ export async function gitPointerStopReason(
  * 7. baseとの差が無いラウンドは、検証を実行せずに「変更なし」として失敗させる。
  *    差があれば、gitleaks、次に検証コマンドを実行する。検証コマンドは、
  *    保護パスが変わったときと未設定のときは実行しない。
- *    実行する直前に、gitが無視するファイルを削除する。
- * 8. 終了を判定する(`decideImplementRoundExit`)。
+ *    実行する直前に、gitが無視するファイルを削除する。検査コマンドは期限で切らない。
+ * 8. 終了を判定する(`decideImplementRoundExit`)。検査に失敗し、期限までの残りが修正ラウンドの最悪の所要時間に足りなければ`deadline`で止める。
  *    差分の指紋には、ステージしたツリーのshaを使う。
  * 9. 修正ラウンドに進む前にリースを確かめ、失っていれば止める。
  * リースを失って止まったラウンドを除き、Claudeの実行ごとに`implement_rounds`へ1行を記録する。
@@ -867,7 +896,12 @@ export async function runImplementVerifyLoop(
     }
 
     if (current.kind === "claude_failed") {
-      const reason = `claude run failed (${current.reason}): ${current.detail}`;
+      const failure = `claude run failed (${current.reason}): ${current.detail}`;
+      // 期限で切られた実行も検査を経ていないので、出口はclaude_errorのまま(途中経過をpushしない)にし、理由にだけ期限を添える。
+      const reason =
+        current.reason === "timeout" && deps.now() >= input.deadlineAt
+          ? `${failure}; ${deadlinePassedReason(round)}`
+          : failure;
       await deps.recordRound({
         ...base,
         outcome: "error",
@@ -946,12 +980,17 @@ export async function runImplementVerifyLoop(
       evaluation.state === "failed" ? stallHash(evaluation.stallText) : null;
     const dailyBudgetExceeded =
       evaluation.state === "failed" ? await deps.dailyBudgetExceeded() : false;
+    // 期限は、ラウンド上限・日次予算と同じく修正ラウンド前のリース確認より先に判定する。両方が成り立っても、完了ステップがリースを確かめて何もしないので結果は変わらない。
+    const deadlineReached =
+      evaluation.state === "failed" &&
+      input.deadlineAt - deps.now() < input.fixRoundRequiredMs;
     const exit = decideImplementRoundExit({
       claudeOutcome: "done",
       checks: evaluation.state,
       round,
       maxRounds: input.maxRounds,
       dailyBudgetExceeded,
+      deadlineReached,
       checkOutputHash: checkHash,
       previousCheckOutputHash: previousCheckHash,
       diffHash: fingerprint.treeSha,

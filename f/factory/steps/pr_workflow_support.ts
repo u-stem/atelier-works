@@ -2843,6 +2843,28 @@ const REASON_RULES: readonly ReasonRule[] = [
     nextAction: () =>
       "検査コマンドが常駐プロセスを残していないかを確かめ、workerを再起動してから(同じworkerの他のジョブも止まります)、ConsoleのFailuresタブから再実行してください",
   },
+  {
+    pattern: /^implement flow deadline reached after round (\d+)$/,
+    describe: (m) =>
+      `実装フローの期限(implement_flow_timeout_sec)までに次の修正を終える時間が残っていないため、ラウンド${m[1]}で修正をやめました`,
+    nextAction: () => CHECK_COMMAND_NEXT_ACTION,
+  },
+  {
+    pattern: /^implement flow deadline passed during round (\d+)$/,
+    describe: (m) =>
+      `実装フローの期限(implement_flow_timeout_sec)を過ぎたため、ラウンド${m[1]}のClaudeの実行を打ち切りました`,
+    // この理由は必ずClaudeの実行失敗の後ろに付くため、表示される次の操作は
+    // 先頭の区切りの規則のものになる。ここでは汎用の案内を置く。
+    nextAction: () => GENERIC_NEXT_ACTION,
+  },
+  {
+    pattern:
+      /^implement time settings do not fit the flow step timeout: ([\s\S]+)$/,
+    describe: (m) =>
+      `実装フローの時間設定が、flow.yamlの実装・検証ステップのtimeoutに収まりません(${m[1]})`,
+    nextAction: () =>
+      "implement_flow_timeout_sec・implement_timeout_sec・implement_check_timeout_sec・検査コマンド数のいずれかを減らしてから、ConsoleのFailuresタブから再実行してください",
+  },
 ];
 
 /**

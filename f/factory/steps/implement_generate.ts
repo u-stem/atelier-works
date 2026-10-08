@@ -26,6 +26,7 @@ import {
   runImplementGenerateRound,
   withReadOnlyDocDirCopy,
 } from "../lib/implement_loop.ts";
+import { requireDeadlineAt } from "../lib/implement_support.ts";
 import {
   withWorktreeProcessLock,
   worktreeLockFor,
@@ -42,6 +43,8 @@ export async function main(
     holdsLease: () =>
       stillHoldsImplementLease(() => getWorkItem(work_item_id), leaseJobId),
     runRound: async () => {
+      // リースを持っているときだけ期限を確かめる。リースを失った実行は何もせずに終わる既存の流れを変えない。
+      const deadlineAt = requireDeadlineAt(context.deadline_at, Date.now());
       const config = await loadConfig(() =>
         wmill.getResource("f/factory/factory_config"),
       );
@@ -77,6 +80,7 @@ export async function main(
                 worktreeDir: context.worktree_dir,
                 docDir,
                 oauthToken,
+                deadlineAt,
               },
             ),
         );

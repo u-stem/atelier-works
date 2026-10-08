@@ -72,6 +72,8 @@ type DefaultableField =
   | "implement_max_turns"
   | "implement_max_budget_usd_per_run"
   | "implement_timeout_sec"
+  | "implement_check_timeout_sec"
+  | "implement_flow_timeout_sec"
   | "implement_max_changed_files"
   | "implement_max_diff_lines"
   | "check_commands_by_repo";
@@ -120,6 +122,8 @@ const DEFAULTS: Pick<FactoryConfig, DefaultableField> = {
   implement_max_turns: 80,
   implement_max_budget_usd_per_run: 10,
   implement_timeout_sec: 3600,
+  implement_check_timeout_sec: 900,
+  implement_flow_timeout_sec: 14400,
   implement_max_changed_files: 60,
   implement_max_diff_lines: 3000,
   check_commands_by_repo: {},
@@ -446,6 +450,16 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
       raw,
       "implement_timeout_sec",
       DEFAULTS.implement_timeout_sec,
+    ),
+    implement_check_timeout_sec: positiveIntegerField(
+      raw,
+      "implement_check_timeout_sec",
+      DEFAULTS.implement_check_timeout_sec,
+    ),
+    implement_flow_timeout_sec: positiveIntegerField(
+      raw,
+      "implement_flow_timeout_sec",
+      DEFAULTS.implement_flow_timeout_sec,
     ),
     implement_max_changed_files: positiveIntegerField(
       raw,
