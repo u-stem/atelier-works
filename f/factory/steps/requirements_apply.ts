@@ -16,7 +16,7 @@ import {
   updateStatusIfCurrentClearingFlowJobId,
   updateStatusIfLeaseHolder,
 } from "../lib/db.ts";
-import { notify } from "../lib/discord.ts";
+import { notify, notifyBestEffort } from "../lib/discord.ts";
 import { commentIssue, type GhClient, getViewer } from "../lib/github.ts";
 import {
   parseFlowJobId,
@@ -116,14 +116,6 @@ async function removeReqWorktree(workItem: WorkItem): Promise<void> {
   }
 }
 
-async function notifySafe(
-  webhookUrl: string,
-  event: Parameters<typeof notify>[1],
-): Promise<void> {
-  if (webhookUrl.length === 0) return;
-  await notify(webhookUrl, event);
-}
-
 /**
  * 承認依頼を読み、承認・却下に応じて作業項目を遷移させる。
  *
@@ -140,8 +132,10 @@ async function notifySafe(
  * (承認コメント)より先に行う。
  * この分岐を再び動かすものは他に無いため、GitHubの呼び出しが失敗して
  * 作業項目が`awaiting_approval`のまま残ると、判断が事実上失われる。
- * `commentIssue`はマーカーで冪等で、通知は繰り返しても安全なので、
- * 再起動(`approval_decide.ts`の`redispatch`など)でやり直してよい。
+ * 一方でCASの後は作業項目が`awaiting_approval`ではなくなり、再起動
+ * (`approval_decide.ts`の`redispatch`など)しても何もしないので、
+ * CASの後で例外を投げると、後続の処理(implementフローの起動など)が行われないまま残る。
+ * そのためDiscordへの通知は`notifyBestEffort`で送り、失敗してもwarnを残して続ける。
  *
  * 承認依頼・作業項目・Issue番号が無いとき、依頼のkindが違うときは例外を投げる。
  */
@@ -228,16 +222,20 @@ async function run(
       buildApprovedComment(consoleUrl, workItem.id),
       viewer.login,
     );
-    await notifySafe(webhookUrl, {
-      kind: "requirements_approved",
-      instance_name: config.instance_name,
-      owner: workItem.owner,
-      repo: workItem.repo,
-      issue_number: workItem.issue_number,
-      issue_url: workItem.issue_url ?? "",
-      title: workItem.title ?? "",
-      console_url: consoleUrl,
-    });
+    await notifyBestEffort(
+      webhookUrl,
+      {
+        kind: "requirements_approved",
+        instance_name: config.instance_name,
+        owner: workItem.owner,
+        repo: workItem.repo,
+        issue_number: workItem.issue_number,
+        issue_url: workItem.issue_url ?? "",
+        title: workItem.title ?? "",
+        console_url: consoleUrl,
+      },
+      log,
+    );
     await removeReqWorktree(workItem);
     if (!config.implement_enabled)
       return { outcome: "approved", implement_started: false };
@@ -276,17 +274,22 @@ async function run(
           message: `${workItem.owner}/${workItem.repo}#${String(issueNumber)} (work item ${String(workItem.id)}): ${describeReason(reason)}`,
         });
       },
-      notifyNeedsHuman: (reason) =>
-        notifySafe(webhookUrl, {
-          kind: "needs_human",
-          instance_name: config.instance_name,
-          owner: workItem.owner,
-          repo: workItem.repo,
-          url: workItem.issue_url ?? "",
-          reason: describeReason(reason),
-          target: { kind: "issue", number: issueNumber },
-          next_action: nextActionFor(reason),
-        }),
+      notifyNeedsHuman: async (reason) => {
+        await notifyBestEffort(
+          webhookUrl,
+          {
+            kind: "needs_human",
+            instance_name: config.instance_name,
+            owner: workItem.owner,
+            repo: workItem.repo,
+            url: workItem.issue_url ?? "",
+            reason: describeReason(reason),
+            target: { kind: "issue", number: issueNumber },
+            next_action: nextActionFor(reason),
+          },
+          log,
+        );
+      },
       log: (message, fields) =>
         log.warn(message, { work_item_id: workItem.id, ...fields }),
     });
@@ -342,16 +345,22 @@ async function run(
     });
     return { outcome: "no_op" };
   }
-  await notifySafe(webhookUrl, {
-    kind: "needs_human",
-    instance_name: config.instance_name,
-    owner: workItem.owner,
-    repo: workItem.repo,
-    url: workItem.issue_url ?? "",
-    reason: describeReason(`rejected ${String(config.max_attempts)} times`),
-    target: { kind: "issue", number: workItem.issue_number },
-    next_action: nextActionFor(`rejected ${String(config.max_attempts)} times`),
-  });
+  await notifyBestEffort(
+    webhookUrl,
+    {
+      kind: "needs_human",
+      instance_name: config.instance_name,
+      owner: workItem.owner,
+      repo: workItem.repo,
+      url: workItem.issue_url ?? "",
+      reason: describeReason(`rejected ${String(config.max_attempts)} times`),
+      target: { kind: "issue", number: workItem.issue_number },
+      next_action: nextActionFor(
+        `rejected ${String(config.max_attempts)} times`,
+      ),
+    },
+    log,
+  );
   await removeReqWorktree(workItem);
   return { outcome: "needs_human" };
 }

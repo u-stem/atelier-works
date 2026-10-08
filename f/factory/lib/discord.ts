@@ -2,7 +2,7 @@
 // テストで実際のHTTP通信や待機をしないよう、`fetch`と`sleep`は注入できる。
 
 import { type CleanupCounts, summarizeCleanup } from "./cleanup_db_support.ts";
-import { type Logger, logger } from "./log.ts";
+import { type Logger, logger, maskSecrets } from "./log.ts";
 import type { ImplementDiffStat } from "./types.ts";
 
 export type DiscordEmbedField = {
@@ -430,10 +430,12 @@ function defaultSleep(ms: number): Promise<void> {
  * 429応答の再試行までの待ち時間をミリ秒で返す。
  * `retry-after`ヘッダー(秒)を優先し、無ければJSON本文の`retry_after`を使い、
  * どちらも無ければ1秒とする。
+ * 空や空白だけのヘッダーは、`Number`が0と読んで待たずに再送してしまうので、無いものとして扱う。
+ * 数として読めないヘッダーも同じく無視する。
  */
 async function readRetryAfterMs(response: Response): Promise<number> {
   const header = response.headers.get("retry-after");
-  if (header !== null) {
+  if (header !== null && header.trim().length > 0) {
     const seconds = Number(header);
     if (Number.isFinite(seconds) && seconds >= 0) {
       return seconds * 1000;
@@ -456,12 +458,19 @@ async function readRetryAfterMs(response: Response): Promise<number> {
 }
 
 /**
+ * `notify`の結果。`rate_limit_skipped`は、429応答が示す待ちが上限を超えたため、
+ * 送らずに諦めたことを表す。
+ */
+export type NotifyOutcome = "sent" | "rate_limit_skipped";
+
+/**
  * `event`をDiscordの埋め込みにして`webhookUrl`へ送る。
  * 429応答なら、応答が示す時間だけ待って1回だけ再送する。
  * 示された待ちが`DISCORD_RETRY_MAX_WAIT_MS`を超えるときは、待たず再送もせずに
- * warnを残して正常に戻る。待ちがstepのtimeoutより長引いて打ち切られることを防ぎ、
- * 例外を捕まえない呼び出し側でも、通知を諦めただけでフローを失敗させないため。
+ * warnを残して`rate_limit_skipped`を返す。待ちがstepのtimeoutより長引いて
+ * 打ち切られることを防ぐため。
  * それ以外で最終的な応答が2xxでなければ(再送も429なら含めて)例外を投げる。
+ * 通知の失敗でフローを止めない呼び出し側は、`notifyBestEffort`を使う。
  * webhookのURLのパスには秘密のトークンが入るため、
  * エラーメッセージとログに`webhookUrl`は含めない。
  */
@@ -469,7 +478,7 @@ export async function notify(
   webhookUrl: string,
   event: NotifyEvent,
   deps: NotifyDeps = {},
-): Promise<void> {
+): Promise<NotifyOutcome> {
   const doFetch = deps.fetch ?? fetch;
   const doSleep = deps.sleep ?? defaultSleep;
   const log = deps.log ?? logger("discord");
@@ -495,7 +504,7 @@ export async function notify(
         retry_after_ms: retryAfterMs,
         max_wait_ms: DISCORD_RETRY_MAX_WAIT_MS,
       });
-      return;
+      return "rate_limit_skipped";
     }
     await doSleep(retryAfterMs);
     response = await doFetch(webhookUrl, requestInit);
@@ -504,4 +513,47 @@ export async function notify(
   if (response.status < 200 || response.status >= 300) {
     throw new Error(`discord webhook failed: HTTP ${String(response.status)}`);
   }
+  return "sent";
+}
+
+/**
+ * `notifyBestEffort`の結果。`not_sent`の`reason`は秘密情報をマスク済みで、
+ * そのままログやConsoleのnoticeに載せてよい。
+ */
+export type NotifyBestEffortResult =
+  | { readonly status: "sent" }
+  | { readonly status: "no_webhook" }
+  | { readonly status: "not_sent"; readonly reason: string };
+
+/**
+ * `notify`で送り、失敗しても例外を投げない。
+ * webhookのURLが空なら何もしない(通知を設定していないインスタンス)。
+ * 送信の失敗(例外、2xx以外の応答、再送も429)はwarnを残して`not_sent`を返す。
+ * 待ちが上限を超えて諦めたときも、`notify`が`log`にwarnを残し、`not_sent`を返す。
+ * 通知はDB・GitHubへの副作用の後に送ることが多く、通知の失敗でstepが止まると、
+ * 済んだ副作用の続き(次のフローの起動や状態の遷移)が行われないままになるため。
+ * 届かなかったことを人に知らせる必要がある呼び出し側は、戻り値で判断する。
+ */
+export async function notifyBestEffort(
+  webhookUrl: string,
+  event: NotifyEvent,
+  log: Logger,
+  deps: NotifyDeps = {},
+): Promise<NotifyBestEffortResult> {
+  if (webhookUrl.length === 0) return { status: "no_webhook" };
+  let outcome: NotifyOutcome;
+  try {
+    outcome = await notify(webhookUrl, event, { ...deps, log });
+  } catch (err) {
+    const reason = maskSecrets(String(err));
+    log.warn("discord notify failed", { kind: event.kind, error: reason });
+    return { status: "not_sent", reason };
+  }
+  if (outcome === "rate_limit_skipped") {
+    return {
+      status: "not_sent",
+      reason: `discord rate limit wait exceeds the ${String(DISCORD_RETRY_MAX_WAIT_MS / 1000)}s cap`,
+    };
+  }
+  return { status: "sent" };
 }
