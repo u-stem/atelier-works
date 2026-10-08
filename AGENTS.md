@@ -11,7 +11,7 @@
 - コメントは日本語で書く(ユーザーレベルの「コメントは英語」より優先する)。識別子、テスト名、ログとエラーのメッセージ、プロンプトの文字列は英語のままにする。書き方は[コーディング規約](docs/coding-guidelines.md)に従う。
 - コメントに`§`、設計文書の章番号、変更の経緯は書かない。リポジトリの外の文書は読み手が辿れず、経緯はコミットとPRに残すため。
 - 文書は[文書の書き方](docs/writing-guidelines.md)と`factory-docs`スキルに従って書く。日本語の推敲には`yomiyasu`スキルを使う。
-- このリポジトリのコードを変える作業は、[review-loopスキル](.claude/skills/review-loop/SKILL.md)で回す。`docs/`、README、AGENTS.mdの文言だけを直す変更は除く(コード、テスト、設定、スキル、subagentの定義を変えないものに限る)。
+- コードを変える作業は、[review-loopスキル](.claude/skills/review-loop/SKILL.md)で回す(コード、テスト、設定、スキル、subagentの定義を変えず、`docs/`、README、AGENTS.mdの文言だけを直す場合は除く)。
   実装した本人の確認だけでは、見落としを拾えないため。
 - 設定は`.env`系のファイルを使わず、miseで管理する。秘密でない設定は`mise.toml`の`[env]`に、秘密値はgitignore済みの`mise.local.toml`に置く。
 - 秘密値は人が投入する。Claudeは`mise.local.toml.example`の更新までを行い、値が要るときは[セットアップ](docs/setup.md)の投入コマンドを示して、止まらずに先へ進む。
