@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   type AuditEvidence,
+  buildEvidenceSections,
   collectAuditEvidence,
   countActionableRecords,
   metricsOf,
@@ -519,7 +520,7 @@ describe("collectAuditEvidence", () => {
     expect(call?.text).toContain("GROUP BY 1, 2");
   });
 
-  test("reads rejected_count from an uncapped count(*) query ", async () => {
+  test("reads rejected_count from an uncapped count(*) query", async () => {
     const { sql } = createRoutedSqlClient({ rejectedCount: [{ count: 45 }] });
     const evidence = await collectAuditEvidence(
       { period: PERIOD, instanceName: "atelier-works" },
@@ -528,7 +529,7 @@ describe("collectAuditEvidence", () => {
     expect(evidence.rejected_count).toBe(45);
   });
 
-  test("reads needs_human_count from an uncapped count(*) query ", async () => {
+  test("reads needs_human_count from an uncapped count(*) query", async () => {
     const { sql } = createRoutedSqlClient({
       humanOutcomeCount: [{ count: 52 }],
     });
@@ -922,6 +923,28 @@ describe("running version of each failure group", () => {
     expect(findCall(calls, "failures")?.text).toContain("d.result = 'success'");
   });
 
+  test("takes the last success at or before the failure time", async () => {
+    const { sql, calls } = createRoutedSqlClient();
+    await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(findCall(calls, "failures")?.text).toContain(
+      "d.occurred_at <= jf.occurred_at ORDER BY d.occurred_at DESC",
+    );
+  });
+
+  test("falls back to the first success strictly after the failure time", async () => {
+    const { sql, calls } = createRoutedSqlClient();
+    await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      sql,
+    );
+    expect(findCall(calls, "failures")?.text).toContain(
+      "d.occurred_at > jf.occurred_at ORDER BY d.occurred_at ASC",
+    );
+  });
+
   test("falls back to the version a later deployment came from", async () => {
     const { sql, calls } = createRoutedSqlClient();
     await collectAuditEvidence(
@@ -1053,15 +1076,6 @@ describe("deployment history and running versions", () => {
     expect(renderEvidenceMarkdown(evidence)).toContain("成功 未設定 → bbbbbbb");
   });
 
-  test("never states a displayed count in a fixed line", async () => {
-    const { evidence } = await evidenceWithDeployments(historyRows);
-    const capped: AuditEvidence = {
-      ...evidence,
-      deployments: [{ key: "success", count: 45 }],
-    };
-    expect(renderEvidenceMarkdown(capped)).not.toContain("のうち最新");
-  });
-
   test("states how many older deployments the list leaves out", async () => {
     const { evidence } = await evidenceWithDeployments(historyRows);
     const capped: AuditEvidence = {
@@ -1077,6 +1091,32 @@ describe("deployment history and running versions", () => {
     const { calls } = await evidenceWithDeployments([]);
     const text = findCall(calls, "versionBounds")?.text ?? "";
     expect(text.split("SELECT sha_from").length - 1).toBe(2);
+  });
+
+  test("takes the last success before the period start, then the first at or after it", async () => {
+    const { calls } = await evidenceWithDeployments([]);
+    const text = findCall(calls, "versionBounds")?.text ?? "";
+    expect(
+      text.includes(
+        "occurred_at < ? ::timestamptz ORDER BY occurred_at DESC, id DESC LIMIT 1), (SELECT sha_from FROM factory.deployments WHERE result = 'success' AND occurred_at >= ? ::timestamptz ORDER BY occurred_at ASC, id ASC LIMIT 1) ) AS start_sha",
+      ),
+    ).toBe(true);
+  });
+
+  test("takes the last success before the period end, then the first at or after it", async () => {
+    const { calls } = await evidenceWithDeployments([]);
+    const text = findCall(calls, "versionBounds")?.text ?? "";
+    expect(
+      text.includes(
+        "occurred_at < ? ::timestamptz ORDER BY occurred_at DESC, id DESC LIMIT 1), (SELECT sha_from FROM factory.deployments WHERE result = 'success' AND occurred_at >= ? ::timestamptz ORDER BY occurred_at ASC, id ASC LIMIT 1) ) AS end_sha",
+      ),
+    ).toBe(true);
+  });
+
+  test("counts only successful deployments as needing a host action", async () => {
+    const { calls } = await evidenceWithDeployments([]);
+    const call = calls.find((c) => c.text.includes("AND needs_host_action"));
+    expect(call?.text).toContain("AND result = 'success'");
   });
 
   test("binds the period start and end twice each for the version bounds", async () => {
@@ -1103,37 +1143,74 @@ describe("deployment history and running versions", () => {
 
 describe("worst-case size", () => {
   const history = Array.from({ length: 30 }, (_, i) => ({
-    occurred_at: `2026-09-${String(25 - (i % 5)).padStart(2, "0")}T0${i % 10}:00:00.000Z`,
+    occurred_at: `2026-09-${String(26 - Math.floor(i / 4)).padStart(2, "0")}T${String(23 - (i % 4)).padStart(2, "0")}:00:00.000Z`,
     sha_from: SHA_A,
     sha_to: SHA_B,
     result: i % 2 === 0 ? "success" : "failed",
   }));
-  const failures = Array.from({ length: 30 }, (_, i) => ({
-    flow_path: `f/factory/flow-${i}-${"y".repeat(60)}`,
-    step: `step-${i}-${"s".repeat(60)}`,
-    count: 30 - i,
-    sample_error: "e".repeat(400),
-    first_sha: SHA_A,
-    last_sha: SHA_B,
-    unknown_version_count: 1,
-  }));
+  const newestDeployment = history[0]?.occurred_at ?? "";
+  const oldestDeployment = history[29]?.occurred_at ?? "";
   const evidence: AuditEvidence = {
     ...EMPTY_EVIDENCE,
-    failures,
+    failures: Array.from({ length: 30 }, (_, i) => ({
+      flow_path: `f/factory/flow-${i}-${"y".repeat(60)}`,
+      step: `step-${i}-${"s".repeat(60)}`,
+      count: 30 - i,
+      sample_error: "e".repeat(400),
+      first_sha: SHA_A,
+      last_sha: SHA_B,
+      unknown_version_count: 1,
+    })),
+    rejections: Array.from({ length: 30 }, (_, i) => ({
+      kind: "issue_proposal",
+      title: `title ${i} ${"t".repeat(100)}`,
+      reason: `reason ${i} ${"r".repeat(300)}`,
+      decided_at: "2026-09-21T00:00:00.000Z",
+    })),
+    human_outcomes: Array.from({ length: 30 }, (_, i) => ({
+      to_status: "needs_human",
+      note: `note ${i} ${"n".repeat(300)}`,
+      count: 30 - i,
+    })),
     deployment_history: history,
     deployments: [{ key: "success", count: 90 }],
     running_version_at_start: SHA_A,
     running_version_at_end: SHA_C,
   };
 
-  test("keeps 30 deployments and 30 failure groups within 12,000 characters", () => {
+  test("the fixture's raw lines alone exceed 12,000 characters, so truncation must run", () => {
+    const rawLength = buildEvidenceSections(evidence)
+      .flatMap((section) => [...section.fixed, ...section.lines])
+      .reduce((total, line) => total + line.length, 0);
+    expect(rawLength).toBeGreaterThan(12000);
+  });
+
+  test("stays within 12,000 characters", () => {
     expect(renderEvidenceMarkdown(evidence).length).toBeLessThanOrEqual(12000);
   });
 
-  test("keeps the running version fixed line in that worst case", () => {
+  test("records the omitted rows", () => {
+    expect(renderEvidenceMarkdown(evidence)).toMatch(/- 省略\d+行/);
+  });
+
+  test("keeps the running version at the period end", () => {
     expect(renderEvidenceMarkdown(evidence)).toContain(
       "- 稼働版(期間の終了時点): ccccccc\n",
     );
+  });
+
+  test("keeps the running version at the period start", () => {
+    expect(renderEvidenceMarkdown(evidence)).toContain(
+      "- 稼働版(期間の開始時点): aaaaaaa\n",
+    );
+  });
+
+  test("keeps the newest deployment row", () => {
+    expect(renderEvidenceMarkdown(evidence)).toContain(newestDeployment);
+  });
+
+  test("drops the oldest deployment row first", () => {
+    expect(renderEvidenceMarkdown(evidence)).not.toContain(oldestDeployment);
   });
 });
 

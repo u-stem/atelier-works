@@ -364,7 +364,9 @@ function formatStageLine(stat: StageStat, previous: StageStat | undefined) {
   );
 }
 
-function buildEvidenceSections(evidence: AuditEvidence): EvidenceSection[] {
+export function buildEvidenceSections(
+  evidence: AuditEvidence,
+): EvidenceSection[] {
   const targetFixed = [
     sanitizeCell(`インスタンス: ${evidence.instance_name}`, SANITIZE_CELL_MAX),
     sanitizeCell(`期間: ${evidence.period_label}`, SANITIZE_CELL_MAX),
@@ -925,7 +927,7 @@ export async function collectAuditEvidence(
     SELECT count(*) AS count
     FROM factory.deployments
     WHERE occurred_at >= ${start}::timestamptz AND occurred_at < ${end}::timestamptz
-      AND needs_host_action
+      AND result = 'success' AND needs_host_action
   `.fetch();
 
   const pastProposalRows = await sql`
