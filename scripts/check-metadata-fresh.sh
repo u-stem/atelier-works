@@ -23,6 +23,12 @@ Windmillのメタデータが最新ではありません。
 ローカルでWindmillを起動した状態(`mise run up`)で`mise run metadata`を実行し、更新されたファイルをコミットしてpushし直してください。
 上の出力が古い項目の一覧ではなく、接続やログインのエラーのときは、`Show diagnostics`ステップのサーバーのログを確かめてください。
 MESSAGE
+elif echo "$output" | grep -q "No workspace profile found"; then
+  cat <<'MESSAGE'
+
+wmillのワークスペースのプロファイルがありません(`.wmill`にログイン情報がありません)。
+`mise run bootstrap`でログインしてください。git worktreeの中では、`.wmill`がメイン作業ツリーの`.wmill`へのリンクになっているかを確かめてください(`scripts/link-worktree-wmill.sh`で張れます)。
+MESSAGE
 else
   cat <<'MESSAGE'
 
