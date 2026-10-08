@@ -40,6 +40,7 @@ function createFakeSqlClient(responses: SqlRow[][] = []): {
 describe("buildSystemPrompt", () => {
   test("concatenates each skill's SKILL.md content", async () => {
     const files = new Map([
+      ["/clone/.claude/skills/factory-writing/SKILL.md", "content-common"],
       ["/clone/.claude/skills/a/SKILL.md", "content-a"],
       ["/clone/.claude/skills/b/SKILL.md", "content-b"],
     ]);
@@ -60,6 +61,43 @@ describe("buildSystemPrompt", () => {
     expect(written).toContain("content-a");
   });
 
+  test("puts the common factory-writing skill before the requested skills", async () => {
+    const readPaths: string[] = [];
+    await buildSystemPrompt({
+      skillNames: ["a"],
+      factoryCloneDir: "/clone",
+      readFile: async (path) => {
+        readPaths.push(path);
+        return path;
+      },
+      writeTempFile: async () => ({
+        path: "/tmp/fake-system-prompt.md",
+        cleanup: async () => {},
+      }),
+    });
+    expect(readPaths).toEqual([
+      "/clone/.claude/skills/factory-writing/SKILL.md",
+      "/clone/.claude/skills/a/SKILL.md",
+    ]);
+  });
+
+  test("does not read a common skill twice when it is also requested", async () => {
+    const readPaths: string[] = [];
+    await buildSystemPrompt({
+      skillNames: ["factory-writing"],
+      factoryCloneDir: "/clone",
+      readFile: async (path) => {
+        readPaths.push(path);
+        return path;
+      },
+      writeTempFile: async () => ({
+        path: "/tmp/fake-system-prompt.md",
+        cleanup: async () => {},
+      }),
+    });
+    expect(readPaths).toHaveLength(1);
+  });
+
   test("returns the path from writeTempFile", async () => {
     const result = await buildSystemPrompt({
       skillNames: [],
@@ -77,6 +115,7 @@ describe("buildSystemPrompt", () => {
     const result = await buildSystemPrompt({
       skillNames: [],
       factoryCloneDir: "/clone",
+      readFile: async () => "",
     });
     try {
       const file = Bun.file(result.path);
@@ -91,6 +130,7 @@ describe("buildSystemPrompt", () => {
     const result = await buildSystemPrompt({
       skillNames: [],
       factoryCloneDir: "/clone",
+      readFile: async () => "",
     });
     await result.cleanup();
     await expect(access(result.path)).rejects.toThrow();
@@ -100,10 +140,12 @@ describe("buildSystemPrompt", () => {
     const first = await buildSystemPrompt({
       skillNames: [],
       factoryCloneDir: "/clone",
+      readFile: async () => "",
     });
     const second = await buildSystemPrompt({
       skillNames: [],
       factoryCloneDir: "/clone",
+      readFile: async () => "",
     });
     try {
       expect(first.path).not.toBe(second.path);
@@ -297,6 +339,132 @@ describe("runClaude", () => {
     ]);
     const result = await runClaude(baseOptions(fake.run));
     expect(result).toMatchObject({ outcome: "success", retried: true });
+  });
+
+  test("retries once with the issues that reviewOutput found", async () => {
+    const fake = createFakeCommandRunner([
+      { stdout: claudeJsonStdout(), stderr: "", exitCode: 0, timedOut: false },
+      { stdout: claudeJsonStdout(), stderr: "", exitCode: 0, timedOut: false },
+    ]);
+    await runClaude({
+      ...baseOptions(fake.run),
+      reviewOutput: () => ["1行目: 絵文字があります"],
+    });
+    const secondStdin = fake.calls[1]?.options?.stdin ?? "";
+    expect(secondStdin).toContain("- 1行目: 絵文字があります");
+  });
+
+  test("adds the caller's reviewRetryNote to a retry for reviewOutput issues", async () => {
+    const fake = createFakeCommandRunner([
+      { stdout: claudeJsonStdout(), stderr: "", exitCode: 0, timedOut: false },
+      { stdout: claudeJsonStdout(), stderr: "", exitCode: 0, timedOut: false },
+    ]);
+    await runClaude({
+      ...baseOptions(fake.run),
+      reviewOutput: () => ["issue"],
+      reviewRetryNote: "edit the file you wrote last time",
+    });
+    const secondStdin = fake.calls[1]?.options?.stdin ?? "";
+    expect(secondStdin).toContain("edit the file you wrote last time");
+  });
+
+  test("does not add reviewRetryNote to a retry for an invalid output", async () => {
+    const fake = createFakeCommandRunner([
+      { stdout: "not json", stderr: "", exitCode: 0, timedOut: false },
+      { stdout: claudeJsonStdout(), stderr: "", exitCode: 0, timedOut: false },
+    ]);
+    await runClaude({
+      ...baseOptions(fake.run),
+      reviewRetryNote: "edit the file you wrote last time",
+    });
+    const secondStdin = fake.calls[1]?.options?.stdin ?? "";
+    expect(secondStdin).not.toContain("edit the file you wrote last time");
+  });
+
+  test("keeps the first attempt's issues in the detail when the retry for them times out", async () => {
+    const fake = createFakeCommandRunner([
+      { stdout: claudeJsonStdout(), stderr: "", exitCode: 0, timedOut: false },
+      { stdout: "", stderr: "", exitCode: 124, timedOut: true },
+    ]);
+    const result = await runClaude({
+      ...baseOptions(fake.run),
+      reviewOutput: () => ["1行目: 見出しにコード表記があります"],
+    });
+    const detail = result.outcome === "failure" ? result.detail : "";
+    expect(detail).toContain("1行目: 見出しにコード表記があります");
+  });
+
+  test("escapes the reason separator in the first attempt's issues kept in the detail", async () => {
+    const fake = createFakeCommandRunner([
+      { stdout: claudeJsonStdout(), stderr: "", exitCode: 0, timedOut: false },
+      { stdout: "", stderr: "", exitCode: 124, timedOut: true },
+    ]);
+    const result = await runClaude({
+      ...baseOptions(fake.run),
+      reviewOutput: () => ["a; b"],
+    });
+    const detail = result.outcome === "failure" ? result.detail : "";
+    expect(detail).not.toContain("; ");
+  });
+
+  test("returns the retry result even when reviewOutput still finds issues", async () => {
+    const fake = createFakeCommandRunner([
+      { stdout: claudeJsonStdout(), stderr: "", exitCode: 0, timedOut: false },
+      { stdout: claudeJsonStdout(), stderr: "", exitCode: 0, timedOut: false },
+    ]);
+    const result = await runClaude({
+      ...baseOptions(fake.run),
+      reviewOutput: () => ["still wrong"],
+    });
+    expect(result).toMatchObject({ outcome: "success", retried: true });
+  });
+
+  test("does not retry when reviewOutput finds no issues", async () => {
+    const fake = createFakeCommandRunner([
+      { stdout: claudeJsonStdout(), stderr: "", exitCode: 0, timedOut: false },
+    ]);
+    const result = await runClaude({
+      ...baseOptions(fake.run),
+      reviewOutput: () => [],
+    });
+    expect(result).toMatchObject({ outcome: "success", retried: false });
+  });
+
+  test("returns the first result when reviewOutput throws", async () => {
+    const fake = createFakeCommandRunner([
+      { stdout: claudeJsonStdout(), stderr: "", exitCode: 0, timedOut: false },
+    ]);
+    const result = await runClaude({
+      ...baseOptions(fake.run),
+      reviewOutput: () => {
+        throw new Error("cannot read the document");
+      },
+    });
+    expect(result).toMatchObject({ outcome: "success", retried: false });
+  });
+
+  test("does not retry for reviewOutput issues when beforeRetry refuses", async () => {
+    const fake = createFakeCommandRunner([
+      { stdout: claudeJsonStdout(), stderr: "", exitCode: 0, timedOut: false },
+    ]);
+    const result = await runClaude({
+      ...baseOptions(fake.run),
+      reviewOutput: () => ["issue"],
+      beforeRetry: async () => false,
+    });
+    expect(result).toMatchObject({ outcome: "success", retried: false });
+  });
+
+  test("keeps the first attempt's record when retrying for reviewOutput issues", async () => {
+    const fake = createFakeCommandRunner([
+      { stdout: claudeJsonStdout(), stderr: "", exitCode: 0, timedOut: false },
+      { stdout: claudeJsonStdout(), stderr: "", exitCode: 0, timedOut: false },
+    ]);
+    const result = await runClaude({
+      ...baseOptions(fake.run),
+      reviewOutput: () => ["issue"],
+    });
+    expect(result.discardedAgentRun).toBeDefined();
   });
 
   test("appends the retry note to the second attempt's stdin", async () => {

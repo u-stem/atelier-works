@@ -1,4 +1,4 @@
-summary: '[OP-0-1/1] Console 用データ取得'
+summary: '[OP-0-1/1] Console用データ取得'
 description: Factory Console(承認・進捗・分析ダッシュボード)が表示する一覧・集計データを、対応するData
   Tableのビューから読み取り専用で取得します。承認や再実行などの操作は行いません。
 lock: '!inline f/factory/steps/console_query.script.lock'

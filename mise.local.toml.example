@@ -1,66 +1,28 @@
 # mise.local.toml.example
 #
-# このファイルはテンプレート。コピーして編集しても可だが、値を入れるのは
-# 人であり Claude は行わない。
+# 秘密値のキーの一覧。値を入れるのは人で、Claudeは入れない。
+# mise.local.tomlはgitの管理外で、doctor.shが`git check-ignore`で確かめる。
 #
-# 値の投入は、シェル履歴に残さず `!` 等の記号による展開事故も避けられる
-# read -s 経由を推奨する(例: DB_PASSWORD の場合)。
-#   zsh:  read -rs 'v?DB_PASSWORD: ' && mise set -E local DB_PASSWORD="$v"; unset v
-#   bash: read -rs -p 'DB_PASSWORD: ' v && mise set -E local DB_PASSWORD="$v"; unset v
-# `mise set -E local KEY=value` の直書きでも投入できるが、記号を含まない値に
-# 限る(zsh の履歴展開で `!` 等が誤動作する)。加えて値がシェル履歴に残る。
-#
-# 下記はキー一覧と取得方法のメモ。mise.local.toml は git 管理外(doctor.sh が
-# `git check-ignore` で gitignore 対象であることを確認する)。
+# 値の投入コマンド(zshとbash)は docs/setup.md の「秘密値を投入する」を参照する。
+# 資格情報の作り方(PAT、OAuthトークン、Webhook)は docs/security.md を参照する。
 
 [env]
-# ローカル Postgres 用のパスワード。任意の強い文字列でよい。
-#   read -rs 'v?DB_PASSWORD: ' && mise set -E local DB_PASSWORD="$v"; unset v
+# ローカルのPostgresのパスワード。任意の強い文字列にする。
 DB_PASSWORD = ""
 
-# Windmill 初期管理者アカウントのメールアドレス。
+# Windmillの管理者アカウントのメールアドレス。bootstrapがこのアドレスでログインする。
 WM_ADMIN_EMAIL = "admin@windmill.dev"
 
-# 初回起動後に bootstrap が設定する Windmill 管理者パスワード。
-# "changeme" は不可、16 文字以上を推奨する。
-#   read -rs 'v?WM_ADMIN_PASSWORD: ' && mise set -E local WM_ADMIN_PASSWORD="$v"; unset v
+# bootstrapが設定するWindmillの管理者パスワード。"changeme"は使えない。16文字以上にする。
 WM_ADMIN_PASSWORD = ""
 
-# GitHub の fine-grained personal access token。
-# 手順: GitHub 右上のアイコン → Settings → Developer settings →
-# Personal access tokens → Fine-grained tokens → Generate new token。
-# 各項目は以下の通り設定する。
-#   - Token name: atelier-works-factory(複数インスタンスがある場合は
-#     -<instance_name> を付ける)
-#   - Description: Software Factory worker (Issues/PR automation)
-#   - Resource owner: 対象リポジトリの所有者(個人アカウントまたは org 名)
-#   - Expiration: Custom で 1 年後(最長)。期限切れは doctor と
-#     poll_issues が検出する
-#   - Repository access: Only select repositories → factory に拾わせる
-#     リポジトリを選択する(sandbox 用のリポジトリも含む)
-#   - Repository permissions:
-#       Issues = Read and write
-#       Contents = Read-only(工程 3 で Read and write に変更し再発行する)
-#       Metadata = Read-only(自動で付与される)
-#       Pull requests = Read and write
-#   - Account permissions: すべて No access
-# Generate token を押すと github_pat_... が一度だけ表示されるので、その場で
-# 下のコマンドで投入する(再表示されない)。
-#   read -rs 'v?GITHUB_TOKEN: ' && mise set -E local GITHUB_TOKEN="$v"; unset v
-# org のリポジトリを対象にする場合、org 側の承認が必要になることがある。
+# GitHubのfine-grained personal access token。権限の設定は docs/security.md に従う。
 GITHUB_TOKEN = ""
 
-# Claude Code の OAuth トークン。
-# 手順: ホストで `claude setup-token` を実行 → ブラウザでログイン →
-# 表示されたトークンをコピーする。
-#   read -rs 'v?CLAUDE_CODE_OAUTH_TOKEN: ' && mise set -E local CLAUDE_CODE_OAUTH_TOKEN="$v"; unset v
+# Claude CodeのOAuthトークン。ホストで`claude setup-token`を実行して作る。
 CLAUDE_CODE_OAUTH_TOKEN = ""
 
-# Discord の Webhook URL(通知用)。
-# 手順: 対象チャンネルの設定(歯車アイコン)→ 連携サービス → ウェブフック →
-# 新しいウェブフック → 名前を "Software Factory" にして
-# 「ウェブフック URL をコピー」を押す。
-#   read -rs 'v?DISCORD_WEBHOOK_URL: ' && mise set -E local DISCORD_WEBHOOK_URL="$v"; unset v
+# 通知先のDiscordのWebhook URL。
 DISCORD_WEBHOOK_URL = ""
 
 # Console の成果物(CI の artifact)を取り込む console_fetcher 専用の

@@ -4,56 +4,19 @@
 
 ## Project-specific instructions
 
-- コメントは日本語で書く(ユーザーレベルの「コード / コメントは英語」より本ルールを
-  優先する)。識別子・テスト名・ログやエラーのメッセージ・プロンプト文字列は英語の
-  まま。`§`や設計文書の章番号、変更の経緯は書かない。書き方は
-  `docs/coding-guidelines.md`の「コメント」、日本語の推敲は`yomiyasu`スキルに従う。
-- Configは`.env`系ファイルではなくmiseで管理する。非秘密の設定は`mise.toml`
-  の`[env]`に平文で置く。秘密(`DB_PASSWORD` / `WM_ADMIN_EMAIL` /
-  `WM_ADMIN_PASSWORD` / `GITHUB_TOKEN` / `CLAUDE_CODE_OAUTH_TOKEN` /
-  `DISCORD_WEBHOOK_URL` / `CONSOLE_GITHUB_TOKEN`)はgitignore済みの
-  `mise.local.toml`に人が投入する。
-  投入先が`mise.local.toml`になること、`-E local`を付けなくても以降の
-  `mise run` / `mise exec`に自動反映されることは実機確認済み。推奨コマンドは
-  次のとおり(値を非表示入力にし、シェル履歴に値を残さない)。
-  - zsh: `read -rs 'v?KEY: ' && mise set -E local KEY="$v"; unset v`
-  - bash: `read -rs -p 'KEY: ' v && mise set -E local KEY="$v"; unset v`
-  直書きの`mise set -E local KEY=value`は補足手段に留める(記号を含まない値
-  のみで安全、かつシェル履歴に値がそのまま残る点に注意)。Claudeが担当するのは
-  `mise.local.toml.example`の更新まで。実際の値の投入は人の作業であり、必要に
-  なったら作業を止めずに実行すべきコマンド(上記のいずれか)を提示したうえで
-  先に進む。
-- `//native`は使わない(child_process / fsを使うため)。managed skillsが推奨する
-  bunnativeランタイムより本ルールを優先する。
-- Windmill資産の配置先は`f/factory/**`、migrationは
-  `migrations/datatable/main/**`に固定する。AGENTS.wmill.mdの「配置先やパスを
-  ユーザーに聞く」「deploy方式を聞く」というmanaged guidanceは本リポジトリでは
-  適用せず、常にこの既定値を使う(subagentやheadless実行はユーザーに質問できない)。
-- Deploy mode: wmill sync push (no git-push deploy)。実務上は`mise run push` =
-  `wmill sync push --yes --keep-deleted`を使う。削除を確定させる
-  `mise run push:prune`は人が明示的に実行する。
-- Metadata: auto。pre-commitフックが`f/`配下のステージ内容に応じて
-  `wmill generate-metadata --yes`を実行し、変更・新規作成されたロック/スキーマ
-  ファイルを自動でステージする(確認は不要)。pre-pushの`metadata:check`は
-  push対象に`f/`か`wmill-lock.yaml`の変更が含まれるときだけ動き、staleな
-  メタデータを検出してpushを止める。どちらもローカルWindmill(`mise run up`)
-  への接続が必要。依存変更を隠さないため`rehash`は使わない。
-  Windmillを起動できない場面では`LEFTHOOK_EXCLUDE=wmill-metadata git commit ...`
-  (pre-commit)/ `LEFTHOOK_EXCLUDE=wmill-metadata-check git push`(pre-push)で
-  一時的に飛ばせるが、次のpush前に`mise run metadata`で追従させる。
-  手動実行は`mise run metadata` / `mise run metadata:check`。
-- `scripts/lint-no-type-assertions.ts`はトークンベースのヒューリスティックのため、
-  まれな入力では誤検知/検知漏れが起こりうる(詳細はスクリプト冒頭コメント参照)。
-  `.tsx`ではJSXを読み分けるが、コードをJSXと読み違えることがある(例: 型の位置
-  の呼び出しシグネチャ`{ <T>(x: T): T }`、キーワードと同じ綴りの変数を`<`で
-  比べる`from < max`)。読み違えた要素はたいていファイルの終わりまで閉じず、
-  `file:line:column`を出してエラーで止まる。その場合は書き方を変えて避ける。
-  ただし、後ろの文字列リテラルなどにある`</`(`"</a>"`)が読み違えた要素を
-  閉じると、その間のコードは黙って検査から漏れる。
-- Git hooksはlefthook(`mise run setup`で`lefthook install`を実行)。
-  pre-commitで(`f/`配下のステージがあれば)`wmill generate-metadata --yes`
-  (`scripts/generate-metadata-staged.sh`)を先に実行し、続けてbiome・`as`禁止
-  (`lint-no-type-assertions.ts`)・gitleaks・(`f/`があれば)`wmill lint f`を
-  並列実行する。commit-msgでコミットメッセージ規約検査
-  (`scripts/check-commit-msg.sh`)、pre-pushで`mise run check`と
-  `mise run metadata:check`(stale検出)を実行する。`--no-verify`は使わない。
+本リポジトリでClaudeが守る決まりを書く。
+次の3つは、ユーザーレベルの設定と`AGENTS.wmill.md`の管理された指示より優先する。
+日本語でコメントを書くこと、`//native`を使わないこと、配置先とdeploy方式を聞かないことである。
+
+- コメントは日本語で書く(ユーザーレベルの「コメントは英語」より優先する)。識別子、テスト名、ログとエラーのメッセージ、プロンプトの文字列は英語のままにする。書き方は[コーディング規約](docs/coding-guidelines.md)に従う。
+- コメントに`§`、設計文書の章番号、変更の経緯は書かない。リポジトリの外の文書は読み手が辿れず、経緯はコミットとPRに残すため。
+- 文書は[文書の書き方](docs/writing-guidelines.md)と`factory-docs`スキルに従って書く。日本語の推敲には`yomiyasu`スキルを使う。
+- 設定は`.env`系のファイルを使わず、miseで管理する。秘密でない設定は`mise.toml`の`[env]`に、秘密値はgitignore済みの`mise.local.toml`に置く。
+- 秘密値は人が投入する。Claudeは`mise.local.toml.example`の更新までを行い、値が要るときは[セットアップ](docs/setup.md)の投入コマンドを示して、止まらずに先へ進む。
+- `//native`は使わない(scriptが`child_process`と`fs`を使うため)。管理スキルが勧めるbunnativeより本ルールを優先する。
+- Windmillの資産は`f/factory/**`に、migrationは`migrations/datatable/main/**`に置く。配置先とdeploy方式はユーザーに聞かない(subagentとheadlessの実行は質問できないため)。
+- Deploy mode: wmill sync push (no git-push deploy)。`mise run push`(`wmill sync push --yes --keep-deleted`)を使う。削除を確定する`mise run push:prune`は人が実行する。
+- Metadata: auto。メタデータの再生成と検査はgitのフックが行うので、確認せずに任せる。依存の変更を隠さないため`rehash`は使わない。
+- メタデータのフックを飛ばすのは、ローカルのWindmillを起動できないときだけにする。commitには`LEFTHOOK_EXCLUDE=wmill-metadata`、pushには`LEFTHOOK_EXCLUDE=wmill-metadata-check`を付ける。次のpushの前に`mise run metadata`で追従させる。
+- gitのフックはlefthookで動く([セットアップ](docs/setup.md)の「gitのフック」)。`--no-verify`は使わない。フックの検査を飛ばすと、壊れた変更や秘密値がpushされるため。
+- `scripts/lint-no-type-assertions.ts`はトークン単位のヒューリスティックで、まれな入力では誤検知や見逃しが起こる。`.tsx`でJSXを読み違えたときの扱いと既知の限界は[コーディング規約](docs/coding-guidelines.md)の「TypeScript」にある。

@@ -51,7 +51,7 @@ description: >-
 # `value`に次のキーを足す。
 #   implement_enabled: true
 #     要件定義の承認後に実装を自動で開始するか。既定はfalseで、falseの間は
-#     承認後に`approved`で止まる(ConsoleのFailuresタブの再実行も拒否される)。
+#     承認後に`approved`で止まる(retry_work_itemでの再実行も拒否される)。
 #     sandboxリポジトリでe2eを済ませてからtrueにする。
 #   check_commands_by_repo:
 #     <owner>/<repo>:
@@ -72,4 +72,4 @@ description: >-
 #   時間の設定と検査コマンドの数は、実装フローのステップのtimeout
 #   (`IMPLEMENT_STEP_TIMEOUT_SEC`)に収まる組み合わせにする。収まらないと、実装の
 #   準備でneeds_humanになる。既定値なら検査コマンドは7件まで、修正ラウンドを
-#   始められる余裕を考えると4件までが目安。計算式は`docs/operations.md`を参照。
+#   始められる余裕を考えると4件までが目安。計算式は`docs/internals/implement.md`を参照。

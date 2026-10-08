@@ -1,4 +1,4 @@
-summary: '[OP-1-1/2] 作業項目を登録して工程 2 を起動'
+summary: '[OP-1-1/2] 作業項目を登録して工程2を起動'
 description: 作成されたIssueの担当を確定し、作業項目として登録します。GitHubへ確認コメントを投稿してDiscordに通知したうえで、要件定義の生成を開始します。
 lock: '!inline f/factory/steps/manual_intake_register.script.lock'
 kind: script

@@ -1,6 +1,6 @@
 // 保護パスの判定を、pr_fixとimplementフローで共有する。
 // pr_fix(`steps/pr_workflow_support.ts`)では一致するとpushを止め
-// (docs/security.md「pr_fixの安全策」)、implementフロー(`lib/implement_support.ts`)では
+// (docs/security.md「PR修正の安全策」)、implementフロー(`lib/implement_support.ts`)では
 // PR本文とDiscord通知に記録するだけにする。
 // `implement_support`が`steps`からimportしないで済むよう`lib`に置き、
 // `pr_workflow_support.ts`が判定関数とpr_fixの一覧を再exportする。
@@ -42,6 +42,11 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  */
 export const FORBIDDEN_EXACT_PATHS: readonly string[] = ["console/index.html"];
 
+/**
+ * pr_fixが保護するファイル名(ディレクトリを問わない)。
+ * markdownlint-cli2とtextlintの設定も含める。どちらも設定から任意のモジュールを読み込めて、
+ * pre-commitと`mise run check`が読むので、書き換えられるとコードを実行されるため。
+ */
 export const FORBIDDEN_BASENAME_PATTERNS: readonly RegExp[] = [
   /^mise\.toml$/,
   /^mise\..*\.toml$/,
@@ -54,6 +59,8 @@ export const FORBIDDEN_BASENAME_PATTERNS: readonly RegExp[] = [
   /^\.npmrc$/,
   /^\.gitattributes$/,
   /^\.gitmodules$/,
+  /^\.markdownlint(-cli2)?\.(jsonc?|ya?ml|[cm]?js)$/,
+  /^\.textlintrc(\..*)?$/,
 ];
 
 /**
@@ -135,7 +142,7 @@ function matchesPathLists(
 }
 
 /**
- * `path`がdocs/security.md「pr_fixの安全策」の禁止パスに当たるかを返す。
+ * `path`がdocs/security.md「PR修正の安全策」の禁止パスに当たるかを返す。
  * `prefixes`のディレクトリは、リポジトリのルートからの相対パスの前方一致で判定する
  * (ディレクトリ名そのものも一致とみなす)。
  * `FORBIDDEN_EXACT_PATHS`とは完全一致で、`FORBIDDEN_BASENAME_PATTERNS`は

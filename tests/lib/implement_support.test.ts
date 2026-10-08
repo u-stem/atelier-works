@@ -18,6 +18,7 @@ import {
   IMPLEMENT_STEP_TIMEOUT_SEC,
   ISSUE_UPDATED_AFTER_INTAKE_NOTE,
   implementDeadlineAt,
+  implementOutputProseIssues,
   implementTimeoutMisfit,
   isImplementClaudeOutput,
   isRequirementsApprovedForAttempt,
@@ -704,7 +705,7 @@ describe("buildImplementPrBody", () => {
   test("checks only 反映するものは無い when no deploy-relevant path changed", () => {
     expect(buildImplementPrBody(PR_BODY_INPUT)).toContain(
       [
-        "Windmillへの反映:",
+        "### Windmillへの反映",
         "",
         "- [ ] マージ後に`self_update`が自動で反映する(`f/`・`migrations/`・`.claude/skills/`の変更)",
         "- [ ] 次に`mise run up`で起動したときに反映される(`infra/`、`mise.toml`の`[tools]`・`[env]`の変更)",
@@ -1247,5 +1248,20 @@ describe("CHECK_COMMAND_STOP_OVERHEAD_SEC", () => {
     expect(CHECK_COMMAND_STOP_OVERHEAD_SEC * 1000).toBeGreaterThanOrEqual(
       RUNNER_MAX_STOP_OVERHEAD_MS,
     );
+  });
+});
+
+describe("implementOutputProseIssues", () => {
+  test("reports a plain ending in the summary that goes into the PR body", () => {
+    const issues = implementOutputProseIssues({
+      outcome: "done",
+      summary: "検索を追加した。",
+      gap_report: null,
+      commit_subject: "feat: 検索を追加",
+      commit_body: "",
+      notes_for_reviewer: [],
+    });
+
+    expect(issues).toHaveLength(1);
   });
 });

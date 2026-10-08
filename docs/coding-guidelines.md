@@ -1,11 +1,12 @@
 # コーディング規約
 
+このリポジトリのコードを書くときの決まりを定める。コードを変更する人と、Claudeが読む。文書の書き方は[文書の書き方](writing-guidelines.md)にある。
+
 ## 言語
 
-- ドキュメント(`docs/**`、`README.md`等)は日本語で書く。
-- コメントは日本語で書く。識別子・テスト名・ログやエラーのメッセージ・Claudeへのプロンプト文字列は英語のままにする。
-- 日本語の文章(コメント・ドキュメント・スキル)は`yomiyasu`スキル(`.claude/skills/yomiyasu/`)の原則で推敲する。英字と日本語の間にスペースを入れない。文体は常体にする。
-- コミットメッセージはConventional Commitsのtype + 日本語の説明: `<type>: <日本語説明>`(`type`は`feat` / `fix` / `docs` / `refactor` / `test` / `chore`)。
+- 文書とコメントは日本語で書く。日本語の書き方は[文書の書き方](writing-guidelines.md)に従う。
+- 識別子、テスト名、ログとエラーのメッセージ、Claudeへのプロンプトの文字列は英語のままにする。
+- コミットメッセージの1行目は`<type>: <日本語の説明>`の形にする。typeは`feat`、`fix`、`docs`、`refactor`、`test`、`chore`のどれかで、commit-msgのフックが検査する。
 
 ## コメント
 
@@ -42,7 +43,7 @@ export function jstMidnightTodayIso(now: Date): string {
   - `as const`
   - 型ガード関数の内部での絞り込み
 - `any`は使わない(biomeの`noExplicitAny`で強制する)。
-- 外部由来の値(HTTPレスポンス、`JSON.parse`の結果、サブプロセスのstdoutなど)は**parse, don't validate**の原則で扱う。「型があるかのように決め打ちしてアクセスする」のではなく、型ガード関数でパースしてから使う。
+- 外部から来た値(HTTPの応答、`JSON.parse`の結果、サブプロセスのstdoutなど)は、parse, don't validateの原則で扱う。型があると決め打ちしてアクセスせず、型ガード関数でパースしてから使う。
 
 ```ts
 // 悪い例: 決め打ちでアクセスする(`as`で黙らせている)
@@ -64,7 +65,15 @@ if (!isClaudeResult(parsed)) {
 // ここから先は`parsed`を`ClaudeResult`として扱える
 ```
 
-型ガード関数の内部でオブジェクトの形を確認するために絞り込む箇所は許容されるが、`lint-no-type-assertions`のチェック対象になる。判定ロジック自体は`typeof` / `in` / 配列チェックなどで組み立てる。
+型ガード関数の内部で、オブジェクトの形を確かめるために絞り込むことは許す。ただし、その箇所も`lint-no-type-assertions`の検査の対象になる。判定は`typeof`、`in`、配列の確認などで組み立てる。
+
+`as`の検出(`scripts/lint-no-type-assertions.ts`)は、`console/`を含めて`.ts`と`.tsx`を検査する。
+完全な構文解析ではなくトークン単位で読むので、まれな入力では誤検知や見逃しが起こる。
+`.tsx`ではJSXを読み分けるが、コードをJSXと読み違えることがある。
+
+- 読み違える例は、型の位置の呼び出しシグネチャ`{ <T>(x: T): T }`と、キーワードと同じ綴りの変数を`<`で比べる`from < max`である。
+- 読み違えた要素はたいていファイルの終わりまで閉じない。そのときは`UnclosedJsxError`として`file:line:column`を出し、エラーで止まる。書き方を変えて避ける。
+- 後ろの文字列リテラルなどにある`</`(`"</a>"`)が、読み違えた要素を閉じることがある。そのときは、間のコードが黙って検査から漏れる。
 
 ## TDD
 
@@ -75,41 +84,55 @@ if (!isClaudeResult(parsed)) {
 
 ## テストの分類
 
-本リポジトリ自身のテストはGoogleのテストサイズ分類(small / medium / large)で分ける。
+このリポジトリのテストは、Googleのテストサイズの分類(small、medium、large)で分ける。
 
-- **small**: 外部依存(DB・ネットワーク・コンテナ)を使わない単体テスト。`bun test`(`mise run test`)。`f/factory/lib/**`の大半はここに属し、外部プロセス起動や`fetch`は注入したダミー実装に差し替える。
-- **medium**: composeのPostgresを使うSQLスモークテストなど、単一マシン内のローカルな依存(DB・コンテナ)を使うテスト。`mise run test:db`。
-- **large**: 実際のIssue起票から確認するE2E。`factory-dev`スキルおよび`mise run doctor` → `up` → `bootstrap`後の手順に従う。
+| サイズ | 対象 | 実行 |
+| --- | --- | --- |
+| small | DB、ネットワーク、コンテナを使わない単体テスト。`f/factory/lib/**`の大半がここに入り、外部プロセスの起動や`fetch`は注入したダミーに差し替える | `mise run test`(`bun test`) |
+| medium | composeのPostgresを使うSQLのスモークテストなど、1台のマシンの中の依存を使うテスト | `mise run test:db` |
+| large | 実際にIssueを起票して確かめるE2E | `factory-dev`スキルの「E2Eの動作確認」の手順 |
 
 ## Windmill scriptの作法
 
-- Windmill固有の配置・secret取得・config取得・native不使用などの規約は`windmill-script`スキル(`.claude/skills/windmill-script/SKILL.md`)を参照する。
+Windmillの資産の配置、secretとconfigの取得、`//native`を使わないことなどの決まりは、`windmill-script`スキルにある。
 
 ## Windmill datatableの型安全性
 
-- `wmill.datatable()`のタグ付きテンプレート(バッククォート文字列)に`null`パラメータを渡すと、Windmillがそのパラメータを`text`型で束縛する。bigint / integer / numeric / boolean / jsonbなどの非text列に対してnull値をINSERT / UPDATEしようとすると、`column is of type bigint but expression is of type text`エラーで失敗する。
-- **回避策**: nullになりうるパラメータに対して明示キャストを付ける。`lib/db.ts`では、nullになりうるすべての非textパラメータに`::型名`(例: `::bigint`、`::boolean`)キャストを必ず付け、テストで確認する。
+`wmill.datatable()`のタグ付きテンプレートに`null`を渡すと、Windmillはその値を`text`型で束縛する。そのため、textでない列(bigint、integer、numeric、boolean、jsonbなど)にnullを入れると失敗する。エラーは`column is of type bigint but expression is of type text`の形になる。
+
+`lib/db.ts`では、nullになりうるtextでない値には必ず明示的なキャスト(`::bigint`や`::boolean`など)を付ける。キャストが効くことはテストで確かめる。
 
 ## 検証コマンド
 
-- `mise run check`で`lint`(`biome check` + `wmill lint f` + 型アサーション検出)→ `typecheck`(`tsc --noEmit`)→ `test`(`bun test`、`console/`を除く)→ `console:check`(Consoleの型検査・テスト・組み立て)を順に実行する。PRを出す前に必ず緑にする。
-- Console(`console/`)の依存はルートと分け、`console/bun.lock`で固定する。入れるときは`bun install --cwd console --frozen-lockfile --ignore-scripts`を、足すときは`bun add --cwd console --exact --ignore-scripts <package>`を使う。bunは依存のinstall scriptを既定では実行しないが、既定の信頼する一覧(trustedDependencies)にある有名なパッケージだけは実行するため、`--ignore-scripts`で止める。
-- 型アサーション検出は`.tsx`を対象にしない(スキャナーがJSXの本文を誤って読むため)。`.tsx`では`as`を書かず、判定は`.ts`の純粋関数に切り出す。
+`mise run check`は、`lint`、`lint:docs`、`typecheck`、`test`、`console:check`を順に実行する。
+PRを出す前に必ず通す。
 
-## PRテンプレート
+- `lint`はbiome、`wmill lint f`、型アサーションと`§`の検出を含む。
+- `test`は`bun test`で、`console/`を除く。
+- `console:check`は、Console(`console/`)のlockfileの方針を検査し、型検査、テスト、組み立てを行う。
 
-PRは`.github/PULL_REQUEST_TEMPLATE.md`の次の章立てに従う。
+依存は、ルートの`bun.lock`と、Console(`console/`)の`console/bun.lock`に分けて固定する。
 
-1. **概要**: このPRで何をしたか、なぜ必要かを簡潔に記述する。
-2. **受入条件**: Issueの受入基準をチェックリストで記述する(Factoryが作成したPR)。
-3. **動作確認結果**: lint / typecheck / test / E2Eの実行結果をチェックする。
-4. **確認して欲しい点**: 実装上のトレードオフや不確実な部分を記述する。
-5. **関連リンク**: `Closes #N`形式でIssueを明示する(Factoryはこれで承認済み要件と照合する)。
-6. **備考**: Windmillへの反映を記述する。`f/`・`migrations/`・`.claude/skills/`の変更はマージ後に`self_update`が自動で反映し、`infra/`と`mise.toml`の`[tools]`・`[env]`の変更は次に`mise run up`で起動したときに反映される(通知はしない)。`console/`の変更は、マージ後にCIが通れば数分で`console_fetcher`が反映する。
+| 対象 | 入れるとき | 足すとき |
+| --- | --- | --- |
+| ルート | `bun install --frozen-lockfile --ignore-scripts` | `bun add --exact --ignore-scripts <package>` |
+| Console | `bun install --cwd console --frozen-lockfile --ignore-scripts` | `bun add --cwd console --exact --ignore-scripts <package>` |
 
-人がClaude Codeで作成するコミットには、トレーラー`Co-Authored-By: Claude <noreply@anthropic.com>`を付ける。
+どちらも`--ignore-scripts`を必ず付ける。
+bunは依存のinstall scriptを既定では実行しないが、既定の信頼する一覧(trustedDependencies)にある有名なパッケージだけは実行するためである。
 
-Software Factoryが作成するコミットには、トレーラー`Co-Authored-By: Claude <noreply@anthropic.com>`と`Generated-By: Software Factory (<instance_name>)`が自動で付く(`lib/workspace.ts`の`commitAndPush`)。
+## PRとコミット
+
+PRの本文は`.github/PULL_REQUEST_TEMPLATE.md`の章立てに従う。
+
+人がClaude Codeで作るコミットには、`Co-Authored-By: Claude <noreply@anthropic.com>`のトレーラーを付ける。
+
+Software Factoryが作るコミットには、`lib/workspace.ts`の`commitAndPush`が次のトレーラーを自動で付ける。
+
+```text
+Co-Authored-By: Claude <noreply@anthropic.com>
+Generated-By: Software Factory (<instance_name>)
+```
 
 ## PRチェックリスト
 
@@ -117,4 +140,4 @@ Software Factoryが作成するコミットには、トレーラー`Co-Authored-
 - [ ] 対象範囲外のファイルを「ついで」で変更していない
 - [ ] シークレット・個人情報をコミットしていない
 - [ ] コード変更に伴うdocs / スキルの更新を同じPRに含めている
-- [ ] Windmillへの反映(`self_update`の自動反映か、次の`mise run up`での反映か)を明記している
+- [ ] Windmillへの反映(`self_update`の自動反映か、次の`mise run up`での反映か、`console/`をCIの後に`console_fetcher`が取り込むか)を明記している

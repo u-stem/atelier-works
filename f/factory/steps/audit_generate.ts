@@ -8,6 +8,8 @@ import {
   AUDIT_BASE_DIR,
   AUDIT_TEMPLATE_RELATIVE_PATH,
   type AuditProposal,
+  auditOutputRegisterIssues,
+  auditReportRegisterIssues,
   auditSnapshotDir,
   checkAuditOutput,
   EVIDENCE_MD_FILENAME,
@@ -104,6 +106,52 @@ export function allowedUrlPrefixesFor(
 ): string[] {
   const { owner, repo } = parseGitHubRepoUrl(config.factory_repo);
   return [`https://github.com/${owner}/${repo}`, config.windmill_public_url];
+}
+
+/**
+ * 監査の検査に通らずに再試行するとき、問題の一覧の前に付け足す文。
+ * 再試行は新しいセッションで動くので、前回書いたレポートが残っていることを伝えて直させる。
+ * 改善提案は構造化出力で、ファイルに残らないので、前回の提案の中身を保って出し直させる。
+ */
+export const AUDIT_REVIEW_RETRY_NOTE = [
+  "前回書いたファイルがカレントディレクトリに残っているので、作り直さずにそれを編集して直してください。",
+  "前回の構造化出力の改善提案も、これらの検査に通りませんでした。提案の中身は保ったまま、指摘された点だけを直して返してください。",
+].join("\n");
+
+/**
+ * 監査の構造化出力と、書き終えたレポートの本文にかける検査をまとめ、問題を返す(無ければ空)。
+ * `runClaude`の`reviewOutput`(問題を伝えて1回だけ書き直させる)と、
+ * 生成後の最終的な検査の両方がこれを使う。
+ * 再試行でClaudeがどこを直せばよいか分かるよう、レポートの問題にはファイル名を前置きする。
+ */
+export function collectAuditIssues(
+  output: AuditOutput,
+  markdown: string,
+  allowedUrlPrefixes: readonly string[],
+): string[] {
+  const reportValidation = validateAuditReport(markdown, output.proposals);
+  const reportIssues = reportValidation.ok ? [] : reportValidation.issues;
+  return [
+    ...checkAuditOutput(output, allowedUrlPrefixes),
+    ...reportIssues.map((issue) => `${REPORT_MD_FILENAME}: ${issue}`),
+  ];
+}
+
+/**
+ * 監査の構造化出力とレポートの本文の文体を検査し、問題を返す(無ければ空)。
+ * 生成は失敗にせず、ログに残すだけにする。
+ * レポートの問題には、`collectAuditIssues`と同じくファイル名を前置きする。
+ */
+export function auditRegisterIssues(
+  output: AuditOutput,
+  markdown: string,
+): string[] {
+  return [
+    ...auditOutputRegisterIssues(output),
+    ...auditReportRegisterIssues(markdown).map(
+      (issue) => `${REPORT_MD_FILENAME}: ${issue}`,
+    ),
+  ];
 }
 
 /**
@@ -452,6 +500,13 @@ export async function main(
       addDirs: [snapshotDir],
       oauthToken,
       timeoutMs: config.claude_timeout_sec * 1000,
+      reviewOutput: async (output) =>
+        collectAuditIssues(
+          output,
+          await readTextFile(`${docDir}/${REPORT_MD_FILENAME}`),
+          allowedUrlPrefixesFor(config),
+        ),
+      reviewRetryNote: AUDIT_REVIEW_RETRY_NOTE,
     });
 
     await recordClaudeRuns(result, recordAgentRun);
@@ -477,22 +532,25 @@ export async function main(
 
     const markdown = await readTextFile(`${docDir}/${REPORT_MD_FILENAME}`);
 
-    const structuredIssues = checkAuditOutput(
+    const issues = collectAuditIssues(
       result.structuredOutput,
+      markdown,
       allowedUrlPrefixesFor(config),
     );
-    const reportValidation = validateAuditReport(
-      markdown,
-      result.structuredOutput.proposals,
-    );
-    const issues = [
-      ...structuredIssues,
-      ...(reportValidation.ok ? [] : reportValidation.issues),
-    ];
     if (issues.length > 0) {
       throw new Error(
         `audit_generate: audit report failed validation: ${issues.join("; ")}`,
       );
+    }
+    const registerIssues = auditRegisterIssues(
+      result.structuredOutput,
+      markdown,
+    );
+    if (registerIssues.length > 0) {
+      log.warn("audit output breaks the writing rules", {
+        work_item_id,
+        issues: registerIssues,
+      });
     }
 
     const reportId = await insertAuditReport({

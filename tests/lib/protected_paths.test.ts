@@ -269,3 +269,43 @@ describe("isNewShellScript", () => {
     );
   });
 });
+
+describe("lint configs that can load code", () => {
+  test.each([
+    ".markdownlint-cli2.jsonc",
+    ".markdownlint-cli2.yaml",
+    ".markdownlint-cli2.cjs",
+    ".markdownlint-cli2.mjs",
+    ".markdownlint.json",
+    ".markdownlint.yml",
+    ".markdownlint.js",
+    "docs/.markdownlint.jsonc",
+  ])("matchesForbiddenPath matches %s", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(true);
+  });
+
+  test.each([
+    ".textlintrc",
+    ".textlintrc.json",
+    ".textlintrc.yml",
+    ".textlintrc.js",
+    "docs/.textlintrc.json",
+  ])("matchesForbiddenPath matches %s", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(true);
+  });
+
+  test.each([".markdownlint-cli2.jsonc", ".textlintrc.json"])(
+    "matchesImplementProtectedPath matches %s",
+    (path) => {
+      expect(matchesImplementProtectedPath(path)).toBe(true);
+    },
+  );
+
+  test.each([
+    "docs/markdownlint.md",
+    "textlintrc.json",
+    ".markdownlint-cli2.jsonc.md",
+  ])("matchesForbiddenPath does not match %s", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(false);
+  });
+});

@@ -23,6 +23,13 @@ import { gitPointerStopReason } from "../lib/implement_loop.ts";
 import { escapeReasonSeparator, maskSecrets } from "../lib/log.ts";
 import { type LockOwner, WorktreeBusyError } from "../lib/process_lock.ts";
 import {
+  ASCII_BOUNDARY_CLASS,
+  COMMIT_MESSAGE_RULES,
+  checkProseFields,
+  GITHUB_PROSE_RULES,
+  JAPANESE_CHAR_CLASS,
+} from "../lib/prose_check.ts";
+import {
   type ChangedPath,
   type ChangedPathStatus,
   isNewShellScript,
@@ -94,18 +101,7 @@ export const ROLE_TAGS = {
 // `renderReviewSummary`、`renderFixReply`)に直す。
 // ---------------------------------------------------------------------------
 
-/**
- * この規則で「日本語の文字」とみなす範囲。
- * ひらがな、カタカナ、CJK統合漢字(拡張Aを含む)、
- * CJKの記号と句読点(、。「」など)、半角・全角形の各ブロック。
- */
-const JAPANESE_CHAR_CLASS =
-  "\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\u3000-\\u303f\\uff00-\\uffef";
-/**
- * この規則で「英字の並びの終わり(または始まり)」とみなす文字。
- * 英数字と、閉じ文字の`)`、`]`、`` ` ``。
- */
-const ASCII_BOUNDARY_CLASS = "0-9A-Za-z)\\]`";
+// 「日本語の文字」と「英字の並びの端」の範囲は、文章の検査(`lib/prose_check.ts`)と同じものを使う。
 
 const JAPANESE_CHAR_RE = new RegExp(`[${JAPANESE_CHAR_CLASS}]`);
 const ASCII_BOUNDARY_RE = new RegExp(`[${ASCII_BOUNDARY_CLASS}]`);
@@ -387,6 +383,78 @@ export function fenceFor(code: string): string {
 function renderSuggestionBlock(code: string): string {
   const fence = fenceFor(code);
   return `\n\n${fence}suggestion\n${code}\n${fence}`;
+}
+
+/**
+ * レビューの出力のうちPRに載る文章(指摘の`message`と`suggestion`)を、
+ * `factory-writing`スキルの規則で検査する。規則に反していても投稿は止めない。
+ * レビューを作り直すと費用が倍になるので、呼び出し側は問題をログに残すだけにする。
+ * `summary`はGitHubに投稿しない(総評は固定の文面)ので検査しない。
+ */
+export function reviewOutputProseIssues(output: ReviewClaudeOutput): string[] {
+  return checkProseFields(
+    output.findings.flatMap((finding, index) => [
+      {
+        label: `findings[${index}].message`,
+        text: finding.message,
+        rules: GITHUB_PROSE_RULES,
+      },
+      ...(finding.suggestion === null
+        ? []
+        : [
+            {
+              label: `findings[${index}].suggestion`,
+              text: finding.suggestion,
+              rules: GITHUB_PROSE_RULES,
+            },
+          ]),
+    ]),
+  );
+}
+
+/**
+ * pr_fixの返信、Issue化の提案、コミットメッセージを、`factory-writing`スキルの規則で検査する。
+ * 規則に反していてもpushと返信は止めない。修正をやり直すと費用が倍になるので、
+ * 呼び出し側は問題をログに残すだけにする。
+ */
+export function fixOutputProseIssues(
+  replies: readonly FixReply[],
+  commitSubject: string,
+  commitBody: string | null,
+): string[] {
+  return checkProseFields([
+    ...replies.flatMap((reply, index) => [
+      {
+        label: `replies[${index}].body`,
+        text: reply.body,
+        rules: GITHUB_PROSE_RULES,
+      },
+      ...(reply.issue_proposal === null || reply.issue_proposal === undefined
+        ? []
+        : [
+            {
+              label: `replies[${index}].issue_proposal.title`,
+              text: reply.issue_proposal.title,
+              rules: GITHUB_PROSE_RULES,
+            },
+            {
+              label: `replies[${index}].issue_proposal.body`,
+              text: reply.issue_proposal.body,
+              rules: GITHUB_PROSE_RULES,
+            },
+          ]),
+    ]),
+    {
+      label: "commit_subject",
+      text: commitSubject,
+      rules: COMMIT_MESSAGE_RULES,
+    },
+    {
+      label: "commit_body",
+      text: commitBody ?? "",
+      rules: COMMIT_MESSAGE_RULES,
+    },
+  ]);
 }
 
 /**
@@ -760,7 +828,7 @@ export type PrFixGateOutcome =
 
 // ---------------------------------------------------------------------------
 // pr_fix_prepare: 安全のための関門(純粋関数)。
-// 方針は`docs/security.md`の「pr_fixの安全策」を参照。
+// 方針は`docs/security.md`の「PR修正の安全策」を参照。
 // ---------------------------------------------------------------------------
 
 export type PrFixGuardResult =
@@ -1259,7 +1327,7 @@ export function isFixClaudeOutput(value: unknown): value is FixClaudeOutput {
 
 // ---------------------------------------------------------------------------
 // pr_fix_verify: 禁止された変更の検出(純粋関数)。
-// 方針は`docs/security.md`の「pr_fixの安全策」を参照。
+// 方針は`docs/security.md`の「PR修正の安全策」を参照。
 // ---------------------------------------------------------------------------
 
 /**
@@ -2524,7 +2592,7 @@ const defaultCreateCheckHomeDir: CreateCheckHomeDir = async () => {
 /**
  * `allowed_check_commands`の各項目を、`cwd`で順に実行する。
  * 環境変数は最小限を明示的に渡し(PATHと新しい非公開のHOMEだけで、秘密は引き継がない。
- * `docs/security.md`の"env -i PATH=... HOME=...")、終わったらHOMEのディレクトリを消す。
+ * `docs/internals/pr-workflow.md`の「検査コマンドの実行」)、終わったらHOMEのディレクトリを消す。
  * miseの設定の信頼(trust)は決して与えない(`MISE_TRUSTED_CONFIG_PATHS`も
  * `mise --yes trust`も使わない)。信頼が無いと動かない検査コマンド
  * (信頼されていない対象リポジトリの`mise.toml`に対する`mise run check`など)は、
@@ -2609,8 +2677,8 @@ export type PrFixFinalAction =
  * `pr_fix_finish.ts`が取るべき終端の動作に振り分ける。
  *
  * `guard_blocked`(prepareの、PRがopen・forkでない・draftでない・
- * 保護ブランチでないという関門)は、`docs/security.md`の
- * 「違反はblockedとして中断する」に従い`work_items`の`"blocked"`にする。
+ * 保護ブランチでないという関門)は、`docs/internals/pr-workflow.md`の
+ * 「準備での確認」のとおり`work_items`の`"blocked"`にする。
  * `blocked`(Claude自身の判断か、`pr_fix_verify`が検出した禁止ファイルや
  * 検査コマンドの失敗)は`"needs_human"`にする。
  * どちらも上流では`"blocked"`の形の結果だが、失敗の種類が違うので、
@@ -3425,10 +3493,10 @@ const RETRY_WORK_ITEM_ACTION =
 
 /**
  * 汎用の次の対応。より具体的な対応が無いときの既定にする。
- * 原因は通知の理由と、ConsoleのNoticesタブ(`factory_console__raw_app`)のnoticeに残る。
+ * 原因は通知の理由と、Consoleの通知タブ(`factory_console__raw_app`)のnoticeに残る。
  * 取り除いた後の再実行は、どの種別の作業項目にも使える`retry_work_item`を案内する。
  */
-const GENERIC_NEXT_ACTION = `通知の理由とConsoleのNoticesタブで原因を確かめ、取り除いてから、${RETRY_WORK_ITEM_ACTION}`;
+const GENERIC_NEXT_ACTION = `通知の理由とConsoleの通知タブで原因を確かめ、取り除いてから、${RETRY_WORK_ITEM_ACTION}`;
 
 const FACTORY_FIX_RELABEL_ACTION =
   "対応してほしい指摘をコメントしてから`factory:fix`を付け直してください";
@@ -3446,7 +3514,7 @@ const DAILY_BUDGET_NEXT_ACTION =
 const NOTHING_TO_COMMIT_NEXT_ACTION =
   "返信内容を確認し、必要なら指示をコメントして`factory:fix`を付け直してください";
 const ISSUE_PROPOSAL_NEXT_ACTION =
-  "ConsoleのInboxで提案を承認または却下してください";
+  "Consoleの承認タブで提案を承認または却下してください";
 
 /**
  * 確かめる内容`check`の後に、フローごとの再実行を続けた次の操作を返す。
@@ -3513,23 +3581,23 @@ const REASON_RULES: readonly ReasonRule[] = [
   // 準備の関門は修正の前に`blocked`で止めるので、再実行は修正のラウンドを使わない`retry_work_item`にする。
   {
     pattern: /^pull request is not open$/,
-    describe: () => "PR がオープンではありません",
+    describe: () => "PRがオープンではありません",
     nextAction: () => "PRを再オープンするか、この作業を取り下げてください",
   },
   {
     pattern: /^head repository differs from base repository \(fork PR\)$/,
-    describe: () => "head リポジトリと base リポジトリが異なります(fork PR)",
+    describe: () => "headリポジトリとbaseリポジトリが異なります(fork PR)",
     nextAction: () =>
       "forkではなく同一リポジトリのブランチからPRを作り直してください",
   },
   {
     pattern: /^pull request is a draft$/,
-    describe: () => "PR がドラフトです",
+    describe: () => "PRがドラフトです",
     nextAction: () => `ドラフトを解除してから、${RETRY_WORK_ITEM_ACTION}`,
   },
   {
     pattern: /^base branch is protected$/,
-    describe: () => "base ブランチが保護されています",
+    describe: () => "baseブランチが保護されています",
     nextAction: () => "baseブランチの保護設定を確認してください",
   },
   {
@@ -3543,7 +3611,7 @@ const REASON_RULES: readonly ReasonRule[] = [
   // pr_fix_prepare.tsの`evaluateFixRoundGuard`(round_exhausted)
   {
     pattern: /^fix_round (\d+) exceeds max_fix_rounds (\d+)$/,
-    describe: (m) => `fix_round ${m[1]} が max_fix_rounds ${m[2]} を超えました`,
+    describe: (m) => `fix_round ${m[1]}がmax_fix_rounds ${m[2]}を超えました`,
     nextAction: () => "残りの指摘は人が対応するか、上限を見直してください",
   },
   // pr_fix_collect.ts(no_feedback)
@@ -3575,7 +3643,7 @@ const REASON_RULES: readonly ReasonRule[] = [
   {
     pattern: /^symlink escapes the worktree: (.+) -> (.+)$/,
     describe: (m) =>
-      `シンボリックリンクが worktree の外を指しています: ${m[1]} -> ${m[2]}`,
+      `シンボリックリンクがworktreeの外を指しています: ${m[1]} -> ${m[2]}`,
     nextAction: () => FORBIDDEN_CHANGE_NEXT_ACTION,
   },
   {
@@ -3593,12 +3661,12 @@ const REASON_RULES: readonly ReasonRule[] = [
   },
   {
     pattern: /^changed file count (\d+) exceeds (\S+) (\d+)$/,
-    describe: (m) => `変更ファイル数 ${m[1]} が ${m[2]} ${m[3]} を超えました`,
+    describe: (m) => `変更ファイル数${m[1]}が${m[2]} ${m[3]}を超えました`,
     nextAction: () => DIFF_SIZE_NEXT_ACTION,
   },
   {
     pattern: /^diff line total (\d+) exceeds (\S+) (\d+)$/,
-    describe: (m) => `diff の総行数 ${m[1]} が ${m[2]} ${m[3]} を超えました`,
+    describe: (m) => `diffの総行数${m[1]}が${m[2]} ${m[3]}を超えました`,
     nextAction: () => DIFF_SIZE_NEXT_ACTION,
   },
   // pr_fix_apply.ts、pr_fix_verify.ts、pipeline_generate.ts、
@@ -3606,18 +3674,18 @@ const REASON_RULES: readonly ReasonRule[] = [
   {
     pattern: /^daily budget exceeded \(\$([\d.]+) >= \$([\d.]+)\)$/,
     describe: (m) =>
-      `1 日あたりの Claude 利用予算の上限に達しました($${m[1]} >= $${m[2]})`,
+      `1日あたりのClaude利用予算の上限に達しました($${m[1]} >= $${m[2]})`,
     nextAction: () => DAILY_BUDGET_NEXT_ACTION,
   },
   {
     pattern: /^daily budget exceeded$/,
-    describe: () => "1 日あたりの Claude 利用予算の上限に達しました",
+    describe: () => "1日あたりのClaude利用予算の上限に達しました",
     nextAction: () => DAILY_BUDGET_NEXT_ACTION,
   },
   // pr_fix_finish.tsのpushと再試行の結果(head_changedなど)
   {
     pattern: /^PR head moved to (\S+) while the fix was in progress$/,
-    describe: (m) => `修正の実行中に PR の head が ${m[1]} に変わりました`,
+    describe: (m) => `修正の実行中にPRのheadが${m[1]}に変わりました`,
     nextAction: () =>
       "最新のheadを確認し、必要なら`factory:fix`を付け直してください",
   },
@@ -3686,7 +3754,7 @@ const REASON_RULES: readonly ReasonRule[] = [
   // pr_fix_finish.tsの`evaluateRerouteGuard`(親に`issue_number`が無い)
   {
     pattern: /^parent work item has no issue_number$/,
-    describe: () => "親の work item に issue_number がありません",
+    describe: () => "親のwork itemにissue_numberがありません",
     nextAction: () => "work itemの状態をConsoleで確認してください",
   },
   // pr_fix_finish.tsが使う`evaluateRerouteParentStatus`と`rerouteParentChangedReason`。
@@ -3732,14 +3800,14 @@ const REASON_RULES: readonly ReasonRule[] = [
   // poll_issues.tsの期限切れの掃除
   {
     pattern: /^rejected (\d+) times$/,
-    describe: (m) => `${m[1]} 回連続で差し戻されました`,
+    describe: (m) => `${m[1]}回連続で差し戻されました`,
     nextAction: () =>
       "要件を人が整理し、Issueに追記してから`factory`ラベルを付け直してください",
   },
   {
     pattern: /^approval timed out$/,
     describe: () => "承認がタイムアウトしました",
-    nextAction: () => "Inboxで承認または却下してください",
+    nextAction: () => "Consoleの承認タブで承認または却下してください",
   },
   // pr_fix_finish.tsのpush後のレビュアー依頼の結果(`reportReviewerRequest`の`note`で、
   // 作業項目の`status_reason`に残す文)。
@@ -3752,7 +3820,7 @@ const REASON_RULES: readonly ReasonRule[] = [
     pattern:
       /^no reviewers to request \(default_reviewers empty and no fallback reviewer authors\)$/,
     describe: () =>
-      "リクエストするレビュアーがいません(default_reviewers が空で、フォールバックの候補者もいません)",
+      "リクエストするレビュアーがいません(default_reviewersが空で、フォールバックの候補者もいません)",
     nextAction: () =>
       "default_reviewersを設定するか、レビュー履歴を確認してください",
   },
@@ -3766,7 +3834,7 @@ const REASON_RULES: readonly ReasonRule[] = [
     pattern:
       /^requested reviewers were all excluded \(PR author \/ factory viewer\)$/,
     describe: () =>
-      "リクエスト対象のレビュアーが全員除外されました(PR 作成者 / factory 自身)",
+      "リクエスト対象のレビュアーが全員除外されました(PR作成者 / factory自身)",
     nextAction: () =>
       "default_reviewersにPR作成者以外のレビュアーを設定してください",
   },

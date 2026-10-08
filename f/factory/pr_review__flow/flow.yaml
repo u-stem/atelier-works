@@ -1,4 +1,4 @@
-summary: '[SF-3-1] PR の自動レビュー'
+summary: '[SF-3-1] PRの自動レビュー'
 description: >-
   依頼されたPRをレビューします。PRの内容をもとにClaudeがレビューを生成し、GitHubのPRへコメントとして投稿します。結果は記録され、Discordに通知されます。
 value:

@@ -71,7 +71,7 @@ export function buildApprovalNotifyFailedMessage(
   },
   reason: string,
 ): string {
-  return `${target.owner}/${target.repo}#${String(target.issue_number)} (work item ${String(target.work_item_id)}): 承認依頼のDiscord通知を送れませんでした(${reason})。承認依頼はConsoleのInboxで待っています。`;
+  return `${target.owner}/${target.repo}#${String(target.issue_number)} (work item ${String(target.work_item_id)}): 承認依頼のDiscord通知を送れませんでした(${reason})。承認依頼はConsoleの承認タブで待っています。`;
 }
 
 /**

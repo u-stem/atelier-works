@@ -1,175 +1,88 @@
 ---
 name: factory-dev
-description: 本リポジトリ (atelier-works) の開発環境をセットアップし、mise タスクで起動・検証・デプロイするときに使う。実装・レビュー・修正のループを回す際にも参照する。
+description: 本リポジトリ(atelier-works)の開発環境をセットアップし、miseタスクで起動・検証・デプロイするときに使う。実装・レビュー・修正のループを回す際にも参照する。
 ---
 
-# このリポジトリの開発手順 (factory-dev)
+# このリポジトリの開発手順(factory-dev)
 
-## 前提
+このリポジトリで開発するときの手順を定める。環境の作り方、変更の進め方、E2Eでの確かめ方を書く。
 
-- ホストに必要なのは**docker(DesktopまたはOrbStack)とmise**のみ。それ以外(node, bun, gh, windmill-cli)はすべて`mise install`で入る。JSの依存関係(`bun install --frozen-lockfile`など)は`mise install`の後に`mise run setup`が入れる。
-- 初回は`mise trust`を実行してこのリポジトリの`mise.toml`を信頼する。
+## 環境を作る
 
-## 秘密情報の設定
+手順は[セットアップ](../../../docs/setup.md)にある。資格情報の取得手順は[セキュリティ](../../../docs/security.md)にある。miseタスクの一覧は[README](../../../README.md)にある。
 
-- 秘密ではない設定は`mise.toml`の`[env]`に平文でコミットする。
-- 個人の秘密値(`DB_PASSWORD`、`WM_ADMIN_EMAIL`、`WM_ADMIN_PASSWORD`、`GITHUB_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`、`DISCORD_WEBHOOK_URL`、`CONSOLE_GITHUB_TOKEN`)は`.env`を使わず、gitignore済みの`mise.local.toml`に置く。テンプレートは`mise.local.toml.example`。
-- 値の投入は人が行う。推奨コマンドは次のとおり(値に`!`などの記号を含んでもシェル履歴展開で失敗せず、平文がシェル履歴に残らない)。zshでは次のように書く。
+- ホストに要るのはDockerとmiseだけである。ほかのツールは`mise run setup`で入る。
+- 秘密値は人が投入する。Claudeは`mise.local.toml.example`の更新までを行う。値が要るときは、[セットアップ](../../../docs/setup.md)の「秘密値を投入する」のコマンドを示し、止まらずに先へ進む。
+- `docker compose`は`.env`を読まない。`mise run`を通して実行する。
 
-  ```sh
-  read -rs 'v?DB_PASSWORD: ' && mise set -E local DB_PASSWORD="$v"; unset v
-  ```
+## 実装、レビュー、修正のループ
 
-  bashの場合は次のように書く。
+このリポジトリの変更は、計画の確定、実装、レビュー、修正、再レビューのループで進める。
 
-  ```sh
-  read -rs -p 'DB_PASSWORD: ' v && mise set -E local DB_PASSWORD="$v"; unset v
-  ```
+1. 対象のファイルと受入条件を決めてから実装を始める。
+2. TDD(Red、Green、Refactor)で実装する。対象の外のファイルには触れない。
+3. `mise run check`が通ることを、実装の完了の条件にする。
+4. 2つの観点でレビューを受ける。1つは正しさ、規約、テストの網羅で、もう1つは前提の反証と運用時の失敗のしかたである。
+5. 指摘を技術的に確かめてから採否を決め、採用した指摘だけを直す。採用しない指摘には理由を残す。
+6. 新しい指摘が無くなるまで、4と5を繰り返す。目安は3周で、超えるようなら設計に戻る。
 
-  他のキー(`WM_ADMIN_EMAIL`、`WM_ADMIN_PASSWORD`、`GITHUB_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`、`DISCORD_WEBHOOK_URL`、`CONSOLE_GITHUB_TOKEN`)も同様にキー名を差し替えて実行する。`mise set -E local KEY=value`は`mise.local.toml`に`[env]`テーブルとして書き込まれ、`-E local`を付けずとも以降の`mise run` / `mise exec`に自動反映される(実機確認済み)。
-- Claudeが担当するのは`mise.local.toml.example`(値の無いテンプレート)の更新までとする。実際の値の投入は人の作業であり、必要になったら作業を止めずに上記の投入コマンドを提示したうえで先に進む。
-- 投入した値の存在確認は、値そのものを表示せずに行う: `mise exec -- sh -c 'test -n "$DB_PASSWORD" && echo ok'`
-- 注意: `mise set -E local KEY=value`の直書きは、値に記号(`!`など)を含まない場合に限り動くが、平文のままシェル履歴に残るため推奨しない。
-- `docker compose`は`.env`を読まない。`mise run`タスク経由で解決された環境変数を参照するため、必ず`mise run`経由で実行する。
+## コミットとPR
 
-## 資格情報の取得手順
+- コミットメッセージは`<type>: <日本語の説明>`の形にする(例: `feat: Issueを拾うpoll_issuesのスケジュールを追加`)。typeの一覧は[コーディング規約](../../../docs/coding-guidelines.md)にある。
+- コードの変更に伴う文書とスキルの更新は、同じコミットに含める。
+- PRの本文は`.github/PULL_REQUEST_TEMPLATE.md`の章立てに従う。Windmillへの反映(マージ後に`self_update`が反映するか、次の`mise run up`で反映されるか)を必ず書く。
 
-`DB_PASSWORD`、`WM_ADMIN_EMAIL`、`WM_ADMIN_PASSWORD`は自分で決めた値でよい。次の4つは外部サービスから取得する。
+## E2Eで確かめる
 
-### GitHub Personal Access Token(`GITHUB_TOKEN`)
+`mise run doctor`、`mise run up`、`mise run bootstrap`の後で、次を確かめる。PRの修正のE2Eは、本番のIssueやブランチではなく、捨てブランチと捨てPRで行う。
 
-1. GitHub右上のアイコン → **Settings** → **Developer settings** → **Personal access tokens** → **Fine-grained tokens** → **Generate new token**を開く。
-2. **Token name**: `atelier-works-factory`(複数インスタンスで運用する場合は`atelier-works-factory-<instance_name>`)
-3. **Description**: `Software Factory worker (Issues/PR automation)`
-4. **Resource owner**: 対象リポジトリの所有者(個人アカウントまたはorg)を選ぶ。
-5. **Expiration**: Customで1年後(最長)を選ぶ。期限切れは`mise run doctor`と`poll_issues`が検出する。
-6. **Repository access**: Only select repositories → 拾わせるリポジトリ(sandboxリポジトリを含む)を選ぶ。
-7. **Repository permissions**を設定する: Issues = Read and write / Contents = Read and write(`pr_fix`の修正pushに必要)/ Metadata = Read-only(Issues/Contents選択時に自動付与)/ Pull requests = Read and write。
-8. **Account permissions**: すべてNo accessのままにする。
-9. **Generate token**を押し、表示された`github_pat_...`を次のコマンドで投入する(orgリポジトリではorg側の承認が必要な場合がある)。
+1. sandboxのリポジトリで、Issueのテンプレートを使ってIssueを作り、`factory`ラベルを付ける。
+2. `poll_issues`の周期である5分以内に、Discordに通知が届き、Consoleの承認タブに表示されることを確かめる。
+3. 理由を付けて一度差し戻し、要件定義が作り直されて、もう一度通知が来ることを確かめる。
+4. 承認し、IssueにConsoleへのリンクを含むコメントが1件だけ投稿されることを確かめる。要件定義の本文や図は転記されない。ラベルは起動のためだけに使うので、承認してもIssueのラベルは変わらない。
+5. Consoleの分析タブに、コストとトークン数が出ることを確かめる。
+6. 何かの変更をself cloneに反映させ、`self_update`のスケジュールが最新のSHAを取り込むことを確かめる。
 
-   ```sh
-   read -rs 'v?GITHUB_TOKEN: ' && mise set -E local GITHUB_TOKEN="$v"; unset v
+## 実装フローをE2Eで確かめる
+
+上の1から4の後で、sandboxで実装フローを確かめる。sandboxには、`factory_config`の`repo_allowlist`にあるsandboxのリポジトリを使う。`f/factory/factory_config`はgitで管理しないので、Windmillの画面で編集する。
+
+1. `check_commands_by_repo`に、sandboxの検査コマンドを設定する。
+
+   ```json
+   {"<owner>/<repo>": ["bun install --frozen-lockfile", "bun test"]}
    ```
 
-### Claude Code OAuthトークン(`CLAUDE_CODE_OAUTH_TOKEN`)
+2. `implement_enabled`をtrueにする。
+3. Issueを起票し、要件定義を作らせ、Consoleで承認する。
+4. 実装フローが走ることを確かめる。Consoleのパイプラインタブで状態が`implementing`になり、ブランチの列にブランチが出る。
+5. PRができると状態が`pr_open`になり、PRの列にPRが出て、Discordに`pr_opened`の通知が届くことを確かめる。
+6. PR本文の章立て(受入条件、動作確認結果、確認して欲しい点、`Closes #N`)を確かめる。
+7. `poll_prs`がPRを拾い、`pr_review`が自動で走ることを確かめる。実装フローの`implement_finish`が`factory:review`のラベルを付けているので、ラベルを付け直さなくてよい。
+8. 下の表の項目を確かめる。
+9. PRを閉じ、ブランチを消し、`implement_enabled`をfalseに戻す。本番での有効化は、E2Eの結果を確かめてから別に行う。
 
-1. ホストにインストール済みのClaude Code CLIで`claude setup-token`を実行する。
-2. 表示されたサブスク長期OAuthトークンを次のコマンドで投入する。
+検査コマンドについては、次の点に注意する。
 
-   ```sh
-   read -rs 'v?CLAUDE_CODE_OAUTH_TOKEN: ' && mise set -E local CLAUDE_CODE_OAUTH_TOKEN="$v"; unset v
-   ```
+- 検査の前に`git clean -fdX`が`node_modules/`などを消す。依存関係のあるリポジトリでは、先頭のコマンドでインストールする。`package.json`が無いリポジトリなら`bun test`だけでよい。
+- 検査コマンドは、Claudeが書いたコードをrootで、隔離せずに実行する。Issueを信頼できる人だけが起票するリポジトリにだけ設定する。
 
-### Discord Webhook URL(`DISCORD_WEBHOOK_URL`)
+`implement_enabled`については、次の点に注意する。
 
-1. 通知先のDiscordチャンネルで「チャンネル設定」→「連携サービス」→「ウェブフック」→「新しいウェブフック」を開く。
-2. 名前を`Software Factory`に設定する。
-3. 「ウェブフックURLをコピー」でURLを取得し、次のコマンドで投入する。
+- falseのままだと、承認した作業項目は`approved`で止まる。`retry_work_item`での再実行も、falseなら拒否する。
+- インスタンス全体の設定なので、trueの間は`repo_allowlist`のほかのリポジトリと`factory_repo`でも、承認すると実装フローが走る。pushとPRの作成、対象リポジトリのCIまで進むので、E2Eの間はsandbox以外を承認しない。
 
-   ```sh
-   read -rs 'v?DISCORD_WEBHOOK_URL: ' && mise set -E local DISCORD_WEBHOOK_URL="$v"; unset v
-   ```
-
-### Consoleの取り込み用のPAT(`CONSOLE_GITHUB_TOKEN`)
-
-1. GitHub右上のアイコン → **Settings** → **Developer settings** → **Personal access tokens** → **Fine-grained tokens** → **Generate new token**を開く。
-2. **Token name**: `atelier-works-console-fetcher`、**Description**: `Factory Console fetcher (read CI artifacts)`
-3. **Resource owner**: このリポジトリの所有者。**Expiration**: Customで1年後(最長)。
-4. **Repository access**: Only select repositories → このリポジトリだけを選ぶ。
-5. **Repository permissions**: Actions = Read-only、Metadata = Read-only(自動で付与される)。ほかは付けない。**Account permissions**はすべてNo access。
-6. **Generate token**を押し、表示された`github_pat_...`を次のコマンドで投入する。`GITHUB_TOKEN`は流用しない(Actionsの読み取り権限が無く403になり、権限も広すぎる)。
-
-   ```sh
-   read -rs 'v?CONSOLE_GITHUB_TOKEN: ' && mise set -E local CONSOLE_GITHUB_TOKEN="$v"; unset v
-   ```
-
-取りに行くリポジトリは`mise.toml`の`[env]`の`CONSOLE_GITHUB_REPO`にある(フォークで動かすときだけ書き換える)。
-
-## セットアップ手順
-
-```bash
-mise trust
-mise install
-mise run setup       # bun install --frozen-lockfile など JS 依存のセットアップ
-# 個人の秘密値の投入方法は上の「秘密情報の設定」「資格情報の取得手順」の各節を参照(値を書き込むのは人)
-mise run doctor      # 前提(docker / mise / mise.local.toml の必須キー / ポート)を確認
-mise run up           # docker compose でスタック起動
-mise run bootstrap     # workspace 作成、secret 投入、sync push、migration 適用
-```
-
-## miseタスク一覧
-
-| タスク | 内容 |
+| 確かめること | 期待する結果 |
 | --- | --- |
-| `mise run setup` | `mise install`の後にJS依存(`bun install --frozen-lockfile`など)を入れる(骨格側で追加予定) |
-| `mise run doctor` | docker / miseの有無、`mise.local.toml`の必須キー、ポートの空き、Windmillの起動状態、workerコンテナ内の`claude`/`gh`/`git gtr`の動作確認を一覧表示する |
-| `mise run up` | `docker compose`(`infra/docker-compose.yml`)でスタックを起動(build込み)。ホスト側checkoutからビルドするため、先にmainをpullする |
-| `mise run down` | スタックを停止する |
-| `mise run bootstrap` | 初回のみ: Windmillの初期パスワード変更、workspace作成、secret変数の投入、`wmill sync push`、migration適用を冪等に行う |
-| `mise run check` | `lint` → `typecheck` → `test`を順に実行する(PR前に必ず通す) |
-| `mise run lint` | `biome check` + `wmill lint f` + 型アサーション検出スクリプト |
-| `mise run typecheck` | `tsc --noEmit` |
-| `mise run test` | `bun test`(`f/factory/lib/**`の単体テスト。テストサイズsmallのみ) |
-| `mise run test:db` | composeのPostgresを使うSQLスモークテスト(テストサイズmedium。M3で追加) |
-| `mise run push` | `wmill sync push --yes --keep-deleted`でリモートのWindmillにローカルの変更を反映する |
-| `mise run push:dry` | `wmill sync push --dry-run`で反映内容を確認するだけ(リモートは変更しない) |
-| `mise run pull` | `wmill sync pull`でリモート(AppのUI編集など)をローカルに取り込む |
-| `mise run migrate` | `wmill datatable migrate up`でData Tableのマイグレーションを適用する |
-| `mise run deploy` | ホスト側checkoutで`git pull --ff-only` → workerと`console_fetcher`のimageのビルド → `compose up -d` → `wmill sync push` → migrationまで一括実行する(手動で一括反映したいときの手段。`self_update`は`f/`・`migrations/`・`.claude/skills/`を自動で反映し、`infra/**`・`mise.toml`の変更は次の`mise run up`で反映されるので、必須の手順ではない) |
-| `mise run logs` | `docker compose logs`を呼び出す |
-| `mise run console:rollback` | Consoleを直前の版に戻して固定する(自動の更新を止める) |
-| `mise run console:unpin` | Consoleの固定を外し、自動の更新に戻す |
+| 検査コマンド | ラウンドごとに実行され、`implement_rounds`に記録される |
+| コスト | `agent_runs`にコストが記録される |
+| `--restricted`の書き込み制限 | Claudeが`.git`、`.gitattributes`、`.gitleaksignore`、元の要件定義のディレクトリに書けない |
+| Workflowsの権限 | PATにWorkflowsの権限が無く、`.github/workflows/`を含む変更のpushが拒否され、人の対応待ちの理由に載る |
 
-## 実装 → レビュー → 修正のループ(概要)
+`--restricted`の制限を破って書けた場合は、`--restricted`の欠陥として扱い、止めて報告する。書けたときの結果は、書いた先によって次のように違う。
 
-このリポジトリの実装は、計画の確定 → 実装 → レビュー → 修正 → 再レビューのループで進める。
+- `.git`に書けたら、作業項目は人の対応待ち(`needs_human`)になる。
+- `.gitattributes`と`.gitleaksignore`は保護パスなので、そのラウンドは検査を飛ばしてPRを作り、PR本文の保護パスの節に載るだけで止まらない。`.gitleaksignore`はgitleaksも読まない。
+- 要件定義は、Claudeには書き込めるコピーを渡す。確かめるのは、元の要件定義のディレクトリのファイルが変わっていないことである。
 
-1. 対象ファイルと受入条件を明確にしてから実装に着手する。
-2. TDD(Red → Green → Refactor)で実装し、対象範囲外のファイルには触れない。
-3. `mise run check`が緑になることを実装完了の条件とする。
-4. 正しさ・規約・テスト網羅の観点と、前提の反証・運用時の失敗モードの観点でレビューを受ける。
-5. 指摘を技術的に検証してから採否を決め、採用した指摘のみ修正する(不採用は理由を残す)。
-6. 新規の指摘が無くなるまで4〜5を繰り返す(目安3周。超えるようなら設計に立ち返る)。
-
-## コミット規約
-
-- Conventional Commitsのtype + 日本語の説明: `<type>: <日本語説明>`(`type`は`feat` / `fix` / `docs` / `refactor` / `test` / `chore`のいずれか)。
-- 例: `feat: Issue 拾い上げの poll_issues スケジュールを追加`
-- コード変更に伴うdocs / スキルの更新は同じコミットに含める。
-
-## PRで期待されること
-
-- Summary(何を、なぜ)
-- 変更範囲
-- 検証結果(lint / typecheck / test / 該当すればE2E)
-- Windmillへの反映(マージ後に`self_update`が自動で反映するか、`infra/`・`mise.toml`の`[tools]`・`[env]`の変更が次の`mise run up`で反映されるか)
-
-テンプレートは`.github/PULL_REQUEST_TEMPLATE.md`を参照。
-
-## E2E動作確認
-
-`mise run doctor` → `mise run up` → `mise run bootstrap`のあと、次を確認する。
-
-1. サンドボックス用リポジトリでIssueテンプレートからIssueを作成し、`factory`ラベルを付ける。
-2. 5分以内(`poll_issues`の周期)にDiscord通知が届き、Inboxに表示されることを確認する。
-3. 一度Reject(理由付き)し、要件が再生成されて再度通知が来ることを確認する。
-4. Approveし、IssueにConsoleへのリンクを含むコメントが1件だけ投稿されること(要件定義本文や図は転記されない)を確認する。ラベルはトリガー専用なので、承認でIssueのラベルは付け替わらない(`docs/operations.md`のラベルの節を参照)。
-5. Analyticsタブにコスト・トークン数が反映されることを確認する。
-6. 何かしらの変更をself cloneに反映させ、`self_update`スケジュールが最新のSHAを取り込むことを確認する。
-
-### 工程3(実装フロー)のE2E
-
-上記の1〜4のあと、sandboxで実装フローを確認する。sandboxは`factory_config.repo_allowlist`にあるsandboxリポジトリを使う。
-
-1. `check_commands_by_repo`にsandboxの検査コマンドを設定する(例: `{"<owner>/<repo>": ["bun install --frozen-lockfile", "bun test"]}`)。検査の前に`git clean -fdX`で`node_modules/`などが消えるため、依存関係のあるリポジトリは先頭でインストールする。依存関係が無い(`package.json`が無い)リポジトリなら`bun test`だけでよい。検査コマンドはClaudeが書いたコードをrootで隔離なしに実行するため、Issueを信頼できる人だけが起票するリポジトリにだけ設定する。`f/factory/factory_config`はgit管理外なので、Windmill UIで編集する。
-2. `implement_enabled`がfalseのままだと、承認後は`approved`で止まる。e2eの間だけtrueにする(Consoleの再実行で起動する場合も、`retry_work_item`はfalseだと拒否するので、先にtrueにする)。`implement_enabled`はインスタンス全体の設定なので、trueの間は`repo_allowlist`の他のリポジトリと、常に対象の`factory_repo`の承認でも実装フローが走る(push、PR作成、対象リポジトリのCIまで進む)。e2eの間はsandbox以外を承認しない。
-3. Issueを起票し、要件定義を生成させ、Consoleで承認する。実装フローが走り、Pipelineタブで`implementing`になり、ブランチ列にブランチが出る。PRができると`pr_open`(成功扱い)になり、PR列にPRが出て、Discordに`pr_opened`の通知が届く。
-4. PR本文の章立て(受入条件、動作確認結果、確認して欲しい点、`Closes #N`)を確かめる。
-5. 実装フローが作ったPRには、`implement_finish`がすでに`factory:review`ラベルを付けている。ラベルを付け直さなくても、`poll_prs`が拾って`pr_review`が自動で走ることを確認する(ラベルを付け直すのは、レビューをもう一度起動したいときだけ)。
-6. 次を確かめる。
-   - 検査コマンドがラウンドで実行されたこと(`implement_rounds`)。
-   - `agent_runs`のコスト。
-   - `--restricted`のClaudeが`.git` / `.gitattributes` / `.gitleaksignore`と要件定義のディレクトリに書けないこと。書けたなら`--restricted`の欠陥として扱い、止めて報告する。書けた場合の結果は経路で違う。`.git`は`needs_human`になる。`.gitattributes`と`.gitleaksignore`は保護パスなので、そのラウンドは検査を飛ばしてPRを作り、PR本文の保護パスの節に載るだけで止まらない(`.gitleaksignore`はgitleaksも読まない)。要件定義はClaudeに書き込めるコピーを渡す設計なので、確かめるのは元の要件定義のディレクトリのファイルが変わっていないこと。
-   - PATにWorkflows権限が無いこと、`.github/workflows/**`を含む変更のpushが拒否され、`needs_human`の理由に載ること。権限は足さない(工程3は`.github/**`の変更を止めずに記録するので、push拒否が実質のガードになる)。
-7. 終わったらPRを閉じ、ブランチを消し、`implement_enabled`をfalseに戻す(有効化はe2eの結果を確かめてから別に行う)。
+Workflowsの権限は足さない。実装フローは`.github/`の変更を止めずに記録するので、pushの拒否が実質のガードになる。

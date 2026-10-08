@@ -437,5 +437,5 @@ export function parseDiskUsageKb(duOutput: string): number {
 /** `factory.notices`に載せるディスク使用量の日本語の文言を、読みやすいMiB単位で返す。 */
 export function formatDiskUsageMessage(usageKb: number, path: string): string {
   const usageMib = (usageKb / 1024).toFixed(1);
-  return `${path} のディスク使用量は約 ${usageMib} MiB です。`;
+  return `${path}のディスク使用量は約${usageMib} MiBです。`;
 }

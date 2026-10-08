@@ -38,7 +38,7 @@ describe("summarizeCleanup", () => {
       doc_dirs_deleted: 0,
     });
     expect(summary).toBe(
-      "work item 3件、失敗記録 12件、デプロイ記録 5件、通知 2件を削除しました",
+      "work item 3件、失敗記録12件、デプロイ記録5件、通知2件を削除しました",
     );
   });
 });

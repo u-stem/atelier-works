@@ -1,4 +1,4 @@
-summary: '[LIB] GitHub API ラッパー'
+summary: '[LIB] GitHub APIラッパー'
 description: 内部ライブラリです。直接実行するものではありません。GitHubとやり取りするための共通処理です。
 lock: '!inline f/factory/lib/github.script.lock'
 kind: script

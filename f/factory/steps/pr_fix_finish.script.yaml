@@ -1,4 +1,4 @@
-summary: '[SF-3-2/5] push と再レビュー依頼'
+summary: '[SF-3-2/5] pushと再レビュー依頼'
 description: 修正結果を確定するステップです。変更をpushし、対応した指摘への返信・ラベルの更新・Discord通知を行ったうえで、必要であれば再レビューを依頼します。
 lock: '!inline f/factory/steps/pr_fix_finish.script.lock'
 kind: script

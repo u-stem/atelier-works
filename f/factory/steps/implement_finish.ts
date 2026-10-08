@@ -73,6 +73,7 @@ import {
 import {
   buildImplementCommitMessage,
   buildImplementPrBody,
+  implementOutputProseIssues,
   issueChangedSinceIntake,
   neutralizeIssueRefs,
 } from "../lib/implement_support.ts";
@@ -642,6 +643,13 @@ async function finishImplement(
       );
       if (verified.kind === "stop")
         return { ok: false, reason: verified.reason };
+      const proseIssues = implementOutputProseIssues(output);
+      if (proseIssues.length > 0) {
+        log.warn("implement output breaks the writing rules", {
+          work_item_id,
+          issues: proseIssues,
+        });
+      }
       const subject = neutralizeIssueRefs(
         claudeText(output.commit_subject).trim(),
       );

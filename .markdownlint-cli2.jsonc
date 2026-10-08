@@ -1,0 +1,16 @@
+// markdownlintの設定。対象のファイルは`scripts/lint-docs.ts`が決めて渡すので、
+// ここにはglobを書かない。
+{
+  "config": {
+    "default": true,
+    // 日本語の文は折り返さずに1段落を1行で書くので、行の長さは見ない。
+    // 段落と箇条書きの長さは`scripts/lint-docs.ts`(`prose_check.ts`)が見る。
+    "MD013": false,
+    // 生成した範囲の目印に`<!-- -->`を使い、図の埋め込みに一部のHTMLを使う。
+    "MD033": false,
+    // 同じ名前の見出しは、親の見出しが違えば許す(各フローに「起動条件」があるなど)。
+    "MD024": { "siblings_only": true },
+    // PRテンプレートのように、`##`から始まるファイルがある。
+    "MD041": false
+  }
+}

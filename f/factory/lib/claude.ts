@@ -65,8 +65,16 @@ const defaultWriteTempFile: WriteTempFile = async (content) => {
 };
 
 /**
- * `skillNames`の各スキルの`<factoryCloneDir>/.claude/skills/<name>/SKILL.md`を
- * 読んで連結し、`--append-system-prompt-file`に渡す非公開の一時ファイルに書く。
+ * どの実行にも先頭に注入するスキル。Factoryが生成する文章に共通の書き方を定める。
+ * 呼び出し側の`skillNames`に書き忘れても規則が抜けないよう、ここで必ず足す。
+ */
+export const COMMON_SKILL_NAMES: readonly string[] = ["factory-writing"];
+
+/**
+ * `COMMON_SKILL_NAMES`と`skillNames`の各スキルの
+ * `<factoryCloneDir>/.claude/skills/<name>/SKILL.md`を読んで、この順に連結し、
+ * `--append-system-prompt-file`に渡す非公開の一時ファイルに書く。
+ * `skillNames`に共通のスキルがあっても二重には読まない。
  * 呼び出し側は、このファイルを使う`runClaude`の呼び出しをすべて終えたら、
  * 返された`cleanup()`を`finally`で呼ぶこと。
  */
@@ -76,8 +84,12 @@ export async function buildSystemPrompt(
   const readFile = opts.readFile ?? defaultReadFile;
   const writeTempFile = opts.writeTempFile ?? defaultWriteTempFile;
 
+  const names = [
+    ...COMMON_SKILL_NAMES,
+    ...opts.skillNames.filter((name) => !COMMON_SKILL_NAMES.includes(name)),
+  ];
   const sections: string[] = [];
-  for (const name of opts.skillNames) {
+  for (const name of names) {
     const path = `${opts.factoryCloneDir}/.claude/skills/${name}/SKILL.md`;
     sections.push(await readFile(path));
   }
@@ -212,7 +224,7 @@ export function parseClaudeJson(stdout: string): ClaudeRunResult {
 
 const DEFAULT_RETRY_NOTE =
   "前回の出力は必須フィールドが欠落しているか、確認のための質問のみで終わっていました。" +
-  "人に確認を求めず、指定された JSON Schema の必須フィールドをすべて埋めた構造化出力を返してください。";
+  "人に確認を求めず、指定されたJSON Schemaの必須フィールドをすべて埋めた構造化出力を返してください。";
 
 export type RunClaudeOptions<T> = {
   readonly run: CommandRunner;
@@ -277,6 +289,23 @@ export type RunClaudeOptions<T> = {
    * 省略時は確かめずに再試行する。
    */
   readonly beforeRetry?: () => Promise<boolean>;
+  /**
+   * 形の検査に通った出力の内容を確かめ、直すべき点を返す(無ければ空)。
+   * 空でなければ、その点をプロンプトに付け足して1回だけ再試行する。
+   * 不正な出力への再試行と合わせて、再試行は1回まで。
+   * 再試行の結果は、内容の問題が残っていてもそのまま返す。採否は呼び出し側が決める。
+   * 例外を投げたときは問題が無いものとして扱い、最初の結果を返す。
+   */
+  readonly reviewOutput?: (
+    output: T,
+  ) => Promise<readonly string[]> | readonly string[];
+  /**
+   * `reviewOutput`の問題で再試行するときに、問題の一覧の前に付け足す文。
+   * 再試行は新しいセッションで動き、前回の作業を覚えていない。
+   * 前回書いたファイルをどう扱うかなど、成果物ごとの指示を呼び出し側が渡す。
+   * 不正な出力への再試行には付け足さない。
+   */
+  readonly reviewRetryNote?: string;
   /**
    * 将来、workerをroot以外で実行する方式のために予約している。
    * 今は使わず、workerの現在のユーザーで起動する。
@@ -566,6 +595,7 @@ const RETRYABLE_REASONS: readonly RunClaudeFailureReason[] = [
  * 出力に必須のフィールドが欠けているか、JSONとして不正なときは、
  * `retryNote`をプロンプトに付け足して1回だけ再試行する
  * (質問だけで終わった応答も同じくスキーマの検査で失敗するので、これで扱える)。
+ * 形の検査に通っても`reviewOutput`が問題を返したときは、その問題を付け足して1回だけ再試行する。
  * 0以外の終了コード、タイムアウト、`is_error: true`は再試行しない。
  * Claudeの実行の失敗は例外にせず、`outcome: "failure"`と`reason`・`detail`で返す。
  * 再試行したかは成功・失敗とも`retried`で示し、`agentRun`には最後の試行の記録が入る。
@@ -590,29 +620,81 @@ export async function runClaude<T>(
   }
 
   const first = await attemptClaude(opts, opts.prompt);
+  let retryNote: string;
+  let firstIssues: readonly string[] = [];
   if (first.outcome === "success") {
-    return { ...first, retried: false };
-  }
-  if (!RETRYABLE_REASONS.includes(first.reason)) {
-    return { ...first, retried: false };
-  }
-  if (opts.deadlineAt !== undefined && attemptTimeoutMs(opts) <= 0) {
-    return { ...first, retried: false };
-  }
-  if (opts.beforeRetry !== undefined) {
-    // 確かめ自体が失敗しても再試行しない。例外にすると最初の試行の記録(費用)を呼び出し側が記録できないため、最初の失敗を返す。
-    let allowed: boolean;
-    try {
-      allowed = await opts.beforeRetry();
-    } catch {
-      allowed = false;
+    firstIssues = await reviewIssues(opts, first.structuredOutput);
+    if (firstIssues.length === 0) return { ...first, retried: false };
+    retryNote = buildOutputIssuesNote(firstIssues, opts.reviewRetryNote);
+  } else {
+    if (!RETRYABLE_REASONS.includes(first.reason)) {
+      return { ...first, retried: false };
     }
-    if (!allowed) return { ...first, retried: false };
+    retryNote = opts.retryNote ?? DEFAULT_RETRY_NOTE;
   }
+  if (!(await retryAllowed(opts))) return { ...first, retried: false };
 
-  const retryPrompt = `${opts.prompt}\n\n${opts.retryNote ?? DEFAULT_RETRY_NOTE}`;
+  const retryPrompt = `${opts.prompt}\n\n${retryNote}`;
   const second = await attemptClaude(opts, retryPrompt);
+  if (second.outcome === "failure" && firstIssues.length > 0) {
+    // 再試行が別の理由(タイムアウトなど)で失敗しても、再試行に至った最初の問題を失敗の記録に残す。
+    return {
+      ...second,
+      detail: `${second.detail} (first attempt output issues: ${failureDetail(firstIssues.join(" / "))})`,
+      discardedAgentRun: first.agentRun,
+      retried: true,
+    };
+  }
   return { ...second, discardedAgentRun: first.agentRun, retried: true };
+}
+
+/** 再試行の前置き。続けて直すべき点を1行ずつ並べる。 */
+export const OUTPUT_ISSUES_NOTE_HEADER =
+  "前回の出力には次の問題がありました。作業の内容は変えずに、これらの点だけを直した出力を返してください。";
+
+/**
+ * `reviewOutput`が見つけた問題を、再試行のプロンプトに付け足す文にする。
+ * `callerNote`があれば、前置きと問題の一覧の間に入れる。
+ */
+export function buildOutputIssuesNote(
+  issues: readonly string[],
+  callerNote?: string,
+): string {
+  return [
+    OUTPUT_ISSUES_NOTE_HEADER,
+    ...(callerNote === undefined ? [] : [callerNote]),
+    ...issues.map((issue) => `- ${issue}`),
+  ].join("\n");
+}
+
+/** `reviewOutput`を呼ぶ。指定が無いときと、例外を投げたときは空を返す。 */
+async function reviewIssues<T>(
+  opts: RunClaudeOptions<T>,
+  output: T,
+): Promise<readonly string[]> {
+  if (opts.reviewOutput === undefined) return [];
+  try {
+    return await opts.reviewOutput(output);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 期限と`beforeRetry`で、再試行してよいかを決める。
+ * 確かめ自体が失敗しても再試行しない。例外にすると最初の試行の記録(費用)を
+ * 呼び出し側が記録できないため、falseを返して最初の結果を返させる。
+ */
+async function retryAllowed<T>(opts: RunClaudeOptions<T>): Promise<boolean> {
+  if (opts.deadlineAt !== undefined && attemptTimeoutMs(opts) <= 0) {
+    return false;
+  }
+  if (opts.beforeRetry === undefined) return true;
+  try {
+    return await opts.beforeRetry();
+  } catch {
+    return false;
+  }
 }
 
 /**

@@ -8,6 +8,14 @@
 // `validateRequirementsDoc`はそれらをまとめて1つの結果にする。
 
 import {
+  checkProse,
+  formatProseIssues,
+  type ProseRegister,
+  type ProseRuleId,
+  type ProseRules,
+  REPORT_RULES,
+} from "./prose_check.ts";
+import {
   DIAGRAM_NAME_PATTERN,
   DIAGRAM_REF_PATTERN,
   MAX_DIAGRAMS,
@@ -466,6 +474,44 @@ export type RequirementsDocValidation =
   | { readonly ok: true }
   | { readonly ok: false; readonly issues: string[] };
 
+/** `markdown`を`rules`で検査し、`rule`の問題だけを「N行目: 内容」の形で返す。 */
+function documentProseIssues(
+  markdown: string,
+  rule: ProseRuleId,
+  rules: ProseRules = REPORT_RULES,
+): string[] {
+  return formatProseIssues(
+    checkProse(markdown, rules).filter((issue) => issue.rule === rule),
+  );
+}
+
+/**
+ * 要件定義書と監査レポートの文章のうち、生成を失敗にする規則
+ * (見出しにコード表記を入れない)で検査する。
+ * 絵文字と太字は`checkForbiddenSyntax`が見るので、ここでは見ない。
+ * 文体は`documentRegisterIssues`が見る。
+ */
+export function checkDocumentProse(markdown: string): string[] {
+  return documentProseIssues(markdown, "heading-code");
+}
+
+/**
+ * 生成した文書の文体を検査する。既定は常体(要件定義書と監査レポート)で、
+ * GitHubに投稿して人が読む文章(監査の改善提案)は`"polite"`を渡して敬体で検査する。
+ * 呼び出し側は問題をログに残すだけにし、生成を失敗にしない。
+ * 引用符の無い画面の文言や注記の別の文体でも当たるので、これで生成全体をやり直すと、
+ * 費用に見合わないためである。
+ */
+export function documentRegisterIssues(
+  markdown: string,
+  register: ProseRegister = "plain",
+): string[] {
+  return documentProseIssues(markdown, "register", {
+    ...REPORT_RULES,
+    register,
+  });
+}
+
 /** 書き終えた要件定義書にすべての検査をかけ、結果を1つの判定にまとめる。 */
 export function validateRequirementsDoc(
   markdown: string,
@@ -477,6 +523,7 @@ export function validateRequirementsDoc(
     ...checkForbiddenSyntax(markdown),
     ...checkQuotes(markdown),
     ...checkLengths(markdown),
+    ...checkDocumentProse(markdown),
     ...checkDiagramRefs(markdown, diagramFiles),
   ];
   if (issues.length === 0) {

@@ -2117,7 +2117,7 @@ export type CommitAndPushOptions = {
   /**
    * `git commit`のauthorとcommitter。その1回の実行だけに、環境変数
    * `GIT_AUTHOR_*`・`GIT_COMMITTER_*`で渡し、gitの設定には書き込まない
-   * (docs/security.md「pr_fixの安全策」)。
+   * (docs/security.md「PR修正の安全策」)。
    * 呼び出し側は、PATの持ち主から`gitIdentityForViewer`(`github.ts`)で作る。
    */
   readonly author: GitIdentity;

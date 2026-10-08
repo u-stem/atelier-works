@@ -1,4 +1,4 @@
-summary: '[LIB] git worktree と作業領域'
+summary: '[LIB] git worktreeと作業領域'
 description: 内部ライブラリです。直接実行するものではありません。作業用リポジトリの取得・更新を行う共通処理です。
 lock: '!inline f/factory/lib/workspace.script.lock'
 kind: script

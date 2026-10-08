@@ -1,4 +1,4 @@
-summary: '[LIB] Discord 通知'
+summary: '[LIB] Discord通知'
 description: 内部ライブラリです。直接実行するものではありません。Discordへの通知を送信するための共通処理です。
 lock: '!inline f/factory/lib/discord.script.lock'
 kind: script

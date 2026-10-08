@@ -1,0 +1,9 @@
+summary: '[LIB] 文章の検査'
+description: 内部ライブラリです。直接実行するものではありません。リポジトリの文書とFactoryが生成する文章を、文書の書き方の規則で検査する共通処理です。
+lock: '!inline f/factory/lib/prose_check.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

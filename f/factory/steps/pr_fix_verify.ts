@@ -350,7 +350,7 @@ export async function main(
       announceChecks: async () => {
         await addNotice({
           kind: "unsandboxed_check_commands",
-          message: `pr_fix_verify はこれから ${String(config.allowed_check_commands.length)} 件の allowed_check_commands を、サンドボックス分離なしで root 権限により ${owner}/${repo}#${String(pr_number)} の未検証コードに対して実行します(work item ${String(work_item_id)})。`,
+          message: `pr_fix_verifyはこれから${String(config.allowed_check_commands.length)}件のallowed_check_commandsを、サンドボックス分離なしでroot権限により${owner}/${repo}#${String(pr_number)}の未検証コードに対して実行します(work item ${String(work_item_id)})。`,
         });
       },
       assertGitPointer: (expected) =>

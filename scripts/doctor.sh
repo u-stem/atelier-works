@@ -30,32 +30,32 @@ report() {
   fi
 }
 
-echo "=== Software Factory 環境診断 ==="
+echo "=== Software Factory環境診断 ==="
 echo
 
 # 1. docker CLIとdaemon
 if command -v docker >/dev/null 2>&1; then
   if docker info >/dev/null 2>&1; then
-    report "docker" ok "CLI / daemon ともに利用できます"
+    report "docker" ok "CLI / daemonともに利用できます"
   else
-    report "docker" ng "docker CLI はありますが daemon に接続できません"
+    report "docker" ng "docker CLIはありますがdaemonに接続できません"
   fi
 else
-  report "docker" ng "docker コマンドが見つかりません"
+  report "docker" ng "dockerコマンドが見つかりません"
 fi
 
 # 2. docker compose v2
 if docker compose version >/dev/null 2>&1; then
   report "docker compose" ok "$(docker compose version --short 2>/dev/null || echo v2)"
 else
-  report "docker compose" ng "docker compose (v2 プラグイン) が見つかりません"
+  report "docker compose" ng "docker compose (v2プラグイン)が見つかりません"
 fi
 
 # 3. miseの有無
 if command -v mise >/dev/null 2>&1; then
   report "mise" ok "$(mise --version 2>/dev/null || true)"
 else
-  report "mise" ng "mise コマンドが見つかりません"
+  report "mise" ng "miseコマンドが見つかりません"
 fi
 
 # 4. `mise.toml`がtrustされているか
@@ -70,10 +70,10 @@ if command -v mise >/dev/null 2>&1; then
   if mise trust --show 2>/dev/null | grep -qE "^(${tilde_root}|${REPO_ROOT}): *trusted$"; then
     report "mise.toml trust" ok "信頼済みです"
   else
-    report "mise.toml trust" ng "未信頼です (リポジトリ直下で 'mise trust' を実行してください)"
+    report "mise.toml trust" ng "未信頼です(リポジトリ直下で 'mise trust' を実行してください)"
   fi
 else
-  report "mise.toml trust" ng "mise が無いため確認できません"
+  report "mise.toml trust" ng "miseが無いため確認できません"
 fi
 
 # 5. mise経由でツールが入っているか
@@ -88,11 +88,11 @@ if command -v mise >/dev/null 2>&1; then
     if output="$(cd "${REPO_ROOT}" && mise exec -- "${cmd[@]}" 2>&1)"; then
       report "tool: ${name}" ok "$(printf '%s' "${output}" | head -n1)"
     else
-      report "tool: ${name}" ng "mise exec -- ${cmd[*]} の実行に失敗しました"
+      report "tool: ${name}" ng "mise exec -- ${cmd[*]}の実行に失敗しました"
     fi
   done
 else
-  report "tool: wmill/gh/bun/node" ng "mise が無いため確認できません"
+  report "tool: wmill/gh/bun/node" ng "miseが無いため確認できません"
 fi
 
 # 6. 必須環境変数が設定されているか。
@@ -121,16 +121,16 @@ env_guidance="'mise run doctor' 経由で実行しているか、'mise set -E lo
 if [[ ${#missing_vars[@]} -gt 0 ]]; then
   report "環境変数" ng "未設定: ${missing_vars[*]} (${env_guidance})"
 elif [[ "${WM_ADMIN_PASSWORD}" == "changeme" ]]; then
-  report "環境変数" ng "WM_ADMIN_PASSWORD が初期値 changeme のままです"
+  report "環境変数" ng "WM_ADMIN_PASSWORDが初期値changemeのままです"
 else
-  report "環境変数" ok "必須キー ${#required_vars[@]} 件すべて設定されています"
+  report "環境変数" ok "必須キー${#required_vars[@]}件すべて設定されています"
 fi
 
 # 7. `mise.local.toml`がgitignoreされているか(秘密の誤コミットを防ぐ)
 if git -C "${REPO_ROOT}" check-ignore -q mise.local.toml; then
-  report "mise.local.toml" ok "gitignore 対象です"
+  report "mise.local.toml" ok "gitignore対象です"
 else
-  report "mise.local.toml" ng "gitignore されていません。秘密情報が誤ってコミットされる恐れがあります"
+  report "mise.local.toml" ng "gitignoreされていません。秘密情報が誤ってコミットされる恐れがあります"
 fi
 
 # 8. ポートが空いているか、またはWindmillが応答しているか
@@ -139,13 +139,13 @@ wm_http_port="${WM_HTTP_PORT:-8080}"
 windmill_is_up=0
 if curl -fs "http://127.0.0.1:${wm_http_port}/api/version" >/dev/null 2>&1; then
   version_body="$(curl -fs "http://127.0.0.1:${wm_http_port}/api/version" 2>/dev/null || true)"
-  report "port ${wm_http_port}" ok "Windmill が応答しています (version: ${version_body})"
+  report "port ${wm_http_port}" ok "Windmillが応答しています(version: ${version_body})"
   windmill_is_up=1
 elif (exec 3<>"/dev/tcp/127.0.0.1/${wm_http_port}") 2>/dev/null; then
   exec 3<&- 3>&- 2>/dev/null || true
-  report "port ${wm_http_port}" ng "ポートは使用中ですが Windmill の応答ではありません"
+  report "port ${wm_http_port}" ng "ポートは使用中ですがWindmillの応答ではありません"
 else
-  report "port ${wm_http_port}" ok "空いています (未起動)"
+  report "port ${wm_http_port}" ok "空いています(未起動)"
 fi
 
 # 9. workerのコンテナ内のツールの確認(スタックが起動している場合だけ)
@@ -169,10 +169,10 @@ if command -v docker >/dev/null 2>&1 && [[ -f "${COMPOSE_FILE}" ]]; then
       fi
     done
   else
-    report "worker コンテナ" ok "スタック未起動のためスキップしました"
+    report "workerコンテナ" ok "スタック未起動のためスキップしました"
   fi
 else
-  report "worker コンテナ" ng "docker または docker-compose.yml が見つからず確認できません"
+  report "workerコンテナ" ng "dockerまたはdocker-compose.ymlが見つからず確認できません"
 fi
 
 # 10. 初期パスワードのままログインできてしまわないか(Windmillが応答している場合だけ)
@@ -182,19 +182,19 @@ if [[ "${windmill_is_up}" -eq 1 ]]; then
     -H 'Content-Type: application/json' \
     -d '{"email":"admin@windmill.dev","password":"changeme"}' 2>/dev/null || echo "000")"
   if [[ "${login_status}" == "200" ]]; then
-    report "初期パスワード" ng "admin@windmill.dev / changeme でログインできてしまいます。至急変更してください"
+    report "初期パスワード" ng "admin@windmill.dev / changemeでログインできてしまいます。至急変更してください"
   else
     report "初期パスワード" ok "初期パスワードではログインできません"
   fi
 else
-  report "初期パスワード" ok "Windmill 未起動のためスキップしました"
+  report "初期パスワード" ok "Windmill未起動のためスキップしました"
 fi
 
 echo
 if [[ "${NG_COUNT}" -eq 0 ]]; then
-  echo "=== 全項目 OK ==="
+  echo "=== 全項目OK ==="
   exit 0
 else
-  echo "=== NG が ${NG_COUNT} 件あります ==="
+  echo "=== NGが${NG_COUNT}件あります ==="
   exit 1
 fi

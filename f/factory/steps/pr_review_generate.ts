@@ -37,6 +37,7 @@ import {
   nextActionFor,
   openFindingsForPrompt,
   prReviewTimeoutMisfit,
+  reviewOutputProseIssues,
 } from "./pr_workflow_support.ts";
 
 const MAX_FINDINGS = 20;
@@ -221,10 +222,17 @@ export async function main(
     }
 
     const output = result.structuredOutput;
+    const proseIssues = reviewOutputProseIssues(output);
+    if (proseIssues.length > 0) {
+      log.warn("review output breaks the writing rules", {
+        work_item_id,
+        issues: proseIssues,
+      });
+    }
     const findings = output.findings.slice(0, MAX_FINDINGS);
     const summary =
       output.findings.length > MAX_FINDINGS
-        ? `${output.summary}\n\n(優先度の低い指摘を ${String(output.findings.length - MAX_FINDINGS)} 件省略しました。)`
+        ? `${output.summary}\n\n(優先度の低い指摘を${String(output.findings.length - MAX_FINDINGS)}件省略しました。)`
         : output.summary;
 
     return {

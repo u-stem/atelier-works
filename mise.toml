@@ -51,7 +51,7 @@ run = "docker compose -f infra/docker-compose.yml run --rm --no-deps console_fet
 description = "Install mise-managed tools, project dependencies, and git hooks"
 run = """
 mise install
-bun install --frozen-lockfile
+bun install --frozen-lockfile --ignore-scripts
 bun install --cwd console --frozen-lockfile --ignore-scripts
 lefthook install
 """
@@ -116,10 +116,19 @@ run = "bunx --bun tsc --noEmit"
 description = "Run the test suite (the console has its own suite in console:check)"
 run = "bun test --path-ignore-patterns 'console/**'"
 
+[tasks."lint:docs"]
+description = "Lint the Markdown documents (repository rules, markdownlint, textlint, generated blocks)"
+run = "bun run scripts/lint-docs.ts"
+
+[tasks."docs:gen"]
+description = "Regenerate the generated blocks in the documents"
+run = "bun run scripts/docs-gen.ts"
+
 [tasks.check]
-description = "Run lint, typecheck, test, and the console checks in order"
+description = "Run lint, lint:docs, typecheck, test, and the console checks in order"
 run = """
 mise run lint
+mise run lint:docs
 mise run typecheck
 mise run test
 mise run console:check

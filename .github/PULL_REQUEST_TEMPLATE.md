@@ -23,7 +23,9 @@ Closes #
 
 ## 備考
 
-Windmillへの反映:
+### Windmillへの反映
+
+<!-- 当てはまるものにチェックを付ける -->
 
 - [ ] マージ後に`self_update`が自動で反映する(`f/`・`migrations/`・`.claude/skills/`の変更)
 - [ ] 次に`mise run up`で起動したときに反映される(`infra/`、`mise.toml`の`[tools]`・`[env]`の変更)

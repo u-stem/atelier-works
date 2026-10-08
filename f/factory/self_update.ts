@@ -407,7 +407,7 @@ export async function main(): Promise<SelfUpdateResult> {
       "f/factory/deployed_sha",
       currentSha,
       false,
-      "Software Factory 自身のうち、直近で Windmill に反映済みのコミットです。自己更新処理が自動的に更新します。",
+      "Software Factory自身のうち、直近でWindmillに反映済みのコミットです。自己更新処理が自動的に更新します。",
     );
 
     const changedPaths = await resolveChangedPaths(

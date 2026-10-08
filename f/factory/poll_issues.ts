@@ -164,7 +164,7 @@ async function checkDeployedSha(
 
     await addNotice({
       kind: "deployed_sha_mismatch",
-      message: `self clone の HEAD(${selfSha})が f/factory/deployed_sha(${deployedSha})と一致しません`,
+      message: `self cloneのHEAD(${selfSha})がf/factory/deployed_sha(${deployedSha})と一致しません`,
     });
   } catch (err) {
     log.warn("deployed_sha check failed", {
@@ -628,7 +628,7 @@ export async function main(): Promise<{
       skipped += 1;
       await addNotice({
         kind: "labeler_association_denied",
-        message: `${candidate.owner}/${candidate.repo}#${candidate.number}: 直近のラベル付与者の association "${decision.association ?? "unknown"}" は allowed_labeler_associations に含まれていません`,
+        message: `${candidate.owner}/${candidate.repo}#${candidate.number}: 直近のラベル付与者のassociation "${decision.association ?? "unknown"}" はallowed_labeler_associationsに含まれていません`,
       });
       continue;
     }

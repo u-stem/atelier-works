@@ -1,5 +1,5 @@
-summary: ''
-description: ''
+summary: '[LIB] 承認者の導出'
+description: 内部ライブラリです。直接実行するものではありません。承認の判断を記録するときの承認者を、ジョブの実行コンテキストから導く共通処理です。
 lock: '!inline f/factory/lib/approver.script.lock'
 kind: script
 schema:

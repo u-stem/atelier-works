@@ -27,9 +27,9 @@ jobs:
 
       - name: Install dependencies
         # `mise run check`はConsoleの検査(console:check)も含むので、Consoleの依存も入れる。
-        # Consoleの依存のinstall scriptは実行しない。
+        # ルートとConsoleのどちらも、依存のinstall scriptは実行しない。
         run: |
-          bun install --frozen-lockfile
+          bun install --frozen-lockfile --ignore-scripts
           bun install --cwd console --frozen-lockfile --ignore-scripts
 
       - name: Lint, typecheck, and test
