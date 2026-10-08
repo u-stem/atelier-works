@@ -1275,6 +1275,26 @@ describe("a process that cannot be inspected", () => {
     expect(entries).toHaveLength(0);
   });
 
+  test("treats a process whose fd dir is gone after its environment was read as gone", async () => {
+    const entries = await scanLockProcesses(
+      LOCK,
+      failingProcFs(
+        {
+          "10": {
+            stat: statLine(10, 1, 10, 1),
+            environ: "PATH=/usr/bin\0",
+            fds: { "3": { id: LOCK_ID, fdinfo: FLOCK_LINE } },
+          },
+        },
+        "readdir",
+        "/proc/10/fd",
+        errno("ENOENT"),
+      ),
+      900,
+    );
+    expect(entries).toHaveLength(0);
+  });
+
   test("does not count a fd that closed during the scan", async () => {
     const entries = await scanFailing(
       "fileId",

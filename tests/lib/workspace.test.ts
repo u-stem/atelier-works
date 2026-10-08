@@ -1546,6 +1546,14 @@ describe("createGtrWorktree", () => {
         await expect(create(fake, true)).rejects.toThrow(/reset --hard/);
       });
 
+      test("throws when the clean fails", async () => {
+        const fake = createFakeCommandRunner([
+          ...responses().slice(0, 6),
+          fail("fatal: could not clean"),
+        ]);
+        await expect(create(fake, true)).rejects.toThrow(/clean -fd/);
+      });
+
       test("throws when the branch head cannot be read", async () => {
         const fake = createFakeCommandRunner([
           ...responses().slice(0, 3),
