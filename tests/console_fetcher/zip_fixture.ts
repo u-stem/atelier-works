@@ -3,6 +3,8 @@
 // CRC32は0のままにする(readZipはCRCを確かめない)。
 import { createHash } from "node:crypto";
 import { deflateRawSync } from "node:zlib";
+import { buildManifest } from "../../console/scripts/manifest.ts";
+import type { FetchLike } from "../../infra/console_fetcher/fetcher.ts";
 
 export type FixtureEntry = {
   readonly name: string;
@@ -88,4 +90,127 @@ export function buildZip(entries: readonly FixtureEntry[]): Uint8Array {
   ev.setUint32(12, centralSize, true);
   ev.setUint32(16, offset, true);
   return concat([...locals, ...centrals, end]);
+}
+
+/** GitHubの実行の一覧の1要素。既定は「mainへのpushで成功したci.yml」。 */
+export function workflowRun(
+  id: number,
+  headSha: string,
+  createdAt = "2026-10-08T00:00:00Z",
+): Record<string, unknown> {
+  return {
+    id,
+    head_sha: headSha,
+    head_branch: "main",
+    event: "push",
+    status: "completed",
+    conclusion: "success",
+    path: ".github/workflows/ci.yml",
+    created_at: createdAt,
+  };
+}
+
+/** GitHubの成果物の一覧の1要素。`digest`の既定は`zip`の本当のsha256。 */
+export function artifactJson(
+  id: number,
+  headSha: string,
+  zip: Uint8Array,
+  digest = `sha256:${sha256Hex(zip)}`,
+): Record<string, unknown> {
+  return {
+    id,
+    name: "console-dist",
+    size_in_bytes: zip.byteLength,
+    expired: false,
+    digest,
+    workflow_run: { head_sha: headSha },
+  };
+}
+
+/** CIの成果物と同じ形のzip(`files`とmanifest.json)を作る。`extra`はマニフェストに載せずに足す。 */
+export function buildRelease(
+  sha: string,
+  files: Readonly<Record<string, string>>,
+  extra: readonly FixtureEntry[] = [],
+): Uint8Array {
+  const manifest = buildManifest(
+    sha,
+    Object.entries(files).map(([path, content]) => ({
+      path,
+      sha256: sha256Hex(content),
+    })),
+  );
+  return buildZip([
+    ...Object.entries(files).map(([name, data]) => ({ name, data })),
+    { name: "manifest.json", data: JSON.stringify(manifest) },
+    ...extra,
+  ]);
+}
+
+export type FakeCall = {
+  readonly url: string;
+  readonly authorization: string | null;
+};
+
+export type FakeGitHubOptions = {
+  readonly runs?: readonly unknown[];
+  readonly runsStatus?: number;
+  readonly artifacts?: Readonly<Record<number, readonly unknown[]>>;
+  readonly blobs?: Readonly<Record<number, Uint8Array>>;
+  readonly location?: (artifactId: number) => string;
+};
+
+export const FAKE_BLOB_HOST = "storage.blob.core.windows.net";
+
+/**
+ * リポジトリ`o/r`だけを知る偽のGitHub。呼ばれたURLとAuthorizationヘッダーを`calls`に残す。
+ * 成果物のダウンロードは302で`https://storage.blob.core.windows.net/blobs/<id>.zip`へ送る。
+ */
+export function fakeGitHub(options: FakeGitHubOptions): {
+  fetch: FetchLike;
+  calls: FakeCall[];
+} {
+  const calls: FakeCall[] = [];
+  const location =
+    options.location ??
+    ((id: number) => `https://${FAKE_BLOB_HOST}/blobs/${id}.zip`);
+  const fetch: FetchLike = async (url, init) => {
+    calls.push({
+      url,
+      authorization: new Headers(init?.headers).get("authorization"),
+    });
+    const parsed = new URL(url);
+    if (parsed.hostname === "api.github.com") {
+      if (parsed.pathname === "/repos/o/r/actions/workflows/ci.yml/runs") {
+        const status = options.runsStatus ?? 200;
+        return status === 200
+          ? Response.json({ workflow_runs: options.runs ?? [] })
+          : new Response("{}", { status });
+      }
+      const artifacts = /^\/repos\/o\/r\/actions\/runs\/(\d+)\/artifacts$/.exec(
+        parsed.pathname,
+      );
+      if (artifacts !== null) {
+        return Response.json({
+          artifacts: options.artifacts?.[Number(artifacts[1])] ?? [],
+        });
+      }
+      const zip = /^\/repos\/o\/r\/actions\/artifacts\/(\d+)\/zip$/.exec(
+        parsed.pathname,
+      );
+      if (zip !== null) {
+        return new Response(null, {
+          status: 302,
+          headers: { location: location(Number(zip[1])) },
+        });
+      }
+    }
+    const blob = /^\/blobs\/(\d+)\.zip$/.exec(parsed.pathname);
+    if (parsed.hostname === FAKE_BLOB_HOST && blob !== null) {
+      const body = options.blobs?.[Number(blob[1])];
+      if (body !== undefined) return new Response(new Uint8Array(body));
+    }
+    return new Response("not found", { status: 404 });
+  };
+  return { fetch, calls };
 }
