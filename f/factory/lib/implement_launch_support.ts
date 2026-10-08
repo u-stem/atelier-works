@@ -36,6 +36,11 @@ export function implementLaunchFailureReason(message: string): string {
   return `implement flow could not be started: ${message}`;
 }
 
+/** 作業項目を`approved`から`implementing`へ移す比較交換が例外を投げたときの失敗理由の文言を返す。 */
+export function implementCasFailureReason(message: string): string {
+  return `implement work item could not be moved to implementing: ${message}`;
+}
+
 /** フローのジョブIDを記録できなかったときの失敗理由の文言を返す。 */
 export function flowJobIdFailureReason(message: string): string {
   return `implement flow job id could not be recorded: ${message}`;
@@ -121,11 +126,13 @@ export type StartImplementDeps = {
 /**
  * `flow_holds_lease`は、起動がエラーを返したが、フローが既にリースを取っていた
  * (または別の処理が作業項目を動かしていた)ことを表す。
+ * `cas_failed`は、`approved`から`implementing`への比較交換そのものが例外を投げたことを表す。
  */
 export type StartImplementOutcome =
   | "started"
   | "started_without_job_id"
   | "not_moved"
+  | "cas_failed"
   | "launch_failed"
   | "flow_holds_lease";
 
@@ -156,9 +163,12 @@ async function attempt(
  * フローのprepareが自分のルートジョブIDで取る。
  *
  * 副作用ごとに`try`を分け、1つが失敗しても後続の記録を飛ばさない。
- * - 状態の移行が`false`を返すか例外を投げた場合は、`not_moved`を返して何もしない。
+ * - 状態の移行が`false`を返した場合は、`not_moved`を返して何もしない。
  *   別の処理(`retry_work_item`)が作業項目を動かしたためで、
  *   ここで`needs_human`へ移すと実行中のフローの状態を上書きしてしまう。
+ * - 状態の移行が例外を投げた場合は、`job_failures`への記録(stepは`cas`)とnoticeの追加を行い、`cas_failed`を返す。
+ *   作業項目は終端の`approved`のまま残り、reconcileの対象にならないので、人が再開するしかないため。
+ *   移行したかどうか分からないので、`needs_human`へは移さない。
  * - フローの起動が例外を投げるか、戻り値がジョブIDでない場合は、
  *   リースが空のときだけ`needs_human`へ移し、`job_failures`への記録
  *   (ConsoleのFailuresタブから再実行できる)、noticeの追加、Discordへの通知を行い、`launch_failed`を返す。
@@ -176,10 +186,15 @@ export async function startImplement(
   try {
     moved = await deps.casToImplementing();
   } catch (err) {
+    const reason = implementCasFailureReason(messageOf(err));
     deps.log("startImplement: approved → implementing failed", {
-      error: messageOf(err),
+      error: reason,
     });
-    return "not_moved";
+    await attempt(deps, "recordFailure", () =>
+      deps.recordFailure(reason, "cas"),
+    );
+    await attempt(deps, "addNotice", () => deps.addNotice(reason));
+    return "cas_failed";
   }
   if (!moved) return "not_moved";
 

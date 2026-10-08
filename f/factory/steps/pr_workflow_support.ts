@@ -3726,6 +3726,14 @@ const REASON_RULES: readonly ReasonRule[] = [
     nextAction: () => "ConsoleのFailuresタブから再実行してください",
   },
   {
+    pattern:
+      /^implement work item could not be moved to implementing: ([\s\S]+)$/,
+    describe: (m) =>
+      `作業項目を実装中へ移せなかったため、実装フローを起動していません: ${m[1]}`,
+    nextAction: () =>
+      "`f/factory/retry_work_item`を作業項目のIDで実行して再開してください",
+  },
+  {
     pattern: /^implement flow job id could not be recorded: ([\s\S]+)$/,
     describe: (m) => `実装フローのジョブIDを記録できませんでした: ${m[1]}`,
     nextAction: () => GENERIC_NEXT_ACTION,

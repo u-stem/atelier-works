@@ -4,6 +4,7 @@ import {
   flowJobIdFailureReason,
   holdsImplementLease,
   ImplementLeaseLostError,
+  implementCasFailureReason,
   implementLaunchFailureReason,
   isFlowJobId,
   parseFlowJobId,
@@ -12,7 +13,10 @@ import {
   startImplement,
   stillHoldsImplementLease,
 } from "../../f/factory/lib/implement_launch_support.ts";
-import { describeReason } from "../../f/factory/steps/pr_workflow_support.ts";
+import {
+  describeReason,
+  nextActionFor,
+} from "../../f/factory/steps/pr_workflow_support.ts";
 
 const JOB_A = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
 
@@ -71,6 +75,20 @@ describe("implementLaunchFailureReason", () => {
   });
 });
 
+describe("implementCasFailureReason", () => {
+  test("is a reason describeReason translates", () => {
+    expect(describeReason(implementCasFailureReason("boom"))).toBe(
+      "作業項目を実装中へ移せなかったため、実装フローを起動していません: boom",
+    );
+  });
+
+  test("tells the person to restart with retry_work_item", () => {
+    expect(nextActionFor(implementCasFailureReason("boom"))).toBe(
+      "`f/factory/retry_work_item`を作業項目のIDで実行して再開してください",
+    );
+  });
+});
+
 describe("flowJobIdFailureReason", () => {
   test("is a reason describeReason translates", () => {
     expect(describeReason(flowJobIdFailureReason("boom"))).toBe(
@@ -98,10 +116,78 @@ describe("startImplement", () => {
     ).toBe("not_moved");
   });
 
-  test("reports not_moved when the CAS itself throws", async () => {
+  test("reports cas_failed when the CAS itself throws", async () => {
     expect(
       await startImplement(launchDeps({ casToImplementing: boom }).deps),
-    ).toBe("not_moved");
+    ).toBe("cas_failed");
+  });
+
+  test("does not launch when the CAS itself throws", async () => {
+    const h = launchDeps({ casToImplementing: boom });
+    await startImplement(h.deps);
+    expect(h.calls).not.toContain("launch");
+  });
+
+  test("records a job failure at the cas step when the CAS itself throws", async () => {
+    const steps: string[] = [];
+    const h = launchDeps({
+      casToImplementing: boom,
+      recordFailure: async (_reason, step) => {
+        steps.push(step);
+      },
+    });
+    await startImplement(h.deps);
+    expect(steps).toEqual(["cas"]);
+  });
+
+  test("records a cas failure reason when the CAS itself throws", async () => {
+    const reasons: string[] = [];
+    const h = launchDeps({
+      casToImplementing: boom,
+      recordFailure: async (reason) => {
+        reasons.push(reason);
+      },
+    });
+    await startImplement(h.deps);
+    expect(reasons).toEqual([implementCasFailureReason("boom")]);
+  });
+
+  test("adds a notice with the cas failure reason when the CAS itself throws", async () => {
+    const reasons: string[] = [];
+    const h = launchDeps({
+      casToImplementing: boom,
+      addNotice: async (reason) => {
+        reasons.push(reason);
+      },
+    });
+    await startImplement(h.deps);
+    expect(reasons).toEqual([implementCasFailureReason("boom")]);
+  });
+
+  test("does not move to needs_human when the CAS itself throws", async () => {
+    const h = launchDeps({ casToImplementing: boom });
+    await startImplement(h.deps);
+    expect(h.calls).not.toContain("needs_human");
+  });
+
+  test("does not notify Discord when the CAS itself throws", async () => {
+    const h = launchDeps({ casToImplementing: boom });
+    await startImplement(h.deps);
+    expect(h.calls).not.toContain("notify");
+  });
+
+  test("adds the notice even when recording the cas failure throws", async () => {
+    const h = launchDeps({ casToImplementing: boom, recordFailure: boom });
+    await startImplement(h.deps);
+    expect(h.calls).toContain("notice");
+  });
+
+  test("reports cas_failed even when the notice cannot be added", async () => {
+    expect(
+      await startImplement(
+        launchDeps({ casToImplementing: boom, addNotice: boom }).deps,
+      ),
+    ).toBe("cas_failed");
   });
 
   test("moves the work item to needs_human when the launch fails", async () => {

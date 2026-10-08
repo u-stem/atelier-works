@@ -55,6 +55,9 @@
 - Discordのrate limit(HTTP 429)に当たると、`retry-after`(空・空白だけ・数でないときは本文の`retry_after`、どちらも無ければ1秒)だけ待って1回だけ再送する。待つのは最大30秒(`f/factory/lib/discord.ts`の`DISCORD_RETRY_MAX_WAIT_MS`。どのフローのステップのtimeoutよりも十分に短い)で、それより長く待つ必要があるときは、待たず再送もせずにその通知を諦め、ジョブログに`discord notify skipped: rate limit wait exceeds cap`のwarnを残す。
 - 通知の失敗でフローは失敗しない。待ちが上限を超えたとき、再送もrate limitで拒まれたとき、その他の送信の失敗のいずれも、すべての呼び出し元が捕まえてジョブログにwarn(失敗の記録と通知を受け持つ`on_error_flow` / `on_error_schedule`などではerror)を残し、処理を続ける。届かなかった通知は再送されないので、ConsoleとGitHubで状態を確かめる。
 - 承認依頼(`approval_requested`)の通知が届かなかったときは、ConsoleのNoticesタブに`approval_notify_failed`のnoticeを1件残す(`<owner>/<repo>#<Issue番号> (work item <id>)`と理由を載せる)。承認依頼自体は記録済みなので、ConsoleのInboxから承認 / 却下できる。webhookを設定していないときは残さない。
+- 承認した要件定義について、Issueへの承認のコメントを投稿できなかったとき(GitHubのrate limitや5xxなど)は、ConsoleのNoticesタブに`approval_comment_failed`のnoticeを1件残す(`<owner>/<repo>#<Issue番号> (work item <id>)`、理由、要件定義を開くConsoleのリンクを載せる)。コメントの失敗はDiscordには通知しない(承認の通知はそのまま送る)。承認は記録済みで、worktreeの片付けとimplementフローの起動はそのまま進む。コメントを自動で投稿し直す処理は無いので、必要なら人がnoticeのリンクを載せたコメントをIssueに投稿する。
+- 承認の後、作業項目を`approved`から`implementing`へ移す比較交換がDBの失敗で例外になったときは、`implement_launch_failed`のnoticeを残し、`job_failures`に記録する(stepは`cas`)。作業項目はふつう`approved`のまま残り、reconcileの対象にならないので、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行して再開する。まれに例外の前に`implementing`へ移っていた場合は、フローの無いまま残るので、reconcileが猶予の後に`failed`にする。その後に同じく再開できる。
+- 却下で要件定義を作り直すときに、pipelineを起動できなかったか、起動したジョブIDを記録できなかったときは、作業項目を`needs_human`に戻し(理由は`requirements regeneration could not be started`)、作業項目のIDを付けて`job_failures`に記録して、Discordに`job_failed`を通知する。ConsoleのFailuresタブから再実行する。この再実行のpipelineには却下理由(feedback)が渡らない。却下理由は承認依頼(`approval_requests.reason`)に残っている。
 
 ## PRの使い方(pr_review / pr_fix)
 

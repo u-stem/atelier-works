@@ -120,7 +120,7 @@ export function gapExhaustedReason(maxAttempts: number): string {
 }
 
 /**
- * requirements_gapの差し戻しで作業項目を`requirements_generating`へ移したが、
+ * requirements_gapの差し戻しか、要件定義の却下で作業項目を`requirements_generating`へ移したが、
  * パイプラインを起動できなかった(またはジョブIDを記録できなかった)ときの
  * `needs_human`の理由。
  */
