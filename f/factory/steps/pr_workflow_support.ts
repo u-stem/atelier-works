@@ -3445,14 +3445,40 @@ const DAILY_BUDGET_NEXT_ACTION =
   "翌日まで待つか、daily_budget_usdを引き上げてください";
 const NOTHING_TO_COMMIT_NEXT_ACTION =
   "返信内容を確認し、必要なら指示をコメントして`factory:fix`を付け直してください";
-/** ローカルのHEADが動いたとき(実装フローとpr_fixの両方で起きる)の次の操作。 */
-const LOCAL_HEAD_NEXT_ACTION =
-  "検査コマンドがコミットやブランチの切り替えをしていないか確かめて人が直してから、PRの修正なら`factory:fix`を付け直し、実装ならWindmillで`f/factory/retry_work_item`を作業項目のIDで実行してください";
 const ISSUE_PROPOSAL_NEXT_ACTION =
   "ConsoleのInboxで提案を承認または却下してください";
+
+/**
+ * 確かめる内容`check`の後に、フローごとの再実行を続けた次の操作を返す。
+ * 実装フローは`retry_work_item`で同じ作業項目を再実行する。
+ * pr_fixでこれを使う理由はどれも修正のClaudeを実行した後に止めるので、そのラウンドは使い終わっており、
+ * 新しいラウンドとして`factory:fix`を付け直してもらう。
+ * フローが分からなければ両方を並べる。
+ */
+function afterFixWorkRerun(
+  check: string,
+  flow: NextActionFlow | undefined,
+): string {
+  if (flow === "implement") return `${check}、${RETRY_WORK_ITEM_ACTION}`;
+  if (flow === "pr_fix") return `${check}、\`factory:fix\`を付け直してください`;
+  return `${check}、PRの修正なら\`factory:fix\`を付け直し、実装なら${RETRY_WORK_ITEM_ACTION}`;
+}
+
+/** ローカルのHEADが動いたとき(実装フローとpr_fixの両方で起きる)の次の操作。 */
+function localHeadNextAction(flow: NextActionFlow | undefined): string {
+  return afterFixWorkRerun(
+    "検査コマンドがコミットやブランチの切り替えをしていないか確かめて人が直してから",
+    flow,
+  );
+}
+
 /** 検査やcommitの後にworktreeが変わったとき(実装フローとpr_fixの両方で起きる)の次の操作。 */
-const LEFTOVER_PROCESS_NEXT_ACTION =
-  "検査コマンドなどが残したプロセスがworktreeを書き換えていないか確かめ、PRの修正なら`factory:fix`を付け直し、実装ならWindmillで`f/factory/retry_work_item`を作業項目のIDで実行してください";
+function leftoverProcessNextAction(flow: NextActionFlow | undefined): string {
+  return afterFixWorkRerun(
+    "検査コマンドなどが残したプロセスがworktreeを書き換えていないか確かめ",
+    flow,
+  );
+}
 
 /**
  * 前の実行のプロセスがまだworktreeを使っているときの次の操作。
@@ -3867,7 +3893,7 @@ const REASON_RULES: readonly ReasonRule[] = [
   {
     pattern: /^committed tree differs from the inspected tree$/,
     describe: () => "commitしたツリーが、検査したツリーと異なります",
-    nextAction: () => LEFTOVER_PROCESS_NEXT_ACTION,
+    nextAction: (_m, flow) => leftoverProcessNextAction(flow),
   },
   // `lib/implement_loop.ts`の`scannedTreeChangedReason`(実装フローの検証ループ)
   {
@@ -3881,14 +3907,17 @@ const REASON_RULES: readonly ReasonRule[] = [
   {
     pattern: /^worktree changed after the secret scan$/,
     describe: () => "秘密情報の検査の後にworktreeが変更されました",
-    nextAction: () => LEFTOVER_PROCESS_NEXT_ACTION,
+    nextAction: (_m, flow) => leftoverProcessNextAction(flow),
   },
   {
     pattern: /^requirements regeneration could not be started$/,
     describe: () => "要件定義の作り直しを起動できませんでした",
-    // 承認済みの要件定義のattemptは変わっていないので、再実行は実装フローからやり直す。
-    nextAction: () =>
-      `${RETRY_WORK_ITEM_ACTION}(実装からやり直します。差し戻し理由は通知に残っています)`,
+    // 実装フローの差し戻しでは承認済みの要件定義のattemptが変わっていないので、再実行は実装フローからやり直す。
+    // 却下による作り直し(requirements_apply)では要件定義から始まるので、フローを渡されたときだけ添える。
+    nextAction: (_m, flow) =>
+      flow === "implement"
+        ? `${RETRY_WORK_ITEM_ACTION}(実装からやり直します。差し戻し理由は通知に残っています)`
+        : RETRY_WORK_ITEM_ACTION,
   },
   {
     pattern: /^pull request has an active fix run$/,
@@ -3923,12 +3952,12 @@ const REASON_RULES: readonly ReasonRule[] = [
     pattern: /^local HEAD (\S+) is not the PR head (\S+)$/,
     describe: (m) =>
       `worktreeのHEAD(${m[1]})が記録したブランチの先頭(${m[2]})と異なります`,
-    nextAction: () => LOCAL_HEAD_NEXT_ACTION,
+    nextAction: (_m, flow) => localHeadNextAction(flow),
   },
   {
     pattern: /^local HEAD is not on branch (.+)$/,
     describe: (m) => `worktreeのHEADがブランチ${m[1]}にありません`,
-    nextAction: () => LOCAL_HEAD_NEXT_ACTION,
+    nextAction: (_m, flow) => localHeadNextAction(flow),
   },
   // pr_fix_verify.tsの`inspectUncommittedChanges`と、pr_fix_finish.tsの`inspectStagedChanges`
   {

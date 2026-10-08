@@ -572,6 +572,20 @@ describe("describeReason (implement flow)", () => {
     );
   });
 
+  test("asks the implement flow to rerun the work item after HEAD moved", () => {
+    expect(
+      nextActionFor("local HEAD is not on branch fix/x", "implement"),
+    ).toBe(
+      "検査コマンドがコミットやブランチの切り替えをしていないか確かめて人が直してから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+    );
+  });
+
+  test("asks pr_fix to re-add factory:fix after HEAD moved", () => {
+    expect(nextActionFor("local HEAD is not on branch fix/x", "pr_fix")).toBe(
+      "検査コマンドがコミットやブランチの切り替えをしていないか確かめて人が直してから、`factory:fix`を付け直してください",
+    );
+  });
+
   test("translates an active fix run on the PR", () => {
     expect(describeReason("pull request has an active fix run")).toBe(
       "このPRで自動修正が実行中のため実装を止めました",
@@ -727,6 +741,42 @@ describe("nextActionFor (implement flow)", () => {
     );
   });
 
+  test("asks the implement flow to rerun the work item after a committed tree differs", () => {
+    expect(
+      nextActionFor(
+        "committed tree differs from the inspected tree",
+        "implement",
+      ),
+    ).toBe(
+      "検査コマンドなどが残したプロセスがworktreeを書き換えていないか確かめ、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+    );
+  });
+
+  // 修正のClaudeを実行した後に止めたので、新しいラウンドとして付け直してもらう。
+  test("asks pr_fix to re-add factory:fix after a committed tree differs", () => {
+    expect(
+      nextActionFor("committed tree differs from the inspected tree", "pr_fix"),
+    ).toBe(
+      "検査コマンドなどが残したプロセスがworktreeを書き換えていないか確かめ、`factory:fix`を付け直してください",
+    );
+  });
+
+  test("asks the implement flow to rerun the work item after a change following the secret scan", () => {
+    expect(
+      nextActionFor("worktree changed after the secret scan", "implement"),
+    ).toBe(
+      "検査コマンドなどが残したプロセスがworktreeを書き換えていないか確かめ、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+    );
+  });
+
+  test("asks pr_fix to re-add factory:fix after a change following the secret scan", () => {
+    expect(
+      nextActionFor("worktree changed after the secret scan", "pr_fix"),
+    ).toBe(
+      "検査コマンドなどが残したプロセスがworktreeを書き換えていないか確かめ、`factory:fix`を付け直してください",
+    );
+  });
+
   test("asks to inspect the branch after a modified .git pointer", () => {
     expect(nextActionFor("worktree git pointer was modified")).toBe(
       "ブランチとworktreeを人が確認し、不審な変更があればブランチを削除してください",
@@ -751,11 +801,23 @@ describe("nextActionFor (implement flow)", () => {
     );
   });
 
-  test("asks to rerun a failed requirements regeneration with retry_work_item", () => {
+  test("tells the implement flow that rerunning a failed requirements regeneration restarts implementation", () => {
+    expect(
+      nextActionFor(
+        "requirements regeneration could not be started",
+        "implement",
+      ),
+    ).toBe(
+      "Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください(実装からやり直します。差し戻し理由は通知に残っています)",
+    );
+  });
+
+  // 却下による作り直し(requirements_apply)の再実行は、実装ではなく要件定義から始まる。
+  test("does not claim a restart from implementation when the flow is unknown", () => {
     expect(
       nextActionFor("requirements regeneration could not be started"),
     ).toBe(
-      "Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください(実装からやり直します。差し戻し理由は通知に残っています)",
+      "Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
     );
   });
 

@@ -99,7 +99,7 @@ export function buildImplementLaunchNoticeMessage(
   },
   reason: string,
 ): string {
-  return `${target.owner}/${target.repo}#${String(target.issue_number)} (work item ${String(target.work_item_id)}): ${describeReason(reason)}。${nextActionFor(reason)}。`;
+  return `${target.owner}/${target.repo}#${String(target.issue_number)} (work item ${String(target.work_item_id)}): ${describeReason(reason)}。${nextActionFor(reason, "implement")}。`;
 }
 
 export type ApprovedSideEffectsDeps = {
@@ -486,7 +486,7 @@ async function run(
               url: workItem.issue_url ?? "",
               reason: describeReason(reason),
               target: { kind: "issue", number: issueNumber },
-              next_action: nextActionFor(reason),
+              next_action: nextActionFor(reason, "implement"),
             },
             log,
           );
