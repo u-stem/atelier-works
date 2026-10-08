@@ -134,7 +134,7 @@ export function selectImplementNextAction(input: {
   readonly notes: readonly string[];
 }): string {
   const firstNote = input.notes[0];
-  if (firstNote !== undefined) return nextActionFor(firstNote);
+  if (firstNote !== undefined) return nextActionFor(firstNote, "implement");
   if (
     input.preserveWork &&
     input.outcome !== "daily_budget" &&
@@ -142,7 +142,7 @@ export function selectImplementNextAction(input: {
   ) {
     return implementNeedsHumanNextAction(input.branch);
   }
-  return nextActionFor(input.reason);
+  return nextActionFor(input.reason, "implement");
 }
 
 /**
@@ -579,7 +579,7 @@ async function finishImplement(
     }
     if (decideGapReroute(attempt, config.max_attempts) === "needs_human") {
       const reason = gapExhaustedReason(config.max_attempts);
-      return finalizeNeedsHuman(reason, nextActionFor(reason));
+      return finalizeNeedsHuman(reason, nextActionFor(reason, "implement"));
     }
     const moved = await updateStatusIfLeaseHolder(
       work_item_id,
@@ -610,7 +610,7 @@ async function finishImplement(
       });
       return finalizeNeedsHuman(
         REQUIREMENTS_REGENERATION_FAILED_REASON,
-        nextActionFor(REQUIREMENTS_REGENERATION_FAILED_REASON),
+        nextActionFor(REQUIREMENTS_REGENERATION_FAILED_REASON, "implement"),
         {
           from: "requirements_generating",
           detail: gapReportNoticeDetail(gapReport),
@@ -740,7 +740,10 @@ async function finishImplement(
 
   const opened = await openPullRequest(context, loop_result);
   if (!opened.ok)
-    return finalizeNeedsHuman(opened.reason, nextActionFor(opened.reason));
+    return finalizeNeedsHuman(
+      opened.reason,
+      nextActionFor(opened.reason, "implement"),
+    );
   const moved = await updateStatusIfLeaseHolder(
     work_item_id,
     "implementing",

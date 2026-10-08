@@ -41,11 +41,11 @@
 - 承認の前にIssueの内容を直したいときは、Issueを書き換えるのではなく、ConsoleのInboxで却下し、直したい内容を却下理由(feedback)に書いて要件定義を作り直させる。承認の後に作り直すときは、先に既存のPRを閉じてから、Issueにトリガーラベルを付け直す(新しいサイクルとして別の作業項目・別のブランチ・別のPRになるため、旧PRを残すと重複する)。
 - 実装フローを再実行するときは、ConsoleのFailuresタブ(`retry_work_item`)を使う。Windmillのrerunは新しいジョブIDで最初から走るため、準備ステップの最初で何もせずに終わる(`flow_job_id`のリース)。途中のステップからのrestartも新しいジョブIDで走るため、再開したステップ(生成・検証・完了)の最初のリースの確認で何もせずに終わる。どちらも、元の実行で進行中のClaudeの実行や検査を中断はしない。同じ作業項目で実装フローが重ねて起動された場合(起動の応答が失敗したが実際には動いていた場合など)も、後の実行は同じく何もせずに終わる。Windmillで取り消した実行のClaudeや検査コマンドは止まらずに残る。
 
-  実装フローの再実行では、準備ステップが、同じ作業項目の前の実装フローのジョブが起動したプロセスを見つけて止めてから続ける。それ以外のプロセス(pr_fixのもの、持ち主の分からないもの)がworktreeを使っていれば`needs_human`になり、理由に残っているプロセスが載る。
+  実装フローの再実行では、準備ステップが、同じ作業項目の前の実装フローのジョブが起動したプロセスを見つけて止めてから続ける。そのため、実行中に同じ実行の検査コマンドなどが残したプロセスがロックを持ち続けて失敗した場合は、`retry_work_item`で再実行するだけでよい。それ以外のプロセス(pr_fixのもの、持ち主の分からないもの)がworktreeを使っていれば`needs_human`になり、理由に残っているプロセスが載る。この場合は、載ったプロセスが終わるのを待つか、それが何かを確かめてworkerのコンテナで止めてから(`mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker kill <pid>`)、`retry_work_item`で再実行する。
 
-  pr_fixの再実行では何も止めずに`blocked`になる。この場合は、理由に載ったプロセスが終わるのを待つか、何かを確かめて止めるか、`mise exec -- docker compose -f infra/docker-compose.yml restart windmill_worker`でworkerを再起動してから再実行する。workerの再起動は、同じコンテナで動いているすべてのジョブを止める。
+  pr_fixの準備は、前の実行が残したプロセスが同じpr_fixのものでも何も止めずに`blocked`になる。この場合は、理由に載ったプロセスが終わるのを待つか、それが何かを確かめて上と同じようにworkerのコンテナで止めてから、`factory:fix`を付け直す(`retry_work_item`で再実行してもよい)。実行中にロックが取れずに失敗したpr_fixも、再実行の準備が残ったプロセスで`blocked`になるので、先に同じように止める。`mise exec -- docker compose -f infra/docker-compose.yml restart windmill_worker`でworkerを再起動しても止まるが、同じコンテナで動いているすべてのジョブを止めるので、載ったプロセスを止められないときだけにする。
 
-  残ったClaudeは、`cleanup_workspaces`の孤児の掃除でも、閾値(`claude_timeout_sec`と`implement_timeout_sec`の長い方に5分を足した時間)を過ぎた後にだけ止まる。検査コマンドの生き残りはこの掃除の対象外である。
+  残ったClaudeは、`cleanup_workspaces`の孤児の掃除でも、閾値(`claude_timeout_sec`と`implement_timeout_sec`の長い方に5分を足した時間)を過ぎた後にだけ止まる。検査コマンドの生き残りはこの掃除の対象外である。掃除は、生き残りが使っている終端の作業項目のworktreeを消さずに飛ばし、そのworktreeごとにConsoleのNoticesタブへ`cleanup_worktree_busy`のnotice(作業項目のID、worktreeのパス、使っているプロセス)を残す。Discordには通知しない。載ったプロセスを止めれば、次の掃除で消える。止めない限り、noticeは毎日残る。
 - 要件定義のフロー(`f/factory/pipeline`)も、再実行はConsoleのFailuresタブ(`retry_work_item`)を使う。Windmillのrerunや、Windmillの画面からの直接の実行は、作業項目の`flow_job_id`にそのジョブIDが記録されないので、準備ステップが何もせずに終わる。作業項目が終端ならすぐに、そうでなければ記録を最大60秒待ってから終わる。差し戻しの取り消しに失敗して同じ作業項目でpipelineが2本動いた場合も、記録されていない方は同じく何もせずに終わる。記録されていないpipelineの実行が例外で失敗しても、`on_error_flow`は作業項目を`failed`にしない(`flow_job_id`が空の間も同じ)。起動側が記録する前に止まった作業項目は、reconcileが猶予の後に孤児として`failed`にする。
 - 実装フローの実行中にリースが移った場合(Issueのcloseによる取り消しで`cancelJob`が失敗したなど)、実装フローは次のリースの確認(生成ステップのClaude実行前、検証の各ラウンドの冒頭と修正ラウンドの前、完了ステップの最初と外への副作用の直前)で止まり、コミット・push・PR作成をしない。進行中のClaudeの実行や検査は中断しない。worktreeに残った途中の変更は、次の実行の準備で捨てられる。
 

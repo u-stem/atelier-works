@@ -184,7 +184,7 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加のみで、ren
 | `pipeline` | flow | 要件定義生成 → 承認依頼の記録(`approval_requests`)。承認 / 却下 / タイムアウトの分岐はフロー外(`approval_decide`とpoll_issuesの期限切れスイープ)で行う |
 | `implement` | flow | 承認済み要件定義からの実装 → 検証と修正のループ(gitleaksと検査コマンド)→ コミット・push・PR作成。`requirements_apply`が`implement_enabled`のときだけ起動する |
 | `self_update` | schedule(10分毎) | self cloneをpullし、変更があれば`wmill sync push`とmigrationを適用する |
-| `cleanup_workspaces` | schedule(毎日03:00) | 期限切れworktree(`req-<N>`、`work_items.branch`の実装worktree、review-*、pr_fixのgtr worktree)と、worktreeが無くなったプロセスのロックファイルの削除、孤児化したheadless Claudeプロセスの停止、ディスク使用量の記録 |
+| `cleanup_workspaces` | schedule(毎日03:00) | 期限切れworktree(`req-<N>`、`work_items.branch`の実装worktree、review-*、pr_fixのgtr worktree)と、worktreeが無くなったプロセスのロックファイルの削除(生き残りのプロセスが使っているworktreeは消さずにnoticeを残す)、孤児化したheadless Claudeプロセスの停止、ディスク使用量の記録 |
 | `cleanup_db` | schedule(毎日03:30) | 保持期限を過ぎたDBのレコード(終端状態の作業項目とその関連データ、失敗記録・デプロイ記録・解決済みの通知)の削除 |
 | `daily_summary` | schedule(毎日09:00) | 前日のコスト・件数・失敗・DB掃除件数をDiscordに通知 |
 | `audit_kickoff` | schedule(毎週月曜09:30) | 前回監査以降の運用記録を集計し、対象があれば監査の作業項目を作成して`audit`フローを起動 |

@@ -213,6 +213,21 @@ export function unresolvedHoldersNoticeMessage(
   return `${owner}/${repo}で稼働中の自動修正のブランチを確認できなかったため、このリポジトリの作業領域の掃除を見送りました。`;
 }
 
+/**
+ * 前の実行のプロセスがまだ使っているので消さなかったworktreeについてのnoticeの文言を返す。
+ * 掃除は誰のプロセスも止めないので、人が止めない限り毎日同じworktreeを飛ばし続ける。
+ * 運用者が止めるプロセスを選べるよう、保持者を載せた`reason`(`WorktreeBusyError`のメッセージ)をそのまま含める。
+ */
+export function busyWorktreeNoticeMessage(input: {
+  readonly owner: string;
+  readonly repo: string;
+  readonly workItemId: number;
+  readonly worktreeDir: string;
+  readonly reason: string;
+}): string {
+  return `${input.owner}/${input.repo}の作業項目${String(input.workItemId)}のworktree(${input.worktreeDir})は、プロセスがまだ使っているため削除しませんでした(${input.reason})。使っているプロセス(検査コマンドの生き残りなど)をworkerのコンテナで止めると、次の掃除で削除されます。`;
+}
+
 // ---------------------------------------------------------------------------
 // selectOrphanClaudePids: `ps -eo pid,etimes,args`を解析する
 // ---------------------------------------------------------------------------

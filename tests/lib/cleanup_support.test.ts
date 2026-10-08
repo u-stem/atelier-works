@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  busyWorktreeNoticeMessage,
   excludeActiveWorktrees,
   formatDiskUsageMessage,
   groupByRepo,
@@ -383,6 +384,23 @@ describe("unresolvedHoldersNoticeMessage", () => {
   test("names the skipped repository", () => {
     expect(unresolvedHoldersNoticeMessage("acme", "widgets")).toContain(
       "acme/widgets",
+    );
+  });
+});
+
+describe("busyWorktreeNoticeMessage", () => {
+  test("names the worktree and its processes, and says how to let the sweep remove it", () => {
+    expect(
+      busyWorktreeNoticeMessage({
+        owner: "acme",
+        repo: "widgets",
+        workItemId: 7,
+        worktreeDir: "/workspaces/acme/widgets/factory-issue-7-wi-7",
+        reason:
+          "worktree is still used by processes from an earlier run: pid 42 (3600s, implement:7:job-a) `bun test`",
+      }),
+    ).toBe(
+      "acme/widgetsの作業項目7のworktree(/workspaces/acme/widgets/factory-issue-7-wi-7)は、プロセスがまだ使っているため削除しませんでした(worktree is still used by processes from an earlier run: pid 42 (3600s, implement:7:job-a) `bun test`)。使っているプロセス(検査コマンドの生き残りなど)をworkerのコンテナで止めると、次の掃除で削除されます。",
     );
   });
 });

@@ -13,11 +13,12 @@
 // リポジトリは、その日の掃除を飛ばしてnoticeを残す(`partitionRepoGroups`)。
 // headless Claudeプロセスを孤立とみなすのは、`claude_timeout_sec`と
 // `implement_timeout_sec`の長い方に猶予を足した時間を過ぎたものだけ。
-// プロセスのロックがまだ持たれているか、そのロックの下で起動されたプロセスが残っているworktreeは消さない。
+// プロセスのロックがまだ持たれているか、そのロックの下で起動されたプロセスが残っているworktreeは消さず、noticeを残す。
 // 掃除したリポジトリでは、worktreeが無くなったロックファイルも、ロックを取ったまま消す(`removeOrphanLockFiles`)。
 
 import * as wmill from "windmill-client@1.817.0";
 import {
+  busyWorktreeNoticeMessage,
   excludeActiveWorktrees,
   formatDiskUsageMessage,
   groupByRepo,
@@ -70,6 +71,29 @@ type RemovedCounts = {
   readonly worktrees: number;
   readonly lockFiles: number;
 };
+
+/**
+ * 生き残りのプロセスが使っているので消さなかったworktreeを、ConsoleのNoticesタブに残す(Discordには送らない)。
+ * 人がプロセスを止めない限り毎日飛ばし続け、ログだけでは運用者に見えないためである。
+ * 記録に失敗しても掃除は続ける。
+ */
+async function recordBusyWorktreeNotice(
+  input: Parameters<typeof busyWorktreeNoticeMessage>[0],
+  log: Logger,
+): Promise<void> {
+  try {
+    await addNotice({
+      kind: "cleanup_worktree_busy",
+      message: busyWorktreeNoticeMessage(input),
+    });
+  } catch (err) {
+    log.warn("cleanup: failed to record the busy-worktree notice", {
+      work_item_id: input.workItemId,
+      worktree_dir: input.worktreeDir,
+      error: maskSecrets(err instanceof Error ? err.message : String(err)),
+    });
+  }
+}
 
 async function removeStaleWorktreesForRepo(
   owner: string,
@@ -152,6 +176,16 @@ async function removeStaleWorktreesForRepo(
             worktree_dir: targetDir,
             reason: err.message,
           });
+          await recordBusyWorktreeNotice(
+            {
+              owner,
+              repo,
+              workItemId: item.id,
+              worktreeDir: targetDir,
+              reason: maskSecrets(err.message),
+            },
+            log,
+          );
           continue;
         }
         await removeWorktree({

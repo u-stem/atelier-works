@@ -21,7 +21,7 @@ import {
 import { parseFlowJobId } from "../lib/implement_launch_support.ts";
 import { gitPointerStopReason } from "../lib/implement_loop.ts";
 import { escapeReasonSeparator, maskSecrets } from "../lib/log.ts";
-import { WorktreeBusyError } from "../lib/process_lock.ts";
+import { type LockOwner, WorktreeBusyError } from "../lib/process_lock.ts";
 import {
   type ChangedPath,
   type ChangedPathStatus,
@@ -3404,9 +3404,16 @@ type ReasonRule = {
    * 具体的な日本語の1文の指示にする。
    * 固有の対応が無い理由(安全のための関門の失敗だけのものなど)と、
    * この表が知らない理由には、汎用の`GENERIC_NEXT_ACTION`を使う。
+   * `flow`は理由を出したフロー(`nextActionFor`の引数)。フローによって取れる操作が違う理由だけが使う。
    */
-  readonly nextAction: (match: RegExpMatchArray) => string;
+  readonly nextAction: (
+    match: RegExpMatchArray,
+    flow: NextActionFlow | undefined,
+  ) => string;
 };
+
+/** 次の操作がフローによって違う理由のための、理由を出したフローの種類。 */
+export type NextActionFlow = LockOwner["kind"];
 
 /**
  * 汎用の次の対応。ConsoleのFailuresとNoticesのタブ(`factory_console__raw_app`)を案内する。
@@ -3440,6 +3447,44 @@ const ISSUE_PROPOSAL_NEXT_ACTION =
 /** 検査やcommitの後にworktreeが変わったとき(実装フローとpr_fixの両方で起きる)の次の操作。 */
 const LEFTOVER_PROCESS_NEXT_ACTION =
   "検査コマンドなどが残したプロセスがworktreeを書き換えていないか確かめ、PRの修正なら`factory:fix`を付け直し、実装ならWindmillで`f/factory/retry_work_item`を作業項目のIDで実行してください";
+/**
+ * 作業項目を同じ作業項目のまま再実行する操作。どの種別の作業項目にも使える。
+ * ConsoleのFailuresタブはジョブの失敗(`job_failures`)だけを並べ、`needs_human`や`blocked`で止めた作業項目は出ないので、
+ * Windmillで直接実行してもらう。
+ */
+const RETRY_WORK_ITEM_ACTION =
+  "Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください";
+
+/**
+ * 前の実行のプロセスがまだworktreeを使っているときの次の操作。
+ * 実装フローの準備は同じ作業項目の前の実装のプロセスを止めてから続けるので、この理由で止まるのは、
+ * pr_fixのプロセスや持ち主の分からないプロセスが残っているときである。pr_fixの準備は何も止めない。
+ * どちらも、理由に載ったプロセスが終わるか止まるまで、再実行しても同じ理由で止まる。
+ * workerの再起動は同じworkerのすべてのジョブを止めるので勧めず、載ったプロセスだけを止めてもらう。
+ */
+function worktreeBusyNextAction(flow: NextActionFlow | undefined): string {
+  const stop =
+    "理由に載ったプロセスが終わるのを待つか、workerのコンテナでそのプロセスを止めてから、";
+  if (flow === "implement") return `${stop}${RETRY_WORK_ITEM_ACTION}`;
+  if (flow === "pr_fix") return `${stop}\`factory:fix\`を付け直してください`;
+  return `${stop}PRの修正なら\`factory:fix\`を付け直し、実装なら${RETRY_WORK_ITEM_ACTION}`;
+}
+
+/**
+ * 実行中に、この実行の検査コマンドなどが残したプロセスがworktreeのロックを持ち続けていたときの次の操作。
+ * 残ったプロセスは、この実行のジョブIDの持ち主タグを持つ。
+ * 実装フローは再実行の準備がそれを止めてから続けるので、再実行するだけでよい。
+ * pr_fixの準備は何も止めないので、先に人が止める必要がある。
+ */
+function worktreeLockHeldInRunNextAction(
+  flow: NextActionFlow | undefined,
+): string {
+  if (flow === "implement")
+    return `検査コマンドが常駐プロセスを残していないか確かめてから、${RETRY_WORK_ITEM_ACTION}(残ったプロセスは再実行の準備ステップが止めます)`;
+  if (flow === "pr_fix")
+    return "検査コマンドが常駐プロセスを残していないか確かめ、残っていればworkerのコンテナで止めてから、`factory:fix`を付け直してください";
+  return `検査コマンドが常駐プロセスを残していないか確かめ、PRの修正なら残ったプロセスをworkerのコンテナで止めてから\`factory:fix\`を付け直し、実装なら${RETRY_WORK_ITEM_ACTION}`;
+}
 
 const REASON_RULES: readonly ReasonRule[] = [
   // pr_fix_prepare.tsの`evaluatePrFixSafetyGuards` / `evaluateRepoAllowedGuard`
@@ -3704,7 +3749,7 @@ const REASON_RULES: readonly ReasonRule[] = [
     pattern: /^could not request re-review: (.+)$/,
     describe: (m) =>
       `再レビューをリクエストできませんでした: ${describeReason(m[1] ?? "")}`,
-    nextAction: (m) => nextActionFor(m[1] ?? ""),
+    nextAction: (m, flow) => nextActionFor(m[1] ?? "", flow),
   },
   // implementフロー(`lib/implement_loop.ts`のループの終了、
   // `lib/implement_finish_support.ts`、`lib/implement_launch_support.ts`、
@@ -3903,8 +3948,7 @@ const REASON_RULES: readonly ReasonRule[] = [
       m[1] === undefined
         ? "前の実行のプロセスがまだworktreeを使っています"
         : `前の実行のプロセスがまだworktreeを使っています(${m[1]})`,
-    nextAction: () =>
-      "載っているプロセスが終わるのを待つか止めてから(workerを再起動すると同じworkerの他のジョブも止まります)、PRの修正なら`factory:fix`を付け直し、実装ならWindmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+    nextAction: (_m, flow) => worktreeBusyNextAction(flow),
   },
   {
     pattern: /^implementation of the branch's work item is running$/,
@@ -3917,8 +3961,7 @@ const REASON_RULES: readonly ReasonRule[] = [
     pattern: /^worktree lock is held by a process this run left behind$/,
     describe: () =>
       "この実行の検査コマンドなどが残したプロセスが、worktreeのロックを持ち続けています",
-    nextAction: () =>
-      "検査コマンドが常駐プロセスを残していないかを確かめ、workerを再起動してから(同じworkerの他のジョブも止まります)、ConsoleのFailuresタブから再実行してください",
+    nextAction: (_m, flow) => worktreeLockHeldInRunNextAction(flow),
   },
   {
     pattern: /^implement flow deadline reached after round (\d+)$/,
@@ -4040,14 +4083,17 @@ export function describeReason(reason: string): string {
  * 主で対応が必要な理由を先頭に置いている(上の`"no changes to commit; replies posted"`の
  * 対についてのコメントを参照)。
  * どの項目もどの規則にも一致しなければ`GENERIC_NEXT_ACTION`を返す。
+ * `flow`には理由を出したフローを渡す。worktreeのプロセスの排他の理由のように、
+ * フローによって取れる操作が違う理由では、そのフローの操作だけを返す。
+ * 省略すると、それらの理由では両方のフローの操作を並べた文を返す。
  */
-export function nextActionFor(reason: string): string {
+export function nextActionFor(reason: string, flow?: NextActionFlow): string {
   const segments = reason.includes("; ") ? reason.split("; ") : [reason];
   for (const segment of segments) {
     for (const rule of REASON_RULES) {
       const match = segment.match(rule.pattern);
       if (match !== null) {
-        return rule.nextAction(match);
+        return rule.nextAction(match, flow);
       }
     }
   }

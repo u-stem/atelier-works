@@ -733,21 +733,71 @@ describe("nextActionFor (implement flow)", () => {
     );
   });
 
-  test("asks to check and stop the earlier run's processes", () => {
+  test("asks to stop the earlier run's processes and names both reruns when the flow is unknown", () => {
     expect(
       nextActionFor(
         "worktree is still used by processes from an earlier run: pid 42 (3600s, no owner) `x`",
       ),
     ).toBe(
-      "載っているプロセスが終わるのを待つか止めてから(workerを再起動すると同じworkerの他のジョブも止まります)、PRの修正なら`factory:fix`を付け直し、実装ならWindmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+      "理由に載ったプロセスが終わるのを待つか、workerのコンテナでそのプロセスを止めてから、PRの修正なら`factory:fix`を付け直し、実装ならWindmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
     );
   });
 
-  test("asks to check for daemons the checks left", () => {
+  test("asks the implement flow to stop the earlier run's processes and rerun the work item", () => {
+    expect(
+      nextActionFor(
+        "worktree is still used by processes from an earlier run: pid 42 (3600s, pr_fix:9:job-c) `x`",
+        "implement",
+      ),
+    ).toBe(
+      "理由に載ったプロセスが終わるのを待つか、workerのコンテナでそのプロセスを止めてから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+    );
+  });
+
+  test("asks pr_fix to stop the earlier run's processes and re-add factory:fix", () => {
+    expect(
+      nextActionFor(
+        "worktree is still used by processes from an earlier run: pid 42 (3600s, pr_fix:9:job-c) `x`",
+        "pr_fix",
+      ),
+    ).toBe(
+      "理由に載ったプロセスが終わるのを待つか、workerのコンテナでそのプロセスを止めてから、`factory:fix`を付け直してください",
+    );
+  });
+
+  test("asks to check for daemons the checks left and names both reruns when the flow is unknown", () => {
     expect(
       nextActionFor("worktree lock is held by a process this run left behind"),
     ).toBe(
-      "検査コマンドが常駐プロセスを残していないかを確かめ、workerを再起動してから(同じworkerの他のジョブも止まります)、ConsoleのFailuresタブから再実行してください",
+      "検査コマンドが常駐プロセスを残していないか確かめ、PRの修正なら残ったプロセスをworkerのコンテナで止めてから`factory:fix`を付け直し、実装ならWindmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+    );
+  });
+
+  test("tells the implement flow that a rerun stops what its own run left behind", () => {
+    expect(
+      nextActionFor(
+        "worktree lock is held by a process this run left behind",
+        "implement",
+      ),
+    ).toBe(
+      "検査コマンドが常駐プロセスを残していないか確かめてから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください(残ったプロセスは再実行の準備ステップが止めます)",
+    );
+  });
+
+  test("asks pr_fix to stop what its run left behind before re-adding factory:fix", () => {
+    expect(
+      nextActionFor(
+        "worktree lock is held by a process this run left behind",
+        "pr_fix",
+      ),
+    ).toBe(
+      "検査コマンドが常駐プロセスを残していないか確かめ、残っていればworkerのコンテナで止めてから、`factory:fix`を付け直してください",
+    );
+  });
+
+  test("keeps the flow-independent action for other reasons when a flow is given", () => {
+    expect(nextActionFor("pull request is not open", "pr_fix")).toBe(
+      "PRを再オープンするか、この作業を取り下げてください",
     );
   });
 

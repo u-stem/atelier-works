@@ -80,6 +80,21 @@ describe("selectImplementNextAction", () => {
       "worktreeの差分を確認し、秘密情報を取り除いてから人が対応してください",
     );
   });
+
+  test("uses the implement wording for a worktree still in use", () => {
+    expect(
+      selectImplementNextAction({
+        preserveWork: false,
+        outcome: "needs_human",
+        reason:
+          "worktree is still used by processes from an earlier run: pid 42 (3600s, pr_fix:9:job-c) `x`",
+        branch: null,
+        notes: [],
+      }),
+    ).toBe(
+      "理由に載ったプロセスが終わるのを待つか、workerのコンテナでそのプロセスを止めてから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+    );
+  });
 });
 
 describe("claudeText", () => {
