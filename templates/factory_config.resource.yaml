@@ -55,18 +55,21 @@ description: >-
 #     sandboxリポジトリでe2eを済ませてからtrueにする。
 #   check_commands_by_repo:
 #     <owner>/<repo>:
+#       - bun install --frozen-lockfile
 #       - bun test
 #     キーは`<owner>/<repo>`、値は実行するコマンドの配列。ここに書いた
 #     リポジトリだけで検査を実行する(`allowed_check_commands`は使わない)。
 #     Claudeが書いたコードを隔離なしで実行するため、Issueを信頼できる人だけが
-#     起票するリポジトリに限る。
+#     起票するリポジトリに限る。検査の前に`git clean -fdX`で`node_modules/`などが
+#     消えるため、依存関係のあるリポジトリは先頭でインストールする。依存関係が
+#     無い(`package.json`が無い)リポジトリなら`bun test`だけでよい。
 #   implement_timeout_sec: 3600
 #     Claude Codeの1回の実行を打ち切るまでの制限時間(秒)。
 #   implement_check_timeout_sec: 900
 #     検査コマンド1件を打ち切るまでの制限時間(秒)。
 #   implement_flow_timeout_sec: 14400
 #     実装1回の期限(秒)。作業領域の準備を始めてから数える。
-#   時間の設定と検査コマンドの数は、実装フローのステップのtimeout(21600秒)に
-#   収まる組み合わせにする。収まらないと、実装の準備でneeds_humanになる。既定値
-#   なら検査コマンドは7件まで、修正ラウンドを始められる余裕を考えると4件までが
-#   目安。
+#   時間の設定と検査コマンドの数は、実装フローのステップのtimeout
+#   (`IMPLEMENT_STEP_TIMEOUT_SEC`)に収まる組み合わせにする。収まらないと、実装の
+#   準備でneeds_humanになる。既定値なら検査コマンドは7件まで、修正ラウンドを
+#   始められる余裕を考えると4件までが目安。計算式は`docs/operations.md`を参照。

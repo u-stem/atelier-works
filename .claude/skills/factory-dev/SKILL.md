@@ -145,11 +145,11 @@ mise run bootstrap     # workspace 作成、secret 投入、sync push、migratio
 
 上記の1〜4のあと、sandboxで実装フローを確認する。sandboxは`factory_config.repo_allowlist`にあるsandboxリポジトリを使う。
 
-1. `check_commands_by_repo`にsandboxの検査コマンドを設定する(例: `{"<owner>/<repo>": ["bun test"]}`)。`f/factory/factory_config`はgit管理外なので、Windmill UIで編集する。
+1. `check_commands_by_repo`にsandboxの検査コマンドを設定する(例: `{"<owner>/<repo>": ["bun install --frozen-lockfile", "bun test"]}`)。検査の前に`git clean -fdX`で`node_modules/`などが消えるため、依存関係のあるリポジトリは先頭でインストールする。依存関係が無い(`package.json`が無い)リポジトリなら`bun test`だけでよい。`f/factory/factory_config`はgit管理外なので、Windmill UIで編集する。
 2. `implement_enabled`がfalseのままだと、承認後は`approved`で止まる。e2eの間だけtrueにする(Consoleの再実行で起動する場合も、`retry_work_item`はfalseだと拒否するので、先にtrueにする)。
 3. Issueを起票し、要件定義を生成させ、Consoleで承認する。実装フローが走り、Pipelineタブで`implementing`になり、ブランチ列にブランチが出る。PRができると`pr_open`(成功扱い)になり、PR列にPRが出て、Discordに`pr_opened`の通知が届く。
 4. PR本文の章立て(受入条件、動作確認結果、確認して欲しい点、`Closes #N`)を確かめる。
-5. PRに`factory:review`ラベルを付け、`pr_review`が走ることを確認する。
+5. 実装フローが作ったPRには、`implement_finish`がすでに`factory:review`ラベルを付けている。ラベルを付け直さなくても、`poll_prs`が拾って`pr_review`が自動で走ることを確認する(ラベルを付け直すのは、レビューをもう一度起動したいときだけ)。
 6. 次を確かめる。
    - 検査コマンドがラウンドで実行されたこと(`implement_rounds`)。
    - `agent_runs`のコスト。
