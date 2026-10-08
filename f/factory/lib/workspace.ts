@@ -480,7 +480,12 @@ function buildGitArgv(
 
 /** ネットワークを使わないgitの操作の環境変数を返す。`GH_TOKEN`は含めない。 */
 function localGitEnv(home?: string, path?: string): Record<string, string> {
-  const env: Record<string, string> = { GIT_TERMINAL_PROMPT: "0" };
+  // `refs/replace/`で別のオブジェクトに差し替えられた内容を読まない。
+  // 差し替えのrefは対象リポジトリの検査コマンドが作れ、gitが読む内容を検査の前提と食い違わせうるため。
+  const env: Record<string, string> = {
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_NO_REPLACE_OBJECTS: "1",
+  };
   const resolvedHome = home ?? process.env.HOME;
   if (resolvedHome !== undefined) env.HOME = resolvedHome;
   const resolvedPath = path ?? process.env.PATH;
@@ -1038,6 +1043,51 @@ export async function assertWorktreeGitPointer(
     throw new WorktreeGitPointerModifiedError();
   }
   if (current !== expected) throw new WorktreeGitPointerModifiedError();
+}
+
+/**
+ * `<worktreeDir>/.git`が`expected`と一致する通常のファイルかを返す(`assertWorktreeGitPointer`)。
+ * 一致しなければfalseを返し、例外は投げない。`runClaude`の`beforeRetry`に渡す。
+ */
+export async function worktreeGitPointerMatches(
+  worktreeDir: string,
+  expected: string,
+  fs: WorktreeGitPointerFs = defaultWorktreeGitPointerFs,
+): Promise<boolean> {
+  try {
+    await assertWorktreeGitPointer(worktreeDir, expected, fs);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * `<dir>/.git`を1回だけ読み(`readWorktreeGitPointer`)、その中身で`verifyWorktreeGitdir`の検査をして、中身を返す。
+ * 検証した値と記録する値を同じ1回の読み取りにするため、検証の中では`.git`を読み直さない。
+ * 読み直すと、検証の後に書き換えられた値を基準値として記録しうる。
+ * 検査に通らなければ`verifyWorktreeGitdir`と同じく例外を投げる。
+ */
+export async function readAndVerifyWorktreeGitPointer(
+  opts: VerifyWorktreeGitdirOptions & {
+    readonly pointerFs?: WorktreeGitPointerFs;
+  },
+): Promise<string> {
+  const content = (
+    await readWorktreeGitPointer(
+      opts.dir,
+      opts.pointerFs ?? defaultWorktreeGitPointerFs,
+    )
+  ).content;
+  const pointerPath = `${opts.dir}/.git`;
+  const readOther =
+    opts.readTextFile ?? ((path: string) => readFile(path, "utf8"));
+  await verifyWorktreeGitdir({
+    ...opts,
+    readTextFile: (path) =>
+      path === pointerPath ? Promise.resolve(content) : readOther(path),
+  });
+  return content;
 }
 
 // ---------------------------------------------------------------------------
@@ -2001,7 +2051,37 @@ export type CommitAndPushOptions = {
   readonly lockFs?: LockFs;
   readonly sleep?: (ms: number) => Promise<void>;
   readonly now?: () => Date;
+  /**
+   * trueなら、`git add -A`の前にローカルのHEADが`expectedHeadSha`であることを確かめる。
+   * 違えば何もステージせずに`CommitBlockedError`を投げる。
+   * pr_fixが使う。検査コマンドがローカルでcommitすると、そのcommitの変更は作業ツリーの変更として見えず、
+   * 保護パスの判定を経ずにpushされるため。
+   */
+  readonly requireLocalHeadAtExpected?: boolean;
+  /**
+   * 渡されたら、fetchの前に`git rev-parse --abbrev-ref HEAD`がこのブランチであることを確かめる。
+   * 違うとき(detachedの`HEAD`を含む)は何もせずに`CommitBlockedError`を投げる。
+   * pr_fixが使う。検査コマンドがブランチを切り替えると、pushする先が準備ステップの見たPRのブランチでなくなるため。
+   */
+  readonly expectedBranch?: string;
+  /**
+   * `git add -A`の後、commitの前に、ステージした内容を調べて止める理由を返す。
+   * 理由があれば`git reset -q`でステージを戻し、commitせずに`CommitBlockedError`を投げる。
+   * pr_fixが、検証ステップの後にworktreeが変わっていないことを、commitする内容そのもので確かめるために使う。
+   */
+  readonly inspectStaged?: () => Promise<readonly string[]>;
 };
+
+/**
+ * `commitAndPush`が、ローカルのHEADかステージした内容の確かめに通らず、commitしなかったことを表す。
+ * messageは止めた理由(`"; "`でつないだ一覧)で、そのまま状態の理由に使う。
+ */
+export class CommitBlockedError extends Error {
+  constructor(reason: string) {
+    super(reason);
+    this.name = "CommitBlockedError";
+  }
+}
 
 export type CommitAndPushResult =
   | { readonly outcome: "pushed"; readonly newSha: string }
@@ -2087,6 +2167,9 @@ export function withCommitTrailers(
  * 先頭が変わっていれば`head_changed`、変更が無ければ`nothing_to_commit`を返す。
  * pushがfast-forwardでないとして拒否されたとき(先頭の確認をすり抜けた競合)も、
  * 例外を投げず、fetchし直して`head_changed`を返す。それ以外の失敗では例外を投げる。
+ * `expectedBranch`・`requireLocalHeadAtExpected`・`inspectStaged`の確かめに通らなければ、commitせずに`CommitBlockedError`を投げる。
+ * `inspectStaged`が例外を投げたときも、ステージを戻してからその例外を投げ直す。
+ * fetchはサブモジュールに降りない(`--no-recurse-submodules`)。worktreeの`.gitmodules`や設定で、別のリポジトリを取りに行かせないため。
  * トークンはリモートのURLに入れない。
  * 認証は`-c credential.helper='!gh auth git-credential'`と
  * サブプロセスの環境変数の`GH_TOKEN`で行い、fetchとpushのときだけ渡す。
@@ -2122,10 +2205,21 @@ export async function commitAndPush(
         throw gitError("git rev-parse --abbrev-ref HEAD failed", branchResult);
       }
       const branch = branchResult.stdout.trim();
+      if (
+        opts.expectedBranch !== undefined &&
+        (branch === "HEAD" || branch !== opts.expectedBranch)
+      ) {
+        throw new CommitBlockedError(
+          `local HEAD is not on branch ${opts.expectedBranch}`,
+        );
+      }
       assertBranchName(branch);
 
       const fetchResult = await opts.run(
-        buildGitArgv(["fetch", "origin", "--", branch], { network: true }),
+        buildGitArgv(
+          ["fetch", "--no-recurse-submodules", "origin", "--", branch],
+          { network: true },
+        ),
         { cwd: opts.dir, env: network },
       );
       if (fetchResult.exitCode !== 0) {
@@ -2147,6 +2241,22 @@ export async function commitAndPush(
         return { outcome: "head_changed" as const, currentSha: remoteSha };
       }
 
+      if (opts.requireLocalHeadAtExpected === true) {
+        const localShaResult = await opts.run(
+          buildGitArgv(["rev-parse", "--verify", "HEAD"]),
+          { cwd: opts.dir, env: local },
+        );
+        if (localShaResult.exitCode !== 0) {
+          throw gitError("git rev-parse --verify HEAD failed", localShaResult);
+        }
+        const localSha = localShaResult.stdout.trim();
+        if (localSha !== opts.expectedHeadSha) {
+          throw new CommitBlockedError(
+            `local HEAD ${localSha} is not the PR head ${opts.expectedHeadSha}`,
+          );
+        }
+      }
+
       const addResult = await opts.run(buildGitArgv(["add", "-A"]), {
         cwd: opts.dir,
         env: local,
@@ -2161,6 +2271,30 @@ export async function commitAndPush(
       );
       if (statusResult.stdout.trim().length === 0) {
         return { outcome: "nothing_to_commit" as const };
+      }
+
+      if (opts.inspectStaged !== undefined) {
+        const unstage = async (): Promise<void> => {
+          const resetResult = await opts.run(buildGitArgv(["reset", "-q"]), {
+            cwd: opts.dir,
+            env: local,
+          });
+          if (resetResult.exitCode !== 0) {
+            throw gitError("git reset -q failed", resetResult);
+          }
+        };
+        let reasons: readonly string[];
+        try {
+          reasons = await opts.inspectStaged();
+        } catch (err) {
+          // 検査できなかった内容をステージしたまま残さない。
+          await unstage();
+          throw err;
+        }
+        if (reasons.length > 0) {
+          await unstage();
+          throw new CommitBlockedError(reasons.join("; "));
+        }
       }
 
       const commitResult = await opts.run(
@@ -2187,9 +2321,10 @@ export async function commitAndPush(
       if (pushResult.exitCode !== 0) {
         if (isNonFastForwardRejection(pushResult.stderr)) {
           const refetchResult = await opts.run(
-            buildGitArgv(["fetch", "origin", "--", branch], {
-              network: true,
-            }),
+            buildGitArgv(
+              ["fetch", "--no-recurse-submodules", "origin", "--", branch],
+              { network: true },
+            ),
             { cwd: opts.dir, env: network },
           );
           if (refetchResult.exitCode !== 0) {

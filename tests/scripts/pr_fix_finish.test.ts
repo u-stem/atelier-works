@@ -5,16 +5,137 @@
 
 import { describe, expect, test } from "bun:test";
 import type { ReviewThread } from "../../f/factory/lib/github.ts";
+import { WorktreeBusyError } from "../../f/factory/lib/process_lock.ts";
 import type { FixReply } from "../../f/factory/lib/types.ts";
+import { WorktreeGitPointerModifiedError } from "../../f/factory/lib/workspace.ts";
 import {
   buildReplyPostFailedNotice,
   decideFixFinishAction,
   deriveFallbackReviewers,
   evaluateRerouteGuard,
   listReviewThreadsBestEffort,
+  type PrFixPushGateDeps,
+  prFixPushGateReason,
   renderFixReply,
   shouldAdvanceWatermarks,
+  stopBeforeCommitTerminal,
 } from "../../f/factory/steps/pr_workflow_support.ts";
+
+describe("stopBeforeCommitTerminal", () => {
+  const REASON = "forbidden path changed: mise.toml";
+
+  test("records the stop reason as status_reason", () => {
+    expect(stopBeforeCommitTerminal(REASON).statusNote).toBe(REASON);
+  });
+
+  test("notifies the stop reason", () => {
+    expect(stopBeforeCommitTerminal(REASON).discordReason).toBe(REASON);
+  });
+
+  test("moves the work item to needs_human", () => {
+    expect(stopBeforeCommitTerminal(REASON).toStatus).toBe("needs_human");
+  });
+});
+
+describe("prFixPushGateReason", () => {
+  const POINTER = "gitdir: /r/.git/worktrees/fix-1\n";
+
+  /** 呼ばれた依存を記録する、どちらも通る偽の依存。`overrides`で個別に差し替える。 */
+  function gateDeps(overrides: Partial<PrFixPushGateDeps> = {}): {
+    readonly deps: PrFixPushGateDeps;
+    readonly calls: string[];
+  } {
+    const calls: string[] = [];
+    return {
+      calls,
+      deps: {
+        ensureLockFree: async () => {
+          calls.push("ensureLockFree");
+          await overrides.ensureLockFree?.();
+        },
+        assertGitPointer: async (expected) => {
+          calls.push("assertGitPointer");
+          await overrides.assertGitPointer?.(expected);
+        },
+      },
+    };
+  }
+
+  test("stops when a process still holds the worktree lock", async () => {
+    const { deps } = gateDeps({
+      ensureLockFree: async () => {
+        throw new WorktreeBusyError([]);
+      },
+    });
+    expect(await prFixPushGateReason(deps, POINTER, "fix/x")).toBe(
+      "worktree is still used by processes from an earlier run",
+    );
+  });
+
+  test("does not read .git while the lock is held", async () => {
+    const { deps, calls } = gateDeps({
+      ensureLockFree: async () => {
+        throw new WorktreeBusyError([]);
+      },
+    });
+    await prFixPushGateReason(deps, POINTER, "fix/x");
+    expect(calls).toEqual(["ensureLockFree"]);
+  });
+
+  test("rethrows an unexpected error from the lock check", async () => {
+    const { deps } = gateDeps({
+      ensureLockFree: async () => {
+        throw new Error("flock failed");
+      },
+    });
+    await expect(prFixPushGateReason(deps, POINTER, "fix/x")).rejects.toThrow(
+      "flock failed",
+    );
+  });
+
+  test("stops when no pointer was recorded", async () => {
+    const { deps } = gateDeps();
+    expect(await prFixPushGateReason(deps, null, "fix/x")).toBe(
+      "worktree git pointer was not recorded",
+    );
+  });
+
+  test("stops when the pointer changed", async () => {
+    const { deps } = gateDeps({
+      assertGitPointer: async () => {
+        throw new WorktreeGitPointerModifiedError();
+      },
+    });
+    expect(await prFixPushGateReason(deps, POINTER, "fix/x")).toBe(
+      "worktree git pointer was modified",
+    );
+  });
+
+  test("checks the lock before the pointer", async () => {
+    const { deps, calls } = gateDeps();
+    await prFixPushGateReason(deps, POINTER, "fix/x");
+    expect(calls).toEqual(["ensureLockFree", "assertGitPointer"]);
+  });
+
+  test("returns null when the lock is free and the pointer is unchanged", async () => {
+    const { deps } = gateDeps();
+    expect(await prFixPushGateReason(deps, POINTER, "fix/x")).toBeNull();
+  });
+
+  test("stops when no PR branch was recorded", async () => {
+    const { deps } = gateDeps();
+    expect(await prFixPushGateReason(deps, POINTER, null)).toBe(
+      "PR head was not recorded",
+    );
+  });
+
+  test("stops when the recorded PR branch is empty", async () => {
+    const { deps } = gateDeps();
+    expect(await prFixPushGateReason(deps, POINTER, "")).toBe(
+      "PR head was not recorded",
+    );
+  });
+});
 
 describe("decideFixFinishAction", () => {
   test("routes skip to a no-op", () => {

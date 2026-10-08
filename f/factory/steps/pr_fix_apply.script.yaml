@@ -63,6 +63,11 @@ schema:
       description: この処理で使う作業用ディレクトリのパス。
       default: null
       originalType: string
+    worktree_git_pointer:
+      type: string
+      description: ''
+      default: null
+      originalType: string
   required:
     - work_item_id
     - owner

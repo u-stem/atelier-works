@@ -11,6 +11,11 @@ schema:
       description: 処理内容の要約。
       default: null
       originalType: string
+    branch:
+      type: string
+      description: ''
+      default: null
+      originalType: string
     comments:
       type: array
       description: 収集したPRコメントの一覧。
@@ -113,6 +118,11 @@ schema:
     worktree_dir:
       type: string
       description: この処理で使う作業用ディレクトリのパス。
+      default: null
+      originalType: string
+    worktree_git_pointer:
+      type: string
+      description: ''
       default: null
       originalType: string
   required:

@@ -20,11 +20,17 @@ import {
 } from "../lib/process_lock.ts";
 import { FIX_SCHEMA, fixPrompt } from "../lib/prompts.ts";
 import type { FixOutcome, FixReply } from "../lib/types.ts";
-import { runCommand } from "../lib/workspace.ts";
+import {
+  assertWorktreeGitPointer,
+  runCommand,
+  worktreeGitPointerMatches,
+} from "../lib/workspace.ts";
 import {
   type CollectedComment,
   type CollectedReview,
   isFixClaudeOutput,
+  recordedGitPointerStopReason,
+  WORKTREE_GIT_POINTER_NOT_RECORDED_REASON,
 } from "./pr_workflow_support.ts";
 
 export type PrFixApplyResult = {
@@ -42,6 +48,9 @@ export type PrFixApplyResult = {
  * 使えるツールはRead/Glob/Grep/Edit/Writeに限り、Bashは渡さない。
  * コミットの件名と本文はClaudeが提案したものを使い、`outcome`が"done"のときだけ返す。
  * 日次予算を超えていればClaudeを起動せず"blocked"を返す。
+ * worktreeの`.git`が`worktree_git_pointer`(準備ステップの記録)と一致しないとき、
+ * 準備ステップの結果に`worktree_git_pointer`が無いときも、Claudeを起動せず"blocked"を返す。
+ * 不正な出力への再試行の前にも`.git`を確かめ、一致しなければ再試行しない。
  * Claudeの実行が失敗したときは例外を投げる。
  */
 export async function main(
@@ -56,8 +65,29 @@ export async function main(
   attempt: number,
   reviews: CollectedReview[],
   comments: CollectedComment[],
+  worktree_git_pointer: string | null = null,
 ): Promise<PrFixApplyResult> {
   const log = logger("pr_fix_apply");
+
+  // Claudeは起動時にcwdでgitを実行しうるので、起動の前に`.git`を準備ステップの記録と比べる。
+  // このステップの再試行(flow.yamlの`retry`)では、前の試行のClaudeが`.git`を書き換えた後でありうる。
+  // 例外にするとフローの再試行がClaudeを起動し直すので、"blocked"を返す。
+  const pointerReason = await recordedGitPointerStopReason(
+    worktree_git_pointer,
+    (expected) => assertWorktreeGitPointer(worktree_dir, expected),
+  );
+  if (pointerReason !== null || worktree_git_pointer === null) {
+    return {
+      outcome: "blocked",
+      reason: pointerReason ?? WORKTREE_GIT_POINTER_NOT_RECORDED_REASON,
+      summary: "",
+      replies: [],
+      commit_subject: null,
+      commit_body: null,
+    };
+  }
+  const recordedPointer = worktree_git_pointer;
+
   const config = await loadConfig(() =>
     wmill.getResource("f/factory/factory_config"),
   );
@@ -146,11 +176,29 @@ export async function main(
       cwd: worktree_dir,
       oauthToken,
       timeoutMs: config.claude_timeout_sec * 1000,
+      beforeRetry: () =>
+        worktreeGitPointerMatches(worktree_dir, recordedPointer),
     });
 
     await recordClaudeRuns(result, recordAgentRun);
 
     if (result.outcome !== "success") {
+      // 失敗した実行が`.git`を書き換えていれば(不正な出力への再試行を`beforeRetry`が止めた場合を含む)、
+      // 例外にせずポインタの書き換えを理由に"blocked"を返す。例外にするとフローの再試行が走るため。
+      const afterFailureReason = await recordedGitPointerStopReason(
+        recordedPointer,
+        (expected) => assertWorktreeGitPointer(worktree_dir, expected),
+      );
+      if (afterFailureReason !== null) {
+        return {
+          outcome: "blocked",
+          reason: afterFailureReason,
+          summary: "",
+          replies: [],
+          commit_subject: null,
+          commit_body: null,
+        };
+      }
       throw new Error(
         `pr_fix_apply: claude run failed (${result.reason}): ${result.detail}`,
       );

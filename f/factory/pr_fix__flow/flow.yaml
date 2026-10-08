@@ -76,6 +76,9 @@ value:
           worktree_dir:
             type: javascript
             expr: results.pr_fix_prepare.worktree_dir
+          worktree_git_pointer:
+            type: javascript
+            expr: results.pr_fix_prepare.worktree_git_pointer ?? null
         path: f/factory/steps/pr_fix_apply
       retry:
         constant:
@@ -113,12 +116,18 @@ value:
           attempt:
             type: javascript
             expr: results.pr_fix_prepare.attempt
+          branch:
+            type: javascript
+            expr: results.pr_fix_prepare.branch ?? null
           comments:
             type: javascript
             expr: results.pr_fix_collect?.comments ?? []
           factory_clone_dir:
             type: javascript
             expr: results.pr_fix_prepare.factory_clone_dir
+          head_sha:
+            type: javascript
+            expr: results.pr_fix_prepare.head_sha
           owner:
             type: javascript
             expr: results.pr_fix_prepare.owner
@@ -140,6 +149,9 @@ value:
           worktree_dir:
             type: javascript
             expr: results.pr_fix_prepare.worktree_dir
+          worktree_git_pointer:
+            type: javascript
+            expr: results.pr_fix_prepare.worktree_git_pointer ?? null
         path: f/factory/steps/pr_fix_verify
       skip_if:
         expr: results.pr_fix_prepare.outcome !== "proceed" ||
@@ -155,6 +167,9 @@ value:
           summary:
             type: javascript
             expr: results.pr_fix_verify?.summary ?? ""
+          branch:
+            type: javascript
+            expr: results.pr_fix_prepare.branch ?? null
           comments:
             type: javascript
             expr: results.pr_fix_collect?.comments ?? []
@@ -218,6 +233,9 @@ value:
           worktree_dir:
             type: javascript
             expr: results.pr_fix_prepare.worktree_dir
+          worktree_git_pointer:
+            type: javascript
+            expr: results.pr_fix_prepare.worktree_git_pointer ?? null
         path: f/factory/steps/pr_fix_finish
       timeout:
         type: static

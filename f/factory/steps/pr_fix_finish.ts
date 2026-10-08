@@ -30,8 +30,19 @@ import {
   withMarker,
 } from "../lib/github.ts";
 import { logger, maskSecrets } from "../lib/log.ts";
+import {
+  defaultLockReleaseDeps,
+  ensureWorktreeLockFree,
+  worktreeLockFor,
+} from "../lib/process_lock.ts";
 import { type FixReply, isOneOf, type WorkItemStatus } from "../lib/types.ts";
-import { commitAndPush, runCommand } from "../lib/workspace.ts";
+import {
+  assertWorktreeGitPointer,
+  type CommitAndPushResult,
+  CommitBlockedError,
+  commitAndPush,
+  runCommand,
+} from "../lib/workspace.ts";
 import {
   buildIssueProposalReason,
   buildReplyPostFailedNotice,
@@ -43,15 +54,19 @@ import {
   describeReason,
   evaluateRerouteGuard,
   filterKnownReplies,
+  inspectStagedChanges,
   listReviewThreadsBestEffort,
   matchReviewThreadForComment,
   nextActionFor,
+  PR_HEAD_NOT_RECORDED_REASON,
   type PrFixFinishOutcome,
+  prFixPushGateReason,
   type ReplyPostFailure,
   renderFixReply,
   rerouteRequirementsGap,
   selectProposeIssueReplies,
   shouldAdvanceWatermarks,
+  stopBeforeCommitTerminal,
   withGapReport,
 } from "./pr_workflow_support.ts";
 
@@ -74,6 +89,9 @@ export type PrFixFinishResult = {
 /**
  * `outcome`に応じて作業項目を遷移させ、遷移先と通知文を返す。
  * 修正があればcommitしてpushし、レビューコメントへ返信して再レビューを依頼する。
+ * commitの前に、worktreeのロックを持つプロセスが無いこと、`.git`が`worktree_git_pointer`(準備ステップの記録)と一致すること、
+ * ローカルのHEADが`branch`(準備ステップの記録)にあり`head_sha`であること、ステージした内容に保護パス・symlink・gitlink・`package.json`のscriptsの変更が無いことを確かめ、
+ * どれかに通らなければcommitせずにneeds_humanにする。準備ステップの結果に`worktree_git_pointer`か`branch`が無いときも同じにする。
  * `outcome`が想定外の値なら例外を投げる。
  * トリガーの`fix_label`は着手時に消費済みなので、終端の遷移で外すラベルは無い。
  * gtrのworktreeは消さずに残し、後で`cleanup_workspaces`が片付ける。
@@ -107,6 +125,8 @@ export async function main(
   max_review_id: number,
   max_comment_id: number,
   max_review_comment_id: number,
+  worktree_git_pointer: string | null = null,
+  branch: string | null = null,
 ): Promise<PrFixFinishResult> {
   if (!isOneOf(outcome, ALL_OUTCOMES)) {
     throw new Error(`pr_fix_finish: unexpected outcome "${outcome}"`);
@@ -504,16 +524,70 @@ export async function main(
     }
   }
 
-  const pushResult = await commitAndPush({
-    run: runCommand,
-    repoDir: repo_dir,
-    dir: worktree_dir,
-    message: commitMessage,
-    instanceName: config.instance_name,
-    expectedHeadSha: head_sha,
-    author: gitIdentityForViewer(viewer),
-    ghToken,
-  });
+  /** commitせずに止めたラウンドを記録し、止めた理由を`status_reason`に入れてneeds_humanにする。 */
+  async function stopBeforeCommit(
+    stopReason: string,
+  ): Promise<PrFixFinishResult> {
+    await insertFixRound({
+      work_item_id,
+      round: fix_round,
+      trigger_review_ids,
+      outcome: "blocked",
+      replies,
+      commit_shas: [],
+    });
+    const terminal = stopBeforeCommitTerminal(stopReason);
+    await finalizeTerminal(
+      terminal.toStatus,
+      terminal.discordReason,
+      terminal.statusNote,
+    );
+    return { ok: true, final_status: terminal.toStatus, notice: stopReason };
+  }
+
+  // 検証ステップの最後の検査とこのcommitは別のジョブなので、その間にworktreeが変わっていないことを確かめる。
+  // 前のステップのプロセスが残っていないこと、`.git`が準備ステップの記録と一致することを見てから、
+  // commitAndPushでローカルのHEADとステージした内容を確かめる。
+  const gateReason = await prFixPushGateReason(
+    {
+      ensureLockFree: async () => {
+        await ensureWorktreeLockFree({
+          run: runCommand,
+          lock: worktreeLockFor(worktree_dir),
+          policy: null,
+          deps: defaultLockReleaseDeps(),
+        });
+      },
+      assertGitPointer: (expected) =>
+        assertWorktreeGitPointer(worktree_dir, expected),
+    },
+    worktree_git_pointer,
+    branch,
+  );
+  if (gateReason !== null || branch === null) {
+    return stopBeforeCommit(gateReason ?? PR_HEAD_NOT_RECORDED_REASON);
+  }
+
+  let pushResult: CommitAndPushResult;
+  try {
+    pushResult = await commitAndPush({
+      run: runCommand,
+      repoDir: repo_dir,
+      dir: worktree_dir,
+      message: commitMessage,
+      instanceName: config.instance_name,
+      expectedHeadSha: head_sha,
+      author: gitIdentityForViewer(viewer),
+      ghToken,
+      requireLocalHeadAtExpected: true,
+      expectedBranch: branch,
+      inspectStaged: () =>
+        inspectStagedChanges(runCommand, worktree_dir, head_sha),
+    });
+  } catch (err) {
+    if (err instanceof CommitBlockedError) return stopBeforeCommit(err.message);
+    throw err;
+  }
 
   if (pushResult.outcome === "head_changed") {
     await insertFixRound({

@@ -1,4 +1,4 @@
-// pr_fixとpr_reviewのflow.yamlが各ステップに付けるWindmillのtimeoutのテスト。
+// pr_fixとpr_reviewのflow.yamlのテスト。各ステップに付けるWindmillのtimeoutと、ステップ間で渡す値を確かめる。
 // 時間設定に左右されるステップの値は、`pr_workflow_support.ts`の定数と一致することを確かめる。
 // GitHubのrate limitの待ちの上限は、`f/factory/*__flow/flow.yaml`をすべて読み、
 // どのステップのtimeoutよりも短いことを確かめる。
@@ -73,6 +73,42 @@ describe("pr_fix flow.yaml", () => {
     expect(
       PR_FIX_FLOW.slice(PR_FIX_FLOW.indexOf("failure_module:")),
     ).not.toContain("timeout:");
+  });
+
+  test("passes the .git pointer recorded by prepare to the apply step", () => {
+    expect(moduleBlock(PR_FIX_FLOW, "pr_fix_apply")).toContain(
+      "          worktree_git_pointer:\n            type: javascript\n            expr: results.pr_fix_prepare.worktree_git_pointer ?? null\n",
+    );
+  });
+
+  test("passes the .git pointer recorded by prepare to the verify step", () => {
+    expect(moduleBlock(PR_FIX_FLOW, "pr_fix_verify")).toContain(
+      "          worktree_git_pointer:\n            type: javascript\n            expr: results.pr_fix_prepare.worktree_git_pointer ?? null\n",
+    );
+  });
+
+  test("passes the PR branch recorded by prepare to the verify step", () => {
+    expect(moduleBlock(PR_FIX_FLOW, "pr_fix_verify")).toContain(
+      "          branch:\n            type: javascript\n            expr: results.pr_fix_prepare.branch ?? null\n",
+    );
+  });
+
+  test("passes the PR head recorded by prepare to the verify step", () => {
+    expect(moduleBlock(PR_FIX_FLOW, "pr_fix_verify")).toContain(
+      "          head_sha:\n            type: javascript\n            expr: results.pr_fix_prepare.head_sha\n",
+    );
+  });
+
+  test("passes the PR branch recorded by prepare to the finish step", () => {
+    expect(moduleBlock(PR_FIX_FLOW, "pr_fix_finish")).toContain(
+      "          branch:\n            type: javascript\n            expr: results.pr_fix_prepare.branch ?? null\n",
+    );
+  });
+
+  test("passes the .git pointer recorded by prepare to the finish step", () => {
+    expect(moduleBlock(PR_FIX_FLOW, "pr_fix_finish")).toContain(
+      "          worktree_git_pointer:\n            type: javascript\n            expr: results.pr_fix_prepare.worktree_git_pointer ?? null\n",
+    );
   });
 });
 

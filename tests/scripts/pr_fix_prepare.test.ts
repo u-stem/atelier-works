@@ -382,6 +382,14 @@ describe("earlyExitBase", () => {
   test("leaves the worktree directory empty because none was prepared", () => {
     expect(earlyExitBase(workItem).worktree_dir).toBe("");
   });
+
+  test("records no .git pointer when no worktree was prepared", () => {
+    expect(earlyExitBase(workItem).worktree_git_pointer).toBeNull();
+  });
+
+  test("records no branch when no worktree was prepared", () => {
+    expect(earlyExitBase(workItem).branch).toBe("");
+  });
 });
 
 describe("describeReason (implement flow)", () => {
@@ -478,6 +486,52 @@ describe("describeReason (implement flow)", () => {
   test("translates a modified worktree .git pointer", () => {
     expect(describeReason("worktree git pointer was modified")).toBe(
       "worktreeのgitの参照先(.gitファイル)が書き換えられました",
+    );
+  });
+
+  test("translates a .git pointer that was not recorded", () => {
+    expect(describeReason("worktree git pointer was not recorded")).toBe(
+      "worktreeのgitの参照先(.gitファイル)が記録されていません",
+    );
+  });
+
+  test("translates a PR head that was not recorded", () => {
+    expect(describeReason("PR head was not recorded")).toBe(
+      "PRのheadが記録されていません",
+    );
+  });
+
+  test("translates a local HEAD that moved off the PR head", () => {
+    expect(
+      describeReason(
+        `local HEAD ${"b".repeat(40)} is not the PR head ${"a".repeat(40)}`,
+      ),
+    ).toBe(
+      `worktreeのHEAD(${"b".repeat(40)})がPRのhead(${"a".repeat(40)})と異なります`,
+    );
+  });
+
+  test("translates a local HEAD on another branch", () => {
+    expect(describeReason("local HEAD is not on branch fix/x")).toBe(
+      "worktreeのHEADがブランチfix/xにありません",
+    );
+  });
+
+  test("translates a changed path that is not a regular file", () => {
+    expect(describeReason("not a regular file: fifo")).toBe(
+      "通常のファイルではないものが変更されました: fifo",
+    );
+  });
+
+  test("translates a nested repository path", () => {
+    expect(
+      describeReason("nested repository or .git path changed: vendor/x/"),
+    ).toBe("入れ子のリポジトリか.gitのパスが変更されました: vendor/x/");
+  });
+
+  test("asks to check the check commands after HEAD moved", () => {
+    expect(nextActionFor("local HEAD is not on branch fix/x")).toBe(
+      "検査コマンドがコミットやブランチの切り替えをしていないか確かめ、人が修正してください",
     );
   });
 
@@ -597,7 +651,13 @@ describe("nextActionFor (implement flow)", () => {
 
   test("asks to inspect the branch after a modified .git pointer", () => {
     expect(nextActionFor("worktree git pointer was modified")).toBe(
-      "実装ブランチとworktreeを人が確認し、不審な変更があればブランチを削除してください",
+      "ブランチとworktreeを人が確認し、不審な変更があればブランチを削除してください",
+    );
+  });
+
+  test("asks to relabel after a .git pointer that was not recorded", () => {
+    expect(nextActionFor("worktree git pointer was not recorded")).toBe(
+      "`factory:fix`を付け直して修正をやり直してください",
     );
   });
 
@@ -627,7 +687,7 @@ describe("nextActionFor (implement flow)", () => {
         "worktree is still used by processes from an earlier run: pid 42 (3600s, no owner) `x`",
       ),
     ).toBe(
-      "載っているプロセスが何かを確かめて止めるか、workerを再起動してから(同じworkerの他のジョブも止まります)、ConsoleのFailuresタブから再実行してください",
+      "載っているプロセスが終わるのを待つか止めてから(workerを再起動すると同じworkerの他のジョブも止まります)、PRの修正なら`factory:fix`を付け直し、実装ならWindmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
     );
   });
 

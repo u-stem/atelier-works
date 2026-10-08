@@ -271,6 +271,13 @@ export type RunClaudeOptions<T> = {
   readonly now?: () => number;
   readonly retryNote?: string;
   /**
+   * 不正な出力への再試行でClaudeをもう一度起動する直前に呼ぶ。falseなら再試行せず、最初の失敗を返す。
+   * 書き込みツールを渡す実行は、ここでworktreeの`.git`が記録と一致するかを確かめる。
+   * 最初の実行が`.git`を書き換えていれば、次のClaudeが起動時にそのworktreeでgitを実行しうるため。
+   * 省略時は確かめずに再試行する。
+   */
+  readonly beforeRetry?: () => Promise<boolean>;
+  /**
    * 将来、workerをroot以外で実行する方式のために予約している。
    * 今は使わず、workerの現在のユーザーで起動する。
    */
@@ -318,6 +325,9 @@ function buildClaudeEnv(opts: ClaudeEnvInputs): Record<string, string> {
   const env: Record<string, string> = {
     CLAUDE_CODE_OAUTH_TOKEN: opts.oauthToken,
     DISABLE_AUTOUPDATER: "1",
+    // システムプロンプトにgit statusの写しを載せない。写しを作るためにClaudeが起動時にcwdでgitを実行し、
+    // 書き換えられた`.git`の参照先のconfig(core.fsmonitor等)を読みうるため。どのフローもgitの文脈を使わない。
+    CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS: "1",
   };
   const claudeConfigDir = opts.claudeConfigDir ?? process.env.CLAUDE_CONFIG_DIR;
   if (claudeConfigDir !== undefined) env.CLAUDE_CONFIG_DIR = claudeConfigDir;
@@ -552,6 +562,7 @@ const RETRYABLE_REASONS: readonly RunClaudeFailureReason[] = [
  * 再試行したかは成功・失敗とも`retried`で示し、`agentRun`には最後の試行の記録が入る。
  * 再試行したときは、最初の試行の記録(費用を含む)を`discardedAgentRun`で返す。
  * `deadlineAt`を過ぎていれば起動せずにtimeoutの失敗を返し、過ぎた後は再試行しない。
+ * `beforeRetry`がfalseを返したとき、例外を投げたときも再試行せず、最初の失敗を返す。
  */
 export async function runClaude<T>(
   opts: RunClaudeOptions<T>,
@@ -578,6 +589,16 @@ export async function runClaude<T>(
   }
   if (opts.deadlineAt !== undefined && attemptTimeoutMs(opts) <= 0) {
     return { ...first, retried: false };
+  }
+  if (opts.beforeRetry !== undefined) {
+    // 確かめ自体が失敗しても再試行しない。例外にすると最初の試行の記録(費用)を呼び出し側が記録できないため、最初の失敗を返す。
+    let allowed: boolean;
+    try {
+      allowed = await opts.beforeRetry();
+    } catch {
+      allowed = false;
+    }
+    if (!allowed) return { ...first, retried: false };
   }
 
   const retryPrompt = `${opts.prompt}\n\n${opts.retryNote ?? DEFAULT_RETRY_NOTE}`;

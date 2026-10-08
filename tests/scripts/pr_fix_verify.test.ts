@@ -25,19 +25,24 @@ import {
   countUntrackedFileLines,
   detectEscapingSymlinks,
   detectForbiddenChanges,
+  detectNestedRepoPaths,
   detectSymlinkChanges,
   evaluateDiffSizeGuard,
   evaluateUncommittedDiffSize,
   getDiffNumstat,
   IMPLEMENT_DIFF_SIZE_LIMIT_NAMES,
+  inspectStagedChanges,
+  inspectUncommittedChanges,
   isEscapingSymlink,
   isNewShellScript,
   listChangedPaths,
   listSymlinkChanges,
   listSymlinkTargets,
   listUncommittedChangedPaths,
+  localHeadStopReason,
   matchesForbiddenPath,
   mergeChangedPaths,
+  type PathProbeFs,
   packageJsonScriptsChanged,
   parseGitDiffNameOnlyZ,
   parseGitDiffNameStatusZ,
@@ -46,6 +51,7 @@ import {
   parseRawSymlinkPaths,
   parseSymlinkModePathsZ,
   parseWcLineCount,
+  probeChangedPathsOnDisk,
   resolveSymlinkTarget,
   runAllowedCheckCommands,
   sumDiffNumstatLines,
@@ -534,6 +540,464 @@ describe("listSymlinkTargets", () => {
     await expect(listSymlinkTargets(run, "/work", ["link"])).rejects.toThrow(
       /ls-files.*abandoned/,
     );
+  });
+});
+
+/** `code`付きの、Nodeのfsが投げるのと同じ形のエラーを作る。 */
+function errnoError(code: string): Error {
+  return Object.assign(new Error(code), { code });
+}
+
+type FakePathFsOptions = {
+  /** symlinkとして返すパスと、その指す先。 */
+  readonly links?: Readonly<Record<string, string>>;
+  /** 通常のファイルでもsymlinkでもないもの(ディレクトリ・FIFOなど)として返すパス。 */
+  readonly nonRegular?: readonly string[];
+  /** lstatがENOENTで失敗するパス。 */
+  readonly missing?: readonly string[];
+};
+
+/** パスごとに、symlink・通常のファイル以外・無いものを返す偽のfs。それ以外は通常のファイルとして返す。 */
+function fakePathFs(
+  options: FakePathFsOptions = {},
+): PathProbeFs & { readonly lstatCalls: string[] } {
+  const links = options.links ?? {};
+  const lstatCalls: string[] = [];
+  return {
+    lstatCalls,
+    lstat: async (path) => {
+      lstatCalls.push(path);
+      if (options.missing?.includes(path)) throw errnoError("ENOENT");
+      const isLink = links[path] !== undefined;
+      const isOther = options.nonRegular?.includes(path) ?? false;
+      return {
+        isSymbolicLink: () => isLink,
+        isFile: () => !isLink && !isOther,
+      };
+    },
+    readlink: async (path) => {
+      const target = links[path];
+      if (target === undefined) throw errnoError("EINVAL");
+      return target;
+    },
+  };
+}
+
+describe("probeChangedPathsOnDisk", () => {
+  test("pairs a path that is a symlink on disk with its target", async () => {
+    const fs = fakePathFs({ links: { "/wt/link": "/etc/passwd" } });
+    const probe = await probeChangedPathsOnDisk("/wt", ["link"], fs);
+    expect(probe.symlinks).toEqual([{ path: "link", target: "/etc/passwd" }]);
+  });
+
+  test("reports no symlink for a regular file", async () => {
+    const probe = await probeChangedPathsOnDisk(
+      "/wt",
+      ["src/a.ts"],
+      fakePathFs(),
+    );
+    expect(probe).toEqual({ symlinks: [], nonRegular: [] });
+  });
+
+  test("reports a path that is neither a regular file nor a symlink", async () => {
+    const fs = fakePathFs({ nonRegular: ["/wt/fifo"] });
+    const probe = await probeChangedPathsOnDisk("/wt", ["fifo"], fs);
+    expect(probe.nonRegular).toEqual(["fifo"]);
+  });
+
+  test("skips a path that no longer exists", async () => {
+    const fs = fakePathFs({ missing: ["/wt/gone.ts"] });
+    const probe = await probeChangedPathsOnDisk("/wt", ["gone.ts"], fs);
+    expect(probe).toEqual({ symlinks: [], nonRegular: [] });
+  });
+
+  test("throws when lstat fails for another reason", async () => {
+    const fs: PathProbeFs = {
+      lstat: async () => {
+        throw errnoError("EACCES");
+      },
+      readlink: async () => "",
+    };
+    await expect(
+      probeChangedPathsOnDisk("/wt", ["secret"], fs),
+    ).rejects.toThrow(/EACCES/);
+  });
+
+  test("lstats each path under the worktree", async () => {
+    const fs = fakePathFs();
+    await probeChangedPathsOnDisk("/wt", ["a/b.ts"], fs);
+    expect(fs.lstatCalls).toEqual(["/wt/a/b.ts"]);
+  });
+});
+
+describe("detectNestedRepoPaths", () => {
+  test("blocks an untracked directory entry that git collapsed", () => {
+    const reasons = detectNestedRepoPaths([
+      { path: "vendor/x/", status: "added" },
+    ]);
+    expect(reasons).toEqual([
+      "nested repository or .git path changed: vendor/x/",
+    ]);
+  });
+
+  test("blocks a path with a .git component", () => {
+    const reasons = detectNestedRepoPaths([
+      { path: "sub/.git/config", status: "added" },
+    ]);
+    expect(reasons).toHaveLength(1);
+  });
+
+  test("blocks a .git component in any letter case", () => {
+    const reasons = detectNestedRepoPaths([
+      { path: "sub/.GIT", status: "added" },
+    ]);
+    expect(reasons).toHaveLength(1);
+  });
+
+  test("passes a name that only contains .git", () => {
+    const reasons = detectNestedRepoPaths([
+      { path: "docs/.gitkeep", status: "added" },
+    ]);
+    expect(reasons).toEqual([]);
+  });
+});
+
+describe("inspectUncommittedChanges", () => {
+  const LIMITS = { maxChangedFiles: 30, maxDiffLines: 1500 };
+  const Z = "\u0000";
+  const SHA_A = "a".repeat(40);
+  const ZERO = "0".repeat(40);
+
+  test("blocks an untracked symlink that git ls-files does not list", async () => {
+    const { run } = createFakeCommandRunner([
+      ok(`?? link${Z}`),
+      ok(""),
+      ok(""),
+      ok(""),
+    ]);
+    const result = await inspectUncommittedChanges(
+      run,
+      "/wt",
+      LIMITS,
+      fakePathFs({ links: { "/wt/link": "docs/readme.md" } }),
+    );
+    expect(result.reasons).toEqual(["symlink_change: symlink changed: link"]);
+  });
+
+  test("reports a tracked symlink only once", async () => {
+    const { run } = createFakeCommandRunner([
+      ok(` M link${Z}`),
+      ok(`link${Z}`),
+      ok(`120000 abc123 0\tlink${Z}`),
+      ok(`:120000 120000 ${SHA_A} ${ZERO} M${Z}link${Z}`),
+    ]);
+    const result = await inspectUncommittedChanges(
+      run,
+      "/wt",
+      LIMITS,
+      fakePathFs({ links: { "/wt/link": "/etc/passwd" } }),
+    );
+    expect(result.reasons).toEqual([
+      "symlink escapes the worktree: link -> /etc/passwd",
+      "symlink_change: symlink changed: link",
+    ]);
+  });
+
+  test("blocks a tracked symlink checked out as a regular file", async () => {
+    const { run } = createFakeCommandRunner([
+      ok(` M link${Z}`),
+      ok(`link${Z}`),
+      ok(`120000 abc123 0\tlink${Z}`),
+      ok(`:120000 120000 ${SHA_A} ${ZERO} M${Z}link${Z}`),
+    ]);
+    const result = await inspectUncommittedChanges(
+      run,
+      "/wt",
+      LIMITS,
+      fakePathFs(),
+    );
+    expect(result.reasons).toEqual(["symlink_change: symlink changed: link"]);
+  });
+
+  test("blocks a deleted tracked symlink", async () => {
+    const { run } = createFakeCommandRunner([
+      ok(` D link${Z}`),
+      ok(`link${Z}`),
+      ok(""),
+      ok(`:120000 000000 ${SHA_A} ${ZERO} D${Z}link${Z}`),
+    ]);
+    const result = await inspectUncommittedChanges(
+      run,
+      "/wt",
+      LIMITS,
+      fakePathFs(),
+    );
+    expect(result.reasons).toEqual(["symlink_change: symlink changed: link"]);
+  });
+
+  test("runs only the listing commands once a symlink is found", async () => {
+    const { run, calls } = createFakeCommandRunner([
+      ok(`?? link${Z}`),
+      ok(""),
+      ok(""),
+      ok(""),
+    ]);
+    await inspectUncommittedChanges(
+      run,
+      "/wt",
+      LIMITS,
+      fakePathFs({ links: { "/wt/link": "/dev/zero" } }),
+    );
+    expect(calls.map((call) => call.argv.slice(7))).toEqual([
+      [
+        "status",
+        "--porcelain",
+        "-z",
+        "--untracked-files=all",
+        "--ignore-submodules=none",
+      ],
+      ["diff", "--name-only", "-z"],
+      ["--literal-pathspecs", "ls-files", "-s", "-z", "--", "link"],
+      [
+        "diff",
+        "--raw",
+        "--no-renames",
+        "-z",
+        "--no-ext-diff",
+        "--ignore-submodules=none",
+        "HEAD",
+        "--",
+      ],
+    ]);
+  });
+
+  test("blocks a FIFO before reading any file content", async () => {
+    const { run, calls } = createFakeCommandRunner([
+      ok(`?? package.json${Z}`),
+      ok(""),
+      ok(""),
+      ok(""),
+    ]);
+    const result = await inspectUncommittedChanges(
+      run,
+      "/wt",
+      LIMITS,
+      fakePathFs({ nonRegular: ["/wt/package.json"] }),
+    );
+    expect([result.reasons, calls.length]).toEqual([
+      ["not a regular file: package.json"],
+      4,
+    ]);
+  });
+
+  test("blocks a nested repository that git status collapsed", async () => {
+    const { run } = createFakeCommandRunner([
+      ok(`?? vendor/x/${Z}`),
+      ok(""),
+      ok(""),
+      ok(""),
+    ]);
+    const result = await inspectUncommittedChanges(
+      run,
+      "/wt",
+      LIMITS,
+      fakePathFs({ nonRegular: ["/wt/vendor/x/"] }),
+    );
+    expect(result.reasons).toEqual([
+      "nested repository or .git path changed: vendor/x/",
+      "not a regular file: vendor/x/",
+    ]);
+  });
+
+  test("does not lstat a deleted path", async () => {
+    const fs = fakePathFs();
+    const { run } = createFakeCommandRunner([
+      ok(` D old.ts${Z}`),
+      ok(`old.ts${Z}`),
+      ok(""),
+      ok(`:100644 000000 ${SHA_A} ${ZERO} D${Z}old.ts${Z}`),
+      ok(""),
+    ]);
+    await inspectUncommittedChanges(run, "/wt", LIMITS, fs);
+    expect(fs.lstatCalls).toEqual([]);
+  });
+
+  test("passes an ordinary modified file", async () => {
+    const { run } = createFakeCommandRunner([
+      ok(` M src/a.ts${Z}`),
+      ok(`src/a.ts${Z}`),
+      ok(""),
+      ok(`:100644 100644 ${SHA_A} ${ZERO} M${Z}src/a.ts${Z}`),
+      ok(`1\t1\tsrc/a.ts${Z}`),
+    ]);
+    const result = await inspectUncommittedChanges(
+      run,
+      "/wt",
+      LIMITS,
+      fakePathFs(),
+    );
+    expect(result.blocked).toBe(false);
+  });
+});
+
+describe("localHeadStopReason", () => {
+  const HEAD = "a".repeat(40);
+  const OTHER = "b".repeat(40);
+
+  test("passes when HEAD is the PR head on the PR branch", async () => {
+    const { run } = createFakeCommandRunner([
+      ok(`${HEAD}\n`),
+      ok("refs/heads/fix/x\n"),
+    ]);
+    expect(await localHeadStopReason(run, "/wt", HEAD, "fix/x")).toBeNull();
+  });
+
+  test("stops when a check command committed locally", async () => {
+    const { run } = createFakeCommandRunner([
+      ok(`${OTHER}\n`),
+      ok("refs/heads/fix/x\n"),
+    ]);
+    expect(await localHeadStopReason(run, "/wt", HEAD, "fix/x")).toBe(
+      `local HEAD ${OTHER} is not the PR head ${HEAD}`,
+    );
+  });
+
+  test("stops when HEAD is on another branch", async () => {
+    const { run } = createFakeCommandRunner([
+      ok(`${HEAD}\n`),
+      ok("refs/heads/main\n"),
+    ]);
+    expect(await localHeadStopReason(run, "/wt", HEAD, "fix/x")).toBe(
+      "local HEAD is not on branch fix/x",
+    );
+  });
+
+  test("stops when HEAD is detached", async () => {
+    const { run } = createFakeCommandRunner([ok(`${HEAD}\n`), fail("", 1)]);
+    expect(await localHeadStopReason(run, "/wt", HEAD, "fix/x")).toBe(
+      "local HEAD is not on branch fix/x",
+    );
+  });
+
+  test("reads HEAD with rev-parse and symbolic-ref", async () => {
+    const { run, calls } = createFakeCommandRunner([
+      ok(`${HEAD}\n`),
+      ok("refs/heads/fix/x\n"),
+    ]);
+    await localHeadStopReason(run, "/wt", HEAD, "fix/x");
+    expect(calls.map((call) => call.argv.slice(7))).toEqual([
+      ["rev-parse", "--verify", "HEAD"],
+      ["symbolic-ref", "-q", "HEAD"],
+    ]);
+  });
+
+  test("throws when HEAD cannot be resolved", async () => {
+    const { run } = createFakeCommandRunner([fail("fatal: bad HEAD", 128)]);
+    await expect(
+      localHeadStopReason(run, "/wt", HEAD, "fix/x"),
+    ).rejects.toThrow(/rev-parse --verify HEAD failed/);
+  });
+});
+
+describe("inspectStagedChanges", () => {
+  const BASE = "c".repeat(40);
+  const Z = "\u0000";
+  const SHA_A = "a".repeat(40);
+  const ZERO = "0".repeat(40);
+  const BEFORE = JSON.stringify({ scripts: { test: "bun test" } });
+  const AFTER = JSON.stringify({ scripts: { test: "true" } });
+
+  test("passes an ordinary staged change", async () => {
+    const { run } = createFakeCommandRunner([
+      ok(`M${Z}src/a.ts${Z}`),
+      ok(`:100644 100644 ${SHA_A} ${SHA_A} M${Z}src/a.ts${Z}`),
+    ]);
+    expect(await inspectStagedChanges(run, "/wt", BASE)).toEqual([]);
+  });
+
+  test("blocks a staged protected path", async () => {
+    const { run } = createFakeCommandRunner([
+      ok(`A${Z}.claude/x.md${Z}`),
+      ok(""),
+    ]);
+    expect(await inspectStagedChanges(run, "/wt", BASE)).toEqual([
+      "forbidden path changed: .claude/x.md",
+    ]);
+  });
+
+  test("blocks a staged symlink", async () => {
+    const { run } = createFakeCommandRunner([
+      ok(`A${Z}link${Z}`),
+      ok(`:000000 120000 ${ZERO} ${SHA_A} A${Z}link${Z}`),
+    ]);
+    expect(await inspectStagedChanges(run, "/wt", BASE)).toEqual([
+      "symlink_change: symlink changed: link",
+    ]);
+  });
+
+  test("blocks a staged nested repository (gitlink)", async () => {
+    const { run } = createFakeCommandRunner([
+      ok(`A${Z}vendor/x${Z}`),
+      ok(`:000000 160000 ${ZERO} ${SHA_A} A${Z}vendor/x${Z}`),
+    ]);
+    expect(await inspectStagedChanges(run, "/wt", BASE)).toEqual([
+      "nested repository or .git path changed: vendor/x",
+    ]);
+  });
+
+  test("compares package.json scripts against the staged blob", async () => {
+    const { run } = createFakeCommandRunner([
+      ok(`M${Z}package.json${Z}`),
+      ok(""),
+      ok(BEFORE),
+      ok(AFTER),
+    ]);
+    expect(await inspectStagedChanges(run, "/wt", BASE)).toEqual([
+      'package.json "scripts" field changed',
+    ]);
+  });
+
+  test("reads the base and staged package.json through git", async () => {
+    const { run, calls } = createFakeCommandRunner([
+      ok(`M${Z}package.json${Z}`),
+      ok(""),
+      ok(BEFORE),
+      ok(BEFORE),
+    ]);
+    await inspectStagedChanges(run, "/wt", BASE);
+    expect(calls.map((call) => call.argv.at(-1))).toEqual([
+      "--",
+      "--",
+      `${BASE}:package.json`,
+      ":0:package.json",
+    ]);
+  });
+
+  test("diffs the index against the base sha", async () => {
+    const { run, calls } = createFakeCommandRunner([ok(""), ok("")]);
+    await inspectStagedChanges(run, "/wt", BASE);
+    expect(calls.map((call) => call.argv.slice(7))).toEqual([
+      [
+        "diff",
+        "--cached",
+        "-z",
+        "--name-status",
+        "--no-ext-diff",
+        "--ignore-submodules=none",
+        BASE,
+        "--",
+      ],
+      [
+        "diff",
+        "--cached",
+        "--raw",
+        "-z",
+        "--no-ext-diff",
+        "--ignore-submodules=none",
+        BASE,
+        "--",
+      ],
+    ]);
   });
 });
 
@@ -1094,12 +1558,13 @@ describe("listChangedPaths", () => {
   test("diffs the index against the base sha with -z --name-status", async () => {
     const { run, calls } = createFakeCommandRunner([ok("")]);
     await listChangedPaths(run, "/wt", BASE);
-    expect(calls[0]?.argv.slice(-7)).toEqual([
+    expect(calls[0]?.argv.slice(-8)).toEqual([
       "diff",
       "--cached",
       "-z",
       "--name-status",
       "--no-ext-diff",
+      "--ignore-submodules=none",
       BASE,
       "--",
     ]);
@@ -1141,6 +1606,12 @@ describe("listUncommittedChangedPaths", () => {
     expect(detectForbiddenChanges(paths, false).blocked).toBe(true);
   });
 
+  test("runs git without replace objects", async () => {
+    const { run, calls } = createFakeCommandRunner([ok(""), ok("")]);
+    await listUncommittedChangedPaths(run, "/wt");
+    expect(calls[0]?.options?.env?.GIT_NO_REPLACE_OBJECTS).toBe("1");
+  });
+
   test("runs both with -z and the hardening flags in the worktree", async () => {
     const { run, calls } = createFakeCommandRunner([ok(""), ok("")]);
     await listUncommittedChangedPaths(run, "/wt");
@@ -1158,6 +1629,7 @@ describe("listUncommittedChangedPaths", () => {
           "--porcelain",
           "-z",
           "--untracked-files=all",
+          "--ignore-submodules=none",
         ],
         "/wt",
       ],
@@ -1326,6 +1798,70 @@ describe("changed path listing against a real git repository", () => {
     const targets = await listSymlinkTargets(repo.run, repo.dir, ["ab"]);
     expect(targets).toEqual([{ path: "ab", target: "/etc/passwd" }]);
   });
+
+  test("pr_fix blocks a new symlink that is still untracked", async () => {
+    const repo = await initRepo();
+    symlinkSync("README.md", join(repo.dir, "link"));
+    const result = await inspectUncommittedChanges(repo.run, repo.dir, {
+      maxChangedFiles: 30,
+      maxDiffLines: 1500,
+    });
+    expect(result.reasons).toEqual(["symlink_change: symlink changed: link"]);
+  });
+
+  /** `repo`でgitを実行し、失敗したら例外を投げる。コミットできるよう作者を渡す。 */
+  async function gitIn(repo: TempRepo, args: readonly string[]): Promise<void> {
+    const result = await repo.run(
+      [
+        "git",
+        "-c",
+        "user.name=test",
+        "-c",
+        "user.email=test@example.invalid",
+        ...args,
+      ],
+      { cwd: repo.dir },
+    );
+    if (result.exitCode !== 0) throw new Error(result.stderr);
+  }
+
+  test("the staged check finds a gitlink that .gitmodules ignore = all hides", async () => {
+    const repo = await initRepo();
+    const sub = { ...repo, dir: join(repo.dir, "sub") };
+    mkdirSync(sub.dir);
+    await gitIn(sub, ["init", "-q"]);
+    writeFileSync(join(sub.dir, "a.txt"), "a\n");
+    await gitIn(sub, ["add", "-A"]);
+    await gitIn(sub, ["commit", "-q", "-m", "sub"]);
+    await gitIn(repo, ["add", "sub"]);
+    writeFileSync(
+      join(repo.dir, ".gitmodules"),
+      '[submodule "sub"]\n\tpath = sub\n\turl = ./sub\n\tignore = all\n',
+    );
+    await gitIn(repo, ["add", ".gitmodules"]);
+    const reasons = await inspectStagedChanges(
+      repo.run,
+      repo.dir,
+      repo.baseSha,
+    );
+    expect(reasons).toContain("nested repository or .git path changed: sub");
+  });
+
+  test("pr_fix blocks a rewritten tracked symlink under core.symlinks=false", async () => {
+    const repo = await initRepo();
+    symlinkSync("README.md", join(repo.dir, "link"));
+    await gitIn(repo, ["add", "-A"]);
+    await gitIn(repo, ["commit", "-q", "-m", "link"]);
+    await gitIn(repo, ["config", "core.symlinks", "false"]);
+    rmSync(join(repo.dir, "link"));
+    await gitIn(repo, ["checkout", "--", "link"]);
+    writeFileSync(join(repo.dir, "link"), "/etc/passwd");
+    const result = await inspectUncommittedChanges(repo.run, repo.dir, {
+      maxChangedFiles: 30,
+      maxDiffLines: 1500,
+    });
+    expect(result.reasons).toEqual(["symlink_change: symlink changed: link"]);
+  });
 });
 
 describe("parseRawSymlinkPaths", () => {
@@ -1375,12 +1911,13 @@ describe("listSymlinkChanges", () => {
   test("diffs the index against the base sha with --raw -z", async () => {
     const { run, calls } = createFakeCommandRunner([ok("")]);
     await listSymlinkChanges(run, "/wt", BASE);
-    expect(calls[0]?.argv.slice(-7)).toEqual([
+    expect(calls[0]?.argv.slice(-8)).toEqual([
       "diff",
       "--cached",
       "--raw",
       "-z",
       "--no-ext-diff",
+      "--ignore-submodules=none",
       BASE,
       "--",
     ]);
