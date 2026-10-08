@@ -43,8 +43,13 @@
   一時的に飛ばせるが、次のpush前に`mise run metadata`で追従させる。
   手動実行は`mise run metadata` / `mise run metadata:check`。
 - `scripts/lint-no-type-assertions.ts`はトークンベースのヒューリスティックのため、
-  ネストしたジェネリクス(`Array<Array<Foo>>`のように`>>`が1トークンになる場合)
-  では誤検知/検知漏れが起こりうる(詳細はスクリプト冒頭コメント参照)。
+  まれな入力では誤検知/検知漏れが起こりうる(詳細はスクリプト冒頭コメント参照)。
+  `.tsx`ではJSXを読み分けるが、コードをJSXと読み違えることがある(例: 型の位置
+  の呼び出しシグネチャ`{ <T>(x: T): T }`、キーワードと同じ綴りの変数を`<`で
+  比べる`from < max`)。読み違えた要素はたいていファイルの終わりまで閉じず、
+  `file:line:column`を出してエラーで止まる。その場合は書き方を変えて避ける。
+  ただし、後ろの文字列リテラルなどにある`</`(`"</a>"`)が読み違えた要素を
+  閉じると、その間のコードは黙って検査から漏れる。
 - Git hooksはlefthook(`mise run setup`で`lefthook install`を実行)。
   pre-commitで(`f/`配下のステージがあれば)`wmill generate-metadata --yes`
   (`scripts/generate-metadata-staged.sh`)を先に実行し、続けてbiome・`as`禁止

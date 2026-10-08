@@ -19,7 +19,7 @@ pre-commit:
             glob: "*.{ts,tsx,js,css,json,jsonc}"
             run: mise exec -- bunx --bun biome check --no-errors-on-unmatched {staged_files}
           - name: no-type-assertions
-            glob: "*.ts"
+            glob: "*.{ts,tsx}"
             run: mise exec -- bun run scripts/lint-no-type-assertions.ts {staged_files}
           - name: no-section-sign
             glob: "*.{ts,tsx,js,mjs,sh,yaml,yml,toml,sql}"
