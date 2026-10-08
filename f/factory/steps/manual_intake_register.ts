@@ -8,31 +8,12 @@
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "../lib/config.ts";
 import { insertWorkItem, setFlowJobId } from "../lib/db.ts";
-import { type NotifyEvent, notify } from "../lib/discord.ts";
+import { notifyBestEffort } from "../lib/discord.ts";
 import { claimIssue, type GhClient, getViewer } from "../lib/github.ts";
 import { parseFlowJobId } from "../lib/implement_launch_support.ts";
-import { type Logger, logger, maskSecrets } from "../lib/log.ts";
+import { logger } from "../lib/log.ts";
 import { assertGitHubName } from "../lib/types.ts";
 import { runCommand } from "../lib/workspace.ts";
-
-/**
- * Discordに通知する。`poll_issues.ts`の`notifySafe`と同じ扱いにしている。
- * webhookのURLが空なら何もしない。
- * 送信に失敗しても例外にせず、秘密をマスクして警告ログに残す。
- * 通知の一時的な失敗で、通知対象の作業項目の処理を止めないため。
- */
-async function notifySafe(
-  webhookUrl: string,
-  event: NotifyEvent,
-  log: Logger,
-): Promise<void> {
-  if (webhookUrl.length === 0) return;
-  try {
-    await notify(webhookUrl, event);
-  } catch (err) {
-    log.warn("discord notify failed", { error: maskSecrets(String(err)) });
-  }
-}
 
 export type ManualIntakeRegisterResult = {
   readonly work_item_id: number;
@@ -103,7 +84,7 @@ export async function main(
   await setFlowJobId(workItemId, flowJobId);
 
   const webhookUrl = await wmill.getVariable("f/factory/discord_webhook_url");
-  await notifySafe(
+  await notifyBestEffort(
     webhookUrl,
     {
       kind: "issue_claimed",

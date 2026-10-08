@@ -15,7 +15,7 @@ import {
   setWorkItemPrUrl,
   updateStatusIfLeaseHolder,
 } from "../lib/db.ts";
-import { type NotifyEvent, notify } from "../lib/discord.ts";
+import { notifyBestEffort } from "../lib/discord.ts";
 import {
   addLabels,
   createPullRequest,
@@ -328,15 +328,6 @@ async function finishImplement(
   const client: GhClient = { run: runCommand, ghToken };
   const webhookUrl = await wmill.getVariable("f/factory/discord_webhook_url");
 
-  const notifySafely = async (event: NotifyEvent): Promise<void> => {
-    if (webhookUrl.length === 0) return;
-    try {
-      await notify(webhookUrl, event);
-    } catch (err) {
-      log.warn("discord notify failed", { error: errorText(err) });
-    }
-  };
-
   /**
    * 作業項目をneeds_humanに遷移させ、遷移できたらnoticeを記録してDiscordへ通知する。
    * `from`はCASで期待する状態(`implementing`、または差し戻しを始められなかった後の
@@ -375,16 +366,20 @@ async function finishImplement(
           error: errorText(err),
         });
       }
-      await notifySafely({
-        kind: "needs_human",
-        instance_name: config.instance_name,
-        owner,
-        repo,
-        url: issueUrl,
-        reason: described,
-        target: { kind: "issue", number: issueNumber },
-        next_action: nextAction,
-      });
+      await notifyBestEffort(
+        webhookUrl,
+        {
+          kind: "needs_human",
+          instance_name: config.instance_name,
+          owner,
+          repo,
+          url: issueUrl,
+          reason: described,
+          target: { kind: "issue", number: issueNumber },
+          next_action: nextAction,
+        },
+        log,
+      );
     }
     return transitionResult(moved, "needs_human", reason);
   };
@@ -754,7 +749,8 @@ async function finishImplement(
     opened.pr.htmlUrl,
   );
   if (moved && loop_result.checks !== null) {
-    await notifySafely(
+    await notifyBestEffort(
+      webhookUrl,
       buildPrOpenedEvent({
         instanceName: config.instance_name,
         target: context,
@@ -763,6 +759,7 @@ async function finishImplement(
         checks: loop_result.checks,
         created: opened.created,
       }),
+      log,
     );
   }
   return transitionResult(moved, "pr_open", opened.pr.htmlUrl);

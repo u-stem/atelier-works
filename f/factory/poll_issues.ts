@@ -27,7 +27,7 @@ import {
   updateStatusIfCurrent,
   updateStatusIfLeaseHolder,
 } from "./lib/db.ts";
-import { type NotifyEvent, notify } from "./lib/discord.ts";
+import { notifyBestEffort } from "./lib/discord.ts";
 import {
   claimIssue,
   type GhClient,
@@ -132,19 +132,6 @@ async function recordFailureSafe(
     log.error("failed to record failure", {
       error: maskSecrets(String(recordErr)),
     });
-  }
-}
-
-async function notifySafe(
-  webhookUrl: string,
-  event: NotifyEvent,
-  log: Logger,
-): Promise<void> {
-  if (webhookUrl.length === 0) return;
-  try {
-    await notify(webhookUrl, event);
-  } catch (err) {
-    log.warn("discord notify failed", { error: maskSecrets(String(err)) });
   }
 }
 
@@ -363,7 +350,7 @@ async function reconcileActiveItems(
         await removePrWorktrees(item.owner, item.repo, item.pr_number, log);
       }
 
-      await notifySafe(
+      await notifyBestEffort(
         discordWebhookUrl,
         {
           kind: "job_failed",
@@ -474,7 +461,7 @@ async function claimAndStart(
     parent_work_item_id: null,
   });
 
-  await notifySafe(
+  await notifyBestEffort(
     discordWebhookUrl,
     {
       kind: "issue_claimed",
@@ -535,7 +522,7 @@ async function expirePendingApprovals(
       );
       if (!updated) continue; // 作業項目は既に次の状態に進んでいる。
 
-      await notifySafe(
+      await notifyBestEffort(
         discordWebhookUrl,
         {
           kind: "needs_human",
