@@ -1,0 +1,9 @@
+summary: '[LIB] Issue取得の後処理'
+description: 内部ライブラリです。直接実行するものではありません。Issueの取得の後に、assigneeを設定できなかったことをnoticeに残す処理です。
+lock: '!inline f/factory/lib/claim_support.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

@@ -13,6 +13,7 @@
 // `generate-metadata`のたびにscriptごとに別の最新版へずれていく。
 import * as wmill from "windmill-client@1.817.0";
 import { expiredRequirementsRequests } from "./lib/approval_support.ts";
+import { recordAssigneeMissing } from "./lib/claim_support.ts";
 import { loadConfig } from "./lib/config.ts";
 import {
   addNoticeUnlessUnresolved,
@@ -561,7 +562,7 @@ export async function claimIssueWithNotice(
       candidate.owner,
       candidate.repo,
       candidate.number,
-      { triggerLabel: input.triggerLabel, assignee: input.viewerLogin },
+      { triggerLabel: input.triggerLabel, assignee: input.viewerLogin, log },
     );
   } catch (err) {
     if (err instanceof ClaimOwnershipUnknownError) {
@@ -585,7 +586,12 @@ export async function claimIssueWithNotice(
 
   if (claimResult.claimed) {
     if (claimResult.assignee === "missing") {
-      await recordAssigneeMissing(target, input.viewerLogin, deps, log);
+      await recordAssigneeMissing(
+        target,
+        input.viewerLogin,
+        deps.addNoticeUnlessUnresolved,
+        log,
+      );
     } else if (claimResult.assignee === "unknown") {
       log.warn("claim assignee could not be confirmed", { target });
     }
@@ -597,37 +603,8 @@ export async function claimIssueWithNotice(
       kind: "claim_race_lost",
       message: `${target}: ${claimResult.reason}`,
     });
-  } else {
-    log.warn("claim deferred to the next poll", {
-      target,
-      reason: claimResult.reason,
-    });
   }
   return false;
-}
-
-/**
- * assigneeを設定できなかったことをnoticeに残す。記録に失敗しても例外にしない。
- * 設定できない主な原因は、Factoryのユーザーがリポジトリのpush権限を持たないことである。
- * GitHubは権限の無いユーザーへのassigneeの追加を、成功の応答のまま無視する。
- */
-async function recordAssigneeMissing(
-  target: string,
-  viewerLogin: string,
-  deps: ClaimNoticeDeps,
-  log: Logger,
-): Promise<void> {
-  try {
-    await deps.addNoticeUnlessUnresolved({
-      kind: "claim_assignee_missing",
-      message: `${target}: assigneeに${viewerLogin}を設定できませんでしたが、作業は続けます。${viewerLogin}がこのリポジトリのpush権限を持つcollaboratorか確かめてください`,
-    });
-  } catch (err) {
-    log.warn("claim_assignee_missing notice could not be recorded", {
-      target,
-      error: maskSecrets(err instanceof Error ? err.message : String(err)),
-    });
-  }
 }
 
 export type LabelerDeniedDeps = {

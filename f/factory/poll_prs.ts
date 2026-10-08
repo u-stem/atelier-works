@@ -8,8 +8,8 @@
 //
 // PRに付くのは2つのトリガーラベル(`factory:review`・`factory:fix`)だけで、
 // Issueと同じく取得時に消費する。`wip`ラベルも状態ラベルも無い。
-// `claimPr`は今回のサイクルを起こしたトリガーラベルを外し、取り直して
-// 確かめる(`lib/github.ts`の`claimIssue`と同じ方式)。assignで起きるレビューは
+// `claimPr`は今回のサイクルを起こしたトリガーラベルを外す。ラベルが既に無ければ(404)
+// ほかが先に外したので引き、外せたら取り直して残っていないかを確かめる。assignで起きるレビューは
 // ラベルが関わらないので`claimPr`を通らない。トリガーラベルを消費すると
 // `searchPrs`のラベル検索ではそのPRを見つけられなくなるため、
 // `listTrackedPrs`がDBから見つけ直す(`main()`を参照)。
@@ -38,6 +38,7 @@ import {
   listPrReviewComments,
   listPrReviews,
   type PrSearchItem,
+  type RemoveLabelResult,
   removeLabel,
   searchPrs,
 } from "./lib/github.ts";
@@ -220,12 +221,14 @@ export type ClaimPrResult =
 
 /**
  * 今回のサイクルを起こした`triggerLabel`(`review_label`か`fix_label`)を
- * 消費してPRを取得する。外せなかった、または外した後も残っていたら
- * `claimed: false`と理由を返す。副作用としてPRからラベルを外す。
- * assigneeは付けない(`claimIssue`と同じ)。Factoryのログインをassignすると、
+ * 消費してPRを取得する。副作用としてPRからラベルを外す。
+ * ラベルが既に無ければ(404)、ほかが先に外したので`claimed: false`を返す
+ * (Issueの`claimIssue`と同じ)。外せなかったときと、外した後も残っていたときも、
+ * `claimed: false`と理由を返す。
+ * assigneeは付けない(`claimIssue`と違う)。Factoryのログインをassignすると、
  * GitHub検索の`assignee:<viewer>`にそのPRが以後ずっと当たり続けるため。
- * ラベルを外した後に取り直して確かめるのは、競合時にGitHubのラベルの
- * APIが黙って何もしないことがあるため。
+ * 外した後に取り直して確かめるのは、別のアクターがラベルを付け直した場合を
+ * 見分けるためである。
  * assignで起きるレビューはラベルが関わらないので、これを呼ばない。
  */
 export async function claimPr(
@@ -235,14 +238,21 @@ export async function claimPr(
   number: number,
   triggerLabel: string,
 ): Promise<ClaimPrResult> {
+  let removal: RemoveLabelResult;
   try {
-    await removeLabel(client, owner, repo, number, triggerLabel);
+    removal = await removeLabel(client, owner, repo, number, triggerLabel);
   } catch (err) {
     // この理由は`main()`の`claim_race_lost`のnoticeに載るので、
     // ghの失敗に由来する他のメッセージと同じくマスクする。
     return {
       claimed: false,
       reason: `failed to remove trigger label: ${maskSecrets(err instanceof Error ? err.message : String(err))}`,
+    };
+  }
+  if (removal === "absent") {
+    return {
+      claimed: false,
+      reason: `trigger label ${triggerLabel} was already removed`,
     };
   }
   const confirmed = await getIssue(client, owner, repo, number);

@@ -64,7 +64,7 @@ function fakeDeps(
   return { deps, notices, sent };
 }
 
-function run(deps: ClaimNoticeDeps): Promise<boolean> {
+function run(deps: ClaimNoticeDeps, log: Logger = silentLog): Promise<boolean> {
   return claimIssueWithNotice(
     {
       client: { run: async () => ok(), ghToken: "tok" },
@@ -73,10 +73,22 @@ function run(deps: ClaimNoticeDeps): Promise<boolean> {
       triggerLabel: "factory",
       instanceName: "local",
       discordWebhookUrl: WEBHOOK,
-      log: silentLog,
+      log,
     },
     deps,
   );
+}
+
+function recordingLog(): { log: Logger; warns: string[] } {
+  const warns: string[] = [];
+  const log: Logger = {
+    info() {},
+    warn(message) {
+      warns.push(message);
+    },
+    error() {},
+  };
+  return { log, warns };
 }
 
 const CLAIMED_CONFIRMED = async (): Promise<ClaimIssueResult> => ({
@@ -177,6 +189,26 @@ describe("claimIssueWithNotice when the claim is established", () => {
   test("returns true when the confirmation read failed", async () => {
     const { deps } = fakeDeps(CLAIMED_UNKNOWN);
     expect(await run(deps)).toBe(true);
+  });
+
+  test("logs a warning when the confirmation read failed", async () => {
+    const { deps } = fakeDeps(CLAIMED_UNKNOWN);
+    const { log, warns } = recordingLog();
+    await run(deps, log);
+    expect(warns).toEqual(["claim assignee could not be confirmed"]);
+  });
+
+  test("passes the logger on to claimIssue", async () => {
+    const { log } = recordingLog();
+    const received: unknown[] = [];
+    const { deps } = fakeDeps(CLAIMED_CONFIRMED, {
+      claimIssue: async (_client, _owner, _repo, _number, opts) => {
+        received.push(opts.log);
+        return { claimed: true, assignee: "confirmed" };
+      },
+    });
+    await run(deps, log);
+    expect(received).toEqual([log]);
   });
 
   test("records no notice when the confirmation read failed", async () => {

@@ -252,7 +252,12 @@ cronはWindmillの6フィールドの形式で、タイムゾーンは`Asia/Toky
 | `cleanup_workspaces` | 期限を過ぎたworktree(`req-<N>`、実装ブランチのworktree、`review-*`、pr_fixのgtrのworktree)、worktreeが無くなったプロセスのロックファイル、孤児になったheadless Claudeのプロセス。生き残りのプロセスが使っているworktreeは消さず、noticeを残す。ディスクの使用量も記録する |
 | `notify_daily_summary` | 前日のコスト、件数、失敗、DBの掃除の件数 |
 
-複数のインスタンスを同時に動かすときの排他は、GitHub側のclaimで取る。Issueはassigneeを追加してからトリガーラベルを外し、外す要求に成功したインスタンスが受け持つ。PRはトリガーラベルを消費し、取り直して確かめる。
+複数のインスタンスを同時に動かすときの排他は、GitHub側のclaimで取る。
+Issueはassigneeを追加してからトリガーラベルを外し、外す要求に成功したインスタンスが受け持つ。
+PRはトリガーラベルを消費し、取り直して確かめる。
+この排他はベストエフォートである。
+最後の防御は、DBを共有している場合の`work_items`の`UNIQUE (owner, repo, issue_number, cycle)`の制約である。
+1つのリポジトリは1つのインスタンスだけで扱う。
 
 ## 命名規則
 
@@ -280,6 +285,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/workspace` | script | [LIB] git worktreeと作業領域 |
 | `f/factory/lib/github` | script | [LIB] GitHub APIラッパー |
 | `f/factory/lib/claude` | script | [LIB] headless Claude実行 |
+| `f/factory/lib/claim_support` | script | [LIB] Issue取得の後処理 |
 | `f/factory/steps/pr_workflow_support` | script | [LIB] PRワークフロー共通処理 |
 | `f/factory/lib/process_lock` | script | [LIB] worktree単位のプロセス排他 |
 | `f/factory/lib/prompts` | script | [LIB] プロンプト定義 |

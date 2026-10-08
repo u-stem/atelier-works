@@ -140,7 +140,7 @@ nullになりうる非textの列には、明示のキャストを必ず付ける
 - `timezone`は`Asia/Tokyo`にする。cronはWindmillの6フィールド形式(秒から始まる)で書く。
 - workerは単一のdefaultグループで動くため、`tag`は原則として指定しない。
 - 多重実行の防止にadvisory lockは使わない。各`*.schedule.yaml`に`no_flow_overlap: true`を設定し、前回の実行中はスキップさせる。
-- 複数のインスタンスを同時に運用する場合の排他は、Windmill側ではなくGitHub側のclaimで行う。Issueはassigneeの付与、PRはトリガーラベル自体の消費で行い、いずれも再取得して確かめる。
+- 複数のインスタンスを同時に運用する場合の排他は、Windmill側ではなくGitHub側のclaimで行う。IssueとPRは、トリガーラベルを外す要求が成功した時点で所有を決める。Issueでは、ラベルを外す要求が応答の無い失敗かサーバーエラーで終わったときに、Issueの読み直しとタイムラインで、ラベルを外したのが自分かを確かめる。これはベストエフォートで、最後の防御はDBの一意制約である。
 - scheduleにはerror handler(`on_failure: f/factory/on_error_schedule`)を設定する。失敗は`job_failures`テーブルとDiscordの通知に流れる。
 - 承認のタイムアウト(7日)は、`poll_issues`がreconcileの後に行う期限切れのスイープが、`approval_requests.expires_at`を見て判定する。`pipeline.flow`はsuspendを使わない。
 
@@ -225,7 +225,7 @@ worker内で実測した、外部コマンドとAPIの挙動を示す。型ガ�
 ## トリガーラベルの消費
 
 Issueの`factory`ラベルと、PRの`factory:review` / `factory:fix`ラベルは、いずれもclaim時に一度だけ消費する(外す)。
-Issueではassigneeを付けた直後、PRではラベル自体を削除した直後がclaim時にあたる。
+Issueでは、assigneeを追加してからラベルを外す。claim時は、IssueとPRのどちらも、ラベルを外す要求が成功した時点である。
 
 以降は、どの状態遷移でもIssueとPRのラベルを付け外ししない。終端の状態への遷移も含む。
 
