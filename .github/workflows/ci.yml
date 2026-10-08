@@ -2,6 +2,9 @@ name: CI
 
 on:
   push:
+    # タグのpushでは動かさない。`main`という名前のタグで動くと、その実行が
+    # console_fetcherから「mainの最新の成功した実行」に見え、取り込みが止まる。
+    branches: ['**']
   pull_request:
 
 permissions:
@@ -109,6 +112,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Setup mise
         uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
@@ -127,6 +132,11 @@ jobs:
     # Consoleを組み立て、mainへのpushのときだけ成果物にする。
     # console_fetcherは、このワークフロー全体が成功した実行の成果物だけを取り込む。
     runs-on: ubuntu-latest
+    env:
+      # このジョブは`mise run` / `mise exec`を使わずbunを直接呼ぶ。
+      # 入れていない[tools](windmill-cliなど)を、後からmiseが自動で入れないようにする。
+      MISE_TASK_RUN_AUTO_INSTALL: "false"
+      MISE_EXEC_AUTO_INSTALL: "false"
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -135,9 +145,16 @@ jobs:
 
       - name: Setup mise
         uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          # 成果物の組み立てに要るbunだけを入れる。他の[tools]のinstall scriptや
+          # 固定していない依存を、配信物を作るジョブで動かさないため。
+          install_args: bun
+          # 他のジョブが書いたキャッシュを読まず、このジョブからも書かない。
+          cache: false
 
       - name: Install root dependencies
-        run: bun install --frozen-lockfile
+        # ルートの依存のinstall scriptも実行しない。
+        run: bun install --frozen-lockfile --ignore-scripts
 
       - name: Check the console lockfile policy
         # 依存を入れる前に、取得元がregistryとintegrityに限られることを確かめる。
