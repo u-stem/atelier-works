@@ -6,7 +6,8 @@
     "dev": "vite",
     "build": "vite build",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "bun test"
+    "test": "bun test",
+    "write-manifest": "bun run scripts/write-manifest.ts"
   },
   "dependencies": {
     "react": "19.3.0",
