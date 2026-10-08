@@ -1,5 +1,5 @@
-// `pr_review_generate.ts`が使う`pr_workflow_support.ts`の`buildReviewDiffText`と
-// `isReviewClaudeOutput`のテスト。
+// `pr_review_generate.ts`が使う`pr_workflow_support.ts`の`buildReviewDiffText`、
+// `isReviewClaudeOutput`、`prReviewTimeoutMisfit`のテスト。
 // あわせて、`pr_review_generate.ts`が渡す`requirements`が`lib/prompts.ts`の
 // `reviewPrompt`に届き、要件との整合を確かめる節が有効になることを、
 // `main()`と同じ呼び方で確かめる。
@@ -9,8 +9,47 @@ import { reviewPrompt } from "../../f/factory/lib/prompts.ts";
 import type { RequirementDraft } from "../../f/factory/lib/types.ts";
 import {
   buildReviewDiffText,
+  describeReason,
   isReviewClaudeOutput,
+  nextActionFor,
+  prReviewTimeoutMisfit,
 } from "../../f/factory/steps/pr_workflow_support.ts";
+
+describe("prReviewTimeoutMisfit", () => {
+  test("accepts the default Claude timeout", () => {
+    expect(prReviewTimeoutMisfit({ claude_timeout_sec: 1800 })).toBeNull();
+  });
+
+  test("accepts the largest Claude timeout that fits in the generate step", () => {
+    expect(prReviewTimeoutMisfit({ claude_timeout_sec: 3285 })).toBeNull();
+  });
+
+  test("rejects a Claude timeout that cannot fit in the generate step", () => {
+    expect(prReviewTimeoutMisfit({ claude_timeout_sec: 3286 })).toBe(
+      "pr_review time settings do not fit the flow step timeout: 2 claude runs x (claude_timeout_sec 3286 + 15) + 600 = 7202s exceeds 7200s",
+    );
+  });
+
+  test("translates the misfit reason for notifications", () => {
+    expect(
+      describeReason(
+        "pr_review time settings do not fit the flow step timeout: 2 claude runs x (claude_timeout_sec 3286 + 15) + 600 = 7202s exceeds 7200s",
+      ),
+    ).toBe(
+      "PRレビューの時間設定が、flow.yamlのレビュー生成ステップのtimeoutに収まりません(2 claude runs x (claude_timeout_sec 3286 + 15) + 600 = 7202s exceeds 7200s)",
+    );
+  });
+
+  test("asks to lower claude_timeout_sec", () => {
+    expect(
+      nextActionFor(
+        "pr_review time settings do not fit the flow step timeout: 2 claude runs x (claude_timeout_sec 3286 + 15) + 600 = 7202s exceeds 7200s",
+      ),
+    ).toBe(
+      "claude_timeout_secを減らしてから、ConsoleのFailuresタブから再実行してください",
+    );
+  });
+});
 
 describe("buildReviewDiffText", () => {
   test("returns the diff unchanged when it was not truncated", () => {

@@ -28,6 +28,7 @@ import {
   evaluatePrFixSafetyGuards,
   evaluateRepoAllowedGuard,
   type PrFixGateOutcome,
+  prFixTimeoutMisfit,
 } from "./pr_workflow_support.ts";
 
 export type PrFixPrepareResult = {
@@ -47,6 +48,7 @@ export type PrFixPrepareResult = {
 
 /**
  * 作業項目を読み、修正ラウンドの上限、対象リポジトリの許可、
+ * 時間設定が修正・検証ステップのtimeoutに収まること、
  * 親Issueの再実装中でないこと、PRの安全条件
  * (open、headとbaseが同じリポジトリ、draftでない、baseブランチが保護されていない)
  * を順に検査する。
@@ -107,6 +109,17 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
     return {
       outcome: "round_exhausted",
       reason: roundGuard.reason,
+      ...earlyExitBase(workItem),
+    };
+  }
+
+  // 修正・検証ステップの最悪の所要時間がflow.yamlのtimeoutに収まらない設定では、
+  // Windmillがアプリ側のtimeoutより先にステップを打ち切るため、worktreeに触れる前に止める。
+  const timeoutMisfit = prFixTimeoutMisfit(config);
+  if (timeoutMisfit !== null) {
+    return {
+      outcome: "guard_blocked",
+      reason: timeoutMisfit,
       ...earlyExitBase(workItem),
     };
   }
