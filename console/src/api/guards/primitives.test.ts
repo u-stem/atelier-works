@@ -112,6 +112,22 @@ describe("strings", () => {
     expect(isIsoTimestamp("2026-10-09T21:00:00+09:00")).toBe(true);
   });
 
+  test("isIsoTimestamp rejects a time without an offset", () => {
+    expect(isIsoTimestamp("2026-10-09T12:00:00")).toBe(false);
+  });
+
+  test("isIsoTimestamp rejects a fractional time without an offset", () => {
+    expect(isIsoTimestamp("2026-10-09T12:00:00.000")).toBe(false);
+  });
+
+  test("isIsoTimestamp accepts a negative offset", () => {
+    expect(isIsoTimestamp("2026-10-09T07:00:00-05:00")).toBe(true);
+  });
+
+  test("isIsoTimestamp rejects an offset without a colon", () => {
+    expect(isIsoTimestamp("2026-10-09T21:00:00+0900")).toBe(false);
+  });
+
   test("isIsoTimestamp rejects a non-date string", () => {
     expect(isIsoTimestamp("yesterday")).toBe(false);
   });

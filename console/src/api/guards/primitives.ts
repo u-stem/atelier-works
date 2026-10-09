@@ -30,16 +30,19 @@ export function isNonNegativeInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && typeof value === "number" && value >= 0;
 }
 
-const ISO_TIMESTAMP_PREFIX = /^\d{4}-\d{2}-\d{2}T/;
+const ISO_TIMESTAMP_WITH_OFFSET =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$/;
 
 /**
- * ISO 8601の日付と時刻の形(`2026-10-09T...`)で、`Date.parse`が読める文字列。
+ * ISO 8601の日付と時刻の形(`2026-10-09T12:00:00Z`)で、`Date.parse`が読める文字列。
  * `Date.parse`は実装依存の形(`Oct 9, 2026`など)も読むので、形を先に確かめる。
+ * `Z`か`+09:00`のオフセットを必須にする。無い値は`Date.parse`がブラウザのローカル時刻として読み、
+ * 閲覧する場所で絶対時刻がずれるため、通さない。
  */
 export function isIsoTimestamp(value: unknown): value is string {
   return (
     typeof value === "string" &&
-    ISO_TIMESTAMP_PREFIX.test(value) &&
+    ISO_TIMESTAMP_WITH_OFFSET.test(value) &&
     !Number.isNaN(Date.parse(value))
   );
 }

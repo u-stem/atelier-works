@@ -4,6 +4,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { isConsoleSummary } from "../../console/src/api/guards/summary.ts";
+import { LEGACY_CONSOLE_PATH } from "../../console/src/app/legacyConsole.ts";
 import {
   approvalKindLabel,
   approvalStatusLabel,
@@ -13,6 +14,7 @@ import {
   workItemKindLabel,
   workItemStatusLabel,
 } from "../../console/src/lib/labels.ts";
+import { buildConsoleUrl } from "../../f/factory/lib/approval_support.ts";
 import { NOTICE_SEVERITY } from "../../f/factory/lib/console_support.ts";
 import type { SqlClient, SqlRow } from "../../f/factory/lib/db.ts";
 import {
@@ -143,6 +145,19 @@ describe("summary contract between console_query and the console guard", () => {
       ),
     );
     expect(isConsoleSummary(damaged)).toBe(false);
+  });
+});
+
+describe("timestamps in the delivered summary", () => {
+  test("carry a UTC offset so that the browser reads them as absolute times", async () => {
+    const delivered = await summaryAsDelivered([[APPROVAL_ROW], [], []]);
+    expect(JSON.stringify(delivered)).toContain(`"requested_at":"${T0}"`);
+  });
+});
+
+describe("legacy console location", () => {
+  test("the console link matches the app path that the backend links to", () => {
+    expect(buildConsoleUrl("")).toBe(LEGACY_CONSOLE_PATH);
   });
 });
 
