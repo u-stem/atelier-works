@@ -635,8 +635,7 @@ mise exec -- docker compose -f infra/docker-compose.yml logs --tail 50 console_f
 版を戻して`pin`で固定している間や、無かったファイルがもう取れないときは、目立つ色の帯で再読み込みを求める。
 一度目立つ色の帯を出したタブは、帯を下げない。
 確かめに失敗したときは、表示を変えない。
-`pin`の間は、配信中でない版を開いたタブはすべて、目立つ色の帯になる。
-`status.json`は`/console/status.json`で配信する。
+`pin`の間は、配信中の版に無いファイルを読み込んでいるタブが、目立つ色の帯になる。
 Caddyfileを更新してCaddyを再起動するまでは、`/console/status.json`が`index.html`に落ちて状態を読めない。
 その間は、`pin`による目立つ色の帯は出ない。
 無かったファイルが404のときの目立つ色の帯と、控えめな帯は出る。
