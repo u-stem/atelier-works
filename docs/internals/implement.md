@@ -388,7 +388,12 @@ Windmillでジョブを取り消しても、新しいセッションで起動し
   - 確認とcheckoutの間に、ほかのworktreeが対象のブランチをcheckoutする。
 - この2つの場合は、git 2.44以降の拒否に任せる。
 - 2.44より古いgitでは、この2つの場合に`checkout -B`がほかのworktreeのブランチを黙って付け替える。
-- workerのgitは2.44以上が要る。確かめるには`mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker git --version`を実行する。
+- workerのgitは2.44以上が要る。版は次のコマンドで確かめる。
+
+  ```bash
+  mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker git --version
+  ```
+
 - gitは`infra/worker/Dockerfile`で版を指定せず、aptから入るので、版はベースイメージで決まる。
 - ほかのworktreeが使っていなければ、`git checkout -f --no-track -B <branch> <戻す先>`で対象のブランチへ移す。この切り替えは、それまでHEADが指していたブランチを動かさない。
 - 次のときは、resetせずに失敗する。
