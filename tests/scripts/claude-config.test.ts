@@ -199,6 +199,10 @@ describe(".claude/agents", () => {
     expect(body("triage")).toContain("回答済み / <要旨> / <確かめた根拠>");
   });
 
+  test("makes triage return a supplement for a returned question", () => {
+    expect(body("triage")).toContain("追補");
+  });
+
   test("keeps round-specific handling of questions out of security-auditor", () => {
     expect(body("security-auditor")).not.toContain("上限のラウンド");
   });
