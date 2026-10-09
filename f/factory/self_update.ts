@@ -15,6 +15,7 @@
 import wmillDefault, * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "./lib/config.ts";
 import {
+  CONSOLE_FETCH_WATCH_PATH,
   CONSOLE_WORKER_TAG,
   watchConsoleWorker,
 } from "./lib/console_worker.ts";
@@ -313,7 +314,7 @@ type FactoryConfig = Awaited<ReturnType<typeof loadConfig>>;
 
 /**
  * 自己更新を行い、そのあとでConsole用workerが受けているかを確かめる。
- * 確認は更新の成否によらず毎回行う。Console用workerが居ないか止まっているとConsoleのjobが溜まり続けるため。
+ * 確認は更新の成否によらず毎回行う。Console用workerがジョブを受けないとConsoleのジョブが溜まり続けるため。
  * 確認は時間を区切り、失敗しても例外を投げないので、更新の結果は変わらない。
  */
 export async function main(): Promise<SelfUpdateResult> {
@@ -334,6 +335,13 @@ export async function main(): Promise<SelfUpdateResult> {
           scheduledForBeforeNow: true,
           orderDesc: false,
           perPage: 100,
+        }),
+      listRecentWatchRuns: () =>
+        wmill.JobService.listCompletedJobs({
+          workspace: wmillDefault.getWorkspace(),
+          scriptPathExact: CONSOLE_FETCH_WATCH_PATH,
+          orderDesc: true,
+          perPage: 1,
         }),
       now: () => Date.now(),
       addNotice: (record) => addNoticeUnlessUnresolved(record),

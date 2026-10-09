@@ -17,7 +17,7 @@ import type { NoticeRecord } from "../../f/factory/lib/types.ts";
 
 const NOW = Date.parse("2026-10-09T12:00:00.000Z");
 
-/** 予定時刻から`seconds`秒前に予定され、まだ実行されていないjob。 */
+/** 予定時刻から`seconds`秒前に予定され、まだ実行されていないジョブ。 */
 function waiting(seconds: number, extra: Record<string, unknown> = {}) {
   return {
     id: "job",
@@ -28,67 +28,136 @@ function waiting(seconds: number, extra: Record<string, unknown> = {}) {
   };
 }
 
+/** `secondsAgo`秒前に終わった`console_fetch_watch`の実行。 */
+function completed(secondsAgo: number, extra: Record<string, unknown> = {}) {
+  return {
+    id: "run",
+    script_path: "f/factory/console_fetch_watch",
+    success: true,
+    completed_at: new Date(NOW - secondsAgo * 1000).toISOString(),
+    ...extra,
+  };
+}
+
+const RECENT = [completed(600)];
+
 describe("judgeConsoleQueue", () => {
   test("is ok when the only waiting job was scheduled under five minutes ago", () => {
-    expect(judgeConsoleQueue([waiting(299)], NOW)).toBe("ok");
+    expect(judgeConsoleQueue([waiting(299)], RECENT, NOW)).toBe("ok");
   });
 
   test("is stalled when a job has waited five minutes", () => {
-    expect(judgeConsoleQueue([waiting(300)], NOW)).toBe("stalled");
+    expect(judgeConsoleQueue([waiting(300)], RECENT, NOW)).toBe("stalled");
   });
 
   test("is stalled when a job has waited over five minutes", () => {
-    expect(judgeConsoleQueue([waiting(301)], NOW)).toBe("stalled");
+    expect(judgeConsoleQueue([waiting(301)], RECENT, NOW)).toBe("stalled");
   });
 
   test("is stalled when one of several jobs has waited long enough", () => {
-    expect(judgeConsoleQueue([waiting(10), waiting(900)], NOW)).toBe("stalled");
-  });
-
-  test("is ok for an empty queue", () => {
-    expect(judgeConsoleQueue([], NOW)).toBe("ok");
-  });
-
-  test("ignores a running job", () => {
-    expect(judgeConsoleQueue([waiting(900, { running: true })], NOW)).toBe(
-      "ok",
-    );
-  });
-
-  test("ignores a job scheduled in the future", () => {
-    expect(judgeConsoleQueue([waiting(-600)], NOW)).toBe("ok");
-  });
-
-  test("does not count a job without scheduled_for", () => {
-    expect(
-      judgeConsoleQueue([waiting(900, { scheduled_for: undefined })], NOW),
-    ).toBe("ok");
-  });
-
-  test("does not count a job whose scheduled_for is not a string", () => {
-    expect(judgeConsoleQueue([waiting(900, { scheduled_for: 123 })], NOW)).toBe(
-      "ok",
-    );
-  });
-
-  test("does not count a job whose scheduled_for is not a date", () => {
-    expect(
-      judgeConsoleQueue([waiting(900, { scheduled_for: "soon" })], NOW),
-    ).toBe("ok");
-  });
-
-  test("skips malformed entries and still finds a stalled job", () => {
-    expect(judgeConsoleQueue([null, 5, "x", waiting(900)], NOW)).toBe(
+    expect(judgeConsoleQueue([waiting(10), waiting(900)], RECENT, NOW)).toBe(
       "stalled",
     );
   });
 
-  test("is unknown for an object response", () => {
-    expect(judgeConsoleQueue({ jobs: [] }, NOW)).toBe("unknown");
+  test("is ok for an empty queue when a watch run completed recently", () => {
+    expect(judgeConsoleQueue([], RECENT, NOW)).toBe("ok");
   });
 
-  test("is unknown for a null response", () => {
-    expect(judgeConsoleQueue(null, NOW)).toBe("unknown");
+  test("ignores a running job", () => {
+    expect(
+      judgeConsoleQueue([waiting(900, { running: true })], RECENT, NOW),
+    ).toBe("ok");
+  });
+
+  test("ignores a job scheduled in the future", () => {
+    expect(judgeConsoleQueue([waiting(-600)], RECENT, NOW)).toBe("ok");
+  });
+
+  test("does not count a job without scheduled_for", () => {
+    expect(
+      judgeConsoleQueue(
+        [waiting(900, { scheduled_for: undefined })],
+        RECENT,
+        NOW,
+      ),
+    ).toBe("ok");
+  });
+
+  test("does not count a job whose scheduled_for is not a string", () => {
+    expect(
+      judgeConsoleQueue([waiting(900, { scheduled_for: 123 })], RECENT, NOW),
+    ).toBe("ok");
+  });
+
+  test("does not count a job whose scheduled_for is not a date", () => {
+    expect(
+      judgeConsoleQueue([waiting(900, { scheduled_for: "soon" })], RECENT, NOW),
+    ).toBe("ok");
+  });
+
+  test("skips malformed entries and still finds a stalled job", () => {
+    expect(judgeConsoleQueue([null, 5, "x", waiting(900)], RECENT, NOW)).toBe(
+      "stalled",
+    );
+  });
+
+  test("is unknown for an object queue response", () => {
+    expect(judgeConsoleQueue({ jobs: [] }, RECENT, NOW)).toBe("unknown");
+  });
+
+  test("is unknown for a null queue response", () => {
+    expect(judgeConsoleQueue(null, RECENT, NOW)).toBe("unknown");
+  });
+
+  test("is ok when the latest watch run completed exactly thirty minutes ago", () => {
+    expect(judgeConsoleQueue([], [completed(1800)], NOW)).toBe("ok");
+  });
+
+  test("is unknown when the latest watch run completed over thirty minutes ago", () => {
+    expect(judgeConsoleQueue([], [completed(1801)], NOW)).toBe("unknown");
+  });
+
+  test("uses the newest completion among the watch runs", () => {
+    expect(judgeConsoleQueue([], [completed(7200), completed(60)], NOW)).toBe(
+      "ok",
+    );
+  });
+
+  test("is unknown when there is no waiting job and no watch run", () => {
+    expect(judgeConsoleQueue([], [], NOW)).toBe("unknown");
+  });
+
+  test("is unknown when the watch runs are not an array", () => {
+    expect(judgeConsoleQueue([], { jobs: [] }, NOW)).toBe("unknown");
+  });
+
+  test("does not count a watch run without completed_at", () => {
+    expect(
+      judgeConsoleQueue([], [completed(60, { completed_at: undefined })], NOW),
+    ).toBe("unknown");
+  });
+
+  test("does not count a watch run whose completed_at is not a date", () => {
+    expect(
+      judgeConsoleQueue([], [completed(60, { completed_at: "soon" })], NOW),
+    ).toBe("unknown");
+  });
+
+  test("skips malformed watch runs and still finds a recent one", () => {
+    expect(judgeConsoleQueue([], [null, 5, completed(60)], NOW)).toBe("ok");
+  });
+
+  test("is ok when a fresh job is waiting even without a watch run", () => {
+    expect(judgeConsoleQueue([waiting(60)], [], NOW)).toBe("ok");
+  });
+
+  test("is stalled for a long wait even without a watch run", () => {
+    expect(judgeConsoleQueue([waiting(900)], [], NOW)).toBe("stalled");
+  });
+
+  test("is stalled for a long wait even when the watch runs are not an array", () => {
+    expect(judgeConsoleQueue([waiting(900)], null, NOW)).toBe("stalled");
   });
 
   test("uses a five minute threshold", () => {
@@ -107,8 +176,34 @@ describe("notices", () => {
     );
   });
 
-  test("the missing notice says the jobs have waited five minutes", () => {
-    expect(CONSOLE_WORKER_MISSING_NOTICE.message).toContain("5分以上");
+  test("the missing notice states the wait threshold from the constant", () => {
+    expect(CONSOLE_WORKER_MISSING_NOTICE.message).toContain(
+      `${CONSOLE_JOB_WAIT_SECONDS / 60}分以上`,
+    );
+  });
+
+  test("the missing notice tells the operator to restart the container", () => {
+    expect(CONSOLE_WORKER_MISSING_NOTICE.message).toContain(
+      "docker compose restart windmill_worker_console",
+    );
+  });
+
+  test("the missing notice tells the operator to check the running jobs", () => {
+    expect(CONSOLE_WORKER_MISSING_NOTICE.message).toContain("実行中のジョブ");
+  });
+
+  test("the missing notice tells the operator to check the worker group tag", () => {
+    expect(CONSOLE_WORKER_MISSING_NOTICE.message).toContain("ワーカーグループ");
+  });
+
+  test("the missing notice does not claim the worker is absent", () => {
+    expect(CONSOLE_WORKER_MISSING_NOTICE.message).toContain("受けていません");
+  });
+
+  test("the check failed notice mentions the watch schedule", () => {
+    expect(CONSOLE_WORKER_CHECK_FAILED_NOTICE.message).toContain(
+      "console_fetch_watch",
+    );
   });
 
   test("the missing notice tells the operator to start the container again", () => {
@@ -180,6 +275,7 @@ type Harness = {
 
 function harness(options: {
   readonly response: () => Promise<unknown>;
+  readonly recent?: () => Promise<unknown>;
   readonly storedCount?: number;
   readonly storedState?: unknown;
   readonly noticeInserted?: boolean;
@@ -199,6 +295,7 @@ function harness(options: {
     states,
     deps: {
       listWaitingJobs: async () => options.response(),
+      listRecentWatchRuns: async () => (options.recent ?? RECENT_RUNS)(),
       now: () => NOW,
       addNotice: async (record) => {
         if (options.addNoticeThrows === true) throw new Error("db down");
@@ -226,7 +323,8 @@ function harness(options: {
   };
 }
 
-const PRESENT = async () => [waiting(60)];
+const RECENT_RUNS = async () => RECENT;
+const PRESENT = async () => [];
 const ABSENT = async () => [waiting(600)];
 const FAILS = async () => {
   throw new Error("forbidden");
@@ -311,16 +409,14 @@ describe("checkConsoleWorker", () => {
   test("logs the listing failure", async () => {
     const h = harness({ response: FAILS });
     await checkConsoleWorker(h.deps);
-    expect(h.logLines.join("\n")).toContain(
-      "could not list the waiting console jobs",
-    );
+    expect(h.logLines.join("\n")).toContain("could not list the console jobs");
   });
 
-  test("logs the unexpected response", async () => {
+  test("logs the unconfirmed state for an unexpected response", async () => {
     const h = harness({ response: async () => ({ jobs: [] }) });
     await checkConsoleWorker(h.deps);
     expect(h.logLines.join("\n")).toContain(
-      "unexpected response while listing the waiting console jobs",
+      "could not confirm the console worker from the job lists",
     );
   });
 
@@ -331,6 +427,36 @@ describe("checkConsoleWorker", () => {
     });
     await checkConsoleWorker(h.deps);
     expect(h.logLines.join("\n")).toContain("console worker check timed out");
+  });
+
+  test("logs the listing failure of the watch runs", async () => {
+    const h = harness({ response: PRESENT, recent: FAILS });
+    await checkConsoleWorker(h.deps);
+    expect(h.logLines.join("\n")).toContain("could not list the console jobs");
+  });
+
+  test("returns unknown when the watch runs cannot be listed", async () => {
+    const h = harness({ response: PRESENT, recent: FAILS });
+    expect(await checkConsoleWorker(h.deps)).toBe("unknown");
+  });
+
+  test("returns unknown when nothing has run or waited recently", async () => {
+    const h = harness({ response: PRESENT, recent: async () => [] });
+    expect(await checkConsoleWorker(h.deps)).toBe("unknown");
+  });
+
+  test("logs the unconfirmed state when nothing has run or waited recently", async () => {
+    const h = harness({ response: PRESENT, recent: async () => [] });
+    await checkConsoleWorker(h.deps);
+    expect(h.logLines.join("\n")).toContain(
+      "could not confirm the console worker from the job lists",
+    );
+  });
+
+  test("still adds the notice when the watch runs cannot be listed but a job waits", async () => {
+    const h = harness({ response: ABSENT, recent: FAILS });
+    await checkConsoleWorker(h.deps);
+    expect(h.notices).toEqual([CONSOLE_WORKER_MISSING_NOTICE]);
   });
 
   test("logs nothing when the queue is ok", async () => {

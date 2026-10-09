@@ -625,26 +625,40 @@ Consoleの**通知**タブには、Discordに送らない要対応の事項が�
 | `workspace_disk_usage` | 作業領域の掃除(毎日03:00)が記録したディスク使用量 | 増え続けていないか見る |
 | `console_fetch_failed` | Consoleの取り込みが失敗した | 通知の「次の操作」に従う |
 | `console_fetch_stale` | Consoleの取り込みの結果が30分以上更新されていない | 取り込みのコンテナ(`console_fetcher`)が動いているか確かめる |
-| `console_worker_missing` | tag `console`のジョブが、予定時刻から5分以上実行されずに待っている。Console用のworkerが居ないか止まっていて、Consoleのジョブがqueueに溜まり、Consoleが止まる | `mise run up`でworkerを起動し直し、`docker compose ps windmill_worker_console`でコンテナの状態を確かめる。自己更新(10分ごと)が検知し、Discordにも届く |
-| `console_worker_check_failed` | Console用のworkerが止まっていないかを、自己更新が1時間(6回)続けて確認できなかった。workerが止まっていても気づけない状態である | 自己更新のジョブログで、下の3種類の警告のどれが出ているかを確かめて原因を直す。Discordにも届く |
+| `console_worker_missing` | tag `console`のジョブが、予定時刻から5分以上実行されずに待っている。Console用のworkerが居ない、2枠とも塞がっている、またはtagの設定がずれていて、Consoleのジョブがqueueに溜まり、Consoleが止まる | `docker compose ps windmill_worker_console`でコンテナの状態を確かめ、無ければ`mise run up`で起動し、動いていれば`docker compose restart windmill_worker_console`で再起動する。直らなければ、Windmillの画面でtag consoleの実行中のジョブとワーカーグループのtagを確かめる。自己更新(10分ごと)が検知し、Discordにも届く |
+| `console_worker_check_failed` | Console用のworkerがジョブを受けているかを、自己更新が1時間(6回)続けて確かめられなかった。workerが止まっていても気づけない状態である | 自己更新のジョブログで、下の3種類の警告のどれが出ているかを確かめて原因を直す。警告が無ければ、`console_fetch_watch`のスケジュールが有効かを確かめる。Discordにも届く |
 | `schedule_failing` | 同じスケジュールの直近3回の実行が続けて失敗した。数えるのはスケジュールの実行そのものの失敗で、成功した実行の中で記録する部分的な失敗は含まない。GitHubのPATの失効などが原因になる | ジョブのログで失敗の内容を確かめて原因を直す。PATは[秘密をローテーションする](#秘密をローテーションする)で再発行する |
 | `schedule_failing_check_failed` | スケジュールが続けて失敗しているかを、ジョブ履歴から判定できなかった。失敗が続いても気づけない状態である | `on_error_schedule`のジョブのログで`failed to read the schedule history`のエラーを確かめ、ジョブ履歴を読む権限があるかを確かめる |
 
 ### Console用のworkerの検知を確かめる
 
-Console用のworkerが居ないか止まっているかどうかは、自己更新(`self_update`)が毎回の最後に確かめる。
-workerの一覧を読むAPIはインスタンスの管理者でないと呼べないので、ジョブのトークンで読めるqueueを見る。
-tag `console`のジョブのうち、予定時刻を過ぎても実行が始まっていないものを、古い順に100件まで読む。
-予定時刻から5分以上待っているものが1件でもあれば、workerが受けていないと判定する。
-待っているジョブが無ければ、問題なしと判定する。
+Console用のworkerがジョブを受けているかどうかは、自己更新(`self_update`)が毎回の最後に確かめる。
+workerの一覧を読むAPIは、ジョブのトークンでは読めない(Forbidden)ので、読めるqueueとジョブの履歴を見る。
+判定は次の順で決める。
+
+1. tag `console`のジョブのうち、予定時刻を過ぎても実行が始まっていないものを、古い順に100件まで読む。予定時刻から5分以上待っているものが1件でもあれば、workerがジョブを受けていないと判定する。
+2. 待っているジョブが残っている(5分未満)か、`console_fetch_watch`が30分以内に完了していれば、問題なしと判定する。ジョブが作られていることが、スケジュールが生きている証拠になる。
+3. どちらも無ければ、判定できないものとして扱う。
 
 `console_fetch_watch`が10分ごとにtag `console`のジョブを作る。
-workerが居なければそのジョブが待ち続けるので、止まってから最大で約25分(ジョブの作成の間隔10分、待ちの5分、自己更新の間隔10分)で検知する。
+workerがジョブを受けなければそのジョブが待ち続けるので、止まってから最大で約30分かけて検知する。
+内訳は、ジョブの作成の間隔10分、待ちの5分、自己更新の間隔10分に、自己更新の実行時間を足した値である。
+
+通知`console_worker_missing`が立つのは、workerが居ないときだけではない。
+workerが居ても、2枠とも塞がっているときや、tagの設定がずれてジョブを受けないときにも立つ。
+通知の次の操作に従い、コンテナの状態、再起動、Windmillの画面での実行中のジョブとワーカーグループのtagの順に確かめる。
+
+次の点に注意する。
+
+- workerが動いていても、ジョブが大量に溜まると5分以上待つことがある。通知が出たら、待っているジョブの数と実行中のジョブを確かめる。
+- workerは居るがジョブが毎回すぐ失敗するときは、この検知では拾わない。スケジュールの失敗の検知(`schedule_failing`)が拾う。
+- この検知は、`console_fetch_watch`のスケジュールが有効なことを前提にする。スケジュールを無効にするか削除すると、待つジョブと完了の記録が新しく増えなくなる。判定できない回が続き、1時間で`console_worker_check_failed`になる。
+
 確認できなかった回は、自己更新のジョブログに警告を残し、通知は出さない。
 警告は次の3種類である。
 
-- `could not list the waiting console jobs`: queueを読むAPIが失敗した。権限が足りないときもこうなる。
-- `unexpected response while listing the waiting console jobs`: 応答が一覧の形でない。
+- `could not list the console jobs`: queueかジョブの履歴を読むAPIが失敗した。権限が足りないときもこうなる。
+- `could not confirm the console worker from the job lists`: 応答が一覧の形でない、または待つジョブも30分以内の完了も無い。
 - `console worker check timed out`: 10秒以内に終わらなかった。
 
 確認できない回数は自己更新のstateに数える。
@@ -661,7 +675,7 @@ mise exec -- docker compose -f infra/docker-compose.yml start windmill_worker_co
 
 1. 自己更新のジョブログに、上の警告が出ていないことを見る。
 2. `stop`でConsole用のworkerを止める。
-3. 25分以内に、通知`console_worker_missing`ができ、Discordにも届くことを見る。
+3. 約30分以内に、通知`console_worker_missing`ができ、Discordにも届くことを見る。
 4. `start`で戻し、通知を解決する。
 
 Consoleが止まっていてもDiscordには届くので、通知の確認先はConsoleに限らない。
