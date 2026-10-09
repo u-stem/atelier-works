@@ -359,6 +359,25 @@ const DETAIL_FAILURE_ROW: SqlRow = {
   occurred_at: T0,
 };
 
+const REVIEW_ROW: SqlRow = {
+  review_id: 12,
+  head_sha: "abc1234",
+  verdict: "request_changes",
+  finding_count: "3",
+  posted_review_id: "9001",
+  created_at: T0,
+};
+
+const FIX_ROUND_ROW: SqlRow = {
+  fix_round_id: 14,
+  round: 2,
+  outcome: "done",
+  trigger_review_count: "1",
+  reply_count: "2",
+  commit_count: "1",
+  created_at: T0,
+};
+
 function detailResponses(): SqlRow[][] {
   return [
     [OVERVIEW_ROW],
@@ -366,20 +385,24 @@ function detailResponses(): SqlRow[][] {
     [APPROVAL_HISTORY_ROW],
     [ROUND_ROW],
     [DETAIL_FAILURE_ROW],
+    [REVIEW_ROW],
+    [FIX_ROUND_ROW],
   ];
 }
 
 describe("runWorkItemDetail queries", () => {
-  test("runs five queries", async () => {
+  test("runs seven queries", async () => {
     const { sql, calls } = createFakeSqlClient(detailResponses());
     await runWorkItemDetail(7, sql);
-    expect(calls.length).toBe(5);
+    expect(calls.length).toBe(7);
   });
 
   test("binds the work item id to every query", async () => {
     const { sql, calls } = createFakeSqlClient(detailResponses());
     await runWorkItemDetail(7, sql);
     expect(calls.map((call) => call.values.includes(7))).toEqual([
+      true,
+      true,
       true,
       true,
       true,
@@ -392,6 +415,36 @@ describe("runWorkItemDetail queries", () => {
     const { sql, calls } = createFakeSqlClient(detailResponses());
     await runWorkItemDetail(7, sql);
     expect(calls[3]?.text).not.toContain("check_output");
+  });
+
+  test("orders the implement rounds by attempt, then round", async () => {
+    const { sql, calls } = createFakeSqlClient(detailResponses());
+    await runWorkItemDetail(7, sql);
+    expect(calls[3]?.text).toContain("ORDER BY attempt ASC, round ASC");
+  });
+
+  test("reads the reviews of the work item", async () => {
+    const { sql, calls } = createFakeSqlClient(detailResponses());
+    await runWorkItemDetail(7, sql);
+    expect(calls[5]?.text).toContain("FROM factory.reviews");
+  });
+
+  test("does not select the review summary or findings text", async () => {
+    const { sql, calls } = createFakeSqlClient(detailResponses());
+    await runWorkItemDetail(7, sql);
+    expect(calls[5]?.text).not.toMatch(/\bsummary\b|findings,|findings\s*$/m);
+  });
+
+  test("reads the fix rounds of the work item", async () => {
+    const { sql, calls } = createFakeSqlClient(detailResponses());
+    await runWorkItemDetail(7, sql);
+    expect(calls[6]?.text).toContain("FROM factory.fix_rounds");
+  });
+
+  test("does not select the fix round replies text", async () => {
+    const { sql, calls } = createFakeSqlClient(detailResponses());
+    await runWorkItemDetail(7, sql);
+    expect(calls[6]?.text).not.toMatch(/replies,|replies\s*$/m);
   });
 
   test("sums the cost of the agent runs", async () => {
@@ -517,6 +570,44 @@ describe("runWorkItemDetail result", () => {
         occurred_at: T0,
       },
     ]);
+  });
+
+  test("parses a review as counts and identifiers only", async () => {
+    const { sql } = createFakeSqlClient(detailResponses());
+    const detail = await runWorkItemDetail(7, sql);
+    expect(detail.reviews).toEqual([
+      {
+        review_id: 12,
+        head_sha: "abc1234",
+        verdict: "request_changes",
+        finding_count: 3,
+        posted_review_id: "9001",
+        created_at: T0,
+      },
+    ]);
+  });
+
+  test("parses a fix round as counts only", async () => {
+    const { sql } = createFakeSqlClient(detailResponses());
+    const detail = await runWorkItemDetail(7, sql);
+    expect(detail.fix_rounds).toEqual([
+      {
+        fix_round_id: 14,
+        round: 2,
+        outcome: "done",
+        trigger_review_count: 1,
+        reply_count: 2,
+        commit_count: 1,
+        created_at: T0,
+      },
+    ]);
+  });
+
+  test("returns empty lists for a work item without reviews or fix rounds", async () => {
+    const responses = detailResponses().slice(0, 5);
+    const { sql } = createFakeSqlClient(responses);
+    const detail = await runWorkItemDetail(7, sql);
+    expect([detail.reviews, detail.fix_rounds]).toEqual([[], []]);
   });
 
   test("throws when the work item does not exist", async () => {

@@ -1338,6 +1338,59 @@ function toWorkItemFailureRow(row: SqlRow): WorkItemFailureRow {
   };
 }
 
+/**
+ * PRレビュー1回分の一覧用の行。レビューの本文や指摘の文は持たず、件数と識別子だけを返す。
+ * 本文は`reviews`のビューで読む。
+ */
+export type WorkItemReviewRow = {
+  readonly review_id: number;
+  readonly head_sha: string;
+  readonly verdict: string;
+  readonly finding_count: number;
+  readonly posted_review_id: string | null;
+  readonly created_at: string;
+};
+
+function toWorkItemReviewRow(row: SqlRow): WorkItemReviewRow {
+  return {
+    review_id: asId(row.review_id, "review_id"),
+    head_sha: asStr(row.head_sha, "head_sha"),
+    verdict: asStr(row.verdict, "verdict"),
+    finding_count: asNumeric(row.finding_count, "finding_count"),
+    posted_review_id: asNullableStr(row.posted_review_id, "posted_review_id"),
+    created_at: asIsoDate(row.created_at, "created_at"),
+  };
+}
+
+/**
+ * PR修正1回分の一覧用の行。返信の本文は持たず、件数だけを返す。
+ * 本文は`fix_rounds`のビューで読む。
+ */
+export type WorkItemFixRoundRow = {
+  readonly fix_round_id: number;
+  readonly round: number;
+  readonly outcome: string;
+  readonly trigger_review_count: number;
+  readonly reply_count: number;
+  readonly commit_count: number;
+  readonly created_at: string;
+};
+
+function toWorkItemFixRoundRow(row: SqlRow): WorkItemFixRoundRow {
+  return {
+    fix_round_id: asId(row.fix_round_id, "fix_round_id"),
+    round: asNumeric(row.round, "round"),
+    outcome: asStr(row.outcome, "outcome"),
+    trigger_review_count: asNumeric(
+      row.trigger_review_count,
+      "trigger_review_count",
+    ),
+    reply_count: asNumeric(row.reply_count, "reply_count"),
+    commit_count: asNumeric(row.commit_count, "commit_count"),
+    created_at: asIsoDate(row.created_at, "created_at"),
+  };
+}
+
 /** 詳細に載せる失敗の件数の上限と、1件のerrorの長さの上限。 */
 const DETAIL_FAILURE_LIMIT = 20;
 const DETAIL_ERROR_LIMIT = 4000;
@@ -1349,10 +1402,15 @@ export type WorkItemDetail = {
   readonly approvals: WorkItemApprovalRow[];
   readonly implement_rounds: WorkItemRoundRow[];
   readonly failures: WorkItemFailureRow[];
+  /** PRの作業項目のレビュー。Issueの作業項目では空。 */
+  readonly reviews: WorkItemReviewRow[];
+  /** PRの作業項目の修正。Issueの作業項目では空。 */
+  readonly fix_rounds: WorkItemFixRoundRow[];
 };
 
 /**
- * 作業項目`workItemId`の概要、要件定義の試行、承認の履歴、実装のラウンド、失敗を返す。
+ * 作業項目`workItemId`の概要、要件定義の試行、承認の履歴、実装のラウンド、失敗、
+ * PRのレビューと修正の一覧(件数だけ)を返す。
  * 作業項目が無ければ例外を投げる。実装のラウンドに`check_output`は含めない。
  */
 export async function runWorkItemDetail(
@@ -1420,7 +1478,7 @@ export async function runWorkItemDetail(
       checks_skipped_reason, protected_changes, diff_stat, created_at
     FROM factory.implement_rounds
     WHERE work_item_id = ${workItemId}::bigint
-    ORDER BY round ASC
+    ORDER BY attempt ASC, round ASC
   `.fetch();
 
   const failureRows = await sql`
@@ -1433,12 +1491,36 @@ export async function runWorkItemDetail(
     LIMIT ${DETAIL_FAILURE_LIMIT}::integer
   `.fetch();
 
+  const reviewRows = await sql`
+    SELECT
+      id AS review_id, head_sha, verdict,
+      jsonb_array_length(findings) AS finding_count,
+      posted_review_id, created_at
+    FROM factory.reviews
+    WHERE work_item_id = ${workItemId}::bigint
+    ORDER BY created_at DESC, id DESC
+  `.fetch();
+
+  const fixRoundRows = await sql`
+    SELECT
+      id AS fix_round_id, round, outcome,
+      jsonb_array_length(trigger_review_ids) AS trigger_review_count,
+      jsonb_array_length(replies) AS reply_count,
+      jsonb_array_length(commit_shas) AS commit_count,
+      created_at
+    FROM factory.fix_rounds
+    WHERE work_item_id = ${workItemId}::bigint
+    ORDER BY round DESC, id DESC
+  `.fetch();
+
   return {
     work_item: toWorkItemOverview(overview),
     attempts: attemptRows.map(toWorkItemAttemptRow),
     approvals: approvalRows.map(toWorkItemApprovalRow),
     implement_rounds: roundRows.map(toWorkItemRoundRow),
     failures: failureRows.map(toWorkItemFailureRow),
+    reviews: reviewRows.map(toWorkItemReviewRow),
+    fix_rounds: fixRoundRows.map(toWorkItemFixRoundRow),
   };
 }
 
