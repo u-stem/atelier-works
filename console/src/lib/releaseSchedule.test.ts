@@ -9,6 +9,7 @@ const INTERVAL = 60_000;
 const MAX = 600_000;
 const TIMEOUT = 10_000;
 const RECHECK_GAP = 5_000;
+const PRELOAD_GAP = 2_000;
 
 /** 手動で進める時計。タイマーを時刻順に実行し、そのたびにPromiseの後続を流す。 */
 function fakeClock() {
@@ -57,24 +58,31 @@ type Setup = {
   checkTimes: number[];
   signals: AbortSignal[];
   visible: { value: boolean };
+  /** `"manual"`のcheckが返したPromiseを、テストの側で解決するための関数。 */
+  resolvers: ((outcome: CheckOutcome) => void)[];
   scheduler: ReturnType<typeof createWatchScheduler<number>>;
 };
 
 /**
  * `outcomes`を順に返すcheckで動かす。尽きたあとは"ok"を返す。
  * `"stall"`は解決も拒否もしないcheckを表す。
+ * `"manual"`は`resolvers`から解決するcheckを表す。
  */
-function setUp(outcomes: readonly (CheckOutcome | "stall")[] = []): Setup {
+function setUp(
+  outcomes: readonly (CheckOutcome | "stall" | "manual")[] = [],
+): Setup {
   const clock = fakeClock();
   const checkTimes: number[] = [];
   const signals: AbortSignal[] = [];
   const visible = { value: true };
+  const resolvers: ((outcome: CheckOutcome) => void)[] = [];
   const queue = [...outcomes];
   const scheduler = createWatchScheduler<number>({
     intervalMs: INTERVAL,
     maxIntervalMs: MAX,
     checkTimeoutMs: TIMEOUT,
     visibleRecheckGapMs: RECHECK_GAP,
+    preloadRecheckGapMs: PRELOAD_GAP,
     now: clock.now,
     isVisible: () => visible.value,
     check: (signal) => {
@@ -84,12 +92,17 @@ function setUp(outcomes: readonly (CheckOutcome | "stall")[] = []): Setup {
       if (next === "stall") {
         return new Promise<CheckOutcome>(() => {});
       }
+      if (next === "manual") {
+        return new Promise<CheckOutcome>((resolve) => {
+          resolvers.push(resolve);
+        });
+      }
       return Promise.resolve(next);
     },
     setTimer: clock.setTimer,
     clearTimer: clock.clearTimer,
   });
-  return { clock, checkTimes, signals, visible, scheduler };
+  return { clock, checkTimes, signals, visible, resolvers, scheduler };
 }
 
 describe("nextDelayMs", () => {
@@ -300,20 +313,20 @@ describe("createWatchScheduler", () => {
   test("checks right away on a preload error without waiting for the interval", async () => {
     const { clock, checkTimes, scheduler } = setUp();
     scheduler.start();
-    await clock.advance(1_000);
+    await clock.advance(PRELOAD_GAP);
     scheduler.onPreloadError();
     await clock.flush();
-    expect(checkTimes).toEqual([0, 1_000]);
+    expect(checkTimes).toEqual([0, PRELOAD_GAP]);
   });
 
   test("checks on a preload error even while the tab is hidden", async () => {
     const { clock, checkTimes, visible, scheduler } = setUp();
     scheduler.start();
-    await clock.advance(1_000);
+    await clock.advance(PRELOAD_GAP);
     visible.value = false;
     scheduler.onPreloadError();
     await clock.flush();
-    expect(checkTimes).toEqual([0, 1_000]);
+    expect(checkTimes).toEqual([0, PRELOAD_GAP]);
   });
 
   test("ignores the recheck gap on a preload error", async () => {
@@ -328,10 +341,10 @@ describe("createWatchScheduler", () => {
   test("restarts the interval from the check a preload error triggered", async () => {
     const { clock, checkTimes, scheduler } = setUp();
     scheduler.start();
-    await clock.advance(1_000);
+    await clock.advance(PRELOAD_GAP);
     scheduler.onPreloadError();
     await clock.advance(INTERVAL);
-    expect(checkTimes).toEqual([0, 1_000, 1_000 + INTERVAL]);
+    expect(checkTimes).toEqual([0, PRELOAD_GAP, PRELOAD_GAP + INTERVAL]);
   });
 
   test("does not start a second check for a preload error while one is running", async () => {
@@ -390,6 +403,84 @@ describe("createWatchScheduler", () => {
     expect(checkTimes).toEqual([0]);
   });
 
+  test("checks on a preload error even when start found the tab hidden", async () => {
+    const { clock, checkTimes, visible, scheduler } = setUp();
+    visible.value = false;
+    scheduler.start();
+    scheduler.onPreloadError();
+    await clock.flush();
+    expect(checkTimes).toEqual([0]);
+  });
+
+  test("holds a preload error back until the floor since the last check started", async () => {
+    const { clock, checkTimes, scheduler } = setUp();
+    scheduler.start();
+    await clock.advance(500);
+    scheduler.onPreloadError();
+    await clock.advance(PRELOAD_GAP - 500 - 1);
+    expect(checkTimes).toEqual([0]);
+  });
+
+  test("runs the held-back preload check when the floor has passed", async () => {
+    const { clock, checkTimes, scheduler } = setUp();
+    scheduler.start();
+    await clock.advance(500);
+    scheduler.onPreloadError();
+    await clock.advance(PRELOAD_GAP - 500);
+    expect(checkTimes).toEqual([0, PRELOAD_GAP]);
+  });
+
+  test("coalesces a stream of preload errors inside the floor into one check", async () => {
+    const { clock, checkTimes, scheduler } = setUp();
+    scheduler.start();
+    await clock.advance(500);
+    for (let i = 0; i < 5; i++) {
+      scheduler.onPreloadError();
+      await clock.advance(100);
+    }
+    await clock.advance(PRELOAD_GAP);
+    expect(checkTimes).toEqual([0, PRELOAD_GAP]);
+  });
+
+  test("keeps the interval after a held-back preload check", async () => {
+    const { clock, checkTimes, scheduler } = setUp();
+    scheduler.start();
+    await clock.advance(500);
+    scheduler.onPreloadError();
+    await clock.advance(PRELOAD_GAP - 500 + INTERVAL);
+    expect(checkTimes).toEqual([0, PRELOAD_GAP, PRELOAD_GAP + INTERVAL]);
+  });
+
+  test("does not run a held-back preload check after stop", async () => {
+    const { clock, checkTimes, scheduler } = setUp();
+    scheduler.start();
+    await clock.advance(500);
+    scheduler.onPreloadError();
+    scheduler.stop();
+    await clock.advance(PRELOAD_GAP * 2);
+    expect(checkTimes).toEqual([0]);
+  });
+
+  test("holds the re-run back to the floor when the running check ended early", async () => {
+    const { clock, checkTimes, resolvers, scheduler } = setUp(["manual"]);
+    scheduler.start();
+    await clock.advance(500);
+    scheduler.onPreloadError();
+    resolvers[0]?.("ok");
+    await clock.advance(PRELOAD_GAP);
+    expect(checkTimes).toEqual([0, PRELOAD_GAP]);
+  });
+
+  test("re-runs after the running check failed", async () => {
+    const { clock, checkTimes, resolvers, scheduler } = setUp(["manual"]);
+    scheduler.start();
+    await clock.advance(PRELOAD_GAP);
+    scheduler.onPreloadError();
+    resolvers[0]?.("failed");
+    await clock.flush();
+    expect(checkTimes).toEqual([0, PRELOAD_GAP]);
+  });
+
   test("treats a check that throws as a failure", async () => {
     const clock = fakeClock();
     const times: number[] = [];
@@ -398,6 +489,7 @@ describe("createWatchScheduler", () => {
       maxIntervalMs: MAX,
       checkTimeoutMs: TIMEOUT,
       visibleRecheckGapMs: RECHECK_GAP,
+      preloadRecheckGapMs: PRELOAD_GAP,
       now: clock.now,
       isVisible: () => true,
       check: () => {

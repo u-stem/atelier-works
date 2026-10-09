@@ -11,6 +11,7 @@ const CHECK_INTERVAL_MS = 60_000;
 const MAX_INTERVAL_MS = 10 * 60_000;
 const CHECK_TIMEOUT_MS = 10_000;
 const VISIBLE_RECHECK_GAP_MS = 5_000;
+const PRELOAD_RECHECK_GAP_MS = 2_000;
 
 /**
  * 開いたままのタブが、配信中の版から外れていないかを確かめ続ける。
@@ -18,6 +19,7 @@ const VISIBLE_RECHECK_GAP_MS = 5_000;
  * 動的importの失敗(Viteが`window`に出す`vite:preloadError`)を受けたときに確かめる。
  * 失敗したimportは、イベントの既定の動作のとおり例外になる。ここでは止めない。
  * 版の入れ替わりで古いchunkが消えた場合に、次の周期を待たずに帯を出すためである。
+ * 失敗が続けざまに起きても、確認は前の確認の開始から2秒以上空けて走らせる。
  * タブが見えないあいだは周期の確認をしない。見える状態に戻ったときは、前の確認から5秒以上空いていれば確認する。確認が失敗し続けるあいだは、間隔を10分まで延ばす。
  * 1回の確認は10秒で打ち切り、アンマウントでも中断する。
  * 自分のファイルの集合は、確かめるたびにDOMから取り直す。後から読み込んだchunkの
@@ -64,6 +66,7 @@ export function useReleaseWatch(): ReleaseNotice {
       maxIntervalMs: MAX_INTERVAL_MS,
       checkTimeoutMs: CHECK_TIMEOUT_MS,
       visibleRecheckGapMs: VISIBLE_RECHECK_GAP_MS,
+      preloadRecheckGapMs: PRELOAD_RECHECK_GAP_MS,
       now: () => Date.now(),
       isVisible: () => document.visibilityState !== "hidden",
       check,

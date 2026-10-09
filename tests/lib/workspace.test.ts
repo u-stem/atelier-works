@@ -2438,6 +2438,57 @@ describe("ensureHeadOnBranch (fake git)", () => {
     expect(fake.calls.length).toBe(1);
   });
 
+  const entry = (path: string, ...lines: readonly string[]) =>
+    [
+      `worktree ${path}`,
+      "HEAD c4c85336fb74d3bc13cca578c870a39583722c58",
+      ...lines,
+      "",
+    ].join("\n");
+  const switchesWith = (listed: string) =>
+    ensureWith(
+      [ok("refs/heads/other\n"), ok(listed), ok(), ok("refs/heads/target\n")],
+      async (path) => path,
+    ).done;
+
+  test("does not block on a detached worktree in the list", async () => {
+    await expect(
+      switchesWith(entry("/elsewhere/detached", "detached")),
+    ).resolves.toBeUndefined();
+  });
+
+  test("does not block on a bare entry in the list", async () => {
+    await expect(
+      switchesWith(["worktree /elsewhere/bare", "bare", ""].join("\n")),
+    ).resolves.toBeUndefined();
+  });
+
+  test("does not block on a prunable worktree of another branch", async () => {
+    await expect(
+      switchesWith(
+        entry(
+          "/elsewhere/gone",
+          "branch refs/heads/feature",
+          "prunable gitdir file points to non-existent location",
+        ),
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  test("proceeds to the checkout when the dir itself is missing from the list", async () => {
+    const { fake, done } = ensureWith(
+      [
+        ok("refs/heads/other\n"),
+        ok(entry("/tmp/repo", "branch refs/heads/main")),
+        ok(),
+        ok("refs/heads/target\n"),
+      ],
+      async (path) => path,
+    );
+    await done;
+    expect(fake.calls[2]?.argv).toContain("checkout");
+  });
+
   test("compares paths as given when realpath fails", async () => {
     const { done } = ensureWith(
       [ok("refs/heads/other\n"), ok(listing(["/elsewhere/target", "target"]))],

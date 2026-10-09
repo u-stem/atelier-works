@@ -29,6 +29,11 @@ export type WatchOptions<Handle> = {
    * タブを素早く切り替えても、そのたびに取りに行かないためである。
    */
   visibleRecheckGapMs: number;
+  /**
+   * 動的importの失敗を受けた確認は、前の確認の開始からこれだけ空ける。
+   * 失敗が続けざまに起きても、確認が続けて走らないためである。
+   */
+  preloadRecheckGapMs: number;
   now: () => number;
   isVisible: () => boolean;
   /** 1回分の確認。`signal`が中断されたら速やかに終えること。 */
@@ -43,8 +48,10 @@ export type WatchScheduler = {
   /** visibilitychangeのたびに呼ぶ。見える状態に戻ったとき、前の確認から間があれば直ちに確認する。 */
   onVisibilityChange: () => void;
   /**
-   * 動的importの失敗を受けたときに呼ぶ。見えているかと前の確認からの間に関わらず、直ちに確認する。
-   * 確認の実行中なら、終わった後に1回だけやり直す。実行中の確認は、失敗の前に始まっているかもしれないためである。
+   * 動的importの失敗を受けたときに呼ぶ。見えているかに関わらず確認する。
+   * 前の確認の開始から`preloadRecheckGapMs`が空いていれば直ちに、空いていなければ空くまで待って確認する。
+   * 待っている間に何度来ても、確認は1回にまとめる。
+   * 確認の実行中なら、終わった後に1回だけやり直す。実行中の確認が、失敗より前に始まっていて、版の入れ替わりを見落とす場合があるためである。
    */
   onPreloadError: () => void;
   /** 予定を取り消し、実行中の確認を中断する。以後は何もしない。 */
@@ -58,6 +65,7 @@ export type WatchScheduler = {
  * - 1回の確認は`checkTimeoutMs`で打ち切る。`check`が中断に応じなくても、
  *   打ち切った時点で実行中の印を外すので、以後の確認は止まらない。
  * - 確認は同時に1つしか走らせない。実行中に`onPreloadError`が来たら、終わった後に1回だけやり直す。
+ *   やり直しも、`preloadRecheckGapMs`を空けてから走らせる。
  */
 export function createWatchScheduler<Handle>(
   options: WatchOptions<Handle>,
@@ -68,6 +76,8 @@ export function createWatchScheduler<Handle>(
   let stopped = false;
   // 実行中に来た要求を覚える。何度来ても、終わった後の再実行は1回にする。
   let rerunRequested = false;
+  // `preloadRecheckGapMs`を待つ確認の予約が、`timer`に入っているか。
+  let preloadHeld = false;
   let failures = 0;
   let lastStartedAt: number | undefined;
 
@@ -76,6 +86,7 @@ export function createWatchScheduler<Handle>(
       options.clearTimer(timer.handle);
       timer = undefined;
     }
+    preloadHeld = false;
   };
 
   const schedule = () => {
@@ -126,10 +137,33 @@ export function createWatchScheduler<Handle>(
     failures = outcome === "failed" ? failures + 1 : 0;
     if (rerunRequested) {
       rerunRequested = false;
-      void run();
+      runAfterPreloadGap();
       return;
     }
     schedule();
+  };
+
+  // 前の確認の開始から`preloadRecheckGapMs`が空くまで待ち、空いたら確認する。
+  // 周期の予約は、確認の終わりに入れ直される。
+  const runAfterPreloadGap = () => {
+    const elapsed =
+      lastStartedAt === undefined ? undefined : options.now() - lastStartedAt;
+    if (elapsed === undefined || elapsed >= options.preloadRecheckGapMs) {
+      void run();
+      return;
+    }
+    if (preloadHeld) {
+      return;
+    }
+    cancelTimer();
+    preloadHeld = true;
+    timer = {
+      handle: options.setTimer(() => {
+        timer = undefined;
+        preloadHeld = false;
+        void run();
+      }, options.preloadRecheckGapMs - elapsed),
+    };
   };
 
   function onTimer() {
@@ -166,7 +200,7 @@ export function createWatchScheduler<Handle>(
         rerunRequested = true;
         return;
       }
-      void run();
+      runAfterPreloadGap();
     },
     stop: () => {
       stopped = true;
