@@ -227,6 +227,67 @@ describe("describeApiError", () => {
   });
 });
 
+describe("classifyRunResponse on a failed job result shape", () => {
+  const BODY = JSON.stringify({
+    error: {
+      name: "Error",
+      message: "db down",
+      stack: "Error: db down\n    at /internal/path/x.ts:10:3",
+    },
+  });
+
+  test("keeps the message", () => {
+    const result = classifyRunResponse(500, BODY);
+    expect(
+      !result.ok && result.error.kind === "job_failed" && result.error.message,
+    ).toBe("db down");
+  });
+
+  test("never carries the stack", () => {
+    expect(JSON.stringify(classifyRunResponse(500, BODY))).not.toContain(
+      "/internal/path",
+    );
+  });
+
+  test("shows only the message on screen", () => {
+    const result = classifyRunResponse(500, BODY);
+    expect(!result.ok && describeApiError(result.error, "read")).not.toContain(
+      "internal",
+    );
+  });
+});
+
+describe("classifyRunResponse on a timeout message", () => {
+  test.each([
+    ["timeout after 30s", '{"error":{"message":"timeout after 30 seconds"}}'],
+    ["timed out", '{"error":{"message":"Request timed out"}}'],
+    ["a text body", "Timeout after 20s waiting for the job"],
+  ])("reports timeout_or_unknown for a 500 with %s", (_name, body) => {
+    expect(classifyRunResponse(500, body)).toEqual({
+      ok: false,
+      error: { kind: "timeout_or_unknown" },
+    });
+  });
+
+  test("keeps job_failed for a message that only mentions timeout", () => {
+    const result = classifyRunResponse(
+      500,
+      '{"error":{"message":"timeout option missing"}}',
+    );
+    expect(!result.ok && result.error.kind).toBe("job_failed");
+  });
+
+  test("keeps job_failed for an unrelated message", () => {
+    const result = classifyRunResponse(500, '{"error":{"message":"boom"}}');
+    expect(!result.ok && result.error.kind).toBe("job_failed");
+  });
+
+  test("keeps http for a timeout phrase outside a 500", () => {
+    const result = classifyRunResponse(400, "timed out");
+    expect(!result.ok && result.error.kind).toBe("http");
+  });
+});
+
 describe("classifyRunResponse on a rejected tag (400)", () => {
   const BODY =
     '"Bad request: Tag console is not included in the allowed CUSTOM_TAGS, which only super admins can go beyond: x"';

@@ -9,6 +9,9 @@ const MAX_MESSAGE_LENGTH = 500;
 /** 4xxの応答の本文を添えるときの長さ。画面の1行に収まる程度にとどめる。 */
 const MAX_DETAIL_LENGTH = 200;
 
+/** 待ちの上限を超えたときの定型文。ジョブ自身の失敗の文と取り違えないよう、語の並びまで合わせる。 */
+const TIMEOUT_MESSAGE = /timeout after \d+|timed out/i;
+
 export type ApiError =
   | { readonly kind: "unauthorized" }
   | { readonly kind: "forbidden" }
@@ -73,9 +76,11 @@ function extractText(body: string, limit: number): string {
  * run_wait_resultの応答の状態と本文を分類する。
  * 失敗の応答の形はJSONの場合とテキストの場合があり、成功の本文はJSONに限る。
  * 408と504は、待ちの上限を超えたか、結果が分からない状態として扱う。
+ * 待ちの上限の応答の状態は実測していないので、500でも、本文の文が待ちの上限の定型文に合えば同じ扱いにする。
  * ジョブが実際に終わったかは分からないので、書き込みの結果としては確定させない。
+ * 500はジョブの失敗で、本文から取り出した文だけを`message`に持つ。スタックは持たない(内部のパスを含むため)。
  * 4xxの本文(例: worker tagの許可がないときの400)は、`detail`に短く添える。
- * 5xxの本文はHTMLなどになりうるので添えない。
+ * 500を除く5xxの本文はHTMLなどになりうるので添えない。
  */
 export function classifyRunResponse(status: number, body: string): RunResult {
   if (status >= 200 && status < 300) {
@@ -94,10 +99,10 @@ export function classifyRunResponse(status: number, body: string): RunResult {
     return failure({ kind: "timeout_or_unknown" });
   }
   if (status === 500) {
-    return failure({
-      kind: "job_failed",
-      message: extractText(body, MAX_MESSAGE_LENGTH),
-    });
+    const message = extractText(body, MAX_MESSAGE_LENGTH);
+    return TIMEOUT_MESSAGE.test(message)
+      ? failure({ kind: "timeout_or_unknown" })
+      : failure({ kind: "job_failed", message });
   }
   const isClientError = status >= 400 && status < 500;
   return failure({

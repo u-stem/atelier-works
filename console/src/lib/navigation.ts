@@ -1,5 +1,7 @@
 // サイドバーの件数の表示、たたみ状態の読み取り、キーボードでの項目の移動を決める純粋関数。
 
+import { cn } from "./cn.ts";
+
 /** サイドバーをたたんだかどうかを残す保存領域のキー。 */
 export const SIDEBAR_STORAGE_KEY = "factory-console.sidebar";
 
@@ -44,4 +46,17 @@ export function nextNavFocusIndex(
     default:
       return null;
   }
+}
+
+/**
+ * サイドバーの入口のリンクのクラス。
+ * `TooltipTrigger asChild`の子に渡すので、関数ではなく文字列にする。
+ * Radix Slotは子の`className`を文字列として結合するため、関数を渡すとクラスが壊れる。
+ * 選択中の強調は、NavLinkが付ける`aria-current="page"`で表す。
+ */
+export function navLinkClass(collapsed: boolean): string {
+  return cn(
+    "flex items-center gap-3 rounded-md px-3 py-2 text-sm outline-none hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring aria-[current=page]:bg-sidebar-accent aria-[current=page]:font-medium aria-[current=page]:text-sidebar-accent-foreground",
+    collapsed && "justify-center px-0",
+  );
 }

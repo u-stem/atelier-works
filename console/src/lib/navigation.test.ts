@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   formatBadgeCount,
+  navLinkClass,
   nextNavFocusIndex,
   parseSidebarCollapsed,
 } from "./navigation.ts";
@@ -84,5 +85,29 @@ describe("nextNavFocusIndex", () => {
 
   test("starts from the last item on up when nothing is focused", () => {
     expect(nextNavFocusIndex("ArrowUp", -1, 4)).toBe(3);
+  });
+});
+
+describe("navLinkClass", () => {
+  test("is a plain string so that a Radix Slot can merge it", () => {
+    expect(typeof navLinkClass(false)).toBe("string");
+  });
+
+  test("styles the active link through aria-current", () => {
+    expect(navLinkClass(false)).toContain(
+      "aria-[current=page]:bg-sidebar-accent",
+    );
+  });
+
+  test("does not depend on a state class for the active link", () => {
+    expect(navLinkClass(false)).not.toContain("isActive");
+  });
+
+  test("centers the icon when collapsed", () => {
+    expect(navLinkClass(true)).toContain("justify-center");
+  });
+
+  test("keeps the label padding when expanded", () => {
+    expect(navLinkClass(false)).not.toContain("justify-center");
   });
 });

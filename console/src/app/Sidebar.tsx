@@ -12,6 +12,7 @@ import {
 import { cn } from "../lib/cn.ts";
 import {
   formatBadgeCount,
+  navLinkClass,
   nextNavFocusIndex,
   parseSidebarCollapsed,
   SIDEBAR_STORAGE_KEY,
@@ -112,14 +113,7 @@ export function Sidebar() {
                 <NavLink
                   to={screen.path}
                   end={screen.path === "/"}
-                  className={({ isActive }) =>
-                    cn(
-                      "flex items-center gap-3 rounded-md px-3 py-2 text-sm outline-none hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring",
-                      isActive &&
-                        "bg-sidebar-accent font-medium text-sidebar-accent-foreground",
-                      collapsed && "justify-center px-0",
-                    )
-                  }
+                  className={navLinkClass(collapsed)}
                 >
                   <Icon aria-hidden="true" className="size-4 shrink-0" />
                   <span

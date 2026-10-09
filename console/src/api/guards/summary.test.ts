@@ -167,26 +167,48 @@ describe("isConsoleSummary", () => {
     expect(isConsoleSummary(summaryWith({ approvals: {} }))).toBe(false);
   });
 
-  test("rejects an approval with an unknown kind", () => {
+  test("accepts an approval with a kind the console does not know", () => {
     expect(
       isConsoleSummary(
         summaryWith({ approvals: [{ ...APPROVAL, kind: "mystery" }] }),
       ),
+    ).toBe(true);
+  });
+
+  test("rejects an approval whose kind is a number", () => {
+    expect(
+      isConsoleSummary(summaryWith({ approvals: [{ ...APPROVAL, kind: 3 }] })),
     ).toBe(false);
   });
 
-  test("rejects an approval with an unknown status", () => {
+  test("accepts an approval with a status the console does not know", () => {
     expect(
       isConsoleSummary(
         summaryWith({ approvals: [{ ...APPROVAL, status: "maybe" }] }),
       ),
+    ).toBe(true);
+  });
+
+  test("rejects an approval whose status is a number", () => {
+    expect(
+      isConsoleSummary(
+        summaryWith({ approvals: [{ ...APPROVAL, status: 3 }] }),
+      ),
     ).toBe(false);
   });
 
-  test("rejects an approval with an unknown origin", () => {
+  test("accepts an approval with an origin the console does not know", () => {
     expect(
       isConsoleSummary(
         summaryWith({ approvals: [{ ...APPROVAL, origin: "elsewhere" }] }),
+      ),
+    ).toBe(true);
+  });
+
+  test("rejects an approval whose origin is a number", () => {
+    expect(
+      isConsoleSummary(
+        summaryWith({ approvals: [{ ...APPROVAL, origin: 3 }] }),
       ),
     ).toBe(false);
   });
@@ -239,12 +261,35 @@ describe("isConsoleSummary", () => {
     expect(isConsoleSummary(summaryWith({ failures: [rest] }))).toBe(false);
   });
 
-  test("rejects a notice with an unknown severity", () => {
+  test("accepts a notice with a severity the console does not know", () => {
     expect(
       isConsoleSummary(
         summaryWith({ notices: [{ ...NOTICE, severity: "loud" }] }),
       ),
-    ).toBe(false);
+    ).toBe(true);
+  });
+
+  test("rejects a notice whose severity is missing", () => {
+    const { severity: _severity, ...rest } = NOTICE;
+    expect(isConsoleSummary(summaryWith({ notices: [rest] }))).toBe(false);
+  });
+
+  test("accepts a notice kind the console does not know", () => {
+    expect(
+      isConsoleSummary(
+        summaryWith({ notices: [{ ...NOTICE, kind: "future_kind" }] }),
+      ),
+    ).toBe(true);
+  });
+
+  test("accepts a failure kind and status the console does not know", () => {
+    expect(
+      isConsoleSummary(
+        summaryWith({
+          failures: [{ ...FAILURE, kind: "future_kind", status: "future" }],
+        }),
+      ),
+    ).toBe(true);
   });
 
   test("rejects a notice whose resolved flag is not a boolean", () => {

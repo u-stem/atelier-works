@@ -12,38 +12,20 @@ import {
   isNullableInteger,
   isNullableIsoTimestamp,
   isNullableString,
-  isOneOf,
   isPositiveInteger,
   isRecord,
   isString,
 } from "./primitives.ts";
 
-export type ApprovalKind = "requirements" | "issue_proposal";
-export type ApprovalStatus = "pending" | "approved" | "rejected" | "expired";
-export type ApprovalOrigin = "pr_fix" | "audit";
-export type NoticeSeverity = "info" | "action";
-
-const isApprovalKind = isOneOf<ApprovalKind>([
-  "requirements",
-  "issue_proposal",
-]);
-const isApprovalStatus = isOneOf<ApprovalStatus>([
-  "pending",
-  "approved",
-  "rejected",
-  "expired",
-]);
-const isNullableApprovalOrigin = (
-  value: unknown,
-): value is ApprovalOrigin | null =>
-  value === null || isOneOf<ApprovalOrigin>(["pr_fix", "audit"])(value);
-const isNoticeSeverity = isOneOf<NoticeSeverity>(["info", "action"]);
+// 表示にしか使わない種類や状態は文字列で受け、日本語への変換(`labels.ts`)で知らない値を受け止める。
+// backendが先に新しい値を反映したときや、配信を前の版に固定している間に、要対応の一覧が丸ごと消えないためである。
+// 形の崩れ(項目の欠落、型の違い、idの不正)は、これまでどおり`invalid_response`にする。
 
 /** 承認待ちの1行。要件定義の本文やIssue提案の本文は持たない。 */
 export type SummaryApproval = {
   readonly approval_request_id: number;
-  readonly kind: ApprovalKind;
-  readonly status: ApprovalStatus;
+  readonly kind: string;
+  readonly status: string;
   readonly work_item_id: number;
   readonly owner: string;
   readonly repo: string;
@@ -57,7 +39,7 @@ export type SummaryApproval = {
   readonly summary: string | null;
   readonly proposal_title: string | null;
   readonly created_issue_number: number | null;
-  readonly origin: ApprovalOrigin | null;
+  readonly origin: string | null;
 };
 
 /** 失敗の1行。作業項目ごとに1行で、失敗の記録が無い作業項目では記録の項目が`null`になる。 */
@@ -89,7 +71,7 @@ export type SummaryNotice = {
   readonly message: string;
   readonly resolved: boolean;
   readonly created_at: string;
-  readonly severity: NoticeSeverity;
+  readonly severity: string;
   readonly resolvable: boolean;
 };
 
@@ -111,8 +93,8 @@ function isSummaryApproval(value: unknown): value is SummaryApproval {
   return (
     isRecord(value) &&
     isPositiveInteger(value.approval_request_id) &&
-    isApprovalKind(value.kind) &&
-    isApprovalStatus(value.status) &&
+    isString(value.kind) &&
+    isString(value.status) &&
     isPositiveInteger(value.work_item_id) &&
     isString(value.owner) &&
     isString(value.repo) &&
@@ -126,7 +108,7 @@ function isSummaryApproval(value: unknown): value is SummaryApproval {
     isNullableString(value.summary) &&
     isNullableString(value.proposal_title) &&
     isNullableInteger(value.created_issue_number) &&
-    isNullableApprovalOrigin(value.origin)
+    isNullableString(value.origin)
   );
 }
 
@@ -162,7 +144,7 @@ function isSummaryNotice(value: unknown): value is SummaryNotice {
     isString(value.message) &&
     isBoolean(value.resolved) &&
     isIsoTimestamp(value.created_at) &&
-    isNoticeSeverity(value.severity) &&
+    isString(value.severity) &&
     isBoolean(value.resolvable)
   );
 }
