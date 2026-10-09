@@ -323,6 +323,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/steps/manual_intake_register` | script | [OP-1-1/2] 作業項目を登録して工程2を起動 |
 | `f/factory/approval_decide` | script | [OP-2-1] 承認 / 差し戻しを記録して反映 |
 | `f/factory/retry_work_item` | script | [OP-2-2] 作業項目を再実行 |
+| `f/factory/notice_resolve` | script | [OP-2-3] 通知を解決 |
 | `f/factory/poll_issues` | script | [SF-1-1] Issueを巡回して担当を確定 |
 | `f/factory/poll_prs` | script | [SF-1-2] PRを巡回してレビュー / 修正を起動 |
 | `f/factory/pipeline` | flow | [SF-2-1] 要件定義の生成と承認 |

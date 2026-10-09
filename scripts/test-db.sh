@@ -251,6 +251,15 @@ notice_row="$(printf "INSERT INTO factory.notices (kind, message) VALUES ('probe
 [ "${notice_row}" = "op" ] || die "expected resolved_by to be 'op', got '${notice_row}'"
 log "notices resolution columns are writable"
 
+# `resolveNoticeIfUnresolved`の文を、本物のPostgreSQLで確かめる。
+# 解決できない種類は更新されず、ほかの種類は解決者と解決時刻が付いて更新される。
+resolved_ids="$(printf "INSERT INTO factory.notices (kind, message) VALUES ('unsandboxed_check_commands', 'a'), ('cleanup_db_failed', 'b'); UPDATE factory.notices SET resolved = true, resolved_by = 'op', resolved_at = now() WHERE id IN (SELECT id FROM factory.notices WHERE kind IN ('unsandboxed_check_commands', 'cleanup_db_failed')) AND resolved = false AND kind IN ('unsandboxed_check_commands', 'cleanup_db_failed') AND NOT (kind = ANY(ARRAY['unsandboxed_check_commands']::text[])) RETURNING kind;\n" \
+  | psql_exec "${SCRATCH_DB}" -q -t -A | tr -d '[:space:]')" \
+  || die "the notice resolve statement failed"
+[ "${resolved_ids}" = "cleanup_db_failed" ] \
+  || die "expected only cleanup_db_failed to be resolved, got '${resolved_ids}'"
+log "notice resolve statement skips unresolvable kinds"
+
 shopt -s nullglob
 down_files=("${MIGRATIONS_DIR}"/*.down.sql)
 shopt -u nullglob

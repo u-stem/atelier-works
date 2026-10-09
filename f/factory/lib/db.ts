@@ -47,6 +47,7 @@ import {
   isOneOf,
   isRecord,
   isString,
+  type Notice,
   type NoticeRecord,
   type RequirementDraft,
   type ReviewFinding,
@@ -958,6 +959,59 @@ export async function addNoticeUnlessUnresolved(
   `.fetch();
   const row = rows[0];
   return row === undefined ? null : parseId(row.id, "id");
+}
+
+/** `factory.notices`の行をIDで1件取得する。無ければ`null`を返す。 */
+export async function getNoticeById(
+  id: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<Notice | null> {
+  const rows = await sql`
+    SELECT id, kind, message, resolved, resolved_by, resolved_at, created_at
+    FROM factory.notices WHERE id = ${id}::bigint
+  `.fetch();
+  const row = rows[0];
+  if (row === undefined) {
+    return null;
+  }
+  return {
+    id: parseId(row.id, "id"),
+    kind: parseRequiredString(row.kind, "kind"),
+    message: parseRequiredString(row.message, "message"),
+    resolved: parseBoolean(row.resolved, "resolved"),
+    resolved_by: parseNullableString(row.resolved_by, "resolved_by"),
+    resolved_at:
+      row.resolved_at === null || row.resolved_at === undefined
+        ? null
+        : parseDate(row.resolved_at, "resolved_at"),
+    created_at: parseDate(row.created_at, "created_at"),
+  };
+}
+
+/**
+ * 未解決のnoticeを1件だけ解決済みにし、解決者と解決時刻を記録する。
+ * 実際に解決したら`true`、条件に合う行が無ければ`false`を返す。
+ * 比較と交換を1つの文で行うので、同時に解決しようとした呼び出しの片方だけが`true`を得る。
+ * `kind`は、呼び出し元が読んだ種類と変わっていないことの確認に使う。
+ * `unresolvableKinds`に含まれる種類は、`id`が合っても解決しない。
+ */
+export async function resolveNoticeIfUnresolved(
+  id: number,
+  kind: string,
+  resolvedBy: string,
+  unresolvableKinds: readonly string[],
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  const rows = await sql`
+    UPDATE factory.notices
+    SET resolved = true, resolved_by = ${resolvedBy}, resolved_at = now()
+    WHERE id = ${id}::bigint
+      AND resolved = false
+      AND kind = ${kind}
+      AND NOT (kind = ANY(${[...unresolvableKinds]}::text[]))
+    RETURNING id
+  `.fetch();
+  return rows.length > 0;
 }
 
 // ---------------------------------------------------------------------------

@@ -746,6 +746,17 @@ export type NoticeRecord = {
   message: string;
 };
 
+/** `factory.notices`の保存済みの1行。`resolved_by`と`resolved_at`は、解決の記録が無ければ`null`。 */
+export type Notice = {
+  id: number;
+  kind: string;
+  message: string;
+  resolved: boolean;
+  resolved_by: string | null;
+  resolved_at: Date | null;
+  created_at: Date;
+};
+
 // ---------------------------------------------------------------------------
 // factory_config(リソース`f/factory/factory_config`、型`c_factory_config`)
 // ---------------------------------------------------------------------------

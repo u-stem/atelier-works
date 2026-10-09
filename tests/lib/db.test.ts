@@ -16,6 +16,7 @@ import {
   findApprovedWorkItemForIssue,
   getApprovalRequest,
   getIssueProposal,
+  getNoticeById,
   getRequirementDraft,
   getWorkItem,
   hasPriorReview,
@@ -47,6 +48,7 @@ import {
   recordAgentRun,
   recordDeployment,
   recordFailure,
+  resolveNoticeIfUnresolved,
   revertIssueProposalToPending,
   type SqlClient,
   type SqlRow,
@@ -2818,6 +2820,96 @@ describe("deleteResolvedNoticesBefore", () => {
     expect(calls[0]?.text).toContain("DELETE FROM factory.notices");
     expect(calls[0]?.text).toContain("resolved = true");
     expect(count).toBe(1);
+  });
+});
+
+describe("getNoticeById", () => {
+  test("parses the notice row", async () => {
+    const { sql } = createFakeSqlClient([
+      [
+        {
+          id: "5",
+          kind: "cleanup_db_failed",
+          message: "m",
+          resolved: false,
+          resolved_by: null,
+          resolved_at: null,
+          created_at: NOW.toISOString(),
+        },
+      ],
+    ]);
+    expect(await getNoticeById(5, sql)).toEqual({
+      id: 5,
+      kind: "cleanup_db_failed",
+      message: "m",
+      resolved: false,
+      resolved_by: null,
+      resolved_at: null,
+      created_at: NOW,
+    });
+  });
+
+  test("returns null when no row matches", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await getNoticeById(5, sql)).toBeNull();
+  });
+
+  test("selects from factory.notices by id", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getNoticeById(5, sql);
+    expect(calls[0]?.text).toContain("FROM factory.notices WHERE id =");
+  });
+});
+
+describe("resolveNoticeIfUnresolved", () => {
+  test("returns true when a row was resolved", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 5 }]]);
+    expect(await resolveNoticeIfUnresolved(5, "k", "op", ["u"], sql)).toBe(
+      true,
+    );
+  });
+
+  test("returns false when no row matched", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await resolveNoticeIfUnresolved(5, "k", "op", ["u"], sql)).toBe(
+      false,
+    );
+  });
+
+  test("guards the update on resolved = false", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await resolveNoticeIfUnresolved(5, "k", "op", ["u"], sql);
+    expect(calls[0]?.text).toContain("AND resolved = false");
+  });
+
+  test("guards the update on the kind that was read", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await resolveNoticeIfUnresolved(5, "k", "op", ["u"], sql);
+    expect(calls[0]?.text).toContain("AND kind =");
+  });
+
+  test("excludes the unresolvable kinds in the statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await resolveNoticeIfUnresolved(5, "k", "op", ["u"], sql);
+    expect(calls[0]?.text).toContain("NOT (kind = ANY(");
+  });
+
+  test("records resolved_by and resolved_at", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await resolveNoticeIfUnresolved(5, "k", "op", ["u"], sql);
+    expect(calls[0]?.text).toContain("resolved_by =");
+  });
+
+  test("stamps resolved_at with now()", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await resolveNoticeIfUnresolved(5, "k", "op", ["u"], sql);
+    expect(calls[0]?.text).toContain("resolved_at = now()");
+  });
+
+  test("binds the approver as a value", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await resolveNoticeIfUnresolved(5, "k", "op", ["u"], sql);
+    expect(calls[0]?.values).toContain("op");
   });
 });
 

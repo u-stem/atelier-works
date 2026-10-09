@@ -1,0 +1,14 @@
+summary: '[OP-2-3] 通知を解決'
+description: Factory Consoleの通知を1件解決済みにします。解決者は実行したユーザーから決まります。設定や権限の問題を示す種類の通知は解決できません。
+lock: '!inline f/factory/notice_resolve.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties:
+    notice_id:
+      type: number
+      description: 解決する通知のID。Consoleの通知の一覧に載っています。
+      default: null
+  required:
+    - notice_id
