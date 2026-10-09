@@ -13,16 +13,24 @@ import { isRecord, type NoticeRecord } from "./types.ts";
 export const SCHEDULE_FAILING_RUNS = 3;
 
 /**
- * ジョブ履歴の応答(新しい順)の先頭`SCHEDULE_FAILING_RUNS`件がすべて失敗か。
+ * ジョブ履歴の応答(新しい順)の、飛ばされた実行(`is_skipped`)を除いた先頭`SCHEDULE_FAILING_RUNS`件が
+ * すべて失敗か。飛ばされた実行は、多重実行の防止(`no_flow_overlap`)が前回の実行中に見送った回で、
+ * 失敗でも成功でもないので数えず、失敗の連続も切らない。
  * 応答は信頼できない入力として読む。配列でないとき、件数が足りないとき、
  * 形の違う要素があるとき、取り消された実行があるときは`false`を返す。
  * 取り消しは失敗として数えない。人が止めた実行を、原因が続く失敗とみなさないため。
  */
 export function allRecentRunsFailed(runs: unknown): boolean {
-  if (!Array.isArray(runs) || runs.length < SCHEDULE_FAILING_RUNS) {
+  if (!Array.isArray(runs)) {
     return false;
   }
-  return runs
+  const counted = runs.filter(
+    (run) => !(isRecord(run) && run.is_skipped === true),
+  );
+  if (counted.length < SCHEDULE_FAILING_RUNS) {
+    return false;
+  }
+  return counted
     .slice(0, SCHEDULE_FAILING_RUNS)
     .every(
       (run) => isRecord(run) && run.success === false && run.canceled === false,
@@ -41,6 +49,17 @@ export function buildScheduleFailingNotice(flowPath: string): NoticeRecord {
   };
 }
 
+/**
+ * ジョブ履歴を読めなかったときに残すnotice。履歴を読めないと連続した失敗を判定できず、
+ * 失敗が続いても気づけないため、判定できないこと自体を要対応にする。
+ * 本文は原因の詳細を含めず、スケジュールにもよらず、いつも同じ文にする。
+ */
+export const SCHEDULE_FAILING_CHECK_FAILED_NOTICE: NoticeRecord = {
+  kind: "schedule_failing_check_failed",
+  message:
+    "スケジュールが続けて失敗しているかを、ジョブ履歴から判定できません。失敗が続いても気づけない状態です。次の操作: on_error_scheduleのジョブのログで警告を確かめ、ジョブ履歴を読む権限があるかを確かめる",
+};
+
 export type FlagFailingScheduleDeps = {
   /** `flowPath`のジョブ履歴を新しい順に`count`件まで返す。 */
   readonly listRecentRuns: (
@@ -53,9 +72,10 @@ export type FlagFailingScheduleDeps = {
 };
 
 /**
- * 失敗のハンドラの最後に呼ぶ。直近`SCHEDULE_FAILING_RUNS`回の実行がすべて失敗なら、
- * noticeを残して`true`を返す。スケジュールの特定できない失敗(`unknown`)は数えない。
- * 履歴を読めないときは通知しない。失敗のハンドラを止めないよう、例外は投げず`false`を返す。
+ * 失敗のハンドラの最後に呼ぶ。直近`SCHEDULE_FAILING_RUNS`回の実行(飛ばされた回を除く)が
+ * すべて失敗なら、noticeを残して`true`を返す。スケジュールの特定できない失敗(`unknown`)は数えない。
+ * 履歴を読めなかったときは、`SCHEDULE_FAILING_CHECK_FAILED_NOTICE`を残して`false`を返す。
+ * 失敗のハンドラを止めないよう、例外は投げない。
  */
 export async function flagFailingSchedule(
   flowPath: string,
@@ -64,11 +84,20 @@ export async function flagFailingSchedule(
   if (flowPath === "unknown") {
     return false;
   }
+  let runs: unknown;
   try {
-    const runs = await deps.listRecentRuns(flowPath, SCHEDULE_FAILING_RUNS);
-    if (!allRecentRunsFailed(runs)) {
-      return false;
-    }
+    runs = await deps.listRecentRuns(flowPath, SCHEDULE_FAILING_RUNS);
+  } catch (err) {
+    deps.log.error("failed to flag a failing schedule", {
+      error: maskSecrets(String(err)),
+    });
+    await recordCheckFailed(deps);
+    return false;
+  }
+  if (!allRecentRunsFailed(runs)) {
+    return false;
+  }
+  try {
     await deps.addNotice(buildScheduleFailingNotice(flowPath));
     return true;
   } catch (err) {
@@ -76,5 +105,15 @@ export async function flagFailingSchedule(
       error: maskSecrets(String(err)),
     });
     return false;
+  }
+}
+
+async function recordCheckFailed(deps: FlagFailingScheduleDeps): Promise<void> {
+  try {
+    await deps.addNotice(SCHEDULE_FAILING_CHECK_FAILED_NOTICE);
+  } catch (err) {
+    deps.log.error("failed to record the schedule check failure", {
+      error: maskSecrets(String(err)),
+    });
   }
 }

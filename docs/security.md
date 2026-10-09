@@ -134,7 +134,9 @@ fine-grained PATは、トークンの値を変えずに権限の設定だけを�
 
 Issue化の提案を承認してIssueを作るとき(`issue_proposal_apply`)も、同じ`f/factory/github_token`を使う。別の資格情報は用意しない。
 
-有効期限は最長で1年である。`poll_issues`は冒頭で`GET /user`を呼び、トークンが失効していればジョブを失敗させる。noticeは残らない。失敗はスケジュールの失敗ハンドラ(`on_error_schedule`)が`job_failures`に記録し、Discordに`job_failed`として通知する。
+有効期限は最長で1年である。`poll_issues`は冒頭で`GET /user`を呼び、トークンが失効していればジョブを失敗させる。
+失敗はスケジュールの失敗ハンドラ(`on_error_schedule`)が`job_failures`に記録し、Discordに`job_failed`として通知する。
+直近3回の実行が続けて失敗すると、要対応の通知`schedule_failing`も残る。
 
 GitHubの認証は、環境変数`GH_TOKEN`と、gitのcredential helperとしての`gh auth git-credential`だけで行う。`gh auth login`の対話ログインと、トークンを埋め込んだclone URLは使わない。
 

@@ -9,7 +9,7 @@
 // このハンドラ自身は例外を投げない。デプロイ先で実際にスケジュールが
 // 失敗したら引数の形を確かめ、違っていれば引数と型ガードを直す。
 
-import wmillDefault, * as wmill from "windmill-client";
+import wmillDefault, * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "./lib/config.ts";
 import { addNoticeUnlessUnresolved, recordFailure } from "./lib/db.ts";
 import { notify } from "./lib/discord.ts";
@@ -93,6 +93,7 @@ export async function main(
         workspace: wmillDefault.getWorkspace(),
         scriptPathExact: path,
         orderDesc: true,
+        isSkipped: false,
         perPage: count,
       }),
     addNotice: (record) => addNoticeUnlessUnresolved(record),

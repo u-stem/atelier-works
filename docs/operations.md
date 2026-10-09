@@ -627,6 +627,7 @@ Consoleの**通知**タブには、Discordに送らない要対応の事項が�
 | `console_worker_missing` | tag `console`を受けるworkerが、5分以内にpingした一覧に居ない。Consoleのjobがqueueに溜まり、Consoleが止まる | `mise run up`でworkerを起動し直し、`docker compose ps windmill_worker_console`でコンテナの状態を確かめる。自己更新(10分ごと)が検知し、Discordにも届く |
 | `console_worker_check_failed` | Console用のworkerが居るかを、自己更新が1時間(6回)続けて確認できなかった。workerが止まっていても気づけない状態である | 自己更新のジョブログで、下の3種類の警告のどれが出ているかを確かめて原因を直す。Discordにも届く |
 | `schedule_failing` | 同じスケジュールの直近3回の実行が続けて失敗した。数えるのはスケジュールの実行そのものの失敗で、成功した実行の中で記録する部分的な失敗は含まない。GitHubのPATの失効などが原因になる | ジョブのログで失敗の内容を確かめて原因を直す。PATは[秘密をローテーションする](#秘密をローテーションする)で再発行する |
+| `schedule_failing_check_failed` | スケジュールが続けて失敗しているかを、ジョブ履歴から判定できなかった。失敗が続いても気づけない状態である | `on_error_schedule`のジョブのログで`failed to flag a failing schedule`の警告を確かめ、ジョブ履歴を読む権限があるかを確かめる |
 
 ### Console用のworkerの検知を確かめる
 
@@ -657,6 +658,20 @@ mise exec -- docker compose -f infra/docker-compose.yml start windmill_worker_co
 4. `start`で戻し、通知を解決する。
 
 Consoleが止まっていてもDiscordには届くので、通知の確認先はConsoleに限らない。
+
+### 続けて失敗するスケジュールの検知を確かめる
+
+スケジュールの直近3回の実行が続けて失敗したかどうかは、失敗のハンドラ(`on_error_schedule`)がジョブ履歴を読んで判定する。
+飛ばされた回(前回の実行中で見送った回)は、失敗として数えず、連続も切らない。
+マージの後は、次の手順で検知が動いていることを確かめる。
+
+1. 失敗する状態を作る。たとえば、あるスケジュールのscriptを一時的に失敗させるか、直近3回が失敗の状態を用意する。
+2. 失敗が3回続いた後で、通知`schedule_failing`ができていることを見る。
+3. `on_error_schedule`のジョブログに、`failed to flag a failing schedule`の警告が出ていないことを見る。
+4. 3回目の失敗の直後に通知ができていなければ、次の失敗で出るかを見る。直後は今回の失敗をジョブ履歴で読めないことがあり、検知は1回遅れる。
+
+ジョブ履歴を読めないときは、通知`schedule_failing_check_failed`が残る。
+その場合は、ジョブ履歴を読む権限を確かめる。
 
 ### 通知を解決する
 

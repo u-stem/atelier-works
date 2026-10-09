@@ -35,6 +35,7 @@ export const NOTICE_SEVERITY: Readonly<Record<string, NoticeSeverity>> = {
   console_worker_missing: "action",
   console_worker_check_failed: "action",
   schedule_failing: "action",
+  schedule_failing_check_failed: "action",
 };
 
 /** 重要度が`info`の種類。「要対応」の一覧には出さず、システム画面に7日だけ出す。 */
