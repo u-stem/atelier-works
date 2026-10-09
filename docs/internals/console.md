@@ -66,7 +66,8 @@ Caddyは、`/console/`の下を次の経路で返す。
 - `lib/referencedUrls.ts`: 画面が参照するscriptとstylesheetのURLの収集
 - `lib/release.ts`: 判定
 - `lib/releaseCheck.ts`: 取得と判定の1回分
-- `useReleaseWatch.ts`: 周期の管理
+- `lib/releaseSchedule.ts`: 確認の間隔、タブの可視状態、打ち切り、失敗時の間隔の延長
+- `useReleaseWatch.ts`: 上の部品をDOMにつなぐ
 
 ### 自分の版の見分け方
 
