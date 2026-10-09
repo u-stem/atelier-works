@@ -2,11 +2,21 @@ import { describe, expect, test } from "bun:test";
 import {
   type Artifact,
   appendHistory,
+  type ConsoleManifest,
   chooseArtifact,
   classifyHttpStatus,
+  clearRevokedContent,
+  contentDigest,
   currentShaFromLink,
+  describeRollbackNotice,
+  describeUnpinRefusal,
+  findUnknownUnpinFlags,
   isAllowedDownloadUrl,
   isLockStale,
+  isReadablePin,
+  isRevokedRelease,
+  isRevokedStateFile,
+  mergeRevokedState,
   needsDeploy,
   parseArtifacts,
   parseCurrentLink,
@@ -14,11 +24,22 @@ import {
   parseFetcherConfig,
   parseHistory,
   parseManifest,
+  parsePinContent,
+  parsePinRevoked,
+  parsePinSha,
+  parseRevokedState,
+  parseUnpinFlags,
   parseWorkflowRuns,
+  pruneRevokedState,
+  REVOKED_DIGEST_LIMIT,
   referencedAssetNames,
   selectAssetsToDelete,
+  selectCorruptCopiesToDelete,
+  selectIdenticalReleases,
   selectLatestRun,
   selectReleasesToDelete,
+  selectRevokedAssets,
+  selectRevokedReleases,
   selectRollbackTarget,
   verifyRelease,
   type WorkflowRun,
@@ -31,6 +52,20 @@ const SHA_D = "d".repeat(40);
 const HASH_1 = "1".repeat(64);
 const HASH_2 = "2".repeat(64);
 const DAY = 24 * 60 * 60 * 1000;
+
+const NO_MANIFESTS: ReadonlyMap<string, ConsoleManifest | null> = new Map();
+
+function manifestOf(
+  sha: string,
+  files: Record<string, string>,
+): ConsoleManifest {
+  return { version: 1, sha, files: new Map(Object.entries(files)) };
+}
+
+/** `index.html`だけを持つ版の中身のsha256。 */
+function contentDigestOf(indexHash: string): string {
+  return contentDigest(manifestOf(SHA_A, { "index.html": indexHash }));
+}
 
 function run(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
   return {
@@ -493,6 +528,7 @@ describe("selectReleasesToDelete", () => {
         [SHA_A, SHA_B, SHA_C, SHA_D],
         { kind: "release", sha: SHA_D },
         3,
+        NO_MANIFESTS,
       ),
     ).toEqual([SHA_A]);
   });
@@ -504,6 +540,7 @@ describe("selectReleasesToDelete", () => {
         [SHA_A, SHA_B, SHA_C, SHA_D],
         { kind: "release", sha: SHA_A },
         3,
+        NO_MANIFESTS,
       ),
     ).toEqual([]);
   });
@@ -515,6 +552,7 @@ describe("selectReleasesToDelete", () => {
         [SHA_A, SHA_B, SHA_C, SHA_B],
         { kind: "release", sha: SHA_B },
         2,
+        NO_MANIFESTS,
       ),
     ).toEqual([SHA_A]);
   });
@@ -526,19 +564,102 @@ describe("selectReleasesToDelete", () => {
         [SHA_A],
         { kind: "release", sha: SHA_A },
         3,
+        NO_MANIFESTS,
       ),
     ).toEqual([SHA_B]);
   });
 
   test("keeps only the history when there is no current link", () => {
     expect(
-      selectReleasesToDelete([SHA_A, SHA_B], [SHA_B], { kind: "none" }, 3),
+      selectReleasesToDelete(
+        [SHA_A, SHA_B],
+        [SHA_B],
+        { kind: "none" },
+        3,
+        NO_MANIFESTS,
+      ),
     ).toEqual([SHA_A]);
   });
 
   test("deletes nothing when the current link is unreadable", () => {
     expect(
-      selectReleasesToDelete([SHA_A, SHA_B], [SHA_B], { kind: "unknown" }, 3),
+      selectReleasesToDelete(
+        [SHA_A, SHA_B],
+        [SHA_B],
+        { kind: "unknown" },
+        3,
+        NO_MANIFESTS,
+      ),
+    ).toEqual([]);
+  });
+
+  test("counts releases with identical files as one version", () => {
+    const manifests = new Map([
+      [SHA_A, manifestOf(SHA_A, { "index.html": HASH_1 })],
+      [SHA_B, manifestOf(SHA_B, { "index.html": HASH_2 })],
+      [SHA_C, manifestOf(SHA_C, { "index.html": HASH_2 })],
+      [SHA_D, manifestOf(SHA_D, { "index.html": HASH_2 })],
+    ]);
+    expect(
+      selectReleasesToDelete(
+        [SHA_A, SHA_B, SHA_C, SHA_D],
+        [SHA_A, SHA_B, SHA_C, SHA_D],
+        { kind: "release", sha: SHA_D },
+        2,
+        manifests,
+      ),
+    ).toEqual([]);
+  });
+
+  test("deletes the oldest distinct version beyond the limit", () => {
+    const manifests = new Map([
+      [SHA_A, manifestOf(SHA_A, { "index.html": HASH_1 })],
+      [SHA_B, manifestOf(SHA_B, { "index.html": HASH_2 })],
+      [
+        SHA_C,
+        manifestOf(SHA_C, { "assets/c.js": HASH_1, "index.html": HASH_2 }),
+      ],
+      [
+        SHA_D,
+        manifestOf(SHA_D, { "assets/c.js": HASH_1, "index.html": HASH_2 }),
+      ],
+    ]);
+    expect(
+      selectReleasesToDelete(
+        [SHA_A, SHA_B, SHA_C, SHA_D],
+        [SHA_A, SHA_B, SHA_C, SHA_D],
+        { kind: "release", sha: SHA_D },
+        2,
+        manifests,
+      ),
+    ).toEqual([SHA_A]);
+  });
+
+  test("counts a release whose manifest could not be read as its own version", () => {
+    expect(
+      selectReleasesToDelete(
+        [SHA_A, SHA_B, SHA_C],
+        [SHA_A, SHA_B, SHA_C],
+        { kind: "release", sha: SHA_C },
+        2,
+        new Map([
+          [SHA_A, null],
+          [SHA_B, null],
+          [SHA_C, null],
+        ]),
+      ),
+    ).toEqual([SHA_A]);
+  });
+
+  test("does not count a release that no longer exists toward the limit", () => {
+    expect(
+      selectReleasesToDelete(
+        [SHA_A, SHA_B],
+        [SHA_A, SHA_B, SHA_C, SHA_D],
+        { kind: "release", sha: SHA_B },
+        2,
+        NO_MANIFESTS,
+      ),
     ).toEqual([]);
   });
 });
@@ -624,6 +745,7 @@ describe("selectRollbackTarget", () => {
         [SHA_A, SHA_B, SHA_C],
         SHA_C,
         new Set([SHA_A, SHA_B, SHA_C]),
+        NO_MANIFESTS,
       ),
     ).toBe(SHA_B);
   });
@@ -634,6 +756,7 @@ describe("selectRollbackTarget", () => {
         [SHA_A, SHA_B, SHA_C],
         SHA_B,
         new Set([SHA_A, SHA_B, SHA_C]),
+        NO_MANIFESTS,
       ),
     ).toBe(SHA_A);
   });
@@ -644,6 +767,7 @@ describe("selectRollbackTarget", () => {
         [SHA_A, SHA_B, SHA_C],
         SHA_C,
         new Set([SHA_A, SHA_C]),
+        NO_MANIFESTS,
       ),
     ).toBe(SHA_A);
   });
@@ -654,12 +778,15 @@ describe("selectRollbackTarget", () => {
         [SHA_A, SHA_B, SHA_C, SHA_B],
         SHA_B,
         new Set([SHA_A, SHA_B, SHA_C]),
+        NO_MANIFESTS,
       ),
     ).toBe(SHA_C);
   });
 
   test("returns null when there is no earlier release", () => {
-    expect(selectRollbackTarget([SHA_A], SHA_A, new Set([SHA_A]))).toBeNull();
+    expect(
+      selectRollbackTarget([SHA_A], SHA_A, new Set([SHA_A]), NO_MANIFESTS),
+    ).toBeNull();
   });
 
   test("returns the newest release in history when current is missing from history", () => {
@@ -668,6 +795,7 @@ describe("selectRollbackTarget", () => {
         [SHA_A, SHA_B, SHA_C],
         SHA_D,
         new Set([SHA_A, SHA_B, SHA_C, SHA_D]),
+        NO_MANIFESTS,
       ),
     ).toBe(SHA_C);
   });
@@ -678,8 +806,585 @@ describe("selectRollbackTarget", () => {
         [SHA_A, SHA_B, SHA_C],
         SHA_D,
         new Set([SHA_A, SHA_B, SHA_D]),
+        NO_MANIFESTS,
       ),
     ).toBe(SHA_B);
+  });
+
+  test("skips a release whose files are identical to current", () => {
+    expect(
+      selectRollbackTarget(
+        [SHA_A, SHA_B, SHA_C],
+        SHA_C,
+        new Set([SHA_A, SHA_B, SHA_C]),
+        new Map([
+          [SHA_A, manifestOf(SHA_A, { "index.html": HASH_1 })],
+          [SHA_B, manifestOf(SHA_B, { "index.html": HASH_2 })],
+          [SHA_C, manifestOf(SHA_C, { "index.html": HASH_2 })],
+        ]),
+      ),
+    ).toBe(SHA_A);
+  });
+
+  test("returns null when every earlier release is identical to current", () => {
+    expect(
+      selectRollbackTarget(
+        [SHA_A, SHA_B],
+        SHA_B,
+        new Set([SHA_A, SHA_B]),
+        new Map([
+          [SHA_A, manifestOf(SHA_A, { "index.html": HASH_1 })],
+          [SHA_B, manifestOf(SHA_B, { "index.html": HASH_1 })],
+        ]),
+      ),
+    ).toBeNull();
+  });
+
+  test("treats a release with an extra file as different from current", () => {
+    expect(
+      selectRollbackTarget(
+        [SHA_A, SHA_B],
+        SHA_B,
+        new Set([SHA_A, SHA_B]),
+        new Map([
+          [
+            SHA_A,
+            manifestOf(SHA_A, { "index.html": HASH_1, "assets/a.js": HASH_1 }),
+          ],
+          [SHA_B, manifestOf(SHA_B, { "index.html": HASH_1 })],
+        ]),
+      ),
+    ).toBe(SHA_A);
+  });
+
+  test("does not skip a release whose manifest could not be read", () => {
+    expect(
+      selectRollbackTarget(
+        [SHA_A, SHA_B],
+        SHA_B,
+        new Set([SHA_A, SHA_B]),
+        new Map([
+          [SHA_A, null],
+          [SHA_B, manifestOf(SHA_B, { "index.html": HASH_1 })],
+        ]),
+      ),
+    ).toBe(SHA_A);
+  });
+
+  test("does not skip any release when the manifest of current could not be read", () => {
+    expect(
+      selectRollbackTarget(
+        [SHA_A, SHA_B],
+        SHA_B,
+        new Set([SHA_A, SHA_B]),
+        new Map([
+          [SHA_A, manifestOf(SHA_A, { "index.html": HASH_1 })],
+          [SHA_B, null],
+        ]),
+      ),
+    ).toBe(SHA_A);
+  });
+});
+
+describe("selectIdenticalReleases", () => {
+  const manifests = new Map([
+    [SHA_A, manifestOf(SHA_A, { "index.html": HASH_1 })],
+    [SHA_B, manifestOf(SHA_B, { "index.html": HASH_2 })],
+    [SHA_C, manifestOf(SHA_C, { "index.html": HASH_2 })],
+  ]);
+
+  test("returns the release itself and every release with the same files", () => {
+    expect(selectIdenticalReleases(SHA_C, manifests).sort()).toEqual([
+      SHA_B,
+      SHA_C,
+    ]);
+  });
+
+  test("returns only the release itself when its manifest could not be read", () => {
+    expect(selectIdenticalReleases(SHA_D, manifests)).toEqual([SHA_D]);
+  });
+});
+
+describe("parsePinRevoked", () => {
+  test("reads the commit shas that were rolled back from", () => {
+    expect(
+      parsePinRevoked({ rolled_back_from: [SHA_A, "x", 1, SHA_B] }),
+    ).toEqual([SHA_A, SHA_B]);
+  });
+
+  test("returns an empty list for a pin without the field", () => {
+    expect(parsePinRevoked({ sha: SHA_A })).toEqual([]);
+  });
+
+  test("returns an empty list for a non-object", () => {
+    expect(parsePinRevoked(null)).toEqual([]);
+  });
+});
+
+describe("contentDigest", () => {
+  test("is the same for releases with identical files", () => {
+    expect(contentDigest(manifestOf(SHA_A, { "index.html": HASH_1 }))).toBe(
+      contentDigest(manifestOf(SHA_B, { "index.html": HASH_1 })),
+    );
+  });
+
+  test("is the same regardless of the order of the files", () => {
+    expect(
+      contentDigest(
+        manifestOf(SHA_A, { "index.html": HASH_1, "assets/a.js": HASH_2 }),
+      ),
+    ).toBe(
+      contentDigest(
+        manifestOf(SHA_A, { "assets/a.js": HASH_2, "index.html": HASH_1 }),
+      ),
+    );
+  });
+
+  test("differs when a file hash differs", () => {
+    expect(contentDigest(manifestOf(SHA_A, { "index.html": HASH_1 }))).not.toBe(
+      contentDigest(manifestOf(SHA_A, { "index.html": HASH_2 })),
+    );
+  });
+
+  test("is a sha256 hex string", () => {
+    expect(contentDigest(manifestOf(SHA_A, { "index.html": HASH_1 }))).toMatch(
+      /^[0-9a-f]{64}$/,
+    );
+  });
+});
+
+describe("parsePinContent", () => {
+  test("reads the content digests", () => {
+    expect(
+      parsePinContent({ rolled_back_content: [HASH_1, "x", 1, HASH_2] }),
+    ).toEqual([HASH_1, HASH_2]);
+  });
+
+  test("returns an empty list for a pin without the field", () => {
+    expect(parsePinContent({ sha: SHA_A })).toEqual([]);
+  });
+});
+
+describe("parseUnpinFlags", () => {
+  test("accepts no flags", () => {
+    expect(parseUnpinFlags([])).toEqual({ force: false, ignoreCleanup: false });
+  });
+
+  test("reads --force", () => {
+    expect(parseUnpinFlags(["--force"])).toEqual({
+      force: true,
+      ignoreCleanup: false,
+    });
+  });
+
+  test("reads --ignore-cleanup", () => {
+    expect(parseUnpinFlags(["--ignore-cleanup"])).toEqual({
+      force: false,
+      ignoreCleanup: true,
+    });
+  });
+
+  test("reads both flags in any order", () => {
+    expect(parseUnpinFlags(["--ignore-cleanup", "--force"])).toEqual({
+      force: true,
+      ignoreCleanup: true,
+    });
+  });
+
+  test("rejects an unknown flag", () => {
+    expect(parseUnpinFlags(["--forse"])).toBeNull();
+  });
+});
+
+describe("describeUnpinRefusal", () => {
+  test("names the latest run and --force when its sha was rolled back from", () => {
+    expect(
+      describeUnpinRefusal({
+        ok: false,
+        reason: "latest_run_is_revoked",
+        sha: SHA_A,
+      }),
+    ).toContain(`${SHA_A}`);
+  });
+
+  test("tells the operator to wait for a fix when the content matches", () => {
+    expect(
+      describeUnpinRefusal({
+        ok: false,
+        reason: "latest_run_has_revoked_content",
+        sha: SHA_A,
+      }),
+    ).toContain("same files");
+  });
+
+  test("offers --force when the content cannot be determined", () => {
+    expect(
+      describeUnpinRefusal({
+        ok: false,
+        reason: "content_undeterminable",
+        sha: SHA_A,
+      }),
+    ).toContain("--force");
+  });
+
+  test("offers --ignore-cleanup when the removal is incomplete", () => {
+    expect(
+      describeUnpinRefusal({ ok: false, reason: "cleanup_incomplete" }),
+    ).toContain("--ignore-cleanup");
+  });
+
+  test("points at the revoked_cleanup events in the output or the logs", () => {
+    expect(
+      describeUnpinRefusal({ ok: false, reason: "cleanup_incomplete" }),
+    ).toContain("revoked_cleanup_");
+  });
+});
+
+describe("describeRollbackNotice", () => {
+  test("says the rollback succeeded when the removal is pending", () => {
+    expect(describeRollbackNotice("pending", true)).toContain(
+      "The rollback succeeded",
+    );
+  });
+
+  test("says nothing when the removal is done and the content is recorded", () => {
+    expect(describeRollbackNotice("done", true)).toBeNull();
+  });
+
+  test("warns that the content was not recorded", () => {
+    expect(describeRollbackNotice("done", false)).toContain(
+      "could not be recorded",
+    );
+  });
+});
+
+describe("findUnknownUnpinFlags", () => {
+  test("returns only the flags that are not known", () => {
+    expect(
+      findUnknownUnpinFlags(["--force", "--forse", "--ignore-cleanup", "-x"]),
+    ).toEqual(["--forse", "-x"]);
+  });
+
+  test("returns nothing for known flags", () => {
+    expect(findUnknownUnpinFlags(["--force"])).toEqual([]);
+  });
+});
+
+describe("selectCorruptCopiesToDelete", () => {
+  test("returns the oldest copies beyond the limit", () => {
+    expect(
+      selectCorruptCopiesToDelete(
+        [
+          "revoked.json.corrupt-3",
+          "revoked.json.corrupt-1",
+          "revoked.json.corrupt-2",
+        ],
+        2,
+      ),
+    ).toEqual(["revoked.json.corrupt-1"]);
+  });
+
+  test("orders copies made in the same millisecond by their suffix", () => {
+    expect(
+      selectCorruptCopiesToDelete(
+        [
+          "revoked.json.corrupt-5-2",
+          "revoked.json.corrupt-5",
+          "revoked.json.corrupt-5-1",
+        ],
+        2,
+      ),
+    ).toEqual(["revoked.json.corrupt-5"]);
+  });
+
+  test("compares the times as numbers", () => {
+    expect(
+      selectCorruptCopiesToDelete(
+        ["revoked.json.corrupt-9", "revoked.json.corrupt-10"],
+        1,
+      ),
+    ).toEqual(["revoked.json.corrupt-9"]);
+  });
+
+  test("ignores other file names", () => {
+    expect(
+      selectCorruptCopiesToDelete(["revoked.json", "pin", "status.json"], 0),
+    ).toEqual([]);
+  });
+
+  test("returns nothing when there are not more copies than the limit", () => {
+    expect(selectCorruptCopiesToDelete(["revoked.json.corrupt-1"], 5)).toEqual(
+      [],
+    );
+  });
+});
+
+describe("parsePinSha", () => {
+  test("reads the sha of the pinned release", () => {
+    expect(parsePinSha({ sha: SHA_A })).toBe(SHA_A);
+  });
+
+  test("returns null for a pin without a sha", () => {
+    expect(parsePinSha({})).toBeNull();
+  });
+});
+
+describe("isReadablePin", () => {
+  test("rejects rolled_back_from that is not an array", () => {
+    expect(isReadablePin({ rolled_back_from: SHA_A })).toBe(false);
+  });
+
+  test("rejects rolled_back_from with an element that is not a sha", () => {
+    expect(isReadablePin({ rolled_back_from: [SHA_A, "x"] })).toBe(false);
+  });
+
+  test("rejects rolled_back_content with an element that is not a digest", () => {
+    expect(isReadablePin({ rolled_back_content: [HASH_1, "x"] })).toBe(false);
+  });
+
+  test("accepts well formed rolled_back_from and rolled_back_content", () => {
+    expect(
+      isReadablePin({
+        rolled_back_from: [SHA_A],
+        rolled_back_content: [HASH_1],
+      }),
+    ).toBe(true);
+  });
+
+  test("accepts a JSON object", () => {
+    expect(isReadablePin({ sha: SHA_A })).toBe(true);
+  });
+
+  test("rejects a value that could not be parsed", () => {
+    expect(isReadablePin(null)).toBe(false);
+  });
+
+  test("rejects an array", () => {
+    expect(isReadablePin([])).toBe(false);
+  });
+});
+
+describe("describeUnpinRefusal for an unreadable pin", () => {
+  test("offers --force", () => {
+    expect(
+      describeUnpinRefusal({ ok: false, reason: "pin_unreadable" }),
+    ).toContain("--force");
+  });
+
+  test("tells the operator to check the latest CI result first", () => {
+    expect(
+      describeUnpinRefusal({ ok: false, reason: "pin_unreadable" }),
+    ).toContain("Check the latest CI result first.");
+  });
+});
+
+describe("parseRevokedState", () => {
+  test("reads the shas and the content digests", () => {
+    expect(
+      parseRevokedState({ shas: [SHA_A, "x"], digests: [HASH_1, 1, "y"] }),
+    ).toEqual({ shas: [SHA_A], digests: [HASH_1] });
+  });
+
+  test("returns an empty state for a missing file", () => {
+    expect(parseRevokedState(null)).toEqual({ shas: [], digests: [] });
+  });
+
+  test("drops duplicates", () => {
+    expect(parseRevokedState({ shas: [SHA_A, SHA_A], digests: [] })).toEqual({
+      shas: [SHA_A],
+      digests: [],
+    });
+  });
+});
+
+describe("mergeRevokedState", () => {
+  test("adds the new shas and digests to the state", () => {
+    expect(
+      mergeRevokedState(
+        { shas: [SHA_A], digests: [HASH_1] },
+        [SHA_B],
+        [HASH_2],
+      ),
+    ).toEqual({ shas: [SHA_A, SHA_B], digests: [HASH_1, HASH_2] });
+  });
+
+  test("does not repeat an entry that is already recorded", () => {
+    expect(
+      mergeRevokedState(
+        { shas: [SHA_A], digests: [HASH_1] },
+        [SHA_A],
+        [HASH_1],
+      ),
+    ).toEqual({ shas: [SHA_A], digests: [HASH_1] });
+  });
+
+  test("keeps the newest digests beyond the limit", () => {
+    const digests = Array.from({ length: REVOKED_DIGEST_LIMIT }, (_, i) =>
+      i.toString(16).padStart(64, "0"),
+    );
+    expect(
+      mergeRevokedState({ shas: [], digests }, [], [HASH_2]).digests.at(-1),
+    ).toBe(HASH_2);
+  });
+
+  test("caps the number of digests", () => {
+    const digests = Array.from({ length: REVOKED_DIGEST_LIMIT }, (_, i) =>
+      i.toString(16).padStart(64, "0"),
+    );
+    expect(
+      mergeRevokedState({ shas: [], digests }, [], [HASH_2]).digests,
+    ).toHaveLength(REVOKED_DIGEST_LIMIT);
+  });
+});
+
+describe("isRevokedStateFile", () => {
+  test("accepts an object with shas and digests arrays", () => {
+    expect(isRevokedStateFile({ shas: [], digests: [] })).toBe(true);
+  });
+
+  test("rejects an object without digests", () => {
+    expect(isRevokedStateFile({ shas: [] })).toBe(false);
+  });
+
+  test("rejects an array", () => {
+    expect(isRevokedStateFile([])).toBe(false);
+  });
+
+  test("rejects a shas field that is not an array", () => {
+    expect(isRevokedStateFile({ shas: "x", digests: [] })).toBe(false);
+  });
+});
+
+describe("clearRevokedContent", () => {
+  test("removes the digest", () => {
+    expect(
+      clearRevokedContent(
+        { shas: [SHA_A], digests: [HASH_1, HASH_2] },
+        HASH_1,
+        [],
+      ).digests,
+    ).toEqual([HASH_2]);
+  });
+
+  test("removes the shas that have the cleared content", () => {
+    expect(
+      clearRevokedContent({ shas: [SHA_A, SHA_B], digests: [HASH_1] }, HASH_1, [
+        SHA_A,
+      ]).shas,
+    ).toEqual([SHA_B]);
+  });
+});
+
+describe("isRevokedRelease", () => {
+  const state = { shas: [SHA_A], digests: [contentDigestOf(HASH_2)] };
+
+  test("matches a revoked sha", () => {
+    expect(isRevokedRelease(SHA_A, null, state)).toBe(true);
+  });
+
+  test("matches a release with revoked files under a new sha", () => {
+    expect(
+      isRevokedRelease(
+        SHA_B,
+        manifestOf(SHA_B, { "index.html": HASH_2 }),
+        state,
+      ),
+    ).toBe(true);
+  });
+
+  test("does not match a release with other files", () => {
+    expect(
+      isRevokedRelease(
+        SHA_B,
+        manifestOf(SHA_B, { "index.html": HASH_1 }),
+        state,
+      ),
+    ).toBe(false);
+  });
+
+  test("does not match a release whose manifest could not be read", () => {
+    expect(isRevokedRelease(SHA_B, null, state)).toBe(false);
+  });
+});
+
+describe("selectRevokedReleases", () => {
+  test("returns the existing releases that are revoked by sha or by files", () => {
+    const manifests = new Map([
+      [SHA_A, manifestOf(SHA_A, { "index.html": HASH_1 })],
+      [SHA_B, manifestOf(SHA_B, { "index.html": HASH_2 })],
+      [SHA_C, manifestOf(SHA_C, { "index.html": HASH_1 })],
+    ]);
+    expect(
+      selectRevokedReleases([SHA_A, SHA_B, SHA_C], manifests, {
+        shas: [SHA_A],
+        digests: [contentDigestOf(HASH_2)],
+      }),
+    ).toEqual([SHA_A, SHA_B]);
+  });
+});
+
+describe("pruneRevokedState", () => {
+  test("drops the shas whose releases are gone", () => {
+    expect(
+      pruneRevokedState({ shas: [SHA_A, SHA_B], digests: [HASH_1] }, [SHA_B]),
+    ).toEqual({ shas: [SHA_B], digests: [HASH_1] });
+  });
+});
+
+describe("selectRevokedAssets", () => {
+  test("returns the assets used only by the revoked releases", () => {
+    expect(
+      selectRevokedAssets(
+        [manifestOf(SHA_B, { "index.html": HASH_1, "assets/bad.js": HASH_1 })],
+        [manifestOf(SHA_A, { "index.html": HASH_2, "assets/good.js": HASH_1 })],
+      ),
+    ).toEqual(["bad.js"]);
+  });
+
+  test("keeps an asset that a remaining release also uses", () => {
+    expect(
+      selectRevokedAssets(
+        [
+          manifestOf(SHA_B, {
+            "index.html": HASH_1,
+            "assets/shared.js": HASH_1,
+          }),
+        ],
+        [
+          manifestOf(SHA_A, {
+            "index.html": HASH_2,
+            "assets/shared.js": HASH_1,
+          }),
+        ],
+      ),
+    ).toEqual([]);
+  });
+
+  test("ignores a remaining manifest that could not be read", () => {
+    expect(
+      selectRevokedAssets(
+        [manifestOf(SHA_B, { "index.html": HASH_1, "assets/bad.js": HASH_1 })],
+        [null, manifestOf(SHA_A, { "index.html": HASH_2 })],
+      ),
+    ).toEqual(["bad.js"]);
+  });
+
+  test("still keeps the assets of the readable remaining manifests", () => {
+    expect(
+      selectRevokedAssets(
+        [manifestOf(SHA_B, { "index.html": HASH_1, "assets/bad.js": HASH_1 })],
+        [null, manifestOf(SHA_A, { "assets/bad.js": HASH_1 })],
+      ),
+    ).toEqual([]);
+  });
+
+  test("returns null when a revoked manifest could not be read", () => {
+    expect(
+      selectRevokedAssets(
+        [null],
+        [manifestOf(SHA_A, { "index.html": HASH_2, "assets/good.js": HASH_1 })],
+      ),
+    ).toBeNull();
   });
 });
 

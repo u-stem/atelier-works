@@ -1,5 +1,6 @@
 // console_fetcherの判定を、I/Oを持たない純粋関数にまとめる。
 // GitHub APIの応答とボリュームの状態を受け取り、何をするか(どの版を取り込み、何を消し、どこへ戻すか)だけを返す。
+import { createHash } from "node:crypto";
 import { isSafeReleasePath } from "./zip.ts";
 
 export const ARTIFACT_NAME = "console-dist";
@@ -363,9 +364,29 @@ export function appendHistory(
   return [...history, sha].slice(-limit);
 }
 
+/** 版の中身を表す文字列。`files`が同じ版は同じ文字列になる。 */
+function contentKey(manifest: ConsoleManifest): string {
+  return JSON.stringify([...manifest.files].sort());
+}
+
 /**
- * 消す`releases/<sha>`を返す。付け替えの履歴の新しい方から、重複を除いて`keep`版と、
- * 今の`current`(戻してpinした古い版を含む)を残す。履歴に無い版(付け替える前に止まったもの)は消す。
+ * 版の中身(`files`)のsha256。commitのshaには依らず、`files`が同じ版は同じ値になる。
+ * 戻した元の版の中身をpinに記録し、後から同じ中身の版を見分けるために使う。
+ */
+export function contentDigest(manifest: ConsoleManifest): string {
+  return createHash("sha256").update(contentKey(manifest)).digest("hex");
+}
+
+/**
+ * 消す`releases/<sha>`を返す。付け替えの履歴の新しい方から、`keep`個の「中身の違う版」と、
+ * 今の`current`(戻してpinした古い版を含む)を残す。
+ * Consoleに触れないマージでも中身の同じ版ができるので、`files`が同じ版は1つと数える
+ * (数えないと、無関係なマージが続いたとき、戻せる版が履歴から押し出される)。
+ * 数えた中身と同じ版は、数が`keep`を超えても残す。
+ * 残っていない版は数えない。
+ * マニフェストを読めない版は、比べられないので、それぞれ別の版と数える。
+ * 中身の同じ版を別の版と数える側に倒すので、残る版が多くなる方にずれる。
+ * 履歴に無い版(付け替える前に止まったもの)は消す。
  * `current`のリンクを読めない(`unknown`)ときは、どの版を配信中か分からないので何も消さない。
  */
 export function selectReleasesToDelete(
@@ -373,16 +394,22 @@ export function selectReleasesToDelete(
   history: readonly string[],
   current: CurrentLink,
   keep: number,
+  manifests: ReadonlyMap<string, ConsoleManifest | null>,
 ): string[] {
   if (current.kind === "unknown") return [];
+  const present = new Set(existing);
   const kept = new Set<string>();
-  for (
-    let index = history.length - 1;
-    index >= 0 && kept.size < keep;
-    index--
-  ) {
+  const versions = new Set<string>();
+  for (let index = history.length - 1; index >= 0; index--) {
     const sha = history[index];
-    if (sha !== undefined) kept.add(sha);
+    if (sha === undefined || !present.has(sha)) continue;
+    const manifest = manifests.get(sha) ?? null;
+    const key = manifest === null ? `sha:${sha}` : contentKey(manifest);
+    if (!versions.has(key)) {
+      if (versions.size >= keep) continue;
+      versions.add(key);
+    }
+    kept.add(sha);
   }
   if (current.kind === "release") kept.add(current.sha);
   return existing.filter((sha) => !kept.has(sha));
@@ -431,8 +458,20 @@ export function selectAssetsToDelete(
     .map((asset) => asset.name);
 }
 
+/** 2つのマニフェストの`files`(パスとsha256の対応)が過不足なく同じかを返す。 */
+function sameFiles(a: ConsoleManifest, b: ConsoleManifest): boolean {
+  if (a.files.size !== b.files.size) return false;
+  for (const [path, hash] of a.files) {
+    if (b.files.get(path) !== hash) return false;
+  }
+  return true;
+}
+
 /**
- * 戻す先を返す。履歴の中で今の版より前に付け替えた版のうち、まだ残っている最も新しいもの。
+ * 戻す先を返す。履歴の中で今の版より前に付け替えた版のうち、まだ残っていて、
+ * 今の版と`files`の中身が違う最も新しいもの。
+ * Consoleに触れないマージでも版ができるので、中身が同じ版へ戻しても何も変わらない。
+ * どちらかのマニフェストを読めない版は、比べられないので飛ばさない。
  * 戻した後にもう一度呼ぶと、さらに1つ前を返す。
  * これは戻す操作とpinを外す操作が履歴に足さないことを前提にする。今の版は履歴の最後の出現で
  * 位置を決めるので、戻した版を足すと、次に戻すときにその前に付け替えた新しい版を返してしまう。
@@ -443,16 +482,328 @@ export function selectRollbackTarget(
   history: readonly string[],
   currentSha: string | null,
   existing: ReadonlySet<string>,
+  manifests: ReadonlyMap<string, ConsoleManifest | null>,
 ): string | null {
   if (currentSha === null) return null;
+  const currentManifest = manifests.get(currentSha) ?? null;
   const found = history.lastIndexOf(currentSha);
   const position = found === -1 ? history.length : found;
   for (let index = position - 1; index >= 0; index--) {
     const sha = history[index];
-    if (sha !== undefined && sha !== currentSha && existing.has(sha))
-      return sha;
+    if (sha === undefined || sha === currentSha || !existing.has(sha)) continue;
+    const candidate = manifests.get(sha) ?? null;
+    if (
+      currentManifest !== null &&
+      candidate !== null &&
+      sameFiles(currentManifest, candidate)
+    ) {
+      continue;
+    }
+    return sha;
   }
   return null;
+}
+
+/**
+ * `sha`の版と、それと`files`の中身が同じ版を返す(`sha`自身を含む)。
+ * 戻すときに、問題の版と同じassetsを指す版も一緒に外すために使う。
+ * `sha`のマニフェストを読めないときは、比べられないので`sha`だけを返す。
+ */
+export function selectIdenticalReleases(
+  sha: string,
+  manifests: ReadonlyMap<string, ConsoleManifest | null>,
+): string[] {
+  const target = manifests.get(sha) ?? null;
+  const identical = [sha];
+  if (target === null) return identical;
+  for (const [other, manifest] of manifests) {
+    if (other !== sha && manifest !== null && sameFiles(target, manifest)) {
+      identical.push(other);
+    }
+  }
+  return identical;
+}
+
+/** pinの`rolled_back_from`(戻した元の版のsha)を読む。shaの形でない要素は捨て、無ければ空にする。 */
+export function parsePinRevoked(value: unknown): string[] {
+  if (!isRecord(value)) return [];
+  return parseHistory(value.rolled_back_from);
+}
+
+/** pinの`rolled_back_content`(戻した元の版の中身のsha256)を読む。形の違う要素は捨て、無ければ空にする。 */
+export function parsePinContent(value: unknown): string[] {
+  if (!isRecord(value) || !Array.isArray(value.rolled_back_content)) return [];
+  return value.rolled_back_content.filter(
+    (item): item is string => typeof item === "string" && SHA256_HEX.test(item),
+  );
+}
+
+/**
+ * 戻した元の版の記録(`revoked.json`)。`pin`を外しても残り、戻した元の版が
+ * 後から戻し先に選ばれたり、保持の対象として残ったりしないようにする。
+ */
+export type RevokedState = {
+  /** 戻した元の版のsha。消えた版は整理で外す。 */
+  readonly shas: readonly string[];
+  /** 戻した元の版の中身(`files`のsha256)。同じ中身の新しい版を見分けるために残す。 */
+  readonly digests: readonly string[];
+};
+
+/** 記録する中身のsha256の上限。超えたら古いものから捨てる。 */
+export const REVOKED_DIGEST_LIMIT = 100;
+
+/** `revoked.json`の中身が記録の形(`shas`と`digests`の配列を持つオブジェクト)かを返す。 */
+export function isRevokedStateFile(value: unknown): boolean {
+  return (
+    isRecord(value) && Array.isArray(value.shas) && Array.isArray(value.digests)
+  );
+}
+
+/** `revoked.json`の中身を読む。形の違う要素は捨て、読めなければ空にする。 */
+export function parseRevokedState(value: unknown): RevokedState {
+  if (!isRecord(value)) return { shas: [], digests: [] };
+  const digests = Array.isArray(value.digests)
+    ? value.digests.filter(
+        (item): item is string =>
+          typeof item === "string" && SHA256_HEX.test(item),
+      )
+    : [];
+  return {
+    shas: [...new Set(parseHistory(value.shas))],
+    digests: [...new Set(digests)],
+  };
+}
+
+/** 記録に`shas`と`digests`を足す。すでにあるものは重ねず、中身は`REVOKED_DIGEST_LIMIT`個まで残す。 */
+export function mergeRevokedState(
+  state: RevokedState,
+  shas: readonly string[],
+  digests: readonly string[],
+): RevokedState {
+  return {
+    shas: [...new Set([...state.shas, ...shas])],
+    digests: [...new Set([...state.digests, ...digests])].slice(
+      -REVOKED_DIGEST_LIMIT,
+    ),
+  };
+}
+
+/**
+ * 記録から`digest`を外す。同じ中身の版(`shas`)も外す。
+ * 戻した元の版と同じ中身が、`main`の最新の成功した実行として意図して配信し直されたときに使う。
+ */
+export function clearRevokedContent(
+  state: RevokedState,
+  digest: string,
+  shas: readonly string[],
+): RevokedState {
+  return {
+    shas: state.shas.filter((sha) => !shas.includes(sha)),
+    digests: state.digests.filter((item) => item !== digest),
+  };
+}
+
+/** 版が戻した元の版かを返す。shaが記録にあるか、マニフェストを読めて中身が記録にあるとき。 */
+export function isRevokedRelease(
+  sha: string,
+  manifest: ConsoleManifest | null,
+  state: RevokedState,
+): boolean {
+  if (state.shas.includes(sha)) return true;
+  return manifest !== null && state.digests.includes(contentDigest(manifest));
+}
+
+/** 残っている版のうち、戻した元の版を返す。 */
+export function selectRevokedReleases(
+  existing: readonly string[],
+  manifests: ReadonlyMap<string, ConsoleManifest | null>,
+  state: RevokedState,
+): string[] {
+  return existing.filter((sha) =>
+    isRevokedRelease(sha, manifests.get(sha) ?? null, state),
+  );
+}
+
+/** 消えた版のshaを記録から外す。中身は、同じ中身の新しい版を見分けるために残す。 */
+export function pruneRevokedState(
+  state: RevokedState,
+  existing: readonly string[],
+): RevokedState {
+  const present = new Set(existing);
+  return {
+    shas: state.shas.filter((sha) => present.has(sha)),
+    digests: state.digests,
+  };
+}
+
+/**
+ * 戻した元の版だけが参照する共有の`assets/`のファイル名(`assets/`からの相対名)を返す。
+ * 戻した元の版のマニフェストを読めないときは、何を消すか分からないので`null`を返す。
+ * 呼び出し側は、`null`のときに版を消さず、次の回に確かめ直す。
+ * 残る版のうち読めないマニフェストは無視し、読めた残る版が参照するassetsだけを残す。
+ * 配信中の版のマニフェストを読めないときは、呼び出し側が先に止める。
+ */
+export function selectRevokedAssets(
+  revoked: readonly (ConsoleManifest | null)[],
+  remaining: readonly (ConsoleManifest | null)[],
+): string[] | null {
+  const candidates = referencedAssetNames(revoked);
+  if (candidates === null) return null;
+  const stillUsed = referencedAssetNames(
+    remaining.filter((manifest) => manifest !== null),
+  );
+  if (stillUsed === null) return null;
+  return [...candidates].filter((name) => !stillUsed.has(name));
+}
+
+/** `unpin`のオプション。 */
+export type UnpinOptions = {
+  /** 最新の実行が戻した元の版かを確かめない。 */
+  readonly force: boolean;
+  /** 戻した元の版を消せていなくても、pinを外す。 */
+  readonly ignoreCleanup: boolean;
+};
+
+/** `unpin`の引数を読む。知らない引数があれば`null`。 */
+export function parseUnpinFlags(args: readonly string[]): UnpinOptions | null {
+  let force = false;
+  let ignoreCleanup = false;
+  for (const arg of args) {
+    if (arg === "--force") force = true;
+    else if (arg === "--ignore-cleanup") ignoreCleanup = true;
+    else return null;
+  }
+  return { force, ignoreCleanup };
+}
+
+/** `unpin`の引数のうち、知らないものを返す。 */
+export function findUnknownUnpinFlags(args: readonly string[]): string[] {
+  return args.filter((arg) => arg !== "--force" && arg !== "--ignore-cleanup");
+}
+
+/**
+ * pinの中身を読めたかを返す。JSONのオブジェクトで、`rolled_back_from`と`rolled_back_content`は、
+ * あるなら全要素がshaとsha256の配列でなければならない。読めない`pin`は、何を戻したか分からない。
+ * 形が違う要素を捨てて続けると、確かめるべき版を黙って落とすため、読めないものとして扱う。
+ */
+export function isReadablePin(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  const from = value.rolled_back_from;
+  const content = value.rolled_back_content;
+  const fromOk =
+    from === undefined ||
+    (Array.isArray(from) &&
+      from.every((item) => typeof item === "string" && isCommitSha(item)));
+  const contentOk =
+    content === undefined ||
+    (Array.isArray(content) &&
+      content.every(
+        (item) => typeof item === "string" && SHA256_HEX.test(item),
+      ));
+  return fromOk && contentOk;
+}
+
+/** pinの`sha`(戻し先の版)を読む。無ければ`null`。 */
+export function parsePinSha(value: unknown): string | null {
+  if (!isRecord(value)) return null;
+  const sha = value.sha;
+  return typeof sha === "string" && isCommitSha(sha) ? sha : null;
+}
+
+/** 壊れた`revoked.json`の控えを残す数。 */
+export const CORRUPT_COPIES_TO_KEEP = 5;
+
+const CORRUPT_COPY = /^revoked\.json\.corrupt-(\d+)(?:-(\d+))?$/;
+
+/**
+ * 壊れた`revoked.json`の控え(`revoked.json.corrupt-<時刻>`、同じ時刻なら`-<番号>`付き)のうち、
+ * 新しい方から`keep`個を残した残りを、消す名前として返す。ほかの名前は返さない。
+ */
+export function selectCorruptCopiesToDelete(
+  names: readonly string[],
+  keep: number,
+): string[] {
+  const copies: { name: string; epoch: number; attempt: number }[] = [];
+  for (const name of names) {
+    const match = CORRUPT_COPY.exec(name);
+    if (match === null) continue;
+    copies.push({
+      name,
+      epoch: Number(match[1]),
+      attempt: Number(match[2] ?? 0),
+    });
+  }
+  copies.sort((a, b) => a.epoch - b.epoch || a.attempt - b.attempt);
+  return copies.slice(0, Math.max(0, copies.length - keep)).map((c) => c.name);
+}
+
+/** `unpin`がpinを外さなかった理由。 */
+export type UnpinRefusal =
+  | { readonly ok: false; readonly reason: "pin_unreadable" }
+  | {
+      readonly ok: false;
+      readonly reason: "latest_run_is_revoked";
+      readonly sha: string;
+    }
+  | {
+      readonly ok: false;
+      readonly reason: "latest_run_has_revoked_content";
+      readonly sha: string;
+    }
+  | { readonly ok: false; readonly reason: "lookup_failed" }
+  | {
+      readonly ok: false;
+      readonly reason: "content_undeterminable";
+      readonly sha: string;
+    }
+  | { readonly ok: false; readonly reason: "cleanup_incomplete" };
+
+export type UnpinResult = { readonly ok: true } | UnpinRefusal;
+
+const FORCE_HINT =
+  'To unpin without these checks, run "mise run console:unpin -- --force".';
+const IGNORE_CLEANUP_HINT =
+  'To unpin without removing it, run "mise run console:unpin -- --ignore-cleanup".';
+
+/** pinを外さなかったときに、運用者に見せる文面(理由と次の操作)を返す。 */
+export function describeUnpinRefusal(refusal: UnpinRefusal): string {
+  switch (refusal.reason) {
+    case "pin_unreadable":
+      return `Not unpinned: the pin file could not be parsed, so it is unknown which release you rolled back from and whether unpinning would serve it again. Check the latest CI result first. ${FORCE_HINT}`;
+    case "latest_run_is_revoked":
+      return `Not unpinned: the latest successful run on main (${refusal.sha}) is the release you rolled back from, so unpinning would serve it again. Merge a fix into main, wait until its CI succeeds, and run this again. ${FORCE_HINT}`;
+    case "latest_run_has_revoked_content":
+      return `Not unpinned: the latest successful run on main (${refusal.sha}) has the same files as the release you rolled back from, so unpinning would serve the same Console again. Merge a fix that changes console/ into main, wait until its CI succeeds, and run this again. ${FORCE_HINT}`;
+    case "lookup_failed":
+      return `Not unpinned: could not look up the latest successful run on main, so it is unknown whether unpinning would serve the release you rolled back from again. Check the GitHub settings and the network, then run this again. ${FORCE_HINT}`;
+    case "content_undeterminable":
+      return `Not unpinned: could not read the files of the latest successful run on main (${refusal.sha}), so it is unknown whether they match the release you rolled back from. Check the GitHub settings and the network, then run this again. ${FORCE_HINT}`;
+    case "cleanup_incomplete":
+      return `Not unpinned: the release you rolled back from could not be removed yet. See the revoked_cleanup_* events in this command's output or in the console_fetcher logs, fix the cause, and run this again. ${IGNORE_CLEANUP_HINT}`;
+  }
+}
+
+/**
+ * `rollback`の後に、運用者に伝えることがあれば文面を返す。無ければ`null`。
+ * 戻した元の版の削除が終わっていないこと(`cleanup`)と、その版の中身をpinに記録できなかったこと
+ * (`contentRecorded`)を伝える。
+ */
+export function describeRollbackNotice(
+  cleanup: "done" | "pending",
+  contentRecorded: boolean,
+): string | null {
+  const notices: string[] = [];
+  if (cleanup === "pending") {
+    notices.push(
+      "The rollback succeeded, but removing the release rolled back from did not finish. console_fetcher resumes the removal within 5 minutes.",
+    );
+  }
+  if (!contentRecorded) {
+    notices.push(
+      "The files of the release rolled back from could not be recorded in the pin, so unpinning cannot tell whether a later commit has the same files. Check the latest build before unpinning.",
+    );
+  }
+  return notices.length === 0 ? null : notices.join("\n");
 }
 
 /**

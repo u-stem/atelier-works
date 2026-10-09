@@ -1,11 +1,18 @@
 // console_fetcherの入口。引数で動作を選ぶ。
 //   loop(既定): 起動直後と、その後5分ごとに取り込む。
 //   once: 1回だけ取り込んで終わる。
-//   rollback: currentを直前の版に戻してpinを置く(mise run console:rollback)。
-//   unpin: pinを外す(mise run console:unpin)。
+//   rollback: currentを中身の違う直前の版に戻してpinを置き、戻した元の版を消す(mise run console:rollback)。
+//   unpin: pinを外す(mise run console:unpin)。戻した元の版が再び配信されうるときは外さない。
+//          `--force`は最新の実行の確認を、`--ignore-cleanup`は削除の確認を飛ばす。
 // ログは1行1つのJSONで標準出力に出す。トークンは出さない。
 // どの動作もボリュームのロックを取ってから行い、同時に動かない。
-import { parseFetcherConfig } from "./decide.ts";
+import {
+  describeRollbackNotice,
+  describeUnpinRefusal,
+  findUnknownUnpinFlags,
+  parseFetcherConfig,
+  parseUnpinFlags,
+} from "./decide.ts";
 import {
   type FetchLike,
   type LogFields,
@@ -62,24 +69,49 @@ async function main(): Promise<void> {
     }
   }
   if (command === "rollback") {
-    const locked = await withLock(ROOT, now, () => rollback(ROOT, now));
+    const locked = await withLock(ROOT, now, () => rollback(ROOT, now, log));
     if (!locked.acquired) {
       console.error(BUSY_MESSAGE);
       process.exit(1);
     }
     if (!locked.value.ok) {
-      console.error("No previous release to roll back to.");
+      console.error(
+        "No previous release with different content to roll back to.",
+      );
       process.exit(1);
     }
     console.log(
       `Rolled back to ${locked.value.sha} and pinned it. Run "mise run console:unpin" to resume automatic updates.`,
     );
+    const notice = describeRollbackNotice(
+      locked.value.cleanup,
+      locked.value.contentRecorded,
+    );
+    if (notice !== null) console.log(notice);
     return;
   }
   if (command === "unpin") {
-    const locked = await withLock(ROOT, now, () => unpin(ROOT));
+    const options = parseUnpinFlags(process.argv.slice(3));
+    if (options === null) {
+      console.error(
+        `Unknown option: ${findUnknownUnpinFlags(process.argv.slice(3)).join(" ")} (expected --force or --ignore-cleanup)`,
+      );
+      process.exit(2);
+    }
+    const config = parseFetcherConfig({
+      CONSOLE_GITHUB_TOKEN: process.env.CONSOLE_GITHUB_TOKEN,
+      CONSOLE_GITHUB_REPO: process.env.CONSOLE_GITHUB_REPO,
+    });
+    const locked = await withLock(ROOT, now, () =>
+      unpin({ fetch: fetchFromNetwork, now, root: ROOT, config, log }, options),
+    );
     if (!locked.acquired) {
       console.error(BUSY_MESSAGE);
+      process.exit(1);
+    }
+    const result = locked.value;
+    if (!result.ok) {
+      console.error(describeUnpinRefusal(result));
       process.exit(1);
     }
     console.log(

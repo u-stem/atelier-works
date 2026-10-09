@@ -599,18 +599,101 @@ mise exec -- docker compose -f infra/docker-compose.yml restart caddy
 mise exec -- docker compose -f infra/docker-compose.yml logs --tail 50 console_fetcher
 ```
 
-版は直近の3つを残す。
+版は、配信するファイルの中身(`manifest.json`の`files`)が違うものを3つまで残す。
+版は`main`へのpushのたびに作られ、`console/`に触れないpushでできた版は中身が同じなので、1つと数える。
+無関係なマージが続いても、戻せる版を押し出さないためである。
+数える対象は、直近20回のpushの範囲である(`history.json`が覚えている回数)。
 共有の`assets/`は、残した版から参照されず14日を超えたファイルを消す。
 
 新しい版に問題があれば、直前の版に戻す。
 
-1. `mise run console:rollback`を実行する。取り込みの最中なら「更新中」と出て止まるので、少し待ってやり直す。
+1. `mise run console:rollback`を実行する。取り込みの最中なら`console_fetcher is updating the console right now.`と出て止まるので、少し待ってやり直す。
 2. 戻すと`pin`が置かれ、自動の付け替えが止まる。もう一度実行すると、さらに1つ前に戻る。
-3. 直ったら`mise run console:unpin`で`pin`を外す。5分以内に最新の版へ戻る。
+3. `main`に修正を入れてCIが成功したら、`mise run console:unpin`で`pin`を外す。5分以内に最新の版へ戻る。
 
-版は`main`へのpushのたびに作られる。
-Consoleを変えていないpushでも作られ、直近の3つしか残らないので、戻せるのはその中だけである。
-それより前の状態に戻すには、`main`で該当のcommitをrevertし、CIを動かす。
+戻し先は、中身が今の版と違い、マニフェストと`assets/`のファイルが揃っている最も新しい版である。
+中身が同じ版へ戻しても、何も変わらないためである。
+揃っていない版は、配信するとページが壊れるので選ばない。
+そのような版が残っていないと、`No previous release with different content to roll back to.`と出て止まる。
+この場合と、残っている版より前に戻したい場合は、`main`で該当のcommitをrevertし、CIを動かす。
+
+戻すと、戻した元の版と、それと中身が同じ版を消す。
+その版だけが参照する共有の`assets/`のファイルも、更新日時にかかわらず消す。
+`pin`の間も、問題の版のscriptを`/console/assets/`から読めるままにしないためである。
+消す版のshaは`pin`の`rolled_back_from`に、戻した元の版の中身(`files`のsha256)は`rolled_back_content`に記録する。
+消し終わらなかったときは、`console:rollback`が`The rollback succeeded, but removing ...`で始まる文を出す。
+続きは`console_fetcher`が次の取り込みで消す。
+戻した元の版のshaと中身は、`pin`とは別に、ボリュームの`revoked.json`にも記録する。
+この記録は`pin`を外しても残り、記録にある版は、`console:rollback`の戻し先に選ばれない。
+取り込みの整理は、保持の数え方にかかわらず、記録にある版を先に消す(配信中の版は消さない)。
+消えた版のshaは、整理が記録から外す。
+`rolled_back_from`を持たない`pin`では、戻した元の版は消えない。
+消した版のページを開いたままのブラウザは、assetsを読み込めなくなるので、再読み込みが要る。
+
+`revoked.json`の扱いは次のとおり。
+
+- 中身が壊れているか形が違うときは、`revoked_state_unreadable`をログに出す。
+  壊れたファイルは`revoked.json.corrupt-<epochミリ秒>`(同じ時刻なら`-<番号>`付き)へ移し、新しい方から5個まで残す。
+  空の記録で続けるので、戻す操作と整理は止まらない。
+- 権限やディレクトリになっているなど、読む操作が失敗したときは、`revoked_state_read_failed`をログに出す。
+  中身の破損ではないので、ファイルは移さない。
+  空の記録で続けるので、戻す操作と整理は止まらない。
+  その回は、記録による除外と削除が効かない。
+  `console:unpin`は、記録し直す段階で同じ読む失敗に当たり、`--force`を付けても失敗して`pin`を残す。
+  先に権限などの原因を直す。
+- `console:rollback`が記録を書けなかったときも、戻す操作は成功する。
+  `revoked_record_failed`をログに出す。
+  同じ内容を`pin`が持ち、`console:unpin`が記録し直すためである。
+- `console:unpin`が記録を書けなかったときは、失敗を出して`pin`を外さない。
+  原因を直してやり直す。
+- 戻した元の版と同じ中身が、`main`の最新の成功した実行として配信し直されると、その中身は記録から外れる。
+  `console:unpin --force`で外して`console_fetcher`が取り込んだ場合も同じである。
+  外れたときは`revoked_digest_cleared`をログに出す。
+  CIを通った中身を意図して配信し直したものとして扱うためで、記録を手で編集する必要は無い。
+- 外す処理が失敗したときは、`revoked_digest_clear_failed`をログに出す。
+  記録は残るので、その中身の版は戻し先に選ばれず、配信中の版でなくなると整理が消す。
+  原因を直すと、次にその中身が配信されるときに外れる。
+
+戻した元の版のマニフェストを読めないと、その版の中身を`pin`に記録できない。
+このとき`console:rollback`は、`The files of the release rolled back from could not be recorded`で始まる文を出す。
+この`pin`は、`console:unpin`がshaだけを照らすので、外す前に最新のCIの結果を確かめる。
+
+`pin`を外すと、`console_fetcher`は最新の成功した実行を取り込む。
+その実行が戻した元の版と同じ中身だと、問題の版が再び配信される。
+`console/`に触れないマージでも、同じ中身の版が新しいcommitで作られるので、commitのshaだけでは見分けられない。
+`console:unpin`は、最新の成功した実行のshaと、その実行の`files`のsha256を、`pin`の記録と`revoked.json`の記録を合わせたものと照らす。
+`console:rollback`を重ねて`pin`が書き直されても、前に戻した版を落とさないためである。
+`revoked.json`の記録は、その中身が配信し直されるまで残る。
+中身(sha256)の記録は、整理で外れない。
+以前に戻した中身を意図して配信し直すときの出口は、`--force`である。
+次の場合は`pin`を外さず、理由を出して止まる。
+
+| 状況 | 人がすること |
+| --- | --- |
+| `pin`を読めない(JSONでない、`rolled_back_from`や`rolled_back_content`の要素がshaやsha256の形でない) | 最新のCIの結果を確かめ、`--force`で外す |
+| 最新の成功した実行のshaが、戻した元の版のshaである | 修正を`main`に入れ、そのCIが成功してからやり直す |
+| 最新の成功した実行の`files`が、戻した元の版と同じである | `console/`を変える修正を`main`に入れ、そのCIが成功してからやり直す |
+| 最新の実行を調べられない(トークンや`CONSOLE_GITHUB_REPO`の不備、ネットワークの失敗) | 原因を直してやり直す |
+| 最新の実行の`files`を調べられない(成果物の取得か検証に失敗) | 原因を直してやり直す |
+| 戻した元の版を消せていない | このコマンドの出力か`console_fetcher`のログの`revoked_cleanup_skipped`、`revoked_cleanup_failed`を確かめ、原因を直してやり直す |
+
+`pin`と`revoked.json`のどちらにも中身の記録が無いときは、shaだけを照らす。
+戻した元の版の記録がどちらにも無いときは、照らす版が無いので、問い合わせずに外す。
+`pin`の`sha`と配信中の版が違うときは、取り込みが`pin_mismatch`をログに出す。
+これは検出だけで、状態は変えない。
+違いが続く間は、取り込みのたびに出る。
+`pin`を読めないときは、`pin_read_failed`をログに出し、状態は`pinned`のままにする。
+
+確認を飛ばすオプションは2つある。
+`mise run console:unpin -- --force`は、`pin`と最新の実行についての確認(上の表の前の5行)を飛ばす。
+問題の版が再び配信されるのを承知の上で使う。
+`mise run console:unpin -- --ignore-cleanup`は、戻した元の版を消せていない確認を飛ばす。
+`--force`だけでは、この確認は飛ばない。
+`--ignore-cleanup`で外しても、消せていない版は`revoked.json`に記録が残る。
+`console_fetcher`は、次の取り込みの整理でその版を消し、`console:rollback`もその版を戻し先にしない。
+手で消す必要は無い。
+消せない原因は、上の表の最後の行と同じ見方で確かめる。
+ログに`revoked_cleanup_skipped`が続くときは、原因を直す。
 
 主な`error`と対処は次のとおり。
 
