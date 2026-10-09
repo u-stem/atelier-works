@@ -218,6 +218,7 @@ ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者�
 - `main`にpushできる者(FactoryのPATを含む)が書いたコードは、人のレビューを経ずに運用者のブラウザで動きうる。今のGitHubのプランではこのリポジトリにbranch protection(rulesets)を設定できず、`main`へのpushを人のレビュー済みのものに限れない。Consoleの変更のレビューは、Windmillの管理者権限を持つコードのレビューとして行う。
 - CIの組み立ての途中で動くもの(miseが入れるbunなどのツール、Viteのプラグインなどの依存)が侵害されると、出力が改ざんされうる。`digest`とマニフェストが保証するのは、GitHubのCIが作ったものであることまでである。
 - 信頼の境界は`console`ジョブだけでなく、`ci.yml`のすべてのジョブとそこで動くツールや依存に及ぶ。同じ実行のほかのジョブも、ランナーから取れるトークンで成果物`console-dist`を上げ直せるためである。成果物は`overwrite: true`で上げ、`console_fetcher`はその名前の`id`が最大の成果物を取り込む。
+- draw.ioのビューアも、この成果物の差し替えの範囲に入る。ビューアは`console`ジョブが取得して、同じ成果物に入れるためである。
 - `Sec-Fetch-Site`をブラウザが送るのは、信頼できるオリジン(localhostかHTTPS)のときだけである。`WM_BIND`を外向きにしてHTTPで公開すると、この防御は効かない。外向きにするならHTTPSで公開する。
 - `Sec-Fetch-Site`の規則が効くのは`/api/*`だけである。`windmill_extra`の経路(`/ws/*`、`/ws_mp/*`、`/ws_debug/*`)には効かない。
 - 共有の`assets/`には古い版のファイルも残る。その間は`script-src`で読み込めるので、XSSの足がかり(script gadget)に使われうる。
@@ -466,17 +467,58 @@ bunかnodeの起動そのものが止まったときだけ、タイムアウト�
 
 フックは誤操作を止める仕組みで、意図した迂回は防げない。
 
-## draw.ioビューアーのプライバシー
+## draw.ioの図の描画
 
 要件定義の図(`<name>.drawio`)は、生のXMLとして、要件定義のファイルと同じworker専用のディレクトリ(`requirement_drafts.doc_dir`の下)に書く。DBの`requirement_drafts.diagrams`列には、`{name, file}`の参照だけを入れる。図の内容とURLは、GitHubのIssueとPRのコメントにも、Discordの通知にも投稿しない。
 
 Consoleは、`f/factory/steps/console_query.ts`の`requirements_doc`ビューで、`requirements.md`と各図のファイルを読み戻す。読む前に、`doc_dir`が`REQUIREMENTS_BASE_DIR`の下にあることを確かめる。図のXMLはWindmillのジョブ結果としてConsoleのフロントエンドに渡るだけで、GitHubとDiscordには送らない。
 
-Consoleの`components/DrawioViewer.tsx`は、diagrams.netの公式の埋め込み用ビューアをページに一度だけ読み込む。スクリプトのURLは`https://viewer.diagrams.net/js/viewer-static.min.js`である。XMLは`<div class="mxgraph">`の`data-mxgraph`にJSONとして渡し、ブラウザの中で描画する。XMLは外部のサーバーに送らない。外部との通信は、スクリプト1つの取得だけである。
-
-ConsoleのCSPがCDNからのスクリプトを拒否する場合は、`viewer-static.min.js`(Apache-2.0)をアプリのファイルとして同梱し、importする必要がある。この同梱は実装していない。
-
 生成した図のXMLは、`f/factory/lib/drawio.ts`の`validateDrawioXml`で検査する。
+
+### 隔離したiframeで描く
+
+ConsoleのSPAは、図を最上位のページでは描かず、隔離したiframeの中で描く。
+図のXMLはIssue本文に由来する信用できない入力で、ビューアは第三者の大きなコードだからである。
+最上位のページで描くと、ビューアの欠陥が、Windmillを管理者として操作できるXSSになる。
+実装は`console/src/components/drawio/DrawioFrame.tsx`と、`console/public/drawio.html`である。
+`DrawioFrame`はどの画面にも組み込まれていない。Consoleの画面で図を描くのは、Windmillのraw app(Factory Console)のコンポーネントである。
+仕組みは[Consoleの配信の仕様](internals/console.md)の「draw.ioの図」にある。
+
+| 守ること | 内容 |
+| --- | --- |
+| ビューアを同梱する | CDNからは読まない。CIが、版を固定したURLからビューアを取得し、固定のsha256と照合してから、配信物の`drawio/`に置く。照合に失敗すると、CIが止まる |
+| 本体から読めない場所に置く | ビューアと受け口は、Console本体のscriptの置き場所`/console/assets/`ではなく`/console/drawio/`に置く。本体のCSPは`/console/assets/`だけを許すので、本体にHTMLが注入されても、信頼されたオリジンでビューアを動かせない |
+| 取得元を固定する | 固定する値は`console/drawio-viewer.json`にある。URLはbranchやtagではなくcommitを指す。この固定ファイルと、固定を強制するスクリプトは保護パスで、人のレビューを経ずには変えられない |
+| 不透明なオリジンで動かす | iframeの`sandbox`は`allow-scripts`だけにする。`allow-same-origin`が無いので、iframeはCookieにも、Windmillにも、親のDOMにも届かない。ポップアップと最上位のページの遷移も許さない。`/console/drawio.html`のCSPにも`sandbox allow-scripts`を付け、ページを直接開いても不透明なオリジンで動かす |
+| 外への取得をCSPで止める | `/console/drawio.html`だけに、別のCSPを付ける。scriptは`/console/drawio/`の同梱のファイル(ビューアと受け口)に限り、`connect-src`、画像、フォント、フォームの送信先は外を許さない。XMLが外部の画像やフォントを指していても、取得されない |
+| XMLを1回だけ送る | 親は、XMLごとにiframeを作り直す。1つのiframeに送るのは、最初のloadの後の1回だけである。2回目のloadは、iframeが別の文書へ遷移したことを表す。親はiframeを`about:blank`にして表示を止め、以後そのiframeのメッセージを受けない。遷移した先へ、次のXMLは渡らない。この停止は最善の努力で、loadが起きない遷移は止められない。その場合も、親が受ける値は、数値と固定の失敗の種類だけである |
+| メッセージを絞る | iframeは、親のwindowからの描画の依頼を最初の1回だけ受ける。親は、iframeのwindowからの高さと失敗の種類(固定の3つ)だけを受け、高さは数値に絞って80〜1600pxに収める。256KBを超えるXMLは送らない |
+| リンクを開かない | ツールバー、lightbox、図のリンクを無効にする。ページ内のクリックとauxclickの既定の動作は、押された要素を問わず止める |
+
+固定するsha256は、commit固定のURLから取得したバイト列の値である。
+版を上げるときは、新しいcommitのURLから同じ手順で取り直す。
+手順は[Consoleの配信の仕様](internals/console.md)の「draw.ioの図」にある。
+
+XMLをiframeへ送るときの`targetOrigin`は`"*"`にする。
+不透明なオリジンには、送り先のオリジンを指定する方法が他に無いためである。
+送るのは図のXMLだけなので、宛先を絞れなくても許容する。
+
+サーバー側で図の`link`属性と`html=1`を落とす処理は入れない。
+iframeの中で動くscriptが取れるのは、そのiframeが受け取った図のXMLだけだからである。
+リンクを押せず、外への取得はCSPが止める。
+XMLを加工すると、図の見た目が変わり、ビューアの解釈との差が新しい抜け道にもなる。
+
+残るリスクは次のとおりである。
+
+- ビューアの欠陥でiframeの中でscriptが動くと、iframe自身を別のURLへ遷移させ、受け取ったXMLをURLに載せて外のサーバーへ送れる。CSPは、ページの遷移を止められない。
+  送った1回のXMLは外へ出せる。
+  次のXMLを渡さないので、被害は、そのiframeが受け取った図1枚に限る。
+  CookieとWindmillの資格情報には届かない。
+- `'unsafe-eval'`は許さない。根拠は、固定した版(32.4.1)のビューアの調査と、ヘッドレスのChromeでの確認である。
+  - ビューアが`eval`を呼ぶ箇所は2つある。図のスタイルや定義に書かれた式を評価する経路は、評価を許すフラグがどれも既定で無効である。外部の図形ライブラリのscriptを取得して評価する経路は、取得をCSPの`connect-src 'none'`が止める。`new Function`は無い。
+  - `'unsafe-eval'`を付けずに、普通の図と、リンク、外部の画像、フォント、図形ライブラリ、評価を許す式を含む図を描いた。`eval`の違反は出なかった。
+- 外部の図形ライブラリ(AWSなどのアイコン集)を使う図は、その図形が描かれない。外部への取得をCSPが止めるためである。
+- Windmillのraw app(Factory Console)の`components/DrawioViewer.tsx`は、ビューアをdiagrams.netのCDNから読む。この部品は、Consoleの図の描画がこの隔離したiframeに移るまで残る。
 
 ## PR修正の安全策
 
@@ -505,6 +547,9 @@ Claudeに渡すツールは`Read`、`Glob`、`Grep`、`Edit`、`Write`だけで�
 保護パスを変更したら、修正を止める。保護パスは`.claude/`、`.agents/`、`mise.toml`、`lefthook.yml`、`.github/workflows/`、`package.json`のscripts、新しい`*.sh`などである。これらはFactoryやCIが実行する設定で、書き換えられるとコードを実行されるためである。
 markdownlint-cli2とtextlintの設定(`.markdownlint-cli2.jsonc`、`.textlintrc.json`など)も止める。どちらも設定から任意のモジュールを読み込め、pre-commitと`mise run check`が読むためである。
 Consoleでバンドルを通らずに配信される`console/public/`と`console/index.html`も止める。
+配信するdraw.ioのビューアを固定する`console/drawio-viewer.json`も止める。
+固定を強制し、配信物を作って検査するスクリプトも止める。一覧は`f/factory/lib/protected_paths.ts`の`FORBIDDEN_EXACT_PATHS`にある。
+配信のCSPを持つ`infra/Caddyfile`と、配信物を検証する`infra/console_fetcher/`も止める。
 一覧は`f/factory/lib/protected_paths.ts`にある。
 
 ### symlinkと特殊なファイルを止める

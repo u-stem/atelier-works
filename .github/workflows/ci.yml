@@ -305,6 +305,29 @@ jobs:
       - name: Build
         run: bun run --cwd console build
 
+      - name: Read the pinned draw.io viewer digest
+        id: drawio
+        # キャッシュのキーに使う前に、64桁の小文字の16進数であることを確かめる。形が違えば失敗させる。
+        run: |
+          set -o pipefail
+          sha256="$(jq -r .sha256 console/drawio-viewer.json | grep -Ex '[0-9a-f]{64}')"
+          echo "sha256=${sha256}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the draw.io viewer cache
+        # 取得物のキャッシュは、固定のsha256をキーにする。
+        # キャッシュの中身は信用せず、使う前に固定のsha256と照合するので、汚染されても害は無い。
+        # dist/には置かない。dist/drawio/の受け口のscriptまで、キャッシュから戻してしまうため。
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: console/.cache/drawio-viewer
+          key: drawio-viewer-${{ steps.drawio.outputs.sha256 }}
+
+      - name: Fetch the draw.io viewer
+        # キャッシュが固定のsha256と一致すればそれを使い、無ければ版を固定したURLから取得する。
+        # どちらも、固定のsha256と照合してからdist/drawio/に置く。照合に失敗したら、ここで止める。
+        # ビューアは、リポジトリに入れない。
+        run: bun run --cwd console fetch-drawio-viewer dist/drawio .cache/drawio-viewer
+
       - name: Write the release manifest
         # 全ファイルのsha256と元のcommitを記録する。console_fetcherはこれと中身を照合する。
         env:

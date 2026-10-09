@@ -509,8 +509,9 @@ PR修正のClaudeに渡すツールは`Read,Glob,Grep,Edit,Write`だけで、`Ba
 
 修正の差分に次のどれかが含まれると、検証のステップが止める結果を返す。作業項目は人の対応待ちになる。
 
-- `.claude/`、`.agents/`、`.github/workflows/`、`.mise/`、`.config/mise/`、`.lefthook/`、`console/public/`の下のファイル
-- `console/index.html`
+- `.claude/`、`.agents/`、`.github/workflows/`、`.mise/`、`.config/mise/`、`.lefthook/`の下のファイル
+- `console/public/`、`infra/console_fetcher/`の下のファイル
+- 個別のファイル(一覧は下の説明を参照)
 - `mise.toml`、`mise.*.toml`、`.mise.toml`
 - `lefthook.yml`、`lefthook-local.yml`、`lefthook.toml`、`lefthook.json`
 - `bunfig.toml`、`.npmrc`、`.gitattributes`、`.gitmodules`
@@ -532,6 +533,20 @@ PR修正のClaudeに渡すツールは`Read,Glob,Grep,Edit,Write`だけで、`Ba
 
 `console/public/`と`console/index.html`は、Consoleでバンドルを通らずにそのまま配信され、ページの中で動く。
 `console/index.html`はファイル名だけではほかの`index.html`と区別できないので、パスで判定する。
+個別のファイルの一覧は、`FORBIDDEN_EXACT_PATHS`にある。
+一覧には、次の4種類が入る。
+
+- Consoleのページの入口: `console/index.html`
+- draw.ioのビューアの固定: `console/drawio-viewer.json`
+- 固定を強制し、配信物を作って検査する側: `console/scripts/`の一部、`console/vite.config.ts`、`scripts/check-console-lockfile.ts`
+- 配信の設定: `infra/Caddyfile`
+
+`console/drawio-viewer.json`は、CIが取得して配信するビューアの取得元とsha256を固定する。
+書き換えられると、別のスクリプトが固定の値として配信される。
+固定を強制する側のスクリプトは、書き換えられると、検査をすり抜けた内容が配信物に混ざる。
+`infra/Caddyfile`には、Consoleのscriptの許可と、draw.ioの図を隔離するCSPがある。
+`infra/console_fetcher/`は、配信物を検証して配信する。
+どちらも書き換えられると、検証や隔離をすり抜けた内容が運用者のブラウザで動く。
 
 markdownlint-cli2の設定は、`customRules`、`markdownItPlugins`、`modulePaths`で任意のモジュールを`import()`できる。
 textlintの設定は、`rules`の名前からモジュールを解決して読み込む。

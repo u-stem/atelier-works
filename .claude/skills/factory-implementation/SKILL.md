@@ -72,6 +72,7 @@ worker内のClaudeはheadlessで起動されており、人と対話して回答
 | 環境とランタイムのバージョン指定 | `.env*`、`.gitleaksignore`、`.gitleaks.toml`、`.tool-versions`、`.node-version` |
 | ツール設定とタスクランナー | `*.config.[cm][jt]s`、`.eslintrc*`、`.markdownlint*`、`.markdownlint-cli2*`、`.textlintrc*`、`Makefile`、`CODEOWNERS`、`.devcontainer/**` |
 | Consoleで配信されるファイル | `console/public/**`、`console/index.html` |
+| 配信物を作って検査するファイル | `console/drawio-viewer.json`、`console/scripts/drawio-viewer.ts`、`console/scripts/fetch-drawio-viewer.ts`、`console/scripts/manifest.ts`、`console/scripts/write-manifest.ts`、`console/scripts/asset-name.ts`、`console/vite.config.ts`、`scripts/check-console-lockfile.ts` |
 | 新規ファイル | 新しく追加する`*.sh`ファイル |
 | インフラ | `infra/**` |
 

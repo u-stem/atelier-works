@@ -24,6 +24,8 @@ export type ChangedPath = {
  * miseのXDG・ドットファイルの設定場所、
  * ディレクトリ形式のlefthook設定)。
  * `console/public/`も含める。Consoleでバンドルを通らずにそのまま配信され、ページの中で動くファイルを置く。
+ * `infra/console_fetcher/`も含める。Consoleの配信物を検証して配信するコードで、書き換えられると、
+ * 検証をすり抜けた内容が運用者のブラウザに配信される。
  */
 export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
   ".claude/",
@@ -33,14 +35,34 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
   ".config/mise/",
   ".lefthook/",
   "console/public/",
+  "infra/console_fetcher/",
 ];
 
 /**
  * pr_fixが保護する個別のファイル(リポジトリのルートからの相対パス)。
  * `console/index.html`は、Consoleのすべてのscriptの読み込み元で、バンドルを通らずに配信される。
  * ファイル名だけでは他の`index.html`と区別できないので、パスで判定する。
+ * `console/drawio-viewer.json`は、CIが取得して配信するdraw.ioのビューアの取得元とsha256を固定する。
+ * 書き換えられると、別のスクリプトを固定の値として配信される。
+ * 固定を強制する側も同じ理由で守る。ビューアの照合と取得、配信物の一覧(manifest.json)の作成、
+ * lockfileの検査のスクリプトは、書き換えられると検査をすり抜けて配信物に混ざる。
+ * `asset-name.ts`は照合したビューアの書き込み先の名前を決め、`vite.config.ts`は
+ * 組み立ての途中で任意のコードを動かして配信物に書ける。
+ * `infra/Caddyfile`には、Consoleのscriptの許可と、draw.ioの図を隔離するCSPがある。
+ * `infra/`全体は、pr_fixでは止めない。
  */
-export const FORBIDDEN_EXACT_PATHS: readonly string[] = ["console/index.html"];
+export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
+  "console/index.html",
+  "console/drawio-viewer.json",
+  "console/scripts/drawio-viewer.ts",
+  "console/scripts/fetch-drawio-viewer.ts",
+  "console/scripts/manifest.ts",
+  "console/scripts/write-manifest.ts",
+  "scripts/check-console-lockfile.ts",
+  "console/scripts/asset-name.ts",
+  "console/vite.config.ts",
+  "infra/Caddyfile",
+];
 
 /**
  * pr_fixが保護するファイル名(ディレクトリを問わない)。

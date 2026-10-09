@@ -22,6 +22,7 @@ describe("IMPLEMENT_PROTECTED_PATH_PREFIXES", () => {
       ".config/mise/",
       ".lefthook/",
       "console/public/",
+      "infra/console_fetcher/",
       "infra/",
       ".husky/",
       ".githooks/",
@@ -36,6 +37,18 @@ describe("IMPLEMENT_PROTECTED_PATH_PREFIXES", () => {
 });
 
 describe("matchesForbiddenPath", () => {
+  test("matches the console_fetcher files with the default (pr_fix) prefixes", () => {
+    expect(matchesForbiddenPath("infra/console_fetcher/fetcher.ts")).toBe(true);
+  });
+
+  test("matches infra/Caddyfile with the default (pr_fix) prefixes", () => {
+    expect(matchesForbiddenPath("infra/Caddyfile")).toBe(true);
+  });
+
+  test("matches infra/Caddyfile with the implement prefixes", () => {
+    expect(matchesImplementProtectedPath("infra/Caddyfile")).toBe(true);
+  });
+
   test("does not match infra/** with the default (pr_fix) prefixes", () => {
     expect(matchesForbiddenPath("infra/worker/Dockerfile")).toBe(false);
   });
@@ -89,6 +102,58 @@ describe("matchesForbiddenPath", () => {
     expect(matchesForbiddenPath("./console/index.html")).toBe(true);
   });
 
+  test("matches console/drawio-viewer.json", () => {
+    expect(matchesForbiddenPath("console/drawio-viewer.json")).toBe(true);
+  });
+
+  test("matches console/scripts/drawio-viewer.ts", () => {
+    expect(matchesForbiddenPath("console/scripts/drawio-viewer.ts")).toBe(true);
+  });
+
+  test("matches console/scripts/fetch-drawio-viewer.ts", () => {
+    expect(matchesForbiddenPath("console/scripts/fetch-drawio-viewer.ts")).toBe(
+      true,
+    );
+  });
+
+  test("matches console/scripts/manifest.ts", () => {
+    expect(matchesForbiddenPath("console/scripts/manifest.ts")).toBe(true);
+  });
+
+  test("matches console/scripts/write-manifest.ts", () => {
+    expect(matchesForbiddenPath("console/scripts/write-manifest.ts")).toBe(
+      true,
+    );
+  });
+
+  test("matches scripts/check-console-lockfile.ts", () => {
+    expect(matchesForbiddenPath("scripts/check-console-lockfile.ts")).toBe(
+      true,
+    );
+  });
+
+  test("matches console/scripts/asset-name.ts", () => {
+    expect(matchesForbiddenPath("console/scripts/asset-name.ts")).toBe(true);
+  });
+
+  test("matches console/vite.config.ts", () => {
+    expect(matchesForbiddenPath("console/vite.config.ts")).toBe(true);
+  });
+
+  test("does not match other console scripts", () => {
+    expect(matchesForbiddenPath("console/scripts/public-assets.test.ts")).toBe(
+      false,
+    );
+  });
+
+  test("does not match a manifest.ts outside console/scripts/", () => {
+    expect(matchesForbiddenPath("console/src/lib/manifest.ts")).toBe(false);
+  });
+
+  test("does not match a drawio-viewer.json outside console/", () => {
+    expect(matchesForbiddenPath("docs/drawio-viewer.json")).toBe(false);
+  });
+
   test("matches files under console/public/", () => {
     expect(
       matchesForbiddenPath("console/public/assets/theme-init-ba7816bf.js"),
@@ -127,8 +192,54 @@ describe("matchesImplementProtectedPath", () => {
     expect(matchesImplementProtectedPath("infra/worker/Dockerfile")).toBe(true);
   });
 
+  test("matches console/scripts/asset-name.ts", () => {
+    expect(matchesImplementProtectedPath("console/scripts/asset-name.ts")).toBe(
+      true,
+    );
+  });
+
+  test("matches console/vite.config.ts", () => {
+    expect(matchesImplementProtectedPath("console/vite.config.ts")).toBe(true);
+  });
+
   test("matches console/index.html", () => {
     expect(matchesImplementProtectedPath("console/index.html")).toBe(true);
+  });
+
+  test("matches console/drawio-viewer.json", () => {
+    expect(matchesImplementProtectedPath("console/drawio-viewer.json")).toBe(
+      true,
+    );
+  });
+
+  test("matches console/scripts/drawio-viewer.ts", () => {
+    expect(
+      matchesImplementProtectedPath("console/scripts/drawio-viewer.ts"),
+    ).toBe(true);
+  });
+
+  test("matches console/scripts/fetch-drawio-viewer.ts", () => {
+    expect(
+      matchesImplementProtectedPath("console/scripts/fetch-drawio-viewer.ts"),
+    ).toBe(true);
+  });
+
+  test("matches console/scripts/manifest.ts", () => {
+    expect(matchesImplementProtectedPath("console/scripts/manifest.ts")).toBe(
+      true,
+    );
+  });
+
+  test("matches console/scripts/write-manifest.ts", () => {
+    expect(
+      matchesImplementProtectedPath("console/scripts/write-manifest.ts"),
+    ).toBe(true);
+  });
+
+  test("matches scripts/check-console-lockfile.ts", () => {
+    expect(
+      matchesImplementProtectedPath("scripts/check-console-lockfile.ts"),
+    ).toBe(true);
   });
 
   test("matches files under console/public/", () => {

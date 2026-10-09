@@ -320,6 +320,7 @@ zipは自前のreaderでメモリ上に展開する。
 - miseのキャッシュを読み書きしない。
 - ルートと`console/`の依存は`bun install --frozen-lockfile --ignore-scripts`で入れ、依存のinstall scriptを実行しない。
 - `console/bun.lock`は`scripts/check-console-lockfile.ts`で検査する。registry由来でsha512のintegrityが付いた依存だけを許す。git、GitHub、tarballのURL、`console/`の外を指す`file:`と`link:`、`trustedDependencies`は拒む。
+- 組み立ての後、マニフェストを書く前に、draw.ioのビューアを取得して`dist/drawio/`に置く。詳細は「draw.ioの図」にある。
 
 ## 配信の経路
 
@@ -328,8 +329,11 @@ Caddyは、`/console/`の下を次の経路で返す。
 
 | パス | 返すもの | キャッシュ |
 | --- | --- | --- |
+| `/console` | `/console/`への308のリダイレクト。クエリ(`?approval=<id>`など)は保つ | - |
 | `/console/status.json` | ボリューム直下の`status.json`。無ければ404 | `no-store` |
 | `/console/assets/*` | 共有の`assets/`。無ければ404 | 長期(immutable) |
+| `/console/drawio/*` | `current/`の`drawio/`。ビューアと受け口。無ければ404 | 長期(immutable) |
+| `/console/drawio.html` | `current/`の`drawio.html`。無ければ404 | `no-cache` |
 | `/console/*` | `current/`のファイル。無いパスは`index.html` | `no-cache` |
 
 `/console/manifest.json`は、`current/`の`manifest.json`である。
@@ -409,6 +413,9 @@ Windmill(`/`と`/api/*`)には付けない。
 
 Trusted Typesは`Content-Security-Policy-Report-Only`で様子を見る。
 
+`/console/drawio.html`と`/console/drawio/`の下だけは、別のヘッダーを付ける。
+内容は「draw.ioの図」にある。
+
 ## CSPとCaddyのパスの解釈の違い
 
 ブラウザは、パスの`%2f`を区切りとみなさない。
@@ -431,6 +438,132 @@ Consoleの画面のURLに、符号化した区切りを使ってはいけない�
 CSPのパスには、オリジンが要るためである。
 IPv6のリテラル(`http://[::1]:8080/console/`など)で開くと、このURLの形が崩れてscriptが拒否される。
 IPv4のアドレス(`127.0.0.1`など)かホスト名で開く。
+
+## draw.ioの図
+
+要件定義書の図は、最上位のページではなく、隔離したiframeの中で描く。
+何を守るかは、[セキュリティ](../security.md)の「draw.ioの図の描画」にある。
+`DrawioFrame`はどの画面にも組み込まれていない。部品と`drawio.html`が配信物に入っているだけである。
+
+| ファイル | 役割 |
+| --- | --- |
+| `console/drawio-viewer.json` | ビューアの版、commit、取得元のURL、sha256の固定。保護パス |
+| `console/scripts/drawio-viewer.ts` | 固定の値の検査と、取得したビューアの照合(`verifyViewer`)。純粋関数 |
+| `console/scripts/fetch-drawio-viewer.ts` | CIが呼ぶ。取得して照合し、`dist/drawio/`に書く |
+| `console/public/drawio.html` | 図を描くページ。scriptはすべて外部のファイルで、通常のscriptとして読む |
+| `console/public/drawio/drawio-frame-*.js` | ページの中の受け口。素のJavaScriptで、ビルドを通らない |
+| `console/src/lib/drawioMessages.ts` | 親が送るメッセージの組み立てと、iframeから届いたメッセージ(高さ、失敗の種類)の検査。純粋関数 |
+| `console/src/lib/drawioFrameState.ts` | iframeの状態の遷移(load、メッセージ、応答なし、XMLの差し替え)を`(state, event) => state`で表す。純粋関数 |
+| `console/src/components/drawio/DrawioFrame.tsx` | 親の部品。どの画面からも使える |
+
+### ビューアの取得
+
+ビューアはリポジトリに入れない。
+CIの`console`ジョブが、組み立ての後に`fetch-drawio-viewer.ts`を動かし、`dist/drawio/drawio-viewer-<sha256の先頭8桁>.js`に書く。
+取得したバイト列のsha256が固定の値と違えば、何も書かずに失敗する。
+URLはリダイレクトを許さず、パスはcommit配下のビューア1ファイルに限る。
+応答は10MBまでで、一時的な失敗(ネットワーク、429、5xx)は、待ちを倍にしながら3回まで再試行する。
+取得物は、固定のsha256をキーにして`actions/cache`に保持する。
+キーとして使う前に、sha256が64桁の小文字の16進数かを検査し、形が違えば失敗させる。
+保存先は`console/.cache/drawio-viewer`で、Gitには入れない。
+キャッシュに一致するファイルがあれば取得しない。
+キャッシュの中身は信用せず、使う前に固定のsha256と照合する。照合に通らなければ、取得し直す。
+キャッシュは`dist/`の外に置く。`dist/drawio/`には受け口のscriptもあり、キャッシュから戻すと、組み立てた受け口を上書きしてしまうためである。
+raw.githubusercontent.comの障害で取得に失敗したら、CIのジョブを再実行する。キャッシュに当たれば取得せず、外れれば取得し直す。
+ビューアはApache-2.0のライセンスである。
+`console_fetcher`は、他の配信物と同じように、マニフェストの照合を経て`releases/<sha>/drawio/`に置く。
+共有の`assets/`には入れない。`current`から`/console/drawio/`として配信する。
+そのため、版を入れ替えたとき、古い版の`drawio/`は`releases/`の掃除に従って消える。
+`console_fetcher`のコードは、このディレクトリのために変える必要が無い。マニフェストの検査は、`assets/`の入れ子だけを拒む。
+
+ローカルの`mise run console:check`は、ビューアを取得しない。
+ネットワークが無くても通る。
+
+固定を更新するときは、次の順に行う。
+
+1. jgraph/drawioのリポジトリを、blobを取らない部分cloneで取る。
+2. 新しいcommitがリリースのタグ(`v<版>`)にあることを、`git tag --contains <commit>`で確かめる。
+3. `git show <commit>:src/main/webapp/js/viewer-static.min.js | shasum -a 256`で、sha256を計算する。配信用のURL(raw.githubusercontent.com)から取ったバイト列を使わず、gitのオブジェクトから取る。
+4. `console/drawio-viewer.json`の4項目を書き換える。URLはそのcommitを指し、sha256は3.の値である。
+5. `console/public/drawio.html`が読むビューアの名前を、新しいsha256の先頭8桁に合わせる。
+
+固定している版(32.4.1)は、この手順で確かめている。
+commit `9034053fba80a435e27d68d374bc564b83917ae9`は、`v32.4.1`のタグが指す`32.4.1 release`のcommitである。
+そのcommitのファイルのsha256は、固定の値と一致した。
+
+`console/scripts/public-assets.test.ts`が、`drawio.html`の参照と固定の値の一致を確かめる。
+受け口のscriptを直したときは、ファイル名のハッシュを中身に合わせて付け直す。
+同じテストが、合っていないファイル名を検出する。
+
+### iframeとメッセージ
+
+親の部品は、`sandbox="allow-scripts"`と`referrerPolicy="no-referrer"`を付けたiframeで`/console/drawio.html`を読み込む。
+XMLが変わるたびに、iframeを作り直す(keyを変える)。
+1つのiframeの一生で送るのは、最初の`load`の後の1回だけである。
+受け口は、`load`の前にscriptの実行を終えているためである。
+状態の遷移は`console/src/lib/drawioFrameState.ts`の`reduceFrame`にある。`shouldSendXml`が、このloadでXMLを送ってよいかを返す。
+
+2回目の`load`は、iframeが別の文書へ遷移したことを表す。
+親は、iframeを`about:blank`にして表示を止め、固定の文を出す。
+以後、そのiframeのメッセージは受けない。
+この停止は最善の努力である。loadが起きない遷移は検知できず、止まらない。
+そのときも、親が受ける値は、数値(高さ)と固定の失敗の種類だけである。
+
+最初の`load`の後、10秒たっても、高さと`drawio:error`のどちらも届かなければ、親は、図のページが応答しないとみなして固定の文を出す。
+`drawio.html`が404になったときや、ヘッダーに遮られて、scriptが動かないときである。
+
+| 向き | メッセージ | 検査 |
+| --- | --- | --- |
+| 親からiframe | 種別`drawio:render`と`xml`(文字列) | 親は、空のXMLと、UTF-8で256KBを超えるXMLを送らない |
+| iframeから親 | 種別`drawio:height`と`height`(数値) | 親は、送り元がiframeのwindowでないものと、`height`が有限の数値でないものを捨て、80〜1600pxに収める |
+| iframeから親 | 種別`drawio:error`と`reason` | 親は、送り元がiframeのwindowでないものと、`reason`が固定の3つ(`viewer_missing`、`render_failed`、`too_large`)でないものを捨てる。画面に出す文は、親が`reason`から決める |
+
+iframe側の受け口(`console/public/drawio/drawio-frame-*.js`)は、次のものを捨てる。
+
+- 送り元が親のwindowでないメッセージ
+- 種別が`drawio:render`でないメッセージ
+- `xml`が文字列でないメッセージ
+- 2回目以降の`drawio:render`
+
+256KBの上限は、親と受け口の両方に置く。
+親は送る前にバイト数で、受け口は受けた後に文字数で確かめる。
+片方を変えるときは、もう片方も同じ値に変える。
+上限を超えたXMLを受けた受け口は、`too_large`を返す。
+
+受け口は、失敗を黙らせない。
+ビューアが読み込まれていない場合、ビューアが例外を投げた場合、描いても図が入らなかった場合は、固定の文をiframeの中に出し、`drawio:error`を親へ返す。
+例外の文面は、ページに出さず、親にも渡さない。
+
+iframeは、図の領域の大きさが変わるたびに高さを送る。
+図が上限より高いときは、親のiframeが1600pxで止まり、iframeの中で縦にスクロールする。横には隠す。
+縦のスクロールバーが出入りして幅が変わると、ビューアが図を合わせ直して高さが変わり、高さの通知が往復するため、幅は固定する(`scrollbar-gutter: stable`)。
+枠線は、iframeの外側の要素に付ける。iframeに付けると、枠線の分だけ高さが足りなくなる。
+
+### CSPとヘッダー
+
+`/console/drawio.html`と`/console/drawio/`の下は、Consoleの他のページと別のヘッダーで返す。
+Caddyfileでは、次の2つを、Consoleの本体の`handle_path /console/*`より前に置く。
+
+- `handle /console/drawio.html`
+- `handle_path /console/drawio/*`
+
+どちらも後ろに置くと、Consoleのヘッダー(`frame-ancestors 'none'`)が付いて、iframeに読み込めなくなるためである。
+
+Consoleの本体のfallback(`handle_path /console/*`)は、`drawio.html`と`drawio/`の下を404にする。
+区切りを重ねた要求などでfallbackに落ちても、sandboxの無いConsoleのヘッダーで返さないためである。
+ビューアと受け口は、`/console/assets/`ではなく`/console/drawio/`に置く。
+Consoleの本体のCSPは`/console/assets/`だけを許すので、本体のページは、`/console/drawio/`のscriptを読めない。
+本体にHTMLが注入されても、信頼されたオリジンでビューアを動かす足場にならない。
+`tests/infra/caddyfile.test.ts`が、この許可の違いを固定している。
+
+| ヘッダー | 値 | 理由 |
+| --- | --- | --- |
+| `Content-Security-Policy` | `default-src 'none'`、`script-src`は`/console/drawio/`、`style-src 'unsafe-inline'`、`img-src data:`、`font-src data:`、`connect-src 'none'`、`base-uri 'none'`、`form-action 'none'`、`frame-ancestors`はブラウザが使ったオリジン、`sandbox allow-scripts` | 外への取得をすべて止める。不透明なオリジンでは`'self'`が使えないので、`script-src`と`frame-ancestors`にはブラウザが使ったオリジンを入れる。`style-src`は、ビューアが付けるインラインのstyleのために許す。`sandbox`は、ページを直接開いても不透明なオリジンで動かす |
+| `X-Frame-Options` | `SAMEORIGIN` | `frame-ancestors`を解釈するブラウザでは、そちらが優先される。これは、解釈しない古いブラウザ向けの備えで、Console自身のページだけに埋め込ませる |
+| `Referrer-Policy` | `no-referrer` | 参照元を送らない |
+| `X-Content-Type-Options` | `nosniff` | scriptの種別を推測させない |
+
+`'unsafe-eval'`は付けない。
 
 ## 他のサイトからのAPIの呼び出し
 
