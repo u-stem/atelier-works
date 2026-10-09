@@ -108,6 +108,41 @@ const rateLimitedByBodyFor = (seconds: number) => () =>
 
 const ok = () => jsonResponse(204, {});
 
+describe("buildEmbed console_fetch_problem", () => {
+  const event: NotifyEvent = {
+    kind: "console_fetch_problem",
+    instance_name: "local",
+    cause: "トークンの期限が切れています",
+    next_action: "トークンを再発行して投入する",
+  };
+
+  test("puts the cause in the description", () => {
+    expect(buildEmbed(event).description).toBe("トークンの期限が切れています");
+  });
+
+  test("shows the next action as a field", () => {
+    expect(buildEmbed(event).fields).toContainEqual({
+      name: "次の操作",
+      value: "トークンを再発行して投入する",
+    });
+  });
+
+  test("includes the instance field", () => {
+    expect(buildEmbed(event).fields).toContainEqual({
+      name: "インスタンス",
+      value: "local",
+    });
+  });
+
+  test("has no link", () => {
+    expect(buildEmbed(event).url).toBeNull();
+  });
+
+  test("names the console in the title", () => {
+    expect(buildEmbed(event).title).toContain("Console");
+  });
+});
+
 describe("buildEmbed", () => {
   test("always includes an instance field", () => {
     const embed = buildEmbed({

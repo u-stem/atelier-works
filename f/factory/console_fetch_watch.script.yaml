@@ -1,0 +1,9 @@
+summary: '[SYS-7] Consoleの取り込みを見張る'
+description: Consoleの取り込み(console_fetcher)が書く状態を読み、失敗、更新の停止、状態が読めないことを通知とDiscordに知らせます。
+lock: '!inline f/factory/console_fetch_watch.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

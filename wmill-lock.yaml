@@ -10,6 +10,7 @@ locks:
   f/factory/audit_kickoff: 5bba1bd91cb8206eaf64597fb56a06c851d514ac4b8864eab65c2421d6ed94b5
   f/factory/cleanup_db: dc4efde6b512d985ffdb31d2ee1c967f0c9a158431e6335a35d62ffbf2a92d99
   f/factory/cleanup_workspaces: 7430896374df64f199577a0b338c2b16b1233a9bfc1fe6d7321845119ec5fccc
+  f/factory/console_fetch_watch: ad95129176a4c38e52bf0957e5dd40d64f435416d90e8976d9c86ae63f5e0d06
   f/factory/factory_console__raw_app+__app_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/implement__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/lib/approval_support: 20f96fdb02ddba3ca38eeb6b259ffb0a063acbe3339e68c5a94ceb5e11d14602
@@ -25,7 +26,7 @@ locks:
   f/factory/lib/console_status: 69a436c4d53901c26df1f27e11885b76dba0ed7e4cf0adff1f9107c4ee5e8ef8
   f/factory/lib/console_support: 3fbb2bf37d275459e183043a069e0d695776ab5259d4ccfb9a9ed8939c13c081
   f/factory/lib/db: 20cb9f68045aa9d4a4336efaac583263c4f006cef2f468f1187a59a62d1b5d0c
-  f/factory/lib/discord: bbf49065e08ed595f87d2275eaf93f20b1d8d9e9cb362c747b75e92d89cc96e4
+  f/factory/lib/discord: 9ca9a14a3709c96343ba8efc090a6bd45b7cb638c24cde1ab8119953a871eb1a
   f/factory/lib/drawio: 6033f8aaf663aeccf8cc84eaa978815c2b08671f4bc726395613303e3751a2a9
   f/factory/lib/github: 0da5ddf13cea03a7865acdb503e5c694532ba3f89ce497ad7034e61f38d6264a
   f/factory/lib/implement_finish_support: 5d1d1af0b285914903c2cdc3ce09575feef4a98aaf304bb19abf5af2cc4c76fa

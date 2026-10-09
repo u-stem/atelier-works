@@ -1,0 +1,13 @@
+summary: '[SYS-7] Consoleの取り込みを見張る'
+description: >-
+  10分ごとに実行します。Consoleの取り込み(console_fetcher)が書く状態を読み、失敗、更新の停止、状態が読めないことを、通知とDiscordに1回だけ知らせます。正常に戻っても通知は自動では解決しません。
+args: {}
+cron_version: v2
+enabled: true
+is_flow: false
+no_flow_overlap: true
+on_failure: f/factory/on_error_schedule
+schedule: 0 */10 * * * *
+script_path: f/factory/console_fetch_watch
+timezone: Asia/Tokyo
+ws_error_handler_muted: false
