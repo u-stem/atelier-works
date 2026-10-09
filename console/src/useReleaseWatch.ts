@@ -10,6 +10,7 @@ const CHECK_INTERVAL_MS = 60_000;
  * 表示した直後と、その後60秒ごと、タブが見える状態に戻ったとき、
  * 動的importの失敗(Viteが`window`に出す`vite:preloadError`)を受けたときに確かめる。
  * 失敗したimportは、イベントの既定の動作のとおり例外になる。ここでは止めない。
+ * 確認の実行中に来た要求は、実行中の確認が終わった後に1回だけやり直す。unmount後はやり直さない。
  * chunkの取得に失敗した原因が版の入れ替わりなら、次の周期を待たずに帯を出すためである。
  * 自分のファイルの集合は、確かめるたびにDOMから取り直す。後から読み込んだchunkの
  * modulepreloadとstylesheetも拾うためである。
@@ -24,10 +25,13 @@ export function useReleaseWatch(): ReleaseNotice {
   useEffect(() => {
     let active = true;
     let running = false;
+    // 実行中に来た要求を覚える。何度来ても、終わった後の再実行は1回にする。
+    let pending = false;
     let latest: ReleaseNotice = "none";
 
     const check = async () => {
       if (running) {
+        pending = true;
         return;
       }
       running = true;
@@ -51,6 +55,12 @@ export function useReleaseWatch(): ReleaseNotice {
         // 想定外の失敗でも、表示は変えず、未処理のrejectionにもしない。
       } finally {
         running = false;
+        if (pending) {
+          pending = false;
+          if (active) {
+            void check();
+          }
+        }
       }
     };
 
