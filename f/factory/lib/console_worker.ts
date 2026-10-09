@@ -155,7 +155,9 @@ function latestCompletionMs(runs: unknown): number | null {
  *    Console用のworkerが`console_fetch_watch`を終えていれば`ok`。
  *    ジョブが作られていることが、スケジュールが生きている証拠になる。
  * 4. どちらも無ければ`unknown`。スケジュールが無効だと待つジョブが作られず、workerの状態を判定できない。
- * 応答は信頼できない入力として読み、実行中の要素と、日時が無い・日時として読めない要素は数えない。
+ * 応答は信頼できない入力として読み、待ちとして数えるのは、tagが`console`で実行中でなく、
+ * 予定時刻が日時として読める要素だけにする。サーバー側のtagの絞りが効かなくても、
+ * defaultのworkerのジョブの長い待ちをConsole用のworkerの停止と取り違えないためである。
  * 予定時刻が`nowMs`より後の要素は、待たされていないので待ちとして数えない。
  */
 export function judgeConsoleQueue(
@@ -169,7 +171,11 @@ export function judgeConsoleQueue(
   const thresholdMs = CONSOLE_JOB_WAIT_SECONDS * 1000;
   let waitingCount = 0;
   for (const job of waitingJobs) {
-    if (!isRecord(job) || job.running === true) {
+    if (
+      !isRecord(job) ||
+      job.running === true ||
+      job.tag !== CONSOLE_WORKER_TAG
+    ) {
       continue;
     }
     const scheduledFor = job.scheduled_for;

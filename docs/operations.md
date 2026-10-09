@@ -642,7 +642,7 @@ workerの一覧を読むAPIは、ジョブのトークンでは読めない(Forb
 
 完了の記録は、`console_fetch_watch`の完了した実行を新しい順に10件読み、tagが`console`で、取り消されていないものだけを数える。
 手動の実行やpreviewはdefaultのworkerで動き、人が取り消したジョブもworkerの動作の証拠にならないためである。
-完了時刻は、Windmillの応答で`completed_at`が空のことがあるので、開始時刻に所要時間を足して出す。
+完了時刻は、`completed_at`があればそれを使い、空なら開始時刻に所要時間を足して出す。Windmillの応答では`completed_at`が空のことがある。
 失敗した実行は、workerがジョブを受けて動いた証拠として数える。
 
 `console_fetch_watch`が10分ごとにtag `console`のジョブを作る。

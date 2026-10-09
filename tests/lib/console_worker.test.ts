@@ -80,6 +80,38 @@ describe("judgeConsoleQueue", () => {
     ).toBe("ok");
   });
 
+  test("does not count a long wait on another tag", () => {
+    expect(judgeConsoleQueue([waiting(900, { tag: "bun" })], [], NOW)).toBe(
+      "unknown",
+    );
+  });
+
+  test("does not count a long wait without a tag", () => {
+    expect(judgeConsoleQueue([waiting(900, { tag: undefined })], [], NOW)).toBe(
+      "unknown",
+    );
+  });
+
+  test("reads a scheduled_for with microsecond precision", () => {
+    expect(
+      judgeConsoleQueue(
+        [waiting(0, { scheduled_for: "2026-10-09T11:50:00.123456Z" })],
+        RECENT,
+        NOW,
+      ),
+    ).toBe("stalled");
+  });
+
+  test("reads a started_at with microsecond precision", () => {
+    expect(
+      judgeConsoleQueue(
+        [],
+        [completed(0, { started_at: "2026-10-09T11:59:00.123456Z" })],
+        NOW,
+      ),
+    ).toBe("ok");
+  });
+
   test("does not count a job scheduled in the future as waiting", () => {
     expect(judgeConsoleQueue([waiting(-600)], [], NOW)).toBe("unknown");
   });
