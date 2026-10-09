@@ -56,13 +56,21 @@ describe("20261009120000_active_issue_key.up.sql", () => {
 });
 
 describe("20261009120000_active_issue_key.up.sql safeguards", () => {
-  test("locks the table right after BEGIN so that no insert slips in before the index exists", async () => {
+  test("fails loudly instead of waiting forever for the table lock", async () => {
     const sql = await upSql();
     const afterBegin = sql
       .slice(sql.indexOf("BEGIN;") + "BEGIN;".length)
       .trim();
+    expect(afterBegin.startsWith("SET LOCAL lock_timeout = '30s';")).toBe(true);
+  });
+
+  test("locks the table right after the lock timeout so that no insert slips in before the index exists", async () => {
+    const sql = await upSql();
+    const afterTimeout = sql
+      .slice(sql.indexOf("SET LOCAL lock_timeout = '30s';") + 31)
+      .trim();
     expect(
-      afterBegin.startsWith(
+      afterTimeout.startsWith(
         "LOCK TABLE factory.work_items IN SHARE ROW EXCLUSIVE MODE;",
       ),
     ).toBe(true);

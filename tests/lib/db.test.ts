@@ -4,6 +4,7 @@ import {
   addNotice,
   addNoticeUnlessUnresolved,
   bumpWatermarks,
+  cancelSupersededApprovedWorkItem,
   countPendingIssueProposals,
   decideApprovalRequestIfPending,
   decideIssueProposal,
@@ -36,6 +37,7 @@ import {
   latestPrWorkItem,
   latestRequirementsApproval,
   listActive,
+  listActiveIssueWorkItems,
   listExpiredPendingApprovalRequests,
   listImplementRounds,
   listPendingIssueProposals,
@@ -2909,5 +2911,100 @@ describe("isActiveIssueUniqueViolation", () => {
     expect(isActiveIssueUniqueViolation("work_items_active_issue_key")).toBe(
       false,
     );
+  });
+});
+
+describe("isActiveIssueUniqueViolation with a server body", () => {
+  const KEY_BODY =
+    'ERROR: duplicate key value violates unique constraint "work_items_active_issue_key"';
+
+  test("recognises the constraint name in a string body", () => {
+    const err = Object.assign(new Error("Conflict"), { body: KEY_BODY });
+    expect(isActiveIssueUniqueViolation(err)).toBe(true);
+  });
+
+  test("ignores a string body that names another constraint", () => {
+    const err = Object.assign(new Error("Conflict"), {
+      body: 'duplicate key value violates unique constraint "other_key"',
+    });
+    expect(isActiveIssueUniqueViolation(err)).toBe(false);
+  });
+
+  test("ignores a body that is not a string", () => {
+    const err = Object.assign(new Error("Conflict"), {
+      body: { message: KEY_BODY },
+    });
+    expect(isActiveIssueUniqueViolation(err)).toBe(false);
+  });
+
+  test("still recognises the constraint name in the message", () => {
+    const err = Object.assign(new Error(`datatable ${KEY_BODY}`), {
+      body: "unrelated",
+    });
+    expect(isActiveIssueUniqueViolation(err)).toBe(true);
+  });
+});
+
+describe("cancelSupersededApprovedWorkItem", () => {
+  test("returns true when the item was cancelled", async () => {
+    const { sql } = createFakeSqlClient([[{ work_item_id: 5 }]]);
+    expect(await cancelSupersededApprovedWorkItem(5, "note", sql)).toBe(true);
+  });
+
+  test("returns false when no active sibling exists or the item moved on", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await cancelSupersededApprovedWorkItem(5, "note", sql)).toBe(false);
+  });
+
+  test("cancels only an approved item", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await cancelSupersededApprovedWorkItem(5, "note", sql);
+    expect(calls[0]?.text).toContain("wi.status = 'approved'");
+  });
+
+  test("requires another active issue work item of the same issue", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await cancelSupersededApprovedWorkItem(5, "note", sql);
+    expect(calls[0]?.text).toContain(
+      "o.owner = wi.owner AND o.repo = wi.repo AND o.issue_number = wi.issue_number",
+    );
+  });
+
+  test("excludes the item itself from the siblings", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await cancelSupersededApprovedWorkItem(5, "note", sql);
+    expect(calls[0]?.text).toContain("o.id <> wi.id");
+  });
+
+  test("passes the terminal statuses so that only active siblings count", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await cancelSupersededApprovedWorkItem(5, "note", sql);
+    expect(calls[0]?.values).toContainEqual([...TERMINAL_WORK_ITEM_STATUSES]);
+  });
+
+  test("records the transition in work_item_events", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await cancelSupersededApprovedWorkItem(5, "note", sql);
+    expect(calls[0]?.text).toContain("INSERT INTO factory.work_item_events");
+  });
+});
+
+describe("listActiveIssueWorkItems", () => {
+  test("filters by owner, repo and issue number", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listActiveIssueWorkItems("o", "r", 12, sql);
+    expect(calls[0]?.values).toContain(12);
+  });
+
+  test("selects issue-kind work items that are not terminal", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listActiveIssueWorkItems("o", "r", 12, sql);
+    expect(calls[0]?.text).toContain("kind = 'issue'");
+  });
+
+  test("returns the mapped rows", async () => {
+    const { sql } = createFakeSqlClient([[{ ...WORK_ITEM_ROW, id: 9 }]]);
+    const items = await listActiveIssueWorkItems("o", "r", 12, sql);
+    expect(items.map((item) => item.id)).toEqual([9]);
   });
 });

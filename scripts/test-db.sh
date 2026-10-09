@@ -127,6 +127,21 @@ verify_active_issue_index() {
     *work_items_active_issue_key*) ;;
     *) die "moving the approved work item was rejected, but not by work_items_active_issue_key: ${reverted}" ;;
   esac
+  # `cancelSupersededApprovedWorkItem`の文を、稼働中の兄弟の行が残るIssue(4)と
+  # 残らないIssue(5)で実行する。前者だけが取り消され、イベントの行が残ることを確かめる。
+  printf "INSERT INTO factory.work_items (cycle, source, kind, owner, repo, issue_number, issue_url, title, status) VALUES (1, 'issue', 'issue', 'o', 'r', 5, 'https://github.com/o/r/issues/5', 't', 'approved');\n" \
+    | psql_exec "${SCRATCH_DB}" >/dev/null \
+    || die "could not seed the approved row without an active sibling"
+  local cancel_sql="WITH updated AS (UPDATE factory.work_items AS wi SET status = 'cancelled', updated_at = now() WHERE wi.id = (SELECT id FROM factory.work_items WHERE issue_number = %s AND cycle = 1) AND wi.status = 'approved' AND wi.kind = 'issue' AND EXISTS (SELECT 1 FROM factory.work_items o WHERE o.owner = wi.owner AND o.repo = wi.repo AND o.issue_number = wi.issue_number AND o.kind = 'issue' AND o.id <> wi.id AND o.status != ALL(ARRAY['approved','rejected','needs_human','failed','expired','cancelled','reviewed','rereview_requested','blocked','audited','pr_open'])) RETURNING wi.id) INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note) SELECT updated.id, 'approved', 'cancelled', 'superseded by a newer cycle' FROM updated RETURNING work_item_id;\n"
+  local cancelled_with_sibling cancelled_without_sibling
+  cancelled_with_sibling="$(printf "${cancel_sql}" 4 | psql_exec "${SCRATCH_DB}" -q -t -A)" \
+    || die "the superseded cancel statement failed"
+  cancelled_without_sibling="$(printf "${cancel_sql}" 5 | psql_exec "${SCRATCH_DB}" -q -t -A)" \
+    || die "the superseded cancel statement failed without a sibling"
+  [ -n "$(printf '%s' "${cancelled_with_sibling}" | tr -d '[:space:]')" ] \
+    || die "the approved item with an active sibling was not cancelled"
+  [ -z "$(printf '%s' "${cancelled_without_sibling}" | tr -d '[:space:]')" ] \
+    || die "the approved item without an active sibling was cancelled"
   log "active issue index rejects a second active work item"
 }
 

@@ -19,7 +19,7 @@ import {
   getWorkItem,
   isActiveIssueUniqueViolation,
   latestRequirementsApproval,
-  listActive,
+  listActiveIssueWorkItems,
   setFlowJobId,
   setFlowJobIdIfUnset,
   updateStatusIfCurrent,
@@ -82,6 +82,23 @@ export function activeIssueConflictError(
   return new Error(
     `retry_work_item: another work item${which} is active for this Issue; retry after it finishes`,
   );
+}
+
+/**
+ * `activeIssueConflictError`を、稼働中の作業項目の検索(`lookup`)の結果から作る。
+ * 検索が失敗しても、再実行の失敗の理由を隠さないよう、IDなしの文にして返す。
+ */
+export async function activeIssueConflictErrorFrom(
+  workItem: Pick<WorkItem, "id" | "owner" | "repo" | "issue_number">,
+  lookup: () => Promise<
+    readonly Pick<WorkItem, "id" | "owner" | "repo" | "issue_number" | "kind">[]
+  >,
+): Promise<Error> {
+  try {
+    return activeIssueConflictError(workItem, await lookup());
+  } catch {
+    return activeIssueConflictError(workItem, []);
+  }
 }
 
 /**
@@ -303,7 +320,12 @@ export async function main(work_item_id: number): Promise<RetryWorkItemResult> {
         );
   } catch (err) {
     if (!isActiveIssueUniqueViolation(err)) throw err;
-    throw activeIssueConflictError(workItem, await listActive());
+    const issueNumber = workItem.issue_number;
+    throw await activeIssueConflictErrorFrom(workItem, async () =>
+      issueNumber === null
+        ? []
+        : listActiveIssueWorkItems(workItem.owner, workItem.repo, issueNumber),
+    );
   }
   if (!moved) {
     throw new Error(

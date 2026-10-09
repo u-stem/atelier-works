@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { IMPLEMENT_FLOW_PATH } from "../../f/factory/lib/implement_loop.ts";
 import {
   activeIssueConflictError,
+  activeIssueConflictErrorFrom,
   computeRestartPlan,
   launchFailureError,
   retryResult,
@@ -360,6 +361,31 @@ describe("activeIssueConflictError", () => {
 
   test("omits the id when the active work item is not found", () => {
     const error = activeIssueConflictError(target, [{ ...base, id: 3 }]);
+    expect(error.message).toBe(
+      "retry_work_item: another work item is active for this Issue; retry after it finishes",
+    );
+  });
+});
+
+describe("activeIssueConflictErrorFrom", () => {
+  const target = {
+    id: 3,
+    owner: "octo-owner",
+    repo: "atelier-works",
+    issue_number: 12,
+  };
+
+  test("names the active work item returned by the lookup", async () => {
+    const error = await activeIssueConflictErrorFrom(target, async () => [
+      { ...target, id: 9, kind: "issue" as const },
+    ]);
+    expect(error.message).toContain("(id 9)");
+  });
+
+  test("falls back to the message without an id when the lookup fails", async () => {
+    const error = await activeIssueConflictErrorFrom(target, async () => {
+      throw new Error("db down");
+    });
     expect(error.message).toBe(
       "retry_work_item: another work item is active for this Issue; retry after it finishes",
     );

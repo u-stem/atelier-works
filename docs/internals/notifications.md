@@ -11,9 +11,9 @@ Factoryは、知らせる内容によって経路を使い分ける。
 | Discordの通知 | 人の行動が要るイベントと、日次サマリー | `f/factory/lib/discord.ts` |
 | Consoleの**通知**タブ | Discordに送らない要対応の事項(notice) | `factory.notices`、`addNotice` |
 | Consoleの**失敗**タブ | フローとスケジュールの失敗の記録 | `factory.job_failures`、`recordFailure` |
-| GitHub | 成果物だけ | Issueへの承認のコメント、PRのレビューと返信 |
+| GitHub | 成果物だけ | Issueへの承認のコメントと、承認を取り消したときのコメント、PRのレビューと返信 |
 
-GitHubには成果物だけを書く。Issueに自動で投稿するのは、要件定義が承認されたときのConsoleへのリンク1件だけである。着手、承認待ち、却下、期限切れ、失敗、人の対応待ちといった運用上の状態は、Issue・PRに書かない。DiscordとConsoleで知らせる。
+GitHubには成果物だけを書く。Issueに自動で投稿するのは、要件定義が承認されたときのConsoleへのリンクと、承認の直後に新しいサイクルが始まって承認を取り消したときの説明の、2種類のコメントだけである。着手、承認待ち、却下、期限切れ、失敗、人の対応待ちといった運用上の状態は、Issue・PRに書かない。DiscordとConsoleで知らせる。
 
 ## Discordの通知の種類
 
@@ -194,7 +194,6 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `labeler_association_denied` | `poll_issues` | 対象、ラベル付与者の関係 |
 | `claim_race_lost` | `poll_issues`、`poll_prs`、`manual_intake_register` | 対象、取得できなかった理由 |
 | `claim_assignee_missing` | `poll_issues` | 対象、assigneeにできなかったユーザー、確かめる点 |
-| `work_item_superseded` | `requirements_apply` | 対象、作業項目のID、置き換えられたこと |
 | `deployed_sha_mismatch` | `poll_issues` | self cloneのHEADと`f/factory/deployed_sha` |
 | `cleanup_db_failed` | `cleanup_db` | 削除に失敗した対象とエラー |
 | `cleanup_worktrees_skipped` | `cleanup_workspaces` | 掃除を見送ったリポジトリ |

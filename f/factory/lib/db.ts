@@ -408,16 +408,73 @@ export async function insertIssueWorkItemUnlessActive(
   return row === undefined ? null : parseId(row.id, "id");
 }
 
+const ACTIVE_ISSUE_INDEX_NAME = "work_items_active_issue_key";
+
 /**
  * 例外が、部分一意インデックス`work_items_active_issue_key`への違反かを返す。
  * 終端の作業項目を稼働中の状態へ戻す更新(`approved`から`implementing`への移行、
  * `retry_work_item`の再開)が、同じIssueの別の稼働中の作業項目に阻まれたときに起きる。
- * エラーの文に制約名が含まれることで判定する。
+ * 制約名が、エラーの文か、文字列の`body`に含まれることで判定する。
  */
 export function isActiveIssueUniqueViolation(err: unknown): boolean {
-  return (
-    err instanceof Error && err.message.includes("work_items_active_issue_key")
-  );
+  if (!(err instanceof Error)) return false;
+  if (err.message.includes(ACTIVE_ISSUE_INDEX_NAME)) return true;
+  // windmill-clientは、500以外のAPIのエラーでは、サーバーの文を`body`に入れる。
+  const body: unknown = Reflect.get(err, "body");
+  return typeof body === "string" && body.includes(ACTIVE_ISSUE_INDEX_NAME);
+}
+
+/**
+ * `approved`の作業項目を、同じIssueの稼働中の作業項目に置き換えられたものとして
+ * `cancelled`へ移し、`factory.work_item_events`に行を残す。
+ * 置き換えた側の稼働中の作業項目が、同じIssueに実際に残っているときだけ移す。
+ * 残っていなければ(先に終わった、取り消されたなど)、何もせず`false`を返す。
+ * 移した場合は`true`を返す。1つの文で判定と更新を行い、判定と更新の間に割り込ませない。
+ */
+export async function cancelSupersededApprovedWorkItem(
+  id: number,
+  note: string | null,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  const terminal: string[] = [...TERMINAL_WORK_ITEM_STATUSES];
+  const rows = await sql`
+    WITH updated AS (
+      UPDATE factory.work_items AS wi
+      SET status = 'cancelled', updated_at = now()
+      WHERE wi.id = ${id} AND wi.status = 'approved' AND wi.kind = 'issue'
+        AND EXISTS (
+          SELECT 1 FROM factory.work_items o
+          WHERE o.owner = wi.owner AND o.repo = wi.repo AND o.issue_number = wi.issue_number
+            AND o.kind = 'issue' AND o.id <> wi.id AND o.status != ALL(${terminal})
+        )
+      RETURNING wi.id
+    )
+    INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note)
+    SELECT updated.id, 'approved', 'cancelled', ${note}
+    FROM updated
+    RETURNING work_item_id
+  `.fetch();
+  return rows.length > 0;
+}
+
+/**
+ * (owner, repo, issueNumber)の、終端でない`issue`の作業項目を返す。
+ * 一意インデックスにより、通常は多くても1件である。
+ */
+export async function listActiveIssueWorkItems(
+  owner: string,
+  repo: string,
+  issueNumber: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<WorkItem[]> {
+  const terminal: string[] = [...TERMINAL_WORK_ITEM_STATUSES];
+  const rows = await sql`
+    SELECT * FROM factory.work_items
+    WHERE kind = 'issue' AND owner = ${owner} AND repo = ${repo}
+      AND issue_number = ${issueNumber}::integer AND status != ALL(${terminal})
+    ORDER BY updated_at DESC
+  `.fetch();
+  return rows.map(toWorkItem);
 }
 
 /**

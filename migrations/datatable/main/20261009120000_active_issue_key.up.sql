@@ -21,8 +21,12 @@
 --
 -- The table is locked first so that no insert can slip in between the
 -- cancelling and the index creation. SHARE ROW EXCLUSIVE blocks concurrent
--- writes and still allows reads.
+-- writes and still allows reads. The lock waits at most 30 seconds, so a
+-- stalled writer makes the migration fail loudly (self_update retries)
+-- instead of hanging.
 BEGIN;
+
+SET LOCAL lock_timeout = '30s';
 
 LOCK TABLE factory.work_items IN SHARE ROW EXCLUSIVE MODE;
 
