@@ -2052,9 +2052,9 @@ describe("ensureHeadOnBranch (real git)", () => {
         `${fixture.worktree}-2`,
         "target",
       ]);
-      // fixtureの環境は`LANG`を渡さないので、gitの文言は英語になる。
+      // gitの拒否の文言は版と言語で変わるので、失敗することと、エラーに実行したコマンドが載ることだけを見る。
       await expect(ensure(fixture, fixture.mainSha)).rejects.toThrow(
-        /checkout -f -B[\s\S]*already (used by worktree|checked out)/,
+        /checkout -f -B/,
       );
     },
   );
