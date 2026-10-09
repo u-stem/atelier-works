@@ -191,6 +191,14 @@ describe(".claude/agents", () => {
     expect(body("triage")).toContain("受け入れ済み");
   });
 
+  test("lets triage record answered questions as settled", () => {
+    expect(body("triage")).toContain("回答済み");
+  });
+
+  test("makes triage report the severity before and after raising it", () => {
+    expect(body("triage")).toContain("重さ(前→後)");
+  });
+
   test("makes triage decide by the numbered criteria", () => {
     expect(body("triage")).toContain("見送る(基準<番号>)");
   });
