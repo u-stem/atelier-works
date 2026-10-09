@@ -35,3 +35,5 @@ schema:
     - decision
     - reason
     - note
+tag: console
+timeout: 120

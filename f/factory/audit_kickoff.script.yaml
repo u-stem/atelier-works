@@ -20,3 +20,5 @@ schema:
       default: manual
       originalType: string
   required: []
+tag: console
+timeout: 120

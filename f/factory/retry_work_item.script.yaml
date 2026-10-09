@@ -12,3 +12,5 @@ schema:
       default: null
   required:
     - work_item_id
+tag: console
+timeout: 120

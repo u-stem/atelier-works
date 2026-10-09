@@ -38,3 +38,5 @@ schema:
       default: null
   required:
     - view
+tag: console
+timeout: 60

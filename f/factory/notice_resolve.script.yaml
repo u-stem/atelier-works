@@ -12,3 +12,5 @@ schema:
       default: null
   required:
     - notice_id
+tag: console
+timeout: 30
