@@ -24,6 +24,7 @@ Claudeの長いジョブがdefaultワーカーグループの枠を埋めても�
 受け付けた後の処理は、defaultのworkerで動く。
 承認のハンドラ、再実行、監査の開始がそうであり、defaultに空きができるまで待つ。
 このworkerはワーカーグループ`console`に属し、tag`console`のジョブだけを受ける。
+どのscriptをこのworkerで動かすかは、scriptの`tag`で決める。
 上流のWindmillイメージで動き、`NUM_WORKERS=2`により2つのワーカープロセスが動く。1件のジョブが止まっても、全体は止まらない。メモリの上限は1024Mである。
 `factory_state`と`factory_console`は読み取り専用でマウントし、`factory_workspaces`はマウントしない。
 

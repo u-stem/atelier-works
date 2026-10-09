@@ -151,7 +151,8 @@ services:
   ## 受け付けた後の処理(承認のハンドラ、再実行、監査の開始)はdefaultのworkerで動く。
   ## 書き込めるマウントは`worker_logs`だけにする。`factory_state`を読み取り専用で付けるのは、
   ## `requirements_doc`が要件定義書と図のファイルをここから読むため。
-  ## `factory_workspaces`と`worker_dependency_cache`は付けない。
+  ## `factory_workspaces`は付けない。依存のキャッシュは専用のボリュームに置き、
+  ## defaultの`worker_dependency_cache`とは共有しない。
   ## 2つのworkerプロセスは、1件のjobが止まっても全体を止めないためで、
   ## メモリはbunのプロセス2つが収まる量にする。
   windmill_worker_console:
@@ -178,6 +179,7 @@ services:
       db:
         condition: service_healthy
     volumes:
+      - worker_console_dependency_cache:/tmp/windmill/cache
       - worker_logs:/tmp/windmill/logs
       - factory_console:/srv/console:ro
       - factory_state:/var/lib/factory:ro
@@ -254,6 +256,7 @@ services:
 volumes:
   db_data: null
   worker_dependency_cache: null
+  worker_console_dependency_cache: null
   worker_logs: null
   caddy_data: null
   lsp_cache: null

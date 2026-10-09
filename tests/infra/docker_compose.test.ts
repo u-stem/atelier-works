@@ -28,7 +28,10 @@ function service(name: string): Json {
 
 function stringList(svc: Json, key: string): string[] {
   const value = svc[key];
-  return isStringArray(value) ? value : [];
+  if (value === undefined) return [];
+  // map形式などの配列でない値は、否定形のテストが空振りしないよう拒否する。
+  if (!isStringArray(value)) throw new Error(`${key} must be a string array`);
+  return value;
 }
 
 function envEntries(svc: Json, prefix: string): string[] {
@@ -48,7 +51,15 @@ describe("infra/docker-compose.yml windmill_worker_console", () => {
     expect(Object.keys(svc).length).toBeGreaterThan(0);
   });
 
-  test("uses the upstream image pinned by WM_VERSION like the native worker", () => {
+  test("uses the upstream windmill image pinned by WM_VERSION", () => {
+    const svc = service("windmill_worker_console");
+
+    expect(svc.image).toStartWith(
+      "ghcr.io/windmill-labs/windmill:${WM_VERSION",
+    );
+  });
+
+  test("uses the same image as the native worker", () => {
     const svc = service("windmill_worker_console");
     const native = service("windmill_worker_native");
 
@@ -170,11 +181,22 @@ describe("infra/docker-compose.yml windmill_worker_console", () => {
     ).toEqual([]);
   });
 
-  test("mounts nothing writable other than worker_logs", () => {
+  test("mounts its own dependency cache", () => {
+    const svc = service("windmill_worker_console");
+
+    expect(stringList(svc, "volumes")).toContain(
+      "worker_console_dependency_cache:/tmp/windmill/cache",
+    );
+  });
+
+  test("mounts nothing writable other than worker_logs and its own cache", () => {
     const svc = service("windmill_worker_console");
 
     const writable = stringList(svc, "volumes").filter(
-      (v) => !v.endsWith(":ro") && !v.startsWith("worker_logs:"),
+      (v) =>
+        !v.endsWith(":ro") &&
+        !v.startsWith("worker_logs:") &&
+        !v.startsWith("worker_console_dependency_cache:"),
     );
 
     expect(writable).toEqual([]);

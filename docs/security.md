@@ -239,13 +239,13 @@ workerには`no-new-privileges:true`と、プロセス数の上限(`deploy.resou
 Console用のworker(`windmill_worker_console`)は、Consoleの問い合わせと操作の受付だけを処理する。
 信頼できないIssueを読むClaudeは、このworkerでは動かさない。
 このworkerの境界が守るのは、ファイルシステムだけである。
-ファイルシステムについては、次のように絞る。
+絞り方は次のとおりである。
 
 | 項目 | 設定 |
 | --- | --- |
-| 書き込めるマウント | `worker_logs`だけである。`factory_state`と`factory_console`は読み取り専用でマウントする。`worker_logs`はdefaultのworkerと共有する書き込みのマウントである |
+| 書き込めるマウント | `worker_logs`と専用の依存キャッシュ`worker_console_dependency_cache`だけである。`factory_state`と`factory_console`は読み取り専用でマウントする。`worker_logs`はdefaultのworkerと共有する書き込みのマウントである |
 | `factory_workspaces` | マウントしない。対象リポジトリのチェックアウトに届かない |
-| `worker_dependency_cache` | 共有しない。defaultのworkerと依存のキャッシュを通して影響し合わない |
+| `worker_dependency_cache` | 共有しない。Console用のworkerは専用のボリュームを使うので、defaultのworkerと依存のキャッシュを通して影響し合わない |
 | `docker.sock` | マウントしない |
 | 権限 | `privileged`にしない。`no-new-privileges:true`と`init`を設定し、プロセス数は256、メモリは1024Mに絞る |
 
@@ -258,8 +258,8 @@ Console用のworker(`windmill_worker_console`)は、Consoleの問い合わせと
 - `factory_state`には、`requirements/`と`audits/`のほかに、次のものも入っていて、Console用のworkerから読める。
   - Claude Codeの設定と履歴(`CLAUDE_CONFIG_DIR=/var/lib/factory/claude`)
   - ghの設定(`GH_CONFIG_DIR=/var/lib/factory/gh`)
-- Console用のworkerで動くのはリポジトリのscriptだけである。defaultのworkerは同じファイルを読み書きできる。
-- tagの正は、composeの環境変数`WORKER_TAGS`である。DBにworkerグループの設定があると、そちらが優先される。
+- このworkerで動かすのはリポジトリのscriptのつもりだが、強制ではない。ワークスペースでscriptを編集できる者は、任意のscriptにtag`console`を付けられる。defaultのworkerは、上の設定と履歴を読み書きできる。
+- composeの環境変数`WORKER_TAGS`は既定値である。DBにワーカーグループの設定があると、そちらが実効になる。変化はWindmillの画面の「Workers」で確かめる。
 
 ## 自己更新の依存インストール
 
