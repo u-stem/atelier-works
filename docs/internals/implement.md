@@ -633,7 +633,8 @@ safe.directoryやロックの失敗は、理由を隠さずstderrつきで例外
 `refs/heads/origin/<既定のブランチ>`が置かれていると、別のcommitから作られる。
 そのため、作った後にブランチの先頭を、完全な名前で読んだ値と照合する。
 照合の相手は、リモートにブランチがあればその追跡ref、無ければ`refs/remotes/origin/HEAD`である。
-違えば、検証したshaへ`reset --hard`して`clean -fd`をする。
+違えば、検証したshaへ`reset --hard`して`clean -fdx`をする。
+誤ったcommitのtreeが置いたファイルのうち、検証したtreeの`.gitignore`が除外するものも消すため、`-x`を付ける。
 すでにあったローカルのブランチが追跡ref(無ければ`refs/remotes/origin/HEAD`)と違うときも、使い回しの経路と同じくそろえる。
 gtrは既定のブランチを`gtr.defaultBranch`、`GTR_DEFAULT_BRANCH`、`.gtrconfig`から取ることがある。
 Factoryはこの設定を意図して無視し、照合は常に`refs/remotes/origin/HEAD`と比べて、違えばそこへ戻す。

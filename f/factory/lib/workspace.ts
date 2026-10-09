@@ -2181,19 +2181,17 @@ export async function createGtrWorktree(
         throw gitError(`git gtr new ${opts.branch} failed`, result);
       }
       const created = parseGtrPorcelain(result.stdout);
-      // 戻す先にする、作った時点のブランチの先頭。確かめより前にworktreeでgitを実行しないよう、メインのcloneで読む。
-      // `rev-parse`には`--`を付けない(`buildGitArgv`の例外を参照)。`opts.branch`は検証済みである。
-      const headResult = await opts.run(
-        buildGitArgv(["rev-parse", "--verify", `refs/heads/${opts.branch}`]),
-        { cwd: opts.repoDir, env: localGitEnv(opts.home, opts.path) },
-      );
-      if (headResult.exitCode !== 0) {
-        throw gitError(
-          `git rev-parse refs/heads/${opts.branch} failed (gtr new)`,
-          headResult,
-        );
+      // 作った時点のブランチの先頭。確かめより前にworktreeでgitを実行しないよう、メインのcloneで読む。
+      // 完全な名前を一致させて読み、別のrefへ解決し直さない(`readExactRef`)。`opts.branch`は検証済みである。
+      const createdSha = await readExactRef({
+        run: opts.run,
+        cwd: opts.repoDir,
+        env: localGitEnv(opts.home, opts.path),
+        ref: `refs/heads/${opts.branch}`,
+      });
+      if (createdSha === null) {
+        throw new Error(`refs/heads/${opts.branch} does not exist (gtr new)`);
       }
-      const createdSha = headResult.stdout.trim();
       assertSha(createdSha);
       // `git gtr new`は、リモートにあるブランチを短い名前の`origin/<branch>`から、
       // 無いブランチを短い名前の`origin/<既定のブランチ>`から作る(gtr 2.11.1のソースで確かめた)。
@@ -2247,12 +2245,20 @@ export async function createGtrWorktree(
           resetResult,
         );
       }
-      const cleanResult = await opts.run(buildGitArgv(["clean", "-fd"]), {
+      // 先頭を作り直したときは、`-x`も付ける。
+      // 誤ったcommitのtreeに置かれたファイルのうち、検証したtreeの.gitignoreが除外するもの
+      // (`node_modules/`など)は、`-fd`では消えずに残るためである。
+      // プロセスを止めただけのときは、対象リポジトリの生成物を残すため`-fd`にする。
+      const cleanFlags = misplaced ? "-fdx" : "-fd";
+      const cleanResult = await opts.run(buildGitArgv(["clean", cleanFlags]), {
         cwd: created.path,
         env: localGitEnv(opts.home, opts.path),
       });
       if (cleanResult.exitCode !== 0) {
-        throw gitError("git clean -fd failed (gtr new restore)", cleanResult);
+        throw gitError(
+          `git clean ${cleanFlags} failed (gtr new restore)`,
+          cleanResult,
+        );
       }
       return created;
     },

@@ -1861,10 +1861,16 @@ describe("createGtrWorktree", () => {
         const fake = createFakeCommandRunner(responses());
         await create(fake, true);
         expect({
-          argv: fake.calls[3]?.argv.slice(-3),
+          argv: fake.calls[3]?.argv.slice(-5),
           cwd: fake.calls[3]?.options?.cwd,
         }).toEqual({
-          argv: ["rev-parse", "--verify", "refs/heads/contract-smoke-branch"],
+          argv: [
+            "show-ref",
+            "--verify",
+            "--hash",
+            "--",
+            "refs/heads/contract-smoke-branch",
+          ],
           cwd: REUSED_REPO,
         });
       });
@@ -2081,12 +2087,35 @@ describe("createGtrWorktree", () => {
         );
       });
 
+      test("throws when the branch does not exist after gtr new", async () => {
+        const fake = createFakeCommandRunner([
+          ...responses().slice(0, 3),
+          fail(
+            "fatal: 'refs/heads/contract-smoke-branch' - not a valid ref",
+            128,
+          ),
+        ]);
+        await expect(create(fake, true)).rejects.toThrow(
+          /refs\/heads\/contract-smoke-branch does not exist/,
+        );
+      });
+
+      test("cleans ignored files too when gtr created the branch elsewhere", async () => {
+        const fake = createFakeCommandRunner([
+          ...responses().slice(0, 4),
+          ok(`${TRACKING_SHA}\n`),
+          ...responses().slice(5),
+        ]);
+        await create(fake, false);
+        expect(fake.calls[8]?.argv.slice(-2)).toEqual(["clean", "-fdx"]);
+      });
+
       test("throws when the branch head cannot be read", async () => {
         const fake = createFakeCommandRunner([
           ...responses().slice(0, 3),
           fail("fatal: Needed a single revision"),
         ]);
-        await expect(create(fake, true)).rejects.toThrow(/rev-parse/);
+        await expect(create(fake, true)).rejects.toThrow(/show-ref/);
       });
     });
   });
@@ -3882,6 +3911,9 @@ describe("remote ref reads (real git)", () => {
         path,
         resolved,
       ]);
+      // gtrのコピーなどが作りうる、検証したtreeの.gitignoreが除外するファイル。
+      mkdirSync(join(path, "node_modules"));
+      writeFileSync(join(path, "node_modules", "planted.js"), "planted\n");
       return {
         // gtrは実体のパスを返す(macOSの一時ディレクトリはsymlink越しになる)。
         stdout: `path\t${realpathSync(path)}\nbranch\t${NEW_BRANCH}\nhook_status\tnone\n`,
@@ -3893,6 +3925,17 @@ describe("remote ref reads (real git)", () => {
   }
 
   async function createNewBranchWorktree(fixture: Fixture) {
+    // 検証する既定のブランチのtreeに、node_modules/を除外する.gitignoreを置く。
+    writeFileSync(join(fixture.worktree, ".gitignore"), "node_modules/\n");
+    await fixture.git(fixture.worktree, ["add", ".gitignore"]);
+    await fixture.git(fixture.worktree, ["commit", "-q", "-m", "ignore"]);
+    await fixture.git(fixture.worktree, [
+      "push",
+      "-q",
+      "origin",
+      "HEAD:refs/heads/main",
+    ]);
+    await fixture.git(fixture.repo, ["fetch", "-q", "origin"]);
     await plantShadowRef(fixture, "refs/heads/origin/main");
     return createGtrWorktree({
       run: gtrNewBranchEmulator(fixture, `${fixture.worktree}-new`),
@@ -3913,6 +3956,14 @@ describe("remote ref reads (real git)", () => {
         "rev-parse",
         "refs/remotes/origin/main",
       ]),
+    );
+  });
+
+  test("createGtrWorktree removes ignored files that a wrongly created tree left behind", async () => {
+    const fixture = await setUp();
+    const created = await createNewBranchWorktree(fixture);
+    expect(existsSync(join(created.path, "node_modules", "planted.js"))).toBe(
+      false,
     );
   });
 
