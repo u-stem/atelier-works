@@ -89,6 +89,19 @@ export type FetcherAssessment =
   | { readonly verdict: "stale"; readonly minutes_since_check: number };
 
 /**
+ * status.jsonの`error`を、通知やDiscordに出せる固定の語にする。
+ * 表(`FETCH_ERROR_NEXT_ACTIONS`)にある分類はそのまま、無ければ`unknown`、
+ * 表に無い文字列(取り込み側が新しくなった場合など)は`unknown_code`にする。
+ * 長い文字列を外に出さず、通知の本文と原因のキーを同じ語に揃えて重複を防ぐため。
+ */
+export function normalizeFetchErrorCode(code: string | null): string {
+  if (code === null) {
+    return "unknown";
+  }
+  return Object.hasOwn(FETCH_ERROR_NEXT_ACTIONS, code) ? code : "unknown_code";
+}
+
+/**
  * 取り込みの状態を判定する。どの判定も、最後の確認からの経過分(切り捨て、0以上)を持つ。
  * `checked_at`から`FETCHER_STALE_MINUTES`分以上たっていれば、`state`によらず`stale`を返す。
  * コンテナが止まっていれば、`state`は最後に書かれた古い値のままだからである。
@@ -107,7 +120,7 @@ export function classifyFetcherStatus(
   if (status.state === "failed") {
     return {
       verdict: "failed",
-      code: status.error ?? "unknown",
+      code: normalizeFetchErrorCode(status.error),
       minutes_since_check: minutes,
     };
   }

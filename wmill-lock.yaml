@@ -10,7 +10,7 @@ locks:
   f/factory/audit_kickoff: 71c7133b44557fd85a106161794abc5964175f23695993577b209827b95d5757
   f/factory/cleanup_db: de59ee1e0854fc59be153cf27e204da7dbc933d48c5a895d07ff25150aa6d0fc
   f/factory/cleanup_workspaces: 7430896374df64f199577a0b338c2b16b1233a9bfc1fe6d7321845119ec5fccc
-  f/factory/console_fetch_watch: 74dc8d8203178b6253eef1359a85f2937c6a14f888b98a8f01a0ab22ae9d678f
+  f/factory/console_fetch_watch: 188646cdc7f977118762d67c8a00a04aedb5fa8f291ef46da3e7dda16cfb05b7
   f/factory/factory_console__raw_app+__app_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/implement__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/lib/approval_support: 20f96fdb02ddba3ca38eeb6b259ffb0a063acbe3339e68c5a94ceb5e11d14602
@@ -23,7 +23,7 @@ locks:
   f/factory/lib/cleanup_db_support: 14b6b17c072d89e10b478331988fca5d3b6814eefae4a7df57b32afa11be8305
   f/factory/lib/cleanup_support: c533522c2ae48e4207c7b0db9ec8c1774c282dad5b962cd9a0b35e927f3c37e5
   f/factory/lib/config: 5922d286a1443ab1057dd2164be94bf49288a7abdbcbfc463d1faf3a362f7d1a
-  f/factory/lib/console_status: 502fd085b8c94896a4e283d1dd9a3c669bcd9f45357591810539bdcc8befc310
+  f/factory/lib/console_status: ee1e2ab9df9b3fc2b5fd492d3576a137dc418f3d616373a555e043d373b411c9
   f/factory/lib/console_support: e1a65da96513a586d40364ff867637e03026c3e0bcc15b96afe541636848685f
   f/factory/lib/console_worker: a4ea745e851b82490882161032030ccff3a82a200a04ba151226e1df4444fc06
   f/factory/lib/db: 7bf3fe25765e08d08463d2913046344c62b706842c88cdd1238d36d032f50200

@@ -125,6 +125,28 @@ describe("classifyFetcherStatus", () => {
     ).toEqual({ verdict: "failed", code: "unknown", minutes_since_check: 2 });
   });
 
+  test("rounds a code the fetcher table does not know to unknown_code", () => {
+    expect(
+      classifyFetcherStatus(
+        status({ state: "failed", error: `new_${"x".repeat(500)}` }),
+        NOW,
+      ),
+    ).toEqual({
+      verdict: "failed",
+      code: "unknown_code",
+      minutes_since_check: 2,
+    });
+  });
+
+  test("does not round a prototype property name into a known code", () => {
+    expect(
+      classifyFetcherStatus(
+        status({ state: "failed", error: "constructor" }),
+        NOW,
+      ),
+    ).toMatchObject({ code: "unknown_code" });
+  });
+
   test("reports exactly thirty minutes as stale", () => {
     expect(
       classifyFetcherStatus(

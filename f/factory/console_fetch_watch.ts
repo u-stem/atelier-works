@@ -5,7 +5,8 @@
 // 原因が続いている間は毎回noticeを試みるので、運用者が解決した後も原因が続けば、
 // 次の回に新しいnoticeが1件できる。Discordはnoticeを新しく挿入できたときだけ送る。
 // GitHubのrate limitやAPIの一時的な障害は、同じ状態が60分以上続いたときだけ知らせる。
-// 続いた長さは、Windmillのstateに残す最初に見た時刻で測る。stateを失っても、通知が遅れるだけである。
+// 続いた長さは、Windmillのstateに残す続き始めた時刻で測る。stateを失っても、通知が遅れるだけである。
+// 一時的な失敗の分類が行き来しても、時刻は戻さない。
 // 正常に戻ったらstateを空にするが、noticeは自動では解決しない。運用者が原因を確かめて解決する。
 
 import * as wmill from "windmill-client@1.817.0";
@@ -40,10 +41,13 @@ const TRANSIENT_CODES: readonly string[] = [
   "github_unavailable",
 ];
 
-/** 今の原因と、それを最初に見た時刻。Windmillのstateに保存する。 */
+/**
+ * 今の原因と、一時的な失敗が続き始めた時刻。Windmillのstateに保存する。
+ * `transient_since`は、今の原因が一時的な失敗のときだけ時刻を持ち、それ以外は`null`である。
+ */
 export type WatchState = {
   readonly cause_key: string;
-  readonly first_seen: string;
+  readonly transient_since: string | null;
 } | null;
 
 /** 知らせる原因。`message`はnoticeの本文で、同じ原因では同じ文になる。 */
@@ -61,12 +65,12 @@ export type WatchDecision =
   | { readonly action: "none"; readonly next_state: null }
   | {
       readonly action: "wait";
-      readonly next_state: { cause_key: string; first_seen: string };
+      readonly next_state: NonNullable<WatchState>;
     }
   | {
       readonly action: "notify";
       readonly cause: WatchCause;
-      readonly next_state: { cause_key: string; first_seen: string };
+      readonly next_state: NonNullable<WatchState>;
     };
 
 const STATUS_FILE_NEXT_ACTION =
@@ -136,9 +140,10 @@ function causeOf(observed: WatchObservation, now: Date): WatchCause | null {
 /**
  * 前回の状態`prev`と今の状態から、何をするかを決める純関数。
  * - 正常: 何もせず、stateを空にする。
- * - 一時的な失敗が60分未満: 知らせず、最初に見た時刻をstateに残す。
+ * - 一時的な失敗が60分未満: 知らせず、続き始めた時刻をstateに残す。
  * - それ以外の原因: 知らせる。原因が続く間は毎回この判定になり、重複はnoticeの側で防ぐ。
- * 最初に見た時刻は、原因が前回と同じ間は保ち、原因が変わったら今にする。
+ * 続き始めた時刻は、前回も今回も一時的な失敗なら、失敗の分類が変わっても保つ。
+ * `rate_limited`と`github_unavailable`が行き来しても、60分の時計を戻さないためである。
  */
 export function decideWatch(
   prev: WatchState,
@@ -149,13 +154,12 @@ export function decideWatch(
   if (cause === null) {
     return { action: "none", next_state: null };
   }
-  const firstSeen =
-    prev !== null && prev.cause_key === cause.key
-      ? prev.first_seen
-      : now.toISOString();
-  const nextState = { cause_key: cause.key, first_seen: firstSeen };
-  if (cause.transient) {
-    const lastedMs = now.getTime() - new Date(firstSeen).getTime();
+  const transientSince = cause.transient
+    ? (prev?.transient_since ?? now.toISOString())
+    : null;
+  const nextState = { cause_key: cause.key, transient_since: transientSince };
+  if (transientSince !== null) {
+    const lastedMs = now.getTime() - new Date(transientSince).getTime();
     if (lastedMs < TRANSIENT_NOTIFY_AFTER_MINUTES * 60_000) {
       return { action: "wait", next_state: nextState };
     }
@@ -164,7 +168,7 @@ export function decideWatch(
 }
 
 /**
- * 保存したstateを解析する。形が違うもの(初回の`null`、最初に見た時刻が読めないものを含む)は
+ * 保存したstateを解析する。形が違うもの(初回の`null`、時刻が読めないものを含む)は
  * `null`を返し、前回の原因が無いものとして扱う。
  */
 export function parseWatchState(value: unknown): WatchState {
@@ -172,13 +176,17 @@ export function parseWatchState(value: unknown): WatchState {
     return null;
   }
   const key = value.cause_key;
-  const firstSeen = value.first_seen;
-  if (!isString(key) || key.length === 0 || !isString(firstSeen)) {
+  const since = value.transient_since;
+  if (!isString(key) || key.length === 0) {
     return null;
   }
-  return Number.isNaN(new Date(firstSeen).getTime())
-    ? null
-    : { cause_key: key, first_seen: firstSeen };
+  if (since === null) {
+    return { cause_key: key, transient_since: null };
+  }
+  if (!isString(since) || Number.isNaN(new Date(since).getTime())) {
+    return null;
+  }
+  return { cause_key: key, transient_since: since };
 }
 
 /** `runWatch`が使う外部の操作。テストでは差し替える。 */
@@ -221,7 +229,10 @@ export async function runWatch(deps: WatchDeps): Promise<WatchResult> {
   }
 
   const causeKey = decision.next_state.cause_key;
-  const stateChanged = prev === null || prev.cause_key !== causeKey;
+  const stateChanged =
+    prev === null ||
+    prev.cause_key !== causeKey ||
+    prev.transient_since !== decision.next_state.transient_since;
 
   if (decision.action === "wait") {
     if (stateChanged) {
