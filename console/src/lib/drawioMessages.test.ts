@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import {
-  acceptsFrameMessages,
   buildRenderMessage,
   clampFrameHeight,
   FRAME_STOPPED_TEXT,
@@ -8,7 +7,6 @@ import {
   MAX_FRAME_HEIGHT,
   MAX_XML_BYTES,
   MIN_FRAME_HEIGHT,
-  phaseAfterLoad,
   readFrameError,
   readFrameHeight,
 } from "./drawioMessages.ts";
@@ -141,43 +139,6 @@ describe("readFrameHeight", () => {
   });
 });
 
-describe("phaseAfterLoad", () => {
-  test("sends the xml on the first load", () => {
-    expect(phaseAfterLoad("loading")).toEqual({
-      phase: "rendered",
-      send: true,
-    });
-  });
-
-  test("stops without sending on the second load", () => {
-    expect(phaseAfterLoad("rendered")).toEqual({
-      phase: "stopped",
-      send: false,
-    });
-  });
-
-  test("stays stopped and sends nothing on a later load", () => {
-    expect(phaseAfterLoad("stopped")).toEqual({
-      phase: "stopped",
-      send: false,
-    });
-  });
-});
-
-describe("acceptsFrameMessages", () => {
-  test("accepts messages while loading", () => {
-    expect(acceptsFrameMessages("loading")).toBe(true);
-  });
-
-  test("accepts messages after the xml was sent", () => {
-    expect(acceptsFrameMessages("rendered")).toBe(true);
-  });
-
-  test("refuses messages once stopped", () => {
-    expect(acceptsFrameMessages("stopped")).toBe(false);
-  });
-});
-
 describe("readFrameError", () => {
   const frame = {};
 
@@ -243,6 +204,10 @@ describe("frameErrorText", () => {
         (reason) => frameErrorText(reason).length > 0,
       ),
     ).toEqual([true, true, true]);
+  });
+
+  test("has a sentence for the parent-side no response failure", () => {
+    expect(frameErrorText("no_response")).toContain("図を表示できません");
   });
 
   test("says the display was stopped", () => {

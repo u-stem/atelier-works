@@ -85,7 +85,11 @@ export function readFrameHeight(
 
 export type FrameErrorReason = "viewer_missing" | "render_failed" | "too_large";
 
-const ERROR_TEXTS: Readonly<Record<FrameErrorReason, string>> = {
+/** iframeの失敗の種類に、親が決めた「応答なし」を足したもの。応答なしは、iframeからは届かない。 */
+export type FrameFailure = FrameErrorReason | "no_response";
+
+const ERROR_TEXTS: Readonly<Record<FrameFailure, string>> = {
+  no_response: "図を表示できません。図のページが応答しませんでした。",
   viewer_missing: "図のビューアが読み込まれていないため、図を表示できません。",
   render_failed: "図を表示できませんでした。",
   too_large: "図が大きすぎるため、表示できません。",
@@ -114,37 +118,9 @@ export function readFrameError(
 }
 
 /** 失敗の種類に対応する、画面に出す文を返す。 */
-export function frameErrorText(reason: FrameErrorReason): string {
+export function frameErrorText(reason: FrameFailure): string {
   return ERROR_TEXTS[reason];
 }
 
 /** iframeの遷移を検知して表示を止めたときに出す文。 */
 export const FRAME_STOPPED_TEXT = "図の表示を止めました。";
-
-/**
- * iframeの一生の段階。
- * - loading: 最初のloadを待っている
- * - rendered: 最初のloadでXMLを送った
- * - stopped: 2回目のloadを受けた(iframeが遷移した)ので、表示を止めた
- */
-export type FramePhase = "loading" | "rendered" | "stopped";
-
-/**
- * loadを受けたときの次の段階と、XMLを送ってよいかを返す。
- * 送るのは最初のloadの後の1回だけにする。
- * 2回目のloadは、iframeが別の文書へ遷移したことを表す。遷移した先にXMLを渡さない。
- */
-export function phaseAfterLoad(phase: FramePhase): {
-  readonly phase: FramePhase;
-  readonly send: boolean;
-} {
-  if (phase === "loading") {
-    return { phase: "rendered", send: true };
-  }
-  return { phase: "stopped", send: false };
-}
-
-/** この段階のiframeから届いたメッセージを受けてよいかを返す。 */
-export function acceptsFrameMessages(phase: FramePhase): boolean {
-  return phase !== "stopped";
-}
