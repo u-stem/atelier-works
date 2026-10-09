@@ -10,11 +10,17 @@ const AGENTS = [
   "security-auditor",
   "devil-advocate",
   "doc-writer",
+  "requirements-reviewer",
+  "design-reviewer",
+  "triage",
 ];
 const READ_ONLY_AGENTS = [
   "code-reviewer",
   "security-auditor",
   "devil-advocate",
+  "requirements-reviewer",
+  "design-reviewer",
+  "triage",
 ];
 const FACTORY_DOCS_PRELOADED = ["implementer", "code-reviewer", "doc-writer"];
 const OWNED_DIRS = [".claude/agents", ".claude/skills/review-loop"];
