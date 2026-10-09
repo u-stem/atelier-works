@@ -30,6 +30,13 @@ report() {
   fi
 }
 
+# 確認できなかった項目を警告として1行出す。失敗には数えない。
+# 使い方: warn <label> [detail]
+warn() {
+  local label="$1" detail="${2:-}"
+  printf '  WARN %-31s %s\n' "${label}" "${detail}"
+}
+
 echo "=== Software Factory環境診断 ==="
 echo
 
@@ -188,6 +195,28 @@ if [[ "${windmill_is_up}" -eq 1 ]]; then
   fi
 else
   report "初期パスワード" ok "Windmill未起動のためスキップしました"
+fi
+
+# 11. インスタンスのカスタムtagに`console`があるか(Windmillが応答している場合だけ)
+# Consoleのscriptは`console`のtagを持つ。superadminでない主体は、インスタンスが
+# 許可したtagのscriptしか実行できない。管理者でログインして確かめるが、
+# パスワードは引数に載せず、`scripts/custom-tags.ts`が環境変数から読む。
+# ログインできないなど、確認できないときは失敗にせず警告にする。
+if [[ "${windmill_is_up}" -eq 1 ]]; then
+  if ! command -v mise >/dev/null 2>&1; then
+    warn "カスタムtag" "miseが無いため確認できません"
+  else
+    tag_status=0
+    (cd "${REPO_ROOT}" && mise exec -- bun run scripts/custom-tags.ts check console) \
+      >/dev/null 2>&1 || tag_status=$?
+    case "${tag_status}" in
+      0) report "カスタムtag" ok "consoleが許可されています" ;;
+      1) report "カスタムtag" ng "consoleが許可されていません('mise run instance:tags' を実行してください)" ;;
+      *) warn "カスタムtag" "確認できませんでした(管理者でログインできるか確かめてください)" ;;
+    esac
+  fi
+else
+  report "カスタムtag" ok "Windmill未起動のためスキップしました"
 fi
 
 echo

@@ -152,6 +152,10 @@ run = "scripts/doctor.sh"
 description = "Bootstrap the local Windmill workspace"
 run = "scripts/bootstrap.sh"
 
+[tasks."instance:tags"]
+description = "Allow the console custom tag on the running Windmill instance (idempotent)"
+run = "scripts/bootstrap.sh custom-tags"
+
 [tasks."test:db"]
 description = "Apply datatable migrations to a scratch database and SELECT from every view"
 run = "scripts/test-db.sh"

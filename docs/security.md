@@ -255,6 +255,13 @@ Console用のworker(`windmill_worker_console`)は、Consoleの問い合わせと
 `factory_console`は配信中のJSの置き場所なので、書き込みでマウントしない。
 読み取り専用で付けるのは、取り込みの失敗を見張るscriptが`status.json`を読むためである。
 
+tag`console`を使える主体は、インスタンスのカスタムtagで決まる。
+superadminは、許可の有無にかかわらず使える。
+superadminでない主体は、許可されたtagしか使えない。
+Consoleのscriptをsuperadminでない主体から呼べるよう、`mise run bootstrap`と`mise run instance:tags`がカスタムtagに`console`を足す。
+許可しても、このworkerのマウントとDBへの到達は変わらない。
+変わるのは、このworkerでscriptを動かせる主体である。
+
 次のことは、この境界では守れない。
 
 - DBには届く。`DATABASE_URL`はdefaultのworkerと同じ管理者の接続だからである。
@@ -262,6 +269,7 @@ Console用のworker(`windmill_worker_console`)は、Consoleの問い合わせと
   - Claude Codeの設定と履歴(`CLAUDE_CONFIG_DIR=/var/lib/factory/claude`)
   - ghの設定(`GH_CONFIG_DIR=/var/lib/factory/gh`)
 - このworkerで動かすのはリポジトリのscriptの想定だが、これを強制する仕組みは無い。ワークスペースでscriptを編集できる者は、任意のscriptにtag`console`を付けられる。
+  `console`をカスタムtagに許可しているので、superadminでない者が付けたscriptも、このworkerで動く。
   tag`console`を付けたscriptは、上の設定と履歴を読める。書けるのはdefaultのworkerだけである。
   読めると、Claude Codeとghの認証情報が漏れうる。
 - composeの環境変数`WORKER_TAGS`は既定値である。DBにワーカーグループの設定があると、そちらが実効になる。変化はWindmillの画面の「Workers」で確かめる。

@@ -660,6 +660,25 @@ mise exec -- docker compose -f infra/docker-compose.yml start windmill_worker_co
 
 Consoleが止まっていてもDiscordには届くので、通知の確認先はConsoleに限らない。
 
+### Consoleのtagの許可を確かめる
+
+Consoleのscriptは、tag`console`を持つ。
+superadminでない主体は、インスタンスのカスタムtagに許可されたtagしか使えない。
+許可が無いと、Consoleのscriptの呼び出しが`Tag console is not included in the allowed CUSTOM_TAGS`で拒まれる。
+運用者のアカウントはsuperadminなので、許可が無くても動き、漏れに気づきにくい。
+
+許可は`mise run doctor`の「カスタムtag」で確かめる。
+doctorは管理者でログインして、インスタンスのカスタムtagを読む。
+
+| 表示 | 意味 | 対処 |
+| --- | --- | --- |
+| `OK` | tag`console`が許可されている | 要らない |
+| `NG` | tag`console`が許可されていない | `mise run instance:tags`を実行する |
+| `WARN` | ログインや取得に失敗し、確かめられていない。失敗には数えない | `WM_ADMIN_PASSWORD`が実際のパスワードと合っているかを確かめる |
+
+`mise run instance:tags`は、既存のtagを保ち、`console`が無いときだけ足す。
+何度実行しても結果は同じである。
+
 ### 続けて失敗するスケジュールの検知を確かめる
 
 スケジュールの直近3回の実行が続けて失敗したかどうかは、失敗のハンドラ(`on_error_schedule`)がジョブ履歴を読んで判定する。

@@ -87,7 +87,7 @@ mise run doctor
    mise run up
    ```
 
-6. ワークスペースを作り、secret変数を投入し、`wmill sync push`とmigrationを実行する。何度実行しても結果は同じになる。
+6. ワークスペースを作り、secret変数を投入し、インスタンスのカスタムtagに`console`を足し、`wmill sync push`とmigrationを実行する。何度実行しても結果は同じになる。
 
    ```bash
    mise run bootstrap
@@ -99,6 +99,23 @@ mise run doctor
 `GITHUB_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`、`DISCORD_WEBHOOK_URL`が空でも、`bootstrap`は完了する。対応するWindmillの変数が空で作られる。`doctor`はこれらが空だとNGを報告するので、運用を始める前に値を投入する。
 
 `bootstrap`は、ワークスペースのIDを小文字の`factory`のままにし、表示名だけを`Factory`にする。表示名はダッシュボードのApp(Factory Console)などの表記にそろえる。
+
+## カスタムtagを許可する
+
+Consoleのscriptは、tag`console`を持つ。
+superadminでない主体は、インスタンスが許可したカスタムtag以外のtagを持つscriptを実行できない。
+そのため`bootstrap`は、superadminのセッションで、インスタンスのカスタムtagに`console`を足す。
+既存のtagは保ち、`console`が無いときだけ書く。
+
+`bootstrap`を実行済みのインスタンスには、この設定だけを当てる。
+手順6の`bootstrap`をやり直す必要はない。
+
+```bash
+mise run instance:tags
+```
+
+運用者のアカウントはsuperadminなので、許可していなくてもConsoleは動く。
+許可できたかどうかは`mise run doctor`の「カスタムtag」で確かめる。
 
 ## gitのフック
 
@@ -194,6 +211,8 @@ post-checkoutのフックは、メイン作業ツリーの`.wmill`へのシン�
 | 症状 | 原因と対処 |
 | --- | --- |
 | ポートが衝突する | `mise.local.toml`の`WM_HTTP_PORT`で別のポートを指定する。投入は[秘密値を投入する](#秘密値を投入する)と同じコマンドで、`KEY`を`WM_HTTP_PORT`にする |
+| `doctor`が「カスタムtag」でNGになる | インスタンスがtag`console`を許可していない。`mise run instance:tags`を実行する |
+| `doctor`が「カスタムtag」でWARNになる | 管理者でログインできず、許可の有無を確かめられていない。`WM_ADMIN_PASSWORD`が実際のパスワードと合っているかを確かめる |
 | `doctor`が「初期パスワード」でNGになる | パスワードが`changeme`のままである。`mise run bootstrap`がログインした後にパスワードを変える |
 | `required variable ... is missing a value: run via mise`と出る | `docker compose`を`mise run`を通さずに実行している。composeの環境変数はmiseからしか渡らないので、`mise run <task>`か`mise exec -- docker compose ...`で実行する |
 | workerのイメージを作り直したい | `mise run build`で、`windmill_worker`のサービスだけを作り直す |
