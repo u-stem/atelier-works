@@ -17,7 +17,9 @@ import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "./lib/config.ts";
 import {
   getWorkItem,
+  isActiveIssueUniqueViolation,
   latestRequirementsApproval,
+  listActive,
   setFlowJobId,
   setFlowJobIdIfUnset,
   updateStatusIfCurrent,
@@ -55,6 +57,32 @@ export type RestartContext = {
   readonly implementReady: boolean;
   readonly implementEnabled: boolean;
 };
+
+/**
+ * 終端の作業項目を稼働中の状態へ戻す更新が、同じIssueの別の稼働中の作業項目に阻まれたときの
+ * 例外を作る。稼働中の作業項目が見つかれば、そのIDを文に含める。
+ * 再実行は、その作業項目が終わってから行う。
+ */
+export function activeIssueConflictError(
+  workItem: Pick<WorkItem, "id" | "owner" | "repo" | "issue_number">,
+  active: readonly Pick<
+    WorkItem,
+    "id" | "owner" | "repo" | "issue_number" | "kind"
+  >[],
+): Error {
+  const other = active.find(
+    (item) =>
+      item.kind === "issue" &&
+      item.id !== workItem.id &&
+      item.owner === workItem.owner &&
+      item.repo === workItem.repo &&
+      item.issue_number === workItem.issue_number,
+  );
+  const which = other === undefined ? "" : ` (id ${String(other.id)})`;
+  return new Error(
+    `retry_work_item: another work item${which} is active for this Issue; retry after it finishes`,
+  );
+}
 
 /**
  * 再開できる作業項目について、戻す状態と起動するフローを決める。
@@ -258,19 +286,25 @@ export async function main(work_item_id: number): Promise<RetryWorkItemResult> {
 
   const leased = usesFlowJobIdLease(plan);
   const note = `retry_work_item: restarted from ${workItem.status}`;
-  const moved = leased
-    ? await updateStatusIfCurrentClearingFlowJobId(
-        work_item_id,
-        workItem.status,
-        plan.toStatus,
-        note,
-      )
-    : await updateStatusIfCurrent(
-        work_item_id,
-        workItem.status,
-        plan.toStatus,
-        note,
-      );
+  let moved: boolean;
+  try {
+    moved = leased
+      ? await updateStatusIfCurrentClearingFlowJobId(
+          work_item_id,
+          workItem.status,
+          plan.toStatus,
+          note,
+        )
+      : await updateStatusIfCurrent(
+          work_item_id,
+          workItem.status,
+          plan.toStatus,
+          note,
+        );
+  } catch (err) {
+    if (!isActiveIssueUniqueViolation(err)) throw err;
+    throw activeIssueConflictError(workItem, await listActive());
+  }
   if (!moved) {
     throw new Error(
       `retry_work_item: work item ${work_item_id} is no longer "${workItem.status}"; not restarted`,

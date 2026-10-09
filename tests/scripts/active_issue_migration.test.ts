@@ -2,6 +2,8 @@
 // 部分一意インデックスの述語は、終端でない状態の一覧をSQLに書き写したものである。
 // `TERMINAL_WORK_ITEM_STATUSES`を変えたのにmigrationを足さないと、
 // 新しく稼働中になる状態がインデックスの対象から漏れる。
+// 述語の検査は、この1つのmigrationのファイルだけを読む。後のmigrationがこのインデックスを
+// 作り直したときは、読む対象と期待する述語をそれに合わせて更新すること。
 
 import { describe, expect, test } from "bun:test";
 import {
@@ -50,6 +52,36 @@ describe("20261009120000_active_issue_key.up.sql", () => {
     expect(sql.indexOf("'cancelled'")).toBeLessThan(
       sql.indexOf("CREATE UNIQUE INDEX work_items_active_issue_key"),
     );
+  });
+});
+
+describe("20261009120000_active_issue_key.up.sql safeguards", () => {
+  test("locks the table right after BEGIN so that no insert slips in before the index exists", async () => {
+    const sql = await upSql();
+    const afterBegin = sql
+      .slice(sql.indexOf("BEGIN;") + "BEGIN;".length)
+      .trim();
+    expect(
+      afterBegin.startsWith(
+        "LOCK TABLE factory.work_items IN SHARE ROW EXCLUSIVE MODE;",
+      ),
+    ).toBe(true);
+  });
+
+  test("cancels only rows that still have the status it ranked", async () => {
+    expect(await upSql()).toContain("wi.status = ranked.status");
+  });
+
+  test("expires the pending approval requests of the rows it cancels", async () => {
+    expect(await upSql()).toContain("UPDATE factory.approval_requests");
+  });
+
+  test("restricts the expiry to pending requests", async () => {
+    expect(await upSql()).toContain("ar.status = 'pending'");
+  });
+
+  test("says that the cancel rule is automatic and not confirmed by a person", async () => {
+    expect(await upSql()).toContain("not confirmed by a person");
   });
 });
 

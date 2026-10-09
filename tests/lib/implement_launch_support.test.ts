@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
   assertImplementLease,
+  buildSupersededNoticeMessage,
+  casToImplementingOrSupersede,
   flowJobIdFailureReason,
   holdsImplementLease,
   ImplementLeaseLostError,
@@ -10,6 +12,7 @@ import {
   parseFlowJobId,
   rootFlowJobId,
   type StartImplementDeps,
+  type SupersedeDeps,
   startImplement,
   stillHoldsImplementLease,
 } from "../../f/factory/lib/implement_launch_support.ts";
@@ -499,5 +502,129 @@ describe("assertImplementLease", () => {
         JOB_A,
       ),
     ).rejects.toBeInstanceOf(ImplementLeaseLostError);
+  });
+});
+
+describe("casToImplementingOrSupersede", () => {
+  const conflict = new Error('violates "work_items_active_issue_key"');
+
+  function supersedeDeps(overrides: Partial<SupersedeDeps> = {}): {
+    deps: SupersedeDeps;
+    calls: string[];
+  } {
+    const calls: string[] = [];
+    const deps: SupersedeDeps = {
+      casToImplementing: async () => true,
+      isActiveIssueConflict: (err) => err === conflict,
+      cancelSuperseded: async () => {
+        calls.push("cancel");
+        return true;
+      },
+      addNotice: async () => {
+        calls.push("notice");
+      },
+      log: (message) => {
+        calls.push(`log:${message}`);
+      },
+      ...overrides,
+    };
+    return { deps, calls };
+  }
+
+  const conflicting = async (): Promise<boolean> => {
+    throw conflict;
+  };
+
+  test("returns true when the transition succeeds", async () => {
+    const { deps } = supersedeDeps();
+    expect(await casToImplementingOrSupersede(deps)).toBe(true);
+  });
+
+  test("returns false when the item already moved on", async () => {
+    const { deps } = supersedeDeps({ casToImplementing: async () => false });
+    expect(await casToImplementingOrSupersede(deps)).toBe(false);
+  });
+
+  test("does not cancel anything when the transition succeeds", async () => {
+    const { deps, calls } = supersedeDeps();
+    await casToImplementingOrSupersede(deps);
+    expect(calls).toEqual([]);
+  });
+
+  test("returns false when a newer active work item blocks the transition", async () => {
+    const { deps } = supersedeDeps({ casToImplementing: conflicting });
+    expect(await casToImplementingOrSupersede(deps)).toBe(false);
+  });
+
+  test("cancels the superseded item and then records a notice", async () => {
+    const { deps, calls } = supersedeDeps({ casToImplementing: conflicting });
+    await casToImplementingOrSupersede(deps);
+    expect(calls).toEqual(["cancel", "notice"]);
+  });
+
+  test("records no notice when the item had already moved on", async () => {
+    const { deps, calls } = supersedeDeps({
+      casToImplementing: conflicting,
+      cancelSuperseded: async () => false,
+    });
+    await casToImplementingOrSupersede(deps);
+    expect(calls).toEqual([]);
+  });
+
+  test("still returns false when recording the notice fails", async () => {
+    const { deps } = supersedeDeps({
+      casToImplementing: conflicting,
+      addNotice: async () => {
+        throw new Error("db down");
+      },
+    });
+    expect(await casToImplementingOrSupersede(deps)).toBe(false);
+  });
+
+  test("logs when recording the notice fails", async () => {
+    const { deps, calls } = supersedeDeps({
+      casToImplementing: conflicting,
+      addNotice: async () => {
+        throw new Error("db down");
+      },
+    });
+    await casToImplementingOrSupersede(deps);
+    expect(calls).toContain("log:superseded notice could not be recorded");
+  });
+
+  test("rethrows an error that is not the active issue conflict", async () => {
+    const { deps } = supersedeDeps({
+      casToImplementing: async () => {
+        throw new Error("db down");
+      },
+    });
+    await expect(casToImplementingOrSupersede(deps)).rejects.toThrow("db down");
+  });
+
+  test("rethrows when cancelling the superseded item fails", async () => {
+    const { deps } = supersedeDeps({
+      casToImplementing: conflicting,
+      cancelSuperseded: async () => {
+        throw new Error("cancel failed");
+      },
+    });
+    await expect(casToImplementingOrSupersede(deps)).rejects.toThrow(
+      "cancel failed",
+    );
+  });
+});
+
+describe("buildSupersededNoticeMessage", () => {
+  test("names the target and the work item and says it was superseded", () => {
+    expect(
+      buildSupersededNoticeMessage({
+        owner: "octo-owner",
+        repo: "atelier-works",
+        issue_number: 12,
+        work_item_id: 7,
+      }),
+    ).toBe(
+      "octo-owner/atelier-works#12 (work item 7): 新しいサイクルが稼働中のため、承認済みの作業項目を取り消しました。新しいサイクルの要件定義を進めます。",
+    );
   });
 });

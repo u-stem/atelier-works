@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { IMPLEMENT_FLOW_PATH } from "../../f/factory/lib/implement_loop.ts";
 import {
+  activeIssueConflictError,
   computeRestartPlan,
   launchFailureError,
   retryResult,
@@ -321,6 +322,46 @@ describe("launchFailureError", () => {
     );
     expect(err.message).toContain(
       "returned an error, but another run holds the lease",
+    );
+  });
+});
+
+describe("activeIssueConflictError", () => {
+  const base = {
+    owner: "octo-owner",
+    repo: "atelier-works",
+    issue_number: 12,
+    kind: "issue" as const,
+  };
+  const target = {
+    id: 3,
+    owner: "octo-owner",
+    repo: "atelier-works",
+    issue_number: 12,
+  };
+
+  test("names the active work item of the same issue", () => {
+    const error = activeIssueConflictError(target, [
+      { ...base, id: 9 },
+      { ...base, id: 3 },
+    ]);
+    expect(error.message).toBe(
+      "retry_work_item: another work item (id 9) is active for this Issue; retry after it finishes",
+    );
+  });
+
+  test("ignores active work items of other issues", () => {
+    const error = activeIssueConflictError(target, [
+      { ...base, id: 9, issue_number: 99 },
+      { ...base, id: 4 },
+    ]);
+    expect(error.message).toContain("(id 4)");
+  });
+
+  test("omits the id when the active work item is not found", () => {
+    const error = activeIssueConflictError(target, [{ ...base, id: 3 }]);
+    expect(error.message).toBe(
+      "retry_work_item: another work item is active for this Issue; retry after it finishes",
     );
   });
 });

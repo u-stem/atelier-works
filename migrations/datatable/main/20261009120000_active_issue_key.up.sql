@@ -13,9 +13,18 @@
 --
 -- Existing duplicates would make CREATE UNIQUE INDEX fail, so the older
 -- duplicate active rows (all but the highest cycle, then the highest id) are
--- cancelled first, each with a work_item_events row. A cancelled row is
--- terminal, so a running flow for it stops at its next lease check.
+-- cancelled first, each with a work_item_events row and with its pending
+-- approval requests expired (as the periodic expiry sweep does). A cancelled
+-- row is terminal, so a running flow stops at its next lease check.
+-- "Keep the highest cycle, then the highest id" is an automatic rule that is
+-- not confirmed by a person: nobody checked which duplicate should be kept.
+--
+-- The table is locked first so that no insert can slip in between the
+-- cancelling and the index creation. SHARE ROW EXCLUSIVE blocks concurrent
+-- writes and still allows reads.
 BEGIN;
+
+LOCK TABLE factory.work_items IN SHARE ROW EXCLUSIVE MODE;
 
 WITH ranked AS (
     SELECT
@@ -36,8 +45,15 @@ cancelled AS (
     UPDATE factory.work_items AS wi
     SET status = 'cancelled', updated_at = now()
     FROM ranked
-    WHERE wi.id = ranked.id AND ranked.rn > 1
+    WHERE wi.id = ranked.id AND ranked.rn > 1 AND wi.status = ranked.status
     RETURNING wi.id, ranked.status AS from_status
+),
+expired AS (
+    UPDATE factory.approval_requests AS ar
+    SET status = 'expired', decided_at = now()
+    FROM cancelled
+    WHERE ar.work_item_id = cancelled.id AND ar.status = 'pending'
+    RETURNING ar.id
 )
 INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note)
 SELECT id, from_status, 'cancelled', 'duplicate active issue work item cancelled by migration'

@@ -153,6 +153,60 @@ async function attempt(
   }
 }
 
+export type SupersedeDeps = {
+  /** `updateStatusIfCurrentClearingFlowJobId`で`approved`から`implementing`へ移す。 */
+  readonly casToImplementing: () => Promise<boolean>;
+  /** 例外が、稼働中のIssueの作業項目の一意インデックスへの違反か(`isActiveIssueUniqueViolation`)。 */
+  readonly isActiveIssueConflict: (err: unknown) => boolean;
+  /** `approved`の作業項目を、新しいサイクルに置き換えられたものとして`cancelled`へ移す。移せたら`true`。 */
+  readonly cancelSuperseded: () => Promise<boolean>;
+  /** 取り消したことをnoticeに残す。 */
+  readonly addNotice: () => Promise<void>;
+  readonly log: (message: string, fields: Record<string, unknown>) => void;
+};
+
+/**
+ * 稼働中に置き換えられた`approved`の作業項目を取り消したときのnoticeの本文。
+ */
+export function buildSupersededNoticeMessage(target: {
+  readonly owner: string;
+  readonly repo: string;
+  readonly issue_number: number;
+  readonly work_item_id: number;
+}): string {
+  return `${target.owner}/${target.repo}#${String(target.issue_number)} (work item ${String(target.work_item_id)}): 新しいサイクルが稼働中のため、承認済みの作業項目を取り消しました。新しいサイクルの要件定義を進めます。`;
+}
+
+/**
+ * `approved`から`implementing`への移行を行う。
+ * `approved`は終端で、稼働中のIssueの一意インデックスの対象外なので、承認の後にIssueへ
+ * ラベルが付け直されると、新しいサイクルの作業項目が先に稼働中になる。
+ * このときの移行は一意インデックスに拒まれる。古い`approved`の項目は
+ * 新しいサイクルに置き換えられたものとして`cancelled`へ移し、noticeを残して`false`を返す。
+ * 人の対応は要らず、新しいサイクルがそのまま進む。noticeの記録に失敗しても取り消しは戻さない。
+ * それ以外の例外は、そのまま投げる。
+ */
+export async function casToImplementingOrSupersede(
+  deps: SupersedeDeps,
+): Promise<boolean> {
+  try {
+    return await deps.casToImplementing();
+  } catch (err) {
+    if (!deps.isActiveIssueConflict(err)) throw err;
+    const cancelled = await deps.cancelSuperseded();
+    if (cancelled) {
+      try {
+        await deps.addNotice();
+      } catch (noticeErr) {
+        deps.log("superseded notice could not be recorded", {
+          error: messageOf(noticeErr),
+        });
+      }
+    }
+    return false;
+  }
+}
+
 /**
  * 作業項目を`approved`から`implementing`へ移し、implementフローを起動して、
  * そのジョブIDを記録する。例外は投げず、結果を`StartImplementOutcome`で返す。

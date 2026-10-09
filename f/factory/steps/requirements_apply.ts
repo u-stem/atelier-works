@@ -9,6 +9,7 @@ import {
   addNotice,
   getApprovalRequest,
   getWorkItem,
+  isActiveIssueUniqueViolation,
   recordFailure,
   setFlowJobIdIfUnset,
   updateStatusIfCurrent,
@@ -19,6 +20,8 @@ import { notify, notifyBestEffort } from "../lib/discord.ts";
 import { commentIssue, type GhClient, getViewer } from "../lib/github.ts";
 import { REQUIREMENTS_REGENERATION_FAILED_REASON } from "../lib/implement_finish_support.ts";
 import {
+  buildSupersededNoticeMessage,
+  casToImplementingOrSupersede,
   parseFlowJobId,
   type StartImplementOutcome,
   startImplement,
@@ -433,12 +436,36 @@ async function run(
     const launchImplement = (): Promise<StartImplementOutcome> =>
       startImplement({
         casToImplementing: () =>
-          updateStatusIfCurrentClearingFlowJobId(
-            workItem.id,
-            "approved",
-            "implementing",
-            null,
-          ),
+          casToImplementingOrSupersede({
+            casToImplementing: () =>
+              updateStatusIfCurrentClearingFlowJobId(
+                workItem.id,
+                "approved",
+                "implementing",
+                null,
+              ),
+            isActiveIssueConflict: isActiveIssueUniqueViolation,
+            cancelSuperseded: () =>
+              updateStatusIfCurrent(
+                workItem.id,
+                "approved",
+                "cancelled",
+                "superseded by a newer cycle",
+              ),
+            addNotice: async () => {
+              await addNotice({
+                kind: "work_item_superseded",
+                message: buildSupersededNoticeMessage({
+                  owner: workItem.owner,
+                  repo: workItem.repo,
+                  issue_number: issueNumber,
+                  work_item_id: workItem.id,
+                }),
+              });
+            },
+            log: (message, fields) =>
+              log.warn(message, { work_item_id: workItem.id, ...fields }),
+          }),
         launchFlow: () =>
           wmill.runFlowAsync(IMPLEMENT_FLOW_PATH, {
             work_item_id: workItem.id,

@@ -30,6 +30,7 @@ import {
   insertIssueWorkItemUnlessActive,
   insertReview,
   insertWorkItem,
+  isActiveIssueUniqueViolation,
   latestDraft,
   latestFixRound,
   latestPrWorkItem,
@@ -2881,6 +2882,32 @@ describe("latestRequirementsApproval", () => {
     await latestRequirementsApproval(1, sql);
     expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(
       "ar.work_item_id = ? ::bigint",
+    );
+  });
+});
+
+describe("isActiveIssueUniqueViolation", () => {
+  test("recognises a violation of the active issue index", () => {
+    const err = new Error(
+      'duplicate key value violates unique constraint "work_items_active_issue_key"',
+    );
+    expect(isActiveIssueUniqueViolation(err)).toBe(true);
+  });
+
+  test("does not match a violation of another constraint", () => {
+    const err = new Error(
+      'duplicate key value violates unique constraint "work_items_owner_repo_issue_cycle_key"',
+    );
+    expect(isActiveIssueUniqueViolation(err)).toBe(false);
+  });
+
+  test("does not match an unrelated error", () => {
+    expect(isActiveIssueUniqueViolation(new Error("db down"))).toBe(false);
+  });
+
+  test("does not match a value that is not an error", () => {
+    expect(isActiveIssueUniqueViolation("work_items_active_issue_key")).toBe(
+      false,
     );
   });
 });

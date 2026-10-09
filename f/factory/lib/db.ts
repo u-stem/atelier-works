@@ -409,6 +409,18 @@ export async function insertIssueWorkItemUnlessActive(
 }
 
 /**
+ * 例外が、部分一意インデックス`work_items_active_issue_key`への違反かを返す。
+ * 終端の作業項目を稼働中の状態へ戻す更新(`approved`から`implementing`への移行、
+ * `retry_work_item`の再開)が、同じIssueの別の稼働中の作業項目に阻まれたときに起きる。
+ * エラーの文に制約名が含まれることで判定する。
+ */
+export function isActiveIssueUniqueViolation(err: unknown): boolean {
+  return (
+    err instanceof Error && err.message.includes("work_items_active_issue_key")
+  );
+}
+
+/**
  * 作業項目の状態を移し、`factory.work_item_events`に監査用の行を追加する。
  * 該当する作業項目が無ければ例外を投げる。
  *
