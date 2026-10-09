@@ -147,4 +147,20 @@ describe("repository-owned Claude config", () => {
       true,
     );
   });
+
+  const RULES = join(ROOT, ".claude/skills/review-loop/rules.md");
+  const RULES_HEADINGS = [
+    "## 指摘の形",
+    "## 重さ",
+    "## 種類",
+    "## 原因の分類",
+    "## 出力の対応",
+    "## 取り入れる基準",
+    "## 範囲外の指摘",
+    "## 差し戻し先",
+  ];
+
+  test.each(RULES_HEADINGS)("keeps %s in the review rules", (heading) => {
+    expect(readFileSync(RULES, "utf8")).toContain(heading);
+  });
 });
