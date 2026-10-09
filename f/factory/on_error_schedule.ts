@@ -1,5 +1,6 @@
 // `f/factory/`のすべてのスケジュールの`on_failure`ハンドラ。
 // 失敗を`job_failures`に記録し、Discordに`job_failed`を通知する。
+// 同じスケジュールが直近24時間に3回以上失敗していれば、要対応のnoticeも残す。
 //
 // Windmillは`on_failure`ハンドラを決まった特殊引数で呼ぶ。引数名
 // (`path`・`is_flow`・`schedule_path`・`job_id`・`error`)はWindmillの
@@ -10,9 +11,14 @@
 
 import * as wmill from "windmill-client";
 import { loadConfig } from "./lib/config.ts";
-import { recordFailure } from "./lib/db.ts";
+import {
+  addNoticeUnlessUnresolved,
+  countJobFailuresSince,
+  recordFailure,
+} from "./lib/db.ts";
 import { notify } from "./lib/discord.ts";
 import { logger, maskSecrets } from "./lib/log.ts";
+import { flagFailingSchedule } from "./lib/schedule_failing.ts";
 import { isRecord, isString } from "./lib/types.ts";
 
 function errorMessage(error: unknown): string {
@@ -60,6 +66,13 @@ export async function main(
       ),
     });
   }
+
+  // 続けて失敗しているスケジュールは、Discordの通知を見落としても拾えるよう、要対応のnoticeにも残す。
+  await flagFailingSchedule(flowPath, new Date(), {
+    countFailuresSince: (path, since) => countJobFailuresSince(path, since),
+    addNotice: (record) => addNoticeUnlessUnresolved(record),
+    log,
+  });
 
   try {
     const config = await loadConfig(() =>
