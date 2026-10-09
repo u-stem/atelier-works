@@ -1834,20 +1834,68 @@ describe("createGtrWorktree", () => {
 });
 
 describe("ensureHeadOnBranch (real git)", () => {
-  /** `git checkout -B`が、他のworktreeでcheckout中のブランチを拒むのはgit 2.43以降である。 */
-  // gitが無い環境でもファイル全体を壊さず、そのテストだけを飛ばす。
+  /**
+   * gitが、別のworktreeでcheckout中のブランチへの`checkout -B`を拒むかどうか。
+   * 拒むのは比較的新しい版からだが、版の番号では判定しない。
+   * 版の番号と挙動の対応は確かでないので、一時リポジトリで実際に試して確かめる。
+   * 準備に失敗したときやgitが無いときは、ファイル全体を壊さずfalseにして、そのテストだけを飛ばす。
+   */
   const hostGitRefusesCheckedOutBranch = (() => {
-    let version: string;
+    const root = mkdtempSync(join(tmpdir(), "git-probe-"));
+    const home = join(root, "home");
+    const repo = join(root, "repo");
+    const worktree = join(root, "wt");
     try {
-      version = Bun.spawnSync(["git", "--version"]).stdout.toString();
+      mkdirSync(home);
+      mkdirSync(repo);
+      const git = (cwd: string, args: readonly string[]): number =>
+        Bun.spawnSync(
+          [
+            "git",
+            "-c",
+            "user.name=test",
+            "-c",
+            "user.email=test@example.invalid",
+            ...args,
+          ],
+          {
+            cwd,
+            stdout: "ignore",
+            stderr: "ignore",
+            env: {
+              PATH: process.env.PATH ?? "",
+              HOME: home,
+              GIT_CONFIG_NOSYSTEM: "1",
+            },
+          },
+        ).exitCode;
+      const preparation: readonly (readonly [string, readonly string[]])[] = [
+        [repo, ["init", "-q", "-b", "main"]],
+        [repo, ["commit", "-q", "--allow-empty", "-m", "init"]],
+        [repo, ["branch", "target"]],
+        [repo, ["worktree", "add", "-q", worktree, "target"]],
+        [worktree, ["checkout", "-q", "--detach"]],
+        [repo, ["worktree", "add", "-q", `${worktree}-2`, "target"]],
+      ];
+      for (const [cwd, args] of preparation) {
+        if (git(cwd, args) !== 0) return false;
+      }
+      return (
+        git(worktree, [
+          "checkout",
+          "-q",
+          "-f",
+          "--no-track",
+          "-B",
+          "target",
+          "main",
+        ]) !== 0
+      );
     } catch {
       return false;
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
-    const match = /git version (\d+)\.(\d+)/.exec(version);
-    if (match === null) return false;
-    const major = Number(match[1]);
-    const minor = Number(match[2]);
-    return major > 2 || (major === 2 && minor >= 43);
   })();
   const roots: string[] = [];
   afterAll(() => {
