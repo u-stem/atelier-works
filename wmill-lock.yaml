@@ -40,7 +40,7 @@ locks:
   f/factory/lib/process_lock: 7e5096145f47513a8ecf846ff771725c4089dac7ddfb7fe29bf46ee93ee4755d
   f/factory/lib/prompts: ee13475a77bf7913e0282e82a7403b55ab91a9c6c5f08b5d2beba781dbe2429c
   f/factory/lib/prose_check: 99b737a644deedc8f9f321494e959ad09f343e938ee5af5b958111a74b37172e
-  f/factory/lib/protected_paths: 3febdaf27753dcb9e524f658e32f64802f543abc1902774ba766c50593831f07
+  f/factory/lib/protected_paths: b1eaff9d871be95454a3efe66d58a68a8effdc6da01235d5f4bb48c3380dce63
   f/factory/lib/requirements_doc: 6ae93ca66b45fdffcd1f2722bdaf51ebbda80452631d219d69ddfe58ac68e4d2
   f/factory/lib/requirements_template: a5db62e34792d5d9aaa6190010c79ebf0d2a403e2d1c49fabe491365f4dbe955
   f/factory/lib/schedule_failing: ff5a695c5631f3df2ecdcf1c3617deec988949b736457110a44cea15a4b2b5a4

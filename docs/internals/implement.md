@@ -493,7 +493,7 @@ lockfileは保護パスなので、Claudeが書き換えたラウンドでは検
 保護パスは`f/factory/lib/protected_paths.ts`の3つの定数で決める。
 
 - ディレクトリ: `IMPLEMENT_PROTECTED_PATH_PREFIXES`
-- 個別のファイル: `IMPLEMENT_PROTECTED_EXACT_PATHS`。PR修正の一覧と同じで、[PRワークフロー](pr-workflow.md)の[禁止パスによる停止](pr-workflow.md#禁止パスによる停止)にある7つである。
+- 個別のファイル: `IMPLEMENT_PROTECTED_EXACT_PATHS`。PR修正の一覧と同じで、[PRワークフロー](pr-workflow.md)の[禁止パスによる停止](pr-workflow.md#禁止パスによる停止)にある。
 - ファイル名: `IMPLEMENT_PROTECTED_BASENAME_PATTERNS`
 
 ディレクトリとファイル名は、PR修正の一覧に次を加えたものである。

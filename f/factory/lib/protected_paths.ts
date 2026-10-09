@@ -43,6 +43,8 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 書き換えられると、別のスクリプトを固定の値として配信される。
  * 固定を強制する側も同じ理由で守る。ビューアの照合と取得、配信物の一覧(manifest.json)の作成、
  * lockfileの検査のスクリプトは、書き換えられると検査をすり抜けて配信物に混ざる。
+ * `asset-name.ts`は照合したビューアの書き込み先の名前を決め、`vite.config.ts`は
+ * 組み立ての途中で任意のコードを動かして配信物に書ける。
  */
 export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "console/index.html",
@@ -52,6 +54,8 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "console/scripts/manifest.ts",
   "console/scripts/write-manifest.ts",
   "scripts/check-console-lockfile.ts",
+  "console/scripts/asset-name.ts",
+  "console/vite.config.ts",
 ];
 
 /**

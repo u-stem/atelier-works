@@ -548,7 +548,7 @@ Claudeに渡すツールは`Read`、`Glob`、`Grep`、`Edit`、`Write`だけで�
 markdownlint-cli2とtextlintの設定(`.markdownlint-cli2.jsonc`、`.textlintrc.json`など)も止める。どちらも設定から任意のモジュールを読み込め、pre-commitと`mise run check`が読むためである。
 Consoleでバンドルを通らずに配信される`console/public/`と`console/index.html`も止める。
 配信するdraw.ioのビューアを固定する`console/drawio-viewer.json`も止める。
-固定を強制し、配信物を検査するスクリプトも止める。対象は`console/scripts/`の4つと`scripts/check-console-lockfile.ts`である。
+固定を強制し、配信物を作って検査するスクリプトも止める。一覧は`f/factory/lib/protected_paths.ts`の`FORBIDDEN_EXACT_PATHS`にある。
 一覧は`f/factory/lib/protected_paths.ts`にある。
 
 ### symlinkと特殊なファイルを止める

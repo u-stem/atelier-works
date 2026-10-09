@@ -119,8 +119,18 @@ describe("matchesForbiddenPath", () => {
     );
   });
 
+  test("matches console/scripts/asset-name.ts", () => {
+    expect(matchesForbiddenPath("console/scripts/asset-name.ts")).toBe(true);
+  });
+
+  test("matches console/vite.config.ts", () => {
+    expect(matchesForbiddenPath("console/vite.config.ts")).toBe(true);
+  });
+
   test("does not match other console scripts", () => {
-    expect(matchesForbiddenPath("console/scripts/asset-name.ts")).toBe(false);
+    expect(matchesForbiddenPath("console/scripts/public-assets.test.ts")).toBe(
+      false,
+    );
   });
 
   test("does not match a manifest.ts outside console/scripts/", () => {
@@ -167,6 +177,16 @@ describe("matchesImplementProtectedPath", () => {
 
   test("matches infra/", () => {
     expect(matchesImplementProtectedPath("infra/worker/Dockerfile")).toBe(true);
+  });
+
+  test("matches console/scripts/asset-name.ts", () => {
+    expect(matchesImplementProtectedPath("console/scripts/asset-name.ts")).toBe(
+      true,
+    );
+  });
+
+  test("matches console/vite.config.ts", () => {
+    expect(matchesImplementProtectedPath("console/vite.config.ts")).toBe(true);
   });
 
   test("matches console/index.html", () => {
