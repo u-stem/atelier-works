@@ -253,24 +253,9 @@ describe("registerManualIntakeWorkItem", () => {
   test("returns the id of the registered work item", async () => {
     const { deps } = insertDeps(async () => ({ id: 77, superseded: [] }));
     const { log } = recordingLog();
-    const registered = await registerManualIntakeWorkItem(
-      { ...INPUT, log },
-      deps,
+    expect(await registerManualIntakeWorkItem({ ...INPUT, log }, deps)).toBe(
+      77,
     );
-    expect(registered?.id).toBe(77);
-  });
-
-  test("returns the work items that the new cycle superseded", async () => {
-    const { deps } = insertDeps(async () => ({
-      id: 77,
-      superseded: [{ id: 5, attempt: 2 }],
-    }));
-    const { log } = recordingLog();
-    const registered = await registerManualIntakeWorkItem(
-      { ...INPUT, log },
-      deps,
-    );
-    expect(registered?.superseded).toEqual([{ id: 5, attempt: 2 }]);
   });
 
   test("registers a manual issue work item", async () => {

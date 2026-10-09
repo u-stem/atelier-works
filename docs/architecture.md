@@ -81,7 +81,7 @@ flowchart TD
 | `needs_human` | 自動処理を打ち切り、人の対応を待つ | すべて | 終端 |
 | `failed` | 実行時エラーで失敗した | すべて | 終端 |
 | `expired` | 承認依頼が7日の期限を過ぎた | issue | 終端 |
-| `cancelled` | IssueかPRが閉じられた | すべて | 終端 |
+| `cancelled` | IssueかPRが閉じられた。または、承認済みの要件定義が、同じIssueの新しいサイクルに置き換えられた | すべて | 終端 |
 | `auditing` | 監査している | audit | |
 | `audited` | 監査を終えた | audit | 終端 |
 
@@ -106,6 +106,7 @@ stateDiagram-v2
     awaiting_approval --> cancelled: Issueがclosed
     approved --> implementing: implement_enabledが真
     approved --> requirements_generating: pr_fixのrequirements_gap
+    approved --> cancelled: 同じIssueで新しいサイクルが始まった
     implementing --> pr_open: PRを作成か更新
     implementing --> requirements_generating: requirements_gap(attempt+1)
     implementing --> needs_human
@@ -141,7 +142,7 @@ stateDiagram-v2
     awaiting_approval --> audited: すべての提案を決定
 ```
 
-図に描いていない遷移が2つある。終端でない作業項目は、フローが例外で失敗するか孤児と判定されると失敗(`failed`)になる。Issueの作業項目とPRの作業項目は、IssueかPRが閉じられると取り消し(`cancelled`)になる。
+図に描いていない遷移が2つある。終端でない作業項目は、フローが例外で失敗するか孤児と判定されると失敗(`failed`)になる。Issueの作業項目とPRの作業項目は、IssueかPRが閉じられると取り消し(`cancelled`)になる。承認済み(`approved`)の作業項目が、同じIssueの新しいサイクルで取り消される遷移は、図に描いている。
 
 終端の作業項目は、Consoleからの再実行で再び動き出す。遷移の条件、リース、孤児の判定は[作業項目の状態とリース](internals/work-items.md)に書く。
 

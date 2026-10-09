@@ -1,5 +1,5 @@
 // 新しいサイクルが始まって、承認済みの作業項目を取り消したときの、Issueへのコメント。
-// `poll_issues`と`manual_intake_register`が共有する。
+// `poll_issues`が、新しいサイクルを始めた後に使う。
 
 import { commentIssue, type GhClient } from "./github.ts";
 import { type Logger, maskSecrets } from "./log.ts";
@@ -7,8 +7,9 @@ import { type Logger, maskSecrets } from "./log.ts";
 /**
  * 取り消した承認済みの作業項目と、新しいサイクルを伝えるコメントの本文を作る。
  * 副作用は無い。
- * 取り消しの原因はラベルの付け直しとは限らない(手動投入も新しい作業項目を作る)ので、
- * 原因は書かない。古い承認についての操作は要らないことを伝える。
+ * 取り消しの原因は推測せず、新しいサイクルが始まったという事実だけを伝える。
+ * 新しいサイクルが失敗することもあるので、承認の依頼が届くとは約束しない。
+ * 古い承認についての操作は要らないことを伝える。
  */
 export function buildSupersededComment(
   cancelledWorkItemId: number,
@@ -17,7 +18,7 @@ export function buildSupersededComment(
   return [
     `承認済みだった要件定義(work_item_id: ${String(cancelledWorkItemId)})を取り消しました。`,
     `このIssueで新しいサイクル(work_item_id: ${String(newWorkItemId)})が始まったためです。`,
-    "新しい要件定義ができたら、あらためて承認の依頼をお送りします。",
+    "新しいサイクルの要件定義には、あらためて承認が必要です。",
     "前の承認について、対応いただく必要はありません。",
   ].join("\n");
 }

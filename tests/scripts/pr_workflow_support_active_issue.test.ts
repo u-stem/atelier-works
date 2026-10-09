@@ -35,3 +35,20 @@ describe("the retry refusal for an active issue", () => {
     expect(nextActionFor(withoutId)).toBe(nextActionFor(RETRY));
   });
 });
+
+describe("the retry refusal for a superseded issue work item", () => {
+  const SUPERSEDED =
+    "retry_work_item: work item 3 is superseded because a newer cycle exists for this Issue, no action needed";
+
+  test("is described as a newer cycle having started", () => {
+    expect(describeReason(SUPERSEDED)).toBe(
+      "同じIssueで、より新しいサイクルが始まっています",
+    );
+  });
+
+  test("asks for no action", () => {
+    expect(nextActionFor(SUPERSEDED)).toBe(
+      "操作は要りません。新しいサイクルの結果を待ってください",
+    );
+  });
+});

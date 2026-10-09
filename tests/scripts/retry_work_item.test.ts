@@ -5,6 +5,7 @@ import {
   activeIssueConflictErrorFrom,
   computeRestartPlan,
   launchFailureError,
+  newerCycleRefusal,
   retryResult,
   runningFlowRefusal,
   usesFlowJobIdLease,
@@ -400,5 +401,23 @@ describe("computeRestartPlan for a cancelled work item", () => {
         { implementReady: true, implementEnabled: true },
       ),
     ).toThrow(/not restartable/);
+  });
+});
+
+describe("newerCycleRefusal", () => {
+  const target = { id: 3, kind: "issue" as const };
+
+  test("allows the restart when no newer cycle exists", () => {
+    expect(newerCycleRefusal(target, false)).toBeNull();
+  });
+
+  test("refuses the restart when a newer cycle exists for the issue", () => {
+    expect(newerCycleRefusal(target, true)).toBe(
+      "retry_work_item: work item 3 is superseded because a newer cycle exists for this Issue, no action needed",
+    );
+  });
+
+  test("does not apply to pull request work items", () => {
+    expect(newerCycleRefusal({ id: 4, kind: "pr_fix" }, true)).toBeNull();
   });
 });

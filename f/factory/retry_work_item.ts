@@ -17,6 +17,7 @@ import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "./lib/config.ts";
 import {
   getWorkItem,
+  hasNewerIssueCycle,
   isActiveIssueUniqueViolation,
   latestRequirementsApproval,
   listActiveIssueWorkItems,
@@ -57,6 +58,20 @@ export type RestartContext = {
   readonly implementReady: boolean;
   readonly implementEnabled: boolean;
 };
+
+/**
+ * Issueの作業項目に、より新しいサイクルがあるとき、再開を断る理由を返す。無ければ`null`。
+ * 古いサイクルの作業項目を再開すると、新しいサイクルに置き換えられた要件定義を
+ * 実装しかねない。新しいサイクルの結果を待つので、人の操作は要らない。
+ * IssueでないPRの作業項目には適用しない。
+ */
+export function newerCycleRefusal(
+  workItem: Pick<WorkItem, "id" | "kind">,
+  newerCycleExists: boolean,
+): string | null {
+  if (workItem.kind !== "issue" || !newerCycleExists) return null;
+  return `retry_work_item: work item ${String(workItem.id)} is superseded because a newer cycle exists for this Issue, no action needed`;
+}
 
 /**
  * 終端の作業項目を稼働中の状態へ戻す更新が、同じIssueの別の稼働中の作業項目に阻まれたときの
@@ -268,6 +283,18 @@ export async function main(work_item_id: number): Promise<RetryWorkItemResult> {
   if (workItem === null) {
     throw new Error(`retry_work_item: no work item with id ${work_item_id}`);
   }
+
+  const newerCycle =
+    workItem.kind === "issue" && workItem.issue_number !== null
+      ? await hasNewerIssueCycle(
+          workItem.owner,
+          workItem.repo,
+          workItem.issue_number,
+          workItem.cycle,
+        )
+      : false;
+  const superseded = newerCycleRefusal(workItem, newerCycle);
+  if (superseded !== null) throw new Error(superseded);
 
   const implementReady =
     workItem.kind === "issue" &&

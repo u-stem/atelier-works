@@ -101,26 +101,85 @@ describe("20261009120000_active_issue_key.down.sql", () => {
   });
 });
 
-describe("the intake statement checked by scripts/test-db.sh", () => {
-  // `scripts/test-db.sh`は、`insertIssueWorkItemUnlessActive`の取り消しの条件を
-  // 本物のPostgreSQLで確かめるために、同じ文を書き写している。食い違いを防ぐ。
-  const WHERE_START = "WHERE wi.status = 'approved'";
-  const WHERE_END = "RETURNING wi.id";
-
-  function cancelCondition(source: string): string {
-    const start = source.indexOf(WHERE_START);
-    const end = source.indexOf(WHERE_END, start);
-    return source.slice(start, end).replace(/\s+/g, " ").trim();
-  }
-
-  test("uses the same cancel condition as the application code", async () => {
-    const app = await Bun.file("f/factory/lib/db.ts").text();
-    const script = await Bun.file("scripts/test-db.sh").text();
-    expect(cancelCondition(script)).toBe(cancelCondition(app));
+describe("the migration for approved rows with a newer cycle", () => {
+  test("cancels approved issue rows that have a newer cycle of the same issue", async () => {
+    expect(await upSql()).toContain("n.cycle > wi.cycle");
   });
 
-  test("finds the cancel condition in both files", async () => {
+  test("restricts that cancelling to approved issue rows", async () => {
+    expect(await upSql()).toContain(
+      "wi.kind = 'issue' AND wi.status = 'approved'",
+    );
+  });
+
+  test("records an event for each approved row it cancels", async () => {
+    expect(await upSql()).toContain(
+      "approved work item cancelled by migration: a newer cycle exists",
+    );
+  });
+
+  test("runs that cancelling before the index is created", async () => {
+    const sql = await upSql();
+    expect(sql.indexOf("n.cycle > wi.cycle")).toBeLessThan(
+      sql.indexOf("CREATE UNIQUE INDEX work_items_active_issue_key"),
+    );
+  });
+});
+
+describe("the down migration", () => {
+  test("says that the cancelled rows are not restored", async () => {
+    expect(await Bun.file(DOWN).text()).toContain("not restored");
+  });
+});
+
+describe("the sweep statement checked by scripts/test-db.sh", () => {
+  // `scripts/test-db.sh`は、`supersedeApprovedIssueWorkItems`の文を本物のPostgreSQLで
+  // 確かめるために、同じ文を書き写している。バインド値をpsqlの変数に置き換えたうえで、
+  // 文の全体が一致することを確かめ、食い違いを防ぐ。
+  const SWEEP_START = "WITH cancelled AS (";
+
+  // アプリの文のバインド値の書き方(ドル記号と波括弧)をリテラルで書くと、lintの警告が出るため組み立てる。
+  const bound = (expression: string): string => `$\{${expression}}`;
+
+  const PLACEHOLDERS: readonly [string, string][] = [
+    [bound("target.owner"), ":'owner'"],
+    [bound("target.repo"), ":'repo'"],
+    [`${bound("target.issue_number")}::integer`, ":'issue'::integer"],
+    [`${bound("target.cycle")}::integer`, ":'cycle'::integer"],
+    [`${bound("newWorkItemId")}::bigint`, ":'new_id'::bigint"],
+  ];
+
+  function normalize(text: string): string {
+    return text.replace(/\s+/g, " ").replace(/;\s*$/, "").trim();
+  }
+
+  function sweepFromApp(source: string): string {
+    const start = source.indexOf(SWEEP_START);
+    const end = source.indexOf("`.fetch()", start);
+    let text = source.slice(start, end);
+    for (const [from, to] of PLACEHOLDERS) text = text.split(from).join(to);
+    return normalize(text);
+  }
+
+  function sweepFromScript(source: string): string {
+    const start = source.indexOf(SWEEP_START);
+    const end = source.indexOf("\nSQL", start);
+    return normalize(source.slice(start, end));
+  }
+
+  test("is the same statement as the application code", async () => {
     const app = await Bun.file("f/factory/lib/db.ts").text();
-    expect(cancelCondition(app)).toContain("wi.kind = 'issue'");
+    const script = await Bun.file("scripts/test-db.sh").text();
+    expect(sweepFromScript(script)).toBe(sweepFromApp(app));
+  });
+
+  test("keeps the cycle comparison that states the intent of the sweep", async () => {
+    const app = await Bun.file("f/factory/lib/db.ts").text();
+    expect(sweepFromApp(app)).toContain("wi.cycle < :'cycle'::integer");
+  });
+
+  test("replaces every bound value in the application statement", async () => {
+    const app = await Bun.file("f/factory/lib/db.ts").text();
+    expect(sweepFromApp(app)).not.toContain("$" + "{");
   });
 });

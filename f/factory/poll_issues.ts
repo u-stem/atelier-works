@@ -812,18 +812,6 @@ async function claimAndStart(
   if (registered === null) return "skipped";
   const workItemId = registered.id;
 
-  // 新しいサイクルの作業項目を挿入した文の中で、承認済みの古い項目は取り消されている。
-  await postSupersededComments({
-    client,
-    owner: candidate.owner,
-    repo: candidate.repo,
-    issueNumber: candidate.number,
-    viewerLogin,
-    newWorkItemId: workItemId,
-    superseded: registered.superseded,
-    log,
-  });
-
   await notifyBestEffort(
     discordWebhookUrl,
     {
@@ -838,15 +826,31 @@ async function claimAndStart(
     log,
   );
 
-  // 応答がジョブIDでなければ例外にし、`main`が起動の失敗と同じく`job_failures`に記録する。
-  const flowJobId = parseFlowJobId(
-    await wmill.runFlowAsync("f/factory/pipeline", {
-      work_item_id: workItemId,
-      attempt: 1,
-    }),
-    "runFlowAsync",
-  );
-  await setFlowJobId(workItemId, flowJobId);
+  try {
+    // 応答がジョブIDでなければ例外にし、`main`が起動の失敗と同じく`job_failures`に記録する。
+    const flowJobId = parseFlowJobId(
+      await wmill.runFlowAsync("f/factory/pipeline", {
+        work_item_id: workItemId,
+        attempt: 1,
+      }),
+      "runFlowAsync",
+    );
+    await setFlowJobId(workItemId, flowJobId);
+  } finally {
+    // 古い承認済みの項目は、挿入の直後に取り消されている。GitHubへの投稿の待ちが、
+    // 作業項目が作られてからジョブIDが記録されるまでの間を延ばさないよう、起動の後に投稿する。
+    // 起動に失敗しても取り消しは済んでいるので、コメントは投稿する。投稿は例外を投げない。
+    await postSupersededComments({
+      client,
+      owner: candidate.owner,
+      repo: candidate.repo,
+      issueNumber: candidate.number,
+      viewerLogin,
+      newWorkItemId: workItemId,
+      superseded: registered.superseded,
+      log,
+    });
+  }
 
   return "claimed";
 }

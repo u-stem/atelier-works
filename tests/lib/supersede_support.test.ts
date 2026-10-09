@@ -82,7 +82,7 @@ describe("buildSupersededComment", () => {
       [
         "承認済みだった要件定義(work_item_id: 5)を取り消しました。",
         "このIssueで新しいサイクル(work_item_id: 77)が始まったためです。",
-        "新しい要件定義ができたら、あらためて承認の依頼をお送りします。",
+        "新しいサイクルの要件定義には、あらためて承認が必要です。",
         "前の承認について、対応いただく必要はありません。",
       ].join("\n"),
     );
@@ -90,6 +90,10 @@ describe("buildSupersededComment", () => {
 
   test("does not assert that the cause was a re-label", () => {
     expect(buildSupersededComment(5, 77)).not.toContain("ラベル");
+  });
+
+  test("does not promise that an approval request will arrive", () => {
+    expect(buildSupersededComment(5, 77)).not.toContain("お送りします");
   });
 });
 

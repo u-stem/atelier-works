@@ -19,6 +19,12 @@
 -- "Keep the highest cycle, then the highest id" is an automatic rule that is
 -- not confirmed by a person: nobody checked which duplicate should be kept.
 --
+-- Approved rows are terminal and outside the index, so an approved row can
+-- sit next to a newer cycle of the same issue (the approval was never used
+-- because implement was disabled). Its requirements were superseded, so every
+-- approved issue row that has a newer cycle is cancelled too, each with a
+-- work_item_events row. The rule is automatic, like the duplicate rule above.
+--
 -- The table is locked first so that no insert can slip in between the
 -- cancelling and the index creation. SHARE ROW EXCLUSIVE blocks concurrent
 -- writes and still allows reads. The lock waits at most 30 seconds, so a
@@ -62,6 +68,21 @@ expired AS (
 INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note)
 SELECT id, from_status, 'cancelled', 'duplicate active issue work item cancelled by migration'
 FROM cancelled;
+
+WITH superseded AS (
+    UPDATE factory.work_items AS wi
+    SET status = 'cancelled', updated_at = now()
+    WHERE wi.kind = 'issue' AND wi.status = 'approved'
+      AND EXISTS (
+        SELECT 1 FROM factory.work_items n
+        WHERE n.kind = 'issue' AND n.owner = wi.owner AND n.repo = wi.repo
+          AND n.issue_number = wi.issue_number AND n.cycle > wi.cycle
+      )
+    RETURNING wi.id
+)
+INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note)
+SELECT id, 'approved', 'cancelled', 'approved work item cancelled by migration: a newer cycle exists'
+FROM superseded;
 
 CREATE UNIQUE INDEX work_items_active_issue_key
     ON factory.work_items (owner, repo, issue_number)

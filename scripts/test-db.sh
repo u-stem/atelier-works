@@ -68,7 +68,10 @@ INSERT INTO factory.work_items (cycle, source, kind, owner, repo, issue_number, 
   (1, 'issue', 'issue', 'o', 'r', 1, 'https://github.com/o/r/issues/1', 't', 'picked'),
   (2, 'issue', 'issue', 'o', 'r', 1, 'https://github.com/o/r/issues/1', 't', 'requirements_generating'),
   (1, 'issue', 'issue', 'o', 'r', 2, 'https://github.com/o/r/issues/2', 't', 'failed'),
-  (2, 'issue', 'issue', 'o', 'r', 2, 'https://github.com/o/r/issues/2', 't', 'picked');
+  (2, 'issue', 'issue', 'o', 'r', 2, 'https://github.com/o/r/issues/2', 't', 'picked'),
+  (1, 'issue', 'issue', 'o', 'r', 8, 'https://github.com/o/r/issues/8', 't', 'approved'),
+  (2, 'issue', 'issue', 'o', 'r', 8, 'https://github.com/o/r/issues/8', 't', 'failed'),
+  (1, 'issue', 'issue', 'o', 'r', 9, 'https://github.com/o/r/issues/9', 't', 'approved');
 INSERT INTO factory.approval_requests (kind, work_item_id, subject_id, status)
   SELECT 'requirements', id, 1, 'pending' FROM factory.work_items
   WHERE issue_number = 1 AND cycle = 1;
@@ -84,10 +87,25 @@ verify_active_issue_index() {
   [ "$(printf '%s' "${cancelled}" | tr -d '[:space:]')" = "1" ] \
     || die "expected exactly one duplicate active row to be cancelled, got '${cancelled}'"
   local events
-  events="$(printf "SELECT count(*) FROM factory.work_item_events WHERE to_status = 'cancelled';\n" \
+  events="$(printf "SELECT count(*) FROM factory.work_item_events WHERE note LIKE 'duplicate active issue work item%%';\n" \
     | psql_exec "${SCRATCH_DB}" -q -t -A 2>/dev/null || true)"
   [ "$(printf '%s' "${events}" | tr -d '[:space:]')" = "1" ] \
     || die "expected one work_item_events row for the cancelled duplicate, got '${events}'"
+
+  # 新しいサイクルのあるIssue(8)のapprovedの行だけが取り消され、イベントが残る。
+  # 新しいサイクルの無いIssue(9)のapprovedの行は、そのまま残る。
+  local migrated
+  migrated="$(printf "SELECT string_agg(issue_number || ':' || cycle || ':' || status, ',' ORDER BY issue_number, cycle) FROM factory.work_items WHERE issue_number IN (8, 9);\n" \
+    | psql_exec "${SCRATCH_DB}" -q -t -A)" \
+    || die "could not read the migrated approved rows"
+  [ "${migrated}" = "8:1:cancelled,8:2:failed,9:1:approved" ] \
+    || die "unexpected statuses of the approved rows after the migration: ${migrated}"
+  local migrated_events
+  migrated_events="$(printf "SELECT count(*) FROM factory.work_item_events WHERE note LIKE 'approved work item cancelled by migration%%';\n" \
+    | psql_exec "${SCRATCH_DB}" -q -t -A)" \
+    || die "could not read the migration events"
+  [ "$(printf '%s' "${migrated_events}" | tr -d '[:space:]')" = "1" ] \
+    || die "expected one event for the approved row cancelled by the migration, got '${migrated_events}'"
 
   local expired
   expired="$(printf "SELECT count(*) FROM factory.approval_requests WHERE status = 'expired';\n" \
@@ -127,32 +145,54 @@ verify_active_issue_index() {
     *work_items_active_issue_key*) ;;
     *) die "moving the approved work item was rejected, but not by work_items_active_issue_key: ${reverted}" ;;
   esac
-  # `insertIssueWorkItemUnlessActive`の取り込みの文(挿入と、承認済みの古い項目の取り消しを
-  # 1つの文で行う)を、本物のPostgreSQLで確かめる。
-  # Issue(6): approvedとfailedの行がある。挿入が通り、approvedだけが取り消され、イベントが残る。
-  # Issue(7): approvedと稼働中の行がある。挿入が負け、何も取り消されない。
+  # `insertIssueWorkItemUnlessActive`の2つの文を、本物のPostgreSQLで確かめる。
+  # 1つ目は挿入、2つ目は古いサイクルの承認済みの項目の取り消しである。
+  # Issue(6): cycle 1がapproved、cycle 2がfailed。cycle 3の挿入が通り、cycle 1だけが取り消され、イベントが残る。
+  # Issue(7): cycle 1がapproved、cycle 2が稼働中。cycle 3の挿入が負け、何も取り消されない。
+  # Issue(10): cycle 5がapproved。cycle 3の挿入は通るが、cycle 5は新しいサイクルより後なので取り消されない。
   psql_exec "${SCRATCH_DB}" >/dev/null <<'SQL' || die "could not seed the intake scenarios"
 INSERT INTO factory.work_items (cycle, source, kind, owner, repo, issue_number, issue_url, title, status) VALUES
   (1, 'issue', 'issue', 'o', 'r', 6, 'https://github.com/o/r/issues/6', 't', 'approved'),
   (2, 'issue', 'issue', 'o', 'r', 6, 'https://github.com/o/r/issues/6', 't', 'failed'),
   (1, 'issue', 'issue', 'o', 'r', 7, 'https://github.com/o/r/issues/7', 't', 'approved'),
-  (2, 'issue', 'issue', 'o', 'r', 7, 'https://github.com/o/r/issues/7', 't', 'picked');
+  (2, 'issue', 'issue', 'o', 'r', 7, 'https://github.com/o/r/issues/7', 't', 'picked'),
+  (5, 'issue', 'issue', 'o', 'r', 10, 'https://github.com/o/r/issues/10', 't', 'approved');
 SQL
-  local intake_sql="WITH inserted AS (INSERT INTO factory.work_items (cycle, source, kind, owner, repo, issue_number, issue_url, title, status) VALUES (3, 'issue', 'issue', 'o', 'r', %s, 'https://github.com/o/r/issues/%s', 't', 'picked') ON CONFLICT DO NOTHING RETURNING id, owner, repo, issue_number), cancelled AS (UPDATE factory.work_items AS wi SET status = 'cancelled', updated_at = now() FROM inserted WHERE wi.status = 'approved' AND wi.kind = 'issue' AND wi.owner = inserted.owner AND wi.repo = inserted.repo AND wi.issue_number = inserted.issue_number AND wi.id <> inserted.id RETURNING wi.id, wi.attempt, inserted.id AS new_id), recorded AS (INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note) SELECT id, 'approved', 'cancelled', 'superseded by a newer cycle (work item ' || new_id || ')' FROM cancelled RETURNING work_item_id) SELECT inserted.id AS id, cancelled.id AS superseded_id, cancelled.attempt AS superseded_attempt FROM inserted LEFT JOIN cancelled ON true;\n"
-  local won lost
-  won="$(printf "${intake_sql}" 6 6 | psql_exec "${SCRATCH_DB}" -q -t -A)" \
-    || die "the intake statement failed for the winning insert"
-  lost="$(printf "${intake_sql}" 7 7 | psql_exec "${SCRATCH_DB}" -q -t -A)" \
-    || die "the intake statement failed for the losing insert"
-  [ -n "$(printf '%s' "${won}" | tr -d '[:space:]')" ] \
-    || die "the winning intake insert returned no row"
-  [ -z "$(printf '%s' "${lost}" | tr -d '[:space:]')" ] \
-    || die "the losing intake insert returned a row"
+  intake_issue() {
+    local issue="$1" new_id
+    new_id="$(printf "INSERT INTO factory.work_items (cycle, source, kind, owner, repo, issue_number, issue_url, title, status) VALUES (3, 'issue', 'issue', 'o', 'r', %s, 'https://github.com/o/r/issues/%s', 't', 'picked') ON CONFLICT DO NOTHING RETURNING id;\n" "${issue}" "${issue}" \
+      | psql_exec "${SCRATCH_DB}" -q -t -A)" \
+      || die "the intake insert failed for issue ${issue}"
+    new_id="$(printf '%s' "${new_id}" | tr -d '[:space:]')"
+    [ -n "${new_id}" ] || return 0
+    psql_exec "${SCRATCH_DB}" -q -t -A -v owner=o -v repo=r -v issue="${issue}" -v cycle=3 -v new_id="${new_id}" >/dev/null <<'SQL' \
+      || die "the sweep statement failed for issue ${issue}"
+WITH cancelled AS (
+      UPDATE factory.work_items AS wi
+      SET status = 'cancelled', updated_at = now()
+      WHERE wi.kind = 'issue' AND wi.status = 'approved'
+        AND wi.owner = :'owner' AND wi.repo = :'repo'
+        AND wi.issue_number = :'issue'::integer
+        AND wi.cycle < :'cycle'::integer
+      RETURNING wi.id, wi.attempt
+    ),
+    recorded AS (
+      INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note)
+      SELECT id, 'approved', 'cancelled', 'superseded by a newer cycle (work item ' || :'new_id'::bigint || ')'
+      FROM cancelled
+      RETURNING work_item_id
+    )
+    SELECT id, attempt FROM cancelled
+SQL
+  }
+  intake_issue 6
+  intake_issue 7
+  intake_issue 10
   local statuses
-  statuses="$(printf "SELECT string_agg(issue_number || ':' || cycle || ':' || status, ',' ORDER BY issue_number, cycle) FROM factory.work_items WHERE issue_number IN (6, 7);\n" \
+  statuses="$(printf "SELECT string_agg(issue_number || ':' || cycle || ':' || status, ',' ORDER BY issue_number, cycle) FROM factory.work_items WHERE issue_number IN (6, 7, 10);\n" \
     | psql_exec "${SCRATCH_DB}" -q -t -A)" \
     || die "could not read the intake result"
-  [ "${statuses}" = "6:1:cancelled,6:2:failed,6:3:picked,7:1:approved,7:2:picked" ] \
+  [ "${statuses}" = "6:1:cancelled,6:2:failed,6:3:picked,7:1:approved,7:2:picked,10:3:picked,10:5:approved" ] \
     || die "unexpected statuses after the intake statements: ${statuses}"
   local superseded_events
   superseded_events="$(printf "SELECT count(*) FROM factory.work_item_events WHERE note LIKE 'superseded by a newer cycle%%';\n" \

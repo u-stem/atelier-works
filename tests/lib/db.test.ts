@@ -18,6 +18,7 @@ import {
   getIssueProposal,
   getRequirementDraft,
   getWorkItem,
+  hasNewerIssueCycle,
   hasPriorReview,
   hasUnfinishedPrRun,
   insertApprovalRequest,
@@ -154,78 +155,84 @@ const NEW_WORK_ITEM = {
 };
 
 describe("insertIssueWorkItemUnlessActive", () => {
-  const insertedRow = (extra: Record<string, unknown> = {}) => ({
-    id: 7,
-    superseded_id: null,
-    superseded_attempt: null,
-    ...extra,
-  });
+  const WON = [{ id: 7 }];
 
   test("inserts into factory.work_items", async () => {
-    const { sql, calls } = createFakeSqlClient([[insertedRow()]]);
+    const { sql, calls } = createFakeSqlClient([WON, []]);
     await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql);
     expect(calls[0]?.text).toContain("INSERT INTO factory.work_items");
   });
 
   test("skips the insert on any unique violation", async () => {
-    const { sql, calls } = createFakeSqlClient([[insertedRow()]]);
+    const { sql, calls } = createFakeSqlClient([WON, []]);
     await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql);
     expect(calls[0]?.text).toContain("ON CONFLICT DO NOTHING");
   });
 
-  test("cancels the approved issue work items of the same issue in the same statement", async () => {
-    const { sql, calls } = createFakeSqlClient([[insertedRow()]]);
+  test("keeps the insert free of the cancelling so that it commits on its own", async () => {
+    const { sql, calls } = createFakeSqlClient([WON, []]);
     await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql);
-    expect(calls[0]?.text).toContain(
-      "wi.status = 'approved' AND wi.kind = 'issue'",
-    );
-  });
-
-  test("cancels only rows of the inserted issue", async () => {
-    const { sql, calls } = createFakeSqlClient([[insertedRow()]]);
-    await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql);
-    expect(calls[0]?.text).toContain(
-      "wi.owner = inserted.owner AND wi.repo = inserted.repo AND wi.issue_number = inserted.issue_number",
-    );
-  });
-
-  test("cancels through the inserted row so that a lost insert cancels nothing", async () => {
-    const { sql, calls } = createFakeSqlClient([[insertedRow()]]);
-    await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql);
-    expect(calls[0]?.text).toContain("FROM inserted");
-  });
-
-  test("records an event for each cancelled work item", async () => {
-    const { sql, calls } = createFakeSqlClient([[insertedRow()]]);
-    await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql);
-    expect(calls[0]?.text).toContain("INSERT INTO factory.work_item_events");
+    expect(calls[0]?.text).not.toContain("work_item_events");
   });
 
   test("passes the same parameters in the same order as insertWorkItem", async () => {
     const plain = createFakeSqlClient([[{ id: 7 }]]);
     await insertWorkItem(NEW_WORK_ITEM, plain.sql);
-    const guarded = createFakeSqlClient([[insertedRow()]]);
+    const guarded = createFakeSqlClient([WON, []]);
     await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, guarded.sql);
     expect(guarded.calls[0]?.values).toEqual(plain.calls[0]?.values);
   });
 
+  test("runs the sweep as a second statement after a successful insert", async () => {
+    const { sql, calls } = createFakeSqlClient([WON, []]);
+    await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql);
+    expect(calls).toHaveLength(2);
+  });
+
+  test("sweeps only approved issue work items of older cycles", async () => {
+    const { sql, calls } = createFakeSqlClient([WON, []]);
+    await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql);
+    expect(calls[1]?.text).toContain(
+      "wi.kind = 'issue' AND wi.status = 'approved'",
+    );
+  });
+
+  test("limits the sweep to cycles older than the new one", async () => {
+    const { sql, calls } = createFakeSqlClient([WON, []]);
+    await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql);
+    expect(calls[1]?.text).toContain("wi.cycle <  ? ::integer");
+  });
+
+  test("passes the issue, the new cycle and the new id to the sweep", async () => {
+    const { sql, calls } = createFakeSqlClient([WON, []]);
+    await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql);
+    expect(calls[1]?.values).toEqual(["octo-owner", "atelier-works", 42, 1, 7]);
+  });
+
+  test("records an event for each cancelled work item", async () => {
+    const { sql, calls } = createFakeSqlClient([WON, []]);
+    await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql);
+    expect(calls[1]?.text).toContain("INSERT INTO factory.work_item_events");
+  });
+
   test("returns the inserted id", async () => {
-    const { sql } = createFakeSqlClient([[insertedRow()]]);
+    const { sql } = createFakeSqlClient([WON, []]);
     const result = await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql);
     expect(result?.id).toBe(7);
   });
 
   test("returns no superseded items when nothing was cancelled", async () => {
-    const { sql } = createFakeSqlClient([[insertedRow()]]);
+    const { sql } = createFakeSqlClient([WON, []]);
     const result = await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql);
     expect(result?.superseded).toEqual([]);
   });
 
   test("returns every cancelled work item with its attempt", async () => {
     const { sql } = createFakeSqlClient([
+      WON,
       [
-        insertedRow({ superseded_id: 3, superseded_attempt: 2 }),
-        insertedRow({ superseded_id: 4, superseded_attempt: 1 }),
+        { id: 3, attempt: 2 },
+        { id: 4, attempt: 1 },
       ],
     ]);
     const result = await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql);
@@ -240,6 +247,42 @@ describe("insertIssueWorkItemUnlessActive", () => {
     expect(
       await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql),
     ).toBeNull();
+  });
+
+  test("cancels nothing when the insert lost", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql);
+    expect(calls).toHaveLength(1);
+  });
+});
+
+describe("hasNewerIssueCycle", () => {
+  test("returns true when a newer cycle row exists", async () => {
+    const { sql } = createFakeSqlClient([[{ "?column?": 1 }]]);
+    expect(await hasNewerIssueCycle("o", "r", 12, 1, sql)).toBe(true);
+  });
+
+  test("returns false when no newer cycle row exists", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await hasNewerIssueCycle("o", "r", 12, 1, sql)).toBe(false);
+  });
+
+  test("looks only at issue work items", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasNewerIssueCycle("o", "r", 12, 1, sql);
+    expect(calls[0]?.text).toContain("kind = 'issue'");
+  });
+
+  test("looks only at larger cycles", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasNewerIssueCycle("o", "r", 12, 1, sql);
+    expect(calls[0]?.text).toContain("cycle >  ? ::integer");
+  });
+
+  test("passes the issue and the cycle", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasNewerIssueCycle("o", "r", 12, 3, sql);
+    expect(calls[0]?.values).toEqual(["o", "r", 12, 3]);
   });
 });
 

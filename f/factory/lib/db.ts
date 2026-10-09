@@ -377,7 +377,7 @@ export async function insertWorkItem(
   return parseId(row.id, "id");
 }
 
-/** `insertIssueWorkItemUnlessActive`の結果。`superseded`は、同じ文で取り消した`approved`の作業項目。 */
+/** `insertIssueWorkItemUnlessActive`の結果。`superseded`は、新しいサイクルに置き換えて取り消した`approved`の作業項目。 */
 export type InsertedIssueWorkItem = {
   readonly id: number;
   readonly superseded: readonly {
@@ -387,69 +387,124 @@ export type InsertedIssueWorkItem = {
 };
 
 /**
- * Issueの作業項目を挿入し、そのIDを返す。同じIssueに終端でない作業項目が既にあるときは、
+ * 新しいサイクルの`newWorkItemId`が始まったので、同じIssueの古いサイクルの`approved`の作業項目を
+ * `cancelled`へ移し、`factory.work_item_events`に行を残す。取り消した項目を返す。
+ * 取り消すのは`cycle`が新しいサイクルより小さい項目だけである。
+ * 新しいサイクルより後の項目は、始めたのが別の取得であり、この取得の置き換え対象ではない。
+ * 取引で囲まない。1つの文が自動でコミットされる。
+ */
+export async function supersedeApprovedIssueWorkItems(
+  target: {
+    readonly owner: string;
+    readonly repo: string;
+    readonly issue_number: number;
+    readonly cycle: number;
+  },
+  newWorkItemId: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<{ readonly id: number; readonly attempt: number }[]> {
+  const rows = await sql`
+    WITH cancelled AS (
+      UPDATE factory.work_items AS wi
+      SET status = 'cancelled', updated_at = now()
+      WHERE wi.kind = 'issue' AND wi.status = 'approved'
+        AND wi.owner = ${target.owner} AND wi.repo = ${target.repo}
+        AND wi.issue_number = ${target.issue_number}::integer
+        AND wi.cycle < ${target.cycle}::integer
+      RETURNING wi.id, wi.attempt
+    ),
+    recorded AS (
+      INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note)
+      SELECT id, 'approved', 'cancelled', 'superseded by a newer cycle (work item ' || ${newWorkItemId}::bigint || ')'
+      FROM cancelled
+      RETURNING work_item_id
+    )
+    SELECT id, attempt FROM cancelled
+  `.fetch();
+  return rows.map((row) => ({
+    id: parseId(row.id, "id"),
+    attempt: parseNumericLike(row.attempt, "attempt"),
+  }));
+}
+
+/**
+ * Issueの作業項目を挿入し、そのIDと、置き換えて取り消した`approved`の作業項目を返す。
+ * 同じIssueに終端でない作業項目が既にあるときは、
  * 部分一意インデックス`work_items_active_issue_key`により挿入せず、`null`を返す。
  * `ON CONFLICT DO NOTHING`は対象を指定しないので、`(owner, repo, issue_number, cycle)`の
  * 一意制約への違反も`null`になる。どちらも、同じIssueの別の取得が先に作業項目を作った場合である。
  * `nextCycleForIssue`の読み取りと挿入は1つの取引ではないため、並行する取得の
  * 最後の防御はこの制約である。DBを共有するインスタンスの間で働く。
  *
- * 挿入できたときは、同じ文の中で、同じIssueの`approved`の`issue`作業項目をすべて`cancelled`へ移し、
- * `factory.work_item_events`に行を残す。新しいサイクルが始まったので、古い承認は使われないためである。
+ * 挿入できたときは、続けて`supersedeApprovedIssueWorkItems`で古い承認済みの項目を取り消す。
  * `approved`は終端で、稼働中のIssueの一意インデックスの対象外なので、
  * `implement_enabled`が無効の間は、承認済みの項目が長く残りうる。
- * 挿入が負けたときは、何も取り消さない。取り消した項目は`superseded`に入れて返す。
+ * 古い承認を実装に使わないよう、新しいサイクルの開始で取り消す。
+ * 挿入が負けたときは、何も取り消さない。
+ *
+ * 挿入と取り消しは、別々に自動コミットされる2つの文にしている。
+ * 1つの文にまとめると、取り消しは文の開始時点のスナップショットを見るので、
+ * 文の実行中にコミットされた承認を取り逃す。
+ * 取引で囲むと、`requirements_apply`の`approved`から`implementing`への更新と、
+ * 行のロックを逆の順に取り合ってデッドロックしうる。
+ * 2つに分けても、取り消しの前にプロセスが落ちると、古い承認が残りうる。
+ * 残った項目は、次に同じIssueで新しいサイクルが始まるときに取り消される。
  */
 export async function insertIssueWorkItemUnlessActive(
   item: NewWorkItem,
   sql: SqlClient = defaultSqlClient,
 ): Promise<InsertedIssueWorkItem | null> {
   const rows = await sql`
-    WITH inserted AS (
-      INSERT INTO factory.work_items (
-        cycle, source, kind, owner, repo, issue_number, issue_url, pr_number,
-        title, body, status, attempt, claimed_by, flow_job_id, resume_url,
-        cancel_url, head_sha, parent_work_item_id
-      ) VALUES (
-        ${item.cycle}::integer, ${item.source}, ${item.kind}, ${item.owner}, ${item.repo},
-        ${item.issue_number}::integer, ${item.issue_url}, ${item.pr_number}::integer, ${item.title},
-        ${item.body}, ${item.status}, ${item.attempt}::integer, ${item.claimed_by},
-        ${item.flow_job_id}, ${item.resume_url}, ${item.cancel_url}, ${item.head_sha},
-        ${item.parent_work_item_id}::bigint
-      )
-      ON CONFLICT DO NOTHING
-      RETURNING id, owner, repo, issue_number
-    ),
-    cancelled AS (
-      UPDATE factory.work_items AS wi
-      SET status = 'cancelled', updated_at = now()
-      FROM inserted
-      WHERE wi.status = 'approved' AND wi.kind = 'issue'
-        AND wi.owner = inserted.owner AND wi.repo = inserted.repo AND wi.issue_number = inserted.issue_number
-        AND wi.id <> inserted.id
-      RETURNING wi.id, wi.attempt, inserted.id AS new_id
-    ),
-    recorded AS (
-      INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note)
-      SELECT id, 'approved', 'cancelled', 'superseded by a newer cycle (work item ' || new_id || ')'
-      FROM cancelled
-      RETURNING work_item_id
+    INSERT INTO factory.work_items (
+      cycle, source, kind, owner, repo, issue_number, issue_url, pr_number,
+      title, body, status, attempt, claimed_by, flow_job_id, resume_url,
+      cancel_url, head_sha, parent_work_item_id
+    ) VALUES (
+      ${item.cycle}::integer, ${item.source}, ${item.kind}, ${item.owner}, ${item.repo},
+      ${item.issue_number}::integer, ${item.issue_url}, ${item.pr_number}::integer, ${item.title},
+      ${item.body}, ${item.status}, ${item.attempt}::integer, ${item.claimed_by},
+      ${item.flow_job_id}, ${item.resume_url}, ${item.cancel_url}, ${item.head_sha},
+      ${item.parent_work_item_id}::bigint
     )
-    SELECT inserted.id AS id, cancelled.id AS superseded_id, cancelled.attempt AS superseded_attempt
-    FROM inserted
-    LEFT JOIN cancelled ON true
+    ON CONFLICT DO NOTHING
+    RETURNING id
   `.fetch();
-  const first = rows[0];
-  if (first === undefined) return null;
-  const superseded: { id: number; attempt: number }[] = [];
-  for (const row of rows) {
-    if (row.superseded_id === null || row.superseded_id === undefined) continue;
-    superseded.push({
-      id: parseId(row.superseded_id, "superseded_id"),
-      attempt: parseNumericLike(row.superseded_attempt, "superseded_attempt"),
-    });
-  }
-  return { id: parseId(first.id, "id"), superseded };
+  const row = rows[0];
+  if (row === undefined) return null;
+  const id = parseId(row.id, "id");
+  if (item.issue_number === null) return { id, superseded: [] };
+  const superseded = await supersedeApprovedIssueWorkItems(
+    {
+      owner: item.owner,
+      repo: item.repo,
+      issue_number: item.issue_number,
+      cycle: item.cycle,
+    },
+    id,
+    sql,
+  );
+  return { id, superseded };
+}
+
+/**
+ * 同じIssueに、`cycle`より大きい`issue`の作業項目が(状態を問わず)あるかを返す。
+ * あれば、`cycle`の作業項目は新しいサイクルに置き換えられている。
+ * `retry_work_item`が古い作業項目を再開しないために使う。
+ */
+export async function hasNewerIssueCycle(
+  owner: string,
+  repo: string,
+  issueNumber: number,
+  cycle: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  const rows = await sql`
+    SELECT 1 FROM factory.work_items
+    WHERE kind = 'issue' AND owner = ${owner} AND repo = ${repo}
+      AND issue_number = ${issueNumber}::integer AND cycle > ${cycle}::integer
+    LIMIT 1
+  `.fetch();
+  return rows.length > 0;
 }
 
 const ACTIVE_ISSUE_INDEX_NAME = "work_items_active_issue_key";

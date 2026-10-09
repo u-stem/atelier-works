@@ -3585,6 +3585,12 @@ const REASON_RULES: readonly ReasonRule[] = [
     nextAction: () =>
       "操作は要りません。稼働中のサイクルの承認依頼か完了を待ってください",
   },
+  // `retry_work_item`が、より新しいサイクルのあるIssueの古い作業項目の再開を断る理由。
+  {
+    pattern: /a newer cycle exists for this Issue/,
+    describe: () => "同じIssueで、より新しいサイクルが始まっています",
+    nextAction: () => "操作は要りません。新しいサイクルの結果を待ってください",
+  },
   // pr_fix_prepare.tsの`evaluatePrFixSafetyGuards` / `evaluateRepoAllowedGuard`。
   // 準備の関門は修正の前に`blocked`で止めるので、再実行は修正のラウンドを使わない`retry_work_item`にする。
   {
