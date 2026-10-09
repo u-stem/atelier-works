@@ -1,10 +1,156 @@
-# Consoleの配信の仕様
+# Consoleの仕様
 
-Consoleの成果物を取り込む`console_fetcher`と、配信するCaddyの仕組みを書く。
-Consoleの配信を変更する人が読む。
+Consoleのアプリ(`console/`)の構成と、成果物を配信する仕組みを書く。
+アプリの構成は、画面とAPI層を変更する人が読む。
+配信の仕組みは、`console_fetcher`とCaddyを変更する人が読む。
 何を守るかと残るリスクは、[セキュリティ](../security.md)の「Consoleの配信」にある。
 
-## 構成
+## アプリの構成
+
+ConsoleはSPAである。
+Vite、React、TypeScript、Tailwind CSS、shadcn/uiの部品で作る。
+経路はReact Router、データの取得はTanStack Queryで扱う。
+画面の判定は純関数に切り出して`bun test`で確かめる。
+画面の部品のテストは書かない。
+
+| ディレクトリ | 役割 |
+| --- | --- |
+| `src/api/` | scriptの呼び出し、失敗の分類、応答の型ガード、取得 |
+| `src/app/` | 外枠、サイドバー、経路の表、ログインの状態、Provider |
+| `src/screens/` | 画面。入口ごとのディレクトリに置く |
+| `src/components/` | 共通の部品。`ui/`はshadcn/uiの部品を写したもの |
+| `src/lib/` | 表示と判定の純関数 |
+
+shadcn/uiの部品は、CLIを使わず、new-yorkのソースを手で`src/components/ui/`に写す。
+importは相対パスにし、型アサーションは外す。
+`as`を禁じる検査が、`console/src/`にもかかるためである。
+
+色の定義は`src/index.css`の変数だけにする。
+値は`light-dark()`で書き、OSの設定と`data-theme`の両方に従う。
+文字と背景の組はWCAG AAの4.5:1以上、入力欄などの境界は3:1以上を保つ。
+
+表示する日本語は`src/lib/labels.ts`に集める。
+画面は、状態や種類の生のコードを出さない。
+表に無い値は、元の文字列ではなく決まった文言で出す。
+backendの値が表から漏れていないことは、`tests/scripts/console_summary_contract.test.ts`が確かめる。
+
+## 経路
+
+経路は`src/app/screens.ts`の1つの表から作る。
+サイドバーの入口、件数のバッジ、React Routerの経路は、すべてこの表を読む。
+routerの基準は`/console`で、Caddyが`/console/`の下のパスに`index.html`を返す。
+
+| パス | 画面 | 状態 |
+| --- | --- | --- |
+| `/console/` | 要対応 | 承認待ちの一覧 |
+| `/console/items` | 作業項目 | 準備中の枠 |
+| `/console/items/:id/requirements` | 要件定義書 | 準備中の枠。`?attempt=<k>`で試行を指す |
+| `/console/reports` | レポート | 準備中の枠 |
+| `/console/reports/audit/:id` | 監査レポート | 準備中の枠 |
+| `/console/system` | システム | 準備中の枠 |
+
+どの経路にも当たらないパスは、「ページが見つかりません」の画面で受ける。
+経路の番号は、正の整数の文字列だけを受け付ける。
+経路やURLの引数は選択を表すだけで、承認や再実行などの操作は起こさない。
+
+### 旧Consoleのリンク
+
+起動時に、URLのフラグメントが旧Consoleの形なら、新しい経路に置き換える。
+置き換えは履歴を増やさない。
+`<id>`と`<k>`は、先頭が0でない正の整数に限る。
+
+| 旧Consoleのフラグメント | 置き換え先 |
+| --- | --- |
+| `#requirements/<id>` | `/console/items/<id>/requirements` |
+| `#requirements/<id>/attempt-<k>` | `/console/items/<id>/requirements?attempt=<k>` |
+| `#audit/<id>` | `/console/reports/audit/<id>` |
+
+サイドバーの「旧Consoleを開く」は、Windmillのraw appの旧Consoleへのリンクである。
+
+## API層
+
+Consoleは、`src/api/windmill.ts`の`runScript`だけを通してWindmillのscriptを呼ぶ。
+`POST /api/w/factory/jobs/run_wait_result/p/<path>`を、`credentials: "same-origin"`と`cache: "no-store"`で呼ぶ。
+ログインのCookieだけで動くので、トークンは持たない。
+
+呼べるscriptは、`SCRIPT_PATHS`の許可リストにある`console_query`と`approval_decide`だけである。
+パスは呼び出し側の名前から引き、外から受け取った文字列では呼ばない。
+Consoleは管理者のCookieで動くので、呼べる範囲を固定する。
+
+`runScript`は例外を投げず、応答を`classifyRunResponse`で分類して返す。
+中断(`AbortSignal`)だけは、取り消しとして扱えるよう例外を再び投げる。
+
+| 応答 | 分類 |
+| --- | --- |
+| 2xxで本文がJSON | 成功 |
+| 2xxで本文がJSONでない | `invalid_response` |
+| 401 | `unauthorized` |
+| 403 | `forbidden` |
+| 408、504 | `timeout_or_unknown` |
+| 500 | `job_failed`。本文から取り出した文を500字まで持つ |
+| その他の状態 | `http`。状態の番号を持つ |
+| 通信の失敗 | `network` |
+
+本文はContent-Typeを見ずに読む。
+失敗の本文は、JSONの`error.message`、`message`、文字列の`error`の順に探し、JSONでなければ本文のテキストを使う。
+`timeout_or_unknown`は、ジョブが終わったか分からない状態を表す。
+書き込みの結果としては確定させず、一覧を読み直して確かめるよう案内する。
+
+### 応答の型ガード
+
+応答は、`src/api/guards/`の型ガードを通してから使う。
+形が違う応答は、一部だけを使わず、全体を`invalid_response`にする。
+知らない種類の値も拒む。
+型のずれを黙って表示せず、気づけるようにするためである。
+`summary`の型は、`f/factory/steps/console_query.ts`の`ConsoleSummary`に合わせてある。
+backendの変換結果が型ガードを通ることは、`tests/scripts/console_summary_contract.test.ts`が確かめる。
+
+### 取得の方針
+
+自動で取り直すのは`summary`だけで、120秒ごとに、タブが見えている間だけ取る。
+サイドバーの件数と、要対応の一覧は、この1つの取得を共有する。
+401、403、形が違う応答は再試行しない。待っても同じ結果になるためである。
+ほかの失敗の取得は2回まで再試行する。
+書き込みは再試行しない。結果が分からないまま2回実行しないためである。
+
+## ログイン切れの扱い
+
+取得が401を返すと、画面の上部にバナーを出す。
+すぐにはログインの画面へ移さない。入力の途中の内容を失わないためである。
+操作者が「ログイン」を押すと、Windmillのログイン画面`/user/login`へ移る。
+
+戻り先は、引数`rd`に`pathname + search + hash`を入れて渡す。
+`rd`は`URLSearchParams`で組み立てる。
+現在のパスが`/console/`で始まらないとき、または`//`、`..`、`\`を含むときは、`/console/`に戻す。
+別のオリジンや別のパスへ飛ばされないようにするためである。
+
+その後の取得が成功すると、バナーは消える。
+401以外の失敗では消えない。通信が戻ったとは限らないためである。
+
+## 要対応の画面
+
+承認待ちを、依頼が新しい順に並べて一覧にする。
+種類のチップ(すべて、要件定義、Issue化提案、改善提案)で絞り込む。
+改善提案は、監査から出たIssue提案である。
+
+選んだ項目は、URLの`?approval=<id>`に持つ。
+`<id>`が正の整数でなければ、選んでいないものとして扱う。
+一覧と詳細は別々にスクロールする。
+詳細には、題名、種類、作業項目(要件定義なら試行)、Issueへのリンク、依頼した時刻を出す。
+IssueのリンクはGitHubのIssueのURLの形のときだけ張る。
+
+この画面は読み取り専用で、承認や却下の操作は起こさない。
+失敗と通知は一覧に出さず、ほかにある件数だけを知らせる。
+並び、絞り込み、行の表示内容は`src/lib/inboxView.ts`の純関数が決める。
+
+## 画面を足す手順
+
+1. 画面を`src/screens/<入口>/`に置く。
+2. `src/app/screens.ts`の表に、入口か詳細の経路を1行足す。
+3. 表示する語を`src/lib/labels.ts`に足す。
+4. 判定は純関数にして、`src/lib/`に置き、テストを書く。
+
+## 配信の構成
 
 | 要素 | 役割 |
 | --- | --- |

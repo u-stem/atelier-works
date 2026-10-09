@@ -435,7 +435,7 @@ Factoryの投稿の見分け方、総評の組み立て、スレッドの解決�
 `console/`の変更は`self_update`の対象ではない。
 マージ後にCIが成果物`console-dist`を作り、`console_fetcher`が数分で取り込む。
 `classifyChangedPaths`は`console/`の変更を`console_paths`として分けて返し、実装フローはPR本文の「Windmillへの反映」に印を付ける。
-仕組みは[Consoleの配信の仕様](internals/console.md)に書く。
+仕組みは[Consoleの仕様](internals/console.md)に書く。
 
 Claudeに渡すスキル(`.claude/skills/**`)は、実行のたびにself cloneから読む。そのためpullの直後の実行から反映される。初回の反映(スケジュールの登録と最初のpush)は、ホストから`scripts/bootstrap.sh`が行う。
 
