@@ -14,7 +14,8 @@
 // `wmill.setVariable`だけが値を変える。無関係な`wmill sync push`で戻らない。
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "./lib/config.ts";
-import { recordDeployment } from "./lib/db.ts";
+import { checkConsoleWorker } from "./lib/console_worker.ts";
+import { addNoticeUnlessUnresolved, recordDeployment } from "./lib/db.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import {
   assertBranchMatches,
@@ -309,6 +310,14 @@ export async function main(): Promise<SelfUpdateResult> {
   const config = await loadConfig(() =>
     wmill.getResource("f/factory/factory_config"),
   );
+  // Console用workerが居ないとConsoleのjobが溜まり続けるので、更新の有無によらず毎回確かめる。
+  // 確かめられなくても自己更新は止めない(`checkConsoleWorker`は例外を投げない)。
+  await checkConsoleWorker({
+    listWorkers: (page, pingSince) =>
+      wmill.WorkerService.listWorkers({ page, perPage: 100, pingSince }),
+    addNotice: (record) => addNoticeUnlessUnresolved(record),
+    log,
+  });
   const ghToken = await wmill.getVariable("f/factory/github_token");
 
   const factoryClone = await ensureFactoryClone({

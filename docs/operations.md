@@ -624,6 +624,7 @@ Consoleの**通知**タブには、Discordに送らない要対応の事項が�
 | `workspace_disk_usage` | 作業領域の掃除(毎日03:00)が記録したディスク使用量 | 増え続けていないか見る |
 | `console_fetch_failed` | Consoleの取り込みが失敗した | 通知の「次の操作」に従う |
 | `console_fetch_stale` | Consoleの取り込みの結果が30分以上更新されていない | 取り込みのコンテナ(`console_fetcher`)が動いているか確かめる |
+| `console_worker_missing` | tag `console`を受けるworkerが、5分以内にpingしていない。Consoleのjobがqueueに溜まり、Consoleが止まる | Console用のworker(`windmill_worker_console`)のコンテナが動いているか確かめ、止まっていれば`mise run up`で起動し直す。自己更新(10分ごと)が検知する |
 
 ### 通知を解決する
 

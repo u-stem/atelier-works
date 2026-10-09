@@ -1,0 +1,9 @@
+summary: '[LIB] Console用workerの存在確認'
+description: 内部ライブラリです。直接実行するものではありません。tag consoleを受けるworkerが最近pingしたかを確かめ、居なければ通知を残します。
+lock: '!inline f/factory/lib/console_worker.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []
