@@ -8,6 +8,7 @@ import {
 const INTERVAL = 60_000;
 const MAX = 600_000;
 const TIMEOUT = 10_000;
+const RECHECK_GAP = 5_000;
 
 /** 手動で進める時計。タイマーを時刻順に実行し、そのたびにPromiseの後続を流す。 */
 function fakeClock() {
@@ -73,6 +74,8 @@ function setUp(outcomes: readonly (CheckOutcome | "stall")[] = []): Setup {
     intervalMs: INTERVAL,
     maxIntervalMs: MAX,
     checkTimeoutMs: TIMEOUT,
+    visibleRecheckGapMs: RECHECK_GAP,
+    now: clock.now,
     isVisible: () => visible.value,
     check: (signal) => {
       checkTimes.push(clock.now());
@@ -170,6 +173,33 @@ describe("createWatchScheduler", () => {
     scheduler.onVisibilityChange();
     await clock.flush();
     expect(checkTimes).toEqual([]);
+  });
+
+  test("skips the visibility check when the last check started moments ago", async () => {
+    const { clock, checkTimes, scheduler } = setUp();
+    scheduler.start();
+    await clock.advance(RECHECK_GAP - 1);
+    scheduler.onVisibilityChange();
+    await clock.flush();
+    expect(checkTimes).toEqual([0]);
+  });
+
+  test("checks on a visibility change once the gap has passed", async () => {
+    const { clock, checkTimes, scheduler } = setUp();
+    scheduler.start();
+    await clock.advance(RECHECK_GAP);
+    scheduler.onVisibilityChange();
+    await clock.flush();
+    expect(checkTimes).toEqual([0, RECHECK_GAP]);
+  });
+
+  test("keeps the interval after skipping a visibility check", async () => {
+    const { clock, checkTimes, scheduler } = setUp();
+    scheduler.start();
+    await clock.advance(RECHECK_GAP - 1);
+    scheduler.onVisibilityChange();
+    await clock.advance(INTERVAL);
+    expect(checkTimes).toEqual([0, INTERVAL]);
   });
 
   test("does not start a second check while one is running", async () => {
@@ -274,6 +304,8 @@ describe("createWatchScheduler", () => {
       intervalMs: INTERVAL,
       maxIntervalMs: MAX,
       checkTimeoutMs: TIMEOUT,
+      visibleRecheckGapMs: RECHECK_GAP,
+      now: clock.now,
       isVisible: () => true,
       check: () => {
         times.push(clock.now());

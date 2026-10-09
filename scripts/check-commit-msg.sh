@@ -10,6 +10,7 @@
 # (空行で区切られた最後のまとまり)にあるものだけを数える。1行目と同じ段落は
 # 数えない。キー名の大文字小文字は区別しない。"#"で始まる行は、エディタが
 # 足すコメントなので、段落の区切りにも数えず取り除いてから見る。
+# `git commit -v`が足す「# ---- >8 ----」の行から下(差分)は読まない。
 set -euo pipefail
 
 commit_msg_file="${1:-}"
@@ -33,7 +34,12 @@ if [[ "$first_line" =~ $pattern ]]; then
   fi
   trailer_pattern='^[Cc][Oo]-[Aa][Uu][Tt][Hh][Oo][Rr][Ee][Dd]-[Bb][Yy]:[[:space:]]*Claude([[:space:]][^<]*)?<noreply@anthropic\.com>[[:space:]]*$'
   lines=()
+  scissors_pattern='^#[[:space:]]-+[[:space:]]>8[[:space:]]-+[[:space:]]*$'
   while IFS= read -r line || [ -n "$line" ]; do
+    # commit -vは、この行より下に差分を足す。差分はメッセージに含まれない。
+    if [[ "$line" =~ $scissors_pattern ]]; then
+      break
+    fi
     case "$line" in
       "#"*) continue ;;
     esac

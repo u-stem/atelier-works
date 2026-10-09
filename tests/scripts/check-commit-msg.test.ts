@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 
 const SCRIPT = resolve(import.meta.dir, "../../scripts/check-commit-msg.sh");
 const TRAILER = "Co-Authored-By: Claude <noreply@anthropic.com>";
+const SCISSORS = "# ------------------------ >8 ------------------------";
 
 let dir: string;
 
@@ -151,6 +152,30 @@ describe("check-commit-msg.sh with CLAUDECODE=1", () => {
       true,
     );
     expect(exitCode).toBe(0);
+  });
+
+  test("accepts a trailer above the scissors line of a verbose commit", () => {
+    const { exitCode } = run(
+      `feat: 機能を追加\n\n本文\n\n${TRAILER}\n\n${SCISSORS}\n# Do not modify or remove the line above.\ndiff --git a/x b/x\n+追加した行\n`,
+      true,
+    );
+    expect(exitCode).toBe(0);
+  });
+
+  test("rejects a verbose commit whose trailer is missing above the scissors line", () => {
+    const { exitCode } = run(
+      `feat: 機能を追加\n\n本文\n\n${SCISSORS}\n# Do not modify or remove the line above.\ndiff --git a/x b/x\n+${TRAILER}\n`,
+      true,
+    );
+    expect(exitCode).toBe(1);
+  });
+
+  test("rejects a trailer that only appears in the diff of a verbose commit", () => {
+    const { exitCode } = run(
+      `feat: 機能を追加\n\n${SCISSORS}\ndiff --git a/x b/x\n${TRAILER}\n`,
+      true,
+    );
+    expect(exitCode).toBe(1);
   });
 
   test("skips the trailer check for a merge commit", () => {

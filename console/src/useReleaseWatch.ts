@@ -10,11 +10,12 @@ import {
 const CHECK_INTERVAL_MS = 60_000;
 const MAX_INTERVAL_MS = 10 * 60_000;
 const CHECK_TIMEOUT_MS = 10_000;
+const VISIBLE_RECHECK_GAP_MS = 5_000;
 
 /**
  * 開いたままのタブが、配信中の版から外れていないかを確かめ続ける。
  * 表示した直後と、その後60秒ごと、タブが見える状態に戻ったときに確かめる。
- * タブが見えないあいだは周期の確認をしない。確認が失敗し続けるあいだは、間隔を10分まで延ばす。
+ * タブが見えないあいだは周期の確認をしない。見える状態に戻ったときは、前の確認から5秒以上空いていれば確認する。確認が失敗し続けるあいだは、間隔を10分まで延ばす。
  * 1回の確認は10秒で打ち切り、アンマウントでも中断する。
  * 自分のファイルの集合は、確かめるたびにDOMから取り直す。後から読み込んだchunkの
  * modulepreloadとstylesheetも拾うためである。
@@ -59,6 +60,8 @@ export function useReleaseWatch(): ReleaseNotice {
       intervalMs: CHECK_INTERVAL_MS,
       maxIntervalMs: MAX_INTERVAL_MS,
       checkTimeoutMs: CHECK_TIMEOUT_MS,
+      visibleRecheckGapMs: VISIBLE_RECHECK_GAP_MS,
+      now: () => Date.now(),
       isVisible: () => document.visibilityState !== "hidden",
       check,
       setTimer: (fn, ms) => window.setTimeout(fn, ms),

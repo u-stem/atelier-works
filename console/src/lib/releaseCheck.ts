@@ -42,33 +42,58 @@ async function fetchJson(
   }
 }
 
+/** ファイルが404かを返す。確かめられなかったとき(失敗、中断)はfalse。 */
+async function isMissing(
+  fetchFn: FetchFn,
+  asset: string,
+  signal: AbortSignal,
+): Promise<boolean> {
+  try {
+    const response = await fetchFn(
+      `/console/${asset}`,
+      requestInit("HEAD", signal),
+    );
+    return response.status === 404;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * 自分のファイルのうち、1つでも404のものがあるかを返す。
- * 1つ見つかれば「強く促す」には十分なので、そこで残りへのHEADをやめる。
- * 確かめられなかったものは404に数えない。中断されたときもやめる。
+ * HEADは並べて送り、最初の404が届いた時点でtrueを返して残りを中断する。
+ * ファイルが多くても、確認が打ち切りの時間に収まるようにするためである。
+ * 確かめられなかったものは404に数えない。`signal`が中断されたときも残りを中断する。
  */
 async function anyMissing(
   fetchFn: FetchFn,
   assets: readonly string[],
   signal?: AbortSignal,
 ): Promise<boolean> {
-  for (const asset of assets) {
-    if (signal?.aborted) {
-      return false;
-    }
-    try {
-      const response = await fetchFn(
-        `/console/${asset}`,
-        requestInit("HEAD", signal),
-      );
-      if (response.status === 404) {
-        return true;
-      }
-    } catch {
-      // 確かめられなかったファイルは404に数えず、次のファイルへ進む。
-    }
+  if (assets.length === 0 || signal?.aborted) {
+    return false;
   }
-  return false;
+  const inner = new AbortController();
+  const abortInner = () => inner.abort();
+  signal?.addEventListener("abort", abortInner, { once: true });
+  try {
+    return await new Promise<boolean>((resolve) => {
+      let pending = assets.length;
+      for (const asset of assets) {
+        void isMissing(fetchFn, asset, inner.signal).then((missing) => {
+          pending -= 1;
+          if (missing) {
+            resolve(true);
+          } else if (pending === 0) {
+            resolve(false);
+          }
+        });
+      }
+    });
+  } finally {
+    inner.abort();
+    signal?.removeEventListener("abort", abortInner);
+  }
 }
 
 /**
@@ -83,7 +108,7 @@ export type ReleaseCheckResult = {
 
 /**
  * 配信中の版のmanifestとstatusを取り、案内の強さを返す。
- * 自分のファイルのうちmanifestに無いものにだけHEADを順に送り、最初の404で止める。
+ * 自分のファイルのうちmanifestに無いものにだけHEADを並べて送り、最初の404で残りを中断する。
  * manifestを取れなかったとき、前回がurgeのとき、自分のファイルが無いときは、前回の判定を返す。
  * `signal`が中断されると、実行中の取得は失敗として扱われ、前回の判定が残る。
  */

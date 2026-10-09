@@ -24,6 +24,12 @@ export type WatchOptions<Handle> = {
   maxIntervalMs: number;
   /** 1回の確認に待つ時間。超えたら中断して失敗に数える。 */
   checkTimeoutMs: number;
+  /**
+   * 見える状態に戻ったときに、前の確認の開始からこれだけ空いていなければ確認しない。
+   * タブを素早く切り替えても、そのたびに取りに行かないためである。
+   */
+  visibleRecheckGapMs: number;
+  now: () => number;
   isVisible: () => boolean;
   /** 1回分の確認。`signal`が中断されたら速やかに終えること。 */
   check: (signal: AbortSignal) => Promise<CheckOutcome>;
@@ -34,7 +40,7 @@ export type WatchOptions<Handle> = {
 export type WatchScheduler = {
   /** 見えているときは直ちに確認し、以後は間隔を置いて確認する。 */
   start: () => void;
-  /** visibilitychangeのたびに呼ぶ。見える状態に戻ったときだけ直ちに確認する。 */
+  /** visibilitychangeのたびに呼ぶ。見える状態に戻ったとき、前の確認から間があれば直ちに確認する。 */
   onVisibilityChange: () => void;
   /** 予定を取り消し、実行中の確認を中断する。以後は何もしない。 */
   stop: () => void;
@@ -56,6 +62,7 @@ export function createWatchScheduler<Handle>(
   let running = false;
   let stopped = false;
   let failures = 0;
+  let lastStartedAt: number | undefined;
 
   const cancelTimer = () => {
     if (timer !== undefined) {
@@ -102,6 +109,7 @@ export function createWatchScheduler<Handle>(
       return;
     }
     running = true;
+    lastStartedAt = options.now();
     cancelTimer();
     const outcome = await runCheck();
     running = false;
@@ -126,9 +134,17 @@ export function createWatchScheduler<Handle>(
       }
     },
     onVisibilityChange: () => {
-      if (options.isVisible()) {
-        void run();
+      if (!options.isVisible()) {
+        return;
       }
+      // 予約は確認の終わりに入るので、ここで見送っても周期は続く。
+      if (
+        lastStartedAt !== undefined &&
+        options.now() - lastStartedAt < options.visibleRecheckGapMs
+      ) {
+        return;
+      }
+      void run();
     },
     stop: () => {
       stopped = true;

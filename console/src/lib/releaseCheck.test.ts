@@ -52,6 +52,35 @@ function fake(routes: Record<string, Route>): Fake {
   return { fetchFn, calls, signals };
 }
 
+/**
+ * 指定の無いHEADは、`signal`が中断されるまで応答しない(中断で拒否する)fetch。
+ * 中断されたURLを`aborted`に記録する。
+ */
+function pendingHeads(routes: Record<string, Response>): {
+  fetchFn: FetchFn;
+  aborted: string[];
+} {
+  const aborted: string[] = [];
+  const fetchFn: FetchFn = (input, init) => {
+    const method = init?.method ?? "GET";
+    const route = routes[method === "GET" ? input : `${method} ${input}`];
+    if (route !== undefined) {
+      return Promise.resolve(route.clone());
+    }
+    return new Promise<Response>((_, reject) => {
+      init?.signal?.addEventListener(
+        "abort",
+        () => {
+          aborted.push(input);
+          reject(new Error("aborted"));
+        },
+        { once: true },
+      );
+    });
+  };
+  return { fetchFn, aborted };
+}
+
 /** 案内の強さだけを取り出す。 */
 async function noticeOf(
   ...args: Parameters<typeof checkRelease>
@@ -202,24 +231,48 @@ describe("checkRelease", () => {
     expect(await noticeOf(fetchFn, new Set(), "suggest")).toBe("suggest");
   });
 
-  test("sends HEAD only until the first 404", async () => {
-    const { fetchFn, calls } = fake({
+  test("passes the abort signal to the manifest and status requests", async () => {
+    const controller = new AbortController();
+    const { fetchFn, calls, signals } = fake({
+      "/console/manifest.json": manifest("index.html", JS, CSS),
+      "/console/status.json": status("ok"),
+    });
+    await checkRelease(fetchFn, OWN, "none", controller.signal);
+    expect(
+      calls.length === 2 && signals.every((s) => s === controller.signal),
+    ).toBe(true);
+  });
+
+  test("urges a reload once one HEAD answers 404 while another is pending", async () => {
+    const { fetchFn } = pendingHeads({
+      "/console/manifest.json": manifest("index.html"),
+      "/console/status.json": status("ok"),
+      [`HEAD /console/${CSS}`]: new Response(null, { status: 404 }),
+    });
+    expect((await checkRelease(fetchFn, OWN, "none")).notice).toBe("urge");
+  });
+
+  test("aborts the pending HEADs after the first 404", async () => {
+    const { fetchFn, aborted } = pendingHeads({
+      "/console/manifest.json": manifest("index.html"),
+      "/console/status.json": status("ok"),
+      [`HEAD /console/${CSS}`]: new Response(null, { status: 404 }),
+    });
+    await checkRelease(fetchFn, OWN, "none");
+    expect(aborted).toEqual([`/console/${JS}`]);
+  });
+
+  test("aborts the pending HEADs when the caller aborts", async () => {
+    const controller = new AbortController();
+    const { fetchFn, aborted } = pendingHeads({
       "/console/manifest.json": manifest("index.html"),
       "/console/status.json": status("ok"),
     });
-    await checkRelease(fetchFn, OWN, "none");
-    expect(calls.filter((c) => c.method === "HEAD")).toHaveLength(1);
-  });
-
-  test("passes the abort signal to every request", async () => {
-    const controller = new AbortController();
-    const { fetchFn, signals } = fake({
-      "/console/manifest.json": manifest("index.html", JS),
-      "/console/status.json": status("ok"),
-      [`HEAD /console/${CSS}`]: new Response(null, { status: 200 }),
-    });
-    await checkRelease(fetchFn, OWN, "none", controller.signal);
-    expect(signals.every((s) => s === controller.signal)).toBe(true);
+    const result = checkRelease(fetchFn, OWN, "none", controller.signal);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    controller.abort();
+    await result;
+    expect(aborted.sort()).toEqual([`/console/${JS}`, `/console/${CSS}`]);
   });
 
   test("reports the manifest as reachable when it was parsed", async () => {
