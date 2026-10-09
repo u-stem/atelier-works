@@ -643,7 +643,7 @@ workerの並列数(`NUM_WORKERS`)のような`infra/docker-compose.yml`の変更
 まとめて反映したいときは、`mise run deploy`を手で実行する。必須の手順ではない。`mise run deploy`は次を順に行う。
 
 1. ホスト側のcheckoutで`git pull --ff-only`
-2. イメージの取得と、workerと`console_fetcher`のイメージのビルド
+2. イメージの取得と、`windmill_worker`と`console_fetcher`のイメージのビルド
 3. `docker compose up -d`
 4. Consoleのraw appの依存の`npm ci --ignore-scripts`と`wmill sync push`
 5. migrationの実行
@@ -868,7 +868,8 @@ Factoryの資産は、すべて`factory`ワークスペースの`f/factory/**`�
 
 ### workerがプロセスを作れなくなったとき
 
-workerのコンテナは、`init: true`でdocker-initをPID 1にし、終了した子プロセスを回収する。ジョブが起こすgit、gh、esbuildの子プロセスは、親より長く残ることがある。initが無いと、回収されないプロセスが上限の`pids: 512`を使い切り、すべてのジョブが`errno=11`(EAGAIN)で失敗する。
+workerのコンテナは、`init: true`でdocker-initをPID 1にし、終了した子プロセスを回収する。ジョブが起こすgit、gh、esbuildの子プロセスは、親より長く残ることがある。initが無いと、回収されないプロセスが上限を使い切り、すべてのジョブが`errno=11`(EAGAIN)で失敗する。
+上限は、defaultのworker(`windmill_worker`)が`pids: 512`、Console用のworker(`windmill_worker_console`)が`pids: 256`である。
 
 同じ症状が出たら、使用量を確かめてからworkerを再起動する。
 

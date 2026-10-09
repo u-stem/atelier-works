@@ -17,7 +17,10 @@ Software FactoryはGitHub Issueを起点に、要件定義から自己改善ま�
 | Console(`console/`) | Vite + Reactで作り直しているConsole。GitHubのCIが組み立てて成果物`console-dist`にし、`console_fetcher`が取り込み、Caddyが`/console/`で配信する |
 | Discord | 拾い上げ、承認待ち、承認、要対応、失敗などのイベントをWebhookで通知する |
 
-workerはカスタムイメージで動き、Claude Code CLI(`claude`)、`gh`、git worktree runner(`gtr`)、`gitleaks`、`wmill`を同梱する。workerはdefaultワーカーグループの1コンテナで、`NUM_WORKERS=3`により3つのワーカープロセスが並列に動く。メモリの上限はコンテナ全体で4096Mである。
+Claudeを動かすworker(`windmill_worker`)はカスタムイメージで動く。
+このイメージには、Claude Code CLI(`claude`)、`gh`、git worktree runner(`gtr`)、`gitleaks`、`wmill`を同梱する。
+このworkerはdefaultワーカーグループの1コンテナで、`NUM_WORKERS=3`により3つのワーカープロセスが並列に動く。
+メモリの上限はコンテナ全体で4096Mである。
 
 Consoleの問い合わせと操作の受付専用のworkerが、別のコンテナ(`windmill_worker_console`)で動く。
 Claudeの長いジョブがdefaultワーカーグループの枠を埋めても、問い合わせと操作の受付を止めないためである。

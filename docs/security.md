@@ -243,7 +243,7 @@ Console用のworker(`windmill_worker_console`)は、Consoleの問い合わせと
 
 | 項目 | 設定 |
 | --- | --- |
-| 書き込めるマウント | `worker_logs`と専用の依存キャッシュ`worker_console_dependency_cache`だけである。`factory_state`と`factory_console`は読み取り専用でマウントする。`worker_logs`はdefaultのworkerと共有する書き込みのマウントである |
+| 書き込めるマウント | `worker_logs`と専用の依存キャッシュ`worker_console_dependency_cache`だけである。`factory_state`と`factory_console`は読み取り専用でマウントする。`worker_logs`は、`windmill_server`、defaultのworker、nativeのworkerとも共有する書き込みのマウントである |
 | `factory_workspaces` | マウントしない。対象リポジトリのチェックアウトに届かない |
 | `worker_dependency_cache` | 共有しない。Console用のworkerは専用のボリュームを使うので、defaultのworkerと依存のキャッシュを通して影響し合わない |
 | `docker.sock` | マウントしない |
