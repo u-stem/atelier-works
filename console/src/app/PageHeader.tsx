@@ -6,8 +6,6 @@ import { cn } from "../lib/cn.ts";
 import type { RefreshStatus } from "./refreshStatus.ts";
 import { useNow } from "./useNow.ts";
 
-const CLOCK_TICK_MS = 30_000;
-
 /**
  * 各画面の見出し。`refresh`を渡すと、右に「最終更新 n分前」と再読み込みのボタンを1つだけ置く。
  * 画面が自分のクエリから`refresh`を作って渡す。取得するデータを持たない画面は渡さない。
@@ -22,7 +20,7 @@ export function PageHeader({
   refresh?: RefreshStatus;
   children?: ReactNode;
 }) {
-  const now = useNow(CLOCK_TICK_MS);
+  const now = useNow();
   return (
     <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-6 py-3">
       <div className="min-w-0">

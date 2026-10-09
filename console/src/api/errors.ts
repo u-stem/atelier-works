@@ -9,8 +9,11 @@ const MAX_MESSAGE_LENGTH = 500;
 /** 4xxの応答の本文を添えるときの長さ。画面の1行に収まる程度にとどめる。 */
 const MAX_DETAIL_LENGTH = 200;
 
-/** 待ちの上限を超えたときの定型文。ジョブ自身の失敗の文と取り違えないよう、語の並びまで合わせる。 */
-const TIMEOUT_MESSAGE = /timeout after \d+|timed out/i;
+/**
+ * 待ちの上限を超えたときのWindmillの定型文。文頭の`timeout after <数>`に限る。
+ * スクリプトの中の外部呼び出しの失敗(`Request timed out`など)を、待ちの上限と取り違えないためである。
+ */
+const TIMEOUT_MESSAGE = /^timeout after \d+/i;
 
 export type ApiError =
   | { readonly kind: "unauthorized" }

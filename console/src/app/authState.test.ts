@@ -3,7 +3,6 @@ import { ApiFailure } from "../api/errors.ts";
 import {
   createAuthStore,
   INITIAL_AUTH_STATE,
-  isUnauthorizedError,
   reduceAuth,
 } from "./authState.ts";
 
@@ -49,28 +48,6 @@ describe("reduceAuth", () => {
     expect(reduceAuth(INITIAL_AUTH_STATE, { type: "succeeded" })).toBe(
       INITIAL_AUTH_STATE,
     );
-  });
-});
-
-describe("isUnauthorizedError", () => {
-  test("recognises an unauthorized ApiFailure", () => {
-    expect(isUnauthorizedError(new ApiFailure({ kind: "unauthorized" }))).toBe(
-      true,
-    );
-  });
-
-  test("rejects another ApiFailure", () => {
-    expect(isUnauthorizedError(new ApiFailure({ kind: "forbidden" }))).toBe(
-      false,
-    );
-  });
-
-  test("rejects a plain Error", () => {
-    expect(isUnauthorizedError(new Error("unauthorized"))).toBe(false);
-  });
-
-  test("rejects a non-error value", () => {
-    expect(isUnauthorizedError("unauthorized")).toBe(false);
   });
 });
 

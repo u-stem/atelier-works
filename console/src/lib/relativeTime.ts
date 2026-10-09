@@ -6,6 +6,8 @@ const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
 const MONTH_DAYS = 30;
 const YEAR_DAYS = 365;
+/** 365日の手前で30日単位が12に届かないよう、月は11までにする。 */
+const MAX_MONTHS = 11;
 
 /**
  * `thenMs`が`nowMs`から見てどれだけ前かを日本語にする。
@@ -28,7 +30,7 @@ export function formatRelativeTime(thenMs: number, nowMs: number): string {
     return `${days}日前`;
   }
   if (days < YEAR_DAYS) {
-    return `${Math.floor(days / MONTH_DAYS)}か月前`;
+    return `${Math.min(MAX_MONTHS, Math.floor(days / MONTH_DAYS))}か月前`;
   }
   return `${Math.floor(days / YEAR_DAYS)}年前`;
 }

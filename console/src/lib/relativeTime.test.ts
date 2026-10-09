@@ -44,6 +44,22 @@ describe("formatRelativeTime", () => {
     expect(formatRelativeTime(NOW - 60 * DAY, NOW)).toBe("2か月前");
   });
 
+  test("switches to months at exactly 30 days", () => {
+    expect(formatRelativeTime(NOW - 30 * DAY, NOW)).toBe("1か月前");
+  });
+
+  test("never says 12 months", () => {
+    expect(formatRelativeTime(NOW - 364 * DAY, NOW)).toBe("11か月前");
+  });
+
+  test("says 11 months at 330 days", () => {
+    expect(formatRelativeTime(NOW - 330 * DAY, NOW)).toBe("11か月前");
+  });
+
+  test("switches to years at exactly 365 days", () => {
+    expect(formatRelativeTime(NOW - 365 * DAY, NOW)).toBe("1年前");
+  });
+
   test("switches to years at 365 days", () => {
     expect(formatRelativeTime(NOW - 400 * DAY, NOW)).toBe("1年前");
   });

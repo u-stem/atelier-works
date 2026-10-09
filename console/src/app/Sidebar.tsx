@@ -53,6 +53,7 @@ export function Sidebar() {
 
   const handleKeyDown = (event: KeyboardEvent<HTMLElement>): void => {
     const links = Array.from(navRef.current?.querySelectorAll("a") ?? []);
+    // biomeはindexOfを勧めるが、activeElementはElement | nullで、indexOfの引数の型に合わない。
     const current = links.findIndex((link) => link === document.activeElement);
     const next = nextNavFocusIndex(event.key, current, links.length);
     if (next === null) {
@@ -115,7 +116,17 @@ export function Sidebar() {
                   end={screen.path === "/"}
                   className={navLinkClass(collapsed)}
                 >
-                  <Icon aria-hidden="true" className="size-4 shrink-0" />
+                  <span className="relative inline-flex shrink-0">
+                    <Icon aria-hidden="true" className="size-4" />
+                    {collapsed && badge !== null ? (
+                      <span
+                        aria-hidden="true"
+                        className="absolute -top-2 -right-2.5 min-w-4 rounded-full bg-primary px-1 text-center text-[10px] leading-4 font-medium text-primary-foreground"
+                      >
+                        {badge}
+                      </span>
+                    ) : null}
+                  </span>
                   <span
                     className={cn("flex-1 truncate", collapsed && "sr-only")}
                   >

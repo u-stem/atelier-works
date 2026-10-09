@@ -9,12 +9,17 @@ import type {
   SummaryFailure,
   SummaryNotice,
 } from "../api/guards/summary.ts";
-import type { InboxKind, InboxSelection } from "./inboxSelection.ts";
+import {
+  INBOX_KINDS,
+  type InboxKind,
+  type InboxSelection,
+} from "./inboxSelection.ts";
 import {
   approvalKindLabel,
   approvalStatusLabel,
   attemptRef,
   noticeKindLabel,
+  workItemKindLabel,
   workItemRef,
   workItemStatusLabel,
 } from "./labels.ts";
@@ -124,19 +129,18 @@ export function chipCounts(
 }
 
 /**
- * 画面に出すチップ。「すべて」と「承認」は常に出し、失敗と通知は項目があるときだけ出す。
- * 一覧に載せない種類のチップを出して、空の一覧へ誘導しないためである。
+ * 画面に出すチップ。「すべて」と、項目が1件以上ある種類だけを出す。
+ * 項目が無い種類のチップを出して、空の一覧へ誘導しないためである。
  */
 export function visibleChips(
   items: readonly InboxItem[],
 ): { id: InboxChip; label: string }[] {
   const present = new Set(items.map((item) => item.type));
-  const chips: InboxChip[] = ["all", "approval"];
-  if (present.has("failure")) {
-    chips.push("failure");
-  }
-  if (present.has("notice")) {
-    chips.push("notice");
+  const chips: InboxChip[] = ["all"];
+  for (const kind of INBOX_KINDS) {
+    if (present.has(kind)) {
+      chips.push(kind);
+    }
   }
   return chips.map((id) => ({ id, label: CHIP_LABELS[id] }));
 }
@@ -300,7 +304,7 @@ export function describeRow(item: InboxItem, nowMs: number): RowDescription {
         title: item.failure.title ?? workItemRef(item.failure.work_item_id),
         kindLabel: "失敗",
         statusLabel: workItemStatusLabel(item.failure.status),
-        subLabel: workItemRef(item.failure.work_item_id),
+        subLabel: `${workItemKindLabel(item.failure.kind)}・${workItemRef(item.failure.work_item_id)}`,
         iso: item.failure.updated_at,
         expiry: null,
       };

@@ -36,8 +36,6 @@ import {
 import { InboxDetail } from "./InboxDetail.tsx";
 import { InboxList } from "./InboxList.tsx";
 
-const CLOCK_TICK_MS = 30_000;
-
 function LoadingState() {
   return (
     <div className="flex flex-col gap-3 p-6" role="status">
@@ -94,11 +92,21 @@ function FailureState({
  */
 export function InboxScreen() {
   const summary = useSummary();
-  const now = useNow(CLOCK_TICK_MS);
+  const now = useNow();
   const [searchParams, setSearchParams] = useSearchParams();
   const [chip, setChip] = useState<InboxChip>("all");
   const selection = parseSelection(searchParams);
   const refresh = refreshStatusOf(summary);
+  const items =
+    summary.data === undefined
+      ? []
+      : sortInboxItems(buildInboxItems(summary.data));
+  const activeChip = effectiveChip(items, chip);
+  if (activeChip !== chip) {
+    // 選んだ種類の項目がなくなったら、状態も「すべて」に揃える。
+    // 描画だけを戻すと、項目が戻ったときに操作なしで絞り込みへ戻ってしまう。
+    setChip(activeChip);
+  }
 
   const select = (next: InboxSelection | null): void => {
     setSearchParams(withSelection(searchParams, next), { replace: true });
@@ -117,8 +125,6 @@ export function InboxScreen() {
     );
   }
 
-  const items = sortInboxItems(buildInboxItems(summary.data));
-  const activeChip = effectiveChip(items, chip);
   const visible = filterInboxItems(items, activeChip);
   const counts = chipCounts(items);
   const note = otherCountsNote(summary.data.counts, items);
@@ -164,9 +170,7 @@ export function InboxScreen() {
         >
           {visible.length === 0 ? (
             <p className="p-6 text-sm text-muted-foreground">
-              {items.length === 0
-                ? "要対応の項目はありません。"
-                : "この種類の項目はありません。"}
+              要対応の項目はありません。
             </p>
           ) : (
             <InboxList

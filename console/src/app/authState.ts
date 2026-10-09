@@ -28,11 +28,6 @@ export function reduceAuth(state: AuthState, event: AuthEvent): AuthState {
   return state.unauthorized ? INITIAL_AUTH_STATE : state;
 }
 
-/** QueryClientに渡る任意のエラーが、401を示すものか。 */
-export function isUnauthorizedError(error: unknown): boolean {
-  return error instanceof ApiFailure && error.apiError.kind === "unauthorized";
-}
-
 export type AuthStore = {
   readonly getSnapshot: () => AuthState;
   readonly subscribe: (listener: () => void) => () => void;

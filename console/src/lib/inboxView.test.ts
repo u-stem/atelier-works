@@ -210,18 +210,22 @@ describe("chipCounts", () => {
 });
 
 describe("visibleChips", () => {
-  test("always offers all and approval", () => {
-    expect(visibleChips([]).map((chip) => chip.id)).toEqual([
-      "all",
-      "approval",
-    ]);
+  test("offers only all for an empty list", () => {
+    expect(visibleChips([]).map((chip) => chip.id)).toEqual(["all"]);
   });
 
-  test("adds a kind that has an item", () => {
+  test("offers a kind only when it has an item", () => {
     expect(visibleChips([A1, N21]).map((chip) => chip.id)).toEqual([
       "all",
       "approval",
       "notice",
+    ]);
+  });
+
+  test("does not offer approval without an approval", () => {
+    expect(visibleChips([F7]).map((chip) => chip.id)).toEqual([
+      "all",
+      "failure",
     ]);
   });
 
@@ -232,6 +236,12 @@ describe("visibleChips", () => {
       "失敗",
       "通知",
     ]);
+  });
+
+  test("offers every chip that effectiveChip can keep", () => {
+    const items = [A1, F7];
+    const kept = effectiveChip(items, "failure");
+    expect(visibleChips(items).some((chip) => chip.id === kept)).toBe(true);
   });
 });
 
@@ -386,7 +396,7 @@ describe("describeRow", () => {
       title: "Fix bug",
       kindLabel: "失敗",
       statusLabel: "失敗",
-      subLabel: "作業項目 #7",
+      subLabel: "Issue・作業項目 #7",
       iso: "2026-10-02T00:00:00.000Z",
       expiry: null,
     });

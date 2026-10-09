@@ -260,7 +260,6 @@ describe("classifyRunResponse on a failed job result shape", () => {
 describe("classifyRunResponse on a timeout message", () => {
   test.each([
     ["timeout after 30s", '{"error":{"message":"timeout after 30 seconds"}}'],
-    ["timed out", '{"error":{"message":"Request timed out"}}'],
     ["a text body", "Timeout after 20s waiting for the job"],
   ])("reports timeout_or_unknown for a 500 with %s", (_name, body) => {
     expect(classifyRunResponse(500, body)).toEqual({
@@ -277,13 +276,29 @@ describe("classifyRunResponse on a timeout message", () => {
     expect(!result.ok && result.error.kind).toBe("job_failed");
   });
 
+  test("keeps job_failed for an external call that timed out", () => {
+    const result = classifyRunResponse(
+      500,
+      '{"error":{"message":"Request timed out"}}',
+    );
+    expect(!result.ok && result.error.kind).toBe("job_failed");
+  });
+
+  test("keeps job_failed when the phrase is not at the start", () => {
+    const result = classifyRunResponse(
+      500,
+      '{"error":{"message":"fetch failed: timeout after 5000ms"}}',
+    );
+    expect(!result.ok && result.error.kind).toBe("job_failed");
+  });
+
   test("keeps job_failed for an unrelated message", () => {
     const result = classifyRunResponse(500, '{"error":{"message":"boom"}}');
     expect(!result.ok && result.error.kind).toBe("job_failed");
   });
 
   test("keeps http for a timeout phrase outside a 500", () => {
-    const result = classifyRunResponse(400, "timed out");
+    const result = classifyRunResponse(400, "timeout after 30s");
     expect(!result.ok && result.error.kind).toBe("http");
   });
 });

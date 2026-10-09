@@ -32,6 +32,7 @@ export function InboxList({
 
   const handleKeyDown = (event: KeyboardEvent<HTMLUListElement>): void => {
     const rows = Array.from(listRef.current?.querySelectorAll("button") ?? []);
+    // biomeはindexOfを勧めるが、activeElementはElement | nullで、indexOfの引数の型に合わない。
     const current = rows.findIndex((row) => row === document.activeElement);
     const next = nextNavFocusIndex(event.key, current, rows.length);
     if (next === null) {
