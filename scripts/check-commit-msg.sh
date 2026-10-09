@@ -7,7 +7,7 @@
 # 環境変数CLAUDECODEが1のとき(Claude Codeのセッション)だけ、本文に
 #   Co-Authored-By: Claude ... <noreply@anthropic.com>
 # の行があるかも検査する。キー名の大文字小文字は区別しない(gitのトレーラーと
-# 同じ)。gitが除く"#"で始まるコメント行は数えない。
+# 同じ)。"#"で始まる行は数えない。
 set -euo pipefail
 
 commit_msg_file="${1:-}"
@@ -46,7 +46,7 @@ Claude Codeのセッションでは、本文に次の行が要ります。
 
 行頭から書きます。モデル名を間に入れてもかまいません
 (例: Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>)。
-キー名の大文字小文字は区別しません。"#"で始まる行は、gitが除くので数えません。
+キー名の大文字小文字は区別しません。"#"で始まる行は数えません。
 MESSAGE
   exit 1
 fi

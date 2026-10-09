@@ -130,6 +130,7 @@ PRの本文は`.github/PULL_REQUEST_TEMPLATE.md`の章立てに従う。
 commit-msgのフックは、環境変数`CLAUDECODE`が`1`のときに、本文のどこかに行頭から書いたトレーラーの行があるかを検査し、無ければコミットを止める。
 `CLAUDECODE`は、Claude Codeが自分の起動したシェルに設定する内部の変数である。
 変数の名前や値が変わると、この検査は黙って止まる。
+Claude Codeのセッションでメッセージを書き直す操作(rebaseのreword、`cherry-pick -e`、`commit --amend`など)で作るコミットも、検査の対象になる。
 Claude Codeを使わない人のコミットは検査しない。
 
 Software Factoryが作るコミットには、`lib/workspace.ts`の`commitAndPush`が次のトレーラーを自動で付ける。
