@@ -3,6 +3,11 @@
 // AppのバックエンドのrunnableをインラインSQLの無い`type: script`の参照のままにする。
 
 import { formatAuditPeriodLabel } from "../lib/audit_support.ts";
+import {
+  isNoticeResolvable,
+  type NoticeSeverity,
+  noticeSeverity,
+} from "../lib/console_support.ts";
 import { defaultSqlClient, type SqlClient, type SqlRow } from "../lib/db.ts";
 import { logger } from "../lib/log.ts";
 import {
@@ -577,15 +582,22 @@ export type NoticeRow = {
   readonly message: string;
   readonly resolved: boolean;
   readonly created_at: string;
+  /** 種類から決まる重要度。表に無い種類は`action`。 */
+  readonly severity: NoticeSeverity;
+  /** Consoleから解決できる種類か。 */
+  readonly resolvable: boolean;
 };
 
 function toNoticeRow(row: SqlRow): NoticeRow {
+  const kind = asStr(row.kind, "kind");
   return {
     notice_id: asId(row.notice_id, "notice_id"),
-    kind: asStr(row.kind, "kind"),
+    kind,
     message: asStr(row.message, "message"),
     resolved: asBool(row.resolved, "resolved"),
     created_at: asIsoDate(row.created_at, "created_at"),
+    severity: noticeSeverity(kind),
+    resolvable: isNoticeResolvable(kind),
   };
 }
 
@@ -774,7 +786,6 @@ export async function readDocFromDisk(
       !DIAGRAM_FILE_PATTERN.test(diagram.file)
     ) {
       log.warn("skipping diagram with a malformed file name", {
-        doc_dir: docDir,
         name: diagram.name,
         file: diagram.file,
       });

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import type { SqlClient, SqlRow } from "../../f/factory/lib/db.ts";
 import {
   main,
@@ -786,5 +786,133 @@ describe("runConsoleQuery audit_doc", () => {
     await expect(
       runConsoleQuery("audit_doc", 10, 30, sql, null),
     ).rejects.toThrow(/work_item_id/);
+  });
+});
+
+describe("runConsoleQuery notices severity", () => {
+  const noticeRow = (kind: string): SqlRow => ({
+    notice_id: 4,
+    kind,
+    message: "m",
+    resolved: false,
+    created_at: NOW.toISOString(),
+  });
+
+  test("marks an info kind as info", async () => {
+    const { sql } = createFakeSqlClient([[noticeRow("claim_race_lost")]]);
+    const rows = await runConsoleQuery("notices", 200, 30, sql);
+    expect(rows[0]).toMatchObject({ severity: "info" });
+  });
+
+  test("marks an action kind as action", async () => {
+    const { sql } = createFakeSqlClient([[noticeRow("cleanup_db_failed")]]);
+    const rows = await runConsoleQuery("notices", 200, 30, sql);
+    expect(rows[0]).toMatchObject({ severity: "action" });
+  });
+
+  test("marks an unknown kind as action", async () => {
+    const { sql } = createFakeSqlClient([[noticeRow("brand_new_kind")]]);
+    const rows = await runConsoleQuery("notices", 200, 30, sql);
+    expect(rows[0]).toMatchObject({ severity: "action" });
+  });
+
+  test("marks an unresolvable kind as not resolvable", async () => {
+    const { sql } = createFakeSqlClient([
+      [noticeRow("unsandboxed_check_commands")],
+    ]);
+    const rows = await runConsoleQuery("notices", 200, 30, sql);
+    expect(rows[0]).toMatchObject({ resolvable: false });
+  });
+
+  test("marks an ordinary kind as resolvable", async () => {
+    const { sql } = createFakeSqlClient([[noticeRow("cleanup_db_failed")]]);
+    const rows = await runConsoleQuery("notices", 200, 30, sql);
+    expect(rows[0]).toMatchObject({ resolvable: true });
+  });
+
+  test("keeps the fields the legacy app reads", async () => {
+    const { sql } = createFakeSqlClient([[noticeRow("cleanup_db_failed")]]);
+    const rows = await runConsoleQuery("notices", 200, 30, sql);
+    expect(rows[0]).toMatchObject({
+      notice_id: 4,
+      kind: "cleanup_db_failed",
+      message: "m",
+      resolved: false,
+      created_at: NOW.toISOString(),
+    });
+  });
+});
+
+describe("doc_dir exposure", () => {
+  const DOC_DIR_FOR_LEAK =
+    "/var/lib/factory/requirements/octo-owner/atelier-works/issue-42/wi-1/attempt-1";
+
+  test("requirements_doc rows have no doc_dir key", async () => {
+    const row: SqlRow = {
+      work_item_id: 1,
+      attempt: 1,
+      summary: "s",
+      markdown: "# m",
+      diagrams: "[]",
+      open_questions: "[]",
+      doc_dir: DOC_DIR_FOR_LEAK,
+      owner: "o",
+      repo: "r",
+      issue_number: 42,
+      issue_url: "https://github.com/o/r/issues/42",
+      title: "t",
+      work_item_status: "awaiting_approval",
+    };
+    const { sql } = createFakeSqlClient([[row]]);
+    const rows = await runConsoleQuery(
+      "requirements_doc",
+      200,
+      30,
+      sql,
+      1,
+      null,
+      () => Promise.reject(new Error("ENOENT")),
+    );
+    expect(Object.keys(rows[0] ?? {})).not.toContain("doc_dir");
+  });
+
+  test("the skipped-diagram warning does not log the doc dir", async () => {
+    const lines: string[] = [];
+    const spy = spyOn(console, "log").mockImplementation((line: unknown) => {
+      lines.push(String(line));
+    });
+    try {
+      await readDocFromDisk(
+        DOC_DIR_FOR_LEAK,
+        [{ name: "flow", file: "../../etc/passwd.drawio" }],
+        (path) =>
+          path.endsWith("requirements.md")
+            ? Promise.resolve("# m")
+            : Promise.reject(new Error("ENOENT")),
+      );
+    } finally {
+      spy.mockRestore();
+    }
+    expect(lines.join("\n")).not.toContain(DOC_DIR_FOR_LEAK);
+  });
+
+  test("the skipped-diagram warning still logs the skipped file name", async () => {
+    const lines: string[] = [];
+    const spy = spyOn(console, "log").mockImplementation((line: unknown) => {
+      lines.push(String(line));
+    });
+    try {
+      await readDocFromDisk(
+        DOC_DIR_FOR_LEAK,
+        [{ name: "flow", file: "../../etc/passwd.drawio" }],
+        (path) =>
+          path.endsWith("requirements.md")
+            ? Promise.resolve("# m")
+            : Promise.reject(new Error("ENOENT")),
+      );
+    } finally {
+      spy.mockRestore();
+    }
+    expect(lines.join("\n")).toContain("passwd.drawio");
   });
 });
