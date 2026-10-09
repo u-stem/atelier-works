@@ -1393,6 +1393,8 @@ function toWorkItemFixRoundRow(row: SqlRow): WorkItemFixRoundRow {
 
 /** 詳細に載せる失敗の件数の上限と、1件のerrorの長さの上限。 */
 const DETAIL_FAILURE_LIMIT = 20;
+/** 詳細に載せるPRのレビューと修正の件数の上限(それぞれ新しい順)。 */
+const DETAIL_LIST_LIMIT = 50;
 const DETAIL_ERROR_LIMIT = 4000;
 
 /** "work_item_detail"ビューの結果。作業項目1件の概要と、その履歴。 */
@@ -1499,6 +1501,7 @@ export async function runWorkItemDetail(
     FROM factory.reviews
     WHERE work_item_id = ${workItemId}::bigint
     ORDER BY created_at DESC, id DESC
+    LIMIT ${DETAIL_LIST_LIMIT}::integer
   `.fetch();
 
   const fixRoundRows = await sql`
@@ -1511,6 +1514,7 @@ export async function runWorkItemDetail(
     FROM factory.fix_rounds
     WHERE work_item_id = ${workItemId}::bigint
     ORDER BY round DESC, id DESC
+    LIMIT ${DETAIL_LIST_LIMIT}::integer
   `.fetch();
 
   return {

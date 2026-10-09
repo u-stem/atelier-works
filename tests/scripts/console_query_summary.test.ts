@@ -441,6 +441,24 @@ describe("runWorkItemDetail queries", () => {
     expect(calls[6]?.text).toContain("FROM factory.fix_rounds");
   });
 
+  test("limits the reviews to fifty", async () => {
+    const { sql, calls } = createFakeSqlClient(detailResponses());
+    await runWorkItemDetail(7, sql);
+    expect([calls[5]?.text.includes("LIMIT"), calls[5]?.values]).toEqual([
+      true,
+      [7, 50],
+    ]);
+  });
+
+  test("limits the fix rounds to fifty", async () => {
+    const { sql, calls } = createFakeSqlClient(detailResponses());
+    await runWorkItemDetail(7, sql);
+    expect([calls[6]?.text.includes("LIMIT"), calls[6]?.values]).toEqual([
+      true,
+      [7, 50],
+    ]);
+  });
+
   test("does not select the fix round replies text", async () => {
     const { sql, calls } = createFakeSqlClient(detailResponses());
     await runWorkItemDetail(7, sql);
