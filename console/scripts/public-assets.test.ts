@@ -101,8 +101,16 @@ describe("console/public/drawio.html", () => {
     expect(scriptTags.filter((tag) => /type\s*=/i.test(tag))).toEqual([]);
   });
 
-  test("hides overflow so the page never shows its own scrollbars", () => {
-    expect(html).toMatch(/overflow:\s*hidden/);
+  test("hides horizontal overflow", () => {
+    expect(html).toMatch(/overflow-x:\s*hidden/);
+  });
+
+  test("scrolls vertically so a diagram taller than the frame stays reachable", () => {
+    expect(html).toMatch(/overflow-y:\s*auto/);
+  });
+
+  test("does not hide vertical overflow", () => {
+    expect(html).not.toMatch(/overflow:\s*hidden/);
   });
 
   test("has no inline event handler", () => {
