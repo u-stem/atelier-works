@@ -13,6 +13,8 @@ import { nextNavFocusIndex } from "../../lib/navigation.ts";
 /**
  * 要対応の一覧のペイン。行を選ぶと`onSelect`を呼ぶだけで、承認や再実行などの操作は起こさない。
  * 行の内容は`describeRow`が種類ごとに決めるので、この部品は種類を知らずに描く。
+ * 行は1つのbuttonなので、行の中に再実行や承認などの操作は入れない(buttonを入れ子にしないため)。
+ * 操作は詳細のペインに置く。
  * 上下の矢印とHome・Endで行の間を移れる。
  */
 export function InboxList({
@@ -40,18 +42,14 @@ export function InboxList({
   };
 
   return (
-    <ul
-      ref={listRef}
-      aria-label="要対応の一覧"
-      className="flex flex-col"
-      onKeyDown={handleKeyDown}
-    >
+    <ul ref={listRef} className="flex flex-col" onKeyDown={handleKeyDown}>
       {items.map((item) => {
-        const row = describeRow(item);
+        const row = describeRow(item, now);
+        const itemSelection = selectionOf(item);
         const isSelected =
           selected !== null &&
-          selected.type === item.type &&
-          selected.id === item.id;
+          selected.type === itemSelection.type &&
+          selected.id === itemSelection.id;
         return (
           <li key={row.key} className="border-b border-border">
             <button
@@ -62,7 +60,7 @@ export function InboxList({
                 isSelected && "bg-accent",
               )}
               onClick={() => {
-                onSelect(selectionOf(item));
+                onSelect(itemSelection);
               }}
             >
               <span className="line-clamp-2 text-sm font-medium">
@@ -72,6 +70,13 @@ export function InboxList({
                 <Badge variant="outline">{row.kindLabel}</Badge>
                 {row.statusLabel === null ? null : (
                   <Badge variant="warning">{row.statusLabel}</Badge>
+                )}
+                {row.expiry === null ? null : (
+                  <Badge
+                    variant={row.expiry.expired ? "destructive" : "outline"}
+                  >
+                    {row.expiry.label}
+                  </Badge>
                 )}
                 {row.subLabel === null ? null : <span>{row.subLabel}</span>}
                 <TimeText iso={row.iso} now={now} />

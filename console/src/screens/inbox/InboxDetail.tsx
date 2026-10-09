@@ -1,5 +1,8 @@
 import type { InboxSelection } from "../../lib/inboxSelection.ts";
-import type { InboxItem } from "../../lib/inboxView.ts";
+import {
+  type InboxItem,
+  missingSelectionMessage,
+} from "../../lib/inboxView.ts";
 import { ApprovalOverview } from "./ApprovalOverview.tsx";
 
 function Message({ children }: { children: string }) {
@@ -20,13 +23,7 @@ export function InboxDetail({
   now: number;
 }) {
   if (item === null) {
-    return (
-      <Message>
-        {selection === null
-          ? "一覧から項目を選んでください。"
-          : "選んだ項目は一覧にありません。すでに処理されたか、まだ取得できていません。"}
-      </Message>
-    );
+    return <Message>{missingSelectionMessage(selection)}</Message>;
   }
   switch (item.type) {
     case "approval":

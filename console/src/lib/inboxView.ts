@@ -18,25 +18,30 @@ import {
   workItemRef,
   workItemStatusLabel,
 } from "./labels.ts";
+import { formatRemainingTime } from "./relativeTime.ts";
 import { safeGitHubUrl } from "./safeUrl.ts";
 
-/** 一覧の1項目。`id`は種類の中で一意で、URLの選択に使う(承認は依頼のid、失敗は作業項目のid、通知は通知のid)。 */
+/** 一覧の1項目。種類ごとのidは`itemId`で導く。 */
 export type InboxItem =
-  | {
-      readonly type: "approval";
-      readonly id: number;
-      readonly approval: SummaryApproval;
-    }
-  | {
-      readonly type: "failure";
-      readonly id: number;
-      readonly failure: SummaryFailure;
-    }
-  | {
-      readonly type: "notice";
-      readonly id: number;
-      readonly notice: SummaryNotice;
-    };
+  | { readonly type: "approval"; readonly approval: SummaryApproval }
+  | { readonly type: "failure"; readonly failure: SummaryFailure }
+  | { readonly type: "notice"; readonly notice: SummaryNotice };
+
+/**
+ * 項目のid。種類の中で一意で、URLの選択に使う。
+ * 承認は依頼のid、失敗は作業項目のid、通知は通知のidである。
+ * 値を二重に持たないよう、項目には持たせず元の行から導く。
+ */
+export function itemId(item: InboxItem): number {
+  switch (item.type) {
+    case "approval":
+      return item.approval.approval_request_id;
+    case "failure":
+      return item.failure.work_item_id;
+    case "notice":
+      return item.notice.notice_id;
+  }
+}
 
 /** 種類のチップ。`all`は絞り込まない。 */
 export type InboxChip = "all" | InboxKind;
@@ -60,16 +65,12 @@ const CHIP_LABELS: Readonly<Record<InboxChip, string>> = {
  */
 export function buildInboxItems(summary: ConsoleSummary): InboxItem[] {
   return summary.approvals.map(
-    (approval): InboxItem => ({
-      type: "approval",
-      id: approval.approval_request_id,
-      approval,
-    }),
+    (approval): InboxItem => ({ type: "approval", approval }),
   );
 }
 
 export function selectionOf(item: InboxItem): InboxSelection {
-  return { type: item.type, id: item.id };
+  return { type: item.type, id: itemId(item) };
 }
 
 /** 項目の時刻(ISO文字列)。並び順と行の相対時刻に使う。 */
@@ -92,7 +93,7 @@ export function sortInboxItems(items: readonly InboxItem[]): InboxItem[] {
       return byTime;
     }
     const byKind = KIND_ORDER[a.type] - KIND_ORDER[b.type];
-    return byKind !== 0 ? byKind : b.id - a.id;
+    return byKind !== 0 ? byKind : itemId(b) - itemId(a);
   });
 }
 
@@ -140,6 +141,34 @@ export function visibleChips(
   return chips.map((id) => ({ id, label: CHIP_LABELS[id] }));
 }
 
+/**
+ * 描画に使うチップ。選んだ種類の項目が無くなったときは「すべて」に戻す。
+ * 取り直しで項目が消えたとき、空の一覧に取り残されないためである。
+ */
+export function effectiveChip(
+  items: readonly InboxItem[],
+  chip: InboxChip,
+): InboxChip {
+  return chip === "all" || items.some((item) => item.type === chip)
+    ? chip
+    : "all";
+}
+
+/**
+ * 選んだ項目が一覧に無いときに、詳細のペインに出す文。
+ * 失敗と通知は一覧に載せない種類なので、処理済みとは言わない。
+ */
+export function missingSelectionMessage(
+  selection: InboxSelection | null,
+): string {
+  if (selection === null) {
+    return "一覧から項目を選んでください。";
+  }
+  return selection.type === "approval"
+    ? "選んだ項目は一覧にありません。すでに処理されたか、まだ取得できていません。"
+    : "この種類の一覧は準備中です。";
+}
+
 /** 選択に当たる項目を返す。選んでいないとき、または一覧に無いときは`null`。 */
 export function findInboxItem(
   items: readonly InboxItem[],
@@ -150,7 +179,7 @@ export function findInboxItem(
   }
   return (
     items.find(
-      (item) => item.type === selection.type && item.id === selection.id,
+      (item) => item.type === selection.type && itemId(item) === selection.id,
     ) ?? null
   );
 }
@@ -211,6 +240,33 @@ export function describeApproval(
   };
 }
 
+export type ExpiryDescription = {
+  /** 「残り3時間」や「期限切れ」。 */
+  readonly label: string;
+  readonly expired: boolean;
+};
+
+/**
+ * 承認待ちの期限。承認待ち(pending)で期限があるときだけ返す。
+ * 判断が済んだ行や、読めない期限は`null`にする。
+ */
+export function describeExpiry(
+  approval: SummaryApproval,
+  nowMs: number,
+): ExpiryDescription | null {
+  if (approval.status !== "pending" || approval.expires_at === null) {
+    return null;
+  }
+  const expiresMs = Date.parse(approval.expires_at);
+  if (Number.isNaN(expiresMs)) {
+    return null;
+  }
+  return {
+    label: formatRemainingTime(expiresMs, nowMs),
+    expired: expiresMs <= nowMs,
+  };
+}
+
 export type RowDescription = {
   /** 一覧の行の識別子。`type:id`の形。 */
   readonly key: string;
@@ -219,11 +275,12 @@ export type RowDescription = {
   readonly statusLabel: string | null;
   readonly subLabel: string | null;
   readonly iso: string;
+  readonly expiry: ExpiryDescription | null;
 };
 
-/** 一覧の1行に出す内容。種類ごとの違いはここに閉じ込め、行の部品は種類を知らずに描く。 */
-export function describeRow(item: InboxItem): RowDescription {
-  const key = `${item.type}:${item.id}`;
+/** 一覧の1行に出す内容。期限は`nowMs`からの残りで決める。種類ごとの違いはここに閉じ込め、行の部品は種類を知らずに描く。 */
+export function describeRow(item: InboxItem, nowMs: number): RowDescription {
+  const key = `${item.type}:${itemId(item)}`;
   switch (item.type) {
     case "approval": {
       const description = describeApproval(item.approval);
@@ -234,6 +291,7 @@ export function describeRow(item: InboxItem): RowDescription {
         statusLabel: description.statusLabel,
         subLabel: description.workItemLabel,
         iso: item.approval.requested_at,
+        expiry: describeExpiry(item.approval, nowMs),
       };
     }
     case "failure":
@@ -244,6 +302,7 @@ export function describeRow(item: InboxItem): RowDescription {
         statusLabel: workItemStatusLabel(item.failure.status),
         subLabel: workItemRef(item.failure.work_item_id),
         iso: item.failure.updated_at,
+        expiry: null,
       };
     case "notice":
       return {
@@ -253,6 +312,7 @@ export function describeRow(item: InboxItem): RowDescription {
         statusLabel: null,
         subLabel: null,
         iso: item.notice.created_at,
+        expiry: null,
       };
   }
 }

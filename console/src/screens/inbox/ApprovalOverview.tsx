@@ -2,7 +2,7 @@ import { ExternalLink } from "lucide-react";
 import type { SummaryApproval } from "../../api/guards/summary.ts";
 import { TimeText } from "../../components/TimeText.tsx";
 import { Badge } from "../../components/ui/badge.tsx";
-import { describeApproval } from "../../lib/inboxView.ts";
+import { describeApproval, describeExpiry } from "../../lib/inboxView.ts";
 
 /**
  * 選んだ承認の概要。題名、種類、作業項目、Issueへのリンク、依頼の時刻を出す。
@@ -16,6 +16,7 @@ export function ApprovalOverview({
   now: number;
 }) {
   const description = describeApproval(approval);
+  const expiry = describeExpiry(approval, now);
   return (
     <article className="flex flex-col gap-4 p-6">
       <header className="flex flex-col gap-2">
@@ -52,6 +53,16 @@ export function ApprovalOverview({
                   <ExternalLink aria-hidden="true" className="size-3" />
                 </a>
               )}
+            </dd>
+          </>
+        )}
+        {expiry === null ? null : (
+          <>
+            <dt className="text-muted-foreground">期限</dt>
+            <dd>
+              <Badge variant={expiry.expired ? "destructive" : "outline"}>
+                {expiry.label}
+              </Badge>
             </dd>
           </>
         )}

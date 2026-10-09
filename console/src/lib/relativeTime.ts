@@ -33,6 +33,28 @@ export function formatRelativeTime(thenMs: number, nowMs: number): string {
   return `${Math.floor(days / YEAR_DAYS)}年前`;
 }
 
+/**
+ * 期限(`expiresMs`)までの残り時間を日本語にする。期限を過ぎていれば「期限切れ」にする。
+ * 残りは切り捨てた最も大きい単位(分、時間、日)で出し、1分未満は「残り1分未満」にする。
+ * 切り捨てるのは、残りを実際より長く見せないためである。
+ */
+export function formatRemainingTime(expiresMs: number, nowMs: number): string {
+  const remaining = expiresMs - nowMs;
+  if (remaining <= 0) {
+    return "期限切れ";
+  }
+  if (remaining < MINUTE_MS) {
+    return "残り1分未満";
+  }
+  if (remaining < HOUR_MS) {
+    return `残り${Math.floor(remaining / MINUTE_MS)}分`;
+  }
+  if (remaining < DAY_MS) {
+    return `残り${Math.floor(remaining / HOUR_MS)}時間`;
+  }
+  return `残り${Math.floor(remaining / DAY_MS)}日`;
+}
+
 /** ISO文字列の時刻を相対表記にする。読めない文字列は「時刻不明」にする。 */
 export function formatRelativeIso(iso: string, nowMs: number): string {
   const thenMs = Date.parse(iso);

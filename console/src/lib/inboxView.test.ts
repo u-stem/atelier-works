@@ -9,10 +9,14 @@ import {
   buildInboxItems,
   chipCounts,
   describeApproval,
+  describeExpiry,
   describeRow,
+  effectiveChip,
   filterInboxItems,
   findInboxItem,
   type InboxItem,
+  itemId,
+  missingSelectionMessage,
   otherCountsNote,
   selectionAfterFilter,
   selectionOf,
@@ -80,13 +84,14 @@ function notice(overrides: Partial<SummaryNotice> = {}): SummaryNotice {
   };
 }
 
+const NOW = Date.parse("2026-10-09T12:00:00.000Z");
+
 const A1: InboxItem = {
   type: "approval",
-  id: 1,
   approval: approval({ approval_request_id: 1 }),
 };
-const F7: InboxItem = { type: "failure", id: 7, failure: failure() };
-const N21: InboxItem = { type: "notice", id: 21, notice: notice() };
+const F7: InboxItem = { type: "failure", failure: failure() };
+const N21: InboxItem = { type: "notice", notice: notice() };
 
 function summaryOf(overrides: Partial<ConsoleSummary> = {}): ConsoleSummary {
   return {
@@ -103,7 +108,7 @@ describe("buildInboxItems", () => {
     expect(
       buildInboxItems(
         summaryOf({ approvals: [approval({ approval_request_id: 5 })] }),
-      ).map((item) => [item.type, item.id]),
+      ).map((item) => [item.type, itemId(item)]),
     ).toEqual([["approval", 5]]);
   });
 
@@ -137,34 +142,27 @@ describe("sortInboxItems", () => {
   test("breaks ties by the larger id within a kind", () => {
     const first: InboxItem = {
       type: "approval",
-      id: 1,
       approval: approval({ approval_request_id: 1 }),
     };
     const second: InboxItem = {
       type: "approval",
-      id: 2,
       approval: approval({ approval_request_id: 2 }),
     };
-    expect(sortInboxItems([first, second]).map((item) => item.id)).toEqual([
-      2, 1,
-    ]);
+    expect(sortInboxItems([first, second]).map(itemId)).toEqual([2, 1]);
   });
 
   test("breaks ties between kinds in the fixed order", () => {
     const at = "2026-10-05T00:00:00.000Z";
     const a: InboxItem = {
       type: "approval",
-      id: 1,
       approval: approval({ requested_at: at }),
     };
     const f: InboxItem = {
       type: "failure",
-      id: 7,
       failure: failure({ updated_at: at }),
     };
     const n: InboxItem = {
       type: "notice",
-      id: 21,
       notice: notice({ created_at: at }),
     };
     expect(sortInboxItems([n, f, a]).map((item) => item.type)).toEqual([
@@ -371,45 +369,50 @@ describe("describeApproval", () => {
 
 describe("describeRow", () => {
   test("describes an approval row", () => {
-    expect(describeRow(A1)).toEqual({
+    expect(describeRow(A1, NOW)).toEqual({
       key: "approval:1",
       title: "Add feature",
       kindLabel: "要件定義",
       statusLabel: null,
       subLabel: "作業項目 #10",
       iso: "2026-10-01T00:00:00.000Z",
+      expiry: null,
     });
   });
 
   test("describes a failure row", () => {
-    expect(describeRow(F7)).toEqual({
+    expect(describeRow(F7, NOW)).toEqual({
       key: "failure:7",
       title: "Fix bug",
       kindLabel: "失敗",
       statusLabel: "失敗",
       subLabel: "作業項目 #7",
       iso: "2026-10-02T00:00:00.000Z",
+      expiry: null,
     });
   });
 
   test("describes a failure of a work item that needs a person", () => {
     expect(
-      describeRow({
-        type: "failure",
-        id: 8,
-        failure: failure({ work_item_id: 8, status: "needs_human" }),
-      }).statusLabel,
+      describeRow(
+        {
+          type: "failure",
+          failure: failure({ work_item_id: 8, status: "needs_human" }),
+        },
+        NOW,
+      ).statusLabel,
     ).toBe("人の対応待ち");
   });
 
   test("describes a notice row without leaking the code", () => {
-    expect(describeRow(N21)).toEqual({
+    expect(describeRow(N21, NOW)).toEqual({
       key: "notice:21",
       title: "データベースの掃除の失敗",
       kindLabel: "通知",
       statusLabel: null,
       subLabel: null,
       iso: "2026-10-03T00:00:00.000Z",
+      expiry: null,
     });
   });
 });
@@ -449,5 +452,110 @@ describe("otherCountsNote", () => {
     expect(
       otherCountsNote({ approvals: 0, failures: 0, notices: 0 }, [A1, F7]),
     ).toBeNull();
+  });
+});
+
+describe("effectiveChip", () => {
+  test("keeps all", () => {
+    expect(effectiveChip([], "all")).toBe("all");
+  });
+
+  test("keeps a chip that still has items", () => {
+    expect(effectiveChip([A1, F7], "failure")).toBe("failure");
+  });
+
+  test("falls back to all when the chosen kind has no items", () => {
+    expect(effectiveChip([A1], "failure")).toBe("all");
+  });
+
+  test("falls back to all when the list is empty", () => {
+    expect(effectiveChip([], "approval")).toBe("all");
+  });
+});
+
+describe("missingSelectionMessage", () => {
+  test("asks for a selection when nothing is selected", () => {
+    expect(missingSelectionMessage(null)).toBe(
+      "一覧から項目を選んでください。",
+    );
+  });
+
+  test("says an approval may already be handled", () => {
+    expect(missingSelectionMessage({ type: "approval", id: 3 })).toContain(
+      "すでに処理された",
+    );
+  });
+
+  test("says a failure list is not ready", () => {
+    expect(missingSelectionMessage({ type: "failure", id: 3 })).toBe(
+      "この種類の一覧は準備中です。",
+    );
+  });
+
+  test("says a notice list is not ready", () => {
+    expect(missingSelectionMessage({ type: "notice", id: 3 })).toBe(
+      "この種類の一覧は準備中です。",
+    );
+  });
+});
+
+describe("itemId", () => {
+  test("is the request id of an approval", () => {
+    expect(itemId(A1)).toBe(1);
+  });
+
+  test("is the work item id of a failure", () => {
+    expect(itemId(F7)).toBe(7);
+  });
+
+  test("is the notice id of a notice", () => {
+    expect(itemId(N21)).toBe(21);
+  });
+});
+
+describe("describeExpiry", () => {
+  test("shows the time left for a pending approval", () => {
+    expect(
+      describeExpiry(approval({ expires_at: "2026-10-09T15:30:00.000Z" }), NOW),
+    ).toEqual({ label: "残り3時間", expired: false });
+  });
+
+  test("shows expired once the time has passed", () => {
+    expect(
+      describeExpiry(approval({ expires_at: "2026-10-09T11:00:00.000Z" }), NOW),
+    ).toEqual({ label: "期限切れ", expired: true });
+  });
+
+  test("shows nothing without an expiry", () => {
+    expect(describeExpiry(approval({ expires_at: null }), NOW)).toBeNull();
+  });
+
+  test("shows nothing for an approval that is no longer pending", () => {
+    expect(
+      describeExpiry(
+        approval({
+          status: "approved",
+          expires_at: "2026-10-09T15:30:00.000Z",
+        }),
+        NOW,
+      ),
+    ).toBeNull();
+  });
+
+  test("shows nothing for an unreadable expiry", () => {
+    expect(describeExpiry(approval({ expires_at: "soon" }), NOW)).toBeNull();
+  });
+});
+
+describe("describeRow expiry", () => {
+  test("carries the expiry of a pending approval", () => {
+    const item: InboxItem = {
+      type: "approval",
+      approval: approval({ expires_at: "2026-10-10T12:00:00.000Z" }),
+    };
+    expect(describeRow(item, NOW).expiry).toEqual({
+      label: "残り1日",
+      expired: false,
+    });
   });
 });

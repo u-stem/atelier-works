@@ -3,6 +3,7 @@ import {
   formatAbsoluteIso,
   formatRelativeIso,
   formatRelativeTime,
+  formatRemainingTime,
 } from "./relativeTime.ts";
 
 const NOW = Date.parse("2026-10-09T12:00:00.000Z");
@@ -67,5 +68,35 @@ describe("formatAbsoluteIso", () => {
 
   test("returns an unknown marker for an unparsable timestamp", () => {
     expect(formatAbsoluteIso("not a date")).toBe("時刻不明");
+  });
+});
+
+describe("formatRemainingTime", () => {
+  test("says expired at the deadline", () => {
+    expect(formatRemainingTime(NOW, NOW)).toBe("期限切れ");
+  });
+
+  test("says expired after the deadline", () => {
+    expect(formatRemainingTime(NOW - MINUTE, NOW)).toBe("期限切れ");
+  });
+
+  test("says under a minute", () => {
+    expect(formatRemainingTime(NOW + 30_000, NOW)).toBe("残り1分未満");
+  });
+
+  test("counts minutes", () => {
+    expect(formatRemainingTime(NOW + 5 * MINUTE + 59_000, NOW)).toBe("残り5分");
+  });
+
+  test("switches to hours at 60 minutes", () => {
+    expect(formatRemainingTime(NOW + 60 * MINUTE, NOW)).toBe("残り1時間");
+  });
+
+  test("switches to days at 24 hours", () => {
+    expect(formatRemainingTime(NOW + 24 * HOUR, NOW)).toBe("残り1日");
+  });
+
+  test("counts days", () => {
+    expect(formatRemainingTime(NOW + 6 * DAY + HOUR, NOW)).toBe("残り6日");
   });
 });

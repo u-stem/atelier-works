@@ -24,6 +24,7 @@ import {
 import {
   buildInboxItems,
   chipCounts,
+  effectiveChip,
   filterInboxItems,
   findInboxItem,
   type InboxChip,
@@ -117,7 +118,8 @@ export function InboxScreen() {
   }
 
   const items = sortInboxItems(buildInboxItems(summary.data));
-  const visible = filterInboxItems(items, chip);
+  const activeChip = effectiveChip(items, chip);
+  const visible = filterInboxItems(items, activeChip);
   const counts = chipCounts(items);
   const note = otherCountsNote(summary.data.counts, items);
   const hasUnlisted =
@@ -133,8 +135,8 @@ export function InboxScreen() {
             <Button
               key={item.id}
               size="sm"
-              variant={chip === item.id ? "default" : "outline"}
-              aria-pressed={chip === item.id}
+              variant={activeChip === item.id ? "default" : "outline"}
+              aria-pressed={activeChip === item.id}
               onClick={() => {
                 setChip(item.id);
                 const kept = selectionAfterFilter(selection, item.id);
