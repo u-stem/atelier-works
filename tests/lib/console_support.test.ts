@@ -101,11 +101,16 @@ describe("isNoticeResolvable", () => {
 });
 
 describe("work item constants", () => {
-  test("ACTIONABLE_WORK_ITEM_STATUSES is failed and needs_human", () => {
+  test("ACTIONABLE_WORK_ITEM_STATUSES is failed, needs_human and expired", () => {
     expect([...ACTIONABLE_WORK_ITEM_STATUSES]).toEqual([
       "failed",
       "needs_human",
+      "expired",
     ]);
+  });
+
+  test("ACTIONABLE_WORK_ITEM_STATUSES leaves out blocked", () => {
+    expect(ACTIONABLE_WORK_ITEM_STATUSES).not.toContain("blocked");
   });
 
   test("INFO_NOTICE_WINDOW_DAYS is seven", () => {

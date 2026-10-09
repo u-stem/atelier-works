@@ -24,7 +24,7 @@ locks:
   f/factory/lib/cleanup_support: c533522c2ae48e4207c7b0db9ec8c1774c282dad5b962cd9a0b35e927f3c37e5
   f/factory/lib/config: 5922d286a1443ab1057dd2164be94bf49288a7abdbcbfc463d1faf3a362f7d1a
   f/factory/lib/console_status: 502fd085b8c94896a4e283d1dd9a3c669bcd9f45357591810539bdcc8befc310
-  f/factory/lib/console_support: 1ddb1ed0d117859d3546e70bd0016c686daca0152d47617a2bd1d3b3207d8c50
+  f/factory/lib/console_support: e1a65da96513a586d40364ff867637e03026c3e0bcc15b96afe541636848685f
   f/factory/lib/console_worker: a4ea745e851b82490882161032030ccff3a82a200a04ba151226e1df4444fc06
   f/factory/lib/db: 65995067a1b0b4ca3252f8758810e8db9a9723d31fc74b1d8215e769aff37ef6
   f/factory/lib/discord: b2a4dac31a69adfd10b83fed0e2558c2ec2dd439d21e764f4d4fc5f58e1cf72b

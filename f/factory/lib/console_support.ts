@@ -52,10 +52,16 @@ export const UNRESOLVABLE_NOTICE_KINDS: readonly string[] = [
   "fix_feedback_association_excluded",
 ];
 
-/** 「要対応」の失敗に数える作業項目の状態。 */
+/**
+ * 「要対応」の失敗に数える作業項目の状態。
+ * `expired`(承認の期限切れ)は、Discordに人の対応を求める通知が届き、
+ * `retry_work_item`で作り直せる状態なので含める。
+ * `blocked`は含めない。安全策で修正の前に止めた状態で、失敗ではないため。
+ */
 export const ACTIONABLE_WORK_ITEM_STATUSES: readonly WorkItemStatus[] = [
   "failed",
   "needs_human",
+  "expired",
 ];
 
 /** `info`の通知と、作業項目の無い失敗を、システム画面に出す日数。 */
