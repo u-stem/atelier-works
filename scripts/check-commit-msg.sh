@@ -4,6 +4,10 @@
 # typeはfeat・fix・docs・refactor・test・choreのどれか。
 # gitやlefthookが作る、"Merge "・"Revert "・"fixup! "・"squash! "で始まる
 # 行は対象外。
+# 環境変数CLAUDECODEが1のとき(Claude Codeのセッション)だけ、本文に
+#   Co-Authored-By: Claude ... <noreply@anthropic.com>
+# の行があるかも検査する。キー名の大文字小文字は区別しない(gitのトレーラーと
+# 同じ)。gitが除く"#"で始まるコメント行は数えない。
 set -euo pipefail
 
 commit_msg_file="${1:-}"
@@ -22,7 +26,29 @@ esac
 
 pattern='^(feat|fix|docs|refactor|test|chore)(\([a-z0-9._/-]+\))?!?: .+'
 if [[ "$first_line" =~ $pattern ]]; then
-  exit 0
+  if [ "${CLAUDECODE:-}" != "1" ]; then
+    exit 0
+  fi
+  trailer_pattern='^[Cc][Oo]-[Aa][Uu][Tt][Hh][Oo][Rr][Ee][Dd]-[Bb][Yy]:[[:space:]]*Claude([[:space:]][^<]*)?<noreply@anthropic\.com>[[:space:]]*$'
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      "#"*) continue ;;
+    esac
+    if [[ "$line" =~ $trailer_pattern ]]; then
+      exit 0
+    fi
+  done <"$commit_msg_file"
+
+  cat >&2 <<'MESSAGE'
+Claude Codeのセッションでは、本文の末尾にClaudeのトレーラーが要ります。
+
+  Co-Authored-By: Claude <noreply@anthropic.com>
+
+行頭から書き、モデル名を入れてもかまいません
+(例: Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>)。
+"#"で始まる行はgitが除くので、数えません。
+MESSAGE
+  exit 1
 fi
 
 cat >&2 <<'MESSAGE'

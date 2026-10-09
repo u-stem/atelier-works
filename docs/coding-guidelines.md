@@ -126,6 +126,10 @@ bunは依存のinstall scriptを既定では実行しないが、既定の信頼
 PRの本文は`.github/PULL_REQUEST_TEMPLATE.md`の章立てに従う。
 
 人がClaude Codeで作るコミットには、`Co-Authored-By: Claude <noreply@anthropic.com>`のトレーラーを付ける。
+モデル名を間に入れてもよく、キー名の大文字小文字は区別しない。
+Claude Codeのセッションでは環境変数`CLAUDECODE`が`1`になる。
+その間はcommit-msgのフックがトレーラーの行を検査し、無ければコミットを止める。
+Claude Codeを使わない人のコミットは検査しない。
 
 Software Factoryが作るコミットには、`lib/workspace.ts`の`commitAndPush`が次のトレーラーを自動で付ける。
 
