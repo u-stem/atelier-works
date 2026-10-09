@@ -20,7 +20,13 @@ export function UnlistedCards({
   compact?: boolean;
 }) {
   return (
-    <ul className={cn("flex flex-wrap", compact ? "gap-2" : "gap-3")}>
+    <ul
+      className={cn(
+        compact
+          ? "flex flex-wrap gap-2"
+          : "grid grid-cols-[repeat(auto-fit,minmax(11rem,1fr))] gap-3",
+      )}
+    >
       {entries.map((entry) =>
         compact ? (
           <li
@@ -48,7 +54,7 @@ export function UnlistedCards({
         ) : (
           <li
             key={entry.type}
-            className="min-w-44 rounded-xl border border-border bg-card px-4 py-3"
+            className="rounded-xl border border-border bg-card px-4 py-3"
           >
             <p className="flex items-center gap-2 text-small text-muted-foreground">
               <KindDot type={entry.type} />

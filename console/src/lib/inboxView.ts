@@ -365,6 +365,17 @@ export function unlistedCounts(
 }
 
 /**
+ * 一覧が空のときの画面の調子。
+ * 何も残っていないときだけ`clear`にして成功を示し、
+ * ほかの種類が残っているときは`pending`にして、片付いた印象を与えない。
+ */
+export function emptyStateTone(
+  unlisted: readonly UnlistedCount[],
+): "clear" | "pending" {
+  return unlisted.length === 0 ? "clear" : "pending";
+}
+
+/**
  * 画面の見出しの副題。一覧にある項目を種類ごとの件数で伝える。
  * 一覧が空で、ほかの種類の件数も残っていなければ「すべて片付いています」にする。
  * 一覧が空でほかの種類が残っているときは、本文が伝えるので副題を出さない。

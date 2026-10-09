@@ -78,7 +78,7 @@ export function InboxList({
                   <TimeText iso={row.iso} now={now} />
                 </span>
               </span>
-              <span className="mt-1 flex items-center gap-2.5 overflow-hidden text-small whitespace-nowrap text-subtle">
+              <span className="mt-1 flex h-6 items-center gap-2.5 overflow-hidden text-small whitespace-nowrap text-subtle">
                 <span className="shrink-0 font-medium text-muted-foreground">
                   {row.kindLabel}
                 </span>

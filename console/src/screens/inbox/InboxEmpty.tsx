@@ -1,12 +1,13 @@
-import { CircleCheck } from "lucide-react";
+import { CircleCheck, Inbox } from "lucide-react";
 import { SUMMARY_REFRESH_MS } from "../../api/queries.ts";
-import type { UnlistedCount } from "../../lib/inboxView.ts";
+import { emptyStateTone, type UnlistedCount } from "../../lib/inboxView.ts";
 import { formatClockTime, formatNextRefresh } from "../../lib/refreshTiming.ts";
 import { UnlistedCards } from "./UnlistedCards.tsx";
 
 /**
  * 一覧が空のときの画面。画面を二つに割らず、中央に一枚の面を置く。
- * 片付いたことに加えて、最後に確かめた時刻、次の自動更新、ほかの種類に残る件数を伝える。
+ * 何も残っていないときだけ成功の印を出し、ほかの種類が残っているときは中立の印にする。
+ * あわせて、最後に確かめた時刻、次の自動更新、ほかの種類に残る件数を伝える。
  */
 export function InboxEmpty({
   updatedAt,
@@ -25,9 +26,15 @@ export function InboxEmpty({
         className="w-full max-w-xl rounded-2xl border border-border bg-card p-8 shadow-raised"
       >
         <div className="flex flex-col items-center gap-3 text-center">
-          <span className="inline-flex size-12 items-center justify-center rounded-full bg-success/14 text-success">
-            <CircleCheck aria-hidden="true" className="size-6" />
-          </span>
+          {emptyStateTone(unlisted) === "clear" ? (
+            <span className="inline-flex size-12 items-center justify-center rounded-full bg-success/14 text-success">
+              <CircleCheck aria-hidden="true" className="size-6" />
+            </span>
+          ) : (
+            <span className="inline-flex size-12 items-center justify-center rounded-full bg-muted text-subtle">
+              <Inbox aria-hidden="true" className="size-6" />
+            </span>
+          )}
           <h2 className="text-title font-semibold tracking-tight">
             対応が必要な承認はありません
           </h2>

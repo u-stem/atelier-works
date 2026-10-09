@@ -12,6 +12,7 @@ import {
   describeExpiry,
   describeRow,
   effectiveChip,
+  emptyStateTone,
   filterInboxItems,
   findInboxItem,
   type InboxItem,
@@ -500,6 +501,18 @@ describe("inboxSubtitle", () => {
         ],
       ),
     ).toBeNull();
+  });
+});
+
+describe("emptyStateTone", () => {
+  test("is clear when nothing is left anywhere", () => {
+    expect(emptyStateTone([])).toBe("clear");
+  });
+
+  test("is pending when another kind still needs attention", () => {
+    expect(emptyStateTone([{ type: "failure", label: "失敗", count: 2 }])).toBe(
+      "pending",
+    );
   });
 });
 

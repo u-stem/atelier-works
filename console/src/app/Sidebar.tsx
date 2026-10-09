@@ -188,6 +188,8 @@ export function Sidebar() {
             <a
               className="inline-flex w-fit items-center gap-1 rounded-sm text-small text-subtle underline underline-offset-4 outline-none transition-colors duration-150 hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring motion-reduce:transition-none"
               href={LEGACY_CONSOLE_PATH}
+              target="_blank"
+              rel="noopener noreferrer"
             >
               旧Consoleを開く
               <ExternalLink aria-hidden="true" className="size-3" />
