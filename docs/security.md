@@ -218,7 +218,7 @@ ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者�
 - `main`にpushできる者(FactoryのPATを含む)が書いたコードは、人のレビューを経ずに運用者のブラウザで動きうる。今のGitHubのプランではこのリポジトリにbranch protection(rulesets)を設定できず、`main`へのpushを人のレビュー済みのものに限れない。Consoleの変更のレビューは、Windmillの管理者権限を持つコードのレビューとして行う。
 - CIの組み立ての途中で動くもの(miseが入れるbunなどのツール、Viteのプラグインなどの依存)が侵害されると、出力が改ざんされうる。`digest`とマニフェストが保証するのは、GitHubのCIが作ったものであることまでである。
 - 信頼の境界は`console`ジョブだけでなく、`ci.yml`のすべてのジョブとそこで動くツールや依存に及ぶ。同じ実行のほかのジョブも、ランナーから取れるトークンで成果物`console-dist`を上げ直せるためである。成果物は`overwrite: true`で上げ、`console_fetcher`はその名前の`id`が最大の成果物を取り込む。
-- draw.ioのビューアも、この成果物の差し替え(Issue #88)の範囲に入る。ビューアは`console`ジョブが取得して、同じ成果物に入れるためである。
+- draw.ioのビューアも、この成果物の差し替えの範囲に入る。ビューアは`console`ジョブが取得して、同じ成果物に入れるためである。
 - `Sec-Fetch-Site`をブラウザが送るのは、信頼できるオリジン(localhostかHTTPS)のときだけである。`WM_BIND`を外向きにしてHTTPで公開すると、この防御は効かない。外向きにするならHTTPSで公開する。
 - `Sec-Fetch-Site`の規則が効くのは`/api/*`だけである。`windmill_extra`の経路(`/ws/*`、`/ws_mp/*`、`/ws_debug/*`)には効かない。
 - 共有の`assets/`には古い版のファイルも残る。その間は`script-src`で読み込めるので、XSSの足がかり(script gadget)に使われうる。
@@ -481,7 +481,7 @@ ConsoleのSPAは、図を最上位のページでは描かず、隔離したifra
 図のXMLはIssue本文に由来する信用できない入力で、ビューアは第三者の大きなコードだからである。
 最上位のページで描くと、ビューアの欠陥が、Windmillを管理者として操作できるXSSになる。
 実装は`console/src/components/drawio/DrawioFrame.tsx`と、`console/public/drawio.html`である。
-`DrawioFrame`はどの画面にも組み込まれていない。Consoleの画面で動く図の描画は、Windmillのraw appの旧Consoleのものである。
+`DrawioFrame`はどの画面にも組み込まれていない。Consoleの画面で図を描くのは、Windmillのraw app(Factory Console)のコンポーネントである。
 仕組みは[Consoleの配信の仕様](internals/console.md)の「draw.ioの図」にある。
 
 | 守ること | 内容 |
@@ -503,7 +503,7 @@ XMLをiframeへ送るときの`targetOrigin`は`"*"`にする。
 不透明なオリジンには、送り先のオリジンを指定する方法が他に無いためである。
 送るのは図のXMLだけなので、宛先を絞れなくても許容する。
 
-Issue #58の2のうち、サーバー側で図の`link`属性と`html=1`を落とす処理は入れない。
+サーバー側で図の`link`属性と`html=1`を落とす処理は入れない。
 iframeの中で動くscriptが取れるのは、そのiframeが受け取った図のXMLだけだからである。
 リンクを押せず、外への取得はCSPが止める。
 XMLを加工すると、図の見た目が変わり、ビューアの解釈との差が新しい抜け道にもなる。
@@ -518,7 +518,7 @@ XMLを加工すると、図の見た目が変わり、ビューアの解釈と�
   - ビューアが`eval`を呼ぶ箇所は2つある。図のスタイルや定義に書かれた式を評価する経路は、評価を許すフラグがどれも既定で無効である。外部の図形ライブラリのscriptを取得して評価する経路は、取得をCSPの`connect-src 'none'`が止める。`new Function`は無い。
   - `'unsafe-eval'`を付けずに、普通の図と、リンク、外部の画像、フォント、図形ライブラリ、評価を許す式を含む図を描いた。`eval`の違反は出なかった。
 - 外部の図形ライブラリ(AWSなどのアイコン集)を使う図は、その図形が描かれない。外部への取得をCSPが止めるためである。
-- Windmillのraw appの旧Console(`components/DrawioViewer.tsx`)は、ビューアをdiagrams.netのCDNから読む。旧Consoleを消すまで残る。
+- Windmillのraw app(Factory Console)の`components/DrawioViewer.tsx`は、ビューアをdiagrams.netのCDNから読む。この部品は、Consoleの図の描画がこの隔離したiframeに移るまで残る。
 
 ## PR修正の安全策
 
