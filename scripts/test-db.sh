@@ -3,6 +3,7 @@
 # `factory_test`データベースに`migrations/datatable/main/*.up.sql`をすべて
 # 適用し、`factory`スキーマの各ビューからSELECTしてビューが成り立つことを
 # 確かめる。次に対応する`*.down.sql`を新しい順に適用し、戻せることを確かめる。
+# あわせて、最小の行を入れて`scripts/test-db-queries.ts`が、アプリのコードが組み立てるSQL文を実行する。
 # 使い捨てのデータベースは成否を問わず終了時に削除し、本物の`windmill`
 # データベースには触れない。
 #
@@ -251,14 +252,13 @@ notice_row="$(printf "INSERT INTO factory.notices (kind, message) VALUES ('probe
 [ "${notice_row}" = "op" ] || die "expected resolved_by to be 'op', got '${notice_row}'"
 log "notices resolution columns are writable"
 
-# `resolveNoticeIfUnresolved`の文を、本物のPostgreSQLで確かめる。
-# 解決できない種類は更新されず、ほかの種類は解決者と解決時刻が付いて更新される。
-resolved_ids="$(printf "INSERT INTO factory.notices (kind, message) VALUES ('unsandboxed_check_commands', 'a'), ('cleanup_db_failed', 'b'); UPDATE factory.notices SET resolved = true, resolved_by = 'op', resolved_at = now() WHERE id IN (SELECT id FROM factory.notices WHERE kind IN ('unsandboxed_check_commands', 'cleanup_db_failed')) AND resolved = false AND kind IN ('unsandboxed_check_commands', 'cleanup_db_failed') AND NOT (kind = ANY(ARRAY['unsandboxed_check_commands']::text[])) RETURNING kind;\n" \
-  | psql_exec "${SCRATCH_DB}" -q -t -A | tr -d '[:space:]')" \
-  || die "the notice resolve statement failed"
-[ "${resolved_ids}" = "cleanup_db_failed" ] \
-  || die "expected only cleanup_db_failed to be resolved, got '${resolved_ids}'"
-log "notice resolve statement skips unresolvable kinds"
+# アプリのコードが組み立てるSQL文(`resolveNoticeIfUnresolved`、summaryの失敗のクエリ、
+# system_status、work_item_detail、通知の掃除、失敗の数え上げ)を、最小の行を入れた
+# 使い捨てデータベースで本物のPostgreSQLに流して確かめる。手書きの別の文は流さない。
+log "running the application queries against '${SCRATCH_DB}'"
+COMPOSE_FILE="${COMPOSE_FILE}" SCRATCH_DB="${SCRATCH_DB}" \
+  bun run "${REPO_ROOT}/scripts/test-db-queries.ts" \
+  || die "the application queries failed against the real PostgreSQL"
 
 shopt -s nullglob
 down_files=("${MIGRATIONS_DIR}"/*.down.sql)
