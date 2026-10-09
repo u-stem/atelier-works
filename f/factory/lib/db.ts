@@ -895,26 +895,6 @@ export async function recordFailure(
   return parseId(row.id, "id");
 }
 
-/**
- * `flowPath`の`factory.job_failures`のうち、`since`以降の件数を返す。
- * スケジュールが続けて失敗しているかの判定に使う。
- */
-export async function countJobFailuresSince(
-  flowPath: string,
-  since: Date,
-  sql: SqlClient = defaultSqlClient,
-): Promise<number> {
-  const rows = await sql`
-    SELECT count(*) AS failure_count
-    FROM factory.job_failures
-    WHERE flow_path = ${flowPath} AND occurred_at >= ${since.toISOString()}::timestamptz
-  `.fetch();
-  const row = rows[0];
-  return row === undefined
-    ? 0
-    : parseNumericLike(row.failure_count, "failure_count");
-}
-
 // ---------------------------------------------------------------------------
 // deployments
 // ---------------------------------------------------------------------------

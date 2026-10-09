@@ -10,7 +10,6 @@ import {
 } from "../f/factory/lib/console_support.ts";
 import {
   addNotice,
-  countJobFailuresSince,
   deleteResolvedNoticesBefore,
   deleteStaleInfoNoticesBefore,
   getNoticeById,
@@ -416,45 +415,6 @@ check(
     UNRESOLVABLE_NOTICE_KINDS,
     sql,
   )),
-);
-
-// ---------------------------------------------------------------------------
-// 失敗の数え上げ
-// ---------------------------------------------------------------------------
-
-for (const job of ["f1", "f2", "f3"]) {
-  await recordFailure(
-    {
-      work_item_id: null,
-      flow_path: "f/factory/qdb_failing",
-      job_id: job,
-      step: null,
-      error: "e",
-    },
-    sql,
-  );
-}
-await recordFailure(
-  {
-    work_item_id: null,
-    flow_path: "f/factory/qdb_failing",
-    job_id: "f-old",
-    step: null,
-    error: "e",
-  },
-  sql,
-);
-execPsql(
-  target,
-  `UPDATE factory.job_failures SET occurred_at = now() - interval '3 days' WHERE job_id = 'f-old'`,
-);
-check(
-  "count: only failures in the last 24 hours are counted",
-  (await countJobFailuresSince(
-    "f/factory/qdb_failing",
-    new Date(Date.now() - 24 * 60 * 60 * 1000),
-    sql,
-  )) === 3,
 );
 
 // ---------------------------------------------------------------------------

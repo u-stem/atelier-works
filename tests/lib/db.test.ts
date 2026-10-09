@@ -4,7 +4,6 @@ import {
   addNotice,
   addNoticeUnlessUnresolved,
   bumpWatermarks,
-  countJobFailuresSince,
   countPendingIssueProposals,
   decideApprovalRequestIfPending,
   decideIssueProposal,
@@ -2837,34 +2836,6 @@ describe("deleteResolvedNoticesBefore", () => {
   test("returns the number of deleted rows", async () => {
     const { sql } = createFakeSqlClient([[{ id: 1 }]]);
     expect(await deleteResolvedNoticesBefore(NOW, sql)).toBe(1);
-  });
-});
-
-describe("countJobFailuresSince", () => {
-  test("counts the failures of one flow path since the given time", async () => {
-    const { sql, calls } = createFakeSqlClient([[{ failure_count: "3" }]]);
-    await countJobFailuresSince("f/factory/poll_issues", NOW, sql);
-    expect(calls[0]?.values).toEqual([
-      "f/factory/poll_issues",
-      NOW.toISOString(),
-    ]);
-  });
-
-  test("filters on flow_path", async () => {
-    const { sql, calls } = createFakeSqlClient([[{ failure_count: 0 }]]);
-    await countJobFailuresSince("f/factory/poll_issues", NOW, sql);
-    expect(calls[0]?.text).toContain("flow_path =");
-  });
-
-  test("filters on occurred_at", async () => {
-    const { sql, calls } = createFakeSqlClient([[{ failure_count: 0 }]]);
-    await countJobFailuresSince("f/factory/poll_issues", NOW, sql);
-    expect(calls[0]?.text).toContain("occurred_at >=");
-  });
-
-  test("parses a bigint count returned as a string", async () => {
-    const { sql } = createFakeSqlClient([[{ failure_count: "3" }]]);
-    expect(await countJobFailuresSince("f/factory/a", NOW, sql)).toBe(3);
   });
 });
 

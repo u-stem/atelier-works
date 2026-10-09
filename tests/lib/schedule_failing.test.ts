@@ -2,33 +2,73 @@ import { describe, expect, test } from "bun:test";
 import { noticeSeverity } from "../../f/factory/lib/console_support.ts";
 import { logger } from "../../f/factory/lib/log.ts";
 import {
+  allRecentRunsFailed,
   buildScheduleFailingNotice,
   flagFailingSchedule,
-  isScheduleFailing,
-  SCHEDULE_FAILING_THRESHOLD,
-  SCHEDULE_FAILING_WINDOW_HOURS,
+  SCHEDULE_FAILING_RUNS,
 } from "../../f/factory/lib/schedule_failing.ts";
 import type { NoticeRecord } from "../../f/factory/lib/types.ts";
 
-const NOW = new Date("2026-10-09T12:00:00.000Z");
+const FAILED = { success: false, canceled: false };
+const SUCCEEDED = { success: true, canceled: false };
 
-describe("isScheduleFailing", () => {
-  test("is false below the threshold", () => {
-    expect(isScheduleFailing(SCHEDULE_FAILING_THRESHOLD - 1)).toBe(false);
+describe("allRecentRunsFailed", () => {
+  test("is true when the last three runs all failed", () => {
+    expect(allRecentRunsFailed([FAILED, FAILED, FAILED])).toBe(true);
   });
 
-  test("is true at the threshold", () => {
-    expect(isScheduleFailing(SCHEDULE_FAILING_THRESHOLD)).toBe(true);
+  test("is false when one of the last three runs succeeded", () => {
+    expect(allRecentRunsFailed([FAILED, SUCCEEDED, FAILED])).toBe(false);
   });
 
-  test("is true above the threshold", () => {
-    expect(isScheduleFailing(SCHEDULE_FAILING_THRESHOLD + 5)).toBe(true);
+  test("is false when the newest run succeeded", () => {
+    expect(allRecentRunsFailed([SUCCEEDED, FAILED, FAILED])).toBe(false);
   });
 
-  test("uses three failures in twenty-four hours", () => {
-    expect([SCHEDULE_FAILING_THRESHOLD, SCHEDULE_FAILING_WINDOW_HOURS]).toEqual(
-      [3, 24],
+  test("is false when fewer than three runs exist", () => {
+    expect(allRecentRunsFailed([FAILED, FAILED])).toBe(false);
+  });
+
+  test("is false for an empty list", () => {
+    expect(allRecentRunsFailed([])).toBe(false);
+  });
+
+  test("is false when a run was canceled", () => {
+    expect(
+      allRecentRunsFailed([FAILED, { success: false, canceled: true }, FAILED]),
+    ).toBe(false);
+  });
+
+  test("is false when a run has no boolean success", () => {
+    expect(allRecentRunsFailed([FAILED, { canceled: false }, FAILED])).toBe(
+      false,
     );
+  });
+
+  test("is false when the success flag is a string", () => {
+    expect(
+      allRecentRunsFailed([
+        FAILED,
+        { success: "false", canceled: false },
+        FAILED,
+      ]),
+    ).toBe(false);
+  });
+
+  test("is false when a run is not an object", () => {
+    expect(allRecentRunsFailed([FAILED, null, FAILED])).toBe(false);
+  });
+
+  test("is false when the response is not an array", () => {
+    expect(allRecentRunsFailed({ jobs: [FAILED, FAILED, FAILED] })).toBe(false);
+  });
+
+  test("looks at the newest three runs only", () => {
+    expect(allRecentRunsFailed([FAILED, FAILED, FAILED, SUCCEEDED])).toBe(true);
+  });
+
+  test("requires three runs", () => {
+    expect(SCHEDULE_FAILING_RUNS).toBe(3);
   });
 });
 
@@ -43,6 +83,12 @@ describe("buildScheduleFailingNotice", () => {
     expect(
       buildScheduleFailingNotice("f/factory/poll_issues").message,
     ).toContain("f/factory/poll_issues");
+  });
+
+  test("says the last three runs failed in a row", () => {
+    expect(buildScheduleFailingNotice("f/factory/a").message).toContain(
+      "直近3回の実行が続けて失敗しています",
+    );
   });
 
   test("is the same text on every call for one schedule", () => {
@@ -63,26 +109,26 @@ describe("buildScheduleFailingNotice", () => {
 });
 
 type Harness = {
-  readonly deps: Parameters<typeof flagFailingSchedule>[2];
-  readonly sinceArgs: { path: string; since: Date }[];
+  readonly deps: Parameters<typeof flagFailingSchedule>[1];
+  readonly asked: { path: string; count: number }[];
   readonly notices: NoticeRecord[];
 };
 
 function harness(options: {
-  readonly count?: number;
-  readonly countThrows?: boolean;
+  readonly runs?: unknown;
+  readonly listThrows?: boolean;
   readonly addNoticeThrows?: boolean;
 }): Harness {
-  const sinceArgs: { path: string; since: Date }[] = [];
+  const asked: { path: string; count: number }[] = [];
   const notices: NoticeRecord[] = [];
   return {
-    sinceArgs,
+    asked,
     notices,
     deps: {
-      countFailuresSince: async (path, since) => {
-        sinceArgs.push({ path, since });
-        if (options.countThrows === true) throw new Error("db down");
-        return options.count ?? 0;
+      listRecentRuns: async (path, count) => {
+        asked.push({ path, count });
+        if (options.listThrows === true) throw new Error("api down");
+        return options.runs ?? [];
       },
       addNotice: async (record) => {
         if (options.addNoticeThrows === true) throw new Error("db down");
@@ -95,54 +141,55 @@ function harness(options: {
 }
 
 describe("flagFailingSchedule", () => {
-  test("adds the notice at three failures", async () => {
-    const h = harness({ count: 3 });
-    await flagFailingSchedule("f/factory/poll_issues", NOW, h.deps);
+  test("adds the notice when the last three runs failed", async () => {
+    const h = harness({ runs: [FAILED, FAILED, FAILED] });
+    await flagFailingSchedule("f/factory/poll_issues", h.deps);
     expect(h.notices).toEqual([
       buildScheduleFailingNotice("f/factory/poll_issues"),
     ]);
   });
 
-  test("adds no notice at two failures", async () => {
-    const h = harness({ count: 2 });
-    await flagFailingSchedule("f/factory/poll_issues", NOW, h.deps);
+  test("adds no notice when a recent run succeeded", async () => {
+    const h = harness({ runs: [FAILED, SUCCEEDED, FAILED] });
+    await flagFailingSchedule("f/factory/poll_issues", h.deps);
     expect(h.notices).toEqual([]);
   });
 
-  test("counts failures since twenty-four hours ago", async () => {
-    const h = harness({ count: 3 });
-    await flagFailingSchedule("f/factory/poll_issues", NOW, h.deps);
-    expect(h.sinceArgs).toEqual([
-      {
-        path: "f/factory/poll_issues",
-        since: new Date("2026-10-08T12:00:00.000Z"),
-      },
-    ]);
+  test("asks for the newest three runs of the schedule", async () => {
+    const h = harness({ runs: [FAILED, FAILED, FAILED] });
+    await flagFailingSchedule("f/factory/poll_issues", h.deps);
+    expect(h.asked).toEqual([{ path: "f/factory/poll_issues", count: 3 }]);
   });
 
   test("returns true when it flagged the schedule", async () => {
-    const h = harness({ count: 4 });
-    expect(await flagFailingSchedule("f/factory/a", NOW, h.deps)).toBe(true);
+    const h = harness({ runs: [FAILED, FAILED, FAILED] });
+    expect(await flagFailingSchedule("f/factory/a", h.deps)).toBe(true);
   });
 
-  test("returns false below the threshold", async () => {
-    const h = harness({ count: 1 });
-    expect(await flagFailingSchedule("f/factory/a", NOW, h.deps)).toBe(false);
+  test("returns false when a run succeeded", async () => {
+    const h = harness({ runs: [SUCCEEDED, FAILED, FAILED] });
+    expect(await flagFailingSchedule("f/factory/a", h.deps)).toBe(false);
   });
 
   test("skips an unknown schedule path", async () => {
-    const h = harness({ count: 9 });
-    await flagFailingSchedule("unknown", NOW, h.deps);
-    expect(h.sinceArgs).toEqual([]);
+    const h = harness({ runs: [FAILED, FAILED, FAILED] });
+    await flagFailingSchedule("unknown", h.deps);
+    expect(h.asked).toEqual([]);
   });
 
-  test("does not throw when the count fails", async () => {
-    const h = harness({ countThrows: true });
-    expect(await flagFailingSchedule("f/factory/a", NOW, h.deps)).toBe(false);
+  test("returns false and adds no notice when the API fails", async () => {
+    const h = harness({ listThrows: true });
+    expect([
+      await flagFailingSchedule("f/factory/a", h.deps),
+      h.notices,
+    ]).toEqual([false, []]);
   });
 
   test("does not throw when the notice cannot be recorded", async () => {
-    const h = harness({ count: 3, addNoticeThrows: true });
-    expect(await flagFailingSchedule("f/factory/a", NOW, h.deps)).toBe(false);
+    const h = harness({
+      runs: [FAILED, FAILED, FAILED],
+      addNoticeThrows: true,
+    });
+    expect(await flagFailingSchedule("f/factory/a", h.deps)).toBe(false);
   });
 });

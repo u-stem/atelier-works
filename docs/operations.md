@@ -625,7 +625,7 @@ Consoleの**通知**タブには、Discordに送らない要対応の事項が�
 | `console_fetch_failed` | Consoleの取り込みが失敗した | 通知の「次の操作」に従う |
 | `console_fetch_stale` | Consoleの取り込みの結果が30分以上更新されていない | 取り込みのコンテナ(`console_fetcher`)が動いているか確かめる |
 | `console_worker_missing` | tag `console`を受けるworkerが居ない。Consoleのjobがqueueに溜まり、Consoleが止まる | `mise run up`でworkerを起動し直し、`docker compose ps windmill_worker_console`でコンテナの状態を確かめる。自己更新(10分ごと)が検知し、Discordにも届く |
-| `schedule_failing` | 同じスケジュールが直近24時間に3回以上失敗した。GitHubのPATの失効などが、直るまで続く失敗の原因になる | 失敗の内容をConsoleの失敗の一覧かジョブのログで確かめて原因を直す。PATは[秘密をローテーションする](#秘密をローテーションする)で再発行する |
+| `schedule_failing` | 同じスケジュールの直近3回の実行が続けて失敗した。数えるのはスケジュールの実行そのものの失敗で、成功した実行の中で記録する部分的な失敗は含まない。GitHubのPATの失効などが原因になる | ジョブのログで失敗の内容を確かめて原因を直す。PATは[秘密をローテーションする](#秘密をローテーションする)で再発行する |
 
 ### Console用のworkerの検知を確かめる
 

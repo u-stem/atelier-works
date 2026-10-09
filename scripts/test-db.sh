@@ -253,7 +253,7 @@ notice_row="$(printf "INSERT INTO factory.notices (kind, message) VALUES ('probe
 log "notices resolution columns are writable"
 
 # アプリのコードが組み立てるSQL文(`resolveNoticeIfUnresolved`、summaryの失敗のクエリ、
-# system_status、work_item_detail、通知の掃除、失敗の数え上げ)を、最小の行を入れた
+# system_status、work_item_detail、通知の掃除)を、最小の行を入れた
 # 使い捨てデータベースで本物のPostgreSQLに流して確かめる。手書きの別の文は流さない。
 log "running the application queries against '${SCRATCH_DB}'"
 COMPOSE_FILE="${COMPOSE_FILE}" SCRATCH_DB="${SCRATCH_DB}" \
