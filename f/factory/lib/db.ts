@@ -2451,6 +2451,30 @@ export async function deleteResolvedNoticesBefore(
 }
 
 /**
+ * 未解決で、`created_at`が`olderThan`より前の、`kinds`の種類の`factory.notices`の行を削除し、行数を返す。
+ * 重要度が`info`の通知は、Consoleの一覧から7日で外れて誰も解決しないので、
+ * 解決済みの通知と同じ保持期間を過ぎたら消す。
+ * `kinds`が空なら何も削除しない。「要対応」の通知は呼び出し元が`kinds`に含めない限り消さない。
+ */
+export async function deleteStaleInfoNoticesBefore(
+  olderThan: Date,
+  kinds: readonly string[],
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  if (kinds.length === 0) {
+    return 0;
+  }
+  const rows = await sql`
+    DELETE FROM factory.notices
+    WHERE resolved = false
+      AND kind = ANY(${[...kinds]}::text[])
+      AND created_at <= ${olderThan.toISOString()}::timestamptz
+    RETURNING id
+  `.fetch();
+  return rows.length;
+}
+
+/**
  * `cleanup_db.ts`の1回の実行の削除件数を`factory.cleanup_runs`に記録し、
  * そのIDを返す。
  */

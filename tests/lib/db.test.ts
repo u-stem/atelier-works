@@ -11,6 +11,7 @@ import {
   deleteDeploymentsBefore,
   deleteJobFailuresBefore,
   deleteResolvedNoticesBefore,
+  deleteStaleInfoNoticesBefore,
   deleteTerminalWorkItemsBefore,
   expireApprovalRequestIfPending,
   findApprovalRequestBySubject,
@@ -2954,6 +2955,43 @@ describe("resolveNoticeIfUnresolved", () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await resolveNoticeIfUnresolved(5, "k", "op", ["u"], sql);
     expect(calls[0]?.values).toContain("op");
+  });
+});
+
+describe("deleteStaleInfoNoticesBefore", () => {
+  test("deletes from factory.notices", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await deleteStaleInfoNoticesBefore(NOW, ["claim_race_lost"], sql);
+    expect(calls[0]?.text).toContain("DELETE FROM factory.notices");
+  });
+
+  test("only deletes unresolved notices", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await deleteStaleInfoNoticesBefore(NOW, ["claim_race_lost"], sql);
+    expect(calls[0]?.text).toContain("resolved = false");
+  });
+
+  test("only deletes the given kinds", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await deleteStaleInfoNoticesBefore(NOW, ["claim_race_lost"], sql);
+    expect(calls[0]?.values).toContainEqual(["claim_race_lost"]);
+  });
+
+  test("measures age from created_at", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await deleteStaleInfoNoticesBefore(NOW, ["claim_race_lost"], sql);
+    expect(calls[0]?.text).toContain("created_at <=");
+  });
+
+  test("returns the number of deleted rows", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 1 }, { id: 2 }]]);
+    expect(await deleteStaleInfoNoticesBefore(NOW, ["a"], sql)).toBe(2);
+  });
+
+  test("deletes nothing when no kinds are given", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    expect(await deleteStaleInfoNoticesBefore(NOW, [], sql)).toBe(0);
+    expect(calls).toEqual([]);
   });
 });
 

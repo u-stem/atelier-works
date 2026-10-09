@@ -2,7 +2,7 @@
 // 放っておくと行が際限なく増えるため。対象は、`config.retention_work_items_days`を
 // 過ぎた終端状態の作業項目(と、それを`ON DELETE CASCADE`で参照する表の行)と、
 // `config.retention_logs_days`を過ぎた`job_failures`・`deployments`・
-// 解決済みのnoticeで、作業項目とは別々に掃除する。
+// 解決済みのnoticeと、同じ期間を過ぎた未解決の`info`のnoticeで、作業項目とは別々に掃除する。
 //
 // 期限の計算と要約の整形は`./lib/cleanup_db_support.ts`にあり、
 // このファイルは入出力をつなぐだけ。掃除は表ごとに独立しており、
@@ -25,12 +25,14 @@ import {
   summarizeCleanup,
 } from "./lib/cleanup_db_support.ts";
 import { loadConfig } from "./lib/config.ts";
+import { INFO_NOTICE_KINDS } from "./lib/console_support.ts";
 import {
   addNotice,
   type DeletedWorkItemRef,
   deleteDeploymentsBefore,
   deleteJobFailuresBefore,
   deleteResolvedNoticesBefore,
+  deleteStaleInfoNoticesBefore,
   deleteTerminalWorkItemsBefore,
   insertCleanupRun,
 } from "./lib/db.ts";
@@ -135,9 +137,19 @@ async function cleanupDeployments(cutoff: Date, log: Logger): Promise<number> {
   }
 }
 
+/**
+ * 解決済みの通知と、保持期間を過ぎた未解決の`info`の通知を消す。
+ * `info`の通知はConsoleの一覧から7日で外れ、誰も解決しないので、溜まり続けないようにここで消す。
+ * 解決できない種類の通知(`UNRESOLVABLE_NOTICE_KINDS`)は`info`なので、この対象に入る。
+ */
 async function cleanupNotices(cutoff: Date, log: Logger): Promise<number> {
   try {
-    return await deleteResolvedNoticesBefore(cutoff);
+    const resolved = await deleteResolvedNoticesBefore(cutoff);
+    const staleInfo = await deleteStaleInfoNoticesBefore(
+      cutoff,
+      INFO_NOTICE_KINDS,
+    );
+    return resolved + staleInfo;
   } catch (err) {
     const message = errorMessage(err);
     log.error("cleanup_db: failed to delete resolved notices", {

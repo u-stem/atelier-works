@@ -217,7 +217,9 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 `poll_issues`が実行されるたびに同じnoticeが積み上がり、ほかの種類が埋もれるためである。
 版の組が変わったときと、既存のnoticeを解決した後に再び食い違ったときは、1件残す。
 
-解決済みのnoticeは、解決してから`retention_logs_days`(既定30日)を過ぎるとDBの掃除が消す。解決の時刻(`resolved_at`)が無い行は、作成の時刻から数える。未解決のnoticeは消さない。
+解決済みのnoticeは、解決してから`retention_logs_days`(既定30日)を過ぎるとDBの掃除が消す。解決の時刻(`resolved_at`)が無い行は、作成の時刻から数える。
+重要度が「情報」の未解決のnoticeも、作成から同じ期間を過ぎたら消す。Consoleの一覧から7日で外れて誰も解決しないため、溜まり続けるからである。
+「要対応」の未解決のnoticeは消さない。
 
 noticeには重要度がある。種類ごとの重要度と、Consoleから解決できない種類は、`lib/console_support.ts`が定める。表に無い種類は「要対応」として扱う。解決できる種類は、`notice_resolve`が1件ずつ解決し、解決者(`resolved_by`)と時刻を残す。
 
