@@ -378,6 +378,37 @@ export async function insertWorkItem(
 }
 
 /**
+ * Issueの作業項目を挿入し、そのIDを返す。同じIssueに終端でない作業項目が既にあるときは、
+ * 部分一意インデックス`work_items_active_issue_key`により挿入せず、`null`を返す。
+ * `ON CONFLICT DO NOTHING`は対象を指定しないので、`(owner, repo, issue_number, cycle)`の
+ * 一意制約への違反も`null`になる。どちらも、同じIssueの別の取得が先に作業項目を作った場合である。
+ * `nextCycleForIssue`の読み取りと挿入は1つの取引ではないため、並行する取得の
+ * 最後の防御はこの制約である。DBを共有するインスタンスの間で働く。
+ */
+export async function insertIssueWorkItemUnlessActive(
+  item: NewWorkItem,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number | null> {
+  const rows = await sql`
+    INSERT INTO factory.work_items (
+      cycle, source, kind, owner, repo, issue_number, issue_url, pr_number,
+      title, body, status, attempt, claimed_by, flow_job_id, resume_url,
+      cancel_url, head_sha, parent_work_item_id
+    ) VALUES (
+      ${item.cycle}::integer, ${item.source}, ${item.kind}, ${item.owner}, ${item.repo},
+      ${item.issue_number}::integer, ${item.issue_url}, ${item.pr_number}::integer, ${item.title},
+      ${item.body}, ${item.status}, ${item.attempt}::integer, ${item.claimed_by},
+      ${item.flow_job_id}, ${item.resume_url}, ${item.cancel_url}, ${item.head_sha},
+      ${item.parent_work_item_id}::bigint
+    )
+    ON CONFLICT DO NOTHING
+    RETURNING id
+  `.fetch();
+  const row = rows[0];
+  return row === undefined ? null : parseId(row.id, "id");
+}
+
+/**
  * 作業項目の状態を移し、`factory.work_item_events`に監査用の行を追加する。
  * 該当する作業項目が無ければ例外を投げる。
  *

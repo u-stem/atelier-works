@@ -14,6 +14,7 @@
 import * as wmill from "windmill-client@1.817.0";
 import { expiredRequirementsRequests } from "./lib/approval_support.ts";
 import {
+  ACTIVE_WORK_ITEM_EXISTS_REASON,
   recordAssigneeMissing,
   recordClaimRaceLost,
 } from "./lib/claim_support.ts";
@@ -22,7 +23,7 @@ import {
   addNoticeUnlessUnresolved,
   expireApprovalRequestIfPending,
   getWorkItem,
-  insertWorkItem,
+  insertIssueWorkItemUnlessActive,
   listActive,
   listExpiredPendingApprovalRequests,
   nextCycleForIssue,
@@ -428,18 +429,23 @@ const REGISTER_FAILED_REASON = "claimed issue could not be registered";
 
 export type RegisterClaimedIssueDeps = {
   readonly nextCycleForIssue: typeof nextCycleForIssue;
-  readonly insertWorkItem: typeof insertWorkItem;
+  readonly insertWorkItem: typeof insertIssueWorkItemUnlessActive;
+  readonly addNoticeUnlessUnresolved: typeof addNoticeUnlessUnresolved;
   readonly notifyBestEffort: typeof notifyBestEffort;
 };
 
 const defaultRegisterDeps: RegisterClaimedIssueDeps = {
   nextCycleForIssue,
-  insertWorkItem,
+  insertWorkItem: insertIssueWorkItemUnlessActive,
+  addNoticeUnlessUnresolved,
   notifyBestEffort,
 };
 
 /**
  * 取得したIssueの作業項目を登録し、そのIDを返す。
+ * 同じIssueの稼働中の作業項目が既にあって挿入されなかったときは、`null`を返す。
+ * 並行する取得に先を越された場合で、そちらが作業を受け持つので、
+ * `claim_race_lost`のnoticeを残すだけで、人には知らせない。
  * 登録に失敗したときは、人の対応待ちの通知(Issueへのリンクと次の操作つき)を
  * 送ってから、元の例外をそのまま投げる。呼び出し元が`job_failures`に記録する。
  * 取得の時点でトリガーラベルは外れていて、作業項目も無いので、
@@ -460,15 +466,16 @@ export async function registerClaimedIssue(
     readonly log: Logger;
   },
   deps: RegisterClaimedIssueDeps = defaultRegisterDeps,
-): Promise<number> {
+): Promise<number | null> {
   const { candidate } = input;
+  let workItemId: number | null;
   try {
     const cycle = await deps.nextCycleForIssue(
       candidate.owner,
       candidate.repo,
       candidate.number,
     );
-    return await deps.insertWorkItem({
+    workItemId = await deps.insertWorkItem({
       cycle,
       source: "issue",
       kind: "issue",
@@ -505,6 +512,15 @@ export async function registerClaimedIssue(
     );
     throw err;
   }
+  if (workItemId === null) {
+    await recordClaimRaceLost(
+      `${candidate.owner}/${candidate.repo}#${String(candidate.number)}`,
+      ACTIVE_WORK_ITEM_EXISTS_REASON,
+      deps.addNoticeUnlessUnresolved,
+      input.log,
+    );
+  }
+  return workItemId;
 }
 
 /**
@@ -791,6 +807,7 @@ async function claimAndStart(
     discordWebhookUrl,
     log,
   });
+  if (workItemId === null) return "skipped";
 
   await notifyBestEffort(
     discordWebhookUrl,

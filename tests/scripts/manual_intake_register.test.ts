@@ -12,7 +12,9 @@ import type { Logger } from "../../f/factory/lib/log.ts";
 import {
   claimManualIntakeIssue,
   type ManualIntakeClaimDeps,
+  type ManualIntakeInsertDeps,
   manualIntakeSkippedResult,
+  registerManualIntakeWorkItem,
 } from "../../f/factory/steps/manual_intake_register.ts";
 import { ok } from "../lib/testSupport.ts";
 
@@ -212,5 +214,101 @@ describe("manualIntakeSkippedResult", () => {
       issue_url: "https://github.com/octo-owner/atelier-works/issues/12",
       reason: "trigger label factory was already removed",
     });
+  });
+});
+
+describe("registerManualIntakeWorkItem", () => {
+  function insertDeps(insert: () => Promise<number | null>): {
+    deps: ManualIntakeInsertDeps;
+    notices: Notice[];
+    inserted: Parameters<ManualIntakeInsertDeps["insertWorkItem"]>[0][];
+  } {
+    const notices: Notice[] = [];
+    const inserted: Parameters<ManualIntakeInsertDeps["insertWorkItem"]>[0][] =
+      [];
+    const deps: ManualIntakeInsertDeps = {
+      insertWorkItem: async (item) => {
+        inserted.push(item);
+        return insert();
+      },
+      addNoticeUnlessUnresolved: async (record) => {
+        notices.push({ kind: record.kind, message: record.message });
+        return notices.length;
+      },
+    };
+    return { deps, notices, inserted };
+  }
+
+  const INPUT = {
+    owner: "octo-owner",
+    repo: "atelier-works",
+    issueNumber: 12,
+    issueUrl: "https://github.com/octo-owner/atelier-works/issues/12",
+    title: "Add a thing",
+    body: "please add a thing",
+    viewerLogin: "factory-bot",
+  };
+
+  test("returns the id of the registered work item", async () => {
+    const { deps } = insertDeps(async () => 77);
+    const { log } = recordingLog();
+    expect(await registerManualIntakeWorkItem({ ...INPUT, log }, deps)).toBe(
+      77,
+    );
+  });
+
+  test("registers a manual issue work item", async () => {
+    const { deps, inserted } = insertDeps(async () => 77);
+    const { log } = recordingLog();
+    await registerManualIntakeWorkItem({ ...INPUT, log }, deps);
+    expect(inserted[0]?.source).toBe("manual");
+  });
+
+  test("starts the work item as picked and claimed by the viewer", async () => {
+    const { deps, inserted } = insertDeps(async () => 77);
+    const { log } = recordingLog();
+    await registerManualIntakeWorkItem({ ...INPUT, log }, deps);
+    expect([inserted[0]?.status, inserted[0]?.claimed_by]).toEqual([
+      "picked",
+      "factory-bot",
+    ]);
+  });
+
+  test("records no notice when the registration succeeds", async () => {
+    const { deps, notices } = insertDeps(async () => 77);
+    const { log } = recordingLog();
+    await registerManualIntakeWorkItem({ ...INPUT, log }, deps);
+    expect(notices).toEqual([]);
+  });
+
+  test("returns null when another active work item already exists for the issue", async () => {
+    const { deps } = insertDeps(async () => null);
+    const { log } = recordingLog();
+    expect(
+      await registerManualIntakeWorkItem({ ...INPUT, log }, deps),
+    ).toBeNull();
+  });
+
+  test("records a claim_race_lost notice when the insert conflicts", async () => {
+    const { deps, notices } = insertDeps(async () => null);
+    const { log } = recordingLog();
+    await registerManualIntakeWorkItem({ ...INPUT, log }, deps);
+    expect(notices).toEqual([
+      {
+        kind: "claim_race_lost",
+        message:
+          "octo-owner/atelier-works#12: another work item is already active for the issue",
+      },
+    ]);
+  });
+
+  test("rethrows a failing insert", async () => {
+    const { deps } = insertDeps(async () => {
+      throw new Error("db down");
+    });
+    const { log } = recordingLog();
+    await expect(
+      registerManualIntakeWorkItem({ ...INPUT, log }, deps),
+    ).rejects.toThrow("db down");
   });
 });

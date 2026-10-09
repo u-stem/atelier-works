@@ -28,21 +28,29 @@ const silentLog: Logger = { info() {}, warn() {}, error() {} };
 
 type Sent = { webhookUrl: string; event: NotifyEvent };
 
+type Notice = { kind: string; message: string };
+
 function fakeDeps(overrides: Partial<RegisterClaimedIssueDeps> = {}): {
   deps: RegisterClaimedIssueDeps;
   sent: Sent[];
+  notices: Notice[];
 } {
   const sent: Sent[] = [];
+  const notices: Notice[] = [];
   const deps: RegisterClaimedIssueDeps = {
     nextCycleForIssue: async () => 1,
     insertWorkItem: async () => 77,
+    addNoticeUnlessUnresolved: async (record) => {
+      notices.push({ kind: record.kind, message: record.message });
+      return notices.length;
+    },
     notifyBestEffort: async (webhookUrl, event) => {
       sent.push({ webhookUrl, event });
       return { status: "sent" };
     },
     ...overrides,
   };
-  return { deps, sent };
+  return { deps, sent, notices };
 }
 
 function register(deps: RegisterClaimedIssueDeps) {
@@ -72,6 +80,10 @@ async function sentEvent(
   const { deps, sent } = fakeDeps(overrides);
   await register(deps).catch(() => undefined);
   return sent[0]?.event;
+}
+
+function insertConflicts(): Partial<RegisterClaimedIssueDeps> {
+  return { insertWorkItem: async () => null };
 }
 
 describe("registerClaimedIssue", () => {
@@ -158,5 +170,34 @@ describe("registerClaimedIssue", () => {
       },
     });
     expect(event?.kind).toBe("needs_human");
+  });
+
+  test("returns null when another active work item already exists for the issue", async () => {
+    const { deps } = fakeDeps(insertConflicts());
+    expect(await register(deps)).toBeNull();
+  });
+
+  test("records a claim_race_lost notice when the insert conflicts", async () => {
+    const { deps, notices } = fakeDeps(insertConflicts());
+    await register(deps);
+    expect(notices).toEqual([
+      {
+        kind: "claim_race_lost",
+        message:
+          "octo-owner/atelier-works#12: another work item is already active for the issue",
+      },
+    ]);
+  });
+
+  test("sends no notification when the insert conflicts", async () => {
+    const { deps, sent } = fakeDeps(insertConflicts());
+    await register(deps);
+    expect(sent).toEqual([]);
+  });
+
+  test("records no notice when the registration succeeds", async () => {
+    const { deps, notices } = fakeDeps();
+    await register(deps);
+    expect(notices).toEqual([]);
   });
 });

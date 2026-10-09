@@ -143,7 +143,9 @@ nullになりうる非textの列には、明示のキャストを必ず付ける
 - 複数のインスタンスを同時に運用する場合の排他は、Windmill側ではなくGitHub側のclaimで行う。
   IssueとPRは、トリガーラベルを外す要求が成功した時点で所有を決める。
   Issueでは、ラベルを外す要求が応答の無い失敗かサーバーエラーで終わったときに、Issueの読み直しとタイムラインで、ラベルを外したのが自分かを確かめる。
-  これはベストエフォートで、最後の防御はDBの一意制約である。
+  これはベストエフォートで、最後の防御はDBの部分一意インデックス`work_items_active_issue_key`である。
+  Issueの作業項目は`insertIssueWorkItemUnlessActive`で挿入し、競合したら取得を失ったものとして引く。
+  DBを分けた複数のインスタンスが同じリポジトリを扱う構成は対象外である。
 - scheduleにはerror handler(`on_failure: f/factory/on_error_schedule`)を設定する。失敗は`job_failures`テーブルとDiscordの通知に流れる。
 - 承認のタイムアウト(7日)は、`poll_issues`がreconcileの後に行う期限切れのスイープが、`approval_requests.expires_at`を見て判定する。`pipeline.flow`はsuspendを使わない。
 

@@ -7,13 +7,14 @@
 
 import * as wmill from "windmill-client@1.817.0";
 import {
+  ACTIVE_WORK_ITEM_EXISTS_REASON,
   recordAssigneeMissing,
   recordClaimRaceLost,
 } from "../lib/claim_support.ts";
 import { loadConfig } from "../lib/config.ts";
 import {
   addNoticeUnlessUnresolved,
-  insertWorkItem,
+  insertIssueWorkItemUnlessActive,
   setFlowJobId,
 } from "../lib/db.ts";
 import { notifyBestEffort } from "../lib/discord.ts";
@@ -128,6 +129,67 @@ export async function claimManualIntakeIssue(
   return { claimed: true };
 }
 
+export type ManualIntakeInsertDeps = {
+  readonly insertWorkItem: typeof insertIssueWorkItemUnlessActive;
+  readonly addNoticeUnlessUnresolved: typeof addNoticeUnlessUnresolved;
+};
+
+const defaultInsertDeps: ManualIntakeInsertDeps = {
+  insertWorkItem: insertIssueWorkItemUnlessActive,
+  addNoticeUnlessUnresolved,
+};
+
+/**
+ * 手動投入のIssueの作業項目を登録し、そのIDを返す。
+ * 同じIssueの稼働中の作業項目が既にあって挿入されなかったときは、`null`を返す。
+ * 並行する取得に先を越された場合で、そちらが作業を受け持つので、
+ * `poll_issues`と同じく`claim_race_lost`のnoticeを残すだけで、人には知らせない。
+ * 挿入が例外を投げたときは、そのまま投げる。フローの失敗として`on_error_flow`が知らせる。
+ */
+export async function registerManualIntakeWorkItem(
+  input: {
+    readonly owner: string;
+    readonly repo: string;
+    readonly issueNumber: number;
+    readonly issueUrl: string;
+    readonly title: string;
+    readonly body: string;
+    readonly viewerLogin: string;
+    readonly log: Logger;
+  },
+  deps: ManualIntakeInsertDeps = defaultInsertDeps,
+): Promise<number | null> {
+  const workItemId = await deps.insertWorkItem({
+    cycle: 1,
+    source: "manual",
+    kind: "issue",
+    owner: input.owner,
+    repo: input.repo,
+    issue_number: input.issueNumber,
+    issue_url: input.issueUrl,
+    pr_number: null,
+    title: input.title,
+    body: input.body,
+    status: "picked",
+    attempt: 1,
+    claimed_by: input.viewerLogin,
+    flow_job_id: null,
+    resume_url: null,
+    cancel_url: null,
+    head_sha: null,
+    parent_work_item_id: null,
+  });
+  if (workItemId === null) {
+    await recordClaimRaceLost(
+      `${input.owner}/${input.repo}#${String(input.issueNumber)}`,
+      ACTIVE_WORK_ITEM_EXISTS_REASON,
+      deps.addNoticeUnlessUnresolved,
+      input.log,
+    );
+  }
+  return workItemId;
+}
+
 export async function main(
   owner: string,
   repo: string,
@@ -161,26 +223,23 @@ export async function main(
     return manualIntakeSkippedResult(issue_number, issue_url, claim.reason);
   }
 
-  const workItemId = await insertWorkItem({
-    cycle: 1,
-    source: "manual",
-    kind: "issue",
+  const workItemId = await registerManualIntakeWorkItem({
     owner,
     repo,
-    issue_number,
-    issue_url,
-    pr_number: null,
+    issueNumber: issue_number,
+    issueUrl: issue_url,
     title,
     body,
-    status: "picked",
-    attempt: 1,
-    claimed_by: viewer.login,
-    flow_job_id: null,
-    resume_url: null,
-    cancel_url: null,
-    head_sha: null,
-    parent_work_item_id: null,
+    viewerLogin: viewer.login,
+    log,
   });
+  if (workItemId === null) {
+    return manualIntakeSkippedResult(
+      issue_number,
+      issue_url,
+      ACTIVE_WORK_ITEM_EXISTS_REASON,
+    );
+  }
 
   // 応答がジョブIDでなければ例外にし、起動の失敗と同じくステップを失敗させて`on_error_flow`に任せる。
   const flowJobId = parseFlowJobId(

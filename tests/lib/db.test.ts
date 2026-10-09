@@ -27,6 +27,7 @@ import {
   insertFixRound,
   insertImplementRound,
   insertIssueProposal,
+  insertIssueWorkItemUnlessActive,
   insertReview,
   insertWorkItem,
   latestDraft,
@@ -149,6 +150,40 @@ const NEW_WORK_ITEM = {
   head_sha: null,
   parent_work_item_id: null,
 };
+
+describe("insertIssueWorkItemUnlessActive", () => {
+  test("inserts into factory.work_items", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql);
+    expect(calls[0]?.text).toContain("INSERT INTO factory.work_items");
+  });
+
+  test("skips the insert on any unique violation", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql);
+    expect(calls[0]?.text).toContain("ON CONFLICT DO NOTHING");
+  });
+
+  test("passes the same parameters in the same order as insertWorkItem", async () => {
+    const plain = createFakeSqlClient([[{ id: 7 }]]);
+    await insertWorkItem(NEW_WORK_ITEM, plain.sql);
+    const guarded = createFakeSqlClient([[{ id: 7 }]]);
+    await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, guarded.sql);
+    expect(guarded.calls[0]?.values).toEqual(plain.calls[0]?.values);
+  });
+
+  test("returns the inserted id", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 7 }]]);
+    expect(await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql)).toBe(7);
+  });
+
+  test("returns null when another active work item already exists for the issue", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(
+      await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql),
+    ).toBeNull();
+  });
+});
 
 describe("insertWorkItem", () => {
   test("inserts into factory.work_items", async () => {

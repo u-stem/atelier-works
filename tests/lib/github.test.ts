@@ -1321,6 +1321,61 @@ describe("claimIssue", () => {
       expect(result).toEqual({ claimed: true, assignee: "confirmed" });
     });
 
+    function timelinePage(n: number, hasNext: boolean) {
+      const link = `<https://api.github.com/repos/acme/widgets/issues/5/timeline?page=${String(n + 1)}>; rel="next"`;
+      return ok(
+        ghApiStdout(
+          200,
+          [unlabeled(n === 20 && !hasNext ? "factory-bot" : "alice")],
+          hasNext ? { link } : {},
+        ),
+      );
+    }
+
+    test("reads up to twenty timeline pages", async () => {
+      const pages = Array.from({ length: 20 }, (_, i) =>
+        timelinePage(i + 1, i + 1 < 20),
+      );
+      const { client, opts } = setup([
+        assigned,
+        serverError,
+        labelAbsent(),
+        ...pages,
+      ]);
+      const result = await claimIssue(client, "acme", "widgets", 5, opts);
+      expect(result).toEqual({ claimed: true, assignee: "confirmed" });
+    });
+
+    test("throws ClaimOwnershipUnknownError when the timeline has more than twenty pages", async () => {
+      const pages = Array.from({ length: 20 }, (_, i) =>
+        timelinePage(i + 1, true),
+      );
+      const { client, opts } = setup([
+        assigned,
+        serverError,
+        labelAbsent(),
+        ...pages,
+      ]);
+      const claiming = claimIssue(client, "acme", "widgets", 5, opts);
+      await expect(claiming).rejects.toBeInstanceOf(ClaimOwnershipUnknownError);
+    });
+
+    test("stops reading at the twenty-page cap without retrying", async () => {
+      const pages = Array.from({ length: 20 }, (_, i) =>
+        timelinePage(i + 1, true),
+      );
+      const { fake, client, opts } = setup([
+        assigned,
+        serverError,
+        labelAbsent(),
+        ...pages,
+      ]);
+      await claimIssue(client, "acme", "widgets", 5, opts).catch(
+        () => undefined,
+      );
+      expect(fake.calls).toHaveLength(23);
+    });
+
     test("retries the timeline read before giving up on it", async () => {
       const { client, opts } = setup([
         assigned,

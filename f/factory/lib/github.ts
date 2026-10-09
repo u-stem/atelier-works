@@ -460,8 +460,18 @@ function toApiEndpoint(url: string): string {
   return url.replace(/^https?:\/\/[^/]+\//, "");
 }
 
+/** ページ送りが、指定した最大のページ数を超えて続いたときの例外。 */
+export class GitHubPaginationLimitError extends Error {
+  constructor(maxPages: number) {
+    super(`GitHub pagination exceeded ${String(maxPages)} pages`);
+    this.name = "GitHubPaginationLimitError";
+  }
+}
+
 /**
  * 応答の`link`ヘッダーの`rel="next"`をたどって最後のページまで取得し、
+ * `maxPages`を指定したときは、そのページ数を超えて続く場合に
+ * `GitHubPaginationLimitError`を投げる。
  * 各ページの要素を`extractPage`で取り出してつなげる。
  * `extractPage`はエンドポイントの応答の形によって変わる
  * (timeline・comments・reviewsは裸のJSON配列、`/search/issues`は
@@ -471,10 +481,14 @@ async function paginateGhApi<T>(
   client: GhClient,
   endpoint: string,
   extractPage: (parsed: unknown, context: string) => readonly T[],
+  maxPages: number = Number.POSITIVE_INFINITY,
 ): Promise<T[]> {
   const results: T[] = [];
   let nextEndpoint: string | null = endpoint;
+  let pages = 0;
   while (nextEndpoint !== null) {
+    if (pages >= maxPages) throw new GitHubPaginationLimitError(maxPages);
+    pages += 1;
     const response = await callGhApi(client, nextEndpoint);
     const context = `GET ${nextEndpoint}`;
     ensureSuccess(response, context);
@@ -494,13 +508,21 @@ async function paginateGhApi<T>(
 async function callGhApiAll(
   client: GhClient,
   endpoint: string,
+  maxPages?: number,
 ): Promise<unknown[]> {
-  return paginateGhApi(client, endpoint, (parsed, context) => {
-    if (!Array.isArray(parsed)) {
-      throw new Error(`${context}: expected an array response for pagination`);
-    }
-    return parsed;
-  });
+  return paginateGhApi(
+    client,
+    endpoint,
+    (parsed, context) => {
+      if (!Array.isArray(parsed)) {
+        throw new Error(
+          `${context}: expected an array response for pagination`,
+        );
+      }
+      return parsed;
+    },
+    maxPages,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -968,10 +990,13 @@ export type ClaimIssueOptions = {
  * これはベストエフォートである。GitHubは、同時に届いた複数の削除のうち
  * 成功が1つだけになることを保証していない。
  * すべてのインスタンスが同じPATで動くので、GitHub側ではインスタンスを区別できない。
- * 同じIssueに2つ目の作業項目を始めない最後の防御は、DBを共有している場合の
- * `UNIQUE (owner, repo, issue_number, cycle)`の制約である。
+ * 同じIssueに2つ目の作業項目を始めない最後の防御は、DBの部分一意インデックス
+ * `work_items_active_issue_key`である。終端でない`issue`の作業項目を、
+ * (owner, repo, issue_number)ごとに1つに限る。
+ * 作業項目は`insertIssueWorkItemUnlessActive`が`ON CONFLICT DO NOTHING`で挿入し、
+ * 競合したら取得を失ったものとして引く。これはDBを共有するインスタンスの間で働く。
+ * DBを分けたインスタンスが同じリポジトリを扱う構成は対象外である。
  * `hasActiveWorkItem`はポーリングの開始時点の状態を見る検査なので、同時の取得は防げない。
- * 1つのリポジトリは、1つのインスタンスだけで扱うこと。
  * - `claimed: true`: 自分がラベルを外した。`assignee`は取得後のIssueで確かめた結果で、
  *   `confirmed`はassigneeが付いている、`missing`は付いていない、
  *   `unknown`は読み取りの失敗で確かめられなかった。
@@ -1000,6 +1025,7 @@ export type ClaimIssueResult =
  * - Issueを読み直せなかった。
  * - ラベルが外れていて、タイムラインを読めなかった。
  * - ラベルが外れていて、タイムラインに、最後に付けられた後の削除の記録が無かった。
+ * - ラベルが外れていて、タイムラインが`CLAIM_TIMELINE_MAX_PAGES`ページを超えて続いた。
  * Issueは「ラベルなし」になっていて、作業項目が始まっているかも分からないので、
  * 呼び出し元は人へ知らせる。
  * ラベルを外す前の失敗(assigneeの追加)と、4xxなどの確定した拒否、レート制限は、
@@ -1028,10 +1054,18 @@ function isUndeterminedRemoval(err: unknown): boolean {
 export const CLAIM_REREAD_BACKOFF_MS: readonly number[] = [1000, 2000];
 
 /**
+ * 削除の結果が不明なときに読むタイムラインの最大のページ数(1ページ100件)。
+ * 長く続くIssueで、1回の取得の判定が際限なくAPIを呼ばないようにする。
+ * 超えたときは`GitHubPaginationLimitError`で判定を打ち切り、所有を判断できない扱いにする。
+ */
+const CLAIM_TIMELINE_MAX_PAGES = 20;
+
+/**
  * `read`を最大`CLAIM_REREAD_BACKOFF_MS.length + 1`回まで試す。GETなので繰り返してよい。
  * 失敗した試行は、そのたびに`log`へ警告として残す。
  * `GitHubRateLimitError`は繰り返さずに投げる。`callGhApi`が上限までの待機と再試行を
  * 済ませたうえで投げるので、ここで重ねても同じ制限に当たり、待ちが長引くだけである。
+ * `GitHubPaginationLimitError`も、繰り返しても同じ長さなので繰り返さずに投げる。
  */
 async function rereadWithRetries<T>(
   client: GhClient,
@@ -1055,7 +1089,12 @@ async function rereadWithRetries<T>(
         attempt: attempt + 1,
         error: maskSecrets(err instanceof Error ? err.message : String(err)),
       });
-      if (err instanceof GitHubRateLimitError) throw err;
+      if (
+        err instanceof GitHubRateLimitError ||
+        err instanceof GitHubPaginationLimitError
+      ) {
+        throw err;
+      }
       lastError = err;
     }
   }
@@ -1080,6 +1119,7 @@ async function lastUnlabeledActor(
   const events = await callGhApiAll(
     client,
     `repos/${owner}/${repo}/issues/${number}/timeline?per_page=100`,
+    CLAIM_TIMELINE_MAX_PAGES,
   );
   let actor: string | null = null;
   for (const raw of events) {

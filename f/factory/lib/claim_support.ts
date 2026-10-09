@@ -5,6 +5,13 @@ import type { addNoticeUnlessUnresolved } from "./db.ts";
 import { type Logger, maskSecrets } from "./log.ts";
 
 /**
+ * 取得した後の作業項目の挿入が、同じIssueの稼働中の作業項目に阻まれたときの理由。
+ * `claim_race_lost`のnoticeの本文になる。
+ */
+export const ACTIVE_WORK_ITEM_EXISTS_REASON =
+  "another work item is already active for the issue";
+
+/**
  * assigneeを設定できなかったことをnoticeに残す。記録に失敗しても例外にしない。
  * ラベルは既に外れているので、ここで例外にすると、ラベルも作業項目も無いIssueが残る。
  * 設定できない主な原因は、Factoryのユーザーがリポジトリのpush権限を持たないことである。
