@@ -2121,21 +2121,84 @@ describe("createGtrWorktree", () => {
   });
 });
 
+/** gitは動くのに、検査の準備が失敗したことを表す。 */
+class GitProbeSetupError extends Error {}
+
 describe("ensureHeadOnBranch (real git)", () => {
-  /** `git checkout -B`が、他のworktreeでcheckout中のブランチを拒むのはgit 2.43以降である。 */
-  // gitが無い環境でもファイル全体を壊さず、そのテストだけを飛ばす。
+  /**
+   * gitが、別のworktreeで使用中のブランチへの`checkout -B`を拒むかどうか。
+   * 公式のリリースノートでは2.44からだが、配布元の差もあるので、版の番号では判定しない。
+   * 一時リポジトリで実際に試して確かめる。
+   * gitを起動できないときはfalseにして、そのテストだけを飛ばす。
+   * gitは動くのに準備が失敗したときは、検査が黙って消えないよう例外を投げる。
+   * 起動の環境(`-c user.*`、`HOME`、`GIT_CONFIG_NOSYSTEM`、`PATH`)は`setUp`と揃える。
+   */
   const hostGitRefusesCheckedOutBranch = (() => {
-    let version: string;
+    let root: string | undefined;
     try {
-      version = Bun.spawnSync(["git", "--version"]).stdout.toString();
-    } catch {
+      root = mkdtempSync(join(tmpdir(), "git-probe-"));
+      const home = join(root, "home");
+      const repo = join(root, "repo");
+      const worktree = join(root, "wt");
+      mkdirSync(home);
+      mkdirSync(repo);
+      const git = (cwd: string, args: readonly string[]) => {
+        const result = Bun.spawnSync(
+          [
+            "git",
+            "-c",
+            "user.name=test",
+            "-c",
+            "user.email=test@example.invalid",
+            ...args,
+          ],
+          {
+            cwd,
+            stdout: "ignore",
+            stderr: "pipe",
+            env: {
+              PATH: process.env.PATH ?? "",
+              HOME: home,
+              GIT_CONFIG_NOSYSTEM: "1",
+            },
+          },
+        );
+        return { exitCode: result.exitCode, stderr: result.stderr.toString() };
+      };
+      if (git(root, ["--version"]).exitCode !== 0) return false;
+      const preparation: readonly (readonly [string, readonly string[]])[] = [
+        [repo, ["init", "-q", "-b", "main"]],
+        [repo, ["commit", "-q", "--allow-empty", "-m", "init"]],
+        [repo, ["branch", "target"]],
+        [repo, ["worktree", "add", "-q", worktree, "target"]],
+        [worktree, ["checkout", "-q", "--detach"]],
+        [repo, ["worktree", "add", "-q", `${worktree}-2`, "target"]],
+      ];
+      for (const [cwd, args] of preparation) {
+        const result = git(cwd, args);
+        if (result.exitCode !== 0) {
+          throw new GitProbeSetupError(
+            `git probe setup failed: git ${args.join(" ")}: ${result.stderr}`,
+          );
+        }
+      }
+      return (
+        git(worktree, [
+          "checkout",
+          "-q",
+          "-f",
+          "--no-track",
+          "-B",
+          "target",
+          "main",
+        ]).exitCode !== 0
+      );
+    } catch (error) {
+      if (error instanceof GitProbeSetupError) throw error;
       return false;
+    } finally {
+      if (root !== undefined) rmSync(root, { recursive: true, force: true });
     }
-    const match = /git version (\d+)\.(\d+)/.exec(version);
-    if (match === null) return false;
-    const major = Number(match[1]);
-    const minor = Number(match[2]);
-    return major > 2 || (major === 2 && minor >= 43);
   })();
   const roots: string[] = [];
   afterAll(() => {
@@ -2258,9 +2321,16 @@ describe("ensureHeadOnBranch (real git)", () => {
     expect(merge.stdout).toBe("");
   });
 
-  test.skipIf(!hostGitRefusesCheckedOutBranch)(
+  // CI(`CI=true`)では飛ばさない。gitが拒否しない環境は、テストの先頭で分かるメッセージで失敗させる。
+  const isCi = process.env.CI === "true";
+  test.skipIf(!hostGitRefusesCheckedOutBranch && !isCi)(
     "fails when the branch is checked out in another worktree",
     async () => {
+      if (!hostGitRefusesCheckedOutBranch) {
+        throw new Error(
+          "this git does not refuse checkout -B for a branch used by another worktree (git 2.44 or later is required in CI)",
+        );
+      }
       const fixture = await setUp();
       await fixture.git(fixture.worktree, ["checkout", "-q", "--detach"]);
       await fixture.git(fixture.worktree, [
@@ -2270,6 +2340,7 @@ describe("ensureHeadOnBranch (real git)", () => {
         `${fixture.worktree}-2`,
         "target",
       ]);
+      // gitの拒否の文言は版と言語で変わるので、失敗することと、エラーに実行したコマンドが載ることだけを見る。
       await expect(ensure(fixture, fixture.mainSha)).rejects.toThrow(
         /checkout -f -B/,
       );

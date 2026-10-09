@@ -37,6 +37,17 @@ describe("console/public/assets", () => {
     );
   });
 
+  // Viteはpublic/assets/をdist/assets/に写し、write-manifestがmanifestに載せる。
+  // 載らない参照があると、再読み込みしても消えない帯が出る。
+  test("has every /console/assets/ file referenced by index.html in public/assets", () => {
+    const html = readFileSync(join(CONSOLE_ROOT, "index.html"), "utf8");
+    const referenced = [
+      ...html.matchAll(/["']\/console\/assets\/([^"'?#]+)["']/g),
+    ].map((match) => match[1] ?? "");
+    const missing = referenced.filter((name) => !assetNames.includes(name));
+    expect(missing).toEqual([]);
+  });
+
   test("reads the same storage key as the React side", () => {
     const script = readFileSync(
       join(PUBLIC_ASSETS, themeInitNames[0] ?? ""),
