@@ -42,6 +42,11 @@ export type WatchScheduler = {
   start: () => void;
   /** visibilitychangeのたびに呼ぶ。見える状態に戻ったとき、前の確認から間があれば直ちに確認する。 */
   onVisibilityChange: () => void;
+  /**
+   * 動的importの失敗を受けたときに呼ぶ。見えているかと前の確認からの間に関わらず、直ちに確認する。
+   * 確認の実行中なら、終わった後に1回だけやり直す。実行中の確認は、失敗の前に始まっているかもしれないためである。
+   */
+  onPreloadError: () => void;
   /** 予定を取り消し、実行中の確認を中断する。以後は何もしない。 */
   stop: () => void;
 };
@@ -52,7 +57,7 @@ export type WatchScheduler = {
  * - 失敗が続くと間隔を延ばし、成功したら元に戻す。
  * - 1回の確認は`checkTimeoutMs`で打ち切る。`check`が中断に応じなくても、
  *   打ち切った時点で実行中の印を外すので、以後の確認は止まらない。
- * - 確認は同時に1つしか走らせない。
+ * - 確認は同時に1つしか走らせない。実行中に`onPreloadError`が来たら、終わった後に1回だけやり直す。
  */
 export function createWatchScheduler<Handle>(
   options: WatchOptions<Handle>,
@@ -61,6 +66,8 @@ export function createWatchScheduler<Handle>(
   let timer: { handle: Handle } | undefined;
   let running = false;
   let stopped = false;
+  // 実行中に来た要求を覚える。何度来ても、終わった後の再実行は1回にする。
+  let rerunRequested = false;
   let failures = 0;
   let lastStartedAt: number | undefined;
 
@@ -117,6 +124,11 @@ export function createWatchScheduler<Handle>(
       return;
     }
     failures = outcome === "failed" ? failures + 1 : 0;
+    if (rerunRequested) {
+      rerunRequested = false;
+      void run();
+      return;
+    }
     schedule();
   };
 
@@ -142,6 +154,16 @@ export function createWatchScheduler<Handle>(
         lastStartedAt !== undefined &&
         options.now() - lastStartedAt < options.visibleRecheckGapMs
       ) {
+        return;
+      }
+      void run();
+    },
+    onPreloadError: () => {
+      if (stopped) {
+        return;
+      }
+      if (running) {
+        rerunRequested = true;
         return;
       }
       void run();

@@ -14,7 +14,10 @@ const VISIBLE_RECHECK_GAP_MS = 5_000;
 
 /**
  * 開いたままのタブが、配信中の版から外れていないかを確かめ続ける。
- * 表示した直後と、その後60秒ごと、タブが見える状態に戻ったときに確かめる。
+ * 表示した直後と、その後60秒ごと、タブが見える状態に戻ったとき、
+ * 動的importの失敗(Viteが`window`に出す`vite:preloadError`)を受けたときに確かめる。
+ * 失敗したimportは、イベントの既定の動作のとおり例外になる。ここでは止めない。
+ * 版の入れ替わりで古いchunkが消えた場合に、次の周期を待たずに帯を出すためである。
  * タブが見えないあいだは周期の確認をしない。見える状態に戻ったときは、前の確認から5秒以上空いていれば確認する。確認が失敗し続けるあいだは、間隔を10分まで延ばす。
  * 1回の確認は10秒で打ち切り、アンマウントでも中断する。
  * 自分のファイルの集合は、確かめるたびにDOMから取り直す。後から読み込んだchunkの
@@ -70,9 +73,11 @@ export function useReleaseWatch(): ReleaseNotice {
 
     scheduler.start();
     document.addEventListener("visibilitychange", scheduler.onVisibilityChange);
+    window.addEventListener("vite:preloadError", scheduler.onPreloadError);
     return () => {
       active = false;
       scheduler.stop();
+      window.removeEventListener("vite:preloadError", scheduler.onPreloadError);
       document.removeEventListener(
         "visibilitychange",
         scheduler.onVisibilityChange,

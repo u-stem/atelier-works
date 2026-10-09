@@ -297,6 +297,99 @@ describe("createWatchScheduler", () => {
     expect(checkTimes).toEqual([0]);
   });
 
+  test("checks right away on a preload error without waiting for the interval", async () => {
+    const { clock, checkTimes, scheduler } = setUp();
+    scheduler.start();
+    await clock.advance(1_000);
+    scheduler.onPreloadError();
+    await clock.flush();
+    expect(checkTimes).toEqual([0, 1_000]);
+  });
+
+  test("checks on a preload error even while the tab is hidden", async () => {
+    const { clock, checkTimes, visible, scheduler } = setUp();
+    scheduler.start();
+    await clock.advance(1_000);
+    visible.value = false;
+    scheduler.onPreloadError();
+    await clock.flush();
+    expect(checkTimes).toEqual([0, 1_000]);
+  });
+
+  test("ignores the recheck gap on a preload error", async () => {
+    const { clock, checkTimes, scheduler } = setUp();
+    scheduler.start();
+    await clock.advance(RECHECK_GAP - 1);
+    scheduler.onPreloadError();
+    await clock.flush();
+    expect(checkTimes).toEqual([0, RECHECK_GAP - 1]);
+  });
+
+  test("restarts the interval from the check a preload error triggered", async () => {
+    const { clock, checkTimes, scheduler } = setUp();
+    scheduler.start();
+    await clock.advance(1_000);
+    scheduler.onPreloadError();
+    await clock.advance(INTERVAL);
+    expect(checkTimes).toEqual([0, 1_000, 1_000 + INTERVAL]);
+  });
+
+  test("does not start a second check for a preload error while one is running", async () => {
+    const { clock, checkTimes, scheduler } = setUp(["stall"]);
+    scheduler.start();
+    await clock.flush();
+    scheduler.onPreloadError();
+    await clock.flush();
+    expect(checkTimes).toEqual([0]);
+  });
+
+  test("re-runs once after the running check ends, however many requests came in", async () => {
+    const { clock, checkTimes, scheduler } = setUp(["stall"]);
+    scheduler.start();
+    await clock.flush();
+    scheduler.onPreloadError();
+    scheduler.onPreloadError();
+    scheduler.onPreloadError();
+    await clock.advance(TIMEOUT);
+    expect(checkTimes).toEqual([0, TIMEOUT]);
+  });
+
+  test("does not re-run when no request came in during the check", async () => {
+    const { clock, checkTimes, scheduler } = setUp(["stall"]);
+    scheduler.start();
+    await clock.advance(TIMEOUT);
+    expect(checkTimes).toEqual([0]);
+  });
+
+  test("returns to the interval after the re-run", async () => {
+    const { clock, checkTimes, scheduler } = setUp(["stall"]);
+    scheduler.start();
+    await clock.flush();
+    scheduler.onPreloadError();
+    await clock.advance(TIMEOUT + INTERVAL);
+    expect(checkTimes).toEqual([0, TIMEOUT, TIMEOUT + INTERVAL]);
+  });
+
+  test("does not re-run after stop", async () => {
+    const { clock, checkTimes, scheduler } = setUp(["stall"]);
+    scheduler.start();
+    await clock.flush();
+    scheduler.onPreloadError();
+    scheduler.stop();
+    await clock.advance(INTERVAL * 3);
+    expect(checkTimes).toEqual([0]);
+  });
+
+  test("does not check on a preload error after stop", async () => {
+    const { clock, checkTimes, scheduler } = setUp();
+    scheduler.start();
+    await clock.flush();
+    scheduler.stop();
+    scheduler.onPreloadError();
+    await clock.flush();
+    expect(checkTimes).toEqual([0]);
+  });
+
   test("treats a check that throws as a failure", async () => {
     const clock = fakeClock();
     const times: number[] = [];
