@@ -12,9 +12,13 @@
 // 完全に外している(`wmill.yaml`の`excludes`のコメントを参照)。
 // `scripts/bootstrap.sh`が空の値で一度だけ作り、以降は下の
 // `wmill.setVariable`だけが値を変える。無関係な`wmill sync push`で戻らない。
-import * as wmill from "windmill-client@1.817.0";
+import wmillDefault, * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "./lib/config.ts";
-import { watchConsoleWorker } from "./lib/console_worker.ts";
+import {
+  consoleQueueQuery,
+  watchConsoleWorker,
+  watchRunsQuery,
+} from "./lib/console_worker.ts";
 import { addNoticeUnlessUnresolved, recordDeployment } from "./lib/db.ts";
 import { notifyBestEffort } from "./lib/discord.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
@@ -309,8 +313,8 @@ export type SelfUpdateResult =
 type FactoryConfig = Awaited<ReturnType<typeof loadConfig>>;
 
 /**
- * 自己更新を行い、そのあとでConsole用workerの存在を確かめる。
- * 確認は更新の成否によらず毎回行う。Console用workerが居ないとConsoleのjobが溜まり続けるため。
+ * 自己更新を行い、そのあとでConsole用workerが受けているかを確かめる。
+ * 確認は更新の成否によらず毎回行う。Console用workerがジョブを受けないとConsoleのジョブが溜まり続けるため。
  * 確認は時間を区切り、失敗しても例外を投げないので、更新の結果は変わらない。
  */
 export async function main(): Promise<SelfUpdateResult> {
@@ -321,10 +325,17 @@ export async function main(): Promise<SelfUpdateResult> {
   try {
     return await updateSelf(log, config);
   } finally {
-    // 更新が例外を投げても検知は走らせる。更新が失敗し続けると、Console用workerの不在に誰も気づけなくなるため。
+    // 更新が例外を投げても検知は走らせる。更新が失敗し続けると、Console用workerの停止に誰も気づけなくなるため。
     await watchConsoleWorker({
-      listWorkers: (pingSince) =>
-        wmill.WorkerService.listWorkers({ page: 1, perPage: 100, pingSince }),
+      listWaitingJobs: () =>
+        wmill.JobService.listQueue(
+          consoleQueueQuery(wmillDefault.getWorkspace()),
+        ),
+      listRecentWatchRuns: () =>
+        wmill.JobService.listCompletedJobs(
+          watchRunsQuery(wmillDefault.getWorkspace()),
+        ),
+      now: () => Date.now(),
       addNotice: (record) => addNoticeUnlessUnresolved(record),
       notify: async (event) => {
         const webhookUrl = await wmill.getVariable(

@@ -1,10 +1,20 @@
-// tag `console`を受けるworkerが居るかを確かめる。
-// 居ないと、tag付きのjobとscheduleがqueueに溜まり続け、Consoleが止まる。
+// Console用のworkerがtag `console`のジョブを受けているかを確かめる。
+// 受けていないと、tag付きのジョブとscheduleがqueueに溜まり続け、Consoleが止まる。
+// workerの一覧は、ジョブのトークンでは読めない(Forbidden)ので、読めるqueueとジョブの履歴を見る。
+// tag `console`のジョブが、予定時刻を過ぎても実行されずに待ち続けていれば、workerが受けていない。
+// `console_fetch_watch`が10分ごとにtag `console`のジョブを作るので、workerが受けなければ待つジョブが現れる。
+// 待つジョブが無いだけでは、スケジュールが無効で何も作られていない場合と区別できない。
+// そのため、`console_fetch_watch`が最近終わっていること、または新しいジョブが待っていることを、
+// 問題なしの根拠にする。どちらも無ければ、判定できないものとして扱う。
 // defaultのworkerで動く`self_update`が呼ぶ。Console用workerと同じworkerで確かめると、
-// そのworkerが居ないときに確かめる処理も動かないため。
+// そのworkerが止まっているときに確かめる処理も動かないため。
 // Consoleが止まるとConsoleの中のnoticeは読めないので、noticeを新しく残したときはDiscordにも送る。
-// 確認そのものが続けて失敗すると不在に気づけないので、失敗の回数を数え、続いたらnoticeにする。
+// 確認そのものが続けて失敗すると停止に気づけないので、失敗の回数を数え、続いたらnoticeにする。
 
+import type {
+  ListCompletedJobsData,
+  ListQueueData,
+} from "windmill-client@1.817.0";
 import type { NotifyEvent } from "./discord.ts";
 import { type Logger, maskSecrets } from "./log.ts";
 import { isRecord, type NoticeRecord } from "./types.ts";
@@ -12,26 +22,32 @@ import { isRecord, type NoticeRecord } from "./types.ts";
 /** Console用workerが受けるtag。 */
 export const CONSOLE_WORKER_TAG = "console";
 
-/** この秒数以内にpingしたworkerだけを、居るものとして数える。 */
-export const CONSOLE_WORKER_PING_SECONDS = 300;
+/** 予定時刻からこの秒数以上、実行されずに待っているジョブがあれば、workerが受けていないと見なす。 */
+export const CONSOLE_JOB_WAIT_SECONDS = 300;
 
-/** 確認が終わるまで待つ上限。止まっても自己更新の反映を遅らせないための値。 */
+/** Console用のworkerが動いている証拠として読む、`console_fetch_watch`を最後に完了した時刻の古さの上限(秒)。 */
+export const CONSOLE_RECENT_RUN_SECONDS = 1800;
+
+/** 10分ごとにtag `console`のジョブを作る、Console用workerの動作の証拠に使うscript。 */
+export const CONSOLE_FETCH_WATCH_PATH = "f/factory/console_fetch_watch";
+
+/** 確認が終わるまで待つ上限。確認が止まっても自己更新の反映を遅らせないための値。 */
 export const CONSOLE_WORKER_CHECK_TIMEOUT_MS = 10_000;
 
 /** 確認できない状態がこの回数(自己更新は10分ごとなので1時間)続いたら、noticeにする。 */
 export const CONSOLE_WORKER_UNKNOWN_LIMIT = 6;
 
-const MISSING_CAUSE = `tag ${CONSOLE_WORKER_TAG}を受けるworkerが居ません。Consoleのjobがqueueに溜まり、Consoleが止まります`;
+const MISSING_CAUSE = `Consoleのジョブが${CONSOLE_JOB_WAIT_SECONDS / 60}分以上待たされています。Console用のworkerが居ない、2枠とも塞がっている、またはtagの設定がずれていて、ジョブを受けていません。Consoleのジョブがqueueに溜まり、Consoleが止まります`;
 const MISSING_ACTION =
-  "mise run upでworkerを起動し直し、docker compose ps windmill_worker_consoleでコンテナの状態を確かめる";
+  "docker compose ps windmill_worker_consoleでコンテナの状態を確かめ、無ければmise run upで起動し、動いていればdocker compose restart windmill_worker_consoleで再起動する。再起動しても直らなければ、Windmillの画面でtag consoleの実行中のジョブと、ワーカーグループconsoleのtagを確かめる";
 
 const CHECK_FAILED_CAUSE =
-  "Console用のworkerが居るかを、1時間続けて確認できていません。workerが止まっていても気づけません";
+  "Console用のworkerがジョブを受けているかを、1時間続けて確かめられていません。workerが止まっていても気づけません";
 const CHECK_FAILED_ACTION =
-  "self_updateのジョブログで、workerの確認の警告の内容を確かめる";
+  "self_updateのジョブログの警告を確かめる。could not confirm the console worker from the job listsが続くなら、console_fetch_watchのスケジュールが有効か、直近の実行がtag consoleで動いているかを確かめる。ほかの警告なら、その内容に従って原因を直す";
 
 /**
- * 通知の本文は、workerが居ない間は毎回同じ文にする。
+ * 通知の本文は、workerがジョブを受けていない間は毎回同じ文にする。
  * 同じ本文の未解決の通知があれば、`addNoticeUnlessUnresolved`が重ねて記録しない。
  */
 export const CONSOLE_WORKER_MISSING_NOTICE: NoticeRecord = {
@@ -45,28 +61,162 @@ export const CONSOLE_WORKER_CHECK_FAILED_NOTICE: NoticeRecord = {
   message: `${CHECK_FAILED_CAUSE}。次の操作: ${CHECK_FAILED_ACTION}`,
 };
 
+/** 待ちのジョブの一覧を取るAPIの引数。待ちが長いジョブを取りこぼさないよう、古いものから取る。 */
+export function consoleQueueQuery(workspace: string): ListQueueData {
+  return {
+    workspace,
+    tag: CONSOLE_WORKER_TAG,
+    running: false,
+    scheduledForBeforeNow: true,
+    orderDesc: false,
+    perPage: 100,
+  };
+}
+
 /**
- * workerの一覧の応答に、tag `console`を持つworkerがあるかを返す。
- * 応答は信頼できない入力として読み、形の違う要素は読み飛ばす。tagは完全一致で比べる。
+ * `console_fetch_watch`の完了した実行を取るAPIの引数。新しい順に取る。
+ * 手動の実行やpreviewはdefaultのworkerで動いてtagが違うので、サーバー側でもtagで絞る。
+ * 判定側でもtagを確かめるので、絞りが効かなくても証拠を取り違えない。
+ * 取り消されたジョブを除いても最新が残るよう、1件でなく10件取る。
  */
-export function hasConsoleWorker(workers: unknown): boolean {
-  if (!Array.isArray(workers)) {
-    return false;
-  }
-  return workers.some((worker) => {
-    if (!isRecord(worker)) {
-      return false;
+export function watchRunsQuery(workspace: string): ListCompletedJobsData {
+  return {
+    workspace,
+    scriptPathExact: CONSOLE_FETCH_WATCH_PATH,
+    tag: CONSOLE_WORKER_TAG,
+    orderDesc: true,
+    perPage: 10,
+  };
+}
+
+/** 判定の結果。`stalled`は、Console用のworkerがジョブを受けていないこと。 */
+export type ConsoleWorkerCheck = "ok" | "stalled" | "unknown";
+
+/**
+ * 実行履歴の1件の完了時刻(エポックミリ秒)を返す。
+ * `completed_at`が日時として読めればそれを使う。Windmillの応答では`completed_at`がnullのことがあるため、
+ * 読めなければ`started_at`に`duration_ms`を足す。どちらも読めなければ`null`を返す。
+ */
+function completionMs(run: Record<string, unknown>): number | null {
+  if (typeof run.completed_at === "string") {
+    const completedMs = Date.parse(run.completed_at);
+    if (!Number.isNaN(completedMs)) {
+      return completedMs;
     }
-    const tags = worker.custom_tags;
-    return (
-      Array.isArray(tags) && tags.some((tag) => tag === CONSOLE_WORKER_TAG)
-    );
-  });
+  }
+  if (
+    typeof run.started_at === "string" &&
+    typeof run.duration_ms === "number"
+  ) {
+    const startedMs = Date.parse(run.started_at);
+    if (!Number.isNaN(startedMs) && Number.isFinite(run.duration_ms)) {
+      return startedMs + run.duration_ms;
+    }
+  }
+  return null;
+}
+
+/**
+ * `console_fetch_watch`の実行履歴の応答から、Console用のworkerが動いた最も新しい完了時刻
+ * (エポックミリ秒)を返す。
+ * 数えるのは、tagが`console`で、取り消されていない実行だけである。
+ * 手動の実行やpreviewはdefaultのworkerで動き、人が取り消したジョブもworkerの動作の証拠にならない。
+ * 失敗した実行は、workerがジョブを受けて動いた証拠として数える。
+ * 一覧でないとき、数えられる要素が無いときは`null`を返す。
+ */
+function latestCompletionMs(runs: unknown): number | null {
+  if (!Array.isArray(runs)) {
+    return null;
+  }
+  let latest: number | null = null;
+  for (const run of runs) {
+    if (
+      !isRecord(run) ||
+      run.tag !== CONSOLE_WORKER_TAG ||
+      run.canceled === true
+    ) {
+      continue;
+    }
+    const completedMs = completionMs(run);
+    if (completedMs !== null && (latest === null || completedMs > latest)) {
+      latest = completedMs;
+    }
+  }
+  return latest;
+}
+
+/**
+ * 実行待ちのジョブと`console_fetch_watch`の実行履歴の応答から、Console用のworkerがジョブを受けているかを判定する。
+ * 次の順に決める。
+ * 1. 待ちの応答が一覧でなければ`unknown`。
+ * 2. 予定時刻から`CONSOLE_JOB_WAIT_SECONDS`秒以上待っているジョブが1件でもあれば`stalled`。
+ *    実行履歴の応答の形には左右されない。
+ * 3. 待っているジョブが残っているか、直近`CONSOLE_RECENT_RUN_SECONDS`秒以内に
+ *    Console用のworkerが`console_fetch_watch`を終えていれば`ok`。
+ *    ジョブが作られていることが、スケジュールが生きている証拠になる。
+ * 4. どちらも無ければ`unknown`。スケジュールが無効だと待つジョブが作られず、workerの状態を判定できない。
+ * 応答は信頼できない入力として読み、待ちとして数えるのは、tagが`console`で実行中でなく、
+ * 予定時刻が日時として読める要素だけにする。サーバー側のtagの絞りが効かなくても、
+ * defaultのworkerのジョブの長い待ちをConsole用のworkerの停止と取り違えないためである。
+ * 予定時刻が`nowMs`より後の要素は、待たされていないので待ちとして数えない。
+ */
+export function judgeConsoleQueue(
+  waitingJobs: unknown,
+  recentWatchRuns: unknown,
+  nowMs: number,
+): ConsoleWorkerCheck {
+  if (!Array.isArray(waitingJobs)) {
+    return "unknown";
+  }
+  const thresholdMs = CONSOLE_JOB_WAIT_SECONDS * 1000;
+  let waitingCount = 0;
+  for (const job of waitingJobs) {
+    if (
+      !isRecord(job) ||
+      job.running === true ||
+      job.tag !== CONSOLE_WORKER_TAG
+    ) {
+      continue;
+    }
+    const scheduledFor = job.scheduled_for;
+    if (typeof scheduledFor !== "string") {
+      continue;
+    }
+    const scheduledMs = Date.parse(scheduledFor);
+    if (Number.isNaN(scheduledMs)) {
+      continue;
+    }
+    if (scheduledMs > nowMs) {
+      continue;
+    }
+    if (nowMs - scheduledMs >= thresholdMs) {
+      return "stalled";
+    }
+    waitingCount += 1;
+  }
+  if (waitingCount > 0) {
+    return "ok";
+  }
+  const completedMs = latestCompletionMs(recentWatchRuns);
+  if (
+    completedMs !== null &&
+    nowMs - completedMs <= CONSOLE_RECENT_RUN_SECONDS * 1000
+  ) {
+    return "ok";
+  }
+  return "unknown";
 }
 
 export type ConsoleWorkerCheckDeps = {
-  /** `pingSince`秒以内にpingしたworkerの一覧(1ページ)の応答を返す。 */
-  readonly listWorkers: (pingSince: number) => Promise<unknown>;
+  /**
+   * tag `console`で、予定時刻を過ぎても実行が始まっていないジョブの一覧(1ページ)の応答を返す。
+   * 待ちが長いジョブを取りこぼさないよう、古いものから返す。
+   */
+  readonly listWaitingJobs: () => Promise<unknown>;
+  /** `console_fetch_watch`の完了した実行を、新しい順に返す(tagで絞る前の複数件)。 */
+  readonly listRecentWatchRuns: () => Promise<unknown>;
+  /** 現在時刻(エポックミリ秒)。 */
+  readonly now: () => number;
   /** 同じ本文の未解決のnoticeが無ければ挿入してIDを返し、あれば`null`を返す。 */
   readonly addNotice: (record: NoticeRecord) => Promise<number | null>;
   readonly notify: (event: NotifyEvent) => Promise<unknown>;
@@ -75,8 +225,6 @@ export type ConsoleWorkerCheckDeps = {
   /** 省略時は`CONSOLE_WORKER_CHECK_TIMEOUT_MS`。 */
   readonly timeoutMs?: number;
 };
-
-export type ConsoleWorkerCheck = "present" | "missing" | "unknown";
 
 /** noticeを新しく挿入できたときだけDiscordに送る。どちらの失敗も呼び出し元に伝えない。 */
 async function recordAndNotify(
@@ -99,29 +247,39 @@ async function recordAndNotify(
 async function checkOnce(
   deps: ConsoleWorkerCheckDeps,
 ): Promise<ConsoleWorkerCheck> {
-  let response: unknown;
+  let waitingJobs: unknown;
+  let recentWatchRuns: unknown;
+  let listFailed = false;
   try {
-    response = await deps.listWorkers(CONSOLE_WORKER_PING_SECONDS);
+    waitingJobs = await deps.listWaitingJobs();
   } catch (err) {
-    deps.log.warn("could not check for a console worker", {
+    deps.log.warn("could not list the waiting console jobs", {
       error: maskSecrets(String(err)),
     });
     return "unknown";
   }
-  if (!Array.isArray(response)) {
-    deps.log.warn("unexpected response while checking for a console worker");
-    return "unknown";
+  try {
+    recentWatchRuns = await deps.listRecentWatchRuns();
+  } catch (err) {
+    // 待ちが長いジョブがあれば履歴が無くても判定できるので、ここでは戻らない。
+    listFailed = true;
+    deps.log.warn("could not list the recent console_fetch_watch runs", {
+      error: maskSecrets(String(err)),
+    });
   }
-  if (hasConsoleWorker(response)) {
-    return "present";
+  const result = judgeConsoleQueue(waitingJobs, recentWatchRuns, deps.now());
+  if (result === "unknown" && !listFailed) {
+    deps.log.warn("could not confirm the console worker from the job lists");
   }
-  await recordAndNotify(deps, CONSOLE_WORKER_MISSING_NOTICE, {
-    kind: "console_worker_missing",
-    instance_name: deps.instanceName,
-    cause: MISSING_CAUSE,
-    next_action: MISSING_ACTION,
-  });
-  return "missing";
+  if (result === "stalled") {
+    await recordAndNotify(deps, CONSOLE_WORKER_MISSING_NOTICE, {
+      kind: "console_worker_missing",
+      instance_name: deps.instanceName,
+      cause: MISSING_CAUSE,
+      next_action: MISSING_ACTION,
+    });
+  }
+  return result;
 }
 
 /**
@@ -149,9 +307,9 @@ async function withTimeout<T>(
 }
 
 /**
- * tag `console`を受けるworkerが最近pingしたかを確かめ、居なければnoticeを残してDiscordに送る。
- * 一覧を読めないとき、応答が一覧でないとき、`timeoutMs`以内に終わらないときは`unknown`を返し、
- * noticeは残さない。居ないと決めつけないためである。例外は投げない。
+ * Console用のworkerがジョブを受けているかを確かめ、受けていなければnoticeを残してDiscordに送る。
+ * 一覧を読めないとき、応答が一覧でないとき、根拠が無いとき、`timeoutMs`以内に終わらないときは
+ * `unknown`を返し、noticeは残さない。workerが受けていないと決めつけないためである。例外は投げない。
  */
 export async function checkConsoleWorker(
   deps: ConsoleWorkerCheckDeps,
@@ -196,7 +354,7 @@ export type WatchConsoleWorkerDeps = ConsoleWorkerCheckDeps & {
 };
 
 /**
- * workerの有無を確かめ、確認できなかった回数をstateに数える。
+ * Console用のworkerが受けているかを確かめ、確認できなかった回数をstateに数える。
  * `CONSOLE_WORKER_UNKNOWN_LIMIT`回続けて確認できなかったら、noticeを残す(新しく挿入したときだけDiscordにも送る)。
  * 確認できたら回数を0に戻す。stateを読めたときは、ほかのキーを保って書く。
  * stateを読めなければ0として数え、ほかのキーを保てないので、書くとほかのキーを失う。

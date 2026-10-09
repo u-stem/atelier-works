@@ -130,7 +130,7 @@ export type NotifyEvent =
   | {
       kind: "console_worker_missing";
       instance_name: string;
-      /** tag `console`を受けるworkerが居ないこと。 */
+      /** Console用のworkerがtag `console`のジョブを受けていないこと。 */
       cause: string;
       /** 運用者がまず行う操作の1文。 */
       next_action: string;
@@ -138,7 +138,7 @@ export type NotifyEvent =
   | {
       kind: "console_worker_check_failed";
       instance_name: string;
-      /** Console用のworkerの有無を、続けて確認できていないこと。 */
+      /** Console用のworkerがジョブを受けているかを、続けて確かめられていないこと。 */
       cause: string;
       /** 運用者がまず行う操作の1文。 */
       next_action: string;
@@ -361,7 +361,7 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
       };
     case "console_worker_missing":
       return {
-        title: "Console用のworkerが居ません",
+        title: "Console用のworkerがジョブを受けていません",
         description: event.cause,
         url: null,
         fields: [
@@ -371,7 +371,7 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
       };
     case "console_worker_check_failed":
       return {
-        title: "Console用のworkerの有無を確認できません",
+        title: "Console用のworkerの動きを確かめられません",
         description: event.cause,
         url: null,
         fields: [

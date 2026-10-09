@@ -30,8 +30,8 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | `pr_fixed` | PR修正適用 | `pr_fix_finish` | 修正をpushし、再レビューを依頼した |
 | `job_failed` | ジョブ失敗 | 下の表を参照 | フローやスケジュールが失敗した |
 | `console_fetch_problem` | Consoleの取り込みに問題があります | `console_fetch_watch`(10分ごと) | Consoleの取り込みの失敗、更新の停止、状態が読めないことを検知し、通知を新しく残した |
-| `console_worker_check_failed` | Console用のworkerの有無を確認できません | `self_update`(10分ごと) | Console用のworkerが居るかを、1時間(6回)続けて確認できなかった |
-| `console_worker_missing` | Console用のworkerが居ません | `self_update`(10分ごと) | tag `console`を受けるworkerが居ないことを検知し、通知を新しく残した |
+| `console_worker_check_failed` | Console用のworkerの動きを確かめられません | `self_update`(10分ごと) | Console用のworkerがジョブを受けているかを、1時間(6回)続けて確かめられなかった |
+| `console_worker_missing` | Console用のworkerがジョブを受けていません | `self_update`(10分ごと) | tag `console`のジョブが予定時刻から5分以上待たされていることを検知し、通知を新しく残した |
 | `daily_summary` | 日次サマリー | `notify_daily_summary`(毎日09:00) | 前日の集計 |
 | `audit_completed` | 監査レポートができました | `audit_generate` | 改善提案が1件以上ある監査レポートを保存した |
 | `pr_opened` | PR作成 / PR更新 | `implement_finish` | 実装フローがPRを作成か更新した |

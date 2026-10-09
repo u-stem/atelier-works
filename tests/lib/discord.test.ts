@@ -134,8 +134,10 @@ describe("buildEmbed console_worker_missing", () => {
     });
   });
 
-  test("names the console worker in the title", () => {
-    expect(buildEmbed(event).title).toContain("Console用のworker");
+  test("says the worker does not take jobs in the title", () => {
+    expect(buildEmbed(event).title).toBe(
+      "Console用のworkerがジョブを受けていません",
+    );
   });
 });
 
@@ -165,8 +167,10 @@ describe("buildEmbed console_worker_check_failed", () => {
     });
   });
 
-  test("says the check cannot be made in the title", () => {
-    expect(buildEmbed(event).title).toContain("確認できません");
+  test("says the worker's activity cannot be checked in the title", () => {
+    expect(buildEmbed(event).title).toBe(
+      "Console用のworkerの動きを確かめられません",
+    );
   });
 });
 

@@ -25,9 +25,9 @@ locks:
   f/factory/lib/config: 5922d286a1443ab1057dd2164be94bf49288a7abdbcbfc463d1faf3a362f7d1a
   f/factory/lib/console_status: ee1e2ab9df9b3fc2b5fd492d3576a137dc418f3d616373a555e043d373b411c9
   f/factory/lib/console_support: a4ea4b1584f26fb2f5fa152fe4a7b4f5b4c45fa3a53d76c95f8045c842757480
-  f/factory/lib/console_worker: fc805924a3219d27b238e341f12fb488004b03ea4e1f528610bd1314a036b52c
+  f/factory/lib/console_worker: 47b2f0d8d2fe34abf974c72f6764c23603955a16415a51294225046872fef428
   f/factory/lib/db: ea1ce71dea68937a70397e861b06f05fc0347fe376eb1ca72fba4e9676ecd41c
-  f/factory/lib/discord: 1ae77518fc378e7d52fef0d5341e911d22e43cbe23ec6a2b2fae0943562647b1
+  f/factory/lib/discord: 341d92926bbc1d4293cbebfe753371562ddf428caa2f1c3483438dc5dd014e2e
   f/factory/lib/drawio: 6033f8aaf663aeccf8cc84eaa978815c2b08671f4bc726395613303e3751a2a9
   f/factory/lib/github: 0da5ddf13cea03a7865acdb503e5c694532ba3f89ce497ad7034e61f38d6264a
   f/factory/lib/implement_finish_support: 5d1d1af0b285914903c2cdc3ce09575feef4a98aaf304bb19abf5af2cc4c76fa
@@ -60,7 +60,7 @@ locks:
   f/factory/pr_fix__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/pr_review__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/retry_work_item: 567ac00e42402851ccb694c963cafaf8aa880f70925d6a0a1d6c515fa25323f9
-  f/factory/self_update: abf8962f889557832dc011152630bbc3778e09183fc5e78d04b72f0c39867795
+  f/factory/self_update: 2f19f7a0709eb5e2e8a696f510a1189954cd0709dcfd4e10501e2984973c4384
   f/factory/steps/audit_generate: d032ee7406d3240b7ccda07df08ea5f4102100c4866f210475bc6cef7c23f1ca
   f/factory/steps/audit_prepare: 3bc36e6c5c703430960a777ad34ca2380d8574db93a5c930486d42cf07a05c81
   f/factory/steps/console_query: 6afbc292ffbf5a6c2abeea5c8b1726bf6611ac5893343cec7c4c99e7545f2a8f
