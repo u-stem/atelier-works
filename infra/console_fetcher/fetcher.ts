@@ -915,20 +915,30 @@ export async function runOnce(deps: FetcherDeps): Promise<FetcherStatus> {
     await prepareLayout(layout);
     currentSha = shaOf(await readCurrentLink(layout));
     if (await exists(layout.pin)) {
-      const pinJson = await readJsonFile(layout.pin);
-      const pinSha = parsePinSha(pinJson);
-      if (pinSha !== currentSha) {
-        // 検出だけで、状態は変えない。pinが指す版と配信中の版が違うのは、手で触った可能性がある。
-        deps.log("pin_mismatch", { pin_sha: pinSha, current_sha: currentSha });
-      }
-      // rollbackが途中で止まっていたときのために、戻した元の版の削除を続ける。
-      // 削除に失敗しても、pinの状態は変えず、次の回に続きを消す。
+      // pinを読めなくても(権限、ディレクトリになっているなど)、状態は`pinned`のままにする。
+      // 配信中の版を変えない取り込みで、読めないことを失敗にすると、状態の表示だけが誤る。
       try {
-        await removeRevoked(layout, deps.log, parsePinRevoked(pinJson));
+        const pinJson = await readJsonFile(layout.pin);
+        const pinSha = parsePinSha(pinJson);
+        if (pinSha !== null && pinSha !== currentSha) {
+          // 検出だけで、状態は変えない。pinが指す版と配信中の版が違うのは、手で触った可能性がある。
+          // 違いが続く間は、取り込みのたびに出る。
+          deps.log("pin_mismatch", {
+            pin_sha: pinSha,
+            current_sha: currentSha,
+          });
+        }
+        // rollbackが途中で止まっていたときのために、戻した元の版の削除を続ける。
+        // 削除に失敗しても、pinの状態は変えず、次の回に続きを消す。
+        try {
+          await removeRevoked(layout, deps.log, parsePinRevoked(pinJson));
+        } catch (err) {
+          deps.log("revoked_cleanup_failed", {
+            error: describeUnexpectedError(err),
+          });
+        }
       } catch (err) {
-        deps.log("revoked_cleanup_failed", {
-          error: describeUnexpectedError(err),
-        });
+        deps.log("pin_read_failed", { error: describeUnexpectedError(err) });
       }
       return await finish(deps, layout, {
         state: "pinned",

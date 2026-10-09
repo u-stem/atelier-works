@@ -833,6 +833,53 @@ describe("runOnce with a pin", () => {
     expect(status.state).toBe("pinned");
   });
 
+  test("stays pinned when the pin cannot be read", async () => {
+    await deploy(SHA_A, "A", 1);
+    await mkdir(join(root, "pin"));
+    const status = await runOnce(deps(githubServing(SHA_A, "A", 1).fetch));
+    expect(status.state).toBe("pinned");
+  });
+
+  test("reports no error when the pin cannot be read", async () => {
+    await deploy(SHA_A, "A", 1);
+    await mkdir(join(root, "pin"));
+    const status = await runOnce(deps(githubServing(SHA_A, "A", 1).fetch));
+    expect(status.error).toBeNull();
+  });
+
+  test("logs when the pin cannot be read", async () => {
+    await deploy(SHA_A, "A", 1);
+    await mkdir(join(root, "pin"));
+    const events: string[] = [];
+    await runOnce({
+      ...deps(githubServing(SHA_A, "A", 1).fetch),
+      log: (event) => events.push(event),
+    });
+    expect(events).toContain("pin_read_failed");
+  });
+
+  test("does not log pin_mismatch when the pin cannot be read", async () => {
+    await deploy(SHA_A, "A", 1);
+    await mkdir(join(root, "pin"));
+    const events: string[] = [];
+    await runOnce({
+      ...deps(githubServing(SHA_A, "A", 1).fetch),
+      log: (event) => events.push(event),
+    });
+    expect(events).not.toContain("pin_mismatch");
+  });
+
+  test("does not log pin_mismatch when the pin names no release", async () => {
+    await deploy(SHA_A, "A", 1);
+    await writeFile(join(root, "pin"), "{}");
+    const events: string[] = [];
+    await runOnce({
+      ...deps(githubServing(SHA_A, "A", 1).fetch),
+      log: (event) => events.push(event),
+    });
+    expect(events).not.toContain("pin_mismatch");
+  });
+
   test("removes the assets used only by a revoked release", async () => {
     await deploy(SHA_A, "A", 1);
     await deploy(SHA_B, "B", 2);

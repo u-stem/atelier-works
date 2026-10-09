@@ -633,12 +633,14 @@ mise exec -- docker compose -f infra/docker-compose.yml logs --tail 50 console_f
 `revoked.json`の扱いは次のとおり。
 
 - 中身が壊れているか形が違うときは、`revoked_state_unreadable`をログに出す。
-  壊れたファイルは`revoked.json.corrupt-<時刻>`へ移し、新しい方から5個まで残す。
+  壊れたファイルは`revoked.json.corrupt-<epochミリ秒>`(同じ時刻なら`-<番号>`付き)へ移し、新しい方から5個まで残す。
   空の記録で続けるので、戻す操作と整理は止まらない。
 - 権限やディレクトリになっているなど、読む操作が失敗したときは、`revoked_state_read_failed`をログに出す。
   中身の破損ではないので、ファイルは移さない。
   空の記録で続けるので、戻す操作と整理は止まらない。
   その回は、記録による除外と削除が効かない。
+  `console:unpin`は、記録し直す段階で同じ読む失敗に当たり、`--force`を付けても失敗して`pin`を残す。
+  先に権限などの原因を直す。
 - `console:rollback`が記録を書けなかったときも、戻す操作は成功する。
   `revoked_record_failed`をログに出す。
   同じ内容を`pin`が持ち、`console:unpin`が記録し直すためである。
@@ -661,6 +663,9 @@ mise exec -- docker compose -f infra/docker-compose.yml logs --tail 50 console_f
 `console/`に触れないマージでも、同じ中身の版が新しいcommitで作られるので、commitのshaだけでは見分けられない。
 `console:unpin`は、最新の成功した実行のshaと、その実行の`files`のsha256を、`pin`の記録と`revoked.json`の記録を合わせたものと照らす。
 `console:rollback`を重ねて`pin`が書き直されても、前に戻した版を落とさないためである。
+`revoked.json`の記録は、その中身が配信し直されるまで残る。
+中身(sha256)の記録は、整理で外れない。
+以前に戻した中身を意図して配信し直すときの出口は、`--force`である。
 次の場合は`pin`を外さず、理由を出して止まる。
 
 | 状況 | 人がすること |
@@ -676,6 +681,8 @@ mise exec -- docker compose -f infra/docker-compose.yml logs --tail 50 console_f
 戻した元の版の記録がどちらにも無いときは、照らす版が無いので、問い合わせずに外す。
 `pin`の`sha`と配信中の版が違うときは、取り込みが`pin_mismatch`をログに出す。
 これは検出だけで、状態は変えない。
+違いが続く間は、取り込みのたびに出る。
+`pin`を読めないときは、`pin_read_failed`をログに出し、状態は`pinned`のままにする。
 
 確認を飛ばすオプションは2つある。
 `mise run console:unpin -- --force`は、`pin`と最新の実行についての確認(上の表の前の5行)を飛ばす。
