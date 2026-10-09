@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  CURRENT_BRANCH_SUBSTITUTIONS,
   parseCommandLine,
   stripWrappers,
   type Word,
@@ -308,5 +309,167 @@ describe("parameter expansions", () => {
 
   test("reports an unterminated parameter expansion", () => {
     expect(parseCommandLine(`echo ${OPEN}x`).ok).toBe(false);
+  });
+});
+
+function writeTexts(line: string): string[] {
+  const result = parseCommandLine(line);
+  if (!result.ok) throw new Error(result.error);
+  return result.commands.flatMap((command) =>
+    command.writeTargets.map((word) => word.text),
+  );
+}
+
+describe("write targets", () => {
+  test("records the target of >", () => {
+    expect(writeTexts("echo x > out.txt")).toEqual(["out.txt"]);
+  });
+
+  test("records the target of >>", () => {
+    expect(writeTexts("echo x >> out.txt")).toEqual(["out.txt"]);
+  });
+
+  test("records the target of >|", () => {
+    expect(writeTexts("echo x >| out.txt")).toEqual(["out.txt"]);
+  });
+
+  test("records the target of &>", () => {
+    expect(writeTexts("echo x &> out.txt")).toEqual(["out.txt"]);
+  });
+
+  test("records the target of <>", () => {
+    expect(writeTexts("echo x <> out.txt")).toEqual(["out.txt"]);
+  });
+
+  test("does not record the source of <", () => {
+    expect(writeTexts("cat < in.txt")).toEqual([]);
+  });
+
+  test("keeps the source of < in the redirects", () => {
+    expect(redirectTexts("cat < in.txt")).toEqual(["in.txt"]);
+  });
+
+  test("does not record a file descriptor duplication", () => {
+    expect(writeTexts("echo x 2>&1")).toEqual([]);
+  });
+});
+
+describe("stripWrappers options", () => {
+  test("skips the option of command", () => {
+    const stripped = stripWrappers(words("command", "-p", "git", "push"));
+    expect(stripped.words.map((word) => word.text)).toEqual(["git", "push"]);
+  });
+
+  test("skips the option of time", () => {
+    const stripped = stripWrappers(words("time", "-p", "git", "push"));
+    expect(stripped.words.map((word) => word.text)).toEqual(["git", "push"]);
+  });
+
+  test("skips the option and value of exec -a", () => {
+    const stripped = stripWrappers(words("exec", "-a", "name", "git", "push"));
+    expect(stripped.words.map((word) => word.text)).toEqual(["git", "push"]);
+  });
+});
+
+describe("stripWrappers with mise exec", () => {
+  test("reads the command of a form without --", () => {
+    const stripped = stripWrappers(
+      words("mise", "exec", "node@22", "git", "push"),
+    );
+    expect(stripped.words.map((word) => word.text)).toEqual(["git", "push"]);
+  });
+
+  test("reads a command that follows no tool", () => {
+    const stripped = stripWrappers(words("mise", "exec", "bash"));
+    expect(stripped.words.map((word) => word.text)).toEqual(["bash"]);
+  });
+
+  test("keeps the raw command that follows --", () => {
+    const stripped = stripWrappers(words("mise", "exec", "--", "env"));
+    expect(stripped.mise?.inner.map((word) => word.text)).toEqual(["env"]);
+  });
+
+  test("reads the command string of -c", () => {
+    const stripped = stripWrappers(words("mise", "exec", "-c", "echo hi"));
+    expect(stripped.mise?.commandString?.text).toBe("echo hi");
+  });
+
+  test("reads the command string of --command", () => {
+    const stripped = stripWrappers(
+      words("mise", "exec", "--command", "echo hi"),
+    );
+    expect(stripped.mise?.commandString?.text).toBe("echo hi");
+  });
+
+  test("reads the command string of --command=", () => {
+    const stripped = stripWrappers(words("mise", "x", "--command=echo hi"));
+    expect(stripped.mise?.commandString?.text).toBe("echo hi");
+  });
+
+  test("leaves no program after a command string", () => {
+    const stripped = stripWrappers(words("mise", "exec", "-c", "echo hi"));
+    expect(stripped.words).toEqual([]);
+  });
+
+  test("records no mise for a plain command", () => {
+    expect(stripWrappers(words("git", "push")).mise).toBeNull();
+  });
+});
+
+describe("current branch substitutions", () => {
+  test("accepts git branch --show-current as a static word", () => {
+    const result = parseCommandLine(
+      'git push origin "$(git branch --show-current)"',
+    );
+    expect(result.ok && result.commands.at(-1)?.words[3]?.dynamic).toBe(false);
+  });
+
+  test("accepts git rev-parse --abbrev-ref HEAD as a static word", () => {
+    const result = parseCommandLine(
+      "git push origin $(git rev-parse --abbrev-ref HEAD)",
+    );
+    expect(result.ok && result.commands.at(-1)?.words[3]?.dynamic).toBe(false);
+  });
+
+  test("keeps the substitution marker as the text", () => {
+    const result = parseCommandLine(
+      'git push origin "$(git branch --show-current)"',
+    );
+    expect(result.ok && result.commands.at(-1)?.words[3]?.text).toBe(
+      CURRENT_BRANCH_SUBSTITUTIONS[0],
+    );
+  });
+
+  test("keeps another substitution dynamic", () => {
+    const result = parseCommandLine('git push origin "$(git rev-parse HEAD)"');
+    expect(result.ok && result.commands.at(-1)?.words[3]?.dynamic).toBe(true);
+  });
+
+  test("keeps a word that mixes the substitution with text dynamic", () => {
+    const result = parseCommandLine(
+      'git push origin "x/$(git branch --show-current)"',
+    );
+    expect(result.ok && result.commands.at(-1)?.words[3]?.dynamic).toBe(true);
+  });
+});
+
+describe("more shells", () => {
+  test.each(["fish", "ash", "mksh", "tcsh", "csh"])(
+    "reads the script of %s -c",
+    (shell) => {
+      expect(commandTexts(`${shell} -c "git push -f"`)).toContainEqual([
+        "git",
+        "push",
+        "-f",
+      ]);
+    },
+  );
+
+  test("reads the script of busybox sh -c", () => {
+    expect(commandTexts('busybox sh -c "git push -f"')).toContainEqual([
+      "git",
+      "push",
+      "-f",
+    ]);
   });
 });

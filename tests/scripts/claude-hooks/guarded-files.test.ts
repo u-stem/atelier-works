@@ -234,6 +234,37 @@ describe("unrelated mentions are allowed", () => {
   });
 });
 
+describe("find patterns are not file reads", () => {
+  test.each([
+    "find . -name mise.local.toml",
+    "find . -maxdepth 2 -name mise.local.toml",
+    "find . -iname '.env*'",
+    "find . -path '*/.env'",
+    "find . -ipath '*/remotes.ndjson'",
+    "find . -regex '.*\\.env'",
+    "find . -type f -name remotes.ndjson -print",
+  ])("allows %s", async (command) => {
+    expect(await decide(command)).toBe("allow");
+  });
+
+  test("a file named after -exec is still checked", async () => {
+    const command = "find . -name '*.ts' -exec cat mise.local.toml ';'";
+    expect(await decide(command)).toBe("deny");
+  });
+});
+
+describe("rg value options do not hide the pattern", () => {
+  test.each([
+    "rg --max-columns 100 mise.local.toml docs",
+    "rg --hyperlink-format default mise.local.toml docs",
+    "rg --type-clear x mise.local.toml docs",
+    "rg --hostname-bin x mise.local.toml docs",
+    "rg -d 2 mise.local.toml docs",
+  ])("allows %s", async (command) => {
+    expect(await decide(command)).toBe("allow");
+  });
+});
+
 describe("deny reasons say what to do instead", () => {
   test("a recursive grep points at rg", async () => {
     expect(await denyReason("grep -rn TOKEN .")).toContain("Use rg");

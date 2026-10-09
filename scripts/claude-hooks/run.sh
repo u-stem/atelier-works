@@ -30,7 +30,8 @@ if command -v bun >/dev/null 2>&1; then
 elif command -v mise >/dev/null 2>&1; then
   mise exec -- bun "$script"
 else
-  echo "claude hook $hook: bun is not installed; denying the tool call" >&2
+  echo "claude hook $hook: neither bun nor mise is on PATH; denying the tool call." >&2
+  echo "Install bun, or run the command yourself with the ! prefix in the prompt." >&2
   exit 2
 fi
 status=$?

@@ -407,22 +407,37 @@ describe("bash-guard denies code that mise exec would give the secrets to", () =
     "mise exec -- printenv TOKEN",
     "mise exec -- set",
     "mise exec -- export -p",
-    "mise exec -- bun -e 'console.log(process.env.TOKEN)'",
-    "mise exec -- bun --eval 'console.log(1)'",
-    "mise exec -- node -e 'console.log(1)'",
-    "mise exec -- node -p 'process.env.TOKEN'",
-    "mise exec -- python3 -c 'print(1)'",
-    "mise exec -- python -c 'print(1)'",
-    "mise exec -- perl -e 'print 1'",
-    "mise exec -- ruby -e 'puts 1'",
-    "mise exec -- deno eval 'console.log(1)'",
+    "mise exec -- declare -p",
+    "mise exec -- typeset -p",
+    "mise exec -- timeout 5 env",
+    "mise exec -- nohup env",
+    "mise exec -- command env",
+    "mise exec -- time env",
+    "mise exec -- xargs -0 env",
+    "mise exec -- env -i",
+    "mise exec -- bash",
+    "mise exec -- fish -c env",
+    "mise exec -- busybox sh -c env",
     "mise x -- sh -c 'echo hi'",
-    "mise exec node@20 -- node -e 'console.log(1)'",
     "mise exec bash",
-    "mise exec node@20 node -e 'console.log(1)'",
+    "mise exec node@22 bash -c 'echo hi'",
     "env FOO=1 mise exec -- sh -c 'echo hi'",
+    "mise exec -c 'echo $GITHUB_TOKEN'",
+    "mise exec -c 'git push --force origin main'",
+    "mise exec --command 'echo hi'",
+    "mise exec --command='echo hi'",
+    "mise x -c 'echo hi'",
+    "mise exec node@22 -c 'echo hi'",
+    "mise exec node@22 git push --force origin main",
+    "mise exec -- git push origin main",
   ])("%s", async (command) => {
     expect(await decide(command)).toBe("deny");
+  });
+
+  test("the command string is judged like sh -c", async () => {
+    expect(await denyReason("mise exec -c 'git push origin main'")).toContain(
+      "pull request",
+    );
   });
 
   test("the reason points at the tool itself or a mise task", async () => {
@@ -445,6 +460,14 @@ describe("bash-guard allows mise exec with a named tool", () => {
     "mise exec -- bun scripts/lint-docs.ts",
     "mise exec -- node scripts/build.js",
     "mise exec -- python3 scripts/tool.py",
+    "mise exec -- bash scripts/doctor.sh",
+    "mise exec -- sh scripts/doctor.sh",
+    "mise exec -- env FOO=1 bun test",
+    "mise exec -- bun -e 'console.log(1)'",
+    "mise exec -- node -e 'console.log(1)'",
+    "mise exec -- python3 -c 'print(1)'",
+    "mise exec -- perl -e 'print 1'",
+    "mise exec -- bunx some-tool",
     "mise exec -- docker compose -f infra/docker-compose.yml ps",
     "mise exec -- lefthook run pre-commit",
     "mise exec -- shellcheck scripts/doctor.sh",
@@ -481,6 +504,213 @@ describe("bash-guard allows other git and environment commands", () => {
     "cp scripts/a.ts /tmp/a.ts",
     "echo x > /tmp/x",
   ])("%s", async (command) => {
+    expect(await decide(command)).toBe("allow");
+  });
+});
+
+describe("bash-guard denies replacing the lefthook binary or config", () => {
+  test.each([
+    "LEFTHOOK_BIN=true git commit -m x",
+    "LEFTHOOK_CONFIG=/dev/null git commit -m x",
+    "export LEFTHOOK_BIN=true",
+    "env LEFTHOOK_BIN=/bin/true git commit -m x",
+    "declare -x LEFTHOOK_CONFIG=x",
+    'LEFTHOOK_BIN="$X" git commit -m x',
+  ])("%s", async (command) => {
+    expect(await decide(command)).toBe("deny");
+  });
+});
+
+describe("bash-guard denies git config keys that redirect a push or the hooks", () => {
+  test.each([
+    "git -c remote.origin.push=HEAD:main push origin",
+    "git -c push.default=matching push",
+    "git -c include.path=/tmp/c commit -m x",
+    "git -c includeIf.gitdir:/x.path=/y status",
+    "git config include.path /tmp/c",
+    "git config remote.origin.push HEAD:main",
+    "git config --add remote.origin.push 'refs/heads/*:refs/heads/main'",
+    "git config push.default matching",
+    "git config --global includeIf.gitdir:/x.path /y",
+  ])("%s", async (command) => {
+    expect(await decide(command)).toBe("deny");
+  });
+});
+
+describe("bash-guard allows git config keys that do not redirect", () => {
+  test.each([
+    "git -c push.autoSetupRemote=true push",
+    "git config push.autoSetupRemote true",
+    "git config remote.origin.url git@example.com:o/r.git",
+    "git config --get remote.origin.push",
+    "git config --unset remote.origin.push",
+    "git config --get-regexp 'remote.*'",
+    "git config --get include.path",
+  ])("%s", async (command) => {
+    expect(await decide(command)).toBe("allow");
+  });
+});
+
+describe("bash-guard follows --git-dir and --work-tree", () => {
+  test("a joined --git-dir on main", async () => {
+    const options = { branches: { "/other/.git": "main" } };
+    expect(await decide("git --git-dir=/other/.git push", options)).toBe(
+      "deny",
+    );
+  });
+
+  test("a separate --git-dir on main", async () => {
+    const options = { branches: { "/other/.git": "main" } };
+    expect(await decide("git --git-dir /other/.git push", options)).toBe(
+      "deny",
+    );
+  });
+
+  test("a joined --work-tree on main", async () => {
+    const options = { branches: { "/other": "main" } };
+    expect(await decide("git --work-tree=/other push", options)).toBe("deny");
+  });
+
+  test("a --git-dir on a feature branch", async () => {
+    const options = { branches: { "/other/.git": "feat/y" } };
+    expect(await decide("git --git-dir=/other/.git push", options)).toBe(
+      "allow",
+    );
+  });
+
+  test("a dynamic --git-dir makes a bare push undeterminable", async () => {
+    expect(await decide('git --git-dir="$D" push')).toBe("deny");
+  });
+});
+
+describe("bash-guard sees through more shells and wrappers", () => {
+  test.each([
+    "fish -c 'git push --force'",
+    "ash -c 'git push --force'",
+    "mksh -c 'git push --force'",
+    "tcsh -c 'git push --force'",
+    "csh -c 'git push --force'",
+    "busybox sh -c 'git push --force'",
+    "echo ls | fish",
+    "echo ls | busybox sh",
+    "time -p git push --force",
+    "command -p git push --force",
+    "exec -a name git push --force",
+  ])("%s", async (command) => {
+    expect(await decide(command)).toBe("deny");
+  });
+
+  test.each([
+    "command -v git",
+    "time -p ls",
+    "fish scripts/setup.fish",
+    "busybox ls",
+  ])("allows %s", async (command) => {
+    expect(await decide(command)).toBe("allow");
+  });
+});
+
+describe("bash-guard denies docker commands that expose the environment", () => {
+  test.each([
+    "docker compose config",
+    "docker compose -f infra/docker-compose.yml config",
+    "docker compose -p x --env-file e config",
+    "docker compose -f infra/docker-compose.yml exec windmill_worker env",
+    "docker compose exec x sh",
+    "docker exec x env",
+    "docker container exec x env",
+    "docker inspect x",
+    "docker-compose config",
+    "mise exec -- docker compose -f infra/docker-compose.yml config",
+    "mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker env",
+    "mise exec -- docker exec x env",
+    "mise exec -- docker inspect x",
+  ])("%s", async (command) => {
+    expect(await decide(command)).toBe("deny");
+  });
+
+  test.each([
+    "docker compose -f infra/docker-compose.yml ps",
+    "docker compose -f infra/docker-compose.yml logs --tail 50",
+    "docker compose -f infra/docker-compose.yml up -d --wait",
+    "docker compose -p x -f infra/docker-compose.yml down",
+    "docker ps",
+    "docker images",
+    "docker logs x",
+    "mise exec -- docker compose -f infra/docker-compose.yml ps",
+  ])("allows %s", async (command) => {
+    expect(await decide(command)).toBe("allow");
+  });
+
+  test("the reason points at the allowed alternatives", async () => {
+    expect(await denyReason("docker compose config")).toContain("compose ps");
+  });
+});
+
+describe("bash-guard treats only writes as writes to the git internals", () => {
+  test.each([
+    "cat < .git/config",
+    "while read l; do echo $l; done < .git/config",
+    "cat .git/config",
+    "wc -l < .git/hooks/pre-commit",
+  ])("allows %s", async (command) => {
+    expect(await decide(command)).toBe("allow");
+  });
+
+  test.each([
+    "echo x > .git/config",
+    "echo x >> .git/config",
+    "echo x >| .git/hooks/pre-commit",
+    "echo x &> .git/config",
+    "echo x <> .git/config",
+  ])("denies %s", async (command) => {
+    expect(await decide(command)).toBe("deny");
+  });
+});
+
+describe("bash-guard uses the current branch substitution as the branch", () => {
+  test.each([
+    'git push origin "$(git branch --show-current)"',
+    "git push -u origin $(git rev-parse --abbrev-ref HEAD)",
+  ])("allows %s on a feature branch", async (command) => {
+    expect(await decide(command)).toBe("allow");
+  });
+
+  test.each([
+    'git push origin "$(git branch --show-current)"',
+    "git push origin $(git rev-parse --abbrev-ref HEAD)",
+  ])("denies %s on main", async (command) => {
+    expect(await decide(command, { branch: "main" })).toBe("deny");
+  });
+
+  test.each([
+    'git push origin "$BRANCH"',
+    'git push origin "$(git rev-parse HEAD)"',
+    'git push origin "x/$(git branch --show-current)"',
+  ])("denies %s", async (command) => {
+    expect(await decide(command)).toBe("deny");
+  });
+});
+
+describe("bash-guard finds the lefthook subcommand", () => {
+  test.each([
+    "lefthook -v uninstall",
+    "lefthook --verbose uninstall",
+    "bunx lefthook uninstall",
+    "bunx --bun lefthook uninstall",
+    "npx lefthook uninstall",
+    "bun x lefthook uninstall",
+  ])("denies %s", async (command) => {
+    expect(await decide(command)).toBe("deny");
+  });
+
+  test.each([
+    "lefthook run pre-commit",
+    "lefthook -v run pre-commit",
+    "bunx lefthook run pre-commit",
+    "bunx biome check",
+    "lefthook install",
+  ])("allows %s", async (command) => {
     expect(await decide(command)).toBe("allow");
   });
 });

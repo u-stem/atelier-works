@@ -119,6 +119,11 @@ describe("the registered Bash guard command", () => {
     expect(result.stderr.toString()).toContain("launcher not found");
   });
 
+  test("starts the launcher with an absolute path to sh", () => {
+    const command = bashHookCommands()[0] ?? "";
+    expect(command).toContain('exec /bin/sh "$@"');
+  });
+
   test("runs the guard when CLAUDE_PROJECT_DIR is set", () => {
     const result = runRegistered("bash-guard", ROOT, DENIED_COMMAND);
     expect(result.stdout.toString()).toContain('"permissionDecision":"deny"');
@@ -134,6 +139,10 @@ describe("docs/security.md", () => {
 
   test("explains the shell mode of the prompt", () => {
     expect(security).toContain("`!`");
+  });
+
+  test("says the mise exec rule is best-effort", () => {
+    expect(security).toContain("ベストエフォート");
   });
 
   test("explains what happens when the hook times out", () => {

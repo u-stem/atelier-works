@@ -28,6 +28,11 @@ describe("run.sh", () => {
     ).toBe(2);
   });
 
+  test("tells how to recover when bun and mise are missing", () => {
+    const result = launch(["bash-guard"], DENIED_COMMAND, "/nonexistent");
+    expect(result.stderr.toString()).toContain("! prefix");
+  });
+
   test("exits with 2 for an invalid hook name", () => {
     expect(launch(["../x"], DENIED_COMMAND, PATH_WITH_BUN).exitCode).toBe(2);
   });

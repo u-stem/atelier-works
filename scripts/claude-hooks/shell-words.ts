@@ -25,6 +25,8 @@ export type Word = {
 export type SimpleCommand = {
   readonly words: readonly Word[];
   readonly redirects: readonly Word[];
+  /** `redirects`のうち、書き込みになるもの(`>`、`>>`、`>|`、`&>`、`<>`の先)。`<`の先は含まない。 */
+  readonly writeTargets: readonly Word[];
   readonly inputs: readonly Word[];
 };
 
@@ -32,23 +34,52 @@ export type ParseResult =
   | { readonly ok: true; readonly commands: readonly SimpleCommand[] }
   | { readonly ok: false; readonly error: string };
 
+/** `mise exec`の呼び出し。`commandString`は`-c`か`--command`の値、`inner`は起動するコマンドの語(前置きを外す前)。 */
+export type MiseExec = {
+  readonly commandString: Word | null;
+  readonly inner: readonly Word[];
+};
+
 export type StrippedCommand = {
   readonly assignments: readonly Word[];
   readonly words: readonly Word[];
   /** 外した前置きのコマンドの名前(`env`、`xargs`など)。 */
   readonly wrappers: readonly string[];
+  /** 最初に見つけた`mise exec`。無ければnull。 */
+  readonly mise: MiseExec | null;
 };
+
+/** 実行時に今のブランチ名になる置換。push先に書いても、ブランチが決まらない語として扱わない。 */
+export const CURRENT_BRANCH_SUBSTITUTIONS: readonly string[] = [
+  "$(git branch --show-current)",
+  "$(git rev-parse --abbrev-ref HEAD)",
+];
 
 /** 変数代入の語(`NAME=value`)。 */
 export const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 
-const SHELLS: ReadonlySet<string> = new Set([
+export const SHELLS: ReadonlySet<string> = new Set([
   "sh",
   "bash",
   "zsh",
   "dash",
   "ksh",
+  "ash",
+  "mksh",
+  "fish",
+  "csh",
+  "tcsh",
 ]);
+
+/** シェルの起動なら、シェルに渡す引数の語を返す(`busybox sh`も含む)。シェルでなければnull。 */
+export function shellArguments(words: readonly Word[]): readonly Word[] | null {
+  const program = baseName(words[0]?.text ?? "");
+  if (SHELLS.has(program)) return words.slice(1);
+  if (program === "busybox" && SHELLS.has(baseName(words[1]?.text ?? ""))) {
+    return words.slice(2);
+  }
+  return null;
+}
 
 /** 入れ子の深さの上限。深すぎる入力で処理が止まらないようにする。 */
 const MAX_DEPTH = 8;
@@ -67,12 +98,29 @@ const TRANSPARENT_WORDS: ReadonlySet<string> = new Set([
   "done",
   "while",
   "until",
-  "time",
-  "exec",
-  "command",
   "builtin",
   "nohup",
   "noglob",
+]);
+
+/** 後ろの語を実行するだけで、自分のオプションを持つ語。オプションだけを読み飛ばす(`command -v`は問い合わせなので外さない)。 */
+const TRANSPARENT_OPTIONS: ReadonlyMap<
+  string,
+  { readonly flags: ReadonlySet<string>; readonly values: ReadonlySet<string> }
+> = new Map([
+  ["time", { flags: new Set(["-p"]), values: new Set<string>() }],
+  ["command", { flags: new Set(["-p"]), values: new Set<string>() }],
+  ["exec", { flags: new Set(["-c", "-l"]), values: new Set(["-a"]) }],
+]);
+
+/** `mise exec`の値を取るオプション。 */
+const MISE_VALUE_OPTIONS: ReadonlySet<string> = new Set([
+  "-C",
+  "--cd",
+  "-j",
+  "--jobs",
+  "-E",
+  "--env",
 ]);
 
 /** 前置きのコマンドと、その値を取るオプション。値の語も一緒に外す。 */
@@ -113,35 +161,99 @@ export function baseName(path: string): string {
 export function stripWrappers(words: readonly Word[]): StrippedCommand {
   const assignments: Word[] = [];
   const wrappers: string[] = [];
+  let mise: MiseExec | null = null;
   let index = 0;
   while (index < words.length) {
     const word = words[index];
     if (word === undefined) break;
     const text = word.text;
+    const transparent = TRANSPARENT_OPTIONS.get(text);
     if (ASSIGNMENT.test(text)) {
       assignments.push(word);
       index += 1;
     } else if (TRANSPARENT_WORDS.has(text)) {
       index += 1;
+    } else if (transparent !== undefined) {
+      index = skipTransparentOptions(words, index + 1, transparent);
     } else if (WRAPPER_VALUE_OPTIONS.has(text)) {
       wrappers.push(text);
       index = skipWrapperOptions(words, index + 1, text);
     } else if (text === "mise" && isMiseExec(words[index + 1])) {
       wrappers.push(text);
-      const separator = words.findIndex(
-        (candidate, at) => at > index && candidate.text === "--",
-      );
-      if (separator === -1) break;
-      index = separator + 1;
+      const read = readMiseExec(words, index + 2);
+      mise ??= read.mise;
+      index = read.next;
     } else {
       break;
     }
   }
-  return { assignments, words: words.slice(index), wrappers };
+  return { assignments, words: words.slice(index), wrappers, mise };
 }
 
 function isMiseExec(word: Word | undefined): boolean {
   return word?.text === "exec" || word?.text === "x";
+}
+
+/**
+ * `mise exec`のオプションと、ツールの指定(`node@22`)を読み飛ばし、起動するコマンドの位置を返す。
+ * `--`があれば、その後ろが起動するコマンドである。`-c`と`--command`の値はシェルの文字列で、起動するコマンドは無い。
+ */
+function readMiseExec(
+  words: readonly Word[],
+  start: number,
+): { readonly mise: MiseExec; readonly next: number } {
+  for (let index = start; index < words.length; index += 1) {
+    const word = words[index];
+    if (word === undefined) break;
+    const text = word.text;
+    if (text === "--") {
+      return {
+        mise: { commandString: null, inner: words.slice(index + 1) },
+        next: index + 1,
+      };
+    }
+    if (text === "-c" || text === "--command") {
+      const value = words[index + 1] ?? null;
+      return {
+        mise: { commandString: value, inner: [] },
+        next: words.length,
+      };
+    }
+    if (text.startsWith("--command=")) {
+      const value: Word = { ...word, text: text.slice("--command=".length) };
+      return {
+        mise: { commandString: value, inner: [] },
+        next: words.length,
+      };
+    }
+    if (MISE_VALUE_OPTIONS.has(text)) {
+      index += 1;
+    } else if (!text.startsWith("-") && !text.includes("@")) {
+      return {
+        mise: { commandString: null, inner: words.slice(index) },
+        next: index,
+      };
+    }
+  }
+  return { mise: { commandString: null, inner: [] }, next: words.length };
+}
+
+function skipTransparentOptions(
+  words: readonly Word[],
+  start: number,
+  options: {
+    readonly flags: ReadonlySet<string>;
+    readonly values: ReadonlySet<string>;
+  },
+): number {
+  let index = start;
+  while (index < words.length) {
+    const text = words[index]?.text ?? "";
+    if (options.values.has(text)) index += 2;
+    else if (options.flags.has(text)) index += 1;
+    else break;
+  }
+  return index;
 }
 
 function skipWrapperOptions(
@@ -201,6 +313,9 @@ class Parser {
   private readonly depth: number;
   private words: Word[] = [];
   private redirects: Word[] = [];
+  private writeTargets: Word[] = [];
+  private redirectOperator = "";
+  private redirectWrites = false;
   private text = "";
   private inWord = false;
   private dynamic = false;
@@ -362,7 +477,9 @@ class Parser {
     if (!this.inWord) return;
     const word: Word = {
       text: this.text,
-      dynamic: this.dynamic,
+      // 今のブランチ名になる置換だけの語は、値が決まっているものとして扱う。
+      dynamic:
+        this.dynamic && !CURRENT_BRANCH_SUBSTITUTIONS.includes(this.text),
       glob: this.glob,
     };
     if (this.hereStringNextWord) {
@@ -370,6 +487,9 @@ class Parser {
       this.inputs.push(word);
     } else if (this.redirectNextWord) {
       this.redirects.push(word);
+      if (this.redirectWrites && !this.isDescriptorTarget(word)) {
+        this.writeTargets.push(word);
+      }
       this.redirectNextWord = false;
     } else if (this.isCaseKeyword(word)) {
       // `case`、`in`、`esac`は制御構文の語で、コマンドの語にしない。
@@ -453,10 +573,12 @@ class Parser {
     const command: SimpleCommand = {
       words: this.words,
       redirects: this.redirects,
+      writeTargets: this.writeTargets,
       inputs,
     };
     this.words = [];
     this.redirects = [];
+    this.writeTargets = [];
     for (const heredoc of this.heredocs) heredoc.target ??= inputs;
     this.out.push(command);
     this.expandNested(command);
@@ -468,8 +590,9 @@ class Parser {
     const program = words[0];
     if (program === undefined) return;
     const name = baseName(program.text);
-    if (SHELLS.has(name)) {
-      const script = shellScriptArgument(words.slice(1));
+    const shellArgs = shellArguments(words);
+    if (shellArgs !== null) {
+      const script = shellScriptArgument(shellArgs);
       if (script !== null)
         collectCommands(script.text, this.out, this.depth + 1);
     } else if (name === "eval") {
@@ -500,8 +623,16 @@ class Parser {
     const operator = /^(&>>|&>|>>|>&|>\||<&|<>|>|<)/.exec(
       this.source.slice(this.position),
     );
-    this.position += operator?.[0].length ?? 1;
+    const text = operator?.[0] ?? "<";
+    this.position += text.length;
     this.redirectNextWord = true;
+    this.redirectOperator = text;
+    this.redirectWrites = text !== "<" && text !== "<&";
+  }
+
+  /** `>&`の先がファイル記述子の番号(`2>&1`の`1`)や`-`なら真。ファイルへの書き込みではない。 */
+  private isDescriptorTarget(word: Word): boolean {
+    return this.redirectOperator === ">&" && /^(\d+-?|-)$/.test(word.text);
   }
 
   private readHeredocDelimiter(): void {
@@ -641,8 +772,15 @@ class Parser {
         this.depth + 1,
       );
       nested.parseList(true);
+      const inner = this.source
+        .slice(this.position + 2, nested.position - 1)
+        .trim()
+        .replace(/\s+/g, " ");
+      const marker = `$(${inner})`;
       this.position = nested.position;
-      this.markDynamic("$(...)");
+      this.markDynamic(
+        CURRENT_BRANCH_SUBSTITUTIONS.includes(marker) ? marker : "$(...)",
+      );
       return;
     }
     if (next === "{") {

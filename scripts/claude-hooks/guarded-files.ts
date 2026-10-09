@@ -117,6 +117,7 @@ const GREP_SHORT_VALUE_FLAGS: ReadonlySet<string> = new Set([
 ]);
 /** rgの短いオプションのうち、値を取るもの。 */
 const RG_SHORT_VALUE_FLAGS: ReadonlySet<string> = new Set([
+  "d",
   "e",
   "f",
   "g",
@@ -180,6 +181,22 @@ const RG_LONG_VALUE_OPTIONS: ReadonlySet<string> = new Set([
   "--context-separator",
   "--field-context-separator",
   "--field-match-separator",
+  "--max-columns",
+  "--hyperlink-format",
+  "--type-clear",
+  "--hostname-bin",
+]);
+
+/** `find`のオプションのうち、次の語がファイル名のパターンになるもの。ファイルの読み取りではない。 */
+const FIND_PATTERN_OPTIONS: ReadonlySet<string> = new Set([
+  "-name",
+  "-iname",
+  "-path",
+  "-ipath",
+  "-regex",
+  "-iregex",
+  "-wholename",
+  "-iwholename",
 ]);
 
 export const SECRET_REASONS = {
@@ -205,6 +222,14 @@ export function findSecretReference(
     if (hit !== null) return SECRET_REASONS.secretFile(hit);
   }
   const exempt = new Set<Word>();
+  if (program === "find") {
+    words.forEach((word, index) => {
+      const value = words[index + 1];
+      if (FIND_PATTERN_OPTIONS.has(word.text) && value !== undefined) {
+        exempt.add(value);
+      }
+    });
+  }
   const search = searchArguments(program, words);
   if (search !== null) {
     const parsed = parseSearchArguments(
