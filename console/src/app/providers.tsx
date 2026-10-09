@@ -5,6 +5,7 @@ import {
 } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { shouldRetryQuery } from "../api/queryPolicy.ts";
+import { Toaster } from "../components/ui/sonner.tsx";
 import { TooltipProvider } from "../components/ui/tooltip.tsx";
 import { authStore } from "./authState.ts";
 
@@ -34,7 +35,10 @@ const queryClient = createQueryClient();
 export function AppProviders({ children }: { children: ReactNode }) {
   return (
     <QueryClientProvider client={queryClient}>
-      <TooltipProvider>{children}</TooltipProvider>
+      <TooltipProvider>
+        {children}
+        <Toaster />
+      </TooltipProvider>
     </QueryClientProvider>
   );
 }

@@ -1,9 +1,9 @@
 // 要対応の画面で選んだ承認依頼を、URLの`?approval=<id>`に持つための読み書き。
 // URLの引数は選択を表すだけで、承認や却下などの操作は起こさない。
 
-export const APPROVAL_PARAM = "approval";
+import { parseIdParam } from "./routeParams.ts";
 
-const POSITIVE_INTEGER = /^[1-9][0-9]*$/;
+export const APPROVAL_PARAM = "approval";
 
 /**
  * `?approval=`の値を承認依頼のidとして読む。
@@ -11,12 +11,7 @@ const POSITIVE_INTEGER = /^[1-9][0-9]*$/;
  * 引数が繰り返されたときは最初の値を使う。
  */
 export function parseApprovalParam(params: URLSearchParams): number | null {
-  const value = params.get(APPROVAL_PARAM);
-  if (value === null || !POSITIVE_INTEGER.test(value)) {
-    return null;
-  }
-  const id = Number(value);
-  return Number.isSafeInteger(id) ? id : null;
+  return parseIdParam(params.get(APPROVAL_PARAM));
 }
 
 /**
