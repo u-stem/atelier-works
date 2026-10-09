@@ -195,6 +195,21 @@ describe(".claude/agents", () => {
     expect(body("triage")).toContain("回答済み");
   });
 
+  test("makes triage settle an answered question with the verified basis", () => {
+    expect(body("triage")).toContain("回答済み / <要旨> / <確かめた根拠>");
+  });
+
+  test("keeps round-specific handling of questions out of security-auditor", () => {
+    expect(body("security-auditor")).not.toContain("上限のラウンド");
+  });
+
+  test.each(["code-reviewer", "design-reviewer", "requirements-reviewer"])(
+    "keeps %s from re-raising settled topics without new grounds",
+    (name) => {
+      expect(body(name)).toContain("新しい根拠が無ければ出し直さない");
+    },
+  );
+
   test("makes triage report the severity before and after raising it", () => {
     expect(body("triage")).toContain("重さ(前→後)");
   });
