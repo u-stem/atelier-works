@@ -10,6 +10,7 @@ import {
 } from "./release.ts";
 
 const OWN = "assets/index-AAAA.js";
+const ORIGIN = "https://factory.example";
 
 function status(state: ReleaseStatus["state"]): ReleaseStatus {
   return {
@@ -40,7 +41,10 @@ function judge(overrides: {
 describe("ownAssetPath", () => {
   test("returns the asset path under /console/assets/", () => {
     expect(
-      ownAssetPath("https://factory.example/console/assets/index-AAAA.js"),
+      ownAssetPath(
+        "https://factory.example/console/assets/index-AAAA.js",
+        ORIGIN,
+      ),
     ).toBe("assets/index-AAAA.js");
   });
 
@@ -48,68 +52,123 @@ describe("ownAssetPath", () => {
     expect(
       ownAssetPath(
         "https://factory.example/console/assets/index-AAAA.js?x=1#y",
+        ORIGIN,
       ),
     ).toBe("assets/index-AAAA.js");
   });
 
   test("returns null for the dev server", () => {
-    expect(ownAssetPath("http://localhost:5173/src/lib/release.ts")).toBeNull();
+    expect(
+      ownAssetPath("http://localhost:5173/src/lib/release.ts", ORIGIN),
+    ).toBeNull();
   });
 
   test("returns null for a path outside /console/assets/", () => {
-    expect(ownAssetPath("https://factory.example/assets/index.js")).toBeNull();
+    expect(
+      ownAssetPath("https://factory.example/assets/index.js", ORIGIN),
+    ).toBeNull();
   });
 
   test("returns null for the assets directory itself", () => {
-    expect(ownAssetPath("https://factory.example/console/assets/")).toBeNull();
+    expect(
+      ownAssetPath("https://factory.example/console/assets/", ORIGIN),
+    ).toBeNull();
+  });
+
+  test("returns null for another origin", () => {
+    expect(
+      ownAssetPath("https://cdn.example/console/assets/index-AAAA.js", ORIGIN),
+    ).toBeNull();
+  });
+
+  test("returns null for an encoded name", () => {
+    expect(
+      ownAssetPath("https://factory.example/console/assets/a%2Fb.js", ORIGIN),
+    ).toBeNull();
   });
 
   test("returns null for a URL that cannot be parsed", () => {
-    expect(ownAssetPath("not a url")).toBeNull();
+    expect(ownAssetPath("not a url", ORIGIN)).toBeNull();
   });
 });
 
 describe("ownAssetPaths", () => {
   test("collects the assets under /console/assets/", () => {
     expect(
-      ownAssetPaths([
-        "https://factory.example/console/assets/index-AAAA.js",
-        "https://factory.example/console/assets/index-BBBB.css",
-      ]),
+      ownAssetPaths(
+        [
+          "https://factory.example/console/assets/index-AAAA.js",
+          "https://factory.example/console/assets/index-BBBB.css",
+        ],
+        ORIGIN,
+      ),
     ).toEqual(new Set(["assets/index-AAAA.js", "assets/index-BBBB.css"]));
   });
 
   test("includes hand-placed files such as the theme init script", () => {
     expect(
-      ownAssetPaths(["https://factory.example/console/assets/theme-init-1.js"]),
+      ownAssetPaths(
+        ["https://factory.example/console/assets/theme-init-1.js"],
+        ORIGIN,
+      ),
     ).toEqual(new Set(["assets/theme-init-1.js"]));
   });
 
   test("drops URLs outside /console/assets/", () => {
     expect(
-      ownAssetPaths([
-        "https://factory.example/console/assets/index-AAAA.js",
-        "https://cdn.example/lib.js",
-        "https://factory.example/api/x.js",
-      ]),
+      ownAssetPaths(
+        [
+          "https://factory.example/console/assets/index-AAAA.js",
+          "https://cdn.example/lib.js",
+          "https://factory.example/api/x.js",
+        ],
+        ORIGIN,
+      ),
     ).toEqual(new Set(["assets/index-AAAA.js"]));
+  });
+
+  test("drops an asset of another origin", () => {
+    expect(
+      ownAssetPaths(["https://cdn.example/console/assets/x.js"], ORIGIN).size,
+    ).toBe(0);
+  });
+
+  test("drops an asset of the same host on another port", () => {
+    expect(
+      ownAssetPaths(
+        ["https://factory.example:8443/console/assets/x.js"],
+        ORIGIN,
+      ).size,
+    ).toBe(0);
+  });
+
+  test("drops an asset with an encoded name", () => {
+    expect(
+      ownAssetPaths(["https://factory.example/console/assets/a%20b.js"], ORIGIN)
+        .size,
+    ).toBe(0);
   });
 
   test("merges duplicate URLs", () => {
     expect(
-      ownAssetPaths([
-        "https://factory.example/console/assets/a.js",
-        "https://factory.example/console/assets/a.js?v=1",
-      ]).size,
+      ownAssetPaths(
+        [
+          "https://factory.example/console/assets/a.js",
+          "https://factory.example/console/assets/a.js?v=1",
+        ],
+        ORIGIN,
+      ).size,
     ).toBe(1);
   });
 
   test("returns an empty set for the dev server", () => {
-    expect(ownAssetPaths(["http://localhost:5173/src/main.tsx"]).size).toBe(0);
+    expect(
+      ownAssetPaths(["http://localhost:5173/src/main.tsx"], ORIGIN).size,
+    ).toBe(0);
   });
 
   test("returns an empty set for no URLs", () => {
-    expect(ownAssetPaths([]).size).toBe(0);
+    expect(ownAssetPaths([], ORIGIN).size).toBe(0);
   });
 });
 

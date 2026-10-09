@@ -17,31 +17,35 @@ export type ReleaseStatus = {
 const ASSETS_PREFIX = "/console/assets/";
 
 /**
- * 実行中のモジュールのURLから、配信物の中の自分のファイル名(`assets/<name>`)を返す。
- * `/console/assets/`の下でなければ(開発サーバーなど)nullを返す。nullなら監視しない。
+ * URLから、配信物の中のファイル名(`assets/<name>`)を返す。
+ * 基準のオリジンと違うURL、`/console/assets/`の下でないURL、符号化した名前(`%`を含む)はnullを返す。
+ * 符号化した名前は、manifestのキーと突き合わせられないため、常に「無い」と判定してしまう。
  */
-export function ownAssetPath(moduleUrl: string): string | null {
-  let pathname: string;
+export function ownAssetPath(url: string, origin: string): string | null {
+  let parsed: URL;
   try {
-    pathname = new URL(moduleUrl).pathname;
+    parsed = new URL(url);
   } catch {
     return null;
   }
-  if (!pathname.startsWith(ASSETS_PREFIX)) {
+  if (parsed.origin !== origin || !parsed.pathname.startsWith(ASSETS_PREFIX)) {
     return null;
   }
-  const name = pathname.slice(ASSETS_PREFIX.length);
-  return name === "" ? null : `assets/${name}`;
+  const name = parsed.pathname.slice(ASSETS_PREFIX.length);
+  return name === "" || name.includes("%") ? null : `assets/${name}`;
 }
 
 /**
  * 画面が参照するファイルのURLの一覧から、配信物の中の自分のファイル名の集合を作る。
- * `/console/assets/`の下でないURLは捨てる。空なら(開発サーバーなど)監視しない。
+ * 対象にならないURLは捨てる(条件は`ownAssetPath`)。空なら監視しない。
  */
-export function ownAssetPaths(urls: readonly string[]): ReadonlySet<string> {
+export function ownAssetPaths(
+  urls: readonly string[],
+  origin: string,
+): ReadonlySet<string> {
   const names = new Set<string>();
   for (const url of urls) {
-    const name = ownAssetPath(url);
+    const name = ownAssetPath(url, origin);
     if (name !== null) {
       names.add(name);
     }

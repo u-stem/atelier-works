@@ -66,7 +66,12 @@ Caddyは、`/console/`の下を次の経路で返す。
 - `useReleaseWatch.ts`: 周期の管理
 
 自分の版は、画面が参照するscriptとstylesheetのうち、`/console/assets/`の下にあるファイル名の集合で見分ける。
-集合が空のとき(開発サーバーなど)は確かめない。
+確かめるたびに、DOMから集合を取り直す。後から読み込んだchunkの参照も拾うためである。
+基準のオリジンと違うURLと、`%`を含む名前は集合に入れない。
+集合が空の回は、何も取りに行かない。
+開発サーバーは`index.html`の`/console/assets/`の参照にbaseを前置するので、集合が空になる。
+集合が空でなくても、開発サーバーには`/console/manifest.json`が無いので、前回の判定(出さない)を保つ。
+`index.html`に直書きした`/console/assets/`の参照は、すべて`console/public/assets/`に置く。Viteが`dist/assets/`に写し、`manifest.json`に載せるためである。載らない参照があると、再読み込みしても消えない帯が出る。
 ビルドに版のshaは埋め込まない。版ごとに中身が変わると、`console_fetcher`の中身による同一判定と`revoked.json`の照合が働かなくなるためである。
 
 判定は次のとおり。

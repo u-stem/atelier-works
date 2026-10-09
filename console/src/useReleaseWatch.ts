@@ -22,17 +22,16 @@ function referencedUrls(): string[] {
 /**
  * 開いたままのタブが、配信中の版から外れていないかを確かめ続ける。
  * 表示した直後と、その後60秒ごと、タブが見える状態に戻ったときに確かめる。
- * 画面が参照するファイルが`/console/assets/`の下に無いとき(開発サーバーなど)は、
- * 何もせず none を返す。
+ * 自分のファイルの集合は、確かめるたびにDOMから取り直す。後から読み込んだchunkの
+ * modulepreloadとstylesheetも拾うためである。
+ * 集合が空の回(`/console/assets/`の下にファイルが無い)は何もしない。
+ * 開発サーバーは、index.htmlの`/console/assets/`の参照にbaseを前置して集合を空にする。
+ * 空でなくても`/console/manifest.json`が無いので、前回の判定(none)を保つ。
  */
 export function useReleaseWatch(): ReleaseNotice {
   const [notice, setNotice] = useState<ReleaseNotice>("none");
 
   useEffect(() => {
-    const ownAssets = ownAssetPaths(referencedUrls());
-    if (ownAssets.size === 0) {
-      return;
-    }
     let active = true;
     let running = false;
     let latest: ReleaseNotice = "none";
@@ -43,6 +42,10 @@ export function useReleaseWatch(): ReleaseNotice {
       }
       running = true;
       try {
+        const ownAssets = ownAssetPaths(referencedUrls(), location.origin);
+        if (ownAssets.size === 0) {
+          return;
+        }
         latest = await checkRelease(
           (input, init) => fetch(input, init),
           ownAssets,
@@ -51,6 +54,8 @@ export function useReleaseWatch(): ReleaseNotice {
         if (active) {
           setNotice(latest);
         }
+      } catch {
+        // 想定外の失敗でも、表示は変えず、未処理のrejectionにもしない。
       } finally {
         running = false;
       }
