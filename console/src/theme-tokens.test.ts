@@ -36,6 +36,8 @@ type Pair = {
   readonly min: number;
   /** 背景に重ねる薄い色(バッジの背景)。 */
   readonly tint?: string;
+  /** `tint`を重ねる割合。省略するとバッジの`BADGE_TINT`になる。 */
+  readonly tintAmount?: number;
 };
 
 const TEXT_SURFACES = [
@@ -54,7 +56,16 @@ const MEANING_COLORS = [
   "warning",
   "success",
 ] as const;
-const MEANING_SURFACES = ["background", "card", "sidebar", "selected"] as const;
+const MEANING_SURFACES = [
+  "background",
+  "card",
+  "sidebar",
+  "selected",
+  "accent",
+] as const;
+
+const BADGE_TINT = 0.14;
+const BANNER_TINT = 0.07;
 
 const PAIRS: Pair[] = [
   ...TEXT_SURFACES.flatMap((bg): Pair[] => [
@@ -72,6 +83,22 @@ const PAIRS: Pair[] = [
     { fg, bg: "card", min: 4.5, tint: fg },
     { fg, bg: "background", min: 4.5, tint: fg },
   ]),
+  // 面の上に載せる、意味の色のバッジ(背景に意味の色を薄く重ねる)。
+  ...MEANING_COLORS.flatMap((fg): Pair[] =>
+    (["selected", "accent"] as const).map(
+      (bg): Pair => ({ fg, bg, min: 4.5, tint: fg }),
+    ),
+  ),
+  // AuthBannerの帯(warningを`BANNER_TINT`で重ねた面)の上の文字。
+  ...(["foreground", "muted-foreground"] as const).map(
+    (fg): Pair => ({
+      fg,
+      bg: "background",
+      min: 4.5,
+      tint: "warning",
+      tintAmount: BANNER_TINT,
+    }),
+  ),
   { fg: "destructive-foreground", bg: "destructive", min: 4.5 },
   { fg: "warning-foreground", bg: "warning", min: 4.5 },
   { fg: "success-foreground", bg: "success", min: 4.5 },
@@ -83,8 +110,6 @@ const PAIRS: Pair[] = [
   { fg: "primary", bg: "sidebar", min: 3 },
   ...MEANING_SURFACES.map((bg): Pair => ({ fg: "notice-mark", bg, min: 3 })),
 ];
-
-const BADGE_TINT = 0.14;
 
 describe("theme tokens", () => {
   test("defines the tokens that the pairs use", () => {
@@ -99,7 +124,11 @@ describe("theme tokens", () => {
         const background =
           pair.tint === undefined
             ? base
-            : mixLinear(base, color(pair.tint, slot), BADGE_TINT);
+            : mixLinear(
+                base,
+                color(pair.tint, slot),
+                pair.tintAmount ?? BADGE_TINT,
+              );
         expect(
           contrastRatio(color(pair.fg, slot), background),
         ).toBeGreaterThanOrEqual(pair.min);

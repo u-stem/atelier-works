@@ -26,7 +26,7 @@
 
   --primary: light-dark(oklch(0.46 0.19 272), oklch(0.7 0.15 275));
   --primary-foreground: light-dark(oklch(0.99 0.005 272), oklch(0.15 0.03 275));
-  --selected: light-dark(oklch(0.945 0.025 275), oklch(0.29 0.035 275));
+  --selected: light-dark(oklch(0.945 0.025 275), oklch(0.28 0.035 275));
   --selected-foreground: light-dark(oklch(0.25 0.06 275), oklch(0.96 0.02 275));
   --secondary: light-dark(oklch(0.95 0.006 265), oklch(0.27 0.015 265));
   --secondary-foreground: light-dark(
@@ -36,16 +36,16 @@
   --accent: light-dark(oklch(0.94 0.008 265), oklch(0.27 0.015 265));
   --accent-foreground: light-dark(oklch(0.2 0.02 265), oklch(0.96 0.006 265));
 
-  --approval: light-dark(oklch(0.48 0.17 250), oklch(0.86 0.09 245));
-  --destructive: light-dark(oklch(0.5 0.2 27), oklch(0.88 0.09 22));
+  --approval: light-dark(oklch(0.48 0.17 250), oklch(0.9 0.08 245));
+  --destructive: light-dark(oklch(0.5 0.2 27), oklch(0.93 0.07 22));
   --destructive-foreground: light-dark(
     oklch(0.99 0.005 27),
     oklch(0.15 0.02 265)
   );
-  --warning: light-dark(oklch(0.48 0.11 70), oklch(0.87 0.13 85));
+  --warning: light-dark(oklch(0.48 0.11 70), oklch(0.9 0.12 85));
   --warning-foreground: light-dark(oklch(0.99 0.005 70), oklch(0.15 0.02 265));
-  --notice-mark: light-dark(oklch(0.6 0.14 70), oklch(0.87 0.13 85));
-  --success: light-dark(oklch(0.44 0.12 152), oklch(0.84 0.13 155));
+  --notice-mark: light-dark(oklch(0.6 0.14 70), oklch(0.9 0.12 85));
+  --success: light-dark(oklch(0.44 0.12 152), oklch(0.88 0.12 155));
   --success-foreground: light-dark(oklch(0.99 0.005 152), oklch(0.15 0.02 265));
 
   --border: light-dark(oklch(0.9 0.008 265), oklch(0.3 0.014 265));
