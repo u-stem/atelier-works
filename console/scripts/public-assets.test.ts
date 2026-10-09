@@ -97,6 +97,10 @@ describe("console/public/drawio.html", () => {
     expect(scriptTags.filter((tag) => /type\s*=/i.test(tag))).toEqual([]);
   });
 
+  test("hides overflow so the page never shows its own scrollbars", () => {
+    expect(html).toMatch(/overflow:\s*hidden/);
+  });
+
   test("has no inline event handler", () => {
     expect(html).not.toMatch(/\son[a-z]+\s*=/i);
   });
