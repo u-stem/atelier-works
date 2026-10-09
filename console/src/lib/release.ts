@@ -101,7 +101,7 @@ export function parseReleaseStatus(value: unknown): ReleaseStatus | null {
 }
 
 export type ReleaseJudgement = {
-  /** 自分のファイル名の集合。空なら監視しない。 */
+  /** 自分のファイル名の集合。空なら監視しないので、前回の判定を保つ。 */
   ownAssets: ReadonlySet<string>;
   /** 配信中の版のファイル名の集合。取得できなかったときはnull。 */
   manifestFiles: ReadonlySet<string> | null;
@@ -118,11 +118,15 @@ export type ReleaseJudgement = {
  * - 自分のファイルがすべて配信中の版にあれば none。
  * - 1つでも無ければ suggest。さらに、版を戻して固定している(pinned)か、
  *   無かったファイルのどれかがもう取れなければ urge。
- * - manifestを取れなかったときは前回の判定を保つ。
+ * - manifestを取れなかったとき、自分のファイルが無いときは前回の判定を保つ。
  * - 一度 urge になったら下げない。取り下げられた版は戻らないため。
  */
 export function judgeRelease(input: ReleaseJudgement): ReleaseNotice {
-  if (input.previous === "urge" || input.manifestFiles === null) {
+  if (
+    input.previous === "urge" ||
+    input.manifestFiles === null ||
+    input.ownAssets.size === 0
+  ) {
     return input.previous;
   }
   const { manifestFiles } = input;

@@ -300,10 +300,14 @@ describe("judgeRelease", () => {
     expect(judge({ status: status("pinned") })).toBe("none");
   });
 
-  test("is none when there is no own asset to watch", () => {
-    expect(judge({ ownAssets: new Set(), manifestFiles: new Set() })).toBe(
-      "none",
-    );
+  test("keeps the previous result when there is no own asset to watch", () => {
+    expect(
+      judge({
+        ownAssets: new Set(),
+        manifestFiles: new Set(),
+        previous: "suggest",
+      }),
+    ).toBe("suggest");
   });
 
   test("suggests a reload when only one of the own assets is not in the manifest", () => {

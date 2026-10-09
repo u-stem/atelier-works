@@ -18,6 +18,20 @@ function urls(...elements: ReferenceElement[]): string[] {
 }
 
 describe("referencedUrls", () => {
+  test("queries script and link elements", () => {
+    const selectors: string[] = [];
+    referencedUrls(
+      {
+        querySelectorAll: (selector) => {
+          selectors.push(selector);
+          return [];
+        },
+      },
+      BASE,
+    );
+    expect(selectors).toEqual(["script, link"]);
+  });
+
   test("collects the src of a script", () => {
     expect(urls(element("SCRIPT", { src: "/console/assets/a.js" }))).toEqual([
       "https://factory.example/console/assets/a.js",
