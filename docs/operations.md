@@ -869,7 +869,8 @@ Factoryの資産は、すべて`factory`ワークスペースの`f/factory/**`�
 ### workerがプロセスを作れなくなったとき
 
 workerのコンテナは、`init: true`でdocker-initをPID 1にし、終了した子プロセスを回収する。ジョブが起こすgit、gh、esbuildの子プロセスは、親より長く残ることがある。initが無いと、回収されないプロセスが上限を使い切り、すべてのジョブが`errno=11`(EAGAIN)で失敗する。
-上限は、defaultのworker(`windmill_worker`)が`pids: 512`、Console用のworker(`windmill_worker_console`)が`pids: 256`である。
+上限は、defaultとnativeのworker(`windmill_worker`、`windmill_worker_native`)が`pids: 512`である。
+Console用のworker(`windmill_worker_console`)は`pids: 256`である。
 
 同じ症状が出たら、使用量を確かめてからworkerを再起動する。
 
