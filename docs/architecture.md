@@ -282,6 +282,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 <!-- generated:assets -->
 | path | 種別 | summary |
 | --- | --- | --- |
+| `f/factory/lib/console_status` | script | [LIB] Consoleの取り込みの状態 |
 | `f/factory/lib/console_support` | script | [LIB] Consoleの通知の重要度 |
 | `f/factory/lib/db` | script | [LIB] Data Tableアクセス |
 | `f/factory/lib/cleanup_db_support` | script | [LIB] DB掃除の純粋ロジック |

@@ -2,11 +2,19 @@
 // Appの各タブが読む`factory.v_*`ビューを1つのスクリプトの背後にまとめ、
 // AppのバックエンドのrunnableをインラインSQLの無い`type: script`の参照のままにする。
 
+import * as wmill from "windmill-client@1.817.0";
 import { isAbsolute, resolve } from "node:path";
 import { formatAuditPeriodLabel } from "../lib/audit_support.ts";
 import {
+  classifyFetcherStatus,
+  type FetcherState,
+  loadFetcherStatus,
+  nextActionForAssessment,
+} from "../lib/console_status.ts";
+import {
   ACTIONABLE_WORK_ITEM_STATUSES,
   INFO_NOTICE_KINDS,
+  INFO_NOTICE_WINDOW_DAYS,
   isNoticeResolvable,
   type NoticeSeverity,
   noticeSeverity,
@@ -54,7 +62,11 @@ const CONSOLE_ROW_VIEWS = [
 ] as const;
 
 /** 1つのオブジェクトを返すビュー。行の配列を返す`CONSOLE_ROW_VIEWS`とは返り値の形が違う。 */
-const CONSOLE_OBJECT_VIEWS = ["summary", "work_item_detail"] as const;
+const CONSOLE_OBJECT_VIEWS = [
+  "summary",
+  "work_item_detail",
+  "system_status",
+] as const;
 
 const CONSOLE_VIEWS = [...CONSOLE_ROW_VIEWS, ...CONSOLE_OBJECT_VIEWS] as const;
 
@@ -1430,6 +1442,223 @@ export async function runWorkItemDetail(
   };
 }
 
+/** `deployed_sha`を持つ変数。`self_update`が反映のたびに更新する。 */
+const DEPLOYED_SHA_VARIABLE = "f/factory/deployed_sha";
+
+/** 直近の反映(`factory.deployments`の1行)。 */
+export type DeploymentRow = {
+  readonly sha_from: string | null;
+  readonly sha_to: string;
+  readonly changed_paths: string[];
+  readonly result: string;
+  readonly needs_host_action: boolean;
+  readonly occurred_at: string;
+};
+
+function toDeploymentRow(row: SqlRow): DeploymentRow {
+  return {
+    sha_from: asNullableStr(row.sha_from, "sha_from"),
+    sha_to: asStr(row.sha_to, "sha_to"),
+    changed_paths: parseStringArray(row.changed_paths, "changed_paths"),
+    result: asStr(row.result, "result"),
+    needs_host_action: asBool(row.needs_host_action, "needs_host_action"),
+    occurred_at: asIsoDate(row.occurred_at, "occurred_at"),
+  };
+}
+
+/**
+ * Consoleの取り込み(`console_fetcher`)の状態。
+ * `status.json`を読めないか形が違えば`unavailable`で、読めれば判定を添える。
+ */
+export type FetcherReport =
+  | {
+      readonly availability: "unavailable";
+      readonly reason: "missing" | "invalid";
+    }
+  | {
+      readonly availability: "available";
+      readonly state: FetcherState;
+      readonly sha: string | null;
+      readonly checked_at: string;
+      readonly error: string | null;
+      readonly assessment: "ok" | "failed" | "stale";
+      readonly minutes_since_check: number | null;
+      readonly next_action: string | null;
+    };
+
+/** 作業項目の無い失敗(定期ジョブの失敗)。 */
+export type OrphanFailureRow = {
+  readonly job_failure_id: number;
+  readonly flow_path: string;
+  readonly job_id: string;
+  readonly step: string | null;
+  readonly error: string;
+  readonly occurred_at: string;
+};
+
+function toOrphanFailureRow(row: SqlRow): OrphanFailureRow {
+  return {
+    job_failure_id: asId(row.job_failure_id, "job_failure_id"),
+    flow_path: asStr(row.flow_path, "flow_path"),
+    job_id: asStr(row.job_id, "job_id"),
+    step: asNullableStr(row.step, "step"),
+    error: asStr(row.error, "error"),
+    occurred_at: asIsoDate(row.occurred_at, "occurred_at"),
+  };
+}
+
+/** 解決済みの通知。誰がいつ解決したかを持つ。記録が無い行では`null`。 */
+export type ResolvedNoticeRow = {
+  readonly notice_id: number;
+  readonly kind: string;
+  readonly message: string;
+  readonly created_at: string;
+  readonly resolved_by: string | null;
+  readonly resolved_at: string | null;
+};
+
+function toResolvedNoticeRow(row: SqlRow): ResolvedNoticeRow {
+  return {
+    notice_id: asId(row.notice_id, "notice_id"),
+    kind: asStr(row.kind, "kind"),
+    message: asStr(row.message, "message"),
+    created_at: asIsoDate(row.created_at, "created_at"),
+    resolved_by: asNullableStr(row.resolved_by, "resolved_by"),
+    resolved_at: asNullableIsoDate(row.resolved_at, "resolved_at"),
+  };
+}
+
+/** "system_status"ビューの結果。 */
+export type SystemStatus = {
+  readonly deployed_sha: string | null;
+  readonly deployment: DeploymentRow | null;
+  readonly fetcher: FetcherReport;
+  readonly orphan_failures: OrphanFailureRow[];
+  readonly info_notices: NoticeRow[];
+  readonly resolved_notices: ResolvedNoticeRow[];
+};
+
+/** `runSystemStatus`が使う外部の操作。テストでは差し替える。 */
+export type SystemStatusDeps = {
+  readonly sql: SqlClient;
+  readonly readFile: ReadTextFile;
+  readonly getVariable: (path: string) => Promise<string>;
+  readonly now: () => Date;
+};
+
+const defaultSystemStatusDeps: SystemStatusDeps = {
+  sql: defaultSqlClient,
+  readFile: readTextFile,
+  getVariable: (path) => wmill.getVariable(path),
+  now: () => new Date(),
+};
+
+async function readFetcherReport(
+  readFile: ReadTextFile,
+  now: Date,
+): Promise<FetcherReport> {
+  const loaded = await loadFetcherStatus(readFile);
+  if (loaded.kind !== "status") {
+    return { availability: "unavailable", reason: loaded.kind };
+  }
+  const { status } = loaded;
+  const assessment = classifyFetcherStatus(status, now);
+  return {
+    availability: "available",
+    state: status.state,
+    sha: status.sha,
+    checked_at: new Date(status.checked_at).toISOString(),
+    error: status.error,
+    assessment: assessment.verdict,
+    minutes_since_check:
+      assessment.verdict === "stale"
+        ? assessment.minutes_since_check
+        : Math.max(
+            0,
+            Math.floor(
+              (now.getTime() - new Date(status.checked_at).getTime()) / 60_000,
+            ),
+          ),
+    next_action: nextActionForAssessment(assessment),
+  };
+}
+
+/**
+ * システム画面のデータを返す。
+ * 反映の状態(`deployed_sha`と直近の反映)、Consoleの取り込みの状態、
+ * 作業項目の無い失敗、`info`の未解決の通知、解決済みの通知を集める。
+ * 作業項目の無い失敗と`info`の通知は、`INFO_NOTICE_WINDOW_DAYS`日より古いものを出さない。
+ * `deployed_sha`が読めなければ`null`にし、`status.json`が読めなければ`unavailable`にする。
+ * どちらも、画面のほかの部分を止めないためである。
+ */
+export async function runSystemStatus(
+  limit: number,
+  deps: SystemStatusDeps = defaultSystemStatusDeps,
+): Promise<SystemStatus> {
+  const { sql } = deps;
+  const now = deps.now();
+  const since = sinceIso(INFO_NOTICE_WINDOW_DAYS, now);
+
+  let deployedSha: string | null = null;
+  try {
+    const value = await deps.getVariable(DEPLOYED_SHA_VARIABLE);
+    deployedSha = value.length > 0 ? value : null;
+  } catch {
+    // 変数が読めなければ、反映した版は不明として扱う。
+  }
+
+  const fetcher = await readFetcherReport(deps.readFile, now);
+
+  const deploymentRows = await sql`
+    SELECT sha_from, sha_to, changed_paths, result, needs_host_action, occurred_at
+    FROM factory.deployments
+    ORDER BY occurred_at DESC, id DESC
+    LIMIT 1
+  `.fetch();
+
+  const orphanRows = await sql`
+    SELECT
+      id AS job_failure_id, flow_path, job_id, step,
+      left(error, ${SUMMARY_TEXT_LIMIT}::integer) AS error, occurred_at
+    FROM factory.job_failures
+    WHERE work_item_id IS NULL AND occurred_at >= ${since}::timestamptz
+    ORDER BY occurred_at DESC, id DESC
+    LIMIT ${limit}::integer
+  `.fetch();
+
+  const infoRows = await sql`
+    SELECT
+      id AS notice_id, kind, left(message, ${SUMMARY_TEXT_LIMIT}::integer) AS message,
+      resolved, created_at
+    FROM factory.notices
+    WHERE resolved = false
+      AND kind = ANY(${[...INFO_NOTICE_KINDS]}::text[])
+      AND created_at >= ${since}::timestamptz
+    ORDER BY created_at DESC
+    LIMIT ${limit}::integer
+  `.fetch();
+
+  const resolvedRows = await sql`
+    SELECT
+      id AS notice_id, kind, left(message, ${SUMMARY_TEXT_LIMIT}::integer) AS message,
+      created_at, resolved_by, resolved_at
+    FROM factory.notices
+    WHERE resolved = true
+    ORDER BY resolved_at DESC NULLS LAST, id DESC
+    LIMIT ${limit}::integer
+  `.fetch();
+
+  const deployment = deploymentRows[0];
+  return {
+    deployed_sha: deployedSha,
+    deployment: deployment === undefined ? null : toDeploymentRow(deployment),
+    fetcher,
+    orphan_failures: orphanRows.map(toOrphanFailureRow),
+    info_notices: infoRows.map(toNoticeRow),
+    resolved_notices: resolvedRows.map(toResolvedNoticeRow),
+  };
+}
+
 export type ConsoleQueryRow =
   | InboxRow
   | PipelineRow
@@ -1680,7 +1909,8 @@ export function resolvePositiveIntArg(
 export type ConsoleQueryResult =
   | ConsoleQueryRow[]
   | ConsoleSummary
-  | WorkItemDetail;
+  | WorkItemDetail
+  | SystemStatus;
 
 /**
  * Consoleが読む`view`の結果を返す。
@@ -1715,6 +1945,8 @@ export async function main(
           );
         }
         return await runWorkItemDetail(resolvedWorkItemId);
+      case "system_status":
+        return await runSystemStatus(resolvedLimit);
     }
   }
   if (!isOneOf(view, CONSOLE_ROW_VIEWS)) {

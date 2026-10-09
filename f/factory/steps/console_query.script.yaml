@@ -27,7 +27,8 @@ schema:
         requirements_index(要件定義の一覧) / requirements_doc(要件定義書1件の全文) /
         audit_index(監査の一覧) / audit_doc(監査1件の全文) /
         summary(要対応の件数と一覧。1つのオブジェクトを返す) /
-        work_item_detail(作業項目1件の概要と履歴。1つのオブジェクトを返す)のいずれか。
+        work_item_detail(作業項目1件の概要と履歴。1つのオブジェクトを返す) /
+        system_status(反映と取り込みの状態、作業項目の無い失敗、情報の通知、解決済みの通知。1つのオブジェクトを返す)のいずれか。
       default: null
       originalType: string
     work_item_id:

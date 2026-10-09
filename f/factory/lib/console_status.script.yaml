@@ -1,0 +1,9 @@
+summary: '[LIB] Consoleの取り込みの状態'
+description: 内部ライブラリです。直接実行するものではありません。取り込みのコンテナが書くstatus.jsonを読み、取り込みの状態を判定します。
+lock: '!inline f/factory/lib/console_status.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []
