@@ -109,6 +109,10 @@ describe("console/public/drawio.html", () => {
     expect(html).toMatch(/overflow-y:\s*auto/);
   });
 
+  test("reserves the scrollbar width so the width does not change when it appears", () => {
+    expect(html).toMatch(/scrollbar-gutter:\s*stable/);
+  });
+
   test("does not hide vertical overflow", () => {
     expect(html).not.toMatch(/overflow:\s*hidden/);
   });

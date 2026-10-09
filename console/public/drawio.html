@@ -6,6 +6,10 @@
     <meta name="referrer" content="no-referrer" />
     <title>draw.io</title>
     <style>
+      /* 縦のスクロールバーが出入りしても幅が変わらないようにする。変わると、ビューアが図を合わせ直して高さが変わり、高さの通知が往復する。 */
+      html {
+        scrollbar-gutter: stable;
+      }
       html,
       body {
         margin: 0;

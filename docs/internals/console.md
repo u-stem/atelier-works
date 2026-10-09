@@ -329,11 +329,11 @@ Caddyは、`/console/`の下を次の経路で返す。
 
 | パス | 返すもの | キャッシュ |
 | --- | --- | --- |
+| `/console` | `/console/`への308のリダイレクト。クエリ(`?approval=<id>`など)は保つ | - |
 | `/console/status.json` | ボリューム直下の`status.json`。無ければ404 | `no-store` |
 | `/console/assets/*` | 共有の`assets/`。無ければ404 | 長期(immutable) |
-| `/console/drawio.html` | `current/`の`drawio.html`。無ければ404 | `no-cache` |
-| `/console` | `/console/`への308のリダイレクト。クエリ(`?approval=<id>`など)は保つ | - |
 | `/console/drawio/*` | `current/`の`drawio/`。ビューアと受け口。無ければ404 | 長期(immutable) |
+| `/console/drawio.html` | `current/`の`drawio.html`。無ければ404 | `no-cache` |
 | `/console/*` | `current/`のファイル。無いパスは`index.html` | `no-cache` |
 
 `/console/manifest.json`は、`current/`の`manifest.json`である。
@@ -534,6 +534,7 @@ iframe側の受け口(`console/public/drawio/drawio-frame-*.js`)は、次のも�
 
 iframeは、図の領域の大きさが変わるたびに高さを送る。
 図が上限より高いときは、親のiframeが1600pxで止まり、iframeの中で縦にスクロールする。横には隠す。
+縦のスクロールバーが出入りして幅が変わると、ビューアが図を合わせ直して高さが変わり、高さの通知が往復するため、幅は固定する(`scrollbar-gutter: stable`)。
 枠線は、iframeの外側の要素に付ける。iframeに付けると、枠線の分だけ高さが足りなくなる。
 
 ### CSPとヘッダー
