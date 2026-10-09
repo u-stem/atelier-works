@@ -1833,23 +1833,29 @@ describe("createGtrWorktree", () => {
   });
 });
 
+/** gitは動くのに、検査の準備が失敗したことを表す。 */
+class GitProbeSetupError extends Error {}
+
 describe("ensureHeadOnBranch (real git)", () => {
   /**
-   * gitが、別のworktreeでcheckout中のブランチへの`checkout -B`を拒むかどうか。
-   * 拒むのは比較的新しい版からだが、版の番号では判定しない。
-   * 版の番号と挙動の対応は確かでないので、一時リポジトリで実際に試して確かめる。
-   * 準備に失敗したときやgitが無いときは、ファイル全体を壊さずfalseにして、そのテストだけを飛ばす。
+   * gitが、別のworktreeで使用中のブランチへの`checkout -B`を拒むかどうか。
+   * 公式のリリースノートでは2.44からだが、配布元の差もあるので、版の番号では判定しない。
+   * 一時リポジトリで実際に試して確かめる。
+   * gitを起動できないときはfalseにして、そのテストだけを飛ばす。
+   * gitは動くのに準備が失敗したときは、検査が黙って消えないよう例外を投げる。
+   * 起動の環境(`-c user.*`、`HOME`、`GIT_CONFIG_NOSYSTEM`、`PATH`)は`setUp`と揃える。
    */
   const hostGitRefusesCheckedOutBranch = (() => {
-    const root = mkdtempSync(join(tmpdir(), "git-probe-"));
-    const home = join(root, "home");
-    const repo = join(root, "repo");
-    const worktree = join(root, "wt");
+    let root: string | undefined;
     try {
+      root = mkdtempSync(join(tmpdir(), "git-probe-"));
+      const home = join(root, "home");
+      const repo = join(root, "repo");
+      const worktree = join(root, "wt");
       mkdirSync(home);
       mkdirSync(repo);
-      const git = (cwd: string, args: readonly string[]): number =>
-        Bun.spawnSync(
+      const git = (cwd: string, args: readonly string[]) => {
+        const result = Bun.spawnSync(
           [
             "git",
             "-c",
@@ -1861,14 +1867,17 @@ describe("ensureHeadOnBranch (real git)", () => {
           {
             cwd,
             stdout: "ignore",
-            stderr: "ignore",
+            stderr: "pipe",
             env: {
               PATH: process.env.PATH ?? "",
               HOME: home,
               GIT_CONFIG_NOSYSTEM: "1",
             },
           },
-        ).exitCode;
+        );
+        return { exitCode: result.exitCode, stderr: result.stderr.toString() };
+      };
+      if (git(root, ["--version"]).exitCode !== 0) return false;
       const preparation: readonly (readonly [string, readonly string[]])[] = [
         [repo, ["init", "-q", "-b", "main"]],
         [repo, ["commit", "-q", "--allow-empty", "-m", "init"]],
@@ -1878,7 +1887,12 @@ describe("ensureHeadOnBranch (real git)", () => {
         [repo, ["worktree", "add", "-q", `${worktree}-2`, "target"]],
       ];
       for (const [cwd, args] of preparation) {
-        if (git(cwd, args) !== 0) return false;
+        const result = git(cwd, args);
+        if (result.exitCode !== 0) {
+          throw new GitProbeSetupError(
+            `git probe setup failed: git ${args.join(" ")}: ${result.stderr}`,
+          );
+        }
       }
       return (
         git(worktree, [
@@ -1889,12 +1903,13 @@ describe("ensureHeadOnBranch (real git)", () => {
           "-B",
           "target",
           "main",
-        ]) !== 0
+        ]).exitCode !== 0
       );
-    } catch {
+    } catch (error) {
+      if (error instanceof GitProbeSetupError) throw error;
       return false;
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      if (root !== undefined) rmSync(root, { recursive: true, force: true });
     }
   })();
   const roots: string[] = [];
@@ -2018,9 +2033,16 @@ describe("ensureHeadOnBranch (real git)", () => {
     expect(merge.stdout).toBe("");
   });
 
-  test.skipIf(!hostGitRefusesCheckedOutBranch)(
+  // CIでは飛ばさない。gitが拒否しない環境は、テストの先頭で分かるメッセージで失敗させる。
+  const isCi = (process.env.CI ?? "") !== "";
+  test.skipIf(!hostGitRefusesCheckedOutBranch && !isCi)(
     "fails when the branch is checked out in another worktree",
     async () => {
+      if (!hostGitRefusesCheckedOutBranch) {
+        throw new Error(
+          "this git does not refuse checkout -B for a branch used by another worktree (git 2.44 or later is required in CI)",
+        );
+      }
       const fixture = await setUp();
       await fixture.git(fixture.worktree, ["checkout", "-q", "--detach"]);
       await fixture.git(fixture.worktree, [
@@ -2030,8 +2052,9 @@ describe("ensureHeadOnBranch (real git)", () => {
         `${fixture.worktree}-2`,
         "target",
       ]);
+      // fixtureの環境は`LANG`を渡さないので、gitの文言は英語になる。
       await expect(ensure(fixture, fixture.mainSha)).rejects.toThrow(
-        /checkout -f -B/,
+        /checkout -f -B[\s\S]*already (used by worktree|checked out)/,
       );
     },
   );

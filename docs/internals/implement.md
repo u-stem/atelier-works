@@ -383,7 +383,7 @@ Windmillでジョブを取り消しても、新しいセッションで起動し
 
 - 指していなければ(別のブランチかdetached)、`git checkout -f --no-track -B <branch> <戻す先>`で対象のブランチへ移す。この切り替えは、それまでHEADが指していたブランチを動かさない。
 - 次のときは、resetせずに失敗する。HEADを読めない、切り替えに失敗した、切り替えた後もHEADが指していない。
-- git 2.43以降では、対象のブランチがほかのworktreeでcheckoutされていると切り替えに失敗する。workerのイメージのgitは、Debian trixieの2.47である。
+- git 2.44以降では、対象のブランチがほかのworktreeでcheckoutされていると切り替えに失敗する。workerのイメージのgitは、Debian trixieの2.47である。
 
 #### 止めないプロセス
 
