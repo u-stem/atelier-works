@@ -1,4 +1,5 @@
 import { type KeyboardEvent, useRef } from "react";
+import { KindDot } from "../../components/KindDot.tsx";
 import { TimeText } from "../../components/TimeText.tsx";
 import { Badge } from "../../components/ui/badge.tsx";
 import { cn } from "../../lib/cn.ts";
@@ -43,7 +44,11 @@ export function InboxList({
   };
 
   return (
-    <ul ref={listRef} className="flex flex-col" onKeyDown={handleKeyDown}>
+    <ul
+      ref={listRef}
+      className="flex flex-col divide-y divide-border"
+      onKeyDown={handleKeyDown}
+    >
       {items.map((item) => {
         const row = describeRow(item, now);
         const itemSelection = selectionOf(item);
@@ -52,35 +57,45 @@ export function InboxList({
           selected.type === itemSelection.type &&
           selected.id === itemSelection.id;
         return (
-          <li key={row.key} className="border-b border-border">
+          <li key={row.key}>
             <button
               type="button"
               aria-current={isSelected ? "true" : undefined}
               className={cn(
-                "flex w-full flex-col gap-1 px-4 py-3 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-                isSelected && "bg-accent",
+                "relative grid w-full grid-cols-[auto_1fr] gap-x-3 px-6 py-4 text-left outline-none transition-colors duration-150 motion-reduce:transition-none",
+                "hover:bg-accent focus-visible:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+                "before:absolute before:inset-y-3 before:left-0 before:w-[3px] before:rounded-r-full before:bg-primary before:opacity-0 before:transition-opacity before:duration-150",
+                "aria-[current=true]:bg-selected aria-[current=true]:before:opacity-100",
               )}
               onClick={() => {
                 onSelect(itemSelection);
               }}
             >
-              <span className="line-clamp-2 text-sm font-medium">
-                {row.title}
-              </span>
-              <span className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                <Badge variant="outline">{row.kindLabel}</Badge>
-                {row.statusLabel === null ? null : (
-                  <Badge variant="warning">{row.statusLabel}</Badge>
-                )}
-                {row.expiry === null ? null : (
-                  <Badge
-                    variant={row.expiry.expired ? "destructive" : "outline"}
-                  >
-                    {row.expiry.label}
-                  </Badge>
-                )}
-                {row.subLabel === null ? null : <span>{row.subLabel}</span>}
-                <TimeText iso={row.iso} now={now} />
+              <KindDot type={item.type} className="mt-2" />
+              <span className="min-w-0">
+                <span className="line-clamp-2 block text-body leading-snug font-medium text-foreground">
+                  {row.title}
+                </span>
+                <span className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-small text-subtle">
+                  <span className="font-medium text-muted-foreground">
+                    {row.kindLabel}
+                  </span>
+                  {row.statusLabel === null ? null : (
+                    <Badge variant="warning">{row.statusLabel}</Badge>
+                  )}
+                  {row.subLabel === null ? null : <span>{row.subLabel}</span>}
+                  {row.expiry === null ? null : (
+                    <span
+                      className={cn(
+                        "tabular-nums",
+                        row.expiry.expired && "font-medium text-failure",
+                      )}
+                    >
+                      {row.expiry.label}
+                    </span>
+                  )}
+                  <TimeText iso={row.iso} now={now} />
+                </span>
               </span>
             </button>
           </li>

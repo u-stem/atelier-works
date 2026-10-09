@@ -1,3 +1,4 @@
+import { LogIn } from "lucide-react";
 import { useState } from "react";
 import { useSearchParams } from "react-router";
 import {
@@ -28,21 +29,41 @@ import {
   filterInboxItems,
   findInboxItem,
   type InboxChip,
-  otherCountsNote,
+  inboxSubtitle,
   selectionAfterFilter,
   sortInboxItems,
+  unlistedCounts,
   visibleChips,
 } from "../../lib/inboxView.ts";
 import { InboxDetail } from "./InboxDetail.tsx";
+import { InboxEmpty } from "./InboxEmpty.tsx";
 import { InboxList } from "./InboxList.tsx";
+import { KindChips } from "./KindChips.tsx";
+import { UnlistedCards } from "./UnlistedCards.tsx";
 
 function LoadingState() {
   return (
-    <div className="flex flex-col gap-3 p-6" role="status">
+    <div className="flex min-h-0 flex-1" role="status">
       <span className="sr-only">読み込み中</span>
-      <Skeleton className="h-5 w-64" />
-      <Skeleton className="h-16 w-full max-w-2xl" />
-      <Skeleton className="h-16 w-full max-w-2xl" />
+      <div className="w-80 shrink-0 border-r border-border min-[1280px]:w-[28rem]">
+        {["a", "b", "c", "d"].map((key) => (
+          <div
+            key={key}
+            className="flex gap-3 border-b border-border px-6 py-4"
+          >
+            <Skeleton className="mt-1.5 size-2 rounded-full" />
+            <div className="flex-1 space-y-2">
+              <Skeleton className="h-4 w-4/5" />
+              <Skeleton className="h-3 w-3/5" />
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="flex-1 space-y-4 p-8">
+        <Skeleton className="h-5 w-20" />
+        <Skeleton className="h-8 w-2/3" />
+        <Skeleton className="h-40 w-full max-w-3xl rounded-xl" />
+      </div>
     </div>
   );
 }
@@ -61,13 +82,19 @@ function FailureState({
   const apiError = error instanceof ApiFailure ? error.apiError : null;
   if (apiError !== null && isBannerError(apiError)) {
     return (
-      <p className="p-6 text-sm text-muted-foreground">
-        ログインすると、要対応の一覧を表示します。
-      </p>
+      <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
+        <span className="inline-flex size-12 items-center justify-center rounded-full bg-muted text-subtle">
+          <LogIn aria-hidden="true" className="size-6" />
+        </span>
+        <p className="text-lead font-semibold">ログインが必要です</p>
+        <p className="max-w-sm text-small text-muted-foreground">
+          上のバナーからログインすると、要対応の一覧を表示します。
+        </p>
+      </div>
     );
   }
   return (
-    <div className="p-6">
+    <div className="p-8">
       <Alert variant="destructive">
         <AlertTitle>要対応の一覧を取得できませんでした</AlertTitle>
         <AlertDescription>
@@ -88,6 +115,7 @@ function FailureState({
 /**
  * 要対応の画面。項目を新しい順に並べ、種類のチップで絞り込む。
  * 選んだ行は`?approval=<id>`などに持つ(同時に1つだけ)。選択の変更は履歴を積まない。
+ * 一覧が空のときは、画面を割らずに状況の面を出す。
  * 一覧と詳細は別々にスクロールする。この画面から承認・却下などの操作は起こさない。
  */
 export function InboxScreen() {
@@ -125,61 +153,69 @@ export function InboxScreen() {
     );
   }
 
+  const unlisted = unlistedCounts(summary.data.counts, items);
+  const header = (
+    <PageHeader
+      title="要対応"
+      subtitle={inboxSubtitle(items, unlisted)}
+      refresh={refresh}
+    />
+  );
+
+  if (items.length === 0) {
+    return (
+      <>
+        {header}
+        <InboxEmpty
+          updatedAt={summary.dataUpdatedAt}
+          now={now}
+          unlisted={unlisted}
+        />
+      </>
+    );
+  }
+
   const visible = filterInboxItems(items, activeChip);
-  const counts = chipCounts(items);
-  const note = otherCountsNote(summary.data.counts, items);
-  const hasUnlisted =
-    summary.data.counts.failures > 0 || summary.data.counts.notices > 0;
+  const chips = visibleChips(items);
 
   return (
     <>
-      <PageHeader title="要対応" refresh={refresh} />
-      <div className="flex flex-wrap items-center gap-2 border-b border-border px-6 py-3">
-        <fieldset className="m-0 flex min-w-0 gap-2 border-0 p-0">
-          <legend className="sr-only">種類で絞り込む</legend>
-          {visibleChips(items).map((item) => (
-            <Button
-              key={item.id}
-              size="sm"
-              variant={activeChip === item.id ? "default" : "outline"}
-              aria-pressed={activeChip === item.id}
-              onClick={() => {
-                setChip(item.id);
-                const kept = selectionAfterFilter(selection, item.id);
-                if (kept === null && selection !== null) {
+      {header}
+      {chips.length === 0 && unlisted.length === 0 ? null : (
+        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-border px-8 py-3">
+          {chips.length === 0 ? (
+            <span className="text-small font-medium text-muted-foreground">
+              ほかに対応が必要なもの
+            </span>
+          ) : (
+            <KindChips
+              chips={chips}
+              counts={chipCounts(items)}
+              active={activeChip}
+              onChange={(next) => {
+                setChip(next);
+                if (selectionAfterFilter(selection, next) === null) {
                   select(null);
                 }
               }}
-            >
-              {item.label}
-              <span className="tabular-nums">{counts[item.id]}</span>
-            </Button>
-          ))}
-        </fieldset>
-        {note === null ? null : (
-          <p className="text-sm text-muted-foreground">
-            {note}
-            {hasUnlisted ? "失敗と通知の一覧は準備中です。" : null}
-          </p>
-        )}
-      </div>
+            />
+          )}
+          {unlisted.length === 0 ? null : (
+            <UnlistedCards entries={unlisted} compact />
+          )}
+        </div>
+      )}
       <div className="flex min-h-0 flex-1">
         <section
           aria-label="要対応の一覧"
-          className="w-96 shrink-0 overflow-y-auto border-r border-border"
+          className="w-80 shrink-0 overflow-y-auto border-r border-border bg-card min-[1280px]:w-[28rem]"
         >
-          {visible.length === 0 ? (
-            <p className="p-6 text-sm text-muted-foreground">
-              要対応の項目はありません。
-            </p>
-          ) : (
-            <InboxList
-              items={visible}
-              selected={selection}
-              now={now}
-              onSelect={select}
-            />
-          )}
+          <InboxList
+            items={visible}
+            selected={selection}
+            now={now}
+            onSelect={select}
+          />
         </section>
         <section
           aria-label="選んだ項目の概要"

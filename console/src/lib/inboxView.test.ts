@@ -15,12 +15,13 @@ import {
   filterInboxItems,
   findInboxItem,
   type InboxItem,
+  inboxSubtitle,
   itemId,
   missingSelectionMessage,
-  otherCountsNote,
   selectionAfterFilter,
   selectionOf,
   sortInboxItems,
+  unlistedCounts,
   visibleChips,
 } from "./inboxView.ts";
 
@@ -210,11 +211,15 @@ describe("chipCounts", () => {
 });
 
 describe("visibleChips", () => {
-  test("offers only all for an empty list", () => {
-    expect(visibleChips([]).map((chip) => chip.id)).toEqual(["all"]);
+  test("offers nothing for an empty list", () => {
+    expect(visibleChips([])).toEqual([]);
   });
 
-  test("offers a kind only when it has an item", () => {
+  test("offers nothing when only one kind is present", () => {
+    expect(visibleChips([A1, A1])).toEqual([]);
+  });
+
+  test("offers all and each kind when two kinds are present", () => {
     expect(visibleChips([A1, N21]).map((chip) => chip.id)).toEqual([
       "all",
       "approval",
@@ -222,10 +227,11 @@ describe("visibleChips", () => {
     ]);
   });
 
-  test("does not offer approval without an approval", () => {
-    expect(visibleChips([F7]).map((chip) => chip.id)).toEqual([
+  test("does not offer a kind without items", () => {
+    expect(visibleChips([F7, N21]).map((chip) => chip.id)).toEqual([
       "all",
       "failure",
+      "notice",
     ]);
   });
 
@@ -236,12 +242,6 @@ describe("visibleChips", () => {
       "失敗",
       "通知",
     ]);
-  });
-
-  test("offers every chip that effectiveChip can keep", () => {
-    const items = [A1, F7];
-    const kept = effectiveChip(items, "failure");
-    expect(visibleChips(items).some((chip) => chip.id === kept)).toBe(true);
   });
 });
 
@@ -427,40 +427,86 @@ describe("describeRow", () => {
   });
 });
 
-describe("otherCountsNote", () => {
+describe("unlistedCounts", () => {
   test("is empty when every count is listed", () => {
     expect(
-      otherCountsNote({ approvals: 1, failures: 0, notices: 0 }, [A1]),
-    ).toBeNull();
+      unlistedCounts({ approvals: 1, failures: 0, notices: 0 }, [A1]),
+    ).toEqual([]);
   });
 
   test("reports approvals cut by the limit", () => {
     expect(
-      otherCountsNote({ approvals: 250, failures: 0, notices: 0 }, [A1]),
-    ).toBe("ほかに、承認が249件あります。");
+      unlistedCounts({ approvals: 250, failures: 0, notices: 0 }, [A1]),
+    ).toEqual([
+      {
+        type: "approval",
+        label: "承認",
+        count: 249,
+        note: "取得の上限を超えた分です",
+      },
+    ]);
   });
 
-  test("reports failures and notices that are not listed", () => {
+  test("reports failures and notices that the list does not show yet", () => {
     expect(
-      otherCountsNote({ approvals: 1, failures: 2, notices: 1 }, [A1]),
-    ).toBe("ほかに、失敗が2件、通知が1件あります。");
+      unlistedCounts({ approvals: 1, failures: 5, notices: 4 }, [A1]),
+    ).toEqual([
+      { type: "failure", label: "失敗", count: 5, note: "一覧は準備中です" },
+      { type: "notice", label: "通知", count: 4, note: "一覧は準備中です" },
+    ]);
   });
 
-  test("reports all three together", () => {
+  test("lists approvals first, then failures, then notices", () => {
     expect(
-      otherCountsNote({ approvals: 3, failures: 2, notices: 4 }, [A1]),
-    ).toBe("ほかに、承認が2件、失敗が2件、通知が4件あります。");
+      unlistedCounts({ approvals: 3, failures: 2, notices: 4 }, [A1]).map(
+        (entry) => entry.type,
+      ),
+    ).toEqual(["approval", "failure", "notice"]);
   });
 
   test("subtracts the listed items of a kind", () => {
     expect(
-      otherCountsNote({ approvals: 1, failures: 3, notices: 0 }, [A1, F7]),
-    ).toBe("ほかに、失敗が2件あります。");
+      unlistedCounts({ approvals: 1, failures: 3, notices: 0 }, [A1, F7]).map(
+        (entry) => entry.count,
+      ),
+    ).toEqual([2]);
   });
 
   test("never reports a negative number", () => {
     expect(
-      otherCountsNote({ approvals: 0, failures: 0, notices: 0 }, [A1, F7]),
+      unlistedCounts({ approvals: 0, failures: 0, notices: 0 }, [A1, F7]),
+    ).toEqual([]);
+  });
+});
+
+describe("inboxSubtitle", () => {
+  test("counts the listed approvals", () => {
+    expect(inboxSubtitle([A1, A1], [])).toBe("承認 2件");
+  });
+
+  test("lists each kind that has items", () => {
+    expect(inboxSubtitle([A1, F7, F7, N21], [])).toBe(
+      "承認 1件、失敗 2件、通知 1件",
+    );
+  });
+
+  test("says everything is done when nothing is left anywhere", () => {
+    expect(inboxSubtitle([], [])).toBe("すべて片付いています");
+  });
+
+  test("has no subtitle when only unlisted kinds remain", () => {
+    expect(
+      inboxSubtitle(
+        [],
+        [
+          {
+            type: "failure",
+            label: "失敗",
+            count: 5,
+            note: "一覧は準備中です",
+          },
+        ],
+      ),
     ).toBeNull();
   });
 });

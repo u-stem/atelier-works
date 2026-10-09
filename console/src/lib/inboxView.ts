@@ -66,7 +66,7 @@ const CHIP_LABELS: Readonly<Record<InboxChip, string>> = {
 
 /**
  * summaryから一覧の項目を作る。
- * 失敗と通知は、詳細を描く画面ができるまで含めない。件数は`otherCountsNote`で知らせる。
+ * 失敗と通知は、詳細を描く画面ができるまで含めない。件数は`unlistedCounts`で知らせる。
  */
 export function buildInboxItems(summary: ConsoleSummary): InboxItem[] {
   return summary.approvals.map(
@@ -129,20 +129,22 @@ export function chipCounts(
 }
 
 /**
- * 画面に出すチップ。「すべて」と、項目が1件以上ある種類だけを出す。
+ * 画面に出すチップ。2種類以上の項目があるときだけ、「すべて」と項目がある種類を出す。
+ * 1種類しかなければ、絞り込む意味が無いのでチップを出さない。
  * 項目が無い種類のチップを出して、空の一覧へ誘導しないためである。
  */
 export function visibleChips(
   items: readonly InboxItem[],
 ): { id: InboxChip; label: string }[] {
   const present = new Set(items.map((item) => item.type));
-  const chips: InboxChip[] = ["all"];
-  for (const kind of INBOX_KINDS) {
-    if (present.has(kind)) {
-      chips.push(kind);
-    }
+  const kinds = INBOX_KINDS.filter((kind) => present.has(kind));
+  if (kinds.length < 2) {
+    return [];
   }
-  return chips.map((id) => ({ id, label: CHIP_LABELS[id] }));
+  return (["all", ...kinds] as const).map((id) => ({
+    id,
+    label: CHIP_LABELS[id],
+  }));
 }
 
 /**
@@ -321,27 +323,61 @@ export function describeRow(item: InboxItem, nowMs: number): RowDescription {
   }
 }
 
+export type UnlistedCount = {
+  readonly type: InboxKind;
+  readonly label: string;
+  readonly count: number;
+  /** 一覧に出ていない理由。 */
+  readonly note: string;
+};
+
 /**
- * 一覧に出ていない要対応の件数を伝える文。無ければ`null`。
- * 件数(`counts`)は取得の上限を超えた分も数える。種類ごとに、件数から一覧にある項目を引いた差を伝える。
+ * 一覧に出ていない要対応の件数を、種類ごとに返す。無ければ空の配列。
+ * 件数(`counts`)は取得の上限を超えた分も数える。種類ごとに、件数から一覧にある項目を引いた差を返す。
+ * 承認は上限を超えた分、失敗と通知は一覧に載せていない分である。
  */
-export function otherCountsNote(
+export function unlistedCounts(
   counts: SummaryCounts,
   items: readonly InboxItem[],
-): string | null {
+): UnlistedCount[] {
   const listed = chipCounts(items);
-  const parts: string[] = [];
-  const hiddenApprovals = counts.approvals - listed.approval;
-  const hiddenFailures = counts.failures - listed.failure;
-  const hiddenNotices = counts.notices - listed.notice;
-  if (hiddenApprovals > 0) {
-    parts.push(`承認が${hiddenApprovals}件`);
+  const entries: UnlistedCount[] = [
+    {
+      type: "approval",
+      label: CHIP_LABELS.approval,
+      count: counts.approvals - listed.approval,
+      note: "取得の上限を超えた分です",
+    },
+    {
+      type: "failure",
+      label: CHIP_LABELS.failure,
+      count: counts.failures - listed.failure,
+      note: "一覧は準備中です",
+    },
+    {
+      type: "notice",
+      label: CHIP_LABELS.notice,
+      count: counts.notices - listed.notice,
+      note: "一覧は準備中です",
+    },
+  ];
+  return entries.filter((entry) => entry.count > 0);
+}
+
+/**
+ * 画面の見出しの副題。一覧にある項目を種類ごとの件数で伝える。
+ * 一覧が空で、ほかの種類の件数も残っていなければ「すべて片付いています」にする。
+ * 一覧が空でほかの種類が残っているときは、本文が伝えるので副題を出さない。
+ */
+export function inboxSubtitle(
+  items: readonly InboxItem[],
+  unlisted: readonly UnlistedCount[],
+): string | null {
+  if (items.length === 0) {
+    return unlisted.length === 0 ? "すべて片付いています" : null;
   }
-  if (hiddenFailures > 0) {
-    parts.push(`失敗が${hiddenFailures}件`);
-  }
-  if (hiddenNotices > 0) {
-    parts.push(`通知が${hiddenNotices}件`);
-  }
-  return parts.length === 0 ? null : `ほかに、${parts.join("、")}あります。`;
+  const counts = chipCounts(items);
+  return INBOX_KINDS.filter((kind) => counts[kind] > 0)
+    .map((kind) => `${CHIP_LABELS[kind]} ${counts[kind]}件`)
+    .join("、");
 }

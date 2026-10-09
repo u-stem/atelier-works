@@ -1,15 +1,18 @@
 import { ExternalLink, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { type KeyboardEvent, useRef, useState } from "react";
 import { NavLink } from "react-router";
+import { useConsoleStatus } from "../api/consoleStatus.ts";
+import type { SummaryCounts } from "../api/guards/summary.ts";
 import { useSummary } from "../api/queries.ts";
-import { Badge } from "../components/ui/badge.tsx";
-import { Button } from "../components/ui/button.tsx";
+import { BrandMark } from "../components/BrandMark.tsx";
+import { KindDot } from "../components/KindDot.tsx";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "../components/ui/tooltip.tsx";
 import { cn } from "../lib/cn.ts";
+import { describeRelease } from "../lib/consoleStatus.ts";
 import {
   formatBadgeCount,
   navLinkClass,
@@ -17,8 +20,9 @@ import {
   parseSidebarCollapsed,
   SIDEBAR_STORAGE_KEY,
 } from "../lib/navigation.ts";
-import { ThemeToggle } from "../ThemeToggle.tsx";
 import { SCREENS } from "./screens.ts";
+import { ThemeSwitch } from "./ThemeSwitch.tsx";
+import { useNow } from "./useNow.ts";
 
 /** 切り替えまでの間は、Windmillのraw appの旧Consoleへ案内する。 */
 const LEGACY_CONSOLE_PATH = "/apps/get/f/factory/factory_console";
@@ -40,6 +44,66 @@ function writeCollapsed(collapsed: boolean): void {
   } catch {
     // 保存できなくても、この画面の表示はすでに切り替わっている。
   }
+}
+
+const STATUS_ROWS = [
+  { type: "approval", label: "承認" },
+  { type: "failure", label: "失敗" },
+  { type: "notice", label: "通知" },
+] as const;
+
+/** どの画面にいても分かるように、種類ごとの件数を並べる。押せず、バッジの数え方とは別の一覧である。 */
+function StatusPanel({ counts }: { counts: SummaryCounts }) {
+  const values = {
+    approval: counts.approvals,
+    failure: counts.failures,
+    notice: counts.notices,
+  };
+  return (
+    <section aria-label="いまの状況" className="mx-3 mt-5">
+      <h2 className="px-3 pb-1.5 text-caption font-medium tracking-wide text-subtle">
+        いまの状況
+      </h2>
+      <ul className="flex flex-col gap-0.5 text-small">
+        {STATUS_ROWS.map((row) => (
+          <li
+            key={row.type}
+            className="flex items-center gap-2.5 rounded-md px-3 py-1.5"
+          >
+            <KindDot type={row.type} />
+            <span className="flex-1 text-muted-foreground">{row.label}</span>
+            <span className="font-medium tabular-nums">{values[row.type]}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/** 配信している版と、取り込みの最後の確認。取れた情報だけを出し、取れなければ何も出さない。 */
+function ReleaseInfo() {
+  const status = useConsoleStatus();
+  const now = useNow();
+  const release = status === null ? null : describeRelease(status, now);
+  if (release === null) {
+    return null;
+  }
+  return (
+    <p className="text-caption leading-5 text-subtle">
+      {release.versionLabel === null ? null : (
+        <span className="font-medium text-muted-foreground tabular-nums">
+          {release.versionLabel}
+        </span>
+      )}
+      {release.versionLabel === null ? null : "・"}
+      <span className="tabular-nums">{release.checkedLabel}</span>
+      {release.warning === null ? null : (
+        <span className="mt-1 block font-medium text-notice">
+          {release.warning}
+        </span>
+      )}
+    </p>
+  );
 }
 
 /**
@@ -72,37 +136,30 @@ export function Sidebar() {
   return (
     <aside
       className={cn(
-        "flex shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground transition-[width]",
-        collapsed ? "w-14" : "w-60",
+        "flex shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground transition-[width] duration-200 motion-reduce:transition-none",
+        collapsed ? "w-16" : "w-64",
       )}
     >
       <div
         className={cn(
-          "flex items-center gap-2 px-3 py-3",
-          collapsed ? "justify-center" : "justify-between",
+          "flex h-16 items-center gap-3 px-4",
+          collapsed && "justify-center px-0",
         )}
       >
+        <BrandMark />
         {collapsed ? null : (
-          <span className="truncate px-1 font-semibold">Factory Console</span>
+          <div className="min-w-0">
+            <p className="truncate text-body leading-tight font-semibold tracking-tight">
+              Factory Console
+            </p>
+            <p className="text-caption text-subtle">運用画面</p>
+          </div>
         )}
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-expanded={!collapsed}
-          aria-label="メニューの開閉"
-          onClick={toggle}
-        >
-          {collapsed ? (
-            <PanelLeftOpen aria-hidden="true" />
-          ) : (
-            <PanelLeftClose aria-hidden="true" />
-          )}
-        </Button>
       </div>
       <nav
         ref={navRef}
         aria-label="メインメニュー"
-        className="flex flex-1 flex-col gap-1 px-2"
+        className="flex flex-col gap-1 px-3 pt-2"
         onKeyDown={handleKeyDown}
       >
         {SCREENS.map((screen) => {
@@ -117,11 +174,11 @@ export function Sidebar() {
                   className={navLinkClass(collapsed)}
                 >
                   <span className="relative inline-flex shrink-0">
-                    <Icon aria-hidden="true" className="size-4" />
+                    <Icon aria-hidden="true" className="size-[18px]" />
                     {collapsed && badge !== null ? (
                       <span
                         aria-hidden="true"
-                        className="absolute -top-2 -right-2.5 min-w-4 rounded-full bg-primary px-1 text-center text-[10px] leading-4 font-medium text-primary-foreground"
+                        className="absolute -top-2 -right-2.5 min-w-4 rounded-full bg-primary px-1 text-center text-[10px] leading-4 font-semibold text-primary-foreground tabular-nums"
                       >
                         {badge}
                       </span>
@@ -133,13 +190,15 @@ export function Sidebar() {
                     {screen.label}
                   </span>
                   {badge === null ? null : (
-                    <Badge
-                      variant="secondary"
-                      className={cn(collapsed && "sr-only")}
+                    <span
+                      className={cn(
+                        "rounded-full bg-primary px-2 text-caption leading-5 font-semibold text-primary-foreground tabular-nums",
+                        collapsed && "sr-only",
+                      )}
                     >
                       {badge}
                       <span className="sr-only">件</span>
-                    </Badge>
+                    </span>
                   )}
                 </NavLink>
               </TooltipTrigger>
@@ -154,18 +213,49 @@ export function Sidebar() {
           );
         })}
       </nav>
-      {collapsed ? null : (
-        <div className="flex flex-col items-start gap-2 border-t border-sidebar-border px-4 py-3">
-          <ThemeToggle />
-          <a
-            className="inline-flex items-center gap-1 text-sm text-muted-foreground underline underline-offset-4 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring"
-            href={LEGACY_CONSOLE_PATH}
-          >
-            旧Consoleを開く
-            <ExternalLink aria-hidden="true" className="size-3" />
-          </a>
-        </div>
+      {collapsed || summary.data === undefined ? null : (
+        <StatusPanel counts={summary.data.counts} />
       )}
+      <div
+        className={cn(
+          "mt-auto flex flex-col gap-3 border-t border-sidebar-border px-4 py-3",
+          collapsed && "items-center px-0",
+        )}
+      >
+        {collapsed ? null : (
+          <>
+            <ReleaseInfo />
+            <ThemeSwitch />
+            <a
+              className="inline-flex w-fit items-center gap-1 rounded-sm text-small text-subtle underline underline-offset-4 outline-none transition-colors duration-150 hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring motion-reduce:transition-none"
+              href={LEGACY_CONSOLE_PATH}
+            >
+              旧Consoleを開く
+              <ExternalLink aria-hidden="true" className="size-3" />
+            </a>
+          </>
+        )}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              aria-expanded={!collapsed}
+              aria-label="メニューの開閉"
+              className="inline-flex size-8 items-center justify-center rounded-lg text-subtle outline-none transition-colors duration-150 hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring motion-reduce:transition-none"
+              onClick={toggle}
+            >
+              {collapsed ? (
+                <PanelLeftOpen aria-hidden="true" className="size-4" />
+              ) : (
+                <PanelLeftClose aria-hidden="true" className="size-4" />
+              )}
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="right">
+            {collapsed ? "メニューを広げる" : "メニューをたたむ"}
+          </TooltipContent>
+        </Tooltip>
+      </div>
     </aside>
   );
 }

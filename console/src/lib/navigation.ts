@@ -56,7 +56,10 @@ export function nextNavFocusIndex(
  */
 export function navLinkClass(collapsed: boolean): string {
   return cn(
-    "flex items-center gap-3 rounded-md px-3 py-2 text-sm outline-none hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring aria-[current=page]:bg-sidebar-accent aria-[current=page]:font-medium aria-[current=page]:text-sidebar-accent-foreground",
+    "relative flex items-center gap-3 rounded-lg px-3 py-2 text-body font-medium text-muted-foreground outline-none transition-colors duration-150 motion-reduce:transition-none",
+    "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring",
+    "before:absolute before:inset-y-2 before:-left-3 before:w-[3px] before:rounded-r-full before:bg-primary before:opacity-0 before:transition-opacity before:duration-150",
+    "aria-[current=page]:bg-selected aria-[current=page]:text-selected-foreground aria-[current=page]:before:opacity-100",
     collapsed && "justify-center px-0",
   );
 }

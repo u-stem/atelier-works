@@ -94,8 +94,12 @@ describe("navLinkClass", () => {
   });
 
   test("styles the active link through aria-current", () => {
+    expect(navLinkClass(false)).toContain("aria-[current=page]:bg-selected");
+  });
+
+  test("shows the accent bar on the active link", () => {
     expect(navLinkClass(false)).toContain(
-      "aria-[current=page]:bg-sidebar-accent",
+      "aria-[current=page]:before:opacity-100",
     );
   });
 
