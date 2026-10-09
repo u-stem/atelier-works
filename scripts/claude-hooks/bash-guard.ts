@@ -54,6 +54,8 @@ export type GuardDeps = {
   readonly currentBranch: (dir: string) => string | null;
   /** `dir`を含むリポジトリの根を返す。リポジトリでなければnullを返す。 */
   readonly repoRoot: (dir: string) => string | null;
+  /** `dir`のリポジトリに、`name`というローカルのブランチがあれば真を返す。 */
+  readonly localBranchExists: (dir: string, name: string) => boolean;
 };
 
 const PROTECTED_BRANCHES: ReadonlySet<string> = new Set(["main", "master"]);
@@ -73,7 +75,11 @@ const FALSY_LEFTHOOK_VALUES: ReadonlySet<string> = new Set([
 ]);
 
 /** gitの設定を環境変数で上書きする変数。`core.hooksPath`やエイリアスを裏から差し込める。 */
-const GIT_CONFIG_ENV = /^GIT_CONFIG_(COUNT|PARAMETERS|KEY_\d+|VALUE_\d+)$/;
+const GIT_CONFIG_ENV =
+  /^GIT_CONFIG_(COUNT|PARAMETERS|GLOBAL|SYSTEM|KEY_\d+|VALUE_\d+)$/;
+
+/** gitの設定ファイルの置き場所を変える変数。フックを実行するgitのコマンドに付けて、別の設定を読ませるのに使える。 */
+const GIT_HOME_ENV = /^(HOME|XDG_CONFIG_HOME)=/;
 
 /** 引数の`NAME=value`を環境変数として設定する組み込みコマンド。 */
 const ENVIRONMENT_BUILTINS: ReadonlySet<string> = new Set([
@@ -108,6 +114,12 @@ const LEFTHOOK_REPLACING_ENV: ReadonlySet<string> = new Set([
  */
 const DANGEROUS_CONFIG_KEY =
   /^(core\.hookspath|alias\..+|remote\..+\.push|push\.default|include\..*|includeif\..*)$/;
+
+/** `mise set`が、書き込む`KEY=VALUE`を持たずに値を一覧するなら真。 */
+function listsMiseValues(words: readonly Word[]): boolean {
+  if (words[1]?.text !== "set") return false;
+  return !words.slice(2).some((word) => ASSIGNMENT.test(word.text));
+}
 
 /** `.git/hooks`と`.git/config`のパス。lefthookのフックと設定の置き場所である。 */
 const GIT_INTERNALS = /(^|\/)\.git\/(hooks(\/|$)|config$)/;
@@ -210,7 +222,7 @@ export const REASONS = {
   force:
     "This force push is not allowed. Use --force-with-lease on a feature branch (not from a subagent), or merge the base branch into your branch instead of rewriting published history.",
   protectedBranch: (branch: string) =>
-    `Pushing to ${branch} is not allowed. Push a feature branch and open a pull request.`,
+    `Pushing to ${branch} is not allowed. Push a feature branch and open a pull request. If you just switched branches, use git switch <branch> so the target is unambiguous.`,
   allBranches:
     "git push --all / --mirror / --branches can update main. Push a single feature branch instead.",
   unknownDestination:
@@ -232,13 +244,17 @@ export const REASONS = {
   dockerExec:
     "docker exec and docker compose exec must not run an environment dump (env, printenv, set) or a shell given code (-c or stdin): containers hold secrets as environment variables. Run the specific command directly, for example docker compose exec windmill_worker kill <pid>.",
   dockerInspect:
-    "docker inspect prints the environment variables of the container, including secrets. Select a field with --format, for example docker inspect --format '{{.State.Running}}' <id>. A format that mentions Env or Config is denied.",
+    "docker inspect prints the environment variables of the container, including secrets. Select a field with --format, for example docker inspect --format '{{.State.Running}}' <id>. A format that mentions Env or Config is denied, and so are whole-object forms such as {{.}}, range, index, and printf.",
   dockerConfig:
     "docker compose config prints the expanded definition, including environment variables. Limit the output with --services, --profiles, --volumes, --images, --hash, or -q.",
   tooManyLookups:
     "This command line needs too many git lookups to check (more than 20, or too slow). Split it into smaller commands.",
   gitAlias:
     "git -c alias.* and git config alias.* can hide a push or a commit behind another name. Write the git command out in full.",
+  gitHomeEnv:
+    "Setting HOME or XDG_CONFIG_HOME for git commit, push, merge, or rebase makes git read another config, which can turn the hooks off. Run the git command without changing HOME.",
+  miseSetList:
+    "mise set without KEY=VALUE lists the values of mise.local.toml, including secrets. To check that the secrets are set, run mise run doctor.",
   gitConfigEnv:
     "GIT_CONFIG_COUNT, GIT_CONFIG_KEY_*, GIT_CONFIG_VALUE_*, and GIT_CONFIG_PARAMETERS can override core.hooksPath and aliases. Set the option with a normal git command instead.",
   lefthookOff:
@@ -333,27 +349,34 @@ class GitBudgetExceeded extends Error {}
 function withGitBudget(deps: GuardDeps): GuardDeps {
   const started = Date.now();
   let spawns = 0;
-  const lookup = (
-    cache: Map<string, { readonly value: string | null }>,
-    dir: string,
-    run: () => string | null,
-  ): string | null => {
-    const hit = cache.get(dir);
-    if (hit !== undefined) return hit.value;
+  const charge = (): void => {
     if (spawns >= MAX_GIT_SPAWNS || Date.now() - started > MAX_GIT_MS) {
       throw new GitBudgetExceeded();
     }
     spawns += 1;
-    const value = run();
-    cache.set(dir, { value });
-    return value;
   };
-  const branches = new Map<string, { readonly value: string | null }>();
-  const roots = new Map<string, { readonly value: string | null }>();
+  /** 結果を覚える関数を作る。覚えた結果は、gitを起動する回数に数えない。 */
+  const memoize = <T>(run: (key: string) => T): ((key: string) => T) => {
+    const cache = new Map<string, { readonly value: T }>();
+    return (key) => {
+      const hit = cache.get(key);
+      if (hit !== undefined) return hit.value;
+      charge();
+      const value = run(key);
+      cache.set(key, { value });
+      return value;
+    };
+  };
+  const branches = memoize((dir) => deps.currentBranch(dir));
+  const roots = memoize((dir) => deps.repoRoot(dir));
+  const exists = memoize((key) => {
+    const [dir = "", name = ""] = key.split("\0");
+    return deps.localBranchExists(dir, name);
+  });
   return {
-    currentBranch: (dir) =>
-      lookup(branches, dir, () => deps.currentBranch(dir)),
-    repoRoot: (dir) => lookup(roots, dir, () => deps.repoRoot(dir)),
+    currentBranch: branches,
+    repoRoot: roots,
+    localBranchExists: (dir, name) => exists(`${dir}\0${name}`),
   };
 }
 
@@ -441,8 +464,17 @@ function checkSimpleCommand(
     const shell = checkShellInput(command, shellArgs, directory, scope);
     if (shell.kind === "deny") return shell;
   }
+  if (program === "mise" && listsMiseValues(words)) {
+    return deny(REASONS.miseSetList);
+  }
   const git = parseGitInvocation(words, directory);
   if (git === null) return ALLOW;
+  if (
+    HOOK_SUBCOMMANDS.has(git.subcommand) &&
+    assignments.some((word) => GIT_HOME_ENV.test(word.text))
+  ) {
+    return deny(REASONS.gitHomeEnv);
+  }
   return checkGit(git, wrappers, scope);
 }
 
@@ -874,13 +906,21 @@ function trackBranch(
   const root =
     git.dir === null ? null : (scope.deps.repoRoot(git.dir) ?? git.dir);
   const previous = scope.branchState.assumed;
+  const [only] = switched.names;
+  // 名前のブランチがローカルにあれば、ファイルの復元ではなくブランチの切り替えである。
+  const named =
+    switched.includesCurrent &&
+    git.dir !== null &&
+    typeof only === "string" &&
+    scope.deps.localBranchExists(git.dir, only);
   // 切り替えに失敗したときの今のブランチは、直前の前提である。
+  const keepsCurrent = switched.includesCurrent && !named;
   const names =
-    switched.includesCurrent && previous !== null && previous.root === root
+    keepsCurrent && previous !== null && previous.root === root
       ? [...switched.names, ...previous.names]
       : switched.names;
   const includesCurrent =
-    switched.includesCurrent &&
+    keepsCurrent &&
     (previous === null || previous.root !== root || previous.includesCurrent);
   scope.branchState.assumed = { root, names, includesCurrent };
 }
@@ -971,6 +1011,8 @@ function switchedBranch(git: GitInvocation): Switched | undefined {
       const name = literal(first);
       return one(name === null ? null : name.slice(name.indexOf("/") + 1));
     }
+    // `@{-1}`は、前にいたブランチである。名前が決まらない。
+    if (/^@\{-\d+\}$/.test(first.text)) return one(null);
     if (RELATIVE_REF.test(first.text)) return undefined;
     // `git checkout <ブランチ> <パス>`と複数のパスは、ブランチの切り替えではない。
     if (subcommand === "checkout" && operands.length > 1) return undefined;
@@ -978,8 +1020,10 @@ function switchedBranch(git: GitInvocation): Switched | undefined {
   }
   if (subcommand === "rebase") {
     const operands = operandsOf(args, REBASE_VALUE_OPTIONS);
-    // `git rebase <上流> <ブランチ>`だけが、ブランチを切り替える。
-    return operands.length >= 2 ? one(literal(operands[1])) : undefined;
+    // `git rebase <上流> <ブランチ>`だけが、ブランチを切り替える。`--root`は上流が無いので、最初のオペランドがブランチである。
+    const root = args.some((word) => word.text === "--root");
+    const branch = operands[root ? 0 : 1];
+    return branch === undefined ? undefined : one(literal(branch));
   }
   if (subcommand === "branch") {
     const rename = args.some(
@@ -1012,6 +1056,24 @@ function gitCurrentBranch(dir: string): string | null {
   return gitOutput(dir, ["symbolic-ref", "--short", "-q", "HEAD"]);
 }
 
+/** `dir`でgitを実行し、成功したら真を返す。 */
+function gitSucceeds(dir: string, args: readonly string[]): boolean {
+  const result = spawnSync("git", ["-C", dir, ...args], {
+    timeout: GIT_TIMEOUT_MS,
+    stdio: "ignore",
+  });
+  return result.error === undefined && result.status === 0;
+}
+
+function gitLocalBranchExists(dir: string, name: string): boolean {
+  return gitSucceeds(dir, [
+    "show-ref",
+    "--verify",
+    "--quiet",
+    `refs/heads/${name}`,
+  ]);
+}
+
 function gitRepoRoot(dir: string): string | null {
   return gitOutput(dir, ["rev-parse", "--show-toplevel"]);
 }
@@ -1022,6 +1084,7 @@ if (isEntryPoint(import.meta.url)) {
       evaluateBashGuard(input, {
         currentBranch: gitCurrentBranch,
         repoRoot: gitRepoRoot,
+        localBranchExists: gitLocalBranchExists,
       }),
     ),
   );

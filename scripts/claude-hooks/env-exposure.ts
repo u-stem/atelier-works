@@ -75,23 +75,27 @@ const SAFE_CONFIG_OPTIONS: ReadonlySet<string> = new Set([
  */
 const INSPECT_ACTION =
   /^\{\{-?\s*(?:json\s+)?(\.[A-Za-z][A-Za-z0-9_.]*)\s*-?\}\}$/;
-const INSPECT_SECRET_PATH = /env|config/i;
+/** 経路の区切りごとに、環境変数を含む`Env`か`Config`かを見る。`.HostConfig.Binds`のように名前の一部なら許す。 */
+const INSPECT_SECRET_SEGMENT = /^(env|config)$/i;
 
-/** `/proc/<pid>/environ`。プロセスの環境変数がそのまま入っている。 */
-const PROC_ENVIRON = /^\/proc\/(?:self|thread-self|\d+|\*)\/environ$/;
+/** `/proc/<pid>/environ`と`/proc/<pid>/task/<tid>/environ`。プロセスの環境変数がそのまま入っている。`<pid>`は`self`や`*`でもよい。 */
+const PROC_ENVIRON = /^\/proc\/[^/]*(\/task\/[^/]*)?\/environ$/;
 
-/** ファイルの中身をそのまま出すコマンド。`/proc/<pid>/environ`を渡すと環境変数が出る。 */
-const FILE_DUMPERS: ReadonlySet<string> = new Set([
-  "cat",
-  "strings",
-  "tr",
-  "head",
-  "tail",
-  "od",
-  "xxd",
-  "hexdump",
-  "less",
-  "more",
+/** 名前や属性だけを扱い、中身を読まないコマンド。`/proc/<pid>/environ`を渡しても値は出ない。 */
+const METADATA_PROGRAMS: ReadonlySet<string> = new Set([
+  "ls",
+  "stat",
+  "test",
+  "[",
+  "[[",
+  "file",
+  "realpath",
+  "readlink",
+  "basename",
+  "dirname",
+  "du",
+  "echo",
+  "printf",
 ]);
 
 export type DockerExposure = "config" | "exec" | "inspect";
@@ -147,19 +151,28 @@ export function shellInputSource(
   return "stdin";
 }
 
+/** 語が`/proc/<pid>/environ`を指すなら真。値が実行時に決まる語は、`/proc/`で始まり`/environ`で終われば指すものとして扱う。 */
+function namesProcEnviron(word: Word): boolean {
+  if (PROC_ENVIRON.test(word.text)) return true;
+  return (
+    word.dynamic &&
+    word.text.includes("/proc/") &&
+    word.text.endsWith("/environ")
+  );
+}
+
 /**
- * `/proc/<pid>/environ`を読むなら真。ファイルの中身を出すコマンドの引数と、どのコマンドでもリダイレクトの入力を見る。
+ * `/proc/<pid>/environ`を読むなら真。どのコマンドの引数でも、リダイレクトの入力でも見る。
+ * 名前や属性だけを扱う`ls`や`test`は除く。
  */
 export function readsProcEnviron(
   words: readonly Word[],
   redirects: readonly Word[] = [],
 ): boolean {
-  if (redirects.some((target) => PROC_ENVIRON.test(target.text))) return true;
+  if (redirects.some(namesProcEnviron)) return true;
   const program = baseName(words[0]?.text ?? "");
-  return (
-    FILE_DUMPERS.has(program) &&
-    words.slice(1).some((word) => PROC_ENVIRON.test(word.text))
-  );
+  if (METADATA_PROGRAMS.has(program)) return false;
+  return words.slice(1).some(namesProcEnviron);
 }
 
 /** コマンドが、環境変数の一覧を出すか、コードを渡したシェルなら真。前置きは外してから見る。 */
@@ -170,6 +183,14 @@ export function dumpsEnvironment(inner: readonly Word[]): boolean {
   // `env`は前置きとして外されるので、後ろにコマンドが無ければ一覧を出している。
   if (first === undefined) return wrappers.includes("env");
   const name = baseName(first.text);
+  // `busybox env`のように、busyboxのアプレットは次の語がコマンドである。
+  if (
+    name === "busybox" &&
+    words.length > 1 &&
+    shellArguments(words) === null
+  ) {
+    return dumpsEnvironment(words.slice(1));
+  }
   if (ENVIRONMENT_PRINTERS.has(name)) return true;
   if (LISTING_BUILTINS.has(name)) return words[1]?.text === "-p";
   const shellArgs = shellArguments(words);
@@ -191,12 +212,16 @@ function isSafeInspectFormat(format: Word): boolean {
   if (format.text.replace(/\{\{.*?\}\}/g, "").includes("{{")) return false;
   return actions.every((action) => {
     const path = INSPECT_ACTION.exec(action)?.[1];
-    return path !== undefined && !INSPECT_SECRET_PATH.test(path);
+    return (
+      path !== undefined &&
+      !path.split(".").some((segment) => INSPECT_SECRET_SEGMENT.test(segment))
+    );
   });
 }
 
-/** `docker inspect`の引数に、許す形の`--format`が無ければ真。 */
+/** `docker inspect`の引数に、許す形の`--format`が無いか、許さない`--format`が1つでもあれば真。 */
 function inspectExposes(args: readonly Word[]): boolean {
+  let found = false;
   for (let index = 0; index < args.length; index += 1) {
     const word = args[index];
     if (word === undefined) break;
@@ -206,11 +231,11 @@ function inspectExposes(args: readonly Word[]): boolean {
     } else if (word.text.startsWith("--format=")) {
       format = { ...word, text: word.text.slice("--format=".length) };
     }
-    if (format !== null) {
-      return !isSafeInspectFormat(format);
-    }
+    if (format === null) continue;
+    found = true;
+    if (!isSafeInspectFormat(format)) return true;
   }
-  return true;
+  return !found;
 }
 
 /** `docker compose config`の引数に、出力を絞るオプションが無いか、環境変数を出す指定があれば真。 */

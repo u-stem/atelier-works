@@ -16,6 +16,10 @@ function countingDeps(): { deps: GuardDeps; calls: () => number } {
       calls += 1;
       return "/repo";
     },
+    localBranchExists: () => {
+      calls += 1;
+      return false;
+    },
   };
   return { deps, calls: () => calls };
 }

@@ -195,6 +195,25 @@ const PATTERN_OPTION_SUBCOMMANDS: ReadonlySet<string> = new Set([
   "grep",
 ]);
 
+/** `git`のグローバルオプション(`-C <dir>`、`-c k=v`、`--no-pager`など)を飛ばして、サブコマンドを返す。 */
+function gitSubcommand(words: readonly Word[]): string {
+  const valueOptions = new Set([
+    "-C",
+    "-c",
+    "--git-dir",
+    "--work-tree",
+    "--namespace",
+    "--config-env",
+    "--super-prefix",
+  ]);
+  for (let index = 1; index < words.length; index += 1) {
+    const text = words[index]?.text ?? "";
+    if (valueOptions.has(text)) index += 1;
+    else if (!text.startsWith("-")) return text;
+  }
+  return "";
+}
+
 /** `find`のオプションのうち、次の語がファイル名のパターンになるもの。ファイルの読み取りではない。 */
 const FIND_PATTERN_OPTIONS: ReadonlySet<string> = new Set([
   "-name",
@@ -240,7 +259,7 @@ export function findSecretReference(
   }
   if (
     program === "git" &&
-    PATTERN_OPTION_SUBCOMMANDS.has(words[1]?.text ?? "")
+    PATTERN_OPTION_SUBCOMMANDS.has(gitSubcommand(words))
   ) {
     // `git log -S/-G/--grep`の値は、履歴を探すパターンで、ファイルの読み取りではない。
     words.forEach((word, index) => {

@@ -109,9 +109,18 @@ describe(".claude/settings.json", () => {
     },
   );
 
-  test("leaves docker exec, inspect, and config to the hook", () => {
-    const docker = denyRules().filter((rule) => rule.startsWith("Bash(docker"));
+  test("leaves docker exec and inspect to the hook", () => {
+    const docker = denyRules().filter((rule) =>
+      /^Bash\(docker.*:\*\)$/.test(rule),
+    );
     expect(docker).toEqual([]);
+  });
+
+  test.each([
+    "Bash(docker compose config)",
+    "Bash(docker compose -f infra/docker-compose.yml config)",
+  ])("denies the bare compose config as a backstop: %s", (rule) => {
+    expect(denyRules()).toContain(rule);
   });
 
   test("keeps the env dump rules as a backstop", () => {

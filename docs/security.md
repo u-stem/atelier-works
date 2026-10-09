@@ -263,7 +263,9 @@ workerには`no-new-privileges:true`と、プロセス数の上限(`deploy.resou
 値を指定して書き込むだけの`mise set -E local KEY=value`は拒否しない。これらのルールは、`mise run <task>`を通した迂回(タスクの中で秘密値を出力する処理など)は防げない。
 
 `mise x`は`mise exec`の別名で、`mise x -- bun test`のように通常の作業にも使うので、環境変数を出す形だけをこの設定で拒否する。
-`docker exec`、`docker inspect`、`docker compose config`も、設定のルールは引数を絞れないので、ここには置かない。
+`docker exec`と`docker inspect`は、設定のルールが引数を絞れないので、ここには置かない。
+引数なしの`docker compose config`だけは、設定にも置く。
+`mise set -E`は、秘密値を投入する手順([セットアップ](setup.md))と同じ形なので、設定では拒否せず、フックが`KEY=VALUE`の無い呼び出しだけを拒否する。
 どちらも、環境変数を出す形だけを次の節のフックが拒否する。
 
 ## Claude Codeのフック
@@ -282,13 +284,15 @@ FactoryのheadlessなClaudeの実行は`.claude/`を読まないので、この�
 | `LEFTHOOK_EXCLUDE`に`wmill-metadata`と`wmill-metadata-check`以外を書くこと | AGENTS.mdが飛ばしてよいとするのは、この2つだけである |
 | `LEFTHOOK_BIN`と`LEFTHOOK_CONFIG`の設定 | インストール済みのフックが読む、lefthookのバイナリと設定を差し替えられる |
 | `lefthook uninstall`、`.git/hooks`と`.git/config`への書き込み | gitのフックを外せる |
-| `git -c alias.*`、`remote.*.push`・`push.default`・`include.*`・`includeIf.*`の設定、`GIT_CONFIG_COUNT`などの環境変数 | `push`や`core.hooksPath`を別の名前や設定の裏から差し込める |
+| `git -c alias.*`、`remote.*.push`・`push.default`・`include.*`・`includeIf.*`の設定、`GIT_CONFIG_COUNT`・`GIT_CONFIG_GLOBAL`・`GIT_CONFIG_SYSTEM`などの環境変数 | `push`や`core.hooksPath`を別の名前や設定の裏から差し込める |
+| `commit`、`push`、`merge`、`rebase`に前置きした`HOME=`と`XDG_CONFIG_HOME=` | gitに別の設定ファイルを読ませて、フックを外せる |
 | `echo`や`printf`が変数から組み立てた文字列を、標準入力で読むシェル | 中身を判定できない |
 | `mise exec`の`-c`と`--command`、コードを渡したシェル、`env`、`printenv`、`set`、`export -p`などの環境変数の一覧 | `mise exec`は`mise.local.toml`の秘密値を環境変数として渡すので、値を表示できる |
 | `docker exec`と`docker compose exec`で実行する環境変数の一覧とコードを渡したシェル(`mise exec --`の前置きがあっても) | コンテナは秘密値を環境変数として持つ |
 | フィールドの経路だけの`--format`を持たない`docker inspect`、`Env`か`Config`を含む経路 | コンテナに渡した環境変数が見える |
 | 出力を絞らない`docker compose config`と`docker compose convert` | 変数を展開したcompose定義を出力する |
-| `cat`や`strings`などで読む`/proc/<pid>/environ` | プロセスの環境変数がそのまま入っている |
+| `/proc/<pid>/environ`(`task/<tid>`の下を含む)を引数やリダイレクトに含むコマンド | プロセスの環境変数がそのまま入っている |
+| 書き込む`KEY=VALUE`を持たない`mise set` | `mise.local.toml`の値を一覧する |
 | 秘密値のファイル(`mise.local.toml`とその別名、`.wmill/`の`remotes.ndjson`、`.env`系)を名前で指すコマンド | `Read`の拒否はBashに効かず、`cat`や`grep`で読むと値が会話の記録に残る |
 | リポジトリの根、`infra`、`.wmill`を起点にした再帰的な`grep`、`-u`や`--no-ignore`を付けた`rg`、`git grep --no-index` | gitignore済みの秘密値のファイルまで読む |
 
@@ -334,9 +338,17 @@ FactoryのheadlessなClaudeの実行は`.claude/`を読まないので、この�
 `git rebase`のオプションの値(`-X theirs`、`--onto <先>`など)は、ブランチとして数えない。
 `git checkout <名前>`の名前はファイルの復元であることもあるので、実際のブランチも候補に残す。
 どちらかが保護するブランチなら拒否する。
+その名前のブランチがローカルにあれば、ブランチの切り替えなので、実際のブランチは候補から外す。
+`git rebase --root <ブランチ>`は、最初のオペランドをブランチとする。
 `git switch`と`-b`、`-c`は、切り替え先だけを今のブランチとする。
 `HEAD`、`@`、`main~2`のような相対の参照は、ブランチを変えないものとして扱う。
-切り替え先が変数のとき、`git checkout -`のとき、`git rebase <上流> <ブランチ>`の`<ブランチ>`が変数のときは、今のブランチが決まらないものとして扱う。
+次の場合は、今のブランチが決まらないものとして扱う。
+
+- 切り替え先が変数のとき
+- `git checkout -`と`git checkout @{-1}`のとき
+- `--detach`と`-d`のとき
+- `git rebase <上流> <ブランチ>`の`<ブランチ>`が変数のとき
+
 切り替えたブランチは、同じリポジトリの別のディレクトリ(`git -C scripts push`)でも使う。
 `;`でつないだ切り替えも、成功したものとして扱う。
 移動先が変数のときも今のブランチを調べられないので、そのpushだけを拒否する。
@@ -350,7 +362,8 @@ push先のrefspecは、`refs/heads/`と`heads/`を外して`main`、`master`と�
 `docker compose exec windmill_worker kill <pid>`のような運用の手順は拒否しない。
 `docker inspect`は、`--format`の`{{...}}`がフィールドの経路だけ(`{{.State.Running}}`、`{{json .State}}`)のときだけ拒否しない。
 `{{.}}`、`range`、`printf`、`index`のように、オブジェクト全体を出せる指定は拒否する。
-経路に`Env`か`Config`を含むものも拒否する。
+経路の区切りに`Env`か`Config`があるものも拒否する(`.HostConfig.Binds`は拒否しない)。
+`--format`を複数指定したときは、1つでも拒否する形なら拒否する。
 `docker compose config`と`convert`は、出力を絞った形を拒否しない。
 絞るオプションは、`--services`、`--profiles`、`--volumes`、`--images`、`--hash`、`-q`、`--no-interpolate`である。
 
@@ -412,7 +425,6 @@ bunかnodeの起動そのものが止まったときだけ、タイムアウト�
 - 式の中でファイルを開く操作(`sed`の`r`コマンド、`perl -e`など)
 - `cd`やglob、`dd`、`perl -pi`、`find -delete`を使った`.git/hooks`と`.git/config`の書き換え
 - `echo ... | cat | sh`のように、間にコマンドを挟んだ標準入力のシェル(直前のパイプの元だけを見る)
-- `cat`や`strings`以外のコマンドで`/proc/<pid>/environ`を読む操作
 - `git checkout <名前>`が、ファイルの復元かブランチの切り替えか(名前が1つなら、ブランチの切り替えとして扱う)
 - `docker run ... env`のように、新しく起動するコンテナで環境変数を出す操作
 - `gh auth token`のように、認証情報を表示するコマンドと、`~/.ssh`やgh CLIの設定ファイルの読み取り

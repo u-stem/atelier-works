@@ -1028,6 +1028,161 @@ describe("bash-guard denies reading the environment from /proc", () => {
   });
 });
 
+describe("bash-guard denies replacing the git config files", () => {
+  test.each([
+    "GIT_CONFIG_GLOBAL=/tmp/g git commit -m x",
+    "GIT_CONFIG_SYSTEM=/tmp/s git commit -m x",
+    "export GIT_CONFIG_GLOBAL=/dev/null",
+    "env GIT_CONFIG_GLOBAL=/tmp/g git push origin feat/x",
+    "HOME=/tmp/h git commit -m x",
+    "XDG_CONFIG_HOME=/tmp/h git commit -m x",
+    "HOME=/tmp/h git push origin feat/x",
+    "env HOME=/tmp/h git rebase origin/main",
+    "XDG_CONFIG_HOME=/tmp/h git merge feat/x",
+  ])("denies %s", async (command) => {
+    expect(await decide(command)).toBe("deny");
+  });
+
+  test.each([
+    "GIT_CONFIG_NOSYSTEM=1 git status",
+    "HOME=/tmp/h git status",
+    "HOME=/tmp/h git log --oneline",
+    "HOME=/tmp/h bun test",
+    "XDG_CONFIG_HOME=/tmp/h mise run check",
+  ])("allows %s", async (command) => {
+    expect(await decide(command)).toBe("allow");
+  });
+});
+
+describe("bash-guard denies mise set without a value to write", () => {
+  test.each([
+    "mise set",
+    "mise set -E local",
+    "mise set KEY",
+    "mise set --env local",
+  ])("denies %s", async (command) => {
+    expect(await decide(command)).toBe("deny");
+  });
+
+  test.each([
+    "mise set -E local KEY=value",
+    'mise set KEY="$v"',
+    'read -rs -p "KEY: " v && mise set -E local KEY="$v"',
+    "mise run check",
+  ])("allows %s", async (command) => {
+    expect(await decide(command)).toBe("allow");
+  });
+
+  test("the reason says it lists the values", async () => {
+    expect(await denyReason("mise set")).toContain("lists");
+  });
+});
+
+describe("bash-guard sees busybox applets that dump the environment", () => {
+  test.each([
+    "mise exec -- busybox env",
+    "mise exec -- busybox printenv",
+    "docker compose exec x busybox env",
+    "docker exec x busybox printenv TOKEN",
+  ])("denies %s", async (command) => {
+    expect(await decide(command)).toBe("deny");
+  });
+
+  test.each(["mise exec -- busybox ls", "docker exec x busybox ls /tmp"])(
+    "allows %s",
+    async (command) => {
+      expect(await decide(command)).toBe("allow");
+    },
+  );
+});
+
+describe("bash-guard denies any reference to a process environ file", () => {
+  test.each([
+    "grep -a TOKEN /proc/self/environ",
+    "sed 's/a/b/' /proc/1/task/1/environ",
+    "python3 dump.py /proc/self/environ",
+    "cat /proc/*/environ",
+    "cat /proc/$$/environ",
+    'cat "/proc/$PID/environ"',
+    "awk 1 /proc/thread-self/environ",
+  ])("denies %s", async (command) => {
+    expect(await decide(command)).toBe("deny");
+  });
+
+  test.each([
+    "ls -l /proc/self/environ",
+    "stat /proc/1/environ",
+    "test -r /proc/self/environ",
+    "cat /proc/self/cmdline",
+    'echo "see /proc/self/environ"',
+  ])("allows %s", async (command) => {
+    expect(await decide(command)).toBe("allow");
+  });
+});
+
+describe("bash-guard checks every docker inspect format", () => {
+  test.each([
+    "docker inspect -f '{{.State.Running}}' -f '{{json .Config}}' x",
+    "docker inspect -f '{{json .Config}}' -f '{{.State.Running}}' x",
+    "docker inspect --format '{{.State.Running}}' --format '{{.Config.Env}}' x",
+  ])("denies %s", async (command) => {
+    expect(await decide(command)).toBe("deny");
+  });
+
+  test.each([
+    "docker inspect -f '{{.HostConfig.Binds}}' x",
+    "docker inspect -f '{{.State.Running}}' -f '{{.State.Status}}' x",
+    "docker inspect -f '{{.ConfigHash}}' x",
+  ])("allows %s", async (command) => {
+    expect(await decide(command)).toBe("allow");
+  });
+
+  test("the reason says whole-object forms are denied", async () => {
+    expect(await denyReason("docker inspect x")).toContain("range");
+  });
+});
+
+describe("bash-guard drops the current branch when the named branch exists", () => {
+  test("an existing local branch is the only candidate", async () => {
+    const options = { branch: "main", localBranches: ["feat/x"] };
+    expect(await decide("git checkout feat/x && git push", options)).toBe(
+      "allow",
+    );
+  });
+
+  test("a name that is no branch keeps the current branch", async () => {
+    const options = { branch: "main", localBranches: ["feat/x"] };
+    expect(await decide("git checkout README.md && git push", options)).toBe(
+      "deny",
+    );
+  });
+
+  test("an existing protected branch is still denied", async () => {
+    const options = { localBranches: ["main"] };
+    expect(await decide("git checkout main && git push", options)).toBe("deny");
+  });
+
+  test("the protected-branch reason suggests git switch", async () => {
+    expect(await denyReason("git push origin main")).toContain("git switch");
+  });
+});
+
+describe("bash-guard handles previous-branch and root rebases", () => {
+  test("@{-1} makes the branch unknown", async () => {
+    expect(await decide("git checkout '@{-1}' && git push")).toBe("deny");
+  });
+
+  test("a rebase --root names the branch", async () => {
+    expect(
+      await decide("git rebase --root feat/x && git push", { branch: "main" }),
+    ).toBe("allow");
+  });
+
+  test("a rebase --root onto a protected branch", async () => {
+    expect(await decide("git rebase --root main && git push")).toBe("deny");
+  });
+});
+
 describe("bash-guard parses common shell syntax", () => {
   test.each([
     'case "$x" in a) echo a;; esac',

@@ -6,6 +6,8 @@ export type Options = {
   readonly branch?: string | null;
   /** ディレクトリごとのブランチ。ここに無いディレクトリは`branch`を返す。 */
   readonly branches?: Readonly<Record<string, string | null>>;
+  /** ローカルに存在するブランチの名前。 */
+  readonly localBranches?: readonly string[];
   readonly subagent?: boolean;
   readonly cwd?: string;
 };
@@ -37,6 +39,8 @@ async function run(command: string, options: Options) {
             const branches = options.branches ?? {};
             return dir in branches ? (branches[dir] ?? null) : fallbackBranch;
           },
+          localBranchExists: (_dir, name) =>
+            (options.localBranches ?? []).includes(name),
           // セッションのディレクトリと、/repo の下のディレクトリは同じリポジトリ、それ以外は自分自身が根になる。
           repoRoot: (dir) =>
             dir === (options.cwd ?? REPO_ROOT) ||

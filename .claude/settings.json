@@ -44,6 +44,8 @@
       "Bash(mise config:*)",
       "Bash(mise cfg:*)",
       "Bash(mise toml:*)",
+      "Bash(docker compose config)",
+      "Bash(docker compose -f infra/docker-compose.yml config)",
       "Bash(mise exec -- env:*)",
       "Bash(mise exec -- printenv:*)",
       "Bash(mise x -- env:*)",
