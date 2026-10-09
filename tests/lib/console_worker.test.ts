@@ -2,61 +2,42 @@ import { describe, expect, test } from "bun:test";
 import { noticeSeverity } from "../../f/factory/lib/console_support.ts";
 import {
   CONSOLE_WORKER_MISSING_NOTICE,
-  CONSOLE_WORKER_PING_SECONDS,
   checkConsoleWorker,
-  hasConsoleWorker,
+  parseConsoleWorkerExists,
 } from "../../f/factory/lib/console_worker.ts";
+import type { NotifyEvent } from "../../f/factory/lib/discord.ts";
 import { logger } from "../../f/factory/lib/log.ts";
 import type { NoticeRecord } from "../../f/factory/lib/types.ts";
 
-const DEFAULT_WORKER = {
-  worker: "w1",
-  worker_group: "default",
-  custom_tags: [],
-};
-const CONSOLE_WORKER = {
-  worker: "w2",
-  worker_group: "console",
-  custom_tags: ["console"],
-};
-
-describe("hasConsoleWorker", () => {
-  test("is true when a worker carries the console tag", () => {
-    expect(hasConsoleWorker([DEFAULT_WORKER, CONSOLE_WORKER])).toBe(true);
+describe("parseConsoleWorkerExists", () => {
+  test("is true when the console tag has a worker", () => {
+    expect(parseConsoleWorkerExists({ console: true })).toBe(true);
   });
 
-  test("is false when no worker carries the console tag", () => {
-    expect(hasConsoleWorker([DEFAULT_WORKER])).toBe(false);
+  test("is false when the console tag has no worker", () => {
+    expect(parseConsoleWorkerExists({ console: false })).toBe(false);
   });
 
-  test("is false for an empty list", () => {
-    expect(hasConsoleWorker([])).toBe(false);
+  test("is null when the console tag is missing from the map", () => {
+    expect(parseConsoleWorkerExists({ other: true })).toBeNull();
   });
 
-  test("is false when custom_tags is missing", () => {
-    expect(hasConsoleWorker([{ worker: "w1" }])).toBe(false);
+  test("is null when the value is not a boolean", () => {
+    expect(parseConsoleWorkerExists({ console: "yes" })).toBeNull();
   });
 
-  test("is false when custom_tags is not an array", () => {
-    expect(hasConsoleWorker([{ custom_tags: "console" }])).toBe(false);
+  test("is null for an array", () => {
+    expect(parseConsoleWorkerExists([true])).toBeNull();
   });
 
-  test("ignores a tag that only contains console", () => {
-    expect(hasConsoleWorker([{ custom_tags: ["console2", "x-console"] }])).toBe(
+  test("is null for null", () => {
+    expect(parseConsoleWorkerExists(null)).toBeNull();
+  });
+
+  test("ignores other tags in the map", () => {
+    expect(parseConsoleWorkerExists({ default: true, console: false })).toBe(
       false,
     );
-  });
-
-  test("skips malformed entries and still finds a console worker", () => {
-    expect(hasConsoleWorker([null, 5, "x", CONSOLE_WORKER])).toBe(true);
-  });
-
-  test("ignores non-string tags", () => {
-    expect(hasConsoleWorker([{ custom_tags: [1, null] }])).toBe(false);
-  });
-
-  test("is false when the response is not an array", () => {
-    expect(hasConsoleWorker({ workers: [CONSOLE_WORKER] })).toBe(false);
   });
 });
 
@@ -69,9 +50,13 @@ describe("console_worker_missing notice", () => {
     expect(CONSOLE_WORKER_MISSING_NOTICE.kind).toBe("console_worker_missing");
   });
 
-  test("tells the operator what to check", () => {
+  test("tells the operator to start the container again", () => {
+    expect(CONSOLE_WORKER_MISSING_NOTICE.message).toContain("mise run up");
+  });
+
+  test("tells the operator how to check the container", () => {
     expect(CONSOLE_WORKER_MISSING_NOTICE.message).toContain(
-      "windmill_worker_console",
+      "docker compose ps windmill_worker_console",
     );
   });
 });
@@ -79,92 +64,158 @@ describe("console_worker_missing notice", () => {
 type Harness = {
   readonly deps: Parameters<typeof checkConsoleWorker>[0];
   readonly notices: NoticeRecord[];
-  readonly pages: { page: number; pingSince: number }[];
+  readonly events: NotifyEvent[];
+  readonly tags: string[];
 };
 
 function harness(options: {
-  readonly pages: readonly (unknown | Error)[];
+  readonly response: () => Promise<unknown>;
+  readonly noticeInserted?: boolean;
   readonly addNoticeThrows?: boolean;
+  readonly notifyThrows?: boolean;
+  readonly timeoutMs?: number;
 }): Harness {
   const notices: NoticeRecord[] = [];
-  const pages: { page: number; pingSince: number }[] = [];
+  const events: NotifyEvent[] = [];
+  const tags: string[] = [];
   return {
     notices,
-    pages,
+    events,
+    tags,
     deps: {
-      listWorkers: async (page, pingSince) => {
-        pages.push({ page, pingSince });
-        const result = options.pages[page - 1] ?? [];
-        if (result instanceof Error) throw result;
-        return result;
+      existsWorker: async (tag) => {
+        tags.push(tag);
+        return options.response();
       },
       addNotice: async (record) => {
         if (options.addNoticeThrows === true) throw new Error("db down");
         notices.push(record);
-        return 1;
+        return options.noticeInserted === false ? null : 1;
       },
+      notify: async (event) => {
+        if (options.notifyThrows === true) throw new Error("discord down");
+        events.push(event);
+      },
+      instanceName: "local",
       log: logger("test", { sink: () => undefined }),
+      timeoutMs: options.timeoutMs ?? 1000,
     },
   };
 }
 
+const PRESENT = async () => ({ console: true });
+const ABSENT = async () => ({ console: false });
+
 describe("checkConsoleWorker", () => {
-  test("adds no notice when a console worker pinged", async () => {
-    const h = harness({ pages: [[CONSOLE_WORKER]] });
+  test("asks about the console tag only", async () => {
+    const h = harness({ response: PRESENT });
+    await checkConsoleWorker(h.deps);
+    expect(h.tags).toEqual(["console"]);
+  });
+
+  test("returns present when a console worker exists", async () => {
+    const h = harness({ response: PRESENT });
+    expect(await checkConsoleWorker(h.deps)).toBe("present");
+  });
+
+  test("adds no notice when a console worker exists", async () => {
+    const h = harness({ response: PRESENT });
     await checkConsoleWorker(h.deps);
     expect(h.notices).toEqual([]);
   });
 
-  test("returns present when a console worker pinged", async () => {
-    const h = harness({ pages: [[CONSOLE_WORKER]] });
-    expect(await checkConsoleWorker(h.deps)).toBe("present");
-  });
-
-  test("adds the notice when no console worker pinged", async () => {
-    const h = harness({ pages: [[DEFAULT_WORKER]] });
+  test("adds the notice when no console worker exists", async () => {
+    const h = harness({ response: ABSENT });
     await checkConsoleWorker(h.deps);
     expect(h.notices).toEqual([CONSOLE_WORKER_MISSING_NOTICE]);
   });
 
-  test("returns missing when no console worker pinged", async () => {
-    const h = harness({ pages: [[DEFAULT_WORKER]] });
+  test("returns missing when no console worker exists", async () => {
+    const h = harness({ response: ABSENT });
     expect(await checkConsoleWorker(h.deps)).toBe("missing");
   });
 
-  test("asks only for workers that pinged recently", async () => {
-    const h = harness({ pages: [[CONSOLE_WORKER]] });
+  test("sends Discord when the notice was newly inserted", async () => {
+    const h = harness({ response: ABSENT });
     await checkConsoleWorker(h.deps);
-    expect(h.pages).toEqual([
-      { page: 1, pingSince: CONSOLE_WORKER_PING_SECONDS },
+    expect(h.events).toEqual([
+      {
+        kind: "console_worker_missing",
+        instance_name: "local",
+        cause: expect.stringContaining("console"),
+        next_action: expect.stringContaining("mise run up"),
+      },
     ]);
   });
 
-  test("reads the next page when a page is full", async () => {
-    const full = Array.from({ length: 100 }, () => DEFAULT_WORKER);
-    const h = harness({ pages: [full, [CONSOLE_WORKER]] });
-    expect(await checkConsoleWorker(h.deps)).toBe("present");
-  });
-
-  test("stops reading pages once a console worker is found", async () => {
-    const full = Array.from({ length: 100 }, () => CONSOLE_WORKER);
-    const h = harness({ pages: [full, [DEFAULT_WORKER]] });
+  test("names the container check in the Discord next action", async () => {
+    const h = harness({ response: ABSENT });
     await checkConsoleWorker(h.deps);
-    expect(h.pages.length).toBe(1);
+    expect(JSON.stringify(h.events[0])).toContain(
+      "docker compose ps windmill_worker_console",
+    );
   });
 
-  test("does not throw when the worker list cannot be read", async () => {
-    const h = harness({ pages: [new Error("forbidden")] });
+  test("does not send Discord while the same notice is unresolved", async () => {
+    const h = harness({ response: ABSENT, noticeInserted: false });
+    await checkConsoleWorker(h.deps);
+    expect(h.events).toEqual([]);
+  });
+
+  test("does not send Discord when a worker exists", async () => {
+    const h = harness({ response: PRESENT });
+    await checkConsoleWorker(h.deps);
+    expect(h.events).toEqual([]);
+  });
+
+  test("does not throw when Discord cannot be reached", async () => {
+    const h = harness({ response: ABSENT, notifyThrows: true });
+    expect(await checkConsoleWorker(h.deps)).toBe("missing");
+  });
+
+  test("does not throw when the notice cannot be recorded", async () => {
+    const h = harness({ response: ABSENT, addNoticeThrows: true });
+    expect(await checkConsoleWorker(h.deps)).toBe("missing");
+  });
+
+  test("returns unknown when the API call fails", async () => {
+    const h = harness({
+      response: async () => {
+        throw new Error("forbidden");
+      },
+    });
     expect(await checkConsoleWorker(h.deps)).toBe("unknown");
   });
 
-  test("adds no notice when the worker list cannot be read", async () => {
-    const h = harness({ pages: [new Error("forbidden")] });
+  test("adds no notice when the API call fails", async () => {
+    const h = harness({
+      response: async () => {
+        throw new Error("forbidden");
+      },
+    });
     await checkConsoleWorker(h.deps);
     expect(h.notices).toEqual([]);
   });
 
-  test("does not throw when the notice cannot be recorded", async () => {
-    const h = harness({ pages: [[DEFAULT_WORKER]], addNoticeThrows: true });
-    expect(await checkConsoleWorker(h.deps)).toBe("missing");
+  test("returns unknown for a response of the wrong shape", async () => {
+    const h = harness({ response: async () => ({ other: true }) });
+    expect(await checkConsoleWorker(h.deps)).toBe("unknown");
+  });
+
+  test("returns unknown when the call hangs past the timeout", async () => {
+    const h = harness({
+      response: () => new Promise(() => undefined),
+      timeoutMs: 20,
+    });
+    expect(await checkConsoleWorker(h.deps)).toBe("unknown");
+  });
+
+  test("adds no notice when the call hangs past the timeout", async () => {
+    const h = harness({
+      response: () => new Promise(() => undefined),
+      timeoutMs: 20,
+    });
+    await checkConsoleWorker(h.deps);
+    expect(h.notices).toEqual([]);
   });
 });

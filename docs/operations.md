@@ -624,7 +624,14 @@ Consoleの**通知**タブには、Discordに送らない要対応の事項が�
 | `workspace_disk_usage` | 作業領域の掃除(毎日03:00)が記録したディスク使用量 | 増え続けていないか見る |
 | `console_fetch_failed` | Consoleの取り込みが失敗した | 通知の「次の操作」に従う |
 | `console_fetch_stale` | Consoleの取り込みの結果が30分以上更新されていない | 取り込みのコンテナ(`console_fetcher`)が動いているか確かめる |
-| `console_worker_missing` | tag `console`を受けるworkerが、5分以内にpingしていない。Consoleのjobがqueueに溜まり、Consoleが止まる | Console用のworker(`windmill_worker_console`)のコンテナが動いているか確かめ、止まっていれば`mise run up`で起動し直す。自己更新(10分ごと)が検知する |
+| `console_worker_missing` | tag `console`を受けるworkerが居ない。Consoleのjobがqueueに溜まり、Consoleが止まる | `mise run up`でworkerを起動し直し、`docker compose ps windmill_worker_console`でコンテナの状態を確かめる。自己更新(10分ごと)が検知し、Discordにも届く |
+
+### Console用のworkerの検知を確かめる
+
+Console用のworkerが居ないかどうかは、自己更新(`self_update`)が毎回確かめる。
+マージの後は、自己更新のジョブログに`could not check for a console worker`の警告が出ていないことを見る。
+出ていれば、検知が動いていない。
+Consoleが止まっていてもDiscordには届くので、通知の確認先はConsoleに限らない。
 
 ### 通知を解決する
 

@@ -128,6 +128,14 @@ export type NotifyEvent =
       next_action: string;
     }
   | {
+      kind: "console_worker_missing";
+      instance_name: string;
+      /** tag `console`を受けるworkerが居ないこと。 */
+      cause: string;
+      /** 運用者がまず行う操作の1文。 */
+      next_action: string;
+    }
+  | {
       kind: "daily_summary";
       instance_name: string;
       day: string;
@@ -336,6 +344,16 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
     case "console_fetch_problem":
       return {
         title: "Consoleの取り込みに問題があります",
+        description: event.cause,
+        url: null,
+        fields: [
+          { name: "次の操作", value: event.next_action },
+          instanceField(event.instance_name),
+        ],
+      };
+    case "console_worker_missing":
+      return {
+        title: "Console用のworkerが居ません",
         description: event.cause,
         url: null,
         fields: [

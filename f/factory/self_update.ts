@@ -16,6 +16,7 @@ import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "./lib/config.ts";
 import { checkConsoleWorker } from "./lib/console_worker.ts";
 import { addNoticeUnlessUnresolved, recordDeployment } from "./lib/db.ts";
+import { notifyBestEffort } from "./lib/discord.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import {
   assertBranchMatches,
@@ -305,19 +306,41 @@ export type SelfUpdateResult =
       readonly needs_host_action: boolean;
     };
 
+type FactoryConfig = Awaited<ReturnType<typeof loadConfig>>;
+
+/**
+ * 自己更新を行い、そのあとでConsole用workerの存在を確かめる。
+ * 確認は更新の成否によらず毎回行う。Console用workerが居ないとConsoleのjobが溜まり続けるため。
+ * 確認は時間を区切り、失敗しても例外を投げないので、更新の結果は変わらない。
+ */
 export async function main(): Promise<SelfUpdateResult> {
   const log = logger("self_update");
   const config = await loadConfig(() =>
     wmill.getResource("f/factory/factory_config"),
   );
-  // Console用workerが居ないとConsoleのjobが溜まり続けるので、更新の有無によらず毎回確かめる。
-  // 確かめられなくても自己更新は止めない(`checkConsoleWorker`は例外を投げない)。
-  await checkConsoleWorker({
-    listWorkers: (page, pingSince) =>
-      wmill.WorkerService.listWorkers({ page, perPage: 100, pingSince }),
-    addNotice: (record) => addNoticeUnlessUnresolved(record),
-    log,
-  });
+  try {
+    return await updateSelf(log, config);
+  } finally {
+    await checkConsoleWorker({
+      existsWorker: (tag) =>
+        wmill.WorkerService.existsWorkersWithTags({ tags: tag }),
+      addNotice: (record) => addNoticeUnlessUnresolved(record),
+      notify: async (event) => {
+        const webhookUrl = await wmill.getVariable(
+          "f/factory/discord_webhook_url",
+        );
+        await notifyBestEffort(webhookUrl, event, log);
+      },
+      instanceName: config.instance_name,
+      log,
+    });
+  }
+}
+
+async function updateSelf(
+  log: Logger,
+  config: FactoryConfig,
+): Promise<SelfUpdateResult> {
   const ghToken = await wmill.getVariable("f/factory/github_token");
 
   const factoryClone = await ensureFactoryClone({

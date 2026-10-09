@@ -108,6 +108,37 @@ const rateLimitedByBodyFor = (seconds: number) => () =>
 
 const ok = () => jsonResponse(204, {});
 
+describe("buildEmbed console_worker_missing", () => {
+  const event: NotifyEvent = {
+    kind: "console_worker_missing",
+    instance_name: "local",
+    cause: "Console用のworkerが居ません",
+    next_action: "mise run upで起動し直す",
+  };
+
+  test("puts the cause in the description", () => {
+    expect(buildEmbed(event).description).toBe("Console用のworkerが居ません");
+  });
+
+  test("shows the next action as a field", () => {
+    expect(buildEmbed(event).fields).toContainEqual({
+      name: "次の操作",
+      value: "mise run upで起動し直す",
+    });
+  });
+
+  test("includes the instance field", () => {
+    expect(buildEmbed(event).fields).toContainEqual({
+      name: "インスタンス",
+      value: "local",
+    });
+  });
+
+  test("names the console worker in the title", () => {
+    expect(buildEmbed(event).title).toContain("Console用のworker");
+  });
+});
+
 describe("buildEmbed console_fetch_problem", () => {
   const event: NotifyEvent = {
     kind: "console_fetch_problem",

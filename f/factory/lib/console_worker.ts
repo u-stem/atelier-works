@@ -2,18 +2,21 @@
 // 居ないと、tag付きのjobとscheduleがqueueに溜まり続け、Consoleが止まる。
 // defaultのworkerで動く`self_update`が呼ぶ。Console用workerと同じworkerで確かめると、
 // そのworkerが居ないときに確かめる処理も動かないため。
+// Consoleが止まるとConsoleの中のnoticeは読めないので、noticeを新しく残したときはDiscordにも送る。
 
+import type { NotifyEvent } from "./discord.ts";
 import { type Logger, maskSecrets } from "./log.ts";
-import { isRecord, isString, type NoticeRecord } from "./types.ts";
+import { isRecord, type NoticeRecord } from "./types.ts";
 
 /** Console用workerが受けるtag。 */
 export const CONSOLE_WORKER_TAG = "console";
 
-/** この秒数以内にpingしたworkerだけを、居るものとして数える。 */
-export const CONSOLE_WORKER_PING_SECONDS = 300;
+/** 確認が終わるまで待つ上限。止まっても自己更新の反映を遅らせないための値。 */
+export const CONSOLE_WORKER_CHECK_TIMEOUT_MS = 10_000;
 
-const WORKERS_PER_PAGE = 100;
-const MAX_PAGES = 5;
+const CAUSE = `tag ${CONSOLE_WORKER_TAG}を受けるworkerが居ません。Consoleのjobがqueueに溜まり、Consoleが止まります`;
+const NEXT_ACTION =
+  "mise run upでworkerを起動し直し、docker compose ps windmill_worker_consoleでコンテナの状態を確かめる";
 
 /**
  * 通知の本文は、workerが居ない間は毎回同じ文にする。
@@ -21,72 +24,96 @@ const MAX_PAGES = 5;
  */
 export const CONSOLE_WORKER_MISSING_NOTICE: NoticeRecord = {
   kind: "console_worker_missing",
-  message: `tag ${CONSOLE_WORKER_TAG}を受けるworkerが${String(CONSOLE_WORKER_PING_SECONDS)}秒以内にpingしていません。Consoleのjobがqueueに溜まり、Consoleが止まります。次の操作: Console用のworker(windmill_worker_console)のコンテナが起動しているか確かめ、止まっていればmise run upで起動し直す`,
+  message: `${CAUSE}。次の操作: ${NEXT_ACTION}`,
 };
 
 /**
- * workerの一覧の応答に、tag `console`を持つworkerがあるかを返す。
- * 応答は信頼できない入力として読み、配列でなければ、形の違う要素は読み飛ばす。
- * tagは完全一致で比べる。
+ * `existsWorkersWithTags`の応答(タグから、そのタグのworkerが居るかへの対応)を読み、
+ * tag `console`のworkerが居るかを返す。応答の形が違えば`null`を返す。
  */
-export function hasConsoleWorker(workers: unknown): boolean {
-  if (!Array.isArray(workers)) {
-    return false;
+export function parseConsoleWorkerExists(response: unknown): boolean | null {
+  if (!isRecord(response)) {
+    return null;
   }
-  return workers.some((worker) => {
-    if (!isRecord(worker)) {
-      return false;
-    }
-    const tags = worker.custom_tags;
-    return (
-      Array.isArray(tags) &&
-      tags.some((tag) => isString(tag) && tag === CONSOLE_WORKER_TAG)
-    );
-  });
+  const exists = response[CONSOLE_WORKER_TAG];
+  return typeof exists === "boolean" ? exists : null;
 }
 
 export type ConsoleWorkerCheckDeps = {
-  /** `page`(1始まり)のworkerの一覧を返す。`pingSince`秒以内にpingしたworkerだけにする。 */
-  readonly listWorkers: (page: number, pingSince: number) => Promise<unknown>;
+  /** `tag`のworkerが居るかの応答を返す。 */
+  readonly existsWorker: (tag: string) => Promise<unknown>;
   /** 同じ本文の未解決のnoticeが無ければ挿入してIDを返し、あれば`null`を返す。 */
   readonly addNotice: (record: NoticeRecord) => Promise<number | null>;
+  readonly notify: (event: NotifyEvent) => Promise<unknown>;
+  readonly instanceName: string;
   readonly log: Logger;
+  /** 省略時は`CONSOLE_WORKER_CHECK_TIMEOUT_MS`。 */
+  readonly timeoutMs?: number;
 };
 
 export type ConsoleWorkerCheck = "present" | "missing" | "unknown";
 
-/**
- * tag `console`を受けるworkerが最近pingしたかを確かめ、居なければnoticeを残す。
- * 一覧を読めなければ`unknown`を返し、noticeは残さない。居ないと決めつけないためである。
- * 呼び出し元の処理を止めないよう、例外は投げない。
- */
-export async function checkConsoleWorker(
+async function checkOnce(
   deps: ConsoleWorkerCheckDeps,
 ): Promise<ConsoleWorkerCheck> {
-  let found = false;
+  let exists: boolean | null;
   try {
-    for (let page = 1; page <= MAX_PAGES && !found; page += 1) {
-      const workers = await deps.listWorkers(page, CONSOLE_WORKER_PING_SECONDS);
-      found = hasConsoleWorker(workers);
-      if (!Array.isArray(workers) || workers.length < WORKERS_PER_PAGE) {
-        break;
-      }
-    }
+    exists = parseConsoleWorkerExists(
+      await deps.existsWorker(CONSOLE_WORKER_TAG),
+    );
   } catch (err) {
-    deps.log.warn("could not list workers to check the console worker", {
+    deps.log.warn("could not check for a console worker", {
       error: maskSecrets(String(err)),
     });
     return "unknown";
   }
-  if (found) {
+  if (exists === null) {
+    deps.log.warn("unexpected response while checking for a console worker");
+    return "unknown";
+  }
+  if (exists) {
     return "present";
   }
   try {
-    await deps.addNotice(CONSOLE_WORKER_MISSING_NOTICE);
+    const noticeId = await deps.addNotice(CONSOLE_WORKER_MISSING_NOTICE);
+    if (noticeId !== null) {
+      await deps.notify({
+        kind: "console_worker_missing",
+        instance_name: deps.instanceName,
+        cause: CAUSE,
+        next_action: NEXT_ACTION,
+      });
+    }
   } catch (err) {
-    deps.log.warn("could not record the console worker notice", {
+    deps.log.warn("could not record the console worker problem", {
       error: maskSecrets(String(err)),
     });
   }
   return "missing";
+}
+
+/**
+ * tag `console`を受けるworkerが居るかを確かめ、居なければnoticeを残してDiscordに送る。
+ * Discordは、noticeを新しく挿入できたときだけ送る。
+ * 応答を読めないときと、`timeoutMs`以内に終わらないときは`unknown`を返し、noticeは残さない。
+ * 居ないと決めつけないためである。呼び出し元の処理を止めないよう、例外は投げない。
+ */
+export async function checkConsoleWorker(
+  deps: ConsoleWorkerCheckDeps,
+): Promise<ConsoleWorkerCheck> {
+  const timeoutMs = deps.timeoutMs ?? CONSOLE_WORKER_CHECK_TIMEOUT_MS;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<ConsoleWorkerCheck>((resolve) => {
+    timer = setTimeout(() => {
+      deps.log.warn("console worker check timed out", {
+        timeout_ms: timeoutMs,
+      });
+      resolve("unknown");
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([checkOnce(deps), timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
