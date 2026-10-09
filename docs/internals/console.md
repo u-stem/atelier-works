@@ -332,6 +332,7 @@ Caddyは、`/console/`の下を次の経路で返す。
 | `/console/status.json` | ボリューム直下の`status.json`。無ければ404 | `no-store` |
 | `/console/assets/*` | 共有の`assets/`。無ければ404 | 長期(immutable) |
 | `/console/drawio.html` | `current/`の`drawio.html`。無ければ404 | `no-cache` |
+| `/console` | `/console/`への308のリダイレクト。クエリ(`?approval=<id>`など)は保つ | - |
 | `/console/drawio/*` | `current/`の`drawio/`。ビューアと受け口。無ければ404 | 長期(immutable) |
 | `/console/*` | `current/`のファイル。無いパスは`index.html` | `no-cache` |
 
@@ -532,7 +533,7 @@ iframe側の受け口(`console/public/drawio/drawio-frame-*.js`)は、次のも�
 例外の文面は、ページに出さず、親にも渡さない。
 
 iframeは、図の領域の大きさが変わるたびに高さを送る。
-図が上限より高いときは、親のiframeが1600pxで止まり、iframeの中でスクロールする。
+図が上限より高いときは、親のiframeが1600pxで止まり、iframeの中で縦にスクロールする。横には隠す。
 枠線は、iframeの外側の要素に付ける。iframeに付けると、枠線の分だけ高さが足りなくなる。
 
 ### CSPとヘッダー
@@ -552,7 +553,7 @@ Consoleの本体のCSPは`/console/assets/`だけを許すので、本体のペ�
 
 | ヘッダー | 値 | 理由 |
 | --- | --- | --- |
-| `Content-Security-Policy` | `default-src 'none'`、`script-src`は`/console/drawio/`、`style-src 'unsafe-inline'`、`img-src data:`、`font-src data:`、`connect-src 'none'`、`base-uri 'none'`、`form-action 'none'`、`frame-ancestors 'self'`、`sandbox allow-scripts` | 外への取得をすべて止める。不透明なオリジンでは`'self'`が使えないので、`script-src`にはブラウザが使ったオリジンを入れる。`style-src`は、ビューアが付けるインラインのstyleのために許す。`sandbox`は、ページを直接開いても不透明なオリジンで動かす |
+| `Content-Security-Policy` | `default-src 'none'`、`script-src`は`/console/drawio/`、`style-src 'unsafe-inline'`、`img-src data:`、`font-src data:`、`connect-src 'none'`、`base-uri 'none'`、`form-action 'none'`、`frame-ancestors`はブラウザが使ったオリジン、`sandbox allow-scripts` | 外への取得をすべて止める。不透明なオリジンでは`'self'`が使えないので、`script-src`と`frame-ancestors`にはブラウザが使ったオリジンを入れる。`style-src`は、ビューアが付けるインラインのstyleのために許す。`sandbox`は、ページを直接開いても不透明なオリジンで動かす |
 | `X-Frame-Options` | `SAMEORIGIN` | `frame-ancestors`を解釈するブラウザでは、そちらが優先される。これは、解釈しない古いブラウザ向けの備えで、Console自身のページだけに埋め込ませる |
 | `Referrer-Policy` | `no-referrer` | 参照元を送らない |
 | `X-Content-Type-Options` | `nosniff` | scriptの種別を推測させない |

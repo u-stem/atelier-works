@@ -15,6 +15,7 @@
 # draw.ioの図を描くページ(/console/drawio.html)だけに付けるヘッダー。
 # 不透明なオリジンのsandbox iframeの中で、同梱のビューアが図のXMLを描く。
 # 外への取得は、scriptも含めてすべて拒否する。frame-ancestorsは、Console自身のページからの埋め込みだけを許す。
+# sandboxの文書は不透明なオリジンになり、'self'に一致しないので、script-srcと同じく、明示のオリジンで書く。
 # sandboxは、親のiframeを経ずに直接開かれても、不透明なオリジンで動かすためである。
 # scriptは/console/drawio/の同梱のファイル(ビューアと受け口)だけにする。
 # Console本体のCSPは/console/assets/しか許さないので、本体のページからは、このscriptを読めない。
@@ -22,7 +23,7 @@
 # 不透明なオリジンでは'self'が使えないので、console_headersと同じく、ブラウザが使ったオリジンをplaceholderで入れる。
 (drawio_headers) {
         header {
-                Content-Security-Policy "default-src 'none'; script-src {http.request.scheme}://{http.request.hostport}/console/drawio/; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'; sandbox allow-scripts"
+                Content-Security-Policy "default-src 'none'; script-src {http.request.scheme}://{http.request.hostport}/console/drawio/; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors {http.request.scheme}://{http.request.hostport}; sandbox allow-scripts"
                 X-Content-Type-Options "nosniff"
                 Referrer-Policy "no-referrer"
                 # frame-ancestorsを解釈するブラウザでは、そちらが優先される。これは、解釈しない古いブラウザ向けの備えである。
@@ -68,7 +69,8 @@
         route {
                 handle /console {
                         import console_headers
-                        redir * /console/ 308
+                        # ?approval=<id>などのクエリを保つ。クエリが無いときは?を付けない。
+                        redir * /console/{?query} 308
                 }
 
                 # console_fetcherの状態。開いたままのタブが、版の取り下げを確かめるために読む。

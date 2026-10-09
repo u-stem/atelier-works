@@ -68,6 +68,7 @@ const drawioCsp = contentSecurityPolicy(drawioHeaders);
 const consoleCsp = contentSecurityPolicy(snippet("console_headers"));
 const pageBlock = braceBlock("handle /console/drawio.html {");
 const scriptsBlock = braceBlock("handle_path /console/drawio/* {");
+const redirectBlock = braceBlock("handle /console {");
 
 describe("drawio_headers", () => {
   test("makes the page an opaque origin even when opened directly", () => {
@@ -101,7 +102,11 @@ describe("drawio_headers", () => {
   });
 
   test("allows embedding only from the same origin", () => {
-    expect(drawioCsp).toContain("frame-ancestors 'self'");
+    expect(sources(drawioCsp, "frame-ancestors")).toEqual([ORIGIN]);
+  });
+
+  test("does not rely on 'self', which an opaque origin never matches", () => {
+    expect(drawioCsp).not.toContain("'self'");
   });
 
   test("sends X-Frame-Options SAMEORIGIN for browsers that ignore frame-ancestors", () => {
@@ -204,5 +209,15 @@ describe("draw.io routes", () => {
     expect(CADDYFILE.indexOf("handle_path /console/drawio/*")).toBeLessThan(
       CADDYFILE.indexOf("handle @console_raw"),
     );
+  });
+});
+
+describe("redirect from /console", () => {
+  test("keeps the query string, such as ?approval=<id>", () => {
+    expect(redirectBlock).toContain("redir * /console/{?query} 308");
+  });
+
+  test("redirects permanently", () => {
+    expect(redirectBlock).toContain("308");
   });
 });
