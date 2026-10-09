@@ -381,9 +381,14 @@ Windmillでジョブを取り消しても、新しいセッションで起動し
 どちらも`reset --hard`の前に、HEADが`refs/heads/<branch>`を指すことを`git symbolic-ref -q HEAD`で確かめる。
 `reset --hard`はHEADが指すブランチを動かすので、生き残りが別のブランチをcheckoutしていると、そのブランチを動かしてしまうためである。
 
-- 指していなければ(別のブランチかdetached)、`git checkout -f --no-track -B <branch> <戻す先>`で対象のブランチへ移す。この切り替えは、それまでHEADが指していたブランチを動かさない。
-- 次のときは、resetせずに失敗する。HEADを読めない、切り替えに失敗した、切り替えた後もHEADが指していない。
-- git 2.44以降では、対象のブランチがほかのworktreeでcheckoutされていると切り替えに失敗する。workerのイメージのgitは、Debian trixieの2.47である。
+- 指していなければ(別のブランチかdetached)、切り替えの前に`git worktree list`で、ほかのworktreeが対象のブランチをcheckoutしていないことを確かめる。gitの版によっては`checkout -B`がほかのworktreeのブランチを黙って付け替えるので、gitの拒否には頼らない。
+- ほかのworktreeが使っていなければ、`git checkout -f --no-track -B <branch> <戻す先>`で対象のブランチへ移す。この切り替えは、それまでHEADが指していたブランチを動かさない。
+- 次のときは、resetせずに失敗する。
+  - HEADを読めない。
+  - worktreeの一覧を取れない。
+  - ほかのworktreeが対象のブランチを使っている。
+  - 切り替えに失敗した。
+  - 切り替えた後もHEADが指していない。
 
 #### 止めないプロセス
 

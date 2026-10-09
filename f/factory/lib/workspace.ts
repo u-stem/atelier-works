@@ -1823,16 +1823,62 @@ function parseGtrPorcelain(stdout: string): GtrWorktree {
 }
 
 /**
+ * `dir`以外のworktreeが`refs/heads/<branch>`をcheckoutしていれば例外を投げる。
+ * `dir`はworktreeの一覧に出るため、パスをrealpathで解決して自分自身を除く。
+ * 解決できないパスは、そのままの文字列で比べる。
+ * 一覧を取れないときも例外にし、呼び出し側をresetに進ませない。
+ */
+async function assertBranchFreeInOtherWorktrees(opts: {
+  readonly run: CommandRunner;
+  readonly dir: string;
+  readonly branch: string;
+  readonly context: string;
+  readonly home?: string;
+  readonly path?: string;
+  readonly realpath?: (path: string) => Promise<string>;
+}): Promise<void> {
+  const entries = await listWorktrees({
+    run: opts.run,
+    repoDir: opts.dir,
+    ...(opts.home !== undefined ? { home: opts.home } : {}),
+    ...(opts.path !== undefined ? { path: opts.path } : {}),
+  });
+  const resolveReal = opts.realpath ?? ((path: string) => realpath(path));
+  const resolveOrSelf = async (path: string): Promise<string> => {
+    try {
+      return await resolveReal(path);
+    } catch {
+      return path;
+    }
+  };
+  const self = await resolveOrSelf(opts.dir);
+  for (const entry of entries) {
+    if (entry.branch !== opts.branch) continue;
+    if (entry.path === opts.dir || (await resolveOrSelf(entry.path)) === self) {
+      continue;
+    }
+    throw new Error(
+      maskSecrets(
+        `branch ${opts.branch} is checked out in another worktree ${entry.path} (${opts.context})`,
+      ),
+    );
+  }
+}
+
+/**
  * worktree`dir`のHEADが`refs/heads/<branch>`を指すようにする。`createGtrWorktree`が`reset --hard`の直前に呼ぶ。
  * `reset --hard`はHEADが指すブランチを動かす。生き残ったプロセスが別のブランチをcheckoutしていると、
  * そのブランチを動かしてしまい、対象のブランチは戻らないため。
  * 指していなければ(別のブランチかdetached)、`checkout -f --no-track -B <branch> <ref>`でHEADを対象のブランチへ移し、`ref`に合わせる。
  * `checkout -B`は、それまでHEADが指していたブランチを動かさない。
- * gitが2.43以降なら、対象のブランチが他のworktreeでcheckoutされているときも失敗する(workerのイメージはDebian trixieのgit 2.47)。
+ * gitの版によっては、`checkout -B`は他のworktreeがcheckoutしているブランチを黙って付け替える。
+ * そのため、切り替えの前に`git worktree list`で`dir`以外のworktreeを確かめ、
+ * 対象のブランチをcheckoutしているものがあれば例外を投げる。パスは、realpathで解決した値で比べる。
  * worktreeを作り直さないのは、作り直しにも生き残りの確かめとポインタの検証がもう一度要り、
  * 再利用するworktreeでは対象リポジトリが無視しているファイル(`node_modules/`など)まで失うためである。
  * `--no-track`は、起点が`origin/<branch>`のときに上流の設定をメインのcloneの`.git/config`へ書かないために付ける。
- * HEADを読めないとき、切り替えに失敗したとき、切り替えた後もHEADが指していないときは例外を投げ、resetに進ませない。
+ * HEADを読めないとき、worktreeの一覧を取れないとき、他のworktreeが対象のブランチを使っているとき、
+ * 切り替えに失敗したとき、切り替えた後もHEADが指していないときは例外を投げ、resetに進ませない。
  * `branch`は`assertBranchName`で、`ref`は検証済みの値から作ったものを渡す。
  */
 export async function ensureHeadOnBranch(opts: {
@@ -1844,6 +1890,7 @@ export async function ensureHeadOnBranch(opts: {
   readonly context: string;
   readonly home?: string;
   readonly path?: string;
+  readonly realpath?: (path: string) => Promise<string>;
 }): Promise<void> {
   const expected = `refs/heads/${opts.branch}`;
   const env = localGitEnv(opts.home, opts.path);
@@ -1858,6 +1905,7 @@ export async function ensureHeadOnBranch(opts: {
     throw gitError(`git symbolic-ref HEAD failed (${opts.context})`, result);
   };
   if ((await readHead()) === expected) return;
+  await assertBranchFreeInOtherWorktrees(opts);
   // 起点の前に`--`を付けない(`buildGitArgv`の例外を参照)。
   const checkout = await opts.run(
     buildGitArgv(["checkout", "-f", "--no-track", "-B", opts.branch, opts.ref]),
@@ -1998,6 +2046,9 @@ export async function createGtrWorktree(
           context: "gtr worktree reuse",
           ...(opts.home !== undefined ? { home: opts.home } : {}),
           ...(opts.path !== undefined ? { path: opts.path } : {}),
+          ...(opts.fs?.realpath !== undefined
+            ? { realpath: opts.fs.realpath }
+            : {}),
         });
 
         // ここでは`--`を付けない(`buildGitArgv`の例外を参照)。
@@ -2099,6 +2150,9 @@ export async function createGtrWorktree(
         context: "gtr new after stopping processes",
         ...(opts.home !== undefined ? { home: opts.home } : {}),
         ...(opts.path !== undefined ? { path: opts.path } : {}),
+        ...(opts.fs?.realpath !== undefined
+          ? { realpath: opts.fs.realpath }
+          : {}),
       });
       const resetResult = await opts.run(
         buildGitArgv(["reset", "--hard", createdSha]),
