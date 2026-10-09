@@ -601,13 +601,14 @@ Consoleの**通知**タブには、Discordに送らない要対応の事項が�
 - `fix_feedback_association_excluded`
 - `labeler_association_denied`
 - `unsandboxed_check_commands`
+- `implement_needs_human`
 
 | 種類 | 意味 | 人がすること |
 | --- | --- | --- |
 | `approval_notify_failed` | 承認待ちの通知がDiscordに届かなかった | 承認依頼は記録済みなので、**承認**タブで判断する |
 | `approval_comment_failed` | 承認のコメントをIssueに投稿できなかった | 承認と実装の起動は進んでいる。必要ならnoticeのリンクを載せたコメントを人がIssueに投稿する |
 | `implement_launch_failed` | 承認の後、実装フローへ進める処理がDBの失敗で例外になった | Windmillで`f/factory/retry_work_item`を作業項目のIDで実行して再開する |
-| `implement_needs_human` | 実装フローが人の対応待ちで止まった | [人の対応待ちになったら](#人の対応待ちになったら) |
+| `implement_needs_human` | 実装フローが人の対応待ちで止まった。作業項目は**失敗**タブにも出る | **失敗**タブの行から[人の対応待ちになったら](#人の対応待ちになったら)に進む |
 | `unsandboxed_check_commands` | 検査コマンドをサンドボックスなしで実行した | 設定が意図どおりか確かめる |
 | `fix_reply_post_failed` | 修正の返信の投稿に失敗した | PRで人が返信する |
 | `pr_fix_reviewer_request_failed` | 再レビューの依頼のAPIが失敗した。PRの取得の失敗と、Botや削除済みの作成者の名前で依頼を組み立てられない場合を含む | GitHubのPRで人がレビュアーを依頼する |

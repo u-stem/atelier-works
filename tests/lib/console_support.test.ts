@@ -28,6 +28,14 @@ describe("noticeSeverity", () => {
     expect(noticeSeverity("cleanup_db_failed")).toBe("action");
   });
 
+  test("returns info for a kind whose work item is already a failure row", () => {
+    expect(noticeSeverity("implement_needs_human")).toBe("info");
+  });
+
+  test("returns action for a launch failure that can leave no failure row", () => {
+    expect(noticeSeverity("implement_launch_failed")).toBe("action");
+  });
+
   test("returns action for an unknown kind", () => {
     expect(noticeSeverity("some_future_kind")).toBe("action");
   });
@@ -54,12 +62,13 @@ describe("INFO_NOTICE_KINDS", () => {
     );
   });
 
-  test("contains the eight kinds that need no action", () => {
+  test("contains the nine kinds that need no action", () => {
     expect([...INFO_NOTICE_KINDS].sort()).toEqual([
       "approval_notify_failed",
       "claim_race_lost",
       "cleanup_worktrees_skipped",
       "fix_feedback_association_excluded",
+      "implement_needs_human",
       "labeler_association_denied",
       "supersede_failed",
       "unsandboxed_check_commands",

@@ -7,7 +7,9 @@ import type { WorkItemStatus } from "./types.ts";
 export type NoticeSeverity = "info" | "action";
 
 /**
- * 通知の種類ごとの重要度。`docs/operations.md`の通知の表に載る種類をすべて含む。
+ * 通知の種類ごとの重要度。
+ * `implement_needs_human`は作業項目が`needs_human`になり、失敗の一覧に行が出るので`info`とする。
+ * `implement_launch_failed`は作業項目が承認済みや実装中のまま残り、失敗の一覧に出ない経路があるので`action`とする。`docs/operations.md`の通知の表に載る種類をすべて含む。
  * 表に無い種類(将来足された種類)は、見落とさせないために`action`として扱う
  * (`noticeSeverity`)。
  */
@@ -20,9 +22,9 @@ export const NOTICE_SEVERITY: Readonly<Record<string, NoticeSeverity>> = {
   fix_feedback_association_excluded: "info",
   labeler_association_denied: "info",
   unsandboxed_check_commands: "info",
+  implement_needs_human: "info",
   approval_comment_failed: "action",
   implement_launch_failed: "action",
-  implement_needs_human: "action",
   fix_reply_post_failed: "action",
   pr_fix_reviewer_request_failed: "action",
   issue_proposal_record_failed: "action",
