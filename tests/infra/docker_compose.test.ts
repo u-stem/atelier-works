@@ -31,6 +31,10 @@ function stringList(svc: Json, key: string): string[] {
   return isStringArray(value) ? value : [];
 }
 
+function envEntries(svc: Json, prefix: string): string[] {
+  return stringList(svc, "environment").filter((e) => e.startsWith(prefix));
+}
+
 function limits(svc: Json): Json {
   const deploy = svc.deploy;
   if (!isRecord(deploy) || !isRecord(deploy.resources)) return {};
@@ -51,14 +55,6 @@ describe("infra/docker-compose.yml windmill_worker_console", () => {
     expect(svc.image).toBe(native.image);
   });
 
-  test("uses the upstream windmill image", () => {
-    const svc = service("windmill_worker_console");
-
-    expect(svc.image).toStartWith(
-      "ghcr.io/windmill-labs/windmill:${WM_VERSION",
-    );
-  });
-
   test("runs in worker mode", () => {
     const svc = service("windmill_worker_console");
 
@@ -68,19 +64,19 @@ describe("infra/docker-compose.yml windmill_worker_console", () => {
   test("belongs to the console worker group", () => {
     const svc = service("windmill_worker_console");
 
-    expect(stringList(svc, "environment")).toContain("WORKER_GROUP=console");
+    expect(envEntries(svc, "WORKER_GROUP=")).toEqual(["WORKER_GROUP=console"]);
   });
 
   test("accepts only the console tag", () => {
     const svc = service("windmill_worker_console");
 
-    expect(stringList(svc, "environment")).toContain("WORKER_TAGS=console");
+    expect(envEntries(svc, "WORKER_TAGS=")).toEqual(["WORKER_TAGS=console"]);
   });
 
-  test("runs a single worker process", () => {
+  test("runs two worker processes", () => {
     const svc = service("windmill_worker_console");
 
-    expect(stringList(svc, "environment")).toContain("NUM_WORKERS=1");
+    expect(envEntries(svc, "NUM_WORKERS=")).toEqual(["NUM_WORKERS=2"]);
   });
 
   test("connects to the database like the other workers", () => {
@@ -92,10 +88,10 @@ describe("infra/docker-compose.yml windmill_worker_console", () => {
     expect(dbUrl(svc)).toEqual(dbUrl(native));
   });
 
-  test("limits memory to 512M", () => {
+  test("limits memory to 1024M", () => {
     const svc = service("windmill_worker_console");
 
-    expect(limits(svc).memory).toBe("512M");
+    expect(limits(svc).memory).toBe("1024M");
   });
 
   test("limits processes to 256", () => {
@@ -182,5 +178,15 @@ describe("infra/docker-compose.yml windmill_worker_console", () => {
     );
 
     expect(writable).toEqual([]);
+  });
+
+  test("default worker does not mount factory_console", () => {
+    const defaultWorker = service("windmill_worker");
+
+    expect(
+      stringList(defaultWorker, "volumes").filter((v) =>
+        v.startsWith("factory_console"),
+      ),
+    ).toEqual([]);
   });
 });

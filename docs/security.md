@@ -236,20 +236,30 @@ workerには`no-new-privileges:true`と、プロセス数の上限(`deploy.resou
 
 ## Console用workerの境界
 
-Console用のworker(`windmill_worker_console`)は、Consoleの問い合わせだけを処理する。
+Console用のworker(`windmill_worker_console`)は、Consoleの問い合わせと操作の受付だけを処理する。
 信頼できないIssueを読むClaudeは、このworkerでは動かさない。
-境界は次のとおりである。
+このworkerの境界が守るのは、ファイルシステムだけである。
+ファイルシステムについては、次のように絞る。
 
 | 項目 | 設定 |
 | --- | --- |
-| 書き込めるマウント | `worker_logs`だけである。`factory_state`と`factory_console`は読み取り専用でマウントする |
+| 書き込めるマウント | `worker_logs`だけである。`factory_state`と`factory_console`は読み取り専用でマウントする。`worker_logs`はdefaultのworkerと共有する書き込みのマウントである |
 | `factory_workspaces` | マウントしない。対象リポジトリのチェックアウトに届かない |
 | `worker_dependency_cache` | 共有しない。defaultのworkerと依存のキャッシュを通して影響し合わない |
 | `docker.sock` | マウントしない |
-| 権限 | `privileged`にしない。`no-new-privileges:true`と`init`を設定し、プロセス数は256、メモリは512Mに絞る |
+| 権限 | `privileged`にしない。`no-new-privileges:true`と`init`を設定し、プロセス数は256、メモリは1024Mに絞る |
 
 `factory_state`を読めるのは、要件定義書と図のファイルを返すためである。
 `factory_console`は配信中のJSの置き場所なので、書き込みでマウントしない。
+
+次のことは、この境界では守れない。
+
+- DBには届く。`DATABASE_URL`はdefaultのworkerと同じ管理者の接続だからである。
+- `factory_state`には、`requirements/`と`audits/`のほかに、次のものも入っていて、Console用のworkerから読める。
+  - Claude Codeの設定と履歴(`CLAUDE_CONFIG_DIR=/var/lib/factory/claude`)
+  - ghの設定(`GH_CONFIG_DIR=/var/lib/factory/gh`)
+- Console用のworkerで動くのはリポジトリのscriptだけである。defaultのworkerは同じファイルを読み書きできる。
+- tagの正は、composeの環境変数`WORKER_TAGS`である。DBにworkerグループの設定があると、そちらが優先される。
 
 ## 自己更新の依存インストール
 

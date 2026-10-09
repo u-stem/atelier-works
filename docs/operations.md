@@ -835,7 +835,7 @@ Caddyfileを更新してCaddyを再起動するまでは、`/console/status.json
 ### Console用workerを確かめる
 
 Console用のworker(`windmill_worker_console`)は、`mise run up`で作られる。
-workerグループ`console`のtagを持つジョブだけを受ける。
+ワーカーグループ`console`に属し、tag`console`のジョブだけを受ける。
 動いていることは、コンテナの状態とログで確かめる。
 
 ```bash
@@ -843,8 +843,17 @@ mise exec -- docker compose -f infra/docker-compose.yml ps windmill_worker_conso
 mise exec -- docker compose -f infra/docker-compose.yml logs --tail 20 windmill_worker_console
 ```
 
-Windmillの画面の「Workers」にも、グループ`console`のworkerが出る。
-このworkerは`factory_workspaces`も依存のキャッシュも持たないので、再起動しても失うものは無い。
+Windmillの画面の「Workers」には、グループ`console`のworkerが出る。tagが`console`だけであることを確かめる。
+DBにワーカーグループの設定があると、composeの環境変数`WORKER_TAGS`より優先されるためである。
+
+メモリは、最初のジョブを動かしている間に確かめる。
+
+```bash
+docker stats --no-stream
+```
+
+このworkerは状態を持つボリュームに書かないので、作り直しても失うものは無い。
+依存のキャッシュは共有しないため、作り直した後の最初のジョブで取り直す。取り直すには、レジストリへの外向きの通信が要る。
 
 ### adminsワークスペースの組み込み項目
 
