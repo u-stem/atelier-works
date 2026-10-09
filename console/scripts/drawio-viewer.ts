@@ -20,7 +20,34 @@ export const VIEWER_EXTENSION = ".js";
 const COMMIT_SHA = /^[0-9a-f]{40}$/;
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 // 固定のURLの取得元。branchやtagではなくcommitを指すので、後から中身が変わらない。
-const PIN_URL_PREFIX = "https://raw.githubusercontent.com/jgraph/drawio/";
+const PIN_URL_ORIGIN = "https://raw.githubusercontent.com";
+const PIN_URL_FILE = "src/main/webapp/js/viewer-static.min.js";
+
+/** 固定のURLのパス。commitの下のビューア1ファイルだけを指す。 */
+function pinPathname(commit: string): string {
+  return `/jgraph/drawio/${commit}/${PIN_URL_FILE}`;
+}
+
+/**
+ * URLを`new URL`で正規化してから、取得元と固定のパスに完全に一致するかを返す。
+ * 文字列の前方一致では、`..`や符号化した`..`でcommitの外へ出られるので使わない。
+ */
+function isPinnedUrl(value: string, commit: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  return (
+    url.origin === PIN_URL_ORIGIN &&
+    url.username === "" &&
+    url.password === "" &&
+    url.pathname === pinPathname(commit) &&
+    url.search === "" &&
+    url.hash === ""
+  );
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -52,9 +79,9 @@ export function parseDrawioViewerPin(value: unknown): DrawioViewerPin {
   if (!SHA256_HEX.test(sha256)) {
     throw new Error('drawio-viewer.json: "sha256" must be 64 lowercase hex');
   }
-  if (!url.startsWith(`${PIN_URL_PREFIX}${commit}/`)) {
+  if (!isPinnedUrl(url, commit)) {
     throw new Error(
-      'drawio-viewer.json: "url" must be a raw.githubusercontent.com url of the pinned commit',
+      `drawio-viewer.json: "url" must be ${PIN_URL_ORIGIN}${pinPathname(commit)}`,
     );
   }
   return { version, commit, url, sha256 };

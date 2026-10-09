@@ -91,6 +91,49 @@ describe("parseDrawioViewerPin", () => {
     expect(() => parseDrawioViewerPin({ ...pin, url })).toThrow();
   });
 
+  test("rejects a url with a query", () => {
+    expect(() =>
+      parseDrawioViewerPin({ ...pin, url: `${pin.url}?token=1` }),
+    ).toThrow();
+  });
+
+  test("rejects a url with a fragment", () => {
+    expect(() =>
+      parseDrawioViewerPin({ ...pin, url: `${pin.url}#x` }),
+    ).toThrow();
+  });
+
+  test("rejects a url that climbs out of the commit with dot segments", () => {
+    const url = `https://raw.githubusercontent.com/jgraph/drawio/${COMMIT}/src/main/webapp/js/../../../../../../other/main/viewer-static.min.js`;
+    expect(() => parseDrawioViewerPin({ ...pin, url })).toThrow();
+  });
+
+  test("rejects a url that climbs out with encoded dot segments", () => {
+    const url = `https://raw.githubusercontent.com/jgraph/drawio/${COMMIT}/%2e%2e/%2e%2e/other/main/viewer-static.min.js`;
+    expect(() => parseDrawioViewerPin({ ...pin, url })).toThrow();
+  });
+
+  test("rejects a url for another file under the commit", () => {
+    const url = `https://raw.githubusercontent.com/jgraph/drawio/${COMMIT}/src/main/webapp/js/app.min.js`;
+    expect(() => parseDrawioViewerPin({ ...pin, url })).toThrow();
+  });
+
+  test("rejects a url with credentials", () => {
+    const url = pin.url.replace("https://", "https://user:pass@");
+    expect(() => parseDrawioViewerPin({ ...pin, url })).toThrow();
+  });
+
+  test("rejects a url with a port", () => {
+    const url = pin.url.replace(".com/", ".com:8443/");
+    expect(() => parseDrawioViewerPin({ ...pin, url })).toThrow();
+  });
+
+  test("rejects a url over http", () => {
+    expect(() =>
+      parseDrawioViewerPin({ ...pin, url: pin.url.replace("https:", "http:") }),
+    ).toThrow();
+  });
+
   test("rejects a missing version", () => {
     const { version: _version, ...rest } = pin;
     expect(() => parseDrawioViewerPin(rest)).toThrow();
