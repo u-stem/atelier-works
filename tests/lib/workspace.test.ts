@@ -1595,6 +1595,29 @@ describe("createGtrWorktree", () => {
     });
   });
 
+  test("parses a `git gtr new --porcelain` output without a hook_status line", async () => {
+    const fake = createFakeCommandRunner([
+      ok(),
+      ok(""),
+      ok("path\t/tmp/repo-worktrees/new-branch\nbranch\tnew-branch\n"),
+      ok(`${NEW_HEAD_SHA}\n`),
+      ok(`${NEW_HEAD_SHA}\n`),
+    ]);
+    const result = await createGtrWorktree({
+      run: fake.run,
+      repoDir: "/repo",
+      branch: "new-branch",
+      ghToken: "gh-token",
+      assertProcessesIdle: idle,
+      lockFs: createInMemoryLockFs(),
+    });
+    expect(result).toEqual({
+      path: "/tmp/repo-worktrees/new-branch",
+      branch: "new-branch",
+      hookStatus: "unknown",
+    });
+  });
+
   // 親ディレクトリごと消えたworktreeが一覧に残っていると、ロックファイルのパスを作れず毎回失敗するため。
   test("prunes stale worktree entries before listing", async () => {
     const gtrPorcelain =

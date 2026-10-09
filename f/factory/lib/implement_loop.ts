@@ -192,7 +192,10 @@ export type PreparedWorktree = {
  *
  * git gtr 2.11.1で測った挙動: `gtr new`はローカルのブランチがあれば使い回す。
  * 無くてリモートにだけあれば、リモートの追跡ブランチからローカルのブランチを作る。
- * 短い名前の`origin/<branch>`が曖昧なときは、gitがその作成を拒むので、続くworktreeの追加が追跡refから作る。
+ * git 2.54で`git branch --track <branch> origin/<branch>`を測ると、
+ * `refs/heads/origin/<branch>`などで短い名前が曖昧なときは、gitがその作成を拒んだ。
+ * そのとき続くworktreeの追加が、追跡refからブランチを作る。
+ * どちらにしても、gtrの結果が違うコミットになりうるので、`createGtrWorktree`が`refs/remotes/origin/<branch>`と照合する。
  * どちらにも無ければ`origin/<default>`から分岐する。
  * すでにworktreeがあるブランチは、`createGtrWorktree`の使い回しの経路
  * (fetch → `reset --hard origin/<branch>` → clean)が扱う。

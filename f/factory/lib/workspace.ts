@@ -1881,11 +1881,11 @@ function parseGtrPorcelain(stdout: string): GtrWorktree {
 
   const path = fields.get("path");
   const branch = fields.get("branch");
-  const hookStatus = fields.get("hook_status");
-  if (path === undefined || branch === undefined || hookStatus === undefined) {
+  if (path === undefined || branch === undefined) {
     throw new Error(`unexpected 'git gtr new --porcelain' output: ${stdout}`);
   }
-  return { path, branch, hookStatus };
+  // `hook_status`は参考の情報なので、無くても失敗させない。
+  return { path, branch, hookStatus: fields.get("hook_status") ?? "unknown" };
 }
 
 /**
@@ -2000,7 +2000,8 @@ async function expectedGtrNewSha(opts: {
 }
 
 /**
- * `git gtr new <branch> --porcelain --yes`で`branch`のworktreeを作って返す。
+ * `git gtr new <branch> --porcelain --yes --no-hooks`で`branch`のworktreeを作って返す。
+ * gtrのpostCreateフックは動かさない。誤ったcommitのtreeの中でフックを実行させないためである。
  * `git worktree prune`の後の`git worktree list`に`branch`のworktreeがすでにあれば、それを再利用する。
  * gitの操作に失敗したら例外を投げる。
  * `ensureRepo`がこのリポジトリに使うのと同じ、
@@ -2074,8 +2075,7 @@ export async function createGtrWorktree(
         // 次のpushがfast-forwardでなくなる。
         // そのため、渡す前にfetch、hard reset、cleanを行い、
         // `refs/remotes/origin/<branch>`のままの状態に戻す。
-        // 下の`git gtr new`で作る新しいworktreeは、
-        // リモートの今の状態から作るので不要である。
+        // 下の`git gtr new`で作る新しいworktreeは、照合で別に扱う。
         const fetchResult = await opts.run(
           buildGitArgv(["fetch", "origin", "--", opts.branch], {
             network: true,
