@@ -25,7 +25,7 @@ locks:
   f/factory/lib/config: 5922d286a1443ab1057dd2164be94bf49288a7abdbcbfc463d1faf3a362f7d1a
   f/factory/lib/console_status: ee1e2ab9df9b3fc2b5fd492d3576a137dc418f3d616373a555e043d373b411c9
   f/factory/lib/console_support: 6f6ef9e5465110ce63487ccb10e55fa9ee7278ceac04dcf9f9df70bb202f82bc
-  f/factory/lib/console_worker: cd182154cff54b718a46b3361d84101956e9b52710c562fabe1ed04c66d827c1
+  f/factory/lib/console_worker: fc805924a3219d27b238e341f12fb488004b03ea4e1f528610bd1314a036b52c
   f/factory/lib/db: ea1ce71dea68937a70397e861b06f05fc0347fe376eb1ca72fba4e9676ecd41c
   f/factory/lib/discord: 1ae77518fc378e7d52fef0d5341e911d22e43cbe23ec6a2b2fae0943562647b1
   f/factory/lib/drawio: 6033f8aaf663aeccf8cc84eaa978815c2b08671f4bc726395613303e3751a2a9
@@ -43,7 +43,7 @@ locks:
   f/factory/lib/protected_paths: d2eb7bbb43870af562b08eddbb4a52516a9e643f315433150c1261f0ab87c662
   f/factory/lib/requirements_doc: 6ae93ca66b45fdffcd1f2722bdaf51ebbda80452631d219d69ddfe58ac68e4d2
   f/factory/lib/requirements_template: a5db62e34792d5d9aaa6190010c79ebf0d2a403e2d1c49fabe491365f4dbe955
-  f/factory/lib/schedule_failing: a0c698797a312387466ce089fe9a6e14bb1031d0aabe26c3917c6c6a5406392e
+  f/factory/lib/schedule_failing: ff5a695c5631f3df2ecdcf1c3617deec988949b736457110a44cea15a4b2b5a4
   f/factory/lib/self_update_support: 0df8c848434c5268a1e6a10b0dc2a4afc9694f56dda5f963573967871e46efa0
   f/factory/lib/summary_support: 0baf32a9659017e51af7cbe3171a357f6960f1609ec27ff204eb30c1b852368b
   f/factory/lib/supersede_support: 0bd26793924642319a83c6b2759c8ac26229e889e57ab70a1de8ac0d9c1848db

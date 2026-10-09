@@ -198,7 +198,9 @@ export type WatchConsoleWorkerDeps = ConsoleWorkerCheckDeps & {
 /**
  * workerの有無を確かめ、確認できなかった回数をstateに数える。
  * `CONSOLE_WORKER_UNKNOWN_LIMIT`回続けて確認できなかったら、noticeを残す(新しく挿入したときだけDiscordにも送る)。
- * 確認できたら回数を0に戻す。stateのほかのキーは保つ。stateを読めなければ0として数え、書けなければ警告だけにする。
+ * 確認できたら回数を0に戻す。stateを読めたときは、ほかのキーを保って書く。
+ * stateを読めなければ0として数え、ほかのキーを保てないので、書くとほかのキーを失う。
+ * 書けなければ警告だけにする。
  * 呼び出し元の処理を止めないよう、例外は投げない。
  */
 export async function watchConsoleWorker(
