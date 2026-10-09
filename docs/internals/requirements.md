@@ -28,7 +28,7 @@ pipelineフロー(`f/factory/pipeline`)は次の3つのステップで動く。�
 
 ディレクトリには、要件定義書の`requirements.md`と、図の`<name>.drawio`だけを置く。DBの`requirement_drafts`には、本文(`markdown`)、図の参照(`{name, file}`)、未確定事項、`doc_dir`を保存する。図のXMLはDBに保存しない。
 
-Consoleのbackendがどのworkerで動くかは、scriptの`tag`で決まる。どちらのworkerも、同じボリュームを読む。このディレクトリを共有するストレージは、workerのコンテナを増やすときにも要る。
+Consoleのbackendがどのworkerで動くかは、scriptの`tag`で決まる。どちらのworkerも、同じボリュームを読む。workerを別のホストに分けるときは、このディレクトリを共有するストレージが要る。
 
 作業項目を削除するときの要件定義ディレクトリの扱いは、DBの掃除(`cleanup_db`)が受け持つ。
 

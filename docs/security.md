@@ -251,6 +251,7 @@ Console用のworker(`windmill_worker_console`)は、Consoleの問い合わせと
 
 `factory_state`を読めるのは、要件定義書と図のファイルを返すためである。
 `factory_console`は配信中のJSの置き場所なので、書き込みでマウントしない。
+読み取り専用で付けるのは、取り込みの失敗を見張るscriptが`status.json`を読むためである。
 
 次のことは、この境界では守れない。
 
@@ -258,7 +259,7 @@ Console用のworker(`windmill_worker_console`)は、Consoleの問い合わせと
 - `factory_state`には、`requirements/`と`audits/`のほかに、次のものも入っていて、Console用のworkerから読める。
   - Claude Codeの設定と履歴(`CLAUDE_CONFIG_DIR=/var/lib/factory/claude`)
   - ghの設定(`GH_CONFIG_DIR=/var/lib/factory/gh`)
-- このworkerで動かすのはリポジトリのscriptのつもりだが、強制ではない。ワークスペースでscriptを編集できる者は、任意のscriptにtag`console`を付けられる。
+- このworkerで動かすのはリポジトリのscriptの想定だが、これを強制する仕組みは無い。ワークスペースでscriptを編集できる者は、任意のscriptにtag`console`を付けられる。
   tag`console`を付けたscriptは、上の設定と履歴を読める。書けるのはdefaultのworkerだけである。
   読めると、Claude Codeとghの認証情報が漏れうる。
 - composeの環境変数`WORKER_TAGS`は既定値である。DBにワーカーグループの設定があると、そちらが実効になる。変化はWindmillの画面の「Workers」で確かめる。
@@ -664,7 +665,7 @@ self cloneは`self_update`のデプロイ元なので、Claudeに書き換えら
 
 ## 承認と権限
 
-承認できるのは、`f/factory/**`のスクリプトを実行できるアカウントである。Windmillのdefaultのワーカーグループでは、ワークスペースの管理者だけが該当する。
+承認できるのは、`f/factory/**`のスクリプトを実行できるアカウントである。実行の権限はフォルダ`f/factory`の権限で決まり、このフォルダには所有者も追加の権限も付けていないので、ワークスペースの管理者だけが該当する。
 
 承認は必ずConsoleの承認タブ(`approval_decide`を実行する)から行う。Windmillのapproval pageのURLは署名付きのcapability URLなので、PRのコメントやDiscordの通知に載せない。approval pageのURLから直接resumeすると承認の状態が記録されず、作業項目は人の対応待ちになる。
 

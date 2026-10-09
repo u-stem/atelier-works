@@ -844,8 +844,9 @@ mise exec -- docker compose -f infra/docker-compose.yml ps windmill_worker_conso
 mise exec -- docker compose -f infra/docker-compose.yml logs --tail 20 windmill_worker_console
 ```
 
-Windmillの画面の「Workers」には、グループ`console`のworkerが出る。tagが`console`だけであることを確かめる。
-composeの環境変数`WORKER_TAGS`は既定値で、DBにワーカーグループの設定があると、そちらが実効になるためである。
+DBにワーカーグループの設定があると、composeの環境変数`WORKER_TAGS`ではなくそちらの値が使われる。
+そのため、Windmillの画面の「Workers」で、グループ`console`のworkerのtagが`console`だけであることを確かめる。
+詳しくは[セキュリティ](security.md)の「Console用workerの境界」にある。
 
 メモリとプロセス数は、最初のジョブを動かしている間に確かめる。
 `docker stats`は`windmill_worker_console`の行を見て、`MEM USAGE / LIMIT`の使用量が上限の1GiBに収まっていることを確かめる。プロセス数の上限は256なので、`pids.current`にも余裕があることを確かめる。

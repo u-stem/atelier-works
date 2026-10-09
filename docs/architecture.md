@@ -21,8 +21,8 @@ workerはカスタムイメージで動き、Claude Code CLI(`claude`)、`gh`、
 
 Consoleの問い合わせと操作の受付専用のworkerが、別のコンテナ(`windmill_worker_console`)で動く。
 Claudeの長いジョブがdefaultワーカーグループの枠を埋めても、問い合わせと操作の受付を止めないためである。
-受け付けた後の処理は、defaultのworkerで動く。
-承認のハンドラ、再実行、監査の開始がそうであり、defaultに空きができるまで待つ。
+受け付けたscriptが起動するフローとハンドラは、defaultのworkerで動く。
+承認のハンドラ、再実行したpipeline、監査のフローがそうであり、defaultに空きができるまで待つ。
 このworkerはワーカーグループ`console`に属し、tag`console`のジョブだけを受ける。
 どのscriptをこのworkerで動かすかは、scriptの`tag`で決める。
 上流のWindmillイメージで動き、`NUM_WORKERS=2`により2つのワーカープロセスが動く。1件のジョブが止まっても、全体は止まらない。メモリの上限は1024Mである。
