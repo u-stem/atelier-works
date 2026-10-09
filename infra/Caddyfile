@@ -15,13 +15,15 @@
 # draw.ioの図を描くページ(/console/drawio.html)だけに付けるヘッダー。
 # 不透明なオリジンのsandbox iframeの中で、同梱のビューアが図のXMLを描く。
 # 外への取得は、scriptも含めてすべて拒否する。frame-ancestorsは、Console自身のページからの埋め込みだけを許す。
+# sandboxは、親のiframeを経ずに直接開かれても、不透明なオリジンで動かすためである。
 # scriptは/console/assets/の同梱のファイルだけにする。不透明なオリジンでは'self'が使えないので、
 # console_headersと同じく、ブラウザが使ったオリジンをplaceholderで入れる。
 (drawio_headers) {
         header {
-                Content-Security-Policy "default-src 'none'; script-src {http.request.scheme}://{http.request.hostport}/console/assets/; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'"
+                Content-Security-Policy "default-src 'none'; script-src {http.request.scheme}://{http.request.hostport}/console/assets/; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'; sandbox allow-scripts"
                 X-Content-Type-Options "nosniff"
                 Referrer-Policy "no-referrer"
+                # frame-ancestorsを解釈するブラウザでは、そちらが優先される。これは、解釈しない古いブラウザ向けの備えである。
                 X-Frame-Options "SAMEORIGIN"
         }
 }
