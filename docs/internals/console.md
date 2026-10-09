@@ -451,7 +451,8 @@ IPv4のアドレス(`127.0.0.1`など)かホスト名で開く。
 | `console/scripts/fetch-drawio-viewer.ts` | CIが呼ぶ。取得して照合し、`dist/drawio/`に書く |
 | `console/public/drawio.html` | 図を描くページ。scriptはすべて外部のファイルで、通常のscriptとして読む |
 | `console/public/drawio/drawio-frame-*.js` | ページの中の受け口。素のJavaScriptで、ビルドを通らない |
-| `console/src/lib/drawioMessages.ts` | 親が送るメッセージの組み立てと、iframeからの高さの検査。純粋関数 |
+| `console/src/lib/drawioMessages.ts` | 親が送るメッセージの組み立てと、iframeから届いたメッセージ(高さ、失敗の種類)の検査。純粋関数 |
+| `console/src/lib/drawioFrameState.ts` | iframeの状態の遷移(load、メッセージ、応答なし、XMLの差し替え)を`(state, event) => state`で表す。純粋関数 |
 | `console/src/components/drawio/DrawioFrame.tsx` | 親の部品。どの画面からも使える |
 
 ### ビューアの取得
@@ -476,9 +477,15 @@ URLはリダイレクトを許さず、パスはcommit配下のビューア1フ�
 
 固定を更新するときは、次の順に行う。
 
-1. 新しいcommitのビューアを取得し、sha256を計算する。
-2. `console/drawio-viewer.json`の4項目を書き換える。URLはそのcommitを指す。
-3. `console/public/drawio.html`が読むビューアの名前を、新しいsha256の先頭8桁に合わせる。
+1. jgraph/drawioのリポジトリを、blobを取らない部分cloneで取る。
+2. 新しいcommitがリリースのタグ(`v<版>`)にあることを、`git tag --contains <commit>`で確かめる。
+3. `git show <commit>:src/main/webapp/js/viewer-static.min.js | shasum -a 256`で、sha256を計算する。配信用のURL(raw.githubusercontent.com)から取ったバイト列を使わず、gitのオブジェクトから取る。
+4. `console/drawio-viewer.json`の4項目を書き換える。URLはそのcommitを指し、sha256は3.の値である。
+5. `console/public/drawio.html`が読むビューアの名前を、新しいsha256の先頭8桁に合わせる。
+
+固定している版(32.4.1)は、この手順で確かめている。
+commit `9034053fba80a435e27d68d374bc564b83917ae9`は、`v32.4.1`のタグが指す`32.4.1 release`のcommitである。
+そのcommitのファイルのsha256は、固定の値と一致した。
 
 `console/scripts/public-assets.test.ts`が、`drawio.html`の参照と固定の値の一致を確かめる。
 受け口のscriptを直したときは、ファイル名のハッシュを中身に合わせて付け直す。
@@ -490,11 +497,16 @@ URLはリダイレクトを許さず、パスはcommit配下のビューア1フ�
 XMLが変わるたびに、iframeを作り直す(keyを変える)。
 1つのiframeの一生で送るのは、最初の`load`の後の1回だけである。
 受け口は、`load`の前にscriptの実行を終えているためである。
-判定は`console/src/lib/drawioMessages.ts`の純関数にある。`phaseAfterLoad`が、何回目のloadかと、送ってよいかを返す。
+状態の遷移は`console/src/lib/drawioFrameState.ts`の`reduceFrame`にある。`shouldSendXml`が、このloadでXMLを送ってよいかを返す。
 
 2回目の`load`は、iframeが別の文書へ遷移したことを表す。
 親は、iframeを`about:blank`にして表示を止め、固定の文を出す。
 以後、そのiframeのメッセージは受けない。
+この停止は最善の努力である。loadが起きない遷移は検知できず、止まらない。
+そのときも、親が受ける値は、数値(高さ)と固定の失敗の種類だけである。
+
+最初の`load`の後、10秒たっても、高さと`drawio:error`のどちらも届かなければ、親は、図のページが応答しないとみなして固定の文を出す。
+`drawio.html`が404になったときや、ヘッダーに遮られて、scriptが動かないときである。
 
 | 向き | メッセージ | 検査 |
 | --- | --- | --- |
