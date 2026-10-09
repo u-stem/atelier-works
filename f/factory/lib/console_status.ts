@@ -80,13 +80,17 @@ export async function loadFetcherStatus(
 
 /** 取り込みの状態の判定。 */
 export type FetcherAssessment =
-  | { readonly verdict: "ok" }
-  | { readonly verdict: "failed"; readonly code: string }
+  | { readonly verdict: "ok"; readonly minutes_since_check: number }
+  | {
+      readonly verdict: "failed";
+      readonly code: string;
+      readonly minutes_since_check: number;
+    }
   | { readonly verdict: "stale"; readonly minutes_since_check: number };
 
 /**
- * 取り込みの状態を判定する。
- * `checked_at`が`FETCHER_STALE_MINUTES`分より古ければ、`state`によらず`stale`を返す。
+ * 取り込みの状態を判定する。どの判定も、最後の確認からの経過分(切り捨て、0以上)を持つ。
+ * `checked_at`から`FETCHER_STALE_MINUTES`分以上たっていれば、`state`によらず`stale`を返す。
  * コンテナが止まっていれば、`state`は最後に書かれた古い値のままだからである。
  * 新しければ、`failed`はコード付きで返し、`ok`と`pinned`は`ok`を返す。
  * `pinned`は運用者が置いた固定なので、新しければ異常とはしない。
@@ -96,14 +100,18 @@ export function classifyFetcherStatus(
   now: Date,
 ): FetcherAssessment {
   const elapsedMs = now.getTime() - new Date(status.checked_at).getTime();
-  const minutes = Math.floor(elapsedMs / 60_000);
-  if (minutes > FETCHER_STALE_MINUTES) {
+  const minutes = Math.max(0, Math.floor(elapsedMs / 60_000));
+  if (elapsedMs >= FETCHER_STALE_MINUTES * 60_000) {
     return { verdict: "stale", minutes_since_check: minutes };
   }
   if (status.state === "failed") {
-    return { verdict: "failed", code: status.error ?? "unknown" };
+    return {
+      verdict: "failed",
+      code: status.error ?? "unknown",
+      minutes_since_check: minutes,
+    };
   }
-  return { verdict: "ok" };
+  return { verdict: "ok", minutes_since_check: minutes };
 }
 
 const GENERIC_NEXT_ACTION =

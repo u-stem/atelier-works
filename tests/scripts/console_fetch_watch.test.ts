@@ -5,6 +5,7 @@ import {
   runWatch,
   type WatchDeps,
   type WatchObservation,
+  type WatchState,
 } from "../../f/factory/console_fetch_watch.ts";
 import type { FetcherStatus } from "../../f/factory/lib/console_status.ts";
 import type { NotifyEvent } from "../../f/factory/lib/discord.ts";
@@ -12,6 +13,7 @@ import { logger } from "../../f/factory/lib/log.ts";
 import type { NoticeRecord } from "../../f/factory/lib/types.ts";
 
 const NOW = new Date("2026-10-09T12:00:00.000Z");
+const NOW_ISO = NOW.toISOString();
 
 function status(overrides: Partial<FetcherStatus> = {}): FetcherStatus {
   return {
@@ -25,6 +27,10 @@ function status(overrides: Partial<FetcherStatus> = {}): FetcherStatus {
 
 function observed(overrides: Partial<FetcherStatus> = {}): WatchObservation {
   return { kind: "status", status: status(overrides) };
+}
+
+function seenAt(key: string, firstSeen: string): WatchState {
+  return { cause_key: key, first_seen: firstSeen };
 }
 
 describe("decideWatch healthy", () => {
@@ -43,7 +49,7 @@ describe("decideWatch healthy", () => {
 
   test("clears the previous cause when the status is healthy again", () => {
     expect(
-      decideWatch({ cause_key: "failed:auth_failed" }, observed(), NOW),
+      decideWatch(seenAt("failed:auth_failed", NOW_ISO), observed(), NOW),
     ).toEqual({ action: "none", next_state: null });
   });
 });
@@ -57,7 +63,7 @@ describe("decideWatch problems", () => {
     );
     expect(decision).toMatchObject({
       action: "notify",
-      next_state: { cause_key: "failed:auth_failed" },
+      next_state: { cause_key: "failed:auth_failed", first_seen: NOW_ISO },
     });
   });
 
@@ -83,37 +89,58 @@ describe("decideWatch problems", () => {
     ).toContain("トークン");
   });
 
-  test("does not notify again for the same failure", () => {
+  test("notifies again while the same failure continues", () => {
     const decision = decideWatch(
-      { cause_key: "failed:auth_failed" },
+      seenAt("failed:auth_failed", "2026-10-09T10:00:00.000Z"),
       observed({ state: "failed", error: "auth_failed" }),
-      NOW,
-    );
-    expect(decision).toEqual({
-      action: "keep",
-      next_state: { cause_key: "failed:auth_failed" },
-    });
-  });
-
-  test("notifies when the failure code changes", () => {
-    const decision = decideWatch(
-      { cause_key: "failed:auth_failed" },
-      observed({ state: "failed", error: "forbidden" }),
       NOW,
     );
     expect(decision.action).toBe("notify");
   });
 
-  test("notifies a status older than thirty minutes as stale", () => {
+  test("keeps the first_seen of the same failure", () => {
+    const decision = decideWatch(
+      seenAt("failed:auth_failed", "2026-10-09T10:00:00.000Z"),
+      observed({ state: "failed", error: "auth_failed" }),
+      NOW,
+    );
+    expect(decision.next_state).toEqual({
+      cause_key: "failed:auth_failed",
+      first_seen: "2026-10-09T10:00:00.000Z",
+    });
+  });
+
+  test("restarts first_seen when the failure code changes", () => {
+    const decision = decideWatch(
+      seenAt("failed:auth_failed", "2026-10-09T10:00:00.000Z"),
+      observed({ state: "failed", error: "forbidden" }),
+      NOW,
+    );
+    expect(decision.next_state).toEqual({
+      cause_key: "failed:forbidden",
+      first_seen: NOW_ISO,
+    });
+  });
+
+  test("notifies a status of thirty minutes or more as stale", () => {
     const decision = decideWatch(
       null,
-      observed({ checked_at: "2026-10-09T11:00:00.000Z" }),
+      observed({ checked_at: "2026-10-09T11:30:00.000Z" }),
       NOW,
     );
     expect(decision).toMatchObject({
       action: "notify",
       next_state: { cause_key: "stale" },
     });
+  });
+
+  test("does not notify a status one second under thirty minutes", () => {
+    const decision = decideWatch(
+      null,
+      observed({ checked_at: "2026-10-09T11:30:01.000Z" }),
+      NOW,
+    );
+    expect(decision.action).toBe("none");
   });
 
   test("uses the stale notice kind for a stale status", () => {
@@ -180,20 +207,78 @@ describe("decideWatch problems", () => {
       next_state: { cause_key: "status_invalid" },
     });
   });
+});
 
-  test("does not notify again while the status file stays missing", () => {
+describe("decideWatch transient failures", () => {
+  const rateLimited = observed({ state: "failed", error: "rate_limited" });
+
+  test("waits on the first sighting of rate_limited", () => {
+    expect(decideWatch(null, rateLimited, NOW)).toEqual({
+      action: "wait",
+      next_state: { cause_key: "failed:rate_limited", first_seen: NOW_ISO },
+    });
+  });
+
+  test("waits on github_unavailable", () => {
     expect(
-      decideWatch({ cause_key: "status_missing" }, { kind: "missing" }, NOW)
-        .action,
-    ).toBe("keep");
+      decideWatch(
+        null,
+        observed({ state: "failed", error: "github_unavailable" }),
+        NOW,
+      ).action,
+    ).toBe("wait");
+  });
+
+  test("keeps waiting at fifty-nine minutes", () => {
+    expect(
+      decideWatch(
+        seenAt("failed:rate_limited", "2026-10-09T11:01:00.000Z"),
+        rateLimited,
+        NOW,
+      ).action,
+    ).toBe("wait");
+  });
+
+  test("notifies once the same state has lasted sixty minutes", () => {
+    expect(
+      decideWatch(
+        seenAt("failed:rate_limited", "2026-10-09T11:00:00.000Z"),
+        rateLimited,
+        NOW,
+      ).action,
+    ).toBe("notify");
+  });
+
+  test("starts the clock over when the previous cause differs", () => {
+    expect(
+      decideWatch(
+        seenAt("failed:github_unavailable", "2026-10-09T09:00:00.000Z"),
+        rateLimited,
+        NOW,
+      ).action,
+    ).toBe("wait");
+  });
+
+  test("notifies a non-transient code at once", () => {
+    expect(
+      decideWatch(
+        null,
+        observed({ state: "failed", error: "digest_mismatch" }),
+        NOW,
+      ).action,
+    ).toBe("notify");
+  });
+
+  test("a lost state only delays a transient notification", () => {
+    expect(decideWatch(null, rateLimited, NOW).action).toBe("wait");
   });
 });
 
 describe("parseWatchState", () => {
-  test("parses a stored cause key", () => {
-    expect(parseWatchState({ cause_key: "stale" })).toEqual({
-      cause_key: "stale",
-    });
+  test("parses a stored state", () => {
+    expect(parseWatchState(seenAt("stale", NOW_ISO))).toEqual(
+      seenAt("stale", NOW_ISO),
+    );
   });
 
   test("returns null for null", () => {
@@ -205,11 +290,21 @@ describe("parseWatchState", () => {
   });
 
   test("returns null for a non-string cause key", () => {
-    expect(parseWatchState({ cause_key: 5 })).toBeNull();
+    expect(parseWatchState({ cause_key: 5, first_seen: NOW_ISO })).toBeNull();
   });
 
   test("returns null for an empty cause key", () => {
-    expect(parseWatchState({ cause_key: "" })).toBeNull();
+    expect(parseWatchState({ cause_key: "", first_seen: NOW_ISO })).toBeNull();
+  });
+
+  test("returns null when first_seen is missing", () => {
+    expect(parseWatchState({ cause_key: "stale" })).toBeNull();
+  });
+
+  test("returns null when first_seen is not a date", () => {
+    expect(
+      parseWatchState({ cause_key: "stale", first_seen: "yesterday" }),
+    ).toBeNull();
   });
 
   test("returns null for a string", () => {
@@ -227,8 +322,8 @@ type Harness = {
 function harness(options: {
   readonly file: () => Promise<string>;
   readonly prev?: unknown;
+  /** 呼び出しごとに、noticeを新しく挿入できたか。省略時は常に挿入できる。 */
   readonly noticeInserted?: boolean;
-  readonly notifyThrows?: boolean;
 }): Harness {
   const notices: NoticeRecord[] = [];
   const events: NotifyEvent[] = [];
@@ -245,9 +340,6 @@ function harness(options: {
     },
     notify: async (event) => {
       events.push(event);
-      if (options.notifyThrows === true) {
-        return { status: "not_sent", reason: "down" };
-      }
       return { status: "sent" };
     },
     instanceName: "local",
@@ -259,6 +351,8 @@ function harness(options: {
 
 const FAILED_FILE = async () =>
   JSON.stringify(status({ state: "failed", error: "auth_failed" }));
+const RATE_LIMITED_FILE = async () =>
+  JSON.stringify(status({ state: "failed", error: "rate_limited" }));
 const OK_FILE = async () => JSON.stringify(status());
 
 describe("runWatch", () => {
@@ -268,7 +362,7 @@ describe("runWatch", () => {
     expect(h.notices.map((n) => n.kind)).toEqual(["console_fetch_failed"]);
   });
 
-  test("sends one Discord notification for a new failure", async () => {
+  test("sends one Discord notification when the notice is inserted", async () => {
     const h = harness({ file: FAILED_FILE });
     await runWatch(h.deps);
     expect(h.events).toHaveLength(1);
@@ -283,10 +377,10 @@ describe("runWatch", () => {
     });
   });
 
-  test("saves the cause key as the state", async () => {
+  test("saves the cause key and first_seen as the state", async () => {
     const h = harness({ file: FAILED_FILE });
     await runWatch(h.deps);
-    expect(h.states).toEqual([{ cause_key: "failed:auth_failed" }]);
+    expect(h.states).toEqual([seenAt("failed:auth_failed", NOW_ISO)]);
   });
 
   test("returns the notified outcome", async () => {
@@ -297,36 +391,53 @@ describe("runWatch", () => {
     });
   });
 
-  test("does nothing again for the same failure", async () => {
+  test("tries the notice again for the same continuing failure", async () => {
     const h = harness({
       file: FAILED_FILE,
-      prev: { cause_key: "failed:auth_failed" },
+      prev: seenAt("failed:auth_failed", "2026-10-09T10:00:00.000Z"),
     });
     await runWatch(h.deps);
-    expect(h.notices).toEqual([]);
+    expect(h.notices).toHaveLength(1);
   });
 
-  test("does not send Discord again for the same failure", async () => {
+  test("sends Discord again when the earlier notice was resolved", async () => {
     const h = harness({
       file: FAILED_FILE,
-      prev: { cause_key: "failed:auth_failed" },
+      prev: seenAt("failed:auth_failed", "2026-10-09T10:00:00.000Z"),
+    });
+    await runWatch(h.deps);
+    expect(h.events).toHaveLength(1);
+  });
+
+  test("does not send Discord while the same notice is still unresolved", async () => {
+    const h = harness({
+      file: FAILED_FILE,
+      prev: seenAt("failed:auth_failed", "2026-10-09T10:00:00.000Z"),
+      noticeInserted: false,
     });
     await runWatch(h.deps);
     expect(h.events).toEqual([]);
   });
 
-  test("returns the unchanged outcome for the same failure", async () => {
+  test("returns already_open while the same notice is unresolved", async () => {
+    const h = harness({ file: FAILED_FILE, noticeInserted: false });
+    expect((await runWatch(h.deps)).outcome).toBe("already_open");
+  });
+
+  test("does not rewrite an unchanged state", async () => {
     const h = harness({
       file: FAILED_FILE,
-      prev: { cause_key: "failed:auth_failed" },
+      prev: seenAt("failed:auth_failed", "2026-10-09T10:00:00.000Z"),
+      noticeInserted: false,
     });
-    expect((await runWatch(h.deps)).outcome).toBe("unchanged");
+    await runWatch(h.deps);
+    expect(h.states).toEqual([]);
   });
 
   test("clears the state when the status is healthy again", async () => {
     const h = harness({
       file: OK_FILE,
-      prev: { cause_key: "failed:auth_failed" },
+      prev: seenAt("failed:auth_failed", NOW_ISO),
     });
     await runWatch(h.deps);
     expect(h.states).toEqual([null]);
@@ -335,7 +446,7 @@ describe("runWatch", () => {
   test("does not resolve or add a notice when healthy again", async () => {
     const h = harness({
       file: OK_FILE,
-      prev: { cause_key: "failed:auth_failed" },
+      prev: seenAt("failed:auth_failed", NOW_ISO),
     });
     await runWatch(h.deps);
     expect([h.notices, h.events]).toEqual([[], []]);
@@ -359,25 +470,31 @@ describe("runWatch", () => {
       },
     });
     await runWatch(h.deps);
-    expect(h.states).toEqual([{ cause_key: "status_missing" }]);
+    expect(h.states).toEqual([seenAt("status_missing", NOW_ISO)]);
   });
 
-  test("skips Discord when the same notice is already unresolved", async () => {
-    const h = harness({ file: FAILED_FILE, noticeInserted: false });
+  test("saves the state without a notice while a transient failure waits", async () => {
+    const h = harness({ file: RATE_LIMITED_FILE });
     await runWatch(h.deps);
-    expect(h.events).toEqual([]);
+    expect([h.notices, h.events, h.states]).toEqual([
+      [],
+      [],
+      [seenAt("failed:rate_limited", NOW_ISO)],
+    ]);
   });
 
-  test("still saves the state when the same notice is already unresolved", async () => {
-    const h = harness({ file: FAILED_FILE, noticeInserted: false });
-    await runWatch(h.deps);
-    expect(h.states).toEqual([{ cause_key: "failed:auth_failed" }]);
+  test("returns the waiting outcome for a transient failure", async () => {
+    const h = harness({ file: RATE_LIMITED_FILE });
+    expect((await runWatch(h.deps)).outcome).toBe("waiting");
   });
 
-  test("still saves the state when Discord cannot be reached", async () => {
-    const h = harness({ file: FAILED_FILE, notifyThrows: true });
+  test("notifies a transient failure after sixty minutes", async () => {
+    const h = harness({
+      file: RATE_LIMITED_FILE,
+      prev: seenAt("failed:rate_limited", "2026-10-09T10:30:00.000Z"),
+    });
     await runWatch(h.deps);
-    expect(h.states).toEqual([{ cause_key: "failed:auth_failed" }]);
+    expect(h.notices.map((n) => n.kind)).toEqual(["console_fetch_failed"]);
   });
 
   test("ignores a stored state of the wrong shape", async () => {

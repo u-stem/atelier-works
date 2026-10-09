@@ -1,6 +1,6 @@
 summary: '[SYS-7] Consoleの取り込みを見張る'
 description: >-
-  10分ごとに実行します。Consoleの取り込み(console_fetcher)が書く状態を読み、失敗、更新の停止、状態が読めないことを、通知とDiscordに1回だけ知らせます。正常に戻っても通知は自動では解決しません。
+  10分ごとに実行します。Consoleの取り込み(console_fetcher)が書く状態を読み、失敗、更新の停止、状態が読めないことを、通知に残し、新しく残したときだけDiscordに知らせます。rate limitなどの一時的な失敗は、60分以上続いたときだけ知らせます。正常に戻っても通知は自動では解決しません。
 args: {}
 cron_version: v2
 enabled: true

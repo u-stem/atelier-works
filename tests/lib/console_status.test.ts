@@ -93,12 +93,16 @@ describe("parseFetcherStatus", () => {
 
 describe("classifyFetcherStatus", () => {
   test("treats a fresh ok status as ok", () => {
-    expect(classifyFetcherStatus(status(), NOW)).toEqual({ verdict: "ok" });
+    expect(classifyFetcherStatus(status(), NOW)).toEqual({
+      verdict: "ok",
+      minutes_since_check: 2,
+    });
   });
 
   test("treats a fresh pinned status as ok", () => {
     expect(classifyFetcherStatus(status({ state: "pinned" }), NOW)).toEqual({
       verdict: "ok",
+      minutes_since_check: 2,
     });
   });
 
@@ -108,22 +112,35 @@ describe("classifyFetcherStatus", () => {
         status({ state: "failed", error: "auth_failed" }),
         NOW,
       ),
-    ).toEqual({ verdict: "failed", code: "auth_failed" });
+    ).toEqual({
+      verdict: "failed",
+      code: "auth_failed",
+      minutes_since_check: 2,
+    });
   });
 
   test("reports a failed status without a code as unknown", () => {
     expect(
       classifyFetcherStatus(status({ state: "failed", error: null }), NOW),
-    ).toEqual({ verdict: "failed", code: "unknown" });
+    ).toEqual({ verdict: "failed", code: "unknown", minutes_since_check: 2 });
   });
 
-  test("does not report exactly thirty minutes as stale", () => {
+  test("reports exactly thirty minutes as stale", () => {
     expect(
       classifyFetcherStatus(
         status({ checked_at: "2026-10-09T11:30:00.000Z" }),
         NOW,
       ),
-    ).toEqual({ verdict: "ok" });
+    ).toEqual({ verdict: "stale", minutes_since_check: 30 });
+  });
+
+  test("does not report one second under thirty minutes as stale", () => {
+    expect(
+      classifyFetcherStatus(
+        status({ checked_at: "2026-10-09T11:30:01.000Z" }),
+        NOW,
+      ),
+    ).toEqual({ verdict: "ok", minutes_since_check: 29 });
   });
 
   test("reports a status older than thirty minutes as stale", () => {
@@ -157,13 +174,13 @@ describe("classifyFetcherStatus", () => {
     ).toEqual({ verdict: "stale", minutes_since_check: 240 });
   });
 
-  test("treats a checked_at in the future as fresh", () => {
+  test("treats a checked_at in the future as fresh with zero minutes", () => {
     expect(
       classifyFetcherStatus(
         status({ checked_at: "2026-10-09T12:05:00.000Z" }),
         NOW,
       ),
-    ).toEqual({ verdict: "ok" });
+    ).toEqual({ verdict: "ok", minutes_since_check: 0 });
   });
 });
 
@@ -222,12 +239,18 @@ describe("loadFetcherStatus", () => {
 
 describe("nextActionForAssessment", () => {
   test("returns null for an ok assessment", () => {
-    expect(nextActionForAssessment({ verdict: "ok" })).toBeNull();
+    expect(
+      nextActionForAssessment({ verdict: "ok", minutes_since_check: 1 }),
+    ).toBeNull();
   });
 
   test("returns the action of the failure code", () => {
     expect(
-      nextActionForAssessment({ verdict: "failed", code: "auth_failed" }),
+      nextActionForAssessment({
+        verdict: "failed",
+        code: "auth_failed",
+        minutes_since_check: 1,
+      }),
     ).toBe(nextActionFor("auth_failed"));
   });
 

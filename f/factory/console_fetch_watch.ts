@@ -1,10 +1,12 @@
 // Consoleの取り込み(console_fetcher)が書くstatus.jsonを見張る。10分ごとに読み、
-// 失敗、30分以上の更新の停止、状態が読めないことを、noticeとDiscordに1回だけ知らせる。
+// 失敗、30分以上の更新の停止、状態が読めないことを、noticeとDiscordに知らせる。
 //
-// 前回知らせた原因はWindmillのstateに残し、同じ原因では繰り返さない。
-// 原因が変わったときは改めて知らせる。正常に戻ったらstateを空にするが、
-// noticeは自動では解決しない。運用者が原因を確かめて解決する。
-// 同じ本文の未解決のnoticeがあるときは、stateを失っていてもDiscordに重ねて送らない。
+// 重複を防ぐ主役は`addNoticeUnlessUnresolved`(種類と本文が同じ未解決のnoticeを重ねない)である。
+// 原因が続いている間は毎回noticeを試みるので、運用者が解決した後も原因が続けば、
+// 次の回に新しいnoticeが1件できる。Discordはnoticeを新しく挿入できたときだけ送る。
+// GitHubのrate limitやAPIの一時的な障害は、同じ状態が60分以上続いたときだけ知らせる。
+// 続いた長さは、Windmillのstateに残す最初に見た時刻で測る。stateを失っても、通知が遅れるだけである。
+// 正常に戻ったらstateを空にするが、noticeは自動では解決しない。運用者が原因を確かめて解決する。
 
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "./lib/config.ts";
@@ -29,8 +31,20 @@ import { type ReadTextFile, readTextFile } from "./lib/workspace.ts";
 /** 読んだstatus.json。`FetcherStatusLoad`と同じ形で、読めなかった場合を含む。 */
 export type WatchObservation = FetcherStatusLoad;
 
-/** 前回知らせた原因。Windmillのstateに保存する。 */
-export type WatchState = { readonly cause_key: string } | null;
+/** 一時的な失敗を知らせるまでに、同じ状態が続くべき分数。 */
+export const TRANSIENT_NOTIFY_AFTER_MINUTES = 60;
+
+/** 自然に直ることが多く、続いたときだけ知らせる取り込みの失敗の分類。 */
+const TRANSIENT_CODES: readonly string[] = [
+  "rate_limited",
+  "github_unavailable",
+];
+
+/** 今の原因と、それを最初に見た時刻。Windmillのstateに保存する。 */
+export type WatchState = {
+  readonly cause_key: string;
+  readonly first_seen: string;
+} | null;
 
 /** 知らせる原因。`message`はnoticeの本文で、同じ原因では同じ文になる。 */
 export type WatchCause = {
@@ -39,15 +53,20 @@ export type WatchCause = {
   readonly cause: string;
   readonly next_action: string;
   readonly message: string;
+  /** 一時的な失敗か。続いた時間が足りないうちは知らせない。 */
+  readonly transient: boolean;
 };
 
 export type WatchDecision =
   | { readonly action: "none"; readonly next_state: null }
-  | { readonly action: "keep"; readonly next_state: WatchState }
+  | {
+      readonly action: "wait";
+      readonly next_state: { cause_key: string; first_seen: string };
+    }
   | {
       readonly action: "notify";
       readonly cause: WatchCause;
-      readonly next_state: WatchState;
+      readonly next_state: { cause_key: string; first_seen: string };
     };
 
 const STATUS_FILE_NEXT_ACTION =
@@ -58,6 +77,7 @@ function buildCause(
   noticeKind: WatchCause["notice_kind"],
   cause: string,
   nextAction: string,
+  transient = false,
 ): WatchCause {
   return {
     key,
@@ -65,6 +85,7 @@ function buildCause(
     cause,
     next_action: nextAction,
     message: `${cause}。次の操作: ${nextAction}`,
+    transient,
   };
 }
 
@@ -106,16 +127,18 @@ function causeOf(observed: WatchObservation, now: Date): WatchCause | null {
       "console_fetch_failed",
       `Consoleの取り込みが失敗しました(${assessment.code})`,
       nextAction,
+      TRANSIENT_CODES.includes(assessment.code),
     );
   }
   return null;
 }
 
 /**
- * 前回の原因`prev`と今の状態から、何をするかを決める純関数。
+ * 前回の状態`prev`と今の状態から、何をするかを決める純関数。
  * - 正常: 何もせず、stateを空にする。
- * - 前回と同じ原因: 知らせず、stateを保つ。
- * - 新しい原因: 知らせ、stateをその原因にする。
+ * - 一時的な失敗が60分未満: 知らせず、最初に見た時刻をstateに残す。
+ * - それ以外の原因: 知らせる。原因が続く間は毎回この判定になり、重複はnoticeの側で防ぐ。
+ * 最初に見た時刻は、原因が前回と同じ間は保ち、原因が変わったら今にする。
  */
 export function decideWatch(
   prev: WatchState,
@@ -126,23 +149,36 @@ export function decideWatch(
   if (cause === null) {
     return { action: "none", next_state: null };
   }
-  const nextState = { cause_key: cause.key };
-  if (prev !== null && prev.cause_key === cause.key) {
-    return { action: "keep", next_state: nextState };
+  const firstSeen =
+    prev !== null && prev.cause_key === cause.key
+      ? prev.first_seen
+      : now.toISOString();
+  const nextState = { cause_key: cause.key, first_seen: firstSeen };
+  if (cause.transient) {
+    const lastedMs = now.getTime() - new Date(firstSeen).getTime();
+    if (lastedMs < TRANSIENT_NOTIFY_AFTER_MINUTES * 60_000) {
+      return { action: "wait", next_state: nextState };
+    }
   }
   return { action: "notify", cause, next_state: nextState };
 }
 
 /**
- * 保存したstateを解析する。形が違うもの(初回の`null`を含む)は`null`を返し、
- * 前回の原因が無いものとして扱う。
+ * 保存したstateを解析する。形が違うもの(初回の`null`、最初に見た時刻が読めないものを含む)は
+ * `null`を返し、前回の原因が無いものとして扱う。
  */
 export function parseWatchState(value: unknown): WatchState {
   if (!isRecord(value)) {
     return null;
   }
   const key = value.cause_key;
-  return isString(key) && key.length > 0 ? { cause_key: key } : null;
+  const firstSeen = value.first_seen;
+  if (!isString(key) || key.length === 0 || !isString(firstSeen)) {
+    return null;
+  }
+  return Number.isNaN(new Date(firstSeen).getTime())
+    ? null
+    : { cause_key: key, first_seen: firstSeen };
 }
 
 /** `runWatch`が使う外部の操作。テストでは差し替える。 */
@@ -160,13 +196,14 @@ export type WatchDeps = {
 
 export type WatchResult =
   | { readonly outcome: "healthy" }
-  | { readonly outcome: "unchanged" }
+  | { readonly outcome: "waiting"; readonly cause_key: string }
+  | { readonly outcome: "already_open"; readonly cause_key: string }
   | { readonly outcome: "notified"; readonly cause_key: string };
 
 /**
- * status.jsonを1回読んで判定し、新しい原因ならnoticeとDiscordに知らせる。
- * 同じ本文の未解決のnoticeが既にあれば、Discordには送らない。
- * Discordに届かなくても、noticeは残るのでstateは更新する。
+ * status.jsonを1回読んで判定し、知らせる原因ならnoticeを試みる。
+ * noticeを新しく挿入できたときだけDiscordに送る。同じ本文の未解決のnoticeがあれば何も足さない。
+ * Discordに届かなくても、noticeは残るのでstateは更新する。stateは原因が変わったときだけ書く。
  */
 export async function runWatch(deps: WatchDeps): Promise<WatchResult> {
   const observed = await loadFetcherStatus(deps.readFile);
@@ -182,8 +219,15 @@ export async function runWatch(deps: WatchDeps): Promise<WatchResult> {
     }
     return { outcome: "healthy" };
   }
-  if (decision.action === "keep") {
-    return { outcome: "unchanged" };
+
+  const causeKey = decision.next_state.cause_key;
+  const stateChanged = prev === null || prev.cause_key !== causeKey;
+
+  if (decision.action === "wait") {
+    if (stateChanged) {
+      await deps.setState(decision.next_state);
+    }
+    return { outcome: "waiting", cause_key: causeKey };
   }
 
   const { cause } = decision;
@@ -198,10 +242,14 @@ export async function runWatch(deps: WatchDeps): Promise<WatchResult> {
       cause: cause.cause,
       next_action: cause.next_action,
     });
+    deps.log.warn("console fetcher problem recorded", { cause_key: causeKey });
   }
-  await deps.setState(decision.next_state);
-  deps.log.warn("console fetcher problem recorded", { cause_key: cause.key });
-  return { outcome: "notified", cause_key: cause.key };
+  if (stateChanged) {
+    await deps.setState(decision.next_state);
+  }
+  return noticeId === null
+    ? { outcome: "already_open", cause_key: causeKey }
+    : { outcome: "notified", cause_key: causeKey };
 }
 
 export async function main(): Promise<WatchResult> {

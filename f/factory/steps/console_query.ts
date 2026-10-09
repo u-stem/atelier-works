@@ -1570,15 +1570,7 @@ async function readFetcherReport(
     checked_at: new Date(status.checked_at).toISOString(),
     error: status.error,
     assessment: assessment.verdict,
-    minutes_since_check:
-      assessment.verdict === "stale"
-        ? assessment.minutes_since_check
-        : Math.max(
-            0,
-            Math.floor(
-              (now.getTime() - new Date(status.checked_at).getTime()) / 60_000,
-            ),
-          ),
+    minutes_since_check: assessment.minutes_since_check,
     next_action: nextActionForAssessment(assessment),
   };
 }
