@@ -16,7 +16,10 @@ import {
   extractH2Headings,
 } from "./requirements_doc.ts";
 
-/** 生成した監査レポートを置く基底ディレクトリ。workerだけが使うvolumeにある。 */
+/**
+ * 生成した監査レポートを置く基底ディレクトリ。volume`factory_state`にある。
+ * defaultのworkerが読み書きし、Console用のworkerは読み取り専用でマウントする。
+ */
 export const AUDIT_BASE_DIR = "/var/lib/factory/audits";
 
 /** 唯一の基準となるテンプレートのパス(リポジトリのルートからの相対パス)。 */
