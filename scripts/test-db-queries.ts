@@ -81,6 +81,37 @@ async function issueWorkItem(
   );
 }
 
+async function prWorkItem(
+  kind: "pr_review" | "pr_fix",
+  pr: number,
+  status: WorkItemStatus,
+  title: string,
+): Promise<number> {
+  return insertWorkItem(
+    {
+      cycle: 1,
+      source: "issue",
+      kind,
+      owner: OWNER,
+      repo: "r",
+      issue_number: null,
+      issue_url: null,
+      pr_number: pr,
+      title,
+      body: null,
+      status,
+      attempt: 1,
+      claimed_by: null,
+      flow_job_id: null,
+      resume_url: null,
+      cancel_url: null,
+      head_sha: null,
+      parent_work_item_id: null,
+    },
+    sql,
+  );
+}
+
 function event(workItemId: number, toStatus: string, note: string): void {
   execPsql(
     target,
@@ -103,6 +134,22 @@ const needsHuman = await issueWorkItem(
 );
 const expired = await issueWorkItem(904, 1, "expired", "qdb-expired");
 const blocked = await issueWorkItem(905, 1, "blocked", "qdb-blocked");
+const reviewOld = await prWorkItem(
+  "pr_review",
+  801,
+  "failed",
+  "qdb-review-old",
+);
+await prWorkItem("pr_review", 801, "reviewed", "qdb-review-new");
+const reviewLone = await prWorkItem(
+  "pr_review",
+  802,
+  "failed",
+  "qdb-review-lone",
+);
+const fixOld = await prWorkItem("pr_fix", 803, "needs_human", "qdb-fix-old");
+await prWorkItem("pr_fix", 803, "reviewed", "qdb-fix-new");
+const fixOtherKind = await prWorkItem("pr_fix", 801, "failed", "qdb-fix-other");
 event(failedA, "failed", "boom-a");
 await recordFailure(
   {
@@ -152,6 +199,24 @@ check(
 check(
   "summary: an item with a newer cycle is left out",
   !failureIds.includes(supersededOld),
+);
+check(
+  "summary: a pr_review with a newer row for the same pr is left out",
+  !failureIds.includes(reviewOld),
+);
+check(
+  "summary: a pr_fix with a newer row for the same pr is left out",
+  !failureIds.includes(fixOld),
+);
+check(
+  "summary: a pr item without a newer row is listed",
+  failureIds.includes(reviewLone),
+  failureIds,
+);
+check(
+  "summary: a newer row of another kind does not hide a pr item",
+  failureIds.includes(fixOtherKind),
+  failureIds,
 );
 check("summary: a blocked item is left out", !failureIds.includes(blocked));
 const failedRow = wide.failures.find((row) => row.work_item_id === failedA);

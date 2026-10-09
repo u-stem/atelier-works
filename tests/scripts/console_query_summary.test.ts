@@ -129,6 +129,32 @@ describe("runConsoleSummary queries", () => {
     expect(calls[1]?.text).toContain("n.cycle > wi.cycle");
   });
 
+  test("excludes a pr work item that has a newer row for the same pr", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [], []]);
+    await runConsoleSummary(200, sql);
+    expect(calls[1]?.text).toContain("n.id > wi.id");
+  });
+
+  test("applies the newer row exclusion to pr_review and pr_fix only", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [], []]);
+    await runConsoleSummary(200, sql);
+    expect(calls[1]?.text).toContain("wi.kind IN ('pr_review', 'pr_fix')");
+  });
+
+  test("matches the newer pr row on kind, repository and pr number", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [], []]);
+    await runConsoleSummary(200, sql);
+    expect(calls[1]?.text).toContain(
+      "n.kind = wi.kind AND n.owner = wi.owner AND n.repo = wi.repo",
+    );
+  });
+
+  test("compares the pr number of the newer row", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [], []]);
+    await runConsoleSummary(200, sql);
+    expect(calls[1]?.text).toContain("n.pr_number = wi.pr_number");
+  });
+
   test("takes only the latest failure of each work item", async () => {
     const { sql, calls } = createFakeSqlClient([[], [], []]);
     await runConsoleSummary(200, sql);

@@ -1069,6 +1069,8 @@ function totalCount(rows: readonly SqlRow[]): number {
  *   承認の記録はIssueの作成より先に行うので、その間で失敗した提案が見えなくならないよう含める。
  * - 失敗: 今の状態が`ACTIONABLE_WORK_ITEM_STATUSES`の作業項目。
  *   同じIssueに新しいcycleがある作業項目は、そのcycleが引き継ぐので除く。
+ *   PRのレビューと修正は、ラベルの付け直しで同じPRに新しい行(cycleは1から)ができるので、
+ *   同じ種類・リポジトリ・PR番号で`id`が大きい行がある作業項目を除く。
  * - 通知: 未解決で、重要度が`action`のもの。
  *
  * `error`、`message`、状態の注記は`SUMMARY_TEXT_LIMIT`字に切り詰める。
@@ -1122,6 +1124,14 @@ export async function runConsoleSummary(
           SELECT 1 FROM factory.work_items n
           WHERE n.kind = 'issue' AND n.owner = wi.owner AND n.repo = wi.repo
             AND n.issue_number = wi.issue_number AND n.cycle > wi.cycle
+        )
+      )
+      AND NOT (
+        wi.kind IN ('pr_review', 'pr_fix')
+        AND EXISTS (
+          SELECT 1 FROM factory.work_items n
+          WHERE n.kind = wi.kind AND n.owner = wi.owner AND n.repo = wi.repo
+            AND n.pr_number = wi.pr_number AND n.id > wi.id
         )
       )
     ORDER BY wi.updated_at DESC
