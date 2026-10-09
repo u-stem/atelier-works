@@ -2033,8 +2033,8 @@ describe("ensureHeadOnBranch (real git)", () => {
     expect(merge.stdout).toBe("");
   });
 
-  // CIでは飛ばさない。gitが拒否しない環境は、テストの先頭で分かるメッセージで失敗させる。
-  const isCi = (process.env.CI ?? "") !== "";
+  // CI(`CI=true`)では飛ばさない。gitが拒否しない環境は、テストの先頭で分かるメッセージで失敗させる。
+  const isCi = process.env.CI === "true";
   test.skipIf(!hostGitRefusesCheckedOutBranch && !isCi)(
     "fails when the branch is checked out in another worktree",
     async () => {
