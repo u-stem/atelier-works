@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { type FetchLike, runScript, SCRIPT_PATHS } from "./windmill.ts";
+import {
+  type FetchLike,
+  isScriptName,
+  runScript,
+  SCRIPT_PATHS,
+} from "./windmill.ts";
 
 type Recorded = { input: string; init: RequestInit };
 
@@ -30,6 +35,23 @@ describe("SCRIPT_PATHS", () => {
       "approval_decide",
       "console_query",
     ]);
+  });
+});
+
+describe("isScriptName", () => {
+  test("accepts an allowed name", () => {
+    expect(isScriptName("console_query")).toBe(true);
+  });
+
+  test.each([
+    "constructor",
+    "toString",
+    "__proto__",
+    "hasOwnProperty",
+    "f/factory/steps/console_query",
+    "",
+  ])("rejects %s", (name) => {
+    expect(isScriptName(name)).toBe(false);
   });
 });
 

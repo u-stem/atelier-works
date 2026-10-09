@@ -1,36 +1,11 @@
-import {
-  QueryCache,
-  QueryClient,
-  QueryClientProvider,
-} from "@tanstack/react-query";
+import { QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
-import { shouldRetryQuery } from "../api/queryPolicy.ts";
 import { Toaster } from "../components/ui/sonner.tsx";
 import { TooltipProvider } from "../components/ui/tooltip.tsx";
 import { authStore } from "./authState.ts";
+import { createQueryClient } from "./queryClient.ts";
 
-/**
- * 取得の失敗と成功をログインの状態に反映する。
- * 書き込みは再試行しない。結果が不明なまま2回実行しないため。
- */
-function createQueryClient(): QueryClient {
-  return new QueryClient({
-    queryCache: new QueryCache({
-      onError: (error) => {
-        authStore.reportError(error);
-      },
-      onSuccess: () => {
-        authStore.reportSuccess();
-      },
-    }),
-    defaultOptions: {
-      queries: { retry: shouldRetryQuery },
-      mutations: { retry: 0 },
-    },
-  });
-}
-
-const queryClient = createQueryClient();
+const queryClient = createQueryClient(authStore);
 
 export function AppProviders({ children }: { children: ReactNode }) {
   return (

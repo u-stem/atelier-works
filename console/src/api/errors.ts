@@ -6,12 +6,15 @@ import { isRecord } from "./guards/primitives.ts";
 /** ジョブの失敗の本文を切り詰める長さ。長い出力で画面を埋めないため。 */
 const MAX_MESSAGE_LENGTH = 500;
 
+/** 4xxの応答の本文を添えるときの長さ。画面の1行に収まる程度にとどめる。 */
+const MAX_DETAIL_LENGTH = 200;
+
 export type ApiError =
   | { readonly kind: "unauthorized" }
   | { readonly kind: "forbidden" }
   | { readonly kind: "job_failed"; readonly message: string }
   | { readonly kind: "timeout_or_unknown" }
-  | { readonly kind: "http"; readonly status: number }
+  | { readonly kind: "http"; readonly status: number; readonly detail: string }
   | { readonly kind: "network" }
   | { readonly kind: "invalid_response" };
 
@@ -60,10 +63,10 @@ function messageFromJson(parsed: unknown): string {
   return typeof error === "string" ? error : "";
 }
 
-function extractJobMessage(body: string): string {
+function extractText(body: string, limit: number): string {
   const json = parseJson(body);
   const message = json === null ? body : messageFromJson(json.parsed);
-  return message.trim().slice(0, MAX_MESSAGE_LENGTH);
+  return message.trim().slice(0, limit);
 }
 
 /**
@@ -71,6 +74,8 @@ function extractJobMessage(body: string): string {
  * 失敗の応答の形はJSONの場合とテキストの場合があり、成功の本文はJSONに限る。
  * 408と504は、待ちの上限を超えたか、結果が分からない状態として扱う。
  * ジョブが実際に終わったかは分からないので、書き込みの結果としては確定させない。
+ * 4xxの本文(例: worker tagの許可がないときの400)は、`detail`に短く添える。
+ * 5xxの本文はHTMLなどになりうるので添えない。
  */
 export function classifyRunResponse(status: number, body: string): RunResult {
   if (status >= 200 && status < 300) {
@@ -89,26 +94,56 @@ export function classifyRunResponse(status: number, body: string): RunResult {
     return failure({ kind: "timeout_or_unknown" });
   }
   if (status === 500) {
-    return failure({ kind: "job_failed", message: extractJobMessage(body) });
+    return failure({
+      kind: "job_failed",
+      message: extractText(body, MAX_MESSAGE_LENGTH),
+    });
   }
-  return failure({ kind: "http", status });
+  const isClientError = status >= 400 && status < 500;
+  return failure({
+    kind: "http",
+    status,
+    detail: isClientError ? extractText(body, MAX_DETAIL_LENGTH) : "",
+  });
 }
 
-/** 失敗を画面に出す日本語の文にする。 */
-export function describeApiError(error: ApiError): string {
+/** 画面全体のバナーが知らせる失敗か。一覧の側では同じ内容を繰り返さない。 */
+export function isBannerError(error: ApiError): boolean {
+  return error.kind === "unauthorized";
+}
+
+export type Operation = "read" | "write";
+
+const UNKNOWN_RESULT = "結果が分かりません。一覧を読み直して確かめてください。";
+
+/**
+ * 失敗を画面に出す日本語の文にする。
+ * 書き込み(`write`)では、ジョブの失敗と待ちの上限のどちらも、処理が途中まで進んだかもしれない。
+ * そのため結果が分からないものとして案内する。読み取り(`read`)は、失敗をそのまま伝える。
+ */
+export function describeApiError(
+  error: ApiError,
+  operation: Operation = "read",
+): string {
   switch (error.kind) {
     case "unauthorized":
       return "ログインの有効期限が切れました。ログインし直してください。";
     case "forbidden":
       return "この操作は許可されていません。";
-    case "job_failed":
-      return error.message === ""
-        ? "処理に失敗しました。"
-        : `処理に失敗しました: ${error.message}`;
+    case "job_failed": {
+      const detail = error.message === "" ? "" : `(${error.message})`;
+      return operation === "write"
+        ? `処理に失敗した可能性があります${detail}。${UNKNOWN_RESULT}`
+        : error.message === ""
+          ? "処理に失敗しました。"
+          : `処理に失敗しました: ${error.message}`;
+    }
     case "timeout_or_unknown":
-      return "応答が時間内に返らず、結果が分かりません。一覧を読み込み直して確かめてください。";
+      return `応答が時間内に返りませんでした。${UNKNOWN_RESULT}`;
     case "http":
-      return `サーバーがエラーを返しました(状態 ${error.status})。`;
+      return error.detail === ""
+        ? `サーバーがエラーを返しました(状態 ${error.status})。`
+        : `サーバーがエラーを返しました(状態 ${error.status}): ${error.detail}`;
     case "network":
       return "サーバーに接続できませんでした。";
     case "invalid_response":

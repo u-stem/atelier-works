@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { ApiFailure, classifyRunResponse, describeApiError } from "./errors.ts";
+import {
+  ApiFailure,
+  classifyRunResponse,
+  describeApiError,
+  isBannerError,
+} from "./errors.ts";
 
 describe("classifyRunResponse on success", () => {
   test("returns the parsed JSON body", () => {
@@ -84,14 +89,14 @@ describe("classifyRunResponse on failure statuses", () => {
   test("reports http with the status for 404", () => {
     expect(classifyRunResponse(404, "Not found")).toEqual({
       ok: false,
-      error: { kind: "http", status: 404 },
+      error: { kind: "http", status: 404, detail: "Not found" },
     });
   });
 
   test("reports http with the status for 502", () => {
     expect(classifyRunResponse(502, "Bad Gateway")).toEqual({
       ok: false,
-      error: { kind: "http", status: 502 },
+      error: { kind: "http", status: 502, detail: "" },
     });
   });
 });
@@ -180,7 +185,83 @@ describe("describeApiError", () => {
   });
 
   test("does not expose the status code as the only text for http", () => {
-    expect(describeApiError({ kind: "http", status: 502 })).toContain("502");
+    expect(
+      describeApiError({ kind: "http", status: 502, detail: "" }),
+    ).toContain("502");
+  });
+
+  test("adds the server detail for http", () => {
+    expect(
+      describeApiError({ kind: "http", status: 400, detail: "Bad request: x" }),
+    ).toContain("Bad request: x");
+  });
+
+  test("keeps a failed job message on reads", () => {
+    expect(
+      describeApiError({ kind: "job_failed", message: "boom" }, "read"),
+    ).not.toContain("結果が分かりません");
+  });
+
+  test("says the result is unknown for a failed job on writes", () => {
+    expect(
+      describeApiError({ kind: "job_failed", message: "boom" }, "write"),
+    ).toContain("結果が分かりません。一覧を読み直して確かめてください");
+  });
+
+  test("keeps the job message on writes", () => {
+    expect(
+      describeApiError({ kind: "job_failed", message: "boom" }, "write"),
+    ).toContain("boom");
+  });
+
+  test("says the result is unknown for a timeout on writes", () => {
+    expect(describeApiError({ kind: "timeout_or_unknown" }, "write")).toContain(
+      "結果が分かりません。一覧を読み直して確かめてください",
+    );
+  });
+
+  test("tells a read that a timeout left the list stale", () => {
+    expect(describeApiError({ kind: "timeout_or_unknown" }, "read")).toContain(
+      "一覧を読み直して",
+    );
+  });
+});
+
+describe("classifyRunResponse on a rejected tag (400)", () => {
+  const BODY =
+    '"Bad request: Tag console is not included in the allowed CUSTOM_TAGS, which only super admins can go beyond: x"';
+
+  test("reports http 400", () => {
+    const result = classifyRunResponse(400, BODY);
+    expect(
+      !result.ok && result.error.kind === "http" && result.error.status,
+    ).toBe(400);
+  });
+
+  test("carries the JSON string as the detail", () => {
+    const result = classifyRunResponse(400, BODY);
+    expect(
+      !result.ok && result.error.kind === "http" && result.error.detail,
+    ).toBe(
+      "Bad request: Tag console is not included in the allowed CUSTOM_TAGS, which only super admins can go beyond: x",
+    );
+  });
+
+  test("truncates a long detail", () => {
+    const result = classifyRunResponse(400, "y".repeat(2000));
+    const detail =
+      !result.ok && result.error.kind === "http" ? result.error.detail : "";
+    expect(detail.length).toBe(200);
+  });
+});
+
+describe("isBannerError", () => {
+  test("is true for unauthorized", () => {
+    expect(isBannerError({ kind: "unauthorized" })).toBe(true);
+  });
+
+  test("is false for forbidden", () => {
+    expect(isBannerError({ kind: "forbidden" })).toBe(false);
   });
 });
 

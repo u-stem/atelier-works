@@ -6,23 +6,26 @@ const MAX_RETRIES = 2;
 
 /**
  * 取得が失敗したときに再試行するか。
- * 401と403は、待っても変わらないので再試行しない。
- * 形が違う応答も再試行しない。再び取っても同じ応答が返るため。
- * それ以外の失敗は`MAX_RETRIES`回まで再試行する。
+ * 再試行するのは、通信の失敗、待ちの上限(結果が分からない)、5xxだけで、`MAX_RETRIES`回までにする。
+ * 401、403、4xx、形が違う応答、ジョブの失敗は、再び取っても同じ結果になる。
+ * summaryは120秒ごとに取り直すので、決定的な失敗を再試行で積み増さない。
+ * `ApiFailure`でないエラーは原因が分からないので再試行しない。
  */
 export function shouldRetryQuery(
   failureCount: number,
   error: unknown,
 ): boolean {
-  if (error instanceof ApiFailure) {
-    const kind = error.apiError.kind;
-    if (
-      kind === "unauthorized" ||
-      kind === "forbidden" ||
-      kind === "invalid_response"
-    ) {
-      return false;
-    }
+  if (failureCount >= MAX_RETRIES || !(error instanceof ApiFailure)) {
+    return false;
   }
-  return failureCount < MAX_RETRIES;
+  const apiError = error.apiError;
+  switch (apiError.kind) {
+    case "network":
+    case "timeout_or_unknown":
+      return true;
+    case "http":
+      return apiError.status >= 500;
+    default:
+      return false;
+  }
 }

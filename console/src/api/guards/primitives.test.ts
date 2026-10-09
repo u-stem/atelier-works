@@ -100,6 +100,18 @@ describe("strings", () => {
     expect(isIsoTimestamp("2026-10-09T12:00:00.000Z")).toBe(true);
   });
 
+  test("isIsoTimestamp rejects a date-only string", () => {
+    expect(isIsoTimestamp("2026-10-09")).toBe(false);
+  });
+
+  test("isIsoTimestamp rejects a locale-style date", () => {
+    expect(isIsoTimestamp("Oct 9, 2026")).toBe(false);
+  });
+
+  test("isIsoTimestamp accepts an offset form", () => {
+    expect(isIsoTimestamp("2026-10-09T21:00:00+09:00")).toBe(true);
+  });
+
   test("isIsoTimestamp rejects a non-date string", () => {
     expect(isIsoTimestamp("yesterday")).toBe(false);
   });

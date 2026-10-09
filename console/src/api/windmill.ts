@@ -12,6 +12,14 @@ export const SCRIPT_PATHS = {
 
 export type ScriptName = keyof typeof SCRIPT_PATHS;
 
+/**
+ * 型の外から来た文字列が許可リストの名前か。
+ * `SCRIPT_PATHS[name]`は`constructor`などの継承したプロパティも返すので、自身のキーに限る。
+ */
+export function isScriptName(name: string): name is ScriptName {
+  return Object.hasOwn(SCRIPT_PATHS, name);
+}
+
 /** テストで差し替えられるよう、`fetch`の形を絞った型。 */
 export type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
 
@@ -37,6 +45,9 @@ export async function runScript(
   args: Readonly<Record<string, unknown>>,
   options: RunScriptOptions = {},
 ): Promise<RunResult> {
+  if (!isScriptName(name)) {
+    return { ok: false, error: { kind: "invalid_response" } };
+  }
   const fetchFn = options.fetchFn ?? defaultFetch;
   const init: RequestInit = {
     method: "POST",
