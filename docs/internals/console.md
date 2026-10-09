@@ -44,6 +44,25 @@ zipは自前のreaderでメモリ上に展開する。
 - ルートと`console/`の依存は`bun install --frozen-lockfile --ignore-scripts`で入れ、依存のinstall scriptを実行しない。
 - `console/bun.lock`は`scripts/check-console-lockfile.ts`で検査する。registry由来でsha512のintegrityが付いた依存だけを許す。git、GitHub、tarballのURL、`console/`の外を指す`file:`と`link:`、`trustedDependencies`は拒む。
 
+## 配信の経路
+
+Caddyは、`/console/`の下を次の経路で返す。
+`factory_console`の他のファイル(`pin`、`revoked.json`、`history.json`など)は配信しない。
+
+| パス | 返すもの | キャッシュ |
+| --- | --- | --- |
+| `/console/status.json` | ボリューム直下の`status.json`。無ければ404 | `no-store` |
+| `/console/assets/*` | 共有の`assets/`。無ければ404 | 長期(immutable) |
+| `/console/*` | `current/`のファイル。無いパスは`index.html` | `no-cache` |
+
+`/console/manifest.json`は、`current/`の`manifest.json`である。
+`status.json`は`state`、`sha`、`checked_at`、`error`の4項目だけを持つ。
+
+開いたままのタブは、`manifest.json`と`status.json`を読んで、自分の版が配信中かを確かめる。
+判定は`console/src/lib/release.ts`、取得は`console/src/useReleaseWatch.ts`にある。
+ビルドに版のshaは埋め込まない。版ごとに中身が変わると、`console_fetcher`の中身による同一判定と`revoked.json`の照合が働かなくなるためである。
+自分の版は、実行中のscriptのURL(`/console/assets/`の下のファイル名)で見分ける。
+
 ## ブラウザ側のヘッダー
 
 `/console/*`の応答(404とfallbackを含む)だけに、次のヘッダーを付ける。

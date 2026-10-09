@@ -53,6 +53,17 @@
                         redir * /console/ 308
                 }
 
+                # console_fetcherの状態。開いたままのタブが、版の取り下げを確かめるために読む。
+                # ボリュームの他のファイル(pin、revoked.json、history.jsonなど)は配信しない。
+                # ファイルが無ければ404にする(handle_errorsが返す)。
+                handle /console/status.json {
+                        import console_headers
+                        rewrite * /status.json
+                        root * /srv/console
+                        header Cache-Control "no-store"
+                        file_server
+                }
+
                 # Consoleの共有のassets。ハッシュ付きの名前なので長期のキャッシュにする。
                 # 無いファイルはindex.htmlに落とさず404にする(handle_errorsが返す)。
                 handle_path /console/assets/* {

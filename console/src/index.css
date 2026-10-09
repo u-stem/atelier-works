@@ -13,6 +13,11 @@
   --muted-foreground: light-dark(oklch(0.45 0 0), oklch(0.75 0 0));
   --primary: light-dark(oklch(0.205 0 0), oklch(0.922 0 0));
   --primary-foreground: light-dark(oklch(0.985 0 0), oklch(0.205 0 0));
+  --destructive: light-dark(
+    oklch(0.505 0.213 27.518),
+    oklch(0.704 0.191 22.216)
+  );
+  --destructive-foreground: light-dark(oklch(0.985 0 0), oklch(0.145 0 0));
   --border: light-dark(oklch(0.922 0 0), oklch(0.371 0 0));
   --ring: light-dark(oklch(0.556 0 0), oklch(0.708 0 0));
 }
@@ -32,6 +37,8 @@
   --color-muted-foreground: var(--muted-foreground);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
   --color-border: var(--border);
   --color-ring: var(--ring);
 }
