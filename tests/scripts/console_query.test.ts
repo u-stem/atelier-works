@@ -115,6 +115,66 @@ describe("readDocFromDisk", () => {
     expect(result).toBeNull();
   });
 
+  test("returns null when a .. segment leaves REQUIREMENTS_BASE_DIR", async () => {
+    const readFile = () => Promise.resolve("# 要件");
+
+    const result = await readDocFromDisk(
+      "/var/lib/factory/requirements/../claude/x",
+      [],
+      readFile,
+    );
+
+    expect(result).toBeNull();
+  });
+
+  test("does not read any file when a .. segment leaves REQUIREMENTS_BASE_DIR", async () => {
+    const reads: string[] = [];
+    const readFile = (path: string) => {
+      reads.push(path);
+      return Promise.resolve("# 要件");
+    };
+
+    await readDocFromDisk(
+      "/var/lib/factory/requirements/../claude/x",
+      [],
+      readFile,
+    );
+
+    expect(reads).toEqual([]);
+  });
+
+  test("returns null for the base directory itself", async () => {
+    const readFile = () => Promise.resolve("# 要件");
+
+    const result = await readDocFromDisk(
+      "/var/lib/factory/requirements/a/..",
+      [],
+      readFile,
+    );
+
+    expect(result).toBeNull();
+  });
+
+  test("returns null for a relative doc_dir", async () => {
+    const readFile = () => Promise.resolve("# 要件");
+
+    const result = await readDocFromDisk("requirements/a", [], readFile);
+
+    expect(result).toBeNull();
+  });
+
+  test("reads from the normalized path when a .. segment stays inside the base", async () => {
+    const reads: string[] = [];
+    const readFile = (path: string) => {
+      reads.push(path);
+      return Promise.resolve("# 要件");
+    };
+
+    await readDocFromDisk("/var/lib/factory/requirements/a/../b", [], readFile);
+
+    expect(reads).toEqual(["/var/lib/factory/requirements/b/requirements.md"]);
+  });
+
   test("returns null when requirements.md can't be read", async () => {
     const readFile = () => Promise.reject(new Error("ENOENT"));
 

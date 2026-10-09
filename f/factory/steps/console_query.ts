@@ -2,6 +2,7 @@
 // Appの各タブが読む`factory.v_*`ビューを1つのスクリプトの背後にまとめ、
 // AppのバックエンドのrunnableをインラインSQLの無い`type: script`の参照のままにする。
 
+import { isAbsolute, resolve } from "node:path";
 import { formatAuditPeriodLabel } from "../lib/audit_support.ts";
 import {
   ACTIONABLE_WORK_ITEM_STATUSES,
@@ -761,7 +762,8 @@ export type RequirementsDocRow = {
  * このランナブルと、ファイルを書く`pipeline_generate.ts`は同じworkerのコンテナで動くので、
  * 普通のファイル読み込みで読める。
  *
- * `docDir`は`REQUIREMENTS_BASE_DIR`の下でなければならない。
+ * `docDir`は絶対パスで、`..`を字面で解決した後に`REQUIREMENTS_BASE_DIR`の下でなければならない。
+ * 解決はシンボリックリンクをたどらない。ファイルは解決後のパスで読む。
  * `doc_dir`はDBの行から読んだ値をそのまま使い、呼び出し元の引数からは組み立てない。
  * `buildRequirementsDocDir`が書いた値のはずだが、パスに使う前に防御的に確かめ直す。
  * この確認に失敗したとき、doc dirが無いとき、`requirements.md`が読めないときは
@@ -782,12 +784,18 @@ export async function readDocFromDisk(
   readonly markdown: string;
   readonly diagrams: RequirementsDiagramContent[];
 } | null> {
-  if (!docDir.startsWith(`${REQUIREMENTS_BASE_DIR}/`)) {
+  if (!isAbsolute(docDir)) {
+    return null;
+  }
+  // `..`を解決してから判定する。接頭辞の比較だけでは、
+  // `<base>/../claude/x`のような値が基準の外を指していても通ってしまう。
+  const dir = resolve(docDir);
+  if (!dir.startsWith(`${REQUIREMENTS_BASE_DIR}/`)) {
     return null;
   }
   let markdown: string;
   try {
-    markdown = await readFile(`${docDir}/${REQUIREMENTS_MD_FILENAME}`);
+    markdown = await readFile(`${dir}/${REQUIREMENTS_MD_FILENAME}`);
   } catch {
     return null;
   }
@@ -805,7 +813,7 @@ export async function readDocFromDisk(
       continue;
     }
     try {
-      const xml = await readFile(`${docDir}/${diagram.file}`);
+      const xml = await readFile(`${dir}/${diagram.file}`);
       resolvedDiagrams.push({ name: diagram.name, xml });
     } catch {
       // 図のファイルが無いか読めなければ、この図だけを落とす。
