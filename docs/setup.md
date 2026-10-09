@@ -104,7 +104,7 @@ mise exec -- sh -c 'test -n "$DB_PASSWORD" && echo ok'
 
 | フック | 実行するもの |
 | --- | --- |
-| pre-commit | `f/`の下をステージしたときは、先に`scripts/generate-metadata-staged.sh`を実行する。メタデータを作り直し、変わったlockとスキーマのファイルをステージする。続けて、biome、`as`の検出、`§`の検出、gitleaks、`wmill lint f`、文書の検査を並列に実行する |
+| pre-commit | `f/`の下をステージしたときは、先に`scripts/generate-metadata-staged.sh`を実行する。メタデータを作り直し、変わったlockとスキーマのファイルをステージする。続けて、biome、`as`の検出、`§`の検出、短い名前のリモートrefの検出、gitleaks、`wmill lint f`、文書の検査を並列に実行する |
 | post-checkout | リンクされたgit worktreeでは、`scripts/link-worktree-wmill.sh`が`.wmill`をメイン作業ツリーの`.wmill`へのシンボリックリンクにする。メイン作業ツリーでは何もしない |
 | commit-msg | `scripts/check-commit-msg.sh`でコミットメッセージの規約を検査する |
 | pre-push | `mise run check`を実行する。pushに`f/`、`dependencies/`、`wmill.yaml`、`wmill-lock.yaml`の変更があれば、`mise run metadata:check`で古いメタデータを見つけてpushを止める |

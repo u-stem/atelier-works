@@ -464,7 +464,7 @@ export type GitCommandOptions = {
  *   ローカルだけの操作(rev-parse、status、add、commit、worktree、diff)は
  *   トークンを持たない`localGitEnv`を使う。
  * - 利用者に由来する位置引数(URL、ディレクトリ、sha、ブランチ)の前には`--`を置き、
- *   `-`で始まる値をオプションと誤読させない。例外は次の5つで、代わりに
+ *   `-`で始まる値をオプションと誤読させない。例外は次の6つで、代わりに
  *   `assertSha`や`assertBranchName`の入力検証で、先頭が`-`の値を防ぐ。
  *   - `git rev-parse`: `-- <rev>`は他のサブコマンドと同じには動かない。
  *     `--verify`では「リビジョンが無い」扱いになり、`--verify`なしでは
@@ -479,7 +479,7 @@ export type GitCommandOptions = {
  *     プロセスを止めたとき): `--hard`はパスを取らず、
  *     `--`を付けるとエラーになる
  *     (「fatal: Cannot do hard reset with paths」、実際に確かめた)。
- *   - `ensureFactoryClone`の`git checkout -B <branch> origin/<branch>`と、
+ *   - `ensureFactoryClone`の`git checkout -B <branch> refs/remotes/origin/<branch>`と、
  *     `createGtrWorktree`の`git checkout -f --no-track -B <branch> <ref>`: 起点の前に
  *     `--`を付けると、`checkout`は起点をrefではなく復元するパスとして扱う。
  *     `branch`は関数の先頭で`assertBranchName`により検証している。
@@ -509,6 +509,21 @@ function buildGitArgv(
       : []),
     ...args,
   ];
+}
+
+const REMOTE_TRACKING_PREFIX = "refs/remotes/origin/";
+
+/** `ensureRepo`のcloneが作る、`origin`の既定のブランチを指すシンボリックref。 */
+const REMOTE_HEAD_REF = `${REMOTE_TRACKING_PREFIX}HEAD`;
+
+/**
+ * `origin`の`branch`の追跡refを、完全な名前で返す。
+ * 短い名前の`origin/<branch>`は、検査コマンドが作る
+ * `refs/heads/origin/<branch>`や`refs/tags/origin/<branch>`が先に解決されうるため、使わない。
+ * `branch`は呼び出し側が`assertBranchName`で検証済みのものを渡す。
+ */
+function remoteTrackingRef(branch: string): string {
+  return `${REMOTE_TRACKING_PREFIX}${branch}`;
 }
 
 /** ネットワークを使わないgitの操作の環境変数を返す。`GH_TOKEN`は含めない。 */
@@ -566,6 +581,44 @@ function gitConfigEnvOverrides(
  */
 function gitError(context: string, result: CommandResult): Error {
   return new Error(maskSecrets(`${context}: ${result.stderr.trim()}`));
+}
+
+/**
+ * `ref`が今指すshaを、名前を完全に一致させて読む。無ければ`null`を返す。
+ * `git show-ref --verify`は`refs/`で始まる完全な名前だけを引き、ほかのrefへ解決し直さない。
+ * `rev-parse`は完全な名前でも、そのrefが無いと`refs/heads/<ref>`などへ解決し直す。
+ * 対象リポジトリの検査コマンドは`refs/heads/refs/remotes/origin/<branch>`のようなrefを作れるので、
+ * 追跡refが無いときに、別のcommitを追跡refの先頭として読んでしまう。
+ * リモート追跡のrefは、この関数で読む(`scripts/lint-no-short-remote-ref.ts`が短い名前を止める)。
+ * 読み取りだけのローカルの操作である。
+ * 戻り値が`null`になるのは、gitが「有効なrefではない」と報告したときだけで、
+ * それ以外の失敗(safe.directory、壊れたリポジトリ、ロックなど)はstderrつきで例外にする。
+ * 失敗の理由を「refが無い」に潰さないためである。
+ * メッセージの言語に左右されないよう`LC_ALL=C`で実行する。
+ * `--`はrefの前に置く。`show-ref`は`--`を受け付ける。
+ */
+export async function readExactRef(opts: {
+  readonly run: CommandRunner;
+  readonly cwd: string;
+  readonly env: Record<string, string>;
+  readonly ref: string;
+}): Promise<string | null> {
+  if (!opts.ref.startsWith("refs/")) {
+    throw new Error(`not a full ref name: ${JSON.stringify(opts.ref)}`);
+  }
+  const result = await opts.run(
+    buildGitArgv(["show-ref", "--verify", "--hash", "--", opts.ref]),
+    { cwd: opts.cwd, env: { ...opts.env, LC_ALL: "C" } },
+  );
+  if (result.exitCode !== 0) {
+    if (result.stderr.includes("not a valid ref")) return null;
+    throw gitError(`git show-ref --verify ${opts.ref} failed`, result);
+  }
+  const sha = result.stdout.trim();
+  if (sha === "") {
+    throw new Error(`git show-ref --verify ${opts.ref} printed an empty sha`);
+  }
+  return sha;
 }
 
 /**
@@ -1210,28 +1263,27 @@ export async function ensureRepo(
 }
 
 /**
- * `repoDir`の`ensureRepo`のcloneで、`origin/HEAD`が指すsha
+ * `repoDir`の`ensureRepo`のcloneで、`refs/remotes/origin/HEAD`が指すsha
  * (対象リポジトリの既定のブランチの先頭)を返す。解決できなければ例外を投げる。
  * 読み取りだけのローカルの操作で、`GH_TOKEN`は要らない。
  * 呼ぶ前に`ensureRepo`が`origin`をfetchしているので、
- * `origin/HEAD`はローカルで解決できる。
- * `rev-parse`には`--`を付けない(`buildGitArgv`の例外を参照)。
+ * `refs/remotes/origin/HEAD`はローカルで解決できる。
+ * 短い名前の`origin/HEAD`は、`refs/heads/origin/HEAD`などが先に解決されうるため使わない(`readExactRef`)。
  */
 export async function resolveDefaultBranchHeadSha(
   run: CommandRunner,
   repoDir: string,
 ): Promise<string> {
-  const result = await run(
-    buildGitArgv(["rev-parse", "--verify", "origin/HEAD"]),
-    { cwd: repoDir, env: localGitEnv() },
-  );
-  if (result.exitCode !== 0) {
-    throw gitError(
-      `git rev-parse --verify origin/HEAD failed in ${repoDir}`,
-      result,
-    );
+  const sha = await readExactRef({
+    run,
+    cwd: repoDir,
+    env: localGitEnv(),
+    ref: REMOTE_HEAD_REF,
+  });
+  if (sha === null) {
+    throw new Error(`${REMOTE_HEAD_REF} does not exist in ${repoDir}`);
   }
-  return result.stdout.trim();
+  return sha;
 }
 
 /**
@@ -1358,7 +1410,7 @@ export function factoryCloneLockPath(dir: string): string {
  * `ensureRepo`と違い、このcloneはファイルを直接読む(`claude.ts`の`buildSystemPrompt`が
  * `.claude/skills/<name>/SKILL.md`を読む)ため、作業ツリーが要る。どのフローも最初に呼ぶ。
  *
- * 初回のcloneに限らず毎回、`opts.branch`をfetchして`checkout -B <branch> origin/<branch>`で
+ * 初回のcloneに限らず毎回、`opts.branch`をfetchして`checkout -B <branch> refs/remotes/origin/<branch>`で
  * 強制的に切り替え、前に何がcheckoutされていても、そのブランチのリモートの今の状態に合わせる
  * (必要なら切り替え、同じブランチならhard resetする)。
  * `git pull --ff-only`は今checkoutしているブランチを進めるだけで、ブランチを切り替えず、
@@ -1414,14 +1466,28 @@ export async function ensureFactoryClone(
             resetResult,
           );
         }
+        // 追跡refが完全な名前で存在することを確かめてから切り替える。
+        // 無いまま名前を渡すと、別のrefへ解決し直されうる。
+        // 名前のまま渡すのは、上流の設定を残すためである。
+        const tracked = await readExactRef({
+          run: opts.run,
+          cwd: dir,
+          env: localGitEnv(opts.home, opts.path),
+          ref: remoteTrackingRef(branch),
+        });
+        if (tracked === null) {
+          throw new Error(
+            `${remoteTrackingRef(branch)} does not exist in factory clone`,
+          );
+        }
         // ここでは`--`を付けない(`buildGitArgv`の例外を参照)。
         // `checkout -B <branch> <start-point>`は起点の前の`--`を受け付けない。
         // `--`を付けると`checkout`は「パスを復元する」動作になり、
-        // `origin/<branch>`を気づかないうちにrefではなくパスとして解釈する。
+        // 起点をrefではなくパスとして解釈する。
         // 代わりに`branch`を上の`assertBranchName`で検証している
         // (先頭の`-`、`..`、制御文字・空白を拒否する)。
         const checkoutResult = await opts.run(
-          buildGitArgv(["checkout", "-B", branch, `origin/${branch}`]),
+          buildGitArgv(["checkout", "-B", branch, remoteTrackingRef(branch)]),
           {
             cwd: dir,
             env: localGitEnv(opts.home, opts.path),
@@ -1429,7 +1495,7 @@ export async function ensureFactoryClone(
         );
         if (checkoutResult.exitCode !== 0) {
           throw gitError(
-            `git checkout -B ${branch} origin/${branch} failed for factory clone`,
+            `git checkout -B ${branch} ${remoteTrackingRef(branch)} failed for factory clone`,
             checkoutResult,
           );
         }
@@ -1815,11 +1881,11 @@ function parseGtrPorcelain(stdout: string): GtrWorktree {
 
   const path = fields.get("path");
   const branch = fields.get("branch");
-  const hookStatus = fields.get("hook_status");
-  if (path === undefined || branch === undefined || hookStatus === undefined) {
+  if (path === undefined || branch === undefined) {
     throw new Error(`unexpected 'git gtr new --porcelain' output: ${stdout}`);
   }
-  return { path, branch, hookStatus };
+  // `hook_status`は参考の情報なので、無くても失敗させない。
+  return { path, branch, hookStatus: fields.get("hook_status") ?? "unknown" };
 }
 
 /**
@@ -1831,7 +1897,7 @@ function parseGtrPorcelain(stdout: string): GtrWorktree {
  * gitが2.43以降なら、対象のブランチが他のworktreeでcheckoutされているときも失敗する(workerのイメージはDebian trixieのgit 2.47)。
  * worktreeを作り直さないのは、作り直しにも生き残りの確かめとポインタの検証がもう一度要り、
  * 再利用するworktreeでは対象リポジトリが無視しているファイル(`node_modules/`など)まで失うためである。
- * `--no-track`は、起点が`origin/<branch>`のときに上流の設定をメインのcloneの`.git/config`へ書かないために付ける。
+ * `--no-track`は、`ref`が追跡ref(`refs/remotes/origin/<branch>`)の名前のときに上流の設定をメインのcloneの`.git/config`へ書かないために付ける。
  * HEADを読めないとき、切り替えに失敗したとき、切り替えた後もHEADが指していないときは例外を投げ、resetに進ませない。
  * `branch`は`assertBranchName`で、`ref`は検証済みの値から作ったものを渡す。
  */
@@ -1900,7 +1966,42 @@ export type CreateGtrWorktreeOptions = {
 };
 
 /**
- * `git gtr new <branch> --porcelain --yes`で`branch`のworktreeを作って返す。
+ * `git gtr new`が`branch`を作った先頭として正しいshaを、完全な名前で読んで返す。
+ * リモートにブランチがあれば`refs/remotes/origin/<branch>`、無ければ既定のブランチの先頭(`refs/remotes/origin/HEAD`)である。
+ * どちらも読めなければ例外を投げる。
+ */
+async function expectedGtrNewSha(opts: {
+  readonly run: CommandRunner;
+  readonly repoDir: string;
+  readonly branch: string;
+  readonly home?: string;
+  readonly path?: string;
+}): Promise<string> {
+  const env = localGitEnv(opts.home, opts.path);
+  const tracking = await readExactRef({
+    run: opts.run,
+    cwd: opts.repoDir,
+    env,
+    ref: remoteTrackingRef(opts.branch),
+  });
+  const sha =
+    tracking ??
+    (await readExactRef({
+      run: opts.run,
+      cwd: opts.repoDir,
+      env,
+      ref: REMOTE_HEAD_REF,
+    }));
+  if (sha === null) {
+    throw new Error(`${REMOTE_HEAD_REF} does not exist (gtr new)`);
+  }
+  assertSha(sha);
+  return sha;
+}
+
+/**
+ * `git gtr new <branch> --porcelain --yes --no-hooks`で`branch`のworktreeを作って返す。
+ * gtrのpostCreateフックは動かさない。誤ったcommitのtreeの中でフックを実行させないためである。
  * `git worktree prune`の後の`git worktree list`に`branch`のworktreeがすでにあれば、それを再利用する。
  * gitの操作に失敗したら例外を投げる。
  * `ensureRepo`がこのリポジトリに使うのと同じ、
@@ -1910,8 +2011,10 @@ export type CreateGtrWorktreeOptions = {
  * 通らなければファイル操作で削除し(`discardUnverifiedWorktree`)、
  * `git gtr new`で作り直す。
  * worktreeに触れる前(既存なら検証より前、新規なら`git gtr new`の直後)に`assertProcessesIdle`を呼ぶ。
- * 新しく作ったworktreeで確かめが何かを止めたときは、`.git`ファイルを検証してから、
- * 作った時点のブランチの先頭へ`reset --hard`し、`clean -fd`する。止まる前に書き込まれたものを捨てるためである。
+ * 新しく作ったworktreeは、作ったブランチの先頭を、完全な名前で読んだ値(`expectedGtrNewSha`)と照合する。
+ * `git gtr new`が短い名前の`origin/...`から作るので、違う先頭になっていることがあるためである。
+ * 照合で違ったときと、確かめが何かを止めたときは、`.git`ファイルを検証してから、
+ * 照合したshaへ`reset --hard`し、`clean -fd`する。止まる前に書き込まれたものを捨てるためである。
  * 再利用と、何かを止めた新しいworktreeのどちらでも、`reset --hard`の前にHEADを対象のブランチへそろえる(`ensureHeadOnBranch`)。
  */
 export async function createGtrWorktree(
@@ -1971,9 +2074,8 @@ export async function createGtrWorktree(
         // さらに人がブランチに直接pushしていれば、古いローカルの履歴のせいで
         // 次のpushがfast-forwardでなくなる。
         // そのため、渡す前にfetch、hard reset、cleanを行い、
-        // `origin/<branch>`のままの状態に戻す。
-        // 下の`git gtr new`で作る新しいworktreeは、
-        // リモートの今の状態から作るので不要である。
+        // `refs/remotes/origin/<branch>`のままの状態に戻す。
+        // 下の`git gtr new`で作る新しいworktreeは、照合で別に扱う。
         const fetchResult = await opts.run(
           buildGitArgv(["fetch", "origin", "--", opts.branch], {
             network: true,
@@ -1990,11 +2092,26 @@ export async function createGtrWorktree(
           );
         }
 
+        // 追跡refのshaを完全な名前で読み、以降はこのshaに合わせる。
+        // 名前のまま渡すと、追跡refが無いときに別のrefへ解決し直されうる。
+        const trackingSha = await readExactRef({
+          run: opts.run,
+          cwd: opts.repoDir,
+          env: localGitEnv(opts.home, opts.path),
+          ref: remoteTrackingRef(opts.branch),
+        });
+        if (trackingSha === null) {
+          throw new Error(
+            `${remoteTrackingRef(opts.branch)} does not exist (gtr worktree reuse)`,
+          );
+        }
+        assertSha(trackingSha);
+
         await ensureHeadOnBranch({
           run: opts.run,
           dir: reused.path,
           branch: opts.branch,
-          ref: `origin/${opts.branch}`,
+          ref: trackingSha,
           context: "gtr worktree reuse",
           ...(opts.home !== undefined ? { home: opts.home } : {}),
           ...(opts.path !== undefined ? { path: opts.path } : {}),
@@ -2005,12 +2122,12 @@ export async function createGtrWorktree(
         // 「fatal: Cannot do hard reset with paths」で失敗することを確かめた。
         // `opts.branch`は上の`assertBranchName`で検証済みである。
         const resetResult = await opts.run(
-          buildGitArgv(["reset", "--hard", `origin/${opts.branch}`]),
+          buildGitArgv(["reset", "--hard", trackingSha]),
           { cwd: reused.path, env: localGitEnv(opts.home, opts.path) },
         );
         if (resetResult.exitCode !== 0) {
           throw gitError(
-            `git reset --hard origin/${opts.branch} failed (gtr worktree reuse)`,
+            `git reset --hard ${trackingSha} failed (gtr worktree reuse)`,
             resetResult,
           );
         }
@@ -2039,13 +2156,17 @@ export async function createGtrWorktree(
         return { path: reused.path, branch: opts.branch, hookStatus: "reused" };
       }
 
+      // `--no-hooks`で、gtrのpostCreateフックを動かさない。
+      // 下の照合で作り直す前の、誤ったcommitのtreeの中で、フックのコマンドを実行させないためである。
+      // gtrのコピーはメインのcloneから読むので、そのtreeは読まない。
       // ここでは`--`を付けない。`git gtr`はcore gitではない外部のサブコマンドで、
       // core gitのように`--`を扱える保証が無い。
       // 先頭の`-`は上の`assertBranchName`ですでに拒否している。
       const result = await opts.run(
-        buildGitArgv(["gtr", "new", opts.branch, "--porcelain", "--yes"], {
-          network: true,
-        }),
+        buildGitArgv(
+          ["gtr", "new", opts.branch, "--porcelain", "--yes", "--no-hooks"],
+          { network: true },
+        ),
         {
           cwd: opts.repoDir,
           // `core.symlinks=false`は`-c`ではなく環境変数で渡す
@@ -2060,24 +2181,38 @@ export async function createGtrWorktree(
         throw gitError(`git gtr new ${opts.branch} failed`, result);
       }
       const created = parseGtrPorcelain(result.stdout);
-      // 戻す先にする、作った時点のブランチの先頭。確かめより前にworktreeでgitを実行しないよう、メインのcloneで読む。
-      // `rev-parse`には`--`を付けない(`buildGitArgv`の例外を参照)。`opts.branch`は検証済みである。
-      const headResult = await opts.run(
-        buildGitArgv(["rev-parse", "--verify", `refs/heads/${opts.branch}`]),
-        { cwd: opts.repoDir, env: localGitEnv(opts.home, opts.path) },
-      );
-      if (headResult.exitCode !== 0) {
-        throw gitError(
-          `git rev-parse refs/heads/${opts.branch} failed (gtr new)`,
-          headResult,
-        );
+      // 作った時点のブランチの先頭。確かめより前にworktreeでgitを実行しないよう、メインのcloneで読む。
+      // 完全な名前を一致させて読み、別のrefへ解決し直さない(`readExactRef`)。`opts.branch`は検証済みである。
+      const createdSha = await readExactRef({
+        run: opts.run,
+        cwd: opts.repoDir,
+        env: localGitEnv(opts.home, opts.path),
+        ref: `refs/heads/${opts.branch}`,
+      });
+      if (createdSha === null) {
+        throw new Error(`refs/heads/${opts.branch} does not exist (gtr new)`);
       }
-      const createdSha = headResult.stdout.trim();
       assertSha(createdSha);
+      // `git gtr new`は、リモートにあるブランチを短い名前の`origin/<branch>`から、
+      // 無いブランチを短い名前の`origin/<既定のブランチ>`から作る(gtr 2.11.1のソースで確かめた)。
+      // 短い名前は`refs/heads/origin/...`などが先に解決されうるので、
+      // 作った先頭を、完全な名前で読んだ値と照合する。
+      // 違えば、検証したshaへ作り直す(下の止めた場合と同じ復元の経路)。
+      // すでにあったローカルのブランチが追跡refと違うときも、使い回しの経路と同じく追跡refへそろえる。
+      // gtrは既定のブランチを設定から取ることがあるが、照合は常に`refs/remotes/origin/HEAD`と比べる。
       // 削除されたworktreeの中で生き残ったClaudeは同じ絶対パスに書き込みうるので、新しく作った場合も確かめる。
-      if (!(await opts.assertProcessesIdle(created.path))) return created;
+      const stopped = await opts.assertProcessesIdle(created.path);
+      const verifiedSha = await expectedGtrNewSha({
+        run: opts.run,
+        repoDir: opts.repoDir,
+        branch: opts.branch,
+        ...(opts.home !== undefined ? { home: opts.home } : {}),
+        ...(opts.path !== undefined ? { path: opts.path } : {}),
+      });
+      const misplaced = createdSha !== verifiedSha;
+      if (!stopped && !misplaced) return created;
       // 止めたプロセスは、止まるまでにworktreeへ書き込んだり`.git`ファイルを書き換えたりしえた。
-      // 中でgitを実行する前にポインタを検証し、作った時点の状態に戻す。
+      // 中でgitを実行する前にポインタを検証し、検証したshaの状態に戻す。
       // コミットしてブランチを進めていても、checkout中のブランチごと戻るので、refを別に戻す必要は無い。
       // 別のブランチをcheckoutしていれば、resetの前に対象のブランチへ戻す(`ensureHeadOnBranch`)。
       await verifyWorktreeGitdir({
@@ -2095,28 +2230,33 @@ export async function createGtrWorktree(
         run: opts.run,
         dir: created.path,
         branch: opts.branch,
-        ref: createdSha,
-        context: "gtr new after stopping processes",
+        ref: verifiedSha,
+        context: "gtr new restore",
         ...(opts.home !== undefined ? { home: opts.home } : {}),
         ...(opts.path !== undefined ? { path: opts.path } : {}),
       });
       const resetResult = await opts.run(
-        buildGitArgv(["reset", "--hard", createdSha]),
+        buildGitArgv(["reset", "--hard", verifiedSha]),
         { cwd: created.path, env: localGitEnv(opts.home, opts.path) },
       );
       if (resetResult.exitCode !== 0) {
         throw gitError(
-          `git reset --hard ${createdSha} failed (gtr new after stopping processes)`,
+          `git reset --hard ${verifiedSha} failed (gtr new restore)`,
           resetResult,
         );
       }
-      const cleanResult = await opts.run(buildGitArgv(["clean", "-fd"]), {
+      // 先頭を作り直したときは、`-x`も付ける。
+      // 誤ったcommitのtreeに置かれたファイルのうち、検証したtreeの.gitignoreが除外するもの
+      // (`node_modules/`など)は、`-fd`では消えずに残るためである。
+      // プロセスを止めただけのときは、対象リポジトリの生成物を残すため`-fd`にする。
+      const cleanFlags = misplaced ? "-fdx" : "-fd";
+      const cleanResult = await opts.run(buildGitArgv(["clean", cleanFlags]), {
         cwd: created.path,
         env: localGitEnv(opts.home, opts.path),
       });
       if (cleanResult.exitCode !== 0) {
         throw gitError(
-          "git clean -fd failed (gtr new after stopping processes)",
+          `git clean ${cleanFlags} failed (gtr new restore)`,
           cleanResult,
         );
       }
@@ -2366,17 +2506,15 @@ export async function commitAndPush(
         throw gitError(`git fetch origin ${branch} failed`, fetchResult);
       }
 
-      const remoteShaResult = await opts.run(
-        buildGitArgv(["rev-parse", "--verify", `origin/${branch}`]),
-        { cwd: opts.dir, env: local },
-      );
-      if (remoteShaResult.exitCode !== 0) {
-        throw gitError(
-          `git rev-parse --verify origin/${branch} failed`,
-          remoteShaResult,
-        );
+      const remoteSha = await readExactRef({
+        run: opts.run,
+        cwd: opts.dir,
+        env: local,
+        ref: remoteTrackingRef(branch),
+      });
+      if (remoteSha === null) {
+        throw new Error(`${remoteTrackingRef(branch)} does not exist`);
       }
-      const remoteSha = remoteShaResult.stdout.trim();
       if (remoteSha !== opts.expectedHeadSha) {
         return { outcome: "head_changed" as const, currentSha: remoteSha };
       }
@@ -2516,20 +2654,18 @@ export async function commitAndPush(
               refetchResult,
             );
           }
-          const currentShaResult = await opts.run(
-            buildGitArgv(["rev-parse", "--verify", `origin/${branch}`]),
-            { cwd: opts.dir, env: local },
-          );
-          if (currentShaResult.exitCode !== 0) {
-            throw gitError(
-              `git rev-parse --verify origin/${branch} failed (after push rejection)`,
-              currentShaResult,
+          const currentSha = await readExactRef({
+            run: opts.run,
+            cwd: opts.dir,
+            env: local,
+            ref: remoteTrackingRef(branch),
+          });
+          if (currentSha === null) {
+            throw new Error(
+              `${remoteTrackingRef(branch)} does not exist (after push rejection)`,
             );
           }
-          return {
-            outcome: "head_changed" as const,
-            currentSha: currentShaResult.stdout.trim(),
-          };
+          return { outcome: "head_changed" as const, currentSha };
         }
         throw gitError("git push failed", pushResult);
       }
@@ -2555,7 +2691,7 @@ export type PushNewBranchOptions = {
   readonly branch: string;
   /**
    * 既定のブランチの名前(`resolveDefaultBranchName`)。
-   * ローカルの`origin/HEAD`から読んだ値なので、リモートの`HEAD`と照合してから使う。
+   * ローカルの`refs/remotes/origin/HEAD`から読んだ値なので、リモートの`HEAD`と照合してから使う。
    */
   readonly baseBranch: string;
   readonly ghToken: string;
@@ -2681,20 +2817,17 @@ export async function pushNewBranch(
       }
       assertSha(baseSha);
 
-      // `rev-parse`には`--`を付けない(`buildGitArgv`の例外を参照)。
-      // 完全なref名で読み、`origin/<baseBranch>`という名前のタグなどと取り違えない。
-      const trackingRef = `refs/remotes/origin/${opts.baseBranch}`;
-      const trackingResult = await opts.run(
-        buildGitArgv(["rev-parse", "--verify", `${trackingRef}^{commit}`]),
-        { cwd: opts.repoDir, env: local },
-      );
-      if (trackingResult.exitCode !== 0) {
-        throw gitError(
-          `git rev-parse --verify ${trackingRef} failed`,
-          trackingResult,
-        );
+      // 完全なref名を一致させて読み、`origin/<baseBranch>`という名前のタグなどと取り違えない。
+      const trackingRef = remoteTrackingRef(opts.baseBranch);
+      const trackingSha = await readExactRef({
+        run: opts.run,
+        cwd: opts.repoDir,
+        env: local,
+        ref: trackingRef,
+      });
+      if (trackingSha === null) {
+        throw new Error(`${trackingRef} does not exist`);
       }
-      const trackingSha = trackingResult.stdout.trim();
       if (trackingSha !== baseSha) {
         throw new Error(
           maskSecrets(
@@ -2808,7 +2941,7 @@ export type CurrentRemoteHeadShaOptions = {
 };
 
 /**
- * `repoDir`で`origin/<branch>`が今指すshaを返す。
+ * `repoDir`で`refs/remotes/origin/<branch>`が今指すshaを返す(`readExactRef`)。
  * リモート追跡のrefがローカルに無いときは`null`を返す
  * (一度もfetchしていない、ブランチが消された)。
  * `resolveDefaultBranchHeadSha`と同じく読み取りだけのローカルの操作で、
@@ -2819,12 +2952,13 @@ export async function currentRemoteHeadSha(
   opts: CurrentRemoteHeadShaOptions,
 ): Promise<string | null> {
   assertBranchName(opts.branch);
-  const result = await opts.run(
-    buildGitArgv(["rev-parse", "--verify", `origin/${opts.branch}`]),
-    { cwd: opts.repoDir, env: localGitEnv(opts.home, opts.path) },
-  );
-  if (result.exitCode !== 0) return null;
-  const sha = result.stdout.trim();
+  const sha = await readExactRef({
+    run: opts.run,
+    cwd: opts.repoDir,
+    env: localGitEnv(opts.home, opts.path),
+    ref: remoteTrackingRef(opts.branch),
+  });
+  if (sha === null) return null;
   assertSha(sha);
   return sha;
 }
@@ -2833,12 +2967,12 @@ export async function currentRemoteHeadSha(
 // resolveDefaultBranchName / mergeBaseSha / deleteLocalBranch(implementフロー)
 // ---------------------------------------------------------------------------
 
-const ORIGIN_PREFIX = "origin/";
-
 /**
  * `ensureRepo`のcloneのシンボリックref`refs/remotes/origin/HEAD`から、
  * 対象リポジトリの既定のブランチ名を返す
- * (`--no-checkout`のcloneで`origin/main`になることを確かめた)。
+ * (`--no-checkout`のcloneで`refs/remotes/origin/main`になることを確かめた)。
+ * `--short`は付けない。`refs/heads/origin/main`があると、
+ * `--short`は曖昧さを避けて`remotes/origin/main`を返し、ブランチ名を読み違えるため。
  * implementフローがPRのbaseにし、
  * `git gtr new`が新しいworktreeの分岐元にするブランチである。
  * ローカルだけの操作で、先に`ensureRepo`を実行しておく必要がある。
@@ -2850,7 +2984,7 @@ export async function resolveDefaultBranchName(opts: {
   readonly path?: string;
 }): Promise<string> {
   const result = await opts.run(
-    buildGitArgv(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]),
+    buildGitArgv(["symbolic-ref", REMOTE_HEAD_REF]),
     {
       cwd: opts.repoDir,
       env: localGitEnv(opts.home, opts.path),
@@ -2858,15 +2992,17 @@ export async function resolveDefaultBranchName(opts: {
   );
   if (result.exitCode !== 0) {
     throw gitError(
-      `git symbolic-ref refs/remotes/origin/HEAD failed in ${opts.repoDir}`,
+      `git symbolic-ref ${REMOTE_HEAD_REF} failed in ${opts.repoDir}`,
       result,
     );
   }
   const ref = result.stdout.trim();
-  if (!ref.startsWith(ORIGIN_PREFIX)) {
-    throw new Error(`unexpected origin/HEAD target: ${JSON.stringify(ref)}`);
+  if (!ref.startsWith(REMOTE_TRACKING_PREFIX)) {
+    throw new Error(
+      `unexpected ${REMOTE_HEAD_REF} target: ${JSON.stringify(ref)}`,
+    );
   }
-  const branch = ref.slice(ORIGIN_PREFIX.length);
+  const branch = ref.slice(REMOTE_TRACKING_PREFIX.length);
   assertBranchName(branch);
   return branch;
 }

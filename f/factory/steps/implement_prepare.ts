@@ -430,7 +430,7 @@ export async function main(
   });
   if (expectedHeadSha === null)
     throw new Error(
-      `implement_prepare: origin/${branch} is not resolvable after the push`,
+      `implement_prepare: refs/remotes/origin/${branch} is not resolvable after the push`,
     );
   // 短い名前の`origin/<base>`を引き直さず、公開のときにリモートと照合したshaを使う。
   const baseSha = await mergeBaseSha({
