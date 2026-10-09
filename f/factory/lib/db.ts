@@ -47,6 +47,7 @@ import {
   isOneOf,
   isRecord,
   isString,
+  type Notice,
   type NoticeRecord,
   type RequirementDraft,
   type ReviewFinding,
@@ -958,6 +959,59 @@ export async function addNoticeUnlessUnresolved(
   `.fetch();
   const row = rows[0];
   return row === undefined ? null : parseId(row.id, "id");
+}
+
+/** `factory.notices`の行をIDで1件取得する。無ければ`null`を返す。 */
+export async function getNoticeById(
+  id: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<Notice | null> {
+  const rows = await sql`
+    SELECT id, kind, message, resolved, resolved_by, resolved_at, created_at
+    FROM factory.notices WHERE id = ${id}::bigint
+  `.fetch();
+  const row = rows[0];
+  if (row === undefined) {
+    return null;
+  }
+  return {
+    id: parseId(row.id, "id"),
+    kind: parseRequiredString(row.kind, "kind"),
+    message: parseRequiredString(row.message, "message"),
+    resolved: parseBoolean(row.resolved, "resolved"),
+    resolved_by: parseNullableString(row.resolved_by, "resolved_by"),
+    resolved_at:
+      row.resolved_at === null || row.resolved_at === undefined
+        ? null
+        : parseDate(row.resolved_at, "resolved_at"),
+    created_at: parseDate(row.created_at, "created_at"),
+  };
+}
+
+/**
+ * 未解決のnoticeを1件だけ解決済みにし、解決者と解決時刻を記録する。
+ * 実際に解決したら`true`、条件に合う行が無ければ`false`を返す。
+ * 比較と交換を1つの文で行うので、同時に解決しようとした呼び出しの片方だけが`true`を得る。
+ * `kind`は、呼び出し元が読んだ種類と変わっていないことの確認に使う。
+ * `unresolvableKinds`に含まれる種類は、`id`が合っても解決しない。
+ */
+export async function resolveNoticeIfUnresolved(
+  id: number,
+  kind: string,
+  resolvedBy: string,
+  unresolvableKinds: readonly string[],
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  const rows = await sql`
+    UPDATE factory.notices
+    SET resolved = true, resolved_by = ${resolvedBy}, resolved_at = now()
+    WHERE id = ${id}::bigint
+      AND resolved = false
+      AND kind = ${kind}
+      AND NOT (kind = ANY(${[...unresolvableKinds]}::text[]))
+    RETURNING id
+  `.fetch();
+  return rows.length > 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -2356,8 +2410,11 @@ export async function deleteDeploymentsBefore(
 }
 
 /**
- * 解決済み(`resolved = true`)で、`created_at`が`olderThan`より前の
+ * 解決済み(`resolved = true`)で、解決した時刻が`olderThan`より前の
  * `factory.notices`の行を削除し、行数を返す。
+ * 古さは`resolved_at`で数え、解決の記録が無い行(Consoleの解決の導入前や、
+ * Console以外で解決した行)は`created_at`で数える。
+ * 解決したばかりの古い通知を、解決の履歴として残すため。
  * 未解決のnoticeは、古さに関係なく削除しない。
  */
 export async function deleteResolvedNoticesBefore(
@@ -2366,7 +2423,39 @@ export async function deleteResolvedNoticesBefore(
 ): Promise<number> {
   const rows = await sql`
     DELETE FROM factory.notices
-    WHERE resolved = true AND created_at <= ${olderThan.toISOString()}::timestamptz
+    WHERE resolved = true
+      AND COALESCE(resolved_at, created_at) <= ${olderThan.toISOString()}::timestamptz
+    RETURNING id
+  `.fetch();
+  return rows.length;
+}
+
+/** DBの掃除が通知を解決済みにしたときに、`resolved_by`へ記録する名前。 */
+export const CLEANUP_RESOLVER = "cleanup_db";
+
+/**
+ * 未解決で、`created_at`が`olderThan`より前の、`kinds`の種類の`factory.notices`の行を、
+ * 削除せず解決済みにし(`resolved_by`は`cleanup_db`)、解決した行数を返す。
+ * 重要度が`info`の通知は、Consoleの一覧から7日で外れて誰も解決しないので、
+ * 解決済みの通知と同じ保持期間を過ぎたら解決済みにする。
+ * 機械が黙って消さず、解決済みの履歴に痕跡を残すためである。
+ * その後は、解決済みの通知と同じ保持期間(解決の時刻から)で`deleteResolvedNoticesBefore`が消す。
+ * `kinds`が空なら何もしない。「要対応」の通知は、呼び出し元が`kinds`に含めない限り触らない。
+ */
+export async function resolveStaleInfoNoticesBefore(
+  olderThan: Date,
+  kinds: readonly string[],
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  if (kinds.length === 0) {
+    return 0;
+  }
+  const rows = await sql`
+    UPDATE factory.notices
+    SET resolved = true, resolved_by = ${CLEANUP_RESOLVER}, resolved_at = now()
+    WHERE resolved = false
+      AND kind = ANY(${[...kinds]}::text[])
+      AND created_at <= ${olderThan.toISOString()}::timestamptz
     RETURNING id
   `.fetch();
   return rows.length;
@@ -2383,11 +2472,12 @@ export async function insertCleanupRun(
   const statement = sql`
     INSERT INTO factory.cleanup_runs (
       work_items_deleted, approval_requests_deleted, job_failures_deleted,
-      deployments_deleted, notices_deleted, doc_dirs_deleted
+      deployments_deleted, notices_deleted, info_notices_resolved, doc_dirs_deleted
     ) VALUES (
       ${counts.work_items_deleted}::integer, ${counts.approval_requests_deleted}::integer,
       ${counts.job_failures_deleted}::integer, ${counts.deployments_deleted}::integer,
-      ${counts.notices_deleted}::integer, ${counts.doc_dirs_deleted}::integer
+      ${counts.notices_deleted}::integer, ${counts.info_notices_resolved}::integer,
+      ${counts.doc_dirs_deleted}::integer
     )
     RETURNING id
   `;

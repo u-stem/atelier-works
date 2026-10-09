@@ -51,6 +51,8 @@ export type CleanupCounts = {
   readonly job_failures_deleted: number;
   readonly deployments_deleted: number;
   readonly notices_deleted: number;
+  /** 保持期間を過ぎた「情報」の未解決の通知を、削除せず解決済みにした件数。 */
+  readonly info_notices_resolved: number;
   /** 作業項目の削除に合わせて消した要件定義書のディレクトリ(`docDirsFor`)。 */
   readonly doc_dirs_deleted: number;
 };
@@ -59,18 +61,20 @@ export type CleanupCounts = {
  * `counts`を1行の日本語に要約する。
  * `cleanup_db.ts`のジョブログと、daily_summaryのDiscord embedの
  * 「DB 掃除」欄の両方で使う。
- * 表示する4件はそれぞれ独立した掃除で、運用者が個別に気にしうるものに限る。
+ * 表示する4件の削除はそれぞれ独立した掃除で、運用者が個別に気にしうるものに限る。
  * `approval_requests_deleted`はwork_items削除のカスケードによる副作用、
  * `doc_dirs_deleted`は同じ削除に伴うファイルシステム上の副作用で、
  * どちらも独立した掃除ではないため意図的に省く。
  */
 export function summarizeCleanup(counts: CleanupCounts): string {
-  return (
+  const deleted =
     `work item ${String(counts.work_items_deleted)}件、` +
     `失敗記録${String(counts.job_failures_deleted)}件、` +
     `デプロイ記録${String(counts.deployments_deleted)}件、` +
-    `通知${String(counts.notices_deleted)}件を削除しました`
-  );
+    `通知${String(counts.notices_deleted)}件を削除しました`;
+  return counts.info_notices_resolved > 0
+    ? `${deleted}。古い情報の通知${String(counts.info_notices_resolved)}件を解決しました`
+    : deleted;
 }
 
 // ---------------------------------------------------------------------------

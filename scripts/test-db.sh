@@ -3,6 +3,7 @@
 # `factory_test`データベースに`migrations/datatable/main/*.up.sql`をすべて
 # 適用し、`factory`スキーマの各ビューからSELECTしてビューが成り立つことを
 # 確かめる。次に対応する`*.down.sql`を新しい順に適用し、戻せることを確かめる。
+# あわせて、最小の行を入れて`scripts/test-db-queries.ts`が、アプリのコードが組み立てるSQL文を実行する。
 # 使い捨てのデータベースは成否を問わず終了時に削除し、本物の`windmill`
 # データベースには触れない。
 #
@@ -243,6 +244,21 @@ for view in "${views[@]}"; do
   printf 'SELECT * FROM factory.%s LIMIT 1;\n' "${view}" | psql_exec "${SCRATCH_DB}" >/dev/null
 done
 log "all ${#views[@]} views selected successfully"
+
+# 通知の解決の記録(resolved_by / resolved_at)の列に値を書け、未解決の通知を返すビューが変わらないことを確かめる。
+notice_row="$(printf "INSERT INTO factory.notices (kind, message) VALUES ('probe', 'm'); UPDATE factory.notices SET resolved = true, resolved_by = 'op', resolved_at = now() WHERE kind = 'probe'; SELECT resolved_by FROM factory.notices WHERE kind = 'probe';\n" \
+  | psql_exec "${SCRATCH_DB}" -q -t -A | tail -n 1)" \
+  || die "could not write the notice resolution columns"
+[ "${notice_row}" = "op" ] || die "expected resolved_by to be 'op', got '${notice_row}'"
+log "notices resolution columns are writable"
+
+# アプリのコードが組み立てるSQL文(`resolveNoticeIfUnresolved`、summaryの失敗のクエリ、
+# system_status、work_item_detail、通知の掃除)を、最小の行を入れた
+# 使い捨てデータベースで本物のPostgreSQLに流して確かめる。手書きの別の文は流さない。
+log "running the application queries against '${SCRATCH_DB}'"
+COMPOSE_FILE="${COMPOSE_FILE}" SCRATCH_DB="${SCRATCH_DB}" \
+  bun run "${REPO_ROOT}/scripts/test-db-queries.ts" \
+  || die "the application queries failed against the real PostgreSQL"
 
 shopt -s nullglob
 down_files=("${MIGRATIONS_DIR}"/*.down.sql)

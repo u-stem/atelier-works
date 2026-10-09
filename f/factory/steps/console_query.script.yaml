@@ -23,13 +23,20 @@ schema:
       type: string
       description: 取得するデータの種類。inbox(承認待ち) / pipeline(作業項目一覧) / agent_cost_daily(日別コスト)
         / approval_stats(承認統計) / lead_time(リードタイム) / failures(失敗一覧) /
-        notices(要対応通知) / reviews(PRレビュー) / fix_rounds(PR修正) /
-        requirements_index(要件定義の一覧) / requirements_doc(要件定義書1件の全文)のいずれか。
+        notices(未解決の通知。重要度と解決可否つき) / reviews(PRレビュー) / fix_rounds(PR修正) /
+        requirements_index(要件定義の一覧) / requirements_doc(要件定義書1件の全文) /
+        audit_index(監査の一覧) / audit_doc(監査1件の全文) /
+        summary(要対応の件数と一覧。1つのオブジェクトを返す) /
+        work_item_detail(作業項目1件の概要と履歴。1つのオブジェクトを返す) /
+        system_status(反映と取り込みの状態、作業項目の無い失敗、情報の通知、解決済みの通知。1つのオブジェクトを返す)のいずれか。
       default: null
       originalType: string
     work_item_id:
       type: number
-      description: view が requirements_doc のとき必須。対象の work_item_id。
+      description: view が requirements_doc / audit_doc / work_item_detail のとき必須。対象の
+        work_item_id。
       default: null
   required:
     - view
+tag: console
+timeout: 60

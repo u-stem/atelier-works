@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { toPipelineRow } from "./types";
+import { toNoticeRow, toPipelineRow } from "./types";
 
 const PIPELINE_ROW = {
   work_item_id: 1,
@@ -40,6 +40,28 @@ describe("toPipelineRow", () => {
     expect(toPipelineRow(withoutImplementColumns)).toMatchObject({
       branch: null,
       pr_url: null,
+    });
+  });
+});
+
+describe("toNoticeRow", () => {
+  test("ignores the severity and resolvable fields the backend adds", () => {
+    expect(
+      toNoticeRow({
+        notice_id: 4,
+        kind: "cleanup_db_failed",
+        message: "m",
+        resolved: false,
+        created_at: "2026-10-01T00:00:00.000Z",
+        severity: "action",
+        resolvable: true,
+      }),
+    ).toEqual({
+      notice_id: 4,
+      kind: "cleanup_db_failed",
+      message: "m",
+      resolved: false,
+      created_at: "2026-10-01T00:00:00.000Z",
     });
   });
 });

@@ -284,7 +284,7 @@ Windmillのtimeoutで打ち切られたステップのClaudeは、`--max-turns`�
 
 実装フローの再実行には`retry_work_item`を使う。
 ジョブが失敗した作業項目はConsoleの**失敗**タブから実行し、それ以外はWindmillで`f/factory/retry_work_item`を作業項目のIDで実行する。
-人の対応待ちの作業項目は、**失敗**タブに出ないためである。
+人の対応待ちの作業項目は、`job_failures`の行が無ければ**失敗**タブに出ないためである。
 Windmillでフローを直接動かすと、リースの確認で何もせずに終わる。
 
 | 操作 | 挙動 |

@@ -243,8 +243,8 @@ GitHubには何も書き込まない。
 | ジョブが失敗した | Consoleの**失敗**タブで**再実行**を押す |
 | 人の対応待ち、ブロック、期限切れで止まった | Windmillで`f/factory/retry_work_item`を開き、作業項目のID(`work_item_id`)を入れて実行する |
 
-**失敗**タブは、ジョブの失敗(`job_failures`)だけを並べる。
-人の対応待ち、ブロック、期限切れの作業項目は**失敗**タブに出ない。
+**失敗**タブは、`job_failures`の行だけを並べる。
+人の対応待ち、ブロック、期限切れの作業項目は、`job_failures`の行が無ければ**失敗**タブに出ない。
 作業項目のIDは、Consoleの**パイプライン**タブで確かめる。
 
 再実行できる状態と、作業項目の種類ごとに起動するフローは、[作業項目の状態とリース](internals/work-items.md)の「再実行」にある。
@@ -280,7 +280,7 @@ GitHub APIのrate limitの解除を待てないと、作業項目は`GitHubRateL
 解除を待ってから**失敗**タブで再実行する。
 
 rate limitが原因で人の対応待ちになったときは、通知の次の操作に、解除を待ってから再実行するよう表示される。
-この作業項目は**失敗**タブに出ないので、解除を待ってからWindmillで`retry_work_item`を実行する。
+この作業項目に`job_failures`の行が無ければ**失敗**タブに出ないので、解除を待ってからWindmillで`retry_work_item`を実行する。
 待つ時間の上限などの仕組みは[通知とrate limit](internals/notifications.md)を参照する。
 
 ### 既定のブランチが食い違って実装フローが失敗するとき
@@ -364,7 +364,7 @@ Discordの通知の「次の操作」に従う。主な場合は次のとおり�
 完了時に新しい変更が無くても、ブランチに分岐点より先のコミット(途中経過のコミットなど)があれば、FactoryはそれでPRを作るか更新する。ブランチに分岐点より先のものが何も無いときだけ、変更を生まなかったとして止まる。
 
 原因を取り除いたら、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行し、実装フローを再実行する。
-人の対応待ちの作業項目は**失敗**タブに出ない。
+人の対応待ちの作業項目は、`job_failures`の行が無ければ**失敗**タブに出ない。
 途中経過のコミットは、再実行で完了したときのコミットとは別のコミットとして残る。
 
 実装が要件の不足(`requirements_gap`)を報告したときは、Factoryが自動で要件定義を作り直す。再承認すると、同じブランチ名で実装をやり直す。既にPRがあれば、そのPRを更新する。
@@ -577,6 +577,7 @@ Factoryは、人の行動が要るものだけをDiscordに送る。通知の仕
 | PR作成・更新(`pr_opened`) | 実装フローがPRを作成か更新した | [PRができたら](#prができたら) |
 | PRレビュー完了(`pr_reviewed`) | レビューを投稿した | 指摘を確かめる。指摘が無ければApproveを判断する |
 | PR修正適用(`pr_fixed`) | 修正をpushし、再レビューを依頼した | 再レビューを待つ。補足に依頼の失敗が載っていれば、GitHubのPRで人がレビュアーを依頼する |
+| Consoleの取り込みの問題(`console_fetch_problem`) | Consoleの取り込みが失敗したか、結果が30分以上更新されていないか、状態を読めない | 通知の「次の操作」に従う。通知を新しく残したときだけ届く |
 | 日次サマリー(`daily_summary`) | 前日のコスト、件数、失敗、DBの掃除の件数 | 異常が無いか見る |
 | 監査レポート(`audit_completed`) | 監査で改善提案が1件以上できた | **承認**タブで提案を承認か却下する |
 
@@ -586,12 +587,28 @@ GitHubのPATが失効していると、Issueの取得のスケジュール(`poll
 
 Consoleの**通知**タブには、Discordに送らない要対応の事項が残る。
 
+通知には重要度がある。
+「要対応」の通知は、解決するまでConsoleの要対応の一覧に残る。
+「情報」の通知は、人の行動が要らないので要対応の一覧に出さず、システムの画面に7日だけ出す。
+表に無い種類は「要対応」として扱う。
+「情報」の種類は次のとおりである。
+
+- `approval_notify_failed`
+- `claim_race_lost`
+- `supersede_failed`
+- `cleanup_worktrees_skipped`
+- `workspace_disk_usage`
+- `fix_feedback_association_excluded`
+- `labeler_association_denied`
+- `unsandboxed_check_commands`
+- `implement_needs_human`
+
 | 種類 | 意味 | 人がすること |
 | --- | --- | --- |
 | `approval_notify_failed` | 承認待ちの通知がDiscordに届かなかった | 承認依頼は記録済みなので、**承認**タブで判断する |
 | `approval_comment_failed` | 承認のコメントをIssueに投稿できなかった | 承認と実装の起動は進んでいる。必要ならnoticeのリンクを載せたコメントを人がIssueに投稿する |
 | `implement_launch_failed` | 承認の後、実装フローへ進める処理がDBの失敗で例外になった | Windmillで`f/factory/retry_work_item`を作業項目のIDで実行して再開する |
-| `implement_needs_human` | 実装フローが人の対応待ちで止まった | [人の対応待ちになったら](#人の対応待ちになったら) |
+| `implement_needs_human` | 実装フローが人の対応待ちで止まった。作業項目は要対応の一覧の失敗に出るが、`job_failures`の行が無いので**失敗**タブには出ない | 作業項目のIDを**パイプライン**タブで確かめ、[人の対応待ちになったら](#人の対応待ちになったら)で原因を取り除いてから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行する |
 | `unsandboxed_check_commands` | 検査コマンドをサンドボックスなしで実行した | 設定が意図どおりか確かめる |
 | `fix_reply_post_failed` | 修正の返信の投稿に失敗した | PRで人が返信する |
 | `pr_fix_reviewer_request_failed` | 再レビューの依頼のAPIが失敗した。PRの取得の失敗と、Botや削除済みの作成者の名前で依頼を組み立てられない場合を含む | GitHubのPRで人がレビュアーを依頼する |
@@ -606,6 +623,74 @@ Consoleの**通知**タブには、Discordに送らない要対応の事項が�
 | `cleanup_worktrees_skipped` | 動いているPRの修正のブランチを確かめられず、そのリポジトリの作業領域の掃除を見送った | 次の日の掃除を待つ |
 | `cleanup_worktree_busy` | 残ったプロセスが使っているので、終端の作業項目のworktreeを消さなかった。作業項目のID、worktreeのパス、使っているプロセスが載る | 載ったプロセスを止める。止めない限り毎日残る |
 | `workspace_disk_usage` | 作業領域の掃除(毎日03:00)が記録したディスク使用量 | 増え続けていないか見る |
+| `console_fetch_failed` | Consoleの取り込みが失敗した | 通知の「次の操作」に従う |
+| `console_fetch_stale` | Consoleの取り込みの結果が30分以上更新されていない | 取り込みのコンテナ(`console_fetcher`)が動いているか確かめる |
+| `console_worker_missing` | tag `console`を受けるworkerが、5分以内にpingした一覧に居ない。Consoleのjobがqueueに溜まり、Consoleが止まる | `mise run up`でworkerを起動し直し、`docker compose ps windmill_worker_console`でコンテナの状態を確かめる。自己更新(10分ごと)が検知し、Discordにも届く |
+| `console_worker_check_failed` | Console用のworkerが居るかを、自己更新が1時間(6回)続けて確認できなかった。workerが止まっていても気づけない状態である | 自己更新のジョブログで、下の3種類の警告のどれが出ているかを確かめて原因を直す。Discordにも届く |
+| `schedule_failing` | 同じスケジュールの直近3回の実行が続けて失敗した。数えるのはスケジュールの実行そのものの失敗で、成功した実行の中で記録する部分的な失敗は含まない。GitHubのPATの失効などが原因になる | ジョブのログで失敗の内容を確かめて原因を直す。PATは[秘密をローテーションする](#秘密をローテーションする)で再発行する |
+| `schedule_failing_check_failed` | スケジュールが続けて失敗しているかを、ジョブ履歴から判定できなかった。失敗が続いても気づけない状態である | `on_error_schedule`のジョブのログで`failed to read the schedule history`のエラーを確かめ、ジョブ履歴を読む権限があるかを確かめる |
+
+### Console用のworkerの検知を確かめる
+
+Console用のworkerが居るかどうかは、自己更新(`self_update`)が毎回の最後に確かめる。
+確認は`WorkerService.listWorkers`で、5分以内にpingしたworkerの一覧の1ページを読む。
+確認できなかった回は、自己更新のジョブログに警告を残し、通知は出さない。
+警告は次の3種類である。
+
+- `could not check for a console worker`: workerの一覧を読むAPIが失敗した。権限が足りないときもこうなる。
+- `unexpected response while checking for a console worker`: 応答が一覧の形でない。
+- `console worker check timed out`: 10秒以内に終わらなかった。
+
+確認できない回数は自己更新のstateに数える。
+6回(1時間)続くと、通知`console_worker_check_failed`を残し、Discordにも知らせる。
+確認できれば回数は0に戻る。
+
+マージの後は、次の手順で検知が動いていることを確かめる。
+Console用のworkerを止めて戻すコマンドは次のとおりである。
+
+```bash
+mise exec -- docker compose -f infra/docker-compose.yml stop windmill_worker_console
+mise exec -- docker compose -f infra/docker-compose.yml start windmill_worker_console
+```
+
+1. 自己更新のジョブログに、上の警告が出ていないことを見る。
+2. `stop`でConsole用のworkerを止める。
+3. 次の自己更新(10分以内)の後で、通知`console_worker_missing`ができ、Discordにも届くことを見る。
+4. `start`で戻し、通知を解決する。
+
+Consoleが止まっていてもDiscordには届くので、通知の確認先はConsoleに限らない。
+
+### 続けて失敗するスケジュールの検知を確かめる
+
+スケジュールの直近3回の実行が続けて失敗したかどうかは、失敗のハンドラ(`on_error_schedule`)がジョブ履歴を読んで判定する。
+飛ばされた回(前回の実行中で見送った回)と取り消された回(人が止めた回)は、失敗として数えず、連続も切らない。
+マージの後は、次の手順で検知が動いていることを確かめる。
+
+1. 失敗する状態を作る。たとえば、あるスケジュールのscriptを一時的に失敗させるか、直近3回が失敗の状態を用意する。
+2. 失敗が3回続いた後で、通知`schedule_failing`ができていることを見る。
+3. `on_error_schedule`のジョブログに、次のエラーが出ていないことを見る。
+   履歴を読めなかったときは`failed to read the schedule history`である。
+   通知を記録できなかったときは`failed to record the schedule failing notice`である。
+   通知`schedule_failing_check_failed`を記録できなかったときは`failed to record the schedule check failure`である。
+4. 3回目の失敗の直後に通知ができていなければ、次の失敗で出るかを見る。直後は今回の失敗をジョブ履歴で読めない場合があり、検知が1回遅れることもある。
+
+ジョブ履歴を読めないとき(APIの失敗と、想定外の形の応答)は、通知`schedule_failing_check_failed`が残る。
+その場合は、ジョブ履歴を読む権限を確かめる。
+
+### 通知を解決する
+
+内容を確かめて対応を終えた通知は、Consoleで1件ずつ解決する。解決の操作は`notice_resolve`で、解決した人と時刻が通知に記録される。何を確かめたか分からないまま消せないよう、まとめて解決する操作は無い。
+
+次の3種類は、設定や権限の問題を示すので、Consoleから解決できない。「情報」として7日で一覧から外れる。
+
+- `unsandboxed_check_commands`
+- `labeler_association_denied`
+- `fix_feedback_association_excluded`
+
+解決済みの通知は、システムの画面に履歴として残り、既定30日で消える。
+並びは、人が解決したものを先にし、DBの掃除で解決したもの(`resolved_by`は`cleanup_db`)を後にする。
+どちらも解決の新しい順である。
+同じ状況がまた起きれば、新しい通知として記録される。
 
 ### 要件定義の作り直しを起動できなかったとき
 
@@ -617,7 +702,7 @@ Consoleの**通知**タブには、Discordに送らない要対応の事項が�
 
 承認済みから実装中へ進める処理がDBの失敗で例外になると、通知タブに`implement_launch_failed`が残る。作業項目はふつう承認済みのまま残り、自動では再開しない。
 
-この作業項目は**失敗**タブに出ないので、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行して再開する。
+**失敗**タブには`job_failures`の行(stepは`cas`)が出る。作業項目は承認済みのまま残るので、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行して再開する。
 
 まれに、例外の前に実装中へ進んでいることがある。この作業項目はフローの無いまま残る。猶予を過ぎると、定期の点検がこれを失敗にする。失敗になった後は、同じ手順で再開できる。
 
@@ -830,7 +915,19 @@ Caddyfileを更新してCaddyを再起動するまでは、`/console/status.json
 | `digest_mismatch`、`manifest_mismatch`、`zip_unsafe_entry`、`unexpected_redirect` | 検証に失敗した | 今の版を配信し続けるので急ぎではないが、原因を調べる |
 | `asset_conflict` | 新しい版の`assets/`のファイルが、既にある同じ名前のファイルと中身が違う(`console/public/assets/`の名前の付け替え忘れなど) | 置き換えると配信中の版が壊れるので取り込まない。名前を直したcommitを`main`に入れる |
 
-取り込みの失敗は、noticeとDiscordのどちらにも出ない。ログで確かめる。
+取り込みの失敗は、10分ごとの見張り(`console_fetch_watch`)が通知とDiscordに知らせる。知らせる原因は、取り込みの失敗、結果が30分以上更新されていないこと、状態を読めないことである。
+同じ原因の未解決の通知がある間は、通知を重ねず、Discordにも送らない。
+運用者が通知を解決した後に原因が続いていれば、次の確認で通知が1件でき、Discordにも届く。
+`rate_limited`と`github_unavailable`は自然に直ることが多いので、どちらかが60分以上続いたときだけ知らせる。
+2つの間で入れ替わっても、60分の数え始めは戻さない。
+取り込みの側が新しくなって未知の分類が来たときは、通知の本文と原因を`unknown_code`にそろえる。
+
+通知の種類は、失敗が`console_fetch_failed`、停止と読めないことが`console_fetch_stale`である。
+どちらも「要対応」で、正常に戻っても自動では解決しない。
+原因を確かめて取り除いたら、Consoleで通知を解決する。
+固定(`pin`)した状態は、更新が新しければ異常としない。
+
+Discordの通知とConsoleの通知には、上の表の次の操作が載る。詳しい原因は、取り込みのコンテナのログで確かめる。
 
 ### Console用workerを確かめる
 
@@ -901,7 +998,11 @@ DBの掃除のスケジュール(`cleanup_db`、毎日03:30)が、保持期間�
 | --- | --- | --- |
 | 終端の状態になった作業項目と、それに連なる記録 | 90日 | `retention_work_items_days` |
 | 監査の作業項目とレポート・提案 | 監査完了(`audited`)から90日 | `retention_work_items_days` |
-| 失敗の記録、デプロイの記録、解決済みのお知らせ | 30日 | `retention_logs_days` |
+| 失敗の記録、デプロイの記録、解決済みの通知(解決の時刻から数える) | 30日 | `retention_logs_days` |
+
+「情報」の未解決の通知は、作成から30日たつと削除せず解決済みにする。
+Consoleの一覧から7日で外れて誰も解決しないので、溜まり続けないようにするためである。
+解決者は`cleanup_db`と記録され、解決済みの履歴に残る。その後は上の表のとおり、解決の時刻から30日で消える。
 
 終端の状態は、承認済み、人の対応待ち、期限切れ、失敗、レビュー済み、再レビュー依頼、ブロック、キャンセル、PR作成済み、監査完了である。PR作成済みの作業項目は、PRがopenのままでも90日で消える。
 

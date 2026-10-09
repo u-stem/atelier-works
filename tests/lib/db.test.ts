@@ -16,6 +16,7 @@ import {
   findApprovedWorkItemForIssue,
   getApprovalRequest,
   getIssueProposal,
+  getNoticeById,
   getRequirementDraft,
   getWorkItem,
   hasPriorReview,
@@ -47,6 +48,8 @@ import {
   recordAgentRun,
   recordDeployment,
   recordFailure,
+  resolveNoticeIfUnresolved,
+  resolveStaleInfoNoticesBefore,
   revertIssueProposalToPending,
   type SqlClient,
   type SqlRow,
@@ -2812,12 +2815,178 @@ describe("deleteDeploymentsBefore", () => {
 });
 
 describe("deleteResolvedNoticesBefore", () => {
-  test("only deletes resolved notices past created_at", async () => {
+  test("deletes from factory.notices", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
-    const count = await deleteResolvedNoticesBefore(NOW, sql);
+    await deleteResolvedNoticesBefore(NOW, sql);
     expect(calls[0]?.text).toContain("DELETE FROM factory.notices");
+  });
+
+  test("only deletes resolved notices", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await deleteResolvedNoticesBefore(NOW, sql);
     expect(calls[0]?.text).toContain("resolved = true");
-    expect(count).toBe(1);
+  });
+
+  test("measures age from resolved_at, falling back to created_at", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await deleteResolvedNoticesBefore(NOW, sql);
+    expect(calls[0]?.text).toContain("COALESCE(resolved_at, created_at) <=");
+  });
+
+  test("returns the number of deleted rows", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 1 }]]);
+    expect(await deleteResolvedNoticesBefore(NOW, sql)).toBe(1);
+  });
+});
+
+describe("getNoticeById", () => {
+  test("parses the notice row", async () => {
+    const { sql } = createFakeSqlClient([
+      [
+        {
+          id: "5",
+          kind: "cleanup_db_failed",
+          message: "m",
+          resolved: false,
+          resolved_by: null,
+          resolved_at: null,
+          created_at: NOW.toISOString(),
+        },
+      ],
+    ]);
+    expect(await getNoticeById(5, sql)).toEqual({
+      id: 5,
+      kind: "cleanup_db_failed",
+      message: "m",
+      resolved: false,
+      resolved_by: null,
+      resolved_at: null,
+      created_at: NOW,
+    });
+  });
+
+  test("returns null when no row matches", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await getNoticeById(5, sql)).toBeNull();
+  });
+
+  test("selects from factory.notices by id", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getNoticeById(5, sql);
+    expect(calls[0]?.text).toContain("FROM factory.notices WHERE id =");
+  });
+});
+
+describe("resolveNoticeIfUnresolved", () => {
+  test("returns true when a row was resolved", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 5 }]]);
+    expect(await resolveNoticeIfUnresolved(5, "k", "op", ["u"], sql)).toBe(
+      true,
+    );
+  });
+
+  test("returns false when no row matched", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await resolveNoticeIfUnresolved(5, "k", "op", ["u"], sql)).toBe(
+      false,
+    );
+  });
+
+  test("guards the update on resolved = false", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await resolveNoticeIfUnresolved(5, "k", "op", ["u"], sql);
+    expect(calls[0]?.text).toContain("AND resolved = false");
+  });
+
+  test("guards the update on the kind that was read", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await resolveNoticeIfUnresolved(5, "k", "op", ["u"], sql);
+    expect(calls[0]?.text).toContain("AND kind =");
+  });
+
+  test("excludes the unresolvable kinds in the statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await resolveNoticeIfUnresolved(5, "k", "op", ["u"], sql);
+    expect(calls[0]?.text).toContain("NOT (kind = ANY(");
+  });
+
+  test("records resolved_by and resolved_at", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await resolveNoticeIfUnresolved(5, "k", "op", ["u"], sql);
+    expect(calls[0]?.text).toContain("resolved_by =");
+  });
+
+  test("stamps resolved_at with now()", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await resolveNoticeIfUnresolved(5, "k", "op", ["u"], sql);
+    expect(calls[0]?.text).toContain("resolved_at = now()");
+  });
+
+  test("binds the approver as a value", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await resolveNoticeIfUnresolved(5, "k", "op", ["u"], sql);
+    expect(calls[0]?.values).toContain("op");
+  });
+});
+
+describe("resolveStaleInfoNoticesBefore", () => {
+  test("updates factory.notices", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await resolveStaleInfoNoticesBefore(NOW, ["claim_race_lost"], sql);
+    expect(calls[0]?.text).toContain("UPDATE factory.notices");
+  });
+
+  test("does not delete any row", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await resolveStaleInfoNoticesBefore(NOW, ["claim_race_lost"], sql);
+    expect(calls[0]?.text).not.toContain("DELETE");
+  });
+
+  test("marks the notice resolved", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await resolveStaleInfoNoticesBefore(NOW, ["claim_race_lost"], sql);
+    expect(calls[0]?.text).toContain("SET resolved = true");
+  });
+
+  test("records cleanup_db as the resolver", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await resolveStaleInfoNoticesBefore(NOW, ["claim_race_lost"], sql);
+    expect(calls[0]?.values).toContain("cleanup_db");
+  });
+
+  test("stamps resolved_at with now()", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await resolveStaleInfoNoticesBefore(NOW, ["claim_race_lost"], sql);
+    expect(calls[0]?.text).toContain("resolved_at = now()");
+  });
+
+  test("only touches unresolved notices", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await resolveStaleInfoNoticesBefore(NOW, ["claim_race_lost"], sql);
+    expect(calls[0]?.text).toContain("WHERE resolved = false");
+  });
+
+  test("only touches the given kinds", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await resolveStaleInfoNoticesBefore(NOW, ["claim_race_lost"], sql);
+    expect(calls[0]?.values).toContainEqual(["claim_race_lost"]);
+  });
+
+  test("measures age from created_at", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await resolveStaleInfoNoticesBefore(NOW, ["claim_race_lost"], sql);
+    expect(calls[0]?.text).toContain("created_at <=");
+  });
+
+  test("returns the number of resolved rows", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 1 }, { id: 2 }]]);
+    expect(await resolveStaleInfoNoticesBefore(NOW, ["a"], sql)).toBe(2);
+  });
+
+  test("changes nothing when no kinds are given", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    expect(await resolveStaleInfoNoticesBefore(NOW, [], sql)).toBe(0);
+    expect(calls).toEqual([]);
   });
 });
 
@@ -2831,12 +3000,47 @@ describe("insertCleanupRun", () => {
         job_failures_deleted: 12,
         deployments_deleted: 5,
         notices_deleted: 2,
+        info_notices_resolved: 0,
         doc_dirs_deleted: 0,
       },
       sql,
     );
     expect(calls[0]?.text).toContain("INSERT INTO factory.cleanup_runs");
     expect(id).toBe(7);
+  });
+
+  test("records the resolved info notices count", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await insertCleanupRun(
+      {
+        work_items_deleted: 0,
+        approval_requests_deleted: 0,
+        job_failures_deleted: 0,
+        deployments_deleted: 0,
+        notices_deleted: 0,
+        info_notices_resolved: 4,
+        doc_dirs_deleted: 0,
+      },
+      sql,
+    );
+    expect(calls[0]?.values).toContain(4);
+  });
+
+  test("inserts into the info_notices_resolved column", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await insertCleanupRun(
+      {
+        work_items_deleted: 0,
+        approval_requests_deleted: 0,
+        job_failures_deleted: 0,
+        deployments_deleted: 0,
+        notices_deleted: 0,
+        info_notices_resolved: 0,
+        doc_dirs_deleted: 0,
+      },
+      sql,
+    );
+    expect(calls[0]?.text).toContain("info_notices_resolved");
   });
 
   test("casts every count to ::integer", async () => {
@@ -2848,6 +3052,7 @@ describe("insertCleanupRun", () => {
         job_failures_deleted: 12,
         deployments_deleted: 5,
         notices_deleted: 2,
+        info_notices_resolved: 0,
         doc_dirs_deleted: 0,
       },
       sql,

@@ -1,0 +1,9 @@
+summary: '[LIB] 続けて失敗するスケジュールの検知'
+description: 内部ライブラリです。直接実行するものではありません。同じスケジュールが続けて失敗したときに、要対応の通知を残します。
+lock: '!inline f/factory/lib/schedule_failing.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

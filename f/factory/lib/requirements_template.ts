@@ -67,8 +67,8 @@ export const TEMPLATE_RELATIVE_PATH =
 
 /**
  * 生成した要件定義書を置くディレクトリの基点。
- * `windmill_worker`だけがマウントするボリューム`factory_state`
- * (`/var/lib/factory`)の下にある。
+ * ボリューム`factory_state`(`/var/lib/factory`)の下にある。
+ * defaultのworker(`windmill_worker`)が読み書きし、Console用のworkerは読み取り専用でマウントする。
  */
 export const REQUIREMENTS_BASE_DIR = "/var/lib/factory/requirements";
 

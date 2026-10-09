@@ -29,6 +29,9 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | `pr_reviewed` | PRレビュー完了 | `pr_review_post` | レビューを投稿した |
 | `pr_fixed` | PR修正適用 | `pr_fix_finish` | 修正をpushし、再レビューを依頼した |
 | `job_failed` | ジョブ失敗 | 下の表を参照 | フローやスケジュールが失敗した |
+| `console_fetch_problem` | Consoleの取り込みに問題があります | `console_fetch_watch`(10分ごと) | Consoleの取り込みの失敗、更新の停止、状態が読めないことを検知し、通知を新しく残した |
+| `console_worker_check_failed` | Console用のworkerの有無を確認できません | `self_update`(10分ごと) | Console用のworkerが居るかを、1時間(6回)続けて確認できなかった |
+| `console_worker_missing` | Console用のworkerが居ません | `self_update`(10分ごと) | tag `console`を受けるworkerが居ないことを検知し、通知を新しく残した |
 | `daily_summary` | 日次サマリー | `notify_daily_summary`(毎日09:00) | 前日の集計 |
 | `audit_completed` | 監査レポートができました | `audit_generate` | 改善提案が1件以上ある監査レポートを保存した |
 | `pr_opened` | PR作成 / PR更新 | `implement_finish` | 実装フローがPRを作成か更新した |
@@ -53,7 +56,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | 処理 | 送るとき |
 | --- | --- |
 | `on_error_flow` | フロー(pipeline、implement、pr_review、pr_fix、manual_intakeなど)が失敗した |
-| `on_error_schedule` | スケジュールのジョブが失敗した。GitHubのPATの失効は、`poll_issues`の冒頭の確認が失敗してここに来る |
+| `on_error_schedule` | スケジュールのジョブが失敗した。GitHubのPATの失効は、`poll_issues`の冒頭の確認が失敗してここに来る。直近3回の実行(飛ばされた回と取り消された回を除く)が続けて失敗すると、要対応の通知`schedule_failing`も残す。ジョブ履歴を読めないときは、`schedule_failing_check_failed`を残す |
 | `poll_issues`の点検 | 閉じたIssue・PRや孤児のジョブを見つけ、作業項目を取り消しか失敗にした |
 | `requirements_apply` | 承認の反映の処理が例外で終わった。却下の後の作り直しを起動できなかったときも含む |
 | `issue_proposal_apply` | Issue化の提案の反映が失敗した |
@@ -71,6 +74,9 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | `pr_reviewed` | PR | 説明に指摘の件数と状態 |
 | `pr_fixed` | PR | 再レビュー依頼のAPIが失敗したときだけ「補足」 |
 | `job_failed` | なし | 説明にエラー、ジョブのID |
+| `console_fetch_problem` | なし | 説明に原因、「次の操作」 |
+| `console_worker_check_failed` | なし | 説明に原因、「次の操作」 |
+| `console_worker_missing` | なし | 説明に原因、「次の操作」 |
 | `daily_summary` | なし | 説明に実行件数と費用、失敗、承認、却下、DB掃除 |
 | `audit_completed` | Consoleの監査のページ | 「次の操作」、`work_item_id` |
 | `pr_opened` | PR | 「次の操作」、Issue、「確認して欲しい点」、ラウンドと費用、差分 |
@@ -80,7 +86,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 次の操作は、理由の文から`pr_workflow_support.ts`の`nextActionFor`が決める。
 
 - 同じ理由でも、実装フローとPRの修正で次の操作が変わるものは、フロー(`NextActionFlow`)を渡して選ぶ。
-- 再実行を案内するときは、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行するよう書く。人の対応待ちとブロックの作業項目は、Consoleの**失敗**タブに出ないためである。
+- 再実行を案内するときは、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行するよう書く。人の対応待ちとブロックの作業項目は、`job_failures`の行が無ければConsoleの**失敗**タブに出ないためである。
 - どの規則にも当たらない理由では、`GENERIC_NEXT_ACTION`の文になる。通知の理由とConsoleの**通知**タブで原因を確かめて取り除き、`retry_work_item`を実行するよう求める文である。
 
 ### 理由の区切りを無効にする
@@ -213,7 +219,13 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 `poll_issues`が実行されるたびに同じnoticeが積み上がり、ほかの種類が埋もれるためである。
 版の組が変わったときと、既存のnoticeを解決した後に再び食い違ったときは、1件残す。
 
-解決済みのnoticeは、`retention_logs_days`(既定30日)を過ぎるとDBの掃除が消す。未解決のnoticeは消さない。
+解決済みのnoticeは、解決してから`retention_logs_days`(既定30日)を過ぎるとDBの掃除が消す。解決の時刻(`resolved_at`)が無い行は、作成の時刻から数える。
+重要度が「情報」の未解決のnoticeは、作成から同じ期間を過ぎると、削除せず解決済みへ変える(`resolved_by`は`cleanup_db`)。
+Consoleの一覧から7日で外れて誰も解決しないため、溜まり続けるからである。
+機械が黙って消さず、解決済みの履歴に痕跡を残す。その後は、解決の時刻から同じ期間で消える。
+「要対応」の未解決のnoticeは消さない。
+
+noticeには重要度がある。種類ごとの重要度と、Consoleから解決できない種類は、`lib/console_support.ts`が定める。表に無い種類は「要対応」として扱う。解決できる種類は、`notice_resolve`が1件ずつ解決し、解決者(`resolved_by`)と時刻を残す。
 
 ## GitHub APIのrate limit
 
@@ -252,7 +264,7 @@ RESTのrate limitでは、解除まで待って1回だけ再試行する。待�
 
 ジョブが失敗した作業項目は、解除を待ってからConsoleの**失敗**タブで再実行する。
 人の対応待ちの通知でも、rate limitが原因のときは、次の操作に解除を待ってから再実行するよう表示する。
-人の対応待ちの作業項目は**失敗**タブに出ないので、Windmillで`retry_work_item`を実行する。rate limitで失敗したときに各ステップが何を済ませているかは、[実装フローの仕様](implement.md)と[PRワークフローの仕様](pr-workflow.md)にある。
+人の対応待ちの作業項目は、`job_failures`の行が無ければ**失敗**タブに出ないので、Windmillで`retry_work_item`を実行する。rate limitで失敗したときに各ステップが何を済ませているかは、[実装フローの仕様](implement.md)と[PRワークフローの仕様](pr-workflow.md)にある。
 
 ## GitHub APIの一時的な失敗
 

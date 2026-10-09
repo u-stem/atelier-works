@@ -14,7 +14,9 @@
 // `wmill.setVariable`だけが値を変える。無関係な`wmill sync push`で戻らない。
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "./lib/config.ts";
-import { recordDeployment } from "./lib/db.ts";
+import { watchConsoleWorker } from "./lib/console_worker.ts";
+import { addNoticeUnlessUnresolved, recordDeployment } from "./lib/db.ts";
+import { notifyBestEffort } from "./lib/discord.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import {
   assertBranchMatches,
@@ -304,11 +306,44 @@ export type SelfUpdateResult =
       readonly needs_host_action: boolean;
     };
 
+type FactoryConfig = Awaited<ReturnType<typeof loadConfig>>;
+
+/**
+ * 自己更新を行い、そのあとでConsole用workerの存在を確かめる。
+ * 確認は更新の成否によらず毎回行う。Console用workerが居ないとConsoleのjobが溜まり続けるため。
+ * 確認は時間を区切り、失敗しても例外を投げないので、更新の結果は変わらない。
+ */
 export async function main(): Promise<SelfUpdateResult> {
   const log = logger("self_update");
   const config = await loadConfig(() =>
     wmill.getResource("f/factory/factory_config"),
   );
+  try {
+    return await updateSelf(log, config);
+  } finally {
+    // 更新が例外を投げても検知は走らせる。更新が失敗し続けると、Console用workerの不在に誰も気づけなくなるため。
+    await watchConsoleWorker({
+      listWorkers: (pingSince) =>
+        wmill.WorkerService.listWorkers({ page: 1, perPage: 100, pingSince }),
+      addNotice: (record) => addNoticeUnlessUnresolved(record),
+      notify: async (event) => {
+        const webhookUrl = await wmill.getVariable(
+          "f/factory/discord_webhook_url",
+        );
+        await notifyBestEffort(webhookUrl, event, log);
+      },
+      getState: () => wmill.getState(),
+      setState: (state) => wmill.setState(state),
+      instanceName: config.instance_name,
+      log,
+    });
+  }
+}
+
+async function updateSelf(
+  log: Logger,
+  config: FactoryConfig,
+): Promise<SelfUpdateResult> {
   const ghToken = await wmill.getVariable("f/factory/github_token");
 
   const factoryClone = await ensureFactoryClone({

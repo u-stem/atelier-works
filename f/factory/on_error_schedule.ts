@@ -1,5 +1,6 @@
 // `f/factory/`のすべてのスケジュールの`on_failure`ハンドラ。
 // 失敗を`job_failures`に記録し、Discordに`job_failed`を通知する。
+// 同じスケジュールの直近3回の実行が続けて失敗していれば、要対応のnoticeも残す。
 //
 // Windmillは`on_failure`ハンドラを決まった特殊引数で呼ぶ。引数名
 // (`path`・`is_flow`・`schedule_path`・`job_id`・`error`)はWindmillの
@@ -8,11 +9,12 @@
 // このハンドラ自身は例外を投げない。デプロイ先で実際にスケジュールが
 // 失敗したら引数の形を確かめ、違っていれば引数と型ガードを直す。
 
-import * as wmill from "windmill-client";
+import wmillDefault, * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "./lib/config.ts";
-import { recordFailure } from "./lib/db.ts";
+import { addNoticeUnlessUnresolved, recordFailure } from "./lib/db.ts";
 import { notify } from "./lib/discord.ts";
 import { logger, maskSecrets } from "./lib/log.ts";
+import { flagFailingSchedule } from "./lib/schedule_failing.ts";
 import { isRecord, isString } from "./lib/types.ts";
 
 function errorMessage(error: unknown): string {
@@ -82,4 +84,19 @@ export async function main(
       ),
     });
   }
+
+  // 直近の実行が続けて失敗しているスケジュールは、Discordの通知を見落としても拾えるよう、
+  // 要対応のnoticeにも残す。既存の記録とDiscordの通知より後ろに置き、これらを遅らせない。
+  await flagFailingSchedule(flowPath, {
+    listRecentRuns: (path, count) =>
+      wmill.JobService.listCompletedJobs({
+        workspace: wmillDefault.getWorkspace(),
+        scriptPathExact: path,
+        orderDesc: true,
+        isSkipped: false,
+        perPage: count,
+      }),
+    addNotice: (record) => addNoticeUnlessUnresolved(record),
+    log,
+  });
 }

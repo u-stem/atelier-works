@@ -108,6 +108,103 @@ const rateLimitedByBodyFor = (seconds: number) => () =>
 
 const ok = () => jsonResponse(204, {});
 
+describe("buildEmbed console_worker_missing", () => {
+  const event: NotifyEvent = {
+    kind: "console_worker_missing",
+    instance_name: "local",
+    cause: "Console用のworkerが居ません",
+    next_action: "mise run upで起動し直す",
+  };
+
+  test("puts the cause in the description", () => {
+    expect(buildEmbed(event).description).toBe("Console用のworkerが居ません");
+  });
+
+  test("shows the next action as a field", () => {
+    expect(buildEmbed(event).fields).toContainEqual({
+      name: "次の操作",
+      value: "mise run upで起動し直す",
+    });
+  });
+
+  test("includes the instance field", () => {
+    expect(buildEmbed(event).fields).toContainEqual({
+      name: "インスタンス",
+      value: "local",
+    });
+  });
+
+  test("names the console worker in the title", () => {
+    expect(buildEmbed(event).title).toContain("Console用のworker");
+  });
+});
+
+describe("buildEmbed console_worker_check_failed", () => {
+  const event: NotifyEvent = {
+    kind: "console_worker_check_failed",
+    instance_name: "local",
+    cause: "1時間続けて確認できていません",
+    next_action: "ジョブログを確かめる",
+  };
+
+  test("puts the cause in the description", () => {
+    expect(buildEmbed(event).description).toBe("1時間続けて確認できていません");
+  });
+
+  test("shows the next action as a field", () => {
+    expect(buildEmbed(event).fields).toContainEqual({
+      name: "次の操作",
+      value: "ジョブログを確かめる",
+    });
+  });
+
+  test("includes the instance field", () => {
+    expect(buildEmbed(event).fields).toContainEqual({
+      name: "インスタンス",
+      value: "local",
+    });
+  });
+
+  test("says the check cannot be made in the title", () => {
+    expect(buildEmbed(event).title).toContain("確認できません");
+  });
+});
+
+describe("buildEmbed console_fetch_problem", () => {
+  const event: NotifyEvent = {
+    kind: "console_fetch_problem",
+    instance_name: "local",
+    cause: "トークンの期限が切れています",
+    next_action: "トークンを再発行して投入する",
+  };
+
+  test("puts the cause in the description", () => {
+    expect(buildEmbed(event).description).toBe("トークンの期限が切れています");
+  });
+
+  test("shows the next action as a field", () => {
+    expect(buildEmbed(event).fields).toContainEqual({
+      name: "次の操作",
+      value: "トークンを再発行して投入する",
+    });
+  });
+
+  test("includes the instance field", () => {
+    expect(buildEmbed(event).fields).toContainEqual({
+      name: "インスタンス",
+      value: "local",
+    });
+  });
+
+  test("has no link", () => {
+    expect(buildEmbed(event).url).toBeNull();
+  });
+
+  test("names the console in the title", () => {
+    expect(buildEmbed(event).title).toContain("Console");
+  });
+});
+
 describe("buildEmbed", () => {
   test("always includes an instance field", () => {
     const embed = buildEmbed({
@@ -187,6 +284,7 @@ describe("buildEmbed", () => {
         job_failures_deleted: 12,
         deployments_deleted: 5,
         notices_deleted: 2,
+        info_notices_resolved: 0,
         doc_dirs_deleted: 0,
       },
     });

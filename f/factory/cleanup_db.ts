@@ -2,7 +2,8 @@
 // 放っておくと行が際限なく増えるため。対象は、`config.retention_work_items_days`を
 // 過ぎた終端状態の作業項目(と、それを`ON DELETE CASCADE`で参照する表の行)と、
 // `config.retention_logs_days`を過ぎた`job_failures`・`deployments`・
-// 解決済みのnoticeで、作業項目とは別々に掃除する。
+// 解決済みのnoticeで、作業項目とは別々に掃除する。同じ期間を過ぎた未解決の`info`のnoticeは、
+// 削除せず解決済みにする。
 //
 // 期限の計算と要約の整形は`./lib/cleanup_db_support.ts`にあり、
 // このファイルは入出力をつなぐだけ。掃除は表ごとに独立しており、
@@ -25,6 +26,7 @@ import {
   summarizeCleanup,
 } from "./lib/cleanup_db_support.ts";
 import { loadConfig } from "./lib/config.ts";
+import { INFO_NOTICE_KINDS } from "./lib/console_support.ts";
 import {
   addNotice,
   type DeletedWorkItemRef,
@@ -33,6 +35,7 @@ import {
   deleteResolvedNoticesBefore,
   deleteTerminalWorkItemsBefore,
   insertCleanupRun,
+  resolveStaleInfoNoticesBefore,
 } from "./lib/db.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import { REQUIREMENTS_BASE_DIR } from "./lib/requirements_template.ts";
@@ -135,6 +138,7 @@ async function cleanupDeployments(cutoff: Date, log: Logger): Promise<number> {
   }
 }
 
+/** 解決済みの通知を、解決の時刻から保持期間を過ぎたものだけ削除する。 */
 async function cleanupNotices(cutoff: Date, log: Logger): Promise<number> {
   try {
     return await deleteResolvedNoticesBefore(cutoff);
@@ -145,7 +149,30 @@ async function cleanupNotices(cutoff: Date, log: Logger): Promise<number> {
     });
     await addNotice({
       kind: "cleanup_db_failed",
-      message: `通知の削除に失敗しました: ${message}`,
+      message: `解決済みの通知の削除に失敗しました: ${message}`,
+    });
+    return 0;
+  }
+}
+
+/**
+ * 保持期間を過ぎた未解決の`info`の通知を、削除せず解決済みにする。
+ * `info`の通知はConsoleの一覧から7日で外れ、誰も解決しないので、溜まり続けないようにここで解決済みにする。
+ * 解決できない種類の通知(`UNRESOLVABLE_NOTICE_KINDS`)は`info`なので、この対象に入る。
+ * 痕跡を解決済みの履歴に残し、その後は`cleanupNotices`が通常の保持期間で消す。
+ * `cleanupNotices`とは別に呼び、片方が失敗してももう片方の件数を捨てない。
+ */
+async function cleanupInfoNotices(cutoff: Date, log: Logger): Promise<number> {
+  try {
+    return await resolveStaleInfoNoticesBefore(cutoff, INFO_NOTICE_KINDS);
+  } catch (err) {
+    const message = errorMessage(err);
+    log.error("cleanup_db: failed to resolve stale info notices", {
+      error: message,
+    });
+    await addNotice({
+      kind: "cleanup_db_failed",
+      message: `古い情報の通知の解決に失敗しました: ${message}`,
     });
     return 0;
   }
@@ -183,6 +210,7 @@ export async function main(): Promise<CleanupCounts> {
   const jobFailuresDeleted = await cleanupJobFailures(cutoffs.logsBefore, log);
   const deploymentsDeleted = await cleanupDeployments(cutoffs.logsBefore, log);
   const noticesDeleted = await cleanupNotices(cutoffs.logsBefore, log);
+  const infoNoticesResolved = await cleanupInfoNotices(cutoffs.logsBefore, log);
 
   const counts: CleanupCounts = {
     work_items_deleted: workItems.work_items_deleted,
@@ -190,6 +218,7 @@ export async function main(): Promise<CleanupCounts> {
     job_failures_deleted: jobFailuresDeleted,
     deployments_deleted: deploymentsDeleted,
     notices_deleted: noticesDeleted,
+    info_notices_resolved: infoNoticesResolved,
     doc_dirs_deleted: docDirsDeleted,
   };
 

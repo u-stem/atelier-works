@@ -120,6 +120,30 @@ export type NotifyEvent =
       error: string;
     }
   | {
+      kind: "console_fetch_problem";
+      instance_name: string;
+      /** 取り込みが止まっている原因。分類したコードではなく、読める文にする。 */
+      cause: string;
+      /** 運用者がまず行う操作の1文(`console_status.ts`の`nextActionFor`)。 */
+      next_action: string;
+    }
+  | {
+      kind: "console_worker_missing";
+      instance_name: string;
+      /** tag `console`を受けるworkerが居ないこと。 */
+      cause: string;
+      /** 運用者がまず行う操作の1文。 */
+      next_action: string;
+    }
+  | {
+      kind: "console_worker_check_failed";
+      instance_name: string;
+      /** Console用のworkerの有無を、続けて確認できていないこと。 */
+      cause: string;
+      /** 運用者がまず行う操作の1文。 */
+      next_action: string;
+    }
+  | {
       kind: "daily_summary";
       instance_name: string;
       day: string;
@@ -323,6 +347,36 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
         fields: [
           instanceField(event.instance_name),
           { name: "ジョブ", value: event.job_id },
+        ],
+      };
+    case "console_fetch_problem":
+      return {
+        title: "Consoleの取り込みに問題があります",
+        description: event.cause,
+        url: null,
+        fields: [
+          { name: "次の操作", value: event.next_action },
+          instanceField(event.instance_name),
+        ],
+      };
+    case "console_worker_missing":
+      return {
+        title: "Console用のworkerが居ません",
+        description: event.cause,
+        url: null,
+        fields: [
+          { name: "次の操作", value: event.next_action },
+          instanceField(event.instance_name),
+        ],
+      };
+    case "console_worker_check_failed":
+      return {
+        title: "Console用のworkerの有無を確認できません",
+        description: event.cause,
+        url: null,
+        fields: [
+          { name: "次の操作", value: event.next_action },
+          instanceField(event.instance_name),
         ],
       };
     case "daily_summary":

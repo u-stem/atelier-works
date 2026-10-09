@@ -12,30 +12,34 @@ export const HISTORY_LIMIT = 20;
 
 /**
  * status.jsonの`error`に書く分類。トークンや応答の本文は書かず、運用者が次の操作を選べる粒度にする。
+ * f/factory/lib/console_status.tsの次の操作の表は、この一覧と同じ集合を持つ(tests/console_fetcher/status_contract.test.ts)。
  */
-export type FetchErrorCode =
-  | "config_missing"
-  | "auth_failed"
-  | "forbidden"
-  | "not_found"
-  | "rate_limited"
-  | "github_unavailable"
-  | "unexpected_response"
-  | "no_successful_run"
-  | "artifact_missing"
-  | "artifact_expired"
-  | "artifact_mismatch"
-  | "artifact_too_large"
-  | "digest_missing"
-  | "digest_mismatch"
-  | "unexpected_redirect"
-  | "zip_invalid"
-  | "zip_unsafe_entry"
-  | "manifest_invalid"
-  | "manifest_mismatch"
-  | "release_invalid"
-  | "asset_conflict"
-  | "filesystem_error";
+export const FETCH_ERROR_CODES = [
+  "config_missing",
+  "auth_failed",
+  "forbidden",
+  "not_found",
+  "rate_limited",
+  "github_unavailable",
+  "unexpected_response",
+  "no_successful_run",
+  "artifact_missing",
+  "artifact_expired",
+  "artifact_mismatch",
+  "artifact_too_large",
+  "digest_missing",
+  "digest_mismatch",
+  "unexpected_redirect",
+  "zip_invalid",
+  "zip_unsafe_entry",
+  "manifest_invalid",
+  "manifest_mismatch",
+  "release_invalid",
+  "asset_conflict",
+  "filesystem_error",
+] as const;
+
+export type FetchErrorCode = (typeof FETCH_ERROR_CODES)[number];
 
 export type FetcherState = "ok" | "failed" | "pinned";
 
