@@ -252,7 +252,7 @@ export const REASONS = {
   gitAlias:
     "git -c alias.* and git config alias.* can hide a push or a commit behind another name. Write the git command out in full.",
   gitHomeEnv:
-    "Setting HOME or XDG_CONFIG_HOME for git commit, push, merge, or rebase makes git read another config, which can turn the hooks off. Run the git command without changing HOME.",
+    "Setting HOME or XDG_CONFIG_HOME for a git command that runs hooks (commit, push, merge, rebase, and the like) makes git read another config, which can turn the hooks off. Run the git command without changing HOME.",
   miseSetList:
     "mise set without KEY=VALUE lists the values of mise.local.toml, including secrets. To check that the secrets are set, run mise run doctor.",
   gitConfigEnv:

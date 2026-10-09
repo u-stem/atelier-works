@@ -285,7 +285,7 @@ FactoryのheadlessなClaudeの実行は`.claude/`を読まないので、この�
 | `LEFTHOOK_BIN`と`LEFTHOOK_CONFIG`の設定 | インストール済みのフックが読む、lefthookのバイナリと設定を差し替えられる |
 | `lefthook uninstall`、`.git/hooks`と`.git/config`への書き込み | gitのフックを外せる |
 | `git -c alias.*`、`remote.*.push`・`push.default`・`include.*`・`includeIf.*`の設定、`GIT_CONFIG_COUNT`・`GIT_CONFIG_GLOBAL`・`GIT_CONFIG_SYSTEM`などの環境変数 | `push`や`core.hooksPath`を別の名前や設定の裏から差し込める |
-| `commit`、`push`、`merge`、`rebase`に前置きした`HOME=`と`XDG_CONFIG_HOME=` | gitに別の設定ファイルを読ませて、フックを外せる |
+| フックを実行するgitのサブコマンド(`commit`、`push`、`merge`、`rebase`など)に前置きした`HOME=`と`XDG_CONFIG_HOME=` | gitに別の設定ファイルを読ませて、フックを外せる |
 | `echo`や`printf`が変数から組み立てた文字列を、標準入力で読むシェル | 中身を判定できない |
 | `mise exec`の`-c`と`--command`、コードを渡したシェル、`env`、`printenv`、`set`、`export -p`などの環境変数の一覧 | `mise exec`は`mise.local.toml`の秘密値を環境変数として渡すので、値を表示できる |
 | `docker exec`と`docker compose exec`で実行する環境変数の一覧とコードを渡したシェル(`mise exec --`の前置きがあっても) | コンテナは秘密値を環境変数として持つ |
@@ -336,9 +336,8 @@ FactoryのheadlessなClaudeの実行は`.claude/`を読まないので、この�
 同じコマンド行の前にブランチを切り替える操作があれば、切り替えた先を今のブランチとする。
 対象は`git checkout`、`git switch`、それぞれの`-b`と`-c`と`-t`、`git rebase <上流> <ブランチ>`、`git branch -m`である。
 `git rebase`のオプションの値(`-X theirs`、`--onto <先>`など)は、ブランチとして数えない。
-`git checkout <名前>`の名前はファイルの復元であることもあるので、実際のブランチも候補に残す。
-どちらかが保護するブランチなら拒否する。
-その名前のブランチがローカルにあれば、ブランチの切り替えなので、実際のブランチは候補から外す。
+`git checkout <名前>`の名前がローカルのブランチなら、切り替え先だけを今のブランチとする。
+そうでなければファイルの復元のこともあるので、実際のブランチも候補に残し、どちらかが保護するブランチなら拒否する。
 `git rebase --root <ブランチ>`は、最初のオペランドをブランチとする。
 `git switch`と`-b`、`-c`は、切り替え先だけを今のブランチとする。
 `HEAD`、`@`、`main~2`のような相対の参照は、ブランチを変えないものとして扱う。
@@ -430,6 +429,8 @@ bunかnodeの起動そのものが止まったときだけ、タイムアウト�
 - `gh auth token`のように、認証情報を表示するコマンドと、`~/.ssh`やgh CLIの設定ファイルの読み取り
 - `mise exec`経由で秘密値を読む方法の一部(ベストエフォートの規則である)
 - サブシェルの中の`cd`の範囲(外側にも効くものとして扱う)
+- 前置きではない`HOME`と`XDG_CONFIG_HOME`の設定(`export HOME=...`の後のgit、`sh -c`の中のgit)
+- 書き方を変えた`/proc/<pid>/environ`(`dd if=/proc/self/environ`、`/proc/self/./environ`、`//proc/...`、`/proc`の再帰的な検索)
 
 フックは誤操作を止める仕組みで、意図した迂回は防げない。
 
