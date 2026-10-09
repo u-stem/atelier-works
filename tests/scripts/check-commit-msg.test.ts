@@ -111,6 +111,48 @@ describe("check-commit-msg.sh with CLAUDECODE=1", () => {
     expect(exitCode).toBe(1);
   });
 
+  test("accepts a trailer followed by git's comment lines", () => {
+    const { exitCode } = run(
+      `feat: 機能を追加\n\n${TRAILER}\n\n# Please enter the commit message\n# Lines starting with '#' are ignored\n`,
+      true,
+    );
+    expect(exitCode).toBe(0);
+  });
+
+  test("accepts a trailer after trailing blank lines", () => {
+    const { exitCode } = run(`feat: 機能を追加\n\n${TRAILER}\n\n\n`, true);
+    expect(exitCode).toBe(0);
+  });
+
+  test("rejects a trailer that is not in the last paragraph", () => {
+    const { exitCode } = run(
+      `feat: 機能を追加\n\n${TRAILER}\n\n後から足した本文\n`,
+      true,
+    );
+    expect(exitCode).toBe(1);
+  });
+
+  test("rejects a trailer that directly follows the subject", () => {
+    const { exitCode } = run(`feat: 機能を追加\n${TRAILER}\n`, true);
+    expect(exitCode).toBe(1);
+  });
+
+  test("rejects a trailer separated from the body by a comment-only paragraph", () => {
+    const { exitCode } = run(
+      `feat: 機能を追加\n\n${TRAILER}\n\n# メモ\n\n本文\n`,
+      true,
+    );
+    expect(exitCode).toBe(1);
+  });
+
+  test("accepts a trailer in a paragraph whose lines are all trailers", () => {
+    const { exitCode } = run(
+      `feat: 機能を追加\n\n本文\n\nSigned-off-by: A <a@example.com>\n${TRAILER}\n`,
+      true,
+    );
+    expect(exitCode).toBe(0);
+  });
+
   test("skips the trailer check for a merge commit", () => {
     const { exitCode } = run("Merge branch 'main' into feature\n", true);
     expect(exitCode).toBe(0);
