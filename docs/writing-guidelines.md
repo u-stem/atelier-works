@@ -2,7 +2,7 @@
 
 このリポジトリの文書と、コードに書く定型文の書き方を定める。対象は次の2つである。
 
-- リポジトリの文書: README、AGENTS.md、`docs/`、自作のスキル、各ディレクトリのREADME
+- リポジトリの文書: README、AGENTS.md、`docs/`、自作のスキル、subagentの定義、各ディレクトリのREADME
 - コードに書く定型文: Issueへのコメント、Discordの通知、Consoleのnotice、通知の理由と次の操作
 
 Claudeが生成する文章(要件定義書、監査レポートと改善提案、PR本文、レビューの指摘、修正の返信、Issue化の提案、コミットメッセージ)の書き方は、[factory-writingスキル](../.claude/skills/factory-writing/SKILL.md)が定める。
@@ -21,7 +21,7 @@ Claudeが生成する文章(要件定義書、監査レポートと改善提案�
 | 説明 | 構成と、その構成をとる理由を理解する | `docs/architecture.md`、`docs/security.md` |
 | 仕様 | 変更する人が、内部の挙動と設定値を確かめる | `docs/internals/` |
 | 規約 | 書く人が、守ることを確かめる | `docs/coding-guidelines.md`、この文書 |
-| エージェント向けの指示 | Claudeが、作業の決まりを知る | AGENTS.md、`.claude/skills/` |
+| エージェント向けの指示 | Claudeが、作業の決まりを知る | AGENTS.md、`.claude/skills/`、`.claude/agents/` |
 
 内部の挙動は、まずコードのコメントとテストで表す。`docs/internals/`には、複数のファイルにまたがる挙動の要約だけを書き、詳細はコードを参照させる。
 
@@ -134,7 +134,7 @@ Claudeが生成する文章(要件定義書、監査レポートと改善提案�
 
 ## エージェント向けの文書
 
-AGENTS.mdとスキルはClaudeが読む。Claudeは書かれていることをすべて今のルールとして扱うので、人向けの文書より短く書く。
+AGENTS.mdとスキル、subagentの定義はClaudeが読む。Claudeは書かれていることをすべて今のルールとして扱うので、人向けの文書より短く書く。
 
 - AGENTS.mdは毎回読み込まれる。1つのルールを1〜2行で書き、詳しい説明は`docs/`へのリンクにする。
 - スキルの`description`には、いつ使うかと、誰が参照するかを書く。
