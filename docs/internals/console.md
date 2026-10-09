@@ -441,6 +441,7 @@ IPv4のアドレス(`127.0.0.1`など)かホスト名で開く。
 
 要件定義書の図は、最上位のページではなく、隔離したiframeの中で描く。
 何を守るかは、[セキュリティ](../security.md)の「draw.ioの図の描画」にある。
+`DrawioFrame`はどの画面にも組み込まれていない。部品と`drawio.html`が配信物に入っているだけである。
 
 | ファイル | 役割 |
 | --- | --- |
@@ -457,7 +458,9 @@ IPv4のアドレス(`127.0.0.1`など)かホスト名で開く。
 ビューアはリポジトリに入れない。
 CIの`console`ジョブが、組み立ての後に`fetch-drawio-viewer.ts`を動かし、`dist/assets/drawio-viewer-<sha256の先頭8桁>.js`に書く。
 取得したバイト列のsha256が固定の値と違えば、何も書かずに失敗する。
-URLはリダイレクトを許さない。
+URLはリダイレクトを許さず、パスはcommit配下のビューア1ファイルに限る。
+応答は10MBまでで、一時的な失敗(ネットワーク、429、5xx)は、待ちを倍にしながら3回まで再試行する。
+ビューアはApache-2.0のライセンスである。
 `console_fetcher`は、他の配信物と同じように、マニフェストの照合を経て共有の`assets/`に置く。
 
 ローカルの`mise run console:check`は、ビューアを取得しない。
@@ -476,16 +479,40 @@ URLはリダイレクトを許さない。
 ### iframeとメッセージ
 
 親の部品は、`sandbox="allow-scripts"`と`referrerPolicy="no-referrer"`を付けたiframeで`/console/drawio.html`を読み込む。
-iframeの`load`の後に、図のXMLをpostMessageで送る。
+XMLが変わるたびに、iframeを作り直す(keyを変える)。
+1つのiframeの一生で送るのは、最初の`load`の後の1回だけである。
 受け口は、`load`の前にscriptの実行を終えているためである。
+判定は`console/src/lib/drawioMessages.ts`の純関数にある。`phaseAfterLoad`が、何回目のloadかと、送ってよいかを返す。
+
+2回目の`load`は、iframeが別の文書へ遷移したことを表す。
+親は、iframeを`about:blank`にして表示を止め、固定の文を出す。
+以後、そのiframeのメッセージは受けない。
 
 | 向き | メッセージ | 検査 |
 | --- | --- | --- |
-| 親からiframe | 種別`drawio:render`と`xml`(文字列) | 親は、空のXMLと、UTF-8で256KBを超えるXMLを送らない。iframeは、送り元が親のwindowでないものと、`xml`が文字列でないものを捨てる |
+| 親からiframe | 種別`drawio:render`と`xml`(文字列) | 親は、空のXMLと、UTF-8で256KBを超えるXMLを送らない |
 | iframeから親 | 種別`drawio:height`と`height`(数値) | 親は、送り元がiframeのwindowでないものと、`height`が有限の数値でないものを捨て、80〜1600pxに収める |
+| iframeから親 | 種別`drawio:error`と`reason` | 親は、送り元がiframeのwindowでないものと、`reason`が固定の3つ(`viewer_missing`、`render_failed`、`too_large`)でないものを捨てる。画面に出す文は、親が`reason`から決める |
+
+iframe側の受け口(`console/public/assets/drawio-frame-*.js`)は、次のものを捨てる。
+
+- 送り元が親のwindowでないメッセージ
+- 種別が`drawio:render`でないメッセージ
+- `xml`が文字列でないメッセージ
+- 2回目以降の`drawio:render`
+
+256KBの上限は、親と受け口の両方に置く。
+親は送る前にバイト数で、受け口は受けた後に文字数で確かめる。
+片方を変えるときは、もう片方も同じ値に変える。
+上限を超えたXMLを受けた受け口は、`too_large`を返す。
+
+受け口は、失敗を黙らせない。
+ビューアが読み込まれていない場合、ビューアが例外を投げた場合、描いても図が入らなかった場合は、固定の文をiframeの中に出し、`drawio:error`を親へ返す。
+例外の文面は、ページに出さず、親にも渡さない。
 
 iframeは、図の領域の大きさが変わるたびに高さを送る。
 図が上限より高いときは、親のiframeが1600pxで止まり、iframeの中でスクロールする。
+枠線は、iframeの外側の要素に付ける。iframeに付けると、枠線の分だけ高さが足りなくなる。
 
 ### CSPとヘッダー
 
@@ -495,8 +522,8 @@ Caddyfileでは、`handle /console/drawio.html`を、Consoleの本体の`handle_
 
 | ヘッダー | 値 | 理由 |
 | --- | --- | --- |
-| `Content-Security-Policy` | `default-src 'none'`、`script-src`は`/console/assets/`、`style-src 'unsafe-inline'`、`img-src data:`、`font-src data:`、`connect-src 'none'`、`base-uri 'none'`、`form-action 'none'`、`frame-ancestors 'self'` | 外への取得をすべて止める。不透明なオリジンでは`'self'`が使えないので、`script-src`にはブラウザが使ったオリジンを入れる。`style-src`は、ビューアが付けるインラインのstyleのために許す |
-| `X-Frame-Options` | `SAMEORIGIN` | Console自身のページだけに埋め込ませる |
+| `Content-Security-Policy` | `default-src 'none'`、`script-src`は`/console/assets/`、`style-src 'unsafe-inline'`、`img-src data:`、`font-src data:`、`connect-src 'none'`、`base-uri 'none'`、`form-action 'none'`、`frame-ancestors 'self'`、`sandbox allow-scripts` | 外への取得をすべて止める。不透明なオリジンでは`'self'`が使えないので、`script-src`にはブラウザが使ったオリジンを入れる。`style-src`は、ビューアが付けるインラインのstyleのために許す。`sandbox`は、ページを直接開いても不透明なオリジンで動かす |
+| `X-Frame-Options` | `SAMEORIGIN` | `frame-ancestors`を解釈するブラウザでは、そちらが優先される。これは、解釈しない古いブラウザ向けの備えで、Console自身のページだけに埋め込ませる |
 | `Referrer-Policy` | `no-referrer` | 参照元を送らない |
 | `X-Content-Type-Options` | `nosniff` | scriptの種別を推測させない |
 
