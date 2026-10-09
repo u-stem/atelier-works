@@ -127,8 +127,9 @@ PRの本文は`.github/PULL_REQUEST_TEMPLATE.md`の章立てに従う。
 
 人がClaude Codeで作るコミットには、`Co-Authored-By: Claude <noreply@anthropic.com>`のトレーラーを付ける。
 モデル名を間に入れてもよく、キー名の大文字小文字は区別しない。
-Claude Codeのセッションでは環境変数`CLAUDECODE`が`1`になる。
-その間はcommit-msgのフックがトレーラーの行を検査し、無ければコミットを止める。
+commit-msgのフックは、環境変数`CLAUDECODE`が`1`のときに、本文のどこかに行頭から書いたトレーラーの行があるかを検査し、無ければコミットを止める。
+`CLAUDECODE`は、Claude Codeが自分の起動したシェルに設定する内部の変数である。
+変数の名前や値が変わると、この検査は黙って止まる。
 Claude Codeを使わない人のコミットは検査しない。
 
 Software Factoryが作るコミットには、`lib/workspace.ts`の`commitAndPush`が次のトレーラーを自動で付ける。

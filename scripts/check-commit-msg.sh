@@ -40,13 +40,13 @@ if [[ "$first_line" =~ $pattern ]]; then
   done <"$commit_msg_file"
 
   cat >&2 <<'MESSAGE'
-Claude Codeのセッションでは、本文の末尾にClaudeのトレーラーが要ります。
+Claude Codeのセッションでは、本文に次の行が要ります。
 
   Co-Authored-By: Claude <noreply@anthropic.com>
 
-行頭から書き、モデル名を入れてもかまいません
+行頭から書きます。モデル名を間に入れてもかまいません
 (例: Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>)。
-"#"で始まる行はgitが除くので、数えません。
+キー名の大文字小文字は区別しません。"#"で始まる行は、gitが除くので数えません。
 MESSAGE
   exit 1
 fi
