@@ -12,6 +12,20 @@
         }
 }
 
+# draw.ioの図を描くページ(/console/drawio.html)だけに付けるヘッダー。
+# 不透明なオリジンのsandbox iframeの中で、同梱のビューアが図のXMLを描く。
+# 外への取得は、scriptも含めてすべて拒否する。frame-ancestorsは、Console自身のページからの埋め込みだけを許す。
+# scriptは/console/assets/の同梱のファイルだけにする。不透明なオリジンでは'self'が使えないので、
+# console_headersと同じく、ブラウザが使ったオリジンをplaceholderで入れる。
+(drawio_headers) {
+        header {
+                Content-Security-Policy "default-src 'none'; script-src {http.request.scheme}://{http.request.hostport}/console/assets/; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'"
+                X-Content-Type-Options "nosniff"
+                Referrer-Policy "no-referrer"
+                X-Frame-Options "SAMEORIGIN"
+        }
+}
+
 # CSPはパスの`%2f`を区切りとみなさないが、Caddyは区切りに戻してから振り分ける。
 # `/console/assets/..%2f...`がscript-srcを通ったまま別のファイルを指さないよう、
 # 生のパスに符号化した区切り(`%2f`と`%5c`)があれば400にする。
@@ -72,6 +86,17 @@
                         import console_reject_encoded_separator
                         root * /srv/console/assets
                         header Cache-Control "public, max-age=31536000, immutable"
+                        file_server
+                }
+
+                # draw.ioの図を描くページ。Consoleの本体より先に置き、別のヘッダー(drawio_headers)を付ける。
+                # 今の版(current)のdrawio.htmlを返す。無ければ404にする(handle_errorsが返す)。
+                handle /console/drawio.html {
+                        import drawio_headers
+                        import console_reject_encoded_separator
+                        rewrite * /drawio.html
+                        root * /srv/console/current
+                        header Cache-Control "no-cache"
                         file_server
                 }
 
