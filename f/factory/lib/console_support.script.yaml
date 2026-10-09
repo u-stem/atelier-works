@@ -1,0 +1,9 @@
+summary: '[LIB] Consoleの通知の重要度'
+description: 内部ライブラリです。直接実行するものではありません。Consoleが要対応を決める、通知の重要度と解決できない種類の定数です。
+lock: '!inline f/factory/lib/console_support.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []
