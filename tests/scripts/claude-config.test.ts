@@ -167,8 +167,28 @@ describe(".claude/agents", () => {
     expect(body("security-auditor")).toContain("監査した HEAD: <sha>");
   });
 
-  test("runs triage on the same model as the strongest reviewers", () => {
-    expect(frontmatter("triage").model).toBe("fable");
+  test("runs triage on the same model as devil-advocate", () => {
+    expect(frontmatter("triage").model).toBe(
+      frontmatter("devil-advocate").model,
+    );
+  });
+
+  test("runs triage on the same model as security-auditor", () => {
+    expect(frontmatter("triage").model).toBe(
+      frontmatter("security-auditor").model,
+    );
+  });
+
+  test("makes triage answer security questions as blockers", () => {
+    expect(body("triage")).toContain("親が答える(blocker)");
+  });
+
+  test("lets triage send an upstream fix to the parent", () => {
+    expect(body("triage")).toContain("取り入れる(上流を親が直す)");
+  });
+
+  test("lets triage record accepted topics as settled", () => {
+    expect(body("triage")).toContain("受け入れ済み");
   });
 
   test("makes triage decide by the numbered criteria", () => {
