@@ -6,6 +6,7 @@ import { describe, expect, test } from "bun:test";
 import { isConsoleSummary } from "../../console/src/api/guards/summary.ts";
 import {
   approvalKindLabel,
+  approvalStatusLabel,
   noticeKindLabel,
   UNKNOWN_NOTICE_LABEL,
   UNKNOWN_STATUS_LABEL,
@@ -16,6 +17,8 @@ import { NOTICE_SEVERITY } from "../../f/factory/lib/console_support.ts";
 import type { SqlClient, SqlRow } from "../../f/factory/lib/db.ts";
 import {
   APPROVAL_REQUEST_KINDS,
+  APPROVAL_REQUEST_STATUSES,
+  ISSUE_PROPOSAL_ORIGINS,
   WORK_ITEM_KINDS,
   WORK_ITEM_STATUSES,
 } from "../../f/factory/lib/types.ts";
@@ -143,6 +146,95 @@ describe("summary contract between console_query and the console guard", () => {
   });
 });
 
+describe("every enumerated backend value passes the console guard", () => {
+  test.each([...APPROVAL_REQUEST_KINDS])("approval kind %s", async (kind) => {
+    const delivered = await summaryAsDelivered([
+      [{ ...APPROVAL_ROW, kind }],
+      [],
+      [],
+    ]);
+    expect(isConsoleSummary(delivered)).toBe(true);
+  });
+
+  test.each([...APPROVAL_REQUEST_STATUSES])(
+    "approval status %s",
+    async (status) => {
+      const delivered = await summaryAsDelivered([
+        [{ ...APPROVAL_ROW, status }],
+        [],
+        [],
+      ]);
+      expect(isConsoleSummary(delivered)).toBe(true);
+    },
+  );
+
+  test.each([...ISSUE_PROPOSAL_ORIGINS])(
+    "issue proposal origin %s",
+    async (origin) => {
+      const delivered = await summaryAsDelivered([
+        [{ ...APPROVAL_ROW, kind: "issue_proposal", origin }],
+        [],
+        [],
+      ]);
+      expect(isConsoleSummary(delivered)).toBe(true);
+    },
+  );
+
+  test("an issue proposal without a known origin", async () => {
+    const delivered = await summaryAsDelivered([
+      [{ ...APPROVAL_ROW, kind: "issue_proposal", origin: "future_origin" }],
+      [],
+      [],
+    ]);
+    expect(isConsoleSummary(delivered)).toBe(true);
+  });
+
+  test.each(Object.keys(NOTICE_SEVERITY))(
+    "notice kind %s with its severity",
+    async (kind) => {
+      const delivered = await summaryAsDelivered([
+        [],
+        [],
+        [{ ...NOTICE_ROW, kind }],
+      ]);
+      expect(isConsoleSummary(delivered)).toBe(true);
+    },
+  );
+
+  test("a notice kind that is not in the severity table", async () => {
+    const delivered = await summaryAsDelivered([
+      [],
+      [],
+      [{ ...NOTICE_ROW, kind: "future_kind" }],
+    ]);
+    expect(isConsoleSummary(delivered)).toBe(true);
+  });
+
+  test.each([...WORK_ITEM_STATUSES])(
+    "failure of a work item in status %s",
+    async (status) => {
+      const delivered = await summaryAsDelivered([
+        [],
+        [{ ...FAILURE_ROW, status }],
+        [],
+      ]);
+      expect(isConsoleSummary(delivered)).toBe(true);
+    },
+  );
+
+  test.each([...WORK_ITEM_KINDS])(
+    "failure of a work item of kind %s",
+    async (kind) => {
+      const delivered = await summaryAsDelivered([
+        [],
+        [{ ...FAILURE_ROW, kind }],
+        [],
+      ]);
+      expect(isConsoleSummary(delivered)).toBe(true);
+    },
+  );
+});
+
 describe("label tables cover the backend values", () => {
   test.each([...WORK_ITEM_STATUSES])("labels work item status %s", (status) => {
     expect(workItemStatusLabel(status)).not.toBe(UNKNOWN_STATUS_LABEL);
@@ -155,6 +247,15 @@ describe("label tables cover the backend values", () => {
   test.each([...APPROVAL_REQUEST_KINDS])("labels approval kind %s", (kind) => {
     expect(approvalKindLabel(kind, null)).not.toBe("承認依頼");
   });
+
+  test.each([...APPROVAL_REQUEST_STATUSES])(
+    "labels approval status %s",
+    (status) => {
+      expect(approvalStatusLabel(status, "issue_proposal")).not.toBe(
+        UNKNOWN_STATUS_LABEL,
+      );
+    },
+  );
 
   test.each(Object.keys(NOTICE_SEVERITY))("labels notice kind %s", (kind) => {
     expect(noticeKindLabel(kind)).not.toBe(UNKNOWN_NOTICE_LABEL);
