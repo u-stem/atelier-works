@@ -162,7 +162,7 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加だけにし、
 | `agent_runs` | Claudeの実行1回ごとのトークン数、費用、所要時間、終了コード |
 | `job_failures` | フローの失敗の記録。トークンはマスクしてから書く |
 | `deployments` | 自己更新によるデプロイの結果 |
-| `notices` | 人が対応すべき事項。PATの失効やSHAの不一致など |
+| `notices` | 人が対応すべき事項。PATの失効やSHAの不一致など。解決した人と時刻(`resolved_by`、`resolved_at`)も持つ |
 | `reviews` | pr_reviewの実行1回ごとの判定、総評、指摘、投稿したレビューのID |
 | `fix_rounds` | pr_fixの実行1回ごとの結果、返信、コミット |
 | `implement_rounds` | 実装フローのClaude実行1ラウンドごとの記録 |
@@ -211,6 +211,25 @@ Consoleの一覧と集計は次のviewを読む。
 | `v_fix_rounds` | PR修正の一覧 |
 
 要件定義書と監査レポートの詳細表示では、Consoleのbackend(`f/factory/steps/console_query.ts`)がテーブルを直接読む。読むのは`requirement_drafts`、`audit_reports`、`approval_requests`、`issue_proposals`、`work_items`である。
+
+`console_query`は、行の配列を返すviewのほかに、1つのオブジェクトを返す3つのviewを持つ。
+
+| view | 内容 |
+| --- | --- |
+| `summary` | サイドバーの件数と、要対応の一覧。承認待ち、作業項目の失敗、要対応の通知を返す |
+| `work_item_detail` | 作業項目1件の概要、要件定義の試行、承認の履歴、実装のラウンド、失敗。検査コマンドの出力は返さない |
+| `system_status` | 反映の状態、Consoleの取り込みの状態、作業項目の無い失敗、情報の通知、解決済みの通知 |
+
+次の6つのscriptは、tag `console`を付け、Console用のworkerで動かす。
+
+- `console_query`
+- `approval_decide`
+- `retry_work_item`
+- `audit_kickoff`
+- `notice_resolve`
+- `console_fetch_watch`
+
+どれも、Claudeの長いジョブがdefaultのworkerの枠を埋めても、Consoleを止めないためである。
 
 ## フローとスケジュール
 
