@@ -1,6 +1,6 @@
-summary: '[LIB] Console用workerの存在確認'
+summary: '[LIB] Console用workerの停止の検知'
 description: 内部ライブラリです。直接実行するものではありません。tag
-  consoleを受けるworkerが居るかを確かめ、居なければ通知を残してDiscordにも知らせます。
+  consoleのジョブが待たされていないかを確かめ、待たされていれば通知を残してDiscordにも知らせます。
 lock: '!inline f/factory/lib/console_worker.script.lock'
 kind: script
 schema:
