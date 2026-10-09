@@ -2814,12 +2814,27 @@ describe("deleteDeploymentsBefore", () => {
 });
 
 describe("deleteResolvedNoticesBefore", () => {
-  test("only deletes resolved notices past created_at", async () => {
+  test("deletes from factory.notices", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
-    const count = await deleteResolvedNoticesBefore(NOW, sql);
+    await deleteResolvedNoticesBefore(NOW, sql);
     expect(calls[0]?.text).toContain("DELETE FROM factory.notices");
+  });
+
+  test("only deletes resolved notices", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await deleteResolvedNoticesBefore(NOW, sql);
     expect(calls[0]?.text).toContain("resolved = true");
-    expect(count).toBe(1);
+  });
+
+  test("measures age from resolved_at, falling back to created_at", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await deleteResolvedNoticesBefore(NOW, sql);
+    expect(calls[0]?.text).toContain("COALESCE(resolved_at, created_at) <=");
+  });
+
+  test("returns the number of deleted rows", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 1 }]]);
+    expect(await deleteResolvedNoticesBefore(NOW, sql)).toBe(1);
   });
 });
 

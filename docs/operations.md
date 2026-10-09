@@ -587,6 +587,21 @@ GitHubのPATが失効していると、Issueの取得のスケジュール(`poll
 
 Consoleの**通知**タブには、Discordに送らない要対応の事項が残る。
 
+通知には重要度がある。
+「要対応」の通知は、解決するまでConsoleの要対応の一覧に残る。
+「情報」の通知は、人の行動が要らないので要対応の一覧に出さず、システムの画面に7日だけ出す。
+表に無い種類は「要対応」として扱う。
+「情報」の種類は次のとおりである。
+
+- `approval_notify_failed`
+- `claim_race_lost`
+- `supersede_failed`
+- `cleanup_worktrees_skipped`
+- `workspace_disk_usage`
+- `fix_feedback_association_excluded`
+- `labeler_association_denied`
+- `unsandboxed_check_commands`
+
 | 種類 | 意味 | 人がすること |
 | --- | --- | --- |
 | `approval_notify_failed` | 承認待ちの通知がDiscordに届かなかった | 承認依頼は記録済みなので、**承認**タブで判断する |
@@ -609,6 +624,18 @@ Consoleの**通知**タブには、Discordに送らない要対応の事項が�
 | `workspace_disk_usage` | 作業領域の掃除(毎日03:00)が記録したディスク使用量 | 増え続けていないか見る |
 | `console_fetch_failed` | Consoleの取り込みが失敗した | 通知の「次の操作」に従う |
 | `console_fetch_stale` | Consoleの取り込みの結果が30分以上更新されていない | 取り込みのコンテナ(`console_fetcher`)が動いているか確かめる |
+
+### 通知を解決する
+
+内容を確かめて対応を終えた通知は、Consoleで1件ずつ解決する。解決の操作は`notice_resolve`で、解決した人と時刻が通知に記録される。何を確かめたか分からないまま消せないよう、まとめて解決する操作は無い。
+
+次の3種類は、設定や権限の問題を示すので、Consoleから解決できない。「情報」として7日で一覧から外れる。
+
+- `unsandboxed_check_commands`
+- `labeler_association_denied`
+- `fix_feedback_association_excluded`
+
+解決済みの通知は、システムの画面に解決した順で残り、既定30日で消える。同じ状況がまた起きれば、新しい通知として記録される。
 
 ### 要件定義の作り直しを起動できなかったとき
 
@@ -833,7 +860,11 @@ Caddyfileを更新してCaddyを再起動するまでは、`/console/status.json
 | `digest_mismatch`、`manifest_mismatch`、`zip_unsafe_entry`、`unexpected_redirect` | 検証に失敗した | 今の版を配信し続けるので急ぎではないが、原因を調べる |
 | `asset_conflict` | 新しい版の`assets/`のファイルが、既にある同じ名前のファイルと中身が違う(`console/public/assets/`の名前の付け替え忘れなど) | 置き換えると配信中の版が壊れるので取り込まない。名前を直したcommitを`main`に入れる |
 
-取り込みの失敗は、noticeとDiscordのどちらにも出ない。ログで確かめる。
+取り込みの失敗は、10分ごとの見張り(`console_fetch_watch`)が通知とDiscordに知らせる。知らせる原因は、取り込みの失敗、結果が30分以上更新されていないこと、状態を読めないことである。同じ原因では繰り返さず、原因が変わったときに改めて知らせる。
+
+通知の種類は、失敗が`console_fetch_failed`、停止と読めないことが`console_fetch_stale`である。どちらも「要対応」で、正常に戻っても自動では解決しない。原因を確かめて取り除いたら、Consoleで通知を解決する。固定(`pin`)した状態は、更新が新しければ異常としない。
+
+Discordの通知とConsoleの通知には、上の表の次の操作が載る。詳しい原因は、取り込みのコンテナのログで確かめる。
 
 ### adminsワークスペースの組み込み項目
 

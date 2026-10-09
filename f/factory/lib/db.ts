@@ -2410,8 +2410,11 @@ export async function deleteDeploymentsBefore(
 }
 
 /**
- * 解決済み(`resolved = true`)で、`created_at`が`olderThan`より前の
+ * 解決済み(`resolved = true`)で、解決した時刻が`olderThan`より前の
  * `factory.notices`の行を削除し、行数を返す。
+ * 古さは`resolved_at`で数え、解決の記録が無い行(Consoleの解決の導入前や、
+ * Console以外で解決した行)は`created_at`で数える。
+ * 解決したばかりの古い通知を、解決の履歴として残すため。
  * 未解決のnoticeは、古さに関係なく削除しない。
  */
 export async function deleteResolvedNoticesBefore(
@@ -2420,7 +2423,8 @@ export async function deleteResolvedNoticesBefore(
 ): Promise<number> {
   const rows = await sql`
     DELETE FROM factory.notices
-    WHERE resolved = true AND created_at <= ${olderThan.toISOString()}::timestamptz
+    WHERE resolved = true
+      AND COALESCE(resolved_at, created_at) <= ${olderThan.toISOString()}::timestamptz
     RETURNING id
   `.fetch();
   return rows.length;
