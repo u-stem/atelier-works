@@ -632,7 +632,7 @@ Consoleの**通知**タブには、Discordに送らない要対応の事項が�
 
 Console用のworkerが居るかどうかは、自己更新(`self_update`)が毎回の最後に確かめる。
 確認は`WorkerService.listWorkers`で、5分以内にpingしたworkerの一覧の1ページを読む。
-確認できなかったときは、自己更新のジョブログに警告が残り、通知は出ない。
+確認できなかった回は、自己更新のジョブログに警告を残し、通知は出さない。
 警告は次の3種類である。
 
 - `could not check for a console worker`: workerの一覧を読むAPIが失敗した。権限が足りないときもこうなる。
