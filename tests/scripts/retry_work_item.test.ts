@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { IMPLEMENT_FLOW_PATH } from "../../f/factory/lib/implement_loop.ts";
+import type { WorkItemStatus } from "../../f/factory/lib/types.ts";
 import {
   activeIssueConflictError,
   activeIssueConflictErrorFrom,
@@ -348,7 +349,7 @@ describe("activeIssueConflictError", () => {
       { ...base, id: 3 },
     ]);
     expect(error.message).toBe(
-      "retry_work_item: another work item (id 9) is active for this Issue, retry after it finishes",
+      "retry_work_item: work item 9 (active) is the current cycle for this Issue, work item 3 will not be resumed, follow work item 9",
     );
   });
 
@@ -357,13 +358,13 @@ describe("activeIssueConflictError", () => {
       { ...base, id: 9, issue_number: 99 },
       { ...base, id: 4 },
     ]);
-    expect(error.message).toContain("(id 4)");
+    expect(error.message).toContain("work item 4 (active)");
   });
 
   test("omits the id when the active work item is not found", () => {
     const error = activeIssueConflictError(target, [{ ...base, id: 3 }]);
     expect(error.message).toBe(
-      "retry_work_item: another work item is active for this Issue, retry after it finishes",
+      "retry_work_item: another work item is the current cycle for this Issue, work item 3 will not be resumed",
     );
   });
 });
@@ -380,7 +381,7 @@ describe("activeIssueConflictErrorFrom", () => {
     const error = await activeIssueConflictErrorFrom(target, async () => [
       { ...target, id: 9, kind: "issue" as const },
     ]);
-    expect(error.message).toContain("(id 9)");
+    expect(error.message).toContain("work item 9 (active)");
   });
 
   test("falls back to the message without an id when the lookup fails", async () => {
@@ -388,7 +389,7 @@ describe("activeIssueConflictErrorFrom", () => {
       throw new Error("db down");
     });
     expect(error.message).toBe(
-      "retry_work_item: another work item is active for this Issue, retry after it finishes",
+      "retry_work_item: another work item is the current cycle for this Issue, work item 3 will not be resumed",
     );
   });
 });
@@ -406,18 +407,66 @@ describe("computeRestartPlan for a cancelled work item", () => {
 
 describe("newerCycleRefusal", () => {
   const target = { id: 3, kind: "issue" as const };
+  const refuse = (status: WorkItemStatus) =>
+    newerCycleRefusal(target, { id: 9, status }, "factory");
 
   test("allows the restart when no newer cycle exists", () => {
-    expect(newerCycleRefusal(target, false)).toBeNull();
+    expect(newerCycleRefusal(target, null, "factory")).toBeNull();
   });
 
-  test("refuses the restart when a newer cycle exists for the issue", () => {
-    expect(newerCycleRefusal(target, true)).toBe(
-      "retry_work_item: work item 3 is superseded because a newer cycle exists for this Issue, no action needed",
+  test("says that no action is needed while the newest cycle is in progress", () => {
+    expect(refuse("requirements_generating")).toBe(
+      "retry_work_item: work item 3 is superseded by work item 9 (status requirements_generating), which is in progress, no action needed",
     );
   });
 
+  test("treats an awaiting approval cycle as in progress", () => {
+    expect(refuse("awaiting_approval")).toContain("which is in progress");
+  });
+
+  test("treats an implementing cycle as in progress", () => {
+    expect(refuse("implementing")).toContain("which is in progress");
+  });
+
+  test("points at the newest cycle when it can be retried", () => {
+    expect(refuse("failed")).toBe(
+      "retry_work_item: work item 3 is superseded by work item 9 (status failed), retry work item 9 instead",
+    );
+  });
+
+  test.each(["needs_human", "expired", "blocked", "approved"] as const)(
+    "points at the newest cycle when its status is %s",
+    (status) => {
+      expect(refuse(status)).toContain("retry work item 9 instead");
+    },
+  );
+
+  test("tells to add the trigger label again when the newest cycle is otherwise terminal", () => {
+    expect(refuse("cancelled")).toBe(
+      'retry_work_item: work item 3 is superseded by work item 9 (status cancelled), add the "factory" label to the Issue again to start a new cycle',
+    );
+  });
+
+  test("names the configured trigger label", () => {
+    expect(
+      newerCycleRefusal(target, { id: 9, status: "pr_open" }, "run-factory"),
+    ).toContain('add the "run-factory" label');
+  });
+
+  test.each(["rejected", "pr_open"] as const)(
+    "tells to add the label again when the newest cycle is %s",
+    (status) => {
+      expect(refuse(status)).toContain("to start a new cycle");
+    },
+  );
+
   test("does not apply to pull request work items", () => {
-    expect(newerCycleRefusal({ id: 4, kind: "pr_fix" }, true)).toBeNull();
+    expect(
+      newerCycleRefusal(
+        { id: 4, kind: "pr_fix" },
+        { id: 9, status: "failed" },
+        "factory",
+      ),
+    ).toBeNull();
   });
 });

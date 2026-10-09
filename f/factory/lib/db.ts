@@ -12,6 +12,7 @@
 // クライアントとサーバーのバージョンが食い違う。
 import * as wmill from "windmill-client@1.817.0";
 import type { CleanupCounts } from "./cleanup_db_support.ts";
+import { type Logger, logger, maskSecrets } from "./log.ts";
 import {
   type AgentRunRecord,
   APPROVAL_REQUEST_KINDS,
@@ -442,6 +443,12 @@ export async function supersedeApprovedIssueWorkItems(
  * 古い承認を実装に使わないよう、新しいサイクルの開始で取り消す。
  * 挿入が負けたときは、何も取り消さない。
  *
+ * 挿入の後は例外を投げない。取り消しの文が失敗したときは、警告を残して
+ * `superseded`を空にして返す。挿入は済んでいて、呼び出し元は作業項目を登録できたものとして
+ * フローを起動する必要があるためである。取り消せなかった承認は、上のとおり
+ * 次の新しいサイクルで取り消され、それまでは`retry_work_item`が再開を断る。
+ * 挿入そのものの失敗は、そのまま投げる。
+ *
  * 挿入と取り消しは、別々に自動コミットされる2つの文にしている。
  * 1つの文にまとめると、取り消しは文の開始時点のスナップショットを見るので、
  * 文の実行中にコミットされた承認を取り逃す。
@@ -453,6 +460,7 @@ export async function supersedeApprovedIssueWorkItems(
 export async function insertIssueWorkItemUnlessActive(
   item: NewWorkItem,
   sql: SqlClient = defaultSqlClient,
+  log: Logger = logger("db"),
 ): Promise<InsertedIssueWorkItem | null> {
   const rows = await sql`
     INSERT INTO factory.work_items (
@@ -473,38 +481,57 @@ export async function insertIssueWorkItemUnlessActive(
   if (row === undefined) return null;
   const id = parseId(row.id, "id");
   if (item.issue_number === null) return { id, superseded: [] };
-  const superseded = await supersedeApprovedIssueWorkItems(
-    {
-      owner: item.owner,
-      repo: item.repo,
-      issue_number: item.issue_number,
-      cycle: item.cycle,
-    },
-    id,
-    sql,
-  );
-  return { id, superseded };
+  try {
+    const superseded = await supersedeApprovedIssueWorkItems(
+      {
+        owner: item.owner,
+        repo: item.repo,
+        issue_number: item.issue_number,
+        cycle: item.cycle,
+      },
+      id,
+      sql,
+    );
+    return { id, superseded };
+  } catch (err) {
+    // 挿入は済んでいる。ここで投げると、呼び出し元が作業項目の登録に失敗したと誤り、
+    // 作業項目だけが残って、フローが起動されない。
+    log.warn("superseding the approved work items failed", {
+      work_item_id: id,
+      error: maskSecrets(err instanceof Error ? err.message : String(err)),
+    });
+    return { id, superseded: [] };
+  }
 }
 
 /**
- * 同じIssueに、`cycle`より大きい`issue`の作業項目が(状態を問わず)あるかを返す。
+ * 同じIssueで、`cycle`より大きい`issue`の作業項目のうち、サイクルが最大のものを返す。無ければ`null`。
  * あれば、`cycle`の作業項目は新しいサイクルに置き換えられている。
- * `retry_work_item`が古い作業項目を再開しないために使う。
+ * `retry_work_item`が古い作業項目を再開せず、最新のサイクルの状態に合う案内を返すために使う。
  */
-export async function hasNewerIssueCycle(
+export async function newestNewerIssueCycle(
   owner: string,
   repo: string,
   issueNumber: number,
   cycle: number,
   sql: SqlClient = defaultSqlClient,
-): Promise<boolean> {
+): Promise<{ readonly id: number; readonly status: WorkItemStatus } | null> {
   const rows = await sql`
-    SELECT 1 FROM factory.work_items
+    SELECT id, status FROM factory.work_items
     WHERE kind = 'issue' AND owner = ${owner} AND repo = ${repo}
       AND issue_number = ${issueNumber}::integer AND cycle > ${cycle}::integer
+    ORDER BY cycle DESC
     LIMIT 1
   `.fetch();
-  return rows.length > 0;
+  const row = rows[0];
+  if (row === undefined) return null;
+  const status = row.status;
+  if (typeof status !== "string" || !isOneOf(status, WORK_ITEM_STATUSES)) {
+    throw new Error(
+      `db: newestNewerIssueCycle: unknown status ${String(status)}`,
+    );
+  }
+  return { id: parseId(row.id, "id"), status };
 }
 
 const ACTIVE_ISSUE_INDEX_NAME = "work_items_active_issue_key";

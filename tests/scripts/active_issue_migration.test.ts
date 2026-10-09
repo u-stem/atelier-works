@@ -183,3 +183,40 @@ describe("the sweep statement checked by scripts/test-db.sh", () => {
     expect(sweepFromApp(app)).not.toContain("$" + "{");
   });
 });
+
+describe("the newest newer cycle query checked by scripts/test-db.sh", () => {
+  // `scripts/test-db.sh`は、`newestNewerIssueCycle`の問い合わせを本物のPostgreSQLで
+  // 確かめるために、同じ文を書き写している。バインド値をpsqlの変数に置き換えて、全体の一致を確かめる。
+  const START = "SELECT id, status FROM factory.work_items";
+
+  const bound = (expression: string): string => `$\{${expression}}`;
+
+  const PLACEHOLDERS: readonly [string, string][] = [
+    [bound("owner"), ":'owner'"],
+    [bound("repo"), ":'repo'"],
+    [`${bound("issueNumber")}::integer`, ":'issue'::integer"],
+    [`${bound("cycle")}::integer`, ":'cycle'::integer"],
+  ];
+
+  function normalize(text: string): string {
+    return text.replace(/\s+/g, " ").replace(/;\s*$/, "").trim();
+  }
+
+  test("is the same statement as the application code", async () => {
+    const app = await Bun.file("f/factory/lib/db.ts").text();
+    const script = await Bun.file("scripts/test-db.sh").text();
+    let fromApp = app.slice(
+      app.indexOf(
+        START,
+        app.indexOf("export async function newestNewerIssueCycle"),
+      ),
+    );
+    fromApp = fromApp.slice(0, fromApp.indexOf("`.fetch()"));
+    for (const [from, to] of PLACEHOLDERS)
+      fromApp = fromApp.split(from).join(to);
+    const fromScript = script.slice(script.indexOf(START));
+    expect(normalize(fromScript.slice(0, fromScript.indexOf("\nSQL")))).toBe(
+      normalize(fromApp),
+    );
+  });
+});

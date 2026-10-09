@@ -1,5 +1,6 @@
-// 稼働中のIssueの一意インデックスへの違反と、その再実行の拒否を、
-// 人が読む文にする規則のテスト。別のサイクルが稼働中なので、人の操作は要らない。
+// 稼働中のIssueの一意インデックスへの違反を、人が読む文にする規則のテスト。
+// 承認の後の実装への移行が失敗したときに、この文が使われる。
+// 現在のサイクルが別にあるので、この作業項目は再開できない。
 
 import { describe, expect, test } from "bun:test";
 import {
@@ -9,46 +10,15 @@ import {
 
 const RAW =
   'duplicate key value violates unique constraint "work_items_active_issue_key"';
-const RETRY =
-  "retry_work_item: another work item (id 9) is active for this Issue, retry after it finishes";
 
 describe("the active issue index violation", () => {
   test("is described as another cycle being active", () => {
     expect(describeReason(RAW)).toBe("同じIssueで、別のサイクルが稼働中です");
   });
 
-  test("asks for no action and says to wait for the active cycle", () => {
+  test("asks for no action and says to follow the current cycle", () => {
     expect(nextActionFor(RAW)).toBe(
-      "操作は要りません。稼働中のサイクルの承認依頼か完了を待ってください",
-    );
-  });
-});
-
-describe("the retry refusal for an active issue", () => {
-  test("is described as another cycle being active", () => {
-    expect(describeReason(RETRY)).toBe("同じIssueで、別のサイクルが稼働中です");
-  });
-
-  test("says to wait for the active cycle, with or without the id", () => {
-    const withoutId =
-      "retry_work_item: another work item is active for this Issue, retry after it finishes";
-    expect(nextActionFor(withoutId)).toBe(nextActionFor(RETRY));
-  });
-});
-
-describe("the retry refusal for a superseded issue work item", () => {
-  const SUPERSEDED =
-    "retry_work_item: work item 3 is superseded because a newer cycle exists for this Issue, no action needed";
-
-  test("is described as a newer cycle having started", () => {
-    expect(describeReason(SUPERSEDED)).toBe(
-      "同じIssueで、より新しいサイクルが始まっています",
-    );
-  });
-
-  test("asks for no action", () => {
-    expect(nextActionFor(SUPERSEDED)).toBe(
-      "操作は要りません。新しいサイクルの結果を待ってください",
+      "操作は要りません。この作業項目は再開できないので、このIssueの現在のサイクルの作業項目に従ってください",
     );
   });
 });

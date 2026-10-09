@@ -17,10 +17,10 @@ import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "./lib/config.ts";
 import {
   getWorkItem,
-  hasNewerIssueCycle,
   isActiveIssueUniqueViolation,
   latestRequirementsApproval,
   listActiveIssueWorkItems,
+  newestNewerIssueCycle,
   setFlowJobId,
   setFlowJobIdIfUnset,
   updateStatusIfCurrent,
@@ -33,7 +33,12 @@ import { isRequirementsApprovedForAttempt } from "./lib/implement_support.ts";
 import { logger, maskSecrets } from "./lib/log.ts";
 import { PIPELINE_FLOW_PATH } from "./lib/pipeline_lease.ts";
 import { type JobState, readJobState } from "./lib/poll_support.ts";
-import { isOneOf, type WorkItem, type WorkItemStatus } from "./lib/types.ts";
+import {
+  isOneOf,
+  TERMINAL_WORK_ITEM_STATUSES,
+  type WorkItem,
+  type WorkItemStatus,
+} from "./lib/types.ts";
 
 const RESTARTABLE_STATUSES = [
   "failed",
@@ -62,21 +67,34 @@ export type RestartContext = {
 /**
  * Issueの作業項目に、より新しいサイクルがあるとき、再開を断る理由を返す。無ければ`null`。
  * 古いサイクルの作業項目を再開すると、新しいサイクルに置き換えられた要件定義を
- * 実装しかねない。新しいサイクルの結果を待つので、人の操作は要らない。
+ * 実装しかねない。
+ * 理由の文は英語の1文で、そのままConsoleとWindmillに表示される。翻訳する処理は無い。
+ * 次の操作は、最新のサイクルの状態で決まる。
+ * - 稼働中(終端でない)なら、そのサイクルが進むので、操作は要らない。
+ * - 再開できる状態(`RESTARTABLE_STATUSES`)なら、最新のサイクルを再実行する。
+ * - それ以外の終端なら、Issueにトリガーラベルを付け直して新しいサイクルを始める。
  * IssueでないPRの作業項目には適用しない。
  */
 export function newerCycleRefusal(
   workItem: Pick<WorkItem, "id" | "kind">,
-  newerCycleExists: boolean,
+  newest: { readonly id: number; readonly status: WorkItemStatus } | null,
+  triggerLabel: string,
 ): string | null {
-  if (workItem.kind !== "issue" || !newerCycleExists) return null;
-  return `retry_work_item: work item ${String(workItem.id)} is superseded because a newer cycle exists for this Issue, no action needed`;
+  if (workItem.kind !== "issue" || newest === null) return null;
+  const head = `retry_work_item: work item ${String(workItem.id)} is superseded by work item ${String(newest.id)} (status ${newest.status})`;
+  if (!isOneOf(newest.status, TERMINAL_WORK_ITEM_STATUSES)) {
+    return `${head}, which is in progress, no action needed`;
+  }
+  if (isOneOf(newest.status, RESTARTABLE_STATUSES)) {
+    return `${head}, retry work item ${String(newest.id)} instead`;
+  }
+  return `${head}, add the "${triggerLabel}" label to the Issue again to start a new cycle`;
 }
 
 /**
  * 終端の作業項目を稼働中の状態へ戻す更新が、同じIssueの別の稼働中の作業項目に阻まれたときの
- * 例外を作る。稼働中の作業項目が見つかれば、そのIDを文に含める。
- * 再実行は、その作業項目が終わってから行う。
+ * 例外を作る。その稼働中の作業項目がこのIssueの現在のサイクルなので、
+ * この作業項目は再開できず、現在のサイクルに従う。稼働中の作業項目が見つかれば、そのIDを文に含める。
  */
 export function activeIssueConflictError(
   workItem: Pick<WorkItem, "id" | "owner" | "repo" | "issue_number">,
@@ -93,9 +111,15 @@ export function activeIssueConflictError(
       item.repo === workItem.repo &&
       item.issue_number === workItem.issue_number,
   );
-  const which = other === undefined ? "" : ` (id ${String(other.id)})`;
+  const id = String(workItem.id);
+  if (other === undefined) {
+    return new Error(
+      `retry_work_item: another work item is the current cycle for this Issue, work item ${id} will not be resumed`,
+    );
+  }
+  const otherId = String(other.id);
   return new Error(
-    `retry_work_item: another work item${which} is active for this Issue, retry after it finishes`,
+    `retry_work_item: work item ${otherId} (active) is the current cycle for this Issue, work item ${id} will not be resumed, follow work item ${otherId}`,
   );
 }
 
@@ -284,16 +308,16 @@ export async function main(work_item_id: number): Promise<RetryWorkItemResult> {
     throw new Error(`retry_work_item: no work item with id ${work_item_id}`);
   }
 
-  const newerCycle =
+  const newest =
     workItem.kind === "issue" && workItem.issue_number !== null
-      ? await hasNewerIssueCycle(
+      ? await newestNewerIssueCycle(
           workItem.owner,
           workItem.repo,
           workItem.issue_number,
           workItem.cycle,
         )
-      : false;
-  const superseded = newerCycleRefusal(workItem, newerCycle);
+      : null;
+  const superseded = newerCycleRefusal(workItem, newest, config.trigger_label);
   if (superseded !== null) throw new Error(superseded);
 
   const implementReady =

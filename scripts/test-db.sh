@@ -194,6 +194,28 @@ SQL
     || die "could not read the intake result"
   [ "${statuses}" = "6:1:cancelled,6:2:failed,6:3:picked,7:1:approved,7:2:picked,10:3:picked,10:5:approved" ] \
     || die "unexpected statuses after the intake statements: ${statuses}"
+  # `newestNewerIssueCycle`の問い合わせを、Issue(6)(cycle 1から3)で確かめる。
+  # 大きいcycleがあれば最新の1行を返し、同じか小さいcycleだけなら何も返さない。
+  newest_newer() {
+    psql_exec "${SCRATCH_DB}" -q -t -A -v owner=o -v repo=r -v issue=6 -v cycle="$1" <<'SQL' \
+      || die "the newest newer cycle query failed for cycle $1"
+SELECT id, status FROM factory.work_items
+    WHERE kind = 'issue' AND owner = :'owner' AND repo = :'repo'
+      AND issue_number = :'issue'::integer AND cycle > :'cycle'::integer
+    ORDER BY cycle DESC
+    LIMIT 1
+SQL
+  }
+  local newer_from_2 newer_from_3 newer_from_4
+  newer_from_2="$(newest_newer 2 | tr -d '[:space:]')"
+  newer_from_3="$(newest_newer 3 | tr -d '[:space:]')"
+  newer_from_4="$(newest_newer 4 | tr -d '[:space:]')"
+  case "${newer_from_2}" in
+    *'|picked') ;;
+    *) die "expected the newest cycle (picked) after cycle 2, got '${newer_from_2}'" ;;
+  esac
+  [ -z "${newer_from_3}" ] || die "expected no newer cycle after cycle 3, got '${newer_from_3}'"
+  [ -z "${newer_from_4}" ] || die "expected no newer cycle after cycle 4, got '${newer_from_4}'"
   local superseded_events
   superseded_events="$(printf "SELECT count(*) FROM factory.work_item_events WHERE note LIKE 'superseded by a newer cycle%%';\n" \
     | psql_exec "${SCRATCH_DB}" -q -t -A)" \

@@ -18,7 +18,6 @@ import {
   getIssueProposal,
   getRequirementDraft,
   getWorkItem,
-  hasNewerIssueCycle,
   hasPriorReview,
   hasUnfinishedPrRun,
   insertApprovalRequest,
@@ -43,6 +42,7 @@ import {
   listPendingIssueProposals,
   listStaleTerminalWorkItems,
   listTrackedPrs,
+  newestNewerIssueCycle,
   nextCycleForIssue,
   recordAgentRun,
   recordDeployment,
@@ -74,6 +74,7 @@ import {
   updateStatusIfLeaseHolder,
   updateStatusIfLeaseHolderClearingFlowJobId,
 } from "../../f/factory/lib/db.ts";
+import type { Logger } from "../../f/factory/lib/log.ts";
 import { TERMINAL_WORK_ITEM_STATUSES } from "../../f/factory/lib/types.ts";
 
 type FakeCall = { text: string; values: unknown[] };
@@ -256,33 +257,106 @@ describe("insertIssueWorkItemUnlessActive", () => {
   });
 });
 
-describe("hasNewerIssueCycle", () => {
-  test("returns true when a newer cycle row exists", async () => {
-    const { sql } = createFakeSqlClient([[{ "?column?": 1 }]]);
-    expect(await hasNewerIssueCycle("o", "r", 12, 1, sql)).toBe(true);
+describe("newestNewerIssueCycle", () => {
+  test("returns the id and status of the newest larger cycle", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 9, status: "failed" }]]);
+    expect(await newestNewerIssueCycle("o", "r", 12, 1, sql)).toEqual({
+      id: 9,
+      status: "failed",
+    });
   });
 
-  test("returns false when no newer cycle row exists", async () => {
+  test("returns null when no larger cycle exists", async () => {
     const { sql } = createFakeSqlClient([[]]);
-    expect(await hasNewerIssueCycle("o", "r", 12, 1, sql)).toBe(false);
+    expect(await newestNewerIssueCycle("o", "r", 12, 1, sql)).toBeNull();
   });
 
   test("looks only at issue work items", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
-    await hasNewerIssueCycle("o", "r", 12, 1, sql);
+    await newestNewerIssueCycle("o", "r", 12, 1, sql);
     expect(calls[0]?.text).toContain("kind = 'issue'");
   });
 
   test("looks only at larger cycles", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
-    await hasNewerIssueCycle("o", "r", 12, 1, sql);
+    await newestNewerIssueCycle("o", "r", 12, 1, sql);
     expect(calls[0]?.text).toContain("cycle >  ? ::integer");
+  });
+
+  test("takes the newest of them", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await newestNewerIssueCycle("o", "r", 12, 1, sql);
+    expect(calls[0]?.text).toContain("ORDER BY cycle DESC");
   });
 
   test("passes the issue and the cycle", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
-    await hasNewerIssueCycle("o", "r", 12, 3, sql);
+    await newestNewerIssueCycle("o", "r", 12, 3, sql);
     expect(calls[0]?.values).toEqual(["o", "r", 12, 3]);
+  });
+});
+
+describe("insertIssueWorkItemUnlessActive when the sweep fails", () => {
+  function failingSweepSql(): { sql: SqlClient; calls: number } {
+    let calls = 0;
+    const sql: SqlClient = () => {
+      calls += 1;
+      const call = calls;
+      return {
+        fetch: () =>
+          call === 1
+            ? Promise.resolve([{ id: 7 }])
+            : Promise.reject(new Error("sweep failed")),
+        execute: () => Promise.resolve(),
+      };
+    };
+    return {
+      sql,
+      get calls() {
+        return calls;
+      },
+    };
+  }
+
+  function recordingLog(): { log: Logger; warns: string[] } {
+    const warns: string[] = [];
+    const log: Logger = {
+      info() {},
+      warn(message) {
+        warns.push(message);
+      },
+      error() {},
+    };
+    return { log, warns };
+  }
+
+  test("still returns the inserted id", async () => {
+    const { sql } = failingSweepSql();
+    const { log } = recordingLog();
+    const result = await insertIssueWorkItemUnlessActive(
+      NEW_WORK_ITEM,
+      sql,
+      log,
+    );
+    expect(result?.id).toBe(7);
+  });
+
+  test("returns no superseded items", async () => {
+    const { sql } = failingSweepSql();
+    const { log } = recordingLog();
+    const result = await insertIssueWorkItemUnlessActive(
+      NEW_WORK_ITEM,
+      sql,
+      log,
+    );
+    expect(result?.superseded).toEqual([]);
+  });
+
+  test("logs a warning", async () => {
+    const { sql } = failingSweepSql();
+    const { log, warns } = recordingLog();
+    await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql, log);
+    expect(warns).toEqual(["superseding the approved work items failed"]);
   });
 });
 

@@ -444,7 +444,7 @@ const defaultRegisterDeps: RegisterClaimedIssueDeps = {
 };
 
 /**
- * 取得したIssueの作業項目を登録し、そのIDと、同じ文で取り消した`approved`の作業項目を返す。
+ * 取得したIssueの作業項目を登録し、そのIDと、直後の文で取り消した`approved`の作業項目を返す。
  * 同じIssueの稼働中の作業項目が既にあって挿入されなかったときは、`null`を返す。
  * 並行する取得に先を越された場合で、そちらが作業を受け持つので、
  * `claim_race_lost`のnoticeを残すだけで、人には知らせない。
