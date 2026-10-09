@@ -25,8 +25,7 @@ import {
   notifyBestEffort,
 } from "./lib/discord.ts";
 import { type Logger, logger } from "./lib/log.ts";
-import type { NoticeRecord } from "./lib/types.ts";
-import { isRecord, isString } from "./lib/types.ts";
+import { isRecord, isString, type NoticeRecord } from "./lib/types.ts";
 import { type ReadTextFile, readTextFile } from "./lib/workspace.ts";
 
 /** 読んだstatus.json。`FetcherStatusLoad`と同じ形で、読めなかった場合を含む。 */

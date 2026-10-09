@@ -162,7 +162,7 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加だけにし、
 | `agent_runs` | Claudeの実行1回ごとのトークン数、費用、所要時間、終了コード |
 | `job_failures` | フローの失敗の記録。トークンはマスクしてから書く |
 | `deployments` | 自己更新によるデプロイの結果 |
-| `notices` | 人が対応すべき事項。PATの失効やSHAの不一致など。解決した人と時刻(`resolved_by`、`resolved_at`)も持つ |
+| `notices` | 人が対応すべき事項。PATの失効やSHAの不一致など。解決した人と時刻(`resolved_by`、`resolved_at`)も持ち、DBの掃除が解決した行の`resolved_by`は`cleanup_db`になる |
 | `reviews` | pr_reviewの実行1回ごとの判定、総評、指摘、投稿したレビューのID |
 | `fix_rounds` | pr_fixの実行1回ごとの結果、返信、コミット |
 | `implement_rounds` | 実装フローのClaude実行1ラウンドごとの記録 |
