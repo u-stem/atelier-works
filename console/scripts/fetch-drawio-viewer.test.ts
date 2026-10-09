@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import type { DrawioViewerPin } from "./drawio-viewer.ts";
+import { type DrawioViewerPin, viewerAssetName } from "./drawio-viewer.ts";
 import {
   fetchViewer,
   MAX_RETRIES,
@@ -38,7 +38,10 @@ function setup(steps: readonly Step[]) {
   const sleep = async (ms: number) => {
     sleeps.push(ms);
   };
-  const run = () => fetchViewer(pin, fetchImpl, writeImpl, sleep);
+  const run = (cached: Uint8Array | null = null) =>
+    fetchViewer(pin, fetchImpl, writeImpl, sleep, async (name) =>
+      name === viewerAssetName(pin) ? cached : null,
+    );
   return { calls, writes, sleeps, run };
 }
 
@@ -224,5 +227,42 @@ describe("fetchViewer: retries", () => {
 
   test("limits the viewer to 10MB", () => {
     expect(MAX_VIEWER_BYTES).toBe(10 * 1024 * 1024);
+  });
+});
+
+describe("fetchViewer: cache", () => {
+  test("does not fetch when the cached viewer matches the pin", async () => {
+    const t = setup([okResponse()]);
+    await t.run(BODY);
+    expect(t.calls).toHaveLength(0);
+  });
+
+  test("writes the cached viewer to the output", async () => {
+    const t = setup([okResponse()]);
+    await t.run(BODY);
+    expect(t.writes).toHaveLength(1);
+  });
+
+  test("returns ok for a cache hit", async () => {
+    const t = setup([okResponse()]);
+    expect((await t.run(BODY)).ok).toBe(true);
+  });
+
+  test("fetches when the cached viewer was tampered with", async () => {
+    const t = setup([okResponse()]);
+    await t.run(new TextEncoder().encode("poisoned"));
+    expect(t.calls).toHaveLength(1);
+  });
+
+  test("never writes the tampered cache content", async () => {
+    const t = setup([okResponse()]);
+    await t.run(new TextEncoder().encode("poisoned"));
+    expect(t.writes[0]?.bytes).toEqual(BODY);
+  });
+
+  test("fetches when nothing is cached", async () => {
+    const t = setup([okResponse()]);
+    await t.run(null);
+    expect(t.calls).toHaveLength(1);
   });
 });
