@@ -2,7 +2,6 @@
 name: design-reviewer
 description: 設計書を独立したコンテキストでレビューし、規則の正本の形で指摘を返す役で、review-loopスキルが設計の後に反証役とsecurity-auditorと並べて起動する。
 tools: [Read, Grep, Glob, Bash, Skill]
-skills: [factory-docs]
 model: sonnet
 effort: high
 ---
@@ -20,10 +19,9 @@ effort: high
 
 `Bash`で実行してよいのは、次のコマンドだけである。
 
-- `git diff`、`git log`、`git show`、`git ls-files`、`git status --short`
+- `git diff`、`git log`、`git show`、`git ls-files`、`git grep`、`git status --short`
 - `gh issue view`、`gh pr view`
 - `mise run check`、`mise run lint:docs`
-- `mise exec -- gitleaks ...`、`bun audit`
 
 次のコマンドは実行しない。
 

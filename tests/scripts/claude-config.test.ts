@@ -151,9 +151,17 @@ describe(".claude/agents", () => {
     expect(body(name)).toContain(".claude/skills/review-loop/rules.md");
   });
 
-  test.each(REVIEW_ROLES)("asks %s for the finding fields", (name) => {
-    expect(body(name)).toContain("原因: <原因の分類>");
-  });
+  const FINDING_FIELDS = ["重さ:", "種類:", "原因: <原因の分類>", "範囲:"];
+  const FINDING_CASES = REVIEW_ROLES.flatMap((name) =>
+    FINDING_FIELDS.map((field): [string, string] => [name, field]),
+  );
+
+  test.each(FINDING_CASES)(
+    "asks %s for the finding field %s",
+    (name, field) => {
+      expect(body(name)).toContain(field);
+    },
+  );
 
   test("makes security-auditor report the audited HEAD", () => {
     expect(body("security-auditor")).toContain("監査した HEAD: <sha>");
@@ -165,6 +173,10 @@ describe(".claude/agents", () => {
 
   test("makes triage decide by the numbered criteria", () => {
     expect(body("triage")).toContain("見送る(基準<番号>)");
+  });
+
+  test("makes triage report the kind before and after reclassifying", () => {
+    expect(body("triage")).toContain("種類(前→後)");
   });
 });
 
@@ -197,4 +209,13 @@ describe("repository-owned Claude config", () => {
   test.each(RULES_HEADINGS)("keeps %s in the review rules", (heading) => {
     expect(readFileSync(RULES, "utf8")).toContain(heading);
   });
+
+  const SECURITY_CAUSES = ["注入", "秘密値の漏れ", "権限の拡大"];
+
+  test.each(SECURITY_CAUSES)(
+    "lists the cause %s in the review rules",
+    (cause) => {
+      expect(readFileSync(RULES, "utf8")).toContain(`| ${cause} |`);
+    },
+  );
 });

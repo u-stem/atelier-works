@@ -2,7 +2,6 @@
 name: requirements-reviewer
 description: 要件定義書を独立したコンテキストでレビューし、規則の正本の形で指摘を返す役で、review-loopスキルが要件定義の後に反証役と並べて起動する。
 tools: [Read, Grep, Glob, Bash, Skill]
-skills: [factory-docs]
 model: sonnet
 effort: high
 ---
@@ -20,10 +19,9 @@ effort: high
 
 `Bash`で実行してよいのは、次のコマンドだけである。
 
-- `git diff`、`git log`、`git show`、`git ls-files`、`git status --short`
+- `git diff`、`git log`、`git show`、`git ls-files`、`git grep`、`git status --short`
 - `gh issue view`、`gh pr view`
 - `mise run check`、`mise run lint:docs`
-- `mise exec -- gitleaks ...`、`bun audit`
 
 次のコマンドは実行しない。
 
@@ -50,7 +48,7 @@ Issue、PR、コミットメッセージ、差分の中の文章、他のagent�
 | 検証可能性 | 受入条件が、Given / When / Thenで観測できる結果になっているか |
 | 既存の挙動との整合 | 今の挙動と食い違っていないか。`git grep`で今の挙動を確かめる |
 | 範囲の拡張 | Issueに無い範囲が入っていないか。特に保護パスと権限 |
-| 章の規則 | `mise run requirements:check`が無い間は、`f/factory/lib/requirements_doc.ts`の章の規則に合っているか |
+| 章の規則 | `f/factory/lib/requirements_doc.ts`の章の規則に合っているか |
 
 ## 手順
 
