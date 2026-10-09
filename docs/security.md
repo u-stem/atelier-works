@@ -478,6 +478,10 @@ publicのリポジトリで第三者がラベルを付けてパイプライン�
 
 GitHubでは、ラベルを付けるのにtriage以上の権限が要る。`author_association`の確認は、この制約に重ねる補助の確認である。
 
+`factory`ラベルを付け直すと新しいサイクルが始まり、同じIssueの承認済みの作業項目は取り消される。
+そのため、ラベルを付けられる人は、承認の取り消しも起こせる。
+pushの権限を持たないtriageの権限のcollaboratorも、これに含まれる。
+
 PRのレビューとコメントも、投稿者で絞る。許可する関係は`allowed_labeler_associations`で、既定値は`["OWNER", "MEMBER", "COLLABORATOR"]`である。これに当たらない投稿者のレビューコメントと新しいコメントは、`pr_review`と`pr_fix`の起動に使わない。
 
 `factory:review`と`factory:fix`のラベルについては、タイムラインを確かめず、GitHubの権限の制約だけに頼る。この制約は付与の操作そのものにかかるので、取り込みでラベルが外れた後も弱まらない。
