@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 // 起動スクリプトの契約は終了コードそのものなので、実際のshで実行して確かめる。
@@ -43,5 +45,34 @@ describe("run.sh", () => {
   test("passes the deny decision of a real hook through", () => {
     const result = launch(["bash-guard"], DENIED_COMMAND, PATH_WITH_BUN);
     expect(result.stdout.toString()).toContain('"permissionDecision":"deny"');
+  });
+});
+
+/** PATHの先頭に置く偽の`mise`を作る。`body`がmiseの中身になる。 */
+function withFakeMise<T>(body: string, run: (path: string) => T): T {
+  const directory = mkdtempSync(join(tmpdir(), "fake-mise-"));
+  try {
+    writeFileSync(join(directory, "mise"), `#!/bin/sh\n${body}\n`);
+    chmodSync(join(directory, "mise"), 0o755);
+    return run(`${directory}:/usr/bin:/bin`);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+describe("run.sh with mise", () => {
+  test("runs bun through mise when bun is not on PATH", () => {
+    const result = withFakeMise(
+      `shift 3\nexec "${process.execPath}" "$@"`,
+      (path) => launch(["bash-guard"], DENIED_COMMAND, path),
+    );
+    expect(result.stdout.toString()).toContain('"permissionDecision":"deny"');
+  });
+
+  test("exits with 2 when mise cannot run bun", () => {
+    const result = withFakeMise("exit 1", (path) =>
+      launch(["bash-guard"], DENIED_COMMAND, path),
+    );
+    expect(result.exitCode).toBe(2);
   });
 });

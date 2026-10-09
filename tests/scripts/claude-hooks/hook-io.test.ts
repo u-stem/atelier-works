@@ -58,6 +58,19 @@ describe("parseBashHookInput", () => {
     expect(parseBashHookInput(input, "/fallback")).toBeNull();
   });
 
+  test("throws when tool_name is missing", () => {
+    const input = JSON.stringify({ tool_input: { command: "ls" } });
+    expect(() => parseBashHookInput(input, "/fallback")).toThrow("tool_name");
+  });
+
+  test("throws when tool_name is not a string", () => {
+    const input = JSON.stringify({
+      tool_name: 7,
+      tool_input: { command: "ls" },
+    });
+    expect(() => parseBashHookInput(input, "/fallback")).toThrow("tool_name");
+  });
+
   test("throws when the Bash command is missing", () => {
     const input = JSON.stringify({ tool_name: "Bash", tool_input: {} });
     expect(() => parseBashHookInput(input, "/fallback")).toThrow(
@@ -116,5 +129,25 @@ describe("runHook", () => {
       "/fallback",
     );
     expect(result.exitCode).toBe(2);
+  });
+
+  test("exits with 2 when the rule does not finish before the deadline", async () => {
+    const result = await runHook(
+      bashInput(),
+      () => new Promise<never>(() => {}),
+      "/fallback",
+      10,
+    );
+    expect(result.exitCode).toBe(2);
+  });
+
+  test("names the deadline in the message", async () => {
+    const result = await runHook(
+      bashInput(),
+      () => new Promise<never>(() => {}),
+      "/fallback",
+      10,
+    );
+    expect(result.stderr).toContain("did not finish");
   });
 });

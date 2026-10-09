@@ -66,8 +66,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh \"${CLAUDE_PROJECT_DIR}/scripts/claude-hooks/run.sh\" bash-guard",
-            "timeout": 30
+            "command": "sh -c '[ -f \"$1\" ] || { echo \"claude hook: launcher not found at $1; denying the tool call\" >&2; exit 2; }; exec sh \"$@\"' _ \"${CLAUDE_PROJECT_DIR}/scripts/claude-hooks/run.sh\" bash-guard",
+            "timeout": 10
           }
         ]
       }

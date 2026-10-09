@@ -39,6 +39,9 @@ export function parseBashHookInput(
 ): BashToolInput | null {
   const parsed: unknown = JSON.parse(stdin);
   if (!isRecord(parsed)) throw new Error("hook input is not a JSON object");
+  if (typeof parsed.tool_name !== "string") {
+    throw new Error("hook input has no tool_name string");
+  }
   if (parsed.tool_name !== "Bash") return null;
   const toolInput = parsed.tool_input;
   if (!isRecord(toolInput) || typeof toolInput.command !== "string") {
@@ -68,16 +71,31 @@ export function renderDecision(decision: Decision): HookResult {
   return { stdout: `${JSON.stringify(output)}\n`, stderr: "", exitCode: 0 };
 }
 
+/**
+ * 判定を待つ時間の上限(ミリ秒)。
+ * Claude Codeはタイムアウトしたフックの呼び出しを止めず、通常の権限の流れに進める。
+ * 登録するタイムアウトより短くして、止まったときはこちらで終了コード2の拒否にする。
+ */
+export const DEADLINE_MS = 8000;
+
 /** 入力を読み、ルールで判定する。失敗は終了コード2の結果にして返し、例外を外に出さない。 */
 export async function runHook(
   stdin: string,
   evaluate: (input: BashToolInput) => Promise<Decision>,
   fallbackCwd: string,
+  deadlineMs: number = DEADLINE_MS,
 ): Promise<HookResult> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`the rule did not finish in ${deadlineMs} ms`)),
+      deadlineMs,
+    );
+  });
   try {
     const input = parseBashHookInput(stdin, fallbackCwd);
     if (input === null) return renderDecision(ALLOW);
-    return renderDecision(await evaluate(input));
+    return renderDecision(await Promise.race([evaluate(input), deadline]));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return {
@@ -85,6 +103,8 @@ export async function runHook(
       stderr: `claude hook failed, denying the tool call: ${message}\n`,
       exitCode: 2,
     };
+  } finally {
+    clearTimeout(timer);
   }
 }
 

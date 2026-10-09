@@ -276,26 +276,87 @@ FactoryのheadlessなClaudeの実行は`.claude/`を読まないので、この�
 | 無条件のforce push(`--force`、`-f`、`+`で始まるrefspec) | 公開した履歴を書き換えると、ほかの作業やFactoryの`pr_fix`の変更を消しうる |
 | `main`と`master`へのpush(`--all`と`--mirror`を含む) | mainへの変更は、PRとCIを通してだけ入れる |
 | subagentからのpush | subagentには、pushの前に確認する相手がいない |
-| `--no-verify`、`git commit -n`、`core.hooksPath`の変更、`LEFTHOOK=0` | lefthookの検査を飛ばすと、壊れた変更や秘密値がpushされる |
+| `xargs`の引数で渡す`git push`と`git commit` | 標準入力から来る引数は、実行するまで分からない |
+| `--no-verify`、`git commit -n`、`core.hooksPath`の設定、`LEFTHOOK`を`0`、`false`、`off`、`no`にすること | lefthookの検査を飛ばすと、壊れた変更や秘密値がpushされる |
 | `LEFTHOOK_EXCLUDE`に`wmill-metadata`と`wmill-metadata-check`以外を書くこと | AGENTS.mdが飛ばしてよいとするのは、この2つだけである |
+| `lefthook uninstall`、`.git/hooks`と`.git/config`への書き込み | gitのフックを外せる |
+| `git -c alias.*`、`GIT_CONFIG_COUNT`などのgit設定の環境変数 | `push`や`core.hooksPath`を別の名前や設定の裏から差し込める |
+| パイプなどで標準入力からコードを読むシェル(`bash -s`を含む) | 中身を判定できない |
+| `mise exec`の中のシェル、インラインのコードを渡したインタープリター、`env`、`printenv` | `mise exec`は`mise.local.toml`の秘密値を環境変数として渡すので、値を表示できる |
 | 秘密値のファイル(`mise.local.toml`とその別名、`.wmill/`の`remotes.ndjson`、`.env`系)を名前で指すコマンド | `Read`の拒否はBashに効かず、`cat`や`grep`で読むと値が会話の記録に残る |
-| 再帰的な`grep`、`-u`や`--no-ignore`を付けた`rg`、`git grep --no-index` | gitignore済みの秘密値のファイルまで読む |
+| リポジトリの根、`infra`、`.wmill`を起点にした再帰的な`grep`、`-u`や`--no-ignore`を付けた`rg`、`git grep --no-index` | gitignore済みの秘密値のファイルまで読む |
 
 `--force-with-lease`と`--force-if-includes`は、subagentではないセッションが`main`と`master`以外のブランチへpushするときに限って許す。
 リモートが想定と違えば失敗するので、他の人の変更を上書きせずに、自分のブランチの履歴を直せる。
 
 拒否のメッセージには、代わりの操作を示す。
 再帰的な検索の代わりには、gitignoreを尊重する`rg`、`git grep`、Grepツールを使う。
+`mise exec`の代わりには、ツールを直接指定するか、`mise run`のタスクを使う。
+秘密値が設定済みかどうかは`mise run doctor`で確かめる。
+
+### 判定の範囲
 
 フックは、コマンドを字句に分けてから判定する。
-引用符の中の文字列やヒアドキュメントの本文には反応しない。
-`ls`や`git check-ignore`のように名前だけを扱うコマンドは、秘密値のファイルの名前を書いても拒否しない。
+引用符の中の文字列と、区切り語を引用符で囲んだヒアドキュメントの本文は、コマンドとして扱わない。
+`sh -c`、`eval`、`$(...)`、バッククォートの中身は、別のコマンドとして判定する。
+標準入力からコードを読むシェルは、入力がヒアストリングかヒアドキュメントならその中身を判定する。
+
+秘密値のファイルの判定は、ファイルを読む引数とリダイレクトの先にだけ働く。
+検索パターン(`rg mise.local.toml docs`の`mise.local.toml`)と、`sed`や`awk`の式の中の名前は拒否しない。
+`ls`、`test`、`[[`、`echo`、`git check-ignore`のように中身を読まないコマンドも、名前を書いて拒否しない。
+`process.env`のような識別子と、空白を含む文章は、ファイル名として扱わない。
+`rm -rf dist/*`のように`*`だけで終わるglobは拒否しない。
+`*.toml`のような秘密値のファイル名に当たりうるglobは、リポジトリの根、`infra`、`.wmill`の中のときだけ拒否する。
+
+再帰的な`grep`と、`-u`や`--no-ignore`を付けた`rg`は、検索の起点がリポジトリの根、`infra`、`.wmill`、またはそれらを含むディレクトリのときだけ拒否する。
+`scripts/`のようなサブディレクトリの検索は拒否しない。
+
+`--no-verify`は、フックを実行するgitのサブコマンド(`commit`、`push`、`merge`、`rebase`、`am`、`cherry-pick`、`revert`、`pull`)でだけ拒否する。
+`--`より後ろはパスとして扱う。
+`git config core.hooksPath`は、値を設定するときだけ拒否する。読むことと`--unset`は拒否しない。
+
+`git push`のブランチを省いたときの今のブランチは、同じコマンド行の前にある文字どおりの`cd`と`pushd`をたどって調べる。
+移動先が変数のときは今のブランチを調べられないので、そのpushだけを拒否する。
+push先のrefspecは、`refs/heads/`と`heads/`を外して`main`、`master`と比べ、`*`を含むものは拒否する。
+
+`mise exec`の拒否は、名前を指定したツール(`mise exec -- gitleaks`、`mise exec -- wmill`、`mise exec -- bun test`)を妨げない。
+`mise run`のタスクはリポジトリが定義するので、拒否しない。
+
+### 失敗したときの動作
 
 判定できないときは、拒否する側に倒す。
 字句に分けられないコマンド、push先が実行するまで決まらないコマンド、bunが見つからないとき、フック自身の異常終了がこれに当たる。
 Claude Codeは終了コード2以外のフックの失敗ではツールの呼び出しを止めないので、`scripts/claude-hooks/run.sh`が失敗を終了コード2に揃える。
+起動スクリプトが見つからないときは、登録したコマンドが終了コード2で拒否する。
+`CLAUDE_PROJECT_DIR`が空のときも同じである。
 
-変数に入れたパスやコマンド、シェルのエイリアス、`find -exec`、スクリプトのファイルの中身は判定しない。
+bunと`mise`のどちらも無い環境では、すべてのBashを拒否する。
+クラウドのセッションでは、最初のBashの前にbunを使えるようにしておく。
+
+Claude Codeは、タイムアウトしたフックのツール呼び出しを止めず、通常の権限の確認に進める。
+そのため、フックは登録するタイムアウト(10秒)より短い8秒で判定を打ち切り、終了コード2で拒否する。
+gitの実行にも3秒の上限を付ける。
+bunの起動そのものが止まったときだけ、タイムアウトの扱いになる。
+
+### 拒否された操作を人が実行する
+
+人は、拒否された操作を自分で実行できる。
+プロンプトの先頭に`!`を付けると、Claudeを通さずにシェルがコマンドを直接実行するので、フックは動かない。
+フックをすべて止めるときは、gitignore済みの`.claude/settings.local.json`に`"disableAllHooks": true`を書く。
+この設定はすべてのフックを止めるので、必要な間だけにして、済んだら消す。
+
+### 判定しないもの
+
+次の操作は判定できないので、拒否しない。
+
+- 変数に入れたパスやコマンド(`cat "$FILE"`、`"$GIT" push`、`eval $CMD`)
+- シェルのエイリアスと関数
+- `find -exec`、`env -S`、標準入力から名前を読む`xargs`(`git push`と`git commit`を除く)
+- スクリプトのファイルの中身
+- gitの省略形のオプション(`--forc`など)
+- 式の中でファイルを開く操作(`sed`の`r`コマンド、`perl -e`など)
+- サブシェルの中の`cd`の範囲(外側にも効くものとして扱う)
+
 フックは誤操作を止める仕組みで、意図した迂回は防げない。
 
 ## draw.ioビューアーのプライバシー

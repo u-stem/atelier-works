@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 const ROOT = join(import.meta.dir, "../../..");
+const PATH_WITH_BUN = `${dirname(process.execPath)}:/usr/bin:/bin`;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -15,13 +16,15 @@ function readSettings(): Record<string, unknown> {
   return isRecord(parsed) ? parsed : {};
 }
 
-/** `.claude/settings.json`のPreToolUse(Bash)に登録したフックのコマンドを返す。 */
-function bashHookCommands(): string[] {
+type RegisteredHook = { readonly command: string; readonly timeout: unknown };
+
+/** `.claude/settings.json`のPreToolUse(Bash)に登録したフックを返す。 */
+function bashHooks(): RegisteredHook[] {
   const hooks = readSettings().hooks;
   if (!isRecord(hooks)) return [];
   const preToolUse = hooks.PreToolUse;
   if (!Array.isArray(preToolUse)) return [];
-  const commands: string[] = [];
+  const registered: RegisteredHook[] = [];
   for (const entry of preToolUse) {
     if (
       !isRecord(entry) ||
@@ -31,10 +34,14 @@ function bashHookCommands(): string[] {
       continue;
     for (const hook of entry.hooks) {
       if (isRecord(hook) && typeof hook.command === "string")
-        commands.push(hook.command);
+        registered.push({ command: hook.command, timeout: hook.timeout });
     }
   }
-  return commands;
+  return registered;
+}
+
+function bashHookCommands(): string[] {
+  return bashHooks().map((hook) => hook.command);
 }
 
 function denyRules(): string[] {
@@ -45,23 +52,91 @@ function denyRules(): string[] {
   );
 }
 
+/** 登録したコマンドを、Claude Codeと同じくshで実行する。 */
+function runRegistered(hook: string, projectDir: string, stdin: string) {
+  const command = bashHookCommands().find((candidate) =>
+    candidate.endsWith(` ${hook}`),
+  );
+  return Bun.spawnSync(["/bin/sh", "-c", command ?? "exit 99"], {
+    stdin: Buffer.from(stdin),
+    env: { PATH: PATH_WITH_BUN, CLAUDE_PROJECT_DIR: projectDir },
+  });
+}
+
+const DENIED_COMMAND = JSON.stringify({
+  hook_event_name: "PreToolUse",
+  tool_name: "Bash",
+  tool_input: { command: "git commit --no-verify -m x" },
+  cwd: "/repo",
+});
+
 describe(".claude/settings.json", () => {
   test.each(["bash-guard"])("registers the %s hook for Bash", (hook) => {
-    expect(bashHookCommands()).toContain(
-      `sh "\${CLAUDE_PROJECT_DIR}/scripts/claude-hooks/run.sh" ${hook}`,
-    );
+    expect(
+      bashHookCommands().some(
+        (command) =>
+          command.includes(
+            `"\${CLAUDE_PROJECT_DIR}/scripts/claude-hooks/run.sh"`,
+          ) && command.endsWith(` ${hook}`),
+      ),
+    ).toBe(true);
   });
 
   test("points every Bash hook at an existing script", () => {
     const missing = bashHookCommands()
-      .map((command) => /run\.sh" ([a-z-]+)$/.exec(command)?.[1] ?? command)
+      .map((command) => / ([a-z-]+)$/.exec(command)?.[1] ?? command)
       .filter(
         (hook) => !existsSync(join(ROOT, "scripts/claude-hooks", `${hook}.ts`)),
       );
     expect(missing).toEqual([]);
   });
 
+  test("registers every Bash hook with a timeout of 10 seconds or less", () => {
+    const slow = bashHooks().filter(
+      (hook) => typeof hook.timeout !== "number" || hook.timeout > 10,
+    );
+    expect(slow).toEqual([]);
+  });
+
   test("denies reading the wmill profiles", () => {
     expect(denyRules()).toContain("Read(**/.wmill/**/remotes.ndjson)");
+  });
+});
+
+describe("the registered Bash guard command", () => {
+  test("denies the tool call when CLAUDE_PROJECT_DIR is empty", () => {
+    expect(runRegistered("bash-guard", "", DENIED_COMMAND).exitCode).toBe(2);
+  });
+
+  test("denies the tool call when the launcher does not exist", () => {
+    expect(
+      runRegistered("bash-guard", "/nonexistent", DENIED_COMMAND).exitCode,
+    ).toBe(2);
+  });
+
+  test("names the missing launcher", () => {
+    const result = runRegistered("bash-guard", "", DENIED_COMMAND);
+    expect(result.stderr.toString()).toContain("launcher not found");
+  });
+
+  test("runs the guard when CLAUDE_PROJECT_DIR is set", () => {
+    const result = runRegistered("bash-guard", ROOT, DENIED_COMMAND);
+    expect(result.stdout.toString()).toContain('"permissionDecision":"deny"');
+  });
+});
+
+describe("docs/security.md", () => {
+  const security = readFileSync(join(ROOT, "docs/security.md"), "utf8");
+
+  test("explains how a person runs a blocked command", () => {
+    expect(security).toContain("disableAllHooks");
+  });
+
+  test("explains the shell mode of the prompt", () => {
+    expect(security).toContain("`!`");
+  });
+
+  test("explains what happens when the hook times out", () => {
+    expect(security).toContain("タイムアウト");
   });
 });
