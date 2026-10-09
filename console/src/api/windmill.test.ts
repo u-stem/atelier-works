@@ -31,10 +31,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 describe("SCRIPT_PATHS", () => {
   test("allows only the scripts the console calls", () => {
-    expect(Object.keys(SCRIPT_PATHS).sort()).toEqual([
-      "approval_decide",
-      "console_query",
-    ]);
+    expect(Object.keys(SCRIPT_PATHS)).toEqual(["console_query"]);
   });
 });
 
@@ -49,6 +46,7 @@ describe("isScriptName", () => {
     "__proto__",
     "hasOwnProperty",
     "f/factory/steps/console_query",
+    "approval_decide",
     "",
   ])("rejects %s", (name) => {
     expect(isScriptName(name)).toBe(false);
@@ -61,14 +59,6 @@ describe("runScript request", () => {
     await runScript("console_query", { view: "summary" }, { fetchFn });
     expect(calls[0]?.input).toBe(
       "/api/w/factory/jobs/run_wait_result/p/f/factory/steps/console_query",
-    );
-  });
-
-  test("uses the approval_decide path", async () => {
-    const { fetchFn, calls } = recordingFetch(jsonResponse({}));
-    await runScript("approval_decide", {}, { fetchFn });
-    expect(calls[0]?.input).toBe(
-      "/api/w/factory/jobs/run_wait_result/p/f/factory/approval_decide",
     );
   });
 

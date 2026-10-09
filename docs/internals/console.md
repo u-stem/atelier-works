@@ -103,7 +103,8 @@ Consoleは、`src/api/windmill.ts`の`runScript`だけを通してWindmillのscr
 `POST /api/w/factory/jobs/run_wait_result/p/<path>`を、`credentials: "same-origin"`と`cache: "no-store"`で呼ぶ。
 ログインのCookieだけで動くので、トークンは持たない。
 
-呼べるscriptは、`SCRIPT_PATHS`の許可リストにある`console_query`と`approval_decide`だけである。
+呼べるscriptは、`SCRIPT_PATHS`の許可リストにある`console_query`だけである。
+読み取り専用の画面だけを持つので、書き込みのscriptは許可リストに入れない。操作の画面を足すときに、そのscriptを足す。
 パスは呼び出し側の名前から引き、外から受け取った文字列では呼ばない。
 Consoleは管理者のCookieで動くので、呼べる範囲を固定する。
 

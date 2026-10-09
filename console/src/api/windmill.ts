@@ -7,7 +7,6 @@ import { classifyRunResponse, type RunResult } from "./errors.ts";
 /** Consoleが呼んでよいscript。キーが呼び出し側の名前、値がWindmillのパス。 */
 export const SCRIPT_PATHS = {
   console_query: "f/factory/steps/console_query",
-  approval_decide: "f/factory/approval_decide",
 } as const;
 
 export type ScriptName = keyof typeof SCRIPT_PATHS;
