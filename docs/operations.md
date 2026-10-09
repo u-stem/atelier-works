@@ -805,7 +805,8 @@ Factory Console(`f/factory/factory_console__raw_app/`)は、raw appとしてリ�
 
 `console/`の変更は、`main`にマージされてCIが通れば、数分で`console_fetcher`が取り込んで反映する。
 `self_update`は関与しない。
-`console`ジョブは、draw.ioのビューアをraw.githubusercontent.comから取得する。取得に失敗したら、CIのジョブを再実行する。手順は[Consoleの配信の仕様](internals/console.md)の「ビューアの取得」にある。
+`console`ジョブは、draw.ioのビューアを外部から取得する。
+取得に失敗したときの対応は、[Consoleの配信の仕様](internals/console.md)の「ビューアの取得」にある。
 `infra/console_fetcher/`の変更は、ほかの`infra/`と同じく次の`mise run up`で反映される。
 `infra/Caddyfile`は`mise run up`では反映されないので、Caddyを再起動する。
 Caddyを再起動するまで、`/console/drawio.html`には`frame-ancestors 'none'`のヘッダーが付き、図のページを埋め込めない。
