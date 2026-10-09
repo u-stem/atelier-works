@@ -191,16 +191,14 @@ export function nextUnknownCount(
 export type WatchConsoleWorkerDeps = ConsoleWorkerCheckDeps & {
   /** Windmillのstateを読む。 */
   readonly getState: () => Promise<unknown>;
-  /** Windmillのstateに書く。 */
-  readonly setState: (state: {
-    readonly console_worker_unknown_count: number;
-  }) => Promise<void>;
+  /** Windmillのstateに書く。stateの全体を置き換える。 */
+  readonly setState: (state: Record<string, unknown>) => Promise<void>;
 };
 
 /**
  * workerの有無を確かめ、確認できなかった回数をstateに数える。
  * `CONSOLE_WORKER_UNKNOWN_LIMIT`回続けて確認できなかったら、noticeを残す(新しく挿入したときだけDiscordにも送る)。
- * 確認できたら回数を0に戻す。stateを読めなければ0として数え、書けなければ警告だけにする。
+ * 確認できたら回数を0に戻す。stateのほかのキーは保つ。stateを読めなければ0として数え、書けなければ警告だけにする。
  * 呼び出し元の処理を止めないよう、例外は投げない。
  */
 export async function watchConsoleWorker(
@@ -208,17 +206,22 @@ export async function watchConsoleWorker(
 ): Promise<ConsoleWorkerCheck> {
   const result = await checkConsoleWorker(deps);
   try {
-    let previous = 0;
+    let stored: Record<string, unknown> = {};
     try {
-      previous = parseUnknownCount(await deps.getState());
+      const state = await deps.getState();
+      if (isRecord(state)) {
+        stored = state;
+      }
     } catch (err) {
       deps.log.warn("could not read the console worker check state", {
         error: maskSecrets(String(err)),
       });
     }
+    const previous = parseUnknownCount(stored);
     const count = nextUnknownCount(previous, result);
     if (count !== previous) {
-      await deps.setState({ console_worker_unknown_count: count });
+      // stateの全体を置き換える書き込みなので、ほかのキーは読んだ値のまま残す。
+      await deps.setState({ ...stored, console_worker_unknown_count: count });
     }
     if (count >= CONSOLE_WORKER_UNKNOWN_LIMIT) {
       await recordAndNotify(deps, CONSOLE_WORKER_CHECK_FAILED_NOTICE, {

@@ -143,6 +143,7 @@ type Harness = {
 function harness(options: {
   readonly response: () => Promise<unknown>;
   readonly storedCount?: number;
+  readonly storedState?: unknown;
   readonly noticeInserted?: boolean;
   readonly addNoticeThrows?: boolean;
   readonly notifyThrows?: boolean;
@@ -174,6 +175,7 @@ function harness(options: {
       },
       getState: async () => {
         if (options.getStateThrows === true) throw new Error("state down");
+        if (options.storedState !== undefined) return options.storedState;
         return options.storedCount === undefined
           ? null
           : { console_worker_unknown_count: options.storedCount };
@@ -362,6 +364,42 @@ describe("watchConsoleWorker", () => {
 
   test("treats an unreadable state as a count of zero", async () => {
     const h = harness({ response: FAILS, getStateThrows: true });
+    await watchConsoleWorker(h.deps);
+    expect(h.states).toEqual([{ console_worker_unknown_count: 1 }]);
+  });
+
+  test("keeps the other keys of the stored state", async () => {
+    const h = harness({
+      response: FAILS,
+      storedState: { other_key: "kept", console_worker_unknown_count: 2 },
+    });
+    await watchConsoleWorker(h.deps);
+    expect(h.states).toEqual([
+      { other_key: "kept", console_worker_unknown_count: 3 },
+    ]);
+  });
+
+  test("keeps the other keys when the count resets", async () => {
+    const h = harness({
+      response: PRESENT,
+      storedState: { other_key: "kept", console_worker_unknown_count: 2 },
+    });
+    await watchConsoleWorker(h.deps);
+    expect(h.states).toEqual([
+      { other_key: "kept", console_worker_unknown_count: 0 },
+    ]);
+  });
+
+  test("adds the count to a state that has no count yet", async () => {
+    const h = harness({ response: FAILS, storedState: { other_key: "kept" } });
+    await watchConsoleWorker(h.deps);
+    expect(h.states).toEqual([
+      { other_key: "kept", console_worker_unknown_count: 1 },
+    ]);
+  });
+
+  test("starts a fresh state when the stored state is not an object", async () => {
+    const h = harness({ response: FAILS, storedState: "garbage" });
     await watchConsoleWorker(h.deps);
     expect(h.states).toEqual([{ console_worker_unknown_count: 1 }]);
   });
