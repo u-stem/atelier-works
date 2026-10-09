@@ -657,6 +657,21 @@ describe("bash-guard denies docker commands that expose the environment", () => 
     "docker inspect --format '{{json .Config}}' x",
     "docker inspect --format='{{.Config.Env}}' x",
     "docker inspect -f '{{.Env}}' x",
+    "docker inspect -f '{{json .}}' x",
+    "docker inspect -f '{{.}}' x",
+    "docker inspect -f '{{ json . }}' x",
+    "docker inspect -f '{{printf \"%+v\" .}}' x",
+    "docker inspect -f '{{range $k,$v := .}}{{$k}}{{end}}' x",
+    "docker inspect -f '{{index . \"Config\"}}' x",
+    "docker inspect -f '{{.State.Running}} {{json .}}' x",
+    "docker inspect -f '{{.State.Running' x",
+    "docker inspect -f '{{json .Config}}' x",
+    "docker inspect -f '{{.CONFIG.Env}}' x",
+    "docker compose convert",
+    "docker compose -f infra/docker-compose.yml convert",
+    "docker compose exec x cat /proc/1/environ",
+    "docker compose exec x cat /proc/self/environ",
+    "docker exec x strings /proc/1/environ",
     "docker container inspect x",
     "mise exec -- docker compose -f infra/docker-compose.yml config",
     "mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker env",
@@ -687,6 +702,15 @@ describe("bash-guard denies docker commands that expose the environment", () => 
     "mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker kill 1234",
     "docker inspect -f '{{.State.Running}}' x",
     "docker inspect -f '{{.State.Running}}' \"$ID\"",
+    "docker inspect -f '{{ .State.Running }}' x",
+    "docker inspect -f '{{json .State}}' x",
+    "docker inspect -f '{{ json .State.Health }}' x",
+    "docker inspect -f '{{.Name}} {{.State.Running}}' x",
+    "docker inspect -f '{{- .State.Status -}}' x",
+    "docker inspect --format '{{.State.Pid}}' x",
+    "docker compose config --no-interpolate",
+    "docker compose exec x ls /proc/1",
+    "docker compose exec x cat /proc/1/status",
     "docker inspect --format '{{.State.Health.Status}}' x",
     "docker inspect --format={{.State.Running}} x",
     "docker compose config --services",
@@ -786,8 +810,12 @@ describe("bash-guard tracks the branch through the command line", () => {
   test.each([
     "git checkout -b feat/x && git push -u origin HEAD",
     "git switch -c feat/x && git push",
-    "git checkout feat/x && git push",
+    "git switch feat/x && git push",
     "git switch feat/x; git push -u origin HEAD",
+    "git checkout -t origin/feat/x && git push",
+    "git switch --track origin/feat/x && git push",
+    "git rebase -X theirs origin/main && git push origin feat/x",
+    "git rebase --onto origin/main a feat/x && git push",
     "git checkout -B feat/x origin/main && git push",
     "git checkout -b feat/x && git push origin $(git branch --show-current)",
     "git -C /other switch -c feat/x && git -C /other push",
@@ -809,6 +837,52 @@ describe("bash-guard tracks the branch through the command line", () => {
     "git checkout -b $NAME && git push",
   ])("denies %s while on a feature branch", async (command) => {
     expect(await decide(command)).toBe("deny");
+  });
+
+  test.each([
+    "git checkout feat/x && git push",
+    "git checkout README.md && git push",
+    "git checkout HEAD~1 && git push",
+    "git checkout main && git -C scripts push",
+    "git checkout main && cd scripts && git push",
+    "git checkout main && git -C /repo/docs push",
+    "git rebase -X theirs main && git push",
+    "git rebase -s ours main && git push",
+    "git rebase --onto origin/main a main && git push",
+    "git rebase --onto X Y main && git push",
+    "git checkout -t origin/main && git push",
+  ])("denies %s while on main", async (command) => {
+    expect(await decide(command, { branch: "main" })).toBe("deny");
+  });
+
+  test.each([
+    "git checkout feat/x && git push",
+    "git checkout README.md && git push",
+    "git checkout HEAD~1 && git push",
+    "git checkout @ && git push",
+    "git checkout HEAD^ && git push",
+    "git checkout main~2 && git push",
+    "git checkout 'main@{1}' && git push",
+    "git checkout -- README.md && git push",
+    "git rebase -X theirs main && git push",
+    "git rebase --onto origin/main a feature && git push",
+    "git rebase --onto X Y feature && git push",
+    "git rebase -s ours -X theirs origin/main && git push",
+    "git rebase --strategy=ours main && git push",
+    "git checkout feature && git -C scripts push",
+    "git checkout feat/x && cd scripts && git push",
+  ])("allows %s while on a feature branch", async (command) => {
+    expect(await decide(command)).toBe("allow");
+  });
+
+  test("a single-operand checkout of a protected name is denied", async () => {
+    expect(await decide("git checkout main && git push")).toBe("deny");
+  });
+
+  test("a switch keeps the single assumption", async () => {
+    expect(
+      await decide("git switch feat/x && git push", { branch: "main" }),
+    ).toBe("allow");
   });
 
   test("a checkout in another directory does not change this one", async () => {
@@ -925,6 +999,32 @@ describe("bash-guard sees through wrapper options", () => {
 describe("bash-guard pins git push --repo", () => {
   test("a push with --repo= and a positional is not a bare push on main", async () => {
     expect(await decide("git push --repo=origin main")).toBe("allow");
+  });
+});
+
+describe("bash-guard denies reading the environment from /proc", () => {
+  test.each([
+    "cat /proc/self/environ",
+    "cat /proc/1/environ",
+    "strings /proc/self/environ",
+    "tr '\\0' '\\n' < /proc/self/environ",
+    "head -c 100 /proc/1234/environ",
+    "mise exec -- cat /proc/self/environ",
+  ])("denies %s", async (command) => {
+    expect(await decide(command)).toBe("deny");
+  });
+
+  test.each([
+    "ls /proc/self",
+    "cat /proc/self/status",
+    "cat /proc/cpuinfo",
+    "ls -l /proc/self/environ",
+  ])("allows %s", async (command) => {
+    expect(await decide(command)).toBe("allow");
+  });
+
+  test("the reason says the environment may hold secrets", async () => {
+    expect(await denyReason("cat /proc/self/environ")).toContain("secret");
   });
 });
 

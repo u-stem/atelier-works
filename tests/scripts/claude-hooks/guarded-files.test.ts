@@ -266,6 +266,16 @@ describe("git log pickaxe and grep values are patterns", () => {
   });
 
   test.each([
+    "git show -S mise.local.toml",
+    "git diff -G mise.local.toml",
+    "git grep --grep mise.local.toml",
+  ])("allows %s", async (command) => {
+    expect(await decide(command)).toBe("allow");
+  });
+
+  test.each([
+    "git add -S mise.local.toml",
+    "git commit --grep mise.local.toml",
     "git add mise.local.toml",
     "git rm --cached mise.local.toml",
     "git diff mise.local.toml",

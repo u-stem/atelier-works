@@ -187,6 +187,14 @@ const RG_LONG_VALUE_OPTIONS: ReadonlySet<string> = new Set([
   "--hostname-bin",
 ]);
 
+/** `-S`、`-G`、`--grep`の値が検索のパターンになるgitのサブコマンド。 */
+const PATTERN_OPTION_SUBCOMMANDS: ReadonlySet<string> = new Set([
+  "log",
+  "show",
+  "diff",
+  "grep",
+]);
+
 /** `find`のオプションのうち、次の語がファイル名のパターンになるもの。ファイルの読み取りではない。 */
 const FIND_PATTERN_OPTIONS: ReadonlySet<string> = new Set([
   "-name",
@@ -230,7 +238,10 @@ export function findSecretReference(
       }
     });
   }
-  if (program === "git") {
+  if (
+    program === "git" &&
+    PATTERN_OPTION_SUBCOMMANDS.has(words[1]?.text ?? "")
+  ) {
     // `git log -S/-G/--grep`の値は、履歴を探すパターンで、ファイルの読み取りではない。
     words.forEach((word, index) => {
       const value = words[index + 1];

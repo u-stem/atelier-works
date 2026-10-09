@@ -37,7 +37,13 @@ async function run(command: string, options: Options) {
             const branches = options.branches ?? {};
             return dir in branches ? (branches[dir] ?? null) : fallbackBranch;
           },
-          repoRoot: () => REPO_ROOT,
+          // セッションのディレクトリと、/repo の下のディレクトリは同じリポジトリ、それ以外は自分自身が根になる。
+          repoRoot: (dir) =>
+            dir === (options.cwd ?? REPO_ROOT) ||
+            dir === REPO_ROOT ||
+            dir.startsWith(`${REPO_ROOT}/`)
+              ? REPO_ROOT
+              : dir,
         }),
       ),
     "/fallback",

@@ -98,11 +98,16 @@ describe(".claude/settings.json", () => {
     expect(slow).toEqual([]);
   });
 
-  test("does not deny mise x, which is an alias of mise exec", () => {
-    expect(
-      denyRules().filter((rule) => rule.startsWith("Bash(mise x")),
-    ).toEqual([]);
+  test("does not deny every mise x, which is an alias of mise exec", () => {
+    expect(denyRules()).not.toContain("Bash(mise x:*)");
   });
+
+  test.each(["Bash(mise x -- env:*)", "Bash(mise x -- printenv:*)"])(
+    "denies the env dump through mise x: %s",
+    (rule) => {
+      expect(denyRules()).toContain(rule);
+    },
+  );
 
   test("leaves docker exec, inspect, and config to the hook", () => {
     const docker = denyRules().filter((rule) => rule.startsWith("Bash(docker"));
@@ -131,7 +136,15 @@ describe("the registered Bash guard command", () => {
 
   test("prints no decision when the launcher does not exist", () => {
     const result = runRegistered("bash-guard", "/nonexistent", DENIED_COMMAND);
-    expect(result.stdout.toString()).toBe("");
+    expect(result.stdout.toString()).not.toContain("permissionDecision");
+  });
+
+  test("shows the user a system message when the launcher does not exist", () => {
+    const result = runRegistered("bash-guard", "/nonexistent", DENIED_COMMAND);
+    const output: unknown = JSON.parse(result.stdout.toString());
+    expect(output).toEqual({
+      systemMessage: expect.stringContaining("did not run"),
+    });
   });
 
   test("names the missing launcher", () => {

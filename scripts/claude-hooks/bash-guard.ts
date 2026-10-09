@@ -25,6 +25,7 @@ import {
   dockerExposure,
   dumpsEnvironment,
   firstOperand,
+  readsProcEnviron,
   shellInputSource,
 } from "./env-exposure.ts";
 import { findSecretReference, type SecretContext } from "./guarded-files.ts";
@@ -226,6 +227,8 @@ export const REASONS = {
     "Setting remote.*.push, push.default, include.*, or includeIf.* can redirect a push or load a config that turns the hooks off. Push with an explicit branch instead; reading or unsetting them is fine.",
   lefthookReplace:
     "LEFTHOOK_BIN and LEFTHOOK_CONFIG replace the lefthook binary or config that the git hooks run. Fix the failing check instead.",
+  procEnviron:
+    "/proc/<pid>/environ holds the environment variables of a process, including secrets. Do not read it; to check that a value is set, run mise run doctor.",
   dockerExec:
     "docker exec and docker compose exec must not run an environment dump (env, printenv, set) or a shell given code (-c or stdin): containers hold secrets as environment variables. Run the specific command directly, for example docker compose exec windmill_worker kill <pid>.",
   dockerInspect:
@@ -266,11 +269,19 @@ type GitInvocation = {
   readonly args: readonly Word[];
 };
 
-/** コマンド行の中の`git checkout`などで切り替わった、そのディレクトリのブランチ。`branch`がnullなら決まらない。 */
+/**
+ * コマンド行の中の`git checkout`などで切り替わった、そのリポジトリのブランチ。
+ * `names`の`null`は、切り替え先が決まらないことを表す。
+ * `includesCurrent`が真なら、切り替えに失敗した場合や、名前がファイルだった場合に備えて、実際のブランチも候補に入れる。
+ */
 type AssumedBranch = {
-  readonly dir: string | null;
-  readonly branch: string | null;
+  readonly root: string | null;
+  readonly names: readonly (string | null)[];
+  readonly includesCurrent: boolean;
 };
+
+/** 切り替えの結果の候補。 */
+type Switched = Pick<AssumedBranch, "names" | "includesCurrent">;
 
 type Scope = {
   readonly input: BashToolInput;
@@ -413,6 +424,9 @@ function checkSimpleCommand(
   if (mise !== null) {
     const miseDecision = checkMise(mise, directory, scope);
     if (miseDecision.kind === "deny") return miseDecision;
+  }
+  if (readsProcEnviron(words, command.redirects)) {
+    return deny(REASONS.procEnviron);
   }
   const docker = dockerExposure(words);
   if (docker !== null) return deny(DOCKER_REASONS[docker]);
@@ -735,11 +749,8 @@ function hasCommitNoVerifyFlag(args: readonly Word[]): boolean {
 
 function checkPush(git: GitInvocation, scope: Scope): Decision {
   if (scope.input.agentId !== null) return deny(REASONS.subagentPush);
-  const currentBranch = (): string | null => {
-    const assumed = scope.branchState.assumed;
-    if (assumed !== null && assumed.dir === git.dir) return assumed.branch;
-    return git.dir === null ? null : scope.deps.currentBranch(git.dir);
-  };
+  const currentBranches = (): readonly (string | null)[] =>
+    branchCandidates(git, scope);
   const positionals: Word[] = [];
   for (let index = 0; index < git.args.length; index += 1) {
     const word = git.args[index];
@@ -771,15 +782,24 @@ function checkPush(git: GitInvocation, scope: Scope): Decision {
     positionals.push(word);
   }
   const refspecs = positionals.slice(1);
-  if (refspecs.length === 0) return checkDestination(currentBranch());
+  if (refspecs.length === 0) return checkDestinations(currentBranches());
   for (const refspec of refspecs) {
     if (refspec.dynamic || refspec.text.includes("*")) {
       return deny(REASONS.unknownDestination);
     }
     if (refspec.text.startsWith("+")) return deny(REASONS.force);
-    const decision = checkDestination(
-      refspecDestination(refspec.text, currentBranch),
+    const decision = checkDestinations(
+      refspecDestinations(refspec.text, currentBranches),
     );
+    if (decision.kind === "deny") return decision;
+  }
+  return ALLOW;
+}
+
+/** push先の候補のどれか1つでも、保護するブランチか決まらないものなら拒否する。 */
+function checkDestinations(branches: readonly (string | null)[]): Decision {
+  for (const branch of branches) {
+    const decision = checkDestination(branch);
     if (decision.kind === "deny") return decision;
   }
   return ALLOW;
@@ -796,30 +816,50 @@ function checkDestination(branch: string | null): Decision {
  * refspecのpush先のブランチ名を返す。`refs/heads/`と`heads/`は外す。
  * `:`だけ(対応するブランチをすべて送る)などで決まらなければnull。
  */
-function refspecDestination(
+function refspecDestinations(
   refspec: string,
-  currentBranch: () => string | null,
-): string | null {
+  currentBranches: () => readonly (string | null)[],
+): readonly (string | null)[] {
   const colon = refspec.indexOf(":");
   const destination = colon === -1 ? refspec : refspec.slice(colon + 1);
-  if (destination === "") return null;
+  if (destination === "") return [null];
   if (
     destination === "HEAD" ||
     destination === "@" ||
     CURRENT_BRANCH_SUBSTITUTIONS.includes(destination)
   ) {
-    return currentBranch();
+    return currentBranches();
   }
   for (const prefix of ["refs/heads/", "heads/"]) {
-    if (destination.startsWith(prefix)) return destination.slice(prefix.length);
+    if (destination.startsWith(prefix)) {
+      return [destination.slice(prefix.length)];
+    }
   }
-  return destination;
+  return [destination];
+}
+
+/**
+ * pushする時点で、今のブランチになりうる名前の候補を返す。
+ * 同じリポジトリで前に切り替えがあれば、その候補を使う。無ければgitで読む。
+ */
+function branchCandidates(
+  git: GitInvocation,
+  scope: Scope,
+): readonly (string | null)[] {
+  const assumed = scope.branchState.assumed;
+  if (git.dir === null) return [null];
+  const lookup = (): string | null => scope.deps.currentBranch(git.dir ?? "");
+  if (assumed === null) return [lookup()];
+  const root = scope.deps.repoRoot(git.dir) ?? git.dir;
+  if (assumed.root !== root) return [lookup()];
+  return assumed.includesCurrent ? [...assumed.names, lookup()] : assumed.names;
 }
 
 /**
  * `git checkout`、`switch`、`rebase`、`branch -m`が切り替える先のブランチを、続くコマンドの前提として覚える。
  * リテラルの名前ならその名前、実行時に決まるときや、行き先が分からないときはnull(不明)にする。
- * 別のディレクトリで実行されたものは、そのディレクトリの前提として覚える。
+ * 前提はリポジトリの根ごとに覚えるので、同じリポジトリの別のディレクトリでも使う。
+ * `;`でつないだ切り替えも、成功したものとして扱う。
  */
 function trackBranch(
   command: SimpleCommand,
@@ -829,20 +869,29 @@ function trackBranch(
   const { words } = stripWrappers(command.words);
   const git = parseGitInvocation(words, directory);
   if (git === null) return;
-  const target = switchedBranch(git);
-  if (target === undefined) return;
-  scope.branchState.assumed = { dir: git.dir, branch: target };
+  const switched = switchedBranch(git);
+  if (switched === undefined) return;
+  const root =
+    git.dir === null ? null : (scope.deps.repoRoot(git.dir) ?? git.dir);
+  const previous = scope.branchState.assumed;
+  // 切り替えに失敗したときの今のブランチは、直前の前提である。
+  const names =
+    switched.includesCurrent && previous !== null && previous.root === root
+      ? [...switched.names, ...previous.names]
+      : switched.names;
+  const includesCurrent =
+    switched.includesCurrent &&
+    (previous === null || previous.root !== root || previous.includesCurrent);
+  scope.branchState.assumed = { root, names, includesCurrent };
 }
 
-/** チェックアウトの値を取るオプション。 */
+/** チェックアウトの値を取るオプション(`-t`と`--track`は値を取らない)。 */
 const CHECKOUT_VALUE_OPTIONS: ReadonlySet<string> = new Set([
   "-b",
   "-B",
   "-c",
   "-C",
   "--orphan",
-  "-t",
-  "--track",
   "--conflict",
   "--pathspec-from-file",
 ]);
@@ -858,44 +907,79 @@ const CREATE_BRANCH_OPTIONS: ReadonlySet<string> = new Set([
   "--orphan",
 ]);
 
+/** `git rebase`の値を取るオプション。`=`でつなぐ形は1語なので、ここには要らない。 */
+const REBASE_VALUE_OPTIONS: ReadonlySet<string> = new Set([
+  "-X",
+  "-s",
+  "-x",
+  "-C",
+  "--onto",
+  "--exec",
+  "--strategy",
+  "--strategy-option",
+]);
+
+/** 今のブランチを変えない、または名前が決まらない参照(`HEAD`、`@`、`main~2`、`main^`、`main@{1}`)。 */
+const RELATIVE_REF = /^(HEAD|@)$|[~^]|@\{/;
+
+/** `args`から、オプションとその値を除いたオペランドを返す。 */
+function operandsOf(
+  args: readonly Word[],
+  valueOptions: ReadonlySet<string>,
+): Word[] {
+  const operands: Word[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const word = args[index];
+    if (word === undefined) break;
+    if (!word.text.startsWith("-") || word.text === "-") operands.push(word);
+    else if (valueOptions.has(word.text)) index += 1;
+  }
+  return operands;
+}
+
 /**
- * `git`の呼び出しで切り替わるブランチ名を返す。切り替わらなければundefined、
- * 切り替わるが名前が決まらなければnullを返す。
+ * `git`の呼び出しで切り替わるブランチの候補を返す。切り替わらなければundefinedを返す。
+ * `git checkout <名前>`は、名前がファイルのこともあるので、実際のブランチも候補に残す。
  */
-function switchedBranch(git: GitInvocation): string | null | undefined {
+function switchedBranch(git: GitInvocation): Switched | undefined {
   const { subcommand, args } = git;
   const literal = (word: Word | undefined): string | null =>
     word === undefined || word.dynamic ? null : word.text;
+  const one = (name: string | null, includesCurrent = false): Switched => ({
+    names: [name],
+    includesCurrent,
+  });
   if (subcommand === "checkout" || subcommand === "switch") {
     if (args.some((word) => word.text === "--")) return undefined;
     for (let index = 0; index < args.length; index += 1) {
       if (CREATE_BRANCH_OPTIONS.has(args[index]?.text ?? "")) {
-        return literal(args[index + 1]);
+        return one(literal(args[index + 1]));
       }
     }
-    const operands: Word[] = [];
-    for (let index = 0; index < args.length; index += 1) {
-      const text = args[index]?.text ?? "";
-      if (!text.startsWith("-") || text === "-") {
-        const word = args[index];
-        if (word !== undefined) operands.push(word);
-      } else if (CHECKOUT_VALUE_OPTIONS.has(text)) {
-        index += 1;
-      }
+    if (args.some((word) => word.text === "--detach" || word.text === "-d")) {
+      return one(null);
     }
-    if (args.some((word) => word.text === "-t" || word.text === "--track")) {
-      return null;
-    }
+    const operands = operandsOf(args, CHECKOUT_VALUE_OPTIONS);
     const first = operands[0];
     if (first === undefined || first.text === ".") return undefined;
+    if (first.text === "-") return one(null);
+    const tracks = args.some(
+      (word) => word.text === "-t" || word.text.startsWith("--track"),
+    );
+    if (tracks) {
+      // `-t origin/feat/x`は、リモートの名前を外した`feat/x`を作って切り替える。
+      const name = literal(first);
+      return one(name === null ? null : name.slice(name.indexOf("/") + 1));
+    }
+    if (RELATIVE_REF.test(first.text)) return undefined;
     // `git checkout <ブランチ> <パス>`と複数のパスは、ブランチの切り替えではない。
     if (subcommand === "checkout" && operands.length > 1) return undefined;
-    return first.text === "-" ? null : literal(first);
+    return one(literal(first), subcommand === "checkout");
   }
   if (subcommand === "rebase") {
-    const operands = args.filter((word) => !word.text.startsWith("-"));
+    const operands = operandsOf(args, REBASE_VALUE_OPTIONS);
     // `git rebase <上流> <ブランチ>`だけが、ブランチを切り替える。
-    return operands.length >= 2 ? literal(operands[1]) : undefined;
+    return operands.length >= 2 ? one(literal(operands[1])) : undefined;
   }
   if (subcommand === "branch") {
     const rename = args.some(
@@ -904,7 +988,7 @@ function switchedBranch(git: GitInvocation): string | null | undefined {
     if (!rename) return undefined;
     const operands = args.filter((word) => !word.text.startsWith("-"));
     // 名前を1つだけ渡すと、今のブランチの名前が変わる。2つ渡すときは、どれが変わるか分からない。
-    return operands.length === 1 ? literal(operands[0]) : null;
+    return one(operands.length === 1 ? literal(operands[0]) : null);
   }
   return undefined;
 }

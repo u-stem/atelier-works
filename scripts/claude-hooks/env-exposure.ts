@@ -65,10 +65,34 @@ const SAFE_CONFIG_OPTIONS: ReadonlySet<string> = new Set([
   "--images",
   "-q",
   "--quiet",
+  "--no-interpolate",
 ]);
 
-/** 環境変数の値を含みうる`docker inspect`の出力の指定。 */
-const INSPECT_SECRET_FORMAT = /env|config/i;
+/**
+ * `docker inspect --format`で許す指定。`{{...}}`の中身は、フィールドへの経路(`.State.Running`)だけを許し、
+ * `json`を前に付けてもよい。オブジェクト全体(`.`)、`range`、`printf`、`index`などは、環境変数を含む部分を出せるので許さない。
+ * 経路に`Env`か`Config`を含むものも許さない。
+ */
+const INSPECT_ACTION =
+  /^\{\{-?\s*(?:json\s+)?(\.[A-Za-z][A-Za-z0-9_.]*)\s*-?\}\}$/;
+const INSPECT_SECRET_PATH = /env|config/i;
+
+/** `/proc/<pid>/environ`。プロセスの環境変数がそのまま入っている。 */
+const PROC_ENVIRON = /^\/proc\/(?:self|thread-self|\d+|\*)\/environ$/;
+
+/** ファイルの中身をそのまま出すコマンド。`/proc/<pid>/environ`を渡すと環境変数が出る。 */
+const FILE_DUMPERS: ReadonlySet<string> = new Set([
+  "cat",
+  "strings",
+  "tr",
+  "head",
+  "tail",
+  "od",
+  "xxd",
+  "hexdump",
+  "less",
+  "more",
+]);
 
 export type DockerExposure = "config" | "exec" | "inspect";
 
@@ -123,9 +147,25 @@ export function shellInputSource(
   return "stdin";
 }
 
+/**
+ * `/proc/<pid>/environ`を読むなら真。ファイルの中身を出すコマンドの引数と、どのコマンドでもリダイレクトの入力を見る。
+ */
+export function readsProcEnviron(
+  words: readonly Word[],
+  redirects: readonly Word[] = [],
+): boolean {
+  if (redirects.some((target) => PROC_ENVIRON.test(target.text))) return true;
+  const program = baseName(words[0]?.text ?? "");
+  return (
+    FILE_DUMPERS.has(program) &&
+    words.slice(1).some((word) => PROC_ENVIRON.test(word.text))
+  );
+}
+
 /** コマンドが、環境変数の一覧を出すか、コードを渡したシェルなら真。前置きは外してから見る。 */
 export function dumpsEnvironment(inner: readonly Word[]): boolean {
   const { words, wrappers } = stripWrappers(inner);
+  if (readsProcEnviron(words)) return true;
   const first = words[0];
   // `env`は前置きとして外されるので、後ろにコマンドが無ければ一覧を出している。
   if (first === undefined) return wrappers.includes("env");
@@ -144,7 +184,18 @@ function execExposes(args: readonly Word[]): boolean {
   return container !== null && dumpsEnvironment(container.rest);
 }
 
-/** `docker inspect`の引数に、環境変数を含まない`--format`が無ければ真。 */
+/** `--format`の指定が、許す形のフィールドだけなら真。 */
+function isSafeInspectFormat(format: Word): boolean {
+  if (format.dynamic) return false;
+  const actions = format.text.match(/\{\{.*?\}\}/g) ?? [];
+  if (format.text.replace(/\{\{.*?\}\}/g, "").includes("{{")) return false;
+  return actions.every((action) => {
+    const path = INSPECT_ACTION.exec(action)?.[1];
+    return path !== undefined && !INSPECT_SECRET_PATH.test(path);
+  });
+}
+
+/** `docker inspect`の引数に、許す形の`--format`が無ければ真。 */
 function inspectExposes(args: readonly Word[]): boolean {
   for (let index = 0; index < args.length; index += 1) {
     const word = args[index];
@@ -156,7 +207,7 @@ function inspectExposes(args: readonly Word[]): boolean {
       format = { ...word, text: word.text.slice("--format=".length) };
     }
     if (format !== null) {
-      return format.dynamic || INSPECT_SECRET_FORMAT.test(format.text);
+      return !isSafeInspectFormat(format);
     }
   }
   return true;
@@ -175,7 +226,9 @@ function composeExposure(args: readonly Word[]): DockerExposure | null {
   const sub = firstOperand(args, COMPOSE_VALUE_OPTIONS);
   if (sub === null) return null;
   if (sub.text === "exec") return execExposes(sub.rest) ? "exec" : null;
-  if (sub.text === "config") return configExposes(sub.rest) ? "config" : null;
+  if (sub.text === "config" || sub.text === "convert") {
+    return configExposes(sub.rest) ? "config" : null;
+  }
   return null;
 }
 

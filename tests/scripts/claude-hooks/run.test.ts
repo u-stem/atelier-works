@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   chmodSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   rmSync,
   symlinkSync,
@@ -64,11 +65,28 @@ describe("run.sh", () => {
     expect(result.exitCode).toBe(0);
   });
 
-  test("prints nothing to stdout when no runtime is found", () => {
+  test("shows the user a system message when no runtime is found", () => {
     const result = withTempDir((directory) =>
       launch(["bash-guard"], DENIED_COMMAND, directory),
     );
-    expect(result.stdout.toString()).toBe("");
+    const output: unknown = JSON.parse(result.stdout.toString());
+    expect(output).toEqual({
+      systemMessage: expect.stringContaining("did not run"),
+    });
+  });
+
+  test("names the settings.json deny rules in the system message", () => {
+    const result = withTempDir((directory) =>
+      launch(["bash-guard"], DENIED_COMMAND, directory),
+    );
+    expect(result.stdout.toString()).toContain("deny rules");
+  });
+
+  test("does not decide anything when no runtime is found", () => {
+    const result = withTempDir((directory) =>
+      launch(["bash-guard"], DENIED_COMMAND, directory),
+    );
+    expect(result.stdout.toString()).not.toContain("permissionDecision");
   });
 
   test("warns that the guard did not run when no runtime is found", () => {
@@ -109,6 +127,68 @@ describe("run.sh", () => {
   test("passes the deny decision of a real hook through", () => {
     const result = launch(["bash-guard"], DENIED_COMMAND, PATH_WITH_BUN);
     expect(result.stdout.toString()).toContain('"permissionDecision":"deny"');
+  });
+});
+
+/** `body`を中身にした実行ファイル`name`を`directory`に作る。 */
+function writeExecutable(directory: string, name: string, body: string) {
+  writeFileSync(join(directory, name), `#!/bin/sh\n${body}\n`);
+  chmodSync(join(directory, name), 0o755);
+}
+
+describe("run.sh picks a runtime that works", () => {
+  test.skipIf(!nodeRunsTypeScript())(
+    "uses node when the bun on PATH is broken",
+    () => {
+      const result = withTempDir((directory) => {
+        writeExecutable(directory, "bun", "exit 127");
+        symlinkSync(NODE ?? "node", join(directory, "node"));
+        return launch(["bash-guard"], DENIED_COMMAND, directory);
+      });
+      expect(result.stdout.toString()).toContain('"permissionDecision":"deny"');
+    },
+  );
+
+  test("allows the tool call when the only bun is broken and node is missing", () => {
+    const result = withTempDir((directory) => {
+      writeExecutable(directory, "bun", "exit 127");
+      return launch(["bash-guard"], DENIED_COMMAND, directory);
+    });
+    expect(result.exitCode).toBe(0);
+  });
+
+  test("allows the tool call when node is older than 24", () => {
+    const result = withTempDir((directory) => {
+      writeExecutable(directory, "node", "exit 1");
+      return launch(["bash-guard"], DENIED_COMMAND, directory);
+    });
+    expect(result.exitCode).toBe(0);
+  });
+
+  test("warns that the guard did not run when node is too old", () => {
+    const result = withTempDir((directory) => {
+      writeExecutable(directory, "node", "exit 1");
+      return launch(["bash-guard"], DENIED_COMMAND, directory);
+    });
+    expect(result.stdout.toString()).toContain("did not run");
+  });
+
+  test("uses bun from the home directory when PATH has no runtime", () => {
+    const result = withTempDir((home) => {
+      mkdirSync(join(home, ".bun/bin"), { recursive: true });
+      symlinkSync(process.execPath, join(home, ".bun/bin/bun"));
+      return withTempDir((empty) =>
+        Bun.spawnSync(["/bin/sh", RUN, "bash-guard"], {
+          stdin: Buffer.from(DENIED_COMMAND),
+          env: { PATH: empty, HOME: home },
+        }),
+      );
+    });
+    expect(result.stdout.toString()).toContain('"permissionDecision":"deny"');
+  });
+
+  test("still exits with 2 when a working bun crashes", () => {
+    expect(launch(["bash-guard"], "not json", PATH_WITH_BUN).exitCode).toBe(2);
   });
 });
 

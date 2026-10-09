@@ -257,12 +257,12 @@ workerには`no-new-privileges:true`と、プロセス数の上限(`deploy.resou
 | `mise env`とその別名(`mise e`、`mise ev`、`mise env-vars`) | 展開した環境変数の一覧を出力する |
 | `mise config`、`mise cfg`、`mise toml` | 設定値を出力する |
 | 引数なしの`mise set` | 設定値の一覧を出力する |
-| `mise exec -- env`、`mise exec -- printenv`、`printenv`、`env` | 環境変数を出力する |
+| `mise exec -- env`、`mise exec -- printenv`、`mise x -- env`、`mise x -- printenv`、`printenv`、`env` | 環境変数を出力する |
 | `cat mise.local.toml` | 秘密値そのものを出力する |
 
 値を指定して書き込むだけの`mise set -E local KEY=value`は拒否しない。これらのルールは、`mise run <task>`を通した迂回(タスクの中で秘密値を出力する処理など)は防げない。
 
-`mise x`は`mise exec`の別名で、`mise x -- bun test`のように通常の作業にも使うので、この設定では拒否しない。
+`mise x`は`mise exec`の別名で、`mise x -- bun test`のように通常の作業にも使うので、環境変数を出す形だけをこの設定で拒否する。
 `docker exec`、`docker inspect`、`docker compose config`も、設定のルールは引数を絞れないので、ここには置かない。
 どちらも、環境変数を出す形だけを次の節のフックが拒否する。
 
@@ -284,10 +284,11 @@ FactoryのheadlessなClaudeの実行は`.claude/`を読まないので、この�
 | `lefthook uninstall`、`.git/hooks`と`.git/config`への書き込み | gitのフックを外せる |
 | `git -c alias.*`、`remote.*.push`・`push.default`・`include.*`・`includeIf.*`の設定、`GIT_CONFIG_COUNT`などの環境変数 | `push`や`core.hooksPath`を別の名前や設定の裏から差し込める |
 | `echo`や`printf`が変数から組み立てた文字列を、標準入力で読むシェル | 中身を判定できない |
-| `mise exec`の`-c`と`--command`、コードを渡したシェル、`env`や`printenv`などの環境変数の一覧 | `mise exec`は`mise.local.toml`の秘密値を環境変数として渡すので、値を表示できる |
+| `mise exec`の`-c`と`--command`、コードを渡したシェル、`env`、`printenv`、`set`、`export -p`などの環境変数の一覧 | `mise exec`は`mise.local.toml`の秘密値を環境変数として渡すので、値を表示できる |
 | `docker exec`と`docker compose exec`で実行する環境変数の一覧とコードを渡したシェル(`mise exec --`の前置きがあっても) | コンテナは秘密値を環境変数として持つ |
-| `--format`で環境変数を含む項目を選ぶか、`--format`の無い`docker inspect` | コンテナに渡した環境変数が見える |
-| 出力を絞らない`docker compose config` | 変数を展開したcompose定義を出力する |
+| フィールドの経路だけの`--format`を持たない`docker inspect`、`Env`か`Config`を含む経路 | コンテナに渡した環境変数が見える |
+| 出力を絞らない`docker compose config`と`docker compose convert` | 変数を展開したcompose定義を出力する |
+| `cat`や`strings`などで読む`/proc/<pid>/environ` | プロセスの環境変数がそのまま入っている |
 | 秘密値のファイル(`mise.local.toml`とその別名、`.wmill/`の`remotes.ndjson`、`.env`系)を名前で指すコマンド | `Read`の拒否はBashに効かず、`cat`や`grep`で読むと値が会話の記録に残る |
 | リポジトリの根、`infra`、`.wmill`を起点にした再帰的な`grep`、`-u`や`--no-ignore`を付けた`rg`、`git grep --no-index` | gitignore済みの秘密値のファイルまで読む |
 
@@ -329,8 +330,15 @@ FactoryのheadlessなClaudeの実行は`.claude/`を読まないので、この�
 `git push`のブランチを省いたときの今のブランチは、同じコマンド行の前にある文字どおりの`cd`と`pushd`をたどって調べる。
 `git -C`、`--git-dir`、`--work-tree`が指すディレクトリも同じように使う。
 同じコマンド行の前にブランチを切り替える操作があれば、切り替えた先を今のブランチとする。
-対象は`git checkout`、`git switch`、それぞれの`-b`と`-c`、`git branch -m`である。
+対象は`git checkout`、`git switch`、それぞれの`-b`と`-c`と`-t`、`git rebase <上流> <ブランチ>`、`git branch -m`である。
+`git rebase`のオプションの値(`-X theirs`、`--onto <先>`など)は、ブランチとして数えない。
+`git checkout <名前>`の名前はファイルの復元であることもあるので、実際のブランチも候補に残す。
+どちらかが保護するブランチなら拒否する。
+`git switch`と`-b`、`-c`は、切り替え先だけを今のブランチとする。
+`HEAD`、`@`、`main~2`のような相対の参照は、ブランチを変えないものとして扱う。
 切り替え先が変数のとき、`git checkout -`のとき、`git rebase <上流> <ブランチ>`の`<ブランチ>`が変数のときは、今のブランチが決まらないものとして扱う。
+切り替えたブランチは、同じリポジトリの別のディレクトリ(`git -C scripts push`)でも使う。
+`;`でつないだ切り替えも、成功したものとして扱う。
 移動先が変数のときも今のブランチを調べられないので、そのpushだけを拒否する。
 push先に`"$(git branch --show-current)"`を書いたときは、今のブランチとして扱う。
 push先のrefspecは、`refs/heads/`と`heads/`を外して`main`、`master`と比べ、`*`を含むものは拒否する。
@@ -340,8 +348,11 @@ push先のrefspecは、`refs/heads/`と`heads/`を外して`main`、`master`と�
 
 `docker exec`と`docker compose exec`は、環境変数の一覧を出すコマンド(`env`、`/usr/bin/env`、`printenv`)かコードを渡したシェルのときだけ拒否する。
 `docker compose exec windmill_worker kill <pid>`のような運用の手順は拒否しない。
-`docker inspect`は、`--format`で環境変数を含まない項目(`{{.State.Running}}`など)を選ぶ形を拒否しない。
-`docker compose config`は、`--services`、`--profiles`、`--volumes`、`--images`、`--hash`、`-q`で出力を絞った形を拒否しない。
+`docker inspect`は、`--format`の`{{...}}`がフィールドの経路だけ(`{{.State.Running}}`、`{{json .State}}`)のときだけ拒否しない。
+`{{.}}`、`range`、`printf`、`index`のように、オブジェクト全体を出せる指定は拒否する。
+経路に`Env`か`Config`を含むものも拒否する。
+`docker compose config`と`convert`は、出力を絞った形を拒否しない。
+絞るオプションは、`--services`、`--profiles`、`--volumes`、`--images`、`--hash`、`-q`、`--no-interpolate`である。
 
 `mise exec`の拒否は、シェルにコードを渡す形と、環境変数の一覧を出すコマンドに限る。
 `mise exec node -- env`のように、ツール名の後ろに`--`があるときは、その後ろのコマンドを見る。
@@ -360,11 +371,12 @@ Claude Codeは終了コード2以外のフックの失敗ではツールの呼�
 実行環境が無いときは、警告を出して通す。
 実行環境が無いのは、次の2つの場合である。
 
-- bunとnodeのどちらも無いとき。依存を入れる前のコンテナが当たる
-- 起動スクリプトが無いとき。フックを入れる前のブランチをチェックアウトした場合が当たる
+- 動くbunも、24以上のnodeも無いとき。依存を入れる前のコンテナが当たる。PATHにあってもshimの中身が無いbunや、24未満のnodeは、動かないものとして扱う
+- 起動スクリプトが無いとき。`CLAUDE_PROJECT_DIR`が空のときが当たる
 
 この場合も拒否すると、すべてのBashが止まり、人が復旧できないクラウドのセッションでは作業を続けられない。
-`run.sh`はbun、node、警告して通す、の順に試す。
+`run.sh`は、動くbun、24以上のnode、`$HOME/.bun/bin/bun`、警告して通す、の順に試す。
+警告は、終了コード0でも利用者に見えるよう、標準出力のJSON(`systemMessage`)にも出す。起動スクリプトが無いときの登録コマンドも同じである。
 `mise`は経由しない。自動インストールがタイムアウトを超えることがあり、信頼していない設定では動かないためである。
 フックが動かない間は、`.claude/settings.json`の拒否ルールだけが残る。
 フックは、bunとnodeのどちらでも動く(nodeは型を取り除いて`.ts`を実行できる24以上)。
@@ -399,7 +411,8 @@ bunかnodeの起動そのものが止まったときだけ、タイムアウト�
 - gitの省略形のオプション(`--forc`など)
 - 式の中でファイルを開く操作(`sed`の`r`コマンド、`perl -e`など)
 - `cd`やglob、`dd`、`perl -pi`、`find -delete`を使った`.git/hooks`と`.git/config`の書き換え
-- `cat /proc/self/environ`のように、環境変数をファイルとして読む操作
+- `echo ... | cat | sh`のように、間にコマンドを挟んだ標準入力のシェル(直前のパイプの元だけを見る)
+- `cat`や`strings`以外のコマンドで`/proc/<pid>/environ`を読む操作
 - `git checkout <名前>`が、ファイルの復元かブランチの切り替えか(名前が1つなら、ブランチの切り替えとして扱う)
 - `docker run ... env`のように、新しく起動するコンテナで環境変数を出す操作
 - `gh auth token`のように、認証情報を表示するコマンドと、`~/.ssh`やgh CLIの設定ファイルの読み取り
