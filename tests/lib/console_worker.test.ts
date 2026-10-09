@@ -6,10 +6,12 @@ import {
   CONSOLE_WORKER_MISSING_NOTICE,
   CONSOLE_WORKER_UNKNOWN_LIMIT,
   checkConsoleWorker,
+  consoleQueueQuery,
   judgeConsoleQueue,
   nextUnknownCount,
   parseUnknownCount,
   watchConsoleWorker,
+  watchRunsQuery,
 } from "../../f/factory/lib/console_worker.ts";
 import type { NotifyEvent } from "../../f/factory/lib/discord.ts";
 import { logger } from "../../f/factory/lib/log.ts";
@@ -28,13 +30,21 @@ function waiting(seconds: number, extra: Record<string, unknown> = {}) {
   };
 }
 
-/** `secondsAgo`秒前に終わった`console_fetch_watch`の実行。 */
+/**
+ * `secondsAgo`秒前に終わったConsole用workerの`console_fetch_watch`の実行。
+ * Windmillの応答に合わせ、`completed_at`はnullで、開始時刻と所要時間から完了時刻が決まる。
+ */
 function completed(secondsAgo: number, extra: Record<string, unknown> = {}) {
+  const durationMs = 2000;
   return {
     id: "run",
     script_path: "f/factory/console_fetch_watch",
+    tag: "console",
     success: true,
-    completed_at: new Date(NOW - secondsAgo * 1000).toISOString(),
+    canceled: false,
+    completed_at: null,
+    started_at: new Date(NOW - secondsAgo * 1000 - durationMs).toISOString(),
+    duration_ms: durationMs,
     ...extra,
   };
 }
@@ -132,15 +142,118 @@ describe("judgeConsoleQueue", () => {
     expect(judgeConsoleQueue([], { jobs: [] }, NOW)).toBe("unknown");
   });
 
-  test("does not count a watch run without completed_at", () => {
+  test("derives the completion time from started_at and duration_ms", () => {
     expect(
-      judgeConsoleQueue([], [completed(60, { completed_at: undefined })], NOW),
+      judgeConsoleQueue(
+        [],
+        [
+          completed(0, {
+            started_at: new Date(NOW - 3000 * 1000).toISOString(),
+            duration_ms: 1_500_000,
+          }),
+        ],
+        NOW,
+      ),
+    ).toBe("ok");
+  });
+
+  test("prefers completed_at when it is a string", () => {
+    expect(
+      judgeConsoleQueue(
+        [],
+        [
+          completed(0, {
+            completed_at: new Date(NOW - 60 * 1000).toISOString(),
+            started_at: new Date(NOW - 7200 * 1000).toISOString(),
+            duration_ms: 0,
+          }),
+        ],
+        NOW,
+      ),
+    ).toBe("ok");
+  });
+
+  test("does not count a watch run without started_at and completed_at", () => {
+    expect(
+      judgeConsoleQueue([], [completed(60, { started_at: undefined })], NOW),
+    ).toBe("unknown");
+  });
+
+  test("does not count a watch run without duration_ms", () => {
+    expect(
+      judgeConsoleQueue([], [completed(60, { duration_ms: undefined })], NOW),
+    ).toBe("unknown");
+  });
+
+  test("does not count a watch run whose duration_ms is not a number", () => {
+    expect(
+      judgeConsoleQueue([], [completed(60, { duration_ms: "2000" })], NOW),
+    ).toBe("unknown");
+  });
+
+  test("does not count a watch run whose started_at is not a date", () => {
+    expect(
+      judgeConsoleQueue([], [completed(60, { started_at: "soon" })], NOW),
     ).toBe("unknown");
   });
 
   test("does not count a watch run whose completed_at is not a date", () => {
     expect(
-      judgeConsoleQueue([], [completed(60, { completed_at: "soon" })], NOW),
+      judgeConsoleQueue(
+        [],
+        [completed(60, { completed_at: "soon", started_at: undefined })],
+        NOW,
+      ),
+    ).toBe("unknown");
+  });
+
+  test("does not count a run on the default worker tag", () => {
+    expect(judgeConsoleQueue([], [completed(60, { tag: "bun" })], NOW)).toBe(
+      "unknown",
+    );
+  });
+
+  test("does not count a run without a tag", () => {
+    expect(
+      judgeConsoleQueue([], [completed(60, { tag: undefined })], NOW),
+    ).toBe("unknown");
+  });
+
+  test("does not count a canceled run", () => {
+    expect(
+      judgeConsoleQueue([], [completed(60, { canceled: true })], NOW),
+    ).toBe("unknown");
+  });
+
+  test("counts a run whose canceled flag is missing", () => {
+    expect(
+      judgeConsoleQueue([], [completed(60, { canceled: undefined })], NOW),
+    ).toBe("ok");
+  });
+
+  test("counts a failed run as proof that the worker ran", () => {
+    expect(
+      judgeConsoleQueue([], [completed(60, { success: false })], NOW),
+    ).toBe("ok");
+  });
+
+  test("falls back to an older console run when the newest run was on another tag", () => {
+    expect(
+      judgeConsoleQueue(
+        [],
+        [completed(30, { tag: "bun" }), completed(600)],
+        NOW,
+      ),
+    ).toBe("ok");
+  });
+
+  test("is unknown when only an old console run remains behind a newer other-tag run", () => {
+    expect(
+      judgeConsoleQueue(
+        [],
+        [completed(30, { tag: "bun" }), completed(7200)],
+        NOW,
+      ),
     ).toBe("unknown");
   });
 
@@ -159,9 +272,29 @@ describe("judgeConsoleQueue", () => {
   test("is stalled for a long wait even when the watch runs are not an array", () => {
     expect(judgeConsoleQueue([waiting(900)], null, NOW)).toBe("stalled");
   });
+});
 
-  test("uses a five minute threshold", () => {
-    expect(CONSOLE_JOB_WAIT_SECONDS).toBe(300);
+describe("consoleQueueQuery", () => {
+  test("asks for waiting console jobs oldest first", () => {
+    expect(consoleQueueQuery("factory")).toEqual({
+      workspace: "factory",
+      tag: "console",
+      running: false,
+      scheduledForBeforeNow: true,
+      orderDesc: false,
+      perPage: 100,
+    });
+  });
+});
+
+describe("watchRunsQuery", () => {
+  test("asks for the newest completed console_fetch_watch runs", () => {
+    expect(watchRunsQuery("factory")).toEqual({
+      workspace: "factory",
+      scriptPathExact: "f/factory/console_fetch_watch",
+      orderDesc: true,
+      perPage: 10,
+    });
   });
 });
 
@@ -200,9 +333,27 @@ describe("notices", () => {
     expect(CONSOLE_WORKER_MISSING_NOTICE.message).toContain("受けていません");
   });
 
+  test("the check failed notice names the warning to look for", () => {
+    expect(CONSOLE_WORKER_CHECK_FAILED_NOTICE.message).toContain(
+      "could not confirm the console worker from the job lists",
+    );
+  });
+
   test("the check failed notice mentions the watch schedule", () => {
     expect(CONSOLE_WORKER_CHECK_FAILED_NOTICE.message).toContain(
-      "console_fetch_watch",
+      "console_fetch_watchのスケジュールが有効か",
+    );
+  });
+
+  test("the check failed notice mentions the tag of the latest run", () => {
+    expect(CONSOLE_WORKER_CHECK_FAILED_NOTICE.message).toContain(
+      "tag consoleで動いているか",
+    );
+  });
+
+  test("the check failed notice does not assume a missing warning", () => {
+    expect(CONSOLE_WORKER_CHECK_FAILED_NOTICE.message).not.toContain(
+      "警告が出ていなければ",
     );
   });
 
@@ -406,10 +557,12 @@ describe("checkConsoleWorker", () => {
     expect(await checkConsoleWorker(h.deps)).toBe("unknown");
   });
 
-  test("logs the listing failure", async () => {
+  test("logs the failure to list the waiting jobs", async () => {
     const h = harness({ response: FAILS });
     await checkConsoleWorker(h.deps);
-    expect(h.logLines.join("\n")).toContain("could not list the console jobs");
+    expect(h.logLines.join("\n")).toContain(
+      "could not list the waiting console jobs",
+    );
   });
 
   test("logs the unconfirmed state for an unexpected response", async () => {
@@ -429,10 +582,12 @@ describe("checkConsoleWorker", () => {
     expect(h.logLines.join("\n")).toContain("console worker check timed out");
   });
 
-  test("logs the listing failure of the watch runs", async () => {
+  test("logs the failure to list the watch runs", async () => {
     const h = harness({ response: PRESENT, recent: FAILS });
     await checkConsoleWorker(h.deps);
-    expect(h.logLines.join("\n")).toContain("could not list the console jobs");
+    expect(h.logLines.join("\n")).toContain(
+      "could not list the recent console_fetch_watch runs",
+    );
   });
 
   test("returns unknown when the watch runs cannot be listed", async () => {

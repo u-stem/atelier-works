@@ -40,7 +40,7 @@ const MISSING_ACTION =
 const CHECK_FAILED_CAUSE =
   "Console用のworkerがジョブを受けているかを、1時間続けて確かめられていません。workerが止まっていても気づけません";
 const CHECK_FAILED_ACTION =
-  "self_updateのジョブログで、workerの確認の警告の内容を確かめる。警告が出ていなければ、console_fetch_watchのスケジュールが有効かを確かめる";
+  "self_updateのジョブログの警告を確かめる。could not confirm the console worker from the job listsが続くなら、console_fetch_watchのスケジュールが有効か、直近の実行がtag consoleで動いているかを確かめる。ほかの警告なら、その内容に従って原因を直す";
 
 /**
  * 通知の本文は、workerがジョブを受けていない間は毎回同じ文にする。
@@ -57,12 +57,66 @@ export const CONSOLE_WORKER_CHECK_FAILED_NOTICE: NoticeRecord = {
   message: `${CHECK_FAILED_CAUSE}。次の操作: ${CHECK_FAILED_ACTION}`,
 };
 
+/** 待ちのジョブの一覧を取るAPIの引数。待ちが長いジョブを取りこぼさないよう、古いものから取る。 */
+export function consoleQueueQuery(workspace: string) {
+  return {
+    workspace,
+    tag: CONSOLE_WORKER_TAG,
+    running: false,
+    scheduledForBeforeNow: true,
+    orderDesc: false,
+    perPage: 100,
+  };
+}
+
+/**
+ * `console_fetch_watch`の完了した実行を取るAPIの引数。新しい順に取る。
+ * 手動の実行やpreviewはdefaultのworkerで動いてtagが違うので、tagで絞った後にも
+ * 最新が残るよう、1件でなく10件取る。
+ */
+export function watchRunsQuery(workspace: string) {
+  return {
+    workspace,
+    scriptPathExact: CONSOLE_FETCH_WATCH_PATH,
+    orderDesc: true,
+    perPage: 10,
+  };
+}
+
 /** 判定の結果。`stalled`は、Console用のworkerがジョブを受けていないこと。 */
 export type ConsoleWorkerCheck = "ok" | "stalled" | "unknown";
 
 /**
- * `console_fetch_watch`の実行履歴の応答から、最も新しい完了時刻(エポックミリ秒)を返す。
- * 一覧でないとき、完了時刻が日時として読める要素が無いときは`null`を返す。
+ * 実行履歴の1件の完了時刻(エポックミリ秒)を返す。
+ * `completed_at`が日時として読めればそれを使う。Windmillの応答では`completed_at`がnullのことがあるため、
+ * 読めなければ`started_at`に`duration_ms`を足す。どちらも読めなければ`null`を返す。
+ */
+function completionMs(run: Record<string, unknown>): number | null {
+  if (typeof run.completed_at === "string") {
+    const completedMs = Date.parse(run.completed_at);
+    if (!Number.isNaN(completedMs)) {
+      return completedMs;
+    }
+  }
+  if (
+    typeof run.started_at === "string" &&
+    typeof run.duration_ms === "number"
+  ) {
+    const startedMs = Date.parse(run.started_at);
+    if (!Number.isNaN(startedMs) && Number.isFinite(run.duration_ms)) {
+      return startedMs + run.duration_ms;
+    }
+  }
+  return null;
+}
+
+/**
+ * `console_fetch_watch`の実行履歴の応答から、Console用のworkerが動いた最も新しい完了時刻
+ * (エポックミリ秒)を返す。
+ * 数えるのは、tagが`console`で、取り消されていない実行だけである。
+ * 手動の実行やpreviewはdefaultのworkerで動き、人が取り消したジョブもworkerの動作の証拠にならない。
+ * 失敗した実行は、workerがジョブを受けて動いた証拠として数える。
+ * 一覧でないとき、数えられる要素が無いときは`null`を返す。
  */
 function latestCompletionMs(runs: unknown): number | null {
   if (!Array.isArray(runs)) {
@@ -70,14 +124,15 @@ function latestCompletionMs(runs: unknown): number | null {
   }
   let latest: number | null = null;
   for (const run of runs) {
-    if (!isRecord(run) || typeof run.completed_at !== "string") {
+    if (
+      !isRecord(run) ||
+      run.tag !== CONSOLE_WORKER_TAG ||
+      run.canceled === true
+    ) {
       continue;
     }
-    const completedMs = Date.parse(run.completed_at);
-    if (
-      !Number.isNaN(completedMs) &&
-      (latest === null || completedMs > latest)
-    ) {
+    const completedMs = completionMs(run);
+    if (completedMs !== null && (latest === null || completedMs > latest)) {
       latest = completedMs;
     }
   }
@@ -87,9 +142,11 @@ function latestCompletionMs(runs: unknown): number | null {
 /**
  * 実行待ちのジョブと`console_fetch_watch`の実行履歴の応答から、Console用のworkerがジョブを受けているかを判定する。
  * 次の順に決める。
- * 1. 予定時刻から`CONSOLE_JOB_WAIT_SECONDS`秒以上待っているジョブが1件でもあれば`stalled`。
- * 2. 待ちの応答が一覧でなければ`unknown`。
- * 3. 待っているジョブが残っているか、直近`CONSOLE_RECENT_RUN_SECONDS`秒以内に`console_fetch_watch`が終わっていれば`ok`。
+ * 1. 待ちの応答が一覧でなければ`unknown`。
+ * 2. 予定時刻から`CONSOLE_JOB_WAIT_SECONDS`秒以上待っているジョブが1件でもあれば`stalled`。
+ *    実行履歴の応答の形には左右されない。
+ * 3. 待っているジョブが残っているか、直近`CONSOLE_RECENT_RUN_SECONDS`秒以内に
+ *    Console用のworkerが`console_fetch_watch`を終えていれば`ok`。
  *    ジョブが作られていることが、スケジュールが生きている証拠になる。
  * 4. どちらも無ければ`unknown`。スケジュールが無効だと待つジョブが作られず、workerの状態を判定できない。
  * 応答は信頼できない入力として読み、実行中の要素と、日時が無い・日時として読めない要素は数えない。
@@ -141,7 +198,7 @@ export type ConsoleWorkerCheckDeps = {
    * 待ちが長いジョブを取りこぼさないよう、古いものから返す。
    */
   readonly listWaitingJobs: () => Promise<unknown>;
-  /** `console_fetch_watch`の完了した実行を、新しい順に返す(最新の1件で足りる)。 */
+  /** `console_fetch_watch`の完了した実行を、新しい順に返す(tagで絞る前の複数件)。 */
   readonly listRecentWatchRuns: () => Promise<unknown>;
   /** 現在時刻(エポックミリ秒)。 */
   readonly now: () => number;
@@ -181,7 +238,7 @@ async function checkOnce(
   try {
     waitingJobs = await deps.listWaitingJobs();
   } catch (err) {
-    deps.log.warn("could not list the console jobs", {
+    deps.log.warn("could not list the waiting console jobs", {
       error: maskSecrets(String(err)),
     });
     return "unknown";
@@ -191,7 +248,7 @@ async function checkOnce(
   } catch (err) {
     // 待ちが長いジョブがあれば履歴が無くても判定できるので、ここでは戻らない。
     listFailed = true;
-    deps.log.warn("could not list the console jobs", {
+    deps.log.warn("could not list the recent console_fetch_watch runs", {
       error: maskSecrets(String(err)),
     });
   }

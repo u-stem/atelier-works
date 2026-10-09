@@ -15,9 +15,9 @@
 import wmillDefault, * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "./lib/config.ts";
 import {
-  CONSOLE_FETCH_WATCH_PATH,
-  CONSOLE_WORKER_TAG,
+  consoleQueueQuery,
   watchConsoleWorker,
+  watchRunsQuery,
 } from "./lib/console_worker.ts";
 import { addNoticeUnlessUnresolved, recordDeployment } from "./lib/db.ts";
 import { notifyBestEffort } from "./lib/discord.ts";
@@ -328,21 +328,13 @@ export async function main(): Promise<SelfUpdateResult> {
     // 更新が例外を投げても検知は走らせる。更新が失敗し続けると、Console用workerの停止に誰も気づけなくなるため。
     await watchConsoleWorker({
       listWaitingJobs: () =>
-        wmill.JobService.listQueue({
-          workspace: wmillDefault.getWorkspace(),
-          tag: CONSOLE_WORKER_TAG,
-          running: false,
-          scheduledForBeforeNow: true,
-          orderDesc: false,
-          perPage: 100,
-        }),
+        wmill.JobService.listQueue(
+          consoleQueueQuery(wmillDefault.getWorkspace()),
+        ),
       listRecentWatchRuns: () =>
-        wmill.JobService.listCompletedJobs({
-          workspace: wmillDefault.getWorkspace(),
-          scriptPathExact: CONSOLE_FETCH_WATCH_PATH,
-          orderDesc: true,
-          perPage: 1,
-        }),
+        wmill.JobService.listCompletedJobs(
+          watchRunsQuery(wmillDefault.getWorkspace()),
+        ),
       now: () => Date.now(),
       addNotice: (record) => addNoticeUnlessUnresolved(record),
       notify: async (event) => {
