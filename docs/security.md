@@ -253,16 +253,186 @@ workerには`no-new-privileges:true`と、プロセス数の上限(`deploy.resou
 | --- | --- |
 | `mise.local.toml`と、その別名のファイル(`.mise.local.toml`、`mise.*.local.toml`)の`Read`と`Edit` | 秘密値そのものが書かれている |
 | `.env`、`infra/.env`、`infra/secrets.env`の`Read` | 秘密値が書かれうる |
+| `.wmill/`の`remotes.ndjson`の`Read`と`Edit` | wmill CLIのワークスペースのプロファイルで、APIトークンが書かれている |
 | `mise env`とその別名(`mise e`、`mise ev`、`mise env-vars`) | 展開した環境変数の一覧を出力する |
 | `mise config`、`mise cfg`、`mise toml` | 設定値を出力する |
 | 引数なしの`mise set` | 設定値の一覧を出力する |
-| `mise x`、`mise exec -- env`、`mise exec -- printenv`、`printenv`、`env` | 環境変数を出力する |
+| `mise exec -- env`、`mise exec -- printenv`、`mise x -- env`、`mise x -- printenv`、`printenv`、`env` | 環境変数を出力する |
 | `cat mise.local.toml` | 秘密値そのものを出力する |
-| `docker compose config` | 変数を展開したcompose定義を出力する |
-| `docker inspect` | コンテナに渡した環境変数が見える |
-| `docker exec`、`docker container exec`、`docker compose exec` | コンテナの中から環境変数を読める |
 
 値を指定して書き込むだけの`mise set -E local KEY=value`は拒否しない。これらのルールは、`mise run <task>`を通した迂回(タスクの中で秘密値を出力する処理など)は防げない。
+
+`mise x`は`mise exec`の別名で、`mise x -- bun test`のように通常の作業にも使うので、環境変数を出す形だけをこの設定で拒否する。
+`docker exec`と`docker inspect`は、設定のルールが引数を絞れないので、ここには置かない。
+どちらも、環境変数を出す形だけを次の節のフックが拒否する。
+引数なしの`docker compose config`だけは、設定にも置く。
+`mise set -E`は、秘密値を投入する手順([セットアップ](setup.md))と同じ形なので、設定では拒否せず、フックが`KEY=VALUE`の無い呼び出しだけを拒否する。
+
+## Claude Codeのフック
+
+ClaudeがBashを実行する前に、`.claude/settings.json`が`scripts/claude-hooks/`のフックを動かす。
+ローカルとクラウドのどちらのセッションでも動く。
+FactoryのheadlessなClaudeの実行は`.claude/`を読まないので、このフックは動かない。
+
+| 拒否する操作 | 理由 |
+| --- | --- |
+| 無条件のforce push(`--force`、`-f`、`+`で始まるrefspec) | 公開した履歴を書き換えると、ほかの作業やFactoryの`pr_fix`の変更を消しうる |
+| `main`と`master`へのpush(`--all`と`--mirror`を含む) | mainへの変更は、PRとCIを通してだけ入れる |
+| subagentからのpush | subagentには、pushの前に確認する相手がいない |
+| `xargs`の引数で渡す`git push`と`git commit` | 標準入力から来る引数は、実行するまで分からない |
+| `--no-verify`、`git commit -n`、`core.hooksPath`の設定、`LEFTHOOK`を`0`、`false`、`off`、`no`にすること | lefthookの検査を飛ばすと、壊れた変更や秘密値がpushされる |
+| `LEFTHOOK_EXCLUDE`に`wmill-metadata`と`wmill-metadata-check`以外を書くこと | AGENTS.mdが飛ばしてよいとするのは、この2つだけである |
+| `LEFTHOOK_BIN`と`LEFTHOOK_CONFIG`の設定 | インストール済みのフックが読む、lefthookのバイナリと設定を差し替えられる |
+| `lefthook uninstall`、`.git/hooks`と`.git/config`への書き込み | gitのフックを外せる |
+| `git -c alias.*`、`remote.*.push`・`push.default`・`include.*`・`includeIf.*`の設定、`GIT_CONFIG_COUNT`・`GIT_CONFIG_GLOBAL`・`GIT_CONFIG_SYSTEM`などの環境変数 | `push`や`core.hooksPath`を別の名前や設定の裏から差し込める |
+| フックを実行するgitのサブコマンド(`commit`、`push`、`merge`、`rebase`など)に前置きした`HOME=`と`XDG_CONFIG_HOME=` | gitに別の設定ファイルを読ませて、フックを外せる |
+| `echo`や`printf`が変数から組み立てた文字列を、標準入力で読むシェル | 中身を判定できない |
+| `mise exec`の`-c`と`--command`、コードを渡したシェル、`env`、`printenv`、`set`、`export -p`などの環境変数の一覧 | `mise exec`は`mise.local.toml`の秘密値を環境変数として渡すので、値を表示できる |
+| `docker exec`と`docker compose exec`で実行する環境変数の一覧とコードを渡したシェル(`mise exec --`の前置きがあっても) | コンテナは秘密値を環境変数として持つ |
+| フィールドの経路だけの`--format`を持たない`docker inspect`、`Env`か`Config`を含む経路 | コンテナに渡した環境変数が見える |
+| 出力を絞らない`docker compose config`と`docker compose convert` | 変数を展開したcompose定義を出力する |
+| `/proc/<pid>/environ`(`task/<tid>`の下を含む)を引数やリダイレクトに含むコマンド | プロセスの環境変数がそのまま入っている |
+| 書き込む`KEY=VALUE`を持たない`mise set` | `mise.local.toml`の値を一覧する |
+| 秘密値のファイル(`mise.local.toml`とその別名、`.wmill/`の`remotes.ndjson`、`.env`系)を名前で指すコマンド | `Read`の拒否はBashに効かず、`cat`や`grep`で読むと値が会話の記録に残る |
+| リポジトリの根、`infra`、`.wmill`を起点にした再帰的な`grep`、`-u`や`--no-ignore`を付けた`rg`、`git grep --no-index` | gitignore済みの秘密値のファイルまで読む |
+
+`--force-with-lease`と`--force-if-includes`は、subagentではないセッションが`main`と`master`以外のブランチへpushするときに限って許す。
+リモートが想定と違えば失敗するので、他の人の変更を上書きせずに、自分のブランチの履歴を直せる。
+
+拒否のメッセージには、代わりの操作を示す。
+再帰的な検索の代わりには、gitignoreを尊重する`rg`、`git grep`、Grepツールを使う。
+`mise exec`の代わりには、ツールを直接指定するか、`mise run`のタスクを使う。
+秘密値が設定済みかどうかは`mise run doctor`で確かめる。
+
+### 判定の範囲
+
+フックは、コマンドを字句に分けてから判定する。
+引用符の中の文字列と、区切り語を引用符で囲んだヒアドキュメントの本文は、コマンドとして扱わない。
+`sh -c`、`eval`、`$(...)`、バッククォートの中身は、別のコマンドとして判定する。
+標準入力からコードを読むシェルは、入力がヒアストリング、ヒアドキュメント、`echo`や`printf`が書いた文字列ならその中身を判定する。
+`curl`の出力を`sh`に渡す形のように、別のプログラムが渡すコードは、中身を読めないので拒否しない。
+コンテナの中でインストーラーを実行する作業を止めないためである。
+`bash -`は標準入力から読む形として扱う。
+`time`、`command`、`exec`、`env`、`xargs`、`timeout`などの前置きは外してから判定する。
+`bash`のほかに、`fish`、`ash`、`mksh`、`tcsh`、`csh`、`busybox sh`も同じように扱う。
+
+秘密値のファイルの判定は、ファイルを読む引数とリダイレクトの先にだけ働く。
+検索パターン(`rg mise.local.toml docs`の`mise.local.toml`)と、`sed`や`awk`の式の中の名前は拒否しない。
+`find`の`-name`や`-path`などの値も拒否しない。
+`ls`、`test`、`[[`、`echo`、`git check-ignore`のように中身を読まないコマンドも、名前を書いて拒否しない。
+`process.env`のような識別子と、空白を含む文章は、ファイル名として扱わない。
+`rm -rf dist/*`のように`*`だけで終わるglobは拒否しない。
+`*.toml`のような秘密値のファイル名に当たりうるglobは、リポジトリの根、`infra`、`.wmill`の中のときだけ拒否する。
+
+再帰的な`grep`と、`-u`や`--no-ignore`を付けた`rg`は、検索の起点がリポジトリの根、`infra`、`.wmill`、またはそれらを含むディレクトリのときだけ拒否する。
+`scripts/`のようなサブディレクトリの検索は拒否しない。
+
+`--no-verify`は、フックを実行するgitのサブコマンド(`commit`、`push`、`merge`、`rebase`、`am`、`cherry-pick`、`revert`、`pull`)でだけ拒否する。
+`--`より後ろはパスとして扱う。
+`git config core.hooksPath`は、値を設定するときだけ拒否する。読むことと`--unset`は拒否しない。
+
+`git push`のブランチを省いたときの今のブランチは、同じコマンド行の前にある文字どおりの`cd`と`pushd`をたどって調べる。
+`git -C`、`--git-dir`、`--work-tree`が指すディレクトリも同じように使う。
+同じコマンド行の前にブランチを切り替える操作があれば、切り替えた先を今のブランチとする。
+対象は`git checkout`、`git switch`、それぞれの`-b`と`-c`と`-t`、`git rebase <上流> <ブランチ>`、`git branch -m`である。
+`git rebase`のオプションの値(`-X theirs`、`--onto <先>`など)は、ブランチとして数えない。
+`git checkout <名前>`の名前がローカルのブランチなら、切り替え先だけを今のブランチとする。
+そうでなければファイルの復元のこともあるので、実際のブランチも候補に残し、どちらかが保護するブランチなら拒否する。
+`git rebase --root <ブランチ>`は、最初のオペランドをブランチとする。
+`git switch`と`-b`、`-c`は、切り替え先だけを今のブランチとする。
+`HEAD`、`@`、`main~2`のような相対の参照は、ブランチを変えないものとして扱う。
+次の場合は、今のブランチが決まらないものとして扱う。
+
+- 切り替え先が変数のとき
+- `git checkout -`と`git checkout @{-1}`のとき
+- `--detach`と`-d`のとき
+- `git rebase <上流> <ブランチ>`の`<ブランチ>`が変数のとき
+
+切り替えたブランチは、同じリポジトリの別のディレクトリ(`git -C scripts push`)でも使う。
+`;`でつないだ切り替えも、成功したものとして扱う。
+移動先が変数のときも今のブランチを調べられないので、そのpushだけを拒否する。
+push先に`"$(git branch --show-current)"`を書いたときは、今のブランチとして扱う。
+push先のrefspecは、`refs/heads/`と`heads/`を外して`main`、`master`と比べ、`*`を含むものは拒否する。
+今のブランチとリポジトリの根を調べるgitの起動は、ディレクトリごとに結果を覚える。
+1回の判定で、起動は20回、時間は5秒までに限る。
+超えたコマンド行は、分けて実行するよう理由を示して拒否する。
+
+`docker exec`と`docker compose exec`は、環境変数の一覧を出すコマンド(`env`、`/usr/bin/env`、`printenv`)かコードを渡したシェルのときだけ拒否する。
+`docker compose exec windmill_worker kill <pid>`のような運用の手順は拒否しない。
+`docker inspect`は、`--format`の`{{...}}`がフィールドの経路だけ(`{{.State.Running}}`、`{{json .State}}`)のときだけ拒否しない。
+`{{.}}`、`range`、`printf`、`index`のように、オブジェクト全体を出せる指定は拒否する。
+経路の区切りに`Env`か`Config`があるものも拒否する(`.HostConfig.Binds`は拒否しない)。
+`--format`を複数指定したときは、1つでも拒否する形なら拒否する。
+`docker compose config`と`convert`は、出力を絞った形を拒否しない。
+絞るオプションは、`--services`、`--profiles`、`--volumes`、`--images`、`--hash`、`-q`、`--no-interpolate`である。
+
+`mise exec`の拒否は、シェルにコードを渡す形と、環境変数の一覧を出すコマンドに限る。
+`mise exec node -- env`のように、ツール名の後ろに`--`があるときは、その後ろのコマンドを見る。
+名前を指定したツール(`mise exec -- gitleaks`、`mise exec -- wmill`、`mise exec -- bun test`)は拒否しない。
+`bun -e`や`python -c`のように、インタープリターにコードを渡す形も拒否しない。
+`mise exec -- bash scripts/doctor.sh`のように、スクリプトのファイルを渡したシェルも拒否しない。
+この規則はベストエフォートで、`mise exec`経由で秘密値を読む方法をすべては塞げない。
+`mise run`のタスクはリポジトリが定義するので、拒否しない。
+
+### 失敗したときの動作
+
+コマンドの意味を判定できないときは拒否する。
+字句に分けられないコマンド、push先が実行するまで決まらないコマンド、フック自身の異常終了がこれに当たる。
+Claude Codeは終了コード2以外のフックの失敗ではツールの呼び出しを止めないので、`scripts/claude-hooks/run.sh`が失敗を終了コード2に揃える。
+
+実行環境が無いときは、警告を出して通す。
+実行環境が無いのは、次の2つの場合である。
+
+- 動くbunも、24以上のnodeも無いとき。依存を入れる前のコンテナが当たる。PATHにあってもshimの中身が無いbunや、24未満のnodeは、動かないものとして扱う
+- 起動スクリプトが無いとき。`CLAUDE_PROJECT_DIR`が空のときが当たる
+
+この場合も拒否すると、すべてのBashが止まり、人が復旧できないクラウドのセッションでは作業を続けられない。
+`run.sh`は、動くbun、24以上のnode、`$HOME/.bun/bin/bun`、警告して通す、の順に試す。
+警告は、終了コード0でも利用者に見えるよう、標準出力のJSON(`systemMessage`)にも出す。
+起動スクリプトが無いときの登録コマンドも同じである。
+`mise`は経由しない。自動インストールがタイムアウトを超えることがあり、信頼していない設定では動かないためである。
+フックが動かない間は、`.claude/settings.json`の拒否ルールだけが残る。
+フックは、bunとnodeのどちらでも動く(nodeは型を取り除いて`.ts`を実行できる24以上)。
+
+Claude Codeは、タイムアウトしたフックのツール呼び出しを止めず、通常の権限の確認に進める。
+そのため、登録するタイムアウトは10秒にして、処理が長引かないようにしている。
+判定は同期の処理で、途中から止められない。
+代わりに、gitの起動に回数と時間の上限を置き、gitの1回の実行にも2秒の上限を付ける。
+非同期の判定を待つ処理には、8秒で終了コード2の拒否にする上限を付ける。
+bunかnodeの起動そのものが止まったときだけ、タイムアウトの扱いになる。
+
+### 拒否された操作を人が実行する
+
+人は、拒否された操作を自分で実行できる。
+ローカルのターミナルでは、プロンプトの先頭に`!`を付けると、Claudeを通さずにシェルがコマンドを直接実行するので、フックは動かない。
+クラウドのセッションには`!`が無いので、人が別の場所で実行する。
+フックをすべて止めるときは、gitignore済みの`.claude/settings.local.json`に`"disableAllHooks": true`を書く。
+この設定はすべてのフックを止めるので、必要な間だけにして、済んだら消す。
+
+### 判定しないもの
+
+次の操作は判定できないので、拒否しない。
+
+- 変数に入れたパスやコマンド(`cat "$FILE"`、`"$GIT" push`、`eval $CMD`、`bash -c "$X"`)
+- 値が実行時に決まるオプション名(`git push ${X:---force}`など)
+- シェルのエイリアスと関数
+- `find -exec`、`env -S`、標準入力から名前を読む`xargs`(`git push`と`git commit`を除く)
+- 外すことにしていない前置きのコマンド(`watch`、`flock`、`stdbuf`、`script`、`parallel`、`setsid`、`doas`など)
+- スクリプトのファイルの中身
+- コマンドを起動するインタープリター(`bun -e`、`python -c`が`git push`を実行する場合など)
+- `bash /dev/stdin`や`source <(...)`のように、標準入力や置換から読むシェルのコード
+- gitの省略形のオプション(`--forc`など)
+- 式の中でファイルを開く操作(`sed`の`r`コマンド、`perl -e`など)
+- `cd`やglob、`dd`、`perl -pi`、`find -delete`を使った`.git/hooks`と`.git/config`の書き換え
+- `echo ... | cat | sh`のように、間にコマンドを挟んだ標準入力のシェル(直前のパイプの元だけを見る)
+- `docker run ... env`のように、新しく起動するコンテナで環境変数を出す操作
+- `gh auth token`のように、認証情報を表示するコマンドと、`~/.ssh`やgh CLIの設定ファイルの読み取り
+- `mise exec`経由で秘密値を読む方法の一部(ベストエフォートの規則である)
+- サブシェルの中の`cd`の範囲(外側にも効くものとして扱う)
+- 前置きではない`HOME`と`XDG_CONFIG_HOME`の設定(`export HOME=...`の後のgit、`sh -c`の中のgit)
+- 書き方を変えた`/proc/<pid>/environ`(`dd if=/proc/self/environ`、`/proc/self/./environ`、`//proc/...`、`/proc`の再帰的な検索)
+
+フックは誤操作を止める仕組みで、意図した迂回は防げない。
 
 ## draw.ioビューアーのプライバシー
 

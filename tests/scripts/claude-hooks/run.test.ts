@@ -1,0 +1,279 @@
+import { describe, expect, test } from "bun:test";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+
+// 起動スクリプトの契約は終了コードそのものなので、実際のshで実行して確かめる。
+const HOOKS = join(import.meta.dir, "../../../scripts/claude-hooks");
+const RUN = join(HOOKS, "run.sh");
+const PATH_WITH_BUN = `${dirname(process.execPath)}:/usr/bin:/bin`;
+const NODE = Bun.which("node");
+
+function launch(args: readonly string[], stdin: string, path: string) {
+  return Bun.spawnSync(["/bin/sh", RUN, ...args], {
+    stdin: Buffer.from(stdin),
+    env: { PATH: path },
+  });
+}
+
+const DENIED_COMMAND = JSON.stringify({
+  hook_event_name: "PreToolUse",
+  tool_name: "Bash",
+  tool_input: { command: "git commit --no-verify -m x" },
+  cwd: "/repo",
+});
+
+/** 使い捨てのディレクトリを作り、`run`に渡して終わったら消す。 */
+function withTempDir<T>(run: (directory: string) => T): T {
+  const directory = mkdtempSync(join(tmpdir(), "claude-hooks-"));
+  try {
+    return run(directory);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+/** nodeだけをPATHに置いた状態で`run`を実行する。nodeが無ければnullを返す。 */
+function withNodeOnly<T>(run: (path: string) => T): T | null {
+  if (NODE === null) return null;
+  return withTempDir((directory) => {
+    symlinkSync(NODE, join(directory, "node"));
+    return run(directory);
+  });
+}
+
+/** nodeが型を取り除いて`.ts`を実行できる版(24以上)なら真。 */
+function nodeRunsTypeScript(): boolean {
+  if (NODE === null) return false;
+  const version = Bun.spawnSync([NODE, "--version"]).stdout.toString();
+  return Number(/^v(\d+)/.exec(version)?.[1] ?? 0) >= 24;
+}
+
+describe("run.sh", () => {
+  test("allows the tool call when neither bun nor node is on PATH", () => {
+    const result = withTempDir((directory) =>
+      launch(["bash-guard"], DENIED_COMMAND, directory),
+    );
+    expect(result.exitCode).toBe(0);
+  });
+
+  test("shows the user a system message when no runtime is found", () => {
+    const result = withTempDir((directory) =>
+      launch(["bash-guard"], DENIED_COMMAND, directory),
+    );
+    const output: unknown = JSON.parse(result.stdout.toString());
+    expect(output).toEqual({
+      systemMessage: expect.stringContaining("did not run"),
+    });
+  });
+
+  test("names the settings.json deny rules in the system message", () => {
+    const result = withTempDir((directory) =>
+      launch(["bash-guard"], DENIED_COMMAND, directory),
+    );
+    expect(result.stdout.toString()).toContain("deny rules");
+  });
+
+  test("does not decide anything when no runtime is found", () => {
+    const result = withTempDir((directory) =>
+      launch(["bash-guard"], DENIED_COMMAND, directory),
+    );
+    expect(result.stdout.toString()).not.toContain("permissionDecision");
+  });
+
+  test("warns that the guard did not run when no runtime is found", () => {
+    const result = withTempDir((directory) =>
+      launch(["bash-guard"], DENIED_COMMAND, directory),
+    );
+    expect(result.stderr.toString()).toContain("not checked");
+  });
+
+  test("does not fall back to mise", () => {
+    const ranMise = withTempDir((directory) => {
+      const marker = join(directory, "mise-ran");
+      writeFileSync(
+        join(directory, "mise"),
+        `#!/bin/sh\ntouch "${marker}"\nexit 1\n`,
+      );
+      chmodSync(join(directory, "mise"), 0o755);
+      launch(["bash-guard"], DENIED_COMMAND, directory);
+      return existsSync(marker);
+    });
+    expect(ranMise).toBe(false);
+  });
+
+  test("exits with 2 for an invalid hook name", () => {
+    expect(launch(["../x"], DENIED_COMMAND, PATH_WITH_BUN).exitCode).toBe(2);
+  });
+
+  test("exits with 2 for an unknown hook", () => {
+    expect(
+      launch(["no-such-hook"], DENIED_COMMAND, PATH_WITH_BUN).exitCode,
+    ).toBe(2);
+  });
+
+  test("exits with 2 when the hook fails", () => {
+    expect(launch(["bash-guard"], "not json", PATH_WITH_BUN).exitCode).toBe(2);
+  });
+
+  test("passes the deny decision of a real hook through", () => {
+    const result = launch(["bash-guard"], DENIED_COMMAND, PATH_WITH_BUN);
+    expect(result.stdout.toString()).toContain('"permissionDecision":"deny"');
+  });
+});
+
+/** `body`を中身にした実行ファイル`name`を`directory`に作る。 */
+function writeExecutable(directory: string, name: string, body: string) {
+  writeFileSync(join(directory, name), `#!/bin/sh\n${body}\n`);
+  chmodSync(join(directory, name), 0o755);
+}
+
+describe("run.sh picks a runtime that works", () => {
+  test.skipIf(!nodeRunsTypeScript())(
+    "uses node when the bun on PATH is broken",
+    () => {
+      const result = withTempDir((directory) => {
+        writeExecutable(directory, "bun", "exit 127");
+        symlinkSync(NODE ?? "node", join(directory, "node"));
+        return launch(["bash-guard"], DENIED_COMMAND, directory);
+      });
+      expect(result.stdout.toString()).toContain('"permissionDecision":"deny"');
+    },
+  );
+
+  test("allows the tool call when the only bun is broken and node is missing", () => {
+    const result = withTempDir((directory) => {
+      writeExecutable(directory, "bun", "exit 127");
+      return launch(["bash-guard"], DENIED_COMMAND, directory);
+    });
+    expect(result.exitCode).toBe(0);
+  });
+
+  test("allows the tool call when node is older than 24", () => {
+    const result = withTempDir((directory) => {
+      writeExecutable(directory, "node", "exit 1");
+      return launch(["bash-guard"], DENIED_COMMAND, directory);
+    });
+    expect(result.exitCode).toBe(0);
+  });
+
+  test("warns that the guard did not run when node is too old", () => {
+    const result = withTempDir((directory) => {
+      writeExecutable(directory, "node", "exit 1");
+      return launch(["bash-guard"], DENIED_COMMAND, directory);
+    });
+    expect(result.stdout.toString()).toContain("did not run");
+  });
+
+  test("uses bun from the home directory when PATH has no runtime", () => {
+    const result = withTempDir((home) => {
+      mkdirSync(join(home, ".bun/bin"), { recursive: true });
+      symlinkSync(process.execPath, join(home, ".bun/bin/bun"));
+      return withTempDir((empty) =>
+        Bun.spawnSync(["/bin/sh", RUN, "bash-guard"], {
+          stdin: Buffer.from(DENIED_COMMAND),
+          env: { PATH: empty, HOME: home },
+        }),
+      );
+    });
+    expect(result.stdout.toString()).toContain('"permissionDecision":"deny"');
+  });
+
+  test("still exits with 2 when a working bun crashes", () => {
+    expect(launch(["bash-guard"], "not json", PATH_WITH_BUN).exitCode).toBe(2);
+  });
+});
+
+describe("run.sh with node only", () => {
+  test.skipIf(!nodeRunsTypeScript())(
+    "runs the guard with node when bun is not on PATH",
+    () => {
+      const result = withNodeOnly((path) =>
+        launch(["bash-guard"], DENIED_COMMAND, path),
+      );
+      expect(result?.stdout.toString()).toContain(
+        '"permissionDecision":"deny"',
+      );
+    },
+  );
+
+  test.skipIf(!nodeRunsTypeScript())(
+    "exits with 2 under node when the input is not JSON",
+    () => {
+      const result = withNodeOnly((path) =>
+        launch(["bash-guard"], "not json", path),
+      );
+      expect(result?.exitCode).toBe(2);
+    },
+  );
+});
+
+describe("the hook entry point under node", () => {
+  test.skipIf(!nodeRunsTypeScript())(
+    "denies a command when run directly by node",
+    () => {
+      const result = Bun.spawnSync(
+        [NODE ?? "node", join(HOOKS, "bash-guard.ts")],
+        { stdin: Buffer.from(DENIED_COMMAND), env: { PATH: "/usr/bin:/bin" } },
+      );
+      expect(result.stdout.toString()).toContain('"permissionDecision":"deny"');
+    },
+  );
+
+  test.skipIf(!nodeRunsTypeScript())(
+    "allows an ordinary command when run directly by node",
+    () => {
+      const input = JSON.stringify({
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        tool_input: { command: "git status" },
+        cwd: "/repo",
+      });
+      const result = Bun.spawnSync(
+        [NODE ?? "node", join(HOOKS, "bash-guard.ts")],
+        { stdin: Buffer.from(input), env: { PATH: "/usr/bin:/bin" } },
+      );
+      expect(result.stdout.toString()).toBe("");
+    },
+  );
+
+  test.skipIf(!nodeRunsTypeScript() || Bun.which("git") === null)(
+    "reads the current branch through git under node",
+    () => {
+      const reason = withTempDir((directory) => {
+        // gitのフックの中で実行されると`GIT_DIR`などが引き継がれ、一時ディレクトリではなく外のリポジトリを初期化してしまうので外す。
+        const gitEnv = Object.fromEntries(
+          Object.entries(process.env).filter(
+            ([key]) => !key.startsWith("GIT_"),
+          ),
+        );
+        Bun.spawnSync(["git", "init", "-q", "-b", "main", directory], {
+          env: gitEnv,
+        });
+        const input = JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command: "git push" },
+          cwd: directory,
+        });
+        const result = Bun.spawnSync(
+          [NODE ?? "node", join(HOOKS, "bash-guard.ts")],
+          {
+            stdin: Buffer.from(input),
+            env: { PATH: `${dirname(Bun.which("git") ?? "")}:/usr/bin:/bin` },
+          },
+        );
+        return result.stdout.toString();
+      });
+      expect(reason).toContain("Pushing to main");
+    },
+  );
+});

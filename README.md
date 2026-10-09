@@ -106,7 +106,7 @@ atelier-works/
   f/factory/                       # Windmillのscript、flow、resource、variable、schedule
   infra/                           # Docker Compose、workerのDockerfile、console_fetcher、Caddyfile
   migrations/datatable/main/       # Data Tableのmigration
-  scripts/                         # doctor.sh、bootstrap.sh、test-db.sh、検査のスクリプト
+  scripts/                         # doctor.sh、bootstrap.sh、test-db.sh、検査のスクリプト、Claude Codeのフック
   templates/                       # factory_configの初期値のテンプレート
   tests/                           # bun testのテスト
 ```
