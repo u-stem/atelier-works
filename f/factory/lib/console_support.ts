@@ -8,8 +8,9 @@ export type NoticeSeverity = "info" | "action";
 
 /**
  * 通知の種類ごとの重要度。
- * `implement_needs_human`は作業項目が`needs_human`になり、失敗の一覧に行が出るので`info`とする。
- * `implement_launch_failed`は作業項目が承認済みや実装中のまま残り、失敗の一覧に出ない経路があるので`action`とする。`docs/operations.md`の通知の表に載る種類をすべて含む。
+ * `implement_needs_human`は作業項目が`needs_human`になり、要対応の一覧の失敗に行が出るので`info`とする。
+ * `implement_launch_failed`は作業項目が承認済みや実装中のまま残り、要対応の一覧の失敗に出ない経路があるので`action`とする。
+ * この対応表は、`docs/operations.md`の通知の表に載る種類をすべて含む。
  * 表に無い種類(将来足された種類)は、見落とさせないために`action`として扱う
  * (`noticeSeverity`)。
  */

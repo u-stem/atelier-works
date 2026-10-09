@@ -608,7 +608,7 @@ Consoleの**通知**タブには、Discordに送らない要対応の事項が�
 | `approval_notify_failed` | 承認待ちの通知がDiscordに届かなかった | 承認依頼は記録済みなので、**承認**タブで判断する |
 | `approval_comment_failed` | 承認のコメントをIssueに投稿できなかった | 承認と実装の起動は進んでいる。必要ならnoticeのリンクを載せたコメントを人がIssueに投稿する |
 | `implement_launch_failed` | 承認の後、実装フローへ進める処理がDBの失敗で例外になった | Windmillで`f/factory/retry_work_item`を作業項目のIDで実行して再開する |
-| `implement_needs_human` | 実装フローが人の対応待ちで止まった。作業項目は**失敗**タブにも出る | **失敗**タブの行から[人の対応待ちになったら](#人の対応待ちになったら)に進む |
+| `implement_needs_human` | 実装フローが人の対応待ちで止まった。作業項目は要対応の一覧の失敗に出るが、**失敗**タブには出ない | 作業項目のIDを**パイプライン**タブで確かめ、[人の対応待ちになったら](#人の対応待ちになったら)で原因を取り除いてから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行する |
 | `unsandboxed_check_commands` | 検査コマンドをサンドボックスなしで実行した | 設定が意図どおりか確かめる |
 | `fix_reply_post_failed` | 修正の返信の投稿に失敗した | PRで人が返信する |
 | `pr_fix_reviewer_request_failed` | 再レビューの依頼のAPIが失敗した。PRの取得の失敗と、Botや削除済みの作成者の名前で依頼を組み立てられない場合を含む | GitHubのPRで人がレビュアーを依頼する |
@@ -671,6 +671,7 @@ Consoleが止まっていてもDiscordには届くので、通知の確認先は
 3. `on_error_schedule`のジョブログに、次のエラーが出ていないことを見る。
    履歴を読めなかったときは`failed to read the schedule history`である。
    通知を記録できなかったときは`failed to record the schedule failing notice`である。
+   通知`schedule_failing_check_failed`を記録できなかったときは`failed to record the schedule check failure`である。
 4. 3回目の失敗の直後に通知ができていなければ、次の失敗で出るかを見る。直後は今回の失敗をジョブ履歴で読めない場合があり、検知が1回遅れることもある。
 
 ジョブ履歴を読めないとき(APIの失敗と、想定外の形の応答)は、通知`schedule_failing_check_failed`が残る。
