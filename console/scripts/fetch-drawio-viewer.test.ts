@@ -1,8 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { type DrawioViewerPin, viewerAssetName } from "./drawio-viewer.ts";
 import {
   fetchViewer,
+  fetchViewerToDirectories,
   MAX_RETRIES,
   MAX_VIEWER_BYTES,
 } from "./fetch-drawio-viewer.ts";
@@ -265,4 +269,138 @@ describe("fetchViewer: cache", () => {
     await t.run(null);
     expect(t.calls).toHaveLength(1);
   });
+});
+
+describe("fetchViewerToDirectories", () => {
+  const name = `drawio-viewer-${SHA256.slice(0, 8)}.js`;
+  let root = "";
+
+  async function withRoot<T>(run: () => Promise<T>): Promise<T> {
+    root = await mkdtemp(join(tmpdir(), "drawio-fetch-"));
+    try {
+      return await run();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+
+  const okFetch = async () => okResponse();
+  const noSleep = async () => {};
+
+  test("writes the verified viewer to the draw.io directory", () =>
+    withRoot(async () => {
+      await fetchViewerToDirectories(
+        pin,
+        { drawioDir: join(root, "dist/drawio"), cacheDir: join(root, "cache") },
+        okFetch,
+        { sleep: noSleep },
+      );
+      expect(await readFile(join(root, "dist/drawio", name), "utf8")).toBe(
+        "viewer body",
+      );
+    }));
+
+  test("writes the verified viewer to the cache directory", () =>
+    withRoot(async () => {
+      await fetchViewerToDirectories(
+        pin,
+        { drawioDir: join(root, "dist/drawio"), cacheDir: join(root, "cache") },
+        okFetch,
+        { sleep: noSleep },
+      );
+      expect(await readdir(join(root, "cache"))).toEqual([name]);
+    }));
+
+  test("does not fetch again when the cache holds the viewer", () =>
+    withRoot(async () => {
+      const paths = {
+        drawioDir: join(root, "dist/drawio"),
+        cacheDir: join(root, "cache"),
+      };
+      await fetchViewerToDirectories(pin, paths, okFetch, { sleep: noSleep });
+      let calls = 0;
+      await fetchViewerToDirectories(
+        pin,
+        { ...paths, drawioDir: join(root, "dist2/drawio") },
+        async () => {
+          calls += 1;
+          return okResponse();
+        },
+        { sleep: noSleep },
+      );
+      expect(calls).toBe(0);
+    }));
+
+  test("works without a cache directory", () =>
+    withRoot(async () => {
+      const result = await fetchViewerToDirectories(
+        pin,
+        { drawioDir: join(root, "dist/drawio") },
+        okFetch,
+        { sleep: noSleep },
+      );
+      expect(result.ok).toBe(true);
+    }));
+
+  test("succeeds when only the cache write fails", () =>
+    withRoot(async () => {
+      // キャッシュのパスが通常のファイルなので、ディレクトリを作れない。
+      await writeFile(join(root, "cache"), "not a directory");
+      const result = await fetchViewerToDirectories(
+        pin,
+        { drawioDir: join(root, "dist/drawio"), cacheDir: join(root, "cache") },
+        okFetch,
+        { sleep: noSleep, warn: () => {} },
+      );
+      expect(result.ok).toBe(true);
+    }));
+
+  test("still writes the dist file when the cache write fails", () =>
+    withRoot(async () => {
+      await writeFile(join(root, "cache"), "not a directory");
+      await fetchViewerToDirectories(
+        pin,
+        { drawioDir: join(root, "dist/drawio"), cacheDir: join(root, "cache") },
+        okFetch,
+        { sleep: noSleep, warn: () => {} },
+      );
+      expect(await readdir(join(root, "dist/drawio"))).toEqual([name]);
+    }));
+
+  test("warns when the cache write fails", () =>
+    withRoot(async () => {
+      await writeFile(join(root, "cache"), "not a directory");
+      const warnings: string[] = [];
+      await fetchViewerToDirectories(
+        pin,
+        { drawioDir: join(root, "dist/drawio"), cacheDir: join(root, "cache") },
+        okFetch,
+        { sleep: noSleep, warn: (message) => warnings.push(message) },
+      );
+      expect(warnings).toHaveLength(1);
+    }));
+
+  test("writes nothing when the sha256 does not match", () =>
+    withRoot(async () => {
+      await fetchViewerToDirectories(
+        pin,
+        { drawioDir: join(root, "dist/drawio"), cacheDir: join(root, "cache") },
+        async () => new Response("tampered", { status: 200 }),
+        { sleep: noSleep },
+      );
+      expect(await readdir(root)).toEqual([]);
+    }));
+
+  test("fails when the dist write fails", () =>
+    withRoot(async () => {
+      await writeFile(join(root, "dist"), "not a directory");
+      await expect(
+        fetchViewerToDirectories(
+          pin,
+          { drawioDir: join(root, "dist/drawio") },
+          okFetch,
+          { sleep: noSleep },
+        ),
+      ).rejects.toThrow();
+    }));
 });

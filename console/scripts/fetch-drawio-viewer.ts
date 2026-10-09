@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// draw.ioのビューアを固定のURLから取得し、sha256を照合して<assets>に書く。
+// draw.ioのビューアを固定のURLから取得し、sha256を照合して<dist/drawio>に書く。
 // 使い方: bun run scripts/fetch-drawio-viewer.ts <dist/drawio> [<キャッシュのディレクトリ>]
 // キャッシュのファイルも、使う前に固定のsha256と照合する。照合に通らなければ、取得し直す。
 // 照合に失敗したときは何も書かず、失敗して終了する。ビューアはリポジトリに入れない。
@@ -156,29 +156,47 @@ export async function fetchViewer(
   return { ok: false, reason: `gave up after retries: ${lastReason}` };
 }
 
-async function main(): Promise<void> {
-  const [assetsDir, cacheDir] = process.argv.slice(2);
-  if (assetsDir === undefined) {
-    console.error(
-      "Usage: fetch-drawio-viewer.ts <dist/drawio> [<cache directory>]",
-    );
-    process.exit(2);
-  }
-  const pin = parseDrawioViewerPin(
-    JSON.parse(await readFile(PIN_FILE, "utf8")),
-  );
-  const result = await fetchViewer(
+export type ViewerDirectories = {
+  /** 配信物の`drawio/`。照合したビューアを必ず書く。 */
+  readonly drawioDir: string;
+  /** 取得物のキャッシュ。あれば読み、照合に通ったものを書く。 */
+  readonly cacheDir?: string;
+};
+
+export type FetchToDirectoriesOptions = {
+  readonly sleep?: SleepImpl;
+  readonly warn?: (message: string) => void;
+};
+
+/**
+ * ビューアを取得(またはキャッシュから読み)、照合して`drawioDir`に書く。
+ * キャッシュには、配信物に書いた後で書く。キャッシュの書き込みだけが失敗しても、
+ * 配信物は照合済みで書けているので、警告にとどめて成功を返す(キャッシュは次回の取得の省略にしか使わない)。
+ */
+export async function fetchViewerToDirectories(
+  pin: DrawioViewerPin,
+  directories: ViewerDirectories,
+  fetchImpl: FetchImpl,
+  options: FetchToDirectoriesOptions = {},
+): Promise<FetchViewerResult> {
+  const { drawioDir, cacheDir } = directories;
+  const warn = options.warn ?? ((message) => console.warn(message));
+  return fetchViewer(
     pin,
-    fetch,
+    fetchImpl,
     async (name, bytes) => {
-      await mkdir(assetsDir, { recursive: true });
-      await writeFile(join(assetsDir, name), bytes);
-      if (cacheDir !== undefined) {
+      await mkdir(drawioDir, { recursive: true });
+      await writeFile(join(drawioDir, name), bytes);
+      if (cacheDir === undefined) return;
+      try {
         await mkdir(cacheDir, { recursive: true });
         await writeFile(join(cacheDir, name), bytes);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : "unknown error";
+        warn(`Could not write the draw.io viewer cache: ${reason}`);
       }
     },
-    undefined,
+    options.sleep,
     async (name) => {
       if (cacheDir === undefined) return null;
       try {
@@ -187,6 +205,24 @@ async function main(): Promise<void> {
         return null;
       }
     },
+  );
+}
+
+async function main(): Promise<void> {
+  const [drawioDir, cacheDir] = process.argv.slice(2);
+  if (drawioDir === undefined) {
+    console.error(
+      "Usage: fetch-drawio-viewer.ts <dist/drawio> [<cache directory>]",
+    );
+    process.exit(2);
+  }
+  const pin = parseDrawioViewerPin(
+    JSON.parse(await readFile(PIN_FILE, "utf8")),
+  );
+  const result = await fetchViewerToDirectories(
+    pin,
+    cacheDir === undefined ? { drawioDir } : { drawioDir, cacheDir },
+    fetch,
   );
   if (!result.ok) {
     console.error(`The draw.io viewer was rejected: ${result.reason}`);

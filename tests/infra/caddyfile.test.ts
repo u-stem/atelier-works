@@ -150,6 +150,14 @@ describe("draw.io routes", () => {
     expect(pageBlock).not.toContain("import console_headers");
   });
 
+  test("the page block rewrites the request to drawio.html", () => {
+    expect(pageBlock).toContain("rewrite * /drawio.html");
+  });
+
+  test("the page block serves the current release", () => {
+    expect(pageBlock).toContain("root * /srv/console/current");
+  });
+
   test("the scripts block exists", () => {
     expect(scriptsBlock).not.toBe("");
   });
@@ -183,6 +191,18 @@ describe("draw.io routes", () => {
   test("the scripts route comes before the general console route", () => {
     expect(CADDYFILE.indexOf("handle_path /console/drawio/*")).toBeLessThan(
       CADDYFILE.indexOf("handle_path /console/*"),
+    );
+  });
+
+  test("the page route comes before the catch-all for raw console paths", () => {
+    expect(CADDYFILE.indexOf("handle /console/drawio.html")).toBeLessThan(
+      CADDYFILE.indexOf("handle @console_raw"),
+    );
+  });
+
+  test("the scripts route comes before the catch-all for raw console paths", () => {
+    expect(CADDYFILE.indexOf("handle_path /console/drawio/*")).toBeLessThan(
+      CADDYFILE.indexOf("handle @console_raw"),
     );
   });
 });

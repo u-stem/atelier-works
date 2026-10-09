@@ -167,3 +167,58 @@ describe("replace", () => {
     expect(shouldSendXml(next, { type: "load" })).toBe(true);
   });
 });
+
+describe("recovering from no_response", () => {
+  const timedOut = reduceFrame(loaded, { type: "timeout" });
+
+  test("a height after the timeout clears the no_response failure", () => {
+    expect(
+      reduceFrame(timedOut, { type: "height", height: 200 }).failure,
+    ).toBeNull();
+  });
+
+  test("a height after the timeout is applied", () => {
+    expect(reduceFrame(timedOut, { type: "height", height: 200 }).height).toBe(
+      200,
+    );
+  });
+
+  test("a height keeps a viewer_missing failure", () => {
+    const failed = reduceFrame(loaded, {
+      type: "error",
+      reason: "viewer_missing",
+    });
+    expect(reduceFrame(failed, { type: "height", height: 24 }).failure).toBe(
+      "viewer_missing",
+    );
+  });
+
+  test("a height keeps a render_failed failure", () => {
+    const failed = reduceFrame(loaded, {
+      type: "error",
+      reason: "render_failed",
+    });
+    expect(reduceFrame(failed, { type: "height", height: 24 }).failure).toBe(
+      "render_failed",
+    );
+  });
+
+  test("a height keeps a too_large failure", () => {
+    const failed = reduceFrame(loaded, { type: "error", reason: "too_large" });
+    expect(reduceFrame(failed, { type: "height", height: 24 }).failure).toBe(
+      "too_large",
+    );
+  });
+});
+
+describe("height range", () => {
+  test("clamps a height above the maximum to 1600", () => {
+    expect(reduceFrame(loaded, { type: "height", height: 5000 }).height).toBe(
+      1600,
+    );
+  });
+
+  test("clamps a height below the minimum to 80", () => {
+    expect(reduceFrame(loaded, { type: "height", height: 10 }).height).toBe(80);
+  });
+});

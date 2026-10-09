@@ -69,10 +69,12 @@ export function reduceFrame(state: FrameState, event: FrameEvent): FrameState {
       };
     case "height":
       if (state.phase === "stopped") return state;
+      // 応答なしは、遅れて届いた高さで誤りだと分かる。ほかの失敗は、高さが届いても残す。
       return {
         ...state,
         height: clampFrameHeight(event.height),
         responded: true,
+        failure: state.failure === "no_response" ? null : state.failure,
       };
     case "error":
       if (state.phase === "stopped") return state;
