@@ -21,7 +21,7 @@ const MAX_PAGES = 5;
  */
 export const CONSOLE_WORKER_MISSING_NOTICE: NoticeRecord = {
   kind: "console_worker_missing",
-  message: `tag ${CONSOLE_WORKER_TAG} を受けるworkerが${String(CONSOLE_WORKER_PING_SECONDS)}秒以内にpingしていません。Consoleのjobがqueueに溜まり、Consoleが止まります。次の操作: Console用のworker(windmill_worker_console)のコンテナが起動しているか確かめ、止まっていれば mise run up で起動し直す`,
+  message: `tag ${CONSOLE_WORKER_TAG}を受けるworkerが${String(CONSOLE_WORKER_PING_SECONDS)}秒以内にpingしていません。Consoleのjobがqueueに溜まり、Consoleが止まります。次の操作: Console用のworker(windmill_worker_console)のコンテナが起動しているか確かめ、止まっていればmise run upで起動し直す`,
 };
 
 /**

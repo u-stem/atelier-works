@@ -51,7 +51,7 @@ export type WatchDecision =
     };
 
 const STATUS_FILE_NEXT_ACTION =
-  "取り込みのコンテナ(console_fetcher)が起動して status.json を書いているか確かめる";
+  "取り込みのコンテナ(console_fetcher)が起動してstatus.jsonを書いているか確かめる";
 
 function buildCause(
   key: string,

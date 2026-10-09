@@ -161,7 +161,7 @@ export function nextActionFor(code: string): string {
 }
 
 const STALE_NEXT_ACTION =
-  "取り込みのコンテナ(console_fetcher)が動いているか確かめ、止まっていれば mise run up で起動し直す";
+  "取り込みのコンテナ(console_fetcher)が動いているか確かめ、止まっていればmise run upで起動し直す";
 
 /** 判定に対する次の操作を返す。操作が要らない(`ok`)ときは`null`を返す。 */
 export function nextActionForAssessment(
