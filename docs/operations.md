@@ -832,6 +832,20 @@ Caddyfileを更新してCaddyを再起動するまでは、`/console/status.json
 
 取り込みの失敗は、noticeとDiscordのどちらにも出ない。ログで確かめる。
 
+### Console用workerを確かめる
+
+Console用のworker(`windmill_worker_console`)は、`mise run up`で作られる。
+workerグループ`console`のtagを持つジョブだけを受ける。
+動いていることは、コンテナの状態とログで確かめる。
+
+```bash
+mise exec -- docker compose -f infra/docker-compose.yml ps windmill_worker_console
+mise exec -- docker compose -f infra/docker-compose.yml logs --tail 20 windmill_worker_console
+```
+
+Windmillの画面の「Workers」にも、グループ`console`のworkerが出る。
+このworkerは`factory_workspaces`も依存のキャッシュも持たないので、再起動しても失うものは無い。
+
 ### adminsワークスペースの組み込み項目
 
 Windmillは起動時に、`admins`ワークスペースへ組み込みのscriptとscheduleを作る。「Synchronize Hub Resource types with instance」などである。これらはWindmill本体の一部で、このリポジトリの管理対象ではない。`mise run push`と自己更新の同期にも含まれない。summaryが英語のままなのはそのためで、日本語化と削除はしない。

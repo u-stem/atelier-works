@@ -146,6 +146,40 @@ services:
       - worker_logs:/tmp/windmill/logs
     logging: *default-logging
 
+  ## Consoleの問い合わせ専用のworker。Claudeの長いジョブがdefaultの枠を埋めても、
+  ## Consoleの応答を止めないために、tagで分けた別のworkerグループに置く。
+  ## 書き込めるマウントを持たせない。`factory_state`を読み取り専用で付けるのは、
+  ## `requirements_doc`が要件定義書と図のファイルをここから読むため。
+  ## `factory_workspaces`と`worker_dependency_cache`は付けない。
+  windmill_worker_console:
+    image: ghcr.io/windmill-labs/windmill:${WM_VERSION:?run via mise}
+    pull_policy: always
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          memory: 512M
+          pids: 256
+    # ゾンビを回収する理由は、上の`windmill_worker`と同じ。
+    init: true
+    restart: unless-stopped
+    security_opt:
+      - "no-new-privileges:true"
+    environment:
+      - DATABASE_URL=postgres://postgres:${DB_PASSWORD:?run via mise}@db/windmill?sslmode=disable
+      - MODE=worker
+      - WORKER_GROUP=console
+      - WORKER_TAGS=console
+      - NUM_WORKERS=1
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - worker_logs:/tmp/windmill/logs
+      - factory_console:/srv/console:ro
+      - factory_state:/var/lib/factory:ro
+    logging: *default-logging
+
   ## LSPだけを有効にする。multiplayerとdebuggerは、Enterprise向けか攻撃面を
   ## 広げる機能で、この環境には要らない。
   windmill_extra:

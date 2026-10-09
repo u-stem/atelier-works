@@ -197,7 +197,7 @@ ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者�
 
 | 守ること | 内容 |
 | --- | --- |
-| 書ける場所を1つにする | 配信物の置き場所`factory_console`(dockerの名前付きボリューム)に書けるのは`console_fetcher`だけである。Caddyは読み取り専用でマウントし、workerはマウントしない |
+| 書ける場所を1つにする | 配信物の置き場所`factory_console`(dockerの名前付きボリューム)に書けるのは`console_fetcher`だけである。CaddyとConsole用のworkerは読み取り専用でマウントし、defaultのworkerはマウントしない |
 | 取り込むものを絞る | `main`へのpushで動き、全体が成功した`ci.yml`の実行の成果物`console-dist`だけを取り込む。zipと展開した各ファイルのsha256を照合してから書く |
 | `console_fetcher`を閉じ込める | rootでないuid、読み取り専用のファイルシステム、ケーパビリティなし、DBにもWindmillにも届かない専用のnetworkで動かす |
 | ブラウザ側で制限する | `/console/*`の応答だけに、scriptの読み込み先を`/console/assets/`に絞ったCSPと、埋め込みを禁じるヘッダーを付ける |
@@ -233,6 +233,23 @@ workerは`privileged`にせず、`FAVOR_UNSHARE_PID`も有効にしない。Wind
 ジョブ間の隔離は、追加の特権に頼らず、工程ごとのツールの制限と読み取り専用の方針で確保する。
 
 workerには`no-new-privileges:true`と、プロセス数の上限(`deploy.resources.limits.pids`)を設定する。`cap_drop`によるケーパビリティの削減と、rootでないユーザーでの実行はしない。ベースのWindmill公式イメージがrootでの実行を前提にしているためである。
+
+## Console用workerの境界
+
+Console用のworker(`windmill_worker_console`)は、Consoleの問い合わせだけを処理する。
+信頼できないIssueを読むClaudeは、このworkerでは動かさない。
+境界は次のとおりである。
+
+| 項目 | 設定 |
+| --- | --- |
+| 書き込めるマウント | `worker_logs`だけである。`factory_state`と`factory_console`は読み取り専用でマウントする |
+| `factory_workspaces` | マウントしない。対象リポジトリのチェックアウトに届かない |
+| `worker_dependency_cache` | 共有しない。defaultのworkerと依存のキャッシュを通して影響し合わない |
+| `docker.sock` | マウントしない |
+| 権限 | `privileged`にしない。`no-new-privileges:true`と`init`を設定し、プロセス数は256、メモリは512Mに絞る |
+
+`factory_state`を読めるのは、要件定義書と図のファイルを返すためである。
+`factory_console`は配信中のJSの置き場所なので、書き込みでマウントしない。
 
 ## 自己更新の依存インストール
 
