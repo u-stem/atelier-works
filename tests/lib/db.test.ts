@@ -27,18 +27,22 @@ import {
   insertFixRound,
   insertImplementRound,
   insertIssueProposal,
+  insertIssueWorkItemUnlessActive,
   insertReview,
   insertWorkItem,
+  isActiveIssueUniqueViolation,
   latestDraft,
   latestFixRound,
   latestPrWorkItem,
   latestRequirementsApproval,
   listActive,
+  listActiveIssueWorkItems,
   listExpiredPendingApprovalRequests,
   listImplementRounds,
   listPendingIssueProposals,
   listStaleTerminalWorkItems,
   listTrackedPrs,
+  newestNewerIssueCycle,
   nextCycleForIssue,
   recordAgentRun,
   recordDeployment,
@@ -70,6 +74,7 @@ import {
   updateStatusIfLeaseHolder,
   updateStatusIfLeaseHolderClearingFlowJobId,
 } from "../../f/factory/lib/db.ts";
+import type { Logger } from "../../f/factory/lib/log.ts";
 import { TERMINAL_WORK_ITEM_STATUSES } from "../../f/factory/lib/types.ts";
 
 type FakeCall = { text: string; values: unknown[] };
@@ -149,6 +154,264 @@ const NEW_WORK_ITEM = {
   head_sha: null,
   parent_work_item_id: null,
 };
+
+describe("insertIssueWorkItemUnlessActive", () => {
+  const WON = [{ id: 7 }];
+
+  test("inserts into factory.work_items", async () => {
+    const { sql, calls } = createFakeSqlClient([WON, []]);
+    await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql);
+    expect(calls[0]?.text).toContain("INSERT INTO factory.work_items");
+  });
+
+  test("skips the insert on any unique violation", async () => {
+    const { sql, calls } = createFakeSqlClient([WON, []]);
+    await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql);
+    expect(calls[0]?.text).toContain("ON CONFLICT DO NOTHING");
+  });
+
+  test("keeps the insert free of the cancelling so that it commits on its own", async () => {
+    const { sql, calls } = createFakeSqlClient([WON, []]);
+    await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql);
+    expect(calls[0]?.text).not.toContain("work_item_events");
+  });
+
+  test("passes the same parameters in the same order as insertWorkItem", async () => {
+    const plain = createFakeSqlClient([[{ id: 7 }]]);
+    await insertWorkItem(NEW_WORK_ITEM, plain.sql);
+    const guarded = createFakeSqlClient([WON, []]);
+    await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, guarded.sql);
+    expect(guarded.calls[0]?.values).toEqual(plain.calls[0]?.values);
+  });
+
+  test("runs the sweep as a second statement after a successful insert", async () => {
+    const { sql, calls } = createFakeSqlClient([WON, []]);
+    await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql);
+    expect(calls).toHaveLength(2);
+  });
+
+  test("sweeps only approved issue work items of older cycles", async () => {
+    const { sql, calls } = createFakeSqlClient([WON, []]);
+    await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql);
+    expect(calls[1]?.text).toContain(
+      "wi.kind = 'issue' AND wi.status = 'approved'",
+    );
+  });
+
+  test("limits the sweep to cycles older than the new one", async () => {
+    const { sql, calls } = createFakeSqlClient([WON, []]);
+    await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql);
+    expect(calls[1]?.text).toContain("wi.cycle <  ? ::integer");
+  });
+
+  test("passes the issue, the new cycle and the new id to the sweep", async () => {
+    const { sql, calls } = createFakeSqlClient([WON, []]);
+    await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql);
+    expect(calls[1]?.values).toEqual(["octo-owner", "atelier-works", 42, 1, 7]);
+  });
+
+  test("records an event for each cancelled work item", async () => {
+    const { sql, calls } = createFakeSqlClient([WON, []]);
+    await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql);
+    expect(calls[1]?.text).toContain("INSERT INTO factory.work_item_events");
+  });
+
+  test("returns the inserted id", async () => {
+    const { sql } = createFakeSqlClient([WON, []]);
+    const result = await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql);
+    expect(result?.id).toBe(7);
+  });
+
+  test("returns no superseded items when nothing was cancelled", async () => {
+    const { sql } = createFakeSqlClient([WON, []]);
+    const result = await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql);
+    expect(result?.superseded).toEqual([]);
+  });
+
+  test("returns every cancelled work item with its attempt", async () => {
+    const { sql } = createFakeSqlClient([
+      WON,
+      [
+        { id: 3, attempt: 2 },
+        { id: 4, attempt: 1 },
+      ],
+    ]);
+    const result = await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql);
+    expect(result?.superseded).toEqual([
+      { id: 3, attempt: 2 },
+      { id: 4, attempt: 1 },
+    ]);
+  });
+
+  test("returns null when another active work item already exists for the issue", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(
+      await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql),
+    ).toBeNull();
+  });
+
+  test("cancels nothing when the insert lost", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql);
+    expect(calls).toHaveLength(1);
+  });
+});
+
+describe("newestNewerIssueCycle", () => {
+  test("returns the id and status of the newest larger cycle", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 9, status: "failed" }]]);
+    expect(await newestNewerIssueCycle("o", "r", 12, 1, sql)).toEqual({
+      id: 9,
+      status: "failed",
+    });
+  });
+
+  test("returns null when no larger cycle exists", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await newestNewerIssueCycle("o", "r", 12, 1, sql)).toBeNull();
+  });
+
+  test("looks only at issue work items", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await newestNewerIssueCycle("o", "r", 12, 1, sql);
+    expect(calls[0]?.text).toContain("kind = 'issue'");
+  });
+
+  test("looks only at larger cycles", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await newestNewerIssueCycle("o", "r", 12, 1, sql);
+    expect(calls[0]?.text).toContain("cycle >  ? ::integer");
+  });
+
+  test("takes the newest of them", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await newestNewerIssueCycle("o", "r", 12, 1, sql);
+    expect(calls[0]?.text).toContain("ORDER BY cycle DESC");
+  });
+
+  test("passes the issue and the cycle", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await newestNewerIssueCycle("o", "r", 12, 3, sql);
+    expect(calls[0]?.values).toEqual(["o", "r", 12, 3]);
+  });
+});
+
+describe("insertIssueWorkItemUnlessActive when the sweep fails", () => {
+  function failingSweepSql(noticeFails = false): {
+    sql: SqlClient;
+    texts: string[];
+    values: unknown[][];
+  } {
+    let calls = 0;
+    const texts: string[] = [];
+    const values: unknown[][] = [];
+    const sql: SqlClient = (strings, ...bound) => {
+      calls += 1;
+      const call = calls;
+      texts.push(strings.join(" ? "));
+      values.push(bound);
+      return {
+        fetch: () => {
+          if (call === 1) return Promise.resolve([{ id: 7 }]);
+          if (call === 2) return Promise.reject(new Error("sweep failed"));
+          return noticeFails
+            ? Promise.reject(new Error("notice failed"))
+            : Promise.resolve([{ id: 1 }]);
+        },
+        execute: () => Promise.resolve(),
+      };
+    };
+    return { sql, texts, values };
+  }
+
+  function recordingLog(): { log: Logger; warns: string[] } {
+    const warns: string[] = [];
+    const log: Logger = {
+      info() {},
+      warn(message) {
+        warns.push(message);
+      },
+      error() {},
+    };
+    return { log, warns };
+  }
+
+  test("still returns the inserted id", async () => {
+    const { sql } = failingSweepSql();
+    const { log } = recordingLog();
+    const result = await insertIssueWorkItemUnlessActive(
+      NEW_WORK_ITEM,
+      sql,
+      log,
+    );
+    expect(result?.id).toBe(7);
+  });
+
+  test("returns no superseded items", async () => {
+    const { sql } = failingSweepSql();
+    const { log } = recordingLog();
+    const result = await insertIssueWorkItemUnlessActive(
+      NEW_WORK_ITEM,
+      sql,
+      log,
+    );
+    expect(result?.superseded).toEqual([]);
+  });
+
+  test("logs a warning", async () => {
+    const { sql } = failingSweepSql();
+    const { log, warns } = recordingLog();
+    await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql, log);
+    expect(warns).toEqual(["superseding the approved work items failed"]);
+  });
+
+  test("leaves a notice of the supersede_failed kind", async () => {
+    const { sql, texts, values } = failingSweepSql();
+    const { log } = recordingLog();
+    await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql, log);
+    expect([texts[2]?.includes("factory.notices"), values[2]?.[0]]).toEqual([
+      true,
+      "supersede_failed",
+    ]);
+  });
+
+  test("words the notice with the issue, the new work item and the next action", async () => {
+    const { sql, values } = failingSweepSql();
+    const { log } = recordingLog();
+    await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql, log);
+    expect(values[2]?.[1]).toBe(
+      "octo-owner/atelier-works#42 (work item 7): 古い承認済みの作業項目を取り消せませんでした。古い承認は再開できず、操作は要りません。次の新しいサイクルで取り消されます",
+    );
+  });
+
+  test("keeps the notice free of the error text so that it deduplicates per issue", async () => {
+    const { sql, values } = failingSweepSql();
+    const { log } = recordingLog();
+    await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql, log);
+    expect(String(values[2]?.[1])).not.toContain("sweep failed");
+  });
+
+  test("still returns the inserted id when the notice cannot be recorded", async () => {
+    const { sql } = failingSweepSql(true);
+    const { log } = recordingLog();
+    const result = await insertIssueWorkItemUnlessActive(
+      NEW_WORK_ITEM,
+      sql,
+      log,
+    );
+    expect(result?.id).toBe(7);
+  });
+
+  test("logs when the notice cannot be recorded", async () => {
+    const { sql } = failingSweepSql(true);
+    const { log, warns } = recordingLog();
+    await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql, log);
+    expect(warns).toEqual([
+      "superseding the approved work items failed",
+      "supersede_failed notice could not be recorded",
+    ]);
+  });
+});
 
 describe("insertWorkItem", () => {
   test("inserts into factory.work_items", async () => {
@@ -2847,5 +3110,82 @@ describe("latestRequirementsApproval", () => {
     expect(calls[0]?.text.replace(/\s+/g, " ")).toContain(
       "ar.work_item_id = ? ::bigint",
     );
+  });
+});
+
+describe("isActiveIssueUniqueViolation", () => {
+  test("recognises a violation of the active issue index", () => {
+    const err = new Error(
+      'duplicate key value violates unique constraint "work_items_active_issue_key"',
+    );
+    expect(isActiveIssueUniqueViolation(err)).toBe(true);
+  });
+
+  test("does not match a violation of another constraint", () => {
+    const err = new Error(
+      'duplicate key value violates unique constraint "work_items_owner_repo_issue_cycle_key"',
+    );
+    expect(isActiveIssueUniqueViolation(err)).toBe(false);
+  });
+
+  test("does not match an unrelated error", () => {
+    expect(isActiveIssueUniqueViolation(new Error("db down"))).toBe(false);
+  });
+
+  test("does not match a value that is not an error", () => {
+    expect(isActiveIssueUniqueViolation("work_items_active_issue_key")).toBe(
+      false,
+    );
+  });
+});
+
+describe("isActiveIssueUniqueViolation with a server body", () => {
+  const KEY_BODY =
+    'ERROR: duplicate key value violates unique constraint "work_items_active_issue_key"';
+
+  test("recognises the constraint name in a string body", () => {
+    const err = Object.assign(new Error("Conflict"), { body: KEY_BODY });
+    expect(isActiveIssueUniqueViolation(err)).toBe(true);
+  });
+
+  test("ignores a string body that names another constraint", () => {
+    const err = Object.assign(new Error("Conflict"), {
+      body: 'duplicate key value violates unique constraint "other_key"',
+    });
+    expect(isActiveIssueUniqueViolation(err)).toBe(false);
+  });
+
+  test("ignores a body that is not a string", () => {
+    const err = Object.assign(new Error("Conflict"), {
+      body: { message: KEY_BODY },
+    });
+    expect(isActiveIssueUniqueViolation(err)).toBe(false);
+  });
+
+  test("still recognises the constraint name in the message", () => {
+    const err = Object.assign(new Error(`datatable ${KEY_BODY}`), {
+      body: "unrelated",
+    });
+    expect(isActiveIssueUniqueViolation(err)).toBe(true);
+  });
+});
+
+describe("listActiveIssueWorkItems", () => {
+  test("filters by owner, repo and issue number", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listActiveIssueWorkItems("o", "r", 12, sql);
+    expect(calls[0]?.values).toContain(12);
+  });
+
+  test("selects issue-kind work items that are not terminal", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listActiveIssueWorkItems("o", "r", 12, sql);
+    expect(calls[0]?.text).toContain("kind = 'issue'");
+  });
+
+  test("returns the mapped rows", async () => {
+    const { sql } = createFakeSqlClient([[{ ...WORK_ITEM_ROW, id: 9 }]]);
+    const items = await listActiveIssueWorkItems("o", "r", 12, sql);
+    expect(items.map((item) => item.id)).toEqual([9]);
   });
 });

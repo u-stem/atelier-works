@@ -19,7 +19,7 @@
 // `isFactoryPost`(`isOwnPost`によるログイン名の一致と`hasMarker`の両方)で
 // 区別する。
 
-import { maskSecrets } from "./log.ts";
+import { type Logger, maskSecrets } from "./log.ts";
 import type {
   FactoryOwnerKind,
   GitIdentity,
@@ -408,12 +408,26 @@ async function callGhApi(
   );
 }
 
+/**
+ * 2xx以外の応答による失敗。`status`が0のときは応答が返らなかった(通信断やtimeout)。
+ * 呼び出し側が、要求が効いたかを状態から判断するために使う(`claimIssue`を参照)。
+ */
+export class GitHubHttpError extends Error {
+  readonly status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "GitHubHttpError";
+    this.status = status;
+  }
+}
+
 function ensureSuccess(response: GhApiResponse, context: string): void {
   if (response.status >= 200 && response.status < 300) return;
-  throw new Error(
+  throw new GitHubHttpError(
     maskSecrets(
       `${context} failed with HTTP ${response.status}: ${response.bodyText.slice(0, 500)}`,
     ),
+    response.status,
   );
 }
 
@@ -446,8 +460,18 @@ function toApiEndpoint(url: string): string {
   return url.replace(/^https?:\/\/[^/]+\//, "");
 }
 
+/** ページ送りが、指定した最大のページ数を超えて続いたときの例外。 */
+export class GitHubPaginationLimitError extends Error {
+  constructor(maxPages: number) {
+    super(`GitHub pagination exceeded ${String(maxPages)} pages`);
+    this.name = "GitHubPaginationLimitError";
+  }
+}
+
 /**
  * 応答の`link`ヘッダーの`rel="next"`をたどって最後のページまで取得し、
+ * `maxPages`を指定したときは、そのページ数を超えて続く場合に
+ * `GitHubPaginationLimitError`を投げる。
  * 各ページの要素を`extractPage`で取り出してつなげる。
  * `extractPage`はエンドポイントの応答の形によって変わる
  * (timeline・comments・reviewsは裸のJSON配列、`/search/issues`は
@@ -457,10 +481,14 @@ async function paginateGhApi<T>(
   client: GhClient,
   endpoint: string,
   extractPage: (parsed: unknown, context: string) => readonly T[],
+  maxPages: number = Number.POSITIVE_INFINITY,
 ): Promise<T[]> {
   const results: T[] = [];
   let nextEndpoint: string | null = endpoint;
+  let pages = 0;
   while (nextEndpoint !== null) {
+    if (pages >= maxPages) throw new GitHubPaginationLimitError(maxPages);
+    pages += 1;
     const response = await callGhApi(client, nextEndpoint);
     const context = `GET ${nextEndpoint}`;
     ensureSuccess(response, context);
@@ -480,13 +508,21 @@ async function paginateGhApi<T>(
 async function callGhApiAll(
   client: GhClient,
   endpoint: string,
+  maxPages?: number,
 ): Promise<unknown[]> {
-  return paginateGhApi(client, endpoint, (parsed, context) => {
-    if (!Array.isArray(parsed)) {
-      throw new Error(`${context}: expected an array response for pagination`);
-    }
-    return parsed;
-  });
+  return paginateGhApi(
+    client,
+    endpoint,
+    (parsed, context) => {
+      if (!Array.isArray(parsed)) {
+        throw new Error(
+          `${context}: expected an array response for pagination`,
+        );
+      }
+      return parsed;
+    },
+    maxPages,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -945,23 +981,170 @@ export async function getIssueTimeline(
 export type ClaimIssueOptions = {
   readonly triggerLabel: string;
   readonly assignee: string;
+  /** 判断を保留したときと、所有を判断できなかったときの警告の書き込み先。 */
+  readonly log?: Logger;
 };
 
+/**
+ * `claimIssue`の結果。取得の所有は、自分のトリガーラベルの削除が2xxで成功したことで決める。
+ * これはベストエフォートである。GitHubは、同時に届いた複数の削除のうち
+ * 成功が1つだけになることを保証していない。
+ * すべてのインスタンスが同じPATで動くので、GitHub側ではインスタンスを区別できない。
+ * 同じIssueに2つ目の作業項目を始めない最後の防御は、DBの部分一意インデックス
+ * `work_items_active_issue_key`である。終端でない`issue`の作業項目を、
+ * (owner, repo, issue_number)ごとに1つに限る。
+ * 作業項目は`insertIssueWorkItemUnlessActive`が`ON CONFLICT DO NOTHING`で挿入し、
+ * 競合したら取得を失ったものとして引く。これはDBを共有するインスタンスの間で働く。
+ * DBを分けたインスタンスが同じリポジトリを扱う構成は対象外である。
+ * `hasActiveWorkItem`はポーリングの開始時点の状態を見る検査なので、同時の取得は防げない。
+ * - `claimed: true`: 自分がラベルを外した。`assignee`は取得後のIssueで確かめた結果で、
+ *   `confirmed`はassigneeが付いている、`missing`は付いていない、
+ *   `unknown`は読み取りの失敗で確かめられなかった。
+ *   GitHubはpush権限の無いユーザーへのassigneeの追加を、201を返したまま無視する。
+ *   そのため`missing`は一時的とは限らない。所有は変わらないので、呼び出し元は作業を続ける。
+ * - `claimed: false`の`lost`: ラベルを外したのは自分ではない。
+ *   削除が404だったか、削除の結果が不明で、タイムラインの最後の削除が別のユーザーだった。
+ * - `claimed: false`の`retry`: ラベルの削除が失敗し、読み直してもラベルが残っていた。
+ *   外れていないので、次のポーリングが拾い直す。
+ */
 export type ClaimIssueResult =
-  | { readonly claimed: true }
-  | { readonly claimed: false; readonly reason: string };
+  | {
+      readonly claimed: true;
+      readonly assignee: "confirmed" | "missing" | "unknown";
+    }
+  | {
+      readonly claimed: false;
+      readonly outcome: "lost" | "retry";
+      readonly reason: string;
+    };
+
+/**
+ * `claimIssue`が、自分がラベルを外したかを判断できなかったときの例外。
+ * ラベルの削除が応答の無い失敗(HTTP 0)かサーバーエラー(5xx)で終わったときに、
+ * Issueの読み直しを間隔を空けて繰り返しても、次のどれかになった場合に投げる。
+ * - Issueを読み直せなかった。
+ * - ラベルが外れていて、タイムラインを読めなかった。
+ * - ラベルが外れていて、タイムラインに、最後に付けられた後の削除の記録が無かった。
+ * - ラベルが外れていて、タイムラインが`CLAIM_TIMELINE_MAX_PAGES`ページを超えて続いた。
+ * Issueは「ラベルなし」になっていて、作業項目が始まっているかも分からないので、
+ * 呼び出し元は人へ知らせる。
+ * ラベルを外す前の失敗(assigneeの追加)と、4xxなどの確定した拒否、レート制限は、
+ * この例外にせず元の例外のまま投げる。どれもラベルは残るので、次のポーリングが拾い直す。
+ * `message`は元の失敗の文を含み、元の例外は`cause`に残る。
+ */
+export class ClaimOwnershipUnknownError extends Error {
+  constructor(message: string, options?: { readonly cause?: unknown }) {
+    super(message, options);
+    this.name = "ClaimOwnershipUnknownError";
+  }
+}
+
+/** ラベルの削除が実行されたか判断できない失敗か(応答が無い、またはサーバーエラー)。 */
+function isUndeterminedRemoval(err: unknown): boolean {
+  return (
+    err instanceof GitHubHttpError && (err.status === 0 || err.status >= 500)
+  );
+}
+
+/**
+ * 削除の結果が不明なときの読み直しで、2回目以降の試行の前に待つ時間(ミリ秒)。
+ * 試行は全部で`length + 1`回になる。一部の障害が続く間に、人への通知が
+ * 重なって出ないよう、短い待機で数回だけ繰り返す。
+ */
+export const CLAIM_REREAD_BACKOFF_MS: readonly number[] = [1000, 2000];
+
+/**
+ * 削除の結果が不明なときに読むタイムラインの最大のページ数(1ページ100件)。
+ * 長く続くIssueで、1回の取得の判定が際限なくAPIを呼ばないようにする。
+ * 超えたときは`GitHubPaginationLimitError`で判定を打ち切り、所有を判断できない扱いにする。
+ */
+const CLAIM_TIMELINE_MAX_PAGES = 20;
+
+/**
+ * `read`を最大`CLAIM_REREAD_BACKOFF_MS.length + 1`回まで試す。GETなので繰り返してよい。
+ * 失敗した試行は、そのたびに`log`へ警告として残す。
+ * `GitHubRateLimitError`は繰り返さずに投げる。`callGhApi`が上限までの待機と再試行を
+ * 済ませたうえで投げるので、ここで重ねても同じ制限に当たり、待ちが長引くだけである。
+ * `GitHubPaginationLimitError`も、繰り返しても同じ長さなので繰り返さずに投げる。
+ */
+async function rereadWithRetries<T>(
+  client: GhClient,
+  context: {
+    readonly log: Logger | undefined;
+    readonly target: string;
+    readonly what: "issue" | "timeline";
+  },
+  read: () => Promise<T>,
+): Promise<T> {
+  const sleep = client.sleep ?? defaultSleep;
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= CLAIM_REREAD_BACKOFF_MS.length; attempt++) {
+    if (attempt > 0) await sleep(CLAIM_REREAD_BACKOFF_MS[attempt - 1] ?? 0);
+    try {
+      return await read();
+    } catch (err) {
+      context.log?.warn("claim re-read attempt failed", {
+        target: context.target,
+        what: context.what,
+        attempt: attempt + 1,
+        error: maskSecrets(err instanceof Error ? err.message : String(err)),
+      });
+      if (
+        err instanceof GitHubRateLimitError ||
+        err instanceof GitHubPaginationLimitError
+      ) {
+        throw err;
+      }
+      lastError = err;
+    }
+  }
+  throw lastError;
+}
+
+/**
+ * タイムラインの中で、`label`を最後に外した人のログイン名を返す。
+ * 返すのは、そのラベルが最後に付けられた後の削除だけである。
+ * ラベルが付け直されると、それより前の削除は今回の取得とは別のサイクルのものなので捨てる。
+ * 付け直しの後に削除の記録がまだ無い場合(タイムラインの反映が遅れている)や、
+ * 最後の削除の実行者が分からない場合は、誰が外したか決められないのでnullを返す。
+ */
+async function lastUnlabeledActor(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  number: number,
+  label: string,
+): Promise<string | null> {
+  validateOwnerRepo(owner, repo);
+  const events = await callGhApiAll(
+    client,
+    `repos/${owner}/${repo}/issues/${number}/timeline?per_page=100`,
+    CLAIM_TIMELINE_MAX_PAGES,
+  );
+  let actor: string | null = null;
+  for (const raw of events) {
+    if (!isTimelineEventPayload(raw)) continue;
+    if (raw.event !== "labeled" && raw.event !== "unlabeled") continue;
+    if (labelName(raw.label) !== label) continue;
+    actor =
+      raw.event === "unlabeled" && isLoginPayload(raw.actor)
+        ? raw.actor.login
+        : null;
+  }
+  return actor;
+}
 
 /**
  * Issueを取得宣言する。`assignee`をassignし、続けて`triggerLabel`を外す。
  * `factory`ラベルは取得時に消費し、`wip`ラベルなどに付け替えない。
  * 状態は`work_items.status`にだけ持つ。
- * 最後にIssueを再取得して両方が反映されたかを確かめ、別のFactoryの
- * インスタンスが先に取得した競合を検出する。
  *
- * これはベストエフォートである。assigneeの追加は上書きではなく追加で、
- * ラベルを外すときの404も許すため、同時に取得した2つのインスタンスが
- * どちらもこの確認を通りうる。同じIssueに2つ目の作業項目を始めないよう
- * 防いでいるのは、DB側の`hasActiveWorkItem`の検査である。
+ * 所有は、自分のラベルの削除が成功したことで決める(`ClaimIssueResult`を参照)。
+ * 削除が404なら、ほかが先に外したので引く。
+ * 削除が成功したら、取得後のIssueの読み取りが失敗しても、assigneeが付いていなくても、
+ * 所有は変わらず取得できたとして返す。
+ * 削除が応答の無い失敗かサーバーエラーで終わったときは、削除が実行されたかを
+ * `resolveUndeterminedRemoval`で調べる。
  */
 export async function claimIssue(
   client: GhClient,
@@ -986,22 +1169,113 @@ export async function claimIssue(
     `POST issue assignees ${owner}/${repo}#${number}`,
   );
 
-  await removeLabel(client, owner, repo, number, opts.triggerLabel);
+  let removal: RemoveLabelResult;
+  try {
+    removal = await removeLabel(client, owner, repo, number, opts.triggerLabel);
+  } catch (err) {
+    if (!isUndeterminedRemoval(err)) throw err;
+    return resolveUndeterminedRemoval(client, owner, repo, number, opts, err);
+  }
+  if (removal === "absent") {
+    return {
+      claimed: false,
+      outcome: "lost",
+      reason: `trigger label ${opts.triggerLabel} was already removed`,
+    };
+  }
 
-  const confirmed = await getIssue(client, owner, repo, number);
-  if (!confirmed.assignees.includes(opts.assignee)) {
+  try {
+    const confirmed = await getIssue(client, owner, repo, number);
+    return {
+      claimed: true,
+      assignee: confirmed.assignees.includes(opts.assignee)
+        ? "confirmed"
+        : "missing",
+    };
+  } catch {
+    return { claimed: true, assignee: "unknown" };
+  }
+}
+
+/**
+ * ラベルの削除が実行されたか判断できなかったとき、次の順に調べて結果を決める。
+ * 1. Issueを読み直す(`rereadWithRetries`)。ラベルが残っていれば外れていないので`retry`を返す。
+ * 2. ラベルが外れていれば、タイムラインでそのラベルを最後に外した人を調べる。
+ *    自分のログイン名なら削除は実行されていたので、取得できたとして返す。
+ *    別の人なら`lost`を返す。
+ * 3. 読み直しやタイムラインが読めない(レート制限は繰り返さない)、または最後に付けられた後の
+ *    削除の記録が無いときは、
+ *    自分が外したか分からないので`ClaimOwnershipUnknownError`を投げる。
+ * 同じPATで動く別のインスタンスは、ログイン名では区別できない(`ClaimIssueResult`を参照)。
+ */
+async function resolveUndeterminedRemoval(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  number: number,
+  opts: ClaimIssueOptions,
+  removalError: unknown,
+): Promise<ClaimIssueResult> {
+  const target = `${owner}/${repo}#${number}`;
+  const detail =
+    removalError instanceof Error ? removalError.message : String(removalError);
+  opts.log?.warn("claim label removal was undetermined; re-reading the issue", {
+    target,
+    error: maskSecrets(detail),
+  });
+  const unknown = (cause: unknown): ClaimOwnershipUnknownError => {
+    opts.log?.warn("claim ownership could not be determined", { target });
+    return new ClaimOwnershipUnknownError(
+      `claim ownership unknown for ${target}: ${detail}`,
+      { cause: cause instanceof Error ? cause : removalError },
+    );
+  };
+
+  let reread: Issue;
+  try {
+    reread = await rereadWithRetries(
+      client,
+      { log: opts.log, target, what: "issue" },
+      () => getIssue(client, owner, repo, number),
+    );
+  } catch (err) {
+    throw unknown(err);
+  }
+  if (reread.labels.includes(opts.triggerLabel)) {
+    opts.log?.warn("claim deferred: trigger label is still present", {
+      target,
+    });
     return {
       claimed: false,
-      reason: `assignee ${opts.assignee} missing after claim`,
+      outcome: "retry",
+      reason: `trigger label ${opts.triggerLabel} removal failed and the label is still present`,
     };
   }
-  if (confirmed.labels.includes(opts.triggerLabel)) {
+
+  let actor: string | null;
+  try {
+    actor = await rereadWithRetries(
+      client,
+      { log: opts.log, target, what: "timeline" },
+      () => lastUnlabeledActor(client, owner, repo, number, opts.triggerLabel),
+    );
+  } catch (err) {
+    throw unknown(err);
+  }
+  if (actor === null) throw unknown(removalError);
+  if (actor.toLowerCase() !== opts.assignee.toLowerCase()) {
     return {
       claimed: false,
-      reason: `trigger label ${opts.triggerLabel} still present after claim`,
+      outcome: "lost",
+      reason: `trigger label ${opts.triggerLabel} was removed by another actor`,
     };
   }
-  return { claimed: true };
+  return {
+    claimed: true,
+    assignee: reread.assignees.includes(opts.assignee)
+      ? "confirmed"
+      : "missing",
+  };
 }
 
 /**
@@ -1192,13 +1466,23 @@ export async function setLabels(
   ensureSuccess(response, `PUT issue labels ${owner}/${repo}#${number}`);
 }
 
+export type RemoveLabelResult = "removed" | "absent";
+
+/**
+ * Issueかpull requestからラベルを外す。
+ * 削除が2xxで成功したら`removed`、ラベルが既に無ければ(404)`absent`を返す。
+ * そのほかの失敗は例外にする。
+ * DELETEは冪等として扱わず(`idempotent`を指定しない)、応答の無い失敗でも再送しない。
+ * 削除が実行された後に応答だけが失われた場合、再送は404を受け取り、
+ * 自分が外したのに「既に無かった」と読み違えるためである。
+ */
 export async function removeLabel(
   client: GhClient,
   owner: string,
   repo: string,
   number: number,
   label: string,
-): Promise<void> {
+): Promise<RemoveLabelResult> {
   validateOwnerRepo(owner, repo);
   const response = await callGhApi(
     client,
@@ -1207,8 +1491,9 @@ export async function removeLabel(
       method: "DELETE",
     },
   );
-  if (response.status === 404) return; // 既に無いので何もしない
+  if (response.status === 404) return "absent";
   ensureSuccess(response, `DELETE issue label ${owner}/${repo}#${number}`);
+  return "removed";
 }
 
 /**

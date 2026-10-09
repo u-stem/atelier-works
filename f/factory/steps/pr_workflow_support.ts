@@ -3575,6 +3575,15 @@ function worktreeLockHeldInRunNextAction(
 }
 
 const REASON_RULES: readonly ReasonRule[] = [
+  // 稼働中のIssueの部分一意インデックス(`work_items_active_issue_key`)への違反。
+  // `approved`から`implementing`への移行が阻まれたときに、`cas_failed`の理由として現れる。
+  // 同じIssueの別の作業項目が現在のサイクルなので、この作業項目は再開できない。
+  {
+    pattern: /work_items_active_issue_key/,
+    describe: () => "同じIssueで、別のサイクルが稼働中です",
+    nextAction: () =>
+      "操作は要りません。この作業項目は再開できないので、このIssueの現在のサイクルの作業項目に従ってください",
+  },
   // pr_fix_prepare.tsの`evaluatePrFixSafetyGuards` / `evaluateRepoAllowedGuard`。
   // 準備の関門は修正の前に`blocked`で止めるので、再実行は修正のラウンドを使わない`retry_work_item`にする。
   {
@@ -3809,6 +3818,16 @@ const REASON_RULES: readonly ReasonRule[] = [
     describe: () => "Issueを取得しましたが、作業項目を登録できませんでした",
     nextAction: () =>
       "原因をConsoleの失敗タブかジョブのログで確かめて取り除き、Issueに`factory`ラベルを付け直してください",
+  },
+  // poll_issues.tsの`claimIssueWithNotice`。ラベルの削除が応答の無い失敗かサーバーエラーで終わり、
+  // 読み直しでも自分が外したか判断できなかった。ラベルは無く、作業項目が始まっているかも分からない。
+  // この表は設定を受け取れないので、ラベル名は既定の`factory`で書く(ほかの行も同じ)。
+  {
+    pattern: /^claim ownership could not be determined$/,
+    describe: () =>
+      "ラベルの削除の結果を確かめられず、Issueを取得できたか分かりません",
+    nextAction: () =>
+      "Consoleの作業項目で、このIssueの作業が始まっているか確かめてください。始まっていなければ、Issueに`factory`ラベルを付け直してください",
   },
   {
     pattern: /^approval timed out$/,

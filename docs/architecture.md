@@ -81,7 +81,7 @@ flowchart TD
 | `needs_human` | 自動処理を打ち切り、人の対応を待つ | すべて | 終端 |
 | `failed` | 実行時エラーで失敗した | すべて | 終端 |
 | `expired` | 承認依頼が7日の期限を過ぎた | issue | 終端 |
-| `cancelled` | IssueかPRが閉じられた | すべて | 終端 |
+| `cancelled` | IssueかPRが閉じられた。または、承認済みの要件定義が、同じIssueの新しいサイクルに置き換えられた | すべて | 終端 |
 | `auditing` | 監査している | audit | |
 | `audited` | 監査を終えた | audit | 終端 |
 
@@ -106,6 +106,7 @@ stateDiagram-v2
     awaiting_approval --> cancelled: Issueがclosed
     approved --> implementing: implement_enabledが真
     approved --> requirements_generating: pr_fixのrequirements_gap
+    approved --> cancelled: 同じIssueで新しいサイクルが始まった
     implementing --> pr_open: PRを作成か更新
     implementing --> requirements_generating: requirements_gap(attempt+1)
     implementing --> needs_human
@@ -252,7 +253,15 @@ cronはWindmillの6フィールドの形式で、タイムゾーンは`Asia/Toky
 | `cleanup_workspaces` | 期限を過ぎたworktree(`req-<N>`、実装ブランチのworktree、`review-*`、pr_fixのgtrのworktree)、worktreeが無くなったプロセスのロックファイル、孤児になったheadless Claudeのプロセス。生き残りのプロセスが使っているworktreeは消さず、noticeを残す。ディスクの使用量も記録する |
 | `notify_daily_summary` | 前日のコスト、件数、失敗、DBの掃除の件数 |
 
-複数のインスタンスを同時に動かすときの排他は、GitHub側のclaimで取る。Issueはassigneeを付けてからラベルを消費し、PRはトリガーラベルを消費する。どちらも取り直して確かめる。
+複数のインスタンスを同時に動かすときの排他は、GitHub側のclaimで取る。
+Issueはassigneeを追加してからトリガーラベルを外し、外す要求に成功したインスタンスが受け持つ。
+PRも同じくトリガーラベルの削除で所有を決め、削除が404なら引く。
+外せた後は取り直して残っていないかを確かめる。
+この排他はベストエフォートである。
+最後の防御は、`work_items`の部分一意インデックス`work_items_active_issue_key`である。
+終端でないIssueの作業項目は、`owner`、`repo`、Issueの番号の組ごとに、同時に1つしか持てない。
+これはDBを共有するインスタンスの間で働き、DBを分けたインスタンスが同じリポジトリを扱う構成は対象外である。
+1つのリポジトリは1つのインスタンスだけで扱う。
 
 ## 命名規則
 
@@ -280,6 +289,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/workspace` | script | [LIB] git worktreeと作業領域 |
 | `f/factory/lib/github` | script | [LIB] GitHub APIラッパー |
 | `f/factory/lib/claude` | script | [LIB] headless Claude実行 |
+| `f/factory/lib/claim_support` | script | [LIB] Issue取得の後処理 |
 | `f/factory/steps/pr_workflow_support` | script | [LIB] PRワークフロー共通処理 |
 | `f/factory/lib/process_lock` | script | [LIB] worktree単位のプロセス排他 |
 | `f/factory/lib/prompts` | script | [LIB] プロンプト定義 |
@@ -291,6 +301,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/implement_loop` | script | [LIB] 実装フローの検証ループ |
 | `f/factory/lib/implement_support` | script | [LIB] 実装フローの純粋関数群 |
 | `f/factory/lib/implement_launch_support` | script | [LIB] 実装フローの起動判定 |
+| `f/factory/lib/supersede_support` | script | [LIB] 承認の取り消しのコメント |
 | `f/factory/lib/approval_support` | script | [LIB] 承認依頼の純粋ロジック |
 | `f/factory/lib/approver` | script | [LIB] 承認者の導出 |
 | `f/factory/lib/prose_check` | script | [LIB] 文章の検査 |

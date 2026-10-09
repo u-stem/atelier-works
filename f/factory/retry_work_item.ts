@@ -17,7 +17,10 @@ import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "./lib/config.ts";
 import {
   getWorkItem,
+  isActiveIssueUniqueViolation,
   latestRequirementsApproval,
+  listActiveIssueWorkItems,
+  newestNewerIssueCycle,
   setFlowJobId,
   setFlowJobIdIfUnset,
   updateStatusIfCurrent,
@@ -30,7 +33,12 @@ import { isRequirementsApprovedForAttempt } from "./lib/implement_support.ts";
 import { logger, maskSecrets } from "./lib/log.ts";
 import { PIPELINE_FLOW_PATH } from "./lib/pipeline_lease.ts";
 import { type JobState, readJobState } from "./lib/poll_support.ts";
-import { isOneOf, type WorkItem, type WorkItemStatus } from "./lib/types.ts";
+import {
+  isOneOf,
+  TERMINAL_WORK_ITEM_STATUSES,
+  type WorkItem,
+  type WorkItemStatus,
+} from "./lib/types.ts";
 
 const RESTARTABLE_STATUSES = [
   "failed",
@@ -55,6 +63,90 @@ export type RestartContext = {
   readonly implementReady: boolean;
   readonly implementEnabled: boolean;
 };
+
+/**
+ * Issueの作業項目に、より新しいサイクルがあるとき、再開を断る理由を返す。無ければ`null`。
+ * 古いサイクルの作業項目を再開すると、新しいサイクルに置き換えられた要件定義を
+ * 実装しかねない。
+ * 理由の文は英語の1文で、そのままConsoleとWindmillに表示される。翻訳する処理は無い。
+ * 次の操作は、最新のサイクルの状態で決まる。
+ * - 稼働中(終端でない)なら、そのサイクルが進むので、操作は要らない。
+ * - 再開できる状態(`RESTARTABLE_STATUSES`)なら、最新のサイクルを再実行する。
+ * - PRを作成した(`pr_open`)なら、そのPRを確かめる。
+ * - それ以外の終端なら、Issueにトリガーラベルを付け直して新しいサイクルを始める。
+ * `issue`の作業項目が取る終端の状態のうち、PRの段階にあるのは`pr_open`だけである。
+ * `reviewed`や`rereview_requested`は`pr_review` / `pr_fix`、`audited`は`audit`の作業項目の状態である。
+ * IssueでないPRの作業項目には適用しない。
+ */
+export function newerCycleRefusal(
+  workItem: Pick<WorkItem, "id" | "kind">,
+  newest: { readonly id: number; readonly status: WorkItemStatus } | null,
+  triggerLabel: string,
+): string | null {
+  if (workItem.kind !== "issue" || newest === null) return null;
+  const head = `retry_work_item: work item ${String(workItem.id)} is superseded by work item ${String(newest.id)} (status ${newest.status})`;
+  if (!isOneOf(newest.status, TERMINAL_WORK_ITEM_STATUSES)) {
+    return `${head}, which is in progress, no action needed`;
+  }
+  if (newest.status === "pr_open") {
+    return `${head}, the newer cycle opened a pull request, check that pull request instead`;
+  }
+  if (isOneOf(newest.status, RESTARTABLE_STATUSES)) {
+    return `${head}, retry work item ${String(newest.id)} instead`;
+  }
+  return `${head}, add the "${triggerLabel}" label to the Issue again to start a new cycle`;
+}
+
+/**
+ * 終端の作業項目を稼働中の状態へ戻す更新が、同じIssueの別の稼働中の作業項目に阻まれたときの
+ * 例外を作る。その稼働中の作業項目がこのIssueの現在のサイクルなので、
+ * この作業項目は再開できず、現在のサイクルに従う。稼働中の作業項目が見つかれば、そのIDを文に含める。
+ * `newerCycleRefusal`が先に新しいサイクルのある作業項目を断るので、この衝突が起きるのは、
+ * 最新のサイクルの再実行で、確認と状態の更新の間に、同じIssueで新しいサイクルが始まった競合のときだけである。
+ */
+export function activeIssueConflictError(
+  workItem: Pick<WorkItem, "id" | "owner" | "repo" | "issue_number">,
+  active: readonly Pick<
+    WorkItem,
+    "id" | "owner" | "repo" | "issue_number" | "kind"
+  >[],
+): Error {
+  const other = active.find(
+    (item) =>
+      item.kind === "issue" &&
+      item.id !== workItem.id &&
+      item.owner === workItem.owner &&
+      item.repo === workItem.repo &&
+      item.issue_number === workItem.issue_number,
+  );
+  const id = String(workItem.id);
+  if (other === undefined) {
+    return new Error(
+      `retry_work_item: another work item is the current cycle for this Issue, work item ${id} will not be resumed`,
+    );
+  }
+  const otherId = String(other.id);
+  return new Error(
+    `retry_work_item: work item ${otherId} (active) is the current cycle for this Issue, work item ${id} will not be resumed, follow work item ${otherId}`,
+  );
+}
+
+/**
+ * `activeIssueConflictError`を、稼働中の作業項目の検索(`lookup`)の結果から作る。
+ * 検索が失敗しても、再実行の失敗の理由を隠さないよう、IDなしの文にして返す。
+ */
+export async function activeIssueConflictErrorFrom(
+  workItem: Pick<WorkItem, "id" | "owner" | "repo" | "issue_number">,
+  lookup: () => Promise<
+    readonly Pick<WorkItem, "id" | "owner" | "repo" | "issue_number" | "kind">[]
+  >,
+): Promise<Error> {
+  try {
+    return activeIssueConflictError(workItem, await lookup());
+  } catch {
+    return activeIssueConflictError(workItem, []);
+  }
+}
 
 /**
  * 再開できる作業項目について、戻す状態と起動するフローを決める。
@@ -224,6 +316,18 @@ export async function main(work_item_id: number): Promise<RetryWorkItemResult> {
     throw new Error(`retry_work_item: no work item with id ${work_item_id}`);
   }
 
+  const newest =
+    workItem.kind === "issue" && workItem.issue_number !== null
+      ? await newestNewerIssueCycle(
+          workItem.owner,
+          workItem.repo,
+          workItem.issue_number,
+          workItem.cycle,
+        )
+      : null;
+  const superseded = newerCycleRefusal(workItem, newest, config.trigger_label);
+  if (superseded !== null) throw new Error(superseded);
+
   const implementReady =
     workItem.kind === "issue" &&
     isRequirementsApprovedForAttempt(
@@ -258,19 +362,30 @@ export async function main(work_item_id: number): Promise<RetryWorkItemResult> {
 
   const leased = usesFlowJobIdLease(plan);
   const note = `retry_work_item: restarted from ${workItem.status}`;
-  const moved = leased
-    ? await updateStatusIfCurrentClearingFlowJobId(
-        work_item_id,
-        workItem.status,
-        plan.toStatus,
-        note,
-      )
-    : await updateStatusIfCurrent(
-        work_item_id,
-        workItem.status,
-        plan.toStatus,
-        note,
-      );
+  let moved: boolean;
+  try {
+    moved = leased
+      ? await updateStatusIfCurrentClearingFlowJobId(
+          work_item_id,
+          workItem.status,
+          plan.toStatus,
+          note,
+        )
+      : await updateStatusIfCurrent(
+          work_item_id,
+          workItem.status,
+          plan.toStatus,
+          note,
+        );
+  } catch (err) {
+    if (!isActiveIssueUniqueViolation(err)) throw err;
+    const issueNumber = workItem.issue_number;
+    throw await activeIssueConflictErrorFrom(workItem, async () =>
+      issueNumber === null
+        ? []
+        : listActiveIssueWorkItems(workItem.owner, workItem.repo, issueNumber),
+    );
+  }
   if (!moved) {
     throw new Error(
       `retry_work_item: work item ${work_item_id} is no longer "${workItem.status}"; not restarted`,

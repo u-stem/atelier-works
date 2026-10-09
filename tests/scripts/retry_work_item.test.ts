@@ -1,8 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { IMPLEMENT_FLOW_PATH } from "../../f/factory/lib/implement_loop.ts";
+import type { WorkItemStatus } from "../../f/factory/lib/types.ts";
 import {
+  activeIssueConflictError,
+  activeIssueConflictErrorFrom,
   computeRestartPlan,
   launchFailureError,
+  newerCycleRefusal,
   retryResult,
   runningFlowRefusal,
   usesFlowJobIdLease,
@@ -322,5 +326,150 @@ describe("launchFailureError", () => {
     expect(err.message).toContain(
       "returned an error, but another run holds the lease",
     );
+  });
+});
+
+describe("activeIssueConflictError", () => {
+  const base = {
+    owner: "octo-owner",
+    repo: "atelier-works",
+    issue_number: 12,
+    kind: "issue" as const,
+  };
+  const target = {
+    id: 3,
+    owner: "octo-owner",
+    repo: "atelier-works",
+    issue_number: 12,
+  };
+
+  test("names the active work item of the same issue", () => {
+    const error = activeIssueConflictError(target, [
+      { ...base, id: 9 },
+      { ...base, id: 3 },
+    ]);
+    expect(error.message).toBe(
+      "retry_work_item: work item 9 (active) is the current cycle for this Issue, work item 3 will not be resumed, follow work item 9",
+    );
+  });
+
+  test("ignores active work items of other issues", () => {
+    const error = activeIssueConflictError(target, [
+      { ...base, id: 9, issue_number: 99 },
+      { ...base, id: 4 },
+    ]);
+    expect(error.message).toContain("work item 4 (active)");
+  });
+
+  test("omits the id when the active work item is not found", () => {
+    const error = activeIssueConflictError(target, [{ ...base, id: 3 }]);
+    expect(error.message).toBe(
+      "retry_work_item: another work item is the current cycle for this Issue, work item 3 will not be resumed",
+    );
+  });
+});
+
+describe("activeIssueConflictErrorFrom", () => {
+  const target = {
+    id: 3,
+    owner: "octo-owner",
+    repo: "atelier-works",
+    issue_number: 12,
+  };
+
+  test("names the active work item returned by the lookup", async () => {
+    const error = await activeIssueConflictErrorFrom(target, async () => [
+      { ...target, id: 9, kind: "issue" as const },
+    ]);
+    expect(error.message).toContain("work item 9 (active)");
+  });
+
+  test("falls back to the message without an id when the lookup fails", async () => {
+    const error = await activeIssueConflictErrorFrom(target, async () => {
+      throw new Error("db down");
+    });
+    expect(error.message).toBe(
+      "retry_work_item: another work item is the current cycle for this Issue, work item 3 will not be resumed",
+    );
+  });
+});
+
+describe("computeRestartPlan for a cancelled work item", () => {
+  test("refuses to restart a work item that a newer cycle superseded", () => {
+    expect(() =>
+      computeRestartPlan(
+        { id: 1, status: "cancelled", kind: "issue", attempt: 1 },
+        { implementReady: true, implementEnabled: true },
+      ),
+    ).toThrow(/not restartable/);
+  });
+});
+
+describe("newerCycleRefusal", () => {
+  const target = { id: 3, kind: "issue" as const };
+  const refuse = (status: WorkItemStatus) =>
+    newerCycleRefusal(target, { id: 9, status }, "factory");
+
+  test("allows the restart when no newer cycle exists", () => {
+    expect(newerCycleRefusal(target, null, "factory")).toBeNull();
+  });
+
+  test("says that no action is needed while the newest cycle is in progress", () => {
+    expect(refuse("requirements_generating")).toBe(
+      "retry_work_item: work item 3 is superseded by work item 9 (status requirements_generating), which is in progress, no action needed",
+    );
+  });
+
+  test("treats an awaiting approval cycle as in progress", () => {
+    expect(refuse("awaiting_approval")).toContain("which is in progress");
+  });
+
+  test("treats an implementing cycle as in progress", () => {
+    expect(refuse("implementing")).toContain("which is in progress");
+  });
+
+  test("points at the newest cycle when it can be retried", () => {
+    expect(refuse("failed")).toBe(
+      "retry_work_item: work item 3 is superseded by work item 9 (status failed), retry work item 9 instead",
+    );
+  });
+
+  test.each(["needs_human", "expired", "blocked", "approved"] as const)(
+    "points at the newest cycle when its status is %s",
+    (status) => {
+      expect(refuse(status)).toContain("retry work item 9 instead");
+    },
+  );
+
+  test("tells to add the trigger label again when the newest cycle is otherwise terminal", () => {
+    expect(refuse("cancelled")).toBe(
+      'retry_work_item: work item 3 is superseded by work item 9 (status cancelled), add the "factory" label to the Issue again to start a new cycle',
+    );
+  });
+
+  test("names the configured trigger label", () => {
+    expect(
+      newerCycleRefusal(target, { id: 9, status: "cancelled" }, "run-factory"),
+    ).toContain('add the "run-factory" label');
+  });
+
+  test("tells to add the label again when the newest cycle is rejected", () => {
+    expect(refuse("rejected")).toContain("to start a new cycle");
+  });
+
+  test("tells to check the pull request when the newest cycle opened one", () => {
+    expect(refuse("pr_open")).toBe(
+      "retry_work_item: work item 3 is superseded by work item 9 (status pr_open), the newer cycle opened a pull request, check that pull request instead",
+    );
+  });
+
+  test("does not apply to pull request work items", () => {
+    expect(
+      newerCycleRefusal(
+        { id: 4, kind: "pr_fix" },
+        { id: 9, status: "failed" },
+        "factory",
+      ),
+    ).toBeNull();
   });
 });

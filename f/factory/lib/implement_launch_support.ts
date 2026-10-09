@@ -164,7 +164,7 @@ async function attempt(
  *
  * 副作用ごとに`try`を分け、1つが失敗しても後続の記録を飛ばさない。
  * - 状態の移行が`false`を返した場合は、`not_moved`を返して何もしない。
- *   別の処理(`retry_work_item`)が作業項目を動かしたためで、
+ *   別の処理(`retry_work_item`や、新しいサイクルの挿入による取り消し)が作業項目を動かしたためで、
  *   ここで`needs_human`へ移すと実行中のフローの状態を上書きしてしまう。
  * - 状態の移行が例外を投げた場合は、`job_failures`への記録(stepは`cas`)とnoticeの追加を行い、`cas_failed`を返す。
  *   作業項目は終端の`approved`のまま残り、reconcileの対象にならないので、人が再開するしかないため。

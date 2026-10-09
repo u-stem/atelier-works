@@ -12,6 +12,7 @@
 // クライアントとサーバーのバージョンが食い違う。
 import * as wmill from "windmill-client@1.817.0";
 import type { CleanupCounts } from "./cleanup_db_support.ts";
+import { type Logger, logger, maskSecrets } from "./log.ts";
 import {
   type AgentRunRecord,
   APPROVAL_REQUEST_KINDS,
@@ -375,6 +376,216 @@ export async function insertWorkItem(
   `;
   const row = await fetchOneRow(statement, "insertWorkItem");
   return parseId(row.id, "id");
+}
+
+/** `insertIssueWorkItemUnlessActive`の結果。`superseded`は、新しいサイクルに置き換えて取り消した`approved`の作業項目。 */
+export type InsertedIssueWorkItem = {
+  readonly id: number;
+  readonly superseded: readonly {
+    readonly id: number;
+    readonly attempt: number;
+  }[];
+};
+
+/**
+ * 新しいサイクルの`newWorkItemId`が始まったので、同じIssueの古いサイクルの`approved`の作業項目を
+ * `cancelled`へ移し、`factory.work_item_events`に行を残す。取り消した項目を返す。
+ * 取り消すのは`cycle`が新しいサイクルより小さい項目だけである。
+ * 新しいサイクルより後の項目は、始めたのが別の取得であり、この取得の置き換え対象ではない。
+ * 取引で囲まない。1つの文が自動でコミットされる。
+ */
+export async function supersedeApprovedIssueWorkItems(
+  target: {
+    readonly owner: string;
+    readonly repo: string;
+    readonly issue_number: number;
+    readonly cycle: number;
+  },
+  newWorkItemId: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<{ readonly id: number; readonly attempt: number }[]> {
+  const rows = await sql`
+    WITH cancelled AS (
+      UPDATE factory.work_items AS wi
+      SET status = 'cancelled', updated_at = now()
+      WHERE wi.kind = 'issue' AND wi.status = 'approved'
+        AND wi.owner = ${target.owner} AND wi.repo = ${target.repo}
+        AND wi.issue_number = ${target.issue_number}::integer
+        AND wi.cycle < ${target.cycle}::integer
+      RETURNING wi.id, wi.attempt
+    ),
+    recorded AS (
+      INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note)
+      SELECT id, 'approved', 'cancelled', 'superseded by a newer cycle (work item ' || ${newWorkItemId}::bigint || ')'
+      FROM cancelled
+      RETURNING work_item_id
+    )
+    SELECT id, attempt FROM cancelled
+  `.fetch();
+  return rows.map((row) => ({
+    id: parseId(row.id, "id"),
+    attempt: parseNumericLike(row.attempt, "attempt"),
+  }));
+}
+
+/**
+ * Issueの作業項目を挿入し、そのIDと、置き換えて取り消した`approved`の作業項目を返す。
+ * 同じIssueに終端でない作業項目が既にあるときは、
+ * 部分一意インデックス`work_items_active_issue_key`により挿入せず、`null`を返す。
+ * `ON CONFLICT DO NOTHING`は対象を指定しないので、`(owner, repo, issue_number, cycle)`の
+ * 一意制約への違反も`null`になる。どちらも、同じIssueの別の取得が先に作業項目を作った場合である。
+ * `nextCycleForIssue`の読み取りと挿入は1つの取引ではないため、並行する取得の
+ * 最後の防御はこの制約である。DBを共有するインスタンスの間で働く。
+ *
+ * 挿入できたときは、続けて`supersedeApprovedIssueWorkItems`で古い承認済みの項目を取り消す。
+ * `approved`は終端で、稼働中のIssueの一意インデックスの対象外なので、
+ * `implement_enabled`が無効の間は、承認済みの項目が長く残りうる。
+ * 古い承認を実装に使わないよう、新しいサイクルの開始で取り消す。
+ * 挿入が負けたときは、何も取り消さない。
+ *
+ * 挿入の後は例外を投げない。取り消しの文が失敗したときは、警告のログと
+ * `supersede_failed`のnoticeを残して`superseded`を空にして返す。挿入は済んでいて、呼び出し元は作業項目を登録できたものとして
+ * フローを起動する必要があるためである。取り消せなかった承認は、上のとおり
+ * 次の新しいサイクルで取り消され、それまでは`retry_work_item`が再開を断る。
+ * 挿入そのものの失敗は、そのまま投げる。
+ *
+ * 挿入と取り消しは、別々に自動コミットされる2つの文にしている。
+ * 1つの文にまとめると、取り消しは文の開始時点のスナップショットを見るので、
+ * 文の実行中にコミットされた承認を取り逃す。
+ * 取引で囲むと、`requirements_apply`の`approved`から`implementing`への更新と、
+ * 行のロックを逆の順に取り合ってデッドロックしうる。
+ * 2つに分けても、取り消しの前にプロセスが落ちると、古い承認が残りうる。
+ * 残った項目は、次に同じIssueで新しいサイクルが始まるときに取り消される。
+ */
+export async function insertIssueWorkItemUnlessActive(
+  item: NewWorkItem,
+  sql: SqlClient = defaultSqlClient,
+  log: Logger = logger("db"),
+): Promise<InsertedIssueWorkItem | null> {
+  const rows = await sql`
+    INSERT INTO factory.work_items (
+      cycle, source, kind, owner, repo, issue_number, issue_url, pr_number,
+      title, body, status, attempt, claimed_by, flow_job_id, resume_url,
+      cancel_url, head_sha, parent_work_item_id
+    ) VALUES (
+      ${item.cycle}::integer, ${item.source}, ${item.kind}, ${item.owner}, ${item.repo},
+      ${item.issue_number}::integer, ${item.issue_url}, ${item.pr_number}::integer, ${item.title},
+      ${item.body}, ${item.status}, ${item.attempt}::integer, ${item.claimed_by},
+      ${item.flow_job_id}, ${item.resume_url}, ${item.cancel_url}, ${item.head_sha},
+      ${item.parent_work_item_id}::bigint
+    )
+    ON CONFLICT DO NOTHING
+    RETURNING id
+  `.fetch();
+  const row = rows[0];
+  if (row === undefined) return null;
+  const id = parseId(row.id, "id");
+  if (item.issue_number === null) return { id, superseded: [] };
+  try {
+    const superseded = await supersedeApprovedIssueWorkItems(
+      {
+        owner: item.owner,
+        repo: item.repo,
+        issue_number: item.issue_number,
+        cycle: item.cycle,
+      },
+      id,
+      sql,
+    );
+    return { id, superseded };
+  } catch (err) {
+    // 挿入は済んでいる。ここで投げると、呼び出し元が作業項目の登録に失敗したと誤り、
+    // 作業項目だけが残って、フローが起動されない。
+    log.warn("superseding the approved work items failed", {
+      work_item_id: id,
+      error: maskSecrets(err instanceof Error ? err.message : String(err)),
+    });
+    try {
+      // 本文は対象と新しい作業項目のIDだけで決まるので、同じ本文の未解決のnoticeは重ならない。
+      // 失敗の文は載せない(ログに残した)。
+      await addNoticeUnlessUnresolved(
+        {
+          kind: "supersede_failed",
+          message: `${item.owner}/${item.repo}#${String(item.issue_number)} (work item ${String(id)}): 古い承認済みの作業項目を取り消せませんでした。古い承認は再開できず、操作は要りません。次の新しいサイクルで取り消されます`,
+        },
+        sql,
+      );
+    } catch (noticeErr) {
+      log.warn("supersede_failed notice could not be recorded", {
+        work_item_id: id,
+        error: maskSecrets(
+          noticeErr instanceof Error ? noticeErr.message : String(noticeErr),
+        ),
+      });
+    }
+    return { id, superseded: [] };
+  }
+}
+
+/**
+ * 同じIssueで、`cycle`より大きい`issue`の作業項目のうち、サイクルが最大のものを返す。無ければ`null`。
+ * あれば、`cycle`の作業項目は新しいサイクルに置き換えられている。
+ * `retry_work_item`が古い作業項目を再開せず、最新のサイクルの状態に合う案内を返すために使う。
+ */
+export async function newestNewerIssueCycle(
+  owner: string,
+  repo: string,
+  issueNumber: number,
+  cycle: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<{ readonly id: number; readonly status: WorkItemStatus } | null> {
+  const rows = await sql`
+    SELECT id, status FROM factory.work_items
+    WHERE kind = 'issue' AND owner = ${owner} AND repo = ${repo}
+      AND issue_number = ${issueNumber}::integer AND cycle > ${cycle}::integer
+    ORDER BY cycle DESC
+    LIMIT 1
+  `.fetch();
+  const row = rows[0];
+  if (row === undefined) return null;
+  const status = row.status;
+  if (typeof status !== "string" || !isOneOf(status, WORK_ITEM_STATUSES)) {
+    throw new Error(
+      `db: newestNewerIssueCycle: unknown status ${String(status)}`,
+    );
+  }
+  return { id: parseId(row.id, "id"), status };
+}
+
+const ACTIVE_ISSUE_INDEX_NAME = "work_items_active_issue_key";
+
+/**
+ * 例外が、部分一意インデックス`work_items_active_issue_key`への違反かを返す。
+ * 終端の作業項目を稼働中の状態へ戻す更新(`approved`から`implementing`への移行、
+ * `retry_work_item`の再開)が、同じIssueの別の稼働中の作業項目に阻まれたときに起きる。
+ * 制約名が、エラーの文か、文字列の`body`に含まれることで判定する。
+ */
+export function isActiveIssueUniqueViolation(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  if (err.message.includes(ACTIVE_ISSUE_INDEX_NAME)) return true;
+  // windmill-clientは、500以外のAPIのエラーでは、サーバーの文を`body`に入れる。
+  const body: unknown = Reflect.get(err, "body");
+  return typeof body === "string" && body.includes(ACTIVE_ISSUE_INDEX_NAME);
+}
+
+/**
+ * (owner, repo, issueNumber)の、終端でない`issue`の作業項目を返す。
+ * 一意インデックスにより、通常は多くても1件である。
+ */
+export async function listActiveIssueWorkItems(
+  owner: string,
+  repo: string,
+  issueNumber: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<WorkItem[]> {
+  const terminal: string[] = [...TERMINAL_WORK_ITEM_STATUSES];
+  const rows = await sql`
+    SELECT * FROM factory.work_items
+    WHERE kind = 'issue' AND owner = ${owner} AND repo = ${repo}
+      AND issue_number = ${issueNumber}::integer AND status != ALL(${terminal})
+    ORDER BY updated_at DESC
+  `.fetch();
+  return rows.map(toWorkItem);
 }
 
 /**

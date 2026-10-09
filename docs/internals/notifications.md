@@ -11,9 +11,10 @@ Factoryは、知らせる内容によって経路を使い分ける。
 | Discordの通知 | 人の行動が要るイベントと、日次サマリー | `f/factory/lib/discord.ts` |
 | Consoleの**通知**タブ | Discordに送らない要対応の事項(notice) | `factory.notices`、`addNotice` |
 | Consoleの**失敗**タブ | フローとスケジュールの失敗の記録 | `factory.job_failures`、`recordFailure` |
-| GitHub | 成果物だけ | Issueへの承認のコメント、PRのレビューと返信 |
+| GitHub | 成果物だけ | Issueへの承認のコメントと、承認を取り消したときのコメント、PRのレビューと返信 |
 
-GitHubには成果物だけを書く。Issueに自動で投稿するのは、要件定義が承認されたときのConsoleへのリンク1件だけである。着手、承認待ち、却下、期限切れ、失敗、人の対応待ちといった運用上の状態は、Issue・PRに書かない。DiscordとConsoleで知らせる。
+GitHubには成果物だけを書く。Issueに自動で投稿するのは、要件定義が承認されたときのConsoleへのリンクと、新しいサイクルが始まって承認済みの要件定義を取り消したときの説明の、2種類のコメントだけである。着手、承認待ち、却下、期限切れ、失敗、人の対応待ちといった運用上の状態は、Issue・PRに書かない。DiscordとConsoleで知らせる。
+承認を取り消したときのコメントは、運用上の通知ではない。Issueで承認が見えなくなった理由を、Issueに残す記録なので、人の操作が要らなくても投稿する。
 
 ## Discordの通知の種類
 
@@ -38,10 +39,14 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | --- | --- |
 | `pipeline_generate` | 日次の予算を超えていたので、要件定義の生成を始めなかった |
 | `requirements_apply` | 試行回数の上限まで却下された。承認の後に実装フローを起動できなかった |
-| `poll_issues` | 承認依頼が期限切れになった(理由は`approval timed out`)。Issueを取得した後に作業項目を登録できなかった(理由は`claimed issue could not be registered`) |
+| `poll_issues` | 承認依頼が期限切れになった(理由は`approval timed out`)。Issueを取得した後に作業項目を登録できなかった(理由は`claimed issue could not be registered`)。トリガーラベルを外した結果が分からなかった(理由は`claim ownership could not be determined`) |
 | `implement_finish` | 実装フローが人の対応待ちで止まった |
 | `pr_review_generate` | レビューの生成を止めた |
 | `pr_fix_finish` | 修正が人の対応待ちで止まった。Issue化の提案がある |
+
+`poll_issues`が、1回のポーリングで複数のIssueについてラベルを外した結果を判断できなかったときは、Issueごとに送らず、リンクを並べた1件の通知にまとめる。
+各行は`owner/repo#番号`とリンクで、タイトルとリンクの先は先頭のIssueである。
+並べるのは10件までで、残りは件数で示す。
 
 ジョブ失敗(`job_failed`)の通知を送る処理は次のとおり。
 
@@ -188,7 +193,9 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `issue_proposal_record_failed` | `pr_fix_finish` | 対象、記録の失敗の理由 |
 | `fix_feedback_association_excluded` | `pr_fix_collect` | 対象、除外した投稿者 |
 | `labeler_association_denied` | `poll_issues` | 対象、ラベル付与者の関係 |
-| `claim_race_lost` | `poll_issues`、`poll_prs` | 対象、取得できなかった理由 |
+| `claim_race_lost` | `poll_issues`、`poll_prs`、`manual_intake_register` | 対象、取得できなかった理由 |
+| `claim_assignee_missing` | `poll_issues` | 対象、assigneeにできなかったユーザー、確かめる点 |
+| `supersede_failed` | `insertIssueWorkItemUnlessActive`(`poll_issues`が呼ぶ) | 対象、新しい作業項目のID、操作が要らないこと |
 | `deployed_sha_mismatch` | `poll_issues` | self cloneのHEADと`f/factory/deployed_sha` |
 | `cleanup_db_failed` | `cleanup_db` | 削除に失敗した対象とエラー |
 | `cleanup_worktrees_skipped` | `cleanup_workspaces` | 掃除を見送ったリポジトリ |
@@ -197,6 +204,11 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 
 `fix_reply_post_failed`は、返信の投稿に1件以上失敗したとき1件だけ残す。Discordには通知しない。`unsandboxed_check_commands`は、検査コマンドを実行するたびに残す。
 `cleanup_worktree_busy`は、1回の掃除でworktreeのパスごとに1件残す。Discordには通知しない。
+次のnoticeは、同じ本文の未解決のものがあるあいだは追加しない。
+対象は、`labeler_association_denied`、`claim_assignee_missing`、`claim_race_lost`、`supersede_failed`である。
+`claim_race_lost`は、`poll_issues`と`manual_intake_register`が残すものに限る。
+`supersede_failed`は、新しいサイクルの挿入の後に、古い承認済みの作業項目を取り消す文が失敗したときに残す。Discordには通知しない。
+同じ状況が続く間、ポーリングのたびに積み上がるのを防ぐためである。
 `deployed_sha_mismatch`は、self cloneのHEADとデプロイ版が同じ組で、未解決のnoticeがあるあいだは追加しない。
 `poll_issues`が実行されるたびに同じnoticeが積み上がり、ほかの種類が埋もれるためである。
 版の組が変わったときと、既存のnoticeを解決した後に再び食い違ったときは、1件残す。

@@ -8,7 +8,13 @@
 
 import { describe, expect, test } from "bun:test";
 import { claimPr } from "../../f/factory/poll_prs.ts";
-import { createFakeCommandRunner, fail, ghApiOk } from "../lib/testSupport.ts";
+import {
+  createFakeCommandRunner,
+  fail,
+  ghApiOk,
+  ghApiStdout,
+  ok,
+} from "../lib/testSupport.ts";
 
 function fakeIssue(labels: string[]) {
   return {
@@ -102,5 +108,36 @@ describe("claimPr", () => {
       claimed: false,
       reason: "trigger label factory:review still present after claim",
     });
+  });
+
+  test("reports not claimed when the label was already gone (404)", async () => {
+    const { run } = createFakeCommandRunner([
+      ok(ghApiStdout(404, { message: "Not Found" })),
+    ]);
+    const result = await claimPr(
+      { run, ghToken: "token" },
+      "octo-owner",
+      "atelier-works",
+      7,
+      "factory:review",
+    );
+    expect(result).toEqual({
+      claimed: false,
+      reason: "trigger label factory:review was already removed",
+    });
+  });
+
+  test("does not read the issue when the label was already gone (404)", async () => {
+    const { run, calls } = createFakeCommandRunner([
+      ok(ghApiStdout(404, { message: "Not Found" })),
+    ]);
+    await claimPr(
+      { run, ghToken: "token" },
+      "octo-owner",
+      "atelier-works",
+      7,
+      "factory:review",
+    );
+    expect(calls).toHaveLength(1);
   });
 });

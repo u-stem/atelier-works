@@ -28,21 +28,29 @@ const silentLog: Logger = { info() {}, warn() {}, error() {} };
 
 type Sent = { webhookUrl: string; event: NotifyEvent };
 
+type Notice = { kind: string; message: string };
+
 function fakeDeps(overrides: Partial<RegisterClaimedIssueDeps> = {}): {
   deps: RegisterClaimedIssueDeps;
   sent: Sent[];
+  notices: Notice[];
 } {
   const sent: Sent[] = [];
+  const notices: Notice[] = [];
   const deps: RegisterClaimedIssueDeps = {
     nextCycleForIssue: async () => 1,
-    insertWorkItem: async () => 77,
+    insertWorkItem: async () => ({ id: 77, superseded: [] }),
+    addNoticeUnlessUnresolved: async (record) => {
+      notices.push({ kind: record.kind, message: record.message });
+      return notices.length;
+    },
     notifyBestEffort: async (webhookUrl, event) => {
       sent.push({ webhookUrl, event });
       return { status: "sent" };
     },
     ...overrides,
   };
-  return { deps, sent };
+  return { deps, sent, notices };
 }
 
 function register(deps: RegisterClaimedIssueDeps) {
@@ -74,10 +82,24 @@ async function sentEvent(
   return sent[0]?.event;
 }
 
+function insertConflicts(): Partial<RegisterClaimedIssueDeps> {
+  return { insertWorkItem: async () => null };
+}
+
 describe("registerClaimedIssue", () => {
   test("returns the id of the registered work item", async () => {
     const { deps } = fakeDeps();
-    expect(await register(deps)).toBe(77);
+    expect((await register(deps))?.id).toBe(77);
+  });
+
+  test("returns the work items that the new cycle superseded", async () => {
+    const { deps } = fakeDeps({
+      insertWorkItem: async () => ({
+        id: 77,
+        superseded: [{ id: 5, attempt: 2 }],
+      }),
+    });
+    expect((await register(deps))?.superseded).toEqual([{ id: 5, attempt: 2 }]);
   });
 
   test("sends no notification when the registration succeeds", async () => {
@@ -158,5 +180,34 @@ describe("registerClaimedIssue", () => {
       },
     });
     expect(event?.kind).toBe("needs_human");
+  });
+
+  test("returns null when another active work item already exists for the issue", async () => {
+    const { deps } = fakeDeps(insertConflicts());
+    expect(await register(deps)).toBeNull();
+  });
+
+  test("records a claim_race_lost notice when the insert conflicts", async () => {
+    const { deps, notices } = fakeDeps(insertConflicts());
+    await register(deps);
+    expect(notices).toEqual([
+      {
+        kind: "claim_race_lost",
+        message:
+          "octo-owner/atelier-works#12: another work item is already active for the issue",
+      },
+    ]);
+  });
+
+  test("sends no notification when the insert conflicts", async () => {
+    const { deps, sent } = fakeDeps(insertConflicts());
+    await register(deps);
+    expect(sent).toEqual([]);
+  });
+
+  test("records no notice when the registration succeeds", async () => {
+    const { deps, notices } = fakeDeps();
+    await register(deps);
+    expect(notices).toEqual([]);
   });
 });
