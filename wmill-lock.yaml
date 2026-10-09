@@ -59,7 +59,7 @@ locks:
   f/factory/self_update: 23bf204fb6f8098d3ea62343741a57c7b03baaaea5bb37ddcc2c6b44a1ecfe85
   f/factory/steps/audit_generate: d032ee7406d3240b7ccda07df08ea5f4102100c4866f210475bc6cef7c23f1ca
   f/factory/steps/audit_prepare: 3bc36e6c5c703430960a777ad34ca2380d8574db93a5c930486d42cf07a05c81
-  f/factory/steps/console_query: cb2d108e94ccbd4de01a5db1fc1ceba79b2092fb8c4a075672eca5fed5b7da99
+  f/factory/steps/console_query: 641f438e1bc70b021bc71479fda716074a34f6b369ffac3deefaf247ca4c9d9f
   f/factory/steps/implement_finish: da8a8270636205f445cf41bdf9bc35e28b82c4bb829c7700590a70681985bb59
   f/factory/steps/implement_generate: aca82c2d7ea8cb40f6623e2314f71ad99fda35633857a75ca5fb2034aa58fe0c
   f/factory/steps/implement_prepare: 60514bac16abed09f5fde091c46292f16fae6ba1c9e2380fd80a8ff65eb224ac

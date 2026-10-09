@@ -4,6 +4,8 @@
 
 import { formatAuditPeriodLabel } from "../lib/audit_support.ts";
 import {
+  ACTIONABLE_WORK_ITEM_STATUSES,
+  INFO_NOTICE_KINDS,
   isNoticeResolvable,
   type NoticeSeverity,
   noticeSeverity,
@@ -34,7 +36,7 @@ import {
 } from "../lib/types.ts";
 import { type ReadTextFile, readTextFile } from "../lib/workspace.ts";
 
-const CONSOLE_VIEWS = [
+const CONSOLE_ROW_VIEWS = [
   "inbox",
   "pipeline",
   "agent_cost_daily",
@@ -50,7 +52,14 @@ const CONSOLE_VIEWS = [
   "audit_doc",
 ] as const;
 
-export type ConsoleView = (typeof CONSOLE_VIEWS)[number];
+/** 1つのオブジェクトを返すビュー。行の配列を返す`CONSOLE_ROW_VIEWS`とは返り値の形が違う。 */
+const CONSOLE_OBJECT_VIEWS = ["summary", "work_item_detail"] as const;
+
+const CONSOLE_VIEWS = [...CONSOLE_ROW_VIEWS, ...CONSOLE_OBJECT_VIEWS] as const;
+
+export type ConsoleRowView = (typeof CONSOLE_ROW_VIEWS)[number];
+export type ConsoleObjectView = (typeof CONSOLE_OBJECT_VIEWS)[number];
+export type ConsoleView = ConsoleRowView | ConsoleObjectView;
 
 const DEFAULT_LIMIT = 200;
 const DEFAULT_DAYS = 30;
@@ -164,6 +173,10 @@ function asIsoDate(value: unknown, field: string): string {
     }
   }
   throw new Error(`console_query: field "${field}" is not a valid timestamp`);
+}
+
+function asNullableIsoDate(value: unknown, field: string): string | null {
+  return value === null || value === undefined ? null : asIsoDate(value, field);
 }
 
 function asJsonArray(value: unknown, field: string): unknown[] {
@@ -895,6 +908,520 @@ function toAuditDocRow(row: SqlRow): AuditDocRow {
   };
 }
 
+// ---------------------------------------------------------------------------
+// 1つのオブジェクトを返すビュー("summary"、"work_item_detail")。
+// ---------------------------------------------------------------------------
+
+/** 一覧のerrorとmessageを切り詰める長さ。一覧は軽く保ち、全文は作業項目の詳細で見る。 */
+const SUMMARY_TEXT_LIMIT = 500;
+
+/** "summary"の承認待ちの1行。要件定義の本文やIssue提案の本文は持たない。 */
+export type SummaryApprovalRow = {
+  readonly approval_request_id: number;
+  readonly kind: ApprovalRequestKind;
+  readonly status: ApprovalRequestStatus;
+  readonly work_item_id: number;
+  readonly owner: string;
+  readonly repo: string;
+  readonly title: string | null;
+  readonly issue_number: number | null;
+  readonly issue_url: string | null;
+  readonly pr_number: number | null;
+  readonly requested_at: string;
+  readonly expires_at: string | null;
+  readonly draft_attempt: number | null;
+  readonly summary: string | null;
+  readonly proposal_title: string | null;
+  readonly created_issue_number: number | null;
+  readonly origin: IssueProposalOrigin | null;
+};
+
+function toSummaryApprovalRow(row: SqlRow): SummaryApprovalRow {
+  return {
+    approval_request_id: asId(row.approval_request_id, "approval_request_id"),
+    kind: asApprovalRequestKind(row.kind),
+    status: asApprovalRequestStatus(row.status),
+    work_item_id: asId(row.work_item_id, "work_item_id"),
+    owner: asStr(row.owner, "owner"),
+    repo: asStr(row.repo, "repo"),
+    title: asNullableStr(row.title, "title"),
+    issue_number: asNullableNumeric(row.issue_number, "issue_number"),
+    issue_url: asNullableStr(row.issue_url, "issue_url"),
+    pr_number: asNullableNumeric(row.pr_number, "pr_number"),
+    requested_at: asIsoDate(row.requested_at, "requested_at"),
+    expires_at: asNullableIsoDate(row.expires_at, "expires_at"),
+    draft_attempt: asNullableNumeric(row.draft_attempt, "draft_attempt"),
+    summary: asNullableStr(row.summary, "summary"),
+    proposal_title: asNullableStr(row.proposal_title, "proposal_title"),
+    created_issue_number: asNullableNumeric(
+      row.created_issue_number,
+      "created_issue_number",
+    ),
+    origin: isOneOf(row.origin, ISSUE_PROPOSAL_ORIGINS) ? row.origin : null,
+  };
+}
+
+/**
+ * "summary"の失敗の1行。作業項目の今の状態が`failed`か`needs_human`のものを、
+ * 作業項目ごとに1行だけ持つ。`job_failures`に行が無い作業項目もあるので、
+ * 失敗の項目は`null`になりうる。
+ */
+export type SummaryFailureRow = {
+  readonly work_item_id: number;
+  readonly kind: string;
+  readonly owner: string;
+  readonly repo: string;
+  readonly issue_number: number | null;
+  readonly issue_url: string | null;
+  readonly pr_number: number | null;
+  readonly title: string | null;
+  readonly status: string;
+  readonly updated_at: string;
+  /** 今の状態へ遷移したときの`work_item_events.note`。 */
+  readonly status_note: string | null;
+  readonly status_changed_at: string | null;
+  readonly job_failure_id: number | null;
+  readonly flow_path: string | null;
+  readonly job_id: string | null;
+  readonly step: string | null;
+  readonly error: string | null;
+  readonly occurred_at: string | null;
+};
+
+function toSummaryFailureRow(row: SqlRow): SummaryFailureRow {
+  return {
+    work_item_id: asId(row.work_item_id, "work_item_id"),
+    kind: asStr(row.kind, "kind"),
+    owner: asStr(row.owner, "owner"),
+    repo: asStr(row.repo, "repo"),
+    issue_number: asNullableNumeric(row.issue_number, "issue_number"),
+    issue_url: asNullableStr(row.issue_url, "issue_url"),
+    pr_number: asNullableNumeric(row.pr_number, "pr_number"),
+    title: asNullableStr(row.title, "title"),
+    status: asStr(row.status, "status"),
+    updated_at: asIsoDate(row.updated_at, "updated_at"),
+    status_note: asNullableStr(row.status_note, "status_note"),
+    status_changed_at: asNullableIsoDate(
+      row.status_changed_at,
+      "status_changed_at",
+    ),
+    job_failure_id: asNullableId(row.job_failure_id, "job_failure_id"),
+    flow_path: asNullableStr(row.flow_path, "flow_path"),
+    job_id: asNullableStr(row.job_id, "job_id"),
+    step: asNullableStr(row.step, "step"),
+    error: asNullableStr(row.error, "error"),
+    occurred_at: asNullableIsoDate(row.occurred_at, "occurred_at"),
+  };
+}
+
+export type ConsoleSummaryCounts = {
+  readonly approvals: number;
+  readonly failures: number;
+  readonly notices: number;
+};
+
+/**
+ * "summary"ビューの結果。サイドバーの件数と、要対応の一覧に使う。
+ * 件数は、一覧の件数の上限(`limit`)を超えた分も数える。
+ */
+export type ConsoleSummary = {
+  readonly counts: ConsoleSummaryCounts;
+  readonly approvals: SummaryApprovalRow[];
+  readonly failures: SummaryFailureRow[];
+  readonly notices: NoticeRow[];
+};
+
+/** 窓関数で付けた全件数を、先頭の行から読む。行が無ければ0を返す。 */
+function totalCount(rows: readonly SqlRow[]): number {
+  const first = rows[0];
+  return first === undefined ? 0 : asNumeric(first.total_count, "total_count");
+}
+
+/**
+ * 要対応の件数と一覧を返す。承認待ち、失敗、要対応の通知を1回ずつ問い合わせる。
+ *
+ * - 承認待ち: 判断待ちの承認依頼と、承認済みでIssueをまだ作っていないIssue提案。
+ *   承認の記録はIssueの作成より先に行うので、その間で失敗した提案が見えなくならないよう含める。
+ * - 失敗: 今の状態が`ACTIONABLE_WORK_ITEM_STATUSES`の作業項目。
+ *   同じIssueに新しいcycleがある作業項目は、そのcycleが引き継ぐので除く。
+ * - 通知: 未解決で、重要度が`action`のもの。
+ *
+ * `error`、`message`、状態の注記は`SUMMARY_TEXT_LIMIT`字に切り詰める。
+ */
+export async function runConsoleSummary(
+  limit: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<ConsoleSummary> {
+  const approvalRows = await sql`
+    SELECT
+      id AS approval_request_id, kind, status, work_item_id, owner, repo,
+      title, issue_number, issue_url, pr_number, requested_at, expires_at,
+      draft_attempt, left(summary, ${SUMMARY_TEXT_LIMIT}::integer) AS summary,
+      proposal_title, created_issue_number, origin,
+      count(*) OVER () AS total_count
+    FROM factory.v_approval_requests
+    WHERE status = 'pending'
+      OR (kind = 'issue_proposal' AND status = 'approved' AND created_issue_number IS NULL)
+    ORDER BY requested_at DESC
+    LIMIT ${limit}::integer
+  `.fetch();
+
+  const failureRows = await sql`
+    SELECT
+      wi.id AS work_item_id, wi.kind, wi.owner, wi.repo, wi.issue_number,
+      wi.issue_url, wi.pr_number, wi.title, wi.status, wi.updated_at,
+      left(ev.note, ${SUMMARY_TEXT_LIMIT}::integer) AS status_note,
+      ev.occurred_at AS status_changed_at,
+      jf.id AS job_failure_id, jf.flow_path, jf.job_id, jf.step,
+      left(jf.error, ${SUMMARY_TEXT_LIMIT}::integer) AS error,
+      jf.occurred_at,
+      count(*) OVER () AS total_count
+    FROM factory.work_items wi
+    LEFT JOIN LATERAL (
+      SELECT e.note, e.occurred_at
+      FROM factory.work_item_events e
+      WHERE e.work_item_id = wi.id AND e.to_status = wi.status
+      ORDER BY e.occurred_at DESC, e.id DESC
+      LIMIT 1
+    ) ev ON true
+    LEFT JOIN LATERAL (
+      SELECT f.id, f.flow_path, f.job_id, f.step, f.error, f.occurred_at
+      FROM factory.job_failures f
+      WHERE f.work_item_id = wi.id
+      ORDER BY f.occurred_at DESC, f.id DESC LIMIT 1
+    ) jf ON true
+    WHERE wi.status = ANY(${[...ACTIONABLE_WORK_ITEM_STATUSES]}::text[])
+      AND NOT (
+        wi.kind = 'issue'
+        AND EXISTS (
+          SELECT 1 FROM factory.work_items n
+          WHERE n.kind = 'issue' AND n.owner = wi.owner AND n.repo = wi.repo
+            AND n.issue_number = wi.issue_number AND n.cycle > wi.cycle
+        )
+      )
+    ORDER BY wi.updated_at DESC
+    LIMIT ${limit}::integer
+  `.fetch();
+
+  const noticeRows = await sql`
+    SELECT
+      id AS notice_id, kind, left(message, ${SUMMARY_TEXT_LIMIT}::integer) AS message,
+      resolved, created_at, count(*) OVER () AS total_count
+    FROM factory.notices
+    WHERE resolved = false
+      AND NOT (kind = ANY(${[...INFO_NOTICE_KINDS]}::text[]))
+    ORDER BY created_at DESC
+    LIMIT ${limit}::integer
+  `.fetch();
+
+  return {
+    counts: {
+      approvals: totalCount(approvalRows),
+      failures: totalCount(failureRows),
+      notices: totalCount(noticeRows),
+    },
+    approvals: approvalRows.map(toSummaryApprovalRow),
+    failures: failureRows.map(toSummaryFailureRow),
+    notices: noticeRows.map(toNoticeRow),
+  };
+}
+
+/** "work_item_detail"の概要。状態、Issue、ブランチ、PR、費用を持つ。 */
+export type WorkItemOverview = {
+  readonly work_item_id: number;
+  readonly kind: string;
+  readonly source: string;
+  readonly cycle: number;
+  readonly owner: string;
+  readonly repo: string;
+  readonly issue_number: number | null;
+  readonly issue_url: string | null;
+  readonly pr_number: number | null;
+  readonly pr_url: string | null;
+  readonly branch: string | null;
+  readonly title: string | null;
+  readonly status: string;
+  readonly attempt: number;
+  readonly fix_round: number;
+  readonly created_at: string;
+  readonly updated_at: string;
+  /** 今の状態へ遷移したときの`work_item_events.note`。 */
+  readonly status_note: string | null;
+  /** `agent_runs.cost_usd`の合計。実行の記録が無ければ`null`。 */
+  readonly total_cost_usd: number | null;
+  readonly run_count: number;
+};
+
+function toWorkItemOverview(row: SqlRow): WorkItemOverview {
+  return {
+    work_item_id: asId(row.work_item_id, "work_item_id"),
+    kind: asStr(row.kind, "kind"),
+    source: asStr(row.source, "source"),
+    cycle: asNumeric(row.cycle, "cycle"),
+    owner: asStr(row.owner, "owner"),
+    repo: asStr(row.repo, "repo"),
+    issue_number: asNullableNumeric(row.issue_number, "issue_number"),
+    issue_url: asNullableStr(row.issue_url, "issue_url"),
+    pr_number: asNullableNumeric(row.pr_number, "pr_number"),
+    pr_url: asNullableStr(row.pr_url, "pr_url"),
+    branch: asNullableStr(row.branch, "branch"),
+    title: asNullableStr(row.title, "title"),
+    status: asStr(row.status, "status"),
+    attempt: asNumeric(row.attempt, "attempt"),
+    fix_round: asNumeric(row.fix_round, "fix_round"),
+    created_at: asIsoDate(row.created_at, "created_at"),
+    updated_at: asIsoDate(row.updated_at, "updated_at"),
+    status_note: asNullableStr(row.status_note, "status_note"),
+    total_cost_usd: asNullableNumeric(row.total_cost_usd, "total_cost_usd"),
+    run_count: asNumeric(row.run_count, "run_count"),
+  };
+}
+
+/** 要件定義の試行1回分。承認依頼があれば、その状態を添える。 */
+export type WorkItemAttemptRow = {
+  readonly attempt: number;
+  readonly summary: string;
+  readonly created_at: string;
+  readonly approval_request_id: number | null;
+  readonly approval_status: ApprovalRequestStatus | null;
+};
+
+function toWorkItemAttemptRow(row: SqlRow): WorkItemAttemptRow {
+  return {
+    attempt: asNumeric(row.attempt, "attempt"),
+    summary: asStr(row.summary, "summary"),
+    created_at: asIsoDate(row.created_at, "created_at"),
+    approval_request_id: asNullableId(
+      row.approval_request_id,
+      "approval_request_id",
+    ),
+    approval_status:
+      row.approval_status === null || row.approval_status === undefined
+        ? null
+        : asApprovalRequestStatus(row.approval_status),
+  };
+}
+
+/** 作業項目の承認依頼1件の履歴。 */
+export type WorkItemApprovalRow = {
+  readonly approval_request_id: number;
+  readonly kind: ApprovalRequestKind;
+  readonly status: ApprovalRequestStatus;
+  readonly requested_at: string;
+  readonly expires_at: string | null;
+  readonly decided_at: string | null;
+  readonly decided_by: string | null;
+  readonly reason: string | null;
+  readonly draft_attempt: number | null;
+  readonly proposal_title: string | null;
+};
+
+function toWorkItemApprovalRow(row: SqlRow): WorkItemApprovalRow {
+  return {
+    approval_request_id: asId(row.approval_request_id, "approval_request_id"),
+    kind: asApprovalRequestKind(row.kind),
+    status: asApprovalRequestStatus(row.status),
+    requested_at: asIsoDate(row.requested_at, "requested_at"),
+    expires_at: asNullableIsoDate(row.expires_at, "expires_at"),
+    decided_at: asNullableIsoDate(row.decided_at, "decided_at"),
+    decided_by: asNullableStr(row.decided_by, "decided_by"),
+    reason: asNullableStr(row.reason, "reason"),
+    draft_attempt: asNullableNumeric(row.draft_attempt, "draft_attempt"),
+    proposal_title: asNullableStr(row.proposal_title, "proposal_title"),
+  };
+}
+
+export type DiffStat = {
+  readonly files: number;
+  readonly added: number;
+  readonly deleted: number;
+};
+
+function asNullableDiffStat(value: unknown): DiffStat | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const parsed: unknown = isString(value) ? JSON.parse(value) : value;
+  if (
+    !isRecord(parsed) ||
+    !isNumber(parsed.files) ||
+    !isNumber(parsed.added) ||
+    !isNumber(parsed.deleted)
+  ) {
+    throw new Error('console_query: field "diff_stat" is malformed');
+  }
+  return {
+    files: parsed.files,
+    added: parsed.added,
+    deleted: parsed.deleted,
+  };
+}
+
+/**
+ * 実装の1ラウンド。検査コマンドの出力(`check_output`)は、
+ * 対象リポジトリの検査が書く任意の文字列を含むので持たない。
+ */
+export type WorkItemRoundRow = {
+  readonly round_id: number;
+  readonly attempt: number;
+  readonly round: number;
+  readonly mode: string;
+  readonly outcome: string;
+  readonly summary: string;
+  readonly gap_report: string | null;
+  readonly checks_skipped_reason: string | null;
+  readonly protected_changes: string[];
+  readonly diff_stat: DiffStat | null;
+  readonly created_at: string;
+};
+
+function toWorkItemRoundRow(row: SqlRow): WorkItemRoundRow {
+  return {
+    round_id: asId(row.id, "id"),
+    attempt: asNumeric(row.attempt, "attempt"),
+    round: asNumeric(row.round, "round"),
+    mode: asStr(row.mode, "mode"),
+    outcome: asStr(row.outcome, "outcome"),
+    summary: asStr(row.summary, "summary"),
+    gap_report: asNullableStr(row.gap_report, "gap_report"),
+    checks_skipped_reason: asNullableStr(
+      row.checks_skipped_reason,
+      "checks_skipped_reason",
+    ),
+    protected_changes: parseStringArray(
+      row.protected_changes,
+      "protected_changes",
+    ),
+    diff_stat: asNullableDiffStat(row.diff_stat),
+    created_at: asIsoDate(row.created_at, "created_at"),
+  };
+}
+
+/** 作業項目に紐づく`job_failures`の1行。 */
+export type WorkItemFailureRow = {
+  readonly job_failure_id: number;
+  readonly flow_path: string;
+  readonly job_id: string;
+  readonly step: string | null;
+  readonly error: string;
+  readonly occurred_at: string;
+};
+
+function toWorkItemFailureRow(row: SqlRow): WorkItemFailureRow {
+  return {
+    job_failure_id: asId(row.job_failure_id, "job_failure_id"),
+    flow_path: asStr(row.flow_path, "flow_path"),
+    job_id: asStr(row.job_id, "job_id"),
+    step: asNullableStr(row.step, "step"),
+    error: asStr(row.error, "error"),
+    occurred_at: asIsoDate(row.occurred_at, "occurred_at"),
+  };
+}
+
+/** 詳細に載せる失敗の件数の上限と、1件のerrorの長さの上限。 */
+const DETAIL_FAILURE_LIMIT = 20;
+const DETAIL_ERROR_LIMIT = 4000;
+
+/** "work_item_detail"ビューの結果。作業項目1件の概要と、その履歴。 */
+export type WorkItemDetail = {
+  readonly work_item: WorkItemOverview;
+  readonly attempts: WorkItemAttemptRow[];
+  readonly approvals: WorkItemApprovalRow[];
+  readonly implement_rounds: WorkItemRoundRow[];
+  readonly failures: WorkItemFailureRow[];
+};
+
+/**
+ * 作業項目`workItemId`の概要、要件定義の試行、承認の履歴、実装のラウンド、失敗を返す。
+ * 作業項目が無ければ例外を投げる。実装のラウンドに`check_output`は含めない。
+ */
+export async function runWorkItemDetail(
+  workItemId: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<WorkItemDetail> {
+  const overviewRows = await sql`
+    SELECT
+      wi.id AS work_item_id, wi.kind, wi.source, wi.cycle, wi.owner, wi.repo,
+      wi.issue_number, wi.issue_url, wi.pr_number, wi.pr_url, wi.branch,
+      wi.title, wi.status, wi.attempt, wi.fix_round, wi.created_at,
+      wi.updated_at,
+      left(ev.note, ${SUMMARY_TEXT_LIMIT}::integer) AS status_note,
+      cost.total_cost_usd, cost.run_count
+    FROM factory.work_items wi
+    LEFT JOIN LATERAL (
+      SELECT e.note
+      FROM factory.work_item_events e
+      WHERE e.work_item_id = wi.id AND e.to_status = wi.status
+      ORDER BY e.occurred_at DESC, e.id DESC
+      LIMIT 1
+    ) ev ON true
+    LEFT JOIN LATERAL (
+      SELECT sum(r.cost_usd) AS total_cost_usd, count(*) AS run_count
+      FROM factory.agent_runs r
+      WHERE r.work_item_id = wi.id
+    ) cost ON true
+    WHERE wi.id = ${workItemId}::bigint
+  `.fetch();
+  const overview = overviewRows[0];
+  if (overview === undefined) {
+    throw new Error(
+      `console_query: no work item with id ${String(workItemId)}`,
+    );
+  }
+
+  const attemptRows = await sql`
+    SELECT
+      rd.attempt, rd.summary, rd.created_at,
+      ar.id AS approval_request_id, ar.status AS approval_status
+    FROM factory.requirement_drafts rd
+    LEFT JOIN factory.approval_requests ar
+      ON ar.kind = 'requirements' AND ar.subject_id = rd.id
+    WHERE rd.work_item_id = ${workItemId}::bigint
+    ORDER BY rd.attempt DESC
+  `.fetch();
+
+  const approvalRows = await sql`
+    SELECT
+      ar.id AS approval_request_id, ar.kind, ar.status, ar.requested_at,
+      ar.expires_at, ar.decided_at, ar.decided_by, ar.reason,
+      rd.attempt AS draft_attempt, ip.title AS proposal_title
+    FROM factory.approval_requests ar
+    LEFT JOIN factory.requirement_drafts rd
+      ON ar.kind = 'requirements' AND rd.id = ar.subject_id
+    LEFT JOIN factory.issue_proposals ip
+      ON ar.kind = 'issue_proposal' AND ip.id = ar.subject_id
+    WHERE ar.work_item_id = ${workItemId}::bigint
+    ORDER BY ar.requested_at DESC, ar.id DESC
+  `.fetch();
+
+  const roundRows = await sql`
+    SELECT
+      id, attempt, round, mode, outcome, summary, gap_report,
+      checks_skipped_reason, protected_changes, diff_stat, created_at
+    FROM factory.implement_rounds
+    WHERE work_item_id = ${workItemId}::bigint
+    ORDER BY round ASC
+  `.fetch();
+
+  const failureRows = await sql`
+    SELECT
+      id AS job_failure_id, flow_path, job_id, step,
+      left(error, ${DETAIL_ERROR_LIMIT}::integer) AS error, occurred_at
+    FROM factory.job_failures
+    WHERE work_item_id = ${workItemId}::bigint
+    ORDER BY occurred_at DESC, id DESC
+    LIMIT ${DETAIL_FAILURE_LIMIT}::integer
+  `.fetch();
+
+  return {
+    work_item: toWorkItemOverview(overview),
+    attempts: attemptRows.map(toWorkItemAttemptRow),
+    approvals: approvalRows.map(toWorkItemApprovalRow),
+    implement_rounds: roundRows.map(toWorkItemRoundRow),
+    failures: failureRows.map(toWorkItemFailureRow),
+  };
+}
+
 export type ConsoleQueryRow =
   | InboxRow
   | PipelineRow
@@ -926,7 +1453,7 @@ export type ConsoleQueryRow =
  * `main`に畳み込まずにexportしている。
  */
 export async function runConsoleQuery(
-  view: ConsoleView,
+  view: ConsoleRowView,
   limit: number,
   days: number,
   sql: SqlClient = defaultSqlClient,
@@ -1141,10 +1668,18 @@ export function resolvePositiveIntArg(
     : null;
 }
 
+/** `main`が返しうる値。行のビューは配列、`CONSOLE_OBJECT_VIEWS`のビューは1つのオブジェクトを返す。 */
+export type ConsoleQueryResult =
+  | ConsoleQueryRow[]
+  | ConsoleSummary
+  | WorkItemDetail;
+
 /**
- * Consoleのタブが読む`view`の行を返す。
+ * Consoleが読む`view`の結果を返す。
+ * 行のビューは行の配列、"summary"と"work_item_detail"は1つのオブジェクトを返す。
  * `limit`と`days`は範囲に丸め、`work_item_id`/`attempt`は不正なら指定なしとして扱う。
  * `view`が既知のビューでなければ例外を投げる。
+ * "work_item_detail"では`work_item_id`が必須で、無ければ例外を投げる。
  */
 export async function main(
   view: string,
@@ -1152,18 +1687,33 @@ export async function main(
   days: number = DEFAULT_DAYS,
   work_item_id?: number,
   attempt?: number,
-): Promise<ConsoleQueryRow[]> {
-  if (!isOneOf(view, CONSOLE_VIEWS)) {
-    throw new Error(
-      `console_query: "view" must be one of ${CONSOLE_VIEWS.join(", ")} (got ${JSON.stringify(view)})`,
-    );
-  }
+): Promise<ConsoleQueryResult> {
   const resolvedLimit = resolveIntArg(
     limit,
     DEFAULT_LIMIT,
     MIN_LIMIT,
     MAX_LIMIT,
   );
+  const resolvedWorkItemId = resolvePositiveIntArg(work_item_id);
+
+  if (isOneOf(view, CONSOLE_OBJECT_VIEWS)) {
+    switch (view) {
+      case "summary":
+        return await runConsoleSummary(resolvedLimit);
+      case "work_item_detail":
+        if (resolvedWorkItemId === null) {
+          throw new Error(
+            'console_query: "work_item_id" is required for view "work_item_detail"',
+          );
+        }
+        return await runWorkItemDetail(resolvedWorkItemId);
+    }
+  }
+  if (!isOneOf(view, CONSOLE_ROW_VIEWS)) {
+    throw new Error(
+      `console_query: "view" must be one of ${CONSOLE_VIEWS.join(", ")} (got ${JSON.stringify(view)})`,
+    );
+  }
   const resolvedDays = resolveIntArg(days, DEFAULT_DAYS, MIN_DAYS, MAX_DAYS);
 
   return await runConsoleQuery(
@@ -1171,7 +1721,7 @@ export async function main(
     resolvedLimit,
     resolvedDays,
     defaultSqlClient,
-    resolvePositiveIntArg(work_item_id),
+    resolvedWorkItemId,
     resolvePositiveIntArg(attempt),
   );
 }
