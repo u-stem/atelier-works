@@ -197,7 +197,7 @@ ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者�
 
 | 守ること | 内容 |
 | --- | --- |
-| 書ける場所を1つにする | 配信物の置き場所`factory_console`(dockerの名前付きボリューム)に書けるのは`console_fetcher`だけである。Caddyは読み取り専用でマウントし、workerはマウントしない |
+| 書ける場所を1つにする | 配信物の置き場所`factory_console`(dockerの名前付きボリューム)に書けるのは`console_fetcher`だけである。CaddyとConsole用のworkerは読み取り専用でマウントし、defaultのworkerはマウントしない |
 | 取り込むものを絞る | `main`へのpushで動き、全体が成功した`ci.yml`の実行の成果物`console-dist`だけを取り込む。zipと展開した各ファイルのsha256を照合してから書く |
 | `console_fetcher`を閉じ込める | rootでないuid、読み取り専用のファイルシステム、ケーパビリティなし、DBにもWindmillにも届かない専用のnetworkで動かす |
 | ブラウザ側で制限する | `/console/*`の応答だけに、scriptの読み込み先を`/console/assets/`に絞ったCSPと、埋め込みを禁じるヘッダーを付ける |
@@ -233,6 +233,36 @@ workerは`privileged`にせず、`FAVOR_UNSHARE_PID`も有効にしない。Wind
 ジョブ間の隔離は、追加の特権に頼らず、工程ごとのツールの制限と読み取り専用の方針で確保する。
 
 workerには`no-new-privileges:true`と、プロセス数の上限(`deploy.resources.limits.pids`)を設定する。`cap_drop`によるケーパビリティの削減と、rootでないユーザーでの実行はしない。ベースのWindmill公式イメージがrootでの実行を前提にしているためである。
+
+## Console用workerの境界
+
+Console用のworker(`windmill_worker_console`)は、Consoleの問い合わせと操作の受付だけを処理する。
+信頼できないIssueを読むClaudeは、このworkerでは動かさない。
+このworkerの境界が守るのは、ファイルシステムだけである。
+絞り方は次のとおりである。
+
+| 項目 | 設定 |
+| --- | --- |
+| 書き込めるマウント | `worker_logs`と専用の依存キャッシュ`worker_console_dependency_cache`だけである。`factory_state`と`factory_console`は読み取り専用でマウントする。`worker_logs`は、`windmill_server`、defaultのworker、nativeのworkerとも共有する書き込みのマウントである |
+| `factory_workspaces` | マウントしない。対象リポジトリのチェックアウトに届かない |
+| `worker_dependency_cache` | 共有しない。Console用のworkerは専用のボリュームを使うので、defaultのworkerと依存のキャッシュを通して影響し合わない |
+| `docker.sock` | マウントしない |
+| 権限 | `privileged`にしない。`no-new-privileges:true`と`init`を設定し、プロセス数は256、メモリは1024Mに絞る |
+
+`factory_state`を読めるのは、要件定義書と図のファイルを返すためである。
+`factory_console`は配信中のJSの置き場所なので、書き込みでマウントしない。
+読み取り専用で付けるのは、取り込みの失敗を見張るscriptが`status.json`を読むためである。
+
+次のことは、この境界では守れない。
+
+- DBには届く。`DATABASE_URL`はdefaultのworkerと同じ管理者の接続だからである。
+- `factory_state`には、`requirements/`と`audits/`のほかに、次のものも入っていて、Console用のworkerから読める。
+  - Claude Codeの設定と履歴(`CLAUDE_CONFIG_DIR=/var/lib/factory/claude`)
+  - ghの設定(`GH_CONFIG_DIR=/var/lib/factory/gh`)
+- このworkerで動かすのはリポジトリのscriptの想定だが、これを強制する仕組みは無い。ワークスペースでscriptを編集できる者は、任意のscriptにtag`console`を付けられる。
+  tag`console`を付けたscriptは、上の設定と履歴を読める。書けるのはdefaultのworkerだけである。
+  読めると、Claude Codeとghの認証情報が漏れうる。
+- composeの環境変数`WORKER_TAGS`は既定値である。DBにワーカーグループの設定があると、そちらが実効になる。変化はWindmillの画面の「Workers」で確かめる。
 
 ## 自己更新の依存インストール
 
@@ -635,7 +665,7 @@ self cloneは`self_update`のデプロイ元なので、Claudeに書き換えら
 
 ## 承認と権限
 
-承認できるのは、`f/factory/**`のスクリプトを実行できるアカウントである。Windmillのdefaultのワーカーグループでは、ワークスペースの管理者だけが該当する。
+承認できるのは、`f/factory/**`のスクリプトを実行できるアカウントである。実行の権限はフォルダ`f/factory`の権限で決まり、このフォルダには所有者も追加の権限も付けていないので、ワークスペースの管理者だけが該当する。
 
 承認は必ずConsoleの承認タブ(`approval_decide`を実行する)から行う。Windmillのapproval pageのURLは署名付きのcapability URLなので、PRのコメントやDiscordの通知に載せない。approval pageのURLから直接resumeすると承認の状態が記録されず、作業項目は人の対応待ちになる。
 

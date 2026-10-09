@@ -643,7 +643,7 @@ workerの並列数(`NUM_WORKERS`)のような`infra/docker-compose.yml`の変更
 まとめて反映したいときは、`mise run deploy`を手で実行する。必須の手順ではない。`mise run deploy`は次を順に行う。
 
 1. ホスト側のcheckoutで`git pull --ff-only`
-2. イメージの取得と、workerと`console_fetcher`のイメージのビルド
+2. イメージの取得と、`windmill_worker`と`console_fetcher`のイメージのビルド
 3. `docker compose up -d`
 4. Consoleのraw appの依存の`npm ci --ignore-scripts`と`wmill sync push`
 5. migrationの実行
@@ -832,6 +832,34 @@ Caddyfileを更新してCaddyを再起動するまでは、`/console/status.json
 
 取り込みの失敗は、noticeとDiscordのどちらにも出ない。ログで確かめる。
 
+### Console用workerを確かめる
+
+Console用のworker(`windmill_worker_console`)は、`mise run up`で作られる。
+ワーカーグループ`console`に属し、tag`console`のジョブだけを受ける。
+どのscriptをこのworkerで動かすかは、scriptの`tag`で決める。
+動いていることは、コンテナの状態とログで確かめる。
+
+```bash
+mise exec -- docker compose -f infra/docker-compose.yml ps windmill_worker_console
+mise exec -- docker compose -f infra/docker-compose.yml logs --tail 20 windmill_worker_console
+```
+
+DBにワーカーグループの設定があると、composeの環境変数`WORKER_TAGS`ではなくそちらの値が使われる。
+そのため、Windmillの画面の「Workers」で、グループ`console`のworkerのtagが`console`だけであることを確かめる。
+詳しくは[セキュリティ](security.md)の「Console用workerの境界」にある。
+
+メモリとプロセス数は、最初のジョブを動かしている間に確かめる。
+`docker stats`は`windmill_worker_console`の行を見て、`MEM USAGE / LIMIT`の使用量が上限の1GiBに収まっていることを確かめる。プロセス数の上限は256なので、`pids.current`にも余裕があることを確かめる。
+
+```bash
+mise exec -- docker stats --no-stream
+mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker_console cat /sys/fs/cgroup/pids.current
+```
+
+このworkerがボリュームに書くのは、ログと専用の依存キャッシュ(`worker_console_dependency_cache`)だけである。
+再起動しても、キャッシュのボリュームは残る。
+ボリュームを消したときは、次のジョブで依存をレジストリから取り直すので、外向きの通信が要る。
+
 ### adminsワークスペースの組み込み項目
 
 Windmillは起動時に、`admins`ワークスペースへ組み込みのscriptとscheduleを作る。「Synchronize Hub Resource types with instance」などである。これらはWindmill本体の一部で、このリポジトリの管理対象ではない。`mise run push`と自己更新の同期にも含まれない。summaryが英語のままなのはそのためで、日本語化と削除はしない。
@@ -840,7 +868,9 @@ Factoryの資産は、すべて`factory`ワークスペースの`f/factory/**`�
 
 ### workerがプロセスを作れなくなったとき
 
-workerのコンテナは、`init: true`でdocker-initをPID 1にし、終了した子プロセスを回収する。ジョブが起こすgit、gh、esbuildの子プロセスは、親より長く残ることがある。initが無いと、回収されないプロセスが上限の`pids: 512`を使い切り、すべてのジョブが`errno=11`(EAGAIN)で失敗する。
+workerのコンテナは、`init: true`でdocker-initをPID 1にし、終了した子プロセスを回収する。ジョブが起こすgit、gh、esbuildの子プロセスは、親より長く残ることがある。initが無いと、回収されないプロセスが上限を使い切り、すべてのジョブが`errno=11`(EAGAIN)で失敗する。
+上限は、defaultとnativeのworker(`windmill_worker`、`windmill_worker_native`)が`pids: 512`である。
+Console用のworker(`windmill_worker_console`)は`pids: 256`である。
 
 同じ症状が出たら、使用量を確かめてからworkerを再起動する。
 
