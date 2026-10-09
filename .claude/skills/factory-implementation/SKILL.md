@@ -71,7 +71,7 @@ worker内のClaudeはheadlessで起動されており、人と対話して回答
 | JavaScript以外のlockfileとmanifest | `uv.lock`、`poetry.lock`、`Pipfile`、`pyproject.toml`、`setup.py`、`requirements*.txt`、`Cargo.toml`、`go.mod`、`Gemfile`、`composer.json` |
 | 環境とランタイムのバージョン指定 | `.env*`、`.gitleaksignore`、`.gitleaks.toml`、`.tool-versions`、`.node-version` |
 | ツール設定とタスクランナー | `*.config.[cm][jt]s`、`.eslintrc*`、`.markdownlint*`、`.markdownlint-cli2*`、`.textlintrc*`、`Makefile`、`CODEOWNERS`、`.devcontainer/**` |
-| Consoleで配信されるファイル | `console/public/**`、`console/index.html`、`console/drawio-viewer.json` |
+| Consoleで配信されるファイル | `console/public/**`、`console/index.html`、`console/drawio-viewer.json`、`console/scripts/drawio-viewer.ts`、`console/scripts/fetch-drawio-viewer.ts`、`console/scripts/manifest.ts`、`console/scripts/write-manifest.ts`、`scripts/check-console-lockfile.ts` |
 | 新規ファイル | 新しく追加する`*.sh`ファイル |
 | インフラ | `infra/**` |
 

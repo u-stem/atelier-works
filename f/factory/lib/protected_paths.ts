@@ -41,10 +41,17 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * ファイル名だけでは他の`index.html`と区別できないので、パスで判定する。
  * `console/drawio-viewer.json`は、CIが取得して配信するdraw.ioのビューアの取得元とsha256を固定する。
  * 書き換えられると、別のスクリプトを固定の値として配信される。
+ * 固定を強制する側も同じ理由で守る。ビューアの照合と取得、配信物の一覧(manifest.json)の作成、
+ * lockfileの検査のスクリプトは、書き換えられると検査をすり抜けて配信物に混ざる。
  */
 export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "console/index.html",
   "console/drawio-viewer.json",
+  "console/scripts/drawio-viewer.ts",
+  "console/scripts/fetch-drawio-viewer.ts",
+  "console/scripts/manifest.ts",
+  "console/scripts/write-manifest.ts",
+  "scripts/check-console-lockfile.ts",
 ];
 
 /**

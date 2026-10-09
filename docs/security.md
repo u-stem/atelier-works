@@ -485,7 +485,7 @@ ConsoleのSPAは、図を最上位のページでは描かず、隔離したifra
 | 守ること | 内容 |
 | --- | --- |
 | ビューアを同梱する | CDNからは読まない。CIが、版を固定したURLからビューアを取得し、固定のsha256と照合してから、配信物の`assets/`に置く。照合に失敗すると、CIが止まる |
-| 取得元を固定する | 固定する値は`console/drawio-viewer.json`にある。URLはbranchやtagではなくcommitを指す。この固定ファイルは保護パスで、人のレビューを経ずには変えられない |
+| 取得元を固定する | 固定する値は`console/drawio-viewer.json`にある。URLはbranchやtagではなくcommitを指す。この固定ファイルと、固定を強制するスクリプトは保護パスで、人のレビューを経ずには変えられない |
 | 不透明なオリジンで動かす | iframeの`sandbox`は`allow-scripts`だけにする。`allow-same-origin`が無いので、iframeはCookieにも、Windmillにも、親のDOMにも届かない。ポップアップと最上位のページの遷移も許さない |
 | 外への取得をCSPで止める | `/console/drawio.html`だけに、別のCSPを付ける。scriptは`/console/assets/`の同梱のファイルに限り、`connect-src`、画像、フォント、フォームの送信先は外を許さない。XMLが外部の画像やフォントを指していても、取得されない |
 | メッセージを絞る | iframeは、親のwindowからの描画の依頼だけを受ける。親は、iframeのwindowからの高さだけを受け、数値に絞って80〜1600pxに収める。256KBを超えるXMLは送らない |
@@ -535,6 +535,7 @@ Claudeに渡すツールは`Read`、`Glob`、`Grep`、`Edit`、`Write`だけで�
 markdownlint-cli2とtextlintの設定(`.markdownlint-cli2.jsonc`、`.textlintrc.json`など)も止める。どちらも設定から任意のモジュールを読み込め、pre-commitと`mise run check`が読むためである。
 Consoleでバンドルを通らずに配信される`console/public/`と`console/index.html`も止める。
 配信するdraw.ioのビューアを固定する`console/drawio-viewer.json`も止める。
+固定を強制し、配信物を検査するスクリプトも止める。対象は`console/scripts/`の4つと`scripts/check-console-lockfile.ts`である。
 一覧は`f/factory/lib/protected_paths.ts`にある。
 
 ### symlinkと特殊なファイルを止める

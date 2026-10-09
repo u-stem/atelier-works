@@ -510,7 +510,7 @@ PR修正のClaudeに渡すツールは`Read,Glob,Grep,Edit,Write`だけで、`Ba
 修正の差分に次のどれかが含まれると、検証のステップが止める結果を返す。作業項目は人の対応待ちになる。
 
 - `.claude/`、`.agents/`、`.github/workflows/`、`.mise/`、`.config/mise/`、`.lefthook/`、`console/public/`の下のファイル
-- `console/index.html`、`console/drawio-viewer.json`
+- 個別のファイル(7つ。下の説明を参照)
 - `mise.toml`、`mise.*.toml`、`.mise.toml`
 - `lefthook.yml`、`lefthook-local.yml`、`lefthook.toml`、`lefthook.json`
 - `bunfig.toml`、`.npmrc`、`.gitattributes`、`.gitmodules`
@@ -532,7 +532,20 @@ PR修正のClaudeに渡すツールは`Read,Glob,Grep,Edit,Write`だけで、`Ba
 
 `console/public/`と`console/index.html`は、Consoleでバンドルを通らずにそのまま配信され、ページの中で動く。
 `console/index.html`はファイル名だけではほかの`index.html`と区別できないので、パスで判定する。
-`console/drawio-viewer.json`は、CIが取得して配信するdraw.ioのビューアの取得元とsha256を固定する。書き換えられると、別のスクリプトが固定の値として配信される。
+個別のファイルは次の7つである。
+
+- `console/index.html`
+- `console/drawio-viewer.json`
+- `console/scripts/drawio-viewer.ts`
+- `console/scripts/fetch-drawio-viewer.ts`
+- `console/scripts/manifest.ts`
+- `console/scripts/write-manifest.ts`
+- `scripts/check-console-lockfile.ts`
+
+`console/drawio-viewer.json`は、CIが取得して配信するdraw.ioのビューアの取得元とsha256を固定する。
+書き換えられると、別のスクリプトが固定の値として配信される。
+残りの5つは、固定を強制する側と、配信物を検査する側のスクリプトである。
+書き換えられると、検査をすり抜けた内容が配信物に混ざる。
 
 markdownlint-cli2の設定は、`customRules`、`markdownItPlugins`、`modulePaths`で任意のモジュールを`import()`できる。
 textlintの設定は、`rules`の名前からモジュールを解決して読み込む。

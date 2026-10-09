@@ -93,6 +93,40 @@ describe("matchesForbiddenPath", () => {
     expect(matchesForbiddenPath("console/drawio-viewer.json")).toBe(true);
   });
 
+  test("matches console/scripts/drawio-viewer.ts", () => {
+    expect(matchesForbiddenPath("console/scripts/drawio-viewer.ts")).toBe(true);
+  });
+
+  test("matches console/scripts/fetch-drawio-viewer.ts", () => {
+    expect(matchesForbiddenPath("console/scripts/fetch-drawio-viewer.ts")).toBe(
+      true,
+    );
+  });
+
+  test("matches console/scripts/manifest.ts", () => {
+    expect(matchesForbiddenPath("console/scripts/manifest.ts")).toBe(true);
+  });
+
+  test("matches console/scripts/write-manifest.ts", () => {
+    expect(matchesForbiddenPath("console/scripts/write-manifest.ts")).toBe(
+      true,
+    );
+  });
+
+  test("matches scripts/check-console-lockfile.ts", () => {
+    expect(matchesForbiddenPath("scripts/check-console-lockfile.ts")).toBe(
+      true,
+    );
+  });
+
+  test("does not match other console scripts", () => {
+    expect(matchesForbiddenPath("console/scripts/asset-name.ts")).toBe(false);
+  });
+
+  test("does not match a manifest.ts outside console/scripts/", () => {
+    expect(matchesForbiddenPath("console/src/lib/manifest.ts")).toBe(false);
+  });
+
   test("does not match a drawio-viewer.json outside console/", () => {
     expect(matchesForbiddenPath("docs/drawio-viewer.json")).toBe(false);
   });
@@ -143,6 +177,36 @@ describe("matchesImplementProtectedPath", () => {
     expect(matchesImplementProtectedPath("console/drawio-viewer.json")).toBe(
       true,
     );
+  });
+
+  test("matches console/scripts/drawio-viewer.ts", () => {
+    expect(
+      matchesImplementProtectedPath("console/scripts/drawio-viewer.ts"),
+    ).toBe(true);
+  });
+
+  test("matches console/scripts/fetch-drawio-viewer.ts", () => {
+    expect(
+      matchesImplementProtectedPath("console/scripts/fetch-drawio-viewer.ts"),
+    ).toBe(true);
+  });
+
+  test("matches console/scripts/manifest.ts", () => {
+    expect(matchesImplementProtectedPath("console/scripts/manifest.ts")).toBe(
+      true,
+    );
+  });
+
+  test("matches console/scripts/write-manifest.ts", () => {
+    expect(
+      matchesImplementProtectedPath("console/scripts/write-manifest.ts"),
+    ).toBe(true);
+  });
+
+  test("matches scripts/check-console-lockfile.ts", () => {
+    expect(
+      matchesImplementProtectedPath("scripts/check-console-lockfile.ts"),
+    ).toBe(true);
   });
 
   test("matches files under console/public/", () => {
