@@ -464,6 +464,7 @@ CIの`console`ジョブが、組み立ての後に`fetch-drawio-viewer.ts`を動
 URLはリダイレクトを許さず、パスはcommit配下のビューア1ファイルに限る。
 応答は10MBまでで、一時的な失敗(ネットワーク、429、5xx)は、待ちを倍にしながら3回まで再試行する。
 取得物は、固定のsha256をキーにして`actions/cache`に保持する。
+キーとして使う前に、sha256が64桁の小文字の16進数かを検査し、形が違えば失敗させる。
 保存先は`console/.cache/drawio-viewer`で、Gitには入れない。
 キャッシュに一致するファイルがあれば取得しない。
 キャッシュの中身は信用せず、使う前に固定のsha256と照合する。照合に通らなければ、取得し直す。
@@ -548,6 +549,8 @@ Caddyfileでは、次の2つを、Consoleの本体の`handle_path /console/*`よ
 
 どちらも後ろに置くと、Consoleのヘッダー(`frame-ancestors 'none'`)が付いて、iframeに読み込めなくなるためである。
 
+Consoleの本体のfallback(`handle_path /console/*`)は、`drawio.html`と`drawio/`の下を404にする。
+区切りを重ねた要求などでfallbackに落ちても、sandboxの無いConsoleのヘッダーで返さないためである。
 ビューアと受け口は、`/console/assets/`ではなく`/console/drawio/`に置く。
 Consoleの本体のCSPは`/console/assets/`だけを許すので、本体のページは、`/console/drawio/`のscriptを読めない。
 本体にHTMLが注入されても、信頼されたオリジンでビューアを動かす足場にならない。

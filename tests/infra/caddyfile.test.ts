@@ -69,6 +69,7 @@ const consoleCsp = contentSecurityPolicy(snippet("console_headers"));
 const pageBlock = braceBlock("handle /console/drawio.html {");
 const scriptsBlock = braceBlock("handle_path /console/drawio/* {");
 const redirectBlock = braceBlock("handle /console {");
+const fallbackBlock = braceBlock("handle_path /console/* {");
 
 describe("drawio_headers", () => {
   test("makes the page an opaque origin even when opened directly", () => {
@@ -219,5 +220,31 @@ describe("redirect from /console", () => {
 
   test("redirects permanently", () => {
     expect(redirectBlock).toContain("308");
+  });
+});
+
+describe("the console fallback", () => {
+  test("refuses the draw.io page and scripts, which only drawio_headers may serve", () => {
+    expect(fallbackBlock).toContain("error @drawio 404");
+  });
+
+  test("matches drawio.html and the drawio directory", () => {
+    expect(fallbackBlock).toMatch(
+      /@drawio path [^\n]*\/drawio\.html[^\n]*\/drawio\/\*/,
+    );
+  });
+
+  test("refuses them before serving any file", () => {
+    expect(fallbackBlock.indexOf("error @drawio 404")).toBeLessThan(
+      fallbackBlock.indexOf("file_server"),
+    );
+  });
+
+  test("does not import drawio_headers", () => {
+    expect(fallbackBlock).not.toContain("import drawio_headers");
+  });
+
+  test("still serves with console_headers", () => {
+    expect(fallbackBlock).toContain("import console_headers");
   });
 });

@@ -119,7 +119,11 @@
 
                 # Consoleの本体。今の版(current)を返し、無いパスはSPAのindex.htmlに落とす。
                 # index.htmlは毎回確かめさせる(付け替えの後、すぐ新しい版を読ませるため)。
+                # draw.ioのページとscriptは、drawio_headers(sandbox付き)でしか返さない。
+                # 区切りを重ねた要求などでここに落ちても、Consoleのヘッダー(sandboxなし)では返さず、404にする。
                 handle_path /console/* {
+                        @drawio path /drawio.html /drawio.html/* /drawio /drawio/*
+                        error @drawio 404
                         import console_headers
                         import console_reject_encoded_separator
                         root * /srv/console/current

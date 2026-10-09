@@ -307,7 +307,11 @@ jobs:
 
       - name: Read the pinned draw.io viewer digest
         id: drawio
-        run: echo "sha256=$(jq -r .sha256 console/drawio-viewer.json)" >> "$GITHUB_OUTPUT"
+        # キャッシュのキーに使う前に、64桁の小文字の16進数であることを確かめる。形が違えば失敗させる。
+        run: |
+          set -o pipefail
+          sha256="$(jq -r .sha256 console/drawio-viewer.json | grep -Ex '[0-9a-f]{64}')"
+          echo "sha256=${sha256}" >> "$GITHUB_OUTPUT"
 
       - name: Restore the draw.io viewer cache
         # 取得物のキャッシュは、固定のsha256をキーにする。
