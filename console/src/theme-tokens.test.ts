@@ -1,0 +1,109 @@
+// index.cssの色のトークンが、WCAG AAの基準を保つことを確かめる。
+// 文字は4.5:1以上、入力欄の境界・フォーカスの輪・点のような図形は3:1以上とする。
+
+import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import {
+  contrastRatio,
+  type LinearRgb,
+  mixLinear,
+  oklchToLinearRgb,
+} from "./lib/contrast.ts";
+
+const CSS = readFileSync(new URL("./index.css", import.meta.url), "utf8");
+
+const TOKENS = new Map<string, readonly [string, string]>();
+for (const match of CSS.matchAll(
+  /--([a-z-]+):\s*light-dark\(\s*oklch\(([^)]*)\),\s*oklch\(([^)]*)\)\s*\)/g,
+)) {
+  const [, name, light, dark] = match;
+  if (name !== undefined && light !== undefined && dark !== undefined) {
+    TOKENS.set(name, [light, dark]);
+  }
+}
+
+function color(name: string, scheme: 0 | 1): LinearRgb {
+  const pair = TOKENS.get(name);
+  if (pair === undefined) {
+    throw new Error(`token --${name} is not defined in index.css`);
+  }
+  return oklchToLinearRgb(pair[scheme]);
+}
+
+type Pair = {
+  readonly fg: string;
+  readonly bg: string;
+  readonly min: number;
+  /** 背景に重ねる薄い色(バッジの背景)。 */
+  readonly tint?: string;
+};
+
+const TEXT_SURFACES = [
+  "background",
+  "card",
+  "popover",
+  "sidebar",
+  "muted",
+  "accent",
+  "selected",
+  "sidebar-accent",
+] as const;
+const MEANING_COLORS = [
+  "approval",
+  "destructive",
+  "warning",
+  "success",
+] as const;
+const MEANING_SURFACES = ["background", "card", "sidebar", "selected"] as const;
+
+const PAIRS: Pair[] = [
+  ...TEXT_SURFACES.flatMap((bg): Pair[] => [
+    { fg: "foreground", bg, min: 4.5 },
+    { fg: "muted-foreground", bg, min: 4.5 },
+    { fg: "subtle-foreground", bg, min: 4.5 },
+  ]),
+  { fg: "selected-foreground", bg: "selected", min: 4.5 },
+  { fg: "primary-foreground", bg: "primary", min: 4.5 },
+  ...(["background", "card", "sidebar", "selected"] as const).map(
+    (bg): Pair => ({ fg: "primary", bg, min: 4.5 }),
+  ),
+  ...MEANING_COLORS.flatMap((fg): Pair[] => [
+    ...MEANING_SURFACES.map((bg): Pair => ({ fg, bg, min: 4.5 })),
+    { fg, bg: "card", min: 4.5, tint: fg },
+    { fg, bg: "background", min: 4.5, tint: fg },
+  ]),
+  { fg: "destructive-foreground", bg: "destructive", min: 4.5 },
+  { fg: "warning-foreground", bg: "warning", min: 4.5 },
+  { fg: "success-foreground", bg: "success", min: 4.5 },
+  { fg: "input", bg: "background", min: 3 },
+  { fg: "input", bg: "card", min: 3 },
+  { fg: "ring", bg: "background", min: 3 },
+  { fg: "ring", bg: "card", min: 3 },
+  { fg: "ring", bg: "sidebar", min: 3 },
+  { fg: "primary", bg: "sidebar", min: 3 },
+  ...MEANING_SURFACES.map((bg): Pair => ({ fg: "notice-mark", bg, min: 3 })),
+];
+
+const BADGE_TINT = 0.14;
+
+describe("theme tokens", () => {
+  test("defines the tokens that the pairs use", () => {
+    expect(TOKENS.size).toBeGreaterThan(30);
+  });
+
+  for (const [index, scheme] of (["light", "dark"] as const).entries()) {
+    const slot = index === 0 ? 0 : 1;
+    describe(scheme, () => {
+      test.each(PAIRS)("$fg on $bg (tint $tint) keeps its contrast", (pair) => {
+        const base = color(pair.bg, slot);
+        const background =
+          pair.tint === undefined
+            ? base
+            : mixLinear(base, color(pair.tint, slot), BADGE_TINT);
+        expect(
+          contrastRatio(color(pair.fg, slot), background),
+        ).toBeGreaterThanOrEqual(pair.min);
+      });
+    });
+  }
+});
