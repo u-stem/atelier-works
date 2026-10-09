@@ -86,7 +86,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 次の操作は、理由の文から`pr_workflow_support.ts`の`nextActionFor`が決める。
 
 - 同じ理由でも、実装フローとPRの修正で次の操作が変わるものは、フロー(`NextActionFlow`)を渡して選ぶ。
-- 再実行を案内するときは、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行するよう書く。人の対応待ちとブロックの作業項目は、Consoleの**失敗**タブに出ないためである。
+- 再実行を案内するときは、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行するよう書く。人の対応待ちとブロックの作業項目は、`job_failures`の行が無ければConsoleの**失敗**タブに出ないためである。
 - どの規則にも当たらない理由では、`GENERIC_NEXT_ACTION`の文になる。通知の理由とConsoleの**通知**タブで原因を確かめて取り除き、`retry_work_item`を実行するよう求める文である。
 
 ### 理由の区切りを無効にする
@@ -264,7 +264,7 @@ RESTのrate limitでは、解除まで待って1回だけ再試行する。待�
 
 ジョブが失敗した作業項目は、解除を待ってからConsoleの**失敗**タブで再実行する。
 人の対応待ちの通知でも、rate limitが原因のときは、次の操作に解除を待ってから再実行するよう表示する。
-人の対応待ちの作業項目は**失敗**タブに出ないので、Windmillで`retry_work_item`を実行する。rate limitで失敗したときに各ステップが何を済ませているかは、[実装フローの仕様](implement.md)と[PRワークフローの仕様](pr-workflow.md)にある。
+人の対応待ちの作業項目は、`job_failures`の行が無ければ**失敗**タブに出ないので、Windmillで`retry_work_item`を実行する。rate limitで失敗したときに各ステップが何を済ませているかは、[実装フローの仕様](implement.md)と[PRワークフローの仕様](pr-workflow.md)にある。
 
 ## GitHub APIの一時的な失敗
 
