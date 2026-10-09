@@ -6,13 +6,15 @@ import {
   buildScheduleFailingNotice,
   flagFailingSchedule,
   SCHEDULE_FAILING_CHECK_FAILED_NOTICE,
+  SCHEDULE_FAILING_FETCH_COUNT,
   SCHEDULE_FAILING_RUNS,
 } from "../../f/factory/lib/schedule_failing.ts";
-import type { NoticeRecord } from "../../f/factory/lib/types.ts";
+import { isRecord, type NoticeRecord } from "../../f/factory/lib/types.ts";
 
 const FAILED = { success: false, canceled: false };
 const SUCCEEDED = { success: true, canceled: false };
 const SKIPPED = { success: false, canceled: false, is_skipped: true };
+const CANCELED = { success: false, canceled: true };
 
 describe("allRecentRunsFailed", () => {
   test("is true when the last three runs all failed", () => {
@@ -35,9 +37,37 @@ describe("allRecentRunsFailed", () => {
     expect(allRecentRunsFailed([])).toBe(false);
   });
 
-  test("is false when a run was canceled", () => {
+  test("does not count a canceled run as a failure", () => {
+    expect(allRecentRunsFailed([FAILED, CANCELED, FAILED])).toBe(false);
+  });
+
+  test("does not let a canceled run break the streak", () => {
+    expect(allRecentRunsFailed([FAILED, CANCELED, FAILED, FAILED])).toBe(true);
+  });
+
+  test("ignores canceled runs at the head of the list", () => {
     expect(
-      allRecentRunsFailed([FAILED, { success: false, canceled: true }, FAILED]),
+      allRecentRunsFailed([CANCELED, SKIPPED, FAILED, FAILED, FAILED]),
+    ).toBe(true);
+  });
+
+  test("judges a response the server did not filter the same way", () => {
+    expect(
+      allRecentRunsFailed([
+        SKIPPED,
+        CANCELED,
+        SKIPPED,
+        FAILED,
+        FAILED,
+        FAILED,
+        SUCCEEDED,
+      ]),
+    ).toBe(true);
+  });
+
+  test("is false when a succeeded run follows the skipped and canceled ones", () => {
+    expect(
+      allRecentRunsFailed([SKIPPED, CANCELED, FAILED, FAILED, SUCCEEDED]),
     ).toBe(false);
   });
 
@@ -91,6 +121,10 @@ describe("allRecentRunsFailed", () => {
 
   test("requires three runs", () => {
     expect(SCHEDULE_FAILING_RUNS).toBe(3);
+  });
+
+  test("fetches ten runs so that skipped and canceled ones can be dropped", () => {
+    expect(SCHEDULE_FAILING_FETCH_COUNT).toBe(10);
   });
 });
 
@@ -156,6 +190,7 @@ type Harness = {
   readonly deps: Parameters<typeof flagFailingSchedule>[1];
   readonly asked: { path: string; count: number }[];
   readonly notices: NoticeRecord[];
+  readonly messages: string[];
 };
 
 function harness(options: {
@@ -165,9 +200,11 @@ function harness(options: {
 }): Harness {
   const asked: { path: string; count: number }[] = [];
   const notices: NoticeRecord[] = [];
+  const messages: string[] = [];
   return {
     asked,
     notices,
+    messages,
     deps: {
       listRecentRuns: async (path, count) => {
         asked.push({ path, count });
@@ -179,7 +216,14 @@ function harness(options: {
         notices.push(record);
         return 1;
       },
-      log: logger("test", { sink: () => undefined }),
+      log: logger("test", {
+        sink: (line) => {
+          const parsed: unknown = JSON.parse(line);
+          if (isRecord(parsed) && typeof parsed.message === "string") {
+            messages.push(parsed.message);
+          }
+        },
+      }),
     },
   };
 }
@@ -199,10 +243,10 @@ describe("flagFailingSchedule", () => {
     expect(h.notices).toEqual([]);
   });
 
-  test("asks for the newest three runs of the schedule", async () => {
+  test("asks for the newest ten runs of the schedule", async () => {
     const h = harness({ runs: [FAILED, FAILED, FAILED] });
     await flagFailingSchedule("f/factory/poll_issues", h.deps);
-    expect(h.asked).toEqual([{ path: "f/factory/poll_issues", count: 3 }]);
+    expect(h.asked).toEqual([{ path: "f/factory/poll_issues", count: 10 }]);
   });
 
   test("returns true when it flagged the schedule", async () => {
@@ -238,10 +282,53 @@ describe("flagFailingSchedule", () => {
     expect(JSON.stringify(h.notices)).not.toContain("api down");
   });
 
-  test("leaves no notice for a response of the wrong shape", async () => {
+  test("leaves the check failed notice for a response of the wrong shape", async () => {
     const h = harness({ runs: { jobs: [] } });
     await flagFailingSchedule("f/factory/a", h.deps);
-    expect(h.notices).toEqual([]);
+    expect(h.notices).toEqual([SCHEDULE_FAILING_CHECK_FAILED_NOTICE]);
+  });
+
+  test("returns false for a response of the wrong shape", async () => {
+    const h = harness({ runs: { jobs: [] } });
+    expect(await flagFailingSchedule("f/factory/a", h.deps)).toBe(false);
+  });
+
+  test("logs a read failure when the response has the wrong shape", async () => {
+    const h = harness({ runs: { jobs: [] } });
+    await flagFailingSchedule("f/factory/a", h.deps);
+    expect(h.messages).toEqual(["failed to read the schedule history"]);
+  });
+
+  test("logs a read failure when the API fails", async () => {
+    const h = harness({ listThrows: true });
+    await flagFailingSchedule("f/factory/a", h.deps);
+    expect(h.messages).toEqual(["failed to read the schedule history"]);
+  });
+
+  test("logs a different message when the failing notice cannot be recorded", async () => {
+    const h = harness({
+      runs: [FAILED, FAILED, FAILED],
+      addNoticeThrows: true,
+    });
+    await flagFailingSchedule("f/factory/a", h.deps);
+    expect(h.messages).toEqual([
+      "failed to record the schedule failing notice",
+    ]);
+  });
+
+  test("logs when the check failed notice cannot be recorded", async () => {
+    const h = harness({ listThrows: true, addNoticeThrows: true });
+    await flagFailingSchedule("f/factory/a", h.deps);
+    expect(h.messages).toEqual([
+      "failed to read the schedule history",
+      "failed to record the schedule check failure",
+    ]);
+  });
+
+  test("logs nothing when the schedule is healthy", async () => {
+    const h = harness({ runs: [SUCCEEDED, FAILED, FAILED] });
+    await flagFailingSchedule("f/factory/a", h.deps);
+    expect(h.messages).toEqual([]);
   });
 
   test("does not throw when the check failed notice cannot be recorded", async () => {
