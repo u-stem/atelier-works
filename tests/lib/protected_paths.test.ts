@@ -89,6 +89,14 @@ describe("matchesForbiddenPath", () => {
     expect(matchesForbiddenPath("./console/index.html")).toBe(true);
   });
 
+  test("matches console/drawio-viewer.json", () => {
+    expect(matchesForbiddenPath("console/drawio-viewer.json")).toBe(true);
+  });
+
+  test("does not match a drawio-viewer.json outside console/", () => {
+    expect(matchesForbiddenPath("docs/drawio-viewer.json")).toBe(false);
+  });
+
   test("matches files under console/public/", () => {
     expect(
       matchesForbiddenPath("console/public/assets/theme-init-ba7816bf.js"),
@@ -129,6 +137,12 @@ describe("matchesImplementProtectedPath", () => {
 
   test("matches console/index.html", () => {
     expect(matchesImplementProtectedPath("console/index.html")).toBe(true);
+  });
+
+  test("matches console/drawio-viewer.json", () => {
+    expect(matchesImplementProtectedPath("console/drawio-viewer.json")).toBe(
+      true,
+    );
   });
 
   test("matches files under console/public/", () => {

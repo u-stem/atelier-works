@@ -78,7 +78,7 @@ headlessで起動したClaude Code(`claude -p`)がレビュー指摘と未解決
 | 種類 | 対象 |
 | --- | --- |
 | ディレクトリ | `.claude/`、`.agents/`、`.github/workflows/`、`.mise/`、`.config/mise/`、`.lefthook/`、`console/public/` |
-| 個別のファイル | `console/index.html` |
+| 個別のファイル | `console/index.html`、`console/drawio-viewer.json` |
 | ファイル名(どのディレクトリでも) | `mise.toml`、`mise.*.toml`、`.mise.toml`、`lefthook.yml`、`lefthook-local.yml`、`lefthook.toml`、`lefthook.json`、`bunfig.toml`、`.npmrc`、`.gitattributes`、`.gitmodules` |
 | 文書の検査の設定(どのディレクトリでも) | `.markdownlint.*`、`.markdownlint-cli2.*`(`json`、`jsonc`、`yaml`、`yml`、`js`、`cjs`、`mjs`)、`.textlintrc`、`.textlintrc.*` |
 | ファイルの一部 | `package.json`の`scripts`フィールド |

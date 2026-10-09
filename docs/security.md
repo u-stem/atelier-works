@@ -505,6 +505,7 @@ Claudeに渡すツールは`Read`、`Glob`、`Grep`、`Edit`、`Write`だけで�
 保護パスを変更したら、修正を止める。保護パスは`.claude/`、`.agents/`、`mise.toml`、`lefthook.yml`、`.github/workflows/`、`package.json`のscripts、新しい`*.sh`などである。これらはFactoryやCIが実行する設定で、書き換えられるとコードを実行されるためである。
 markdownlint-cli2とtextlintの設定(`.markdownlint-cli2.jsonc`、`.textlintrc.json`など)も止める。どちらも設定から任意のモジュールを読み込め、pre-commitと`mise run check`が読むためである。
 Consoleでバンドルを通らずに配信される`console/public/`と`console/index.html`も止める。
+配信するdraw.ioのビューアを固定する`console/drawio-viewer.json`も止める。
 一覧は`f/factory/lib/protected_paths.ts`にある。
 
 ### symlinkと特殊なファイルを止める

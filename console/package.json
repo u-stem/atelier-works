@@ -7,7 +7,8 @@
     "build": "vite build",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "bun test",
-    "write-manifest": "bun run scripts/write-manifest.ts"
+    "write-manifest": "bun run scripts/write-manifest.ts",
+    "fetch-drawio-viewer": "bun run scripts/fetch-drawio-viewer.ts"
   },
   "dependencies": {
     "@radix-ui/react-separator": "1.1.15",

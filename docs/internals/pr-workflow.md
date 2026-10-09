@@ -510,7 +510,7 @@ PR修正のClaudeに渡すツールは`Read,Glob,Grep,Edit,Write`だけで、`Ba
 修正の差分に次のどれかが含まれると、検証のステップが止める結果を返す。作業項目は人の対応待ちになる。
 
 - `.claude/`、`.agents/`、`.github/workflows/`、`.mise/`、`.config/mise/`、`.lefthook/`、`console/public/`の下のファイル
-- `console/index.html`
+- `console/index.html`、`console/drawio-viewer.json`
 - `mise.toml`、`mise.*.toml`、`.mise.toml`
 - `lefthook.yml`、`lefthook-local.yml`、`lefthook.toml`、`lefthook.json`
 - `bunfig.toml`、`.npmrc`、`.gitattributes`、`.gitmodules`
@@ -532,6 +532,7 @@ PR修正のClaudeに渡すツールは`Read,Glob,Grep,Edit,Write`だけで、`Ba
 
 `console/public/`と`console/index.html`は、Consoleでバンドルを通らずにそのまま配信され、ページの中で動く。
 `console/index.html`はファイル名だけではほかの`index.html`と区別できないので、パスで判定する。
+`console/drawio-viewer.json`は、CIが取得して配信するdraw.ioのビューアの取得元とsha256を固定する。書き換えられると、別のスクリプトが固定の値として配信される。
 
 markdownlint-cli2の設定は、`customRules`、`markdownItPlugins`、`modulePaths`で任意のモジュールを`import()`できる。
 textlintの設定は、`rules`の名前からモジュールを解決して読み込む。

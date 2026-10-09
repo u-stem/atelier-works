@@ -39,8 +39,13 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * pr_fixが保護する個別のファイル(リポジトリのルートからの相対パス)。
  * `console/index.html`は、Consoleのすべてのscriptの読み込み元で、バンドルを通らずに配信される。
  * ファイル名だけでは他の`index.html`と区別できないので、パスで判定する。
+ * `console/drawio-viewer.json`は、CIが取得して配信するdraw.ioのビューアの取得元とsha256を固定する。
+ * 書き換えられると、別のスクリプトを固定の値として配信される。
  */
-export const FORBIDDEN_EXACT_PATHS: readonly string[] = ["console/index.html"];
+export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
+  "console/index.html",
+  "console/drawio-viewer.json",
+];
 
 /**
  * pr_fixが保護するファイル名(ディレクトリを問わない)。
