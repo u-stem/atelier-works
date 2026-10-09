@@ -250,7 +250,11 @@ export type ExpiryDescription = {
   /** 「残り3時間」や「期限切れ」。 */
   readonly label: string;
   readonly expired: boolean;
+  /** 期限が24時間を切った(過ぎた場合を含む)。一覧で警告色の印を付ける。 */
+  readonly urgent: boolean;
 };
+
+const URGENT_WITHIN_MS = 24 * 60 * 60 * 1000;
 
 /**
  * 承認待ちの期限。承認待ち(pending)で期限があるときだけ返す。
@@ -270,6 +274,7 @@ export function describeExpiry(
   return {
     label: formatRemainingTime(expiresMs, nowMs),
     expired: expiresMs <= nowMs,
+    urgent: expiresMs - nowMs < URGENT_WITHIN_MS,
   };
 }
 
@@ -327,8 +332,6 @@ export type UnlistedCount = {
   readonly type: InboxKind;
   readonly label: string;
   readonly count: number;
-  /** 一覧に出ていない理由。 */
-  readonly note: string;
 };
 
 /**
@@ -346,19 +349,16 @@ export function unlistedCounts(
       type: "approval",
       label: CHIP_LABELS.approval,
       count: counts.approvals - listed.approval,
-      note: "取得の上限を超えた分です",
     },
     {
       type: "failure",
       label: CHIP_LABELS.failure,
       count: counts.failures - listed.failure,
-      note: "一覧は準備中です",
     },
     {
       type: "notice",
       label: CHIP_LABELS.notice,
       count: counts.notices - listed.notice,
-      note: "一覧は準備中です",
     },
   ];
   return entries.filter((entry) => entry.count > 0);

@@ -437,22 +437,15 @@ describe("unlistedCounts", () => {
   test("reports approvals cut by the limit", () => {
     expect(
       unlistedCounts({ approvals: 250, failures: 0, notices: 0 }, [A1]),
-    ).toEqual([
-      {
-        type: "approval",
-        label: "承認",
-        count: 249,
-        note: "取得の上限を超えた分です",
-      },
-    ]);
+    ).toEqual([{ type: "approval", label: "承認", count: 249 }]);
   });
 
   test("reports failures and notices that the list does not show yet", () => {
     expect(
       unlistedCounts({ approvals: 1, failures: 5, notices: 4 }, [A1]),
     ).toEqual([
-      { type: "failure", label: "失敗", count: 5, note: "一覧は準備中です" },
-      { type: "notice", label: "通知", count: 4, note: "一覧は準備中です" },
+      { type: "failure", label: "失敗", count: 5 },
+      { type: "notice", label: "通知", count: 4 },
     ]);
   });
 
@@ -503,7 +496,6 @@ describe("inboxSubtitle", () => {
             type: "failure",
             label: "失敗",
             count: 5,
-            note: "一覧は準備中です",
           },
         ],
       ),
@@ -573,13 +565,27 @@ describe("describeExpiry", () => {
   test("shows the time left for a pending approval", () => {
     expect(
       describeExpiry(approval({ expires_at: "2026-10-09T15:30:00.000Z" }), NOW),
-    ).toEqual({ label: "残り3時間", expired: false });
+    ).toEqual({ label: "残り3時間", expired: false, urgent: true });
   });
 
   test("shows expired once the time has passed", () => {
     expect(
       describeExpiry(approval({ expires_at: "2026-10-09T11:00:00.000Z" }), NOW),
-    ).toEqual({ label: "期限切れ", expired: true });
+    ).toEqual({ label: "期限切れ", expired: true, urgent: true });
+  });
+
+  test("is not urgent with a day or more left", () => {
+    expect(
+      describeExpiry(approval({ expires_at: "2026-10-10T12:00:00.000Z" }), NOW)
+        ?.urgent,
+    ).toBe(false);
+  });
+
+  test("is urgent just under a day left", () => {
+    expect(
+      describeExpiry(approval({ expires_at: "2026-10-10T11:59:00.000Z" }), NOW)
+        ?.urgent,
+    ).toBe(true);
   });
 
   test("shows nothing without an expiry", () => {
@@ -612,6 +618,7 @@ describe("describeRow expiry", () => {
     expect(describeRow(item, NOW).expiry).toEqual({
       label: "残り1日",
       expired: false,
+      urgent: false,
     });
   });
 });

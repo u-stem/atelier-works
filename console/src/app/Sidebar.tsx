@@ -2,10 +2,8 @@ import { ExternalLink, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { type KeyboardEvent, useRef, useState } from "react";
 import { NavLink } from "react-router";
 import { useConsoleStatus } from "../api/consoleStatus.ts";
-import type { SummaryCounts } from "../api/guards/summary.ts";
 import { useSummary } from "../api/queries.ts";
 import { BrandMark } from "../components/BrandMark.tsx";
-import { KindDot } from "../components/KindDot.tsx";
 import {
   Tooltip,
   TooltipContent,
@@ -20,12 +18,10 @@ import {
   parseSidebarCollapsed,
   SIDEBAR_STORAGE_KEY,
 } from "../lib/navigation.ts";
+import { LEGACY_CONSOLE_PATH } from "./legacyConsole.ts";
 import { SCREENS } from "./screens.ts";
 import { ThemeSwitch } from "./ThemeSwitch.tsx";
 import { useNow } from "./useNow.ts";
-
-/** 切り替えまでの間は、Windmillのraw appの旧Consoleへ案内する。 */
-const LEGACY_CONSOLE_PATH = "/apps/get/f/factory/factory_console";
 
 function readCollapsed(): boolean {
   try {
@@ -44,40 +40,6 @@ function writeCollapsed(collapsed: boolean): void {
   } catch {
     // 保存できなくても、この画面の表示はすでに切り替わっている。
   }
-}
-
-const STATUS_ROWS = [
-  { type: "approval", label: "承認" },
-  { type: "failure", label: "失敗" },
-  { type: "notice", label: "通知" },
-] as const;
-
-/** どの画面にいても分かるように、種類ごとの件数を並べる。押せず、バッジの数え方とは別の一覧である。 */
-function StatusPanel({ counts }: { counts: SummaryCounts }) {
-  const values = {
-    approval: counts.approvals,
-    failure: counts.failures,
-    notice: counts.notices,
-  };
-  return (
-    <section aria-label="いまの状況" className="mx-3 mt-5">
-      <h2 className="px-3 pb-1.5 text-caption font-medium tracking-wide text-subtle">
-        いまの状況
-      </h2>
-      <ul className="flex flex-col gap-0.5 text-small">
-        {STATUS_ROWS.map((row) => (
-          <li
-            key={row.type}
-            className="flex items-center gap-2.5 rounded-md px-3 py-1.5"
-          >
-            <KindDot type={row.type} />
-            <span className="flex-1 text-muted-foreground">{row.label}</span>
-            <span className="font-medium tabular-nums">{values[row.type]}</span>
-          </li>
-        ))}
-      </ul>
-    </section>
-  );
 }
 
 /** 配信している版と、取り込みの最後の確認。取れた情報だけを出し、取れなければ何も出さない。 */
@@ -213,9 +175,6 @@ export function Sidebar() {
           );
         })}
       </nav>
-      {collapsed || summary.data === undefined ? null : (
-        <StatusPanel counts={summary.data.counts} />
-      )}
       <div
         className={cn(
           "mt-auto flex flex-col gap-3 border-t border-sidebar-border px-4 py-3",

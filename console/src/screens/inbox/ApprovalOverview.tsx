@@ -1,10 +1,13 @@
 import { ExternalLink, Info } from "lucide-react";
 import type { ReactNode } from "react";
 import type { SummaryApproval } from "../../api/guards/summary.ts";
-import { TimeText } from "../../components/TimeText.tsx";
 import { Badge } from "../../components/ui/badge.tsx";
 import { cn } from "../../lib/cn.ts";
 import { describeApproval, describeExpiry } from "../../lib/inboxView.ts";
+import {
+  formatAbsoluteWithRelative,
+  formatDeadline,
+} from "../../lib/relativeTime.ts";
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -29,7 +32,7 @@ export function ApprovalOverview({
   const description = describeApproval(approval);
   const expiry = describeExpiry(approval, now);
   return (
-    <article className="mx-auto flex max-w-3xl flex-col gap-6 p-8">
+    <article className="flex max-w-[47.5rem] flex-col gap-6 p-8">
       <header className="flex flex-col gap-3">
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant="approval">{description.kindLabel}</Badge>
@@ -65,20 +68,23 @@ export function ApprovalOverview({
             )}
           </Row>
         )}
-        {expiry === null ? null : (
+        {expiry === null || approval.expires_at === null ? null : (
           <Row label="期限">
             <span
               className={cn(
                 "tabular-nums",
-                expiry.expired && "font-medium text-failure",
+                expiry.urgent && "font-medium text-warning",
+                expiry.expired && "text-failure",
               )}
             >
-              {expiry.label}
+              {formatDeadline(approval.expires_at, now)}
             </span>
           </Row>
         )}
         <Row label="依頼した時刻">
-          <TimeText iso={approval.requested_at} now={now} />
+          <time dateTime={approval.requested_at} className="tabular-nums">
+            {formatAbsoluteWithRelative(approval.requested_at, now)}
+          </time>
         </Row>
       </dl>
       <p className="flex items-start gap-2 rounded-xl border border-dashed border-border px-4 py-3 text-small text-muted-foreground">

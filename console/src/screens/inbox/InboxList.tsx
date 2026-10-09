@@ -1,5 +1,4 @@
 import { type KeyboardEvent, useRef } from "react";
-import { KindDot } from "../../components/KindDot.tsx";
 import { TimeText } from "../../components/TimeText.tsx";
 import { Badge } from "../../components/ui/badge.tsx";
 import { cn } from "../../lib/cn.ts";
@@ -62,7 +61,7 @@ export function InboxList({
               type="button"
               aria-current={isSelected ? "true" : undefined}
               className={cn(
-                "relative grid w-full grid-cols-[auto_1fr] gap-x-3 px-6 py-4 text-left outline-none transition-colors duration-150 motion-reduce:transition-none",
+                "relative block w-full px-6 py-3.5 text-left outline-none transition-colors duration-150 motion-reduce:transition-none",
                 "hover:bg-accent focus-visible:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
                 "before:absolute before:inset-y-3 before:left-0 before:w-[3px] before:rounded-r-full before:bg-primary before:opacity-0 before:transition-opacity before:duration-150",
                 "aria-[current=true]:bg-selected aria-[current=true]:before:opacity-100",
@@ -71,31 +70,46 @@ export function InboxList({
                 onSelect(itemSelection);
               }}
             >
-              <KindDot type={item.type} className="mt-2" />
-              <span className="min-w-0">
-                <span className="line-clamp-2 block text-body leading-snug font-medium text-foreground">
+              <span className="flex items-baseline justify-between gap-3">
+                <span className="truncate text-body font-medium text-foreground">
                   {row.title}
                 </span>
-                <span className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-small text-subtle">
-                  <span className="font-medium text-muted-foreground">
-                    {row.kindLabel}
-                  </span>
-                  {row.statusLabel === null ? null : (
-                    <Badge variant="warning">{row.statusLabel}</Badge>
-                  )}
-                  {row.subLabel === null ? null : <span>{row.subLabel}</span>}
-                  {row.expiry === null ? null : (
-                    <span
-                      className={cn(
-                        "tabular-nums",
-                        row.expiry.expired && "font-medium text-failure",
-                      )}
-                    >
-                      {row.expiry.label}
-                    </span>
-                  )}
+                <span className="shrink-0 text-small text-subtle tabular-nums">
                   <TimeText iso={row.iso} now={now} />
                 </span>
+              </span>
+              <span className="mt-1 flex items-center gap-2.5 overflow-hidden text-small whitespace-nowrap text-subtle">
+                <span className="shrink-0 font-medium text-muted-foreground">
+                  {row.kindLabel}
+                </span>
+                {row.subLabel === null ? null : (
+                  <span className="shrink-0">{row.subLabel}</span>
+                )}
+                {row.expiry === null ? null : (
+                  <span
+                    className={cn(
+                      "inline-flex shrink-0 items-center gap-1.5 tabular-nums",
+                      row.expiry.urgent && "font-medium text-warning",
+                      row.expiry.expired && "text-failure",
+                    )}
+                  >
+                    {row.expiry.urgent ? (
+                      <span
+                        aria-hidden="true"
+                        className={cn(
+                          "size-1.5 rounded-full",
+                          row.expiry.expired ? "bg-failure" : "bg-notice-mark",
+                        )}
+                      />
+                    ) : null}
+                    {row.expiry.label}
+                  </span>
+                )}
+                {row.statusLabel === null ? null : (
+                  <Badge variant="warning" className="ml-auto min-w-0 shrink">
+                    <span className="truncate">{row.statusLabel}</span>
+                  </Badge>
+                )}
               </span>
             </button>
           </li>

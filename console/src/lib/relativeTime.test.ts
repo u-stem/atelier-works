@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
   formatAbsoluteIso,
+  formatAbsoluteWithRelative,
+  formatDeadline,
   formatRelativeIso,
   formatRelativeTime,
   formatRemainingTime,
+  formatShortAbsoluteIso,
 } from "./relativeTime.ts";
 
 const NOW = Date.parse("2026-10-09T12:00:00.000Z");
@@ -114,5 +117,49 @@ describe("formatRemainingTime", () => {
 
   test("counts days", () => {
     expect(formatRemainingTime(NOW + 6 * DAY + HOUR, NOW)).toBe("残り6日");
+  });
+});
+
+describe("formatShortAbsoluteIso", () => {
+  test("formats month, day and time in Japan time", () => {
+    expect(formatShortAbsoluteIso("2026-10-09T09:48:00.000Z")).toBe(
+      "10/09 18:48",
+    );
+  });
+
+  test("crosses midnight in Japan time", () => {
+    expect(formatShortAbsoluteIso("2026-10-09T15:05:00.000Z")).toBe(
+      "10/10 00:05",
+    );
+  });
+
+  test("returns an unknown marker for an unparsable timestamp", () => {
+    expect(formatShortAbsoluteIso("later")).toBe("時刻不明");
+  });
+});
+
+describe("formatAbsoluteWithRelative", () => {
+  test("puts the relative time in parentheses", () => {
+    expect(formatAbsoluteWithRelative("2026-10-09T09:48:00.000Z", NOW)).toBe(
+      "10/09 18:48(2時間前)",
+    );
+  });
+});
+
+describe("formatDeadline", () => {
+  test("shows the time and the time left", () => {
+    expect(formatDeadline("2026-10-15T09:48:00.000Z", NOW)).toBe(
+      "10/15 18:48まで(残り5日)",
+    );
+  });
+
+  test("shows expired after the deadline", () => {
+    expect(formatDeadline("2026-10-09T09:48:00.000Z", NOW)).toBe(
+      "10/09 18:48まで(期限切れ)",
+    );
+  });
+
+  test("returns an unknown marker for an unparsable timestamp", () => {
+    expect(formatDeadline("soon", NOW)).toBe("時刻不明");
   });
 });

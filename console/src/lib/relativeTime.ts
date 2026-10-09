@@ -82,3 +82,36 @@ export function formatAbsoluteIso(iso: string): string {
     ? UNKNOWN_TIME_LABEL
     : ABSOLUTE_FORMAT.format(thenMs);
 }
+
+const SHORT_FORMAT = new Intl.DateTimeFormat("ja-JP", {
+  timeZone: "Asia/Tokyo",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+});
+
+/** ISO文字列の時刻を、日本時間の「10/09 18:48」の形にする。読めなければ「時刻不明」にする。 */
+export function formatShortAbsoluteIso(iso: string): string {
+  const thenMs = Date.parse(iso);
+  return Number.isNaN(thenMs)
+    ? UNKNOWN_TIME_LABEL
+    : SHORT_FORMAT.format(thenMs);
+}
+
+/** 「10/09 18:48(2時間前)」の形。絶対時刻と相対時刻を並べて、どちらからも読めるようにする。 */
+export function formatAbsoluteWithRelative(iso: string, nowMs: number): string {
+  const thenMs = Date.parse(iso);
+  return Number.isNaN(thenMs)
+    ? UNKNOWN_TIME_LABEL
+    : `${formatShortAbsoluteIso(iso)}(${formatRelativeTime(thenMs, nowMs)})`;
+}
+
+/** 「10/15 18:48まで(残り5日)」の形。期限を過ぎていれば「(期限切れ)」にする。 */
+export function formatDeadline(iso: string, nowMs: number): string {
+  const expiresMs = Date.parse(iso);
+  return Number.isNaN(expiresMs)
+    ? UNKNOWN_TIME_LABEL
+    : `${formatShortAbsoluteIso(iso)}まで(${formatRemainingTime(expiresMs, nowMs)})`;
+}
