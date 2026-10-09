@@ -681,9 +681,60 @@ export function findUnknownUnpinFlags(args: readonly string[]): string[] {
   return args.filter((arg) => arg !== "--force" && arg !== "--ignore-cleanup");
 }
 
-/** pinの中身を読めたか(JSONのオブジェクトか)を返す。読めない`pin`は、何を戻したか分からない。 */
+/**
+ * pinの中身を読めたかを返す。JSONのオブジェクトで、`rolled_back_from`と`rolled_back_content`は、
+ * あるなら全要素がshaとsha256の配列でなければならない。読めない`pin`は、何を戻したか分からない。
+ * 形が違う要素を捨てて続けると、確かめるべき版を黙って落とすため、読めないものとして扱う。
+ */
 export function isReadablePin(value: unknown): boolean {
-  return isRecord(value);
+  if (!isRecord(value)) return false;
+  const from = value.rolled_back_from;
+  const content = value.rolled_back_content;
+  const fromOk =
+    from === undefined ||
+    (Array.isArray(from) &&
+      from.every((item) => typeof item === "string" && isCommitSha(item)));
+  const contentOk =
+    content === undefined ||
+    (Array.isArray(content) &&
+      content.every(
+        (item) => typeof item === "string" && SHA256_HEX.test(item),
+      ));
+  return fromOk && contentOk;
+}
+
+/** pinの`sha`(戻し先の版)を読む。無ければ`null`。 */
+export function parsePinSha(value: unknown): string | null {
+  if (!isRecord(value)) return null;
+  const sha = value.sha;
+  return typeof sha === "string" && isCommitSha(sha) ? sha : null;
+}
+
+/** 壊れた`revoked.json`の控えを残す数。 */
+export const CORRUPT_COPIES_TO_KEEP = 5;
+
+const CORRUPT_COPY = /^revoked\.json\.corrupt-(\d+)(?:-(\d+))?$/;
+
+/**
+ * 壊れた`revoked.json`の控え(`revoked.json.corrupt-<時刻>`、同じ時刻なら`-<番号>`付き)のうち、
+ * 新しい方から`keep`個を残した残りを、消す名前として返す。ほかの名前は返さない。
+ */
+export function selectCorruptCopiesToDelete(
+  names: readonly string[],
+  keep: number,
+): string[] {
+  const copies: { name: string; epoch: number; attempt: number }[] = [];
+  for (const name of names) {
+    const match = CORRUPT_COPY.exec(name);
+    if (match === null) continue;
+    copies.push({
+      name,
+      epoch: Number(match[1]),
+      attempt: Number(match[2] ?? 0),
+    });
+  }
+  copies.sort((a, b) => a.epoch - b.epoch || a.attempt - b.attempt);
+  return copies.slice(0, Math.max(0, copies.length - keep)).map((c) => c.name);
 }
 
 /** `unpin`がpinを外さなかった理由。 */

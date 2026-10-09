@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { chmodSync } from "node:fs";
 import {
   chmod,
   cp,
@@ -183,10 +184,25 @@ async function writeRevokedRaw(text: string): Promise<void> {
   await writeFile(join(root, "revoked.json"), text);
 }
 
-/** 壊れた`revoked.json`を脇へ移せない状態にする(退避先が中身のあるディレクトリ)。 */
-async function blockCorruptCopy(): Promise<void> {
-  await mkdir(join(root, "revoked.json.corrupt"), { recursive: true });
-  await writeFile(join(root, "revoked.json.corrupt", "keep"), "keep");
+/** `revoked.json`を読めない状態にする(ファイルでなくディレクトリにする)。壊れた中身ではない。 */
+async function blockRevokedFile(): Promise<void> {
+  await mkdir(join(root, "revoked.json"));
+}
+
+/** 壊れた`revoked.json`を脇へ移した控えの名前を、古い順に返す。 */
+async function corruptCopyNames(): Promise<string[]> {
+  return (await readdir(root))
+    .filter((name) => name.startsWith("revoked.json.corrupt-"))
+    .sort();
+}
+
+/** 壊れた`revoked.json`を脇へ移した控えの中身を、名前の順に返す。 */
+async function readCorruptCopies(): Promise<string[]> {
+  const contents: string[] = [];
+  for (const name of await corruptCopyNames()) {
+    contents.push(await readFile(join(root, name), "utf8"));
+  }
+  return contents;
 }
 
 /** 管理者(root)は書き込みの権限の制限を受けないので、権限で失敗を起こすテストは飛ばす。 */
@@ -625,9 +641,7 @@ describe("runOnce", () => {
     await deploy(SHA_A, "A", 1);
     await writeRevokedRaw("not json");
     await runOnce(deps(githubServing(SHA_A, "A", 1).fetch));
-    expect(await readFile(join(root, "revoked.json.corrupt"), "utf8")).toBe(
-      "not json",
-    );
+    expect(await readCorruptCopies()).toEqual(["not json"]);
   });
 
   test("logs when revoked.json has the wrong shape during retention", async () => {
@@ -645,9 +659,7 @@ describe("runOnce", () => {
     await deploy(SHA_A, "A", 1);
     await writeRevokedRaw("[]");
     await runOnce(deps(githubServing(SHA_A, "A", 1).fetch));
-    expect(await readFile(join(root, "revoked.json.corrupt"), "utf8")).toBe(
-      "[]",
-    );
+    expect(await readCorruptCopies()).toEqual(["[]"]);
   });
 
   test("keeps the current release when its digest is revoked", async () => {
@@ -733,9 +745,94 @@ describe("runOnce", () => {
     await runOnce(deps(githubServing(SHA_B, "B", 2).fetch));
     expect((await readRevoked()).digests).toEqual([digest]);
   });
+
+  test("stays ok when revoked.json cannot be read during retention", async () => {
+    await deploy(SHA_A, "A", 1);
+    await blockRevokedFile();
+    const status = await runOnce(deps(githubServing(SHA_A, "A", 1).fetch));
+    expect(status.state).toBe("ok");
+  });
+
+  test("logs a read error of revoked.json during retention", async () => {
+    await deploy(SHA_A, "A", 1);
+    await blockRevokedFile();
+    const events: string[] = [];
+    await runOnce({
+      ...deps(githubServing(SHA_A, "A", 1).fetch),
+      log: (event) => events.push(event),
+    });
+    expect(events).toContain("revoked_state_read_failed");
+  });
+
+  itFailsOnPermission("logs when clearing a revoked digest fails", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await rm(join(root, "current"));
+    await symlink(`releases/${SHA_A}`, join(root, "current"));
+    await writeRevoked([], [await digestOfRelease(SHA_B)]);
+    const events: string[] = [];
+    try {
+      await runOnce({
+        ...deps(githubServing(SHA_B, "B", 2).fetch),
+        log: (event) => {
+          events.push(event);
+          if (event === "deployed") chmodSync(root, 0o555);
+        },
+      });
+    } finally {
+      await chmod(root, 0o755);
+    }
+    expect(events).toContain("revoked_digest_clear_failed");
+  });
+
+  test("drops the sha of a released version even when its digest was not recorded", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await rm(join(root, "current"));
+    await symlink(`releases/${SHA_A}`, join(root, "current"));
+    await writeRevoked([SHA_B], []);
+    await runOnce(deps(githubServing(SHA_B, "B", 2).fetch));
+    expect((await readRevoked()).shas).toEqual([]);
+  });
 });
 
 describe("runOnce with a pin", () => {
+  test("logs when the pin names another release than current", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await pinAt(SHA_A, [SHA_C]);
+    await rm(join(root, "current"));
+    await symlink(`releases/${SHA_B}`, join(root, "current"));
+    const events: string[] = [];
+    await runOnce({
+      ...deps(githubServing(SHA_B, "B", 2).fetch),
+      log: (event) => events.push(event),
+    });
+    expect(events).toContain("pin_mismatch");
+  });
+
+  test("does not log pin_mismatch when the pin names current", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await pinAt(SHA_A, [SHA_B]);
+    const events: string[] = [];
+    await runOnce({
+      ...deps(githubServing(SHA_B, "B", 2).fetch),
+      log: (event) => events.push(event),
+    });
+    expect(events).not.toContain("pin_mismatch");
+  });
+
+  test("stays pinned when the pin names another release than current", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await pinAt(SHA_A, [SHA_C]);
+    await rm(join(root, "current"));
+    await symlink(`releases/${SHA_B}`, join(root, "current"));
+    const status = await runOnce(deps(githubServing(SHA_B, "B", 2).fetch));
+    expect(status.state).toBe("pinned");
+  });
+
   test("removes the assets used only by a revoked release", async () => {
     await deploy(SHA_A, "A", 1);
     await deploy(SHA_B, "B", 2);
@@ -1253,8 +1350,7 @@ describe("rollback", () => {
   test("still rolls back when recording the revoked state fails", async () => {
     await deploy(SHA_A, "A", 1);
     await deploy(SHA_B, "B", 2);
-    await writeRevokedRaw("not json");
-    await blockCorruptCopy();
+    await blockRevokedFile();
     expect(await rollback(root, () => NOW)).toMatchObject({
       ok: true,
       sha: SHA_A,
@@ -1264,8 +1360,7 @@ describe("rollback", () => {
   test("logs when recording the revoked state fails", async () => {
     await deploy(SHA_A, "A", 1);
     await deploy(SHA_B, "B", 2);
-    await writeRevokedRaw("not json");
-    await blockCorruptCopy();
+    await blockRevokedFile();
     const events: string[] = [];
     await rollback(
       root,
@@ -1278,8 +1373,7 @@ describe("rollback", () => {
   test("still removes the release rolled back from when recording fails", async () => {
     await deploy(SHA_A, "A", 1);
     await deploy(SHA_B, "B", 2);
-    await writeRevokedRaw("not json");
-    await blockCorruptCopy();
+    await blockRevokedFile();
     await rollback(root, () => NOW);
     expect(await readdir(join(root, "releases"))).toEqual([SHA_A]);
   });
@@ -1287,8 +1381,7 @@ describe("rollback", () => {
   test("still writes the status when recording fails", async () => {
     await deploy(SHA_A, "A", 1);
     await deploy(SHA_B, "B", 2);
-    await writeRevokedRaw("not json");
-    await blockCorruptCopy();
+    await blockRevokedFile();
     await rollback(root, () => NOW);
     expect(
       JSON.parse(await readFile(join(root, "status.json"), "utf8")).state,
@@ -1313,9 +1406,7 @@ describe("rollback", () => {
     await deploy(SHA_B, "B", 2);
     await writeRevokedRaw("not json");
     await rollback(root, () => NOW);
-    expect(await readFile(join(root, "revoked.json.corrupt"), "utf8")).toBe(
-      "not json",
-    );
+    expect(await readCorruptCopies()).toEqual(["not json"]);
   });
 
   test("logs when revoked.json has the wrong shape", async () => {
@@ -1336,9 +1427,7 @@ describe("rollback", () => {
     await deploy(SHA_B, "B", 2);
     await writeRevokedRaw('{"shas":"x"}');
     await rollback(root, () => NOW);
-    expect(await readFile(join(root, "revoked.json.corrupt"), "utf8")).toBe(
-      '{"shas":"x"}',
-    );
+    expect(await readCorruptCopies()).toEqual(['{"shas":"x"}']);
   });
 
   test("writes a valid revoked.json after setting a corrupt one aside", async () => {
@@ -1372,6 +1461,90 @@ describe("rollback", () => {
       (event) => events.push(event),
     );
     expect(events).not.toContain("revoked_state_unreadable");
+  });
+
+  test("keeps both copies when revoked.json is corrupted twice", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await deploy(SHA_C, "C", 3);
+    await writeRevokedRaw("one");
+    await rollback(root, () => new Date(1000));
+    await writeRevokedRaw("two");
+    await rollback(root, () => new Date(2000));
+    expect(await readCorruptCopies()).toEqual(["one", "two"]);
+  });
+
+  test("keeps both copies when revoked.json is corrupted twice in the same millisecond", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await deploy(SHA_C, "C", 3);
+    await writeRevokedRaw("one");
+    await rollback(root, () => NOW);
+    await writeRevokedRaw("two");
+    await rollback(root, () => NOW);
+    expect(await readCorruptCopies()).toEqual(["one", "two"]);
+  });
+
+  test("keeps only the five newest copies of a corrupt revoked.json", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    for (let epoch = 1; epoch <= 6; epoch++) {
+      await writeFile(
+        join(root, `revoked.json.corrupt-${epoch}`),
+        `old${epoch}`,
+      );
+    }
+    await writeRevokedRaw("new");
+    await rollback(root, () => NOW);
+    expect(await corruptCopyNames()).toHaveLength(5);
+  });
+
+  test("deletes the oldest copies of a corrupt revoked.json", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    for (let epoch = 1; epoch <= 6; epoch++) {
+      await writeFile(
+        join(root, `revoked.json.corrupt-${epoch}`),
+        `old${epoch}`,
+      );
+    }
+    await writeRevokedRaw("new");
+    await rollback(root, () => NOW);
+    expect(await corruptCopyNames()).not.toContain("revoked.json.corrupt-1");
+  });
+
+  test("does not treat a read error as corruption", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await blockRevokedFile();
+    const events: string[] = [];
+    await rollback(
+      root,
+      () => NOW,
+      (event) => events.push(event),
+    );
+    expect(events).not.toContain("revoked_state_unreadable");
+  });
+
+  test("logs a read error of revoked.json", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await blockRevokedFile();
+    const events: string[] = [];
+    await rollback(
+      root,
+      () => NOW,
+      (event) => events.push(event),
+    );
+    expect(events).toContain("revoked_state_read_failed");
+  });
+
+  test("does not move revoked.json when it cannot be read", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await blockRevokedFile();
+    await rollback(root, () => NOW);
+    expect((await lstat(join(root, "revoked.json"))).isDirectory()).toBe(true);
   });
 
   test("logs when the previous pin cannot be read", async () => {
@@ -1538,6 +1711,86 @@ describe("unpin", () => {
     await pinAt(SHA_A, [SHA_B], [await digestOfRelease(SHA_B)]);
     await unpin(unpinDeps(failingFetch), { force: true, ignoreCleanup: false });
     expect((await readRevoked()).shas).toEqual([SHA_B]);
+  });
+
+  test("refuses when the pin has a rolled_back_from that is not a list of shas", async () => {
+    await writeFile(join(root, "pin"), '{"rolled_back_from":["zzz"]}');
+    expect(
+      await unpin(unpinDeps(failingFetch), {
+        force: false,
+        ignoreCleanup: false,
+      }),
+    ).toEqual({ ok: false, reason: "pin_unreadable" });
+  });
+
+  test("refuses when the pin has a rolled_back_content that is not a list of digests", async () => {
+    await writeFile(join(root, "pin"), '{"rolled_back_content":"x"}');
+    expect(
+      await unpin(unpinDeps(failingFetch), {
+        force: false,
+        ignoreCleanup: false,
+      }),
+    ).toEqual({ ok: false, reason: "pin_unreadable" });
+  });
+
+  test("removes a malformed pin with force", async () => {
+    await writeFile(join(root, "pin"), '{"rolled_back_from":["zzz"]}');
+    await unpin(unpinDeps(failingFetch), { force: true, ignoreCleanup: false });
+    expect(await exists(join(root, "pin"))).toBe(false);
+  });
+
+  test("rejects when the revoked state cannot be written", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await pinAt(SHA_A, [SHA_B]);
+    await blockRevokedFile();
+    await expect(
+      unpin(unpinDeps(failingFetch), { force: true, ignoreCleanup: false }),
+    ).rejects.toThrow();
+  });
+
+  test("keeps the pin when the revoked state cannot be written", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await pinAt(SHA_A, [SHA_B]);
+    await blockRevokedFile();
+    await unpin(unpinDeps(failingFetch), {
+      force: true,
+      ignoreCleanup: false,
+    }).catch(() => {});
+    expect(await exists(join(root, "pin"))).toBe(true);
+  });
+
+  test("refuses a release rolled back from in an earlier rollback that the pin no longer lists", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await deploy(SHA_C, "C", 3);
+    await rollback(root, () => NOW);
+    await pinAt(SHA_B);
+    expect(
+      await unpin(unpinDeps(githubWithLatestRun(SHA_C, 3).fetch), {
+        force: false,
+        ignoreCleanup: false,
+      }),
+    ).toEqual({ ok: false, reason: "latest_run_is_revoked", sha: SHA_C });
+  });
+
+  test("refuses files rolled back from in an earlier rollback that the pin no longer lists", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await deploy(SHA_C, "C", 3);
+    await rollback(root, () => NOW);
+    await pinAt(SHA_B);
+    expect(
+      await unpin(unpinDeps(githubServing(SHA_D, "C", 4).fetch), {
+        force: false,
+        ignoreCleanup: false,
+      }),
+    ).toEqual({
+      ok: false,
+      reason: "latest_run_has_revoked_content",
+      sha: SHA_D,
+    });
   });
 
   test("does not append to history", async () => {

@@ -26,6 +26,7 @@ import {
   parseManifest,
   parsePinContent,
   parsePinRevoked,
+  parsePinSha,
   parseRevokedState,
   parseUnpinFlags,
   parseWorkflowRuns,
@@ -33,6 +34,7 @@ import {
   REVOKED_DIGEST_LIMIT,
   referencedAssetNames,
   selectAssetsToDelete,
+  selectCorruptCopiesToDelete,
   selectIdenticalReleases,
   selectLatestRun,
   selectReleasesToDelete,
@@ -1068,7 +1070,87 @@ describe("findUnknownUnpinFlags", () => {
   });
 });
 
+describe("selectCorruptCopiesToDelete", () => {
+  test("returns the oldest copies beyond the limit", () => {
+    expect(
+      selectCorruptCopiesToDelete(
+        [
+          "revoked.json.corrupt-3",
+          "revoked.json.corrupt-1",
+          "revoked.json.corrupt-2",
+        ],
+        2,
+      ),
+    ).toEqual(["revoked.json.corrupt-1"]);
+  });
+
+  test("orders copies made in the same millisecond by their suffix", () => {
+    expect(
+      selectCorruptCopiesToDelete(
+        [
+          "revoked.json.corrupt-5-2",
+          "revoked.json.corrupt-5",
+          "revoked.json.corrupt-5-1",
+        ],
+        2,
+      ),
+    ).toEqual(["revoked.json.corrupt-5"]);
+  });
+
+  test("compares the times as numbers", () => {
+    expect(
+      selectCorruptCopiesToDelete(
+        ["revoked.json.corrupt-9", "revoked.json.corrupt-10"],
+        1,
+      ),
+    ).toEqual(["revoked.json.corrupt-9"]);
+  });
+
+  test("ignores other file names", () => {
+    expect(
+      selectCorruptCopiesToDelete(["revoked.json", "pin", "status.json"], 0),
+    ).toEqual([]);
+  });
+
+  test("returns nothing when there are not more copies than the limit", () => {
+    expect(selectCorruptCopiesToDelete(["revoked.json.corrupt-1"], 5)).toEqual(
+      [],
+    );
+  });
+});
+
+describe("parsePinSha", () => {
+  test("reads the sha of the pinned release", () => {
+    expect(parsePinSha({ sha: SHA_A })).toBe(SHA_A);
+  });
+
+  test("returns null for a pin without a sha", () => {
+    expect(parsePinSha({})).toBeNull();
+  });
+});
+
 describe("isReadablePin", () => {
+  test("rejects rolled_back_from that is not an array", () => {
+    expect(isReadablePin({ rolled_back_from: SHA_A })).toBe(false);
+  });
+
+  test("rejects rolled_back_from with an element that is not a sha", () => {
+    expect(isReadablePin({ rolled_back_from: [SHA_A, "x"] })).toBe(false);
+  });
+
+  test("rejects rolled_back_content with an element that is not a digest", () => {
+    expect(isReadablePin({ rolled_back_content: [HASH_1, "x"] })).toBe(false);
+  });
+
+  test("accepts well formed rolled_back_from and rolled_back_content", () => {
+    expect(
+      isReadablePin({
+        rolled_back_from: [SHA_A],
+        rolled_back_content: [HASH_1],
+      }),
+    ).toBe(true);
+  });
+
   test("accepts a JSON object", () => {
     expect(isReadablePin({ sha: SHA_A })).toBe(true);
   });
