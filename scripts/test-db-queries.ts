@@ -218,6 +218,14 @@ execPsql(
   target,
   `UPDATE factory.notices SET resolved = true, resolved_by = 'op', resolved_at = now() + interval '1 minute' WHERE id = ${String(resolvedNoticeId)}`,
 );
+const resolvedByCleanupId = await addNotice(
+  { kind: "claim_race_lost", message: "qdb resolved by cleanup" },
+  sql,
+);
+execPsql(
+  target,
+  `UPDATE factory.notices SET resolved = true, resolved_by = 'cleanup_db', resolved_at = now() + interval '2 minutes' WHERE id = ${String(resolvedByCleanupId)}`,
+);
 await recordFailure(
   {
     work_item_id: null,
@@ -278,6 +286,25 @@ check(
 check(
   "system_status: an action notice is not in the info list",
   !status.info_notices.some((row) => row.notice_id === actionNoticeId),
+);
+check(
+  "system_status: a notice resolved by a person comes before a newer one resolved by cleanup_db",
+  status.resolved_notices.findIndex(
+    (row) => row.notice_id === resolvedNoticeId,
+  ) >= 0 &&
+    status.resolved_notices.findIndex(
+      (row) => row.notice_id === resolvedNoticeId,
+    ) <
+      status.resolved_notices.findIndex(
+        (row) => row.notice_id === resolvedByCleanupId,
+      ),
+  status.resolved_notices.map((row) => row.notice_id),
+);
+check(
+  "system_status: resolved_by is returned for every resolved notice",
+  status.resolved_notices.every(
+    (row) => row.resolved_by === null || typeof row.resolved_by === "string",
+  ) && status.resolved_notices.some((row) => row.resolved_by === "cleanup_db"),
 );
 check(
   "system_status: the newest resolution comes first",

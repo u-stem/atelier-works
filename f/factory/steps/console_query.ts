@@ -19,7 +19,12 @@ import {
   type NoticeSeverity,
   noticeSeverity,
 } from "../lib/console_support.ts";
-import { defaultSqlClient, type SqlClient, type SqlRow } from "../lib/db.ts";
+import {
+  CLEANUP_RESOLVER,
+  defaultSqlClient,
+  type SqlClient,
+  type SqlRow,
+} from "../lib/db.ts";
 import { logger } from "../lib/log.ts";
 import {
   DIAGRAM_NAME_PATTERN,
@@ -1665,6 +1670,8 @@ async function readFetcherReport(
  * システム画面のデータを返す。
  * 反映の状態(`deployed_sha`と直近の反映)、Consoleの取り込みの状態、
  * 作業項目の無い失敗、`info`の未解決の通知、解決済みの通知を集める。
+ * 解決済みの通知は、人が解決したものを先に、DBの掃除が解決したもの(`CLEANUP_RESOLVER`)を後に、
+ * それぞれ解決の新しい順に並べる。機械が片付けた大量の通知で、人の解決の履歴が押し出されないため。
  * 作業項目の無い失敗と`info`の通知は、`INFO_NOTICE_WINDOW_DAYS`日より古いものを出さない。
  * `deployed_sha`が読めなければ`null`にし、`status.json`が読めなければ`unavailable`にする。
  * どちらも、画面のほかの部分を止めないためである。
@@ -1722,7 +1729,7 @@ export async function runSystemStatus(
       created_at, resolved_by, resolved_at
     FROM factory.notices
     WHERE resolved = true
-    ORDER BY resolved_at DESC NULLS LAST, id DESC
+    ORDER BY coalesce(resolved_by = ${CLEANUP_RESOLVER}, false) ASC, resolved_at DESC NULLS LAST, id DESC
     LIMIT ${limit}::integer
   `.fetch();
 

@@ -2431,7 +2431,7 @@ export async function deleteResolvedNoticesBefore(
 }
 
 /** DBの掃除が通知を解決済みにしたときに、`resolved_by`へ記録する名前。 */
-const CLEANUP_RESOLVER = "cleanup_db";
+export const CLEANUP_RESOLVER = "cleanup_db";
 
 /**
  * 未解決で、`created_at`が`olderThan`より前の、`kinds`の種類の`factory.notices`の行を、

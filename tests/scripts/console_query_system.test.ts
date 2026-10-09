@@ -141,10 +141,24 @@ describe("runSystemStatus queries", () => {
     expect(d.calls[2]?.values).toContain("2026-10-02T12:00:00.000Z");
   });
 
-  test("selects resolved notices newest resolution first", async () => {
+  test("puts notices resolved by a person before those resolved by cleanup_db", async () => {
     const d = deps(EMPTY);
     await runSystemStatus(200, d.deps);
-    expect(d.calls[3]?.text).toContain("ORDER BY resolved_at DESC NULLS LAST");
+    expect(d.calls[3]?.text).toMatch(
+      /ORDER BY coalesce\(resolved_by =\s*\?\s*, false\) ASC, resolved_at DESC NULLS LAST/,
+    );
+  });
+
+  test("binds cleanup_db as the automatic resolver", async () => {
+    const d = deps(EMPTY);
+    await runSystemStatus(200, d.deps);
+    expect(d.calls[3]?.values).toContain("cleanup_db");
+  });
+
+  test("selects resolved_by", async () => {
+    const d = deps(EMPTY);
+    await runSystemStatus(200, d.deps);
+    expect(d.calls[3]?.text).toContain("resolved_by");
   });
 
   test("selects only resolved notices", async () => {
