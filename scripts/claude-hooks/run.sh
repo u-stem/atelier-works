@@ -1,8 +1,9 @@
 #!/bin/sh
-# Claude Codeのフック(scripts/claude-hooks/<名前>.ts)をbunで起動する。
+# Claude Codeのフック(scripts/claude-hooks/<名前>.ts)をbunかnodeで起動する。
 # Claude Codeは終了コード2だけをツールの呼び出しの拒否として扱い、ほかの失敗では呼び出しを通す。
-# bunが見つからないとき、フックが見つからないとき、フックが異常終了したときは、
-# 終了コード2で拒否する側に倒す。
+# フックが見つからないとき、フックが異常終了したときは、終了コード2で拒否する側に倒す。
+# bunもnodeも無い環境(依存をまだ入れていないコンテナなど)では、すべてのBashを止めてしまうので、
+# 警告を出して通す。この場合は、設定ファイルの拒否ルールだけが残る。
 # 使い方: sh scripts/claude-hooks/run.sh <フックの名前>(標準入力にフックの入力のJSONを渡す)
 set -u
 
@@ -27,12 +28,12 @@ fi
 
 if command -v bun >/dev/null 2>&1; then
   bun "$script"
-elif command -v mise >/dev/null 2>&1; then
-  mise exec -- bun "$script"
+elif command -v node >/dev/null 2>&1; then
+  node "$script"
 else
-  echo "claude hook $hook: neither bun nor mise is on PATH; denying the tool call." >&2
-  echo "Install bun, or run the command yourself with the ! prefix in the prompt." >&2
-  exit 2
+  echo "claude hook $hook: neither bun nor node is on PATH, so the command was not checked; allowing the tool call." >&2
+  echo "Install bun to enable the guard." >&2
+  exit 0
 fi
 status=$?
 if [ "$status" -ne 0 ]; then

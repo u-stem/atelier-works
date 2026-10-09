@@ -257,13 +257,14 @@ workerには`no-new-privileges:true`と、プロセス数の上限(`deploy.resou
 | `mise env`とその別名(`mise e`、`mise ev`、`mise env-vars`) | 展開した環境変数の一覧を出力する |
 | `mise config`、`mise cfg`、`mise toml` | 設定値を出力する |
 | 引数なしの`mise set` | 設定値の一覧を出力する |
-| `mise x`、`mise exec -- env`、`mise exec -- printenv`、`printenv`、`env` | 環境変数を出力する |
+| `mise exec -- env`、`mise exec -- printenv`、`printenv`、`env` | 環境変数を出力する |
 | `cat mise.local.toml` | 秘密値そのものを出力する |
-| `docker compose config` | 変数を展開したcompose定義を出力する |
-| `docker inspect` | コンテナに渡した環境変数が見える |
-| `docker exec`、`docker container exec`、`docker compose exec` | コンテナの中から環境変数を読める |
 
 値を指定して書き込むだけの`mise set -E local KEY=value`は拒否しない。これらのルールは、`mise run <task>`を通した迂回(タスクの中で秘密値を出力する処理など)は防げない。
+
+`mise x`は`mise exec`の別名で、`mise x -- bun test`のように通常の作業にも使うので、この設定では拒否しない。
+`docker exec`、`docker inspect`、`docker compose config`も、設定のルールは引数を絞れないので、ここには置かない。
+どちらも、環境変数を出す形だけを次の節のフックが拒否する。
 
 ## Claude Codeのフック
 
@@ -282,9 +283,11 @@ FactoryのheadlessなClaudeの実行は`.claude/`を読まないので、この�
 | `LEFTHOOK_BIN`と`LEFTHOOK_CONFIG`の設定 | インストール済みのフックが読む、lefthookのバイナリと設定を差し替えられる |
 | `lefthook uninstall`、`.git/hooks`と`.git/config`への書き込み | gitのフックを外せる |
 | `git -c alias.*`、`remote.*.push`・`push.default`・`include.*`・`includeIf.*`の設定、`GIT_CONFIG_COUNT`などの環境変数 | `push`や`core.hooksPath`を別の名前や設定の裏から差し込める |
-| パイプなどで標準入力からコードを読むシェル(`bash -s`を含む) | 中身を判定できない |
+| `echo`や`printf`が変数から組み立てた文字列を、標準入力で読むシェル | 中身を判定できない |
 | `mise exec`の`-c`と`--command`、コードを渡したシェル、`env`や`printenv`などの環境変数の一覧 | `mise exec`は`mise.local.toml`の秘密値を環境変数として渡すので、値を表示できる |
-| `docker compose config`、`docker compose exec`、`docker exec`、`docker inspect`(`mise exec --`の前置きがあっても) | 展開済みの定義とコンテナから、環境変数の値が見える |
+| `docker exec`と`docker compose exec`で実行する環境変数の一覧とコードを渡したシェル(`mise exec --`の前置きがあっても) | コンテナは秘密値を環境変数として持つ |
+| `--format`で環境変数を含む項目を選ぶか、`--format`の無い`docker inspect` | コンテナに渡した環境変数が見える |
+| 出力を絞らない`docker compose config` | 変数を展開したcompose定義を出力する |
 | 秘密値のファイル(`mise.local.toml`とその別名、`.wmill/`の`remotes.ndjson`、`.env`系)を名前で指すコマンド | `Read`の拒否はBashに効かず、`cat`や`grep`で読むと値が会話の記録に残る |
 | リポジトリの根、`infra`、`.wmill`を起点にした再帰的な`grep`、`-u`や`--no-ignore`を付けた`rg`、`git grep --no-index` | gitignore済みの秘密値のファイルまで読む |
 
@@ -301,7 +304,10 @@ FactoryのheadlessなClaudeの実行は`.claude/`を読まないので、この�
 フックは、コマンドを字句に分けてから判定する。
 引用符の中の文字列と、区切り語を引用符で囲んだヒアドキュメントの本文は、コマンドとして扱わない。
 `sh -c`、`eval`、`$(...)`、バッククォートの中身は、別のコマンドとして判定する。
-標準入力からコードを読むシェルは、入力がヒアストリングかヒアドキュメントならその中身を判定する。
+標準入力からコードを読むシェルは、入力がヒアストリング、ヒアドキュメント、`echo`や`printf`が書いた文字列ならその中身を判定する。
+`curl`の出力を`sh`に渡す形のように、別のプログラムが渡すコードは、中身を読めないので拒否しない。
+コンテナの中でインストーラーを実行する作業を止めないためである。
+`bash -`は標準入力から読む形として扱う。
 `time`、`command`、`exec`、`env`、`xargs`、`timeout`などの前置きは外してから判定する。
 `bash`のほかに、`fish`、`ash`、`mksh`、`tcsh`、`csh`、`busybox sh`も同じように扱う。
 
@@ -322,14 +328,23 @@ FactoryのheadlessなClaudeの実行は`.claude/`を読まないので、この�
 
 `git push`のブランチを省いたときの今のブランチは、同じコマンド行の前にある文字どおりの`cd`と`pushd`をたどって調べる。
 `git -C`、`--git-dir`、`--work-tree`が指すディレクトリも同じように使う。
-移動先が変数のときは今のブランチを調べられないので、そのpushだけを拒否する。
+同じコマンド行の前にブランチを切り替える操作があれば、切り替えた先を今のブランチとする。
+対象は`git checkout`、`git switch`、それぞれの`-b`と`-c`、`git branch -m`である。
+切り替え先が変数のとき、`git checkout -`のとき、`git rebase <上流> <ブランチ>`の`<ブランチ>`が変数のときは、今のブランチが決まらないものとして扱う。
+移動先が変数のときも今のブランチを調べられないので、そのpushだけを拒否する。
 push先に`"$(git branch --show-current)"`を書いたときは、今のブランチとして扱う。
 push先のrefspecは、`refs/heads/`と`heads/`を外して`main`、`master`と比べ、`*`を含むものは拒否する。
 今のブランチとリポジトリの根を調べるgitの起動は、ディレクトリごとに結果を覚える。
 1回の判定で、起動は20回、時間は5秒までに限る。
 超えたコマンド行は、分けて実行するよう理由を示して拒否する。
 
+`docker exec`と`docker compose exec`は、環境変数の一覧を出すコマンド(`env`、`/usr/bin/env`、`printenv`)かコードを渡したシェルのときだけ拒否する。
+`docker compose exec windmill_worker kill <pid>`のような運用の手順は拒否しない。
+`docker inspect`は、`--format`で環境変数を含まない項目(`{{.State.Running}}`など)を選ぶ形を拒否しない。
+`docker compose config`は、`--services`、`--profiles`、`--volumes`、`--images`、`--hash`、`-q`で出力を絞った形を拒否しない。
+
 `mise exec`の拒否は、シェルにコードを渡す形と、環境変数の一覧を出すコマンドに限る。
+`mise exec node -- env`のように、ツール名の後ろに`--`があるときは、その後ろのコマンドを見る。
 名前を指定したツール(`mise exec -- gitleaks`、`mise exec -- wmill`、`mise exec -- bun test`)は拒否しない。
 `bun -e`や`python -c`のように、インタープリターにコードを渡す形も拒否しない。
 `mise exec -- bash scripts/doctor.sh`のように、スクリプトのファイルを渡したシェルも拒否しない。
@@ -338,27 +353,34 @@ push先のrefspecは、`refs/heads/`と`heads/`を外して`main`、`master`と�
 
 ### 失敗したときの動作
 
-判定できないときは拒否する。
-字句に分けられないコマンド、push先が実行するまで決まらないコマンド、bunが見つからないとき、フック自身の異常終了がこれに当たる。
+コマンドの意味を判定できないときは拒否する。
+字句に分けられないコマンド、push先が実行するまで決まらないコマンド、フック自身の異常終了がこれに当たる。
 Claude Codeは終了コード2以外のフックの失敗ではツールの呼び出しを止めないので、`scripts/claude-hooks/run.sh`が失敗を終了コード2に揃える。
-起動スクリプトが見つからないときは、登録したコマンドが終了コード2で拒否する。
-`CLAUDE_PROJECT_DIR`が空のときも同じである。
 
-bunと`mise`のどちらも無い環境では、すべてのBashを拒否する。
-拒否のメッセージには、bunを入れるか、`!`を付けて自分で実行する復旧の手順を示す。
-クラウドのセッションでは、最初のBashの前にbunを使えるようにしておく。
+実行環境が無いときは、警告を出して通す。
+実行環境が無いのは、次の2つの場合である。
+
+- bunとnodeのどちらも無いとき。依存を入れる前のコンテナが当たる
+- 起動スクリプトが無いとき。フックを入れる前のブランチをチェックアウトした場合が当たる
+
+この場合も拒否すると、すべてのBashが止まり、人が復旧できないクラウドのセッションでは作業を続けられない。
+`run.sh`はbun、node、警告して通す、の順に試す。
+`mise`は経由しない。自動インストールがタイムアウトを超えることがあり、信頼していない設定では動かないためである。
+フックが動かない間は、`.claude/settings.json`の拒否ルールだけが残る。
+フックは、bunとnodeのどちらでも動く(nodeは型を取り除いて`.ts`を実行できる24以上)。
 
 Claude Codeは、タイムアウトしたフックのツール呼び出しを止めず、通常の権限の確認に進める。
 そのため、登録するタイムアウトは10秒にして、処理が長引かないようにしている。
 判定は同期の処理で、途中から止められない。
 代わりに、gitの起動に回数と時間の上限を置き、gitの1回の実行にも2秒の上限を付ける。
 非同期の判定を待つ処理には、8秒で終了コード2の拒否にする上限を付ける。
-bunの起動そのものが止まったときだけ、タイムアウトの扱いになる。
+bunかnodeの起動そのものが止まったときだけ、タイムアウトの扱いになる。
 
 ### 拒否された操作を人が実行する
 
 人は、拒否された操作を自分で実行できる。
-プロンプトの先頭に`!`を付けると、Claudeを通さずにシェルがコマンドを直接実行するので、フックは動かない。
+ローカルのターミナルでは、プロンプトの先頭に`!`を付けると、Claudeを通さずにシェルがコマンドを直接実行するので、フックは動かない。
+クラウドのセッションには`!`が無いので、人が別の場所で実行する。
 フックをすべて止めるときは、gitignore済みの`.claude/settings.local.json`に`"disableAllHooks": true`を書く。
 この設定はすべてのフックを止めるので、必要な間だけにして、済んだら消す。
 
@@ -377,6 +399,10 @@ bunの起動そのものが止まったときだけ、タイムアウトの扱�
 - gitの省略形のオプション(`--forc`など)
 - 式の中でファイルを開く操作(`sed`の`r`コマンド、`perl -e`など)
 - `cd`やglob、`dd`、`perl -pi`、`find -delete`を使った`.git/hooks`と`.git/config`の書き換え
+- `cat /proc/self/environ`のように、環境変数をファイルとして読む操作
+- `git checkout <名前>`が、ファイルの復元かブランチの切り替えか(名前が1つなら、ブランチの切り替えとして扱う)
+- `docker run ... env`のように、新しく起動するコンテナで環境変数を出す操作
+- `gh auth token`のように、認証情報を表示するコマンドと、`~/.ssh`やgh CLIの設定ファイルの読み取り
 - `mise exec`経由で秘密値を読む方法の一部(ベストエフォートの規則である)
 - サブシェルの中の`cd`の範囲(外側にも効くものとして扱う)
 

@@ -46,8 +46,10 @@ read -rs -p 'KEY: ' v && mise set -E local KEY="$v"; unset v
 値を表示せずに、投入できたかを確かめるには次のように実行する。
 
 ```bash
-mise exec -- sh -c 'test -n "$DB_PASSWORD" && echo ok'
+mise run doctor
 ```
+
+環境変数の項目が、未設定のキーの名前を示す。値は表示しない。
 
 `mise set -E local KEY=value`と値を直接書く方法は、補足の手段にとどめる。
 

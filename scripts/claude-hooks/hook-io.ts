@@ -1,6 +1,10 @@
 // Claude CodeのPreToolUseフックの入出力を扱う。
 // Claude Codeは終了コード2だけをツールの呼び出しの拒否として扱い、ほかの失敗では呼び出しを通す。
 // そのため、入力を読めないときやルールが例外を投げたときは、必ず終了コード2で返す。
+// bunとnodeのどちらでも動くよう、実行環境に固有のAPIは使わない。
+
+import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 /** フックの入力から取り出した、Bashの呼び出し。`agentId`はsubagentの中の呼び出しでだけ値を持つ。 */
 export type BashToolInput = {
@@ -109,11 +113,31 @@ export async function runHook(
   }
 }
 
+/** 標準入力をすべて読む。 */
+async function readStdin(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+/** `moduleUrl`のファイルが、実行したスクリプトそのものなら真(`import.meta.url`を渡す)。 */
+export function isEntryPoint(moduleUrl: string): boolean {
+  const entry = process.argv[1];
+  if (entry === undefined) return false;
+  try {
+    return realpathSync(entry) === realpathSync(fileURLToPath(moduleUrl));
+  } catch {
+    return false;
+  }
+}
+
 /** 標準入力を読んで判定し、結果を書き出す。各フックのエントリーポイントから呼ぶ。 */
 export async function runHookMain(
   evaluate: (input: BashToolInput) => Promise<Decision>,
 ): Promise<void> {
-  const result = await runHook(await Bun.stdin.text(), evaluate, process.cwd());
+  const result = await runHook(await readStdin(), evaluate, process.cwd());
   process.stdout.write(result.stdout);
   process.stderr.write(result.stderr);
   process.exitCode = result.exitCode;

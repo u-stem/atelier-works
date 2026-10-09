@@ -1,28 +1,39 @@
-#!/usr/bin/env bun
-// Claude CodeのPreToolUse(Bash)フック。取り消しにくいgitの操作と、gitのフックを飛ばす操作を拒否する。
-// 守る相手はエージェントの誤操作であり、意図した迂回は対象にしない。
-// 規則を足すときは、起こりうる誤操作を1つ挙げられるものに限る。拒否する規則と、想定する誤操作は次のとおり。
+// Claude CodeのPreToolUse(Bash)フック。取り消しにくいgitの操作と、gitのフックを飛ばす操作などを拒否する。
+// bunとnodeのどちらでも動く。
+// 守る相手は、エージェントの誤操作と、失敗した検査を避けて通ろうとする操作である。調べ尽くした迂回は対象にしない。
+// 規則を足す条件は、起こりうる場面を1つ挙げられ、通常の作業を止める確率がほぼ無いことである。
+// 規則の判定に迷うときは拒否し、実行環境(bunやnode、起動スクリプト)が無いときは警告を出して通す。
+// 規則のグループと、想定する場面は次のとおり。
 // - 無条件のforce push(`--force`、`-f`、`+`で始まるrefspec): 衝突したpushを強制して、他のコミットを消す。
 //   `--force-with-lease`と`--force-if-includes`は、subagentではないセッションが保護しないブランチへpushするときに限って許す
 // - 保護するブランチ(`main`、`master`)へのpush: 作業ブランチのつもりでmainに送る。
 // - subagentからのpush: 確認する相手がいないまま、レビュー前のコミットを公開する。
-// - `--no-verify`、`git commit -n`、`core.hooksPath`などの設定、lefthookを止める環境変数、`.git/hooks`と`.git/config`の書き換え:
-//   検査が落ちたとき、直さずに迂回する。
+// - `--no-verify`、`git commit -n`: lefthookの検査が落ちたとき、直さずに迂回する。
+// - `core.hooksPath`、`LEFTHOOK*`、`GIT_CONFIG_*`、`include.*`、`.git/hooks`と`.git/config`の書き換え: 同じ迂回を、設定の裏から行う。
+// - `remote.*.push`、`push.default`、`alias.*`: pushの行き先や中身を、別の名前や設定に隠す。
 // - xargsや標準入力から渡すgit push、シェルのコード: 渡された引数やコードを判定できないまま実行する。
-// - 秘密値のファイルの参照(`guarded-files.ts`)、`mise exec`と`docker`の環境変数の表示: 値が会話の記録に残る。
+// - 秘密値のファイルの参照(`guarded-files.ts`)、`mise exec`と`docker`の環境変数の表示(`env-exposure.ts`): 値が会話の記録に残る。
 // コマンドは字句に分けてから判定するので、引用符の中やヒアドキュメントの本文には反応しない。
 // 字句に分けられないコマンドと、実行するまでpush先が決まらないコマンドは拒否する。
-// `cd`と`pushd`の文字どおりの移動先はたどり、今のブランチを調べるディレクトリに使う。
+// `cd`と`pushd`の文字どおりの移動先と、`git checkout`などで切り替えたブランチは、続くコマンドの前提にする。
 // gitを起動する回数と時間には上限を置く(同期の処理は途中で止められないため)。
 // 使い方: scripts/claude-hooks/run.sh bash-guard(標準入力にフックの入力のJSONを渡す)
 
+import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
+import {
+  dockerExposure,
+  dumpsEnvironment,
+  firstOperand,
+  shellInputSource,
+} from "./env-exposure.ts";
 import { findSecretReference, type SecretContext } from "./guarded-files.ts";
 import {
   ALLOW,
   type BashToolInput,
   type Decision,
   deny,
+  isEntryPoint,
   runHookMain,
 } from "./hook-io.ts";
 import {
@@ -95,7 +106,7 @@ const LEFTHOOK_REPLACING_ENV: ReadonlySet<string> = new Set([
  * `core.hooksPath`、`remote.<名前>.push`、`push.default`、`include.*`、`includeIf.*`である。
  */
 const DANGEROUS_CONFIG_KEY =
-  /^(core\.hookspath|remote\..+\.push|push\.default|include\..*|includeif\..*)$/;
+  /^(core\.hookspath|alias\..+|remote\..+\.push|push\.default|include\..*|includeif\..*)$/;
 
 /** `.git/hooks`と`.git/config`のパス。lefthookのフックと設定の置き場所である。 */
 const GIT_INTERNALS = /(^|\/)\.git\/(hooks(\/|$)|config$)/;
@@ -104,51 +115,21 @@ const GIT_INTERNALS = /(^|\/)\.git\/(hooks(\/|$)|config$)/;
 const MUTATING_PROGRAMS: ReadonlySet<string> = new Set([
   "rm",
   "mv",
-  "cp",
   "ln",
   "tee",
   "touch",
   "chmod",
   "chown",
   "truncate",
-  "install",
   "dd",
-  "rsync",
   "unlink",
 ]);
 
-/** 環境変数の一覧を出すコマンド(`env`は前置きとして扱うので別に見る)。 */
-const ENVIRONMENT_PRINTERS: ReadonlySet<string> = new Set(["printenv", "set"]);
-
-/** 値を設定せずに一覧を出す、組み込みコマンドの`-p`。 */
-const LISTING_BUILTINS: ReadonlySet<string> = new Set([
-  "export",
-  "declare",
-  "typeset",
-]);
-
-/** dockerの値を取るオプション(サブコマンドより前にあるもの)。 */
-const DOCKER_VALUE_OPTIONS: ReadonlySet<string> = new Set([
-  "-H",
-  "--host",
-  "--context",
-  "-c",
-  "-l",
-  "--log-level",
-  "--config",
-]);
-
-/** `docker compose`の値を取るオプション(サブコマンドより前にあるもの)。 */
-const COMPOSE_VALUE_OPTIONS: ReadonlySet<string> = new Set([
-  "-f",
-  "--file",
-  "-p",
-  "--project-name",
-  "--profile",
-  "--env-file",
-  "--project-directory",
-  "--ansi",
-  "--parallel",
+/** 行き先だけが書き込まれるコマンド。 */
+const COPYING_PROGRAMS: ReadonlySet<string> = new Set([
+  "cp",
+  "rsync",
+  "install",
 ]);
 
 /** シェルを入れ子にして読む深さの上限。 */
@@ -245,12 +226,16 @@ export const REASONS = {
     "Setting remote.*.push, push.default, include.*, or includeIf.* can redirect a push or load a config that turns the hooks off. Push with an explicit branch instead; reading or unsetting them is fine.",
   lefthookReplace:
     "LEFTHOOK_BIN and LEFTHOOK_CONFIG replace the lefthook binary or config that the git hooks run. Fix the failing check instead.",
-  dockerEnvironment:
-    "docker compose config, docker compose exec, docker exec, and docker inspect print or expose environment variables, including secrets. Use docker compose ps or docker compose logs to check the state, or add a mise task and use mise run.",
+  dockerExec:
+    "docker exec and docker compose exec must not run an environment dump (env, printenv, set) or a shell given code (-c or stdin): containers hold secrets as environment variables. Run the specific command directly, for example docker compose exec windmill_worker kill <pid>.",
+  dockerInspect:
+    "docker inspect prints the environment variables of the container, including secrets. Select a field with --format, for example docker inspect --format '{{.State.Running}}' <id>. A format that mentions Env or Config is denied.",
+  dockerConfig:
+    "docker compose config prints the expanded definition, including environment variables. Limit the output with --services, --profiles, --volumes, --images, --hash, or -q.",
   tooManyLookups:
     "This command line needs too many git lookups to check (more than 20, or too slow). Split it into smaller commands.",
   gitAlias:
-    "git -c alias.* can hide a push or a commit behind another name. Write the git command out in full.",
+    "git -c alias.* and git config alias.* can hide a push or a commit behind another name. Write the git command out in full.",
   gitConfigEnv:
     "GIT_CONFIG_COUNT, GIT_CONFIG_KEY_*, GIT_CONFIG_VALUE_*, and GIT_CONFIG_PARAMETERS can override core.hooksPath and aliases. Set the option with a normal git command instead.",
   lefthookOff:
@@ -264,7 +249,13 @@ export const REASONS = {
   miseExecCode:
     "mise exec passes the secrets of mise.local.toml to its command as environment variables, so a shell given code (-c or stdin), the -c/--command option, or an environment dump (env, printenv, set, export -p) can print them. Run the intended tool directly (for example mise exec -- gitleaks ... or mise exec -- wmill ...), or add a mise task and use mise run. Never print secret values.",
   shellStdin:
-    "Shell code passed through stdin cannot be checked. Pass it with sh -c '...' (or a here-document with a quoted delimiter), or run a script file.",
+    "Shell code built from variables and passed through stdin cannot be checked. Pass literal text (echo 'git status' | sh), use sh -c '...', or run a script file.",
+} as const;
+
+const DOCKER_REASONS = {
+  config: REASONS.dockerConfig,
+  exec: REASONS.dockerExec,
+  inspect: REASONS.dockerInspect,
 } as const;
 
 type GitInvocation = {
@@ -275,12 +266,20 @@ type GitInvocation = {
   readonly args: readonly Word[];
 };
 
+/** コマンド行の中の`git checkout`などで切り替わった、そのディレクトリのブランチ。`branch`がnullなら決まらない。 */
+type AssumedBranch = {
+  readonly dir: string | null;
+  readonly branch: string | null;
+};
+
 type Scope = {
   readonly input: BashToolInput;
   readonly deps: GuardDeps;
   /** 最初のリポジトリの根。求めるのは必要になったときだけである。 */
   readonly repoRoot: () => string;
   readonly depth: number;
+  /** 入れ子の判定とも共有する、ブランチの切り替えの記録。 */
+  readonly branchState: { assumed: AssumedBranch | null };
 };
 
 /** Bashのコマンド行を判定する。どれか1つの単純コマンドが拒否に当たれば、全体を拒否する。 */
@@ -297,7 +296,13 @@ export function evaluateBashGuard(
   try {
     return evaluateLine(
       input.command,
-      { input, deps: budgeted, repoRoot, depth: 0 },
+      {
+        input,
+        deps: budgeted,
+        repoRoot,
+        depth: 0,
+        branchState: { assumed: null },
+      },
       input.cwd,
     );
   } catch (error) {
@@ -355,6 +360,7 @@ function evaluateLine(
   for (const command of parsed.commands) {
     const decision = checkSimpleCommand(command, directory, scope);
     if (decision.kind === "deny") return decision;
+    trackBranch(command, directory, scope);
     directory = directoryAfter(command, directory);
   }
   return ALLOW;
@@ -408,9 +414,8 @@ function checkSimpleCommand(
     const miseDecision = checkMise(mise, directory, scope);
     if (miseDecision.kind === "deny") return miseDecision;
   }
-  if (exposesDockerEnvironment(words)) {
-    return deny(REASONS.dockerEnvironment);
-  }
+  const docker = dockerExposure(words);
+  if (docker !== null) return deny(DOCKER_REASONS[docker]);
   if (isLefthookUninstall(words)) {
     return deny(REASONS.lefthookUninstall);
   }
@@ -441,8 +446,9 @@ function checkGit(
   if (git.subcommand === "config") {
     const key = settingDangerousConfigKey(git.args);
     if (key !== null) {
+      if (isHooksPathKey(key)) return deny(REASONS.hooksPath);
       return deny(
-        isHooksPathKey(key) ? REASONS.hooksPath : REASONS.gitConfigKey,
+        key.startsWith("alias.") ? REASONS.gitAlias : REASONS.gitConfigKey,
       );
     }
   }
@@ -501,73 +507,17 @@ function checkMise(
   scope: Scope,
 ): Decision {
   if (mise.commandString !== null) {
-    if (!mise.commandString.dynamic) {
-      const decision = evaluateLine(
-        mise.commandString.text,
-        { ...scope, depth: scope.depth + 1 },
-        directory,
-      );
-      if (decision.kind === "deny") return decision;
-    }
-    return deny(REASONS.miseExecCode);
+    // 常に拒否するが、中身がほかの規則に当たるなら、その具体的な理由を返す。
+    const inner = mise.commandString.dynamic
+      ? ALLOW
+      : evaluateLine(
+          mise.commandString.text,
+          { ...scope, depth: scope.depth + 1 },
+          directory,
+        );
+    return inner.kind === "deny" ? inner : deny(REASONS.miseExecCode);
   }
   return dumpsEnvironment(mise.inner) ? deny(REASONS.miseExecCode) : ALLOW;
-}
-
-/** `mise exec`の中のコマンドが、環境変数の一覧を出すか、コードを渡したシェルなら真。 */
-function dumpsEnvironment(inner: readonly Word[]): boolean {
-  const { words, wrappers } = stripWrappers(inner);
-  const first = words[0];
-  // `env`は前置きとして外されるので、後ろにコマンドが無ければ一覧を出している。
-  if (first === undefined) return wrappers.includes("env");
-  const name = baseName(first.text);
-  if (ENVIRONMENT_PRINTERS.has(name)) return true;
-  if (LISTING_BUILTINS.has(name)) return words[1]?.text === "-p";
-  const shellArgs = shellArguments(words);
-  if (shellArgs === null) return false;
-  const source = shellInputSource(shellArgs);
-  return source === "command" || source === "stdin";
-}
-
-/** `args`の最初のオプションでない語と、その後ろの語を返す。`valueOptions`のオプションは値の語も読み飛ばす。 */
-function firstOperand(
-  args: readonly Word[],
-  valueOptions: ReadonlySet<string>,
-): { readonly text: string; readonly rest: readonly Word[] } | null {
-  for (let index = 0; index < args.length; index += 1) {
-    const text = args[index]?.text ?? "";
-    if (text.startsWith("-")) {
-      if (valueOptions.has(text)) index += 1;
-      continue;
-    }
-    return { text, rest: args.slice(index + 1) };
-  }
-  return null;
-}
-
-const NO_OPTIONS: ReadonlySet<string> = new Set();
-
-/**
- * 環境変数を表示する、`docker compose config`、`docker compose exec`、`docker exec`、`docker inspect`なら真。
- * `.claude/settings.json`の拒否ルールは前置き(`mise exec --`)があると効かないので、ここでも見る。
- */
-function exposesDockerEnvironment(words: readonly Word[]): boolean {
-  const program = baseName(words[0]?.text ?? "");
-  const exposingCompose = (args: readonly Word[]): boolean => {
-    const sub = firstOperand(args, COMPOSE_VALUE_OPTIONS)?.text;
-    return sub === "config" || sub === "exec";
-  };
-  if (program === "docker-compose") return exposingCompose(words.slice(1));
-  if (program !== "docker") return false;
-  const first = firstOperand(words.slice(1), DOCKER_VALUE_OPTIONS);
-  if (first === null) return false;
-  if (first.text === "exec" || first.text === "inspect") return true;
-  if (first.text === "compose") return exposingCompose(first.rest);
-  if (first.text === "container") {
-    const sub = firstOperand(first.rest, NO_OPTIONS)?.text;
-    return sub === "exec" || sub === "inspect";
-  }
-  return false;
 }
 
 /** `lefthook uninstall`なら真。`lefthook`のオプションの後ろや、`bunx`、`npx`、`bun x`経由の呼び出しも見る。 */
@@ -590,7 +540,7 @@ function isLefthookUninstall(words: readonly Word[]): boolean {
   } else {
     return false;
   }
-  return firstOperand(args, NO_OPTIONS)?.text === "uninstall";
+  return firstOperand(args)?.text === "uninstall";
 }
 
 /** コマンドが`.git/hooks`か`.git/config`に書き込むなら真。読むだけのコマンドは対象にしない。 */
@@ -606,8 +556,28 @@ function touchesGitInternals(
   const editsInPlace =
     program === "sed" &&
     args.some((word) => /^-[A-Za-z]*i|^--in-place/.test(word.text));
+  if (COPYING_PROGRAMS.has(program)) {
+    // 書き込まれるのは行き先だけである。コピー元の`.git/hooks`は読むだけなので拒否しない。
+    const destination = copyDestination(args);
+    return destination !== null && GIT_INTERNALS.test(destination);
+  }
   if (!MUTATING_PROGRAMS.has(program) && !editsInPlace) return false;
   return args.some((word) => GIT_INTERNALS.test(word.text));
+}
+
+/** `cp`、`rsync`、`install`の行き先を返す。`-t`か`--target-directory`があればその値、無ければ最後の引数。 */
+function copyDestination(args: readonly Word[]): string | null {
+  for (let index = 0; index < args.length; index += 1) {
+    const text = args[index]?.text ?? "";
+    if (text === "-t" || text === "--target-directory") {
+      return args[index + 1]?.text ?? null;
+    }
+    if (text.startsWith("--target-directory=")) {
+      return text.slice("--target-directory=".length);
+    }
+  }
+  const operands = args.filter((word) => !word.text.startsWith("-"));
+  return operands.at(-1)?.text ?? null;
 }
 
 /**
@@ -622,11 +592,11 @@ function checkShellInput(
   scope: Scope,
 ): Decision {
   if (shellInputSource(shellArgs) !== "stdin") return ALLOW;
-  if (command.inputs.length === 0) return deny(REASONS.shellStdin);
-  for (const input of command.inputs) {
-    if (input.dynamic) return deny(REASONS.shellStdin);
+  const sources = literalShellInputs(command);
+  if (sources === null) return deny(REASONS.shellStdin);
+  for (const source of sources) {
     const decision = evaluateLine(
-      input.text,
+      source,
       { ...scope, depth: scope.depth + 1 },
       directory,
     );
@@ -636,31 +606,30 @@ function checkShellInput(
 }
 
 /**
- * シェルの引数から、コードの出どころ(`-c`の引数、スクリプトのファイル、標準入力)を返す。
- * `--version`のようにコードを読まない呼び出しは`none`を返す。
+ * シェルに標準入力で渡るコードのうち、文字列として読めるものを返す。
+ * ヒアストリングとヒアドキュメントの本文と、`echo`や`printf`が書いた文字列がそれに当たる。
+ * `curl ... | sh`のように別のプログラムが渡すコードは中身を読めないので、空の配列を返して通す。
+ * `echo "$X" | sh`のように、変数から組み立てた文字列は判定できないのでnullを返す。
  */
-function shellInputSource(
-  args: readonly Word[],
-): "command" | "file" | "stdin" | "none" {
-  let readsStdin = false;
-  for (let index = 0; index < args.length; index += 1) {
-    const text = args[index]?.text ?? "";
-    if (text === "--") return args[index + 1] === undefined ? "stdin" : "file";
-    if (text === "-o" || text === "+o" || text === "-O" || text === "+O") {
-      index += 1;
-      continue;
-    }
-    if (text === "--version" || text === "--help") return "none";
-    if (text.startsWith("--")) continue;
-    if (text.startsWith("-") && text.length > 1) {
-      if (text.includes("c")) return "command";
-      if (text.includes("s")) readsStdin = true;
-      continue;
-    }
-    if (text.startsWith("+")) continue;
-    return readsStdin ? "stdin" : "file";
+function literalShellInputs(command: SimpleCommand): readonly string[] | null {
+  if (command.inputs.length > 0)
+    return command.inputs.map((input) => input.text);
+  const source = command.pipedFrom;
+  if (source === null) return [];
+  const { words } = stripWrappers(source.words);
+  const program = baseName(words[0]?.text ?? "");
+  if (program !== "echo" && program !== "printf") return [];
+  let args = words.slice(1);
+  if (program === "echo") {
+    const first = args.findIndex((word) => !/^-[neE]+$/.test(word.text));
+    args = first === -1 ? [] : args.slice(first);
   }
-  return "stdin";
+  if (args.some((word) => word.dynamic)) return null;
+  // `\n`や`\t`は、echoとprintfが改行や区切りに直す。
+  const texts = args.map((word) =>
+    word.text.replace(/\\n/g, "\n").replace(/\\t/g, " "),
+  );
+  return program === "echo" ? [texts.join(" ")] : texts;
 }
 
 function parseGitInvocation(
@@ -766,8 +735,11 @@ function hasCommitNoVerifyFlag(args: readonly Word[]): boolean {
 
 function checkPush(git: GitInvocation, scope: Scope): Decision {
   if (scope.input.agentId !== null) return deny(REASONS.subagentPush);
-  const currentBranch = (): string | null =>
-    git.dir === null ? null : scope.deps.currentBranch(git.dir);
+  const currentBranch = (): string | null => {
+    const assumed = scope.branchState.assumed;
+    if (assumed !== null && assumed.dir === git.dir) return assumed.branch;
+    return git.dir === null ? null : scope.deps.currentBranch(git.dir);
+  };
   const positionals: Word[] = [];
   for (let index = 0; index < git.args.length; index += 1) {
     const word = git.args[index];
@@ -844,20 +816,114 @@ function refspecDestination(
   return destination;
 }
 
+/**
+ * `git checkout`、`switch`、`rebase`、`branch -m`が切り替える先のブランチを、続くコマンドの前提として覚える。
+ * リテラルの名前ならその名前、実行時に決まるときや、行き先が分からないときはnull(不明)にする。
+ * 別のディレクトリで実行されたものは、そのディレクトリの前提として覚える。
+ */
+function trackBranch(
+  command: SimpleCommand,
+  directory: string | null,
+  scope: Scope,
+): void {
+  const { words } = stripWrappers(command.words);
+  const git = parseGitInvocation(words, directory);
+  if (git === null) return;
+  const target = switchedBranch(git);
+  if (target === undefined) return;
+  scope.branchState.assumed = { dir: git.dir, branch: target };
+}
+
+/** チェックアウトの値を取るオプション。 */
+const CHECKOUT_VALUE_OPTIONS: ReadonlySet<string> = new Set([
+  "-b",
+  "-B",
+  "-c",
+  "-C",
+  "--orphan",
+  "-t",
+  "--track",
+  "--conflict",
+  "--pathspec-from-file",
+]);
+
+/** ブランチを作って切り替えるオプション。 */
+const CREATE_BRANCH_OPTIONS: ReadonlySet<string> = new Set([
+  "-b",
+  "-B",
+  "-c",
+  "-C",
+  "--create",
+  "--force-create",
+  "--orphan",
+]);
+
+/**
+ * `git`の呼び出しで切り替わるブランチ名を返す。切り替わらなければundefined、
+ * 切り替わるが名前が決まらなければnullを返す。
+ */
+function switchedBranch(git: GitInvocation): string | null | undefined {
+  const { subcommand, args } = git;
+  const literal = (word: Word | undefined): string | null =>
+    word === undefined || word.dynamic ? null : word.text;
+  if (subcommand === "checkout" || subcommand === "switch") {
+    if (args.some((word) => word.text === "--")) return undefined;
+    for (let index = 0; index < args.length; index += 1) {
+      if (CREATE_BRANCH_OPTIONS.has(args[index]?.text ?? "")) {
+        return literal(args[index + 1]);
+      }
+    }
+    const operands: Word[] = [];
+    for (let index = 0; index < args.length; index += 1) {
+      const text = args[index]?.text ?? "";
+      if (!text.startsWith("-") || text === "-") {
+        const word = args[index];
+        if (word !== undefined) operands.push(word);
+      } else if (CHECKOUT_VALUE_OPTIONS.has(text)) {
+        index += 1;
+      }
+    }
+    if (args.some((word) => word.text === "-t" || word.text === "--track")) {
+      return null;
+    }
+    const first = operands[0];
+    if (first === undefined || first.text === ".") return undefined;
+    // `git checkout <ブランチ> <パス>`と複数のパスは、ブランチの切り替えではない。
+    if (subcommand === "checkout" && operands.length > 1) return undefined;
+    return first.text === "-" ? null : literal(first);
+  }
+  if (subcommand === "rebase") {
+    const operands = args.filter((word) => !word.text.startsWith("-"));
+    // `git rebase <上流> <ブランチ>`だけが、ブランチを切り替える。
+    return operands.length >= 2 ? literal(operands[1]) : undefined;
+  }
+  if (subcommand === "branch") {
+    const rename = args.some(
+      (word) => word.text === "-m" || word.text === "-M",
+    );
+    if (!rename) return undefined;
+    const operands = args.filter((word) => !word.text.startsWith("-"));
+    // 名前を1つだけ渡すと、今のブランチの名前が変わる。2つ渡すときは、どれが変わるか分からない。
+    return operands.length === 1 ? literal(operands[0]) : null;
+  }
+  return undefined;
+}
+
 /** gitの標準出力を読む時間の上限(ミリ秒)。 */
 const GIT_TIMEOUT_MS = 2000;
 
 /** `dir`でgitを実行して出力を返す。失敗、タイムアウト、空の出力ならnullを返す。 */
 function gitOutput(dir: string, args: readonly string[]): string | null {
-  const result = Bun.spawnSync(["git", "-C", dir, ...args], {
+  const result = spawnSync("git", ["-C", dir, ...args], {
     timeout: GIT_TIMEOUT_MS,
+    encoding: "utf8",
   });
-  if (!result.success) return null;
-  const output = result.stdout.toString().trim();
+  if (result.error !== undefined || result.status !== 0) return null;
+  const output = result.stdout.trim();
   return output === "" ? null : output;
 }
 
-/** gitで今のブランチ名を読む。gitが無ければ`Bun.spawnSync`が例外を投げ、フックは拒否に倒れる。 */
+/** gitで今のブランチ名を読む。読めなければnullを返し、push先が決まらないものとして拒否に倒れる。 */
 function gitCurrentBranch(dir: string): string | null {
   return gitOutput(dir, ["symbolic-ref", "--short", "-q", "HEAD"]);
 }
@@ -866,7 +932,7 @@ function gitRepoRoot(dir: string): string | null {
   return gitOutput(dir, ["rev-parse", "--show-toplevel"]);
 }
 
-if (import.meta.main) {
+if (isEntryPoint(import.meta.url)) {
   await runHookMain((input) =>
     Promise.resolve(
       evaluateBashGuard(input, {

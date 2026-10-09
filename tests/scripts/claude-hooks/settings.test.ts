@@ -98,20 +98,40 @@ describe(".claude/settings.json", () => {
     expect(slow).toEqual([]);
   });
 
+  test("does not deny mise x, which is an alias of mise exec", () => {
+    expect(
+      denyRules().filter((rule) => rule.startsWith("Bash(mise x")),
+    ).toEqual([]);
+  });
+
+  test("leaves docker exec, inspect, and config to the hook", () => {
+    const docker = denyRules().filter((rule) => rule.startsWith("Bash(docker"));
+    expect(docker).toEqual([]);
+  });
+
+  test("keeps the env dump rules as a backstop", () => {
+    expect(denyRules()).toContain("Bash(mise exec -- env:*)");
+  });
+
   test("denies reading the wmill profiles", () => {
     expect(denyRules()).toContain("Read(**/.wmill/**/remotes.ndjson)");
   });
 });
 
 describe("the registered Bash guard command", () => {
-  test("denies the tool call when CLAUDE_PROJECT_DIR is empty", () => {
-    expect(runRegistered("bash-guard", "", DENIED_COMMAND).exitCode).toBe(2);
+  test("allows the tool call when CLAUDE_PROJECT_DIR is empty", () => {
+    expect(runRegistered("bash-guard", "", DENIED_COMMAND).exitCode).toBe(0);
   });
 
-  test("denies the tool call when the launcher does not exist", () => {
+  test("allows the tool call when the launcher does not exist", () => {
     expect(
       runRegistered("bash-guard", "/nonexistent", DENIED_COMMAND).exitCode,
-    ).toBe(2);
+    ).toBe(0);
+  });
+
+  test("prints no decision when the launcher does not exist", () => {
+    const result = runRegistered("bash-guard", "/nonexistent", DENIED_COMMAND);
+    expect(result.stdout.toString()).toBe("");
   });
 
   test("names the missing launcher", () => {
@@ -119,9 +139,22 @@ describe("the registered Bash guard command", () => {
     expect(result.stderr.toString()).toContain("launcher not found");
   });
 
+  test("starts with an absolute path to sh", () => {
+    expect(bashHookCommands()[0]).toStartWith("/bin/sh -c ");
+  });
+
   test("starts the launcher with an absolute path to sh", () => {
     const command = bashHookCommands()[0] ?? "";
     expect(command).toContain('exec /bin/sh "$@"');
+  });
+
+  test("still runs with an empty PATH", () => {
+    const command = bashHookCommands()[0] ?? "exit 99";
+    const result = Bun.spawnSync(["/bin/sh", "-c", command], {
+      stdin: Buffer.from(DENIED_COMMAND),
+      env: { PATH: "", CLAUDE_PROJECT_DIR: ROOT },
+    });
+    expect(result.exitCode).toBe(0);
   });
 
   test("runs the guard when CLAUDE_PROJECT_DIR is set", () => {
@@ -139,6 +172,19 @@ describe("docs/security.md", () => {
 
   test("explains the shell mode of the prompt", () => {
     expect(security).toContain("`!`");
+  });
+
+  test("describes the node fallback of the launcher", () => {
+    expect(security).toContain("node");
+  });
+
+  test("says what happens when no runtime is found", () => {
+    expect(security).toContain("警告");
+  });
+
+  test("does not tell Claude to run a command the hook denies", () => {
+    const setup = readFileSync(join(ROOT, "docs/setup.md"), "utf8");
+    expect(setup).not.toContain("mise exec -- sh -c");
   });
 
   test("says the mise exec rule is best-effort", () => {

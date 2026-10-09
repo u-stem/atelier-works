@@ -28,6 +28,8 @@ export type SimpleCommand = {
   /** `redirects`のうち、書き込みになるもの(`>`、`>>`、`>|`、`&>`、`<>`の先)。`<`の先は含まない。 */
   readonly writeTargets: readonly Word[];
   readonly inputs: readonly Word[];
+  /** パイプで標準入力を渡してくる、すぐ前のコマンド。パイプの後ろでなければnull。 */
+  readonly pipedFrom: SimpleCommand | null;
 };
 
 export type ParseResult =
@@ -167,6 +169,8 @@ export function stripWrappers(words: readonly Word[]): StrippedCommand {
     const word = words[index];
     if (word === undefined) break;
     const text = word.text;
+    // 絶対パスで書いた前置き(`/usr/bin/env`)も、名前で見分ける。
+    const name = baseName(text);
     const transparent = TRANSPARENT_OPTIONS.get(text);
     if (ASSIGNMENT.test(text)) {
       assignments.push(word);
@@ -175,10 +179,10 @@ export function stripWrappers(words: readonly Word[]): StrippedCommand {
       index += 1;
     } else if (transparent !== undefined) {
       index = skipTransparentOptions(words, index + 1, transparent);
-    } else if (WRAPPER_VALUE_OPTIONS.has(text)) {
-      wrappers.push(text);
-      index = skipWrapperOptions(words, index + 1, text);
-    } else if (text === "mise" && isMiseExec(words[index + 1])) {
+    } else if (WRAPPER_VALUE_OPTIONS.has(name)) {
+      wrappers.push(name);
+      index = skipWrapperOptions(words, index + 1, name);
+    } else if (name === "mise" && isMiseExec(words[index + 1])) {
       wrappers.push(text);
       const read = readMiseExec(words, index + 2);
       mise ??= read.mise;
@@ -229,6 +233,16 @@ function readMiseExec(
     if (MISE_VALUE_OPTIONS.has(text)) {
       index += 1;
     } else if (!text.startsWith("-") && !text.includes("@")) {
+      // `mise exec node -- env`のように、ツール名の後ろに`--`があれば、起動するコマンドはその後ろである。
+      const later = words.findIndex(
+        (candidate, at) => at > index && candidate.text === "--",
+      );
+      if (later !== -1) {
+        return {
+          mise: { commandString: null, inner: words.slice(later + 1) },
+          next: later + 1,
+        };
+      }
       return {
         mise: { commandString: null, inner: words.slice(index) },
         next: index,
@@ -238,6 +252,10 @@ function readMiseExec(
   return { mise: { commandString: null, inner: [] }, next: words.length };
 }
 
+/**
+ * `time`、`command`、`exec`のオプションを読み飛ばす。`--`と、まとめた短いオプション(`-cl`)も読む。
+ * 値を取るオプションが並びの最後にあれば、次の語も値として飛ばす。
+ */
 function skipTransparentOptions(
   words: readonly Word[],
   start: number,
@@ -249,9 +267,14 @@ function skipTransparentOptions(
   let index = start;
   while (index < words.length) {
     const text = words[index]?.text ?? "";
-    if (options.values.has(text)) index += 2;
-    else if (options.flags.has(text)) index += 1;
-    else break;
+    if (text === "--") return index + 1;
+    if (!/^-[A-Za-z]+$/.test(text)) break;
+    const letters = [...text.slice(1)].map((letter) => `-${letter}`);
+    if (!letters.every((l) => options.flags.has(l) || options.values.has(l))) {
+      break;
+    }
+    const last = letters.at(-1) ?? "";
+    index += options.values.has(last) ? 2 : 1;
   }
   return index;
 }
@@ -314,6 +337,9 @@ class Parser {
   private words: Word[] = [];
   private redirects: Word[] = [];
   private writeTargets: Word[] = [];
+  /** 直前の区切りがパイプなら真。次に確定するコマンドが、`lastCommand`から入力を受ける。 */
+  private pipeNext = false;
+  private lastCommand: SimpleCommand | null = null;
   private redirectOperator = "";
   private redirectWrites = false;
   private text = "";
@@ -401,7 +427,13 @@ class Parser {
         return;
       case "|":
         this.endCommand();
-        this.position += 1;
+        if (this.peek(1) === "|") {
+          // `||`はパイプではない。
+          this.position += 2;
+          return;
+        }
+        this.position += this.peek(1) === "&" ? 2 : 1;
+        this.pipeNext = true;
         return;
       case "&":
         if (this.peek(1) === ">") {
@@ -575,7 +607,10 @@ class Parser {
       redirects: this.redirects,
       writeTargets: this.writeTargets,
       inputs,
+      pipedFrom: this.pipeNext ? this.lastCommand : null,
     };
+    this.pipeNext = false;
+    this.lastCommand = command;
     this.words = [];
     this.redirects = [];
     this.writeTargets = [];

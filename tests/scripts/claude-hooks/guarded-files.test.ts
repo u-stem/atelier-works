@@ -253,6 +253,29 @@ describe("find patterns are not file reads", () => {
   });
 });
 
+describe("git log pickaxe and grep values are patterns", () => {
+  test.each([
+    "git log -S mise.local.toml --oneline",
+    "git log -G mise.local.toml",
+    "git log -Smise.local.toml",
+    "git log --grep mise.local.toml",
+    "git log --grep=mise.local.toml",
+    "git log --oneline --grep=remotes.ndjson -5",
+  ])("allows %s", async (command) => {
+    expect(await decide(command)).toBe("allow");
+  });
+
+  test.each([
+    "git add mise.local.toml",
+    "git rm --cached mise.local.toml",
+    "git diff mise.local.toml",
+    "git log -p -- mise.local.toml",
+    "git log -S x -- mise.local.toml",
+  ])("denies %s", async (command) => {
+    expect(await decide(command)).toBe("deny");
+  });
+});
+
 describe("rg value options do not hide the pattern", () => {
   test.each([
     "rg --max-columns 100 mise.local.toml docs",
@@ -292,6 +315,10 @@ describe("deny reasons say what to do instead", () => {
     expect(await denyReason("cat mise.local.toml")).toContain(
       "mise run doctor",
     );
+  });
+
+  test("a secret file reference says a name inside a sentence passes", async () => {
+    expect(await denyReason("cat mise.local.toml")).toContain("sentence");
   });
 
   test("a secret file reference says how to search for the name", async () => {

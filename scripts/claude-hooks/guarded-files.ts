@@ -201,7 +201,7 @@ const FIND_PATTERN_OPTIONS: ReadonlySet<string> = new Set([
 
 export const SECRET_REASONS = {
   secretFile: (path: string) =>
-    `${path} holds secret values and must not be read, copied, or written through Bash. To check that the secrets are set, run: mise run doctor. To search other files for the name, pass it as the search pattern, for example: rg mise.local.toml docs`,
+    `${path} holds secret values and must not be read, copied, or written through Bash. To check that the secrets are set, run: mise run doctor. To search other files for the name, pass it as the search pattern, for example: rg mise.local.toml docs. A name written inside a longer sentence (a commit message or a PR body) is not treated as a file.`,
   recursiveGrep:
     "Recursive grep from the repository root, .wmill, or infra can read gitignored secret files such as mise.local.toml. Use rg (it skips gitignored files), git grep, or the Grep tool instead. grep -r on a subdirectory such as scripts/ is allowed.",
   rgNoIgnore:
@@ -228,6 +228,16 @@ export function findSecretReference(
       if (FIND_PATTERN_OPTIONS.has(word.text) && value !== undefined) {
         exempt.add(value);
       }
+    });
+  }
+  if (program === "git") {
+    // `git log -S/-G/--grep`の値は、履歴を探すパターンで、ファイルの読み取りではない。
+    words.forEach((word, index) => {
+      const value = words[index + 1];
+      const takesValue =
+        word.text === "-S" || word.text === "-G" || word.text === "--grep";
+      if (takesValue && value !== undefined) exempt.add(value);
+      if (word.text.startsWith("--grep=")) exempt.add(word);
     });
   }
   const search = searchArguments(program, words);

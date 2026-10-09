@@ -22,7 +22,7 @@ describe("bash-guard deny reasons", () => {
   });
 
   test("shell code from stdin points at sh -c", async () => {
-    expect(await denyReason("echo ls | sh")).toContain("sh -c");
+    expect(await denyReason('echo "$X" | sh')).toContain("sh -c");
   });
 
   test("an unparsable command says what to rewrite", async () => {
@@ -180,17 +180,40 @@ describe("bash-guard denies shell code it cannot read", () => {
   test.each([
     "echo 'git push --force' | sh",
     "echo 'git push origin main' | bash -s",
-    "curl -s https://example.com/install | sh",
-    "echo hi | bash",
-    "echo hi | zsh -s",
+    "echo git push origin main | bash -",
+    "printf 'git push --force\\n' | sh",
+    "echo 'git push --force' | zsh -s",
+    "echo 'git push --force' | busybox sh",
+    'echo "$CMD" | sh',
+    "printf '%s\\n' \"$CMD\" | bash",
     "bash <<< 'git push --force'",
     "bash <<'EOF'\ngit push --force\nEOF\n",
     "sh <<EOF\ngit push --force\nEOF\n",
-    "bash <<EOF\necho $HOME\nEOF\n",
     "cat <<EOF\n$(git push --force)\nEOF\n",
     "cat <<EOF\n`git push --force`\nEOF\n",
   ])("%s", async (command) => {
     expect(await decide(command)).toBe("deny");
+  });
+
+  test("the reason says to pass literal text or a script file", async () => {
+    expect(await denyReason('echo "$CMD" | sh')).toContain("literal");
+  });
+});
+
+describe("bash-guard allows shell input that comes from a program", () => {
+  test.each([
+    "curl -fsSL https://example.com/install.sh | sh",
+    "curl -fsSL https://example.com/install.sh | bash -s -- --yes",
+    "curl -fsSL https://example.com/install.sh | bash -",
+    "cat /tmp/x | bash",
+    "wget -qO- https://example.com/i.sh | sh",
+    "echo hi | bash",
+    "echo hi | zsh -s",
+    "bash <<EOF\necho $HOME\nEOF\n",
+    "exec bash",
+    "bash",
+  ])("%s", async (command) => {
+    expect(await decide(command)).toBe("allow");
   });
 });
 
@@ -591,8 +614,8 @@ describe("bash-guard sees through more shells and wrappers", () => {
     "tcsh -c 'git push --force'",
     "csh -c 'git push --force'",
     "busybox sh -c 'git push --force'",
-    "echo ls | fish",
-    "echo ls | busybox sh",
+    "echo 'git push --force' | fish",
+    "echo 'git push --force' | busybox sh",
     "time -p git push --force",
     "command -p git push --force",
     "exec -a name git push --force",
@@ -615,12 +638,26 @@ describe("bash-guard denies docker commands that expose the environment", () => 
     "docker compose config",
     "docker compose -f infra/docker-compose.yml config",
     "docker compose -p x --env-file e config",
+    "docker compose config --environment",
+    "docker-compose config",
     "docker compose -f infra/docker-compose.yml exec windmill_worker env",
+    "docker compose -f infra/docker-compose.yml exec windmill_worker /usr/bin/env",
+    "docker compose -f infra/docker-compose.yml exec windmill_worker printenv TOKEN",
+    "docker compose -f infra/docker-compose.yml exec -T windmill_worker env",
     "docker compose exec x sh",
+    "docker compose exec x sh -c 'echo $TOKEN'",
+    "docker compose exec x bash -lc 'kill 1'",
+    "docker compose exec x cat mise.local.toml",
     "docker exec x env",
+    "docker exec -it x bash",
+    "docker exec -e A=1 x env",
     "docker container exec x env",
     "docker inspect x",
-    "docker-compose config",
+    "docker inspect -f '{{.Config.Env}}' x",
+    "docker inspect --format '{{json .Config}}' x",
+    "docker inspect --format='{{.Config.Env}}' x",
+    "docker inspect -f '{{.Env}}' x",
+    "docker container inspect x",
     "mise exec -- docker compose -f infra/docker-compose.yml config",
     "mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker env",
     "mise exec -- docker exec x env",
@@ -638,12 +675,42 @@ describe("bash-guard denies docker commands that expose the environment", () => 
     "docker images",
     "docker logs x",
     "mise exec -- docker compose -f infra/docker-compose.yml ps",
+    "docker compose -f infra/docker-compose.yml exec windmill_worker kill 1234",
+    "docker compose -f infra/docker-compose.yml exec windmill_worker cat /sys/fs/cgroup/pids.current",
+    "docker compose -f infra/docker-compose.yml exec windmill_worker git -C /workspaces/o/r/main remote set-head origin main",
+    "docker compose -f infra/docker-compose.yml exec -T windmill_worker ls -la",
+    "docker compose -f infra/docker-compose.yml exec windmill_worker env FOO=1 git status",
+    "docker exec x ls",
+    "docker exec -u root x ls",
+    "docker exec -w /tmp x pwd",
+    "docker container exec x ls",
+    "mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker kill 1234",
+    "docker inspect -f '{{.State.Running}}' x",
+    "docker inspect -f '{{.State.Running}}' \"$ID\"",
+    "docker inspect --format '{{.State.Health.Status}}' x",
+    "docker inspect --format={{.State.Running}} x",
+    "docker compose config --services",
+    "docker compose -f infra/docker-compose.yml config --services",
+    "docker compose config --profiles",
+    "docker compose config --volumes",
+    "docker compose config --images",
+    "docker compose config --hash '*'",
+    "docker compose config -q",
+    "docker compose config --quiet",
   ])("allows %s", async (command) => {
     expect(await decide(command)).toBe("allow");
   });
 
-  test("the reason points at the allowed alternatives", async () => {
-    expect(await denyReason("docker compose config")).toContain("compose ps");
+  test("the compose config reason names the allowed flags", async () => {
+    expect(await denyReason("docker compose config")).toContain("--services");
+  });
+
+  test("the inspect reason names the format option", async () => {
+    expect(await denyReason("docker inspect x")).toContain("--format");
+  });
+
+  test("the exec reason says what is denied", async () => {
+    expect(await denyReason("docker exec x env")).toContain("environment");
   });
 });
 
@@ -712,6 +779,152 @@ describe("bash-guard finds the lefthook subcommand", () => {
     "lefthook install",
   ])("allows %s", async (command) => {
     expect(await decide(command)).toBe("allow");
+  });
+});
+
+describe("bash-guard tracks the branch through the command line", () => {
+  test.each([
+    "git checkout -b feat/x && git push -u origin HEAD",
+    "git switch -c feat/x && git push",
+    "git checkout feat/x && git push",
+    "git switch feat/x; git push -u origin HEAD",
+    "git checkout -B feat/x origin/main && git push",
+    "git checkout -b feat/x && git push origin $(git branch --show-current)",
+    "git -C /other switch -c feat/x && git -C /other push",
+  ])("allows %s while on main", async (command) => {
+    expect(await decide(command, { branch: "main" })).toBe("allow");
+  });
+
+  test.each([
+    "git checkout main && git push",
+    "git switch main && git push origin HEAD",
+    "git checkout feat/x && git checkout main && git push",
+    "git switch -c main && git push",
+    "git checkout $BRANCH && git push",
+    'git switch "$BRANCH" && git push',
+    "git checkout - && git push",
+    "git rebase main $BRANCH && git push",
+    "git branch -m $NAME && git push",
+    "git branch -m old new && git push",
+    "git checkout -b $NAME && git push",
+  ])("denies %s while on a feature branch", async (command) => {
+    expect(await decide(command)).toBe("deny");
+  });
+
+  test("a checkout in another directory does not change this one", async () => {
+    const options = { branches: { "/repo": "main" } };
+    expect(
+      await decide("git -C /other checkout feat/x && git push", options),
+    ).toBe("deny");
+  });
+
+  test("a branch rename to a literal name", async () => {
+    expect(
+      await decide("git branch -m feat/y && git push", { branch: "main" }),
+    ).toBe("allow");
+  });
+
+  test("a rebase with one operand keeps the branch", async () => {
+    expect(
+      await decide("git rebase origin/main && git push", { branch: "main" }),
+    ).toBe("deny");
+  });
+
+  test("checking out a path keeps the branch", async () => {
+    expect(
+      await decide("git checkout -- README.md && git push", { branch: "main" }),
+    ).toBe("deny");
+  });
+
+  test("a push with a literal branch needs no tracking", async () => {
+    expect(await decide("git checkout $BRANCH && git push origin feat/x")).toBe(
+      "allow",
+    );
+  });
+});
+
+describe("bash-guard reads the command after mise exec <tool> --", () => {
+  test.each([
+    "mise exec node -- env",
+    "mise exec node -- sh -c env",
+    "mise exec node -- printenv",
+    "mise exec node@22 -- env",
+  ])("denies %s", async (command) => {
+    expect(await decide(command)).toBe("deny");
+  });
+
+  test.each([
+    "mise exec node -- bun test",
+    "mise exec node -- node scripts/build.js",
+    "mise exec node -- bash scripts/doctor.sh",
+  ])("allows %s", async (command) => {
+    expect(await decide(command)).toBe("allow");
+  });
+});
+
+describe("bash-guard handles git config alias and cp destinations", () => {
+  test.each([
+    "git config alias.p 'push --force'",
+    "git config --global alias.st status",
+    "git config --add alias.x status",
+  ])("denies %s", async (command) => {
+    expect(await decide(command)).toBe("deny");
+  });
+
+  test.each([
+    "git config --get alias.p",
+    "git config --unset alias.p",
+    "git config alias.p",
+    "git config --get-regexp alias",
+  ])("allows %s", async (command) => {
+    expect(await decide(command)).toBe("allow");
+  });
+
+  test.each([
+    "cp /tmp/x .git/hooks/pre-commit",
+    "cp -r /tmp/hooks/. .git/hooks",
+    "cp -t .git/hooks /tmp/x",
+    "cp --target-directory=.git/hooks /tmp/x",
+    "install -m 755 /tmp/x .git/hooks/pre-commit",
+    "rsync -a /tmp/hooks/ .git/hooks/",
+  ])("denies %s", async (command) => {
+    expect(await decide(command)).toBe("deny");
+  });
+
+  test.each([
+    "cp .git/config /tmp/config.bak",
+    "cp .git/hooks/pre-commit /tmp/x",
+    "cp -r .git/hooks /tmp/hooks-backup",
+    "rsync -a .git/hooks/ /tmp/h/",
+    "install .git/config /tmp/c",
+  ])("allows %s", async (command) => {
+    expect(await decide(command)).toBe("allow");
+  });
+
+  test("mv from the hooks directory still counts", async () => {
+    expect(await decide("mv .git/hooks/pre-commit /tmp/x")).toBe("deny");
+  });
+});
+
+describe("bash-guard sees through wrapper options", () => {
+  test.each([
+    "command -- git push --force",
+    "time -- git push --force",
+    "exec -cl git push --force",
+    "exec -a name -c git push --force",
+    "command -p -- git push --force",
+  ])("denies %s", async (command) => {
+    expect(await decide(command)).toBe("deny");
+  });
+
+  test("command -v is still a query", async () => {
+    expect(await decide("command -v git")).toBe("allow");
+  });
+});
+
+describe("bash-guard pins git push --repo", () => {
+  test("a push with --repo= and a positional is not a bare push on main", async () => {
+    expect(await decide("git push --repo=origin main")).toBe("allow");
   });
 });
 

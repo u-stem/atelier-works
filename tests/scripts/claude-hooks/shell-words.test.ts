@@ -416,6 +416,76 @@ describe("stripWrappers with mise exec", () => {
   });
 });
 
+/** 最後の単純コマンドの、パイプの前のコマンドの語を返す。 */
+function pipedFromTexts(line: string): string[] | null {
+  const result = parseCommandLine(line);
+  if (!result.ok) throw new Error(result.error);
+  const source = result.commands.at(-1)?.pipedFrom;
+  return source ? source.words.map((word) => word.text) : null;
+}
+
+describe("pipelines", () => {
+  test("records the command before a pipe", () => {
+    expect(pipedFromTexts("echo hi | sh")).toEqual(["echo", "hi"]);
+  });
+
+  test("records the command before a |& pipe", () => {
+    expect(pipedFromTexts("echo hi |& sh")).toEqual(["echo", "hi"]);
+  });
+
+  test("records the previous stage of a longer pipeline", () => {
+    expect(pipedFromTexts("echo hi | cat | sh")).toEqual(["cat"]);
+  });
+
+  test("records the command across a newline after the pipe", () => {
+    expect(pipedFromTexts("echo hi |\nsh")).toEqual(["echo", "hi"]);
+  });
+
+  test("records nothing after &&", () => {
+    expect(pipedFromTexts("echo hi && sh")).toBeNull();
+  });
+
+  test("records nothing after ||", () => {
+    expect(pipedFromTexts("echo hi || sh")).toBeNull();
+  });
+
+  test("records nothing after a semicolon", () => {
+    expect(pipedFromTexts("echo hi; sh")).toBeNull();
+  });
+
+  test("keeps || out of the commands", () => {
+    expect(commandTexts("a || b")).toEqual([["a"], ["b"]]);
+  });
+});
+
+describe("stripWrappers with paths and --", () => {
+  test("strips env given by an absolute path", () => {
+    const stripped = stripWrappers(
+      words("/usr/bin/env", "FOO=1", "git", "push"),
+    );
+    expect(stripped.words.map((word) => word.text)).toEqual(["git", "push"]);
+  });
+
+  test("records an absolute env as a wrapper", () => {
+    expect(stripWrappers(words("/usr/bin/env")).wrappers).toEqual(["env"]);
+  });
+
+  test("uses the command after -- when it follows a tool", () => {
+    const stripped = stripWrappers(words("mise", "exec", "node", "--", "env"));
+    expect(stripped.mise?.inner.map((word) => word.text)).toEqual(["env"]);
+  });
+
+  test("skips -- after command", () => {
+    const stripped = stripWrappers(words("command", "--", "git", "push"));
+    expect(stripped.words.map((word) => word.text)).toEqual(["git", "push"]);
+  });
+
+  test("skips a cluster of flags after exec", () => {
+    const stripped = stripWrappers(words("exec", "-cl", "git", "push"));
+    expect(stripped.words.map((word) => word.text)).toEqual(["git", "push"]);
+  });
+});
+
 describe("current branch substitutions", () => {
   test("accepts git branch --show-current as a static word", () => {
     const result = parseCommandLine(
