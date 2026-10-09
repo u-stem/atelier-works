@@ -9,7 +9,6 @@ import {
   buildApprovalCommentFailedMessage,
   buildApprovedComment,
   buildImplementLaunchNoticeMessage,
-  buildSupersededComment,
   decideRejectedOutcome,
   type RejectedRetryDeps,
   readRequestAttempt,
@@ -351,12 +350,6 @@ describe("applyApprovedSideEffects", () => {
     expect(result.implement_started).toBe(false);
   });
 
-  test("reports a superseded outcome when the approved item was cancelled", async () => {
-    const h = approvedDeps({ startImplement: async () => "superseded" });
-    const result = await applyApprovedSideEffects(h.deps);
-    expect(result).toEqual({ outcome: "superseded", implement_started: false });
-  });
-
   test("reports that implement started", async () => {
     const result = await applyApprovedSideEffects(approvedDeps().deps);
     expect(result).toEqual({ outcome: "approved", implement_started: true });
@@ -537,19 +530,5 @@ describe("readRequestAttempt", () => {
 
   test("falls back when attempt is not a number", () => {
     expect(readRequestAttempt({ attempt: "2" }, 1)).toBe(1);
-  });
-});
-
-describe("buildSupersededComment", () => {
-  test("states that the earlier approval was superseded by the newer cycle", () => {
-    expect(buildSupersededComment()).toContain(
-      "ラベルを付け直して始まった新しいサイクルに置き換えられた",
-    );
-  });
-
-  test("states that the new requirements need approval again", () => {
-    expect(buildSupersededComment()).toContain(
-      "新しい要件定義は、あらためて承認が必要です",
-    );
   });
 });

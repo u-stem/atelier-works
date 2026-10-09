@@ -23,6 +23,7 @@ import {
   addNoticeUnlessUnresolved,
   expireApprovalRequestIfPending,
   getWorkItem,
+  type InsertedIssueWorkItem,
   insertIssueWorkItemUnlessActive,
   listActive,
   listExpiredPendingApprovalRequests,
@@ -59,6 +60,7 @@ import {
   type ReconcileGithubState,
   readJobState,
 } from "./lib/poll_support.ts";
+import { postSupersededComments } from "./lib/supersede_support.ts";
 import type { FactoryConfig, WorkItem } from "./lib/types.ts";
 import {
   type CommandRunner,
@@ -442,7 +444,7 @@ const defaultRegisterDeps: RegisterClaimedIssueDeps = {
 };
 
 /**
- * 取得したIssueの作業項目を登録し、そのIDを返す。
+ * 取得したIssueの作業項目を登録し、そのIDと、同じ文で取り消した`approved`の作業項目を返す。
  * 同じIssueの稼働中の作業項目が既にあって挿入されなかったときは、`null`を返す。
  * 並行する取得に先を越された場合で、そちらが作業を受け持つので、
  * `claim_race_lost`のnoticeを残すだけで、人には知らせない。
@@ -466,16 +468,16 @@ export async function registerClaimedIssue(
     readonly log: Logger;
   },
   deps: RegisterClaimedIssueDeps = defaultRegisterDeps,
-): Promise<number | null> {
+): Promise<InsertedIssueWorkItem | null> {
   const { candidate } = input;
-  let workItemId: number | null;
+  let registered: InsertedIssueWorkItem | null;
   try {
     const cycle = await deps.nextCycleForIssue(
       candidate.owner,
       candidate.repo,
       candidate.number,
     );
-    workItemId = await deps.insertWorkItem({
+    registered = await deps.insertWorkItem({
       cycle,
       source: "issue",
       kind: "issue",
@@ -512,7 +514,7 @@ export async function registerClaimedIssue(
     );
     throw err;
   }
-  if (workItemId === null) {
+  if (registered === null) {
     await recordClaimRaceLost(
       `${candidate.owner}/${candidate.repo}#${String(candidate.number)}`,
       ACTIVE_WORK_ITEM_EXISTS_REASON,
@@ -520,7 +522,7 @@ export async function registerClaimedIssue(
       input.log,
     );
   }
-  return workItemId;
+  return registered;
 }
 
 /**
@@ -800,14 +802,27 @@ async function claimAndStart(
   });
   if (!claimed) return "skipped";
 
-  const workItemId = await registerClaimedIssue({
+  const registered = await registerClaimedIssue({
     candidate,
     viewerLogin,
     instanceName: config.instance_name,
     discordWebhookUrl,
     log,
   });
-  if (workItemId === null) return "skipped";
+  if (registered === null) return "skipped";
+  const workItemId = registered.id;
+
+  // 新しいサイクルの作業項目を挿入した文の中で、承認済みの古い項目は取り消されている。
+  await postSupersededComments({
+    client,
+    owner: candidate.owner,
+    repo: candidate.repo,
+    issueNumber: candidate.number,
+    viewerLogin,
+    newWorkItemId: workItemId,
+    superseded: registered.superseded,
+    log,
+  });
 
   await notifyBestEffort(
     discordWebhookUrl,

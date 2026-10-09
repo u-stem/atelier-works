@@ -39,7 +39,7 @@ function fakeDeps(overrides: Partial<RegisterClaimedIssueDeps> = {}): {
   const notices: Notice[] = [];
   const deps: RegisterClaimedIssueDeps = {
     nextCycleForIssue: async () => 1,
-    insertWorkItem: async () => 77,
+    insertWorkItem: async () => ({ id: 77, superseded: [] }),
     addNoticeUnlessUnresolved: async (record) => {
       notices.push({ kind: record.kind, message: record.message });
       return notices.length;
@@ -89,7 +89,17 @@ function insertConflicts(): Partial<RegisterClaimedIssueDeps> {
 describe("registerClaimedIssue", () => {
   test("returns the id of the registered work item", async () => {
     const { deps } = fakeDeps();
-    expect(await register(deps)).toBe(77);
+    expect((await register(deps))?.id).toBe(77);
+  });
+
+  test("returns the work items that the new cycle superseded", async () => {
+    const { deps } = fakeDeps({
+      insertWorkItem: async () => ({
+        id: 77,
+        superseded: [{ id: 5, attempt: 2 }],
+      }),
+    });
+    expect((await register(deps))?.superseded).toEqual([{ id: 5, attempt: 2 }]);
   });
 
   test("sends no notification when the registration succeeds", async () => {

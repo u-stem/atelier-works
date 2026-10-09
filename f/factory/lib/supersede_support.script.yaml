@@ -1,0 +1,9 @@
+summary: '[LIB] 承認の取り消しのコメント'
+description: 内部ライブラリです。直接実行するものではありません。新しいサイクルが始まって承認済みの作業項目を取り消したときに、Issueへ投稿するコメントを扱います。
+lock: '!inline f/factory/lib/supersede_support.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

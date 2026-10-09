@@ -14,6 +14,7 @@ import {
 import { loadConfig } from "../lib/config.ts";
 import {
   addNoticeUnlessUnresolved,
+  type InsertedIssueWorkItem,
   insertIssueWorkItemUnlessActive,
   setFlowJobId,
 } from "../lib/db.ts";
@@ -21,6 +22,7 @@ import { notifyBestEffort } from "../lib/discord.ts";
 import { claimIssue, type GhClient, getViewer } from "../lib/github.ts";
 import { parseFlowJobId } from "../lib/implement_launch_support.ts";
 import { type Logger, logger } from "../lib/log.ts";
+import { postSupersededComments } from "../lib/supersede_support.ts";
 import { assertGitHubName } from "../lib/types.ts";
 import { runCommand } from "../lib/workspace.ts";
 
@@ -140,7 +142,7 @@ const defaultInsertDeps: ManualIntakeInsertDeps = {
 };
 
 /**
- * 手動投入のIssueの作業項目を登録し、そのIDを返す。
+ * 手動投入のIssueの作業項目を登録し、そのIDと、同じ文で取り消した`approved`の作業項目を返す。
  * 同じIssueの稼働中の作業項目が既にあって挿入されなかったときは、`null`を返す。
  * 並行する取得に先を越された場合で、そちらが作業を受け持つので、
  * `poll_issues`と同じく`claim_race_lost`のnoticeを残すだけで、人には知らせない。
@@ -158,8 +160,8 @@ export async function registerManualIntakeWorkItem(
     readonly log: Logger;
   },
   deps: ManualIntakeInsertDeps = defaultInsertDeps,
-): Promise<number | null> {
-  const workItemId = await deps.insertWorkItem({
+): Promise<InsertedIssueWorkItem | null> {
+  const registered = await deps.insertWorkItem({
     cycle: 1,
     source: "manual",
     kind: "issue",
@@ -179,7 +181,7 @@ export async function registerManualIntakeWorkItem(
     head_sha: null,
     parent_work_item_id: null,
   });
-  if (workItemId === null) {
+  if (registered === null) {
     await recordClaimRaceLost(
       `${input.owner}/${input.repo}#${String(input.issueNumber)}`,
       ACTIVE_WORK_ITEM_EXISTS_REASON,
@@ -187,7 +189,7 @@ export async function registerManualIntakeWorkItem(
       input.log,
     );
   }
-  return workItemId;
+  return registered;
 }
 
 export async function main(
@@ -223,7 +225,7 @@ export async function main(
     return manualIntakeSkippedResult(issue_number, issue_url, claim.reason);
   }
 
-  const workItemId = await registerManualIntakeWorkItem({
+  const registered = await registerManualIntakeWorkItem({
     owner,
     repo,
     issueNumber: issue_number,
@@ -233,13 +235,26 @@ export async function main(
     viewerLogin: viewer.login,
     log,
   });
-  if (workItemId === null) {
+  if (registered === null) {
     return manualIntakeSkippedResult(
       issue_number,
       issue_url,
       ACTIVE_WORK_ITEM_EXISTS_REASON,
     );
   }
+  const workItemId = registered.id;
+
+  // 新しいサイクルの作業項目を挿入した文の中で、承認済みの古い項目は取り消されている。
+  await postSupersededComments({
+    client,
+    owner,
+    repo,
+    issueNumber: issue_number,
+    viewerLogin: viewer.login,
+    newWorkItemId: workItemId,
+    superseded: registered.superseded,
+    log,
+  });
 
   // 応答がジョブIDでなければ例外にし、起動の失敗と同じくステップを失敗させて`on_error_flow`に任せる。
   const flowJobId = parseFlowJobId(

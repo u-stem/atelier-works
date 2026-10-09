@@ -80,7 +80,7 @@ export function activeIssueConflictError(
   );
   const which = other === undefined ? "" : ` (id ${String(other.id)})`;
   return new Error(
-    `retry_work_item: another work item${which} is active for this Issue; retry after it finishes`,
+    `retry_work_item: another work item${which} is active for this Issue, retry after it finishes`,
   );
 }
 

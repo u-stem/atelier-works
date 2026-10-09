@@ -377,6 +377,15 @@ export async function insertWorkItem(
   return parseId(row.id, "id");
 }
 
+/** `insertIssueWorkItemUnlessActive`の結果。`superseded`は、同じ文で取り消した`approved`の作業項目。 */
+export type InsertedIssueWorkItem = {
+  readonly id: number;
+  readonly superseded: readonly {
+    readonly id: number;
+    readonly attempt: number;
+  }[];
+};
+
 /**
  * Issueの作業項目を挿入し、そのIDを返す。同じIssueに終端でない作業項目が既にあるときは、
  * 部分一意インデックス`work_items_active_issue_key`により挿入せず、`null`を返す。
@@ -384,28 +393,63 @@ export async function insertWorkItem(
  * 一意制約への違反も`null`になる。どちらも、同じIssueの別の取得が先に作業項目を作った場合である。
  * `nextCycleForIssue`の読み取りと挿入は1つの取引ではないため、並行する取得の
  * 最後の防御はこの制約である。DBを共有するインスタンスの間で働く。
+ *
+ * 挿入できたときは、同じ文の中で、同じIssueの`approved`の`issue`作業項目をすべて`cancelled`へ移し、
+ * `factory.work_item_events`に行を残す。新しいサイクルが始まったので、古い承認は使われないためである。
+ * `approved`は終端で、稼働中のIssueの一意インデックスの対象外なので、
+ * `implement_enabled`が無効の間は、承認済みの項目が長く残りうる。
+ * 挿入が負けたときは、何も取り消さない。取り消した項目は`superseded`に入れて返す。
  */
 export async function insertIssueWorkItemUnlessActive(
   item: NewWorkItem,
   sql: SqlClient = defaultSqlClient,
-): Promise<number | null> {
+): Promise<InsertedIssueWorkItem | null> {
   const rows = await sql`
-    INSERT INTO factory.work_items (
-      cycle, source, kind, owner, repo, issue_number, issue_url, pr_number,
-      title, body, status, attempt, claimed_by, flow_job_id, resume_url,
-      cancel_url, head_sha, parent_work_item_id
-    ) VALUES (
-      ${item.cycle}::integer, ${item.source}, ${item.kind}, ${item.owner}, ${item.repo},
-      ${item.issue_number}::integer, ${item.issue_url}, ${item.pr_number}::integer, ${item.title},
-      ${item.body}, ${item.status}, ${item.attempt}::integer, ${item.claimed_by},
-      ${item.flow_job_id}, ${item.resume_url}, ${item.cancel_url}, ${item.head_sha},
-      ${item.parent_work_item_id}::bigint
+    WITH inserted AS (
+      INSERT INTO factory.work_items (
+        cycle, source, kind, owner, repo, issue_number, issue_url, pr_number,
+        title, body, status, attempt, claimed_by, flow_job_id, resume_url,
+        cancel_url, head_sha, parent_work_item_id
+      ) VALUES (
+        ${item.cycle}::integer, ${item.source}, ${item.kind}, ${item.owner}, ${item.repo},
+        ${item.issue_number}::integer, ${item.issue_url}, ${item.pr_number}::integer, ${item.title},
+        ${item.body}, ${item.status}, ${item.attempt}::integer, ${item.claimed_by},
+        ${item.flow_job_id}, ${item.resume_url}, ${item.cancel_url}, ${item.head_sha},
+        ${item.parent_work_item_id}::bigint
+      )
+      ON CONFLICT DO NOTHING
+      RETURNING id, owner, repo, issue_number
+    ),
+    cancelled AS (
+      UPDATE factory.work_items AS wi
+      SET status = 'cancelled', updated_at = now()
+      FROM inserted
+      WHERE wi.status = 'approved' AND wi.kind = 'issue'
+        AND wi.owner = inserted.owner AND wi.repo = inserted.repo AND wi.issue_number = inserted.issue_number
+        AND wi.id <> inserted.id
+      RETURNING wi.id, wi.attempt, inserted.id AS new_id
+    ),
+    recorded AS (
+      INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note)
+      SELECT id, 'approved', 'cancelled', 'superseded by a newer cycle (work item ' || new_id || ')'
+      FROM cancelled
+      RETURNING work_item_id
     )
-    ON CONFLICT DO NOTHING
-    RETURNING id
+    SELECT inserted.id AS id, cancelled.id AS superseded_id, cancelled.attempt AS superseded_attempt
+    FROM inserted
+    LEFT JOIN cancelled ON true
   `.fetch();
-  const row = rows[0];
-  return row === undefined ? null : parseId(row.id, "id");
+  const first = rows[0];
+  if (first === undefined) return null;
+  const superseded: { id: number; attempt: number }[] = [];
+  for (const row of rows) {
+    if (row.superseded_id === null || row.superseded_id === undefined) continue;
+    superseded.push({
+      id: parseId(row.superseded_id, "superseded_id"),
+      attempt: parseNumericLike(row.superseded_attempt, "superseded_attempt"),
+    });
+  }
+  return { id: parseId(first.id, "id"), superseded };
 }
 
 const ACTIVE_ISSUE_INDEX_NAME = "work_items_active_issue_key";
@@ -422,39 +466,6 @@ export function isActiveIssueUniqueViolation(err: unknown): boolean {
   // windmill-clientは、500以外のAPIのエラーでは、サーバーの文を`body`に入れる。
   const body: unknown = Reflect.get(err, "body");
   return typeof body === "string" && body.includes(ACTIVE_ISSUE_INDEX_NAME);
-}
-
-/**
- * `approved`の作業項目を、同じIssueの稼働中の作業項目に置き換えられたものとして
- * `cancelled`へ移し、`factory.work_item_events`に行を残す。
- * 置き換えた側の稼働中の作業項目が、同じIssueに実際に残っているときだけ移す。
- * 残っていなければ(先に終わった、取り消されたなど)、何もせず`false`を返す。
- * 移した場合は`true`を返す。1つの文で判定と更新を行い、判定と更新の間に割り込ませない。
- */
-export async function cancelSupersededApprovedWorkItem(
-  id: number,
-  note: string | null,
-  sql: SqlClient = defaultSqlClient,
-): Promise<boolean> {
-  const terminal: string[] = [...TERMINAL_WORK_ITEM_STATUSES];
-  const rows = await sql`
-    WITH updated AS (
-      UPDATE factory.work_items AS wi
-      SET status = 'cancelled', updated_at = now()
-      WHERE wi.id = ${id} AND wi.status = 'approved' AND wi.kind = 'issue'
-        AND EXISTS (
-          SELECT 1 FROM factory.work_items o
-          WHERE o.owner = wi.owner AND o.repo = wi.repo AND o.issue_number = wi.issue_number
-            AND o.kind = 'issue' AND o.id <> wi.id AND o.status != ALL(${terminal})
-        )
-      RETURNING wi.id
-    )
-    INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note)
-    SELECT updated.id, 'approved', 'cancelled', ${note}
-    FROM updated
-    RETURNING work_item_id
-  `.fetch();
-  return rows.length > 0;
 }
 
 /**

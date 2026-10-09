@@ -105,11 +105,8 @@ export async function assertImplementLease(
 }
 
 export type StartImplementDeps = {
-  /**
-   * `updateStatusIfCurrentClearingFlowJobId`で`approved`から`implementing`へ移し、`flow_job_id`を空にする。
-   * 新しいサイクルに置き換えられて`approved`の項目を取り消したときは、`"superseded"`を返す。
-   */
-  readonly casToImplementing: () => Promise<boolean | "superseded">;
+  /** `updateStatusIfCurrentClearingFlowJobId`で`approved`から`implementing`へ移し、`flow_job_id`を空にする。 */
+  readonly casToImplementing: () => Promise<boolean>;
   /** `runFlowAsync(IMPLEMENT_FLOW_PATH, { work_item_id })`の戻り値をそのまま返す。ジョブIDの解析は`startImplement`が行う。 */
   readonly launchFlow: () => Promise<string>;
   /** `setFlowJobIdIfUnset`でジョブIDを記録する。別の実行が先にリースを取っていれば`false`を返す。 */
@@ -130,13 +127,11 @@ export type StartImplementDeps = {
  * `flow_holds_lease`は、起動がエラーを返したが、フローが既にリースを取っていた
  * (または別の処理が作業項目を動かしていた)ことを表す。
  * `cas_failed`は、`approved`から`implementing`への比較交換そのものが例外を投げたことを表す。
- * `superseded`は、承認の後に新しいサイクルが始まったため、`approved`の項目を取り消したことを表す。
  */
 export type StartImplementOutcome =
   | "started"
   | "started_without_job_id"
   | "not_moved"
-  | "superseded"
   | "cas_failed"
   | "launch_failed"
   | "flow_holds_lease";
@@ -158,55 +153,6 @@ async function attempt(
   }
 }
 
-export type SupersedeDeps = {
-  /** `updateStatusIfCurrentClearingFlowJobId`で`approved`から`implementing`へ移す。 */
-  readonly casToImplementing: () => Promise<boolean>;
-  /** 例外が、稼働中のIssueの作業項目の一意インデックスへの違反か(`isActiveIssueUniqueViolation`)。 */
-  readonly isActiveIssueConflict: (err: unknown) => boolean;
-  /**
-   * `approved`の作業項目を、同じIssueの稼働中の作業項目に置き換えられたものとして`cancelled`へ移す
-   * (`cancelSupersededApprovedWorkItem`)。稼働中の作業項目が残っていなければ移さず`false`を返す。
-   */
-  readonly cancelSuperseded: () => Promise<boolean>;
-  /** 置き換えたことを伝えるコメントをIssueに投稿する。 */
-  readonly postSupersededComment: () => Promise<void>;
-  readonly log: (message: string, fields: Record<string, unknown>) => void;
-};
-
-/**
- * `approved`から`implementing`への移行を行う。
- * `approved`は終端で、稼働中のIssueの一意インデックスの対象外なので、承認の後にIssueへ
- * ラベルが付け直されると、新しいサイクルの作業項目が先に稼働中になる。
- * このときの移行は一意インデックスに拒まれる。
- * - 同じIssueに稼働中の作業項目が残っていれば、古い`approved`の項目を
- *   新しいサイクルに置き換えられたものとして`cancelled`へ移し、ログを残して`"superseded"`を返す。
- *   移行のイベントは作業項目に残る。Issueへのコメントを投稿できなくても、取り消しは戻さない。
- *   人の対応は要らず、新しいサイクルがそのまま進む。
- * - 稼働中の作業項目が既に残っていなければ(先に終わったなど)、取り消さずに移行をもう1回試す。
- *   2回目も拒まれたときは、その例外を投げる。
- * 一意インデックスの違反以外の例外は、そのまま投げる。
- */
-export async function casToImplementingOrSupersede(
-  deps: SupersedeDeps,
-): Promise<boolean | "superseded"> {
-  try {
-    return await deps.casToImplementing();
-  } catch (err) {
-    if (!deps.isActiveIssueConflict(err)) throw err;
-    const cancelled = await deps.cancelSuperseded();
-    if (!cancelled) return await deps.casToImplementing();
-    deps.log("approved work item superseded by a newer cycle", {});
-    try {
-      await deps.postSupersededComment();
-    } catch (commentErr) {
-      deps.log("superseded comment could not be posted", {
-        error: messageOf(commentErr),
-      });
-    }
-    return "superseded";
-  }
-}
-
 /**
  * 作業項目を`approved`から`implementing`へ移し、implementフローを起動して、
  * そのジョブIDを記録する。例外は投げず、結果を`StartImplementOutcome`で返す。
@@ -217,10 +163,8 @@ export async function casToImplementingOrSupersede(
  * フローのprepareが自分のルートジョブIDで取る。
  *
  * 副作用ごとに`try`を分け、1つが失敗しても後続の記録を飛ばさない。
- * - 状態の移行が`"superseded"`を返した場合は、承認の後に新しいサイクルが始まり、
- *   `approved`の項目は取り消されている。`superseded`を返して何もしない。
  * - 状態の移行が`false`を返した場合は、`not_moved`を返して何もしない。
- *   別の処理(`retry_work_item`)が作業項目を動かしたためで、
+ *   別の処理(`retry_work_item`や、新しいサイクルの挿入による取り消し)が作業項目を動かしたためで、
  *   ここで`needs_human`へ移すと実行中のフローの状態を上書きしてしまう。
  * - 状態の移行が例外を投げた場合は、`job_failures`への記録(stepは`cas`)とnoticeの追加を行い、`cas_failed`を返す。
  *   作業項目は終端の`approved`のまま残り、reconcileの対象にならないので、人が再開するしかないため。
@@ -238,7 +182,7 @@ export async function casToImplementingOrSupersede(
 export async function startImplement(
   deps: StartImplementDeps,
 ): Promise<StartImplementOutcome> {
-  let moved: boolean | "superseded" = false;
+  let moved = false;
   try {
     moved = await deps.casToImplementing();
   } catch (err) {
@@ -252,7 +196,6 @@ export async function startImplement(
     await attempt(deps, "addNotice", () => deps.addNotice(reason));
     return "cas_failed";
   }
-  if (moved === "superseded") return "superseded";
   if (!moved) return "not_moved";
 
   let jobId: string;

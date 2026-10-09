@@ -7,10 +7,8 @@ import { buildConsoleUrl } from "../lib/approval_support.ts";
 import { loadConfig } from "../lib/config.ts";
 import {
   addNotice,
-  cancelSupersededApprovedWorkItem,
   getApprovalRequest,
   getWorkItem,
-  isActiveIssueUniqueViolation,
   recordFailure,
   setFlowJobIdIfUnset,
   updateStatusIfCurrent,
@@ -21,7 +19,6 @@ import { notify, notifyBestEffort } from "../lib/discord.ts";
 import { commentIssue, type GhClient, getViewer } from "../lib/github.ts";
 import { REQUIREMENTS_REGENERATION_FAILED_REASON } from "../lib/implement_finish_support.ts";
 import {
-  casToImplementingOrSupersede,
   parseFlowJobId,
   type StartImplementOutcome,
   startImplement,
@@ -35,7 +32,6 @@ import { describeReason, nextActionFor } from "./pr_workflow_support.ts";
 
 export type RequirementsApplyOutcome =
   | "approved"
-  | "superseded"
   | "retrying"
   | "needs_human"
   | "no_op";
@@ -70,14 +66,6 @@ export function buildApprovedComment(
   workItemId: number,
 ): string {
   return `要件定義が承認されました。[Consoleで要件定義を開く](${consoleUrl})(work_item_id: ${String(workItemId)})`;
-}
-
-/**
- * 承認の後に新しいサイクルが始まり、承認済みの作業項目を取り消したときに、Issueへ投稿するコメントを作る。
- * 副作用は無い。承認のコメントと同じく、投稿者の目印となる行頭のタグは付けない。
- */
-export function buildSupersededComment(): string {
-  return "先の承認は、ラベルを付け直して始まった新しいサイクルに置き換えられたため、取り消しました。新しい要件定義は、あらためて承認が必要です。";
 }
 
 /**
@@ -175,9 +163,6 @@ export async function applyApprovedSideEffects(
   if (deps.startImplement === null)
     return { outcome: "approved", implement_started: false };
   const launched = await deps.startImplement();
-  if (launched === "superseded") {
-    return { outcome: "superseded", implement_started: false };
-  }
   return {
     outcome: "approved",
     implement_started:
@@ -448,35 +433,12 @@ async function run(
     const launchImplement = (): Promise<StartImplementOutcome> =>
       startImplement({
         casToImplementing: () =>
-          casToImplementingOrSupersede({
-            casToImplementing: () =>
-              updateStatusIfCurrentClearingFlowJobId(
-                workItem.id,
-                "approved",
-                "implementing",
-                null,
-              ),
-            isActiveIssueConflict: isActiveIssueUniqueViolation,
-            cancelSuperseded: () =>
-              cancelSupersededApprovedWorkItem(
-                workItem.id,
-                "superseded by a newer cycle",
-              ),
-            postSupersededComment: async () => {
-              await commentIssue(
-                client,
-                workItem.owner,
-                workItem.repo,
-                issueNumber,
-                `issue-superseded-${String(attempt)}`,
-                workItem.id,
-                buildSupersededComment(),
-                viewer.login,
-              );
-            },
-            log: (message, fields) =>
-              log.warn(message, { work_item_id: workItem.id, ...fields }),
-          }),
+          updateStatusIfCurrentClearingFlowJobId(
+            workItem.id,
+            "approved",
+            "implementing",
+            null,
+          ),
         launchFlow: () =>
           wmill.runFlowAsync(IMPLEMENT_FLOW_PATH, {
             work_item_id: workItem.id,

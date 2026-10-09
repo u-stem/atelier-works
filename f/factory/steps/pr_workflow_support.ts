@@ -3575,6 +3575,16 @@ function worktreeLockHeldInRunNextAction(
 }
 
 const REASON_RULES: readonly ReasonRule[] = [
+  // 稼働中のIssueの部分一意インデックス(`work_items_active_issue_key`)への違反と、
+  // `retry_work_item`が同じ理由で出す拒否。同じIssueで別のサイクルが稼働中なので、
+  // 人の操作は要らず、そのサイクルが進むのを待つ。
+  {
+    pattern:
+      /work_items_active_issue_key|another work item (?:\(id \d+\) )?is active for this Issue/,
+    describe: () => "同じIssueで、別のサイクルが稼働中です",
+    nextAction: () =>
+      "操作は要りません。稼働中のサイクルの承認依頼か完了を待ってください",
+  },
   // pr_fix_prepare.tsの`evaluatePrFixSafetyGuards` / `evaluateRepoAllowedGuard`。
   // 準備の関門は修正の前に`blocked`で止めるので、再実行は修正のラウンドを使わない`retry_work_item`にする。
   {

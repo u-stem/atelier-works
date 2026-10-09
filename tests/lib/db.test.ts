@@ -4,7 +4,6 @@ import {
   addNotice,
   addNoticeUnlessUnresolved,
   bumpWatermarks,
-  cancelSupersededApprovedWorkItem,
   countPendingIssueProposals,
   decideApprovalRequestIfPending,
   decideIssueProposal,
@@ -155,29 +154,85 @@ const NEW_WORK_ITEM = {
 };
 
 describe("insertIssueWorkItemUnlessActive", () => {
+  const insertedRow = (extra: Record<string, unknown> = {}) => ({
+    id: 7,
+    superseded_id: null,
+    superseded_attempt: null,
+    ...extra,
+  });
+
   test("inserts into factory.work_items", async () => {
-    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    const { sql, calls } = createFakeSqlClient([[insertedRow()]]);
     await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql);
     expect(calls[0]?.text).toContain("INSERT INTO factory.work_items");
   });
 
   test("skips the insert on any unique violation", async () => {
-    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    const { sql, calls } = createFakeSqlClient([[insertedRow()]]);
     await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql);
     expect(calls[0]?.text).toContain("ON CONFLICT DO NOTHING");
+  });
+
+  test("cancels the approved issue work items of the same issue in the same statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[insertedRow()]]);
+    await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql);
+    expect(calls[0]?.text).toContain(
+      "wi.status = 'approved' AND wi.kind = 'issue'",
+    );
+  });
+
+  test("cancels only rows of the inserted issue", async () => {
+    const { sql, calls } = createFakeSqlClient([[insertedRow()]]);
+    await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql);
+    expect(calls[0]?.text).toContain(
+      "wi.owner = inserted.owner AND wi.repo = inserted.repo AND wi.issue_number = inserted.issue_number",
+    );
+  });
+
+  test("cancels through the inserted row so that a lost insert cancels nothing", async () => {
+    const { sql, calls } = createFakeSqlClient([[insertedRow()]]);
+    await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql);
+    expect(calls[0]?.text).toContain("FROM inserted");
+  });
+
+  test("records an event for each cancelled work item", async () => {
+    const { sql, calls } = createFakeSqlClient([[insertedRow()]]);
+    await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql);
+    expect(calls[0]?.text).toContain("INSERT INTO factory.work_item_events");
   });
 
   test("passes the same parameters in the same order as insertWorkItem", async () => {
     const plain = createFakeSqlClient([[{ id: 7 }]]);
     await insertWorkItem(NEW_WORK_ITEM, plain.sql);
-    const guarded = createFakeSqlClient([[{ id: 7 }]]);
+    const guarded = createFakeSqlClient([[insertedRow()]]);
     await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, guarded.sql);
     expect(guarded.calls[0]?.values).toEqual(plain.calls[0]?.values);
   });
 
   test("returns the inserted id", async () => {
-    const { sql } = createFakeSqlClient([[{ id: 7 }]]);
-    expect(await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql)).toBe(7);
+    const { sql } = createFakeSqlClient([[insertedRow()]]);
+    const result = await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql);
+    expect(result?.id).toBe(7);
+  });
+
+  test("returns no superseded items when nothing was cancelled", async () => {
+    const { sql } = createFakeSqlClient([[insertedRow()]]);
+    const result = await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql);
+    expect(result?.superseded).toEqual([]);
+  });
+
+  test("returns every cancelled work item with its attempt", async () => {
+    const { sql } = createFakeSqlClient([
+      [
+        insertedRow({ superseded_id: 3, superseded_attempt: 2 }),
+        insertedRow({ superseded_id: 4, superseded_attempt: 1 }),
+      ],
+    ]);
+    const result = await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql);
+    expect(result?.superseded).toEqual([
+      { id: 3, attempt: 2 },
+      { id: 4, attempt: 1 },
+    ]);
   });
 
   test("returns null when another active work item already exists for the issue", async () => {
@@ -2942,50 +2997,6 @@ describe("isActiveIssueUniqueViolation with a server body", () => {
       body: "unrelated",
     });
     expect(isActiveIssueUniqueViolation(err)).toBe(true);
-  });
-});
-
-describe("cancelSupersededApprovedWorkItem", () => {
-  test("returns true when the item was cancelled", async () => {
-    const { sql } = createFakeSqlClient([[{ work_item_id: 5 }]]);
-    expect(await cancelSupersededApprovedWorkItem(5, "note", sql)).toBe(true);
-  });
-
-  test("returns false when no active sibling exists or the item moved on", async () => {
-    const { sql } = createFakeSqlClient([[]]);
-    expect(await cancelSupersededApprovedWorkItem(5, "note", sql)).toBe(false);
-  });
-
-  test("cancels only an approved item", async () => {
-    const { sql, calls } = createFakeSqlClient([[]]);
-    await cancelSupersededApprovedWorkItem(5, "note", sql);
-    expect(calls[0]?.text).toContain("wi.status = 'approved'");
-  });
-
-  test("requires another active issue work item of the same issue", async () => {
-    const { sql, calls } = createFakeSqlClient([[]]);
-    await cancelSupersededApprovedWorkItem(5, "note", sql);
-    expect(calls[0]?.text).toContain(
-      "o.owner = wi.owner AND o.repo = wi.repo AND o.issue_number = wi.issue_number",
-    );
-  });
-
-  test("excludes the item itself from the siblings", async () => {
-    const { sql, calls } = createFakeSqlClient([[]]);
-    await cancelSupersededApprovedWorkItem(5, "note", sql);
-    expect(calls[0]?.text).toContain("o.id <> wi.id");
-  });
-
-  test("passes the terminal statuses so that only active siblings count", async () => {
-    const { sql, calls } = createFakeSqlClient([[]]);
-    await cancelSupersededApprovedWorkItem(5, "note", sql);
-    expect(calls[0]?.values).toContainEqual([...TERMINAL_WORK_ITEM_STATUSES]);
-  });
-
-  test("records the transition in work_item_events", async () => {
-    const { sql, calls } = createFakeSqlClient([[]]);
-    await cancelSupersededApprovedWorkItem(5, "note", sql);
-    expect(calls[0]?.text).toContain("INSERT INTO factory.work_item_events");
   });
 });
 

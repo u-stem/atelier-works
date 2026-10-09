@@ -4,6 +4,7 @@
 // 失敗にせず見送る。assigneeが付かなくても作業を続け、noticeを残す。
 
 import { describe, expect, test } from "bun:test";
+import type { InsertedIssueWorkItem } from "../../f/factory/lib/db.ts";
 import {
   type ClaimIssueResult,
   ClaimOwnershipUnknownError,
@@ -218,7 +219,7 @@ describe("manualIntakeSkippedResult", () => {
 });
 
 describe("registerManualIntakeWorkItem", () => {
-  function insertDeps(insert: () => Promise<number | null>): {
+  function insertDeps(insert: () => Promise<InsertedIssueWorkItem | null>): {
     deps: ManualIntakeInsertDeps;
     notices: Notice[];
     inserted: Parameters<ManualIntakeInsertDeps["insertWorkItem"]>[0][];
@@ -250,22 +251,43 @@ describe("registerManualIntakeWorkItem", () => {
   };
 
   test("returns the id of the registered work item", async () => {
-    const { deps } = insertDeps(async () => 77);
+    const { deps } = insertDeps(async () => ({ id: 77, superseded: [] }));
     const { log } = recordingLog();
-    expect(await registerManualIntakeWorkItem({ ...INPUT, log }, deps)).toBe(
-      77,
+    const registered = await registerManualIntakeWorkItem(
+      { ...INPUT, log },
+      deps,
     );
+    expect(registered?.id).toBe(77);
+  });
+
+  test("returns the work items that the new cycle superseded", async () => {
+    const { deps } = insertDeps(async () => ({
+      id: 77,
+      superseded: [{ id: 5, attempt: 2 }],
+    }));
+    const { log } = recordingLog();
+    const registered = await registerManualIntakeWorkItem(
+      { ...INPUT, log },
+      deps,
+    );
+    expect(registered?.superseded).toEqual([{ id: 5, attempt: 2 }]);
   });
 
   test("registers a manual issue work item", async () => {
-    const { deps, inserted } = insertDeps(async () => 77);
+    const { deps, inserted } = insertDeps(async () => ({
+      id: 77,
+      superseded: [],
+    }));
     const { log } = recordingLog();
     await registerManualIntakeWorkItem({ ...INPUT, log }, deps);
     expect(inserted[0]?.source).toBe("manual");
   });
 
   test("starts the work item as picked and claimed by the viewer", async () => {
-    const { deps, inserted } = insertDeps(async () => 77);
+    const { deps, inserted } = insertDeps(async () => ({
+      id: 77,
+      superseded: [],
+    }));
     const { log } = recordingLog();
     await registerManualIntakeWorkItem({ ...INPUT, log }, deps);
     expect([inserted[0]?.status, inserted[0]?.claimed_by]).toEqual([
@@ -275,7 +297,10 @@ describe("registerManualIntakeWorkItem", () => {
   });
 
   test("records no notice when the registration succeeds", async () => {
-    const { deps, notices } = insertDeps(async () => 77);
+    const { deps, notices } = insertDeps(async () => ({
+      id: 77,
+      superseded: [],
+    }));
     const { log } = recordingLog();
     await registerManualIntakeWorkItem({ ...INPUT, log }, deps);
     expect(notices).toEqual([]);

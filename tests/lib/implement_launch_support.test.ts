@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
   assertImplementLease,
-  casToImplementingOrSupersede,
   flowJobIdFailureReason,
   holdsImplementLease,
   ImplementLeaseLostError,
@@ -11,7 +10,6 @@ import {
   parseFlowJobId,
   rootFlowJobId,
   type StartImplementDeps,
-  type SupersedeDeps,
   startImplement,
   stillHoldsImplementLease,
 } from "../../f/factory/lib/implement_launch_support.ts";
@@ -501,176 +499,5 @@ describe("assertImplementLease", () => {
         JOB_A,
       ),
     ).rejects.toBeInstanceOf(ImplementLeaseLostError);
-  });
-});
-
-describe("casToImplementingOrSupersede", () => {
-  const conflict = new Error('violates "work_items_active_issue_key"');
-
-  function supersedeDeps(overrides: Partial<SupersedeDeps> = {}): {
-    deps: SupersedeDeps;
-    calls: string[];
-  } {
-    const calls: string[] = [];
-    const deps: SupersedeDeps = {
-      casToImplementing: async () => {
-        calls.push("cas");
-        return true;
-      },
-      isActiveIssueConflict: (err) => err === conflict,
-      cancelSuperseded: async () => {
-        calls.push("cancel");
-        return true;
-      },
-      postSupersededComment: async () => {
-        calls.push("comment");
-      },
-      log: (message) => {
-        calls.push(`log:${message}`);
-      },
-      ...overrides,
-    };
-    return { deps, calls };
-  }
-
-  const conflictingOnce = () => {
-    let first = true;
-    return async (): Promise<boolean> => {
-      if (first) {
-        first = false;
-        throw conflict;
-      }
-      return true;
-    };
-  };
-
-  const conflictingAlways = async (): Promise<boolean> => {
-    throw conflict;
-  };
-
-  test("returns true when the transition succeeds", async () => {
-    const { deps } = supersedeDeps();
-    expect(await casToImplementingOrSupersede(deps)).toBe(true);
-  });
-
-  test("returns false when the item already moved on", async () => {
-    const { deps } = supersedeDeps({ casToImplementing: async () => false });
-    expect(await casToImplementingOrSupersede(deps)).toBe(false);
-  });
-
-  test("does not cancel anything when the transition succeeds", async () => {
-    const { deps, calls } = supersedeDeps();
-    await casToImplementingOrSupersede(deps);
-    expect(calls).toEqual(["cas"]);
-  });
-
-  test("reports superseded when the older item is cancelled", async () => {
-    const { deps } = supersedeDeps({ casToImplementing: conflictingAlways });
-    expect(await casToImplementingOrSupersede(deps)).toBe("superseded");
-  });
-
-  test("cancels the older item, logs it and then posts the comment", async () => {
-    const { deps, calls } = supersedeDeps({
-      casToImplementing: conflictingAlways,
-    });
-    await casToImplementingOrSupersede(deps);
-    expect(calls).toEqual([
-      "cancel",
-      "log:approved work item superseded by a newer cycle",
-      "comment",
-    ]);
-  });
-
-  test("still reports superseded when posting the comment fails", async () => {
-    const { deps } = supersedeDeps({
-      casToImplementing: conflictingAlways,
-      postSupersededComment: async () => {
-        throw new Error("gh down");
-      },
-    });
-    expect(await casToImplementingOrSupersede(deps)).toBe("superseded");
-  });
-
-  test("logs when posting the comment fails", async () => {
-    const { deps, calls } = supersedeDeps({
-      casToImplementing: conflictingAlways,
-      postSupersededComment: async () => {
-        throw new Error("gh down");
-      },
-    });
-    await casToImplementingOrSupersede(deps);
-    expect(calls).toContain("log:superseded comment could not be posted");
-  });
-
-  test("retries the transition once when no active sibling remains", async () => {
-    const cas = conflictingOnce();
-    const { deps, calls } = supersedeDeps({
-      casToImplementing: async () => {
-        calls.push("cas");
-        return cas();
-      },
-      cancelSuperseded: async () => {
-        calls.push("cancel");
-        return false;
-      },
-    });
-    await casToImplementingOrSupersede(deps);
-    expect(calls).toEqual(["cas", "cancel", "cas"]);
-  });
-
-  test("returns the result of the retried transition", async () => {
-    const { deps } = supersedeDeps({
-      casToImplementing: conflictingOnce(),
-      cancelSuperseded: async () => false,
-    });
-    expect(await casToImplementingOrSupersede(deps)).toBe(true);
-  });
-
-  test("posts no comment when no active sibling remains", async () => {
-    const { deps, calls } = supersedeDeps({
-      casToImplementing: conflictingOnce(),
-      cancelSuperseded: async () => false,
-    });
-    await casToImplementingOrSupersede(deps);
-    expect(calls).not.toContain("comment");
-  });
-
-  test("rethrows when the retried transition conflicts again", async () => {
-    const { deps } = supersedeDeps({
-      casToImplementing: conflictingAlways,
-      cancelSuperseded: async () => false,
-    });
-    await expect(casToImplementingOrSupersede(deps)).rejects.toBe(conflict);
-  });
-
-  test("rethrows an error that is not the active issue conflict", async () => {
-    const { deps } = supersedeDeps({
-      casToImplementing: async () => {
-        throw new Error("db down");
-      },
-    });
-    await expect(casToImplementingOrSupersede(deps)).rejects.toThrow("db down");
-  });
-
-  test("rethrows when cancelling the superseded item fails", async () => {
-    const { deps } = supersedeDeps({
-      casToImplementing: conflictingAlways,
-      cancelSuperseded: async () => {
-        throw new Error("cancel failed");
-      },
-    });
-    await expect(casToImplementingOrSupersede(deps)).rejects.toThrow(
-      "cancel failed",
-    );
-  });
-});
-
-describe("startImplement when the item was superseded", () => {
-  test("returns superseded without launching the flow", async () => {
-    const { deps, calls } = launchDeps({
-      casToImplementing: async () => "superseded",
-    });
-    const outcome = await startImplement(deps);
-    expect([outcome, calls]).toEqual(["superseded", []]);
   });
 });

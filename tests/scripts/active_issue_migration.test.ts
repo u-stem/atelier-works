@@ -100,3 +100,27 @@ describe("20261009120000_active_issue_key.down.sql", () => {
     );
   });
 });
+
+describe("the intake statement checked by scripts/test-db.sh", () => {
+  // `scripts/test-db.sh`は、`insertIssueWorkItemUnlessActive`の取り消しの条件を
+  // 本物のPostgreSQLで確かめるために、同じ文を書き写している。食い違いを防ぐ。
+  const WHERE_START = "WHERE wi.status = 'approved'";
+  const WHERE_END = "RETURNING wi.id";
+
+  function cancelCondition(source: string): string {
+    const start = source.indexOf(WHERE_START);
+    const end = source.indexOf(WHERE_END, start);
+    return source.slice(start, end).replace(/\s+/g, " ").trim();
+  }
+
+  test("uses the same cancel condition as the application code", async () => {
+    const app = await Bun.file("f/factory/lib/db.ts").text();
+    const script = await Bun.file("scripts/test-db.sh").text();
+    expect(cancelCondition(script)).toBe(cancelCondition(app));
+  });
+
+  test("finds the cancel condition in both files", async () => {
+    const app = await Bun.file("f/factory/lib/db.ts").text();
+    expect(cancelCondition(app)).toContain("wi.kind = 'issue'");
+  });
+});

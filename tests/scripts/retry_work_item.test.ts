@@ -347,7 +347,7 @@ describe("activeIssueConflictError", () => {
       { ...base, id: 3 },
     ]);
     expect(error.message).toBe(
-      "retry_work_item: another work item (id 9) is active for this Issue; retry after it finishes",
+      "retry_work_item: another work item (id 9) is active for this Issue, retry after it finishes",
     );
   });
 
@@ -362,7 +362,7 @@ describe("activeIssueConflictError", () => {
   test("omits the id when the active work item is not found", () => {
     const error = activeIssueConflictError(target, [{ ...base, id: 3 }]);
     expect(error.message).toBe(
-      "retry_work_item: another work item is active for this Issue; retry after it finishes",
+      "retry_work_item: another work item is active for this Issue, retry after it finishes",
     );
   });
 });
@@ -387,7 +387,18 @@ describe("activeIssueConflictErrorFrom", () => {
       throw new Error("db down");
     });
     expect(error.message).toBe(
-      "retry_work_item: another work item is active for this Issue; retry after it finishes",
+      "retry_work_item: another work item is active for this Issue, retry after it finishes",
     );
+  });
+});
+
+describe("computeRestartPlan for a cancelled work item", () => {
+  test("refuses to restart a work item that a newer cycle superseded", () => {
+    expect(() =>
+      computeRestartPlan(
+        { id: 1, status: "cancelled", kind: "issue", attempt: 1 },
+        { implementReady: true, implementEnabled: true },
+      ),
+    ).toThrow(/not restartable/);
   });
 });
