@@ -249,7 +249,15 @@ describe("the hook entry point under node", () => {
     "reads the current branch through git under node",
     () => {
       const reason = withTempDir((directory) => {
-        Bun.spawnSync(["git", "init", "-q", "-b", "main", directory]);
+        // gitのフックの中で実行されると`GIT_DIR`などが引き継がれ、一時ディレクトリではなく外のリポジトリを初期化してしまうので外す。
+        const gitEnv = Object.fromEntries(
+          Object.entries(process.env).filter(
+            ([key]) => !key.startsWith("GIT_"),
+          ),
+        );
+        Bun.spawnSync(["git", "init", "-q", "-b", "main", directory], {
+          env: gitEnv,
+        });
         const input = JSON.stringify({
           hook_event_name: "PreToolUse",
           tool_name: "Bash",
