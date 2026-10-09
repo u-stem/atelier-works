@@ -14,7 +14,7 @@
 // `wmill.setVariable`だけが値を変える。無関係な`wmill sync push`で戻らない。
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "./lib/config.ts";
-import { checkConsoleWorker } from "./lib/console_worker.ts";
+import { watchConsoleWorker } from "./lib/console_worker.ts";
 import { addNoticeUnlessUnresolved, recordDeployment } from "./lib/db.ts";
 import { notifyBestEffort } from "./lib/discord.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
@@ -321,9 +321,10 @@ export async function main(): Promise<SelfUpdateResult> {
   try {
     return await updateSelf(log, config);
   } finally {
-    await checkConsoleWorker({
-      existsWorker: (tag) =>
-        wmill.WorkerService.existsWorkersWithTags({ tags: tag }),
+    // 更新が例外を投げても検知は走らせる。更新が失敗し続けると、Console用workerの不在に誰も気づけなくなるため。
+    await watchConsoleWorker({
+      listWorkers: (pingSince) =>
+        wmill.WorkerService.listWorkers({ page: 1, perPage: 100, pingSince }),
       addNotice: (record) => addNoticeUnlessUnresolved(record),
       notify: async (event) => {
         const webhookUrl = await wmill.getVariable(
@@ -331,6 +332,8 @@ export async function main(): Promise<SelfUpdateResult> {
         );
         await notifyBestEffort(webhookUrl, event, log);
       },
+      getState: () => wmill.getState(),
+      setState: (state) => wmill.setState(state),
       instanceName: config.instance_name,
       log,
     });

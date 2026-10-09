@@ -139,6 +139,37 @@ describe("buildEmbed console_worker_missing", () => {
   });
 });
 
+describe("buildEmbed console_worker_check_failed", () => {
+  const event: NotifyEvent = {
+    kind: "console_worker_check_failed",
+    instance_name: "local",
+    cause: "1時間続けて確認できていません",
+    next_action: "ジョブログを確かめる",
+  };
+
+  test("puts the cause in the description", () => {
+    expect(buildEmbed(event).description).toBe("1時間続けて確認できていません");
+  });
+
+  test("shows the next action as a field", () => {
+    expect(buildEmbed(event).fields).toContainEqual({
+      name: "次の操作",
+      value: "ジョブログを確かめる",
+    });
+  });
+
+  test("includes the instance field", () => {
+    expect(buildEmbed(event).fields).toContainEqual({
+      name: "インスタンス",
+      value: "local",
+    });
+  });
+
+  test("says the check cannot be made in the title", () => {
+    expect(buildEmbed(event).title).toContain("確認できません");
+  });
+});
+
 describe("buildEmbed console_fetch_problem", () => {
   const event: NotifyEvent = {
     kind: "console_fetch_problem",

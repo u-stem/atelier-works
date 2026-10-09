@@ -624,14 +624,38 @@ Consoleの**通知**タブには、Discordに送らない要対応の事項が�
 | `workspace_disk_usage` | 作業領域の掃除(毎日03:00)が記録したディスク使用量 | 増え続けていないか見る |
 | `console_fetch_failed` | Consoleの取り込みが失敗した | 通知の「次の操作」に従う |
 | `console_fetch_stale` | Consoleの取り込みの結果が30分以上更新されていない | 取り込みのコンテナ(`console_fetcher`)が動いているか確かめる |
-| `console_worker_missing` | tag `console`を受けるworkerが居ない。Consoleのjobがqueueに溜まり、Consoleが止まる | `mise run up`でworkerを起動し直し、`docker compose ps windmill_worker_console`でコンテナの状態を確かめる。自己更新(10分ごと)が検知し、Discordにも届く |
+| `console_worker_missing` | tag `console`を受けるworkerが、5分以内にpingした一覧に居ない。Consoleのjobがqueueに溜まり、Consoleが止まる | `mise run up`でworkerを起動し直し、`docker compose ps windmill_worker_console`でコンテナの状態を確かめる。自己更新(10分ごと)が検知し、Discordにも届く |
+| `console_worker_check_failed` | Console用のworkerが居るかを、自己更新が1時間(6回)続けて確認できなかった。workerが止まっていても気づけない状態である | 自己更新のジョブログで、下の3種類の警告のどれが出ているかを確かめて原因を直す。Discordにも届く |
 | `schedule_failing` | 同じスケジュールの直近3回の実行が続けて失敗した。数えるのはスケジュールの実行そのものの失敗で、成功した実行の中で記録する部分的な失敗は含まない。GitHubのPATの失効などが原因になる | ジョブのログで失敗の内容を確かめて原因を直す。PATは[秘密をローテーションする](#秘密をローテーションする)で再発行する |
 
 ### Console用のworkerの検知を確かめる
 
-Console用のworkerが居ないかどうかは、自己更新(`self_update`)が毎回確かめる。
-マージの後は、自己更新のジョブログに`could not check for a console worker`の警告が出ていないことを見る。
-出ていれば、検知が動いていない。
+Console用のworkerが居るかどうかは、自己更新(`self_update`)が毎回の最後に確かめる。
+確認は`WorkerService.listWorkers`で、5分以内にpingしたworkerの一覧の1ページを読む。
+確認できなかったときは、自己更新のジョブログに警告が残り、通知は出ない。
+警告は次の3種類である。
+
+- `could not check for a console worker`: workerの一覧を読むAPIが失敗した。権限が足りないときもこうなる。
+- `unexpected response while checking for a console worker`: 応答が一覧の形でない。
+- `console worker check timed out`: 10秒以内に終わらなかった。
+
+確認できない回数は自己更新のstateに数える。
+6回(1時間)続くと、通知`console_worker_check_failed`を残し、Discordにも知らせる。
+確認できれば回数は0に戻る。
+
+マージの後は、次の手順で検知が動いていることを確かめる。
+Console用のworkerを止めて戻すコマンドは次のとおりである。
+
+```bash
+mise exec -- docker compose -f infra/docker-compose.yml stop windmill_worker_console
+mise exec -- docker compose -f infra/docker-compose.yml start windmill_worker_console
+```
+
+1. 自己更新のジョブログに、上の警告が出ていないことを見る。
+2. `stop`でConsole用のworkerを止める。
+3. 次の自己更新(10分以内)の後で、通知`console_worker_missing`ができ、Discordにも届くことを見る。
+4. `start`で戻し、通知を解決する。
+
 Consoleが止まっていてもDiscordには届くので、通知の確認先はConsoleに限らない。
 
 ### 通知を解決する

@@ -33,6 +33,7 @@ export const NOTICE_SEVERITY: Readonly<Record<string, NoticeSeverity>> = {
   console_fetch_failed: "action",
   console_fetch_stale: "action",
   console_worker_missing: "action",
+  console_worker_check_failed: "action",
   schedule_failing: "action",
 };
 

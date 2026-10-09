@@ -30,6 +30,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | `pr_fixed` | PR修正適用 | `pr_fix_finish` | 修正をpushし、再レビューを依頼した |
 | `job_failed` | ジョブ失敗 | 下の表を参照 | フローやスケジュールが失敗した |
 | `console_fetch_problem` | Consoleの取り込みに問題があります | `console_fetch_watch`(10分ごと) | Consoleの取り込みの失敗、更新の停止、状態が読めないことを検知し、通知を新しく残した |
+| `console_worker_check_failed` | Console用のworkerの有無を確認できません | `self_update`(10分ごと) | Console用のworkerが居るかを、1時間(6回)続けて確認できなかった |
 | `console_worker_missing` | Console用のworkerが居ません | `self_update`(10分ごと) | tag `console`を受けるworkerが居ないことを検知し、通知を新しく残した |
 | `daily_summary` | 日次サマリー | `notify_daily_summary`(毎日09:00) | 前日の集計 |
 | `audit_completed` | 監査レポートができました | `audit_generate` | 改善提案が1件以上ある監査レポートを保存した |
@@ -74,6 +75,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | `pr_fixed` | PR | 再レビュー依頼のAPIが失敗したときだけ「補足」 |
 | `job_failed` | なし | 説明にエラー、ジョブのID |
 | `console_fetch_problem` | なし | 説明に原因、「次の操作」 |
+| `console_worker_check_failed` | なし | 説明に原因、「次の操作」 |
 | `console_worker_missing` | なし | 説明に原因、「次の操作」 |
 | `daily_summary` | なし | 説明に実行件数と費用、失敗、承認、却下、DB掃除 |
 | `audit_completed` | Consoleの監査のページ | 「次の操作」、`work_item_id` |
