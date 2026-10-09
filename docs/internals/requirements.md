@@ -24,11 +24,11 @@ pipelineフロー(`f/factory/pipeline`)は次の3つのステップで動く。�
 /var/lib/factory/requirements/<owner>/<repo>/issue-<N>/wi-<work_item_id>/attempt-<attempt>/
 ```
 
-`/var/lib/factory`は、volume(`factory_state`)である。CLIを動かすworkerのコンテナが書き込みでマウントし、Console用のworkerのコンテナが読み取り専用でマウントする。このディレクトリはコミットしない。`owner`と`repo`は、GitHubの名前として正しいかを確かめてからパスに埋め込む。
+`/var/lib/factory`は、workerのコンテナだけがマウントするvolume(`factory_state`)である。このディレクトリはコミットしない。`owner`と`repo`は、GitHubの名前として正しいかを確かめてからパスに埋め込む。
 
 ディレクトリには、要件定義書の`requirements.md`と、図の`<name>.drawio`だけを置く。DBの`requirement_drafts`には、本文(`markdown`)、図の参照(`{name, file}`)、未確定事項、`doc_dir`を保存する。図のXMLはDBに保存しない。
 
-Consoleのbackendは、CLIを動かすworkerとは別のConsole用workerで動く。このworkerはワーカーグループ`console`、tag `console`、`NUM_WORKERS=2`で、同じvolumeを読み取り専用でマウントして要件定義書を読む。`console_query`は`doc_dir`を字面で解決し、要件定義の置き場所の下でなければ読まない。CLIを動かすworkerを複数のコンテナに分けるときは、このディレクトリを共有するストレージが要る。
+ConsoleのbackendもCLIを動かすworkerと同じコンテナ(defaultワーカーグループ)で動き、同じvolumeを読む。workerを複数のコンテナに分けるときは、このディレクトリを共有するストレージが要る。
 
 作業項目を削除するときの要件定義ディレクトリの扱いは、DBの掃除(`cleanup_db`)が受け持つ。
 
