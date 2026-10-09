@@ -11,6 +11,10 @@
 // Consoleが止まるとConsoleの中のnoticeは読めないので、noticeを新しく残したときはDiscordにも送る。
 // 確認そのものが続けて失敗すると停止に気づけないので、失敗の回数を数え、続いたらnoticeにする。
 
+import type {
+  ListCompletedJobsData,
+  ListQueueData,
+} from "windmill-client@1.817.0";
 import type { NotifyEvent } from "./discord.ts";
 import { type Logger, maskSecrets } from "./log.ts";
 import { isRecord, type NoticeRecord } from "./types.ts";
@@ -58,7 +62,7 @@ export const CONSOLE_WORKER_CHECK_FAILED_NOTICE: NoticeRecord = {
 };
 
 /** 待ちのジョブの一覧を取るAPIの引数。待ちが長いジョブを取りこぼさないよう、古いものから取る。 */
-export function consoleQueueQuery(workspace: string) {
+export function consoleQueueQuery(workspace: string): ListQueueData {
   return {
     workspace,
     tag: CONSOLE_WORKER_TAG,
@@ -71,13 +75,15 @@ export function consoleQueueQuery(workspace: string) {
 
 /**
  * `console_fetch_watch`の完了した実行を取るAPIの引数。新しい順に取る。
- * 手動の実行やpreviewはdefaultのworkerで動いてtagが違うので、tagで絞った後にも
- * 最新が残るよう、1件でなく10件取る。
+ * 手動の実行やpreviewはdefaultのworkerで動いてtagが違うので、サーバー側でもtagで絞る。
+ * 判定側でもtagを確かめるので、絞りが効かなくても証拠を取り違えない。
+ * 取り消されたジョブを除いても最新が残るよう、1件でなく10件取る。
  */
-export function watchRunsQuery(workspace: string) {
+export function watchRunsQuery(workspace: string): ListCompletedJobsData {
   return {
     workspace,
     scriptPathExact: CONSOLE_FETCH_WATCH_PATH,
+    tag: CONSOLE_WORKER_TAG,
     orderDesc: true,
     perPage: 10,
   };
@@ -172,6 +178,9 @@ export function judgeConsoleQueue(
     }
     const scheduledMs = Date.parse(scheduledFor);
     if (Number.isNaN(scheduledMs)) {
+      continue;
+    }
+    if (scheduledMs > nowMs) {
       continue;
     }
     if (nowMs - scheduledMs >= thresholdMs) {

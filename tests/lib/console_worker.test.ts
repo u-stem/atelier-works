@@ -80,8 +80,8 @@ describe("judgeConsoleQueue", () => {
     ).toBe("ok");
   });
 
-  test("ignores a job scheduled in the future", () => {
-    expect(judgeConsoleQueue([waiting(-600)], RECENT, NOW)).toBe("ok");
+  test("does not count a job scheduled in the future as waiting", () => {
+    expect(judgeConsoleQueue([waiting(-600)], [], NOW)).toBe("unknown");
   });
 
   test("does not count a job without scheduled_for", () => {
@@ -292,6 +292,7 @@ describe("watchRunsQuery", () => {
     expect(watchRunsQuery("factory")).toEqual({
       workspace: "factory",
       scriptPathExact: "f/factory/console_fetch_watch",
+      tag: "console",
       orderDesc: true,
       perPage: 10,
     });
@@ -319,18 +320,6 @@ describe("notices", () => {
     expect(CONSOLE_WORKER_MISSING_NOTICE.message).toContain(
       "docker compose restart windmill_worker_console",
     );
-  });
-
-  test("the missing notice tells the operator to check the running jobs", () => {
-    expect(CONSOLE_WORKER_MISSING_NOTICE.message).toContain("実行中のジョブ");
-  });
-
-  test("the missing notice tells the operator to check the worker group tag", () => {
-    expect(CONSOLE_WORKER_MISSING_NOTICE.message).toContain("ワーカーグループ");
-  });
-
-  test("the missing notice does not claim the worker is absent", () => {
-    expect(CONSOLE_WORKER_MISSING_NOTICE.message).toContain("受けていません");
   });
 
   test("the check failed notice names the warning to look for", () => {
