@@ -381,9 +381,32 @@ Windmillでジョブを取り消しても、新しいセッションで起動し
 どちらも`reset --hard`の前に、HEADが`refs/heads/<branch>`を指すことを`git symbolic-ref -q HEAD`で確かめる。
 `reset --hard`はHEADが指すブランチを動かすので、生き残りが別のブランチをcheckoutしていると、そのブランチを動かしてしまうためである。
 
-- 指していなければ(別のブランチかdetached)、`git checkout -f --no-track -B <branch> <戻す先>`で対象のブランチへ移す。この切り替えは、それまでHEADが指していたブランチを動かさない。
-- 次のときは、resetせずに失敗する。HEADを読めない、切り替えに失敗した、切り替えた後もHEADが指していない。
-- git 2.44以降では、対象のブランチがほかのworktreeでcheckoutされていると切り替えに失敗する。workerのイメージのgitは、Debian trixieの2.47である。
+- 指していなければ(別のブランチかdetached)、切り替えの前に`git worktree list`で、ほかのworktreeが対象のブランチをcheckoutしていないことを確かめる。
+- 対象のブランチをcheckoutしているworktreeがあれば、切り替えずに失敗する。
+- ほかのworktreeが使っていなければ、`git checkout -f --no-track -B <branch> <戻す先>`で対象のブランチへ移す。この切り替えは、それまでHEADが指していたブランチを動かさない。
+- 次のときは、resetせずに失敗する。
+  - HEADを読めない。
+  - worktreeの一覧を取れない。
+  - ほかのworktreeが対象のブランチを使っている。
+  - 切り替えに失敗した。
+  - 切り替えた後もHEADが指していない。
+
+一覧の確認では防げない場合が2つある。
+`checkout -B`の拒否は、その2つをgit 2.44以降で防ぐ。
+
+- ほかのworktreeが対象のブランチをrebaseかbisectの途中にしている。
+  - そのworktreeのHEADはdetachedで、一覧に対象のブランチが載らない。
+  - `checkout -B`がこの場合も拒否することは、git 2.54.0で確かめた。
+- 確認とcheckoutの間に、ほかのworktreeが対象のブランチをcheckoutする。
+
+2.44より古いgitでは、この2つの場合に`checkout -B`がほかのworktreeのブランチを黙って付け替える。
+そのため、workerのgitは2.44以上が要る。
+gitは`infra/worker/Dockerfile`で版を指定せず、aptから入るので、版はベースイメージで決まる。
+版は次のコマンドで確かめる。
+
+```bash
+mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker git --version
+```
 
 #### 止めないプロセス
 
