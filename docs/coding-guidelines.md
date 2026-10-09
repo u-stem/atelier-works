@@ -131,6 +131,7 @@ commit-msgのフックは、環境変数`CLAUDECODE`が`1`のときに、本文�
 `CLAUDECODE`は、Claude Codeが自分の起動したシェルに設定する内部の変数である。
 変数の名前や値が変わると、この検査は働かず、警告も出ない。
 Claude Codeのセッションでメッセージを書き直す操作(rebaseのreword、`cherry-pick -e`、`commit --amend`など)で作るコミットも、検査の対象になる。
+1行目が`Merge`、`Revert`、`fixup!`、`squash!`で始まり、その後に空白が続くコミットは、Claude Codeのセッションでも検査しない。
 Claude Codeを使わない人のコミットは検査しない。
 
 Software Factoryが作るコミットには、`lib/workspace.ts`の`commitAndPush`が次のトレーラーを自動で付ける。
