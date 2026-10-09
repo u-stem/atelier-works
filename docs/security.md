@@ -258,7 +258,9 @@ Console用のworker(`windmill_worker_console`)は、Consoleの問い合わせと
 - `factory_state`には、`requirements/`と`audits/`のほかに、次のものも入っていて、Console用のworkerから読める。
   - Claude Codeの設定と履歴(`CLAUDE_CONFIG_DIR=/var/lib/factory/claude`)
   - ghの設定(`GH_CONFIG_DIR=/var/lib/factory/gh`)
-- このworkerで動かすのはリポジトリのscriptのつもりだが、強制ではない。ワークスペースでscriptを編集できる者は、任意のscriptにtag`console`を付けられる。defaultのworkerは、上の設定と履歴を読み書きできる。
+- このworkerで動かすのはリポジトリのscriptのつもりだが、強制ではない。ワークスペースでscriptを編集できる者は、任意のscriptにtag`console`を付けられる。
+  tag`console`を付けたscriptは、上の設定と履歴を読める。書けるのはdefaultのworkerだけである。
+  読めると、Claude Codeとghの認証情報が漏れうる。
 - composeの環境変数`WORKER_TAGS`は既定値である。DBにワーカーグループの設定があると、そちらが実効になる。変化はWindmillの画面の「Workers」で確かめる。
 
 ## 自己更新の依存インストール

@@ -24,11 +24,11 @@ pipelineフロー(`f/factory/pipeline`)は次の3つのステップで動く。�
 /var/lib/factory/requirements/<owner>/<repo>/issue-<N>/wi-<work_item_id>/attempt-<attempt>/
 ```
 
-`/var/lib/factory`は、workerのコンテナだけがマウントするvolume(`factory_state`)である。このディレクトリはコミットしない。`owner`と`repo`は、GitHubの名前として正しいかを確かめてからパスに埋め込む。
+`/var/lib/factory`は、名前付きボリューム`factory_state`である。defaultのworkerが読み書きし、Console用のworkerが読み取り専用でマウントする。このディレクトリはコミットしない。`owner`と`repo`は、GitHubの名前として正しいかを確かめてからパスに埋め込む。
 
 ディレクトリには、要件定義書の`requirements.md`と、図の`<name>.drawio`だけを置く。DBの`requirement_drafts`には、本文(`markdown`)、図の参照(`{name, file}`)、未確定事項、`doc_dir`を保存する。図のXMLはDBに保存しない。
 
-ConsoleのbackendもCLIを動かすworkerと同じコンテナ(defaultワーカーグループ)で動き、同じvolumeを読む。workerを複数のコンテナに分けるときは、このディレクトリを共有するストレージが要る。
+Consoleのbackendがどのworkerで動くかは、scriptの`tag`で決まる。どちらのworkerも、同じボリュームを読む。このディレクトリを共有するストレージは、workerのコンテナを増やすときにも要る。
 
 作業項目を削除するときの要件定義ディレクトリの扱いは、DBの掃除(`cleanup_db`)が受け持つ。
 

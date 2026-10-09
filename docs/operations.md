@@ -848,14 +848,14 @@ Windmillの画面の「Workers」には、グループ`console`のworkerが出�
 composeの環境変数`WORKER_TAGS`は既定値で、DBにワーカーグループの設定があると、そちらが実効になるためである。
 
 メモリとプロセス数は、最初のジョブを動かしている間に確かめる。
-`docker stats`は`windmill_worker_console`の行を見る。プロセス数の上限は256なので、`pids.current`に余裕があることを確かめる。
+`docker stats`は`windmill_worker_console`の行を見て、`MEM USAGE / LIMIT`の使用量が上限の1GiBに収まっていることを確かめる。プロセス数の上限は256なので、`pids.current`にも余裕があることを確かめる。
 
 ```bash
 mise exec -- docker stats --no-stream
 mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker_console cat /sys/fs/cgroup/pids.current
 ```
 
-このworkerが書くのは、ログと専用の依存キャッシュ(`worker_console_dependency_cache`)だけである。
+このworkerがボリュームに書くのは、ログと専用の依存キャッシュ(`worker_console_dependency_cache`)だけである。
 再起動しても、キャッシュのボリュームは残る。
 ボリュームを消したときは、次のジョブで依存をレジストリから取り直すので、外向きの通信が要る。
 

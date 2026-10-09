@@ -3,8 +3,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 // Console用workerの構成を静的に確かめる。
-// 書き込みマウントを持たないことと、factory_workspacesを共有しないことが境界の要なので、
-// composeの編集で崩れたらここで落とす。
+// 書き込めるマウントをworker_logsと専用の依存キャッシュに限ることと、
+// factory_workspacesを共有しないことが境界の要なので、composeの編集で崩れたらここで落とす。
 const REPO_ROOT = join(import.meta.dir, "../..");
 
 type Json = Record<string, unknown>;
@@ -17,11 +17,16 @@ function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((v) => typeof v === "string");
 }
 
-function service(name: string): Json {
+function compose(): Json {
   const parsed: unknown = Bun.YAML.parse(
     readFileSync(join(REPO_ROOT, "infra/docker-compose.yml"), "utf8"),
   );
-  if (!isRecord(parsed) || !isRecord(parsed.services)) return {};
+  return isRecord(parsed) ? parsed : {};
+}
+
+function service(name: string): Json {
+  const parsed = compose();
+  if (!isRecord(parsed.services)) return {};
   const found = parsed.services[name];
   return isRecord(found) ? found : {};
 }
@@ -187,6 +192,14 @@ describe("infra/docker-compose.yml windmill_worker_console", () => {
     expect(stringList(svc, "volumes")).toContain(
       "worker_console_dependency_cache:/tmp/windmill/cache",
     );
+  });
+
+  test("declares its dependency cache as a top-level volume", () => {
+    const volumes = compose().volumes;
+
+    expect(
+      isRecord(volumes) && "worker_console_dependency_cache" in volumes,
+    ).toBe(true);
   });
 
   test("mounts nothing writable other than worker_logs and its own cache", () => {

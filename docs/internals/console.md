@@ -13,7 +13,8 @@ Consoleの配信を変更する人が読む。
 | `infra/console_fetcher/` | 成果物を検証して、名前付きボリューム`factory_console`に書く |
 | Caddy | `factory_console`を読み取り専用でマウントし、`/console/`で配信する |
 
-workerはすべてのジョブをrootで動かすので、`factory_console`をマウントしない。
+defaultのworkerは、すべてのジョブをrootで動かすので、`factory_console`をマウントしない。
+Console用のworker(`windmill_worker_console`)は、`factory_console`を読み取り専用でマウントする。
 
 ## console_fetcherのコンテナ
 

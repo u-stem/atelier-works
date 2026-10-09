@@ -149,10 +149,11 @@ services:
   ## Consoleの問い合わせと操作の受付専用のworker。Claudeの長いジョブがdefaultの枠を
   ## 埋めても、これらの受付を止めないために、tagで分けた別のworkerグループに置く。
   ## 受け付けた後の処理(承認のハンドラ、再実行、監査の開始)はdefaultのworkerで動く。
-  ## 書き込めるマウントは`worker_logs`だけにする。`factory_state`を読み取り専用で付けるのは、
+  ## 書き込めるマウントは`worker_logs`と専用の依存キャッシュだけにする。
+  ## 依存のキャッシュはdefaultの`worker_dependency_cache`とは共有しない。
+  ## `factory_state`を読み取り専用で付けるのは、
   ## `requirements_doc`が要件定義書と図のファイルをここから読むため。
-  ## `factory_workspaces`は付けない。依存のキャッシュは専用のボリュームに置き、
-  ## defaultの`worker_dependency_cache`とは共有しない。
+  ## `factory_workspaces`は付けない。
   ## 2つのworkerプロセスは、1件のjobが止まっても全体を止めないためで、
   ## メモリはbunのプロセス2つが収まる量にする。
   windmill_worker_console:
