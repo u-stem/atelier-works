@@ -158,6 +158,7 @@ export async function getCleanupSummary(
       coalesce(sum(job_failures_deleted), 0) AS job_failures_deleted,
       coalesce(sum(deployments_deleted), 0) AS deployments_deleted,
       coalesce(sum(notices_deleted), 0) AS notices_deleted,
+      coalesce(sum(info_notices_resolved), 0) AS info_notices_resolved,
       coalesce(sum(doc_dirs_deleted), 0) AS doc_dirs_deleted
     FROM factory.cleanup_runs
     WHERE ran_at >= ${range.start.toISOString()}
@@ -185,6 +186,10 @@ export async function getCleanupSummary(
       "deployments_deleted",
     ),
     notices_deleted: parseNumericLike(row.notices_deleted, "notices_deleted"),
+    info_notices_resolved: parseNumericLike(
+      row.info_notices_resolved,
+      "info_notices_resolved",
+    ),
     doc_dirs_deleted: parseNumericLike(
       row.doc_dirs_deleted,
       "doc_dirs_deleted",

@@ -2430,13 +2430,19 @@ export async function deleteResolvedNoticesBefore(
   return rows.length;
 }
 
+/** DBの掃除が通知を解決済みにしたときに、`resolved_by`へ記録する名前。 */
+const CLEANUP_RESOLVER = "cleanup_db";
+
 /**
- * 未解決で、`created_at`が`olderThan`より前の、`kinds`の種類の`factory.notices`の行を削除し、行数を返す。
+ * 未解決で、`created_at`が`olderThan`より前の、`kinds`の種類の`factory.notices`の行を、
+ * 削除せず解決済みにし(`resolved_by`は`cleanup_db`)、解決した行数を返す。
  * 重要度が`info`の通知は、Consoleの一覧から7日で外れて誰も解決しないので、
- * 解決済みの通知と同じ保持期間を過ぎたら消す。
- * `kinds`が空なら何も削除しない。「要対応」の通知は呼び出し元が`kinds`に含めない限り消さない。
+ * 解決済みの通知と同じ保持期間を過ぎたら解決済みにする。
+ * 機械が黙って消さず、解決済みの履歴に痕跡を残すためである。
+ * その後は、解決済みの通知と同じ保持期間(解決の時刻から)で`deleteResolvedNoticesBefore`が消す。
+ * `kinds`が空なら何もしない。「要対応」の通知は、呼び出し元が`kinds`に含めない限り触らない。
  */
-export async function deleteStaleInfoNoticesBefore(
+export async function resolveStaleInfoNoticesBefore(
   olderThan: Date,
   kinds: readonly string[],
   sql: SqlClient = defaultSqlClient,
@@ -2445,7 +2451,8 @@ export async function deleteStaleInfoNoticesBefore(
     return 0;
   }
   const rows = await sql`
-    DELETE FROM factory.notices
+    UPDATE factory.notices
+    SET resolved = true, resolved_by = ${CLEANUP_RESOLVER}, resolved_at = now()
     WHERE resolved = false
       AND kind = ANY(${[...kinds]}::text[])
       AND created_at <= ${olderThan.toISOString()}::timestamptz
@@ -2465,11 +2472,12 @@ export async function insertCleanupRun(
   const statement = sql`
     INSERT INTO factory.cleanup_runs (
       work_items_deleted, approval_requests_deleted, job_failures_deleted,
-      deployments_deleted, notices_deleted, doc_dirs_deleted
+      deployments_deleted, notices_deleted, info_notices_resolved, doc_dirs_deleted
     ) VALUES (
       ${counts.work_items_deleted}::integer, ${counts.approval_requests_deleted}::integer,
       ${counts.job_failures_deleted}::integer, ${counts.deployments_deleted}::integer,
-      ${counts.notices_deleted}::integer, ${counts.doc_dirs_deleted}::integer
+      ${counts.notices_deleted}::integer, ${counts.info_notices_resolved}::integer,
+      ${counts.doc_dirs_deleted}::integer
     )
     RETURNING id
   `;

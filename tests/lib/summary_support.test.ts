@@ -137,6 +137,7 @@ describe("getCleanupSummary", () => {
           job_failures_deleted: 12,
           deployments_deleted: 5,
           notices_deleted: 2,
+          info_notices_resolved: 0,
           doc_dirs_deleted: 0,
         },
       ],
@@ -155,6 +156,7 @@ describe("getCleanupSummary", () => {
           job_failures_deleted: "12",
           deployments_deleted: "5",
           notices_deleted: "2",
+          info_notices_resolved: "0",
           doc_dirs_deleted: "0",
         },
       ],
@@ -166,8 +168,34 @@ describe("getCleanupSummary", () => {
       job_failures_deleted: 12,
       deployments_deleted: 5,
       notices_deleted: 2,
+      info_notices_resolved: 0,
       doc_dirs_deleted: 0,
     });
+  });
+
+  test("sums the resolved info notices", async () => {
+    const { sql } = createFakeSqlClient([
+      [
+        {
+          run_count: 2,
+          work_items_deleted: 0,
+          approval_requests_deleted: 0,
+          job_failures_deleted: 0,
+          deployments_deleted: 0,
+          notices_deleted: 0,
+          info_notices_resolved: "4",
+          doc_dirs_deleted: 0,
+        },
+      ],
+    ]);
+    const summary = await getCleanupSummary(RANGE, sql);
+    expect(summary?.info_notices_resolved).toBe(4);
+  });
+
+  test("selects the info_notices_resolved column", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getCleanupSummary(RANGE, sql);
+    expect(calls[0]?.text).toContain("sum(info_notices_resolved)");
   });
 
   test("returns null when no cleanup_runs row falls in range", async () => {
@@ -180,6 +208,7 @@ describe("getCleanupSummary", () => {
           job_failures_deleted: 0,
           deployments_deleted: 0,
           notices_deleted: 0,
+          info_notices_resolved: 0,
           doc_dirs_deleted: 0,
         },
       ],

@@ -35,9 +35,33 @@ describe("summarizeCleanup", () => {
       job_failures_deleted: 12,
       deployments_deleted: 5,
       notices_deleted: 2,
+      info_notices_resolved: 0,
       doc_dirs_deleted: 0,
     });
     expect(summary).toBe(
+      "work item 3件、失敗記録12件、デプロイ記録5件、通知2件を削除しました",
+    );
+  });
+});
+
+describe("summarizeCleanup with resolved info notices", () => {
+  const base = {
+    work_items_deleted: 3,
+    approval_requests_deleted: 5,
+    job_failures_deleted: 12,
+    deployments_deleted: 5,
+    notices_deleted: 2,
+    doc_dirs_deleted: 0,
+  };
+
+  test("adds the resolved info notices when there are some", () => {
+    expect(summarizeCleanup({ ...base, info_notices_resolved: 4 })).toBe(
+      "work item 3件、失敗記録12件、デプロイ記録5件、通知2件を削除しました。古い情報の通知4件を解決しました",
+    );
+  });
+
+  test("leaves the sentence as is when there are none", () => {
+    expect(summarizeCleanup({ ...base, info_notices_resolved: 0 })).toBe(
       "work item 3件、失敗記録12件、デプロイ記録5件、通知2件を削除しました",
     );
   });

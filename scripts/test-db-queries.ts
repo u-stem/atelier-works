@@ -11,12 +11,14 @@ import {
 import {
   addNotice,
   deleteResolvedNoticesBefore,
-  deleteStaleInfoNoticesBefore,
   getNoticeById,
+  insertCleanupRun,
   insertWorkItem,
   recordFailure,
   resolveNoticeIfUnresolved,
+  resolveStaleInfoNoticesBefore,
 } from "../f/factory/lib/db.ts";
+import { getCleanupSummary } from "../f/factory/lib/summary_support.ts";
 import type { WorkItemStatus } from "../f/factory/lib/types.ts";
 import {
   runConsoleSummary,
@@ -484,7 +486,7 @@ execPsql(
 
 const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 const deletedResolved = await deleteResolvedNoticesBefore(cutoff, sql);
-const deletedInfo = await deleteStaleInfoNoticesBefore(
+const resolvedInfo = await resolveStaleInfoNoticesBefore(
   cutoff,
   INFO_NOTICE_KINDS,
   sql,
@@ -500,10 +502,14 @@ check(
   "cleanup: a resolved notice without resolved_at is aged from created_at",
   !(await exists(resolvedWithoutRecord)),
 );
+const staleInfoAfter = await getNoticeById(staleInfo, sql);
 check(
-  "cleanup: a stale unresolved info notice is deleted",
-  !(await exists(staleInfo)) && deletedInfo >= 1,
-  deletedInfo,
+  "cleanup: a stale unresolved info notice is resolved, not deleted",
+  staleInfoAfter?.resolved === true &&
+    staleInfoAfter.resolved_by === "cleanup_db" &&
+    staleInfoAfter.resolved_at instanceof Date &&
+    resolvedInfo >= 1,
+  staleInfoAfter,
 );
 check("cleanup: a fresh info notice is kept", await exists(freshInfo));
 check(
@@ -514,6 +520,33 @@ check(
   "cleanup: the resolved delete counted the two old resolved notices",
   deletedResolved >= 2,
   deletedResolved,
+);
+
+await insertCleanupRun(
+  {
+    work_items_deleted: 0,
+    approval_requests_deleted: 0,
+    job_failures_deleted: 0,
+    deployments_deleted: 0,
+    notices_deleted: 2,
+    info_notices_resolved: 3,
+    doc_dirs_deleted: 0,
+  },
+  sql,
+);
+const cleanupSummary = await getCleanupSummary(
+  {
+    start: new Date(Date.now() - 60 * 60 * 1000),
+    end: new Date(Date.now() + 60 * 60 * 1000),
+    label: "qdb",
+  },
+  sql,
+);
+check(
+  "cleanup_runs: the resolved info notices count is recorded and summed",
+  cleanupSummary?.info_notices_resolved === 3 &&
+    cleanupSummary.notices_deleted === 2,
+  cleanupSummary,
 );
 
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。
