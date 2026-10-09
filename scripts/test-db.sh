@@ -244,6 +244,13 @@ for view in "${views[@]}"; do
 done
 log "all ${#views[@]} views selected successfully"
 
+# 通知の解決の記録(resolved_by / resolved_at)の列に値を書け、未解決の通知を返すビューが変わらないことを確かめる。
+notice_row="$(printf "INSERT INTO factory.notices (kind, message) VALUES ('probe', 'm'); UPDATE factory.notices SET resolved = true, resolved_by = 'op', resolved_at = now() WHERE kind = 'probe'; SELECT resolved_by FROM factory.notices WHERE kind = 'probe';\n" \
+  | psql_exec "${SCRATCH_DB}" -q -t -A | tail -n 1)" \
+  || die "could not write the notice resolution columns"
+[ "${notice_row}" = "op" ] || die "expected resolved_by to be 'op', got '${notice_row}'"
+log "notices resolution columns are writable"
+
 shopt -s nullglob
 down_files=("${MIGRATIONS_DIR}"/*.down.sql)
 shopt -u nullglob
