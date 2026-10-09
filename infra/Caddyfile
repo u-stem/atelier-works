@@ -16,11 +16,13 @@
 # 不透明なオリジンのsandbox iframeの中で、同梱のビューアが図のXMLを描く。
 # 外への取得は、scriptも含めてすべて拒否する。frame-ancestorsは、Console自身のページからの埋め込みだけを許す。
 # sandboxは、親のiframeを経ずに直接開かれても、不透明なオリジンで動かすためである。
-# scriptは/console/assets/の同梱のファイルだけにする。不透明なオリジンでは'self'が使えないので、
-# console_headersと同じく、ブラウザが使ったオリジンをplaceholderで入れる。
+# scriptは/console/drawio/の同梱のファイル(ビューアと受け口)だけにする。
+# Console本体のCSPは/console/assets/しか許さないので、本体のページからは、このscriptを読めない。
+# 本体にHTMLが注入されても、信頼されたオリジンでビューアを動かす足場にならないようにするためである。
+# 不透明なオリジンでは'self'が使えないので、console_headersと同じく、ブラウザが使ったオリジンをplaceholderで入れる。
 (drawio_headers) {
         header {
-                Content-Security-Policy "default-src 'none'; script-src {http.request.scheme}://{http.request.hostport}/console/assets/; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'; sandbox allow-scripts"
+                Content-Security-Policy "default-src 'none'; script-src {http.request.scheme}://{http.request.hostport}/console/drawio/; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'; sandbox allow-scripts"
                 X-Content-Type-Options "nosniff"
                 Referrer-Policy "no-referrer"
                 # frame-ancestorsを解釈するブラウザでは、そちらが優先される。これは、解釈しない古いブラウザ向けの備えである。
@@ -87,6 +89,17 @@
                         import console_headers
                         import console_reject_encoded_separator
                         root * /srv/console/assets
+                        header Cache-Control "public, max-age=31536000, immutable"
+                        file_server
+                }
+
+                # draw.ioのビューアと受け口のscript。ハッシュ付きの名前なので長期のキャッシュにする。
+                # 今の版(current)のdrawio/を返し、無いファイルは404にする(handle_errorsが返す)。
+                # Consoleの本体より先に置く。Consoleのヘッダーは付けず、drawio_headersを付ける。
+                handle_path /console/drawio/* {
+                        import drawio_headers
+                        import console_reject_encoded_separator
+                        root * /srv/console/current/drawio
                         header Cache-Control "public, max-age=31536000, immutable"
                         file_server
                 }

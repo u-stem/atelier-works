@@ -426,6 +426,15 @@ describe("parseManifest", () => {
     ).toBeNull();
   });
 
+  test("accepts a file under the draw.io directory", () => {
+    expect(
+      parseManifest({
+        ...valid,
+        files: { ...valid.files, "drawio/drawio-viewer-bc7586cb.js": HASH_1 },
+      })?.files.get("drawio/drawio-viewer-bc7586cb.js"),
+    ).toBe(HASH_1);
+  });
+
   test("rejects an invalid hash", () => {
     expect(
       parseManifest({ ...valid, files: { ...valid.files, "index.html": "x" } }),

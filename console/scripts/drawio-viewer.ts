@@ -1,5 +1,5 @@
 // draw.ioのビューアの固定(drawio-viewer.json)を検証する純粋関数。
-// ビューアはgitに入れず、CIが固定のURLから取得してsha256を照合し、dist/assets/に置く。
+// ビューアはgitに入れず、CIが固定のURLから取得してsha256を照合し、dist/drawio/に置く。
 import { createHash } from "node:crypto";
 import { contentHashedName } from "./asset-name.ts";
 
@@ -88,7 +88,7 @@ export function parseDrawioViewerPin(value: unknown): DrawioViewerPin {
 }
 
 /**
- * 固定のsha256から、dist/assets/に置くビューアの名前を返す。
+ * 固定のsha256から、dist/drawio/に置くビューアの名前を返す。
  * 名前は`asset-name.ts`の規則どおり、中身のsha256の先頭8桁を含む。
  */
 export function viewerAssetName(pin: DrawioViewerPin): string {
@@ -97,7 +97,7 @@ export function viewerAssetName(pin: DrawioViewerPin): string {
 
 /**
  * 取得したビューアが固定のsha256と一致するかを返す。
- * 一致すれば、dist/assets/に置く名前を返す。
+ * 一致すれば、dist/drawio/に置く名前を返す。
  */
 export function verifyViewer(
   bytes: Uint8Array,

@@ -1,5 +1,5 @@
 // draw.ioの図を描くiframeとのpostMessageを扱う純粋関数。
-// iframe側(public/assets/drawio-frame-*.js)の受け口と、メッセージの形と上限を合わせる。
+// iframe側(public/drawio/drawio-frame-*.js)の受け口と、メッセージの形と上限を合わせる。
 // iframeは不透明なオリジンなので、親からは送り先のオリジンを指定できず、
 // 受け取る側が送り元のwindowを確かめる。
 

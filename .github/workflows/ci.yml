@@ -308,7 +308,7 @@ jobs:
       - name: Fetch the draw.io viewer
         # 版を固定したURLから取得し、固定のsha256と照合してからdist/assets/に置く。
         # 照合に失敗したら、ここで止める。ビューアはgitに入れない。
-        run: bun run --cwd console fetch-drawio-viewer dist/assets
+        run: bun run --cwd console fetch-drawio-viewer dist/drawio
 
       - name: Write the release manifest
         # 全ファイルのsha256と元のcommitを記録する。console_fetcherはこれと中身を照合する。

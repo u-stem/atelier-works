@@ -49,6 +49,17 @@ describe("buildManifest", () => {
     ).toThrow();
   });
 
+  test("accepts files under the draw.io directory", () => {
+    expect(
+      Object.keys(
+        buildManifest(SHA, [
+          INDEX,
+          { path: "drawio/drawio-viewer-bc7586cb.js", sha256: HASH },
+        ]).files,
+      ),
+    ).toContain("drawio/drawio-viewer-bc7586cb.js");
+  });
+
   test("rejects an invalid sha256", () => {
     expect(() =>
       buildManifest(SHA, [{ path: "index.html", sha256: "xyz" }]),

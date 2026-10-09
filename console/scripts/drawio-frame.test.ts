@@ -3,14 +3,14 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { runInNewContext } from "node:vm";
 
-// public/assets/drawio-frame-*.jsは、ビルドを通らない素のJavaScriptである。
+// public/drawio/drawio-frame-*.jsは、ビルドを通らない素のJavaScriptである。
 // ブラウザの代わりに、window・document・ResizeObserver・GraphViewerのスタブを付けて評価し、
 // 受け取ったメッセージごとの振る舞いを確かめる。
-const PUBLIC_ASSETS = join(import.meta.dir, "../public/assets");
-const frameName = readdirSync(PUBLIC_ASSETS).find((name) =>
+const PUBLIC_DRAWIO = join(import.meta.dir, "../public/drawio");
+const frameName = readdirSync(PUBLIC_DRAWIO).find((name) =>
   name.startsWith("drawio-frame-"),
 );
-const SCRIPT = readFileSync(join(PUBLIC_ASSETS, frameName ?? ""), "utf8");
+const SCRIPT = readFileSync(join(PUBLIC_DRAWIO, frameName ?? ""), "utf8");
 
 const MAX_XML_LENGTH = 256 * 1024;
 const VIEWER_MISSING_TEXT = "ビューアが読み込まれていません";
@@ -285,7 +285,7 @@ describe("drawio-frame script: links", () => {
     expect(prevented).toBe(true);
   });
 
-  test("cancels a click inside a link", () => {
+  test("cancels a click on an element inside an anchor", () => {
     const frame = createFrame();
     let prevented = false;
     frame.dispatch("click", {

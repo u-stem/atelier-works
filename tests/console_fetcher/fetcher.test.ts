@@ -208,6 +208,43 @@ async function readCorruptCopies(): Promise<string[]> {
 /** 管理者(root)は書き込みの権限の制限を受けないので、権限で失敗を起こすテストは飛ばす。 */
 const itFailsOnPermission = process.getuid?.() === 0 ? test.skip : test;
 
+describe("runOnce with the draw.io directory", () => {
+  const drawioFiles = {
+    ...filesFor("A"),
+    "drawio/drawio-viewer-bc7586cb.js": "viewer",
+    "drawio/drawio-frame-ca735013.js": "frame",
+  };
+
+  function githubServingDrawio() {
+    const zip = buildRelease(SHA_A, drawioFiles);
+    return fakeGitHub({
+      runs: [workflowRun(1, SHA_A)],
+      artifacts: { 1: [artifactJson(101, SHA_A, zip)] },
+      blobs: { 101: zip },
+    });
+  }
+
+  test("serves the draw.io files through current", async () => {
+    await runOnce(deps(githubServingDrawio().fetch));
+    expect(
+      await readFile(
+        join(root, "current", "drawio", "drawio-viewer-bc7586cb.js"),
+        "utf8",
+      ),
+    ).toBe("viewer");
+  });
+
+  test("keeps the draw.io files out of the shared assets", async () => {
+    await runOnce(deps(githubServingDrawio().fetch));
+    expect(await readdir(join(root, "assets"))).toEqual(["index-A0000000.js"]);
+  });
+
+  test("reports ok for a release with the draw.io directory", async () => {
+    const status = await runOnce(deps(githubServingDrawio().fetch));
+    expect(status.state).toBe("ok");
+  });
+});
+
 describe("runOnce", () => {
   test("points current at the new release with a relative link", async () => {
     await deploy(SHA_A, "A", 1);
