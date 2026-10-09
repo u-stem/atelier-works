@@ -24,6 +24,8 @@ export type ChangedPath = {
  * miseのXDG・ドットファイルの設定場所、
  * ディレクトリ形式のlefthook設定)。
  * `console/public/`も含める。Consoleでバンドルを通らずにそのまま配信され、ページの中で動くファイルを置く。
+ * `infra/console_fetcher/`も含める。Consoleの配信物を検証して配信するコードで、書き換えられると、
+ * 検証をすり抜けた内容が運用者のブラウザに配信される。
  */
 export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
   ".claude/",
@@ -33,6 +35,7 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
   ".config/mise/",
   ".lefthook/",
   "console/public/",
+  "infra/console_fetcher/",
 ];
 
 /**
@@ -45,6 +48,8 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * lockfileの検査のスクリプトは、書き換えられると検査をすり抜けて配信物に混ざる。
  * `asset-name.ts`は照合したビューアの書き込み先の名前を決め、`vite.config.ts`は
  * 組み立ての途中で任意のコードを動かして配信物に書ける。
+ * `infra/Caddyfile`には、Consoleのscriptの許可と、draw.ioの図を隔離するCSPがある。
+ * `infra/`全体は、pr_fixでは止めない。
  */
 export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "console/index.html",
@@ -56,6 +61,7 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "scripts/check-console-lockfile.ts",
   "console/scripts/asset-name.ts",
   "console/vite.config.ts",
+  "infra/Caddyfile",
 ];
 
 /**

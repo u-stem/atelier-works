@@ -320,7 +320,7 @@ zipは自前のreaderでメモリ上に展開する。
 - miseのキャッシュを読み書きしない。
 - ルートと`console/`の依存は`bun install --frozen-lockfile --ignore-scripts`で入れ、依存のinstall scriptを実行しない。
 - `console/bun.lock`は`scripts/check-console-lockfile.ts`で検査する。registry由来でsha512のintegrityが付いた依存だけを許す。git、GitHub、tarballのURL、`console/`の外を指す`file:`と`link:`、`trustedDependencies`は拒む。
-- 組み立ての後、マニフェストを書く前に、draw.ioのビューアを取得して`dist/assets/`に置く。詳細は「draw.ioの図」にある。
+- 組み立ての後、マニフェストを書く前に、draw.ioのビューアを取得して`dist/drawio/`に置く。詳細は「draw.ioの図」にある。
 
 ## 配信の経路
 
@@ -466,6 +466,7 @@ URLはリダイレクトを許さず、パスはcommit配下のビューア1フ�
 キャッシュに一致するファイルがあれば取得しない。
 キャッシュの中身は信用せず、使う前に固定のsha256と照合する。照合に通らなければ、取得し直す。
 キャッシュは`dist/`の外に置く。`dist/drawio/`には受け口のscriptもあり、キャッシュから戻すと、組み立てた受け口を上書きしてしまうためである。
+raw.githubusercontent.comの障害で取得に失敗したら、CIのジョブを再実行する。キャッシュに当たれば取得せず、外れれば取得し直す。
 ビューアはApache-2.0のライセンスである。
 `console_fetcher`は、他の配信物と同じように、マニフェストの照合を経て`releases/<sha>/drawio/`に置く。
 共有の`assets/`には入れない。`current`から`/console/drawio/`として配信する。

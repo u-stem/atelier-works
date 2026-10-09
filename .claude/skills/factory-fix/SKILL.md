@@ -77,8 +77,8 @@ headlessで起動したClaude Code(`claude -p`)がレビュー指摘と未解決
 
 | 種類 | 対象 |
 | --- | --- |
-| ディレクトリ | `.claude/`、`.agents/`、`.github/workflows/`、`.mise/`、`.config/mise/`、`.lefthook/`、`console/public/` |
-| 個別のファイル | `console/index.html`、`console/drawio-viewer.json`、`console/scripts/drawio-viewer.ts`、`console/scripts/fetch-drawio-viewer.ts`、`console/scripts/manifest.ts`、`console/scripts/write-manifest.ts`、`scripts/check-console-lockfile.ts`、`console/scripts/asset-name.ts`、`console/vite.config.ts` |
+| ディレクトリ | `.claude/`、`.agents/`、`.github/workflows/`、`.mise/`、`.config/mise/`、`.lefthook/`、`console/public/`、`infra/console_fetcher/` |
+| 個別のファイル | `console/index.html`、`console/drawio-viewer.json`、`console/scripts/drawio-viewer.ts`、`console/scripts/fetch-drawio-viewer.ts`、`console/scripts/manifest.ts`、`console/scripts/write-manifest.ts`、`scripts/check-console-lockfile.ts`、`console/scripts/asset-name.ts`、`console/vite.config.ts`、`infra/Caddyfile` |
 | ファイル名(どのディレクトリでも) | `mise.toml`、`mise.*.toml`、`.mise.toml`、`lefthook.yml`、`lefthook-local.yml`、`lefthook.toml`、`lefthook.json`、`bunfig.toml`、`.npmrc`、`.gitattributes`、`.gitmodules` |
 | 文書の検査の設定(どのディレクトリでも) | `.markdownlint.*`、`.markdownlint-cli2.*`(`json`、`jsonc`、`yaml`、`yml`、`js`、`cjs`、`mjs`)、`.textlintrc`、`.textlintrc.*` |
 | ファイルの一部 | `package.json`の`scripts`フィールド |
