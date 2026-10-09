@@ -297,25 +297,31 @@ describe("newestNewerIssueCycle", () => {
 });
 
 describe("insertIssueWorkItemUnlessActive when the sweep fails", () => {
-  function failingSweepSql(): { sql: SqlClient; calls: number } {
+  function failingSweepSql(noticeFails = false): {
+    sql: SqlClient;
+    texts: string[];
+    values: unknown[][];
+  } {
     let calls = 0;
-    const sql: SqlClient = () => {
+    const texts: string[] = [];
+    const values: unknown[][] = [];
+    const sql: SqlClient = (strings, ...bound) => {
       calls += 1;
       const call = calls;
+      texts.push(strings.join(" ? "));
+      values.push(bound);
       return {
-        fetch: () =>
-          call === 1
-            ? Promise.resolve([{ id: 7 }])
-            : Promise.reject(new Error("sweep failed")),
+        fetch: () => {
+          if (call === 1) return Promise.resolve([{ id: 7 }]);
+          if (call === 2) return Promise.reject(new Error("sweep failed"));
+          return noticeFails
+            ? Promise.reject(new Error("notice failed"))
+            : Promise.resolve([{ id: 1 }]);
+        },
         execute: () => Promise.resolve(),
       };
     };
-    return {
-      sql,
-      get calls() {
-        return calls;
-      },
-    };
+    return { sql, texts, values };
   }
 
   function recordingLog(): { log: Logger; warns: string[] } {
@@ -357,6 +363,53 @@ describe("insertIssueWorkItemUnlessActive when the sweep fails", () => {
     const { log, warns } = recordingLog();
     await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql, log);
     expect(warns).toEqual(["superseding the approved work items failed"]);
+  });
+
+  test("leaves a notice of the supersede_failed kind", async () => {
+    const { sql, texts, values } = failingSweepSql();
+    const { log } = recordingLog();
+    await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql, log);
+    expect([texts[2]?.includes("factory.notices"), values[2]?.[0]]).toEqual([
+      true,
+      "supersede_failed",
+    ]);
+  });
+
+  test("words the notice with the issue, the new work item and the next action", async () => {
+    const { sql, values } = failingSweepSql();
+    const { log } = recordingLog();
+    await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql, log);
+    expect(values[2]?.[1]).toBe(
+      "octo-owner/atelier-works#42 (work item 7): 古い承認済みの作業項目を取り消せませんでした。古い承認は再開できず、操作は要りません。次の新しいサイクルで取り消されます",
+    );
+  });
+
+  test("keeps the notice free of the error text so that it deduplicates per issue", async () => {
+    const { sql, values } = failingSweepSql();
+    const { log } = recordingLog();
+    await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql, log);
+    expect(String(values[2]?.[1])).not.toContain("sweep failed");
+  });
+
+  test("still returns the inserted id when the notice cannot be recorded", async () => {
+    const { sql } = failingSweepSql(true);
+    const { log } = recordingLog();
+    const result = await insertIssueWorkItemUnlessActive(
+      NEW_WORK_ITEM,
+      sql,
+      log,
+    );
+    expect(result?.id).toBe(7);
+  });
+
+  test("logs when the notice cannot be recorded", async () => {
+    const { sql } = failingSweepSql(true);
+    const { log, warns } = recordingLog();
+    await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql, log);
+    expect(warns).toEqual([
+      "superseding the approved work items failed",
+      "supersede_failed notice could not be recorded",
+    ]);
   });
 });
 

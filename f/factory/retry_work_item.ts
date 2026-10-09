@@ -72,7 +72,10 @@ export type RestartContext = {
  * 次の操作は、最新のサイクルの状態で決まる。
  * - 稼働中(終端でない)なら、そのサイクルが進むので、操作は要らない。
  * - 再開できる状態(`RESTARTABLE_STATUSES`)なら、最新のサイクルを再実行する。
+ * - PRを作成した(`pr_open`)なら、そのPRを確かめる。
  * - それ以外の終端なら、Issueにトリガーラベルを付け直して新しいサイクルを始める。
+ * `issue`の作業項目が取る終端の状態のうち、PRの段階にあるのは`pr_open`だけである。
+ * `reviewed`や`rereview_requested`は`pr_review` / `pr_fix`、`audited`は`audit`の作業項目の状態である。
  * IssueでないPRの作業項目には適用しない。
  */
 export function newerCycleRefusal(
@@ -85,6 +88,9 @@ export function newerCycleRefusal(
   if (!isOneOf(newest.status, TERMINAL_WORK_ITEM_STATUSES)) {
     return `${head}, which is in progress, no action needed`;
   }
+  if (newest.status === "pr_open") {
+    return `${head}, the newer cycle opened a pull request, check that pull request instead`;
+  }
   if (isOneOf(newest.status, RESTARTABLE_STATUSES)) {
     return `${head}, retry work item ${String(newest.id)} instead`;
   }
@@ -95,6 +101,8 @@ export function newerCycleRefusal(
  * 終端の作業項目を稼働中の状態へ戻す更新が、同じIssueの別の稼働中の作業項目に阻まれたときの
  * 例外を作る。その稼働中の作業項目がこのIssueの現在のサイクルなので、
  * この作業項目は再開できず、現在のサイクルに従う。稼働中の作業項目が見つかれば、そのIDを文に含める。
+ * `newerCycleRefusal`が先に新しいサイクルのある作業項目を断るので、この衝突が起きるのは、
+ * 最新のサイクルの再実行で、確認と状態の更新の間に、同じIssueで新しいサイクルが始まった競合のときだけである。
  */
 export function activeIssueConflictError(
   workItem: Pick<WorkItem, "id" | "owner" | "repo" | "issue_number">,

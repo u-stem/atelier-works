@@ -449,16 +449,19 @@ describe("newerCycleRefusal", () => {
 
   test("names the configured trigger label", () => {
     expect(
-      newerCycleRefusal(target, { id: 9, status: "pr_open" }, "run-factory"),
+      newerCycleRefusal(target, { id: 9, status: "cancelled" }, "run-factory"),
     ).toContain('add the "run-factory" label');
   });
 
-  test.each(["rejected", "pr_open"] as const)(
-    "tells to add the label again when the newest cycle is %s",
-    (status) => {
-      expect(refuse(status)).toContain("to start a new cycle");
-    },
-  );
+  test("tells to add the label again when the newest cycle is rejected", () => {
+    expect(refuse("rejected")).toContain("to start a new cycle");
+  });
+
+  test("tells to check the pull request when the newest cycle opened one", () => {
+    expect(refuse("pr_open")).toBe(
+      "retry_work_item: work item 3 is superseded by work item 9 (status pr_open), the newer cycle opened a pull request, check that pull request instead",
+    );
+  });
 
   test("does not apply to pull request work items", () => {
     expect(

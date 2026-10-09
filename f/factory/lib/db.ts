@@ -443,8 +443,8 @@ export async function supersedeApprovedIssueWorkItems(
  * 古い承認を実装に使わないよう、新しいサイクルの開始で取り消す。
  * 挿入が負けたときは、何も取り消さない。
  *
- * 挿入の後は例外を投げない。取り消しの文が失敗したときは、警告を残して
- * `superseded`を空にして返す。挿入は済んでいて、呼び出し元は作業項目を登録できたものとして
+ * 挿入の後は例外を投げない。取り消しの文が失敗したときは、警告のログと
+ * `supersede_failed`のnoticeを残して`superseded`を空にして返す。挿入は済んでいて、呼び出し元は作業項目を登録できたものとして
  * フローを起動する必要があるためである。取り消せなかった承認は、上のとおり
  * 次の新しいサイクルで取り消され、それまでは`retry_work_item`が再開を断る。
  * 挿入そのものの失敗は、そのまま投げる。
@@ -500,6 +500,24 @@ export async function insertIssueWorkItemUnlessActive(
       work_item_id: id,
       error: maskSecrets(err instanceof Error ? err.message : String(err)),
     });
+    try {
+      // 本文は対象と新しい作業項目のIDだけで決まるので、同じ本文の未解決のnoticeは重ならない。
+      // 失敗の文は載せない(ログに残した)。
+      await addNoticeUnlessUnresolved(
+        {
+          kind: "supersede_failed",
+          message: `${item.owner}/${item.repo}#${String(item.issue_number)} (work item ${String(id)}): 古い承認済みの作業項目を取り消せませんでした。古い承認は再開できず、操作は要りません。次の新しいサイクルで取り消されます`,
+        },
+        sql,
+      );
+    } catch (noticeErr) {
+      log.warn("supersede_failed notice could not be recorded", {
+        work_item_id: id,
+        error: maskSecrets(
+          noticeErr instanceof Error ? noticeErr.message : String(noticeErr),
+        ),
+      });
+    }
     return { id, superseded: [] };
   }
 }

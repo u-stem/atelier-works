@@ -195,6 +195,7 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `labeler_association_denied` | `poll_issues` | 対象、ラベル付与者の関係 |
 | `claim_race_lost` | `poll_issues`、`poll_prs`、`manual_intake_register` | 対象、取得できなかった理由 |
 | `claim_assignee_missing` | `poll_issues` | 対象、assigneeにできなかったユーザー、確かめる点 |
+| `supersede_failed` | `insertIssueWorkItemUnlessActive`(`poll_issues`が呼ぶ) | 対象、新しい作業項目のID、操作が要らないこと |
 | `deployed_sha_mismatch` | `poll_issues` | self cloneのHEADと`f/factory/deployed_sha` |
 | `cleanup_db_failed` | `cleanup_db` | 削除に失敗した対象とエラー |
 | `cleanup_worktrees_skipped` | `cleanup_workspaces` | 掃除を見送ったリポジトリ |
@@ -204,8 +205,9 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 `fix_reply_post_failed`は、返信の投稿に1件以上失敗したとき1件だけ残す。Discordには通知しない。`unsandboxed_check_commands`は、検査コマンドを実行するたびに残す。
 `cleanup_worktree_busy`は、1回の掃除でworktreeのパスごとに1件残す。Discordには通知しない。
 次のnoticeは、同じ本文の未解決のものがあるあいだは追加しない。
-対象は、`labeler_association_denied`、`claim_assignee_missing`、`claim_race_lost`である。
+対象は、`labeler_association_denied`、`claim_assignee_missing`、`claim_race_lost`、`supersede_failed`である。
 `claim_race_lost`は、`poll_issues`と`manual_intake_register`が残すものに限る。
+`supersede_failed`は、新しいサイクルの挿入の後に、古い承認済みの作業項目を取り消す文が失敗したときに残す。Discordには通知しない。
 同じ状況が続く間、ポーリングのたびに積み上がるのを防ぐためである。
 `deployed_sha_mismatch`は、self cloneのHEADとデプロイ版が同じ組で、未解決のnoticeがあるあいだは追加しない。
 `poll_issues`が実行されるたびに同じnoticeが積み上がり、ほかの種類が埋もれるためである。
