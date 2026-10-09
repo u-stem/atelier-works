@@ -1825,6 +1825,7 @@ function parseGtrPorcelain(stdout: string): GtrWorktree {
 /**
  * `dir`以外のworktreeが`refs/heads/<branch>`をcheckoutしていれば例外を投げる。
  * `dir`はworktreeの一覧に出るため、パスをrealpathで解決して自分自身を除く。
+ * HEADを読んでから一覧を取るまでの間に、生き残りが`dir`のHEADを対象のブランチへ移すことがあり、そのとき`dir`自身を誤って止めないためである。
  * 解決できないパスは、そのままの文字列で比べる。
  * 一覧を取れないときも例外にし、呼び出し側をresetに進ませない。
  */
@@ -1874,6 +1875,7 @@ async function assertBranchFreeInOtherWorktrees(opts: {
  * gitの版によっては、`checkout -B`は他のworktreeがcheckoutしているブランチを黙って付け替える。
  * そのため、切り替えの前に`git worktree list`で`dir`以外のworktreeを確かめ、
  * 対象のブランチをcheckoutしているものがあれば例外を投げる。パスは、realpathで解決した値で比べる。
+ * 別のworktreeがrebaseやbisectの途中でHEADがdetachedのものと、確認とcheckoutの間の競合は、このmoduleでは防げず、2.44以降のgitの拒否に任せる。
  * worktreeを作り直さないのは、作り直しにも生き残りの確かめとポインタの検証がもう一度要り、
  * 再利用するworktreeでは対象リポジトリが無視しているファイル(`node_modules/`など)まで失うためである。
  * `--no-track`は、起点が`origin/<branch>`のときに上流の設定をメインのcloneの`.git/config`へ書かないために付ける。

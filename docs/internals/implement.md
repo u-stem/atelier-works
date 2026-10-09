@@ -382,6 +382,9 @@ Windmillでジョブを取り消しても、新しいセッションで起動し
 `reset --hard`はHEADが指すブランチを動かすので、生き残りが別のブランチをcheckoutしていると、そのブランチを動かしてしまうためである。
 
 - 指していなければ(別のブランチかdetached)、切り替えの前に`git worktree list`で、ほかのworktreeが対象のブランチをcheckoutしていないことを確かめる。gitの版によっては`checkout -B`がほかのworktreeのブランチを黙って付け替えるので、gitの拒否には頼らない。
+- 自前で確かめるのは、ほかのworktreeが対象のブランチをcheckoutしている場合だけである。
+- ほかのworktreeが対象のブランチをrebaseかbisectの途中にしていると、そのworktreeのHEADはdetachedで、一覧に対象のブランチが載らない。この場合は、git 2.44以降の拒否に頼る。
+- 確認とcheckoutの間に起きる変化は防げない。この間の競合も、git 2.44以降の拒否が最後の防御になる。
 - ほかのworktreeが使っていなければ、`git checkout -f --no-track -B <branch> <戻す先>`で対象のブランチへ移す。この切り替えは、それまでHEADが指していたブランチを動かさない。
 - 次のときは、resetせずに失敗する。
   - HEADを読めない。

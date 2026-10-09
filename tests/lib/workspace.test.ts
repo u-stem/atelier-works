@@ -1844,6 +1844,31 @@ describe("createGtrWorktree", () => {
         ]);
       });
 
+      const anotherWorktreeHasBranch = () =>
+        createFakeCommandRunner([
+          ...responses().slice(0, 5),
+          ok("refs/heads/other\n"),
+          ok(BRANCH_IN_ANOTHER_WORKTREE),
+        ]);
+
+      test("throws when another worktree has the branch checked out", async () => {
+        const fake = anotherWorktreeHasBranch();
+        await expect(create(fake, true)).rejects.toThrow(
+          /checked out in another worktree \/tmp\/repo-worktrees\/elsewhere \(gtr new after stopping processes\)/,
+        );
+      });
+
+      test("does not check out or reset when another worktree has the branch checked out", async () => {
+        const fake = anotherWorktreeHasBranch();
+        await create(fake, true).catch(() => undefined);
+        expect(
+          fake.calls.some(
+            (call) =>
+              call.argv.includes("checkout") || call.argv.includes("reset"),
+          ),
+        ).toBe(false);
+      });
+
       test("does not reset when HEAD cannot be read", async () => {
         const fake = createFakeCommandRunner([
           ...responses().slice(0, 5),
@@ -2100,6 +2125,8 @@ describe("ensureHeadOnBranch (fake git)", () => {
     return { fake, done };
   };
 
+  // HEADを読んだ後、一覧を取るまでの間に生き残りがdirのHEADを対象のブランチへ移した状況を模す。
+  // 一覧ではdir自身が別のパスで対象のブランチに載るので、自分自身として除かれる。
   test("does not treat the dir itself as another worktree when it is listed by a different path", async () => {
     const { done } = ensureWith(
       [
