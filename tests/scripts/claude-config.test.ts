@@ -158,6 +158,14 @@ describe(".claude/agents", () => {
   test("makes security-auditor report the audited HEAD", () => {
     expect(body("security-auditor")).toContain("監査した HEAD: <sha>");
   });
+
+  test("runs triage on the same model as the strongest reviewers", () => {
+    expect(frontmatter("triage").model).toBe("fable");
+  });
+
+  test("makes triage decide by the numbered criteria", () => {
+    expect(body("triage")).toContain("見送る(基準<番号>)");
+  });
 });
 
 describe("repository-owned Claude config", () => {
