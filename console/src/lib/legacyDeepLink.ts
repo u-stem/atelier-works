@@ -42,9 +42,3 @@ export function legacyDeepLinkTarget(hash: string): string | null {
   }
   return null;
 }
-
-/** `/console`から始まるパスを、routerのbasenameを除いたパスにする。 */
-export function consolePathToRoute(path: string): string {
-  const rest = path.slice(CONSOLE_BASE.length);
-  return rest.startsWith("/") ? rest : `/${rest}`;
-}

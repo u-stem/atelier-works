@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { consolePathToRoute, legacyDeepLinkTarget } from "./legacyDeepLink.ts";
+import { legacyDeepLinkTarget } from "./legacyDeepLink.ts";
 
 describe("legacyDeepLinkTarget", () => {
   test("maps a requirements link", () => {
@@ -38,17 +38,5 @@ describe("legacyDeepLinkTarget", () => {
     ["not at the start", "x#requirements/12"],
   ])("returns null for %s", (_name, hash) => {
     expect(legacyDeepLinkTarget(hash)).toBeNull();
-  });
-});
-
-describe("consolePathToRoute", () => {
-  test("strips the console base path", () => {
-    expect(consolePathToRoute("/console/items/12/requirements?attempt=2")).toBe(
-      "/items/12/requirements?attempt=2",
-    );
-  });
-
-  test("returns the root for the console root", () => {
-    expect(consolePathToRoute("/console/")).toBe("/");
   });
 });

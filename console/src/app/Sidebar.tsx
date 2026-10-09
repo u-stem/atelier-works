@@ -87,7 +87,7 @@ export function Sidebar() {
           variant="ghost"
           size="icon"
           aria-expanded={!collapsed}
-          aria-label={collapsed ? "メニューを広げる" : "メニューをたたむ"}
+          aria-label="メニューの開閉"
           onClick={toggle}
         >
           {collapsed ? (
@@ -107,7 +107,7 @@ export function Sidebar() {
           const Icon = screen.icon;
           const badge = formatBadgeCount(screen.badge(summary.data?.counts));
           return (
-            <Tooltip key={screen.id} {...(collapsed ? {} : { open: false })}>
+            <Tooltip key={screen.id}>
               <TooltipTrigger asChild>
                 <NavLink
                   to={screen.path}
@@ -138,9 +138,13 @@ export function Sidebar() {
                   )}
                 </NavLink>
               </TooltipTrigger>
-              <TooltipContent side="right">
-                {badge === null ? screen.label : `${screen.label}(${badge}件)`}
-              </TooltipContent>
+              {collapsed ? (
+                <TooltipContent side="right">
+                  {badge === null
+                    ? screen.label
+                    : `${screen.label}(${badge}件)`}
+                </TooltipContent>
+              ) : null}
             </Tooltip>
           );
         })}

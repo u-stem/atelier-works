@@ -16,10 +16,18 @@ export type LazyScreen = () => Promise<{ Component: ComponentType }>;
 
 export type ScreenId = "inbox" | "items" | "reports" | "system";
 
-/** 入口の下で受ける経路。パスは`/`で始めず、routerの基準からの相対で書く。 */
-export type ScreenChild = {
+/**
+ * 入口の下で受ける経路。
+ * 入口の直下に置く経路のパスは、`/`で始めず、外枠からの相対で書く。
+ * `children`の経路のパスは、親の経路からの相対で書く。親の画面は`Outlet`を描く。
+ * `ErrorBoundary`を省くと、外枠が用意する既定の表示になる。
+ * 読み込みや描画の失敗は、この表示が画面の位置で受け、外枠とサイドバーは残る。
+ */
+export type ScreenRoute = {
   readonly path: string;
   readonly lazy: LazyScreen;
+  readonly ErrorBoundary?: ComponentType;
+  readonly children?: readonly ScreenRoute[];
 };
 
 export type Screen = {
@@ -31,7 +39,8 @@ export type Screen = {
   /** サイドバーに出す件数。件数が分からないときと、件数の無い入口は0を返す。 */
   readonly badge: (counts: SummaryCounts | undefined) => number;
   readonly lazy: LazyScreen;
-  readonly children: readonly ScreenChild[];
+  readonly ErrorBoundary?: ComponentType;
+  readonly children: readonly ScreenRoute[];
 };
 
 const noBadge = (): number => 0;
