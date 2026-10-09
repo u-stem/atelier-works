@@ -72,7 +72,7 @@ export function ApprovalOverview({
         </dd>
       </dl>
       <p className="text-sm text-muted-foreground">
-        本文の表示と、承認・却下の操作は、この画面に追加されます。
+        本文の表示と、承認・却下の操作は準備中です。
       </p>
     </article>
   );

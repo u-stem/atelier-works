@@ -6,7 +6,7 @@ export function SystemScreen() {
     <>
       <PageHeader title="システム" />
       <ComingSoon>
-        反映の状態と通知の履歴は、この画面に追加されます。
+        反映の状態と通知の履歴は、ここに表示する予定です。
       </ComingSoon>
     </>
   );

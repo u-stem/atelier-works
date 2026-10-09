@@ -25,7 +25,7 @@ export function ItemRequirementsScreen() {
   return (
     <>
       <PageHeader title={title} />
-      <ComingSoon>要件定義書の表示は、この画面に追加されます。</ComingSoon>
+      <ComingSoon>要件定義書は、ここに表示する予定です。</ComingSoon>
     </>
   );
 }

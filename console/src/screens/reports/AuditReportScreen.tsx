@@ -19,7 +19,7 @@ export function AuditReportScreen() {
   return (
     <>
       <PageHeader title={`${workItemRef(workItemId)}の監査レポート`} />
-      <ComingSoon>監査レポートの表示は、この画面に追加されます。</ComingSoon>
+      <ComingSoon>監査レポートは、ここに表示する予定です。</ComingSoon>
     </>
   );
 }

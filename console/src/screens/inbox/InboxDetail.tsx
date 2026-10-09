@@ -29,8 +29,8 @@ export function InboxDetail({
     case "approval":
       return <ApprovalOverview approval={item.approval} now={now} />;
     case "failure":
-      return <Message>失敗の詳細は、この画面に追加されます。</Message>;
+      return <Message>失敗の詳細は準備中です。</Message>;
     case "notice":
-      return <Message>通知の詳細は、この画面に追加されます。</Message>;
+      return <Message>通知の詳細は準備中です。</Message>;
   }
 }
