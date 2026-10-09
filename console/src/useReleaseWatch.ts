@@ -1,23 +1,9 @@
 import { useEffect, useState } from "react";
+import { referencedUrls } from "./lib/referencedUrls.ts";
 import { ownAssetPaths, type ReleaseNotice } from "./lib/release.ts";
 import { checkRelease } from "./lib/releaseCheck.ts";
 
 const CHECK_INTERVAL_MS = 60_000;
-const OWN_ASSET_SELECTOR =
-  'script[src], link[rel="stylesheet"][href], link[rel="modulepreload"][href]';
-
-/** 画面が参照しているscriptとstylesheetのURLを集める。 */
-function referencedUrls(): string[] {
-  const urls: string[] = [];
-  for (const element of document.querySelectorAll(OWN_ASSET_SELECTOR)) {
-    if (element instanceof HTMLScriptElement) {
-      urls.push(element.src);
-    } else if (element instanceof HTMLLinkElement) {
-      urls.push(element.href);
-    }
-  }
-  return urls;
-}
 
 /**
  * 開いたままのタブが、配信中の版から外れていないかを確かめ続ける。
@@ -26,7 +12,8 @@ function referencedUrls(): string[] {
  * modulepreloadとstylesheetも拾うためである。
  * 集合が空の回(`/console/assets/`の下にファイルが無い)は何もしない。
  * 開発サーバーは、index.htmlの`/console/assets/`の参照にbaseを前置して集合を空にする。
- * 空でなくても`/console/manifest.json`が無いので、前回の判定(none)を保つ。
+ * 周期、visibleへの復帰、running、activeの扱いはDOM環境が無いのでテストしていない。
+ * 確認1回分は`checkRelease`、URLの収集は`referencedUrls`でテストしている。
  */
 export function useReleaseWatch(): ReleaseNotice {
   const [notice, setNotice] = useState<ReleaseNotice>("none");
@@ -42,7 +29,10 @@ export function useReleaseWatch(): ReleaseNotice {
       }
       running = true;
       try {
-        const ownAssets = ownAssetPaths(referencedUrls(), location.origin);
+        const ownAssets = ownAssetPaths(
+          referencedUrls(document, location.href),
+          location.origin,
+        );
         if (ownAssets.size === 0) {
           return;
         }

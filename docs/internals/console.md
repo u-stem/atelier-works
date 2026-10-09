@@ -58,23 +58,33 @@ Caddyは、`/console/`の下を次の経路で返す。
 `/console/manifest.json`は、`current/`の`manifest.json`である。
 `status.json`は`state`、`sha`、`checked_at`、`error`の4項目だけを持つ。
 
+## 開いたままのタブの版の確認
+
 開いたままのタブは、`manifest.json`と`status.json`を読んで、自分の版が配信中かを確かめる。
 実装は`console/src/lib/`と`console/src/`にある。
 
+- `lib/referencedUrls.ts`: 画面が参照するscriptとstylesheetのURLの収集
 - `lib/release.ts`: 判定
 - `lib/releaseCheck.ts`: 取得と判定の1回分
 - `useReleaseWatch.ts`: 周期の管理
 
-自分の版は、画面が参照するscriptとstylesheetのうち、`/console/assets/`の下にあるファイル名の集合で見分ける。
-確かめるたびに、DOMから集合を取り直す。後から読み込んだchunkの参照も拾うためである。
-基準のオリジンと違うURLと、`%`を含む名前は集合に入れない。
-集合が空の回は、何も取りに行かない。
-開発サーバーは`index.html`の`/console/assets/`の参照にbaseを前置するので、集合が空になる。
-集合が空でなくても、開発サーバーには`/console/manifest.json`が無いので、前回の判定(出さない)を保つ。
-`index.html`に直書きした`/console/assets/`の参照は、すべて`console/public/assets/`に置く。Viteが`dist/assets/`に写し、`manifest.json`に載せるためである。載らない参照があると、再読み込みしても消えない帯が出る。
-ビルドに版のshaは埋め込まない。版ごとに中身が変わると、`console_fetcher`の中身による同一判定と`revoked.json`の照合が働かなくなるためである。
+### 自分の版の見分け方
 
-判定は次のとおり。
+自分の版は、画面が参照するscriptとstylesheetのうち、`/console/assets/`の下にあるファイル名の集合で見分ける。
+確かめるたびに、DOMから集合を取り直す。
+後から読み込んだchunkの参照も拾うためである。
+基準のオリジンと違うURLと、`%`を含む名前は集合に入れない。
+集合が空の回は、何も取りに行かず、前回の判定を保つ。
+開発サーバーは`index.html`の`/console/assets/`の参照にbaseを前置するので、集合が空になる。
+
+`index.html`に直書きした`/console/assets/`の参照は、すべて`console/public/assets/`に置く。
+Viteが`dist/assets/`に写し、`manifest.json`に載せるためである。
+載らない参照があると、再読み込みしても消えない帯が出る。
+
+ビルドに版のshaは埋め込まない。
+版ごとに中身が変わると、`console_fetcher`の中身による同一判定と`revoked.json`の照合が働かなくなるためである。
+
+### 判定
 
 | 状況 | 表示 |
 | --- | --- |

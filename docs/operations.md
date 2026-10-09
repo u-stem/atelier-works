@@ -638,7 +638,8 @@ mise exec -- docker compose -f infra/docker-compose.yml logs --tail 50 console_f
 `pin`の間は、配信中でない版を開いたタブはすべて、目立つ色の帯になる。
 `status.json`は`/console/status.json`で配信する。
 Caddyfileを更新してCaddyを再起動するまでは、`/console/status.json`が`index.html`に落ちて状態を読めない。
-その間は、`pin`による目立つ色の帯は出ない。無かったファイルが404のときの目立つ色の帯と、控えめな帯は出る。
+その間は、`pin`による目立つ色の帯は出ない。
+無かったファイルが404のときの目立つ色の帯と、控えめな帯は出る。
 
 `revoked.json`の扱いは次のとおり。
 

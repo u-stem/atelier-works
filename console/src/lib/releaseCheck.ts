@@ -42,18 +42,15 @@ async function isMissing(fetchFn: FetchFn, asset: string): Promise<boolean> {
 /**
  * 配信中の版のmanifestとstatusを取り、案内の強さを返す。
  * 自分のファイルのうちmanifestに無いものにだけHEADを送り、404かを確かめる。
- * manifestを取れなかったときと、前回がurgeのときは、前回の判定を返す。
+ * manifestを取れなかったとき、前回がurgeのとき、自分のファイルが無いときは、前回の判定を返す。
  */
 export async function checkRelease(
   fetchFn: FetchFn,
   ownAssets: ReadonlySet<string>,
   previous: ReleaseNotice,
 ): Promise<ReleaseNotice> {
-  if (previous === "urge") {
+  if (previous === "urge" || ownAssets.size === 0) {
     return previous;
-  }
-  if (ownAssets.size === 0) {
-    return "none";
   }
   const [manifestBody, statusBody] = await Promise.all([
     fetchJson(fetchFn, MANIFEST_URL),

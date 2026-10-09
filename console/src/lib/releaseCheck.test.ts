@@ -185,4 +185,9 @@ describe("checkRelease", () => {
     await checkRelease(fetchFn, new Set(), "none");
     expect(calls).toEqual([]);
   });
+
+  test("keeps the previous result when there is no own asset to watch", async () => {
+    const { fetchFn } = fake({});
+    expect(await checkRelease(fetchFn, new Set(), "suggest")).toBe("suggest");
+  });
 });
