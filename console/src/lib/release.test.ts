@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   judgeRelease,
   ownAssetPath,
+  ownAssetPaths,
   parseManifestFiles,
   parseReleaseStatus,
   type ReleaseNotice,
@@ -20,14 +21,14 @@ function status(state: ReleaseStatus["state"]): ReleaseStatus {
 }
 
 function judge(overrides: {
-  ownAsset?: string | null;
+  ownAssets?: ReadonlySet<string>;
   manifestFiles?: ReadonlySet<string> | null;
   status?: ReleaseStatus | null;
   ownAssetMissing?: boolean;
   previous?: ReleaseNotice;
 }): ReleaseNotice {
   return judgeRelease({
-    ownAsset: OWN,
+    ownAssets: new Set([OWN]),
     manifestFiles: new Set(["index.html", OWN]),
     status: status("ok"),
     ownAssetMissing: false,
@@ -65,6 +66,50 @@ describe("ownAssetPath", () => {
 
   test("returns null for a URL that cannot be parsed", () => {
     expect(ownAssetPath("not a url")).toBeNull();
+  });
+});
+
+describe("ownAssetPaths", () => {
+  test("collects the assets under /console/assets/", () => {
+    expect(
+      ownAssetPaths([
+        "https://factory.example/console/assets/index-AAAA.js",
+        "https://factory.example/console/assets/index-BBBB.css",
+      ]),
+    ).toEqual(new Set(["assets/index-AAAA.js", "assets/index-BBBB.css"]));
+  });
+
+  test("includes hand-placed files such as the theme init script", () => {
+    expect(
+      ownAssetPaths(["https://factory.example/console/assets/theme-init-1.js"]),
+    ).toEqual(new Set(["assets/theme-init-1.js"]));
+  });
+
+  test("drops URLs outside /console/assets/", () => {
+    expect(
+      ownAssetPaths([
+        "https://factory.example/console/assets/index-AAAA.js",
+        "https://cdn.example/lib.js",
+        "https://factory.example/api/x.js",
+      ]),
+    ).toEqual(new Set(["assets/index-AAAA.js"]));
+  });
+
+  test("merges duplicate URLs", () => {
+    expect(
+      ownAssetPaths([
+        "https://factory.example/console/assets/a.js",
+        "https://factory.example/console/assets/a.js?v=1",
+      ]).size,
+    ).toBe(1);
+  });
+
+  test("returns an empty set for the dev server", () => {
+    expect(ownAssetPaths(["http://localhost:5173/src/main.tsx"]).size).toBe(0);
+  });
+
+  test("returns an empty set for no URLs", () => {
+    expect(ownAssetPaths([]).size).toBe(0);
   });
 });
 
@@ -197,7 +242,27 @@ describe("judgeRelease", () => {
   });
 
   test("is none when there is no own asset to watch", () => {
-    expect(judge({ ownAsset: null, manifestFiles: new Set() })).toBe("none");
+    expect(judge({ ownAssets: new Set(), manifestFiles: new Set() })).toBe(
+      "none",
+    );
+  });
+
+  test("suggests a reload when only one of the own assets is not in the manifest", () => {
+    expect(
+      judge({
+        ownAssets: new Set([OWN, "assets/index-BBBB.css"]),
+        manifestFiles: new Set([OWN]),
+      }),
+    ).toBe("suggest");
+  });
+
+  test("is none when every own asset is in the manifest", () => {
+    expect(
+      judge({
+        ownAssets: new Set([OWN, "assets/index-BBBB.css"]),
+        manifestFiles: new Set([OWN, "assets/index-BBBB.css"]),
+      }),
+    ).toBe("none");
   });
 
   test("suggests a reload when the own asset is not in the manifest", () => {

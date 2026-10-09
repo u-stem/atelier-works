@@ -19,7 +19,7 @@ export function ReloadBanner({ notice }: { notice: ReleaseNotice }) {
         className="flex items-center justify-between gap-4 bg-destructive px-6 py-3 text-sm font-medium text-destructive-foreground"
       >
         <p>
-          この版は取り下げられました。画面が正しく動かないことがあるので、再読み込みしてください。
+          配信中の版が戻されたか、この画面のファイルが配信から外れました。正しく動かないことがあるので、再読み込みしてください。
         </p>
         <button type="button" className={BUTTON_CLASS} onClick={reload}>
           再読み込み

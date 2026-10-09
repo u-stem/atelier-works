@@ -1,5 +1,5 @@
 // 開いたままのタブが、自分の版がまだ配信中かを判定する純粋関数。
-// ネットワークとDOMには触れない。取得は useReleaseWatch が行う。
+// ネットワークとDOMには触れない。取得は releaseCheck.ts、周期の管理は useReleaseWatch が行う。
 
 /** 画面に出す案内の強さ。none は何も出さない。 */
 export type ReleaseNotice = "none" | "suggest" | "urge";
@@ -32,6 +32,21 @@ export function ownAssetPath(moduleUrl: string): string | null {
   }
   const name = pathname.slice(ASSETS_PREFIX.length);
   return name === "" ? null : `assets/${name}`;
+}
+
+/**
+ * 画面が参照するファイルのURLの一覧から、配信物の中の自分のファイル名の集合を作る。
+ * `/console/assets/`の下でないURLは捨てる。空なら(開発サーバーなど)監視しない。
+ */
+export function ownAssetPaths(urls: readonly string[]): ReadonlySet<string> {
+  const names = new Set<string>();
+  for (const url of urls) {
+    const name = ownAssetPath(url);
+    if (name !== null) {
+      names.add(name);
+    }
+  }
+  return names;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -82,13 +97,13 @@ export function parseReleaseStatus(value: unknown): ReleaseStatus | null {
 }
 
 export type ReleaseJudgement = {
-  /** 自分のファイル名。監視しないときはnull。 */
-  ownAsset: string | null;
+  /** 自分のファイル名の集合。空なら監視しない。 */
+  ownAssets: ReadonlySet<string>;
   /** 配信中の版のファイル名の集合。取得できなかったときはnull。 */
   manifestFiles: ReadonlySet<string> | null;
   /** 読めなかったときはnull。 */
   status: ReleaseStatus | null;
-  /** 自分のファイルを取りに行くと404だったか。確かめていないときはfalse。 */
+  /** 配信中の版に無い自分のファイルのどれかを取りに行くと404だったか。確かめていないときはfalse。 */
   ownAssetMissing: boolean;
   /** 前回の判定。 */
   previous: ReleaseNotice;
@@ -96,9 +111,9 @@ export type ReleaseJudgement = {
 
 /**
  * 案内の強さを決める。
- * - 自分のファイルが配信中の版にあれば none。
- * - 無ければ suggest。さらに、版を戻して固定している(pinned)か、
- *   自分のファイルがもう取れなければ urge。
+ * - 自分のファイルがすべて配信中の版にあれば none。
+ * - 1つでも無ければ suggest。さらに、版を戻して固定している(pinned)か、
+ *   無かったファイルのどれかがもう取れなければ urge。
  * - manifestを取れなかったときは前回の判定を保つ。
  * - 一度 urge になったら下げない。取り下げられた版は戻らないため。
  */
@@ -106,7 +121,11 @@ export function judgeRelease(input: ReleaseJudgement): ReleaseNotice {
   if (input.previous === "urge" || input.manifestFiles === null) {
     return input.previous;
   }
-  if (input.ownAsset === null || input.manifestFiles.has(input.ownAsset)) {
+  const { manifestFiles } = input;
+  const allServed = [...input.ownAssets].every((name) =>
+    manifestFiles.has(name),
+  );
+  if (allServed) {
     return "none";
   }
   if (input.status?.state === "pinned" || input.ownAssetMissing) {

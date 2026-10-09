@@ -1,55 +1,41 @@
 import { useEffect, useState } from "react";
-import {
-  judgeRelease,
-  ownAssetPath,
-  parseManifestFiles,
-  parseReleaseStatus,
-  type ReleaseNotice,
-} from "./lib/release.ts";
+import { ownAssetPaths, type ReleaseNotice } from "./lib/release.ts";
+import { checkRelease } from "./lib/releaseCheck.ts";
 
-const MANIFEST_URL = "/console/manifest.json";
-const STATUS_URL = "/console/status.json";
 const CHECK_INTERVAL_MS = 60_000;
+const OWN_ASSET_SELECTOR =
+  'script[src], link[rel="stylesheet"][href], link[rel="modulepreload"][href]';
 
-/** 取得か解析に失敗したときはundefinedを返す。失敗は表示に反映しない。 */
-async function fetchJson(url: string): Promise<unknown> {
-  try {
-    const response = await fetch(url, { cache: "no-store" });
-    if (!response.ok) {
-      return undefined;
+/** 画面が参照しているscriptとstylesheetのURLを集める。 */
+function referencedUrls(): string[] {
+  const urls: string[] = [];
+  for (const element of document.querySelectorAll(OWN_ASSET_SELECTOR)) {
+    if (element instanceof HTMLScriptElement) {
+      urls.push(element.src);
+    } else if (element instanceof HTMLLinkElement) {
+      urls.push(element.href);
     }
-    return await response.json();
-  } catch {
-    return undefined;
   }
-}
-
-/** 自分のファイルが404かを返す。確かめられなかったときはfalse。 */
-async function isOwnAssetMissing(url: string): Promise<boolean> {
-  try {
-    const response = await fetch(url, { method: "HEAD", cache: "no-store" });
-    return response.status === 404;
-  } catch {
-    return false;
-  }
+  return urls;
 }
 
 /**
  * 開いたままのタブが、配信中の版から外れていないかを確かめ続ける。
- * 60秒ごとと、タブが見える状態に戻ったときに確かめる。
- * 開発サーバーなど、配信物でないときは何もせず none を返す。
+ * 表示した直後と、その後60秒ごと、タブが見える状態に戻ったときに確かめる。
+ * 画面が参照するファイルが`/console/assets/`の下に無いとき(開発サーバーなど)は、
+ * 何もせず none を返す。
  */
 export function useReleaseWatch(): ReleaseNotice {
   const [notice, setNotice] = useState<ReleaseNotice>("none");
 
   useEffect(() => {
-    const ownUrl = import.meta.url;
-    const ownAsset = ownAssetPath(ownUrl);
-    if (ownAsset === null) {
+    const ownAssets = ownAssetPaths(referencedUrls());
+    if (ownAssets.size === 0) {
       return;
     }
     let active = true;
     let running = false;
+    let latest: ReleaseNotice = "none";
 
     const check = async () => {
       if (running) {
@@ -57,22 +43,13 @@ export function useReleaseWatch(): ReleaseNotice {
       }
       running = true;
       try {
-        const manifestFiles = parseManifestFiles(await fetchJson(MANIFEST_URL));
-        const status = parseReleaseStatus(await fetchJson(STATUS_URL));
-        const ownAssetMissing =
-          manifestFiles !== null && !manifestFiles.has(ownAsset)
-            ? await isOwnAssetMissing(ownUrl)
-            : false;
+        latest = await checkRelease(
+          (input, init) => fetch(input, init),
+          ownAssets,
+          latest,
+        );
         if (active) {
-          setNotice((previous) =>
-            judgeRelease({
-              ownAsset,
-              manifestFiles,
-              status,
-              ownAssetMissing,
-              previous,
-            }),
-          );
+          setNotice(latest);
         }
       } finally {
         running = false;
@@ -85,6 +62,7 @@ export function useReleaseWatch(): ReleaseNotice {
       }
     };
 
+    void check();
     const timer = window.setInterval(() => {
       void check();
     }, CHECK_INTERVAL_MS);

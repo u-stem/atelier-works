@@ -59,9 +59,27 @@ Caddyは、`/console/`の下を次の経路で返す。
 `status.json`は`state`、`sha`、`checked_at`、`error`の4項目だけを持つ。
 
 開いたままのタブは、`manifest.json`と`status.json`を読んで、自分の版が配信中かを確かめる。
-判定は`console/src/lib/release.ts`、取得は`console/src/useReleaseWatch.ts`にある。
+実装は`console/src/lib/`と`console/src/`にある。
+
+- `lib/release.ts`: 判定
+- `lib/releaseCheck.ts`: 取得と判定の1回分
+- `useReleaseWatch.ts`: 周期の管理
+
+自分の版は、画面が参照するscriptとstylesheetのうち、`/console/assets/`の下にあるファイル名の集合で見分ける。
+集合が空のとき(開発サーバーなど)は確かめない。
 ビルドに版のshaは埋め込まない。版ごとに中身が変わると、`console_fetcher`の中身による同一判定と`revoked.json`の照合が働かなくなるためである。
-自分の版は、実行中のscriptのURL(`/console/assets/`の下のファイル名)で見分ける。
+
+判定は次のとおり。
+
+| 状況 | 表示 |
+| --- | --- |
+| 集合のファイルがすべて`manifest.json`にある | 出さない |
+| 1つでも無い | 再読み込みを促す控えめな帯 |
+| 1つでも無く、`state`が`pinned`か、無かったファイルのどれかを取ると404 | 再読み込みを求める目立つ色の帯 |
+
+`manifest.json`を取れないときは、前回の判定を保つ。
+`status.json`を取れなくても、帯は出す。
+一度目立つ色の帯を出したタブは、帯を下げない。
 
 ## ブラウザ側のヘッダー
 
