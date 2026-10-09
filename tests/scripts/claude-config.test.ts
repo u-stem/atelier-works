@@ -132,6 +132,26 @@ describe(".claude/agents", () => {
     );
     expect(missing).toEqual([]);
   });
+
+  const REVIEW_ROLES = [
+    "code-reviewer",
+    "devil-advocate",
+    "security-auditor",
+    "requirements-reviewer",
+    "design-reviewer",
+  ];
+
+  test.each(REVIEW_ROLES)("points %s at the review rules", (name) => {
+    expect(body(name)).toContain(".claude/skills/review-loop/rules.md");
+  });
+
+  test.each(REVIEW_ROLES)("asks %s for the finding fields", (name) => {
+    expect(body(name)).toContain("原因: <原因の分類>");
+  });
+
+  test("makes security-auditor report the audited HEAD", () => {
+    expect(body("security-auditor")).toContain("監査した HEAD: <sha>");
+  });
 });
 
 describe("repository-owned Claude config", () => {
