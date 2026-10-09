@@ -5,7 +5,7 @@ import { Badge } from "../../components/ui/badge.tsx";
 import { describeApproval } from "../../lib/inboxView.ts";
 
 /**
- * 選んだ承認待ちの概要。題名、種類、作業項目、Issueへのリンク、依頼の時刻を出す。
+ * 選んだ承認の概要。題名、種類、作業項目、Issueへのリンク、依頼の時刻を出す。
  * 本文の表示と承認・却下の操作は持たない。
  */
 export function ApprovalOverview({
@@ -19,7 +19,12 @@ export function ApprovalOverview({
   return (
     <article className="flex flex-col gap-4 p-6">
       <header className="flex flex-col gap-2">
-        <Badge variant="outline">{description.kindLabel}</Badge>
+        <div className="flex flex-wrap gap-2">
+          <Badge variant="outline">{description.kindLabel}</Badge>
+          {description.statusLabel === null ? null : (
+            <Badge variant="warning">{description.statusLabel}</Badge>
+          )}
+        </div>
         <h2 className="text-xl font-semibold">{description.title}</h2>
       </header>
       <dl className="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-2 text-sm">

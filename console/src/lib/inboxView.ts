@@ -1,85 +1,179 @@
-// 要対応の画面の承認待ちの一覧について、並び、絞り込み、行の表示内容を決める純粋関数。
+// 要対応の画面の一覧について、項目の型、並び、絞り込み、行の表示内容を決める純粋関数。
+// 項目は承認、失敗、通知の判別可能な和で持つ。種類を足すときは、和の型と`describeRow`を直し、
+// 詳細を描く画面(`screens/inbox/InboxDetail.tsx`)に分岐を足す。
 
-import type { SummaryApproval, SummaryCounts } from "../api/guards/summary.ts";
-import { approvalKindLabel, attemptRef, workItemRef } from "./labels.ts";
+import type {
+  ConsoleSummary,
+  SummaryApproval,
+  SummaryCounts,
+  SummaryFailure,
+  SummaryNotice,
+} from "../api/guards/summary.ts";
+import type { InboxKind, InboxSelection } from "./inboxSelection.ts";
+import {
+  approvalKindLabel,
+  approvalStatusLabel,
+  attemptRef,
+  noticeKindLabel,
+  workItemRef,
+  workItemStatusLabel,
+} from "./labels.ts";
 import { safeGitHubUrl } from "./safeUrl.ts";
 
-/** 種類のチップ。「改善提案」は監査から出たIssue提案である。 */
-export type InboxChip =
-  | "all"
-  | "requirements"
-  | "issue_proposal"
-  | "improvement";
+/** 一覧の1項目。`id`は種類の中で一意で、URLの選択に使う(承認は依頼のid、失敗は作業項目のid、通知は通知のid)。 */
+export type InboxItem =
+  | {
+      readonly type: "approval";
+      readonly id: number;
+      readonly approval: SummaryApproval;
+    }
+  | {
+      readonly type: "failure";
+      readonly id: number;
+      readonly failure: SummaryFailure;
+    }
+  | {
+      readonly type: "notice";
+      readonly id: number;
+      readonly notice: SummaryNotice;
+    };
 
-export const INBOX_CHIPS: readonly { id: InboxChip; label: string }[] = [
-  { id: "all", label: "すべて" },
-  { id: "requirements", label: "要件定義" },
-  { id: "issue_proposal", label: "Issue化提案" },
-  { id: "improvement", label: "改善提案" },
-];
+/** 種類のチップ。`all`は絞り込まない。 */
+export type InboxChip = "all" | InboxKind;
 
-/** 承認待ちの1行が属するチップ。`all`は含めない。 */
-export function chipOf(approval: SummaryApproval): Exclude<InboxChip, "all"> {
-  if (approval.kind === "requirements") {
-    return "requirements";
-  }
-  return approval.origin === "audit" ? "improvement" : "issue_proposal";
+const KIND_ORDER: Readonly<Record<InboxKind, number>> = {
+  approval: 0,
+  failure: 1,
+  notice: 2,
+};
+
+const CHIP_LABELS: Readonly<Record<InboxChip, string>> = {
+  all: "すべて",
+  approval: "承認",
+  failure: "失敗",
+  notice: "通知",
+};
+
+/**
+ * summaryから一覧の項目を作る。
+ * 失敗と通知は、詳細を描く画面ができるまで含めない。件数は`otherCountsNote`で知らせる。
+ */
+export function buildInboxItems(summary: ConsoleSummary): InboxItem[] {
+  return summary.approvals.map(
+    (approval): InboxItem => ({
+      type: "approval",
+      id: approval.approval_request_id,
+      approval,
+    }),
+  );
 }
 
-/** `chip`に当たる行だけを、順序を保って返す。`all`は全件を返す。 */
-export function filterApprovals(
-  approvals: readonly SummaryApproval[],
+export function selectionOf(item: InboxItem): InboxSelection {
+  return { type: item.type, id: item.id };
+}
+
+/** 項目の時刻(ISO文字列)。並び順と行の相対時刻に使う。 */
+function itemTime(item: InboxItem): string {
+  switch (item.type) {
+    case "approval":
+      return item.approval.requested_at;
+    case "failure":
+      return item.failure.updated_at;
+    case "notice":
+      return item.notice.created_at;
+  }
+}
+
+/** 時刻が新しい順に並べた新しい配列を返す。同時刻は種類の順(承認、失敗、通知)、次にidが大きい順にする。 */
+export function sortInboxItems(items: readonly InboxItem[]): InboxItem[] {
+  return [...items].sort((a, b) => {
+    const byTime = Date.parse(itemTime(b)) - Date.parse(itemTime(a));
+    if (byTime !== 0) {
+      return byTime;
+    }
+    const byKind = KIND_ORDER[a.type] - KIND_ORDER[b.type];
+    return byKind !== 0 ? byKind : b.id - a.id;
+  });
+}
+
+/** `chip`に当たる項目だけを、順序を保って返す。`all`は全件を返す。 */
+export function filterInboxItems(
+  items: readonly InboxItem[],
   chip: InboxChip,
-): SummaryApproval[] {
+): InboxItem[] {
   return chip === "all"
-    ? [...approvals]
-    : approvals.filter((approval) => chipOf(approval) === chip);
+    ? [...items]
+    : items.filter((item) => item.type === chip);
 }
 
 /** チップごとの件数。チップの横に出して、絞り込む前に件数が分かるようにする。 */
 export function chipCounts(
-  approvals: readonly SummaryApproval[],
+  items: readonly InboxItem[],
 ): Record<InboxChip, number> {
   const counts: Record<InboxChip, number> = {
-    all: approvals.length,
-    requirements: 0,
-    issue_proposal: 0,
-    improvement: 0,
+    all: items.length,
+    approval: 0,
+    failure: 0,
+    notice: 0,
   };
-  for (const approval of approvals) {
-    counts[chipOf(approval)] += 1;
+  for (const item of items) {
+    counts[item.type] += 1;
   }
   return counts;
 }
 
-/** 依頼が新しい順に並べた新しい配列を返す。同時刻はidが大きい順にする。 */
-export function sortApprovals(
-  approvals: readonly SummaryApproval[],
-): SummaryApproval[] {
-  return [...approvals].sort((a, b) => {
-    const byTime = Date.parse(b.requested_at) - Date.parse(a.requested_at);
-    return byTime !== 0
-      ? byTime
-      : b.approval_request_id - a.approval_request_id;
-  });
+/**
+ * 画面に出すチップ。「すべて」と「承認」は常に出し、失敗と通知は項目があるときだけ出す。
+ * 一覧に載せない種類のチップを出して、空の一覧へ誘導しないためである。
+ */
+export function visibleChips(
+  items: readonly InboxItem[],
+): { id: InboxChip; label: string }[] {
+  const present = new Set(items.map((item) => item.type));
+  const chips: InboxChip[] = ["all", "approval"];
+  if (present.has("failure")) {
+    chips.push("failure");
+  }
+  if (present.has("notice")) {
+    chips.push("notice");
+  }
+  return chips.map((id) => ({ id, label: CHIP_LABELS[id] }));
 }
 
-/** 選んだidの行を返す。選んでいないとき、または一覧に無いときは`null`。 */
-export function findApproval(
-  approvals: readonly SummaryApproval[],
-  id: number | null,
-): SummaryApproval | null {
-  if (id === null) {
+/** 選択に当たる項目を返す。選んでいないとき、または一覧に無いときは`null`。 */
+export function findInboxItem(
+  items: readonly InboxItem[],
+  selection: InboxSelection | null,
+): InboxItem | null {
+  if (selection === null) {
     return null;
   }
   return (
-    approvals.find((approval) => approval.approval_request_id === id) ?? null
+    items.find(
+      (item) => item.type === selection.type && item.id === selection.id,
+    ) ?? null
   );
+}
+
+/**
+ * チップを切り替えた後に残す選択。チップが選択の種類を隠すときは外す。
+ * 隠れた項目の詳細を出したままにしないためである。
+ */
+export function selectionAfterFilter(
+  selection: InboxSelection | null,
+  chip: InboxChip,
+): InboxSelection | null {
+  if (selection === null) {
+    return null;
+  }
+  return chip === "all" || chip === selection.type ? selection : null;
 }
 
 export type ApprovalDescription = {
   readonly title: string;
   readonly kindLabel: string;
+  /** 承認待ち(pending)以外の状態の語。承認待ちなら`null`。 */
+  readonly statusLabel: string | null;
   readonly workItemLabel: string;
   /** 要件定義の試行。要件定義でないときは`null`。 */
   readonly attemptLabel: string | null;
@@ -88,7 +182,10 @@ export type ApprovalDescription = {
   readonly issueUrl: string | null;
 };
 
-/** 一覧の行と詳細の概要に出す内容。画面は生のコードを出さず、この結果だけを描く。 */
+/**
+ * 承認の1行を、詳細の概要に出す内容にする。画面は生のコードを出さず、この結果だけを描く。
+ * summaryには、承認済みでIssueをまだ作っていないIssue提案も入るので、状態の語を添える。
+ */
 export function describeApproval(
   approval: SummaryApproval,
 ): ApprovalDescription {
@@ -99,6 +196,10 @@ export function describeApproval(
   return {
     title: title ?? workItemRef(approval.work_item_id),
     kindLabel: approvalKindLabel(approval.kind, approval.origin),
+    statusLabel:
+      approval.status === "pending"
+        ? null
+        : approvalStatusLabel(approval.status, approval.kind),
     workItemLabel: workItemRef(approval.work_item_id),
     attemptLabel:
       approval.kind === "requirements" && approval.draft_attempt !== null
@@ -110,17 +211,73 @@ export function describeApproval(
   };
 }
 
-/**
- * 承認待ち以外の要対応(失敗と通知)の件数を伝える文。無ければ`null`。
- * 承認待ちの一覧にこれらは含まれないので、件数があることだけを知らせる。
- */
-export function otherCountsNote(counts: SummaryCounts): string | null {
-  const parts: string[] = [];
-  if (counts.failures > 0) {
-    parts.push(`失敗が${counts.failures}件`);
+export type RowDescription = {
+  /** 一覧の行の識別子。`type:id`の形。 */
+  readonly key: string;
+  readonly title: string;
+  readonly kindLabel: string;
+  readonly statusLabel: string | null;
+  readonly subLabel: string | null;
+  readonly iso: string;
+};
+
+/** 一覧の1行に出す内容。種類ごとの違いはここに閉じ込め、行の部品は種類を知らずに描く。 */
+export function describeRow(item: InboxItem): RowDescription {
+  const key = `${item.type}:${item.id}`;
+  switch (item.type) {
+    case "approval": {
+      const description = describeApproval(item.approval);
+      return {
+        key,
+        title: description.title,
+        kindLabel: description.kindLabel,
+        statusLabel: description.statusLabel,
+        subLabel: description.workItemLabel,
+        iso: item.approval.requested_at,
+      };
+    }
+    case "failure":
+      return {
+        key,
+        title: item.failure.title ?? workItemRef(item.failure.work_item_id),
+        kindLabel: "失敗",
+        statusLabel: workItemStatusLabel(item.failure.status),
+        subLabel: workItemRef(item.failure.work_item_id),
+        iso: item.failure.updated_at,
+      };
+    case "notice":
+      return {
+        key,
+        title: noticeKindLabel(item.notice.kind),
+        kindLabel: "通知",
+        statusLabel: null,
+        subLabel: null,
+        iso: item.notice.created_at,
+      };
   }
-  if (counts.notices > 0) {
-    parts.push(`通知が${counts.notices}件`);
+}
+
+/**
+ * 一覧に出ていない要対応の件数を伝える文。無ければ`null`。
+ * 件数(`counts`)は取得の上限を超えた分も数える。種類ごとに、件数から一覧にある項目を引いた差を伝える。
+ */
+export function otherCountsNote(
+  counts: SummaryCounts,
+  items: readonly InboxItem[],
+): string | null {
+  const listed = chipCounts(items);
+  const parts: string[] = [];
+  const hiddenApprovals = counts.approvals - listed.approval;
+  const hiddenFailures = counts.failures - listed.failure;
+  const hiddenNotices = counts.notices - listed.notice;
+  if (hiddenApprovals > 0) {
+    parts.push(`承認が${hiddenApprovals}件`);
+  }
+  if (hiddenFailures > 0) {
+    parts.push(`失敗が${hiddenFailures}件`);
+  }
+  if (hiddenNotices > 0) {
+    parts.push(`通知が${hiddenNotices}件`);
   }
   return parts.length === 0 ? null : `ほかに、${parts.join("、")}あります。`;
 }

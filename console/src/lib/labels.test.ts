@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   approvalKindLabel,
+  approvalStatusLabel,
   attemptRef,
   noticeKindLabel,
   UNKNOWN_NOTICE_LABEL,
@@ -53,6 +54,36 @@ describe("approvalKindLabel", () => {
 
   test("does not leak an unknown approval kind", () => {
     expect(approvalKindLabel("mystery", null)).toBe("承認依頼");
+  });
+});
+
+describe("approvalStatusLabel", () => {
+  test("labels a pending approval", () => {
+    expect(approvalStatusLabel("pending", "requirements")).toBe("承認待ち");
+  });
+
+  test("labels an approved issue proposal as waiting for its issue", () => {
+    expect(approvalStatusLabel("approved", "issue_proposal")).toBe(
+      "承認済み(Issue作成待ち)",
+    );
+  });
+
+  test("labels an approved requirements approval without the issue note", () => {
+    expect(approvalStatusLabel("approved", "requirements")).toBe("承認済み");
+  });
+
+  test("labels a rejected approval", () => {
+    expect(approvalStatusLabel("rejected", "requirements")).toBe("却下");
+  });
+
+  test("labels an expired approval", () => {
+    expect(approvalStatusLabel("expired", "requirements")).toBe("期限切れ");
+  });
+
+  test("does not leak an unknown status", () => {
+    expect(approvalStatusLabel("mystery", "requirements")).toBe(
+      UNKNOWN_STATUS_LABEL,
+    );
   });
 });
 

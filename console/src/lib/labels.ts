@@ -84,6 +84,26 @@ export function approvalKindLabel(kind: string, origin: string | null): string {
   return "承認依頼";
 }
 
+/**
+ * 承認依頼の状態の日本語。
+ * 承認済みのIssue提案は、承認を記録した後でIssueを作れなかった行が一覧に残る。
+ * そのため「Issue作成待ち」と添える。表に無い状態は`UNKNOWN_STATUS_LABEL`にする。
+ */
+export function approvalStatusLabel(status: string, kind: string): string {
+  switch (status) {
+    case "pending":
+      return "承認待ち";
+    case "approved":
+      return kind === "issue_proposal" ? "承認済み(Issue作成待ち)" : "承認済み";
+    case "rejected":
+      return "却下";
+    case "expired":
+      return "期限切れ";
+    default:
+      return UNKNOWN_STATUS_LABEL;
+  }
+}
+
 /** 通知の種類の日本語。表に無い種類は`UNKNOWN_NOTICE_LABEL`にする。 */
 export function noticeKindLabel(kind: string): string {
   return NOTICE_KIND_LABELS.get(kind) ?? UNKNOWN_NOTICE_LABEL;
