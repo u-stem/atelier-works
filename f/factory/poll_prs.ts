@@ -365,7 +365,8 @@ function prClaimNoticeMessage(
 }
 
 /**
- * PRの取得に成功したときに、そのPRとラベルの未解決のnoticeを解決済みにする。
+ * PRの作業(レビューか修正)を始めた後に、そのPRとラベルの未解決のnoticeを解決済みにする。
+ * 作業の開始が例外になったときは呼ばない。noticeが解決済みに見えて、証跡が消えるのを防ぐ。
  * 対象は、確認できずにラベルを付け直したときの`claim_race_lost`と、
  * ラベルが外れたままになった旨の`pr_trigger_label_left_removed`である。
  * 本文の完全一致で選ぶので、`review`と`review-fix`のようにラベル名が互いの接頭辞でも、
@@ -847,12 +848,6 @@ export async function main(): Promise<{
               skipped += 1;
               await recordPrClaimNotClaimed(candidate, claimResult);
             } else {
-              await resolveClaimNotices(
-                candidate,
-                config.review_label,
-                resolveUnresolvedNoticesByMessage,
-                log,
-              );
               await startReview(
                 candidate,
                 viewer.login,
@@ -860,6 +855,12 @@ export async function main(): Promise<{
                 context.linkedParentWorkItemId,
               );
               reviewsStarted += 1;
+              await resolveClaimNotices(
+                candidate,
+                config.review_label,
+                resolveUnresolvedNoticesByMessage,
+                log,
+              );
             }
           } else {
             // assignで起きた場合はラベルが関わらず、消費するものが無い。
@@ -902,12 +903,6 @@ export async function main(): Promise<{
             skipped += 1;
             await recordPrClaimNotClaimed(candidate, claimResult);
           } else {
-            await resolveClaimNotices(
-              candidate,
-              config.fix_label,
-              resolveUnresolvedNoticesByMessage,
-              log,
-            );
             await startFix(
               candidate,
               viewer.login,
@@ -916,6 +911,12 @@ export async function main(): Promise<{
               context.linkedParentWorkItemId,
             );
             fixesStarted += 1;
+            await resolveClaimNotices(
+              candidate,
+              config.fix_label,
+              resolveUnresolvedNoticesByMessage,
+              log,
+            );
           }
         } catch (err) {
           failed += 1;
