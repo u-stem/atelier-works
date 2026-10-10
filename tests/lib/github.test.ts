@@ -1003,6 +1003,23 @@ describe("getLabelerLogin", () => {
     expect(fake.calls[0]?.argv).toContain("graphql");
   });
 
+  async function sentQuery(): Promise<string> {
+    const { fake } = await loginOf([labelEventsOk([])], "factory");
+    const stdin = fake.calls[0]?.options?.stdin;
+    const body: unknown = JSON.parse(stdin ?? "{}");
+    return isRecord(body) && typeof body.query === "string" ? body.query : "";
+  }
+
+  test("asks only for labeled and unlabeled events", async () => {
+    expect(await sentQuery()).toContain(
+      "itemTypes: [LABELED_EVENT, UNLABELED_EVENT]",
+    );
+  });
+
+  test("asks for the latest hundred label events", async () => {
+    expect(await sentQuery()).toContain("timelineItems(last: 100");
+  });
+
   test("returns the actor of the last labeled event for the label", async () => {
     const { login } = await loginOf(
       [
@@ -1029,11 +1046,57 @@ describe("getLabelerLogin", () => {
     expect(login).toBe("carol");
   });
 
-  test("breaks a createdAt tie by id", async () => {
-    const early = { ...labeled("alice", "factory", 1), id: "LE_a" };
-    const late = { ...unlabeled("alice", "factory", 1), id: "LE_b" };
-    const { login } = await loginOf([labelEventsOk([late, early])], "factory");
+  /** 同じ秒のイベント。`id`の辞書順では、`labeled`が`unlabeled`より後になる。 */
+  const sameSecondLabeled = {
+    ...labeled("alice", "factory", 5),
+    id: "LE_z",
+  };
+  const sameSecondUnlabeled = {
+    ...unlabeled("alice", "factory", 5),
+    id: "UNLE_a",
+  };
+
+  test("returns null when events share the latest second, earlier one first", async () => {
+    const { login } = await loginOf(
+      [labelEventsOk([sameSecondUnlabeled, sameSecondLabeled])],
+      "factory",
+    );
     expect(login).toBeNull();
+  });
+
+  test("returns null when events share the latest second, later one first", async () => {
+    const { login } = await loginOf(
+      [labelEventsOk([sameSecondLabeled, sameSecondUnlabeled])],
+      "factory",
+    );
+    expect(login).toBeNull();
+  });
+
+  test("returns null when two users labeled in the latest second", async () => {
+    const { login } = await loginOf(
+      [
+        labelEventsOk([
+          labeled("alice", "factory", 5),
+          labeled("mallory", "factory", 5),
+        ]),
+      ],
+      "factory",
+    );
+    expect(login).toBeNull();
+  });
+
+  test("decides by the latest second even when an earlier second has two events", async () => {
+    const { login } = await loginOf(
+      [
+        labelEventsOk([
+          labeled("mallory", "factory", 1),
+          labeled("bob", "factory", 1),
+          labeled("alice", "factory", 2),
+        ]),
+      ],
+      "factory",
+    );
+    expect(login).toBe("alice");
   });
 
   test("ignores the labeled events of other labels", async () => {
@@ -1170,7 +1233,7 @@ describe("getLabelerLogin", () => {
       ],
       "factory",
     );
-    await expect(result).rejects.toThrow();
+    await expect(result).rejects.toThrow("GraphQL error");
   });
 
   test("throws on a response of an unexpected shape", async () => {
@@ -1179,6 +1242,53 @@ describe("getLabelerLogin", () => {
       "factory",
     );
     await expect(result).rejects.toThrow("unexpected response shape");
+  });
+
+  test("throws on a label event without createdAt instead of skipping it", async () => {
+    const { createdAt: _createdAt, ...broken } = labeled(
+      "mallory",
+      "factory",
+      3,
+    );
+    const result = loginOf(
+      [labelEventsOk([labeled("alice", "factory", 1), broken])],
+      "factory",
+    );
+    await expect(result).rejects.toThrow("unexpected response shape");
+  });
+
+  test("throws on a label event without a label instead of skipping it", async () => {
+    const result = loginOf(
+      [
+        labelEventsOk([
+          labeled("alice", "factory", 1),
+          { ...labeled("mallory", "factory", 3), label: null },
+        ]),
+      ],
+      "factory",
+    );
+    await expect(result).rejects.toThrow("unexpected response shape");
+  });
+
+  test("skips null nodes", async () => {
+    const { login } = await loginOf(
+      [labelEventsOk([null, labeled("alice", "factory", 1)])],
+      "factory",
+    );
+    expect(login).toBe("alice");
+  });
+
+  test("skips nodes of other kinds", async () => {
+    const { login } = await loginOf(
+      [
+        labelEventsOk([
+          { __typename: "IssueComment", body: "hi" },
+          labeled("alice", "factory", 1),
+        ]),
+      ],
+      "factory",
+    );
+    expect(login).toBe("alice");
   });
 
   test("rejects when the request fails", async () => {

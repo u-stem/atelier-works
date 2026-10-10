@@ -29,7 +29,7 @@ locks:
   f/factory/lib/db: f0b46c9e53b2a89831872b65c74e003f8afacaaf297b1c46528628e605eb7976
   f/factory/lib/discord: 341d92926bbc1d4293cbebfe753371562ddf428caa2f1c3483438dc5dd014e2e
   f/factory/lib/drawio: 6033f8aaf663aeccf8cc84eaa978815c2b08671f4bc726395613303e3751a2a9
-  f/factory/lib/github: bfc2dc046d6808d6fce98a69c2101eb5a3d55065b687052f09a2557d63fd6a02
+  f/factory/lib/github: bd0aedc6f86ea8a0e761259bf08db6431fc012507603c22581f448134c3acaab
   f/factory/lib/implement_finish_support: 5d1d1af0b285914903c2cdc3ce09575feef4a98aaf304bb19abf5af2cc4c76fa
   f/factory/lib/implement_launch_support: 6fa700a51538677f880a6b6244f6ef7c51f9c968337557b27229f4c5cbbf41f6
   f/factory/lib/implement_loop: 8752c952112ef996529cb96580f4a3682e491482494c01718be59d38fb088bdc

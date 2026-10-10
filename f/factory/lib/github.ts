@@ -976,8 +976,8 @@ const LABEL_EVENTS_QUERY = `
             pageInfo { hasPreviousPage }
             nodes {
               __typename
-              ... on LabeledEvent { id createdAt actor { __typename login } label { name } }
-              ... on UnlabeledEvent { id createdAt actor { __typename login } label { name } }
+              ... on LabeledEvent { createdAt actor { __typename login } label { name } }
+              ... on UnlabeledEvent { createdAt actor { __typename login } label { name } }
             }
           }
         }
@@ -986,8 +986,8 @@ const LABEL_EVENTS_QUERY = `
             pageInfo { hasPreviousPage }
             nodes {
               __typename
-              ... on LabeledEvent { id createdAt actor { __typename login } label { name } }
-              ... on UnlabeledEvent { id createdAt actor { __typename login } label { name } }
+              ... on LabeledEvent { createdAt actor { __typename login } label { name } }
+              ... on UnlabeledEvent { createdAt actor { __typename login } label { name } }
             }
           }
         }
@@ -998,7 +998,6 @@ const LABEL_EVENTS_QUERY = `
 
 type LabelEvent = {
   readonly kind: "labeled" | "unlabeled";
-  readonly id: string;
   readonly createdAt: number;
   /** 種類が`User`のactorのログイン名。actorが無いときと、`User`でないときは`null`。 */
   readonly actorLogin: string | null;
@@ -1027,19 +1026,24 @@ function parseLabelEventsPayload(data: unknown): LabelEventsPayload | null {
 }
 
 /**
- * ラベルのイベント1件を読む。ラベルのイベントでないもの、ラベルが削除されたもの、
- * 形が違うものは`null`にして読み飛ばす。
+ * ラベルのイベント1件を読む。
+ * `nodes`の`null`と、ラベルのイベント以外の種類のノードは、`null`を返して読み飛ばす。
+ * ラベルのイベントなのに`createdAt`か`label`を読めないノードは、読み飛ばさず例外を投げる。
+ * 読み飛ばすと、最新のイベントが落ちて、古い許可の`labeled`が最後になるためである。
+ * スキーマ上、`label`は必須の項目なので、読めないのは想定外の応答である。
  */
-function parseLabelEvent(raw: unknown): LabelEvent | null {
-  if (!isRecord(raw)) return null;
+function parseLabelEvent(raw: unknown, context: string): LabelEvent | null {
+  if (raw === null) return null;
+  const unexpected = new Error(`${context}: unexpected response shape`);
+  if (!isRecord(raw)) throw unexpected;
   const typename = raw.__typename;
   if (typename !== "LabeledEvent" && typename !== "UnlabeledEvent") return null;
-  const { id, createdAt: createdAtText } = raw;
-  if (typeof id !== "string" || typeof createdAtText !== "string") return null;
+  const createdAtText = raw.createdAt;
+  if (typeof createdAtText !== "string") throw unexpected;
   const createdAt = Date.parse(createdAtText);
-  if (Number.isNaN(createdAt)) return null;
+  if (Number.isNaN(createdAt)) throw unexpected;
   const label = labelName(raw.label);
-  if (label === null) return null;
+  if (label === null) throw unexpected;
   const actor = raw.actor;
   const actorLogin =
     isRecord(actor) &&
@@ -1049,7 +1053,6 @@ function parseLabelEvent(raw: unknown): LabelEvent | null {
       : null;
   return {
     kind: typename === "LabeledEvent" ? "labeled" : "unlabeled",
-    id,
     createdAt,
     actorLogin,
     label,
@@ -1057,8 +1060,12 @@ function parseLabelEvent(raw: unknown): LabelEvent | null {
 }
 
 /**
- * `label`の最後のイベントを返す。そのラベルのイベントが無ければ`null`を返す。
- * 「最後」は、配列の並びではなく、`createdAt`(同時刻なら`id`)の最大で決める。
+ * `label`の最後のイベントを返す。
+ * 次のときは`null`を返す。
+ * - そのラベルのイベントが無い。
+ * - 作成時刻が最大のイベントが2件以上ある。`createdAt`は秒精度で、同じ秒のイベントの順は
+ *   IDからも決められないので、どちらが後かを判定できない。
+ * 「最後」は、配列の並びではなく、`createdAt`の最大で決める。
  * ラベル名はGitHubが大文字小文字を区別しないので、比較も区別しない。
  * 直近のラベルのイベントの中に`label`のイベントが無く、それより古いイベントが残っているときは、
  * 付与者を判定できないので`LabelerCheckLimitError`を投げる。
@@ -1086,21 +1093,21 @@ async function lastLabelEvent(
 
   const wanted = label.toLowerCase();
   let last: LabelEvent | null = null;
+  let tied = false;
   for (const raw of payload.nodes) {
-    const event = parseLabelEvent(raw);
+    const event = parseLabelEvent(raw, context);
     if (event === null || event.label.toLowerCase() !== wanted) continue;
-    if (
-      last === null ||
-      event.createdAt > last.createdAt ||
-      (event.createdAt === last.createdAt && event.id > last.id)
-    ) {
+    if (last === null || event.createdAt > last.createdAt) {
       last = event;
+      tied = false;
+    } else if (event.createdAt === last.createdAt) {
+      tied = true;
     }
   }
   if (last === null && payload.hasPreviousPage) {
     throw new LabelerCheckLimitError(label);
   }
-  return last;
+  return tied ? null : last;
 }
 
 /**
@@ -1111,6 +1118,7 @@ async function lastLabelEvent(
  * 次のときは`null`を返す。呼び出し側は、判定できないものとして拒否する。
  * - そのラベルのイベントが無い。
  * - 最後のイベントが`unlabeled`である(今付いているラベルの付与者を特定できない)。
+ * - 作成時刻が最大のイベントが同じ秒に2件以上ある(どちらが後かを判定できない)。
  * - 最後の`labeled`イベントに`actor`が無い(削除されたユーザーなど)。
  * - actorの種類が`User`でない。GitHub Appなどのログイン名は`[bot]`を伴わないので、
  *   人のログイン名と取り違えないようにする。

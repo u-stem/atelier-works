@@ -117,7 +117,6 @@ export function labelEventsOk(
     data: {
       repository: {
         issueOrPullRequest: {
-          __typename: "Issue",
           timelineItems: { pageInfo: { hasPreviousPage }, nodes },
         },
       },
