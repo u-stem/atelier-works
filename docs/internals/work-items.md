@@ -131,7 +131,9 @@ Issueの新しいサイクルの作業項目を挿入すると、同じIssueの�
 - `f/factory/lib/types.ts`の`TERMINAL_WORK_ITEM_STATUSES`
 - Data Tableのview`factory.v_lead_time`の`WHERE status IN (...)`
 
-終端の状態を増やすときは、migrationで`v_lead_time`を`CREATE OR REPLACE`し、同じPRで`TERMINAL_WORK_ITEM_STATUSES`を更新する。`poll_issues`のreconcileは終端の作業項目を照合の対象から外す(`listActive`)。片方だけを更新すると、完了した作業項目が孤児と判定されて失敗にされる。
+終端の状態を増やすときは、migrationで`v_lead_time`を`CREATE OR REPLACE`し、同じPRで`TERMINAL_WORK_ITEM_STATUSES`を更新する。
+`poll_issues`のreconcileは終端の作業項目を照合の対象から外す(`listActive`)。片方だけを更新すると、完了した作業項目が孤児と判定されて失敗にされる。
+例外は、要対応の終端の作業項目を取り消す専用の照合だけである。詳しくは「要対応の終端の取り消し」に書く。
 
 ## リース
 
@@ -197,6 +199,7 @@ Issueのcloseによる取り消しなどで、実行中にリースが別の実�
 | --- | --- |
 | `retry_work_item` | 記録されたジョブがまだ動いているか、状態を読めなければ再実行を拒否する |
 | `poll_issues`のreconcile | 読み取った時点の`flow_job_id`が変わっていないときだけ、失敗か取り消しにする |
+| `poll_issues`の要対応の取り消し | 読み取った時点の状態と`flow_job_id`が変わっていないときだけ、取り消しにする。`retry_work_item`との競合では、先に書いた方だけが成功する |
 | `on_error_flow` | 読み取った時点の`flow_job_id`が変わっていないときだけ失敗にする。pipelineでは、`flow_job_id`が自分のルートジョブIDと一致するときに限る。空のときも書き換えない |
 | Windmillのrerun | 新しいジョブIDで最初から走る。実装フローでは、準備ステップがリースを取れずに何もせず終わる |
 | Windmillのrerunか画面からの直接の実行(pipeline) | ジョブIDが`flow_job_id`に記録されないので、準備ステップが何もせずに終わる。作業項目が終端ならすぐ終わり、そうでなければ記録を最大60秒待ってから終わる |
@@ -227,5 +230,37 @@ IssueかPRが閉じられていれば、ジョブの状態にかかわらず作�
 ### 承認待ちの作業項目
 
 承認待ち(`awaiting_approval`)の作業項目は、フローのジョブが完了したまま人の決定を待つ。そのためreconcileは、この状態にはジョブの生死と猶予による孤児の判定をしない。IssueとPRのcloseだけを確かめる。
+
+### 要対応の終端の取り消し
+
+reconcileが照合するのは、終端でない作業項目だけである。
+失敗(`failed`)、人の対応待ち(`needs_human`)、期限切れ(`expired`)になった後でIssueやPRが閉じられても、reconcileはその作業項目を取り消さない。
+そのままだと、Consoleの要対応の一覧に保持期間のあいだ残る。
+人が対応しないと決めた作業項目を一覧に残さないため、`poll_issues`は別の照合で、この3つの状態の作業項目を取り消しにする。
+
+- 対象は、Consoleの要対応の一覧に出る作業項目である。
+  監査の作業項目は、GitHubの対象が無いので含めない。
+  次の作業項目は、一覧に出ないので含めない。
+  - 同じIssueに新しいサイクルがある作業項目
+  - 同じ種類で、同じPRに新しい行がある作業項目
+- IssueかPRが閉じられていれば取り消しにする。
+  PRのcloseにはマージを含む。
+  判定は承認待ちと同じで、閉じたかどうかだけを見る。
+- 状態の注記は`reconcile: closed (actionable)`か`reconcile: pr_closed (actionable)`にする。
+- 状態の遷移は、読み取った状態と`flow_job_id`のままのときだけ行う。
+  `retry_work_item`が先に再開していれば、何も書かない。
+- ジョブを止める操作はしない。
+  終端の状態は、フローの最後のステップかエラー処理が書くので、止めるべき動いているジョブが無いためである。
+- PRが閉じられたときは、reconcileと同じくレビューのworktreeを消す。
+- Discordには通知しない。
+  人が対応しないと決めた後の片付けで、通知は雑音になるためである。
+  ログと状態の注記だけを残す。
+- 開いたままの対象は毎回調べ直すので、GitHubへの問い合わせは1回の実行で30件までにする。
+  同じPRのレビューと修正の行は1件に数える。
+
+上限を超えるときは、警告のログを出す。
+取りこぼしが続かないよう、問い合わせた最後の作業項目のIDを`poll_issues`のstateに保存し、次の実行はその続きから始める。
+末尾まで進んだら先頭に戻るので、対象が開いたまま残っても、件数を30で割った回数の実行で全件を一巡する。
+stateを読めないときは先頭から始める。
 
 reconcileの後、`poll_issues`は承認依頼の期限切れを判定する。仕組みは[要件定義の生成と承認](requirements.md)に書く。

@@ -409,3 +409,90 @@ export function decideClosureOnly(
     ? { action: "none" }
     : { action: "cancel", reason: "pr_closed" };
 }
+
+// ---------------------------------------------------------------------------
+// 要対応の終端の作業項目の照合
+// ---------------------------------------------------------------------------
+
+/** GitHubの1つのIssueまたはPRと、それに紐づく要対応の作業項目。 */
+export type ActionableTarget<T> = {
+  /** `<owner>/<repo>#<番号>`。IssueとPRは同じ番号の空間にある。 */
+  readonly key: string;
+  /** 束ねた作業項目のIDのうち最小のもの。回す順番とカーソルの基準になる。 */
+  readonly id: number;
+  readonly items: readonly T[];
+};
+
+/**
+ * 要対応の作業項目を、GitHubのIssueまたはPRごとに束ねて、`id`の昇順で返す。
+ * 同じPRのレビューと修正の行は、1回の問い合わせで足りるので1つにする。
+ * GitHubのオブジェクトが無い`audit`と、番号の無い行は含めない。
+ */
+export function groupActionableTargets<
+  T extends Pick<
+    WorkItem,
+    "id" | "kind" | "owner" | "repo" | "issue_number" | "pr_number"
+  >,
+>(items: readonly T[]): ActionableTarget<T>[] {
+  const byKey = new Map<string, { id: number; items: T[] }>();
+  for (const item of items) {
+    if (item.kind === "audit") continue;
+    const number = item.kind === "issue" ? item.issue_number : item.pr_number;
+    if (number === null) continue;
+    const key = `${item.owner}/${item.repo}#${String(number)}`;
+    const group = byKey.get(key);
+    if (group === undefined) {
+      byKey.set(key, { id: item.id, items: [item] });
+    } else {
+      group.id = Math.min(group.id, item.id);
+      group.items.push(item);
+    }
+  }
+  return [...byKey.entries()]
+    .map(([key, group]) => ({ key, id: group.id, items: group.items }))
+    .sort((a, b) => a.id - b.id);
+}
+
+export type TargetBatch<T> = {
+  readonly batch: T[];
+  /** 次の実行が続きから始めるための、今回の最後の対象の`id`。対象が無ければ`null`。 */
+  readonly nextCursor: number | null;
+  /** 対象の数が上限を超え、今回は一部しか選ばなかったとき`true`。 */
+  readonly truncated: boolean;
+};
+
+/**
+ * `targets`(`id`の昇順)から、`cursor`の次を先頭にして最大`limit`件を選ぶ。
+ * 末尾まで進んだら先頭に戻る。実行ごとに返した`nextCursor`を渡し直せば、
+ * 開いたままの対象が続いても、ceil(件数 / limit)回の実行で全件を一巡する。
+ */
+export function selectTargetBatch<T extends { readonly id: number }>(
+  targets: readonly T[],
+  cursor: number | null,
+  limit: number,
+): TargetBatch<T> {
+  const after = targets.filter(
+    (target) => cursor === null || target.id > cursor,
+  );
+  const before = targets.filter(
+    (target) => cursor !== null && target.id <= cursor,
+  );
+  const batch = [...after, ...before].slice(0, limit);
+  return {
+    batch,
+    nextCursor: batch.at(-1)?.id ?? null,
+    truncated: targets.length > limit,
+  };
+}
+
+/**
+ * Windmillのstateに保存した、要対応の照合のカーソルを読む。
+ * 形が違うもの(初回の`null`を含む)は、先頭からやり直すので`null`を返す。
+ */
+export function parseActionableCursor(value: unknown): number | null {
+  if (!isRecord(value)) return null;
+  const cursor = value.cursor;
+  return isNumber(cursor) && Number.isInteger(cursor) && cursor >= 0
+    ? cursor
+    : null;
+}

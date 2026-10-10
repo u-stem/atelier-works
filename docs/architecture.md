@@ -123,6 +123,8 @@ stateDiagram-v2
     implementing --> requirements_generating: requirements_gap(attempt+1)
     implementing --> needs_human
     implementing --> cancelled: Issueがclosed
+    needs_human --> cancelled: Issueがclosed
+    expired --> cancelled: Issueがclosed
     pr_open --> requirements_generating: pr_fixのrequirements_gap
 ```
 
@@ -139,6 +141,7 @@ stateDiagram-v2
     fixing --> blocked: 準備の確認で停止、headの移動、または親Issueへ差し戻し
     fixing --> needs_human: 安全策で停止、Issue化の提案がある、または差し戻せない
     fixing --> cancelled: PRがclosedかmerged
+    needs_human --> cancelled: PRがclosedかmerged
     needs_human --> rereview_requested: 提案がすべて決定し、pushしていた
     needs_human --> reviewed: 提案がすべて決定し、pushしていない
 ```
@@ -154,7 +157,11 @@ stateDiagram-v2
     awaiting_approval --> audited: すべての提案を決定
 ```
 
-図に描いていない遷移が2つある。終端でない作業項目は、フローが例外で失敗するか孤児と判定されると失敗(`failed`)になる。Issueの作業項目とPRの作業項目は、IssueかPRが閉じられると取り消し(`cancelled`)になる。
+図に描いていない遷移が3つある。
+終端でない作業項目は、フローが例外で失敗するか孤児と判定されると失敗(`failed`)になる。
+Issueの作業項目とPRの作業項目は、IssueかPRが閉じられると取り消し(`cancelled`)になる。
+失敗の作業項目も、IssueかPRが閉じられると取り消しになる。
+閉じられた後の失敗、人の対応待ち、期限切れの作業項目を取り消すことで、Consoleの要対応の一覧から外す。
 
 終端の作業項目は、Consoleからの再実行で再び動き出す。遷移の条件、リース、孤児の判定は[作業項目の状態とリース](internals/work-items.md)に書く。
 

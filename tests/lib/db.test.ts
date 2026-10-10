@@ -36,6 +36,7 @@ import {
   latestFixRound,
   latestPrWorkItem,
   latestRequirementsApproval,
+  listActionableWorkItems,
   listActive,
   listActiveIssueWorkItems,
   listExpiredPendingApprovalRequests,
@@ -853,6 +854,46 @@ describe("listActive", () => {
       [WORK_ITEM_ROW, { ...WORK_ITEM_ROW, id: 2 }],
     ]);
     const items = await listActive(sql);
+    expect(items).toHaveLength(2);
+  });
+});
+
+describe("listActionableWorkItems", () => {
+  test("passes the actionable statuses as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[WORK_ITEM_ROW]]);
+    await listActionableWorkItems(sql);
+    expect(calls[0]?.values[0]).toEqual(["failed", "needs_human", "expired"]);
+  });
+
+  test("leaves out audit items", async () => {
+    const { sql, calls } = createFakeSqlClient([[WORK_ITEM_ROW]]);
+    await listActionableWorkItems(sql);
+    expect(calls[0]?.text).toContain("wi.kind != 'audit'");
+  });
+
+  test("leaves out an issue item that has a newer cycle", async () => {
+    const { sql, calls } = createFakeSqlClient([[WORK_ITEM_ROW]]);
+    await listActionableWorkItems(sql);
+    expect(calls[0]?.text).toContain("n.cycle > wi.cycle");
+  });
+
+  test("leaves out a pr item that has a newer row of the same kind", async () => {
+    const { sql, calls } = createFakeSqlClient([[WORK_ITEM_ROW]]);
+    await listActionableWorkItems(sql);
+    expect(calls[0]?.text).toContain("n.id > wi.id");
+  });
+
+  test("orders by id so the rotation is stable", async () => {
+    const { sql, calls } = createFakeSqlClient([[WORK_ITEM_ROW]]);
+    await listActionableWorkItems(sql);
+    expect(calls[0]?.text).toContain("ORDER BY wi.id ASC");
+  });
+
+  test("parses every returned row", async () => {
+    const { sql } = createFakeSqlClient([
+      [WORK_ITEM_ROW, { ...WORK_ITEM_ROW, id: 2 }],
+    ]);
+    const items = await listActionableWorkItems(sql);
     expect(items).toHaveLength(2);
   });
 });
