@@ -1,7 +1,14 @@
-// 図を描くiframeとのpostMessageを扱う純粋関数。
-// iframe側の受け口(`drawioFrameScript.ts`)と、メッセージの形と上限を合わせる。
+// draw.ioの図を描くiframeとのpostMessageを扱う純粋関数。
+// SPAのConsoleの`console/src/lib/drawioMessages.ts`と、定数とメッセージの形を合わせる。
+// iframe側の受け口(`console/public/drawio/drawio-frame-*.js`)も、同じ形と上限で読む。
 // iframeは不透明なオリジンなので、親からは送り先のオリジンを指定できず、
 // 受け取る側が送り元のwindowを確かめる。
+
+/** 図を描くページ。SPAのConsoleが配信し、CSPがこのページだけ別になる。 */
+export const DRAWIO_FRAME_SRC = "/console/drawio.html";
+
+/** iframeのsandbox。`allow-same-origin`が無いので、iframeは不透明なオリジンになる。 */
+export const DRAWIO_FRAME_SANDBOX = "allow-scripts";
 
 /** 描く図のXMLの上限(UTF-8のバイト数)。iframe側の受け口の上限と合わせる。 */
 export const MAX_XML_BYTES = 256 * 1024;

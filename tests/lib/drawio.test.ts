@@ -84,6 +84,98 @@ function withObjectWrapper(attrs: string): string {
   );
 }
 
+describe("validateDrawioXml tokenizer", () => {
+  const prefix = "<mxfile><diagram><mxGraphModel><root>";
+  const maxBytes = 256 * 1024;
+
+  function timeOf(xml: string): { valid: boolean; elapsedMs: number } {
+    const started = performance.now();
+    const result = validateDrawioXml(xml);
+    return { valid: result.valid, elapsedMs: performance.now() - started };
+  }
+
+  test.each([
+    ["angle brackets", "<", 1600],
+    ["unclosed tag starts", "<a", 1500],
+    ["unclosed quoted tag starts", '<x"', 1500],
+  ])("rejects %s", (_name, unit, count) => {
+    expect(validateDrawioXml(prefix + unit.repeat(count)).valid).toBe(false);
+  });
+
+  test.each([
+    ["angle brackets", "<"],
+    ["unclosed tag starts", "<a"],
+    ["unclosed quoted tag starts", '<x"'],
+  ])("rejects %s up to the size limit in a short time", (_name, unit) => {
+    const xml =
+      prefix +
+      unit.repeat(Math.floor((maxBytes - prefix.length) / unit.length));
+    expect(timeOf(xml).elapsedMs).toBeLessThan(500);
+  });
+
+  test.each([
+    ["angle brackets", "<"],
+    ["unclosed tag starts", "<a"],
+    ["unclosed quoted tag starts", '<x"'],
+  ])("returns valid false for %s up to the size limit", (_name, unit) => {
+    const xml =
+      prefix +
+      unit.repeat(Math.floor((maxBytes - prefix.length) / unit.length));
+    expect(timeOf(xml).valid).toBe(false);
+  });
+
+  test("rejects an unclosed comment", () => {
+    expect(validateDrawioXml(`${prefix}<!-- x`).valid).toBe(false);
+  });
+
+  test("rejects an unclosed CDATA section", () => {
+    expect(validateDrawioXml(`${prefix}<![CDATA[x`).valid).toBe(false);
+  });
+
+  test("rejects an unclosed processing instruction", () => {
+    expect(validateDrawioXml(`${prefix}<?x`).valid).toBe(false);
+  });
+
+  test("rejects a raw < outside the quotes of a tag", () => {
+    expect(validateDrawioXml(`${prefix}<mxCell a<b="1"/>`).valid).toBe(false);
+  });
+
+  test("rejects a tag that is never closed with >", () => {
+    expect(validateDrawioXml(`${prefix}<mxCell a="1"`).valid).toBe(false);
+  });
+
+  test("rejects a doctype declaration", () => {
+    expect(validateDrawioXml(`<!DOCTYPE x>${MINIMAL_VALID_XML}`).valid).toBe(
+      false,
+    );
+  });
+
+  test("checks many attribute-bearing starts inside one value in a short time", () => {
+    const xml = withCellValue("&lt;a ".repeat(40000));
+    expect(timeOf(xml).elapsedMs).toBeLessThan(500);
+  });
+
+  test("checks many quoted starts inside one value in a short time", () => {
+    const xml = withCellValue("&lt;a b=&quot;".repeat(20000));
+    expect(timeOf(xml).elapsedMs).toBeLessThan(500);
+  });
+
+  test("checks many unterminated diagram starts in a short time", () => {
+    const xml = withCellValue("&lt;diagram ".repeat(20000));
+    expect(timeOf(xml).elapsedMs).toBeLessThan(500);
+  });
+
+  test("checks a long run of ampersands in a short time", () => {
+    const xml = withCellValue("&#1".repeat(60000));
+    expect(timeOf(xml).elapsedMs).toBeLessThan(500);
+  });
+
+  test("keeps a quoted > inside an attribute from ending the tag", () => {
+    const xml = withCellAttr('note="a>b"');
+    expect(validateDrawioXml(xml).valid).toBe(true);
+  });
+});
+
 describe("validateDrawioXml compressed diagrams", () => {
   const head = '<mxfile host="app.diagrams.net">';
   const model = '<mxGraphModel><root><mxCell id="0"/></root></mxGraphModel>';
@@ -284,6 +376,12 @@ describe("validateDrawioXml link and HTML hardening", () => {
     ["formaction", "&lt;button formaction=&quot;x&quot;&gt;"],
     ["formaction on a bare word", "formaction=x"],
     ["srcdoc", "&lt;div srcdoc=&quot;x&quot;&gt;"],
+    ["script without attributes", "&lt;script&gt;alert(1)&lt;/script&gt;"],
+    ["script with a src", "&lt;SCRIPT src=x&gt;"],
+    ["an onclick handler", "&lt;div onclick=&quot;x&quot;&gt;"],
+    ["an onerror handler on an image", "&lt;b onerror = x&gt;"],
+    ["an onload handler after a slash", "&lt;b/onload=x&gt;"],
+    ["an escaped onmouseover handler", "&amp;lt;b onmouseover=x&amp;gt;"],
   ])("rejects a label with %s", (_name, value) => {
     expect(validateDrawioXml(withCellValue(value)).valid).toBe(false);
   });
@@ -299,6 +397,10 @@ describe("validateDrawioXml link and HTML hardening", () => {
     ["an anchor without attributes", "&lt;a&gt;x&lt;/a&gt;"],
     ["a closing style", "x&lt;/style&gt;"],
     ["a class named Styles", "Map&lt;Styles&gt;"],
+    ["a word that contains on and a letter before =", "Conditions = 3"],
+    ["on followed by a space", "on hold = yes"],
+    ["a type named Scripts", "Map&lt;Scripts&gt;"],
+    ["a closing script", "x&lt;/script&gt;"],
   ])("accepts a label that writes %s", (_name, value) => {
     expect(validateDrawioXml(withCellValue(value)).valid).toBe(true);
   });

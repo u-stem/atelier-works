@@ -423,11 +423,9 @@ describe("lint configs that can load code", () => {
 
 describe("raw app drawio isolation files", () => {
   const paths = [
-    "f/factory/factory_console__raw_app/lib/drawioViewerPin.ts",
-    "f/factory/factory_console__raw_app/lib/drawioFrameScript.ts",
-    "f/factory/factory_console__raw_app/lib/drawioFrameHtml.ts",
-    "tests/lib/drawio_viewer_pin.test.ts",
-    "tests/lib/drawio_frame.test.ts",
+    "f/factory/factory_console__raw_app/components/DrawioViewer.tsx",
+    "f/factory/factory_console__raw_app/lib/drawioMessages.ts",
+    "tests/lib/drawio_raw_app_isolation.test.ts",
   ];
 
   test.each(paths)("matchesForbiddenPath matches %s", (path) => {
@@ -441,7 +439,7 @@ describe("raw app drawio isolation files", () => {
   test("does not match the other files of the raw app lib", () => {
     expect(
       matchesForbiddenPath(
-        "f/factory/factory_console__raw_app/lib/drawioMessages.ts",
+        "f/factory/factory_console__raw_app/lib/drawioFrameState.ts",
       ),
     ).toBe(false);
   });

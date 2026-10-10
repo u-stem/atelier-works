@@ -490,11 +490,13 @@ Consoleは、`f/factory/steps/console_query.ts`の`requirements_doc`ビューで
   - ページ遷移: `<meta>`、`<base>`、`<link>`
   - 埋め込み: `<iframe>`、`<object>`、`<embed>`、`<frame>`、`<img>`、`<video>`、`<audio>`、`<source>`、`<svg>`、`<use>`
   - 送信: `<form>`、`<input>`、`<button>`
-- ラベルのHTMLの`<style>`。属性の有無を問わない
-- ラベルのHTMLの`usemap=`、`formaction=`、`srcdoc=`
+- ラベルのHTMLの`<style>`と`<script`。属性の有無を問わない
+- ラベルのHTMLのイベントハンドラ属性(`onclick=`のような`on`と英字の名前に`=`が続く形)、`usemap=`、`formaction=`、`srcdoc=`
+- 構文が不正なXML。閉じていないコメント、CDATA、処理命令、タグ、引用符と、タグの引用符の外の`<`である。XML全体を前から1回だけ読み、読めない箇所があれば拒否する。正規表現の打ち切りで、手前までしか検査されずに通ることを防ぐためである
 
 `Promise<Object>`、`List<Map>`、`Result<A, E>`のように、属性を持たない要素名だけの表記は通す。
 型の書き方としてラベルに現れ、属性の無い要素は行き先も資源のURLも持てないためである。
+`<A extends B = C>`のような表記は拒否することがある。要素名と同じ型引数の名前に`名前=`が続くと、属性付きの要素と見分けられないためである。
 
 図のXMLを加工して取り除くと、図の見た目が変わり、ビューアの解釈との差が新しい抜け道にもなる。
 そのため、取り除かずに拒否し、理由を生成のやり直しでClaudeに伝える。
@@ -556,30 +558,42 @@ iframeの中で動くscriptが取れるのは、そのiframeが受け取った�
 
 ### 旧Consoleのraw appで描く
 
-Consoleの図の描画がSPAのiframeに移るまでは、Windmillのraw app(Factory Console)が図を描く。
-raw appの`components/DrawioViewer.tsx`も、図をWindmillと同じオリジンでは描かず、隔離したiframeの中で描く。
+Windmillのraw app(Factory Console)も、図をWindmillと同じオリジンでは描かない。
+`components/DrawioViewer.tsx`が、隔離したiframeの中で描く。
 ビューアの欠陥が、管理者としてWindmillを操作できるXSSになるのを防ぐためである。
-図形ライブラリの動的な取得と評価、`openLink`による遷移、ラベルの`<style>`と`<form>`、tooltipは、すべて不透明なオリジンの中に閉じる。
-iframeの中身は、固定の文字列から組み立てるHTMLである(`lib/drawioFrameHtml.ts`)。
+iframeの`src`は、SPAのConsoleが配信する`/console/drawio.html`である。
+そのページの同梱のビューア、受け口のscript、HTTPのCSPは、上の表のとおりで、raw appは別のビューアも別のCSPも持たない。
+raw appはsandboxなしでWindmillと同じオリジンで動き、`/console/`も同じサイトなので、`frame-ancestors`に一致して読み込める。
 
 | 守ること | 内容 |
 | --- | --- |
-| 不透明なオリジンで動かす | `<iframe sandbox="allow-scripts" srcdoc referrerPolicy="no-referrer">`にする。`allow-same-origin`、`allow-popups`、`allow-forms`、`allow-top-navigation`は付けない。iframeはWindmillのCookieにも、親のDOMにも届かない |
-| CSPで通信とスクリプトを止める | iframeのHTMLの`<meta http-equiv="Content-Security-Policy">`が、`default-src 'none'`にして、スクリプトを、受け口のinline scriptのsha256と、固定したビューアのURL1つだけに限る。`connect-src 'none'`、`form-action 'none'`、`base-uri 'none'`で、通信、送信、基準URLを止める。画像とフォントは`data:`だけを許す。`unsafe-eval`は許さない |
-| 版を固定してSRIを付ける | ビューアは、commitを固定したjsDelivrのURLから、iframeの中で`integrity`と`crossorigin="anonymous"`を付けて読む。バイト列が違えばブラウザが実行しない。親のページにはスクリプトを入れない。raw.githubusercontent.comは`text/plain`と`nosniff`で返すので、scriptとして読めず、使わない |
-| 固定の値を照合する | URLとSRIは`lib/drawioViewerPin.ts`に書く。raw appは`console/drawio-viewer.json`をimportできないので、値を写し、`tests/lib/drawio_viewer_pin.test.ts`が一致を確かめる。受け口のscriptのsha256は`lib/drawioFrameScript.ts`の定数で、`tests/lib/drawio_frame.test.ts`が、scriptの文字列から再計算して一致を確かめる |
-| リンクを開く経路を無効にする | 受け口のscriptが、`Graph.prototype.openLink`を無効にし、`labelLinkClicked`と`customLinkClicked`があれば無効にする。`mxStencilRegistry`の動的な読み込みと評価を止め、`window.open`を無効にする。clickとauxclickとsubmitの既定の動作を、捕捉の段階で止める。lightbox、nav、ツールバーは無効にして描く |
-| XMLは1回だけ渡す | XMLは`srcdoc`に入れない。最初のloadの後にpostMessageで1回だけ送る。受け口は、送り元が`window.parent`のものだけを受け取る。親は、送り元がそのiframeの`contentWindow`のものだけを受け取り、高さを80〜1600の範囲に収めて使う。iframeが2回目のloadを起こしたら、遷移とみなして表示を止める |
+| 不透明なオリジンで動かす | `<iframe src="/console/drawio.html" sandbox="allow-scripts" referrerPolicy="no-referrer">`にする。`srcDoc`は使わない。`allow-same-origin`、`allow-popups`、`allow-forms`、`allow-top-navigation`は付けない。iframeはWindmillのCookieにも、親のDOMにも届かない |
+| SPAと同じ値を使う | `src`とsandboxは、`lib/drawioMessages.ts`の`DRAWIO_FRAME_SRC`と`DRAWIO_FRAME_SANDBOX`から使う。`DRAWIO_FRAME_SRC`と`MAX_XML_BYTES`は、`console/src/lib/drawioMessages.ts`と同じ値にする。`tests/lib/drawio_raw_app_isolation.test.ts`が、ソースを文字列として読んで確かめる |
+| XMLは1回だけ渡す | 最初のloadの後にpostMessageで1回だけ送る。親は、送り元がそのiframeの`contentWindow`のものだけを受け取り、高さを80〜1600の範囲に収め、失敗は固定の3つの種類だけを受ける。iframeが2回目のloadを起こしたら、遷移とみなして表示を止める |
 | 図を拒否する | 上の`validateDrawioXml`が、生成の時点と読み戻しの時点で、リンク、危険な要素、圧縮した図を拒否する |
+| 取り違えを防ぐ | 図は枠で囲み、「Issueから生成した図」と明記する。図が承認画面を偽った表示をしても、読み手が取り違えにくくするためである |
 
-`lib/drawioViewerPin.ts`、`lib/drawioFrameScript.ts`、`lib/drawioFrameHtml.ts`と、その2つのテストは、保護パスである。
-書き換えられると、図を描くiframeに別のスクリプトを読ませたり、照合を外したりできるためである。
+読み戻しで拒否した図は、`requirements_doc`ビューが名前を`rejected_diagrams`で返す。
+本文は、その名前の図を「安全の検査を通らなかったので表示しません」と表示し、図が見つからない場合と区別する。
+
+`DrawioViewer.tsx`と`lib/drawioMessages.ts`、`tests/lib/drawio_raw_app_isolation.test.ts`は、保護パスである。
+書き換えられると、sandboxを外したり、別のページをiframeに読ませたりできるためである。
+
+制約は次のとおりである。
+
+- SPAのConsoleが配信されていないと、`/console/drawio.html`が無く、図は描かれない。親は、応答がないものとして固定の文を出す。
+- 外部の図形ライブラリ(AWSなどのアイコン集)と、ビューアのtoolbar、ズーム、レイヤは使えない。
 
 残るリスクは次のとおりである。
 
-- WindmillのCSPが、`srcdoc`のiframeと、jsDelivrのスクリプトの読み込みを許すかは、実機で確かめる。`srcdoc`の文書は、埋め込む側のCSPを引き継ぐので、WindmillのCSPが`script-src`や`frame-src`を絞っていると、図が描かれない。そのときは、図の代わりに「ビューアが読み込まれていない」という表示が出る。
 - ビューアがiframeの中で`window.location`を書き換えて遷移する経路は、`sandbox`で防げない。2回目のloadの検知で表示を止めるが、loadが起きない遷移は検知できない。そのときも、親が受け取るのは、範囲に収めた高さと、固定の失敗の種類だけである。
 - `placeholders`で分けて書いたタグは、属性の値を連結した文字列だけを調べる。値の順序を入れ替えて組み立てる書き方は、iframeの隔離とCSPで止める。
+
+実機でしか確かめられない点は次のとおりである。
+
+- raw appから`/console/drawio.html`をiframeで読めること。`frame-ancestors`が合わないと、図の代わりに応答なしの文が出る。
+- 図が描かれ、高さが図に追従すること。
+- リンクを含む図を描いても、クリックで遷移しないこと。
 
 ## 要件定義書のリンク
 
@@ -631,7 +645,7 @@ markdownlint-cli2とtextlintの設定(`.markdownlint-cli2.jsonc`、`.textlintrc.
 Consoleでバンドルを通らずに配信される`console/public/`と`console/index.html`も止める。
 配信するdraw.ioのビューアを固定する`console/drawio-viewer.json`も止める。
 固定を強制し、配信物を作って検査するスクリプトも止める。
-旧Consoleのraw appが図を隔離して描く部品(ビューアの固定、iframeの受け口のscript、iframeのHTMLと、そのテスト)も止める。一覧は`f/factory/lib/protected_paths.ts`の`FORBIDDEN_EXACT_PATHS`にある。
+旧Consoleのraw appが図を隔離して描く部品(iframeを作る`DrawioViewer.tsx`、`src`とsandboxの定数、それらを照合するテスト)も止める。一覧は`f/factory/lib/protected_paths.ts`の`FORBIDDEN_EXACT_PATHS`にある。
 配信のCSPを持つ`infra/Caddyfile`と、配信物を検証する`infra/console_fetcher/`も止める。
 一覧は`f/factory/lib/protected_paths.ts`にある。
 

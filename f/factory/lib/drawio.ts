@@ -87,6 +87,15 @@ function findAttributeBearingTag(text: string): string | null {
  */
 const STYLE_ELEMENT_PATTERN = /<style(?![\w-])/i;
 
+/** `<script`も属性の有無を問わず拒否する。 */
+const SCRIPT_ELEMENT_PATTERN = /<script(?![\w-])/i;
+
+/**
+ * イベントハンドラ属性(`onclick=`など)。属性名の手前に語の文字が無いものだけを見て、
+ * `Conditions = 3`のような文章を拒否しない。
+ */
+const EVENT_HANDLER_ATTRIBUTE_PATTERN = /\bon[a-z]+\s*=/i;
+
 /**
  * ラベルのHTMLの属性の形(`名前=`)で現れたら拒否する属性。
  * `usemap`はイメージマップ、`formaction`は送信先、`srcdoc`は埋め込む文書を指す。
@@ -158,6 +167,13 @@ function findForbiddenHtml(raw: string): string | null {
     if (STYLE_ELEMENT_PATTERN.test(current)) {
       return "ラベルのHTMLに<style>が含まれています";
     }
+    if (SCRIPT_ELEMENT_PATTERN.test(current)) {
+      return "ラベルのHTMLに<script>が含まれています";
+    }
+    const handler = EVENT_HANDLER_ATTRIBUTE_PATTERN.exec(current);
+    if (handler !== null) {
+      return `ラベルのHTMLにイベントハンドラ属性${handler[0]}が含まれています`;
+    }
     const attribute = FORBIDDEN_HTML_ATTRIBUTE_PATTERN.exec(current);
     if (attribute !== null) {
       return `ラベルのHTMLに${attribute[0]}が含まれています`;
@@ -171,12 +187,87 @@ function findForbiddenHtml(raw: string): string | null {
   return "ラベルのエスケープが深すぎて検査できません";
 }
 
+type Token =
+  | {
+      readonly kind: "tag";
+      readonly closing: boolean;
+      readonly name: string;
+      /** 要素名の後ろから`>`の手前まで。 */
+      readonly attributes: string;
+    }
+  | { readonly kind: "cdata"; readonly text: string }
+  | { readonly kind: "text"; readonly text: string }
+  /** コメントと処理命令。中身は検査の対象にしない。 */
+  | { readonly kind: "skip" };
+
+/** 要素名。`<`と`>`と`/`と`!`と`?`と空白を含まない。 */
+const TAG_NAME_PATTERN = /[^\s<>/!?]+/y;
+
 /**
- * XMLを、コメント、CDATA、処理命令、タグ、テキストの順に切る。
- * 引用符の中の`>`をタグの終わりと取り違えないよう、タグは引用符を数えて読む。
+ * 要素名の後ろの属性部分。引用符の中は何でもよく、引用符の外には`<`と`>`を置けない。
+ * 3つの選択肢は先頭の文字が重ならないので、どの位置でも読み方は1通りに決まる。
  */
-const TOKEN_PATTERN =
-  /<!--[\s\S]*?-->|<!\[CDATA\[([\s\S]*?)\]\]>|<\?[\s\S]*?\?>|<(\/?)([^\s>/!?]+)((?:"[^"]*"|'[^']*'|[^>"'])*)>|[^<]+|</g;
+const TAG_ATTRIBUTES_PATTERN = /(?:"[^"]*"|'[^']*'|[^<>"'])*/y;
+
+/** `pattern`(stickyな正規表現)を`position`から当て、一致した文字列を返す。 */
+function matchAt(
+  pattern: RegExp,
+  text: string,
+  position: number,
+): string | null {
+  pattern.lastIndex = position;
+  const found = pattern.exec(text);
+  return found === null ? null : found[0];
+}
+
+/**
+ * XMLを、コメント、CDATA、処理命令、タグ、テキストに切る。
+ * 前から1回だけ読み、閉じていないコメント、CDATA、処理命令、タグ、引用符があれば`null`を返す。
+ * 読める形に当てはまらない箇所を読み飛ばして進まないので、`null`でないときは、
+ * トークンが文字列全体を隙間なく覆っている。
+ * 正規表現1つでXML全体を読むと、`<`や`<a`を並べた入力で打ち切られ、
+ * 打ち切られた手前までしか検査されないので、手書きで読む。
+ */
+function tokenize(xml: string): Token[] | null {
+  const tokens: Token[] = [];
+  let index = 0;
+  while (index < xml.length) {
+    if (xml[index] !== "<") {
+      const next = xml.indexOf("<", index);
+      const end = next === -1 ? xml.length : next;
+      tokens.push({ kind: "text", text: xml.slice(index, end) });
+      index = end;
+    } else if (xml.startsWith("<!--", index)) {
+      const end = xml.indexOf("-->", index + 4);
+      if (end === -1) return null;
+      tokens.push({ kind: "skip" });
+      index = end + 3;
+    } else if (xml.startsWith("<![CDATA[", index)) {
+      const end = xml.indexOf("]]>", index + 9);
+      if (end === -1) return null;
+      tokens.push({ kind: "cdata", text: xml.slice(index + 9, end) });
+      index = end + 3;
+    } else if (xml.startsWith("<?", index)) {
+      const end = xml.indexOf("?>", index + 2);
+      if (end === -1) return null;
+      tokens.push({ kind: "skip" });
+      index = end + 2;
+    } else {
+      const closing = xml[index + 1] === "/";
+      const nameStart = index + (closing ? 2 : 1);
+      const name = matchAt(TAG_NAME_PATTERN, xml, nameStart);
+      if (name === null) return null;
+      const attributesStart = nameStart + name.length;
+      const attributes = matchAt(TAG_ATTRIBUTES_PATTERN, xml, attributesStart);
+      if (attributes === null) return null;
+      const closeIndex = attributesStart + attributes.length;
+      if (xml[closeIndex] !== ">") return null;
+      tokens.push({ kind: "tag", closing, name, attributes });
+      index = closeIndex + 1;
+    }
+  }
+  return tokens;
+}
 
 const QUOTED_PATTERN = /"([^"]*)"|'([^']*)'/g;
 
@@ -207,19 +298,18 @@ function parseAttributes(source: string): {
  * 圧縮した図は中身が見えず、リンクやHTMLの検査を素通りするため。
  * 圧縮を示す属性の有無は見ない。属性が無くても、テキストがあれば圧縮として読まれる。
  */
-function findCompressedDiagram(xml: string): string | null {
+function findCompressedDiagram(tokens: readonly Token[]): string | null {
   const reason =
     "diagramの内容が圧縮されているようです(非圧縮の<mxGraphModel>を渡してください)";
   let depth = 0;
-  for (const token of xml.matchAll(TOKEN_PATTERN)) {
-    const [whole, cdata, closing, tagName, attrSource] = token;
-    if (tagName !== undefined) {
-      if (tagName.toLowerCase() !== "diagram") {
+  for (const token of tokens) {
+    if (token.kind === "tag") {
+      if (token.name.toLowerCase() !== "diagram") {
         continue;
       }
-      if (closing === "/") {
+      if (token.closing) {
         depth = Math.max(0, depth - 1);
-      } else if (!(attrSource ?? "").trimEnd().endsWith("/")) {
+      } else if (!token.attributes.trimEnd().endsWith("/")) {
         depth += 1;
       }
       continue;
@@ -227,10 +317,10 @@ function findCompressedDiagram(xml: string): string | null {
     if (depth === 0) {
       continue;
     }
-    if (cdata !== undefined) {
+    if (token.kind === "cdata") {
       return reason;
     }
-    if (!whole.startsWith("<") && whole.trim() !== "") {
+    if (token.kind === "text" && token.text.trim() !== "") {
       return reason;
     }
   }
@@ -243,20 +333,16 @@ function findCompressedDiagram(xml: string): string | null {
  * 加工して取り除くことはしない。図の見た目が変わり、ビューアの解釈との差が
  * 新しい抜け道になるため。
  */
-function findForbiddenContent(xml: string): string | null {
-  for (const token of xml.matchAll(TOKEN_PATTERN)) {
-    const [whole, cdata, closing, tagName, attrSource] = token;
-    if (whole === "<") {
-      return "XMLの構文が不正です(閉じていない < があります)";
-    }
-    if (tagName !== undefined) {
+function findForbiddenContent(tokens: readonly Token[]): string | null {
+  for (const token of tokens) {
+    if (token.kind === "tag") {
       if (
-        closing !== "/" &&
-        FORBIDDEN_ELEMENTS.includes(tagName.toLowerCase())
+        !token.closing &&
+        FORBIDDEN_ELEMENTS.includes(token.name.toLowerCase())
       ) {
-        return `<${tagName}>要素が含まれています`;
+        return `<${token.name}>要素が含まれています`;
       }
-      const { names, values } = parseAttributes(attrSource ?? "");
+      const { names, values } = parseAttributes(token.attributes);
       for (const name of names) {
         if (FORBIDDEN_ATTRIBUTES.includes(name.toLowerCase())) {
           return `${name}属性が含まれています`;
@@ -276,17 +362,8 @@ function findForbiddenContent(xml: string): string | null {
           return reason;
         }
       }
-      continue;
-    }
-    if (cdata !== undefined) {
-      const reason = findForbiddenHtml(cdata);
-      if (reason !== null) {
-        return reason;
-      }
-      continue;
-    }
-    if (!whole.startsWith("<")) {
-      const reason = findForbiddenHtml(whole);
+    } else if (token.kind === "cdata" || token.kind === "text") {
+      const reason = findForbiddenHtml(token.text);
       if (reason !== null) {
         return reason;
       }
@@ -310,7 +387,8 @@ function byteLength(text: string): number {
  * `<diagram>`を1つ以上含むこと、256KB以下であること、
  * `link`属性と、ラベルのHTMLの危険な要素と属性を含まないことの5つ。
  * 拒否するラベルのHTMLは、属性付きの`a`・`area`・`map`・`meta`・`iframe`・`object`などと、
- * `<style>`、`usemap=`・`formaction=`・`srcdoc=`である。属性を持たない`<Object>`のような
+ * `<style>`、`<script`、`onclick=`のようなイベントハンドラ属性、
+ * `usemap=`・`formaction=`・`srcdoc=`である。属性を持たない`<Object>`のような
  * 型の表記は通す。`placeholders`を持つ要素では、属性の値をつなげた文字列も調べる。
  * 実体参照は段ごとに復号して調べる。二重に実体参照を書いた値は、実際に何として読まれるかを
  * 追わず、安全側に倒して復号して拒否する。
@@ -325,14 +403,20 @@ export function validateDrawioXml(xml: string): DrawioValidationResult {
     };
   }
 
-  const trimmed = xml.trim();
-  const mxfileOpenTagMatch = trimmed.match(/^<mxfile\b([^>]*)>/);
-  if (mxfileOpenTagMatch === null) {
+  const tokens = tokenize(xml.trim());
+  if (tokens === null) {
+    return {
+      valid: false,
+      reason: "XMLの構文が不正です(閉じていない <、コメント、引用符があります)",
+    };
+  }
+
+  const root = tokens[0];
+  if (root?.kind !== "tag" || root.closing || root.name !== "mxfile") {
     return { valid: false, reason: "ルート要素が <mxfile> ではありません" };
   }
 
-  const mxfileAttrs = mxfileOpenTagMatch[1] ?? "";
-  if (/\bcompressed\s*=\s*["']true["']/i.test(mxfileAttrs)) {
+  if (/\bcompressed\s*=\s*["']true["']/i.test(root.attributes)) {
     return {
       valid: false,
       reason:
@@ -340,16 +424,20 @@ export function validateDrawioXml(xml: string): DrawioValidationResult {
     };
   }
 
-  if (!/<diagram\b[^>]*>/.test(trimmed)) {
+  const hasDiagram = tokens.some(
+    (token) =>
+      token.kind === "tag" && !token.closing && token.name === "diagram",
+  );
+  if (!hasDiagram) {
     return { valid: false, reason: "<diagram> 要素がありません" };
   }
 
-  const compressed = findCompressedDiagram(trimmed);
+  const compressed = findCompressedDiagram(tokens);
   if (compressed !== null) {
     return { valid: false, reason: compressed };
   }
 
-  const forbidden = findForbiddenContent(trimmed);
+  const forbidden = findForbiddenContent(tokens);
   if (forbidden !== null) {
     return {
       valid: false,

@@ -534,12 +534,13 @@ PR修正のClaudeに渡すツールは`Read,Glob,Grep,Edit,Write`だけで、`Ba
 `console/public/`と`console/index.html`は、Consoleでバンドルを通らずにそのまま配信され、ページの中で動く。
 `console/index.html`はファイル名だけではほかの`index.html`と区別できないので、パスで判定する。
 個別のファイルの一覧は、`FORBIDDEN_EXACT_PATHS`にある。
-一覧には、次の4種類が入る。
+一覧には、次の5種類が入る。
 
 - Consoleのページの入口: `console/index.html`
 - draw.ioのビューアの固定: `console/drawio-viewer.json`
 - 固定を強制し、配信物を作って検査する側: `console/scripts/`の一部、`console/vite.config.ts`、`scripts/check-console-lockfile.ts`
 - 配信の設定: `infra/Caddyfile`
+- 旧Consoleのraw appが図を隔離して描く部品: `DrawioViewer.tsx`、`lib/drawioMessages.ts`、それらを照合するテスト
 
 `console/drawio-viewer.json`は、CIが取得して配信するビューアの取得元とsha256を固定する。
 書き換えられると、別のスクリプトが固定の値として配信される。

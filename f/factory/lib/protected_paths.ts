@@ -50,10 +50,9 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 組み立ての途中で任意のコードを動かして配信物に書ける。
  * `infra/Caddyfile`には、Consoleのscriptの許可と、draw.ioの図を隔離するCSPがある。
  * `infra/`全体は、pr_fixでは止めない。
- * 旧Consoleのraw appが図を隔離して描く部品も守る。ビューアのURLとSRIの固定
- * (`drawioViewerPin.ts`)、iframeの中で動く受け口のスクリプト(`drawioFrameScript.ts`)、
- * iframeのCSPを組み立てるHTML(`drawioFrameHtml.ts`)と、それらを固定値と照合するテストである。
- * 書き換えられると、図を描くiframeに別のスクリプトを読ませたり、検査を外したりできる。
+ * 旧Consoleのraw appが図を隔離して描く部品も守る。iframeを作る`DrawioViewer.tsx`、
+ * iframeの`src`とsandboxの定数(`drawioMessages.ts`)と、それらを固定値と照合するテストである。
+ * 書き換えられると、図を描くiframeにsandboxを外したり別のページを読ませたりできる。
  */
 export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "console/index.html",
@@ -66,11 +65,9 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "console/scripts/asset-name.ts",
   "console/vite.config.ts",
   "infra/Caddyfile",
-  "f/factory/factory_console__raw_app/lib/drawioViewerPin.ts",
-  "f/factory/factory_console__raw_app/lib/drawioFrameScript.ts",
-  "f/factory/factory_console__raw_app/lib/drawioFrameHtml.ts",
-  "tests/lib/drawio_viewer_pin.test.ts",
-  "tests/lib/drawio_frame.test.ts",
+  "f/factory/factory_console__raw_app/components/DrawioViewer.tsx",
+  "f/factory/factory_console__raw_app/lib/drawioMessages.ts",
+  "tests/lib/drawio_raw_app_isolation.test.ts",
 ];
 
 /**

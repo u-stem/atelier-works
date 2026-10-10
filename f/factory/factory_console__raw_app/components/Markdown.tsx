@@ -19,7 +19,8 @@
 // `img`の差し替えで受け取り、壊れた`<img>`ではなく`DrawioViewer`で描く。
 // `name.drawio`はworkerのディスクにだけあるファイル名で、URLとして取得できない。
 // XMLは`diagrams`から名前で引き、一覧に無い名前は、空や壊れた画像ではなく
-// 「見つからない」という表示にする。
+// 「見つからない」という表示にする。安全の検査を通らず読み戻しで落とされた図は、
+// 名前が`rejectedDiagrams`にあり、「見つからない」とは別の文で「表示しません」と出す。
 
 import React from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
@@ -208,9 +209,20 @@ const components: Components = {
  */
 const DiagramsContext = React.createContext<readonly RequirementsDiagram[]>([]);
 
+/** 安全の検査を通らなかった図の名前を、`img`の図の検索に届けるcontext。 */
+const RejectedDiagramsContext = React.createContext<readonly string[]>([]);
+
 function DiagramSlot({ name }: { name: string }): React.ReactElement {
   const diagrams = React.useContext(DiagramsContext);
+  const rejected = React.useContext(RejectedDiagramsContext);
   const diagram = diagrams.find((candidate) => candidate.name === name);
+  if (diagram === undefined && rejected.includes(name)) {
+    return (
+      <p className="md-diagram-missing" role="alert">
+        図 {name} は安全の検査を通らなかったので表示しません
+      </p>
+    );
+  }
   if (diagram === undefined) {
     return <p className="md-diagram-missing">図 {name} が見つかりません</p>;
   }
@@ -224,24 +236,29 @@ function DiagramSlot({ name }: { name: string }): React.ReactElement {
 export function Markdown({
   markdown,
   diagrams = [],
+  rejectedDiagrams = [],
   repo = null,
 }: {
   markdown: string;
   diagrams?: readonly RequirementsDiagram[];
+  /** 安全の検査を通らず、表示しない図の名前。 */
+  rejectedDiagrams?: readonly string[];
   repo?: RepoRef | null;
 }): React.ReactElement {
   return (
     <RepoContext.Provider value={repo}>
       <DiagramsContext.Provider value={diagrams}>
-        <div className="markdown">
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
-            rehypePlugins={[[rehypeSanitize, schema]]}
-            components={components}
-          >
-            {markdown}
-          </ReactMarkdown>
-        </div>
+        <RejectedDiagramsContext.Provider value={rejectedDiagrams}>
+          <div className="markdown">
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              rehypePlugins={[[rehypeSanitize, schema]]}
+              components={components}
+            >
+              {markdown}
+            </ReactMarkdown>
+          </div>
+        </RejectedDiagramsContext.Provider>
       </DiagramsContext.Provider>
     </RepoContext.Provider>
   );

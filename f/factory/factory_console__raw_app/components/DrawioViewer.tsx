@@ -2,19 +2,22 @@
 // 図のXMLは信頼できないIssueの内容に由来する。Windmillと同じオリジンで描くと、
 // ビューアが図形ライブラリを動的に取得して評価する経路や、図のリンクで遷移する経路が
 // 管理者のセッションに届くので、図はすべてiframeの中に閉じ込める(`docs/security.md`)。
+// - iframeの`src`は、SPAのConsoleが配信する`/console/drawio.html`にする。
+//   そのページは、同梱のビューア、openLinkなどを止める受け口のscript、
+//   `sandbox allow-scripts`と`connect-src 'none'`などのHTTPのCSPを持つ。
+//   SPAのConsoleが配信されていないと、ページが無く、図は描かれない。
 // - iframeのsandboxは`allow-scripts`だけにする。`allow-same-origin`が無いので、
 //   不透明なオリジンになり、Windmillのクッキーにも、このページのDOMにも届かない。
 //   ポップアップ、フォームの送信、トップレベルの遷移も許さない。
-// - iframeの中身は固定のHTML(`lib/drawioFrameHtml.ts`)で、CSPが、受け口のスクリプトの
-//   ハッシュと、固定したビューアのURL以外のスクリプトと、通信を許さない。
-// - XMLは`srcdoc`に埋め込まず、最初のloadの後にpostMessageで1回だけ渡す。
+// - XMLは最初のloadの後にpostMessageで1回だけ渡す。
 //   iframeから届く高さは、送り元を確かめ、範囲に収めてから使う(`lib/drawioMessages.ts`)。
 // - `f/factory/lib/drawio.ts`の`validateDrawioXml`が、リンクなどを含む図を、生成の時点と
 //   `console_query`の読み戻しの時点で拒否する。
+// - 図は承認画面の中に出るので、図の中身が承認画面を偽っても取り違えにくいよう、
+//   枠で囲み、「Issueから生成した図」と明記する。
 //
-// ブラウザでの実行時には確かめていない点がある。WindmillのCSPが`srcdoc`のiframeと、
-// jsDelivrのスクリプトを許すか(許さなければ図は「読み込まれていない」表示になる)と、
-// 図が実際に描かれることを、`wmill app dev`と実機で確かめる。
+// ブラウザでの実行時には確かめていない点がある。raw appから`/console/drawio.html`を
+// iframeで読めること(`frame-ancestors`)、描画、高さの追従を、実機で確かめる。
 
 import React, {
   useCallback,
@@ -23,7 +26,6 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { buildDrawioFrameHtml } from "../lib/drawioFrameHtml";
 import {
   type FrameEvent,
   initialFrameState,
@@ -33,14 +35,14 @@ import {
 } from "../lib/drawioFrameState";
 import {
   buildRenderMessage,
+  DRAWIO_FRAME_SANDBOX,
+  DRAWIO_FRAME_SRC,
   FRAME_STOPPED_TEXT,
   frameErrorText,
   MAX_XML_BYTES,
   readFrameError,
   readFrameHeight,
 } from "../lib/drawioMessages";
-
-const FRAME_SRC_DOC = buildDrawioFrameHtml();
 
 /**
  * draw.ioの図を1つ、隔離したiframeでその場に描く。
@@ -131,14 +133,17 @@ export function DrawioViewer({
 
   const stopped = state.phase === "stopped";
   return (
-    <div className="diagram-viewer">
+    <figure className="diagram-viewer">
+      <figcaption className="diagram-viewer-caption">
+        Issueから生成した図
+      </figcaption>
       {stopped ? null : (
         <iframe
           key={state.generation}
           ref={frameRef}
           title={`図 ${name}`}
-          srcDoc={FRAME_SRC_DOC}
-          sandbox="allow-scripts"
+          src={DRAWIO_FRAME_SRC}
+          sandbox={DRAWIO_FRAME_SANDBOX}
           referrerPolicy="no-referrer"
           style={{
             display: "block",
@@ -159,6 +164,6 @@ export function DrawioViewer({
           {frameErrorText(state.failure)}
         </p>
       ) : null}
-    </div>
+    </figure>
   );
 }

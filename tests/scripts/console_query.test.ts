@@ -107,6 +107,7 @@ describe("readDocFromDisk", () => {
     expect(result).toEqual({
       markdown: "# 要件",
       diagrams: [{ name: "flow", xml: VALID_DIAGRAM_XML }],
+      rejected_diagrams: [],
     });
   });
 
@@ -201,7 +202,11 @@ describe("readDocFromDisk", () => {
       readFile,
     );
 
-    expect(result).toEqual({ markdown: "# 要件", diagrams: [] });
+    expect(result).toEqual({
+      markdown: "# 要件",
+      diagrams: [],
+      rejected_diagrams: [],
+    });
     expect(readCalls).toEqual([`${DOC_DIR}/requirements.md`]);
   });
 
@@ -217,7 +222,11 @@ describe("readDocFromDisk", () => {
       readFile,
     );
 
-    expect(result).toEqual({ markdown: "# 要件", diagrams: [] });
+    expect(result).toEqual({
+      markdown: "# 要件",
+      diagrams: [],
+      rejected_diagrams: [],
+    });
   });
 });
 
@@ -250,7 +259,11 @@ describe("readDocFromDisk diagram validation", () => {
       readFile,
     );
 
-    expect(result).toEqual({ markdown: "# 要件", diagrams: [] });
+    expect(result).toEqual({
+      markdown: "# 要件",
+      diagrams: [],
+      rejected_diagrams: ["flow"],
+    });
   });
 
   test("keeps the diagrams that pass when another one fails", async () => {
@@ -272,6 +285,37 @@ describe("readDocFromDisk diagram validation", () => {
     expect(result?.diagrams).toEqual([
       { name: "good", xml: VALID_DIAGRAM_XML },
     ]);
+  });
+
+  test("names only the diagram that fails validation", async () => {
+    const readFile = readerWith({
+      "requirements.md": "# 要件",
+      "bad.drawio": LINKED_DIAGRAM_XML,
+      "good.drawio": VALID_DIAGRAM_XML,
+    });
+
+    const result = await readDocFromDisk(
+      DOC_DIR,
+      [
+        { name: "bad", file: "bad.drawio" },
+        { name: "good", file: "good.drawio" },
+      ],
+      readFile,
+    );
+
+    expect(result?.rejected_diagrams).toEqual(["bad"]);
+  });
+
+  test("does not name a diagram whose file cannot be read", async () => {
+    const readFile = readerWith({ "requirements.md": "# 要件" });
+
+    const result = await readDocFromDisk(
+      DOC_DIR,
+      [{ name: "flow", file: "flow.drawio" }],
+      readFile,
+    );
+
+    expect(result?.rejected_diagrams).toEqual([]);
   });
 
   test("drops a compressed diagram", async () => {
@@ -711,6 +755,7 @@ describe("runConsoleQuery", () => {
         summary: "要約(DB)",
         markdown: "# 要件(ファイル)",
         diagrams: [{ name: "flow", xml: VALID_DIAGRAM_XML }],
+        rejected_diagrams: [],
         open_questions: ["未確定事項A"],
         doc_dir_source: "file",
       },
@@ -740,6 +785,7 @@ describe("runConsoleQuery", () => {
     expect(rows[0]).toMatchObject({
       markdown: "# 要件(DB)",
       diagrams: [],
+      rejected_diagrams: [],
       doc_dir_source: "db_fallback",
     });
   });

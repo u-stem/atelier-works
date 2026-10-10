@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { Markdown } from "../components/Markdown";
 import { RequirementsDocumentLoader } from "../components/RequirementsDocument";
 import { Skeleton } from "../components/Skeleton";
@@ -52,6 +52,16 @@ export function InboxTab({
   const selected =
     rows.find((row) => row.approval_request_id === selectedId) ?? null;
   const incomplete = selected !== null && isIncompleteProposal(selected);
+  // `Markdown`のcontextの値になるので、描画のたびに作り直さない。
+  const selectedOwner = selected?.owner;
+  const selectedRepo = selected?.repo;
+  const selectedRepoRef = useMemo(
+    () =>
+      selectedOwner === undefined || selectedRepo === undefined
+        ? null
+        : { owner: selectedOwner, repo: selectedRepo },
+    [selectedOwner, selectedRepo],
+  );
 
   function selectRow(approvalRequestId: number): void {
     const row = rows.find(
@@ -286,7 +296,7 @@ export function InboxTab({
             <h3>提案内容</h3>
             <Markdown
               markdown={selected.proposal_body}
-              repo={{ owner: selected.owner, repo: selected.repo }}
+              repo={selectedRepoRef}
             />
             <h3>承認 / 却下</h3>
             {incomplete ? (
