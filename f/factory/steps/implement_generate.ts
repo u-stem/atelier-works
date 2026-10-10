@@ -12,7 +12,11 @@
 import * as wmill from "windmill-client@1.817.0";
 import { buildSystemPrompt, runClaude } from "../lib/claude.ts";
 import { loadConfig } from "../lib/config.ts";
-import { getWorkItem, recordAgentRun } from "../lib/db.ts";
+import {
+  countImplementFailedRounds,
+  getWorkItem,
+  recordAgentRun,
+} from "../lib/db.ts";
 import {
   rootFlowJobId,
   stillHoldsImplementLease,
@@ -51,6 +55,11 @@ export async function main(
       const oauthToken = await wmill.getVariable(
         "f/factory/claude_oauth_token",
       );
+      // `retry_work_item`で再開する前の実行の失敗も、DBの記録から数える。
+      const sonnetFailures = await countImplementFailedRounds(
+        work_item_id,
+        context.attempt,
+      );
       const systemPrompt = await buildSystemPrompt({
         skillNames: [IMPLEMENT_SKILL_NAME],
         factoryCloneDir: context.factory_clone_dir,
@@ -74,6 +83,7 @@ export async function main(
                 config,
                 workItemId: work_item_id,
                 attempt: context.attempt,
+                sonnetFailures,
                 stage: "implement",
                 prompt: implementPrompt(implementPromptInput(context, docDir)),
                 systemPromptPath: systemPrompt.path,

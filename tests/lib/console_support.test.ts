@@ -69,7 +69,7 @@ describe("INFO_NOTICE_KINDS", () => {
       "cleanup_worktrees_skipped",
       "fix_feedback_association_excluded",
       "implement_needs_human",
-      "labeler_association_denied",
+      "labeler_denied",
       "supersede_failed",
       "unsandboxed_check_commands",
       "workspace_disk_usage",
@@ -81,7 +81,7 @@ describe("UNRESOLVABLE_NOTICE_KINDS", () => {
   test("contains the security-related kinds", () => {
     expect([...UNRESOLVABLE_NOTICE_KINDS].sort()).toEqual([
       "fix_feedback_association_excluded",
-      "labeler_association_denied",
+      "labeler_denied",
       "unsandboxed_check_commands",
     ]);
   });

@@ -44,6 +44,20 @@ function moduleTimeoutSec(flow: string, id: string): number | null {
   return match?.[1] === undefined ? null : Number(match[1]);
 }
 
+/** モジュールの固定間隔の再試行の待ち(秒)。無ければnull。 */
+function moduleRetryConstantSec(flow: string, id: string): number | null {
+  const match = moduleBlock(flow, id).match(
+    /^ {6}retry:\n {8}constant:\n {10}attempts: \d+\n {10}seconds: (\d+)$/m,
+  );
+  return match?.[1] === undefined ? null : Number(match[1]);
+}
+
+/**
+ * `countPrFixFailures`は、不正な出力の再試行で捨てた行を「10秒以内に次の行がある」で見分ける。
+ * flowの再試行の待ちがこの秒数以下だと、別の実行の行を捨てた行と取り違える。
+ */
+const PR_FIX_DISCARD_WINDOW_SEC = 10;
+
 describe("pr_fix flow.yaml", () => {
   test("bounds the prepare step at 1800 seconds", () => {
     expect(moduleTimeoutSec(PR_FIX_FLOW, "pr_fix_prepare")).toBe(1800);
@@ -56,6 +70,12 @@ describe("pr_fix flow.yaml", () => {
   test("bounds the apply step at PR_FIX_APPLY_STEP_TIMEOUT_SEC", () => {
     expect(moduleTimeoutSec(PR_FIX_FLOW, "pr_fix_apply")).toBe(
       PR_FIX_APPLY_STEP_TIMEOUT_SEC,
+    );
+  });
+
+  test("waits longer than the discarded-row window before retrying the apply step", () => {
+    expect(moduleRetryConstantSec(PR_FIX_FLOW, "pr_fix_apply")).toBeGreaterThan(
+      PR_FIX_DISCARD_WINDOW_SEC,
     );
   });
 

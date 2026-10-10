@@ -2,7 +2,7 @@
 name: design-reviewer
 description: 設計書を独立したコンテキストでレビューし、規則の正本の形で指摘を返す役で、review-loopスキルが設計の後に反証役とsecurity-auditorと並べて起動する。
 tools: [Read, Grep, Glob, Bash, Skill]
-model: sonnet
+model: opus
 effort: high
 ---
 

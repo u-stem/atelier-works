@@ -44,6 +44,7 @@ Consoleのbackendがどのworkerで動くかは、scriptの`tag`で決まる。�
 | 対象リポジトリ | worktreeを`--add-dir`で読み取り専用として渡す。カレントディレクトリにはしない |
 | スキル | `factory-requirements`と`drawio-diagram` |
 | 構造化出力 | `{summary, open_questions}` |
+| モデル | `heavy_model` |
 | 上限 | `max_turns`、`max_budget_usd_per_run`、`claude_timeout_sec` |
 
 Claudeは`requirements.md`を`Edit`で埋め、図があれば`<name>.drawio`を`Write`で横に置く。`Write`と`Edit`を許可しても、`--restricted`によって書き込みはカレントディレクトリの下に閉じる。

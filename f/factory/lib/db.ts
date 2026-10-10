@@ -1014,6 +1014,53 @@ export async function resolveNoticeIfUnresolved(
   return rows.length > 0;
 }
 
+/**
+ * `kind`と`message`が完全に一致する未解決のnoticeを、すべて解決済みにする。
+ * 解決者は`resolvedBy`、解決時刻は`now()`に記録し、解決した行数を返す。
+ * 本文の一部が重なる別の対象(`review`と`review-fix`のようにラベル名が接頭辞になる場合など)に
+ * 当たらないよう、前方一致ではなく完全一致で選ぶ。
+ */
+export async function resolveUnresolvedNoticesByMessage(
+  kind: string,
+  message: string,
+  resolvedBy: string,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  const rows = await sql`
+    UPDATE factory.notices
+    SET resolved = true, resolved_by = ${resolvedBy}, resolved_at = now()
+    WHERE resolved = false
+      AND kind = ${kind}
+      AND message = ${message}
+    RETURNING id
+  `.fetch();
+  return rows.length;
+}
+
+/**
+ * `kind`が一致し、`message`が`messagePrefix`で始まる未解決のnoticeを、すべて解決済みにする。
+ * 解決者は`resolvedBy`、解決時刻は`now()`に記録し、解決した行数を返す。
+ * 前方一致は`starts_with`で行い、`LIKE`のワイルドカード(`%`、`_`)は使わない。
+ * ownerやrepoの名前が`_`を含んでも、ほかの対象の行に当たらないようにするため。
+ * 対象を区切る文字まで含めて渡すこと(`acme/app#1: `は`acme/app#12: `に当たらない)。
+ */
+export async function resolveUnresolvedNoticesByPrefix(
+  kind: string,
+  messagePrefix: string,
+  resolvedBy: string,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  const rows = await sql`
+    UPDATE factory.notices
+    SET resolved = true, resolved_by = ${resolvedBy}, resolved_at = now()
+    WHERE resolved = false
+      AND kind = ${kind}
+      AND starts_with(message, ${messagePrefix})
+    RETURNING id
+  `.fetch();
+  return rows.length;
+}
+
 // ---------------------------------------------------------------------------
 // reviews
 // ---------------------------------------------------------------------------
@@ -2659,6 +2706,131 @@ export async function insertImplementRound(
   `;
   const row = await fetchOneRow(statement, "insertImplementRound");
   return parseId(row.id, "id");
+}
+
+/**
+ * 作業項目の、指定した試行(同じ要件定義)の実装で失敗したラウンドの数を返す。
+ * 失敗は、検査が通らなかった(`check_failed`)、変更が進まなかった(`stalled`)、
+ * Claudeの実行が失敗した(`error`)ラウンドである。
+ * `done`は成功、`checks_skipped`は検査が無かっただけ、`requirements_gap`は要件の不足で、
+ * どれもモデルの失敗ではない。
+ * 検証ループの修正ラウンドと、`retry_work_item`で再開する前の実行の失敗の合計になる。
+ * ラウンドは記録してから次のラウンドを始めるので、修正ラウンドの直前の失敗も含む。
+ * 試行(`attempt`)が増えると数え直す。却下や要件の不足で要件定義からやり直した実装は、
+ * 前の要件定義の失敗を引き継がない。
+ */
+export async function countImplementFailedRounds(
+  workItemId: number,
+  attempt: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  const rows = await sql`
+    SELECT COUNT(*) AS failed_rounds
+    FROM factory.implement_rounds
+    WHERE work_item_id = ${workItemId}::bigint
+      AND attempt = ${attempt}::integer
+      AND outcome IN ('check_failed', 'stalled', 'error')
+  `.fetch();
+  const row = rows[0];
+  return row === undefined
+    ? 0
+    : parseNumericLike(row.failed_rounds, "failed_rounds");
+}
+
+/**
+ * 作業項目と同じPRのPR修正で、これまでにSonnetが失敗した回数を返す。
+ * 同じPRのpr_fixの作業項目(前のラウンドと、`retry_work_item`で再実行した同じ作業項目)を対象に、
+ * 次の3つを足す。
+ * - Claudeが動いた(`agent_runs`にstageが`pr_fix`の行がある)のに、修正をpushせず
+ *   `blocked`で終えたラウンド。`fix_rounds`の行を数える。
+ * - 検査が通らず、検査の失敗を添えて再実行した(stageが`pr_fix_verify_retry`の行がある)作業項目。
+ *   不正な出力の再試行で同じstageの行が増えるので、作業項目ごとに1回と数える。
+ * - Claudeの実行そのものが失敗した(`agent_runs.error`が入っている)行。`runClaude`は、
+ *   タイムアウト、0以外の終了コード、`is_error`、ターンや予算の上限、不正な出力のどれでも
+ *   失敗した行に`error`を書く。適用の実行の失敗は例外で終わってラウンドの記録を残さず、flowの再試行と`on_error_flow`は
+ *   `fix_rounds`を書かないので、上の2つでは数えられない。検査の再実行の失敗は例外にならず、`blocked`のラウンドを残す。
+ *   flowの再試行や`retry_work_item`で同じ作業項目の実行が何度失敗しても、1行ずつ数える。
+ *   ただし次の2つは数えない。
+ *   - `blocked`のラウンドの直前の実行(その実行とラウンドの間に、同じ作業項目の実行が無い)。
+ *     検査の再実行の失敗や`.git`の書き換えでラウンドが`blocked`になったときで、
+ *     その失敗は`blocked`のラウンドで数え済みである。それより前の失敗と、
+ *     `blocked`の後に`retry_work_item`で再実行した失敗は数える。
+ *   - 不正な出力の再試行で捨てた最初の試行の行。`recordClaudeRuns`は捨てた行と最後の行を
+ *     続けて書くので、同じ作業項目、stage、試行で10秒以内に次の行がある失敗の行と見なす。
+ *     別の実行の行は、flowの再試行の60秒の待ちか、flowとClaudeの実行のやり直しを経てから
+ *     書かれるので、10秒以内には来ない。
+ *   `done`や`requirements_gap`で終えたラウンドより前の失敗も数える。
+ *   後の実行が成功しても、Sonnetがその実行で失敗した事実は変わらないためである。
+ * 新しい指摘でラベルが付き直しただけのラウンドは数えない。
+ * `blocked`の行は、`done`で終わったラウンドを数えない。
+ * Claudeが動いたかは作業項目の単位で見るので、同じ作業項目で前にClaudeが動いていれば、
+ * Claudeを起動しなかった後の`blocked`も数える。
+ * 検査の再実行は、ラウンドが`done`で終わっても、作業項目ごとに1回数える。
+ */
+export async function countPrFixFailures(
+  workItemId: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  const rows = await sql`
+    WITH same_pr AS (
+      SELECT wi.id
+      FROM factory.work_items cur
+      JOIN factory.work_items wi
+        ON wi.owner = cur.owner AND wi.repo = cur.repo AND wi.pr_number = cur.pr_number
+      WHERE cur.id = ${workItemId}::bigint AND wi.kind = 'pr_fix'
+    )
+    SELECT
+      (
+        SELECT COUNT(*)
+        FROM factory.fix_rounds fr
+        WHERE fr.work_item_id IN (SELECT id FROM same_pr)
+          AND fr.outcome = 'blocked'
+          AND EXISTS (
+            SELECT 1 FROM factory.agent_runs ar
+            WHERE ar.work_item_id = fr.work_item_id AND ar.stage = 'pr_fix'
+          )
+      ) AS blocked_rounds,
+      (
+        SELECT COUNT(DISTINCT ar.work_item_id)
+        FROM factory.agent_runs ar
+        WHERE ar.work_item_id IN (SELECT id FROM same_pr)
+          AND ar.stage = 'pr_fix_verify_retry'
+      ) AS verify_retry_items,
+      (
+        SELECT COUNT(*)
+        FROM factory.agent_runs ar
+        WHERE ar.work_item_id IN (SELECT id FROM same_pr)
+          AND ar.stage IN ('pr_fix', 'pr_fix_verify_retry')
+          AND ar.error IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM factory.fix_rounds fr
+            WHERE fr.work_item_id = ar.work_item_id
+              AND fr.outcome = 'blocked'
+              AND fr.created_at >= ar.created_at
+              AND NOT EXISTS (
+                SELECT 1 FROM factory.agent_runs later
+                WHERE later.work_item_id = ar.work_item_id
+                  AND later.stage IN ('pr_fix', 'pr_fix_verify_retry')
+                  AND later.id > ar.id
+                  AND later.created_at <= fr.created_at
+              )
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM factory.agent_runs next_run
+            WHERE next_run.work_item_id = ar.work_item_id
+              AND next_run.stage = ar.stage
+              AND next_run.attempt = ar.attempt
+              AND next_run.id > ar.id
+              AND next_run.created_at <= ar.created_at + interval '10 seconds'
+          )
+      ) AS failed_runs
+  `.fetch();
+  const row = rows[0];
+  return row === undefined
+    ? 0
+    : parseNumericLike(row.blocked_rounds, "blocked_rounds") +
+        parseNumericLike(row.verify_retry_items, "verify_retry_items") +
+        parseNumericLike(row.failed_runs, "failed_runs");
 }
 
 function parseImplementDiffStat(value: unknown): ImplementDiffStat | null {

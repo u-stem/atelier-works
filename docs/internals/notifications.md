@@ -43,12 +43,16 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | `pipeline_generate` | 日次の予算を超えていたので、要件定義の生成を始めなかった |
 | `requirements_apply` | 試行回数の上限まで却下された。承認の後に実装フローを起動できなかった |
 | `poll_issues` | 承認依頼が期限切れになった(理由は`approval timed out`)。Issueを取得した後に作業項目を登録できなかった(理由は`claimed issue could not be registered`)。トリガーラベルを外した結果が分からなかった(理由は`claim ownership could not be determined`) |
+| `poll_prs` | PRのトリガーラベルを外した後に取得を確認できず、ラベルが外れたままになった(理由は`claimed pr trigger label was left removed`) |
 | `implement_finish` | 実装フローが人の対応待ちで止まった |
 | `pr_review_generate` | レビューの生成を止めた |
 | `pr_fix_finish` | 修正が人の対応待ちで止まった。Issue化の提案がある |
 
 `poll_issues`が、1回のポーリングで複数のIssueについてラベルを外した結果を判断できなかったときは、Issueごとに送らず、リンクを並べた1件の通知にまとめる。
 各行は`owner/repo#番号`とリンクで、タイトルとリンクの先は先頭のIssueである。
+並べるのは10件までで、残りは件数で示す。
+`poll_prs`が、1回のポーリングで複数のPRについてラベルが外れたままになったときも、PRごとに送らず、リンクを並べた1件の通知にまとめる。
+各行は`owner/repo#番号`とリンクと外れたラベルで、リンクの先は先頭のPRである。
 並べるのは10件までで、残りは件数で示す。
 
 ジョブ失敗(`job_failed`)の通知を送る処理は次のとおり。
@@ -198,9 +202,11 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `pr_fix_reviewer_request_failed` | `pr_fix_finish` | 対象、依頼できなかった理由 |
 | `issue_proposal_record_failed` | `pr_fix_finish` | 対象、記録の失敗の理由 |
 | `fix_feedback_association_excluded` | `pr_fix_collect` | 対象、除外した投稿者 |
-| `labeler_association_denied` | `poll_issues` | 対象、ラベル付与者の関係 |
+| `labeler_denied` | `poll_issues`、`poll_prs` | 対象、許可されていないトリガーラベル |
+| `labeler_check_limit` | `poll_issues`、`poll_prs` | 対象、付与者を判定できないトリガーラベル、付け直す操作 |
 | `claim_race_lost` | `poll_issues`、`poll_prs`、`manual_intake_register` | 対象、取得できなかった理由 |
 | `claim_assignee_missing` | `poll_issues` | 対象、assigneeにできなかったユーザー、確かめる点 |
+| `pr_trigger_label_left_removed` | `poll_prs` | 対象のPRと、外れたままのトリガーラベル |
 | `supersede_failed` | `insertIssueWorkItemUnlessActive`(`poll_issues`が呼ぶ) | 対象、新しい作業項目のID、操作が要らないこと |
 | `deployed_sha_mismatch` | `poll_issues` | self cloneのHEADと`f/factory/deployed_sha` |
 | `cleanup_db_failed` | `cleanup_db` | 削除に失敗した対象とエラー |
@@ -211,13 +217,40 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 `fix_reply_post_failed`は、返信の投稿に1件以上失敗したとき1件だけ残す。Discordには通知しない。`unsandboxed_check_commands`は、検査コマンドを実行するたびに残す。
 `cleanup_worktree_busy`は、1回の掃除でworktreeのパスごとに1件残す。Discordには通知しない。
 次のnoticeは、同じ本文の未解決のものがあるあいだは追加しない。
-対象は、`labeler_association_denied`、`claim_assignee_missing`、`claim_race_lost`、`supersede_failed`である。
-`claim_race_lost`は、`poll_issues`と`manual_intake_register`が残すものに限る。
+対象は、次の6種類である。
+
+- `labeler_denied`
+- `labeler_check_limit`
+- `claim_assignee_missing`
+- `claim_race_lost`
+- `supersede_failed`
+- `pr_trigger_label_left_removed`
+
+`claim_race_lost`のうち、`poll_issues`と`manual_intake_register`が残すものは対象である。
+`poll_prs`が残すものは、確認できずにトリガーラベルを付け直したときだけ対象にする。
+`poll_prs`のその他の`claim_race_lost`は、毎回追加する。
 `supersede_failed`は、新しいサイクルの挿入の後に、古い承認済みの作業項目を取り消す文が失敗したときに残す。Discordには通知しない。
 同じ状況が続く間、ポーリングのたびに積み上がるのを防ぐためである。
 `deployed_sha_mismatch`は、self cloneのHEADとデプロイ版が同じ組で、未解決のnoticeがあるあいだは追加しない。
 `poll_issues`が実行されるたびに同じnoticeが積み上がり、ほかの種類が埋もれるためである。
 版の組が変わったときと、既存のnoticeを解決した後に再び食い違ったときは、1件残す。
+
+Issueの取得に成功すると、`poll_issues`は未解決の`labeler_denied`を解決済みにする。
+対象は、本文が`<owner>/<repo>#<番号>:`と空白1つで始まるすべてのnoticeで、`resolved_by`は`poll_issues`になる。
+PRのトリガーラベルの取得に成功したときは、`poll_prs`が、同じPRと同じラベルの未解決の`labeler_denied`を、本文の完全一致で解決済みにする。
+`resolved_by`は`poll_prs`になる。
+解決に失敗しても取得の成否は変わらず、警告をログに残す。
+この種類はConsoleから解決できない。運用者が内容を確かめないまま消せると、許可されていない人の操作が見えなくなるためである。
+許可された人が付け直して取得できたときは、見送りの原因が解けているので、機械が解決しても、この目的と両立する。
+
+`poll_prs`は、PRの作業を始めた後に、そのPRとラベルの未解決のnoticeを解決済みにする。
+作業の開始が例外になったときは解決しない。
+対象は、確認できずにラベルを戻したときの`claim_race_lost`と、`pr_trigger_label_left_removed`である。
+本文が完全に一致する行だけを選ぶので、`review`と`review-fix`のようにラベル名が互いの接頭辞でも、別のラベルの行には触れない。`resolved_by`は`poll_prs`になる。
+
+`pr_trigger_label_left_removed`は、ラベルが外れたままのPRを検出した場所で、PRごとにすぐ残す。
+Discordの通知が届かなくても、Consoleから該当のPRを確かめられる。
+記録に失敗しても、警告のログを残すだけで、Discordの通知は送る。この種類は、人がConsoleから解決できる。
 
 解決済みのnoticeは、解決してから`retention_logs_days`(既定30日)を過ぎるとDBの掃除が消す。解決の時刻(`resolved_at`)が無い行は、作成の時刻から数える。
 重要度が「情報」の未解決のnoticeは、作成から同じ期間を過ぎると、削除せず解決済みへ変える(`resolved_by`は`cleanup_db`)。
@@ -268,12 +301,13 @@ RESTのrate limitでは、解除まで待って1回だけ再試行する。待�
 
 ## GitHub APIの一時的な失敗
 
-rate limitのほかに、次の2つの一時的な失敗は、`f/factory/lib/github.ts`が短く待って1回だけ再試行する。PRとIssueのポーリングは5分ごとに動くので、一過性の失敗でその回の検出が抜けることを防ぐ。
+rate limitのほかに、次の3つの一時的な失敗は、`f/factory/lib/github.ts`が短く待って1回だけ再試行する。PRとIssueのポーリングは5分ごとに動くので、一過性の失敗でその回の検出が抜けることを防ぐ。
 
 | 失敗 | 判定 | 再試行する要求 |
 | --- | --- | --- |
 | ghプロセスの起動失敗 | `Bun.spawn`の失敗を表す`SpawnError`で、コードが`EAGAIN`、`EMFILE`、`ENFILE`、`ENOMEM`(資源の一時不足) | すべての要求 |
 | ステータス行の無い失敗(通信断など) | 標準出力にステータス行が無く(HTTP 0)、プロセスがtimeoutしていない | GETと、読み取りのGraphQL(`listReviewThreads`) |
+| サーバーエラー | ステータスが500から599 | GETと、読み取りのGraphQL(`listReviewThreads`) |
 
 待つ時間は2秒(`GITHUB_TRANSIENT_RETRY_DELAY_MS`)である。テストでは`GhClient`の`transientRetryDelayMs`と`sleep`で差し替える。再試行は要求ごとに1回までで、rate limitの再試行とは別に数える。rate limitの待ちの上限は変わらない。
 rate limitの再試行の中でも一時的な失敗の再試行が起こりうるので、1回の`callGhApi`でghを最大4回起動する。
@@ -285,13 +319,16 @@ rate limitの再試行の中でも一時的な失敗の再試行が起こりう�
 
 通信断では、要求が届いた後で応答だけを失った可能性がある。届いていた場合に再送すると、コメントやレビューが二重に投稿され、PRやIssueが重複して作られる。
 そのため、GETでない要求は通信断を再試行せず、HTTP 0の失敗として記録する。GETでない要求とは、POST、PUT、PATCH、DELETEである。GraphQLはqueryでもPOSTで送るので含む。
+
+サーバーエラーでも、変更が途中まで効いている可能性は通信断と同じである。
+そのため、5xxを再試行するのもGETと読み取りのGraphQLだけで、GETでない要求は5xxの応答のまま失敗にする。
 例外として、読み取りのGraphQL(`listReviewThreads`)だけは、呼び出し側が冪等だと明示して再試行する。mutation(`resolveReviewThread`)は再試行しない。
 
 ### 再試行しないもの
 
 次の失敗は、再試行せずに記録する。
 
-- HTTPのエラー応答(4xxと5xx)。応答が返っているので、呼び出し側が失敗として扱う。
+- HTTPの4xx応答。応答が返っているので、呼び出し側が失敗として扱う。
 - 待っても直らない起動の失敗。ghの実行ファイルが無い場合(`ENOENT`)と、実行権限が無い場合(`EACCES`)である。
 - ghプロセスのtimeout。待ちが長引き、ステップのtimeoutに近づくため。
-- 再試行しても失敗したもの。起動失敗は元のエラーで、通信断はHTTP 0の失敗でステップを失敗にする。
+- 再試行しても失敗したもの。起動失敗は元のエラーで、通信断はHTTP 0の失敗で、サーバーエラーはその5xxの応答のままステップを失敗にする。

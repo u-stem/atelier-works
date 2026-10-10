@@ -18,7 +18,9 @@ value:
     - OWNER
     - MEMBER
     - COLLABORATOR
-  model: claude-opus-5-5
+  allowed_labeler_logins: []
+  model: claude-sonnet-5-5
+  heavy_model: claude-opus-5-5
   max_attempts: 3
   max_turns: 40
   max_budget_usd_per_run: 5

@@ -4,11 +4,16 @@
 import { describe, expect, test } from "bun:test";
 import {
   decidePrActions,
+  type LabelerPolicy,
+  labelerPolicyFor,
   type PrCandidate,
+  recordLabelerCheckLimit,
 } from "../../f/factory/lib/poll_support.ts";
+import { hasLabel } from "../../f/factory/lib/types.ts";
 
 const REVIEW_LABEL = "factory:review";
 const FIX_LABEL = "factory:fix";
+const POLICY: LabelerPolicy = { viewerLogin: "octo-owner", allowedLogins: [] };
 
 function candidate(overrides: Partial<PrCandidate> = {}): PrCandidate {
   return {
@@ -18,6 +23,9 @@ function candidate(overrides: Partial<PrCandidate> = {}): PrCandidate {
     title: "Fix the thing",
     headSha: "aaaaaaa1111111111111111111111111111111",
     labels: [],
+    authorLogin: "octo-owner",
+    reviewLabelerLogin: null,
+    fixLabelerLogin: null,
     hasActiveReviewingItem: false,
     lastKnownHeadSha: null,
     previousFixRound: 0,
@@ -29,9 +37,10 @@ function candidate(overrides: Partial<PrCandidate> = {}): PrCandidate {
 describe("decidePrActions — review", () => {
   test("triggers a label-based review and asks to remove the label", () => {
     const [decision] = decidePrActions(
-      [candidate({ labels: [REVIEW_LABEL] })],
+      [candidate({ labels: [REVIEW_LABEL], reviewLabelerLogin: "octo-owner" })],
       REVIEW_LABEL,
       FIX_LABEL,
+      POLICY,
     );
     expect(decision?.review).toEqual({
       kind: "trigger_review",
@@ -49,6 +58,7 @@ describe("decidePrActions — review", () => {
       ],
       REVIEW_LABEL,
       FIX_LABEL,
+      POLICY,
     );
     expect(decision?.review.kind).toBe("trigger_review");
   });
@@ -63,6 +73,7 @@ describe("decidePrActions — review", () => {
       ],
       REVIEW_LABEL,
       FIX_LABEL,
+      POLICY,
     );
     expect(decision?.review).toEqual({ kind: "none" });
   });
@@ -72,6 +83,7 @@ describe("decidePrActions — review", () => {
       [candidate({ lastKnownHeadSha: candidate().headSha })],
       REVIEW_LABEL,
       FIX_LABEL,
+      POLICY,
     );
     expect(decision?.review).toEqual({ kind: "none" });
   });
@@ -80,9 +92,10 @@ describe("decidePrActions — review", () => {
 describe("decidePrActions — fix", () => {
   test("triggers a label-based fix and asks to remove the label", () => {
     const [decision] = decidePrActions(
-      [candidate({ labels: [FIX_LABEL] })],
+      [candidate({ labels: [FIX_LABEL], fixLabelerLogin: "octo-owner" })],
       REVIEW_LABEL,
       FIX_LABEL,
+      POLICY,
     );
     expect(decision?.fix).toEqual({
       kind: "trigger_fix",
@@ -93,7 +106,12 @@ describe("decidePrActions — fix", () => {
   // `pr_fix`はコメントでは起動しない。
   // PRにどんなコメントがあっても、修正サイクルを始める手段は`fix_label`だけである。
   test("does not trigger fix without the label, even with no other state", () => {
-    const [decision] = decidePrActions([candidate()], REVIEW_LABEL, FIX_LABEL);
+    const [decision] = decidePrActions(
+      [candidate()],
+      REVIEW_LABEL,
+      FIX_LABEL,
+      POLICY,
+    );
     expect(decision?.fix).toEqual({ kind: "none" });
   });
 
@@ -109,11 +127,263 @@ describe("decidePrActions — fix", () => {
         candidate({
           hasActiveReviewingItem: false,
           labels: [FIX_LABEL],
+          fixLabelerLogin: "octo-owner",
         }),
       ],
       REVIEW_LABEL,
       FIX_LABEL,
+      POLICY,
     );
     expect(decision?.fix.kind).toBe("trigger_fix");
+  });
+});
+
+describe("decidePrActions — labeler check", () => {
+  function reviewOf(overrides: Partial<PrCandidate>, policy = POLICY) {
+    const [decision] = decidePrActions(
+      [candidate({ labels: [REVIEW_LABEL], ...overrides })],
+      REVIEW_LABEL,
+      FIX_LABEL,
+      policy,
+    );
+    return decision?.review;
+  }
+
+  function fixOf(overrides: Partial<PrCandidate>, policy = POLICY) {
+    const [decision] = decidePrActions(
+      [candidate({ labels: [FIX_LABEL], ...overrides })],
+      REVIEW_LABEL,
+      FIX_LABEL,
+      policy,
+    );
+    return decision?.fix;
+  }
+
+  test("denies a review label that another user added", () => {
+    expect(reviewOf({ reviewLabelerLogin: "mallory" })).toEqual({
+      kind: "deny_labeler",
+    });
+  });
+
+  test("denies a review label with no known labeler", () => {
+    expect(reviewOf({ reviewLabelerLogin: null })).toEqual({
+      kind: "deny_labeler",
+    });
+  });
+
+  test("does not fall back to the assignment path for a denied review label", () => {
+    const review = reviewOf({
+      reviewLabelerLogin: "mallory",
+      lastKnownHeadSha: "bbbbbbb2222222222222222222222222222222",
+    });
+    expect(review).toEqual({ kind: "deny_labeler" });
+  });
+
+  test("allows a review label that a listed login added", () => {
+    const review = reviewOf(
+      { reviewLabelerLogin: "alice" },
+      { ...POLICY, allowedLogins: ["alice"] },
+    );
+    expect(review?.kind).toBe("trigger_review");
+  });
+
+  test("denies every review label when the viewer is unknown", () => {
+    const review = reviewOf(
+      { reviewLabelerLogin: "octo-owner" },
+      { viewerLogin: null, allowedLogins: [] },
+    );
+    expect(review).toEqual({ kind: "deny_labeler" });
+  });
+
+  test("denies a fix label that another user added", () => {
+    expect(fixOf({ fixLabelerLogin: "mallory" })).toEqual({
+      kind: "deny_labeler",
+    });
+  });
+
+  test("denies a fix label with no known labeler", () => {
+    expect(fixOf({ fixLabelerLogin: null })).toEqual({ kind: "deny_labeler" });
+  });
+
+  test("allows a fix label that a listed login added", () => {
+    const fix = fixOf(
+      { fixLabelerLogin: "alice" },
+      { ...POLICY, allowedLogins: ["alice"] },
+    );
+    expect(fix?.kind).toBe("trigger_fix");
+  });
+
+  test("judges the fix label by its own labeler, not the review label's", () => {
+    const [decision] = decidePrActions(
+      [
+        candidate({
+          labels: [REVIEW_LABEL, FIX_LABEL],
+          reviewLabelerLogin: "octo-owner",
+          fixLabelerLogin: "mallory",
+        }),
+      ],
+      REVIEW_LABEL,
+      FIX_LABEL,
+      POLICY,
+    );
+    expect(decision?.fix).toEqual({ kind: "deny_labeler" });
+  });
+});
+
+describe("decidePrActions — detection without a label", () => {
+  const UNPROCESSED = {
+    lastKnownHeadSha: "bbbbbbb2222222222222222222222222222222",
+  };
+
+  function reviewOf(overrides: Partial<PrCandidate>, policy = POLICY) {
+    const [decision] = decidePrActions(
+      [candidate({ ...UNPROCESSED, ...overrides })],
+      REVIEW_LABEL,
+      FIX_LABEL,
+      policy,
+    );
+    return decision?.review;
+  }
+
+  test("starts a review of an unprocessed commit of the viewer's PR", () => {
+    expect(reviewOf({ authorLogin: "octo-owner" })?.kind).toBe(
+      "trigger_review",
+    );
+  });
+
+  test("starts a review of an unprocessed commit of a listed author's PR", () => {
+    const review = reviewOf(
+      { authorLogin: "alice" },
+      { ...POLICY, allowedLogins: ["alice"] },
+    );
+    expect(review?.kind).toBe("trigger_review");
+  });
+
+  test("does not start a review of a PR whose author is not allowed", () => {
+    expect(reviewOf({ authorLogin: "mallory" })).toEqual({ kind: "none" });
+  });
+
+  test("does not start a review of a PR whose author is unknown", () => {
+    expect(reviewOf({ authorLogin: null })).toEqual({ kind: "none" });
+  });
+
+  test("does not start a review by detection when the fix label was denied", () => {
+    const review = reviewOf({
+      labels: [FIX_LABEL],
+      fixLabelerLogin: "mallory",
+    });
+    expect(review).toEqual({ kind: "none" });
+  });
+
+  test("does not start a review by detection when the fix label has no known labeler", () => {
+    const review = reviewOf({ labels: [FIX_LABEL], fixLabelerLogin: null });
+    expect(review).toEqual({ kind: "none" });
+  });
+
+  test("still starts a review by detection when the fix label was allowed", () => {
+    const review = reviewOf({
+      labels: [FIX_LABEL],
+      fixLabelerLogin: "octo-owner",
+    });
+    expect(review?.kind).toBe("trigger_review");
+  });
+
+  test("does not fall back to detection when the review label was denied", () => {
+    const review = reviewOf({
+      labels: [REVIEW_LABEL],
+      reviewLabelerLogin: "mallory",
+    });
+    expect(review).toEqual({ kind: "deny_labeler" });
+  });
+
+  test("treats a label whose case differs from the config as present", () => {
+    const review = reviewOf({
+      labels: ["Factory:Fix"],
+      fixLabelerLogin: "mallory",
+    });
+    expect(review).toEqual({ kind: "none" });
+  });
+
+  test("denies a review label whose case differs from the config", () => {
+    const review = reviewOf({
+      labels: ["FACTORY:REVIEW"],
+      reviewLabelerLogin: "mallory",
+    });
+    expect(review).toEqual({ kind: "deny_labeler" });
+  });
+
+  test("reviews a third-party PR when the allowed account added the review label", () => {
+    const review = reviewOf({
+      authorLogin: "mallory",
+      labels: [REVIEW_LABEL],
+      reviewLabelerLogin: "octo-owner",
+    });
+    expect(review?.kind).toBe("trigger_review");
+  });
+
+  test("does not review a third-party PR's new commit without the label", () => {
+    const review = reviewOf({
+      authorLogin: "mallory",
+      lastKnownHeadSha: "bbbbbbb2222222222222222222222222222222",
+    });
+    expect(review).toEqual({ kind: "none" });
+  });
+});
+
+describe("hasLabel", () => {
+  test("matches regardless of case", () => {
+    expect(hasLabel(["Factory:Review"], "factory:review")).toBe(true);
+  });
+
+  test("does not match a different label", () => {
+    expect(hasLabel(["factory:fix"], "factory:review")).toBe(false);
+  });
+});
+
+describe("labelerPolicyFor", () => {
+  test("takes the viewer login as given", () => {
+    const policy = labelerPolicyFor("octo-owner", {
+      allowed_labeler_logins: ["alice"],
+    });
+    expect(policy.viewerLogin).toBe("octo-owner");
+  });
+
+  test("takes allowed_labeler_logins as the allowed logins", () => {
+    const policy = labelerPolicyFor("octo-owner", {
+      allowed_labeler_logins: ["alice"],
+    });
+    expect(policy.allowedLogins).toEqual(["alice"]);
+  });
+});
+
+describe("recordLabelerCheckLimit", () => {
+  const TARGET = { owner: "octo-owner", repo: "atelier-works", number: 7 };
+
+  async function recorded(label = "factory:review") {
+    const records: { kind: string; message: string }[] = [];
+    await recordLabelerCheckLimit(
+      async (record) => {
+        records.push(record);
+      },
+      TARGET,
+      label,
+    );
+    return records;
+  }
+
+  test("records the kind that asks a person to act", async () => {
+    expect((await recorded())[0]?.kind).toBe("labeler_check_limit");
+  });
+
+  test("names the target and the label and asks to remove the label", async () => {
+    expect((await recorded())[0]?.message).toBe(
+      "octo-owner/atelier-works#7: factory:reviewラベルの付与者を判定できないため、着手できません。ラベルを外し、許可された人が付け直してください",
+    );
+  });
+
+  test("builds the same message on the next poll", async () => {
+    const first = await recorded();
+    const second = await recorded();
+    expect(second[0]?.message).toBe(first[0]?.message);
   });
 });

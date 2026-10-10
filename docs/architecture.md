@@ -171,7 +171,7 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加だけにし、
 | `requirement_drafts` | 要件定義ドラフト。attemptごとに本文、図の参照、未確定事項、ファイルの置き場所(`doc_dir`)を持つ |
 | `approval_requests` | 承認依頼。要件定義の承認とIssue化の提案の承認の両方を持つ |
 | `approvals` | 承認と却下の古い履歴。今は書き込まない |
-| `agent_runs` | Claudeの実行1回ごとのトークン数、費用、所要時間、終了コード |
+| `agent_runs` | Claudeの実行1回ごとのモデル、トークン数、費用、所要時間、終了コード |
 | `job_failures` | フローの失敗の記録。トークンはマスクしてから書く |
 | `deployments` | 自己更新によるデプロイの結果 |
 | `notices` | 人が対応すべき事項。PATの失効やSHAの不一致など。解決した人と時刻(`resolved_by`、`resolved_at`)も持ち、DBの掃除が解決した行の`resolved_by`は`cleanup_db`になる |
@@ -290,6 +290,8 @@ cronはWindmillの6フィールドの形式で、タイムゾーンは`Asia/Toky
 Issueはassigneeを追加してからトリガーラベルを外し、外す要求に成功したインスタンスが受け持つ。
 PRも同じくトリガーラベルの削除で所有を決め、削除が404なら引く。
 外せた後は取り直して残っていないかを確かめる。
+取り直しが数回とも失敗したときは、トリガーラベルを付け直して引く。
+PRのラベルの経路は、稼働中の作業項目があっても止まらないので、確認できないまま始めると同じPRのサイクルが重なりうるためである。
 この排他はベストエフォートである。
 最後の防御は、`work_items`の部分一意インデックス`work_items_active_issue_key`である。
 終端でないIssueの作業項目は、`owner`、`repo`、Issueの番号の組ごとに、同時に1つしか持てない。
@@ -337,6 +339,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/implement_loop` | script | [LIB] 実装フローの検証ループ |
 | `f/factory/lib/implement_support` | script | [LIB] 実装フローの純粋関数群 |
 | `f/factory/lib/implement_launch_support` | script | [LIB] 実装フローの起動判定 |
+| `f/factory/lib/model_policy` | script | [LIB] 工程ごとのモデルの選択 |
 | `f/factory/lib/supersede_support` | script | [LIB] 承認の取り消しのコメント |
 | `f/factory/lib/approval_support` | script | [LIB] 承認依頼の純粋ロジック |
 | `f/factory/lib/approver` | script | [LIB] 承認者の導出 |
