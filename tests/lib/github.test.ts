@@ -2000,6 +2000,50 @@ describe("addLabels", () => {
     ).rejects.toThrow();
   });
 
+  test("does not resend after a 500 by default", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(500, { message: "boom" })),
+      ok(ghApiStdout(200, [])),
+    ]);
+    await addLabels(
+      { run: fake.run, ghToken: "tok", sleep: async () => {} },
+      "acme",
+      "widgets",
+      5,
+      ["a"],
+    ).catch(() => undefined);
+    expect(fake.calls).toHaveLength(1);
+  });
+
+  test("resends once after a 500 when idempotent", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(500, { message: "boom" })),
+      ok(ghApiStdout(200, [])),
+    ]);
+    await addLabels(
+      { run: fake.run, ghToken: "tok", sleep: async () => {} },
+      "acme",
+      "widgets",
+      5,
+      ["a"],
+      { idempotent: true },
+    );
+    expect(fake.calls).toHaveLength(2);
+  });
+
+  test("resends once after a lost connection when idempotent", async () => {
+    const fake = createFakeCommandRunner([ok(""), ok(ghApiStdout(200, []))]);
+    await addLabels(
+      { run: fake.run, ghToken: "tok", sleep: async () => {} },
+      "acme",
+      "widgets",
+      5,
+      ["a"],
+      { idempotent: true },
+    );
+    expect(fake.calls).toHaveLength(2);
+  });
+
   test("masks a secret-looking value in the thrown error", async () => {
     const secret = "github_pat_11ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     const fake = createFakeCommandRunner([

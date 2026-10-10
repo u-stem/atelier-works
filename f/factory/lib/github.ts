@@ -1510,6 +1510,9 @@ export async function removeLabel(
  * GitHubの`POST .../labels`は追加で、全体を置き換える`setLabels`のPUTとは異なる。
  * POSTするだけで、再取得による確認はしない。
  * `claimIssue`と違い、assigneeは設定しない。
+ * `options.idempotent`を`true`にすると、応答の無い通信断と5xxを1回再送する
+ * (`isRetryable`を参照)。既に付いているラベルの追加は状態を変えないので、
+ * 呼び出し側が再送してよいと判断できるときだけ指定する。省略するとPOSTなので再送しない。
  */
 export async function addLabels(
   client: GhClient,
@@ -1517,6 +1520,7 @@ export async function addLabels(
   repo: string,
   number: number,
   labels: readonly string[],
+  options: { readonly idempotent?: boolean } = {},
 ): Promise<void> {
   validateOwnerRepo(owner, repo);
   const response = await callGhApi(
@@ -1525,6 +1529,9 @@ export async function addLabels(
     {
       method: "POST",
       body: { labels },
+      ...(options.idempotent !== undefined
+        ? { idempotent: options.idempotent }
+        : {}),
     },
   );
   ensureSuccess(response, `POST issue labels ${owner}/${repo}#${number}`);

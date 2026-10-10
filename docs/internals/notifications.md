@@ -224,6 +224,11 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 Issueの取得に成功すると、`poll_issues`は未解決の`labeler_association_denied`を解決済みにする。
 対象は、本文が`<owner>/<repo>#<番号>:`と空白1つで始まるすべてのnoticeで、`resolved_by`は`poll_issues`になる。
 解決に失敗しても取得の成否は変わらず、警告をログに残す。
+この種類はConsoleから解決できない。運用者が内容を確かめないまま消せると、許可されていない人の操作が見えなくなるためである。
+許可された人が付け直して取得できたときは、見送りの原因が解けているので、機械が解決しても、この目的と両立する。
+
+`poll_prs`は、PRの取得に成功すると、確認できずにラベルを戻したときの`claim_race_lost`を解決済みにする。
+対象は同じPRと同じラベルの本文で、`resolved_by`は`poll_prs`になる。ほかの理由の`claim_race_lost`には触れない。
 
 解決済みのnoticeは、解決してから`retention_logs_days`(既定30日)を過ぎるとDBの掃除が消す。解決の時刻(`resolved_at`)が無い行は、作成の時刻から数える。
 重要度が「情報」の未解決のnoticeは、作成から同じ期間を過ぎると、削除せず解決済みへ変える(`resolved_by`は`cleanup_db`)。

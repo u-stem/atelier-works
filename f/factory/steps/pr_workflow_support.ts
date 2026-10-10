@@ -3829,6 +3829,17 @@ const REASON_RULES: readonly ReasonRule[] = [
     nextAction: () =>
       "Consoleの作業項目で、このIssueの作業が始まっているか確かめてください。始まっていなければ、Issueに`factory`ラベルを付け直してください",
   },
+  // poll_prs.tsの`claimPr`。トリガーラベルを外した後に取得を確認できず、
+  // ラベルを付け直せなかったか、レート制限で付け直さなかった。ラベルは外れたままで、作業項目も無い。
+  // 作業項目が無いので、再実行ではなくラベルの付け直しで拾い直す。
+  // ラベル名は`factory:review`と`factory:fix`の既定で書く(ほかの行と同じ)。
+  {
+    pattern: /^claimed pr trigger label was left removed$/,
+    describe: () =>
+      "PRのトリガーラベルを外した後に取得を確認できず、ラベルが外れたままです",
+    nextAction: () =>
+      "GitHubのレート制限などが解けるのを待ってから、PRに外れたほうの`factory:review`か`factory:fix`ラベルを付け直してください",
+  },
   {
     pattern: /^approval timed out$/,
     describe: () => "承認がタイムアウトしました",
