@@ -101,6 +101,7 @@ Issueに`factory`ラベルを付けると、Factoryがそれを拾う。拾う�
 
 許可されていない人がラベルを付けたIssueは拾わない。Consoleの**通知**タブに、ラベル付与者の関係が許可されていない旨(`labeler_association_denied`)が残る。
 許可された人がラベルを付け直し、FactoryがそのIssueを取得すると、このnoticeは解決済みになる。
+フォームで投入したIssueは`manual_intake_register`が登録するので、このnoticeは自動では解決されない。Consoleからも解決できない種類なので、DBの掃除が保持期間を過ぎてから解決済みにする。
 このnoticeの記録に失敗してもジョブは止まらず、**失敗**タブに`labeler_denied:<owner>/<repo>#<Issue番号>`として残る。
 
 ### フォームで投入する
@@ -690,7 +691,7 @@ Consoleの**通知**タブには、Discordに送らない要対応の事項が�
 | `issue_proposal_record_failed` | Issue化の提案を記録できなかった | PRのスレッドを確かめ、必要なら人がIssueを起票する |
 | `fix_feedback_association_excluded` | 許可されていない関係の人のコメントを、修正の材料から除いた | 必要なら許可された人が指示を書き直す |
 | `labeler_association_denied` | 許可されていない関係の人が`factory`ラベルを付けた | 拾わせるなら、許可された人がラベルを付け直す |
-| `claim_race_lost` | ほかのインスタンスか人が先にIssue・PRのトリガーラベルを外した。または、別の取得が同じIssueを先に取得した。Issueでは、同じ本文の未解決のnoticeがあるあいだは追加しない | 理由がラベルを先に外されたことなら、人が意図して外したのか確かめる。意図していなければ、何もしない |
+| `claim_race_lost` | ほかのインスタンスか人が先にIssue・PRのトリガーラベルを外した。または、別の取得が同じIssueを先に取得した。Issueでは、同じ本文の未解決のnoticeがあるあいだは追加しない。PRでは、確認できずにトリガーラベルを付け直したときだけ、同じ本文の未解決のnoticeがあるあいだは追加しない | 理由がラベルを先に外されたことなら、人が意図して外したのか確かめる。意図していなければ、何もしない |
 | `claim_assignee_missing` | Issueを取得したが、FactoryのGitHubユーザーをassigneeにできなかった。作業は続く | そのユーザーがリポジトリのpush権限を持つcollaboratorか確かめる |
 | `supersede_failed` | 新しいサイクルを始めたが、古い承認済みの作業項目を取り消せなかった | なし。古い承認は再開できず、次の新しいサイクルで取り消される |
 | `deployed_sha_mismatch` | 自己更新が反映した版と、self cloneの版が一致しない | 自己更新のジョブの失敗を確かめる |

@@ -212,15 +212,18 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 `cleanup_worktree_busy`は、1回の掃除でworktreeのパスごとに1件残す。Discordには通知しない。
 次のnoticeは、同じ本文の未解決のものがあるあいだは追加しない。
 対象は、`labeler_association_denied`、`claim_assignee_missing`、`claim_race_lost`、`supersede_failed`である。
-`claim_race_lost`は、`poll_issues`と`manual_intake_register`が残すものに限る。
+`claim_race_lost`のうち、`poll_issues`と`manual_intake_register`が残すものは対象である。
+`poll_prs`が残すものは、確認できずにトリガーラベルを付け直したときだけ対象にする。
+`poll_prs`のその他の`claim_race_lost`は、毎回追加する。
 `supersede_failed`は、新しいサイクルの挿入の後に、古い承認済みの作業項目を取り消す文が失敗したときに残す。Discordには通知しない。
 同じ状況が続く間、ポーリングのたびに積み上がるのを防ぐためである。
-`poll_issues`は、Issueを取得した後に、そのIssueの`labeler_association_denied`を解決済みにする。
-解決者は`poll_issues`で、同じIssueを指す本文の未解決の行がすべて対象になる。
-解決に失敗しても取得の成否は変わらず、警告をログに残す。
 `deployed_sha_mismatch`は、self cloneのHEADとデプロイ版が同じ組で、未解決のnoticeがあるあいだは追加しない。
 `poll_issues`が実行されるたびに同じnoticeが積み上がり、ほかの種類が埋もれるためである。
 版の組が変わったときと、既存のnoticeを解決した後に再び食い違ったときは、1件残す。
+
+Issueの取得に成功すると、`poll_issues`は未解決の`labeler_association_denied`を解決済みにする。
+対象は、本文が`<owner>/<repo>#<番号>:`と空白1つで始まるすべてのnoticeで、`resolved_by`は`poll_issues`になる。
+解決に失敗しても取得の成否は変わらず、警告をログに残す。
 
 解決済みのnoticeは、解決してから`retention_logs_days`(既定30日)を過ぎるとDBの掃除が消す。解決の時刻(`resolved_at`)が無い行は、作成の時刻から数える。
 重要度が「情報」の未解決のnoticeは、作成から同じ期間を過ぎると、削除せず解決済みへ変える(`resolved_by`は`cleanup_db`)。
@@ -271,12 +274,13 @@ RESTのrate limitでは、解除まで待って1回だけ再試行する。待�
 
 ## GitHub APIの一時的な失敗
 
-rate limitのほかに、次の2つの一時的な失敗は、`f/factory/lib/github.ts`が短く待って1回だけ再試行する。PRとIssueのポーリングは5分ごとに動くので、一過性の失敗でその回の検出が抜けることを防ぐ。
+rate limitのほかに、次の3つの一時的な失敗は、`f/factory/lib/github.ts`が短く待って1回だけ再試行する。PRとIssueのポーリングは5分ごとに動くので、一過性の失敗でその回の検出が抜けることを防ぐ。
 
 | 失敗 | 判定 | 再試行する要求 |
 | --- | --- | --- |
 | ghプロセスの起動失敗 | `Bun.spawn`の失敗を表す`SpawnError`で、コードが`EAGAIN`、`EMFILE`、`ENFILE`、`ENOMEM`(資源の一時不足) | すべての要求 |
 | ステータス行の無い失敗(通信断など) | 標準出力にステータス行が無く(HTTP 0)、プロセスがtimeoutしていない | GETと、読み取りのGraphQL(`listReviewThreads`) |
+| サーバーエラー | ステータスが500から599 | GETと、読み取りのGraphQL(`listReviewThreads`) |
 
 待つ時間は2秒(`GITHUB_TRANSIENT_RETRY_DELAY_MS`)である。テストでは`GhClient`の`transientRetryDelayMs`と`sleep`で差し替える。再試行は要求ごとに1回までで、rate limitの再試行とは別に数える。rate limitの待ちの上限は変わらない。
 rate limitの再試行の中でも一時的な失敗の再試行が起こりうるので、1回の`callGhApi`でghを最大4回起動する。
@@ -288,13 +292,16 @@ rate limitの再試行の中でも一時的な失敗の再試行が起こりう�
 
 通信断では、要求が届いた後で応答だけを失った可能性がある。届いていた場合に再送すると、コメントやレビューが二重に投稿され、PRやIssueが重複して作られる。
 そのため、GETでない要求は通信断を再試行せず、HTTP 0の失敗として記録する。GETでない要求とは、POST、PUT、PATCH、DELETEである。GraphQLはqueryでもPOSTで送るので含む。
+
+サーバーエラーでも、変更が途中まで効いている可能性は通信断と同じである。
+そのため、5xxを再試行するのもGETと読み取りのGraphQLだけで、GETでない要求は5xxの応答のまま失敗にする。
 例外として、読み取りのGraphQL(`listReviewThreads`)だけは、呼び出し側が冪等だと明示して再試行する。mutation(`resolveReviewThread`)は再試行しない。
 
 ### 再試行しないもの
 
 次の失敗は、再試行せずに記録する。
 
-- HTTPのエラー応答(4xxと5xx)。応答が返っているので、呼び出し側が失敗として扱う。
+- HTTPの4xx応答。応答が返っているので、呼び出し側が失敗として扱う。
 - 待っても直らない起動の失敗。ghの実行ファイルが無い場合(`ENOENT`)と、実行権限が無い場合(`EACCES`)である。
 - ghプロセスのtimeout。待ちが長引き、ステップのtimeoutに近づくため。
-- 再試行しても失敗したもの。起動失敗は元のエラーで、通信断はHTTP 0の失敗でステップを失敗にする。
+- 再試行しても失敗したもの。起動失敗は元のエラーで、通信断はHTTP 0の失敗で、サーバーエラーはその5xxの応答のままステップを失敗にする。

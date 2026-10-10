@@ -1897,6 +1897,7 @@ export async function listWorktrees(opts: {
   if (result.exitCode !== 0) {
     throw gitError("git worktree list failed", result);
   }
+  assertOutputComplete("git worktree list", result);
   return parseWorktreeListPorcelain(result.stdout);
 }
 

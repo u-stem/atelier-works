@@ -9,7 +9,11 @@
 import { describe, expect, test } from "bun:test";
 import type { GhClient } from "../../f/factory/lib/github.ts";
 import type { Logger } from "../../f/factory/lib/log.ts";
-import { claimPr } from "../../f/factory/poll_prs.ts";
+import {
+  type ClaimNotClaimedDeps,
+  claimPr,
+  recordPrClaimNotClaimed,
+} from "../../f/factory/poll_prs.ts";
 import {
   createFakeCommandRunner,
   fail,
@@ -123,7 +127,7 @@ describe("claimPr when the confirmation read fails", () => {
     expect(result.claimed).toBe(false);
   });
 
-  test("explains that the label was restored because the read failed", async () => {
+  test("returns a fixed reason that marks the label as restored", async () => {
     const { run } = createFakeCommandRunner([
       ghApiOk({}),
       readFails,
@@ -133,11 +137,36 @@ describe("claimPr when the confirmation read fails", () => {
     ]);
     const { client } = recordingClient(run);
     const result = await claimPr(client, ...args);
-    expect(result).toMatchObject({
-      reason: expect.stringContaining(
+    expect(result).toEqual({
+      claimed: false,
+      reason:
         "could not confirm the claim; restored trigger label factory:review",
-      ),
+      restored: true,
     });
+  });
+
+  test("logs the read failure when the label is restored", async () => {
+    const { run } = createFakeCommandRunner([
+      ghApiOk({}),
+      readFails,
+      readFails,
+      readFails,
+      ghApiOk([]),
+    ]);
+    const { client } = recordingClient(run);
+    const messages: string[] = [];
+    const log: Logger = {
+      info() {},
+      warn(message, fields) {
+        if (
+          message === "claim could not be confirmed; restored the trigger label"
+        )
+          messages.push(String(fields?.error));
+      },
+      error() {},
+    };
+    await claimPr(client, ...args, log);
+    expect(messages).toEqual([expect.stringContaining("HTTP 404")]);
   });
 
   test("makes three read attempts before restoring the label", async () => {
@@ -197,18 +226,23 @@ describe("claimPr when the confirmation read fails", () => {
     ).toHaveLength(3);
   });
 
-  test("does not repeat the read on a rate limit and puts the label back", async () => {
+  test("throws on a rate limit, saying the label stays removed", async () => {
+    const { run } = createFakeCommandRunner([ghApiOk({}), rateLimited]);
+    const { client } = recordingClient(run);
+    await expect(claimPr(client, ...args)).rejects.toThrow(
+      /rate limit after trigger label factory:review was removed.*a person must add it back/s,
+    );
+  });
+
+  test("does not repeat the read or put the label back on a rate limit", async () => {
     const { run, calls } = createFakeCommandRunner([
       ghApiOk({}),
       rateLimited,
       ghApiOk([]),
     ]);
     const { client } = recordingClient(run);
-    const result = await claimPr(client, ...args);
-    expect({ claimed: result.claimed, calls: calls.length }).toEqual({
-      claimed: false,
-      calls: 3,
-    });
+    await claimPr(client, ...args).catch(() => undefined);
+    expect(calls).toHaveLength(2);
   });
 
   test("throws an error naming both failures when restoring the label fails", async () => {
@@ -218,12 +252,24 @@ describe("claimPr when the confirmation read fails", () => {
       readFails,
       readFails,
       ok(ghApiStdout(500, { message: "boom" })),
-      ok(ghApiStdout(500, { message: "boom" })),
     ]);
     const { client } = recordingClient(run);
     await expect(claimPr(client, ...args)).rejects.toThrow(
       /confirmation read failed.*HTTP 404.*restoring trigger label factory:review failed.*HTTP 500/s,
     );
+  });
+
+  test("sends the label POST only once when it fails", async () => {
+    const { run, calls } = createFakeCommandRunner([
+      ghApiOk({}),
+      readFails,
+      readFails,
+      readFails,
+      ok(ghApiStdout(500, { message: "boom" })),
+    ]);
+    const { client } = recordingClient(run);
+    await claimPr(client, ...args).catch(() => undefined);
+    expect(calls.filter((call) => call.argv.includes("POST"))).toHaveLength(1);
   });
 });
 
@@ -338,5 +384,92 @@ describe("claimPr", () => {
       "factory:review",
     );
     expect(calls).toHaveLength(1);
+  });
+});
+
+describe("recordPrClaimNotClaimed", () => {
+  const TARGET = { owner: "octo-owner", repo: "atelier-works", number: 7 };
+
+  function fakeNoticeDeps(): {
+    deps: ClaimNotClaimedDeps;
+    plain: unknown[];
+    deduplicated: unknown[];
+  } {
+    const plain: unknown[] = [];
+    const deduplicated: unknown[] = [];
+    return {
+      plain,
+      deduplicated,
+      deps: {
+        addNotice: async (record) => {
+          plain.push(record);
+          return 1;
+        },
+        addNoticeUnlessUnresolved: async (record) => {
+          deduplicated.push(record);
+          return 1;
+        },
+      },
+    };
+  }
+
+  test("skips an unresolved duplicate when the label was restored", async () => {
+    const { deps, deduplicated } = fakeNoticeDeps();
+    await recordPrClaimNotClaimed(
+      TARGET,
+      {
+        claimed: false,
+        reason:
+          "could not confirm the claim; restored trigger label factory:review",
+        restored: true,
+      },
+      deps,
+    );
+    expect(deduplicated).toEqual([
+      {
+        kind: "claim_race_lost",
+        message:
+          "octo-owner/atelier-works#7: could not confirm the claim; restored trigger label factory:review",
+      },
+    ]);
+  });
+
+  test("does not use the plain insert when the label was restored", async () => {
+    const { deps, plain } = fakeNoticeDeps();
+    await recordPrClaimNotClaimed(
+      TARGET,
+      { claimed: false, reason: "r", restored: true },
+      deps,
+    );
+    expect(plain).toEqual([]);
+  });
+
+  test("inserts every time for other reasons", async () => {
+    const { deps, plain } = fakeNoticeDeps();
+    await recordPrClaimNotClaimed(
+      TARGET,
+      {
+        claimed: false,
+        reason: "trigger label factory:review was already removed",
+      },
+      deps,
+    );
+    expect(plain).toEqual([
+      {
+        kind: "claim_race_lost",
+        message:
+          "octo-owner/atelier-works#7: trigger label factory:review was already removed",
+      },
+    ]);
+  });
+
+  test("does not use the deduplicating insert for other reasons", async () => {
+    const { deps, deduplicated } = fakeNoticeDeps();
+    await recordPrClaimNotClaimed(
+      TARGET,
+      { claimed: false, reason: "r" },
+      deps,
+    );
+    expect(deduplicated).toEqual([]);
   });
 });

@@ -10,7 +10,8 @@
 // Issueと同じく取得時に消費する。`wip`ラベルも状態ラベルも無い。
 // `claimPr`は今回のサイクルを起こしたトリガーラベルを外す。ラベルが既に無ければ(404)
 // ほかが先に外したので引き、外せたら取り直して残っていないかを確かめる。
-// 取り直しが数回とも失敗したときは、ラベルを付け直して引く(`claimPr`を参照)。assignで起きるレビューは
+// 取り直しが数回とも失敗したときは、ラベルを付け直して引く。レート制限で読めないときは、
+// 付け直さず、ラベルが外れたままであることを例外で知らせる(`claimPr`を参照)。assignで起きるレビューは
 // ラベルが関わらないので`claimPr`を通らない。トリガーラベルを消費すると
 // `searchPrs`のラベル検索ではそのPRを見つけられなくなるため、
 // `listTrackedPrs`がDBから見つけ直す(`main()`を参照)。
@@ -20,6 +21,7 @@ import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "./lib/config.ts";
 import {
   addNotice,
+  addNoticeUnlessUnresolved,
   bumpWatermarks,
   findApprovedWorkItemForIssue,
   insertWorkItem,
@@ -34,6 +36,7 @@ import {
 import {
   addLabels,
   type GhClient,
+  GitHubRateLimitError,
   getIssue,
   getPr,
   getViewer,
@@ -221,7 +224,15 @@ async function buildPrCandidate(
 
 export type ClaimPrResult =
   | { readonly claimed: true }
-  | { readonly claimed: false; readonly reason: string };
+  | {
+      readonly claimed: false;
+      readonly reason: string;
+      /**
+       * 確認できなかったので、外したトリガーラベルを付け直したとき`true`。
+       * ほかが先に外したなどの引き方と区別して、noticeの扱いを分けるために使う。
+       */
+      readonly restored?: true;
+    };
 
 /**
  * 今回のサイクルを起こした`triggerLabel`(`review_label`か`fix_label`)を
@@ -230,13 +241,15 @@ export type ClaimPrResult =
  * (Issueの`claimIssue`と同じ)。外せなかったときと、外した後も残っていたときも、
  * `claimed: false`と理由を返す。
  * 外した後の確認の読み取りは、`rereadWithRetries`で数回試す(`log`に各回の失敗を警告で残す)。
- * それでも読めなければ(レート制限を含む)、取得できたか分からない。ラベルを消費したまま
+ * それでも読めなければ、取得できたか分からない。ラベルを消費したまま
  * 作業項目を作らないと、以後ラベル検索でもDBでもそのPRを見つけられない。
  * 一方、読めないまま作業を始めると、別のアクターがラベルを付け直していた場合に、
  * 次のポーリングで同じPRのサイクルが二重に始まる(ラベルの経路は、稼働中の作業項目があっても
  * `decidePrActions`が止めない)。そのため、トリガーラベルを付け直して
- * `claimed: false`を返し、次のポーリングが拾い直す。付け直しも失敗したら、
- * 読み取りの失敗と付け直しの失敗の両方を含む例外を投げる(`main()`が失敗に記録する)。
+ * `claimed: false`と`restored: true`を返し、次のポーリングが拾い直す。
+ * 付け直しも失敗したら、読み取りの失敗と付け直しの失敗の両方を含む例外を投げる(`main()`が失敗に記録する)。
+ * 読み取りの失敗がレート制限のときは、付け直さない。同じ制限に当たり、さらに最大120秒待つためである。
+ * ラベルは外れたままで人が付け直す必要があることを、例外で知らせる(`main()`が失敗に記録する)。
  * assigneeは付けない(`claimIssue`と違う)。Factoryのログインをassignすると、
  * GitHub検索の`assignee:<viewer>`にそのPRが以後ずっと当たり続けるため。
  * 外した後に取り直して確かめるのは、別のアクターがラベルを付け直した場合を
@@ -276,10 +289,17 @@ export async function claimPr(
       () => getIssue(client, owner, repo, number),
     );
   } catch (readErr) {
+    if (readErr instanceof GitHubRateLimitError) {
+      throw new Error(
+        `claim confirmation hit the GitHub rate limit after trigger label ${triggerLabel} was removed from ${owner}/${repo}#${String(number)}; the label stays removed, so a person must add it back (${errorMessage(readErr)})`,
+        { cause: readErr },
+      );
+    }
     return restoreTriggerLabel(
       client,
       { owner, repo, number, triggerLabel },
       readErr,
+      log,
     );
   }
   if (confirmed.labels.includes(triggerLabel)) {
@@ -310,6 +330,7 @@ async function restoreTriggerLabel(
     readonly triggerLabel: string;
   },
   readErr: unknown,
+  log: Logger | undefined,
 ): Promise<ClaimPrResult> {
   const { owner, repo, number, triggerLabel } = target;
   try {
@@ -320,10 +341,53 @@ async function restoreTriggerLabel(
       { cause: restoreErr },
     );
   }
+  log?.warn("claim could not be confirmed; restored the trigger label", {
+    target: `${owner}/${repo}#${String(number)}`,
+    label: triggerLabel,
+    error: errorMessage(readErr),
+  });
   return {
     claimed: false,
-    reason: `could not confirm the claim; restored trigger label ${triggerLabel} (${errorMessage(readErr)})`,
+    reason: `could not confirm the claim; restored trigger label ${triggerLabel}`,
+    restored: true,
   };
+}
+
+export type ClaimNotClaimedDeps = {
+  readonly addNotice: typeof addNotice;
+  readonly addNoticeUnlessUnresolved: typeof addNoticeUnlessUnresolved;
+};
+
+const defaultClaimNotClaimedDeps: ClaimNotClaimedDeps = {
+  addNotice,
+  addNoticeUnlessUnresolved,
+};
+
+/**
+ * `claimPr`が引いた理由を、`claim_race_lost`のnoticeに残す。
+ * ラベルを付け直して引いたときは、読み取りが続けて失敗する間、ポーリングのたびに
+ * 同じ本文になる。そのため、同じ本文の未解決のnoticeがあれば追加しない。
+ * 本文は対象と固定の理由だけで決まり、エラーの文を含まない(エラーは警告のログに残る)。
+ * ほかの理由は、従来どおり毎回追加する。
+ */
+export async function recordPrClaimNotClaimed(
+  target: {
+    readonly owner: string;
+    readonly repo: string;
+    readonly number: number;
+  },
+  result: Extract<ClaimPrResult, { readonly claimed: false }>,
+  deps: ClaimNotClaimedDeps = defaultClaimNotClaimedDeps,
+): Promise<void> {
+  const record = {
+    kind: "claim_race_lost",
+    message: `${target.owner}/${target.repo}#${String(target.number)}: ${result.reason}`,
+  };
+  if (result.restored === true) {
+    await deps.addNoticeUnlessUnresolved(record);
+  } else {
+    await deps.addNotice(record);
+  }
 }
 
 async function startReview(
@@ -586,10 +650,7 @@ export async function main(): Promise<{
           );
           if (!claimResult.claimed) {
             skipped += 1;
-            await addNotice({
-              kind: "claim_race_lost",
-              message: `${candidate.owner}/${candidate.repo}#${candidate.number}: ${claimResult.reason}`,
-            });
+            await recordPrClaimNotClaimed(candidate, claimResult);
           } else {
             await startReview(
               candidate,
@@ -631,10 +692,7 @@ export async function main(): Promise<{
         );
         if (!claimResult.claimed) {
           skipped += 1;
-          await addNotice({
-            kind: "claim_race_lost",
-            message: `${candidate.owner}/${candidate.repo}#${candidate.number}: ${claimResult.reason}`,
-          });
+          await recordPrClaimNotClaimed(candidate, claimResult);
         } else {
           await startFix(
             candidate,

@@ -38,7 +38,7 @@ export function requirementsWorktreeDir(
 /**
  * リポジトリについて、worktreeのプロセスのロックファイルを探すディレクトリを返す。
  * ロックファイルはworktreeの隣に置かれるので、メインのクローンの親(`req-<N>`と`review-*`の置き場所)と、一覧にある各worktreeの親を、重複を除いて返す。
- * `worktrees`は、そのリポジトリの`git worktree list --porcelain`を解析したもの。
+ * `worktrees`は、そのリポジトリの`git worktree list --porcelain -z`を解析したもの。
  * 一覧から消えたworktreeの親は分からないので、そこに残るロックファイルは、同じ親に別のworktreeが一覧に載るまで探さない。
  */
 export function lockFileDirs(
@@ -71,7 +71,7 @@ export type IssueWorktreeSource = {
  * 対象は、一覧にあれば要件定義用のdetachedな`req-<N>`(`requirementsWorktreeDir`)と、
  * 作業項目にブランチがあれば`item.branch`(implementブランチ、`work_items.branch`)を
  * チェックアウトしたworktreeである。
- * `worktrees`は、そのリポジトリの`git worktree list --porcelain`を解析したもの。
+ * `worktrees`は、そのリポジトリの`git worktree list --porcelain -z`を解析したもの。
  * fetch専用のメインのクローン(`mainRepoDir`)は、たまたまそのブランチにあっても返さない。
  */
 export function issueWorktreePaths(

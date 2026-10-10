@@ -1046,8 +1046,7 @@ function porcelainZ(records: readonly (readonly string[])[]): string {
     .join("");
 }
 
-// 実際に採取した`git worktree list --porcelain -z`の出力の形。
-// パスは一般的な名前に置き換えた。
+// 実際の`git worktree list --porcelain -z`の出力の形に合わせて組み立てたもの。
 const REAL_WORKTREE_PORCELAIN = porcelainZ([
   [
     "worktree /tmp/repo",
@@ -1153,6 +1152,15 @@ describe("listWorktrees", () => {
     await expect(
       listWorktrees({ run: fake.run, repoDir: "/repo" }),
     ).rejects.toThrow(/unexpected 'git worktree list --porcelain -z' record/);
+  });
+
+  test("throws when the output was abandoned even if it ends at a complete record", async () => {
+    const fake = createFakeCommandRunner([
+      { ...ok(REAL_WORKTREE_PORCELAIN), outputAbandoned: true },
+    ]);
+    await expect(
+      listWorktrees({ run: fake.run, repoDir: "/repo" }),
+    ).rejects.toThrow(/output was abandoned/);
   });
 
   test("throws when a record is empty", async () => {
