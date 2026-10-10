@@ -2698,8 +2698,11 @@ export async function countImplementFailedRounds(
  *   `blocked`で終えたラウンド。`fix_rounds`の行を数える。
  * - 検査が通らず、検査の失敗を添えて再実行した(stageが`pr_fix_verify_retry`の行がある)作業項目。
  *   不正な出力の再試行で同じstageの行が増えるので、作業項目ごとに1回と数える。
- * 新しい指摘でラベルが付き直しただけのラウンドや、Claudeが動かなかったラウンドは数えない。
- * ラウンドが`done`で終わった場合は失敗に含めない。
+ * 新しい指摘でラベルが付き直しただけのラウンドは数えない。
+ * `blocked`の行は、`done`で終わったラウンドを数えない。
+ * Claudeが動いたかは作業項目の単位で見るので、同じ作業項目で前にClaudeが動いていれば、
+ * Claudeを起動しなかった後の`blocked`も数える。
+ * 検査の再実行は、ラウンドが`done`で終わっても、作業項目ごとに1回数える。
  */
 export async function countPrFixFailures(
   workItemId: number,
