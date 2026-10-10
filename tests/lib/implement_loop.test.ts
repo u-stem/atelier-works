@@ -1055,6 +1055,28 @@ describe("runImplementVerifyLoop", () => {
     expect((await run(h)).rounds).toBe(3);
   });
 
+  test("tells the fix round the previous round stalled when the stall check was skipped", async () => {
+    const h = harness({
+      checks: [[FAIL]],
+      fingerprints: [FP_1],
+      modelChangesNext: [false, true, false],
+    });
+    await run(h);
+    expect(
+      h.fixRequests.map((request) => request.previousRoundStalled),
+    ).toEqual([false, true]);
+  });
+
+  test("does not flag a stall when the model changes but the round made progress", async () => {
+    const h = harness({
+      checks: [[FAIL], [LINT_FAIL]],
+      fingerprints: [FP_1, FP_2],
+      modelChangesNext: [true],
+    });
+    await run(h);
+    expect(h.fixRequests[0]?.previousRoundStalled).toBe(false);
+  });
+
   test("exits stalled once the model no longer changes", async () => {
     const h = harness({
       checks: [[FAIL]],

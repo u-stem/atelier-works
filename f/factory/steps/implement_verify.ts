@@ -231,6 +231,7 @@ export async function main(
                     ...(request.contractViolated
                       ? { outputContractNote: IMPLEMENT_OUTPUT_CONTRACT_NOTE }
                       : {}),
+                    previousRoundStalled: request.previousRoundStalled,
                   }),
                   systemPromptPath: systemPrompt.path,
                   worktreeDir,

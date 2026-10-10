@@ -843,20 +843,35 @@ export function decideImplementRoundExit(
   if (state.dailyBudgetExceeded) return "daily_budget";
   if (state.deadlineReached) return "deadline";
   if (state.modelChangesNext) return "continue";
+  if (roundIsStalled(state)) return "stalled";
+  return "continue";
+}
+
+/**
+ * このラウンドが前のラウンドから進んでいないかを返す。
+ * 差分か検証出力のどちらかが前のラウンドと同じなら、進んでいないとみなす。
+ * 前のラウンドが無い(指紋が`null`)ときは進んでいないとみなさない。
+ */
+export function roundIsStalled(
+  state: Pick<
+    ImplementRoundExitInput,
+    | "diffHash"
+    | "previousDiffHash"
+    | "checkOutputHash"
+    | "previousCheckOutputHash"
+  >,
+): boolean {
   if (
     state.previousDiffHash !== null &&
     state.diffHash === state.previousDiffHash
   ) {
-    return "stalled";
+    return true;
   }
-  if (
+  return (
     state.checkOutputHash !== null &&
     state.previousCheckOutputHash !== null &&
     state.checkOutputHash === state.previousCheckOutputHash
-  ) {
-    return "stalled";
-  }
-  return "continue";
+  );
 }
 
 /**

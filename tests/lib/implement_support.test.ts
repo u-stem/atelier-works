@@ -27,6 +27,7 @@ import {
   neutralizeIssueRefs,
   parseImplementBranchWorkItemId,
   requireDeadlineAt,
+  roundIsStalled,
   roundOutcomeForExit,
   stallHash,
   truncateCheckOutput,
@@ -881,6 +882,34 @@ const CONTINUE_STATE = {
   diffHash: "d1",
   previousDiffHash: null,
 };
+
+describe("roundIsStalled", () => {
+  test("is false for the first round", () => {
+    expect(roundIsStalled(CONTINUE_STATE)).toBe(false);
+  });
+
+  test("is true when the diff matches the previous round", () => {
+    expect(roundIsStalled({ ...CONTINUE_STATE, previousDiffHash: "d1" })).toBe(
+      true,
+    );
+  });
+
+  test("is true when the check output matches the previous round", () => {
+    expect(
+      roundIsStalled({ ...CONTINUE_STATE, previousCheckOutputHash: "h1" }),
+    ).toBe(true);
+  });
+
+  test("is false when both the diff and the check output changed", () => {
+    expect(
+      roundIsStalled({
+        ...CONTINUE_STATE,
+        previousDiffHash: "d0",
+        previousCheckOutputHash: "h0",
+      }),
+    ).toBe(false);
+  });
+});
 
 describe("decideImplementRoundExit", () => {
   test("continues when checks failed and no guard fired", () => {

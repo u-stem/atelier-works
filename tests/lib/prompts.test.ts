@@ -913,6 +913,27 @@ describe("implementFixPrompt", () => {
     expect(prompt).toContain("Do not weaken or delete a test");
   });
 
+  test("tells Claude the previous round made no progress when it stalled", () => {
+    const prompt = implementFixPrompt(
+      { ...FIX_INPUT, previousRoundStalled: true },
+      FIXED_UUID,
+    );
+    expect(prompt).toContain("The previous round did not make progress");
+  });
+
+  test("omits the no-progress note when the previous round did not stall", () => {
+    const prompt = implementFixPrompt(
+      { ...FIX_INPUT, previousRoundStalled: false },
+      FIXED_UUID,
+    );
+    expect(prompt).not.toContain("did not make progress");
+  });
+
+  test("omits the no-progress note when the stall flag is absent", () => {
+    const prompt = implementFixPrompt(FIX_INPUT, FIXED_UUID);
+    expect(prompt).not.toContain("did not make progress");
+  });
+
   test("renders the output contract note after every DATA fence", () => {
     const prompt = implementFixPrompt(
       { ...FIX_INPUT, outputContractNote: "CONTRACT_NOTE_4455" },

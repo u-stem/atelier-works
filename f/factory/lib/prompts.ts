@@ -787,6 +787,11 @@ export type ImplementFixPromptInput = ImplementPromptInput & {
    * Factoryが書いた指示で対象リポジトリのデータではないので、どのDATAの囲みにも入れない。
    */
   outputContractNote?: string;
+  /**
+   * 前のラウンドが差分も検査出力も進めなかったのに、モデルを上げて続けるときに`true`にする。
+   * 上位のモデルが同じ直し方を繰り返さないよう、別の方法を取るよう伝える。
+   */
+  previousRoundStalled?: boolean;
 };
 
 export function implementFixPrompt(
@@ -820,6 +825,13 @@ export function implementFixPrompt(
     "check commands' own definitions (mise.toml, package.json scripts, CI",
     "workflows) to avoid a failure. You have no Bash; do not commit.",
     `Round ${String(input.round)} of ${String(input.maxRounds)}.`,
+    ...(input.previousRoundStalled === true
+      ? [
+          "The previous round did not make progress: its diff or its check",
+          "output was identical to the round before it. Take a different",
+          "approach from the one the previous round took.",
+        ]
+      : []),
     "",
     ...implementContextSections(nonce, input),
   ];
