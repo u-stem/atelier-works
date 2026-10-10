@@ -633,7 +633,6 @@ Claudeには、要件定義のディレクトリを一時ディレクトリに�
 ### 対象リポジトリのCIが動く
 
 実装ブランチのpushとPRの作成で、対象リポジトリの`push`と`pull_request`のCIが動く。Claudeの書いたコードは、人のレビューより前に、そのリポジトリのsecretsを使える状態で実行されうる。対象リポジトリのCIの権限とsecretsの範囲は、この前提で設定する。
-atelier-worksのCIは、`main`以外のpushでは動かない。
 
 ### 保護パスは止めずに明示する
 
@@ -696,6 +695,12 @@ git、gh、Claude、検査コマンドは、新しいプロセスグループで
 ### workflowの変更はpushで止まる
 
 `.github/workflows/`を含むpushは、PATにWorkflowsの権限が無いのでGitHubが拒否する。拒否されたら、作業項目は人の対応待ちになり、理由に拒否が載る。
+
+### 取り消したCIの実行で走査されないコミット
+
+PRのCIの実行は、同じPRの新しい実行が始まると`cancel-in-progress`で止める。
+秘密値を含むコミットを、実行の途中でforce pushにより置き換えると、置き換えられたコミットはCIのgitleaksで走査されない。
+そのため、手前の防御であるlefthookのpre-commitのgitleaksと、Factoryのpush前の走査に頼る。
 
 ## 監査の安全策
 

@@ -6,15 +6,9 @@ on:
     # タグのpushでは動かさない。`main`という名前のタグで動くと、その実行が
     # console_fetcherから「mainの最新の成功した実行」に見え、取り込みが止まる。
     branches: [main]
+  # PRはパスで絞らない。lint:docs、文書を読むテスト、docs:gen --check、gitleaksが、
+  # `docs/`や`.github/`の文書とテンプレートも対象にするため。
   pull_request:
-    # 文書とテンプレートだけの変更では動かさない。
-    # `.claude/**`は除外しない。フローが保護パスの変更の検査を実行せず、CIが担うため。
-    paths-ignore:
-      - 'docs/**'
-      - '*.md'
-      - 'LICENSE'
-      - '.github/ISSUE_TEMPLATE/**'
-      - '.github/PULL_REQUEST_TEMPLATE.md'
 
 # 同じ参照の古いPRの実行は止める。`main`の実行は止めず、待機中の取り消しも起こさない。
 # `main`の実行を止めると、console_fetcherが取り込む成功した実行が欠けるため。
@@ -52,10 +46,10 @@ jobs:
         run: mise run check
 
       - name: Determine gitleaks scan range
-        # 走査範囲を、このpushやPRで入ったコミットに絞る
+        # 走査範囲を、PRではbaseの先頭からの変更、`main`へのpushでは直前の先頭からの変更に絞る
         # (上の`fetch-depth: 0`で全履歴を取得している)。
-        # 新しいブランチの初回pushで`before`がすべて0のときなど、
-        # 差分の基点が無い場合は範囲を空にし、gitleaksに全履歴を走査させる。
+        # `before`がすべて0のときなど、差分の基点が無い場合は範囲を空にし、
+        # gitleaksに全履歴を走査させる。
         id: gitleaks-range
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -150,8 +144,6 @@ jobs:
     # 飛ばしたコミットが古いメタデータのままマージされると、mainの自動反映がそれを配る。
     # `check`ジョブから独立させる。
     # 関係する変更が無いときは、最初のステップの出力で後続のステップを飛ばして成功にする。
-    # 文書だけのPRはworkflowの`paths-ignore`で起動しないので、チェックが付かない。
-    # このジョブを必須のチェックにするときは、その点に注意する。
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
