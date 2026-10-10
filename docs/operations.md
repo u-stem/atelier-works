@@ -269,10 +269,9 @@ Botが閉じた対象と、GitHubが閉じた人を返さない対象は、取�
 Botが閉じた対象と、作者が許可されない関係で閉じた対象は、要対応に残る。
 たとえば、stale Botが閉じた対象や、依存更新のBotが自分のPRを閉じた対象である。
 残った対象は毎回調べ直すので、問い合わせの上限を使い続けることがある。
-closing keywordを含むPRを、merge queueやauto-mergeなどのBotがマージすると、Issueの`closed_by`がBotか空になりうる。
-そのため、Issueの作業項目も要対応に残りうる。
+closing keywordを含むPRをmerge queueがマージしたとき、Issueの`closed_by`がBotか空になるかは実機で確かめる。
+Botか空になるなら、Issueの作業項目も要対応に残る。
 外すには、人が対象を開き直してから閉じ直す。
-Issueの作業項目は、再実行すると準備の工程(`pipeline_prepare`、`implement_prepare`)が閉じたIssueを確かめて`cancelled`にするので、再実行でも外れる。
 PRの作業項目は、マージ済みなら`merged_at`で外れるので、この操作は要らない。
 削除された対象(404、410)と、移動したIssue(リダイレクト先の状態を読む)も、一覧に残る。
 Consoleから外す操作は無い。
