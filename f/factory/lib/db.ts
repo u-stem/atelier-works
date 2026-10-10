@@ -2698,14 +2698,22 @@ export async function countImplementFailedRounds(
  *   `blocked`で終えたラウンド。`fix_rounds`の行を数える。
  * - 検査が通らず、検査の失敗を添えて再実行した(stageが`pr_fix_verify_retry`の行がある)作業項目。
  *   不正な出力の再試行で同じstageの行が増えるので、作業項目ごとに1回と数える。
- * - Claudeの実行そのものが失敗した(`agent_runs.error`が入っている。`runClaude`は、
+ * - Claudeの実行そのものが失敗した(`agent_runs.error`が入っている)行。`runClaude`は、
  *   タイムアウト、0以外の終了コード、`is_error`、ターンや予算の上限、不正な出力のどれでも
- *   失敗した行に`error`を書く)のに、`fix_rounds`の行が書かれなかった作業項目。
- *   実行の失敗は例外で終わり、flowの再試行と`on_error_flow`は`fix_rounds`を書かないので、
- *   上の2つでは数えられない。作業項目とstageごとに1回と数える。
- *   `fix_rounds`の行がある作業項目は、その行(`blocked`)か成功したラウンドで数え済みなので、
- *   重ねて数えない。不正な出力の再試行で最初の失敗の行(`error`あり)が残った場合も、
- *   ラウンドが終わって`fix_rounds`の行が書かれるまでは、1回と数える。
+ *   失敗した行に`error`を書く。実行の失敗は例外で終わり、flowの再試行と`on_error_flow`は
+ *   `fix_rounds`を書かないので、上の2つでは数えられない。
+ *   flowの再試行や`retry_work_item`で同じ作業項目の実行が何度失敗しても、1行ずつ数える。
+ *   ただし次の2つは数えない。
+ *   - `blocked`のラウンドの直前の実行(その実行とラウンドの間に、同じ作業項目の実行が無い)。
+ *     検査の再実行の失敗や`.git`の書き換えでラウンドが`blocked`になったときで、
+ *     その失敗は`blocked`のラウンドで数え済みである。それより前の失敗と、
+ *     `blocked`の後に`retry_work_item`で再実行した失敗は数える。
+ *   - 不正な出力の再試行で捨てた最初の試行の行。`recordClaudeRuns`は捨てた行と最後の行を
+ *     続けて書くので、同じ作業項目、stage、試行で10秒以内に次の行がある失敗の行と見なす。
+ *     別の実行の行は、flowの再試行の60秒の待ちか、flowとClaudeの実行のやり直しを経てから
+ *     書かれるので、10秒以内には来ない。
+ *   `done`や`requirements_gap`で終えたラウンドより前の失敗も数える。
+ *   後の実行が成功しても、Sonnetがその実行で失敗した事実は変わらないためである。
  * 新しい指摘でラベルが付き直しただけのラウンドは数えない。
  * `blocked`の行は、`done`で終わったラウンドを数えない。
  * Claudeが動いたかは作業項目の単位で見るので、同じ作業項目で前にClaudeが動いていれば、
@@ -2743,24 +2751,39 @@ export async function countPrFixFailures(
       ) AS verify_retry_items,
       (
         SELECT COUNT(*)
-        FROM (
-          SELECT DISTINCT ar.work_item_id, ar.stage
-          FROM factory.agent_runs ar
-          WHERE ar.work_item_id IN (SELECT id FROM same_pr)
-            AND ar.stage IN ('pr_fix', 'pr_fix_verify_retry')
-            AND ar.error IS NOT NULL
-            AND NOT EXISTS (
-              SELECT 1 FROM factory.fix_rounds fr WHERE fr.work_item_id = ar.work_item_id
-            )
-        ) failed_runs
-      ) AS failed_run_stages
+        FROM factory.agent_runs ar
+        WHERE ar.work_item_id IN (SELECT id FROM same_pr)
+          AND ar.stage IN ('pr_fix', 'pr_fix_verify_retry')
+          AND ar.error IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM factory.fix_rounds fr
+            WHERE fr.work_item_id = ar.work_item_id
+              AND fr.outcome = 'blocked'
+              AND fr.created_at >= ar.created_at
+              AND NOT EXISTS (
+                SELECT 1 FROM factory.agent_runs later
+                WHERE later.work_item_id = ar.work_item_id
+                  AND later.stage IN ('pr_fix', 'pr_fix_verify_retry')
+                  AND later.id > ar.id
+                  AND later.created_at <= fr.created_at
+              )
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM factory.agent_runs next_run
+            WHERE next_run.work_item_id = ar.work_item_id
+              AND next_run.stage = ar.stage
+              AND next_run.attempt = ar.attempt
+              AND next_run.id > ar.id
+              AND next_run.created_at <= ar.created_at + interval '10 seconds'
+          )
+      ) AS failed_runs
   `.fetch();
   const row = rows[0];
   return row === undefined
     ? 0
     : parseNumericLike(row.blocked_rounds, "blocked_rounds") +
         parseNumericLike(row.verify_retry_items, "verify_retry_items") +
-        parseNumericLike(row.failed_run_stages, "failed_run_stages");
+        parseNumericLike(row.failed_runs, "failed_runs");
 }
 
 function parseImplementDiffStat(value: unknown): ImplementDiffStat | null {

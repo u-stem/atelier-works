@@ -174,7 +174,7 @@ Generated-By: Software Factory (<instance_name>)
 | Opus | 設計の判断、原因が分からないバグ、大きな計画とレビュー、Sonnetで2回失敗した課題 |
 | Fable | 最難関の課題だけ。subagentの定義やFactoryの既定には入れない |
 
-review-loopでは、同じ`[MUST]`の指摘が2ラウンド続けて直らないときに、implementerをOpusで起動し直す。
+review-loopでimplementerをOpusで起動し直す条件は、[review-loopスキル](../.claude/skills/review-loop/SKILL.md)が定める。
 
 `.claude/settings.json`の`model`は`opusplan`にしている。計画モードだけがOpusで、実装はSonnetで動く。
 `/model opus`は人が打つコマンドで、Claudeの親のセッションは自分で切り替えられない。
