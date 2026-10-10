@@ -332,11 +332,12 @@ export const SELF_UPDATE_CLI_COMMAND_COUNT = 3;
 /**
  * 1回の実行で通りうる、`SELF_UPDATE_CALL_TIMEOUT_MS`で区切った呼び出しの最大回数。通知は含めない。
  * - config(`getResource`): 1
- * - 更新: github_token、deployed_sha、wmill_token、`setVariable`、`setVariable`が時間切れのときの読み直し、
- *   `recordDeployment`の成功、`recordDeployment`の失敗(成功の記録が時間切れになり、失敗側へ進む場合): 7
+ * - 更新: github_token、deployed_sha、deployed_shaの読み取りが失敗したときの存在の確認、wmill_token、
+ *   `setVariable`、`setVariable`が時間切れのときの読み直し、
+ *   `recordDeployment`の成功、`recordDeployment`の失敗(成功の記録が時間切れになり、失敗側へ進む場合): 8
  * - finally: stateの読み、stateの書き、noticeの挿入、通知先の取得: 4
  */
-export const SELF_UPDATE_BOUNDED_CALL_COUNT = 12;
+export const SELF_UPDATE_BOUNDED_CALL_COUNT = 13;
 
 /**
  * finallyの通知1回の上限(ミリ秒)。
@@ -459,9 +460,14 @@ async function updateSelf(
 
   const currentSha = await readSelfCloneHeadSha(runCommand, factoryClone.dir);
 
-  // 変数が無いときだけ未デプロイ(空)として扱い、時間切れは投げる(`readDeployedSha`を参照)。
-  const deployedSha = await readDeployedSha(() =>
-    wmill.getVariable("f/factory/deployed_sha"),
+  // 変数が無いと確かめられたときだけ未デプロイ(空)として扱う(`readDeployedSha`を参照)。
+  const deployedSha = await readDeployedSha(
+    () => wmill.getVariable("f/factory/deployed_sha"),
+    () =>
+      wmill.VariableService.existsVariable({
+        workspace: wmillDefault.getWorkspace(),
+        path: "f/factory/deployed_sha",
+      }),
   );
 
   const decision = decideUpdate(currentSha, deployedSha);

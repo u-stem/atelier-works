@@ -34,7 +34,7 @@ function count(source: string, pattern: RegExp): number {
 
 const WRAPPERS = ["withCallTimeout(", "readDeployedSha(", "setDeployedSha("];
 const UNBOUNDED_CALL =
-  /wmill\.(getVariable|setVariable|getResource|getState|setState)\(|\brecordDeployment\(|\baddNoticeUnlessUnresolved\(|\bnotifyBestEffort\(/g;
+  /wmill\.(getVariable|setVariable|getResource|getState|setState)\(|wmill\.VariableService\.existsVariable\(|\brecordDeployment\(|\baddNoticeUnlessUnresolved\(|\bnotifyBestEffort\(/g;
 /** 区切りの呼び出しの開きから、その中の呼び出しまでの、最も長い距離。 */
 const WRAPPER_REACH = 700;
 
@@ -65,7 +65,7 @@ describe("self_update timeout", () => {
     const sites =
       count(source, /withCallTimeout\(/g) -
       notify +
-      count(source, /readDeployedSha\(/g) +
+      2 * count(source, /readDeployedSha\(/g) +
       2 * count(source, /setDeployedSha\(/g);
 
     expect(sites).toBe(SELF_UPDATE_BOUNDED_CALL_COUNT);

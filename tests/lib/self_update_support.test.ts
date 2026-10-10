@@ -482,22 +482,73 @@ describe("CallTimeoutError", () => {
 });
 
 describe("readDeployedSha", () => {
+  const FAILS_READ = async (): Promise<string> => {
+    throw new Error("Variable not found at f/factory/deployed_sha");
+  };
+
   test("returns the value of the variable", async () => {
-    const sha = await readDeployedSha(async () => "abc1234", 50);
+    const sha = await readDeployedSha(
+      async () => "abc1234",
+      async () => true,
+      50,
+    );
 
     expect(sha).toBe("abc1234");
   });
 
-  test("returns an empty string when the variable cannot be read", async () => {
-    const sha = await readDeployedSha(async () => {
-      throw new Error("Variable not found at f/factory/deployed_sha");
-    }, 50);
+  test("does not check the existence when the read succeeds", async () => {
+    let checks = 0;
+
+    await readDeployedSha(
+      async () => "abc1234",
+      async () => {
+        checks += 1;
+        return true;
+      },
+      50,
+    );
+
+    expect(checks).toBe(0);
+  });
+
+  test("returns an empty string when the read fails and the variable does not exist", async () => {
+    const sha = await readDeployedSha(FAILS_READ, async () => false, 50);
 
     expect(sha).toBe("");
   });
 
+  test("rejects when the read fails and the variable exists", async () => {
+    const pending = readDeployedSha(FAILS_READ, async () => true, 50);
+
+    await expect(pending).rejects.toThrow("Variable not found");
+  });
+
+  test("rejects when the read fails and the existence check fails", async () => {
+    const pending = readDeployedSha(
+      FAILS_READ,
+      async () => {
+        throw new Error("500");
+      },
+      50,
+    );
+
+    await expect(pending).rejects.toThrow("Variable not found");
+  });
+
+  test("rejects when the read fails and the existence check times out", async () => {
+    const pending = readDeployedSha(FAILS_READ, NEVER, 10);
+
+    await expect(pending).rejects.toThrow("Variable not found");
+  });
+
+  test("rejects when the read fails and the existence check is not a boolean", async () => {
+    const pending = readDeployedSha(FAILS_READ, async () => "no", 50);
+
+    await expect(pending).rejects.toThrow("Variable not found");
+  });
+
   test("rejects when the read times out instead of treating it as not deployed", async () => {
-    const pending = readDeployedSha(NEVER, 10);
+    const pending = readDeployedSha(NEVER, async () => false, 10);
 
     await expect(pending).rejects.toBeInstanceOf(CallTimeoutError);
   });

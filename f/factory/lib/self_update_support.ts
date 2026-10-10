@@ -382,20 +382,34 @@ export async function withCallTimeout<T>(
 }
 
 /**
- * 前回デプロイしたコミットのshaを読む。変数が無いなど読めないときは、未デプロイとして空文字を返す。
- * `windmill-client`の`getVariable`は、変数が無い場合もほかの失敗も、同じ形の通常の`Error`にして投げるので、
- * 見分けられない。時間切れだけは`CallTimeoutError`で見分けられるので、未デプロイと取り違えず、そのまま投げる。
- * 取り違えると、実際はデプロイ済みなのに全体を反映し直す。
+ * 前回デプロイしたコミットのshaを読む。変数が無いときだけ、未デプロイとして空文字を返す。
+ * `windmill-client`の`getVariable`は、変数が無い場合もほかの失敗も、同じ形の通常の`Error`にして
+ * 投げるので、失敗した理由では見分けられない。そこで読み取りが失敗したら、`exists`で変数の有無を確かめる。
+ * `false`が返ったときだけ未デプロイとし、`true`のとき、`exists`が失敗か時間切れのとき、
+ * 真偽値でない値を返したときは、最初の失敗を投げる。時間切れも同じく投げる。
+ * 一時的な失敗を未デプロイと取り違えると、実際はデプロイ済みなのに全体を反映し直す。
  */
 export async function readDeployedSha(
   get: () => Promise<string>,
+  exists: () => Promise<unknown>,
   timeoutMs: number = SELF_UPDATE_CALL_TIMEOUT_MS,
 ): Promise<string> {
   try {
     return await withCallTimeout("getVariable deployed_sha", get, timeoutMs);
   } catch (err) {
     if (err instanceof CallTimeoutError) throw err;
-    return "";
+    let found: unknown;
+    try {
+      found = await withCallTimeout(
+        "existsVariable deployed_sha",
+        exists,
+        timeoutMs,
+      );
+    } catch {
+      throw err;
+    }
+    if (found === false) return "";
+    throw err;
   }
 }
 

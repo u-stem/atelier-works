@@ -359,7 +359,7 @@ export type WatchConsoleWorkerDeps = ConsoleWorkerCheckDeps & {
  * 確認できたら回数を0に戻す。stateを読めたときは、ほかのキーを保って書く。
  * stateを読めなかったとき(例外、時間切れ)は書かない。読めない間は積み上げた回数を知らず、
  * 0として書くと、続けて確認できなかった回数が0に戻ってしまうため。
- * 書けなければ警告だけにする。
+ * 書けなければ警告だけにして、noticeの判定は続ける。
  * 呼び出し元の処理を止めないよう、例外は投げない。
  */
 export async function watchConsoleWorker(
@@ -383,8 +383,15 @@ export async function watchConsoleWorker(
     const previous = parseUnknownCount(stored);
     const count = nextUnknownCount(previous, result);
     if (stateReadable && count !== previous) {
-      // stateの全体を置き換える書き込みなので、ほかのキーは読んだ値のまま残す。
-      await deps.setState({ ...stored, console_worker_unknown_count: count });
+      try {
+        // stateの全体を置き換える書き込みなので、ほかのキーは読んだ値のまま残す。
+        await deps.setState({ ...stored, console_worker_unknown_count: count });
+      } catch (err) {
+        // 書けなくても、noticeの判定は数えた回数で続ける。
+        deps.log.warn("could not write the console worker check state", {
+          error: maskSecrets(String(err)),
+        });
+      }
     }
     if (count >= CONSOLE_WORKER_UNKNOWN_LIMIT) {
       await recordAndNotify(deps, CONSOLE_WORKER_CHECK_FAILED_NOTICE, {

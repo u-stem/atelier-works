@@ -733,8 +733,21 @@ Consoleが止まっていてもDiscordには届くので、通知の確認先は
 `wmill sync`の対象は`f/**`だけなので、`u/<user>/`のscriptとスケジュールはWindmillの画面で作る。
 自己更新の`wmill sync push`で消えたり上書きされたりしない。
 
+次の点に注意する。
+
+- 作る人は、`f/factory`のスケジュールと同じ権限(admin)にする。
+  失敗のハンドラはスケジュールの`permissioned_as`で動くので、`f/factory`の資源と変数を読めないと、黙って失敗する。
+- 手順の前に、Discordのチャンネルの人へ知らせる。
+  使い捨てのスケジュールの失敗が、`job_failed`として届くためである。
+- `on_error_schedule`は、`factory.job_failures`に`flow_path`が`u/<user>/timeout_probe`の行を残す。
+  この行は週次監査(月曜9時30分)の証跡に入るので、後片付けで消すか、監査の前に手順を終える。
+
+手順は次のとおりである。
+
 1. `self_update`の上限が反映されていることを確かめる。
    `wmill script get f/factory/self_update`の出力で、`timeout`が2700であることを見る。
+   2700秒がインスタンスの上限で切り詰められないのは、セルフホストの上限が環境変数`TIMEOUT`で、未設定なら7日だからである。
+   `job_default_timeout`は21600秒以上にする決まりなので、2700秒はその範囲に収まる([実装フローの仕様](internals/implement.md)の「Windmillのtimeoutで打ち切られたとき」)。
 2. `u/<user>/timeout_probe`というscriptを作る。
    子プロセスを起動せず、60秒待つだけにする。
    設定の`timeout`は10秒にする。
@@ -751,16 +764,31 @@ Consoleが止まっていてもDiscordには届くので、通知の確認先は
 4. スケジュールの実行を待つ。
    手動の実行では`on_error_schedule`が呼ばれないので、手動では確かめられない。
 5. `wmill job list --script-path u/<user>/timeout_probe`で打ち切られた回を見つける。
-   `wmill job get <id>`で`canceled`、`canceled_by`、`canceled_reason`を読む。
+   `wmill job get <id> --json`で`canceled`、`canceled_by`、`canceled_reason`を読む。
+   出力に`canceled_by`が無いときは、Windmillの画面のジョブ詳細で読む。
    `canceled_by`が`timeout`であることを見る。
    違う値なら、`f/factory/lib/schedule_failing.ts`の判定を、読んだ値に合わせて直す。
-6. Discordに`job_failed`が届いたことを見る。
-   `on_error_schedule`のジョブが、打ち切られた回の直後にあることも見る。
+6. 先に`wmill job list --script-path f/factory/on_error_schedule`を見る。
+   `on_error_schedule`のジョブが、打ち切られた回の直後にあることを確かめる。
+   ジョブが無ければ、`on_error_schedule`は時間切れでは呼ばれない。
+   ジョブがあれば、続けてDiscordに`job_failed`が届いたことを見る。
 7. 通知`schedule_failing`まで見るなら、打ち切りが3回続くまで(約6分)待つ。
    Consoleの**通知**タブに出ることを見る。
 8. 終わったら、スケジュールとscriptを消す。
    出た`schedule_failing`は、Consoleで解決する。
-   `job_failures`に残った記録は、掃除に任せる。
+9. `factory.job_failures`に残った使い捨ての記録を消す。
+   Data Tableのデータベースに接続し、消す前に件数と中身を確かめる。
+   データベース名は、`main`のData Tableのresource_pathで、既定は`datatable_db`である。
+
+   ```bash
+   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "SELECT id, flow_path, occurred_at FROM factory.job_failures WHERE flow_path LIKE 'u/%'"
+   ```
+
+   件数が使い捨ての実行の回数と合い、ほかの人の記録が混ざっていなければ、同じ条件で消す。
+
+   ```bash
+   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "DELETE FROM factory.job_failures WHERE flow_path LIKE 'u/%'"
+   ```
 
 打ち切りの扱いの確認は、同じ手順の使い捨てのscriptで続ける。
 
@@ -798,16 +826,20 @@ mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker ps 
 `self_update`の区切った呼び出しが30秒で終わらないと、例外にする。
 呼び出し自体は中断しないので、後から完了することがある。
 
-- 更新の途中なら、更新の失敗として`factory.deployments`に記録する。
+- 更新のうち、`wmill_token`の取得より後の時間切れは、更新の失敗として`factory.deployments`に記録する。
+  設定、`github_token`、`deployed_sha`の読み取り、cloneの更新の失敗と時間切れは、ジョブの失敗になるだけで、`deployments`には残らない。
+  ジョブの失敗は、Discordの`job_failed`と、3回続いたときの`schedule_failing`で知る。
   ただし`deployed_sha`の更新が時間切れのときは、変数を読み直し、書けていれば成功として続ける。
 - `deployed_sha`の読み取りが時間切れのときは、未デプロイとは扱わず、更新を失敗にする。
-  変数が無い場合と、そのほかの読み取りの失敗は、Windmillのクライアントが同じ形の例外にするので見分けられない。
-  読み取りが時間切れ以外で失敗したときは、未デプロイとして全体を反映し直す。
+  読み取りがそれ以外で失敗したときは、区切った`existsVariable`で変数の有無を確かめる。
+  `false`のときだけ未デプロイとして全体を反映し直す。
+  `true`のときと、確かめられないときは、更新を失敗にする。
 - noticeの挿入が時間切れになり、後から挿入されたときは、その回のDiscordの通知は出ない。
   次の回からは、同じ本文の未解決のnoticeがあるので、通知しない。
   Consoleの要対応には残る。
 - stateの読み取りが失敗か時間切れの回は、stateを書かない。
   確認できなかった回数の積み上げを、0に戻さないためである。
+  stateを書けなかった回は、警告だけにして、noticeの判定は数えた回数で続ける。
 
 ### 打ち切られた回の記録を確かめる
 
