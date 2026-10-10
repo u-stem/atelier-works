@@ -250,11 +250,12 @@ reconcileが照合するのは、終端でない作業項目だけである。
   1. PRで`pull_request.merged_at`があれば許す。マージにもmerge queueへの投入にも、write権限が要る。
   2. `closed_by`が無いときは許さない。
   3. `closed_by`がBotのときは許さない。
-  4. 作者以外の人が閉じたときは許す。
-  5. 作者が閉じたときは、作者の`author_association`が`allowed_labeler_associations`に含まれるときだけ許す。
-  
+  4. 作者が分からないときは許さない。
+  5. 作者以外の人が閉じたときは許す。
+  6. 作者が閉じたときは、作者の`author_association`が`allowed_labeler_associations`に含まれるときだけ許す。
+
   許されないときは、取り消さず要対応に残す。
-  理由(`no_closer`、`bot_closer`、`author_not_allowed`など)と対象は、infoのログに出す。
+  理由(`no_closer`、`bot_closer`、`author_unknown`、`author_not_allowed`など)と対象は、infoのログに出す。
   理由は[セキュリティ](../security.md)に書く。
 - 状態の注記は`reconcile: closed (actionable)`か`reconcile: pr_closed (actionable)`にする。
 - 状態の遷移は、読み取った状態と`flow_job_id`のままのときだけ行う。
