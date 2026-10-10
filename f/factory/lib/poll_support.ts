@@ -8,9 +8,7 @@ import {
   type FactoryConfig,
   isBoolean,
   isNumber,
-  isOneOf,
   isRecord,
-  type LabelerAssociation,
   type WorkItem,
   type WorkItemStatus,
 } from "./types.ts";
@@ -64,6 +62,56 @@ export function deployedShaMismatchMessage(
 }
 
 // ---------------------------------------------------------------------------
+// トリガーラベルの付与者の確認
+// ---------------------------------------------------------------------------
+
+/**
+ * トリガーラベルを付けてよい人の決まり。
+ * `viewerLogin`はFactoryのPATのアカウントで、取得できなかったときは`null`にする。
+ * `allowedLogins`は`config.allowed_labeler_logins`である。
+ */
+export type LabelerPolicy = {
+  readonly viewerLogin: string | null;
+  readonly allowedLogins: readonly string[];
+};
+
+/**
+ * トリガーラベルを付けたのが許可された人かを返す。
+ * 許可するのは、`viewerLogin`のアカウントと、`allowedLogins`に含まれるログイン名である。
+ * 大文字小文字は区別しない。
+ * 付与者を特定できないとき(`actorLogin`が`null`)と、`viewerLogin`が`null`のときは、
+ * 判定できないものとして拒否する。
+ * ラベルを付けられる人はGitHub上で書き込み権限を持つ人に限られず、公開リポジトリでは
+ * 起票者が自分のIssueにラベルを付けられることもあるため、付与者の確認が要る。
+ */
+export function isAllowedLabeler(
+  actorLogin: string | null,
+  policy: LabelerPolicy,
+): boolean {
+  if (actorLogin === null || policy.viewerLogin === null) return false;
+  const actor = actorLogin.toLowerCase();
+  if (actor === policy.viewerLogin.toLowerCase()) return true;
+  return policy.allowedLogins.some((login) => login.toLowerCase() === actor);
+}
+
+/**
+ * ラベルの付与者が許可されていないときに、noticeへ残す本文を返す。
+ * 対象とラベルだけで決まり、時刻や付与者を含めない。
+ * ラベルが残る間はポーリングのたびに同じ状況になるので、
+ * 同じ本文の未解決のnoticeを重ねて登録しないためである。
+ */
+export function labelerDeniedMessage(
+  target: {
+    readonly owner: string;
+    readonly repo: string;
+    readonly number: number;
+  },
+  label: string,
+): string {
+  return `${target.owner}/${target.repo}#${String(target.number)}: ${label}ラベルを付けたのは許可されていないユーザーです`;
+}
+
+// ---------------------------------------------------------------------------
 // Issueに着手するかの判定
 // ---------------------------------------------------------------------------
 
@@ -75,13 +123,10 @@ export type IssueCandidate = {
   readonly body: string;
   readonly htmlUrl: string;
   /**
-   * Issueのタイムラインで最後の`labeled`イベントの`authorAssociation`。無ければ`null`。
-   * これは補助の検査である。
-   * ラベルを付けられる人は通常GitHub自体が制限しているため、
-   * `null`だけでは着手を止めない
-   * (イベントが見つからない、または操作した人を特定できないときに`null`になる)。
+   * トリガーラベルを付けた最後のイベントの付与者のログイン名。
+   * そのイベントが無いとき、付与者を特定できないときは`null`で、着手しない。
    */
-  readonly labelerAssociation: string | null;
+  readonly labelerLogin: string | null;
   /**
    * この(owner, repo, number)に、終了していない`work_items`の行がすでにあるか。
    * トリガーラベルは着手時に外すが、同じIssueに重ねて着手しないよう念のため確かめる。
@@ -92,42 +137,19 @@ export type IssueCandidate = {
 
 export type IssueDecision =
   | { readonly action: "claim"; readonly candidate: IssueCandidate }
-  | {
-      readonly action: "skip_association";
-      readonly candidate: IssueCandidate;
-      readonly association: string | null;
-    }
+  | { readonly action: "skip_labeler"; readonly candidate: IssueCandidate }
   | { readonly action: "skip_active"; readonly candidate: IssueCandidate };
-
-/**
- * `labeled`のタイムラインイベント(無いこともある)から、
- * 検査に使う`authorAssociation`を返す。
- * `poll_issues.ts`の`main()`が`LabeledTimelineEvent`の形を知らずに済むよう、
- * 関数に分けている。
- */
-export function associationFromLabeledEvent(
-  event: { readonly authorAssociation: string | null } | null,
-): string | null {
-  return event === null ? null : event.authorAssociation;
-}
 
 export function decideIssueActions(
   candidates: readonly IssueCandidate[],
-  allowedAssociations: readonly LabelerAssociation[],
+  policy: LabelerPolicy,
 ): IssueDecision[] {
   return candidates.map((candidate): IssueDecision => {
     if (candidate.hasActiveWorkItem) {
       return { action: "skip_active", candidate };
     }
-    if (
-      candidate.labelerAssociation !== null &&
-      !isOneOf(candidate.labelerAssociation, allowedAssociations)
-    ) {
-      return {
-        action: "skip_association",
-        candidate,
-        association: candidate.labelerAssociation,
-      };
+    if (!isAllowedLabeler(candidate.labelerLogin, policy)) {
+      return { action: "skip_labeler", candidate };
     }
     return { action: "claim", candidate };
   });
@@ -148,6 +170,14 @@ export type PrCandidate = {
    * `getIssue`で取得する。
    */
   readonly labels: readonly string[];
+  /**
+   * `review_label`を付けた最後のイベントの付与者のログイン名。
+   * ラベルが付いていないとき、イベントが無いとき、付与者を特定できないときは`null`。
+   * ラベルが付いているのに`null`なら、拒否する。
+   */
+  readonly reviewLabelerLogin: string | null;
+  /** `fix_label`の付与者。意味は`reviewLabelerLogin`と同じ。 */
+  readonly fixLabelerLogin: string | null;
   /** このPRに、終了していない`pr_review`の作業項目がすでにあるか。 */
   readonly hasActiveReviewingItem: boolean;
   /**
@@ -175,11 +205,15 @@ export type PrReviewAction =
       readonly kind: "trigger_review";
       readonly reason: "label" | "assignment";
       readonly removeLabel: boolean;
-    };
+    }
+  /** `review_label`を付けたのが許可された人ではないので、始めない。 */
+  | { readonly kind: "deny_labeler" };
 
 export type PrFixAction =
   | { readonly kind: "none" }
-  | { readonly kind: "trigger_fix"; readonly removeLabel: boolean };
+  | { readonly kind: "trigger_fix"; readonly removeLabel: boolean }
+  /** `fix_label`を付けたのが許可された人ではないので、始めない。 */
+  | { readonly kind: "deny_labeler" };
 
 export type PrDecision = {
   readonly candidate: PrCandidate;
@@ -189,7 +223,9 @@ export type PrDecision = {
 
 /**
  * 各PRについて、レビューと修正を始めるかを判定して返す。
- * ラベルによるレビューと修正は常に始める(ラベルを外すことで冪等になる)。
+ * ラベルによるレビューと修正は、ラベルを付けたのが許可された人のときに始める
+ * (ラベルを外すことで冪等になる)。許可されない人が付けたラベルは拒否し、
+ * レビューは未処理の`head_sha`からの検出にも回さない。
  * 未処理の`head_sha`から自動で検出するレビューは、
  * このPRに実行中の`pr_review`があれば見送る。
  * `pr_fix`に自動検出の経路は無く、`fix_label`からだけ始め、コメントからは始めない。
@@ -198,20 +234,25 @@ export function decidePrActions(
   candidates: readonly PrCandidate[],
   reviewLabel: string,
   fixLabel: string,
+  policy: LabelerPolicy,
 ): PrDecision[] {
   return candidates.map((candidate): PrDecision => {
     const hasReviewLabel = candidate.labels.includes(reviewLabel);
     const hasFixLabel = candidate.labels.includes(fixLabel);
 
     const review: PrReviewAction = hasReviewLabel
-      ? { kind: "trigger_review", reason: "label", removeLabel: true }
+      ? isAllowedLabeler(candidate.reviewLabelerLogin, policy)
+        ? { kind: "trigger_review", reason: "label", removeLabel: true }
+        : { kind: "deny_labeler" }
       : !candidate.hasActiveReviewingItem &&
           candidate.lastKnownHeadSha !== candidate.headSha
         ? { kind: "trigger_review", reason: "assignment", removeLabel: false }
         : { kind: "none" };
 
     const fix: PrFixAction = hasFixLabel
-      ? { kind: "trigger_fix", removeLabel: true }
+      ? isAllowedLabeler(candidate.fixLabelerLogin, policy)
+        ? { kind: "trigger_fix", removeLabel: true }
+        : { kind: "deny_labeler" }
       : { kind: "none" };
 
     return { candidate, review, fix };

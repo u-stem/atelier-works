@@ -18,7 +18,7 @@ import {
   GitHubRateLimitError,
   getBranchProtected,
   getIssue,
-  getIssueTimeline,
+  getLastLabeledEvent,
   getPr,
   getPrDiff,
   getPrFiles,
@@ -974,109 +974,153 @@ describe("getIssue", () => {
   });
 });
 
-describe("getIssueTimeline", () => {
-  test("returns only the last labeled event", async () => {
-    const fake = createFakeCommandRunner([
-      ghApiOk([
-        {
-          event: "labeled",
-          actor: { login: "alice" },
-          label: { name: "factory" },
-          author_association: "OWNER",
-        },
-        { event: "commented", actor: { login: "bob" } },
-        {
-          event: "labeled",
-          actor: { login: "carol" },
-          label: { name: "factory" },
-          author_association: "NONE",
-        },
-      ]),
-    ]);
-    const last = await getIssueTimeline(
-      { run: fake.run, ghToken: "tok" },
-      "acme",
-      "widgets",
-      5,
+describe("getLastLabeledEvent", () => {
+  /** 本物のtimelineの`labeled`イベントの形。`author_association`は持たない。 */
+  function labeled(login: string | null, label: string) {
+    return {
+      id: 1,
+      node_id: "LE_1",
+      url: "https://api.github.com/repos/acme/widgets/issues/events/1",
+      event: "labeled",
+      actor: login === null ? null : { login },
+      commit_id: null,
+      commit_url: null,
+      created_at: "2026-10-01T00:00:00Z",
+      label: { name: label, color: "ededed" },
+      performed_via_github_app: null,
+    };
+  }
+
+  async function lastLabeled(pages: readonly CommandResult[], label: string) {
+    const fake = createFakeCommandRunner(pages);
+    return {
+      fake,
+      event: await getLastLabeledEvent(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        5,
+        label,
+      ),
+    };
+  }
+
+  test("returns the actor of the last labeled event for the label", async () => {
+    const { event } = await lastLabeled(
+      [
+        ghApiOk([
+          labeled("alice", "factory"),
+          { event: "commented", actor: { login: "bob" } },
+          labeled("carol", "factory"),
+        ]),
+      ],
+      "factory",
     );
-    expect(last?.actorLogin).toBe("carol");
+    expect(event?.actorLogin).toBe("carol");
   });
 
-  test("returns null when there is no labeled event", async () => {
-    const fake = createFakeCommandRunner([
-      ghApiOk([{ event: "commented", actor: { login: "bob" } }]),
-    ]);
-    const last = await getIssueTimeline(
-      { run: fake.run, ghToken: "tok" },
-      "acme",
-      "widgets",
-      5,
+  test("ignores the labeled events of other labels", async () => {
+    const { event } = await lastLabeled(
+      [
+        ghApiOk([
+          labeled("alice", "factory"),
+          labeled("mallory", "documentation"),
+        ]),
+      ],
+      "factory",
     );
-    expect(last).toBeNull();
+    expect(event?.actorLogin).toBe("alice");
+  });
+
+  test("returns the re-added label's actor after an unlabeled event", async () => {
+    const { event } = await lastLabeled(
+      [
+        ghApiOk([
+          labeled("alice", "factory"),
+          { event: "unlabeled", actor: { login: "alice" } },
+          labeled("mallory", "factory"),
+        ]),
+      ],
+      "factory",
+    );
+    expect(event?.actorLogin).toBe("mallory");
+  });
+
+  test("matches the label name case-insensitively", async () => {
+    const { event } = await lastLabeled(
+      [ghApiOk([labeled("alice", "Factory")])],
+      "factory",
+    );
+    expect(event?.actorLogin).toBe("alice");
+  });
+
+  test("returns a null actor when the event has no actor", async () => {
+    const { event } = await lastLabeled(
+      [ghApiOk([labeled("alice", "factory"), labeled(null, "factory")])],
+      "factory",
+    );
+    expect(event?.actorLogin).toBeNull();
+  });
+
+  test("returns null when no event labeled the label", async () => {
+    const { event } = await lastLabeled(
+      [
+        ghApiOk([
+          { event: "commented", actor: { login: "bob" } },
+          labeled("alice", "documentation"),
+        ]),
+      ],
+      "factory",
+    );
+    expect(event).toBeNull();
   });
 
   test("follows the link header's rel=next page", async () => {
-    const fake = createFakeCommandRunner([
-      ok(
-        ghApiStdout(
-          200,
-          [
-            {
-              event: "labeled",
-              actor: { login: "alice" },
-              label: { name: "factory" },
-            },
-          ],
-          {
+    const { event } = await lastLabeled(
+      [
+        ok(
+          ghApiStdout(200, [labeled("alice", "factory")], {
             link: '<https://api.github.com/repos/acme/widgets/issues/5/timeline?page=2>; rel="next"',
-          },
+          }),
         ),
-      ),
-      ghApiOk([
-        {
-          event: "labeled",
-          actor: { login: "carol" },
-          label: { name: "factory" },
-        },
-      ]),
-    ]);
-    const last = await getIssueTimeline(
-      { run: fake.run, ghToken: "tok" },
-      "acme",
-      "widgets",
-      5,
+        ghApiOk([labeled("carol", "factory")]),
+      ],
+      "factory",
     );
-    expect(last?.actorLogin).toBe("carol");
+    expect(event?.actorLogin).toBe("carol");
   });
 
   test("the second (paginated) call targets the URL from the link header", async () => {
-    const fake = createFakeCommandRunner([
-      ok(
-        ghApiStdout(
-          200,
-          [
-            {
-              event: "labeled",
-              actor: { login: "alice" },
-              label: { name: "factory" },
-            },
-          ],
-          {
+    const { fake } = await lastLabeled(
+      [
+        ok(
+          ghApiStdout(200, [labeled("alice", "factory")], {
             link: '<https://api.github.com/repos/acme/widgets/issues/5/timeline?page=2>; rel="next"',
-          },
+          }),
         ),
-      ),
-      ghApiOk([]),
-    ]);
-    await getIssueTimeline(
-      { run: fake.run, ghToken: "tok" },
-      "acme",
-      "widgets",
-      5,
+        ghApiOk([]),
+      ],
+      "factory",
     );
     expect(fake.calls[1]?.argv).toContain(
       "repos/acme/widgets/issues/5/timeline?page=2",
     );
+  });
+
+  test("rejects when the timeline request fails", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(500, { message: "boom" })),
+      ok(ghApiStdout(500, { message: "boom" })),
+    ]);
+    await expect(
+      getLastLabeledEvent(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        5,
+        "factory",
+      ),
+    ).rejects.toThrow();
   });
 });
 

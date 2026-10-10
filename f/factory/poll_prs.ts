@@ -42,6 +42,7 @@ import {
   type GhClient,
   GitHubRateLimitError,
   getIssue,
+  getLabelerLogin,
   getPr,
   getViewer,
   type Issue,
@@ -58,6 +59,7 @@ import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import {
   decidePrActions,
   filterByRepoAllowlist,
+  labelerDeniedMessage,
   type PrCandidate,
   type PrDecision,
 } from "./lib/poll_support.ts";
@@ -161,6 +163,7 @@ async function buildPrCandidate(
   found: PrSearchItem,
   viewerLogin: string,
   activeForPr: readonly WorkItem[],
+  triggerLabels: { readonly reviewLabel: string; readonly fixLabel: string },
 ): Promise<PrCandidateContext> {
   // `startFix`の引き継ぎに要る`latestFix`を先に取得し、残りはその後に並列で取る。
   // `latestPrWorkItem`は行全体を返すので、`getWorkItem(id)`で引き直さない。
@@ -180,6 +183,24 @@ async function buildPrCandidate(
       found.number,
       viewerLogin,
     ),
+  ]);
+
+  // 付与者は、トリガーラベルが付いているときだけ確かめる。取得に失敗したら
+  // 例外のまま呼び出し元へ返し、そのPRは候補に加えない
+  // (付与者を確かめられないまま始めない)。
+  const labelerOf = async (label: string): Promise<string | null> => {
+    if (!asIssue.labels.includes(label)) return null;
+    return getLabelerLogin(
+      client,
+      found.owner,
+      found.repo,
+      found.number,
+      label,
+    );
+  };
+  const [reviewLabelerLogin, fixLabelerLogin] = await Promise.all([
+    labelerOf(triggerLabels.reviewLabel),
+    labelerOf(triggerLabels.fixLabel),
   ]);
 
   // 人が作ったPRも承認済みの要件に結びつける。PRの本文が最初に閉じるIssue
@@ -208,6 +229,8 @@ async function buildPrCandidate(
     title: pr.title,
     headSha: pr.headSha,
     labels: asIssue.labels,
+    reviewLabelerLogin,
+    fixLabelerLogin,
     hasActiveReviewingItem: activeForPr.some(
       (item) => item.kind === "pr_review",
     ),
@@ -371,7 +394,8 @@ function prClaimNoticeMessage(
  * PRの作業(レビューか修正)を始めた後に、そのPRとラベルの未解決のnoticeを解決済みにする。
  * 作業の開始が例外になったときは呼ばない。noticeが解決済みに見えて、証跡が消えるのを防ぐ。
  * 対象は、確認できずにラベルを付け直したときの`claim_race_lost`と、
- * ラベルが外れたままになった旨の`pr_trigger_label_left_removed`である。
+ * ラベルが外れたままになった旨の`pr_trigger_label_left_removed`と、
+ * 付与者が許可されていなかった旨の`labeler_denied`である。
  * 本文の完全一致で選ぶので、`review`と`review-fix`のようにラベル名が互いの接頭辞でも、
  * 別のラベルのnoticeには触れない。
  * 解決の失敗は取得の成否を変えず、警告をログに残すだけにする。
@@ -395,6 +419,10 @@ export async function resolveClaimNotices(
       kind: PR_LABEL_LEFT_REMOVED_KIND,
       message: prLabelLeftRemovedMessage({ ...target, label: triggerLabel }),
     },
+    {
+      kind: PR_LABELER_DENIED_KIND,
+      message: labelerDeniedMessage(target, triggerLabel),
+    },
   ];
   for (const notice of notices) {
     try {
@@ -408,6 +436,9 @@ export async function resolveClaimNotices(
     }
   }
 }
+
+/** 付与者の確認で見送ったPRのnoticeの`kind`。 */
+export const PR_LABELER_DENIED_KIND = "labeler_denied";
 
 /** ラベルが外れたままになったPRの要対応のnoticeの`kind`。 */
 export const PR_LABEL_LEFT_REMOVED_KIND = "pr_trigger_label_left_removed";
@@ -583,6 +614,35 @@ export async function recordPrClaimNotClaimed(
   }
 }
 
+export type LabelerDeniedDeps = {
+  readonly addNoticeUnlessUnresolved: typeof addNoticeUnlessUnresolved;
+};
+
+const defaultLabelerDeniedDeps: LabelerDeniedDeps = {
+  addNoticeUnlessUnresolved,
+};
+
+/**
+ * 付与者の確認で見送ったPRのnoticeを残す。
+ * 見送りではラベルを外さないので、ラベルが付いている間はポーリングのたびに
+ * 同じ状況になる。本文は対象とラベルだけで決まるため、
+ * 同じ本文の未解決のnoticeがあれば登録しない。
+ */
+export async function recordPrLabelerDenied(
+  target: {
+    readonly owner: string;
+    readonly repo: string;
+    readonly number: number;
+  },
+  label: string,
+  deps: LabelerDeniedDeps = defaultLabelerDeniedDeps,
+): Promise<void> {
+  await deps.addNoticeUnlessUnresolved({
+    kind: PR_LABELER_DENIED_KIND,
+    message: labelerDeniedMessage(target, label),
+  });
+}
+
 async function startReview(
   candidate: PrCandidate,
   viewerLogin: string,
@@ -694,6 +754,11 @@ export type PrDecisionHandlers = {
     candidate: PrCandidate,
     result: Extract<ClaimPrResult, { readonly claimed: false }>,
   ) => Promise<void>;
+  /** 付与者が許可されていないラベルを、noticeに残す。 */
+  readonly recordLabelerDenied: (
+    candidate: PrCandidate,
+    label: string,
+  ) => Promise<void>;
   readonly startReview: (
     candidate: PrCandidate,
     context: PrCandidateContext,
@@ -744,6 +809,22 @@ export async function processPrDecisions(
   let failed = 0;
   // トリガーラベルが外れたままになったPR。ループを抜けるときに必ず1回だけ知らせる。
   const labelsLeftRemoved: PrLabelLeftRemoved[] = [];
+  // noticeの記録の失敗は、そのPRの失敗として記録して次へ進む。
+  const recordDenied = async (
+    candidate: PrCandidate,
+    label: string,
+  ): Promise<"recorded" | "failed"> => {
+    try {
+      await handlers.recordLabelerDenied(candidate, label);
+      return "recorded";
+    } catch (err) {
+      await handlers.recordFailure(
+        `labeler_denied:${candidate.owner}/${candidate.repo}#${candidate.number}`,
+        err,
+      );
+      return "failed";
+    }
+  };
   try {
     for (const decision of decisions) {
       const { candidate, review, fix } = decision;
@@ -765,6 +846,12 @@ export async function processPrDecisions(
       // レビューと修正は、それぞれ自分のトリガーラベルを別々に消費する。
       // 1回のポーリングで1つのPRに`review_label`と`fix_label`の両方が
       // 付いていることがあり、1つの取得にまとめず個別に扱う必要がある。
+      if (review.kind === "deny_labeler") {
+        const outcome = await recordDenied(candidate, labels.reviewLabel);
+        if (outcome === "recorded") skipped += 1;
+        else failed += 1;
+      }
+
       if (review.kind === "trigger_review") {
         try {
           if (review.reason === "label") {
@@ -793,6 +880,12 @@ export async function processPrDecisions(
             err,
           );
         }
+      }
+
+      if (fix.kind === "deny_labeler") {
+        const outcome = await recordDenied(candidate, labels.fixLabel);
+        if (outcome === "recorded") skipped += 1;
+        else failed += 1;
       }
 
       if (fix.kind === "trigger_fix") {
@@ -924,7 +1017,10 @@ export async function main(): Promise<{
       const activeForPr =
         byPr.get(`${found.owner}/${found.repo}#${found.number}`) ?? [];
       contexts.push(
-        await buildPrCandidate(client, found, viewer.login, activeForPr),
+        await buildPrCandidate(client, found, viewer.login, activeForPr, {
+          reviewLabel: config.review_label,
+          fixLabel: config.fix_label,
+        }),
       );
     } catch (err) {
       failed += 1;
@@ -953,6 +1049,10 @@ export async function main(): Promise<{
     contexts.map((context) => context.candidate),
     config.review_label,
     config.fix_label,
+    {
+      viewerLogin: viewer.login,
+      allowedLogins: config.allowed_labeler_logins,
+    },
   );
 
   const processed = await processPrDecisions(
@@ -970,6 +1070,8 @@ export async function main(): Promise<{
           log,
         ),
       recordNotClaimed: recordPrClaimNotClaimed,
+      recordLabelerDenied: (candidate, label) =>
+        recordPrLabelerDenied(candidate, label),
       startReview: (candidate, context) =>
         startReview(
           candidate,

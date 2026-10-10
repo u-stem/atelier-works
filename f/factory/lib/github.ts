@@ -627,10 +627,8 @@ export function isFactoryPost(
 }
 
 /**
- * コメント・レビュー・timelineイベントの投稿者についてのGitHubの
- * `author_association`の値を返す。無ければ`null`。
- * `LabeledTimelineEvent.authorAssociation`と同じ型で、
- * `allowed_labeler_associations`の検査と、pr_fixで人のフィードバックを
+ * コメントとレビューの投稿者についてのGitHubの`author_association`の値を返す。
+ * 無ければ`null`。pr_fixで人のフィードバックを`allowed_labeler_associations`で
  * 絞り込むのに使う。
  */
 function parseAuthorAssociation(
@@ -927,20 +925,20 @@ export async function getIssue(
   };
 }
 
-export type LabeledTimelineEvent = {
-  readonly event: "labeled";
-  readonly actorLogin: string;
-  readonly authorAssociation: LabelerAssociation | string | null;
-  readonly label: string;
-  readonly createdAt: string | null;
+/**
+ * トリガーラベルを付けた最後の`labeled`イベント。
+ * `actorLogin`は、イベントの`actor`が無いとき(削除されたユーザーなど)に`null`になる。
+ * timelineの`labeled`イベントは`author_association`を持たないため、付与者は
+ * ログイン名だけで識別する。
+ */
+export type LastLabeledEvent = {
+  readonly actorLogin: string | null;
 };
 
 type TimelineEventPayload = {
   readonly event: unknown;
   readonly actor: unknown;
   readonly label: unknown;
-  readonly author_association: unknown;
-  readonly created_at: unknown;
 };
 
 function isTimelineEventPayload(value: unknown): value is TimelineEventPayload {
@@ -948,19 +946,22 @@ function isTimelineEventPayload(value: unknown): value is TimelineEventPayload {
 }
 
 /**
- * `GET .../timeline`をページ送りしながら取得し、最後の`labeled`イベントだけを返す。
+ * `GET .../timeline`をページ送りしながら取得し、`label`を付けた最後の`labeled`
+ * イベントだけを返す。IssueとPRのどちらにも使える。
  * ラベルは外されて別の人に付け直されていることがある。そのため
- * `poll_issues`が`docs/security.md`の「ラベル付与の制限」に
- * 照らして確かめるべきなのは、いずれかのラベル付与ではなく最新のラベル付与である。
- * ラベルが一度も付いていなければ`null`を返す(ラベルで絞った検索で見つけた
- * Issueでは起こらないはずだが、念のため扱う)。
+ * 見るべきなのは、いずれかのラベル付与ではなく、そのラベルの最新の付与である。
+ * 他のラベルのイベントは見ない。ラベル名はGitHubが大文字小文字を区別しないので、
+ * 比較も区別しない。
+ * そのラベルの`labeled`イベントが無ければ`null`を返す。
+ * 取得に失敗したときは例外を投げる。呼び出し側は、判定できないものとして拒否する。
  */
-export async function getIssueTimeline(
+export async function getLastLabeledEvent(
   client: GhClient,
   owner: string,
   repo: string,
   number: number,
-): Promise<LabeledTimelineEvent | null> {
+  label: string,
+): Promise<LastLabeledEvent | null> {
   validateOwnerRepo(owner, repo);
 
   const parsed = await callGhApiAll(
@@ -968,22 +969,32 @@ export async function getIssueTimeline(
     `repos/${owner}/${repo}/issues/${number}/timeline?per_page=100`,
   );
 
-  let last: LabeledTimelineEvent | null = null;
+  const wanted = label.toLowerCase();
+  let last: LastLabeledEvent | null = null;
   for (const raw of parsed) {
     if (!isTimelineEventPayload(raw)) continue;
     if (raw.event !== "labeled") continue;
-    const actorLogin = isLoginPayload(raw.actor) ? raw.actor.login : null;
-    const resolvedLabelName = labelName(raw.label);
-    if (actorLogin === null || resolvedLabelName === null) continue;
-    last = {
-      event: "labeled",
-      actorLogin,
-      authorAssociation: parseAuthorAssociation(raw.author_association),
-      label: resolvedLabelName,
-      createdAt: typeof raw.created_at === "string" ? raw.created_at : null,
-    };
+    const name = labelName(raw.label);
+    if (name === null || name.toLowerCase() !== wanted) continue;
+    last = { actorLogin: isLoginPayload(raw.actor) ? raw.actor.login : null };
   }
   return last;
+}
+
+/**
+ * `label`を付けた最後の人のログイン名を返す。
+ * そのラベルの`labeled`イベントが無いとき、`actor`が無いときは`null`を返す。
+ * 取得に失敗したときは例外を投げる(`getLastLabeledEvent`を参照)。
+ */
+export async function getLabelerLogin(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  number: number,
+  label: string,
+): Promise<string | null> {
+  const event = await getLastLabeledEvent(client, owner, repo, number, label);
+  return event === null ? null : event.actorLogin;
 }
 
 export type ClaimIssueOptions = {

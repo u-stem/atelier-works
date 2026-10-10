@@ -23,6 +23,7 @@ import {
   type PrLabelLeftRemoved,
   processPrDecisions,
   recordPrClaimNotClaimed,
+  recordPrLabelerDenied,
   resolveClaimNotices,
 } from "../../f/factory/poll_prs.ts";
 import { describeReason } from "../../f/factory/steps/pr_workflow_support.ts";
@@ -697,7 +698,7 @@ describe("resolveClaimNotices", () => {
     return { resolve, calls, resolvedMessages };
   }
 
-  test("resolves the restored notice and the left-removed notice of that PR and label", async () => {
+  test("resolves the restored, left-removed and labeler-denied notices of that PR and label", async () => {
     const { resolve, calls } = exactResolver([]);
     await resolveClaimNotices(TARGET, "factory:review", resolve, noopLog);
     expect(calls).toEqual([
@@ -712,7 +713,26 @@ describe("resolveClaimNotices", () => {
         message: "octo-owner/atelier-works#7: factory:review",
         resolvedBy: "poll_prs",
       },
+      {
+        kind: "labeler_denied",
+        message:
+          "octo-owner/atelier-works#7: factory:reviewラベルを付けたのは許可されていないユーザーです",
+        resolvedBy: "poll_prs",
+      },
     ]);
+  });
+
+  test("matches the message the labeler-denied recording writes", async () => {
+    const recorded: string[] = [];
+    await recordPrLabelerDenied(TARGET, "factory:review", {
+      addNoticeUnlessUnresolved: async (record) => {
+        recorded.push(record.message);
+        return 1;
+      },
+    });
+    const { resolve, calls } = exactResolver([]);
+    await resolveClaimNotices(TARGET, "factory:review", resolve, noopLog);
+    expect(calls[2]?.message).toBe(recorded[0]);
   });
 
   test("matches the message the restored-notice recording writes", async () => {
@@ -805,7 +825,42 @@ describe("resolveClaimNotices", () => {
     expect(warns).toEqual([
       "claim notices could not be resolved",
       "claim notices could not be resolved",
+      "claim notices could not be resolved",
     ]);
+  });
+});
+
+describe("recordPrLabelerDenied", () => {
+  const TARGET = { owner: "octo-owner", repo: "atelier-works", number: 7 };
+
+  function recording() {
+    const records: { kind: string; message: string }[] = [];
+    return {
+      records,
+      deps: {
+        addNoticeUnlessUnresolved: async (record: {
+          kind: string;
+          message: string;
+        }) => {
+          records.push(record);
+          return 1;
+        },
+      },
+    };
+  }
+
+  test("records the notice kind", async () => {
+    const { records, deps } = recording();
+    await recordPrLabelerDenied(TARGET, "factory:fix", deps);
+    expect(records[0]?.kind).toBe("labeler_denied");
+  });
+
+  test("names the target and the label in the message", async () => {
+    const { records, deps } = recording();
+    await recordPrLabelerDenied(TARGET, "factory:fix", deps);
+    expect(records[0]?.message).toBe(
+      "octo-owner/atelier-works#7: factory:fixラベルを付けたのは許可されていないユーザーです",
+    );
   });
 });
 
@@ -908,6 +963,8 @@ describe("processPrDecisions", () => {
     title: "t",
     headSha: "abc",
     labels: [],
+    reviewLabelerLogin: null,
+    fixLabelerLogin: null,
     hasActiveReviewingItem: false,
     lastKnownHeadSha: null,
     previousFixRound: 0,
@@ -942,6 +999,7 @@ describe("processPrDecisions", () => {
     const handlers: PrDecisionHandlers = {
       claim: async () => ({ claimed: true }),
       recordNotClaimed: async () => {},
+      recordLabelerDenied: async () => {},
       startReview: async () => {
         calls.push("startReview");
       },
@@ -1211,6 +1269,90 @@ describe("processPrDecisions", () => {
       silentLog(),
     );
   }
+
+  describe("when the labeler of the review label is denied", () => {
+    const REVIEW_DENIED: PrDecision = {
+      candidate: CANDIDATE,
+      review: { kind: "deny_labeler" },
+      fix: { kind: "none" },
+    };
+
+    test("counts the review as skipped", async () => {
+      const { handlers } = handlersWith();
+
+      const result = await run([REVIEW_DENIED], handlers);
+
+      expect(result.skipped).toBe(1);
+    });
+
+    test("records the denial with the review label", async () => {
+      const recorded: string[] = [];
+      const { handlers } = handlersWith({
+        recordLabelerDenied: async (_candidate, label) => {
+          recorded.push(label);
+        },
+      });
+
+      await run([REVIEW_DENIED], handlers);
+
+      expect(recorded).toEqual(["factory:review"]);
+    });
+
+    test("neither claims nor starts the review", async () => {
+      const claimed: string[] = [];
+      const { handlers, calls } = handlersWith({
+        claim: async (_candidate, label) => {
+          claimed.push(label);
+          return { claimed: true };
+        },
+      });
+
+      await run([REVIEW_DENIED], handlers);
+
+      expect([claimed, calls]).toEqual([[], []]);
+    });
+
+    test("counts a failing record as failed", async () => {
+      const { handlers } = handlersWith({
+        recordLabelerDenied: async () => {
+          throw new Error("db down");
+        },
+      });
+
+      const result = await run([REVIEW_DENIED], handlers);
+
+      expect(result.failed).toBe(1);
+    });
+  });
+
+  describe("when the labeler of the fix label is denied", () => {
+    const FIX_DENIED: PrDecision = {
+      candidate: CANDIDATE,
+      review: { kind: "none" },
+      fix: { kind: "deny_labeler" },
+    };
+
+    test("records the denial with the fix label", async () => {
+      const recorded: string[] = [];
+      const { handlers } = handlersWith({
+        recordLabelerDenied: async (_candidate, label) => {
+          recorded.push(label);
+        },
+      });
+
+      await run([FIX_DENIED], handlers);
+
+      expect(recorded).toEqual(["factory:fix"]);
+    });
+
+    test("does not start the fix", async () => {
+      const { handlers, calls } = handlersWith();
+
+      await run([FIX_DENIED], handlers);
+
+      expect(calls).toEqual([]);
+    });
+  });
 
   describe("when the review claim is not acquired", () => {
     test("counts the review as skipped", async () => {

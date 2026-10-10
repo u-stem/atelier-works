@@ -50,6 +50,7 @@ const OWNER_SLASH_REPO = /^[^/\s]+\/[^/\s]+$/;
 type DefaultableField =
   | "trigger_label"
   | "allowed_labeler_associations"
+  | "allowed_labeler_logins"
   | "model"
   | "heavy_model"
   | "max_attempts"
@@ -92,6 +93,7 @@ type DefaultableField =
 const DEFAULTS: Pick<FactoryConfig, DefaultableField> = {
   trigger_label: "factory",
   allowed_labeler_associations: ["OWNER", "MEMBER", "COLLABORATOR"],
+  allowed_labeler_logins: [],
   model: "claude-sonnet-5-5",
   heavy_model: "claude-opus-5-5",
   max_attempts: 3,
@@ -371,6 +373,11 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
     owners,
     trigger_label: stringField(raw, "trigger_label", DEFAULTS.trigger_label),
     allowed_labeler_associations: resolvedAllowedLabelerAssociations,
+    allowed_labeler_logins: stringArrayField(
+      raw,
+      "allowed_labeler_logins",
+      DEFAULTS.allowed_labeler_logins,
+    ),
     model: modelField(raw, "model", DEFAULTS.model),
     heavy_model: modelField(raw, "heavy_model", DEFAULTS.heavy_model),
     max_attempts: numberField(raw, "max_attempts", DEFAULTS.max_attempts),

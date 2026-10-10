@@ -791,7 +791,17 @@ export type ReviewPostMode = "comment_only" | "gated";
 export type FactoryConfig = {
   owners: FactoryOwner[];
   trigger_label: string;
+  /**
+   * PRのレビューと修正のコメントの投稿者を、GitHubの`author_association`で絞る。
+   * トリガーラベルの付与者の確認には使わない(timelineの`labeled`イベントは
+   * `author_association`を持たないため)。
+   */
   allowed_labeler_associations: LabelerAssociation[];
+  /**
+   * トリガーラベルを付けてよい、FactoryのPATのアカウント以外のGitHubのログイン名。
+   * 空なら、PATのアカウントが付けたラベルだけに反応する。大文字小文字は区別しない。
+   */
+  allowed_labeler_logins: string[];
   model: string;
   heavy_model: string;
   max_attempts: number;

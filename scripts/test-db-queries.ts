@@ -688,15 +688,15 @@ check(
 // ---------------------------------------------------------------------------
 
 const prefixTarget = await addNotice(
-  { kind: "labeler_association_denied", message: "qdb_app#1: denied" },
+  { kind: "labeler_denied", message: "qdb_app#1: denied" },
   sql,
 );
 const prefixOtherNumber = await addNotice(
-  { kind: "labeler_association_denied", message: "qdb_app#12: denied" },
+  { kind: "labeler_denied", message: "qdb_app#12: denied" },
   sql,
 );
 const prefixWildcardRepo = await addNotice(
-  { kind: "labeler_association_denied", message: "qdbxapp#1: denied" },
+  { kind: "labeler_denied", message: "qdbxapp#1: denied" },
   sql,
 );
 const prefixOtherKind = await addNotice(
@@ -704,7 +704,7 @@ const prefixOtherKind = await addNotice(
   sql,
 );
 const prefixResolvedCount = await resolveUnresolvedNoticesByPrefix(
-  "labeler_association_denied",
+  "labeler_denied",
   "qdb_app#1: ",
   "poll_issues",
   sql,

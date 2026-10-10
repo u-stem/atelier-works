@@ -21,7 +21,7 @@ export const NOTICE_SEVERITY: Readonly<Record<string, NoticeSeverity>> = {
   cleanup_worktrees_skipped: "info",
   workspace_disk_usage: "info",
   fix_feedback_association_excluded: "info",
-  labeler_association_denied: "info",
+  labeler_denied: "info",
   unsandboxed_check_commands: "info",
   implement_needs_human: "info",
   approval_comment_failed: "action",
@@ -54,7 +54,7 @@ export const INFO_NOTICE_KINDS: readonly string[] = Object.entries(
  */
 export const UNRESOLVABLE_NOTICE_KINDS: readonly string[] = [
   "unsandboxed_check_commands",
-  "labeler_association_denied",
+  "labeler_denied",
   "fix_feedback_association_excluded",
 ];
 
