@@ -649,6 +649,11 @@ function isLoginPayload(value: unknown): value is LoginPayload {
   return typeof (value as { login: unknown }).login === "string";
 }
 
+/** GitHubのユーザーのオブジェクトからログイン名を読む。ユーザーでなければ`null`。 */
+function readLogin(value: unknown): string | null {
+  return isLoginPayload(value) ? value.login : null;
+}
+
 /**
  * `getViewer`が必要とする`GET /user`の応答の形。
  * `LoginPayload`に、GitHubのnoreplyのコミット用メールアドレスを組み立てる
@@ -821,6 +826,13 @@ export type Issue = {
   readonly htmlUrl: string;
   readonly state: string;
   readonly authorLogin: string;
+  /**
+   * 閉じた人のログイン名。開いているときと、GitHubが閉じた人を返さないときは`null`。
+   * PRのマージでは、マージした人が入ると想定している(実機で確かめる)。
+   */
+  readonly closedByLogin: string | null;
+  /** 作者の`author_association`。応答に無ければ`null`。 */
+  readonly authorAssociation: string | null;
   readonly labels: string[];
   readonly assignees: string[];
 };
@@ -914,6 +926,10 @@ export async function getIssue(
     htmlUrl: parsed.html_url,
     state: parsed.state,
     authorLogin: parsed.user?.login ?? "",
+    closedByLogin: readLogin(Reflect.get(parsed, "closed_by")),
+    authorAssociation: parseAuthorAssociation(
+      Reflect.get(parsed, "author_association"),
+    ),
     labels,
     assignees,
   };
@@ -1023,47 +1039,6 @@ export async function getIssueTimeline(
       actorLogin,
       authorAssociation: parseAuthorAssociation(raw.author_association),
       label: resolvedLabelName,
-      createdAt: typeof raw.created_at === "string" ? raw.created_at : null,
-    };
-  }
-  return last;
-}
-
-export type ClosedTimelineEvent = {
-  readonly event: "closed" | "merged";
-  /** 閉じた人のログイン名。タイムラインに実行者が無いときは`null`。 */
-  readonly actorLogin: string | null;
-  readonly authorAssociation: LabelerAssociation | string | null;
-  readonly createdAt: string | null;
-};
-
-/**
- * `GET .../timeline`をページ送りしながら取得し、最後の`closed`か`merged`のイベントを返す。
- * IssueやPRは閉じられて開き直されることがあるので、見るべきなのは最新の閉じる操作である。
- * 実行者が分からないイベントでも、より古い閉じる操作に取り替えず、実行者なしで返す。
- * 一度も閉じられていなければ`null`を返す。
- */
-export async function getIssueClosedEvent(
-  client: GhClient,
-  owner: string,
-  repo: string,
-  number: number,
-): Promise<ClosedTimelineEvent | null> {
-  validateOwnerRepo(owner, repo);
-
-  const parsed = await callGhApiAll(
-    client,
-    `repos/${owner}/${repo}/issues/${number}/timeline?per_page=100`,
-  );
-
-  let last: ClosedTimelineEvent | null = null;
-  for (const raw of parsed) {
-    if (!isTimelineEventPayload(raw)) continue;
-    if (raw.event !== "closed" && raw.event !== "merged") continue;
-    last = {
-      event: raw.event,
-      actorLogin: isLoginPayload(raw.actor) ? raw.actor.login : null,
-      authorAssociation: parseAuthorAssociation(raw.author_association),
       createdAt: typeof raw.created_at === "string" ? raw.created_at : null,
     };
   }

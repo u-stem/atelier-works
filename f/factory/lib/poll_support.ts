@@ -500,16 +500,48 @@ export function parseActionableCursor(value: unknown): number | null {
     : null;
 }
 
+/** 閉じた対象について、閉じた人の確認に使うIssue(PR)の応答の部分。 */
+export type ClosedTargetInfo = {
+  /** 閉じた人のログイン名。GitHubが返さなければ`null`。 */
+  readonly closedByLogin: string | null;
+  /** 作者のログイン名。分からなければ`null`か空文字列。 */
+  readonly authorLogin: string | null;
+  /** 作者の`author_association`。分からなければ`null`。 */
+  readonly authorAssociation: string | null;
+};
+
+export type CloserDecision =
+  | { readonly allowed: true; readonly basis: "other_than_author" | "author" }
+  | {
+      readonly allowed: false;
+      readonly reason: "no_closer" | "author_unknown" | "author_not_allowed";
+    };
+
 /**
- * 対象を閉じた人の`author_association`が、許可する関係に含まれるかを返す。
- * 関係が分からない(`null`)ときは、許可しない。
+ * 対象を閉じた人が、要対応の取り消しを許せる人かを返す。
+ * - 閉じた人が分からなければ許さない。
+ * - 作者以外が閉じたなら許す。他人のIssueやPRを閉じるには、triage以上の権限が要るため。
+ * - 作者が閉じたなら、作者の`author_association`が許可する関係に含まれるときだけ許す。
+ *   作者が分からないとき、関係が分からないときは許さない。
+ * ログイン名は大文字と小文字を区別せずに比べる。
  * 第三者が自分のIssueやPRを閉じて、安全策で止まった作業項目を要対応の一覧から消せないようにするため。
  */
-export function isCloserAllowed(
-  association: string | null,
+export function decideCloser(
+  info: ClosedTargetInfo,
   allowed: readonly LabelerAssociation[],
-): boolean {
-  return association !== null && isOneOf(association, allowed);
+): CloserDecision {
+  if (info.closedByLogin === null)
+    return { allowed: false, reason: "no_closer" };
+  if (info.authorLogin === null || info.authorLogin === "") {
+    return { allowed: false, reason: "author_unknown" };
+  }
+  if (info.closedByLogin.toLowerCase() !== info.authorLogin.toLowerCase()) {
+    return { allowed: true, basis: "other_than_author" };
+  }
+  return info.authorAssociation !== null &&
+    isOneOf(info.authorAssociation, allowed)
+    ? { allowed: true, basis: "author" }
+    : { allowed: false, reason: "author_not_allowed" };
 }
 
 /**

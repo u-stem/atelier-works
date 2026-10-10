@@ -42,7 +42,6 @@ import {
   type GhClient,
   GitHubHttpError,
   getIssue,
-  getIssueClosedEvent,
   getIssueTimeline,
   getViewer,
   type IssueSearchItem,
@@ -53,6 +52,8 @@ import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import {
   actionableCancelNote,
   associationFromLabeledEvent,
+  type ClosedTargetInfo,
+  decideCloser,
   decideClosureOnly,
   decideIssueActions,
   decideReconcileAction,
@@ -61,7 +62,6 @@ import {
   groupActionableTargets,
   type IssueCandidate,
   type IssueDecision,
-  isCloserAllowed,
   isWaitingForHuman,
   type JobState,
   parseActionableCursor,
@@ -400,29 +400,25 @@ async function reconcileActiveItems(
 // ---------------------------------------------------------------------------
 
 /**
- * 1回の実行でGitHubに行う問い合わせの目安の回数。
- * Issue(PR)の状態の取得と、閉じていたときの閉じた人の確認(タイムライン)を、それぞれ1回と数える。
- * 確認のタイムラインはページ送りで読むので、実際の問い合わせは数えた回数より増えうる。
+ * 1回の実行でGitHubに問い合わせる、IssueまたはPRの最大の数。
+ * 対象ごとに、Issue(PR)の取得を1回だけ行う。閉じた人も、この応答で確かめる。
  * 開いたままの対象は毎回調べ直すので、要対応の行が増えても
  * 実行の時間とAPIの消費が膨らまないように抑える。
- * 対象の途中で打ち切らず、上限に達した後の最初の対象から次の実行に回す。
+ * 上限に達したら、残りの対象を次の実行に回す。
  */
 export const ACTIONABLE_RECONCILE_LIMIT = 30;
 
 export type ActionableReconcileDeps = {
   readonly listItems: () => Promise<readonly WorkItem[]>;
-  /** IssueまたはPRの`state`(`open`か`closed`)を返す。PRの番号もissues APIで引ける。 */
-  readonly getIssueState: (
+  /**
+   * IssueまたはPRの`state`(`open`か`closed`)と、閉じた人の確認に使う項目を返す。
+   * PRの番号もissues APIで引ける。
+   */
+  readonly getTarget: (
     owner: string,
     repo: string,
     number: number,
-  ) => Promise<string>;
-  /** 最後に閉じた人の`author_association`を返す。閉じた記録や関係が分からなければ`null`。 */
-  readonly getCloserAssociation: (
-    owner: string,
-    repo: string,
-    number: number,
-  ) => Promise<string | null>;
+  ) => Promise<ClosedTargetInfo & { readonly state: string }>;
   readonly updateStatus: typeof updateStatusIfLeaseHolder;
   /** 同じPRに終端でない`pr_review`か`pr_fix`の作業項目があるかを返す。 */
   readonly hasActivePrWorkItem: (
@@ -456,8 +452,9 @@ function isGoneFromGithub(err: unknown): boolean {
  * これが取り消さない限り、保持期間のあいだ要対応に残る。
  *
  * - 判定は`decideClosureOnly`で、注記は`actionableCancelNote`にする。
- * - 閉じた人の`author_association`が`allowed_labeler_associations`に含まれるときだけ取り消す。
- *   含まれない、または分からないときは取り消さず、ログだけ残して要対応に残す。
+ * - 閉じた人を`decideCloser`で確かめ、許されたときだけ取り消す。
+ *   許されないとき(閉じた人が分からない、作者が許可されない関係)は取り消さず、
+ *   理由をinfoのログに残して要対応に残す。
  *   第三者が自分のIssueやPRを閉じて、安全策で止まった作業項目を一覧から消せないようにするため。
  * - 遷移は`updateStatusIfLeaseHolder`で、読み取った状態とflow_job_idのままのときだけ行う。
  *   `retry_work_item`が先に再開していれば更新は失敗し、何もしない。
@@ -465,7 +462,7 @@ function isGoneFromGithub(err: unknown): boolean {
  *   止めるべき動いているジョブが無い。
  * - PRのレビューのworktreeは、同じPRに終端でない作業項目が無いときだけ消す。
  * - 人が対応しないと決めた後の片付けなので、Discordには通知しない。
- * - 問い合わせは目安の`limit`回までで、前回の続きから回す(`rotateTargets`)。
+ * - 問い合わせは対象`limit`件までで、前回の続きから回す(`rotateTargets`)。
  *   上限に達して一部を次の実行に回すときは警告を出す。
  * 1件の失敗では例外を投げず、`recordFailure`に渡して次へ進む。
  * 対象の削除やアクセスの喪失(404、410)は、失敗として記録せず警告のログだけを残す。
@@ -499,35 +496,30 @@ export async function reconcileClosedActionableItems(
   const ordered = rotateTargets(groupActionableTargets(items), cursor);
 
   let cancelled = 0;
-  let calls = 0;
   let checked = 0;
   let lastId: number | null = null;
   for (const target of ordered) {
-    if (calls >= limit) break;
+    if (checked >= limit) break;
     checked += 1;
     lastId = target.id;
     try {
-      calls += 1;
-      const state = await deps.getIssueState(
+      const info = await deps.getTarget(
         target.owner,
         target.repo,
         target.number,
       );
-      if (state === "open") continue;
+      if (info.state === "open") continue;
 
-      calls += 1;
-      const association = await deps.getCloserAssociation(
-        target.owner,
-        target.repo,
-        target.number,
-      );
-      if (!isCloserAllowed(association, input.allowedAssociations)) {
-        // 取り消されないまま毎回調べ直されるので、info以上では出さない。
-        log.debug?.(
-          "reconcile: kept actionable items of a target closed by a person who may not do so",
+      const closer = decideCloser(info, input.allowedAssociations);
+      if (!closer.allowed) {
+        // 取り消されないまま毎回調べ直されるので、前提が崩れたとき(GitHubの応答が
+        // 閉じた人を返さないなど)に気づけるよう、infoで残す。
+        log.info(
+          "reconcile: kept actionable items of a closed target because the closer is not trusted",
           {
             target: target.key,
-            association,
+            reason: closer.reason,
+            closed_by: info.closedByLogin,
             work_item_ids: target.items.map((item) => item.id),
           },
         );
@@ -1259,12 +1251,7 @@ export async function main(): Promise<{
     { log, allowedAssociations: config.allowed_labeler_associations },
     {
       listItems: () => listActionableWorkItems(),
-      getIssueState: async (owner, repo, number) =>
-        (await getIssue(client, owner, repo, number)).state,
-      getCloserAssociation: async (owner, repo, number) =>
-        associationFromLabeledEvent(
-          await getIssueClosedEvent(client, owner, repo, number),
-        ),
+      getTarget: (owner, repo, number) => getIssue(client, owner, repo, number),
       updateStatus: updateStatusIfLeaseHolder,
       hasActivePrWorkItem: (owner, repo, prNumber) =>
         hasNonTerminalPrWorkItem(owner, repo, prNumber),

@@ -20,7 +20,6 @@ import {
   GitHubRateLimitError,
   getBranchProtected,
   getIssue,
-  getIssueClosedEvent,
   getIssueTimeline,
   getPr,
   getPrDiff,
@@ -982,89 +981,64 @@ describe("fetchIssueState", () => {
   });
 });
 
-describe("getIssueClosedEvent", () => {
-  const client = (fake: ReturnType<typeof createFakeCommandRunner>) => ({
-    run: fake.run,
-    ghToken: "tok",
+describe("getIssue closing fields", () => {
+  const closedIssue = {
+    number: 5,
+    title: "t",
+    body: "b",
+    html_url: "https://github.com/acme/widgets/issues/5",
+    state: "closed",
+    user: { login: "alice" },
+    author_association: "CONTRIBUTOR",
+    closed_by: { login: "maintainer" },
+    labels: [],
+    assignees: [],
+  };
+  const read = (payload: unknown) =>
+    getIssue(
+      { run: createFakeCommandRunner([ghApiOk(payload)]).run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      5,
+    );
+
+  test("reads who closed the issue", async () => {
+    expect((await read(closedIssue)).closedByLogin).toBe("maintainer");
   });
 
-  test("returns the actor of the last closed event", async () => {
-    const fake = createFakeCommandRunner([
-      ghApiOk([
-        { event: "closed", actor: { login: "alice" } },
-        { event: "reopened", actor: { login: "alice" } },
-        {
-          event: "closed",
-          actor: { login: "carol" },
-          author_association: "NONE",
-        },
-      ]),
-    ]);
-    const last = await getIssueClosedEvent(client(fake), "acme", "widgets", 5);
-    expect(last?.actorLogin).toBe("carol");
+  test("reads the association of the author", async () => {
+    expect((await read(closedIssue)).authorAssociation).toBe("CONTRIBUTOR");
   });
 
-  test("returns the association of the last closed event", async () => {
-    const fake = createFakeCommandRunner([
-      ghApiOk([
-        {
-          event: "closed",
-          actor: { login: "alice" },
-          author_association: "OWNER",
-        },
-      ]),
-    ]);
-    const last = await getIssueClosedEvent(client(fake), "acme", "widgets", 5);
-    expect(last?.authorAssociation).toBe("OWNER");
+  test("reads the closer of a merged pull request", async () => {
+    const merged = {
+      ...closedIssue,
+      pull_request: { merged_at: "2026-10-01T00:00:00Z" },
+      closed_by: { login: "maintainer" },
+    };
+    expect((await read(merged)).closedByLogin).toBe("maintainer");
   });
 
-  test("treats a merged event as a closing event", async () => {
-    const fake = createFakeCommandRunner([
-      ghApiOk([
-        { event: "closed", actor: { login: "alice" } },
-        { event: "merged", actor: { login: "dave" } },
-      ]),
-    ]);
-    const last = await getIssueClosedEvent(client(fake), "acme", "widgets", 5);
-    expect(last?.actorLogin).toBe("dave");
+  test("reads a null closed_by as no closer", async () => {
+    expect(
+      (await read({ ...closedIssue, closed_by: null })).closedByLogin,
+    ).toBeNull();
   });
 
-  test("reads the association as null when the event has none", async () => {
-    const fake = createFakeCommandRunner([
-      ghApiOk([{ event: "closed", actor: { login: "alice" } }]),
-    ]);
-    const last = await getIssueClosedEvent(client(fake), "acme", "widgets", 5);
-    expect(last?.authorAssociation).toBeNull();
+  test("reads a missing closed_by as no closer", async () => {
+    const { closed_by: _omitted, ...withoutCloser } = closedIssue;
+    expect((await read(withoutCloser)).closedByLogin).toBeNull();
   });
 
-  test("does not fall back to an older closed event when the last has no actor", async () => {
-    const fake = createFakeCommandRunner([
-      ghApiOk([
-        {
-          event: "closed",
-          actor: { login: "alice" },
-          author_association: "OWNER",
-        },
-        { event: "closed" },
-      ]),
-    ]);
-    const last = await getIssueClosedEvent(client(fake), "acme", "widgets", 5);
-    expect(last?.actorLogin).toBeNull();
+  test("ignores a closed_by that is not a user object", async () => {
+    expect(
+      (await read({ ...closedIssue, closed_by: "maintainer" })).closedByLogin,
+    ).toBeNull();
   });
 
-  test("returns null when the thread was never closed", async () => {
-    const fake = createFakeCommandRunner([
-      ghApiOk([{ event: "commented", actor: { login: "bob" } }]),
-    ]);
-    const last = await getIssueClosedEvent(client(fake), "acme", "widgets", 5);
-    expect(last).toBeNull();
-  });
-
-  test("rejects an owner that isn't a valid GitHub name", async () => {
-    const fake = createFakeCommandRunner([]);
-    await expect(
-      getIssueClosedEvent(client(fake), "../etc", "widgets", 5),
-    ).rejects.toThrow();
+  test("reads a missing association as null", async () => {
+    const { author_association: _omitted, ...without } = closedIssue;
+    expect((await read(without)).authorAssociation).toBeNull();
   });
 });
 

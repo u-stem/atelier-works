@@ -54,19 +54,13 @@ export function escapeReasonSeparator(text: string): string {
   return text.replaceAll("; ", ", ");
 }
 
-export type LogLevel = "debug" | "info" | "warn" | "error";
+export type LogLevel = "info" | "warn" | "error";
 
 export type LogFields = Record<string, unknown>;
 
 export type LogSink = (line: string) => void;
 
 export type Logger = {
-  /**
-   * 毎回の実行で同じ内容が出うる、調査用のログ。
-   * 既定では書き出さず、`LoggerOptions.debug`か環境変数`FACTORY_LOG_DEBUG=1`で有効にする。
-   * 実装しない`Logger`(テストの偽物など)があるので、省略できる。
-   */
-  debug?(message: string, fields?: LogFields): void;
   info(message: string, fields?: LogFields): void;
   warn(message: string, fields?: LogFields): void;
   error(message: string, fields?: LogFields): void;
@@ -80,8 +74,6 @@ export type LoggerOptions = {
   secrets?: readonly string[];
   /** 直列化したログ行の書き込み先。既定は`console.log`。 */
   sink?: LogSink;
-  /** `debug`のログを書き出すか。既定は環境変数`FACTORY_LOG_DEBUG`が`1`のとき。 */
-  debug?: boolean;
   /** テストで時刻を固定するための時計。既定は`() => new Date()`。 */
   now?: () => Date;
 };
@@ -101,7 +93,6 @@ export function logger(stage: string, options: LoggerOptions = {}): Logger {
   const secrets = options.secrets ?? [];
   const sink = options.sink ?? ((line: string) => console.log(line));
   const now = options.now ?? (() => new Date());
-  const debugEnabled = options.debug ?? process.env.FACTORY_LOG_DEBUG === "1";
 
   function emit(level: LogLevel, message: string, fields?: LogFields): void {
     const record: Record<string, unknown> = {
@@ -117,9 +108,6 @@ export function logger(stage: string, options: LoggerOptions = {}): Logger {
   }
 
   return {
-    debug: (message, fields) => {
-      if (debugEnabled) emit("debug", message, fields);
-    },
     info: (message, fields) => emit("info", message, fields),
     warn: (message, fields) => emit("warn", message, fields),
     error: (message, fields) => emit("error", message, fields),

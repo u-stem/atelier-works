@@ -73,6 +73,7 @@ Windmillで実行する間、秘密値はWindmillのsecret変数に置く。
 - `f/factory/discord_webhook_url`
 
 scriptは`wmill.getVariable()`で値を取得し、子プロセスの環境変数(`GH_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`など)としてだけ渡す。URLのクエリとパス、ログ、Data Tableの列、Discordの通知本文には出さない。
+例外は、Console用のworkerで動く`retry_work_item`だけである。このworkerでは`gh`を起動できないので、`github_token`を`fetch`の`Authorization`ヘッダに載せる。宛先は`https://api.github.com`に固定する。境界は[Console用workerの境界](#console用workerの境界)に書く。
 
 エラーメッセージと失敗の記録(`job_failures`)には、マスク処理を通してから値を入れる。マスクの関数はテストで検証する。
 
@@ -739,9 +740,20 @@ PRのレビューとコメントも、投稿者で絞る。許可する関係は
 
 `poll_issues`は、対象のIssueやPRが閉じられた作業項目を取り消し、Consoleの要対応の一覧から外す。
 対象は、失敗、人の対応待ち、期限切れの作業項目である。
-このとき、タイムラインの最新の`closed`か`merged`のイベントから、閉じた人の`author_association`を確かめる。
-`allowed_labeler_associations`に含まれるときだけ取り消す。
-含まれないときと、関係が分からないときは取り消さず、一覧に残す。
+このとき、IssueまたはPRの取得の応答から、閉じた人を確かめる。
+使うのは、`GET /repos/{owner}/{repo}/issues/{番号}`の`closed_by`、作者(`user`)、作者の`author_association`である。
+タイムラインの`closed`と`merged`のイベントには`author_association`が無いので、使わない。
+判定は次のとおり。ログイン名は大文字と小文字を区別せずに比べる。
+
+| 状況 | 判定 |
+| --- | --- |
+| `closed_by`が無い | 取り消さない |
+| 作者以外が閉じた | 取り消す。他人のIssueやPRを閉じるには、triage以上の権限が要るため |
+| 作者が閉じ、作者の`author_association`が`allowed_labeler_associations`に含まれる | 取り消す |
+| 作者が閉じ、作者の関係が含まれないか分からない | 取り消さない |
+
+取り消さなかった対象は、一覧に残る。理由と対象は`poll_issues`のログにinfoで残す。
+PRがマージされたときの`closed_by`が、マージした人になるかは、実機で確かめる。
 
 第三者が自分のIssueやPRを閉じて、安全策で止まった作業項目を一覧から消せないようにするためである。
 publicのリポジトリでは、誰でもIssueを作れ、作者は自分のIssueやPRを閉じられる。

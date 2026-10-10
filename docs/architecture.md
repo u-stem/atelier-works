@@ -162,7 +162,7 @@ stateDiagram-v2
 Issueの作業項目とPRの作業項目は、IssueかPRが閉じられると取り消し(`cancelled`)になる。
 失敗の作業項目も、IssueかPRが閉じられると取り消しになる。
 この取り消しは、図に描いた人の対応待ちと期限切れからの取り消しと同じで、Consoleの要対応の一覧から外すためのものである。
-閉じた人の関係が許可する関係(`allowed_labeler_associations`)に当たるときだけ取り消す。
+閉じた人が許されるときだけ取り消す。作者以外が閉じたか、作者の関係が許可する関係(`allowed_labeler_associations`)に当たるときである。
 
 終端の作業項目は、Consoleからの再実行で再び動き出す。遷移の条件、リース、孤児の判定は[作業項目の状態とリース](internals/work-items.md)に書く。
 

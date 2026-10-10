@@ -1,5 +1,5 @@
 // `poll_issues.ts`の`reconcileClosedActionableItems`と、その判断の純粋関数
-// (`lib/poll_support.ts`の`groupActionableTargets`、`rotateTargets`、`isCloserAllowed`、
+// (`lib/poll_support.ts`の`groupActionableTargets`、`rotateTargets`、`decideCloser`、
 // `statusBeforeActionableCancel`など)のテスト。
 // 閉じたIssueやPRの終端の失敗を`cancelled`にして要対応から外す経路で、
 // 状態の競合、1回の実行の上限、順番の回し方を確かめる。
@@ -9,8 +9,9 @@ import { GitHubHttpError } from "../../f/factory/lib/github.ts";
 import type { Logger } from "../../f/factory/lib/log.ts";
 import {
   actionableCancelNote,
+  type ClosedTargetInfo,
+  decideCloser,
   groupActionableTargets,
-  isCloserAllowed,
   parseActionableCursor,
   rotateTargets,
   statusBeforeActionableCancel,
@@ -174,19 +175,76 @@ describe("parseActionableCursor", () => {
   });
 });
 
-describe("isCloserAllowed", () => {
+describe("decideCloser", () => {
   const ALLOWED: readonly LabelerAssociation[] = ["OWNER", "MEMBER"];
-
-  test("allows an association in the list", () => {
-    expect(isCloserAllowed("MEMBER", ALLOWED)).toBe(true);
+  const info = (
+    overrides: Partial<{
+      closedByLogin: string | null;
+      authorLogin: string | null;
+      authorAssociation: string | null;
+    }>,
+  ) => ({
+    closedByLogin: "alice",
+    authorLogin: "bob",
+    authorAssociation: "NONE",
+    ...overrides,
   });
 
-  test("denies an association outside the list", () => {
-    expect(isCloserAllowed("NONE", ALLOWED)).toBe(false);
+  test("allows someone other than the author", () => {
+    expect(decideCloser(info({}), ALLOWED)).toEqual({
+      allowed: true,
+      basis: "other_than_author",
+    });
   });
 
-  test("denies when the association is unknown", () => {
-    expect(isCloserAllowed(null, ALLOWED)).toBe(false);
+  test("compares the logins ignoring case", () => {
+    expect(
+      decideCloser(
+        info({ closedByLogin: "Bob", authorAssociation: "MEMBER" }),
+        ALLOWED,
+      ),
+    ).toEqual({ allowed: true, basis: "author" });
+  });
+
+  test("allows the author whose association is allowed", () => {
+    expect(
+      decideCloser(
+        info({ closedByLogin: "bob", authorAssociation: "OWNER" }),
+        ALLOWED,
+      ),
+    ).toEqual({ allowed: true, basis: "author" });
+  });
+
+  test("denies the author whose association is not allowed", () => {
+    expect(
+      decideCloser(
+        info({ closedByLogin: "bob", authorAssociation: "NONE" }),
+        ALLOWED,
+      ),
+    ).toEqual({ allowed: false, reason: "author_not_allowed" });
+  });
+
+  test("denies the author whose association is unknown", () => {
+    expect(
+      decideCloser(
+        info({ closedByLogin: "bob", authorAssociation: null }),
+        ALLOWED,
+      ),
+    ).toEqual({ allowed: false, reason: "author_not_allowed" });
+  });
+
+  test("denies when GitHub did not return who closed it", () => {
+    expect(decideCloser(info({ closedByLogin: null }), ALLOWED)).toEqual({
+      allowed: false,
+      reason: "no_closer",
+    });
+  });
+
+  test("denies when the author is unknown", () => {
+    expect(decideCloser(info({ authorLogin: "" }), ALLOWED)).toEqual({
+      allowed: false,
+      reason: "author_unknown",
+    });
   });
 });
 
@@ -244,8 +302,8 @@ const silentLog: Logger = { info() {}, warn() {}, error() {} };
 
 type HarnessOptions = {
   closed?: readonly number[];
-  /** 閉じた人の`author_association`。既定は許可される`OWNER`。 */
-  association?: string | null;
+  /** 閉じた対象の`closed_by`、作者、作者の関係。既定は作者以外が閉じた場合。 */
+  closer?: Partial<ClosedTargetInfo>;
   cursor?: unknown;
   activePr?: boolean;
   failures?: Partial<ActionableReconcileDeps>;
@@ -253,23 +311,22 @@ type HarnessOptions = {
 
 function harness(items: readonly WorkItem[], options: HarnessOptions = {}) {
   const closed = new Set(options.closed ?? []);
-  const association =
-    options.association === undefined ? "OWNER" : options.association;
+  const closer: ClosedTargetInfo = {
+    closedByLogin: "alice",
+    authorLogin: "bob",
+    authorAssociation: "NONE",
+    ...options.closer,
+  };
   const fetched: number[] = [];
-  const closerLookups: number[] = [];
   const updates: UpdateCall[] = [];
   const worktrees: number[] = [];
   const failures: { step: string; err: unknown }[] = [];
   const cursors: (number | null)[] = [];
   const deps: ActionableReconcileDeps = {
     listItems: async () => items,
-    getIssueState: async (_owner, _repo, number) => {
+    getTarget: async (_owner, _repo, number) => {
       fetched.push(number);
-      return closed.has(number) ? "closed" : "open";
-    },
-    getCloserAssociation: async (_owner, _repo, number) => {
-      closerLookups.push(number);
-      return association;
+      return { state: closed.has(number) ? "closed" : "open", ...closer };
     },
     updateStatus: async (id, from, to, flowJobId, note) => {
       updates.push({ id, from, to, flowJobId, note: note ?? null });
@@ -291,7 +348,6 @@ function harness(items: readonly WorkItem[], options: HarnessOptions = {}) {
   return {
     deps,
     fetched,
-    closerLookups,
     updates,
     worktrees,
     failures,
@@ -466,9 +522,14 @@ describe("reconcileClosedActionableItems", () => {
 
 describe("reconcileClosedActionableItems failures", () => {
   const throwing = (err: Error): Partial<ActionableReconcileDeps> => ({
-    getIssueState: async (_owner, _repo, number) => {
+    getTarget: async (_owner, _repo, number) => {
       if (number === 10) throw err;
-      return "closed";
+      return {
+        state: "closed",
+        closedByLogin: "alice",
+        authorLogin: "bob",
+        authorAssociation: "NONE",
+      };
     },
   });
   const twoIssues = [
@@ -544,105 +605,109 @@ describe("reconcileClosedActionableItems failures", () => {
       "reconcile_actionable:octo-owner/atelier-works#10",
     ]);
   });
-
-  test("records a failure when the closer lookup throws", async () => {
-    const { deps, updates, failures } = harness([workItem({ id: 1 })], {
-      closed: [10],
-      failures: {
-        getCloserAssociation: async () => {
-          throw new Error("timeline failed");
-        },
-      },
-    });
-    await run(deps);
-    expect({ updates, failures: failures.length }).toEqual({
-      updates: [],
-      failures: 1,
-    });
-  });
 });
 
 describe("reconcileClosedActionableItems closer check", () => {
-  test("cancels when the closer is allowed", async () => {
+  const authorClosed = (association: string | null) => ({
+    closedByLogin: "bob",
+    authorLogin: "bob",
+    authorAssociation: association,
+  });
+
+  test("cancels when someone other than the author closed it", async () => {
     const { deps, updates } = harness([workItem({ id: 1 })], {
       closed: [10],
-      association: "MEMBER",
     });
     await run(deps);
     expect(updates).toHaveLength(1);
   });
 
-  test("keeps the item when the closer is not allowed", async () => {
+  test("cancels when the author with an allowed association closed it", async () => {
     const { deps, updates } = harness([workItem({ id: 1 })], {
       closed: [10],
-      association: "NONE",
+      closer: authorClosed("MEMBER"),
+    });
+    await run(deps);
+    expect(updates).toHaveLength(1);
+  });
+
+  test("keeps the item when the author without an allowed association closed it", async () => {
+    const { deps, updates } = harness([workItem({ id: 1 })], {
+      closed: [10],
+      closer: authorClosed("NONE"),
     });
     await run(deps);
     expect(updates).toEqual([]);
   });
 
-  test("keeps the item when the closer cannot be determined", async () => {
+  test("keeps the item when GitHub returns no closer", async () => {
     const { deps, updates } = harness([workItem({ id: 1 })], {
       closed: [10],
-      association: null,
+      closer: { closedByLogin: null },
     });
     await run(deps);
     expect(updates).toEqual([]);
   });
 
-  test("keeps the worktrees when the closer is not allowed", async () => {
+  test("cancels a merged pr whose closer is not the author", async () => {
+    const { deps, updates } = harness([prItem({ id: 2 })], {
+      closed: [20],
+      closer: { closedByLogin: "maintainer", authorLogin: "contributor" },
+    });
+    await run(deps);
+    expect(updates.map((update) => update.note)).toEqual([
+      "reconcile: pr_closed (actionable)",
+    ]);
+  });
+
+  test("keeps the worktrees when the closer is not trusted", async () => {
     const { deps, worktrees } = harness([prItem({ id: 2 })], {
       closed: [20],
-      association: "NONE",
+      closer: authorClosed("NONE"),
     });
     await run(deps);
     expect(worktrees).toEqual([]);
   });
 
-  test("does not write an info log for a kept target", async () => {
-    const infos: string[] = [];
+  test("writes an info log with the reason for a kept target", async () => {
+    const infos: { message: string; reason: unknown }[] = [];
     const log: Logger = {
-      info: (message) => infos.push(message),
+      info: (message, fields) =>
+        infos.push({ message, reason: fields?.reason }),
       warn() {},
       error() {},
     };
     const { deps } = harness([workItem({ id: 1 })], {
       closed: [10],
-      association: "NONE",
+      closer: { closedByLogin: null },
     });
     await run(deps, undefined, log);
-    expect(infos).toEqual([]);
+    expect(infos.map((entry) => entry.reason)).toEqual(["no_closer"]);
   });
 
-  test("does not look up the closer of an open target", async () => {
-    const { deps, closerLookups } = harness([workItem({ id: 1 })]);
-    await run(deps);
-    expect(closerLookups).toEqual([]);
-  });
-
-  test("looks up the closer once for a pr shared by a review item and a fix item", async () => {
-    const { deps, closerLookups } = harness(
+  test("asks GitHub once for a closed pr shared by a review item and a fix item", async () => {
+    const { deps, fetched } = harness(
       [prItem({ id: 2, kind: "pr_review" }), prItem({ id: 3, kind: "pr_fix" })],
       { closed: [20] },
     );
     await run(deps);
-    expect(closerLookups).toEqual([20]);
+    expect(fetched).toEqual([20]);
   });
 });
 
 describe("reconcileClosedActionableItems limit and rotation", () => {
-  test("stops after the limit of GitHub requests for open targets", async () => {
+  test("stops after the limit of targets", async () => {
     const { deps, fetched } = harness(issues(4));
     await run(deps, 3);
     expect(fetched).toHaveLength(3);
   });
 
-  test("counts the closer lookup as a request", async () => {
+  test("asks GitHub once per closed target within the limit", async () => {
     const { deps, fetched } = harness(issues(4), {
       closed: [101, 102, 103, 104],
     });
     await run(deps, 3);
-    expect(fetched).toEqual([101, 102]);
+    expect(fetched).toEqual([101, 102, 103]);
   });
 
   test("warns when targets exceed the limit", async () => {
