@@ -408,6 +408,22 @@ describe("scopeOfPaths for check-only files", () => {
       noneScope({ metadata: true }),
     );
   });
+
+  test("an additive rule wins over the allow list for Markdown under console/", () => {
+    expect(scopeOfPaths(["console/a/README.md"])).toEqual(
+      noneScope({ console: true }),
+    );
+  });
+
+  test("an exclusive rule wins over the allow list for Markdown under infra/", () => {
+    expect(scopeOfPaths(["infra/README.md"])).toEqual(allScope());
+  });
+
+  test("an additive rule wins over the allow list for Markdown under migrations/", () => {
+    expect(scopeOfPaths(["migrations/datatable/README.md"])).toEqual(
+      noneScope({ db: true }),
+    );
+  });
 });
 
 describe("parseNulSeparated", () => {

@@ -9,7 +9,8 @@
 // 失敗したジョブが飛ばされ、全体が成功に見えてしまう。
 // 成功した実行を基点にすれば、失敗したcommitの変更は、次の実行で必ず検査し直される。
 //
-// 使い方: bun run scripts/ci-scope.ts
+// 使い方: bun ./scripts/ci-scope.ts
+// `bun run <名前>`は`package.json`のscriptsを先に解決するので、ファイルとして実行する。
 // 外部パッケージを使わない。依存を入れる前のジョブで動かすため。
 
 import { appendFileSync } from "node:fs";
@@ -300,11 +301,11 @@ export function isValidRepository(repository: string): boolean {
   return repository.split("/").every((part) => part !== "." && part !== "..");
 }
 
-// ワークフローの実行の一覧のJSONから、先頭の実行のcommitを取り出す。
 function invalidResponse(): BaseLookup {
   return { reason: "invalid response" };
 }
 
+// ワークフローの実行の一覧のJSONから、先頭の実行のcommitを取り出す。
 export function parseLastSuccessfulSha(json: string): BaseLookup {
   let value: unknown;
   try {
