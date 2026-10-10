@@ -616,7 +616,7 @@ export type FixRoundRequest = {
    */
   readonly contractViolated: boolean;
   /**
-   * 前のラウンドが差分も検査出力も進めておらず、停滞の判定を飛ばして続けたことを表す。
+   * 前のラウンドの差分か検査出力のどちらかがその前のラウンドと同じで、停滞の判定を飛ばして続けたことを表す。
    * `true`なら、上位のモデルが同じ直し方を繰り返さないよう、プロンプトでそれを伝える。
    */
   readonly previousRoundStalled: boolean;
@@ -1157,6 +1157,7 @@ export async function runImplementVerifyLoop(
       round,
       failed: evaluation.failures.map((failure) => failure.command),
       contract_violated: evaluation.contractViolated,
+      previous_round_stalled: stallSkipped,
     });
     previousDiffHash = fingerprint.treeSha;
     previousCheckHash = checkHash;

@@ -879,6 +879,7 @@ describe("implementFixPrompt", () => {
     ],
     round: 2,
     maxRounds: 5,
+    previousRoundStalled: false,
   };
 
   test("wraps the check failure output in a nonce-qualified fence", () => {
@@ -926,11 +927,6 @@ describe("implementFixPrompt", () => {
       { ...FIX_INPUT, previousRoundStalled: false },
       FIXED_UUID,
     );
-    expect(prompt).not.toContain("did not make progress");
-  });
-
-  test("omits the no-progress note when the stall flag is absent", () => {
-    const prompt = implementFixPrompt(FIX_INPUT, FIXED_UUID);
     expect(prompt).not.toContain("did not make progress");
   });
 
