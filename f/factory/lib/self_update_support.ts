@@ -341,3 +341,34 @@ export function buildNpmCiArgv(rawAppDir: string): string[] {
     "--ignore-scripts",
   ];
 }
+
+/**
+ * `self_update`が、上限を持たないSDKとDBの呼び出し(変数の取得と更新、stateの読み書き、
+ * DBへの記録、Discordへの通知)1回に許す時間(ミリ秒)。
+ * ジョブ全体の`timeout`は、子プロセスの実行中に当たると子が残りうる最後の砦なので、
+ * 通常はこの上限で先に終わらせる。
+ */
+export const SELF_UPDATE_CALL_TIMEOUT_MS = 30_000;
+
+/**
+ * `work`が`timeoutMs`以内に終わらなければ、例外を投げる。
+ * `work`自体は中断しないので、副作用が後から完了することはありうる。
+ * `label`は例外の文に入る。秘密値を含めてはならない。
+ */
+export async function withCallTimeout<T>(
+  label: string,
+  work: () => Promise<T>,
+  timeoutMs: number = SELF_UPDATE_CALL_TIMEOUT_MS,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${String(timeoutMs)}ms`));
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([work(), expired]);
+  } finally {
+    clearTimeout(timer);
+  }
+}

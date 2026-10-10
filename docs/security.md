@@ -276,6 +276,23 @@ Console用のworker(`windmill_worker_console`)は、Consoleの問い合わせと
 - ホストで動かすmiseのタスク(`mise run push`、`mise run deploy`など)も、`npm ci --ignore-scripts`とこの環境変数を使う。
 - raw appの`package-lock.json`には、install scriptを要する依存(`hasInstallScript`)が無い。そのような依存を足すと、コントラクトテスト(`tests/lib/self_update_support.test.ts`)が落ちる。足す前に、install scriptなしで組み立てが通るかを確かめる。
 
+## 自己更新の打ち切り
+
+`self_update`のジョブには、全体の上限がある。
+値と内訳は[アーキテクチャ](architecture.md)の「自己更新」にある。
+通常は、各コマンドの上限と、区切ったSDK・DBの呼び出しの上限(30秒)で先に終わる。
+全体の上限は、それでも止まったときの最後の砦である。
+
+残るリスクは次のとおりである。
+
+- Windmillが全体の上限でジョブを打ち切るときに、子プロセスが止まるかを確かめていない。
+  子(`npm ci`、`wmill sync push`、`wmill datatable migrate up`、git)は別のセッションで起動する。
+  子の上限はworkerの中のタイマーなので、ジョブごと止まると子は上限なしで残りうる。
+- 残った`wmill sync push`が、次の回が更新する作業ツリーを読み続けると、新旧の混ざった内容をpushしうる。作業ツリーのロックは、cloneの更新の間しか取らず、pushの間は守らない。
+- 残った`wmill datatable migrate up`が、次の回の同じ処理と並行しうる。
+- 打ち切りが子の実行中に当たるのは、内側の上限が働く前に全体の上限に達したときだけである。区切った呼び出しが30秒で終わるので、通常は当たらない。
+- 残ったプロセスの見つけ方と、打ち切りが子を止めるかの確かめ方は[運用](operations.md)の「自己更新の打ち切りを確かめる」にある。
+
 ## Claude Codeの拒否ルール
 
 `.claude/settings.json`の`deny`は、誤操作を防ぐためのもので、秘匿性を保証しない。設定ファイルを読めば、ルールは誰でも確かめられる。秘匿性は、値をコミットしないこと(`mise.local.toml`はgitignore済み)と、値をWindmillのsecret変数に置くことで保つ。

@@ -708,20 +708,107 @@ Consoleが止まっていてもDiscordには届くので、通知の確認先は
 
 ### 自己更新の打ち切りを確かめる
 
-`self_update`のジョブには、全体の上限(1800秒)がある。
+`self_update`のジョブには、全体の上限(2400秒)がある。
 値の内訳は[アーキテクチャ](architecture.md)の「自己更新」に書く。
+通常は、各コマンドと、区切った呼び出し(1回30秒)の上限で先に終わる。
+全体の上限は、それでも止まったときの最後の砦である。
+
 上限で打ち切られた回は、最後に行うConsole用のworkerの確認が走らない。
-打ち切りが続くと、自己更新の反映もworkerの停止の検知も止まるので、通知`schedule_failing`で気づく。
+打ち切られるまでの最大40分は、10分ごとの次の3回が飛ばされる。
+この間は、自己更新の反映とConsole用のworkerの停止の検知が止まる。
 
-打ち切りの記録の形は、実機で確かめる。
-`canceled_by`が`timeout`でなければ、打ち切られた回が失敗として数えられず、通知が出ない。
+気づく経路は2つある。
 
-1. `self_update`の上限を一時的に短くして、打ち切られる状態を作る。
-2. `wmill job list --script-path f/factory/self_update`で打ち切られた回を見つける。
+- `on_error_schedule`が時間切れでも呼ばれるなら、打ち切りのたびにDiscordの`job_failed`が届く。これが主な経路である。
+- 打ち切りが3回続くと、通知`schedule_failing`が残る。補助の経路である。
+
+どちらも、次の2点を実機で確かめるまでは、頼れる経路とみなさない。
+確かめていなければ、自己更新が止まっても気づけない。
+
+- 時間切れの取り消しが、ジョブ履歴で`canceled_by`が`timeout`になること。違う値なら、打ち切られた回が失敗として数えられず、`schedule_failing`が出ない。
+- `on_error_schedule`が、打ち切られた回でも呼ばれること。呼ばれなければ、`job_failed`と`schedule_failing`のどちらも出ない。
+
+確かめる手順は次のとおりである。
+自己更新は本番のスケジュールなので、他の作業が少ない時間に行う。
+
+1. workerで、self cloneのロックファイルを作る。
+   ロックを待つ間は子プロセスが動かないので、打ち切りが子に当たらず、必ず時間切れになる。
+
+   ```bash
+   mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker touch /workspaces/factory/atelier-works.lock
+   ```
+
+2. `f/factory/self_update.script.yaml`の`timeout`を60に書き換え、`mise run push`で反映する。
+   自己更新が本番の内容で`wmill sync push`を行うと値が戻るので、手順の間はmainに他の変更を入れない。
+3. スケジュールの実行(10分ごと)を待つ。
+   手動の実行では`on_error_schedule`が呼ばれないので、手動では確かめられない。
+4. `wmill job list --script-path f/factory/self_update`で打ち切られた回を見つける。
    `wmill job get <id>`で`canceled`、`canceled_by`、`canceled_reason`を読む。
-3. `canceled_by`が`timeout`であることを見る。違う値なら、`f/factory/lib/schedule_failing.ts`の判定を、読んだ値に合わせて直す。
-4. `on_error_schedule`が、打ち切られた回でも呼ばれたことをジョブ履歴で見る。
-   呼ばれなければ、打ち切りが続いても通知は出ない。
+   `canceled_by`が`timeout`であることを見る。
+   違う値なら、`f/factory/lib/schedule_failing.ts`の判定を、読んだ値に合わせて直す。
+5. Discordに`job_failed`が届いたことを見る。
+   `on_error_schedule`のジョブが、打ち切られた回の直後にあることも見る。
+6. 通知`schedule_failing`まで見るなら、打ち切りが3回続くまで待つ。
+   ロックファイルは、更新から10分以上経つと他の実行が古いものとして消す。
+   そのため、実行のたびに手順1の`touch`をやり直す。
+7. 終わったら、`timeout`を2400に戻して`mise run push`で反映する。
+   ロックファイルも消す。
+
+   ```bash
+   mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker rm -f /workspaces/factory/atelier-works.lock
+   ```
+
+### 打ち切りで残ったプロセスを確かめる
+
+Windmillの打ち切りが子プロセスを止めるかは、実機で確かめる。
+止めなければ、子の実行中に打ち切られたとき、`npm ci`や`wmill sync push`などが上限なしで残る。
+残った`wmill sync push`は次の回の作業ツリーを読み続け、`wmill datatable migrate up`は次の回と並行しうる。
+リスクは[セキュリティ](security.md)の「自己更新の打ち切り」に書く。
+
+打ち切られた回の後は、workerで残ったプロセスを探す。
+
+```bash
+mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker ps -eo pid,pgid,etime,args
+```
+
+出力から`wmill`、`npm`、`git`を探し、経過時間(`etime`)が打ち切りより長いものがあれば残っている。
+内容を確かめてから、`kill <pid>`で止める。
+
+打ち切りが子を止めるかを確かめるには、使い捨てのscriptを使う。
+
+1. 自分のフォルダ(`u/<user>/`)に、子プロセスを別のセッションで起動して待ち続けるscriptを作る。
+   子は`sleep 600`でよい。
+2. scriptの`timeout`を10にして、`wmill script run`で実行する。
+3. 打ち切られた後に、上の`ps`で`sleep 600`が残っているかを見る。
+   残っていれば、Windmillの打ち切りは子を止めない。
+4. 確かめたら、残った`sleep`を`kill`で止め、scriptを消す。
+
+### 打ち切られた回の記録を確かめる
+
+打ち切られた回は`factory.deployments`に記録が残らない。
+成功と失敗のどちらの記録も、更新の最後のほうで書くためである。
+
+`wmill sync push`と`wmill datatable migrate up`が済み、`deployed_sha`を更新した後で、記録の前に打ち切られることがある。
+このときは、その版の反映が済んでいるのに`deployments`に行が無い。
+次の回は、`deployed_sha`がself cloneのHEADと同じなので、何もせずに終わる。欠けた記録は補われない。
+
+見分けるには、次の3つを見比べる。
+
+- `deployed_sha`の値。Windmillの画面で変数`f/factory/deployed_sha`を開いて読む。
+- self cloneのHEAD。
+- `deployments`の最新の行の`sha_to`。
+
+self cloneのHEADは、次のコマンドで読む。
+
+```bash
+mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker git -C /workspaces/factory/atelier-works rev-parse HEAD
+```
+
+`deployed_sha`とHEADが違えば、反映が済んでいないか、打ち切りが`deployed_sha`の更新より前に当たっている。
+通知`deployed_sha_mismatch`が残り、次の回が反映をやり直す。
+`deployed_sha`とHEADが同じで、`deployments`の最新の`sha_to`だけが違えば、その版の記録が欠けている。
+`wmill job list --script-path f/factory/self_update`で、打ち切られた回の時刻が、その版の反映の時刻と合うかを確かめる。
+欠けた記録は監査の「デプロイ」に出ないので、必要なら人が補う。
 
 ### 通知を解決する
 

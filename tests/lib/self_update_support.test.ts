@@ -11,7 +11,9 @@ import {
   parseNulSeparatedPaths,
   RAW_APP_RELATIVE_DIR,
   resolveWmillCliContext,
+  SELF_UPDATE_CALL_TIMEOUT_MS,
   truncateOutput,
+  withCallTimeout,
 } from "../../f/factory/lib/self_update_support.ts";
 
 describe("decideUpdate", () => {
@@ -417,5 +419,51 @@ describe("extractMiseHostSections", () => {
     expect(extractMiseHostSections(MISE_BASE)).toBe(
       'tools:bun = "1.4.2"\nenv:WM_VERSION = "1.817.0"',
     );
+  });
+});
+
+describe("withCallTimeout", () => {
+  test("returns the value of work that finishes in time", async () => {
+    const result = await withCallTimeout("call", async () => 42, 50);
+
+    expect(result).toBe(42);
+  });
+
+  test("rejects with the label when work does not finish in time", async () => {
+    const pending = withCallTimeout(
+      "getVariable",
+      () => new Promise<never>(() => {}),
+      10,
+    );
+
+    await expect(pending).rejects.toThrow("getVariable timed out after 10ms");
+  });
+
+  test("passes through the error of work that fails in time", async () => {
+    const pending = withCallTimeout(
+      "call",
+      async () => {
+        throw new Error("boom");
+      },
+      50,
+    );
+
+    await expect(pending).rejects.toThrow("boom");
+  });
+
+  test("turns a synchronous throw of work into a rejection", async () => {
+    const pending = withCallTimeout(
+      "call",
+      () => {
+        throw new Error("sync boom");
+      },
+      50,
+    );
+
+    await expect(pending).rejects.toThrow("sync boom");
+  });
+
+  test("uses SELF_UPDATE_CALL_TIMEOUT_MS by default", () => {
+    expect(SELF_UPDATE_CALL_TIMEOUT_MS).toBe(30_000);
   });
 });

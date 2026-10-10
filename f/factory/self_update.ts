@@ -8,19 +8,21 @@
 // つなぐだけ。`infra/`と`mise.toml`の変更は次の`mise run up`で反映されるため、
 // 通知はせずログと`deployments`の記録だけを残す。
 //
-// ジョブ全体の上限は`self_update.script.yaml`の`timeout`(1800秒)である。
-// 各段の上限の合計に、正常な実行を切らない余裕を足した値にしている。
-// - cloneのロック待ち: 300秒(`withRepoLock`の既定)
-// - git: 9回 × 60秒(`runCommand`の既定) = 540秒。
-//   cloneの更新で4回(fetch、reset、show-ref、checkout)、HEADとブランチの確認で2回、
-//   変更パスの列挙で1回、`mise.toml`の比較で最大2回
-// - `npm ci`、`wmill sync push`、`wmill datatable migrate up`: 各300秒 = 900秒
-// - finallyのConsole用workerの確認: `CONSOLE_WORKER_CHECK_TIMEOUT_MS`の10秒
-// 合計は1750秒で、残りの50秒は、タイムアウトした子プロセスの停止の猶予
-// (`RUNNER_MAX_STOP_OVERHEAD_MS`)と、変数とDBの呼び出しに充てる。
-// 上限が無い呼び出し(`wmill.getVariable`・`setVariable`、DBの記録)が止まると、
-// ジョブが終わらず、`no_flow_overlap`で次の回も飛ばされ続けるため、全体にも上限を置く。
-// 時間切れで打ち切られた回は、finallyのConsole用workerの確認が走らない。
+// ジョブ全体の上限は`self_update.script.yaml`の`timeout`で、`SELF_UPDATE_WORST_CASE_MS`以上にする。
+// 計算は次のとおり。
+// - cloneのロック待ち: 300秒と、確かめる間隔0.2秒
+// - git 9回: 各60秒(`runCommand`の既定)と、停止の上乗せ13秒(`RUNNER_MAX_STOP_OVERHEAD_MS`)
+//   9回の内訳は`SELF_UPDATE_GIT_COMMAND_COUNT`のコメントにある
+// - `npm ci`、`wmill sync push`、`wmill datatable migrate up`: 各300秒と、停止の上乗せ13秒
+// - 区切った呼び出し12回: 各30秒(`SELF_UPDATE_CALL_TIMEOUT_MS`)。呼び出しは`SELF_UPDATE_BOUNDED_CALL_COUNT`のコメントにある
+// - finallyのConsole用workerの確認: 10秒
+// 合計は2266.2秒で、余裕を足して2400秒にしている。
+//
+// この上限はWindmillが外から打ち切る最後の砦である。`runCommand`は子を別のセッションで起動し、
+// 子の上限はこのプロセスの中のタイマーなので、子の実行中に打ち切られると子が残りうる。
+// そのため、上限の無い呼び出し(`wmill.getResource`・`getVariable`・`setVariable`・state、DBの記録、通知)も
+// `withCallTimeout`で区切り、通常は内側の上限で先に終わらせる。
+// 時間切れで打ち切られた回は、finallyのConsole用workerの確認が走らず、`deployments`にも記録が残らない。
 // `on_error_schedule`は、打ち切られた回を失敗の連続の判定で失敗として数える。
 //
 // `f/factory/deployed_sha`(秘密でないWindmillの変数)はsyncの対象から
@@ -30,6 +32,7 @@
 import wmillDefault, * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "./lib/config.ts";
 import {
+  CONSOLE_WORKER_CHECK_TIMEOUT_MS,
   consoleQueueQuery,
   watchConsoleWorker,
   watchRunsQuery,
@@ -49,14 +52,20 @@ import {
   parseNulSeparatedPaths,
   RAW_APP_RELATIVE_DIR,
   resolveWmillCliContext,
+  SELF_UPDATE_CALL_TIMEOUT_MS,
   truncateOutput,
+  withCallTimeout,
 } from "./lib/self_update_support.ts";
 import { assertSha } from "./lib/types.ts";
 import {
   type CommandResult,
   type CommandRunner,
+  DEFAULT_TIMEOUT_MS,
   ensureFactoryClone,
   pathExists,
+  REPO_LOCK_MAX_WAIT_MS,
+  REPO_LOCK_POLL_MS,
+  RUNNER_MAX_STOP_OVERHEAD_MS,
   runCommand,
 } from "./lib/workspace.ts";
 
@@ -262,7 +271,7 @@ async function resolveChangedPaths(
 // `wmill` CLIの子プロセスの実行
 // ---------------------------------------------------------------------------
 
-const WMILL_CLI_TIMEOUT_MS = 5 * 60_000;
+export const WMILL_CLI_TIMEOUT_MS = 5 * 60_000;
 const LOG_OUTPUT_MAX = 4000;
 
 function logCommandOutput(
@@ -313,6 +322,51 @@ async function runWmillCli(
 }
 
 // ---------------------------------------------------------------------------
+// ジョブ全体の上限の見積もり
+// ---------------------------------------------------------------------------
+
+/**
+ * 1回の実行で走るgitの最大回数。
+ * cloneの更新で4回(fetch、reset、show-ref、checkout)、HEADとブランチの確認で2回、
+ * 変更パスの列挙で1回、`mise.toml`の比較(`git show`)で最大2回。
+ * `git show`は時間切れでも失敗として続くので、最大回数まで走りうる。
+ */
+export const SELF_UPDATE_GIT_COMMAND_COUNT = 9;
+
+/** 1回の実行で走る`npm ci`、`wmill sync push`、`wmill datatable migrate up`の回数。 */
+export const SELF_UPDATE_CLI_COMMAND_COUNT = 3;
+
+/**
+ * 1回の実行で通りうる、`withCallTimeout`で区切った呼び出しの最大回数。
+ * - config(`getResource`): 1
+ * - 更新: github_token、deployed_sha、wmill_token、`setVariable`、`recordDeployment`の成功、
+ *   `recordDeployment`の失敗(成功の記録が時間切れになり、失敗側へ進む場合): 6
+ * - finally: stateの読み、stateの書き、noticeの挿入、通知先の取得、通知の送信: 5
+ */
+export const SELF_UPDATE_BOUNDED_CALL_COUNT = 12;
+
+/**
+ * 全部が最悪のときの、1回の実行の長さ(ミリ秒)。`self_update.script.yaml`の`timeout`は、これ以上にする。
+ * ジョブの`timeout`はWindmillが外から打ち切る最後の砦で、子プロセスの実行中に当たると、
+ * 子が上限なしで残りうる(`runCommand`は子を別のセッションで起動する)。
+ * そのため通常は、各コマンドとSDKとDBの呼び出しの内側の上限で先に終わるようにする。
+ * - cloneのロック待ち(最大の待ちと、確かめる間隔1回)
+ * - コマンド: 上限に、停止の上乗せ(`RUNNER_MAX_STOP_OVERHEAD_MS`: 時間切れ後のSIGKILLまでの猶予、
+ *   終了後のグループの停止、出力の読み取り待ち)を足した時間の、回数分
+ * - 区切った呼び出し: 上限の回数分
+ * - finallyのConsole用workerの確認
+ */
+export const SELF_UPDATE_WORST_CASE_MS =
+  REPO_LOCK_MAX_WAIT_MS +
+  REPO_LOCK_POLL_MS +
+  SELF_UPDATE_GIT_COMMAND_COUNT *
+    (DEFAULT_TIMEOUT_MS + RUNNER_MAX_STOP_OVERHEAD_MS) +
+  SELF_UPDATE_CLI_COMMAND_COUNT *
+    (WMILL_CLI_TIMEOUT_MS + RUNNER_MAX_STOP_OVERHEAD_MS) +
+  SELF_UPDATE_BOUNDED_CALL_COUNT * SELF_UPDATE_CALL_TIMEOUT_MS +
+  CONSOLE_WORKER_CHECK_TIMEOUT_MS;
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -335,7 +389,9 @@ type FactoryConfig = Awaited<ReturnType<typeof loadConfig>>;
 export async function main(): Promise<SelfUpdateResult> {
   const log = logger("self_update");
   const config = await loadConfig(() =>
-    wmill.getResource("f/factory/factory_config"),
+    withCallTimeout("getResource factory_config", () =>
+      wmill.getResource("f/factory/factory_config"),
+    ),
   );
   try {
     return await updateSelf(log, config);
@@ -351,15 +407,19 @@ export async function main(): Promise<SelfUpdateResult> {
           watchRunsQuery(wmillDefault.getWorkspace()),
         ),
       now: () => Date.now(),
-      addNotice: (record) => addNoticeUnlessUnresolved(record),
+      addNotice: (record) =>
+        withCallTimeout("addNotice", () => addNoticeUnlessUnresolved(record)),
       notify: async (event) => {
-        const webhookUrl = await wmill.getVariable(
-          "f/factory/discord_webhook_url",
+        const webhookUrl = await withCallTimeout("getVariable webhook", () =>
+          wmill.getVariable("f/factory/discord_webhook_url"),
         );
-        await notifyBestEffort(webhookUrl, event, log);
+        await withCallTimeout("notify", () =>
+          notifyBestEffort(webhookUrl, event, log),
+        );
       },
-      getState: () => wmill.getState(),
-      setState: (state) => wmill.setState(state),
+      getState: () => withCallTimeout("getState", () => wmill.getState()),
+      setState: (state) =>
+        withCallTimeout("setState", () => wmill.setState(state)),
       instanceName: config.instance_name,
       log,
     });
@@ -370,7 +430,9 @@ async function updateSelf(
   log: Logger,
   config: FactoryConfig,
 ): Promise<SelfUpdateResult> {
-  const ghToken = await wmill.getVariable("f/factory/github_token");
+  const ghToken = await withCallTimeout("getVariable github_token", () =>
+    wmill.getVariable("f/factory/github_token"),
+  );
 
   const factoryClone = await ensureFactoryClone({
     run: runCommand,
@@ -388,9 +450,11 @@ async function updateSelf(
 
   let deployedSha = "";
   try {
-    deployedSha = await wmill.getVariable("f/factory/deployed_sha");
+    deployedSha = await withCallTimeout("getVariable deployed_sha", () =>
+      wmill.getVariable("f/factory/deployed_sha"),
+    );
   } catch {
-    deployedSha = ""; // 変数がまだ無いときは、未デプロイとして扱う。
+    deployedSha = ""; // 変数がまだ無いときと取得が時間切れのときは、未デプロイとして扱う。
   }
 
   const decision = decideUpdate(currentSha, deployedSha);
@@ -409,7 +473,9 @@ async function updateSelf(
   let secrets: string[] = [];
 
   try {
-    const wmillToken = await wmill.getVariable("f/factory/wmill_token");
+    const wmillToken = await withCallTimeout("getVariable wmill_token", () =>
+      wmill.getVariable("f/factory/wmill_token"),
+    );
     secrets = [wmillToken];
     const context = resolveWmillCliContext({
       BASE_INTERNAL_URL: process.env.BASE_INTERNAL_URL,
@@ -464,11 +530,13 @@ async function updateSelf(
       secrets,
     );
 
-    await wmill.setVariable(
-      "f/factory/deployed_sha",
-      currentSha,
-      false,
-      "Software Factory自身のうち、直近でWindmillに反映済みのコミットです。自己更新処理が自動的に更新します。",
+    await withCallTimeout("setVariable deployed_sha", () =>
+      wmill.setVariable(
+        "f/factory/deployed_sha",
+        currentSha,
+        false,
+        "Software Factory自身のうち、直近でWindmillに反映済みのコミットです。自己更新処理が自動的に更新します。",
+      ),
     );
 
     const changedPaths = await resolveChangedPaths(
@@ -497,13 +565,15 @@ async function updateSelf(
     }
 
     const shaFrom = deployedSha.length > 0 ? deployedSha : null;
-    await recordDeployment({
-      sha_from: shaFrom,
-      sha_to: currentSha,
-      changed_paths: changedPaths,
-      result: "success",
-      needs_host_action: classification.needs_host_action,
-    });
+    await withCallTimeout("recordDeployment success", () =>
+      recordDeployment({
+        sha_from: shaFrom,
+        sha_to: currentSha,
+        changed_paths: changedPaths,
+        result: "success",
+        needs_host_action: classification.needs_host_action,
+      }),
+    );
 
     return {
       outcome: "updated",
@@ -518,13 +588,15 @@ async function updateSelf(
     );
     log.error("self_update failed", { error: message });
     try {
-      await recordDeployment({
-        sha_from: deployedSha.length > 0 ? deployedSha : null,
-        sha_to: currentSha,
-        changed_paths: [],
-        result: "failed",
-        needs_host_action: false,
-      });
+      await withCallTimeout("recordDeployment failed", () =>
+        recordDeployment({
+          sha_from: deployedSha.length > 0 ? deployedSha : null,
+          sha_to: currentSha,
+          changed_paths: [],
+          result: "failed",
+          needs_host_action: false,
+        }),
+      );
     } catch (recordErr) {
       log.error("failed to record deployment", {
         error: maskSecrets(
