@@ -171,7 +171,7 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加だけにし、
 | `requirement_drafts` | 要件定義ドラフト。attemptごとに本文、図の参照、未確定事項、ファイルの置き場所(`doc_dir`)を持つ |
 | `approval_requests` | 承認依頼。要件定義の承認とIssue化の提案の承認の両方を持つ |
 | `approvals` | 承認と却下の古い履歴。今は書き込まない |
-| `agent_runs` | Claudeの実行1回ごとのトークン数、費用、所要時間、終了コード |
+| `agent_runs` | Claudeの実行1回ごとのモデル、トークン数、費用、所要時間、終了コード |
 | `job_failures` | フローの失敗の記録。トークンはマスクしてから書く |
 | `deployments` | 自己更新によるデプロイの結果 |
 | `notices` | 人が対応すべき事項。PATの失効やSHAの不一致など。解決した人と時刻(`resolved_by`、`resolved_at`)も持ち、DBの掃除が解決した行の`resolved_by`は`cleanup_db`になる |
@@ -337,6 +337,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/implement_loop` | script | [LIB] 実装フローの検証ループ |
 | `f/factory/lib/implement_support` | script | [LIB] 実装フローの純粋関数群 |
 | `f/factory/lib/implement_launch_support` | script | [LIB] 実装フローの起動判定 |
+| `f/factory/lib/model_policy` | script | [LIB] 工程ごとのモデルの選択 |
 | `f/factory/lib/supersede_support` | script | [LIB] 承認の取り消しのコメント |
 | `f/factory/lib/approval_support` | script | [LIB] 承認依頼の純粋ロジック |
 | `f/factory/lib/approver` | script | [LIB] 承認者の導出 |

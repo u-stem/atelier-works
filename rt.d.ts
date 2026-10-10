@@ -5,6 +5,7 @@ declare namespace RT {
 
   type CFactoryConfig = {
     model: string,
+    heavy_model: string,
     owners: object[],
     fix_label: string,
     max_turns: number,

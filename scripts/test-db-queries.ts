@@ -10,6 +10,8 @@ import {
 } from "../f/factory/lib/console_support.ts";
 import {
   addNotice,
+  countImplementFailedRounds,
+  countPrFixFailures,
   deleteResolvedNoticesBefore,
   getNoticeById,
   insertCleanupRun,
@@ -449,6 +451,174 @@ check(
     prDetail.fix_rounds[0]?.trigger_review_count === 1,
   prDetail.fix_rounds,
 );
+
+// ---------------------------------------------------------------------------
+// モデルの昇格に使う失敗の数
+// ---------------------------------------------------------------------------
+
+// failedAのラウンド: 試行2のdone、試行1のcheck_failed。試行1にstalledとerrorを足す。
+execPsql(
+  target,
+  `INSERT INTO factory.implement_rounds (work_item_id, attempt, round, mode, outcome) VALUES (${String(failedA)}, 1, 3, 'fix', 'stalled'), (${String(failedA)}, 1, 4, 'fix', 'error'), (${String(failedA)}, 1, 5, 'fix', 'requirements_gap'), (${String(failedA)}, 1, 6, 'fix', 'checks_skipped')`,
+);
+check(
+  "countImplementFailedRounds: check_failed, stalled and error of the attempt are counted",
+  (await countImplementFailedRounds(failedA, 1, sql)) === 3,
+  await countImplementFailedRounds(failedA, 1, sql),
+);
+check(
+  "countImplementFailedRounds: another attempt is not counted",
+  (await countImplementFailedRounds(failedA, 2, sql)) === 0,
+);
+
+async function prFixItem(pr: number): Promise<number> {
+  return insertWorkItem(
+    {
+      cycle: 1,
+      source: "issue",
+      kind: "pr_fix",
+      owner: OWNER,
+      repo: "r",
+      issue_number: null,
+      issue_url: null,
+      pr_number: pr,
+      title: "qdb pr fix",
+      body: null,
+      status: "needs_human",
+      attempt: 1,
+      claimed_by: null,
+      flow_job_id: null,
+      resume_url: null,
+      cancel_url: null,
+      head_sha: "abc1234",
+      parent_work_item_id: null,
+    },
+    sql,
+  );
+}
+/** `secondsAgo`秒前の時刻を表すSQLの式を返す。数え方は実行とラウンドの前後で変わるため。 */
+function secondsAgo(seconds: number): string {
+  return `now() - interval '${String(seconds)} seconds'`;
+}
+
+/** `agent_runs`に入れる1行のVALUESを返す。 */
+function runRow(
+  workItemId: number,
+  stage: "pr_fix" | "pr_fix_verify_retry",
+  ago: number,
+  error: string | null,
+): string {
+  const errorValue = error === null ? "NULL" : `'${error}'`;
+  return `(${String(workItemId)}, '${stage}', 1, 'm', ${errorValue}, ${secondsAgo(ago)})`;
+}
+
+/** `fix_rounds`に入れる1行のVALUESを返す。 */
+function roundRow(
+  workItemId: number,
+  outcome: "done" | "blocked",
+  ago: number,
+): string {
+  return `(${String(workItemId)}, 1, '${outcome}', ${secondsAgo(ago)})`;
+}
+
+// 1つのPRに1つの経路を置き、経路ごとに数を確かめる。
+// 別の実行の行は、flowの再試行の待ち(60秒)より離して置く。
+const fixA = await prFixItem(88);
+const fixB = await prFixItem(88);
+const fixOtherPr = await prFixItem(89);
+// fixA: Claudeが動いて、blockedで終わり、検査の再実行が2行あった(blockedの1回と再実行の1回で2回)。
+// fixB: Claudeが動かずにblockedで終わった(数えない)。
+// fixOtherPr: 別のPRのblocked(PR 88には数えない)。
+const applyTimeouts = await prFixItem(90);
+// applyがタイムアウトし、flowの再試行でも2回失敗した(3回)。
+const failedAfterBlocked = await prFixItem(91);
+// Claudeがblockedを返した後、retry_work_itemの再実行がタイムアウトした(blockedの1回と失敗の1回で2回)。
+const verifyRetryFailed = await prFixItem(92);
+// 検査が通らず、再実行が失敗してblockedで終わった(blockedの1回と再実行の1回で2回。再実行の失敗は重ねない)。
+const timeoutThenBlocked = await prFixItem(93);
+// applyがタイムアウトし、flowの再試行でClaudeがblockedを返した(失敗の1回とblockedの1回で2回)。
+const outputRetried = await prFixItem(94);
+// 不正な出力を1回返し、再試行で直してdoneで終わった(捨てた行は数えないので0回)。
+const outputRetryFailed = await prFixItem(95);
+// 不正な出力の再試行でも失敗した(1回のrunClaudeなので1回)。
+const failedBeforeDone = await prFixItem(96);
+// applyがタイムアウトし、flowの再試行でdoneで終わった(1回)。
+execPsql(
+  target,
+  `INSERT INTO factory.agent_runs (work_item_id, stage, attempt, model, error, created_at) VALUES ${[
+    runRow(fixA, "pr_fix", 900, null),
+    runRow(fixA, "pr_fix_verify_retry", 800, null),
+    runRow(fixA, "pr_fix_verify_retry", 799, null),
+    runRow(fixOtherPr, "pr_fix", 900, null),
+    runRow(applyTimeouts, "pr_fix", 900, "timeout"),
+    runRow(applyTimeouts, "pr_fix", 700, "timeout"),
+    runRow(applyTimeouts, "pr_fix", 500, "timeout"),
+    runRow(failedAfterBlocked, "pr_fix", 900, null),
+    runRow(failedAfterBlocked, "pr_fix", 500, "timeout"),
+    runRow(verifyRetryFailed, "pr_fix", 900, null),
+    runRow(
+      verifyRetryFailed,
+      "pr_fix_verify_retry",
+      800,
+      "claude reported an error",
+    ),
+    runRow(timeoutThenBlocked, "pr_fix", 900, "timeout"),
+    runRow(timeoutThenBlocked, "pr_fix", 700, null),
+    runRow(outputRetried, "pr_fix", 901, "structured_output does not match"),
+    runRow(outputRetried, "pr_fix", 900, null),
+    runRow(
+      outputRetryFailed,
+      "pr_fix",
+      901,
+      "structured_output does not match",
+    ),
+    runRow(
+      outputRetryFailed,
+      "pr_fix",
+      900,
+      "structured_output does not match",
+    ),
+    runRow(failedBeforeDone, "pr_fix", 900, "timeout"),
+    runRow(failedBeforeDone, "pr_fix", 700, null),
+  ].join(", ")}`,
+);
+execPsql(
+  target,
+  `INSERT INTO factory.fix_rounds (work_item_id, round, outcome, created_at) VALUES ${[
+    roundRow(fixA, "blocked", 790),
+    roundRow(fixB, "blocked", 600),
+    roundRow(fixOtherPr, "blocked", 890),
+    roundRow(failedAfterBlocked, "blocked", 890),
+    roundRow(verifyRetryFailed, "blocked", 790),
+    roundRow(timeoutThenBlocked, "blocked", 690),
+    roundRow(outputRetried, "done", 890),
+    roundRow(failedBeforeDone, "done", 690),
+  ].join(", ")}`,
+);
+
+const prFixExpectations: readonly (readonly [string, number, number])[] = [
+  ["blocked rounds and verify retries of the same PR are counted", fixB, 2],
+  ["another PR is counted separately", fixOtherPr, 1],
+  ["every failed apply of flow retries is counted", applyTimeouts, 3],
+  ["a failure after a blocked round is counted", failedAfterBlocked, 2],
+  [
+    "a failed verify retry that ended blocked is counted once",
+    verifyRetryFailed,
+    2,
+  ],
+  [
+    "a failure before the run that ended blocked is counted",
+    timeoutThenBlocked,
+    2,
+  ],
+  ["the discarded attempt of an output retry is not counted", outputRetried, 0],
+  ["a failed output retry is counted once", outputRetryFailed, 1],
+  ["a failure before a done round is counted", failedBeforeDone, 1],
+];
+for (const [name, workItemId, expected] of prFixExpectations) {
+  const actual = await countPrFixFailures(workItemId, sql);
+  check(`countPrFixFailures: ${name}`, actual === expected, actual);
+}
 
 // ---------------------------------------------------------------------------
 // 通知の解決

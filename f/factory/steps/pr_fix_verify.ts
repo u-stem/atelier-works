@@ -11,9 +11,15 @@ import {
   runClaude,
 } from "../lib/claude.ts";
 import { loadConfig } from "../lib/config.ts";
-import { addNotice, latestDraft, recordAgentRun } from "../lib/db.ts";
+import {
+  addNotice,
+  countPrFixFailures,
+  latestDraft,
+  recordAgentRun,
+} from "../lib/db.ts";
 import { type GhClient, getPr } from "../lib/github.ts";
 import { escapeReasonSeparator, logger } from "../lib/log.ts";
+import { prFixRetryModel } from "../lib/model_policy.ts";
 import {
   lockJobIdFromEnv,
   withWorktreeProcessLock,
@@ -405,12 +411,13 @@ export async function main(
           factoryCloneDir: factory_clone_dir,
         });
         try {
+          const sonnetFailures = await countPrFixFailures(work_item_id);
           const retryResult = await runClaude({
             run: lockedRun,
             workItemId: work_item_id,
             stage: "pr_fix_verify_retry",
             attempt,
-            model: config.model,
+            model: prFixRetryModel(config, sonnetFailures),
             prompt: retryPrompt,
             appendSystemPromptFile: systemPrompt.path,
             jsonSchema: FIX_SCHEMA,

@@ -11,6 +11,7 @@ import {
 import { implementCheckCommandsFor, loadConfig } from "../lib/config.ts";
 import {
   addNotice,
+  countImplementFailedRounds,
   getWorkItem,
   insertImplementRound,
   recordAgentRun,
@@ -38,6 +39,7 @@ import {
   requireDeadlineAt,
 } from "../lib/implement_support.ts";
 import { logger } from "../lib/log.ts";
+import { modelChangesAfterFailure } from "../lib/model_policy.ts";
 import {
   withWorktreeProcessLock,
   worktreeLockFor,
@@ -203,43 +205,59 @@ export async function main(
             commands,
             config.implement_check_timeout_sec * 1000,
           ),
-        runFixRound: (request) =>
-          withReadOnlyDocDirCopy(context.requirements_doc_dir, (docDir) =>
-            runImplementClaudeRound(
-              { runClaude, recordAgentRun },
-              {
-                run: lockedRun,
-                config,
-                workItemId: work_item_id,
-                attempt: context.attempt,
-                stage: "implement_fix",
-                prompt: implementFixPrompt({
-                  ...implementPromptInput(context, docDir),
-                  checkFailures: request.failures,
-                  round: request.round,
-                  maxRounds: config.implement_max_rounds,
-                  ...(request.contractViolated
-                    ? { outputContractNote: IMPLEMENT_OUTPUT_CONTRACT_NOTE }
-                    : {}),
-                }),
-                systemPromptPath: systemPrompt.path,
-                worktreeDir,
-                docDir,
-                oauthToken,
-                deadlineAt,
-                beforeRetry: () =>
-                  worktreeGitPointerMatches(
-                    worktreeDir,
-                    context.worktree_git_pointer,
-                  ),
-              },
-            ),
-          ),
+        runFixRound: async (request) => {
+          // 直前のラウンドは記録済みなので、その失敗も数に入る。
+          const sonnetFailures = await countImplementFailedRounds(
+            work_item_id,
+            context.attempt,
+          );
+          return withReadOnlyDocDirCopy(
+            context.requirements_doc_dir,
+            (docDir) =>
+              runImplementClaudeRound(
+                { runClaude, recordAgentRun },
+                {
+                  run: lockedRun,
+                  config,
+                  workItemId: work_item_id,
+                  attempt: context.attempt,
+                  sonnetFailures,
+                  stage: "implement_fix",
+                  prompt: implementFixPrompt({
+                    ...implementPromptInput(context, docDir),
+                    checkFailures: request.failures,
+                    round: request.round,
+                    maxRounds: config.implement_max_rounds,
+                    ...(request.contractViolated
+                      ? { outputContractNote: IMPLEMENT_OUTPUT_CONTRACT_NOTE }
+                      : {}),
+                    previousRoundStalled: request.previousRoundStalled,
+                  }),
+                  systemPromptPath: systemPrompt.path,
+                  worktreeDir,
+                  docDir,
+                  oauthToken,
+                  deadlineAt,
+                  beforeRetry: () =>
+                    worktreeGitPointerMatches(
+                      worktreeDir,
+                      context.worktree_git_pointer,
+                    ),
+                },
+              ),
+          );
+        },
         recordRound: async (record) => {
           await insertImplementRound(record);
         },
         dailyBudgetExceeded: async () =>
           (await dailyBudgetStatus(config)).exceeded,
+        modelChangesAfterFailure: async () =>
+          modelChangesAfterFailure(
+            config,
+            "implement",
+            await countImplementFailedRounds(work_item_id, context.attempt),
+          ),
         holdsLease: () =>
           stillHoldsImplementLease(() => getWorkItem(work_item_id), leaseJobId),
         now: Date.now,

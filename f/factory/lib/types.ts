@@ -793,6 +793,7 @@ export type FactoryConfig = {
   trigger_label: string;
   allowed_labeler_associations: LabelerAssociation[];
   model: string;
+  heavy_model: string;
   max_attempts: number;
   max_turns: number;
   max_budget_usd_per_run: number;
