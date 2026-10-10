@@ -284,7 +284,7 @@ IssueのリンクはGitHubのIssueのURLの形のときだけ張る。
 | 要素 | 役割 |
 | --- | --- |
 | `console/` | Consoleのソースコード(Vite + React) |
-| `ci.yml`の`console`ジョブ | `console/`を組み立て、成果物`console-dist`として上げる |
+| `ci.yml`の`console`ジョブ | `console/`を組み立て、`main`へのpushのときだけ成果物`console-dist`として上げる |
 | `infra/console_fetcher/` | 成果物を検証して、名前付きボリューム`factory_console`に書く |
 | Caddy | `factory_console`を読み取り専用でマウントし、`/console/`で配信する |
 
@@ -321,6 +321,7 @@ zipは自前のreaderでメモリ上に展開する。
 - ルートと`console/`の依存は`bun install --frozen-lockfile --ignore-scripts`で入れ、依存のinstall scriptを実行しない。
 - `console/bun.lock`は`scripts/check-console-lockfile.ts`で検査する。registry由来でsha512のintegrityが付いた依存だけを許す。git、GitHub、tarballのURL、`console/`の外を指す`file:`と`link:`、`trustedDependencies`は拒む。
 - 組み立ての後、マニフェストを書く前に、draw.ioのビューアを取得して`dist/drawio/`に置く。詳細は「draw.ioの図」にある。
+- 型検査、lint、testは、このジョブでは実行しない。手元の`mise run console:check`とpre-pushが担う。保護パスを含むPRでは、`check`ジョブの`mise run check`が`console:check`を含む。
 
 ## 配信の経路
 

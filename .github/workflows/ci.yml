@@ -2,10 +2,27 @@ name: CI
 
 on:
   push:
+    # `main`へのpushだけで動かす。ほかのブランチはPRの実行が検査する。
+    # `main`のpushは、変更に関わらず必ず実行を作る。
+    # console_fetcherが「`main`へのpushで成功した実行」の最新を取り込むため。
     # タグのpushでは動かさない。`main`という名前のタグで動くと、その実行が
     # console_fetcherから「mainの最新の成功した実行」に見え、取り込みが止まる。
-    branches: ['**']
+    branches: [main]
   pull_request:
+    # 文書とテンプレートだけの変更では動かさない。
+    # `.claude/**`は除外しない。保護パスで、フローは保護パスの変更の検査を実行せず、CIが担うため。
+    paths-ignore:
+      - 'docs/**'
+      - '*.md'
+      - 'LICENSE'
+      - '.github/ISSUE_TEMPLATE/**'
+      - '.github/PULL_REQUEST_TEMPLATE.md'
+
+# 同じ参照の古いPRの実行は止める。`main`の実行は止めない。
+# `main`の実行を止めると、console_fetcherが取り込む成功した実行が欠けるため。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -22,17 +39,109 @@ jobs:
           # 後のステップは取得済みの履歴だけを使い、fetchもpushもしない。
           persist-credentials: false
 
+      - name: Determine whether the protected paths changed
+        # `mise run check`は、PRが保護パスに触れるときだけ実行する。
+        # 保護パスの変更では、implementフローとpr_fixが検査を実行せず、CIが担うため。
+        # それ以外の変更は、手元の`mise run check`とpre-pushが検査する。
+        # `main`へのpushでは実行しない。PRで検査済みのため。
+        # 保護パスの一覧は、`f/factory/lib/protected_paths.ts`の
+        # `IMPLEMENT_PROTECTED_*`と同じに保つ。新しい`*.sh`も保護パスとして扱う。
+        # 差分を取れないときは、安全側に倒して実行する。
+        id: scope
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          prefixes=(
+            .claude/ .agents/ .github/ .mise/ .config/mise/ .lefthook/
+            console/public/ infra/ .husky/ .githooks/ .yarn/ .devcontainer/
+          )
+          exact_paths=(
+            console/index.html
+            console/drawio-viewer.json
+            console/scripts/drawio-viewer.ts
+            console/scripts/fetch-drawio-viewer.ts
+            console/scripts/manifest.ts
+            console/scripts/write-manifest.ts
+            scripts/check-console-lockfile.ts
+            console/scripts/asset-name.ts
+            console/vite.config.ts
+            infra/Caddyfile
+          )
+          # ディレクトリを問わず、ファイル名で判定するもの。
+          basenames=(
+            'mise\.toml' 'mise\..*\.toml' '\.mise\.toml'
+            'lefthook\.(yml|toml|json)' 'lefthook-local\.yml'
+            'bunfig\.toml' '\.npmrc' '\.gitattributes' '\.gitmodules'
+            '\.markdownlint(-cli2)?\.(jsonc?|ya?ml|[cm]?js)'
+            '\.textlintrc(\..*)?'
+            '\.env(\..*)?' '\.gitleaks(ignore|\.toml)' '\.tool-versions'
+            '\.(node|bun|python)-version' '\.nvmrc'
+            'rust-toolchain(\.toml)?' '\.yarnrc(\.yml)?' '\.pnpmfile\.cjs'
+            'bun\.lockb?' 'package-lock\.json' 'npm-shrinkwrap\.json'
+            'pnpm-lock\.yaml' 'yarn\.lock'
+            '[A-Za-z0-9_.-]+\.config\.[cm]?[jt]s'
+            '\.(eslintrc|babelrc|prettierrc)(\..*)?'
+            'Makefile' '[Jj]ustfile' 'Taskfile\.ya?ml' 'turbo\.json' 'nx\.json'
+            'deno\.jsonc?' 'CODEOWNERS' '\.pre-commit-config\.yaml'
+            'package\.json'
+            '(uv|poetry)\.lock' 'Pipfile(\.lock)?' 'pyproject\.toml'
+            'setup\.(py|cfg)' 'requirements.*\.txt'
+            'Cargo\.(lock|toml)' 'go\.(sum|mod)' 'Gemfile(\.lock)?'
+            'composer\.(lock|json)'
+          )
+          basename_pattern="^($(IFS='|'; echo "${basenames[*]}"))$"
+
+          is_protected() {
+            local path="$1" prefix exact base
+            for prefix in "${prefixes[@]}"; do
+              if [ "$path" = "${prefix%/}" ] || [[ "$path" == "$prefix"* ]]; then
+                return 0
+              fi
+            done
+            for exact in "${exact_paths[@]}"; do
+              if [ "$path" = "$exact" ]; then
+                return 0
+              fi
+            done
+            base="${path##*/}"
+            [[ "$base" =~ $basename_pattern ]]
+          }
+
+          run="true"
+          if [ "$EVENT_NAME" = "push" ]; then
+            run="false"
+          elif [ "$EVENT_NAME" = "pull_request" ]; then
+            changes="$RUNNER_TEMP/changes"
+            if git diff --no-renames --name-status -z "${BASE_SHA}...${HEAD_SHA}" > "$changes"; then
+              run="false"
+              while IFS= read -r -d '' status && IFS= read -r -d '' path; do
+                if is_protected "$path" || { [ "$status" = "A" ] && [[ "$path" =~ \.[sS][hH]$ ]]; }; then
+                  run="true"
+                  break
+                fi
+              done < "$changes"
+            fi
+          fi
+          echo "run=${run}" >> "$GITHUB_OUTPUT"
+          echo "mise run check needed: ${run}"
+
       - name: Setup mise
         uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
 
       - name: Install dependencies
         # `mise run check`はConsoleの検査(console:check)も含むので、Consoleの依存も入れる。
         # ルートとConsoleのどちらも、依存のinstall scriptは実行しない。
+        if: steps.scope.outputs.run == 'true'
         run: |
           bun install --frozen-lockfile --ignore-scripts
           bun install --cwd console --frozen-lockfile --ignore-scripts
 
       - name: Lint, typecheck, and test
+        if: steps.scope.outputs.run == 'true'
         run: mise run check
 
       - name: Determine gitleaks scan range
@@ -260,6 +369,8 @@ jobs:
 
   console:
     # Consoleを組み立て、mainへのpushのときだけ成果物にする。
+    # 型検査、lint、testは、手元の`mise run console:check`とpre-pushが担う。
+    # 保護パスを含むPRでは、`check`ジョブの`mise run check`が`console:check`を含む。
     # console_fetcherは、このワークフロー全体が成功した実行の成果物だけを取り込む。
     runs-on: ubuntu-latest
     env:
@@ -292,15 +403,6 @@ jobs:
 
       - name: Install console dependencies
         run: bun install --cwd console --frozen-lockfile --ignore-scripts
-
-      - name: Type-check
-        run: bun run --cwd console typecheck
-
-      - name: Lint
-        run: bunx --bun biome check console
-
-      - name: Test
-        run: bun run --cwd console test
 
       - name: Build
         run: bun run --cwd console build

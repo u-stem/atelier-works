@@ -495,7 +495,7 @@ lockfileは保護パスなので、Claudeが書き換えたラウンドでは検
 
 ### 保護パスの記録
 
-保護パスの変更は、止めずにPR本文とDiscordに列挙する。保護パスを変えたラウンドでは検査コマンドを実行せず、検査はGitHub側のCIに任せる。Claudeが書き換えた`mise.toml`や`package.json`のscriptsをworkerで実行すると、Issue本文を経由してコードを実行させる経路になるためである。
+保護パスの変更は、止めずにPR本文とDiscordに列挙する。保護パスを変えたラウンドでは検査コマンドを実行せず、検査はGitHub側のCIに任せる。atelier-worksのCIは、保護パスを含むPRでだけ`mise run check`を実行する。Claudeが書き換えた`mise.toml`や`package.json`のscriptsをworkerで実行すると、Issue本文を経由してコードを実行させる経路になるためである。
 
 列挙するのは次の3種類である。
 
