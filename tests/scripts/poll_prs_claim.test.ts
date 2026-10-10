@@ -10,14 +10,18 @@ import { describe, expect, test } from "bun:test";
 import type { NotifyEvent } from "../../f/factory/lib/discord.ts";
 import type { GhClient } from "../../f/factory/lib/github.ts";
 import type { Logger } from "../../f/factory/lib/log.ts";
+import type { PrDecision } from "../../f/factory/lib/poll_support.ts";
 import {
   type ClaimNotClaimedDeps,
   claimPr,
   collectLabelLeftRemoved,
   notifyPrLabelsLeftRemoved,
   PR_LABEL_LEFT_REMOVED_REASON,
+  type PrCandidateContext,
   PrClaimLabelLeftRemovedError,
+  type PrDecisionHandlers,
   type PrLabelLeftRemoved,
+  processPrDecisions,
   recordPrClaimNotClaimed,
   resolveClaimNotices,
 } from "../../f/factory/poll_prs.ts";
@@ -892,6 +896,284 @@ describe("collectLabelLeftRemoved", () => {
     expect(warns).toEqual([
       "pr_trigger_label_left_removed notice could not be recorded",
     ]);
+  });
+});
+
+describe("processPrDecisions", () => {
+  const LABELS = { reviewLabel: "factory:review", fixLabel: "factory:fix" };
+  const CANDIDATE = {
+    owner: "octo-owner",
+    repo: "atelier-works",
+    number: 7,
+    title: "t",
+    headSha: "abc",
+    labels: [],
+    hasActiveReviewingItem: false,
+    lastKnownHeadSha: null,
+    previousFixRound: 0,
+    maxReviewId: 0,
+  };
+  const CONTEXT: PrCandidateContext = {
+    candidate: CANDIDATE,
+    prevFixSeed: { lastReviewId: 0, lastCommentId: 0, lastReviewCommentId: 0 },
+    observed: { reviewId: 0, reviewCommentId: 0 },
+    linkedParentWorkItemId: null,
+  };
+  const CONTEXTS = new Map([["octo-owner/atelier-works#7", CONTEXT]]);
+  const REVIEW_BY_LABEL: PrDecision = {
+    candidate: CANDIDATE,
+    review: { kind: "trigger_review", reason: "label", removeLabel: true },
+    fix: { kind: "none" },
+  };
+  const FIX_BY_LABEL: PrDecision = {
+    candidate: CANDIDATE,
+    review: { kind: "none" },
+    fix: { kind: "trigger_fix", removeLabel: true },
+  };
+
+  // 呼び出しを`calls`に順に記録する。上書きした関数は記録の後に実行される。
+  function handlersWith(overrides: Partial<PrDecisionHandlers> = {}): {
+    handlers: PrDecisionHandlers;
+    calls: string[];
+    notified: (readonly PrLabelLeftRemoved[])[];
+  } {
+    const calls: string[] = [];
+    const notified: (readonly PrLabelLeftRemoved[])[] = [];
+    const handlers: PrDecisionHandlers = {
+      claim: async () => ({ claimed: true }),
+      recordNotClaimed: async () => {},
+      startReview: async () => {
+        calls.push("startReview");
+      },
+      startFix: async () => {
+        calls.push("startFix");
+      },
+      resolveNotices: async (_candidate, label) => {
+        calls.push(`resolveNotices:${label}`);
+      },
+      collectLeftRemoved: async () => {},
+      recordFailure: async () => {},
+      notifyLeftRemoved: async (items) => {
+        notified.push([...items]);
+      },
+      ...overrides,
+    };
+    return { handlers, calls, notified };
+  }
+
+  const LEFT_REMOVED = new PrClaimLabelLeftRemovedError(
+    "factory:review",
+    "m",
+    null,
+  );
+
+  test("notifies the PRs collected during the loop at the end", async () => {
+    const collected = {
+      owner: "octo-owner",
+      repo: "atelier-works",
+      number: 7,
+      label: "factory:review",
+    };
+    const { handlers, notified } = handlersWith({
+      claim: async () => {
+        throw LEFT_REMOVED;
+      },
+      collectLeftRemoved: async (items) => {
+        items.push(collected);
+      },
+    });
+
+    await processPrDecisions(
+      [REVIEW_BY_LABEL],
+      CONTEXTS,
+      LABELS,
+      handlers,
+      silentLog(),
+    );
+
+    expect(notified).toEqual([[collected]]);
+  });
+
+  test("notifies once even when nothing was collected", async () => {
+    const { handlers, notified } = handlersWith();
+
+    await processPrDecisions([], CONTEXTS, LABELS, handlers, silentLog());
+
+    expect(notified).toEqual([[]]);
+  });
+
+  test("notifies exactly once when the loop throws", async () => {
+    const { handlers, notified } = handlersWith({
+      claim: async () => {
+        throw new Error("claim failed");
+      },
+      recordFailure: async () => {
+        throw new Error("record failed");
+      },
+    });
+
+    await processPrDecisions(
+      [REVIEW_BY_LABEL],
+      CONTEXTS,
+      LABELS,
+      handlers,
+      silentLog(),
+    ).catch(() => {});
+
+    expect(notified).toHaveLength(1);
+  });
+
+  test("rethrows the loop error after notifying", async () => {
+    const { handlers } = handlersWith({
+      claim: async () => {
+        throw new Error("claim failed");
+      },
+      recordFailure: async () => {
+        throw new Error("record failed");
+      },
+    });
+
+    const result = processPrDecisions(
+      [REVIEW_BY_LABEL],
+      CONTEXTS,
+      LABELS,
+      handlers,
+      silentLog(),
+    );
+
+    await expect(result).rejects.toThrow("record failed");
+  });
+
+  test("keeps the loop error when the notification also throws", async () => {
+    const { handlers } = handlersWith({
+      claim: async () => {
+        throw new Error("claim failed");
+      },
+      recordFailure: async () => {
+        throw new Error("record failed");
+      },
+      notifyLeftRemoved: async () => {
+        throw new Error("notify failed");
+      },
+    });
+
+    const result = processPrDecisions(
+      [REVIEW_BY_LABEL],
+      CONTEXTS,
+      LABELS,
+      handlers,
+      silentLog(),
+    );
+
+    await expect(result).rejects.toThrow("record failed");
+  });
+
+  test("logs the notification failure instead of throwing it", async () => {
+    const errors: string[] = [];
+    const { handlers } = handlersWith({
+      notifyLeftRemoved: async () => {
+        throw new Error("notify failed");
+      },
+    });
+
+    await processPrDecisions([], CONTEXTS, LABELS, handlers, {
+      info() {},
+      warn() {},
+      error(message) {
+        errors.push(message);
+      },
+    });
+
+    expect(errors).toEqual([
+      "failed to notify PRs whose trigger label was left removed",
+    ]);
+  });
+
+  test("resolves the review notices after the review has started", async () => {
+    const { handlers, calls } = handlersWith();
+
+    await processPrDecisions(
+      [REVIEW_BY_LABEL],
+      CONTEXTS,
+      LABELS,
+      handlers,
+      silentLog(),
+    );
+
+    expect(calls).toEqual(["startReview", "resolveNotices:factory:review"]);
+  });
+
+  test("resolves the fix notices after the fix has started", async () => {
+    const { handlers, calls } = handlersWith();
+
+    await processPrDecisions(
+      [FIX_BY_LABEL],
+      CONTEXTS,
+      LABELS,
+      handlers,
+      silentLog(),
+    );
+
+    expect(calls).toEqual(["startFix", "resolveNotices:factory:fix"]);
+  });
+
+  test("does not resolve the notices when starting the review throws", async () => {
+    const { handlers, calls } = handlersWith({
+      startReview: async () => {
+        throw new Error("start failed");
+      },
+    });
+
+    await processPrDecisions(
+      [REVIEW_BY_LABEL],
+      CONTEXTS,
+      LABELS,
+      handlers,
+      silentLog(),
+    );
+
+    expect(calls).toEqual([]);
+  });
+
+  test("does not resolve the notices when starting the fix throws", async () => {
+    const { handlers, calls } = handlersWith({
+      startFix: async () => {
+        throw new Error("start failed");
+      },
+    });
+
+    await processPrDecisions(
+      [FIX_BY_LABEL],
+      CONTEXTS,
+      LABELS,
+      handlers,
+      silentLog(),
+    );
+
+    expect(calls).toEqual([]);
+  });
+
+  test("counts a failed start and moves on", async () => {
+    const { handlers } = handlersWith({
+      startReview: async () => {
+        throw new Error("start failed");
+      },
+    });
+
+    const result = await processPrDecisions(
+      [REVIEW_BY_LABEL],
+      CONTEXTS,
+      LABELS,
+      handlers,
+      silentLog(),
+    );
+
+    expect(result).toEqual({
+      reviewsStarted: 0,
+      fixesStarted: 0,
+      skipped: 0,
+      failed: 1,
+    });
   });
 });
 

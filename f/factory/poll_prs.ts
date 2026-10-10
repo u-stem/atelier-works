@@ -58,6 +58,7 @@ import {
   decidePrActions,
   filterByRepoAllowlist,
   type PrCandidate,
+  type PrDecision,
 } from "./lib/poll_support.ts";
 import type { WorkItem } from "./lib/types.ts";
 import { runCommand } from "./lib/workspace.ts";
@@ -138,7 +139,7 @@ type ObservedSeed = {
   readonly reviewCommentId: number;
 };
 
-type PrCandidateContext = {
+export type PrCandidateContext = {
   readonly candidate: PrCandidate;
   readonly prevFixSeed: PrFixSeed;
   readonly observed: ObservedSeed;
@@ -682,6 +683,149 @@ async function startFix(
   await setFlowJobId(workItemId, flowJobId);
 }
 
+export type PrDecisionHandlers = {
+  readonly claim: (
+    candidate: PrCandidate,
+    label: string,
+  ) => Promise<ClaimPrResult>;
+  readonly recordNotClaimed: (
+    candidate: PrCandidate,
+    result: Extract<ClaimPrResult, { readonly claimed: false }>,
+  ) => Promise<void>;
+  readonly startReview: (
+    candidate: PrCandidate,
+    context: PrCandidateContext,
+  ) => Promise<void>;
+  readonly startFix: (
+    candidate: PrCandidate,
+    context: PrCandidateContext,
+  ) => Promise<void>;
+  readonly resolveNotices: (
+    candidate: PrCandidate,
+    label: string,
+  ) => Promise<void>;
+  readonly collectLeftRemoved: (
+    items: PrLabelLeftRemoved[],
+    candidate: PrCandidate,
+    err: unknown,
+  ) => Promise<void>;
+  readonly recordFailure: (step: string, err: unknown) => Promise<void>;
+  readonly notifyLeftRemoved: (
+    items: readonly PrLabelLeftRemoved[],
+  ) => Promise<void>;
+};
+
+/**
+ * 判定した各PRのレビューと修正を順に始め、結果の件数を返す。
+ * 1件の失敗は`recordFailure`に渡して次へ進む。
+ * 作業の開始(`startReview`と`startFix`)が成功した後にだけ、noticeを解決する。
+ * 開始が例外になったときに解決すると、noticeが解決済みに見えて証跡が消えるため。
+ * ラベルが外れたままになったPRは集め、ループを抜けるときに必ず1回だけ`notifyLeftRemoved`へ渡す。
+ * ループが想定外に例外を投げて途中で終わっても、集めた分は通知される。
+ * 通知が例外を投げても、ループの例外を隠さないよう`log`に記録するだけにする。
+ */
+export async function processPrDecisions(
+  decisions: readonly PrDecision[],
+  contexts: ReadonlyMap<string, PrCandidateContext>,
+  labels: { readonly reviewLabel: string; readonly fixLabel: string },
+  handlers: PrDecisionHandlers,
+  log: Logger,
+): Promise<{
+  reviewsStarted: number;
+  fixesStarted: number;
+  skipped: number;
+  failed: number;
+}> {
+  let reviewsStarted = 0;
+  let fixesStarted = 0;
+  let skipped = 0;
+  let failed = 0;
+  // トリガーラベルが外れたままになったPR。ループを抜けるときに必ず1回だけ知らせる。
+  const labelsLeftRemoved: PrLabelLeftRemoved[] = [];
+  try {
+    for (const decision of decisions) {
+      const { candidate, review, fix } = decision;
+      if (review.kind === "none" && fix.kind === "none") continue;
+
+      const context = contexts.get(
+        prKey(candidate.owner, candidate.repo, candidate.number),
+      );
+      if (context === undefined) {
+        // 起きないはず。`decisions`は`contexts`の元の候補から1対1で作っている。
+        failed += 1;
+        await handlers.recordFailure(
+          `trigger:${candidate.owner}/${candidate.repo}#${candidate.number}`,
+          new Error("internal: missing PrCandidateContext for a decided PR"),
+        );
+        continue;
+      }
+
+      // レビューと修正は、それぞれ自分のトリガーラベルを別々に消費する。
+      // 1回のポーリングで1つのPRに`review_label`と`fix_label`の両方が
+      // 付いていることがあり、1つの取得にまとめず個別に扱う必要がある。
+      if (review.kind === "trigger_review") {
+        try {
+          if (review.reason === "label") {
+            const claimResult = await handlers.claim(
+              candidate,
+              labels.reviewLabel,
+            );
+            if (!claimResult.claimed) {
+              skipped += 1;
+              await handlers.recordNotClaimed(candidate, claimResult);
+            } else {
+              await handlers.startReview(candidate, context);
+              reviewsStarted += 1;
+              await handlers.resolveNotices(candidate, labels.reviewLabel);
+            }
+          } else {
+            // assignで起きた場合はラベルが関わらず、消費するものが無い。
+            await handlers.startReview(candidate, context);
+            reviewsStarted += 1;
+          }
+        } catch (err) {
+          failed += 1;
+          await handlers.collectLeftRemoved(labelsLeftRemoved, candidate, err);
+          await handlers.recordFailure(
+            `trigger_review:${candidate.owner}/${candidate.repo}#${candidate.number}`,
+            err,
+          );
+        }
+      }
+
+      if (fix.kind === "trigger_fix") {
+        try {
+          const claimResult = await handlers.claim(candidate, labels.fixLabel);
+          if (!claimResult.claimed) {
+            skipped += 1;
+            await handlers.recordNotClaimed(candidate, claimResult);
+          } else {
+            await handlers.startFix(candidate, context);
+            fixesStarted += 1;
+            await handlers.resolveNotices(candidate, labels.fixLabel);
+          }
+        } catch (err) {
+          failed += 1;
+          await handlers.collectLeftRemoved(labelsLeftRemoved, candidate, err);
+          await handlers.recordFailure(
+            `trigger_fix:${candidate.owner}/${candidate.repo}#${candidate.number}`,
+            err,
+          );
+        }
+      }
+    }
+  } finally {
+    try {
+      await handlers.notifyLeftRemoved(labelsLeftRemoved);
+    } catch (notifyErr) {
+      log.error("failed to notify PRs whose trigger label was left removed", {
+        error: errorMessage(notifyErr),
+      });
+    }
+  }
+  return { reviewsStarted, fixesStarted, skipped, failed };
+}
+
 export async function main(): Promise<{
   reviewsStarted: number;
   fixesStarted: number;
@@ -809,149 +953,66 @@ export async function main(): Promise<{
     config.fix_label,
   );
 
-  // トリガーラベルが外れたままになったPR。ループを抜けるときに必ず1回だけ知らせる。
-  const labelsLeftRemoved: PrLabelLeftRemoved[] = [];
-  try {
-    for (const decision of decisions) {
-      const { candidate, review, fix } = decision;
-      if (review.kind === "none" && fix.kind === "none") continue;
-
-      const context = contextByKey.get(
-        prKey(candidate.owner, candidate.repo, candidate.number),
-      );
-      if (context === undefined) {
-        // 起きないはず。`decisions`は上の`contexts`から1対1で作っている。
-        failed += 1;
-        await recordFailureSafe(
-          `trigger:${candidate.owner}/${candidate.repo}#${candidate.number}`,
-          new Error("internal: missing PrCandidateContext for a decided PR"),
+  const processed = await processPrDecisions(
+    decisions,
+    contextByKey,
+    { reviewLabel: config.review_label, fixLabel: config.fix_label },
+    {
+      claim: (candidate, label) =>
+        claimPr(
+          client,
+          candidate.owner,
+          candidate.repo,
+          candidate.number,
+          label,
           log,
-        );
-        continue;
-      }
-
-      // レビューと修正は、それぞれ自分のトリガーラベルを別々に消費する。
-      // 1回のポーリングで1つのPRに`review_label`と`fix_label`の両方が
-      // 付いていることがあり、1つの取得にまとめず個別に扱う必要がある。
-      if (review.kind === "trigger_review") {
-        try {
-          if (review.reason === "label") {
-            const claimResult = await claimPr(
-              client,
-              candidate.owner,
-              candidate.repo,
-              candidate.number,
-              config.review_label,
-              log,
-            );
-            if (!claimResult.claimed) {
-              skipped += 1;
-              await recordPrClaimNotClaimed(candidate, claimResult);
-            } else {
-              await startReview(
-                candidate,
-                viewer.login,
-                context.observed,
-                context.linkedParentWorkItemId,
-              );
-              reviewsStarted += 1;
-              await resolveClaimNotices(
-                candidate,
-                config.review_label,
-                resolveUnresolvedNoticesByMessage,
-                log,
-              );
-            }
-          } else {
-            // assignで起きた場合はラベルが関わらず、消費するものが無い。
-            await startReview(
-              candidate,
-              viewer.login,
-              context.observed,
-              context.linkedParentWorkItemId,
-            );
-            reviewsStarted += 1;
-          }
-        } catch (err) {
-          failed += 1;
-          await collectLabelLeftRemoved(
-            labelsLeftRemoved,
-            candidate,
-            err,
-            addNoticeUnlessUnresolved,
-            log,
-          );
-          await recordFailureSafe(
-            `trigger_review:${candidate.owner}/${candidate.repo}#${candidate.number}`,
-            err,
-            log,
-          );
-        }
-      }
-
-      if (fix.kind === "trigger_fix") {
-        try {
-          const claimResult = await claimPr(
-            client,
-            candidate.owner,
-            candidate.repo,
-            candidate.number,
-            config.fix_label,
-            log,
-          );
-          if (!claimResult.claimed) {
-            skipped += 1;
-            await recordPrClaimNotClaimed(candidate, claimResult);
-          } else {
-            await startFix(
-              candidate,
-              viewer.login,
-              context.prevFixSeed,
-              context.observed,
-              context.linkedParentWorkItemId,
-            );
-            fixesStarted += 1;
-            await resolveClaimNotices(
-              candidate,
-              config.fix_label,
-              resolveUnresolvedNoticesByMessage,
-              log,
-            );
-          }
-        } catch (err) {
-          failed += 1;
-          await collectLabelLeftRemoved(
-            labelsLeftRemoved,
-            candidate,
-            err,
-            addNoticeUnlessUnresolved,
-            log,
-          );
-          await recordFailureSafe(
-            `trigger_fix:${candidate.owner}/${candidate.repo}#${candidate.number}`,
-            err,
-            log,
-          );
-        }
-      }
-    }
-  } finally {
-    // 通知は例外を投げないが、投げても、ループの例外を隠さない。
-    try {
-      await notifyPrLabelsLeftRemoved({
-        items: labelsLeftRemoved,
-        instanceName: config.instance_name,
-        discordWebhookUrl,
-        log,
-      });
-    } catch (notifyErr) {
-      log.error("failed to notify PRs whose trigger label was left removed", {
-        error: maskSecrets(
-          notifyErr instanceof Error ? notifyErr.message : String(notifyErr),
         ),
-      });
-    }
-  }
+      recordNotClaimed: recordPrClaimNotClaimed,
+      startReview: (candidate, context) =>
+        startReview(
+          candidate,
+          viewer.login,
+          context.observed,
+          context.linkedParentWorkItemId,
+        ),
+      startFix: (candidate, context) =>
+        startFix(
+          candidate,
+          viewer.login,
+          context.prevFixSeed,
+          context.observed,
+          context.linkedParentWorkItemId,
+        ),
+      resolveNotices: (candidate, label) =>
+        resolveClaimNotices(
+          candidate,
+          label,
+          resolveUnresolvedNoticesByMessage,
+          log,
+        ),
+      collectLeftRemoved: (items, candidate, err) =>
+        collectLabelLeftRemoved(
+          items,
+          candidate,
+          err,
+          addNoticeUnlessUnresolved,
+          log,
+        ),
+      recordFailure: (step, err) => recordFailureSafe(step, err, log),
+      notifyLeftRemoved: (items) =>
+        notifyPrLabelsLeftRemoved({
+          items,
+          instanceName: config.instance_name,
+          discordWebhookUrl,
+          log,
+        }),
+    },
+    log,
+  );
+  reviewsStarted += processed.reviewsStarted;
+  fixesStarted += processed.fixesStarted;
+  skipped += processed.skipped;
+  failed += processed.failed;
 
   return { reviewsStarted, fixesStarted, skipped, failed };
 }

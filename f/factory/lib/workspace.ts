@@ -625,7 +625,7 @@ export async function readExactRef(opts: {
  * 出力を値として判断に使うコマンドで、出力の読み取りを打ち切っていれば(`outputAbandoned`)例外を投げる。
  * 打ち切った出力は途中で切れていることがあり、終了コードが0でも、検査や照合に使うと見落としになるため。
  * 対象は、秘密情報の検査に渡す差分とそのレポート、保護パス・symlink・`package.json`のscriptsの判定に使う変更の一覧と中身、
- * 差分の大きさ、検証したツリーの照合に使う`write-tree`である。
+ * 差分の大きさ、検証したツリーの照合に使う`write-tree`、worktreeの一覧である。
  */
 export function assertOutputComplete(
   context: string,
