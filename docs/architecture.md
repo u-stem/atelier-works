@@ -430,6 +430,25 @@ Factoryの投稿の見分け方、総評の組み立て、スレッドの解決�
 4. `wmill datatable migrate up`を実行し、Data Tableの定義を最新にする。
 5. 結果を`deployments`に記録し、`f/factory/deployed_sha`を更新する。
 
+ジョブ全体には上限(`timeout`)を1800秒で置く。
+変数の取得と更新やデータベースの記録は、個別の上限が無い。
+これらの呼び出しが止まるとジョブが終わらず、多重実行の防止で次の回も飛ばされ続けるため、全体にも上限を置く。
+1800秒は、各段の上限の合計1750秒に、タイムアウトした子プロセスの停止の猶予を足した値である。
+正常な実行を途中で切らないよう、合計を下回る値にはしない。
+
+| 段 | 回数 | 1回の上限 | 合計 |
+| --- | --- | --- | --- |
+| self cloneのロック待ち | 1 | 300秒 | 300秒 |
+| git | 9 | 60秒 | 540秒 |
+| `npm ci`、`wmill sync push`、`wmill datatable migrate up` | 3 | 300秒 | 900秒 |
+| Console用のworkerの確認 | 1 | 10秒 | 10秒 |
+
+gitの9回は、cloneの更新で4回、HEADとブランチの確認で2回、変更パスの列挙で1回、`mise.toml`の比較で最大2回である。
+ジョブの上限で打ち切られた回は、最後に行うConsole用のworkerの確認が走らない。
+その間のworkerの停止は、スケジュールの失敗の通知(`schedule_failing`)に頼って気づく。
+`schedule_failing`は、打ち切られた回(ジョブ履歴で`canceled_by`が`timeout`の取り消し)を失敗として数える。
+人が止めた回は数えない。
+
 `infra/**`の変更と、`mise.toml`の`[tools]`か`[env]`の変更は、worker自身では反映できない。`self_update`は`deployments.needs_host_action`を`true`にしてログに残し、通知はしない。これらはホスト側のcheckoutをpullしたうえで、次に`mise run up`で起動したときに反映される。
 
 `console/`の変更は`self_update`の対象ではない。

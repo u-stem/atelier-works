@@ -627,7 +627,7 @@ Consoleの**通知**タブには、Discordに送らない要対応の事項が�
 | `console_fetch_stale` | Consoleの取り込みの結果が30分以上更新されていない | 取り込みのコンテナ(`console_fetcher`)が動いているか確かめる |
 | `console_worker_missing` | tag `console`のジョブが、予定時刻から5分以上実行されずに待っている。Console用のworkerが居ない、2枠とも塞がっている、またはtagの設定がずれていて、Consoleのジョブがqueueに溜まり、Consoleが止まる | `docker compose ps windmill_worker_console`でコンテナの状態を確かめ、無ければ`mise run up`で起動し、動いていれば`docker compose restart windmill_worker_console`で再起動する。直らなければ、Windmillの画面でtag `console`の実行中のジョブとワーカーグループのtagを確かめる。自己更新(10分ごと)が検知し、Discordにも届く |
 | `console_worker_check_failed` | Console用のworkerがジョブを受けているかを、自己更新が1時間(6回)続けて確かめられなかった。workerが止まっていても気づけない状態である | 自己更新のジョブログで、下の4種類の警告のどれが出ているかを確かめて原因を直す。`could not confirm the console worker from the job lists`が続くなら、`console_fetch_watch`のスケジュールが有効か、直近の実行がtag `console`で動いているかを確かめる。Discordにも届く |
-| `schedule_failing` | 同じスケジュールの直近3回の実行が続けて失敗した。数えるのはスケジュールの実行そのものの失敗で、成功した実行の中で記録する部分的な失敗は含まない。GitHubのPATの失効などが原因になる | ジョブのログで失敗の内容を確かめて原因を直す。PATは[秘密をローテーションする](#秘密をローテーションする)で再発行する |
+| `schedule_failing` | 同じスケジュールの直近3回の実行が続けて失敗した。数えるのはスケジュールの実行そのものの失敗で、成功した実行の中で記録する部分的な失敗は含まない。ジョブの上限(`timeout`)で打ち切られた回も失敗に数える。GitHubのPATの失効などが原因になる | ジョブのログで失敗の内容を確かめて原因を直す。PATは[秘密をローテーションする](#秘密をローテーションする)で再発行する |
 | `schedule_failing_check_failed` | スケジュールが続けて失敗しているかを、ジョブ履歴から判定できなかった。失敗が続いても気づけない状態である | `on_error_schedule`のジョブのログで`failed to read the schedule history`のエラーを確かめ、ジョブ履歴を読む権限があるかを確かめる |
 
 ### Console用のworkerの検知を確かめる
@@ -690,7 +690,9 @@ Consoleが止まっていてもDiscordには届くので、通知の確認先は
 ### 続けて失敗するスケジュールの検知を確かめる
 
 スケジュールの直近3回の実行が続けて失敗したかどうかは、失敗のハンドラ(`on_error_schedule`)がジョブ履歴を読んで判定する。
-飛ばされた回(前回の実行中で見送った回)と取り消された回(人が止めた回)は、失敗として数えず、連続も切らない。
+飛ばされた回(前回の実行中で見送った回)と、人が取り消した回は、失敗として数えず、連続も切らない。
+ジョブの上限(`timeout`)で打ち切られた回は、失敗として数える。
+時間切れの取り消しは、ジョブ履歴で`canceled_by`が`timeout`になる想定で判定する。
 マージの後は、次の手順で検知が動いていることを確かめる。
 
 1. 失敗する状態を作る。たとえば、あるスケジュールのscriptを一時的に失敗させるか、直近3回が失敗の状態を用意する。
@@ -703,6 +705,23 @@ Consoleが止まっていてもDiscordには届くので、通知の確認先は
 
 ジョブ履歴を読めないとき(APIの失敗と、想定外の形の応答)は、通知`schedule_failing_check_failed`が残る。
 その場合は、ジョブ履歴を読む権限を確かめる。
+
+### 自己更新の打ち切りを確かめる
+
+`self_update`のジョブには、全体の上限(1800秒)がある。
+値の内訳は[アーキテクチャ](architecture.md)の「自己更新」に書く。
+上限で打ち切られた回は、最後に行うConsole用のworkerの確認が走らない。
+打ち切りが続くと、自己更新の反映もworkerの停止の検知も止まるので、通知`schedule_failing`で気づく。
+
+打ち切りの記録の形は、実機で確かめる。
+`canceled_by`が`timeout`でなければ、打ち切られた回が失敗として数えられず、通知が出ない。
+
+1. `self_update`の上限を一時的に短くして、打ち切られる状態を作る。
+2. `wmill job list --script-path f/factory/self_update`で打ち切られた回を見つける。
+   `wmill job get <id>`で`canceled`、`canceled_by`、`canceled_reason`を読む。
+3. `canceled_by`が`timeout`であることを見る。違う値なら、`f/factory/lib/schedule_failing.ts`の判定を、読んだ値に合わせて直す。
+4. `on_error_schedule`が、打ち切られた回でも呼ばれたことをジョブ履歴で見る。
+   呼ばれなければ、打ち切りが続いても通知は出ない。
 
 ### 通知を解決する
 
