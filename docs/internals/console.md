@@ -316,7 +316,7 @@ zipは自前のreaderでメモリ上に展開する。
 
 `ci.yml`の`console`ジョブが組み立てる。
 型検査、lint、テストは`check`ジョブの`mise run check`(`console:check`)が担い、`console`ジョブは重ねて実行しない。
-PRでは、`console/`などに変更が無ければ、`scope`ジョブの判定でこのジョブを飛ばす。
+PRでは、`scope`ジョブの`console`のフラグが偽のとき、このジョブを飛ばす。
 `main`へのpushでは、変更に関わらず毎回動かす。
 `console_fetcher`が、その実行の成果物を取り込むためである。
 判定の詳細は[セットアップ](../setup.md)の「CIの実行の範囲」にある。

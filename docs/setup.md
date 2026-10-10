@@ -172,7 +172,7 @@ CI自身と環境の定義が変わると、どのジョブの結果も変わり
 - ルートの`tsconfig*.json`
 - `scripts/`の下の`.sh`ファイル(次の表に挙げたものを除く)
 - `scripts/ci-scope.ts`と`tests/scripts/ci-scope.test.ts`(判定自身。誤ると検査を飛ばすため)
-- 次の表と許可リストのどちらにも無いパス(`.mise.toml`、`.tool-versions`、`bunfig.toml`、`.npmrc`、`.gitattributes`など)
+- 次の表と許可リストのどちらにも無いパス(例: `.mise.toml`、`.tool-versions`、`bunfig.toml`、`.npmrc`、`.gitattributes`)
 
 次の表のパスは、表のジョブだけを動かす。
 
