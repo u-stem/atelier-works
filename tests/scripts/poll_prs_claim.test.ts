@@ -1175,6 +1175,384 @@ describe("processPrDecisions", () => {
       failed: 1,
     });
   });
+
+  const KEY = "octo-owner/atelier-works#7";
+  const NOT_CLAIMED = { claimed: false, reason: "lost the race" } as const;
+  const REVIEW_BY_ASSIGNMENT: PrDecision = {
+    candidate: CANDIDATE,
+    review: {
+      kind: "trigger_review",
+      reason: "assignment",
+      removeLabel: false,
+    },
+    fix: { kind: "none" },
+  };
+  const REVIEW_AND_FIX: PrDecision = {
+    candidate: CANDIDATE,
+    review: { kind: "trigger_review", reason: "label", removeLabel: true },
+    fix: { kind: "trigger_fix", removeLabel: true },
+  };
+  const NOTHING_TO_DO: PrDecision = {
+    candidate: CANDIDATE,
+    review: { kind: "none" },
+    fix: { kind: "none" },
+  };
+
+  function run(
+    decisions: readonly PrDecision[],
+    handlers: PrDecisionHandlers,
+    contexts: ReadonlyMap<string, PrCandidateContext> = CONTEXTS,
+  ) {
+    return processPrDecisions(
+      decisions,
+      contexts,
+      LABELS,
+      handlers,
+      silentLog(),
+    );
+  }
+
+  describe("when the review claim is not acquired", () => {
+    test("counts the review as skipped", async () => {
+      const { handlers } = handlersWith({ claim: async () => NOT_CLAIMED });
+
+      const result = await run([REVIEW_BY_LABEL], handlers);
+
+      expect(result.skipped).toBe(1);
+    });
+
+    test("records the claim result", async () => {
+      const recorded: unknown[] = [];
+      const { handlers } = handlersWith({
+        claim: async () => NOT_CLAIMED,
+        recordNotClaimed: async (candidate, result) => {
+          recorded.push([candidate, result]);
+        },
+      });
+
+      await run([REVIEW_BY_LABEL], handlers);
+
+      expect(recorded).toEqual([[CANDIDATE, NOT_CLAIMED]]);
+    });
+
+    test("neither starts the review nor resolves the notices", async () => {
+      const { handlers, calls } = handlersWith({
+        claim: async () => NOT_CLAIMED,
+      });
+
+      await run([REVIEW_BY_LABEL], handlers);
+
+      expect(calls).toEqual([]);
+    });
+  });
+
+  describe("when the fix claim is not acquired", () => {
+    test("counts the fix as skipped", async () => {
+      const { handlers } = handlersWith({ claim: async () => NOT_CLAIMED });
+
+      const result = await run([FIX_BY_LABEL], handlers);
+
+      expect(result.skipped).toBe(1);
+    });
+
+    test("records the claim result", async () => {
+      const recorded: unknown[] = [];
+      const { handlers } = handlersWith({
+        claim: async () => NOT_CLAIMED,
+        recordNotClaimed: async (candidate, result) => {
+          recorded.push([candidate, result]);
+        },
+      });
+
+      await run([FIX_BY_LABEL], handlers);
+
+      expect(recorded).toEqual([[CANDIDATE, NOT_CLAIMED]]);
+    });
+
+    test("neither starts the fix nor resolves the notices", async () => {
+      const { handlers, calls } = handlersWith({
+        claim: async () => NOT_CLAIMED,
+      });
+
+      await run([FIX_BY_LABEL], handlers);
+
+      expect(calls).toEqual([]);
+    });
+  });
+
+  test("counts a started review", async () => {
+    const { handlers } = handlersWith();
+
+    const result = await run([REVIEW_BY_LABEL], handlers);
+
+    expect(result.reviewsStarted).toBe(1);
+  });
+
+  test("counts a started fix", async () => {
+    const { handlers } = handlersWith();
+
+    const result = await run([FIX_BY_LABEL], handlers);
+
+    expect(result.fixesStarted).toBe(1);
+  });
+
+  describe("a review started by assignment", () => {
+    test("does not claim a label", async () => {
+      const claimed: string[] = [];
+      const { handlers } = handlersWith({
+        claim: async (_candidate, label) => {
+          claimed.push(label);
+          return { claimed: true };
+        },
+      });
+
+      await run([REVIEW_BY_ASSIGNMENT], handlers);
+
+      expect(claimed).toEqual([]);
+    });
+
+    test("starts without resolving any notice", async () => {
+      const { handlers, calls } = handlersWith();
+
+      await run([REVIEW_BY_ASSIGNMENT], handlers);
+
+      expect(calls).toEqual(["startReview"]);
+    });
+
+    test("is counted as a started review", async () => {
+      const { handlers } = handlersWith();
+
+      const result = await run([REVIEW_BY_ASSIGNMENT], handlers);
+
+      expect(result.reviewsStarted).toBe(1);
+    });
+  });
+
+  function claimLabelsRecordedBy(): {
+    claimed: string[];
+    claim: PrDecisionHandlers["claim"];
+  } {
+    const claimed: string[] = [];
+    return {
+      claimed,
+      claim: async (_candidate, label) => {
+        claimed.push(label);
+        return { claimed: true };
+      },
+    };
+  }
+
+  test("claims the review label for a review", async () => {
+    const { claimed, claim } = claimLabelsRecordedBy();
+    const { handlers } = handlersWith({ claim });
+
+    await run([REVIEW_BY_LABEL], handlers);
+
+    expect(claimed).toEqual(["factory:review"]);
+  });
+
+  test("claims the fix label for a fix", async () => {
+    const { claimed, claim } = claimLabelsRecordedBy();
+    const { handlers } = handlersWith({ claim });
+
+    await run([FIX_BY_LABEL], handlers);
+
+    expect(claimed).toEqual(["factory:fix"]);
+  });
+
+  test("records a review failure under a trigger_review step", async () => {
+    const steps: string[] = [];
+    const { handlers } = handlersWith({
+      startReview: async () => {
+        throw new Error("start failed");
+      },
+      recordFailure: async (step) => {
+        steps.push(step);
+      },
+    });
+
+    await run([REVIEW_BY_LABEL], handlers);
+
+    expect(steps).toEqual([`trigger_review:${KEY}`]);
+  });
+
+  test("records a fix failure under a trigger_fix step", async () => {
+    const steps: string[] = [];
+    const { handlers } = handlersWith({
+      startFix: async () => {
+        throw new Error("start failed");
+      },
+      recordFailure: async (step) => {
+        steps.push(step);
+      },
+    });
+
+    await run([FIX_BY_LABEL], handlers);
+
+    expect(steps).toEqual([`trigger_fix:${KEY}`]);
+  });
+
+  describe("when starting the fix throws", () => {
+    const startError = new Error("start failed");
+    const throwing = {
+      startFix: async () => {
+        throw startError;
+      },
+    };
+
+    test("counts the failure", async () => {
+      const { handlers } = handlersWith(throwing);
+
+      const result = await run([FIX_BY_LABEL], handlers);
+
+      expect(result.failed).toBe(1);
+    });
+
+    test("passes the error to collectLeftRemoved", async () => {
+      const seen: [unknown, unknown][] = [];
+      const { handlers } = handlersWith({
+        ...throwing,
+        collectLeftRemoved: async (_items, candidate, err) => {
+          seen.push([candidate, err]);
+        },
+      });
+
+      await run([FIX_BY_LABEL], handlers);
+
+      expect(seen).toEqual([[CANDIDATE, startError]]);
+    });
+
+    test("passes the error to recordFailure", async () => {
+      const errors: unknown[] = [];
+      const { handlers } = handlersWith({
+        ...throwing,
+        recordFailure: async (_step, err) => {
+          errors.push(err);
+        },
+      });
+
+      await run([FIX_BY_LABEL], handlers);
+
+      expect(errors).toEqual([startError]);
+    });
+  });
+
+  test("passes a review error to collectLeftRemoved", async () => {
+    const seen: [unknown, unknown][] = [];
+    const { handlers } = handlersWith({
+      claim: async () => {
+        throw LEFT_REMOVED;
+      },
+      collectLeftRemoved: async (_items, candidate, err) => {
+        seen.push([candidate, err]);
+      },
+    });
+
+    await run([REVIEW_BY_LABEL], handlers);
+
+    expect(seen).toEqual([[CANDIDATE, LEFT_REMOVED]]);
+  });
+
+  describe("when the review fails for a PR that also needs a fix", () => {
+    test("still starts the fix", async () => {
+      const { handlers, calls } = handlersWith({
+        startReview: async () => {
+          throw new Error("start failed");
+        },
+      });
+
+      await run([REVIEW_AND_FIX], handlers);
+
+      expect(calls).toEqual(["startFix", "resolveNotices:factory:fix"]);
+    });
+
+    test("counts the fix as started and the review as failed", async () => {
+      const { handlers } = handlersWith({
+        startReview: async () => {
+          throw new Error("start failed");
+        },
+      });
+
+      const result = await run([REVIEW_AND_FIX], handlers);
+
+      expect(result).toEqual({
+        reviewsStarted: 0,
+        fixesStarted: 1,
+        skipped: 0,
+        failed: 1,
+      });
+    });
+  });
+
+  test("starts the second PR after the first one failed", async () => {
+    const second: PrDecision = {
+      ...REVIEW_BY_LABEL,
+      candidate: { ...CANDIDATE, number: 8 },
+    };
+    const contexts = new Map([
+      ...CONTEXTS,
+      [
+        "octo-owner/atelier-works#8",
+        { ...CONTEXT, candidate: second.candidate },
+      ],
+    ]);
+    const started: number[] = [];
+    const { handlers } = handlersWith({
+      startReview: async (candidate) => {
+        if (candidate.number === 7) throw new Error("start failed");
+        started.push(candidate.number);
+      },
+    });
+
+    await run([REVIEW_BY_LABEL, second], handlers, contexts);
+
+    expect(started).toEqual([8]);
+  });
+
+  test("skips a decision with neither a review nor a fix", async () => {
+    const { handlers } = handlersWith();
+
+    const result = await run([NOTHING_TO_DO], handlers, new Map());
+
+    expect(result).toEqual({
+      reviewsStarted: 0,
+      fixesStarted: 0,
+      skipped: 0,
+      failed: 0,
+    });
+  });
+
+  describe("when the context of a decided PR is missing", () => {
+    test("counts the failure", async () => {
+      const { handlers } = handlersWith();
+
+      const result = await run([REVIEW_BY_LABEL], handlers, new Map());
+
+      expect(result.failed).toBe(1);
+    });
+
+    test("records the failure under a trigger step", async () => {
+      const steps: string[] = [];
+      const { handlers } = handlersWith({
+        recordFailure: async (step) => {
+          steps.push(step);
+        },
+      });
+
+      await run([REVIEW_BY_LABEL], handlers, new Map());
+
+      expect(steps).toEqual([`trigger:${KEY}`]);
+    });
+
+    test("does not claim anything", async () => {
+      const { claimed, claim } = claimLabelsRecordedBy();
+      const { handlers } = handlersWith({ claim });
+
+      await run([REVIEW_AND_FIX], handlers, new Map());
+
+      expect(claimed).toEqual([]);
+    });
+  });
 });
 
 function silentLog(): Logger {

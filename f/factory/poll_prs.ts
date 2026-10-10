@@ -12,7 +12,8 @@
 // ほかが先に外したので引き、外せたら取り直して残っていないかを確かめる。
 // 取り直しが数回とも失敗したときは、ラベルを付け直して引く。レート制限で読めないときは、
 // 付け直さず、ラベルが外れたままであることを例外で知らせる(`claimPr`を参照)。
-// 付け直しも失敗して外れたままになったPRは、`main()`が集めて1件のDiscord通知にまとめる。
+// 付け直しも失敗して外れたままになったPRは、`processPrDecisions`が集め、
+// `collectLabelLeftRemoved`が要対応のnoticeに残し、1件のDiscord通知にまとめる。
 // assignで起きるレビューはラベルが関わらないので`claimPr`を通らない。トリガーラベルを消費すると
 // `searchPrs`のラベル検索ではそのPRを見つけられなくなるため、
 // `listTrackedPrs`がDBから見つけ直す(`main()`を参照)。
@@ -258,8 +259,9 @@ export type ClaimPrResult =
  * 付け直しは5xxと通信断を1回再送する(ラベルの追加は何度送っても状態が同じ)。
  * ラベルが外れたままになるのは、読み取りの失敗がレート制限のとき(同じ制限に当たり、
  * さらに最大120秒待つので付け直さない)と、付け直しも失敗したときである。
- * この2つでは`PrClaimLabelLeftRemovedError`を投げる。`main()`は、失敗に記録し、
- * 要対応のnoticeを残し、該当したPRを集めてDiscordに知らせる(`notifyPrLabelsLeftRemoved`)。
+ * この2つでは`PrClaimLabelLeftRemovedError`を投げる。`processPrDecisions`は、失敗に記録し、
+ * 該当したPRを集める(`collectLabelLeftRemoved`が要対応のnoticeも残す)。
+ * 集めたPRは、ループを抜けるときにDiscordへ知らせる(`notifyPrLabelsLeftRemoved`)。
  * assigneeは付けない(`claimIssue`と違う)。Factoryのログインをassignすると、
  * GitHub検索の`assignee:<viewer>`にそのPRが以後ずっと当たり続けるため。
  * 外した後に取り直して確かめるのは、別のアクターがラベルを付け直した場合を
@@ -278,7 +280,7 @@ export async function claimPr(
   try {
     removal = await removeLabel(client, owner, repo, number, triggerLabel);
   } catch (err) {
-    // この理由は`main()`の`claim_race_lost`のnoticeに載るので、
+    // この理由は`recordPrClaimNotClaimed`の`claim_race_lost`のnoticeに載るので、
     // ghの失敗に由来する他のメッセージと同じくマスクする。
     return {
       claimed: false,
@@ -333,7 +335,7 @@ export const PR_LABEL_LEFT_REMOVED_REASON =
  * `claimPr`が、トリガーラベルを外した後に取得を確認できず、ラベルも外れたままになったときの例外。
  * 確認の読み取りがレート制限で失敗して付け直さなかった場合と、付け直しも失敗した場合に投げる。
  * 作業項目は無く、ラベルも無いので、人が付け直さない限りそのPRは拾われない。
- * `label`は外れたままのトリガーラベルで、`main()`が集めて人へ知らせる。
+ * `label`は外れたままのトリガーラベルで、`processPrDecisions`が集めて人へ知らせる。
  */
 export class PrClaimLabelLeftRemovedError extends Error {
   readonly label: string;
@@ -506,7 +508,7 @@ function errorMessage(err: unknown): string {
  * 確認の読み取りが読めなかった`claimPr`が、外したトリガーラベルを付け直す。
  * ラベルの付与は、既に付いていても成功する。付け直せたら`claimed: false`を返す。
  * 付け直しも失敗したら、両方の失敗の文を含む例外を投げる。ラベルが外れたままなので、
- * `main()`が記録する失敗から人が付け直せるようにする。
+ * `processPrDecisions`が記録する失敗から人が付け直せるようにする。
  */
 async function restoreTriggerLabel(
   client: GhClient,
