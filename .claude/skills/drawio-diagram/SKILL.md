@@ -15,6 +15,7 @@ XML自体が、すべての情報を含む自己完結した文書である必�
 図にリンクを入れない。`link`属性と、ラベルのHTMLの属性付きの`<a>`、`<area>`、`<map>`、`<meta>`、`<iframe>`、`<object>`、`<embed>`、`<form>`、`<img>`、`<image>`などは使わない。
 `<style>`、`<script`も使わない。
 HTMLのタグの中の`onclick=`のようなイベントハンドラ属性も使わない。
+コメント(`<!--`)や`<textarea>`の内側に書いたタグも、タグとして検査する。
 タグの外の文章にある`one = 1`や`online=true`は拒否しない。
 `usemap=`、`formaction=`、`srcdoc=`も使わない。
 `Promise<Object>`のように、属性を持たない要素名だけの表記は使ってよい。

@@ -110,10 +110,12 @@ function isAsciiLetter(char: string): boolean {
 }
 
 /**
- * `position`(要素名の先頭)から始まる開始タグを、HTMLのパーサーと同じ規則で読む。
+ * `position`(要素名の先頭)から始まる開始タグを、引用符を読みながら読む。
  * 属性名を前から順に調べ、イベントハンドラ属性があれば`handler`にその名前を入れる。
  * `end`は、タグを読み終えた位置(閉じていなければ文字列の長さ)。
  * 引用符の中の`>`ではタグが終わらないので、引用符を読んでから`>`を探す。
+ * コメントやRCDATAの内側の引用符は、HTMLのパーサーが引用符として読まないことがあり、
+ * この読み方だけではタグの終わりがずれる。そのずれは`findEventHandlerInRawTag`が補う。
  */
 function scanStartTag(
   text: string,
@@ -182,11 +184,42 @@ function scanStartTag(
   return { handler: null, end: text.length };
 }
 
+/** 引用符を読まない走査で、タグの区間の中のイベントハンドラ属性を探す。 */
+const RAW_EVENT_HANDLER_PATTERN = /\bon[a-z]+\s*=/i;
+
+/**
+ * 引用符を読まずに、開始タグの区間の中のイベントハンドラ属性を探す。
+ * 区間は、`<`に英字が続く位置から、次の`>`(無ければ文字列の終わり)までである。
+ * 区間を調べたら、その`>`の後ろから次の`<`を探す。区間の途中の`<`から始め直さないので、
+ * 計算量は入力の長さに比例する。手前から始まる区間が、後ろから始まる区間を含むためである。
+ * コメント、偽のコメント、RCDATAの内側にある引用符の読み違いに影響されない。
+ */
+function findEventHandlerInRawTag(text: string): string | null {
+  let index = text.indexOf("<");
+  while (index !== -1) {
+    if (!isAsciiLetter(text.charAt(index + 1))) {
+      index = text.indexOf("<", index + 1);
+      continue;
+    }
+    const close = text.indexOf(">", index + 1);
+    const end = close === -1 ? text.length : close;
+    const found = RAW_EVENT_HANDLER_PATTERN.exec(text.slice(index + 1, end));
+    if (found !== null) {
+      return found[0];
+    }
+    index = text.indexOf("<", end + 1);
+  }
+  return null;
+}
+
 /**
  * `text`の開始タグ(`<`に英字が続く箇所から`>`まで)の中に、イベントハンドラ属性
  * (`onclick=`など)があるかを調べ、あれば`名前=`の形で返す。
+ * 次の2つの走査を行い、どちらかが当たれば返す。
+ * - 引用符を読む走査。引用符の中の`>`でタグが終わらない書き方を、正しく読む。
+ * - 引用符を読まない走査。コメントやRCDATAの内側を含め、`<`に英字が続く箇所をすべてタグとして調べる。
  * タグの外の文章(`one = 1`、`https://x/?online=1`)は見ない。
- * 前から1回だけ読み、読み終えた位置から次の開始タグを探すので、計算量は入力の長さに比例する。
+ * どちらの走査も、読み終えた位置から次の開始タグを探すので、計算量は入力の長さに比例する。
  */
 function findEventHandlerInTag(text: string): string | null {
   let index = text.indexOf("<");
@@ -201,7 +234,7 @@ function findEventHandlerInTag(text: string): string | null {
     }
     index = text.indexOf("<", tag.end);
   }
-  return null;
+  return findEventHandlerInRawTag(text);
 }
 
 /**

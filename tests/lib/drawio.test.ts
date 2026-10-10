@@ -400,6 +400,39 @@ describe("validateDrawioXml link and HTML hardening", () => {
   });
 
   test.each([
+    [
+      "a quote opened inside a comment",
+      '<!-- <b title=" --> <b onclick=x> <b title="-->',
+    ],
+    [
+      "a quote opened inside a bogus comment",
+      '<!x <b title="> <b onclick=x> <b title=">',
+    ],
+    [
+      "a quote opened inside a bogus end tag",
+      '</ <b title="> <b onclick=x> <b title=">',
+    ],
+    [
+      "a quote opened inside a textarea",
+      '<textarea><b title="</textarea><b onclick=x><b title=""></textarea>',
+    ],
+    [
+      "a handler after a comment that hides a quote",
+      '<!--<b title="--><details open ontoggle=alert(1)>">',
+    ],
+    [
+      "a handler after a processing instruction that hides a quote",
+      '<?<b title="><details open ontoggle=x>">',
+    ],
+  ])("rejects a label with %s", (_name, html) => {
+    const escaped = html
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;");
+    expect(validateDrawioXml(withCellValue(escaped)).valid).toBe(false);
+  });
+
+  test.each([
     ["Promise<Object>", "Promise&lt;Object&gt;"],
     ["List<Map>", "List&lt;Map&gt;"],
     ["Result<A, E>", "Result&lt;A, E&gt;"],
@@ -451,6 +484,20 @@ describe("validateDrawioXml link and HTML hardening", () => {
 
   test("checks a long run of unterminated tags for handlers in linear time", () => {
     const xml = withCellValue("&lt;b ".repeat(20000));
+    const started = performance.now();
+    validateDrawioXml(xml);
+    expect(performance.now() - started).toBeLessThan(1000);
+  });
+
+  test("checks a long run of angle brackets in linear time", () => {
+    const xml = withCellValue("&lt;".repeat(40000));
+    const started = performance.now();
+    validateDrawioXml(xml);
+    expect(performance.now() - started).toBeLessThan(1000);
+  });
+
+  test("checks a long run of tag starts without a close in linear time", () => {
+    const xml = withCellValue("&lt;b on".repeat(20000));
     const started = performance.now();
     validateDrawioXml(xml);
     expect(performance.now() - started).toBeLessThan(1000);
