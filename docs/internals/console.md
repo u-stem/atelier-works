@@ -486,6 +486,8 @@ raw.githubusercontent.comの障害で取得に失敗したら、CIのジョブ�
 3. `git show <commit>:src/main/webapp/js/viewer-static.min.js | shasum -a 256`で、sha256を計算する。配信用のURL(raw.githubusercontent.com)から取ったバイト列を使わず、gitのオブジェクトから取る。
 4. `console/drawio-viewer.json`の4項目を書き換える。URLはそのcommitを指し、sha256は3.の値である。
 5. `console/public/drawio.html`が読むビューアの名前を、新しいsha256の先頭8桁に合わせる。
+6. raw appの`f/factory/factory_console__raw_app/lib/drawioViewerPin.ts`の、commitとSRIを合わせる。SRIは、sha256をbase64にした`sha256-...`の形である。
+   `tests/lib/drawio_viewer_pin.test.ts`が、`console/drawio-viewer.json`との一致を確かめる。
 
 固定している版(32.4.1)は、この手順で確かめている。
 commit `9034053fba80a435e27d68d374bc564b83917ae9`は、`v32.4.1`のタグが指す`32.4.1 release`のcommitである。

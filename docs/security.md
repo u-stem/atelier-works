@@ -474,6 +474,23 @@ bunかnodeの起動そのものが止まったときだけ、タイムアウト�
 Consoleは、`f/factory/steps/console_query.ts`の`requirements_doc`ビューで、`requirements.md`と各図のファイルを読み戻す。読む前に、`doc_dir`が`REQUIREMENTS_BASE_DIR`の下にあることを確かめる。図のXMLはWindmillのジョブ結果としてConsoleのフロントエンドに渡るだけで、GitHubとDiscordには送らない。
 
 生成した図のXMLは、`f/factory/lib/drawio.ts`の`validateDrawioXml`で検査する。
+検査は、大きさ、ルート要素、圧縮の有無に加えて、外へ出る経路になる記述を拒否する。
+次のどれかを含む図は、加工せずに`valid: false`と理由を返す。
+
+- `link`属性と`usemap`属性
+- 図の構造としての`<a>`、`<area>`、`<map>`、`<meta>`、`<iframe>`要素
+- ラベルのHTMLの中の`<a>`、`<area>`、`<map>`、`<meta>`、`<iframe>`、`<object>`と、`usemap=`
+
+図のXMLを加工して取り除くと、図の見た目が変わり、ビューアの解釈との差が新しい抜け道にもなる。
+そのため、取り除かずに拒否し、理由を生成のやり直しでClaudeに伝える。
+
+属性の値とテキストは、XMLの実体参照(`&lt;a`、数値文字参照の`&#60;`と`&#x3c;`)を復号してから調べる。
+ビューアは`html=1`のラベルをHTMLとして解釈するためである。
+`&amp;lt;a`のような二重のエスケープも、ビューアがHTMLとして解釈しうるので、安全側に拒否する。
+復号は5段までで、それでも変わり続ける値は調べきれないので拒否する。
+要素と属性の名前は、大文字小文字を区別せずに比べる。
+名前の完全一致だけを見るので、`linkTarget`や`placeholders`のような別の属性、ラベルの文章にあるだけの単語は拒否しない。
+`<object>`は、draw.ioがセルを包む要素として正しいので、構造としては許し、ラベルのHTMLの中だけ拒否する。
 
 ### 隔離したiframeで描く
 
@@ -504,9 +521,10 @@ XMLをiframeへ送るときの`targetOrigin`は`"*"`にする。
 送るのは図のXMLだけなので、宛先を絞れなくても許容する。
 
 サーバー側で図の`link`属性と`html=1`を落とす処理は入れない。
-iframeの中で動くscriptが取れるのは、そのiframeが受け取った図のXMLだけだからである。
-リンクを押せず、外への取得はCSPが止める。
-XMLを加工すると、図の見た目が変わり、ビューアの解釈との差が新しい抜け道にもなる。
+リンクを含む図は、`validateDrawioXml`が生成の時点で拒否する。
+ビューアの設定とiframeの隔離は、検査をすり抜けた図に備える2層目である。
+iframeの中で動くscriptが取れるのは、そのiframeが受け取った図のXMLだけで、リンクを押せず、外への取得はCSPが止める。
+`html=1`を落とすと、`<br>`による改行のような正しい図が壊れる。
 
 残るリスクは次のとおりである。
 
@@ -518,7 +536,41 @@ XMLを加工すると、図の見た目が変わり、ビューアの解釈と�
   - ビューアが`eval`を呼ぶ箇所は2つある。図のスタイルや定義に書かれた式を評価する経路は、評価を許すフラグがどれも既定で無効である。外部の図形ライブラリのscriptを取得して評価する経路は、取得をCSPの`connect-src 'none'`が止める。`new Function`は無い。
   - `'unsafe-eval'`を付けずに、普通の図と、リンク、外部の画像、フォント、図形ライブラリ、評価を許す式を含む図を描いた。`eval`の違反は出なかった。
 - 外部の図形ライブラリ(AWSなどのアイコン集)を使う図は、その図形が描かれない。外部への取得をCSPが止めるためである。
-- Windmillのraw app(Factory Console)の`components/DrawioViewer.tsx`は、ビューアをdiagrams.netのCDNから読む。この部品は、Consoleの図の描画がこの隔離したiframeに移るまで残る。
+
+### 旧Consoleのraw appで描く
+
+Consoleの図の描画がiframeに移るまでは、Windmillのraw app(Factory Console)が図を描く。
+raw appの`components/DrawioViewer.tsx`は、ビューアをWindmillと同じオリジンで動かす。
+隔離したiframeの保護は無いので、ビューアの欠陥は、管理者としてWindmillを操作できるXSSになりうる。
+次の層で、そこへ至る経路を狭める。
+
+| 守ること | 内容 |
+| --- | --- |
+| 版を固定してSRIを付ける | ビューアは、commitを固定したjsDelivrのURLから読む。`<script>`に`integrity`と`crossOrigin = "anonymous"`を付け、バイト列が違えばブラウザが実行しない。raw.githubusercontent.comは`text/plain`と`nosniff`で返すので、scriptとして読めず、使わない |
+| 固定の値を一致させる | commitとSRIは、`lib/drawioViewerPin.ts`に書く。raw appは`console/drawio-viewer.json`をimportできないので、値を写し、`tests/lib/drawio_viewer_pin.test.ts`が、commitの一致と、sha256(16進)をbase64にした値の一致を確かめる |
+| リンクを開く機能を切る | `lightbox`と`nav`を無効にし、ツールバーを出さない。図の入れ物で、clickとauxclickの既定の動作を捕捉の段階で止め、図のラベルのリンクで外へ遷移させない |
+| 図を生成の時点で拒否する | 上の`validateDrawioXml`が、リンクとHTMLの要素を含む図を拒否する |
+
+sandboxとCSPは、このraw appには無い。ビューアの欠陥までは防げない。
+フロントエンドの図の部品とビューアの設定を変えるときは、この表の4つを保つ。
+
+## 要件定義書のリンク
+
+要件定義書と監査レポートのMarkdownは、Issueの内容に由来する。
+Windmillのraw appは、これをWindmillと同じオリジンで描く。
+`rehype-sanitize`の既定のスキーマは`javascript:`などを除くが、任意の`http(s)`のURLの`a[href]`は通す。
+そのため、読み手がリンクの文字を信じて、外のページを開くおそれがある。
+
+`components/Markdown.tsx`は`a`を差し替え、`lib/markdownLink.ts`の`resolveMarkdownLink`で、リンクにするものを絞る。
+
+- GitHubのIssueとPRのURL。`lib/githubLink.ts`の`safeGitHubUrl`を通るものに限る。
+- 同じページの見出しへのフラグメント。`#`で始まり、`lib/extractHeadings.ts`の`slugify`が作るslugと同じ形に限る。
+
+それ以外は、リンクにせず文字で出す。
+リンクの文字とURLが違うときは、URLも括弧で添える。
+読み手が行き先を判断できるようにするためである。
+同じページの見出しへのリンクは、行き先を取り違えようがないので、URLを添えない。
+GitHubへのリンクは、`rel="noopener noreferrer"`を付けて新しいタブで開く。
 
 ## PR修正の安全策
 

@@ -78,7 +78,12 @@ Claudeの出力が検査を通らないときは、問題点をプロンプト�
 
 Consoleの**要件定義**タブと、**承認**タブの要件定義の詳細は、どちらも`f/factory/steps/console_query.ts`の`requirements_doc`ビューを使う。このビューは`requirements_doc.ts`の検査とは別のものである。
 
-ビューは、DBの行の`doc_dir`から`requirements.md`と各図のファイルを読み戻す(`readDocFromDisk`)。raw appの`components/RequirementsDocument.tsx`、`Markdown.tsx`、`DrawioViewer.tsx`が、本文、目次、図をページの中に描画する。見た目はConfluenceの文書ページに近い。
+ビューは、DBの行の`doc_dir`から`requirements.md`と各図のファイルを読み戻す(`readDocFromDisk`)。
+raw appの`components/RequirementsDocument.tsx`、`Markdown.tsx`、`DrawioViewer.tsx`が、本文、目次、図をページの中に描画する。
+見た目はConfluenceの文書ページに近い。
+本文のリンクは、GitHubのIssueとPRのURLと見出しへのフラグメントだけをリンクにする。
+図は、リンクやHTMLの要素を含まないものだけを描く。
+理由は[セキュリティ](../security.md)の「draw.ioの図の描画」と「要件定義書のリンク」にある。
 
 読み戻しの規則は次のとおり。
 

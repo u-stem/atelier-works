@@ -4,6 +4,11 @@
 // 内容をClaudeが要約したものに由来するため、HTMLでスクリプトや危険な
 // プロトコルの`href`・`src`を差し込めないようにする
 // (同種の注意は`f/factory/lib/drawio.ts`にもある)。
+// リンクは`a`の差し替えで絞る。`rehype-sanitize`の既定は任意の`http(s)`の
+// URLを通すので、リンクにするのはGitHubのIssueとPRのURLと、同じページの
+// 見出しへのフラグメントだけにする(`lib/markdownLink.ts`)。それ以外は
+// リンクにせず文字で出す。リンクの文字とURLが違うときは、読み手が
+// 行き先を判断できるようにURLも添える。
 // `dangerouslySetInnerHTML`は使わない。`react-markdown`が無害化済みの
 // hastの木を直接Reactの要素にする。
 //
@@ -20,6 +25,7 @@ import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import { slugify } from "../lib/extractHeadings";
 import { ALERT_LABELS, stripAlertMarker } from "../lib/markdownAlerts";
+import { resolveMarkdownLink } from "../lib/markdownLink";
 import type { RequirementsDiagram } from "../lib/types";
 import { DrawioViewer } from "./DrawioViewer";
 
@@ -83,6 +89,34 @@ function childrenText(children: React.ReactNode): string {
 }
 
 const components: Components = {
+  a: ({ href, children }) => {
+    const link = resolveMarkdownLink(href, childrenText(children));
+    const note =
+      link.note === null ? null : (
+        <span className="md-link-url"> ({link.note})</span>
+      );
+    if (link.kind === "text") {
+      return (
+        <span className="md-link-disabled">
+          {children}
+          {note}
+        </span>
+      );
+    }
+    return (
+      <>
+        <a
+          href={link.href}
+          {...(link.external
+            ? { target: "_blank", rel: "noopener noreferrer" }
+            : {})}
+        >
+          {children}
+        </a>
+        {note}
+      </>
+    );
+  },
   h1: ({ children }) => <h1>{children}</h1>,
   h2: ({ children }) => {
     const id = slugify(childrenText(children));
