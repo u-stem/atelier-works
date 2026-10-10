@@ -57,6 +57,13 @@ atelier-worksのCIは、gitleaksでPRのコミットを走査する。
 実行されるのはlefthookのpre-commitのgitleaksだけで、ローカルで飛ばせる。
 PRを作ればCIが走査し、Factoryは実装ブランチのpushの前に走査するので、受け入れる。
 
+### CIのトークンの権限
+
+`ci.yml`の既定の権限は、リポジトリの読み取り(`contents: read`)だけである。
+`scope`ジョブだけが、実行の一覧を読む権限(`actions: read`)を足す。
+`main`へのpushで、直近で成功した実行のcommitを調べ、差分の基点にするためである。
+どちらも読み取りだけで、書き込みの権限は付けない。
+
 ### 開発セッションのsubagent
 
 `.claude/agents/`のsubagentは、開発のセッションで使うものである。
@@ -563,6 +570,7 @@ markdownlint-cli2とtextlintの設定(`.markdownlint-cli2.jsonc`、`.textlintrc.
 Consoleでバンドルを通らずに配信される`console/public/`と`console/index.html`も止める。
 配信するdraw.ioのビューアを固定する`console/drawio-viewer.json`も止める。
 固定を強制し、配信物を作って検査するスクリプトも止める。一覧は`f/factory/lib/protected_paths.ts`の`FORBIDDEN_EXACT_PATHS`にある。
+CIがどのジョブを動かすかを決める`scripts/ci-scope.ts`も止める。書き換えられると、検査のジョブを飛ばされるためである。
 配信のCSPを持つ`infra/Caddyfile`と、配信物を検証する`infra/console_fetcher/`も止める。
 一覧は`f/factory/lib/protected_paths.ts`にある。
 

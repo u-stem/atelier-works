@@ -145,51 +145,63 @@ CIの`metadata`ジョブも、メタデータが最新かを検査する。
   止めると、console_fetcherの取り込む成功した実行が欠けるためである。
 
 動いた実行の中では、`scope`ジョブが変更したファイルを見て、後続のジョブを動かすかを決める。
-判定は`scripts/ci-scope.ts`にあり、結果を6つのフラグで各ジョブに渡す。
+判定は`scripts/ci-scope.ts`にあり、結果を6つのフラグ(`db`、`worker`、`caddy`、`fetcher`、`metadata`、`console`)で各ジョブに渡す。
 飛ばしたジョブは課金されない。
 関係しないジョブを飛ばすと、GitHub Actionsの無料枠の消費が減る。
 `check`ジョブは常に動かす。
-ただし、`check`ジョブの中のworkerイメージのビルドとプロセスロックのテストは、`worker`が真のときだけ動かす。
+ただし、`check`ジョブの中のworkerイメージのビルドとプロセスロックのテストは、`worker`が偽のときに飛ばす。
 
 次のパスが変わると、すべてのフラグが真になる。
 CI自身と環境の定義が変わると、どのジョブの結果も変わりうるためである。
 
-- `.github/`
-- `infra/`
-- `mise.toml`
-- `package.json`
-- `bun.lock`
-- `wmill.yaml`
-- `scripts/`の下の`.sh`ファイル
+- `.github/workflows/`
+- `.github/`のうち、IssueとPRのテンプレート以外
+- `infra/`のうち、`Caddyfile`、`console_fetcher/`、`worker/`以外(`docker-compose*.yml`を含む)
+- `mise.toml`、`package.json`、`bun.lock`、`wmill.yaml`
+- ルートの`tsconfig*.json`
+- `scripts/`の下の`.sh`ファイル(次の表に挙げたものを除く)
+- `scripts/ci-scope.ts`と`tests/scripts/ci-scope.test.ts`(判定自身。誤ると検査を飛ばすため)
 
-共通のパス以外では、フラグごとに次のパスが変わったときだけ、そのジョブを動かす。
+それ以外のパスは、次の表のジョブだけを動かす。
 
-| フラグ | 動かすジョブ | 動かすパス |
-| --- | --- | --- |
-| `db` | `test-db` | `migrations/`、`scripts/test-db`で始まるファイル、`test:db`が読み込む`f/factory/`の下のファイル |
-| `worker` | `check`の中のworkerイメージのビルドとプロセスロックのテスト | `f/factory/lib/process_lock`と`tests/lib/process_lock`で始まるファイル、そのテストが読み込むファイル |
-| `caddy` | `caddyfile` | 共通のパスだけ(`infra/Caddyfile`と`infra/docker-compose.yml`は`infra/`に含まれる) |
-| `fetcher` | `console-fetcher-image` | 共通のパスだけ(`infra/console_fetcher/`は`infra/`に含まれる) |
-| `metadata` | `metadata` | `f/`、`dependencies/`、`wmill-lock.yaml` |
-| `console` | `console` | `console/`、`scripts/check-console-lockfile.ts` |
+| パス | 動かすジョブ |
+| --- | --- |
+| `infra/Caddyfile` | `caddyfile` |
+| `infra/console_fetcher/` | `console-fetcher-image` |
+| `infra/worker/` | `check`の中のworkerのステップ |
+| `migrations/`、`scripts/test-db`で始まるファイル | `test-db` |
+| `test:db`が読み込む`f/factory/`の下のファイル | `test-db`と`metadata` |
+| `f/factory/lib/process_lock`と`tests/lib/process_lock`で始まるファイル、そのテストが読み込むファイル | `check`の中のworkerのステップ |
+| `f/`、`dependencies/`、`wmill-lock.yaml` | `metadata` |
+| `scripts/check-metadata-fresh.sh`、`scripts/ci-metadata-login.sh` | `metadata` |
+| `console/`、`scripts/check-console-lockfile.ts` | `console` |
+| 文書、`tests/`、IssueとPRのテンプレート、`scripts/claude-hooks/run.sh`、`scripts/check-commit-msg.sh` | なし(`check`が検査する) |
 
 `console`ジョブは、型検査、lint、テストをしない。
 `check`ジョブの`mise run check`がConsoleの検査(`console:check`)を含むためである。
 `console`ジョブは、lockfileの検査、ビルド、draw.ioのビューアの取得と照合、マニフェストの書き出し、成果物の上げだけをする。
 
-判定の入力は次のとおりである。
+差分の基点は、イベントで決める。
 
 - PRは、マージ基点から先頭までの変更を見る。
-- `main`へのpushも、pushの直前から直後までの変更で判定する。
-  `metadata`ジョブも、変更が無ければ飛ばす。
+- `main`へのpushは、直近で成功した`ci.yml`の`main`のpushの実行のcommitから、今のcommitまでの変更を見る。
+  直前のpushを基点にすると、直前の実行が失敗していても、無関係な次のpushで失敗したジョブが飛ばされ、実行が成功になるためである。
+  成功した実行を基点にすれば、失敗したcommitの変更は、次の実行で必ず検査し直される。
 - `main`へのpushでは、`console`を常に真にする。
   `console_fetcher`が、`main`へのpushで成功した実行の成果物`console-dist`を取り込むため、毎回その実行を作る。
-- 差分を取れないとき、pushの直前がすべて0のとき、イベントを判別できないときは、すべてのフラグを真にする。
-  検査を見逃すより、余分に動かすほうが安全なためである。
-- ファイル名は、改行や空白を含んでいても壊れない形で読む。
-  名前の変更は、変更前と変更後の両方のパスを変更として扱う。
 
-`scope`ジョブが失敗すると、後続のジョブはすべて飛ばされ、実行は失敗になる。
+次のときは、すべてのフラグを真にする。
+検査を見逃すより、余分に動かすほうが安全なためである。
+
+- 差分を取れないとき
+- `main`へのpushで、成功した実行を取得できないとき、結果が空のとき、そのcommitが今のcommitの履歴に無いとき
+- イベントを判別できないとき
+
+ファイル名は、改行や空白を含んでいても壊れない形で読む。
+名前の変更は、変更前と変更後の両方のパスを変更として扱う。
+
+後続のジョブは、`scope`の出力が欠けても動く。
+`scope`ジョブが失敗しても、後続のジョブは動かし、実行は失敗になる。
 
 必須のステータスチェックは設定していない。
 そのため、飛ばしたジョブがPRのマージを止めることは無い。
