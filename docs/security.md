@@ -730,6 +730,12 @@ GitHubでは、ラベルを付けるのにtriage以上の権限が要る。`auth
 そのため、ラベルを付けられる人は、承認の取り消しも起こせる。
 pushの権限を持たないtriageの権限のcollaboratorも、これに含まれる。
 
+残るリスクとして、許可されていない人の操作を運用者に見せるnotice(`labeler_association_denied`)が、運用者の見ないまま要対応の一覧から消えることがある。
+許可された人がラベルを付け直してIssueを取得すると、`poll_issues`がそのIssueの未解決の同noticeを解決済みにする(`resolved_by`は`poll_issues`)。対象の範囲は[通知とrate limit](internals/notifications.md)にある。
+解決した後も行は残り、`retention_logs_days`(既定30日)の掃除まで読める。
+許可されていない人は、取得の条件である最後のラベル付与者が許可された人であることを満たせないので、この解決を起こせない。
+Consoleからは解決できない種類だが、人の介在を減らすため、この自動の解決を受け入れる。
+
 PRのレビューとコメントも、投稿者で絞る。許可する関係は`allowed_labeler_associations`で、既定値は`["OWNER", "MEMBER", "COLLABORATOR"]`である。これに当たらない投稿者のレビューコメントと新しいコメントは、`pr_review`と`pr_fix`の起動に使わない。
 
 `factory:review`と`factory:fix`のラベルについては、タイムラインを確かめず、GitHubの権限の制約だけに頼る。この制約は付与の操作そのものにかかるので、取り込みでラベルが外れた後も弱まらない。
