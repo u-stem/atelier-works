@@ -125,20 +125,7 @@ LEFTHOOK_EXCLUDE=wmill-metadata-check git push
 
 CIの`metadata`ジョブも、メタデータが最新かを検査する。
 使い捨てのWindmillをdbとサーバーだけで起動し、空のワークスペースを作って`mise run metadata:check`を実行する。
-`main`へのpushでは、変更に関わらず毎回検査する。
-`main`のCIの結果は、`main`全体の状態を表すためである。
-
-PRでは、次のどれにも触れないとき、検査を飛ばして成功にする。
-
-- メタデータの入力: `f/`、`dependencies/`、`wmill.yaml`、`wmill-lock.yaml`
-- このジョブの定義
-  - `.github/workflows/ci.yml`
-  - `infra/docker-compose.yml`と`infra/docker-compose.ci.yml`
-  - `scripts/ci-metadata-login.sh`と`scripts/check-metadata-fresh.sh`
-  - `mise.toml`
-
-比べる範囲は、マージ基点からの変更である。
-基点や差分を求められないときは、安全のために検査する。
+このジョブを動かす条件は、「CIの実行の範囲」にある。
 
 フックを飛ばしてコミットしたPRは、手元で`mise run metadata`を実行してpushし直すまで、このジョブで失敗する。
 
@@ -156,6 +143,94 @@ PRでは、次のどれにも触れないとき、検査を飛ばして成功に
 - 同じ参照の古いPRの実行は、新しい実行が始まると止める。
 - `main`の実行は止めない。
   止めると、console_fetcherの取り込む成功した実行が欠けるためである。
+
+動いた実行の中では、`scope`ジョブが変更したファイルを見て、後続のジョブを動かすかを決める。
+判定は`scripts/ci-scope.ts`にあり、結果を6つのフラグ(`db`、`worker`、`caddy`、`fetcher`、`metadata`、`console`)で各ジョブに渡す。
+飛ばしたジョブは課金されない。
+関係しないジョブを飛ばすと、GitHub Actionsの無料枠の消費が減る。
+`check`ジョブは常に動かす。
+ただし、`check`ジョブの中のworkerイメージのビルドとプロセスロックのテストは、`worker`が偽のときに飛ばす。
+
+変更したパスは、次の順に規則を当てて、動かすジョブを決める。
+
+1. 個別の規則: 先に当たった規則だけを使う。
+2. 入力が決まっているパスの規則: 当たった規則のジョブをすべて動かす。
+3. 許可リスト: `check`の検査だけで足りるパス。どのジョブも動かさない。
+4. どれにも当たらないパス: すべてのフラグを真にする。
+
+どれにも当たらないパスは、読むジョブが分からない。
+検査を見逃すより、余分に動かすほうが安全なため、すべてのジョブを動かす。
+許可リストには、迷うパスを入れない。
+
+次のパスが変わると、すべてのフラグが真になる。
+CI自身と環境の定義が変わると、どのジョブの結果も変わりうるためである。
+
+- `.github/workflows/`
+- `.github/`のうち、IssueとPRのテンプレート以外
+- `infra/`のうち、`Caddyfile`、`console_fetcher/`、`worker/`以外(`docker-compose*.yml`を含む)
+- `mise.toml`、`package.json`、`bun.lock`、`wmill.yaml`
+- ルートの`tsconfig*.json`
+- `scripts/`の下の`.sh`ファイル(次の表に挙げたものを除く)
+- `scripts/ci-scope.ts`と`tests/scripts/ci-scope.test.ts`(判定自身。誤ると検査を飛ばすため)
+- 次の表と許可リストのどちらにも無いパス(例: `.mise.toml`、`.tool-versions`、`bunfig.toml`、`.npmrc`、`.gitattributes`)
+
+次の表のパスは、表のジョブだけを動かす。
+
+| パス | 動かすジョブ |
+| --- | --- |
+| `infra/Caddyfile` | `caddyfile` |
+| `infra/console_fetcher/` | `console-fetcher-image` |
+| `infra/worker/` | `check`の中のworkerのステップ |
+| `migrations/`、`scripts/test-db`で始まるファイル | `test-db` |
+| `test:db`が読み込む`f/factory/`の下のファイル | `test-db`と`metadata` |
+| `f/factory/lib/process_lock`と`tests/lib/process_lock`で始まるファイル、そのテストが読み込むファイル | `check`の中のworkerのステップ |
+| `f/`、`dependencies/`、`wmill-lock.yaml` | `metadata` |
+| `scripts/check-metadata-fresh.sh`、`scripts/ci-metadata-login.sh` | `metadata` |
+| `console/`、`scripts/check-console-lockfile.ts` | `console` |
+
+許可リストは、次のパスである。
+どれも、読むのは`check`のステップだけで、他のジョブは読まない。
+
+| パス | 理由 |
+| --- | --- |
+| `docs/`、`.md`ファイル | lint:docsとdocs:gen --checkが検査する |
+| `tests/` | テストは`check`だけが実行する(プロセスロックとCIの判定のテストは、上の規則が先に当たる) |
+| `.claude/`、`.agents/`、`templates/` | CIのジョブは読まない |
+| `rt.d.ts`、ルートの`c_factory_config.resource-type.yaml` | `wmill.yaml`の同期の対象(`f/**`)の外で、メタデータの入力ではない |
+| `biome.json`、`lefthook.yml`、`.gitleaks.toml`、`.textlintrc.json`、`.markdownlint`で始まるファイル、`.gitignore`、`LICENSE` | lintと走査の設定で、`check`のステップが読む |
+| `scripts/`の下の`.ts`ファイル | 上の規則に当たらないものは、`check`のテストが担う |
+| IssueとPRのテンプレート、`scripts/claude-hooks/run.sh`、`scripts/check-commit-msg.sh` | `check`の文書の検査とテストが担う |
+
+`console`ジョブは、型検査、lint、テストをしない。
+`check`ジョブの`mise run check`がConsoleの検査(`console:check`)を含むためである。
+`console`ジョブは、lockfileの検査、ビルド、draw.ioのビューアの取得と照合、マニフェストの書き出し、成果物の上げだけをする。
+
+差分の基点は、イベントで決める。
+
+- PRは、マージ基点から先頭までの変更を見る。
+- `main`へのpushは、直近で成功した`ci.yml`の`main`のpushの実行のcommitから、今のcommitまでの変更を見る。
+  直前のpushを基点にすると、直前の実行が失敗していても、無関係な次のpushで失敗したジョブが飛ばされ、実行が成功になるためである。
+  成功した実行を基点にすれば、失敗したcommitの変更は、次の実行で必ず検査し直される。
+- `main`へのpushでは、`console`を常に真にする。
+  `console_fetcher`が、`main`へのpushで成功した実行の成果物`console-dist`を取り込むため、毎回その実行を作る。
+
+次のときは、すべてのフラグを真にする。
+検査を見逃すより、余分に動かすほうが安全なためである。
+
+- 差分を取れないとき
+- `main`へのpushで、成功した実行を取得できないとき、結果が空のとき、結果の形が不正なとき
+- `main`へのpushで、基点が今のcommitと同じとき、または今のcommitの履歴に無いとき
+- イベントを判別できないとき
+
+理由は、`scope`ジョブのログに`scope fallback: <理由>`の1行で出る。
+
+ファイル名は、改行や空白を含んでいても壊れない形で読む。
+名前の変更は、変更前と変更後の両方のパスを変更として扱う。
+
+後続のジョブは、`scope`の出力が欠けても動く。
+`scope`ジョブが失敗しても、後続のジョブは動かし、実行は失敗になる。
+
+条件で飛ばしたジョブは、成功として扱われる。
 
 ### git worktreeのログイン情報
 

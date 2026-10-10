@@ -21,7 +21,60 @@ permissions:
   contents: read
 
 jobs:
+  scope:
+    # 変更したパスから、後続のジョブを動かすかを決める。判定は`scripts/ci-scope.ts`にある。
+    # 差分を取れないときは、すべて動かす。
+    # `main`へのpushは、直近で成功した実行のcommitからの変更を見る。前の失敗を次の実行で必ず検査し直すため。
+    # `mise run`も`mise exec`も使わずbunを直接呼ぶので、bun以外のツールを入れない。
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # 実行の一覧を読むために、このジョブだけ`actions: read`を足す。読み取りだけで、書き込みは付けない。
+    permissions:
+      contents: read
+      actions: read
+    env:
+      MISE_TASK_RUN_AUTO_INSTALL: "false"
+      MISE_EXEC_AUTO_INSTALL: "false"
+    outputs:
+      db: ${{ steps.scope.outputs.db }}
+      worker: ${{ steps.scope.outputs.worker }}
+      caddy: ${{ steps.scope.outputs.caddy }}
+      fetcher: ${{ steps.scope.outputs.fetcher }}
+      metadata: ${{ steps.scope.outputs.metadata }}
+      console: ${{ steps.scope.outputs.console }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # PRの基点と先頭、pushの基点と今のcommitの差分を取るため、全履歴を取得する。
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup mise
+        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          # スクリプトを動かすbunだけを入れる。キャッシュは読み書きしない。
+          install_args: bun
+          cache: false
+
+      - name: Determine which jobs to run
+        id: scope
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          AFTER_SHA: ${{ github.sha }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          # `main`へのpushで、直近で成功した実行を調べるために`gh`が読む。PRの実行には渡さない。
+          GH_TOKEN: ${{ github.event_name == 'push' && github.token || '' }}
+        # `bun run <名前>`は`package.json`のscriptsを先に解決するので、ファイルとして実行する。
+        run: bun ./scripts/ci-scope.ts
+
   check:
+    # 常に動かす。lint、型検査、テスト、秘密情報の走査は、どの変更にも要る。
+    # `scope`が失敗しても動かす。workerイメージに関わるステップだけを、`scope`の判定で絞る。
+    needs: scope
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -82,6 +135,7 @@ jobs:
           fi
 
       - name: Build worker image
+        if: needs.scope.outputs.worker != 'false'
         # `.env`は無く、workerのビルド入力は`mise.toml`の`[env]`にある。
         # `mise exec -c '...'`は`[env]`を適用したシェルでコマンドを実行するので、
         # `$WM_VERSION`などはこのステップのシェル(値を持たない)ではなく、
@@ -102,6 +156,7 @@ jobs:
           '
 
       - name: Test the process lock in the worker image
+        if: needs.scope.outputs.worker != 'false'
         # /procを全件走査するプロセスロックのテストは、rootでないと`mise run check`では飛ばされる。
         # workerと同じ条件で走らせる。同じイメージを使い、自分のPID名前空間の中でrootとして動かす。
         # `--init`はworkerの`init: true`に合わせる。PID 1のtiniが、止めた保持者の孤児を回収するため。
@@ -112,6 +167,8 @@ jobs:
   test-db:
     # `check`ジョブ(とworkerイメージのビルド)から独立させる。
     # Postgresの起動が遅い・不安定なときに、イメージのビルドと互いに待たせないため。
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.outputs.db != 'false' }}
     runs-on: ubuntu-latest
     env:
       # 使い捨て専用の値。`migrations/datatable/main/*.{up,down}.sql`は、
@@ -143,7 +200,9 @@ jobs:
     # ローカルのpre-pushは、Windmillを起動できないときに`LEFTHOOK_EXCLUDE`で飛ばせる。
     # 飛ばしたコミットが古いメタデータのままマージされると、mainの自動反映がそれを配る。
     # `check`ジョブから独立させる。
-    # 関係する変更が無いときは、最初のステップの出力で後続のステップを飛ばして成功にする。
+    # 関係する変更が無いときは、`scope`ジョブの判定でジョブごと飛ばす。
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.outputs.metadata != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -158,52 +217,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
           persist-credentials: false
 
-      - name: Determine whether the metadata can be stale
-        # `main`へのpushか、メタデータの入力かこのジョブの定義に触れるPRのときだけ、後続のステップを動かす。
-        # 入力は、`f/`、ルートの`dependencies/`(ワークスペースの依存。ハッシュに入る)、
-        # `wmill.yaml`(走査の範囲や言語を決める)、`wmill-lock.yaml`である。
-        # このジョブ自身の定義(ワークフロー、compose、2つのスクリプト、`mise.toml`)が
-        # 変わったときも、変更が動くことを確かめるために検査する。
-        # `main`へのpushは、差分に関わらず常に検査する。
-        # `main`のCIの結論は、`main`全体の状態を表すものとして使うため、
-        # pushした範囲だけでなく、ツリー全体を検査した結果でなければならない。
-        # PRはマージ基点からの変更で見る。差分を取れないときは、安全側に倒して検査する。
-        id: scope
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -euo pipefail
-          run="true"
-          if [ "$EVENT_NAME" = "pull_request" ]; then
-            if changed="$(git diff --name-only "${BASE_SHA}...${HEAD_SHA}" -- \
-              f dependencies wmill.yaml wmill-lock.yaml \
-              .github/workflows/ci.yml infra/docker-compose.yml infra/docker-compose.ci.yml \
-              scripts/ci-metadata-login.sh scripts/check-metadata-fresh.sh mise.toml)"; then
-              if [ -z "$changed" ]; then
-                run="false"
-              fi
-            fi
-          fi
-          echo "run=${run}" >> "$GITHUB_OUTPUT"
-          echo "metadata check needed: ${run}"
-
       - name: Setup mise
-        if: steps.scope.outputs.run == 'true'
         uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
 
       - name: Start Windmill (db and server only)
         # `docker-compose.ci.yml`が、サーバーを`127.0.0.1:8080`に公開する。
         # `metadata:check`は`generate-metadata --dry-run`で、workerを必要としない。
-        if: steps.scope.outputs.run == 'true'
         run: mise exec -- docker compose up -d --wait db windmill_server
 
       - name: Wait for the Windmill API
-        if: steps.scope.outputs.run == 'true'
         run: |
           set -euo pipefail
           base_url="$(mise exec -- printenv WM_BASE_URL)"
@@ -219,27 +243,29 @@ jobs:
 
       - name: Register an empty workspace
         # 既定の管理者で空のワークスペース`factory`を作る。使い捨てのサーバー専用の手順。
-        if: steps.scope.outputs.run == 'true'
         run: mise exec -- scripts/ci-metadata-login.sh
 
       - name: Check that the metadata is up to date
-        if: steps.scope.outputs.run == 'true'
         run: mise run metadata:check
 
       - name: Show diagnostics
         # ログインやメタデータの検査が失敗したとき、原因を追えるようにサーバーの状態を残す。
-        if: failure() && steps.scope.outputs.run == 'true'
+        if: failure()
         run: |
           mise exec -- docker compose ps
           mise exec -- docker compose logs --tail 200 windmill_server
 
       - name: Tear down Windmill
-        if: always() && steps.scope.outputs.run == 'true'
+        if: always()
         run: mise exec -- docker compose down -v
 
   console:
     # Consoleを組み立て、mainへのpushのときだけ成果物にする。
     # console_fetcherは、このワークフロー全体が成功した実行の成果物だけを取り込む。
+    # 型検査、lint、テストは`check`ジョブの`mise run check`(console:check)が担う。
+    # mainへのpushでは、`scope`ジョブが常に動かす。成果物を毎回上げるため。
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.outputs.console != 'false' }}
     runs-on: ubuntu-latest
     env:
       # このジョブは`mise run` / `mise exec`を使わずbunを直接呼ぶ。
@@ -267,19 +293,11 @@ jobs:
 
       - name: Check the console lockfile policy
         # 依存を入れる前に、取得元がregistryとintegrityに限られることを確かめる。
-        run: bun run scripts/check-console-lockfile.ts console/bun.lock
+        # `bun run <名前>`は`package.json`のscriptsを先に解決するので、ファイルとして実行する。
+        run: bun ./scripts/check-console-lockfile.ts console/bun.lock
 
       - name: Install console dependencies
         run: bun install --cwd console --frozen-lockfile --ignore-scripts
-
-      - name: Type-check
-        run: bun run --cwd console typecheck
-
-      - name: Lint
-        run: bunx --bun biome check console
-
-      - name: Test
-        run: bun run --cwd console test
 
       - name: Build
         run: bun run --cwd console build
@@ -326,6 +344,8 @@ jobs:
 
   caddyfile:
     # Caddyfileを、composeで使うのと同じイメージで検証する。
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.outputs.caddy != 'false' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -344,6 +364,8 @@ jobs:
   console-fetcher-image:
     # console_fetcherのイメージを組み立て、composeと同じ制限(読み取り専用のルート、tmpfs、
     # 権限なし)で1回動かす。トークンが無いので、状態にconfig_missingを書いて終わるはず。
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.outputs.fetcher != 'false' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
