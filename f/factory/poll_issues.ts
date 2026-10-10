@@ -29,6 +29,7 @@ import {
   listExpiredPendingApprovalRequests,
   nextCycleForIssue,
   recordFailure,
+  resolveUnresolvedNoticesByPrefix,
   setFlowJobId,
   updateStatusIfCurrent,
   updateStatusIfLeaseHolder,
@@ -535,12 +536,56 @@ const CLAIM_OWNERSHIP_UNKNOWN_REASON =
 export type ClaimNoticeDeps = {
   readonly claimIssue: typeof claimIssue;
   readonly addNoticeUnlessUnresolved: typeof addNoticeUnlessUnresolved;
+  readonly resolveUnresolvedNoticesByPrefix: typeof resolveUnresolvedNoticesByPrefix;
 };
 
 const defaultClaimNoticeDeps: ClaimNoticeDeps = {
   claimIssue,
   addNoticeUnlessUnresolved,
+  resolveUnresolvedNoticesByPrefix,
 };
+
+/** `poll_issues`がnoticeを解決済みにしたときに、`resolved_by`へ記録する名前。 */
+export const POLL_ISSUES_RESOLVER = "poll_issues";
+
+/** 関係の検査で見送ったIssueのnoticeの`kind`。 */
+const LABELER_DENIED_KIND = "labeler_association_denied";
+
+/**
+ * 関係の検査で見送ったIssueのnoticeの本文の先頭を返す。
+ * 記録(`recordLabelerAssociationDenied`)と解決(`claimIssueWithNotice`)が同じ関数から作り、
+ * 両者がずれて解決できなくなるのを防ぐ。
+ * 末尾の`: `までを含めるので、`#1`の接頭辞は`#12`のnoticeに当たらない。
+ */
+export function labelerDeniedMessagePrefix(
+  candidate: Pick<IssueCandidate, "owner" | "repo" | "number">,
+): string {
+  return `${candidate.owner}/${candidate.repo}#${String(candidate.number)}: `;
+}
+
+/**
+ * 取得できたIssueの、見送りのnoticeを解決済みにする。
+ * 許可された人がラベルを付け直して取得できたので、見送りの記録はもう対応を要しない。
+ * 解決に失敗しても、取得は成否を変えない(ラベルは既に外れている)。警告をログに残すだけにする。
+ */
+async function resolveLabelerDenied(
+  candidate: IssueCandidate,
+  resolve: typeof resolveUnresolvedNoticesByPrefix,
+  log: Logger,
+): Promise<void> {
+  try {
+    await resolve(
+      LABELER_DENIED_KIND,
+      labelerDeniedMessagePrefix(candidate),
+      POLL_ISSUES_RESOLVER,
+    );
+  } catch (err) {
+    log.warn("labeler_association_denied notices could not be resolved", {
+      target: `${candidate.owner}/${candidate.repo}#${String(candidate.number)}`,
+      error: maskSecrets(err instanceof Error ? err.message : String(err)),
+    });
+  }
+}
 
 /**
  * Issueを取得し、作業を始めてよいか(取得できたか)を返す。
@@ -549,6 +594,9 @@ const defaultClaimNoticeDeps: ClaimNoticeDeps = {
  *   付いていないときだけ、確認の手がかりを`claim_assignee_missing`のnoticeに残す。
  *   このnoticeの記録は、失敗しても取得を妨げない。ラベルは既に外れているので、
  *   ここで例外にすると、ラベルも作業項目も無いIssueが残る。
+ * - 取得できたときは、そのIssueの`labeler_association_denied`のnoticeを解決済みにする。
+ *   許可された人がラベルを付け直した結果なので、見送りの記録は残さない。
+ *   解決の失敗は取得を妨げず、警告をログに残す。
  * - ほかが先にラベルを外したときは、`claim_race_lost`のnoticeを残して引く。
  * - ラベルの削除が失敗してラベルが残っているときは、次のポーリングが拾い直すので、
  *   通知もnoticeもなく引く。
@@ -590,6 +638,11 @@ export async function claimIssueWithNotice(
     } else if (claimResult.assignee === "unknown") {
       log.warn("claim assignee could not be confirmed", { target });
     }
+    await resolveLabelerDenied(
+      candidate,
+      deps.resolveUnresolvedNoticesByPrefix,
+      log,
+    );
     return true;
   }
 
@@ -701,8 +754,8 @@ export async function recordLabelerAssociationDenied(
   deps: LabelerDeniedDeps = defaultLabelerDeniedDeps,
 ): Promise<void> {
   await deps.addNoticeUnlessUnresolved({
-    kind: "labeler_association_denied",
-    message: `${candidate.owner}/${candidate.repo}#${candidate.number}: 直近のラベル付与者のassociation "${association ?? "unknown"}" はallowed_labeler_associationsに含まれていません`,
+    kind: LABELER_DENIED_KIND,
+    message: `${labelerDeniedMessagePrefix(candidate)}直近のラベル付与者のassociation "${association ?? "unknown"}" はallowed_labeler_associationsに含まれていません`,
   });
 }
 

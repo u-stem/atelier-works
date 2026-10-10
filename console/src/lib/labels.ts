@@ -49,6 +49,7 @@ const NOTICE_KIND_LABELS: ReadonlyMap<string, string> = new Map([
   ["pr_fix_reviewer_request_failed", "再レビュー依頼の失敗"],
   ["issue_proposal_record_failed", "Issue提案の記録の失敗"],
   ["claim_assignee_missing", "担当者の未設定"],
+  ["pr_trigger_label_left_removed", "PRのトリガーラベルの外れ"],
   ["deployed_sha_mismatch", "反映された版の不一致"],
   ["cleanup_db_failed", "データベースの掃除の失敗"],
   ["cleanup_worktree_busy", "作業ディレクトリの使用中"],

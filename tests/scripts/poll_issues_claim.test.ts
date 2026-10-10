@@ -5,6 +5,7 @@
 // 人へ知らせるのは、所有したかどうかを自動で判断できないときだけで、
 // 1回のポーリングで該当したIssueは1件の通知にまとめる。
 // 関係の検査で見送るIssueのnoticeは、ポーリングのたびに積み上がらない。
+// Issueを取得できたら、そのIssueの見送りのnoticeを解決済みにする。
 
 import { describe, expect, test } from "bun:test";
 import type { NotifyEvent } from "../../f/factory/lib/discord.ts";
@@ -23,6 +24,7 @@ import {
   claimIssueWithNotice,
   type DecisionHandlers,
   type LabelerDeniedDeps,
+  labelerDeniedMessagePrefix,
   notifyClaimOwnershipUnknown,
   processIssueDecisions,
   recordLabelerAssociationDenied,
@@ -46,9 +48,12 @@ const silentLog: Logger = { info() {}, warn() {}, error() {} };
 type Notice = { kind: string; message: string };
 type Sent = { webhookUrl: string; event: NotifyEvent };
 
+type Resolved = { kind: string; prefix: string; resolvedBy: string };
+
 type Fakes = {
   deps: ClaimNoticeDeps;
   notices: Notice[];
+  resolved: Resolved[];
 };
 
 function fakeDeps(
@@ -56,15 +61,20 @@ function fakeDeps(
   overrides: Partial<ClaimNoticeDeps> = {},
 ): Fakes {
   const notices: Notice[] = [];
+  const resolved: Resolved[] = [];
   const deps: ClaimNoticeDeps = {
     claimIssue: claim,
     addNoticeUnlessUnresolved: async (record) => {
       notices.push({ kind: record.kind, message: record.message });
       return notices.length;
     },
+    resolveUnresolvedNoticesByPrefix: async (kind, prefix, resolvedBy) => {
+      resolved.push({ kind, prefix, resolvedBy });
+      return 1;
+    },
     ...overrides,
   };
-  return { deps, notices };
+  return { deps, notices, resolved };
 }
 
 function run(deps: ClaimNoticeDeps, log: Logger = silentLog): Promise<boolean> {
@@ -438,6 +448,66 @@ describe("notifyClaimOwnershipUnknown", () => {
   });
 });
 
+describe("claimIssueWithNotice resolves the labeler_association_denied notice", () => {
+  test("resolves the notice of the claimed issue", async () => {
+    const { deps, resolved } = fakeDeps(CLAIMED_CONFIRMED);
+    await run(deps);
+    expect(resolved).toEqual([
+      {
+        kind: "labeler_association_denied",
+        prefix: "octo-owner/atelier-works#12: ",
+        resolvedBy: "poll_issues",
+      },
+    ]);
+  });
+
+  test("resolves the notice even when the assignee did not stick", async () => {
+    const { deps, resolved } = fakeDeps(CLAIMED_MISSING);
+    await run(deps);
+    expect(resolved).toHaveLength(1);
+  });
+
+  test("resolves the notice even when the confirmation read failed", async () => {
+    const { deps, resolved } = fakeDeps(CLAIMED_UNKNOWN);
+    await run(deps);
+    expect(resolved).toHaveLength(1);
+  });
+
+  test("keeps the notice when another instance won", async () => {
+    const { deps, resolved } = fakeDeps(LOST);
+    await run(deps);
+    expect(resolved).toEqual([]);
+  });
+
+  test("keeps the notice when the label remains", async () => {
+    const { deps, resolved } = fakeDeps(RETRY);
+    await run(deps);
+    expect(resolved).toEqual([]);
+  });
+
+  test("returns true even when resolving the notice fails", async () => {
+    const { deps } = fakeDeps(CLAIMED_CONFIRMED, {
+      resolveUnresolvedNoticesByPrefix: async () => {
+        throw new Error("db down");
+      },
+    });
+    expect(await run(deps)).toBe(true);
+  });
+
+  test("logs a warning when resolving the notice fails", async () => {
+    const { deps } = fakeDeps(CLAIMED_CONFIRMED, {
+      resolveUnresolvedNoticesByPrefix: async () => {
+        throw new Error("db down");
+      },
+    });
+    const { log, warns } = recordingLog();
+    await run(deps, log);
+    expect(warns).toEqual([
+      "labeler_association_denied notices could not be resolved",
+    ]);
+  });
+});
+
 describe("claimIssueWithNotice when the claim fails before the label is removed", () => {
   test("rethrows the original error", async () => {
     const { deps } = fakeDeps(BEFORE_LABEL_FAILS);
@@ -477,6 +547,26 @@ describe("recordLabelerAssociationDenied", () => {
     await recordLabelerAssociationDenied(CANDIDATE, "NONE", deps);
     await recordLabelerAssociationDenied(CANDIDATE, "NONE", deps);
     expect(recorded[1]?.message).toBe(EXPECTED_MESSAGE);
+  });
+
+  test("starts the message with the prefix used to resolve it", async () => {
+    const { deps, recorded } = denyDeps();
+    await recordLabelerAssociationDenied(CANDIDATE, "NONE", deps);
+    expect(
+      recorded[0]?.message.startsWith(labelerDeniedMessagePrefix(CANDIDATE)),
+    ).toBe(true);
+  });
+
+  test("does not let the prefix of one issue match another issue number", async () => {
+    const { deps, recorded } = denyDeps();
+    await recordLabelerAssociationDenied(
+      { ...CANDIDATE, number: 120 },
+      "NONE",
+      deps,
+    );
+    expect(
+      recorded[0]?.message.startsWith(labelerDeniedMessagePrefix(CANDIDATE)),
+    ).toBe(false);
   });
 
   test("falls back to unknown when the association is not known", async () => {

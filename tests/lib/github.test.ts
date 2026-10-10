@@ -170,10 +170,11 @@ describe("getViewer", () => {
   test("throws with a masked message on a non-rate-limit HTTP error", async () => {
     const fake = createFakeCommandRunner([
       ok(ghApiStdout(500, { message: "boom" })),
+      ok(ghApiStdout(500, { message: "boom" })),
     ]);
-    await expect(getViewer({ run: fake.run, ghToken: "tok" })).rejects.toThrow(
-      /HTTP 500/,
-    );
+    await expect(
+      getViewer({ run: fake.run, ghToken: "tok", sleep: async () => {} }),
+    ).rejects.toThrow(/HTTP 500/);
   });
 
   test("rejects a response whose id is not a number", async () => {
@@ -660,12 +661,81 @@ describe("transient failure retry", () => {
   });
 
   describe("HTTP error responses", () => {
-    test("does not retry a 500", async () => {
+    const serverError = ok(ghApiStdout(500, { message: "boom" }));
+    const createArgs = { title: "t", body: "b" };
+
+    test("succeeds on the retry of a GET after a 500", async () => {
+      const { client } = fakeClient([serverError, viewerOk]);
+      const viewer = await getViewer(client);
+      expect(viewer.login).toBe("factory-bot");
+    });
+
+    test("waits the injected delay once before retrying a GET after a 500", async () => {
+      const sleeps: number[] = [];
+      const { client } = fakeClient([serverError, viewerOk], sleeps, 250);
+      await getViewer(client);
+      expect(sleeps).toEqual([250]);
+    });
+
+    test("retries a GET after a 599", async () => {
       const { client, calls } = fakeClient([
-        ok(ghApiStdout(500, { message: "boom" })),
+        ok(ghApiStdout(599, { message: "edge" })),
+        viewerOk,
+      ]);
+      await getViewer(client);
+      expect(calls.length).toBe(2);
+    });
+
+    test("reports the second 5xx when the retry fails too", async () => {
+      const { client } = fakeClient([
+        serverError,
+        ok(ghApiStdout(502, { message: "bad gateway" })),
+      ]);
+      await expect(getViewer(client)).rejects.toThrow(/HTTP 502/);
+    });
+
+    test("does not send a third request after two 5xx responses", async () => {
+      const { client, calls } = fakeClient([
+        serverError,
+        serverError,
         viewerOk,
       ]);
       await rejectionOf(getViewer(client));
+      expect(calls.length).toBe(2);
+    });
+
+    test("retries a GraphQL query that reads review threads after a 502", async () => {
+      const { client, calls } = fakeClient([
+        ok(ghApiStdout(502, { message: "bad gateway" })),
+        ghApiOk(reviewThreadsGraphqlPayload([])),
+      ]);
+      await listReviewThreads(client, "acme", "widgets", 7);
+      expect(calls.length).toBe(2);
+    });
+
+    test("does not resend the resolveReviewThread mutation after a 500", async () => {
+      const { client, calls } = fakeClient([serverError, ok("")]);
+      await rejectionOf(resolveReviewThread(client, "PRRT_1"));
+      expect(calls.length).toBe(1);
+    });
+
+    test("does not retry a POST after a 500", async () => {
+      const { client, calls } = fakeClient([serverError, issueCreated]);
+      await rejectionOf(createIssue(client, "acme", "widgets", createArgs));
+      expect(calls.length).toBe(1);
+    });
+
+    test("does not retry a DELETE after a 500", async () => {
+      const { client, calls } = fakeClient([serverError, ok("")]);
+      await rejectionOf(removeLabel(client, "acme", "widgets", 7, "bug"));
+      expect(calls.length).toBe(1);
+    });
+
+    test("does not retry a PATCH after a 500", async () => {
+      const { client, calls } = fakeClient([serverError, ok("")]);
+      await rejectionOf(
+        updatePullRequest(client, "acme", "widgets", 7, { title: "t" }),
+      );
       expect(calls.length).toBe(1);
     });
 
@@ -678,13 +748,10 @@ describe("transient failure retry", () => {
       expect(calls.length).toBe(1);
     });
 
-    test("does not wait before reporting a 500", async () => {
+    test("does not wait before reporting a 500 for a POST", async () => {
       const sleeps: number[] = [];
-      const { client } = fakeClient(
-        [ok(ghApiStdout(500, { message: "boom" }))],
-        sleeps,
-      );
-      await rejectionOf(getViewer(client));
+      const { client } = fakeClient([serverError], sleeps);
+      await rejectionOf(createIssue(client, "acme", "widgets", createArgs));
       expect(sleeps).toEqual([]);
     });
   });
@@ -1018,6 +1085,8 @@ describe("claimIssue", () => {
   const RETRY_LOG = "claim deferred: trigger label is still present";
   const UNKNOWN_LOG = "claim ownership could not be determined";
   const ATTEMPT_LOG = "claim re-read attempt failed";
+  /** 冪等な読み取りの5xxを1回再送する前の待機。試行の間の待機と見分けるため、他と異なる値にする。 */
+  const TRANSIENT_DELAY_MS = 5;
 
   function setup(responses: readonly CommandResult[]) {
     const fake = createFakeCommandRunner(responses);
@@ -1036,6 +1105,7 @@ describe("claimIssue", () => {
       sleep: async (ms) => {
         sleeps.push(ms);
       },
+      transientRetryDelayMs: TRANSIENT_DELAY_MS,
     };
     return { fake, client, sleeps, warns, opts: { ...OPTS, log } };
   }
@@ -1163,6 +1233,7 @@ describe("claimIssue", () => {
         assigned,
         serverError,
         serverError,
+        serverError,
         labelPresent(),
       ]);
       const result = await claimIssue(client, "acme", "widgets", 5, opts);
@@ -1174,10 +1245,11 @@ describe("claimIssue", () => {
         assigned,
         serverError,
         serverError,
+        serverError,
         labelPresent(),
       ]);
       await claimIssue(client, "acme", "widgets", 5, opts);
-      expect(sleeps).toEqual([1000]);
+      expect(sleeps).toEqual([TRANSIENT_DELAY_MS, 1000]);
     });
 
     test("logs a warning that the claim is deferred", async () => {
@@ -1414,18 +1486,16 @@ describe("claimIssue", () => {
   });
 
   describe("when every re-read fails", () => {
-    test("makes exactly three re-read attempts", async () => {
+    test("makes exactly three re-read attempts, each sending the read twice", async () => {
       const { fake, client, opts } = setup([
         assigned,
         serverError,
-        serverError,
-        serverError,
-        serverError,
+        ...Array(6).fill(serverError),
       ]);
       await claimIssue(client, "acme", "widgets", 5, opts).catch(
         () => undefined,
       );
-      expect(fake.calls).toHaveLength(5);
+      expect(fake.calls).toHaveLength(8);
     });
 
     test("rejects with ClaimOwnershipUnknownError", async () => {
@@ -1444,14 +1514,14 @@ describe("claimIssue", () => {
       const { client, sleeps, opts } = setup([
         assigned,
         serverError,
-        serverError,
-        serverError,
-        serverError,
+        ...Array(6).fill(serverError),
       ]);
       await claimIssue(client, "acme", "widgets", 5, opts).catch(
         () => undefined,
       );
-      expect(sleeps).toEqual([1000, 2000]);
+      expect(sleeps.filter((ms) => ms !== TRANSIENT_DELAY_MS)).toEqual([
+        1000, 2000,
+      ]);
     });
 
     test("keeps the removal failure in the error message", async () => {
@@ -1928,6 +1998,50 @@ describe("addLabels", () => {
     await expect(
       addLabels({ run: fake.run, ghToken: "tok" }, "acme", "widgets", 5, ["a"]),
     ).rejects.toThrow();
+  });
+
+  test("does not resend after a 500 by default", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(500, { message: "boom" })),
+      ok(ghApiStdout(200, [])),
+    ]);
+    await addLabels(
+      { run: fake.run, ghToken: "tok", sleep: async () => {} },
+      "acme",
+      "widgets",
+      5,
+      ["a"],
+    ).catch(() => undefined);
+    expect(fake.calls).toHaveLength(1);
+  });
+
+  test("resends once after a 500 when idempotent", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(500, { message: "boom" })),
+      ok(ghApiStdout(200, [])),
+    ]);
+    await addLabels(
+      { run: fake.run, ghToken: "tok", sleep: async () => {} },
+      "acme",
+      "widgets",
+      5,
+      ["a"],
+      { idempotent: true },
+    );
+    expect(fake.calls).toHaveLength(2);
+  });
+
+  test("resends once after a lost connection when idempotent", async () => {
+    const fake = createFakeCommandRunner([ok(""), ok(ghApiStdout(200, []))]);
+    await addLabels(
+      { run: fake.run, ghToken: "tok", sleep: async () => {} },
+      "acme",
+      "widgets",
+      5,
+      ["a"],
+      { idempotent: true },
+    );
+    expect(fake.calls).toHaveLength(2);
   });
 
   test("masks a secret-looking value in the thrown error", async () => {
@@ -3577,10 +3691,11 @@ describe("ensureLabel", () => {
   test("throws when the existence check fails with a non-404 error", async () => {
     const fake = createFakeCommandRunner([
       ok(ghApiStdout(500, { message: "boom" })),
+      ok(ghApiStdout(500, { message: "boom" })),
     ]);
     await expect(
       ensureLabel(
-        { run: fake.run, ghToken: "tok" },
+        { run: fake.run, ghToken: "tok", sleep: async () => {} },
         "acme",
         "widgets",
         "factory:review",

@@ -9,7 +9,7 @@
 // 403/429のレート制限のヘッダー(`retry-after`、`x-ratelimit-remaining`)を
 // 2回目の要求なしに読める。レート制限の待ちには上限があり、超えるなら
 // 待たずに`GitHubRateLimitError`を投げる(`callGhApi`を参照)。
-// ghプロセスの起動失敗と、応答の無い通信断には、短い待機の後に1回だけ再試行する
+// ghプロセスの起動失敗と、冪等な要求の通信断と5xxには、短い待機の後に1回だけ再試行する
 // (`sendGhApi`を参照)。
 //
 // 自己再入の防止: Factoryが投稿するコメント・レビュー・返信には、すべて
@@ -244,7 +244,7 @@ export type GhApiCallOptions = {
   readonly acceptHeader?: string;
   /**
    * 同じ要求を何度送っても、GitHub上の状態が変わらないか。
-   * 応答の無い通信断で再送してよいかの判断に使う。省略するとGETだけが該当する。
+   * 応答の無い通信断と5xxで再送してよいかの判断に使う。省略するとGETだけが該当する。
    * GraphQLの読み取りのqueryはPOSTで送るので、呼び出し側が`true`を明示する。
    */
   readonly idempotent?: boolean;
@@ -333,27 +333,35 @@ function isIdempotentRequest(options: GhApiCallOptions): boolean {
   );
 }
 
+/** サーバー側の一時的な障害を示す、ステータス行のあるHTTPのステータスか(500から599)。 */
+function isServerErrorStatus(status: number): boolean {
+  return status >= 500 && status <= 599;
+}
+
 /**
  * 再試行してよい失敗かを返す。
  * - プロセスの起動失敗: 要求はGitHubに届いていないので、どの要求でも再試行してよい。
  * - 応答の無い通信断: 要求が届いた後に応答だけが失われたかもしれない。
  *   届いていた場合、コメント・レビュー・ラベル・PRの作成などの変更は二重に実行される。
- *   そのため、冪等な要求だけを再試行する。冪等かどうかは`options.idempotent`で決め、
+ * - ステータス行のある5xx: サーバー側の一時的な障害かもしれないが、
+ *   変更が途中まで効いている可能性は通信断と同じである。
+ *   そのため、通信断と5xxは冪等な要求だけを再試行する。冪等かどうかは`options.idempotent`で決め、
  *   省略したときはGET(メソッドの指定なしを含む)を冪等とみなす。
- *   冪等でない要求は再試行せず、HTTP 0の失敗として記録する。
+ *   冪等でない要求は再試行せず、通信断はHTTP 0の失敗として、5xxはその応答のまま記録する。
  */
 function isRetryable(
   attempt: GhApiAttempt,
   options: GhApiCallOptions,
 ): boolean {
   if (attempt.kind === "spawn_failed") return true;
-  return attempt.noResponse && isIdempotentRequest(options);
+  if (!isIdempotentRequest(options)) return false;
+  return attempt.noResponse || isServerErrorStatus(attempt.response.status);
 }
 
 /**
  * 要求を1回送る。一時的な失敗(`isRetryable`)なら、短く待ってから1回だけ再送する。
- * 再送も失敗したら、ghの起動失敗はその例外を投げ、応答の無い通信断は
- * ステータス0の応答として返す(呼び出し側の`ensureSuccess`が失敗にする)。
+ * 再送も失敗したら、ghの起動失敗はその例外を投げ、応答の無い通信断はステータス0の、
+ * 5xxはその5xxの応答として返す(呼び出し側の`ensureSuccess`が失敗にする)。
  * レート制限は扱わない(`callGhApi`を参照)。
  */
 async function sendGhApi(
@@ -378,7 +386,7 @@ async function sendGhApi(
  * 必要な待ちが`GITHUB_RATE_LIMIT_MAX_WAIT_MS`を超えるときは待たずに、
  * 再試行も拒まれたときはその時点で、`GitHubRateLimitError`を投げる。
  * 待ちがstepのtimeoutより長引いて、副作用の途中でstepが打ち切られることを防ぐ。
- * ghの起動失敗と応答の無い通信断の再試行は、それぞれの要求の中で行う(`sendGhApi`を参照)。
+ * ghの起動失敗、応答の無い通信断、冪等な要求の5xxの再試行は、それぞれの要求の中で行う(`sendGhApi`を参照)。
  * レート制限以外のHTTPのエラーのステータスでは例外を投げない。
  * 呼び出し側が`response.status`を確かめる(`ensureSuccess`を参照)。
  */
@@ -1062,12 +1070,13 @@ const CLAIM_TIMELINE_MAX_PAGES = 20;
 
 /**
  * `read`を最大`CLAIM_REREAD_BACKOFF_MS.length + 1`回まで試す。GETなので繰り返してよい。
+ * `claimIssue`と、PRの取得(`poll_prs.ts`の`claimPr`)が、ラベルを外した後の確認に使う。
  * 失敗した試行は、そのたびに`log`へ警告として残す。
  * `GitHubRateLimitError`は繰り返さずに投げる。`callGhApi`が上限までの待機と再試行を
  * 済ませたうえで投げるので、ここで重ねても同じ制限に当たり、待ちが長引くだけである。
  * `GitHubPaginationLimitError`も、繰り返しても同じ長さなので繰り返さずに投げる。
  */
-async function rereadWithRetries<T>(
+export async function rereadWithRetries<T>(
   client: GhClient,
   context: {
     readonly log: Logger | undefined;
@@ -1501,6 +1510,9 @@ export async function removeLabel(
  * GitHubの`POST .../labels`は追加で、全体を置き換える`setLabels`のPUTとは異なる。
  * POSTするだけで、再取得による確認はしない。
  * `claimIssue`と違い、assigneeは設定しない。
+ * `options.idempotent`を`true`にすると、応答の無い通信断と5xxを1回再送する
+ * (`isRetryable`を参照)。既に付いているラベルの追加は状態を変えないので、
+ * 呼び出し側が再送してよいと判断できるときだけ指定する。省略するとPOSTなので再送しない。
  */
 export async function addLabels(
   client: GhClient,
@@ -1508,6 +1520,7 @@ export async function addLabels(
   repo: string,
   number: number,
   labels: readonly string[],
+  options: { readonly idempotent?: boolean } = {},
 ): Promise<void> {
   validateOwnerRepo(owner, repo);
   const response = await callGhApi(
@@ -1516,6 +1529,9 @@ export async function addLabels(
     {
       method: "POST",
       body: { labels },
+      ...(options.idempotent !== undefined
+        ? { idempotent: options.idempotent }
+        : {}),
     },
   );
   ensureSuccess(response, `POST issue labels ${owner}/${repo}#${number}`);
@@ -2393,7 +2409,7 @@ function isGraphqlDataPayload(value: unknown): value is GraphqlDataPayload {
  * (`RATE_LIMITED`なら`GitHubRateLimitError`、それ以外は一般のエラー)。こうして、
  * HTTPのステータスだけを確かめた呼び出し側がGraphQLの失敗を成功と取り違えないようにする。
  * `idempotent`は、読み取りのqueryなら`true`、mutationなら`false`にする。
- * `true`のときだけ、応答の無い通信断を再試行する(`isRetryable`を参照)。
+ * `true`のときだけ、応答の無い通信断と5xxを再試行する(`isRetryable`を参照)。
  */
 async function callGhGraphql(
   client: GhClient,
