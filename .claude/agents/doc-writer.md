@@ -3,7 +3,7 @@ name: doc-writer
 description: コードの変更に合わせてこのリポジトリの文書を直してコミットする役で、review-loopスキルがsecurity-auditorの前に起動するほか、親が文書の追従を任せるときに起動する。
 tools: [Read, Grep, Glob, Edit, Write, Bash, Skill]
 skills: [factory-docs, yomiyasu]
-model: haiku
+model: sonnet
 effort: medium
 ---
 

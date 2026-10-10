@@ -13,6 +13,7 @@
 - 文書は[文書の書き方](docs/writing-guidelines.md)と`factory-docs`スキルに従って書く。日本語の推敲には`yomiyasu`スキルを使う。
 - コードを変える作業は、[review-loopスキル](.claude/skills/review-loop/SKILL.md)で回す(コード、テスト、設定、スキル、subagentの定義を変えず、`docs/`、README、AGENTS.mdの文言だけを直す場合は除く)。
   実装した本人の確認だけでは、見落としを拾えないため。
+- モデルは、既定をSonnetにする。設計の判断、原因が分からないバグ、大きな計画とレビュー、Sonnetで2〜3回失敗した課題はOpusに上げる。Fableは最難関の課題だけに使う。Factoryも`model`と`heavy_model`で同じ方針に従う。詳細は[コーディング規約](docs/coding-guidelines.md)の「Claudeのモデルの使い分け」にある。
 - 設定は`.env`系のファイルを使わず、miseで管理する。秘密でない設定は`mise.toml`の`[env]`に、秘密値はgitignore済みの`mise.local.toml`に置く。
 - 秘密値は人が投入する。Claudeは`mise.local.toml.example`の更新までを行い、値が要るときは[セットアップ](docs/setup.md)の投入コマンドを示して、止まらずに先へ進む。
 - `//native`は使わない(scriptが`child_process`と`fs`を使うため)。管理スキルが勧めるbunnativeより本ルールを優先する。

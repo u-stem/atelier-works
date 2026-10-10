@@ -108,9 +108,8 @@ pushは親のセッションが、運用者の確認を経て行う。
 
 ## モデルを指定したsubagentが起動しないとき
 
-security-auditorとdevil-advocateは、定義でモデルを指定している(`fable`)。
-そのモデルで起動できなかったときは、起動のたびに`model: opus`を指定して起動し直す。
-それも起動できなければ、`model: sonnet`で起動する。
+design-reviewer、requirements-reviewer、security-auditor、devil-advocate、triageは、定義でモデルを指定している(`opus`)。
+そのモデルで起動できなかったときは、起動のたびに`model: sonnet`を指定して起動し直す。
 どのモデルで動かしたかを、完了の報告に載せる。
 ゲートを飛ばさない。
 

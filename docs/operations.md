@@ -587,6 +587,8 @@ Sonnetで試して届かなかった課題を、上位のモデルでやり直�
 Sonnetを既定にするには、Windmillの画面で`f/factory/factory_config`を開き、`model`を`claude-sonnet-5-5`に書き換える。
 リソースはgitで同期しないので、リポジトリの変更だけでは反映されない。
 
+このリポジトリでClaudeを使うときのモデルの方針は、[コーディング規約](coding-guidelines.md)の「Claudeのモデルの使い分け」にある。
+
 ## 通知を受けたら
 
 Factoryは、人の行動が要るものだけをDiscordに送る。通知の仕組み、送れなかったときの扱い、rate limitは[通知とrate limit](internals/notifications.md)にある。
