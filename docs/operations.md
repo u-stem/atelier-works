@@ -756,10 +756,15 @@ workerの並列数(`NUM_WORKERS`)のような`infra/docker-compose.yml`の変更
 まとめて反映したいときは、`mise run deploy`を手で実行する。必須の手順ではない。`mise run deploy`は次を順に行う。
 
 1. ホスト側のcheckoutで`git pull --ff-only`
-2. イメージの取得と、`windmill_worker`と`console_fetcher`のイメージのビルド
-3. `docker compose up -d`
-4. Consoleのraw appの依存の`npm ci --ignore-scripts`と`wmill sync push`
-5. migrationの実行
+2. Dockerの版の検査。Engineが26.0以上、Composeが2.26.0以上でなければ止まる
+3. イメージの取得と、`windmill_worker`と`console_fetcher`のイメージのビルド
+4. `docker compose up -d`
+5. Consoleのraw appの依存の`npm ci --ignore-scripts`と`wmill sync push`
+6. migrationの実行
+
+版の検査は`git pull --ff-only`の後に行う。取り込んだ新しい版の検査を使うためである。
+この検査を持たない版から取り込む最初の1回は、`mise run deploy`を使わない。miseは起動の時点のタスク定義で動くので、取り込んだ検査が走らないためである。
+`git pull --ff-only`を実行してから`mise run up`を実行する。`wmill sync push`とmigrationも要るときは、その後に`mise run deploy`を実行する。
 
 `mise run push`と`mise run deploy`は、`wmill sync push`の前にConsoleのraw appの`npm ci --ignore-scripts`を実行する。
 raw appのバンドルに依存が要るためである。
@@ -1002,16 +1007,39 @@ mise exec -- docker compose -f infra/docker-compose.yml ps -a factory_state_init
 mise exec -- docker compose -f infra/docker-compose.yml logs factory_state_init
 ```
 
-マウントが想定どおりかは、起動中のworkerの中で確かめる。
+symlinkを消す手順は次のとおりである。
+defaultのworkerで動いたコードがsymlinkを置いた可能性がある。`ls -la`に出るリンク先を控え、置いた経緯を調べてから消す。
+
+1. ボリューム名を確かめる。名前は`<プロジェクト名>_factory_state`で、プロジェクト名は通常、リポジトリのディレクトリ名である。
+2. 一時コンテナで`ls -la`を実行し、`requirements`が`->`でリンク先を示すsymlinkであることを確かめる。
+3. 同じ一時コンテナで`rm`を実行する。
 
 ```bash
-mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker_console ls -la /var/lib/factory /var/lib/factory/requirements
+mise exec -- docker volume ls --filter name=factory_state
+mise exec -- docker run --rm --network none --entrypoint ls -v <ボリューム名>:/var/lib/factory ghcr.io/windmill-labs/windmill:<WM_VERSION> -la /var/lib/factory
+mise exec -- docker run --rm --network none --entrypoint rm -v <ボリューム名>:/var/lib/factory ghcr.io/windmill-labs/windmill:<WM_VERSION> /var/lib/factory/requirements
 ```
 
-`/var/lib/factory`の直下に`requirements`だけがあり、`claude`や`gh`が見えないことを確かめる。
+`<WM_VERSION>`は`mise.toml`の`WM_VERSION`の値である。
+
+> [!WARNING]
+> `rm`の対象は、`ls -la`で確かめたsymlinkだけにする。パスの末尾に`/`を付けない。付けるとリンク先のディレクトリを指す。
+> `-r`と`-f`は付けない。`requirements`が通常のディレクトリなら、`rm`は何も消さずに失敗する。
+
+マウントが想定どおりかは、次の2つで確かめる。
+`volume.subpath`が無視されると、`factory_state`の根が`/var/lib/factory/requirements`に付く。
+どちらも、根が付いたときに見分けられるように選んでいる。
+
+1. 起動中のworkerの`/var/lib/factory/requirements`のマウントのSourceが、`/_data/requirements`で終わる。根が付いたときのSourceは`/_data`で終わる。`mise run doctor`もこれを検査する。
+2. `/var/lib/factory/requirements`の下に、`requirements`、`audits`、`claude`、`gh`が見えない。見えたときは、根が付いている。
+
+```bash
+mise exec -- docker compose -f infra/docker-compose.yml ps -q windmill_worker_console | xargs docker inspect --format '{{range .Mounts}}{{if eq .Destination "/var/lib/factory/requirements"}}{{.Source}}{{end}}{{end}}'
+mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker_console ls -la /var/lib/factory/requirements
+```
+
 `/var/lib/factory/requirements`の下には、要件定義書の所有者ごとのディレクトリが並ぶ。
-`claude`や`gh`が見えたときは、`factory_state`の根がマウントされている。
-考えられる原因は、DockerのEngineかComposeが下限に届いていないことである。`mise run doctor`で版を確かめる。
+根が付く原因として考えられるのは、DockerのEngineかComposeが下限に届いていないことである。`mise run doctor`で版を確かめる。
 
 ### adminsワークスペースの組み込み項目
 

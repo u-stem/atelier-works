@@ -198,6 +198,11 @@ services:
   ## `volume.subpath`はDocker Engine 26.0以上とDocker Compose 2.26.0以上が要る。
   ## サブパスのディレクトリが無いとコンテナが起動しないので、
   ## `factory_state_init`が作ってから起動する。
+  ## このworkerが作り直されるたびに(restart policy、daemonの再起動、ホストの再起動)、
+  ## Dockerは`factory_state_init`を経ずにサブパスを解決し直す。
+  ## その前にdefaultのworkerが`requirements`をsymlinkに置き換えると、先がマウントされうる。
+  ## 隙は次の`mise run up`まで続く。突くにはdefaultのworkerでのコード実行が要り、
+  ## その権限があれば根を直接読めるので、実害は増えない。
   ## `factory_console`を読み取り専用で付けるのは、取り込みの失敗を見張るscriptが
   ## `status.json`を読むため。`factory_workspaces`は付けない。
   ## 2つのworkerプロセスは、1件のjobが止まっても全体を止めないためで、

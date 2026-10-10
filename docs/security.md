@@ -265,9 +265,12 @@ Console用のworker(`windmill_worker_console`)は、Consoleの問い合わせと
 `requirements`がsymlinkならディレクトリを作らずに失敗で終わり、そうでなければ`mkdir -p -m 0755`を実行する。
 defaultのworkerで動くものが置いたsymlinkの先を、Console用のworkerにマウントさせないためである。
 
-`volume.subpath`は、古いEngineでは気づかないうちに無視され、`factory_state`の根が付く。
+`volume.subpath`は、古いEngineでは気づかないうちに無視され、`factory_state`の根が付きうる。
 そのため、スタックを起動するmiseのタスク(`up`、`deploy`)は、起動の前にEngineが26.0(API 1.45)以上、Composeが2.26.0以上かを確かめ、満たさなければ止まる。
-`doctor`も同じ検査を報告する。
+この強制が止めるのは、`mise run up`と`mise run deploy`を通した起動だけである。
+`mise exec -- docker compose ... up`を直接実行した場合や、restart policyによる再起動は止めない。
+`doctor`は同じ検査に加えて、起動中のConsole用workerのマウントのSourceを確かめる。
+Podmanは対象外である。
 
 次のことは、この境界では守れない。
 
@@ -281,7 +284,11 @@ defaultのworkerで動くものが置いたsymlinkの先を、Console用のworke
 - このworkerで動かすのはリポジトリのscriptの想定だが、これを強制する仕組みは無い。ワークスペースでscriptを編集できる者は、任意のscriptにtag`console`を付けられる。
   tag`console`を付けたscriptは、`requirements`の下を読める。書けるのはdefaultのworkerだけである。
 - composeの環境変数`WORKER_TAGS`は既定値である。DBにワーカーグループの設定があると、そちらが実効になる。変化はWindmillの画面の「Workers」で確かめる。
-- `factory_state_init`の確認からConsole用workerのマウントまでには隙がある。その間にdefaultのworkerが`requirements`をsymlinkに置き換えると、symlinkの先がマウントされうる。
+- `factory_state_init`の確認の後にも隙がある。
+  Console用のworkerは、restart policy、Dockerデーモンの再起動、ホストの再起動で作り直されるたびに、`factory_state_init`を経ずにサブパスを解決し直す。
+  その前にdefaultのworkerが`requirements`をsymlinkに置き換えると、symlinkの先がマウントされうる。
+  隙は次の`mise run up`まで続く。
+  突くにはdefaultのworkerでのコード実行が要る。その権限があれば`factory_state`の根を直接読めるので、実害は増えない。
 
 ## 自己更新の依存インストール
 

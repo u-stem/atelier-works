@@ -62,8 +62,8 @@ lefthook install
 [tasks.deploy]
 description = "Update checkout, rebuild, restart, push, and migrate"
 run = """
-scripts/check-docker-version.sh
 git pull --ff-only
+scripts/check-docker-version.sh
 docker compose -f infra/docker-compose.yml pull
 docker compose -f infra/docker-compose.yml build windmill_worker console_fetcher
 docker compose -f infra/docker-compose.yml up -d

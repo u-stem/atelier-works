@@ -6,7 +6,10 @@
 # Compose 2.26.0以上でEngineがAPI 1.45(Docker Engine 26.0)未満の組み合わせでは、
 # Composeはエラーにせず、Engineが`subpath`を黙って無視する。
 # 無視されると、サブパスではなく`factory_state`の根が付き、Claude Codeとghの設定まで届く。
+# Compose 2.26.0未満が`subpath`を拒否するのか、黙って無視するのかは確かめていない。
+# どちらであっても、根が付く経路を残さないため、両方の下限を要求する。
 # 起動の前に止めるため、スタックを起動するmiseのタスクと`doctor`がこれを呼ぶ。
+# 対象はDocker Engineである。Podmanは検査も動作確認もしていない。
 set -euo pipefail
 
 MIN_ENGINE_API="1.45"
@@ -58,7 +61,7 @@ problems=0
 api_raw="$(docker version --format '{{.Server.APIVersion}}' 2>/dev/null)" || api_raw=""
 if api="$(core_version "${api_raw}")"; then
   if ! version_ge "${api}" "${MIN_ENGINE_API}"; then
-    echo "Docker Engine API ${api} is older than ${MIN_ENGINE_API} (Docker Engine 26.0): volume.subpath would be ignored silently. Upgrade Docker Engine." >&2
+    echo "Docker Engine API ${api} is older than ${MIN_ENGINE_API} (Docker Engine 26.0): volume.subpath may be ignored silently. Upgrade Docker Engine." >&2
     problems=$((problems + 1))
   fi
 else
@@ -70,7 +73,7 @@ fi
 compose_raw="$(docker compose version --short 2>/dev/null)" || compose_raw=""
 if compose="$(core_version "${compose_raw}")"; then
   if ! version_ge "${compose}" "${MIN_COMPOSE}"; then
-    echo "Docker Compose ${compose} is older than ${MIN_COMPOSE}: volume.subpath is not supported. Upgrade Docker Compose." >&2
+    echo "Docker Compose ${compose} is older than ${MIN_COMPOSE}: this repository requires ${MIN_COMPOSE} or newer for volume.subpath (behavior of older versions is unverified). Upgrade Docker Compose." >&2
     problems=$((problems + 1))
   fi
 else

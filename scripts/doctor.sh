@@ -55,7 +55,7 @@ fi
 
 # 3. Dockerの版
 # Console用workerの`volume.subpath`は、Engineが26.0(API 1.45)未満だと黙って無視され、
-# `factory_state`の根が付く。下限は`check-docker-version.sh`が定め、
+# `factory_state`の根が付きうる。下限は`check-docker-version.sh`が定め、
 # `mise run up`と`mise run deploy`も同じ検査で起動の前に止まる。
 if [[ "${docker_ready}" -eq 1 ]]; then
   if version_output="$("${SCRIPT_DIR}/check-docker-version.sh" 2>&1)"; then
@@ -191,7 +191,28 @@ else
   report "workerコンテナ" ng "dockerまたはdocker-compose.ymlが見つからず確認できません"
 fi
 
-# 11. 初期パスワードのままログインできてしまわないか(Windmillが応答している場合だけ)
+# 11. Console用workerのマウント(起動中のコンテナがある場合だけ)
+# `volume.subpath`が無視されると、`requirements`のサブパスではなく`factory_state`の根が
+# `/var/lib/factory/requirements`に付く。根のマウントのSourceは`/_data`で終わり、
+# サブパスのマウントのSourceは`/_data/requirements`で終わる。
+# `docker inspect`の書式は固定の文字列にし、外から来る値を組み込まない。
+console_mount_format='{{range .Mounts}}{{if eq .Destination "/var/lib/factory/requirements"}}{{.Source}}{{end}}{{end}}'
+console_id=""
+if command -v docker >/dev/null 2>&1 && [[ -f "${COMPOSE_FILE}" ]]; then
+  console_id="$(docker compose -f "${COMPOSE_FILE}" ps -q windmill_worker_console 2>/dev/null || true)"
+fi
+if [[ -n "${console_id}" ]] && [[ "$(docker inspect -f '{{.State.Running}}' "${console_id}" 2>/dev/null || echo false)" == "true" ]]; then
+  console_source="$(docker inspect --format "${console_mount_format}" "${console_id}" 2>/dev/null || true)"
+  if [[ "${console_source}" == */_data/requirements ]]; then
+    report "console worker mount" ok "requirementsのサブパスだけがマウントされています"
+  else
+    report "console worker mount" ng "Sourceが/_data/requirementsで終わりません(Source: ${console_source:-なし})。factory_stateの根が付いている恐れがあります"
+  fi
+else
+  report "console worker mount" ok "windmill_worker_consoleが起動していないため確かめられません"
+fi
+
+# 12. 初期パスワードのままログインできてしまわないか(Windmillが応答している場合だけ)
 if [[ "${windmill_is_up}" -eq 1 ]]; then
   login_status="$(curl -s -o /dev/null -w '%{http_code}' -X POST \
     "http://127.0.0.1:${wm_http_port}/api/auth/login" \

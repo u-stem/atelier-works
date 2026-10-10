@@ -52,21 +52,24 @@ function taskRuns(): Map<string, string[]> {
 
 describe("mise.toml stack tasks", () => {
   const CHECK = "scripts/check-docker-version.sh";
+  const isComposeUp = (line: string) => /docker compose\b.*\bup\b/.test(line);
 
   test("up checks the Docker version first", () => {
     expect(taskRuns().get("up")?.[0]).toBe(CHECK);
   });
 
-  test("deploy checks the Docker version first", () => {
-    expect(taskRuns().get("deploy")?.[0]).toBe(CHECK);
+  test("deploy checks the Docker version right after git pull", () => {
+    const lines = taskRuns().get("deploy") ?? [];
+    expect(lines[lines.indexOf(CHECK) - 1]).toBe("git pull --ff-only");
   });
 
-  test("every task that runs docker compose up checks the Docker version first", () => {
+  test("every task that runs docker compose up checks the Docker version before it", () => {
     const unchecked = [...taskRuns()]
-      .filter(([, lines]) =>
-        lines.some((line) => /docker compose\b.*\bup\b/.test(line)),
-      )
-      .filter(([, lines]) => lines[0] !== CHECK)
+      .filter(([, lines]) => lines.some(isComposeUp))
+      .filter(([, lines]) => {
+        const check = lines.indexOf(CHECK);
+        return check === -1 || check > lines.findIndex(isComposeUp);
+      })
       .map(([name]) => name);
 
     expect(unchecked).toEqual([]);
