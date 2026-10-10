@@ -540,7 +540,7 @@ PR修正のClaudeに渡すツールは`Read,Glob,Grep,Edit,Write`だけで、`Ba
 - draw.ioのビューアの固定: `console/drawio-viewer.json`
 - 固定を強制し、配信物を作って検査する側: `console/scripts/`の一部、`console/vite.config.ts`、`scripts/check-console-lockfile.ts`
 - 配信の設定: `infra/Caddyfile`
-- 旧Consoleのraw appが図を隔離して描く部品: `DrawioViewer.tsx`、`lib/drawioMessages.ts`、それらを照合するテスト
+- 旧Consoleのraw appが図を隔離して描く部品: `DrawioViewer.tsx`、`lib/drawioMessages.ts`、`lib/drawioFrameState.ts`と、照合するテスト
 
 `console/drawio-viewer.json`は、CIが取得して配信するビューアの取得元とsha256を固定する。
 書き換えられると、別のスクリプトが固定の値として配信される。

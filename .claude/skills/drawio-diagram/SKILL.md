@@ -13,9 +13,16 @@ XML自体が、すべての情報を含む自己完結した文書である必�
 外部ファイルの参照や、相対パスの画像は使わない。
 
 図にリンクを入れない。`link`属性と、ラベルのHTMLの属性付きの`<a>`、`<area>`、`<map>`、`<meta>`、`<iframe>`、`<object>`、`<embed>`、`<form>`、`<img>`、`<image>`などは使わない。
-`<style>`、`<script`も使わない。
 HTMLのタグの中の`onclick=`のようなイベントハンドラ属性も使わない。
-コメント(`<!--`)や`<textarea>`の内側に書いたタグも、タグとして検査する。
+ラベルに、HTMLのコメント(`<!--`)と、`<!`か`<?`で始まる構文は使えない。
+`x </ y`のように、`</`の後ろが英字でない書き方も使えない。
+ラベルに次の要素は使えない。属性の有無を問わず拒否する。
+
+- `<textarea>`、`<title>`、`<xmp>`、`<noscript>`、`<noembed>`、`<noframes>`、`<plaintext>`、`<iframe>`、`<style>`、`<script>`
+- `<svg>`、`<math>`
+- `<set>`、`<animate>`、`<animateMotion>`、`<animateTransform>`
+
+`Map<title>`のように、型の表記がこれらの要素名と同じになるときは、型の名前を変えるか、文章で書く。
 タグの外の文章にある`one = 1`や`online=true`は拒否しない。
 `usemap=`、`formaction=`、`srcdoc=`も使わない。
 `Promise<Object>`のように、属性を持たない要素名だけの表記は使ってよい。

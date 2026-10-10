@@ -23,7 +23,8 @@ const FORBIDDEN_ATTRIBUTES = ["link", "usemap"];
  * `image`は、HTMLのパーサーが`img`に置き換えるので`img`と同じに扱う。
  * 属性を持たない`<Object>`や`<Map>`のような表記は、`Promise<Object>`のように型の書き方として
  * ラベルに現れるので通す。属性が無い要素は、行き先も資源のURLも持てない。
- * 「属性付き」は、要素名に空白か`/`が続き、その後に`名前=`が現れる形を指す。
+ * 「属性付き」は、`名前=`の形の属性を持つことを指す。引用符を読む走査(`findForbiddenInTags`)と、
+ * 要素名の後ろから最初の`>`までに`名前=`を探す走査(`findAttributeBearingTag`)の両方で判定する。
  * `<object>`は、ラベルの中では拒否するが、draw.ioがセルを包む要素としては正しい。
  */
 const ATTRIBUTE_BEARING_TAGS = [
@@ -85,12 +86,20 @@ function findAttributeBearingTag(text: string): string | null {
 }
 
 /**
- * 属性の有無を問わず拒否する要素。`<style>`は、図の外の画面の見た目を書き換えられる。
+ * ラベルのHTMLで拒否する、パーサーによって読み方が分かれる構文。大文字小文字を区別しない。
+ * - `<!`(コメント、DOCTYPE、CDATA、偽のコメント)、`<?`、`</`の後ろが英字でない形。
+ *   HTMLのパーサーはこれらの内側をタグとして読まず、内側の引用符でタグの終わりがずれる。
+ * - RCDATA、RAWTEXT、scriptの中身として読まれる要素(`<textarea>`、`<title>`など)。
+ *   閉じるまでの内側をタグとして読まないので、同じずれが起こる。属性の有無は問わない。
+ * - 外来要素の`<svg>`と`<math>`。内側の読み方(CDATAなど)が変わる。
+ * - SVGのアニメーション要素。`href`などの属性を後から書き換え、リンクを作れる。
+ * 要素名は、後ろに空白、`/`、`>`、文字列の終わりが続くときだけ当てる。
+ * HTMLのパーサーは、それ以外の文字を要素名の続きとして読むためである。
+ * これらが無いラベルでは、HTMLのパーサーはタグの外を常にdata状態で読み、
+ * 引用符を読む走査と同じ位置でタグを区切る。
  */
-const STYLE_ELEMENT_PATTERN = /<style(?![\w-])/i;
-
-/** `<script`も属性の有無を問わず拒否する。 */
-const SCRIPT_ELEMENT_PATTERN = /<script(?![\w-])/i;
+const AMBIGUOUS_SYNTAX_PATTERN =
+  /<(?:[!?]|\/(?![a-z])|(?:textarea|title|xmp|noscript|noembed|noframes|plaintext|iframe|style|script|svg|math|set|animate|animatemotion|animatetransform)(?![^\s/>]))/i;
 
 /** イベントハンドラの属性名(`onclick`など)。`on`の後ろに英字が続く名前。 */
 const EVENT_HANDLER_NAME_PATTERN = /^on[a-z]+$/i;
@@ -109,18 +118,24 @@ function isAsciiLetter(char: string): boolean {
   return (char >= "a" && char <= "z") || (char >= "A" && char <= "Z");
 }
 
+type ScannedTag = {
+  readonly name: string;
+  /** 最初に見つけたイベントハンドラ属性の名前。見つけた時点で読むのをやめる。 */
+  readonly handler: string | null;
+  /** `名前=`の形の属性があるか。 */
+  readonly hasValuedAttribute: boolean;
+  /** タグを読み終えた位置(閉じていなければ文字列の長さ)。 */
+  readonly end: number;
+};
+
 /**
- * `position`(要素名の先頭)から始まる開始タグを、引用符を読みながら読む。
- * 属性名を前から順に調べ、イベントハンドラ属性があれば`handler`にその名前を入れる。
- * `end`は、タグを読み終えた位置(閉じていなければ文字列の長さ)。
- * 引用符の中の`>`ではタグが終わらないので、引用符を読んでから`>`を探す。
- * コメントやRCDATAの内側の引用符は、HTMLのパーサーが引用符として読まないことがあり、
- * この読み方だけではタグの終わりがずれる。そのずれは`findEventHandlerInRawTag`が補う。
+ * `position`(要素名の先頭)から始まる開始タグか終了タグを、HTMLのパーサーと同じ規則で読む。
+ * 要素名と属性名は空白、`/`、`>`で終わり、属性名は`=`でも終わる。
+ * 属性名の先頭の`=`と引用符は、名前の一部として読む。
+ * 値は引用符で囲めば次の同じ引用符まで、囲まなければ空白か`>`までである。
+ * 引用符の中の`>`ではタグが終わらない。
  */
-function scanStartTag(
-  text: string,
-  position: number,
-): { handler: string | null; end: number } {
+function scanTag(text: string, position: number): ScannedTag {
   let index = position;
   while (
     index < text.length &&
@@ -130,6 +145,8 @@ function scanStartTag(
   ) {
     index++;
   }
+  const name = text.slice(position, index);
+  let hasValuedAttribute = false;
   while (index < text.length) {
     while (
       index < text.length &&
@@ -141,9 +158,8 @@ function scanStartTag(
       break;
     }
     if (text.charAt(index) === ">") {
-      return { handler: null, end: index + 1 };
+      return { name, handler: null, hasValuedAttribute, end: index + 1 };
     }
-    // 属性名の先頭の`=`は、名前の一部として読む。
     const nameStart = index;
     index++;
     while (index < text.length) {
@@ -153,15 +169,16 @@ function scanStartTag(
       }
       index++;
     }
-    const name = text.slice(nameStart, index);
+    const attributeName = text.slice(nameStart, index);
     while (index < text.length && isHtmlSpace(text.charAt(index))) {
       index++;
     }
     if (text.charAt(index) !== "=") {
       continue;
     }
-    if (EVENT_HANDLER_NAME_PATTERN.test(name)) {
-      return { handler: name, end: index };
+    hasValuedAttribute = true;
+    if (EVENT_HANDLER_NAME_PATTERN.test(attributeName)) {
+      return { name, handler: attributeName, hasValuedAttribute, end: index };
     }
     index++;
     while (index < text.length && isHtmlSpace(text.charAt(index))) {
@@ -181,18 +198,53 @@ function scanStartTag(
       }
     }
   }
-  return { handler: null, end: text.length };
+  return { name, handler: null, hasValuedAttribute, end: text.length };
+}
+
+/**
+ * 引用符を読む走査で`text`のタグを前から順に読み、拒否する理由を返す。
+ * 対象は、`<`に英字が続く開始タグと、`</`に英字が続く終了タグである。
+ * 終了タグも読むのは、HTMLのパーサーが終了タグの属性の引用符も読むためである。
+ * 開始タグと終了タグの中のイベントハンドラ属性と、`名前=`の属性を持つ`ATTRIBUTE_BEARING_TAGS`の
+ * 開始タグを拒否する。タグの外の文章(`one = 1`、`https://x/?online=1`)は見ない。
+ * `AMBIGUOUS_SYNTAX_PATTERN`の構文が無い文字列では、HTMLのパーサーと同じ位置でタグを区切る。
+ * 読み終えた位置から次のタグを探すので、計算量は入力の長さに比例する。
+ */
+function findForbiddenInTags(text: string): string | null {
+  let index = text.indexOf("<");
+  while (index !== -1) {
+    const closing = text.charAt(index + 1) === "/";
+    const nameStart = index + (closing ? 2 : 1);
+    if (!isAsciiLetter(text.charAt(nameStart))) {
+      index = text.indexOf("<", index + 1);
+      continue;
+    }
+    const tag = scanTag(text, nameStart);
+    if (tag.handler !== null) {
+      return `ラベルのHTMLにイベントハンドラ属性${tag.handler}=が含まれています`;
+    }
+    if (
+      !closing &&
+      tag.hasValuedAttribute &&
+      ATTRIBUTE_BEARING_TAGS.includes(tag.name.toLowerCase())
+    ) {
+      return `ラベルのHTMLに属性付きの<${tag.name}>が含まれています`;
+    }
+    index = text.indexOf("<", tag.end);
+  }
+  return null;
 }
 
 /** 引用符を読まない走査で、タグの区間の中のイベントハンドラ属性を探す。 */
 const RAW_EVENT_HANDLER_PATTERN = /\bon[a-z]+\s*=/i;
 
 /**
- * 引用符を読まずに、開始タグの区間の中のイベントハンドラ属性を探す。
+ * 引用符を読まずに、開始タグの区間の中のイベントハンドラ属性を探し、あれば`名前=`の形で返す。
  * 区間は、`<`に英字が続く位置から、次の`>`(無ければ文字列の終わり)までである。
+ * 引用符を読む走査と読み方が分かれる入力に備える、補助の検査である。
+ * 引用符の中の`>`で区間が切れるので、これだけでは足りない。
  * 区間を調べたら、その`>`の後ろから次の`<`を探す。区間の途中の`<`から始め直さないので、
  * 計算量は入力の長さに比例する。手前から始まる区間が、後ろから始まる区間を含むためである。
- * コメント、偽のコメント、RCDATAの内側にある引用符の読み違いに影響されない。
  */
 function findEventHandlerInRawTag(text: string): string | null {
   let index = text.indexOf("<");
@@ -213,31 +265,6 @@ function findEventHandlerInRawTag(text: string): string | null {
 }
 
 /**
- * `text`の開始タグ(`<`に英字が続く箇所から`>`まで)の中に、イベントハンドラ属性
- * (`onclick=`など)があるかを調べ、あれば`名前=`の形で返す。
- * 次の2つの走査を行い、どちらかが当たれば返す。
- * - 引用符を読む走査。引用符の中の`>`でタグが終わらない書き方を、正しく読む。
- * - 引用符を読まない走査。コメントやRCDATAの内側を含め、`<`に英字が続く箇所をすべてタグとして調べる。
- * タグの外の文章(`one = 1`、`https://x/?online=1`)は見ない。
- * どちらの走査も、読み終えた位置から次の開始タグを探すので、計算量は入力の長さに比例する。
- */
-function findEventHandlerInTag(text: string): string | null {
-  let index = text.indexOf("<");
-  while (index !== -1) {
-    if (!isAsciiLetter(text.charAt(index + 1))) {
-      index = text.indexOf("<", index + 1);
-      continue;
-    }
-    const tag = scanStartTag(text, index + 1);
-    if (tag.handler !== null) {
-      return `${tag.handler}=`;
-    }
-    index = text.indexOf("<", tag.end);
-  }
-  return findEventHandlerInRawTag(text);
-}
-
-/**
  * ラベルのHTMLの属性の形(`名前=`)で現れたら拒否する属性。
  * `usemap`はイメージマップ、`formaction`は送信先、`srcdoc`は埋め込む文書を指す。
  */
@@ -253,8 +280,8 @@ const FORBIDDEN_ELEMENTS = ["a", "area", "map", "meta", "iframe"];
  */
 const MAX_DECODE_DEPTH = 5;
 
-const ENTITY_PATTERN =
-  /&(?:#(\d+)|#[xX]([0-9a-fA-F]+)|(lt|gt|amp|quot|apos));?/g;
+/** 名前つきの参照は大文字小文字を区別しない。HTMLは`&LT;`や`&AMP;`も復号するためである。 */
+const ENTITY_PATTERN = /&(?:#(\d+)|#x([0-9a-f]+)|(lt|gt|amp|quot|apos));?/gi;
 
 const NAMED_ENTITIES: Readonly<Record<string, string>> = {
   lt: "<",
@@ -281,7 +308,7 @@ function decodeEntitiesOnce(text: string): string {
     ENTITY_PATTERN,
     (whole, decimal?: string, hex?: string, named?: string) => {
       if (named !== undefined) {
-        return NAMED_ENTITIES[named] ?? whole;
+        return NAMED_ENTITIES[named.toLowerCase()] ?? whole;
       }
       const digits = decimal ?? hex;
       if (digits === undefined) {
@@ -301,17 +328,19 @@ function decodeEntitiesOnce(text: string): string {
 function findForbiddenHtml(raw: string): string | null {
   let current = raw;
   for (let depth = 0; depth <= MAX_DECODE_DEPTH; depth++) {
+    const ambiguous = AMBIGUOUS_SYNTAX_PATTERN.exec(current);
+    if (ambiguous !== null) {
+      return `ラベルのHTMLに使えない構文${ambiguous[0]}が含まれています`;
+    }
     const attributeBearing = findAttributeBearingTag(current);
     if (attributeBearing !== null) {
       return `ラベルのHTMLに属性付きの<${attributeBearing}>が含まれています`;
     }
-    if (STYLE_ELEMENT_PATTERN.test(current)) {
-      return "ラベルのHTMLに<style>が含まれています";
+    const inTags = findForbiddenInTags(current);
+    if (inTags !== null) {
+      return inTags;
     }
-    if (SCRIPT_ELEMENT_PATTERN.test(current)) {
-      return "ラベルのHTMLに<script>が含まれています";
-    }
-    const handler = findEventHandlerInTag(current);
+    const handler = findEventHandlerInRawTag(current);
     if (handler !== null) {
       return `ラベルのHTMLにイベントハンドラ属性${handler}が含まれています`;
     }
@@ -513,6 +542,305 @@ function findForbiddenContent(tokens: readonly Token[]): string | null {
   return null;
 }
 
+/**
+ * `placeholders`を持つ要素で、ラベルの`%名前%`を置き換えるときに、祖先をたどる歩数の上限。
+ * 図全体で数える。超えた図は、調べきれないので拒否する。
+ */
+const MAX_PLACEHOLDER_STEPS = 100_000;
+
+/** 置き換えた後の文字列の長さの合計の上限。超えた図は、調べきれないので拒否する。 */
+const MAX_PLACEHOLDER_OUTPUT = 4 * MAX_XML_BYTES;
+
+const ATTRIBUTE_PAIR_PATTERN = /\s*([^\s=/]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/y;
+
+/**
+ * タグの属性部分から、名前と、実体参照を1段復号した値の組を取り出す。
+ * 引用符で囲まない値のように、XMLとして読めない箇所で止める。
+ * draw.ioはそうした図を読み込めないので、止めた後ろは描かれない。
+ */
+function parseAttributePairs(source: string): Map<string, string> {
+  const pairs = new Map<string, string>();
+  let index = 0;
+  for (;;) {
+    ATTRIBUTE_PAIR_PATTERN.lastIndex = index;
+    const found = ATTRIBUTE_PAIR_PATTERN.exec(source);
+    if (found === null) {
+      return pairs;
+    }
+    const name = found[1] ?? "";
+    if (!pairs.has(name)) {
+      pairs.set(name, decodeEntitiesOnce(found[2] ?? found[3] ?? ""));
+    }
+    index = ATTRIBUTE_PAIR_PATTERN.lastIndex;
+  }
+}
+
+type CellRecord = {
+  readonly id: string;
+  readonly parent: string | null;
+  readonly vertex: boolean;
+  /** セルを包む要素(`<object>`、`<UserObject>`など)の属性。包む要素が無ければ`null`。 */
+  readonly attributes: ReadonlyMap<string, string> | null;
+};
+
+type DiagramCells = {
+  readonly cells: Map<string, CellRecord>;
+  /** `placeholders`を持つ要素に包まれたセル。 */
+  readonly targets: CellRecord[];
+  /** 同じidのセルが2つ以上あるか。あると祖先を1通りに決められない。 */
+  duplicated: boolean;
+};
+
+/**
+ * 図のセルを`<diagram>`ごとに集める。セルの祖先は`parent`属性のidでたどる。
+ * セルを包む要素は、`<root>`の直下にあり、`<mxCell>`を直下に持つ要素である。
+ * そのidは、包む要素の`id`か、無ければ`<mxCell>`の`id`である。
+ */
+function collectDiagramCells(tokens: readonly Token[]): DiagramCells[] {
+  const diagrams: DiagramCells[] = [];
+  let current: DiagramCells | null = null;
+  const stack: { name: string; attributes: string }[] = [];
+  for (const token of tokens) {
+    if (token.kind !== "tag") {
+      continue;
+    }
+    if (token.closing) {
+      if (stack[stack.length - 1]?.name === token.name) {
+        stack.pop();
+      }
+      continue;
+    }
+    if (token.name === "diagram") {
+      current = { cells: new Map(), targets: [], duplicated: false };
+      diagrams.push(current);
+    }
+    if (token.name === "mxCell" && current !== null) {
+      const parentTag = stack[stack.length - 1];
+      const wrapper =
+        parentTag !== undefined && stack[stack.length - 2]?.name === "root"
+          ? parseAttributePairs(parentTag.attributes)
+          : null;
+      const own = parseAttributePairs(token.attributes);
+      const id = wrapper?.get("id") ?? own.get("id") ?? "";
+      const cell: CellRecord = {
+        id,
+        parent: own.get("parent") ?? null,
+        vertex: own.get("vertex") === "1",
+        attributes: wrapper,
+      };
+      if (current.cells.has(id)) {
+        current.duplicated = true;
+      }
+      current.cells.set(id, cell);
+      if (wrapper?.has("placeholders")) {
+        current.targets.push(cell);
+      }
+    }
+    if (!token.attributes.trimEnd().endsWith("/")) {
+      stack.push({ name: token.name, attributes: token.attributes });
+    }
+  }
+  return diagrams;
+}
+
+function isLineTerminator(char: string): boolean {
+  return char === "\n" || char === "\r" || char === " " || char === " ";
+}
+
+/**
+ * 位置ごとに、同じ行の中でその位置以降にある最後の`}%`の`}`の位置を返す。無ければ-1。
+ * draw.ioの`%date{...}%`は、行の中で最も後ろの`}%`までを読むためである。
+ * 後ろから1回だけ読むので、計算量は入力の長さに比例する。
+ */
+function lastDateCloses(text: string): Int32Array {
+  const closes = new Int32Array(text.length + 1).fill(-1);
+  let last = -1;
+  for (let index = text.length - 1; index >= 0; index--) {
+    const char = text.charAt(index);
+    if (isLineTerminator(char)) {
+      last = -1;
+    } else if (char === "}" && text.charAt(index + 1) === "%" && last === -1) {
+      last = index;
+    }
+    closes[index] = last;
+  }
+  return closes;
+}
+
+/** draw.ioの`%名前%`の名前に使えない文字。 */
+function isPlaceholderStop(char: string): boolean {
+  return (
+    char === "%" ||
+    char === "{" ||
+    char === "}" ||
+    char === '"' ||
+    char === "'" ||
+    char === "=" ||
+    char === ";"
+  );
+}
+
+/**
+ * `from`以降で最初の`%名前%`を探し、その範囲を返す。
+ * draw.ioの`/%(date\{.*\}|[^%\{\}"'=;]+)%/g`と同じ範囲を、入力の長さに比例する時間で探す。
+ */
+function nextPlaceholder(
+  text: string,
+  from: number,
+  closes: Int32Array | null,
+): { start: number; end: number } | null {
+  let start = text.indexOf("%", from);
+  while (start !== -1) {
+    if (closes !== null && text.startsWith("date{", start + 1)) {
+      const close = closes[start + 6] ?? -1;
+      if (close !== -1) {
+        return { start, end: close + 2 };
+      }
+    }
+    let index = start + 1;
+    while (index < text.length && !isPlaceholderStop(text.charAt(index))) {
+      index++;
+    }
+    if (index > start + 1 && text.charAt(index) === "%") {
+      return { start, end: index + 1 };
+    }
+    start = text.indexOf("%", start + 1);
+  }
+  return null;
+}
+
+type PlaceholderBudget = { steps: number; output: number };
+
+/**
+ * `%名前%`の名前を、draw.ioと同じ順で値に置き換える。置き換えないときは`null`を返す。
+ * 幅、高さ、長さ、ページ番号、日時は数字になるので`0`で代える。
+ * `date{書式}`は、書式の文字が残りうるので、書式から引用符を除いた文字列で代える。
+ * それ以外は、セル自身と祖先の、包む要素の属性から探す。
+ * 歩数が上限を超えたら`budget.steps`を負にして`null`を返す。
+ */
+function resolvePlaceholder(
+  name: string,
+  cell: CellRecord,
+  cells: ReadonlyMap<string, CellRecord>,
+  budget: PlaceholderBudget,
+): string | null {
+  if (name === "id") {
+    return cell.id;
+  }
+  if (
+    ((name.startsWith("width") || name.startsWith("height")) && cell.vertex) ||
+    name.startsWith("length")
+  ) {
+    return "0";
+  }
+  if (!name.includes("{")) {
+    let current: CellRecord | undefined = cell;
+    while (current !== undefined) {
+      budget.steps--;
+      if (budget.steps < 0) {
+        return null;
+      }
+      const value = current.attributes?.get(name);
+      if (value !== undefined) {
+        return value;
+      }
+      current = current.parent === null ? undefined : cells.get(current.parent);
+    }
+  }
+  if (
+    name.startsWith("pagecount") ||
+    name.startsWith("pagenumber") ||
+    name === "date" ||
+    name === "time" ||
+    name === "timestamp"
+  ) {
+    return "0";
+  }
+  if (name.startsWith("date{")) {
+    return name.slice(5, -1).replace(/["']/g, "");
+  }
+  return null;
+}
+
+/**
+ * `text`の`%名前%`を、draw.ioの`replacePlaceholders`と同じ規則で置き換える。
+ * `%label%`と`%tooltip%`は置き換えず、直前に`%`がある`%名前%`は`名前%`にする。
+ */
+function replacePlaceholders(
+  text: string,
+  cell: CellRecord,
+  cells: ReadonlyMap<string, CellRecord>,
+  budget: PlaceholderBudget,
+): string {
+  const closes = text.includes("%date{") ? lastDateCloses(text) : null;
+  const parts: string[] = [];
+  let last = 0;
+  let from = 0;
+  for (;;) {
+    const found = nextPlaceholder(text, from, closes);
+    if (found === null) {
+      break;
+    }
+    from = found.end;
+    const whole = text.slice(found.start, found.end);
+    if (whole === "%label%" || whole === "%tooltip%") {
+      continue;
+    }
+    const value =
+      found.start > last && text.charAt(found.start - 1) === "%"
+        ? whole.slice(1)
+        : resolvePlaceholder(whole.slice(1, -1), cell, cells, budget);
+    parts.push(text.slice(last, found.start), value ?? whole);
+    last = found.end;
+  }
+  parts.push(text.slice(last));
+  const result = parts.join("");
+  budget.output -= result.length;
+  return result;
+}
+
+/**
+ * `placeholders`を持つ要素の属性の値を、`%名前%`を置き換えてから調べ、拒否する理由を返す。
+ * draw.ioは、セル自身の属性に無い名前を祖先のセルの属性から探すので、
+ * タグを祖先のセルの属性と子のラベルに分けて書ける。
+ * 祖先は文書の順序に関わらず`parent`属性でたどる。
+ */
+function findForbiddenPlaceholderLabel(
+  tokens: readonly Token[],
+): string | null {
+  const tooComplex = "placeholdersの置き換えが複雑すぎて検査できません";
+  const budget: PlaceholderBudget = {
+    steps: MAX_PLACEHOLDER_STEPS,
+    output: MAX_PLACEHOLDER_OUTPUT,
+  };
+  for (const diagram of collectDiagramCells(tokens)) {
+    if (diagram.targets.length > 0 && diagram.duplicated) {
+      return "placeholdersを使う図に、同じidのセルが複数あります";
+    }
+    for (const cell of diagram.targets) {
+      for (const value of cell.attributes?.values() ?? []) {
+        if (!value.includes("%")) {
+          continue;
+        }
+        const replaced = replacePlaceholders(
+          value,
+          cell,
+          diagram.cells,
+          budget,
+        );
+        if (budget.steps < 0 || budget.output < 0) {
+          return tooComplex;
+        }
+        const reason = findForbiddenHtml(replaced);
+        if (reason !== null) {
+          return reason;
+        }
+      }
+    }
+  }
+  return null;
+}
+
 export type DrawioValidationResult =
   | { readonly valid: true }
   | { readonly valid: false; readonly reason: string };
@@ -527,10 +855,11 @@ function byteLength(text: string): number {
  * すべての`<diagram>`が非圧縮であること(空白以外のテキストとCDATAを持たない)、
  * `<diagram>`を1つ以上含むこと、256KB以下であること、
  * `link`属性と、ラベルのHTMLの危険な要素と属性を含まないことの5つ。
- * 拒否するラベルのHTMLは、属性付きの`a`・`area`・`map`・`meta`・`iframe`・`object`などと、
- * `<style>`、`<script`、タグの中の`onclick=`のようなイベントハンドラ属性、
- * `usemap=`・`formaction=`・`srcdoc=`である。属性を持たない`<Object>`のような
- * 型の表記は通す。`placeholders`を持つ要素では、属性の値をつなげた文字列も調べる。
+ * 拒否するラベルのHTMLは、パーサーによって読み方が分かれる構文(`AMBIGUOUS_SYNTAX_PATTERN`)、
+ * 属性付きの`a`・`area`・`map`・`meta`・`object`など、タグの中の`onclick=`のような
+ * イベントハンドラ属性、`usemap=`・`formaction=`・`srcdoc=`である。属性を持たない`<Object>`のような
+ * 型の表記は通す。`placeholders`を持つ要素では、属性の値をつなげた文字列と、
+ * `%名前%`をセル自身と祖先の属性で置き換えた値も調べる。
  * 実体参照は段ごとに復号して調べる。二重に実体参照を書いた値は、実際に何として読まれるかを
  * 追わず、安全側に倒して復号して拒否する。
  * 満たさないときは、理由を添えて`valid: false`を返す。
@@ -578,7 +907,8 @@ export function validateDrawioXml(xml: string): DrawioValidationResult {
     return { valid: false, reason: compressed };
   }
 
-  const forbidden = findForbiddenContent(tokens);
+  const forbidden =
+    findForbiddenContent(tokens) ?? findForbiddenPlaceholderLabel(tokens);
   if (forbidden !== null) {
     return {
       valid: false,

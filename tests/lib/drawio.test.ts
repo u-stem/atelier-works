@@ -576,3 +576,188 @@ describe("validateDrawioXml long inputs", () => {
     expect(performance.now() - started).toBeLessThan(2000);
   });
 });
+
+/** ラベルのHTMLを1段エスケープして、`html=1`のセルの`value`に入れる。 */
+function withHtmlLabel(html: string): string {
+  const escaped = html
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+  return MINIMAL_VALID_XML.replace(
+    'value="start" vertex="1"',
+    `value="${escaped}" style="html=1;" vertex="1"`,
+  );
+}
+
+describe("validateDrawioXml syntax that parsers read differently", () => {
+  test.each([
+    [
+      "a double quote hidden in a comment",
+      '<!-- <b t=" --> <b t=">" onclick=1>',
+    ],
+    [
+      "a single quote hidden in a comment",
+      "<!-- <b t=' --> <b t='>' onclick=1>",
+    ],
+    [
+      "a comment that hides a quote before a details element",
+      '<!--<b title="--><details title=">" open ontoggle=alert(1)>',
+    ],
+    [
+      "a textarea that hides a quote before a details element",
+      '<textarea><x a="</textarea><details title=">" open ontoggle=alert(1)>',
+    ],
+    [
+      "a processing instruction that hides a quote",
+      '<?<b title="><details open ontoggle=x>">',
+    ],
+    [
+      "an end tag whose quoted value hides a handler",
+      `</x a="<b t='"> <b t=">" onclick=1> '>`,
+    ],
+    ["a comment", "a<!-- note -->b"],
+    ["a doctype", "<!DOCTYPE html>x"],
+    ["a bogus comment", "<!x>"],
+    ["a CDATA section", "<![CDATA[x]]>"],
+    ["a processing instruction", "<?x?>"],
+    ["a less-than sign and a slash followed by a space", "x </ y"],
+    ["a less-than sign and a slash followed by a digit", "x </1"],
+    ["a less-than sign and a slash at the end", "x </"],
+    ["an svg element", "x<svg>y"],
+    [
+      "an svg anchor with a set element",
+      '<svg><a><set attributeName="href" to="javascript:alert(1)"/><text>x</text></a></svg>',
+    ],
+    ["a math element", "<math>x</math>"],
+    ["a set element", '<set attributeName="href" to="x">'],
+    ["an animate element", "<animate attributeName=href values=x>"],
+    ["an animateMotion element", "<animateMotion>"],
+    ["an animateTransform element", "<ANIMATETRANSFORM/>"],
+    ["a textarea", "<textarea>x</textarea>"],
+    ["a title without attributes", "<title>x</title>"],
+    ["an xmp element", "<xmp>x</xmp>"],
+    ["a noscript element", "<noscript>x</noscript>"],
+    ["a noembed element", "<noembed>x</noembed>"],
+    ["a noframes element", "<noframes>x</noframes>"],
+    ["a plaintext element", "<plaintext>x"],
+    ["an iframe without attributes", "<iframe>x</iframe>"],
+    ["a textarea at the end of the label", "x<textarea"],
+    ["a title in upper case", "<TITLE>"],
+    ["a textarea followed by a slash", "<textarea/>"],
+    ["a title followed by a tab", "<title\tid=x>"],
+  ])("rejects a label with %s", (_name, html) => {
+    expect(validateDrawioXml(withHtmlLabel(html)).valid).toBe(false);
+  });
+
+  test.each([
+    ["one = 1", "one = 1"],
+    ["Promise<Object>", "Promise<Object>"],
+    ["List<Map>", "List<Map>"],
+    ["a < b", "a < b"],
+    ["a <= b", "a <= b"],
+    ["a line break", "a<br>b"],
+    ["bold text", "<b>x</b>"],
+    ["a list", "<ul><li>x</li></ul>"],
+    ["a styled div", '<div style="color:red">x</div>'],
+    ["a styled span", "<span style='font-size:12px'>x</span>"],
+    ["a font element", '<font color="#ff0000">x</font>'],
+    ["a type named Settings", "Map<Settings>"],
+    ["a type named Titles", "List<Titles>"],
+    ["a type named Svgs", "List<Svgs>"],
+  ])("accepts a label that writes %s", (_name, html) => {
+    expect(validateDrawioXml(withHtmlLabel(html)).valid).toBe(true);
+  });
+});
+
+describe("validateDrawioXml tags read with quotes", () => {
+  test("rejects an anchor whose first attribute name is a quote", () => {
+    const xml = withHtmlLabel('<a "=">" href=x>go</a>');
+    expect(validateDrawioXml(xml).valid).toBe(false);
+  });
+
+  test("rejects an anchor written with upper case named references", () => {
+    const xml = withCellValue("&amp;LT;a href=x&amp;GT;go");
+    expect(validateDrawioXml(xml).valid).toBe(false);
+  });
+
+  test("rejects a handler written with upper case named references", () => {
+    const xml = withCellValue(
+      "&amp;LT;b onclick=&amp;QUOT;x&amp;QUOT;&amp;GT;",
+    );
+    expect(validateDrawioXml(xml).valid).toBe(false);
+  });
+
+  test("rejects a script written with an upper case ampersand reference", () => {
+    const xml = withCellValue("&amp;AMP;lt;script&amp;AMP;gt;");
+    expect(validateDrawioXml(xml).valid).toBe(false);
+  });
+});
+
+describe("validateDrawioXml placeholders resolved from ancestors", () => {
+  const head =
+    '<mxfile><diagram id="d"><mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/>';
+  const tail = "</root></mxGraphModel></diagram></mxfile>";
+  const parentCell =
+    '<object id="g" x="&lt;a "><mxCell parent="1" vertex="1"/></object>';
+  const childCell =
+    '<object id="c" placeholders="1" label="%x%href=javascript:alert(1)&gt;go"><mxCell parent="g" vertex="1" style="html=1;"/></object>';
+
+  test("rejects a tag split between an ancestor and a child label", () => {
+    const xml = `${head}${parentCell}${childCell}${tail}`;
+    expect(validateDrawioXml(xml).valid).toBe(false);
+  });
+
+  test("rejects a tag split between a later ancestor and a child label", () => {
+    const xml = `${head}${childCell}${parentCell}${tail}`;
+    expect(validateDrawioXml(xml).valid).toBe(false);
+  });
+
+  test("rejects a tag whose attribute comes from a grandparent", () => {
+    const xml = `${head}<object id="r" x="href=x"><mxCell parent="1" vertex="1"/></object><mxCell id="m" parent="r" vertex="1"/><object id="c" placeholders="1" label="&lt;a %x%&gt;go"><mxCell parent="m" vertex="1"/></object>${tail}`;
+    expect(validateDrawioXml(xml).valid).toBe(false);
+  });
+
+  test("rejects a tag split across the own values in reverse order", () => {
+    const xml = `${head}<object id="c" placeholders="1" label="%p1%%p2%" p2=" href=x&gt;" p1="&lt;a"><mxCell parent="1" vertex="1"/></object>${tail}`;
+    expect(validateDrawioXml(xml).valid).toBe(false);
+  });
+
+  test("rejects a less-than sign produced by a date placeholder", () => {
+    const xml = `${head}<object id="c" placeholders="1" label="%date{&lt;}%a href=x&gt;go"><mxCell parent="1" vertex="1"/></object>${tail}`;
+    expect(validateDrawioXml(xml).valid).toBe(false);
+  });
+
+  test("rejects a cell id used as a placeholder", () => {
+    const xml = `${head}<object placeholders="1" label="%id%href=x&gt;go" id="&lt;a "><mxCell parent="1" vertex="1"/></object>${tail}`;
+    expect(validateDrawioXml(xml).valid).toBe(false);
+  });
+
+  test("accepts placeholders that resolve to plain text from an ancestor", () => {
+    const xml = `${head}<object id="g" owner="team"><mxCell parent="1" vertex="1"/></object><object id="c" placeholders="1" label="owner: %owner%"><mxCell parent="g" vertex="1"/></object>${tail}`;
+    expect(validateDrawioXml(xml).valid).toBe(true);
+  });
+
+  test("accepts an escaped percent pair that stays literal", () => {
+    const xml = `${head}${parentCell}<object id="c" placeholders="1" label="%%x%href=y&gt;"><mxCell parent="g" vertex="1"/></object>${tail}`;
+    expect(validateDrawioXml(xml).valid).toBe(true);
+  });
+
+  test("checks a deep chain of placeholder labels in a short time", () => {
+    const cells = Array.from(
+      { length: 2000 },
+      (_unused, i) =>
+        `<object id="c${i}" placeholders="1" label="${"%missing%".repeat(10)}"><mxCell parent="${i === 0 ? "1" : `c${i - 1}`}" vertex="1"/></object>`,
+    ).join("");
+    const started = performance.now();
+    validateDrawioXml(`${head}${cells}${tail}`);
+    expect(performance.now() - started).toBeLessThan(1000);
+  });
+
+  test("checks many date placeholders without a closing brace in a short time", () => {
+    const xml = `${head}<object id="c" placeholders="1" label="${"%date{".repeat(30000)}"><mxCell parent="1" vertex="1"/></object>${tail}`;
+    const started = performance.now();
+    validateDrawioXml(xml);
+    expect(performance.now() - started).toBeLessThan(1000);
+  });
+});
