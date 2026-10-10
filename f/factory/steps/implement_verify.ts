@@ -39,6 +39,7 @@ import {
   requireDeadlineAt,
 } from "../lib/implement_support.ts";
 import { logger } from "../lib/log.ts";
+import { modelChangesAfterFailure } from "../lib/model_policy.ts";
 import {
   withWorktreeProcessLock,
   worktreeLockFor,
@@ -250,6 +251,12 @@ export async function main(
         },
         dailyBudgetExceeded: async () =>
           (await dailyBudgetStatus(config)).exceeded,
+        modelChangesAfterFailure: async () =>
+          modelChangesAfterFailure(
+            config,
+            "implement",
+            await countImplementFailedRounds(work_item_id, context.attempt),
+          ),
         holdsLease: () =>
           stillHoldsImplementLease(() => getWorkItem(work_item_id), leaseJobId),
         now: Date.now,

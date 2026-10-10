@@ -647,6 +647,12 @@ export type ImplementLoopDeps = {
   readonly recordRound: (record: ImplementRoundRecord) => Promise<void>;
   readonly dailyBudgetExceeded: () => Promise<boolean>;
   /**
+   * 検査に失敗したラウンドを数えに入れる前の呼び出しで、
+   * このラウンドの失敗の次に使うモデルが、今のモデルと変わるかを返す。
+   * 失敗したラウンドでだけ呼ぶ。
+   */
+  readonly modelChangesAfterFailure: () => Promise<boolean>;
+  /**
    * 作業項目がまだimplementingで、flow_job_idがこの実行のルートジョブIDならtrueを返す(1回のSELECT)。
    * 各ラウンドの冒頭(worktreeに触れる前)と、修正ラウンドを始める直前に呼ぶ。
    */
@@ -1052,6 +1058,11 @@ export async function runImplementVerifyLoop(
       evaluation.state === "failed" ? stallHash(evaluation.stallText) : null;
     const dailyBudgetExceeded =
       evaluation.state === "failed" ? await deps.dailyBudgetExceeded() : false;
+    // 記録の前に呼ぶので、数えるのはこのラウンドを含まない失敗の回数になる。
+    const modelChangesNext =
+      evaluation.state === "failed"
+        ? await deps.modelChangesAfterFailure()
+        : false;
     // 期限は、ラウンド上限・日次予算と同じく修正ラウンド前のリース確認より先に判定する。両方が成り立っても、完了ステップがリースを確かめて何もしないので結果は変わらない。
     const deadlineReached =
       evaluation.state === "failed" &&
@@ -1063,6 +1074,7 @@ export async function runImplementVerifyLoop(
       maxRounds: input.maxRounds,
       dailyBudgetExceeded,
       deadlineReached,
+      modelChangesNext,
       checkOutputHash: checkHash,
       previousCheckOutputHash: previousCheckHash,
       diffHash: fingerprint.treeSha,

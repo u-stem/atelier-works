@@ -694,6 +694,8 @@ type HarnessOptions = {
   readonly checks?: readonly (readonly LoopCheckResult[])[];
   readonly fixRounds?: readonly ImplementClaudeRound[];
   readonly budgetExceeded?: boolean;
+  /** `modelChangesAfterFailure`が、呼び出しの順に返す値。最後の値を繰り返す。既定はfalse。 */
+  readonly modelChangesNext?: readonly boolean[];
   /** `holdsLease`が、0始まりで`from`回目以降の呼び出しでfalseを返す(リースを失った)。 */
   readonly leaseLostFrom?: number;
   /** `assertGitPointer`が、0始まりで`from`回目以降の呼び出しで投げる例外。 */
@@ -706,14 +708,24 @@ type Harness = {
   readonly deps: ImplementLoopDeps;
   readonly recorded: ImplementRoundRecord[];
   readonly fixRequests: FixRoundRequest[];
-  readonly calls: { gitleaks: number; checks: number; fingerprint: number };
+  readonly calls: {
+    gitleaks: number;
+    checks: number;
+    fingerprint: number;
+    modelChange: number;
+  };
   readonly events: string[];
 };
 
 function harness(options: HarnessOptions = {}): Harness {
   const recorded: ImplementRoundRecord[] = [];
   const fixRequests: FixRoundRequest[] = [];
-  const calls = { gitleaks: 0, checks: 0, fingerprint: 0 };
+  const calls = {
+    gitleaks: 0,
+    checks: 0,
+    fingerprint: 0,
+    modelChange: 0,
+  };
   const events: string[] = [];
   let lastTreeSha = "";
   const deps: ImplementLoopDeps = {
@@ -761,6 +773,14 @@ function harness(options: HarnessOptions = {}): Harness {
       recorded.push(record);
     },
     dailyBudgetExceeded: async () => options.budgetExceeded ?? false,
+    modelChangesAfterFailure: async () => {
+      const value = pick(
+        options.modelChangesNext ?? [false],
+        calls.modelChange,
+      );
+      calls.modelChange += 1;
+      return value;
+    },
     holdsLease: async () => {
       const index = events.filter((event) => event === "lease").length;
       events.push("lease");
@@ -1021,6 +1041,60 @@ describe("runImplementVerifyLoop", () => {
     expect(
       (await run(harness({ checks: [[FAIL]], fingerprints: [FP_1] }))).exit,
     ).toBe("stalled");
+  });
+
+  test("runs a fix round past a stall when the next failure changes the model", async () => {
+    const h = harness({
+      checks: [[FAIL]],
+      fingerprints: [FP_1],
+      modelChangesNext: [false, true, false],
+    });
+    expect((await run(h)).rounds).toBe(3);
+  });
+
+  test("exits stalled once the model no longer changes", async () => {
+    const h = harness({
+      checks: [[FAIL]],
+      fingerprints: [FP_1],
+      modelChangesNext: [false, true, false],
+    });
+    expect((await run(h)).exit).toBe("stalled");
+  });
+
+  test("still exits max_rounds when the next failure changes the model", async () => {
+    const h = harness({
+      checks: [[FAIL]],
+      fingerprints: [FP_1],
+      modelChangesNext: [true],
+    });
+    expect(
+      (await run(h, loopInput(outputRound(), { maxRounds: 2 }))).exit,
+    ).toBe("max_rounds");
+  });
+
+  test("asks whether the model changes only for a failed round", async () => {
+    const h = harness({ checks: [[PASS]] });
+    await run(h);
+    expect(h.calls.modelChange).toBe(0);
+  });
+
+  test("asks whether the model changes before recording the failed round", async () => {
+    const order: string[] = [];
+    const h = harness({ checks: [[FAIL], [PASS]], fingerprints: [FP_1, FP_2] });
+    const base = h.deps;
+    const deps: ImplementLoopDeps = {
+      ...base,
+      modelChangesAfterFailure: async () => {
+        order.push("count");
+        return base.modelChangesAfterFailure();
+      },
+      recordRound: async (record) => {
+        order.push("record");
+        await base.recordRound(record);
+      },
+    };
+    await runImplementVerifyLoop(deps, loopInput());
+    expect(order).toEqual(["count", "record", "record"]);
   });
 
   test("exits daily_budget when the budget is spent", async () => {

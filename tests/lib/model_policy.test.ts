@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { modelFor, prFixRetryModel } from "../../f/factory/lib/model_policy.ts";
+import {
+  modelChangesAfterFailure,
+  modelFor,
+  prFixRetryModel,
+} from "../../f/factory/lib/model_policy.ts";
 
 const CONFIG = { model: "light-model", heavy_model: "heavy-model" };
 
@@ -47,5 +51,37 @@ describe("prFixRetryModel", () => {
 
   test("uses heavy_model when one earlier failure is already recorded", () => {
     expect(prFixRetryModel(CONFIG, 1)).toBe("heavy-model");
+  });
+});
+
+describe("modelChangesAfterFailure", () => {
+  test("is false when the next failure keeps model", () => {
+    expect(modelChangesAfterFailure(CONFIG, "implement", 0)).toBe(false);
+  });
+
+  test("is true when the next failure reaches the escalation count", () => {
+    expect(modelChangesAfterFailure(CONFIG, "implement", 1)).toBe(true);
+  });
+
+  test("is false once heavy_model is already in use", () => {
+    expect(modelChangesAfterFailure(CONFIG, "implement", 2)).toBe(false);
+  });
+
+  test("is true for pr_fix at the same boundary", () => {
+    expect(modelChangesAfterFailure(CONFIG, "pr_fix", 1)).toBe(true);
+  });
+
+  test("is false for a stage that always uses heavy_model", () => {
+    expect(modelChangesAfterFailure(CONFIG, "pr_review", 1)).toBe(false);
+  });
+
+  test("is false when model and heavy_model are the same", () => {
+    expect(
+      modelChangesAfterFailure(
+        { model: "same-model", heavy_model: "same-model" },
+        "implement",
+        1,
+      ),
+    ).toBe(false);
   });
 });

@@ -70,6 +70,11 @@ describe("model assignment", () => {
         "countImplementFailedRounds(",
         /const sonnetFailures = await countImplementFailedRounds\([\s\S]*?\);[\s\S]*attempt: context\.attempt,\s*sonnetFailures,/,
       ],
+      [
+        "steps/implement_verify.ts",
+        "modelChangesAfterFailure(",
+        /modelChangesAfterFailure\(\s*config,\s*"implement",\s*await countImplementFailedRounds\(work_item_id, context\.attempt\),?\s*\)/,
+      ],
     ];
 
     test.each(wiring)("%s calls %s", (path, call) => {

@@ -109,9 +109,14 @@ Claudeの実行ごとに`implement_rounds`へ1行記録する。リースを失�
 | `max_rounds` | ラウンドが`implement_max_rounds`に達した | `check_failed` |
 | `daily_budget` | 日次予算を超えた | `check_failed` |
 | `deadline` | 期限までの残りが修正ラウンドの最悪の所要時間に足りない | `check_failed` |
-| `stalled` | 差分か検査の出力が前のラウンドと同じ | `stalled` |
+| `stalled` | 差分か検査の出力が前のラウンドと同じ。ただし、この失敗で`heavy_model`に上がるときは除く | `stalled` |
 
-検査コマンドを動かさなかったラウンドは、GitHub側のCIに検査を任せる。停滞(`stalled`)で止めるのは、同じ状態でもう1回直させても予算を使うだけになるからである。期限の判定は、ラウンドの上限や日次予算と同じく、修正ラウンドの前のリースの確認より先に行う。
+検査コマンドを動かさなかったラウンドは、GitHub側のCIに検査を任せる。停滞(`stalled`)で止めるのは、同じ状態でもう1回直させても予算を使うだけになるからである。
+ただし、そのラウンドの失敗でモデルが`model`から`heavy_model`に変わるときは、停滞で止めず、`heavy_model`で修正ラウンドを1回回す。
+同じ失敗でも、上位のモデルなら直せる場合があるためである。
+`model`と`heavy_model`が同じ設定なら変わらないので、停滞で止める。
+ラウンドの上限、日次予算、期限の判定は、この場合も停滞の判定より先に行う。
+期限の判定は、ラウンドの上限や日次予算と同じく、修正ラウンドの前のリースの確認より先に行う。
 
 ループは、検査の前にも次の理由で止まる。
 
@@ -232,6 +237,7 @@ Claudeが要件の不足を返すと、完了のステップは次の順に処�
 
 モデルの昇格に使う失敗の数は、同じ作業項目の同じ試行の`implement_rounds`のうち、結果が`check_failed`、`stalled`、`error`の行である。
 `error`と`check_failed`には、トークンの失効やAPIの障害、期限切れ、`.git`ポインタの不一致など、モデルの失敗でないものも入るので、実際より早く`heavy_model`に上がることがある。損失の上限は`implement_max_rounds`と予算で決まる。
+Sonnetのラウンドが停滞しても、その失敗で`heavy_model`に上がるときは、停滞で止めずに`heavy_model`で修正ラウンドを1回回す。
 数え方の全体は[運用](../operations.md)の「モデルを使い分ける」にある。
 
 `check_commands_by_repo`は、`{"<owner>/<repo>": ["bun install --frozen-lockfile", "bun test"]}`の形で書く。workerで直接動く例は`bunx --bun tsc --noEmit`や`bunx --bun biome check .`である。実装フローは`allowed_check_commands`を使わない。

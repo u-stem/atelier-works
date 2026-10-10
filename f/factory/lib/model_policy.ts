@@ -52,3 +52,19 @@ export function prFixRetryModel(
 ): string {
   return modelFor(config, "pr_fix", priorFailures + 1);
 }
+
+/**
+ * `stage`で、あと1回失敗すると使うモデルが変わるかを返す。
+ * `priorFailures`は、今の失敗を数えに入れる前の失敗の回数である。
+ * `model`と`heavy_model`が同じ設定のときは、昇格しても変わらないのでfalseを返す。
+ */
+export function modelChangesAfterFailure(
+  config: Pick<FactoryConfig, "model" | "heavy_model">,
+  stage: ModelStage,
+  priorFailures: number,
+): boolean {
+  return (
+    modelFor(config, stage, priorFailures) !==
+    modelFor(config, stage, priorFailures + 1)
+  );
+}

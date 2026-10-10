@@ -708,6 +708,11 @@ export type ImplementRoundExitInput = {
   readonly dailyBudgetExceeded: boolean;
   /** 検査に失敗した後、期限までの残りが修正ラウンドの最悪の所要時間(fixRoundWorstCaseSec)に足りない。 */
   readonly deadlineReached: boolean;
+  /**
+   * このラウンドの失敗で、次の修正ラウンドのモデルが`heavy_model`に変わる。
+   * trueのときは、同じ失敗を新しいモデルで直せるかを確かめるため、停滞の判定を飛ばす。
+   */
+  readonly modelChangesNext: boolean;
   /** このラウンドの検証出力全体の`stallHash`。何も実行しなかったときは`null`。 */
   readonly checkOutputHash: string | null;
   readonly previousCheckOutputHash: string | null;
@@ -824,6 +829,7 @@ export function implementTimeoutMisfit(
  * 4. ガードとして、ラウンド上限、日次予算、フロー全体の期限、停滞の検出を確かめる。
  *    停滞は、差分か検証出力が前のラウンドと同じ状態で、
  *    もう1回修正しても予算を使うだけになる。
+ *    ただし、この失敗で次のモデルが変わるときは、モデルを上げた修正を1回試すため停滞を判定しない。
  * `continue`は、検証が失敗し、どのガードにも当たらなかったことを表す。
  * 終了の理由から`implement_rounds.outcome`への対応は`roundOutcomeForExit`が決める。
  */
@@ -836,6 +842,7 @@ export function decideImplementRoundExit(
   if (state.round >= state.maxRounds) return "max_rounds";
   if (state.dailyBudgetExceeded) return "daily_budget";
   if (state.deadlineReached) return "deadline";
+  if (state.modelChangesNext) return "continue";
   if (
     state.previousDiffHash !== null &&
     state.diffHash === state.previousDiffHash
