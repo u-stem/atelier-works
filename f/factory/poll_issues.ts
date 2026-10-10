@@ -453,7 +453,7 @@ function isGoneFromGithub(err: unknown): boolean {
  *
  * - 判定は`decideClosureOnly`で、注記は`actionableCancelNote`にする。
  * - 閉じた人を`decideCloser`で確かめ、許されたときだけ取り消す。
- *   許されないとき(閉じた人が分からない、作者が許可されない関係)は取り消さず、
+ *   `decideCloser`が許さないときは取り消さず、
  *   理由をinfoのログに残して要対応に残す。
  *   第三者が自分のIssueやPRを閉じて、安全策で止まった作業項目を一覧から消せないようにするため。
  * - 遷移は`updateStatusIfLeaseHolder`で、読み取った状態とflow_job_idのままのときだけ行う。
