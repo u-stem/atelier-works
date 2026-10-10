@@ -491,7 +491,9 @@ lockfileは保護パスなので、Claudeが書き換えたラウンドでは検
 
 ### 対象リポジトリのCI
 
-実装ブランチのpushとPRの作成で、対象リポジトリ自身の`push`と`pull_request`のCIが動く。CIは、人のレビューより前に、Claudeが書いたコードをそのリポジトリのsecretsを使える状態で実行しうる。対象リポジトリのCIの権限とsecretsの範囲は、この前提で設定する。
+実装ブランチのpushとPRの作成で、対象リポジトリ自身の`push`と`pull_request`のCIが動く。
+atelier-worksのCIは`main`のpushと`pull_request`でだけ動くので、実装ブランチのpushでは動かず、PRの作成から動く。
+CIは、人のレビューより前に、Claudeが書いたコードをそのリポジトリのsecretsを使える状態で実行しうる。対象リポジトリのCIの権限とsecretsの範囲は、この前提で設定する。
 
 ### 保護パスの記録
 

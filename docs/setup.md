@@ -128,7 +128,7 @@ CIの`metadata`ジョブも、メタデータが最新かを検査する。
 `main`へのpushでは、変更に関わらず毎回検査する。
 `main`のCIの結果は、`main`全体の状態を表すためである。
 
-PRと`main`以外へのpushでは、次のどれにも触れないとき、検査を飛ばして成功にする。
+PRでは、次のどれにも触れないとき、検査を飛ばして成功にする。
 
 - メタデータの入力: `f/`、`dependencies/`、`wmill.yaml`、`wmill-lock.yaml`
 - このジョブの定義
@@ -137,11 +137,25 @@ PRと`main`以外へのpushでは、次のどれにも触れないとき、検�
   - `scripts/ci-metadata-login.sh`と`scripts/check-metadata-fresh.sh`
   - `mise.toml`
 
-比べる範囲は、PRではマージ基点からの変更、pushでは前回のpushからの変更である。
-新しいブランチの初回pushでは、`origin/main`とのマージ基点からの変更を見る。
+比べる範囲は、マージ基点からの変更である。
 基点や差分を求められないときは、安全のために検査する。
 
 フックを飛ばしてコミットしたPRは、手元で`mise run metadata`を実行してpushし直すまで、このジョブで失敗する。
+
+### CIの実行の範囲
+
+`ci.yml`は、次のときに動く。
+
+- `push`は`main`だけで動かす。
+  ほかのブランチは、PRの実行が検査する。
+- タグのpushでは動かさない。
+  `main`という名前のタグで動くと、その実行は「mainの最新の成功した実行」に見える。
+  console_fetcherの取り込みが止まるため、動かさない。
+- `pull_request`は、変更したパスで絞らない。
+  文書だけのPRも、lint:docsと秘密情報の検査のために動く。
+- 同じ参照の古いPRの実行は、新しい実行が始まると止める。
+- `main`の実行は止めない。
+  止めると、console_fetcherの取り込む成功した実行が欠けるためである。
 
 ### git worktreeのログイン情報
 
