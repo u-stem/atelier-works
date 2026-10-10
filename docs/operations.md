@@ -730,7 +730,8 @@ Consoleが止まっていてもDiscordには届くので、通知の確認先は
 - `on_error_schedule`が、打ち切られた回でも呼ばれること。呼ばれなければ、`job_failed`と`schedule_failing`のどちらも出ない。
 
 あわせて、`self_update`の実行ユーザーに`f/factory/deployed_sha`が見えることも実機で確かめる。
-見えないと存在の確認が`false`になり、全体を反映し直して`setVariable`が衝突しうる。
+見えないと存在の確認が`false`になり、全体を反映し直す。
+このとき、見えない既存の変数に対して、`setVariable`の作成が既存のパスと衝突しうる。
 
 確かめるには、本番の`self_update`やロックには触れず、使い捨てのscriptとスケジュールを使う。
 `wmill sync`の対象は`f/**`だけなので、`u/<user>/`のscriptとスケジュールはWindmillの画面で作る。
@@ -796,7 +797,8 @@ Consoleが止まっていてもDiscordには届くので、通知の確認先は
    mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "DELETE FROM factory.job_failures WHERE flow_path = 'u/<user>/timeout_probe' AND id IN (<確かめたid>)"
    ```
 
-   子プロセスと取り残しの確認に使った`u/<user>/timeout_probe_child`と`u/<user>/timeout_probe_tail`も、同じ形で消す。
+   `u/<user>/timeout_probe_child`と`u/<user>/timeout_probe_tail`は手動で実行するので、`on_error_schedule`が呼ばれず、通常は行が付かない。
+   SELECTで行が出た場合だけ、同じ手順で消す。
 
 打ち切りの扱いの確認は、同じ手順の使い捨てのscriptで続ける。
 
@@ -834,25 +836,26 @@ mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker ps 
 `self_update`の区切った呼び出しが30秒で終わらないと、例外にする。
 呼び出し自体は中断しないので、後から完了することがある。
 
-- 更新のうち、`wmill_token`の取得より後の失敗と時間切れは、更新の失敗として`factory.deployments`に記録する。
-  `wmill_token`の取得より前の失敗と時間切れ(設定、`github_token`、cloneの更新、ブランチとHEADの確認、`deployed_sha`の読み取りなど)は、ジョブの失敗になるだけで、`deployments`には残らない。
+- 更新のうち、`wmill_token`の取得を含め、それ以降の失敗と時間切れは、更新の失敗として`factory.deployments`に記録する。
+  記録されない範囲は[アーキテクチャ](architecture.md)の「自己更新」に書く。
   ジョブの失敗は、Discordの`job_failed`と、3回続いたときの`schedule_failing`で知る。
   ただし`deployed_sha`の更新が時間切れのときは、変数を読み直し、書けていれば成功として続ける。
 - `deployed_sha`の読み取りが時間切れのときは、未デプロイとは扱わず、更新を失敗にする。
   読み取りがそれ以外で失敗したときは、区切った`existsVariable`で変数の有無を確かめる。
   `false`のときだけ未デプロイとして全体を反映し直す。
-  `true`のときと、確かめられないときは、更新を失敗にする。
-- `deployed_sha`の読み取りが失敗し、存在の確認が`true`か確かめられなかったときは、ジョブが失敗する。
-  エラーは`Variable not found at f/factory/deployed_sha or not visible to you`になるが、変数が存在することもある。
-  権限か一時的な失敗を疑う。
+  `true`のときと、確認できないときも、更新を失敗にする。
+  このとき、エラーは`Variable not found at f/factory/deployed_sha or not visible to you`になるが、変数が存在することもある。
+  一時的な失敗か、存在の確認(`existsVariable`)の失敗を疑う。
 - noticeの挿入が時間切れになり、後から挿入されたときは、その回のDiscordの通知は出ない。
   次の回からは、同じ本文の未解決のnoticeがあるので、通知しない。
   Consoleの要対応には残る。
 - stateの読み取りが失敗か時間切れの回は、stateを書かない。
   確認できなかった回数の積み上げを、0に戻さないためである。
   stateを書けなかった回は、警告だけにして、noticeの判定は数えた回数で続ける。
-- Console用workerの確認で、stateを書けなかった回の後は、保存された回数が古いままになる。
-  確かめられなかった回数が実際より多く数えられ、通知`console_worker_check_failed`が1回の失敗で出ることがある。
+- Console用workerの確認で、stateを書けなかった回の後は、保存された回数が実際と食い違う。
+  回数を0に戻す書き込みが失敗すると、古い回数が残る。
+  その後は、1回の確認失敗でも通知`console_worker_check_failed`が出うる。
+  回数を増やす書き込みが失敗すると、保存された回数は実際より少なくなり、通知が遅れる。
 
 ### 打ち切られた回の記録を確かめる
 
