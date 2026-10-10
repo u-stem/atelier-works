@@ -25,7 +25,10 @@ LOG_MAX_FILE = "10"
 
 [tasks.up]
 description = "Start the local Windmill stack"
-run = "docker compose -f infra/docker-compose.yml up -d --build"
+run = """
+scripts/check-docker-version.sh
+docker compose -f infra/docker-compose.yml up -d --build
+"""
 
 [tasks.down]
 description = "Stop the local Windmill stack"
@@ -59,6 +62,7 @@ lefthook install
 [tasks.deploy]
 description = "Update checkout, rebuild, restart, push, and migrate"
 run = """
+scripts/check-docker-version.sh
 git pull --ff-only
 docker compose -f infra/docker-compose.yml pull
 docker compose -f infra/docker-compose.yml build windmill_worker console_fetcher

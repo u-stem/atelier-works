@@ -151,19 +151,23 @@ services:
   ## defaultのworkerは、ジョブが初めて動くまでこのディレクトリを作らないので、
   ## 起動の前に作れるのはこのサービスだけである。
   ## defaultのworkerはrootで動き、umask 022でディレクトリを作る。
-  ## このサービスもrootで`mkdir -p -m 0755`だけを実行し、同じ所有者と権限で作る。
+  ## このサービスもrootで`mkdir -p -m 0755`を実行し、同じ所有者と権限で作る。
   ## どちらが先に作っても、defaultのworkerは書ける。
+  ## `requirements`がsymlinkのときは、何も作らず失敗で終わる。
+  ## defaultのworkerで動くものが`factory_state`の下にsymlinkを置いていても、
+  ## その先をConsole用workerにマウントさせないため。
+  ## 確認からマウントまでの間にsymlinkへ置き換わる隙は、これでは塞げない。
+  ## 引数は固定の文字列にし、変数を展開しない。
+  ## `sh`は、同じイメージを土台にする`infra/worker/Dockerfile`の`RUN`も使うので、入っている。
   ## ネットワークを持たず、権限もすべて落とし、`factory_state`以外は何もマウントしない。
   ## 終了後のコンテナが残るのは、`depends_on`の判定に使うため。
   factory_state_init:
     image: ghcr.io/windmill-labs/windmill:${WM_VERSION:?run via mise}
     pull_policy: always
     entrypoint:
-      - mkdir
-      - -p
-      - -m
-      - "0755"
-      - /var/lib/factory/requirements
+      - sh
+      - -c
+      - 'if [ -L /var/lib/factory/requirements ]; then echo "/var/lib/factory/requirements is a symlink" >&2; exit 1; fi; mkdir -p -m 0755 /var/lib/factory/requirements'
     user: "0:0"
     restart: "no"
     network_mode: none

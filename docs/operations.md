@@ -625,7 +625,7 @@ Consoleの**通知**タブには、Discordに送らない要対応の事項が�
 | `workspace_disk_usage` | 作業領域の掃除(毎日03:00)が記録したディスク使用量 | 増え続けていないか見る |
 | `console_fetch_failed` | Consoleの取り込みが失敗した | 通知の「次の操作」に従う |
 | `console_fetch_stale` | Consoleの取り込みの結果が30分以上更新されていない | 取り込みのコンテナ(`console_fetcher`)が動いているか確かめる |
-| `console_worker_missing` | tag `console`のジョブが、予定時刻から5分以上実行されずに待っている。Console用のworkerが居ない、2枠とも塞がっている、またはtagの設定がずれていて、Consoleのジョブがqueueに溜まり、Consoleが止まる | `docker compose ps windmill_worker_console`でコンテナの状態を確かめ、無ければ`mise run up`で起動し、動いていれば`docker compose restart windmill_worker_console`で再起動する。直らなければ、Windmillの画面でtag `console`の実行中のジョブとワーカーグループのtagを確かめる。自己更新(10分ごと)が検知し、Discordにも届く |
+| `console_worker_missing` | tag `console`のジョブが、予定時刻から5分以上実行されずに待っている。Console用のworkerが居ない、2枠とも塞がっている、またはtagの設定がずれていて、Consoleのジョブがqueueに溜まり、Consoleが止まる | `docker compose ps windmill_worker_console`でコンテナの状態を確かめ、無ければ`mise run up`で起動し、動いていれば`docker compose restart windmill_worker_console`で再起動する。コンテナが作られていなければ、`factory_state_init`が失敗していないかを[Console用workerを確かめる](#console用workerを確かめる)の手順で確かめる。直らなければ、Windmillの画面でtag `console`の実行中のジョブとワーカーグループのtagを確かめる。自己更新(10分ごと)が検知し、Discordにも届く |
 | `console_worker_check_failed` | Console用のworkerがジョブを受けているかを、自己更新が1時間(6回)続けて確かめられなかった。workerが止まっていても気づけない状態である | 自己更新のジョブログで、下の4種類の警告のどれが出ているかを確かめて原因を直す。`could not confirm the console worker from the job lists`が続くなら、`console_fetch_watch`のスケジュールが有効か、直近の実行がtag `console`で動いているかを確かめる。Discordにも届く |
 | `schedule_failing` | 同じスケジュールの直近3回の実行が続けて失敗した。数えるのはスケジュールの実行そのものの失敗で、成功した実行の中で記録する部分的な失敗は含まない。GitHubのPATの失効などが原因になる | ジョブのログで失敗の内容を確かめて原因を直す。PATは[秘密をローテーションする](#秘密をローテーションする)で再発行する |
 | `schedule_failing_check_failed` | スケジュールが続けて失敗しているかを、ジョブ履歴から判定できなかった。失敗が続いても気づけない状態である | `on_error_schedule`のジョブのログで`failed to read the schedule history`のエラーを確かめ、ジョブ履歴を読む権限があるかを確かめる |
@@ -990,15 +990,28 @@ mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker_con
 
 このworkerは、要件定義書のディレクトリ(`factory_state`のサブパス`requirements`)を読み取り専用でマウントする。
 サブパスのディレクトリが無いと起動しないので、1回限りのサービス`factory_state_init`が先に作る。
-このサービスは`mkdir`だけを実行して正常に終了し、停止したコンテナが残る。
+このサービスは、`requirements`がsymlinkなら失敗で終わり、そうでなければ`mkdir -p -m 0755`を実行して正常に終了する。
+停止したコンテナが残る。
 `mise run up`のたびに実行し直すが、ディレクトリがあれば何も変えない。
 既存の環境でも、`mise run up`を1回実行すれば、このworkerが作り直されて新しいマウントになる。
 `windmill_worker_console`が起動しないときは、このサービスのログを確かめる。
+`requirements is a symlink`と出たときは、`requirements`を通常のディレクトリに直してから、`mise run up`を実行し直す。
 
 ```bash
 mise exec -- docker compose -f infra/docker-compose.yml ps -a factory_state_init
 mise exec -- docker compose -f infra/docker-compose.yml logs factory_state_init
 ```
+
+マウントが想定どおりかは、起動中のworkerの中で確かめる。
+
+```bash
+mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker_console ls -la /var/lib/factory /var/lib/factory/requirements
+```
+
+`/var/lib/factory`の直下に`requirements`だけがあり、`claude`や`gh`が見えないことを確かめる。
+`/var/lib/factory/requirements`の下には、要件定義書の所有者ごとのディレクトリが並ぶ。
+`claude`や`gh`が見えたときは、`factory_state`の根がマウントされている。
+考えられる原因は、DockerのEngineかComposeが下限に届いていないことである。`mise run doctor`で版を確かめる。
 
 ### adminsワークスペースの組み込み項目
 

@@ -34,8 +34,10 @@ echo "=== Software Factory環境診断 ==="
 echo
 
 # 1. docker CLIとdaemon
+docker_ready=0
 if command -v docker >/dev/null 2>&1; then
   if docker info >/dev/null 2>&1; then
+    docker_ready=1
     report "docker" ok "CLI / daemonともに利用できます"
   else
     report "docker" ng "docker CLIはありますがdaemonに接続できません"
@@ -51,14 +53,28 @@ else
   report "docker compose" ng "docker compose (v2プラグイン)が見つかりません"
 fi
 
-# 3. miseの有無
+# 3. Dockerの版
+# Console用workerの`volume.subpath`は、Engineが26.0(API 1.45)未満だと黙って無視され、
+# `factory_state`の根が付く。下限は`check-docker-version.sh`が定め、
+# `mise run up`と`mise run deploy`も同じ検査で起動の前に止まる。
+if [[ "${docker_ready}" -eq 1 ]]; then
+  if version_output="$("${SCRIPT_DIR}/check-docker-version.sh" 2>&1)"; then
+    report "docker version" ok "${version_output}"
+  else
+    report "docker version" ng "$(printf '%s' "${version_output}" | tr '\n' ' ')"
+  fi
+else
+  report "docker version" ng "daemonに接続できないため確認できません"
+fi
+
+# 4. miseの有無
 if command -v mise >/dev/null 2>&1; then
   report "mise" ok "$(mise --version 2>/dev/null || true)"
 else
   report "mise" ng "miseコマンドが見つかりません"
 fi
 
-# 4. `mise.toml`がtrustされているか
+# 5. `mise.toml`がtrustされているか
 # `mise trust --show`は`~/path/to/repo: trusted`のように、ホームディレクトリの
 # 下を`~`に縮めたディレクトリ単位の行で出す(ファイル名は付かない)。
 # `REPO_ROOT`の`$HOME`の部分を`~`に置き換えた文字列と、念のため絶対パスの
@@ -76,7 +92,7 @@ else
   report "mise.toml trust" ng "miseが無いため確認できません"
 fi
 
-# 5. mise経由でツールが入っているか
+# 6. mise経由でツールが入っているか
 if command -v mise >/dev/null 2>&1; then
   for name in wmill gh bun node; do
     case "${name}" in
@@ -95,7 +111,7 @@ else
   report "tool: wmill/gh/bun/node" ng "miseが無いため確認できません"
 fi
 
-# 6. 必須環境変数が設定されているか。
+# 7. 必須環境変数が設定されているか。
 # 値そのものはログに一切出さず、有無だけを確かめる。miseの`[env]`と
 # `mise.local.toml`から渡す前提なので、直接ではなく`mise run doctor`で
 # 実行しているかを確かめること。
@@ -126,14 +142,14 @@ else
   report "環境変数" ok "必須キー${#required_vars[@]}件すべて設定されています"
 fi
 
-# 7. `mise.local.toml`がgitignoreされているか(秘密の誤コミットを防ぐ)
+# 8. `mise.local.toml`がgitignoreされているか(秘密の誤コミットを防ぐ)
 if git -C "${REPO_ROOT}" check-ignore -q mise.local.toml; then
   report "mise.local.toml" ok "gitignore対象です"
 else
   report "mise.local.toml" ng "gitignoreされていません。秘密情報が誤ってコミットされる恐れがあります"
 fi
 
-# 8. ポートが空いているか、またはWindmillが応答しているか
+# 9. ポートが空いているか、またはWindmillが応答しているか
 wm_http_port="${WM_HTTP_PORT:-8080}"
 
 windmill_is_up=0
@@ -148,7 +164,7 @@ else
   report "port ${wm_http_port}" ok "空いています(未起動)"
 fi
 
-# 9. workerのコンテナ内のツールの確認(スタックが起動している場合だけ)
+# 10. workerのコンテナ内のツールの確認(スタックが起動している場合だけ)
 if command -v docker >/dev/null 2>&1 && [[ -f "${COMPOSE_FILE}" ]]; then
   worker_id="$(docker compose -f "${COMPOSE_FILE}" ps -q windmill_worker 2>/dev/null || true)"
   worker_running=0
@@ -175,7 +191,7 @@ else
   report "workerコンテナ" ng "dockerまたはdocker-compose.ymlが見つからず確認できません"
 fi
 
-# 10. 初期パスワードのままログインできてしまわないか(Windmillが応答している場合だけ)
+# 11. 初期パスワードのままログインできてしまわないか(Windmillが応答している場合だけ)
 if [[ "${windmill_is_up}" -eq 1 ]]; then
   login_status="$(curl -s -o /dev/null -w '%{http_code}' -X POST \
     "http://127.0.0.1:${wm_http_port}/api/auth/login" \

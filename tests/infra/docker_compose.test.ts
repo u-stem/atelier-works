@@ -1,5 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import {
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 // Console用workerの構成を静的に確かめる。
@@ -83,6 +92,30 @@ function mounts(svc: Json): Mount[] {
 
 function mountsOf(svc: Json, source: string): Mount[] {
   return mounts(svc).filter((m) => m.source === source);
+}
+
+// `factory_state_init`のscriptを、`/var/lib/factory`を一時ディレクトリに差し替えて実際に動かす。
+function initScript(): string {
+  const entrypoint = service("factory_state_init").entrypoint;
+  if (!isStringArray(entrypoint) || entrypoint.length !== 3) {
+    throw new Error("entrypoint must be [sh, -c, script]");
+  }
+  return entrypoint[2] ?? "";
+}
+
+function runInit(root: string) {
+  const script = initScript().replaceAll("/var/lib/factory", root);
+  const result = Bun.spawnSync(["sh", "-c", script], { env: {} });
+  return { exitCode: result.exitCode, stderr: result.stderr.toString() };
+}
+
+function withRoot<T>(fn: (root: string) => T): T {
+  const root = mkdtempSync(join(tmpdir(), "factory-state-init-"));
+  try {
+    return fn(root);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 }
 
 function envEntries(svc: Json, prefix: string): string[] {
@@ -303,16 +336,64 @@ describe("infra/docker-compose.yml factory_state_init", () => {
     expect(svc.image).toBe(consoleWorker.image);
   });
 
-  test("creates the requirements directory the console worker mounts", () => {
+  test("runs a fixed sh -c script", () => {
     const svc = service("factory_state_init");
 
     expect(svc.entrypoint).toEqual([
-      "mkdir",
-      "-p",
-      "-m",
-      "0755",
-      "/var/lib/factory/requirements",
+      "sh",
+      "-c",
+      expect.stringContaining("mkdir -p -m 0755 /var/lib/factory/requirements"),
     ]);
+  });
+
+  test("does not expand variables in the script", () => {
+    expect(initScript()).not.toMatch(/[$`]/);
+  });
+
+  test("fails when requirements is a symlink", () => {
+    expect(
+      withRoot((root) => {
+        symlinkSync(root, join(root, "requirements"));
+        return runInit(root).exitCode;
+      }),
+    ).toBe(1);
+  });
+
+  test("says that requirements is a symlink", () => {
+    expect(
+      withRoot((root) => {
+        symlinkSync(root, join(root, "requirements"));
+        return runInit(root).stderr;
+      }),
+    ).toContain("is a symlink");
+  });
+
+  test("leaves the symlink as it is", () => {
+    expect(
+      withRoot((root) => {
+        symlinkSync(root, join(root, "requirements"));
+        runInit(root);
+        return lstatSync(join(root, "requirements")).isSymbolicLink();
+      }),
+    ).toBe(true);
+  });
+
+  test("creates requirements with mode 0755 when it is missing", () => {
+    expect(
+      withRoot((root) => {
+        runInit(root);
+        return statSync(join(root, "requirements")).mode & 0o777;
+      }),
+    ).toBe(0o755);
+  });
+
+  test("succeeds when requirements already exists", () => {
+    expect(
+      withRoot((root) => {
+        mkdirSync(join(root, "requirements"));
+        return runInit(root).exitCode;
+      }),
+    ).toBe(0);
   });
 
   test("mounts only factory_state", () => {

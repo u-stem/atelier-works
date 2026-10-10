@@ -261,15 +261,27 @@ Console用のworker(`windmill_worker_console`)は、Consoleの問い合わせと
 
 サブパスのマウントは、ディレクトリが無いとコンテナが起動しない。
 1回限りのサービス`factory_state_init`が、起動の前に`requirements`を作る。
-このサービスは`factory_state`を書き込みでマウントするが、ネットワークを持たず、権限もすべて落とし、`mkdir`だけを実行して終わる。
+このサービスは`factory_state`を書き込みでマウントするが、ネットワークを持たず、権限もすべて落とし、固定の短いシェルのコマンドだけを実行して終わる。
+`requirements`がsymlinkならディレクトリを作らずに失敗で終わり、そうでなければ`mkdir -p -m 0755`を実行する。
+defaultのworkerで動くものが置いたsymlinkの先を、Console用のworkerにマウントさせないためである。
+
+`volume.subpath`は、古いEngineでは気づかないうちに無視され、`factory_state`の根が付く。
+そのため、スタックを起動するmiseのタスク(`up`、`deploy`)は、起動の前にEngineが26.0(API 1.45)以上、Composeが2.26.0以上かを確かめ、満たさなければ止まる。
+`doctor`も同じ検査を報告する。
 
 次のことは、この境界では守れない。
 
 - DBには届く。`DATABASE_URL`はdefaultのworkerと同じ管理者の接続だからである。
+- tag`console`のscriptは、管理者の`DATABASE_URL`か`wmill.getVariable()`で、Windmillのsecret変数を読める。
+  読める変数には`f/factory/claude_oauth_token`と`f/factory/github_token`がある。
+  マウントの制限で守るのは、Claude Codeとghの設定と履歴のファイルだけである。
+  トークンそのものは守らない。
+- scriptを編集できる者は、tagを付けずにdefaultのworkerで動かせば、`factory_state`を根から読み書きできる。
 - 要件定義書と図は読める。Consoleが表示するのと同じ内容である。
 - このworkerで動かすのはリポジトリのscriptの想定だが、これを強制する仕組みは無い。ワークスペースでscriptを編集できる者は、任意のscriptにtag`console`を付けられる。
   tag`console`を付けたscriptは、`requirements`の下を読める。書けるのはdefaultのworkerだけである。
 - composeの環境変数`WORKER_TAGS`は既定値である。DBにワーカーグループの設定があると、そちらが実効になる。変化はWindmillの画面の「Workers」で確かめる。
+- `factory_state_init`の確認からConsole用workerのマウントまでには隙がある。その間にdefaultのworkerが`requirements`をsymlinkに置き換えると、symlinkの先がマウントされうる。
 
 ## 自己更新の依存インストール
 
