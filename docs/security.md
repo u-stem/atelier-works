@@ -43,6 +43,20 @@ headless Claudeの起動には、次のフラグと環境変数で防御を足�
 PRの修正(`pr_fix`)と実装(`implement`)のフローは、Claudeが対象リポジトリのworktreeに書き込み、その変更をpushする。
 そのための追加の安全策は[PR修正の安全策](#pr修正の安全策)と[実装の安全策](#実装の安全策)に書く。
 
+### CIで走査されないコミット
+
+atelier-worksのCIは、gitleaksでPRのコミットを走査する。
+走査されないコミットが、次の2つの場合に残る。
+
+残るリスクとして、PRのCIの実行は、同じPRの新しい実行が始まると`cancel-in-progress`で止まる。
+秘密値を含むコミットを、実行の途中でforce pushにより置き換えると、置き換えられたコミットはCIのgitleaksで走査されない。
+置き換えられるのは、PRの履歴から外れたコミットなので、受け入れる。
+手前の防御として、lefthookのpre-commitのgitleaksと、Factoryのpush前の走査がある。
+
+残るリスクとして、`push`は`main`だけで動くので、PRを作るまで、人がpushしたブランチのコミットはCIで走査されない。
+実行されるのはlefthookのpre-commitのgitleaksだけで、ローカルで飛ばせる。
+PRを作ればCIが走査し、Factoryは実装ブランチのpushの前に走査するので、受け入れる。
+
 ### 開発セッションのsubagent
 
 `.claude/agents/`のsubagentは、開発のセッションで使うものである。
@@ -632,7 +646,7 @@ Claudeには、要件定義のディレクトリを一時ディレクトリに�
 
 ### 対象リポジトリのCIが動く
 
-実装ブランチのpushとPRの作成で、対象リポジトリの`push`と`pull_request`のCIが動く。Claudeの書いたコードは、人のレビューより前に、そのリポジトリのsecretsを使える状態で実行されうる。対象リポジトリのCIの権限とsecretsの範囲は、この前提で設定する。
+実装ブランチのpushとPRの作成で、対象リポジトリの`push`と`pull_request`のCIが動く。atelier-worksのCIはPRの作成から動く。Claudeの書いたコードは、人のレビューより前に、そのリポジトリのsecretsを使える状態で実行されうる。対象リポジトリのCIの権限とsecretsの範囲は、この前提で設定する。
 
 ### 保護パスは止めずに明示する
 
@@ -695,12 +709,6 @@ git、gh、Claude、検査コマンドは、新しいプロセスグループで
 ### workflowの変更はpushで止まる
 
 `.github/workflows/`を含むpushは、PATにWorkflowsの権限が無いのでGitHubが拒否する。拒否されたら、作業項目は人の対応待ちになり、理由に拒否が載る。
-
-### 取り消したCIの実行で走査されないコミット
-
-PRのCIの実行は、同じPRの新しい実行が始まると`cancel-in-progress`で止める。
-秘密値を含むコミットを、実行の途中でforce pushにより置き換えると、置き換えられたコミットはCIのgitleaksで走査されない。
-そのため、手前の防御であるlefthookのpre-commitのgitleaksと、Factoryのpush前の走査に頼る。
 
 ## 監査の安全策
 
