@@ -8,6 +8,21 @@
 // つなぐだけ。`infra/`と`mise.toml`の変更は次の`mise run up`で反映されるため、
 // 通知はせずログと`deployments`の記録だけを残す。
 //
+// ジョブ全体の上限は`self_update.script.yaml`の`timeout`(1800秒)である。
+// 各段の上限の合計に、正常な実行を切らない余裕を足した値にしている。
+// - cloneのロック待ち: 300秒(`withRepoLock`の既定)
+// - git: 9回 × 60秒(`runCommand`の既定) = 540秒。
+//   cloneの更新で4回(fetch、reset、show-ref、checkout)、HEADとブランチの確認で2回、
+//   変更パスの列挙で1回、`mise.toml`の比較で最大2回
+// - `npm ci`、`wmill sync push`、`wmill datatable migrate up`: 各300秒 = 900秒
+// - finallyのConsole用workerの確認: `CONSOLE_WORKER_CHECK_TIMEOUT_MS`の10秒
+// 合計は1750秒で、残りの50秒は、タイムアウトした子プロセスの停止の猶予
+// (`RUNNER_MAX_STOP_OVERHEAD_MS`)と、変数とDBの呼び出しに充てる。
+// 上限が無い呼び出し(`wmill.getVariable`・`setVariable`、DBの記録)が止まると、
+// ジョブが終わらず、`no_flow_overlap`で次の回も飛ばされ続けるため、全体にも上限を置く。
+// 時間切れで打ち切られた回は、finallyのConsole用workerの確認が走らない。
+// `on_error_schedule`は、打ち切られた回を失敗の連続の判定で失敗として数える。
+//
 // `f/factory/deployed_sha`(秘密でないWindmillの変数)はsyncの対象から
 // 完全に外している(`wmill.yaml`の`excludes`のコメントを参照)。
 // `scripts/bootstrap.sh`が空の値で一度だけ作り、以降は下の

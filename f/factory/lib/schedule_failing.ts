@@ -13,17 +13,28 @@ import { isRecord, type NoticeRecord } from "./types.ts";
 export const SCHEDULE_FAILING_RUNS = 3;
 
 /**
- * ジョブ履歴から取り出す件数。飛ばされた実行と取り消された実行はクライアントで除くので、
+ * ジョブ履歴から取り出す件数。飛ばされた実行と人が取り消した実行はクライアントで除くので、
  * 判定の3件より多く取る。サーバーが絞り込みを無視しても同じ結果になるようにする。
  */
 export const SCHEDULE_FAILING_FETCH_COUNT = 10;
 
 /**
- * ジョブ履歴の応答(新しい順)から、飛ばされた実行(`is_skipped`)と取り消された実行(`canceled`)を除いた
+ * `canceled_by`がこの値の取り消しを、ジョブの`timeout`による時間切れとみなす。
+ * 取り消した人は`canceled_by`に名前が入るので、`canceled_reason`の文面は見ない。
+ * 人が書ける文面で、時間切れと取り違えうるため。
+ */
+const TIMEOUT_CANCELED_BY = "timeout";
+
+function isCanceledByTimeout(run: Record<string, unknown>): boolean {
+  return run.canceled === true && run.canceled_by === TIMEOUT_CANCELED_BY;
+}
+
+/**
+ * ジョブ履歴の応答(新しい順)から、飛ばされた実行(`is_skipped`)と、人が取り消した実行(`canceled`)を除いた
  * 先頭`SCHEDULE_FAILING_RUNS`件が、すべて失敗か。
  * 飛ばされた実行は、多重実行の防止(`no_flow_overlap`)が前回の実行中に見送った回である。
- * 取り消された実行は、人が止めた回である。どちらも失敗の原因が続いている証拠にならず、
- * 成功でもないので、数えず、失敗の連続も切らない。
+ * 人が取り消した回は、失敗の原因が続いている証拠にならず、成功でもないので、数えず、失敗の連続も切らない。
+ * 時間切れで取り消された回(`canceled_by`が`timeout`)は、実行が終わらなかったことが失敗なので、失敗として数える。
  * 応答は信頼できない入力として読む。配列でないとき、除いた後の件数が足りないとき、
  * 形の違う要素があるときは`false`を返す。
  */
@@ -33,7 +44,11 @@ export function allRecentRunsFailed(runs: unknown): boolean {
   }
   const counted = runs.filter(
     (run) =>
-      !(isRecord(run) && (run.is_skipped === true || run.canceled === true)),
+      !(
+        isRecord(run) &&
+        (run.is_skipped === true ||
+          (run.canceled === true && !isCanceledByTimeout(run)))
+      ),
   );
   if (counted.length < SCHEDULE_FAILING_RUNS) {
     return false;
@@ -78,7 +93,7 @@ export type FlagFailingScheduleDeps = {
 };
 
 /**
- * 失敗のハンドラの最後に呼ぶ。直近の実行から飛ばされた回と取り消された回を除いた
+ * 失敗のハンドラの最後に呼ぶ。直近の実行から飛ばされた回と人が取り消した回を除いた
  * 先頭`SCHEDULE_FAILING_RUNS`回がすべて失敗なら、noticeを残して`true`を返す。
  * スケジュールの特定できない失敗(`unknown`)は数えない。
  * 履歴を読めなかったとき(例外、配列でない応答)は、`SCHEDULE_FAILING_CHECK_FAILED_NOTICE`を残して`false`を返す。
