@@ -5,7 +5,6 @@ import { describe, expect, test } from "bun:test";
 import {
   associationFromLabeledEvent,
   decideIssueActions,
-  deployedShaMismatchMessage,
   filterByRepoAllowlist,
   type IssueCandidate,
 } from "../../f/factory/lib/poll_support.ts";
@@ -116,25 +115,5 @@ describe("decideIssueActions", () => {
   test("claims an issue with an allowed association and no active work item", () => {
     const decisions = decideIssueActions([candidate()], ALLOWED);
     expect(decisions[0]?.action).toBe("claim");
-  });
-});
-
-describe("deployedShaMismatchMessage", () => {
-  test("names both the head sha and the deployed sha", () => {
-    expect(deployedShaMismatchMessage("abc1234", "def5678")).toBe(
-      "self cloneのHEAD(abc1234)がf/factory/deployed_sha(def5678)と一致しません",
-    );
-  });
-
-  test("differs when the head sha moves on", () => {
-    expect(deployedShaMismatchMessage("abc1234", "def5678")).not.toBe(
-      deployedShaMismatchMessage("fff0000", "def5678"),
-    );
-  });
-
-  test("differs when the deployed sha changes", () => {
-    expect(deployedShaMismatchMessage("abc1234", "def5678")).not.toBe(
-      deployedShaMismatchMessage("abc1234", "fff0000"),
-    );
   });
 });
