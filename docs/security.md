@@ -269,7 +269,7 @@ defaultのworkerで動くものが置いたsymlinkの先を、Console用のworke
 そのため、スタックを起動するmiseのタスク(`up`、`deploy`)は、起動の前にEngineが26.0(API 1.45)以上、Composeが2.26.0以上かを確かめ、満たさなければ止まる。
 この強制が止めるのは、`mise run up`と`mise run deploy`を通した起動だけである。
 `mise exec -- docker compose ... up`を直接実行した場合や、restart policyによる再起動は止めない。
-`doctor`は同じ検査に加えて、起動中のConsole用workerのマウントのSourceを確かめる。
+`doctor`は同じ検査に加えて、起動中のConsole用workerの中から、`factory_state`の根にだけある`requirements/requirements`が見えないことを確かめる。
 Podmanは対象外である。
 
 次のことは、この境界では守れない。
@@ -287,7 +287,9 @@ Podmanは対象外である。
 - `factory_state_init`の確認の後にも隙がある。
   Console用のworkerは、restart policy、Dockerデーモンの再起動、ホストの再起動で作り直されるたびに、`factory_state_init`を経ずにサブパスを解決し直す。
   その前にdefaultのworkerが`requirements`をsymlinkに置き換えると、symlinkの先がマウントされうる。
-  隙は次の`mise run up`まで続く。
+  隙は、Console用のworkerを作り直すまで続く。`mise run up`は、設定の変わらない、動いているworkerを作り直さないためである。
+  `mise run up`が`factory_state_init`の失敗で止まったときは、その時点のworkerのマウントを疑う。
+  [Console用workerを確かめる](operations.md#console用workerを確かめる)の手順でsymlinkを消し、workerを作り直す。
   突くにはdefaultのworkerでのコード実行が要る。その権限があれば`factory_state`の根を直接読めるので、実害は増えない。
 
 ## 自己更新の依存インストール

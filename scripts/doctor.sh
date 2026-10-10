@@ -193,21 +193,25 @@ fi
 
 # 11. Console用workerのマウント(起動中のコンテナがある場合だけ)
 # `volume.subpath`が無視されると、`requirements`のサブパスではなく`factory_state`の根が
-# `/var/lib/factory/requirements`に付く。根のマウントのSourceは`/_data`で終わり、
-# サブパスのマウントのSourceは`/_data/requirements`で終わる。
-# `docker inspect`の書式は固定の文字列にし、外から来る値を組み込まない。
-console_mount_format='{{range .Mounts}}{{if eq .Destination "/var/lib/factory/requirements"}}{{.Source}}{{end}}{{end}}'
+# `/var/lib/factory/requirements`に付く。`docker inspect`のSourceはサブパスを反映しないので、
+# コンテナ内の見え方で判定する。根には`factory_state_init`が必ず`requirements`を作るため、
+# 根が付いていれば`/var/lib/factory/requirements/requirements`が見える。
+# 対象リポジトリのownerが`requirements`だと、正常でもこのパスが見えてNGになる。
+# `exec`の引数は固定の文字列にし、外から来る値を組み込まない。
 console_id=""
 if command -v docker >/dev/null 2>&1 && [[ -f "${COMPOSE_FILE}" ]]; then
   console_id="$(docker compose -f "${COMPOSE_FILE}" ps -q windmill_worker_console 2>/dev/null || true)"
 fi
 if [[ -n "${console_id}" ]] && [[ "$(docker inspect -f '{{.State.Running}}' "${console_id}" 2>/dev/null || echo false)" == "true" ]]; then
-  console_source="$(docker inspect --format "${console_mount_format}" "${console_id}" 2>/dev/null || true)"
-  if [[ "${console_source}" == */_data/requirements ]]; then
-    report "console worker mount" ok "requirementsのサブパスだけがマウントされています"
-  else
-    report "console worker mount" ng "Sourceが/_data/requirementsで終わりません(Source: ${console_source:-なし})。factory_stateの根が付いている恐れがあります"
-  fi
+  # `set -e`の下でも終了コードを受け取れるよう、`if`の外で`|| status=$?`と書く。
+  console_probe_status=0
+  docker compose -f "${COMPOSE_FILE}" exec -T windmill_worker_console \
+    test -e /var/lib/factory/requirements/requirements >/dev/null 2>&1 || console_probe_status=$?
+  case "${console_probe_status}" in
+    0) report "console worker mount" ng "/var/lib/factory/requirements/requirementsが見えます。factory_stateの根が付いている恐れがあります(対象リポジトリのownerがrequirementsなら正常です)" ;;
+    1) report "console worker mount" ok "requirementsのサブパスだけがマウントされています" ;;
+    *) report "console worker mount" ok "windmill_worker_consoleでコマンドを実行できないため確かめられません(終了コード: ${console_probe_status})" ;;
+  esac
 else
   report "console worker mount" ok "windmill_worker_consoleが起動していないため確かめられません"
 fi

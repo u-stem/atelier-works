@@ -1,20 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import {
-  chmodSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 const SCRIPT = resolve(import.meta.dir, "../../scripts/doctor.sh");
 const BASH = Bun.which("bash") ?? "bash";
-
-// doctorが`docker inspect --format`に渡す、固定の書式の文字列。
-const MOUNT_FORMAT =
-  '{{range .Mounts}}{{if eq .Destination "/var/lib/factory/requirements"}}{{.Source}}{{end}}{{end}}';
 
 let dir: string;
 
@@ -29,18 +19,30 @@ afterEach(() => {
 type Fake = {
   // Console用workerのコンテナID。undefinedならコンテナが無い。
   consoleId: string | undefined;
-  // そのコンテナの`/var/lib/factory/requirements`のマウントのSource。
-  source: string;
+  // `docker inspect -f '{{.State.Running}}'`が返す値。
+  running: boolean;
+  // `compose exec`の終了コード。0はパスが存在し、1は存在しない。
+  execStatus: number;
+  // `docker version`が返すEngineのAPI版。
+  apiVersion: string;
+};
+
+const defaults: Fake = {
+  consoleId: "abc123",
+  running: true,
+  execStatus: 1,
+  apiVersion: "1.47",
 };
 
 // 本物のdockerではなく、版とコンテナの状態を固定して返す偽のdockerをPATHの先頭に置く。
-// `inspect --format`は、doctorが固定の書式を渡したときだけSourceを返す。
-function installFakeDocker(fake: Fake): void {
+// `compose exec`は、doctorが固定の引数を渡したときだけ設定した終了コードで終わる。
+function installFakeDocker(overrides: Partial<Fake>): void {
+  const fake = { ...defaults, ...overrides };
   const body = [
     "#!/bin/sh",
     'case "$1" in',
     "  info) exit 0 ;;",
-    "  version) echo 1.47 ;;",
+    `  version) echo ${fake.apiVersion} ;;`,
     "  compose)",
     '    case "$2" in',
     "      version) echo 2.40.0 ;;",
@@ -51,17 +53,19 @@ function installFakeDocker(fake: Fake): void {
       : [`          echo '${fake.consoleId}'`]),
     '        elif [ "$4" = ps ]; then',
     "          :",
+    '        elif [ "$4" = exec ] && [ "$5" = -T ] && [ "$6" = windmill_worker_console ] \\',
+    '          && [ "$7" = test ] && [ "$8" = -e ] \\',
+    '          && [ "$9" = /var/lib/factory/requirements/requirements ] && [ "$#" = 9 ]; then',
+    `          exit ${fake.execStatus}`,
     "        else",
-    "          exit 1",
+    "          exit 99",
     "        fi",
     "        ;;",
     "    esac",
     "    ;;",
     "  inspect)",
     '    if [ "$2" = "-f" ]; then',
-    "      echo true",
-    `    elif [ "$2" = "--format" ] && [ "$3" = '${MOUNT_FORMAT}' ]; then`,
-    `      printf '%s\\n' '${fake.source}'`,
+    `      echo ${fake.running}`,
     "    else",
     "      exit 3",
     "    fi",
@@ -75,53 +79,59 @@ function installFakeDocker(fake: Fake): void {
   chmodSync(path, 0o755);
 }
 
-function consoleMountLine(): string {
+function doctorLine(label: string): string {
   const result = Bun.spawnSync([BASH, SCRIPT], {
     env: { PATH: `${dir}:/usr/bin:/bin`, HOME: dir },
   });
   const line = result.stdout
     .toString()
     .split("\n")
-    .find((l) => l.includes("console worker mount"));
+    .find((l) => l.includes(label));
   return line ?? "";
 }
 
 describe("doctor.sh Console worker mount", () => {
-  test("reports OK when the Source ends with /_data/requirements", () => {
-    installFakeDocker({
-      consoleId: "abc123",
-      source: "/var/lib/docker/volumes/p_factory_state/_data/requirements",
-    });
+  test("reports OK when requirements/requirements does not exist", () => {
+    installFakeDocker({ execStatus: 1 });
 
-    expect(consoleMountLine()).toMatch(/^\s+OK\s/);
+    expect(doctorLine("console worker mount")).toMatch(/^\s+OK\s/);
   });
 
-  test("reports NG when the Source is the volume root", () => {
-    installFakeDocker({
-      consoleId: "abc123",
-      source: "/var/lib/docker/volumes/p_factory_state/_data",
-    });
+  test("reports NG when requirements/requirements exists", () => {
+    installFakeDocker({ execStatus: 0 });
 
-    expect(consoleMountLine()).toMatch(/^\s+NG\s/);
-  });
-
-  test("reports NG when the requirements mount is missing", () => {
-    installFakeDocker({ consoleId: "abc123", source: "" });
-
-    expect(consoleMountLine()).toMatch(/^\s+NG\s/);
+    expect(doctorLine("console worker mount")).toMatch(/^\s+NG\s/);
   });
 
   test("reports OK as unverifiable when the container does not exist", () => {
-    installFakeDocker({ consoleId: undefined, source: "" });
+    installFakeDocker({ consoleId: undefined });
 
-    expect(consoleMountLine()).toMatch(/^\s+OK\s.*確かめられません/);
+    expect(doctorLine("console worker mount")).toMatch(
+      /^\s+OK\s.*確かめられません/,
+    );
+  });
+
+  test("reports OK as unverifiable when the container is not running", () => {
+    installFakeDocker({ running: false, execStatus: 0 });
+
+    expect(doctorLine("console worker mount")).toMatch(
+      /^\s+OK\s.*確かめられません/,
+    );
+  });
+
+  test("reports OK as unverifiable when exec fails with another status", () => {
+    installFakeDocker({ execStatus: 126 });
+
+    expect(doctorLine("console worker mount")).toMatch(
+      /^\s+OK\s.*確かめられません/,
+    );
   });
 });
 
 describe("doctor.sh Docker version check", () => {
-  test("calls check-docker-version.sh", () => {
-    const text = readFileSync(SCRIPT, "utf8");
+  test("reports NG when the Engine API is older than 1.45", () => {
+    installFakeDocker({ apiVersion: "1.44" });
 
-    expect(text).toContain("check-docker-version.sh");
+    expect(doctorLine("docker version")).toMatch(/^\s+NG\s/);
   });
 });

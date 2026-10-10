@@ -1010,32 +1010,52 @@ mise exec -- docker compose -f infra/docker-compose.yml logs factory_state_init
 symlinkを消す手順は次のとおりである。
 defaultのworkerで動いたコードがsymlinkを置いた可能性がある。`ls -la`に出るリンク先を控え、置いた経緯を調べてから消す。
 
-1. ボリューム名を確かめる。名前は`<プロジェクト名>_factory_state`で、プロジェクト名は通常、リポジトリのディレクトリ名である。
-2. 一時コンテナで`ls -la`を実行し、`requirements`が`->`でリンク先を示すsymlinkであることを確かめる。
-3. 同じ一時コンテナで`rm`を実行する。
+1. `factory_state_init`の一時コンテナで`ls -la`を実行し、`requirements`が`->`でリンク先を示すsymlinkであることを確かめる。ボリューム名は、Composeが解決するので指定しない。
+2. 同じ形の一時コンテナで`rm`を実行する。
+3. `mise run up`を実行する。`factory_state_init`が成功し、`requirements`が通常のディレクトリとして作られる。
+4. Console用のworkerを作り直す。
 
 ```bash
-mise exec -- docker volume ls --filter name=factory_state
-mise exec -- docker run --rm --network none --entrypoint ls -v <ボリューム名>:/var/lib/factory ghcr.io/windmill-labs/windmill:<WM_VERSION> -la /var/lib/factory
-mise exec -- docker run --rm --network none --entrypoint rm -v <ボリューム名>:/var/lib/factory ghcr.io/windmill-labs/windmill:<WM_VERSION> /var/lib/factory/requirements
+mise exec -- docker compose -f infra/docker-compose.yml run --rm --no-deps --entrypoint ls factory_state_init -la /var/lib/factory
+mise exec -- docker compose -f infra/docker-compose.yml run --rm --no-deps --entrypoint rm factory_state_init /var/lib/factory/requirements
+mise run up
+mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_worker_console
 ```
-
-`<WM_VERSION>`は`mise.toml`の`WM_VERSION`の値である。
 
 > [!WARNING]
 > `rm`の対象は、`ls -la`で確かめたsymlinkだけにする。パスの末尾に`/`を付けない。付けるとリンク先のディレクトリを指す。
 > `-r`と`-f`は付けない。`requirements`が通常のディレクトリなら、`rm`は何も消さずに失敗する。
 
-マウントが想定どおりかは、次の2つで確かめる。
-`volume.subpath`が無視されると、`factory_state`の根が`/var/lib/factory/requirements`に付く。
-どちらも、根が付いたときに見分けられるように選んでいる。
+作り直す段が要る理由は、Composeが、設定の変わらない、動いているworkerを作り直さないことである。
+作り直さないと、symlinkの先をマウントしたworkerが残る。
 
-1. 起動中のworkerの`/var/lib/factory/requirements`のマウントのSourceが、`/_data/requirements`で終わる。根が付いたときのSourceは`/_data`で終わる。`mise run doctor`もこれを検査する。
-2. `/var/lib/factory/requirements`の下に、`requirements`、`audits`、`claude`、`gh`が見えない。見えたときは、根が付いている。
+> [!NOTE]
+> `factory_state_init`は`read_only`で、権限もすべて落としている。
+> この条件でも、所有者がrootのディレクトリにあるsymlinkは`rm`で消せる見込みだが、実機では確かめていない。
+> `rm`が権限のエラーで失敗したときは、出力を控えて、運用者が対処を決める。
+
+マウントが想定どおりかは、起動中のworkerの中から`/var/lib/factory/requirements/requirements`が見えるかで判定する。
+`volume.subpath`が無視されると、`factory_state`の根が`/var/lib/factory/requirements`に付く。
+根には`factory_state_init`が必ず`requirements`を作るので、根が付いていればこのパスが見える。
+`docker inspect`のSourceは、サブパスを反映しないので、判定に使わない。
+
+- `test`が成功する(終了コード0)なら、根が付いている。Dockerの版を下限以上にしてから、Console用のworkerを作り直す。
+- `test`が終了コード1で失敗するなら、サブパスだけが付いている。
+- ほかの終了コードか、コンテナが動いていないときは、確かめられない。
 
 ```bash
-mise exec -- docker compose -f infra/docker-compose.yml ps -q windmill_worker_console | xargs docker inspect --format '{{range .Mounts}}{{if eq .Destination "/var/lib/factory/requirements"}}{{.Source}}{{end}}{{end}}'
-mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker_console ls -la /var/lib/factory/requirements
+mise exec -- docker compose -f infra/docker-compose.yml exec -T windmill_worker_console test -e /var/lib/factory/requirements/requirements; echo "exit=$?"
+```
+
+`mise run doctor`も同じ判定をする。
+対象リポジトリのowner名が`requirements`だと、サブパスだけが付いていても、このパスが見えて想定外と判定される。
+その場合は、次の`ls`でowner名のディレクトリを確かめる。
+
+根が付いたときは、`requirements`に加えて`audits`、`claude`、`gh`も並ぶ。
+この3つは、owner名と同じ名前になりうる。単独では根の証拠にならず、4つが揃って並んだときだけ根が付いていると判断する。
+
+```bash
+mise exec -- docker compose -f infra/docker-compose.yml exec -T windmill_worker_console ls -la /var/lib/factory/requirements
 ```
 
 `/var/lib/factory/requirements`の下には、要件定義書の所有者ごとのディレクトリが並ぶ。
