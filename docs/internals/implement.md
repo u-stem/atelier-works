@@ -237,7 +237,7 @@ Claudeが要件の不足を返すと、完了のステップは次の順に処�
 
 モデルの昇格に使う失敗の数は、同じ作業項目の同じ試行の`implement_rounds`のうち、結果が`check_failed`、`stalled`、`error`の行である。
 `error`と`check_failed`には、トークンの失効やAPIの障害、期限切れ、`.git`ポインタの不一致など、モデルの失敗でないものも入るので、実際より早く`heavy_model`に上がることがある。損失の上限は`implement_max_rounds`と予算で決まる。
-Sonnetのラウンドが停滞しても、その失敗で`heavy_model`に上がるときは、停滞で止めずに`heavy_model`で修正ラウンドを1回回す。
+停滞したラウンドの扱いは「[ループの終わり方](#ループの終わり方)」にある。
 数え方の全体は[運用](../operations.md)の「モデルを使い分ける」にある。
 
 `check_commands_by_repo`は、`{"<owner>/<repo>": ["bun install --frozen-lockfile", "bun test"]}`の形で書く。workerで直接動く例は`bunx --bun tsc --noEmit`や`bunx --bun biome check .`である。実装フローは`allowed_check_commands`を使わない。
