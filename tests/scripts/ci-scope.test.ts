@@ -14,17 +14,29 @@ import {
   DB_DEPENDENCY_FILES,
   decideScope,
   diffRangeOf,
+  ENV_NAMES,
+  FLAGS,
+  fetchLastSuccessfulSha,
   formatOutputs,
+  isAncestor,
+  isValidRepository,
+  parseLastSuccessfulSha,
   parseNulSeparated,
   readChangedPaths,
+  readScopeEnv,
   type Scope,
+  type ScopeDeps,
   type ScopeEnv,
   scopeOfPaths,
   WORKER_DEPENDENCY_FILES,
 } from "../../scripts/ci-scope.ts";
 
+const ROOT = join(import.meta.dir, "..", "..");
+const SCRIPT = join(ROOT, "scripts", "ci-scope.ts");
+
 const SHA_A = "a".repeat(40);
 const SHA_B = "b".repeat(40);
+const SHA_C = "c".repeat(40);
 const ZERO = "0".repeat(40);
 
 function envOf(overrides: Partial<ScopeEnv>): ScopeEnv {
@@ -32,8 +44,8 @@ function envOf(overrides: Partial<ScopeEnv>): ScopeEnv {
     eventName: "",
     baseSha: "",
     headSha: "",
-    beforeSha: "",
     afterSha: "",
+    repository: "",
     ...overrides,
   };
 }
@@ -46,6 +58,15 @@ function noneScope(overrides: Partial<Scope>): Scope {
     fetcher: false,
     metadata: false,
     console: false,
+    ...overrides,
+  };
+}
+
+function depsOf(overrides: Partial<ScopeDeps>): ScopeDeps {
+  return {
+    readChangedPaths: () => [],
+    lastSuccessfulSha: () => null,
+    isAncestor: () => true,
     ...overrides,
   };
 }
@@ -71,13 +92,25 @@ describe("scopeOfPaths", () => {
     );
   });
 
+  test("runs db, worker and metadata for a file both tests import", () => {
+    expect(scopeOfPaths(["f/factory/lib/workspace.ts"])).toEqual(
+      noneScope({ db: true, worker: true, metadata: true }),
+    );
+  });
+
   test("runs db for a migration", () => {
     expect(
       scopeOfPaths(["migrations/datatable/main/20261009_x.up.sql"]),
     ).toEqual(noneScope({ db: true }));
   });
 
-  test("runs db for the test-db scripts", () => {
+  test("runs db for the test-db script", () => {
+    expect(scopeOfPaths(["scripts/test-db.sh"])).toEqual(
+      noneScope({ db: true }),
+    );
+  });
+
+  test("runs db for the test-db queries", () => {
     expect(scopeOfPaths(["scripts/test-db-queries.ts"])).toEqual(
       noneScope({ db: true }),
     );
@@ -129,8 +162,34 @@ describe("scopeOfPaths", () => {
     expect(scopeOfPaths([".github/workflows/ci.yml"])).toEqual(allScope());
   });
 
-  test("runs everything for a file under .github/", () => {
+  test("runs everything for another workflow", () => {
+    expect(scopeOfPaths([".github/workflows/other.yml"])).toEqual(allScope());
+  });
+
+  test("runs nothing for the pull request template", () => {
     expect(scopeOfPaths([".github/PULL_REQUEST_TEMPLATE.md"])).toEqual(
+      noneScope({}),
+    );
+  });
+
+  test("runs nothing for an issue template", () => {
+    expect(scopeOfPaths([".github/ISSUE_TEMPLATE/factory-task.yml"])).toEqual(
+      noneScope({}),
+    );
+  });
+
+  test("runs everything for a composite action under .github/", () => {
+    expect(scopeOfPaths([".github/actions/setup/action.yml"])).toEqual(
+      allScope(),
+    );
+  });
+
+  test("runs everything for the scope script", () => {
+    expect(scopeOfPaths(["scripts/ci-scope.ts"])).toEqual(allScope());
+  });
+
+  test("runs everything for the scope script test", () => {
+    expect(scopeOfPaths(["tests/scripts/ci-scope.test.ts"])).toEqual(
       allScope(),
     );
   });
@@ -139,8 +198,34 @@ describe("scopeOfPaths", () => {
     expect(scopeOfPaths(["mise.toml"])).toEqual(allScope());
   });
 
-  test("runs everything for a change under infra/", () => {
-    expect(scopeOfPaths(["infra/Caddyfile"])).toEqual(allScope());
+  test("runs only caddy for the Caddyfile", () => {
+    expect(scopeOfPaths(["infra/Caddyfile"])).toEqual(
+      noneScope({ caddy: true }),
+    );
+  });
+
+  test("runs only fetcher for console_fetcher", () => {
+    expect(scopeOfPaths(["infra/console_fetcher/Dockerfile"])).toEqual(
+      noneScope({ fetcher: true }),
+    );
+  });
+
+  test("runs only worker for the worker image", () => {
+    expect(scopeOfPaths(["infra/worker/Dockerfile"])).toEqual(
+      noneScope({ worker: true }),
+    );
+  });
+
+  test("runs everything for docker-compose.yml", () => {
+    expect(scopeOfPaths(["infra/docker-compose.yml"])).toEqual(allScope());
+  });
+
+  test("runs everything for docker-compose.ci.yml", () => {
+    expect(scopeOfPaths(["infra/docker-compose.ci.yml"])).toEqual(allScope());
+  });
+
+  test("runs everything for another file under infra/", () => {
+    expect(scopeOfPaths(["infra/other/x.conf"])).toEqual(allScope());
   });
 
   test("runs everything for the root package.json", () => {
@@ -155,10 +240,40 @@ describe("scopeOfPaths", () => {
     expect(scopeOfPaths(["wmill.yaml"])).toEqual(allScope());
   });
 
-  test("runs everything for a shell script under scripts/", () => {
+  test("runs everything for tsconfig.json", () => {
+    expect(scopeOfPaths(["tsconfig.json"])).toEqual(allScope());
+  });
+
+  test("runs everything for tsconfig.wmill.json", () => {
+    expect(scopeOfPaths(["tsconfig.wmill.json"])).toEqual(allScope());
+  });
+
+  test("runs only metadata for the metadata check script", () => {
     expect(scopeOfPaths(["scripts/check-metadata-fresh.sh"])).toEqual(
-      allScope(),
+      noneScope({ metadata: true }),
     );
+  });
+
+  test("runs only metadata for the metadata login script", () => {
+    expect(scopeOfPaths(["scripts/ci-metadata-login.sh"])).toEqual(
+      noneScope({ metadata: true }),
+    );
+  });
+
+  test("runs nothing for the Claude hook runner", () => {
+    expect(scopeOfPaths(["scripts/claude-hooks/run.sh"])).toEqual(
+      noneScope({}),
+    );
+  });
+
+  test("runs nothing for the commit message check", () => {
+    expect(scopeOfPaths(["scripts/check-commit-msg.sh"])).toEqual(
+      noneScope({}),
+    );
+  });
+
+  test("runs everything for a new shell script under scripts/", () => {
+    expect(scopeOfPaths(["scripts/new-tool.sh"])).toEqual(allScope());
   });
 
   test("does not treat console/package.json as the root package.json", () => {
@@ -167,8 +282,20 @@ describe("scopeOfPaths", () => {
     );
   });
 
+  test("does not treat console/tsconfig.json as the root tsconfig", () => {
+    expect(scopeOfPaths(["console/tsconfig.json"])).toEqual(
+      noneScope({ console: true }),
+    );
+  });
+
   test("does not treat a TypeScript script under scripts/ as common", () => {
     expect(scopeOfPaths(["scripts/lint-docs.ts"])).toEqual(noneScope({}));
+  });
+
+  test("does not run root resource-type files for any job", () => {
+    expect(
+      scopeOfPaths(["c_factory_config.resource-type.yaml", "rt.d.ts"]),
+    ).toEqual(noneScope({}));
   });
 
   test("does not match a prefix without the slash", () => {
@@ -201,40 +328,169 @@ describe("parseNulSeparated", () => {
   });
 });
 
+describe("isValidRepository", () => {
+  test("accepts owner/repo", () => {
+    expect(isValidRepository("u-stem/atelier-works")).toBe(true);
+  });
+
+  test("rejects a value without a slash", () => {
+    expect(isValidRepository("atelier-works")).toBe(false);
+  });
+
+  test("rejects a path traversal", () => {
+    expect(isValidRepository("../x")).toBe(false);
+  });
+
+  test("rejects a query string", () => {
+    expect(isValidRepository("o/r?x=1")).toBe(false);
+  });
+
+  test("rejects an empty value", () => {
+    expect(isValidRepository("")).toBe(false);
+  });
+});
+
+describe("parseLastSuccessfulSha", () => {
+  test("returns the head_sha of the first run", () => {
+    const json = JSON.stringify({ workflow_runs: [{ head_sha: SHA_A }] });
+
+    expect(parseLastSuccessfulSha(json)).toBe(SHA_A);
+  });
+
+  test("returns null when there is no run", () => {
+    expect(parseLastSuccessfulSha('{"workflow_runs":[]}')).toBeNull();
+  });
+
+  test("returns null for invalid JSON", () => {
+    expect(parseLastSuccessfulSha("not json")).toBeNull();
+  });
+
+  test("returns null when head_sha is not a SHA", () => {
+    const json = JSON.stringify({ workflow_runs: [{ head_sha: "--x" }] });
+
+    expect(parseLastSuccessfulSha(json)).toBeNull();
+  });
+
+  test("returns null when head_sha is all zeros", () => {
+    const json = JSON.stringify({ workflow_runs: [{ head_sha: ZERO }] });
+
+    expect(parseLastSuccessfulSha(json)).toBeNull();
+  });
+
+  test("returns null when workflow_runs is missing", () => {
+    expect(parseLastSuccessfulSha("{}")).toBeNull();
+  });
+});
+
+describe("fetchLastSuccessfulSha", () => {
+  const okOutput = JSON.stringify({ workflow_runs: [{ head_sha: SHA_A }] });
+
+  test("returns the sha from the API output", () => {
+    expect(fetchLastSuccessfulSha("o/r", () => okOutput)).toBe(SHA_A);
+  });
+
+  test("asks for the latest successful push run of main", () => {
+    const calls: (readonly string[])[] = [];
+
+    fetchLastSuccessfulSha("o/r", (args) => {
+      calls.push(args);
+      return okOutput;
+    });
+
+    expect(calls).toEqual([
+      [
+        "api",
+        "repos/o/r/actions/workflows/ci.yml/runs?branch=main&event=push&status=success&per_page=1",
+      ],
+    ]);
+  });
+
+  test("returns null when the API call fails", () => {
+    expect(fetchLastSuccessfulSha("o/r", () => null)).toBeNull();
+  });
+
+  test("does not call the API for an invalid repository", () => {
+    let called = false;
+
+    fetchLastSuccessfulSha("o/../r", () => {
+      called = true;
+      return okOutput;
+    });
+
+    expect(called).toBe(false);
+  });
+});
+
 describe("diffRangeOf", () => {
   test("uses the merge base range for a pull request", () => {
     expect(
       diffRangeOf(
         envOf({ eventName: "pull_request", baseSha: SHA_A, headSha: SHA_B }),
+        depsOf({}),
       ),
     ).toBe(`${SHA_A}...${SHA_B}`);
   });
 
-  test("uses the before and after range for a push", () => {
+  test("uses the last successful run to the current commit for a push", () => {
     expect(
       diffRangeOf(
-        envOf({ eventName: "push", beforeSha: SHA_A, afterSha: SHA_B }),
+        envOf({ eventName: "push", afterSha: SHA_B }),
+        depsOf({ lastSuccessfulSha: () => SHA_A }),
       ),
     ).toBe(`${SHA_A}..${SHA_B}`);
   });
 
-  test("has no range for a push whose before is all zeros", () => {
+  test("has no range when no run succeeded before", () => {
     expect(
       diffRangeOf(
-        envOf({ eventName: "push", beforeSha: ZERO, afterSha: SHA_B }),
+        envOf({ eventName: "push", afterSha: SHA_B }),
+        depsOf({ lastSuccessfulSha: () => null }),
       ),
     ).toBeNull();
   });
 
-  test("has no range for a push without before", () => {
+  test("has no range when the last successful run is the current commit", () => {
     expect(
-      diffRangeOf(envOf({ eventName: "push", afterSha: SHA_B })),
+      diffRangeOf(
+        envOf({ eventName: "push", afterSha: SHA_B }),
+        depsOf({ lastSuccessfulSha: () => SHA_B }),
+      ),
+    ).toBeNull();
+  });
+
+  test("has no range when the last successful commit is not in the history", () => {
+    expect(
+      diffRangeOf(
+        envOf({ eventName: "push", afterSha: SHA_B }),
+        depsOf({ lastSuccessfulSha: () => SHA_A, isAncestor: () => false }),
+      ),
+    ).toBeNull();
+  });
+
+  test("has no range when the last successful sha is malformed", () => {
+    expect(
+      diffRangeOf(
+        envOf({ eventName: "push", afterSha: SHA_B }),
+        depsOf({ lastSuccessfulSha: () => "--output=x" }),
+      ),
+    ).toBeNull();
+  });
+
+  test("has no range for a push without the current commit", () => {
+    expect(
+      diffRangeOf(
+        envOf({ eventName: "push" }),
+        depsOf({ lastSuccessfulSha: () => SHA_A }),
+      ),
     ).toBeNull();
   });
 
   test("has no range for a pull request without a base", () => {
     expect(
-      diffRangeOf(envOf({ eventName: "pull_request", headSha: SHA_B })),
+      diffRangeOf(
+        envOf({ eventName: "pull_request", headSha: SHA_B }),
+        depsOf({}),
+      ),
     ).toBeNull();
   });
 
@@ -242,6 +498,7 @@ describe("diffRangeOf", () => {
     expect(
       diffRangeOf(
         envOf({ eventName: "schedule", baseSha: SHA_A, headSha: SHA_B }),
+        depsOf({}),
       ),
     ).toBeNull();
   });
@@ -254,6 +511,7 @@ describe("diffRangeOf", () => {
           baseSha: "--output=x",
           headSha: SHA_B,
         }),
+        depsOf({}),
       ),
     ).toBeNull();
   });
@@ -265,51 +523,134 @@ describe("decideScope", () => {
     baseSha: SHA_A,
     headSha: SHA_B,
   });
-  const push = envOf({
-    eventName: "push",
-    beforeSha: SHA_A,
-    afterSha: SHA_B,
-  });
+  const push = envOf({ eventName: "push", afterSha: SHA_B });
 
   test("decides a pull request by its diff", () => {
-    expect(decideScope(pr, () => ["docs/a.md"])).toEqual(noneScope({}));
+    expect(
+      decideScope(pr, depsOf({ readChangedPaths: () => ["docs/a.md"] })),
+    ).toEqual(noneScope({}));
   });
 
   test("runs everything when the diff cannot be read", () => {
-    expect(decideScope(pr, () => null)).toEqual(allScope());
+    expect(decideScope(pr, depsOf({ readChangedPaths: () => null }))).toEqual(
+      allScope(),
+    );
   });
 
   test("runs everything for an unknown event", () => {
     expect(
-      decideScope(envOf({ eventName: "workflow_dispatch" }), () => []),
+      decideScope(envOf({ eventName: "workflow_dispatch" }), depsOf({})),
     ).toEqual(allScope());
   });
 
-  test("runs everything for the first push of a branch", () => {
+  test("runs everything for a push when no successful run is known", () => {
     expect(
-      decideScope({ ...push, beforeSha: ZERO }, () => ["docs/a.md"]),
+      decideScope(
+        push,
+        depsOf({
+          lastSuccessfulSha: () => null,
+          readChangedPaths: () => ["docs/a.md"],
+        }),
+      ),
+    ).toEqual(allScope());
+  });
+
+  test("runs everything for a push when the last successful sha is the current one", () => {
+    expect(
+      decideScope(
+        push,
+        depsOf({
+          lastSuccessfulSha: () => SHA_B,
+          readChangedPaths: () => ["docs/a.md"],
+        }),
+      ),
+    ).toEqual(allScope());
+  });
+
+  test("runs everything for a push when the last successful sha is not in the history", () => {
+    expect(
+      decideScope(
+        push,
+        depsOf({
+          lastSuccessfulSha: () => SHA_C,
+          isAncestor: () => false,
+          readChangedPaths: () => ["docs/a.md"],
+        }),
+      ),
     ).toEqual(allScope());
   });
 
   test("decides a push by its diff and always runs console", () => {
-    expect(decideScope(push, () => ["docs/a.md"])).toEqual(
-      noneScope({ console: true }),
-    );
+    expect(
+      decideScope(
+        push,
+        depsOf({
+          lastSuccessfulSha: () => SHA_A,
+          readChangedPaths: () => ["docs/a.md"],
+        }),
+      ),
+    ).toEqual(noneScope({ console: true }));
   });
 
   test("keeps the other flags of a push that changed f/", () => {
-    expect(decideScope(push, () => ["f/a.ts"])).toEqual(
-      noneScope({ console: true, metadata: true }),
-    );
+    expect(
+      decideScope(
+        push,
+        depsOf({
+          lastSuccessfulSha: () => SHA_A,
+          readChangedPaths: () => ["f/a.ts"],
+        }),
+      ),
+    ).toEqual(noneScope({ console: true, metadata: true }));
   });
 
-  test("passes the range to the reader", () => {
+  test("passes the range from the last successful run to the reader", () => {
     const ranges: string[] = [];
-    decideScope(pr, (range) => {
-      ranges.push(range);
-      return [];
-    });
+
+    decideScope(
+      push,
+      depsOf({
+        lastSuccessfulSha: () => SHA_A,
+        readChangedPaths: (range) => {
+          ranges.push(range);
+          return [];
+        },
+      }),
+    );
+
+    expect(ranges).toEqual([`${SHA_A}..${SHA_B}`]);
+  });
+
+  test("passes the merge base range of a pull request to the reader", () => {
+    const ranges: string[] = [];
+
+    decideScope(
+      pr,
+      depsOf({
+        readChangedPaths: (range) => {
+          ranges.push(range);
+          return [];
+        },
+      }),
+    );
+
     expect(ranges).toEqual([`${SHA_A}...${SHA_B}`]);
+  });
+
+  test("does not look up the last successful run for a pull request", () => {
+    let looked = false;
+
+    decideScope(
+      pr,
+      depsOf({
+        lastSuccessfulSha: () => {
+          looked = true;
+          return SHA_A;
+        },
+      }),
+    );
+
+    expect(looked).toBe(false);
   });
 });
 
@@ -318,6 +659,30 @@ describe("formatOutputs", () => {
     expect(formatOutputs(noneScope({ db: true }))).toBe(
       "db=true\nworker=false\ncaddy=false\nfetcher=false\nmetadata=false\nconsole=false\n",
     );
+  });
+});
+
+describe("readScopeEnv", () => {
+  test("reads the variables named by ENV_NAMES", () => {
+    const env = readScopeEnv({
+      EVENT_NAME: "push",
+      BASE_SHA: "b",
+      HEAD_SHA: "h",
+      AFTER_SHA: "a",
+      GITHUB_REPOSITORY: "o/r",
+    });
+
+    expect(env).toEqual({
+      eventName: "push",
+      baseSha: "b",
+      headSha: "h",
+      afterSha: "a",
+      repository: "o/r",
+    });
+  });
+
+  test("uses empty strings for missing variables", () => {
+    expect(readScopeEnv({})).toEqual(envOf({}));
   });
 });
 
@@ -457,16 +822,69 @@ describe("readChangedPaths", () => {
 
     const scope = decideScope(
       envOf({ eventName: "pull_request", baseSha: base, headSha: head }),
-      (range) => readChangedPaths(range, dir),
+      depsOf({ readChangedPaths: (range) => readChangedPaths(range, dir) }),
     );
 
     expect(scope).toEqual(noneScope({ console: true }));
   });
+
+  test("isAncestor is true for an earlier commit", () => {
+    const dir = newRepo();
+    const base = git(dir, "rev-parse", "HEAD");
+    write(dir, "docs/a.md", "changed\n");
+    commitAll(dir);
+    const head = git(dir, "rev-parse", "HEAD");
+
+    expect(isAncestor(base, head, dir)).toBe(true);
+  });
+
+  test("isAncestor is false for a later commit", () => {
+    const dir = newRepo();
+    const base = git(dir, "rev-parse", "HEAD");
+    write(dir, "docs/a.md", "changed\n");
+    commitAll(dir);
+    const head = git(dir, "rev-parse", "HEAD");
+
+    expect(isAncestor(head, base, dir)).toBe(false);
+  });
+
+  test("isAncestor is false for a commit that does not exist", () => {
+    const dir = newRepo();
+    const head = git(dir, "rev-parse", "HEAD");
+
+    expect(isAncestor(SHA_A, head, dir)).toBe(false);
+  });
+
+  test("isAncestor is false for a value that is not a SHA", () => {
+    const dir = newRepo();
+    const head = git(dir, "rev-parse", "HEAD");
+
+    expect(isAncestor("HEAD~1", head, dir)).toBe(false);
+  });
+
+  test("decides a push from the last successful commit end to end", () => {
+    const dir = newRepo();
+    const success = git(dir, "rev-parse", "HEAD");
+    write(dir, "f/c.ts", "c\n");
+    commitAll(dir);
+    write(dir, "docs/b.md", "b\n");
+    commitAll(dir);
+    const head = git(dir, "rev-parse", "HEAD");
+
+    const scope = decideScope(envOf({ eventName: "push", afterSha: head }), {
+      readChangedPaths: (range) => readChangedPaths(range, dir),
+      lastSuccessfulSha: () => success,
+      isAncestor: (ancestor, descendant) =>
+        isAncestor(ancestor, descendant, dir),
+    });
+
+    expect(scope).toEqual(noneScope({ metadata: true, console: true }));
+  });
 });
 
 // import文をたどって、ファイルが読み込むリポジトリ内のファイルの全体を求める。
+// 解決できない相対importは、一覧から漏れる原因になるので例外にする。
 function importClosure(entry: string): string[] {
-  const root = join(import.meta.dir, "..", "..");
   const seen = new Set<string>();
   const queue = [entry];
   while (queue.length > 0) {
@@ -475,7 +893,7 @@ function importClosure(entry: string): string[] {
       continue;
     }
     seen.add(current);
-    const source = readFileSync(join(root, current), "utf8");
+    const source = readFileSync(join(ROOT, current), "utf8");
     for (const match of source.matchAll(
       /(?:from|import)\s+["'](\.[^"']+)["']/g,
     )) {
@@ -484,9 +902,10 @@ function importClosure(entry: string): string[] {
         continue;
       }
       const next = normalize(join(dirname(current), specifier));
-      if (existsSync(join(root, next))) {
-        queue.push(next);
+      if (!existsSync(join(ROOT, next))) {
+        throw new Error(`unresolved import "${specifier}" in ${current}`);
       }
+      queue.push(next);
     }
   }
   return [...seen].sort();
@@ -509,21 +928,329 @@ describe("import closure of the CI tests", () => {
     expect(uncovered).toEqual([]);
   });
 
+  test("the traced files use no dynamic import or require", () => {
+    const files = [
+      ...importClosure("scripts/test-db-queries.ts"),
+      ...importClosure("tests/lib/process_lock.test.ts"),
+    ];
+    const dynamic = files.filter((path) =>
+      /\b(?:import|require)\s*\(/.test(readFileSync(join(ROOT, path), "utf8")),
+    );
+
+    expect(dynamic).toEqual([]);
+  });
+
   test("every listed db dependency exists", () => {
-    const root = join(import.meta.dir, "..", "..");
     const missing = DB_DEPENDENCY_FILES.filter(
-      (path) => !existsSync(join(root, path)),
+      (path) => !existsSync(join(ROOT, path)),
     );
 
     expect(missing).toEqual([]);
   });
 
   test("every listed worker dependency exists", () => {
-    const root = join(import.meta.dir, "..", "..");
     const missing = WORKER_DEPENDENCY_FILES.filter(
-      (path) => !existsSync(join(root, path)),
+      (path) => !existsSync(join(ROOT, path)),
     );
 
     expect(missing).toEqual([]);
+  });
+});
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function recordAt(parent: unknown, key: string): Record<string, unknown> {
+  if (!isRecord(parent)) {
+    throw new Error(`not an object when reading ${key}`);
+  }
+  const value = parent[key];
+  if (!isRecord(value)) {
+    throw new Error(`${key} is not an object`);
+  }
+  return value;
+}
+
+function workflow(): Record<string, unknown> {
+  const parsed: unknown = Bun.YAML.parse(
+    readFileSync(join(ROOT, ".github", "workflows", "ci.yml"), "utf8"),
+  );
+  if (!isRecord(parsed)) {
+    throw new Error("ci.yml is not an object");
+  }
+  return parsed;
+}
+
+function job(name: string): Record<string, unknown> {
+  return recordAt(recordAt(workflow(), "jobs"), name);
+}
+
+function stepNamed(jobName: string, stepName: string): Record<string, unknown> {
+  const steps = job(jobName).steps;
+  if (!Array.isArray(steps)) {
+    throw new Error(`${jobName} has no steps`);
+  }
+  for (const step of steps) {
+    if (isRecord(step) && step.name === stepName) {
+      return step;
+    }
+  }
+  throw new Error(`step not found: ${stepName}`);
+}
+
+// GitHub Actionsの式`${{ ... }}`を組み立てる。
+function expression(body: string): string {
+  return `$${"{{"} ${body} }}`;
+}
+
+const FLAG_JOBS: readonly (readonly [string, string])[] = [
+  ["test-db", "db"],
+  ["metadata", "metadata"],
+  ["console", "console"],
+  ["caddyfile", "caddy"],
+  ["console-fetcher-image", "fetcher"],
+];
+
+describe("ci.yml wiring", () => {
+  test("the scope job outputs exactly the flags the script writes", () => {
+    const keys = Object.keys(recordAt(job("scope"), "outputs")).sort();
+
+    expect(keys).toEqual([...FLAGS].sort());
+  });
+
+  test("each output reads the same flag from the scope step", () => {
+    const outputs = recordAt(job("scope"), "outputs");
+    const mismatched = FLAGS.filter(
+      (flag) => outputs[flag] !== expression(`steps.scope.outputs.${flag}`),
+    );
+
+    expect(mismatched).toEqual([]);
+  });
+
+  test("the scope step passes the variables the script reads", () => {
+    const keys = Object.keys(
+      recordAt(stepNamed("scope", "Determine which jobs to run"), "env"),
+    );
+
+    expect(keys.sort()).toEqual(
+      [...Object.values(ENV_NAMES), "GH_TOKEN"].sort(),
+    );
+  });
+
+  test("the scope step passes the repository from the context", () => {
+    const env = recordAt(
+      stepNamed("scope", "Determine which jobs to run"),
+      "env",
+    );
+
+    expect(env.GITHUB_REPOSITORY).toBe(expression("github.repository"));
+  });
+
+  test("the scope step passes the workflow token as GH_TOKEN", () => {
+    const env = recordAt(
+      stepNamed("scope", "Determine which jobs to run"),
+      "env",
+    );
+
+    expect(env.GH_TOKEN).toBe(expression("github.token"));
+  });
+
+  test("the workflow grants only contents: read by default", () => {
+    expect(recordAt(workflow(), "permissions")).toEqual({ contents: "read" });
+  });
+
+  test("the scope job also reads actions", () => {
+    expect(recordAt(job("scope"), "permissions")).toEqual({
+      contents: "read",
+      actions: "read",
+    });
+  });
+
+  test("no other job sets its own permissions", () => {
+    const withPermissions = Object.keys(recordAt(workflow(), "jobs")).filter(
+      (name) => name !== "scope" && "permissions" in job(name),
+    );
+
+    expect(withPermissions).toEqual([]);
+  });
+
+  test("every job except scope waits for scope", () => {
+    const jobs = Object.keys(recordAt(workflow(), "jobs")).filter(
+      (name) => name !== "scope",
+    );
+    const notWaiting = jobs.filter((name) => job(name).needs !== "scope");
+
+    expect(notWaiting).toEqual([]);
+  });
+
+  for (const [jobName, flag] of FLAG_JOBS) {
+    test(`${jobName} runs unless scope says ${flag} is false`, () => {
+      expect(job(jobName).if).toBe(
+        expression(`!cancelled() && needs.scope.outputs.${flag} != 'false'`),
+      );
+    });
+  }
+
+  test("check runs unless the run is cancelled", () => {
+    expect(job("check").if).toBe(expression("!cancelled()"));
+  });
+
+  test("the worker image build runs unless scope says worker is false", () => {
+    expect(stepNamed("check", "Build worker image").if).toBe(
+      "needs.scope.outputs.worker != 'false'",
+    );
+  });
+
+  test("the process lock test runs unless scope says worker is false", () => {
+    expect(
+      stepNamed("check", "Test the process lock in the worker image").if,
+    ).toBe("needs.scope.outputs.worker != 'false'");
+  });
+
+  test("the console build is uploaded only for pushes to main", () => {
+    expect(stepNamed("console", "Upload the console build").if).toBe(
+      "github.event_name == 'push' && github.ref == 'refs/heads/main'",
+    );
+  });
+});
+
+describe("running the script", () => {
+  const dirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  function tempDir(): string {
+    const dir = mkdtempSync(join(tmpdir(), "ci-scope-main-"));
+    dirs.push(dir);
+    return dir;
+  }
+
+  function gitIn(dir: string, ...args: string[]): string {
+    const result = Bun.spawnSync(
+      [
+        "git",
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@example.invalid",
+        "-c",
+        "commit.gpgsign=false",
+        ...args,
+      ],
+      {
+        cwd: dir,
+        env: { PATH: process.env.PATH ?? "", HOME: dir },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    if (result.exitCode !== 0) {
+      throw new Error(`git ${args.join(" ")}: ${result.stderr.toString()}`);
+    }
+    return result.stdout.toString().trim();
+  }
+
+  // 基点と先頭のcommitを持つリポジトリを作る。先頭ではconsole/の下だけを変える。
+  function repoWithConsoleChange(): {
+    dir: string;
+    base: string;
+    head: string;
+  } {
+    const dir = tempDir();
+    gitIn(dir, "init", "-q");
+    writeFileSync(join(dir, "README.md"), "a\n");
+    gitIn(dir, "add", "-A");
+    gitIn(dir, "commit", "-q", "-m", "base");
+    const base = gitIn(dir, "rev-parse", "HEAD");
+    mkdirSync(join(dir, "console"));
+    writeFileSync(join(dir, "console", "a.ts"), "a\n");
+    gitIn(dir, "add", "-A");
+    gitIn(dir, "commit", "-q", "-m", "change");
+    return { dir, base, head: gitIn(dir, "rev-parse", "HEAD") };
+  }
+
+  // 親の環境(CIのGITHUB_OUTPUTなど)を引き継がず、渡した変数だけで実行する。
+  function runScript(
+    cwd: string,
+    env: Record<string, string>,
+  ): { exitCode: number; stdout: string } {
+    const result = Bun.spawnSync([process.execPath, "run", SCRIPT], {
+      cwd,
+      env: { PATH: process.env.PATH ?? "", HOME: cwd, ...env },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    return { exitCode: result.exitCode, stdout: result.stdout.toString() };
+  }
+
+  test("writes the six flags of a pull request to GITHUB_OUTPUT", () => {
+    const { dir, base, head } = repoWithConsoleChange();
+    const output = join(tempDir(), "out");
+
+    runScript(dir, {
+      EVENT_NAME: "pull_request",
+      BASE_SHA: base,
+      HEAD_SHA: head,
+      GITHUB_OUTPUT: output,
+    });
+
+    expect(readFileSync(output, "utf8")).toBe(
+      formatOutputs(noneScope({ console: true })),
+    );
+  });
+
+  test("writes every flag as true for an unknown event", () => {
+    const { dir } = repoWithConsoleChange();
+    const output = join(tempDir(), "out");
+
+    runScript(dir, { EVENT_NAME: "schedule", GITHUB_OUTPUT: output });
+
+    expect(readFileSync(output, "utf8")).toBe(formatOutputs(allScope()));
+  });
+
+  test("writes every flag as true for a push with an invalid repository", () => {
+    const { dir, head } = repoWithConsoleChange();
+    const output = join(tempDir(), "out");
+
+    runScript(dir, {
+      EVENT_NAME: "push",
+      AFTER_SHA: head,
+      GITHUB_REPOSITORY: "not a repository",
+      GITHUB_OUTPUT: output,
+    });
+
+    expect(readFileSync(output, "utf8")).toBe(formatOutputs(allScope()));
+  });
+
+  test("exits with a failure when GITHUB_OUTPUT is not set", () => {
+    const { dir } = repoWithConsoleChange();
+
+    const result = runScript(dir, { EVENT_NAME: "schedule" });
+
+    expect(result.exitCode).toBe(1);
+  });
+
+  test("exits with a failure when GITHUB_OUTPUT is empty", () => {
+    const { dir } = repoWithConsoleChange();
+
+    const result = runScript(dir, {
+      EVENT_NAME: "schedule",
+      GITHUB_OUTPUT: "",
+    });
+
+    expect(result.exitCode).toBe(1);
+  });
+
+  test("still prints the flags when GITHUB_OUTPUT is not set", () => {
+    const { dir } = repoWithConsoleChange();
+
+    const result = runScript(dir, { EVENT_NAME: "schedule" });
+
+    expect(result.stdout).toContain("db=true");
   });
 });

@@ -48,6 +48,8 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * lockfileの検査のスクリプトは、書き換えられると検査をすり抜けて配信物に混ざる。
  * `asset-name.ts`は照合したビューアの書き込み先の名前を決め、`vite.config.ts`は
  * 組み立ての途中で任意のコードを動かして配信物に書ける。
+ * `scripts/ci-scope.ts`は、CIがどのジョブを動かすかを決める。書き換えられると、検査のジョブを
+ * 黙って飛ばせるので、固定を強制する側と同じ理由で守る。
  * `infra/Caddyfile`には、Consoleのscriptの許可と、draw.ioの図を隔離するCSPがある。
  * `infra/`全体は、pr_fixでは止めない。
  */
@@ -59,6 +61,7 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "console/scripts/manifest.ts",
   "console/scripts/write-manifest.ts",
   "scripts/check-console-lockfile.ts",
+  "scripts/ci-scope.ts",
   "console/scripts/asset-name.ts",
   "console/vite.config.ts",
   "infra/Caddyfile",
