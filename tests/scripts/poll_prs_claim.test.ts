@@ -1298,13 +1298,8 @@ describe("processPrDecisions", () => {
 
   describe("a review started by assignment", () => {
     test("does not claim a label", async () => {
-      const claimed: string[] = [];
-      const { handlers } = handlersWith({
-        claim: async (_candidate, label) => {
-          claimed.push(label);
-          return { claimed: true };
-        },
-      });
+      const { claimed, claim } = claimLabelsRecordedBy();
+      const { handlers } = handlersWith({ claim });
 
       await run([REVIEW_BY_ASSIGNMENT], handlers);
 
@@ -1374,6 +1369,23 @@ describe("processPrDecisions", () => {
     await run([REVIEW_BY_LABEL], handlers);
 
     expect(steps).toEqual([`trigger_review:${KEY}`]);
+  });
+
+  test("passes the review error to recordFailure", async () => {
+    const startError = new Error("start failed");
+    const errors: unknown[] = [];
+    const { handlers } = handlersWith({
+      startReview: async () => {
+        throw startError;
+      },
+      recordFailure: async (_step, err) => {
+        errors.push(err);
+      },
+    });
+
+    await run([REVIEW_BY_LABEL], handlers);
+
+    expect(errors).toEqual([startError]);
   });
 
   test("records a fix failure under a trigger_fix step", async () => {
