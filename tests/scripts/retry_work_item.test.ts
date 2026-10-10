@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { IMPLEMENT_FLOW_PATH } from "../../f/factory/lib/implement_loop.ts";
 import { actionableCancelNote } from "../../f/factory/lib/poll_support.ts";
-import type { WorkItemStatus } from "../../f/factory/lib/types.ts";
+import type { WorkItem, WorkItemStatus } from "../../f/factory/lib/types.ts";
 import {
   activeIssueConflictError,
   activeIssueConflictErrorFrom,
@@ -408,10 +408,10 @@ describe("computeRestartPlan for a cancelled work item", () => {
 });
 
 describe("asBeforeActionableCancel", () => {
-  const cancelled = {
+  const cancelled: Pick<WorkItem, "id" | "status" | "kind" | "attempt"> = {
     id: 1,
-    status: "cancelled" as WorkItemStatus,
-    kind: "issue" as const,
+    status: "cancelled",
+    kind: "issue",
     attempt: 1,
   };
 
@@ -444,7 +444,7 @@ describe("asBeforeActionableCancel", () => {
   });
 
   test("keeps a work item that is not cancelled", () => {
-    const failed = { ...cancelled, status: "failed" as WorkItemStatus };
+    const failed: typeof cancelled = { ...cancelled, status: "failed" };
     const item = asBeforeActionableCancel(failed, {
       from_status: "expired",
       note: actionableCancelNote("closed"),
