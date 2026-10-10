@@ -239,8 +239,8 @@ describe("validateDrawioXml compressed diagrams", () => {
 });
 
 describe("validateDrawioXml link and HTML hardening", () => {
-  test("accepts a document that wraps a cell in <object> with placeholders", () => {
-    const result = validateDrawioXml(withObjectWrapper('placeholders="1"'));
+  test("accepts a document that wraps a cell in <object> with a label", () => {
+    const result = validateDrawioXml(withObjectWrapper('tooltip="note"'));
     expect(result.valid).toBe(true);
   });
 
@@ -458,19 +458,7 @@ describe("validateDrawioXml link and HTML hardening", () => {
     expect(validateDrawioXml(withCellValue(value)).valid).toBe(true);
   });
 
-  test("rejects an angle bracket tag split across placeholder values", () => {
-    const xml = withObjectWrapper(
-      'placeholders="1" p1="&lt;a" p2=" href=x&gt;"',
-    );
-    expect(validateDrawioXml(xml).valid).toBe(false);
-  });
-
-  test("accepts placeholder values that join into harmless text", () => {
-    const xml = withObjectWrapper('placeholders="1" p1="a" p2="b"');
-    expect(validateDrawioXml(xml).valid).toBe(true);
-  });
-
-  test("does not join attribute values when placeholders is absent", () => {
+  test("accepts attribute values that would join into a tag", () => {
     const xml = withObjectWrapper('p1="&lt;a" p2=" href=x&gt;"');
     expect(validateDrawioXml(xml).valid).toBe(true);
   });
@@ -694,70 +682,50 @@ describe("validateDrawioXml tags read with quotes", () => {
   });
 });
 
-describe("validateDrawioXml placeholders resolved from ancestors", () => {
+describe("validateDrawioXml placeholders and vars", () => {
   const head =
     '<mxfile><diagram id="d"><mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/>';
   const tail = "</root></mxGraphModel></diagram></mxfile>";
-  const parentCell =
-    '<object id="g" x="&lt;a "><mxCell parent="1" vertex="1"/></object>';
-  const childCell =
-    '<object id="c" placeholders="1" label="%x%href=javascript:alert(1)&gt;go"><mxCell parent="g" vertex="1" style="html=1;"/></object>';
+  const placeholdersRejected = {
+    valid: false,
+    reason: expect.stringContaining("placeholders属性は使えません"),
+  };
 
-  test("rejects a tag split between an ancestor and a child label", () => {
-    const xml = `${head}${parentCell}${childCell}${tail}`;
-    expect(validateDrawioXml(xml).valid).toBe(false);
+  test.each([
+    [
+      "an <object> with placeholders",
+      `${head}<object id="c" placeholders="1" label="x"><mxCell parent="1" vertex="1"/></object>${tail}`,
+    ],
+    [
+      "a <UserObject> with placeholders set to 0",
+      `${head}<UserObject id="c" placeholders="0" label="x"><mxCell parent="1" vertex="1"/></UserObject>${tail}`,
+    ],
+    [
+      "an <mxCell> with placeholders",
+      `${head}<mxCell id="c" placeholders="1" value="x" parent="1" vertex="1"/>${tail}`,
+    ],
+    [
+      "placeholders in upper case",
+      `${head}<object id="c" PLACEHOLDERS="1" label="x"><mxCell parent="1" vertex="1"/></object>${tail}`,
+    ],
+    [
+      "a label that reads a tag from the page name",
+      '<mxfile><diagram name="href=https://evil.example/" id="d"><mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/><object id="c" placeholders="1" label="&lt;a %page%&gt;go"><mxCell parent="1" vertex="1"/></object></root></mxGraphModel></diagram></mxfile>',
+    ],
+  ])("rejects %s", (_name, xml) => {
+    expect(validateDrawioXml(xml)).toEqual(placeholdersRejected);
   });
 
-  test("rejects a tag split between a later ancestor and a child label", () => {
-    const xml = `${head}${childCell}${parentCell}${tail}`;
-    expect(validateDrawioXml(xml).valid).toBe(false);
+  test("rejects an <mxfile> with vars", () => {
+    const xml = `<mxfile vars='{}'>${head.slice("<mxfile>".length)}${tail}`;
+    expect(validateDrawioXml(xml)).toEqual({
+      valid: false,
+      reason: expect.stringContaining("vars属性は使えません"),
+    });
   });
 
-  test("rejects a tag whose attribute comes from a grandparent", () => {
-    const xml = `${head}<object id="r" x="href=x"><mxCell parent="1" vertex="1"/></object><mxCell id="m" parent="r" vertex="1"/><object id="c" placeholders="1" label="&lt;a %x%&gt;go"><mxCell parent="m" vertex="1"/></object>${tail}`;
-    expect(validateDrawioXml(xml).valid).toBe(false);
-  });
-
-  test("rejects a tag split across the own values in reverse order", () => {
-    const xml = `${head}<object id="c" placeholders="1" label="%p1%%p2%" p2=" href=x&gt;" p1="&lt;a"><mxCell parent="1" vertex="1"/></object>${tail}`;
-    expect(validateDrawioXml(xml).valid).toBe(false);
-  });
-
-  test("rejects a less-than sign produced by a date placeholder", () => {
-    const xml = `${head}<object id="c" placeholders="1" label="%date{&lt;}%a href=x&gt;go"><mxCell parent="1" vertex="1"/></object>${tail}`;
-    expect(validateDrawioXml(xml).valid).toBe(false);
-  });
-
-  test("rejects a cell id used as a placeholder", () => {
-    const xml = `${head}<object placeholders="1" label="%id%href=x&gt;go" id="&lt;a "><mxCell parent="1" vertex="1"/></object>${tail}`;
-    expect(validateDrawioXml(xml).valid).toBe(false);
-  });
-
-  test("accepts placeholders that resolve to plain text from an ancestor", () => {
-    const xml = `${head}<object id="g" owner="team"><mxCell parent="1" vertex="1"/></object><object id="c" placeholders="1" label="owner: %owner%"><mxCell parent="g" vertex="1"/></object>${tail}`;
+  test("accepts an <object> label without placeholders", () => {
+    const xml = `${head}<object id="c" label="owner: %owner%" owner="team"><mxCell parent="1" vertex="1"/></object>${tail}`;
     expect(validateDrawioXml(xml).valid).toBe(true);
-  });
-
-  test("accepts an escaped percent pair that stays literal", () => {
-    const xml = `${head}${parentCell}<object id="c" placeholders="1" label="%%x%href=y&gt;"><mxCell parent="g" vertex="1"/></object>${tail}`;
-    expect(validateDrawioXml(xml).valid).toBe(true);
-  });
-
-  test("checks a deep chain of placeholder labels in a short time", () => {
-    const cells = Array.from(
-      { length: 2000 },
-      (_unused, i) =>
-        `<object id="c${i}" placeholders="1" label="${"%missing%".repeat(10)}"><mxCell parent="${i === 0 ? "1" : `c${i - 1}`}" vertex="1"/></object>`,
-    ).join("");
-    const started = performance.now();
-    validateDrawioXml(`${head}${cells}${tail}`);
-    expect(performance.now() - started).toBeLessThan(1000);
-  });
-
-  test("checks many date placeholders without a closing brace in a short time", () => {
-    const xml = `${head}<object id="c" placeholders="1" label="${"%date{".repeat(30000)}"><mxCell parent="1" vertex="1"/></object>${tail}`;
-    const started = performance.now();
-    validateDrawioXml(xml);
-    expect(performance.now() - started).toBeLessThan(1000);
   });
 });
