@@ -420,3 +420,29 @@ describe("lint configs that can load code", () => {
     expect(matchesForbiddenPath(path)).toBe(false);
   });
 });
+
+describe("raw app drawio isolation files", () => {
+  const paths = [
+    "f/factory/factory_console__raw_app/lib/drawioViewerPin.ts",
+    "f/factory/factory_console__raw_app/lib/drawioFrameScript.ts",
+    "f/factory/factory_console__raw_app/lib/drawioFrameHtml.ts",
+    "tests/lib/drawio_viewer_pin.test.ts",
+    "tests/lib/drawio_frame.test.ts",
+  ];
+
+  test.each(paths)("matchesForbiddenPath matches %s", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(true);
+  });
+
+  test.each(paths)("matchesImplementProtectedPath matches %s", (path) => {
+    expect(matchesImplementProtectedPath(path)).toBe(true);
+  });
+
+  test("does not match the other files of the raw app lib", () => {
+    expect(
+      matchesForbiddenPath(
+        "f/factory/factory_console__raw_app/lib/drawioMessages.ts",
+      ),
+    ).toBe(false);
+  });
+});

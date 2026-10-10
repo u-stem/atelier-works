@@ -119,7 +119,11 @@ export function RequirementsDocument({
       <div className="confluence-doc-body">
         <div className="confluence-doc-content">
           <p className="confluence-doc-summary">{doc.summary}</p>
-          <Markdown markdown={doc.markdown} diagrams={doc.diagrams} />
+          <Markdown
+            markdown={doc.markdown}
+            diagrams={doc.diagrams}
+            repo={{ owner: doc.owner, repo: doc.repo }}
+          />
           {doc.open_questions.length > 0 && (
             <section className="confluence-doc-open-questions">
               <h2>未確定事項</h2>

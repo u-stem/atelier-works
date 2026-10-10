@@ -1,9 +1,10 @@
 // draw.io(mxGraph)のXMLを検証する。
 // 図のXMLはDBではなく要件定義書のディレクトリ
 // (`requirement_drafts.doc_dir`)に置く。
-// Consoleはそれを読み出し、diagrams.netの埋め込みビューアーで表示する。
+// Consoleはそれを読み出し、隔離したiframeの中で、diagrams.netの埋め込みビューアーが表示する。
 // 図のXMLは信頼できないIssueの内容に由来するので、リンクやHTMLの要素で
-// 図の外へ出られる図は、加工せずに拒否する。
+// 図の外へ出られる図と、圧縮された図は、加工せずに拒否する。
+// 生成の時点と、Consoleがディスクから読み戻す時点の両方で同じ検査をかける。
 
 const MAX_XML_BYTES = 256 * 1024;
 
@@ -15,18 +16,85 @@ const MAX_XML_BYTES = 256 * 1024;
 const FORBIDDEN_ATTRIBUTES = ["link", "usemap"];
 
 /**
- * ラベルのHTMLに含めない要素。ビューアは`html=1`のラベルをHTMLとして解釈するので、
- * リンク(`a`、`area`、`map`)、ページ遷移(`meta`)、別ページの埋め込み(`iframe`、`object`)を塞ぐ。
+ * 属性付きで現れたら拒否する、ラベルのHTMLの要素。
+ * リンク(`a`、`area`、`map`)、ページ遷移(`meta`、`base`、`link`)、別ページや外部資源の埋め込み
+ * (`iframe`、`object`、`embed`、`frame`、`img`、`video`、`audio`、`source`、`svg`、`use`)、
+ * 送信(`form`、`input`、`button`)を塞ぐ。
+ * 属性を持たない`<Object>`や`<Map>`のような表記は、`Promise<Object>`のように型の書き方として
+ * ラベルに現れるので通す。属性が無い要素は、行き先も資源のURLも持てない。
+ * 「属性付き」は、要素名に空白か`/`が続き、その後に`名前=`が現れる形を指す。
  * `<object>`は、ラベルの中では拒否するが、draw.ioがセルを包む要素としては正しい。
  */
-const FORBIDDEN_HTML_PATTERN =
-  /<\/?(?:a|area|map|meta|iframe|object)(?![\w-])/i;
+const ATTRIBUTE_BEARING_TAGS = [
+  "a",
+  "area",
+  "map",
+  "meta",
+  "iframe",
+  "object",
+  "embed",
+  "form",
+  "base",
+  "link",
+  "img",
+  "input",
+  "button",
+  "svg",
+  "use",
+  "video",
+  "audio",
+  "source",
+  "frame",
+];
+
+const ATTRIBUTE_BEARING_START_PATTERN = new RegExp(
+  `<(${ATTRIBUTE_BEARING_TAGS.join("|")})(?=[\\s/])`,
+  "gi",
+);
+
+/** 要素名の後ろに続く部分で、空白か`/`か引用符に続く`名前=`を探す。 */
+const ATTRIBUTE_IN_TAG_PATTERN = /[\s/"'][^\s=>/"']+\s*=/;
+
+/**
+ * `text`に、属性付きの拒否する要素があるかを調べ、あれば要素名を返す。
+ * 要素は、名前の後ろから最初の`>`までを範囲として、その中に`名前=`があるかで判定する。
+ * 1つの正規表現で`<a <a <a ...`のような入力を調べると計算量が二乗になるので、
+ * 開始位置ごとに探す。同じ`>`で終わる範囲は、先に失敗した範囲の一部なので、飛ばす。
+ */
+function findAttributeBearingTag(text: string): string | null {
+  let closeIndex = -1;
+  let failedCloseIndex = -2;
+  for (const start of text.matchAll(ATTRIBUTE_BEARING_START_PATTERN)) {
+    const tagName = start[1] ?? "";
+    const from = start.index + start[0].length;
+    if (closeIndex < from) {
+      const found = text.indexOf(">", from);
+      closeIndex = found === -1 ? text.length : found;
+    }
+    if (closeIndex === failedCloseIndex) {
+      continue;
+    }
+    if (ATTRIBUTE_IN_TAG_PATTERN.test(text.slice(from, closeIndex))) {
+      return tagName;
+    }
+    failedCloseIndex = closeIndex;
+  }
+  return null;
+}
+
+/**
+ * 属性の有無を問わず拒否する要素。`<style>`は、図の外の画面の見た目を書き換えられる。
+ */
+const STYLE_ELEMENT_PATTERN = /<style(?![\w-])/i;
+
+/**
+ * ラベルのHTMLの属性の形(`名前=`)で現れたら拒否する属性。
+ * `usemap`はイメージマップ、`formaction`は送信先、`srcdoc`は埋め込む文書を指す。
+ */
+const FORBIDDEN_HTML_ATTRIBUTE_PATTERN = /\b(?:usemap|formaction|srcdoc)\s*=/i;
 
 /** 要素として図の構造に現れてはいけない名前。`object`はdraw.ioの正しい要素なので含めない。 */
 const FORBIDDEN_ELEMENTS = ["a", "area", "map", "meta", "iframe"];
-
-/** ラベルの`usemap`は、HTMLの属性の形(`usemap=`)のときだけ拒否する。 */
-const USEMAP_IN_HTML_PATTERN = /\busemap\s*=/i;
 
 /**
  * 実体参照を何段まで復号して調べるか。
@@ -83,12 +151,16 @@ function decodeEntitiesOnce(text: string): string {
 function findForbiddenHtml(raw: string): string | null {
   let current = raw;
   for (let depth = 0; depth <= MAX_DECODE_DEPTH; depth++) {
-    const match = FORBIDDEN_HTML_PATTERN.exec(current);
-    if (match !== null) {
-      return `ラベルのHTMLに${match[0]}が含まれています`;
+    const attributeBearing = findAttributeBearingTag(current);
+    if (attributeBearing !== null) {
+      return `ラベルのHTMLに属性付きの<${attributeBearing}>が含まれています`;
     }
-    if (USEMAP_IN_HTML_PATTERN.test(current)) {
-      return "ラベルのHTMLにusemap属性が含まれています";
+    if (STYLE_ELEMENT_PATTERN.test(current)) {
+      return "ラベルのHTMLに<style>が含まれています";
+    }
+    const attribute = FORBIDDEN_HTML_ATTRIBUTE_PATTERN.exec(current);
+    if (attribute !== null) {
+      return `ラベルのHTMLに${attribute[0]}が含まれています`;
     }
     const next = decodeEntitiesOnce(current);
     if (next === current) {
@@ -129,6 +201,43 @@ function parseAttributes(source: string): {
 }
 
 /**
+ * `<diagram>`の中に、空白以外のテキストかCDATAがあるかを調べ、あれば拒否する理由を返す。
+ * draw.ioの圧縮した図は、`<diagram>`の中のテキストにある。
+ * 非圧縮の図は要素と属性だけで書かれるので、`<diagram>`の中のテキストはすべて拒否する。
+ * 圧縮した図は中身が見えず、リンクやHTMLの検査を素通りするため。
+ * 圧縮を示す属性の有無は見ない。属性が無くても、テキストがあれば圧縮として読まれる。
+ */
+function findCompressedDiagram(xml: string): string | null {
+  const reason =
+    "diagramの内容が圧縮されているようです(非圧縮の<mxGraphModel>を渡してください)";
+  let depth = 0;
+  for (const token of xml.matchAll(TOKEN_PATTERN)) {
+    const [whole, cdata, closing, tagName, attrSource] = token;
+    if (tagName !== undefined) {
+      if (tagName.toLowerCase() !== "diagram") {
+        continue;
+      }
+      if (closing === "/") {
+        depth = Math.max(0, depth - 1);
+      } else if (!(attrSource ?? "").trimEnd().endsWith("/")) {
+        depth += 1;
+      }
+      continue;
+    }
+    if (depth === 0) {
+      continue;
+    }
+    if (cdata !== undefined) {
+      return reason;
+    }
+    if (!whole.startsWith("<") && whole.trim() !== "") {
+      return reason;
+    }
+  }
+  return null;
+}
+
+/**
  * 図のXMLが、外へのリンクやHTMLの要素を含むかを調べる。
  * 含むときは拒否する理由を、含まないときは`null`を返す。
  * 加工して取り除くことはしない。図の見た目が変わり、ビューアの解釈との差が
@@ -155,6 +264,14 @@ function findForbiddenContent(xml: string): string | null {
       }
       for (const value of values) {
         const reason = findForbiddenHtml(value);
+        if (reason !== null) {
+          return reason;
+        }
+      }
+      // `placeholders`を持つ要素では、ラベルの`%名前%`が他の属性の値に置き換わる。
+      // タグや属性を複数の値に分けて書けるので、値をつなげた文字列も調べる。
+      if (names.some((name) => name.toLowerCase() === "placeholders")) {
+        const reason = findForbiddenHtml(values.join(""));
         if (reason !== null) {
           return reason;
         }
@@ -188,10 +305,15 @@ function byteLength(text: string): number {
 
 /**
  * draw.ioのXML文書1件が、drawio-diagramスキルの契約を満たすか検証する。
- * 契約は、ルートが`<mxfile>`であること、非圧縮であること、
+ * 契約は、ルートが`<mxfile>`であること、
+ * すべての`<diagram>`が非圧縮であること(空白以外のテキストとCDATAを持たない)、
  * `<diagram>`を1つ以上含むこと、256KB以下であること、
- * `link`属性と、ラベルのHTMLの`<a>`・`<area>`・`<map>`・`<meta>`・`<iframe>`・
- * `<object>`・`usemap`を含まないことの5つ。
+ * `link`属性と、ラベルのHTMLの危険な要素と属性を含まないことの5つ。
+ * 拒否するラベルのHTMLは、属性付きの`a`・`area`・`map`・`meta`・`iframe`・`object`などと、
+ * `<style>`、`usemap=`・`formaction=`・`srcdoc=`である。属性を持たない`<Object>`のような
+ * 型の表記は通す。`placeholders`を持つ要素では、属性の値をつなげた文字列も調べる。
+ * 実体参照は段ごとに復号して調べる。二重に実体参照を書いた値は、実際に何として読まれるかを
+ * 追わず、安全側に倒して復号して拒否する。
  * 満たさないときは、理由を添えて`valid: false`を返す。
  */
 export function validateDrawioXml(xml: string): DrawioValidationResult {
@@ -210,7 +332,7 @@ export function validateDrawioXml(xml: string): DrawioValidationResult {
   }
 
   const mxfileAttrs = mxfileOpenTagMatch[1] ?? "";
-  if (/\bcompressed\s*=\s*"true"/.test(mxfileAttrs)) {
+  if (/\bcompressed\s*=\s*["']true["']/i.test(mxfileAttrs)) {
     return {
       valid: false,
       reason:
@@ -218,18 +340,13 @@ export function validateDrawioXml(xml: string): DrawioValidationResult {
     };
   }
 
-  const diagramMatch = trimmed.match(/<diagram\b[^>]*>([\s\S]*?)<\/diagram>/);
-  if (diagramMatch === null) {
+  if (!/<diagram\b[^>]*>/.test(trimmed)) {
     return { valid: false, reason: "<diagram> 要素がありません" };
   }
 
-  const diagramBody = (diagramMatch[1] ?? "").trim();
-  if (diagramBody.length > 0 && !diagramBody.includes("<")) {
-    return {
-      valid: false,
-      reason:
-        "diagramの内容が圧縮されているようです(非圧縮の<mxGraphModel>を渡してください)",
-    };
+  const compressed = findCompressedDiagram(trimmed);
+  if (compressed !== null) {
+    return { valid: false, reason: compressed };
   }
 
   const forbidden = findForbiddenContent(trimmed);

@@ -2,13 +2,19 @@
 // 本文は信頼できないIssueの内容を要約したもので、`rehype-sanitize`の既定は
 // `https`と`http`の任意のURLを通す。管理者のWindmillと同じオリジンで描くため、
 // 読み手がリンクの行き先を取り違えて外のページを開かないよう、
-// 行き先をGitHubのIssueとPRのURLと、同じページの見出しだけに絞る。
+// 行き先を、作業項目と同じリポジトリのIssueとPRのURLと、同じページの見出しだけに絞る。
 
 import { slugify } from "./extractHeadings";
 import { safeGitHubUrl } from "./githubLink";
 
 /** 注記に出すURLの最大の長さ。長い`data:`のURLで表示が崩れないようにする。 */
 const MAX_NOTE_LENGTH = 200;
+
+/** リンクにしてよいGitHubのリポジトリ。作業項目のownerとrepoである。 */
+export type RepoRef = {
+  readonly owner: string;
+  readonly repo: string;
+};
 
 export type MarkdownLink =
   | {
@@ -53,9 +59,23 @@ function headingSlugOf(href: string): string | null {
 }
 
 /**
+ * `safeGitHubUrl`を通ったURLが、`repo`のIssueかPRを指すかを返す。
+ * GitHubはownerとrepoの大文字小文字を区別しないので、区別せずに比べる。
+ */
+function isUrlOfRepo(githubUrl: string, repo: RepoRef): boolean {
+  const [, , , owner, name] = githubUrl.split("/");
+  return (
+    owner?.toLowerCase() === repo.owner.toLowerCase() &&
+    name?.toLowerCase() === repo.repo.toLowerCase()
+  );
+}
+
+/**
  * Markdownのリンク1つについて、リンクにするか文字で出すかを決める。
- * リンクにするのは、`safeGitHubUrl`を通るURLと、見出しのslugの形の
+ * リンクにするのは、`safeGitHubUrl`を通り、かつ`repo`のものであるURLと、見出しのslugの形の
  * 同じページのフラグメントだけである。それ以外は文字で出す。
+ * 別のリポジトリのURLをリンクにすると、信頼できない本文が、読み手を別の
+ * リポジトリへ誘導できるため、`repo`を渡せない呼び出し元(`null`)では、GitHubのURLも文字で出す。
  * `label`はリンクの表示文字(平文)。URLと違うときは`note`にURLを入れ、
  * 読み手が行き先を判断できるように、呼び出し側が添えて表示する。
  * 同じページの見出しへのリンクは、行き先を取り違えようがないので`note`を付けない。
@@ -63,6 +83,7 @@ function headingSlugOf(href: string): string | null {
 export function resolveMarkdownLink(
   href: string | undefined,
   label: string,
+  repo: RepoRef | null,
 ): MarkdownLink {
   if (href === undefined) {
     return { kind: "text", note: null };
@@ -75,7 +96,7 @@ export function resolveMarkdownLink(
   }
 
   const githubUrl = safeGitHubUrl(href);
-  if (githubUrl !== null) {
+  if (githubUrl !== null && repo !== null && isUrlOfRepo(githubUrl, repo)) {
     return { kind: "link", href: githubUrl, external: true, note };
   }
 

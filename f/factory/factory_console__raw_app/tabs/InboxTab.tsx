@@ -284,7 +284,10 @@ export function InboxTab({
               {" ・ "}approval_request_id {selected.approval_request_id}
             </p>
             <h3>提案内容</h3>
-            <Markdown markdown={selected.proposal_body} />
+            <Markdown
+              markdown={selected.proposal_body}
+              repo={{ owner: selected.owner, repo: selected.repo }}
+            />
             <h3>承認 / 却下</h3>
             {incomplete ? (
               <p className="empty-state-hint">

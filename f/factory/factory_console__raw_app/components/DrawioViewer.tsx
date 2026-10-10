@@ -1,100 +1,54 @@
-// diagrams.netの埋め込み用の静的ビューア(`viewer-static.min.js`と
-// `<div class="mxgraph" data-mxgraph='...'>`の規約。
-// https://www.diagrams.net/doc/faq/embed-html-options)で、draw.io(mxGraph)の
-// 図をその場に描く。図の内容は`data-mxgraph`のJSONからブラウザの中だけで描画し、
-// どこにも送らない。外部と通信するのは、ビューアのスクリプト1つの取得だけである。
+// draw.io(mxGraph)の図を、隔離したiframeの中で描く。
+// 図のXMLは信頼できないIssueの内容に由来する。Windmillと同じオリジンで描くと、
+// ビューアが図形ライブラリを動的に取得して評価する経路や、図のリンクで遷移する経路が
+// 管理者のセッションに届くので、図はすべてiframeの中に閉じ込める(`docs/security.md`)。
+// - iframeのsandboxは`allow-scripts`だけにする。`allow-same-origin`が無いので、
+//   不透明なオリジンになり、Windmillのクッキーにも、このページのDOMにも届かない。
+//   ポップアップ、フォームの送信、トップレベルの遷移も許さない。
+// - iframeの中身は固定のHTML(`lib/drawioFrameHtml.ts`)で、CSPが、受け口のスクリプトの
+//   ハッシュと、固定したビューアのURL以外のスクリプトと、通信を許さない。
+// - XMLは`srcdoc`に埋め込まず、最初のloadの後にpostMessageで1回だけ渡す。
+//   iframeから届く高さは、送り元を確かめ、範囲に収めてから使う(`lib/drawioMessages.ts`)。
+// - `f/factory/lib/drawio.ts`の`validateDrawioXml`が、リンクなどを含む図を、生成の時点と
+//   `console_query`の読み戻しの時点で拒否する。
 //
-// このコンポーネントは、Windmillと同じオリジンでビューアを動かす。図のXMLは
-// 信頼できないIssueの内容に由来するので、次の多層防御を置く(`docs/security.md`の
-// draw.ioの節を参照)。
-// - スクリプトはcommitを固定したjsDelivrのURLから、SRIを付けて読む
-//   (`lib/drawioViewerPin.ts`。値は`console/drawio-viewer.json`と同じ)。
-//   SRIが合わなければブラウザが実行せず、図は読み込み失敗の表示になる。
-// - `lightbox`・`nav`・ツールバーを切り、図の入れ物でclickとauxclickの
-//   既定の動作を止めて、図のリンクで外へ遷移させない。
-// - `f/factory/lib/drawio.ts`の`validateDrawioXml`が、`link`属性などを含む図を
-//   生成の時点で拒否する。
-//
-// 文書ページの図はすべて同じ`window.GraphViewer`を共有するので、スクリプトは
-// ページごとに一度だけ読み込む(モジュールスコープの単一のPromise)。
-// `<script>`を2回入れても、同じ`processElements()`をもう一度走らせるだけになる。
-//
-// ブラウザでの実行時には確かめていない点がある。`wmill app dev`で、
-// jsDelivrのURLがスクリプトとして読めてSRIが通ること(コンソールに
-// SRIの不一致や`Refused to load the script...`が出ないこと)と、
-// 図が実際に描かれることを確かめる。
-// 読めない場合の代替は、`viewer-static.min.js`(Apache-2.0)をこのアプリの
-// ファイルとして同梱し、バンドルする資産としてimportすること(未実装)。
+// ブラウザでの実行時には確かめていない点がある。WindmillのCSPが`srcdoc`のiframeと、
+// jsDelivrのスクリプトを許すか(許さなければ図は「読み込まれていない」表示になる)と、
+// 図が実際に描かれることを、`wmill app dev`と実機で確かめる。
 
-import React, { useEffect, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { buildDrawioFrameHtml } from "../lib/drawioFrameHtml";
 import {
-  buildGraphViewerConfig,
-  DRAWIO_VIEWER_INTEGRITY,
-  DRAWIO_VIEWER_SCRIPT_URL,
-} from "../lib/drawioViewerPin";
+  type FrameEvent,
+  initialFrameState,
+  RESPONSE_TIMEOUT_MS,
+  reduceFrame,
+  shouldSendXml,
+} from "../lib/drawioFrameState";
+import {
+  buildRenderMessage,
+  FRAME_STOPPED_TEXT,
+  frameErrorText,
+  MAX_XML_BYTES,
+  readFrameError,
+  readFrameHeight,
+} from "../lib/drawioMessages";
 
-type GraphViewerGlobal = {
-  processElements: () => void;
-};
-
-declare global {
-  interface Window {
-    // `DRAWIO_VIEWER_SCRIPT_URL`のスクリプトが読み込み後に設定する。このアプリが
-    // 管理していないスクリプトなので`unknown`で受け、使う前に
-    // `isGraphViewerGlobal`で絞り込む。
-    GraphViewer?: unknown;
-  }
-}
-
-function isGraphViewerGlobal(value: unknown): value is GraphViewerGlobal {
-  if (typeof value !== "object" || value === null) {
-    return false;
-  }
-  return (
-    "processElements" in value && typeof value.processElements === "function"
-  );
-}
-
-function getGraphViewerGlobal(): GraphViewerGlobal | null {
-  return isGraphViewerGlobal(window.GraphViewer) ? window.GraphViewer : null;
-}
-
-let viewerScriptPromise: Promise<void> | null = null;
+const FRAME_SRC_DOC = buildDrawioFrameHtml();
 
 /**
- * 固定したビューアのスクリプトを、ページ全体で一度だけ読み込む
- * (モジュールスコープの単一のPromise。理由はファイル冒頭を参照)。
- */
-function loadViewerScript(): Promise<void> {
-  if (viewerScriptPromise !== null) {
-    return viewerScriptPromise;
-  }
-  viewerScriptPromise = new Promise((resolve, reject) => {
-    const existing = getGraphViewerGlobal();
-    if (existing !== null) {
-      resolve();
-      return;
-    }
-    const script = document.createElement("script");
-    script.src = DRAWIO_VIEWER_SCRIPT_URL;
-    script.integrity = DRAWIO_VIEWER_INTEGRITY;
-    script.crossOrigin = "anonymous";
-    script.async = true;
-    script.addEventListener("load", () => resolve());
-    script.addEventListener("error", () =>
-      reject(new Error(`failed to load ${DRAWIO_VIEWER_SCRIPT_URL}`)),
-    );
-    document.head.appendChild(script);
-  });
-  return viewerScriptPromise;
-}
-
-type ViewerState = "loading" | "ready" | "error";
-
-/**
- * draw.ioの図を1つ、埋め込み用の静的ビューアでその場に描く。
+ * draw.ioの図を1つ、隔離したiframeでその場に描く。
  * `xml`は、`f/factory/steps/console_query.ts`の`requirements_doc`ビューが
- * 要件定義ディレクトリから読み出した、圧縮していないmxGraphのXML。
+ * 要件定義ディレクトリから読み出し、検証を通した、圧縮していないmxGraphのXML。
+ * 状態の遷移は`lib/drawioFrameState.ts`の純関数にある。ここは、DOMの出来事をその入力にする。
+ * 不透明なオリジンには送り先のオリジンを指定できないので、postMessageは`"*"`で送る。
+ * そのため、1つのiframeに送るのは最初のloadの後の1回だけにし、図が変わったらiframeを作り直す。
  */
 export function DrawioViewer({
   name,
@@ -103,70 +57,108 @@ export function DrawioViewer({
   name: string;
   xml: string;
 }): React.ReactElement {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [state, setState] = useState<ViewerState>("loading");
+  const frameRef = useRef<HTMLIFrameElement>(null);
+  const stateRef = useRef(initialFrameState());
+  const [state, setState] = useState(stateRef.current);
+  const result = useMemo(() => buildRenderMessage(xml), [xml]);
+  const message = result.ok ? result.message : null;
+  const messageRef = useRef(message);
+  messageRef.current = message;
 
-  // 図の中のクリックは、押された要素を問わず既定の動作を止める。
-  // 図のラベルのリンク(`<a href>`)を押しても、ページが遷移しない。
-  // 捕捉の段階で止めるので、図の内側の要素のhandlerより先に動く。
+  const dispatch = useCallback((event: FrameEvent) => {
+    stateRef.current = reduceFrame(stateRef.current, event);
+    setState(stateRef.current);
+  }, []);
+
+  // 図が変わったら、iframeを作り直す。最初の描画では何もしない。
+  const previousXml = useRef(xml);
   useEffect(() => {
-    const container = containerRef.current;
-    if (container === null) {
+    if (previousXml.current !== xml) {
+      previousXml.current = xml;
+      dispatch({ type: "replace" });
+    }
+  }, [xml, dispatch]);
+
+  useEffect(() => {
+    function onMessage(event: MessageEvent): void {
+      const frameWindow = frameRef.current?.contentWindow;
+      const height = readFrameHeight(event.source, frameWindow, event.data);
+      if (height !== null) {
+        dispatch({ type: "height", height });
+        return;
+      }
+      const reason = readFrameError(event.source, frameWindow, event.data);
+      if (reason !== null) {
+        dispatch({ type: "error", reason });
+      }
+    }
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [dispatch]);
+
+  // 最初のloadの後、一定時間たっても高さも失敗も届かなければ、応答なしとみなす。
+  const waiting = state.phase === "rendered" && !state.responded;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: iframeを作り直すたびに、待ちを数え直す。
+  useEffect(() => {
+    if (!waiting) {
       return;
     }
-    const block = (event: Event) => event.preventDefault();
-    container.addEventListener("click", block, { capture: true });
-    container.addEventListener("auxclick", block, { capture: true });
-    return () => {
-      container.removeEventListener("click", block, { capture: true });
-      container.removeEventListener("auxclick", block, { capture: true });
-    };
-  }, []);
+    const timer = window.setTimeout(
+      () => dispatch({ type: "timeout" }),
+      RESPONSE_TIMEOUT_MS,
+    );
+    return () => window.clearTimeout(timer);
+  }, [waiting, state.generation, dispatch]);
 
-  useEffect(() => {
-    let cancelled = false;
-    setState("loading");
-    loadViewerScript()
-      .then(() => {
-        if (cancelled) {
-          return;
-        }
-        const graphViewer = getGraphViewerGlobal();
-        if (graphViewer === null) {
-          setState("error");
-          return;
-        }
-        graphViewer.processElements();
-        setState("ready");
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setState("error");
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  function onLoad(): void {
+    const event: FrameEvent = { type: "load" };
+    const send = shouldSendXml(stateRef.current, event);
+    dispatch(event);
+    if (send && messageRef.current !== null) {
+      frameRef.current?.contentWindow?.postMessage(messageRef.current, "*");
+    }
+  }
 
-  if (state === "error") {
+  if (!result.ok) {
     return (
       <div className="diagram-viewer diagram-viewer-error">
-        図 {name} を読み込めませんでした(draw.io
-        ビューアーの取得に失敗しました)。
+        {result.reason === "empty"
+          ? `図 ${name} のデータがありません。`
+          : `図 ${name} のXMLが大きすぎるため、表示しません(上限${MAX_XML_BYTES / 1024}KB)。`}
       </div>
     );
   }
 
-  const dataMxgraph = buildGraphViewerConfig(xml);
-
+  const stopped = state.phase === "stopped";
   return (
-    <div className="diagram-viewer" ref={containerRef}>
-      <div
-        className="mxgraph"
-        style={{ maxWidth: "100%" }}
-        data-mxgraph={dataMxgraph}
-      />
+    <div className="diagram-viewer">
+      {stopped ? null : (
+        <iframe
+          key={state.generation}
+          ref={frameRef}
+          title={`図 ${name}`}
+          srcDoc={FRAME_SRC_DOC}
+          sandbox="allow-scripts"
+          referrerPolicy="no-referrer"
+          style={{
+            display: "block",
+            width: "100%",
+            border: 0,
+            height: state.height,
+          }}
+          onLoad={onLoad}
+        />
+      )}
+      {stopped ? (
+        <p role="alert" className="diagram-viewer-error">
+          {FRAME_STOPPED_TEXT}
+        </p>
+      ) : null}
+      {state.failure !== null && !stopped ? (
+        <p role="alert" className="diagram-viewer-error">
+          {frameErrorText(state.failure)}
+        </p>
+      ) : null}
     </div>
   );
 }

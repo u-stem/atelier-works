@@ -5,10 +5,12 @@
 // プロトコルの`href`・`src`を差し込めないようにする
 // (同種の注意は`f/factory/lib/drawio.ts`にもある)。
 // リンクは`a`の差し替えで絞る。`rehype-sanitize`の既定は任意の`http(s)`の
-// URLを通すので、リンクにするのはGitHubのIssueとPRのURLと、同じページの
-// 見出しへのフラグメントだけにする(`lib/markdownLink.ts`)。それ以外は
-// リンクにせず文字で出す。リンクの文字とURLが違うときは、読み手が
-// 行き先を判断できるようにURLも添える。
+// URLを通すので、リンクにするのは、作業項目と同じリポジトリのIssueとPRのURLと、
+// 同じページの見出しへのフラグメントだけにする(`lib/markdownLink.ts`)。
+// リポジトリを渡されない呼び出し元では、GitHubのURLもリンクにしない。
+// それ以外はリンクにせず文字で出す。リンクの文字とURLが違うときは、読み手が
+// 行き先を判断できるようにURLも添える。添えたURLは、文字の向きを変える
+// 制御文字で周りの表示を崩さないよう、`<bdi>`で包む。
 // `dangerouslySetInnerHTML`は使わない。`react-markdown`が無害化済みの
 // hastの木を直接Reactの要素にする。
 //
@@ -25,7 +27,7 @@ import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import { slugify } from "../lib/extractHeadings";
 import { ALERT_LABELS, stripAlertMarker } from "../lib/markdownAlerts";
-import { resolveMarkdownLink } from "../lib/markdownLink";
+import { type RepoRef, resolveMarkdownLink } from "../lib/markdownLink";
 import type { RequirementsDiagram } from "../lib/types";
 import { DrawioViewer } from "./DrawioViewer";
 
@@ -88,35 +90,56 @@ function childrenText(children: React.ReactNode): string {
     .join("");
 }
 
-const components: Components = {
-  a: ({ href, children }) => {
-    const link = resolveMarkdownLink(href, childrenText(children));
-    const note =
-      link.note === null ? null : (
-        <span className="md-link-url"> ({link.note})</span>
-      );
-    if (link.kind === "text") {
-      return (
-        <span className="md-link-disabled">
-          {children}
-          {note}
-        </span>
-      );
-    }
-    return (
-      <>
-        <a
-          href={link.href}
-          {...(link.external
-            ? { target: "_blank", rel: "noopener noreferrer" }
-            : {})}
-        >
-          {children}
-        </a>
-        {note}
-      </>
+/**
+ * `Markdown`に渡された`repo`を、リンクの判定に届けるcontext。
+ * `diagrams`と同じく、`components`を描画のたびに作り直さないために使う。
+ */
+const RepoContext = React.createContext<RepoRef | null>(null);
+
+function MarkdownAnchor({
+  href,
+  children,
+}: {
+  href: string | undefined;
+  children: React.ReactNode;
+}): React.ReactElement {
+  const repo = React.useContext(RepoContext);
+  const link = resolveMarkdownLink(href, childrenText(children), repo);
+  const note =
+    link.note === null ? null : (
+      <span className="md-link-url">
+        {" ("}
+        <bdi>{link.note}</bdi>
+        {")"}
+      </span>
     );
-  },
+  if (link.kind === "text") {
+    return (
+      <span className="md-link-disabled">
+        {children}
+        {note}
+      </span>
+    );
+  }
+  return (
+    <>
+      <a
+        href={link.href}
+        {...(link.external
+          ? { target: "_blank", rel: "noopener noreferrer" }
+          : {})}
+      >
+        {children}
+      </a>
+      {note}
+    </>
+  );
+}
+
+const components: Components = {
+  a: ({ href, children }) => (
+    <MarkdownAnchor href={href}>{children}</MarkdownAnchor>
+  ),
   h1: ({ children }) => <h1>{children}</h1>,
   h2: ({ children }) => {
     const id = slugify(childrenText(children));
@@ -194,24 +217,32 @@ function DiagramSlot({ name }: { name: string }): React.ReactElement {
   return <DrawioViewer name={diagram.name} xml={diagram.xml} />;
 }
 
+/**
+ * `repo`は、本文が属する作業項目のリポジトリ。渡すと、そのリポジトリのIssueとPRの
+ * URLだけをリンクにする。渡さないと、GitHubのURLも文字で出す。
+ */
 export function Markdown({
   markdown,
   diagrams = [],
+  repo = null,
 }: {
   markdown: string;
   diagrams?: readonly RequirementsDiagram[];
+  repo?: RepoRef | null;
 }): React.ReactElement {
   return (
-    <DiagramsContext.Provider value={diagrams}>
-      <div className="markdown">
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          rehypePlugins={[[rehypeSanitize, schema]]}
-          components={components}
-        >
-          {markdown}
-        </ReactMarkdown>
-      </div>
-    </DiagramsContext.Provider>
+    <RepoContext.Provider value={repo}>
+      <DiagramsContext.Provider value={diagrams}>
+        <div className="markdown">
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            rehypePlugins={[[rehypeSanitize, schema]]}
+            components={components}
+          >
+            {markdown}
+          </ReactMarkdown>
+        </div>
+      </DiagramsContext.Provider>
+    </RepoContext.Provider>
   );
 }

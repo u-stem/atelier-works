@@ -473,24 +473,41 @@ bunかnodeの起動そのものが止まったときだけ、タイムアウト�
 
 Consoleは、`f/factory/steps/console_query.ts`の`requirements_doc`ビューで、`requirements.md`と各図のファイルを読み戻す。読む前に、`doc_dir`が`REQUIREMENTS_BASE_DIR`の下にあることを確かめる。図のXMLはWindmillのジョブ結果としてConsoleのフロントエンドに渡るだけで、GitHubとDiscordには送らない。
 
-生成した図のXMLは、`f/factory/lib/drawio.ts`の`validateDrawioXml`で検査する。
-検査は、大きさ、ルート要素、圧縮の有無に加えて、外へ出る経路になる記述を拒否する。
-次のどれかを含む図は、加工せずに`valid: false`と理由を返す。
+図のXMLは、`f/factory/lib/drawio.ts`の`validateDrawioXml`で検査する。
+検査は2か所でかける。生成の時点と、`requirements_doc`ビューがディスクから読み戻す時点である。
+ディスクのファイルは生成の後に書き換わりうるので、読み戻す時点でも同じ検査をかける。
+読み戻しで通らない図は、ファイル名が不正な図と同じように、警告のログを残して一覧から落とす。
+文書の本文と、ほかの図は返す。
 
+検査は、大きさ、ルート要素に加えて、次のものを加工せずに拒否する。
+拒否したときは`valid: false`と理由を返す。
+
+- 圧縮した図。すべての`<diagram>`について、空白以外のテキストとCDATAを拒否する。`<mxfile>`の`compressed`属性の値が`true`のときも、引用符の種類を問わず拒否する。圧縮した図は中身が見えず、以降の検査を素通りするためである
 - `link`属性と`usemap`属性
 - 図の構造としての`<a>`、`<area>`、`<map>`、`<meta>`、`<iframe>`要素
-- ラベルのHTMLの中の`<a>`、`<area>`、`<map>`、`<meta>`、`<iframe>`、`<object>`と、`usemap=`
+- ラベルのHTMLの、属性付きの次の要素。属性付きとは、要素名に空白か`/`が続き、その後に`名前=`が現れる形である。
+  - リンク: `<a>`、`<area>`、`<map>`
+  - ページ遷移: `<meta>`、`<base>`、`<link>`
+  - 埋め込み: `<iframe>`、`<object>`、`<embed>`、`<frame>`、`<img>`、`<video>`、`<audio>`、`<source>`、`<svg>`、`<use>`
+  - 送信: `<form>`、`<input>`、`<button>`
+- ラベルのHTMLの`<style>`。属性の有無を問わない
+- ラベルのHTMLの`usemap=`、`formaction=`、`srcdoc=`
+
+`Promise<Object>`、`List<Map>`、`Result<A, E>`のように、属性を持たない要素名だけの表記は通す。
+型の書き方としてラベルに現れ、属性の無い要素は行き先も資源のURLも持てないためである。
 
 図のXMLを加工して取り除くと、図の見た目が変わり、ビューアの解釈との差が新しい抜け道にもなる。
 そのため、取り除かずに拒否し、理由を生成のやり直しでClaudeに伝える。
 
 属性の値とテキストは、XMLの実体参照(`&lt;a`、数値文字参照の`&#60;`と`&#x3c;`)を復号してから調べる。
 ビューアは`html=1`のラベルをHTMLとして解釈するためである。
-`&amp;lt;a`のような二重のエスケープも、ビューアがHTMLとして解釈しうるので、安全側に拒否する。
+二重にエスケープした`&amp;lt;a`も、安全側に倒して復号し、拒否する。実際に何として読まれるかは追わない。
 復号は5段までで、それでも変わり続ける値は調べきれないので拒否する。
+`placeholders`属性を持つ要素では、ラベルの`%名前%`が他の属性の値に置き換わり、タグを複数の値に分けて書ける。
+そのため、各属性の値に加えて、属性の値をすべて連結した文字列も調べる。
 要素と属性の名前は、大文字小文字を区別せずに比べる。
-名前の完全一致だけを見るので、`linkTarget`や`placeholders`のような別の属性、ラベルの文章にあるだけの単語は拒否しない。
-`<object>`は、draw.ioがセルを包む要素として正しいので、構造としては許し、ラベルのHTMLの中だけ拒否する。
+`link`と`usemap`は名前の完全一致だけを見るので、`linkTarget`や`placeholders`のような別の属性、ラベルの文章にあるだけの単語は拒否しない。
+`<object>`は、draw.ioがセルを包む要素として正しい。構造としては許し、ラベルのHTMLの中の、属性付きのものだけを拒否する。
 
 ### 隔離したiframeで描く
 
@@ -539,20 +556,30 @@ iframeの中で動くscriptが取れるのは、そのiframeが受け取った�
 
 ### 旧Consoleのraw appで描く
 
-Consoleの図の描画がiframeに移るまでは、Windmillのraw app(Factory Console)が図を描く。
-raw appの`components/DrawioViewer.tsx`は、ビューアをWindmillと同じオリジンで動かす。
-隔離したiframeの保護は無いので、ビューアの欠陥は、管理者としてWindmillを操作できるXSSになりうる。
-次の層で、そこへ至る経路を狭める。
+Consoleの図の描画がSPAのiframeに移るまでは、Windmillのraw app(Factory Console)が図を描く。
+raw appの`components/DrawioViewer.tsx`も、図をWindmillと同じオリジンでは描かず、隔離したiframeの中で描く。
+ビューアの欠陥が、管理者としてWindmillを操作できるXSSになるのを防ぐためである。
+図形ライブラリの動的な取得と評価、`openLink`による遷移、ラベルの`<style>`と`<form>`、tooltipは、すべて不透明なオリジンの中に閉じる。
+iframeの中身は、固定の文字列から組み立てるHTMLである(`lib/drawioFrameHtml.ts`)。
 
 | 守ること | 内容 |
 | --- | --- |
-| 版を固定してSRIを付ける | ビューアは、commitを固定したjsDelivrのURLから読む。`<script>`に`integrity`と`crossOrigin = "anonymous"`を付け、バイト列が違えばブラウザが実行しない。raw.githubusercontent.comは`text/plain`と`nosniff`で返すので、scriptとして読めず、使わない |
-| 固定の値を一致させる | commitとSRIは、`lib/drawioViewerPin.ts`に書く。raw appは`console/drawio-viewer.json`をimportできないので、値を写し、`tests/lib/drawio_viewer_pin.test.ts`が、commitの一致と、sha256(16進)をbase64にした値の一致を確かめる |
-| リンクを開く機能を切る | `lightbox`と`nav`を無効にし、ツールバーを出さない。図の入れ物で、clickとauxclickの既定の動作を捕捉の段階で止め、図のラベルのリンクで外へ遷移させない |
-| 図を生成の時点で拒否する | 上の`validateDrawioXml`が、リンクとHTMLの要素を含む図を拒否する |
+| 不透明なオリジンで動かす | `<iframe sandbox="allow-scripts" srcdoc referrerPolicy="no-referrer">`にする。`allow-same-origin`、`allow-popups`、`allow-forms`、`allow-top-navigation`は付けない。iframeはWindmillのCookieにも、親のDOMにも届かない |
+| CSPで通信とスクリプトを止める | iframeのHTMLの`<meta http-equiv="Content-Security-Policy">`が、`default-src 'none'`にして、スクリプトを、受け口のinline scriptのsha256と、固定したビューアのURL1つだけに限る。`connect-src 'none'`、`form-action 'none'`、`base-uri 'none'`で、通信、送信、基準URLを止める。画像とフォントは`data:`だけを許す。`unsafe-eval`は許さない |
+| 版を固定してSRIを付ける | ビューアは、commitを固定したjsDelivrのURLから、iframeの中で`integrity`と`crossorigin="anonymous"`を付けて読む。バイト列が違えばブラウザが実行しない。親のページにはスクリプトを入れない。raw.githubusercontent.comは`text/plain`と`nosniff`で返すので、scriptとして読めず、使わない |
+| 固定の値を照合する | URLとSRIは`lib/drawioViewerPin.ts`に書く。raw appは`console/drawio-viewer.json`をimportできないので、値を写し、`tests/lib/drawio_viewer_pin.test.ts`が一致を確かめる。受け口のscriptのsha256は`lib/drawioFrameScript.ts`の定数で、`tests/lib/drawio_frame.test.ts`が、scriptの文字列から再計算して一致を確かめる |
+| リンクを開く経路を無効にする | 受け口のscriptが、`Graph.prototype.openLink`を無効にし、`labelLinkClicked`と`customLinkClicked`があれば無効にする。`mxStencilRegistry`の動的な読み込みと評価を止め、`window.open`を無効にする。clickとauxclickとsubmitの既定の動作を、捕捉の段階で止める。lightbox、nav、ツールバーは無効にして描く |
+| XMLは1回だけ渡す | XMLは`srcdoc`に入れない。最初のloadの後にpostMessageで1回だけ送る。受け口は、送り元が`window.parent`のものだけを受け取る。親は、送り元がそのiframeの`contentWindow`のものだけを受け取り、高さを80〜1600の範囲に収めて使う。iframeが2回目のloadを起こしたら、遷移とみなして表示を止める |
+| 図を拒否する | 上の`validateDrawioXml`が、生成の時点と読み戻しの時点で、リンク、危険な要素、圧縮した図を拒否する |
 
-sandboxとCSPは、このraw appには無い。ビューアの欠陥までは防げない。
-フロントエンドの図の部品とビューアの設定を変えるときは、この表の4つを保つ。
+`lib/drawioViewerPin.ts`、`lib/drawioFrameScript.ts`、`lib/drawioFrameHtml.ts`と、その2つのテストは、保護パスである。
+書き換えられると、図を描くiframeに別のスクリプトを読ませたり、照合を外したりできるためである。
+
+残るリスクは次のとおりである。
+
+- WindmillのCSPが、`srcdoc`のiframeと、jsDelivrのスクリプトの読み込みを許すかは、実機で確かめる。`srcdoc`の文書は、埋め込む側のCSPを引き継ぐので、WindmillのCSPが`script-src`や`frame-src`を絞っていると、図が描かれない。そのときは、図の代わりに「ビューアが読み込まれていない」という表示が出る。
+- ビューアがiframeの中で`window.location`を書き換えて遷移する経路は、`sandbox`で防げない。2回目のloadの検知で表示を止めるが、loadが起きない遷移は検知できない。そのときも、親が受け取るのは、範囲に収めた高さと、固定の失敗の種類だけである。
+- `placeholders`で分けて書いたタグは、属性の値を連結した文字列だけを調べる。値の順序を入れ替えて組み立てる書き方は、iframeの隔離とCSPで止める。
 
 ## 要件定義書のリンク
 
@@ -563,12 +590,15 @@ Windmillのraw appは、これをWindmillと同じオリジンで描く。
 
 `components/Markdown.tsx`は`a`を差し替え、`lib/markdownLink.ts`の`resolveMarkdownLink`で、リンクにするものを絞る。
 
-- GitHubのIssueとPRのURL。`lib/githubLink.ts`の`safeGitHubUrl`を通るものに限る。
+- 作業項目と同じリポジトリのIssueとPRのURL。`lib/githubLink.ts`の`safeGitHubUrl`を通り、ownerとrepoが作業項目のものと一致するものに限る。ownerとrepoは、大文字小文字を区別せずに比べる。信頼できない本文が、読み手を別のリポジトリへ誘導できないようにするためである。
 - 同じページの見出しへのフラグメント。`#`で始まり、`lib/extractHeadings.ts`の`slugify`が作るslugと同じ形に限る。
 
+`Markdown`は、リポジトリを`repo`の引数で受ける。要件定義書(`RequirementsDocument`)と承認タブの提案は、作業項目のownerとrepoを渡す。
+監査レポート(`AuditTab`)のように渡せない呼び出し元では、GitHubのURLもリンクにせず、文字で出す。
 それ以外は、リンクにせず文字で出す。
 リンクの文字とURLが違うときは、URLも括弧で添える。
 読み手が行き先を判断できるようにするためである。
+添えたURLは`<bdi>`で包む。文字の向きを変える制御文字が、周りの表示を崩さないようにするためである。
 同じページの見出しへのリンクは、行き先を取り違えようがないので、URLを添えない。
 GitHubへのリンクは、`rel="noopener noreferrer"`を付けて新しいタブで開く。
 
@@ -600,7 +630,8 @@ Claudeに渡すツールは`Read`、`Glob`、`Grep`、`Edit`、`Write`だけで�
 markdownlint-cli2とtextlintの設定(`.markdownlint-cli2.jsonc`、`.textlintrc.json`など)も止める。どちらも設定から任意のモジュールを読み込め、pre-commitと`mise run check`が読むためである。
 Consoleでバンドルを通らずに配信される`console/public/`と`console/index.html`も止める。
 配信するdraw.ioのビューアを固定する`console/drawio-viewer.json`も止める。
-固定を強制し、配信物を作って検査するスクリプトも止める。一覧は`f/factory/lib/protected_paths.ts`の`FORBIDDEN_EXACT_PATHS`にある。
+固定を強制し、配信物を作って検査するスクリプトも止める。
+旧Consoleのraw appが図を隔離して描く部品(ビューアの固定、iframeの受け口のscript、iframeのHTMLと、そのテスト)も止める。一覧は`f/factory/lib/protected_paths.ts`の`FORBIDDEN_EXACT_PATHS`にある。
 配信のCSPを持つ`infra/Caddyfile`と、配信物を検証する`infra/console_fetcher/`も止める。
 一覧は`f/factory/lib/protected_paths.ts`にある。
 

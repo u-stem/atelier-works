@@ -81,8 +81,9 @@ Consoleの**要件定義**タブと、**承認**タブの要件定義の詳細�
 ビューは、DBの行の`doc_dir`から`requirements.md`と各図のファイルを読み戻す(`readDocFromDisk`)。
 raw appの`components/RequirementsDocument.tsx`、`Markdown.tsx`、`DrawioViewer.tsx`が、本文、目次、図をページの中に描画する。
 見た目はConfluenceの文書ページに近い。
-本文のリンクは、GitHubのIssueとPRのURLと見出しへのフラグメントだけをリンクにする。
-図は、リンクやHTMLの要素を含まないものだけを描く。
+本文のリンクは、作業項目と同じリポジトリのIssueとPRのURLと、見出しへのフラグメントだけをリンクにする。
+図は、読み戻すときにも`validateDrawioXml`で検査し、通らない図は落とす。
+通った図は、隔離したiframeの中で描く。
 理由は[セキュリティ](../security.md)の「draw.ioの図の描画」と「要件定義書のリンク」にある。
 
 読み戻しの規則は次のとおり。

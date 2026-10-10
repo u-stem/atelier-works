@@ -84,6 +84,68 @@ function withObjectWrapper(attrs: string): string {
   );
 }
 
+describe("validateDrawioXml compressed diagrams", () => {
+  const head = '<mxfile host="app.diagrams.net">';
+  const model = '<mxGraphModel><root><mxCell id="0"/></root></mxGraphModel>';
+
+  test.each([
+    [
+      "text after a model",
+      `${head}<diagram id="d1">${model}BASE64DATA</diagram></mxfile>`,
+    ],
+    [
+      "text next to an empty model",
+      `${head}<diagram id="d1"><mxGraphModel/>BASE64</diagram></mxfile>`,
+    ],
+    [
+      "a CDATA section",
+      `${head}<diagram id="d1"><![CDATA[dGhpcyBpcw==]]></diagram></mxfile>`,
+    ],
+    [
+      "an empty CDATA section",
+      `${head}<diagram id="d1">${model}<![CDATA[]]></diagram></mxfile>`,
+    ],
+    [
+      "a comment and then text",
+      `${head}<diagram id="d1"><!-- note -->BASE64</diagram></mxfile>`,
+    ],
+    [
+      "compression only in the second diagram",
+      `${head}<diagram id="d1">${model}</diagram><diagram id="d2">BASE64</diagram></mxfile>`,
+    ],
+    [
+      "text inside a nested element",
+      `${head}<diagram id="d1"><mxGraphModel><root>BASE64</root></mxGraphModel></diagram></mxfile>`,
+    ],
+    [
+      "single-quoted compressed true",
+      `<mxfile compressed='true'><diagram id="d1">${model}</diagram></mxfile>`,
+    ],
+  ])("rejects a diagram with %s", (_name, xml) => {
+    expect(validateDrawioXml(xml).valid).toBe(false);
+  });
+
+  test("names compression in the reason for text inside a diagram", () => {
+    const result = validateDrawioXml(
+      `${head}<diagram id="d1"><mxGraphModel/>BASE64</diagram></mxfile>`,
+    );
+    expect(result).toEqual({
+      valid: false,
+      reason: expect.stringContaining("圧縮"),
+    });
+  });
+
+  test("accepts whitespace and comments between elements in every diagram", () => {
+    const xml = `${head}\n<diagram id="d1">\n <!-- a -->${model}\n</diagram>\n<diagram id="d2">${model}</diagram></mxfile>`;
+    expect(validateDrawioXml(xml).valid).toBe(true);
+  });
+
+  test("accepts text outside the diagrams", () => {
+    const xml = `${head}note<diagram id="d1">${model}</diagram></mxfile>`;
+    expect(validateDrawioXml(xml).valid).toBe(true);
+  });
+});
+
 describe("validateDrawioXml link and HTML hardening", () => {
   test("accepts a document that wraps a cell in <object> with placeholders", () => {
     const result = validateDrawioXml(withObjectWrapper('placeholders="1"'));
@@ -159,7 +221,6 @@ describe("validateDrawioXml link and HTML hardening", () => {
       "&lt;A HREF=&quot;https://example.com&quot;&gt;x&lt;/A&gt;",
     ],
     ["anchor with a tab after the name", "&lt;a&#9;href=&quot;x&quot;&gt;x"],
-    ["anchor closed right away", "&lt;a/&gt;"],
     ["area", "&lt;area href=&quot;x&quot;&gt;"],
     ["map", "&lt;map name=&quot;m&quot;&gt;"],
     [
@@ -197,6 +258,73 @@ describe("validateDrawioXml link and HTML hardening", () => {
     ],
   ])("rejects an HTML label with %s", (_name, value) => {
     expect(validateDrawioXml(withCellValue(value)).valid).toBe(false);
+  });
+
+  test.each([
+    ["embed", "&lt;embed src=&quot;x&quot;&gt;"],
+    ["form", "&lt;form action=&quot;x&quot;&gt;"],
+    ["base", "&lt;base href=&quot;x&quot;&gt;"],
+    ["link", "&lt;link rel=&quot;stylesheet&quot; href=&quot;x&quot;&gt;"],
+    ["img", "&lt;img src=&quot;x&quot;&gt;"],
+    ["input", "&lt;input type=&quot;submit&quot;&gt;"],
+    ["button", "&lt;button name=&quot;x&quot;&gt;"],
+    ["svg", "&lt;svg onload=&quot;x&quot;&gt;"],
+    ["use", "&lt;use href=&quot;x&quot;&gt;"],
+    ["video", "&lt;video src=&quot;x&quot;&gt;"],
+    ["audio", "&lt;audio src=&quot;x&quot;&gt;"],
+    ["source", "&lt;source src=&quot;x&quot;&gt;"],
+    ["frame", "&lt;frame src=&quot;x&quot;&gt;"],
+    ["anchor with a valueless attribute first", "&lt;a download href=x&gt;"],
+    ["anchor with a slash before the attribute", "&lt;a/href=x&gt;"],
+    ["anchor after another tag", "&lt;b&gt;&lt;a href=x&gt;"],
+    ["anchor after an unrelated angle bracket", "&lt;&lt;a href=x&gt;"],
+    ["style without attributes", "&lt;style&gt;p{display:none}&lt;/style&gt;"],
+    ["style with attributes", "&lt;style media=&quot;all&quot;&gt;"],
+    ["style in upper case", "&lt;STYLE&gt;"],
+    ["formaction", "&lt;button formaction=&quot;x&quot;&gt;"],
+    ["formaction on a bare word", "formaction=x"],
+    ["srcdoc", "&lt;div srcdoc=&quot;x&quot;&gt;"],
+  ])("rejects a label with %s", (_name, value) => {
+    expect(validateDrawioXml(withCellValue(value)).valid).toBe(false);
+  });
+
+  test.each([
+    ["Promise<Object>", "Promise&lt;Object&gt;"],
+    ["List<Map>", "List&lt;Map&gt;"],
+    ["Result<A, E>", "Result&lt;A, E&gt;"],
+    ["Array<Area>", "Array&lt;Area&gt;"],
+    ["Option<Meta>", "Option&lt;Meta&gt;"],
+    ["Map<string, Link>", "Map&lt;string, Link&gt;"],
+    ["a self-closed anchor", "&lt;a/&gt;"],
+    ["an anchor without attributes", "&lt;a&gt;x&lt;/a&gt;"],
+    ["a closing style", "x&lt;/style&gt;"],
+    ["a class named Styles", "Map&lt;Styles&gt;"],
+  ])("accepts a label that writes %s", (_name, value) => {
+    expect(validateDrawioXml(withCellValue(value)).valid).toBe(true);
+  });
+
+  test("rejects an angle bracket tag split across placeholder values", () => {
+    const xml = withObjectWrapper(
+      'placeholders="1" p1="&lt;a" p2=" href=x&gt;"',
+    );
+    expect(validateDrawioXml(xml).valid).toBe(false);
+  });
+
+  test("accepts placeholder values that join into harmless text", () => {
+    const xml = withObjectWrapper('placeholders="1" p1="a" p2="b"');
+    expect(validateDrawioXml(xml).valid).toBe(true);
+  });
+
+  test("does not join attribute values when placeholders is absent", () => {
+    const xml = withObjectWrapper('p1="&lt;a" p2=" href=x&gt;"');
+    expect(validateDrawioXml(xml).valid).toBe(true);
+  });
+
+  test("checks a long run of unterminated tags in linear time", () => {
+    const xml = withCellValue("&lt;a ".repeat(20000));
+    const started = performance.now();
+    validateDrawioXml(xml);
+    expect(performance.now() - started).toBeLessThan(1000);
   });
 
   test("rejects an anchor written as an XML element", () => {

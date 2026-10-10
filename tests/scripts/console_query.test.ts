@@ -36,6 +36,9 @@ function createFakeSqlClient(responses: SqlRow[][] = []): {
 
 const NOW = new Date("2026-09-26T00:00:00.000Z");
 
+const VALID_DIAGRAM_XML =
+  '<mxfile><diagram id="d1"><mxGraphModel><root><mxCell id="0"/></root></mxGraphModel></diagram></mxfile>';
+
 describe("resolveIntArg", () => {
   test("falls back when undefined", () => {
     expect(resolveIntArg(undefined, 200, 1, 2000)).toBe(200);
@@ -85,7 +88,7 @@ describe("readDocFromDisk", () => {
   test("reads requirements.md and every diagram file", async () => {
     const reads = new Map([
       [`${DOC_DIR}/requirements.md`, "# 要件"],
-      [`${DOC_DIR}/flow.drawio`, "<mxfile></mxfile>"],
+      [`${DOC_DIR}/flow.drawio`, VALID_DIAGRAM_XML],
     ]);
     const readFile = (path: string) => {
       const content = reads.get(path);
@@ -103,7 +106,7 @@ describe("readDocFromDisk", () => {
 
     expect(result).toEqual({
       markdown: "# 要件",
-      diagrams: [{ name: "flow", xml: "<mxfile></mxfile>" }],
+      diagrams: [{ name: "flow", xml: VALID_DIAGRAM_XML }],
     });
   });
 
@@ -215,6 +218,75 @@ describe("readDocFromDisk", () => {
     );
 
     expect(result).toEqual({ markdown: "# 要件", diagrams: [] });
+  });
+});
+
+describe("readDocFromDisk diagram validation", () => {
+  const DOC_DIR =
+    "/var/lib/factory/requirements/octo-owner/atelier-works/issue-42/wi-1/attempt-1";
+  const LINKED_DIAGRAM_XML = VALID_DIAGRAM_XML.replace(
+    '<mxCell id="0"/>',
+    '<mxCell id="0" link="https://example.com"/>',
+  );
+
+  function readerWith(files: Record<string, string>) {
+    return (path: string) => {
+      const content = files[path.slice(DOC_DIR.length + 1)];
+      return content === undefined
+        ? Promise.reject(new Error(`not found: ${path}`))
+        : Promise.resolve(content);
+    };
+  }
+
+  test("drops a diagram whose file now fails validation", async () => {
+    const readFile = readerWith({
+      "requirements.md": "# 要件",
+      "flow.drawio": LINKED_DIAGRAM_XML,
+    });
+
+    const result = await readDocFromDisk(
+      DOC_DIR,
+      [{ name: "flow", file: "flow.drawio" }],
+      readFile,
+    );
+
+    expect(result).toEqual({ markdown: "# 要件", diagrams: [] });
+  });
+
+  test("keeps the diagrams that pass when another one fails", async () => {
+    const readFile = readerWith({
+      "requirements.md": "# 要件",
+      "bad.drawio": LINKED_DIAGRAM_XML,
+      "good.drawio": VALID_DIAGRAM_XML,
+    });
+
+    const result = await readDocFromDisk(
+      DOC_DIR,
+      [
+        { name: "bad", file: "bad.drawio" },
+        { name: "good", file: "good.drawio" },
+      ],
+      readFile,
+    );
+
+    expect(result?.diagrams).toEqual([
+      { name: "good", xml: VALID_DIAGRAM_XML },
+    ]);
+  });
+
+  test("drops a compressed diagram", async () => {
+    const readFile = readerWith({
+      "requirements.md": "# 要件",
+      "flow.drawio": '<mxfile><diagram id="d1">dGhpcw==</diagram></mxfile>',
+    });
+
+    const result = await readDocFromDisk(
+      DOC_DIR,
+      [{ name: "flow", file: "flow.drawio" }],
+      readFile,
+    );
+
+    expect(result?.diagrams).toEqual([]);
   });
 });
 
@@ -606,7 +678,7 @@ describe("runConsoleQuery", () => {
     const { sql, calls } = createFakeSqlClient([[row]]);
     const reads = new Map([
       [`${docDir}/requirements.md`, "# 要件(ファイル)"],
-      [`${docDir}/flow.drawio`, "<mxfile></mxfile>"],
+      [`${docDir}/flow.drawio`, VALID_DIAGRAM_XML],
     ]);
     const readFile = (path: string) => {
       const content = reads.get(path);
@@ -638,7 +710,7 @@ describe("runConsoleQuery", () => {
         attempt: 1,
         summary: "要約(DB)",
         markdown: "# 要件(ファイル)",
-        diagrams: [{ name: "flow", xml: "<mxfile></mxfile>" }],
+        diagrams: [{ name: "flow", xml: VALID_DIAGRAM_XML }],
         open_questions: ["未確定事項A"],
         doc_dir_source: "file",
       },

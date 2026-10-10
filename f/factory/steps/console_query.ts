@@ -25,6 +25,7 @@ import {
   type SqlClient,
   type SqlRow,
 } from "../lib/db.ts";
+import { validateDrawioXml } from "../lib/drawio.ts";
 import { logger } from "../lib/log.ts";
 import {
   DIAGRAM_NAME_PATTERN,
@@ -790,6 +791,9 @@ export type RequirementsDocRow = {
  * `name`/`file`が`DIAGRAM_NAME_PATTERN`/`DIAGRAM_FILE_PATTERN`の規則に合わない図も、
  * `file`を`docDir`に連結する前に同じく落とし、警告をログに残す。
  * 壊れた`diagrams`列の値(例: `"../../etc/passwd.drawio"`)を読ませないため。
+ * 読み戻した図のXMLには、生成の時点と同じ`validateDrawioXml`をかけ、通らない図は
+ * ファイル名の不正と同じく警告をログに残して落とす。ディスクのファイルは生成の後に
+ * 書き換わりうるので、生成時の検査を信用しない。
  * 図のXMLはGitHubやDiscordには載せず、Consoleの図ビューア
  * (`components/DrawioViewer.tsx`)のためだけにここで読む。
  */
@@ -829,12 +833,22 @@ export async function readDocFromDisk(
       });
       continue;
     }
+    let xml: string;
     try {
-      const xml = await readFile(`${dir}/${diagram.file}`);
-      resolvedDiagrams.push({ name: diagram.name, xml });
+      xml = await readFile(`${dir}/${diagram.file}`);
     } catch {
       // 図のファイルが無いか読めなければ、この図だけを落とす。
+      continue;
     }
+    const validation = validateDrawioXml(xml);
+    if (!validation.valid) {
+      log.warn("skipping diagram that fails validation", {
+        name: diagram.name,
+        reason: validation.reason,
+      });
+      continue;
+    }
+    resolvedDiagrams.push({ name: diagram.name, xml });
   }
   return { markdown, diagrams: resolvedDiagrams };
 }
