@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { IMPLEMENT_FLOW_PATH } from "../../f/factory/lib/implement_loop.ts";
+import { actionableCancelNote } from "../../f/factory/lib/poll_support.ts";
 import type { WorkItemStatus } from "../../f/factory/lib/types.ts";
 import {
   activeIssueConflictError,
   activeIssueConflictErrorFrom,
+  asBeforeActionableCancel,
   computeRestartPlan,
   launchFailureError,
   newerCycleRefusal,
@@ -402,6 +404,76 @@ describe("computeRestartPlan for a cancelled work item", () => {
         { implementReady: true, implementEnabled: true },
       ),
     ).toThrow(/not restartable/);
+  });
+});
+
+describe("asBeforeActionableCancel", () => {
+  const cancelled = {
+    id: 1,
+    status: "cancelled" as WorkItemStatus,
+    kind: "issue" as const,
+    attempt: 1,
+  };
+
+  test("restores the status before a closed-target cancellation", () => {
+    const item = asBeforeActionableCancel(cancelled, {
+      from_status: "failed",
+      note: actionableCancelNote("closed"),
+    });
+    expect(item.status).toBe("failed");
+  });
+
+  test("restores a needs_human work item cancelled with the pr note", () => {
+    const item = asBeforeActionableCancel(cancelled, {
+      from_status: "needs_human",
+      note: actionableCancelNote("pr_closed"),
+    });
+    expect(item.status).toBe("needs_human");
+  });
+
+  test("keeps a cancellation made for another reason", () => {
+    const item = asBeforeActionableCancel(cancelled, {
+      from_status: "approved",
+      note: "superseded by work item 9",
+    });
+    expect(item.status).toBe("cancelled");
+  });
+
+  test("keeps a cancelled work item without a recorded transition", () => {
+    expect(asBeforeActionableCancel(cancelled, null).status).toBe("cancelled");
+  });
+
+  test("keeps a work item that is not cancelled", () => {
+    const failed = { ...cancelled, status: "failed" as WorkItemStatus };
+    const item = asBeforeActionableCancel(failed, {
+      from_status: "expired",
+      note: actionableCancelNote("closed"),
+    });
+    expect(item.status).toBe("failed");
+  });
+
+  test("lets the restored work item restart like the one before cancellation", () => {
+    const restored = asBeforeActionableCancel(
+      { ...cancelled, kind: "pr_fix" as const },
+      { from_status: "failed", note: actionableCancelNote("pr_closed") },
+    );
+    const plan = computeRestartPlan(restored, {
+      implementReady: false,
+      implementEnabled: false,
+    });
+    expect(plan.flowPath).toBe("f/factory/pr_fix");
+  });
+
+  test("restarts a restored expired issue like an expired one", () => {
+    const restored = asBeforeActionableCancel(cancelled, {
+      from_status: "expired",
+      note: actionableCancelNote("closed"),
+    });
+    const plan = computeRestartPlan(restored, {
+      implementReady: false,
+      implementEnabled: false,
+    });
+    expect(plan.toStatus).toBe("requirements_generating");
   });
 });
 

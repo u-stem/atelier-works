@@ -19,6 +19,7 @@ import {
   getNoticeById,
   getRequirementDraft,
   getWorkItem,
+  hasNonTerminalPrWorkItem,
   hasPriorReview,
   hasUnfinishedPrRun,
   insertApprovalRequest,
@@ -36,6 +37,7 @@ import {
   latestFixRound,
   latestPrWorkItem,
   latestRequirementsApproval,
+  latestStatusEvent,
   listActionableWorkItems,
   listActive,
   listActiveIssueWorkItems,
@@ -855,6 +857,58 @@ describe("listActive", () => {
     ]);
     const items = await listActive(sql);
     expect(items).toHaveLength(2);
+  });
+});
+
+describe("latestStatusEvent", () => {
+  test("returns null when no transition was recorded", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await latestStatusEvent(1, "cancelled", sql)).toBeNull();
+  });
+
+  test("reads the previous status and the note", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ from_status: "failed", note: "reconcile: closed (actionable)" }],
+    ]);
+    expect(await latestStatusEvent(1, "cancelled", sql)).toEqual({
+      from_status: "failed",
+      note: "reconcile: closed (actionable)",
+    });
+  });
+
+  test("rejects an unknown previous status", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ from_status: "bogus", note: null }],
+    ]);
+    await expect(latestStatusEvent(1, "cancelled", sql)).rejects.toThrow(
+      "unknown status",
+    );
+  });
+
+  test("looks at the newest transition into the status", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await latestStatusEvent(1, "cancelled", sql);
+    expect(calls[0]?.text).toContain("ORDER BY occurred_at DESC, id DESC");
+  });
+});
+
+describe("hasNonTerminalPrWorkItem", () => {
+  test("is true when a row exists", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 3 }]]);
+    expect(await hasNonTerminalPrWorkItem("o", "r", 7, sql)).toBe(true);
+  });
+
+  test("is false when no row exists", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await hasNonTerminalPrWorkItem("o", "r", 7, sql)).toBe(false);
+  });
+
+  test("passes the terminal statuses as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasNonTerminalPrWorkItem("o", "r", 7, sql);
+    expect(calls[0]?.values).toContainEqual(
+      expect.arrayContaining(["cancelled", "failed"]),
+    );
   });
 });
 

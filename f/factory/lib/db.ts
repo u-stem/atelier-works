@@ -554,6 +554,64 @@ export async function newestNewerIssueCycle(
   return { id: parseId(row.id, "id"), status };
 }
 
+/** `factory.work_item_events`の1行のうち、再開の判断に要る部分。 */
+export type StatusEventSummary = {
+  readonly from_status: WorkItemStatus | null;
+  readonly note: string | null;
+};
+
+/**
+ * 作業項目が`toStatus`へ移った最新の遷移の記録を返す。無ければ`null`を返す。
+ * `retry_work_item`が、取り消された作業項目の取り消す前の状態と理由の注記を読むために使う。
+ */
+export async function latestStatusEvent(
+  workItemId: number,
+  toStatus: WorkItemStatus,
+  sql: SqlClient = defaultSqlClient,
+): Promise<StatusEventSummary | null> {
+  const rows = await sql`
+    SELECT from_status, note FROM factory.work_item_events
+    WHERE work_item_id = ${workItemId}::bigint AND to_status = ${toStatus}
+    ORDER BY occurred_at DESC, id DESC
+    LIMIT 1
+  `.fetch();
+  const row = rows[0];
+  if (row === undefined) return null;
+  const from = row.from_status;
+  if (
+    from !== null &&
+    (typeof from !== "string" || !isOneOf(from, WORK_ITEM_STATUSES))
+  ) {
+    throw new Error(`db: latestStatusEvent: unknown status ${String(from)}`);
+  }
+  return {
+    from_status: from,
+    note: parseNullableString(row.note, "note"),
+  };
+}
+
+/**
+ * PRに紐づく`pr_review`か`pr_fix`の作業項目のうち、終端でないものがあるかを返す。
+ * 閉じたPRのworktreeを消す前に、そのPRをまだ使う処理が無いことを確かめるために使う。
+ */
+export async function hasNonTerminalPrWorkItem(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  const terminal: string[] = [...TERMINAL_WORK_ITEM_STATUSES];
+  const rows = await sql`
+    SELECT id FROM factory.work_items
+    WHERE owner = ${owner} AND repo = ${repo}
+      AND kind IN ('pr_review', 'pr_fix')
+      AND pr_number = ${prNumber}::integer
+      AND NOT (status = ANY(${terminal}))
+    LIMIT 1
+  `.fetch();
+  return rows.length > 0;
+}
+
 const ACTIVE_ISSUE_INDEX_NAME = "work_items_active_issue_key";
 
 /**

@@ -1,18 +1,25 @@
 // `poll_issues.ts`の`reconcileClosedActionableItems`と、その判断の純粋関数
-// (`lib/poll_support.ts`の`groupActionableTargets`、`selectTargetBatch`、
-// `parseActionableCursor`)のテスト。
+// (`lib/poll_support.ts`の`groupActionableTargets`、`rotateTargets`、`isCloserAllowed`、
+// `statusBeforeActionableCancel`など)のテスト。
 // 閉じたIssueやPRの終端の失敗を`cancelled`にして要対応から外す経路で、
 // 状態の競合、1回の実行の上限、順番の回し方を確かめる。
 
-import { describe, expect, spyOn, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
+import { GitHubHttpError } from "../../f/factory/lib/github.ts";
 import type { Logger } from "../../f/factory/lib/log.ts";
 import {
+  actionableCancelNote,
   groupActionableTargets,
+  isCloserAllowed,
   parseActionableCursor,
-  selectTargetBatch,
-  type TargetBatch,
+  rotateTargets,
+  statusBeforeActionableCancel,
 } from "../../f/factory/lib/poll_support.ts";
-import type { WorkItem, WorkItemStatus } from "../../f/factory/lib/types.ts";
+import type {
+  LabelerAssociation,
+  WorkItem,
+  WorkItemStatus,
+} from "../../f/factory/lib/types.ts";
 import {
   type ActionableReconcileDeps,
   reconcileClosedActionableItems,
@@ -80,6 +87,15 @@ describe("groupActionableTargets", () => {
     ]);
   });
 
+  test("carries the owner, repo and number of the target", () => {
+    const [target] = groupActionableTargets([prItem({ id: 3 })]);
+    expect([target?.owner, target?.repo, target?.number]).toEqual([
+      "octo-owner",
+      "atelier-works",
+      20,
+    ]);
+  });
+
   test("merges a review item and a fix item of the same pr into one target", () => {
     const targets = groupActionableTargets([
       prItem({ id: 5, kind: "pr_review" }),
@@ -111,70 +127,32 @@ describe("groupActionableTargets", () => {
   });
 });
 
-describe("selectTargetBatch", () => {
+describe("rotateTargets", () => {
   const targets = [1, 2, 3, 4, 5].map((id) => ({ id }));
+  const ids = (list: readonly { id: number }[]) => list.map((t) => t.id);
 
-  test("returns every target when they fit in the limit", () => {
-    const { batch } = selectTargetBatch(targets, null, 10);
-    expect(batch.map((target) => target.id)).toEqual([1, 2, 3, 4, 5]);
+  test("keeps the order without a cursor", () => {
+    expect(ids(rotateTargets(targets, null))).toEqual([1, 2, 3, 4, 5]);
   });
 
-  test("starts from the first target without a cursor", () => {
-    const { batch } = selectTargetBatch(targets, null, 2);
-    expect(batch.map((target) => target.id)).toEqual([1, 2]);
+  test("starts after the cursor and wraps around", () => {
+    expect(ids(rotateTargets(targets, 2))).toEqual([3, 4, 5, 1, 2]);
   });
 
-  test("starts after the cursor", () => {
-    const { batch } = selectTargetBatch(targets, 2, 2);
-    expect(batch.map((target) => target.id)).toEqual([3, 4]);
-  });
-
-  test("wraps around to the first target after the last one", () => {
-    const { batch } = selectTargetBatch(targets, 4, 3);
-    expect(batch.map((target) => target.id)).toEqual([5, 1, 2]);
+  test("starts over when the cursor is the last target", () => {
+    expect(ids(rotateTargets(targets, 5))).toEqual([1, 2, 3, 4, 5]);
   });
 
   test("starts over when the cursor is past every target", () => {
-    const { batch } = selectTargetBatch(targets, 99, 2);
-    expect(batch.map((target) => target.id)).toEqual([1, 2]);
+    expect(ids(rotateTargets(targets, 99))).toEqual([1, 2, 3, 4, 5]);
   });
 
-  test("sets the next cursor to the last target of the batch", () => {
-    const { nextCursor } = selectTargetBatch(targets, 2, 2);
-    expect(nextCursor).toBe(4);
+  test("starts at the first target after a cursor whose target is gone", () => {
+    expect(ids(rotateTargets([{ id: 1 }, { id: 4 }], 2))).toEqual([4, 1]);
   });
 
-  test("reports truncation when targets exceed the limit", () => {
-    const { truncated } = selectTargetBatch(targets, null, 2);
-    expect(truncated).toBe(true);
-  });
-
-  test("reports no truncation when targets fit in the limit", () => {
-    const { truncated } = selectTargetBatch(targets, null, 5);
-    expect(truncated).toBe(false);
-  });
-
-  test("returns an empty batch and no cursor for no targets", () => {
-    expect(selectTargetBatch([], 3, 2)).toEqual({
-      batch: [],
-      nextCursor: null,
-      truncated: false,
-    });
-  });
-
-  test("visits every target within ceil(n / limit) runs", () => {
-    const seen = new Set<number>();
-    let cursor: number | null = null;
-    for (let run = 0; run < 3; run += 1) {
-      const selected: TargetBatch<{ id: number }> = selectTargetBatch(
-        targets,
-        cursor,
-        2,
-      );
-      for (const target of selected.batch) seen.add(target.id);
-      cursor = selected.nextCursor;
-    }
-    expect([...seen].sort()).toEqual([1, 2, 3, 4, 5]);
+  test("returns an empty list for no targets", () => {
+    expect(rotateTargets([], 3)).toEqual([]);
   });
 });
 
@@ -196,6 +174,64 @@ describe("parseActionableCursor", () => {
   });
 });
 
+describe("isCloserAllowed", () => {
+  const ALLOWED: readonly LabelerAssociation[] = ["OWNER", "MEMBER"];
+
+  test("allows an association in the list", () => {
+    expect(isCloserAllowed("MEMBER", ALLOWED)).toBe(true);
+  });
+
+  test("denies an association outside the list", () => {
+    expect(isCloserAllowed("NONE", ALLOWED)).toBe(false);
+  });
+
+  test("denies when the association is unknown", () => {
+    expect(isCloserAllowed(null, ALLOWED)).toBe(false);
+  });
+});
+
+describe("statusBeforeActionableCancel", () => {
+  test("returns the previous status of a closed issue cancellation", () => {
+    expect(
+      statusBeforeActionableCancel({
+        from_status: "failed",
+        note: actionableCancelNote("closed"),
+      }),
+    ).toBe("failed");
+  });
+
+  test("returns the previous status of a closed pr cancellation", () => {
+    expect(
+      statusBeforeActionableCancel({
+        from_status: "needs_human",
+        note: actionableCancelNote("pr_closed"),
+      }),
+    ).toBe("needs_human");
+  });
+
+  test("ignores a cancellation with another note", () => {
+    expect(
+      statusBeforeActionableCancel({
+        from_status: "failed",
+        note: "reconcile: closed",
+      }),
+    ).toBeNull();
+  });
+
+  test("ignores a previous status that is not actionable", () => {
+    expect(
+      statusBeforeActionableCancel({
+        from_status: "implementing",
+        note: actionableCancelNote("closed"),
+      }),
+    ).toBeNull();
+  });
+
+  test("ignores a missing transition", () => {
+    expect(statusBeforeActionableCancel(null)).toBeNull();
+  });
+});
+
 type UpdateCall = {
   id: number;
   from: WorkItemStatus;
@@ -206,18 +242,24 @@ type UpdateCall = {
 
 const silentLog: Logger = { info() {}, warn() {}, error() {} };
 
-function harness(
-  items: readonly WorkItem[],
-  overrides: Partial<ActionableReconcileDeps> & {
-    closed?: readonly number[];
-    cursor?: unknown;
-  } = {},
-) {
-  const closed = new Set(overrides.closed ?? []);
+type HarnessOptions = {
+  closed?: readonly number[];
+  /** 閉じた人の`author_association`。既定は許可される`OWNER`。 */
+  association?: string | null;
+  cursor?: unknown;
+  activePr?: boolean;
+  failures?: Partial<ActionableReconcileDeps>;
+};
+
+function harness(items: readonly WorkItem[], options: HarnessOptions = {}) {
+  const closed = new Set(options.closed ?? []);
+  const association =
+    options.association === undefined ? "OWNER" : options.association;
   const fetched: number[] = [];
+  const closerLookups: number[] = [];
   const updates: UpdateCall[] = [];
   const worktrees: number[] = [];
-  const failures: { step: string; workItemId: number | null }[] = [];
+  const failures: { step: string; err: unknown }[] = [];
   const cursors: (number | null)[] = [];
   const deps: ActionableReconcileDeps = {
     listItems: async () => items,
@@ -225,29 +267,62 @@ function harness(
       fetched.push(number);
       return closed.has(number) ? "closed" : "open";
     },
+    getCloserAssociation: async (_owner, _repo, number) => {
+      closerLookups.push(number);
+      return association;
+    },
     updateStatus: async (id, from, to, flowJobId, note) => {
       updates.push({ id, from, to, flowJobId, note: note ?? null });
       return true;
     },
+    hasActivePrWorkItem: async () => options.activePr ?? false,
     removePrWorktrees: async (_owner, _repo, prNumber) => {
       worktrees.push(prNumber);
     },
-    recordFailure: async (step, _err, workItemId) => {
-      failures.push({ step, workItemId });
+    recordFailure: async (step, err) => {
+      failures.push({ step, err });
     },
-    getCursor: async () => overrides.cursor ?? null,
+    getCursor: async () => options.cursor ?? null,
     setCursor: async (cursor) => {
       cursors.push(cursor);
     },
-    ...overrides,
+    ...options.failures,
   };
-  return { deps, fetched, updates, worktrees, failures, cursors };
+  return {
+    deps,
+    fetched,
+    closerLookups,
+    updates,
+    worktrees,
+    failures,
+    cursors,
+  };
 }
 
-function run(deps: ActionableReconcileDeps, limit?: number) {
+const ALLOWED: readonly LabelerAssociation[] = [
+  "OWNER",
+  "MEMBER",
+  "COLLABORATOR",
+];
+
+function run(
+  deps: ActionableReconcileDeps,
+  limit?: number,
+  log: Logger = silentLog,
+) {
   return reconcileClosedActionableItems(
-    limit === undefined ? { log: silentLog } : { log: silentLog, limit },
+    {
+      log,
+      allowedAssociations: ALLOWED,
+      ...(limit === undefined ? {} : { limit }),
+    },
     deps,
+  );
+}
+
+function issues(count: number, base = 100): WorkItem[] {
+  return Array.from({ length: count }, (_, index) =>
+    workItem({ id: index + 1, issue_number: base + index + 1 }),
   );
 }
 
@@ -255,9 +330,7 @@ describe("reconcileClosedActionableItems", () => {
   test("cancels a failed issue item whose issue is closed", async () => {
     const { deps, updates } = harness(
       [workItem({ id: 1, flow_job_id: "j1" })],
-      {
-        closed: [10],
-      },
+      { closed: [10] },
     );
     await run(deps);
     expect(updates).toEqual([
@@ -306,9 +379,7 @@ describe("reconcileClosedActionableItems", () => {
   });
 
   test("removes the review worktrees of a closed pr", async () => {
-    const { deps, worktrees } = harness([prItem({ id: 2 })], {
-      closed: [20],
-    });
+    const { deps, worktrees } = harness([prItem({ id: 2 })], { closed: [20] });
     await run(deps);
     expect(worktrees).toEqual([20]);
   });
@@ -322,6 +393,15 @@ describe("reconcileClosedActionableItems", () => {
     expect(worktrees).toEqual([20]);
   });
 
+  test("keeps the worktrees while another work item of the pr is active", async () => {
+    const { deps, worktrees } = harness([prItem({ id: 2 })], {
+      closed: [20],
+      activePr: true,
+    });
+    await run(deps);
+    expect(worktrees).toEqual([]);
+  });
+
   test("does not remove worktrees for a closed issue", async () => {
     const { deps, worktrees } = harness([workItem({ id: 1 })], {
       closed: [10],
@@ -333,7 +413,7 @@ describe("reconcileClosedActionableItems", () => {
   test("does not remove worktrees when the transition lost the race", async () => {
     const { deps, worktrees } = harness([prItem({ id: 2 })], {
       closed: [20],
-      updateStatus: async () => false,
+      failures: { updateStatus: async () => false },
     });
     await run(deps);
     expect(worktrees).toEqual([]);
@@ -342,7 +422,7 @@ describe("reconcileClosedActionableItems", () => {
   test("does nothing more when the compare-and-swap fails", async () => {
     const { deps, failures } = harness([workItem({ id: 1 })], {
       closed: [10],
-      updateStatus: async () => false,
+      failures: { updateStatus: async () => false },
     });
     const result = await run(deps);
     expect({ cancelled: result.cancelled, failures }).toEqual({
@@ -372,68 +452,182 @@ describe("reconcileClosedActionableItems", () => {
     expect(fetched).toEqual([20]);
   });
 
-  test("records a failure and continues when GitHub lookup throws", async () => {
-    const { deps, updates, failures } = harness(
-      [
-        workItem({ id: 1, issue_number: 10 }),
-        workItem({ id: 2, issue_number: 11 }),
-      ],
-      {
-        closed: [11],
-        getIssueState: async (_owner, _repo, number) => {
-          if (number === 10) throw new Error("boom");
-          return "closed";
+  test("does not throw when the item list cannot be read", async () => {
+    const { deps } = harness([], {
+      failures: {
+        listItems: async () => {
+          throw new Error("db down");
         },
       },
-    );
-    await run(deps);
-    expect({ updates: updates.map((update) => update.id), failures }).toEqual({
-      updates: [2],
-      failures: [
-        {
-          step: "reconcile_actionable:octo-owner/atelier-works#10",
-          workItemId: 1,
-        },
-      ],
     });
+    expect(await run(deps)).toEqual({ cancelled: 0, checked: 0 });
+  });
+});
+
+describe("reconcileClosedActionableItems failures", () => {
+  const throwing = (err: Error): Partial<ActionableReconcileDeps> => ({
+    getIssueState: async (_owner, _repo, number) => {
+      if (number === 10) throw err;
+      return "closed";
+    },
+  });
+  const twoIssues = [
+    workItem({ id: 1, issue_number: 10 }),
+    workItem({ id: 2, issue_number: 11 }),
+  ];
+
+  test("records the failure with the target key and continues", async () => {
+    const { deps, updates, failures } = harness(twoIssues, {
+      failures: throwing(new Error("boom")),
+    });
+    await run(deps);
+    expect({
+      updates: updates.map((update) => update.id),
+      steps: failures.map((f) => f.step),
+    }).toEqual({
+      updates: [2],
+      steps: ["reconcile_actionable:octo-owner/atelier-works#10"],
+    });
+  });
+
+  test("does not record a 404 as a failure", async () => {
+    const { deps, failures } = harness(twoIssues, {
+      failures: throwing(new GitHubHttpError("not found", 404)),
+    });
+    await run(deps);
+    expect(failures).toEqual([]);
+  });
+
+  test("does not record a 410 as a failure", async () => {
+    const { deps, failures } = harness(twoIssues, {
+      failures: throwing(new GitHubHttpError("gone", 410)),
+    });
+    await run(deps);
+    expect(failures).toEqual([]);
+  });
+
+  test("warns when the target is gone", async () => {
+    const warnings: string[] = [];
+    const log: Logger = {
+      info() {},
+      warn: (message) => warnings.push(message),
+      error() {},
+    };
+    const { deps } = harness(twoIssues, {
+      failures: throwing(new GitHubHttpError("gone", 410)),
+    });
+    await run(deps, undefined, log);
+    expect(warnings).toEqual([
+      "reconcile: an actionable target is gone or inaccessible",
+    ]);
+  });
+
+  test("records a 500 as a failure", async () => {
+    const { deps, failures } = harness(twoIssues, {
+      failures: throwing(new GitHubHttpError("server error", 500)),
+    });
+    await run(deps);
+    expect(failures).toHaveLength(1);
   });
 
   test("records a failure and continues when the transition throws", async () => {
     const { deps, failures } = harness([workItem({ id: 1 })], {
       closed: [10],
-      updateStatus: async () => {
-        throw new Error("db down");
+      failures: {
+        updateStatus: async () => {
+          throw new Error("db down");
+        },
       },
     });
     await run(deps);
-    expect(failures.map((failure) => failure.workItemId)).toEqual([1]);
+    expect(failures.map((failure) => failure.step)).toEqual([
+      "reconcile_actionable:octo-owner/atelier-works#10",
+    ]);
   });
 
-  test("does not throw when the item list cannot be read", async () => {
-    const { deps } = harness([], {
-      listItems: async () => {
-        throw new Error("db down");
+  test("records a failure when the closer lookup throws", async () => {
+    const { deps, updates, failures } = harness([workItem({ id: 1 })], {
+      closed: [10],
+      failures: {
+        getCloserAssociation: async () => {
+          throw new Error("timeline failed");
+        },
       },
     });
-    expect(await run(deps)).toEqual({ cancelled: 0, checked: 0 });
-  });
-
-  test("does not notify Discord", async () => {
-    const fetchSpy = spyOn(globalThis, "fetch");
-    const { deps } = harness([workItem({ id: 1 })], { closed: [10] });
     await run(deps);
-    const calls = fetchSpy.mock.calls.length;
-    fetchSpy.mockRestore();
-    expect(calls).toBe(0);
+    expect({ updates, failures: failures.length }).toEqual({
+      updates: [],
+      failures: 1,
+    });
+  });
+});
+
+describe("reconcileClosedActionableItems closer check", () => {
+  test("cancels when the closer is allowed", async () => {
+    const { deps, updates } = harness([workItem({ id: 1 })], {
+      closed: [10],
+      association: "MEMBER",
+    });
+    await run(deps);
+    expect(updates).toHaveLength(1);
   });
 
-  test("asks GitHub for at most the limit of targets", async () => {
-    const items = [1, 2, 3, 4].map((n) =>
-      workItem({ id: n, issue_number: 100 + n }),
+  test("keeps the item when the closer is not allowed", async () => {
+    const { deps, updates } = harness([workItem({ id: 1 })], {
+      closed: [10],
+      association: "NONE",
+    });
+    await run(deps);
+    expect(updates).toEqual([]);
+  });
+
+  test("keeps the item when the closer cannot be determined", async () => {
+    const { deps, updates } = harness([workItem({ id: 1 })], {
+      closed: [10],
+      association: null,
+    });
+    await run(deps);
+    expect(updates).toEqual([]);
+  });
+
+  test("keeps the worktrees when the closer is not allowed", async () => {
+    const { deps, worktrees } = harness([prItem({ id: 2 })], {
+      closed: [20],
+      association: "NONE",
+    });
+    await run(deps);
+    expect(worktrees).toEqual([]);
+  });
+
+  test("does not look up the closer of an open target", async () => {
+    const { deps, closerLookups } = harness([workItem({ id: 1 })]);
+    await run(deps);
+    expect(closerLookups).toEqual([]);
+  });
+
+  test("looks up the closer once for a pr shared by a review item and a fix item", async () => {
+    const { deps, closerLookups } = harness(
+      [prItem({ id: 2, kind: "pr_review" }), prItem({ id: 3, kind: "pr_fix" })],
+      { closed: [20] },
     );
-    const { deps, fetched } = harness(items);
+    await run(deps);
+    expect(closerLookups).toEqual([20]);
+  });
+});
+
+describe("reconcileClosedActionableItems limit and rotation", () => {
+  test("stops after the limit of GitHub requests for open targets", async () => {
+    const { deps, fetched } = harness(issues(4));
     await run(deps, 3);
     expect(fetched).toHaveLength(3);
+  });
+
+  test("counts the closer lookup as a request", async () => {
+    const { deps, fetched } = harness(issues(4), {
+      closed: [101, 102, 103, 104],
+    });
+    await run(deps, 3);
+    expect(fetched).toEqual([101, 102]);
   });
 
   test("warns when targets exceed the limit", async () => {
@@ -443,28 +637,33 @@ describe("reconcileClosedActionableItems", () => {
       warn: (message) => warnings.push(message),
       error() {},
     };
-    const items = [1, 2, 3].map((n) => workItem({ id: n, issue_number: n }));
-    const { deps } = harness(items);
-    await reconcileClosedActionableItems({ log, limit: 2 }, deps);
+    const { deps } = harness(issues(3));
+    await run(deps, 2, log);
     expect(warnings).toEqual([
       "reconcile: actionable items exceed the per-run limit",
     ]);
   });
 
+  test("does not warn when every target was checked", async () => {
+    const warnings: string[] = [];
+    const log: Logger = {
+      info() {},
+      warn: (message) => warnings.push(message),
+      error() {},
+    };
+    const { deps } = harness(issues(2));
+    await run(deps, 5, log);
+    expect(warnings).toEqual([]);
+  });
+
   test("continues after the stored cursor", async () => {
-    const items = [1, 2, 3, 4].map((n) =>
-      workItem({ id: n, issue_number: 100 + n }),
-    );
-    const { deps, fetched } = harness(items, { cursor: { cursor: 2 } });
+    const { deps, fetched } = harness(issues(4), { cursor: { cursor: 2 } });
     await run(deps, 2);
     expect(fetched).toEqual([103, 104]);
   });
 
   test("stores the last checked target as the next cursor", async () => {
-    const items = [1, 2, 3, 4].map((n) =>
-      workItem({ id: n, issue_number: 100 + n }),
-    );
-    const { deps, cursors } = harness(items, { cursor: { cursor: 2 } });
+    const { deps, cursors } = harness(issues(4), { cursor: { cursor: 2 } });
     await run(deps, 2);
     expect(cursors).toEqual([4]);
   });
@@ -476,12 +675,11 @@ describe("reconcileClosedActionableItems", () => {
   });
 
   test("starts from the first target when the cursor cannot be read", async () => {
-    const items = [1, 2, 3].map((n) =>
-      workItem({ id: n, issue_number: 100 + n }),
-    );
-    const { deps, fetched } = harness(items, {
-      getCursor: async () => {
-        throw new Error("state unavailable");
+    const { deps, fetched } = harness(issues(3), {
+      failures: {
+        getCursor: async () => {
+          throw new Error("state unavailable");
+        },
       },
     });
     await run(deps, 2);
@@ -489,12 +687,31 @@ describe("reconcileClosedActionableItems", () => {
   });
 
   test("does not throw when the cursor cannot be stored", async () => {
-    const items = [1, 2, 3].map((n) => workItem({ id: n, issue_number: n }));
-    const { deps } = harness(items, {
-      setCursor: async () => {
-        throw new Error("state unavailable");
+    const { deps } = harness(issues(3), {
+      failures: {
+        setCursor: async () => {
+          throw new Error("state unavailable");
+        },
       },
     });
     expect((await run(deps, 2)).checked).toBe(2);
+  });
+
+  test("visits every target when the cursor is carried across runs", async () => {
+    let stored: unknown = null;
+    const seen = new Set<number>();
+    for (let round = 0; round < 3; round += 1) {
+      const { deps, fetched } = harness(issues(5), {
+        cursor: stored,
+        failures: {
+          setCursor: async (cursor) => {
+            stored = { cursor };
+          },
+        },
+      });
+      await run(deps, 2);
+      for (const number of fetched) seen.add(number);
+    }
+    expect([...seen].sort((a, b) => a - b)).toEqual([101, 102, 103, 104, 105]);
   });
 });

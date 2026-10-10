@@ -3,7 +3,10 @@
 // `buildReviewWorktreeDir`は`cleanup_workspaces.ts`も使う。
 
 import { describe, expect, test } from "bun:test";
-import { buildReviewWorktreeDir } from "../../f/factory/steps/pr_review_prepare.ts";
+import {
+  buildReviewWorktreeDir,
+  isReviewWorktreeOf,
+} from "../../f/factory/steps/pr_review_prepare.ts";
 import { decideReviewPrepare } from "../../f/factory/steps/pr_workflow_support.ts";
 
 describe("buildReviewWorktreeDir", () => {
@@ -11,6 +14,52 @@ describe("buildReviewWorktreeDir", () => {
     expect(
       buildReviewWorktreeDir("/workspaces/acme/widgets/main", 42, "abc1234"),
     ).toBe("/workspaces/acme/widgets/review-42-abc1234");
+  });
+});
+
+describe("isReviewWorktreeOf", () => {
+  const REPO_DIR = "/workspaces/acme/widgets/main";
+
+  test("matches the path buildReviewWorktreeDir creates", () => {
+    const path = buildReviewWorktreeDir(REPO_DIR, 42, "abc1234");
+    expect(isReviewWorktreeOf(REPO_DIR, 42, { path, detached: true })).toBe(
+      true,
+    );
+  });
+
+  test("does not match a worktree of another pr", () => {
+    const path = buildReviewWorktreeDir(REPO_DIR, 421, "abc1234");
+    expect(isReviewWorktreeOf(REPO_DIR, 42, { path, detached: true })).toBe(
+      false,
+    );
+  });
+
+  test("does not match a worktree that is not detached", () => {
+    const path = buildReviewWorktreeDir(REPO_DIR, 42, "abc1234");
+    expect(isReviewWorktreeOf(REPO_DIR, 42, { path, detached: false })).toBe(
+      false,
+    );
+  });
+
+  test("does not match the same name under another directory", () => {
+    const path = "/workspaces/acme/other/review-42-abc1234";
+    expect(isReviewWorktreeOf(REPO_DIR, 42, { path, detached: true })).toBe(
+      false,
+    );
+  });
+
+  test("does not match a directory nested below the repo's parent", () => {
+    const path = "/workspaces/acme/widgets/x/review-42-abc1234";
+    expect(isReviewWorktreeOf(REPO_DIR, 42, { path, detached: true })).toBe(
+      false,
+    );
+  });
+
+  test("does not match a name whose suffix is not a 7-digit hex sha", () => {
+    const path = "/workspaces/acme/widgets/review-42-abc1234-extra";
+    expect(isReviewWorktreeOf(REPO_DIR, 42, { path, detached: true })).toBe(
+      false,
+    );
   });
 });
 

@@ -978,6 +978,47 @@ export async function getIssueTimeline(
   return last;
 }
 
+export type ClosedTimelineEvent = {
+  readonly event: "closed" | "merged";
+  /** 閉じた人のログイン名。タイムラインに実行者が無いときは`null`。 */
+  readonly actorLogin: string | null;
+  readonly authorAssociation: LabelerAssociation | string | null;
+  readonly createdAt: string | null;
+};
+
+/**
+ * `GET .../timeline`をページ送りしながら取得し、最後の`closed`か`merged`のイベントを返す。
+ * IssueやPRは閉じられて開き直されることがあるので、見るべきなのは最新の閉じる操作である。
+ * 実行者が分からないイベントでも、より古い閉じる操作に取り替えず、実行者なしで返す。
+ * 一度も閉じられていなければ`null`を返す。
+ */
+export async function getIssueClosedEvent(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  number: number,
+): Promise<ClosedTimelineEvent | null> {
+  validateOwnerRepo(owner, repo);
+
+  const parsed = await callGhApiAll(
+    client,
+    `repos/${owner}/${repo}/issues/${number}/timeline?per_page=100`,
+  );
+
+  let last: ClosedTimelineEvent | null = null;
+  for (const raw of parsed) {
+    if (!isTimelineEventPayload(raw)) continue;
+    if (raw.event !== "closed" && raw.event !== "merged") continue;
+    last = {
+      event: raw.event,
+      actorLogin: isLoginPayload(raw.actor) ? raw.actor.login : null,
+      authorAssociation: parseAuthorAssociation(raw.author_association),
+      createdAt: typeof raw.created_at === "string" ? raw.created_at : null,
+    };
+  }
+  return last;
+}
+
 export type ClaimIssueOptions = {
   readonly triggerLabel: string;
   readonly assignee: string;

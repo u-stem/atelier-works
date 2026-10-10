@@ -1,6 +1,7 @@
 // 止まった作業項目を手動で再開するscript。`failed`・`needs_human`・
-// `expired`・`blocked`・`approved`から再開でき、再開するフローと遷移先の
-// 状態は種別で決まる(`computeRestartPlan`)。状態の変更はここで読んだ状態を
+// `expired`・`blocked`・`approved`から再開できる。閉じた対象を理由に
+// 要対応の照合が取り消した`cancelled`も、取り消す前の状態の作業項目として再開できる。
+// 再開するフローと遷移先の状態は種別で決まる(`computeRestartPlan`)。状態の変更はここで読んだ状態を
 // 前提にした比較交換なので、並行して状態が変わったら上書きせず再開をやめる。
 // 記録済みのflowジョブがまだ動いている(キュー待ちを含む)か、状態を読めないときは
 // 再開を拒否する。実装フローとpipelineへの再開は比較交換でflow_job_id(リース)を空にし、
@@ -19,8 +20,10 @@ import {
   getWorkItem,
   isActiveIssueUniqueViolation,
   latestRequirementsApproval,
+  latestStatusEvent,
   listActiveIssueWorkItems,
   newestNewerIssueCycle,
+  type StatusEventSummary,
   setFlowJobId,
   setFlowJobIdIfUnset,
   updateStatusIfCurrent,
@@ -32,7 +35,11 @@ import { IMPLEMENT_FLOW_PATH } from "./lib/implement_loop.ts";
 import { isRequirementsApprovedForAttempt } from "./lib/implement_support.ts";
 import { logger, maskSecrets } from "./lib/log.ts";
 import { PIPELINE_FLOW_PATH } from "./lib/pipeline_lease.ts";
-import { type JobState, readJobState } from "./lib/poll_support.ts";
+import {
+  type JobState,
+  readJobState,
+  statusBeforeActionableCancel,
+} from "./lib/poll_support.ts";
 import {
   isOneOf,
   TERMINAL_WORK_ITEM_STATUSES,
@@ -146,6 +153,23 @@ export async function activeIssueConflictErrorFrom(
   } catch {
     return activeIssueConflictError(workItem, []);
   }
+}
+
+/**
+ * 取り消された作業項目を、取り消す前の状態の作業項目として扱うために、状態を置き換えて返す。
+ * 対象は、`poll_issues`の要対応の照合が、要対応の状態(失敗、人の対応待ち、期限切れ)から
+ * 取り消した作業項目だけである。照合は対象のIssueやPRが閉じられたときに取り消すので、
+ * 閉じた対象を開き直した後に、再開できるようにするためである。
+ * ほかの理由の取り消し(新しいサイクルによる置き換えなど)や、取り消されていない作業項目は、そのまま返す。
+ * 状態の更新は取り消された状態を期待して行うので、置き換えるのは再開先を決めるときだけに使う。
+ */
+export function asBeforeActionableCancel<T extends Pick<WorkItem, "status">>(
+  workItem: T,
+  cancelEvent: StatusEventSummary | null,
+): T {
+  if (workItem.status !== "cancelled") return workItem;
+  const before = statusBeforeActionableCancel(cancelEvent);
+  return before === null ? workItem : { ...workItem, status: before };
 }
 
 /**
@@ -334,7 +358,13 @@ export async function main(work_item_id: number): Promise<RetryWorkItemResult> {
       await latestRequirementsApproval(work_item_id),
       workItem.attempt,
     );
-  const plan = computeRestartPlan(workItem, {
+  const restartItem = asBeforeActionableCancel(
+    workItem,
+    workItem.status === "cancelled"
+      ? await latestStatusEvent(work_item_id, "cancelled")
+      : null,
+  );
+  const plan = computeRestartPlan(restartItem, {
     implementReady,
     implementEnabled: config.implement_enabled,
   });
@@ -361,7 +391,10 @@ export async function main(work_item_id: number): Promise<RetryWorkItemResult> {
   if (refusal !== null) throw new Error(refusal);
 
   const leased = usesFlowJobIdLease(plan);
-  const note = `retry_work_item: restarted from ${workItem.status}`;
+  const note =
+    restartItem.status === workItem.status
+      ? `retry_work_item: restarted from ${workItem.status}`
+      : `retry_work_item: restarted from ${workItem.status} (was ${restartItem.status} before the closed target was cancelled)`;
   let moved: boolean;
   try {
     moved = leased

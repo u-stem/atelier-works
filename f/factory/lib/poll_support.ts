@@ -2,6 +2,7 @@
 // 各`main()`はこれらを呼び、その結果に従ってI/Oだけを行う。
 
 import { normalizeRepoUrl } from "./config.ts";
+import { ACTIONABLE_WORK_ITEM_STATUSES } from "./console_support.ts";
 import { isFlowJobId } from "./implement_launch_support.ts";
 import { maskSecrets } from "./log.ts";
 import {
@@ -420,7 +421,11 @@ export type ActionableTarget<T> = {
   readonly key: string;
   /** 束ねた作業項目のIDのうち最小のもの。回す順番とカーソルの基準になる。 */
   readonly id: number;
-  readonly items: readonly T[];
+  readonly owner: string;
+  readonly repo: string;
+  /** IssueまたはPRの番号。 */
+  readonly number: number;
+  readonly items: readonly [T, ...T[]];
 };
 
 /**
@@ -434,7 +439,16 @@ export function groupActionableTargets<
     "id" | "kind" | "owner" | "repo" | "issue_number" | "pr_number"
   >,
 >(items: readonly T[]): ActionableTarget<T>[] {
-  const byKey = new Map<string, { id: number; items: T[] }>();
+  const byKey = new Map<
+    string,
+    {
+      id: number;
+      owner: string;
+      repo: string;
+      number: number;
+      items: [T, ...T[]];
+    }
+  >();
   for (const item of items) {
     if (item.kind === "audit") continue;
     const number = item.kind === "issue" ? item.issue_number : item.pr_number;
@@ -442,47 +456,36 @@ export function groupActionableTargets<
     const key = `${item.owner}/${item.repo}#${String(number)}`;
     const group = byKey.get(key);
     if (group === undefined) {
-      byKey.set(key, { id: item.id, items: [item] });
+      byKey.set(key, {
+        id: item.id,
+        owner: item.owner,
+        repo: item.repo,
+        number,
+        items: [item],
+      });
     } else {
       group.id = Math.min(group.id, item.id);
       group.items.push(item);
     }
   }
   return [...byKey.entries()]
-    .map(([key, group]) => ({ key, id: group.id, items: group.items }))
+    .map(([key, group]) => ({ key, ...group }))
     .sort((a, b) => a.id - b.id);
 }
 
-export type TargetBatch<T> = {
-  readonly batch: T[];
-  /** 次の実行が続きから始めるための、今回の最後の対象の`id`。対象が無ければ`null`。 */
-  readonly nextCursor: number | null;
-  /** 対象の数が上限を超え、今回は一部しか選ばなかったとき`true`。 */
-  readonly truncated: boolean;
-};
-
 /**
- * `targets`(`id`の昇順)から、`cursor`の次を先頭にして最大`limit`件を選ぶ。
- * 末尾まで進んだら先頭に戻る。実行ごとに返した`nextCursor`を渡し直せば、
- * 開いたままの対象が続いても、ceil(件数 / limit)回の実行で全件を一巡する。
+ * `targets`(`id`の昇順)を、`cursor`の次を先頭にした順に並べ直す。
+ * 末尾の後は先頭に戻る。前回の実行が最後に調べた対象の`id`を`cursor`に渡せば、
+ * 打ち切られた対象から続きを調べられる。`cursor`が`null`なら並べ直さない。
  */
-export function selectTargetBatch<T extends { readonly id: number }>(
+export function rotateTargets<T extends { readonly id: number }>(
   targets: readonly T[],
   cursor: number | null,
-  limit: number,
-): TargetBatch<T> {
-  const after = targets.filter(
-    (target) => cursor === null || target.id > cursor,
-  );
-  const before = targets.filter(
-    (target) => cursor !== null && target.id <= cursor,
-  );
-  const batch = [...after, ...before].slice(0, limit);
-  return {
-    batch,
-    nextCursor: batch.at(-1)?.id ?? null,
-    truncated: targets.length > limit,
-  };
+): T[] {
+  if (cursor === null) return [...targets];
+  const after = targets.filter((target) => target.id > cursor);
+  const before = targets.filter((target) => target.id <= cursor);
+  return [...after, ...before];
 }
 
 /**
@@ -494,5 +497,50 @@ export function parseActionableCursor(value: unknown): number | null {
   const cursor = value.cursor;
   return isNumber(cursor) && Number.isInteger(cursor) && cursor >= 0
     ? cursor
+    : null;
+}
+
+/**
+ * 対象を閉じた人の`author_association`が、許可する関係に含まれるかを返す。
+ * 関係が分からない(`null`)ときは、許可しない。
+ * 第三者が自分のIssueやPRを閉じて、安全策で止まった作業項目を要対応の一覧から消せないようにするため。
+ */
+export function isCloserAllowed(
+  association: string | null,
+  allowed: readonly LabelerAssociation[],
+): boolean {
+  return association !== null && isOneOf(association, allowed);
+}
+
+/**
+ * 要対応の終端の作業項目を取り消すときの状態の注記。
+ * `retry_work_item`が、この照合で取り消した作業項目だけを再開できるよう、注記で見分ける。
+ */
+export function actionableCancelNote(reason: "closed" | "pr_closed"): string {
+  return `reconcile: ${reason} (actionable)`;
+}
+
+const ACTIONABLE_CANCEL_NOTES: readonly string[] = [
+  actionableCancelNote("closed"),
+  actionableCancelNote("pr_closed"),
+];
+
+/**
+ * `cancelled`への最新の遷移の記録から、取り消す前の状態を返す。
+ * 要対応の照合(`actionableCancelNote`の注記)が、要対応の状態から取り消した遷移でなければ`null`を返す。
+ * ほかの理由の取り消し(Issueが閉じられた直後のreconcile、新しいサイクルによる置き換えなど)は、再開の対象にしない。
+ */
+export function statusBeforeActionableCancel(
+  event: {
+    readonly from_status: WorkItemStatus | null;
+    readonly note: string | null;
+  } | null,
+): WorkItemStatus | null {
+  if (event === null || event.from_status === null || event.note === null) {
+    return null;
+  }
+  if (!ACTIONABLE_CANCEL_NOTES.includes(event.note)) return null;
+  return isOneOf(event.from_status, ACTIONABLE_WORK_ITEM_STATUSES)
+    ? event.from_status
     : null;
 }
