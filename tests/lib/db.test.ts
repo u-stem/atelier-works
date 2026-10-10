@@ -3405,9 +3405,16 @@ describe("getLatestDeployment", () => {
 
   test("returns the result of the newest row", async () => {
     const { sql } = createFakeSqlClient([
-      [{ result: "failed", sha_to: "bbb", occurred_at: NOW }],
+      [{ result: "failed", sha_to: "bbb" }],
     ]);
     expect((await getLatestDeployment(sql))?.result).toBe("failed");
+  });
+
+  test("returns the target sha of the newest row", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ result: "failed", sha_to: "bbb" }],
+    ]);
+    expect((await getLatestDeployment(sql))?.sha_to).toBe("bbb");
   });
 
   test("orders by newest first", async () => {

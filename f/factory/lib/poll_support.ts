@@ -55,54 +55,67 @@ export function filterByRepoAllowlist<
 /**
  * 食い違いを見てから、反映の停止とみなして知らせるまでの猶予(ミリ秒)。
  * mergeの直後から`self_update`が反映するまでの間は、必ず食い違う。
- * `self_update`は10分ごとに動くので、その2倍の20分を待てば、
- * 反映が1回遅れても通知にならず、2回続けて反映されなかったときだけ通知になる。
+ * 30分は、`self_update`の2周期(20分)に、`poll_issues`の1周期(5分)と、
+ * 反映にかかる時間の見込み(5分)を足した値である。
+ * 2つのスケジュールは毎時0分で位置が重なるので、20分ちょうどでは、
+ * 反映の直前に判定が先に動いて誤って知らせる境目に当たる。
  */
-export const DEPLOYED_SHA_GRACE_MS = 20 * 60 * 1000;
+export const DEPLOYED_SHA_GRACE_MS = 30 * 60 * 1000;
 
-/** 食い違っている版の組と、その組を最初に見た時刻(epochミリ秒)。Windmillのstateに保存する。 */
+/** Windmillのstateのうち、この判定が使うキー。ほかのキーは触らない。 */
+export const DEPLOYED_SHA_STATE_KEY = "deployed_sha_check";
+
+/**
+ * 反映済みの版(`deployed_sha`)が今の値になってから、食い違いを最初に見た時刻(epochミリ秒)。
+ * 数え直すのは`deployed_sha`が変わったとき(反映が進んだとき)だけで、
+ * self cloneのHEADが変わっても引き継ぐ。
+ * 反映が止まったままmergeが続いても、猶予を超えれば知らせるためである。
+ */
 export type DeployedShaState = {
-  readonly self_sha: string;
   readonly deployed_sha: string;
   readonly first_seen_ms: number;
 };
 
 /**
- * 保存済みのstateを読む。信頼できない入力として扱い、形が合わなければ`null`を返す
- * (最初に見た時刻を失うだけで、次の実行が作り直す)。
+ * 保存済みのstate全体から、この判定のキーの値を読む。信頼できない入力として扱い、
+ * 形が合わなければ`null`を返す(最初に見た時刻を失うだけで、次の実行が作り直す)。
  */
 export function parseDeployedShaState(value: unknown): DeployedShaState | null {
   if (!isRecord(value)) {
     return null;
   }
-  const { self_sha, deployed_sha, first_seen_ms } = value;
+  const entry = value[DEPLOYED_SHA_STATE_KEY];
+  if (!isRecord(entry)) {
+    return null;
+  }
+  const { deployed_sha, first_seen_ms } = entry;
   if (
-    typeof self_sha !== "string" ||
     typeof deployed_sha !== "string" ||
     !isNumber(first_seen_ms) ||
     !Number.isFinite(first_seen_ms)
   ) {
     return null;
   }
-  return { self_sha, deployed_sha, first_seen_ms };
+  return { deployed_sha, first_seen_ms };
 }
 
 export type DeployedShaDecision =
-  /** 一致した(または比べる対象が無い)。stateを消し、未解決のnoticeを解決する。 */
-  | { readonly action: "resolve"; readonly next_state: null }
-  /** 食い違いを新しく見た。stateを書くだけで、知らせない。 */
+  /** 一致した。stateのこのキーを消し、未解決のnoticeを解決する。 */
+  | { readonly action: "resolve" }
+  /** 食い違いを新しく見た、または反映が進んだ。stateを書くだけで、知らせない。 */
   | { readonly action: "record"; readonly next_state: DeployedShaState }
   /** 猶予の内にある。何もしない。 */
-  | { readonly action: "wait"; readonly next_state: DeployedShaState }
+  | { readonly action: "wait" }
   /** 猶予を超えて食い違っている。noticeを出す。 */
-  | { readonly action: "notify"; readonly next_state: DeployedShaState };
+  | { readonly action: "notify" };
 
 /**
  * self cloneのHEAD(`selfSha`)とデプロイ済みの版(`deployedSha`)から、取る行動を決める。
- * 版の組が前回と同じなら最初に見た時刻から猶予(`graceMs`)を超えたときだけ知らせ、
- * 組が変わったときは数え直す。
- * 最初に見た時刻が現在より後のとき(時計が戻ったとき、または壊れたstate)は、
- * 経過時間を負にして通知を止め続けないよう、今を最初に見た時刻として数え直す。
+ * `deployedSha`は空でないこと(空のときは呼び出し側が判定しない)。
+ * 食い違いは、最初に見た時刻から猶予(`graceMs`)を超えたときだけ知らせる。
+ * 数え直すのは、前回の`deployed_sha`と違うとき、前回が無いときと、
+ * 最初に見た時刻が現在より後のとき(時計が戻ったとき、または壊れたstate)である。
+ * 最後の場合は、経過時間が負になって通知を止め続けるのを防ぐ。
  */
 export function decideDeployedSha(input: {
   readonly selfSha: string;
@@ -112,63 +125,65 @@ export function decideDeployedSha(input: {
   readonly graceMs: number;
 }): DeployedShaDecision {
   const { selfSha, deployedSha, prev, nowMs, graceMs } = input;
-  if (deployedSha.length === 0 || deployedSha === selfSha) {
-    return { action: "resolve", next_state: null };
+  if (deployedSha === selfSha) {
+    return { action: "resolve" };
   }
-  const fresh: DeployedShaState = {
-    self_sha: selfSha,
-    deployed_sha: deployedSha,
-    first_seen_ms: nowMs,
-  };
   if (
     prev === null ||
-    prev.self_sha !== selfSha ||
     prev.deployed_sha !== deployedSha ||
     prev.first_seen_ms > nowMs
   ) {
-    return { action: "record", next_state: fresh };
+    return {
+      action: "record",
+      next_state: { deployed_sha: deployedSha, first_seen_ms: nowMs },
+    };
   }
   return nowMs - prev.first_seen_ms > graceMs
-    ? { action: "notify", next_state: prev }
-    : { action: "wait", next_state: prev };
+    ? { action: "notify" }
+    : { action: "wait" };
 }
 
 /**
- * self cloneのHEADと記録済みのデプロイ版が食い違うときのnoticeの本文。
- * 両方の版を含めるので、本文が同じなら版の組が同じである。
- * 重複して登録しない判定(`addNoticeUnlessUnresolved`)は本文の一致で行うので、
- * 時刻のような実行ごとに変わる値は入れない。
+ * 反映が止まっているときのnoticeの本文。
+ * 反映済みの版(`deployedSha`)を中心にし、今のself cloneのHEADは含めない。
+ * 重複して登録しない判定(`addNoticeUnlessUnresolved`)は本文の一致で行う。
+ * HEADを含めると、反映が止まっている間にmergeが続くたびに別のnoticeが増える。
+ * 時刻のような実行ごとに変わる値も入れない。
+ * 今のHEADは、ログ(`deployed_sha_mismatch notified`)と、self cloneのgitで分かる。
  * `hint`は、反映が止まっている原因の候補で、あれば末尾に添える。
  */
 export function deployedShaMismatchMessage(
-  selfSha: string,
   deployedSha: string,
   hint: string | null = null,
 ): string {
-  const base = `self cloneのHEAD(${selfSha})がf/factory/deployed_sha(${deployedSha})と一致しません`;
+  const base = `f/factory/deployed_sha(${deployedSha})から、self cloneのHEADへの反映が進んでいません`;
   return hint === null ? base : `${base}。${hint}`;
 }
 
 /** `factory.deployments`の直近の1行のうち、原因の候補を選ぶのに使う列。 */
 export type LatestDeployment = {
   readonly result: string;
+  readonly sha_to: string;
 };
 
 /**
  * 直近の反映の記録から、反映が止まっている原因の候補を言葉にする。
  * 断定せず候補だけを示す。続けて失敗しているスケジュールの通知
  * (`schedule_failing`)と役割が重ならないようにするため。
+ * 反映の失敗の候補にするのは、その記録が今のself cloneのHEAD(`selfSha`)への反映で、
+ * 失敗しているときだけである。古い版への失敗は、今のHEADを試した結果ではない。
  * 記録を読めなかったとき(`null`)は、候補を添えない。
  */
 export function deployedShaHint(
   latest: LatestDeployment | null,
+  selfSha: string,
 ): string | null {
   if (latest === null) {
     return null;
   }
-  return latest.result === "failed"
-    ? "原因の候補: 直近のself_updateの反映が失敗として記録されています"
-    : "原因の候補: self_updateのスケジュールが止まっているか、反映の記録より前で失敗しています";
+  return latest.result === "failed" && latest.sha_to === selfSha
+    ? "原因の候補: self_updateの反映が、今のself cloneのHEADで失敗しています"
+    : "原因の候補: self_updateのスケジュールが止まっているか、今のself cloneのHEADをまだ試していません";
 }
 
 export type DeployedShaCheckDeps = {
@@ -176,7 +191,8 @@ export type DeployedShaCheckDeps = {
   readonly deployedSha: string | null;
   readonly selfSha: string;
   readonly getState: () => Promise<unknown>;
-  readonly setState: (state: DeployedShaState | null) => Promise<void>;
+  /** Windmillのstateを書く。stateの全体を置き換えるので、ほかのキーを保った全体を渡す。 */
+  readonly setState: (state: Record<string, unknown>) => Promise<void>;
   readonly getLatestDeployment: () => Promise<LatestDeployment | null>;
   /** 同じ本文の未解決のnoticeが無ければ挿入してIDを返し、あれば`null`を返す。 */
   readonly addNotice: (record: NoticeRecord) => Promise<number | null>;
@@ -197,29 +213,43 @@ function errorText(err: unknown): string {
   return maskSecrets(err instanceof Error ? err.message : String(err));
 }
 
+/** `stored`からこの判定のキーだけを除いたオブジェクトを返す。 */
+function withoutDeployedShaState(
+  stored: Record<string, unknown>,
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(stored).filter(([key]) => key !== DEPLOYED_SHA_STATE_KEY),
+  );
+}
+
 /**
  * 版の食い違いを判定し、stateとnoticeに反映する。
+ * 変数が無い、または空のときは、まだ比べる対象が無いので、stateにもnoticeにも触れない。
  * stateを読めない、または書けないときは、猶予を数えられない。
  * その場合は、本当の反映の停止を見逃さないよう、猶予を待たずに知らせる
- * (同じ版の組のnoticeは重複して登録されないので、増えるのは1件までである)。
+ * (同じ本文のnoticeは重複して登録されない)。
  * stateの失敗とnoticeの解決の失敗は警告のログだけにし、判定は続ける。
  */
 export async function runDeployedShaCheck(
   deps: DeployedShaCheckDeps,
 ): Promise<DeployedShaCheckOutcome> {
   const { selfSha, deployedSha, log } = deps;
-  if (deployedSha === null) {
+  if (deployedSha === null || deployedSha.length === 0) {
     return "skipped";
   }
 
-  let prev: DeployedShaState | null = null;
+  let stored: Record<string, unknown> = {};
   let stateUsable = true;
   try {
-    prev = parseDeployedShaState(await deps.getState());
+    const raw = await deps.getState();
+    if (isRecord(raw)) {
+      stored = raw;
+    }
   } catch (err) {
     stateUsable = false;
     log.warn("deployed_sha state read failed", { error: errorText(err) });
   }
+  const prev = parseDeployedShaState(stored);
 
   const decision = decideDeployedSha({
     selfSha,
@@ -230,9 +260,9 @@ export async function runDeployedShaCheck(
   });
 
   if (decision.action === "resolve") {
-    if (prev !== null) {
+    if (stateUsable && DEPLOYED_SHA_STATE_KEY in stored) {
       try {
-        await deps.setState(null);
+        await deps.setState(withoutDeployedShaState(stored));
       } catch (err) {
         log.warn("deployed_sha state clear failed", { error: errorText(err) });
       }
@@ -256,7 +286,10 @@ export async function runDeployedShaCheck(
 
   if (decision.action === "record" && stateUsable) {
     try {
-      await deps.setState(decision.next_state);
+      await deps.setState({
+        ...stored,
+        [DEPLOYED_SHA_STATE_KEY]: decision.next_state,
+      });
       return "recorded";
     } catch (err) {
       log.warn("deployed_sha state write failed", { error: errorText(err) });
@@ -272,10 +305,13 @@ export async function runDeployedShaCheck(
   await deps.addNotice({
     kind: "deployed_sha_mismatch",
     message: deployedShaMismatchMessage(
-      selfSha,
       deployedSha,
-      deployedShaHint(latest),
+      deployedShaHint(latest, selfSha),
     ),
+  });
+  log.warn("deployed_sha_mismatch notified", {
+    self_sha: selfSha,
+    deployed_sha: deployedSha,
   });
   return "notified";
 }

@@ -916,11 +916,10 @@ export async function recordDeployment(
   return parseId(row.id, "id");
 }
 
-/** `factory.deployments`の最新の1行のうち、反映の成否を表す列。 */
+/** `factory.deployments`の最新の1行のうち、反映の成否と対象の版を表す列。 */
 export type LatestDeploymentRow = {
   readonly result: string;
   readonly sha_to: string;
-  readonly occurred_at: Date;
 };
 
 /** `factory.deployments`の最新の1行を返す。1行も無ければ`null`を返す。 */
@@ -928,7 +927,7 @@ export async function getLatestDeployment(
   sql: SqlClient = defaultSqlClient,
 ): Promise<LatestDeploymentRow | null> {
   const rows = await sql`
-    SELECT result, sha_to, occurred_at
+    SELECT result, sha_to
     FROM factory.deployments
     ORDER BY occurred_at DESC, id DESC
     LIMIT 1
@@ -940,7 +939,6 @@ export async function getLatestDeployment(
   return {
     result: parseRequiredString(row.result, "result"),
     sha_to: parseRequiredString(row.sha_to, "sha_to"),
-    occurred_at: parseDate(row.occurred_at, "occurred_at"),
   };
 }
 
