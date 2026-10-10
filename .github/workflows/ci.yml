@@ -65,9 +65,10 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           AFTER_SHA: ${{ github.sha }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          # `main`へのpushで、直近で成功した実行を調べるために`gh`が読む。
-          GH_TOKEN: ${{ github.token }}
-        run: bun run scripts/ci-scope.ts
+          # `main`へのpushで、直近で成功した実行を調べるために`gh`が読む。PRの実行には渡さない。
+          GH_TOKEN: ${{ github.event_name == 'push' && github.token || '' }}
+        # `bun run <名前>`は`package.json`のscriptsを先に解決するので、ファイルとして実行する。
+        run: bun ./scripts/ci-scope.ts
 
   check:
     # 常に動かす。lint、型検査、テスト、秘密情報の走査は、どの変更にも要る。
@@ -292,7 +293,8 @@ jobs:
 
       - name: Check the console lockfile policy
         # 依存を入れる前に、取得元がregistryとintegrityに限られることを確かめる。
-        run: bun run scripts/check-console-lockfile.ts console/bun.lock
+        # `bun run <名前>`は`package.json`のscriptsを先に解決するので、ファイルとして実行する。
+        run: bun ./scripts/check-console-lockfile.ts console/bun.lock
 
       - name: Install console dependencies
         run: bun install --cwd console --frozen-lockfile --ignore-scripts

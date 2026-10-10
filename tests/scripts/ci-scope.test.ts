@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -11,10 +12,12 @@ import { tmpdir } from "node:os";
 import { dirname, join, normalize } from "node:path";
 import {
   allScope,
+  type BaseLookup,
   DB_DEPENDENCY_FILES,
   decideScope,
   diffRangeOf,
   ENV_NAMES,
+  type FallbackReason,
   FLAGS,
   fetchLastSuccessfulSha,
   formatOutputs,
@@ -24,6 +27,7 @@ import {
   parseNulSeparated,
   readChangedPaths,
   readScopeEnv,
+  runGh,
   type Scope,
   type ScopeDeps,
   type ScopeEnv,
@@ -62,10 +66,18 @@ function noneScope(overrides: Partial<Scope>): Scope {
   };
 }
 
+function found(sha: string): BaseLookup {
+  return { sha };
+}
+
+function notFound(reason: FallbackReason): BaseLookup {
+  return { reason };
+}
+
 function depsOf(overrides: Partial<ScopeDeps>): ScopeDeps {
   return {
     readChangedPaths: () => [],
-    lastSuccessfulSha: () => null,
+    lastSuccessfulSha: () => notFound("no successful run"),
     isAncestor: () => true,
     ...overrides,
   };
@@ -299,14 +311,101 @@ describe("scopeOfPaths", () => {
   });
 
   test("does not match a prefix without the slash", () => {
-    expect(scopeOfPaths(["consoles/x.ts", "foo/f/x.ts"])).toEqual(
-      noneScope({}),
-    );
+    expect(scopeOfPaths(["consoles/x.ts"])).toEqual(allScope());
+  });
+
+  test("runs everything for a path no rule knows", () => {
+    expect(scopeOfPaths(["something/new.bin"])).toEqual(allScope());
   });
 
   test("combines flags across several paths", () => {
     expect(scopeOfPaths(["docs/a.md", "console/a.ts", "f/a.ts"])).toEqual(
       noneScope({ console: true, metadata: true }),
+    );
+  });
+});
+
+// 保護パスの一覧が設定として挙げるファイル。どのジョブの動作も変えうるので、全ジョブを動かす。
+const CONFIGURATION_PATHS: readonly string[] = [
+  ".mise/config.toml",
+  ".config/mise/config.toml",
+  ".mise.toml",
+  "mise.ci.toml",
+  "mise.local.toml",
+  "mise.lock",
+  ".tool-versions",
+  ".bun-version",
+  ".node-version",
+  ".nvmrc",
+  "bunfig.toml",
+  ".npmrc",
+  ".gitattributes",
+  ".gitmodules",
+  ".gitleaksignore",
+  ".env",
+  "lefthook-local.yml",
+  ".lefthook/pre-commit.yml",
+  ".husky/pre-commit",
+  ".githooks/pre-commit",
+  ".devcontainer/devcontainer.json",
+  ".yarnrc.yml",
+  ".mcp.json",
+  "vite.config.ts",
+];
+
+describe("scopeOfPaths for configuration files", () => {
+  for (const path of CONFIGURATION_PATHS) {
+    test(`runs everything for ${path}`, () => {
+      expect(scopeOfPaths([path])).toEqual(allScope());
+    });
+  }
+});
+
+// checkの検査だけで足りるパス。どのジョブも動かさない。
+const CHECK_ONLY_PATHS: readonly string[] = [
+  "docs/setup.md",
+  "docs/internals/console.md",
+  "README.md",
+  "AGENTS.md",
+  "tests/lib/db.test.ts",
+  "tests/scripts/lint-docs.test.ts",
+  ".claude/settings.json",
+  ".claude/skills/factory-docs/SKILL.md",
+  ".agents/skills/x/SKILL.md",
+  "templates/factory_config.resource.yaml",
+  "rt.d.ts",
+  "c_factory_config.resource-type.yaml",
+  "biome.json",
+  "lefthook.yml",
+  ".gitleaks.toml",
+  ".markdownlint-cli2.jsonc",
+  ".textlintrc.json",
+  ".gitignore",
+  "LICENSE",
+  ".github/ISSUE_TEMPLATE/config.yml",
+  ".github/PULL_REQUEST_TEMPLATE.md",
+  "scripts/lint-docs.ts",
+  "scripts/claude-hooks/bash-guard.ts",
+  "scripts/claude-hooks/run.sh",
+  "scripts/check-commit-msg.sh",
+];
+
+describe("scopeOfPaths for check-only files", () => {
+  for (const path of CHECK_ONLY_PATHS) {
+    test(`runs no job for ${path}`, () => {
+      expect(scopeOfPaths([path])).toEqual(noneScope({}));
+    });
+  }
+
+  test("a specific rule wins over the allow list for a test of the process lock", () => {
+    expect(scopeOfPaths(["tests/lib/process_lock.test.ts"])).toEqual(
+      noneScope({ worker: true }),
+    );
+  });
+
+  test("an additive rule wins over the allow list for Markdown under f/", () => {
+    expect(scopeOfPaths(["f/factory/README.md"])).toEqual(
+      noneScope({ metadata: true }),
     );
   });
 });
@@ -354,31 +453,41 @@ describe("parseLastSuccessfulSha", () => {
   test("returns the head_sha of the first run", () => {
     const json = JSON.stringify({ workflow_runs: [{ head_sha: SHA_A }] });
 
-    expect(parseLastSuccessfulSha(json)).toBe(SHA_A);
+    expect(parseLastSuccessfulSha(json)).toEqual({ sha: SHA_A });
   });
 
-  test("returns null when there is no run", () => {
-    expect(parseLastSuccessfulSha('{"workflow_runs":[]}')).toBeNull();
+  test("reports no successful run when the list is empty", () => {
+    expect(parseLastSuccessfulSha('{"workflow_runs":[]}')).toEqual({
+      reason: "no successful run",
+    });
   });
 
-  test("returns null for invalid JSON", () => {
-    expect(parseLastSuccessfulSha("not json")).toBeNull();
+  test("reports an invalid response for invalid JSON", () => {
+    expect(parseLastSuccessfulSha("not json")).toEqual({
+      reason: "invalid response",
+    });
   });
 
-  test("returns null when head_sha is not a SHA", () => {
+  test("reports an invalid response when head_sha is not a SHA", () => {
     const json = JSON.stringify({ workflow_runs: [{ head_sha: "--x" }] });
 
-    expect(parseLastSuccessfulSha(json)).toBeNull();
+    expect(parseLastSuccessfulSha(json)).toEqual({
+      reason: "invalid response",
+    });
   });
 
-  test("returns null when head_sha is all zeros", () => {
+  test("reports an invalid response when head_sha is all zeros", () => {
     const json = JSON.stringify({ workflow_runs: [{ head_sha: ZERO }] });
 
-    expect(parseLastSuccessfulSha(json)).toBeNull();
+    expect(parseLastSuccessfulSha(json)).toEqual({
+      reason: "invalid response",
+    });
   });
 
-  test("returns null when workflow_runs is missing", () => {
-    expect(parseLastSuccessfulSha("{}")).toBeNull();
+  test("reports an invalid response when workflow_runs is missing", () => {
+    expect(parseLastSuccessfulSha("{}")).toEqual({
+      reason: "invalid response",
+    });
   });
 });
 
@@ -386,7 +495,9 @@ describe("fetchLastSuccessfulSha", () => {
   const okOutput = JSON.stringify({ workflow_runs: [{ head_sha: SHA_A }] });
 
   test("returns the sha from the API output", () => {
-    expect(fetchLastSuccessfulSha("o/r", () => okOutput)).toBe(SHA_A);
+    expect(fetchLastSuccessfulSha("o/r", () => okOutput)).toEqual({
+      sha: SHA_A,
+    });
   });
 
   test("asks for the latest successful push run of main", () => {
@@ -405,102 +516,155 @@ describe("fetchLastSuccessfulSha", () => {
     ]);
   });
 
-  test("returns null when the API call fails", () => {
-    expect(fetchLastSuccessfulSha("o/r", () => null)).toBeNull();
+  test("reports gh failed when the API call fails", () => {
+    expect(fetchLastSuccessfulSha("o/r", () => null)).toEqual({
+      reason: "gh failed",
+    });
   });
 
-  test("does not call the API for an invalid repository", () => {
+  test("reports an invalid repository without calling the API", () => {
     let called = false;
 
-    fetchLastSuccessfulSha("o/../r", () => {
+    const lookup = fetchLastSuccessfulSha("o/../r", () => {
       called = true;
       return okOutput;
     });
 
-    expect(called).toBe(false);
+    expect([lookup, called]).toEqual([{ reason: "invalid repository" }, false]);
+  });
+});
+
+describe("runGh", () => {
+  const dirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  function fakeCommand(body: string): string {
+    const dir = mkdtempSync(join(tmpdir(), "ci-scope-gh-"));
+    dirs.push(dir);
+    const path = join(dir, "gh");
+    writeFileSync(path, `#!/bin/sh\n${body}\n`);
+    chmodSync(path, 0o755);
+    return path;
+  }
+
+  test("returns the standard output of a successful command", () => {
+    const command = fakeCommand('printf "%s" "$*"');
+
+    expect(runGh(["api", "x"], { command })).toBe("api x");
+  });
+
+  test("returns null for a non-zero exit code", () => {
+    const command = fakeCommand("echo out; exit 1");
+
+    expect(runGh(["api"], { command })).toBeNull();
+  });
+
+  test("returns null when the command cannot be started", () => {
+    expect(
+      runGh(["api"], { command: join(tmpdir(), "ci-scope-no-such-gh") }),
+    ).toBeNull();
+  });
+
+  test("returns null when the command exceeds the timeout", () => {
+    const command = fakeCommand("exec sleep 5");
+
+    expect(runGh(["api"], { command, timeoutMs: 200 })).toBeNull();
   });
 });
 
 describe("diffRangeOf", () => {
+  const push = envOf({ eventName: "push", afterSha: SHA_B });
+
   test("uses the merge base range for a pull request", () => {
     expect(
       diffRangeOf(
         envOf({ eventName: "pull_request", baseSha: SHA_A, headSha: SHA_B }),
         depsOf({}),
       ),
-    ).toBe(`${SHA_A}...${SHA_B}`);
+    ).toEqual({ range: `${SHA_A}...${SHA_B}` });
   });
 
   test("uses the last successful run to the current commit for a push", () => {
     expect(
-      diffRangeOf(
-        envOf({ eventName: "push", afterSha: SHA_B }),
-        depsOf({ lastSuccessfulSha: () => SHA_A }),
-      ),
-    ).toBe(`${SHA_A}..${SHA_B}`);
+      diffRangeOf(push, depsOf({ lastSuccessfulSha: () => found(SHA_A) })),
+    ).toEqual({ range: `${SHA_A}..${SHA_B}` });
   });
 
-  test("has no range when no run succeeded before", () => {
+  test("passes through the reason when no run succeeded before", () => {
     expect(
       diffRangeOf(
-        envOf({ eventName: "push", afterSha: SHA_B }),
-        depsOf({ lastSuccessfulSha: () => null }),
+        push,
+        depsOf({ lastSuccessfulSha: () => notFound("no successful run") }),
       ),
-    ).toBeNull();
+    ).toEqual({ reason: "no successful run" });
   });
 
-  test("has no range when the last successful run is the current commit", () => {
+  test("passes through the reason when gh failed", () => {
     expect(
       diffRangeOf(
-        envOf({ eventName: "push", afterSha: SHA_B }),
-        depsOf({ lastSuccessfulSha: () => SHA_B }),
+        push,
+        depsOf({ lastSuccessfulSha: () => notFound("gh failed") }),
       ),
-    ).toBeNull();
+    ).toEqual({ reason: "gh failed" });
   });
 
-  test("has no range when the last successful commit is not in the history", () => {
+  test("reports same sha when the last successful run is the current commit", () => {
+    expect(
+      diffRangeOf(push, depsOf({ lastSuccessfulSha: () => found(SHA_B) })),
+    ).toEqual({ reason: "same sha" });
+  });
+
+  test("reports not an ancestor when the last successful commit is not in the history", () => {
     expect(
       diffRangeOf(
-        envOf({ eventName: "push", afterSha: SHA_B }),
-        depsOf({ lastSuccessfulSha: () => SHA_A, isAncestor: () => false }),
+        push,
+        depsOf({
+          lastSuccessfulSha: () => found(SHA_A),
+          isAncestor: () => false,
+        }),
       ),
-    ).toBeNull();
+    ).toEqual({ reason: "not an ancestor" });
   });
 
-  test("has no range when the last successful sha is malformed", () => {
+  test("reports an invalid sha when the last successful sha is malformed", () => {
     expect(
       diffRangeOf(
-        envOf({ eventName: "push", afterSha: SHA_B }),
-        depsOf({ lastSuccessfulSha: () => "--output=x" }),
+        push,
+        depsOf({ lastSuccessfulSha: () => found("--output=x") }),
       ),
-    ).toBeNull();
+    ).toEqual({ reason: "invalid sha" });
   });
 
-  test("has no range for a push without the current commit", () => {
+  test("reports an invalid sha for a push without the current commit", () => {
     expect(
       diffRangeOf(
         envOf({ eventName: "push" }),
-        depsOf({ lastSuccessfulSha: () => SHA_A }),
+        depsOf({ lastSuccessfulSha: () => found(SHA_A) }),
       ),
-    ).toBeNull();
+    ).toEqual({ reason: "invalid sha" });
   });
 
-  test("has no range for a pull request without a base", () => {
+  test("reports an invalid sha for a pull request without a base", () => {
     expect(
       diffRangeOf(
         envOf({ eventName: "pull_request", headSha: SHA_B }),
         depsOf({}),
       ),
-    ).toBeNull();
+    ).toEqual({ reason: "invalid sha" });
   });
 
-  test("has no range for an unknown event", () => {
+  test("reports an unknown event", () => {
     expect(
       diffRangeOf(
         envOf({ eventName: "schedule", baseSha: SHA_A, headSha: SHA_B }),
         depsOf({}),
       ),
-    ).toBeNull();
+    ).toEqual({ reason: "unknown event" });
   });
 
   test("rejects a value that is not a SHA", () => {
@@ -513,7 +677,7 @@ describe("diffRangeOf", () => {
         }),
         depsOf({}),
       ),
-    ).toBeNull();
+    ).toEqual({ reason: "invalid sha" });
   });
 });
 
@@ -548,7 +712,7 @@ describe("decideScope", () => {
       decideScope(
         push,
         depsOf({
-          lastSuccessfulSha: () => null,
+          lastSuccessfulSha: () => notFound("no successful run"),
           readChangedPaths: () => ["docs/a.md"],
         }),
       ),
@@ -560,7 +724,7 @@ describe("decideScope", () => {
       decideScope(
         push,
         depsOf({
-          lastSuccessfulSha: () => SHA_B,
+          lastSuccessfulSha: () => found(SHA_B),
           readChangedPaths: () => ["docs/a.md"],
         }),
       ),
@@ -572,7 +736,7 @@ describe("decideScope", () => {
       decideScope(
         push,
         depsOf({
-          lastSuccessfulSha: () => SHA_C,
+          lastSuccessfulSha: () => found(SHA_C),
           isAncestor: () => false,
           readChangedPaths: () => ["docs/a.md"],
         }),
@@ -585,7 +749,7 @@ describe("decideScope", () => {
       decideScope(
         push,
         depsOf({
-          lastSuccessfulSha: () => SHA_A,
+          lastSuccessfulSha: () => found(SHA_A),
           readChangedPaths: () => ["docs/a.md"],
         }),
       ),
@@ -597,7 +761,7 @@ describe("decideScope", () => {
       decideScope(
         push,
         depsOf({
-          lastSuccessfulSha: () => SHA_A,
+          lastSuccessfulSha: () => found(SHA_A),
           readChangedPaths: () => ["f/a.ts"],
         }),
       ),
@@ -610,7 +774,7 @@ describe("decideScope", () => {
     decideScope(
       push,
       depsOf({
-        lastSuccessfulSha: () => SHA_A,
+        lastSuccessfulSha: () => found(SHA_A),
         readChangedPaths: (range) => {
           ranges.push(range);
           return [];
@@ -637,6 +801,42 @@ describe("decideScope", () => {
     expect(ranges).toEqual([`${SHA_A}...${SHA_B}`]);
   });
 
+  test("reports the reason when the base cannot be decided", () => {
+    const reasons: FallbackReason[] = [];
+
+    decideScope(
+      push,
+      depsOf({
+        lastSuccessfulSha: () => notFound("gh failed"),
+        report: (reason) => reasons.push(reason),
+      }),
+    );
+
+    expect(reasons).toEqual(["gh failed"]);
+  });
+
+  test("reports diff failed when the diff cannot be read", () => {
+    const reasons: FallbackReason[] = [];
+
+    decideScope(
+      pr,
+      depsOf({
+        readChangedPaths: () => null,
+        report: (reason) => reasons.push(reason),
+      }),
+    );
+
+    expect(reasons).toEqual(["diff failed"]);
+  });
+
+  test("reports nothing when the diff decides the scope", () => {
+    const reasons: FallbackReason[] = [];
+
+    decideScope(pr, depsOf({ report: (reason) => reasons.push(reason) }));
+
+    expect(reasons).toEqual([]);
+  });
+
   test("does not look up the last successful run for a pull request", () => {
     let looked = false;
 
@@ -645,7 +845,7 @@ describe("decideScope", () => {
       depsOf({
         lastSuccessfulSha: () => {
           looked = true;
-          return SHA_A;
+          return found(SHA_A);
         },
       }),
     );
@@ -873,7 +1073,7 @@ describe("readChangedPaths", () => {
 
     const scope = decideScope(envOf({ eventName: "push", afterSha: head }), {
       readChangedPaths: (range) => readChangedPaths(range, dir),
-      lastSuccessfulSha: () => success,
+      lastSuccessfulSha: () => found(success),
       isAncestor: (ancestor, descendant) =>
         isAncestor(ancestor, descendant, dir),
     });
@@ -1047,13 +1247,27 @@ describe("ci.yml wiring", () => {
     expect(env.GITHUB_REPOSITORY).toBe(expression("github.repository"));
   });
 
-  test("the scope step passes the workflow token as GH_TOKEN", () => {
+  test("the scope step passes the token only for pushes", () => {
     const env = recordAt(
       stepNamed("scope", "Determine which jobs to run"),
       "env",
     );
 
-    expect(env.GH_TOKEN).toBe(expression("github.token"));
+    expect(env.GH_TOKEN).toBe(
+      expression("github.event_name == 'push' && github.token || ''"),
+    );
+  });
+
+  test("the scope step runs the script as a file", () => {
+    expect(stepNamed("scope", "Determine which jobs to run").run).toBe(
+      "bun ./scripts/ci-scope.ts",
+    );
+  });
+
+  test("the console job runs the lockfile check as a file", () => {
+    expect(stepNamed("console", "Check the console lockfile policy").run).toBe(
+      "bun ./scripts/check-console-lockfile.ts console/bun.lock",
+    );
   });
 
   test("the workflow grants only contents: read by default", () => {
@@ -1178,15 +1392,159 @@ describe("running the script", () => {
   function runScript(
     cwd: string,
     env: Record<string, string>,
-  ): { exitCode: number; stdout: string } {
+  ): { exitCode: number; stdout: string; stderr: string } {
     const result = Bun.spawnSync([process.execPath, "run", SCRIPT], {
       cwd,
       env: { PATH: process.env.PATH ?? "", HOME: cwd, ...env },
       stdout: "pipe",
       stderr: "pipe",
     });
-    return { exitCode: result.exitCode, stdout: result.stdout.toString() };
+    return {
+      exitCode: result.exitCode,
+      stdout: result.stdout.toString(),
+      stderr: result.stderr.toString(),
+    };
   }
+
+  // 偽のghを置いたディレクトリを、PATHの先頭に足した値を返す。外部へは通信しない。
+  function pathWithFakeGh(body: string): string {
+    const bin = tempDir();
+    const path = join(bin, "gh");
+    writeFileSync(path, `#!/bin/sh\n${body}\n`);
+    chmodSync(path, 0o755);
+    return `${bin}:${process.env.PATH ?? ""}`;
+  }
+
+  // 基点の上に、f/の下だけを変えたcommitを重ねたリポジトリを作る。
+  function repoWithMetadataChange(): {
+    dir: string;
+    base: string;
+    head: string;
+  } {
+    const dir = tempDir();
+    gitIn(dir, "init", "-q");
+    writeFileSync(join(dir, "README.md"), "a\n");
+    gitIn(dir, "add", "-A");
+    gitIn(dir, "commit", "-q", "-m", "base");
+    const base = gitIn(dir, "rev-parse", "HEAD");
+    mkdirSync(join(dir, "f"));
+    writeFileSync(join(dir, "f", "a.ts"), "a\n");
+    gitIn(dir, "add", "-A");
+    gitIn(dir, "commit", "-q", "-m", "change");
+    return { dir, base, head: gitIn(dir, "rev-parse", "HEAD") };
+  }
+
+  function pushEnv(
+    head: string,
+    output: string,
+    path: string,
+  ): Record<string, string> {
+    return {
+      EVENT_NAME: "push",
+      AFTER_SHA: head,
+      GITHUB_REPOSITORY: "o/r",
+      GITHUB_OUTPUT: output,
+      PATH: path,
+    };
+  }
+
+  test("decides a push from the run the fake gh reports", () => {
+    const { dir, base, head } = repoWithMetadataChange();
+    const output = join(tempDir(), "out");
+    const json = JSON.stringify({ workflow_runs: [{ head_sha: base }] });
+
+    runScript(dir, pushEnv(head, output, pathWithFakeGh(`echo '${json}'`)));
+
+    expect(readFileSync(output, "utf8")).toBe(
+      formatOutputs(noneScope({ metadata: true, console: true })),
+    );
+  });
+
+  test("writes every flag as true when the fake gh fails", () => {
+    const { dir, head } = repoWithMetadataChange();
+    const output = join(tempDir(), "out");
+
+    runScript(dir, pushEnv(head, output, pathWithFakeGh("exit 1")));
+
+    expect(readFileSync(output, "utf8")).toBe(formatOutputs(allScope()));
+  });
+
+  test("explains on stderr that gh failed", () => {
+    const { dir, head } = repoWithMetadataChange();
+    const output = join(tempDir(), "out");
+
+    const result = runScript(
+      dir,
+      pushEnv(head, output, pathWithFakeGh("exit 1")),
+    );
+
+    expect(result.stderr).toContain("scope fallback: gh failed");
+  });
+
+  test("explains on stderr that no run succeeded", () => {
+    const { dir, head } = repoWithMetadataChange();
+    const output = join(tempDir(), "out");
+
+    const result = runScript(
+      dir,
+      pushEnv(head, output, pathWithFakeGh(`echo '{"workflow_runs":[]}'`)),
+    );
+
+    expect(result.stderr).toContain("scope fallback: no successful run");
+  });
+
+  test("explains on stderr that the response was invalid", () => {
+    const { dir, head } = repoWithMetadataChange();
+    const output = join(tempDir(), "out");
+
+    const result = runScript(
+      dir,
+      pushEnv(head, output, pathWithFakeGh("echo not-json")),
+    );
+
+    expect(result.stderr).toContain("scope fallback: invalid response");
+  });
+
+  test("explains on stderr that the base is the current commit", () => {
+    const { dir, head } = repoWithMetadataChange();
+    const output = join(tempDir(), "out");
+    const json = JSON.stringify({ workflow_runs: [{ head_sha: head }] });
+
+    const result = runScript(
+      dir,
+      pushEnv(head, output, pathWithFakeGh(`echo '${json}'`)),
+    );
+
+    expect(result.stderr).toContain("scope fallback: same sha");
+  });
+
+  test("explains on stderr that the event is unknown", () => {
+    const { dir } = repoWithMetadataChange();
+    const output = join(tempDir(), "out");
+
+    const result = runScript(dir, {
+      EVENT_NAME: "schedule",
+      GITHUB_OUTPUT: output,
+    });
+
+    expect(result.stderr).toContain("scope fallback: unknown event");
+  });
+
+  test("does not print values that came from outside", () => {
+    const { dir, head } = repoWithMetadataChange();
+    const output = join(tempDir(), "out");
+
+    const result = runScript(
+      dir,
+      pushEnv(
+        head,
+        output,
+        pathWithFakeGh("echo SECRET-LOOKING-OUTPUT; exit 1"),
+      ),
+    );
+
+    expect(result.stderr).not.toContain("SECRET-LOOKING-OUTPUT");
+  });
 
   test("writes the six flags of a pull request to GITHUB_OUTPUT", () => {
     const { dir, base, head } = repoWithConsoleChange();

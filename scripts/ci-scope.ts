@@ -46,12 +46,35 @@ export const ENV_NAMES = {
 
 export type ReadChangedPaths = (range: string) => readonly string[] | null;
 
+// 差分の基点を決められず、すべてのフラグを真にした理由。固定の語だけにする。
+// 外から来た文字列(APIの応答、環境変数の値)は、ログに出さない。
+export type FallbackReason =
+  | "unknown event"
+  | "invalid sha"
+  | "invalid repository"
+  | "gh failed"
+  | "invalid response"
+  | "no successful run"
+  | "same sha"
+  | "not an ancestor"
+  | "diff failed";
+
+export type BaseLookup =
+  | { readonly sha: string }
+  | { readonly reason: FallbackReason };
+
+export type DiffRange =
+  | { readonly range: string }
+  | { readonly reason: FallbackReason };
+
 export type ScopeDeps = {
   readonly readChangedPaths: ReadChangedPaths;
-  // 直近で成功した`main`のpushの実行のcommit。取れなければnull。
-  readonly lastSuccessfulSha: () => string | null;
+  // 直近で成功した`main`のpushの実行のcommit。取れなければ理由を返す。
+  readonly lastSuccessfulSha: () => BaseLookup;
   // ancestorがdescendantの履歴に含まれるか。commitが存在しなければfalse。
   readonly isAncestor: (ancestor: string, descendant: string) => boolean;
+  // すべてのフラグを真にした理由を受け取る。
+  readonly report?: (reason: FallbackReason) => void;
 };
 
 // `test:db`が実行するコードの、f/配下の依存。
@@ -177,6 +200,47 @@ const ADDITIVE_RULES: readonly Rule[] = [
   { matches: under("console/"), flags: ["console"] },
 ];
 
+// どのジョブも読まず、checkの検査だけで足りるパス。
+// 個別の規則と加算の規則に当たらなかったときだけ見る。ここに無いパスは、全ジョブを動かす。
+// 迷うパスは入れない。入れ忘れは余分な実行で済むが、入れすぎは検査の見逃しになるため。
+const NO_JOB_RULES: readonly Rule[] = [
+  // 文書。lint:docsとdocs:gen --checkはcheckが担う。
+  { matches: under("docs/"), flags: [] },
+  // ルートやその他の場所のMarkdown。
+  { matches: (path) => path.endsWith(".md"), flags: [] },
+  // テスト。実行するのはcheckだけ(プロセスロックとCIの判定のテストは先の規則が拾う)。
+  { matches: under("tests/"), flags: [] },
+  // エージェントの設定とスキル。CIのジョブは読まない。
+  { matches: under(".claude/", ".agents/"), flags: [] },
+  // bootstrapが初期値に使う雛形。CIのジョブは読まない。
+  { matches: under("templates/"), flags: [] },
+  // リソース型の定義と生成物。syncの対象(f/**)の外にあり、メタデータの入力ではない。
+  {
+    matches: exact("rt.d.ts", "c_factory_config.resource-type.yaml"),
+    flags: [],
+  },
+  // lintとフックと走査の設定。読むのはcheckのステップだけ。
+  {
+    matches: exact(
+      "biome.json",
+      "lefthook.yml",
+      ".gitleaks.toml",
+      ".textlintrc.json",
+      ".gitignore",
+      "LICENSE",
+    ),
+    flags: [],
+  },
+  { matches: under(".markdownlint"), flags: [] },
+  // 上で拾わなかったscripts/のTypeScript。db・worker・metadata・consoleが読むものは先の規則が拾う。
+  {
+    matches: (path) => path.startsWith("scripts/") && path.endsWith(".ts"),
+    flags: [],
+  },
+];
+
+// 順序は、個別の規則、加算の規則、許可リスト、既定の全ジョブ。
+// どの規則にも当たらないパスは、読むジョブが分からないので全ジョブを動かす。
 export function flagsOfPath(path: string): readonly Flag[] {
   for (const rule of EXCLUSIVE_RULES) {
     if (rule.matches(path)) {
@@ -191,7 +255,13 @@ export function flagsOfPath(path: string): readonly Flag[] {
       }
     }
   }
-  return [...flags];
+  if (flags.size > 0) {
+    return [...flags];
+  }
+  if (NO_JOB_RULES.some((rule) => rule.matches(path))) {
+    return [];
+  }
+  return FLAGS;
 }
 
 export function allScope(): Scope {
@@ -230,34 +300,41 @@ export function isValidRepository(repository: string): boolean {
   return repository.split("/").every((part) => part !== "." && part !== "..");
 }
 
-// ワークフローの実行の一覧のJSONから、先頭の実行のcommitを取り出す。形が違えばnull。
-export function parseLastSuccessfulSha(json: string): string | null {
+// ワークフローの実行の一覧のJSONから、先頭の実行のcommitを取り出す。
+function invalidResponse(): BaseLookup {
+  return { reason: "invalid response" };
+}
+
+export function parseLastSuccessfulSha(json: string): BaseLookup {
   let value: unknown;
   try {
     value = JSON.parse(json);
   } catch {
-    return null;
+    return invalidResponse();
   }
   if (
     typeof value !== "object" ||
     value === null ||
     !("workflow_runs" in value)
   ) {
-    return null;
+    return invalidResponse();
   }
   const runs = value.workflow_runs;
   if (!Array.isArray(runs)) {
-    return null;
+    return invalidResponse();
+  }
+  if (runs.length === 0) {
+    return { reason: "no successful run" };
   }
   const first: unknown = runs[0];
   if (typeof first !== "object" || first === null || !("head_sha" in first)) {
-    return null;
+    return invalidResponse();
   }
   const sha = first.head_sha;
   if (typeof sha !== "string" || !SHA.test(sha) || ZERO_SHA.test(sha)) {
-    return null;
+    return invalidResponse();
   }
-  return sha;
+  return { sha };
 }
 
 export type RunGh = (args: readonly string[]) => string | null;
@@ -266,45 +343,54 @@ export type RunGh = (args: readonly string[]) => string | null;
 export function fetchLastSuccessfulSha(
   repository: string,
   runGh: RunGh,
-): string | null {
+): BaseLookup {
   if (!isValidRepository(repository)) {
-    return null;
+    return { reason: "invalid repository" };
   }
   const output = runGh([
     "api",
     `repos/${repository}/actions/workflows/ci.yml/runs?branch=main&event=push&status=success&per_page=1`,
   ]);
-  return output === null ? null : parseLastSuccessfulSha(output);
+  return output === null
+    ? { reason: "gh failed" }
+    : parseLastSuccessfulSha(output);
 }
 
-// 差分を取る範囲。取れないときはnullを返す。
+// 差分を取る範囲。取れないときは理由を返す。
 // PRは基点との共通の祖先からの変更を見て、pushは直近で成功した実行から今のcommitまでを見る。
 export function diffRangeOf(
   env: ScopeEnv,
   deps: Pick<ScopeDeps, "lastSuccessfulSha" | "isAncestor">,
-): string | null {
+): DiffRange {
   if (env.eventName === "pull_request") {
     if (SHA.test(env.baseSha) && SHA.test(env.headSha)) {
-      return `${env.baseSha}...${env.headSha}`;
+      return { range: `${env.baseSha}...${env.headSha}` };
     }
-    return null;
+    return { reason: "invalid sha" };
   }
   if (env.eventName === "push") {
     if (!SHA.test(env.afterSha)) {
-      return null;
+      return { reason: "invalid sha" };
     }
-    const base = deps.lastSuccessfulSha();
+    const lookup = deps.lastSuccessfulSha();
+    if ("reason" in lookup) {
+      return lookup;
+    }
+    const base = lookup.sha;
+    if (!SHA.test(base)) {
+      return { reason: "invalid sha" };
+    }
     // 自分自身が基点だと差分が空になり、何も検査しないまま成功してしまう。
-    if (base === null || !SHA.test(base) || base === env.afterSha) {
-      return null;
+    if (base === env.afterSha) {
+      return { reason: "same sha" };
     }
     // 履歴に無いcommitや、今のcommitより後のcommitを基点にすると、差分が正しくならない。
     if (!deps.isAncestor(base, env.afterSha)) {
-      return null;
+      return { reason: "not an ancestor" };
     }
-    return `${base}..${env.afterSha}`;
+    return { range: `${base}..${env.afterSha}` };
   }
-  return null;
+  return { reason: "unknown event" };
 }
 
 // 親のプロセスのGIT_DIRなどを引き継ぐと、cwdのリポジトリを見ない。
@@ -350,13 +436,17 @@ export function isAncestor(
 }
 
 // `gh`を配列引数で呼ぶ。トークンは環境変数(GH_TOKEN)から`gh`が読む。
-export function runGh(args: readonly string[]): string | null {
+// 起動の失敗、0以外の終了コード、時間切れは、すべてnullにする。
+export function runGh(
+  args: readonly string[],
+  options: { readonly command?: string; readonly timeoutMs?: number } = {},
+): string | null {
   try {
-    const result = Bun.spawnSync(["gh", ...args], {
+    const result = Bun.spawnSync([options.command ?? "gh", ...args], {
       env: cleanEnv(),
       stdout: "pipe",
       stderr: "pipe",
-      timeout: 30_000,
+      timeout: options.timeoutMs ?? 30_000,
     });
     return result.exitCode === 0 ? result.stdout.toString() : null;
   } catch {
@@ -365,12 +455,14 @@ export function runGh(args: readonly string[]): string | null {
 }
 
 export function decideScope(env: ScopeEnv, deps: ScopeDeps): Scope {
-  const range = diffRangeOf(env, deps);
-  if (range === null) {
+  const target = diffRangeOf(env, deps);
+  if ("reason" in target) {
+    deps.report?.(target.reason);
     return allScope();
   }
-  const paths = deps.readChangedPaths(range);
+  const paths = deps.readChangedPaths(target.range);
   if (paths === null) {
+    deps.report?.("diff failed");
     return allScope();
   }
   const scope = scopeOfPaths(paths);
@@ -405,6 +497,7 @@ function main(): void {
     },
     lastSuccessfulSha: () => fetchLastSuccessfulSha(env.repository, runGh),
     isAncestor: (ancestor, descendant) => isAncestor(ancestor, descendant),
+    report: (reason) => console.error(`scope fallback: ${reason}`),
   });
   const outputs = formatOutputs(scope);
   // 名前を表示するときはJSONで包む。改行を含むパスがログの行を偽造しないようにするため。
