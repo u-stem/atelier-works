@@ -43,6 +43,7 @@ import {
   getLabelerLogin,
   getViewer,
   type IssueSearchItem,
+  LabelerCheckLimitError,
   searchIssues,
 } from "./lib/github.ts";
 import { parseFlowJobId } from "./lib/implement_launch_support.ts";
@@ -62,6 +63,7 @@ import {
   labelerPolicyFor,
   type ReconcileGithubState,
   readJobState,
+  recordLabelerCheckLimit,
 } from "./lib/poll_support.ts";
 import { postSupersededComments } from "./lib/supersede_support.ts";
 import type { FactoryConfig, WorkItem } from "./lib/types.ts";
@@ -391,15 +393,22 @@ async function reconcileActiveItems(
 /**
  * 見つかったIssueを、着手の判定にかける候補にする。
  * 付与者はトリガーラベルの最後の`labeled`イベントから取る。
- * timelineを取得できないIssueは候補に加えず、`recordFailure`に渡す。
+ * イベントを取得できないIssueは候補に加えず、`recordFailure`に渡す。
  * 付与者を確かめられないまま着手しないためで、次のポーリングで取得し直す。
+ * イベントが上限を超えたIssueも候補に加えず、`recordCheckLimit`でnoticeに残す。
  */
 export async function buildIssueCandidates(
   client: GhClient,
   found: readonly IssueSearchItem[],
   activeIssueKeys: ReadonlySet<string>,
   triggerLabel: string,
-  recordFailure: (step: string, err: unknown) => Promise<void>,
+  handlers: {
+    readonly recordFailure: (step: string, err: unknown) => Promise<void>;
+    readonly recordCheckLimit: (
+      item: IssueSearchItem,
+      label: string,
+    ) => Promise<void>;
+  },
 ): Promise<IssueCandidate[]> {
   const candidates: IssueCandidate[] = [];
   for (const item of found) {
@@ -424,8 +433,13 @@ export async function buildIssueCandidates(
         ),
       });
     } catch (err) {
-      await recordFailure(
-        `fetch_timeline:${item.owner}/${item.repo}#${item.number}`,
+      if (err instanceof LabelerCheckLimitError) {
+        // イベントが多すぎる対象は、失敗ではなく人の操作を求めるnoticeにする。
+        await handlers.recordCheckLimit(item, err.label);
+        continue;
+      }
+      await handlers.recordFailure(
+        `fetch_labeler:${item.owner}/${item.repo}#${item.number}`,
         err,
       );
     }
@@ -828,11 +842,21 @@ export async function processIssueDecisions(
         await countDenied(candidate, where);
         continue;
       }
+      // 取得の直前の確認は、取得の前の失敗として別に記録する。
+      // この時点でラベルは外れておらず、次のポーリングが拾い直す。
+      let confirmed: boolean;
       try {
-        if (!(await handlers.confirmLabeler(candidate))) {
-          await countDenied(candidate, where);
-          continue;
-        }
+        confirmed = await handlers.confirmLabeler(candidate);
+      } catch (err) {
+        failed += 1;
+        await handlers.recordFailure(`confirm_labeler:${where}`, err);
+        continue;
+      }
+      if (!confirmed) {
+        await countDenied(candidate, where);
+        continue;
+      }
+      try {
         const outcome = await handlers.claim(candidate);
         if (outcome === "claimed") claimed += 1;
         else skipped += 1;
@@ -1055,7 +1079,11 @@ export async function main(): Promise<{
     allowed,
     activeIssueKeys,
     config.trigger_label,
-    (step, err) => recordFailureSafe(step, err, log),
+    {
+      recordFailure: (step, err) => recordFailureSafe(step, err, log),
+      recordCheckLimit: (item, label) =>
+        recordLabelerCheckLimit(addNoticeUnlessUnresolved, item, label),
+    },
   );
   const labelerPolicy = labelerPolicyFor(viewer.login, config);
   const decisions = decideIssueActions(candidates, labelerPolicy);

@@ -94,6 +94,12 @@ describe("noticeKindLabel", () => {
     );
   });
 
+  test("translates the legacy labeler notice kind kept in the history", () => {
+    expect(noticeKindLabel("labeler_association_denied")).toBe(
+      "ラベル付与者の拒否",
+    );
+  });
+
   test("does not leak an unknown notice kind", () => {
     expect(noticeKindLabel("future_kind")).toBe(UNKNOWN_NOTICE_LABEL);
   });

@@ -1,10 +1,13 @@
 // `poll_prs.ts`の`buildPrCandidate`が、PRのトリガーラベルの付与者と作成者を
 // 候補に載せるまでの経路のテスト。
-// GitHubの応答は本物のAPIの形にする。timelineの`labeled`イベントは
+// GitHubの応答は本物のAPIの形にする。イベントの`labeled`は
 // `author_association`を持たない。
 
 import { describe, expect, test } from "bun:test";
-import type { PrSearchItem } from "../../f/factory/lib/github.ts";
+import {
+  LabelerCheckLimitError,
+  type PrSearchItem,
+} from "../../f/factory/lib/github.ts";
 import type { CommandResult } from "../../f/factory/lib/workspace.ts";
 import {
   type BuildPrCandidateDeps,
@@ -46,12 +49,12 @@ type World = {
   readonly timeline: CommandResult;
 };
 
-/** エンドポイントごとに応答する偽のrunner。timelineの呼び出し回数を数える。 */
+/** エンドポイントごとに応答する偽のrunner。イベントの取得回数を数える。 */
 function world(w: World) {
   let timelineCalls = 0;
   const run = async (argv: readonly string[]): Promise<CommandResult> => {
-    const endpoint = argv.find((arg) => arg.startsWith("repos/")) ?? "";
-    if (endpoint.includes("/timeline")) {
+    const endpoint = argv.find((arg) => arg.startsWith("repo")) ?? "";
+    if (endpoint.includes("/events")) {
       timelineCalls += 1;
       return w.timeline;
     }
@@ -159,6 +162,16 @@ describe("buildPrCandidate labelers", () => {
       timeline: ghApiOk([labeled(null, "factory:review")]),
     });
     expect(candidate.reviewLabelerLogin).toBeNull();
+  });
+
+  test("throws LabelerCheckLimitError when the events exceed the page limit", async () => {
+    const overflowing = ok(
+      ghApiStdout(200, [labeled("alice", "factory:review")], {
+        link: '<https://api.github.com/repositories/1/issues/7/events?per_page=100&page=2>; rel="next"',
+      }),
+    );
+    const result = build({ labels: ["factory:review"], timeline: overflowing });
+    await expect(result).rejects.toThrow(LabelerCheckLimitError);
   });
 
   test("throws when the timeline cannot be fetched", async () => {

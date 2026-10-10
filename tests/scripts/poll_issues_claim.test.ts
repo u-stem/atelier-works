@@ -769,7 +769,7 @@ describe("processIssueDecisions", () => {
       expect(claims).toEqual([]);
     });
 
-    test("records a failure when the labeler cannot be fetched", async () => {
+    test("records the failure under its own step when the labeler cannot be fetched", async () => {
       const { handlers: h, recorded } = handlers(async () => "claimed", {
         confirmLabeler: async () => {
           throw new Error("timeline failed");
@@ -777,7 +777,7 @@ describe("processIssueDecisions", () => {
       });
       await processIssueDecisions([claimDecision(3)], h);
       expect(recorded.failures).toEqual([
-        "claim_issue:octo-owner/atelier-works#3",
+        "confirm_labeler:octo-owner/atelier-works#3",
       ]);
     });
 

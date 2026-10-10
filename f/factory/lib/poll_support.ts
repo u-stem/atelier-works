@@ -6,6 +6,7 @@ import { isFlowJobId } from "./implement_launch_support.ts";
 import { maskSecrets } from "./log.ts";
 import {
   type FactoryConfig,
+  hasLabel,
   isBoolean,
   isNumber,
   isRecord,
@@ -107,16 +108,6 @@ export function isAllowedLabeler(
 }
 
 /**
- * `labels`に`label`が付いているかを返す。
- * GitHubのラベル名は大文字小文字を区別せず、検索もtimelineも区別しないので、
- * 比較も区別しない。
- */
-export function hasLabel(labels: readonly string[], label: string): boolean {
-  const wanted = label.toLowerCase();
-  return labels.some((name) => name.toLowerCase() === wanted);
-}
-
-/**
  * ラベルの付与者が許可されていないときに、noticeへ残す本文を返す。
  * 対象とラベルだけで決まり、時刻や付与者を含めない。
  * ラベルが残る間はポーリングのたびに同じ状況になるので、
@@ -131,6 +122,48 @@ export function labelerDeniedMessage(
   label: string,
 ): string {
   return `${target.owner}/${target.repo}#${String(target.number)}: ${label}ラベルを付けたのは許可されていないユーザーです`;
+}
+
+/** 付与者を確かめるイベントが上限を超えたときのnoticeの`kind`。 */
+export const LABELER_CHECK_LIMIT_KIND = "labeler_check_limit";
+
+/**
+ * 付与者を確かめるイベントが上限を超えたときに、noticeへ残す本文を返す。
+ * 対象とラベルだけで決まり、時刻などの揺れる値を含まない。
+ * 超えた対象はポーリングのたびに同じ状況になるので、
+ * 同じ本文の未解決のnoticeを重ねて登録しないためである。
+ */
+export function labelerCheckLimitMessage(
+  target: {
+    readonly owner: string;
+    readonly repo: string;
+    readonly number: number;
+  },
+  label: string,
+): string {
+  return `${target.owner}/${target.repo}#${String(target.number)}: ${label}ラベルの付与者を確かめるイベントが多すぎるため、着手できません。ラベルを外してください`;
+}
+
+/**
+ * 付与者を確かめるイベントが上限を超えたことを、noticeに残す。
+ * `addNoticeUnlessUnresolved`は、同じ本文の未解決のnoticeがあれば登録しない関数を渡す。
+ */
+export async function recordLabelerCheckLimit(
+  addNoticeUnlessUnresolved: (record: {
+    readonly kind: string;
+    readonly message: string;
+  }) => Promise<unknown>,
+  target: {
+    readonly owner: string;
+    readonly repo: string;
+    readonly number: number;
+  },
+  label: string,
+): Promise<void> {
+  await addNoticeUnlessUnresolved({
+    kind: LABELER_CHECK_LIMIT_KIND,
+    message: labelerCheckLimitMessage(target, label),
+  });
 }
 
 // ---------------------------------------------------------------------------

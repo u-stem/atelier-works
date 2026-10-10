@@ -51,20 +51,30 @@ function labeled(login: string | null, label: string) {
 async function actionFor(
   responses: Parameters<typeof createFakeCommandRunner>[0],
   policy: LabelerPolicy = VIEWER_ONLY,
-): Promise<{ action: string | undefined; failures: string[] }> {
+): Promise<{
+  action: string | undefined;
+  failures: string[];
+  limited: string[];
+}> {
   const fake = createFakeCommandRunner(responses);
   const failures: string[] = [];
+  const limited: string[] = [];
   const candidates = await buildIssueCandidates(
     { run: fake.run, ghToken: "tok" },
     [ITEM],
     new Set(),
     "factory",
-    async (step) => {
-      failures.push(step);
+    {
+      recordFailure: async (step) => {
+        failures.push(step);
+      },
+      recordCheckLimit: async (item, label) => {
+        limited.push(`${item.number}:${label}`);
+      },
     },
   );
   const decisions = decideIssueActions(candidates, policy);
-  return { action: decisions[0]?.action, failures };
+  return { action: decisions[0]?.action, failures, limited };
 }
 
 describe("issue claim by the trigger label's labeler", () => {
@@ -124,7 +134,30 @@ describe("issue claim by the trigger label's labeler", () => {
     const { failures } = await actionFor([
       ok(ghApiStdout(404, { message: "Not Found" })),
     ]);
-    expect(failures).toEqual(["fetch_timeline:octo-owner/atelier-works#12"]);
+    expect(failures).toEqual(["fetch_labeler:octo-owner/atelier-works#12"]);
+  });
+
+  const OVERFLOWING = Array.from({ length: 21 }, (_, i) =>
+    ok(
+      ghApiStdout(200, [labeled("octo-owner", "factory")], {
+        link: `<https://api.github.com/repositories/1/issues/12/events?per_page=100&page=${i + 2}>; rel="next"`,
+      }),
+    ),
+  );
+
+  test("does not claim an issue whose events exceed the page limit", async () => {
+    const { action } = await actionFor(OVERFLOWING);
+    expect(action).toBeUndefined();
+  });
+
+  test("records the issue and label whose events exceed the page limit", async () => {
+    const { limited } = await actionFor(OVERFLOWING);
+    expect(limited).toEqual(["12:factory"]);
+  });
+
+  test("records no failure for events that exceed the page limit", async () => {
+    const { failures } = await actionFor(OVERFLOWING);
+    expect(failures).toEqual([]);
   });
 
   test("skips every issue when the viewer could not be fetched", async () => {

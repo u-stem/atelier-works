@@ -46,6 +46,7 @@ import {
   getPr,
   getViewer,
   type Issue,
+  LabelerCheckLimitError,
   listPrReviewComments,
   listPrReviews,
   type PrSearchItem,
@@ -59,14 +60,14 @@ import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import {
   decidePrActions,
   filterByRepoAllowlist,
-  hasLabel,
   isAllowedLabeler,
   labelerDeniedMessage,
   labelerPolicyFor,
   type PrCandidate,
   type PrDecision,
+  recordLabelerCheckLimit,
 } from "./lib/poll_support.ts";
-import type { WorkItem } from "./lib/types.ts";
+import { hasLabel, type WorkItem } from "./lib/types.ts";
 import { runCommand } from "./lib/workspace.ts";
 import {
   describeReason,
@@ -361,7 +362,7 @@ export async function claimPr(
       log,
     );
   }
-  if (confirmed.labels.includes(triggerLabel)) {
+  if (hasLabel(confirmed.labels, triggerLabel)) {
     return {
       claimed: false,
       reason: `trigger label ${triggerLabel} still present after claim`,
@@ -863,7 +864,20 @@ export async function processPrDecisions(
     candidate: PrCandidate,
     label: string,
   ): Promise<boolean> => {
-    if (await handlers.confirmLabeler(candidate, label)) return true;
+    // 取得の直前の確認は、取得の前の失敗として別に記録する。
+    // この時点でラベルは外れておらず、次のポーリングが拾い直す。
+    let confirmed: boolean;
+    try {
+      confirmed = await handlers.confirmLabeler(candidate, label);
+    } catch (err) {
+      failed += 1;
+      await handlers.recordFailure(
+        `confirm_labeler:${candidate.owner}/${candidate.repo}#${candidate.number}`,
+        err,
+      );
+      return false;
+    }
+    if (confirmed) return true;
     await countDenied(candidate, label);
     return false;
   };
@@ -964,6 +978,25 @@ export async function processPrDecisions(
     }
   }
   return { reviewsStarted, fixesStarted, skipped, failed };
+}
+
+/**
+ * 付与者を確かめるイベントが上限を超えたPRを、noticeに残す。
+ * 記録に失敗してもポーリングは続けるので、警告のログだけにする。
+ */
+async function recordLabelerCheckLimitSafe(
+  target: PrSearchItem,
+  label: string,
+  log: Logger,
+): Promise<void> {
+  try {
+    await recordLabelerCheckLimit(addNoticeUnlessUnresolved, target, label);
+  } catch (err) {
+    log.warn("labeler_check_limit notice could not be recorded", {
+      target: `${target.owner}/${target.repo}#${String(target.number)}`,
+      error: errorMessage(err),
+    });
+  }
 }
 
 export async function main(): Promise<{
@@ -1068,6 +1101,12 @@ export async function main(): Promise<{
         }),
       );
     } catch (err) {
+      if (err instanceof LabelerCheckLimitError) {
+        // イベントが多すぎる対象は、失敗ではなく人の操作を求めるnoticeにする。
+        skipped += 1;
+        await recordLabelerCheckLimitSafe(found, err.label, log);
+        continue;
+      }
       failed += 1;
       await recordFailureSafe(
         `fetch_pr:${found.owner}/${found.repo}#${found.number}`,

@@ -97,15 +97,33 @@ Factory自身のリポジトリ(`factory_repo`)は、`repo_allowlist`の内容�
 
 ### ラベルで投入する
 
-Issueに`factory`ラベルを付けると、Factoryがそれを拾う。拾うのは、そのラベルを最後に付けたのが、FactoryのPATのアカウントか、`factory_config`の`allowed_labeler_logins`に挙げたアカウントのときだけである。
-通常は、Factoryを動かすアカウントでラベルを付ける。確認の仕組みは[ラベル付与の制限](security.md#ラベル付与の制限)にある。
+Issueに`factory`ラベルを付けると、Factoryがそれを拾う。
+拾うのは、そのラベルを最後に付けたのが、次のアカウントのときだけである。
 
-許可されていない人がラベルを付けたIssueは拾わない。Consoleの**通知**タブに、ラベルを付けたのが許可されていないユーザーである旨(`labeler_denied`)が残る。
+- FactoryのPATのアカウント。
+- `factory_config`の`allowed_labeler_logins`に挙げたアカウント。
+
+通常は、Factoryを動かすアカウントでラベルを付ける。
+確認の仕組みは[ラベル付与の制限](security.md#ラベル付与の制限)にある。
+
+許可されていない人がラベルを付けたIssueは拾わない。
+Consoleの**通知**タブに、ラベルを付けたのが許可されていないユーザーである旨(`labeler_denied`)が残る。
 付与者を確かめられなかったときも、同じく拾わない。
 許可された人がラベルを付け直し、FactoryがそのIssueを取得すると、このnoticeは解決済みになる。
-フォームで投入したIssueは`manual_intake_register`が登録するので、このnoticeは自動では解決されない。Consoleからも解決できない種類なので、DBの掃除が保持期間を過ぎてから解決済みにする。
+フォームで投入したIssueは`manual_intake_register`が登録するので、このnoticeは自動では解決されない。
+Consoleからも解決できない種類なので、DBの掃除が保持期間を過ぎてから解決済みにする。
 このnoticeの記録に失敗してもジョブは止まらず、**失敗**タブに`labeler_denied:<owner>/<repo>#<Issue番号>`として残る。
-付与者を確かめるタイムラインを取得できなかったときは、noticeを残さず、**失敗**タブに`fetch_timeline:<owner>/<repo>#<Issue番号>`として残る。次のポーリングで取得し直す。
+
+付与者を確かめるイベントを取得できなかったときは、noticeを残さず、**失敗**タブに`fetch_labeler:<owner>/<repo>#<Issue番号>`として残る。
+取得の直前の確認で取得できなかったときは、**失敗**タブに`confirm_labeler:<owner>/<repo>#<Issue番号>`として残る。
+どちらもラベルは外れていないので、操作は要らない。
+次のポーリングが、自動で拾い直す。
+ラベルを付け直すと付与者が変わるので、付け直さない。
+
+付与者を確かめるイベントが20ページを超えたIssueは、**通知**タブに`labeler_check_limit`が残る。
+このIssueは、ラベルが付いているあいだ、ポーリングのたびにAPIを使い続ける。
+人がラベルを外すまで、この状態は続く。
+拾わせたいときは、ラベルを外してから、許可された人が付け直す。
 
 GitHubのIssueフォーム(`.github/ISSUE_TEMPLATE/factory-task.yml`)は、ラベルを付けない。
 フォームが付けるラベルは起票者の権限によらず付くため、第三者の起票で作業が始まってしまうからである。
@@ -174,6 +192,7 @@ Issueにはラベルが無いので、次のポーリングは拾わない。
 4. 始まっていなければ、Issueに`factory`ラベルを付け直す。
 
 原因は、Consoleの**失敗**タブの`claim_issue:<owner>/<repo>#<Issue番号>`か、`poll_issues`のジョブのログで確かめる。
+`confirm_labeler:`と`fetch_labeler:`の失敗は、ラベルを外す前に起きているので、この手順の対象ではない。
 付与者の確認で見送ったIssueのnoticeを記録できなかった失敗は、同じタブに`labeler_denied:<owner>/<repo>#<Issue番号>`で残る。
 
 次の場合は、人の操作は要らない。
@@ -448,12 +467,15 @@ PRのレビュー(`pr_review`)と修正(`pr_fix`)の内部の挙動は、[PRワ�
 次のどれかでレビューが起動する。
 
 - PRに`factory:review`ラベルを付ける。
-- PRのレビュー依頼かassigneeにこのインスタンスのGitHubアカウントを入れる。まだレビューしていないcommitがあり、PRの作成者が許可されたアカウントのときだけ起動する。
+- PRのレビュー依頼かassigneeにこのインスタンスのGitHubアカウントを入れる。
+
+レビュー依頼かassigneeによる起動は、まだレビューしていないcommitがあり、PRの作成者が許可されたアカウントのときだけ起こる。
 
 `factory:review`ラベルは、最後に付けたのが許可されたアカウントのときだけ起動する。
 許可されるアカウントはIssueの`factory`ラベルと同じである。
 許可されていない人が付けたラベルは、外さずに残し、**通知**タブに`labeler_denied`を残す。
-レビュー依頼かassigneeによる起動と、追跡中のPRの新しいcommitによる再レビューは、PRの作成者が許可されたアカウントのときに限る。
+そのPRは、人がラベルを外すまで、ラベルを介さないレビューの自動検出も止まる。
+追跡中のPRの新しいcommitによる再レビューも、PRの作成者が許可されたアカウントのときに限る。
 forkのPRと第三者のPRは、許可されたアカウントがラベルを付けたときだけレビューされる。
 新しいcommitが入るたびに、ラベルを付け直す。
 
@@ -739,6 +761,7 @@ Consoleの**通知**タブには、Discordに送らない事項と、Discordに�
 | `issue_proposal_record_failed` | Issue化の提案を記録できなかった | PRのスレッドを確かめ、必要なら人がIssueを起票する |
 | `fix_feedback_association_excluded` | 許可されていない関係の人のコメントを、修正の材料から除いた | 必要なら許可された人が指示を書き直す |
 | `labeler_denied` | 許可されていない人が、または付与者を特定できないままトリガーラベルを付けた。Issueの`factory`と、PRの`factory:review`、`factory:fix`が対象 | 拾わせるなら、ラベルを外して、許可された人が付け直す。付ける人を増やすなら`allowed_labeler_logins`に足す |
+| `labeler_check_limit` | 付与者を確かめるイベントが20ページを超えた。ラベルが付いているあいだ、ポーリングのたびにAPIを使い続ける | ラベルを外す。拾わせるなら、外した後に許可された人が付け直す |
 | `claim_race_lost` | ほかのインスタンスか人が先にIssue・PRのトリガーラベルを外した。または、別の取得が同じIssueを先に取得した。Issueでは、同じ本文の未解決のnoticeがあるあいだは追加しない。PRでは、確認できずにトリガーラベルを付け直したときだけ、同じ本文の未解決のnoticeがあるあいだは追加しない | 理由がラベルを先に外されたことなら、人が意図して外したのか確かめる。意図していなければ、何もしない |
 | `pr_trigger_label_left_removed` | PRのトリガーラベルを外した後に取得を確認できず、ラベルが外れたままで作業項目も無い。本文は`<owner>/<repo>#<PR番号>: <ラベル>`で、PRごとに残る | [PRのトリガーラベルが外れたままになったとき](#prのトリガーラベルが外れたままになったとき)の手順で、ラベルが付いていないか、サイクルが始まっていないかを確かめてから付け直す |
 | `claim_assignee_missing` | Issueを取得したが、FactoryのGitHubユーザーをassigneeにできなかった。作業は続く | そのユーザーがリポジトリのpush権限を持つcollaboratorか確かめる |

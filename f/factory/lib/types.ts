@@ -80,6 +80,16 @@ export type GitIdentity = {
  */
 const GITHUB_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
+/**
+ * `labels`に`label`が付いているかを返す。
+ * GitHubのラベル名は大文字小文字を区別せず、検索もイベントも区別しないので、
+ * 比較も区別しない。
+ */
+export function hasLabel(labels: readonly string[], label: string): boolean {
+  const wanted = label.toLowerCase();
+  return labels.some((name) => name.toLowerCase() === wanted);
+}
+
 export function assertGitHubName(name: string): void {
   if (name === "." || name === "..") {
     throw new Error(`invalid GitHub name: ${JSON.stringify(name)}`);

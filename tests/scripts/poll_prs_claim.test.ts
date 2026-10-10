@@ -417,6 +417,24 @@ describe("claimPr", () => {
     });
   });
 
+  test("reports not claimed when the remaining label differs only in case", async () => {
+    const { run } = createFakeCommandRunner([
+      ghApiOk({}),
+      ghApiOk(fakeIssue(["Factory:Review"])),
+    ]);
+    const result = await claimPr(
+      { run, ghToken: "token" },
+      "octo-owner",
+      "atelier-works",
+      7,
+      "factory:review",
+    );
+    expect(result).toEqual({
+      claimed: false,
+      reason: "trigger label factory:review still present after claim",
+    });
+  });
+
   test("reports not claimed when the label was already gone (404)", async () => {
     const { run } = createFakeCommandRunner([
       ok(ghApiStdout(404, { message: "Not Found" })),
@@ -1434,6 +1452,22 @@ describe("processPrDecisions", () => {
       await run([REVIEW_BY_LABEL], handlers);
 
       expect(claimed).toEqual([]);
+    });
+
+    test("records the failure under its own step when the labeler cannot be fetched", async () => {
+      const steps: string[] = [];
+      const { handlers } = handlersWith({
+        confirmLabeler: async () => {
+          throw new Error("timeline failed");
+        },
+        recordFailure: async (step) => {
+          steps.push(step);
+        },
+      });
+
+      await run([REVIEW_BY_LABEL], handlers);
+
+      expect(steps).toEqual(["confirm_labeler:octo-owner/atelier-works#7"]);
     });
 
     test("counts the failure when the labeler cannot be fetched", async () => {

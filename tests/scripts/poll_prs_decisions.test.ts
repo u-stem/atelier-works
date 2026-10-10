@@ -4,11 +4,12 @@
 import { describe, expect, test } from "bun:test";
 import {
   decidePrActions,
-  hasLabel,
   type LabelerPolicy,
   labelerPolicyFor,
   type PrCandidate,
+  recordLabelerCheckLimit,
 } from "../../f/factory/lib/poll_support.ts";
+import { hasLabel } from "../../f/factory/lib/types.ts";
 
 const REVIEW_LABEL = "factory:review";
 const FIX_LABEL = "factory:fix";
@@ -352,5 +353,37 @@ describe("labelerPolicyFor", () => {
       allowed_labeler_logins: ["alice"],
     });
     expect(policy.allowedLogins).toEqual(["alice"]);
+  });
+});
+
+describe("recordLabelerCheckLimit", () => {
+  const TARGET = { owner: "octo-owner", repo: "atelier-works", number: 7 };
+
+  async function recorded(label = "factory:review") {
+    const records: { kind: string; message: string }[] = [];
+    await recordLabelerCheckLimit(
+      async (record) => {
+        records.push(record);
+      },
+      TARGET,
+      label,
+    );
+    return records;
+  }
+
+  test("records the kind that asks a person to act", async () => {
+    expect((await recorded())[0]?.kind).toBe("labeler_check_limit");
+  });
+
+  test("names the target and the label and asks to remove the label", async () => {
+    expect((await recorded())[0]?.message).toBe(
+      "octo-owner/atelier-works#7: factory:reviewラベルの付与者を確かめるイベントが多すぎるため、着手できません。ラベルを外してください",
+    );
+  });
+
+  test("builds the same message on the next poll", async () => {
+    const first = await recorded();
+    const second = await recorded();
+    expect(second[0]?.message).toBe(first[0]?.message);
   });
 });

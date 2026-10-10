@@ -15,11 +15,10 @@ import {
   GITHUB_RATE_LIMIT_MAX_WAIT_MS,
   GITHUB_TRANSIENT_RETRY_DELAY_MS,
   GitHubHttpError,
-  GitHubPaginationLimitError,
   GitHubRateLimitError,
   getBranchProtected,
   getIssue,
-  getLastLabeledEvent,
+  getLabelerLogin,
   getPr,
   getPrDiff,
   getPrFiles,
@@ -28,6 +27,7 @@ import {
   hasMarker,
   isFactoryPost,
   isOwnPost,
+  LabelerCheckLimitError,
   listIssueComments,
   listPrReviewComments,
   listPrReviews,
@@ -975,15 +975,19 @@ describe("getIssue", () => {
   });
 });
 
-describe("getLastLabeledEvent", () => {
-  /** 本物のtimelineの`labeled`イベントの形。`author_association`は持たない。 */
+describe("getLabelerLogin", () => {
+  /**
+   * 本物のissue events APIの`labeled`イベントの形。
+   * `GET /repos/{owner}/{repo}/issues/{n}/events`の応答から採った。
+   * `author_association`は持たない。
+   */
   function labeled(login: string | null, label: string) {
     return {
-      id: 1,
-      node_id: "LE_1",
-      url: "https://api.github.com/repos/acme/widgets/issues/events/1",
+      id: 31960112112,
+      node_id: "LE_lADOUrSMNc8AAAABTkVthM8AAAAHcPib8A",
+      url: "https://api.github.com/repos/acme/widgets/issues/events/31960112112",
+      actor: login === null ? null : { login, id: 1, type: "User" },
       event: "labeled",
-      actor: login === null ? null : { login },
       commit_id: null,
       commit_url: null,
       created_at: "2026-10-01T00:00:00Z",
@@ -994,19 +998,22 @@ describe("getLastLabeledEvent", () => {
 
   function unlabeled(login: string, label: string) {
     return {
-      id: 2,
+      ...labeled(login, label),
+      id: 31960112113,
       event: "unlabeled",
-      actor: { login },
       created_at: "2026-10-01T00:01:00Z",
-      label: { name: label, color: "ededed" },
     };
   }
 
-  async function lastLabeled(pages: readonly CommandResult[], label: string) {
+  const NEXT = (n: number) => ({
+    link: `<https://api.github.com/repositories/1/issues/5/events?per_page=100&page=${n}>; rel="next"`,
+  });
+
+  async function loginOf(pages: readonly CommandResult[], label: string) {
     const fake = createFakeCommandRunner(pages);
     return {
       fake,
-      event: await getLastLabeledEvent(
+      login: await getLabelerLogin(
         { run: fake.run, ghToken: "tok" },
         "acme",
         "widgets",
@@ -1016,22 +1023,29 @@ describe("getLastLabeledEvent", () => {
     };
   }
 
+  test("reads the events API, not the timeline", async () => {
+    const { fake } = await loginOf([ghApiOk([])], "factory");
+    expect(fake.calls[0]?.argv).toContain(
+      "repos/acme/widgets/issues/5/events?per_page=100",
+    );
+  });
+
   test("returns the actor of the last labeled event for the label", async () => {
-    const { event } = await lastLabeled(
+    const { login } = await loginOf(
       [
         ghApiOk([
           labeled("alice", "factory"),
-          { event: "commented", actor: { login: "bob" } },
+          { event: "assigned", actor: { login: "bob" } },
           labeled("carol", "factory"),
         ]),
       ],
       "factory",
     );
-    expect(event?.actorLogin).toBe("carol");
+    expect(login).toBe("carol");
   });
 
   test("ignores the labeled events of other labels", async () => {
-    const { event } = await lastLabeled(
+    const { login } = await loginOf(
       [
         ghApiOk([
           labeled("alice", "factory"),
@@ -1040,11 +1054,11 @@ describe("getLastLabeledEvent", () => {
       ],
       "factory",
     );
-    expect(event?.actorLogin).toBe("alice");
+    expect(login).toBe("alice");
   });
 
   test("returns the re-added label's actor after an unlabeled event", async () => {
-    const { event } = await lastLabeled(
+    const { login } = await loginOf(
       [
         ghApiOk([
           labeled("alice", "factory"),
@@ -1054,19 +1068,19 @@ describe("getLastLabeledEvent", () => {
       ],
       "factory",
     );
-    expect(event?.actorLogin).toBe("mallory");
+    expect(login).toBe("mallory");
   });
 
-  test("returns a null actor when the label's last event is unlabeled", async () => {
-    const { event } = await lastLabeled(
+  test("returns null when the label's last event is unlabeled", async () => {
+    const { login } = await loginOf(
       [ghApiOk([labeled("alice", "factory"), unlabeled("alice", "factory")])],
       "factory",
     );
-    expect(event?.actorLogin).toBeNull();
+    expect(login).toBeNull();
   });
 
   test("ignores an unlabeled event of another label", async () => {
-    const { event } = await lastLabeled(
+    const { login } = await loginOf(
       [
         ghApiOk([
           labeled("alice", "factory"),
@@ -1075,89 +1089,98 @@ describe("getLastLabeledEvent", () => {
       ],
       "factory",
     );
-    expect(event?.actorLogin).toBe("alice");
-  });
-
-  test("rejects a timeline that runs past the page limit", async () => {
-    const next = (n: number) => ({
-      link: `<https://api.github.com/repos/acme/widgets/issues/5/timeline?page=${n}>; rel="next"`,
-    });
-    const pages = Array.from({ length: 21 }, (_, i) =>
-      ok(ghApiStdout(200, [labeled("alice", "factory")], next(i + 2))),
-    );
-    await expect(lastLabeled(pages, "factory")).rejects.toThrow(
-      GitHubPaginationLimitError,
-    );
+    expect(login).toBe("alice");
   });
 
   test("matches the label name case-insensitively", async () => {
-    const { event } = await lastLabeled(
+    const { login } = await loginOf(
       [ghApiOk([labeled("alice", "Factory")])],
       "factory",
     );
-    expect(event?.actorLogin).toBe("alice");
+    expect(login).toBe("alice");
   });
 
-  test("returns a null actor when the event has no actor", async () => {
-    const { event } = await lastLabeled(
+  test("returns null when the labeled event has no actor", async () => {
+    const { login } = await loginOf(
       [ghApiOk([labeled("alice", "factory"), labeled(null, "factory")])],
       "factory",
     );
-    expect(event?.actorLogin).toBeNull();
+    expect(login).toBeNull();
   });
 
   test("returns null when no event labeled the label", async () => {
-    const { event } = await lastLabeled(
+    const { login } = await loginOf(
       [
         ghApiOk([
-          { event: "commented", actor: { login: "bob" } },
+          { event: "closed", actor: { login: "bob" } },
           labeled("alice", "documentation"),
         ]),
       ],
       "factory",
     );
-    expect(event).toBeNull();
+    expect(login).toBeNull();
   });
 
   test("follows the link header's rel=next page", async () => {
-    const { event } = await lastLabeled(
+    const { login } = await loginOf(
       [
-        ok(
-          ghApiStdout(200, [labeled("alice", "factory")], {
-            link: '<https://api.github.com/repos/acme/widgets/issues/5/timeline?page=2>; rel="next"',
-          }),
-        ),
+        ok(ghApiStdout(200, [labeled("alice", "factory")], NEXT(2))),
         ghApiOk([labeled("carol", "factory")]),
       ],
       "factory",
     );
-    expect(event?.actorLogin).toBe("carol");
+    expect(login).toBe("carol");
   });
 
   test("the second (paginated) call targets the URL from the link header", async () => {
-    const { fake } = await lastLabeled(
+    const { fake } = await loginOf(
       [
-        ok(
-          ghApiStdout(200, [labeled("alice", "factory")], {
-            link: '<https://api.github.com/repos/acme/widgets/issues/5/timeline?page=2>; rel="next"',
-          }),
-        ),
+        ok(ghApiStdout(200, [labeled("alice", "factory")], NEXT(2))),
         ghApiOk([]),
       ],
       "factory",
     );
     expect(fake.calls[1]?.argv).toContain(
-      "repos/acme/widgets/issues/5/timeline?page=2",
+      "repositories/1/issues/5/events?per_page=100&page=2",
     );
   });
 
-  test("rejects when the timeline request fails", async () => {
+  test("reads exactly twenty pages", async () => {
+    const pages = Array.from({ length: 20 }, (_, i) =>
+      i < 19
+        ? ok(ghApiStdout(200, [labeled("alice", "factory")], NEXT(i + 2)))
+        : ghApiOk([labeled("carol", "factory")]),
+    );
+    const { login } = await loginOf(pages, "factory");
+    expect(login).toBe("carol");
+  });
+
+  test("throws LabelerCheckLimitError past twenty pages", async () => {
+    const pages = Array.from({ length: 21 }, (_, i) =>
+      ok(ghApiStdout(200, [labeled("alice", "factory")], NEXT(i + 2))),
+    );
+    await expect(loginOf(pages, "factory")).rejects.toThrow(
+      LabelerCheckLimitError,
+    );
+  });
+
+  test("names the label in the LabelerCheckLimitError", async () => {
+    const pages = Array.from({ length: 21 }, (_, i) =>
+      ok(ghApiStdout(200, [labeled("alice", "factory")], NEXT(i + 2))),
+    );
+    const error = await loginOf(pages, "factory").catch((err: unknown) => err);
+    expect(error instanceof LabelerCheckLimitError && error.label).toBe(
+      "factory",
+    );
+  });
+
+  test("rejects when the events request fails", async () => {
     const fake = createFakeCommandRunner([
       ok(ghApiStdout(500, { message: "boom" })),
       ok(ghApiStdout(500, { message: "boom" })),
     ]);
     await expect(
-      getLastLabeledEvent(
+      getLabelerLogin(
         { run: fake.run, ghToken: "tok" },
         "acme",
         "widgets",
@@ -1306,6 +1329,16 @@ describe("claimIssue", () => {
 
     test("asks to retry later after a server error", async () => {
       const { client, opts } = setup([assigned, serverError, labelPresent()]);
+      const result = await claimIssue(client, "acme", "widgets", 5, opts);
+      expect(result).toEqual(retryResult);
+    });
+
+    test("asks to retry later when the remaining label differs only in case", async () => {
+      const { client, opts } = setup([
+        assigned,
+        serverError,
+        ghApiOk(issueBody(["Factory"], ["factory-bot"])),
+      ]);
       const result = await claimIssue(client, "acme", "widgets", 5, opts);
       expect(result).toEqual(retryResult);
     });

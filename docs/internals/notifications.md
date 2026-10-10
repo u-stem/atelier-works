@@ -203,6 +203,7 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `issue_proposal_record_failed` | `pr_fix_finish` | 対象、記録の失敗の理由 |
 | `fix_feedback_association_excluded` | `pr_fix_collect` | 対象、除外した投稿者 |
 | `labeler_denied` | `poll_issues`、`poll_prs` | 対象、許可されていないトリガーラベル |
+| `labeler_check_limit` | `poll_issues`、`poll_prs` | 対象、イベントが多すぎるトリガーラベル、ラベルを外す操作 |
 | `claim_race_lost` | `poll_issues`、`poll_prs`、`manual_intake_register` | 対象、取得できなかった理由 |
 | `claim_assignee_missing` | `poll_issues` | 対象、assigneeにできなかったユーザー、確かめる点 |
 | `pr_trigger_label_left_removed` | `poll_prs` | 対象のPRと、外れたままのトリガーラベル |
@@ -216,9 +217,10 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 `fix_reply_post_failed`は、返信の投稿に1件以上失敗したとき1件だけ残す。Discordには通知しない。`unsandboxed_check_commands`は、検査コマンドを実行するたびに残す。
 `cleanup_worktree_busy`は、1回の掃除でworktreeのパスごとに1件残す。Discordには通知しない。
 次のnoticeは、同じ本文の未解決のものがあるあいだは追加しない。
-対象は、次の5種類である。
+対象は、次の6種類である。
 
 - `labeler_denied`
+- `labeler_check_limit`
 - `claim_assignee_missing`
 - `claim_race_lost`
 - `supersede_failed`
