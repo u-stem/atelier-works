@@ -381,7 +381,7 @@ export async function main(
       workItemId: work_item_id,
       stage: "generate_requirements",
       attempt,
-      model: modelFor(config, "requirements", attempt),
+      model: modelFor(config, "requirements", 0),
       prompt,
       appendSystemPromptFile: systemPrompt.path,
       jsonSchema: REQUIREMENTS_SCHEMA,

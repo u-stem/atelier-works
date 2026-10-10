@@ -28,6 +28,7 @@ const SONNET_FAILURES_BEFORE_ESCALATION = 2;
  * `stage`で使うモデル名を返す。
  * `sonnetFailures`は、同じ作業でこれまでに`model`が失敗した回数である。
  * 要件定義の生成、PRのレビュー、監査は、回数にかかわらず`heavy_model`を使う。
+ * この3工程の呼び出しは、回数が使われないことを示すために0を渡す。
  */
 export function modelFor(
   config: Pick<FactoryConfig, "model" | "heavy_model">,

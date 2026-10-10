@@ -230,6 +230,10 @@ Claudeが要件の不足を返すと、完了のステップは次の順に処�
 | `daily_budget_usd` | `50` | 全フローで共有する1日の費用の上限(USD) |
 | `max_attempts` | `3` | 要件定義の試行回数の上限 |
 
+モデルの昇格に使う失敗の数は、同じ作業項目の同じ試行の`implement_rounds`のうち、結果が`check_failed`、`stalled`、`error`の行である。
+`error`と`check_failed`には、トークンの失効やAPIの障害、期限切れ、`.git`ポインタの不一致など、モデルの失敗でないものも入るので、実際より早く`heavy_model`に上がることがある。損失の上限は`implement_max_rounds`と予算で決まる。
+数え方の全体は[運用](../operations.md)の「モデルを使い分ける」にある。
+
 `check_commands_by_repo`は、`{"<owner>/<repo>": ["bun install --frozen-lockfile", "bun test"]}`の形で書く。workerで直接動く例は`bunx --bun tsc --noEmit`や`bunx --bun biome check .`である。実装フローは`allowed_check_commands`を使わない。
 
 1つのIssueにかかる費用の上限は、`implement_max_rounds × implement_max_budget_usd_per_run`が目安である。Claudeの不正な出力への再試行は、その実行の費用の上限をもう1回使うので、最悪でその2倍になる。

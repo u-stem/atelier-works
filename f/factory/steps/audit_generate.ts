@@ -481,7 +481,7 @@ export async function main(
       workItemId: work_item_id,
       stage: "audit",
       attempt: 1,
-      model: modelFor(config, "audit", 1),
+      model: modelFor(config, "audit", 0),
       prompt: auditPrompt({
         instanceName: config.instance_name,
         periodLabel: formatAuditPeriodLabel(period.start, period.end),

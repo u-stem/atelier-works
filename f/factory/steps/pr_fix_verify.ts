@@ -411,15 +411,13 @@ export async function main(
           factoryCloneDir: factory_clone_dir,
         });
         try {
+          const sonnetFailures = await countPrFixFailures(work_item_id);
           const retryResult = await runClaude({
             run: lockedRun,
             workItemId: work_item_id,
             stage: "pr_fix_verify_retry",
             attempt,
-            model: prFixRetryModel(
-              config,
-              await countPrFixFailures(work_item_id),
-            ),
+            model: prFixRetryModel(config, sonnetFailures),
             prompt: retryPrompt,
             appendSystemPromptFile: systemPrompt.path,
             jsonSchema: FIX_SCHEMA,

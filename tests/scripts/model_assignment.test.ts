@@ -45,4 +45,42 @@ describe("model assignment", () => {
     ).map(({ path }) => path);
     expect(missing).toEqual([]);
   });
+
+  // 失敗の数を数える関数の結果を、モデルの選択に渡す配線を守る。
+  // 数えた値を変数に入れ、その変数を渡す形を、ソースの文字列で照合する。
+  describe("failure count wiring", () => {
+    const wiring: [string, string, RegExp][] = [
+      [
+        "steps/pr_fix_apply.ts",
+        "countPrFixFailures(",
+        /const sonnetFailures = await countPrFixFailures\(\w+\);[\s\S]*modelFor\(config, "pr_fix", sonnetFailures\)/,
+      ],
+      [
+        "steps/pr_fix_verify.ts",
+        "countPrFixFailures(",
+        /const sonnetFailures = await countPrFixFailures\(\w+\);[\s\S]*prFixRetryModel\(config, sonnetFailures\)/,
+      ],
+      [
+        "steps/implement_generate.ts",
+        "countImplementFailedRounds(",
+        /const sonnetFailures = await countImplementFailedRounds\([\s\S]*?\);[\s\S]*attempt: context\.attempt,\s*sonnetFailures,/,
+      ],
+      [
+        "steps/implement_verify.ts",
+        "countImplementFailedRounds(",
+        /const sonnetFailures = await countImplementFailedRounds\([\s\S]*?\);[\s\S]*attempt: context\.attempt,\s*sonnetFailures,/,
+      ],
+    ];
+
+    test.each(wiring)("%s calls %s", (path, call) => {
+      expect(readFileSync(join(FACTORY_DIR, path), "utf8")).toContain(call);
+    });
+
+    test.each(wiring)(
+      "%s passes the counted value on (%s)",
+      (path, _call, pattern) => {
+        expect(readFileSync(join(FACTORY_DIR, path), "utf8")).toMatch(pattern);
+      },
+    );
+  });
 });

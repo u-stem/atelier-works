@@ -166,7 +166,8 @@ function isReviewPostMode(value: unknown): value is ReviewPostMode {
 }
 
 /**
- * `raw[field]`を返す。値が無ければ`fallback`を返し、文字列でなければ例外を投げる。
+ * `stringField`の値が、`MODEL_NAME`の許可リストに合うことまで検証して返す。
+ * 合わなければ例外を投げる。
  */
 function modelField(
   raw: Record<string, unknown>,
@@ -182,6 +183,9 @@ function modelField(
   return value;
 }
 
+/**
+ * `raw[field]`を返す。値が無ければ`fallback`を返し、文字列でなければ例外を投げる。
+ */
 function stringField(
   raw: Record<string, unknown>,
   field: string,

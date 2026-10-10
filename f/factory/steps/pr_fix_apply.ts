@@ -148,6 +148,7 @@ export async function main(
   });
 
   try {
+    const sonnetFailures = await countPrFixFailures(work_item_id);
     const result = await runClaude({
       run: withWorktreeProcessLock(runCommand, worktreeLockFor(worktree_dir), {
         kind: "pr_fix",
@@ -157,7 +158,7 @@ export async function main(
       workItemId: work_item_id,
       stage: "pr_fix",
       attempt,
-      model: modelFor(config, "pr_fix", await countPrFixFailures(work_item_id)),
+      model: modelFor(config, "pr_fix", sonnetFailures),
       prompt: promptText,
       appendSystemPromptFile: systemPrompt.path,
       jsonSchema: FIX_SCHEMA,

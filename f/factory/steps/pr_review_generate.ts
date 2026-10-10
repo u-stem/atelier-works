@@ -192,7 +192,7 @@ export async function main(
       workItemId: work_item_id,
       stage: "pr_review",
       attempt,
-      model: modelFor(config, "pr_review", attempt),
+      model: modelFor(config, "pr_review", 0),
       prompt: promptText,
       appendSystemPromptFile: systemPrompt.path,
       jsonSchema: REVIEW_SCHEMA,
