@@ -649,9 +649,19 @@ function isLoginPayload(value: unknown): value is LoginPayload {
   return typeof (value as { login: unknown }).login === "string";
 }
 
-/** GitHubのユーザーのオブジェクトからログイン名を読む。ユーザーでなければ`null`。 */
+/**
+ * GitHubのユーザーのオブジェクトからログイン名を読む。
+ * ユーザーでないとき、ログイン名が空文字列のときは`null`を返す。
+ */
 function readLogin(value: unknown): string | null {
-  return isLoginPayload(value) ? value.login : null;
+  return isLoginPayload(value) && value.login !== "" ? value.login : null;
+}
+
+/** オブジェクトの文字列のフィールドを読む。オブジェクトでない、文字列でない、空文字列のときは`null`。 */
+function readStringField(value: unknown, field: string): string | null {
+  if (typeof value !== "object" || value === null) return null;
+  const raw: unknown = Reflect.get(value, field);
+  return typeof raw === "string" && raw !== "" ? raw : null;
 }
 
 /**
@@ -831,6 +841,10 @@ export type Issue = {
    * PRのマージでは、マージした人が入ると想定している(実機で確かめる)。
    */
   readonly closedByLogin: string | null;
+  /** 閉じた人の種別(`User`、`Bot`など)。閉じた人が無いとき、応答に無いときは`null`。 */
+  readonly closedByType: string | null;
+  /** PRがマージされた時刻。マージされていないとき、PRでないときは`null`。 */
+  readonly mergedAt: string | null;
   /** 作者の`author_association`。応答に無ければ`null`。 */
   readonly authorAssociation: string | null;
   readonly labels: string[];
@@ -862,7 +876,7 @@ type IssuePayload = {
   readonly body: string | null;
   readonly html_url: string;
   readonly state: string;
-  readonly user: { readonly login: string } | null;
+  readonly user: LoginPayload | null;
   readonly labels: readonly unknown[];
   readonly assignees: readonly unknown[];
 };
@@ -884,6 +898,7 @@ function isIssuePayload(value: unknown): value is IssuePayload {
   if (record.body !== null && typeof record.body !== "string") return false;
   if (typeof record.html_url !== "string") return false;
   if (typeof record.state !== "string") return false;
+  if (record.user !== null && !isLoginPayload(record.user)) return false;
   if (!Array.isArray(record.labels)) return false;
   if (!Array.isArray(record.assignees)) return false;
   return true;
@@ -927,6 +942,8 @@ export async function getIssue(
     state: parsed.state,
     authorLogin: parsed.user?.login ?? "",
     closedByLogin: readLogin(Reflect.get(parsed, "closed_by")),
+    closedByType: readStringField(Reflect.get(parsed, "closed_by"), "type"),
+    mergedAt: readStringField(Reflect.get(parsed, "pull_request"), "merged_at"),
     authorAssociation: parseAuthorAssociation(
       Reflect.get(parsed, "author_association"),
     ),

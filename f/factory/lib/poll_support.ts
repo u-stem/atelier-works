@@ -502,8 +502,12 @@ export function parseActionableCursor(value: unknown): number | null {
 
 /** 閉じた対象について、閉じた人の確認に使うIssue(PR)の応答の部分。 */
 export type ClosedTargetInfo = {
+  /** PRがマージされた時刻。マージされていないとき、PRでないときは`null`。 */
+  readonly mergedAt: string | null;
   /** 閉じた人のログイン名。GitHubが返さなければ`null`。 */
   readonly closedByLogin: string | null;
+  /** 閉じた人の種別(`User`、`Bot`など)。分からなければ`null`。 */
+  readonly closedByType: string | null;
   /** 作者のログイン名。分からなければ`null`か空文字列。 */
   readonly authorLogin: string | null;
   /** 作者の`author_association`。分からなければ`null`。 */
@@ -511,18 +515,34 @@ export type ClosedTargetInfo = {
 };
 
 export type CloserDecision =
-  | { readonly allowed: true; readonly basis: "other_than_author" | "author" }
+  | {
+      readonly allowed: true;
+      readonly basis: "merged" | "other_than_author" | "author";
+    }
   | {
       readonly allowed: false;
-      readonly reason: "no_closer" | "author_unknown" | "author_not_allowed";
+      readonly reason:
+        | "no_closer"
+        | "bot_closer"
+        | "author_unknown"
+        | "author_not_allowed";
     };
 
+function isBotCloser(info: ClosedTargetInfo): boolean {
+  return (
+    info.closedByType === "Bot" ||
+    (info.closedByLogin?.toLowerCase().endsWith("[bot]") ?? false)
+  );
+}
+
 /**
- * 対象を閉じた人が、要対応の取り消しを許せる人かを返す。
- * - 閉じた人が分からなければ許さない。
- * - 作者以外が閉じたなら許す。他人のIssueやPRを閉じるには、triage以上の権限が要るため。
- * - 作者が閉じたなら、作者の`author_association`が許可する関係に含まれるときだけ許す。
- *   作者が分からないとき、関係が分からないときは許さない。
+ * 対象を閉じた人が、要対応の取り消しを許せる人かを、Issue(PR)の1回の応答から次の順に判定する。
+ * 1. PRがマージされていれば許す。マージにもmerge queueへの投入にも、write権限が要るため。
+ * 2. 閉じた人が分からなければ許さない。
+ * 3. Botが閉じたなら許さない。BotやActionsは、第三者のイベントを受けて閉じることがあるため。
+ * 4. 作者が分からなければ許さない。
+ * 5. 作者以外の人が閉じたなら許す。他人のIssueやPRを閉じるには、triage以上の権限が要るため。
+ * 6. 作者が閉じたなら、作者の`author_association`が許可する関係に含まれるときだけ許す。
  * ログイン名は大文字と小文字を区別せずに比べる。
  * 第三者が自分のIssueやPRを閉じて、安全策で止まった作業項目を要対応の一覧から消せないようにするため。
  */
@@ -530,8 +550,11 @@ export function decideCloser(
   info: ClosedTargetInfo,
   allowed: readonly LabelerAssociation[],
 ): CloserDecision {
-  if (info.closedByLogin === null)
+  if (info.mergedAt !== null) return { allowed: true, basis: "merged" };
+  if (info.closedByLogin === null) {
     return { allowed: false, reason: "no_closer" };
+  }
+  if (isBotCloser(info)) return { allowed: false, reason: "bot_closer" };
   if (info.authorLogin === null || info.authorLogin === "") {
     return { allowed: false, reason: "author_unknown" };
   }

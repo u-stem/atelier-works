@@ -177,17 +177,47 @@ describe("parseActionableCursor", () => {
 
 describe("decideCloser", () => {
   const ALLOWED: readonly LabelerAssociation[] = ["OWNER", "MEMBER"];
-  const info = (
-    overrides: Partial<{
-      closedByLogin: string | null;
-      authorLogin: string | null;
-      authorAssociation: string | null;
-    }>,
-  ) => ({
+  const info = (overrides: Partial<ClosedTargetInfo>): ClosedTargetInfo => ({
+    mergedAt: null,
     closedByLogin: "alice",
+    closedByType: "User",
     authorLogin: "bob",
     authorAssociation: "NONE",
     ...overrides,
+  });
+
+  test("allows a merged pull request even without a closer", () => {
+    expect(
+      decideCloser(
+        info({ mergedAt: "2026-10-01T00:00:00Z", closedByLogin: null }),
+        ALLOWED,
+      ),
+    ).toEqual({ allowed: true, basis: "merged" });
+  });
+
+  test("allows a merged pull request that a bot closed", () => {
+    expect(
+      decideCloser(
+        info({ mergedAt: "2026-10-01T00:00:00Z", closedByType: "Bot" }),
+        ALLOWED,
+      ),
+    ).toEqual({ allowed: true, basis: "merged" });
+  });
+
+  test("denies a closer of type Bot", () => {
+    expect(decideCloser(info({ closedByType: "Bot" }), ALLOWED)).toEqual({
+      allowed: false,
+      reason: "bot_closer",
+    });
+  });
+
+  test("denies a closer whose login ends with [bot]", () => {
+    expect(
+      decideCloser(
+        info({ closedByLogin: "github-actions[bot]", closedByType: null }),
+        ALLOWED,
+      ),
+    ).toEqual({ allowed: false, reason: "bot_closer" });
   });
 
   test("allows someone other than the author", () => {
@@ -312,7 +342,9 @@ type HarnessOptions = {
 function harness(items: readonly WorkItem[], options: HarnessOptions = {}) {
   const closed = new Set(options.closed ?? []);
   const closer: ClosedTargetInfo = {
+    mergedAt: null,
     closedByLogin: "alice",
+    closedByType: "User",
     authorLogin: "bob",
     authorAssociation: "NONE",
     ...options.closer,
@@ -526,6 +558,8 @@ describe("reconcileClosedActionableItems failures", () => {
       if (number === 10) throw err;
       return {
         state: "closed",
+        mergedAt: null,
+        closedByType: "User",
         closedByLogin: "alice",
         authorLogin: "bob",
         authorAssociation: "NONE",
@@ -658,6 +692,24 @@ describe("reconcileClosedActionableItems closer check", () => {
     expect(updates.map((update) => update.note)).toEqual([
       "reconcile: pr_closed (actionable)",
     ]);
+  });
+
+  test("cancels a merged pr whose closed_by is null", async () => {
+    const { deps, updates } = harness([prItem({ id: 2 })], {
+      closed: [20],
+      closer: { mergedAt: "2026-10-01T00:00:00Z", closedByLogin: null },
+    });
+    await run(deps);
+    expect(updates).toHaveLength(1);
+  });
+
+  test("keeps the item when a bot closed it", async () => {
+    const { deps, updates } = harness([workItem({ id: 1 })], {
+      closed: [10],
+      closer: { closedByType: "Bot", closedByLogin: "stale[bot]" },
+    });
+    await run(deps);
+    expect(updates).toEqual([]);
   });
 
   test("keeps the worktrees when the closer is not trusted", async () => {

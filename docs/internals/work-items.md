@@ -246,9 +246,15 @@ reconcileが照合するのは、終端でない作業項目だけである。
   - 同じ種類で、同じPRに新しい行がある作業項目
 - IssueかPRが閉じられていて、閉じた人が許されるときだけ取り消しにする。
   PRのcloseにはマージを含む。
-  閉じた人は、IssueまたはPRの取得の応答の`closed_by`、作者、作者の`author_association`で確かめる。
-  作者以外が閉じたときは許す。作者が閉じたときは、作者の関係が`allowed_labeler_associations`に含まれるときだけ許す。
-  `closed_by`が無いときと許されないときは、取り消さずに要対応に残し、理由と対象をinfoのログに出す。
+  閉じた人は、IssueまたはPRの取得の応答だけで、次の順に確かめる。
+  1. PRで`pull_request.merged_at`があれば許す。マージにもmerge queueへの投入にも、write権限が要る。
+  2. `closed_by`が無いときは許さない。
+  3. `closed_by`がBotのときは許さない。
+  4. 作者以外の人が閉じたときは許す。
+  5. 作者が閉じたときは、作者の`author_association`が`allowed_labeler_associations`に含まれるときだけ許す。
+  
+  許されないときは、取り消さず要対応に残す。
+  理由(`no_closer`、`bot_closer`、`author_not_allowed`など)と対象は、infoのログに出す。
   理由は[セキュリティ](../security.md)に書く。
 - 状態の注記は`reconcile: closed (actionable)`か`reconcile: pr_closed (actionable)`にする。
 - 状態の遷移は、読み取った状態と`flow_job_id`のままのときだけ行う。
@@ -258,6 +264,8 @@ reconcileが照合するのは、終端でない作業項目だけである。
 - PRが閉じられたときは、レビューのworktreeを消す。
   消すのは、リポジトリの親の直下にあるdetachedの`review-<PR番号>-<sha7>`だけである。
   同じPRに終端でない`pr_review`か`pr_fix`の作業項目があるときは消さない。
+  取り消さなかったPRのworktreeは、この照合では消えない。
+  `cleanup_workspaces`が、終端の作業項目が`worktree_ttl_days`(既定7日)更新されなければ、PRが閉じたかどうかによらず消す。
   この確認とworktreeの削除の間は、ロックで守らない。
   その間に閉じたPRで手動の再開をすると、作られたworktreeが消えうる。
   時間幅が狭く、閉じたPRでの手動の再開に限る。
@@ -268,7 +276,7 @@ reconcileが照合するのは、終端でない作業項目だけである。
   IDを付けると、要対応の一覧が最新の失敗としてその記録を表示し、元の失敗の理由を隠すためである。
   対象は記録のstepに入る`owner/repo#番号`で追える。
   対象の削除やアクセスの喪失(404と410)は、失敗として記録せず、警告のログだけを残す。
-- 作者自身のBotが閉じた対象や、`closed_by`が無い対象は、取り消されずに毎回調べ直される。
+- stale Botが閉じた対象や、依存更新のBotが自分のPRを閉じた対象は、取り消されずに毎回調べ直される。
 
 Issue化の提案を待つ`pr_fix`の`needs_human`も、PRが閉じられれば取り消す。
 提案の承認依頼は取り消さず、人が決められる状態のまま残す。

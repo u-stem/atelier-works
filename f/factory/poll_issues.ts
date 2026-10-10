@@ -548,6 +548,7 @@ export async function reconcileClosedActionableItems(
           work_item_id: item.id,
           from_status: item.status,
           note,
+          closer_basis: closer.basis,
         });
         if (decision.reason === "pr_closed" && !worktreesHandled) {
           worktreesHandled = true;

@@ -23,6 +23,7 @@ function fakeIssue(labels: string[]) {
     body: null,
     html_url: "https://github.com/octo-owner/atelier-works/issues/7",
     state: "open",
+    user: { login: "alice" },
     labels,
     assignees: [],
   };
