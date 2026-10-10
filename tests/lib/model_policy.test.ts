@@ -67,6 +67,10 @@ describe("modelChangesAfterFailure", () => {
     expect(modelChangesAfterFailure(CONFIG, "implement", 2)).toBe(false);
   });
 
+  test("is false after the escalation count has passed", () => {
+    expect(modelChangesAfterFailure(CONFIG, "implement", 3)).toBe(false);
+  });
+
   test("is true for pr_fix at the same boundary", () => {
     expect(modelChangesAfterFailure(CONFIG, "pr_fix", 1)).toBe(true);
   });

@@ -45,6 +45,7 @@ import {
   IMPLEMENT_CHECK_SKIP_REASONS,
   type ImplementClaudeOutput,
 } from "../../f/factory/lib/implement_support.ts";
+import { modelChangesAfterFailure } from "../../f/factory/lib/model_policy.ts";
 import { IMPLEMENT_SCHEMA } from "../../f/factory/lib/prompts.ts";
 import type {
   AgentRunRecord,
@@ -55,6 +56,8 @@ import {
   type WorktreeFingerprint,
   WorktreeGitPointerModifiedError,
 } from "../../f/factory/lib/workspace.ts";
+
+const MODEL_CONFIG = { model: "light-model", heavy_model: "heavy-model" };
 
 const DONE: ImplementClaudeOutput = {
   outcome: "done",
@@ -1059,6 +1062,30 @@ describe("runImplementVerifyLoop", () => {
       modelChangesNext: [false, true, false],
     });
     expect((await run(h)).exit).toBe("stalled");
+  });
+
+  test("skips the stall check only once when the model changes from the recorded failures", async () => {
+    const h = harness({ checks: [[FAIL]], fingerprints: [FP_1] });
+    const failedOutcomes: readonly string[] = [
+      "check_failed",
+      "stalled",
+      "error",
+    ];
+    const deps: ImplementLoopDeps = {
+      ...h.deps,
+      modelChangesAfterFailure: async () =>
+        modelChangesAfterFailure(
+          MODEL_CONFIG,
+          "implement",
+          h.recorded.filter((record) => failedOutcomes.includes(record.outcome))
+            .length,
+        ),
+    };
+    const result = await runImplementVerifyLoop(deps, loopInput());
+    expect({ exit: result.exit, rounds: result.rounds }).toEqual({
+      exit: "stalled",
+      rounds: 3,
+    });
   });
 
   test("still exits max_rounds when the next failure changes the model", async () => {
