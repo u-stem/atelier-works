@@ -24,14 +24,13 @@ import {
   expireApprovalRequestIfPending,
   getLatestDeployment,
   getWorkItem,
-  hasSuccessfulDeployment,
   type InsertedIssueWorkItem,
   insertIssueWorkItemUnlessActive,
   listActive,
   listExpiredPendingApprovalRequests,
   nextCycleForIssue,
   recordFailure,
-  resolveUnresolvedNoticesByKind,
+  resolveNoticesBeforeSuccessfulDeployment,
   setFlowJobId,
   updateStatusIfCurrent,
   updateStatusIfLeaseHolder,
@@ -155,7 +154,7 @@ const DEPLOYED_SHA_RESOLVER = "poll_issues";
  * self cloneのHEADのshaを変数`f/factory/deployed_sha`と比べ、
  * 食い違いが猶予を超えて続くときだけnoticeを記録する。
  * 食い違いを最初に見た時刻は、このscheduleのWindmillのstateに保存する。
- * 一致したら、未解決のnoticeを解決済みにする。判定は`runDeployedShaCheck`にある。
+ * 毎回、今の`deployed_sha`への反映の成功の記録より前のnoticeを解決済みにする。判定は`runDeployedShaCheck`にある。
  * noticeを残すだけでジョブは失敗させない。
  * 変数が無い・空のときは、まだ比べる対象が無いとみなす。
  */
@@ -186,11 +185,11 @@ async function checkDeployedSha(
       getState: () => wmill.getState(),
       setState: (state) => wmill.setState(state),
       getLatestDeployment: () => getLatestDeployment(),
-      hasSuccessfulDeployment: (sha) => hasSuccessfulDeployment(sha),
       addNotice: (record) => addNoticeUnlessUnresolved(record),
-      resolveNotices: () =>
-        resolveUnresolvedNoticesByKind(
+      resolveNotices: (sha) =>
+        resolveNoticesBeforeSuccessfulDeployment(
           "deployed_sha_mismatch",
+          sha,
           DEPLOYED_SHA_RESOLVER,
         ),
       nowMs: () => Date.now(),

@@ -214,6 +214,8 @@ type Harness = {
   warnings: string[];
   logs: { message: string; fields: Record<string, unknown> | undefined }[];
   resolveCalls: () => number;
+  resolvedFor: string[];
+  events: string[];
 };
 
 const STORED: Record<string, unknown> = {
@@ -226,6 +228,8 @@ function harness(overrides: Partial<DeployedShaCheckDeps> = {}): Harness {
   const warnings: string[] = [];
   const logs: Harness["logs"] = [];
   let resolveCalls = 0;
+  const resolvedFor: string[] = [];
+  const events: string[] = [];
   const log: Logger = {
     info: (message, fields) => {
       logs.push({ message, fields });
@@ -246,12 +250,14 @@ function harness(overrides: Partial<DeployedShaCheckDeps> = {}): Harness {
     },
     getLatestDeployment: () =>
       Promise.resolve({ result: "failed", sha_to: "aaa" }),
-    hasSuccessfulDeployment: () => Promise.resolve(true),
     addNotice: (record) => {
+      events.push("notify");
       notices.push(record);
       return Promise.resolve(1);
     },
-    resolveNotices: () => {
+    resolveNotices: (sha) => {
+      events.push("resolve");
+      resolvedFor.push(sha);
       resolveCalls += 1;
       return Promise.resolve(1);
     },
@@ -266,6 +272,8 @@ function harness(overrides: Partial<DeployedShaCheckDeps> = {}): Harness {
     warnings,
     logs,
     resolveCalls: () => resolveCalls,
+    resolvedFor,
+    events,
   };
 }
 
@@ -436,23 +444,6 @@ describe("runDeployedShaCheck", () => {
     expect(h.warnings).toContain("deployed_sha state write failed");
   });
 
-  test("does not resolve the notices when there is no previous state", async () => {
-    const h = harness({ getState: () => Promise.resolve(undefined) });
-    await runDeployedShaCheck(h.deps);
-    expect(h.resolveCalls()).toBe(0);
-  });
-
-  test("resolves the notices when the deployed sha advanced", async () => {
-    const h = harness({
-      getState: () =>
-        Promise.resolve({
-          [DEPLOYED_SHA_STATE_KEY]: { deployed_sha: "old", first_seen_ms: T0 },
-        }),
-    });
-    await runDeployedShaCheck(h.deps);
-    expect(h.resolveCalls()).toBe(1);
-  });
-
   test("starts a new count when the deployed sha advanced", async () => {
     const h = harness({
       getState: () =>
@@ -472,24 +463,6 @@ describe("runDeployedShaCheck", () => {
     });
     await runDeployedShaCheck(h.deps);
     expect(h.notices).toEqual([]);
-  });
-
-  test("still records the state when resolving after an advance fails", async () => {
-    const h = harness({
-      getState: () =>
-        Promise.resolve({
-          [DEPLOYED_SHA_STATE_KEY]: { deployed_sha: "old", first_seen_ms: T0 },
-        }),
-      resolveNotices: () => Promise.reject(new Error("db down")),
-    });
-    await runDeployedShaCheck(h.deps);
-    expect(h.states.length).toBe(1);
-  });
-
-  test("does not resolve the notices when the clock moved backwards", async () => {
-    const h = harness({ nowMs: () => T0 - 1 });
-    await runDeployedShaCheck(h.deps);
-    expect(h.resolveCalls()).toBe(0);
   });
 
   test("keeps resolving the notices without writing when the state cannot be read and the shas match", async () => {
@@ -546,15 +519,6 @@ describe("runDeployedShaCheck", () => {
     ).toBe(false);
   });
 
-  test("does not resolve the notices when the state write fails after an advance", async () => {
-    const h = harness({
-      getState: () => Promise.resolve(ADVANCED_STATE),
-      setState: () => Promise.reject(new Error("write failed")),
-    });
-    await runDeployedShaCheck(h.deps);
-    expect(h.resolveCalls()).toBe(0);
-  });
-
   test("notifies when the state write fails after an advance", async () => {
     const h = harness({
       getState: () => Promise.resolve(ADVANCED_STATE),
@@ -563,64 +527,76 @@ describe("runDeployedShaCheck", () => {
     expect(await runDeployedShaCheck(h.deps)).toBe("notified");
   });
 
-  test("looks up the successful deployment of the current deployed sha", async () => {
-    const asked: string[] = [];
-    const h = harness({
-      getState: () => Promise.resolve(ADVANCED_STATE),
-      hasSuccessfulDeployment: (sha) => {
-        asked.push(sha);
-        return Promise.resolve(true);
-      },
-    });
+  test("resolves for the current deployed sha when the shas match", async () => {
+    const h = harness({ deployedSha: "aaa" });
     await runDeployedShaCheck(h.deps);
-    expect(asked).toEqual(["bbb"]);
+    expect(h.resolvedFor).toEqual(["aaa"]);
   });
 
-  test("does not resolve the notices after an advance without a successful deployment record", async () => {
-    const h = harness({
-      getState: () => Promise.resolve(ADVANCED_STATE),
-      hasSuccessfulDeployment: () => Promise.resolve(false),
-    });
+  test("resolves for the current deployed sha while waiting", async () => {
+    const h = harness({ nowMs: () => T0 + 1000 });
     await runDeployedShaCheck(h.deps);
-    expect(h.resolveCalls()).toBe(0);
+    expect(h.resolvedFor).toEqual(["bbb"]);
   });
 
-  test("still records the state after an advance without a successful deployment record", async () => {
+  test("resolves for the current deployed sha when recording", async () => {
+    const h = harness({ getState: () => Promise.resolve(undefined) });
+    await runDeployedShaCheck(h.deps);
+    expect(h.resolvedFor).toEqual(["bbb"]);
+  });
+
+  test("resolves for the current deployed sha after an advance", async () => {
+    const h = harness({ getState: () => Promise.resolve(ADVANCED_STATE) });
+    await runDeployedShaCheck(h.deps);
+    expect(h.resolvedFor).toEqual(["bbb"]);
+  });
+
+  test("resolves once when notifying", async () => {
+    const h = harness();
+    await runDeployedShaCheck(h.deps);
+    expect(h.resolveCalls()).toBe(1);
+  });
+
+  test("resolves before notifying", async () => {
+    const h = harness();
+    await runDeployedShaCheck(h.deps);
+    expect(h.events).toEqual(["resolve", "notify"]);
+  });
+
+  test("still notifies when resolving fails", async () => {
+    const h = harness({
+      resolveNotices: () => Promise.reject(new Error("db down")),
+    });
+    expect(await runDeployedShaCheck(h.deps)).toBe("notified");
+  });
+
+  test("warns when resolving fails", async () => {
+    const h = harness({
+      resolveNotices: () => Promise.reject(new Error("db down")),
+    });
+    await runDeployedShaCheck(h.deps);
+    expect(h.warnings).toContain("deployed_sha_mismatch resolve failed");
+  });
+
+  test("still records the state when resolving fails", async () => {
     const h = harness({
       getState: () => Promise.resolve(ADVANCED_STATE),
-      hasSuccessfulDeployment: () => Promise.resolve(false),
+      resolveNotices: () => Promise.reject(new Error("db down")),
     });
     expect(await runDeployedShaCheck(h.deps)).toBe("recorded");
   });
 
-  test("does not resolve the notices when the deployment record lookup fails", async () => {
-    const h = harness({
-      getState: () => Promise.resolve(ADVANCED_STATE),
-      hasSuccessfulDeployment: () => Promise.reject(new Error("db down")),
-    });
+  test("does not resolve when the variable does not exist", async () => {
+    const h = harness({ deployedSha: null });
     await runDeployedShaCheck(h.deps);
     expect(h.resolveCalls()).toBe(0);
   });
 
-  test("warns when the deployment record lookup fails", async () => {
+  test("resolves even when the state cannot be read and the shas differ", async () => {
     const h = harness({
-      getState: () => Promise.resolve(ADVANCED_STATE),
-      hasSuccessfulDeployment: () => Promise.reject(new Error("db down")),
+      getState: () => Promise.reject(new Error("no state")),
     });
     await runDeployedShaCheck(h.deps);
-    expect(h.warnings).toContain("deployment record lookup failed");
-  });
-
-  test("does not look up the deployment record when the shas match", async () => {
-    const asked: string[] = [];
-    const h = harness({
-      deployedSha: "aaa",
-      hasSuccessfulDeployment: (sha) => {
-        asked.push(sha);
-        return Promise.resolve(true);
-      },
-    });
-    await runDeployedShaCheck(h.deps);
-    expect(asked).toEqual([]);
+    expect(h.resolveCalls()).toBe(1);
   });
 });

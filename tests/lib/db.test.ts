@@ -21,7 +21,6 @@ import {
   getRequirementDraft,
   getWorkItem,
   hasPriorReview,
-  hasSuccessfulDeployment,
   hasUnfinishedPrRun,
   insertApprovalRequest,
   insertAuditReport,
@@ -51,8 +50,8 @@ import {
   recordDeployment,
   recordFailure,
   resolveNoticeIfUnresolved,
+  resolveNoticesBeforeSuccessfulDeployment,
   resolveStaleInfoNoticesBefore,
-  resolveUnresolvedNoticesByKind,
   revertIssueProposalToPending,
   type SqlClient,
   type SqlRow,
@@ -3425,69 +3424,78 @@ describe("getLatestDeployment", () => {
   });
 });
 
-describe("resolveUnresolvedNoticesByKind", () => {
-  test("returns the number of resolved rows", async () => {
-    const { sql } = createFakeSqlClient([[{ id: 1 }, { id: 2 }]]);
-    expect(
-      await resolveUnresolvedNoticesByKind(
-        "deployed_sha_mismatch",
-        "poll_issues",
-        sql,
-      ),
-    ).toBe(2);
-  });
-
-  test("only touches unresolved notices of the kind", async () => {
-    const { sql, calls } = createFakeSqlClient([[]]);
-    await resolveUnresolvedNoticesByKind(
+describe("resolveNoticesBeforeSuccessfulDeployment", () => {
+  const call = (sql: SqlClient) =>
+    resolveNoticesBeforeSuccessfulDeployment(
       "deployed_sha_mismatch",
+      "bbb",
       "poll_issues",
       sql,
     );
-    expect(calls[0]?.text).toContain("WHERE resolved = false AND kind =");
+
+  test("returns the number of resolved rows", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 1 }, { id: 2 }]]);
+    expect(await call(sql)).toBe(2);
+  });
+
+  test("returns 0 when nothing is resolved", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await call(sql)).toBe(0);
+  });
+
+  test("updates factory.notices in a single statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await call(sql);
+    expect(calls.length).toBe(1);
+  });
+
+  test("only touches unresolved notices", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await call(sql);
+    expect(calls[0]?.text).toContain("AND resolved = false");
+  });
+
+  test("only touches notices created before the deployment", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await call(sql);
+    expect(calls[0]?.text).toContain("created_at < (");
+  });
+
+  test("uses the newest occurred_at as the reference", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await call(sql);
+    expect(calls[0]?.text).toContain(
+      "SELECT max(occurred_at) FROM factory.deployments",
+    );
+  });
+
+  test("counts only successful deployments", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await call(sql);
+    expect(calls[0]?.text).toContain("result = 'success'");
+  });
+
+  test("filters the deployment by the target sha", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await call(sql);
+    expect(calls[0]?.values).toContain("bbb");
+  });
+
+  test("filters the notices by kind", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await call(sql);
+    expect(calls[0]?.values).toContain("deployed_sha_mismatch");
   });
 
   test("records the resolver", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
-    await resolveUnresolvedNoticesByKind(
-      "deployed_sha_mismatch",
-      "poll_issues",
-      sql,
-    );
+    await call(sql);
     expect(calls[0]?.values).toContain("poll_issues");
   });
 
   test("stamps resolved_at with now()", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
-    await resolveUnresolvedNoticesByKind(
-      "deployed_sha_mismatch",
-      "poll_issues",
-      sql,
-    );
+    await call(sql);
     expect(calls[0]?.text).toContain("resolved_at = now()");
-  });
-});
-
-describe("hasSuccessfulDeployment", () => {
-  test("is true when a row exists", async () => {
-    const { sql } = createFakeSqlClient([[{ found: 1 }]]);
-    expect(await hasSuccessfulDeployment("bbb", sql)).toBe(true);
-  });
-
-  test("is false when no row exists", async () => {
-    const { sql } = createFakeSqlClient([[]]);
-    expect(await hasSuccessfulDeployment("bbb", sql)).toBe(false);
-  });
-
-  test("only counts successful rows", async () => {
-    const { sql, calls } = createFakeSqlClient([[]]);
-    await hasSuccessfulDeployment("bbb", sql);
-    expect(calls[0]?.text).toContain("result = 'success'");
-  });
-
-  test("filters by the target sha", async () => {
-    const { sql, calls } = createFakeSqlClient([[]]);
-    await hasSuccessfulDeployment("bbb", sql);
-    expect(calls[0]?.values).toContain("bbb");
   });
 });

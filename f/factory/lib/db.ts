@@ -917,24 +917,6 @@ export async function recordDeployment(
   return parseId(row.id, "id");
 }
 
-/**
- * `shaTo`への反映が成功したと`factory.deployments`に記録されているかを返す。
- * `self_update`は、`f/factory/deployed_sha`を更新した後に`result = 'success'`の行を記録する。
- * 最新の1行ではなく行の有無で確かめるのは、反映の後に別の版の失敗が記録されうるため。
- */
-export async function hasSuccessfulDeployment(
-  shaTo: string,
-  sql: SqlClient = defaultSqlClient,
-): Promise<boolean> {
-  const rows = await sql`
-    SELECT 1 AS found
-    FROM factory.deployments
-    WHERE result = 'success' AND sha_to = ${shaTo}
-    LIMIT 1
-  `.fetch();
-  return rows.length > 0;
-}
-
 /** `factory.deployments`の最新の1行を返す。1行も無ければ`null`を返す。 */
 export async function getLatestDeployment(
   sql: SqlClient = defaultSqlClient,
@@ -1028,18 +1010,29 @@ export async function getNoticeById(
 }
 
 /**
- * `kind`の未解決のnoticeをすべて解決済みにし(`resolved_by`は`resolvedBy`)、解決した行数を返す。
- * 状況が解消したことを機械が確かめられる種類のnoticeを、本文によらず片付けるために使う。
+ * `kind`の未解決のnoticeのうち、`shaTo`への反映の成功の記録より前に作られたものを
+ * 解決済みにし(`resolved_by`は`resolvedBy`)、解決した行数を返す。
+ * 基準は、`factory.deployments`の`result = 'success'`かつ`sha_to = shaTo`の行のうち、最も新しい`occurred_at`である。
+ * 成功の記録が無ければ基準がNULLになり、何も解決しない。
+ * 比べる2つの時刻は、どちらも行を入れたときのDBの`now()`なので、workerの時計にもstateにも頼らない。
+ * 反映の後に作られたnoticeは、その反映より後の状況を表すので解決しない。
+ * 判定と更新は1つの文で行う。
  */
-export async function resolveUnresolvedNoticesByKind(
+export async function resolveNoticesBeforeSuccessfulDeployment(
   kind: string,
+  shaTo: string,
   resolvedBy: string,
   sql: SqlClient = defaultSqlClient,
 ): Promise<number> {
   const rows = await sql`
     UPDATE factory.notices
     SET resolved = true, resolved_by = ${resolvedBy}, resolved_at = now()
-    WHERE resolved = false AND kind = ${kind}
+    WHERE kind = ${kind}
+      AND resolved = false
+      AND created_at < (
+        SELECT max(occurred_at) FROM factory.deployments
+        WHERE result = 'success' AND sha_to = ${shaTo}
+      )
     RETURNING id
   `.fetch();
   return rows.length;
