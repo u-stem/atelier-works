@@ -202,7 +202,7 @@ post-checkoutのフックは、メイン作業ツリーの`.wmill`へのシン�
 | 症状 | 原因と対処 |
 | --- | --- |
 | ポートが衝突する | `mise.local.toml`の`WM_HTTP_PORT`で別のポートを指定する。投入は[秘密値を投入する](#秘密値を投入する)と同じコマンドで、`KEY`を`WM_HTTP_PORT`にする |
-| `mise run up`が「Docker Engine API ... is older than 1.45」か「Docker Compose ... is older than 2.26.0」と出て止まる | DockerのEngineかComposeが下限に届いていない。Docker DesktopかOrbStackを更新するか、Engineを26.0以上、Composeを2.26.0以上にする。更新後は`mise run doctor`で`docker version`の行が`OK`になることを確かめる |
+| `mise run up`が「Docker Engine API ... is older than 1.45」か「Docker Compose ... is older than 2.26.0」と出て止まる | DockerのEngineかComposeが下限に届いていない。Docker DesktopかOrbStackを更新するか、Engineを26.0以上、Composeを2.26.0以上にする。更新した後で`mise run up`を実行し直す。Dockerの更新で止まったworkerは、restart policyで元の設定のまま起動し直すので、`mise run up`で作り直す。その後で`mise run doctor`を実行し、`docker version`の行が`OK`になることを確かめる |
 | `doctor`が「初期パスワード」でNGになる | パスワードが`changeme`のままである。`mise run bootstrap`がログインした後にパスワードを変える |
 | `required variable ... is missing a value: run via mise`と出る | `docker compose`を`mise run`を通さずに実行している。composeの環境変数はmiseからしか渡らないので、`mise run <task>`か`mise exec -- docker compose ...`で実行する。スタックの起動には、版の検査を通る`mise run up`を使う |
 | workerのイメージを作り直したい | `mise run build`で、`windmill_worker`のサービスだけを作り直す |

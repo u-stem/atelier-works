@@ -625,7 +625,7 @@ Consoleの**通知**タブには、Discordに送らない要対応の事項が�
 | `workspace_disk_usage` | 作業領域の掃除(毎日03:00)が記録したディスク使用量 | 増え続けていないか見る |
 | `console_fetch_failed` | Consoleの取り込みが失敗した | 通知の「次の操作」に従う |
 | `console_fetch_stale` | Consoleの取り込みの結果が30分以上更新されていない | 取り込みのコンテナ(`console_fetcher`)が動いているか確かめる |
-| `console_worker_missing` | tag `console`のジョブが、予定時刻から5分以上実行されずに待っている。Console用のworkerが居ない、2枠とも塞がっている、またはtagの設定がずれていて、Consoleのジョブがqueueに溜まり、Consoleが止まる | `docker compose ps windmill_worker_console`でコンテナの状態を確かめ、無ければ`mise run up`で起動し、動いていれば`mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_worker_console`で作り直す(`restart`は`factory_state_init`を経ずにマウントを解決し直す)。コンテナが作られていなければ、`factory_state_init`が失敗していないかを[Console用workerを確かめる](#console用workerを確かめる)の手順で確かめる。直らなければ、Windmillの画面でtag `console`の実行中のジョブとワーカーグループのtagを確かめる。自己更新(10分ごと)が検知し、Discordにも届く |
+| `console_worker_missing` | tag `console`のジョブが、予定時刻から5分以上実行されずに待っている。Console用のworkerが居ない、2枠とも塞がっている、またはtagの設定がずれていて、Consoleのジョブがqueueに溜まり、Consoleが止まる | `docker compose ps windmill_worker_console`でコンテナの状態を確かめ、無ければ`mise run up`で起動する。動いていれば、`mise run up`を実行し、続けて`mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_worker_console`で作り直す(`restart`は`factory_state_init`を経ずにマウントを解決し直す)。コンテナが作られていなければ、`factory_state_init`が失敗していないかを[Console用workerを確かめる](#console用workerを確かめる)の手順で確かめる。直らなければ、Windmillの画面でtag `console`の実行中のジョブとワーカーグループのtagを確かめる。自己更新(10分ごと)が検知し、Discordにも届く |
 | `console_worker_check_failed` | Console用のworkerがジョブを受けているかを、自己更新が1時間(6回)続けて確かめられなかった。workerが止まっていても気づけない状態である | 自己更新のジョブログで、下の4種類の警告のどれが出ているかを確かめて原因を直す。`could not confirm the console worker from the job lists`が続くなら、`console_fetch_watch`のスケジュールが有効か、直近の実行がtag `console`で動いているかを確かめる。Discordにも届く |
 | `schedule_failing` | 同じスケジュールの直近3回の実行が続けて失敗した。数えるのはスケジュールの実行そのものの失敗で、成功した実行の中で記録する部分的な失敗は含まない。GitHubのPATの失効などが原因になる | ジョブのログで失敗の内容を確かめて原因を直す。PATは[秘密をローテーションする](#秘密をローテーションする)で再発行する |
 | `schedule_failing_check_failed` | スケジュールが続けて失敗しているかを、ジョブ履歴から判定できなかった。失敗が続いても気づけない状態である | `on_error_schedule`のジョブのログで`failed to read the schedule history`のエラーを確かめ、ジョブ履歴を読む権限があるかを確かめる |
@@ -1035,36 +1035,43 @@ mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate w
 > `--pull never`は、外向きの通信が無いときでも使え、余計なpullをしないために付ける。
 > `rm`が権限のエラーで失敗したときは、出力を控えて、運用者が対処を決める。
 
-マウントが想定どおりかは、起動中のworkerの中から`/var/lib/factory/requirements/requirements`が見えるかで判定する。
-`volume.subpath`が無視されると、`factory_state`の根が`/var/lib/factory/requirements`に付く。
-根には`factory_state_init`が必ず`requirements`を作るので、根が付いていればこのパスが見える。
+マウントが想定どおりかは、起動中のworkerの中から`factory_state`の根の証拠が見えるかで判定する。
+正しい設定では、`/var/lib/factory`はコンテナのrootfsにあり、その下にはマウント先の`requirements`しか無い。
+証拠は次の2つである。
+
+- `/var/lib/factory`の直下の`claude`、`gh`、`audits`。根を`/var/lib/factory`に付ける設定で作られたworkerが残っていると見える。直下の名前なので、owner名とはぶつからない。
+- `/var/lib/factory/requirements/requirements`。`volume.subpath`が無視されて、根が`/var/lib/factory/requirements`に付くと見える。根には`factory_state_init`が必ず`requirements`を作るためである。
+
 `docker inspect`のSourceは、サブパスを反映しないので、判定に使わない。
 
 判定は1回の`exec`で行い、`sh -c`の終了コードで結果を返す。
 composeの失敗(1、126、127など)とぶつからないよう、専用の値を使う。
 
 - 11なら、根は付いていない。
-- 10なら、根が付いている。Dockerの版を下限以上にしてから、Console用のworkerを作り直す。
-- ほかの終了コード(マウント先が見えない3を含む)か、コンテナが動いていないときは、確かめられない。
+- 10なら、根が付いている。Dockerの版を下限以上にし、`mise run up`を実行してから、Console用のworkerを作り直す。
+- 3なら、マウント先が見えない。マウントが設定どおりに付いていないので、`mise run up`を実行してから、Console用のworkerを作り直す。
+- ほかの終了コードか、コンテナが動いていないときは、確かめられない。
 
 ```bash
-mise exec -- docker compose -f infra/docker-compose.yml exec -T windmill_worker_console sh -c 'test -d /var/lib/factory/requirements || exit 3; test -e /var/lib/factory/requirements/requirements && exit 10; exit 11'; echo "exit=$?"
+mise exec -- docker compose -f infra/docker-compose.yml exec -T windmill_worker_console sh -c 'test -e /var/lib/factory/claude || test -e /var/lib/factory/gh || test -e /var/lib/factory/audits && exit 10; test -d /var/lib/factory/requirements || exit 3; test -e /var/lib/factory/requirements/requirements && exit 10; exit 11'; echo "exit=$?"
 ```
 
-`mise run doctor`も同じ判定をし、11を「`factory_state`の根は付いていません」と表示する。
+`mise run doctor`も同じ判定をし、11を「`factory_state`の根は付いていません」と表示する。3はNGとして、終了コードを添えて表示する。
 この判定が見分けるのは、根が付いたかどうかだけである。symlinkの先がマウントされた場合は見分けられないので、その疑いは、上の手順の`ls -la`で確かめる。
-対象リポジトリのowner名が`requirements`だと、サブパスだけが付いていても、このパスが見えて想定外と判定される。
-その場合は、次の`ls`でowner名のディレクトリを確かめる。
-
-根が付いたときは、`requirements`に加えて`audits`、`claude`、`gh`も並ぶ。
-この3つは、owner名と同じ名前になりうる。単独では根の証拠にならず、4つが揃って並んだときだけ根が付いていると判断する。
+対象リポジトリのowner名が`requirements`だと、サブパスだけが付いていても`requirements/requirements`が見え、想定外と判定される。
+10と判定されたときは、次の2つの`ls`でどちらの証拠が見えたかを確かめる。
 
 ```bash
+mise exec -- docker compose -f infra/docker-compose.yml exec -T windmill_worker_console ls -la /var/lib/factory
 mise exec -- docker compose -f infra/docker-compose.yml exec -T windmill_worker_console ls -la /var/lib/factory/requirements
 ```
 
-`/var/lib/factory/requirements`の下には、要件定義書の所有者ごとのディレクトリが並ぶ。
-根が付く原因として考えられるのは、DockerのEngineかComposeが下限に届いていないことである。`mise run doctor`で版を確かめる。
+1つめの`ls`で`requirements`のほかに`claude`、`gh`、`audits`のどれかが並べば、根が`/var/lib/factory`に付いている。
+2つめの`ls`には、要件定義書の所有者ごとのディレクトリが並ぶ。
+ここに`requirements`、`audits`、`claude`、`gh`の4つが揃って並んだときだけ、根が`/var/lib/factory/requirements`に付いていると判断する。
+この4つはowner名と同じ名前になりうるので、1つだけでは根の証拠にならない。
+どちらでもなければ、owner名が`requirements`であるための誤検知である。
+根が付く原因として考えられるのは、根を付ける設定で作られたworkerが残っていることと、DockerのEngineかComposeが下限に届いていないことである。`mise run doctor`で版を確かめる。
 
 ### adminsワークスペースの組み込み項目
 

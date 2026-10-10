@@ -38,7 +38,7 @@ const defaults: Fake = {
 // 本物のdockerではなく、版とコンテナの状態を固定して返す偽のdockerをPATHの先頭に置く。
 // `compose exec`は、doctorが固定の引数を1回で渡したときだけ設定した終了コードで終わる。
 const PROBE =
-  "test -d /var/lib/factory/requirements || exit 3; test -e /var/lib/factory/requirements/requirements && exit 10; exit 11";
+  "test -e /var/lib/factory/claude || test -e /var/lib/factory/gh || test -e /var/lib/factory/audits && exit 10; test -d /var/lib/factory/requirements || exit 3; test -e /var/lib/factory/requirements/requirements && exit 10; exit 11";
 
 function installFakeDocker(overrides: Partial<Fake>): void {
   const fake = { ...defaults, ...overrides };
@@ -109,11 +109,11 @@ describe("doctor.sh Console worker mount", () => {
     expect(doctorLine("console worker mount")).toMatch(/^\s+NG\s/);
   });
 
-  test("reports OK as unverifiable when the probe exits 3", () => {
+  test("reports NG with the exit code when the probe exits 3", () => {
     installFakeDocker({ execStatus: 3 });
 
     expect(doctorLine("console worker mount")).toMatch(
-      /^\s+OK\s.*確かめられません/,
+      /^\s+NG\s.*終了コード: 3/,
     );
   });
 
@@ -127,6 +127,14 @@ describe("doctor.sh Console worker mount", () => {
 
   test("reports OK as unverifiable when the probe exits 126", () => {
     installFakeDocker({ execStatus: 126 });
+
+    expect(doctorLine("console worker mount")).toMatch(
+      /^\s+OK\s.*確かめられません/,
+    );
+  });
+
+  test("reports OK as unverifiable when the probe exits 127", () => {
+    installFakeDocker({ execStatus: 127 });
 
     expect(doctorLine("console worker mount")).toMatch(
       /^\s+OK\s.*確かめられません/,

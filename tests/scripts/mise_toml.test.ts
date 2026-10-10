@@ -27,6 +27,8 @@ describe("mise.toml", () => {
 // スタックを起動するタスクは、起動の前にDockerの版を確かめる。
 // 下限を満たさないEngineは`volume.subpath`を黙って無視し、
 // Console用workerに`factory_state`の根が付きうるため。
+// 検査に失敗したら必ず止まるよう、タスクの先頭で`set -e`を置く。
+// miseの既定のシェルの引数が変わっても、検査の後の行へ進まないためである。
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -52,10 +54,15 @@ function taskRuns(): Map<string, string[]> {
 
 describe("mise.toml stack tasks", () => {
   const CHECK = "scripts/check-docker-version.sh";
+  const ERREXIT = "set -e";
   const isComposeUp = (line: string) => /docker compose\b.*\bup\b/.test(line);
 
-  test("up checks the Docker version first", () => {
-    expect(taskRuns().get("up")?.[0]).toBe(CHECK);
+  test("up sets errexit and then checks the Docker version first", () => {
+    expect(taskRuns().get("up")?.slice(0, 2)).toEqual([ERREXIT, CHECK]);
+  });
+
+  test("deploy sets errexit on its first line", () => {
+    expect(taskRuns().get("deploy")?.[0]).toBe(ERREXIT);
   });
 
   test("deploy checks the Docker version right after git pull", () => {
@@ -63,12 +70,16 @@ describe("mise.toml stack tasks", () => {
     expect(lines[lines.indexOf(CHECK) - 1]).toBe("git pull --ff-only");
   });
 
-  test("every task that runs docker compose up checks the Docker version before it", () => {
+  test("every task that runs docker compose up stops on a failed Docker version check", () => {
     const unchecked = [...taskRuns()]
       .filter(([, lines]) => lines.some(isComposeUp))
       .filter(([, lines]) => {
         const check = lines.indexOf(CHECK);
-        return check === -1 || check > lines.findIndex(isComposeUp);
+        return (
+          lines[0] !== ERREXIT ||
+          check === -1 ||
+          check > lines.findIndex(isComposeUp)
+        );
       })
       .map(([name]) => name);
 

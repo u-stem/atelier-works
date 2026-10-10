@@ -192,6 +192,9 @@ else
 fi
 
 # 11. Console用workerのマウント(起動中のコンテナがある場合だけ)
+# 正しい設定では、`/var/lib/factory`はコンテナのrootfsにあり、その下にはマウント先の
+# `requirements`しか無い。直下に`claude`、`gh`、`audits`のどれかが見えれば、根を
+# `/var/lib/factory`に付ける設定で作られたworkerが残っている。直下の名前はowner名とぶつからない。
 # `volume.subpath`が無視されると、`requirements`のサブパスではなく`factory_state`の根が
 # `/var/lib/factory/requirements`に付く。`docker inspect`のSourceはサブパスを反映しないので、
 # コンテナ内の見え方で判定する。根には`factory_state_init`が必ず`requirements`を作るため、
@@ -200,11 +203,13 @@ fi
 # 判定が見分けるのは根が付いたかどうかだけで、symlinkの先がマウントされた場合は見分けられない。
 # 判定は1回の`exec`にまとめ、シェルの終了コードで結果を返す。composeの失敗(1、126、127など)と
 # ぶつからないよう、専用の値を使う。
-#   11: マウント先が見え、その下に`requirements`が無い(根は付いていない)
-#   10: マウント先の下に`requirements`が見える(根が付いている)
+#   11: マウント先が見え、根は付いていない
+#   10: 直下か、マウント先の下に根の証拠が見える(根が付いている)
 #   3: マウント先が見えない
+# 直下の確認を先に行うのは、`requirements`がまだ無い根が`/var/lib/factory`に付いた場合も
+# 10で返すためである。
 # `sh -c`の文字列は固定にし、外から来る値を組み込まない。
-console_probe='test -d /var/lib/factory/requirements || exit 3; test -e /var/lib/factory/requirements/requirements && exit 10; exit 11'
+console_probe='test -e /var/lib/factory/claude || test -e /var/lib/factory/gh || test -e /var/lib/factory/audits && exit 10; test -d /var/lib/factory/requirements || exit 3; test -e /var/lib/factory/requirements/requirements && exit 10; exit 11'
 console_id=""
 if command -v docker >/dev/null 2>&1 && [[ -f "${COMPOSE_FILE}" ]]; then
   console_id="$(docker compose -f "${COMPOSE_FILE}" ps -q windmill_worker_console 2>/dev/null || true)"
@@ -216,7 +221,8 @@ if [[ -n "${console_id}" ]] && [[ "$(docker inspect -f '{{.State.Running}}' "${c
     sh -c "${console_probe}" >/dev/null 2>&1 || console_probe_status=$?
   case "${console_probe_status}" in
     11) report "console worker mount" ok "factory_stateの根は付いていません" ;;
-    10) report "console worker mount" ng "/var/lib/factory/requirements/requirementsが見えます。factory_stateの根が付いている恐れがあります(対象リポジトリのownerがrequirementsなら正常です)" ;;
+    10) report "console worker mount" ng "/var/lib/factory/requirements/requirementsか、/var/lib/factoryの直下のclaude、gh、auditsが見えます。factory_stateの根が付いている恐れがあります(見えたのがrequirements/requirementsだけで、対象リポジトリのownerがrequirementsなら正常です)" ;;
+    3) report "console worker mount" ng "/var/lib/factory/requirementsが見えません。マウントが設定どおりに付いていません(終了コード: ${console_probe_status})" ;;
     *) report "console worker mount" ok "windmill_worker_consoleでマウントを確認できないため確かめられません(終了コード: ${console_probe_status})" ;;
   esac
 else

@@ -269,7 +269,8 @@ defaultのworkerで動くものが置いたsymlinkの先を、Console用のworke
 そのため、スタックを起動するmiseのタスク(`up`、`deploy`)は、起動の前にEngineが26.0(API 1.45)以上、Composeが2.26.0以上かを確かめ、満たさなければ止まる。
 この強制が止めるのは、`mise run up`と`mise run deploy`を通した起動だけである。
 `mise exec -- docker compose ... up`を直接実行した場合や、restart policyによる再起動は止めない。
-`doctor`は同じ検査に加えて、起動中のConsole用workerの中から、`factory_state`の根にだけある`requirements/requirements`が見えないことを確かめる。
+`doctor`は同じ検査に加えて、起動中のConsole用workerの中から、`factory_state`の根の証拠が見えないことを確かめる。
+証拠は、`/var/lib/factory`の直下の`claude`、`gh`、`audits`と、根にだけある`requirements/requirements`である。
 Podmanは対象外である。
 
 次のことは、この境界では守れない。
