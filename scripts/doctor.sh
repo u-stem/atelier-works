@@ -203,15 +203,23 @@ if command -v docker >/dev/null 2>&1 && [[ -f "${COMPOSE_FILE}" ]]; then
   console_id="$(docker compose -f "${COMPOSE_FILE}" ps -q windmill_worker_console 2>/dev/null || true)"
 fi
 if [[ -n "${console_id}" ]] && [[ "$(docker inspect -f '{{.State.Running}}' "${console_id}" 2>/dev/null || echo false)" == "true" ]]; then
+  # 本判定の`test -e`は、`exec`自体の失敗も終了コード1で返す。
+  # 先に`test -d`でマウント先が見えることを確かめ、`exec`が通ったと分かってから判定する。
   # `set -e`の下でも終了コードを受け取れるよう、`if`の外で`|| status=$?`と書く。
   console_probe_status=0
   docker compose -f "${COMPOSE_FILE}" exec -T windmill_worker_console \
-    test -e /var/lib/factory/requirements/requirements >/dev/null 2>&1 || console_probe_status=$?
-  case "${console_probe_status}" in
-    0) report "console worker mount" ng "/var/lib/factory/requirements/requirementsが見えます。factory_stateの根が付いている恐れがあります(対象リポジトリのownerがrequirementsなら正常です)" ;;
-    1) report "console worker mount" ok "requirementsのサブパスだけがマウントされています" ;;
-    *) report "console worker mount" ok "windmill_worker_consoleでコマンドを実行できないため確かめられません(終了コード: ${console_probe_status})" ;;
-  esac
+    test -d /var/lib/factory/requirements >/dev/null 2>&1 || console_probe_status=$?
+  if [[ "${console_probe_status}" -eq 0 ]]; then
+    docker compose -f "${COMPOSE_FILE}" exec -T windmill_worker_console \
+      test -e /var/lib/factory/requirements/requirements >/dev/null 2>&1 || console_probe_status=$?
+    case "${console_probe_status}" in
+      0) report "console worker mount" ng "/var/lib/factory/requirements/requirementsが見えます。factory_stateの根が付いている恐れがあります(対象リポジトリのownerがrequirementsなら正常です)" ;;
+      1) report "console worker mount" ok "requirementsのサブパスだけがマウントされています" ;;
+      *) report "console worker mount" ok "windmill_worker_consoleでコマンドを実行できないため確かめられません(終了コード: ${console_probe_status})" ;;
+    esac
+  else
+    report "console worker mount" ok "windmill_worker_consoleでマウント先を確認できないため確かめられません(終了コード: ${console_probe_status})"
+  fi
 else
   report "console worker mount" ok "windmill_worker_consoleが起動していないため確かめられません"
 fi
