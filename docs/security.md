@@ -730,9 +730,12 @@ GitHubでは、ラベルを付けるのにtriage以上の権限が要る。`auth
 そのため、ラベルを付けられる人は、承認の取り消しも起こせる。
 pushの権限を持たないtriageの権限のcollaboratorも、これに含まれる。
 
-残るリスクとして、許可されていない人の操作を運用者に見せるnotice(`labeler_association_denied`)が、運用者の見ないまま要対応の一覧から消えることがある。
-許可された人がラベルを付け直してIssueを取得すると、`poll_issues`がそのIssueの未解決の同noticeを解決済みにする(`resolved_by`は`poll_issues`)。対象の範囲は[通知とrate limit](internals/notifications.md)にある。
-解決した後も行は残り、`retention_logs_days`(既定30日)の掃除まで読める。
+残るリスクとして、許可されていない人の操作を運用者に見せるnotice(`labeler_association_denied`)は、運用者が確かめないまま解決済みになることがある。
+このnoticeは重要度が「情報」なので、要対応の一覧には出ず、Consoleのシステム画面に7日だけ出る。
+その間に、許可された人がラベルを付け直してIssueを取得すると、`poll_issues`が同じIssueの未解決のnoticeを解決済みにする。
+対象の範囲は[通知とrate limit](internals/notifications.md)にある。
+解決しなかったnoticeも、作成から`retention_logs_days`(既定30日)を過ぎると、DBの掃除が解決済みにする。
+どちらの場合も行は残り、解決の時刻から同じ期間の掃除までは、解決済みの履歴として読める。
 許可されていない人は、取得の条件である最後のラベル付与者が許可された人であることを満たせないので、この解決を起こせない。
 Consoleからは解決できない種類だが、人の介在を減らすため、この自動の解決を受け入れる。
 
