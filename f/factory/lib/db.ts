@@ -1015,6 +1015,29 @@ export async function resolveNoticeIfUnresolved(
 }
 
 /**
+ * `kind`と`message`が完全に一致する未解決のnoticeを、すべて解決済みにする。
+ * 解決者は`resolvedBy`、解決時刻は`now()`に記録し、解決した行数を返す。
+ * 本文の一部が重なる別の対象(`review`と`review-fix`のようにラベル名が接頭辞になる場合など)に
+ * 当たらないよう、前方一致ではなく完全一致で選ぶ。
+ */
+export async function resolveUnresolvedNoticesByMessage(
+  kind: string,
+  message: string,
+  resolvedBy: string,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  const rows = await sql`
+    UPDATE factory.notices
+    SET resolved = true, resolved_by = ${resolvedBy}, resolved_at = now()
+    WHERE resolved = false
+      AND kind = ${kind}
+      AND message = ${message}
+    RETURNING id
+  `.fetch();
+  return rows.length;
+}
+
+/**
  * `kind`が一致し、`message`が`messagePrefix`で始まる未解決のnoticeを、すべて解決済みにする。
  * 解決者は`resolvedBy`、解決時刻は`now()`に記録し、解決した行数を返す。
  * 前方一致は`starts_with`で行い、`LIKE`のワイルドカード(`%`、`_`)は使わない。

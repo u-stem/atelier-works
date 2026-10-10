@@ -30,7 +30,7 @@ import {
   listActive,
   listTrackedPrs,
   recordFailure,
-  resolveUnresolvedNoticesByPrefix,
+  resolveUnresolvedNoticesByMessage,
   setFixRound,
   setFlowJobId,
   setObservedWatermarks,
@@ -254,12 +254,11 @@ export type ClaimPrResult =
  * 次のポーリングで同じPRのサイクルが二重に始まる(ラベルの経路は、稼働中の作業項目があっても
  * `decidePrActions`が止めない)。そのため、トリガーラベルを付け直して
  * `claimed: false`と`restored: true`を返し、次のポーリングが拾い直す。
- * 付け直しも失敗したら、読み取りの失敗と付け直しの失敗の両方を含む例外を投げる(`main()`が失敗に記録する)。
- * 読み取りの失敗がレート制限のときは、付け直さない。同じ制限に当たり、さらに最大120秒待つためである。
- * ラベルは外れたままで人が付け直す必要があることを、`PrClaimLabelLeftRemovedError`で知らせる。
- * 付け直しも失敗したときも、同じ例外を投げる。`main()`が失敗に記録し、
- * 該当したPRを集めてDiscordに知らせる(`notifyPrLabelsLeftRemoved`)。
  * 付け直しは5xxと通信断を1回再送する(ラベルの追加は何度送っても状態が同じ)。
+ * ラベルが外れたままになるのは、読み取りの失敗がレート制限のとき(同じ制限に当たり、
+ * さらに最大120秒待つので付け直さない)と、付け直しも失敗したときである。
+ * この2つでは`PrClaimLabelLeftRemovedError`を投げる。`main()`は、失敗に記録し、
+ * 要対応のnoticeを残し、該当したPRを集めてDiscordに知らせる(`notifyPrLabelsLeftRemoved`)。
  * assigneeは付けない(`claimIssue`と違う)。Factoryのログインをassignすると、
  * GitHub検索の`assignee:<viewer>`にそのPRが以後ずっと当たり続けるため。
  * 外した後に取り直して確かめるのは、別のアクターがラベルを付け直した場合を
@@ -351,7 +350,7 @@ function restoredClaimReason(triggerLabel: string): string {
 
 /**
  * `claim_race_lost`のnoticeの本文。対象と理由だけで決まる。
- * 記録(`recordPrClaimNotClaimed`)と解決(`resolveRestoredClaimNotice`)が同じ関数から作り、
+ * 記録(`recordPrClaimNotClaimed`)と解決(`resolveClaimNotices`)が同じ関数から作り、
  * 両者がずれて解決できなくなるのを防ぐ。
  */
 function prClaimNoticeMessage(
@@ -366,32 +365,60 @@ function prClaimNoticeMessage(
 }
 
 /**
- * PRの取得に成功したときに、ラベルを付け直して引いたときの未解決のnoticeを解決済みにする。
- * 同じラベルの本文だけが対象で、ほかの理由の`claim_race_lost`には触れない。
+ * PRの取得に成功したときに、そのPRとラベルの未解決のnoticeを解決済みにする。
+ * 対象は、確認できずにラベルを付け直したときの`claim_race_lost`と、
+ * ラベルが外れたままになった旨の`pr_trigger_label_left_removed`である。
+ * 本文の完全一致で選ぶので、`review`と`review-fix`のようにラベル名が互いの接頭辞でも、
+ * 別のラベルのnoticeには触れない。
  * 解決の失敗は取得の成否を変えず、警告をログに残すだけにする。
  */
-export async function resolveRestoredClaimNotice(
+export async function resolveClaimNotices(
   target: {
     readonly owner: string;
     readonly repo: string;
     readonly number: number;
   },
   triggerLabel: string,
-  resolve: typeof resolveUnresolvedNoticesByPrefix,
+  resolve: typeof resolveUnresolvedNoticesByMessage,
   log: Logger,
 ): Promise<void> {
-  try {
-    await resolve(
-      "claim_race_lost",
-      prClaimNoticeMessage(target, restoredClaimReason(triggerLabel)),
-      POLL_PRS_RESOLVER,
-    );
-  } catch (err) {
-    log.warn("claim_race_lost notices could not be resolved", {
-      target: `${target.owner}/${target.repo}#${String(target.number)}`,
-      error: errorMessage(err),
-    });
+  const notices = [
+    {
+      kind: "claim_race_lost",
+      message: prClaimNoticeMessage(target, restoredClaimReason(triggerLabel)),
+    },
+    {
+      kind: PR_LABEL_LEFT_REMOVED_KIND,
+      message: prLabelLeftRemovedMessage({ ...target, label: triggerLabel }),
+    },
+  ];
+  for (const notice of notices) {
+    try {
+      await resolve(notice.kind, notice.message, POLL_PRS_RESOLVER);
+    } catch (err) {
+      log.warn("claim notices could not be resolved", {
+        target: `${target.owner}/${target.repo}#${String(target.number)}`,
+        kind: notice.kind,
+        error: errorMessage(err),
+      });
+    }
   }
+}
+
+/** ラベルが外れたままになったPRの要対応のnoticeの`kind`。 */
+export const PR_LABEL_LEFT_REMOVED_KIND = "pr_trigger_label_left_removed";
+
+/**
+ * `pr_trigger_label_left_removed`のnoticeの本文。PRとラベルだけで決まる。
+ * 記録(`recordPrLabelLeftRemoved`)と解決(`resolveClaimNotices`)が同じ関数から作る。
+ */
+export function prLabelLeftRemovedMessage(item: {
+  readonly owner: string;
+  readonly repo: string;
+  readonly number: number;
+  readonly label: string;
+}): string {
+  return `${item.owner}/${item.repo}#${String(item.number)}: ${item.label}`;
 }
 
 /** 外れたままのトリガーラベルがあるPR。 */
@@ -454,7 +481,7 @@ export async function notifyPrLabelsLeftRemoved(
       reason,
       target: { kind: "pr", number: first.number },
       next_action: many
-        ? "GitHubのレート制限などが解けるのを待ってから、一覧のPRそれぞれに、括弧内のトリガーラベルを付け直してください"
+        ? "一覧のPRそれぞれについて、ラベルが既に付いていないか、Consoleで同じPRのpr_reviewかpr_fixが始まっていないかを確かめてください。始まっていなければ、GitHubのレート制限などが解けるのを待ってから、そのPRに括弧内のトリガーラベルを付け直してください"
         : nextActionFor(PR_LABEL_LEFT_REMOVED_REASON),
     },
     input.log,
@@ -530,7 +557,7 @@ const defaultClaimNotClaimedDeps: ClaimNotClaimedDeps = {
  * ラベルを付け直して引いたときは、読み取りが続けて失敗する間、ポーリングのたびに
  * 同じ本文になる。そのため、同じ本文の未解決のnoticeがあれば追加しない。
  * 本文は対象と固定の理由だけで決まり、エラーの文を含まない(エラーは警告のログに残る)。
- * ほかの理由は、従来どおり毎回追加する。
+ * ほかの理由は、毎回追加する。
  */
 export async function recordPrClaimNotClaimed(
   target: {
@@ -820,10 +847,10 @@ export async function main(): Promise<{
               skipped += 1;
               await recordPrClaimNotClaimed(candidate, claimResult);
             } else {
-              await resolveRestoredClaimNotice(
+              await resolveClaimNotices(
                 candidate,
                 config.review_label,
-                resolveUnresolvedNoticesByPrefix,
+                resolveUnresolvedNoticesByMessage,
                 log,
               );
               await startReview(
@@ -846,7 +873,13 @@ export async function main(): Promise<{
           }
         } catch (err) {
           failed += 1;
-          collectLabelLeftRemoved(labelsLeftRemoved, candidate, err);
+          await collectLabelLeftRemoved(
+            labelsLeftRemoved,
+            candidate,
+            err,
+            addNoticeUnlessUnresolved,
+            log,
+          );
           await recordFailureSafe(
             `trigger_review:${candidate.owner}/${candidate.repo}#${candidate.number}`,
             err,
@@ -869,10 +902,10 @@ export async function main(): Promise<{
             skipped += 1;
             await recordPrClaimNotClaimed(candidate, claimResult);
           } else {
-            await resolveRestoredClaimNotice(
+            await resolveClaimNotices(
               candidate,
               config.fix_label,
-              resolveUnresolvedNoticesByPrefix,
+              resolveUnresolvedNoticesByMessage,
               log,
             );
             await startFix(
@@ -886,7 +919,13 @@ export async function main(): Promise<{
           }
         } catch (err) {
           failed += 1;
-          collectLabelLeftRemoved(labelsLeftRemoved, candidate, err);
+          await collectLabelLeftRemoved(
+            labelsLeftRemoved,
+            candidate,
+            err,
+            addNoticeUnlessUnresolved,
+            log,
+          );
           await recordFailureSafe(
             `trigger_fix:${candidate.owner}/${candidate.repo}#${candidate.number}`,
             err,
@@ -916,17 +955,36 @@ export async function main(): Promise<{
   return { reviewsStarted, fixesStarted, skipped, failed };
 }
 
-/** `claimPr`が投げた「ラベルが外れたまま」の例外なら、`items`に足す。 */
-function collectLabelLeftRemoved(
+/**
+ * `claimPr`が投げた「ラベルが外れたまま」の例外なら、`items`に足し、要対応のnoticeをすぐ残す。
+ * Discordへのまとめた通知は、ループを抜けるときに送る。通知が届かなかったり、
+ * ループが途中で止まったりしても、noticeはPRごとに永続して残る。
+ * noticeの記録の失敗は警告のログだけにし、`items`への追加と通知は妨げない。
+ */
+export async function collectLabelLeftRemoved(
   items: PrLabelLeftRemoved[],
   candidate: { owner: string; repo: string; number: number },
   err: unknown,
-): void {
+  addNotice: typeof addNoticeUnlessUnresolved,
+  log: Logger,
+): Promise<void> {
   if (!(err instanceof PrClaimLabelLeftRemovedError)) return;
-  items.push({
+  const item = {
     owner: candidate.owner,
     repo: candidate.repo,
     number: candidate.number,
     label: err.label,
-  });
+  };
+  items.push(item);
+  try {
+    await addNotice({
+      kind: PR_LABEL_LEFT_REMOVED_KIND,
+      message: prLabelLeftRemovedMessage(item),
+    });
+  } catch (recordErr) {
+    log.warn("pr_trigger_label_left_removed notice could not be recorded", {
+      target: `${item.owner}/${item.repo}#${String(item.number)}`,
+      error: errorMessage(recordErr),
+    });
+  }
 }

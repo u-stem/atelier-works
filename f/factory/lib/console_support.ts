@@ -30,6 +30,7 @@ export const NOTICE_SEVERITY: Readonly<Record<string, NoticeSeverity>> = {
   pr_fix_reviewer_request_failed: "action",
   issue_proposal_record_failed: "action",
   claim_assignee_missing: "action",
+  pr_trigger_label_left_removed: "action",
   deployed_sha_mismatch: "action",
   cleanup_db_failed: "action",
   cleanup_worktree_busy: "action",

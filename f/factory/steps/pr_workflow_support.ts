@@ -3838,7 +3838,7 @@ const REASON_RULES: readonly ReasonRule[] = [
     describe: () =>
       "PRのトリガーラベルを外した後に取得を確認できず、ラベルが外れたままです",
     nextAction: () =>
-      "GitHubのレート制限などが解けるのを待ってから、PRに外れたほうの`factory:review`か`factory:fix`ラベルを付け直してください",
+      "PRにラベルが既に付いていないか、Consoleで同じPRのpr_reviewかpr_fixが始まっていないかを確かめてください。始まっていなければ、GitHubのレート制限などが解けるのを待ってから、外れたほうの`factory:review`か`factory:fix`ラベルを付け直してください",
   },
   {
     pattern: /^approval timed out$/,

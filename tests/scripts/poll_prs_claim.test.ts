@@ -13,12 +13,13 @@ import type { Logger } from "../../f/factory/lib/log.ts";
 import {
   type ClaimNotClaimedDeps,
   claimPr,
+  collectLabelLeftRemoved,
   notifyPrLabelsLeftRemoved,
   PR_LABEL_LEFT_REMOVED_REASON,
   PrClaimLabelLeftRemovedError,
   type PrLabelLeftRemoved,
   recordPrClaimNotClaimed,
-  resolveRestoredClaimNotice,
+  resolveClaimNotices,
 } from "../../f/factory/poll_prs.ts";
 import { describeReason } from "../../f/factory/steps/pr_workflow_support.ts";
 import {
@@ -631,11 +632,33 @@ describe("notifyPrLabelsLeftRemoved", () => {
     });
   });
 
+  test("asks to check the label and the started cycle before re-adding it", async () => {
+    const { sent, done } = run([ITEM_A]);
+    await done;
+    expect(sent[0]).toMatchObject({
+      next_action: expect.stringContaining(
+        "ラベルが既に付いていないか、Consoleで同じPRのpr_reviewかpr_fixが始まっていないかを確かめてください",
+      ),
+    });
+  });
+
+  test("asks the same check for every PR in the list", async () => {
+    const { sent, done } = run([ITEM_A, ITEM_B]);
+    await done;
+    expect(sent[0]).toMatchObject({
+      next_action: expect.stringContaining(
+        "ラベルが既に付いていないか、Consoleで同じPRのpr_reviewかpr_fixが始まっていないかを確かめてください",
+      ),
+    });
+  });
+
   test("tells the operator to re-add each label from the list", async () => {
     const { sent, done } = run([ITEM_A, ITEM_B]);
     await done;
     expect(sent[0]).toMatchObject({
-      next_action: expect.stringContaining("括弧内のトリガーラベル"),
+      next_action: expect.stringContaining(
+        "そのPRに括弧内のトリガーラベルを付け直してください",
+      ),
     });
   });
 
@@ -645,31 +668,50 @@ describe("notifyPrLabelsLeftRemoved", () => {
   });
 });
 
-describe("resolveRestoredClaimNotice", () => {
+describe("resolveClaimNotices", () => {
   const TARGET = { owner: "octo-owner", repo: "atelier-works", number: 7 };
   const noopLog: Logger = { info() {}, warn() {}, error() {} };
 
-  test("resolves the restored notice of that PR and label", async () => {
-    const calls: unknown[][] = [];
-    await resolveRestoredClaimNotice(
-      TARGET,
-      "factory:review",
-      async (...call) => {
-        calls.push(call);
-        return 1;
-      },
-      noopLog,
-    );
+  type Call = { kind: string; message: string; resolvedBy: string };
+
+  /** 完全一致で解決する、`resolveUnresolvedNoticesByMessage`と同じ意味の偽物。 */
+  function exactResolver(stored: readonly { kind: string; message: string }[]) {
+    const calls: Call[] = [];
+    const resolvedMessages: string[] = [];
+    const resolve = async (
+      kind: string,
+      message: string,
+      resolvedBy: string,
+    ) => {
+      calls.push({ kind, message, resolvedBy });
+      const hits = stored.filter(
+        (n) => n.kind === kind && n.message === message,
+      );
+      resolvedMessages.push(...hits.map((n) => n.message));
+      return hits.length;
+    };
+    return { resolve, calls, resolvedMessages };
+  }
+
+  test("resolves the restored notice and the left-removed notice of that PR and label", async () => {
+    const { resolve, calls } = exactResolver([]);
+    await resolveClaimNotices(TARGET, "factory:review", resolve, noopLog);
     expect(calls).toEqual([
-      [
-        "claim_race_lost",
-        "octo-owner/atelier-works#7: could not confirm the claim; restored trigger label factory:review",
-        "poll_prs",
-      ],
+      {
+        kind: "claim_race_lost",
+        message:
+          "octo-owner/atelier-works#7: could not confirm the claim; restored trigger label factory:review",
+        resolvedBy: "poll_prs",
+      },
+      {
+        kind: "pr_trigger_label_left_removed",
+        message: "octo-owner/atelier-works#7: factory:review",
+        resolvedBy: "poll_prs",
+      },
     ]);
   });
 
-  test("matches the message the recording side writes", async () => {
+  test("matches the message the restored-notice recording writes", async () => {
     const recorded: string[] = [];
     await recordPrClaimNotClaimed(
       TARGET,
@@ -687,22 +729,62 @@ describe("resolveRestoredClaimNotice", () => {
         },
       },
     );
-    const prefixes: string[] = [];
-    await resolveRestoredClaimNotice(
+    const { resolve, calls } = exactResolver([]);
+    await resolveClaimNotices(TARGET, "factory:review", resolve, noopLog);
+    expect(calls[0]?.message).toBe(recorded[0]);
+  });
+
+  test("matches the message the left-removed notice is recorded with", async () => {
+    const recorded: string[] = [];
+    await collectLabelLeftRemoved(
+      [],
       TARGET,
-      "factory:review",
-      async (_kind, prefix) => {
-        prefixes.push(prefix);
-        return 0;
+      new PrClaimLabelLeftRemovedError("factory:review", "m", null),
+      async (record) => {
+        recorded.push(record.message);
+        return 1;
       },
       noopLog,
     );
-    expect(recorded[0]?.startsWith(prefixes[0] ?? "\0")).toBe(true);
+    const { resolve, calls } = exactResolver([]);
+    await resolveClaimNotices(TARGET, "factory:review", resolve, noopLog);
+    expect(calls[1]?.message).toBe(recorded[0]);
   });
 
-  test("logs a warning and does not throw when resolving fails", async () => {
+  test("does not resolve the notice of another label that has this label as a prefix", async () => {
+    const { resolve, resolvedMessages } = exactResolver([
+      {
+        kind: "pr_trigger_label_left_removed",
+        message: "octo-owner/atelier-works#7: review-fix",
+      },
+      {
+        kind: "claim_race_lost",
+        message:
+          "octo-owner/atelier-works#7: could not confirm the claim; restored trigger label review-fix",
+      },
+    ]);
+    await resolveClaimNotices(TARGET, "review", resolve, noopLog);
+    expect(resolvedMessages).toEqual([]);
+  });
+
+  test("resolves the notice of the same label when another label shares its prefix", async () => {
+    const { resolve, resolvedMessages } = exactResolver([
+      {
+        kind: "pr_trigger_label_left_removed",
+        message: "octo-owner/atelier-works#7: review",
+      },
+      {
+        kind: "pr_trigger_label_left_removed",
+        message: "octo-owner/atelier-works#7: review-fix",
+      },
+    ]);
+    await resolveClaimNotices(TARGET, "review", resolve, noopLog);
+    expect(resolvedMessages).toEqual(["octo-owner/atelier-works#7: review"]);
+  });
+
+  test("logs a warning for each failed resolve and does not throw", async () => {
     const warns: string[] = [];
-    await resolveRestoredClaimNotice(
+    await resolveClaimNotices(
       TARGET,
       "factory:review",
       async () => {
@@ -716,6 +798,103 @@ describe("resolveRestoredClaimNotice", () => {
         error() {},
       },
     );
-    expect(warns).toEqual(["claim_race_lost notices could not be resolved"]);
+    expect(warns).toEqual([
+      "claim notices could not be resolved",
+      "claim notices could not be resolved",
+    ]);
   });
 });
+
+describe("collectLabelLeftRemoved", () => {
+  const TARGET = { owner: "octo-owner", repo: "atelier-works", number: 7 };
+  const leftRemoved = new PrClaimLabelLeftRemovedError(
+    "factory:fix",
+    "m",
+    null,
+  );
+
+  function recorder() {
+    const records: { kind: string; message: string }[] = [];
+    const add = async (record: { kind: string; message: string }) => {
+      records.push(record);
+      return 1;
+    };
+    return { records, add };
+  }
+
+  test("collects the PR with its label", async () => {
+    const items: PrLabelLeftRemoved[] = [];
+    await collectLabelLeftRemoved(
+      items,
+      TARGET,
+      leftRemoved,
+      recorder().add,
+      silentLog(),
+    );
+    expect(items).toEqual([{ ...TARGET, label: "factory:fix" }]);
+  });
+
+  test("records a persistent action notice right away in the fixed form", async () => {
+    const { records, add } = recorder();
+    await collectLabelLeftRemoved([], TARGET, leftRemoved, add, silentLog());
+    expect(records).toEqual([
+      {
+        kind: "pr_trigger_label_left_removed",
+        message: "octo-owner/atelier-works#7: factory:fix",
+      },
+    ]);
+  });
+
+  test("ignores other errors", async () => {
+    const items: PrLabelLeftRemoved[] = [];
+    const { records, add } = recorder();
+    await collectLabelLeftRemoved(
+      items,
+      TARGET,
+      new Error("other"),
+      add,
+      silentLog(),
+    );
+    expect({ items, records }).toEqual({ items: [], records: [] });
+  });
+
+  test("keeps the PR collected when recording the notice fails", async () => {
+    const items: PrLabelLeftRemoved[] = [];
+    await collectLabelLeftRemoved(
+      items,
+      TARGET,
+      leftRemoved,
+      async () => {
+        throw new Error("db down");
+      },
+      silentLog(),
+    );
+    expect(items).toHaveLength(1);
+  });
+
+  test("logs a warning when recording the notice fails", async () => {
+    const warns: string[] = [];
+    await collectLabelLeftRemoved(
+      [],
+      TARGET,
+      leftRemoved,
+      async () => {
+        throw new Error("db down");
+      },
+      {
+        info() {},
+        warn(message) {
+          warns.push(message);
+        },
+        error() {},
+      },
+    );
+    expect(warns).toEqual([
+      "pr_trigger_label_left_removed notice could not be recorded",
+    ]);
+  });
+});
+
+function silentLog(): Logger {
+  return { info() {}, warn() {}, error() {} };
+}

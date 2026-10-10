@@ -201,6 +201,7 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `labeler_association_denied` | `poll_issues` | 対象、ラベル付与者の関係 |
 | `claim_race_lost` | `poll_issues`、`poll_prs`、`manual_intake_register` | 対象、取得できなかった理由 |
 | `claim_assignee_missing` | `poll_issues` | 対象、assigneeにできなかったユーザー、確かめる点 |
+| `pr_trigger_label_left_removed` | `poll_prs` | 対象のPRと、外れたままのトリガーラベル |
 | `supersede_failed` | `insertIssueWorkItemUnlessActive`(`poll_issues`が呼ぶ) | 対象、新しい作業項目のID、操作が要らないこと |
 | `deployed_sha_mismatch` | `poll_issues` | self cloneのHEADと`f/factory/deployed_sha` |
 | `cleanup_db_failed` | `cleanup_db` | 削除に失敗した対象とエラー |
@@ -211,7 +212,14 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 `fix_reply_post_failed`は、返信の投稿に1件以上失敗したとき1件だけ残す。Discordには通知しない。`unsandboxed_check_commands`は、検査コマンドを実行するたびに残す。
 `cleanup_worktree_busy`は、1回の掃除でworktreeのパスごとに1件残す。Discordには通知しない。
 次のnoticeは、同じ本文の未解決のものがあるあいだは追加しない。
-対象は、`labeler_association_denied`、`claim_assignee_missing`、`claim_race_lost`、`supersede_failed`である。
+対象は、次の5種類である。
+
+- `labeler_association_denied`
+- `claim_assignee_missing`
+- `claim_race_lost`
+- `supersede_failed`
+- `pr_trigger_label_left_removed`
+
 `claim_race_lost`のうち、`poll_issues`と`manual_intake_register`が残すものは対象である。
 `poll_prs`が残すものは、確認できずにトリガーラベルを付け直したときだけ対象にする。
 `poll_prs`のその他の`claim_race_lost`は、毎回追加する。
@@ -227,8 +235,13 @@ Issueの取得に成功すると、`poll_issues`は未解決の`labeler_associat
 この種類はConsoleから解決できない。運用者が内容を確かめないまま消せると、許可されていない人の操作が見えなくなるためである。
 許可された人が付け直して取得できたときは、見送りの原因が解けているので、機械が解決しても、この目的と両立する。
 
-`poll_prs`は、PRの取得に成功すると、確認できずにラベルを戻したときの`claim_race_lost`を解決済みにする。
-対象は同じPRと同じラベルの本文で、`resolved_by`は`poll_prs`になる。ほかの理由の`claim_race_lost`には触れない。
+`poll_prs`は、PRの取得に成功すると、そのPRとラベルの未解決のnoticeを解決済みにする。
+対象は、確認できずにラベルを戻したときの`claim_race_lost`と、`pr_trigger_label_left_removed`である。
+本文が完全に一致する行だけを選ぶので、`review`と`review-fix`のようにラベル名が互いの接頭辞でも、別のラベルの行には触れない。`resolved_by`は`poll_prs`になる。
+
+`pr_trigger_label_left_removed`は、ラベルが外れたままのPRを検出した場所で、PRごとにすぐ残す。
+Discordの通知が届かなくても、Consoleから該当のPRを確かめられる。
+記録に失敗しても、警告のログを残すだけで、Discordの通知は送る。この種類は、人がConsoleから解決できる。
 
 解決済みのnoticeは、解決してから`retention_logs_days`(既定30日)を過ぎるとDBの掃除が消す。解決の時刻(`resolved_at`)が無い行は、作成の時刻から数える。
 重要度が「情報」の未解決のnoticeは、作成から同じ期間を過ぎると、削除せず解決済みへ変える(`resolved_by`は`cleanup_db`)。
