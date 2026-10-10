@@ -740,6 +740,12 @@ export type DeploymentRecord = {
   needs_host_action: boolean;
 };
 
+/** `factory.deployments`の最新の1行のうち、反映の成否と対象の版を表す列。 */
+export type LatestDeployment = {
+  readonly result: string;
+  readonly sha_to: string;
+};
+
 /** `db.addNotice`に渡す、`factory.notices`の1行。 */
 export type NoticeRecord = {
   kind: string;

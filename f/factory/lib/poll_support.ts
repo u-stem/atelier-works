@@ -11,6 +11,7 @@ import {
   isOneOf,
   isRecord,
   type LabelerAssociation,
+  type LatestDeployment,
   type NoticeRecord,
   type WorkItem,
   type WorkItemStatus,
@@ -160,12 +161,6 @@ export function deployedShaMismatchMessage(
   return hint === null ? base : `${base}。${hint}`;
 }
 
-/** `factory.deployments`の直近の1行のうち、原因の候補を選ぶのに使う列。 */
-export type LatestDeployment = {
-  readonly result: string;
-  readonly sha_to: string;
-};
-
 /**
  * 直近の反映の記録から、反映が止まっている原因の候補を言葉にする。
  * 断定せず候補だけを示す。続けて失敗しているスケジュールの通知
@@ -222,9 +217,26 @@ function withoutDeployedShaState(
   );
 }
 
+/** 未解決の`deployed_sha_mismatch`をすべて解決済みにする。失敗は警告のログだけにする。 */
+async function resolveOpenNotices(deps: DeployedShaCheckDeps): Promise<void> {
+  try {
+    const resolved = await deps.resolveNotices();
+    if (resolved > 0) {
+      deps.log.info("deployed_sha_mismatch notices resolved", {
+        count: resolved,
+      });
+    }
+  } catch (err) {
+    deps.log.warn("deployed_sha_mismatch resolve failed", {
+      error: errorText(err),
+    });
+  }
+}
+
 /**
  * 版の食い違いを判定し、stateとnoticeに反映する。
  * 変数が無い、または空のときは、まだ比べる対象が無いので、stateにもnoticeにも触れない。
+ * 版が一致したとき、または前回の記録と違う版へ反映が進んだときは、未解決のnoticeを解決する。
  * stateを読めない、または書けないときは、猶予を数えられない。
  * その場合は、本当の反映の停止を見逃さないよう、猶予を待たずに知らせる
  * (同じ本文のnoticeは重複して登録されない)。
@@ -267,16 +279,7 @@ export async function runDeployedShaCheck(
         log.warn("deployed_sha state clear failed", { error: errorText(err) });
       }
     }
-    try {
-      const resolved = await deps.resolveNotices();
-      if (resolved > 0) {
-        log.info("deployed_sha_mismatch notices resolved", { count: resolved });
-      }
-    } catch (err) {
-      log.warn("deployed_sha_mismatch resolve failed", {
-        error: errorText(err),
-      });
-    }
+    await resolveOpenNotices(deps);
     return "resolved";
   }
 
@@ -285,6 +288,11 @@ export async function runDeployedShaCheck(
   }
 
   if (decision.action === "record" && stateUsable) {
+    // 前回と違う版へ反映が進んだのは、停止が解消した証拠である。
+    // 古い版を名指しするnoticeを残さない。前回が無いときは、解消を確かめられない。
+    if (prev !== null && prev.deployed_sha !== deployedSha) {
+      await resolveOpenNotices(deps);
+    }
     try {
       await deps.setState({
         ...stored,
@@ -302,17 +310,26 @@ export async function runDeployedShaCheck(
   } catch (err) {
     log.warn("latest deployment lookup failed", { error: errorText(err) });
   }
-  await deps.addNotice({
+  const noticeId = await deps.addNotice({
     kind: "deployed_sha_mismatch",
     message: deployedShaMismatchMessage(
       deployedSha,
       deployedShaHint(latest, selfSha),
     ),
   });
-  log.warn("deployed_sha_mismatch notified", {
-    self_sha: selfSha,
-    deployed_sha: deployedSha,
-  });
+  // 本文は今のHEADを含まないので、ログに残す。
+  if (noticeId === null) {
+    log.info("deployed_sha_mismatch notice already open", {
+      self_sha: selfSha,
+      deployed_sha: deployedSha,
+    });
+  } else {
+    log.warn("deployed_sha_mismatch notice recorded", {
+      notice_id: noticeId,
+      self_sha: selfSha,
+      deployed_sha: deployedSha,
+    });
+  }
   return "notified";
 }
 

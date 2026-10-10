@@ -61,6 +61,11 @@ Claudeや検査コマンドが書ける詳細と、pr_fixのClaudeが理由と�
 残るリスクとして、Claudeは`blocked_reason`の全体を既知の理由と同じ文にできる。
 そのときは、その理由の訳文と次の操作が表示される。
 
+### 自己更新の通知の状態
+
+`poll_issues`は、版の食い違いを最初に見た時刻をWindmillのstateに保存し、猶予を超えたときに`deployed_sha_mismatch`を通知する。
+残るリスクとして、stateを書けるWindmillの利用者は、`deployed_sha_mismatch`の通知を遅らせられる。`deployed_sha`を書ける者と同じ範囲である。
+
 ## シークレットの扱い
 
 ### Windmillでの保持
@@ -275,8 +280,6 @@ Console用のworker(`windmill_worker_console`)は、Consoleの問い合わせと
 - `wmill sync push`がraw appを組み立てるときに動かすnpmには、`--ignore-scripts`が効かない。そのため、`wmill`のサブプロセスの環境変数に`NPM_CONFIG_IGNORE_SCRIPTS=true`を渡す。
 - ホストで動かすmiseのタスク(`mise run push`、`mise run deploy`など)も、`npm ci --ignore-scripts`とこの環境変数を使う。
 - raw appの`package-lock.json`には、install scriptを要する依存(`hasInstallScript`)が無い。そのような依存を足すと、コントラクトテスト(`tests/lib/self_update_support.test.ts`)が落ちる。足す前に、install scriptなしで組み立てが通るかを確かめる。
-
-残るリスクとして、stateを書けるWindmillの利用者は、`deployed_sha_mismatch`の通知を遅らせられる。`deployed_sha`を書ける者と同じ範囲である。
 
 ## Claude Codeの拒否ルール
 

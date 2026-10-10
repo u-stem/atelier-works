@@ -202,7 +202,7 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `claim_race_lost` | `poll_issues`、`poll_prs`、`manual_intake_register` | 対象、取得できなかった理由 |
 | `claim_assignee_missing` | `poll_issues` | 対象、assigneeにできなかったユーザー、確かめる点 |
 | `supersede_failed` | `insertIssueWorkItemUnlessActive`(`poll_issues`が呼ぶ) | 対象、新しい作業項目のID、操作が要らないこと |
-| `deployed_sha_mismatch` | `poll_issues` | self cloneのHEADと`f/factory/deployed_sha`、原因の候補 |
+| `deployed_sha_mismatch` | `poll_issues` | `f/factory/deployed_sha`、原因の候補 |
 | `cleanup_db_failed` | `cleanup_db` | 削除に失敗した対象とエラー |
 | `cleanup_worktrees_skipped` | `cleanup_workspaces` | 掃除を見送ったリポジトリ |
 | `cleanup_worktree_busy` | `cleanup_workspaces` | 作業項目のID、worktreeのパス、worktreeを使っているプロセス |
@@ -225,14 +225,21 @@ mergeの直後から自己更新が反映するまでの間は、版が必ず食
 `f/factory/deployed_sha`が空のときは、変数が無いときと同じく、何もしない。stateとnoticeは変えない。
 本文は反映済みの版を中心にし、今のself cloneのHEADを含めない。
 重複の判定は本文の一致で行うので、HEADを含めると、止まっている間にmergeのたびにnoticeが増える。時刻も入れない。
-今のHEADは、`poll_issues`のログ(`deployed_sha_mismatch notified`)で分かる。
+今のHEADは、`poll_issues`のログで分かる。
+noticeを新しく残したときは`deployed_sha_mismatch notice recorded`に、noticeのIDを添えて出る。
+同じ本文の未解決のnoticeがあったときは`deployed_sha_mismatch notice already open`に出る。
 本文には、直近の反映の記録(`factory.deployments`)から読んだ原因の候補を添える。
 記録の行の対象の版が今のHEADで、結果が失敗のときだけ、反映の失敗を候補にする。
 それ以外は、自己更新が止まっているか、まだ今のHEADを試していないことを候補にする。
-記録を読めなくても、noticeは残す。
+記録を読めない場合と、1行も無い場合でも、noticeは残す。そのときは候補を添えない。
 候補が変わると本文も変わるので、同じ反映済みの版でも、候補ごとに最大で1件ずつ残る。
-stateを読めない、または書けないときは、猶予を数えられない。反映の停止を見逃さないよう、待たずに残す。
-版が一致すると、`poll_issues`は未解決のnoticeをすべて解決済みにする(`resolved_by`は`poll_issues`)。反映の追いつきを確かめた後なので、古い版のnoticeも含める。
+stateを読めないとき、書けないときは、猶予を数えられない。反映の停止を見逃さないよう、待たずに残す。
+次のどちらかのとき、`poll_issues`は未解決のnoticeをすべて解決済みにする(`resolved_by`は`poll_issues`)。
+
+- 版が一致した。
+- 前回の記録と違う版へ反映が進んだ。止まっていた反映が動いたので、前の版を名指しするnoticeを残さない。前回の記録が無いときは、解消を確かめられないので解決しない。
+
+どちらも反映の進みを確かめた後なので、古い版のnoticeも含める。解決の失敗は警告のログだけにする。
 stateは、このキーだけを書き換え、消すときもこのキーだけを除く。ほかのキーは保つ。
 
 解決済みのnoticeは、解決してから`retention_logs_days`(既定30日)を過ぎるとDBの掃除が消す。解決の時刻(`resolved_at`)が無い行は、作成の時刻から数える。

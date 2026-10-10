@@ -47,6 +47,7 @@ import {
   isOneOf,
   isRecord,
   isString,
+  type LatestDeployment,
   type Notice,
   type NoticeRecord,
   type RequirementDraft,
@@ -916,16 +917,10 @@ export async function recordDeployment(
   return parseId(row.id, "id");
 }
 
-/** `factory.deployments`の最新の1行のうち、反映の成否と対象の版を表す列。 */
-export type LatestDeploymentRow = {
-  readonly result: string;
-  readonly sha_to: string;
-};
-
 /** `factory.deployments`の最新の1行を返す。1行も無ければ`null`を返す。 */
 export async function getLatestDeployment(
   sql: SqlClient = defaultSqlClient,
-): Promise<LatestDeploymentRow | null> {
+): Promise<LatestDeployment | null> {
   const rows = await sql`
     SELECT result, sha_to
     FROM factory.deployments

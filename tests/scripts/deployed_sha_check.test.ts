@@ -18,7 +18,7 @@ import type { NoticeRecord } from "../../f/factory/lib/types.ts";
 
 const T0 = 1_000_000_000_000;
 const MIN = 60 * 1000;
-const PAIR_STATE: DeployedShaState = {
+const SEEN_STATE: DeployedShaState = {
   deployed_sha: "bbb",
   first_seen_ms: T0,
 };
@@ -29,7 +29,7 @@ function decide(
   return decideDeployedSha({
     selfSha: "aaa",
     deployedSha: "bbb",
-    prev: PAIR_STATE,
+    prev: SEEN_STATE,
     nowMs: T0,
     graceMs: DEPLOYED_SHA_GRACE_MS,
     ...overrides,
@@ -122,8 +122,8 @@ describe("decideDeployedSha", () => {
 describe("parseDeployedShaState", () => {
   test("reads a valid state under the key", () => {
     expect(
-      parseDeployedShaState({ [DEPLOYED_SHA_STATE_KEY]: { ...PAIR_STATE } }),
-    ).toEqual(PAIR_STATE);
+      parseDeployedShaState({ [DEPLOYED_SHA_STATE_KEY]: { ...SEEN_STATE } }),
+    ).toEqual(SEEN_STATE);
   });
 
   test("returns null for undefined", () => {
@@ -137,7 +137,7 @@ describe("parseDeployedShaState", () => {
   test("returns null when first_seen_ms is not a number", () => {
     expect(
       parseDeployedShaState({
-        [DEPLOYED_SHA_STATE_KEY]: { ...PAIR_STATE, first_seen_ms: "x" },
+        [DEPLOYED_SHA_STATE_KEY]: { ...SEEN_STATE, first_seen_ms: "x" },
       }),
     ).toBeNull();
   });
@@ -153,7 +153,7 @@ describe("parseDeployedShaState", () => {
   test("returns null when first_seen_ms is not finite", () => {
     expect(
       parseDeployedShaState({
-        [DEPLOYED_SHA_STATE_KEY]: { ...PAIR_STATE, first_seen_ms: Number.NaN },
+        [DEPLOYED_SHA_STATE_KEY]: { ...SEEN_STATE, first_seen_ms: Number.NaN },
       }),
     ).toBeNull();
   });
@@ -208,22 +208,27 @@ type Harness = {
   notices: NoticeRecord[];
   states: Record<string, unknown>[];
   warnings: string[];
+  logs: { message: string; fields: Record<string, unknown> | undefined }[];
   resolveCalls: () => number;
 };
 
 const STORED: Record<string, unknown> = {
-  [DEPLOYED_SHA_STATE_KEY]: { ...PAIR_STATE },
+  [DEPLOYED_SHA_STATE_KEY]: { ...SEEN_STATE },
 };
 
 function harness(overrides: Partial<DeployedShaCheckDeps> = {}): Harness {
   const notices: NoticeRecord[] = [];
   const states: Record<string, unknown>[] = [];
   const warnings: string[] = [];
+  const logs: Harness["logs"] = [];
   let resolveCalls = 0;
   const log: Logger = {
-    info: () => {},
-    warn: (message) => {
+    info: (message, fields) => {
+      logs.push({ message, fields });
+    },
+    warn: (message, fields) => {
       warnings.push(message);
+      logs.push({ message, fields });
     },
     error: () => {},
   };
@@ -249,7 +254,14 @@ function harness(overrides: Partial<DeployedShaCheckDeps> = {}): Harness {
     log,
     ...overrides,
   };
-  return { deps, notices, states, warnings, resolveCalls: () => resolveCalls };
+  return {
+    deps,
+    notices,
+    states,
+    warnings,
+    logs,
+    resolveCalls: () => resolveCalls,
+  };
 }
 
 describe("runDeployedShaCheck", () => {
@@ -417,5 +429,115 @@ describe("runDeployedShaCheck", () => {
     });
     await runDeployedShaCheck(h.deps);
     expect(h.warnings).toContain("deployed_sha state write failed");
+  });
+
+  test("does not resolve the notices when there is no previous state", async () => {
+    const h = harness({ getState: () => Promise.resolve(undefined) });
+    await runDeployedShaCheck(h.deps);
+    expect(h.resolveCalls()).toBe(0);
+  });
+
+  test("resolves the notices when the deployed sha advanced", async () => {
+    const h = harness({
+      getState: () =>
+        Promise.resolve({
+          [DEPLOYED_SHA_STATE_KEY]: { deployed_sha: "old", first_seen_ms: T0 },
+        }),
+    });
+    await runDeployedShaCheck(h.deps);
+    expect(h.resolveCalls()).toBe(1);
+  });
+
+  test("starts a new count when the deployed sha advanced", async () => {
+    const h = harness({
+      getState: () =>
+        Promise.resolve({
+          [DEPLOYED_SHA_STATE_KEY]: { deployed_sha: "old", first_seen_ms: T0 },
+        }),
+    });
+    expect(await runDeployedShaCheck(h.deps)).toBe("recorded");
+  });
+
+  test("does not notify when the deployed sha advanced", async () => {
+    const h = harness({
+      getState: () =>
+        Promise.resolve({
+          [DEPLOYED_SHA_STATE_KEY]: { deployed_sha: "old", first_seen_ms: T0 },
+        }),
+    });
+    await runDeployedShaCheck(h.deps);
+    expect(h.notices).toEqual([]);
+  });
+
+  test("still records the state when resolving after an advance fails", async () => {
+    const h = harness({
+      getState: () =>
+        Promise.resolve({
+          [DEPLOYED_SHA_STATE_KEY]: { deployed_sha: "old", first_seen_ms: T0 },
+        }),
+      resolveNotices: () => Promise.reject(new Error("db down")),
+    });
+    await runDeployedShaCheck(h.deps);
+    expect(h.states.length).toBe(1);
+  });
+
+  test("does not resolve the notices when the clock moved backwards", async () => {
+    const h = harness({ nowMs: () => T0 - 1 });
+    await runDeployedShaCheck(h.deps);
+    expect(h.resolveCalls()).toBe(0);
+  });
+
+  test("keeps resolving the notices without writing when the state cannot be read and the shas match", async () => {
+    const h = harness({
+      deployedSha: "aaa",
+      getState: () => Promise.reject(new Error("no state")),
+    });
+    await runDeployedShaCheck(h.deps);
+    expect(h.resolveCalls()).toBe(1);
+  });
+
+  test("does not write the state when it cannot be read and the shas match", async () => {
+    const h = harness({
+      deployedSha: "aaa",
+      getState: () => Promise.reject(new Error("no state")),
+    });
+    await runDeployedShaCheck(h.deps);
+    expect(h.states).toEqual([]);
+  });
+
+  test("clears the state key even when resolving the notices fails", async () => {
+    const h = harness({
+      deployedSha: "aaa",
+      resolveNotices: () => Promise.reject(new Error("db down")),
+    });
+    await runDeployedShaCheck(h.deps);
+    expect(h.states).toEqual([{}]);
+  });
+
+  test("logs the notice id and both shas when a notice is recorded", async () => {
+    const h = harness();
+    await runDeployedShaCheck(h.deps);
+    expect(
+      h.logs.find((l) => l.message === "deployed_sha_mismatch notice recorded")
+        ?.fields,
+    ).toEqual({ notice_id: 1, self_sha: "aaa", deployed_sha: "bbb" });
+  });
+
+  test("logs the head sha when the notice is already open", async () => {
+    const h = harness({ addNotice: () => Promise.resolve(null) });
+    await runDeployedShaCheck(h.deps);
+    expect(
+      h.logs.find(
+        (l) => l.message === "deployed_sha_mismatch notice already open",
+      )?.fields,
+    ).toEqual({ self_sha: "aaa", deployed_sha: "bbb" });
+  });
+
+  test("does not log a recorded notice when the notice is already open", async () => {
+    const h = harness({ addNotice: () => Promise.resolve(null) });
+    await runDeployedShaCheck(h.deps);
+    expect(
+      h.logs.some((l) => l.message === "deployed_sha_mismatch notice recorded"),
+    ).toBe(false);
   });
 });
