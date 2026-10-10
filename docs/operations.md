@@ -625,7 +625,7 @@ Consoleの**通知**タブには、Discordに送らない要対応の事項が�
 | `workspace_disk_usage` | 作業領域の掃除(毎日03:00)が記録したディスク使用量 | 増え続けていないか見る |
 | `console_fetch_failed` | Consoleの取り込みが失敗した | 通知の「次の操作」に従う |
 | `console_fetch_stale` | Consoleの取り込みの結果が30分以上更新されていない | 取り込みのコンテナ(`console_fetcher`)が動いているか確かめる |
-| `console_worker_missing` | tag `console`のジョブが、予定時刻から5分以上実行されずに待っている。Console用のworkerが居ない、2枠とも塞がっている、またはtagの設定がずれていて、Consoleのジョブがqueueに溜まり、Consoleが止まる | `docker compose ps windmill_worker_console`でコンテナの状態を確かめ、無ければ`mise run up`で起動し、動いていれば`docker compose restart windmill_worker_console`で再起動する。コンテナが作られていなければ、`factory_state_init`が失敗していないかを[Console用workerを確かめる](#console用workerを確かめる)の手順で確かめる。直らなければ、Windmillの画面でtag `console`の実行中のジョブとワーカーグループのtagを確かめる。自己更新(10分ごと)が検知し、Discordにも届く |
+| `console_worker_missing` | tag `console`のジョブが、予定時刻から5分以上実行されずに待っている。Console用のworkerが居ない、2枠とも塞がっている、またはtagの設定がずれていて、Consoleのジョブがqueueに溜まり、Consoleが止まる | `docker compose ps windmill_worker_console`でコンテナの状態を確かめ、無ければ`mise run up`で起動し、動いていれば`mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_worker_console`で作り直す(`restart`は`factory_state_init`を経ずにマウントを解決し直す)。コンテナが作られていなければ、`factory_state_init`が失敗していないかを[Console用workerを確かめる](#console用workerを確かめる)の手順で確かめる。直らなければ、Windmillの画面でtag `console`の実行中のジョブとワーカーグループのtagを確かめる。自己更新(10分ごと)が検知し、Discordにも届く |
 | `console_worker_check_failed` | Console用のworkerがジョブを受けているかを、自己更新が1時間(6回)続けて確かめられなかった。workerが止まっていても気づけない状態である | 自己更新のジョブログで、下の4種類の警告のどれが出ているかを確かめて原因を直す。`could not confirm the console worker from the job lists`が続くなら、`console_fetch_watch`のスケジュールが有効か、直近の実行がtag `console`で動いているかを確かめる。Discordにも届く |
 | `schedule_failing` | 同じスケジュールの直近3回の実行が続けて失敗した。数えるのはスケジュールの実行そのものの失敗で、成功した実行の中で記録する部分的な失敗は含まない。GitHubのPATの失効などが原因になる | ジョブのログで失敗の内容を確かめて原因を直す。PATは[秘密をローテーションする](#秘密をローテーションする)で再発行する |
 | `schedule_failing_check_failed` | スケジュールが続けて失敗しているかを、ジョブ履歴から判定できなかった。失敗が続いても気づけない状態である | `on_error_schedule`のジョブのログで`failed to read the schedule history`のエラーを確かめ、ジョブ履歴を読む権限があるかを確かめる |
@@ -1016,8 +1016,8 @@ defaultのworkerで動いたコードがsymlinkを置いた可能性がある。
 4. Console用のworkerを作り直す。
 
 ```bash
-mise exec -- docker compose -f infra/docker-compose.yml run --rm --no-deps --entrypoint ls factory_state_init -la /var/lib/factory
-mise exec -- docker compose -f infra/docker-compose.yml run --rm --no-deps --entrypoint rm factory_state_init /var/lib/factory/requirements
+mise exec -- docker compose -f infra/docker-compose.yml run --rm --no-deps --pull never --entrypoint ls factory_state_init -la /var/lib/factory
+mise exec -- docker compose -f infra/docker-compose.yml run --rm --no-deps --pull never --entrypoint rm factory_state_init /var/lib/factory/requirements
 mise run up
 mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_worker_console
 ```
@@ -1031,7 +1031,8 @@ mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate w
 
 > [!NOTE]
 > `factory_state_init`は`read_only`で、権限もすべて落としている。
-> この条件でも、所有者がrootのディレクトリにあるsymlinkは`rm`で消せる見込みだが、実機では確かめていない。
+> この条件でも`rm`は通る見込みである。`factory_state_init`が新しいボリュームで`mkdir`できたのと同じ条件(所有者がrootでモードが0755の`_data`)だからである。実機では確かめていない。
+> `--pull never`は、外向きの通信が無いときでも使え、余計なpullをしないために付ける。
 > `rm`が権限のエラーで失敗したときは、出力を控えて、運用者が対処を決める。
 
 マウントが想定どおりかは、起動中のworkerの中から`/var/lib/factory/requirements/requirements`が見えるかで判定する。
@@ -1039,15 +1040,19 @@ mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate w
 根には`factory_state_init`が必ず`requirements`を作るので、根が付いていればこのパスが見える。
 `docker inspect`のSourceは、サブパスを反映しないので、判定に使わない。
 
-- `test`が成功する(終了コード0)なら、根が付いている。Dockerの版を下限以上にしてから、Console用のworkerを作り直す。
-- `test`が終了コード1で失敗するなら、サブパスだけが付いている。
-- ほかの終了コードか、コンテナが動いていないときは、確かめられない。
+判定は1回の`exec`で行い、`sh -c`の終了コードで結果を返す。
+composeの失敗(1、126、127など)とぶつからないよう、専用の値を使う。
+
+- 11なら、根は付いていない。
+- 10なら、根が付いている。Dockerの版を下限以上にしてから、Console用のworkerを作り直す。
+- ほかの終了コード(マウント先が見えない3を含む)か、コンテナが動いていないときは、確かめられない。
 
 ```bash
-mise exec -- docker compose -f infra/docker-compose.yml exec -T windmill_worker_console test -e /var/lib/factory/requirements/requirements; echo "exit=$?"
+mise exec -- docker compose -f infra/docker-compose.yml exec -T windmill_worker_console sh -c 'test -d /var/lib/factory/requirements || exit 3; test -e /var/lib/factory/requirements/requirements && exit 10; exit 11'; echo "exit=$?"
 ```
 
-`mise run doctor`も同じ判定をする。
+`mise run doctor`も同じ判定をし、11を「`factory_state`の根は付いていません」と表示する。
+この判定が見分けるのは、根が付いたかどうかだけである。symlinkの先がマウントされた場合は見分けられないので、その疑いは、上の手順の`ls -la`で確かめる。
 対象リポジトリのowner名が`requirements`だと、サブパスだけが付いていても、このパスが見えて想定外と判定される。
 その場合は、次の`ls`でowner名のディレクトリを確かめる。
 

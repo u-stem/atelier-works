@@ -21,9 +21,8 @@ type Fake = {
   consoleId: string | undefined;
   // `docker inspect -f '{{.State.Running}}'`が返す値。
   running: boolean;
-  // マウント先のディレクトリを確かめる`test -d`の終了コード。0は見える。
-  dirStatus: number;
-  // `compose exec`の本判定の終了コード。0はパスが存在し、1は存在しない。
+  // `compose exec`の判定の終了コード。11は根が付いていない、10は根が付いている、
+  // 3はマウント先が見えない。それ以外はcomposeやshellの失敗。
   execStatus: number;
   // `docker version`が返すEngineのAPI版。
   apiVersion: string;
@@ -32,13 +31,15 @@ type Fake = {
 const defaults: Fake = {
   consoleId: "abc123",
   running: true,
-  dirStatus: 0,
-  execStatus: 1,
+  execStatus: 11,
   apiVersion: "1.47",
 };
 
 // 本物のdockerではなく、版とコンテナの状態を固定して返す偽のdockerをPATHの先頭に置く。
-// `compose exec`は、doctorが固定の引数を渡したときだけ設定した終了コードで終わる。
+// `compose exec`は、doctorが固定の引数を1回で渡したときだけ設定した終了コードで終わる。
+const PROBE =
+  "test -d /var/lib/factory/requirements || exit 3; test -e /var/lib/factory/requirements/requirements && exit 10; exit 11";
+
 function installFakeDocker(overrides: Partial<Fake>): void {
   const fake = { ...defaults, ...overrides };
   const body = [
@@ -57,12 +58,8 @@ function installFakeDocker(overrides: Partial<Fake>): void {
     '        elif [ "$4" = ps ]; then',
     "          :",
     '        elif [ "$4" = exec ] && [ "$5" = -T ] && [ "$6" = windmill_worker_console ] \\',
-    '          && [ "$7" = test ] && [ "$8" = -d ] \\',
-    '          && [ "$9" = /var/lib/factory/requirements ] && [ "$#" = 9 ]; then',
-    `          exit ${fake.dirStatus}`,
-    '        elif [ "$4" = exec ] && [ "$5" = -T ] && [ "$6" = windmill_worker_console ] \\',
-    '          && [ "$7" = test ] && [ "$8" = -e ] \\',
-    '          && [ "$9" = /var/lib/factory/requirements/requirements ] && [ "$#" = 9 ]; then',
+    '          && [ "$7" = sh ] && [ "$8" = -c ] \\',
+    `          && [ "$9" = '${PROBE}' ] && [ "$#" = 9 ]; then`,
     `          exit ${fake.execStatus}`,
     "        else",
     "          exit 99",
@@ -98,16 +95,42 @@ function doctorLine(label: string): string {
 }
 
 describe("doctor.sh Console worker mount", () => {
-  test("reports OK when requirements/requirements does not exist", () => {
-    installFakeDocker({ execStatus: 1 });
+  test("reports OK when the probe exits 11", () => {
+    installFakeDocker({ execStatus: 11 });
 
-    expect(doctorLine("console worker mount")).toMatch(/^\s+OK\s/);
+    expect(doctorLine("console worker mount")).toMatch(
+      /^\s+OK\s.*根は付いていません/,
+    );
   });
 
-  test("reports NG when requirements/requirements exists", () => {
-    installFakeDocker({ execStatus: 0 });
+  test("reports NG when the probe exits 10", () => {
+    installFakeDocker({ execStatus: 10 });
 
     expect(doctorLine("console worker mount")).toMatch(/^\s+NG\s/);
+  });
+
+  test("reports OK as unverifiable when the probe exits 3", () => {
+    installFakeDocker({ execStatus: 3 });
+
+    expect(doctorLine("console worker mount")).toMatch(
+      /^\s+OK\s.*確かめられません/,
+    );
+  });
+
+  test("reports OK as unverifiable when the probe exits 1", () => {
+    installFakeDocker({ execStatus: 1 });
+
+    expect(doctorLine("console worker mount")).toMatch(
+      /^\s+OK\s.*確かめられません/,
+    );
+  });
+
+  test("reports OK as unverifiable when the probe exits 126", () => {
+    installFakeDocker({ execStatus: 126 });
+
+    expect(doctorLine("console worker mount")).toMatch(
+      /^\s+OK\s.*確かめられません/,
+    );
   });
 
   test("reports OK as unverifiable when the container does not exist", () => {
@@ -119,23 +142,7 @@ describe("doctor.sh Console worker mount", () => {
   });
 
   test("reports OK as unverifiable when the container is not running", () => {
-    installFakeDocker({ running: false, execStatus: 0 });
-
-    expect(doctorLine("console worker mount")).toMatch(
-      /^\s+OK\s.*確かめられません/,
-    );
-  });
-
-  test("reports OK as unverifiable when the mount point check fails", () => {
-    installFakeDocker({ dirStatus: 1, execStatus: 1 });
-
-    expect(doctorLine("console worker mount")).toMatch(
-      /^\s+OK\s.*確かめられません/,
-    );
-  });
-
-  test("reports OK as unverifiable when exec fails with another status", () => {
-    installFakeDocker({ execStatus: 126 });
+    installFakeDocker({ running: false, execStatus: 10 });
 
     expect(doctorLine("console worker mount")).toMatch(
       /^\s+OK\s.*確かめられません/,

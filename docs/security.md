@@ -285,9 +285,11 @@ Podmanは対象外である。
   tag`console`を付けたscriptは、`requirements`の下を読める。書けるのはdefaultのworkerだけである。
 - composeの環境変数`WORKER_TAGS`は既定値である。DBにワーカーグループの設定があると、そちらが実効になる。変化はWindmillの画面の「Workers」で確かめる。
 - `factory_state_init`の確認の後にも隙がある。
-  Console用のworkerは、restart policy、Dockerデーモンの再起動、ホストの再起動で作り直されるたびに、`factory_state_init`を経ずにサブパスを解決し直す。
+  Console用のworkerは、`factory_state_init`を経ない起動のたびに、サブパスを解決し直す。
+  契機は、restart policy、Dockerデーモンの再起動、ホストの再起動、手動の`docker compose restart windmill_worker_console`である。
   その前にdefaultのworkerが`requirements`をsymlinkに置き換えると、symlinkの先がマウントされうる。
-  隙は、Console用のworkerを作り直すまで続く。`mise run up`は、設定の変わらない、動いているworkerを作り直さないためである。
+  隙は、`factory_state_init`を経ずにworkerが起動するたびに開く。
+  誤ったマウントは、symlinkを消してworkerを起動し直すまで残る。`mise run up`は、設定の変わらない、動いているworkerを作り直さないためである。
   `mise run up`が`factory_state_init`の失敗で止まったときは、その時点のworkerのマウントを疑う。
   [Console用workerを確かめる](operations.md#console用workerを確かめる)の手順でsymlinkを消し、workerを作り直す。
   突くにはdefaultのworkerでのコード実行が要る。その権限があれば`factory_state`の根を直接読めるので、実害は増えない。
