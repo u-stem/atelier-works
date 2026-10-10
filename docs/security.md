@@ -633,10 +633,11 @@ Claudeには、要件定義のディレクトリを一時ディレクトリに�
 ### 対象リポジトリのCIが動く
 
 実装ブランチのpushとPRの作成で、対象リポジトリの`push`と`pull_request`のCIが動く。Claudeの書いたコードは、人のレビューより前に、そのリポジトリのsecretsを使える状態で実行されうる。対象リポジトリのCIの権限とsecretsの範囲は、この前提で設定する。
+atelier-worksのCIは、`main`以外のpushでは動かない。
 
 ### 保護パスは止めずに明示する
 
-保護パスの変更は止めずに、PR本文とDiscordの通知に列挙する。保護パスは、PR修正の一覧より広い`IMPLEMENT_PROTECTED_PATH_PREFIXES`などで定める。そのラウンドは検査コマンドを実行せず、検査はGitHubのCIに任せる。atelier-worksのCIは、保護パスを含むPRでだけ`mise run check`を実行する。書き換えられた設定をworkerで実行すると、Issueの本文からコードを実行する経路になるためである。
+保護パスの変更は止めずに、PR本文とDiscordの通知に列挙する。保護パスは、PR修正の一覧より広い`IMPLEMENT_PROTECTED_PATH_PREFIXES`などで定める。そのラウンドは検査コマンドを実行せず、検査はGitHubのCIに任せる。書き換えられた設定をworkerで実行すると、Issueの本文からコードを実行する経路になるためである。
 
 ### symlinkの変更を止める
 

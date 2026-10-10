@@ -137,36 +137,18 @@ PRでは、次のどれにも触れないとき、検査を飛ばして成功に
   - `scripts/ci-metadata-login.sh`と`scripts/check-metadata-fresh.sh`
   - `mise.toml`
 
-比べる範囲は、PRではマージ基点からの変更である。
+比べる範囲は、マージ基点からの変更である。
 基点や差分を求められないときは、安全のために検査する。
 
 フックを飛ばしてコミットしたPRは、手元で`mise run metadata`を実行してpushし直すまで、このジョブで失敗する。
 
 ### CIの実行の範囲
 
-CIは、手元でできる検査を手元に任せ、手元でできない検査だけを実行する。
 `ci.yml`は、次のときに動く。
 
-- `main`へのpush。変更に関わらず必ず実行を作る。`console_fetcher`が、`main`へのpushで成功した実行の最新を取り込むためである。
-- PR。ただし`docs/`、ルート直下の`*.md`、`LICENSE`、`.github/ISSUE_TEMPLATE/`、`.github/PULL_REQUEST_TEMPLATE.md`だけの変更では動かさない。
-
-タグのpushでは動かさない。
-同じ参照の古いPRの実行は、新しい実行が始まると止める。`main`の実行は止めない。
-
-`check`ジョブは、`mise run check`(lint、文書の検査、型検査、test、Consoleの検査)を、保護パスを含むPRでだけ実行する。
-保護パスの一覧は、[セキュリティ](security.md)の「保護パスは止めずに明示する」と同じで、`f/factory/lib/protected_paths.ts`の`IMPLEMENT_PROTECTED_*`に合わせる。新しい`*.sh`も含める。
-保護パスの変更では、implementフローとpr_fixが検査しないので、CIが検査を担う。
-保護パスを含まないPRでは、`mise run check`を実行しない。手元のpre-pushが検査するためである。
-`main`へのpushでも実行しない。PRで検査済みのためである。
-差分を取れないときは、安全のために実行する。
-
-`check`ジョブは、gitleaksの走査、workerイメージのビルド、イメージの中でのプロセスロックのテストを常に実行する。
-プロセスロックのテストは、rootでないと手元の`mise run check`では飛ばされるためである。
-
-`console`ジョブは、lockfileの検査、ビルド、draw.ioのビューアの取得と照合、マニフェストの作成を常に実行し、`main`へのpushのときだけ成果物を上げる。
-型検査、lint、testは実行しない。
-`test-db`、`metadata`、`caddyfile`、`console-fetcher-image`の各ジョブは、常に実行する。
-クラウドのセッションにはmiseとlefthookが無く、そこで作った変更を検査するのはこれらのジョブだけだからである。
+- `push`は`main`だけで動く。ほかのブランチはPRの実行が検査し、タグのpushでは動かさない。
+- 文書だけのPRでは動かさない。対象は`docs/`、ルート直下の`*.md`、`LICENSE`、`.github/ISSUE_TEMPLATE/`、`.github/PULL_REQUEST_TEMPLATE.md`である。
+- 同じ参照の古いPRの実行は、新しい実行が始まると止める。`main`の実行は止めない。
 
 ### git worktreeのログイン情報
 

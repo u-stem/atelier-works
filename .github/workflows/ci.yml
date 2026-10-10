@@ -3,14 +3,12 @@ name: CI
 on:
   push:
     # `main`へのpushだけで動かす。ほかのブランチはPRの実行が検査する。
-    # `main`のpushは、変更に関わらず必ず実行を作る。
-    # console_fetcherが「`main`へのpushで成功した実行」の最新を取り込むため。
     # タグのpushでは動かさない。`main`という名前のタグで動くと、その実行が
     # console_fetcherから「mainの最新の成功した実行」に見え、取り込みが止まる。
     branches: [main]
   pull_request:
     # 文書とテンプレートだけの変更では動かさない。
-    # `.claude/**`は除外しない。保護パスで、フローは保護パスの変更の検査を実行せず、CIが担うため。
+    # `.claude/**`は除外しない。フローが保護パスの変更の検査を実行せず、CIが担うため。
     paths-ignore:
       - 'docs/**'
       - '*.md'
@@ -18,10 +16,11 @@ on:
       - '.github/ISSUE_TEMPLATE/**'
       - '.github/PULL_REQUEST_TEMPLATE.md'
 
-# 同じ参照の古いPRの実行は止める。`main`の実行は止めない。
+# 同じ参照の古いPRの実行は止める。`main`の実行は止めず、待機中の取り消しも起こさない。
 # `main`の実行を止めると、console_fetcherが取り込む成功した実行が欠けるため。
+# `main`の実行は実行ごとに別のグループにする。
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -39,109 +38,17 @@ jobs:
           # 後のステップは取得済みの履歴だけを使い、fetchもpushもしない。
           persist-credentials: false
 
-      - name: Determine whether the protected paths changed
-        # `mise run check`は、PRが保護パスに触れるときだけ実行する。
-        # 保護パスの変更では、implementフローとpr_fixが検査を実行せず、CIが担うため。
-        # それ以外の変更は、手元の`mise run check`とpre-pushが検査する。
-        # `main`へのpushでは実行しない。PRで検査済みのため。
-        # 保護パスの一覧は、`f/factory/lib/protected_paths.ts`の
-        # `IMPLEMENT_PROTECTED_*`と同じに保つ。新しい`*.sh`も保護パスとして扱う。
-        # 差分を取れないときは、安全側に倒して実行する。
-        id: scope
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -euo pipefail
-
-          prefixes=(
-            .claude/ .agents/ .github/ .mise/ .config/mise/ .lefthook/
-            console/public/ infra/ .husky/ .githooks/ .yarn/ .devcontainer/
-          )
-          exact_paths=(
-            console/index.html
-            console/drawio-viewer.json
-            console/scripts/drawio-viewer.ts
-            console/scripts/fetch-drawio-viewer.ts
-            console/scripts/manifest.ts
-            console/scripts/write-manifest.ts
-            scripts/check-console-lockfile.ts
-            console/scripts/asset-name.ts
-            console/vite.config.ts
-            infra/Caddyfile
-          )
-          # ディレクトリを問わず、ファイル名で判定するもの。
-          basenames=(
-            'mise\.toml' 'mise\..*\.toml' '\.mise\.toml'
-            'lefthook\.(yml|toml|json)' 'lefthook-local\.yml'
-            'bunfig\.toml' '\.npmrc' '\.gitattributes' '\.gitmodules'
-            '\.markdownlint(-cli2)?\.(jsonc?|ya?ml|[cm]?js)'
-            '\.textlintrc(\..*)?'
-            '\.env(\..*)?' '\.gitleaks(ignore|\.toml)' '\.tool-versions'
-            '\.(node|bun|python)-version' '\.nvmrc'
-            'rust-toolchain(\.toml)?' '\.yarnrc(\.yml)?' '\.pnpmfile\.cjs'
-            'bun\.lockb?' 'package-lock\.json' 'npm-shrinkwrap\.json'
-            'pnpm-lock\.yaml' 'yarn\.lock'
-            '[A-Za-z0-9_.-]+\.config\.[cm]?[jt]s'
-            '\.(eslintrc|babelrc|prettierrc)(\..*)?'
-            'Makefile' '[Jj]ustfile' 'Taskfile\.ya?ml' 'turbo\.json' 'nx\.json'
-            'deno\.jsonc?' 'CODEOWNERS' '\.pre-commit-config\.yaml'
-            'package\.json'
-            '(uv|poetry)\.lock' 'Pipfile(\.lock)?' 'pyproject\.toml'
-            'setup\.(py|cfg)' 'requirements.*\.txt'
-            'Cargo\.(lock|toml)' 'go\.(sum|mod)' 'Gemfile(\.lock)?'
-            'composer\.(lock|json)'
-          )
-          basename_pattern="^($(IFS='|'; echo "${basenames[*]}"))$"
-
-          is_protected() {
-            local path="$1" prefix exact base
-            for prefix in "${prefixes[@]}"; do
-              if [ "$path" = "${prefix%/}" ] || [[ "$path" == "$prefix"* ]]; then
-                return 0
-              fi
-            done
-            for exact in "${exact_paths[@]}"; do
-              if [ "$path" = "$exact" ]; then
-                return 0
-              fi
-            done
-            base="${path##*/}"
-            [[ "$base" =~ $basename_pattern ]]
-          }
-
-          run="true"
-          if [ "$EVENT_NAME" = "push" ]; then
-            run="false"
-          elif [ "$EVENT_NAME" = "pull_request" ]; then
-            changes="$RUNNER_TEMP/changes"
-            if git diff --no-renames --name-status -z "${BASE_SHA}...${HEAD_SHA}" > "$changes"; then
-              run="false"
-              while IFS= read -r -d '' status && IFS= read -r -d '' path; do
-                if is_protected "$path" || { [ "$status" = "A" ] && [[ "$path" =~ \.[sS][hH]$ ]]; }; then
-                  run="true"
-                  break
-                fi
-              done < "$changes"
-            fi
-          fi
-          echo "run=${run}" >> "$GITHUB_OUTPUT"
-          echo "mise run check needed: ${run}"
-
       - name: Setup mise
         uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
 
       - name: Install dependencies
         # `mise run check`はConsoleの検査(console:check)も含むので、Consoleの依存も入れる。
         # ルートとConsoleのどちらも、依存のinstall scriptは実行しない。
-        if: steps.scope.outputs.run == 'true'
         run: |
           bun install --frozen-lockfile --ignore-scripts
           bun install --cwd console --frozen-lockfile --ignore-scripts
 
       - name: Lint, typecheck, and test
-        if: steps.scope.outputs.run == 'true'
         run: mise run check
 
       - name: Determine gitleaks scan range
@@ -241,9 +148,10 @@ jobs:
     # Windmillのメタデータ(ロック、スキーマ、`wmill-lock.yaml`のハッシュ)が最新かを確かめる。
     # ローカルのpre-pushは、Windmillを起動できないときに`LEFTHOOK_EXCLUDE`で飛ばせる。
     # 飛ばしたコミットが古いメタデータのままマージされると、mainの自動反映がそれを配る。
-    # `check`ジョブから独立させ、jobレベルの`paths`では絞らない
-    # (常に状態を報告しないと、必須のチェックにできないため)。
+    # `check`ジョブから独立させる。
     # 関係する変更が無いときは、最初のステップの出力で後続のステップを飛ばして成功にする。
+    # 文書だけのPRはworkflowの`paths-ignore`で起動しないので、チェックが付かない。
+    # このジョブを必須のチェックにするときは、その点に注意する。
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -262,55 +170,25 @@ jobs:
           persist-credentials: false
 
       - name: Determine whether the metadata can be stale
-        # このpushやPRが、メタデータの入力かこのジョブの定義に触れるときだけ、後続のステップを動かす。
+        # `main`へのpushか、メタデータの入力かこのジョブの定義に触れるPRのときだけ、後続のステップを動かす。
         # 入力は、`f/`、ルートの`dependencies/`(ワークスペースの依存。ハッシュに入る)、
         # `wmill.yaml`(走査の範囲や言語を決める)、`wmill-lock.yaml`である。
         # このジョブ自身の定義(ワークフロー、compose、2つのスクリプト、`mise.toml`)が
         # 変わったときも、変更が動くことを確かめるために検査する。
-        # 範囲の決め方は、上の`check`ジョブの「Determine gitleaks scan range」と同じ。
-        # ただし`main`へのpushは、差分に関わらず常に検査する。
+        # `main`へのpushは、差分に関わらず常に検査する。
         # `main`のCIの結論は、`main`全体の状態を表すものとして使うため、
         # pushした範囲だけでなく、ツリー全体を検査した結果でなければならない。
-        # 新しいブランチの初回push(`before`がすべて0か空)は、`origin/main`とのマージ基点を差分の基点にする。
-        # マージ基点を求められないときと、差分を取れないとき
-        # (force pushで`before`が履歴から消えたなど)は、安全側に倒して検査する。
+        # PRはマージ基点からの変更で見る。差分を取れないときは、安全側に倒して検査する。
         id: scope
         env:
           EVENT_NAME: ${{ github.event_name }}
-          REF: ${{ github.ref }}
-          BEFORE_SHA: ${{ github.event.before }}
-          AFTER_SHA: ${{ github.sha }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          zero="0000000000000000000000000000000000000000"
-          from=""
-          to=""
-          if [ "$EVENT_NAME" = "push" ] && [ "$REF" = "refs/heads/main" ]; then
-            :
-          elif [ "$EVENT_NAME" = "pull_request" ]; then
-            from="$BASE_SHA"
-            to="$HEAD_SHA"
-          elif [ "$EVENT_NAME" = "push" ] && [ "$BEFORE_SHA" != "$zero" ] && [ -n "$BEFORE_SHA" ]; then
-            from="$BEFORE_SHA"
-            to="$AFTER_SHA"
-          elif [ "$EVENT_NAME" = "push" ]; then
-            # 初回pushの基点。求められなければ`from`は空のままで、検査する。
-            if base="$(git merge-base origin/main "$AFTER_SHA")"; then
-              from="$base"
-              to="$AFTER_SHA"
-            fi
-          fi
           run="true"
-          if [ -n "$from" ]; then
-            # PRはマージ基点からの変更(3点)、pushは直前の先頭からの変更(2点)で見る。
-            if [ "$EVENT_NAME" = "pull_request" ]; then
-              spec="${from}...${to}"
-            else
-              spec="${from}..${to}"
-            fi
-            if changed="$(git diff --name-only "$spec" -- \
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            if changed="$(git diff --name-only "${BASE_SHA}...${HEAD_SHA}" -- \
               f dependencies wmill.yaml wmill-lock.yaml \
               .github/workflows/ci.yml infra/docker-compose.yml infra/docker-compose.ci.yml \
               scripts/ci-metadata-login.sh scripts/check-metadata-fresh.sh mise.toml)"; then
@@ -369,8 +247,6 @@ jobs:
 
   console:
     # Consoleを組み立て、mainへのpushのときだけ成果物にする。
-    # 型検査、lint、testは、手元の`mise run console:check`とpre-pushが担う。
-    # 保護パスを含むPRでは、`check`ジョブの`mise run check`が`console:check`を含む。
     # console_fetcherは、このワークフロー全体が成功した実行の成果物だけを取り込む。
     runs-on: ubuntu-latest
     env:
@@ -403,6 +279,15 @@ jobs:
 
       - name: Install console dependencies
         run: bun install --cwd console --frozen-lockfile --ignore-scripts
+
+      - name: Type-check
+        run: bun run --cwd console typecheck
+
+      - name: Lint
+        run: bunx --bun biome check console
+
+      - name: Test
+        run: bun run --cwd console test
 
       - name: Build
         run: bun run --cwd console build
