@@ -751,6 +751,7 @@ Consoleが止まっていてもDiscordには届くので、通知の確認先は
 2. `mise run up`で起動し直す。workerのイメージの再ビルドとコンテナの再作成まで行う。
 
 workerの並列数(`NUM_WORKERS`)のような`infra/docker-compose.yml`の変更も、`git pull`だけでは反映されず、`mise run up`で反映される。
+マウントの変更では、該当するコンテナが作り直される。Console用のworkerが作り直される間は、Consoleの問い合わせが待たされる。
 
 まとめて反映したいときは、`mise run deploy`を手で実行する。必須の手順ではない。`mise run deploy`は次を順に行う。
 
@@ -986,6 +987,18 @@ mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker_con
 このworkerがボリュームに書くのは、ログと専用の依存キャッシュ(`worker_console_dependency_cache`)だけである。
 再起動しても、キャッシュのボリュームは残る。
 ボリュームを消したときは、次のジョブで依存をレジストリから取り直すので、外向きの通信が要る。
+
+このworkerは、要件定義書のディレクトリ(`factory_state`のサブパス`requirements`)を読み取り専用でマウントする。
+サブパスのディレクトリが無いと起動しないので、1回限りのサービス`factory_state_init`が先に作る。
+このサービスは`mkdir`だけを実行して正常に終了し、停止したコンテナが残る。
+`mise run up`のたびに実行し直すが、ディレクトリがあれば何も変えない。
+既存の環境でも、`mise run up`を1回実行すれば、このworkerが作り直されて新しいマウントになる。
+`windmill_worker_console`が起動しないときは、このサービスのログを確かめる。
+
+```bash
+mise exec -- docker compose -f infra/docker-compose.yml ps -a factory_state_init
+mise exec -- docker compose -f infra/docker-compose.yml logs factory_state_init
+```
 
 ### adminsワークスペースの組み込み項目
 

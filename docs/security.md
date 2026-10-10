@@ -246,25 +246,29 @@ Console用のworker(`windmill_worker_console`)は、Consoleの問い合わせと
 
 | 項目 | 設定 |
 | --- | --- |
-| 書き込めるマウント | `worker_logs`と専用の依存キャッシュ`worker_console_dependency_cache`だけである。`factory_state`と`factory_console`は読み取り専用でマウントする。`worker_logs`は、`windmill_server`、defaultのworker、nativeのworkerとも共有する書き込みのマウントである |
+| 書き込めるマウント | `worker_logs`と専用の依存キャッシュ`worker_console_dependency_cache`だけである。`worker_logs`は、`windmill_server`、defaultのworker、nativeのworkerとも共有する書き込みのマウントである |
+| `factory_state` | 根はマウントしない。サブパス`requirements`だけを、同じパス(`/var/lib/factory/requirements`)に読み取り専用でマウントする。Claude Codeとghの設定は、根の直下にあるので届かない |
+| `factory_console` | 読み取り専用でマウントする |
 | `factory_workspaces` | マウントしない。対象リポジトリのチェックアウトに届かない |
 | `worker_dependency_cache` | 共有しない。Console用のworkerは専用のボリュームを使うので、defaultのworkerと依存のキャッシュを通して影響し合わない |
 | `docker.sock` | マウントしない |
 | 権限 | `privileged`にしない。`no-new-privileges:true`と`init`を設定し、プロセス数は256、メモリは1024Mに絞る |
 
-`factory_state`を読めるのは、要件定義書と図のファイルを返すためである。
+`requirements`を読めるのは、要件定義書と図のファイルを返すためである。
+監査レポートは本文をDBから読むので、`audits`はマウントしない。
 `factory_console`は配信中のJSの置き場所なので、書き込みでマウントしない。
 読み取り専用で付けるのは、取り込みの失敗を見張るscriptが`status.json`を読むためである。
+
+サブパスのマウントは、ディレクトリが無いとコンテナが起動しない。
+1回限りのサービス`factory_state_init`が、起動の前に`requirements`を作る。
+このサービスは`factory_state`を書き込みでマウントするが、ネットワークを持たず、権限もすべて落とし、`mkdir`だけを実行して終わる。
 
 次のことは、この境界では守れない。
 
 - DBには届く。`DATABASE_URL`はdefaultのworkerと同じ管理者の接続だからである。
-- `factory_state`には、`requirements/`と`audits/`のほかに、次のものも入っていて、Console用のworkerから読める。
-  - Claude Codeの設定と履歴(`CLAUDE_CONFIG_DIR=/var/lib/factory/claude`)
-  - ghの設定(`GH_CONFIG_DIR=/var/lib/factory/gh`)
+- 要件定義書と図は読める。Consoleが表示するのと同じ内容である。
 - このworkerで動かすのはリポジトリのscriptの想定だが、これを強制する仕組みは無い。ワークスペースでscriptを編集できる者は、任意のscriptにtag`console`を付けられる。
-  tag`console`を付けたscriptは、上の設定と履歴を読める。書けるのはdefaultのworkerだけである。
-  読めると、Claude Codeとghの認証情報が漏れうる。
+  tag`console`を付けたscriptは、`requirements`の下を読める。書けるのはdefaultのworkerだけである。
 - composeの環境変数`WORKER_TAGS`は既定値である。DBにワーカーグループの設定があると、そちらが実効になる。変化はWindmillの画面の「Workers」で確かめる。
 
 ## 自己更新の依存インストール

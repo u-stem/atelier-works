@@ -6,6 +6,9 @@
 
 ホストに要るのは、Docker(Docker DesktopかOrbStack)とmiseだけである。node、bun、gh、windmill-cliなどほかのツールは、`mise run setup`の中の`mise install`で入る。
 
+Dockerは、Engineを26.0以上、Composeを2.26.0以上にする。
+Console用のworkerが、ボリュームのサブパスをマウントするためである。
+
 設定に`.env`系のファイルは使わない。`infra/.env`と`infra/secrets.env`は存在しない。秘密でない設定は`mise.toml`の`[env]`に、秘密値はgitignore済みの`mise.local.toml`に置く。理由は[セキュリティ](security.md)の「シークレットの扱い」にある。
 
 ## 資格情報を用意する
