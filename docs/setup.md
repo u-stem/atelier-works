@@ -151,6 +151,17 @@ CIの`metadata`ジョブも、メタデータが最新かを検査する。
 `check`ジョブは常に動かす。
 ただし、`check`ジョブの中のworkerイメージのビルドとプロセスロックのテストは、`worker`が偽のときに飛ばす。
 
+変更したパスは、次の順に規則を当てて、動かすジョブを決める。
+
+1. 個別の規則: 先に当たった規則だけを使う。
+2. 入力が決まっているパスの規則: 当たった規則のジョブをすべて動かす。
+3. 許可リスト: `check`の検査だけで足りるパス。どのジョブも動かさない。
+4. どれにも当たらないパス: すべてのフラグを真にする。
+
+どれにも当たらないパスは、読むジョブが分からない。
+検査を見逃すより、余分に動かすほうが安全なため、すべてのジョブを動かす。
+許可リストには、迷うパスを入れない。
+
 次のパスが変わると、すべてのフラグが真になる。
 CI自身と環境の定義が変わると、どのジョブの結果も変わりうるためである。
 
@@ -161,8 +172,9 @@ CI自身と環境の定義が変わると、どのジョブの結果も変わり
 - ルートの`tsconfig*.json`
 - `scripts/`の下の`.sh`ファイル(次の表に挙げたものを除く)
 - `scripts/ci-scope.ts`と`tests/scripts/ci-scope.test.ts`(判定自身。誤ると検査を飛ばすため)
+- 次の表と許可リストのどちらにも無いパス(`.mise.toml`、`.tool-versions`、`bunfig.toml`、`.npmrc`、`.gitattributes`など)
 
-それ以外のパスは、次の表のジョブだけを動かす。
+次の表のパスは、表のジョブだけを動かす。
 
 | パス | 動かすジョブ |
 | --- | --- |
@@ -175,7 +187,19 @@ CI自身と環境の定義が変わると、どのジョブの結果も変わり
 | `f/`、`dependencies/`、`wmill-lock.yaml` | `metadata` |
 | `scripts/check-metadata-fresh.sh`、`scripts/ci-metadata-login.sh` | `metadata` |
 | `console/`、`scripts/check-console-lockfile.ts` | `console` |
-| 文書、`tests/`、IssueとPRのテンプレート、`scripts/claude-hooks/run.sh`、`scripts/check-commit-msg.sh` | なし(`check`が検査する) |
+
+許可リストは、次のパスである。
+どれも、読むのは`check`のステップだけで、他のジョブは読まない。
+
+| パス | 理由 |
+| --- | --- |
+| `docs/`、`.md`ファイル | lint:docsとdocs:gen --checkが検査する |
+| `tests/` | テストは`check`だけが実行する(プロセスロックとCIの判定のテストは、上の規則が先に当たる) |
+| `.claude/`、`.agents/`、`templates/` | CIのジョブは読まない |
+| `rt.d.ts`、ルートの`c_factory_config.resource-type.yaml` | `wmill.yaml`の同期の対象(`f/**`)の外で、メタデータの入力ではない |
+| `biome.json`、`lefthook.yml`、`.gitleaks.toml`、`.textlintrc.json`、`.markdownlint`で始まるファイル、`.gitignore`、`LICENSE` | lintと走査の設定で、`check`のステップが読む |
+| `scripts/`の下の`.ts`ファイル | 上の規則に当たらないものは、`check`のテストが担う |
+| IssueとPRのテンプレート、`scripts/claude-hooks/run.sh`、`scripts/check-commit-msg.sh` | `check`の文書の検査とテストが担う |
 
 `console`ジョブは、型検査、lint、テストをしない。
 `check`ジョブの`mise run check`がConsoleの検査(`console:check`)を含むためである。
@@ -194,8 +218,11 @@ CI自身と環境の定義が変わると、どのジョブの結果も変わり
 検査を見逃すより、余分に動かすほうが安全なためである。
 
 - 差分を取れないとき
-- `main`へのpushで、成功した実行を取得できないとき、結果が空のとき、そのcommitが今のcommitの履歴に無いとき
+- `main`へのpushで、成功した実行を取得できないとき、結果が空のとき、結果の形が不正なとき
+- `main`へのpushで、基点が今のcommitと同じとき、または今のcommitの履歴に無いとき
 - イベントを判別できないとき
+
+理由は、`scope`ジョブのログに`scope fallback: <理由>`の1行で出る。
 
 ファイル名は、改行や空白を含んでいても壊れない形で読む。
 名前の変更は、変更前と変更後の両方のパスを変更として扱う。
@@ -203,8 +230,7 @@ CI自身と環境の定義が変わると、どのジョブの結果も変わり
 後続のジョブは、`scope`の出力が欠けても動く。
 `scope`ジョブが失敗しても、後続のジョブは動かし、実行は失敗になる。
 
-必須のステータスチェックは設定していない。
-そのため、飛ばしたジョブがPRのマージを止めることは無い。
+条件で飛ばしたジョブは、成功として扱われる。
 
 ### git worktreeのログイン情報
 
