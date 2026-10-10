@@ -2700,7 +2700,7 @@ export async function countImplementFailedRounds(
  *   不正な出力の再試行で同じstageの行が増えるので、作業項目ごとに1回と数える。
  * - Claudeの実行そのものが失敗した(`agent_runs.error`が入っている)行。`runClaude`は、
  *   タイムアウト、0以外の終了コード、`is_error`、ターンや予算の上限、不正な出力のどれでも
- *   失敗した行に`error`を書く。applyの実行の失敗は例外で終わってラウンドの記録を残さず、flowの再試行と`on_error_flow`は
+ *   失敗した行に`error`を書く。適用の実行の失敗は例外で終わってラウンドの記録を残さず、flowの再試行と`on_error_flow`は
  *   `fix_rounds`を書かないので、上の2つでは数えられない。検査の再実行の失敗は例外にならず、`blocked`のラウンドを残す。
  *   flowの再試行や`retry_work_item`で同じ作業項目の実行が何度失敗しても、1行ずつ数える。
  *   ただし次の2つは数えない。

@@ -390,7 +390,8 @@ PRワークフローは`f/factory/factory_config`の次の値を読む。
 | `model` | `claude-sonnet-5-5` | PR修正のモデル。同じPRの修正が2回失敗した後は`heavy_model`を使う |
 | `heavy_model` | `claude-opus-5-5` | PRレビューのモデルと、2回失敗した後のPR修正のモデル |
 
-モデルの昇格に使う失敗の数は、同じPRの`pr_fix`の作業項目から数える。次の3つを足す。
+モデルの昇格に使う失敗の数は、同じPRの`pr_fix`の作業項目から数える。
+次の3つを足す。
 
 - Claudeが動いて`blocked`で終えた`fix_rounds`の行
 - 検査の再実行(`pr_fix_verify_retry`)をした作業項目
