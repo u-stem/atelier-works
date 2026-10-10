@@ -1036,18 +1036,30 @@ describe("pruneWorktrees", () => {
 // 再利用の経路で、追跡refの読み取りが返すsha。
 const TRACKING_SHA = "c".repeat(40);
 
-// 実際に採取した`git worktree list --porcelain`の出力。
+/**
+ * `git worktree list --porcelain -z`の出力を組み立てる。
+ * 各行をNULで終え、各レコードの後にもう1つNULを置く。
+ */
+function porcelainZ(records: readonly (readonly string[])[]): string {
+  return records
+    .map((lines) => `${lines.map((line) => `${line}\0`).join("")}\0`)
+    .join("");
+}
+
+// 実際に採取した`git worktree list --porcelain -z`の出力の形。
 // パスは一般的な名前に置き換えた。
-const REAL_WORKTREE_PORCELAIN = [
-  "worktree /tmp/repo",
-  "HEAD c4c85336fb74d3bc13cca578c870a39583722c58",
-  "branch refs/heads/main",
-  "",
-  "worktree /tmp/repo-worktrees/contract-smoke-branch",
-  "HEAD c4c85336fb74d3bc13cca578c870a39583722c58",
-  "branch refs/heads/contract-smoke-branch",
-  "",
-].join("\n");
+const REAL_WORKTREE_PORCELAIN = porcelainZ([
+  [
+    "worktree /tmp/repo",
+    "HEAD c4c85336fb74d3bc13cca578c870a39583722c58",
+    "branch refs/heads/main",
+  ],
+  [
+    "worktree /tmp/repo-worktrees/contract-smoke-branch",
+    "HEAD c4c85336fb74d3bc13cca578c870a39583722c58",
+    "branch refs/heads/contract-smoke-branch",
+  ],
+]);
 
 describe("listWorktrees", () => {
   test("parses a real captured `git worktree list --porcelain` sample", async () => {
@@ -1071,16 +1083,92 @@ describe("listWorktrees", () => {
     ]);
   });
 
+  test("asks git for NUL-separated output", async () => {
+    const fake = createFakeCommandRunner([ok(REAL_WORKTREE_PORCELAIN)]);
+    await listWorktrees({ run: fake.run, repoDir: "/repo" });
+    expect(fake.calls[0]?.argv.slice(-4)).toEqual([
+      "worktree",
+      "list",
+      "--porcelain",
+      "-z",
+    ]);
+  });
+
+  test("returns no entries for empty output", async () => {
+    const fake = createFakeCommandRunner([ok("")]);
+    const entries = await listWorktrees({ run: fake.run, repoDir: "/repo" });
+    expect(entries).toEqual([]);
+  });
+
+  test("keeps a path that contains a newline as one path", async () => {
+    const path = "/tmp/repo-worktrees/a\nb";
+    const fake = createFakeCommandRunner([
+      ok(porcelainZ([[`worktree ${path}`, "HEAD deadbeef", "detached"]])),
+    ]);
+    const entries = await listWorktrees({ run: fake.run, repoDir: "/repo" });
+    expect(entries.map((entry) => entry.path)).toEqual([path]);
+  });
+
+  test("does not read a line inside a path as an attribute", async () => {
+    const path = "/tmp/wt\nbranch refs/heads/victim";
+    const fake = createFakeCommandRunner([
+      ok(porcelainZ([[`worktree ${path}`, "HEAD deadbeef", "detached"]])),
+    ]);
+    const entries = await listWorktrees({ run: fake.run, repoDir: "/repo" });
+    expect(entries.map((entry) => entry.branch)).toEqual([null]);
+  });
+
+  test("throws when the output ends before the last record is terminated", async () => {
+    const complete = porcelainZ([
+      ["worktree /repo", "HEAD deadbeef", "branch refs/heads/main"],
+    ]);
+    const fake = createFakeCommandRunner([ok(complete.slice(0, -1))]);
+    await expect(
+      listWorktrees({ run: fake.run, repoDir: "/repo" }),
+    ).rejects.toThrow(/truncated/);
+  });
+
+  test("throws when the output ends in the middle of an attribute", async () => {
+    const fake = createFakeCommandRunner([
+      ok("worktree /repo\0HEAD deadbeef\0branch refs/hea"),
+    ]);
+    await expect(
+      listWorktrees({ run: fake.run, repoDir: "/repo" }),
+    ).rejects.toThrow(/truncated/);
+  });
+
+  test("throws when the output stops after an attribute with no record end", async () => {
+    const fake = createFakeCommandRunner([
+      ok("worktree /repo\0HEAD deadbeef\0"),
+    ]);
+    await expect(
+      listWorktrees({ run: fake.run, repoDir: "/repo" }),
+    ).rejects.toThrow(/truncated/);
+  });
+
+  test("throws when a record has no worktree line", async () => {
+    const fake = createFakeCommandRunner([
+      ok(porcelainZ([["HEAD deadbeef", "branch refs/heads/main"]])),
+    ]);
+    await expect(
+      listWorktrees({ run: fake.run, repoDir: "/repo" }),
+    ).rejects.toThrow(/unexpected 'git worktree list --porcelain -z' record/);
+  });
+
+  test("throws when a record is empty", async () => {
+    const fake = createFakeCommandRunner([
+      ok(`${porcelainZ([["worktree /repo", "bare"]])}\0`),
+    ]);
+    await expect(
+      listWorktrees({ run: fake.run, repoDir: "/repo" }),
+    ).rejects.toThrow(/empty record/);
+  });
+
   test("parses bare and detached markers", async () => {
-    const porcelain = [
-      "worktree /repo",
-      "bare",
-      "",
-      "worktree /repo/wt",
-      "HEAD deadbeef",
-      "detached",
-      "",
-    ].join("\n");
+    const porcelain = porcelainZ([
+      ["worktree /repo", "bare"],
+      ["worktree /repo/wt", "HEAD deadbeef", "detached"],
+    ]);
     const fake = createFakeCommandRunner([ok(porcelain)]);
     const entries = await listWorktrees({ run: fake.run, repoDir: "/repo" });
     expect(entries).toEqual([
@@ -1102,21 +1190,74 @@ describe("listWorktrees", () => {
   });
 });
 
-/** 別のworktreeが`contract-smoke-branch`をcheckoutしている`git worktree list --porcelain`の出力。 */
-const BRANCH_IN_ANOTHER_WORKTREE = [
-  "worktree /tmp/repo",
-  "HEAD c4c85336fb74d3bc13cca578c870a39583722c58",
-  "branch refs/heads/main",
-  "",
-  `worktree ${REUSED_WT}`,
-  "HEAD c4c85336fb74d3bc13cca578c870a39583722c58",
-  "branch refs/heads/other",
-  "",
-  "worktree /tmp/repo-worktrees/elsewhere",
-  "HEAD c4c85336fb74d3bc13cca578c870a39583722c58",
-  "branch refs/heads/contract-smoke-branch",
-  "",
-].join("\n");
+describe("listWorktrees (real git)", () => {
+  const roots: string[] = [];
+  afterAll(() => {
+    for (const root of roots) rmSync(root, { recursive: true, force: true });
+  });
+
+  /** 実際のgitが、改行を含むパスのworktreeを1件として返すことを確かめる。 */
+  test("reads a worktree whose path contains a newline as one entry", async () => {
+    const root = mkdtempSync(join(tmpdir(), "list-worktrees-"));
+    roots.push(root);
+    const repo = join(root, "repo");
+    const home = join(root, "home");
+    const worktree = join(root, "wt\nbranch refs/heads/victim");
+    mkdirSync(repo);
+    mkdirSync(home);
+    const git = async (cwd: string, args: readonly string[]) => {
+      const result = await runCommand(
+        [
+          "git",
+          "-c",
+          "user.name=test",
+          "-c",
+          "user.email=test@example.invalid",
+          ...args,
+        ],
+        {
+          cwd,
+          env: {
+            PATH: process.env.PATH ?? "",
+            HOME: home,
+            GIT_CONFIG_NOSYSTEM: "1",
+          },
+        },
+      );
+      if (result.exitCode !== 0) {
+        throw new Error(`git ${args.join(" ")} failed: ${result.stderr}`);
+      }
+    };
+    await git(repo, ["init", "-q", "-b", "main"]);
+    await git(repo, ["commit", "-q", "--allow-empty", "-m", "init"]);
+    await git(repo, ["worktree", "add", "-q", "--detach", worktree]);
+    const entries = await listWorktrees({
+      run: runCommand,
+      repoDir: repo,
+      home,
+    });
+    expect(entries.map((entry) => entry.branch)).toEqual(["main", null]);
+  });
+});
+
+/** 別のworktreeが`contract-smoke-branch`をcheckoutしている`git worktree list --porcelain -z`の出力。 */
+const BRANCH_IN_ANOTHER_WORKTREE = porcelainZ([
+  [
+    "worktree /tmp/repo",
+    "HEAD c4c85336fb74d3bc13cca578c870a39583722c58",
+    "branch refs/heads/main",
+  ],
+  [
+    `worktree ${REUSED_WT}`,
+    "HEAD c4c85336fb74d3bc13cca578c870a39583722c58",
+    "branch refs/heads/other",
+  ],
+  [
+    "worktree /tmp/repo-worktrees/elsewhere",
+    "HEAD c4c85336fb74d3bc13cca578c870a39583722c58",
+    "branch refs/heads/contract-smoke-branch",
+  ],
+]);
 
 /** プロセスが残っていないとみなす(何も止めなかった)`assertProcessesIdle`。 */
 const idle = async (): Promise<boolean> => false;
@@ -1534,10 +1675,10 @@ describe("createGtrWorktree", () => {
       const { fake, created } = reuse(ok("refs/heads/other\n"), switched());
       await created;
       expect({
-        argv: fake.calls[6]?.argv.slice(-3),
+        argv: fake.calls[6]?.argv.slice(-4),
         cwd: fake.calls[6]?.options?.cwd,
       }).toEqual({
-        argv: ["worktree", "list", "--porcelain"],
+        argv: ["worktree", "list", "--porcelain", "-z"],
         cwd: REUSED_WT,
       });
     });
@@ -2388,16 +2529,13 @@ describe("ensureHeadOnBranch (real git)", () => {
 describe("ensureHeadOnBranch (fake git)", () => {
   const DIR = "/tmp/repo-worktrees/target";
   const listing = (...entries: readonly (readonly [string, string])[]) =>
-    entries
-      .map(([path, branch]) =>
-        [
-          `worktree ${path}`,
-          "HEAD c4c85336fb74d3bc13cca578c870a39583722c58",
-          `branch refs/heads/${branch}`,
-          "",
-        ].join("\n"),
-      )
-      .join("\n");
+    porcelainZ(
+      entries.map(([path, branch]) => [
+        `worktree ${path}`,
+        "HEAD c4c85336fb74d3bc13cca578c870a39583722c58",
+        `branch refs/heads/${branch}`,
+      ]),
+    );
   const ensureWith = (
     responses: readonly CommandResult[],
     realpathOf: (path: string) => Promise<string>,
@@ -2439,12 +2577,13 @@ describe("ensureHeadOnBranch (fake git)", () => {
   });
 
   const entry = (path: string, ...lines: readonly string[]) =>
-    [
-      `worktree ${path}`,
-      "HEAD c4c85336fb74d3bc13cca578c870a39583722c58",
-      ...lines,
-      "",
-    ].join("\n");
+    porcelainZ([
+      [
+        `worktree ${path}`,
+        "HEAD c4c85336fb74d3bc13cca578c870a39583722c58",
+        ...lines,
+      ],
+    ]);
   const switchesWith = (listed: string) =>
     ensureWith(
       [ok("refs/heads/other\n"), ok(listed), ok(), ok("refs/heads/target\n")],
@@ -2459,7 +2598,7 @@ describe("ensureHeadOnBranch (fake git)", () => {
 
   test("does not block on a bare entry in the list", async () => {
     await expect(
-      switchesWith(["worktree /elsewhere/bare", "bare", ""].join("\n")),
+      switchesWith(porcelainZ([["worktree /elsewhere/bare", "bare"]])),
     ).resolves.toBeUndefined();
   });
 
