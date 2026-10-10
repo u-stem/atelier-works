@@ -917,6 +917,24 @@ export async function recordDeployment(
   return parseId(row.id, "id");
 }
 
+/**
+ * `shaTo`への反映が成功したと`factory.deployments`に記録されているかを返す。
+ * `self_update`は、`f/factory/deployed_sha`を更新した後に`result = 'success'`の行を記録する。
+ * 最新の1行ではなく行の有無で確かめるのは、反映の後に別の版の失敗が記録されうるため。
+ */
+export async function hasSuccessfulDeployment(
+  shaTo: string,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  const rows = await sql`
+    SELECT 1 AS found
+    FROM factory.deployments
+    WHERE result = 'success' AND sha_to = ${shaTo}
+    LIMIT 1
+  `.fetch();
+  return rows.length > 0;
+}
+
 /** `factory.deployments`の最新の1行を返す。1行も無ければ`null`を返す。 */
 export async function getLatestDeployment(
   sql: SqlClient = defaultSqlClient,

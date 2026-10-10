@@ -24,6 +24,7 @@ import {
   expireApprovalRequestIfPending,
   getLatestDeployment,
   getWorkItem,
+  hasSuccessfulDeployment,
   type InsertedIssueWorkItem,
   insertIssueWorkItemUnlessActive,
   listActive,
@@ -185,6 +186,7 @@ async function checkDeployedSha(
       getState: () => wmill.getState(),
       setState: (state) => wmill.setState(state),
       getLatestDeployment: () => getLatestDeployment(),
+      hasSuccessfulDeployment: (sha) => hasSuccessfulDeployment(sha),
       addNotice: (record) => addNoticeUnlessUnresolved(record),
       resolveNotices: () =>
         resolveUnresolvedNoticesByKind(

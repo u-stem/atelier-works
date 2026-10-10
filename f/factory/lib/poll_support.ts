@@ -150,7 +150,7 @@ export function decideDeployedSha(input: {
  * 重複して登録しない判定(`addNoticeUnlessUnresolved`)は本文の一致で行う。
  * HEADを含めると、反映が止まっている間にmergeが続くたびに別のnoticeが増える。
  * 時刻のような実行ごとに変わる値も入れない。
- * 今のHEADは、ログ(`deployed_sha_mismatch notified`)と、self cloneのgitで分かる。
+ * 今のHEADは、ログ(`deployed_sha_mismatch notice recorded`と`deployed_sha_mismatch notice already open`)と、self cloneのgitで分かる。
  * `hint`は、反映が止まっている原因の候補で、あれば末尾に添える。
  */
 export function deployedShaMismatchMessage(
@@ -189,6 +189,8 @@ export type DeployedShaCheckDeps = {
   /** Windmillのstateを書く。stateの全体を置き換えるので、ほかのキーを保った全体を渡す。 */
   readonly setState: (state: Record<string, unknown>) => Promise<void>;
   readonly getLatestDeployment: () => Promise<LatestDeployment | null>;
+  /** `factory.deployments`に、`sha`への反映が成功した行があるか。 */
+  readonly hasSuccessfulDeployment: (sha: string) => Promise<boolean>;
   /** 同じ本文の未解決のnoticeが無ければ挿入してIDを返し、あれば`null`を返す。 */
   readonly addNotice: (record: NoticeRecord) => Promise<number | null>;
   /** 未解決の`deployed_sha_mismatch`をすべて解決済みにし、解決した件数を返す。 */
@@ -234,9 +236,33 @@ async function resolveOpenNotices(deps: DeployedShaCheckDeps): Promise<void> {
 }
 
 /**
+ * `deployedSha`への反映が成功したと`factory.deployments`に記録されているときだけ、
+ * 未解決のnoticeを解決する。記録が無いとき、問い合わせに失敗したときは、解決を見送る。
+ * 見送っても、次に版が一致したときに解決される。
+ */
+async function resolveOpenNoticesIfDeployed(
+  deps: DeployedShaCheckDeps,
+  deployedSha: string,
+): Promise<void> {
+  let deployed = false;
+  try {
+    deployed = await deps.hasSuccessfulDeployment(deployedSha);
+  } catch (err) {
+    deps.log.warn("deployment record lookup failed", {
+      error: errorText(err),
+    });
+  }
+  if (deployed) {
+    await resolveOpenNotices(deps);
+  }
+}
+
+/**
  * 版の食い違いを判定し、stateとnoticeに反映する。
  * 変数が無い、または空のときは、まだ比べる対象が無いので、stateにもnoticeにも触れない。
- * 版が一致したとき、または前回の記録と違う版へ反映が進んだときは、未解決のnoticeを解決する。
+ * 版が一致したときは、未解決のnoticeを解決する。
+ * 前回の記録と違う版へ反映が進んだときは、stateを書けて、かつその版への反映の成功の記録が
+ * あるときに、未解決のnoticeを解決する。
  * stateを読めない、または書けないときは、猶予を数えられない。
  * その場合は、本当の反映の停止を見逃さないよう、猶予を待たずに知らせる
  * (同じ本文のnoticeは重複して登録されない)。
@@ -288,19 +314,25 @@ export async function runDeployedShaCheck(
   }
 
   if (decision.action === "record" && stateUsable) {
-    // 前回と違う版へ反映が進んだのは、停止が解消した証拠である。
-    // 古い版を名指しするnoticeを残さない。前回が無いときは、解消を確かめられない。
-    if (prev !== null && prev.deployed_sha !== deployedSha) {
-      await resolveOpenNotices(deps);
-    }
+    let written = false;
     try {
       await deps.setState({
         ...stored,
         [DEPLOYED_SHA_STATE_KEY]: decision.next_state,
       });
-      return "recorded";
+      written = true;
     } catch (err) {
       log.warn("deployed_sha state write failed", { error: errorText(err) });
+    }
+    if (written) {
+      // 前回と違う版へ反映が進んだのは、停止が解消した証拠である。
+      // ただし値は書き戻しやstateの書き換えでも変わるので、
+      // 反映の成功の記録があるときだけ、古い版を名指しするnoticeを解決する。
+      // 前回が無いときは、解消を確かめられない。
+      if (prev !== null && prev.deployed_sha !== deployedSha) {
+        await resolveOpenNoticesIfDeployed(deps, deployedSha);
+      }
+      return "recorded";
     }
   }
 

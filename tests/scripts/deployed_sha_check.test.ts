@@ -203,6 +203,10 @@ describe("deployedShaMismatchMessage", () => {
   });
 });
 
+const ADVANCED_STATE: Record<string, unknown> = {
+  [DEPLOYED_SHA_STATE_KEY]: { deployed_sha: "old", first_seen_ms: T0 },
+};
+
 type Harness = {
   deps: DeployedShaCheckDeps;
   notices: NoticeRecord[];
@@ -242,6 +246,7 @@ function harness(overrides: Partial<DeployedShaCheckDeps> = {}): Harness {
     },
     getLatestDeployment: () =>
       Promise.resolve({ result: "failed", sha_to: "aaa" }),
+    hasSuccessfulDeployment: () => Promise.resolve(true),
     addNotice: (record) => {
       notices.push(record);
       return Promise.resolve(1);
@@ -539,5 +544,83 @@ describe("runDeployedShaCheck", () => {
     expect(
       h.logs.some((l) => l.message === "deployed_sha_mismatch notice recorded"),
     ).toBe(false);
+  });
+
+  test("does not resolve the notices when the state write fails after an advance", async () => {
+    const h = harness({
+      getState: () => Promise.resolve(ADVANCED_STATE),
+      setState: () => Promise.reject(new Error("write failed")),
+    });
+    await runDeployedShaCheck(h.deps);
+    expect(h.resolveCalls()).toBe(0);
+  });
+
+  test("notifies when the state write fails after an advance", async () => {
+    const h = harness({
+      getState: () => Promise.resolve(ADVANCED_STATE),
+      setState: () => Promise.reject(new Error("write failed")),
+    });
+    expect(await runDeployedShaCheck(h.deps)).toBe("notified");
+  });
+
+  test("looks up the successful deployment of the current deployed sha", async () => {
+    const asked: string[] = [];
+    const h = harness({
+      getState: () => Promise.resolve(ADVANCED_STATE),
+      hasSuccessfulDeployment: (sha) => {
+        asked.push(sha);
+        return Promise.resolve(true);
+      },
+    });
+    await runDeployedShaCheck(h.deps);
+    expect(asked).toEqual(["bbb"]);
+  });
+
+  test("does not resolve the notices after an advance without a successful deployment record", async () => {
+    const h = harness({
+      getState: () => Promise.resolve(ADVANCED_STATE),
+      hasSuccessfulDeployment: () => Promise.resolve(false),
+    });
+    await runDeployedShaCheck(h.deps);
+    expect(h.resolveCalls()).toBe(0);
+  });
+
+  test("still records the state after an advance without a successful deployment record", async () => {
+    const h = harness({
+      getState: () => Promise.resolve(ADVANCED_STATE),
+      hasSuccessfulDeployment: () => Promise.resolve(false),
+    });
+    expect(await runDeployedShaCheck(h.deps)).toBe("recorded");
+  });
+
+  test("does not resolve the notices when the deployment record lookup fails", async () => {
+    const h = harness({
+      getState: () => Promise.resolve(ADVANCED_STATE),
+      hasSuccessfulDeployment: () => Promise.reject(new Error("db down")),
+    });
+    await runDeployedShaCheck(h.deps);
+    expect(h.resolveCalls()).toBe(0);
+  });
+
+  test("warns when the deployment record lookup fails", async () => {
+    const h = harness({
+      getState: () => Promise.resolve(ADVANCED_STATE),
+      hasSuccessfulDeployment: () => Promise.reject(new Error("db down")),
+    });
+    await runDeployedShaCheck(h.deps);
+    expect(h.warnings).toContain("deployment record lookup failed");
+  });
+
+  test("does not look up the deployment record when the shas match", async () => {
+    const asked: string[] = [];
+    const h = harness({
+      deployedSha: "aaa",
+      hasSuccessfulDeployment: (sha) => {
+        asked.push(sha);
+        return Promise.resolve(true);
+      },
+    });
+    await runDeployedShaCheck(h.deps);
+    expect(asked).toEqual([]);
   });
 });

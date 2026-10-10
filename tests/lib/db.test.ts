@@ -21,6 +21,7 @@ import {
   getRequirementDraft,
   getWorkItem,
   hasPriorReview,
+  hasSuccessfulDeployment,
   hasUnfinishedPrRun,
   insertApprovalRequest,
   insertAuditReport,
@@ -3464,5 +3465,29 @@ describe("resolveUnresolvedNoticesByKind", () => {
       sql,
     );
     expect(calls[0]?.text).toContain("resolved_at = now()");
+  });
+});
+
+describe("hasSuccessfulDeployment", () => {
+  test("is true when a row exists", async () => {
+    const { sql } = createFakeSqlClient([[{ found: 1 }]]);
+    expect(await hasSuccessfulDeployment("bbb", sql)).toBe(true);
+  });
+
+  test("is false when no row exists", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await hasSuccessfulDeployment("bbb", sql)).toBe(false);
+  });
+
+  test("only counts successful rows", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasSuccessfulDeployment("bbb", sql);
+    expect(calls[0]?.text).toContain("result = 'success'");
+  });
+
+  test("filters by the target sha", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasSuccessfulDeployment("bbb", sql);
+    expect(calls[0]?.values).toContain("bbb");
   });
 });

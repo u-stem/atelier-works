@@ -65,6 +65,7 @@ Claudeや検査コマンドが書ける詳細と、pr_fixのClaudeが理由と�
 
 `poll_issues`は、版の食い違いを最初に見た時刻をWindmillのstateに保存し、猶予を超えたときに`deployed_sha_mismatch`を通知する。
 残るリスクとして、stateを書けるWindmillの利用者は、`deployed_sha_mismatch`の通知を遅らせられる。`deployed_sha`を書ける者と同じ範囲である。
+一方、通知を解決させるには、一致するか、反映の成功の記録(`factory.deployments`)が要る。stateや`deployed_sha`の値を書き換えるだけでは、通知は消えない。
 
 ## シークレットの扱い
 
