@@ -729,6 +729,9 @@ Consoleが止まっていてもDiscordには届くので、通知の確認先は
 - 時間切れの取り消しが、ジョブ履歴で`canceled_by`が`timeout`になること。違う値なら、打ち切られた回が失敗として数えられず、`schedule_failing`が出ない。
 - `on_error_schedule`が、打ち切られた回でも呼ばれること。呼ばれなければ、`job_failed`と`schedule_failing`のどちらも出ない。
 
+あわせて、`self_update`の実行ユーザーに`f/factory/deployed_sha`が見えることも実機で確かめる。
+見えないと存在の確認が`false`になり、全体を反映し直して`setVariable`が衝突しうる。
+
 確かめるには、本番の`self_update`やロックには触れず、使い捨てのscriptとスケジュールを使う。
 `wmill sync`の対象は`f/**`だけなので、`u/<user>/`のscriptとスケジュールはWindmillの画面で作る。
 自己更新の`wmill sync push`で消えたり上書きされたりしない。
@@ -777,18 +780,23 @@ Consoleが止まっていてもDiscordには届くので、通知の確認先は
 8. 終わったら、スケジュールとscriptを消す。
    出た`schedule_failing`は、Consoleで解決する。
 9. `factory.job_failures`に残った使い捨ての記録を消す。
-   Data Tableのデータベースに接続し、消す前に件数と中身を確かめる。
+   Data Tableのデータベースに接続し、消す前に行を確かめる。
    データベース名は、`main`のData Tableのresource_pathで、既定は`datatable_db`である。
+   `<user>`は、作ったscriptのパスに合わせて置き換える。
 
    ```bash
-   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "SELECT id, flow_path, occurred_at FROM factory.job_failures WHERE flow_path LIKE 'u/%'"
+   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "SELECT id, flow_path, occurred_at FROM factory.job_failures WHERE flow_path = 'u/<user>/timeout_probe'"
    ```
 
-   件数が使い捨ての実行の回数と合い、ほかの人の記録が混ざっていなければ、同じ条件で消す。
+   表示された行の件数が使い捨ての実行の回数と合うことを確かめ、行の`id`を控える。
+   確かめた`id`だけを、同じ`flow_path`の条件で消す。
+   `<確かめたid>`には、控えた`id`をカンマで区切って並べる。
 
    ```bash
-   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "DELETE FROM factory.job_failures WHERE flow_path LIKE 'u/%'"
+   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "DELETE FROM factory.job_failures WHERE flow_path = 'u/<user>/timeout_probe' AND id IN (<確かめたid>)"
    ```
+
+   子プロセスと取り残しの確認に使った`u/<user>/timeout_probe_child`と`u/<user>/timeout_probe_tail`も、同じ形で消す。
 
 打ち切りの扱いの確認は、同じ手順の使い捨てのscriptで続ける。
 
@@ -826,20 +834,25 @@ mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker ps 
 `self_update`の区切った呼び出しが30秒で終わらないと、例外にする。
 呼び出し自体は中断しないので、後から完了することがある。
 
-- 更新のうち、`wmill_token`の取得より後の時間切れは、更新の失敗として`factory.deployments`に記録する。
-  設定、`github_token`、`deployed_sha`の読み取り、cloneの更新の失敗と時間切れは、ジョブの失敗になるだけで、`deployments`には残らない。
+- 更新のうち、`wmill_token`の取得より後の失敗と時間切れは、更新の失敗として`factory.deployments`に記録する。
+  `wmill_token`の取得より前の失敗と時間切れ(設定、`github_token`、cloneの更新、ブランチとHEADの確認、`deployed_sha`の読み取りなど)は、ジョブの失敗になるだけで、`deployments`には残らない。
   ジョブの失敗は、Discordの`job_failed`と、3回続いたときの`schedule_failing`で知る。
   ただし`deployed_sha`の更新が時間切れのときは、変数を読み直し、書けていれば成功として続ける。
 - `deployed_sha`の読み取りが時間切れのときは、未デプロイとは扱わず、更新を失敗にする。
   読み取りがそれ以外で失敗したときは、区切った`existsVariable`で変数の有無を確かめる。
   `false`のときだけ未デプロイとして全体を反映し直す。
   `true`のときと、確かめられないときは、更新を失敗にする。
+- `deployed_sha`の読み取りが失敗し、存在の確認が`true`か確かめられなかったときは、ジョブが失敗する。
+  エラーは`Variable not found at f/factory/deployed_sha or not visible to you`になるが、変数が存在することもある。
+  権限か一時的な失敗を疑う。
 - noticeの挿入が時間切れになり、後から挿入されたときは、その回のDiscordの通知は出ない。
   次の回からは、同じ本文の未解決のnoticeがあるので、通知しない。
   Consoleの要対応には残る。
 - stateの読み取りが失敗か時間切れの回は、stateを書かない。
   確認できなかった回数の積み上げを、0に戻さないためである。
   stateを書けなかった回は、警告だけにして、noticeの判定は数えた回数で続ける。
+- Console用workerの確認で、stateを書けなかった回の後は、保存された回数が古いままになる。
+  確かめられなかった回数が実際より多く数えられ、通知`console_worker_check_failed`が1回の失敗で出ることがある。
 
 ### 打ち切られた回の記録を確かめる
 

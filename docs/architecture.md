@@ -436,13 +436,9 @@ Factoryの投稿の見分け方、総評の組み立て、スレッドの解決�
 変数の取得と更新、stateの読み書き、データベースの記録は個別の上限が無いので、1回30秒で区切り、超えたら例外にする。
 Discordへの通知は、送信を30秒で中断し、429の待ち(最大30秒)と送信2回に余裕を足した120秒で区切る。
 最後のConsole用のworkerの確認では、例外を投げずに警告だけを残す。
-更新のうち、`wmill_token`の取得より後の例外は、更新の失敗として`deployments`に記録する。
-次の失敗と時間切れは、ジョブの失敗(`job_failed`と`schedule_failing`)になるだけで、`deployments`には残らない。
-
-- 設定の取得。
-- `github_token`の取得。
-- `deployed_sha`の読み取り。
-- cloneの更新。
+更新のうち、`wmill_token`の取得より後の失敗と時間切れは、更新の失敗として`deployments`に記録する。
+`wmill_token`の取得より前の失敗と時間切れは、ジョブの失敗(`job_failed`と`schedule_failing`)になるだけで、`deployments`には残らない。
+その範囲は、設定、`github_token`、cloneの更新、ブランチとHEADの確認、`deployed_sha`の読み取りなどである。
 
 ジョブの`timeout`はインスタンスの上限を超えられないが、セルフホストの上限は環境変数`TIMEOUT`で、未設定なら7日である。
 `job_default_timeout`は21600秒以上にする決まりなので([実装フローの仕様](internals/implement.md)の「Windmillのtimeoutで打ち切られたとき」)、2700秒は切り詰められない。
