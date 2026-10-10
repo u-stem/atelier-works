@@ -2693,11 +2693,19 @@ export async function countImplementFailedRounds(
 /**
  * 作業項目と同じPRのPR修正で、これまでにSonnetが失敗した回数を返す。
  * 同じPRのpr_fixの作業項目(前のラウンドと、`retry_work_item`で再実行した同じ作業項目)を対象に、
- * 次の2つを足す。
+ * 次の3つを足す。
  * - Claudeが動いた(`agent_runs`にstageが`pr_fix`の行がある)のに、修正をpushせず
  *   `blocked`で終えたラウンド。`fix_rounds`の行を数える。
  * - 検査が通らず、検査の失敗を添えて再実行した(stageが`pr_fix_verify_retry`の行がある)作業項目。
  *   不正な出力の再試行で同じstageの行が増えるので、作業項目ごとに1回と数える。
+ * - Claudeの実行そのものが失敗した(`agent_runs.error`が入っている。`runClaude`は、
+ *   タイムアウト、0以外の終了コード、`is_error`、ターンや予算の上限、不正な出力のどれでも
+ *   失敗した行に`error`を書く)のに、`fix_rounds`の行が書かれなかった作業項目。
+ *   実行の失敗は例外で終わり、flowの再試行と`on_error_flow`は`fix_rounds`を書かないので、
+ *   上の2つでは数えられない。作業項目とstageごとに1回と数える。
+ *   `fix_rounds`の行がある作業項目は、その行(`blocked`)か成功したラウンドで数え済みなので、
+ *   重ねて数えない。不正な出力の再試行で最初の失敗の行(`error`あり)が残った場合も、
+ *   ラウンドが終わって`fix_rounds`の行が書かれるまでは、1回と数える。
  * 新しい指摘でラベルが付き直しただけのラウンドは数えない。
  * `blocked`の行は、`done`で終わったラウンドを数えない。
  * Claudeが動いたかは作業項目の単位で見るので、同じ作業項目で前にClaudeが動いていれば、
@@ -2732,13 +2740,27 @@ export async function countPrFixFailures(
         FROM factory.agent_runs ar
         WHERE ar.work_item_id IN (SELECT id FROM same_pr)
           AND ar.stage = 'pr_fix_verify_retry'
-      ) AS verify_retry_items
+      ) AS verify_retry_items,
+      (
+        SELECT COUNT(*)
+        FROM (
+          SELECT DISTINCT ar.work_item_id, ar.stage
+          FROM factory.agent_runs ar
+          WHERE ar.work_item_id IN (SELECT id FROM same_pr)
+            AND ar.stage IN ('pr_fix', 'pr_fix_verify_retry')
+            AND ar.error IS NOT NULL
+            AND NOT EXISTS (
+              SELECT 1 FROM factory.fix_rounds fr WHERE fr.work_item_id = ar.work_item_id
+            )
+        ) failed_runs
+      ) AS failed_run_stages
   `.fetch();
   const row = rows[0];
   return row === undefined
     ? 0
     : parseNumericLike(row.blocked_rounds, "blocked_rounds") +
-        parseNumericLike(row.verify_retry_items, "verify_retry_items");
+        parseNumericLike(row.verify_retry_items, "verify_retry_items") +
+        parseNumericLike(row.failed_run_stages, "failed_run_stages");
 }
 
 function parseImplementDiffStat(value: unknown): ImplementDiffStat | null {

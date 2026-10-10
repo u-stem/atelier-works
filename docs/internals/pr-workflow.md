@@ -391,7 +391,9 @@ PRワークフローは`f/factory/factory_config`の次の値を読む。
 | `heavy_model` | `claude-opus-5-5` | PRレビューのモデルと、2回失敗した後のPR修正のモデル |
 
 モデルの昇格に使う失敗の数は、同じPRの`pr_fix`の作業項目から数える。
-Claudeが動いて`blocked`で終えた`fix_rounds`の行と、検査の再実行(`pr_fix_verify_retry`)をした作業項目を足した値である。
+Claudeが動いて`blocked`で終えた`fix_rounds`の行と、検査の再実行(`pr_fix_verify_retry`)をした作業項目を足す。
+さらに、`agent_runs.error`がある失敗した実行のうち、`fix_rounds`の行が無い作業項目のものを、stageごとに1回と数える。ターン上限、予算上限、タイムアウト、不正な出力は例外で終わり、ラウンドの記録を残さないためである。
+同じラウンドで検査の再実行と`blocked`が重なると、初回と再実行でSonnetが2回失敗しているので、2回と数える。
 `blocked`には、返信だけで終えたラウンド、人のpushでheadが動いたラウンド、ロックなど基盤の停止も入る。
 検査の再実行は作業項目ごとに1回と数え、要件の不足で要件定義をやり直しても数え直さない。
 そのため、実際より早く`heavy_model`に上がることがある。

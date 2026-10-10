@@ -177,7 +177,10 @@ Generated-By: Software Factory (<instance_name>)
 review-loopでは、同じ`[MUST]`の指摘が2ラウンド続けて直らないときに、implementerをOpusで起動し直す。
 
 `.claude/settings.json`の`model`は`opusplan`にしている。計画モードだけがOpusで、実装はSonnetで動く。
-review-loopの親が指摘の判定を覆すときや、`[Q]`に答えるときのように、重い判断をする場面では、`/model opus`に切り替える。
+`/model opus`は人が打つコマンドで、Claudeの親のセッションは自分で切り替えられない。
+review-loopの親が指摘の判定を覆すときや、`[Q]`に答えるときのように、重い判断をする場面では、次のように分ける。
+人が見ているセッションでは、人が`/model opus`に切り替える。
+クラウドやheadlessでは、重い判断の材料をOpusのsubagent(triage、devil-advocate)に出させる。
 subagentのモデルは、各定義の`model`で決める。
 implementer、code-reviewer、doc-writerはSonnetで動く。
 design-reviewer、requirements-reviewer、security-auditor、devil-advocate、triageはOpusで動く。

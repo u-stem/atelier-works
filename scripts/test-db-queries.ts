@@ -498,21 +498,26 @@ async function prFixItem(pr: number): Promise<number> {
 }
 const fixA = await prFixItem(88);
 const fixB = await prFixItem(88);
+const fixC = await prFixItem(88);
+const fixD = await prFixItem(88);
 const fixOtherPr = await prFixItem(89);
 // fixA: Claudeが動いて、blockedで終わり、検査の再実行もあった(2回と数える)。
 // fixB: Claudeが動かずにblockedで終わった(数えない)。
+// fixC: 検査の再実行がある(1回)。applyと再実行の実行が失敗し、fix_roundsの行が無い(作業項目とstageごとに1回なので2回)。
+// fixD: Claudeの実行が失敗したが、後でdoneで終わった(fix_roundsの行があるので数えない)。
 // fixOtherPr: 別のPRの失敗(数えない)。
+// 同じPRの合計は、fixAの2回とfixCの3回で5回になる。
 execPsql(
   target,
-  `INSERT INTO factory.agent_runs (work_item_id, stage, attempt, model) VALUES (${String(fixA)}, 'pr_fix', 1, 'm'), (${String(fixA)}, 'pr_fix_verify_retry', 1, 'm'), (${String(fixA)}, 'pr_fix_verify_retry', 1, 'm'), (${String(fixOtherPr)}, 'pr_fix', 1, 'm')`,
+  `INSERT INTO factory.agent_runs (work_item_id, stage, attempt, model, error) VALUES (${String(fixA)}, 'pr_fix', 1, 'm', NULL), (${String(fixA)}, 'pr_fix_verify_retry', 1, 'm', NULL), (${String(fixA)}, 'pr_fix_verify_retry', 1, 'm', NULL), (${String(fixOtherPr)}, 'pr_fix', 1, 'm', NULL), (${String(fixC)}, 'pr_fix', 1, 'm', 'timeout'), (${String(fixC)}, 'pr_fix', 1, 'm', 'timeout'), (${String(fixC)}, 'pr_fix_verify_retry', 1, 'm', 'claude reported an error'), (${String(fixD)}, 'pr_fix', 1, 'm', 'timeout')`,
 );
 execPsql(
   target,
-  `INSERT INTO factory.fix_rounds (work_item_id, round, outcome) VALUES (${String(fixA)}, 1, 'blocked'), (${String(fixB)}, 2, 'blocked'), (${String(fixOtherPr)}, 1, 'blocked')`,
+  `INSERT INTO factory.fix_rounds (work_item_id, round, outcome) VALUES (${String(fixA)}, 1, 'blocked'), (${String(fixB)}, 2, 'blocked'), (${String(fixOtherPr)}, 1, 'blocked'), (${String(fixD)}, 1, 'done')`,
 );
 check(
-  "countPrFixFailures: blocked rounds where Claude ran and verify retries of the same PR are counted",
-  (await countPrFixFailures(fixB, sql)) === 2,
+  "countPrFixFailures: blocked rounds, verify retries and failed runs of the same PR are counted",
+  (await countPrFixFailures(fixB, sql)) === 5,
   await countPrFixFailures(fixB, sql),
 );
 check(

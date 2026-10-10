@@ -1801,27 +1801,51 @@ describe("countImplementFailedRounds", () => {
 });
 
 describe("countPrFixFailures", () => {
-  test("adds blocked rounds and verify retries", async () => {
+  const ZERO = {
+    blocked_rounds: 0,
+    verify_retry_items: 0,
+    failed_run_stages: 0,
+  };
+
+  test("adds blocked rounds, verify retries and failed runs", async () => {
     const { sql } = createFakeSqlClient([
-      [{ blocked_rounds: "1", verify_retry_items: 1 }],
+      [{ blocked_rounds: "1", verify_retry_items: 1, failed_run_stages: "2" }],
     ]);
-    expect(await countPrFixFailures(1, sql)).toBe(2);
+    expect(await countPrFixFailures(1, sql)).toBe(4);
   });
 
   test("counts only blocked rounds in which Claude ran", async () => {
-    const { sql, calls } = createFakeSqlClient([
-      [{ blocked_rounds: 0, verify_retry_items: 0 }],
-    ]);
+    const { sql, calls } = createFakeSqlClient([[ZERO]]);
     await countPrFixFailures(1, sql);
     expect(calls[0]?.text).toContain("ar.stage = 'pr_fix'");
   });
 
   test("counts verify retries once per work item", async () => {
-    const { sql, calls } = createFakeSqlClient([
-      [{ blocked_rounds: 0, verify_retry_items: 0 }],
-    ]);
+    const { sql, calls } = createFakeSqlClient([[ZERO]]);
     await countPrFixFailures(1, sql);
     expect(calls[0]?.text).toContain("COUNT(DISTINCT ar.work_item_id)");
+  });
+
+  test("counts failed runs by the error column of both Claude stages", async () => {
+    const { sql, calls } = createFakeSqlClient([[ZERO]]);
+    await countPrFixFailures(1, sql);
+    expect(calls[0]?.text).toContain(
+      "ar.stage IN ('pr_fix', 'pr_fix_verify_retry')",
+    );
+  });
+
+  test("counts failed runs once per work item and stage", async () => {
+    const { sql, calls } = createFakeSqlClient([[ZERO]]);
+    await countPrFixFailures(1, sql);
+    expect(calls[0]?.text).toContain(
+      "SELECT DISTINCT ar.work_item_id, ar.stage",
+    );
+  });
+
+  test("leaves out failed runs of work items that have a fix round", async () => {
+    const { sql, calls } = createFakeSqlClient([[ZERO]]);
+    await countPrFixFailures(1, sql);
+    expect(calls[0]?.text).toContain("ar.error IS NOT NULL");
   });
 
   test("returns 0 when no row is returned", async () => {
