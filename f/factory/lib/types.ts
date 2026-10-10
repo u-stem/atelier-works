@@ -803,7 +803,7 @@ export type FactoryConfig = {
   trigger_label: string;
   /**
    * PRのレビューと修正のコメントの投稿者を、GitHubの`author_association`で絞る。
-   * トリガーラベルの付与者の確認には使わない(timelineの`labeled`イベントは
+   * トリガーラベルの付与者の確認には使わない(ラベルの`labeled`イベントは
    * `author_association`を持たないため)。
    */
   allowed_labeler_associations: LabelerAssociation[];

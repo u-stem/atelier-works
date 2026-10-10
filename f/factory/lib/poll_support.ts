@@ -2,6 +2,7 @@
 // 各`main()`はこれらを呼び、その結果に従ってI/Oだけを行う。
 
 import { normalizeRepoUrl } from "./config.ts";
+import { type GhClient, getLabelerLogin } from "./github.ts";
 import { isFlowJobId } from "./implement_launch_support.ts";
 import { maskSecrets } from "./log.ts";
 import {
@@ -108,6 +109,32 @@ export function isAllowedLabeler(
 }
 
 /**
+ * 取得の直前に、`label`の付与者が許可された人かを取り直して確かめる。
+ * 判定の後にラベルが付け直されていることがあるためである。
+ * 取得に失敗したとき、判定できないとき(`LabelerCheckLimitError`)は例外を投げる。
+ * 呼び出し側は、取得に進まない。
+ */
+export async function confirmLabeler(
+  client: GhClient,
+  target: {
+    readonly owner: string;
+    readonly repo: string;
+    readonly number: number;
+  },
+  label: string,
+  policy: LabelerPolicy,
+): Promise<boolean> {
+  const login = await getLabelerLogin(
+    client,
+    target.owner,
+    target.repo,
+    target.number,
+    label,
+  );
+  return isAllowedLabeler(login, policy);
+}
+
+/**
  * ラベルの付与者が許可されていないときに、noticeへ残す本文を返す。
  * 対象とラベルだけで決まり、時刻や付与者を含めない。
  * ラベルが残る間はポーリングのたびに同じ状況になるので、
@@ -124,11 +151,14 @@ export function labelerDeniedMessage(
   return `${target.owner}/${target.repo}#${String(target.number)}: ${label}ラベルを付けたのは許可されていないユーザーです`;
 }
 
-/** 付与者を確かめるイベントが上限を超えたときのnoticeの`kind`。 */
+/** ラベルの付与者が許可されていないときのnoticeの`kind`。IssueとPRで共通する。 */
+export const LABELER_DENIED_KIND = "labeler_denied";
+
+/** ラベルの付与者を判定できないときのnoticeの`kind`。 */
 export const LABELER_CHECK_LIMIT_KIND = "labeler_check_limit";
 
 /**
- * 付与者を確かめるイベントが上限を超えたときに、noticeへ残す本文を返す。
+ * 付与者を判定できないときに、noticeへ残す本文を返す。
  * 対象とラベルだけで決まり、時刻などの揺れる値を含まない。
  * 超えた対象はポーリングのたびに同じ状況になるので、
  * 同じ本文の未解決のnoticeを重ねて登録しないためである。
@@ -141,11 +171,11 @@ export function labelerCheckLimitMessage(
   },
   label: string,
 ): string {
-  return `${target.owner}/${target.repo}#${String(target.number)}: ${label}ラベルの付与者を確かめるイベントが多すぎるため、着手できません。ラベルを外してください`;
+  return `${target.owner}/${target.repo}#${String(target.number)}: ${label}ラベルの付与者を判定できないため、着手できません。ラベルを外し、許可された人が付け直してください`;
 }
 
 /**
- * 付与者を確かめるイベントが上限を超えたことを、noticeに残す。
+ * 付与者を判定できないことを、noticeに残す。
  * `addNoticeUnlessUnresolved`は、同じ本文の未解決のnoticeがあれば登録しない関数を渡す。
  */
 export async function recordLabelerCheckLimit(

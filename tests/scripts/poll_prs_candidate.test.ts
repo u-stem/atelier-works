@@ -1,6 +1,6 @@
 // `poll_prs.ts`の`buildPrCandidate`が、PRのトリガーラベルの付与者と作成者を
 // 候補に載せるまでの経路のテスト。
-// GitHubの応答は本物のAPIの形にする。イベントの`labeled`は
+// GitHubの応答は本物のAPIの形にする。ラベルの`labeled`イベントは
 // `author_association`を持たない。
 
 import { describe, expect, test } from "bun:test";
@@ -13,7 +13,13 @@ import {
   type BuildPrCandidateDeps,
   buildPrCandidate,
 } from "../../f/factory/poll_prs.ts";
-import { ghApiOk, ghApiStdout, ok } from "../lib/testSupport.ts";
+import {
+  ghApiOk,
+  ghApiStdout,
+  labelEventNode,
+  labelEventsOk,
+  ok,
+} from "../lib/testSupport.ts";
 
 const FOUND: PrSearchItem = {
   owner: "octo-owner",
@@ -28,35 +34,23 @@ const DEPS: BuildPrCandidateDeps = {
   findApprovedWorkItemForIssue: async () => null,
 };
 
-function labeled(login: string | null, label: string) {
-  return {
-    id: 1,
-    node_id: "LE_1",
-    url: "https://api.github.com/repos/octo-owner/atelier-works/issues/events/1",
-    event: "labeled",
-    actor: login === null ? null : { login },
-    commit_id: null,
-    commit_url: null,
-    created_at: "2026-10-01T00:00:00Z",
-    label: { name: label, color: "ededed" },
-    performed_via_github_app: null,
-  };
-}
+const labeled = (login: string | null, label: string) =>
+  labelEventNode("labeled", login, label);
 
 type World = {
   readonly labels: readonly string[];
   readonly author?: string | null;
-  readonly timeline: CommandResult;
+  readonly events: CommandResult;
 };
 
 /** エンドポイントごとに応答する偽のrunner。イベントの取得回数を数える。 */
 function world(w: World) {
-  let timelineCalls = 0;
+  let eventCalls = 0;
   const run = async (argv: readonly string[]): Promise<CommandResult> => {
     const endpoint = argv.find((arg) => arg.startsWith("repo")) ?? "";
-    if (endpoint.includes("/events")) {
-      timelineCalls += 1;
-      return w.timeline;
+    if (argv.includes("graphql")) {
+      eventCalls += 1;
+      return w.events;
     }
     if (endpoint.includes("/reviews") || endpoint.includes("/comments")) {
       return ghApiOk([]);
@@ -89,7 +83,7 @@ function world(w: World) {
     }
     return ok(ghApiStdout(404, { message: "Not Found" }));
   };
-  return { run, timelineCalls: () => timelineCalls };
+  return { run, eventCalls: () => eventCalls };
 }
 
 async function build(w: World) {
@@ -106,15 +100,20 @@ async function build(w: World) {
 }
 
 describe("buildPrCandidate labelers", () => {
-  const BOTH = ghApiOk([
-    labeled("alice", "factory:review"),
-    labeled("bob", "factory:fix"),
+  const BOTH = labelEventsOk([
+    labelEventNode(
+      "labeled",
+      "alice",
+      "factory:review",
+      "2026-10-01T00:00:01Z",
+    ),
+    labelEventNode("labeled", "bob", "factory:fix", "2026-10-01T00:00:02Z"),
   ]);
 
   test("takes the review label's labeler for the review label", async () => {
     const { candidate } = await build({
       labels: ["factory:review", "factory:fix"],
-      timeline: BOTH,
+      events: BOTH,
     });
     expect(candidate.reviewLabelerLogin).toBe("alice");
   });
@@ -122,7 +121,7 @@ describe("buildPrCandidate labelers", () => {
   test("takes the fix label's labeler for the fix label", async () => {
     const { candidate } = await build({
       labels: ["factory:review", "factory:fix"],
-      timeline: BOTH,
+      events: BOTH,
     });
     expect(candidate.fixLabelerLogin).toBe("bob");
   });
@@ -130,28 +129,28 @@ describe("buildPrCandidate labelers", () => {
   test("leaves the fix labeler empty when only the review label is on the PR", async () => {
     const { candidate } = await build({
       labels: ["factory:review"],
-      timeline: BOTH,
+      events: BOTH,
     });
     expect(candidate.fixLabelerLogin).toBeNull();
   });
 
-  test("does not fetch the timeline when no trigger label is on the PR", async () => {
-    const { fake } = await build({ labels: ["documentation"], timeline: BOTH });
-    expect(fake.timelineCalls()).toBe(0);
+  test("does not fetch the label events when no trigger label is on the PR", async () => {
+    const { fake } = await build({ labels: ["documentation"], events: BOTH });
+    expect(fake.eventCalls()).toBe(0);
   });
 
-  test("fetches the timeline once per trigger label on the PR", async () => {
+  test("fetches the label events once per trigger label on the PR", async () => {
     const { fake } = await build({
       labels: ["factory:review", "factory:fix"],
-      timeline: BOTH,
+      events: BOTH,
     });
-    expect(fake.timelineCalls()).toBe(2);
+    expect(fake.eventCalls()).toBe(2);
   });
 
   test("finds a trigger label whose case differs from the config", async () => {
     const { candidate } = await build({
       labels: ["Factory:Review"],
-      timeline: ghApiOk([labeled("alice", "Factory:Review")]),
+      events: labelEventsOk([labeled("alice", "Factory:Review")]),
     });
     expect(candidate.reviewLabelerLogin).toBe("alice");
   });
@@ -159,25 +158,23 @@ describe("buildPrCandidate labelers", () => {
   test("leaves the labeler empty when the label's event has no actor", async () => {
     const { candidate } = await build({
       labels: ["factory:review"],
-      timeline: ghApiOk([labeled(null, "factory:review")]),
+      events: labelEventsOk([labeled(null, "factory:review")]),
     });
     expect(candidate.reviewLabelerLogin).toBeNull();
   });
 
-  test("throws LabelerCheckLimitError when the events exceed the page limit", async () => {
-    const overflowing = ok(
-      ghApiStdout(200, [labeled("alice", "factory:review")], {
-        link: '<https://api.github.com/repositories/1/issues/7/events?per_page=100&page=2>; rel="next"',
-      }),
-    );
-    const result = build({ labels: ["factory:review"], timeline: overflowing });
+  test("throws LabelerCheckLimitError when the label is not among the latest events", async () => {
+    const result = build({
+      labels: ["factory:review"],
+      events: labelEventsOk([labeled("alice", "documentation")], true),
+    });
     await expect(result).rejects.toThrow(LabelerCheckLimitError);
   });
 
-  test("throws when the timeline cannot be fetched", async () => {
+  test("throws when the label events cannot be fetched", async () => {
     const result = build({
       labels: ["factory:review"],
-      timeline: ok(ghApiStdout(500, { message: "boom" })),
+      events: ok(ghApiStdout(500, { message: "boom" })),
     });
     await expect(result).rejects.toThrow();
   });
@@ -188,7 +185,7 @@ describe("buildPrCandidate author", () => {
     const { candidate } = await build({
       labels: [],
       author: "mallory",
-      timeline: ghApiOk([]),
+      events: labelEventsOk([]),
     });
     expect(candidate.authorLogin).toBe("mallory");
   });
@@ -197,7 +194,7 @@ describe("buildPrCandidate author", () => {
     const { candidate } = await build({
       labels: [],
       author: null,
-      timeline: ghApiOk([]),
+      events: labelEventsOk([]),
     });
     expect(candidate.authorLogin).toBeNull();
   });

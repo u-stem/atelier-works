@@ -48,12 +48,12 @@ PR修正はラベルからしか起動しない。コメントやcommitのpush�
 
 ### ラベルの付与者の確認
 
-`poll_prs`は、`factory:review`と`factory:fix`のそれぞれについて、そのラベルを最後に付けた人をissue eventsの`labeled`イベントの`actor`で確かめる。
+`poll_prs`は、`factory:review`と`factory:fix`のそれぞれについて、そのラベルを最後に付けた人を、ラベルの`labeled`イベントの`actor`で確かめる。
 許可されるのは、FactoryのPATのアカウントと、`allowed_labeler_logins`に挙げたアカウントである。
 許可されない人が付けたラベルと、付与者を特定できないラベルは、外さずに残し、起動しない。
 取得の直前にも、同じ確認をもう一度行う。
 イベントを取得できなかったPRは、そのポーリングでは対象にしない。
-イベントが20ページを超えたPRは、`labeler_check_limit`のnoticeを残し、人がラベルを外すまで対象にしない。
+付与者を判定できないPR(直近100件のラベルのイベントにトリガーラベルのイベントが無い)は、`labeler_check_limit`のnoticeを残し、ラベルを外して付け直すまで対象にしない。
 仕組みの全体は[ラベル付与の制限](../security.md#ラベル付与の制限)にある。
 
 レビュー依頼かassigneeによる起動と、追跡中のPRの新しいcommitによる再レビューは、ラベルを介さない。

@@ -49,6 +49,7 @@ import {
 import { parseFlowJobId } from "./lib/implement_launch_support.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import {
+  confirmLabeler,
   decideClosureOnly,
   decideIssueActions,
   decideReconcileAction,
@@ -56,9 +57,9 @@ import {
   filterByRepoAllowlist,
   type IssueCandidate,
   type IssueDecision,
-  isAllowedLabeler,
   isWaitingForHuman,
   type JobState,
+  LABELER_DENIED_KIND,
   labelerDeniedMessage,
   labelerPolicyFor,
   type ReconcileGithubState,
@@ -395,7 +396,8 @@ async function reconcileActiveItems(
  * 付与者はトリガーラベルの最後の`labeled`イベントから取る。
  * イベントを取得できないIssueは候補に加えず、`recordFailure`に渡す。
  * 付与者を確かめられないまま着手しないためで、次のポーリングで取得し直す。
- * イベントが上限を超えたIssueも候補に加えず、`recordCheckLimit`でnoticeに残す。
+ * 付与者を判定できないIssue(直近のラベルのイベントにトリガーラベルが無い)も候補に加えず、
+ * `recordCheckLimit`でnoticeに残す。記録に失敗しても、警告のログだけにして次のIssueへ進む。
  */
 export async function buildIssueCandidates(
   client: GhClient,
@@ -408,6 +410,7 @@ export async function buildIssueCandidates(
       item: IssueSearchItem,
       label: string,
     ) => Promise<void>;
+    readonly log: Logger;
   },
 ): Promise<IssueCandidate[]> {
   const candidates: IssueCandidate[] = [];
@@ -434,8 +437,22 @@ export async function buildIssueCandidates(
       });
     } catch (err) {
       if (err instanceof LabelerCheckLimitError) {
-        // イベントが多すぎる対象は、失敗ではなく人の操作を求めるnoticeにする。
-        await handlers.recordCheckLimit(item, err.label);
+        // 判定できない対象は、失敗ではなく人の操作を求めるnoticeにする。
+        try {
+          await handlers.recordCheckLimit(item, err.label);
+        } catch (recordErr) {
+          handlers.log.warn(
+            "labeler_check_limit notice could not be recorded",
+            {
+              target: `${item.owner}/${item.repo}#${String(item.number)}`,
+              error: maskSecrets(
+                recordErr instanceof Error
+                  ? recordErr.message
+                  : String(recordErr),
+              ),
+            },
+          );
+        }
         continue;
       }
       await handlers.recordFailure(
@@ -570,9 +587,6 @@ const defaultClaimNoticeDeps: ClaimNoticeDeps = {
 
 /** `poll_issues`がnoticeを解決済みにしたときに、`resolved_by`へ記録する名前。 */
 export const POLL_ISSUES_RESOLVER = "poll_issues";
-
-/** ラベルの付与者の確認で見送ったIssueのnoticeの`kind`。 */
-const LABELER_DENIED_KIND = "labeler_denied";
 
 /**
  * 付与者の確認で見送ったIssueのnoticeの本文の先頭を返す。
@@ -1080,6 +1094,7 @@ export async function main(): Promise<{
     activeIssueKeys,
     config.trigger_label,
     {
+      log,
       recordFailure: (step, err) => recordFailureSafe(step, err, log),
       recordCheckLimit: (item, label) =>
         recordLabelerCheckLimit(addNoticeUnlessUnresolved, item, label),
@@ -1092,17 +1107,8 @@ export async function main(): Promise<{
   const processed = await processIssueDecisions(
     decisions,
     {
-      confirmLabeler: async (candidate) =>
-        isAllowedLabeler(
-          await getLabelerLogin(
-            client,
-            candidate.owner,
-            candidate.repo,
-            candidate.number,
-            config.trigger_label,
-          ),
-          labelerPolicy,
-        ),
+      confirmLabeler: (candidate) =>
+        confirmLabeler(client, candidate, config.trigger_label, labelerPolicy),
       claim: (candidate) =>
         claimAndStart(
           client,

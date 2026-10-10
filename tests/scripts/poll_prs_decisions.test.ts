@@ -377,7 +377,7 @@ describe("recordLabelerCheckLimit", () => {
 
   test("names the target and the label and asks to remove the label", async () => {
     expect((await recorded())[0]?.message).toBe(
-      "octo-owner/atelier-works#7: factory:reviewラベルの付与者を確かめるイベントが多すぎるため、着手できません。ラベルを外してください",
+      "octo-owner/atelier-works#7: factory:reviewラベルの付与者を判定できないため、着手できません。ラベルを外し、許可された人が付け直してください",
     );
   });
 

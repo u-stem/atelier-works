@@ -1,10 +1,12 @@
-// `poll_issues.ts`が、timelineの`labeled`イベントの`actor`でトリガーラベルの付与者を
-// 確かめ、着手するかを決めるまでの経路のテスト。
-// イベントは本物のAPIの形にする。`labeled`イベントは`author_association`を持たない。
+// `poll_issues.ts`が、ラベルのイベントの`actor`でトリガーラベルの付与者を確かめ、
+// 着手するかを決めるまでの経路のテスト。
+// イベントは本物のAPIの応答の形にする。`labeled`イベントは`author_association`を持たない。
 
 import { describe, expect, test } from "bun:test";
 import type { IssueSearchItem } from "../../f/factory/lib/github.ts";
+import type { Logger } from "../../f/factory/lib/log.ts";
 import {
+  confirmLabeler,
   decideIssueActions,
   type LabelerPolicy,
 } from "../../f/factory/lib/poll_support.ts";
@@ -12,8 +14,9 @@ import { buildIssueCandidates } from "../../f/factory/poll_issues.ts";
 import {
   createFakeCommandRunner,
   fail,
-  ghApiOk,
   ghApiStdout,
+  labelEventNode,
+  labelEventsOk,
   ok,
 } from "../lib/testSupport.ts";
 
@@ -32,71 +35,79 @@ const VIEWER_ONLY: LabelerPolicy = {
   allowedLogins: [],
 };
 
-function labeled(login: string | null, label: string) {
-  return {
-    id: 1,
-    node_id: "LE_1",
-    url: "https://api.github.com/repos/octo-owner/atelier-works/issues/events/1",
-    event: "labeled",
-    actor: login === null ? null : { login },
-    commit_id: null,
-    commit_url: null,
-    created_at: "2026-10-01T00:00:00Z",
-    label: { name: label, color: "ededed" },
-    performed_via_github_app: null,
-  };
-}
+const at = (n: number) => `2026-10-01T00:00:${String(n).padStart(2, "0")}Z`;
+const labeled = (login: string | null, label: string, n = 1) =>
+  labelEventNode("labeled", login, label, at(n));
+const unlabeled = (login: string, label: string, n = 2) =>
+  labelEventNode("unlabeled", login, label, at(n));
 
-/** timelineの応答に対して、着手の判定の結果を返す。 */
+type Responses = Parameters<typeof createFakeCommandRunner>[0];
+
+const silentLog: Logger = { info() {}, warn() {}, error() {} };
+
+/** イベントの応答に対して、着手の判定の結果を返す。 */
 async function actionFor(
-  responses: Parameters<typeof createFakeCommandRunner>[0],
+  responses: Responses,
   policy: LabelerPolicy = VIEWER_ONLY,
+  recordCheckLimit: (
+    item: IssueSearchItem,
+    label: string,
+  ) => Promise<void> = async () => {},
 ): Promise<{
   action: string | undefined;
   failures: string[];
   limited: string[];
+  warns: string[];
 }> {
   const fake = createFakeCommandRunner(responses);
   const failures: string[] = [];
   const limited: string[] = [];
+  const warns: string[] = [];
   const candidates = await buildIssueCandidates(
     { run: fake.run, ghToken: "tok" },
     [ITEM],
     new Set(),
     "factory",
     {
+      log: {
+        ...silentLog,
+        warn(message) {
+          warns.push(message);
+        },
+      },
       recordFailure: async (step) => {
         failures.push(step);
       },
       recordCheckLimit: async (item, label) => {
         limited.push(`${item.number}:${label}`);
+        await recordCheckLimit(item, label);
       },
     },
   );
   const decisions = decideIssueActions(candidates, policy);
-  return { action: decisions[0]?.action, failures, limited };
+  return { action: decisions[0]?.action, failures, limited, warns };
 }
 
 describe("issue claim by the trigger label's labeler", () => {
   test("claims an issue the viewer labeled", async () => {
     const { action } = await actionFor([
-      ghApiOk([labeled("octo-owner", "factory")]),
+      labelEventsOk([labeled("octo-owner", "factory")]),
     ]);
     expect(action).toBe("claim");
   });
 
   test("skips an issue another user labeled", async () => {
     const { action } = await actionFor([
-      ghApiOk([labeled("mallory", "factory")]),
+      labelEventsOk([labeled("mallory", "factory")]),
     ]);
     expect(action).toBe("skip_labeler");
   });
 
   test("judges by the trigger label's last event even when another label's event is later", async () => {
     const { action } = await actionFor([
-      ghApiOk([
-        labeled("octo-owner", "factory"),
-        labeled("mallory", "documentation"),
+      labelEventsOk([
+        labeled("octo-owner", "factory", 1),
+        labeled("mallory", "documentation", 2),
       ]),
     ]);
     expect(action).toBe("claim");
@@ -104,10 +115,20 @@ describe("issue claim by the trigger label's labeler", () => {
 
   test("skips an issue whose trigger label another user added again", async () => {
     const { action } = await actionFor([
-      ghApiOk([
-        labeled("octo-owner", "factory"),
-        { event: "unlabeled", actor: { login: "octo-owner" } },
-        labeled("mallory", "factory"),
+      labelEventsOk([
+        labeled("octo-owner", "factory", 1),
+        unlabeled("octo-owner", "factory", 2),
+        labeled("mallory", "factory", 3),
+      ]),
+    ]);
+    expect(action).toBe("skip_labeler");
+  });
+
+  test("skips an issue whose trigger label was last unlabeled", async () => {
+    const { action } = await actionFor([
+      labelEventsOk([
+        labeled("octo-owner", "factory", 1),
+        unlabeled("octo-owner", "factory", 2),
       ]),
     ]);
     expect(action).toBe("skip_labeler");
@@ -115,54 +136,66 @@ describe("issue claim by the trigger label's labeler", () => {
 
   test("skips an issue with no labeled event of the trigger label", async () => {
     const { action } = await actionFor([
-      ghApiOk([labeled("octo-owner", "documentation")]),
+      labelEventsOk([labeled("octo-owner", "documentation")]),
     ]);
     expect(action).toBe("skip_labeler");
   });
 
   test("skips an issue whose labeled event has no actor", async () => {
-    const { action } = await actionFor([ghApiOk([labeled(null, "factory")])]);
+    const { action } = await actionFor([
+      labelEventsOk([labeled(null, "factory")]),
+    ]);
     expect(action).toBe("skip_labeler");
   });
 
-  test("does not claim an issue whose timeline could not be fetched", async () => {
+  test("does not claim an issue whose events could not be fetched", async () => {
     const { action } = await actionFor([fail("gh: Not Found (HTTP 404)")]);
     expect(action).toBeUndefined();
   });
 
-  test("records the failure of a timeline that could not be fetched", async () => {
+  test("records the failure of events that could not be fetched", async () => {
     const { failures } = await actionFor([
       ok(ghApiStdout(404, { message: "Not Found" })),
     ]);
     expect(failures).toEqual(["fetch_labeler:octo-owner/atelier-works#12"]);
   });
 
-  const OVERFLOWING = Array.from({ length: 21 }, (_, i) =>
-    ok(
-      ghApiStdout(200, [labeled("octo-owner", "factory")], {
-        link: `<https://api.github.com/repositories/1/issues/12/events?per_page=100&page=${i + 2}>; rel="next"`,
-      }),
-    ),
-  );
+  const UNDETERMINED = [
+    labelEventsOk([labeled("octo-owner", "documentation")], true),
+  ];
 
-  test("does not claim an issue whose events exceed the page limit", async () => {
-    const { action } = await actionFor(OVERFLOWING);
+  test("does not claim an issue whose labeler cannot be determined", async () => {
+    const { action } = await actionFor(UNDETERMINED);
     expect(action).toBeUndefined();
   });
 
-  test("records the issue and label whose events exceed the page limit", async () => {
-    const { limited } = await actionFor(OVERFLOWING);
+  test("records the issue and label whose labeler cannot be determined", async () => {
+    const { limited } = await actionFor(UNDETERMINED);
     expect(limited).toEqual(["12:factory"]);
   });
 
-  test("records no failure for events that exceed the page limit", async () => {
-    const { failures } = await actionFor(OVERFLOWING);
+  test("records no failure for a labeler that cannot be determined", async () => {
+    const { failures } = await actionFor(UNDETERMINED);
     expect(failures).toEqual([]);
+  });
+
+  test("goes on when recording the undetermined labeler throws", async () => {
+    const { warns, failures } = await actionFor(
+      UNDETERMINED,
+      VIEWER_ONLY,
+      async () => {
+        throw new Error("db down");
+      },
+    );
+    expect([warns, failures]).toEqual([
+      ["labeler_check_limit notice could not be recorded"],
+      [],
+    ]);
   });
 
   test("skips every issue when the viewer could not be fetched", async () => {
     const { action } = await actionFor(
-      [ghApiOk([labeled("octo-owner", "factory")])],
+      [labelEventsOk([labeled("octo-owner", "factory")])],
       { viewerLogin: null, allowedLogins: [] },
     );
     expect(action).toBe("skip_labeler");
@@ -170,16 +203,72 @@ describe("issue claim by the trigger label's labeler", () => {
 
   test("matches the labeler's login case-insensitively", async () => {
     const { action } = await actionFor([
-      ghApiOk([labeled("OCTO-OWNER", "factory")]),
+      labelEventsOk([labeled("OCTO-OWNER", "factory")]),
     ]);
     expect(action).toBe("claim");
   });
 
   test("claims an issue a listed login labeled", async () => {
     const { action } = await actionFor(
-      [ghApiOk([labeled("alice", "factory")])],
+      [labelEventsOk([labeled("alice", "factory")])],
       { ...VIEWER_ONLY, allowedLogins: ["alice"] },
     );
     expect(action).toBe("claim");
+  });
+});
+
+describe("confirmLabeler", () => {
+  const TARGET = { owner: "octo-owner", repo: "atelier-works", number: 12 };
+
+  function confirm(
+    events: unknown[],
+    label: string,
+    policy: LabelerPolicy = VIEWER_ONLY,
+  ) {
+    const fake = createFakeCommandRunner([labelEventsOk(events)]);
+    return confirmLabeler(
+      { run: fake.run, ghToken: "tok" },
+      TARGET,
+      label,
+      policy,
+    );
+  }
+
+  const MIXED = [
+    labeled("octo-owner", "factory", 1),
+    labeled("mallory", "factory:fix", 2),
+  ];
+
+  test("confirms the label the allowed account added", async () => {
+    expect(await confirm(MIXED, "factory")).toBe(true);
+  });
+
+  test("rejects the label another user added", async () => {
+    expect(await confirm(MIXED, "factory:fix")).toBe(false);
+  });
+
+  test("rejects a label with no event", async () => {
+    expect(await confirm(MIXED, "factory:review")).toBe(false);
+  });
+
+  test("confirms a listed login", async () => {
+    const policy = { ...VIEWER_ONLY, allowedLogins: ["mallory"] };
+    expect(await confirm(MIXED, "factory:fix", policy)).toBe(true);
+  });
+
+  test("rejects every label when the viewer is unknown", async () => {
+    const policy = { viewerLogin: null, allowedLogins: [] };
+    expect(await confirm(MIXED, "factory", policy)).toBe(false);
+  });
+
+  test("throws when the events cannot be fetched", async () => {
+    const fake = createFakeCommandRunner([fail("gh: boom")]);
+    const result = confirmLabeler(
+      { run: fake.run, ghToken: "tok" },
+      TARGET,
+      "factory",
+      VIEWER_ONLY,
+    );
+    await expect(result).rejects.toThrow();
   });
 });

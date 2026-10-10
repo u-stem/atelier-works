@@ -25,7 +25,12 @@ import type {
   GitIdentity,
   LabelerAssociation,
 } from "./types.ts";
-import { assertBranchName, assertGitHubName, hasLabel } from "./types.ts";
+import {
+  assertBranchName,
+  assertGitHubName,
+  hasLabel,
+  isRecord,
+} from "./types.ts";
 import {
   type CommandResult,
   type CommandRunner,
@@ -936,43 +941,181 @@ function isLabelEventPayload(value: unknown): value is LabelEventPayload {
 }
 
 /**
- * 付与者の確認で読むイベントの最大ページ数。
- * 公開リポジトリでラベルの操作を重ねられたIssueやPRが、1回の判定でAPIを際限なく
- * 呼ばないようにする。超えたときは`LabelerCheckLimitError`を投げ、
- * 判定できないものとして拒否させる。
- */
-const LABELER_EVENTS_MAX_PAGES = 20;
-
-/**
- * 付与者の確認のイベントが`LABELER_EVENTS_MAX_PAGES`ページを超えたときの例外。
+ * 付与者を判定できないときの例外。
+ * 直近のラベルのイベント(`LABEL_EVENTS_WINDOW`件)の中に、確認しているラベルのイベントが無く、
+ * それより古いイベントが残っている。そのラベルの付与者は、読んだ範囲では分からない。
  * `label`は確認していたトリガーラベルで、呼び出し側が人へ知らせる。
  */
 export class LabelerCheckLimitError extends Error {
   readonly label: string;
-  constructor(label: string, cause: unknown) {
+  constructor(label: string) {
     super(
-      `labeler check for label ${label} exceeded ${LABELER_EVENTS_MAX_PAGES} pages of events`,
-      { cause },
+      `labeler of label ${label} is not among the latest ${LABEL_EVENTS_WINDOW} label events`,
     );
     this.name = "LabelerCheckLimitError";
     this.label = label;
   }
 }
 
+/** 付与者の確認で読むラベルのイベント(`labeled`と`unlabeled`)の件数。 */
+const LABEL_EVENTS_WINDOW = 100;
+
+/**
+ * IssueとPRの直近のラベルのイベントを読むクエリ。
+ * `timelineItems`の`itemTypes`でラベルのイベントだけに絞る。
+ * コメントや参照のイベントは含まないので、第三者はイベントの数を増やせない。
+ * ラベルのイベントを作れるのは、ラベルを付け外しできる権限(triage以上)を持つ人に限られる。
+ * IssueとPRで型が異なるので、同じ選択を両方に書く。
+ */
+const LABEL_EVENTS_QUERY = `
+  query($owner: String!, $repo: String!, $number: Int!) {
+    repository(owner: $owner, name: $repo) {
+      issueOrPullRequest(number: $number) {
+        ... on Issue {
+          timelineItems(last: ${LABEL_EVENTS_WINDOW}, itemTypes: [LABELED_EVENT, UNLABELED_EVENT]) {
+            pageInfo { hasPreviousPage }
+            nodes {
+              __typename
+              ... on LabeledEvent { id createdAt actor { __typename login } label { name } }
+              ... on UnlabeledEvent { id createdAt actor { __typename login } label { name } }
+            }
+          }
+        }
+        ... on PullRequest {
+          timelineItems(last: ${LABEL_EVENTS_WINDOW}, itemTypes: [LABELED_EVENT, UNLABELED_EVENT]) {
+            pageInfo { hasPreviousPage }
+            nodes {
+              __typename
+              ... on LabeledEvent { id createdAt actor { __typename login } label { name } }
+              ... on UnlabeledEvent { id createdAt actor { __typename login } label { name } }
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
+type LabelEvent = {
+  readonly kind: "labeled" | "unlabeled";
+  readonly id: string;
+  readonly createdAt: number;
+  /** 種類が`User`のactorのログイン名。actorが無いときと、`User`でないときは`null`。 */
+  readonly actorLogin: string | null;
+  readonly label: string;
+};
+
+type LabelEventsPayload = {
+  readonly hasPreviousPage: boolean;
+  readonly nodes: readonly unknown[];
+};
+
+function parseLabelEventsPayload(data: unknown): LabelEventsPayload | null {
+  if (!isRecord(data)) return null;
+  const repository = data.repository;
+  if (!isRecord(repository)) return null;
+  const target = repository.issueOrPullRequest;
+  if (!isRecord(target)) return null;
+  const items = target.timelineItems;
+  if (!isRecord(items)) return null;
+  const { nodes, pageInfo } = items;
+  if (!Array.isArray(nodes)) return null;
+  if (!isRecord(pageInfo)) return null;
+  const hasPreviousPage = pageInfo.hasPreviousPage;
+  if (typeof hasPreviousPage !== "boolean") return null;
+  return { hasPreviousPage, nodes };
+}
+
+/**
+ * ラベルのイベント1件を読む。ラベルのイベントでないもの、ラベルが削除されたもの、
+ * 形が違うものは`null`にして読み飛ばす。
+ */
+function parseLabelEvent(raw: unknown): LabelEvent | null {
+  if (!isRecord(raw)) return null;
+  const typename = raw.__typename;
+  if (typename !== "LabeledEvent" && typename !== "UnlabeledEvent") return null;
+  const { id, createdAt: createdAtText } = raw;
+  if (typeof id !== "string" || typeof createdAtText !== "string") return null;
+  const createdAt = Date.parse(createdAtText);
+  if (Number.isNaN(createdAt)) return null;
+  const label = labelName(raw.label);
+  if (label === null) return null;
+  const actor = raw.actor;
+  const actorLogin =
+    isRecord(actor) &&
+    actor.__typename === "User" &&
+    typeof actor.login === "string"
+      ? actor.login
+      : null;
+  return {
+    kind: typename === "LabeledEvent" ? "labeled" : "unlabeled",
+    id,
+    createdAt,
+    actorLogin,
+    label,
+  };
+}
+
+/**
+ * `label`の最後のイベントを返す。そのラベルのイベントが無ければ`null`を返す。
+ * 「最後」は、配列の並びではなく、`createdAt`(同時刻なら`id`)の最大で決める。
+ * ラベル名はGitHubが大文字小文字を区別しないので、比較も区別しない。
+ * 直近のラベルのイベントの中に`label`のイベントが無く、それより古いイベントが残っているときは、
+ * 付与者を判定できないので`LabelerCheckLimitError`を投げる。
+ */
+async function lastLabelEvent(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  number: number,
+  label: string,
+): Promise<LabelEvent | null> {
+  validateOwnerRepo(owner, repo);
+  const context = `GraphQL labelEvents ${owner}/${repo}#${number}`;
+  const data = await callGhGraphql(
+    client,
+    LABEL_EVENTS_QUERY,
+    { owner, repo, number },
+    context,
+    true,
+  );
+  const payload = parseLabelEventsPayload(data);
+  if (payload === null) {
+    throw new Error(`${context}: unexpected response shape`);
+  }
+
+  const wanted = label.toLowerCase();
+  let last: LabelEvent | null = null;
+  for (const raw of payload.nodes) {
+    const event = parseLabelEvent(raw);
+    if (event === null || event.label.toLowerCase() !== wanted) continue;
+    if (
+      last === null ||
+      event.createdAt > last.createdAt ||
+      (event.createdAt === last.createdAt && event.id > last.id)
+    ) {
+      last = event;
+    }
+  }
+  if (last === null && payload.hasPreviousPage) {
+    throw new LabelerCheckLimitError(label);
+  }
+  return last;
+}
+
 /**
  * `label`を最後に付けた人のログイン名を返す。IssueとPRのどちらにも使える。
- * `GET .../issues/{n}/events`をページ送りして、`label`の最後の`labeled`か
- * `unlabeled`のイベントを調べる。コメントなどを含むtimelineは第三者に伸ばされるので使わない。
- * このAPIは古い順に返し、`labeled`イベントは`author_association`を持たない。
  * ラベルは外されて別の人に付け直されていることがある。そのため
- * 見るべきなのは、いずれかのラベル付与ではなく、そのラベルの最新の付与である。
- * 他のラベルのイベントは見ない。ラベル名はGitHubが大文字小文字を区別しないので、
- * 比較も区別しない。
+ * 見るべきなのは、いずれかのラベル付与ではなく、そのラベルの最新のイベントである。
+ * 他のラベルのイベントは見ない。
  * 次のときは`null`を返す。呼び出し側は、判定できないものとして拒否する。
  * - そのラベルのイベントが無い。
- * - 最後のイベントが`unlabeled`である(イベントの反映が遅れている)。
+ * - 最後のイベントが`unlabeled`である(今付いているラベルの付与者を特定できない)。
  * - 最後の`labeled`イベントに`actor`が無い(削除されたユーザーなど)。
- * 取得に失敗したときは例外を投げる。ページ数が上限を超えたときは`LabelerCheckLimitError`を投げる。
+ * - actorの種類が`User`でない。GitHub Appなどのログイン名は`[bot]`を伴わないので、
+ *   人のログイン名と取り違えないようにする。
+ * 取得に失敗したときは例外を投げる。
+ * 直近のラベルのイベントの中にそのラベルのイベントが無いときは`LabelerCheckLimitError`を投げる。
  */
 export async function getLabelerLogin(
   client: GhClient,
@@ -981,35 +1124,8 @@ export async function getLabelerLogin(
   number: number,
   label: string,
 ): Promise<string | null> {
-  validateOwnerRepo(owner, repo);
-
-  let events: unknown[];
-  try {
-    events = await callGhApiAll(
-      client,
-      `repos/${owner}/${repo}/issues/${number}/events?per_page=100`,
-      LABELER_EVENTS_MAX_PAGES,
-    );
-  } catch (err) {
-    if (err instanceof GitHubPaginationLimitError) {
-      throw new LabelerCheckLimitError(label, err);
-    }
-    throw err;
-  }
-
-  const wanted = label.toLowerCase();
-  let last: string | null = null;
-  for (const raw of events) {
-    if (!isLabelEventPayload(raw)) continue;
-    if (raw.event !== "labeled" && raw.event !== "unlabeled") continue;
-    const name = labelName(raw.label);
-    if (name === null || name.toLowerCase() !== wanted) continue;
-    last =
-      raw.event === "labeled" && isLoginPayload(raw.actor)
-        ? raw.actor.login
-        : null;
-  }
-  return last;
+  const last = await lastLabelEvent(client, owner, repo, number, label);
+  return last !== null && last.kind === "labeled" ? last.actorLogin : null;
 }
 
 export type ClaimIssueOptions = {

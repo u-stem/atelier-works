@@ -82,3 +82,45 @@ export function ghApiOk(
 ): CommandResult {
   return ok(ghApiStdout(200, body, headers));
 }
+
+/**
+ * 付与者の確認のGraphQL(`timelineItems`の`LABELED_EVENT` / `UNLABELED_EVENT`)の
+ * 応答のノード1件。形は本物のAPIの応答から採った。
+ * `login`が`null`のときは`actor`が無い。
+ */
+export function labelEventNode(
+  kind: "labeled" | "unlabeled",
+  login: string | null,
+  label: string,
+  createdAt = "2026-09-28T03:13:41Z",
+  actorType = "User",
+) {
+  const prefix = kind === "labeled" ? "LE" : "UNLE";
+  return {
+    __typename: kind === "labeled" ? "LabeledEvent" : "UnlabeledEvent",
+    id: `${prefix}_${createdAt}_${label}`,
+    createdAt,
+    actor: login === null ? null : { login, __typename: actorType },
+    label: { name: label },
+  };
+}
+
+/**
+ * 付与者の確認のGraphQLの応答。
+ * `hasPreviousPage`は、読んだ範囲より古いラベルのイベントが残っているか。
+ */
+export function labelEventsOk(
+  nodes: readonly unknown[],
+  hasPreviousPage = false,
+): CommandResult {
+  return ghApiOk({
+    data: {
+      repository: {
+        issueOrPullRequest: {
+          __typename: "Issue",
+          timelineItems: { pageInfo: { hasPreviousPage }, nodes },
+        },
+      },
+    },
+  });
+}

@@ -58,9 +58,10 @@ import {
 import { parseFlowJobId } from "./lib/implement_launch_support.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import {
+  confirmLabeler,
   decidePrActions,
   filterByRepoAllowlist,
-  isAllowedLabeler,
+  LABELER_DENIED_KIND,
   labelerDeniedMessage,
   labelerPolicyFor,
   type PrCandidate,
@@ -176,9 +177,9 @@ const defaultBuildPrCandidateDeps: BuildPrCandidateDeps = {
 /**
  * 見つかったPRを、判定にかける候補にする。
  * 付与者は、トリガーラベルが付いているラベルごとに、そのラベルの最後の
- * `labeled`イベントから取る。ラベルが付いていなければtimelineを取得しない。
+ * `labeled`イベントから取る。ラベルが付いていなければイベントを取得しない。
  * 作成者はPRの`user`から取り、取得できなければ`null`にする。
- * timelineを取得できないときは例外を投げ、そのPRは候補にならない
+ * イベントを取得できないときは例外を投げ、そのPRは候補にならない
  * (付与者を確かめられないまま始めない)。
  */
 export async function buildPrCandidate(
@@ -444,7 +445,7 @@ export async function resolveClaimNotices(
       message: prLabelLeftRemovedMessage({ ...target, label: triggerLabel }),
     },
     {
-      kind: PR_LABELER_DENIED_KIND,
+      kind: LABELER_DENIED_KIND,
       message: labelerDeniedMessage(target, triggerLabel),
     },
   ];
@@ -460,9 +461,6 @@ export async function resolveClaimNotices(
     }
   }
 }
-
-/** 付与者の確認で見送ったPRのnoticeの`kind`。 */
-export const PR_LABELER_DENIED_KIND = "labeler_denied";
 
 /** ラベルが外れたままになったPRの要対応のnoticeの`kind`。 */
 export const PR_LABEL_LEFT_REMOVED_KIND = "pr_trigger_label_left_removed";
@@ -662,7 +660,7 @@ export async function recordPrLabelerDenied(
   deps: LabelerDeniedDeps = defaultLabelerDeniedDeps,
 ): Promise<void> {
   await deps.addNoticeUnlessUnresolved({
-    kind: PR_LABELER_DENIED_KIND,
+    kind: LABELER_DENIED_KIND,
     message: labelerDeniedMessage(target, label),
   });
 }
@@ -981,7 +979,7 @@ export async function processPrDecisions(
 }
 
 /**
- * 付与者を確かめるイベントが上限を超えたPRを、noticeに残す。
+ * 付与者を判定できないPRを、noticeに残す。
  * 記録に失敗してもポーリングは続けるので、警告のログだけにする。
  */
 async function recordLabelerCheckLimitSafe(
@@ -1102,7 +1100,7 @@ export async function main(): Promise<{
       );
     } catch (err) {
       if (err instanceof LabelerCheckLimitError) {
-        // イベントが多すぎる対象は、失敗ではなく人の操作を求めるnoticeにする。
+        // 判定できない対象は、失敗ではなく人の操作を求めるnoticeにする。
         skipped += 1;
         await recordLabelerCheckLimitSafe(found, err.label, log);
         continue;
@@ -1152,17 +1150,8 @@ export async function main(): Promise<{
           log,
         ),
       recordNotClaimed: recordPrClaimNotClaimed,
-      confirmLabeler: async (candidate, label) =>
-        isAllowedLabeler(
-          await getLabelerLogin(
-            client,
-            candidate.owner,
-            candidate.repo,
-            candidate.number,
-            label,
-          ),
-          labelerPolicy,
-        ),
+      confirmLabeler: (candidate, label) =>
+        confirmLabeler(client, candidate, label, labelerPolicy),
       recordLabelerDenied: (candidate, label) =>
         recordPrLabelerDenied(candidate, label),
       startReview: (candidate, context) =>
