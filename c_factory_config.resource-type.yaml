@@ -114,7 +114,7 @@ schema:
     heavy_model:
       type: string
       description: >-
-        要件定義の生成、PRのレビュー、監査と、実装やPR修正の再試行で使うClaude Codeのモデル名です。判断が重い作業に使います。
+        要件定義の生成、PRのレビュー、監査と、実装やPR修正で`model`が2回失敗した後に使うClaude Codeのモデル名です。判断が重い作業に使います。
       default: claude-opus-5-5
     implement_check_timeout_sec:
       type: integer
@@ -198,7 +198,7 @@ schema:
     model:
       type: string
       description: >-
-        実装とPR修正など、安く直せる作業で使うClaude Codeのモデル名です。同じ作業の再試行では`heavy_model`に切り替わります。
+        実装とPR修正など、安く直せる作業で使うClaude Codeのモデル名です。同じ作業で2回失敗すると`heavy_model`に切り替わります。
       default: claude-sonnet-5-5
     owners:
       type: array

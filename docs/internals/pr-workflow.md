@@ -387,8 +387,8 @@ PRワークフローは`f/factory/factory_config`の次の値を読む。
 | `default_reviewers` | `[]` | 再レビューを依頼する人 |
 | `daily_budget_usd` | `50` | 全フローで共有する1日の費用の上限(USD) |
 | `max_attempts` | `3` | 要件定義の試行回数の上限 |
-| `model` | `claude-sonnet-5-5` | PR修正のモデル。修正のラウンドが2以上のときは`heavy_model`を使う |
-| `heavy_model` | `claude-opus-5-5` | PRレビューのモデルと、PR修正の再試行のモデル |
+| `model` | `claude-sonnet-5-5` | PR修正のモデル。同じPRの修正が2回失敗した後は`heavy_model`を使う |
+| `heavy_model` | `claude-opus-5-5` | PRレビューのモデルと、2回失敗した後のPR修正のモデル |
 
 PR修正のラウンドが`max_fix_rounds`を超えると、準備のステップが止め、作業項目は人の対応待ちになる。ラウンドの番号(`fix_round`)は、`poll_prs`が作業項目を作るときに入れる。PR修正の各ラウンドは別の作業項目になり、完了のステップは番号を増やさない。
 

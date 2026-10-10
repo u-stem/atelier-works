@@ -48,6 +48,36 @@ describe("model settings", () => {
     expect(config.heavy_model).toBe("claude-test-heavy");
   });
 
+  test.each([
+    "-p",
+    "--dangerously-skip-permissions",
+    "claude opus",
+    "claude;rm",
+    "",
+    "$(id)",
+  ])("throws when model is %p", (model) => {
+    expect(() => parseFactoryConfig({ ...LEGACY_RAW_CONFIG, model })).toThrow(
+      ConfigValidationError,
+    );
+  });
+
+  test.each(["-p", "claude opus", "a/b", ""])(
+    "throws when heavy_model is %p",
+    (heavy_model) => {
+      expect(() =>
+        parseFactoryConfig({ ...LEGACY_RAW_CONFIG, heavy_model }),
+      ).toThrow(ConfigValidationError);
+    },
+  );
+
+  test("accepts a model name with a context suffix", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      model: "claude-opus-5-5[1m]",
+    });
+    expect(config.model).toBe("claude-opus-5-5[1m]");
+  });
+
   test("throws when heavy_model is not a string", () => {
     const raw = { ...LEGACY_RAW_CONFIG, heavy_model: 5 };
     expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);

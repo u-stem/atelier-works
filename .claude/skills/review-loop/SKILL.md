@@ -118,6 +118,7 @@ design-reviewer、requirements-reviewer、security-auditor、devil-advocate、tr
 - 指摘は、コードを読んで正しいかを確かめてから直す。
 - 誤った指摘は直さず、根拠を「決着した論点」に書いて次のラウンドに渡す。
 - 同じ指摘が2ラウンド続けて直らないときは、直し方ではなく前提を疑い、原因を調べ直す。
+- 同じ`[MUST]`の指摘が2ラウンド続けて直らないときは、implementerを`model: opus`で起動し直す。どのモデルで動かしたかを、完了の報告に載せる。
 
 ## 完了の報告
 

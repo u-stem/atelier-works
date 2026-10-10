@@ -2661,6 +2661,83 @@ export async function insertImplementRound(
   return parseId(row.id, "id");
 }
 
+/**
+ * 作業項目の、指定した試行(同じ要件定義)の実装で失敗したラウンドの数を返す。
+ * 失敗は、検査が通らなかった(`check_failed`)、変更が進まなかった(`stalled`)、
+ * Claudeの実行が失敗した(`error`)ラウンドである。
+ * `done`は成功、`checks_skipped`は検査が無かっただけ、`requirements_gap`は要件の不足で、
+ * どれもモデルの失敗ではない。
+ * 検証ループの修正ラウンドと、`retry_work_item`で再開する前の実行の失敗の合計になる。
+ * ラウンドは記録してから次のラウンドを始めるので、修正ラウンドの直前の失敗も含む。
+ * 試行(`attempt`)が増えると数え直す。却下や要件の不足で要件定義からやり直した実装は、
+ * 前の要件定義の失敗を引き継がない。
+ */
+export async function countImplementFailedRounds(
+  workItemId: number,
+  attempt: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  const rows = await sql`
+    SELECT COUNT(*) AS failed_rounds
+    FROM factory.implement_rounds
+    WHERE work_item_id = ${workItemId}::bigint
+      AND attempt = ${attempt}::integer
+      AND outcome IN ('check_failed', 'stalled', 'error')
+  `.fetch();
+  const row = rows[0];
+  return row === undefined
+    ? 0
+    : parseNumericLike(row.failed_rounds, "failed_rounds");
+}
+
+/**
+ * 作業項目と同じPRのPR修正で、これまでにSonnetが失敗した回数を返す。
+ * 同じPRのpr_fixの作業項目(前のラウンドと、`retry_work_item`で再実行した同じ作業項目)を対象に、
+ * 次の2つを足す。
+ * - Claudeが動いた(`agent_runs`にstageが`pr_fix`の行がある)のに、修正をpushせず
+ *   `blocked`で終えたラウンド。`fix_rounds`の行を数える。
+ * - 検査が通らず、検査の失敗を添えて再実行した(stageが`pr_fix_verify_retry`の行がある)作業項目。
+ *   不正な出力の再試行で同じstageの行が増えるので、作業項目ごとに1回と数える。
+ * 新しい指摘でラベルが付き直しただけのラウンドや、Claudeが動かなかったラウンドは数えない。
+ * ラウンドが`done`で終わった場合は失敗に含めない。
+ */
+export async function countPrFixFailures(
+  workItemId: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  const rows = await sql`
+    WITH same_pr AS (
+      SELECT wi.id
+      FROM factory.work_items cur
+      JOIN factory.work_items wi
+        ON wi.owner = cur.owner AND wi.repo = cur.repo AND wi.pr_number = cur.pr_number
+      WHERE cur.id = ${workItemId}::bigint AND wi.kind = 'pr_fix'
+    )
+    SELECT
+      (
+        SELECT COUNT(*)
+        FROM factory.fix_rounds fr
+        WHERE fr.work_item_id IN (SELECT id FROM same_pr)
+          AND fr.outcome = 'blocked'
+          AND EXISTS (
+            SELECT 1 FROM factory.agent_runs ar
+            WHERE ar.work_item_id = fr.work_item_id AND ar.stage = 'pr_fix'
+          )
+      ) AS blocked_rounds,
+      (
+        SELECT COUNT(DISTINCT ar.work_item_id)
+        FROM factory.agent_runs ar
+        WHERE ar.work_item_id IN (SELECT id FROM same_pr)
+          AND ar.stage = 'pr_fix_verify_retry'
+      ) AS verify_retry_items
+  `.fetch();
+  const row = rows[0];
+  return row === undefined
+    ? 0
+    : parseNumericLike(row.blocked_rounds, "blocked_rounds") +
+        parseNumericLike(row.verify_retry_items, "verify_retry_items");
+}
+
 function parseImplementDiffStat(value: unknown): ImplementDiffStat | null {
   if (value === null || value === undefined) {
     return null;

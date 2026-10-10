@@ -1,7 +1,8 @@
 // 工程ごとに使うClaudeのモデルを決める。
-// 判断が重い工程と、Sonnetで試して失敗した後の再試行は`heavy_model`を使い、
-// 実装や修正のように安く直せる作業は`model`を使う。
-// 割り当てを1か所に置くのは、工程を足したときに選び忘れないようにするため。
+// 判断が重い工程は`heavy_model`を使う。
+// 実装とPR修正は既定の`model`(Sonnet)で始め、同じ作業でSonnetが2回失敗したら、
+// 以後は`heavy_model`に上げる。失敗の数え方は`db.ts`の
+// `countImplementFailedRounds`と`countPrFixFailures`が決める。
 
 import type { FactoryConfig } from "./types.ts";
 
@@ -20,20 +21,33 @@ const ALWAYS_HEAVY_STAGES: readonly ModelStage[] = [
   "audit",
 ];
 
-/** 再試行とみなす最初の試行の番号。1回目は`model`で試し、2回目から`heavy_model`に上げる。 */
-export const FIRST_ESCALATED_ATTEMPT = 2;
+/** `model`での失敗がこの回数に達したら、以後は`heavy_model`を使う。 */
+const SONNET_FAILURES_BEFORE_ESCALATION = 2;
 
 /**
  * `stage`で使うモデル名を返す。
- * `attempt`は、その作業の何回目の試行かを表す1始まりの値である。
- * implementでは作業項目の`attempt`(要件の不足や却下の後にやり直すと増える)を、
- * pr_fixでは`fix_round`(PR修正のラウンドは別の作業項目になり、`attempt`は常に1のため)を渡す。
+ * `sonnetFailures`は、同じ作業でこれまでに`model`が失敗した回数である。
+ * 要件定義の生成、PRのレビュー、監査は、回数にかかわらず`heavy_model`を使う。
  */
 export function modelFor(
   config: Pick<FactoryConfig, "model" | "heavy_model">,
   stage: ModelStage,
-  attempt: number,
+  sonnetFailures: number,
 ): string {
   if (ALWAYS_HEAVY_STAGES.includes(stage)) return config.heavy_model;
-  return attempt >= FIRST_ESCALATED_ATTEMPT ? config.heavy_model : config.model;
+  return sonnetFailures >= SONNET_FAILURES_BEFORE_ESCALATION
+    ? config.heavy_model
+    : config.model;
+}
+
+/**
+ * PR修正の検査が失敗した後の再実行で使うモデル名を返す。
+ * 再実行は、このラウンドの最初の修正が検査に通らなかった後に動くので、
+ * DBに残っている失敗(`priorFailures`)に、その1回を足して判定する。
+ */
+export function prFixRetryModel(
+  config: Pick<FactoryConfig, "model" | "heavy_model">,
+  priorFailures: number,
+): string {
+  return modelFor(config, "pr_fix", priorFailures + 1);
 }

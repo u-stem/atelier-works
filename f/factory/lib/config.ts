@@ -31,6 +31,12 @@ const LABELER_ASSOCIATIONS: readonly LabelerAssociation[] = [
 const REVIEW_POST_MODES: readonly ReviewPostMode[] = ["comment_only", "gated"];
 const OWNER_KINDS = ["user", "org"];
 /**
+ * `model`と`heavy_model`に許す形。`claude --model`の引数に渡すので、
+ * 先頭が`-`の値(オプションとして読まれる)や空白、シェルの特殊文字を通さない。
+ * `claude-opus-5-5`や`claude-opus-5-5[1m]`のような名前は通る。
+ */
+const MODEL_NAME = /^[A-Za-z0-9][A-Za-z0-9._[\]-]*$/;
+/**
  * `check_commands_by_repo`のキーを正規化した結果が従う形。
  * スキームとホストを含まず、スラッシュが1つだけの`owner/repo`。
  */
@@ -162,6 +168,20 @@ function isReviewPostMode(value: unknown): value is ReviewPostMode {
 /**
  * `raw[field]`を返す。値が無ければ`fallback`を返し、文字列でなければ例外を投げる。
  */
+function modelField(
+  raw: Record<string, unknown>,
+  field: "model" | "heavy_model",
+  fallback: string,
+): string {
+  const value = stringField(raw, field, fallback);
+  if (!MODEL_NAME.test(value)) {
+    throw new ConfigValidationError(
+      `"${field}" must match ${String(MODEL_NAME)}`,
+    );
+  }
+  return value;
+}
+
 function stringField(
   raw: Record<string, unknown>,
   field: string,
@@ -347,8 +367,8 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
     owners,
     trigger_label: stringField(raw, "trigger_label", DEFAULTS.trigger_label),
     allowed_labeler_associations: resolvedAllowedLabelerAssociations,
-    model: stringField(raw, "model", DEFAULTS.model),
-    heavy_model: stringField(raw, "heavy_model", DEFAULTS.heavy_model),
+    model: modelField(raw, "model", DEFAULTS.model),
+    heavy_model: modelField(raw, "heavy_model", DEFAULTS.heavy_model),
     max_attempts: numberField(raw, "max_attempts", DEFAULTS.max_attempts),
     max_turns: numberField(raw, "max_turns", DEFAULTS.max_turns),
     max_budget_usd_per_run: numberField(

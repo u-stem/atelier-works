@@ -52,9 +52,6 @@ value:
           factory_clone_dir:
             type: javascript
             expr: results.pr_fix_prepare.factory_clone_dir
-          fix_round:
-            type: javascript
-            expr: results.pr_fix_prepare.fix_round
           head_sha:
             type: javascript
             expr: results.pr_fix_prepare.head_sha
@@ -128,9 +125,6 @@ value:
           factory_clone_dir:
             type: javascript
             expr: results.pr_fix_prepare.factory_clone_dir
-          fix_round:
-            type: javascript
-            expr: results.pr_fix_prepare.fix_round
           head_sha:
             type: javascript
             expr: results.pr_fix_prepare.head_sha

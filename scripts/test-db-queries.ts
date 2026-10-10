@@ -10,6 +10,8 @@ import {
 } from "../f/factory/lib/console_support.ts";
 import {
   addNotice,
+  countImplementFailedRounds,
+  countPrFixFailures,
   deleteResolvedNoticesBefore,
   getNoticeById,
   insertCleanupRun,
@@ -448,6 +450,74 @@ check(
     prDetail.fix_rounds[0]?.commit_count === 1 &&
     prDetail.fix_rounds[0]?.trigger_review_count === 1,
   prDetail.fix_rounds,
+);
+
+// ---------------------------------------------------------------------------
+// モデルの昇格に使う失敗の数
+// ---------------------------------------------------------------------------
+
+// failedAのラウンド: 試行2のdone、試行1のcheck_failed。試行1にstalledとerrorを足す。
+execPsql(
+  target,
+  `INSERT INTO factory.implement_rounds (work_item_id, attempt, round, mode, outcome) VALUES (${String(failedA)}, 1, 3, 'fix', 'stalled'), (${String(failedA)}, 1, 4, 'fix', 'error'), (${String(failedA)}, 1, 5, 'fix', 'requirements_gap'), (${String(failedA)}, 1, 6, 'fix', 'checks_skipped')`,
+);
+check(
+  "countImplementFailedRounds: check_failed, stalled and error of the attempt are counted",
+  (await countImplementFailedRounds(failedA, 1, sql)) === 3,
+  await countImplementFailedRounds(failedA, 1, sql),
+);
+check(
+  "countImplementFailedRounds: another attempt is not counted",
+  (await countImplementFailedRounds(failedA, 2, sql)) === 0,
+);
+
+async function prFixItem(pr: number): Promise<number> {
+  return insertWorkItem(
+    {
+      cycle: 1,
+      source: "issue",
+      kind: "pr_fix",
+      owner: OWNER,
+      repo: "r",
+      issue_number: null,
+      issue_url: null,
+      pr_number: pr,
+      title: "qdb pr fix",
+      body: null,
+      status: "needs_human",
+      attempt: 1,
+      claimed_by: null,
+      flow_job_id: null,
+      resume_url: null,
+      cancel_url: null,
+      head_sha: "abc1234",
+      parent_work_item_id: null,
+    },
+    sql,
+  );
+}
+const fixA = await prFixItem(88);
+const fixB = await prFixItem(88);
+const fixOtherPr = await prFixItem(89);
+// fixA: Claudeが動いて、blockedで終わり、検査の再実行もあった(2回と数える)。
+// fixB: Claudeが動かずにblockedで終わった(数えない)。
+// fixOtherPr: 別のPRの失敗(数えない)。
+execPsql(
+  target,
+  `INSERT INTO factory.agent_runs (work_item_id, stage, attempt, model) VALUES (${String(fixA)}, 'pr_fix', 1, 'm'), (${String(fixA)}, 'pr_fix_verify_retry', 1, 'm'), (${String(fixA)}, 'pr_fix_verify_retry', 1, 'm'), (${String(fixOtherPr)}, 'pr_fix', 1, 'm')`,
+);
+execPsql(
+  target,
+  `INSERT INTO factory.fix_rounds (work_item_id, round, outcome) VALUES (${String(fixA)}, 1, 'blocked'), (${String(fixB)}, 2, 'blocked'), (${String(fixOtherPr)}, 1, 'blocked')`,
+);
+check(
+  "countPrFixFailures: blocked rounds where Claude ran and verify retries of the same PR are counted",
+  (await countPrFixFailures(fixB, sql)) === 2,
+  await countPrFixFailures(fixB, sql),
+);
+check(
+  "countPrFixFailures: another PR is counted separately",
+  (await countPrFixFailures(fixOtherPr, sql)) === 1,
 );
 
 // ---------------------------------------------------------------------------

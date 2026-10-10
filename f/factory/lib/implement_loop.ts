@@ -427,6 +427,11 @@ export type ImplementClaudeRunInput = {
   >;
   readonly workItemId: number;
   readonly attempt: number;
+  /**
+   * 同じ作業項目の同じ試行で、これまでに実装のラウンドが失敗した回数
+   * (`countImplementFailedRounds`)。2回に達したら`heavy_model`を使う。
+   */
+  readonly sonnetFailures: number;
   readonly stage: "implement" | "implement_fix";
   readonly prompt: string;
   /** `buildSystemPrompt([IMPLEMENT_SKILL_NAME])`が作ったファイル。 */
@@ -465,7 +470,7 @@ export function buildImplementClaudeOptions(
     workItemId: input.workItemId,
     stage: input.stage,
     attempt: input.attempt,
-    model: modelFor(input.config, "implement", input.attempt),
+    model: modelFor(input.config, "implement", input.sonnetFailures),
     prompt: input.prompt,
     appendSystemPromptFile: input.systemPromptPath,
     jsonSchema: IMPLEMENT_SCHEMA,

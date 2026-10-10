@@ -1,66 +1,48 @@
-// 各工程が、割り当て表(`lib/model_policy.ts`)の工程名でモデルを選ぶことを確かめる。
-// 各ステップの`main`はWindmillのAPIを呼ぶため直接は動かさず、ソースの呼び出しを読む。
+// `runClaude`を呼ぶすべてのファイルが、モデルを`modelFor`系の関数で選ぶことを確かめる。
+// 構文を解析せず、ソースの文字列を照合する。したがって、別名やスプレッドで
+// `config.model`を渡す書き方は見つけられない。
+// 新しい呼び出しが`model: config.model`を直接渡す書き方を持ち込んだときに気づくための検査である。
 
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readdirSync, readFileSync } from "node:fs";
+import { join, relative } from "node:path";
 
-function source(relative: string): string {
-  return readFileSync(
-    join(import.meta.dir, "../../f/factory", relative),
-    "utf8",
-  );
+const FACTORY_DIR = join(import.meta.dir, "../../f/factory");
+const DEFINITION_FILE = "lib/claude.ts";
+// `runClaude(`と`runClaude<T>(`の呼び出し。
+const RUN_CLAUDE_CALL = /\brunClaude\s*(<[^>(]*>)?\(/;
+
+function sourceFiles(dir: string): string[] {
+  return readdirSync(dir, { recursive: true })
+    .map((entry) => join(dir, String(entry)))
+    .filter((path) => path.endsWith(".ts") && !path.includes("node_modules"));
 }
 
-describe("model assignment per stage", () => {
-  test("pipeline_generate selects the requirements model", () => {
-    expect(source("steps/pipeline_generate.ts")).toContain(
-      'model: modelFor(config, "requirements", attempt)',
-    );
+const CLAUDE_CALLERS = sourceFiles(FACTORY_DIR)
+  .map((path) => ({
+    path: relative(FACTORY_DIR, path),
+    text: readFileSync(path, "utf8"),
+  }))
+  .filter(
+    ({ path, text }) => path !== DEFINITION_FILE && RUN_CLAUDE_CALL.test(text),
+  );
+
+describe("model assignment", () => {
+  test("finds the files that call runClaude", () => {
+    expect(CLAUDE_CALLERS.length).toBeGreaterThanOrEqual(6);
   });
 
-  test("pr_review_generate selects the pr_review model", () => {
-    expect(source("steps/pr_review_generate.ts")).toContain(
-      'model: modelFor(config, "pr_review", attempt)',
-    );
-  });
-
-  test("audit_generate selects the audit model", () => {
-    expect(source("steps/audit_generate.ts")).toContain(
-      'model: modelFor(config, "audit", 1)',
-    );
-  });
-
-  test("pr_fix_apply selects the pr_fix model by fix_round", () => {
-    expect(source("steps/pr_fix_apply.ts")).toContain(
-      'model: modelFor(config, "pr_fix", fix_round)',
-    );
-  });
-
-  test("pr_fix_verify selects the pr_fix model by fix_round", () => {
-    expect(source("steps/pr_fix_verify.ts")).toContain(
-      'model: modelFor(config, "pr_fix", fix_round)',
-    );
-  });
-
-  test("implement_loop selects the implement model by attempt", () => {
-    expect(source("lib/implement_loop.ts")).toContain(
-      'model: modelFor(input.config, "implement", input.attempt)',
-    );
-  });
-
-  test("no step passes config.model to the model option directly", () => {
-    const steps = [
-      "steps/pipeline_generate.ts",
-      "steps/pr_review_generate.ts",
-      "steps/audit_generate.ts",
-      "steps/pr_fix_apply.ts",
-      "steps/pr_fix_verify.ts",
-      "lib/implement_loop.ts",
-    ];
-    const direct = steps.filter((path) =>
-      /model:\s*(input\.)?config\.model\b/.test(source(path)),
-    );
+  test("no caller passes config.model to the model option directly", () => {
+    const direct = CLAUDE_CALLERS.filter(({ text }) =>
+      /model:\s*(input\.)?config\.model\b/.test(text),
+    ).map(({ path }) => path);
     expect(direct).toEqual([]);
+  });
+
+  test("every caller selects the model with modelFor or prFixRetryModel", () => {
+    const missing = CLAUDE_CALLERS.filter(
+      ({ text }) => !/\b(modelFor|prFixRetryModel)\(/.test(text),
+    ).map(({ path }) => path);
+    expect(missing).toEqual([]);
   });
 });

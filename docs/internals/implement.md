@@ -216,8 +216,8 @@ Claudeが要件の不足を返すと、完了のステップは次の順に処�
 | キー | 既定値 | 意味 |
 | --- | --- | --- |
 | `implement_enabled` | `false` | 承認の後に実装フローを起動するか |
-| `model` | `claude-sonnet-5-5` | 実装のモデル。作業項目の試行が2以上のときは`heavy_model`を使う |
-| `heavy_model` | `claude-opus-5-5` | 要件定義の生成のモデルと、実装の再試行のモデル |
+| `model` | `claude-sonnet-5-5` | 実装のモデル。同じ要件定義の実装が2回失敗した後は`heavy_model`を使う |
+| `heavy_model` | `claude-opus-5-5` | 要件定義の生成のモデルと、2回失敗した後の実装のモデル |
 | `implement_max_rounds` | `5` | Claudeを実行するラウンドの上限 |
 | `implement_max_turns` | `80` | Claude 1回の実行のターン数の上限 |
 | `implement_max_budget_usd_per_run` | `10` | Claude 1回の実行の費用の上限(USD) |

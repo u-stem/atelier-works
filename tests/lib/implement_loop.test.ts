@@ -165,6 +165,7 @@ const RUN_INPUT: ImplementClaudeRunInput = {
   },
   workItemId: 3,
   attempt: 1,
+  sonnetFailures: 0,
   stage: "implement",
   prompt: "prompt",
   systemPromptPath: "/tmp/system-prompt.md",
@@ -450,14 +451,26 @@ describe("toImplementClaudeRound", () => {
 });
 
 describe("buildImplementClaudeOptions", () => {
-  test("uses model on the first attempt", () => {
+  test("uses model when no round has failed", () => {
     expect(buildImplementClaudeOptions(RUN_INPUT).model).toBe("claude-test");
   });
 
-  test("uses heavy_model from the second attempt", () => {
+  test("uses model after one failed round", () => {
     expect(
-      buildImplementClaudeOptions({ ...RUN_INPUT, attempt: 2 }).model,
+      buildImplementClaudeOptions({ ...RUN_INPUT, sonnetFailures: 1 }).model,
+    ).toBe("claude-test");
+  });
+
+  test("uses heavy_model after two failed rounds", () => {
+    expect(
+      buildImplementClaudeOptions({ ...RUN_INPUT, sonnetFailures: 2 }).model,
     ).toBe("claude-test-heavy");
+  });
+
+  test("does not escalate on the attempt number alone", () => {
+    expect(
+      buildImplementClaudeOptions({ ...RUN_INPUT, attempt: 3 }).model,
+    ).toBe("claude-test");
   });
 
   test("passes the flow deadline to runClaude", () => {
