@@ -4,14 +4,17 @@ import {
   buildNpmCiArgv,
   buildWmillArgv,
   buildWmillEnv,
+  CallTimeoutError,
   classifyChangedPaths,
   decideUpdate,
   extractMiseHostSections,
   miseTomlNeedsHostAction,
   parseNulSeparatedPaths,
   RAW_APP_RELATIVE_DIR,
+  readDeployedSha,
   resolveWmillCliContext,
   SELF_UPDATE_CALL_TIMEOUT_MS,
+  setDeployedSha,
   truncateOutput,
   withCallTimeout,
 } from "../../f/factory/lib/self_update_support.ts";
@@ -465,5 +468,133 @@ describe("withCallTimeout", () => {
 
   test("uses SELF_UPDATE_CALL_TIMEOUT_MS by default", () => {
     expect(SELF_UPDATE_CALL_TIMEOUT_MS).toBe(30_000);
+  });
+});
+
+const NEVER = (): Promise<never> => new Promise<never>(() => {});
+
+describe("CallTimeoutError", () => {
+  test("is what withCallTimeout rejects with on a time out", async () => {
+    const pending = withCallTimeout("call", NEVER, 10);
+
+    await expect(pending).rejects.toBeInstanceOf(CallTimeoutError);
+  });
+});
+
+describe("readDeployedSha", () => {
+  test("returns the value of the variable", async () => {
+    const sha = await readDeployedSha(async () => "abc1234", 50);
+
+    expect(sha).toBe("abc1234");
+  });
+
+  test("returns an empty string when the variable cannot be read", async () => {
+    const sha = await readDeployedSha(async () => {
+      throw new Error("Variable not found at f/factory/deployed_sha");
+    }, 50);
+
+    expect(sha).toBe("");
+  });
+
+  test("rejects when the read times out instead of treating it as not deployed", async () => {
+    const pending = readDeployedSha(NEVER, 10);
+
+    await expect(pending).rejects.toBeInstanceOf(CallTimeoutError);
+  });
+});
+
+describe("setDeployedSha", () => {
+  test("does not read back when the write succeeds", async () => {
+    let reads = 0;
+
+    await setDeployedSha(
+      {
+        set: async () => {},
+        get: async () => {
+          reads += 1;
+          return "";
+        },
+      },
+      "abc1234",
+      50,
+    );
+
+    expect(reads).toBe(0);
+  });
+
+  test("succeeds when the write times out but the variable holds the sha", async () => {
+    const pending = setDeployedSha(
+      { set: NEVER, get: async () => "abc1234" },
+      "abc1234",
+      10,
+    );
+
+    await expect(pending).resolves.toBeUndefined();
+  });
+
+  test("rejects when the write times out and the variable holds another value", async () => {
+    const pending = setDeployedSha(
+      { set: NEVER, get: async () => "old0000" },
+      "abc1234",
+      10,
+    );
+
+    await expect(pending).rejects.toBeInstanceOf(CallTimeoutError);
+  });
+
+  test("rejects with the write time out when the read back fails", async () => {
+    const pending = setDeployedSha(
+      {
+        set: NEVER,
+        get: async () => {
+          throw new Error("down");
+        },
+      },
+      "abc1234",
+      10,
+    );
+
+    await expect(pending).rejects.toThrow("setVariable deployed_sha");
+  });
+
+  test("rejects when the read back times out", async () => {
+    const pending = setDeployedSha({ set: NEVER, get: NEVER }, "abc1234", 10);
+
+    await expect(pending).rejects.toBeInstanceOf(CallTimeoutError);
+  });
+
+  test("rejects with the original error when the write fails for another reason", async () => {
+    const pending = setDeployedSha(
+      {
+        set: async () => {
+          throw new Error("forbidden");
+        },
+        get: async () => "abc1234",
+      },
+      "abc1234",
+      50,
+    );
+
+    await expect(pending).rejects.toThrow("forbidden");
+  });
+
+  test("does not read back when the write fails for another reason", async () => {
+    let reads = 0;
+
+    await setDeployedSha(
+      {
+        set: async () => {
+          throw new Error("forbidden");
+        },
+        get: async () => {
+          reads += 1;
+          return "abc1234";
+        },
+      },
+      "abc1234",
+      50,
+    ).catch(() => {});
+
+    expect(reads).toBe(0);
   });
 });

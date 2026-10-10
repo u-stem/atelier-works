@@ -350,8 +350,16 @@ export function buildNpmCiArgv(rawAppDir: string): string[] {
  */
 export const SELF_UPDATE_CALL_TIMEOUT_MS = 30_000;
 
+/** `withCallTimeout`が時間切れのときに投げる例外。ほかの失敗と見分けるために型を分ける。 */
+export class CallTimeoutError extends Error {
+  constructor(label: string, timeoutMs: number) {
+    super(`${label} timed out after ${String(timeoutMs)}ms`);
+    this.name = "CallTimeoutError";
+  }
+}
+
 /**
- * `work`が`timeoutMs`以内に終わらなければ、例外を投げる。
+ * `work`が`timeoutMs`以内に終わらなければ、`CallTimeoutError`を投げる。
  * `work`自体は中断しないので、副作用が後から完了することはありうる。
  * `label`は例外の文に入る。秘密値を含めてはならない。
  */
@@ -363,12 +371,63 @@ export async function withCallTimeout<T>(
   let timer: ReturnType<typeof setTimeout> | undefined;
   const expired = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => {
-      reject(new Error(`${label} timed out after ${String(timeoutMs)}ms`));
+      reject(new CallTimeoutError(label, timeoutMs));
     }, timeoutMs);
   });
   try {
     return await Promise.race([work(), expired]);
   } finally {
     clearTimeout(timer);
+  }
+}
+
+/**
+ * 前回デプロイしたコミットのshaを読む。変数が無いなど読めないときは、未デプロイとして空文字を返す。
+ * `windmill-client`の`getVariable`は、変数が無い場合もほかの失敗も、同じ形の通常の`Error`にして投げるので、
+ * 見分けられない。時間切れだけは`CallTimeoutError`で見分けられるので、未デプロイと取り違えず、そのまま投げる。
+ * 取り違えると、実際はデプロイ済みなのに全体を反映し直す。
+ */
+export async function readDeployedSha(
+  get: () => Promise<string>,
+  timeoutMs: number = SELF_UPDATE_CALL_TIMEOUT_MS,
+): Promise<string> {
+  try {
+    return await withCallTimeout("getVariable deployed_sha", get, timeoutMs);
+  } catch (err) {
+    if (err instanceof CallTimeoutError) throw err;
+    return "";
+  }
+}
+
+/**
+ * デプロイしたコミットのshaを変数に書く。書き込みが時間切れになったときは、書き込みが後から
+ * 済んでいることがあるので、変数を読み直し、`sha`と同じなら成功として扱う。
+ * 読み直せないとき、値が違うときは、最初の時間切れを投げる。時間切れ以外の失敗はそのまま投げる。
+ */
+export async function setDeployedSha(
+  deps: {
+    readonly set: () => Promise<void>;
+    readonly get: () => Promise<string>;
+  },
+  sha: string,
+  timeoutMs: number = SELF_UPDATE_CALL_TIMEOUT_MS,
+): Promise<void> {
+  try {
+    await withCallTimeout("setVariable deployed_sha", deps.set, timeoutMs);
+    return;
+  } catch (err) {
+    if (!(err instanceof CallTimeoutError)) throw err;
+    let current: string | null = null;
+    try {
+      current = await withCallTimeout(
+        "getVariable deployed_sha (confirm)",
+        deps.get,
+        timeoutMs,
+      );
+    } catch {
+      current = null;
+    }
+    if (current === sha) return;
+    throw err;
   }
 }

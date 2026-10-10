@@ -669,6 +669,7 @@ workerが居ても、2枠とも塞がっているときや、tagの設定がず�
 - `console worker check timed out`: 10秒以内に終わらなかった。
 
 確認できない回数は自己更新のstateに数える。
+stateを読めなかった回は、数えず、stateも書かない。
 6回(1時間)続くと、通知`console_worker_check_failed`を残し、Discordにも知らせる。
 確認できれば回数は0に戻る。
 
@@ -708,13 +709,13 @@ Consoleが止まっていてもDiscordには届くので、通知の確認先は
 
 ### 自己更新の打ち切りを確かめる
 
-`self_update`のジョブには、全体の上限(2400秒)がある。
+`self_update`のジョブには、全体の上限(2700秒)がある。
 値の内訳は[アーキテクチャ](architecture.md)の「自己更新」に書く。
-通常は、各コマンドと、区切った呼び出し(1回30秒)の上限で先に終わる。
+通常は、各コマンドの上限と、区切った呼び出し(1回30秒)の上限で先に終わる。
 全体の上限は、それでも止まったときの最後の砦である。
 
 上限で打ち切られた回は、最後に行うConsole用のworkerの確認が走らない。
-打ち切られるまでの最大40分は、10分ごとの次の3回が飛ばされる。
+打ち切られるまでの最大45分は、10分ごとの次の4回が飛ばされる。
 この間は、自己更新の反映とConsole用のworkerの停止の検知が止まる。
 
 気づく経路は2つある。
@@ -728,39 +729,57 @@ Consoleが止まっていてもDiscordには届くので、通知の確認先は
 - 時間切れの取り消しが、ジョブ履歴で`canceled_by`が`timeout`になること。違う値なら、打ち切られた回が失敗として数えられず、`schedule_failing`が出ない。
 - `on_error_schedule`が、打ち切られた回でも呼ばれること。呼ばれなければ、`job_failed`と`schedule_failing`のどちらも出ない。
 
-確かめる手順は次のとおりである。
-自己更新は本番のスケジュールなので、他の作業が少ない時間に行う。
+確かめるには、本番の`self_update`やロックには触れず、使い捨てのscriptとスケジュールを使う。
+`wmill sync`の対象は`f/**`だけなので、`u/<user>/`のscriptとスケジュールはWindmillの画面で作る。
+自己更新の`wmill sync push`で消えたり上書きされたりしない。
 
-1. workerで、self cloneのロックファイルを作る。
-   ロックを待つ間は子プロセスが動かないので、打ち切りが子に当たらず、必ず時間切れになる。
+1. `self_update`の上限が反映されていることを確かめる。
+   `wmill script get f/factory/self_update`の出力で、`timeout`が2700であることを見る。
+2. `u/<user>/timeout_probe`というscriptを作る。
+   子プロセスを起動せず、60秒待つだけにする。
+   設定の`timeout`は10秒にする。
 
-   ```bash
-   mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker touch /workspaces/factory/atelier-works.lock
+   ```ts
+   export async function main() {
+     await new Promise((resolve) => setTimeout(resolve, 60_000));
+   }
    ```
 
-2. `f/factory/self_update.script.yaml`の`timeout`を60に書き換え、`mise run push`で反映する。
-   自己更新が本番の内容で`wmill sync push`を行うと値が戻るので、手順の間はmainに他の変更を入れない。
-3. スケジュールの実行(10分ごと)を待つ。
+3. `u/<user>/timeout_probe`のスケジュールを作る。
+   cronは`0 */2 * * * *`(2分ごと)にし、`no_flow_overlap`を有効にする。
+   失敗時のハンドラは`f/factory/on_error_schedule`にする。
+4. スケジュールの実行を待つ。
    手動の実行では`on_error_schedule`が呼ばれないので、手動では確かめられない。
-4. `wmill job list --script-path f/factory/self_update`で打ち切られた回を見つける。
+5. `wmill job list --script-path u/<user>/timeout_probe`で打ち切られた回を見つける。
    `wmill job get <id>`で`canceled`、`canceled_by`、`canceled_reason`を読む。
    `canceled_by`が`timeout`であることを見る。
    違う値なら、`f/factory/lib/schedule_failing.ts`の判定を、読んだ値に合わせて直す。
-5. Discordに`job_failed`が届いたことを見る。
+6. Discordに`job_failed`が届いたことを見る。
    `on_error_schedule`のジョブが、打ち切られた回の直後にあることも見る。
-6. 通知`schedule_failing`まで見るなら、打ち切りが3回続くまで待つ。
-   ロックファイルは、更新から10分以上経つと他の実行が古いものとして消す。
-   そのため、実行のたびに手順1の`touch`をやり直す。
-7. 終わったら、`timeout`を2400に戻して`mise run push`で反映する。
-   ロックファイルも消す。
+7. 通知`schedule_failing`まで見るなら、打ち切りが3回続くまで(約6分)待つ。
+   Consoleの**通知**タブに出ることを見る。
+8. 終わったら、スケジュールとscriptを消す。
+   出た`schedule_failing`は、Consoleで解決する。
+   `job_failures`に残った記録は、掃除に任せる。
 
-   ```bash
-   mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker rm -f /workspaces/factory/atelier-works.lock
-   ```
+打ち切りの扱いの確認は、同じ手順の使い捨てのscriptで続ける。
+
+- 打ち切りが子を止めるか。
+  `u/<user>/timeout_probe_child`を作り、`timeout`を10秒にする。
+  本体で、`Bun.spawn(["sleep", "600"], { detached: true })`で別のセッションの子を起動し、60秒待つ。
+  `wmill script run`で実行し、打ち切られた後に、後述の`ps`で`sleep 600`が残っているかを見る。
+  残っていれば、Windmillの打ち切りは子を止めない。
+  確かめたら、残った`sleep`を`kill`で止め、scriptを消す。
+- 取り残した処理が、ジョブの終わりを遅らせるか。
+  `withCallTimeout`は呼び出しを中断しないので、時間切れの後も処理が残りうる。
+  `u/<user>/timeout_probe_tail`を作り、60秒のタイマーを残したまま、すぐに戻るようにする。
+  実行して`wmill job get <id>`の`duration_ms`を見る。
+  60秒近くかかるなら、取り残した処理が終わりを遅らせる。
+  実際の`self_update`では、区切った呼び出しが時間切れになった回で、ジョブの終了がログの最後の時刻より大きく遅れないかを見る。
 
 ### 打ち切りで残ったプロセスを確かめる
 
-Windmillの打ち切りが子プロセスを止めるかは、実機で確かめる。
+Windmillの打ち切りが子プロセスを止めるかは、上の手順で確かめる。
 止めなければ、子の実行中に打ち切られたとき、`npm ci`や`wmill sync push`などが上限なしで残る。
 残った`wmill sync push`は次の回の作業ツリーを読み続け、`wmill datatable migrate up`は次の回と並行しうる。
 リスクは[セキュリティ](security.md)の「自己更新の打ち切り」に書く。
@@ -774,14 +793,21 @@ mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker ps 
 出力から`wmill`、`npm`、`git`を探し、経過時間(`etime`)が打ち切りより長いものがあれば残っている。
 内容を確かめてから、`kill <pid>`で止める。
 
-打ち切りが子を止めるかを確かめるには、使い捨てのscriptを使う。
+### 区切った呼び出しが時間切れになったとき
 
-1. 自分のフォルダ(`u/<user>/`)に、子プロセスを別のセッションで起動して待ち続けるscriptを作る。
-   子は`sleep 600`でよい。
-2. scriptの`timeout`を10にして、`wmill script run`で実行する。
-3. 打ち切られた後に、上の`ps`で`sleep 600`が残っているかを見る。
-   残っていれば、Windmillの打ち切りは子を止めない。
-4. 確かめたら、残った`sleep`を`kill`で止め、scriptを消す。
+`self_update`の区切った呼び出しが30秒で終わらないと、例外にする。
+呼び出し自体は中断しないので、後から完了することがある。
+
+- 更新の途中なら、更新の失敗として`factory.deployments`に記録する。
+  ただし`deployed_sha`の更新が時間切れのときは、変数を読み直し、書けていれば成功として続ける。
+- `deployed_sha`の読み取りが時間切れのときは、未デプロイとは扱わず、更新を失敗にする。
+  変数が無い場合と、そのほかの読み取りの失敗は、Windmillのクライアントが同じ形の例外にするので見分けられない。
+  読み取りが時間切れ以外で失敗したときは、未デプロイとして全体を反映し直す。
+- noticeの挿入が時間切れになり、後から挿入されたときは、その回のDiscordの通知は出ない。
+  次の回からは、同じ本文の未解決のnoticeがあるので、通知しない。
+  Consoleの要対応には残る。
+- stateの読み取りが失敗か時間切れの回は、stateを書かない。
+  確認できなかった回数の積み上げを、0に戻さないためである。
 
 ### 打ち切られた回の記録を確かめる
 
@@ -808,6 +834,12 @@ mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker git
 通知`deployed_sha_mismatch`が残り、次の回が反映をやり直す。
 `deployed_sha`とHEADが同じで、`deployments`の最新の`sha_to`だけが違えば、その版の記録が欠けている。
 `wmill job list --script-path f/factory/self_update`で、打ち切られた回の時刻が、その版の反映の時刻と合うかを確かめる。
+
+`sha_to`がHEADと同じで、`result`が`failed`の行だけがあることもある。
+`deployed_sha`の更新が時間切れになった後で、実は書けていた場合の組である。
+更新は読み直しで成功として続けるので、この組は起きにくい。
+起きていれば、`deployed_sha`がHEADと同じかを見て、同じなら反映は済んでいる。
+
 欠けた記録は監査の「デプロイ」に出ないので、必要なら人が補う。
 
 ### 通知を解決する

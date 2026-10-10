@@ -357,7 +357,8 @@ export type WatchConsoleWorkerDeps = ConsoleWorkerCheckDeps & {
  * Console用のworkerが受けているかを確かめ、確認できなかった回数をstateに数える。
  * `CONSOLE_WORKER_UNKNOWN_LIMIT`回続けて確認できなかったら、noticeを残す(新しく挿入したときだけDiscordにも送る)。
  * 確認できたら回数を0に戻す。stateを読めたときは、ほかのキーを保って書く。
- * stateを読めなければ0として数え、ほかのキーを保てないので、書くとほかのキーを失う。
+ * stateを読めなかったとき(例外、時間切れ)は書かない。読めない間は積み上げた回数を知らず、
+ * 0として書くと、続けて確認できなかった回数が0に戻ってしまうため。
  * 書けなければ警告だけにする。
  * 呼び出し元の処理を止めないよう、例外は投げない。
  */
@@ -367,19 +368,21 @@ export async function watchConsoleWorker(
   const result = await checkConsoleWorker(deps);
   try {
     let stored: Record<string, unknown> = {};
+    let stateReadable = true;
     try {
       const state = await deps.getState();
       if (isRecord(state)) {
         stored = state;
       }
     } catch (err) {
+      stateReadable = false;
       deps.log.warn("could not read the console worker check state", {
         error: maskSecrets(String(err)),
       });
     }
     const previous = parseUnknownCount(stored);
     const count = nextUnknownCount(previous, result);
-    if (count !== previous) {
+    if (stateReadable && count !== previous) {
       // stateの全体を置き換える書き込みなので、ほかのキーは読んだ値のまま残す。
       await deps.setState({ ...stored, console_worker_unknown_count: count });
     }
