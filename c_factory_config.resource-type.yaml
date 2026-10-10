@@ -71,7 +71,7 @@ schema:
     allowed_labeler_logins:
       type: array
       description: >-
-        トリガーラベル(`trigger_label`、`review_label`、`fix_label`)を付けてよい、Factoryを動かすアカウント以外のGitHubのログイン名です。空の場合は、Factoryのアカウントが付けたラベルにだけ反応します。大文字小文字は区別しません。
+        トリガーラベル(`trigger_label`、`review_label`、`fix_label`)を付けてよい、Factoryを動かすアカウント以外のGitHubのログイン名です。空の場合は、Factoryのアカウントが付けたラベルにだけ反応します。大文字小文字は区別しません。他人の入力に応じてラベルを付ける自動化のアカウントや、FactoryのPATを使う自動化は、許可しないでください。`[bot]`で終わるログイン名は設定の検証で拒否します。
       default: []
       items:
         type: string

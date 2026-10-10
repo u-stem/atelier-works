@@ -59,7 +59,10 @@ import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import {
   decidePrActions,
   filterByRepoAllowlist,
+  hasLabel,
+  isAllowedLabeler,
   labelerDeniedMessage,
+  labelerPolicyFor,
   type PrCandidate,
   type PrDecision,
 } from "./lib/poll_support.ts";
@@ -158,18 +161,40 @@ function prKey(owner: string, repo: string, number: number): string {
   return `${owner}/${repo}#${String(number)}`;
 }
 
-async function buildPrCandidate(
+/** `buildPrCandidate`が使うDBの読み取り。テストで差し替える。 */
+export type BuildPrCandidateDeps = {
+  readonly latestPrWorkItem: typeof latestPrWorkItem;
+  readonly findApprovedWorkItemForIssue: typeof findApprovedWorkItemForIssue;
+};
+
+const defaultBuildPrCandidateDeps: BuildPrCandidateDeps = {
+  latestPrWorkItem,
+  findApprovedWorkItemForIssue,
+};
+
+/**
+ * 見つかったPRを、判定にかける候補にする。
+ * 付与者は、トリガーラベルが付いているラベルごとに、そのラベルの最後の
+ * `labeled`イベントから取る。ラベルが付いていなければtimelineを取得しない。
+ * 作成者はPRの`user`から取り、取得できなければ`null`にする。
+ * timelineを取得できないときは例外を投げ、そのPRは候補にならない
+ * (付与者を確かめられないまま始めない)。
+ */
+export async function buildPrCandidate(
   client: GhClient,
   found: PrSearchItem,
   viewerLogin: string,
   activeForPr: readonly WorkItem[],
   triggerLabels: { readonly reviewLabel: string; readonly fixLabel: string },
+  deps: BuildPrCandidateDeps = defaultBuildPrCandidateDeps,
 ): Promise<PrCandidateContext> {
   // `startFix`の引き継ぎに要る`latestFix`を先に取得し、残りはその後に並列で取る。
   // `latestPrWorkItem`は行全体を返すので、`getWorkItem(id)`で引き直さない。
   const [latestAny, latestFix] = await Promise.all([
-    latestPrWorkItem(found.owner, found.repo, found.number),
-    latestPrWorkItem(found.owner, found.repo, found.number, { kind: "pr_fix" }),
+    deps.latestPrWorkItem(found.owner, found.repo, found.number),
+    deps.latestPrWorkItem(found.owner, found.repo, found.number, {
+      kind: "pr_fix",
+    }),
   ]);
 
   const [pr, asIssue, reviews, reviewComments] = await Promise.all([
@@ -185,11 +210,8 @@ async function buildPrCandidate(
     ),
   ]);
 
-  // 付与者は、トリガーラベルが付いているときだけ確かめる。取得に失敗したら
-  // 例外のまま呼び出し元へ返し、そのPRは候補に加えない
-  // (付与者を確かめられないまま始めない)。
   const labelerOf = async (label: string): Promise<string | null> => {
-    if (!asIssue.labels.includes(label)) return null;
+    if (!hasLabel(asIssue.labels, label)) return null;
     return getLabelerLogin(
       client,
       found.owner,
@@ -216,7 +238,7 @@ async function buildPrCandidate(
   const approvedParent =
     firstLinkedIssue === undefined
       ? null
-      : await findApprovedWorkItemForIssue(
+      : await deps.findApprovedWorkItemForIssue(
           found.owner,
           found.repo,
           firstLinkedIssue,
@@ -229,6 +251,7 @@ async function buildPrCandidate(
     title: pr.title,
     headSha: pr.headSha,
     labels: asIssue.labels,
+    authorLogin: pr.authorLogin === "" ? null : pr.authorLogin,
     reviewLabelerLogin,
     fixLabelerLogin,
     hasActiveReviewingItem: activeForPr.some(
@@ -754,6 +777,15 @@ export type PrDecisionHandlers = {
     candidate: PrCandidate,
     result: Extract<ClaimPrResult, { readonly claimed: false }>,
   ) => Promise<void>;
+  /**
+   * 取得の直前に、ラベルの付与者がまだ許可された人かを確かめ直す。
+   * 判定の後にラベルが付け直されていることがあるためである。
+   * 取得できなかったときは例外を投げ、取得に進まない。
+   */
+  readonly confirmLabeler: (
+    candidate: PrCandidate,
+    label: string,
+  ) => Promise<boolean>;
   /** 付与者が許可されていないラベルを、noticeに残す。 */
   readonly recordLabelerDenied: (
     candidate: PrCandidate,
@@ -809,21 +841,31 @@ export async function processPrDecisions(
   let failed = 0;
   // トリガーラベルが外れたままになったPR。ループを抜けるときに必ず1回だけ知らせる。
   const labelsLeftRemoved: PrLabelLeftRemoved[] = [];
+  // 付与者が許可されていないラベルをnoticeに残し、見送りとして数える。
   // noticeの記録の失敗は、そのPRの失敗として記録して次へ進む。
-  const recordDenied = async (
+  const countDenied = async (
     candidate: PrCandidate,
     label: string,
-  ): Promise<"recorded" | "failed"> => {
+  ): Promise<void> => {
     try {
       await handlers.recordLabelerDenied(candidate, label);
-      return "recorded";
+      skipped += 1;
     } catch (err) {
+      failed += 1;
       await handlers.recordFailure(
         `labeler_denied:${candidate.owner}/${candidate.repo}#${candidate.number}`,
         err,
       );
-      return "failed";
     }
+  };
+  // 取得の直前に付与者を確かめ直し、許可されていなければ見送りとして数えて`false`を返す。
+  const labelerConfirmed = async (
+    candidate: PrCandidate,
+    label: string,
+  ): Promise<boolean> => {
+    if (await handlers.confirmLabeler(candidate, label)) return true;
+    await countDenied(candidate, label);
+    return false;
   };
   try {
     for (const decision of decisions) {
@@ -847,25 +889,25 @@ export async function processPrDecisions(
       // 1回のポーリングで1つのPRに`review_label`と`fix_label`の両方が
       // 付いていることがあり、1つの取得にまとめず個別に扱う必要がある。
       if (review.kind === "deny_labeler") {
-        const outcome = await recordDenied(candidate, labels.reviewLabel);
-        if (outcome === "recorded") skipped += 1;
-        else failed += 1;
+        await countDenied(candidate, labels.reviewLabel);
       }
 
       if (review.kind === "trigger_review") {
         try {
           if (review.reason === "label") {
-            const claimResult = await handlers.claim(
-              candidate,
-              labels.reviewLabel,
-            );
-            if (!claimResult.claimed) {
-              skipped += 1;
-              await handlers.recordNotClaimed(candidate, claimResult);
-            } else {
-              await handlers.startReview(candidate, context);
-              reviewsStarted += 1;
-              await handlers.resolveNotices(candidate, labels.reviewLabel);
+            if (await labelerConfirmed(candidate, labels.reviewLabel)) {
+              const claimResult = await handlers.claim(
+                candidate,
+                labels.reviewLabel,
+              );
+              if (!claimResult.claimed) {
+                skipped += 1;
+                await handlers.recordNotClaimed(candidate, claimResult);
+              } else {
+                await handlers.startReview(candidate, context);
+                reviewsStarted += 1;
+                await handlers.resolveNotices(candidate, labels.reviewLabel);
+              }
             }
           } else {
             // assignで起きた場合はラベルが関わらず、消費するものが無い。
@@ -883,21 +925,24 @@ export async function processPrDecisions(
       }
 
       if (fix.kind === "deny_labeler") {
-        const outcome = await recordDenied(candidate, labels.fixLabel);
-        if (outcome === "recorded") skipped += 1;
-        else failed += 1;
+        await countDenied(candidate, labels.fixLabel);
       }
 
       if (fix.kind === "trigger_fix") {
         try {
-          const claimResult = await handlers.claim(candidate, labels.fixLabel);
-          if (!claimResult.claimed) {
-            skipped += 1;
-            await handlers.recordNotClaimed(candidate, claimResult);
-          } else {
-            await handlers.startFix(candidate, context);
-            fixesStarted += 1;
-            await handlers.resolveNotices(candidate, labels.fixLabel);
+          if (await labelerConfirmed(candidate, labels.fixLabel)) {
+            const claimResult = await handlers.claim(
+              candidate,
+              labels.fixLabel,
+            );
+            if (!claimResult.claimed) {
+              skipped += 1;
+              await handlers.recordNotClaimed(candidate, claimResult);
+            } else {
+              await handlers.startFix(candidate, context);
+              fixesStarted += 1;
+              await handlers.resolveNotices(candidate, labels.fixLabel);
+            }
           }
         } catch (err) {
           failed += 1;
@@ -1045,14 +1090,12 @@ export async function main(): Promise<{
     ]),
   );
 
+  const labelerPolicy = labelerPolicyFor(viewer.login, config);
   const decisions = decidePrActions(
     contexts.map((context) => context.candidate),
     config.review_label,
     config.fix_label,
-    {
-      viewerLogin: viewer.login,
-      allowedLogins: config.allowed_labeler_logins,
-    },
+    labelerPolicy,
   );
 
   const processed = await processPrDecisions(
@@ -1070,6 +1113,17 @@ export async function main(): Promise<{
           log,
         ),
       recordNotClaimed: recordPrClaimNotClaimed,
+      confirmLabeler: async (candidate, label) =>
+        isAllowedLabeler(
+          await getLabelerLogin(
+            client,
+            candidate.owner,
+            candidate.repo,
+            candidate.number,
+            label,
+          ),
+          labelerPolicy,
+        ),
       recordLabelerDenied: (candidate, label) =>
         recordPrLabelerDenied(candidate, label),
       startReview: (candidate, context) =>

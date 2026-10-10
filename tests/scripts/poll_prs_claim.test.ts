@@ -963,6 +963,7 @@ describe("processPrDecisions", () => {
     title: "t",
     headSha: "abc",
     labels: [],
+    authorLogin: "octo-owner",
     reviewLabelerLogin: null,
     fixLabelerLogin: null,
     hasActiveReviewingItem: false,
@@ -999,6 +1000,7 @@ describe("processPrDecisions", () => {
     const handlers: PrDecisionHandlers = {
       claim: async () => ({ claimed: true }),
       recordNotClaimed: async () => {},
+      confirmLabeler: async () => true,
       recordLabelerDenied: async () => {},
       startReview: async () => {
         calls.push("startReview");
@@ -1351,6 +1353,99 @@ describe("processPrDecisions", () => {
       await run([FIX_DENIED], handlers);
 
       expect(calls).toEqual([]);
+    });
+  });
+
+  describe("when the labeler changed after the decision", () => {
+    test("does not claim the review label", async () => {
+      const claimed: string[] = [];
+      const { handlers } = handlersWith({
+        confirmLabeler: async () => false,
+        claim: async (_candidate, label) => {
+          claimed.push(label);
+          return { claimed: true };
+        },
+      });
+
+      await run([REVIEW_BY_LABEL], handlers);
+
+      expect(claimed).toEqual([]);
+    });
+
+    test("does not claim the fix label", async () => {
+      const claimed: string[] = [];
+      const { handlers } = handlersWith({
+        confirmLabeler: async () => false,
+        claim: async (_candidate, label) => {
+          claimed.push(label);
+          return { claimed: true };
+        },
+      });
+
+      await run([FIX_BY_LABEL], handlers);
+
+      expect(claimed).toEqual([]);
+    });
+
+    test("records the denial with the label that changed", async () => {
+      const recorded: string[] = [];
+      const { handlers } = handlersWith({
+        confirmLabeler: async () => false,
+        recordLabelerDenied: async (_candidate, label) => {
+          recorded.push(label);
+        },
+      });
+
+      await run([REVIEW_BY_LABEL], handlers);
+
+      expect(recorded).toEqual(["factory:review"]);
+    });
+
+    test("counts the review as skipped", async () => {
+      const { handlers } = handlersWith({ confirmLabeler: async () => false });
+
+      const result = await run([REVIEW_BY_LABEL], handlers);
+
+      expect(result.skipped).toBe(1);
+    });
+
+    test("still judges the fix label separately after a changed review label", async () => {
+      const { handlers, calls } = handlersWith({
+        confirmLabeler: async (_candidate, label) => label === "factory:fix",
+      });
+
+      await run([REVIEW_AND_FIX], handlers);
+
+      expect(calls).toEqual(["startFix", "resolveNotices:factory:fix"]);
+    });
+
+    test("does not claim when the labeler cannot be fetched", async () => {
+      const claimed: string[] = [];
+      const { handlers } = handlersWith({
+        confirmLabeler: async () => {
+          throw new Error("timeline failed");
+        },
+        claim: async (_candidate, label) => {
+          claimed.push(label);
+          return { claimed: true };
+        },
+      });
+
+      await run([REVIEW_BY_LABEL], handlers);
+
+      expect(claimed).toEqual([]);
+    });
+
+    test("counts the failure when the labeler cannot be fetched", async () => {
+      const { handlers } = handlersWith({
+        confirmLabeler: async () => {
+          throw new Error("timeline failed");
+        },
+      });
+
+      const result = await run([REVIEW_BY_LABEL], handlers);
+
+      expect(result.failed).toBe(1);
     });
   });
 

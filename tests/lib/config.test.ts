@@ -219,6 +219,22 @@ describe("parseFactoryConfig", () => {
     expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
   });
 
+  test("throws when allowed_labeler_logins contains a [bot] account", () => {
+    const raw = {
+      ...LEGACY_RAW_CONFIG,
+      allowed_labeler_logins: ["alice", "some-app[bot]"],
+    };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when allowed_labeler_logins contains a [BOT] account in any case", () => {
+    const raw = {
+      ...LEGACY_RAW_CONFIG,
+      allowed_labeler_logins: ["Some-App[BOT]"],
+    };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
   test("throws when factory_repo is missing (no schema default)", () => {
     const { factory_repo: _factoryRepo, ...withoutFactoryRepo } =
       LEGACY_RAW_CONFIG;

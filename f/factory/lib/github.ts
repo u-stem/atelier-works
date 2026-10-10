@@ -946,14 +946,26 @@ function isTimelineEventPayload(value: unknown): value is TimelineEventPayload {
 }
 
 /**
- * `GET .../timeline`をページ送りしながら取得し、`label`を付けた最後の`labeled`
- * イベントだけを返す。IssueとPRのどちらにも使える。
+ * 付与者の確認で読むtimelineの最大ページ数。
+ * コメントなどで伸ばされたIssueやPRが、1回の判定でAPIを際限なく呼ばないようにする。
+ * 超えたときは`GitHubPaginationLimitError`を投げ、判定できないものとして拒否させる。
+ */
+const LABELER_TIMELINE_MAX_PAGES = 20;
+
+/**
+ * `GET .../timeline`をページ送りしながら取得し、`label`の最後の
+ * `labeled`か`unlabeled`のイベントを調べる。IssueとPRのどちらにも使える。
  * ラベルは外されて別の人に付け直されていることがある。そのため
  * 見るべきなのは、いずれかのラベル付与ではなく、そのラベルの最新の付与である。
  * 他のラベルのイベントは見ない。ラベル名はGitHubが大文字小文字を区別しないので、
  * 比較も区別しない。
- * そのラベルの`labeled`イベントが無ければ`null`を返す。
- * 取得に失敗したときは例外を投げる。呼び出し側は、判定できないものとして拒否する。
+ * - そのラベルのイベントが無ければ`null`を返す。
+ * - 最後のイベントが`labeled`なら、その`actor`のログイン名を返す。
+ *   `actor`が無いときは`actorLogin`を`null`にする。
+ * - 最後のイベントが`unlabeled`なら、今付いているラベルの付与者を特定できない
+ *   (timelineの反映が遅れている)ので、`actorLogin`を`null`にする。
+ * 取得に失敗したとき、`LABELER_TIMELINE_MAX_PAGES`を超えたときは例外を投げる。
+ * 呼び出し側は、判定できないものとして拒否する。
  */
 export async function getLastLabeledEvent(
   client: GhClient,
@@ -967,16 +979,22 @@ export async function getLastLabeledEvent(
   const parsed = await callGhApiAll(
     client,
     `repos/${owner}/${repo}/issues/${number}/timeline?per_page=100`,
+    LABELER_TIMELINE_MAX_PAGES,
   );
 
   const wanted = label.toLowerCase();
   let last: LastLabeledEvent | null = null;
   for (const raw of parsed) {
     if (!isTimelineEventPayload(raw)) continue;
-    if (raw.event !== "labeled") continue;
+    if (raw.event !== "labeled" && raw.event !== "unlabeled") continue;
     const name = labelName(raw.label);
     if (name === null || name.toLowerCase() !== wanted) continue;
-    last = { actorLogin: isLoginPayload(raw.actor) ? raw.actor.login : null };
+    last = {
+      actorLogin:
+        raw.event === "labeled" && isLoginPayload(raw.actor)
+          ? raw.actor.login
+          : null,
+    };
   }
   return last;
 }

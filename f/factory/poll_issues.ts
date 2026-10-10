@@ -55,9 +55,11 @@ import {
   filterByRepoAllowlist,
   type IssueCandidate,
   type IssueDecision,
+  isAllowedLabeler,
   isWaitingForHuman,
   type JobState,
   labelerDeniedMessage,
+  labelerPolicyFor,
   type ReconcileGithubState,
   readJobState,
 } from "./lib/poll_support.ts";
@@ -767,6 +769,12 @@ export async function recordLabelerDenied(
 }
 
 export type DecisionHandlers = {
+  /**
+   * 取得の直前に、ラベルの付与者がまだ許可された人かを確かめ直す。
+   * 判定の後にラベルが付け直されていることがあるためである。
+   * 取得できなかったときは例外を投げ、取得に進まない。
+   */
+  readonly confirmLabeler: (candidate: IssueCandidate) => Promise<boolean>;
   readonly claim: (candidate: IssueCandidate) => Promise<"claimed" | "skipped">;
   readonly recordDenied: (candidate: IssueCandidate) => Promise<void>;
   readonly recordFailure: (step: string, err: unknown) => Promise<void>;
@@ -794,6 +802,19 @@ export async function processIssueDecisions(
   let skipped = 0;
   let failed = 0;
   const ownershipUnknown: IssueCandidate[] = [];
+  // 付与者が許可されていないIssueをnoticeに残し、見送りとして数える。
+  const countDenied = async (
+    candidate: IssueCandidate,
+    where: string,
+  ): Promise<void> => {
+    try {
+      await handlers.recordDenied(candidate);
+      skipped += 1;
+    } catch (err) {
+      failed += 1;
+      await handlers.recordFailure(`labeler_denied:${where}`, err);
+    }
+  };
   let loopFailure: { readonly error: unknown } | null = null;
   try {
     for (const decision of decisions) {
@@ -804,16 +825,14 @@ export async function processIssueDecisions(
         continue;
       }
       if (decision.action === "skip_labeler") {
-        try {
-          await handlers.recordDenied(candidate);
-          skipped += 1;
-        } catch (err) {
-          failed += 1;
-          await handlers.recordFailure(`labeler_denied:${where}`, err);
-        }
+        await countDenied(candidate, where);
         continue;
       }
       try {
+        if (!(await handlers.confirmLabeler(candidate))) {
+          await countDenied(candidate, where);
+          continue;
+        }
         const outcome = await handlers.claim(candidate);
         if (outcome === "claimed") claimed += 1;
         else skipped += 1;
@@ -1038,15 +1057,24 @@ export async function main(): Promise<{
     config.trigger_label,
     (step, err) => recordFailureSafe(step, err, log),
   );
-  const decisions = decideIssueActions(candidates, {
-    viewerLogin: viewer.login,
-    allowedLogins: config.allowed_labeler_logins,
-  });
+  const labelerPolicy = labelerPolicyFor(viewer.login, config);
+  const decisions = decideIssueActions(candidates, labelerPolicy);
 
   // 所有を判断できなかったIssueの通知は、`processIssueDecisions`がループを抜けるときに送る。
   const processed = await processIssueDecisions(
     decisions,
     {
+      confirmLabeler: async (candidate) =>
+        isAllowedLabeler(
+          await getLabelerLogin(
+            client,
+            candidate.owner,
+            candidate.repo,
+            candidate.number,
+            config.trigger_label,
+          ),
+          labelerPolicy,
+        ),
       claim: (candidate) =>
         claimAndStart(
           client,

@@ -252,6 +252,28 @@ function stringArrayField(
 }
 
 /**
+ * `allowed_labeler_logins`を返す。値が無ければ既定値を返す。
+ * `[bot]`で終わるログイン名はGitHub Appのアカウントで、第三者の入力に応じて
+ * ラベルを付ける自動化になりうる。そのアカウントが付けたラベルを許可すると、
+ * 付与者の確認が素通りになるため、例外を投げる。
+ */
+function labelerLoginsField(raw: Record<string, unknown>): string[] {
+  const logins = stringArrayField(
+    raw,
+    "allowed_labeler_logins",
+    DEFAULTS.allowed_labeler_logins,
+  );
+  for (const login of logins) {
+    if (login.toLowerCase().endsWith("[bot]")) {
+      throw new ConfigValidationError(
+        `"allowed_labeler_logins" must not contain an automation account: ${JSON.stringify(login)}`,
+      );
+    }
+  }
+  return logins;
+}
+
+/**
  * `raw[field]`を返す。値が無ければ`fallback`を返し、真偽値でなければ例外を投げる。
  */
 function booleanField(
@@ -373,11 +395,7 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
     owners,
     trigger_label: stringField(raw, "trigger_label", DEFAULTS.trigger_label),
     allowed_labeler_associations: resolvedAllowedLabelerAssociations,
-    allowed_labeler_logins: stringArrayField(
-      raw,
-      "allowed_labeler_logins",
-      DEFAULTS.allowed_labeler_logins,
-    ),
+    allowed_labeler_logins: labelerLoginsField(raw),
     model: modelField(raw, "model", DEFAULTS.model),
     heavy_model: modelField(raw, "heavy_model", DEFAULTS.heavy_model),
     max_attempts: numberField(raw, "max_attempts", DEFAULTS.max_attempts),

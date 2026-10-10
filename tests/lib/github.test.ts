@@ -15,6 +15,7 @@ import {
   GITHUB_RATE_LIMIT_MAX_WAIT_MS,
   GITHUB_TRANSIENT_RETRY_DELAY_MS,
   GitHubHttpError,
+  GitHubPaginationLimitError,
   GitHubRateLimitError,
   getBranchProtected,
   getIssue,
@@ -991,6 +992,16 @@ describe("getLastLabeledEvent", () => {
     };
   }
 
+  function unlabeled(login: string, label: string) {
+    return {
+      id: 2,
+      event: "unlabeled",
+      actor: { login },
+      created_at: "2026-10-01T00:01:00Z",
+      label: { name: label, color: "ededed" },
+    };
+  }
+
   async function lastLabeled(pages: readonly CommandResult[], label: string) {
     const fake = createFakeCommandRunner(pages);
     return {
@@ -1037,13 +1048,46 @@ describe("getLastLabeledEvent", () => {
       [
         ghApiOk([
           labeled("alice", "factory"),
-          { event: "unlabeled", actor: { login: "alice" } },
+          unlabeled("alice", "factory"),
           labeled("mallory", "factory"),
         ]),
       ],
       "factory",
     );
     expect(event?.actorLogin).toBe("mallory");
+  });
+
+  test("returns a null actor when the label's last event is unlabeled", async () => {
+    const { event } = await lastLabeled(
+      [ghApiOk([labeled("alice", "factory"), unlabeled("alice", "factory")])],
+      "factory",
+    );
+    expect(event?.actorLogin).toBeNull();
+  });
+
+  test("ignores an unlabeled event of another label", async () => {
+    const { event } = await lastLabeled(
+      [
+        ghApiOk([
+          labeled("alice", "factory"),
+          unlabeled("alice", "documentation"),
+        ]),
+      ],
+      "factory",
+    );
+    expect(event?.actorLogin).toBe("alice");
+  });
+
+  test("rejects a timeline that runs past the page limit", async () => {
+    const next = (n: number) => ({
+      link: `<https://api.github.com/repos/acme/widgets/issues/5/timeline?page=${n}>; rel="next"`,
+    });
+    const pages = Array.from({ length: 21 }, (_, i) =>
+      ok(ghApiStdout(200, [labeled("alice", "factory")], next(i + 2))),
+    );
+    await expect(lastLabeled(pages, "factory")).rejects.toThrow(
+      GitHubPaginationLimitError,
+    );
   });
 
   test("matches the label name case-insensitively", async () => {

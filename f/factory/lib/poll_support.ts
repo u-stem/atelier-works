@@ -76,7 +76,19 @@ export type LabelerPolicy = {
 };
 
 /**
+ * `viewerLogin`と設定の`allowed_labeler_logins`から、付与者の決まりを作る。
+ * `poll_issues`と`poll_prs`が同じ決まりを使うための組み立てである。
+ */
+export function labelerPolicyFor(
+  viewerLogin: string | null,
+  config: Pick<FactoryConfig, "allowed_labeler_logins">,
+): LabelerPolicy {
+  return { viewerLogin, allowedLogins: config.allowed_labeler_logins };
+}
+
+/**
  * トリガーラベルを付けたのが許可された人かを返す。
+ * PRの作成者が許可されたアカウントかの判定にも使う。
  * 許可するのは、`viewerLogin`のアカウントと、`allowedLogins`に含まれるログイン名である。
  * 大文字小文字は区別しない。
  * 付与者を特定できないとき(`actorLogin`が`null`)と、`viewerLogin`が`null`のときは、
@@ -92,6 +104,16 @@ export function isAllowedLabeler(
   const actor = actorLogin.toLowerCase();
   if (actor === policy.viewerLogin.toLowerCase()) return true;
   return policy.allowedLogins.some((login) => login.toLowerCase() === actor);
+}
+
+/**
+ * `labels`に`label`が付いているかを返す。
+ * GitHubのラベル名は大文字小文字を区別せず、検索もtimelineも区別しないので、
+ * 比較も区別しない。
+ */
+export function hasLabel(labels: readonly string[], label: string): boolean {
+  const wanted = label.toLowerCase();
+  return labels.some((name) => name.toLowerCase() === wanted);
 }
 
 /**
@@ -171,6 +193,13 @@ export type PrCandidate = {
    */
   readonly labels: readonly string[];
   /**
+   * PRの作成者のログイン名。取得できなかったときは`null`。
+   * ラベルを介さない検出(レビュー依頼やassigneeによるレビューと、追跡中のPRの
+   * 新しいcommitによる再レビュー)は、作成者が許可されたアカウントのときに限る。
+   * forkのPRや第三者のPRを、作成者の操作だけで始めさせないためである。
+   */
+  readonly authorLogin: string | null;
+  /**
    * `review_label`を付けた最後のイベントの付与者のログイン名。
    * ラベルが付いていないとき、イベントが無いとき、付与者を特定できないときは`null`。
    * ラベルが付いているのに`null`なら、拒否する。
@@ -224,8 +253,11 @@ export type PrDecision = {
 /**
  * 各PRについて、レビューと修正を始めるかを判定して返す。
  * ラベルによるレビューと修正は、ラベルを付けたのが許可された人のときに始める
- * (ラベルを外すことで冪等になる)。許可されない人が付けたラベルは拒否し、
- * レビューは未処理の`head_sha`からの検出にも回さない。
+ * (ラベルを外すことで冪等になる)。許可されない人が付けたラベルは拒否する。
+ * ラベルを介さないレビューの検出は、未処理の`head_sha`があるときに始めるが、
+ * 次のどちらかを満たさないときは始めない。
+ * - PRの作成者が許可されたアカウントである。
+ * - レビューと修正のどちらのトリガーラベルも、拒否された状態で付いていない。
  * 未処理の`head_sha`から自動で検出するレビューは、
  * このPRに実行中の`pr_review`があれば見送る。
  * `pr_fix`に自動検出の経路は無く、`fix_label`からだけ始め、コメントからは始めない。
@@ -237,20 +269,29 @@ export function decidePrActions(
   policy: LabelerPolicy,
 ): PrDecision[] {
   return candidates.map((candidate): PrDecision => {
-    const hasReviewLabel = candidate.labels.includes(reviewLabel);
-    const hasFixLabel = candidate.labels.includes(fixLabel);
+    const hasReviewLabel = hasLabel(candidate.labels, reviewLabel);
+    const hasFixLabel = hasLabel(candidate.labels, fixLabel);
+    const reviewLabelAllowed =
+      hasReviewLabel && isAllowedLabeler(candidate.reviewLabelerLogin, policy);
+    const fixLabelAllowed =
+      hasFixLabel && isAllowedLabeler(candidate.fixLabelerLogin, policy);
+    const mayDetect =
+      isAllowedLabeler(candidate.authorLogin, policy) &&
+      (!hasReviewLabel || reviewLabelAllowed) &&
+      (!hasFixLabel || fixLabelAllowed);
 
     const review: PrReviewAction = hasReviewLabel
-      ? isAllowedLabeler(candidate.reviewLabelerLogin, policy)
+      ? reviewLabelAllowed
         ? { kind: "trigger_review", reason: "label", removeLabel: true }
         : { kind: "deny_labeler" }
-      : !candidate.hasActiveReviewingItem &&
+      : mayDetect &&
+          !candidate.hasActiveReviewingItem &&
           candidate.lastKnownHeadSha !== candidate.headSha
         ? { kind: "trigger_review", reason: "assignment", removeLabel: false }
         : { kind: "none" };
 
     const fix: PrFixAction = hasFixLabel
-      ? isAllowedLabeler(candidate.fixLabelerLogin, policy)
+      ? fixLabelAllowed
         ? { kind: "trigger_fix", removeLabel: true }
         : { kind: "deny_labeler" }
       : { kind: "none" };

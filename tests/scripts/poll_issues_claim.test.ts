@@ -603,6 +603,7 @@ describe("processIssueDecisions", () => {
     return {
       recorded,
       handlers: {
+        confirmLabeler: async () => true,
         claim,
         recordDenied: async (candidate) => {
           recorded.denied.push(candidate.number);
@@ -719,6 +720,77 @@ describe("processIssueDecisions", () => {
     expect(recorded.failures).toEqual([
       "labeler_denied:octo-owner/atelier-works#4",
     ]);
+  });
+
+  describe("when the labeler changed after the decision", () => {
+    const changed: Partial<DecisionHandlers> = {
+      confirmLabeler: async () => false,
+    };
+
+    test("does not claim the issue", async () => {
+      const claims: number[] = [];
+      const { handlers: h } = handlers(async (c) => {
+        claims.push(c.number);
+        return "claimed";
+      }, changed);
+      await processIssueDecisions([claimDecision(3)], h);
+      expect(claims).toEqual([]);
+    });
+
+    test("counts the issue as skipped", async () => {
+      const { handlers: h } = handlers(async () => "claimed", changed);
+      const result = await processIssueDecisions([claimDecision(3)], h);
+      expect(result.skipped).toBe(1);
+    });
+
+    test("records the denial of the issue", async () => {
+      const { handlers: h, recorded } = handlers(
+        async () => "claimed",
+        changed,
+      );
+      await processIssueDecisions([claimDecision(3)], h);
+      expect(recorded.denied).toEqual([3]);
+    });
+
+    test("does not claim the issue when the labeler cannot be fetched", async () => {
+      const claims: number[] = [];
+      const { handlers: h } = handlers(
+        async (c) => {
+          claims.push(c.number);
+          return "claimed";
+        },
+        {
+          confirmLabeler: async () => {
+            throw new Error("timeline failed");
+          },
+        },
+      );
+      await processIssueDecisions([claimDecision(3)], h);
+      expect(claims).toEqual([]);
+    });
+
+    test("records a failure when the labeler cannot be fetched", async () => {
+      const { handlers: h, recorded } = handlers(async () => "claimed", {
+        confirmLabeler: async () => {
+          throw new Error("timeline failed");
+        },
+      });
+      await processIssueDecisions([claimDecision(3)], h);
+      expect(recorded.failures).toEqual([
+        "claim_issue:octo-owner/atelier-works#3",
+      ]);
+    });
+
+    test("goes on with the next issue", async () => {
+      const { handlers: h } = handlers(async () => "claimed", {
+        confirmLabeler: async (c) => c.number !== 3,
+      });
+      const result = await processIssueDecisions(
+        [claimDecision(3), claimDecision(4)],
+        h,
+      );
+      expect(result.claimed).toBe(1);
+    });
   });
 
   const failingClaim = async (): Promise<"claimed" | "skipped"> => {

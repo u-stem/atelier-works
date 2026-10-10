@@ -235,7 +235,8 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 
 Issueの取得に成功すると、`poll_issues`は未解決の`labeler_denied`を解決済みにする。
 対象は、本文が`<owner>/<repo>#<番号>:`と空白1つで始まるすべてのnoticeで、`resolved_by`は`poll_issues`になる。
-PRのトリガーラベルの取得に成功したときは、`poll_prs`が、同じPRと同じラベルの未解決の`labeler_denied`を、本文の完全一致で解決済みにする。`resolved_by`は`poll_prs`になる。
+PRのトリガーラベルの取得に成功したときは、`poll_prs`が、同じPRと同じラベルの未解決の`labeler_denied`を、本文の完全一致で解決済みにする。
+`resolved_by`は`poll_prs`になる。
 解決に失敗しても取得の成否は変わらず、警告をログに残す。
 この種類はConsoleから解決できない。運用者が内容を確かめないまま消せると、許可されていない人の操作が見えなくなるためである。
 許可された人が付け直して取得できたときは、見送りの原因が解けているので、機械が解決しても、この目的と両立する。
