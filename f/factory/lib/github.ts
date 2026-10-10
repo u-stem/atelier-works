@@ -1070,12 +1070,13 @@ const CLAIM_TIMELINE_MAX_PAGES = 20;
 
 /**
  * `read`を最大`CLAIM_REREAD_BACKOFF_MS.length + 1`回まで試す。GETなので繰り返してよい。
+ * `claimIssue`と、PRの取得(`poll_prs.ts`の`claimPr`)が、ラベルを外した後の確認に使う。
  * 失敗した試行は、そのたびに`log`へ警告として残す。
  * `GitHubRateLimitError`は繰り返さずに投げる。`callGhApi`が上限までの待機と再試行を
  * 済ませたうえで投げるので、ここで重ねても同じ制限に当たり、待ちが長引くだけである。
  * `GitHubPaginationLimitError`も、繰り返しても同じ長さなので繰り返さずに投げる。
  */
-async function rereadWithRetries<T>(
+export async function rereadWithRetries<T>(
   client: GhClient,
   context: {
     readonly log: Logger | undefined;

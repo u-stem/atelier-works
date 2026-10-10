@@ -9,7 +9,8 @@
 // PRに付くのは2つのトリガーラベル(`factory:review`・`factory:fix`)だけで、
 // Issueと同じく取得時に消費する。`wip`ラベルも状態ラベルも無い。
 // `claimPr`は今回のサイクルを起こしたトリガーラベルを外す。ラベルが既に無ければ(404)
-// ほかが先に外したので引き、外せたら取り直して残っていないかを確かめる。assignで起きるレビューは
+// ほかが先に外したので引き、外せたら取り直して残っていないかを確かめる。
+// 取り直しが数回とも失敗したときは、ラベルを付け直して引く(`claimPr`を参照)。assignで起きるレビューは
 // ラベルが関わらないので`claimPr`を通らない。トリガーラベルを消費すると
 // `searchPrs`のラベル検索ではそのPRを見つけられなくなるため、
 // `listTrackedPrs`がDBから見つけ直す(`main()`を参照)。
@@ -31,15 +32,18 @@ import {
   setObservedWatermarks,
 } from "./lib/db.ts";
 import {
+  addLabels,
   type GhClient,
   getIssue,
   getPr,
   getViewer,
+  type Issue,
   listPrReviewComments,
   listPrReviews,
   type PrSearchItem,
   type RemoveLabelResult,
   removeLabel,
+  rereadWithRetries,
   searchPrs,
 } from "./lib/github.ts";
 import { parseFlowJobId } from "./lib/implement_launch_support.ts";
@@ -225,6 +229,14 @@ export type ClaimPrResult =
  * ラベルが既に無ければ(404)、ほかが先に外したので`claimed: false`を返す
  * (Issueの`claimIssue`と同じ)。外せなかったときと、外した後も残っていたときも、
  * `claimed: false`と理由を返す。
+ * 外した後の確認の読み取りは、`rereadWithRetries`で数回試す(`log`に各回の失敗を警告で残す)。
+ * それでも読めなければ(レート制限を含む)、取得できたか分からない。ラベルを消費したまま
+ * 作業項目を作らないと、以後ラベル検索でもDBでもそのPRを見つけられない。
+ * 一方、読めないまま作業を始めると、別のアクターがラベルを付け直していた場合に、
+ * 次のポーリングで同じPRのサイクルが二重に始まる(ラベルの経路は、稼働中の作業項目があっても
+ * `decidePrActions`が止めない)。そのため、トリガーラベルを付け直して
+ * `claimed: false`を返し、次のポーリングが拾い直す。付け直しも失敗したら、
+ * 読み取りの失敗と付け直しの失敗の両方を含む例外を投げる(`main()`が失敗に記録する)。
  * assigneeは付けない(`claimIssue`と違う)。Factoryのログインをassignすると、
  * GitHub検索の`assignee:<viewer>`にそのPRが以後ずっと当たり続けるため。
  * 外した後に取り直して確かめるのは、別のアクターがラベルを付け直した場合を
@@ -237,6 +249,7 @@ export async function claimPr(
   repo: string,
   number: number,
   triggerLabel: string,
+  log?: Logger,
 ): Promise<ClaimPrResult> {
   let removal: RemoveLabelResult;
   try {
@@ -255,7 +268,20 @@ export async function claimPr(
       reason: `trigger label ${triggerLabel} was already removed`,
     };
   }
-  const confirmed = await getIssue(client, owner, repo, number);
+  let confirmed: Issue;
+  try {
+    confirmed = await rereadWithRetries(
+      client,
+      { log, target: `${owner}/${repo}#${String(number)}`, what: "issue" },
+      () => getIssue(client, owner, repo, number),
+    );
+  } catch (readErr) {
+    return restoreTriggerLabel(
+      client,
+      { owner, repo, number, triggerLabel },
+      readErr,
+    );
+  }
   if (confirmed.labels.includes(triggerLabel)) {
     return {
       claimed: false,
@@ -263,6 +289,41 @@ export async function claimPr(
     };
   }
   return { claimed: true };
+}
+
+function errorMessage(err: unknown): string {
+  return maskSecrets(err instanceof Error ? err.message : String(err));
+}
+
+/**
+ * 確認の読み取りが読めなかった`claimPr`が、外したトリガーラベルを付け直す。
+ * ラベルの付与は、既に付いていても成功する。付け直せたら`claimed: false`を返す。
+ * 付け直しも失敗したら、両方の失敗の文を含む例外を投げる。ラベルが外れたままなので、
+ * `main()`が記録する失敗から人が付け直せるようにする。
+ */
+async function restoreTriggerLabel(
+  client: GhClient,
+  target: {
+    readonly owner: string;
+    readonly repo: string;
+    readonly number: number;
+    readonly triggerLabel: string;
+  },
+  readErr: unknown,
+): Promise<ClaimPrResult> {
+  const { owner, repo, number, triggerLabel } = target;
+  try {
+    await addLabels(client, owner, repo, number, [triggerLabel]);
+  } catch (restoreErr) {
+    throw new Error(
+      `claim confirmation read failed (${errorMessage(readErr)}) and restoring trigger label ${triggerLabel} failed (${errorMessage(restoreErr)})`,
+      { cause: restoreErr },
+    );
+  }
+  return {
+    claimed: false,
+    reason: `could not confirm the claim; restored trigger label ${triggerLabel} (${errorMessage(readErr)})`,
+  };
 }
 
 async function startReview(
@@ -521,6 +582,7 @@ export async function main(): Promise<{
             candidate.repo,
             candidate.number,
             config.review_label,
+            log,
           );
           if (!claimResult.claimed) {
             skipped += 1;
@@ -565,6 +627,7 @@ export async function main(): Promise<{
           candidate.repo,
           candidate.number,
           config.fix_label,
+          log,
         );
         if (!claimResult.claimed) {
           skipped += 1;

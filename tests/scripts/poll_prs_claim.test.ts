@@ -7,6 +7,8 @@
 // 期待する`gh api -i`の形(`ghApiOk`/`ghApiStdout`)で用意する。
 
 import { describe, expect, test } from "bun:test";
+import type { GhClient } from "../../f/factory/lib/github.ts";
+import type { Logger } from "../../f/factory/lib/log.ts";
 import { claimPr } from "../../f/factory/poll_prs.ts";
 import {
   createFakeCommandRunner,
@@ -27,6 +29,203 @@ function fakeIssue(labels: string[]) {
     assignees: [],
   };
 }
+
+// 確認の読み取りが失敗した場合のテスト用。待機は記録するだけで実際には待たない。
+// 404はghの応答として確定した失敗なので、`getIssue`の中で再送されない。
+const readFails = ok(ghApiStdout(404, { message: "Not Found" }));
+const rateLimited = ok(
+  ghApiStdout(403, { message: "rate limited" }, { "retry-after": "100000" }),
+);
+
+function recordingClient(run: GhClient["run"]): {
+  client: GhClient;
+  sleeps: number[];
+} {
+  const sleeps: number[] = [];
+  return {
+    client: {
+      run,
+      ghToken: "token",
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+    },
+    sleeps,
+  };
+}
+
+function recordingLog(): { log: Logger; warns: string[] } {
+  const warns: string[] = [];
+  const log: Logger = {
+    info() {},
+    warn(message) {
+      warns.push(message);
+    },
+    error() {},
+  };
+  return { log, warns };
+}
+
+/** `addLabels`のPOSTを探す。 */
+function labelPost<T extends { argv: readonly string[] }>(
+  calls: readonly T[],
+): T | undefined {
+  return calls.find((call) => call.argv.includes("POST"));
+}
+
+describe("claimPr when the confirmation read fails", () => {
+  const args = ["octo-owner", "atelier-works", 7, "factory:review"] as const;
+
+  test("claims when a later read attempt succeeds", async () => {
+    const { run } = createFakeCommandRunner([
+      ghApiOk({}),
+      readFails,
+      ghApiOk(fakeIssue([])),
+    ]);
+    const { client } = recordingClient(run);
+    expect(await claimPr(client, ...args)).toEqual({ claimed: true });
+  });
+
+  test("waits one second before the second read attempt", async () => {
+    const { run } = createFakeCommandRunner([
+      ghApiOk({}),
+      readFails,
+      ghApiOk(fakeIssue([])),
+    ]);
+    const { client, sleeps } = recordingClient(run);
+    await claimPr(client, ...args);
+    expect(sleeps).toEqual([1000]);
+  });
+
+  test("reports the label as still present when a later read sees it", async () => {
+    const { run } = createFakeCommandRunner([
+      ghApiOk({}),
+      readFails,
+      ghApiOk(fakeIssue(["factory:review"])),
+    ]);
+    const { client } = recordingClient(run);
+    expect(await claimPr(client, ...args)).toEqual({
+      claimed: false,
+      reason: "trigger label factory:review still present after claim",
+    });
+  });
+
+  test("puts the label back and reports not claimed when every read fails", async () => {
+    const { run } = createFakeCommandRunner([
+      ghApiOk({}),
+      readFails,
+      readFails,
+      readFails,
+      ghApiOk([]), // POST: ラベルを付け直す
+    ]);
+    const { client } = recordingClient(run);
+    const result = await claimPr(client, ...args);
+    expect(result.claimed).toBe(false);
+  });
+
+  test("explains that the label was restored because the read failed", async () => {
+    const { run } = createFakeCommandRunner([
+      ghApiOk({}),
+      readFails,
+      readFails,
+      readFails,
+      ghApiOk([]),
+    ]);
+    const { client } = recordingClient(run);
+    const result = await claimPr(client, ...args);
+    expect(result).toMatchObject({
+      reason: expect.stringContaining(
+        "could not confirm the claim; restored trigger label factory:review",
+      ),
+    });
+  });
+
+  test("makes three read attempts before restoring the label", async () => {
+    const { run, calls } = createFakeCommandRunner([
+      ghApiOk({}),
+      readFails,
+      readFails,
+      readFails,
+      ghApiOk([]),
+    ]);
+    const { client } = recordingClient(run);
+    await claimPr(client, ...args);
+    expect(calls).toHaveLength(5);
+  });
+
+  test("posts the trigger label back", async () => {
+    const { run, calls } = createFakeCommandRunner([
+      ghApiOk({}),
+      readFails,
+      readFails,
+      readFails,
+      ghApiOk([]),
+    ]);
+    const { client } = recordingClient(run);
+    await claimPr(client, ...args);
+    expect(labelPost(calls)?.options?.stdin).toBe(
+      JSON.stringify({ labels: ["factory:review"] }),
+    );
+  });
+
+  test("backs off one and two seconds between the read attempts", async () => {
+    const { run } = createFakeCommandRunner([
+      ghApiOk({}),
+      readFails,
+      readFails,
+      readFails,
+      ghApiOk([]),
+    ]);
+    const { client, sleeps } = recordingClient(run);
+    await claimPr(client, ...args);
+    expect(sleeps).toEqual([1000, 2000]);
+  });
+
+  test("logs a warning for each failed read attempt", async () => {
+    const { run } = createFakeCommandRunner([
+      ghApiOk({}),
+      readFails,
+      readFails,
+      readFails,
+      ghApiOk([]),
+    ]);
+    const { client } = recordingClient(run);
+    const { log, warns } = recordingLog();
+    await claimPr(client, ...args, log);
+    expect(
+      warns.filter((m) => m === "claim re-read attempt failed"),
+    ).toHaveLength(3);
+  });
+
+  test("does not repeat the read on a rate limit and puts the label back", async () => {
+    const { run, calls } = createFakeCommandRunner([
+      ghApiOk({}),
+      rateLimited,
+      ghApiOk([]),
+    ]);
+    const { client } = recordingClient(run);
+    const result = await claimPr(client, ...args);
+    expect({ claimed: result.claimed, calls: calls.length }).toEqual({
+      claimed: false,
+      calls: 3,
+    });
+  });
+
+  test("throws an error naming both failures when restoring the label fails", async () => {
+    const { run } = createFakeCommandRunner([
+      ghApiOk({}),
+      readFails,
+      readFails,
+      readFails,
+      ok(ghApiStdout(500, { message: "boom" })),
+      ok(ghApiStdout(500, { message: "boom" })),
+    ]);
+    const { client } = recordingClient(run);
+    await expect(claimPr(client, ...args)).rejects.toThrow(
+      /confirmation read failed.*HTTP 404.*restoring trigger label factory:review failed.*HTTP 500/s,
+    );
+  });
+});
 
 describe("claimPr", () => {
   test("reports claimed when the trigger label is gone after removal", async () => {
