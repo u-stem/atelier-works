@@ -202,7 +202,7 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `claim_race_lost` | `poll_issues`、`poll_prs`、`manual_intake_register` | 対象、取得できなかった理由 |
 | `claim_assignee_missing` | `poll_issues` | 対象、assigneeにできなかったユーザー、確かめる点 |
 | `supersede_failed` | `insertIssueWorkItemUnlessActive`(`poll_issues`が呼ぶ) | 対象、新しい作業項目のID、操作が要らないこと |
-| `deployed_sha_mismatch` | `poll_issues` | self cloneのHEADと`f/factory/deployed_sha` |
+| `deployed_sha_mismatch` | `poll_issues` | self cloneのHEADと`f/factory/deployed_sha`、原因の候補 |
 | `cleanup_db_failed` | `cleanup_db` | 削除に失敗した対象とエラー |
 | `cleanup_worktrees_skipped` | `cleanup_workspaces` | 掃除を見送ったリポジトリ |
 | `cleanup_worktree_busy` | `cleanup_workspaces` | 作業項目のID、worktreeのパス、worktreeを使っているプロセス |
@@ -215,9 +215,15 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 `claim_race_lost`は、`poll_issues`と`manual_intake_register`が残すものに限る。
 `supersede_failed`は、新しいサイクルの挿入の後に、古い承認済みの作業項目を取り消す文が失敗したときに残す。Discordには通知しない。
 同じ状況が続く間、ポーリングのたびに積み上がるのを防ぐためである。
-`deployed_sha_mismatch`は、self cloneのHEADとデプロイ版が同じ組で、未解決のnoticeがあるあいだは追加しない。
-`poll_issues`が実行されるたびに同じnoticeが積み上がり、ほかの種類が埋もれるためである。
-版の組が変わったときと、既存のnoticeを解決した後に再び食い違ったときは、1件残す。
+`deployed_sha_mismatch`は、反映が止まったときだけ残す。
+mergeの直後から自己更新が反映するまでの間は、版が必ず食い違うためである。
+`poll_issues`は、食い違う版の組を最初に見た時刻を、このスケジュールのWindmillのstateに保存する。
+同じ組が20分(自己更新の周期10分の2倍)を超えて続いたときに、1件残す。
+組が変わると数え直す。
+本文には、直近の反映の記録(`factory.deployments`)から読んだ原因の候補を添える。記録を読めなくても、noticeは残す。
+stateを読めない、または書けないときは、猶予を数えられない。反映の停止を見逃さないよう、待たずに残す。
+同じ組で未解決のnoticeがあるあいだは追加しない。重複の判定は本文の一致で行うため、本文に時刻を入れない。
+版が一致すると、`poll_issues`は未解決のnoticeをすべて解決済みにする(`resolved_by`は`poll_issues`)。反映の追いつきを確かめた後なので、古い組のnoticeも含める。
 
 解決済みのnoticeは、解決してから`retention_logs_days`(既定30日)を過ぎるとDBの掃除が消す。解決の時刻(`resolved_at`)が無い行は、作成の時刻から数える。
 重要度が「情報」の未解決のnoticeは、作成から同じ期間を過ぎると、削除せず解決済みへ変える(`resolved_by`は`cleanup_db`)。
