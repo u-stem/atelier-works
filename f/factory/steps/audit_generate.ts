@@ -43,6 +43,7 @@ import {
 import { notifyBestEffort } from "../lib/discord.ts";
 import { parseGitHubRepoUrl } from "../lib/github.ts";
 import { type Logger, logger, maskSecrets } from "../lib/log.ts";
+import { modelFor } from "../lib/model_policy.ts";
 import { AUDIT_SCHEMA, auditPrompt } from "../lib/prompts.ts";
 import {
   type AuditIssueProposal,
@@ -480,7 +481,7 @@ export async function main(
       workItemId: work_item_id,
       stage: "audit",
       attempt: 1,
-      model: config.model,
+      model: modelFor(config, "audit", 1),
       prompt: auditPrompt({
         instanceName: config.instance_name,
         periodLabel: formatAuditPeriodLabel(period.start, period.end),

@@ -158,6 +158,7 @@ const RUN_INPUT: ImplementClaudeRunInput = {
   run: async () => ({ stdout: "", stderr: "", exitCode: 0, timedOut: false }),
   config: {
     model: "claude-test",
+    heavy_model: "claude-test-heavy",
     implement_max_turns: 80,
     implement_max_budget_usd_per_run: 10,
     implement_timeout_sec: 3600,
@@ -449,6 +450,16 @@ describe("toImplementClaudeRound", () => {
 });
 
 describe("buildImplementClaudeOptions", () => {
+  test("uses model on the first attempt", () => {
+    expect(buildImplementClaudeOptions(RUN_INPUT).model).toBe("claude-test");
+  });
+
+  test("uses heavy_model from the second attempt", () => {
+    expect(
+      buildImplementClaudeOptions({ ...RUN_INPUT, attempt: 2 }).model,
+    ).toBe("claude-test-heavy");
+  });
+
   test("passes the flow deadline to runClaude", () => {
     expect(buildImplementClaudeOptions(RUN_INPUT).deadlineAt).toBe(
       1_900_000_000_000,

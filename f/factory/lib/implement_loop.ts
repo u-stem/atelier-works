@@ -26,6 +26,7 @@ import {
   validateImplementOutput,
 } from "./implement_support.ts";
 import { escapeReasonSeparator } from "./log.ts";
+import { modelFor } from "./model_policy.ts";
 import {
   type CheckFailure,
   IMPLEMENT_SCHEMA,
@@ -419,6 +420,7 @@ export type ImplementClaudeRunInput = {
   readonly config: Pick<
     FactoryConfig,
     | "model"
+    | "heavy_model"
     | "implement_max_turns"
     | "implement_max_budget_usd_per_run"
     | "implement_timeout_sec"
@@ -463,7 +465,7 @@ export function buildImplementClaudeOptions(
     workItemId: input.workItemId,
     stage: input.stage,
     attempt: input.attempt,
-    model: input.config.model,
+    model: modelFor(input.config, "implement", input.attempt),
     prompt: input.prompt,
     appendSystemPromptFile: input.systemPromptPath,
     jsonSchema: IMPLEMENT_SCHEMA,

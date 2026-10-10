@@ -14,6 +14,7 @@ import { loadConfig } from "../lib/config.ts";
 import { addNotice, latestDraft, recordAgentRun } from "../lib/db.ts";
 import { type GhClient, getPr } from "../lib/github.ts";
 import { escapeReasonSeparator, logger } from "../lib/log.ts";
+import { modelFor } from "../lib/model_policy.ts";
 import {
   lockJobIdFromEnv,
   withWorktreeProcessLock,
@@ -313,6 +314,7 @@ export async function main(
   worktree_git_pointer: string | null = null,
   head_sha: string | null = null,
   branch: string | null = null,
+  fix_round = 1,
 ): Promise<PrFixVerifyResult> {
   const lockedRun = withWorktreeProcessLock(
     runCommand,
@@ -410,7 +412,7 @@ export async function main(
             workItemId: work_item_id,
             stage: "pr_fix_verify_retry",
             attempt,
-            model: config.model,
+            model: modelFor(config, "pr_fix", fix_round),
             prompt: retryPrompt,
             appendSystemPromptFile: systemPrompt.path,
             jsonSchema: FIX_SCHEMA,

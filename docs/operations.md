@@ -558,6 +558,35 @@ Discordの監査完了の通知(`audit_completed`)のリンクは、末尾に`#a
 
 監査の内部の挙動は[監査の仕様](internals/audit.md)にある。
 
+## モデルを使い分ける
+
+Factoryは、工程によってClaudeのモデルを使い分ける。
+間違えたときにやり直しが高くつく判断は上位のモデルに任せ、安く直せる作業は既定のモデルで済ませるためである。
+モデルは`f/factory/factory_config`の2つの項目で決める。
+
+| 項目 | 既定値 | 使う工程 |
+| --- | --- | --- |
+| `model` | `claude-sonnet-5-5` | 実装、PR修正 |
+| `heavy_model` | `claude-opus-5-5` | 要件定義の生成、PRのレビュー、監査 |
+
+実装とPR修正は、同じ作業の再試行では`heavy_model`に上げる。
+Sonnetで試して届かなかった課題を、上位のモデルでやり直すためである。
+再試行かどうかは、工程ごとに次の値で判定する。
+
+- 実装は、作業項目の試行(`attempt`)が2以上のときである。`attempt`は、要件定義の却下や実装中の要件の不足で、要件定義の生成から作り直すたびに1つ増える。
+- PR修正は、修正のラウンド(`fix_round`)が2以上のときである。PRの作業項目の`attempt`は常に1なので、ラウンドで判定する。
+
+実装フローの中の修正ラウンド(検査の失敗を直す周回)は、同じ試行の中なので、モデルを切り替えない。
+
+実際に使ったモデルは、Claudeの実行の記録(`agent_runs`)の`model`列に残る。
+再試行で`heavy_model`に上がったかどうかは、この列で確かめる。
+
+`heavy_model`が無い既存のリソースでも、既定値の`claude-opus-5-5`で動く。
+一方、既存のリソースに`model: claude-opus-5-5`が書かれていると、既定が変わっても書き換わらない。
+その間は、実装とPR修正もOpusで動く。
+Sonnetを既定にするには、Windmillの画面で`f/factory/factory_config`を開き、`model`を`claude-sonnet-5-5`に書き換える。
+リソースはgitで同期しないので、リポジトリの変更だけでは反映されない。
+
 ## 通知を受けたら
 
 Factoryは、人の行動が要るものだけをDiscordに送る。通知の仕組み、送れなかったときの扱い、rate limitは[通知とrate limit](internals/notifications.md)にある。

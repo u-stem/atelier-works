@@ -45,6 +45,18 @@ function moduleTimeoutSec(flow: string, id: string): number | null {
 }
 
 describe("pr_fix flow.yaml", () => {
+  test("passes fix_round from prepare to the apply step", () => {
+    expect(moduleBlock(PR_FIX_FLOW, "pr_fix_apply")).toContain(
+      "fix_round:\n            type: javascript\n            expr: results.pr_fix_prepare.fix_round\n",
+    );
+  });
+
+  test("passes fix_round from prepare to the verify step", () => {
+    expect(moduleBlock(PR_FIX_FLOW, "pr_fix_verify")).toContain(
+      "fix_round:\n            type: javascript\n            expr: results.pr_fix_prepare.fix_round\n",
+    );
+  });
+
   test("bounds the prepare step at 1800 seconds", () => {
     expect(moduleTimeoutSec(PR_FIX_FLOW, "pr_fix_prepare")).toBe(1800);
   });

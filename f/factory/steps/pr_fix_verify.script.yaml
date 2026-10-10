@@ -61,6 +61,10 @@ schema:
       description: Software Factory自身の複製を置いた作業ディレクトリのパス。
       default: null
       originalType: string
+    fix_round:
+      type: number
+      description: PR修正のラウンドの番号。2以降のラウンドは上位のモデルで実行します。
+      default: 1
     head_sha:
       type: string
       description: ''

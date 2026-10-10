@@ -45,6 +45,7 @@ type DefaultableField =
   | "trigger_label"
   | "allowed_labeler_associations"
   | "model"
+  | "heavy_model"
   | "max_attempts"
   | "max_turns"
   | "max_budget_usd_per_run"
@@ -85,7 +86,8 @@ type DefaultableField =
 const DEFAULTS: Pick<FactoryConfig, DefaultableField> = {
   trigger_label: "factory",
   allowed_labeler_associations: ["OWNER", "MEMBER", "COLLABORATOR"],
-  model: "claude-opus-5-5",
+  model: "claude-sonnet-5-5",
+  heavy_model: "claude-opus-5-5",
   max_attempts: 3,
   max_turns: 40,
   max_budget_usd_per_run: 5,
@@ -346,6 +348,7 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
     trigger_label: stringField(raw, "trigger_label", DEFAULTS.trigger_label),
     allowed_labeler_associations: resolvedAllowedLabelerAssociations,
     model: stringField(raw, "model", DEFAULTS.model),
+    heavy_model: stringField(raw, "heavy_model", DEFAULTS.heavy_model),
     max_attempts: numberField(raw, "max_attempts", DEFAULTS.max_attempts),
     max_turns: numberField(raw, "max_turns", DEFAULTS.max_turns),
     max_budget_usd_per_run: numberField(

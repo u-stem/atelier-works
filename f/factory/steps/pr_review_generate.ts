@@ -27,6 +27,7 @@ import {
   listReviewThreads,
 } from "../lib/github.ts";
 import { logger } from "../lib/log.ts";
+import { modelFor } from "../lib/model_policy.ts";
 import { REVIEW_SCHEMA, reviewPrompt } from "../lib/prompts.ts";
 import type { ReviewFinding, ReviewVerdict } from "../lib/types.ts";
 import { runCommand } from "../lib/workspace.ts";
@@ -191,7 +192,7 @@ export async function main(
       workItemId: work_item_id,
       stage: "pr_review",
       attempt,
-      model: config.model,
+      model: modelFor(config, "pr_review", attempt),
       prompt: promptText,
       appendSystemPromptFile: systemPrompt.path,
       jsonSchema: REVIEW_SCHEMA,
