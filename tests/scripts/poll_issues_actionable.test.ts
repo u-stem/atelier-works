@@ -599,6 +599,21 @@ describe("reconcileClosedActionableItems closer check", () => {
     expect(worktrees).toEqual([]);
   });
 
+  test("does not write an info log for a kept target", async () => {
+    const infos: string[] = [];
+    const log: Logger = {
+      info: (message) => infos.push(message),
+      warn() {},
+      error() {},
+    };
+    const { deps } = harness([workItem({ id: 1 })], {
+      closed: [10],
+      association: "NONE",
+    });
+    await run(deps, undefined, log);
+    expect(infos).toEqual([]);
+  });
+
   test("does not look up the closer of an open target", async () => {
     const { deps, closerLookups } = harness([workItem({ id: 1 })]);
     await run(deps);

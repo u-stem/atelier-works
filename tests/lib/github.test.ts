@@ -9,6 +9,8 @@ import {
   createPrReview,
   createPullRequest,
   ensureLabel,
+  type FetchLike,
+  fetchIssueState,
   findIssueByMarker,
   findOpenPullRequestByHead,
   type GhClient,
@@ -904,6 +906,78 @@ describe("getIssue", () => {
     const fake = createFakeCommandRunner([]);
     await expect(
       getIssue({ run: fake.run, ghToken: "tok" }, "../etc", "widgets", 5),
+    ).rejects.toThrow();
+  });
+});
+
+describe("fetchIssueState", () => {
+  function fakeFetch(status: number, body: unknown) {
+    const calls: { url: string; init: RequestInit }[] = [];
+    const fetchFn: FetchLike = async (url, init) => {
+      calls.push({ url, init });
+      return { status, json: async () => body };
+    };
+    return { fetchFn, calls };
+  }
+
+  test("returns the state of the issue", async () => {
+    const { fetchFn } = fakeFetch(200, { state: "closed" });
+    expect(await fetchIssueState(fetchFn, "tok", "acme", "widgets", 5)).toBe(
+      "closed",
+    );
+  });
+
+  test("reads the issues endpoint", async () => {
+    const { fetchFn, calls } = fakeFetch(200, { state: "open" });
+    await fetchIssueState(fetchFn, "tok", "acme", "widgets", 5);
+    expect(calls[0]?.url).toBe(
+      "https://api.github.com/repos/acme/widgets/issues/5",
+    );
+  });
+
+  test("sends the token in the authorization header", async () => {
+    const { fetchFn, calls } = fakeFetch(200, { state: "open" });
+    await fetchIssueState(fetchFn, "tok", "acme", "widgets", 5);
+    expect(calls[0]?.init.headers).toMatchObject({
+      Authorization: "Bearer tok",
+    });
+  });
+
+  test("throws an http error carrying the status", async () => {
+    const { fetchFn } = fakeFetch(404, { message: "Not Found" });
+    const error = await fetchIssueState(
+      fetchFn,
+      "tok",
+      "acme",
+      "widgets",
+      5,
+    ).catch((err: unknown) => err);
+    expect(error instanceof GitHubHttpError && error.status).toBe(404);
+  });
+
+  test("does not put the token in the error message", async () => {
+    const { fetchFn } = fakeFetch(500, {});
+    const error = await fetchIssueState(
+      fetchFn,
+      "secret-token",
+      "acme",
+      "widgets",
+      5,
+    ).catch((err: unknown) => err);
+    expect(String(error)).not.toContain("secret-token");
+  });
+
+  test("rejects a response without a state", async () => {
+    const { fetchFn } = fakeFetch(200, { title: "x" });
+    await expect(
+      fetchIssueState(fetchFn, "tok", "acme", "widgets", 5),
+    ).rejects.toThrow("unexpected response shape");
+  });
+
+  test("rejects an owner that isn't a valid GitHub name", async () => {
+    const { fetchFn } = fakeFetch(200, { state: "open" });
+    await expect(
+      fetchIssueState(fetchFn, "tok", "../etc", "widgets", 5),
     ).rejects.toThrow();
   });
 });

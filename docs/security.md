@@ -259,6 +259,7 @@ Console用のworker(`windmill_worker_console`)は、Consoleの問い合わせと
 次のことは、この境界では守れない。
 
 - DBには届く。`DATABASE_URL`はdefaultのworkerと同じ管理者の接続だからである。
+- `retry_work_item`は、取り消された作業項目の再開のときだけ、`github_token`を読んでIssueの状態を確かめる。このworkerには`gh`が無いので、`fetch`で読む。
 - `factory_state`には、`requirements/`と`audits/`のほかに、次のものも入っていて、Console用のworkerから読める。
   - Claude Codeの設定と履歴(`CLAUDE_CONFIG_DIR=/var/lib/factory/claude`)
   - ghの設定(`GH_CONFIG_DIR=/var/lib/factory/gh`)

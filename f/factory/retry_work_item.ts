@@ -1,6 +1,8 @@
 // 止まった作業項目を手動で再開するscript。`failed`・`needs_human`・
 // `expired`・`blocked`・`approved`から再開できる。閉じた対象を理由に
 // 要対応の照合が取り消した`cancelled`も、取り消す前の状態の作業項目として再開できる。
+// その再開だけは、対象のIssueかPRが開いていることをGitHubで確かめる(`closedTargetRefusal`)。
+// ほかの再開はGitHubに依存しない。
 // 再開するフローと遷移先の状態は種別で決まる(`computeRestartPlan`)。状態の変更はここで読んだ状態を
 // 前提にした比較交換なので、並行して状態が変わったら上書きせず再開をやめる。
 // 記録済みのflowジョブがまだ動いている(キュー待ちを含む)か、状態を読めないときは
@@ -30,6 +32,7 @@ import {
   updateStatusIfCurrentClearingFlowJobId,
   updateStatusIfLeaseHolder,
 } from "./lib/db.ts";
+import { fetchIssueState } from "./lib/github.ts";
 import { parseFlowJobId } from "./lib/implement_launch_support.ts";
 import { IMPLEMENT_FLOW_PATH } from "./lib/implement_loop.ts";
 import { isRequirementsApprovedForAttempt } from "./lib/implement_support.ts";
@@ -170,6 +173,41 @@ export function asBeforeActionableCancel<T extends Pick<WorkItem, "status">>(
   if (workItem.status !== "cancelled") return workItem;
   const before = statusBeforeActionableCancel(cancelEvent);
   return before === null ? workItem : { ...workItem, status: before };
+}
+
+/**
+ * 要対応の照合が取り消した作業項目を再開する前に、対象のIssueかPRが開いているかを確かめ、
+ * 再開を断る理由を返す。開いていれば`null`を返す。
+ * 閉じたまま再開すると、作業項目は終端でない状態に戻り、reconcileが再開できない注記で取り消す。
+ * 取り消す前の状態からの再開は二度とできなくなるので、先に対象を開き直させる。
+ * 開いているか確かめられない(番号が無い、取得に失敗した)ときも断る。
+ * 理由の文は英語の1文で、そのままConsoleとWindmillに表示される。
+ */
+export async function closedTargetRefusal(
+  workItem: Pick<
+    WorkItem,
+    "id" | "kind" | "owner" | "repo" | "issue_number" | "pr_number"
+  >,
+  getState: (owner: string, repo: string, number: number) => Promise<string>,
+): Promise<string | null> {
+  const number =
+    workItem.kind === "issue" ? workItem.issue_number : workItem.pr_number;
+  const head = `retry_work_item: work item ${String(workItem.id)} was cancelled when its target was closed`;
+  if (number === null) {
+    return `${head}, and the target has no number to check, so it was not restarted`;
+  }
+  const target = `${workItem.owner}/${workItem.repo}#${String(number)}`;
+  let state: string;
+  try {
+    state = await getState(workItem.owner, workItem.repo, number);
+  } catch (err) {
+    const reason = maskSecrets(
+      err instanceof Error ? err.message : String(err),
+    );
+    return `${head}, and whether ${target} is open could not be checked (${reason}); try again later`;
+  }
+  if (state === "open") return null;
+  return `${head}, and ${target} is still closed; reopen it and run retry_work_item again`;
 }
 
 /**
@@ -389,6 +427,22 @@ export async function main(work_item_id: number): Promise<RetryWorkItemResult> {
     ),
   );
   if (refusal !== null) throw new Error(refusal);
+
+  if (restartItem.status !== workItem.status) {
+    // Console用のworkerには`gh`が無いので、`gh`を起動せず`fetch`で読む。
+    const closed = await closedTargetRefusal(
+      workItem,
+      async (owner, repo, number) =>
+        fetchIssueState(
+          fetch,
+          await wmill.getVariable("f/factory/github_token"),
+          owner,
+          repo,
+          number,
+        ),
+    );
+    if (closed !== null) throw new Error(closed);
+  }
 
   const leased = usesFlowJobIdLease(plan);
   const note =

@@ -919,6 +919,57 @@ export async function getIssue(
   };
 }
 
+/** `fetchIssueState`が使う`fetch`の最小の形。テストで差し替える。 */
+export type FetchLike = (
+  url: string,
+  init: RequestInit,
+) => Promise<Pick<Response, "status" | "json">>;
+
+const FETCH_ISSUE_TIMEOUT_MS = 10_000;
+
+/**
+ * IssueまたはPRの`state`(`open`か`closed`)を、`fetch`で`GET /repos/.../issues/<番号>`から読む。
+ * `gh`を起動できないworker(Console用のworker)から使うためのもので、
+ * 資格情報は`Authorization`ヘッダだけに載せ、エラーの文には含めない。
+ * 応答が2xxでなければ`GitHubHttpError`を、形が違えば`Error`を投げる。
+ */
+export async function fetchIssueState(
+  fetchFn: FetchLike,
+  ghToken: string,
+  owner: string,
+  repo: string,
+  number: number,
+): Promise<string> {
+  validateOwnerRepo(owner, repo);
+  const context = `GET issue ${owner}/${repo}#${number}`;
+  const response = await fetchFn(
+    `https://api.github.com/repos/${owner}/${repo}/issues/${number}`,
+    {
+      headers: {
+        Authorization: `Bearer ${ghToken}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+      signal: AbortSignal.timeout(FETCH_ISSUE_TIMEOUT_MS),
+    },
+  );
+  if (response.status < 200 || response.status >= 300) {
+    throw new GitHubHttpError(
+      `${context} failed with HTTP ${response.status}`,
+      response.status,
+    );
+  }
+  const body: unknown = await response.json();
+  if (typeof body !== "object" || body === null || !("state" in body)) {
+    throw new Error(`${context}: unexpected response shape`);
+  }
+  const state = Reflect.get(body, "state");
+  if (typeof state !== "string") {
+    throw new Error(`${context}: unexpected response shape`);
+  }
+  return state;
+}
+
 export type LabeledTimelineEvent = {
   readonly event: "labeled";
   readonly actorLogin: string;

@@ -185,3 +185,26 @@ describe("escapeReasonSeparator", () => {
     expect(escapeReasonSeparator("a;; b; ; c")).not.toContain("; ");
   });
 });
+
+describe("logger debug", () => {
+  test("does not write a debug line by default", () => {
+    const lines: string[] = [];
+    const log = logger("t", { sink: (line) => lines.push(line), debug: false });
+    log.debug?.("detail");
+    expect(lines).toEqual([]);
+  });
+
+  test("writes a debug line when enabled", () => {
+    const lines: string[] = [];
+    const log = logger("t", { sink: (line) => lines.push(line), debug: true });
+    log.debug?.("detail");
+    expect(lines).toHaveLength(1);
+  });
+
+  test("marks the line with the debug level", () => {
+    const lines: string[] = [];
+    const log = logger("t", { sink: (line) => lines.push(line), debug: true });
+    log.debug?.("detail");
+    expect(lines[0]).toContain('"level":"debug"');
+  });
+});

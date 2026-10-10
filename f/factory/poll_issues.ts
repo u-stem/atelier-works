@@ -402,6 +402,7 @@ async function reconcileActiveItems(
 /**
  * 1回の実行でGitHubに行う問い合わせの目安の回数。
  * Issue(PR)の状態の取得と、閉じていたときの閉じた人の確認(タイムライン)を、それぞれ1回と数える。
+ * 確認のタイムラインはページ送りで読むので、実際の問い合わせは数えた回数より増えうる。
  * 開いたままの対象は毎回調べ直すので、要対応の行が増えても
  * 実行の時間とAPIの消費が膨らまないように抑える。
  * 対象の途中で打ち切らず、上限に達した後の最初の対象から次の実行に回す。
@@ -521,7 +522,8 @@ export async function reconcileClosedActionableItems(
         target.number,
       );
       if (!isCloserAllowed(association, input.allowedAssociations)) {
-        log.info(
+        // 取り消されないまま毎回調べ直されるので、info以上では出さない。
+        log.debug?.(
           "reconcile: kept actionable items of a target closed by a person who may not do so",
           {
             target: target.key,

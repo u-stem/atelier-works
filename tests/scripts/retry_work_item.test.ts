@@ -6,6 +6,7 @@ import {
   activeIssueConflictError,
   activeIssueConflictErrorFrom,
   asBeforeActionableCancel,
+  closedTargetRefusal,
   computeRestartPlan,
   launchFailureError,
   newerCycleRefusal,
@@ -474,6 +475,64 @@ describe("asBeforeActionableCancel", () => {
       implementEnabled: false,
     });
     expect(plan.toStatus).toBe("requirements_generating");
+  });
+});
+
+describe("closedTargetRefusal", () => {
+  const issueItem = {
+    id: 5,
+    kind: "issue" as const,
+    owner: "octo-owner",
+    repo: "atelier-works",
+    issue_number: 10,
+    pr_number: null,
+  };
+
+  test("allows a restart when the target is open", async () => {
+    expect(await closedTargetRefusal(issueItem, async () => "open")).toBeNull();
+  });
+
+  test("refuses when the target is still closed", async () => {
+    const refusal = await closedTargetRefusal(issueItem, async () => "closed");
+    expect(refusal).toContain(
+      "octo-owner/atelier-works#10 is still closed; reopen it",
+    );
+  });
+
+  test("checks the pr number for a pr work item", async () => {
+    const asked: number[] = [];
+    await closedTargetRefusal(
+      { ...issueItem, kind: "pr_fix", issue_number: null, pr_number: 20 },
+      async (_owner, _repo, number) => {
+        asked.push(number);
+        return "open";
+      },
+    );
+    expect(asked).toEqual([20]);
+  });
+
+  test("refuses when the lookup fails", async () => {
+    const refusal = await closedTargetRefusal(issueItem, async () => {
+      throw new Error("HTTP 502");
+    });
+    expect(refusal).toContain(
+      "could not be checked (HTTP 502); try again later",
+    );
+  });
+
+  test("masks a secret in the lookup failure", async () => {
+    const refusal = await closedTargetRefusal(issueItem, async () => {
+      throw new Error("bad token ghp_0123456789abcdefghijklmnopqrstuvwxyz");
+    });
+    expect(refusal).not.toContain("ghp_0123456789");
+  });
+
+  test("refuses when the work item has no number to check", async () => {
+    const refusal = await closedTargetRefusal(
+      { ...issueItem, issue_number: null },
+      async () => "open",
+    );
+    expect(refusal).toContain("no number to check");
   });
 });
 
