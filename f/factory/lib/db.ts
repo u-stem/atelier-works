@@ -916,6 +916,34 @@ export async function recordDeployment(
   return parseId(row.id, "id");
 }
 
+/** `factory.deployments`の最新の1行のうち、反映の成否を表す列。 */
+export type LatestDeploymentRow = {
+  readonly result: string;
+  readonly sha_to: string;
+  readonly occurred_at: Date;
+};
+
+/** `factory.deployments`の最新の1行を返す。1行も無ければ`null`を返す。 */
+export async function getLatestDeployment(
+  sql: SqlClient = defaultSqlClient,
+): Promise<LatestDeploymentRow | null> {
+  const rows = await sql`
+    SELECT result, sha_to, occurred_at
+    FROM factory.deployments
+    ORDER BY occurred_at DESC, id DESC
+    LIMIT 1
+  `.fetch();
+  const row = rows[0];
+  if (row === undefined) {
+    return null;
+  }
+  return {
+    result: parseRequiredString(row.result, "result"),
+    sha_to: parseRequiredString(row.sha_to, "sha_to"),
+    occurred_at: parseDate(row.occurred_at, "occurred_at"),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // notices
 // ---------------------------------------------------------------------------
@@ -986,6 +1014,24 @@ export async function getNoticeById(
         : parseDate(row.resolved_at, "resolved_at"),
     created_at: parseDate(row.created_at, "created_at"),
   };
+}
+
+/**
+ * `kind`の未解決のnoticeをすべて解決済みにし(`resolved_by`は`resolvedBy`)、解決した行数を返す。
+ * 状況が解消したことを機械が確かめられる種類のnoticeを、本文によらず片付けるために使う。
+ */
+export async function resolveUnresolvedNoticesByKind(
+  kind: string,
+  resolvedBy: string,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  const rows = await sql`
+    UPDATE factory.notices
+    SET resolved = true, resolved_by = ${resolvedBy}, resolved_at = now()
+    WHERE resolved = false AND kind = ${kind}
+    RETURNING id
+  `.fetch();
+  return rows.length;
 }
 
 /**

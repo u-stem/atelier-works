@@ -16,6 +16,7 @@ import {
   findApprovedWorkItemForIssue,
   getApprovalRequest,
   getIssueProposal,
+  getLatestDeployment,
   getNoticeById,
   getRequirementDraft,
   getWorkItem,
@@ -50,6 +51,7 @@ import {
   recordFailure,
   resolveNoticeIfUnresolved,
   resolveStaleInfoNoticesBefore,
+  resolveUnresolvedNoticesByKind,
   revertIssueProposalToPending,
   type SqlClient,
   type SqlRow,
@@ -3392,5 +3394,68 @@ describe("listActiveIssueWorkItems", () => {
     const { sql } = createFakeSqlClient([[{ ...WORK_ITEM_ROW, id: 9 }]]);
     const items = await listActiveIssueWorkItems("o", "r", 12, sql);
     expect(items.map((item) => item.id)).toEqual([9]);
+  });
+});
+
+describe("getLatestDeployment", () => {
+  test("returns null when there is no deployment", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await getLatestDeployment(sql)).toBeNull();
+  });
+
+  test("returns the result of the newest row", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ result: "failed", sha_to: "bbb", occurred_at: NOW }],
+    ]);
+    expect((await getLatestDeployment(sql))?.result).toBe("failed");
+  });
+
+  test("orders by newest first", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getLatestDeployment(sql);
+    expect(calls[0]?.text).toContain("ORDER BY occurred_at DESC");
+  });
+});
+
+describe("resolveUnresolvedNoticesByKind", () => {
+  test("returns the number of resolved rows", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 1 }, { id: 2 }]]);
+    expect(
+      await resolveUnresolvedNoticesByKind(
+        "deployed_sha_mismatch",
+        "poll_issues",
+        sql,
+      ),
+    ).toBe(2);
+  });
+
+  test("only touches unresolved notices of the kind", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await resolveUnresolvedNoticesByKind(
+      "deployed_sha_mismatch",
+      "poll_issues",
+      sql,
+    );
+    expect(calls[0]?.text).toContain("WHERE resolved = false AND kind =");
+  });
+
+  test("records the resolver", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await resolveUnresolvedNoticesByKind(
+      "deployed_sha_mismatch",
+      "poll_issues",
+      sql,
+    );
+    expect(calls[0]?.values).toContain("poll_issues");
+  });
+
+  test("stamps resolved_at with now()", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await resolveUnresolvedNoticesByKind(
+      "deployed_sha_mismatch",
+      "poll_issues",
+      sql,
+    );
+    expect(calls[0]?.text).toContain("resolved_at = now()");
   });
 });
