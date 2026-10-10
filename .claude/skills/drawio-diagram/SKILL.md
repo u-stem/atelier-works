@@ -12,8 +12,11 @@ description: 要件定義や設計の図をdraw.io (mxGraph)のXMLとして手�
 XML自体が、すべての情報を含む自己完結した文書である必要がある。
 外部ファイルの参照や、相対パスの画像は使わない。
 
-図にリンクを入れない。`link`属性と、ラベルのHTMLの属性付きの`<a>`、`<area>`、`<map>`、`<meta>`、`<iframe>`、`<object>`、`<embed>`、`<form>`、`<img>`などは使わない。
-`<style>`、`<script`、`onclick=`のようなイベントハンドラ属性、`usemap=`、`formaction=`、`srcdoc=`も使わない。
+図にリンクを入れない。`link`属性と、ラベルのHTMLの属性付きの`<a>`、`<area>`、`<map>`、`<meta>`、`<iframe>`、`<object>`、`<embed>`、`<form>`、`<img>`、`<image>`などは使わない。
+`<style>`、`<script`も使わない。
+HTMLのタグの中の`onclick=`のようなイベントハンドラ属性も使わない。
+タグの外の文章にある`one = 1`や`online=true`は拒否しない。
+`usemap=`、`formaction=`、`srcdoc=`も使わない。
 `Promise<Object>`のように、属性を持たない要素名だけの表記は使ってよい。
 `<A extends B = C>`のように、型引数の名前が`a`や`map`などの要素名と同じで、後ろに`名前=`が続く表記は、属性付きの要素とみなして拒否することがある。そのときは、型引数の名前を変えるか、文章で書く。
 図のXMLは信頼できない入力として描くので、リンクや圧縮で検査をすり抜ける図は、Factoryが生成の時点と読み戻しの時点で拒否するためである。

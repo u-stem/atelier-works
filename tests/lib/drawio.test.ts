@@ -358,6 +358,8 @@ describe("validateDrawioXml link and HTML hardening", () => {
     ["base", "&lt;base href=&quot;x&quot;&gt;"],
     ["link", "&lt;link rel=&quot;stylesheet&quot; href=&quot;x&quot;&gt;"],
     ["img", "&lt;img src=&quot;x&quot;&gt;"],
+    ["image, which the HTML parser turns into img", "&lt;image src=x&gt;"],
+    ["image in upper case", "&lt;IMAGE/src=x&gt;"],
     ["input", "&lt;input type=&quot;submit&quot;&gt;"],
     ["button", "&lt;button name=&quot;x&quot;&gt;"],
     ["svg", "&lt;svg onload=&quot;x&quot;&gt;"],
@@ -382,6 +384,17 @@ describe("validateDrawioXml link and HTML hardening", () => {
     ["an onerror handler on an image", "&lt;b onerror = x&gt;"],
     ["an onload handler after a slash", "&lt;b/onload=x&gt;"],
     ["an escaped onmouseover handler", "&amp;lt;b onmouseover=x&amp;gt;"],
+    ["an upper case handler", "&lt;b ONCLICK=x&gt;"],
+    [
+      "a handler after a quoted value",
+      "&lt;b title=&quot;x&quot;onclick=y&gt;",
+    ],
+    [
+      "a handler after a quoted > in another attribute",
+      "&lt;b title=&quot;&gt;&quot; onclick=x&gt;",
+    ],
+    ["a handler after an unquoted value", "&lt;b id=x onclick=y&gt;"],
+    ["a handler after another tag", "&lt;i&gt;a&lt;/i&gt;&lt;b onclick=x&gt;"],
   ])("rejects a label with %s", (_name, value) => {
     expect(validateDrawioXml(withCellValue(value)).valid).toBe(false);
   });
@@ -399,6 +412,13 @@ describe("validateDrawioXml link and HTML hardening", () => {
     ["a class named Styles", "Map&lt;Styles&gt;"],
     ["a word that contains on and a letter before =", "Conditions = 3"],
     ["on followed by a space", "on hold = yes"],
+    ["a variable named one", "one = 1"],
+    ["a variable named online", "online = true"],
+    ["a query string with online", "https://x/?online=1"],
+    ["a status with onboarding", "onboarding=完了"],
+    ["text after a closed tag", "&lt;b&gt;x&lt;/b&gt; one = 1"],
+    ["text after a closing tag with a slash", "x&lt;/b&gt;online=1"],
+    ["a comparison before a handler-like word", "a &lt; b online = 1"],
     ["a type named Scripts", "Map&lt;Scripts&gt;"],
     ["a closing script", "x&lt;/script&gt;"],
   ])("accepts a label that writes %s", (_name, value) => {
@@ -424,6 +444,20 @@ describe("validateDrawioXml link and HTML hardening", () => {
 
   test("checks a long run of unterminated tags in linear time", () => {
     const xml = withCellValue("&lt;a ".repeat(20000));
+    const started = performance.now();
+    validateDrawioXml(xml);
+    expect(performance.now() - started).toBeLessThan(1000);
+  });
+
+  test("checks a long run of unterminated tags for handlers in linear time", () => {
+    const xml = withCellValue("&lt;b ".repeat(20000));
+    const started = performance.now();
+    validateDrawioXml(xml);
+    expect(performance.now() - started).toBeLessThan(1000);
+  });
+
+  test("checks a long run of unterminated quoted values in linear time", () => {
+    const xml = withCellValue("&lt;b a=&quot;".repeat(20000));
     const started = performance.now();
     validateDrawioXml(xml);
     expect(performance.now() - started).toBeLessThan(1000);
@@ -467,5 +501,31 @@ describe("validateDrawioXml link and HTML hardening", () => {
   test("rejects escaping nested deeper than the decoder follows", () => {
     const deep = `&${"amp;".repeat(8)}lt;a`;
     expect(validateDrawioXml(withCellValue(deep)).valid).toBe(false);
+  });
+});
+
+describe("validateDrawioXml long inputs", () => {
+  test("returns a result for a long run of attribute names in the root tag", () => {
+    const xml = `<mxfile ${"a ".repeat(120000)}><diagram/></mxfile>`;
+    const started = performance.now();
+    const result = validateDrawioXml(xml);
+    expect(typeof result.valid).toBe("boolean");
+    expect(performance.now() - started).toBeLessThan(2000);
+  });
+
+  test("returns a result for a 200KB unquoted attribute value", () => {
+    const xml = `<mxfile a=${"x".repeat(200000)}><diagram/></mxfile>`;
+    const started = performance.now();
+    const result = validateDrawioXml(xml);
+    expect(typeof result.valid).toBe("boolean");
+    expect(performance.now() - started).toBeLessThan(2000);
+  });
+
+  test("returns a result for a 200KB attribute with an unclosed quote", () => {
+    const xml = `<mxfile a="${"x".repeat(200000)}><diagram/></mxfile>`;
+    const started = performance.now();
+    const result = validateDrawioXml(xml);
+    expect(typeof result.valid).toBe("boolean");
+    expect(performance.now() - started).toBeLessThan(2000);
   });
 });

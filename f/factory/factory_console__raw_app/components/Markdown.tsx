@@ -186,7 +186,7 @@ const components: Components = {
   },
   p: ({ node, children }) => {
     // 図の画像だけを含む段落は、`<p>`で包まず(上の`img`の差し替えで)
-    // ビューアを直接描く。`DrawioViewer`の入れ物は`<div>`で、DOMでは
+    // ビューアを直接描く。`DrawioViewer`の入れ物は`<figure>`か`<div>`で、DOMでは
     // `<p>`の中に`<div>`を置けないため。
     const soleChild = node?.children.length === 1 ? node.children[0] : null;
     if (

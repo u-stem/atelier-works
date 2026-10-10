@@ -477,6 +477,7 @@ Consoleは、`f/factory/steps/console_query.ts`の`requirements_doc`ビューで
 検査は2か所でかける。生成の時点と、`requirements_doc`ビューがディスクから読み戻す時点である。
 ディスクのファイルは生成の後に書き換わりうるので、読み戻す時点でも同じ検査をかける。
 読み戻しで通らない図は、ファイル名が不正な図と同じように、警告のログを残して一覧から落とす。
+検査が例外で終わった図も、通らない図として扱い、警告のログを残す。安全と確かめられない図は、表示しないほうを選ぶためである。
 文書の本文と、ほかの図は返す。
 
 検査は、大きさ、ルート要素に加えて、次のものを加工せずに拒否する。
@@ -488,10 +489,13 @@ Consoleは、`f/factory/steps/console_query.ts`の`requirements_doc`ビューで
 - ラベルのHTMLの、属性付きの次の要素。属性付きとは、要素名に空白か`/`が続き、その後に`名前=`が現れる形である。
   - リンク: `<a>`、`<area>`、`<map>`
   - ページ遷移: `<meta>`、`<base>`、`<link>`
-  - 埋め込み: `<iframe>`、`<object>`、`<embed>`、`<frame>`、`<img>`、`<video>`、`<audio>`、`<source>`、`<svg>`、`<use>`
+  - 埋め込み: `<iframe>`、`<object>`、`<embed>`、`<frame>`、`<img>`、`<image>`、`<video>`、`<audio>`、`<source>`、`<svg>`、`<use>`
   - 送信: `<form>`、`<input>`、`<button>`
+
+  `<image>`は、HTMLのパーサーが`<img>`に置き換えるので、`<img>`と同じに扱う。
 - ラベルのHTMLの`<style>`と`<script`。属性の有無を問わない
-- ラベルのHTMLのイベントハンドラ属性(`onclick=`のような`on`と英字の名前に`=`が続く形)、`usemap=`、`formaction=`、`srcdoc=`
+- ラベルのHTMLのタグの中のイベントハンドラ属性(`onclick=`のような、`on`と英字の名前に`=`が続く形)。タグは、`<`に英字が続く箇所から、引用符の外の`>`までである。タグの外の文章にある`one = 1`、`online = true`、`https://x/?online=1`は拒否しない。HTMLのパーサーと同じ規則で前から1回だけ読むので、検査の時間は入力の長さに比例する
+- ラベルのHTMLの`usemap=`、`formaction=`、`srcdoc=`
 - 構文が不正なXML。閉じていないコメント、CDATA、処理命令、タグ、引用符と、タグの引用符の外の`<`である。XML全体を前から1回だけ読み、読めない箇所があれば拒否する。正規表現の打ち切りで、手前までしか検査されずに通ることを防ぐためである
 
 `Promise<Object>`、`List<Map>`、`Result<A, E>`のように、属性を持たない要素名だけの表記は通す。
@@ -558,17 +562,18 @@ iframeの中で動くscriptが取れるのは、そのiframeが受け取った�
 
 ### 旧Consoleのraw appで描く
 
-Windmillのraw app(Factory Console)も、図をWindmillと同じオリジンでは描かない。
+Windmillのraw app(Factory Console)も、図をWindmillのオリジンで直接は描かない。
 `components/DrawioViewer.tsx`が、隔離したiframeの中で描く。
 ビューアの欠陥が、管理者としてWindmillを操作できるXSSになるのを防ぐためである。
+この変更の前は、ビューアがWindmillのオリジンで直接動いていたので、この変更で危険は増えない。
 iframeの`src`は、SPAのConsoleが配信する`/console/drawio.html`である。
 そのページの同梱のビューア、受け口のscript、HTTPのCSPは、上の表のとおりで、raw appは別のビューアも別のCSPも持たない。
 raw appはsandboxなしでWindmillと同じオリジンで動き、`/console/`も同じサイトなので、`frame-ancestors`に一致して読み込める。
 
 | 守ること | 内容 |
 | --- | --- |
-| 不透明なオリジンで動かす | `<iframe src="/console/drawio.html" sandbox="allow-scripts" referrerPolicy="no-referrer">`にする。`srcDoc`は使わない。`allow-same-origin`、`allow-popups`、`allow-forms`、`allow-top-navigation`は付けない。iframeはWindmillのCookieにも、親のDOMにも届かない |
-| SPAと同じ値を使う | `src`とsandboxは、`lib/drawioMessages.ts`の`DRAWIO_FRAME_SRC`と`DRAWIO_FRAME_SANDBOX`から使う。`DRAWIO_FRAME_SRC`と`MAX_XML_BYTES`は、`console/src/lib/drawioMessages.ts`と同じ値にする。`tests/lib/drawio_raw_app_isolation.test.ts`が、ソースを文字列として読んで確かめる |
+| 不透明なオリジンで動かす | `<iframe src="/console/drawio.html" sandbox="allow-scripts" referrerPolicy="no-referrer">`にする。`srcDoc`は使わない。`allow-same-origin`、`allow-popups`、`allow-forms`、`allow-top-navigation`は付けない。iframeは、WindmillのCookie、親のDOM、最上位のページの遷移、ポップアップ、フォームの送信から切り離される。外への取得は、CSPの`connect-src 'none'`が止める |
+| SPAと同じ値を使う | `src`とsandboxは、`lib/drawioMessages.ts`の`DRAWIO_FRAME_SRC`と`DRAWIO_FRAME_SANDBOX`から使う。`DRAWIO_FRAME_SRC`と`MAX_XML_BYTES`は、`console/src/lib/drawioMessages.ts`と同じ値にする。メッセージの種別と失敗の種類は、`console/public/drawio/drawio-frame-*.js`と同じにする。`tests/lib/drawio_raw_app_isolation.test.ts`が、ソースを文字列として読んで確かめる |
 | XMLは1回だけ渡す | 最初のloadの後にpostMessageで1回だけ送る。親は、送り元がそのiframeの`contentWindow`のものだけを受け取り、高さを80〜1600の範囲に収め、失敗は固定の3つの種類だけを受ける。iframeが2回目のloadを起こしたら、遷移とみなして表示を止める |
 | 図を拒否する | 上の`validateDrawioXml`が、生成の時点と読み戻しの時点で、リンク、危険な要素、圧縮した図を拒否する |
 | 取り違えを防ぐ | 図は枠で囲み、「Issueから生成した図」と明記する。図が承認画面を偽った表示をしても、読み手が取り違えにくくするためである |
@@ -576,8 +581,46 @@ raw appはsandboxなしでWindmillと同じオリジンで動き、`/console/`�
 読み戻しで拒否した図は、`requirements_doc`ビューが名前を`rejected_diagrams`で返す。
 本文は、その名前の図を「安全の検査を通らなかったので表示しません」と表示し、図が見つからない場合と区別する。
 
-`DrawioViewer.tsx`と`lib/drawioMessages.ts`、`tests/lib/drawio_raw_app_isolation.test.ts`は、保護パスである。
+読み戻しの検査は、この変更より前に作られた図にもかかる。
+`link`属性や`<a>`を含む既存の図は、「表示しません」になる。
+承認する人は、図を見ないまま判断することになる。
+図が判断に要るときは、要件定義の作り直しを求める。
+
+#### sandboxが止められない経路
+
+`sandbox`は、iframeの`window.top.postMessage`と`window.parent.postMessage`を止められない。
+旧Consoleでは、図のiframeのscriptが、WindmillのSPAとraw appのメッセージの通り道に届く。
+raw appの`backend.*`の呼び出しは、メッセージを通してWindmillのSPAが受けて実行し、応答をraw appのリスナーが受ける。
+図のscriptがこの通り道へ送ったメッセージが、`backend.*`の呼び出しや応答として扱われると、sandboxの隔離は意味を失う。
+そのため、次の2つが`event.source`を確かめて、自分が送った相手以外のメッセージを捨てていることが前提になる。
+
+- WindmillのSPA。raw appの`backend.*`の呼び出しを受ける側
+- raw app内の、応答を受けるリスナー
+
+この前提は、Windmill 1.817.0のコードと実機で確かめる必要がある。
+`mise.toml`の`WM_VERSION`を上げるたびに、確かめ直す。
+
+SPAのConsoleには、この経路が無い。
+親のページは、iframeから高さと失敗の種類だけを受け、Windmillの`backend.*`のメッセージの通り道を持たないためである。
+
+#### 保護パス
+
+次のファイルは、保護パスである。
+
+- `DrawioViewer.tsx`
+- `lib/drawioMessages.ts`
+- `lib/drawioFrameState.ts`
+- `tests/lib/drawio_raw_app_isolation.test.ts`
+
 書き換えられると、sandboxを外したり、別のページをiframeに読ませたりできるためである。
+iframeへ送るXMLと、受ける応答の扱いも変えられる。
+保護したファイルが主に守るのは、iframeの`src`と、送るXMLの扱いである。
+
+`components/Markdown.tsx`は保護しない。
+旧Consoleの普段の変更を、保護パスで止めないためである。
+`sandbox`は、HTTPのCSP(`infra/Caddyfile`の`drawio_headers`)も後ろ盾になる。
+別の部品が`/console/drawio.html`をsandboxなしのiframeで読む迂回は、CSPの`sandbox allow-scripts`が、ページを不透明なオリジンに固定して止める。
+`frame-ancestors`は、埋め込める親を、このサイトと同じオリジンのページに限る。
 
 制約は次のとおりである。
 
@@ -587,13 +630,16 @@ raw appはsandboxなしでWindmillと同じオリジンで動き、`/console/`�
 残るリスクは次のとおりである。
 
 - ビューアがiframeの中で`window.location`を書き換えて遷移する経路は、`sandbox`で防げない。2回目のloadの検知で表示を止めるが、loadが起きない遷移は検知できない。そのときも、親が受け取るのは、範囲に収めた高さと、固定の失敗の種類だけである。
+- 図のiframeが`window.top.postMessage`と`window.parent.postMessage`で、WindmillのSPAとraw appのメッセージの通り道に届く。上のとおり、WindmillのSPAとraw appの応答のリスナーが`event.source`を確かめていることが前提で、`WM_VERSION`を上げるたびに確かめ直す。確かめていない版では、この経路を塞げているとは言えない。
 - `placeholders`で分けて書いたタグは、属性の値を連結した文字列だけを調べる。値の順序を入れ替えて組み立てる書き方は、iframeの隔離とCSPで止める。
 
 実機でしか確かめられない点は次のとおりである。
 
 - raw appから`/console/drawio.html`をiframeで読めること。`frame-ancestors`が合わないと、図の代わりに応答なしの文が出る。
+- raw appの文書が`srcdoc`か`blob:`かで、相対パス`/console/drawio.html`が解決できるかが変わる。`blob:`だと解決できないおそれがある。
 - 図が描かれ、高さが図に追従すること。
 - リンクを含む図を描いても、クリックで遷移しないこと。
+- 図のiframeから`window.top`と`window.parent`へ`backend.*`の呼び出しや応答の形のメッセージを送っても、実行されず、応答も奪われないこと。
 
 ## 要件定義書のリンク
 
@@ -645,7 +691,7 @@ markdownlint-cli2とtextlintの設定(`.markdownlint-cli2.jsonc`、`.textlintrc.
 Consoleでバンドルを通らずに配信される`console/public/`と`console/index.html`も止める。
 配信するdraw.ioのビューアを固定する`console/drawio-viewer.json`も止める。
 固定を強制し、配信物を作って検査するスクリプトも止める。
-旧Consoleのraw appが図を隔離して描く部品(iframeを作る`DrawioViewer.tsx`、`src`とsandboxの定数、それらを照合するテスト)も止める。一覧は`f/factory/lib/protected_paths.ts`の`FORBIDDEN_EXACT_PATHS`にある。
+旧Consoleのraw appが図を隔離して描く部品(iframeを作る`DrawioViewer.tsx`、`src`とsandboxの定数、iframeとの状態の遷移、それらを照合するテスト)も止める。一覧は`f/factory/lib/protected_paths.ts`の`FORBIDDEN_EXACT_PATHS`にある。
 配信のCSPを持つ`infra/Caddyfile`と、配信物を検証する`infra/console_fetcher/`も止める。
 一覧は`f/factory/lib/protected_paths.ts`にある。
 

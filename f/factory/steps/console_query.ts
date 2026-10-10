@@ -25,7 +25,10 @@ import {
   type SqlClient,
   type SqlRow,
 } from "../lib/db.ts";
-import { validateDrawioXml } from "../lib/drawio.ts";
+import {
+  type DrawioValidationResult,
+  validateDrawioXml,
+} from "../lib/drawio.ts";
 import { logger } from "../lib/log.ts";
 import {
   DIAGRAM_NAME_PATTERN,
@@ -800,6 +803,8 @@ export type RequirementsDocRow = {
  * 読み戻した図のXMLには、生成の時点と同じ`validateDrawioXml`をかけ、通らない図は
  * ファイル名の不正と同じく警告をログに残して落とし、名前を`rejected_diagrams`に返す。
  * ディスクのファイルは生成の後に書き換わりうるので、生成時の検査を信用しない。
+ * 検査が例外で終わった図も、拒否した図として扱い、警告をログに残す(閉じる側に倒す)。
+ * `validate`はテスト用に差し替えられる。
  * 図のXMLはGitHubやDiscordには載せず、Consoleの図ビューア
  * (`components/DrawioViewer.tsx`)のためだけにここで読む。
  */
@@ -807,6 +812,7 @@ export async function readDocFromDisk(
   docDir: string,
   diagrams: readonly Diagram[],
   readFile: ReadTextFile = readTextFile,
+  validate: (xml: string) => DrawioValidationResult = validateDrawioXml,
 ): Promise<{
   readonly markdown: string;
   readonly diagrams: RequirementsDiagramContent[];
@@ -848,7 +854,18 @@ export async function readDocFromDisk(
       // 図のファイルが無いか読めなければ、この図だけを落とす。
       continue;
     }
-    const validation = validateDrawioXml(xml);
+    let validation: DrawioValidationResult;
+    try {
+      validation = validate(xml);
+    } catch (error) {
+      // 検査が例外で終わった図は、安全と確かめられないので拒否した図として扱う。
+      log.warn("skipping diagram because validation threw", {
+        name: diagram.name,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      rejectedDiagrams.push(diagram.name);
+      continue;
+    }
     if (!validation.valid) {
       log.warn("skipping diagram that fails validation", {
         name: diagram.name,

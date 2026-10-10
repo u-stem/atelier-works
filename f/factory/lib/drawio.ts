@@ -18,8 +18,9 @@ const FORBIDDEN_ATTRIBUTES = ["link", "usemap"];
 /**
  * 属性付きで現れたら拒否する、ラベルのHTMLの要素。
  * リンク(`a`、`area`、`map`)、ページ遷移(`meta`、`base`、`link`)、別ページや外部資源の埋め込み
- * (`iframe`、`object`、`embed`、`frame`、`img`、`video`、`audio`、`source`、`svg`、`use`)、
+ * (`iframe`、`object`、`embed`、`frame`、`img`、`image`、`video`、`audio`、`source`、`svg`、`use`)、
  * 送信(`form`、`input`、`button`)を塞ぐ。
+ * `image`は、HTMLのパーサーが`img`に置き換えるので`img`と同じに扱う。
  * 属性を持たない`<Object>`や`<Map>`のような表記は、`Promise<Object>`のように型の書き方として
  * ラベルに現れるので通す。属性が無い要素は、行き先も資源のURLも持てない。
  * 「属性付き」は、要素名に空白か`/`が続き、その後に`名前=`が現れる形を指す。
@@ -37,6 +38,7 @@ const ATTRIBUTE_BEARING_TAGS = [
   "base",
   "link",
   "img",
+  "image",
   "input",
   "button",
   "svg",
@@ -90,11 +92,117 @@ const STYLE_ELEMENT_PATTERN = /<style(?![\w-])/i;
 /** `<script`も属性の有無を問わず拒否する。 */
 const SCRIPT_ELEMENT_PATTERN = /<script(?![\w-])/i;
 
+/** イベントハンドラの属性名(`onclick`など)。`on`の後ろに英字が続く名前。 */
+const EVENT_HANDLER_NAME_PATTERN = /^on[a-z]+$/i;
+
+function isHtmlSpace(char: string): boolean {
+  return (
+    char === " " ||
+    char === "\t" ||
+    char === "\n" ||
+    char === "\f" ||
+    char === "\r"
+  );
+}
+
+function isAsciiLetter(char: string): boolean {
+  return (char >= "a" && char <= "z") || (char >= "A" && char <= "Z");
+}
+
 /**
- * イベントハンドラ属性(`onclick=`など)。属性名の手前に語の文字が無いものだけを見て、
- * `Conditions = 3`のような文章を拒否しない。
+ * `position`(要素名の先頭)から始まる開始タグを、HTMLのパーサーと同じ規則で読む。
+ * 属性名を前から順に調べ、イベントハンドラ属性があれば`handler`にその名前を入れる。
+ * `end`は、タグを読み終えた位置(閉じていなければ文字列の長さ)。
+ * 引用符の中の`>`ではタグが終わらないので、引用符を読んでから`>`を探す。
  */
-const EVENT_HANDLER_ATTRIBUTE_PATTERN = /\bon[a-z]+\s*=/i;
+function scanStartTag(
+  text: string,
+  position: number,
+): { handler: string | null; end: number } {
+  let index = position;
+  while (
+    index < text.length &&
+    !isHtmlSpace(text.charAt(index)) &&
+    text.charAt(index) !== "/" &&
+    text.charAt(index) !== ">"
+  ) {
+    index++;
+  }
+  while (index < text.length) {
+    while (
+      index < text.length &&
+      (isHtmlSpace(text.charAt(index)) || text.charAt(index) === "/")
+    ) {
+      index++;
+    }
+    if (index >= text.length) {
+      break;
+    }
+    if (text.charAt(index) === ">") {
+      return { handler: null, end: index + 1 };
+    }
+    // 属性名の先頭の`=`は、名前の一部として読む。
+    const nameStart = index;
+    index++;
+    while (index < text.length) {
+      const char = text.charAt(index);
+      if (isHtmlSpace(char) || char === "/" || char === ">" || char === "=") {
+        break;
+      }
+      index++;
+    }
+    const name = text.slice(nameStart, index);
+    while (index < text.length && isHtmlSpace(text.charAt(index))) {
+      index++;
+    }
+    if (text.charAt(index) !== "=") {
+      continue;
+    }
+    if (EVENT_HANDLER_NAME_PATTERN.test(name)) {
+      return { handler: name, end: index };
+    }
+    index++;
+    while (index < text.length && isHtmlSpace(text.charAt(index))) {
+      index++;
+    }
+    const quote = text.charAt(index);
+    if (quote === '"' || quote === "'") {
+      const close = text.indexOf(quote, index + 1);
+      index = close === -1 ? text.length : close + 1;
+    } else {
+      while (
+        index < text.length &&
+        !isHtmlSpace(text.charAt(index)) &&
+        text.charAt(index) !== ">"
+      ) {
+        index++;
+      }
+    }
+  }
+  return { handler: null, end: text.length };
+}
+
+/**
+ * `text`の開始タグ(`<`に英字が続く箇所から`>`まで)の中に、イベントハンドラ属性
+ * (`onclick=`など)があるかを調べ、あれば`名前=`の形で返す。
+ * タグの外の文章(`one = 1`、`https://x/?online=1`)は見ない。
+ * 前から1回だけ読み、読み終えた位置から次の開始タグを探すので、計算量は入力の長さに比例する。
+ */
+function findEventHandlerInTag(text: string): string | null {
+  let index = text.indexOf("<");
+  while (index !== -1) {
+    if (!isAsciiLetter(text.charAt(index + 1))) {
+      index = text.indexOf("<", index + 1);
+      continue;
+    }
+    const tag = scanStartTag(text, index + 1);
+    if (tag.handler !== null) {
+      return `${tag.handler}=`;
+    }
+    index = text.indexOf("<", tag.end);
+  }
+  return null;
+}
 
 /**
  * ラベルのHTMLの属性の形(`名前=`)で現れたら拒否する属性。
@@ -170,9 +278,9 @@ function findForbiddenHtml(raw: string): string | null {
     if (SCRIPT_ELEMENT_PATTERN.test(current)) {
       return "ラベルのHTMLに<script>が含まれています";
     }
-    const handler = EVENT_HANDLER_ATTRIBUTE_PATTERN.exec(current);
+    const handler = findEventHandlerInTag(current);
     if (handler !== null) {
-      return `ラベルのHTMLにイベントハンドラ属性${handler[0]}が含まれています`;
+      return `ラベルのHTMLにイベントハンドラ属性${handler}が含まれています`;
     }
     const attribute = FORBIDDEN_HTML_ATTRIBUTE_PATTERN.exec(current);
     if (attribute !== null) {
@@ -387,7 +495,7 @@ function byteLength(text: string): number {
  * `<diagram>`を1つ以上含むこと、256KB以下であること、
  * `link`属性と、ラベルのHTMLの危険な要素と属性を含まないことの5つ。
  * 拒否するラベルのHTMLは、属性付きの`a`・`area`・`map`・`meta`・`iframe`・`object`などと、
- * `<style>`、`<script`、`onclick=`のようなイベントハンドラ属性、
+ * `<style>`、`<script`、タグの中の`onclick=`のようなイベントハンドラ属性、
  * `usemap=`・`formaction=`・`srcdoc=`である。属性を持たない`<Object>`のような
  * 型の表記は通す。`placeholders`を持つ要素では、属性の値をつなげた文字列も調べる。
  * 実体参照は段ごとに復号して調べる。二重に実体参照を書いた値は、実際に何として読まれるかを

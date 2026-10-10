@@ -425,6 +425,7 @@ describe("raw app drawio isolation files", () => {
   const paths = [
     "f/factory/factory_console__raw_app/components/DrawioViewer.tsx",
     "f/factory/factory_console__raw_app/lib/drawioMessages.ts",
+    "f/factory/factory_console__raw_app/lib/drawioFrameState.ts",
     "tests/lib/drawio_raw_app_isolation.test.ts",
   ];
 
@@ -438,8 +439,14 @@ describe("raw app drawio isolation files", () => {
 
   test("does not match the other files of the raw app lib", () => {
     expect(
+      matchesForbiddenPath("f/factory/factory_console__raw_app/lib/api.ts"),
+    ).toBe(false);
+  });
+
+  test("does not match Markdown.tsx", () => {
+    expect(
       matchesForbiddenPath(
-        "f/factory/factory_console__raw_app/lib/drawioFrameState.ts",
+        "f/factory/factory_console__raw_app/components/Markdown.tsx",
       ),
     ).toBe(false);
   });

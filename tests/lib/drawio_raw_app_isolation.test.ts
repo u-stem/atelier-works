@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import {
   DRAWIO_FRAME_SANDBOX,
   DRAWIO_FRAME_SRC,
@@ -94,5 +94,72 @@ describe("raw app constants against the SPA", () => {
 
   test("MAX_XML_BYTES matches console/src/lib/drawioMessages.ts", () => {
     expect(MAX_XML_BYTES).toBe(readSpaByteLimit());
+  });
+});
+
+/** `console/public/drawio/`の受け口のソース。ファイル名のハッシュはビルドで変わるので、globで探す。 */
+function readFrameScript(): string {
+  const directory = new URL("../../console/public/drawio/", import.meta.url);
+  const names = readdirSync(directory).filter((name) =>
+    /^drawio-frame-.+\.js$/.test(name),
+  );
+  if (names.length !== 1) {
+    throw new Error(
+      `expected one console/public/drawio/drawio-frame-*.js, found ${names.length}`,
+    );
+  }
+  return readFileSync(new URL(names[0] ?? "", directory), "utf8");
+}
+
+const FRAME_SCRIPT = readFrameScript();
+const RAW_APP_MESSAGES_SOURCE = readSource(
+  "f/factory/factory_console__raw_app/lib/drawioMessages.ts",
+);
+
+function messageTypesIn(source: string): string[] {
+  return [...new Set(source.match(/drawio:[a-z]+/g) ?? [])].sort();
+}
+
+/** 受け口の`ERROR_TEXTS`のキー。失敗の種類の一覧になる。 */
+function frameFailureReasons(): string[] {
+  const block = /const ERROR_TEXTS = \{([\s\S]*?)\};/.exec(FRAME_SCRIPT)?.[1];
+  if (block === undefined) {
+    throw new Error("ERROR_TEXTS is not found in the drawio frame script");
+  }
+  return [...block.matchAll(/^\s*([a-z_]+):/gm)]
+    .map((match) => match[1] ?? "")
+    .sort();
+}
+
+/** raw appの`FrameErrorReason`の選択肢。 */
+function rawAppFailureReasons(): string[] {
+  const union = /export type FrameErrorReason =([^;]+);/.exec(
+    RAW_APP_MESSAGES_SOURCE,
+  )?.[1];
+  if (union === undefined) {
+    throw new Error("FrameErrorReason is not found in drawioMessages.ts");
+  }
+  return [...union.matchAll(/"([a-z_]+)"/g)]
+    .map((match) => match[1] ?? "")
+    .sort();
+}
+
+describe("raw app messages against the SPA frame script", () => {
+  test("uses the same message types as the frame script", () => {
+    expect(messageTypesIn(RAW_APP_MESSAGES_SOURCE)).toEqual(
+      messageTypesIn(FRAME_SCRIPT),
+    );
+  });
+
+  test("the frame script uses the three known message types", () => {
+    expect(messageTypesIn(FRAME_SCRIPT)).toEqual([
+      "drawio:error",
+      "drawio:height",
+      "drawio:render",
+    ]);
+  });
+
+  test("uses the same failure reasons as the frame script", () => {
+    expect(rawAppFailureReasons()).toEqual(frameFailureReasons());
   });
 });

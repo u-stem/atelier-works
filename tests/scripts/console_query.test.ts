@@ -266,6 +266,57 @@ describe("readDocFromDisk diagram validation", () => {
     });
   });
 
+  test("treats a diagram as rejected when the validator throws", async () => {
+    const readFile = readerWith({
+      "requirements.md": "# 要件",
+      "flow.drawio": VALID_DIAGRAM_XML,
+    });
+    const throwingValidator = () => {
+      throw new Error("validator crashed");
+    };
+
+    const result = await readDocFromDisk(
+      DOC_DIR,
+      [{ name: "flow", file: "flow.drawio" }],
+      readFile,
+      throwingValidator,
+    );
+
+    expect(result).toEqual({
+      markdown: "# 要件",
+      diagrams: [],
+      rejected_diagrams: ["flow"],
+    });
+  });
+
+  test("keeps validating the other diagrams when the validator throws once", async () => {
+    const readFile = readerWith({
+      "requirements.md": "# 要件",
+      "bad.drawio": "boom",
+      "good.drawio": VALID_DIAGRAM_XML,
+    });
+    const validator = (xml: string) => {
+      if (xml === "boom") {
+        throw new Error("validator crashed");
+      }
+      return { valid: true } as const;
+    };
+
+    const result = await readDocFromDisk(
+      DOC_DIR,
+      [
+        { name: "bad", file: "bad.drawio" },
+        { name: "good", file: "good.drawio" },
+      ],
+      readFile,
+      validator,
+    );
+
+    expect(result?.diagrams).toEqual([
+      { name: "good", xml: VALID_DIAGRAM_XML },
+    ]);
+  });
+
   test("keeps the diagrams that pass when another one fails", async () => {
     const readFile = readerWith({
       "requirements.md": "# 要件",
