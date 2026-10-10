@@ -10,11 +10,17 @@ const AGENTS = [
   "security-auditor",
   "devil-advocate",
   "doc-writer",
+  "requirements-reviewer",
+  "design-reviewer",
+  "triage",
 ];
 const READ_ONLY_AGENTS = [
   "code-reviewer",
   "security-auditor",
   "devil-advocate",
+  "requirements-reviewer",
+  "design-reviewer",
+  "triage",
 ];
 const FACTORY_DOCS_PRELOADED = ["implementer", "code-reviewer", "doc-writer"];
 const OWNED_DIRS = [".claude/agents", ".claude/skills/review-loop"];
@@ -132,6 +138,93 @@ describe(".claude/agents", () => {
     );
     expect(missing).toEqual([]);
   });
+
+  const REVIEW_ROLES = [
+    "code-reviewer",
+    "devil-advocate",
+    "security-auditor",
+    "requirements-reviewer",
+    "design-reviewer",
+  ];
+
+  test.each(REVIEW_ROLES)("points %s at the review rules", (name) => {
+    expect(body(name)).toContain(".claude/skills/review-loop/rules.md");
+  });
+
+  const FINDING_FIELDS = ["重さ:", "種類:", "原因: <原因の分類>", "範囲:"];
+  const FINDING_CASES = REVIEW_ROLES.flatMap((name) =>
+    FINDING_FIELDS.map((field): [string, string] => [name, field]),
+  );
+
+  test.each(FINDING_CASES)(
+    "asks %s for the finding field %s",
+    (name, field) => {
+      expect(body(name)).toContain(field);
+    },
+  );
+
+  test("makes security-auditor report the audited HEAD", () => {
+    expect(body("security-auditor")).toContain("監査した HEAD: <sha>");
+  });
+
+  test("runs triage on the same model as devil-advocate", () => {
+    expect(frontmatter("triage").model).toBe(
+      frontmatter("devil-advocate").model,
+    );
+  });
+
+  test("runs triage on the same model as security-auditor", () => {
+    expect(frontmatter("triage").model).toBe(
+      frontmatter("security-auditor").model,
+    );
+  });
+
+  test("makes triage answer security questions as blockers", () => {
+    expect(body("triage")).toContain("親が答える(blocker)");
+  });
+
+  test("lets triage send an upstream fix to the parent", () => {
+    expect(body("triage")).toContain("取り入れる(上流を親が直す)");
+  });
+
+  test("lets triage record accepted topics as settled", () => {
+    expect(body("triage")).toContain("受け入れ済み");
+  });
+
+  test("lets triage record answered questions as settled", () => {
+    expect(body("triage")).toContain("回答済み");
+  });
+
+  test("makes triage settle an answered question with the verified basis", () => {
+    expect(body("triage")).toContain("回答済み / <要旨> / <確かめた根拠>");
+  });
+
+  test("makes triage return a supplement for a returned question", () => {
+    expect(body("triage")).toContain("追補");
+  });
+
+  test("keeps round-specific handling of questions out of security-auditor", () => {
+    expect(body("security-auditor")).not.toContain("上限のラウンド");
+  });
+
+  test.each(["code-reviewer", "design-reviewer", "requirements-reviewer"])(
+    "keeps %s from re-raising settled topics without new grounds",
+    (name) => {
+      expect(body(name)).toContain("新しい根拠が無ければ出し直さない");
+    },
+  );
+
+  test("makes triage report the severity before and after raising it", () => {
+    expect(body("triage")).toContain("重さ(前→後)");
+  });
+
+  test("makes triage decide by the numbered criteria", () => {
+    expect(body("triage")).toContain("見送る(基準<番号>)");
+  });
+
+  test("makes triage report the kind before and after reclassifying", () => {
+    expect(body("triage")).toContain("種類(前→後)");
+  });
 });
 
 describe("repository-owned Claude config", () => {
@@ -147,4 +240,29 @@ describe("repository-owned Claude config", () => {
       true,
     );
   });
+
+  const RULES = join(ROOT, ".claude/skills/review-loop/rules.md");
+  const RULES_HEADINGS = [
+    "## 指摘の形",
+    "## 重さ",
+    "## 種類",
+    "## 原因の分類",
+    "## 出力の対応",
+    "## 取り入れる基準",
+    "## 範囲外の指摘",
+    "## 差し戻し先",
+  ];
+
+  test.each(RULES_HEADINGS)("keeps %s in the review rules", (heading) => {
+    expect(readFileSync(RULES, "utf8")).toContain(heading);
+  });
+
+  const SECURITY_CAUSES = ["注入", "秘密値の漏れ", "権限の拡大"];
+
+  test.each(SECURITY_CAUSES)(
+    "lists the cause %s in the review rules",
+    (cause) => {
+      expect(readFileSync(RULES, "utf8")).toContain(`| ${cause} |`);
+    },
+  );
 });
