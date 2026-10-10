@@ -284,7 +284,7 @@ IssueのリンクはGitHubのIssueのURLの形のときだけ張る。
 | 要素 | 役割 |
 | --- | --- |
 | `console/` | Consoleのソースコード(Vite + React) |
-| `ci.yml`の`console`ジョブ | `console/`を組み立て、成果物`console-dist`として上げる |
+| `ci.yml`の`console`ジョブ | `console/`を組み立て、`main`へのpushで成果物`console-dist`として上げる。型検査、lint、テストは`check`ジョブが担う |
 | `infra/console_fetcher/` | 成果物を検証して、名前付きボリューム`factory_console`に書く |
 | Caddy | `factory_console`を読み取り専用でマウントし、`/console/`で配信する |
 
@@ -315,6 +315,11 @@ zipは自前のreaderでメモリ上に展開する。
 ## CIの組み立て
 
 `ci.yml`の`console`ジョブが組み立てる。
+型検査、lint、テストは`check`ジョブの`mise run check`(`console:check`)が担い、`console`ジョブは重ねて実行しない。
+PRでは、`console/`などに変更が無ければ、`scope`ジョブの判定でこのジョブを飛ばす。
+`main`へのpushでは、変更に関わらず毎回動かす。
+`console_fetcher`が、その実行の成果物を取り込むためである。
+判定の詳細は[セットアップ](../setup.md)の「CIの実行の範囲」にある。
 
 - miseで入れるツールは、bunと、viteとtscを動かすnodeだけにする。ほかの`[tools]`とそのinstall scriptを動かさない。
 - miseのキャッシュを読み書きしない。
