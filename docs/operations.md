@@ -100,6 +100,7 @@ Factory自身のリポジトリ(`factory_repo`)は、`repo_allowlist`の内容�
 Issueに`factory`ラベルを付けると、Factoryがそれを拾う。拾うのは、最後にラベルを付けた人が許可された関係(既定ではOWNER、MEMBER、COLLABORATORのいずれか)のときだけである。
 
 許可されていない人がラベルを付けたIssueは拾わない。Consoleの**通知**タブに、ラベル付与者の関係が許可されていない旨(`labeler_association_denied`)が残る。
+許可された人がラベルを付け直し、FactoryがそのIssueを取得すると、このnoticeは解決済みになる。
 このnoticeの記録に失敗してもジョブは止まらず、**失敗**タブに`labeler_denied:<owner>/<repo>#<Issue番号>`として残る。
 
 ### フォームで投入する

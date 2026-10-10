@@ -19,6 +19,7 @@ import {
   recordFailure,
   resolveNoticeIfUnresolved,
   resolveStaleInfoNoticesBefore,
+  resolveUnresolvedNoticesByPrefix,
 } from "../f/factory/lib/db.ts";
 import { getCleanupSummary } from "../f/factory/lib/summary_support.ts";
 import type { WorkItemStatus } from "../f/factory/lib/types.ts";
@@ -679,6 +680,54 @@ check(
     UNRESOLVABLE_NOTICE_KINDS,
     sql,
   )),
+);
+
+// ---------------------------------------------------------------------------
+// 接頭辞による通知の解決
+// ---------------------------------------------------------------------------
+
+const prefixTarget = await addNotice(
+  { kind: "labeler_association_denied", message: "qdb_app#1: denied" },
+  sql,
+);
+const prefixOtherNumber = await addNotice(
+  { kind: "labeler_association_denied", message: "qdb_app#12: denied" },
+  sql,
+);
+const prefixWildcardRepo = await addNotice(
+  { kind: "labeler_association_denied", message: "qdbxapp#1: denied" },
+  sql,
+);
+const prefixOtherKind = await addNotice(
+  { kind: "claim_race_lost", message: "qdb_app#1: lost" },
+  sql,
+);
+const prefixResolvedCount = await resolveUnresolvedNoticesByPrefix(
+  "labeler_association_denied",
+  "qdb_app#1: ",
+  "poll_issues",
+  sql,
+);
+const prefixTargetAfter = await getNoticeById(prefixTarget, sql);
+check(
+  "prefix resolve: the matching notice is resolved with the resolver",
+  prefixResolvedCount === 1 &&
+    prefixTargetAfter?.resolved === true &&
+    prefixTargetAfter.resolved_by === "poll_issues" &&
+    prefixTargetAfter.resolved_at instanceof Date,
+  prefixTargetAfter,
+);
+check(
+  "prefix resolve: another issue number sharing the digits is kept",
+  (await getNoticeById(prefixOtherNumber, sql))?.resolved === false,
+);
+check(
+  "prefix resolve: a name that only matches as a LIKE wildcard is kept",
+  (await getNoticeById(prefixWildcardRepo, sql))?.resolved === false,
+);
+check(
+  "prefix resolve: a notice of another kind is kept",
+  (await getNoticeById(prefixOtherKind, sql))?.resolved === false,
 );
 
 // ---------------------------------------------------------------------------

@@ -1014,6 +1014,30 @@ export async function resolveNoticeIfUnresolved(
   return rows.length > 0;
 }
 
+/**
+ * `kind`が一致し、`message`が`messagePrefix`で始まる未解決のnoticeを、すべて解決済みにする。
+ * 解決者は`resolvedBy`、解決時刻は`now()`に記録し、解決した行数を返す。
+ * 前方一致は`starts_with`で行い、`LIKE`のワイルドカード(`%`、`_`)は使わない。
+ * ownerやrepoの名前が`_`を含んでも、ほかの対象の行に当たらないようにするため。
+ * 対象を区切る文字まで含めて渡すこと(`acme/app#1: `は`acme/app#12: `に当たらない)。
+ */
+export async function resolveUnresolvedNoticesByPrefix(
+  kind: string,
+  messagePrefix: string,
+  resolvedBy: string,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  const rows = await sql`
+    UPDATE factory.notices
+    SET resolved = true, resolved_by = ${resolvedBy}, resolved_at = now()
+    WHERE resolved = false
+      AND kind = ${kind}
+      AND starts_with(message, ${messagePrefix})
+    RETURNING id
+  `.fetch();
+  return rows.length;
+}
+
 // ---------------------------------------------------------------------------
 // reviews
 // ---------------------------------------------------------------------------

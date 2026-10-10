@@ -215,6 +215,9 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 `claim_race_lost`は、`poll_issues`と`manual_intake_register`が残すものに限る。
 `supersede_failed`は、新しいサイクルの挿入の後に、古い承認済みの作業項目を取り消す文が失敗したときに残す。Discordには通知しない。
 同じ状況が続く間、ポーリングのたびに積み上がるのを防ぐためである。
+`poll_issues`は、Issueを取得した後に、そのIssueの`labeler_association_denied`を解決済みにする。
+解決者は`poll_issues`で、同じIssueを指す本文の未解決の行がすべて対象になる。
+解決に失敗しても取得の成否は変わらず、警告をログに残す。
 `deployed_sha_mismatch`は、self cloneのHEADとデプロイ版が同じ組で、未解決のnoticeがあるあいだは追加しない。
 `poll_issues`が実行されるたびに同じnoticeが積み上がり、ほかの種類が埋もれるためである。
 版の組が変わったときと、既存のnoticeを解決した後に再び食い違ったときは、1件残す。

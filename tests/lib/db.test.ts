@@ -52,6 +52,7 @@ import {
   recordFailure,
   resolveNoticeIfUnresolved,
   resolveStaleInfoNoticesBefore,
+  resolveUnresolvedNoticesByPrefix,
   revertIssueProposalToPending,
   type SqlClient,
   type SqlRow,
@@ -3081,6 +3082,72 @@ describe("resolveStaleInfoNoticesBefore", () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
     expect(await resolveStaleInfoNoticesBefore(NOW, [], sql)).toBe(0);
     expect(calls).toEqual([]);
+  });
+});
+
+describe("resolveUnresolvedNoticesByPrefix", () => {
+  const PREFIX = "octo-owner/atelier-works#12: ";
+
+  test("updates factory.notices", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await resolveUnresolvedNoticesByPrefix("k", PREFIX, "poll_issues", sql);
+    expect(calls[0]?.text).toContain("UPDATE factory.notices");
+  });
+
+  test("stamps resolved_at with now()", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await resolveUnresolvedNoticesByPrefix("k", PREFIX, "poll_issues", sql);
+    expect(calls[0]?.text).toContain("resolved_at = now()");
+  });
+
+  test("records the given resolver", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await resolveUnresolvedNoticesByPrefix("k", PREFIX, "poll_issues", sql);
+    expect(calls[0]?.values).toContain("poll_issues");
+  });
+
+  test("only touches unresolved notices", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await resolveUnresolvedNoticesByPrefix("k", PREFIX, "poll_issues", sql);
+    expect(calls[0]?.text).toContain("resolved = false");
+  });
+
+  test("only touches the given kind", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await resolveUnresolvedNoticesByPrefix("k", PREFIX, "poll_issues", sql);
+    expect(calls[0]?.values).toContain("k");
+  });
+
+  test("matches the message prefix with starts_with", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await resolveUnresolvedNoticesByPrefix("k", PREFIX, "poll_issues", sql);
+    expect(calls[0]?.text).toMatch(/starts_with\(message,\s*\?\s*\)/);
+  });
+
+  test("passes the prefix as is, without LIKE wildcards", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await resolveUnresolvedNoticesByPrefix("k", PREFIX, "poll_issues", sql);
+    expect(calls[0]?.values).toContain(PREFIX);
+  });
+
+  test("does not use LIKE", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await resolveUnresolvedNoticesByPrefix("k", PREFIX, "poll_issues", sql);
+    expect(calls[0]?.text).not.toContain("LIKE");
+  });
+
+  test("returns the number of resolved rows", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 1 }, { id: 2 }]]);
+    expect(
+      await resolveUnresolvedNoticesByPrefix("k", PREFIX, "poll_issues", sql),
+    ).toBe(2);
+  });
+
+  test("returns 0 when nothing matches", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(
+      await resolveUnresolvedNoticesByPrefix("k", PREFIX, "poll_issues", sql),
+    ).toBe(0);
   });
 });
 
