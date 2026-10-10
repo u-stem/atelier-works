@@ -1,10 +1,10 @@
 // `poll_issues.ts`の`claimIssueWithNotice`、`notifyClaimOwnershipUnknown`、
-// `recordLabelerAssociationDenied`のテスト。
+// `recordLabelerDenied`のテスト。
 // 取得の所有は、トリガーラベルの削除が成功したことで決まる。
 // 所有できたときは、assigneeが付かなくても作業を続ける。
 // 人へ知らせるのは、所有したかどうかを自動で判断できないときだけで、
 // 1回のポーリングで該当したIssueは1件の通知にまとめる。
-// 関係の検査で見送るIssueのnoticeは、ポーリングのたびに積み上がらない。
+// 付与者の確認で見送るIssueのnoticeは、ポーリングのたびに積み上がらない。
 // Issueを取得できたら、そのIssueの見送りのnoticeを解決済みにする。
 
 import { describe, expect, test } from "bun:test";
@@ -27,7 +27,7 @@ import {
   labelerDeniedMessagePrefix,
   notifyClaimOwnershipUnknown,
   processIssueDecisions,
-  recordLabelerAssociationDenied,
+  recordLabelerDenied,
 } from "../../f/factory/poll_issues.ts";
 import { ok } from "../lib/testSupport.ts";
 
@@ -39,7 +39,7 @@ const CANDIDATE: IssueCandidate = {
   title: "Add a thing",
   body: "please add a thing",
   htmlUrl: "https://github.com/octo-owner/atelier-works/issues/12",
-  labelerAssociation: "NONE",
+  labelerLogin: "mallory",
   hasActiveWorkItem: false,
 };
 
@@ -448,13 +448,13 @@ describe("notifyClaimOwnershipUnknown", () => {
   });
 });
 
-describe("claimIssueWithNotice resolves the labeler_association_denied notice", () => {
+describe("claimIssueWithNotice resolves the labeler_denied notice", () => {
   test("resolves the notice of the claimed issue", async () => {
     const { deps, resolved } = fakeDeps(CLAIMED_CONFIRMED);
     await run(deps);
     expect(resolved).toEqual([
       {
-        kind: "labeler_association_denied",
+        kind: "labeler_denied",
         prefix: "octo-owner/atelier-works#12: ",
         resolvedBy: "poll_issues",
       },
@@ -502,9 +502,7 @@ describe("claimIssueWithNotice resolves the labeler_association_denied notice", 
     });
     const { log, warns } = recordingLog();
     await run(deps, log);
-    expect(warns).toEqual([
-      "labeler_association_denied notices could not be resolved",
-    ]);
+    expect(warns).toEqual(["labeler_denied notices could not be resolved"]);
   });
 });
 
@@ -515,7 +513,7 @@ describe("claimIssueWithNotice when the claim fails before the label is removed"
   });
 });
 
-describe("recordLabelerAssociationDenied", () => {
+describe("recordLabelerDenied", () => {
   function denyDeps(): { deps: LabelerDeniedDeps; recorded: Notice[] } {
     const recorded: Notice[] = [];
     const deps: LabelerDeniedDeps = {
@@ -528,30 +526,41 @@ describe("recordLabelerAssociationDenied", () => {
   }
 
   const EXPECTED_MESSAGE =
-    'octo-owner/atelier-works#12: 直近のラベル付与者のassociation "NONE" はallowed_labeler_associationsに含まれていません';
+    "octo-owner/atelier-works#12: factoryラベルを付けたのは許可されていないユーザーです";
 
   test("records the notice through the unresolved-deduplicating path", async () => {
     const { deps, recorded } = denyDeps();
-    await recordLabelerAssociationDenied(CANDIDATE, "NONE", deps);
-    expect(recorded.map((n) => n.kind)).toEqual(["labeler_association_denied"]);
+    await recordLabelerDenied(CANDIDATE, "factory", deps);
+    expect(recorded.map((n) => n.kind)).toEqual(["labeler_denied"]);
   });
 
-  test("builds a message that holds only the target and the association", async () => {
+  test("builds a message that holds only the target and the label", async () => {
     const { deps, recorded } = denyDeps();
-    await recordLabelerAssociationDenied(CANDIDATE, "NONE", deps);
+    await recordLabelerDenied(CANDIDATE, "factory", deps);
     expect(recorded[0]?.message).toBe(EXPECTED_MESSAGE);
   });
 
   test("builds the same message again on the next poll", async () => {
     const { deps, recorded } = denyDeps();
-    await recordLabelerAssociationDenied(CANDIDATE, "NONE", deps);
-    await recordLabelerAssociationDenied(CANDIDATE, "NONE", deps);
+    await recordLabelerDenied(CANDIDATE, "factory", deps);
+    await recordLabelerDenied(CANDIDATE, "factory", deps);
+    expect(recorded[1]?.message).toBe(EXPECTED_MESSAGE);
+  });
+
+  test("builds the same message for a different labeler", async () => {
+    const { deps, recorded } = denyDeps();
+    await recordLabelerDenied(CANDIDATE, "factory", deps);
+    await recordLabelerDenied(
+      { ...CANDIDATE, labelerLogin: "someone-else" },
+      "factory",
+      deps,
+    );
     expect(recorded[1]?.message).toBe(EXPECTED_MESSAGE);
   });
 
   test("starts the message with the prefix used to resolve it", async () => {
     const { deps, recorded } = denyDeps();
-    await recordLabelerAssociationDenied(CANDIDATE, "NONE", deps);
+    await recordLabelerDenied(CANDIDATE, "factory", deps);
     expect(
       recorded[0]?.message.startsWith(labelerDeniedMessagePrefix(CANDIDATE)),
     ).toBe(true);
@@ -559,20 +568,10 @@ describe("recordLabelerAssociationDenied", () => {
 
   test("does not let the prefix of one issue match another issue number", async () => {
     const { deps, recorded } = denyDeps();
-    await recordLabelerAssociationDenied(
-      { ...CANDIDATE, number: 120 },
-      "NONE",
-      deps,
-    );
+    await recordLabelerDenied({ ...CANDIDATE, number: 120 }, "factory", deps);
     expect(
       recorded[0]?.message.startsWith(labelerDeniedMessagePrefix(CANDIDATE)),
     ).toBe(false);
-  });
-
-  test("falls back to unknown when the association is not known", async () => {
-    const { deps, recorded } = denyDeps();
-    await recordLabelerAssociationDenied(CANDIDATE, null, deps);
-    expect(recorded[0]?.message).toContain('association "unknown"');
   });
 });
 
@@ -604,6 +603,7 @@ describe("processIssueDecisions", () => {
     return {
       recorded,
       handlers: {
+        confirmLabeler: async () => true,
         claim,
         recordDenied: async (candidate) => {
           recorded.denied.push(candidate.number);
@@ -671,18 +671,17 @@ describe("processIssueDecisions", () => {
   });
 
   const denied = (n: number): IssueDecision => ({
-    action: "skip_association",
+    action: "skip_labeler",
     candidate: candidateAt(n),
-    association: "NONE",
   });
 
-  test("counts a denied association as skipped", async () => {
+  test("counts a denied labeler as skipped", async () => {
     const { handlers: h } = handlers(async () => "claimed");
     const result = await processIssueDecisions([denied(4)], h);
     expect(result.skipped).toBe(1);
   });
 
-  test("records the denied association of the issue", async () => {
+  test("records the denied labeler of the issue", async () => {
     const { handlers: h, recorded } = handlers(async () => "claimed");
     await processIssueDecisions([denied(4)], h);
     expect(recorded.denied).toEqual([4]);
@@ -721,6 +720,77 @@ describe("processIssueDecisions", () => {
     expect(recorded.failures).toEqual([
       "labeler_denied:octo-owner/atelier-works#4",
     ]);
+  });
+
+  describe("when the labeler changed after the decision", () => {
+    const changed: Partial<DecisionHandlers> = {
+      confirmLabeler: async () => false,
+    };
+
+    test("does not claim the issue", async () => {
+      const claims: number[] = [];
+      const { handlers: h } = handlers(async (c) => {
+        claims.push(c.number);
+        return "claimed";
+      }, changed);
+      await processIssueDecisions([claimDecision(3)], h);
+      expect(claims).toEqual([]);
+    });
+
+    test("counts the issue as skipped", async () => {
+      const { handlers: h } = handlers(async () => "claimed", changed);
+      const result = await processIssueDecisions([claimDecision(3)], h);
+      expect(result.skipped).toBe(1);
+    });
+
+    test("records the denial of the issue", async () => {
+      const { handlers: h, recorded } = handlers(
+        async () => "claimed",
+        changed,
+      );
+      await processIssueDecisions([claimDecision(3)], h);
+      expect(recorded.denied).toEqual([3]);
+    });
+
+    test("does not claim the issue when the labeler cannot be fetched", async () => {
+      const claims: number[] = [];
+      const { handlers: h } = handlers(
+        async (c) => {
+          claims.push(c.number);
+          return "claimed";
+        },
+        {
+          confirmLabeler: async () => {
+            throw new Error("timeline failed");
+          },
+        },
+      );
+      await processIssueDecisions([claimDecision(3)], h);
+      expect(claims).toEqual([]);
+    });
+
+    test("records the failure under its own step when the labeler cannot be fetched", async () => {
+      const { handlers: h, recorded } = handlers(async () => "claimed", {
+        confirmLabeler: async () => {
+          throw new Error("timeline failed");
+        },
+      });
+      await processIssueDecisions([claimDecision(3)], h);
+      expect(recorded.failures).toEqual([
+        "confirm_labeler:octo-owner/atelier-works#3",
+      ]);
+    });
+
+    test("goes on with the next issue", async () => {
+      const { handlers: h } = handlers(async () => "claimed", {
+        confirmLabeler: async (c) => c.number !== 3,
+      });
+      const result = await processIssueDecisions(
+        [claimDecision(3), claimDecision(4)],
+        h,
+      );
+      expect(result.claimed).toBe(1);
+    });
   });
 
   const failingClaim = async (): Promise<"claimed" | "skipped"> => {

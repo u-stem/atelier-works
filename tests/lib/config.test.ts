@@ -200,6 +200,41 @@ describe("parseFactoryConfig", () => {
     expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
   });
 
+  test("defaults allowed_labeler_logins to an empty list when absent", () => {
+    expect(
+      parseFactoryConfig(LEGACY_RAW_CONFIG).allowed_labeler_logins,
+    ).toEqual([]);
+  });
+
+  test("passes through an explicit allowed_labeler_logins value", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      allowed_labeler_logins: ["alice", "bob"],
+    });
+    expect(config.allowed_labeler_logins).toEqual(["alice", "bob"]);
+  });
+
+  test("throws when allowed_labeler_logins is not an array of strings", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, allowed_labeler_logins: ["alice", 1] };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when allowed_labeler_logins contains a [bot] account", () => {
+    const raw = {
+      ...LEGACY_RAW_CONFIG,
+      allowed_labeler_logins: ["alice", "some-app[bot]"],
+    };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when allowed_labeler_logins contains a [BOT] account in any case", () => {
+    const raw = {
+      ...LEGACY_RAW_CONFIG,
+      allowed_labeler_logins: ["Some-App[BOT]"],
+    };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
   test("throws when factory_repo is missing (no schema default)", () => {
     const { factory_repo: _factoryRepo, ...withoutFactoryRepo } =
       LEGACY_RAW_CONFIG;

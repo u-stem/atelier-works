@@ -46,7 +46,20 @@ PR修正はラベルからしか起動しない。コメントやcommitのpush�
 
 レビューとコメントの投稿者の`author_association`が`allowed_labeler_associations`に含まれないとき、その投稿は起動の対象から外す。既定値は`OWNER`、`MEMBER`、`COLLABORATOR`である。
 
-`factory:review`と`factory:fix`のラベル自体は、タイムラインを照会しない。ラベルを付けるにはGitHubでtriage以上の権限が要るので、その制約だけに頼る。この制約はラベルを付ける操作に対するものなので、ラベルが消費された後も弱まらない。
+### ラベルの付与者の確認
+
+`poll_prs`は、`factory:review`と`factory:fix`のそれぞれについて、そのラベルを最後に付けた人を、ラベルの`labeled`イベントの`actor`で確かめる。
+許可されるのは、FactoryのPATのアカウントと、`allowed_labeler_logins`に挙げたアカウントである。
+許可されない人が付けたラベルと、付与者を特定できないラベルは、外さずに残し、起動しない。
+取得の直前にも、同じ確認をもう一度行う。
+イベントを取得できなかったPRは、そのポーリングでは対象にしない。
+付与者を判定できないPR(直近100件のラベルのイベントにトリガーラベルのイベントが無い)は、`labeler_check_limit`のnoticeを残し、ラベルを外して付け直すまで対象にしない。
+仕組みの全体は[ラベル付与の制限](../security.md#ラベル付与の制限)にある。
+
+レビュー依頼かassigneeによる起動と、追跡中のPRの新しいcommitによる再レビューは、ラベルを介さない。
+この2つは、PRの作成者が許可されたアカウントのときに限る。
+トリガーラベルが拒否された状態で付いているPRでも、始めない。
+forkのPRと第三者のPRは、許可されたアカウントがラベルを付けたときだけレビューされ、新しいcommitのたびにラベルの付け直しが要る。
 
 ### 対象のリポジトリ
 
@@ -374,7 +387,8 @@ PRワークフローは`f/factory/factory_config`の次の値を読む。
 | --- | --- | --- |
 | `review_label` | `factory:review` | PRレビューを起動するラベル |
 | `fix_label` | `factory:fix` | PR修正を起動するラベル |
-| `allowed_labeler_associations` | `["OWNER", "MEMBER", "COLLABORATOR"]` | 起動の対象にする投稿者の関係 |
+| `allowed_labeler_logins` | `[]` | ラベルを付けてよいアカウント。FactoryのPATのアカウントに加えて許可する |
+| `allowed_labeler_associations` | `["OWNER", "MEMBER", "COLLABORATOR"]` | 修正の材料にする投稿者の関係 |
 | `repo_allowlist` | `[]` | 対象のリポジトリ。空なら`owners`のすべて |
 | `tracked_pr_days` | `30` | ラベルが外れた後もPRを追跡する日数 |
 | `review_post_mode` | `comment_only` | `gated`ならレビューを投稿しない |

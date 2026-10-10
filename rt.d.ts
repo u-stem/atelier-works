@@ -33,6 +33,7 @@ declare namespace RT {
     retention_logs_days: number,
     retention_work_items_days: number,
     allowed_labeler_associations: string[],
+    allowed_labeler_logins: string[],
     implement_enabled: boolean,
     implement_max_rounds: number,
     implement_max_turns: number,

@@ -94,6 +94,22 @@ describe("noticeKindLabel", () => {
     );
   });
 
+  test("translates the labeler denied notice kind", () => {
+    expect(noticeKindLabel("labeler_denied")).toBe("ラベル付与者の拒否");
+  });
+
+  test("translates the labeler check limit notice kind", () => {
+    expect(noticeKindLabel("labeler_check_limit")).toBe(
+      "ラベル付与者の判定不能",
+    );
+  });
+
+  test("translates the legacy labeler notice kind kept in the history", () => {
+    expect(noticeKindLabel("labeler_association_denied")).toBe(
+      "ラベル付与者の拒否",
+    );
+  });
+
   test("does not leak an unknown notice kind", () => {
     expect(noticeKindLabel("future_kind")).toBe(UNKNOWN_NOTICE_LABEL);
   });

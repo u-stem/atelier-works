@@ -202,7 +202,8 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `pr_fix_reviewer_request_failed` | `pr_fix_finish` | 対象、依頼できなかった理由 |
 | `issue_proposal_record_failed` | `pr_fix_finish` | 対象、記録の失敗の理由 |
 | `fix_feedback_association_excluded` | `pr_fix_collect` | 対象、除外した投稿者 |
-| `labeler_association_denied` | `poll_issues` | 対象、ラベル付与者の関係 |
+| `labeler_denied` | `poll_issues`、`poll_prs` | 対象、許可されていないトリガーラベル |
+| `labeler_check_limit` | `poll_issues`、`poll_prs` | 対象、付与者を判定できないトリガーラベル、付け直す操作 |
 | `claim_race_lost` | `poll_issues`、`poll_prs`、`manual_intake_register` | 対象、取得できなかった理由 |
 | `claim_assignee_missing` | `poll_issues` | 対象、assigneeにできなかったユーザー、確かめる点 |
 | `pr_trigger_label_left_removed` | `poll_prs` | 対象のPRと、外れたままのトリガーラベル |
@@ -216,9 +217,10 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 `fix_reply_post_failed`は、返信の投稿に1件以上失敗したとき1件だけ残す。Discordには通知しない。`unsandboxed_check_commands`は、検査コマンドを実行するたびに残す。
 `cleanup_worktree_busy`は、1回の掃除でworktreeのパスごとに1件残す。Discordには通知しない。
 次のnoticeは、同じ本文の未解決のものがあるあいだは追加しない。
-対象は、次の5種類である。
+対象は、次の6種類である。
 
-- `labeler_association_denied`
+- `labeler_denied`
+- `labeler_check_limit`
 - `claim_assignee_missing`
 - `claim_race_lost`
 - `supersede_failed`
@@ -233,8 +235,10 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 `poll_issues`が実行されるたびに同じnoticeが積み上がり、ほかの種類が埋もれるためである。
 版の組が変わったときと、既存のnoticeを解決した後に再び食い違ったときは、1件残す。
 
-Issueの取得に成功すると、`poll_issues`は未解決の`labeler_association_denied`を解決済みにする。
+Issueの取得に成功すると、`poll_issues`は未解決の`labeler_denied`を解決済みにする。
 対象は、本文が`<owner>/<repo>#<番号>:`と空白1つで始まるすべてのnoticeで、`resolved_by`は`poll_issues`になる。
+PRのトリガーラベルの取得に成功したときは、`poll_prs`が、同じPRと同じラベルの未解決の`labeler_denied`を、本文の完全一致で解決済みにする。
+`resolved_by`は`poll_prs`になる。
 解決に失敗しても取得の成否は変わらず、警告をログに残す。
 この種類はConsoleから解決できない。運用者が内容を確かめないまま消せると、許可されていない人の操作が見えなくなるためである。
 許可された人が付け直して取得できたときは、見送りの原因が解けているので、機械が解決しても、この目的と両立する。
