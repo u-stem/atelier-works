@@ -8,7 +8,7 @@ import type {
 import { TooltipProvider } from "../../components/ui/tooltip.tsx";
 import type { InboxSelection } from "../../lib/inboxSelection.ts";
 import type { InboxItem } from "../../lib/inboxView.ts";
-import { InboxList } from "./InboxList.tsx";
+import { GroupHeader, InboxList } from "./InboxList.tsx";
 
 const NOW = Date.parse("2026-10-04T00:00:00.000Z");
 const SHA_A = "0123456789abcdef0123456789abcdef01234567";
@@ -199,5 +199,55 @@ describe("InboxList groups", () => {
     expect(
       render(rows, rows, { type: "notice", id: 2 }).match(/>通知</g)?.length,
     ).toBe(1);
+  });
+});
+
+describe("InboxList group header", () => {
+  const pair = [
+    notice(1, "a/b#12 is behind"),
+    notice(2, "a/b#15 is behind"),
+    notice(3, "a/b#20 is behind"),
+  ];
+
+  test("names the targets of a closed group", () => {
+    expect(render(pair)).toContain("a/b#12、a/b#15 ほか1件");
+  });
+
+  test("keeps the count badge out of the warning color", () => {
+    expect(render(pair)).not.toContain("bg-warning");
+  });
+
+  /** 閉じ具合と選択の有無を指定して、グループの見出しを描く。 */
+  function renderHeader(open: boolean, containsSelection: boolean): string {
+    return renderToStaticMarkup(
+      <TooltipProvider>
+        <GroupHeader
+          group={{
+            key: "notice-group:k",
+            title: "t",
+            countLabel: "2件",
+            iso: "2026-10-03T00:00:00.000Z",
+            targetsLabel: null,
+          }}
+          open={open}
+          containsSelection={containsSelection}
+          showKind
+          now={NOW}
+          onToggle={() => {}}
+        />
+      </TooltipProvider>,
+    );
+  }
+
+  test("tells screen readers that a closed group holds the selection", () => {
+    expect(renderHeader(false, true)).toContain("選択中の通知を含む");
+  });
+
+  test("leaves the screen reader note off an open group", () => {
+    expect(renderHeader(true, true)).not.toContain("選択中の通知を含む");
+  });
+
+  test("leaves the screen reader note off a group without the selection", () => {
+    expect(renderHeader(false, false)).not.toContain("選択中の通知を含む");
   });
 });

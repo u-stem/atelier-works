@@ -1,6 +1,6 @@
 // 要対応の一覧で、同じ種類の未解決の通知を1行にまとめる純粋関数。
 // まとめるのは通知だけで、承認と失敗は1件ずつ判断するので、まとめない。
-// まとめても個々の項目は失わず、`rowItems`で元の項目に戻せる。件数は`rowCount`の合計が項目の数と一致する。
+// まとめても個々の通知は失わず、グループの件数と通常の行(1件)の合計が項目の数と一致する。
 
 import type { InboxSelection } from "./inboxSelection.ts";
 import { type InboxItem, itemId } from "./inboxView.ts";
@@ -57,16 +57,6 @@ export function groupInboxItems(items: readonly InboxItem[]): InboxRow[] {
   return rows;
 }
 
-/** 行に含まれる個々の項目。グループなら中の通知すべて。 */
-export function rowItems(row: InboxRow): readonly InboxItem[] {
-  return row.type === "item" ? [row.item] : row.notices;
-}
-
-/** 行が表す項目の数。全行の合計は、項目の数と一致する。 */
-export function rowCount(row: InboxRow): number {
-  return rowItems(row).length;
-}
-
 export type GroupDescription = {
   /** 行の識別子。 */
   readonly key: string;
@@ -75,7 +65,35 @@ export type GroupDescription = {
   readonly countLabel: string;
   /** 中で最も新しい通知の時刻。一覧の並び(新しい順)の根拠と揃える。 */
   readonly iso: string;
+  /**
+   * 閉じた行の副題。メンバーの本文が挙げる最初の対象を、重複なしで最大2つ並べ、残りは「ほかN件」にする。
+   * 対象を挙げない通知は数えない。どの通知も挙げなければ`null`。
+   * 閉じたままでも、別の対象の通知が紛れ込んだことに気づけるようにするためである。
+   */
+  readonly targetsLabel: string | null;
 };
+
+/** 副題に並べる対象の数。 */
+const TARGETS_SHOWN = 2;
+
+function targetsLabelOf(
+  group: Extract<InboxRow, { type: "group" }>,
+): string | null {
+  const labels = [
+    ...new Set(
+      group.notices.flatMap((each) => {
+        const target = describeNotice(each.notice).targets[0];
+        return target === undefined ? [] : [target.label];
+      }),
+    ),
+  ];
+  if (labels.length === 0) {
+    return null;
+  }
+  const shown = labels.slice(0, TARGETS_SHOWN).join("、");
+  const rest = labels.length - TARGETS_SHOWN;
+  return rest > 0 ? `${shown} ほか${rest}件` : shown;
+}
 
 /** グループの行に出す内容。題名は種別の語で、個々の通知の違いは開いた行の副題が担う。 */
 export function describeGroup(
@@ -94,6 +112,7 @@ export function describeGroup(
     title: first === undefined ? "" : describeNotice(first.notice).title,
     countLabel: `${group.notices.length}件`,
     iso: newest,
+    targetsLabel: targetsLabelOf(group),
   };
 }
 
@@ -113,19 +132,59 @@ export function groupKindOfSelection(
   return group?.type === "group" ? group.kind : null;
 }
 
+/** グループの開閉の状態。 */
+export type GroupExpansion = {
+  /**
+   * 最後に自動で開いたときの選択(`種別:通知のid`)。選択を含むグループが無いときは`null`。
+   * 同じ選択のまま自分で閉じたグループを、再描画のたびに開き直さないために持つ。
+   */
+  readonly openedFor: string | null;
+  /** 開いているグループの種別。 */
+  readonly expanded: ReadonlySet<string>;
+};
+
+export const INITIAL_EXPANSION: GroupExpansion = {
+  openedFor: null,
+  expanded: new Set<string>(),
+};
+
 /**
- * 選択に合わせて開くグループを足した集合を返す。
- * 選んだ通知を折りたたみの中に隠さないためである。
- * 足すものが無いときは、同じ集合をそのまま返す(状態の更新で再描画を起こさない)。
+ * 一覧と選択の現状に合わせて開閉の状態を直す。
+ * - 一覧から無くなった(まとめられなくなった)種別は、開いている集合から外す。
+ * - 選択が別のグループや別の通知に移ったとき、またはグループが選択を含むようになったときは、そのグループを開く。
+ *   選んだ通知を折りたたみの中に隠さないためである。
+ * - 同じ選択のまま自分で閉じたグループは、開き直さない。
+ * 変えるものが無いときは、同じ状態をそのまま返す(状態の更新で再描画を起こさない)。
  */
-export function expandedAfterSelection(
-  expanded: ReadonlySet<string>,
+export function syncExpansion(
+  state: GroupExpansion,
   rows: readonly InboxRow[],
   selection: InboxSelection | null,
-): ReadonlySet<string> {
+): GroupExpansion {
+  const present = new Set(
+    rows.flatMap((row) => (row.type === "group" ? [row.kind] : [])),
+  );
+  const kept = [...state.expanded].filter((kind) => present.has(kind));
   const kind = groupKindOfSelection(rows, selection);
-  if (kind === null || expanded.has(kind)) {
-    return expanded;
+  const openedFor =
+    kind === null || selection === null ? null : `${kind}:${selection.id}`;
+  const opens = openedFor !== null && openedFor !== state.openedFor;
+  const expanded = new Set(opens && kind !== null ? [...kept, kind] : kept);
+  const unchanged =
+    openedFor === state.openedFor &&
+    expanded.size === state.expanded.size &&
+    kept.length === state.expanded.size;
+  return unchanged ? state : { openedFor, expanded };
+}
+
+/** 種別のグループを開閉し直す。`openedFor`は変えない。 */
+export function toggleGroup(
+  state: GroupExpansion,
+  kind: string,
+): GroupExpansion {
+  const expanded = new Set(state.expanded);
+  if (!expanded.delete(kind)) {
+    expanded.add(kind);
   }
-  return new Set([...expanded, kind]);
+  return { openedFor: state.openedFor, expanded };
 }

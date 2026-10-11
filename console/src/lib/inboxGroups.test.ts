@@ -7,16 +7,16 @@ import type {
 } from "../api/guards/summary.ts";
 import {
   describeGroup,
-  expandedAfterSelection,
+  type GroupExpansion,
   groupInboxItems,
   groupKindOfSelection,
-  rowCount,
-  rowItems,
+  type InboxRow,
+  syncExpansion,
+  toggleGroup,
 } from "./inboxGroups.ts";
 import {
   actionableCounts,
   buildInboxItems,
-  chipCounts,
   type InboxItem,
   itemId,
   sortInboxItems,
@@ -157,7 +157,7 @@ describe("groupInboxItems", () => {
       noticeItem({ notice_id: 3 }),
       noticeItem({ notice_id: 4 }),
     ]);
-    expect(row === undefined ? [] : rowItems(row).map(itemId)).toEqual([
+    expect(row?.type === "group" ? row.notices.map(itemId) : []).toEqual([
       5, 3, 4,
     ]);
   });
@@ -167,22 +167,14 @@ describe("groupInboxItems", () => {
   });
 });
 
-describe("rowCount", () => {
-  test("counts a plain item row as one", () => {
-    expect(rowCount({ type: "item", item: APPROVAL(1) })).toBe(1);
-  });
+/** 画面に出る件数。グループは件数の表示、通常の行は1件である。 */
+function displayedCount(row: InboxRow): number {
+  return row.type === "group"
+    ? Number.parseInt(describeGroup(row).countLabel, 10)
+    : 1;
+}
 
-  test("counts a group row by its members", () => {
-    const [row] = groupInboxItems([
-      noticeItem({ notice_id: 1 }),
-      noticeItem({ notice_id: 2 }),
-      noticeItem({ notice_id: 3 }),
-    ]);
-    expect(row === undefined ? 0 : rowCount(row)).toBe(3);
-  });
-});
-
-describe("row totals", () => {
+describe("displayed counts", () => {
   const items: InboxItem[] = [
     APPROVAL(1),
     FAILURE(7),
@@ -194,20 +186,13 @@ describe("row totals", () => {
 
   test("sum to the number of individual items", () => {
     const total = groupInboxItems(items).reduce(
-      (sum, row) => sum + rowCount(row),
+      (sum, row) => sum + displayedCount(row),
       0,
     );
     expect(total).toBe(items.length);
   });
 
-  test("hand every item back exactly once when flattened", () => {
-    const flat = groupInboxItems(items).flatMap((row) => rowItems(row));
-    expect(flat.map((item) => `${item.type}:${itemId(item)}`).sort()).toEqual(
-      items.map((item) => `${item.type}:${itemId(item)}`).sort(),
-    );
-  });
-
-  test("match the notice count on the sidebar badge", () => {
+  test("sum, over the notice rows, to the notice count on the sidebar badge", () => {
     const notices = [
       notice({ notice_id: 1, kind: "a" }),
       notice({ notice_id: 2, kind: "a" }),
@@ -223,15 +208,8 @@ describe("row totals", () => {
       notices,
     };
     const rows = groupInboxItems(sortInboxItems(buildInboxItems(summary)));
-    const noticeTotal = rows
-      .flatMap((row) => rowItems(row))
-      .filter((item) => item.type === "notice").length;
-    expect(noticeTotal).toBe(actionableCounts(summary).notices);
-  });
-
-  test("leave the kind chip counts as individual items", () => {
-    const grouped = groupInboxItems(items).flatMap((row) => rowItems(row));
-    expect(chipCounts(grouped)).toEqual(chipCounts(items));
+    const total = rows.reduce((sum, row) => sum + displayedCount(row), 0);
+    expect(total).toBe(actionableCounts(summary).notices);
   });
 });
 
@@ -275,6 +253,46 @@ describe("describeGroup", () => {
   });
 });
 
+describe("describeGroup targets", () => {
+  /** 本文が`messages`の対象を挙げる通知からグループを作り、その説明を返す。 */
+  function targetsOf(messages: readonly string[]): string | null {
+    const [row] = groupInboxItems(
+      messages.map((message, index) =>
+        noticeItem({ notice_id: index + 1, message }),
+      ),
+    );
+    return row?.type === "group" ? describeGroup(row).targetsLabel : null;
+  }
+
+  test("lists the targets of the members", () => {
+    expect(targetsOf(["a/b#12 failed", "a/b#15 failed"])).toBe(
+      "a/b#12、a/b#15",
+    );
+  });
+
+  test("counts the targets beyond the second", () => {
+    expect(targetsOf(["a/b#12 x", "a/b#15 x", "a/b#20 x"])).toBe(
+      "a/b#12、a/b#15 ほか1件",
+    );
+  });
+
+  test("lists a target shared by members once", () => {
+    expect(targetsOf(["a/b#12 x", "a/b#12 y", "a/b#15 z"])).toBe(
+      "a/b#12、a/b#15",
+    );
+  });
+
+  test("skips members whose body names no target", () => {
+    expect(targetsOf(["a/b#12 x", "no target", "a/b#15 z"])).toBe(
+      "a/b#12、a/b#15",
+    );
+  });
+
+  test("is null when no member names a target", () => {
+    expect(targetsOf(["disk full", "no target"])).toBeNull();
+  });
+});
+
 describe("groupKindOfSelection", () => {
   const rows = groupInboxItems([
     noticeItem({ notice_id: 1, kind: "a" }),
@@ -299,39 +317,100 @@ describe("groupKindOfSelection", () => {
   });
 });
 
-describe("expandedAfterSelection", () => {
+describe("syncExpansion", () => {
   const rows = groupInboxItems([
     noticeItem({ notice_id: 1, kind: "a" }),
     noticeItem({ notice_id: 2, kind: "a" }),
   ]);
+  const closed: GroupExpansion = { openedFor: null, expanded: new Set() };
 
   test("opens the group that holds the selection", () => {
-    expect([
-      ...expandedAfterSelection(new Set<string>(), rows, {
-        type: "notice",
-        id: 1,
-      }),
-    ]).toEqual(["a"]);
+    const next = syncExpansion(closed, rows, { type: "notice", id: 1 });
+    expect([...next.expanded]).toEqual(["a"]);
   });
 
   test("keeps the groups already open", () => {
-    expect([
-      ...expandedAfterSelection(new Set(["z"]), rows, {
-        type: "notice",
-        id: 1,
-      }),
-    ]).toEqual(["z", "a"]);
+    const next = syncExpansion(
+      { openedFor: null, expanded: new Set(["a", "b"]) },
+      groupInboxItems([
+        noticeItem({ notice_id: 1, kind: "a" }),
+        noticeItem({ notice_id: 2, kind: "a" }),
+        noticeItem({ notice_id: 3, kind: "b" }),
+        noticeItem({ notice_id: 4, kind: "b" }),
+      ]),
+      null,
+    );
+    expect([...next.expanded]).toEqual(["a", "b"]);
   });
 
-  test("returns the same set when nothing needs to open", () => {
-    const expanded = new Set<string>();
-    expect(expandedAfterSelection(expanded, rows, null)).toBe(expanded);
+  test("returns the same state when nothing changes", () => {
+    expect(syncExpansion(closed, rows, null)).toBe(closed);
   });
 
-  test("returns the same set when the group is already open", () => {
-    const expanded = new Set(["a"]);
-    expect(
-      expandedAfterSelection(expanded, rows, { type: "notice", id: 2 }),
-    ).toBe(expanded);
+  test("does not reopen a group the user closed under the same selection", () => {
+    const state: GroupExpansion = { openedFor: "a:1", expanded: new Set() };
+    expect(syncExpansion(state, rows, { type: "notice", id: 1 })).toBe(state);
+  });
+
+  test("opens the group again when the selection moves within it", () => {
+    const state: GroupExpansion = { openedFor: "a:1", expanded: new Set() };
+    const next = syncExpansion(state, rows, { type: "notice", id: 2 });
+    expect([...next.expanded]).toEqual(["a"]);
+  });
+
+  test("opens the group that forms around a notice already selected", () => {
+    const alone = groupInboxItems([noticeItem({ notice_id: 1, kind: "a" })]);
+    const settled = syncExpansion(closed, alone, { type: "notice", id: 1 });
+    const next = syncExpansion(settled, rows, { type: "notice", id: 1 });
+    expect([...next.expanded]).toEqual(["a"]);
+  });
+
+  test("drops a kind that no longer forms a group", () => {
+    const next = syncExpansion(
+      { openedFor: null, expanded: new Set(["gone"]) },
+      rows,
+      null,
+    );
+    expect([...next.expanded]).toEqual([]);
+  });
+
+  test("keeps the open groups when the selection goes away", () => {
+    const state: GroupExpansion = {
+      openedFor: "a:1",
+      expanded: new Set(["a"]),
+    };
+    const next = syncExpansion(state, rows, null);
+    expect([...next.expanded]).toEqual(["a"]);
+  });
+
+  test("forgets the selection that opened a group once it goes away", () => {
+    const state: GroupExpansion = {
+      openedFor: "a:1",
+      expanded: new Set(["a"]),
+    };
+    expect(syncExpansion(state, rows, null).openedFor).toBeNull();
+  });
+});
+
+describe("toggleGroup", () => {
+  test("opens a closed group", () => {
+    const next = toggleGroup({ openedFor: null, expanded: new Set() }, "a");
+    expect([...next.expanded]).toEqual(["a"]);
+  });
+
+  test("closes an open group", () => {
+    const next = toggleGroup(
+      { openedFor: null, expanded: new Set(["a"]) },
+      "a",
+    );
+    expect([...next.expanded]).toEqual([]);
+  });
+
+  test("keeps the selection that last opened a group", () => {
+    const next = toggleGroup(
+      { openedFor: "a:1", expanded: new Set(["a"]) },
+      "a",
+    );
+    expect(next.openedFor).toBe("a:1");
   });
 });

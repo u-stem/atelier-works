@@ -5,10 +5,13 @@ import { Badge } from "../../components/ui/badge.tsx";
 import { cn } from "../../lib/cn.ts";
 import {
   describeGroup,
-  expandedAfterSelection,
+  type GroupDescription,
   groupInboxItems,
   groupKindOfSelection,
+  INITIAL_EXPANSION,
   type InboxRow,
+  syncExpansion,
+  toggleGroup,
 } from "../../lib/inboxGroups.ts";
 import { rowDomKey } from "../../lib/inboxPane.ts";
 import type { InboxSelection } from "../../lib/inboxSelection.ts";
@@ -109,6 +112,79 @@ function ItemRow({
 }
 
 /**
+ * まとめた通知の行。押すと個々の通知を開閉する。
+ * 閉じていて選んだ通知を含むときは、背景で示し、読み上げにも添える(選んだ行が見えないため)。
+ */
+export function GroupHeader({
+  group,
+  open,
+  listId,
+  containsSelection,
+  showKind,
+  now,
+  onToggle,
+}: {
+  group: GroupDescription;
+  open: boolean;
+  /** 開いているときに中身の一覧が持つid。閉じているときは指す先が無いので使わない。 */
+  listId?: string;
+  containsSelection: boolean;
+  showKind: boolean;
+  now: number;
+  onToggle: () => void;
+}) {
+  const holdsHiddenSelection = !open && containsSelection;
+  return (
+    <button
+      type="button"
+      data-group={group.key}
+      data-contains-selection={holdsHiddenSelection ? "true" : undefined}
+      aria-expanded={open}
+      aria-controls={open ? listId : undefined}
+      className={cn(
+        ROW_BUTTON_CLASS,
+        "data-[contains-selection=true]:bg-selected",
+      )}
+      onClick={onToggle}
+    >
+      <span className="flex items-baseline justify-between gap-3">
+        <span className="flex min-w-0 items-center gap-1.5">
+          <ChevronRight
+            aria-hidden="true"
+            className={cn(
+              "size-4 shrink-0 self-center text-subtle transition-transform duration-150 motion-reduce:transition-none",
+              open && "rotate-90",
+            )}
+          />
+          <span className="truncate text-body font-medium text-foreground">
+            {group.title}
+          </span>
+        </span>
+        <span className="shrink-0 text-small text-subtle tabular-nums">
+          <TimeText iso={group.iso} now={now} />
+        </span>
+      </span>
+      <span className="mt-1 flex h-6 items-center gap-2.5 overflow-hidden pl-5.5 text-small whitespace-nowrap text-subtle">
+        {showKind ? (
+          <span className="shrink-0 font-medium text-muted-foreground">
+            通知
+          </span>
+        ) : null}
+        <Badge variant="muted">{group.countLabel}</Badge>
+        {open || group.targetsLabel === null ? null : (
+          <span className="min-w-0 truncate" title={group.targetsLabel}>
+            {group.targetsLabel}
+          </span>
+        )}
+        {holdsHiddenSelection ? (
+          <span className="sr-only">選択中の通知を含む</span>
+        ) : null}
+      </span>
+    </button>
+  );
+}
+
+/**
  * 要対応の一覧のペイン。行を選ぶと`onSelect`を呼ぶだけで、承認や再実行などの操作は起こさない。
  * 行の内容は`describeRow`が種類ごとに決めるので、この部品は種類を知らずに描く。
  * 行は1つのbuttonなので、行の中に再実行や承認などの操作は入れない(buttonを入れ子にしないため)。
@@ -141,26 +217,14 @@ export function InboxList({
   const showKind = !omitsKindLabels(allItems);
   const rows = useMemo(() => groupInboxItems(items), [items]);
   const selectedKind = groupKindOfSelection(rows, selected);
-  const [expanded, setExpanded] = useState<ReadonlySet<string>>(() =>
-    expandedAfterSelection(new Set<string>(), rows, selected),
+  const [stored, setStored] = useState(() =>
+    syncExpansion(INITIAL_EXPANSION, rows, selected),
   );
-  // 選択が別のグループへ移ったときだけ開く。開いた後に自分で閉じた状態を、再描画のたびに戻さないためである。
-  const openedKey = selectedKind === null ? null : `${selected?.id}`;
-  const [openedFor, setOpenedFor] = useState<string | null>(openedKey);
-  if (openedKey !== openedFor) {
-    setOpenedFor(openedKey);
-    setExpanded(expandedAfterSelection(expanded, rows, selected));
+  // 描画の途中で状態を直す。選択や一覧の変化に合わせた開閉を、最初の描画から反映するためである。
+  const expansion = syncExpansion(stored, rows, selected);
+  if (expansion !== stored) {
+    setStored(expansion);
   }
-
-  const toggle = (kind: string): void => {
-    setExpanded((current) => {
-      const next = new Set(current);
-      if (!next.delete(kind)) {
-        next.add(kind);
-      }
-      return next;
-    });
-  };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLUListElement>): void => {
     const buttons = Array.from(
@@ -205,52 +269,21 @@ export function InboxList({
     index: number,
   ) => {
     const group = describeGroup(row);
-    const open = expanded.has(row.kind);
+    const open = expansion.expanded.has(row.kind);
     const listId = `${idBase}-group-${index}`;
     return (
       <li key={group.key}>
-        <button
-          type="button"
-          data-group={group.key}
-          data-contains-selection={
-            !open && selectedKind === row.kind ? "true" : undefined
-          }
-          aria-expanded={open}
-          aria-controls={open ? listId : undefined}
-          className={cn(
-            ROW_BUTTON_CLASS,
-            "data-[contains-selection=true]:bg-selected",
-          )}
-          onClick={() => {
-            toggle(row.kind);
+        <GroupHeader
+          group={group}
+          open={open}
+          listId={listId}
+          containsSelection={selectedKind === row.kind}
+          showKind={showKind}
+          now={now}
+          onToggle={() => {
+            setStored(toggleGroup(expansion, row.kind));
           }}
-        >
-          <span className="flex items-baseline justify-between gap-3">
-            <span className="flex min-w-0 items-center gap-1.5">
-              <ChevronRight
-                aria-hidden="true"
-                className={cn(
-                  "size-4 shrink-0 self-center text-subtle transition-transform duration-150 motion-reduce:transition-none",
-                  open && "rotate-90",
-                )}
-              />
-              <span className="truncate text-body font-medium text-foreground">
-                {group.title}
-              </span>
-            </span>
-            <span className="shrink-0 text-small text-subtle tabular-nums">
-              <TimeText iso={group.iso} now={now} />
-            </span>
-          </span>
-          <span className="mt-1 flex h-6 items-center gap-2.5 overflow-hidden pl-5.5 text-small whitespace-nowrap text-subtle">
-            {showKind ? (
-              <span className="shrink-0 font-medium text-muted-foreground">
-                通知
-              </span>
-            ) : null}
-            <Badge variant="warning">{group.countLabel}</Badge>
-          </span>
-        </button>
+        />
         {open ? (
           <ul id={listId} className="flex flex-col divide-y divide-border">
             {row.notices.map((item) =>
