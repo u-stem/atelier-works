@@ -123,6 +123,8 @@ stateDiagram-v2
     implementing --> requirements_generating: requirements_gap(attempt+1)
     implementing --> needs_human
     implementing --> cancelled: Issueがclosed
+    needs_human --> cancelled: Issueがclosed
+    expired --> cancelled: Issueがclosed
     pr_open --> requirements_generating: pr_fixのrequirements_gap
 ```
 
@@ -140,6 +142,7 @@ stateDiagram-v2
     fixing --> blocked: 準備の確認で停止、headの移動、または親Issueへ差し戻し
     fixing --> needs_human: 安全策で停止、Issue化の提案がある、または差し戻せない
     fixing --> cancelled: PRがclosedかmerged
+    needs_human --> cancelled: PRがclosedかmerged
     needs_human --> rereview_requested: 提案がすべて決定し、pushしていた
     needs_human --> reviewed: 提案がすべて決定し、pushしていない
 ```
@@ -155,7 +158,14 @@ stateDiagram-v2
     awaiting_approval --> audited: すべての提案を決定
 ```
 
-図に描いていない遷移が2つある。終端でない作業項目は、フローが例外で失敗するか孤児と判定されると失敗(`failed`)になる。Issueの作業項目とPRの作業項目は、IssueかPRが閉じられると取り消し(`cancelled`)になる。
+図に描いていない遷移が3つある。
+終端でない作業項目は、フローが例外で失敗するか孤児と判定されると失敗(`failed`)になる。
+Issueの作業項目とPRの作業項目は、IssueかPRが閉じられると取り消し(`cancelled`)になる。
+失敗の作業項目も、IssueかPRが閉じられると取り消しになる。
+この取り消しは、図に描いた人の対応待ちと期限切れからの取り消しと同じで、Consoleの要対応の一覧から外すためのものである。
+閉じた人が許されるときだけ取り消す。
+許されるのは、PRがマージされたとき、作者以外の人が閉じたとき、作者が閉じて作者の関係が許可する関係(`allowed_labeler_associations`)に当たるときである。
+Botが閉じたときは取り消さない。
 
 終端の作業項目は、Consoleからの再実行で再び動き出す。遷移の条件、リース、孤児の判定は[作業項目の状態とリース](internals/work-items.md)に書く。
 
@@ -271,7 +281,7 @@ Consoleの一覧と集計は次のviewを読む。
 | cleanup_workspaces | `0 0 3 * * *` | `f/factory/cleanup_workspaces` | 毎日3:00に実行します。処理が終わった作業用ディレクトリや、動かなくなった処理の後始末を行い、保存領域の使用量を記録します。 |
 | console_fetch_watch | `0 */10 * * * *` | `f/factory/console_fetch_watch` | 10分ごとに実行します。Consoleの取り込み(console_fetcher)が書く状態を読み、失敗、更新の停止、状態が読めないことを、通知に残し、新しく残したときだけDiscordに知らせます。rate limitなどの一時的な失敗は、60分以上続いたときだけ知らせます。正常に戻っても通知は自動では解決しません。 |
 | notify_daily_summary | `0 0 9 * * *` | `f/factory/notify_daily_summary` | 毎日9:00(Asia/Tokyo)に実行します。前日分の実行回数・コスト・失敗回数と承認/却下の件数を集計し、Discordへ日次サマリを投稿します。 |
-| poll_issues | `0 */5 * * * *` | `f/factory/poll_issues` | 5分ごとに実行します。稼働確認とデプロイ状況の通知を行い、担当リポジトリのIssueを検索して担当を確定します。あわせて、進行中のすべての作業項目をGitHub側の状態と突き合わせ、後始末が必要なものを処理します。 |
+| poll_issues | `0 */5 * * * *` | `f/factory/poll_issues` | 5分ごとに実行します。稼働確認とデプロイ状況の通知を行い、担当リポジトリのIssueを検索して担当を確定します。あわせて、進行中のすべての作業項目をGitHub側の状態と突き合わせ、後始末が必要なものを処理します。失敗、人の対応待ち、期限切れの作業項目は、対象のIssueやPRが閉じられていれば取り消して、要対応の一覧から外します。 |
 | poll_prs | `0 */5 * * * *` | `f/factory/poll_prs` | 5分ごとに実行します。PRにレビュー依頼のラベルが付いている、レビューをリクエストされている、または担当者(assignee)に指定されている場合はレビュー処理を開始します。修正依頼のラベルが付いている場合は修正処理を開始します。作業項目の後始末はIssueの巡回処理側で行います。 |
 | self_update | `0 */10 * * * *` | `f/factory/self_update` | 10分ごとに実行します。Software Factory自身の最新のコミットを取り込み、変更があればWindmillへの反映とデータベースの更新を自動的に行います。ホスト側の変更は次にホストで起動したときに反映されるため、通知はしません。更新の最後に、Console用のworkerが止まっていないかを確かめ、止まっていれば通知を残してDiscordにも知らせます。 |
 <!-- /generated:schedules -->
@@ -282,7 +292,7 @@ cronはWindmillの6フィールドの形式で、タイムゾーンは`Asia/Toky
 
 | スケジュール | 処理の対象 |
 | --- | --- |
-| `poll_issues` | Issueの検知とclaim、作業項目の照合(reconcile)、再投入の検出、承認依頼の期限切れ。照合ではIssueとPRのclose、孤児になったジョブを見つける |
+| `poll_issues` | Issueの検知とclaim、作業項目の照合(reconcile)、再投入の検出、承認依頼の期限切れ。照合ではIssueとPRのclose、孤児になったジョブを見つける。閉じたIssueやPRの失敗、人の対応待ち、期限切れの作業項目は、閉じた人を確かめて取り消し、要対応の一覧から外す |
 | `cleanup_workspaces` | 期限を過ぎたworktree(`req-<N>`、実装ブランチのworktree、`review-*`、pr_fixのgtrのworktree)、worktreeが無くなったプロセスのロックファイル、孤児になったheadless Claudeのプロセス。生き残りのプロセスが使っているworktreeは消さず、noticeを残す。ディスクの使用量も記録する |
 | `console_fetch_watch` | Consoleの取り込みが共有ボリュームに書く状態(`status.json`)。原因を最初に見た時刻をWindmillのstateに残し、一時的な失敗が続いた長さを測る。重複は通知の側で防ぐ |
 | `notify_daily_summary` | 前日のコスト、件数、失敗、DBの掃除の件数 |
@@ -433,6 +443,71 @@ Factoryの投稿の見分け方、総評の組み立て、スレッドの解決�
 3. workerの中から`wmill sync push --yes --keep-deleted`を実行し、script、flow、スケジュールを最新にする。
 4. `wmill datatable migrate up`を実行し、Data Tableの定義を最新にする。
 5. 結果を`deployments`に記録し、`f/factory/deployed_sha`を更新する。
+
+ジョブ全体には上限(`timeout`)を2700秒で置く。
+この上限はWindmillが外から打ち切る最後の砦で、通常は内側の上限で先に終わる。
+子プロセスは別のプロセスグループで起動し、その上限はworkerの中のタイマーなので、子の実行中に外から打ち切られると子が残りうるためである([セキュリティ](security.md)の「自己更新の打ち切り」)。
+変数の取得と更新、stateの読み書き、データベースの記録は個別の上限が無いので、1回30秒で区切り、超えたら例外にする。
+Discordへの通知は、送信を30秒で中断し、429の待ち(最大30秒)と送信2回に余裕を足した120秒で区切る。
+最後のConsole用のworkerの確認では、例外を投げずに警告だけを残す。
+更新のうち、`wmill_token`の取得を含め、それ以降の失敗と時間切れは、更新の失敗として`deployments`に記録する。
+ただし、成功の記録そのものが時間切れになったときは、反映が済んでいるので失敗にしない。
+区切りは記録を中断しないので、後から成功の行が入りうる。
+失敗の行を足すと、同じコミットに成功と失敗が並ぶためである。
+この回は警告のログだけを残し、成功として終わる。
+次の回は`deployed_sha`が更新済みなので、記録し直さない。
+`wmill_token`の取得より前の、設定、`github_token`、cloneの更新(ロック待ちを含む)、ブランチとHEADの確認、`deployed_sha`の読み取りの失敗と時間切れは記録しない。
+これらはジョブの失敗(`job_failed`と`schedule_failing`)になるだけである。
+
+ジョブの`timeout`はインスタンスの上限を超えられないが、セルフホストの上限は環境変数`TIMEOUT`で、未設定なら7日である。
+`job_default_timeout`は21600秒以上にする決まりなので([実装フローの仕様](internals/implement.md)の「Windmillのtimeoutで打ち切られたとき」)、2700秒は切り詰められない。
+
+2700秒は、全部が最悪のときの長さ2416.2秒に余裕を足した値である。
+コマンドの上限には、停止の上乗せ13秒を足す。
+時間切れ後のSIGKILLまでの猶予が5秒、終了後のプロセスグループの停止が最大6秒、出力の読み取り待ちが2秒である。
+
+| 段 | 回数 | 1回の上限 | 停止の上乗せ | 合計 |
+| --- | --- | --- | --- | --- |
+| self cloneのロック待ち | 1 | 300秒 | 確かめる間隔0.2秒 | 300.2秒 |
+| git | 9 | 60秒 | 13秒 | 657秒 |
+| `npm ci`、`wmill sync push`、`wmill datatable migrate up` | 3 | 300秒 | 13秒 | 939秒 |
+| 区切った呼び出し | 13 | 30秒 | なし | 390秒 |
+| Discordへの通知 | 1 | 120秒 | なし | 120秒 |
+| Console用のworkerの確認 | 1 | 10秒 | なし | 10秒 |
+
+gitの9回は、cloneの更新で4回、HEADとブランチの確認で2回、変更パスの列挙で1回、`mise.toml`の比較で最大2回である。
+`mise.toml`の比較は時間切れでも失敗として続くので、最大回数まで走りうる。
+区切った呼び出しの13回は、設定の取得が1回、更新が8回、最後の確認が4回に分かれる。
+更新の8回は、3つの変数の取得と、`deployed_sha`の読み取りが失敗したときの存在の確認である。
+残りは、`deployed_sha`の更新、更新が時間切れになったときの読み直し、成功の記録、失敗の記録である。
+成功の記録と失敗の記録は一方しか通らないが、呼び出しの箇所を数えるので、両方を数える。
+時間切れの後に中断されず残る処理は、この合計に含めない。
+最後の確認では、stateの読みと書き、noticeの挿入、通知先の取得を区切る。
+値を変えるときは、`tests/scripts/self_update_timeout.test.ts`が次の2点を確かめる。
+
+- `timeout`が、`self_update.ts`の見積もり以上であること。
+- `self_update.ts`の呼び出しが、見積もりの回数と合うこと。
+
+`deployed_sha`の更新が時間切れになったときは、変数を読み直し、書けていれば成功として続ける。
+`deployed_sha`の読み取りが時間切れのときは、未デプロイとは扱わず、更新を失敗にする。
+読み取りがそれ以外で失敗したときは、区切った`existsVariable`で変数の有無を確かめる。
+`false`のときだけ未デプロイとして扱い、`true`のときと、確かめられないときは、更新を失敗にする。
+`windmill-client`の`getVariable`は、変数が無い場合もそのほかの失敗も、同じ形の例外にするので、失敗の種類では見分けられない。
+一時的な5xxで、全体を反映し直さないためである。
+
+ジョブの上限で打ち切られた回の扱いは次のとおりである。
+
+- 最後に行うConsole用のworkerの確認が走らず、`deployments`にも記録が残らない。
+- 打ち切られるまでの最大45分、実行が終わらない。
+  10分ごとの次の4回は多重実行の防止で飛ばされる。
+  この間は、自己更新の反映とConsole用のworkerの確認が止まる。
+- `on_error_schedule`が時間切れでも呼ばれるなら、打ち切りのたびにDiscordの`job_failed`で即時に気づける。
+  これが主な経路になる想定だが、呼ばれるかは実機で未確認である([運用](operations.md)の「自己更新の打ち切りを確かめる」)。
+- `schedule_failing`は補助の経路になる想定だが、こちらも実機で未確認である。
+  打ち切られた回を、ジョブ履歴で`canceled_by`が`timeout`の取り消しとみなして失敗に数え、3回続くと要対応に残す。
+  人が止めた回は数えない。
+  `canceled_by`が`timeout`になるかは確かめていない。
+- ユーザー名が`timeout`の人が取り消した回は、時間切れと見分けられず、失敗に数えられる。
 
 `infra/**`の変更と、`mise.toml`の`[tools]`か`[env]`の変更は、worker自身では反映できない。`self_update`は`deployments.needs_host_action`を`true`にしてログに残し、通知はしない。これらはホスト側のcheckoutをpullしたうえで、次に`mise run up`で起動したときに反映される。
 
