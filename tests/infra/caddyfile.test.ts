@@ -283,9 +283,15 @@ describe("the Origin rule on /api/*", () => {
     expect(crossOriginMatcher).toContain('{http.request.header.Origin} != ""');
   });
 
-  test("the matcher compares the Origin with the origin the browser used", () => {
+  test("the matcher allows the http origin of the host the browser used", () => {
     expect(crossOriginMatcher).toContain(
-      '{http.request.header.Origin} != {http.request.scheme} + "://" + {http.request.hostport}',
+      '{http.request.header.Origin} != "http://" + {http.request.hostport}',
+    );
+  });
+
+  test("the matcher allows the https origin of the host the browser used", () => {
+    expect(crossOriginMatcher).toContain(
+      '{http.request.header.Origin} != "https://" + {http.request.hostport}',
     );
   });
 
@@ -301,6 +307,64 @@ describe("the Origin rule on /api/*", () => {
 
   test("the handler comes after the console routes", () => {
     expect(CADDYFILE.indexOf("handle @cross_origin_api")).toBeGreaterThan(
+      CADDYFILE.indexOf("handle @console_raw"),
+    );
+  });
+});
+
+// GETなのに副作用を起こすAPIを、fetch以外の読み込み(img、document、iframeなど)から呼ばせない規則を静的に確かめる。
+// 同じオリジンの<img>はSec-Fetch-Site: same-originでOriginも付かないので、上の2規則では止まらない。
+const sideEffectMatcher = braceBlock("@side_effect_get_api {");
+const sideEffectHandler = braceBlock("handle @side_effect_get_api {");
+
+describe("the rule for GET requests with side effects", () => {
+  test("the matcher exists", () => {
+    expect(sideEffectMatcher).not.toBe("");
+  });
+
+  test("the matcher is limited to GET and HEAD", () => {
+    expect(sideEffectMatcher).toContain("method GET HEAD");
+  });
+
+  test.each([
+    "run_wait_result",
+    "run_and_stream",
+    "slack_approval",
+    "teams_approval",
+  ])("the matcher covers jobs/%s", (name) => {
+    expect(sideEffectMatcher).toMatch(
+      new RegExp(`path_regexp [^\\n]*jobs/\\([^)]*\\b${name}\\b`),
+    );
+  });
+
+  test("the matcher covers job_helpers/move_s3_file", () => {
+    expect(sideEffectMatcher).toContain("job_helpers/move_s3_file");
+  });
+
+  test("the matcher lets fetch through", () => {
+    expect(sideEffectMatcher).toContain(
+      '{http.request.header.Sec-Fetch-Dest} != "empty"',
+    );
+  });
+
+  test("the matcher also stops a cookie request without Sec-Fetch-Dest", () => {
+    expect(sideEffectMatcher).toContain(
+      '{http.request.header.Sec-Fetch-Dest} != "" || {http.request.header.Cookie} != ""',
+    );
+  });
+
+  test("the handler responds 403", () => {
+    expect(sideEffectHandler).toContain("respond 403");
+  });
+
+  test("the handler comes before the default reverse proxy", () => {
+    expect(CADDYFILE.indexOf("handle @side_effect_get_api")).toBeLessThan(
+      CADDYFILE.indexOf("reverse_proxy http://windmill_server:8000"),
+    );
+  });
+
+  test("the handler comes after the console routes", () => {
+    expect(CADDYFILE.indexOf("handle @side_effect_get_api")).toBeGreaterThan(
       CADDYFILE.indexOf("handle @console_raw"),
     );
   });

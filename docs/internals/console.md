@@ -140,6 +140,7 @@ Consoleは管理者のCookieで動くので、呼べる範囲を固定する。
 | Cookieなしで`run_wait_result`を呼ぶ | 401、`text/plain; charset=utf-8`、本文`Unauthorized` | 実測 |
 | `Sec-Fetch-Site: cross-site`で`/api/*`を呼ぶ | Caddyが403を返す | 実測 |
 | 別のサイトの`Origin`で`/api/*`を呼ぶ | Caddyが403を返す | `scripts/check-caddy-origin.sh`で実測 |
+| `Sec-Fetch-Dest: image`で`run_wait_result`をGETする | Caddyが403を返す | `scripts/check-caddy-origin.sh`で実測 |
 | superadminでない主体が、tag`console`のscriptを呼ぶ | 400、JSON文字列`"Bad request: Tag console is not included in the allowed CUSTOM_TAGS, ..."` | 実測 |
 | ジョブの失敗の結果(CLIで確認) | `{"error":{"name","message","stack"}}`。HTTPの状態は未実測 | 結果の形だけ実測 |
 | ジョブが失敗する | 500を想定する。本文はJSONでもテキストでも読める | 状態は未実測 |
@@ -659,28 +660,81 @@ Consoleの本体のCSPは`/console/assets/`だけを許すので、本体のペ�
 
 ## 他のサイトからのAPIの呼び出し
 
-`/api/*`への要求は、次のどちらかに当てはまるとCaddyが403にする。
+`/api/*`への要求は、次のどれかに当てはまるとCaddyが403にする。
 ほかのポートのlocalhostや外部のリンクから、運用者のCookieでAPIを実行させないためである。
 
 - `Sec-Fetch-Site`が`cross-site`か`same-site`である。
-- `Origin`ヘッダーがあり、ブラウザが使ったオリジンと一致しない。
+- `Origin`ヘッダーがあり、ブラウザが開いたホスト名とポートのオリジンと一致しない。
+- 副作用のあるGETのAPIを、fetchとXHR以外の読み込み(`<img>`、リンク、iframeなど)から呼んでいる。
 
-`Sec-Fetch-Site`を送らない古いブラウザは、1つ目の規則を素通りする。
-書き込みの要求にはブラウザが`Origin`を付けるので、2つ目の規則がそれを止める。
+### Sec-Fetch-Siteの規則
 
-ブラウザが使ったオリジンとは、要求のスキームと、`Host`ヘッダーのホスト名とポートをつないだ`scheme://host:port`である。
-許すのはこの1つだけで、`WM_HTTP_PORT`やホスト名を変えても規則はそのまま合う。
-`http://localhost:8080`で開いたなら、`http://localhost:8080`だけが通る。
-同じポートでも、`http://127.0.0.1:8080`は通らない。
-スキームが違うもの、ポートが違うもの、末尾に`/`が付いたもの、`Origin: null`も止める。
-
-- Windmillのフロントエンドからの要求には、ブラウザが`Sec-Fetch-Site: same-origin`を付ける。`POST`などには、開いたページと同じ`Origin`も付ける。同じオリジンの`GET`には`Origin`を付けないことがある。
-- CLI(`wmill`)は、どちらのヘッダーも送らない。`Origin`が無い要求は、2つ目の規則では止めない。
+- Windmillのフロントエンドからの要求には、ブラウザが`Sec-Fetch-Site: same-origin`を付ける。
+- CLI(`wmill`)は、どのヘッダーも送らない。
 - Windmill 1.817.0のraw app(旧Console)には、既定でsandboxが無い。`backend.*`の呼び出しは、`parent.postMessage`を通して同じオリジンの親(WindmillのSPA)が行うので、これも`same-origin`になる。
 - raw appのsandboxを有効にすると、バンドルの取得(`GET /api/w/*/apps_u/get_data/v/*`)がcross-siteになって403になる。`Origin: null`も止めるので、`Origin`を付ける要求も同じである。そのときは、この経路を例外にする必要がある。
 
+### Originの検査
+
+`Sec-Fetch-Site`を送らない古いブラウザは、1つ目の規則を素通りする。
+ブラウザは、GETとHEAD以外の要求には`Origin`を付けるので、2つ目の規則がそれを止める。
+ナビゲーションや`<img>`のGETには`Origin`が付かない。
+Firefox 70未満は、フォームのPOSTにも付けない。
+そのため、この検査が補えるのは、GETとHEAD以外のブラウザの要求だけである。
+
+ブラウザが開いたオリジンは、`Host`ヘッダーのホスト名とポートに、`http://`か`https://`を付けたものである。
+許すのはこの2つだけで、`WM_HTTP_PORT`やホスト名を変えても規則はそのまま合う。
+前段でTLSを終端するときは、プロキシがブラウザの使った`Host`を保つ必要がある(`proxy_set_header Host $host`など)。
+`Host`が内部の名前に変わると、ブラウザの`Origin`と合わず、書き込みがすべて403になる。
+`http://localhost:8080`で開いたなら、`http://localhost:8080`と`https://localhost:8080`が通る。
+同じポートでも、`http://127.0.0.1:8080`は通らない。
+ポートが違うもの、末尾に`/`が付いたもの、`Origin: null`も止める。
+
+### 副作用のあるGET
+
+Windmillには、GETでジョブを起動するAPIがある。
+例は`GET /api/w/<workspace>/jobs/run_wait_result/p/<path>?payload=<base64>`である。
+同じオリジンの`<img>`やリンクから呼ぶと、`Sec-Fetch-Site: same-origin`で`Origin`も付かず、上の2つの規則を通る。
+Cookieの持ち主の権限でジョブが動き、承認のscriptなら、Cookieの持ち主が承認者として記録される。
+そのため、次のGETとHEADは、`Sec-Fetch-Dest`が`empty`(fetchとXHR)のときだけ通し、それ以外は403にする。
+Consoleの呼び出しはPOSTの`fetch`なので、影響しない。
+
+| 経路(`/api/w/<workspace>/`の下) | 理由 |
+| --- | --- |
+| `jobs/run_wait_result/p/<path>`と`jobs/run_wait_result/fv/<version>` | scriptとflowを起動し、結果を待つ |
+| `jobs/run_and_stream/f/<path>`、`fv/<version>`、`p/<path>`、`h/<hash>` | scriptとflowを起動し、結果を流す |
+| `jobs/slack_approval/<id>`と`jobs/teams_approval/<id>` | SlackとTeamsへ承認のメッセージを送る |
+| `job_helpers/move_s3_file` | オブジェクトストレージのファイルを動かす |
+
+`Sec-Fetch-Dest`を送らない古いブラウザは、`Cookie`を持つときだけ止める。
+CLIとscriptは`Cookie`を送らず、`Authorization`で認証するので、そのまま通る。
+
+洗い出しは、`windmill-client`の`services.gen.d.ts`にある453個のGETのAPIを、名前と説明で分類して行った。
+サーバーの全経路を網羅した確認ではなく、`/api/r/*`のカスタムHTTPルート(HTTPトリガー)は含まない。
+このリポジトリはHTTPトリガーを持たない。
+足すときは、GETでjobを起動する経路にならないか、認証の方式とあわせて確かめる。
+
+次のGETは、副作用があるか、起動する可能性があっても、対象にしない。
+
+| 経路 | 対象にしない理由 |
+| --- | --- |
+| `jobs_u/resume/<id>/<resume_id>/<signature>`と`jobs_u/cancel/...` | 署名が資格情報で、Cookieに頼らない。メールの承認リンクとして、ナビゲーションで開くため |
+| `auth/login_link/<token>`、`mcp/oauth/start`、`mcp/oauth/callback` | ログインとOAuthの導線で、ナビゲーションで開くため |
+| `users/refresh_token` | 新しいトークンを返すだけで、攻撃者に得がない |
+| `jobs/resume_urls/...`と`jobs/job_signature/...` | 署名付きURLを返すだけで、応答は別のオリジンから読めない |
+| `job_helpers/test_connection`と`workspaces/test_datatable_connection/...` | 設定済みの接続を試すだけで、状態を変えない |
+| 上以外の`list`、`get`、`count`、`exists`、`history`、`download`など | 読み取りだけである |
+
+Windmillのフロントエンドの実装は読んでいない。
+対象のGETを`fetch`以外で開く導線があれば、そのリンクは403になる。
+ジョブ結果の表示は`jobs_u/get`などの読み取り系のGETを使い、対象に入れていない。
+
+### 実機での確認
+
 規則は、Caddyを起動して`bash scripts/check-caddy-origin.sh`で確かめる。
 composeと同じイメージで`infra/Caddyfile`を動かし、止めるべき要求が403に、通すべき要求が(転送先のWindmillを起動しないので)502になることを、`curl`で比べる。
+Caddyが起動しないときは、コンテナのログを出して失敗する。
+CIの`caddyfile`ジョブも、同じスクリプトを動かす。
 Dockerが要る。
 `CHECK_PORT`で、待ち受けるポートを変えられる(既定は18080)。
 
