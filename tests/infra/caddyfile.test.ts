@@ -248,3 +248,60 @@ describe("the console fallback", () => {
     expect(fallbackBlock).toContain("import console_headers");
   });
 });
+
+// /api/*で、他のサイトからの要求を止める規則を静的に確かめる。
+// Sec-Fetch-Siteを送らない古いブラウザでも、Originの不一致で止める。
+const crossSiteMatcher = braceBlock("@cross_site_api {");
+const crossSiteHandler = braceBlock("handle @cross_site_api {");
+const crossOriginMatcher = braceBlock("@cross_origin_api {");
+const crossOriginHandler = braceBlock("handle @cross_origin_api {");
+
+describe("the Sec-Fetch-Site rule on /api/*", () => {
+  test("matches cross-site requests", () => {
+    expect(crossSiteMatcher).toContain("header Sec-Fetch-Site cross-site");
+  });
+
+  test("matches same-site requests", () => {
+    expect(crossSiteMatcher).toContain("header Sec-Fetch-Site same-site");
+  });
+
+  test("responds 403", () => {
+    expect(crossSiteHandler).toContain("respond 403");
+  });
+});
+
+describe("the Origin rule on /api/*", () => {
+  test("the matcher exists", () => {
+    expect(crossOriginMatcher).not.toBe("");
+  });
+
+  test("the matcher is limited to /api/*", () => {
+    expect(crossOriginMatcher).toContain("path /api/*");
+  });
+
+  test("the matcher ignores requests without an Origin header", () => {
+    expect(crossOriginMatcher).toContain('{http.request.header.Origin} != ""');
+  });
+
+  test("the matcher compares the Origin with the origin the browser used", () => {
+    expect(crossOriginMatcher).toContain(
+      '{http.request.header.Origin} != {http.request.scheme} + "://" + {http.request.hostport}',
+    );
+  });
+
+  test("the handler responds 403", () => {
+    expect(crossOriginHandler).toContain("respond 403");
+  });
+
+  test("the handler comes before the default reverse proxy", () => {
+    expect(CADDYFILE.indexOf("handle @cross_origin_api")).toBeLessThan(
+      CADDYFILE.indexOf("reverse_proxy http://windmill_server:8000"),
+    );
+  });
+
+  test("the handler comes after the console routes", () => {
+    expect(CADDYFILE.indexOf("handle @cross_origin_api")).toBeGreaterThan(
+      CADDYFILE.indexOf("handle @console_raw"),
+    );
+  });
+});

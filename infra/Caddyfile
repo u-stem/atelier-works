@@ -64,6 +64,16 @@
                 header Sec-Fetch-Site same-site
         }
 
+        # Sec-Fetch-Siteを送らない古いブラウザでも、他のサイトからAPIを呼ばせない。
+        # Originがあり、ブラウザが使ったオリジン(scheme://host:port)と違う要求を止める。
+        # Originを送らないCLIと、同じオリジンのGETは通す。Originがnullの要求(sandboxのiframeなど)は止める。
+        # 許すのは、運用者がブラウザで開いたホスト名とポートのオリジンだけである。
+        # 許可するホストを固定の一覧にすると、WM_HTTP_PORTを変えたときに黙って壊れる。
+        @cross_origin_api {
+                path /api/*
+                expression `{http.request.header.Origin} != "" && {http.request.header.Origin} != {http.request.scheme} + "://" + {http.request.hostport}`
+        }
+
         # Caddyはhandleをmatcherの種類で並べ替えるので、routeで書いた順に評価させる。
         # Consoleの経路と@console_rawを、どのreverse_proxyよりも先に置く。
         route {
@@ -140,6 +150,10 @@
                 }
 
                 handle @cross_site_api {
+                        respond 403
+                }
+
+                handle @cross_origin_api {
                         respond 403
                 }
 
