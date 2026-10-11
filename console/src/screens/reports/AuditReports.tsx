@@ -7,11 +7,7 @@ import type { AuditIndexRow } from "../../api/guards/audit.ts";
 import { useNow } from "../../app/useNow.ts";
 import { QueryFailureAlert } from "../../components/QueryFailureAlert.tsx";
 import { TimeText } from "../../components/TimeText.tsx";
-import {
-  Alert,
-  AlertDescription,
-  AlertTitle,
-} from "../../components/ui/alert.tsx";
+import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
 import {
