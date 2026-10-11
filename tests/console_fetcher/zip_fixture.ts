@@ -92,7 +92,7 @@ export function buildZip(entries: readonly FixtureEntry[]): Uint8Array {
   return concat([...locals, ...centrals, end]);
 }
 
-/** GitHubの実行の一覧の1要素。既定は「mainへのpushで成功したci.yml」。 */
+/** GitHubの実行の一覧の1要素。既定は「mainへのpushで成功したconsole-dist.yml」。 */
 export function workflowRun(
   id: number,
   headSha: string,
@@ -105,8 +105,21 @@ export function workflowRun(
     event: "push",
     status: "completed",
     conclusion: "success",
-    path: ".github/workflows/ci.yml",
+    name: "Console dist",
+    path: ".github/workflows/console-dist.yml",
     created_at: createdAt,
+  };
+}
+
+/** GitHubの実行の一覧の1要素。既定は「mainへのpushで成功したci.yml」。 */
+export function ciWorkflowRun(
+  id: number,
+  headSha: string,
+): Record<string, unknown> {
+  return {
+    ...workflowRun(id, headSha),
+    name: "CI",
+    path: ".github/workflows/ci.yml",
   };
 }
 
@@ -155,6 +168,9 @@ export type FakeCall = {
 export type FakeGitHubOptions = {
   readonly runs?: readonly unknown[];
   readonly runsStatus?: number;
+  /** ci.ymlの実行の一覧。省略すると、問い合わせたcommitの成功した実行を返す。 */
+  readonly ciRuns?: readonly Record<string, unknown>[];
+  readonly ciRunsStatus?: number;
   readonly artifacts?: Readonly<Record<number, readonly unknown[]>>;
   readonly blobs?: Readonly<Record<number, Uint8Array>>;
   readonly location?: (artifactId: number) => string;
@@ -181,11 +197,22 @@ export function fakeGitHub(options: FakeGitHubOptions): {
     });
     const parsed = new URL(url);
     if (parsed.hostname === "api.github.com") {
-      if (parsed.pathname === "/repos/o/r/actions/workflows/ci.yml/runs") {
+      if (
+        parsed.pathname === "/repos/o/r/actions/workflows/console-dist.yml/runs"
+      ) {
         const status = options.runsStatus ?? 200;
         return status === 200
           ? Response.json({ workflow_runs: options.runs ?? [] })
           : new Response("{}", { status });
+      }
+      if (parsed.pathname === "/repos/o/r/actions/workflows/ci.yml/runs") {
+        const status = options.ciRunsStatus ?? 200;
+        if (status !== 200) return new Response("{}", { status });
+        const sha = parsed.searchParams.get("head_sha") ?? "";
+        const listed = options.ciRuns?.filter(
+          (run) => run.head_sha === sha,
+        ) ?? [ciWorkflowRun(900, sha)];
+        return Response.json({ workflow_runs: listed });
       }
       const artifacts = /^\/repos\/o\/r\/actions\/runs\/(\d+)\/artifacts$/.exec(
         parsed.pathname,

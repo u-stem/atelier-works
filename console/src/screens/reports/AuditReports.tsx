@@ -2,19 +2,12 @@ import { RefreshCw } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router";
 import { useAuditIndex } from "../../api/auditQueries.ts";
-import {
-  ApiFailure,
-  describeApiError,
-  isBannerError,
-} from "../../api/errors.ts";
+import { isBannerError } from "../../api/errors.ts";
 import type { AuditIndexRow } from "../../api/guards/audit.ts";
 import { useNow } from "../../app/useNow.ts";
+import { QueryFailureAlert } from "../../components/QueryFailureAlert.tsx";
 import { TimeText } from "../../components/TimeText.tsx";
-import {
-  Alert,
-  AlertDescription,
-  AlertTitle,
-} from "../../components/ui/alert.tsx";
+import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
 import {
@@ -24,6 +17,7 @@ import {
 } from "../../lib/auditView.ts";
 import { displayableIssueText } from "../../lib/intakeText.ts";
 import { workItemRef, workItemStatusLabel } from "../../lib/labels.ts";
+import { apiErrorOf } from "../../lib/queryFailureView.ts";
 import { KickoffConfirmDialog } from "./KickoffConfirmDialog.tsx";
 import { useAuditKickoff } from "./useAuditKickoff.ts";
 
@@ -77,8 +71,7 @@ function ListState({
     );
   }
   if (query.isError) {
-    const apiError =
-      query.error instanceof ApiFailure ? query.error.apiError : null;
+    const apiError = apiErrorOf(query.error);
     // 401は画面上部のバナーが知らせるので、同じ内容を重ねない。
     if (apiError !== null && isBannerError(apiError)) {
       return (
@@ -89,25 +82,13 @@ function ListState({
     }
     return (
       <div className="px-6 py-4">
-        <Alert variant="destructive">
-          <AlertTitle>監査レポートの一覧を取得できませんでした</AlertTitle>
-          <AlertDescription>
-            <p>
-              {apiError === null
-                ? "原因は不明です。"
-                : describeApiError(apiError)}
-            </p>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => {
-                void query.refetch();
-              }}
-            >
-              もう一度取得する
-            </Button>
-          </AlertDescription>
-        </Alert>
+        <QueryFailureAlert
+          title="監査レポートの一覧を取得できませんでした"
+          error={query.error}
+          onRetry={() => {
+            void query.refetch();
+          }}
+        />
       </div>
     );
   }

@@ -1,4 +1,4 @@
-import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { Menu, PanelLeftClose, PanelLeftOpen, X } from "lucide-react";
 import { type KeyboardEvent, useRef, useState } from "react";
 import { NavLink } from "react-router";
 import { useConsoleStatus } from "../api/consoleStatus.ts";
@@ -14,11 +14,13 @@ import { describeRelease } from "../lib/consoleStatus.ts";
 import { actionableCounts } from "../lib/inboxView.ts";
 import {
   formatBadgeCount,
+  menuButtonLabel,
   navLinkClass,
   nextNavFocusIndex,
   parseSidebarCollapsed,
   SIDEBAR_STORAGE_KEY,
 } from "../lib/navigation.ts";
+import { NavDrawer } from "./NavDrawer.tsx";
 import { SCREENS } from "./screens.ts";
 import { ThemeSwitch } from "./ThemeSwitch.tsx";
 import { useNow } from "./useNow.ts";
@@ -69,12 +71,17 @@ function ReleaseInfo() {
 }
 
 /**
- * 4つの入口と件数を出す左のメニュー。たたむ操作は保存領域に残す。
- * 入口の間は、上下の矢印とHome・Endで移れる。
+ * 4つの入口と件数のリスト。入口の間は、上下の矢印とHome・Endで移れる。
+ * `onNavigate`は、入口を選んだときに呼ぶ。ドロワーを閉じるために使う。
  */
-export function Sidebar() {
+function NavList({
+  collapsed,
+  onNavigate,
+}: {
+  collapsed: boolean;
+  onNavigate?: () => void;
+}) {
   const summary = useSummary();
-  const [collapsed, setCollapsed] = useState(readCollapsed);
   const navRef = useRef<HTMLElement>(null);
 
   const handleKeyDown = (event: KeyboardEvent<HTMLElement>): void => {
@@ -89,131 +96,202 @@ export function Sidebar() {
     links[next]?.focus();
   };
 
+  return (
+    <nav
+      ref={navRef}
+      aria-label="メインメニュー"
+      className="flex flex-col gap-1 px-3 pt-2"
+      onKeyDown={handleKeyDown}
+    >
+      {SCREENS.map((screen) => {
+        const Icon = screen.icon;
+        const badge = formatBadgeCount(
+          screen.badge(
+            summary.data === undefined
+              ? undefined
+              : actionableCounts(summary.data),
+          ),
+        );
+        return (
+          <Tooltip key={screen.id}>
+            <TooltipTrigger asChild>
+              <NavLink
+                to={screen.path}
+                end={screen.path === "/"}
+                className={navLinkClass(collapsed)}
+                onClick={onNavigate}
+              >
+                <span className="relative inline-flex shrink-0">
+                  <Icon aria-hidden="true" className="size-[18px]" />
+                  {collapsed && badge !== null ? (
+                    <span
+                      aria-hidden="true"
+                      className="absolute -top-2 -right-2.5 min-w-4 rounded-full bg-primary px-1 text-center text-[10px] leading-4 font-semibold text-primary-foreground tabular-nums"
+                    >
+                      {badge}
+                    </span>
+                  ) : null}
+                </span>
+                <span className={cn("flex-1 truncate", collapsed && "sr-only")}>
+                  {screen.label}
+                </span>
+                {badge === null ? null : (
+                  <span
+                    className={cn(
+                      "rounded-full bg-primary px-2 text-caption leading-5 font-semibold text-primary-foreground tabular-nums",
+                      collapsed && "sr-only",
+                    )}
+                  >
+                    {badge}
+                    <span className="sr-only">件</span>
+                  </span>
+                )}
+              </NavLink>
+            </TooltipTrigger>
+            {collapsed ? (
+              <TooltipContent side="right">
+                {badge === null ? screen.label : `${screen.label}(${badge}件)`}
+              </TooltipContent>
+            ) : null}
+          </Tooltip>
+        );
+      })}
+    </nav>
+  );
+}
+
+/** 題名の2行。サイドバーの上端とドロワーの上端で共通に使う。 */
+function BrandTitle() {
+  return (
+    <div className="min-w-0">
+      <p className="truncate text-body leading-tight font-semibold tracking-tight">
+        Factory Console
+      </p>
+      <p className="text-caption text-subtle">運用画面</p>
+    </div>
+  );
+}
+
+/**
+ * 画面のメニュー。md以上は、4つの入口と件数を出す左のサイドバーで、たたむ操作は保存領域に残す。
+ * md未満は、上部のバーのボタンからドロワーを開く。たたむ操作は無く、常に広げた形で出す。
+ */
+export function Sidebar() {
+  const summary = useSummary();
+  const [collapsed, setCollapsed] = useState(readCollapsed);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const counts =
+    summary.data === undefined ? undefined : actionableCounts(summary.data);
+  const actionableTotal = SCREENS.reduce(
+    (total, screen) => total + screen.badge(counts),
+    0,
+  );
+
   const toggle = (): void => {
     const next = !collapsed;
     setCollapsed(next);
     writeCollapsed(next);
   };
 
+  const closeDrawer = (): void => {
+    setDrawerOpen(false);
+  };
+
   return (
-    <aside
-      className={cn(
-        "flex shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground transition-[width] duration-200 motion-reduce:transition-none",
-        collapsed ? "w-16" : "w-64",
-      )}
-    >
-      <div
+    <>
+      <header className="flex h-14 shrink-0 items-center gap-3 border-b border-sidebar-border bg-sidebar px-3 text-sidebar-foreground md:hidden">
+        <button
+          type="button"
+          aria-haspopup="dialog"
+          aria-expanded={drawerOpen}
+          aria-label={menuButtonLabel(actionableTotal)}
+          className="relative inline-flex size-9 min-h-11 min-w-11 items-center justify-center rounded-lg text-muted-foreground outline-none transition-colors duration-150 hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring motion-reduce:transition-none"
+          onClick={() => {
+            setDrawerOpen(true);
+          }}
+        >
+          <Menu aria-hidden="true" className="size-5" />
+          {formatBadgeCount(actionableTotal) === null ? null : (
+            <span
+              aria-hidden="true"
+              className="absolute top-1.5 right-1.5 size-2.5 rounded-full bg-primary ring-2 ring-sidebar"
+            />
+          )}
+        </button>
+        <BrandMark className="size-7" />
+        <p className="truncate text-body font-semibold tracking-tight">
+          Factory Console
+        </p>
+      </header>
+      <NavDrawer open={drawerOpen} label="メニュー" onClose={closeDrawer}>
+        <div className="flex h-14 shrink-0 items-center gap-3 px-4">
+          <BrandMark />
+          <BrandTitle />
+          <button
+            type="button"
+            aria-label="メニューを閉じる"
+            className="ml-auto inline-flex size-8 min-h-11 min-w-11 shrink-0 items-center justify-center rounded-lg text-subtle outline-none transition-colors duration-150 hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring motion-reduce:transition-none"
+            onClick={closeDrawer}
+          >
+            <X aria-hidden="true" className="size-4" />
+          </button>
+        </div>
+        <NavList collapsed={false} onNavigate={closeDrawer} />
+        <div className="mt-auto flex flex-col gap-3 border-t border-sidebar-border px-4 py-3">
+          <ReleaseInfo />
+          <ThemeSwitch />
+        </div>
+      </NavDrawer>
+      <aside
         className={cn(
-          "flex h-16 items-center gap-3 px-4",
-          collapsed && "justify-center px-0",
+          "hidden shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground transition-[width] duration-200 motion-reduce:transition-none md:flex",
+          collapsed ? "w-16" : "w-64",
         )}
       >
-        <BrandMark />
-        {collapsed ? null : (
-          <div className="min-w-0">
-            <p className="truncate text-body leading-tight font-semibold tracking-tight">
-              Factory Console
-            </p>
-            <p className="text-caption text-subtle">運用画面</p>
-          </div>
-        )}
-      </div>
-      <nav
-        ref={navRef}
-        aria-label="メインメニュー"
-        className="flex flex-col gap-1 px-3 pt-2"
-        onKeyDown={handleKeyDown}
-      >
-        {SCREENS.map((screen) => {
-          const Icon = screen.icon;
-          const badge = formatBadgeCount(
-            screen.badge(
-              summary.data === undefined
-                ? undefined
-                : actionableCounts(summary.data),
-            ),
-          );
-          return (
-            <Tooltip key={screen.id}>
-              <TooltipTrigger asChild>
-                <NavLink
-                  to={screen.path}
-                  end={screen.path === "/"}
-                  className={navLinkClass(collapsed)}
-                >
-                  <span className="relative inline-flex shrink-0">
-                    <Icon aria-hidden="true" className="size-[18px]" />
-                    {collapsed && badge !== null ? (
-                      <span
-                        aria-hidden="true"
-                        className="absolute -top-2 -right-2.5 min-w-4 rounded-full bg-primary px-1 text-center text-[10px] leading-4 font-semibold text-primary-foreground tabular-nums"
-                      >
-                        {badge}
-                      </span>
-                    ) : null}
-                  </span>
-                  <span
-                    className={cn("flex-1 truncate", collapsed && "sr-only")}
-                  >
-                    {screen.label}
-                  </span>
-                  {badge === null ? null : (
-                    <span
-                      className={cn(
-                        "rounded-full bg-primary px-2 text-caption leading-5 font-semibold text-primary-foreground tabular-nums",
-                        collapsed && "sr-only",
-                      )}
-                    >
-                      {badge}
-                      <span className="sr-only">件</span>
-                    </span>
-                  )}
-                </NavLink>
-              </TooltipTrigger>
-              {collapsed ? (
-                <TooltipContent side="right">
-                  {badge === null
-                    ? screen.label
-                    : `${screen.label}(${badge}件)`}
-                </TooltipContent>
-              ) : null}
-            </Tooltip>
-          );
-        })}
-      </nav>
-      <div
-        className={cn(
-          "mt-auto flex flex-col gap-3 border-t border-sidebar-border px-4 py-3",
-          collapsed && "items-center px-0",
-        )}
-      >
-        {collapsed ? null : (
-          <>
-            <ReleaseInfo />
-            <ThemeSwitch />
-          </>
-        )}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              aria-expanded={!collapsed}
-              aria-label="メニューの開閉"
-              className="inline-flex size-8 items-center justify-center rounded-lg text-subtle outline-none transition-colors duration-150 hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring motion-reduce:transition-none"
-              onClick={toggle}
-            >
-              {collapsed ? (
-                <PanelLeftOpen aria-hidden="true" className="size-4" />
-              ) : (
-                <PanelLeftClose aria-hidden="true" className="size-4" />
-              )}
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="right">
-            {collapsed ? "メニューを広げる" : "メニューをたたむ"}
-          </TooltipContent>
-        </Tooltip>
-      </div>
-    </aside>
+        <div
+          className={cn(
+            "flex h-16 items-center gap-3 px-4",
+            collapsed && "justify-center px-0",
+          )}
+        >
+          <BrandMark />
+          {collapsed ? null : <BrandTitle />}
+        </div>
+        <NavList collapsed={collapsed} />
+        <div
+          className={cn(
+            "mt-auto flex flex-col gap-3 border-t border-sidebar-border px-4 py-3",
+            collapsed && "items-center px-0",
+          )}
+        >
+          {collapsed ? null : (
+            <>
+              <ReleaseInfo />
+              <ThemeSwitch />
+            </>
+          )}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                aria-expanded={!collapsed}
+                aria-label="メニューの開閉"
+                className="inline-flex size-8 items-center justify-center rounded-lg text-subtle outline-none transition-colors duration-150 hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring motion-reduce:transition-none"
+                onClick={toggle}
+              >
+                {collapsed ? (
+                  <PanelLeftOpen aria-hidden="true" className="size-4" />
+                ) : (
+                  <PanelLeftClose aria-hidden="true" className="size-4" />
+                )}
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right">
+              {collapsed ? "メニューを広げる" : "メニューをたたむ"}
+            </TooltipContent>
+          </Tooltip>
+        </div>
+      </aside>
+    </>
   );
 }

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
+import { ApiFailure } from "../../api/errors.ts";
 import type { IntakeSnapshot } from "../../api/guards/intakeSnapshot.ts";
 import {
   IntakeSnapshotView,
@@ -100,7 +101,7 @@ describe("IntakeSnapshotView", () => {
   test("shows the failure and a retry button", () => {
     const html = render({
       status: "error",
-      message: "ログインの有効期限が切れました。",
+      error: new ApiFailure({ kind: "network" }),
       onRetry: () => {},
     });
     expect(html).toContain("取り込み時点のIssueを取得できませんでした");
@@ -109,7 +110,7 @@ describe("IntakeSnapshotView", () => {
   test("shows the failure message", () => {
     const html = render({
       status: "error",
-      message: "ログインの有効期限が切れました。",
+      error: new ApiFailure({ kind: "unauthorized" }),
       onRetry: () => {},
     });
     expect(html).toContain("ログインの有効期限が切れました。");

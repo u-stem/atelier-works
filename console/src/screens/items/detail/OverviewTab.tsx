@@ -23,7 +23,7 @@ import {
 function Summary({ detail, now }: { detail: WorkItemDetail; now: number }) {
   const view = describeOverview(detail.work_item);
   return (
-    <Panel heading="概要">
+    <Panel>
       <dl className="divide-y divide-border rounded-xl border border-border bg-card">
         <Row label="状態">
           <span className="flex flex-col gap-1">

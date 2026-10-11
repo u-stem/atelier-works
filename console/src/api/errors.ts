@@ -6,8 +6,11 @@ import { isRecord } from "./guards/primitives.ts";
 /** ジョブの失敗の本文を切り詰める長さ。長い出力で画面を埋めないため。 */
 const MAX_MESSAGE_LENGTH = 500;
 
-/** 4xxの応答の本文を添えるときの長さ。画面の1行に収まる程度にとどめる。 */
-const MAX_DETAIL_LENGTH = 200;
+/**
+ * 4xxの応答の本文を添えるときの長さ。
+ * `console_query`の断りの文は末尾に要求した値を持つので、末尾が落ちない長さにする。
+ */
+const MAX_DETAIL_LENGTH = 500;
 
 /**
  * 待ちの上限を超えたときのWindmillの定型文。文頭の`timeout after <数>`に限る。
@@ -120,22 +123,16 @@ export function isBannerError(error: ApiError): boolean {
   return error.kind === "unauthorized";
 }
 
-export type Operation = "read" | "write";
-
 const UNKNOWN_RESULT = "結果が分かりません。一覧を読み直して確かめてください。";
 
 /**
- * 失敗を画面に出す日本語の文にする。
- * 書き込み(`write`)では、4xxと401、403を除く失敗は、処理が途中まで進んだかもしれない。
+ * 書き込みの失敗を画面に出す日本語の文にする。
+ * 4xxと401、403を除く失敗は、処理が途中まで進んだかもしれない。
  * ジョブの失敗、待ちの上限、形が違う応答、通信の失敗、5xxがそれにあたる。
  * これらは結果が分からないものとして、一覧を読み直して確かめるよう案内する。
- * 読み取り(`read`)は、失敗をそのまま伝える。
+ * 読み取りの失敗は`lib/queryFailureView.ts`の`describeQueryFailure`が扱う。
  */
-export function describeApiError(
-  error: ApiError,
-  operation: Operation = "read",
-): string {
-  const unknownResult = operation === "write" ? UNKNOWN_RESULT : "";
+export function describeWriteFailure(error: ApiError): string {
   switch (error.kind) {
     case "unauthorized":
       return "ログインの有効期限が切れました。ログインし直してください。";
@@ -143,11 +140,7 @@ export function describeApiError(
       return "この操作は許可されていません。";
     case "job_failed": {
       const detail = error.message === "" ? "" : `(${error.message})`;
-      return operation === "write"
-        ? `処理に失敗した可能性があります${detail}。${UNKNOWN_RESULT}`
-        : error.message === ""
-          ? "処理に失敗しました。"
-          : `処理に失敗しました: ${error.message}`;
+      return `処理に失敗した可能性があります${detail}。${UNKNOWN_RESULT}`;
     }
     case "timeout_or_unknown":
       return `応答が時間内に返りませんでした。${UNKNOWN_RESULT}`;
@@ -156,11 +149,11 @@ export function describeApiError(
         error.detail === ""
           ? `サーバーがエラーを返しました(状態 ${error.status})。`
           : `サーバーがエラーを返しました(状態 ${error.status}): ${error.detail}`;
-      return error.status >= 500 ? `${text}${unknownResult}` : text;
+      return error.status >= 500 ? `${text}${UNKNOWN_RESULT}` : text;
     }
     case "network":
-      return `サーバーに接続できませんでした。${unknownResult}`;
+      return `サーバーに接続できませんでした。${UNKNOWN_RESULT}`;
     case "invalid_response":
-      return `サーバーの応答を読み取れませんでした。${unknownResult}`;
+      return `サーバーの応答を読み取れませんでした。${UNKNOWN_RESULT}`;
   }
 }

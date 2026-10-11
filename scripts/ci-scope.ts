@@ -173,7 +173,7 @@ const EXCLUSIVE_RULES: readonly Rule[] = [
     matches: (path) => path.startsWith("scripts/") && path.endsWith(".sh"),
     flags: FLAGS,
   },
-  // lockfileの検査は、consoleジョブが組み立ての前提にする。
+  // lockfileの検査は、consoleジョブが組み立ての前提にする(console-dist.ymlも同じ検査を動かす)。
   { matches: exact("scripts/check-console-lockfile.ts"), flags: ["console"] },
   // 依存、型検査、ツール、Windmillの設定は、どのジョブの結果も変えうる。
   {
@@ -469,9 +469,7 @@ export function decideScope(env: ScopeEnv, deps: ScopeDeps): Scope {
     deps.report?.("diff failed");
     return allScope();
   }
-  const scope = scopeOfPaths(paths);
-  // mainのpushは、console_fetcherが取り込む成果物を必ず上げるため、consoleを常に動かす。
-  return env.eventName === "push" ? { ...scope, console: true } : scope;
+  return scopeOfPaths(paths);
 }
 
 export function formatOutputs(scope: Scope): string {

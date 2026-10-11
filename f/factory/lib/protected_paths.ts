@@ -20,9 +20,10 @@ export type ChangedPath = {
 /**
  * pr_fixが保護するディレクトリ。
  * どのコマンドが実行されるか、パッケージマネージャーやgitが何を信頼するかを変える設定を
- * すべて含める(エージェントの設定、CIのワークフロー、
+ * すべて含める(エージェントの設定、CIのワークフローとcomposite action、
  * miseのXDG・ドットファイルの設定場所、
  * ディレクトリ形式のlefthook設定)。
+ * composite actionは、PATのWorkflowsの権限の拒否が及ばないので、パスで止める。
  * `console/public/`も含める。Consoleでバンドルを通らずにそのまま配信され、ページの中で動くファイルを置く。
  * `infra/console_fetcher/`も含める。Consoleの配信物を検証して配信するコードで、書き換えられると、
  * 検証をすり抜けた内容が運用者のブラウザに配信される。
@@ -31,6 +32,7 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
   ".claude/",
   ".agents/",
   ".github/workflows/",
+  ".github/actions/",
   ".mise/",
   ".config/mise/",
   ".lefthook/",
@@ -116,9 +118,9 @@ export const FORBIDDEN_BASENAME_PATTERNS: readonly RegExp[] = [
  * 検査コマンドが何を実行するかを決めるディレクトリを保護する。pr_fixの一覧は変えない。
  */
 export const IMPLEMENT_PROTECTED_PATH_PREFIXES: readonly string[] = [
-  ...FORBIDDEN_PATH_PREFIXES.map((prefix) =>
-    prefix === ".github/workflows/" ? ".github/" : prefix,
-  ),
+  ...FORBIDDEN_PATH_PREFIXES.filter(
+    (prefix) => prefix !== ".github/actions/",
+  ).map((prefix) => (prefix === ".github/workflows/" ? ".github/" : prefix)),
   "infra/",
   ".husky/",
   ".githooks/",

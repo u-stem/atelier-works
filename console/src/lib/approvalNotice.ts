@@ -1,5 +1,5 @@
 // 承認・却下の結果を、トーストに出す知らせにする。
-// 失敗の文は`describeApiError`が作った文をそのまま使い、結果が分からない失敗の案内もそこに含まれる。
+// 失敗の文は`describeWriteFailure`が作った文をそのまま使い、結果が分からない失敗の案内もそこに含まれる。
 
 import type { WriteOutcome } from "../api/executeWrite.ts";
 import type { ApprovalDecideResult } from "../api/guards/writeResults.ts";

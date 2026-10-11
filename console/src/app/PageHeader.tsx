@@ -30,7 +30,7 @@ export function PageHeader({
 }) {
   const now = useNow();
   return (
-    <header className="flex min-h-[4.5rem] flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b border-border px-8 py-4">
+    <header className="flex min-h-[4.5rem] flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b border-border px-4 py-4 md:px-8">
       <div className="min-w-0">
         <h1 className="truncate text-title font-semibold tracking-tight">
           {title}
@@ -43,7 +43,7 @@ export function PageHeader({
         {children}
       </div>
       {refresh === undefined ? null : (
-        <div className="flex items-center gap-2 text-small text-subtle">
+        <div className="flex items-center gap-2 text-small whitespace-nowrap text-subtle">
           {refresh.isError ? (
             <span className="font-medium text-failure">更新に失敗しました</span>
           ) : null}

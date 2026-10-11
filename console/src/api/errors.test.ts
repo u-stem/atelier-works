@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   ApiFailure,
   classifyRunResponse,
-  describeApiError,
+  describeWriteFailure,
   isBannerError,
 } from "./errors.ts";
 
@@ -167,105 +167,81 @@ describe("classifyRunResponse on a failed job (500)", () => {
   });
 });
 
-describe("describeApiError", () => {
+describe("describeWriteFailure", () => {
   test("asks the operator to log in again for unauthorized", () => {
-    expect(describeApiError({ kind: "unauthorized" })).toContain("ログイン");
-  });
-
-  test("says the result is unknown for a timeout", () => {
-    expect(describeApiError({ kind: "timeout_or_unknown" })).toContain(
-      "結果が分かりません",
+    expect(describeWriteFailure({ kind: "unauthorized" })).toContain(
+      "ログイン",
     );
   });
 
   test("includes the server message for a failed job", () => {
-    expect(describeApiError({ kind: "job_failed", message: "boom" })).toContain(
-      "boom",
-    );
+    expect(
+      describeWriteFailure({ kind: "job_failed", message: "boom" }),
+    ).toContain("boom");
   });
 
   test("does not expose the status code as the only text for http", () => {
     expect(
-      describeApiError({ kind: "http", status: 502, detail: "" }),
+      describeWriteFailure({ kind: "http", status: 502, detail: "" }),
     ).toContain("502");
   });
 
   test("adds the server detail for http", () => {
     expect(
-      describeApiError({ kind: "http", status: 400, detail: "Bad request: x" }),
+      describeWriteFailure({
+        kind: "http",
+        status: 400,
+        detail: "Bad request: x",
+      }),
     ).toContain("Bad request: x");
   });
 
-  test("keeps a failed job message on reads", () => {
+  test("says the result is unknown for a failed job", () => {
     expect(
-      describeApiError({ kind: "job_failed", message: "boom" }, "read"),
-    ).not.toContain("結果が分かりません");
-  });
-
-  test("says the result is unknown for a failed job on writes", () => {
-    expect(
-      describeApiError({ kind: "job_failed", message: "boom" }, "write"),
+      describeWriteFailure({ kind: "job_failed", message: "boom" }),
     ).toContain("結果が分かりません。一覧を読み直して確かめてください");
   });
 
-  test("keeps the job message on writes", () => {
+  test("keeps the job message", () => {
     expect(
-      describeApiError({ kind: "job_failed", message: "boom" }, "write"),
+      describeWriteFailure({ kind: "job_failed", message: "boom" }),
     ).toContain("boom");
   });
 
-  test("says the result is unknown for a timeout on writes", () => {
-    expect(describeApiError({ kind: "timeout_or_unknown" }, "write")).toContain(
+  test("says the result is unknown for a timeout", () => {
+    expect(describeWriteFailure({ kind: "timeout_or_unknown" })).toContain(
       "結果が分かりません。一覧を読み直して確かめてください",
     );
   });
 
-  test("says the result is unknown for a network failure on writes", () => {
-    expect(describeApiError({ kind: "network" }, "write")).toContain(
+  test("says the result is unknown for a network failure", () => {
+    expect(describeWriteFailure({ kind: "network" })).toContain(
       "結果が分かりません。一覧を読み直して確かめてください",
     );
   });
 
-  test("keeps a network failure on reads as it is", () => {
-    expect(describeApiError({ kind: "network" }, "read")).toBe(
-      "サーバーに接続できませんでした。",
-    );
-  });
-
-  test("says the result is unknown for an unreadable response on writes", () => {
-    expect(describeApiError({ kind: "invalid_response" }, "write")).toContain(
+  test("says the result is unknown for an unreadable response", () => {
+    expect(describeWriteFailure({ kind: "invalid_response" })).toContain(
       "結果が分かりません。一覧を読み直して確かめてください",
     );
   });
 
-  test("says the result is unknown for a 502 on writes", () => {
+  test("says the result is unknown for a 502", () => {
     expect(
-      describeApiError({ kind: "http", status: 502, detail: "" }, "write"),
+      describeWriteFailure({ kind: "http", status: 502, detail: "" }),
     ).toContain("結果が分かりません。一覧を読み直して確かめてください");
   });
 
-  test("keeps the status of a 502 on writes", () => {
+  test("keeps the status of a 502", () => {
     expect(
-      describeApiError({ kind: "http", status: 502, detail: "" }, "write"),
+      describeWriteFailure({ kind: "http", status: 502, detail: "" }),
     ).toContain("502");
   });
 
-  test("does not say the result is unknown for a 400 on writes", () => {
+  test("does not say the result is unknown for a 400", () => {
     expect(
-      describeApiError({ kind: "http", status: 400, detail: "bad" }, "write"),
+      describeWriteFailure({ kind: "http", status: 400, detail: "bad" }),
     ).not.toContain("結果が分かりません");
-  });
-
-  test("does not say the result is unknown for a 502 on reads", () => {
-    expect(
-      describeApiError({ kind: "http", status: 502, detail: "" }, "read"),
-    ).not.toContain("結果が分かりません");
-  });
-
-  test("tells a read that a timeout left the list stale", () => {
-    expect(describeApiError({ kind: "timeout_or_unknown" }, "read")).toContain(
-      "一覧を読み直して",
-    );
   });
 });
 
@@ -293,7 +269,7 @@ describe("classifyRunResponse on a failed job result shape", () => {
 
   test("shows only the message on screen", () => {
     const result = classifyRunResponse(500, BODY);
-    expect(!result.ok && describeApiError(result.error, "read")).not.toContain(
+    expect(!result.ok && describeWriteFailure(result.error)).not.toContain(
       "internal",
     );
   });
@@ -369,7 +345,7 @@ describe("classifyRunResponse on a rejected tag (400)", () => {
     const result = classifyRunResponse(400, "y".repeat(2000));
     const detail =
       !result.ok && result.error.kind === "http" ? result.error.detail : "";
-    expect(detail.length).toBe(200);
+    expect(detail.length).toBe(500);
   });
 });
 

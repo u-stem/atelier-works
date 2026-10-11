@@ -31,12 +31,28 @@ describe("IMPLEMENT_PROTECTED_PATH_PREFIXES", () => {
     ]);
   });
 
+  test("keeps .github/actions/ in the pr_fix list", () => {
+    expect(FORBIDDEN_PATH_PREFIXES).toContain(".github/actions/");
+  });
+
+  test("lists .github/ once for the implement flow", () => {
+    expect(
+      IMPLEMENT_PROTECTED_PATH_PREFIXES.filter((prefix) =>
+        prefix.startsWith(".github/"),
+      ),
+    ).toEqual([".github/"]);
+  });
+
   test("leaves the pr_fix list itself without infra/", () => {
     expect(FORBIDDEN_PATH_PREFIXES).not.toContain("infra/");
   });
 });
 
 describe("matchesForbiddenPath", () => {
+  test("matches a composite action under .github/actions/ with the default (pr_fix) prefixes", () => {
+    expect(matchesForbiddenPath(".github/actions/build/action.yml")).toBe(true);
+  });
+
   test("matches the console_fetcher files with the default (pr_fix) prefixes", () => {
     expect(matchesForbiddenPath("infra/console_fetcher/fetcher.ts")).toBe(true);
   });
@@ -210,6 +226,12 @@ describe("matchesForbiddenPath", () => {
 describe("matchesImplementProtectedPath", () => {
   test("matches anything under .github/, not only workflows", () => {
     expect(matchesImplementProtectedPath(".github/dependabot.yml")).toBe(true);
+  });
+
+  test("matches a composite action under .github/actions/", () => {
+    expect(
+      matchesImplementProtectedPath(".github/actions/build/action.yml"),
+    ).toBe(true);
   });
 
   test("matches git hook directories (.husky/, .githooks/)", () => {

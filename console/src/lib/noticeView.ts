@@ -17,6 +17,8 @@ export type NoticeTarget = {
   readonly label: string;
   /** リンクにしてよいGitHubのURL。安全な形でなければ`null`。 */
   readonly url: string | null;
+  /** 本文で最初に現れた位置(UTF-16の添字)。本文からこの対象を切り出すときに使う。 */
+  readonly index: number;
 };
 
 /** 詳細に並べる対象の最大数。本文が多くの対象を挙げても、詳細が長くならないようにする。 */
@@ -61,6 +63,7 @@ export function noticeTargets(
       url: safeGitHubUrl(
         `https://github.com/${owner}/${repo}/issues/${number}`,
       ),
+      index: match.index,
     });
     if (targets.length >= MAX_NOTICE_TARGETS) {
       break;
@@ -69,10 +72,55 @@ export function noticeTargets(
   return targets;
 }
 
+/** 本文の版(40桁の16進数)。前後が16進数の文字のときは、別の語の一部なので拾わない。 */
+const SHA_PATTERN = /(?<![0-9a-f])[0-9a-f]{40}(?![0-9a-f])/g;
+
+/** 版の表示の桁数。 */
+const SHORT_SHA_LENGTH = 7;
+
+/** 版の先頭7桁。 */
+export function shortSha(sha: string): string {
+  return sha.slice(0, SHORT_SHA_LENGTH);
+}
+
+/** 本文の一部。`sha`があるときは、`text`が先頭7桁で、`sha`が複製できる全体である。 */
+export type NoticeMessagePart = {
+  readonly text: string;
+  readonly sha?: string;
+};
+
+/**
+ * 本文を、版とそれ以外に分ける。版は先頭7桁の表示にし、全体を`sha`に残す。
+ * `truncated`が真のとき、本文の末尾に接する40桁は版にしない。
+ * 長い16進数の途中で切れていると、別の値の一部を版と見間違えるためである。
+ */
+export function splitNoticeMessage(
+  message: string,
+  truncated = false,
+): NoticeMessagePart[] {
+  const parts: NoticeMessagePart[] = [];
+  let cursor = 0;
+  for (const match of message.matchAll(SHA_PATTERN)) {
+    if (truncated && match.index + match[0].length === message.length) {
+      continue;
+    }
+    if (match.index > cursor) {
+      parts.push({ text: message.slice(cursor, match.index) });
+    }
+    parts.push({ text: shortSha(match[0]), sha: match[0] });
+    cursor = match.index + match[0].length;
+  }
+  if (cursor < message.length || parts.length === 0) {
+    parts.push({ text: message.slice(cursor) });
+  }
+  return parts;
+}
+
 export type NoticeDescription = {
   readonly title: string;
   readonly severity: "action" | "info";
-  readonly severityLabel: string;
+  /** 詳細の先頭に出すタグ。種別と重要度を1つにする。 */
+  readonly badgeLabel: string;
   readonly resolved: boolean;
   /** 解決のボタンを出してよいか。未解決で、Consoleから解決できる種類のときだけ`true`。 */
   readonly canResolve: boolean;
@@ -84,6 +132,10 @@ export type NoticeDescription = {
   readonly messageReplaced: boolean;
   /** 本文の後ろが切れている可能性があるか。summary由来で、長さが上限ちょうどのときだけ真。 */
   readonly messageTruncated: boolean;
+  /** 本文を、版の表示と全体を分けた部分に切ったもの。 */
+  readonly messageParts: readonly NoticeMessagePart[];
+  /** 本文が挙げる版(40桁)を、現れた順に重複なしで並べたもの。 */
+  readonly shas: readonly string[];
   readonly targets: readonly NoticeTarget[];
   readonly guide: NoticeGuide;
 };
@@ -102,10 +154,16 @@ export function describeNotice(
   const message = displayableIssueText(notice.message);
   const truncated =
     source === "summary" && [...notice.message].length >= SUMMARY_MESSAGE_LIMIT;
+  const parts = splitNoticeMessage(message.text, truncated);
+  const shas = [
+    ...new Set(
+      parts.flatMap((part) => (part.sha === undefined ? [] : [part.sha])),
+    ),
+  ];
   return {
     title: noticeKindLabel(notice.kind),
     severity: notice.severity === "info" ? "info" : "action",
-    severityLabel: noticeSeverityLabel(notice.severity),
+    badgeLabel: `${noticeSeverityLabel(notice.severity)}の通知`,
     resolved: notice.resolved,
     canResolve: !notice.resolved && notice.resolvable,
     unresolvableReason:
@@ -113,6 +171,8 @@ export function describeNotice(
     message: message.text,
     messageReplaced: message.replaced,
     messageTruncated: truncated,
+    messageParts: parts,
+    shas,
     targets: noticeTargets(message.text, truncated),
     guide: noticeGuide(notice.kind),
   };

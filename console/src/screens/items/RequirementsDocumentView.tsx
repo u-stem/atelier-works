@@ -1,5 +1,5 @@
 import { ExternalLink, Info } from "lucide-react";
-import { type ReactNode, useMemo } from "react";
+import { type ReactNode, useMemo, useRef } from "react";
 import type { RequirementsDoc } from "../../api/guards/requirements.ts";
 import { Markdown } from "../../components/markdown/Markdown.tsx";
 import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
@@ -14,12 +14,13 @@ import {
 import { safeGitHubUrl } from "../../lib/safeUrl.ts";
 import { AttemptSwitcher } from "./AttemptSwitcher.tsx";
 import { RequirementsToc } from "./RequirementsToc.tsx";
+import { useActiveHeading } from "./useActiveHeading.ts";
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="grid grid-cols-[7rem_1fr] items-baseline gap-x-4 px-5 py-3">
+    <div className="flex items-center gap-1.5">
       <dt className="text-small text-subtle">{label}</dt>
-      <dd className="min-w-0 text-body text-foreground">{children}</dd>
+      <dd className="min-w-0 text-small text-foreground">{children}</dd>
     </div>
   );
 }
@@ -48,6 +49,7 @@ function IssueLink({ doc }: { doc: RequirementsDoc }) {
 
 /**
  * 要件定義書1件の本文。メタ情報、試行の切り替え、要約、本文、未確定事項を左に、目次を右に置く。
+ * メタ情報は、本文を押し下げないよう、折り返す1〜2行にまとめる。
  * 本文と要約と未確定事項はIssueの内容に由来するので、`prepared`(見えない文字を置き換え済み)だけを描く。
  * `embedded`のときは、承認の画面の中に置くため、メタ情報、試行の切り替え、目次を省き、幅も親に合わせる。
  * 承認の画面は、承認する試行を固定して出すので、試行を切り替えさせない。
@@ -69,8 +71,16 @@ export function RequirementsDocumentView({
     [doc.owner, doc.repo],
   );
   const sourceNotice = docSourceNotice(doc.doc_dir_source);
+  // 目次は2か所(畳んだ目次と右の目次)に出すので、強調する節は1か所で決める。
+  const anchor = useRef<HTMLDivElement>(null);
+  const tocIds = useMemo(
+    () => (embedded ? [] : prepared.headings.map((heading) => heading.id)),
+    [embedded, prepared.headings],
+  );
+  const activeId = useActiveHeading(tocIds, anchor);
   return (
     <div
+      ref={anchor}
       className={
         embedded
           ? "flex w-full items-start"
@@ -85,7 +95,7 @@ export function RequirementsDocumentView({
         }
       >
         {embedded ? null : (
-          <dl className="divide-y divide-border rounded-xl border border-border bg-card">
+          <dl className="flex flex-wrap items-center gap-x-6 gap-y-2">
             <Row label="状態">
               <Badge
                 variant={toneBadgeVariant(
@@ -131,7 +141,10 @@ export function RequirementsDocumentView({
               目次
             </summary>
             <div className="mt-3">
-              <RequirementsToc headings={prepared.headings} />
+              <RequirementsToc
+                headings={prepared.headings}
+                activeId={activeId}
+              />
             </div>
           </details>
         )}
@@ -171,7 +184,7 @@ export function RequirementsDocumentView({
       </article>
       {embedded || prepared.headings.length === 0 ? null : (
         <aside className="sticky top-6 hidden w-56 shrink-0 min-[1100px]:block">
-          <RequirementsToc headings={prepared.headings} />
+          <RequirementsToc headings={prepared.headings} activeId={activeId} />
         </aside>
       )}
     </div>

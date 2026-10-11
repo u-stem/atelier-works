@@ -1,22 +1,25 @@
-import { LogIn } from "lucide-react";
-import { useState } from "react";
-import { useSearchParams } from "react-router";
-import {
-  ApiFailure,
-  describeApiError,
-  isBannerError,
-} from "../../api/errors.ts";
+import { ArrowLeft, LogIn } from "lucide-react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useLocation, useNavigate, useSearchParams } from "react-router";
+import { isBannerError } from "../../api/errors.ts";
 import { useSummary } from "../../api/queries.ts";
 import { PageHeader } from "../../app/PageHeader.tsx";
 import { refreshStatusOf } from "../../app/refreshStatus.ts";
+import { useMediaQuery } from "../../app/useMediaQuery.ts";
 import { useNow } from "../../app/useNow.ts";
-import {
-  Alert,
-  AlertDescription,
-  AlertTitle,
-} from "../../components/ui/alert.tsx";
+import { QueryFailureAlert } from "../../components/QueryFailureAlert.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
+import { cn } from "../../lib/cn.ts";
+import {
+  inboxDetailClass,
+  inboxListClass,
+  inboxPane,
+  listBackAction,
+  rowDomKey,
+  selectionHistoryState,
+  selectionPushesHistory,
+} from "../../lib/inboxPane.ts";
 import {
   type InboxSelection,
   parseSelection,
@@ -36,17 +39,21 @@ import {
   unlistedCounts,
   visibleChips,
 } from "../../lib/inboxView.ts";
+import { apiErrorOf } from "../../lib/queryFailureView.ts";
 import { InboxDetail } from "./InboxDetail.tsx";
 import { InboxEmpty } from "./InboxEmpty.tsx";
 import { InboxList } from "./InboxList.tsx";
 import { KindChips } from "./KindChips.tsx";
 import { UnlistedCards } from "./UnlistedCards.tsx";
 
+/** 一覧と詳細を並べる幅(Tailwindのlg)。これ未満では1画面ずつ出す。 */
+const WIDE_QUERY = "(min-width: 64rem)";
+
 function LoadingState() {
   return (
     <div className="flex min-h-0 flex-1" role="status">
       <span className="sr-only">読み込み中</span>
-      <div className="w-80 shrink-0 border-r border-border min-[1280px]:w-[28rem]">
+      <div className="w-full shrink-0 border-border lg:w-80 lg:border-r xl:w-[28rem]">
         {["a", "b", "c", "d"].map((key) => (
           <div
             key={key}
@@ -60,7 +67,7 @@ function LoadingState() {
           </div>
         ))}
       </div>
-      <div className="flex-1 space-y-4 p-8">
+      <div className="hidden flex-1 space-y-4 p-8 lg:block">
         <Skeleton className="h-5 w-20" />
         <Skeleton className="h-8 w-2/3" />
         <Skeleton className="h-40 w-full max-w-3xl rounded-xl" />
@@ -80,7 +87,7 @@ function FailureState({
   error: unknown;
   onRetry: () => void;
 }) {
-  const apiError = error instanceof ApiFailure ? error.apiError : null;
+  const apiError = apiErrorOf(error);
   if (apiError !== null && isBannerError(apiError)) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
@@ -96,27 +103,23 @@ function FailureState({
   }
   return (
     <div className="p-8">
-      <Alert variant="destructive">
-        <AlertTitle>要対応の一覧を取得できませんでした</AlertTitle>
-        <AlertDescription>
-          <p>
-            {apiError === null
-              ? "原因は不明です。"
-              : describeApiError(apiError)}
-          </p>
-          <Button size="sm" variant="outline" onClick={onRetry}>
-            もう一度取得する
-          </Button>
-        </AlertDescription>
-      </Alert>
+      <QueryFailureAlert
+        title="要対応の一覧を取得できませんでした"
+        error={error}
+        onRetry={onRetry}
+      />
     </div>
   );
 }
 
 /**
  * 要対応の画面。項目を新しい順に並べ、種類のチップで絞り込む。
- * 選んだ行は`?approval=<id>`などに持つ(同時に1つだけ)。選択の変更は履歴を積まない。
+ * 選んだ行は`?approval=<id>`などに持つ(同時に1つだけ)。選択の変更は履歴を積まない(幅が狭いときの項目の選択を除く)。
  * 一覧が空のときは、画面を割らずに状況の面を出す。
+ * 幅が狭いとき(lg未満)は一覧と詳細を1画面ずつ出す。
+ * 項目を選ぶ操作だけは履歴に印を付けて積む。ブラウザの戻る操作と、詳細の「一覧へ戻る」は、印のある履歴を戻って取り除く。
+ * 選択つきのURLを直接開いたときは、「一覧へ戻る」が選択を外して置き換える。
+ * 面が切り替わると、新しく出た面へフォーカスを移す。一覧へ戻るときは、スクロール位置と直前に選んでいた行を戻す。
  * 一覧と詳細は別々にスクロールする。一覧の行は選ぶだけで、承認・却下、再実行、通知の解決などの操作は詳細のペインに置く。
  */
 export function InboxScreen() {
@@ -126,10 +129,59 @@ export function InboxScreen() {
   const [chip, setChip] = useState<InboxChip>("all");
   const selection = parseSelection(searchParams);
   const refresh = refreshStatusOf(summary);
-  const items =
-    summary.data === undefined
-      ? []
-      : sortInboxItems(buildInboxItems(summary.data));
+  const location = useLocation();
+  const navigate = useNavigate();
+  const wide = useMediaQuery(WIDE_QUERY);
+  const pane = inboxPane(selection);
+  const listRef = useRef<HTMLElement>(null);
+  const detailRef = useRef<HTMLElement>(null);
+  const listScrollTop = useRef(0);
+  const lastSelection = useRef<InboxSelection | null>(null);
+  const previousPane = useRef(pane);
+  useLayoutEffect(() => {
+    // display:noneの間にスクロール位置が失われるので、一覧へ戻るときは最初の描画の前に復元する。
+    if (previousPane.current !== pane && pane === "list" && !wide) {
+      const list = listRef.current;
+      if (list !== null) {
+        list.scrollTop = listScrollTop.current;
+      }
+    }
+  }, [pane, wide]);
+  useEffect(() => {
+    if (selection !== null) {
+      lastSelection.current = selection;
+    }
+  });
+  useEffect(() => {
+    if (previousPane.current === pane) {
+      return;
+    }
+    previousPane.current = pane;
+    if (wide) {
+      return;
+    }
+    // 面が切り替わったら、新しく出た面へフォーカスを移す。隠れた面に残すと、読み上げと操作が迷子になる。
+    // 一覧へ戻るときは、直前に選んでいた行へ戻す。
+    if (pane === "list") {
+      const list = listRef.current;
+      const previous = lastSelection.current;
+      const row =
+        previous === null
+          ? null
+          : list?.querySelector<HTMLElement>(
+              `[data-row="${rowDomKey(previous)}"]`,
+            );
+      (row ?? list)?.focus({ preventScroll: true });
+    } else {
+      detailRef.current?.focus();
+    }
+  }, [pane, wide]);
+  // 一覧の配列が同じなら、通知の副題を作り直さない。時刻の更新や選択の変更のたびに、全通知を解析し直さないためである。
+  const data = summary.data;
+  const items = useMemo(
+    () => (data === undefined ? [] : sortInboxItems(buildInboxItems(data))),
+    [data],
+  );
   const activeChip = effectiveChip(items, chip);
   if (activeChip !== chip) {
     // 選んだ種類の項目がなくなったら、状態も「すべて」に揃える。
@@ -138,7 +190,20 @@ export function InboxScreen() {
   }
 
   const select = (next: InboxSelection | null): void => {
-    setSearchParams(withSelection(searchParams, next), { replace: true });
+    const push = selectionPushesHistory(!wide, next);
+    setSearchParams(withSelection(searchParams, next), {
+      replace: !push,
+      state: selectionHistoryState(push, location.state),
+    });
+  };
+
+  // 一覧から選んで積んだ履歴は、戻って取り除く。置き換えると、画面の変わらない履歴が残る。
+  const clearSelection = (): void => {
+    if (listBackAction(location.state) === "pop") {
+      navigate(-1);
+    } else {
+      select(null);
+    }
   };
 
   if (summary.data === undefined) {
@@ -187,7 +252,7 @@ export function InboxScreen() {
     <>
       {header}
       {chips.length === 0 && unlisted.length === 0 ? null : (
-        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-border px-8 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-border px-4 py-3 md:px-8">
           {chips.length === 0 ? (
             <span className="text-small font-medium text-muted-foreground">
               ほかに対応が必要なもの
@@ -200,7 +265,7 @@ export function InboxScreen() {
               onChange={(next) => {
                 setChip(next);
                 if (selectionAfterFilter(selection, next) === null) {
-                  select(null);
+                  clearSelection();
                 }
               }}
             />
@@ -212,25 +277,48 @@ export function InboxScreen() {
       )}
       <div className="flex min-h-0 flex-1">
         <section
+          ref={listRef}
           aria-label="要対応の一覧"
-          className="w-80 shrink-0 overflow-y-auto border-r border-border bg-card min-[1280px]:w-[28rem]"
+          tabIndex={-1}
+          className={cn(inboxListClass(pane), "outline-none")}
+          onScroll={(event) => {
+            if (pane === "list") {
+              listScrollTop.current = event.currentTarget.scrollTop;
+            }
+          }}
         >
           <InboxList
             items={visible}
             selected={selection}
             now={now}
+            allItems={items}
             onSelect={select}
           />
         </section>
         <section
+          ref={detailRef}
           aria-label="選んだ項目の概要"
-          className="min-w-0 flex-1 overflow-y-auto"
+          tabIndex={-1}
+          className={cn(inboxDetailClass(pane), "outline-none")}
         >
-          <InboxDetail
-            item={findInboxItem(items, selection)}
-            selection={selection}
-            now={now}
-          />
+          <div className="shrink-0 border-b border-border px-4 py-2 lg:hidden">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="min-h-11 min-w-11"
+              onClick={clearSelection}
+            >
+              <ArrowLeft aria-hidden="true" />
+              一覧へ戻る
+            </Button>
+          </div>
+          <div className="min-h-0 flex-1">
+            <InboxDetail
+              item={findInboxItem(items, selection)}
+              selection={selection}
+              now={now}
+            />
+          </div>
         </section>
       </div>
     </>

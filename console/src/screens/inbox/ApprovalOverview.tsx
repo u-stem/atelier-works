@@ -44,7 +44,7 @@ export function ApprovalOverview({
   const links = approvalLinks(approval);
   const title = displayableIssueText(description.title).text;
   return (
-    <article className="flex max-w-[47.5rem] flex-col gap-6 p-8">
+    <article className="flex max-w-[47.5rem] flex-col gap-6 p-4 md:p-8">
       <header className="flex flex-col gap-3">
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant="approval">{description.kindLabel}</Badge>

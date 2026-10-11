@@ -1,0 +1,104 @@
+name: Console dist
+
+# Consoleの配布物(成果物console-dist)を上げる、唯一のワークフロー。
+# console_fetcherは、このファイルの`main`へのpushで成功した実行の成果物だけを取り込む。
+# ci.ymlのジョブは同名の成果物を上げても、取り込み先の実行に入らない。
+# ここに、ほかのジョブとトリガーを足さない。権限の違うジョブが成果物を上げ直せるようになるため。
+# 組み立ての手順は、ここに直接書き、別のファイルに分けない。
+# composite action(.github/actions/)はFactoryのPATのWorkflowsの権限の拒否が及ばず、
+# 分けるとそのファイルの変更が配布物に届くため。
+# ci.ymlの`console`ジョブ(PRの検査)は同じ手順を持つ。一致はテストが確かめる。
+on:
+  push:
+    # `main`へのpushだけで動かす。タグのpushでは動かさない。
+    # `main`という名前のタグで動いた実行が、取り込みの対象に見えるのを防ぐため。
+    branches: [main]
+
+# `main`の実行は止めない。実行ごとに別のグループにする。
+# 止めた実行は成功せず、そのcommitの配布物が欠けるため。
+concurrency:
+  group: console-dist-${{ github.run_id }}
+  cancel-in-progress: false
+
+# 既定の権限は読み取りだけにする。成果物の書き込みはupload-artifactがランナーの資格情報で行い、
+# GITHUB_TOKENの書き込み権限は要らない。
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # `mise run` / `mise exec`を使わずbunを直接呼ぶ。
+      # 入れていない[tools](windmill-cliなど)を、後からmiseが自動で入れないようにする。
+      MISE_TASK_RUN_AUTO_INSTALL: "false"
+      MISE_EXEC_AUTO_INSTALL: "false"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup mise
+        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          # 成果物の組み立てに要るbunと、viteとtscを動かすnodeだけを入れる。
+          # 他の[tools]のinstall scriptや固定していない依存を、配信物を作るジョブで動かさないため。
+          install_args: bun node
+          # 他のジョブが書いたキャッシュを読まず、このジョブからも書かない。
+          cache: false
+
+      - name: Install root dependencies
+        # ルートの依存のinstall scriptも実行しない。
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      - name: Check the console lockfile policy
+        # 依存を入れる前に、取得元がregistryとintegrityに限られることを確かめる。
+        # `bun run <名前>`は`package.json`のscriptsを先に解決するので、ファイルとして実行する。
+        run: bun ./scripts/check-console-lockfile.ts console/bun.lock
+
+      - name: Install console dependencies
+        run: bun install --cwd console --frozen-lockfile --ignore-scripts
+
+      - name: Build
+        run: bun run --cwd console build
+
+      - name: Read the pinned draw.io viewer digest
+        id: drawio
+        # キャッシュのキーに使う前に、64桁の小文字の16進数であることを確かめる。形が違えば失敗させる。
+        run: |
+          set -o pipefail
+          sha256="$(jq -r .sha256 console/drawio-viewer.json | grep -Ex '[0-9a-f]{64}')"
+          echo "sha256=${sha256}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the draw.io viewer cache
+        # 取得物のキャッシュは、固定のsha256をキーにする。
+        # キャッシュの中身は信用せず、使う前に固定のsha256と照合するので、汚染されても害は無い。
+        # dist/には置かない。dist/drawio/の受け口のscriptまで、キャッシュから戻してしまうため。
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: console/.cache/drawio-viewer
+          key: drawio-viewer-${{ steps.drawio.outputs.sha256 }}
+
+      - name: Fetch the draw.io viewer
+        # キャッシュが固定のsha256と一致すればそれを使い、無ければ版を固定したURLから取得する。
+        # どちらも、固定のsha256と照合してからdist/drawio/に置く。照合に失敗したら、ここで止める。
+        # ビューアは、リポジトリに入れない。
+        run: bun run --cwd console fetch-drawio-viewer dist/drawio .cache/drawio-viewer
+
+      - name: Write the release manifest
+        # 全ファイルのsha256と元のcommitを記録する。console_fetcherはこれと中身を照合する。
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: bun run --cwd console write-manifest dist "$SOURCE_SHA"
+
+      - name: Upload the console build
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: console-dist
+          path: console/dist/
+          retention-days: 30
+          if-no-files-found: error
+          # 同じ実行の「Re-run all jobs」で上げ直しても、名前の衝突で失敗しないようにする。
+          overwrite: true
