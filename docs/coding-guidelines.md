@@ -136,6 +136,26 @@ PRを出す前に必ず通す。
 どちらも`--ignore-scripts`を必ず付ける。
 bunは依存のinstall scriptを既定では実行しないが、既定の信頼する一覧(trustedDependencies)にある有名なパッケージだけは実行するためである。
 
+### 依存の脆弱性
+
+ルートで`bun audit`を実行し、指摘を確かめる。
+ルートの依存はすべて開発用で、文書の検査(markdownlint-cli2、textlint)と型検査、整形に使う。
+Windmillのworkerやコンテナには入らず、本番のコードからも読まれない。
+指摘が出たときは、更新で解消できるかを先に確かめる。
+
+- 修正版が出ているのに、親のパッケージが古い版を求めるときは、ルートの`package.json`の`overrides`で修正版に固定する。今は`katex`と`smol-toml`を固定している。親が修正版を取り込んだら、`overrides`を外す。固定したままだと、親が新しい版へ移っても古い版に留まるためである。
+- 修正版が無いときは、更新できないので受け入れる。
+
+次の指摘は、修正版が無いので受け入れている。
+どちらも、検査対象はこのリポジトリの文書で、攻撃者が選べる入力ではない。
+
+| パッケージ | 重大度 | 経路 | 受け入れる理由 |
+| --- | --- | --- | --- |
+| `braces` | high | markdownlint-cli2のglob展開 | 入力はリポジトリ内のglobで、深くネストしたパターンを渡せる者がいない |
+| `sprintf-js` | moderate | argparseを使うmarkdown-it、js-yaml(textlintの設定読み込み、prh) | 書式文字列は固定で、精度指定を外から渡す経路が無い |
+
+修正版が出たら、`bun update`か`overrides`で解消し、この表から外す。
+
 ## PRとコミット
 
 PRの本文は`.github/PULL_REQUEST_TEMPLATE.md`の章立てに従う。
