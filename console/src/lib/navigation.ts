@@ -15,6 +15,15 @@ export function formatBadgeCount(count: number): string | null {
   return count > MAX_BADGE ? `${MAX_BADGE}+` : String(count);
 }
 
+/**
+ * 狭い画面でメニューを開くボタンの名前。要対応の件数があれば添える。
+ * ボタンの点は見た目だけなので、件数は名前で伝える。
+ */
+export function menuButtonLabel(actionableTotal: number): string {
+  const badge = formatBadgeCount(actionableTotal);
+  return badge === null ? "メニューを開く" : `メニューを開く(要対応${badge}件)`;
+}
+
 /** 保存領域の値をたたんだ状態にする。「1」だけをたたんだ状態とし、読めない値は広げた状態にする。 */
 export function parseSidebarCollapsed(value: unknown): boolean {
   return value === "1";

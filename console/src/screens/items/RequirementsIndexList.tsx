@@ -3,6 +3,7 @@ import { Link } from "react-router";
 import type { RequirementsIndexRow } from "../../api/guards/requirements.ts";
 import { TimeText } from "../../components/TimeText.tsx";
 import { Badge } from "../../components/ui/badge.tsx";
+import { Input } from "../../components/ui/input.tsx";
 import {
   emptyFilterMessage,
   filterRequirementsRows,
@@ -62,7 +63,7 @@ export function RequirementsIndexList({
         <label htmlFor={inputId} className="text-small text-muted-foreground">
           作業項目の番号で絞り込む
         </label>
-        <input
+        <Input
           id={inputId}
           type="text"
           inputMode="numeric"
@@ -70,7 +71,7 @@ export function RequirementsIndexList({
           placeholder="空欄で全件"
           value={filter}
           onChange={(event) => setFilter(event.target.value)}
-          className="h-9 w-40 rounded-md border border-input bg-background px-3 text-body text-foreground outline-none placeholder:text-subtle focus-visible:ring-2 focus-visible:ring-ring"
+          className="w-40"
         />
       </div>
       {rows.length === 0 ? (

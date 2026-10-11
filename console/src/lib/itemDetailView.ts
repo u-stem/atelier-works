@@ -190,11 +190,23 @@ export function formatCostUsd(cost: number | null): string {
   return `$${cost.toFixed(2)}`;
 }
 
-/** 差分の規模の表示。記録が無ければ`null`。 */
+/** 差分の規模の表示。符号ではなく言葉で書く。記録が無ければ`null`。 */
 export function formatDiffStat(stat: WorkItemDiffStat | null): string | null {
   return stat === null
     ? null
-    : `${stat.files}ファイル +${stat.added} -${stat.deleted}`;
+    : `${stat.files}ファイル・追加${stat.added}行・削除${stat.deleted}行`;
+}
+
+/**
+ * 状態の注記。注記が「PR」「Issue」の行に出るリンクのURLだけなら`null`にする。
+ * 同じリンクが行に出ており、生の文字で重ねる必要がないためである。
+ * 行に出ていないURLは、検査を通らなかった値も含めて残す。
+ */
+function statusNoteOf(item: WorkItemOverview): string | null {
+  const note = plainOrNull(item.status_note);
+  if (note === null) return null;
+  const shown = [issueTarget(item)?.url, pullTarget(item)?.url];
+  return shown.includes(note.trim()) ? null : note;
 }
 
 export function describeOverview(item: WorkItemOverview): OverviewView {
@@ -203,7 +215,7 @@ export function describeOverview(item: WorkItemOverview): OverviewView {
     kindLabel: workItemKindLabel(item.kind),
     statusLabel: pipelineStatusLabel(item.status),
     statusVariant: pipelineStatusVariant(item.status),
-    statusNote: plainOrNull(item.status_note),
+    statusNote: statusNoteOf(item),
     repoLabel: `${item.owner}/${item.repo}`,
     issue: issueTarget(item),
     pr: pullTarget(item),
@@ -231,17 +243,22 @@ export type AttemptView = {
   /** 承認依頼があるときの状態の名前。無ければ`null`。 */
   readonly approvalLabel: string | null;
   readonly approvalVariant: PipelineStatusVariant;
-  /** この試行の要件定義書の経路。 */
+  /** 要件定義書の画面への経路。最新の試行は試行の番号を付けず、常に最新を指す。 */
   readonly path: string;
+  /** 経路のリンクの文言。どの試行の書類を開くかを添える。 */
+  readonly linkLabel: string;
 };
 
+/** `isLatest`は、作業項目の試行のうち最新のものかどうか。 */
 export function describeAttempt(
   workItemId: number,
   attempt: WorkItemAttempt,
+  isLatest: boolean,
 ): AttemptView {
+  const label = attemptRef(attempt.attempt);
   return {
     attempt: attempt.attempt,
-    attemptLabel: attemptRef(attempt.attempt),
+    attemptLabel: label,
     summary: plain(attempt.summary),
     createdAt: attempt.created_at,
     approvalLabel:
@@ -249,7 +266,10 @@ export function describeAttempt(
         ? null
         : approvalStatusLabel(attempt.approval_status, "requirements"),
     approvalVariant: approvalVariant(attempt.approval_status),
-    path: requirementsPath(workItemId, attempt.attempt),
+    path: requirementsPath(workItemId, isLatest ? null : attempt.attempt),
+    linkLabel: isLatest
+      ? `要件定義書を開く(${label}・最新)`
+      : `要件定義書を開く(${label})`,
   };
 }
 
@@ -266,7 +286,7 @@ function approvalVariant(status: string | null): PipelineStatusVariant {
     case "rejected":
       return "failure";
     default:
-      return "outline";
+      return "muted";
   }
 }
 
@@ -403,7 +423,7 @@ export function describeRound(round: WorkItemRound): RoundView {
     modeLabel: ROUND_MODE_LABELS.get(round.mode) ?? unknownLabel(round.mode),
     outcomeLabel:
       ROUND_OUTCOME_LABELS.get(round.outcome) ?? unknownLabel(round.outcome),
-    outcomeVariant: ROUND_OUTCOME_VARIANTS.get(round.outcome) ?? "outline",
+    outcomeVariant: ROUND_OUTCOME_VARIANTS.get(round.outcome) ?? "muted",
     summary: plain(round.summary),
     gapReport: plainOrNull(round.gap_report),
     skippedReason: plainOrNull(round.checks_skipped_reason),
@@ -442,7 +462,7 @@ export function describeReview(review: WorkItemReview): ReviewView {
     shaLabel: plain(review.head_sha).slice(0, SHORT_SHA_LENGTH),
     verdictLabel:
       VERDICT_LABELS.get(review.verdict) ?? unknownLabel(review.verdict),
-    verdictVariant: VERDICT_VARIANTS.get(review.verdict) ?? "outline",
+    verdictVariant: VERDICT_VARIANTS.get(review.verdict) ?? "muted",
     findingLabel: `指摘 ${review.finding_count}件`,
     createdAt: review.created_at,
   };
@@ -477,7 +497,7 @@ export function describeFixRound(fixRound: WorkItemFixRound): FixRoundView {
     outcomeLabel:
       FIX_OUTCOME_LABELS.get(fixRound.outcome) ??
       unknownLabel(fixRound.outcome),
-    outcomeVariant: FIX_OUTCOME_VARIANTS.get(fixRound.outcome) ?? "outline",
+    outcomeVariant: FIX_OUTCOME_VARIANTS.get(fixRound.outcome) ?? "muted",
     countsLabel: `対象のレビュー ${fixRound.trigger_review_count}件・返信 ${fixRound.reply_count}件・コミット ${fixRound.commit_count}件`,
     createdAt: fixRound.created_at,
   };

@@ -39,6 +39,7 @@ import {
   DRAWIO_IMAGE_SRC,
   diagramSlotState,
 } from "../../lib/requirementsView.ts";
+import { splitIdTokens } from "../../lib/tableCell.ts";
 import { DrawioFrame } from "../drawio/DrawioFrame.tsx";
 
 /**
@@ -80,6 +81,30 @@ function childrenText(children: ReactNode): string {
       return "";
     })
     .join("");
+}
+
+/**
+ * セルの文字に含まれるIDを、折り返さない`<span>`で包む。IDはハイフンで折り返されると読めなくなる。
+ * 文字以外の子(強調やコードなど)は、そのまま返す。
+ */
+function keepIdsTogether(child: ReactNode): ReactNode {
+  if (typeof child !== "string") {
+    return child;
+  }
+  const pieces = splitIdTokens(child);
+  if (!pieces.some((piece) => piece.id)) {
+    return child;
+  }
+  return pieces.map((piece, index) =>
+    piece.id ? (
+      // biome-ignore lint/suspicious/noArrayIndexKey: 断片の並びは文字から決まり、入れ替わらないため。
+      <span key={index} className="whitespace-nowrap">
+        {piece.text}
+      </span>
+    ) : (
+      piece.text
+    ),
+  );
 }
 
 type MarkdownContextValue = {
@@ -312,7 +337,9 @@ const components: Components = {
     </th>
   ),
   td: ({ children }) => (
-    <td className="border border-border px-3 py-1.5 align-top">{children}</td>
+    <td className="border border-border px-3 py-1.5 align-top">
+      {Children.map(children, keepIdsTogether)}
+    </td>
   ),
   blockquote: ({ children }) => {
     // 子の先頭には、段落の前の改行の文字列が入るので、最初の要素を探す。
