@@ -59,7 +59,7 @@ export function describeRetryResult(result: RetryWorkItemResult): WriteNotice {
 
 const AUDIT_SKIP_MESSAGES: Readonly<Record<AuditSkipReason, string>> = {
   audit_in_progress: "別の監査が進行中のため、起動しませんでした。",
-  empty_period: "対象期間が空のため、起動しませんでした。",
+  empty_period: "前回の監査以降の対象期間がまだないため、起動しませんでした。",
   no_new_records: "監査の対象になる新しい記録が無いため、起動しませんでした。",
   daily_budget_exceeded:
     "今日の予算の上限に達しているため、起動しませんでした。",
