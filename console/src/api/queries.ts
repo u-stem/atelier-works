@@ -10,6 +10,7 @@ import {
   type IntakeSnapshot,
   isIntakeSnapshotRows,
 } from "./guards/intakeSnapshot.ts";
+import { isPipelineRows, type PipelineRow } from "./guards/pipeline.ts";
 import { type ConsoleSummary, isConsoleSummary } from "./guards/summary.ts";
 import { type RunScriptOptions, runScript } from "./windmill.ts";
 
@@ -139,5 +140,41 @@ export function useDeployments(): UseQueryResult<DeploymentEntry[], Error> {
     queryKey: deploymentsQueryKey,
     queryFn: ({ signal }) => fetchDeployments({ signal }),
     staleTime: DEPLOYMENTS_STALE_MS,
+  });
+}
+
+/** 作業項目の一覧が見る期間(日)と件数の上限。 */
+export const PIPELINE_DAYS = 90;
+export const PIPELINE_LIMIT = 500;
+
+/** 作業項目の一覧を取り直さない間隔。状態は進むが、開いたまま追うのは再読み込みに任せる。 */
+const PIPELINE_STALE_MS = 30_000;
+
+export const pipelineQueryKey = ["console", "pipeline"] as const;
+
+/** 作業項目の進捗を更新が新しい順に取り、型ガードを通してから返す。失敗は`ApiFailure`で投げる。 */
+export async function fetchPipeline(
+  options: RunScriptOptions = {},
+): Promise<PipelineRow[]> {
+  const result = await runScript(
+    "console_query",
+    { view: "pipeline", limit: PIPELINE_LIMIT, days: PIPELINE_DAYS },
+    options,
+  );
+  if (!result.ok) {
+    throw new ApiFailure(result.error);
+  }
+  if (!isPipelineRows(result.value)) {
+    throw new ApiFailure({ kind: "invalid_response" });
+  }
+  return result.value;
+}
+
+/** 作業項目の進捗を取る。自動では取り直さず、画面の再読み込みで取り直す。 */
+export function usePipeline(): UseQueryResult<PipelineRow[], Error> {
+  return useQuery({
+    queryKey: pipelineQueryKey,
+    queryFn: ({ signal }) => fetchPipeline({ signal }),
+    staleTime: PIPELINE_STALE_MS,
   });
 }
