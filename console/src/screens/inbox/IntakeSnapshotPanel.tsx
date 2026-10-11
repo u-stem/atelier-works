@@ -16,18 +16,26 @@ import { displayableIssueText } from "../../lib/intakeText.ts";
  * Reactが文字列をエスケープするので、タグやリンクは文字として見える。
  */
 function SnapshotBody({ snapshot }: { snapshot: IntakeSnapshot }) {
+  const title = displayableIssueText(snapshot.title);
+  const body = displayableIssueText(snapshot.body);
   return (
     <div className="flex flex-col gap-3 px-5 py-4">
-      <p className="text-body font-medium break-words text-foreground">
-        {displayableIssueText(snapshot.title)}
+      {title.replaced || body.replaced ? (
+        <p className="text-small text-warning">
+          不可視の文字を含みます。見えない文字や、並びの見た目を入れ替える文字は、代替文字(U+FFFD)に置き換えて表示しています。実装のClaudeには、置き換える前の内容が渡ります。
+        </p>
+      ) : null}
+      <p
+        dir="ltr"
+        className="text-body font-medium break-words text-foreground [unicode-bidi:isolate]"
+      >
+        {title.text}
       </p>
       <pre
         dir="ltr"
-        className="max-h-96 overflow-auto rounded-lg bg-muted px-4 py-3 font-mono text-small break-words whitespace-pre-wrap text-foreground"
+        className="max-h-96 overflow-auto rounded-lg bg-muted px-4 py-3 font-mono text-small break-words whitespace-pre-wrap text-foreground [unicode-bidi:isolate]"
       >
-        {snapshot.body === ""
-          ? "(本文は空です)"
-          : displayableIssueText(snapshot.body)}
+        {snapshot.body === "" ? "(本文は空です)" : body.text}
       </pre>
       {snapshot.body_truncated ? (
         <p className="text-small text-warning">

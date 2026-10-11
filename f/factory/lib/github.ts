@@ -661,6 +661,21 @@ function isLoginPayload(value: unknown): value is LoginPayload {
 }
 
 /**
+ * GitHubのユーザーのオブジェクトからログイン名を読む。
+ * ユーザーでないとき、ログイン名が空文字列のときは`null`を返す。
+ */
+function readLogin(value: unknown): string | null {
+  return isLoginPayload(value) && value.login !== "" ? value.login : null;
+}
+
+/** オブジェクトの文字列のフィールドを読む。オブジェクトでない、文字列でない、空文字列のときは`null`。 */
+function readStringField(value: unknown, field: string): string | null {
+  if (typeof value !== "object" || value === null) return null;
+  const raw: unknown = Reflect.get(value, field);
+  return typeof raw === "string" && raw !== "" ? raw : null;
+}
+
+/**
  * `getViewer`が必要とする`GET /user`の応答の形。
  * `LoginPayload`に、GitHubのnoreplyのコミット用メールアドレスを組み立てる
  * (`gitIdentityForViewer`)ための数値のアカウント`id`を加えたもの。
@@ -832,6 +847,17 @@ export type Issue = {
   readonly htmlUrl: string;
   readonly state: string;
   readonly authorLogin: string;
+  /**
+   * 閉じた人のログイン名。開いているときと、GitHubが閉じた人を返さないときは`null`。
+   * PRのマージでは、マージした人が入ると想定している(実機で確かめる)。
+   */
+  readonly closedByLogin: string | null;
+  /** 閉じた人の種別(`User`、`Bot`など)。閉じた人が無いとき、応答に無いときは`null`。 */
+  readonly closedByType: string | null;
+  /** PRがマージされた時刻。マージされていないとき、PRでないときは`null`。 */
+  readonly mergedAt: string | null;
+  /** 作者の`author_association`。応答に無ければ`null`。 */
+  readonly authorAssociation: string | null;
   readonly labels: string[];
   readonly assignees: string[];
 };
@@ -861,7 +887,7 @@ type IssuePayload = {
   readonly body: string | null;
   readonly html_url: string;
   readonly state: string;
-  readonly user: { readonly login: string } | null;
+  readonly user: LoginPayload | null;
   readonly labels: readonly unknown[];
   readonly assignees: readonly unknown[];
 };
@@ -883,6 +909,7 @@ function isIssuePayload(value: unknown): value is IssuePayload {
   if (record.body !== null && typeof record.body !== "string") return false;
   if (typeof record.html_url !== "string") return false;
   if (typeof record.state !== "string") return false;
+  if (record.user !== null && !isLoginPayload(record.user)) return false;
   if (!Array.isArray(record.labels)) return false;
   if (!Array.isArray(record.assignees)) return false;
   return true;
@@ -925,9 +952,121 @@ export async function getIssue(
     htmlUrl: parsed.html_url,
     state: parsed.state,
     authorLogin: parsed.user?.login ?? "",
+    closedByLogin: readLogin(Reflect.get(parsed, "closed_by")),
+    closedByType: readStringField(Reflect.get(parsed, "closed_by"), "type"),
+    mergedAt: readStringField(Reflect.get(parsed, "pull_request"), "merged_at"),
+    authorAssociation: parseAuthorAssociation(
+      Reflect.get(parsed, "author_association"),
+    ),
     labels,
     assignees,
   };
+}
+
+/** `fetchIssueState`が使う`fetch`の最小の形。テストで差し替える。 */
+export type FetchLike = (
+  url: string,
+  init: RequestInit,
+) => Promise<Pick<Response, "status" | "json">>;
+
+const FETCH_ISSUE_TIMEOUT_MS = 10_000;
+
+/**
+ * `GET /repos/.../issues/<番号>`を`fetch`で読み、JSONのオブジェクトを返す。
+ * `gh`を起動できないworker(Console用のworker)から使うためのもので、
+ * 宛先は`api.github.com`に固定し、資格情報は`Authorization`ヘッダだけに載せる。
+ * リダイレクトは辿らない。移したIssueの新しい宛先へ`Authorization`を送らず、
+ * 確かめられないものとして扱うためである。
+ * 10秒の締め切りを付け、超えると`fetch`が拒否される。
+ * 応答が2xxでなければ`GitHubHttpError`を、形が違えば`Error`を投げる。
+ * エラーの文に、資格情報とIssueの内容は含めない。
+ */
+async function fetchIssueObject(
+  fetchFn: FetchLike,
+  ghToken: string,
+  owner: string,
+  repo: string,
+  number: number,
+): Promise<{ readonly context: string; readonly body: object }> {
+  validateOwnerRepo(owner, repo);
+  const context = `GET issue ${owner}/${repo}#${number}`;
+  const response = await fetchFn(
+    `https://api.github.com/repos/${owner}/${repo}/issues/${number}`,
+    {
+      headers: {
+        Authorization: `Bearer ${ghToken}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+      redirect: "manual",
+      signal: AbortSignal.timeout(FETCH_ISSUE_TIMEOUT_MS),
+    },
+  );
+  if (response.status < 200 || response.status >= 300) {
+    throw new GitHubHttpError(
+      `${context} failed with HTTP ${response.status}`,
+      response.status,
+    );
+  }
+  const body: unknown = await response.json();
+  if (typeof body !== "object" || body === null) {
+    throw new Error(`${context}: unexpected response shape`);
+  }
+  return { context, body };
+}
+
+/**
+ * IssueまたはPRの`state`(`open`か`closed`)を、`fetch`で読む。
+ * 通信の決まりは`fetchIssueObject`にある。
+ */
+export async function fetchIssueState(
+  fetchFn: FetchLike,
+  ghToken: string,
+  owner: string,
+  repo: string,
+  number: number,
+): Promise<string> {
+  const { context, body } = await fetchIssueObject(
+    fetchFn,
+    ghToken,
+    owner,
+    repo,
+    number,
+  );
+  const state = Reflect.get(body, "state");
+  if (typeof state !== "string") {
+    throw new Error(`${context}: unexpected response shape`);
+  }
+  return state;
+}
+
+/**
+ * Issueの題名と本文を、`fetch`で読む。本文が無い(`null`)Issueは空文字にする。
+ * 通信の決まりは`fetchIssueObject`にある。
+ */
+export async function fetchIssueContent(
+  fetchFn: FetchLike,
+  ghToken: string,
+  owner: string,
+  repo: string,
+  number: number,
+): Promise<{ readonly title: string; readonly body: string }> {
+  const { context, body } = await fetchIssueObject(
+    fetchFn,
+    ghToken,
+    owner,
+    repo,
+    number,
+  );
+  const title = Reflect.get(body, "title");
+  const text = Reflect.get(body, "body");
+  if (
+    typeof title !== "string" ||
+    (text !== null && typeof text !== "string")
+  ) {
+    throw new Error(`${context}: unexpected response shape`);
+  }
+  return { title, body: text ?? "" };
 }
 
 type LabelEventPayload = {

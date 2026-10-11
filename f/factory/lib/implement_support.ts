@@ -387,7 +387,7 @@ export const ISSUE_UPDATED_AFTER_INTAKE_NOTE =
 
 /** 改行コードを`\n`に揃え、前後の空白を除く。GitHubの編集画面は内容を変えずに改行コードを`\r\n`にすることがある。 */
 function normalizeIssueText(text: string | null): string {
-  return (text ?? "").replaceAll("\r\n", "\n").trim();
+  return (text ?? "").replace(/\r\n?/g, "\n").trim();
 }
 
 /**

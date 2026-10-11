@@ -255,7 +255,7 @@ export type RefreshIntakeDeps = {
 /**
  * 却下による作り直しの前に、作業項目の題名と本文を現在のIssueの内容に更新する。
  * 却下の理由が「Issueを書き換えた」ことのとき、作り直した要件定義が書き換え後の内容に基づき、
- * 次の承認の確認(`approval_check_issue`)が通るようにするためである。
+ * 次の承認の前の確認(`approval_decide`の`checkIssueAgainstIntake`)が通るようにするためである。
  * 承認者がConsoleで見る取り込み時点の内容は更新後の値で、実装のClaudeに渡る内容と一致する。
  *
  * GitHubから取れなかったとき、書き込みに失敗したとき、作業項目が先に動いたときは、更新せずに
@@ -635,6 +635,7 @@ async function run(
   // ここからは却下のとき。
   const rejectedOutcome = decideRejectedOutcome(attempt, config.max_attempts);
   if (rejectedOutcome === "retry") {
+    const intakeIssueNumber = workItem.issue_number;
     const relaunched = await relaunchPipelineAfterRejection({
       casToGenerating: () =>
         updateStatusIfCurrentClearingFlowJobId(
@@ -648,7 +649,7 @@ async function run(
         refreshIntakeFromIssue({
           snapshot: workItem,
           getIssue: () =>
-            getIssue(client, workItem.owner, workItem.repo, issueNumber),
+            getIssue(client, workItem.owner, workItem.repo, intakeIssueNumber),
           writeIntake: (intake) =>
             updateIntakeIfRegenerating(workItem.id, intake),
           log: (message, fields) =>

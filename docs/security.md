@@ -135,6 +135,11 @@ Windmillで実行する間、秘密値はWindmillのsecret変数に置く。
 - `f/factory/discord_webhook_url`
 
 scriptは`wmill.getVariable()`で値を取得し、子プロセスの環境変数(`GH_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`など)としてだけ渡す。URLのクエリとパス、ログ、Data Tableの列、Discordの通知本文には出さない。
+親プロセスが`fetch`で使う秘密値は、次の3か所である。
+
+- Console用のworkerで動く`retry_work_item`は、`gh`を起動できないので、`github_token`を`fetch`の`Authorization`ヘッダに載せる。宛先は`https://api.github.com`に固定し、リダイレクトは辿らない。境界は[Console用workerの境界](#console用workerの境界)に書く。
+- Console用のworkerで動く`approval_decide`は、要件定義の承認の前に現在のIssueを読むため、同じ形で`github_token`を使う。10秒の締め切りを付け、エラーの文とログにトークンとIssueの内容を含めない。
+- Discordへの送信(`lib/discord.ts`の`notify`)は、`discord_webhook_url`を`fetch`の宛先のURLにする。URLそのものが秘密なので、エラーメッセージとログには含めない。
 
 エラーメッセージと失敗の記録(`job_failures`)には、マスク処理を通してから値を入れる。マスクの関数はテストで検証する。
 
@@ -344,6 +349,9 @@ Podmanは対象外である。
 - DBには届く。`DATABASE_URL`はdefaultのworkerと同じ管理者の接続だからである。
 - tag`console`のscriptは、管理者の`DATABASE_URL`か`wmill.getVariable()`で、Windmillのsecret変数を読める。
   読める変数には`f/factory/claude_oauth_token`と`f/factory/github_token`がある。
+  `retry_work_item`が実際に読むのは、取り消された作業項目の再開のときの`github_token`である。
+  `approval_decide`が読むのは、要件定義の承認のときの`github_token`である。
+  Console用のworkerで動くscriptから`github_token`を読むのは、この2つに限る取り決めである。強制はしない。
   マウントの制限で守るのは、Claude Codeとghの設定と履歴のファイルだけである。
   トークンそのものは守らない。
 - scriptを編集できる者は、tagを付けずにdefaultのworkerで動かせば、`factory_state`のボリューム全体を読み書きできる。
@@ -369,6 +377,25 @@ Podmanは対象外である。
 - `wmill sync push`がraw appを組み立てるときに動かすnpmには、`--ignore-scripts`が効かない。そのため、`wmill`のサブプロセスの環境変数に`NPM_CONFIG_IGNORE_SCRIPTS=true`を渡す。
 - ホストで動かすmiseのタスク(`mise run push`、`mise run deploy`など)も、`npm ci --ignore-scripts`とこの環境変数を使う。
 - raw appの`package-lock.json`には、install scriptを要する依存(`hasInstallScript`)が無い。そのような依存を足すと、コントラクトテスト(`tests/lib/self_update_support.test.ts`)が落ちる。足す前に、install scriptなしで組み立てが通るかを確かめる。
+
+## 自己更新の打ち切り
+
+`self_update`のジョブには、全体の上限がある。
+値と内訳は[アーキテクチャ](architecture.md)の「自己更新」にある。
+通常は、各コマンドの上限と、区切ったSDK・DBの呼び出しの上限(30秒)で先に終わる。
+全体の上限は、それでも止まったときの最後の砦である。
+
+残るリスクは次のとおりである。
+
+- Windmillが全体の上限でジョブを打ち切るときに、子プロセスが止まるかを確かめていない。
+  子(`npm ci`、`wmill sync push`、`wmill datatable migrate up`、git)は別のセッションで起動する。
+  子の上限はworkerの中のタイマーなので、ジョブごと止まると子は上限なしで残りうる。
+- 残った`wmill sync push`が、次の回が更新する作業ツリーを読み続けると、新旧の混ざった内容をpushしうる。
+  作業ツリーのロックは、cloneの更新の間しか取らず、pushの間は守らない。
+- 残った`wmill datatable migrate up`が、次の回の同じ処理と並行しうる。
+- 打ち切りが子の実行中に当たるのは、内側の上限が働く前に全体の上限に達したときだけである。
+  区切った呼び出しが30秒で終わるので、通常は当たらない。
+- 残ったプロセスの見つけ方と、打ち切りが子を止めるかの確かめ方は[運用](operations.md)の「自己更新の打ち切りを確かめる」にある。
 
 ## Claude Codeの拒否ルール
 
@@ -978,7 +1005,15 @@ Claudeに渡すツールは`Read`、`Glob`、`Grep`、`Edit`、`Write`だけで�
 
 Claudeに渡すIssueの題名と本文は、取り込んだ時点のものである。承認の後にIssueを書き換えて指示を差し込むことはできない。現在のIssueは、openかどうかの確認と、PR本文の注記にだけ使う。
 
-承認者が見ていない内容が渡らないよう、Consoleの要件定義の承認画面に取り込み時点の題名と本文を出す。さらに、要件定義の承認では、決定を記録する前に現在のIssueを取り込み時点と比べる。違うときと、比べられなかったときは、承認を断る。比べるscriptはGitHubを呼ぶので、`github_token`を読めるdefaultのworkerで動かす。Console用のworkerには`github_token`を読ませない。確認から記録までの間の書き換えは防げない。
+承認者が見ていない内容が渡らないよう、Consoleの要件定義の承認画面に取り込み時点の題名と本文を出す。
+さらに、要件定義の承認では、決定を記録する前に現在のIssueを取り込み時点と比べる。違うときと、比べられなかったときは、承認を断る。
+比べる処理は`approval_decide`の中で、`github_token`を使ってGitHubのREST APIを`fetch`で読む。Console用のworkerの`github_token`の扱いは[Console用workerの境界](#console用workerの境界)に書く。
+
+次のことは、この確認では守れない。
+
+- 確認から決定の記録までの間のIssueの書き換えは防げない。承認者が見た内容のハッシュに結び付ける案は、承認の操作が旧Consoleにあり、旧Consoleが取り込み時点の内容を出さないので、今は採れない。
+- 旧Consoleの承認タブは、取り込み時点の内容を出さない。承認者は新しいConsoleの要件定義の承認画面で確かめる。確認が働くので、確かめずに承認しても、書き換えられたIssueは通らない。
+- Claudeに渡す題名と本文から、不可視の文字(tag文字、ゼロ幅の文字、双方向の制御文字など)を除いていない。Consoleは置き換えて警告を出すが、Claudeには置き換える前の内容が届く。除く処理は別に扱う。
 
 ### 同じ作業項目を同時に実装しない
 
@@ -1229,3 +1264,43 @@ PRのレビューとコメントは、投稿者で絞る。
 許可する関係は`allowed_labeler_associations`で、既定値は`["OWNER", "MEMBER", "COLLABORATOR"]`である。
 コメントとレビューの応答は`author_association`を持つので、この関係で判定できる。
 これに当たらない投稿者のレビューコメントと新しいコメントは、`pr_review`と`pr_fix`の起動に使わない。
+
+## 閉じた人の確認
+
+`poll_issues`は、対象のIssueやPRが閉じられた作業項目を取り消し、Consoleの要対応の一覧から外す。
+対象は、失敗、人の対応待ち、期限切れの作業項目である。
+このとき、IssueまたはPRの取得の応答から、閉じた人を確かめる。
+使うのは、`GET /repos/{owner}/{repo}/issues/{番号}`の次の項目である。
+
+- `pull_request.merged_at`
+- `closed_by`
+- 作者(`user`)
+- 作者の`author_association`
+
+タイムラインの`closed`と`merged`のイベントには`author_association`が無いので、使わない。
+判定は次の順に行う。ログイン名は大文字と小文字を区別せずに比べる。
+
+| 順 | 状況 | 判定 |
+| --- | --- | --- |
+| 1 | PRで`merged_at`がある | 取り消す。マージにもmerge queueへの投入にも、write権限が要るため |
+| 2 | `closed_by`が無い、またはログイン名が空 | 取り消さない |
+| 3 | `closed_by`がBot(`type`が`Bot`、またはログイン名が`[bot]`で終わる) | 取り消さない。BotやActionsは、第三者のイベントを受けて閉じることがあるため |
+| 4 | 作者が分からない | 取り消さない |
+| 5 | 作者以外の人が閉じた | 取り消す。他人のIssueやPRを閉じるには、triage以上の権限が要るため |
+| 6 | 作者が閉じ、作者の`author_association`が`allowed_labeler_associations`に含まれる | 取り消す |
+| 7 | 作者が閉じ、作者の関係が含まれないか分からない | 取り消さない |
+
+取り消さなかった対象は、一覧に残る。理由と対象は`poll_issues`のログにinfoで残す。
+
+第三者が自分のIssueやPRを閉じて、安全策で止まった作業項目を一覧から消せないようにするためである。
+publicのリポジトリでは、誰でもIssueを作れ、作者は自分のIssueやPRを閉じられる。
+確認が無いと、安全策で止まった作業項目を、人が気づかないうちに一覧から外されてしまう。
+
+この確認は、要対応の一覧から外す取り消しにだけかける。
+取り消した作業項目は`retry_work_item`で再開できるので、権限のある人が元に戻せる。
+
+残るリスクは次のとおり。
+
+- PRのheadブランチやforkを消してPRが閉じたときの`closed_by`は、実機で確かめる。作者と別のアカウントが消すと、作者以外の人が閉じた扱いで取り消されうる。
+- 人のアカウント(`type`が`User`)のPATで閉じる自動化は、Botとして扱われない。作者と別のアカウントなら、作者以外の人が閉じた扱いになり、取り消される。第三者のイベントで閉じる自動化は、`GITHUB_TOKEN`かGitHub Appのinstallation tokenで動かす。
+- 判定は、要対応の一覧の取り消しにだけかかる。承認待ちなど終端でない作業項目は、既存のreconcileが閉じた人を確かめずに取り消す。

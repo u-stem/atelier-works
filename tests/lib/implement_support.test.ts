@@ -1217,6 +1217,15 @@ describe("issueChangedSinceIntake", () => {
     ).toBe(false);
   });
 
+  test("ignores a lone CR-only difference", () => {
+    expect(
+      issueChangedSinceIntake(
+        { title: "CSV出力", body: "一行目\n二行目" },
+        { title: "CSV出力", body: "一行目\r二行目" },
+      ),
+    ).toBe(false);
+  });
+
   test("ignores surrounding whitespace", () => {
     expect(
       issueChangedSinceIntake(SNAPSHOT, {

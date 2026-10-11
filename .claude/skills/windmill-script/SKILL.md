@@ -229,7 +229,7 @@ worker内で実測した、外部コマンドとAPIの挙動を示す。型ガ�
 
 - `pipeline_request_approval`は`pending`行を記録して、すぐにフローを終える。以降、フローは待機しない。
 - 人がConsoleから承認か却下をすると、`approval_decide`が決定を`approval_requests`に記録する。記録には、`decideApprovalRequestIfPending`(`WHERE status = 'pending'`の楽観ロック)を使う。
-- 要件定義を承認するときは、記録の前に`steps/approval_check_issue`を同期で呼び、現在のIssueが取り込み時点と同じかを確かめる。GitHubを呼ぶので、このscriptにはtagを付けず、defaultのworkerで動かす。Console用workerに`github_token`を読ませないためである。
+- 要件定義を承認するときは、記録の前に、現在のIssueが取り込み時点と同じかを確かめる。`approval_decide`の中で、`github_token`を`Authorization`ヘッダだけに載せ、GitHubのREST APIを`fetch`で読む。別のscriptに頼むと、defaultのworkerの待ち行列に並ぶ間、Console用workerの枠を塞ぐためである。
 - 続けて`approval_decide`は、`kind`に応じたapplyスクリプトを`wmill.runScriptByPathAsync`で起動する。実際の反映はapplyスクリプトが行う。
   - `requirements`: `steps/requirements_apply`
   - `issue_proposal`: `steps/issue_proposal_apply`

@@ -1,33 +1,35 @@
 // Issueの題名と本文を画面に出す前に通す整形。
-// 起票者が書いた文字列なので、見た目の順序を入れ替える制御文字を、そのまま描かない。
+// 起票者が書いた文字列なので、見た目に現れない文字と、並びの見た目を入れ替える文字を、そのまま描かない。
 
 /**
- * 見た目を入れ替えるか、画面に出せない制御文字か。
- * 双方向テキストの制御文字(U+202A〜U+202E、U+2066〜U+2069)は、文字の並びの見た目を入れ替え、
- * 承認者が読む内容と実際の内容をずらせる。
- * 改行(U+000A)とタブ(U+0009)以外の制御文字(U+0000〜U+001F、U+007F)も出せない。
+ * 画面に出さずに代替文字へ置き換える文字。
+ * 書式の制御文字(Unicodeの分類Cf。双方向の制御文字、ゼロ幅の文字、tag文字などを含む)、
+ * 制御文字(Cc。改行とタブを除く)、行と段落の区切り(Zl、Zp)、異体字セレクタ(Variation_Selector)。
+ * これらは承認者には見えないか、並びの見た目を入れ替えるが、実装のClaudeには届く。
  */
-function isHiddenControl(code: number): boolean {
-  if (code === 0x09 || code === 0x0a) return false;
-  return (
-    code <= 0x1f ||
-    code === 0x7f ||
-    (code >= 0x202a && code <= 0x202e) ||
-    (code >= 0x2066 && code <= 0x2069)
-  );
-}
+const HIDDEN_CHARACTERS =
+  /\p{Cf}|\p{Cc}|\p{Zl}|\p{Zp}|\p{Variation_Selector}/gu;
+
+export type DisplayableText = {
+  readonly text: string;
+  /** 置き換えた文字が1つでもあったか。 */
+  readonly replaced: boolean;
+};
 
 /**
  * `text`を画面に出せる形にする。改行コードを`\n`に揃え、
- * 見た目をずらす制御文字を代替文字(U+FFFD)に置き換える。
+ * 見えない文字や見た目をずらす文字(改行とタブを除く)を代替文字(U+FFFD)に置き換える。
+ * ゼロ幅接合子(U+200D)も置き換えるので、絵文字の組み合わせは分かれて見える。
  * 内容は解釈しない。HTMLやMarkdownとしては描かず、呼び出し側はReactの文字列として出す。
  */
-export function displayableIssueText(text: string): string {
-  const normalized = text.replaceAll("\r\n", "\n");
-  let result = "";
-  for (const char of normalized) {
-    const code = char.codePointAt(0) ?? 0;
-    result += isHiddenControl(code) ? "\uFFFD" : char;
-  }
-  return result;
+export function displayableIssueText(text: string): DisplayableText {
+  let replaced = false;
+  const result = text
+    .replace(/\r\n?/g, "\n")
+    .replace(HIDDEN_CHARACTERS, (char) => {
+      if (char === "\n" || char === "\t") return char;
+      replaced = true;
+      return "\uFFFD";
+    });
+  return { text: result, replaced };
 }

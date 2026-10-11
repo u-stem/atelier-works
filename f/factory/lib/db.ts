@@ -12,6 +12,7 @@
 // クライアントとサーバーのバージョンが食い違う。
 import * as wmill from "windmill-client@1.817.0";
 import type { CleanupCounts } from "./cleanup_db_support.ts";
+import { ACTIONABLE_WORK_ITEM_STATUSES } from "./console_support.ts";
 import { type Logger, logger, maskSecrets } from "./log.ts";
 import {
   type AgentRunRecord,
@@ -554,6 +555,96 @@ export async function newestNewerIssueCycle(
   return { id: parseId(row.id, "id"), status };
 }
 
+/**
+ * 同じPRで、同じ種類(`pr_review`か`pr_fix`)の作業項目のうち、`id`が`id`より大きいものの中で
+ * `id`が最大のものを返す。無ければ`null`。
+ * `listActionableWorkItems`が引き継ぎ済みとみなす行と同じ条件で、
+ * `retry_work_item`が取り消された古い行を、並んで動く新しい行があるときに再開しないために使う。
+ */
+export async function newestNewerPrWorkItem(
+  kind: "pr_review" | "pr_fix",
+  owner: string,
+  repo: string,
+  prNumber: number,
+  id: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<{ readonly id: number; readonly status: WorkItemStatus } | null> {
+  const rows = await sql`
+    SELECT id, status FROM factory.work_items
+    WHERE kind = ${kind} AND owner = ${owner} AND repo = ${repo}
+      AND pr_number = ${prNumber}::integer AND id > ${id}::bigint
+    ORDER BY id DESC
+    LIMIT 1
+  `.fetch();
+  const row = rows[0];
+  if (row === undefined) return null;
+  const status = row.status;
+  if (typeof status !== "string" || !isOneOf(status, WORK_ITEM_STATUSES)) {
+    throw new Error(
+      `db: newestNewerPrWorkItem: unknown status ${String(status)}`,
+    );
+  }
+  return { id: parseId(row.id, "id"), status };
+}
+
+/** `factory.work_item_events`の1行のうち、再開の判断に要る部分。 */
+export type StatusEventSummary = {
+  readonly from_status: WorkItemStatus | null;
+  readonly note: string | null;
+};
+
+/**
+ * 作業項目が`toStatus`へ移った最新の遷移の記録を返す。無ければ`null`を返す。
+ * `retry_work_item`が、取り消された作業項目の取り消す前の状態と理由の注記を読むために使う。
+ */
+export async function latestStatusEvent(
+  workItemId: number,
+  toStatus: WorkItemStatus,
+  sql: SqlClient = defaultSqlClient,
+): Promise<StatusEventSummary | null> {
+  const rows = await sql`
+    SELECT from_status, note FROM factory.work_item_events
+    WHERE work_item_id = ${workItemId}::bigint AND to_status = ${toStatus}
+    ORDER BY occurred_at DESC, id DESC
+    LIMIT 1
+  `.fetch();
+  const row = rows[0];
+  if (row === undefined) return null;
+  const from = row.from_status;
+  if (
+    from !== null &&
+    (typeof from !== "string" || !isOneOf(from, WORK_ITEM_STATUSES))
+  ) {
+    throw new Error(`db: latestStatusEvent: unknown status ${String(from)}`);
+  }
+  return {
+    from_status: from,
+    note: parseNullableString(row.note, "note"),
+  };
+}
+
+/**
+ * PRに紐づく`pr_review`か`pr_fix`の作業項目のうち、終端でないものがあるかを返す。
+ * 閉じたPRのworktreeを消す前に、そのPRをまだ使う処理が無いことを確かめるために使う。
+ */
+export async function hasNonTerminalPrWorkItem(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  const terminal: string[] = [...TERMINAL_WORK_ITEM_STATUSES];
+  const rows = await sql`
+    SELECT id FROM factory.work_items
+    WHERE owner = ${owner} AND repo = ${repo}
+      AND kind IN ('pr_review', 'pr_fix')
+      AND pr_number = ${prNumber}::integer
+      AND NOT (status = ANY(${terminal}))
+    LIMIT 1
+  `.fetch();
+  return rows.length > 0;
+}
+
 const ACTIVE_ISSUE_INDEX_NAME = "work_items_active_issue_key";
 
 /**
@@ -801,6 +892,43 @@ export async function listActive(
     SELECT * FROM factory.work_items
     WHERE status != ALL(${terminal})
     ORDER BY updated_at DESC
+  `.fetch();
+  return rows.map(toWorkItem);
+}
+
+/**
+ * Consoleの要対応の一覧(`ACTIONABLE_WORK_ITEM_STATUSES`の作業項目)に出ている行を、
+ * `id`の昇順で返す。閉じたIssueやPRの行を`cancelled`にして一覧から外すための入力である。
+ * 一覧と同じく、`audit`(GitHubのオブジェクトが無い)と、新しい行が引き継ぐ行は含めない。
+ * 新しい行とは、同じIssueの新しいcycleと、同じ種類・同じPRで`id`が大きい行である。
+ * 一覧に出ない行を調べても一覧は変わらず、GitHubへの問い合わせが増えるだけである。
+ * 引き継いだ側の行は、`listActive`の照合が閉じたIssueやPRを扱う。
+ */
+export async function listActionableWorkItems(
+  sql: SqlClient = defaultSqlClient,
+): Promise<WorkItem[]> {
+  const statuses: string[] = [...ACTIONABLE_WORK_ITEM_STATUSES];
+  const rows = await sql`
+    SELECT wi.* FROM factory.work_items wi
+    WHERE wi.status = ANY(${statuses})
+      AND wi.kind != 'audit'
+      AND NOT (
+        wi.kind = 'issue'
+        AND EXISTS (
+          SELECT 1 FROM factory.work_items n
+          WHERE n.kind = 'issue' AND n.owner = wi.owner AND n.repo = wi.repo
+            AND n.issue_number = wi.issue_number AND n.cycle > wi.cycle
+        )
+      )
+      AND NOT (
+        wi.kind IN ('pr_review', 'pr_fix')
+        AND EXISTS (
+          SELECT 1 FROM factory.work_items n
+          WHERE n.kind = wi.kind AND n.owner = wi.owner AND n.repo = wi.repo
+            AND n.pr_number = wi.pr_number AND n.id > wi.id
+        )
+      )
+    ORDER BY wi.id ASC
   `.fetch();
   return rows.map(toWorkItem);
 }
