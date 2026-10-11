@@ -741,6 +741,27 @@ export type FailureRecord = {
   error: string;
 };
 
+/**
+ * 反映に含まれるPRを誰が作ったか。
+ * `factory`はFactoryの実装ブランチから作られたPR、`human`はそれ以外のブランチから作られたPR、
+ * `unknown`はマージのコミットからブランチを読めなかったPRである。
+ */
+export const PULL_REQUEST_ORIGINS = ["factory", "human", "unknown"] as const;
+export type PullRequestOrigin = (typeof PULL_REQUEST_ORIGINS)[number];
+
+/** 反映に記録するPRの題名の長さの上限(文字数)。 */
+export const MAX_PULL_REQUEST_TITLE_LENGTH = 200;
+
+/** 1回の反映に含まれるPR。`factory.deployments.pull_requests`のJSON配列の要素。 */
+export type DeploymentPullRequest = {
+  readonly number: number;
+  /** マージのコミットの本文から取った題名。取れなければnull。画面には文字として出す。 */
+  readonly title: string | null;
+  readonly origin: PullRequestOrigin;
+  /** `https://github.com/<owner>/<repo>/pull/<n>`の形。作れなければnull。 */
+  readonly url: string | null;
+};
+
 /** `db.recordDeployment`に渡す、`factory.deployments`の1行。 */
 export type DeploymentRecord = {
   sha_from: string | null;
@@ -748,6 +769,7 @@ export type DeploymentRecord = {
   changed_paths: string[];
   result: string;
   needs_host_action: boolean;
+  pull_requests: DeploymentPullRequest[];
 };
 
 /** `factory.deployments`の最新の1行のうち、反映の成否と対象の版を表す列。 */

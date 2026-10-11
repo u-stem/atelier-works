@@ -174,7 +174,7 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加だけにし、
 | `approvals` | 承認と却下の古い履歴。今は書き込まない |
 | `agent_runs` | Claudeの実行1回ごとのモデル、トークン数、費用、所要時間、終了コード |
 | `job_failures` | フローの失敗の記録。トークンはマスクしてから書く |
-| `deployments` | 自己更新によるデプロイの結果 |
+| `deployments` | 自己更新によるデプロイの結果。変更したパスと、含まれるPR(`pull_requests`)も持つ |
 | `notices` | 人が対応すべき事項。PATの失効やSHAの不一致など。解決した人と時刻(`resolved_by`、`resolved_at`)も持ち、DBの掃除が解決した行の`resolved_by`は`cleanup_db`になる |
 | `reviews` | pr_reviewの実行1回ごとの判定、総評、指摘、投稿したレビューのID |
 | `fix_rounds` | pr_fixの実行1回ごとの結果、返信、コミット |
@@ -224,6 +224,8 @@ Consoleの一覧と集計は次のviewを読む。
 | `v_fix_rounds` | PR修正の一覧 |
 
 要件定義書と監査レポートの詳細表示では、Consoleのbackend(`f/factory/steps/console_query.ts`)がテーブルを直接読む。読むのは`requirement_drafts`、`audit_reports`、`approval_requests`、`issue_proposals`、`work_items`である。
+
+更新履歴の表示では、`console_query`の`deployments`viewが`deployments`テーブルを新しい順に読む。選ぶのは、版、結果、ホストの作業の要否、時刻、含まれるPRで、変更したパスの一覧は選ばない。
 
 `console_query`は、行の配列を返すviewのほかに、1つのオブジェクトを返す3つのviewを持つ。
 
@@ -336,6 +338,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/cleanup_support` | script | [LIB] 作業領域掃除の純粋ロジック |
 | `f/factory/lib/protected_paths` | script | [LIB] 保護パスの判定 |
 | `f/factory/lib/types` | script | [LIB] 共通型 |
+| `f/factory/lib/self_update_pull_requests` | script | [LIB] 反映に含まれるPRの解析 |
 | `f/factory/lib/implement_finish_support` | script | [LIB] 実装フローの完了処理の判定 |
 | `f/factory/lib/implement_loop` | script | [LIB] 実装フローの検証ループ |
 | `f/factory/lib/implement_support` | script | [LIB] 実装フローの純粋関数群 |
@@ -433,6 +436,16 @@ Factoryの投稿の見分け方、総評の組み立て、スレッドの解決�
 3. workerの中から`wmill sync push --yes --keep-deleted`を実行し、script、flow、スケジュールを最新にする。
 4. `wmill datatable migrate up`を実行し、Data Tableの定義を最新にする。
 5. 結果を`deployments`に記録し、`f/factory/deployed_sha`を更新する。
+
+記録には、前回の版から今回の版までの間にmainへマージされたPRの番号、題名、作り手、リンクを含める。
+PRは、self cloneの`git log --first-parent`にあるマージのコミットから取り出す。
+件名は`Merge pull request #<N> from <owner>/<branch>`の形で、題名は本文の1行目である。
+GitHubのAPIは呼ばないので、Console用のworkerのネットワークとトークンの権限は広がらない。
+作り手は、ブランチの名前から決める。
+ownerがFactoryのリポジトリと同じで、ブランチが実装ブランチ(`factory/issue-<N>-wi-<id>`)なら`factory`、それ以外のブランチなら`human`にする。
+squashでマージされて件名の末尾が`(#<N>)`の形のPRは、ブランチが分からないので`unknown`にする。
+前回の反映が無い初回は、履歴の全体を数えないよう、PRを記録しない。
+PRを取り出せなくても、反映の成功は変えない。
 
 `infra/**`の変更と、`mise.toml`の`[tools]`か`[env]`の変更は、worker自身では反映できない。`self_update`は`deployments.needs_host_action`を`true`にしてログに残し、通知はしない。これらはホスト側のcheckoutをpullしたうえで、次に`mise run up`で起動したときに反映される。
 

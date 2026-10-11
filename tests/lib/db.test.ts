@@ -1138,10 +1138,49 @@ describe("recordDeployment", () => {
         changed_paths: ["f/factory/lib/db.ts"],
         result: "ok",
         needs_host_action: false,
+        pull_requests: [],
       },
       sql,
     );
     expect(calls[0]?.text).toContain("INSERT INTO factory.deployments");
+  });
+
+  test("stores the pull requests as a jsonb array", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 13 }]]);
+    const pull = {
+      number: 7,
+      title: "fix: a",
+      origin: "human" as const,
+      url: "https://github.com/o/r/pull/7",
+    };
+    await recordDeployment(
+      {
+        sha_from: "aaa",
+        sha_to: "bbb",
+        changed_paths: [],
+        result: "ok",
+        needs_host_action: false,
+        pull_requests: [pull],
+      },
+      sql,
+    );
+    expect(calls[0]?.values).toContain(JSON.stringify([pull]));
+  });
+
+  test("writes the pull_requests column", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 13 }]]);
+    await recordDeployment(
+      {
+        sha_from: "aaa",
+        sha_to: "bbb",
+        changed_paths: [],
+        result: "ok",
+        needs_host_action: false,
+        pull_requests: [],
+      },
+      sql,
+    );
+    expect(calls[0]?.text).toContain("pull_requests");
   });
 
   test("casts needs_host_action to ::boolean", async () => {
@@ -1153,6 +1192,7 @@ describe("recordDeployment", () => {
         changed_paths: [],
         result: "ok",
         needs_host_action: true,
+        pull_requests: [],
       },
       sql,
     );

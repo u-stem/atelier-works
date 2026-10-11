@@ -23,6 +23,10 @@ import { addNoticeUnlessUnresolved, recordDeployment } from "./lib/db.ts";
 import { notifyBestEffort } from "./lib/discord.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import {
+  MERGED_PULL_REQUESTS_LOG_FORMAT,
+  parseMergedPullRequests,
+} from "./lib/self_update_pull_requests.ts";
+import {
   assertBranchMatches,
   buildNpmCiArgv,
   buildWmillArgv,
@@ -36,7 +40,7 @@ import {
   resolveWmillCliContext,
   truncateOutput,
 } from "./lib/self_update_support.ts";
-import { assertSha } from "./lib/types.ts";
+import { assertSha, type DeploymentPullRequest } from "./lib/types.ts";
 import {
   type CommandResult,
   type CommandRunner,
@@ -173,6 +177,41 @@ export async function diffPaths(
     );
   }
   return parseNulSeparatedPaths(result.stdout);
+}
+
+/**
+ * `oldSha`から`newSha`の間でmainにマージされたPRを新しい順に返す。
+ * 第1親だけをたどる(`--first-parent`)ので、PRのブランチの中のコミットは読まない。
+ * `oldSha`が空(前回の反映が無い)ときは、履歴の全体を数えないよう、gitを呼ばずに空配列を返す。
+ * 解析は`parseMergedPullRequests`が行う。gitが失敗したら例外を投げる。
+ */
+export async function listMergedPullRequests(
+  run: CommandRunner,
+  dir: string,
+  oldSha: string,
+  newSha: string,
+  factoryRepoUrl: string,
+): Promise<DeploymentPullRequest[]> {
+  if (oldSha.length === 0) return [];
+  assertSha(oldSha);
+  assertSha(newSha);
+  const result = await run(
+    [
+      ...GIT_BASE_ARGV,
+      "log",
+      "--first-parent",
+      "-z",
+      `--format=${MERGED_PULL_REQUESTS_LOG_FORMAT}`,
+      `${oldSha}..${newSha}`,
+    ],
+    { cwd: dir, env: selfCloneGitEnv() },
+  );
+  if (result.exitCode !== 0) {
+    throw new Error(
+      maskSecrets(`git log failed in ${dir}: ${result.stderr.trim()}`),
+    );
+  }
+  return parseMergedPullRequests(result.stdout, factoryRepoUrl);
 }
 
 /**
@@ -481,6 +520,22 @@ async function updateSelf(
       });
     }
 
+    // PRの一覧は表示のための付随情報なので、取れなくても反映の成功を失敗にしない。
+    let pullRequests: DeploymentPullRequest[] = [];
+    try {
+      pullRequests = await listMergedPullRequests(
+        runCommand,
+        factoryClone.dir,
+        deployedSha,
+        currentSha,
+        config.factory_repo,
+      );
+    } catch (err) {
+      log.warn("failed to list merged pull requests", {
+        error: maskSecrets(err instanceof Error ? err.message : String(err)),
+      });
+    }
+
     const shaFrom = deployedSha.length > 0 ? deployedSha : null;
     await recordDeployment({
       sha_from: shaFrom,
@@ -488,6 +543,7 @@ async function updateSelf(
       changed_paths: changedPaths,
       result: "success",
       needs_host_action: classification.needs_host_action,
+      pull_requests: pullRequests,
     });
 
     return {
@@ -509,6 +565,7 @@ async function updateSelf(
         changed_paths: [],
         result: "failed",
         needs_host_action: false,
+        pull_requests: [],
       });
     } catch (recordErr) {
       log.error("failed to record deployment", {

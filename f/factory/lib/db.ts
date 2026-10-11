@@ -906,10 +906,11 @@ export async function recordDeployment(
   sql: SqlClient = defaultSqlClient,
 ): Promise<number> {
   const statement = sql`
-    INSERT INTO factory.deployments (sha_from, sha_to, changed_paths, result, needs_host_action)
+    INSERT INTO factory.deployments (sha_from, sha_to, changed_paths, result, needs_host_action, pull_requests)
     VALUES (
       ${record.sha_from}, ${record.sha_to}, ${JSON.stringify(record.changed_paths)}::jsonb,
-      ${record.result}, ${record.needs_host_action}::boolean
+      ${record.result}, ${record.needs_host_action}::boolean,
+      ${JSON.stringify(record.pull_requests)}::jsonb
     )
     RETURNING id
   `;
