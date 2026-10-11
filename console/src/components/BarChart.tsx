@@ -1,4 +1,9 @@
-import { labelStride, layoutBars, resolvePlotWidth } from "../lib/barChart.ts";
+import {
+  isLabeledIndex,
+  labelStride,
+  layoutBars,
+  resolvePlotWidth,
+} from "../lib/barChart.ts";
 import { cn } from "../lib/cn.ts";
 import { useElementWidth } from "../lib/useElementWidth.ts";
 
@@ -103,7 +108,7 @@ export function BarChart({
                   {formatValue(datum.value)}
                 </text>
               ) : null}
-              {showAxisLabels && index % stride === 0 ? (
+              {showAxisLabels && isLabeledIndex(index, data.length, stride) ? (
                 <text
                   x={center}
                   y={LABEL_BASELINE}

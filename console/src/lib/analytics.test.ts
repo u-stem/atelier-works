@@ -5,6 +5,7 @@ import type {
   LeadTimeRow,
 } from "../api/guards/analytics.ts";
 import {
+  chartSeries,
   dailyTotals,
   fillDailyTotals,
   firstTryApprovalRate,
@@ -160,11 +161,8 @@ describe("fillDailyTotals", () => {
       process.env.TZ = "Asia/Tokyo";
     });
     afterEach(() => {
-      if (originalTimeZone === undefined) {
-        delete process.env.TZ;
-      } else {
-        process.env.TZ = originalTimeZone;
-      }
+      // 未設定のときは`delete`しても実行時の時刻帯が戻らないので、UTCを明示して戻す。
+      process.env.TZ = originalTimeZone ?? "UTC";
     });
 
     test("counts the days in UTC rather than the local time zone", () => {
@@ -207,14 +205,36 @@ describe("fillDailyTotals", () => {
     ]);
   });
 
-  test("does not fill the days before the oldest fetched day when truncated", () => {
+  test("starts after the oldest fetched day when truncated", () => {
     const filled = fillDailyTotals(
       [total("2026-10-08", 1), total("2026-10-09", 1)],
       30,
       NOW,
       true,
     );
-    expect(filled[0]?.day).toBe("2026-10-08");
+    expect(filled[0]?.day).toBe("2026-10-09");
+  });
+
+  test("leaves out the oldest fetched day when truncated", () => {
+    const filled = fillDailyTotals(
+      [total("2026-10-08", 1), total("2026-10-09", 1)],
+      30,
+      NOW,
+      true,
+    );
+    expect(filled.some((entry) => entry.day === "2026-10-08")).toBe(false);
+  });
+
+  test("keeps the newer fetched days when truncated", () => {
+    const filled = fillDailyTotals(
+      [total("2026-10-08", 1), total("2026-10-09", 5)],
+      30,
+      NOW,
+      true,
+    );
+    expect(filled.find((entry) => entry.day === "2026-10-09")?.runCount).toBe(
+      5,
+    );
   });
 
   test("still fills up to today when truncated", () => {
@@ -224,6 +244,45 @@ describe("fillDailyTotals", () => {
 
   test("fills the whole period when truncated but no day was fetched", () => {
     expect(fillDailyTotals([], 7, NOW, true).length).toBe(7);
+  });
+});
+
+describe("chartSeries", () => {
+  const NOW = new Date("2026-10-11T15:30:00.000Z");
+  const rows = [
+    costRow({ day: "2026-10-08T00:00:00.000Z", run_count: 2 }),
+    costRow({ day: "2026-10-09T00:00:00.000Z", run_count: 4 }),
+  ];
+
+  test("fills every day of the period when the rows are under the limit", () => {
+    expect(chartSeries(rows, 7, NOW, 3).countData.length).toBe(7);
+  });
+
+  test("starts after the oldest day when the rows reach the limit exactly", () => {
+    expect(chartSeries(rows, 7, NOW, 2).countData[0]?.key).toBe("2026-10-09");
+  });
+
+  test("labels each day for the axis", () => {
+    expect(chartSeries(rows, 7, NOW, 3).countData[3]?.label).toBe("10/8");
+  });
+
+  test("takes the run count of a day as its count value", () => {
+    expect(chartSeries(rows, 7, NOW, 3).countData[4]?.value).toBe(4);
+  });
+
+  test("takes the cost of a day as its cost value", () => {
+    expect(
+      chartSeries([costRow({ total_cost_usd: 1.5 })], 7, NOW, 3).costData[3]
+        ?.value,
+    ).toBe(1.5);
+  });
+
+  test("returns the series of the period for the requested number of days", () => {
+    expect(chartSeries(rows, 30, NOW, 3).costData.length).toBe(30);
+  });
+
+  test("returns empty series for no rows", () => {
+    expect(chartSeries([], 7, NOW, 3)).toEqual({ costData: [], countData: [] });
   });
 });
 

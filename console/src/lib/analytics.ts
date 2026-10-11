@@ -76,8 +76,9 @@ function dayStartMs(day: string): number | null {
  * 期間は`now`の日(UTC)を最後とする`days`日で、棒の間隔を日数に比例させるために使う。
  * 期間の外の日の合計は捨てず、範囲を広げて含める。端末の時計とbackendの時刻はずれうるため。
  * 日付として読めない日は、並べる位置が決まらないので除く。
- * `truncated`が真のとき、取得した最も古い日より前は補わない。
- * 行数の上限で古い日が切れているので、その前を0で補うと、実際にはあった実行を無いものとして描くためである。
+ * `truncated`が真のとき、取得した最も古い日とそれより前を並べない。
+ * 行数の上限で古い日が切れているので、その前を0で補うと、実際にはあった実行を無いものとして描く。
+ * 最も古い日も、段階とモデルの行が途中で切れて、合計が実際より小さい可能性があるためである。
  */
 export function fillDailyTotals(
   totals: readonly DailyTotal[],
@@ -96,9 +97,13 @@ export function fillDailyTotals(
   const windowStart = today - (days - 1) * MS_PER_DAY;
   const fetched = [...byTime.keys()];
   const times = [windowStart, today, ...fetched];
-  const first =
-    truncated && fetched.length > 0 ? Math.min(...fetched) : Math.min(...times);
   const last = Math.max(...times);
+  let first = Math.min(...times);
+  if (truncated && fetched.length > 0) {
+    const oldest = Math.min(...fetched);
+    byTime.delete(oldest);
+    first = oldest + MS_PER_DAY;
+  }
   const filled: DailyTotal[] = [];
   for (let time = first; time <= last; time += MS_PER_DAY) {
     filled.push(
@@ -110,6 +115,50 @@ export function fillDailyTotals(
     );
   }
   return filled;
+}
+
+/** 棒グラフ1本分のデータ。 */
+export type ChartDatum = {
+  readonly key: string;
+  readonly label: string;
+  readonly value: number;
+};
+
+export type CostChartSeries = {
+  readonly costData: ChartDatum[];
+  readonly countData: ChartDatum[];
+};
+
+/**
+ * 日別コストと日別実行件数のグラフに渡す系列。
+ * 実行の無い日を補った日ごとの合計を使い、行数が`limit`に届いたときは古い日を切る。
+ * 行が1件も無いときは、期間を0で埋めずに空にする。空の表示は画面が決める。
+ */
+export function chartSeries(
+  rows: readonly AgentCostDailyRow[],
+  days: AnalyticsPeriodDays,
+  now: Date,
+  limit: number,
+): CostChartSeries {
+  if (rows.length === 0) {
+    return { costData: [], countData: [] };
+  }
+  const filled = fillDailyTotals(
+    dailyTotals(rows),
+    days,
+    now,
+    hitsRowLimit(rows.length, limit),
+  );
+  const series = (pick: (total: DailyTotal) => number): ChartDatum[] =>
+    filled.map((total) => ({
+      key: total.day,
+      label: formatMonthDay(total.day),
+      value: pick(total),
+    }));
+  return {
+    costData: series((total) => total.costUsd),
+    countData: series((total) => total.runCount),
+  };
 }
 
 /**

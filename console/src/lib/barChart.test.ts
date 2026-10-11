@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   estimateLabelWidth,
+  isLabeledIndex,
   labelStride,
   layoutBars,
   MIN_PLOT_WIDTH,
@@ -106,6 +107,28 @@ describe("labelStride", () => {
     expect(labelStride(days(90), 1200)).toBeLessThan(
       labelStride(days(90), 640),
     );
+  });
+});
+
+describe("isLabeledIndex", () => {
+  test("labels the last bar", () => {
+    expect(isLabeledIndex(89, 90, 6)).toBe(true);
+  });
+
+  test("labels the bars a whole stride before the last one", () => {
+    expect(isLabeledIndex(83, 90, 6)).toBe(true);
+  });
+
+  test("skips the bars between the labeled ones", () => {
+    expect(isLabeledIndex(86, 90, 6)).toBe(false);
+  });
+
+  test("does not label the first bar when the stride does not reach it", () => {
+    expect(isLabeledIndex(0, 90, 6)).toBe(false);
+  });
+
+  test("labels every bar for a stride of one", () => {
+    expect(isLabeledIndex(3, 10, 1)).toBe(true);
   });
 });
 

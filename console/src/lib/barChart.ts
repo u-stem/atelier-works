@@ -34,6 +34,19 @@ const NARROW_CHAR_RATIO = 0.6;
 /** 隣のラベルとの間に空ける幅(px)。 */
 const LABEL_GAP = 8;
 
+/**
+ * 横軸のラベルを、`index`番目の棒に付けるか。
+ * 間引くときは最後の棒を基準にして`stride`本おきに付ける。
+ * 日の並びで、いちばん読みたい最新の日にラベルを残すためである。
+ */
+export function isLabeledIndex(
+  index: number,
+  count: number,
+  stride: number,
+): boolean {
+  return (count - 1 - index) % stride === 0;
+}
+
 /** グラフの幅(px)の下限。測る前と、狭い画面で、ラベルの計算が崩れないようにする。 */
 export const MIN_PLOT_WIDTH = 320;
 

@@ -17,13 +17,12 @@ import { Button } from "../../components/ui/button.tsx";
 import {
   ANALYTICS_PERIOD_DAYS,
   type AnalyticsPeriodDays,
+  chartSeries,
   DEFAULT_ANALYTICS_DAYS,
   dailyTotals,
-  fillDailyTotals,
   firstTryApprovalRate,
   formatHours,
   formatIsoDate,
-  formatMonthDay,
   formatPercent,
   formatUsd,
   hitsRowLimit,
@@ -69,25 +68,14 @@ function CostReport({
   rows: readonly AgentCostDailyRow[];
   days: AnalyticsPeriodDays;
 }) {
+  // 表は実行のあった日だけを出す。グラフは実行の無い日も0で並べ、行数が上限に届いたときは古い日を切る。
   const totals = dailyTotals(rows);
-  // グラフは実行の無い日も0で並べ、間隔を日数に比例させる。表は実行のあった日だけを出す。
-  // 行数が上限に届いたときは古い日が切れているので、取れた最古の日より前は補わない。
-  const chartDays = fillDailyTotals(
-    totals,
+  const { costData, countData } = chartSeries(
+    rows,
     days,
     new Date(),
-    hitsRowLimit(rows.length, ANALYTICS_ROW_LIMIT),
+    ANALYTICS_ROW_LIMIT,
   );
-  const costData = chartDays.map((total) => ({
-    key: total.day,
-    label: formatMonthDay(total.day),
-    value: total.costUsd,
-  }));
-  const countData = chartDays.map((total) => ({
-    key: total.day,
-    label: formatMonthDay(total.day),
-    value: total.runCount,
-  }));
   return (
     <>
       <TruncationNote rowCount={rows.length} />
