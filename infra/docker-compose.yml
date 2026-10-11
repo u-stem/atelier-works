@@ -89,7 +89,10 @@ services:
           # 混ぜたサービスを、片方しか設定していなくても拒否するため
           # ("can't set distinct values on 'pids_limit' and
           # 'deploy.resources.limits.pids'")。
-          pids: 512
+          # 検査コマンドは枠ごとに`CHECK_NPROC_LIMIT`(256)までプロセスを持てる。
+          # NUM_WORKERSの数の検査がそろって上限まで使っても、検査の外に256が残る値にする。
+          # `tests/infra/docker_compose.test.ts`がこの関係を確かめる。
+          pids: 1024
     # 孤立した子プロセスを回収するため、docker-init(tini)をPID 1で動かす。
     # ジョブはgit・gh・esbuildの子プロセスを起動し、それらは親より長く残る
     # (裏での保守、タイムアウト時のプロセスグループごとのkill)。initが無いと

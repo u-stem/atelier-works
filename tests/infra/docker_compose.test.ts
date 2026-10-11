@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { CHECK_NPROC_LIMIT } from "../../f/factory/lib/check_sandbox.ts";
 
 // Console用workerの構成を静的に確かめる。
 // 書き込めるマウントをworker_logsと専用の依存キャッシュに限ること、
@@ -553,6 +554,21 @@ describe("infra/docker-compose.yml windmill_worker check sandbox", () => {
     expect(dockerfileDefault("FACTORY_CHECK_POOL_SIZE")).toBe(
       String(miseEnv().FACTORY_CHECK_POOL_SIZE),
     );
+  });
+
+  /**
+   * workerのコンテナで、検査の外のプロセス(Windmill本体、ジョブのbun、Claude、git)に残す数。
+   * 動いているworkerで、待機中が53、起動からの最大が112だったので、その2倍強にする。
+   */
+  const WORKER_PIDS_RESERVE = 256;
+
+  test("every worker process running a check at the cap leaves the reserve within the pids limit", () => {
+    const workers = envEntries(service("windmill_worker"), "NUM_WORKERS=")[0];
+    const concurrentChecks = Number(workers?.slice("NUM_WORKERS=".length));
+
+    expect(
+      concurrentChecks * CHECK_NPROC_LIMIT + WORKER_PIDS_RESERVE,
+    ).toBeLessThanOrEqual(Number(limits(service("windmill_worker")).pids));
   });
 
   test("there are at least as many slots as worker processes", () => {
