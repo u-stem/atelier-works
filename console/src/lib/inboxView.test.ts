@@ -143,12 +143,20 @@ describe("buildInboxItems", () => {
     ).toEqual([10]);
   });
 
-  test("does not list notices yet", () => {
+  test("wraps each notice as a notice item keyed by its notice id", () => {
     expect(
-      buildInboxItems(summaryOf({ notices: [notice()] })).map(
-        (item) => item.type,
-      ),
-    ).toEqual(["approval"]);
+      buildInboxItems(
+        summaryOf({ approvals: [], notices: [notice({ notice_id: 9 })] }),
+      ).map((item) => [item.type, itemId(item)]),
+    ).toEqual([["notice", 9]]);
+  });
+
+  test("lists approvals, then failures, then notices", () => {
+    expect(
+      buildInboxItems(
+        summaryOf({ failures: [failure()], notices: [notice()] }),
+      ).map((item) => item.type),
+    ).toEqual(["approval", "failure", "notice"]);
   });
 });
 
@@ -461,6 +469,31 @@ describe("describeRow", () => {
   });
 });
 
+describe("describeRow for a notice", () => {
+  test("marks an info notice in the kind label", () => {
+    expect(
+      describeRow({ type: "notice", notice: notice({ severity: "info" }) }, NOW)
+        .kindLabel,
+    ).toBe("通知(情報)");
+  });
+
+  test("marks a resolved notice in the status label", () => {
+    expect(
+      describeRow({ type: "notice", notice: notice({ resolved: true }) }, NOW)
+        .statusLabel,
+    ).toBe("解決済み");
+  });
+
+  test("names the first target of the body in the sub label", () => {
+    expect(
+      describeRow(
+        { type: "notice", notice: notice({ message: "o/r#12 (work item 3)" }) },
+        NOW,
+      ).subLabel,
+    ).toBe("o/r#12");
+  });
+});
+
 describe("auditFailureCount", () => {
   test("counts the audit failures of the summary", () => {
     expect(
@@ -510,8 +543,8 @@ describe("hasLegacyLink", () => {
     expect(hasLegacyLink("failure")).toBe(false);
   });
 
-  test("keeps the link for notices until the list shows them", () => {
-    expect(hasLegacyLink("notice")).toBe(true);
+  test("drops the link for notices, which the list now shows", () => {
+    expect(hasLegacyLink("notice")).toBe(false);
   });
 });
 
@@ -536,6 +569,14 @@ describe("unlistedNote", () => {
   test("says the failures beyond the limit are not shown, oldest first", () => {
     expect(unlistedNote({ type: "failure", label: "失敗", count: 3 })).toBe(
       "取得の上限を超えた分は、更新の古いものから表示されません",
+    );
+  });
+});
+
+describe("unlistedNote for notices", () => {
+  test("says the notices beyond the limit are not shown, oldest first", () => {
+    expect(unlistedNote({ type: "notice", label: "通知", count: 3 })).toBe(
+      "取得の上限を超えた分は、発生の古いものから表示されません",
     );
   });
 });
@@ -573,7 +614,7 @@ describe("unlistedCounts", () => {
     ).toEqual([{ type: "approval", label: "承認", count: 249 }]);
   });
 
-  test("reports failures beyond the listed ones and the unlisted notices", () => {
+  test("reports failures beyond the listed ones and notices cut by the limit", () => {
     expect(
       unlistedCounts({ approvals: 1, failures: 5, notices: 4 }, [A1, F7]),
     ).toEqual([
@@ -685,9 +726,9 @@ describe("missingSelectionMessage", () => {
     );
   });
 
-  test("says a notice list is not ready", () => {
-    expect(missingSelectionMessage({ type: "notice", id: 3 })).toBe(
-      "この種類の一覧は準備中です。",
+  test("says a notice may already be resolved", () => {
+    expect(missingSelectionMessage({ type: "notice", id: 3 })).toContain(
+      "すでに解決された",
     );
   });
 });

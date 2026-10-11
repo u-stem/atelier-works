@@ -136,7 +136,7 @@ function isSummaryFailure(value: unknown): value is SummaryFailure {
   );
 }
 
-function isSummaryNotice(value: unknown): value is SummaryNotice {
+export function isSummaryNotice(value: unknown): value is SummaryNotice {
   return (
     isRecord(value) &&
     isPositiveInteger(value.notice_id) &&

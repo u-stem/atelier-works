@@ -19,11 +19,11 @@ import {
   approvalKindLabel,
   approvalStatusLabel,
   attemptRef,
-  noticeKindLabel,
   workItemKindLabel,
   workItemRef,
   workItemStatusLabel,
 } from "./labels.ts";
+import { describeNotice } from "./noticeView.ts";
 import { formatRemainingTime } from "./relativeTime.ts";
 import { safeGitHubUrl } from "./safeUrl.ts";
 
@@ -66,8 +66,8 @@ const CHIP_LABELS: Readonly<Record<InboxChip, string>> = {
 };
 
 /**
- * summaryから一覧の項目を作る。
- * 通知は、詳細を描く画面ができるまで含めない。件数は`unlistedCounts`で知らせる。
+ * summaryから一覧の項目を作る。承認、失敗、通知の順に並べる。
+ * 監査の失敗は再実行できないので含めない。
  */
 export function buildInboxItems(summary: ConsoleSummary): InboxItem[] {
   return [
@@ -77,6 +77,7 @@ export function buildInboxItems(summary: ConsoleSummary): InboxItem[] {
     ...summary.failures
       .filter((failure) => failure.kind !== "audit")
       .map((failure): InboxItem => ({ type: "failure", failure })),
+    ...summary.notices.map((notice): InboxItem => ({ type: "notice", notice })),
   ];
 }
 
@@ -188,7 +189,6 @@ export function effectiveChip(
 
 /**
  * 選んだ項目が一覧に無いときに、詳細のペインに出す文。
- * 通知は一覧に載せない種類なので、処理済みとは言わない。
  */
 export function missingSelectionMessage(
   selection: InboxSelection | null,
@@ -197,7 +197,7 @@ export function missingSelectionMessage(
     return "一覧から項目を選んでください。";
   }
   return selection.type === "notice"
-    ? "この種類の一覧は準備中です。"
+    ? "選んだ通知は一覧にありません。すでに解決されたか、まだ取得できていません。"
     : "選んだ項目は一覧にありません。すでに処理されたか、まだ取得できていません。";
 }
 
@@ -343,16 +343,18 @@ export function describeRow(item: InboxItem, nowMs: number): RowDescription {
         iso: item.failure.updated_at,
         expiry: null,
       };
-    case "notice":
+    case "notice": {
+      const description = describeNotice(item.notice);
       return {
         key,
-        title: noticeKindLabel(item.notice.kind),
-        kindLabel: "通知",
-        statusLabel: null,
-        subLabel: null,
+        title: description.title,
+        kindLabel: description.severity === "info" ? "通知(情報)" : "通知",
+        statusLabel: description.resolved ? "解決済み" : null,
+        subLabel: description.targets[0]?.label ?? null,
         iso: item.notice.created_at,
         expiry: null,
       };
+    }
   }
 }
 
@@ -366,32 +368,36 @@ export type UnlistedCount = {
 
 /**
  * 一覧に出ていない件数のカードが、旧Consoleへのリンクを持つ種類か。
- * 失敗は新しい画面の一覧が受け持つので、旧Consoleへ誘導しない。
+ * 失敗と通知は新しい画面の一覧が受け持つので、旧Consoleへ誘導しない。
  * 残る件数は、取得の上限を超えた分だけである。
  */
 export function hasLegacyLink(type: InboxKind): boolean {
-  return type !== "failure";
+  return type === "approval";
 }
 
 /**
  * 旧Consoleへのリンクを持たない件数のカードに添える文。リンクを持つ種類は`null`。
  * 失敗の残りは、監査の失敗(再実行できない)と、取得の上限を超えた分である。
- * 取得は更新の新しい順に上限まで読むので、超えた分は更新の古いものから見えない。
+ * 通知の残りは、取得の上限を超えた分である。
+ * 取得は新しい順に上限まで読むので、超えた分は古いものから見えない。
  * 古い失敗に、再実行できるものが含まれることもある。
  */
 export function unlistedNote(entry: UnlistedCount): string | null {
   if (hasLegacyLink(entry.type)) {
     return null;
   }
-  return entry.cause === "audit"
-    ? "再実行できません。システムの画面で確認してください"
+  if (entry.cause === "audit") {
+    return "再実行できません。システムの画面で確認してください";
+  }
+  return entry.type === "notice"
+    ? "取得の上限を超えた分は、発生の古いものから表示されません"
     : "取得の上限を超えた分は、更新の古いものから表示されません";
 }
 
 /**
  * 一覧に出ていない要対応の件数を、種類ごとに返す。無ければ空の配列。
  * 件数(`counts`)は取得の上限を超えた分も数える。種類ごとに、件数から一覧にある項目を引いた差を返す。
- * 承認と失敗は上限を超えた分、通知は一覧に載せていない分である。
+ * 承認、失敗、通知とも、一覧にない分は取得の上限を超えた分である(監査の失敗は別に数える)。
  */
 export function unlistedCounts(
   counts: SummaryCounts,
