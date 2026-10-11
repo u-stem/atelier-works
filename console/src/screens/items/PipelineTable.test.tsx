@@ -67,13 +67,43 @@ const FIX_ROUND_CELL = 8;
 const UPDATED_CELL = 9;
 const SHOWN_FROM_WIDE = "@[80rem]:table-cell";
 
+/** セルの中の最初の`div`のクラス。最小幅と上限をセルでなく中身に付けているかを見る。 */
+function innerClasses(cell: string): string[] {
+  return classesOf(/<div [^>]*>/.exec(cell)?.[0] ?? "");
+}
+
 function bodyClasses(html: string, index: number): string[] {
   return classesOf(openingTag(bodyCells(html)[index] ?? ""));
 }
 
 describe("PipelineTable columns", () => {
-  test("gives the title column a minimum width", () => {
-    expect(headerClasses(render([row()]), "題名")).toContain("min-w-64");
+  test("gives the title header content a minimum width", () => {
+    const cell = headerCells(render([row()])).find((c) => c.includes("題名"));
+    expect(innerClasses(cell ?? "")).toContain("min-w-56");
+  });
+
+  test("gives the title cell content the same minimum width", () => {
+    expect(innerClasses(bodyCells(render([row()]))[1] ?? "")).toContain(
+      "min-w-56",
+    );
+  });
+
+  test("does not rely on the table cell for the title width", () => {
+    const cell = headerCells(render([row()])).find((c) => c.includes("題名"));
+    expect(
+      classesOf(openingTag(cell ?? "")).some((c) => c.startsWith("min-w-")),
+    ).toBe(false);
+  });
+
+  test("gives the branch cell content a minimum width", () => {
+    expect(
+      innerClasses(bodyCells(render([row()]))[BRANCH_CELL] ?? ""),
+    ).toContain("min-w-40");
+  });
+
+  test("makes the scroll frame of the table a container for the width query", () => {
+    const frame = /<div [^>]*overflow-x-auto[^>]*>/.exec(render([row()]));
+    expect(classesOf(frame?.[0] ?? "")).toContain("@container");
   });
 
   test("merges the issue and pull request links into one column", () => {
@@ -124,8 +154,9 @@ describe("PipelineTable columns", () => {
   });
 
   test("limits the title width inside the cell", () => {
-    const html = render([row()]);
-    expect(bodyCells(html)[1]).toContain('class="max-w-lg break-words"');
+    expect(innerClasses(bodyCells(render([row()]))[1] ?? "")).toContain(
+      "max-w-lg",
+    );
   });
 });
 

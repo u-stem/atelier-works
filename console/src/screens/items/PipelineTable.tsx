@@ -36,13 +36,18 @@ import {
  * 表の幅が足りないときに隠す列。題名、状態、更新を先に確保するため、
  * 補助の情報であるブランチ、試行、修正回数をここに置く。
  * 幅は画面ではなく表を包む領域で測る。サイドバーの有無で使える幅が変わるためである。
- * 全列を出した表の最小幅は約80rem(題名16rem、ブランチ最大16rem、試行と修正回数で約8rem、残りで約40rem)になる。
- * 閾値がこれより低いと、列が戻った直後に横スクロールが出るため、閾値を80remにしている。
+ * 全列を出した表の最小幅は約80remと見積もっている(題名と余白で約16rem、ブランチ最大16rem、試行と修正回数で約8rem、残りで約40rem)。
+ * ブランチは折り返して縮むので、実際の最小幅は見積もりより小さいことがある。
+ * 閾値が見積もりより低いと、列が戻った直後に横スクロールが出るため、閾値を80remにしている。
  */
 const NARROW_HIDDEN = "hidden @[80rem]:table-cell";
 
-/** 題名の列が潰れないための最小幅。表と見出しの両方に付ける。 */
-const TITLE_MIN_WIDTH = "min-w-64";
+/**
+ * 題名の列が潰れないための最小幅。
+ * 表のセルへの`min-width`は効き方が仕様で定まらないので、セルの中の`div`に付ける。
+ * 見出しと本文の両方の`div`に付けて、列の幅をそろえる。
+ */
+const TITLE_MIN_WIDTH = "min-w-56";
 
 function ExternalLinks({ links }: { links: readonly PipelineLink[] }) {
   if (links.length === 0) {
@@ -128,9 +133,12 @@ function SortableHeader({
 function PlainHeader({
   label,
   className,
+  labelClassName,
 }: {
   label: string;
   className?: string;
+  /** 指定すると、文字を`div`で包んでクラスを付ける。セルでなく中身に最小幅を与えるときに使う。 */
+  labelClassName?: string;
 }) {
   return (
     <th
@@ -140,7 +148,11 @@ function PlainHeader({
         className,
       )}
     >
-      {label}
+      {labelClassName === undefined ? (
+        label
+      ) : (
+        <div className={labelClassName}>{label}</div>
+      )}
     </th>
   );
 }
@@ -243,8 +255,8 @@ function PipelineRowView({ row, now }: { row: PipelineRow; now: number }) {
           #{row.work_item_id}
         </Link>
       </td>
-      <td className={cn("px-3 py-2", TITLE_MIN_WIDTH)}>
-        <div className="max-w-lg break-words">
+      <td className="px-3 py-2">
+        <div className={cn("max-w-lg break-words", TITLE_MIN_WIDTH)}>
           <PlainText value={row.title} />
         </div>
       </td>
@@ -262,13 +274,10 @@ function PipelineRowView({ row, now }: { row: PipelineRow; now: number }) {
       <td className="whitespace-nowrap px-3 py-2">
         <ExternalLinks links={relatedLinks(row)} />
       </td>
-      <td
-        className={cn(
-          "max-w-64 break-all px-3 py-2 font-mono text-small",
-          NARROW_HIDDEN,
-        )}
-      >
-        <PlainText value={row.branch} />
+      <td className={cn("px-3 py-2 font-mono text-small", NARROW_HIDDEN)}>
+        <div className="max-w-64 min-w-40 break-all">
+          <PlainText value={row.branch} />
+        </div>
       </td>
       <td className={cn("px-3 py-2 tabular-nums", NARROW_HIDDEN)}>
         {row.attempt}
@@ -343,8 +352,7 @@ export function PipelineTable({
         </p>
       ) : (
         <div className="@container overflow-x-auto rounded-xl border border-border bg-card">
-          {/* 3列を隠した表の最小幅は約56rem(題名16rem、残りで約40rem)。これを下回る領域では横にスクロールする。 */}
-          <table className="w-full min-w-[56rem] border-collapse text-body">
+          <table className="w-full border-collapse text-body">
             <thead className="text-small text-muted-foreground">
               <tr>
                 <SortableHeader
@@ -353,7 +361,7 @@ export function PipelineTable({
                   sort={sort}
                   onSort={onSort}
                 />
-                <PlainHeader label="題名" className={TITLE_MIN_WIDTH} />
+                <PlainHeader label="題名" labelClassName={TITLE_MIN_WIDTH} />
                 <PlainHeader label="種別" />
                 <SortableHeader
                   label="状態"
