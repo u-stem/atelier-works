@@ -14,6 +14,7 @@ import {
   formatUsd,
   hitsRowLimit,
   leadTimeByStatus,
+  periodButtonStyle,
   rejectionsByAttempt,
 } from "./analytics.ts";
 
@@ -228,5 +229,26 @@ describe("hitsRowLimit", () => {
 
   test("is false below the limit", () => {
     expect(hitsRowLimit(1999, 2000)).toBe(false);
+  });
+});
+
+describe("periodButtonStyle", () => {
+  test("outlines the selected period with the primary color", () => {
+    expect(periodButtonStyle(true).className).toContain("border-primary");
+  });
+
+  test("makes the selected period bold", () => {
+    expect(periodButtonStyle(true).className).toContain("font-semibold");
+  });
+
+  test("leaves the other periods plain", () => {
+    expect(periodButtonStyle(false).className).toBe("");
+  });
+
+  test("fills only the selected period", () => {
+    expect([
+      periodButtonStyle(true).variant,
+      periodButtonStyle(false).variant,
+    ]).toEqual(["secondary", "outline"]);
   });
 });

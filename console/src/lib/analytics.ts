@@ -14,6 +14,19 @@ export type AnalyticsPeriodDays = (typeof ANALYTICS_PERIOD_DAYS)[number];
 
 export const DEFAULT_ANALYTICS_DAYS: AnalyticsPeriodDays = 30;
 
+/**
+ * 期間切替のボタンの見た目。
+ * 選択中は背景の差だけだと暗いテーマで見分けにくいので、枠線と太字を足す。
+ */
+export function periodButtonStyle(selected: boolean): {
+  readonly variant: "secondary" | "outline";
+  readonly className: string;
+} {
+  return selected
+    ? { variant: "secondary", className: "border border-primary font-semibold" }
+    : { variant: "outline", className: "" };
+}
+
 /** 1日分の費用と実行件数。`day`は`YYYY-MM-DD`(UTC)。 */
 export type DailyTotal = {
   readonly day: string;
