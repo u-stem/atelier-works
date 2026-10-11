@@ -8,7 +8,6 @@ import { Button } from "../../components/ui/button.tsx";
 import { Input } from "../../components/ui/input.tsx";
 import { Select } from "../../components/ui/select.tsx";
 import { cn } from "../../lib/cn.ts";
-import { displayableIssueText } from "../../lib/intakeText.ts";
 import { workItemKindLabel } from "../../lib/labels.ts";
 import {
   DEFAULT_PIPELINE_SORT,
@@ -31,6 +30,8 @@ import {
   sortPipelineRows,
   statusOptions,
 } from "../../lib/pipelineView.ts";
+import { PipelineCards } from "./PipelineCards.tsx";
+import { PlainText } from "./PipelineParts.tsx";
 
 /**
  * 表の幅が足りないときに隠す列。題名、状態、更新を先に確保するため、
@@ -69,14 +70,6 @@ function ExternalLinks({ links }: { links: readonly PipelineLink[] }) {
       ))}
     </div>
   );
-}
-
-/** 題名やブランチのように、Issueの起票者や外のコードが決める文字。見えない文字を落としてから文字として出す。 */
-function PlainText({ value }: { value: string | null }) {
-  if (value === null || value.length === 0) {
-    return <span className="text-subtle">-</span>;
-  }
-  return <>{displayableIssueText(value).text}</>;
 }
 
 function sortIcon(sort: PipelineSort, key: PipelineSortKey) {
@@ -352,63 +345,68 @@ export function PipelineTable({
           条件に合う作業項目はありません
         </p>
       ) : (
-        <div className="@container overflow-x-auto rounded-xl border border-border bg-card">
-          <table className="w-full border-collapse text-body">
-            <thead className="text-small text-muted-foreground">
-              <tr>
-                <SortableHeader
-                  label="作業項目"
-                  sortKey="work_item_id"
-                  sort={sort}
-                  onSort={onSort}
-                />
-                <PlainHeader label="題名" labelClassName={TITLE_MIN_WIDTH} />
-                <PlainHeader label="種別" />
-                <SortableHeader
-                  label="状態"
-                  sortKey="status"
-                  sort={sort}
-                  onSort={onSort}
-                />
-                <SortableHeader
-                  label="リポジトリ"
-                  sortKey="repo"
-                  sort={sort}
-                  onSort={onSort}
-                />
-                <PlainHeader label="Issue/PR" />
-                <PlainHeader label="ブランチ" className={NARROW_HIDDEN} />
-                <SortableHeader
-                  label="試行"
-                  sortKey="attempt"
-                  sort={sort}
-                  onSort={onSort}
-                  numeric
-                  className={NARROW_HIDDEN}
-                />
-                <SortableHeader
-                  label="修正回数"
-                  sortKey="fix_round"
-                  sort={sort}
-                  onSort={onSort}
-                  numeric
-                  className={NARROW_HIDDEN}
-                />
-                <SortableHeader
-                  label="更新"
-                  sortKey="updated_at"
-                  sort={sort}
-                  onSort={onSort}
-                />
-                <PlainHeader label="書類" />
-              </tr>
-            </thead>
-            <tbody>
-              {visible.map((row) => (
-                <PipelineRowView key={row.work_item_id} row={row} now={now} />
-              ))}
-            </tbody>
-          </table>
+        <div className="@container">
+          <div className="@4xl:hidden">
+            <PipelineCards rows={visible} now={now} />
+          </div>
+          <div className="@container hidden overflow-x-auto rounded-xl border border-border bg-card @4xl:block">
+            <table className="w-full border-collapse text-body">
+              <thead className="text-small text-muted-foreground">
+                <tr>
+                  <SortableHeader
+                    label="作業項目"
+                    sortKey="work_item_id"
+                    sort={sort}
+                    onSort={onSort}
+                  />
+                  <PlainHeader label="題名" labelClassName={TITLE_MIN_WIDTH} />
+                  <PlainHeader label="種別" />
+                  <SortableHeader
+                    label="状態"
+                    sortKey="status"
+                    sort={sort}
+                    onSort={onSort}
+                  />
+                  <SortableHeader
+                    label="リポジトリ"
+                    sortKey="repo"
+                    sort={sort}
+                    onSort={onSort}
+                  />
+                  <PlainHeader label="Issue/PR" />
+                  <PlainHeader label="ブランチ" className={NARROW_HIDDEN} />
+                  <SortableHeader
+                    label="試行"
+                    sortKey="attempt"
+                    sort={sort}
+                    onSort={onSort}
+                    numeric
+                    className={NARROW_HIDDEN}
+                  />
+                  <SortableHeader
+                    label="修正回数"
+                    sortKey="fix_round"
+                    sort={sort}
+                    onSort={onSort}
+                    numeric
+                    className={NARROW_HIDDEN}
+                  />
+                  <SortableHeader
+                    label="更新"
+                    sortKey="updated_at"
+                    sort={sort}
+                    onSort={onSort}
+                  />
+                  <PlainHeader label="書類" />
+                </tr>
+              </thead>
+              <tbody>
+                {visible.map((row) => (
+                  <PipelineRowView key={row.work_item_id} row={row} now={now} />
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
     </div>

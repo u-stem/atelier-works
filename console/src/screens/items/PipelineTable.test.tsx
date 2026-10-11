@@ -189,3 +189,13 @@ describe("PipelineTable status badge", () => {
     expect(badge?.[0]).toContain("border-transparent");
   });
 });
+
+describe("PipelineTable layout", () => {
+  test("shows the table only from a wide container", () => {
+    expect(render([row()])).toContain("@4xl:block");
+  });
+
+  test("shows the cards only below a wide container", () => {
+    expect(render([row()])).toContain('class="@4xl:hidden"');
+  });
+});

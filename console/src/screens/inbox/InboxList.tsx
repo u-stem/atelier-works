@@ -2,6 +2,7 @@ import { type KeyboardEvent, useRef } from "react";
 import { TimeText } from "../../components/TimeText.tsx";
 import { Badge } from "../../components/ui/badge.tsx";
 import { cn } from "../../lib/cn.ts";
+import { rowDomKey } from "../../lib/inboxPane.ts";
 import type { InboxSelection } from "../../lib/inboxSelection.ts";
 import {
   describeRow,
@@ -59,6 +60,7 @@ export function InboxList({
           <li key={row.key}>
             <button
               type="button"
+              data-row={rowDomKey(itemSelection)}
               aria-current={isSelected ? "true" : undefined}
               className={cn(
                 "relative block w-full px-6 py-3.5 text-left outline-none transition-colors duration-150 motion-reduce:transition-none",
