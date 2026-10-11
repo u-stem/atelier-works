@@ -6,11 +6,25 @@ import {
   isViewMismatch,
 } from "./queryFailureView.ts";
 
+const MISMATCH_TEXT =
+  'console_query: "view" must be one of inbox, pipeline, agent_cost_daily (got "deployments")';
+
 const VIEW_MISMATCH: ApiError = {
   kind: "http",
   status: 422,
+  detail: MISMATCH_TEXT,
+};
+
+const VIEW_MISMATCH_AS_JOB_FAILURE: ApiError = {
+  kind: "job_failed",
+  message: MISMATCH_TEXT,
+};
+
+const SYSTEM_STATUS_MISMATCH: ApiError = {
+  kind: "http",
+  status: 422,
   detail:
-    'console_query: "view" must be one of inbox, pipeline, agent_cost_daily (got "deployments")',
+    'console_query: "view" must be one of inbox, pipeline (got "system_status")',
 };
 
 describe("apiErrorOf", () => {
@@ -26,24 +40,32 @@ describe("apiErrorOf", () => {
 });
 
 describe("isViewMismatch", () => {
-  test("is true for a 422 about the view", () => {
+  test("is true for an http error about the view", () => {
     expect(isViewMismatch(VIEW_MISMATCH)).toBe(true);
   });
 
-  test("is false for a 422 about something else", () => {
+  test("is true for a failed job about the view", () => {
+    expect(isViewMismatch(VIEW_MISMATCH_AS_JOB_FAILURE)).toBe(true);
+  });
+
+  test("is true whatever the http status is", () => {
+    expect(isViewMismatch({ ...VIEW_MISMATCH, status: 400 })).toBe(true);
+  });
+
+  test("is false for an http error about something else", () => {
     expect(
       isViewMismatch({ kind: "http", status: 422, detail: "bad args" }),
     ).toBe(false);
   });
 
-  test("is false for the same text with another status", () => {
-    expect(isViewMismatch({ ...VIEW_MISMATCH, status: 400 })).toBe(false);
+  test("is false for a failed job about something else", () => {
+    expect(isViewMismatch({ kind: "job_failed", message: "db down" })).toBe(
+      false,
+    );
   });
 
-  test("is false for a failed job with the same text", () => {
-    expect(
-      isViewMismatch({ kind: "job_failed", message: VIEW_MISMATCH.detail }),
-    ).toBe(false);
+  test("is false for an error without server text", () => {
+    expect(isViewMismatch({ kind: "network" })).toBe(false);
   });
 });
 
@@ -52,10 +74,14 @@ describe("describeQueryFailure for a view mismatch", () => {
     expect(describeQueryFailure(VIEW_MISMATCH).summary).toContain("版がずれて");
   });
 
+  test("says so for a failed job as well", () => {
+    expect(
+      describeQueryFailure(VIEW_MISMATCH_AS_JOB_FAILURE).summary,
+    ).toContain("版がずれて");
+  });
+
   test("keeps the server text only in the detail", () => {
-    expect(describeQueryFailure(VIEW_MISMATCH).detail).toBe(
-      VIEW_MISMATCH.detail,
-    );
+    expect(describeQueryFailure(VIEW_MISMATCH).detail).toBe(MISMATCH_TEXT);
   });
 
   test("does not put the server text in the summary", () => {
@@ -74,6 +100,60 @@ describe("describeQueryFailure for a view mismatch", () => {
     expect(describeQueryFailure(VIEW_MISMATCH).nextStep).toContain(
       "読み込み直",
     );
+  });
+
+  test("points to the system screen to check the last update", () => {
+    expect(describeQueryFailure(VIEW_MISMATCH).nextStep).toContain(
+      "システムの画面",
+    );
+  });
+
+  test("points to the self_update job log", () => {
+    expect(describeQueryFailure(VIEW_MISMATCH).nextStep).toContain(
+      "self_updateのジョブのログ",
+    );
+  });
+
+  test("does not point to the system screen when system_status failed", () => {
+    expect(describeQueryFailure(SYSTEM_STATUS_MISMATCH).nextStep).not.toContain(
+      "システムの画面",
+    );
+  });
+
+  test("still points to the self_update job log when system_status failed", () => {
+    expect(describeQueryFailure(SYSTEM_STATUS_MISMATCH).nextStep).toContain(
+      "self_updateのジョブのログ",
+    );
+  });
+});
+
+describe("describeQueryFailure detail", () => {
+  test("replaces control characters in the server text", () => {
+    expect(
+      describeQueryFailure({
+        kind: "http",
+        status: 400,
+        detail: "bad\u0007tag",
+      }).detail,
+    ).toBe("bad�tag");
+  });
+
+  test("replaces bidirectional controls in the server text", () => {
+    expect(
+      describeQueryFailure({ kind: "job_failed", message: "a‮b" }).detail,
+    ).toBe("a�b");
+  });
+
+  test("replaces zero-width characters in the server text", () => {
+    expect(
+      describeQueryFailure({ kind: "job_failed", message: "a​b" }).detail,
+    ).toBe("a�b");
+  });
+
+  test("keeps line breaks in the server text", () => {
+    expect(
+      describeQueryFailure({ kind: "job_failed", message: "a\nb" }).detail,
+    ).toBe("a\nb");
   });
 });
 
@@ -95,6 +175,37 @@ describe("describeQueryFailure", () => {
     expect(
       describeQueryFailure({ kind: "http", status: 502, detail: "" }).summary,
     ).not.toContain("版がずれて");
+  });
+
+  test("points a 4xx to the job log through the detail", () => {
+    expect(
+      describeQueryFailure({ kind: "http", status: 400, detail: "bad tag" })
+        .nextStep,
+    ).toContain("詳細の文を手がかりに、Windmillでジョブのログを確かめて");
+  });
+
+  test("points a failed job to the job log through the detail", () => {
+    expect(
+      describeQueryFailure({ kind: "job_failed", message: "db down" }).nextStep,
+    ).toContain("詳細の文を手がかりに、Windmillでジョブのログを確かめて");
+  });
+
+  test("points a failed job without a message to the job log", () => {
+    expect(
+      describeQueryFailure({ kind: "job_failed", message: "" }).nextStep,
+    ).toBe("Windmillでジョブのログを確かめてください。");
+  });
+
+  test("does not tell a failed job to wait and reopen", () => {
+    expect(
+      describeQueryFailure({ kind: "job_failed", message: "db down" }).nextStep,
+    ).not.toContain("時間をおいて");
+  });
+
+  test("tells a 5xx to retry later", () => {
+    expect(
+      describeQueryFailure({ kind: "http", status: 502, detail: "" }).nextStep,
+    ).toContain("時間をおいて");
   });
 
   test("puts the message of a failed job in the detail", () => {
@@ -119,6 +230,24 @@ describe("describeQueryFailure", () => {
     );
   });
 
+  test("says the request was refused for forbidden", () => {
+    expect(describeQueryFailure({ kind: "forbidden" }).summary).toContain(
+      "断られ",
+    );
+  });
+
+  test("points forbidden to the Origin and Host checks", () => {
+    expect(describeQueryFailure({ kind: "forbidden" }).nextStep).toContain(
+      "OriginとHostの検査",
+    );
+  });
+
+  test("does not send forbidden to an administrator", () => {
+    expect(describeQueryFailure({ kind: "forbidden" }).nextStep).not.toContain(
+      "管理者",
+    );
+  });
+
   test("says the response did not arrive in time for a timeout", () => {
     expect(
       describeQueryFailure({ kind: "timeout_or_unknown" }).summary,
@@ -135,6 +264,12 @@ describe("describeQueryFailure", () => {
     expect(
       describeQueryFailure({ kind: "invalid_response" }).summary,
     ).toContain("読み取れませんでした");
+  });
+
+  test("says the versions may be out of step for an invalid response", () => {
+    expect(
+      describeQueryFailure({ kind: "invalid_response" }).summary,
+    ).toContain("版がずれている可能性");
   });
 
   test("says the cause is unknown when the error is not classified", () => {

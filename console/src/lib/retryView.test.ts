@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { QueryClient } from "@tanstack/react-query";
-import { type ApiError, describeApiError } from "../api/errors.ts";
+import { type ApiError, describeWriteFailure } from "../api/errors.ts";
 import type { WriteOutcome } from "../api/executeWrite.ts";
 import type { RetryWorkItemResult } from "../api/guards/writeResults.ts";
 import { createWriteLocks } from "../api/writeLocks.ts";
@@ -122,7 +122,7 @@ describe("describeRetryOutcome", () => {
       describeRetryOutcome({
         kind: "failed",
         error,
-        message: describeApiError(error, "write"),
+        message: describeWriteFailure(error),
       }).message,
     ).toContain("一覧を読み直して確かめてください。");
   });

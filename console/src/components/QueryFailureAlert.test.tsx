@@ -35,7 +35,13 @@ describe("QueryFailureAlert", () => {
   });
 
   test("labels the details", () => {
-    expect(render(MISMATCH)).toContain("<summary");
+    expect(render(MISMATCH)).toMatch(/<summary[^>]*>詳細<\/summary>/);
+  });
+
+  test("replaces hidden characters in the details", () => {
+    expect(
+      render(new ApiFailure({ kind: "job_failed", message: "a‮b" })),
+    ).toContain("a�b");
   });
 
   test("keeps the server text out of the main text", () => {
