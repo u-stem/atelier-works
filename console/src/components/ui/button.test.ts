@@ -6,6 +6,7 @@ const VARIANTS = [
   ["default", "text-primary-foreground"],
   ["destructive", "text-destructive-foreground"],
   ["secondary", "text-secondary-foreground"],
+  ["link", "text-primary"],
 ] as const;
 
 describe("buttonVariants after the class merge", () => {
@@ -14,8 +15,8 @@ describe("buttonVariants after the class merge", () => {
     expect(merged).toContain(textColor);
   });
 
-  test("keeps the font size of the small size", () => {
-    const merged = cn(buttonVariants({ size: "sm" })).split(" ");
+  test.each(VARIANTS)("keeps the font size of %s", (variant) => {
+    const merged = cn(buttonVariants({ variant, size: "sm" })).split(" ");
     expect(merged).toContain("text-small");
   });
 });

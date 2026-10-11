@@ -16,14 +16,15 @@ export const DEFAULT_ANALYTICS_DAYS: AnalyticsPeriodDays = 30;
 
 /**
  * 期間切替のボタンの見た目。
- * 選択中は背景の差だけだと暗いテーマで見分けにくいので、枠線と太字を足す。
+ * 選択中は背景の差だけだと暗いテーマで見分けにくいので、枠線を足す。
+ * 文字の太さは変えない。変えると文字幅が動き、隣のボタンの位置がずれる。
  */
 export function periodButtonStyle(selected: boolean): {
   readonly variant: "secondary" | "outline";
   readonly className: string;
 } {
   return selected
-    ? { variant: "secondary", className: "border border-primary font-semibold" }
+    ? { variant: "secondary", className: "border border-primary" }
     : { variant: "outline", className: "" };
 }
 

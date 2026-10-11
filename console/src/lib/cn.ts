@@ -5,12 +5,19 @@ import { extendTailwindMerge } from "tailwind-merge";
  * index.cssの`--text-*`が定める文字の大きさ。
  * 教えないと、`text-body`などを文字色と見なし、同じ要素の`text-primary-foreground`を落とす。
  */
-const FONT_SIZES = ["caption", "small", "body", "lead", "title", "display"];
+export const FONT_SIZES: readonly string[] = [
+  "caption",
+  "small",
+  "body",
+  "lead",
+  "title",
+  "display",
+];
 
 const twMerge = extendTailwindMerge({
   extend: {
     classGroups: {
-      "font-size": [{ text: FONT_SIZES }],
+      "font-size": [{ text: [...FONT_SIZES] }],
     },
   },
 });

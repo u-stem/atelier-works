@@ -237,8 +237,8 @@ describe("periodButtonStyle", () => {
     expect(periodButtonStyle(true).className).toContain("border-primary");
   });
 
-  test("makes the selected period bold", () => {
-    expect(periodButtonStyle(true).className).toContain("font-semibold");
+  test("keeps the font weight so that the neighbors do not move", () => {
+    expect(periodButtonStyle(true).className).not.toContain("font-");
   });
 
   test("leaves the other periods plain", () => {

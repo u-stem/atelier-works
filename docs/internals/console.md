@@ -37,7 +37,7 @@ importは相対パスにし、型アサーションは外す。
 | アクセント | 藍(`primary`)の1色。選択中の帯、主要な操作、フォーカスの輪に使う |
 | 意味の色 | 承認は青(`approval`)、失敗は赤(`destructive`)、通知は琥珀(`warning`)、成功は緑(`success`)。点、バッジ、ラベルに使う |
 | 文字の濃さ | 主(`foreground`)、副(`muted-foreground`)、補足(`subtle-foreground`)の3段 |
-| 文字の大きさ | 12、13、14、16、20、24pxの6段(`text-caption`、`text-small`、`text-body`、`text-lead`、`text-title`、`text-display`)。本文の行間は1.7 |
+| 文字の大きさ | 12、13、14、16、20、24pxの6段(`text-caption`、`text-small`、`text-body`、`text-lead`、`text-title`、`text-display`)。本文の行間は1.7。大きさを足したら、`src/lib/cn.ts`の`FONT_SIZES`にも足す。足し忘れると、`cn`が同じ要素の文字色の指定を落とす |
 | 書体 | Hiragino Sans、Noto Sans JP、system-uiの順。Webフォントを読み込まない。CSPが外部のファイルを拒むためである |
 | 数字 | 件数や時刻は`tabular-nums`で桁をそろえる |
 | 動き | 選択とhoverの遷移は150ms。動きを減らす設定の利用者には、アニメーションと遷移をほぼ止める |
@@ -47,6 +47,8 @@ importは相対パスにし、型アサーションは外す。
 
 文字と背景の組が基準を満たすことは、`src/theme-tokens.test.ts`が`index.css`を読んで確かめる。
 対象は、面の上の文字、意味の色の文字、薄く重ねた面(バッジと帯)の上の文字、入力欄の境界・フォーカスの輪・通知の点などの図形である。
+`X-foreground`と`X`の組も、定義されたすべてをライトとダークの両方で確かめる。
+`FONT_SIZES`が`index.css`の文字の大きさと一致することは、`src/lib/cn.test.ts`が確かめる。
 承認、失敗、通知の違いは、色だけに頼らず、隣の文字でも伝える。
 
 表示する日本語は`src/lib/labels.ts`に集める。
