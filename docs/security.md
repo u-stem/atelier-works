@@ -112,6 +112,17 @@ Claudeや検査コマンドが書ける詳細と、pr_fixのClaudeが理由と�
 残るリスクとして、Claudeは`blocked_reason`の全体を既知の理由と同じ文にできる。
 そのときは、その理由の訳文と次の操作が表示される。
 
+### 自己更新の通知の状態
+
+`poll_issues`は、版の食い違いを最初に見た時刻をWindmillのstateに保存し、猶予を超えたときに`deployed_sha_mismatch`を通知する。
+通知は、今の`deployed_sha`への反映が成功した記録(`factory.deployments`)のうち最も新しいものより前に作られたものだけが、自動で解決される。
+残るリスクは次のとおりである。
+
+- stateを書けるWindmillの利用者は、`deployed_sha_mismatch`の通知を遅らせられる。`deployed_sha`を書ける者と同じ範囲である。
+- stateや`deployed_sha`を書き換えても、通知より新しい反映の成功の記録が無い限り、通知は解決されない。
+- `deployed_sha`を今のHEADに書き換えると、版が一致するので、自己更新もそれを反映済みとみなす。これは通知の仕組みより前からある性質である。
+- `factory.deployments`に書けるDBの利用者は、この判定も動かせる。
+
 ## シークレットの扱い
 
 ### Windmillでの保持
@@ -575,7 +586,93 @@ bunかnodeの起動そのものが止まったときだけ、タイムアウト�
 
 Consoleは、`f/factory/steps/console_query.ts`の`requirements_doc`ビューで、`requirements.md`と各図のファイルを読み戻す。読む前に、`doc_dir`が`REQUIREMENTS_BASE_DIR`の下にあることを確かめる。図のXMLはWindmillのジョブ結果としてConsoleのフロントエンドに渡るだけで、GitHubとDiscordには送らない。
 
-生成した図のXMLは、`f/factory/lib/drawio.ts`の`validateDrawioXml`で検査する。
+図のXMLは、`f/factory/lib/drawio.ts`の`validateDrawioXml`で検査する。
+検査は2か所でかける。生成の時点と、`requirements_doc`ビューがディスクから読み戻す時点である。
+ディスクのファイルは生成の後に書き換わりうるので、読み戻す時点でも同じ検査をかける。
+読み戻しで通らない図は、ファイル名が不正な図と同じように、警告のログを残して一覧から落とす。
+検査が例外で終わった図も、通らない図として扱い、警告のログを残す。安全と確かめられない図は、表示しないほうを選ぶためである。
+文書の本文と、ほかの図は返す。
+
+検査は、大きさ、ルート要素に加えて、次のものを加工せずに拒否する。
+拒否したときは`valid: false`と理由を返す。
+
+- 圧縮した図。すべての`<diagram>`について、空白以外のテキストとCDATAを拒否する。`<mxfile>`の`compressed`属性の値が`true`のときも、引用符の種類を問わず拒否する。圧縮した図は中身が見えず、以降の検査を素通りするためである
+- `link`属性と`usemap`属性
+- `placeholders`属性と、`<mxfile>`の`vars`属性。理由は下にある
+- 図の構造としての`<a>`、`<area>`、`<map>`、`<meta>`、`<iframe>`要素
+- ラベルのHTMLの、パーサーによって読み方が分かれる構文。大文字小文字を区別しない。
+  - `<!`で始まる構文(コメント、DOCTYPE、CDATA、偽のコメント)、`<?`、`</`の後ろが英字でない形
+  - 中身をタグとして読まない要素。属性の有無を問わない。
+    対象は`<textarea>`、`<title>`、`<xmp>`、`<noscript>`、`<noembed>`、`<noframes>`、`<plaintext>`、`<iframe>`、`<style>`、`<script>`である
+  - 外来要素の`<svg>`と`<math>`
+  - SVGのアニメーション要素: `<set>`、`<animate>`、`<animateMotion>`、`<animateTransform>`
+
+  理由は、下の「ラベルのHTMLの読み方」にある。
+- ラベルのHTMLの、属性付きの次の要素。属性付きとは、`名前=`の形の属性を持つことである。
+  - リンク: `<a>`、`<area>`、`<map>`
+  - ページ遷移: `<meta>`、`<base>`、`<link>`
+  - 埋め込み: `<object>`、`<embed>`、`<frame>`、`<img>`、`<image>`、`<video>`、`<audio>`、`<source>`、`<use>`
+  - 送信: `<form>`、`<input>`、`<button>`
+
+  `<image>`は、HTMLのパーサーが`<img>`に置き換えるので、`<img>`と同じに扱う。
+  `<iframe>`と`<svg>`は、上の読み方が分かれる構文として、属性の有無を問わず拒否する。
+- ラベルのHTMLのタグの中のイベントハンドラ属性。`onclick=`のように、`on`と英字の名前に`=`が続く形である
+- ラベルのHTMLの`usemap=`、`formaction=`、`srcdoc=`
+- 構文が不正なXML。閉じていないコメント、CDATA、処理命令、タグ、引用符と、タグの引用符の外の`<`である。XML全体を前から1回だけ読み、読めない箇所があれば拒否する。正規表現の打ち切りで、手前までしか検査されずに通ることを防ぐためである
+
+`Promise<Object>`、`List<Map>`、`Result<A, E>`のように、属性を持たない要素名だけの表記は通す。
+型の書き方としてラベルに現れ、属性の無い要素は行き先も資源のURLも持てないためである。
+`<A extends B = C>`のような表記は拒否することがある。要素名と同じ型引数の名前に`名前=`が続くと、属性付きの要素と見分けられないためである。
+
+図のXMLを加工して取り除くと、図の見た目が変わり、ビューアの解釈との差が新しい抜け道にもなる。
+そのため、取り除かずに拒否し、理由を生成のやり直しでClaudeに伝える。
+
+属性の値とテキストは、XMLの実体参照(`&lt;a`、数値文字参照の`&#60;`と`&#x3c;`)を復号してから調べる。
+ビューアは`html=1`のラベルをHTMLとして解釈するためである。
+二重にエスケープした`&amp;lt;a`も、安全側に倒して復号し、拒否する。実際に何として読まれるかは追わない。
+復号は5段までで、それでも変わり続ける値は調べきれないので拒否する。
+`placeholders`属性は、どの要素にあっても値を問わず拒否する。`<mxfile>`の`vars`属性も拒否する。
+`placeholders`を持つセルでは、draw.ioがラベルの`%名前%`を別の値に置き換える。
+置き換える値は、祖先のセルの属性、ページの名前、`vars`に書いた値などである。
+タグを置き換え元の値とラベルに分けて書けるので、置き換えた後のラベルを検査では確かめきれない。
+要件定義の図には置き換えが要らないので、使うこと自体を拒否する。
+要素と属性の名前は、大文字小文字を区別せずに比べる。
+`link`と`usemap`は名前の完全一致だけを見るので、`linkTarget`のような別の属性や、ラベルの文章にあるだけの単語は拒否しない。
+`<object>`は、draw.ioがセルを包む要素として正しい。構造としては許し、ラベルのHTMLの中の、属性付きのものだけを拒否する。
+
+### ラベルのHTMLの読み方
+
+検査は、ラベルのHTMLのタグを、引用符を読む走査で読む。
+`<`に英字が続く開始タグと、`</`に英字が続く終了タグを、HTMLのパーサーと同じ規則で、引用符の外の`>`まで読む。
+終了タグも読むのは、HTMLのパーサーが終了タグの属性の引用符も読むためである。
+この走査で、イベントハンドラ属性と、属性付きの拒否する要素を探す。
+タグの外の文章にある`one = 1`、`online = true`、`https://x/?online=1`は拒否しない。
+
+パーサーによって読み方が分かれる構文を拒否するのは、検査とブラウザがタグを同じ位置で区切る入力だけを通すためである。
+HTMLのパーサーは、コメントや`<textarea>`の内側をタグとして読まない。
+検査がその内側の引用符を読むと、タグの終わりが検査とブラウザでずれ、本物のタグのハンドラを見逃す。
+`<svg>`と`<math>`の内側は、CDATAを読むなど、別の規則で読まれる。
+これらの構文が無いラベルでは、ブラウザはタグの外を常に同じ規則で読み、引用符を読む走査と同じ位置でタグを区切る。
+SVGのアニメーション要素は、`href`などの属性を後から書き換えてリンクを作れるので、`<svg>`の外にあっても拒否する。
+
+要素名は、後ろに空白、`/`、`>`、文字列の終わりが続くときだけ当てる。
+HTMLのパーサーは、それ以外の文字を要素名の続きとして読むので、`Map<Settings>`や`List<Titles>`は通す。
+`<title>`は、属性が無くても拒否する。
+属性の無い`<title>`でも、閉じるまでの内側をタグとして読まない状態に入るためである。
+`Map<title>`のような型の表記は拒否されるので、型の名前を変えるか、文章で書く。
+`a < b`のように`<`の後ろが英字でない形は通す。
+`x </ y`のように`</`の後ろが英字でない形は、HTMLのパーサーが偽のコメントとして読むので拒否する。
+
+補助として、引用符を読まない走査も行う。
+`<`に英字が続く箇所から次の`>`までの区間を、引用符を無視してタグとして調べ、イベントハンドラ属性があれば拒否する。
+属性付きの要素も、要素名の後ろから最初の`>`までに`名前=`があれば拒否する。
+引用符を読む走査とブラウザで読み方の分かれる入力が、まだ残っていたときに備えるためである。
+引用符の中の`>`で区間が切れるので、補助の走査だけでは足りない。
+
+どの走査も、調べ終えた位置の後ろから次を探すので、検査の時間は入力の長さに比例する。
+この検査は1層目である。
+2層目は、iframeのCSPである。
+`script-src`に`'unsafe-inline'`が無いので、検査をすり抜けたハンドラも実行されない。
 
 ### 隔離したiframeで描く
 
@@ -606,9 +703,10 @@ XMLをiframeへ送るときの`targetOrigin`は`"*"`にする。
 送るのは図のXMLだけなので、宛先を絞れなくても許容する。
 
 サーバー側で図の`link`属性と`html=1`を落とす処理は入れない。
-iframeの中で動くscriptが取れるのは、そのiframeが受け取った図のXMLだけだからである。
-リンクを押せず、外への取得はCSPが止める。
-XMLを加工すると、図の見た目が変わり、ビューアの解釈との差が新しい抜け道にもなる。
+`validateDrawioXml`は1層目として、リンクを含む図のうち既知の形を拒否する。網羅はしない。
+すり抜けた図は、2層目のCSP、sandbox、受け口のscriptとビューアの設定が受け止める。
+iframeの中で動くscriptが取れるのは、そのiframeが受け取った図のXMLだけで、リンクを押せず、外への取得はCSPが止める。
+`html=1`を落とすと、`<br>`による改行のような正しい図が壊れる。
 
 残るリスクは次のとおりである。
 
@@ -620,7 +718,124 @@ XMLを加工すると、図の見た目が変わり、ビューアの解釈と�
   - ビューアが`eval`を呼ぶ箇所は2つある。図のスタイルや定義に書かれた式を評価する経路は、評価を許すフラグがどれも既定で無効である。外部の図形ライブラリのscriptを取得して評価する経路は、取得をCSPの`connect-src 'none'`が止める。`new Function`は無い。
   - `'unsafe-eval'`を付けずに、普通の図と、リンク、外部の画像、フォント、図形ライブラリ、評価を許す式を含む図を描いた。`eval`の違反は出なかった。
 - 外部の図形ライブラリ(AWSなどのアイコン集)を使う図は、その図形が描かれない。外部への取得をCSPが止めるためである。
-- Windmillのraw app(Factory Console)の`components/DrawioViewer.tsx`は、ビューアをdiagrams.netのCDNから読む。この部品は、Consoleの図の描画がこの隔離したiframeに移るまで残る。
+
+### 旧Consoleのraw appで描く
+
+Windmillのraw app(Factory Console)も、図をWindmillのオリジンで直接は描かない。
+`components/DrawioViewer.tsx`が、隔離したiframeの中で描く。
+ビューアの欠陥が、管理者としてWindmillを操作できるXSSになるのを防ぐためである。
+ビューアはWindmillのオリジンでは動かず、iframeの中でだけ動く。
+iframeの`src`は、SPAのConsoleが配信する`/console/drawio.html`である。
+そのページの同梱のビューア、受け口のscript、HTTPのCSPは、上の表のとおりで、raw appは別のビューアも別のCSPも持たない。
+raw appがsandboxなしでWindmillと同じオリジンで動くなら、`/console/`も同じサイトなので、`frame-ancestors`に一致して読み込めるはずである。
+ただし、実機で確かめるまでは前提として扱う。
+管理スキルの`.claude/skills/raw-app/SKILL.md`に、バンドルが不透明なオリジンから動くという記述があり、この前提に反するためである。
+読み込めない場合は、隔離なしの描画には戻らず、図の代わりに「図のページが応答しませんでした」と出す。
+図を描けなくなる側に倒れるので、安全側である。
+
+| 守ること | 内容 |
+| --- | --- |
+| 不透明なオリジンで動かす | `<iframe src="/console/drawio.html" sandbox="allow-scripts" referrerPolicy="no-referrer">`にする。`srcDoc`は使わない。`allow-same-origin`、`allow-popups`、`allow-forms`、`allow-top-navigation`は付けない。iframeは、WindmillのCookie、親のDOM、最上位のページの遷移、ポップアップ、フォームの送信から切り離される。外への取得は、CSPの`connect-src 'none'`が止める |
+| SPAと同じ値を使う | `src`とsandboxは、`lib/drawioMessages.ts`の`DRAWIO_FRAME_SRC`と`DRAWIO_FRAME_SANDBOX`から使う。`DRAWIO_FRAME_SRC`と`MAX_XML_BYTES`は、`console/src/lib/drawioMessages.ts`と同じ値にする。メッセージの種別と失敗の種類は、`console/public/drawio/drawio-frame-*.js`と同じにする。`tests/lib/drawio_raw_app_isolation.test.ts`が、ソースを文字列として読んで確かめる |
+| XMLは1回だけ渡す | 最初のloadの後にpostMessageで1回だけ送る。親は、送り元がそのiframeの`contentWindow`のものだけを受け取り、高さを80〜1600の範囲に収め、失敗は固定の3つの種類だけを受ける。iframeが2回目のloadを起こしたら、遷移とみなして表示を止める |
+| 図を拒否する | 上の`validateDrawioXml`が、生成の時点と読み戻しの時点で、リンク、危険な要素、圧縮した図を拒否する |
+| 取り違えを防ぐ | 図は枠で囲み、「Issueから生成した図」と明記する。図が承認画面を偽った表示をしても、読み手が取り違えにくくするためである |
+
+読み戻しで拒否した図は、`requirements_doc`ビューが名前を`rejected_diagrams`で返す。
+本文は、その名前の図を「安全の検査を通らなかったので表示しません」と表示し、図が見つからない場合と区別する。
+
+読み戻しの検査は、すでにディスクにある図にもかかる。検査を通らない図は表示しない。
+`link`属性や`<a>`を含む既存の図は、「表示しません」になる。
+承認する人は、図を見ないまま判断することになる。
+図が判断に要るときは、要件定義の作り直しを求める。
+
+#### sandboxが止められない経路
+
+`sandbox`は、iframeの`window.top.postMessage`と`window.parent.postMessage`を止められない。
+旧Consoleでは、図のiframeのscriptが、WindmillのSPAとraw appのメッセージの通り道に届く。
+raw appの`backend.*`の呼び出しは、メッセージを通してWindmillのSPAが受けて実行し、応答をraw appのリスナーが受ける。
+図のscriptがこの通り道へ送ったメッセージが、`backend.*`の呼び出しや応答として扱われると、sandboxの隔離は意味を失う。
+そのため、次の2つが`event.source`を確かめて、自分が送った相手以外のメッセージを捨てていることが前提になる。
+
+- WindmillのSPA。raw appの`backend.*`の呼び出しを受ける側
+- raw app内の、応答を受けるリスナー
+
+この前提は、Windmill 1.817.0のコードと実機で確かめる必要がある。
+このリポジトリで読めるのは、次の2点までである。
+
+- 図の部品(`DrawioViewer.tsx`)が`event.source`を確かめること
+- `windmill-client`の1.817.0に`message`のリスナーが無いこと
+
+Windmill本体の画面と、raw appの実行時に注入される応答のリスナーは、このリポジトリに無く、`event.source`を確かめているかは未確認である。
+`mise.toml`の`WM_VERSION`を上げるたびに、確かめ直す。
+
+SPAのConsoleには、この経路が無い。
+親のページは、iframeから高さと失敗の種類だけを受け、Windmillの`backend.*`のメッセージの通り道を持たないためである。
+
+#### 保護パス
+
+次のファイルは、保護パスである。
+
+- `DrawioViewer.tsx`
+- `lib/drawioMessages.ts`
+- `lib/drawioFrameState.ts`
+- `tests/lib/drawio_raw_app_isolation.test.ts`
+
+書き換えられると、sandboxを外したり、別のページをiframeに読ませたりできるためである。
+iframeへ送るXMLと、受ける応答の扱いも変えられる。
+保護したファイルが主に守るのは、iframeの`src`と、送るXMLの扱いである。
+
+`components/Markdown.tsx`は保護しない。
+旧Consoleの普段の変更を、保護パスで止めないためである。
+`sandbox`は、HTTPのCSP(`infra/Caddyfile`の`drawio_headers`)も後ろ盾になる。
+別の部品が`/console/drawio.html`をsandboxなしのiframeで読む迂回は、CSPの`sandbox allow-scripts`が、ページを不透明なオリジンに固定して止める。
+`frame-ancestors`は、埋め込める親を、このサイトと同じオリジンのページに限る。
+
+制約は次のとおりである。
+
+- SPAのConsoleが配信されていないと、`/console/drawio.html`が無く、図は描かれない。親は、応答がないものとして固定の文を出す。
+- 外部の図形ライブラリ(AWSなどのアイコン集)と、ビューアのtoolbar、ズーム、レイヤは使えない。
+
+残るリスクは次のとおりである。
+
+- ビューアがiframeの中で`window.location`を書き換えて遷移する経路は、`sandbox`で防げない。2回目のloadの検知で表示を止めるが、loadが起きない遷移は検知できない。そのときも、親が受け取るのは、範囲に収めた高さと、固定の失敗の種類だけである。
+- 図のiframeが`window.top.postMessage`と`window.parent.postMessage`で、WindmillのSPAとraw appのメッセージの通り道に届く。上のとおり、Windmill本体の画面とraw appの応答のリスナーが`event.source`を確かめているかは、未確認である。`WM_VERSION`を上げるたびに確かめ直す。確かめていない版では、この経路を塞げているとは言えない。
+  それでも受け入れる理由は、この隔離が新しい経路を作らないためである。
+  届くには、ビューアの欠陥、検査のすり抜け、送り元を確かめないリスナーの3つが揃う必要がある。
+  ビューアをWindmillのオリジンで直接動かす構成なら、より広く届く。
+- ラベルの`%名前%`を別の値に置き換える`placeholders`と`vars`は、検査が拒否する。
+  draw.ioが別の属性でも同じ置き換えをするようになると、検査はその図を拒否できない。
+  その図は、iframeの隔離とCSPで止める。
+
+実機でしか確かめられない点は次のとおりである。
+
+- raw appから`/console/drawio.html`をiframeで読めること。`frame-ancestors`が合わないと、図の代わりに応答なしの文が出る。
+- raw appがsandboxなしで動くこと。管理スキルの`.claude/skills/raw-app/SKILL.md`は、バンドルが不透明なオリジンから動くと書いており、反する。
+- raw appの文書が`srcdoc`か`blob:`かで、相対パス`/console/drawio.html`が解決できるかが変わる。`blob:`だと解決できないおそれがある。
+- 図が描かれ、高さが図に追従すること。
+- リンクを含む図を描いても、クリックで遷移しないこと。
+- 図のiframeから`window.top`と`window.parent`へ`backend.*`の呼び出しや応答の形のメッセージを送っても、実行されず、応答も奪われないこと。
+
+## 要件定義書のリンク
+
+要件定義書と監査レポートのMarkdownは、Issueの内容に由来する。
+Windmillのraw appは、これをWindmillと同じオリジンで描く。
+`rehype-sanitize`の既定のスキーマは`javascript:`などを除くが、任意の`http(s)`のURLの`a[href]`は通す。
+そのため、読み手がリンクの文字を信じて、外のページを開くおそれがある。
+
+`components/Markdown.tsx`は`a`を差し替え、`lib/markdownLink.ts`の`resolveMarkdownLink`で、リンクにするものを絞る。
+
+- 作業項目と同じリポジトリのIssueとPRのURL。`lib/githubLink.ts`の`safeGitHubUrl`を通り、ownerとrepoが作業項目のものと一致するものに限る。ownerとrepoは、大文字小文字を区別せずに比べる。信頼できない本文が、読み手を別のリポジトリへ誘導できないようにするためである。
+- 同じページの見出しへのフラグメント。`#`で始まり、`lib/extractHeadings.ts`の`slugify`が作るslugと同じ形に限る。
+
+`Markdown`は、リポジトリを`repo`の引数で受ける。要件定義書(`RequirementsDocument`)と承認タブの提案は、作業項目のownerとrepoを渡す。
+監査レポート(`AuditTab`)のように渡せない呼び出し元では、GitHubのURLもリンクにせず、文字で出す。
+それ以外は、リンクにせず文字で出す。
+リンクの文字とURLが違うときは、URLも括弧で添える。
+読み手が行き先を判断できるようにするためである。
+添えたURLは`<bdi>`で包む。文字の向きを変える制御文字が、周りの表示を崩さないようにするためである。
+同じページの見出しへのリンクは、行き先を取り違えようがないので、URLを添えない。
+GitHubへのリンクは、`rel="noopener noreferrer"`を付けて新しいタブで開く。
 
 ## PR修正の安全策
 
@@ -650,7 +865,8 @@ Claudeに渡すツールは`Read`、`Glob`、`Grep`、`Edit`、`Write`だけで�
 markdownlint-cli2とtextlintの設定(`.markdownlint-cli2.jsonc`、`.textlintrc.json`など)も止める。どちらも設定から任意のモジュールを読み込め、pre-commitと`mise run check`が読むためである。
 Consoleでバンドルを通らずに配信される`console/public/`と`console/index.html`も止める。
 配信するdraw.ioのビューアを固定する`console/drawio-viewer.json`も止める。
-固定を強制し、配信物を作って検査するスクリプトも止める。一覧は`f/factory/lib/protected_paths.ts`の`FORBIDDEN_EXACT_PATHS`にある。
+固定を強制し、配信物を作って検査するスクリプトも止める。
+旧Consoleのraw appが図を隔離して描く部品(iframeを作る`DrawioViewer.tsx`、`src`とsandboxの定数、iframeとの状態の遷移、それらを照合するテスト)も止める。一覧は`f/factory/lib/protected_paths.ts`の`FORBIDDEN_EXACT_PATHS`にある。
 CIがどのジョブを動かすかを決める`scripts/ci-scope.ts`も止める。書き換えられると、検査のジョブを飛ばされるためである。
 配信のCSPを持つ`infra/Caddyfile`と、配信物を検証する`infra/console_fetcher/`も止める。
 一覧は`f/factory/lib/protected_paths.ts`にある。

@@ -25,6 +25,10 @@ import {
   type SqlClient,
   type SqlRow,
 } from "../lib/db.ts";
+import {
+  type DrawioValidationResult,
+  validateDrawioXml,
+} from "../lib/drawio.ts";
 import { logger } from "../lib/log.ts";
 import {
   DIAGRAM_NAME_PATTERN,
@@ -769,6 +773,12 @@ export type RequirementsDocRow = {
   readonly summary: string;
   readonly markdown: string;
   readonly diagrams: RequirementsDiagramContent[];
+  /**
+   * 読み戻した図のうち、安全の検査(`validateDrawioXml`)を通らなかった図の名前。
+   * Consoleは、「見つかりません」と区別して「通らなかったので表示しません」と出す。
+   * 図の中身と理由は返さない。`doc_dir_source`が`"db_fallback"`のときは空。
+   */
+  readonly rejected_diagrams: string[];
   readonly open_questions: string[];
   readonly doc_dir_source: DocDirSource;
 };
@@ -791,6 +801,11 @@ export type RequirementsDocRow = {
  * `name`/`file`が`DIAGRAM_NAME_PATTERN`/`DIAGRAM_FILE_PATTERN`の規則に合わない図も、
  * `file`を`docDir`に連結する前に同じく落とし、警告をログに残す。
  * 壊れた`diagrams`列の値(例: `"../../etc/passwd.drawio"`)を読ませないため。
+ * 読み戻した図のXMLには、生成の時点と同じ`validateDrawioXml`をかけ、通らない図は
+ * ファイル名の不正と同じく警告をログに残して落とし、名前を`rejected_diagrams`に返す。
+ * ディスクのファイルは生成の後に書き換わりうるので、生成時の検査を信用しない。
+ * 検査が例外で終わった図も、拒否した図として扱い、警告をログに残す(閉じる側に倒す)。
+ * `validate`はテスト用に差し替えられる。
  * 図のXMLはGitHubやDiscordには載せず、Consoleの図ビューア
  * (`components/DrawioViewer.tsx`)のためだけにここで読む。
  */
@@ -798,9 +813,11 @@ export async function readDocFromDisk(
   docDir: string,
   diagrams: readonly Diagram[],
   readFile: ReadTextFile = readTextFile,
+  validate: (xml: string) => DrawioValidationResult = validateDrawioXml,
 ): Promise<{
   readonly markdown: string;
   readonly diagrams: RequirementsDiagramContent[];
+  readonly rejected_diagrams: string[];
 } | null> {
   if (!isAbsolute(docDir)) {
     return null;
@@ -818,6 +835,7 @@ export async function readDocFromDisk(
     return null;
   }
   const resolvedDiagrams: RequirementsDiagramContent[] = [];
+  const rejectedDiagrams: string[] = [];
   const log = logger("console_query");
   for (const diagram of diagrams) {
     if (
@@ -830,14 +848,40 @@ export async function readDocFromDisk(
       });
       continue;
     }
+    let xml: string;
     try {
-      const xml = await readFile(`${dir}/${diagram.file}`);
-      resolvedDiagrams.push({ name: diagram.name, xml });
+      xml = await readFile(`${dir}/${diagram.file}`);
     } catch {
       // 図のファイルが無いか読めなければ、この図だけを落とす。
+      continue;
     }
+    let validation: DrawioValidationResult;
+    try {
+      validation = validate(xml);
+    } catch (error) {
+      // 検査が例外で終わった図は、安全と確かめられないので拒否した図として扱う。
+      log.warn("skipping diagram because validation threw", {
+        name: diagram.name,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      rejectedDiagrams.push(diagram.name);
+      continue;
+    }
+    if (!validation.valid) {
+      log.warn("skipping diagram that fails validation", {
+        name: diagram.name,
+        reason: validation.reason,
+      });
+      rejectedDiagrams.push(diagram.name);
+      continue;
+    }
+    resolvedDiagrams.push({ name: diagram.name, xml });
   }
-  return { markdown, diagrams: resolvedDiagrams };
+  return {
+    markdown,
+    diagrams: resolvedDiagrams,
+    rejected_diagrams: rejectedDiagrams,
+  };
 }
 
 async function toRequirementsDocRow(
@@ -861,6 +905,7 @@ async function toRequirementsDocRow(
     summary: asStr(row.summary, "summary"),
     markdown: fromDisk?.markdown ?? asStr(row.markdown, "markdown"),
     diagrams: fromDisk?.diagrams ?? [],
+    rejected_diagrams: fromDisk?.rejected_diagrams ?? [],
     open_questions: parseStringArray(row.open_questions, "open_questions"),
     doc_dir_source: fromDisk === null ? "db_fallback" : "file",
   };
