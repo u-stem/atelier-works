@@ -1284,6 +1284,8 @@ suite("entries another slot adds during a check", () => {
   const uid = POOL[4] ?? 0;
   const other = POOL[5] ?? 0;
   const victim = join(fx.base, "victim");
+  /** 別の枠が自分の所有で作り、worktreeへハードリンクするworktreeの外のファイル。 */
+  const ownFile = `/tmp/check-sandbox-it-own-${String(process.pid)}`;
   let worktree = "";
   let added = -1;
 
@@ -1312,6 +1314,7 @@ suite("entries another slot adds during a check", () => {
         "touch shared/b-file && chmod 666 shared/b-file",
         `ln -s ${victim} shared/b-link`,
         "mkdir shared/b-acl && setfacl -d -m o::rwx shared/b-acl",
+        `touch ${ownFile} && chmod 666 ${ownFile} && ln ${ownFile} shared/b-hardlink`,
       ].join(" && "),
       worktree,
     );
@@ -1319,7 +1322,10 @@ suite("entries another slot adds during a check", () => {
     writeFileSync(join(worktree, "shared", "b-acl", "by-root"), "x\n");
   }, 60_000);
 
-  afterAll(() => fx.cleanup());
+  afterAll(() => {
+    fx.cleanup();
+    rmSync(ownFile, { force: true });
+  });
 
   test("the other slot could add entries while the check ran", () => {
     expect(added).toBe(0);
@@ -1349,6 +1355,58 @@ suite("entries another slot adds during a check", () => {
     expect(
       statSync(join(worktree, "shared", "b-acl", "by-root")).mode & 0o022,
     ).toBe(0);
+  });
+
+  test("the file outside the worktree the other slot hard-linked in is owned by root afterwards", () => {
+    expect(lstatSync(ownFile).uid).toBe(0);
+  });
+
+  test("the file outside the worktree the other slot hard-linked in is closed afterwards", () => {
+    expect(lstatSync(ownFile).mode & 0o022).toBe(0);
+  });
+});
+
+suite("a hard link a check makes to a writable file of root", () => {
+  const fx = makeRepo();
+  const lockDir = join(fx.base, "slots");
+  const uid = POOL[6] ?? 0;
+  const rootFile = join(fx.base, "root-writable");
+  let worktree = "";
+  let outcome = "";
+
+  beforeAll(async () => {
+    mkdirSync(WINDMILL_TMP_DIR, { recursive: true });
+    worktree = fx.addWorktree("hardlink");
+    writeFileSync(rootFile, "x\n");
+    chmodSync(rootFile, 0o666);
+    writeFileSync(join(worktree, "link.sh"), `ln ${rootFile} linked\n`);
+    outcome = await runChecks(
+      worktree,
+      ["sh ./link.sh"],
+      sandboxIn(lockDir, [uid]),
+    )
+      .then(() => "taken back")
+      .catch((error: unknown) =>
+        error instanceof Error ? error.message : String(error),
+      );
+  }, 60_000);
+
+  afterAll(() => fx.cleanup());
+
+  test("the check could link the file into the worktree", () => {
+    expect(statSync(join(worktree, "linked")).ino).toBe(statSync(rootFile).ino);
+  });
+
+  test("taking the worktree back fails on the writable link instead of leaving it", () => {
+    expect(outcome).toContain("writable by others remain");
+  });
+
+  test("the linked file outside the worktree keeps its mode", () => {
+    expect(statSync(rootFile).mode & 0o777).toBe(0o666);
+  });
+
+  test("the linked file outside the worktree stays owned by root", () => {
+    expect(statSync(rootFile).uid).toBe(0);
   });
 });
 

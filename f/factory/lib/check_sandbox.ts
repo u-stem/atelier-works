@@ -347,6 +347,10 @@ export function chownToArgv(identity: CheckIdentity, dir: string): string[] {
  * ほかの非rootのユーザー(並行して動く別の枠など)のもの、書き込みかsetidのビットが立ったrootの単独のファイルを、枠のuidに集める。
  * 権限のビットは次の段で枠のuidとして落とす。rootのまま`chmod`すると、差し替えられたsymlinkの先を変えうるためである。
  * ディレクトリをすべて集めるのは、次の段の`find`が枠のuidのまま全体に入れるようにするためである。
+ * 非rootのファイルは、リンクの数によらず集める。worktreeの外の同じファイルも最後にrootの所有になり、書き込みのビットが落ちる。
+ * そのリンクを作れるのは、ファイルを所有するか読み書きできるユーザーだけ(`fs.protected_hardlinks`)なので、
+ * 変わるのは、リンクした枠が自分で書き換えられたファイルに限られる。
+ * rootのファイルは単独のものだけを集める。worktreeの外のrootのファイルの権限を変えないためで、残れば`leftoverArgv`が見つける。
  */
 export function gatherArgv(identity: CheckIdentity, dir: string): string[] {
   assertChownableDir(dir);
@@ -465,7 +469,9 @@ export function reclaimArgv(dir: string): string[] {
 /**
  * 取り戻しの確かめ。`dir`の下に、rootでないものか、書き込みかsetidのビットが立ったものが残っていれば、最初の1つのパスを出す。
  * 並行して動く別の枠のプロセスが、途中で書き足した場合に残る。
- * ハードリンクが2つ以上あるファイルは、worktreeの外のファイルでありうるので見ない。
+ * ハードリンクが2つ以上あるファイルも、リンクの数によらず数える。
+ * 検査がworktreeの外の書き込めるrootのファイルへリンクすると、取り戻しはそのファイルを集めず(外のファイルの権限を変えないため)、ここで失敗にする。
+ * 書き込めるファイルをworktreeに残したまま、rootが後で読み書きしないためである。
  */
 export function leftoverArgv(dir: string): string[] {
   assertChownableDir(dir);
@@ -483,13 +489,6 @@ export function leftoverArgv(dir: string): string[] {
     "!",
     "-type",
     "l",
-    "(",
-    "-type",
-    "d",
-    "-o",
-    "-links",
-    "1",
-    ")",
     "-perm",
     "/6022",
     ")",

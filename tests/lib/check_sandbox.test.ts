@@ -546,8 +546,12 @@ describe("leftoverArgv", () => {
 
   test("looks for entries of other users or loose entries", () => {
     expect(argv.join(" ")).toContain(
-      "( ! -uid 0 -o ( ! -type l ( -type d -o -links 1 ) -perm /6022 ) )",
+      "( ! -uid 0 -o ( ! -type l -perm /6022 ) )",
     );
+  });
+
+  test("counts a loose file however many hard links it has", () => {
+    expect(argv).not.toContain("-links");
   });
 
   test("stops at the first match", () => {
