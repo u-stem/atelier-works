@@ -52,6 +52,16 @@ describe("noticeSeverity", () => {
   });
 });
 
+describe("host_action_required", () => {
+  test("is an action notice", () => {
+    expect(noticeSeverity("host_action_required")).toBe("action");
+  });
+
+  test("can be resolved from the Console", () => {
+    expect(isNoticeResolvable("host_action_required")).toBe(true);
+  });
+});
+
 describe("INFO_NOTICE_KINDS", () => {
   test("lists exactly the kinds whose severity is info", () => {
     expect([...INFO_NOTICE_KINDS].sort()).toEqual(

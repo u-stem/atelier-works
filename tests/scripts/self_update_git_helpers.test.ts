@@ -7,11 +7,19 @@ import { describe, expect, test } from "bun:test";
 import {
   assertWmillYamlExists,
   diffPaths,
+  isAncestorSha,
+  isCommitInClone,
   listAllPaths,
   readSelfCloneBranch,
   readSelfCloneHeadSha,
+  SELF_UPDATE_LOCAL_GIT_TIMEOUT_MS,
 } from "../../f/factory/self_update.ts";
-import { createFakeCommandRunner, fail, ok } from "../lib/testSupport.ts";
+import {
+  createFakeCommandRunner,
+  fail,
+  ok,
+  timeout,
+} from "../lib/testSupport.ts";
 
 describe("assertWmillYamlExists", () => {
   test("does not throw when wmill.yaml exists at the given dir", async () => {
@@ -235,5 +243,88 @@ describe("diffPaths", () => {
         "0000000000000000000000000000000000000b",
       ),
     ).rejects.toThrow();
+  });
+});
+
+describe("isAncestorSha", () => {
+  const DIR = "/workspaces/factory/atelier-works";
+  const A = "0000000000000000000000000000000000000a";
+  const B = "0000000000000000000000000000000000000b";
+
+  test("returns true when merge-base exits 0", async () => {
+    const { run } = createFakeCommandRunner([ok("")]);
+    expect(await isAncestorSha(run, DIR, A, B)).toBe(true);
+  });
+
+  test("returns false when merge-base exits 1", async () => {
+    const { run } = createFakeCommandRunner([fail("", 1)]);
+    expect(await isAncestorSha(run, DIR, A, B)).toBe(false);
+  });
+
+  test("throws when merge-base fails for another reason", async () => {
+    const { run } = createFakeCommandRunner([fail("bad object", 128)]);
+    await expect(isAncestorSha(run, DIR, A, B)).rejects.toThrow();
+  });
+
+  test("passes the ancestor first and the descendant second", async () => {
+    const fake = createFakeCommandRunner([ok("")]);
+    await isAncestorSha(fake.run, DIR, A, B);
+    expect(fake.calls[0]?.argv.slice(-3)).toEqual(["--is-ancestor", A, B]);
+  });
+
+  test("throws on an invalid sha", async () => {
+    const { run } = createFakeCommandRunner([ok("")]);
+    await expect(isAncestorSha(run, DIR, "not-a-sha", B)).rejects.toThrow();
+  });
+
+  test("runs under the local git timeout", async () => {
+    const fake = createFakeCommandRunner([ok("")]);
+    await isAncestorSha(fake.run, DIR, A, B);
+    expect(fake.calls[0]?.options?.timeoutMs).toBe(
+      SELF_UPDATE_LOCAL_GIT_TIMEOUT_MS,
+    );
+  });
+});
+
+describe("isCommitInClone", () => {
+  const DIR = "/workspaces/factory/atelier-works";
+  const A = "0000000000000000000000000000000000000a";
+
+  test("returns true when cat-file exits 0", async () => {
+    const { run } = createFakeCommandRunner([ok("")]);
+    expect(await isCommitInClone(run, DIR, A)).toBe(true);
+  });
+
+  test("returns false when cat-file exits non-zero", async () => {
+    const { run } = createFakeCommandRunner([fail("bad object", 128)]);
+    expect(await isCommitInClone(run, DIR, A)).toBe(false);
+  });
+
+  test("throws when cat-file times out", async () => {
+    const { run } = createFakeCommandRunner([timeout()]);
+    await expect(isCommitInClone(run, DIR, A)).rejects.toThrow();
+  });
+
+  test("asks for a commit object", async () => {
+    const fake = createFakeCommandRunner([ok("")]);
+    await isCommitInClone(fake.run, DIR, A);
+    expect(fake.calls[0]?.argv.slice(-3)).toEqual([
+      "cat-file",
+      "-e",
+      `${A}^{commit}`,
+    ]);
+  });
+
+  test("throws on an invalid sha", async () => {
+    const { run } = createFakeCommandRunner([ok("")]);
+    await expect(isCommitInClone(run, DIR, "not-a-sha")).rejects.toThrow();
+  });
+
+  test("runs under the local git timeout", async () => {
+    const fake = createFakeCommandRunner([ok("")]);
+    await isCommitInClone(fake.run, DIR, A);
+    expect(fake.calls[0]?.options?.timeoutMs).toBe(
+      SELF_UPDATE_LOCAL_GIT_TIMEOUT_MS,
+    );
   });
 });

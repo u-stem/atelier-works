@@ -108,6 +108,39 @@ const rateLimitedByBodyFor = (seconds: number) => () =>
 
 const ok = () => jsonResponse(204, {});
 
+describe("buildEmbed host_action_required", () => {
+  const event: NotifyEvent = {
+    kind: "host_action_required",
+    instance_name: "local",
+    cause: "反映した版: abc。ホスト側の作業が要る変更を含みます",
+    next_action: "mise run upを実行する",
+  };
+
+  test("puts the cause in the description", () => {
+    expect(buildEmbed(event).description).toBe(
+      "反映した版: abc。ホスト側の作業が要る変更を含みます",
+    );
+  });
+
+  test("shows the next action as a field", () => {
+    expect(buildEmbed(event).fields).toContainEqual({
+      name: "次の操作",
+      value: "mise run upを実行する",
+    });
+  });
+
+  test("includes the instance field", () => {
+    expect(buildEmbed(event).fields).toContainEqual({
+      name: "インスタンス",
+      value: "local",
+    });
+  });
+
+  test("says the host needs work in the title", () => {
+    expect(buildEmbed(event).title).toBe("ホスト側の作業が必要です");
+  });
+});
+
 describe("buildEmbed console_worker_missing", () => {
   const event: NotifyEvent = {
     kind: "console_worker_missing",

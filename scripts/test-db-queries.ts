@@ -16,6 +16,7 @@ import {
   getNoticeById,
   insertCleanupRun,
   insertWorkItem,
+  listUnresolvedNoticesByKind,
   recordFailure,
   resolveNoticeIfUnresolved,
   resolveNoticesBeforeSuccessfulDeployment,
@@ -1215,6 +1216,37 @@ check(
   "deployed_sha_mismatch: a notice created at the same time as the successful deployment stays open",
   boundaryResolved === 0 && (await isResolved(boundaryNotice)) === false,
   boundaryResolved,
+);
+
+// 種類で絞った未解決のnotice一覧: 解決済みと別の種類は含めず、古い順に返す。
+const LIST_KIND = "qdb_list_kind";
+const listFirst = await addNotice(
+  { kind: LIST_KIND, message: "qdb list first" },
+  sql,
+);
+const listSecond = await addNotice(
+  { kind: LIST_KIND, message: "qdb list second" },
+  sql,
+);
+const listResolved = await addNotice(
+  { kind: LIST_KIND, message: "qdb list resolved" },
+  sql,
+);
+await addNotice({ kind: "qdb_list_other", message: "qdb list other" }, sql);
+await resolveNoticeIfUnresolved(
+  listResolved,
+  LIST_KIND,
+  "qdb_resolver",
+  [],
+  sql,
+);
+const listed = await listUnresolvedNoticesByKind(LIST_KIND, sql);
+check(
+  "listUnresolvedNoticesByKind: returns only the unresolved notices of the kind in id order",
+  listed.length === 2 &&
+    listed[0]?.id === listFirst &&
+    listed[1]?.id === listSecond,
+  listed,
 );
 
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。
