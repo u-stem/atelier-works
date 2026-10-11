@@ -1,15 +1,18 @@
 // `self_update.ts`の内部向けのgit補助関数のテスト。
-// 対象は`readSelfCloneHeadSha`、`readSelfCloneBranch`、`listAllPaths`、`diffPaths`。
+// 対象は`readSelfCloneHeadSha`、`readSelfCloneBranch`、`listAllPaths`、`diffPaths`、`listDifferingPaths`など。
 // 入出力のつなぎ込みを、`poll_issues.ts`の`readRepoHeadSha`と同じ方法で確かめる
 // (`tests/scripts/poll_issues_read_repo_head_sha.test.ts`)。
 
 import { describe, expect, test } from "bun:test";
+import { omittedMarker } from "../../f/factory/lib/workspace.ts";
 import {
   assertWmillYamlExists,
   diffPaths,
+  HOST_CONTENT_DIFF_MAX_BYTES,
   isAncestorSha,
   isCommitInClone,
   listAllPaths,
+  listDifferingPaths,
   readSelfCloneBranch,
   readSelfCloneHeadSha,
   SELF_UPDATE_LOCAL_GIT_TIMEOUT_MS,
@@ -283,6 +286,75 @@ describe("isAncestorSha", () => {
     expect(fake.calls[0]?.options?.timeoutMs).toBe(
       SELF_UPDATE_LOCAL_GIT_TIMEOUT_MS,
     );
+  });
+});
+
+describe("listDifferingPaths", () => {
+  const DIR = "/workspaces/factory/atelier-works";
+  const A = "0000000000000000000000000000000000000a";
+  const B = "0000000000000000000000000000000000000b";
+
+  test("returns every NUL-separated path whose content differs", async () => {
+    const { run } = createFakeCommandRunner([ok("mise.toml\0infra/x.yml\0")]);
+    expect(await listDifferingPaths(run, DIR, A, B)).toEqual([
+      "mise.toml",
+      "infra/x.yml",
+    ]);
+  });
+
+  test("compares the two commits as separate arguments without renames", async () => {
+    const fake = createFakeCommandRunner([ok("")]);
+    await listDifferingPaths(fake.run, DIR, A, B);
+    expect(fake.calls[0]?.argv.slice(-6)).toEqual([
+      "diff",
+      "--name-only",
+      "--no-renames",
+      "-z",
+      A,
+      B,
+    ]);
+  });
+
+  test("runs under the local git timeout", async () => {
+    const fake = createFakeCommandRunner([ok("")]);
+    await listDifferingPaths(fake.run, DIR, A, B);
+    expect(fake.calls[0]?.options?.timeoutMs).toBe(
+      SELF_UPDATE_LOCAL_GIT_TIMEOUT_MS,
+    );
+  });
+
+  test("caps the output it keeps", async () => {
+    const fake = createFakeCommandRunner([ok("")]);
+    await listDifferingPaths(fake.run, DIR, A, B);
+    expect(fake.calls[0]?.options?.maxOutputBytes).toBe(
+      HOST_CONTENT_DIFF_MAX_BYTES,
+    );
+  });
+
+  test("throws when the output was cut for too many paths", async () => {
+    const { run } = createFakeCommandRunner([
+      ok(`infra/a\0${omittedMarker(10)}infra/b\0`),
+    ]);
+    await expect(listDifferingPaths(run, DIR, A, B)).rejects.toThrow(
+      /too many/,
+    );
+  });
+
+  test("throws when git diff fails", async () => {
+    const { run } = createFakeCommandRunner([fail("bad object", 128)]);
+    await expect(listDifferingPaths(run, DIR, A, B)).rejects.toThrow();
+  });
+
+  test("throws when git diff times out", async () => {
+    const { run } = createFakeCommandRunner([timeout()]);
+    await expect(listDifferingPaths(run, DIR, A, B)).rejects.toThrow();
+  });
+
+  test("throws on an invalid sha", async () => {
+    const { run } = createFakeCommandRunner([ok("")]);
+    await expect(
+      listDifferingPaths(run, DIR, A, "not-a-sha"),
+    ).rejects.toThrow();
   });
 });
 

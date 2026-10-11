@@ -10,7 +10,9 @@
 // ホストのcheckoutのHEAD(`HOST_APPLIED_SHA_PATH`)である。
 // 通知が名指しする版がこのHEADと同じか、その祖先なら、ホストはその変更を含む版で
 // 起動し直したことになるので、通知を解決する。
-// 印が無いとき、読めないとき、self cloneに無い版のとき、祖先かどうかを確かめられないときは、
+// 祖先でなくても、ホスト側の作業が要るパスの内容がHEADと同じなら、反映済みとして扱う。
+// PRのブランチで先に`mise run up`してからマージすると、マージの版はHEADの祖先にならないためである。
+// 印が無いとき、読めないとき、self cloneに無い版のとき、祖先かどうかも内容も確かめられないときは、
 // 解決しない。解決できなかった通知は、人がConsoleで解決してよい。
 // 印は、workerのジョブも書ける場所にある。偽の印で黙らせられるのは、この通知だけである。
 
@@ -23,6 +25,7 @@ import {
 } from "./check_sandbox.ts";
 import type { NotifyBestEffortResult, NotifyEvent } from "./discord.ts";
 import { type Logger, maskSecrets } from "./log.ts";
+import { classifyChangedPaths } from "./self_update_support.ts";
 import type { NoticeRecord } from "./types.ts";
 
 /** ホスト側の作業が要ることを示すnoticeの種類。 */
@@ -36,7 +39,7 @@ export const HOST_ACTION_RESOLVER = "self_update";
 
 /**
  * 1回の実行で調べる未解決の通知の数の上限。古いものから調べる。
- * 通知ごとにgitを1回呼ぶので、数を固定して最悪の長さを抑える。
+ * 通知ごとにgitを最大2回(祖先の確認と内容の比較)呼ぶので、数を固定して最悪の長さを抑える。
  * 古い通知はホストの反映に含まれやすく、解決されれば次の回で残りに進む。
  * 未解決の通知は、ふだん0〜1件である。
  * 本文から版を読めない通知は数えず、版を読めた通知の先頭から数える。
@@ -285,18 +288,45 @@ export type AppliedCheckDeps = {
     ancestor: string,
     descendant: string,
   ) => Promise<boolean>;
+  /**
+   * `from`と`to`の間で内容が異なるパス(追加、削除、変更)をすべて返す。
+   * 確かめられないとき、異なるパスが多すぎて全部を読めないときは、例外を投げる。
+   */
+  readonly differingPaths: (
+    from: string,
+    to: string,
+  ) => Promise<readonly string[]>;
   readonly log: Logger;
 };
 
 /**
- * 版`sha`がホストの反映済みの版に含まれるかを返す関数を作る。例外は投げず、確かめられなければ`false`にする。
+ * 版がホストの反映済みの版に含まれるかの判定の結果。
+ * `included`は反映済みの版と同じか、その祖先であること、`same_content`は祖先ではないが、
+ * ホスト側の作業が要るパスの内容が反映済みの版と同じことを表す。
+ */
+export type HostAppliedMatch = "included" | "same_content" | "not_applied";
+
+/**
+ * 版`sha`がホストの反映済みの版に含まれるかを返す。
+ * `hostPaths`は内容を比べるパスで、`null`なら、2つの版で内容が異なるパスを`classifyChangedPaths`で分類し直して比べる。
+ */
+export type HostAppliedCheck = (
+  sha: string,
+  hostPaths: readonly string[] | null,
+) => Promise<HostAppliedMatch>;
+
+/**
+ * `hostAppliedChecker`が返す関数を作る。例外は投げず、確かめられなければ`not_applied`にする。
+ * 先に祖先かどうかを確かめ、祖先でないときだけ内容を比べる。
+ * 内容は、`hostPaths`のどれも反映済みの版と異ならなければ同じとする。
+ * `hostPaths`が空なら、比べるものが無いので、内容では反映済みとしない。
+ * `hostPaths`が`null`なら、異なるパスのうちホスト側の作業が要るものが無ければ同じとする。
+ * `mise.toml`は節を読まずにファイル全体で比べる。節を読むとgitの回数が増えるためで、節の外だけが違っても反映済みとしない。
  * 印は最初の呼び出しで1回だけ読み、self cloneにあるかも1回だけ確かめる。
  * 印が読めない、版として読めない、self cloneに無いときは、以降のどの`sha`も含まれないとして扱う。
  * 印が無いだけのとき(ホストが一度も書いていない)は、警告を出さない。
  */
-export function hostAppliedChecker(
-  deps: AppliedCheckDeps,
-): (sha: string) => Promise<boolean> {
+export function hostAppliedChecker(deps: AppliedCheckDeps): HostAppliedCheck {
   let loaded: Promise<string | null> | undefined;
   const load = async (): Promise<string | null> => {
     let raw: string;
@@ -334,22 +364,50 @@ export function hostAppliedChecker(
     }
     return applied;
   };
-  return async (sha) => {
+  return async (sha, hostPaths) => {
     loaded ??= load();
     const applied = await loaded;
-    if (applied === null) return false;
-    if (applied === sha) return true;
+    if (applied === null) return "not_applied";
+    if (applied === sha) return "included";
     try {
-      return await deps.isAncestor(sha, applied);
+      if (await deps.isAncestor(sha, applied)) return "included";
     } catch (err) {
       deps.log.warn("host applied ancestry could not be checked", {
         sha,
         applied_sha: applied,
         error: errorMessage(err),
       });
-      return false;
+      return "not_applied";
     }
+    return (await hasSameHostContent(deps, applied, sha, hostPaths))
+      ? "same_content"
+      : "not_applied";
   };
+}
+
+async function hasSameHostContent(
+  deps: AppliedCheckDeps,
+  applied: string,
+  sha: string,
+  hostPaths: readonly string[] | null,
+): Promise<boolean> {
+  if (hostPaths !== null && hostPaths.length === 0) return false;
+  let differing: readonly string[];
+  try {
+    differing = await deps.differingPaths(applied, sha);
+  } catch (err) {
+    deps.log.warn("host applied content could not be compared", {
+      sha,
+      applied_sha: applied,
+      error: errorMessage(err),
+    });
+    return false;
+  }
+  if (hostPaths === null) {
+    return classifyChangedPaths(differing, true).host_paths.length === 0;
+  }
+  const differingSet = new Set(differing);
+  return hostPaths.every((path) => !differingSet.has(path));
 }
 
 export type HostActionDeps = {
@@ -357,7 +415,7 @@ export type HostActionDeps = {
   readonly addNotice: (record: NoticeRecord) => Promise<number | null>;
   readonly notify: (event: NotifyEvent) => Promise<NotifyBestEffortResult>;
   /** 版がホストの反映済みの版に含まれるか(`hostAppliedChecker`)。 */
-  readonly isApplied: (sha: string) => Promise<boolean>;
+  readonly isApplied: HostAppliedCheck;
   readonly instanceName: string;
   readonly log: Logger;
 };
@@ -370,8 +428,9 @@ export type HostActionRecordResult =
 
 /**
  * ホスト側の作業が要る反映を、noticeに残し、新しく残したときだけDiscordに送る。
- * 先に印を確かめ、ホストがその版を既に反映していれば、通知もDiscordも出さない。
- * 運用者が先に`mise run deploy`などで反映した場合に、操作の要らない通知を送らないためである。
+ * 先に印を確かめ、ホストがその版か、`hostPaths`の内容が同じ版を既に反映していれば、通知もDiscordも出さない。
+ * 運用者が先に`mise run deploy`やPRのブランチでの`mise run up`で反映した場合に、操作の要らない通知を送らないためである。
+ * 出さなかったことは、戻り値の`already_applied`とinfoのログに残す。
  * 反映そのものは済んでいるので、通知の失敗で例外を投げない。失敗は警告ログに残す。
  */
 export async function recordHostAction(
@@ -380,8 +439,15 @@ export async function recordHostAction(
   hostPaths: readonly string[],
 ): Promise<HostActionRecordResult> {
   try {
-    if (await deps.isApplied(shaTo)) {
+    const match = await deps.isApplied(shaTo, hostPaths);
+    if (match === "included") {
       deps.log.info("host action already applied on the host", { sha: shaTo });
+      return "already_applied";
+    }
+    if (match === "same_content") {
+      deps.log.info("skipped: host already applied the same content", {
+        sha: shaTo,
+      });
       return "already_applied";
     }
   } catch (err) {
@@ -432,15 +498,18 @@ export type HostActionNoticeRow = {
 
 export type ReconcileDeps = {
   readonly listUnresolved: () => Promise<readonly HostActionNoticeRow[]>;
-  /** 版がホストの反映済みの版に含まれるか(`hostAppliedChecker`)。 */
-  readonly isApplied: (sha: string) => Promise<boolean>;
+  /**
+   * 版がホストの反映済みの版に含まれるか(`hostAppliedChecker`)。
+   * 本文のパスは見えない文字の置き換えと省略を経ていて読み戻せないので、`hostPaths`には`null`を渡す。
+   */
+  readonly isApplied: HostAppliedCheck;
   /** noticeを解決し、実際に解決したら`true`を返す。 */
   readonly resolve: (id: number) => Promise<boolean>;
   readonly log: Logger;
 };
 
 /**
- * 未解決の通知のうち、ホストが反映した版に含まれるものを解決し、解決した件数を返す。
+ * 未解決の通知のうち、ホストが反映した版に含まれるものと、ホスト側の作業が要るパスの内容がその版と同じものを解決し、解決した件数を返す。
  * 調べるのは古いものから`HOST_ACTION_RECONCILE_LIMIT`件までで、残りは次の回に調べる。
  * 自己更新が毎回呼ぶので、例外を投げない。反映の可否に影響させないためである。
  */
@@ -474,12 +543,14 @@ export async function reconcileHostActionNotices(
     HOST_ACTION_RECONCILE_LIMIT,
   )) {
     try {
-      if (!(await deps.isApplied(noticeSha))) continue;
+      const match = await deps.isApplied(noticeSha, null);
+      if (match === "not_applied") continue;
       if (await deps.resolve(id)) {
         resolvedCount += 1;
         deps.log.info("host action notice resolved", {
           notice_id: id,
           sha: noticeSha,
+          match,
         });
       }
     } catch (err) {

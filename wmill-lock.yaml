@@ -35,7 +35,7 @@ locks:
   f/factory/lib/drawio_viewer_bump_github: 15b3ba986a6ece3a53dda277ec91680765319fce1137707e5c65e32ba6b8c124
   f/factory/lib/drawio_viewer_observations: 33e09dc40e72b47e2be3da91c06b88429b73e9f6d89e3291947aaaca23841886
   f/factory/lib/github: e343bd8515e62bbc56f05ffab8c9fa417702d9e195b3a329a5400772c58d6818
-  f/factory/lib/host_action: d7eed905036f76ace8a75a9d8e2dac4ba01b01a8221bb59eff318ef1916783fc
+  f/factory/lib/host_action: 7a359b6ce2ea0c47f123132849436adab0aeed0c7bb12fab5ea9bb02a566dfce
   f/factory/lib/implement_finish_support: 650e75bc3c8f4568472a5d94a06d86aac9ec5ec2151a1b4b8679956ab544d4c5
   f/factory/lib/implement_launch_support: ba2f3db0e4dcd3635bded5d79cabbce1b108b5fcb274ec853b8a24dcd0038c77
   f/factory/lib/implement_loop: 9bfef0f4127c99575febe30587a91355ac5d7cb8666d9a182a1e97b1e478f98e
@@ -70,7 +70,7 @@ locks:
   f/factory/pr_fix__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/pr_review__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/retry_work_item: a0447d41cd130badc451ccb28574a947426c62d18a60e2f09ddfa82208fbbc4a
-  f/factory/self_update: 06e0843353dcc7d8fd81503a5fc78e631550f95d855159caad62d9521e13d9f5
+  f/factory/self_update: 100582cdd681042c6a49e5d42e7609a4bc69f16819616ab83c381cdd651b0542
   f/factory/steps/audit_generate: 23f909e777c1593ac09022dc5efa8c892f982b3b6639d9de3e0c29e55919d60d
   f/factory/steps/audit_prepare: 3bc36e6c5c703430960a777ad34ca2380d8574db93a5c930486d42cf07a05c81
   f/factory/steps/console_query: 138970a4c7a416e1fb534a16538ed14d6ac30349930287d2d02d6de65959c9f8
