@@ -13,7 +13,10 @@ export type RefreshStatus = {
    * 要対応の画面は一覧(summary)だけで、詳細ペインの取得は含まない。
    */
   readonly onRefresh: () => void;
-  /** 見出しに渡した取得のすべてが自動で取り直される間隔(ミリ秒)。そうでなければ`null`。 */
+  /**
+   * 見出しに渡した取得のすべてが自動で取り直される間隔(ミリ秒)。そうでなければ`null`。
+   * 取得が失敗している間は`null`にする。自動更新が成功しているように読めるためである。
+   */
   readonly autoRefreshMs: number | null;
 };
 
@@ -59,15 +62,16 @@ export function refreshStatusOfAll(
   const fetched = queries
     .map((query) => query.dataUpdatedAt)
     .filter((updatedAt) => updatedAt > 0);
+  const isError = queries.some(isHeaderError);
   return {
     updatedAt: fetched.length === 0 ? 0 : Math.min(...fetched),
     isFetching: queries.some((query) => query.isFetching),
-    isError: queries.some(isHeaderError),
+    isError,
     onRefresh: () => {
       for (const query of queries) {
         void query.refetch();
       }
     },
-    autoRefreshMs: options.autoRefreshMs ?? null,
+    autoRefreshMs: isError ? null : (options.autoRefreshMs ?? null),
   };
 }

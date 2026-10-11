@@ -1,5 +1,5 @@
-import type { UseQueryResult } from "@tanstack/react-query";
 import type { ReactNode } from "react";
+import type { SectionQuery } from "../../api/sectionQuery.ts";
 import { useNow } from "../../app/useNow.ts";
 import { StaleDataNotice } from "../../components/StaleDataNotice.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
@@ -34,7 +34,7 @@ export function SystemSection<T>({
   id: string;
   title: string;
   description: ReactNode;
-  query: UseQueryResult<T, Error>;
+  query: SectionQuery<T>;
   /** 401で取得できないときに、ログイン後に何が出るかを伝える文。 */
   loginHint: string;
   /** 取得できた値から本文を描く。 */
@@ -67,6 +67,7 @@ export function SystemSection<T>({
         <>
           {query.isError ? (
             <StaleDataNotice
+              isFetching={query.isFetching}
               error={query.error}
               onRetry={() => {
                 void query.refetch();

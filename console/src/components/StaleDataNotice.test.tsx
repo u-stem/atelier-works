@@ -3,9 +3,13 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { ApiFailure } from "../api/errors.ts";
 import { StaleDataNotice } from "./StaleDataNotice.tsx";
 
-function render(error: unknown): string {
+function render(error: unknown, isFetching = false): string {
   return renderToStaticMarkup(
-    <StaleDataNotice error={error} onRetry={() => undefined} />,
+    <StaleDataNotice
+      error={error}
+      isFetching={isFetching}
+      onRetry={() => undefined}
+    />,
   );
 }
 
@@ -28,5 +32,17 @@ describe("StaleDataNotice", () => {
 
   test("shows nothing for a 401 that the banner covers", () => {
     expect(render(new ApiFailure({ kind: "unauthorized" }))).toBe("");
+  });
+
+  test("keeps the retry enabled while idle", () => {
+    expect(render(new ApiFailure({ kind: "network" }))).not.toContain(
+      'aria-disabled="true"',
+    );
+  });
+
+  test("disables the retry while fetching", () => {
+    expect(render(new ApiFailure({ kind: "network" }), true)).toContain(
+      'aria-disabled="true"',
+    );
   });
 });

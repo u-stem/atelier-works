@@ -182,6 +182,32 @@ describe("refreshStatusOfAll", () => {
     expect(status.isError).toBe(false);
   });
 
+  test("drops the auto-refresh interval while a fetch has failed", () => {
+    const status = refreshStatusOfAll(
+      [
+        fakeQuery({
+          isError: true,
+          error: new ApiFailure({ kind: "network" }),
+        }),
+      ],
+      { autoRefreshMs: 60_000 },
+    );
+    expect(status.autoRefreshMs).toBeNull();
+  });
+
+  test("keeps the auto-refresh interval when only a 401 failed", () => {
+    const status = refreshStatusOfAll(
+      [
+        fakeQuery({
+          isError: true,
+          error: new ApiFailure({ kind: "unauthorized" }),
+        }),
+      ],
+      { autoRefreshMs: 60_000 },
+    );
+    expect(status.autoRefreshMs).toBe(60_000);
+  });
+
   test("has no update time without queries", () => {
     expect(refreshStatusOfAll([]).updatedAt).toBe(0);
   });

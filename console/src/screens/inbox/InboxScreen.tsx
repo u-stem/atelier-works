@@ -113,6 +113,9 @@ function FailureState({
   );
 }
 
+/** 見出しの更新は一覧だけを取り直し、詳細ペインの取得は含まないので、そう読める名前にする。 */
+const INBOX_REFRESH_LABEL = "一覧を更新";
+
 /**
  * 要対応の画面。項目を新しい順に並べ、種類のチップで絞り込む。
  * 選んだ行は`?approval=<id>`などに持つ(同時に1つだけ)。選択の変更は履歴を積まない。
@@ -146,7 +149,11 @@ export function InboxScreen() {
   if (summary.data === undefined) {
     return (
       <>
-        <PageHeader title="要対応" refresh={refresh} />
+        <PageHeader
+          title="要対応"
+          refresh={refresh}
+          refreshLabel={INBOX_REFRESH_LABEL}
+        />
         {summary.isError ? (
           <FailureState error={summary.error} onRetry={refresh.onRefresh} />
         ) : (
@@ -166,6 +173,7 @@ export function InboxScreen() {
       title="要対応"
       subtitle={inboxSubtitle(items, unlisted)}
       refresh={refresh}
+      refreshLabel={INBOX_REFRESH_LABEL}
     />
   );
 
@@ -173,7 +181,18 @@ export function InboxScreen() {
     return (
       <>
         {header}
-        <InboxEmpty unlisted={unlisted} />
+        <InboxEmpty
+          unlisted={unlisted}
+          refreshFailure={
+            summary.isError
+              ? {
+                  error: summary.error,
+                  isFetching: summary.isFetching,
+                  onRetry: refresh.onRefresh,
+                }
+              : null
+          }
+        />
       </>
     );
   }

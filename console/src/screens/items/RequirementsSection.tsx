@@ -1,4 +1,5 @@
-import type { useRequirementsIndex } from "../../api/queries.ts";
+import type { RequirementsIndexRow } from "../../api/guards/requirements.ts";
+import type { SectionQuery } from "../../api/sectionQuery.ts";
 import { useNow } from "../../app/useNow.ts";
 import { StaleDataNotice } from "../../components/StaleDataNotice.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
@@ -24,7 +25,7 @@ function LoadingState() {
 export function RequirementsSection({
   index,
 }: {
-  index: ReturnType<typeof useRequirementsIndex>;
+  index: SectionQuery<readonly RequirementsIndexRow[]>;
 }) {
   const now = useNow();
   const rows = index.data;
@@ -48,6 +49,7 @@ export function RequirementsSection({
           {index.isError ? (
             <StaleDataNotice
               error={index.error}
+              isFetching={index.isFetching}
               onRetry={() => {
                 void index.refetch();
               }}

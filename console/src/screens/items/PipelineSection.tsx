@@ -3,11 +3,9 @@ import {
   describeApiError,
   isBannerError,
 } from "../../api/errors.ts";
-import {
-  PIPELINE_DAYS,
-  PIPELINE_LIMIT,
-  type usePipeline,
-} from "../../api/queries.ts";
+import type { PipelineRow } from "../../api/guards/pipeline.ts";
+import { PIPELINE_DAYS, PIPELINE_LIMIT } from "../../api/queries.ts";
+import type { SectionQuery } from "../../api/sectionQuery.ts";
 import { useNow } from "../../app/useNow.ts";
 import { StaleDataNotice } from "../../components/StaleDataNotice.tsx";
 import {
@@ -73,7 +71,7 @@ function FailureState({
 export function PipelineSection({
   pipeline,
 }: {
-  pipeline: ReturnType<typeof usePipeline>;
+  pipeline: SectionQuery<PipelineRow[]>;
 }) {
   const now = useNow();
 
@@ -109,6 +107,7 @@ export function PipelineSection({
           {pipeline.isError ? (
             <StaleDataNotice
               error={pipeline.error}
+              isFetching={pipeline.isFetching}
               onRetry={() => {
                 void pipeline.refetch();
               }}

@@ -23,11 +23,14 @@ export function PageHeader({
   title,
   subtitle,
   refresh,
+  refreshLabel = "この画面を更新",
   children,
 }: {
   title: string;
   subtitle?: string | null;
   refresh?: RefreshStatus;
+  /** 更新ボタンの名前。更新が画面の一部だけを取り直すときは、取り直す範囲が分かる名前にする。 */
+  refreshLabel?: string;
   children?: ReactNode;
 }) {
   const now = useNow();
@@ -64,7 +67,7 @@ export function PageHeader({
               <Button
                 variant="ghost"
                 size="icon"
-                aria-label="この画面を更新"
+                aria-label={refreshLabel}
                 aria-disabled={refresh.isFetching}
                 onClick={refresh.isFetching ? undefined : refresh.onRefresh}
               >
@@ -75,7 +78,7 @@ export function PageHeader({
               </Button>
             </TooltipTrigger>
             <TooltipContent>
-              {refresh.isFetching ? "取得しています" : "この画面を更新"}
+              {refresh.isFetching ? "取得しています" : refreshLabel}
             </TooltipContent>
           </Tooltip>
         </div>

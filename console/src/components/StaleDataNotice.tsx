@@ -8,9 +8,12 @@ import { Button } from "./ui/button.tsx";
  */
 export function StaleDataNotice({
   error,
+  isFetching,
   onRetry,
 }: {
   error: unknown;
+  /** 取得中は再取得を押せなくする。押すと進行中の取得を打ち切るためである。 */
+  isFetching: boolean;
   onRetry: () => void;
 }) {
   if (error instanceof ApiFailure && isBannerError(error.apiError)) {
@@ -21,7 +24,12 @@ export function StaleDataNotice({
       <p className="text-small text-warning">
         最新の取得に失敗したため、前回取得した値を表示しています。
       </p>
-      <Button size="sm" variant="outline" onClick={onRetry}>
+      <Button
+        size="sm"
+        variant="outline"
+        aria-disabled={isFetching}
+        onClick={isFetching ? undefined : onRetry}
+      >
         もう一度取得する
       </Button>
     </div>
