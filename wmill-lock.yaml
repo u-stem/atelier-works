@@ -26,7 +26,7 @@ locks:
   f/factory/lib/console_status: ee1e2ab9df9b3fc2b5fd492d3576a137dc418f3d616373a555e043d373b411c9
   f/factory/lib/console_support: e50b660ed235471d08df5732cb1265b10d65da800986e49bc0720017cf1185f4
   f/factory/lib/console_worker: 5aa1f64ef4c0f327c902d4e92c5bc7c7a2af50aac860ce4d288e993cf0bd5b83
-  f/factory/lib/db: e53548b68bdac207da6c06c333a2e0f169e856a219f4a316dbe31a845869f51f
+  f/factory/lib/db: 7cb1d6b5563c7f5a7bd37871d3d9147a82402ea5406c8b445c030d281b9554e4
   f/factory/lib/discord: 341d92926bbc1d4293cbebfe753371562ddf428caa2f1c3483438dc5dd014e2e
   f/factory/lib/drawio: d6c208d61c640f7019c865f28fb77f2a50dcf539ced468e33d2e731709a7be32
   f/factory/lib/github: 479b87aed42d3b176e82640604d8acb422278864e444dcc450efe75b0a29cdec
@@ -65,7 +65,7 @@ locks:
   f/factory/self_update: 318298e6f83d250567f444d6e690b85fd9c1a7ad4ab40ff5002dd54a830216e2
   f/factory/steps/audit_generate: 23f909e777c1593ac09022dc5efa8c892f982b3b6639d9de3e0c29e55919d60d
   f/factory/steps/audit_prepare: 3bc36e6c5c703430960a777ad34ca2380d8574db93a5c930486d42cf07a05c81
-  f/factory/steps/console_query: 77a2dcdb3db76eb66364f9d751259b0651827bdee19deac8f0b223a49f2f8760
+  f/factory/steps/console_query: ac793048b41263ec8137ca3c4a3e045c23af836c34f096aaacae88d1e9ee2c4f
   f/factory/steps/implement_finish: da8a8270636205f445cf41bdf9bc35e28b82c4bb829c7700590a70681985bb59
   f/factory/steps/implement_generate: 0671a360eef104568c2efaf753c42348a779005d3185c64e26fea5aeb15a36c1
   f/factory/steps/implement_prepare: 60514bac16abed09f5fde091c46292f16fae6ba1c9e2380fd80a8ff65eb224ac

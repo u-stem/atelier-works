@@ -151,7 +151,6 @@ verify_active_issue_index() {
 # `insertIssueWorkItemUnlessActive`の2つの文を、全migrationの適用後に確かめる。
 # 取り消しの文は、後のmigrationが足す列(work_item_eventsのジョブID)にも書くため。
 verify_issue_intake() {
-  # `insertIssueWorkItemUnlessActive`の2つの文を、本物のPostgreSQLで確かめる。
   # 1つ目は挿入、2つ目は古いサイクルの承認済みの項目の取り消しである。
   # Issue(6): cycle 1がapproved、cycle 2がfailed。cycle 3の挿入が通り、cycle 1だけが取り消され、イベントが残る。
   # Issue(7): cycle 1がapproved、cycle 2が稼働中。cycle 3の挿入が負け、何も取り消されない。
@@ -236,7 +235,7 @@ SQL
     || die "could not read the root job id of the superseded event"
   [ "$(printf '%s' "${superseded_root}" | tr -d '[:space:]')" = "0198a1b2-0000-7000-8000-000000000001" ] \
     || die "expected the superseded event to record the root job id, got '${superseded_root}'"
-  log "active issue index rejects a second active work item"
+  log "issue intake supersedes only the older approved work items and records the job ids"
 }
 
 for up_file in "${up_files[@]}"; do

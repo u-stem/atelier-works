@@ -1383,7 +1383,11 @@ function toWorkItemRoundRow(row: SqlRow): WorkItemRoundRow {
 export type WorkItemFailureRow = {
   readonly job_failure_id: number;
   readonly flow_path: string;
-  readonly job_id: string;
+  /**
+   * 失敗の記録に渡されたジョブID。UUIDの形のものだけで、形が違う値(取れなかったときの`unknown`など)は`null`。
+   * フローの失敗ではフローのルートのジョブで、失敗したステップのジョブではない。
+   */
+  readonly job_id: string | null;
   /** 失敗を記録したジョブのルートジョブID。UUIDの形のものだけで、記録が無いか形が違えば`null`。 */
   readonly root_job_id: string | null;
   readonly step: string | null;
@@ -1395,7 +1399,7 @@ function toWorkItemFailureRow(row: SqlRow): WorkItemFailureRow {
   return {
     job_failure_id: asId(row.job_failure_id, "job_failure_id"),
     flow_path: asStr(row.flow_path, "flow_path"),
-    job_id: asStr(row.job_id, "job_id"),
+    job_id: asNullableJobId(row.job_id),
     root_job_id: asNullableJobId(row.root_job_id),
     step: asNullableStr(row.step, "step"),
     error: asStr(row.error, "error"),

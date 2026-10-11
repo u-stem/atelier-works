@@ -695,6 +695,14 @@ describe("runWorkItemDetail result", () => {
     expect(detail.transitions[0]?.job_id).toBeNull();
   });
 
+  test("returns a null failure job id for the placeholder unknown", async () => {
+    const responses = detailResponses();
+    responses[4] = [{ ...DETAIL_FAILURE_ROW, job_id: "unknown" }];
+    const { sql } = createFakeSqlClient(responses);
+    const detail = await runWorkItemDetail(7, sql);
+    expect(detail.failures[0]?.job_id).toBeNull();
+  });
+
   test("drops a failure root job id that is not a UUID", async () => {
     const responses = detailResponses();
     responses[4] = [{ ...DETAIL_FAILURE_ROW, root_job_id: "unknown" }];

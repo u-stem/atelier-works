@@ -1020,7 +1020,28 @@ export async function recordAgentRun(
 // job_failures
 // ---------------------------------------------------------------------------
 
-/** `factory.job_failures`に行を挿入し、そのIDを返す。 */
+const JOB_LINK_COLUMN_PATTERN =
+  /column "(?:job_id|root_job_id)" of relation "(?:work_item_events|job_failures)" does not exist/;
+
+/**
+ * 例外が、ジョブIDの列が無いことによるもの(PostgreSQLのundefined_column、コード42703)かを返す。
+ * コードか、列と表の名前を含む文で判定する。windmill-clientは、500以外のAPIのエラーでは
+ * サーバーの文を`body`に入れる。
+ */
+export function isMissingJobLinkColumnError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  if (Reflect.get(err, "code") === "42703") return true;
+  if (JOB_LINK_COLUMN_PATTERN.test(err.message)) return true;
+  const body: unknown = Reflect.get(err, "body");
+  return typeof body === "string" && JOB_LINK_COLUMN_PATTERN.test(body);
+}
+
+/**
+ * `factory.job_failures`に行を挿入し、そのIDを返す。
+ * ルートジョブIDの列を足すmigrationより先に、この関数を含むコードが反映されると、
+ * 列が無いエラーになる。そのときだけ、新しい列を含まない文で記録し直す。
+ * 失敗の記録が消えると、反映の遅れ自体に気づけないためである。ほかのエラーは投げる。
+ */
 export async function recordFailure(
   record: FailureRecord,
   sql: SqlClient = defaultSqlClient,
@@ -1031,7 +1052,18 @@ export async function recordFailure(
     VALUES (${record.work_item_id}::bigint, ${record.flow_path}, ${record.job_id}, ${record.step}, ${record.error}, ${jobIds.root_job_id}::text)
     RETURNING id
   `;
-  const row = await fetchOneRow(statement, "recordFailure");
+  let row: SqlRow;
+  try {
+    row = await fetchOneRow(statement, "recordFailure");
+  } catch (err) {
+    if (!isMissingJobLinkColumnError(err)) throw err;
+    const legacy = sql`
+      INSERT INTO factory.job_failures (work_item_id, flow_path, job_id, step, error)
+      VALUES (${record.work_item_id}::bigint, ${record.flow_path}, ${record.job_id}, ${record.step}, ${record.error})
+      RETURNING id
+    `;
+    row = await fetchOneRow(legacy, "recordFailure");
+  }
   return parseId(row.id, "id");
 }
 

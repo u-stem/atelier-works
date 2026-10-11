@@ -194,3 +194,102 @@ describe("recordFailure job ids", () => {
     expect(calls[0]?.text).toContain(" ? ::text");
   });
 });
+
+/** 1回目の`fetch`だけ指定のエラーで失敗し、2回目以降は行を返す偽の`SqlClient`。 */
+function createFailingFirstSqlClient(firstError: Error): {
+  sql: SqlClient;
+  calls: FakeCall[];
+} {
+  const calls: FakeCall[] = [];
+  const sql: SqlClient = (strings, ...values) => {
+    const index = calls.length;
+    calls.push({ text: strings.join(" ? "), values });
+    return {
+      fetch: () =>
+        index === 0
+          ? Promise.reject(firstError)
+          : Promise.resolve([{ id: 11 }]),
+      execute: () => Promise.resolve(),
+    };
+  };
+  return { sql, calls };
+}
+
+const FAILURE: Parameters<typeof recordFailure>[0] = {
+  work_item_id: null,
+  flow_path: "f/factory/pipeline",
+  job_id: "unknown",
+  step: null,
+  error: "boom",
+};
+
+describe("recordFailure before the job link migration", () => {
+  const MISSING_COLUMN = new Error(
+    'column "root_job_id" of relation "job_failures" does not exist',
+  );
+
+  test("retries once with an insert that names no new column", async () => {
+    const { sql, calls } = createFailingFirstSqlClient(MISSING_COLUMN);
+    await recordFailure(FAILURE, sql, JOBS);
+    expect(calls[1]?.text).not.toContain("root_job_id");
+  });
+
+  test("returns the id of the row written by the retry", async () => {
+    const { sql } = createFailingFirstSqlClient(MISSING_COLUMN);
+    expect(await recordFailure(FAILURE, sql, JOBS)).toBe(11);
+  });
+
+  test("recognizes an undefined_column error by its code", async () => {
+    const error = Object.assign(new Error("failed"), { code: "42703" });
+    const { sql, calls } = createFailingFirstSqlClient(error);
+    await recordFailure(FAILURE, sql, JOBS);
+    expect(calls).toHaveLength(2);
+  });
+
+  test("recognizes an undefined_column error in the response body", async () => {
+    const error = Object.assign(new Error("Bad Request"), {
+      body: 'column "root_job_id" of relation "job_failures" does not exist',
+    });
+    const { sql, calls } = createFailingFirstSqlClient(error);
+    await recordFailure(FAILURE, sql, JOBS);
+    expect(calls).toHaveLength(2);
+  });
+
+  test("does not retry other errors", async () => {
+    const { sql, calls } = createFailingFirstSqlClient(
+      new Error("connection refused"),
+    );
+    await recordFailure(FAILURE, sql, JOBS).catch(() => undefined);
+    expect(calls).toHaveLength(1);
+  });
+
+  test("rethrows other errors", async () => {
+    const { sql } = createFailingFirstSqlClient(
+      new Error("connection refused"),
+    );
+    await expect(recordFailure(FAILURE, sql, JOBS)).rejects.toThrow(
+      "connection refused",
+    );
+  });
+
+  test("does not retry when the insert succeeds", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 11 }]]);
+    await recordFailure(FAILURE, sql, JOBS);
+    expect(calls).toHaveLength(1);
+  });
+});
+
+describe("job ids from a malformed environment", () => {
+  test("updateStatus binds no value taken from an invalid WM_JOB_ID", async () => {
+    const saved = process.env.WM_JOB_ID;
+    process.env.WM_JOB_ID = "not-a-uuid";
+    try {
+      const { sql, calls } = createFakeSqlClient([[{ from_status: "picked" }]]);
+      await updateStatus(1, "failed", null, sql);
+      expect(calls[0]?.values).not.toContain("not-a-uuid");
+    } finally {
+      if (saved === undefined) delete process.env.WM_JOB_ID;
+      else process.env.WM_JOB_ID = saved;
+    }
+  });
+});
