@@ -96,9 +96,21 @@ describe("describeQueryFailure for a view mismatch", () => {
     );
   });
 
-  test("tells the operator to reload the console", () => {
+  test("tells the operator to wait for the next update first", () => {
     expect(describeQueryFailure(VIEW_MISMATCH).nextStep).toContain(
-      "読み込み直",
+      "反映は10分ごとなので、しばらく待ってから開き直してください",
+    );
+  });
+
+  test("tells the operator to compare the two versions", () => {
+    expect(describeQueryFailure(VIEW_MISMATCH).nextStep).toContain(
+      "「反映した版」と「Consoleの取り込み」の版を見比べ",
+    );
+  });
+
+  test("tells the operator to wait even when system_status failed", () => {
+    expect(describeQueryFailure(SYSTEM_STATUS_MISMATCH).nextStep).toContain(
+      "しばらく待ってから開き直してください",
     );
   });
 
@@ -177,11 +189,33 @@ describe("describeQueryFailure", () => {
     ).not.toContain("版がずれて");
   });
 
-  test("points a 4xx to the job log through the detail", () => {
+  test("points a 4xx to the worker tag and permissions through the detail", () => {
     expect(
       describeQueryFailure({ kind: "http", status: 400, detail: "bad tag" })
         .nextStep,
-    ).toContain("詳細の文を手がかりに、Windmillでジョブのログを確かめて");
+    ).toContain(
+      "詳細の文を手がかりに、Windmillのworkerのtagと権限、またはジョブのログを確かめて",
+    );
+  });
+
+  test("points a 4xx without a detail to the worker tag and permissions", () => {
+    expect(
+      describeQueryFailure({ kind: "http", status: 400, detail: "" }).nextStep,
+    ).toBe(
+      "Windmillのworkerのtagと権限、またはジョブのログを確かめてください。",
+    );
+  });
+
+  test("points forbidden to the account permissions as well", () => {
+    expect(describeQueryFailure({ kind: "forbidden" }).nextStep).toContain(
+      "アカウントの権限",
+    );
+  });
+
+  test("points an invalid response to the version check", () => {
+    expect(
+      describeQueryFailure({ kind: "invalid_response" }).nextStep,
+    ).toContain("「反映した版」と「Consoleの取り込み」の版を見比べ");
   });
 
   test("points a failed job to the job log through the detail", () => {

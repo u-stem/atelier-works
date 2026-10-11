@@ -14,8 +14,9 @@ export type QueryFailureView = {
 };
 
 /**
- * `console_query`が未知の`view`を断るときの文。Consoleがバックエンドより新しいと起こる。
- * `f/factory/steps/console_query.ts`の文と同じで、`tests/scripts/`の契約テストが一致を保つ。
+ * `console_query`が未知の`view`を断るときの文。
+ * Consoleがバックエンドより新しいと起こる。バンドルが古く、バックエンドが新しい場合にも起こりうる。
+ * `f/factory/steps/console_query.ts`が投げる文で、`tests/scripts/`の契約テストが実際の文で判定を確かめる。
  */
 const VIEW_MISMATCH_TEXT = /"view" must be one of/;
 
@@ -28,8 +29,11 @@ const SYSTEM_VIEW = "system_status";
 const RETRY_STEP =
   "もう一度取得してください。直らないときは、時間をおいてから画面を開き直してください。";
 
+const WAIT_FOR_UPDATE_STEP =
+  "反映は10分ごとなので、しばらく待ってから開き直してください。";
+
 const SELF_UPDATE_STEP =
-  "反映が失敗していたら、Windmillでself_updateのジョブのログを確かめてください。";
+  "反映が失敗していれば、Windmillでself_updateのジョブのログを確かめてください。";
 
 /** `queryFn`が投げた値から、分類した失敗を取り出す。分類されていなければ`null`。 */
 export function apiErrorOf(error: unknown): ApiError | null {
@@ -58,15 +62,30 @@ export function isViewMismatch(error: ApiError): boolean {
   return VIEW_MISMATCH_TEXT.test(serverText(error));
 }
 
-function viewMismatchNextStep(text: string): string {
+/**
+ * 版のずれの案内。反映は定期的に走るので、まず待つ。
+ * 直らなければ、システムの画面で版を見比べ、反映が失敗していればログを見る。
+ * システムの画面も同じ`view`で取得するので、それが断られたときは案内先にならない。
+ */
+function versionMismatchNextStep(text: string): string {
   const requested = REQUESTED_VIEW.exec(text)?.[1];
-  // システムの画面も同じ`view`で取得するので、断られたときは案内先にならない。
   return requested === SYSTEM_VIEW
-    ? "Consoleを読み込み直してください。直らないときは、Windmillでself_updateのジョブのログを確かめてください。"
-    : `Consoleを読み込み直してください。直らないときは、システムの画面で直近の反映を確かめてください。${SELF_UPDATE_STEP}`;
+    ? `${WAIT_FOR_UPDATE_STEP}直らないときは、Windmillでself_updateのジョブのログを確かめてください。`
+    : `${WAIT_FOR_UPDATE_STEP}直らないときは、システムの画面で「反映した版」と「Consoleの取り込み」の版を見比べ、${SELF_UPDATE_STEP}`;
 }
 
-/** 4xxとジョブの失敗は、待っても直らない。詳細の文か、ジョブのログが手がかりになる。 */
+/**
+ * 4xxの案内。断られたのがジョブの作成前だとログが無いので、tagと権限も挙げる。
+ * 詳細の文が手がかりになる。
+ */
+function clientErrorStep(detail: string): string {
+  const targets = "Windmillのworkerのtagと権限、またはジョブのログ";
+  return detail === ""
+    ? `${targets}を確かめてください。`
+    : `詳細の文を手がかりに、${targets}を確かめてください。`;
+}
+
+/** ジョブが走って失敗した場合の案内。詳細の文とジョブのログが手がかりになる。 */
 function jobLogStep(detail: string): string {
   return detail === ""
     ? "Windmillでジョブのログを確かめてください。"
@@ -82,7 +101,7 @@ export function describeQueryFailure(error: ApiError | null): QueryFailureView {
   if (isViewMismatch(error)) {
     return {
       summary: "Consoleとバックエンドの版がずれている可能性があります。",
-      nextStep: viewMismatchNextStep(detail),
+      nextStep: versionMismatchNextStep(detail),
       detail,
     };
   }
@@ -97,7 +116,7 @@ export function describeQueryFailure(error: ApiError | null): QueryFailureView {
       return {
         summary: "サーバーに要求を断られました。",
         nextStep:
-          "配信の設定で要求が断られた可能性があります。CaddyのOriginとHostの検査を確かめてください。",
+          "配信の設定で要求が断られた可能性があります。CaddyのOriginとHostの検査を確かめてください。Windmill自身の権限不足でも同じ状態になるので、アカウントの権限も確かめてください。",
         detail,
       };
     case "job_failed":
@@ -115,7 +134,7 @@ export function describeQueryFailure(error: ApiError | null): QueryFailureView {
     case "http":
       return {
         summary: `サーバーがエラーを返しました(状態 ${error.status})。`,
-        nextStep: error.status < 500 ? jobLogStep(detail) : RETRY_STEP,
+        nextStep: error.status < 500 ? clientErrorStep(detail) : RETRY_STEP,
         detail,
       };
     case "network":
@@ -129,7 +148,7 @@ export function describeQueryFailure(error: ApiError | null): QueryFailureView {
       return {
         summary:
           "サーバーの応答を読み取れませんでした。Consoleとバックエンドの版がずれている可能性があります。",
-        nextStep: RETRY_STEP,
+        nextStep: versionMismatchNextStep(detail),
         detail,
       };
   }
