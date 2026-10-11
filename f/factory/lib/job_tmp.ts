@@ -1,8 +1,9 @@
 // ジョブごとの一時ディレクトリ。
 // workerのジョブは`TMPDIR`が無く、git、Claude、bun、gh、gitleaksが共有の`/tmp`に一時ファイルを作る。
-// まだ無い名前は検査用のユーザーが先に作れるので、ジョブごとの0700のディレクトリを`/tmp/windmill`の下に作り、
+// まだ無い名前は検査用のユーザーが先に作れるので、ジョブごとの0700のディレクトリを`/run/factory-tmp`の下に作り、
 // 子プロセスの`TMPDIR`をそこに向ける。ディレクトリはジョブの終了で消し、残ったものは掃除のジョブが消す。
-// 親の`/tmp/windmill`は、自分の所有なら0700に直して使い、他のユーザーの所有かsymlinkなら使わない。
+// 親は、Windmillが管理せず、他のユーザーが書けない`/run`の下に置く。
+// `/tmp/windmill`はWindmillが権限を戻しうるので使わない。親が自分の所有なら0700に直して使い、他のユーザーの所有かsymlinkなら使わない。
 
 import { chmodSync, lstatSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -10,8 +11,11 @@ import { join } from "node:path";
 import { parseJobId } from "./job_ids.ts";
 import { logger } from "./log.ts";
 
-/** Windmillが作業用に使う、rootが所有するディレクトリ。ジョブごとのディレクトリはこの下に作る。 */
-export const JOB_TMP_ROOT = "/tmp/windmill";
+/**
+ * ジョブごとのディレクトリを置く親。workerの実行時に作る。
+ * `/run`はrootの所有で他のユーザーが書けず、Windmillが管理する`/tmp/windmill`と違って、ジョブの途中で権限が変わらない。
+ */
+export const JOB_TMP_ROOT = "/run/factory-tmp";
 
 /**
  * ジョブごとのディレクトリの名前の先頭。Windmill自身が作る名前と区別し、掃除の対象を絞る。
@@ -23,7 +27,7 @@ export const JOB_TMP_PREFIX = "fj-";
  * 掃除が消すまでの経過秒。ジョブの終了時の削除が走らなかったものだけが残る。
  * 取り消されたジョブや強制終了されたworkerが対象である。
  * 動いているジョブのものを消さないよう、`claude_timeout_sec`と`implement_timeout_sec`の既定値より十分長くする。
- * 設定でこの期限を超える実行時間を入れることは想定しない。
+ * `config.ts`は、`claude_timeout_sec`と`implement_timeout_sec`がこの期限を超える設定を拒否する。
  */
 export const JOB_TMP_MAX_AGE_SEC = 3 * 24 * 60 * 60;
 
@@ -147,9 +151,9 @@ function makeDirIfMissing(fs: JobTmpFs, path: string): boolean {
 }
 
 /**
- * 親のディレクトリ(`/tmp/windmill`)を、ジョブごとのディレクトリを置ける状態にする。
+ * 親のディレクトリ(`JOB_TMP_ROOT`)を、ジョブごとのディレクトリを置ける状態にする。
  * このプロセスのユーザーの所有の実ディレクトリなら、0700でなければ0700に直して使う。
- * Windmillの作る権限は確かめていないので、直せるものは直して先へ進む。
+ * 権限が違うだけなら直して先へ進む。
  * 他のユーザーの所有か、symlinkか、ディレクトリでないときは、差し替えられうるので例外を投げる。
  */
 function ensureTrustedRoot(fs: JobTmpFs, root: string): void {

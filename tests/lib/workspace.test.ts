@@ -673,8 +673,8 @@ describe("git config isolation", () => {
   });
 
   test("local git points TMPDIR at the given job directory", () => {
-    const env = localGitEnv("/home/x", "/usr/bin", "/tmp/windmill/fj-x");
-    expect(env.TMPDIR).toBe("/tmp/windmill/fj-x");
+    const env = localGitEnv("/home/x", "/usr/bin", "/run/factory-tmp/fj-x");
+    expect(env.TMPDIR).toBe("/run/factory-tmp/fj-x");
   });
 
   test("local git leaves TMPDIR unset outside a job", () => {

@@ -287,8 +287,8 @@ describe("buildWmillEnv", () => {
   });
 
   test("carries TMPDIR through when set", () => {
-    const env = buildWmillEnv({ TMPDIR: "/tmp/windmill/fj-x" });
-    expect(env.TMPDIR).toBe("/tmp/windmill/fj-x");
+    const env = buildWmillEnv({ TMPDIR: "/run/factory-tmp/fj-x" });
+    expect(env.TMPDIR).toBe("/run/factory-tmp/fj-x");
   });
 
   test("omits HOME and PATH when unset", () => {

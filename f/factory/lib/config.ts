@@ -3,6 +3,7 @@
 // 項目を後から足しても、
 // それより前に作った既存のリモートのリソースが検証を通るようにするため。
 
+import { JOB_TMP_MAX_AGE_SEC } from "./job_tmp.ts";
 import {
   type FactoryConfig,
   type FactoryOwner,
@@ -219,6 +220,19 @@ function numberField(
 }
 
 /**
+ * ジョブごとの一時ディレクトリの掃除は、この期限を過ぎたものを消す。
+ * ジョブの実行時間を決める設定がこれを超えると、動いているジョブのディレクトリが消されうるので、超える値は拒否する。
+ */
+function withinJobTmpAge(field: string, value: number): number {
+  if (value > JOB_TMP_MAX_AGE_SEC) {
+    throw new ConfigValidationError(
+      `"${field}" must not exceed ${String(JOB_TMP_MAX_AGE_SEC)} seconds`,
+    );
+  }
+  return value;
+}
+
+/**
  * `raw[field]`を返す。値が無ければ`fallback`を返し、正の整数でなければ例外を投げる。
  */
 function positiveIntegerField(
@@ -410,10 +424,9 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
       "daily_budget_usd",
       DEFAULTS.daily_budget_usd,
     ),
-    claude_timeout_sec: numberField(
-      raw,
+    claude_timeout_sec: withinJobTmpAge(
       "claude_timeout_sec",
-      DEFAULTS.claude_timeout_sec,
+      numberField(raw, "claude_timeout_sec", DEFAULTS.claude_timeout_sec),
     ),
     worktree_ttl_days: numberField(
       raw,
@@ -498,10 +511,13 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
       "implement_max_budget_usd_per_run",
       DEFAULTS.implement_max_budget_usd_per_run,
     ),
-    implement_timeout_sec: positiveIntegerField(
-      raw,
+    implement_timeout_sec: withinJobTmpAge(
       "implement_timeout_sec",
-      DEFAULTS.implement_timeout_sec,
+      positiveIntegerField(
+        raw,
+        "implement_timeout_sec",
+        DEFAULTS.implement_timeout_sec,
+      ),
     ),
     implement_check_timeout_sec: positiveIntegerField(
       raw,

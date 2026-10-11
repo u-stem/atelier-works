@@ -211,8 +211,8 @@ describe("runAllowedCheckCommands", () => {
   test("the real default createHomeDir puts the HOME under /tmp whatever TMPDIR says", async () => {
     const { run, calls } = createFakeCommandRunner([ok("")]);
     const before = process.env.TMPDIR;
-    // Windmillのジョブの一時ディレクトリは、検査用のuidが入れない`/tmp/windmill`の下にありうる。
-    process.env.TMPDIR = "/tmp/windmill/wk-default-x/job-y";
+    // Windmillのジョブの一時ディレクトリは、検査用のuidが入れない0700の下にありうる。
+    process.env.TMPDIR = "/run/factory-tmp/fj-y";
     try {
       await runAllowedCheckCommands(run, "/work", ["true"], 1000);
     } finally {
