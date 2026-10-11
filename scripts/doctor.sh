@@ -221,7 +221,7 @@ if [[ -n "${console_id}" ]] && [[ "$(docker inspect -f '{{.State.Running}}' "${c
     sh -c "${console_probe}" >/dev/null 2>&1 || console_probe_status=$?
   case "${console_probe_status}" in
     11) report "console worker mount" ok "factory_stateの根は付いていません" ;;
-    10) report "console worker mount" ng "/var/lib/factory/requirements/requirementsか、/var/lib/factoryの直下のclaude、gh、auditsが見えます。factory_stateの根が付いている恐れがあります(見えたのがrequirements/requirementsだけで、対象リポジトリのownerがrequirementsなら正常です)" ;;
+    10) report "console worker mount" ng "/var/lib/factory/requirements/requirementsか、/var/lib/factoryの直下のclaude、gh、auditsが見えます。factory_stateの根が付いている恐れがあります(見えたのがrequirements/requirementsだけで、対象リポジトリのownerがrequirementsのときは、根が付いたのかサブパスだけが付いたのか見分けられません)" ;;
     3) report "console worker mount" ng "/var/lib/factory/requirementsが見えません。マウントが設定どおりに付いていません(終了コード: ${console_probe_status})" ;;
     *) report "console worker mount" ok "windmill_worker_consoleでマウントを確認できないため確かめられません(終了コード: ${console_probe_status})" ;;
   esac
