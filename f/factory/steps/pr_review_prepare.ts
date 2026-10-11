@@ -18,7 +18,6 @@ import {
   ensureRepo,
   fetchPrHeadRef,
   runCommand,
-  type WorktreeEntry,
 } from "../lib/workspace.ts";
 import {
   decideReviewPrepare,
