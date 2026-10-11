@@ -7,6 +7,7 @@ import * as wmill from "windmill-client@1.817.0";
 import { formatAuditPeriodLabel } from "../lib/audit_support.ts";
 import { isRepoAllowed, loadConfig } from "../lib/config.ts";
 import {
+  claimIssueCreation,
   countPendingIssueProposals,
   decideIssueProposal,
   getApprovalRequest,
@@ -45,6 +46,16 @@ import {
   renderIssueProposalApprovedReply,
   renderIssueProposalRejectedReply,
 } from "./pr_workflow_support.ts";
+
+/**
+ * Issueを作る処理の印の有効期間(秒)。
+ * 印を取った呼び出しが途中で止まったときに、やり直しが塞がれる最長の時間になる。
+ * 最悪の経路は、マーカーの検索(約380秒)の後にIssueの作成(約250秒)が続く約630秒である。
+ * これを覆い、余裕を持たせて900秒(15分)にする。
+ * Consoleの画面がやり直しを止める時間(`REDO_COOLDOWN_MS`)も、同じ長さにそろえる。
+ * 印に持ち主の識別子は無いので、期限を超えた処理と、取り直した処理が重なる可能性は、理論上残る。
+ */
+export const ISSUE_CREATION_LEASE_SECONDS = 900;
 
 export type IssueProposalApplyResult = {
   readonly ok: boolean;
@@ -144,6 +155,10 @@ function requirePrNumber(prNumber: number | null, workItemId: number): number {
  * `setIssueProposalCreatedIssue`が`created_issue_number`/`created_issue_url`を書く。
  * (a)の後、(b)の前に再起動されたら、Issueを作るか再利用する段階からやり直し、
  * 2つ目のIssueは作らない。
+ * 同時に2つの呼び出しが走っても、Issueを作る段階は1つだけが通る。
+ * Issueを作るか探す前に、`claimIssueCreation`の条件付きUPDATEで印を取り、取れなかった呼び出しは何もしない。
+ * マーカーでの検索はGitHubの索引の反映が遅れ、同時の呼び出しがどちらも空振りしうるためである。
+ * 印は期限付きなので、印を取った呼び出しが止まっても、期限後のやり直しは塞がれない。
  * 却下も同じく、判断を先に記録してから返信する。
  *
  * 未完了の承認を見えるままにする: Issueの番号が分かる前にIssueの作成・再利用が失敗したら、
@@ -314,6 +329,17 @@ async function run(
       // 決め直さずに記録済みの判断を反映する。
       labelApplied = current.with_factory_label ?? false;
     } else {
+      // Issueを作る呼び出しを1つに絞る。マーカーでの検索はGitHubの索引の反映が遅れるので、
+      // 同時の呼び出しがどちらも空振りして、Issueが2件できうる。
+      // 印を取れなかった呼び出しは、別の呼び出しが作っている最中なので、何もせずに終える。
+      const claimed = await claimIssueCreation(
+        proposal_id,
+        ISSUE_CREATION_LEASE_SECONDS,
+      );
+      if (!claimed) {
+        log.info("another call is creating the issue, no-op", { proposal_id });
+        return { ok: true, status: "in_progress", label_applied: false };
+      }
       try {
         const markerSearchTerm = issueProposalMarkerSearchTerm(proposal_id);
         const existingIssue = await findIssueByMarker(
@@ -352,6 +378,7 @@ async function run(
         // この時点ではIssueの番号が分からない。
         // このままだと行は`created_issue_number`がnullの"approved"で止まり、人から見えなくなる。
         // "pending"に戻し、再試行できるようConsoleのInboxに再び出す。
+        // 印は残す。Issueが作られていた場合に、期限が切れるまで次の承認が何もせず終わる。
         await revertIssueProposalToPending(proposal_id);
         throw new Error(
           `issue_proposal_apply: Issueの起票に失敗しました: ${maskSecrets(err instanceof Error ? err.message : String(err))}。Consoleの承認タブから再度承認してください`,
