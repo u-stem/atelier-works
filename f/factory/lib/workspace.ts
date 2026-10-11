@@ -452,11 +452,40 @@ export type GitCommandOptions = {
 };
 
 /**
+ * 設定ファイルの値にかかわらず、すべてのgitの実行に固定する設定。
+ * `-c`はコマンドラインの設定で、`.git/config`、`config.worktree`、
+ * グローバル、システムのどの設定ファイルよりも優先される。
+ * `extensions.worktreeConfig`は`-c`では無効にできず、`config.worktree`は
+ * 有効にされると読まれる。だから、読まれて困る項目は設定ファイルの側ではなく、ここで固定する。
+ * - `core.hooksPath`、`core.fsmonitor`、`core.askPass`:
+ *   設定ファイルに書かれたプログラムを、gitに実行させない。
+ *   `core.askPass`は空にすると、環境変数`SSH_ASKPASS`も読まれなくなる。
+ * - `commit.gpgsign`、`push.gpgSign`: commitとpushの署名で、`gpg.program`に書かれたプログラムを実行させない。
+ * - `core.symlinks`: worktreeの検証が前提にする値。
+ *   `.git/config`や`config.worktree`で`true`に戻させない。
+ * - `core.excludesFile`、`core.attributesFile`: `/dev/null`にして、
+ *   `$HOME/.config/git/ignore`と`$HOME/.config/git/attributes`(設定が無いときの既定の置き場)を読ませない。
+ *   `GIT_CONFIG_GLOBAL`では、この2つのファイルは止まらない。
+ * - `credential.helper`: 空にして、設定ファイルのcredential helperを消す。
+ */
+export const FIXED_GIT_CONFIG: readonly (readonly [string, string])[] = [
+  ["core.hooksPath", "/dev/null"],
+  ["core.fsmonitor", "false"],
+  ["core.askPass", ""],
+  ["core.symlinks", "false"],
+  ["core.excludesFile", "/dev/null"],
+  ["core.attributesFile", "/dev/null"],
+  ["commit.gpgsign", "false"],
+  ["push.gpgSign", "false"],
+  ["credential.helper", ""],
+];
+
+/**
  * `args`の前に共通の安全策のオプションを付けた、gitのargvを返す。
- * `credential.helper`を空にしてシステムやグローバルの設定を消し、
- * フックとfsmonitorを無効にする。
- * 悪意のあるcloneに、任意のフックやfsmonitorのヘルパーを実行させないため。
+ * `FIXED_GIT_CONFIG`の設定を`-c`で固定する。
+ * 悪意のあるcloneや検査コマンドが書いた設定で、任意のプログラムを実行させないため。
  * ネットワーク操作のときだけ、ghのcredential helperを加え直す。
+ * システムとグローバルの設定は、`localGitEnv`の環境変数で読まない。
  *
  * このモジュールのgitの実行では、ほかに次を守る。
  * - `GH_TOKEN`は、ネットワーク操作(clone、fetch、push)の
@@ -492,18 +521,13 @@ export type GitCommandOptions = {
  *   下を指すことを確かめる。
  *   `.git`ファイルの差し替えなどで別の場所に向けられたworktreeを操作しないため。
  */
-function buildGitArgv(
+export function buildGitArgv(
   args: readonly string[],
   options: GitCommandOptions = {},
 ): string[] {
   return [
     "git",
-    "-c",
-    "core.hooksPath=/dev/null",
-    "-c",
-    "core.fsmonitor=false",
-    "-c",
-    "credential.helper=",
+    ...FIXED_GIT_CONFIG.flatMap(([key, value]) => ["-c", `${key}=${value}`]),
     ...(options.network === true
       ? ["-c", "credential.helper=!gh auth git-credential"]
       : []),
@@ -526,13 +550,37 @@ function remoteTrackingRef(branch: string): string {
   return `${REMOTE_TRACKING_PREFIX}${branch}`;
 }
 
-/** ネットワークを使わないgitの操作の環境変数を返す。`GH_TOKEN`は含めない。 */
-function localGitEnv(home?: string, path?: string): Record<string, string> {
-  // `refs/replace/`で別のオブジェクトに差し替えられた内容を読まない。
-  // 差し替えのrefは対象リポジトリの検査コマンドが作れ、gitが読む内容を検査の前提と食い違わせうるため。
+/**
+ * ネットワークを使わないgitの操作の環境変数を返す。`GH_TOKEN`は含めない。
+ * 渡す環境変数は、ここで挙げるものとHOMEとPATHだけである。
+ * HOMEは、gitが起動するghなどの子プロセスと、gitの`~`の展開
+ * (`.git/config`のパスの`~`、httpsの`$HOME/.netrc`)のために渡す。
+ * workerのHOMEには`.netrc`を置かない前提である。
+ * グローバルの設定としては、下の環境変数と`FIXED_GIT_CONFIG`で読ませない。
+ * `pr_workflow_support.ts`も、gitの実行にこの関数と`buildGitArgv`を使う。
+ */
+export function localGitEnv(
+  home?: string,
+  path?: string,
+): Record<string, string> {
   const env: Record<string, string> = {
     GIT_TERMINAL_PROMPT: "0",
+    // `refs/replace/`で別のオブジェクトに差し替えられた内容を読まない。
+    // 差し替えのrefは対象リポジトリの検査コマンドが作れ、gitが読む内容を検査の前提と食い違わせうるため。
     GIT_NO_REPLACE_OBJECTS: "1",
+    // システムとグローバル(`$HOME/.gitconfig`、XDGの`git/config`)の設定と、システムのgitattributesを読まない。
+    // 実行する環境ごとに値が違い、リポジトリの設定と検証の前提が食い違うため。
+    // コミットのauthorは`GIT_AUTHOR_*`、認証は`GH_TOKEN`で渡すので、これらの設定は要らない。
+    // `GIT_CONFIG_GLOBAL`を指定すると、`$HOME/.gitconfig`と`$XDG_CONFIG_HOME/git/config`の両方が読まれなくなる。
+    // XDGの`ignore`と`attributes`は設定ファイルではないので止まらず、`FIXED_GIT_CONFIG`で止める。
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_SYSTEM: "/dev/null",
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_ATTR_NOSYSTEM: "1",
+    // httpsだけを許す。`.git/config`の`protocol.<name>.allow`や`remote.origin.url`で、
+    // `ext::`などの別の転送を使わせないため。この環境変数は`protocol.*`の設定より優先される。
+    // `GH_TOKEN`や非公開のコミットを、`ext::`のコマンドに渡さない。
+    GIT_ALLOW_PROTOCOL: "https",
   };
   const resolvedHome = home ?? process.env.HOME;
   if (resolvedHome !== undefined) env.HOME = resolvedHome;
@@ -550,29 +598,6 @@ function networkGitEnv(
   path?: string,
 ): Record<string, string> {
   return { ...localGitEnv(home, path), GH_TOKEN: ghToken };
-}
-
-/**
- * `overrides`を環境変数`GIT_CONFIG_COUNT`、`GIT_CONFIG_KEY_<i>`、
- * `GIT_CONFIG_VALUE_<i>`にして返す。
- * 結果は`networkGitEnv(...)`や`localGitEnv(...)`に混ぜて使う。
- * gitはこれらを、どのサブコマンドやラッパーから起動されても`-c key=value`と同じに読む。
- * `git gtr`は外部のサブコマンドで、
- * 直接の`git`のように途中の`-c`を受け付けるとは限らないため、
- * 設定の上書きを環境変数で渡す(`--`を付けないのと同じ理由)。
- */
-function gitConfigEnvOverrides(
-  overrides: Readonly<Record<string, string>>,
-): Record<string, string> {
-  const entries = Object.entries(overrides);
-  const env: Record<string, string> = {
-    GIT_CONFIG_COUNT: String(entries.length),
-  };
-  entries.forEach(([key, value], index) => {
-    env[`GIT_CONFIG_KEY_${index}`] = key;
-    env[`GIT_CONFIG_VALUE_${index}`] = value;
-  });
-  return env;
 }
 
 /**
@@ -637,18 +662,17 @@ export function assertOutputComplete(
 
 /**
  * `dir`の設定に`core.symlinks false`を書き込む。失敗したら例外を投げる。
- * `addDetachedWorktree`の`worktree add`に付ける`-c core.symlinks=false`
- * (と`git gtr new`の`GIT_CONFIG_*`)は、その1回の実行にしか効かない。
- * 設定を書き込まないと、同じリポジトリでの以後の操作
- * (`git status`、`add -A`、`commit`、
- * 特に`createGtrWorktree`の再利用時の`reset --hard`)は、
+ * このモジュールのgitは`buildGitArgv`の`-c core.symlinks=false`で動くので、
+ * ここで書く値は、このモジュールを通さずに実行されるgit
+ * (worktreeの中でClaudeや検査コマンドが実行するもの)のための既定である。
+ * 書かないと、そのgit(`git status`、`add -A`、`commit`、`reset --hard`)は、
  * gitの既定の`core.symlinks=true`で動く。
  * すると`reset --hard`がコミットされたシンボリックリンクを本物のリンクとして作り直し、
  * 次のコミットで`typechange`として現れる。
  * worktreeはどれもメインのcloneの`.git/config`を読むため、
  * メインのcloneに書けば全worktreeに効く。
  * `ensureRepo`がclone・fetchの成功のたびに呼ぶ。
- * 他の箇所の実行ごとの`-c`や`GIT_CONFIG_*`も残してある(今は重複するが害は無い)。
+ * `.git/config`や`config.worktree`の値は、`-c`が優先されるので、このモジュールのgitには効かない。
  */
 async function persistNoSymlinksConfig(
   run: CommandRunner,
@@ -1572,23 +1596,11 @@ export async function addDetachedWorktree(
         throw gitError(`git fetch ${opts.sha} failed`, fetchResult);
       }
 
-      // `-c core.symlinks=false`を付ける。
-      // 付けないと、コミットされたシンボリックリンク
-      // (`/proc/self/environ`などworktreeの外を指すもの)が、
-      // 本物のリンクとしてcheckoutされる。
-      // 付ければ`git clone -c core.symlinks=false`と同じく、リンク先のパスを書いた
-      // ただのテキストファイルとしてcheckoutされる。
+      // `buildGitArgv`の`-c core.symlinks=false`が効くので、
+      // コミットされたシンボリックリンク(`/proc/self/environ`などworktreeの外を指すもの)は、
+      // 本物のリンクではなく、リンク先のパスを書いたただのテキストファイルとしてcheckoutされる。
       const addResult = await opts.run(
-        buildGitArgv([
-          "-c",
-          "core.symlinks=false",
-          "worktree",
-          "add",
-          "--detach",
-          "--",
-          opts.dir,
-          opts.sha,
-        ]),
+        buildGitArgv(["worktree", "add", "--detach", "--", opts.dir, opts.sha]),
         { cwd: opts.repoDir, env: localGitEnv(opts.home, opts.path) },
       );
       if (addResult.exitCode !== 0) {
@@ -2285,12 +2297,8 @@ export async function createGtrWorktree(
         ),
         {
           cwd: opts.repoDir,
-          // `core.symlinks=false`は`-c`ではなく環境変数で渡す
-          // (`gitConfigEnvOverrides`を参照。`gtr`はcore gitではない外部のラッパー)。
-          env: {
-            ...networkGitEnv(opts.ghToken, opts.home, opts.path),
-            ...gitConfigEnvOverrides({ "core.symlinks": "false" }),
-          },
+          // `buildGitArgv`の`-c`は、環境変数`GIT_CONFIG_PARAMETERS`で`git-gtr`の子のgitにも渡る。
+          env: networkGitEnv(opts.ghToken, opts.home, opts.path),
         },
       );
       if (result.exitCode !== 0) {
