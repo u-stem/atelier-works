@@ -108,8 +108,11 @@ const PAIRS: Pair[] = [
   { fg: "ring", bg: "card", min: 3 },
   { fg: "ring", bg: "sidebar", min: 3 },
   { fg: "primary", bg: "sidebar", min: 3 },
-  // 選択中の期間切替(secondaryの面)の枠線。
-  { fg: "primary", bg: "secondary", min: 3 },
+  // 選択中の切り替え(期間、種類、テーマ)の枠線。
+  // 選択中の面(selected)は、背景・面・トラック(muted)との明るさの差が小さいので、藍の枠線が未選択との違いを担う。
+  { fg: "primary", bg: "muted", min: 3 },
+  { fg: "primary", bg: "card", min: 3 },
+  { fg: "primary", bg: "selected", min: 3 },
   ...MEANING_SURFACES.map((bg): Pair => ({ fg: "notice-mark", bg, min: 3 })),
 ];
 

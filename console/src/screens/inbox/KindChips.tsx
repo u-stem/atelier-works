@@ -1,5 +1,6 @@
 import { cn } from "../../lib/cn.ts";
 import type { InboxChip } from "../../lib/inboxView.ts";
+import { SELECTED_STYLE } from "../../lib/selectedStyle.ts";
 
 /** 種類の切り替え。押した種類だけを一覧に出す。件数はチップの横に添える。 */
 export function KindChips({
@@ -24,8 +25,8 @@ export function KindChips({
             type="button"
             aria-pressed={pressed}
             className={cn(
-              "inline-flex h-7 items-center gap-1.5 rounded-md px-3 text-small text-muted-foreground outline-none transition-colors duration-150 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
-              pressed && "bg-card font-medium text-foreground shadow-sm",
+              "inline-flex h-7 items-center gap-1.5 rounded-md border border-transparent px-3 text-small text-muted-foreground outline-none transition-colors duration-150 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
+              pressed && SELECTED_STYLE,
             )}
             onClick={() => {
               onChange(chip.id);

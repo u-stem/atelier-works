@@ -6,6 +6,7 @@ import {
   TooltipTrigger,
 } from "../components/ui/tooltip.tsx";
 import { cn } from "../lib/cn.ts";
+import { SELECTED_STYLE } from "../lib/selectedStyle.ts";
 import {
   parseThemePreference,
   THEME_OPTIONS,
@@ -63,8 +64,8 @@ export function ThemeSwitch() {
                 aria-pressed={pressed}
                 aria-label={option.label}
                 className={cn(
-                  "inline-flex size-7 items-center justify-center rounded-md text-subtle outline-none transition-colors duration-150 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
-                  pressed && "bg-card text-foreground shadow-sm",
+                  "inline-flex size-7 items-center justify-center rounded-md border border-transparent text-subtle outline-none transition-colors duration-150 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
+                  pressed && SELECTED_STYLE,
                 )}
                 onClick={() => {
                   applyPreference(option.value);

@@ -4,6 +4,7 @@ import type {
   ApprovalStatsRow,
   LeadTimeRow,
 } from "../api/guards/analytics.ts";
+import { buttonVariants } from "../components/ui/button.tsx";
 import {
   dailyTotals,
   firstTryApprovalRate,
@@ -17,6 +18,8 @@ import {
   periodButtonStyle,
   rejectionsByAttempt,
 } from "./analytics.ts";
+import { cn } from "./cn.ts";
+import { SELECTED_STYLE } from "./selectedStyle.ts";
 
 function costRow(overrides: Partial<AgentCostDailyRow>): AgentCostDailyRow {
   return {
@@ -233,22 +236,26 @@ describe("hitsRowLimit", () => {
 });
 
 describe("periodButtonStyle", () => {
-  test("outlines the selected period with the primary color", () => {
-    expect(periodButtonStyle(true).className).toContain("border-primary");
-  });
-
-  test("keeps the font weight so that the neighbors do not move", () => {
-    expect(periodButtonStyle(true).className).not.toContain("font-");
+  test("marks the selected period like the other switches", () => {
+    expect(periodButtonStyle(true).className).toBe(SELECTED_STYLE);
   });
 
   test("leaves the other periods plain", () => {
     expect(periodButtonStyle(false).className).toBe("");
   });
 
-  test("fills only the selected period", () => {
-    expect([
-      periodButtonStyle(true).variant,
-      periodButtonStyle(false).variant,
-    ]).toEqual(["secondary", "outline"]);
+  test("keeps the selected colors after the button classes are merged", () => {
+    const style = periodButtonStyle(true);
+    const merged = cn(
+      buttonVariants({ variant: style.variant, size: "sm" }),
+      style.className,
+    ).split(" ");
+    expect(merged).toEqual(
+      expect.arrayContaining([
+        "border-primary",
+        "bg-selected",
+        "text-selected-foreground",
+      ]),
+    );
   });
 });

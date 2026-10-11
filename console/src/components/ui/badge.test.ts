@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { cn } from "../../lib/cn.ts";
 import { badgeVariants } from "./badge.tsx";
 
+// variantを足したら、この一覧にも足す。
 const VARIANTS = [
   ["default", "text-primary-foreground"],
   ["secondary", "text-secondary-foreground"],
