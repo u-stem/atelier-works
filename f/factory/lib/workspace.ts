@@ -89,7 +89,8 @@ export class SpawnError extends Error {
   }
 }
 
-const DEFAULT_TIMEOUT_MS = 60_000;
+/** `CommandRunner`に`timeoutMs`を渡さないときの、コマンド1回の上限(ミリ秒)。 */
+export const DEFAULT_TIMEOUT_MS = 60_000;
 /** setTimeoutが受け付ける上限(2^31-1ミリ秒)。超えると約1ミリ秒に丸められ、即時にタイムアウトしてしまう。 */
 const MAX_TIMER_MS = 2 ** 31 - 1;
 const DEFAULT_KILL_GRACE_MS = 5_000;
@@ -919,6 +920,11 @@ function parseLockToken(content: string): string | null {
 const defaultSleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
+/** `withRepoLock`がロックを取れるまで待つ上限(ミリ秒)の既定。 */
+export const REPO_LOCK_MAX_WAIT_MS = 5 * 60_000;
+/** `withRepoLock`がロックの空きを確かめる間隔(ミリ秒)の既定。 */
+export const REPO_LOCK_POLL_MS = 200;
+
 export type WithRepoLockOptions<T> = {
   readonly lockPath: string;
   readonly fn: () => Promise<T>;
@@ -952,11 +958,11 @@ export async function withRepoLock<T>(
   const now = opts.now ?? (() => new Date());
   const sleep = opts.sleep ?? defaultSleep;
   const staleMs = opts.staleMs ?? 10 * 60_000;
-  const pollMs = opts.pollMs ?? 200;
-  // 5分。このロックは最初のclone・fetchだけでなく、リポジトリ配下のgitの操作すべて
+  const pollMs = opts.pollMs ?? REPO_LOCK_POLL_MS;
+  // このロックは最初のclone・fetchだけでなく、リポジトリ配下のgitの操作すべて
   // (ensureRepo、addDetachedWorktree、createGtrWorktree、removeWorktree、commitAndPush)で
   // 共有するので、先に並んだ遅いclone・checkoutを待てるだけの余裕が要る。
-  const maxWaitMs = opts.maxWaitMs ?? 5 * 60_000;
+  const maxWaitMs = opts.maxWaitMs ?? REPO_LOCK_MAX_WAIT_MS;
   const deadline = now().getTime() + maxWaitMs;
   const token = crypto.randomUUID();
 
@@ -1413,6 +1419,14 @@ export type EnsureFactoryCloneResult = {
   readonly dir: string;
   readonly action: "cloned" | "pulled";
 };
+
+/**
+ * 既存のcloneを更新するとき、`ensureFactoryClone`が走らせるgitの回数。
+ * fetch、reset、追跡refの確認(show-ref)、checkoutの4回。
+ * `self_update`のジョブの上限の見積もりが使う。gitの呼び出しを増減したら、この値も直す
+ * (`tests/lib/workspace.test.ts`が、更新での呼び出しの回数と一致することを確かめる)。
+ */
+export const FACTORY_CLONE_UPDATE_GIT_COMMAND_COUNT = 4;
 
 /**
  * `dir`にあるFactory自身のcloneを守るロックのパス(隣の`<dir>.lock`)を返す。
