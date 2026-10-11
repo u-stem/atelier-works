@@ -686,6 +686,15 @@ describe("reconcileClosedActionableItems failures", () => {
     expect(failures).toHaveLength(1);
   });
 
+  test("keeps the stored cursor when the first target hits the rate limit", async () => {
+    const { deps, cursors } = harness(issues(5), {
+      cursor: { cursor: 2 },
+      failures: failingEvery(new GitHubRateLimitError("GET /x", null, false)),
+    });
+    await run(deps);
+    expect(cursors).toEqual([2]);
+  });
+
   test("keeps the cursor before the target that hit the rate limit", async () => {
     const { deps, cursors } = harness(issues(5), {
       failures: {

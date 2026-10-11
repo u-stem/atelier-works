@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { GitHubHttpError } from "../../f/factory/lib/github.ts";
 import { IMPLEMENT_FLOW_PATH } from "../../f/factory/lib/implement_loop.ts";
 import { actionableCancelNote } from "../../f/factory/lib/poll_support.ts";
 import type { WorkItem, WorkItemStatus } from "../../f/factory/lib/types.ts";
@@ -6,6 +7,7 @@ import {
   activeIssueConflictError,
   activeIssueConflictErrorFrom,
   asBeforeActionableCancel,
+  cancelledRestartRefusal,
   closedTargetRefusal,
   computeRestartPlan,
   launchFailureError,
@@ -521,6 +523,25 @@ describe("closedTargetRefusal", () => {
     );
   });
 
+  test.each([301, 302, 307, 308])(
+    "says a %d redirect cannot be restarted instead of asking to try again",
+    async (status) => {
+      const refusal = await closedTargetRefusal(issueItem, async () => {
+        throw new GitHubHttpError(`HTTP ${String(status)}`, status);
+      });
+      expect(refusal).toContain(
+        "octo-owner/atelier-works#10 was redirected (the issue or repository moved); it cannot be restarted",
+      );
+    },
+  );
+
+  test("still asks to try again later for a server error", async () => {
+    const refusal = await closedTargetRefusal(issueItem, async () => {
+      throw new GitHubHttpError("HTTP 502", 502);
+    });
+    expect(refusal).toContain("try again later");
+  });
+
   test("masks a secret in the lookup failure", async () => {
     const refusal = await closedTargetRefusal(issueItem, async () => {
       throw new Error("bad token ghp_0123456789abcdefghijklmnopqrstuvwxyz");
@@ -556,6 +577,91 @@ describe("newerPrRowRefusal", () => {
   test("does not apply to an issue work item", () => {
     expect(
       newerPrRowRefusal({ id: 3, kind: "issue" }, { id: 9, status: "failed" }),
+    ).toBeNull();
+  });
+});
+
+describe("cancelledRestartRefusal", () => {
+  const prFix = {
+    id: 3,
+    kind: "pr_fix" as const,
+    status: "cancelled" as const,
+    owner: "o",
+    repo: "r",
+    issue_number: null,
+    pr_number: 20,
+  };
+  const issue = {
+    ...prFix,
+    kind: "issue" as const,
+    issue_number: 10,
+    pr_number: null,
+  };
+  const newer = { id: 9, status: "reviewed" as const };
+
+  function deps(row: typeof newer | null = null, state = "open") {
+    const calls = { newerPrRow: 0, getState: 0 };
+    return {
+      calls,
+      deps: {
+        newerPrRow: async () => {
+          calls.newerPrRow += 1;
+          return row;
+        },
+        getState: async () => {
+          calls.getState += 1;
+          return state;
+        },
+      },
+    };
+  }
+
+  test("checks nothing for a work item that was not cancelled", async () => {
+    const { deps: d, calls } = deps(newer, "closed");
+    await cancelledRestartRefusal(prFix, { status: "cancelled" }, d);
+    expect(calls).toEqual({ newerPrRow: 0, getState: 0 });
+  });
+
+  test("refuses a cancelled pr work item that has a newer row", async () => {
+    const { deps: d } = deps(newer);
+    expect(
+      await cancelledRestartRefusal(prFix, { status: "failed" }, d),
+    ).toContain("now tracks the same pull request");
+  });
+
+  test("does not ask GitHub when a newer row refuses", async () => {
+    const { deps: d, calls } = deps(newer);
+    await cancelledRestartRefusal(prFix, { status: "failed" }, d);
+    expect(calls.getState).toBe(0);
+  });
+
+  test("does not look for newer rows of an issue work item", async () => {
+    const { deps: d, calls } = deps(newer);
+    await cancelledRestartRefusal(issue, { status: "failed" }, d);
+    expect(calls.newerPrRow).toBe(0);
+  });
+
+  test("does not look for newer rows without a pr number", async () => {
+    const { deps: d, calls } = deps(newer);
+    await cancelledRestartRefusal(
+      { ...prFix, pr_number: null },
+      { status: "failed" },
+      d,
+    );
+    expect(calls.newerPrRow).toBe(0);
+  });
+
+  test("falls through to the closed target check when no newer row exists", async () => {
+    const { deps: d } = deps(null, "closed");
+    expect(
+      await cancelledRestartRefusal(prFix, { status: "failed" }, d),
+    ).toContain("is still closed");
+  });
+
+  test("allows the restart when the target is open and no newer row exists", async () => {
+    const { deps: d } = deps(null, "open");
+    expect(
+      await cancelledRestartRefusal(prFix, { status: "failed" }, d),
     ).toBeNull();
   });
 });

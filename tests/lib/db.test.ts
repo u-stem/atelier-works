@@ -325,7 +325,7 @@ describe("newestNewerPrWorkItem", () => {
   test("looks only at larger ids", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await newestNewerPrWorkItem("pr_review", "o", "r", 7, 3, sql);
-    expect(calls[0]?.text).toContain("id >  ? ::integer");
+    expect(calls[0]?.text).toContain("id >  ? ::bigint");
   });
 
   test("takes the newest of them", async () => {

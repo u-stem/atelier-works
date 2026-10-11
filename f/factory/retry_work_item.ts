@@ -33,7 +33,7 @@ import {
   updateStatusIfCurrentClearingFlowJobId,
   updateStatusIfLeaseHolder,
 } from "./lib/db.ts";
-import { fetchIssueState } from "./lib/github.ts";
+import { fetchIssueState, GitHubHttpError } from "./lib/github.ts";
 import { parseFlowJobId } from "./lib/implement_launch_support.ts";
 import { IMPLEMENT_FLOW_PATH } from "./lib/implement_loop.ts";
 import { isRequirementsApprovedForAttempt } from "./lib/implement_support.ts";
@@ -124,6 +124,57 @@ export function newerPrRowRefusal(
   const id = String(workItem.id);
   const newerId = String(newer.id);
   return `retry_work_item: work item ${id} was cancelled when its target was closed, and work item ${newerId} (status ${newer.status}) now tracks the same pull request, so work item ${id} will not be restarted, follow work item ${newerId}`;
+}
+
+/**
+ * 取り消された作業項目(`restartItem`の状態が`workItem`と違うとき)の再開を断る理由を返す。無ければ`null`。
+ * 取り消されていない作業項目には何も確かめない。
+ * 取り消されたものは、先に`newerPrRowRefusal`(`pr_review` / `pr_fix`で`pr_number`があるときだけ問い合わせる)、
+ * 次に`closedTargetRefusal`の順に確かめる。GitHubへの問い合わせを後にして、DBで済む確認を先に返す。
+ */
+export async function cancelledRestartRefusal(
+  workItem: Pick<
+    WorkItem,
+    "id" | "kind" | "status" | "owner" | "repo" | "issue_number" | "pr_number"
+  >,
+  restartItem: Pick<WorkItem, "status">,
+  deps: {
+    readonly newerPrRow: (
+      item: {
+        readonly id: number;
+        readonly kind: "pr_review" | "pr_fix";
+        readonly owner: string;
+        readonly repo: string;
+      },
+      prNumber: number,
+    ) => Promise<{
+      readonly id: number;
+      readonly status: WorkItemStatus;
+    } | null>;
+    readonly getState: (
+      owner: string,
+      repo: string,
+      number: number,
+    ) => Promise<string>;
+  },
+): Promise<string | null> {
+  if (restartItem.status === workItem.status) return null;
+  const newerRow =
+    (workItem.kind === "pr_review" || workItem.kind === "pr_fix") &&
+    workItem.pr_number !== null
+      ? await deps.newerPrRow(
+          {
+            id: workItem.id,
+            kind: workItem.kind,
+            owner: workItem.owner,
+            repo: workItem.repo,
+          },
+          workItem.pr_number,
+        )
+      : null;
+  const taken = newerPrRowRefusal(workItem, newerRow);
+  if (taken !== null) return taken;
+  return closedTargetRefusal(workItem, deps.getState);
 }
 
 /**
@@ -220,6 +271,14 @@ export async function closedTargetRefusal(
   try {
     state = await getState(workItem.owner, workItem.repo, number);
   } catch (err) {
+    // 3xxは恒久的な移転(Issueの移動、リポジトリの改名や所有者の移管)で、待っても直らない。
+    if (
+      err instanceof GitHubHttpError &&
+      err.status >= 300 &&
+      err.status < 400
+    ) {
+      return `${head}, and ${target} was redirected (the issue or repository moved); it cannot be restarted`;
+    }
     const reason = maskSecrets(
       err instanceof Error ? err.message : String(err),
     );
@@ -447,24 +506,20 @@ export async function main(work_item_id: number): Promise<RetryWorkItemResult> {
   );
   if (refusal !== null) throw new Error(refusal);
 
-  if (restartItem.status !== workItem.status) {
-    const newerRow =
-      (workItem.kind === "pr_review" || workItem.kind === "pr_fix") &&
-      workItem.pr_number !== null
-        ? await newestNewerPrWorkItem(
-            workItem.kind,
-            workItem.owner,
-            workItem.repo,
-            workItem.pr_number,
-            workItem.id,
-          )
-        : null;
-    const taken = newerPrRowRefusal(workItem, newerRow);
-    if (taken !== null) throw new Error(taken);
-    // Console用のworkerには`gh`が無いので、`gh`を起動せず`fetch`で読む。
-    const closed = await closedTargetRefusal(
-      workItem,
-      async (owner, repo, number) =>
+  const cancelledRefusal = await cancelledRestartRefusal(
+    workItem,
+    restartItem,
+    {
+      newerPrRow: (item, prNumber) =>
+        newestNewerPrWorkItem(
+          item.kind,
+          item.owner,
+          item.repo,
+          prNumber,
+          item.id,
+        ),
+      // Console用のworkerには`gh`が無いので、`gh`を起動せず`fetch`で読む。
+      getState: async (owner, repo, number) =>
         fetchIssueState(
           fetch,
           await wmill.getVariable("f/factory/github_token"),
@@ -472,9 +527,9 @@ export async function main(work_item_id: number): Promise<RetryWorkItemResult> {
           repo,
           number,
         ),
-    );
-    if (closed !== null) throw new Error(closed);
-  }
+    },
+  );
+  if (cancelledRefusal !== null) throw new Error(cancelledRefusal);
 
   const leased = usesFlowJobIdLease(plan);
   const note =

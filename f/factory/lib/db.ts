@@ -571,7 +571,7 @@ export async function newestNewerPrWorkItem(
   const rows = await sql`
     SELECT id, status FROM factory.work_items
     WHERE kind = ${kind} AND owner = ${owner} AND repo = ${repo}
-      AND pr_number = ${prNumber}::integer AND id > ${id}::integer
+      AND pr_number = ${prNumber}::integer AND id > ${id}::bigint
     ORDER BY id DESC
     LIMIT 1
   `.fetch();
