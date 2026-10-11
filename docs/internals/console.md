@@ -271,6 +271,27 @@ IssueのリンクはGitHubのIssueのURLの形のときだけ張る。
 次の自動更新までの時間と時刻の表示は`src/lib/refreshTiming.ts`が決める。
 相対時刻の表示は、`src/app/clock.ts`の共有の時計が30秒ごとに進める。
 
+## ジョブの画面へのリンク
+
+作業項目の遷移と失敗は、動いたジョブのIDを持つ([作業項目の状態とリース](work-items.md)の「ジョブの記録」)。
+`src/lib/jobLink.ts`の`jobRunUrl`が、IDからWindmillのジョブの画面のURLを作る。
+`src/components/JobLink.tsx`の`JobLink`が、そのURLへのリンクを描く。リンクは別のタブで開く。
+`work_item_detail`の遷移の型ガードは`src/api/guards/workItemTransitions.ts`にある。
+`tests/scripts/console_work_item_jobs_contract.test.ts`が、backendの変換結果が型ガードを通ることを確かめる。
+
+IDはDBに記録された値で、信頼できない入力として扱う。
+UUIDの形のものだけを、固定の形のパス`/run/<job_id>`に入れる。形が違えばリンクを出さない。
+URLの組み立てに、IDから先の文字列を使わない。
+
+リンクは、同じオリジンの相対パスにする。
+ConsoleはWindmillと同じオリジンで配信するためである。
+別のオリジンで公開するときは、ビルド時の環境変数`VITE_WINDMILL_PUBLIC_URL`にオリジンを設定する。
+値は`http(s)`のURLのオリジンに直し、パス、クエリ、ハッシュは捨てる。
+認証情報つきのURLや、別のスキームの値は、設定が無いものとして扱う。
+
+作業項目の詳細の画面は、まだ無い。
+`JobLink`はどの画面にも組み込んでいない。
+
 ## 画面を足す手順
 
 1. 画面を`src/screens/<入口>/`に置く。
