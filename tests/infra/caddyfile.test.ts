@@ -333,12 +333,20 @@ describe("the rule for GET requests with side effects", () => {
     "teams_approval",
   ])("the matcher covers jobs/%s", (name) => {
     expect(sideEffectMatcher).toMatch(
-      new RegExp(`path_regexp [^\\n]*jobs/\\([^)]*\\b${name}\\b`),
+      new RegExp(`path_regexp [^\\n]*jobs/\\+\\([^)]*\\b${name}\\b`),
     );
   });
 
-  test("the matcher covers job_helpers/move_s3_file", () => {
-    expect(sideEffectMatcher).toContain("job_helpers/move_s3_file");
+  test("the matcher covers job_helpers/move_s3_file with its end anchored like the others", () => {
+    expect(sideEffectMatcher).toContain("move_s3_file)(/|$)");
+  });
+
+  test("the matcher lets the workspace part cross a slash", () => {
+    expect(sideEffectMatcher).toContain("^/+api/+w/.+/");
+  });
+
+  test("the matcher ignores case", () => {
+    expect(sideEffectMatcher).toContain("(?i)");
   });
 
   test("the matcher lets fetch through", () => {
@@ -365,6 +373,49 @@ describe("the rule for GET requests with side effects", () => {
 
   test("the handler comes after the console routes", () => {
     expect(CADDYFILE.indexOf("handle @side_effect_get_api")).toBeGreaterThan(
+      CADDYFILE.indexOf("handle @console_raw"),
+    );
+  });
+});
+
+// フォームのPOSTのように、ページの移動(navigate)で送られる書き込みを止める規則を静的に確かめる。
+// ConsoleとWindmillのUIのAPI呼び出しはfetchなので、Sec-Fetch-Modeはcorsかsame-originになる。
+const navigateMatcher = braceBlock("@navigate_write_api {");
+const navigateHandler = braceBlock("handle @navigate_write_api {");
+
+describe("the rule for writes sent by navigation", () => {
+  test("the matcher exists", () => {
+    expect(navigateMatcher).not.toBe("");
+  });
+
+  test("the matcher is limited to /api/*", () => {
+    expect(navigateMatcher).toContain("path /api/*");
+  });
+
+  test("the matcher leaves GET and HEAD to the other rules", () => {
+    expect(navigateMatcher).toMatch(/not \{[^}]*method GET HEAD/);
+  });
+
+  test("the matcher matches Sec-Fetch-Mode navigate", () => {
+    expect(navigateMatcher).toContain("header Sec-Fetch-Mode navigate\n");
+  });
+
+  test("the matcher matches Sec-Fetch-Mode nested-navigate", () => {
+    expect(navigateMatcher).toContain("header Sec-Fetch-Mode nested-navigate");
+  });
+
+  test("the handler responds 403", () => {
+    expect(navigateHandler).toContain("respond 403");
+  });
+
+  test("the handler comes before the default reverse proxy", () => {
+    expect(CADDYFILE.indexOf("handle @navigate_write_api")).toBeLessThan(
+      CADDYFILE.indexOf("reverse_proxy http://windmill_server:8000"),
+    );
+  });
+
+  test("the handler comes after the console routes", () => {
+    expect(CADDYFILE.indexOf("handle @navigate_write_api")).toBeGreaterThan(
       CADDYFILE.indexOf("handle @console_raw"),
     );
   });

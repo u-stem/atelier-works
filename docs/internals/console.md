@@ -141,6 +141,7 @@ Consoleは管理者のCookieで動くので、呼べる範囲を固定する。
 | `Sec-Fetch-Site: cross-site`で`/api/*`を呼ぶ | Caddyが403を返す | 実測 |
 | 別のサイトの`Origin`で`/api/*`を呼ぶ | Caddyが403を返す | `scripts/check-caddy-origin.sh`で実測 |
 | `Sec-Fetch-Dest: image`で`run_wait_result`をGETする | Caddyが403を返す | `scripts/check-caddy-origin.sh`で実測 |
+| `Sec-Fetch-Mode: navigate`で`/api/*`へPOSTする | Caddyが403を返す | `scripts/check-caddy-origin.sh`で実測 |
 | superadminでない主体が、tag`console`のscriptを呼ぶ | 400、JSON文字列`"Bad request: Tag console is not included in the allowed CUSTOM_TAGS, ..."` | 実測 |
 | ジョブの失敗の結果(CLIで確認) | `{"error":{"name","message","stack"}}`。HTTPの状態は未実測 | 結果の形だけ実測 |
 | ジョブが失敗する | 500を想定する。本文はJSONでもテキストでも読める | 状態は未実測 |
@@ -666,11 +667,12 @@ Consoleの本体のCSPは`/console/assets/`だけを許すので、本体のペ�
 - `Sec-Fetch-Site`が`cross-site`か`same-site`である。
 - `Origin`ヘッダーがあり、ブラウザが開いたホスト名とポートのオリジンと一致しない。
 - 副作用のあるGETのAPIを、fetchとXHR以外の読み込み(`<img>`、リンク、iframeなど)から呼んでいる。
+- GETとHEAD以外の要求が、ページの移動(`Sec-Fetch-Mode: navigate`)で送られている。
 
 ### Sec-Fetch-Siteの規則
 
 - Windmillのフロントエンドからの要求には、ブラウザが`Sec-Fetch-Site: same-origin`を付ける。
-- CLI(`wmill`)は、どのヘッダーも送らない。
+- CLI(`wmill`)は、`Sec-Fetch-*`、`Origin`、`Cookie`のどれも送らない。
 - Windmill 1.817.0のraw app(旧Console)には、既定でsandboxが無い。`backend.*`の呼び出しは、`parent.postMessage`を通して同じオリジンの親(WindmillのSPA)が行うので、これも`same-origin`になる。
 - raw appのsandboxを有効にすると、バンドルの取得(`GET /api/w/*/apps_u/get_data/v/*`)がcross-siteになって403になる。`Origin: null`も止めるので、`Origin`を付ける要求も同じである。そのときは、この経路を例外にする必要がある。
 
@@ -706,8 +708,15 @@ Consoleの呼び出しはPOSTの`fetch`なので、影響しない。
 | `jobs/slack_approval/<id>`と`jobs/teams_approval/<id>` | SlackとTeamsへ承認のメッセージを送る |
 | `job_helpers/move_s3_file` | オブジェクトストレージのファイルを動かす |
 
-`Sec-Fetch-Dest`を送らない古いブラウザは、`Cookie`を持つときだけ止める。
-CLIとscriptは`Cookie`を送らず、`Authorization`で認証するので、そのまま通る。
+`Sec-Fetch-Dest`を送らないブラウザは、`Cookie`を持つときだけ止める。
+対象は、古いブラウザと、HTTPで公開したブラウザである。
+`Sec-Fetch-*`は、信頼できるオリジン(localhostかHTTPS)でだけ付く。
+そのため、WindmillのフロントエンドがこれらのGETを使うと、その環境では403になる。
+CLIとscriptは、`Sec-Fetch-*`と`Cookie`を送らず、`Authorization`で認証するので、そのまま通る。
+
+パスの照合は、大文字小文字を区別せず、`//`の重なりも許す。
+作業スペースの部分は`/`をまたいで一致させるので、`%2f`で`/`を隠しても逃げられない。
+`%72un_wait_result`のようにパーセント符号で綴りを変えても、Caddyが戻してから照合するので止まる。
 
 洗い出しは、`windmill-client`の`services.gen.d.ts`にある453個のGETのAPIを、名前と説明で分類して行った。
 サーバーの全経路を網羅した確認ではなく、`/api/r/*`のカスタムHTTPルート(HTTPトリガー)は含まない。
@@ -728,6 +737,32 @@ CLIとscriptは`Cookie`を送らず、`Authorization`で認証するので、そ
 Windmillのフロントエンドの実装は読んでいない。
 対象のGETを`fetch`以外で開く導線があれば、そのリンクは403になる。
 ジョブ結果の表示は`jobs_u/get`などの読み取り系のGETを使い、対象に入れていない。
+
+### ページの移動で送られる書き込み
+
+同じオリジンに注入された`<form method="post" action="/api/w/<workspace>/jobs/run/p/...">`は、クリック1回で送られる。
+このPOSTは、`Sec-Fetch-Site: same-origin`で、`Origin`も一致し、`Sec-Fetch-Dest`は`document`になる。
+上の3つの規則は、どれも止められない。
+そのため、GETとHEAD以外の要求で`Sec-Fetch-Mode`が`navigate`か`nested-navigate`のものは、メソッドを問わず403にする。
+ConsoleとWindmillのフロントエンドのAPI呼び出しは`fetch`なので、`Sec-Fetch-Mode`は`cors`か`same-origin`になり、影響しない。
+
+GETとHEADは、この規則では止めない。
+APIをナビゲーションで開く正当な導線があるためである。
+副作用のあるGETは、前の節の規則が止める。
+ナビゲーションで開く導線は、次のとおりである。
+
+| 経路(`/api/`の下) | 導線 |
+| --- | --- |
+| `w/<workspace>/jobs_u/resume/...`と`jobs_u/cancel/...` | メールとSlackの署名付きの承認リンク |
+| `auth/login_link/<token>` | ログインのリンク |
+| `oauth/login_callback/...`、`oauth/connect_callback/...`、`mcp/oauth/start`、`mcp/oauth/callback` | OAuthの認可とコールバック(IdPからのリダイレクト) |
+| `w/<workspace>/job_helpers/download_s3_file`、`jobs_u/get_log_file/...`、`jobs/completed/export`、`users/export`、`groups/export`など | ファイルのダウンロードとエクスポート |
+| `openapi.yaml`、`version` | 利用者が直接開くページ |
+
+この一覧は、型定義の名前と説明から選んだもので、UIの実装を読んで確かめたものではない。
+GETとHEAD以外をナビゲーションで送る導線は、型定義から見つけていない。
+`Sec-Fetch-Mode`が無い古いブラウザと、HTTPで公開したブラウザは、止めない。
+`Cookie`だけで止めると、`fetch`の書き込みまで巻き込み、UIが動かなくなるためである。
 
 ### 実機での確認
 

@@ -83,6 +83,26 @@ expect 502 "POST + Origin一致 + Sec-Fetch-Dest: empty" -X POST -H "Origin: ${l
 expect 502 "読み取り系のGET + Sec-Fetch-Dest: image" -H 'Sec-Fetch-Dest: image' "${localhost}/api/w/factory/jobs_u/get/1"
 expect 502 "署名付きの承認リンク + Sec-Fetch-Dest: document" -H 'Sec-Fetch-Dest: document' "${localhost}/api/w/factory/jobs_u/resume/1/0/sig"
 
+# GETの副作用のあるAPIは、表記を変えても止める。
+expect 403 "大文字のRUN_WAIT_RESULT" -H 'Sec-Fetch-Dest: image' "${localhost}/api/w/factory/jobs/RUN_WAIT_RESULT/p/f/factory/steps/x"
+expect 403 "jobs//run_wait_result" -H 'Sec-Fetch-Dest: image' "${localhost}/api/w/factory/jobs//run_wait_result/p/f/factory/steps/x"
+expect 403 "//api//w/..." -H 'Sec-Fetch-Dest: image' "${localhost}//api//w/factory/jobs/run_wait_result/p/f/factory/steps/x"
+expect 403 "%72un_wait_result" -H 'Sec-Fetch-Dest: image' "${localhost}/api/w/factory/jobs/%72un_wait_result/p/f/factory/steps/x"
+expect 403 "作業スペースの部分に%2fを入れたもの" -H 'Sec-Fetch-Dest: image' "${localhost}/api/w/a%2fb/jobs/run_wait_result/p/f/factory/steps/x"
+expect 403 "run_wait_result/fv/<version>" -H 'Sec-Fetch-Dest: image' "${localhost}/api/w/factory/jobs/run_wait_result/fv/1"
+expect 403 "run_and_stream/f/<path>" -H 'Sec-Fetch-Dest: image' "${localhost}/api/w/factory/jobs/run_and_stream/f/factory/steps/x"
+expect 403 "run_and_stream/h/<hash>" -H 'Sec-Fetch-Dest: image' "${localhost}/api/w/factory/jobs/run_and_stream/h/abc"
+expect 403 "move_s3_file(末尾に/)" -H 'Sec-Fetch-Dest: image' "${localhost}/api/w/factory/job_helpers/move_s3_file/"
+expect 502 "GET + Sec-Fetch-Dest: empty + Cookie(fetch)" -H 'Sec-Fetch-Dest: empty' -H 'Cookie: token=x' "${run}"
+
+# ページの移動で送られる書き込み(注入された<form method=post>)は止める。fetchの書き込みは通す。
+approve="${localhost}/api/w/factory/jobs/run/p/f/factory/approval_decide"
+expect 403 "フォームのPOST(Sec-Fetch-Mode: navigate)" -X POST -H "Origin: ${localhost}" -H 'Sec-Fetch-Site: same-origin' -H 'Sec-Fetch-Mode: navigate' -H 'Sec-Fetch-Dest: document' -H 'Content-Type: application/x-www-form-urlencoded' -d 'a=1' "${approve}"
+expect 403 "フォームのPOST(iframeの中)" -X POST -H "Origin: ${localhost}" -H 'Sec-Fetch-Site: same-origin' -H 'Sec-Fetch-Mode: navigate' -H 'Sec-Fetch-Dest: iframe' -d 'a=1' "${approve}"
+expect 502 "JSONのfetchのPOST(Sec-Fetch-Mode: cors)" -X POST -H "Origin: ${localhost}" -H 'Sec-Fetch-Site: same-origin' -H 'Sec-Fetch-Mode: cors' -H 'Sec-Fetch-Dest: empty' -H 'Content-Type: application/json' -d '{}' "${approve}"
+expect 502 "ナビゲーションで開く読み取りのGET" -H 'Sec-Fetch-Mode: navigate' -H 'Sec-Fetch-Dest: document' "${localhost}/api/version"
+expect 502 "Sec-Fetch-Modeが無いPOST(古いブラウザやCLI)" -X POST -H "Origin: ${localhost}" -d '{}' "${approve}"
+
 # 規則は/api/*だけに効く。
 expect 502 "/api/*以外ではOriginを見ない" -H 'Origin: http://evil.example' "${localhost}/ws/ready"
 
