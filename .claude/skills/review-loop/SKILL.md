@@ -152,19 +152,24 @@ design-reviewer、requirements-reviewer、security-auditor、devil-advocate、tr
 - 残った指摘と、直さなかった理由: <なし、または一覧>
 ```
 
+PRを作った後は、Factoryの`pr_review`(`factory:review`ラベル)が別のレビューとして加わる。
+
 ## 終わった作業ツリーの片付け
 
 対話セッションのsubagentが作った作業ツリー(`.claude/worktrees/agent-*`)は、PRのマージ後に親が片付ける。
 Factoryが作る作業ツリーは、`cleanup_workspaces`が片付けるので対象にしない。
 
-- 対象は、ブランチが`origin/main`にマージ済みで、`git status --short`が空で、使うagentが止まっているものである。
+- 親は、主の作業ツリーから実行する。
+  先に`git fetch origin`を実行し、`origin/main`を最新にする。
+- 対象は、次の3つを満たすものである。
+  - ブランチが`git branch --merged origin/main`の一覧にある。
+  - `git status --short`が空である。
+  - その作業ツリーを使うagentが残っていない。
 - `git worktree remove <パス>`で消し、続けて`git branch -d <ブランチ>`でローカルのブランチを消す。
   `--force`、`git branch -D`、`rm -rf`は使わない。
   未マージのコミットや、コミットしていない変更を失わないためである。
-- 次のものは消さずに残し、完了の報告に一覧で載せる。
-  - 未マージのブランチ
+- 次のものは消さずに残し、片付けを終えたときの親の報告に、消したものと並べて一覧で載せる。
+  - `--merged`の一覧に無いブランチ
   - 変更が残っているもの
-  - `-d`が未マージと拒んだ`worktree-agent-*`のブランチ
+  - `git worktree remove`か`git branch -d`が拒んだもの(ロックされた作業ツリーを含む)
 - リモートのブランチは、マージ時にGitHubが消す設定なので、手で消さない。
-
-PRを作った後は、Factoryの`pr_review`(`factory:review`ラベル)が別のレビューとして加わる。
