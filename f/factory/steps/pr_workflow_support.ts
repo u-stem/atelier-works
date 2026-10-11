@@ -2584,9 +2584,12 @@ export const CHECK_COMMAND_MAX_OUTPUT_BYTES = 1024 * 1024;
  * 検査コマンドに渡す`PATH`。workerのPATHは引き継がず、この固定値を使う。
  * workerのPATHに、rootのホームや書き込める一時ディレクトリが入っていても、
  * そこに置かれた実行ファイルを検査コマンドが名前の解決で拾わないようにするため。
- * workerのイメージでは、bun・node・git・wmillが`/usr/bin`に、ghとgitleaksが`/usr/local/bin`にある。
+ * workerのイメージでは、bun・node・git・wmillが`/usr/bin`に、ghとgitleaksが`/usr/local/bin`に、
+ * goが`/usr/local/go/bin`にある。どれもrootが所有する。
+ * 値の説明は`docs/security.md`の「検査コマンドはフローが実行する」にある。
  */
-export const CHECK_COMMAND_PATH = "/usr/local/bin:/usr/bin:/bin";
+export const CHECK_COMMAND_PATH =
+  "/usr/local/bin:/usr/bin:/bin:/usr/local/go/bin";
 
 export type CheckHomeDir = {
   readonly path: string;

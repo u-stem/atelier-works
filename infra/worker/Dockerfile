@@ -104,15 +104,21 @@ ENV DISABLE_AUTOUPDATER=1 \
 RUN curl -fsSL https://claude.ai/install.sh | bash -s -- "${CLAUDE_VERSION}" \
     && ln -sf /root/.local/bin/claude /usr/local/bin/claude
 
-# workerのPATHからrootのホームを外す。ベースのイメージのPATHは
-# `/root/.local/bin`と`/tmp/.local/bin`を含むので、継承せず明示的に書く。
-# 値はベースのイメージのPATHから`/root/.local/bin`だけを除いたものである。
-ENV PATH="/usr/local/bin:/tmp/.local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/go/bin"
+# workerのPATHから、rootのホームと、誰でも書き込める`/tmp`の下を外す。
+# ベースのイメージのPATHは`/root/.local/bin`と`/tmp/.local/bin`を含むので、
+# 継承せず明示的に書く。`/tmp/.local/bin`は、workerの`windmill`の実行ファイルに
+# 参照が無く、稼働中のコンテナにも存在しない。非特権のuidが同名の実行ファイルを
+# 置いて、rootの名前解決を奪えるので、残さない。
+# 値はベースのイメージのPATHから、この2つを除いたものである。
+# `WM_VERSION`を上げるときは、新しいベースの`docker image inspect`でPATHを確かめ、
+# 必要なディレクトリが増えていないか突き合わせる。
+ENV PATH="/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/go/bin"
 
 # ビルド時の検証。道具が欠けている・壊れているとき、ジョブの実行時に
 # 気づくのではなく、その場でビルドを失敗させる。
 # `claude`はPATHの名前で解決して確かめる。
+# `setpriv`は、切り替えた先のuidを出力と比べて確かめる。
 RUN claude --version && gh --version && gitleaks version && git gtr version && wmill --version && bun --version \
-    && setpriv --reuid=10001 --regid=10001 --clear-groups -- id -u
+    && [ "$(setpriv --reuid=10001 --regid=10001 --clear-groups -- id -u)" = 10001 ]
 
 CMD ["windmill"]

@@ -31,6 +31,13 @@ function startingWith(keyword: string): string[] {
   return instructions().filter((line) => line.startsWith(`${keyword} `));
 }
 
+/** `ENV PATH="..."`の値を`:`で分けた一覧を返す。無ければ空の配列を返す。 */
+function pathDirs(): string[] {
+  const pathEnv = startingWith("ENV").find((line) => /\sPATH=/.test(line));
+  const value = /\sPATH="?([^"\s]*)"?/.exec(pathEnv ?? "")?.[1] ?? "";
+  return value.split(":").filter((dir) => dir !== "");
+}
+
 describe("infra/worker/Dockerfile PATH", () => {
   test("sets PATH explicitly instead of inheriting the base image's", () => {
     const pathEnvs = startingWith("ENV").filter((line) => /\sPATH=/.test(line));
@@ -38,13 +45,21 @@ describe("infra/worker/Dockerfile PATH", () => {
   });
 
   test("keeps /root/.local/bin out of the PATH", () => {
-    const pathEnv = startingWith("ENV").find((line) => /\sPATH=/.test(line));
-    expect(pathEnv).not.toContain("/root/.local/bin");
+    expect(pathDirs()).not.toContain("/root/.local/bin");
   });
 
-  test("keeps /usr/local/bin in the PATH so the claude symlink resolves by name", () => {
-    const pathEnv = startingWith("ENV").find((line) => /\sPATH=/.test(line));
-    expect(pathEnv).toContain("/usr/local/bin");
+  test("keeps every directory under /tmp out of the PATH", () => {
+    expect(pathDirs().filter((dir) => dir.startsWith("/tmp"))).toEqual([]);
+  });
+
+  test("keeps the directories the worker's tools live in", () => {
+    const required = [
+      "/usr/local/bin",
+      "/usr/bin",
+      "/bin",
+      "/usr/local/go/bin",
+    ];
+    expect(required.filter((dir) => !pathDirs().includes(dir))).toEqual([]);
   });
 
   test("links claude into /usr/local/bin", () => {
@@ -79,10 +94,10 @@ describe("infra/worker/Dockerfile check user", () => {
     expect(installed).toBe(true);
   });
 
-  test("verifies at build time that setpriv can drop to the check uid", () => {
+  test("verifies at build time that setpriv drops to the check uid", () => {
     const verified = startingWith("RUN").some((line) =>
       line.includes(
-        "setpriv --reuid=10001 --regid=10001 --clear-groups -- id -u",
+        '[ "$(setpriv --reuid=10001 --regid=10001 --clear-groups -- id -u)" = 10001 ]',
       ),
     );
     expect(verified).toBe(true);

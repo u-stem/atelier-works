@@ -1356,12 +1356,20 @@ describe("runAllowedCheckCommands", () => {
       if (workerPath === undefined) delete process.env.PATH;
       else process.env.PATH = workerPath;
     }
-    expect(calls[0]?.options?.env?.PATH).toBe("/usr/local/bin:/usr/bin:/bin");
+    expect(calls[0]?.options?.env?.PATH).toBe(
+      "/usr/local/bin:/usr/bin:/bin:/usr/local/go/bin",
+    );
   });
 
   test("the fixed PATH holds no directory under /root", () => {
     expect(
       CHECK_COMMAND_PATH.split(":").filter((dir) => dir.startsWith("/root")),
+    ).toEqual([]);
+  });
+
+  test("the fixed PATH holds no directory under /tmp", () => {
+    expect(
+      CHECK_COMMAND_PATH.split(":").filter((dir) => dir.startsWith("/tmp")),
     ).toEqual([]);
   });
 
