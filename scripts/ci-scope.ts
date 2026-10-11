@@ -109,6 +109,7 @@ export const WORKER_DEPENDENCY_FILES: readonly string[] = [
   "f/factory/lib/types.ts",
   "f/factory/lib/workspace.ts",
   "tests/lib/testSupport.ts",
+  "tests/preload.ts",
 ];
 
 const ZERO_SHA = /^0+$/;
