@@ -554,6 +554,17 @@ describe("buildHostActionNotice paths", () => {
     expect(cause).toContain("\\[x\\]\\(https://evil\\)");
   });
 
+  test("escapes a backslash so it cannot cancel the escape of the next character", () => {
+    const { cause } = buildHostActionNotice(SHA_A, ["\\[x\\]\\(https://evil)"]);
+    const backslashes = /(\\+)\(https/.exec(cause)?.[1]?.length ?? 0;
+    expect(backslashes % 2).toBe(1);
+  });
+
+  test("escapes the backslash itself", () => {
+    const { cause } = buildHostActionNotice(SHA_A, ["a\\b"]);
+    expect(cause).toContain("a\\\\b");
+  });
+
   test("keeps the message on one line", () => {
     const { notice } = buildHostActionNotice(SHA_A, ["infra/a\r\nb"]);
     expect(notice.message.includes("\n")).toBe(false);

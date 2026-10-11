@@ -1247,9 +1247,12 @@ miseの自動インストールが`mise run`の前に不足分を入れるかは
 workerの並列数(`NUM_WORKERS`)のような`infra/docker-compose.yml`の変更も、`git pull`だけでは反映されず、`mise run up`で反映される。
 マウントの変更では、該当するコンテナが作り直される。Console用のworkerが作り直される間は、Consoleの問い合わせが待たされる。
 
-`mise run up`と`mise run deploy`は、`up -d`の後に、Caddyを再起動する。
-再起動の後に、動いているCaddyが`caddy validate`でCaddyfileを読めることを確かめ、失敗したら止まる。
-`restart`はコンテナを起動できれば成功を返し、Caddyfileの誤りで直後に落ちても気づけないためである。
+`mise run up`と`mise run deploy`は、`up -d`の前に、一時コンテナで`caddy validate`を実行し、Caddyfileを確かめる。
+不正なら、そこで止まり、何も起動し直さない。
+不正なCaddyfileのまま、Caddyの作り直しや再起動をすると、Caddyが落ちて再起動を繰り返し、公開の入口が止まるためである。
+続けて、`up -d`の後に、Caddyを再起動する。
+再起動の後に、動いているCaddyでも`caddy validate`を実行し、失敗したら止まる。
+`restart`はコンテナを起動できれば成功を返し、直後に落ちても気づけないためである。
 止まったときは、HEADを書かないので、通知は解決されない。
 `infra/Caddyfile`は単一ファイルのbind mountで、`up -d`はcomposeの設定が変わらない限りCaddyを作り直さず、再読み込みもしないためである。
 再起動しないと、古いCaddyfileのまま、次に書くHEADが反映済みを表してしまう。
@@ -1274,11 +1277,12 @@ workerの並列数(`NUM_WORKERS`)のような`infra/docker-compose.yml`の変更
 1. ホスト側のcheckoutで`git pull --ff-only`
 2. Dockerの版の検査。Engineが26.0以上、Composeが2.26.0以上でなければ止まる
 3. イメージの取得と、`windmill_worker`と`console_fetcher`のイメージのビルド
-4. `docker compose up -d`
-5. Caddyの再起動と、`caddy validate`による設定の確認
-6. Consoleのraw appの依存の`npm ci --ignore-scripts`と`wmill sync push`
-7. migrationの実行
-8. 反映したHEADの記録
+4. 一時コンテナでの`caddy validate`。不正なら止まる
+5. `docker compose up -d`
+6. Caddyの再起動と、動いているCaddyでの`caddy validate`
+7. Consoleのraw appの依存の`npm ci --ignore-scripts`と`wmill sync push`
+8. migrationの実行
+9. 反映したHEADの記録
 
 版の検査は`git pull --ff-only`の後に行う。取り込んだ新しい版の検査を使うためである。
 この検査を持たない版から取り込む最初の1回は、`mise run deploy`を使わない。miseは起動の時点のタスク定義で動くので、取り込んだ検査が走らないためである。

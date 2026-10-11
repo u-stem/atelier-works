@@ -92,7 +92,25 @@ describe("mise.toml stack tasks", () => {
   const VALIDATE_CADDY =
     "docker compose -f infra/docker-compose.yml exec -T caddy caddy validate --config /etc/caddy/Caddyfile";
 
+  // 不正なCaddyfileのまま再起動すると、Caddyが落ちて再起動を繰り返し、公開の入口が止まる。
+  // `up -d`はCaddyのイメージや設定が変わると作り直すので、`up -d`より前に、一時コンテナで確かめる。
+  const PREVALIDATE_CADDY =
+    "docker compose -f infra/docker-compose.yml run --rm --no-deps caddy caddy validate --config /etc/caddy/Caddyfile";
+
   for (const task of ["up", "deploy"]) {
+    test(`${task} validates the Caddyfile before compose up`, () => {
+      const lines = taskRuns().get(task) ?? [];
+      const pre = lines.indexOf(PREVALIDATE_CADDY);
+      expect(pre > -1 && pre < lines.findIndex(isComposeUp)).toBe(true);
+    });
+
+    test(`${task} validates the Caddyfile after the Docker version check`, () => {
+      const lines = taskRuns().get(task) ?? [];
+      expect(lines.indexOf(PREVALIDATE_CADDY)).toBeGreaterThan(
+        lines.indexOf(CHECK),
+      );
+    });
+
     test(`${task} restarts caddy after compose up`, () => {
       const lines = taskRuns().get(task) ?? [];
       expect(lines.indexOf(RESTART_CADDY)).toBeGreaterThan(

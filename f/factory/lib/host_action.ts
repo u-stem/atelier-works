@@ -54,8 +54,12 @@ const FULL_SHA = /^[0-9a-f]{40}$/;
 /** 制御文字(C0、DEL、C1)、書式文字(双方向制御など)、行と段落の区切りを表すUnicodeの分類。 */
 const INVISIBLE_CHARS = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
 
-/** Markdownのリンクを組み立てる文字。 */
-const LINK_CHARS = /[[\]()]/g;
+/**
+ * Markdownの書式を作る文字。バックスラッシュ自身も含める。
+ * 含めないと、パスの`\`が直後に足す`\`を打ち消し、`[]()`が有効なリンクとして残る。
+ * `_`と`#`は含めない。リンクも強調も作れず、`console_fetcher`などのパスの読みやすさを保つため。
+ */
+const MARKDOWN_CHARS = /[\\[\]()*~|`<>]/g;
 
 export type HostActionNotice = {
   readonly notice: NoticeRecord;
@@ -68,10 +72,11 @@ export type HostActionNotice = {
 /**
  * gitで管理するファイル名は、改行や双方向制御などの文字を含められる。
  * 本文とDiscordの表示を崩さないよう、見えない文字を`?`にする。
- * リンクを組み立てる`[]()`は、Discordのマスクリンクにならないよう`\\`でエスケープする。
+ * Markdownの書式文字は、Discordのマスクリンクなどにならないよう、`\\`でエスケープする。
+ * バックスラッシュ自身を先に(同じ置換の中で)エスケープする。
  */
 function printablePath(path: string): string {
-  return path.replace(INVISIBLE_CHARS, "?").replace(LINK_CHARS, "\\$&");
+  return path.replace(INVISIBLE_CHARS, "?").replace(MARKDOWN_CHARS, "\\$&");
 }
 
 /**

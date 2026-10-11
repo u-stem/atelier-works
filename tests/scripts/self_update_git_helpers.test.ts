@@ -12,6 +12,7 @@ import {
   listAllPaths,
   readSelfCloneBranch,
   readSelfCloneHeadSha,
+  SELF_UPDATE_LOCAL_GIT_TIMEOUT_MS,
 } from "../../f/factory/self_update.ts";
 import {
   createFakeCommandRunner,
@@ -275,6 +276,14 @@ describe("isAncestorSha", () => {
     const { run } = createFakeCommandRunner([ok("")]);
     await expect(isAncestorSha(run, DIR, "not-a-sha", B)).rejects.toThrow();
   });
+
+  test("runs under the local git timeout", async () => {
+    const fake = createFakeCommandRunner([ok("")]);
+    await isAncestorSha(fake.run, DIR, A, B);
+    expect(fake.calls[0]?.options?.timeoutMs).toBe(
+      SELF_UPDATE_LOCAL_GIT_TIMEOUT_MS,
+    );
+  });
 });
 
 describe("isCommitInClone", () => {
@@ -309,5 +318,13 @@ describe("isCommitInClone", () => {
   test("throws on an invalid sha", async () => {
     const { run } = createFakeCommandRunner([ok("")]);
     await expect(isCommitInClone(run, DIR, "not-a-sha")).rejects.toThrow();
+  });
+
+  test("runs under the local git timeout", async () => {
+    const fake = createFakeCommandRunner([ok("")]);
+    await isCommitInClone(fake.run, DIR, A);
+    expect(fake.calls[0]?.options?.timeoutMs).toBe(
+      SELF_UPDATE_LOCAL_GIT_TIMEOUT_MS,
+    );
   });
 });

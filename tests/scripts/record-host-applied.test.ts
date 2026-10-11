@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   chmodSync,
   lstatSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
@@ -111,43 +112,103 @@ describe("record-host-applied.sh", () => {
   });
 });
 
-// コンテナの中で動くシェルを、記録した引数から取り出して実際に動かす。
-describe("record-host-applied.sh in-container write", () => {
-  function runInner(target: string): void {
-    const { dockerArgs } = run({ head: SHA, dockerExit: 0 });
-    const script = dockerArgs[dockerArgs.indexOf("-c") + 1] ?? "";
-    Bun.spawnSync(["sh", "-c", script, "sh", SHA, target]);
-  }
+// コンテナの中で動く部分を、記録した引数から取り出す。
+function inContainerArgs(): string[] {
+  const { dockerArgs } = run({ head: SHA, dockerExit: 0 });
+  return dockerArgs.slice(dockerArgs.indexOf("windmill_worker") + 1, -1);
+}
 
-  test("writes the sha to a regular file", () => {
-    const target = join(dir, "marker");
-    runInner(target);
-    expect(readFileSync(target, "utf8")).toBe(`${SHA}\n`);
+function inContainerScript(): string {
+  const args = inContainerArgs();
+  return args[args.indexOf("-c") + 1] ?? "";
+}
+
+describe("record-host-applied.sh in-container script", () => {
+  test("wraps the write in a timeout", () => {
+    expect(inContainerArgs().slice(0, 2)).toEqual(["timeout", "10"]);
   });
 
-  test("replaces a symlinked marker instead of following it", () => {
-    const victim = join(dir, "victim");
-    const target = join(dir, "marker");
-    writeFileSync(victim, "keep");
-    symlinkSync(victim, target);
-    runInner(target);
-    expect(readFileSync(victim, "utf8")).toBe("keep");
+  test("creates the temporary file with a random name", () => {
+    expect(inContainerScript()).toContain('mktemp "$2.tmp.XXXXXXXX"');
   });
 
-  test("turns a symlinked marker into a regular file", () => {
-    const victim = join(dir, "victim");
-    const target = join(dir, "marker");
-    writeFileSync(victim, "keep");
-    symlinkSync(victim, target);
-    runInner(target);
-    expect(lstatSync(target).isFile()).toBe(true);
+  test("replaces the marker without moving into a directory", () => {
+    expect(inContainerScript()).toContain('mv -fT "$tmp" "$2"');
   });
 
-  test("leaves no temporary file behind", () => {
-    const target = join(dir, "marker");
-    runInner(target);
-    expect(readdirSync(dir).filter((name) => name.includes(".tmp."))).toEqual(
-      [],
-    );
+  test("removes the temporary file when the write fails", () => {
+    expect(inContainerScript()).toContain('rm -f "$tmp"');
   });
 });
+
+// GNUのcoreutils(`timeout`、`mv -T`)が要るので、実際に動かすのはLinuxだけにする。
+// コンテナの中はGNUのcoreutilsである。
+describe.skipIf(process.platform !== "linux")(
+  "record-host-applied.sh in-container write",
+  () => {
+    function runInner(target: string): number {
+      const result = Bun.spawnSync([
+        ...inContainerArgs().slice(0, -2),
+        SHA,
+        target,
+      ]);
+      return result.exitCode;
+    }
+
+    test("writes the sha to a regular file", () => {
+      const target = join(dir, "marker");
+      runInner(target);
+      expect(readFileSync(target, "utf8")).toBe(`${SHA}\n`);
+    });
+
+    test("does not write through a symlinked marker", () => {
+      const victim = join(dir, "victim");
+      const target = join(dir, "marker");
+      writeFileSync(victim, "keep");
+      symlinkSync(victim, target);
+      runInner(target);
+      expect(readFileSync(victim, "utf8")).toBe("keep");
+    });
+
+    test("turns a symlinked marker into a regular file", () => {
+      const victim = join(dir, "victim");
+      const target = join(dir, "marker");
+      writeFileSync(victim, "keep");
+      symlinkSync(victim, target);
+      runInner(target);
+      expect(lstatSync(target).isFile()).toBe(true);
+    });
+
+    test("does not move the file into a directory the marker points to", () => {
+      const directory = join(dir, "directory");
+      const target = join(dir, "marker");
+      mkdirSync(directory);
+      symlinkSync(directory, target);
+      runInner(target);
+      expect(readdirSync(directory)).toEqual([]);
+    });
+
+    test("fails when the marker is a directory", () => {
+      const target = join(dir, "marker");
+      mkdirSync(target);
+      expect(runInner(target)).not.toBe(0);
+    });
+
+    test("leaves no temporary file after a failed write", () => {
+      const target = join(dir, "marker");
+      mkdirSync(target);
+      runInner(target);
+      expect(readdirSync(dir).filter((name) => name.includes(".tmp."))).toEqual(
+        [],
+      );
+    });
+
+    test("leaves no temporary file after a successful write", () => {
+      const target = join(dir, "marker");
+      runInner(target);
+      expect(readdirSync(dir).filter((name) => name.includes(".tmp."))).toEqual(
+        [],
+      );
+    });
+  },
+);
