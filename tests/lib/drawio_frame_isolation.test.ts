@@ -22,6 +22,8 @@ const FRAME_COMPONENT = stripComments(
   readSource("console/src/components/drawio/DrawioFrame.tsx"),
 );
 const SPA_MESSAGES_SOURCE = readSource("console/src/lib/drawioMessages.ts");
+/** `<iframe`から、最初の`/>`までの要素。 */
+const IFRAME_ELEMENT = /<iframe[\s\S]*?\/>/.exec(FRAME_COMPONENT)?.[0] ?? "";
 
 describe("DrawioFrame iframe", () => {
   test("sets the sandbox to allow-scripts only", () => {
@@ -32,8 +34,14 @@ describe("DrawioFrame iframe", () => {
     expect(FRAME_COMPONENT.match(/allow-/g)?.length).toBe(1);
   });
 
-  test("uses DRAWIO_FRAME_SRC as the src", () => {
-    expect(FRAME_COMPONENT).toContain("DRAWIO_FRAME_SRC");
+  test("uses only DRAWIO_FRAME_SRC or about:blank as the src", () => {
+    expect(FRAME_COMPONENT).toContain(
+      'src={stopped ? "about:blank" : DRAWIO_FRAME_SRC}',
+    );
+  });
+
+  test("does not spread props into the iframe element", () => {
+    expect(IFRAME_ELEMENT).not.toContain("{...");
   });
 
   test("creates exactly one iframe", () => {
@@ -92,6 +100,20 @@ function parentFailureReasons(): string[] {
     .map((match) => match[1] ?? "")
     .sort();
 }
+
+describe("drawioMessages constants", () => {
+  test("DRAWIO_FRAME_SRC is the drawio page", () => {
+    expect(SPA_MESSAGES_SOURCE).toContain(
+      'export const DRAWIO_FRAME_SRC = "/console/drawio.html";',
+    );
+  });
+
+  test("MAX_XML_BYTES is 256 KiB", () => {
+    expect(SPA_MESSAGES_SOURCE).toContain(
+      "export const MAX_XML_BYTES = 256 * 1024;",
+    );
+  });
+});
 
 describe("DrawioFrame messages against the frame script", () => {
   test("uses the same message types as the frame script", () => {

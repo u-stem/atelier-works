@@ -878,7 +878,7 @@ Factoryは、人の行動が要るものだけをDiscordに送る。通知の仕
 | Issue着手(`issue_claimed`) | FactoryがIssueを取得し、要件定義の生成を始めた | なし |
 | 承認待ち(`approval_requested`) | 要件定義が承認待ちになった | [要件定義を承認・却下する](#要件定義を承認却下する) |
 | 要件定義承認(`requirements_approved`) | 要件定義が承認され、Issueにリンクを投稿した | なし。実装が有効なら実装フローが始まる |
-| 人による対応が必要(`needs_human`) | 作業項目が人の対応待ちか期限切れになった | 通知の「次の操作」に従う。再実行するときは、Consoleの**要対応**で**再実行**を押す |
+| 人による対応が必要(`needs_human`) | 作業項目が人の対応待ちか期限切れになった | 通知の「次の操作」に従う。再実行するときは、Windmillで`retry_work_item`を実行する |
 | ジョブ失敗(`job_failed`) | フローやスケジュールが失敗した。孤児のジョブや閉じたIssue・PRの片付けも含む | Consoleの**要対応**の失敗か、**システム**の「作業項目に紐づかない失敗」で内容を確かめる。作業項目の失敗は再実行する |
 | PR作成・更新(`pr_opened`) | 実装フローがPRを作成か更新した | [PRができたら](#prができたら) |
 | PRレビュー完了(`pr_reviewed`) | レビューを投稿した | 指摘を確かめる。指摘が無ければApproveを判断する |
@@ -1139,7 +1139,7 @@ Consoleが止まっていてもDiscordには届くので、通知の確認先は
 ### 打ち切りで残ったプロセスを確かめる
 
 Windmillの打ち切りが子プロセスを止めるかは、上の手順で確かめる。
-止めなければ、子の実行中に打ち切られたとき、`npm ci`や`wmill sync push`などが上限なしで残る。
+止めなければ、子の実行中に打ち切られたとき、`wmill sync push`などが上限なしで残る。
 残った`wmill sync push`は次の回の作業ツリーを読み続け、`wmill datatable migrate up`は次の回と並行しうる。
 リスクは[セキュリティ](security.md)の「自己更新の打ち切り」に書く。
 
@@ -1344,7 +1344,7 @@ workerの並列数(`NUM_WORKERS`)のような`infra/docker-compose.yml`の変更
 
 `mise run push`と`mise run deploy`は、`wmill sync push`を`NPM_CONFIG_IGNORE_SCRIPTS=true`で動かす。
 `wmill`がnpmを走らせることがあっても、依存のinstall scriptを動かさないためである。
-理由は[セキュリティ](security.md)の「自己更新の依存インストール」にある。
+理由は[セキュリティ](security.md)の「サブプロセスのnpmのinstall script」にある。
 
 ### mise run upで反映されないもの
 
@@ -1390,6 +1390,8 @@ workerのイメージに入れるツールのバージョンは、`mise.toml`の
 消したものは、Windmillのゴミ箱に3日残る。
 
 廃止した旧Consoleのapp(`f/factory/factory_console`)が残っているときも、この手順で消す。
+マージ後に`mise run push:dry`を実行し、`f/factory/factory_console`が消える対象に出ることを確かめる。
+確かめたら、人が`mise run push:prune`を実行する。
 消えても、過去のリンクは新しいConsoleに着く。
 
 ### Console(console/)を反映する・戻す

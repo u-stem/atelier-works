@@ -455,7 +455,7 @@ Podmanは対象外である。
   [Console用workerを確かめる](operations.md#console用workerを確かめる)の手順でsymlinkを消し、workerを作り直す。
   突くにはdefaultのworkerでのコード実行が要る。その権限があれば`factory_state`のボリューム全体を直接読めるので、実害は増えない。
 
-## 自己更新の依存インストール
+## サブプロセスのnpmのinstall script
 
 `self_update`と、ホストで動かすmiseのタスク(`mise run push`、`mise run deploy`など)は、`wmill sync push`のサブプロセスに次の環境変数を渡す。
 
@@ -469,6 +469,9 @@ install scriptは、workerの権限のまま、ネットワークにも出られ
 リポジトリのWindmillの資産には、npmの依存を入れるものが無い。
 足すときは、install scriptなしで組み立てが通るかを確かめる。
 
+廃止した旧Consoleのappは、人が`mise run push:prune`を実行するまでWindmillに残る。
+残ったappは更新されず、閲覧のURLはCaddyが新しいConsoleへ302で飛ばす。
+
 ## 自己更新の打ち切り
 
 `self_update`のジョブには、全体の上限がある。
@@ -479,7 +482,7 @@ install scriptは、workerの権限のまま、ネットワークにも出られ
 残るリスクは次のとおりである。
 
 - Windmillが全体の上限でジョブを打ち切るときに、子プロセスが止まるかを確かめていない。
-  子(`npm ci`、`wmill sync push`、`wmill datatable migrate up`、git)は別のセッションで起動する。
+  子(`wmill sync push`、`wmill datatable migrate up`、git)は別のセッションで起動する。
   子の上限はworkerの中のタイマーなので、ジョブごと止まると子は上限なしで残りうる。
 - 残った`wmill sync push`が、次の回が更新する作業ツリーを読み続けると、新旧の混ざった内容をpushしうる。
   作業ツリーのロックは、cloneの更新の間しか取らず、pushの間は守らない。

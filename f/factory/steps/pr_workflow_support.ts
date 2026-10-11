@@ -3512,8 +3512,8 @@ export type NextActionFlow = LockOwner["kind"];
 
 /**
  * 作業項目を同じ作業項目のまま再実行する操作。どの種別の作業項目にも使える。
- * Consoleの要対応の失敗の一覧はジョブの失敗(`job_failures`)だけを並べ、`needs_human`や`blocked`で止めた作業項目は出ないので、
- * Windmillで直接実行してもらう。
+ * Consoleの要対応の失敗には`failed`、`needs_human`、`expired`の作業項目が出るが、`blocked`は出ない。
+ * 通知の文は状態によらず同じにするので、Windmillでの直接実行を案内する。
  */
 const RETRY_WORK_ITEM_ACTION =
   "Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください";

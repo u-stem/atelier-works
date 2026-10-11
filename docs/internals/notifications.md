@@ -76,7 +76,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | `issue_claimed` | Issue | リポジトリ |
 | `approval_requested` | Consoleの承認の画面 | リポジトリ、Issue |
 | `requirements_approved` | Consoleの要件定義のページ | リポジトリ、Issue |
-| `intake_refreshed` | Issue | リポジトリ。説明に、新しいConsoleで更新後の内容を確かめる旨 |
+| `intake_refreshed` | Issue | リポジトリ。説明に、Consoleで更新後の内容を確かめる旨 |
 | `needs_human` | 対象のIssueかPR | 説明に理由、「次の操作」、リポジトリ |
 | `pr_reviewed` | PR | 説明に指摘の件数と状態 |
 | `pr_fixed` | PR | 再レビュー依頼のAPIが失敗したときだけ「補足」 |
@@ -94,8 +94,8 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 次の操作は、理由の文から`pr_workflow_support.ts`の`nextActionFor`が決める。
 
 - 同じ理由でも、実装フローとPRの修正で次の操作が変わるものは、フロー(`NextActionFlow`)を渡して選ぶ。
-- 再実行を案内するときは、Consoleの**要対応**で**再実行**を押すよう書く。ブロックの作業項目は**要対応**に出ないので、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行するよう書く。
-- どの規則にも当たらない理由では、`GENERIC_NEXT_ACTION`の文になる。通知の理由とConsoleの**要対応**で原因を確かめて取り除き、再実行するよう求める文である。
+- 再実行を案内するときは、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行するよう書く(`RETRY_WORK_ITEM_ACTION`)。どの種別と状態の作業項目にも使えるためである。
+- どの規則にも当たらない理由では、`GENERIC_NEXT_ACTION`の文になる。通知の理由とConsoleの**システム**で原因を確かめて取り除き、`retry_work_item`を実行するよう求める文である。
 
 ### 理由の区切りを無効にする
 
@@ -198,7 +198,7 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | --- | --- | --- |
 | `approval_notify_failed` | `pipeline_request_approval` | 対象、送れなかった理由 |
 | `approval_comment_failed` | `requirements_apply` | 対象、理由、要件定義を開くConsoleのリンク |
-| `intake_refreshed` | `requirements_apply`、`retry_work_item` | 対象、新しいConsoleで更新後の内容を確かめる旨 |
+| `intake_refreshed` | `requirements_apply`、`retry_work_item` | 対象、Consoleで更新後の内容を確かめる旨 |
 | `implement_launch_failed` | `requirements_apply` | 対象、理由、次の操作 |
 | `implement_needs_human` | `implement_finish` | 対象、止まった理由 |
 | `unsandboxed_check_commands` | `implement_verify`、`pr_fix_verify` | 実行する検査コマンドの件数、対象 |
