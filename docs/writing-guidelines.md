@@ -156,7 +156,7 @@ AGENTS.mdとスキル、subagentの定義はClaudeが読む。Claudeは書かれ
 
 次のファイルは検査の対象外にする。自分で編集しないか、外から取り込んだものだからである。
 
-- `wmill`が生成するファイル: `AGENTS.wmill.md`、管理スキル、raw appの`AGENTS.md`と`DATATABLES.md`
+- `wmill`が生成するファイル: `AGENTS.wmill.md`、管理スキル
 - 管理スキルの置き場所: `.agents/skills/`と、`.claude/skills/`のうち自作でないもの
 - 外から取り込んだスキル: `.claude/skills/yomiyasu/`
 - テストの入力: `tests/fixtures/`

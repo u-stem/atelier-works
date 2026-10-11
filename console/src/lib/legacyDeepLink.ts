@@ -1,5 +1,5 @@
-// 旧Console(raw app)のURLのフラグメントを、新しい経路に読み替える。
-// 旧ConsoleのリンクはIssueのコメントやDiscordの通知に残っているため、新しいConsoleが受け取る。
+// 廃止した旧ConsoleのURLのフラグメントを、新しい経路に読み替える。
+// 旧ConsoleのリンクはIssueのコメントやDiscordの通知に残り続けるため、新しいConsoleが受け取る。
 
 /** idと試行の番号。先頭が0の数と符号つきの数は受け付けない。 */
 const ID_PATTERN = "[1-9][0-9]*";

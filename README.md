@@ -18,7 +18,7 @@ Factoryは次の5つの工程で動く。
 
 - Docker Composeで動くWindmillのスタックと、claude・gh・gitleaks・gtr・wmillを入れたworkerのイメージ
 - Data Table、`doctor`、`bootstrap`
-- ダッシュボードのApp(Factory Console)
+- ダッシュボード(Factory Console。`/console/`で開く)
 - 自己更新と、失敗したジョブの通知
 
 Discordからの双方向の操作は未実装である。Discordには通知だけを送る。

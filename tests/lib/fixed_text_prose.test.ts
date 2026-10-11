@@ -53,7 +53,7 @@ async function findViolations(): Promise<ScanResult> {
   let scanned = 0;
   const glob = new Bun.Glob("f/factory/**/*.ts");
   for await (const path of glob.scan({ cwd: REPO_ROOT })) {
-    if (path.includes("__raw_app/") || EXCLUDED_FILES.has(path)) continue;
+    if (EXCLUDED_FILES.has(path)) continue;
     scanned += 1;
     const lines = (await Bun.file(join(REPO_ROOT, path)).text()).split("\n");
     lines.forEach((line, index) => {
