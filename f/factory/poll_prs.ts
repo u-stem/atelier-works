@@ -60,7 +60,9 @@ import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import {
   confirmLabeler,
   decidePrActions,
+  FORK_HEAD_DENIED_KIND,
   filterByRepoAllowlist,
+  forkHeadDeniedMessage,
   LABELER_DENIED_KIND,
   labelerDeniedMessage,
   labelerPolicyFor,
@@ -72,6 +74,7 @@ import { hasLabel, type WorkItem } from "./lib/types.ts";
 import { runCommand } from "./lib/workspace.ts";
 import {
   describeReason,
+  evaluateSameRepoHeadGuard,
   extractLinkedIssueNumbers,
   nextActionFor,
 } from "./steps/pr_workflow_support.ts";
@@ -254,6 +257,10 @@ export async function buildPrCandidate(
     headSha: pr.headSha,
     labels: asIssue.labels,
     authorLogin: pr.authorLogin === "" ? null : pr.authorLogin,
+    headInBaseRepo: evaluateSameRepoHeadGuard(
+      pr.headRepoFullName,
+      pr.baseRepoFullName,
+    ).ok,
     reviewLabelerLogin,
     fixLabelerLogin,
     hasActiveReviewingItem: activeForPr.some(
@@ -665,6 +672,34 @@ export async function recordPrLabelerDenied(
   });
 }
 
+export type ForkHeadDeniedDeps = {
+  readonly addNoticeUnlessUnresolved: typeof addNoticeUnlessUnresolved;
+};
+
+const defaultForkHeadDeniedDeps: ForkHeadDeniedDeps = {
+  addNoticeUnlessUnresolved,
+};
+
+/**
+ * headがbaseと同じリポジトリにないために見送ったPRのnoticeを残す。
+ * 見送りではラベルを外さず、assignによる検出も続くため、ポーリングのたびに
+ * 同じ状況になる。本文は対象だけで決まるので、
+ * 同じ本文の未解決のnoticeがあれば登録しない。
+ */
+export async function recordPrForkHeadDenied(
+  target: {
+    readonly owner: string;
+    readonly repo: string;
+    readonly number: number;
+  },
+  deps: ForkHeadDeniedDeps = defaultForkHeadDeniedDeps,
+): Promise<void> {
+  await deps.addNoticeUnlessUnresolved({
+    kind: FORK_HEAD_DENIED_KIND,
+    message: forkHeadDeniedMessage(target),
+  });
+}
+
 async function startReview(
   candidate: PrCandidate,
   viewerLogin: string,
@@ -790,6 +825,8 @@ export type PrDecisionHandlers = {
     candidate: PrCandidate,
     label: string,
   ) => Promise<void>;
+  /** headがbaseと同じリポジトリにないために見送ったレビューを、noticeに残す。 */
+  readonly recordForkHeadDenied: (candidate: PrCandidate) => Promise<void>;
   readonly startReview: (
     candidate: PrCandidate,
     context: PrCandidateContext,
@@ -857,6 +894,20 @@ export async function processPrDecisions(
       );
     }
   };
+  // headがbaseと同じリポジトリにないレビューをnoticeに残し、見送りとして数える。
+  // 記録の失敗の扱いは`countDenied`と同じ。
+  const countForkHeadDenied = async (candidate: PrCandidate): Promise<void> => {
+    try {
+      await handlers.recordForkHeadDenied(candidate);
+      skipped += 1;
+    } catch (err) {
+      failed += 1;
+      await handlers.recordFailure(
+        `fork_head_denied:${candidate.owner}/${candidate.repo}#${candidate.number}`,
+        err,
+      );
+    }
+  };
   // 取得の直前に付与者を確かめ直し、許可されていなければ見送りとして数えて`false`を返す。
   const labelerConfirmed = async (
     candidate: PrCandidate,
@@ -902,6 +953,10 @@ export async function processPrDecisions(
       // 付いていることがあり、1つの取得にまとめず個別に扱う必要がある。
       if (review.kind === "deny_labeler") {
         await countDenied(candidate, labels.reviewLabel);
+      }
+
+      if (review.kind === "deny_fork_head") {
+        await countForkHeadDenied(candidate);
       }
 
       if (review.kind === "trigger_review") {
@@ -1154,6 +1209,7 @@ export async function main(): Promise<{
         confirmLabeler(client, candidate, label, labelerPolicy),
       recordLabelerDenied: (candidate, label) =>
         recordPrLabelerDenied(candidate, label),
+      recordForkHeadDenied: (candidate) => recordPrForkHeadDenied(candidate),
       startReview: (candidate, context) =>
         startReview(
           candidate,

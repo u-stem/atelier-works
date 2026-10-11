@@ -24,6 +24,7 @@ function candidate(overrides: Partial<PrCandidate> = {}): PrCandidate {
     headSha: "aaaaaaa1111111111111111111111111111111",
     labels: [],
     authorLogin: "octo-owner",
+    headInBaseRepo: true,
     reviewLabelerLogin: null,
     fixLabelerLogin: null,
     hasActiveReviewingItem: false,
@@ -327,6 +328,78 @@ describe("decidePrActions — detection without a label", () => {
       lastKnownHeadSha: "bbbbbbb2222222222222222222222222222222",
     });
     expect(review).toEqual({ kind: "none" });
+  });
+});
+
+describe("decidePrActions — head repository", () => {
+  const UNPROCESSED = {
+    lastKnownHeadSha: "bbbbbbb2222222222222222222222222222222",
+  };
+
+  function decisionOf(overrides: Partial<PrCandidate>) {
+    const [decision] = decidePrActions(
+      [candidate({ ...UNPROCESSED, ...overrides })],
+      REVIEW_LABEL,
+      FIX_LABEL,
+      POLICY,
+    );
+    return decision;
+  }
+
+  test("denies a label-based review of a fork PR", () => {
+    const decision = decisionOf({
+      headInBaseRepo: false,
+      labels: [REVIEW_LABEL],
+      reviewLabelerLogin: "octo-owner",
+    });
+    expect(decision?.review).toEqual({ kind: "deny_fork_head" });
+  });
+
+  test("denies a detected review of an allowed author's fork PR", () => {
+    const decision = decisionOf({ headInBaseRepo: false });
+    expect(decision?.review).toEqual({ kind: "deny_fork_head" });
+  });
+
+  test("does not report a fork PR whose commit was already processed", () => {
+    const decision = decisionOf({
+      headInBaseRepo: false,
+      lastKnownHeadSha: candidate().headSha,
+    });
+    expect(decision?.review).toEqual({ kind: "none" });
+  });
+
+  test("does not report a fork PR while a review is running", () => {
+    const decision = decisionOf({
+      headInBaseRepo: false,
+      hasActiveReviewingItem: true,
+    });
+    expect(decision?.review).toEqual({ kind: "none" });
+  });
+
+  test("does not report a fork PR of an author who is not allowed", () => {
+    const decision = decisionOf({
+      headInBaseRepo: false,
+      authorLogin: "mallory",
+    });
+    expect(decision?.review).toEqual({ kind: "none" });
+  });
+
+  test("reports the labeler denial first when the label is not allowed", () => {
+    const decision = decisionOf({
+      headInBaseRepo: false,
+      labels: [REVIEW_LABEL],
+      reviewLabelerLogin: "mallory",
+    });
+    expect(decision?.review).toEqual({ kind: "deny_labeler" });
+  });
+
+  test("leaves the fix decision to the preparation guard", () => {
+    const decision = decisionOf({
+      headInBaseRepo: false,
+      labels: [FIX_LABEL],
+      fixLabelerLogin: "octo-owner",
+    });
+    expect(decision?.fix.kind).toBe("trigger_fix");
   });
 });
 

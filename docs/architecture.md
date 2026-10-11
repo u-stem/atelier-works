@@ -29,7 +29,7 @@ Claudeの長いジョブがdefaultワーカーグループの枠を埋めても�
 このworkerはワーカーグループ`console`に属し、tag`console`のジョブだけを受ける。
 どのscriptをこのworkerで動かすかは、scriptの`tag`で決める。
 上流のWindmillイメージで動き、`NUM_WORKERS=2`により2つのワーカープロセスが動く。1件のジョブが止まっても、全体は止まらない。メモリの上限は1024Mである。
-`factory_state`と`factory_console`は読み取り専用でマウントし、`factory_workspaces`はマウントしない。
+`factory_state`は要件定義書のサブパス`requirements`だけを、`factory_console`は全体を読み取り専用でマウントし、`factory_workspaces`はマウントしない。
 
 ## パイプライン
 
@@ -89,7 +89,7 @@ flowchart TD
 | `reviewed` | レビューをCOMMENTとして投稿した | pr_review、pr_fix | 終端 |
 | `fixing` | レビューの指摘やコメントを修正している | pr_fix | |
 | `rereview_requested` | 修正をpushし、再レビューを依頼した | pr_fix | 終端 |
-| `blocked` | 準備の確認で修正の前に止めた、修正の実行中にPRのheadが動いた、要件の不足で親のIssueへ差し戻した | pr_fix | 終端 |
+| `blocked` | 準備の確認でレビューか修正の前に止めた(headがforkのPRなど)、修正の実行中にPRのheadが動いた、要件の不足で親のIssueへ差し戻した | pr_review、pr_fix | 終端 |
 | `needs_human` | 自動処理を打ち切り、人の対応を待つ | すべて | 終端 |
 | `failed` | 実行時エラーで失敗した | すべて | 終端 |
 | `expired` | 承認依頼が7日の期限を過ぎた | issue | 終端 |
@@ -132,6 +132,7 @@ stateDiagram-v2
 stateDiagram-v2
     [*] --> reviewing: poll_prsがpr_reviewを起動
     reviewing --> reviewed: レビューを投稿
+    reviewing --> blocked: headがforkのPRを準備で見送った
     reviewing --> needs_human
     reviewing --> cancelled: PRがclosedかmerged
     [*] --> fixing: poll_prsがpr_fixを起動

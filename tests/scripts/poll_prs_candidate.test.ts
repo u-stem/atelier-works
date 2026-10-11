@@ -40,6 +40,9 @@ const labeled = (login: string | null, label: string) =>
 type World = {
   readonly labels: readonly string[];
   readonly author?: string | null;
+  /** PRのheadのリポジトリの`full_name`。省略は`null`(取得できない)。 */
+  readonly headRepo?: string;
+  readonly baseRepo?: string;
   readonly events: CommandResult;
 };
 
@@ -63,8 +66,15 @@ function world(w: World) {
         draft: false,
         state: "open",
         merged: false,
-        head: { sha: "aaaaaaa", ref: "feature", repo: null },
-        base: { ref: "main", repo: null },
+        head: {
+          sha: "aaaaaaa",
+          ref: "feature",
+          repo: w.headRepo === undefined ? null : { full_name: w.headRepo },
+        },
+        base: {
+          ref: "main",
+          repo: w.baseRepo === undefined ? null : { full_name: w.baseRepo },
+        },
         mergeable_state: "clean",
         user: w.author === null ? null : { login: w.author ?? "octo-owner" },
       });
@@ -197,5 +207,36 @@ describe("buildPrCandidate author", () => {
       events: labelEventsOk([]),
     });
     expect(candidate.authorLogin).toBeNull();
+  });
+});
+
+describe("buildPrCandidate head repository", () => {
+  test("marks a head in the base repository", async () => {
+    const { candidate } = await build({
+      labels: [],
+      headRepo: "octo-owner/atelier-works",
+      baseRepo: "octo-owner/atelier-works",
+      events: labelEventsOk([]),
+    });
+    expect(candidate.headInBaseRepo).toBe(true);
+  });
+
+  test("does not mark a head in a fork", async () => {
+    const { candidate } = await build({
+      labels: [],
+      headRepo: "mallory/atelier-works",
+      baseRepo: "octo-owner/atelier-works",
+      events: labelEventsOk([]),
+    });
+    expect(candidate.headInBaseRepo).toBe(false);
+  });
+
+  test("does not mark a head whose repository is unavailable", async () => {
+    const { candidate } = await build({
+      labels: [],
+      baseRepo: "octo-owner/atelier-works",
+      events: labelEventsOk([]),
+    });
+    expect(candidate.headInBaseRepo).toBe(false);
   });
 });

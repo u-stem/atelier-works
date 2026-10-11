@@ -62,12 +62,13 @@ describe("INFO_NOTICE_KINDS", () => {
     );
   });
 
-  test("contains the nine kinds that need no action", () => {
+  test("contains the ten kinds that need no action", () => {
     expect([...INFO_NOTICE_KINDS].sort()).toEqual([
       "approval_notify_failed",
       "claim_race_lost",
       "cleanup_worktrees_skipped",
       "fix_feedback_association_excluded",
+      "fork_head_denied",
       "implement_needs_human",
       "labeler_denied",
       "supersede_failed",
