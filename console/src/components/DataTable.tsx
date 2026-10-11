@@ -9,6 +9,8 @@ export type DataTableRow = {
 /**
  * 数値の小さな表。最初の列は左、2列目以降は数値として右に寄せる。
  * 行が多いときは高さを抑えてスクロールさせる。
+ * スクロールする領域に名前を付けて焦点を当てられるようにし、表自体には別の名前を付けない。
+ * 同じ名前を2か所に付けると、読み上げが重なるためである。
  */
 export function DataTable({
   caption,
@@ -22,10 +24,11 @@ export function DataTable({
   return (
     <section
       aria-label={caption}
-      className="max-h-64 max-w-3xl overflow-y-auto rounded-lg border border-border"
+      // biome-ignore lint/a11y/noNoninteractiveTabindex: スクロールできる領域は、キーボードで焦点を当てないと行を読み進められない。
+      tabIndex={0}
+      className="max-h-64 max-w-3xl overflow-y-auto rounded-lg border border-border focus-visible:ring-2 focus-visible:ring-ring"
     >
       <table className="w-full text-small tabular-nums">
-        <caption className="sr-only">{caption}</caption>
         <thead className="sticky top-0 bg-muted text-left text-muted-foreground">
           <tr>
             {columns.map((column, index) => (

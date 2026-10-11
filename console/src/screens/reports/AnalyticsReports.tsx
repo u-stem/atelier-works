@@ -77,12 +77,18 @@ function CostReport({ rows }: { rows: readonly AgentCostDailyRow[] }) {
     <>
       <TruncationNote rowCount={rows.length} />
       <ChartBlock title="日別コスト(USD)">
-        <BarChart title="日別コスト" data={costData} formatValue={formatUsd} />
+        <BarChart
+          title="日別コスト"
+          data={costData}
+          axis="sequence"
+          formatValue={formatUsd}
+        />
       </ChartBlock>
       <ChartBlock title="日別実行件数">
         <BarChart
           title="日別実行件数"
           data={countData}
+          axis="sequence"
           formatValue={formatCount}
         />
       </ChartBlock>
@@ -125,6 +131,7 @@ function ApprovalReport({ rows }: { rows: readonly ApprovalStatsRow[] }) {
           <>
             <BarChart
               title="試行ごとの却下件数"
+              axis="category"
               data={rejections.map((entry) => ({
                 key: String(entry.attempt),
                 label: attemptRef(entry.attempt),
@@ -155,6 +162,7 @@ function LeadTimeReport({ rows }: { rows: readonly LeadTimeRow[] }) {
       <ChartBlock title="状態別の平均リードタイム(時間)">
         <BarChart
           title="状態別の平均リードタイム"
+          axis="category"
           data={byStatus.map((entry) => ({
             key: entry.status,
             label: workItemStatusLabel(entry.status),

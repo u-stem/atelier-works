@@ -14,32 +14,42 @@ const VIEW_HEIGHT = 190;
 const LABEL_BASELINE = 172;
 const VALUE_LABEL_GAP = 4;
 
-/** 横軸のラベルを並べる上限。超えたら間引く。 */
-const MAX_AXIS_LABELS = 12;
-
-/** 棒の上に値を出す本数の上限。超えると文字が重なるので、値は表で読む。 */
-const MAX_VALUE_LABELS = 12;
-
 /**
  * SVGで描く棒グラフ。色は文字のクラスで決め、実行時の入力から色や大きさを作らない。
  * 値は表にも出すことを前提にして、グラフ自体は読み上げの対象にせず、題だけを伝える。
  * 空の`data`は描かない。空の表示は呼び出し側が決める。
+ *
+ * 棒の上の値と横軸のラベルは、文字の幅の見積もりが1本分の幅に収まるときだけ出す。
+ * 収まらないとき、`axis`が`sequence`(日のような連続する並び)なら横軸のラベルを間引く。
+ * `category`(状態のような別々の項目)では、間引くと棒が何か分からなくなるので、
+ * 横軸のラベルを出さず、表で読ませる。
  */
 export function BarChart({
   title,
   data,
+  axis,
   formatValue,
 }: {
   title: string;
   data: readonly BarChartDatum[];
+  axis: "sequence" | "category";
   formatValue: (value: number) => string;
 }) {
   const bars = layoutBars(
     data.map((datum) => datum.value),
     { width: VIEW_WIDTH, height: PLOT_HEIGHT },
   );
-  const stride = labelStride(data.length, MAX_AXIS_LABELS);
-  const showValues = data.length <= MAX_VALUE_LABELS;
+  const axisStride = labelStride(
+    data.map((datum) => datum.label),
+    VIEW_WIDTH,
+  );
+  const showAxisLabels = axis === "sequence" || axisStride === 1;
+  const stride = axis === "sequence" ? axisStride : 1;
+  const showValues =
+    labelStride(
+      data.map((datum) => formatValue(datum.value)),
+      VIEW_WIDTH,
+    ) === 1;
   return (
     <svg
       viewBox={`0 0 ${VIEW_WIDTH} ${VIEW_HEIGHT}`}
@@ -73,14 +83,14 @@ export function BarChart({
             {showValues ? (
               <text
                 x={center}
-                y={Math.max(bar.y - VALUE_LABEL_GAP, 10)}
+                y={bar.y - VALUE_LABEL_GAP}
                 textAnchor="middle"
                 className="fill-muted-foreground text-[11px] tabular-nums"
               >
                 {formatValue(datum.value)}
               </text>
             ) : null}
-            {index % stride === 0 ? (
+            {showAxisLabels && index % stride === 0 ? (
               <text
                 x={center}
                 y={LABEL_BASELINE}

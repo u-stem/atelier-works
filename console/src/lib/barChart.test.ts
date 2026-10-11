@@ -1,15 +1,21 @@
 import { describe, expect, test } from "bun:test";
-import { labelStride, layoutBars } from "./barChart.ts";
+import {
+  estimateLabelWidth,
+  labelStride,
+  layoutBars,
+  VALUE_LABEL_ROOM,
+} from "./barChart.ts";
 
 const PLOT = { width: 100, height: 50 };
 
 describe("layoutBars", () => {
-  test("gives the largest value the full plot height", () => {
-    expect(layoutBars([10, 5], PLOT)[0]?.height).toBe(50);
+  test("leaves room above the tallest bar for its value label", () => {
+    expect(layoutBars([10, 5], PLOT)[0]?.y).toBe(VALUE_LABEL_ROOM);
   });
 
-  test("scales the other bars to the largest value", () => {
-    expect(layoutBars([10, 5], PLOT)[1]?.height).toBe(25);
+  test("scales the other bars to the tallest one", () => {
+    const tallest = PLOT.height - VALUE_LABEL_ROOM;
+    expect(layoutBars([10, 5], PLOT)[1]?.height).toBe(tallest / 2);
   });
 
   test("rests every bar on the bottom of the plot", () => {
@@ -46,16 +52,43 @@ describe("layoutBars", () => {
   });
 });
 
+describe("estimateLabelWidth", () => {
+  test("counts a full width character as wider than a half width one", () => {
+    expect(estimateLabelWidth("あ")).toBeGreaterThan(estimateLabelWidth("a"));
+  });
+
+  test("grows with the number of characters", () => {
+    expect(estimateLabelWidth("10/8")).toBeGreaterThan(estimateLabelWidth("1"));
+  });
+});
+
 describe("labelStride", () => {
-  test("labels every bar when they fit", () => {
-    expect(labelStride(7, 12)).toBe(1);
+  const days = (count: number) =>
+    Array.from({ length: count }, (_, index) => `10/${index + 1}`);
+
+  test("labels every bar when the labels fit", () => {
+    expect(labelStride(days(7), 640)).toBe(1);
   });
 
-  test("skips bars so that the labels fit", () => {
-    expect(labelStride(90, 12)).toBe(8);
+  test("skips bars so that 90 days of labels do not overlap", () => {
+    expect(labelStride(days(90), 640)).toBeGreaterThan(1);
   });
 
-  test("never returns less than one", () => {
-    expect(labelStride(0, 12)).toBe(1);
+  test("skips more bars for long Japanese labels than for short ones", () => {
+    const long = Array.from({ length: 8 }, () => "要件定義の生成中");
+    const short = Array.from({ length: 8 }, () => "失敗");
+    expect(labelStride(long, 640)).toBeGreaterThan(labelStride(short, 640));
+  });
+
+  test("lets the stride cover a label wider than its slot", () => {
+    const labels = days(90);
+    const slot = 640 / labels.length;
+    expect(labelStride(labels, 640) * slot).toBeGreaterThanOrEqual(
+      estimateLabelWidth("10/90"),
+    );
+  });
+
+  test("returns one for no labels", () => {
+    expect(labelStride([], 640)).toBe(1);
   });
 });

@@ -1,4 +1,5 @@
-// 分析の画面が読む3つのviewの取得。自動では取り直さず、画面の再読み込みと期間の切り替えで取り直す。
+// 分析の画面が読む3つのviewの取得。定期には取り直さない。
+// 取得から60秒を過ぎた値は、画面に戻ったときと開き直したときに取り直す。
 
 import { type UseQueryResult, useQuery } from "@tanstack/react-query";
 import { ApiFailure } from "./errors.ts";
@@ -19,7 +20,7 @@ import { type RunScriptOptions, runScript } from "./windmill.ts";
  */
 export const ANALYTICS_ROW_LIMIT = 2000;
 
-/** 分析を取り直さない間隔。履歴を日ごとに集めた値で、開いている間に変わる量は小さい。 */
+/** 取得した値を新しいとみなす間隔。履歴を日ごとに集めた値で、開いている間に変わる量は小さい。 */
 const ANALYTICS_STALE_MS = 60_000;
 
 type AnalyticsView = "agent_cost_daily" | "approval_stats" | "lead_time";
