@@ -117,6 +117,12 @@ export function buildHostActionNotice(
   };
 }
 
+/**
+ * イメージが古いことを知らせるnoticeの本文に含める句。
+ * 自動の再開(`auto_retry.ts`)が、解決されたnoticeのうち、反映の通知と見分けるために読む。
+ */
+export const STALE_IMAGE_NOTICE_MARKER = "workerのイメージが古く";
+
 const STALE_IMAGE_NEXT_ACTION_UNRESOLVABLE =
   "ホストのcheckoutでgit pullし、mise installとmise run upを実行する。実行が済んだら、この通知を解決する";
 
@@ -137,7 +143,7 @@ export function buildCheckImageStaleNotice(
     deployedSha === null ? STALE_IMAGE_NEXT_ACTION_UNRESOLVABLE : NEXT_ACTION;
   return {
     kind: HOST_ACTION_NOTICE_KIND,
-    message: `${version}workerのイメージが古く、検査コマンドを非特権のユーザーで実行できません(${printablePath(detail)})。イメージを作り直すまで、検査コマンドのある実装とPR修正は人の対応待ちで止まります。次の操作: ${nextAction}`,
+    message: `${version}${STALE_IMAGE_NOTICE_MARKER}、検査コマンドを非特権のユーザーで実行できません(${printablePath(detail)})。イメージを作り直すまで、検査コマンドのある実装とPR修正は人の対応待ちで止まります。次の操作: ${nextAction}`,
   };
 }
 

@@ -50,7 +50,19 @@ describe("noticeGuide", () => {
     );
   });
 
-  test("tells to rerun the work items the stale image stopped", () => {
+  test("tells that the work items the stale image stopped restart by themselves", () => {
+    expect(noticeGuide("host_action_required").action).toContain(
+      "自動で再開します",
+    );
+  });
+
+  test("tells to rerun by hand only after the automatic restarts are used up", () => {
+    expect(noticeGuide("host_action_required").action).toContain(
+      "3回の上限に達したとき",
+    );
+  });
+
+  test("names the script to rerun by hand", () => {
     expect(noticeGuide("host_action_required").action).toContain(
       "f/factory/retry_work_item",
     );

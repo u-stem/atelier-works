@@ -523,9 +523,10 @@ export const SELF_UPDATE_CLI_COMMAND_COUNT = 2;
  * - finally: stateの読み、stateの書き、noticeの挿入、通知先の取得: 4
  * - ホスト側の作業の通知: 印の読み取り、未解決の通知の一覧、通知の解決(上限の数まで)、
  *   noticeの挿入、通知先の取得: 4 + `HOST_ACTION_RECONCILE_LIMIT`
+ * - 止まった作業項目の再開の起動: 1
  */
 export const SELF_UPDATE_BOUNDED_CALL_COUNT =
-  13 + 4 + HOST_ACTION_RECONCILE_LIMIT;
+  13 + 4 + HOST_ACTION_RECONCILE_LIMIT + 1;
 
 /**
  * finallyの通知1回の上限(ミリ秒)。
@@ -630,6 +631,25 @@ export async function main(): Promise<SelfUpdateResult> {
   }
 }
 
+/**
+ * イメージが古くて止まった作業項目の再開を、別のジョブで始める。例外は投げない。
+ * 再開するものが無ければ、そのジョブは何もせずに終わる。
+ * 再開は、フローの起動や状態の確認を伴い、自己更新の長さを延ばすためである。
+ * 起動に失敗しても、止まった作業項目は`retry_work_item`で再開できるので、警告のログだけを残す。
+ */
+async function startStaleImageRetry(log: Logger): Promise<void> {
+  try {
+    const jobId = await withCallTimeout("start auto retry", () =>
+      wmill.runScriptByPathAsync("f/factory/auto_retry_stale_image", {}),
+    );
+    log.info("auto retry of the stale image items started", { job_id: jobId });
+  } catch (err) {
+    log.warn("auto retry of the stale image items could not be started", {
+      error: maskSecrets(err instanceof Error ? err.message : String(err)),
+    });
+  }
+}
+
 async function updateSelf(
   log: Logger,
   config: FactoryConfig,
@@ -665,8 +685,10 @@ async function updateSelf(
   });
   // ホストで反映が済んだ通知を解決する。反映が不要な回でも、反映の後でも呼ぶ。
   // 反映の判断を遅らせないよう、反映の判断と記録より後に呼ぶ。
-  const resolveHostActionNotices = () =>
-    reconcileHostActionNotices({
+  // イメージが古くて止まった作業項目の再開は、通知を解決した回に限らず毎回始める。
+  // 候補の選び方は繰り返しても同じ結果になるので、前の回で取り逃した項目も拾える。
+  const resolveHostActionNotices = async () => {
+    const resolved = await reconcileHostActionNotices({
       listUnresolved: () =>
         withCallTimeout("list host action notices", () =>
           listUnresolvedNoticesByKind(HOST_ACTION_NOTICE_KIND),
@@ -683,6 +705,9 @@ async function updateSelf(
         ),
       log,
     });
+    await startStaleImageRetry(log);
+    return resolved;
+  };
 
   // 変数が無いと確かめられたときだけ未デプロイ(空)として扱う(`readDeployedSha`を参照)。
   const deployedSha = await readDeployedSha(

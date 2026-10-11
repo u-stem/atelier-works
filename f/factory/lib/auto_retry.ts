@@ -1,0 +1,220 @@
+// イメージが古くて止まった作業項目を、原因が直った後に自動で再開する。
+//
+// 対象は、実装(`issue`)の`needs_human`と、PR修正(`pr_fix`)の`blocked`のうち、
+// 止まった理由が`AUTO_RETRY_REASON_PREFIXES`のどれかで始まるものである。
+// 理由は明示した許可リストで扱う。許可リストに無い理由は、人が`retry_work_item`で再開する。
+// 稼働中のworkerの問題(誰でも書けるパス)の理由は載せない。直ったことを示す自動の印が無く、
+// 人が閉じてnoticeを解決するまで続くため、自動で再開すると同じ理由で止まり続ける。
+//
+// 再開のきっかけは、イメージが古いことを知らせるnotice(`host_action_required`)を、
+// 自己更新が止まった後に自動で解決したことである(`listAutoRetryCandidates`)。
+// 再開は`retry_work_item`と同じ遷移とフローの起動で行う。違いは次の点である。
+// - 状態の交換は、止まった理由も条件にする(`restartStoppedWorkItem`)。人が先に再開したり、
+//   別の理由で止まり直したりした作業項目は、再開しない。
+// - 同じIssueに新しいサイクルがある作業項目は、新しいサイクルに置き換えられているので、
+//   候補にも比較交換にも入れない。
+// - 同じ作業項目の自動の再開は、`AUTO_RETRY_MAX_RESTARTS`回までである。
+// - 要件が承認済みでないIssueと、`implement_enabled`が無効のIssueは、要件定義を作り直さないよう再開しない。
+
+import { CHECK_IMAGE_STALE_REASON } from "./check_sandbox.ts";
+import type { AutoRetryCandidate } from "./db.ts";
+import { parseFlowJobId } from "./implement_launch_support.ts";
+import { IMPLEMENT_FLOW_PATH } from "./implement_loop.ts";
+import { type Logger, maskSecrets } from "./log.ts";
+import type { WorkItemStatus } from "./types.ts";
+
+/** 自動で再開してよい止まった理由の先頭。 */
+export const AUTO_RETRY_REASON_PREFIXES: readonly string[] = [
+  `${CHECK_IMAGE_STALE_REASON}: `,
+];
+
+/** 自動の再開の遷移の注記の先頭。再開の回数をこの注記で数える。 */
+export const AUTO_RETRY_NOTE_PREFIX = "auto_retry: ";
+
+/** 1つの作業項目を自動で再開する回数の上限。同じ理由で止まり続けても、再開を繰り返さない。 */
+export const AUTO_RETRY_MAX_RESTARTS = 3;
+
+/** 1回の実行で再開する(起動を試みる)作業項目の数の上限。飛ばした項目は数えない。 */
+export const AUTO_RETRY_LIMIT_PER_RUN = 5;
+
+/**
+ * 1回の実行で読む候補の数の上限。再開する数の上限より多くする。
+ * 要件が未承認の項目のように、DBの条件だけでは除けないものが、先頭を占めて後ろの項目を締め出さないためである。
+ */
+export const AUTO_RETRY_LIST_LIMIT = 50;
+
+const PR_FIX_FLOW_PATH = "f/factory/pr_fix";
+
+export type AutoRetryPlan = {
+  readonly toStatus: WorkItemStatus;
+  readonly flowPath: string;
+  readonly args: Readonly<Record<string, unknown>>;
+  /** `flow_job_id`をリースとして扱うフローか。そうなら、遷移で空にし、起動したジョブIDは空のときだけ記録する。 */
+  readonly leased: boolean;
+};
+
+/**
+ * 再開先を決める。再開しない作業項目には`null`を返す。
+ * 実装は、要件が承認済みで`implement_enabled`が有効なときだけ、実装フローで再開する。
+ * そうでなければ要件定義を作り直す再開になり、人が承認した要件を捨てかねない。
+ */
+export function autoRetryPlan(
+  candidate: Pick<AutoRetryCandidate, "id" | "kind" | "status">,
+  implementReady: boolean,
+  implementEnabled: boolean,
+): AutoRetryPlan | null {
+  if (candidate.kind === "issue" && candidate.status === "needs_human") {
+    if (!implementReady || !implementEnabled) return null;
+    return {
+      toStatus: "implementing",
+      flowPath: IMPLEMENT_FLOW_PATH,
+      args: { work_item_id: candidate.id },
+      leased: true,
+    };
+  }
+  if (candidate.kind === "pr_fix" && candidate.status === "blocked") {
+    return {
+      toStatus: "fixing",
+      flowPath: PR_FIX_FLOW_PATH,
+      args: { work_item_id: candidate.id },
+      leased: false,
+    };
+  }
+  return null;
+}
+
+export type AutoRetryDeps = {
+  /** `factory_config.implement_enabled`の値。 */
+  readonly implementEnabled: boolean;
+  /** 再開の候補を返す(`listAutoRetryCandidates`)。 */
+  readonly listCandidates: () => Promise<readonly AutoRetryCandidate[]>;
+  /** Issueの要件が現在の`attempt`で承認済みか。 */
+  readonly isImplementReady: (
+    candidate: AutoRetryCandidate,
+  ) => Promise<boolean>;
+  /** 記録済みのflowジョブが終わっているか。動いているか状態を読めなければ`false`を返す。 */
+  readonly isFlowJobFinished: (flowJobId: string | null) => Promise<boolean>;
+  /** 止まった理由を条件にした比較と交換(`restartStoppedWorkItem`)。移せたら`true`を返す。 */
+  readonly restart: (
+    candidate: AutoRetryCandidate,
+    plan: AutoRetryPlan,
+  ) => Promise<boolean>;
+  /** `runFlowAsync`の戻り値をそのまま返す。 */
+  readonly launchFlow: (
+    flowPath: string,
+    args: Readonly<Record<string, unknown>>,
+  ) => Promise<string>;
+  /** 起動したジョブIDを記録する。リースのフローは空のときだけ記録し、別の実行が先に取っていれば`false`を返す。 */
+  readonly recordFlowJobId: (
+    id: number,
+    jobId: string,
+    leased: boolean,
+  ) => Promise<boolean>;
+  /** 起動できなかった作業項目を、理由を注記にして`needs_human`へ戻す。戻せたら`true`を返す。 */
+  readonly rollBack: (
+    candidate: AutoRetryCandidate,
+    plan: AutoRetryPlan,
+    reason: string,
+  ) => Promise<boolean>;
+  readonly log: Logger;
+};
+
+export type AutoRetryResult = {
+  readonly restarted: number;
+  readonly skipped: number;
+  readonly failed: number;
+};
+
+function messageOf(err: unknown): string {
+  return maskSecrets(err instanceof Error ? err.message : String(err));
+}
+
+type Outcome = "restarted" | "skipped" | "failed";
+
+async function retryOne(
+  deps: AutoRetryDeps,
+  candidate: AutoRetryCandidate,
+): Promise<Outcome> {
+  const implementReady =
+    candidate.kind === "issue" ? await deps.isImplementReady(candidate) : false;
+  const plan = autoRetryPlan(candidate, implementReady, deps.implementEnabled);
+  if (plan === null) {
+    deps.log.info("auto retry skipped: the work item cannot be restarted", {
+      work_item_id: candidate.id,
+    });
+    return "skipped";
+  }
+  // 動いている古いフローと新しいフローが、同じ作業項目を同時に書き換えないようにする。
+  if (!(await deps.isFlowJobFinished(candidate.flow_job_id))) {
+    deps.log.info("auto retry skipped: the previous flow job is not finished", {
+      work_item_id: candidate.id,
+    });
+    return "skipped";
+  }
+  if (!(await deps.restart(candidate, plan))) {
+    deps.log.info("auto retry skipped: the work item moved on", {
+      work_item_id: candidate.id,
+    });
+    return "skipped";
+  }
+  let jobId: string;
+  try {
+    jobId = parseFlowJobId(
+      await deps.launchFlow(plan.flowPath, plan.args),
+      "runFlowAsync",
+    );
+  } catch (err) {
+    const reason = `retry_stale_image: ${plan.flowPath} could not be started: ${messageOf(err)}`;
+    const movedBack = await deps.rollBack(candidate, plan, reason);
+    deps.log.warn("auto retry could not start the flow", {
+      work_item_id: candidate.id,
+      rolled_back: movedBack,
+      error: reason,
+    });
+    return "failed";
+  }
+  if (!(await deps.recordFlowJobId(candidate.id, jobId, plan.leased))) {
+    deps.log.warn("auto retry did not record the flow job id", {
+      work_item_id: candidate.id,
+      job_id: jobId,
+    });
+  }
+  deps.log.info("auto retry restarted the work item", {
+    work_item_id: candidate.id,
+    to_status: plan.toStatus,
+    job_id: jobId,
+  });
+  return "restarted";
+}
+
+/**
+ * イメージが古くて止まった作業項目を再開し、結果の件数を返す。例外は投げない。
+ * 作業項目ごとに失敗を分け、1件の失敗で残りを飛ばさない。
+ */
+export async function retryStaleImageItems(
+  deps: AutoRetryDeps,
+): Promise<AutoRetryResult> {
+  let candidates: readonly AutoRetryCandidate[];
+  try {
+    candidates = await deps.listCandidates();
+  } catch (err) {
+    deps.log.warn("auto retry candidates could not be listed", {
+      error: messageOf(err),
+    });
+    return { restarted: 0, skipped: 0, failed: 0 };
+  }
+  const counts = { restarted: 0, skipped: 0, failed: 0 };
+  for (const candidate of candidates) {
+    if (counts.restarted + counts.failed >= AUTO_RETRY_LIMIT_PER_RUN) break;
+    try {
+      counts[await retryOne(deps, candidate)] += 1;
+    } catch (err) {
+      counts.failed += 1;
+      deps.log.warn("auto retry failed for a work item", {
+        work_item_id: candidate.id,
+        error: messageOf(err),
+      });
+    }
+  }
+  return counts;
+}

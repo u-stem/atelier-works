@@ -190,7 +190,7 @@ const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
     "host_action_required",
     guide(
       "自己更新が反映した版に、worker自身では反映できない変更(infra/、mise.tomlの[tools]・[env])が含まれています。ホストで作業するまで、新しい構成は動きません。実装、PR修正、作業領域の掃除が、workerのイメージが古くて検査コマンドを実行できないと分かったときにも出ます。そのときは、検査コマンドのある作業項目は進みません。",
-      "ホストのcheckoutで、次のコマンドを順に実行してください。mise run upは、Caddyを再起動したうえで、終わりにそのcheckoutのHEADをworkerへ渡します。イメージが古くて止まった作業項目は、mise run upの後に、Windmillでf/factory/retry_work_itemを作業項目のIDで実行して再開してください。",
+      "ホストのcheckoutで、次のコマンドを順に実行してください。mise run upは、Caddyを再起動したうえで、終わりにそのcheckoutのHEADをworkerへ渡します。イメージが古くて止まった作業項目は、mise run upの後に通知が自動で解決されると、自動で再開します。自動の再開が3回の上限に達したときと、版が載らない通知のときだけ、Windmillでf/factory/retry_work_itemを作業項目のIDで実行して再開してください。",
       {
         commands: ["git pull", "mise install", "mise run up"],
         note: "通知の版がホストのHEADと同じか祖先なら、自己更新(10分ごと)が自動で解決します。HEADを書けなかったときと、版が載らない通知(イメージが古いと分かったときに、反映した版を読めなかったもの)は自動では解決されないので、mise run upが済んでいれば人が解決してかまいません。",

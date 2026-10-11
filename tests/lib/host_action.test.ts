@@ -23,6 +23,7 @@ import {
   reconcileHostActionNotices,
   recordCheckEnvironmentNotice,
   recordHostAction,
+  STALE_IMAGE_NOTICE_MARKER,
 } from "../../f/factory/lib/host_action.ts";
 import { logger } from "../../f/factory/lib/log.ts";
 import type { NoticeRecord } from "../../f/factory/lib/types.ts";
@@ -744,6 +745,18 @@ describe("buildHostActionNotice paths", () => {
 });
 
 describe("buildCheckImageStaleNotice", () => {
+  test("carries the marker the automatic retry looks for", () => {
+    expect(buildCheckImageStaleNotice(SHA_A, "x").message).toContain(
+      STALE_IMAGE_NOTICE_MARKER,
+    );
+  });
+
+  test("keeps the marker out of the deployment notice", () => {
+    expect(
+      buildHostActionNotice(SHA_A, ["infra/docker-compose.yml"]).notice.message,
+    ).not.toContain(STALE_IMAGE_NOTICE_MARKER);
+  });
+
   test("uses the host action notice kind", () => {
     expect(
       buildCheckImageStaleNotice(SHA_A, "/usr/bin/getfacl is missing").kind,
