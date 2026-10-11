@@ -140,8 +140,7 @@ Consoleは管理者のCookieで動くので、呼べる範囲を固定する。
 本文はContent-Typeを見ずに読む。
 失敗の本文は、JSONの`error.message`、`message`、文字列の`error`の順に探し、JSONでなければ本文のテキストを使う。
 `timeout_or_unknown`は、ジョブが終わったか分からない状態を表す。
-書き込みでは、401、403、4xxを除くすべての失敗で、処理が途中まで進んでいる可能性がある。
-ジョブの失敗、待ちの上限、形が違う応答、通信の失敗、5xxがそれにあたる。
+書き込みでは、ジョブの失敗、待ちの上限、形が違う応答、通信の失敗、5xxで、処理が途中まで進んでいる可能性がある。
 そのため`describeApiError`は、書き込みのこれらの失敗を「結果が分かりません。一覧を読み直して確かめてください」と案内する。
 読み取りの失敗は、そのまま伝える。
 500を除く5xxの本文はHTMLなどになりうるので、画面に出さない。
@@ -212,33 +211,41 @@ backendが先に新しい値を反映した間や、配信を前の版に固定�
 | --- | --- |
 | 認可はWindmillのログインに任せる | Consoleは独自の認可を持たない。ログインしていない呼び出しは、Windmillが401にする |
 | 承認者と解決者は引数に取らない | 画面から渡した名前は信用できない。scriptがジョブの実行文脈(`WM_USERNAME`、無ければ`WM_EMAIL`)から導き、導けなければ拒否する |
-| 同一オリジンの`fetch`でPOSTし、本文はJSONにする | 他のサイトから運用者のCookieで操作させないため。Caddyの`Sec-Fetch-Site`の検査とあわせて守る。POSTに限ることは、Caddyではまだ強制していない([セキュリティ](../security.md)の「Consoleの配信」) |
+| 同一オリジンの`fetch`でPOSTし、本文はJSONにする | 他のサイトから運用者のCookieで操作させないため。Caddyの`Sec-Fetch-Site`の検査とあわせて守る。POSTに限ることは、Caddyの規則で強制する予定で、反映するまでは強制していない([セキュリティ](../security.md)の「Consoleの配信」) |
 | 操作の値をConsole側で固定する | 監査は`force: false`、`source: "manual"`、`days: 7`で起動する。承認の補足(`note`)は固定の文にする。画面から変えさせない |
 | 再試行しない | 結果が分からないまま2回実行しないため |
 
 承認は、同じ決定が記録済みの行にもう一度呼ぶと、ハンドラの起動をやり直す。
 二重の送信は、画面側で止める。
 
+却下の理由は、4000文字までにする(`MAX_REASON_LENGTH`)。
+`decideApproval`は、上限を超える理由を送らず、`RangeError`で断る。
+画面は、送る前に長さを確かめて入力欄で知らせる。
+理由はDBに記録され、Issueやレポートに出るためである。
+script側には上限が無く、Windmillのapiを直に呼ぶ者には効かない。script側の上限は、別のIssueで扱う。
+
 #### 共通のフック
 
 `useWriteMutation`(`src/api/mutations.ts`)が、ロック、実行、読み直しをつなぐ。
-実行の流れは`executeWrite`、ロックは`runLocked`と`writeLocks`、読み直せなかったときの待ちは`holdUntilFresh`に切り出してあり、`bun test`で確かめる。
+結線は、Reactから切り離した`createWriteRunner`(`src/api/writeRunner.ts`)に置く。
+`bun test`が、実際のQueryClientで確かめる。
+実行の流れは`executeWrite`、ロックは`runLocked`と`writeLocks`、読み直せなかったときの待ちは`holdUntilFresh`に切り出してある。
 
 - 対象のキー単位でボタンをロックする。キーは`writeTargetKey`が作り、承認の承認と却下のように、同じ対象への操作は同じキーで止める。一覧と詳細のボタンは、同じロックを共有する
 - ロックはmutationの実行の中で取る。同じ瞬間に2回押されても、実行は1回になる
 - 成功と、結果が分からない失敗の後に、関連する取得(既定はsummary)を読み直す。読み直しが終わるまでロックを残す
-- 画面の知らせの関数が例外を投げても、読み直しは行う
+- 画面の知らせの関数は、結果用も一覧が古いこと用も、例外を投げても読み直しとロックの扱いを変えない
 - 401は取得と同じ経路でログインの帯に流す
 - 成功の知らせの文は、`src/lib/writeNotices.ts`の純関数が作る。解決済みだった通知の解決は成功として扱う
 
-結果が分からない失敗は、401、403、4xx以外のすべての失敗である。
+結果が分からない失敗は、ジョブの失敗、待ちの上限、形が違う応答、通信の失敗、5xxである。
 401、403、4xxは、ジョブが動く前に断られたので、読み直さない。
 ジョブの失敗(`job_failed`)は、結果が分からないものとして扱う。
 scriptの断り(理由なしの却下、記録済みの別の決定など)と、副作用の後の失敗が、同じ形で返り、本文から区別できないためである。
 区別するには、scriptが断りを固定の接頭辞で投げる必要がある。
 
 読み直しが失敗したか、30秒以内に終わらなかったときは、一覧が古いことを知らせる(`STALE_LIST_NOTICE`)。
-その対象は、一覧の取得が次に成功するまで、押せないままにする。
+その対象は、読み直す取得のすべてが次に成功するまで、押せないままにする。
 古い一覧のままだと、済んだ操作をもう一度押せるためである。
 summaryは120秒ごとに取り直すので、通信が戻れば解ける。
 
@@ -260,8 +267,11 @@ Issueに由来する文字は、`displayableIssueText`(`src/lib/intakeText.ts`)�
 - 許可リストの行き先が、tag`console`を持つ実在のscriptであること
 - 型付きの関数の引数は、scriptの入力の項目と必須の項目に合うこと
 - 各scriptの戻りが、型ガードを通ること
-- `src/api/`の外が、`windmill.ts`をimportせず、`run_wait_result`の経路を直に書かず、`fetch`も呼ばないこと。例外は、版の確認の`useReleaseWatch.ts`だけである
+- `src/api/`の外が、`windmill.ts`をimportせず、`run_wait_result`の経路を直に書かず、`fetch`、`XMLHttpRequest`、`sendBeacon`も使わないこと。例外は、版の確認の`useReleaseWatch.ts`だけである。`fetch`を別名に代入してから呼ぶ形は見ない
 - `runScript`と`SCRIPT_PATHS`が、`windmill.ts`の外へ再エクスポートされないこと
+
+Console用workerのscriptが読むsecret変数は、`tests/scripts/console_worker_boundary.test.ts`が数える。
+走査がたどれない形と、見ないものは、[セキュリティ](../security.md)の「Console用workerの境界」に書く。
 
 ## ログイン切れの扱い
 

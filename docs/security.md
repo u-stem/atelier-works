@@ -305,7 +305,8 @@ ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者�
 残るリスクは次のとおりである。
 
 - 許可リストと型付きの関数が防ぐのは、Console自身の誤りだけである。ConsoleのXSSや、運用者のCookieを持つ攻撃者は防げない。Cookieがあれば、許可リストの外のscriptも、Windmillのapiから直に呼べる。
-- 書き込みをPOSTに限ることは、Caddyでは強制していない。Consoleは常にPOSTで送るが、同一オリジンのGETでも`/api/w/*/jobs/run_wait_result*`は動き、承認を通せる。他のサイトからの要求は`Sec-Fetch-Site`で止めているが、同一オリジンからのGETは止めていない。
+- 書き込みをPOSTに限ることは、現在のCaddyの規則では強制していない。Consoleは常にPOSTで送る。しかし現在の規則が403にするのは、`Sec-Fetch-Site`が`cross-site`か`same-site`の要求だけである。`same-origin`か`none`(外部のアプリから開いたリンク)の要求と、このヘッダーが無い要求は止まらない。それらのGETの`/api/w/*/jobs/run_wait_result/p/<path>`で、承認などを実行できる。
+  Caddyの規則で塞ぐ予定である。`Sec-Fetch-Dest`が`empty`以外の`run_wait_result`などのGETと、ナビゲーションの`Sec-Fetch-Mode`を403にする。反映するまでは、この経路が残る。
 - `main`へのマージは、承認0件のPRで済む。PRの必須チェックは通る必要があるが、人のレビューは強制されない。FactoryのPATが`main`へマージできるか、人の確認なしにマージできるかは確かめていない([mainの保護とリポジトリの公開](#mainの保護とリポジトリの公開))。そのため、マージされたコードは人のレビューを経ずに運用者のブラウザで動きうる。Consoleの変更のレビューは、Windmillの管理者権限を持つコードのレビューとして行う。
 - CIの組み立ての途中で動くもの(miseが入れるbunなどのツール、Viteのプラグインなどの依存)が侵害されると、出力が改ざんされうる。`digest`とマニフェストが保証するのは、GitHubのCIが作ったものであることまでである。
 - 信頼の境界は`console`ジョブだけでなく、`ci.yml`のすべてのジョブとそこで動くツールや依存に及ぶ。同じ実行のほかのジョブも、ランナーから取れるトークンで成果物`console-dist`を上げ直せるためである。成果物は`overwrite: true`で上げ、`console_fetcher`はその名前の`id`が最大の成果物を取り込む。
@@ -380,7 +381,17 @@ Consoleから押せる書き込みには、読むsecret変数の上限を決め�
 Consoleの操作で、外向きの資格情報が動く範囲を広げないためである。
 tag`console`のscriptがimportでたどれるソースを数える契約テスト(`tests/scripts/console_worker_boundary.test.ts`)が、この上限を確かめる。
 許可した2つも、`github_token`以外のsecret変数は読まない。
-走査がたどれない形(importの引数が変数、`require`)が現れたら、テストが落ちる。
+走査でたどれない形が現れたら、テストは落ちる。
+たどれない形は、次のとおりである。
+
+- 絶対パスと、`f/`か`u/`で始まるimport
+- `require`
+- 引数が単純な文字列リテラルでないimport()
+- 引数が単純な文字列リテラルでない`getVariable()`と`getResource()`
+
+script.yamlに`$var:`か`$res:`の参照があるときも、テストは落ちる。
+例外は`console_query`の1件で、`deployed_sha`の読み取りを依存として注入するため、引数が変数になる。呼び出し側が定数だけを渡すことを確かめ、テストの許可リストに理由を書いている。
+テストが見ないのは、文字列を組み立てて作ったsecretのパス、環境変数やDBを経由して受け取る名前、`eval`である。これらはコードのレビューで見る。
 
 サブパスのマウントは、ディレクトリが無いとコンテナが起動しない。
 1回限りのサービス`factory_state_init`が、起動の前に`requirements`を作る。
