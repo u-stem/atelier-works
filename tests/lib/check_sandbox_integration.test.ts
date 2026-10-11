@@ -1404,8 +1404,8 @@ suite("entries another slot adds during a check", () => {
     expect(lstatSync(join(worktree, "shared", "b-file")).mode & 0o022).toBe(0);
   });
 
-  test("a symlink the other slot added is owned by root afterwards", () => {
-    expect(lstatSync(join(worktree, "shared", "b-link")).uid).toBe(0);
+  test("a symlink the other slot added is removed afterwards because it points outside", () => {
+    expect(existsSync(join(worktree, "shared", "b-link"))).toBe(false);
   });
 
   test("the target of that symlink keeps its mode", () => {
@@ -1777,5 +1777,86 @@ suite("world-writable paths created while the worker runs", () => {
         await checkImageProblems(POOL, defaultSandboxDeps()),
       ),
     ).toBeInstanceOf(CheckRuntimeUnsafeError);
+  });
+});
+
+suite("symlinks a check leaves pointing outside the worktree", () => {
+  const fx = makeRepo();
+  const lockDir = join(fx.base, "slots");
+  let worktree = "";
+  let detected = "";
+  let scanCommand = "";
+  let ownerOfHardLinkedFile = -1;
+
+  beforeAll(async () => {
+    mkdirSync(WINDMILL_TMP_DIR, { recursive: true });
+    worktree = fx.addWorktree("links");
+    // 準備の時点で既にある、外を指すsymlink。追跡されているものにあたる。
+    symlinkSync("/etc/hostname", join(worktree, "keep"));
+    // ハードリンクがあると、受け渡しはディレクトリごとの方法に切り替わる。
+    writeFileSync(join(worktree, "one.txt"), "x\n");
+    linkSync(join(worktree, "one.txt"), join(worktree, "two.txt"));
+    writeFileSync(
+      join(worktree, "links.sh"),
+      [
+        "mkdir -p a/b",
+        // 途中のsymlinkを経由する`..`で、worktreeの外の、まだ無いファイルを指す。
+        "ln -s ../.. a/b/il",
+        "ln -s il/../outside/new.txt a/b/x",
+        "ln -s /etc/passwd evil",
+        "ln -s ../ok a/inside",
+        "touch ok",
+        "",
+      ].join("\n"),
+    );
+    const results = await runChecks(
+      worktree,
+      ["sh ./links.sh"],
+      sandboxIn(lockDir, POOL),
+    );
+    const scanned = results.at(-1);
+    detected = scanned?.output ?? "";
+    scanCommand = scanned?.command ?? "";
+    ownerOfHardLinkedFile = lstatSync(join(worktree, "one.txt")).uid;
+  }, 60_000);
+
+  afterAll(() => {
+    fx.cleanup();
+  });
+
+  test("the scan is added as a failed check", () => {
+    expect(scanCommand).toBe("check sandbox: symlinks outside the worktree");
+  });
+
+  test("a symlink to an existing file outside is reported", () => {
+    expect(detected).toContain(join(worktree, "evil"));
+  });
+
+  test("a dangling symlink through another symlink and .. is reported", () => {
+    expect(detected).toContain(join(worktree, "a/b/x"));
+  });
+
+  test("a symlink that was already there is not reported", () => {
+    expect(detected).not.toContain(join(worktree, "keep"));
+  });
+
+  test("a symlink that stays inside the worktree is not reported", () => {
+    expect(detected).not.toContain(join(worktree, "a/inside"));
+  });
+
+  test("the reported symlink is removed", () => {
+    expect(existsSync(join(worktree, "evil"))).toBe(false);
+  });
+
+  test("the dangling symlink is removed", () => {
+    expect(() => lstatSync(join(worktree, "a/b/x"))).toThrow();
+  });
+
+  test("the symlink that was already there is kept", () => {
+    expect(lstatSync(join(worktree, "keep")).isSymbolicLink()).toBe(true);
+  });
+
+  test("the file with a hard link is owned by root afterwards", () => {
+    expect(ownerOfHardLinkedFile).toBe(0);
   });
 });

@@ -18,8 +18,8 @@ locks:
   f/factory/lib/audit_doc: 0dcccfcfd59607c2aff289b48940f5dfd98de36ce6db462375394f2b6d696aa1
   f/factory/lib/audit_evidence: ac1ccc03e083e673184500451f40287247023042a52e597954379c12a9e79269
   f/factory/lib/audit_support: 7e3a1a0e9b438c651812eee365575dbcba2c789388dec74458106c39b3a0d032
-  f/factory/lib/check_runner: 8b6ffbeab01aca2013fc514bc8b018f53d6ec364f841f39395bf699190a83535
-  f/factory/lib/check_sandbox: 38667c19f2ff8e29cb0638fa9588fd22eaf9a5e492a03815f665809ba24b6147
+  f/factory/lib/check_runner: aec1fa8f78312d1281f6f110d1d534f61e54c3f9d8c7a099a7cea47b31b21725
+  f/factory/lib/check_sandbox: 607a2d7ec21b37a9670875fd93056d8fd83fc31a235d08d84e260f82af152500
   f/factory/lib/claim_support: a1a20cdbf0b277b24529f736e86cf4d439ba0c93030c74a4d211feb439ff583a
   f/factory/lib/claude: 37bd94b7315969113b4900f1ad8e82d5b75bcb8619d6ef6722cf610bc378d400
   f/factory/lib/cleanup_db_support: d9ef6bb600246990c3b2c4d3d22419356217fed835fe22499834491ed951138f

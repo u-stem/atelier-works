@@ -77,7 +77,7 @@ const ESCAPING_SYMLINKS_COMMAND =
   "check sandbox: symlinks outside the worktree";
 const ESCAPING_SYMLINKS_LISTED = 20;
 
-/** worktreeの外を指すsymlinkが残ったことを、失敗した検査として表す。 */
+/** worktreeの外を指すsymlinkを消したことを、失敗した検査として表す。 */
 function escapingSymlinksResult(paths: readonly string[]): CheckCommandResult {
   const listed = paths.slice(0, ESCAPING_SYMLINKS_LISTED).join("\n");
   const more =
@@ -85,7 +85,7 @@ function escapingSymlinksResult(paths: readonly string[]): CheckCommandResult {
       ? `\n... and ${String(paths.length - ESCAPING_SYMLINKS_LISTED)} more`
       : "";
   const output = maskSecrets(
-    `the check left symlinks that point outside the worktree:\n${listed}${more}`,
+    `the check left symlinks that point outside the worktree; they were removed:\n${listed}${more}`,
   );
   return {
     command: ESCAPING_SYMLINKS_COMMAND,
@@ -107,7 +107,7 @@ function escapingSymlinksResult(paths: readonly string[]): CheckCommandResult {
  * 実行の後(失敗しても)所有権をrootに戻してからHOMEを消す。
  * 戻すのに失敗したときはHOMEを消さない。止まらないプロセスが書き換えている木をrootでたどらないためで、
  * HOMEは枠の記録に残り、次にその枠を取る実行が片付ける。
- * 取り戻しの後に、検査が置いたworktreeの外を指すsymlinkを調べ、あれば失敗した検査として結果に足す。
+ * 取り戻しの後に、検査が置いたworktreeの外を指すsymlinkを調べて消し、あれば失敗した検査として結果に足す。
  * `sandbox`が無いと、コマンドはworkerのuidのまま動く。本番の呼び出し(`implement_verify`、`pr_fix_verify`)は必ず渡す。
  * miseの設定の信頼(trust)は決して与えない(`MISE_TRUSTED_CONFIG_PATHS`も
  * `mise --yes trust`も使わない)。信頼が無いと動かない検査コマンド

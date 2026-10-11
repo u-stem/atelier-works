@@ -309,7 +309,10 @@ function fakeSandbox(opts?: {
       events.push(`release ${dirs.worktreeDir} ${dirs.homeDir}`);
       if (opts?.releaseError !== undefined) throw opts.releaseError;
     },
-    escapingSymlinks: async () => [...(opts?.escaping ?? [])],
+    escapingSymlinks: async () => {
+      events.push("escaping");
+      return [...(opts?.escaping ?? [])];
+    },
     kernelWarnings: () => [],
   };
   return { sandbox, events, identity };
@@ -378,6 +381,53 @@ describe("runAllowedCheckCommands with a sandbox", () => {
     expect(results).toHaveLength(2);
   });
 
+  test("looks for escaping symlinks after the release", async () => {
+    const { sandbox, events } = fakeSandbox();
+    const { run } = recordingRunner(events, [ok("")]);
+    await runAllowedCheckCommands(
+      run,
+      "/work",
+      ["true"],
+      1000,
+      fakeCheckHomeDir().factory,
+      "/usr/bin",
+      sandbox,
+    );
+    expect(events.at(-1)).toBe("escaping");
+  });
+
+  test("does not look for escaping symlinks when the release fails", async () => {
+    const { sandbox, events } = fakeSandbox({
+      releaseError: new Error("could not take back"),
+    });
+    const { run } = recordingRunner(events, [ok("")]);
+    await runAllowedCheckCommands(
+      run,
+      "/work",
+      ["true"],
+      1000,
+      fakeCheckHomeDir().factory,
+      "/usr/bin",
+      sandbox,
+    ).catch(() => {});
+    expect(events).not.toContain("escaping");
+  });
+
+  test("says the escaping symlinks were removed", async () => {
+    const { sandbox, events } = fakeSandbox({ escaping: ["/work/x"] });
+    const { run } = recordingRunner(events, [ok("")]);
+    const results = await runAllowedCheckCommands(
+      run,
+      "/work",
+      ["true"],
+      1000,
+      fakeCheckHomeDir().factory,
+      "/usr/bin",
+      sandbox,
+    );
+    expect(results.at(-1)?.output).toContain("were removed");
+  });
+
   test("adds nothing when no symlink points outside the worktree", async () => {
     const { sandbox, events } = fakeSandbox();
     const { run } = recordingRunner(events, [ok("")]);
@@ -427,6 +477,7 @@ describe("runAllowedCheckCommands with a sandbox", () => {
       "run",
       "settle",
       "release",
+      "escaping",
     ]);
   });
 
@@ -640,8 +691,9 @@ describe("runAllowedCheckCommands with a sandbox", () => {
       "/usr/bin",
       sandbox,
     );
-    expect(events.slice(-2).map((event) => event.split(" ")[0])).toEqual([
+    expect(events.slice(-3).map((event) => event.split(" ")[0])).toEqual([
       "release",
+      "escaping",
       "cleanup",
     ]);
   });
