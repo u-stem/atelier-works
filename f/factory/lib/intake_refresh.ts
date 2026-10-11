@@ -38,7 +38,7 @@ export function buildIntakeRefreshedNoticeMessage(target: {
   readonly issue_number: number;
   readonly work_item_id: number;
 }): string {
-  return `${target.owner}/${target.repo}#${String(target.issue_number)} (work item ${String(target.work_item_id)}): Issueが取り込み後に書き換えられたので、取り込み内容を現在のIssueで更新しました。新しいConsoleの要対応で更新後の内容を確かめてから承認してください`;
+  return `${target.owner}/${target.repo}#${String(target.issue_number)} (work item ${String(target.work_item_id)}): Issueが取り込み後に書き換えられたので、取り込み内容を現在のIssueで更新しました。Consoleの要対応で更新後の内容を確かめてから承認してください`;
 }
 
 export type RefreshIntakeOutcome =

@@ -292,7 +292,7 @@ ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者�
 | `console_fetcher`を閉じ込める | rootでないuid、読み取り専用のファイルシステム、ケーパビリティなし、DBにもWindmillにも届かない専用のnetworkで動かす |
 | ブラウザ側で制限する | `/console/*`の応答だけに、scriptの読み込み先を`/console/assets/`に絞ったCSPと、埋め込みを禁じるヘッダーを付ける |
 | CSPとCaddyのパスの解釈の違いを塞ぐ | パーセント符号を戻した元のパスが`/console/`で始まる要求は、Windmillへ転送しない。Consoleの経路では、生のパスに`%2f`か`%5c`があれば400にする |
-| 旧Consoleのリンクを固定の行き先に飛ばす | 旧Console(raw app)のURL(`/apps/get/f/factory/factory_console`と`/apps_raw/get/f/factory/factory_console`、配下を含む)は、パスとクエリによらず固定の`/console/`へ302で飛ばす。行き先を要求から作らないので、オープンリダイレクトにならない。`Cache-Control: no-store`を付け、ブラウザに転送を覚えさせない |
+| 旧Consoleのリンクを固定の行き先に飛ばす | 廃止した旧ConsoleのURL(`/apps/get/f/factory/factory_console`と`/apps_raw/get/f/factory/factory_console`、配下を含む)は、パスとクエリによらず固定の`/console/`へ302で飛ばす。行き先を要求から作らないので、オープンリダイレクトにならない。`Cache-Control: no-store`を付け、ブラウザに転送を覚えさせない |
 | 他のサイトからAPIを呼ばせない | `/api/*`への要求は、次の4つをCaddyが403にする。`Sec-Fetch-Site`が`cross-site`か`same-site`のもの。`Origin`がブラウザの開いたオリジンと一致しないもの。ジョブを起動するGET(`run_wait_result`、`run_and_stream`、`slack_approval`、`teams_approval`、`move_s3_file`)を、fetchとXHR以外(`Sec-Fetch-Dest`が`empty`でないもの)で呼んだもの。GETとHEAD以外の要求を、ページの移動(`Sec-Fetch-Mode`が`navigate`か`nested-navigate`)で送ったもの。副作用のあるGETも、`Sec-Fetch-Mode`が`navigate`のときは止める。`Sec-Fetch-*`、`Origin`、`Cookie`のどれも送らないCLIは通す |
 | Console自身の誤りを防ぐ | 呼べるscriptは、許可リストの5つ(読み取りの1つと、承認、再実行、監査の起動、通知の解決)だけである。認可はWindmillのログインに任せる。承認者と解決者は、画面から渡さず、ジョブの実行文脈からscriptが導き、導けなければ拒否する。Consoleの書き込みは、同一オリジンの`fetch`によるPOSTで送る。副作用のあるGETと、ページの移動による書き込みは、上の行のとおりCaddyが止める |
 | 配信する状態を絞る | `/console/status.json`で配信するのは、`console_fetcher`の状態の4項目(`state`、`sha`、`checked_at`、`error`)だけである。`checked_at`と`error`から、自動の配信が止まっていることなど運用の状態が外から見える。`error`には分類した失敗の種類だけを書き、トークンや応答の本文などの秘密は含まない。ボリュームの他のファイルは配信しない |
@@ -455,14 +455,22 @@ Podmanは対象外である。
   [Console用workerを確かめる](operations.md#console用workerを確かめる)の手順でsymlinkを消し、workerを作り直す。
   突くにはdefaultのworkerでのコード実行が要る。その権限があれば`factory_state`のボリューム全体を直接読めるので、実害は増えない。
 
-## 自己更新の依存インストール
+## サブプロセスのnpmのinstall script
 
-`self_update`は、Consoleのraw appの依存を`npm ci --ignore-scripts`で入れる。
-依存のinstall scriptは、workerの権限のまま、ネットワークにも出られる状態で動くためである。
+`self_update`と、ホストで動かすmiseのタスク(`mise run push`、`mise run deploy`など)は、`wmill sync push`のサブプロセスに次の環境変数を渡す。
 
-- `wmill sync push`がraw appを組み立てるときに動かすnpmには、`--ignore-scripts`が効かない。そのため、`wmill`のサブプロセスの環境変数に`NPM_CONFIG_IGNORE_SCRIPTS=true`を渡す。
-- ホストで動かすmiseのタスク(`mise run push`、`mise run deploy`など)も、`npm ci --ignore-scripts`とこの環境変数を使う。
-- raw appの`package-lock.json`には、install scriptを要する依存(`hasInstallScript`)が無い。そのような依存を足すと、コントラクトテスト(`tests/lib/self_update_support.test.ts`)が落ちる。足す前に、install scriptなしで組み立てが通るかを確かめる。
+```text
+NPM_CONFIG_IGNORE_SCRIPTS=true
+```
+
+`wmill`がnpmを走らせることがあっても、依存のinstall scriptを動かさないためである。
+install scriptは、workerの権限のまま、ネットワークにも出られる状態で動く。
+
+リポジトリのWindmillの資産には、npmの依存を入れるものが無い。
+足すときは、install scriptなしで組み立てが通るかを確かめる。
+
+廃止した旧Consoleのappは、人が`mise run push:prune`を実行するまでWindmillに残る。
+残ったappは更新されず、閲覧のURLはCaddyが新しいConsoleへ302で飛ばす。
 
 ## 自己更新の打ち切り
 
@@ -474,7 +482,7 @@ Podmanは対象外である。
 残るリスクは次のとおりである。
 
 - Windmillが全体の上限でジョブを打ち切るときに、子プロセスが止まるかを確かめていない。
-  子(`npm ci`、`wmill sync push`、`wmill datatable migrate up`、git)は別のセッションで起動する。
+  子(`wmill sync push`、`wmill datatable migrate up`、git)は別のセッションで起動する。
   子の上限はworkerの中のタイマーなので、ジョブごと止まると子は上限なしで残りうる。
 - 残った`wmill sync push`が、次の回が更新する作業ツリーを読み続けると、新旧の混ざった内容をpushしうる。
   作業ツリーのロックは、cloneの更新の間しか取らず、pushの間は守らない。
@@ -814,27 +822,17 @@ iframeの中で動くscriptが取れるのは、そのiframeが受け取った�
   - `'unsafe-eval'`を付けずに、普通の図と、リンク、外部の画像、フォント、図形ライブラリ、評価を許す式を含む図を描いた。`eval`の違反は出なかった。
 - 外部の図形ライブラリ(AWSなどのアイコン集)を使う図は、その図形が描かれない。外部への取得をCSPが止めるためである。
 
-### 旧Consoleのraw appで描く
+### 親の部品が守ること
 
-Windmillのraw app(Factory Console)も、図をWindmillのオリジンで直接は描かない。
-`components/DrawioViewer.tsx`が、隔離したiframeの中で描く。
-ビューアの欠陥が、管理者としてWindmillを操作できるXSSになるのを防ぐためである。
-ビューアはWindmillのオリジンでは動かず、iframeの中でだけ動く。
-iframeの`src`は、SPAのConsoleが配信する`/console/drawio.html`である。
-そのページの同梱のビューア、受け口のscript、HTTPのCSPは、上の表のとおりで、raw appは別のビューアも別のCSPも持たない。
-raw appがsandboxなしでWindmillと同じオリジンで動くなら、`/console/`も同じサイトなので、`frame-ancestors`に一致して読み込めるはずである。
-ただし、実機で確かめるまでは前提として扱う。
-管理スキルの`.claude/skills/raw-app/SKILL.md`に、バンドルが不透明なオリジンから動くという記述があり、この前提に反するためである。
-読み込めない場合は、隔離なしの描画には戻らず、図の代わりに「図のページが応答しませんでした」と出す。
-図を描けなくなる側に倒れるので、安全側である。
+`DrawioFrame`が、iframeを作る。
+iframeとのメッセージは、`console/src/lib/drawioMessages.ts`と`console/src/lib/drawioFrameState.ts`の純関数が扱う。
 
 | 守ること | 内容 |
 | --- | --- |
 | 不透明なオリジンで動かす | `<iframe src="/console/drawio.html" sandbox="allow-scripts" referrerPolicy="no-referrer">`にする。`srcDoc`は使わない。`allow-same-origin`、`allow-popups`、`allow-forms`、`allow-top-navigation`は付けない。iframeは、WindmillのCookie、親のDOM、最上位のページの遷移、ポップアップ、フォームの送信から切り離される。外への取得は、CSPの`connect-src 'none'`が止める |
-| SPAと同じ値を使う | `src`とsandboxは、`lib/drawioMessages.ts`の`DRAWIO_FRAME_SRC`と`DRAWIO_FRAME_SANDBOX`から使う。`DRAWIO_FRAME_SRC`と`MAX_XML_BYTES`は、`console/src/lib/drawioMessages.ts`と同じ値にする。メッセージの種別と失敗の種類は、`console/public/drawio/drawio-frame-*.js`と同じにする。`tests/lib/drawio_raw_app_isolation.test.ts`が、ソースを文字列として読んで確かめる |
+| 受け口と値を合わせる | メッセージの種別と失敗の種類は、`console/public/drawio/drawio-frame-*.js`と同じにする。`tests/lib/drawio_frame_isolation.test.ts`が、ソースを文字列として読んで確かめる |
 | XMLは1回だけ渡す | 最初のloadの後にpostMessageで1回だけ送る。親は、送り元がそのiframeの`contentWindow`のものだけを受け取り、高さを80〜1600の範囲に収め、失敗は固定の3つの種類だけを受ける。iframeが2回目のloadを起こしたら、遷移とみなして表示を止める |
 | 図を拒否する | 上の`validateDrawioXml`が、生成の時点と読み戻しの時点で、リンク、危険な要素、圧縮した図を拒否する |
-| 取り違えを防ぐ | 図は枠で囲み、「Issueから生成した図」と明記する。図が承認画面を偽った表示をしても、読み手が取り違えにくくするためである |
 
 読み戻しで拒否した図は、`requirements_doc`ビューが名前を`rejected_diagrams`で返す。
 本文は、その名前の図を「安全の検査を通らなかったので表示しません」と表示し、図が見つからない場合と区別する。
@@ -847,84 +845,52 @@ raw appがsandboxなしでWindmillと同じオリジンで動くなら、`/conso
 #### sandboxが止められない経路
 
 `sandbox`は、iframeの`window.top.postMessage`と`window.parent.postMessage`を止められない。
-旧Consoleでは、図のiframeのscriptが、WindmillのSPAとraw appのメッセージの通り道に届く。
-raw appの`backend.*`の呼び出しは、メッセージを通してWindmillのSPAが受けて実行し、応答をraw appのリスナーが受ける。
-図のscriptがこの通り道へ送ったメッセージが、`backend.*`の呼び出しや応答として扱われると、sandboxの隔離は意味を失う。
-そのため、次の2つが`event.source`を確かめて、自分が送った相手以外のメッセージを捨てていることが前提になる。
-
-- WindmillのSPA。raw appの`backend.*`の呼び出しを受ける側
-- raw app内の、応答を受けるリスナー
-
-この前提は、Windmill 1.817.0のコードと実機で確かめる必要がある。
-このリポジトリで読めるのは、次の2点までである。
-
-- 図の部品(`DrawioViewer.tsx`)が`event.source`を確かめること
-- `windmill-client`の1.817.0に`message`のリスナーが無いこと
-
-Windmill本体の画面と、raw appの実行時に注入される応答のリスナーは、このリポジトリに無く、`event.source`を確かめているかは未確認である。
-`mise.toml`の`WM_VERSION`を上げるたびに、確かめ直す。
-
-SPAのConsoleには、この経路が無い。
-親のページは、iframeから高さと失敗の種類だけを受け、Windmillの`backend.*`のメッセージの通り道を持たないためである。
+ConsoleのSPAの親のページは、iframeから高さと失敗の種類だけを受け、ほかのメッセージの通り道を持たない。
+図のscriptが親へ送れるものは、範囲に収めた数値の高さと、固定の失敗の種類に限られる。
 
 #### 保護パス
 
 次のファイルは、保護パスである。
 
-- `DrawioViewer.tsx`
-- `lib/drawioMessages.ts`
-- `lib/drawioFrameState.ts`
-- `tests/lib/drawio_raw_app_isolation.test.ts`
+- `tests/lib/drawio_frame_isolation.test.ts`
 
-書き換えられると、sandboxを外したり、別のページをiframeに読ませたりできるためである。
-iframeへ送るXMLと、受ける応答の扱いも変えられる。
-保護したファイルが主に守るのは、iframeの`src`と、送るXMLの扱いである。
-
-`components/Markdown.tsx`は保護しない。
-旧Consoleの普段の変更を、保護パスで止めないためである。
-`sandbox`は、HTTPのCSP(`infra/Caddyfile`の`drawio_headers`)も後ろ盾になる。
+書き換えられると、sandboxを外したり、別のページをiframeに読ませたりしても、検査を通ってしまうためである。
+`DrawioFrame.tsx`は保護しない。
+画面の普段の変更を、保護パスで止めないためである。
+`sandbox`の値は上のテストが固定し、HTTPのCSP(`infra/Caddyfile`の`drawio_headers`)も後ろ盾になる。
 別の部品が`/console/drawio.html`をsandboxなしのiframeで読む迂回は、CSPの`sandbox allow-scripts`が、ページを不透明なオリジンに固定して止める。
 `frame-ancestors`は、埋め込める親を、このサイトと同じオリジンのページに限る。
 
 制約は次のとおりである。
 
-- SPAのConsoleが配信されていないと、`/console/drawio.html`が無く、図は描かれない。親は、応答がないものとして固定の文を出す。
+- `/console/drawio.html`が配信されていないと、図は描かれない。親は、応答がないものとして固定の文を出す。
 - 外部の図形ライブラリ(AWSなどのアイコン集)と、ビューアのtoolbar、ズーム、レイヤは使えない。
 
 残るリスクは次のとおりである。
 
 - ビューアがiframeの中で`window.location`を書き換えて遷移する経路は、`sandbox`で防げない。2回目のloadの検知で表示を止めるが、loadが起きない遷移は検知できない。そのときも、親が受け取るのは、範囲に収めた高さと、固定の失敗の種類だけである。
-- 図のiframeが`window.top.postMessage`と`window.parent.postMessage`で、WindmillのSPAとraw appのメッセージの通り道に届く。上のとおり、Windmill本体の画面とraw appの応答のリスナーが`event.source`を確かめているかは、未確認である。`WM_VERSION`を上げるたびに確かめ直す。確かめていない版では、この経路を塞げているとは言えない。
-  それでも受け入れる理由は、この隔離が新しい経路を作らないためである。
-  届くには、ビューアの欠陥、検査のすり抜け、送り元を確かめないリスナーの3つが揃う必要がある。
-  ビューアをWindmillのオリジンで直接動かす構成なら、より広く届く。
 - ラベルの`%名前%`を別の値に置き換える`placeholders`と`vars`は、検査が拒否する。
   draw.ioが別の属性でも同じ置き換えをするようになると、検査はその図を拒否できない。
   その図は、iframeの隔離とCSPで止める。
 
 実機でしか確かめられない点は次のとおりである。
 
-- raw appから`/console/drawio.html`をiframeで読めること。`frame-ancestors`が合わないと、図の代わりに応答なしの文が出る。
-- raw appがsandboxなしで動くこと。管理スキルの`.claude/skills/raw-app/SKILL.md`は、バンドルが不透明なオリジンから動くと書いており、反する。
-- raw appの文書が`srcdoc`か`blob:`かで、相対パス`/console/drawio.html`が解決できるかが変わる。`blob:`だと解決できないおそれがある。
 - 図が描かれ、高さが図に追従すること。
 - リンクを含む図を描いても、クリックで遷移しないこと。
-- 図のiframeから`window.top`と`window.parent`へ`backend.*`の呼び出しや応答の形のメッセージを送っても、実行されず、応答も奪われないこと。
 
 ## 要件定義書のリンク
 
-要件定義書と監査レポートのMarkdownは、Issueの内容に由来する。
-Windmillのraw appは、これをWindmillと同じオリジンで描く。
+要件定義書のMarkdownは、Issueの内容に由来する。
+Consoleは、これをWindmillと同じオリジンで描く。
 `rehype-sanitize`の既定のスキーマは`javascript:`などを除くが、任意の`http(s)`のURLの`a[href]`は通す。
 そのため、読み手がリンクの文字を信じて、外のページを開くおそれがある。
 
-`components/Markdown.tsx`は`a`を差し替え、`lib/markdownLink.ts`の`resolveMarkdownLink`で、リンクにするものを絞る。
+`src/components/markdown/Markdown.tsx`は`a`を差し替える。
+リンクにするものは、`src/lib/markdownLink.ts`の`resolveMarkdownLink`で絞る。
 
-- 作業項目と同じリポジトリのIssueとPRのURL。`lib/githubLink.ts`の`safeGitHubUrl`を通り、ownerとrepoが作業項目のものと一致するものに限る。ownerとrepoは、大文字小文字を区別せずに比べる。信頼できない本文が、読み手を別のリポジトリへ誘導できないようにするためである。
-- 同じページの見出しへのフラグメント。`#`で始まり、`lib/extractHeadings.ts`の`slugify`が作るslugと同じ形に限る。
+- 作業項目と同じリポジトリのIssueとPRのURL。`src/lib/safeUrl.ts`の`safeGitHubUrl`を通り、ownerとrepoが作業項目のものと一致するものに限る。ownerとrepoは、大文字小文字を区別せずに比べる。信頼できない本文が、読み手を別のリポジトリへ誘導できないようにするためである。
+- 同じページの見出しへのフラグメント。`#`で始まり、`slugify`が作るslugと同じ形に限る。
 
-`Markdown`は、リポジトリを`repo`の引数で受ける。要件定義書(`RequirementsDocument`)と承認タブの提案は、作業項目のownerとrepoを渡す。
-監査レポート(`AuditTab`)のように渡せない呼び出し元では、GitHubのURLもリンクにせず、文字で出す。
 それ以外は、リンクにせず文字で出す。
 リンクの文字とURLが違うときは、URLも括弧で添える。
 読み手が行き先を判断できるようにするためである。
@@ -932,9 +898,6 @@ Windmillのraw appは、これをWindmillと同じオリジンで描く。
 同じページの見出しへのリンクは、行き先を取り違えようがないので、URLを添えない。
 GitHubへのリンクは、`rel="noopener noreferrer"`を付けて新しいタブで開く。
 
-新しいConsoleの`src/components/markdown/Markdown.tsx`も、同じ規則でリンクを絞る。
-判定は`src/lib/markdownLink.ts`の`resolveMarkdownLink`である。
-`src/lib/safeUrl.ts`の`safeGitHubUrl`を通り、作業項目と同じリポジトリのURLだけを、リンクにする。
 `Markdown`が`repo`を必須の引数で受けるので、リポジトリを渡さずにGitHubのURLをリンクにする経路は無い。
 見出しへのフラグメントは、接頭辞`h-`を付けた見出しの`id`を指すように読み替える。
 見出しの`id`が、ページの他の要素の`id`や`name`と重ならないようにするためである。
@@ -1015,7 +978,7 @@ markdownlint-cli2とtextlintの設定(`.markdownlint-cli2.jsonc`、`.textlintrc.
 Consoleでバンドルを通らずに配信される`console/public/`と`console/index.html`も止める。
 配信するdraw.ioのビューアを固定する`console/drawio-viewer.json`も止める。
 固定を強制し、配信物を作って検査するスクリプトも止める。
-旧Consoleのraw appが図を隔離して描く部品(iframeを作る`DrawioViewer.tsx`、`src`とsandboxの定数、iframeとの状態の遷移、それらを照合するテスト)も止める。一覧は`f/factory/lib/protected_paths.ts`の`FORBIDDEN_EXACT_PATHS`にある。
+図を隔離して描くiframeの検査(`tests/lib/drawio_frame_isolation.test.ts`)も止める。一覧は`f/factory/lib/protected_paths.ts`の`FORBIDDEN_EXACT_PATHS`にある。
 CIがどのジョブを動かすかを決める`scripts/ci-scope.ts`も止める。書き換えられると、検査のジョブを飛ばされるためである。
 配信のCSPを持つ`infra/Caddyfile`と、配信物を検証する`infra/console_fetcher/`も止める。
 一覧は`f/factory/lib/protected_paths.ts`にある。
@@ -1253,7 +1216,7 @@ git、gh、Claude、検査コマンドは、新しいプロセスグループで
 | ツールの制限 | Claudeのツールは`Read`、`Glob`、`Grep`、`Edit`だけにする。`Edit`はカレントディレクトリの`report.md`にだけ使わせ、`Write`は許可しない |
 | self cloneは見せない | `audit_generate`は、self cloneのHEADから使い捨てのdetached worktree(`/var/lib/factory/audits/wi-<id>-snapshot`)を作り、`--add-dir`、テンプレート、スキルをそこに向ける。スナップショットは成否に関わらず`finally`で消し、ステップの再試行で作り直す |
 | 出力の機械検査 | Issueになる提案のtitle、body、summaryは、HTMLコメント、禁止した記法、許可リスト(Factory自身のGitHubのURLとWindmillの公開URL)の外のURLを検査する。レポート本文は対象リポジトリのURLを引用するのでURLの検査から外し、章立て、HTMLコメント、改善提案の表と構造化出力の一致を検査する。検査に通らない出力は保存しない |
-| 人の承認が最後のゲート | 検査に通った提案も、Consoleの承認タブで人が承認するまでIssueにならない。承認された提案だけが`factory_repo`にIssueとして起票される |
+| 人の承認が最後のゲート | 検査に通った提案も、Consoleの要対応で人が承認するまでIssueにならない。承認された提案だけが`factory_repo`にIssueとして起票される |
 
 self cloneは`self_update`のデプロイ元なので、Claudeに書き換えられないよう直接は渡さない。
 
@@ -1261,7 +1224,7 @@ self cloneは`self_update`のデプロイ元なので、Claudeに書き換えら
 
 承認できるのは、`f/factory/**`のスクリプトを実行できるアカウントである。実行の権限はフォルダ`f/factory`の権限で決まり、このフォルダには所有者も追加の権限も付けていないので、ワークスペースの管理者だけが該当する。
 
-承認は必ずConsoleの承認タブ(`approval_decide`を実行する)から行う。Windmillのapproval pageのURLは署名付きのcapability URLなので、PRのコメントやDiscordの通知に載せない。approval pageのURLから直接resumeすると承認の状態が記録されず、作業項目は人の対応待ちになる。
+承認は必ずConsoleの要対応(`approval_decide`を実行する)から行う。Windmillのapproval pageのURLは署名付きのcapability URLなので、PRのコメントやDiscordの通知に載せない。approval pageのURLから直接resumeすると承認の状態が記録されず、作業項目は人の対応待ちになる。
 
 承認者は`f/factory/lib/approver.ts`の`deriveApprover`が導出する。記録先は`approval_requests.decided_by`と`issue_proposals.decided_by`である。Windmillのログインユーザー名(`WM_USERNAME`)を優先し、無ければ`WM_EMAIL`を使い、どちらも無ければ例外で処理を止める。呼び出し元が渡す引数は承認者として信頼しない。承認者が不明なまま既定値で記録することは無い。
 
@@ -1319,7 +1282,7 @@ GitHubでは、ラベルを付けるのにtriage以上の権限が要る。
 
 拒否したときは、ラベルを外さずに、noticeの`labeler_denied`を記録する。
 本文は対象とラベルだけで決まり、同じ本文の未解決のnoticeがあるあいだは追加しない。
-イベントの取得に失敗したときは、noticeを増やさず、**失敗**タブに記録する。
+イベントの取得に失敗したときは、noticeを増やさず、失敗の記録を残す。Consoleの**システム**の「作業項目に紐づかない失敗」に出る。
 記録されるステップ名は、Issueが`fetch_labeler:<owner>/<repo>#<番号>`、PRが`fetch_pr:<owner>/<repo>#<番号>`である。
 
 付与者を判定できないときは、失敗ではなく、noticeの`labeler_check_limit`を1回だけ記録する。
@@ -1331,7 +1294,7 @@ noticeは、対応した後にConsoleで解決する。
 
 判定から取得までには時間差があるので、取得の直前に同じ確認をもう一度行う。
 拒否されたときは、取得せずに`labeler_denied`を記録する。
-取得できなかったときは、取得せず、**失敗**タブに`confirm_labeler:<owner>/<repo>#<番号>`として記録する。
+取得できなかったときは、取得せず、失敗の記録に`confirm_labeler:<owner>/<repo>#<番号>`として残す。Consoleの**システム**の「作業項目に紐づかない失敗」に出る。
 このときラベルは外れていないので、操作は要らない。
 次のポーリングが、自動で拾い直す。
 ラベルを付け直すと、付与者がその人に変わる。

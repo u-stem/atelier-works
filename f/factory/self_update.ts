@@ -54,7 +54,6 @@ import {
 } from "./lib/self_update_pull_requests.ts";
 import {
   assertBranchMatches,
-  buildNpmCiArgv,
   buildWmillArgv,
   buildWmillEnv,
   classifyChangedPaths,
@@ -62,7 +61,6 @@ import {
   MISE_TOML_PATH,
   miseTomlNeedsHostAction,
   parseNulSeparatedPaths,
-  RAW_APP_RELATIVE_DIR,
   readDeployedSha,
   recordSuccessDeployment,
   resolveWmillCliContext,
@@ -466,8 +464,8 @@ export const SELF_UPDATE_GIT_COMMAND_COUNT =
 export const SELF_UPDATE_LOCAL_GIT_COMMAND_COUNT =
   1 + (HOST_ACTION_RECONCILE_LIMIT + 1);
 
-/** 1回の実行で走る`npm ci`、`wmill sync push`、`wmill datatable migrate up`の回数。 */
-export const SELF_UPDATE_CLI_COMMAND_COUNT = 3;
+/** 1回の実行で走る`wmill sync push`と`wmill datatable migrate up`の回数。 */
+export const SELF_UPDATE_CLI_COMMAND_COUNT = 2;
 
 /**
  * 1回の実行で通りうる、`SELF_UPDATE_CALL_TIMEOUT_MS`で区切った呼び出しの最大回数。通知は含めない。
@@ -680,22 +678,6 @@ async function updateSelf(
     });
 
     await assertWmillYamlExists(factoryClone.dir);
-
-    // Consoleのraw appは`wmill sync push`がこのcloneからバンドルするので、
-    // npmの依存が最新の状態で揃っている必要がある(新しいコミットで足した依存は、
-    // それ以前に入れた`node_modules`には無い)。`npm ci`は`package-lock.json`を
-    // 書き換えず、固定された版をそのまま入れる(`buildNpmCiArgv`を参照)。
-    const rawAppDir = `${factoryClone.dir}/${RAW_APP_RELATIVE_DIR}`;
-    if (await pathExists(`${rawAppDir}/package-lock.json`)) {
-      await runWmillCli(
-        buildNpmCiArgv(rawAppDir),
-        factoryClone.dir,
-        env,
-        log,
-        "npm ci (raw app)",
-        secrets,
-      );
-    }
 
     await runWmillCli(
       buildWmillArgv(
