@@ -98,6 +98,11 @@ describe("parseFactoryConfig timeouts against the job temp directory age limit",
     expect(parseFactoryConfig(raw).claude_timeout_sec).toBe(limit);
   });
 
+  test("accepts an implement_timeout_sec at the limit", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, implement_timeout_sec: limit };
+    expect(parseFactoryConfig(raw).implement_timeout_sec).toBe(limit);
+  });
+
   test("rejects an implement_timeout_sec above the limit", () => {
     const raw = { ...LEGACY_RAW_CONFIG, implement_timeout_sec: limit + 1 };
     expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);

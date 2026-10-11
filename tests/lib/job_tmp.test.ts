@@ -87,7 +87,7 @@ const dir = (overrides: Partial<JobTmpStat> = {}): JobTmpStat => ({
 const JOB_DIR_A = `${JOB_TMP_ROOT}/${JOB_TMP_PREFIX}${JOB_A}`;
 
 describe("jobTmpDirPath", () => {
-  test("puts the directory under the Windmill temp root", () => {
+  test("puts the directory under the job temp root", () => {
     expect(jobTmpDirPath({ WM_JOB_ID: JOB_A })).toBe(JOB_DIR_A);
   });
 
@@ -224,7 +224,7 @@ describe("with the real file system", () => {
 
   beforeEach(() => {
     base = mkdtempSync(join(tmpdir(), "job-tmp-test-"));
-    root = join(base, "windmill");
+    root = join(base, "job-tmp-root");
   });
 
   afterEach(() => {
