@@ -350,6 +350,22 @@ describe("listDifferingPaths", () => {
     await expect(listDifferingPaths(run, DIR, A, B)).rejects.toThrow();
   });
 
+  test("names the timeout as the cause when git diff times out", async () => {
+    const { run } = createFakeCommandRunner([timeout()]);
+    await expect(listDifferingPaths(run, DIR, A, B)).rejects.toThrow(
+      `git diff timed out in ${DIR}`,
+    );
+  });
+
+  test("throws when the output was abandoned even if git diff succeeded", async () => {
+    const { run } = createFakeCommandRunner([
+      { ...ok("f/factory/x.ts\0"), outputAbandoned: true },
+    ]);
+    await expect(listDifferingPaths(run, DIR, A, B)).rejects.toThrow(
+      /abandoned/,
+    );
+  });
+
   test("throws on an invalid sha", async () => {
     const { run } = createFakeCommandRunner([ok("")]);
     await expect(

@@ -71,6 +71,7 @@ import {
 } from "./lib/self_update_support.ts";
 import { assertSha, type DeploymentPullRequest } from "./lib/types.ts";
 import {
+  assertOutputComplete,
   type CommandResult,
   type CommandRunner,
   DEFAULT_TIMEOUT_MS,
@@ -330,7 +331,7 @@ export const HOST_CONTENT_DIFF_MAX_BYTES = 1024 * 1024;
 /**
  * self cloneの`from`と`to`の間で内容が異なるパスを返す(`git diff --name-only --no-renames -z from to`)。
  * ホストの反映済みの版と内容を比べるために使う。改名を検出しないのは、旧名と新名の両方を列挙させるためである。
- * 失敗、時間切れ、出力が`HOST_CONTENT_DIFF_MAX_BYTES`を超えて間が省かれたときは、例外を投げる。
+ * 失敗、時間切れ、出力の読み取りの打ち切り、出力が`HOST_CONTENT_DIFF_MAX_BYTES`を超えて間が省かれたときは、例外を投げる。
  * 省かれた印に見えるパスがあっても、比べるのを諦めるだけで、反映済みにはならない。
  */
 export async function listDifferingPaths(
@@ -350,11 +351,15 @@ export async function listDifferingPaths(
       maxOutputBytes: HOST_CONTENT_DIFF_MAX_BYTES,
     },
   );
-  if (result.exitCode !== 0 || result.timedOut) {
+  if (result.timedOut) {
+    throw new Error(`git diff timed out in ${dir}`);
+  }
+  if (result.exitCode !== 0) {
     throw new Error(
       maskSecrets(`git diff failed in ${dir}: ${result.stderr.trim()}`),
     );
   }
+  assertOutputComplete(`git diff in ${dir}`, result);
   if (omittedMarkerIndex(result.stdout) >= 0) {
     throw new Error(`too many differing paths between ${from} and ${to}`);
   }

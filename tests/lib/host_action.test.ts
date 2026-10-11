@@ -212,16 +212,27 @@ describe("recordHostAction", () => {
     ).toBe(true);
   });
 
-  test("passes the host paths to the applied check", async () => {
-    const seen: Array<readonly string[] | null> = [];
-    const h = recordHarness({
-      isApplied: async (_sha, hostPaths) => {
-        seen.push(hostPaths);
-        return "not_applied";
-      },
+  test("notifies when a host path outside this change differs from the applied sha", async () => {
+    // 並行するPRを両方とも先にmise run upしてからマージした回は、この回の変更の外のinfra/も比べる。
+    const checker = checkerHarness({
+      applied: SHA_B,
+      differing: ["infra/worker/Dockerfile"],
     });
-    await recordHostAction(h.deps, SHA_A, ["infra/a", "mise.toml"]);
-    expect(seen).toEqual([["infra/a", "mise.toml"]]);
+    const h = recordHarness({ isApplied: checker.check });
+    expect(
+      await recordHostAction(h.deps, SHA_A, ["infra/docker-compose.yml"]),
+    ).toBe("recorded");
+  });
+
+  test("skips the notice when no host path differs from the applied sha", async () => {
+    const checker = checkerHarness({
+      applied: SHA_B,
+      differing: ["f/factory/x.ts"],
+    });
+    const h = recordHarness({ isApplied: checker.check });
+    expect(
+      await recordHostAction(h.deps, SHA_A, ["infra/docker-compose.yml"]),
+    ).toBe("already_applied");
   });
 
   test("notifies when the applied check throws", async () => {
@@ -249,8 +260,6 @@ describe("recordHostAction", () => {
 
 /** 反映済みの版と内容が異なるパスの既定。ホスト側のパスを含むので、内容の比較では反映済みにならない。 */
 const DIFFERING_HOST_PATHS = ["infra/docker-compose.yml", "mise.toml"];
-
-const HOST_PATHS = ["infra/docker-compose.yml"];
 
 function checkerHarness(options: {
   applied?: string | Error;
@@ -298,53 +307,32 @@ const missingFile = () =>
 
 describe("hostAppliedChecker", () => {
   test("covers the same sha", async () => {
-    expect(
-      await checkerHarness({ applied: SHA_A }).check(SHA_A, HOST_PATHS),
-    ).toBe("included");
+    expect(await checkerHarness({ applied: SHA_A }).check(SHA_A)).toBe(
+      "included",
+    );
   });
 
   test("covers an ancestor of the applied sha", async () => {
     const h = checkerHarness({ applied: SHA_B, ancestors: [[SHA_A, SHA_B]] });
-    expect(await h.check(SHA_A, HOST_PATHS)).toBe("included");
+    expect(await h.check(SHA_A)).toBe("included");
   });
 
   test("does not compare the content of an ancestor", async () => {
     const h = checkerHarness({ applied: SHA_B, ancestors: [[SHA_A, SHA_B]] });
-    await h.check(SHA_A, HOST_PATHS);
+    await h.check(SHA_A);
     expect(h.compared).toEqual([]);
   });
 
   test("does not cover a sha that is not an ancestor when the host paths differ", async () => {
-    expect(
-      await checkerHarness({ applied: SHA_B }).check(SHA_A, HOST_PATHS),
-    ).toBe("not_applied");
-  });
-
-  test("covers a sha that is not an ancestor when the host paths have the same content", async () => {
-    const h = checkerHarness({ applied: SHA_B, differing: ["f/factory/x.ts"] });
-    expect(await h.check(SHA_A, HOST_PATHS)).toBe("same_content");
+    expect(await checkerHarness({ applied: SHA_B }).check(SHA_A)).toBe(
+      "not_applied",
+    );
   });
 
   test("compares the applied sha with the sha", async () => {
     const h = checkerHarness({ applied: SHA_B, differing: [] });
-    await h.check(SHA_A, HOST_PATHS);
+    await h.check(SHA_A);
     expect(h.compared).toEqual([[SHA_B, SHA_A]]);
-  });
-
-  test("does not cover a sha when one of the host paths differs", async () => {
-    const h = checkerHarness({ applied: SHA_B, differing: ["mise.toml"] });
-    expect(await h.check(SHA_A, ["infra/a", "mise.toml"])).toBe("not_applied");
-  });
-
-  test("does not cover a sha by content when the host paths are empty", async () => {
-    const h = checkerHarness({ applied: SHA_B, differing: [] });
-    expect(await h.check(SHA_A, [])).toBe("not_applied");
-  });
-
-  test("does not compare the content when the host paths are empty", async () => {
-    const h = checkerHarness({ applied: SHA_B, differing: [] });
-    await h.check(SHA_A, []);
-    expect(h.compared).toEqual([]);
   });
 
   test("does not cover a sha when the content comparison fails", async () => {
@@ -352,7 +340,7 @@ describe("hostAppliedChecker", () => {
       applied: SHA_B,
       differing: new Error("git diff failed"),
     });
-    expect(await h.check(SHA_A, HOST_PATHS)).toBe("not_applied");
+    expect(await h.check(SHA_A)).toBe("not_applied");
   });
 
   test("warns when the content comparison fails", async () => {
@@ -360,51 +348,51 @@ describe("hostAppliedChecker", () => {
       applied: SHA_B,
       differing: new Error("git diff failed"),
     });
-    await h.check(SHA_A, HOST_PATHS);
+    await h.check(SHA_A);
     expect(h.lines.some((l) => l.includes("could not be compared"))).toBe(true);
   });
 
-  test("covers a sha when no host path differs and the host paths are unknown", async () => {
+  test("covers a sha that is not an ancestor when only paths without host action differ", async () => {
     const h = checkerHarness({
       applied: SHA_B,
       differing: ["f/factory/x.ts", "scripts/up.sh"],
     });
-    expect(await h.check(SHA_A, null)).toBe("same_content");
+    expect(await h.check(SHA_A)).toBe("same_content");
   });
 
-  test("does not cover a sha when an infra path differs and the host paths are unknown", async () => {
+  test("does not cover a sha that is not an ancestor when an infra path differs", async () => {
     const h = checkerHarness({
       applied: SHA_B,
       differing: ["infra/Caddyfile"],
     });
-    expect(await h.check(SHA_A, null)).toBe("not_applied");
+    expect(await h.check(SHA_A)).toBe("not_applied");
   });
 
-  test("does not cover a sha when mise.toml differs and the host paths are unknown", async () => {
+  test("does not cover a sha that is not an ancestor when mise.toml differs", async () => {
     const h = checkerHarness({ applied: SHA_B, differing: ["mise.toml"] });
-    expect(await h.check(SHA_A, null)).toBe("not_applied");
+    expect(await h.check(SHA_A)).toBe("not_applied");
   });
 
   test("does not cover anything when nothing is recorded", async () => {
     const h = checkerHarness({ applied: missingFile() });
-    expect(await h.check(SHA_A, HOST_PATHS)).toBe("not_applied");
+    expect(await h.check(SHA_A)).toBe("not_applied");
   });
 
   test("stays silent when the file does not exist", async () => {
     const h = checkerHarness({ applied: missingFile() });
-    await h.check(SHA_A, HOST_PATHS);
+    await h.check(SHA_A);
     expect(h.lines).toEqual([]);
   });
 
   test("warns when the file cannot be read for another reason", async () => {
     const h = checkerHarness({ applied: new Error("EACCES") });
-    await h.check(SHA_A, HOST_PATHS);
+    await h.check(SHA_A);
     expect(h.lines.some((l) => l.includes("could not be read"))).toBe(true);
   });
 
   test("does not cover anything when the value is not a sha", async () => {
     const h = checkerHarness({ applied: "garbage", differing: [] });
-    expect(await h.check(SHA_A, HOST_PATHS)).toBe("not_applied");
+    expect(await h.check(SHA_A)).toBe("not_applied");
   });
 
   test("does not cover a sha when the ancestry check fails", async () => {
@@ -413,7 +401,7 @@ describe("hostAppliedChecker", () => {
       isAncestorThrows: true,
       differing: [],
     });
-    expect(await h.check(SHA_A, HOST_PATHS)).toBe("not_applied");
+    expect(await h.check(SHA_A)).toBe("not_applied");
   });
 
   test("does not cover anything when the applied sha is not in the clone", async () => {
@@ -422,13 +410,13 @@ describe("hostAppliedChecker", () => {
       commitExists: false,
       differing: [],
     });
-    expect(await h.check(SHA_B, HOST_PATHS)).toBe("not_applied");
+    expect(await h.check(SHA_B)).toBe("not_applied");
   });
 
   test("warns once about a missing commit however many shas it checks", async () => {
     const h = checkerHarness({ applied: SHA_B, commitExists: false });
-    await h.check(SHA_A, HOST_PATHS);
-    await h.check(SHA_C, HOST_PATHS);
+    await h.check(SHA_A);
+    await h.check(SHA_C);
     expect(
       h.lines.filter((l) => l.includes("not in the self clone")),
     ).toHaveLength(1);
@@ -440,13 +428,13 @@ describe("hostAppliedChecker", () => {
       commitExistsThrows: true,
       differing: [],
     });
-    expect(await h.check(SHA_B, HOST_PATHS)).toBe("not_applied");
+    expect(await h.check(SHA_B)).toBe("not_applied");
   });
 
   test("reads the file and looks up the commit only once", async () => {
     const h = checkerHarness({ applied: SHA_B });
-    await h.check(SHA_A, HOST_PATHS);
-    await h.check(SHA_C, HOST_PATHS);
+    await h.check(SHA_A);
+    await h.check(SHA_C);
     expect([h.reads.length, h.lookups.length]).toEqual([1, 1]);
   });
 });
@@ -510,7 +498,6 @@ function reconcileHarness(options: {
   const resolved: number[] = [];
   const lines: string[] = [];
   const checked: string[] = [];
-  const hostPathsSeen: Array<readonly string[] | null> = [];
   const log = logger("test", { sink: (line) => lines.push(line) });
   const check = hostAppliedChecker({
     readAppliedSha: async () => {
@@ -538,17 +525,14 @@ function reconcileHarness(options: {
       if (options.listThrows === true) throw new Error("db down");
       return options.rows ?? [];
     },
-    isApplied: (sha, hostPaths) => {
-      hostPathsSeen.push(hostPaths);
-      return check(sha, hostPaths);
-    },
+    isApplied: check,
     resolve: async (id) => {
       resolved.push(id);
       return true;
     },
     log,
   };
-  return { deps, resolved, lines, checked, hostPathsSeen };
+  return { deps, resolved, lines, checked };
 }
 
 describe("reconcileHostActionNotices", () => {
@@ -599,15 +583,6 @@ describe("reconcileHostActionNotices", () => {
     });
     await reconcileHostActionNotices(h.deps);
     expect(h.resolved).toEqual([]);
-  });
-
-  test("asks the applied check to classify the host paths again", async () => {
-    const h = reconcileHarness({
-      applied: SHA_B,
-      rows: [noticeRow(1, SHA_A)],
-    });
-    await reconcileHostActionNotices(h.deps);
-    expect(h.hostPathsSeen).toEqual([null]);
   });
 
   test("keeps a notice for a sha newer than the applied sha", async () => {

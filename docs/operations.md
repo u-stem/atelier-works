@@ -1406,6 +1406,8 @@ workerの並列数(`NUM_WORKERS`)のような`infra/docker-compose.yml`の変更
 
 続けて、起動の最後に`scripts/record-host-applied.sh`を呼ぶ。
 このスクリプトは、ホストのcheckoutのHEADを、workerの共有ボリュームの`/var/lib/factory/host_applied_sha`に書く。
+書くのは作業ツリーではなくHEADなので、`infra/`か`mise.toml`に未コミットの変更を残したまま`mise run up`しても、HEADの版を反映済みとして書く。
+そのときは、ホストの構成とHEADの食い違いを残したまま通知が解決されうるので、変更をコミットするか戻してから`mise run up`を実行する。
 自己更新は10分ごとにこの値を読む。
 通知`host_action_required`の版が、この値と同じか祖先であれば、通知を自動で解決する。
 ホストのcheckoutがその版を含んで起動し直されたことを、確かめられるためである。
@@ -1414,6 +1416,8 @@ PRのブランチで先に`mise run up`した場合、マージの版はPRのブ
 
 自己更新が反映した時点で、ホストがその版か、`infra/`と`mise.toml`の内容が同じ版を反映済みなら、通知とDiscordのどちらも出さない。
 運用者が先に`mise run deploy`やPRのブランチでの`mise run up`で反映した場合に、操作の要らない通知を送らないためである。
+通知を出すときと解決するときの両方で、その回の変更のパスだけでなく、`infra/`と`mise.toml`のすべてを比べる。
+並行する2つのPRを両方とも先に`mise run up`してからマージしたとき、もう一方のPRの`infra/`の違いを見落とさないためである。
 比べ方の詳細は[通知の仕様](internals/notifications.md)にある。
 
 値を書けなかったときは警告が出るが、起動は成功のまま終わる。
