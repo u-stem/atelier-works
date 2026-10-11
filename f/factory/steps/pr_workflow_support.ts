@@ -58,8 +58,10 @@ import {
 } from "../lib/types.ts";
 import {
   assertOutputComplete,
+  buildGitArgv,
   type CommandRunner,
   type GitleaksScan,
+  localGitEnv,
   readGitShowFile,
 } from "../lib/workspace.ts";
 
@@ -4234,34 +4236,21 @@ export function nextActionFor(reason: string, flow?: NextActionFlow): string {
 // I/O: `workspace.ts`が公開していないgitの補助
 // ---------------------------------------------------------------------------
 
+/** `lib/workspace.ts`の`buildGitArgv`と同じ、設定を固定したgitのargvを返す。 */
 function gitHardeningArgv(extra: readonly string[]): string[] {
-  return [
-    "git",
-    "-c",
-    "core.hooksPath=/dev/null",
-    "-c",
-    "core.fsmonitor=false",
-    "-c",
-    "credential.helper=",
-    ...extra,
-  ];
+  return buildGitArgv(extra);
 }
 
+/**
+ * `lib/workspace.ts`の`localGitEnv`(システムとグローバルの設定を読まない環境変数)に、
+ * `base`を重ねて返す。
+ */
 function resolvedEnv(
   base: Record<string, string>,
   home: string | undefined,
   path: string | undefined,
 ): Record<string, string> {
-  // `refs/replace/`で差し替えられたオブジェクトを読まない(`lib/workspace.ts`の`localGitEnv`と同じ理由)。
-  const env: Record<string, string> = {
-    ...base,
-    GIT_NO_REPLACE_OBJECTS: "1",
-  };
-  const resolvedHome = home ?? process.env.HOME;
-  if (resolvedHome !== undefined) env.HOME = resolvedHome;
-  const resolvedPath = path ?? process.env.PATH;
-  if (resolvedPath !== undefined) env.PATH = resolvedPath;
-  return env;
+  return { ...base, ...localGitEnv(home, path) };
 }
 
 export type ReadFileFn = (path: string) => Promise<string>;

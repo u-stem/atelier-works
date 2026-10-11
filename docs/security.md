@@ -595,31 +595,51 @@ worktreeの`.git`ファイルは、準備のときに検証して中身を記録
 
 ### gitが読む設定を限る
 
-`f/factory/lib/workspace.ts`が実行するgitは、システムとグローバルの設定を読まない。
-環境変数`GIT_CONFIG_NOSYSTEM`、`GIT_CONFIG_SYSTEM`、`GIT_CONFIG_GLOBAL`、`GIT_ATTR_NOSYSTEM`を設定して読ませない。
-workerのHOMEやホストの設定が、検証の前提を変えないためである。
+`f/factory/lib/workspace.ts`と`f/factory/steps/pr_workflow_support.ts`が実行するgitは、読む設定を同じ方法で限る。
+どちらも`workspace.ts`の`buildGitArgv`と`localGitEnv`を使う。
+
+システムとグローバルの設定は、環境変数`GIT_CONFIG_NOSYSTEM`、`GIT_CONFIG_SYSTEM`、`GIT_CONFIG_GLOBAL`、`GIT_ATTR_NOSYSTEM`で読ませない。
+workerのホストの設定が、検証の前提を変えないためである。
 コミットのauthorは環境変数で、認証は`GH_TOKEN`で渡すので、これらの設定は要らない。
+workerのイメージは、グローバルのgit設定もgtrのグローバル設定も持たない。
+HOMEは、gitではなく、gitが起動するghなどの子プロセスが使うので渡す。
+
+転送はhttpsだけを許す。環境変数`GIT_ALLOW_PROTOCOL`を`https`にする。
+`.git/config`に`protocol.ext.allow=always`と`ext::`のremoteを書かれると、`GH_TOKEN`を持つ環境でコマンドを実行されうる。
+この環境変数は`protocol.*`の設定より優先されるので、設定ファイルでは許可を広げられない。
+対象のremoteはhttpsだけなので、fileやsshは使えなくてよい。
 
 main cloneの`.git/config`は、gitがremoteやブランチの設定を読むので、読ませないことはできない。
 `extensions.worktreeConfig`が有効なときは、worktreeごとの`config.worktree`も読まれる。
 どちらも検査コマンドが書き換えられ、`-c`では`config.worktree`の読み込みを止められない。
 そこで、プログラムの実行と検証の前提に関わる設定を、コマンドラインの`-c`で固定する。
 `-c`はどの設定ファイルよりも優先されるので、設定ファイルに別の値を書かれても効かない。
+`git gtr`の子のgitにも、環境変数`GIT_CONFIG_PARAMETERS`を通して渡る。
 
 | 設定 | 固定する値 | 防ぐこと |
 | --- | --- | --- |
 | `core.hooksPath` | `/dev/null` | 設定のフックの実行 |
 | `core.fsmonitor` | `false` | 設定のfsmonitorのヘルパーの実行 |
 | `core.askPass` | 空 | 設定のaskpassのプログラムの実行 |
-| `commit.gpgsign` | `false` | `gpg.program`に書かれたプログラムの実行 |
+| `commit.gpgsign` | `false` | commitの署名で`gpg.program`を実行させること |
 | `core.symlinks` | `false` | symlinkの検出が前提にする値の巻き戻し |
+| `core.excludesFile` | `/dev/null` | `$HOME/.config/git/ignore`の読み込み |
+| `core.attributesFile` | `/dev/null` | `$HOME/.config/git/attributes`の読み込み |
 | `credential.helper` | 空 | 設定のcredential helperの実行 |
 
+`ignore`と`attributes`は設定ファイルではないので、`GIT_CONFIG_GLOBAL`では止まらない。
 ネットワーク操作では、この後にghのcredential helperを加える。
 
+`core.symlinks=false`はFactory自身のself cloneにも効く。
+Factoryのリポジトリにsymlinkを足すと、self cloneでは普通のファイルになる。
+
 固定していない設定は、そのまま読まれる。
-`url.*.insteadOf`、`http.*`、`filter.*`、`diff.*`などは、キーが対象ごとに変わり、名前で固定できないためである。
-remoteのURLを書き換えられても、ghのcredential helperはGitHub以外のホストにトークンを返さない。
+`url.*.insteadOf`、`remote.*.pushurl`、`http.*`、`filter.*`、`diff.*`などは、キーが対象ごとに変わり、名前で固定できない。
+これは残るリスクである。
+検査コマンドはworkerのrootとして隔離なしに動く([検査コマンドはフローが実行する](#検査コマンドはフローが実行する))。
+そのため、`.git/config`を書き換えなくても、gitプロセスの環境変数を読むなど、同じことができる。
+この隔離は、設定の誤動作への備えである。
+根本の対処は、検査コマンドの実行ユーザーをgitの実行ユーザーと分けることである。
 
 ### コミットの直前の再検査
 

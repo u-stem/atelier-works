@@ -597,8 +597,9 @@ symlinkのモードを引くときは`--literal-pathspecs`でパスを文字ど�
 ### symlinkと特殊なファイルの検出
 
 main cloneのconfigには`core.symlinks=false`を書いておく。
-gitの実行にも`-c core.symlinks=false`を付ける。
-検査コマンドが`.git/config`や`config.worktree`で`true`に戻しても、効かないようにするためである([セキュリティ](../security.md)の「gitが読む設定を限る」)。
+このモジュールが実行するgitには、`-c core.symlinks=false`も付ける。
+`-c`は`.git/config`や`config.worktree`より優先されるので、検査コマンドがそこで`true`に戻しても、このモジュールのgitには効かない([セキュリティ](../security.md)の「gitが読む設定を限る」)。
+configに書いた値は、このモジュールを通さずにClaudeや検査コマンドが実行するgit向けの既定である。
 PR修正の検証は、symlinkの新規作成(未追跡のものを含む)、変更、削除、typechangeで止める結果を返す。symlinkは次の3つで探し、どれかで見つかれば止める。
 
 | 探し方 | 見つけるもの |
