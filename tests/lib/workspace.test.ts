@@ -673,12 +673,21 @@ describe("git config isolation", () => {
   });
 
   test("local git points TMPDIR at the given job directory", () => {
-    const env = localGitEnv(
-      "/home/x",
-      "/usr/bin",
-      "/tmp/windmill/factory-job-x",
-    );
-    expect(env.TMPDIR).toBe("/tmp/windmill/factory-job-x");
+    const env = localGitEnv("/home/x", "/usr/bin", "/tmp/windmill/fj-x");
+    expect(env.TMPDIR).toBe("/tmp/windmill/fj-x");
+  });
+
+  test("local git takes TMPDIR from the job id by default", () => {
+    const jobId = "0198a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5c";
+    const saved = process.env.WM_JOB_ID;
+    process.env.WM_JOB_ID = jobId;
+    try {
+      const env = localGitEnv("/home/x", "/usr/bin");
+      expect(env.TMPDIR).toBe(`/tmp/windmill/fj-${jobId}`);
+    } finally {
+      if (saved === undefined) delete process.env.WM_JOB_ID;
+      else process.env.WM_JOB_ID = saved;
+    }
   });
 
   test("local git leaves TMPDIR unset outside a job", () => {

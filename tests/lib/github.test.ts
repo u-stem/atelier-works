@@ -149,11 +149,9 @@ describe("getViewer", () => {
     await getViewer({
       run: fake.run,
       ghToken: "tok",
-      tmpDir: "/tmp/windmill/factory-job-x",
+      tmpDir: "/tmp/windmill/fj-x",
     });
-    expect(fake.calls[0]?.options?.env?.TMPDIR).toBe(
-      "/tmp/windmill/factory-job-x",
-    );
+    expect(fake.calls[0]?.options?.env?.TMPDIR).toBe("/tmp/windmill/fj-x");
   });
 
   test("leaves TMPDIR unset outside a job", async () => {

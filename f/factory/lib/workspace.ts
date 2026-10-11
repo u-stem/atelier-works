@@ -561,7 +561,7 @@ function remoteTrackingRef(branch: string): string {
 
 /**
  * ネットワークを使わないgitの操作の環境変数を返す。`GH_TOKEN`は含めない。
- * 渡す環境変数は、ここで挙げるものとHOMEとPATHだけである。
+ * 渡す環境変数は、ここで挙げるものとHOMEとPATH、ジョブの中ではジョブごとのTMPDIRだけである。
  * HOMEは、gitが起動するghなどの子プロセスと、gitの`~`の展開
  * (`.git/config`のパスの`~`、httpsの`$HOME/.netrc`)のために渡す。
  * workerのHOMEには`.netrc`を置かない前提である。
