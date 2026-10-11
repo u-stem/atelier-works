@@ -116,8 +116,6 @@ export type OverviewView = {
   readonly costLabel: string;
   readonly createdAt: string;
   readonly updatedAt: string;
-  /** 要件定義を作るのはIssueの作業項目だけである。 */
-  readonly hasRequirements: boolean;
 };
 
 function issueTarget(item: WorkItemOverview): TargetLink | null {
@@ -183,7 +181,6 @@ export function describeOverview(item: WorkItemOverview): OverviewView {
         : `${formatCostUsd(item.total_cost_usd)}(${item.run_count}回の実行)`,
     createdAt: item.created_at,
     updatedAt: item.updated_at,
-    hasRequirements: item.kind === "issue",
   };
 }
 
