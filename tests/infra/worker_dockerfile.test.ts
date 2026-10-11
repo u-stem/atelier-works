@@ -56,3 +56,39 @@ describe("infra/worker/Dockerfile PATH", () => {
     expect(linked).toBe(true);
   });
 });
+
+describe("infra/worker/Dockerfile check user", () => {
+  test("creates factory-check with the fixed uid 10001, no home and no login shell", () => {
+    const created = startingWith("RUN").some((line) =>
+      line.includes("useradd -u 10001 -M -s /usr/sbin/nologin factory-check"),
+    );
+    expect(created).toBe(true);
+  });
+
+  test("installs util-linux for setpriv", () => {
+    const installed = startingWith("RUN").some(
+      (line) => line.includes("apt-get install") && /\sutil-linux\b/.test(line),
+    );
+    expect(installed).toBe(true);
+  });
+
+  test("installs procps for pkill", () => {
+    const installed = startingWith("RUN").some(
+      (line) => line.includes("apt-get install") && /\sprocps\b/.test(line),
+    );
+    expect(installed).toBe(true);
+  });
+
+  test("verifies at build time that setpriv can drop to the check uid", () => {
+    const verified = startingWith("RUN").some((line) =>
+      line.includes(
+        "setpriv --reuid=10001 --regid=10001 --clear-groups -- id -u",
+      ),
+    );
+    expect(verified).toBe(true);
+  });
+
+  test("does not switch the image to a non-root USER", () => {
+    expect(startingWith("USER")).toEqual([]);
+  });
+});

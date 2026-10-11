@@ -305,6 +305,12 @@ workerには`no-new-privileges:true`と、プロセス数の上限(`deploy.resou
 
 workerのPATHには、rootのホームの`/root/.local/bin`を入れない。`claude`は`/usr/local/bin`のsymlinkから名前で起動する。
 
+イメージには、固定のuid 10001のユーザー`factory-check`を作ってある。
+このユーザーはホームを持たず、ログインシェルも使えない。
+uidの切り替えに使う`setpriv`と、残ったプロセスを止める`pkill`も入っている。
+このuidで動く処理は、検査コマンドを含めて無い。
+検査コマンドは、[検査コマンドはフローが実行する](#検査コマンドはフローが実行する)のとおりrootで動く。
+
 ## Console用workerの境界
 
 Console用のworker(`windmill_worker_console`)は、Consoleの問い合わせと操作の受付だけを処理する。

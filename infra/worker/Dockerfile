@@ -27,7 +27,15 @@ RUN apt-get update \
         curl \
         git \
         jq \
+        procps \
+        util-linux \
     && rm -rf /var/lib/apt/lists/*
+
+# 検査コマンドを実行するための非特権ユーザー。uidを固定するのは、ボリュームの
+# 所有者や`setpriv`の引数がuidで決まり、再ビルドで変わってはいけないため。
+# ホームもログインシェルも持たせない。`setpriv`(util-linux)で切り替え、
+# 残った子プロセスは`pkill`(procps)で止める。
+RUN useradd -u 10001 -M -s /usr/sbin/nologin factory-check
 
 # gh CLI: 公式のリリースのtarball(アーキテクチャ別)から入れ、リリースの
 # `checksums.txt`で検証する。壊れた・改ざんされたダウンロードを黙って入れず、
@@ -104,6 +112,7 @@ ENV PATH="/usr/local/bin:/tmp/.local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbi
 # ビルド時の検証。道具が欠けている・壊れているとき、ジョブの実行時に
 # 気づくのではなく、その場でビルドを失敗させる。
 # `claude`はPATHの名前で解決して確かめる。
-RUN claude --version && gh --version && gitleaks version && git gtr version && wmill --version && bun --version
+RUN claude --version && gh --version && gitleaks version && git gtr version && wmill --version && bun --version \
+    && setpriv --reuid=10001 --regid=10001 --clear-groups -- id -u
 
 CMD ["windmill"]
