@@ -433,6 +433,9 @@ function removeStaleJobTmpDirs(log: Logger): number {
     if (result.failed.length > 0) {
       log.warn("cleanup: failed to remove some job temp directories", {
         paths: result.failed,
+        ...(result.rootError !== undefined
+          ? { root_error: maskSecrets(result.rootError) }
+          : {}),
       });
     }
     return result.removed.length;

@@ -237,12 +237,16 @@ export function jobTmpBase(): string {
 export type JobTmpSweepResult = {
   readonly removed: string[];
   readonly failed: string[];
+  /** 親のディレクトリを使えなかったときの理由。次の操作を含む。 */
+  readonly rootError?: string;
 };
 
 /**
  * ジョブの終了時に消されなかったジョブごとのディレクトリを、`JOB_TMP_MAX_AGE_SEC`を過ぎたものだけ消す。
  * 名前が`JOB_TMP_PREFIX`で始まる実ディレクトリだけが対象で、symlinkはたどらない。
- * 消す前に親のディレクトリを`ensureJobTmpDir`と同じ基準で確かめて直し、使えなければ何も消さず、親を失敗として返す。
+ * 消す前に親のディレクトリを`ensureJobTmpDir`と同じ基準で確かめて直し、使えなければ何も消さず、親を失敗として理由とともに返す。
+ * 子も同じ基準を満たすものだけを消す。他のユーザーの所有か、他のユーザーに開いているものは、rootで消さず失敗として返す。
+ * 他のユーザーが差し替えた木を、rootでたどらないためである。
  * 1件が消せなくても残りを続け、消せなかったものを返す。
  */
 export function sweepStaleJobTmpDirs(
@@ -255,8 +259,9 @@ export function sweepStaleJobTmpDirs(
   if (fs.lstat(root) === null) return { removed, failed };
   try {
     ensureTrustedRoot(fs, root);
-  } catch {
-    return { removed, failed: [root] };
+  } catch (error) {
+    const rootError = error instanceof Error ? error.message : String(error);
+    return { removed, failed: [root], rootError };
   }
   for (const name of fs.readdir(root)) {
     if (!name.startsWith(JOB_TMP_PREFIX)) continue;
@@ -264,6 +269,10 @@ export function sweepStaleJobTmpDirs(
     const stat = fs.lstat(path);
     if (stat === null || !stat.isDirectory || stat.isSymbolicLink) continue;
     if (input.nowMs - stat.mtimeMs <= JOB_TMP_MAX_AGE_SEC * 1000) continue;
+    if (stat.uid !== fs.uid() || (stat.mode & GROUP_OTHER_BITS) !== 0) {
+      failed.push(path);
+      continue;
+    }
     try {
       fs.rm(path);
       removed.push(path);

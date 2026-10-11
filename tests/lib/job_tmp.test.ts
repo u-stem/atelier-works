@@ -426,6 +426,52 @@ describe("sweepStaleJobTmpDirs with a fake file system", () => {
     expect(removed).toEqual([]);
   });
 
+  test("returns the reason with the next step when the root is unusable", () => {
+    const { fs } = fakeFs({ [JOB_TMP_ROOT]: dir({ uid: 1234 }) });
+
+    expect(sweepStaleJobTmpDirs({ nowMs, fs }).rootError).toContain("chown");
+  });
+
+  test("does not remove an old directory owned by another user", () => {
+    const { fs, removed } = fakeFs({
+      [JOB_TMP_ROOT]: dir(),
+      [stale]: dir({ uid: 1234, mtimeMs: old }),
+    });
+
+    sweepStaleJobTmpDirs({ nowMs, fs });
+
+    expect(removed).toEqual([]);
+  });
+
+  test("reports an old directory owned by another user as failed", () => {
+    const { fs } = fakeFs({
+      [JOB_TMP_ROOT]: dir(),
+      [stale]: dir({ uid: 1234, mtimeMs: old }),
+    });
+
+    expect(sweepStaleJobTmpDirs({ nowMs, fs }).failed).toEqual([stale]);
+  });
+
+  test("does not remove an old directory that others can read", () => {
+    const { fs, removed } = fakeFs({
+      [JOB_TMP_ROOT]: dir(),
+      [stale]: dir({ mode: 0o755, mtimeMs: old }),
+    });
+
+    sweepStaleJobTmpDirs({ nowMs, fs });
+
+    expect(removed).toEqual([]);
+  });
+
+  test("reports an old directory that others can read as failed", () => {
+    const { fs } = fakeFs({
+      [JOB_TMP_ROOT]: dir(),
+      [stale]: dir({ mode: 0o750, mtimeMs: old }),
+    });
+
+    expect(sweepStaleJobTmpDirs({ nowMs, fs }).failed).toEqual([stale]);
+  });
+
   test("reports the root as failed when it belongs to another user", () => {
     const { fs } = fakeFs({
       [JOB_TMP_ROOT]: dir({ uid: 1234 }),
