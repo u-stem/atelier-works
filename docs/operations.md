@@ -1449,7 +1449,9 @@ mise exec -- docker compose -f infra/docker-compose.yml logs --tail 50 console_f
 戻した元の版のshaと中身は、`pin`とは別に、ボリュームの`revoked.json`にも記録する。
 この記録は`pin`を外しても残り、記録にある版は、`console:rollback`の戻し先に選ばれない。
 取り込みの整理は、保持の数え方にかかわらず、記録にある版を先に消す(配信中の版は消さない)。
-消えた版のshaは、整理が記録から外す。
+消えた版のshaも記録に残り、その版は取り込みの候補から外れる。
+戻した元のcommitは、`pin`を外した後も再び配信されない。
+shaと中身の記録は、それぞれ100件まで残し、超えると古いものから捨てる。
 `rolled_back_from`を持たない`pin`では、戻した元の版は消えない。
 消した版のページを開いたままのブラウザは、assetsを読み込めなくなる。
 開いたままのタブは、配信中の版の`/console/manifest.json`と`/console/status.json`を読んで、自分の版を確かめる。
@@ -1482,7 +1484,7 @@ Caddyfileを更新してCaddyを再起動するまでは、`/console/status.json
   同じ内容を`pin`が持ち、`console:unpin`が記録し直すためである。
 - `console:unpin`が記録を書けなかったときは、失敗を出して`pin`を外さない。
   原因を直してやり直す。
-- 戻した元の版と同じ中身が、`main`の最新の成功した実行として配信し直されると、その中身は記録から外れる。
+- 戻した元の版と同じ中身が、別のcommitの最新の成功した実行として配信し直されると、その中身は記録から外れる。
   `console:unpin --force`で外して`console_fetcher`が取り込んだ場合も同じである。
   外れたときは`revoked_digest_cleared`をログに出す。
   ワークフローを通った中身を意図して配信し直したものとして扱うためで、記録を手で編集する必要は無い。
@@ -1500,8 +1502,9 @@ Caddyfileを更新してCaddyを再起動するまでは、`/console/status.json
 `console:unpin`は、最新の成功した実行のshaと、その実行の`files`のsha256を、`pin`の記録と`revoked.json`の記録を合わせたものと照らす。
 `console:rollback`を重ねて`pin`が書き直されても、前に戻した版を落とさないためである。
 `revoked.json`の記録は、その中身が配信し直されるまで残る。
-中身(sha256)の記録は、整理で外れない。
-以前に戻した中身を意図して配信し直すときの出口は、`--force`である。
+shaと中身(sha256)の記録は、整理で外れない。
+以前に戻した中身を、別のcommitで意図して配信し直すときの出口は、`--force`である。
+戻した元のcommit自体は、`--force`で外しても再び配信されない。同じ中身の修正は、新しいcommitで`main`に入れる。
 次の場合は`pin`を外さず、理由を出して止まる。
 
 | 状況 | 人がすること |
@@ -1522,7 +1525,7 @@ Caddyfileを更新してCaddyを再起動するまでは、`/console/status.json
 
 確認を飛ばすオプションは2つある。
 `mise run console:unpin -- --force`は、`pin`と最新の実行についての確認(上の表の前の5行)を飛ばす。
-問題の版が再び配信されるのを承知の上で使う。
+問題の中身が別のcommitで再び配信されるのを承知の上で使う。
 `mise run console:unpin -- --ignore-cleanup`は、戻した元の版を消せていない確認を飛ばす。
 `--force`だけでは、この確認は飛ばない。
 `--ignore-cleanup`で外しても、消せていない版は`revoked.json`に記録が残る。
@@ -1556,6 +1559,23 @@ Caddyfileを更新してCaddyを再起動するまでは、`/console/status.json
 固定(`pin`)した状態は、更新が新しければ異常としない。
 
 Discordの通知とConsoleの通知には、上の表の次の操作が載る。詳しい原因は、取り込みのコンテナのログで確かめる。
+
+### タグのrulesetを確かめる
+
+`main`という名前のタグの実行は、`main`のブランチの実行と見分けがつかない。
+そのため、タグの作成と更新を管理者に限るrulesetを設定しておく。
+これは運用の前提で、リポジトリの管理者が設定する。
+
+設定は、次のコマンドで確かめる。
+
+```bash
+gh api repos/<owner>/<repo>/rulesets
+```
+
+一覧に、対象が`tag`のrulesetがあり、有効(`enforcement`が`active`)なことを確かめる。
+詳しい中身は、一覧の`id`を使って`gh api repos/<owner>/<repo>/rulesets/<id>`で読む。
+中身では、タグの作成と更新の制限があり、迂回できる者が管理者だけなことを確かめる。
+無いときは、設定するまで`console_fetcher`の取り込みを信頼しない。
 
 ### Console用workerを確かめる
 

@@ -3,6 +3,9 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   ARTIFACT_NAME,
+  CI_WORKFLOW_FILE,
+  CI_WORKFLOW_NAME,
+  CI_WORKFLOW_PATH,
   WORKFLOW_FILE,
   WORKFLOW_NAME,
   WORKFLOW_PATH,
@@ -53,7 +56,7 @@ function stepNamed(
 }
 
 const consoleDist = readYaml(join(WORKFLOWS_DIR, WORKFLOW_FILE));
-const ci = readYaml(join(WORKFLOWS_DIR, "ci.yml"));
+const ci = readYaml(join(WORKFLOWS_DIR, CI_WORKFLOW_FILE));
 
 function allUses(...documents: readonly Record<string, unknown>[]): string[] {
   const uses: string[] = [];
@@ -157,6 +160,27 @@ describe("console-dist.yml", () => {
 });
 
 describe("ci.yml", () => {
+  test("lives at the path the console_fetcher accepts", () => {
+    expect(existsSync(join(ROOT, CI_WORKFLOW_PATH))).toBe(true);
+  });
+
+  test("is named as the console_fetcher expects", () => {
+    expect(ci.name).toBe(CI_WORKFLOW_NAME);
+  });
+
+  test("runs only on push and pull_request", () => {
+    expect(Object.keys(recordAt(ci, "on")).sort()).toEqual([
+      "pull_request",
+      "push",
+    ]);
+  });
+
+  test("runs pushes only for the main branch, never for tags", () => {
+    expect(recordAt(recordAt(ci, "on"), "push")).toEqual({
+      branches: ["main"],
+    });
+  });
+
   test("uploads no artifact from any job", () => {
     const uploads = allUses(ci).filter((uses) =>
       uses.startsWith("actions/upload-artifact@"),

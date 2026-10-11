@@ -336,7 +336,6 @@ describe("runOnce", () => {
     await runOnce(deps(github.fetch));
     expect(github.calls.map((call) => new URL(call.url).pathname)).toEqual([
       "/repos/o/r/actions/workflows/console-dist.yml/runs",
-      "/repos/o/r/actions/workflows/ci.yml/runs",
     ]);
   });
 
@@ -610,6 +609,88 @@ describe("runOnce", () => {
     });
   });
 
+  describe("version order and revocation", () => {
+    /** 古い順に並べた版を、console-dist.ymlの成功した実行として配る。ci.ymlは`ciShas`の版だけ成功している。 */
+    function githubWith(shas: readonly string[], ciShas: readonly string[]) {
+      const runs: Record<string, unknown>[] = [];
+      const artifacts: Record<number, unknown[]> = {};
+      const blobs: Record<number, Uint8Array> = {};
+      shas.forEach((sha, index) => {
+        const id = index + 1;
+        const zip = buildRelease(sha, filesFor(sha.slice(0, 1).toUpperCase()));
+        runs.push(workflowRun(id, sha, `2026-10-0${index + 1}T00:00:00Z`));
+        artifacts[id] = [artifactJson(100 + id, sha, zip)];
+        blobs[100 + id] = zip;
+      });
+      return fakeGitHub({
+        runs,
+        ciRuns: ciShas.map((sha, index) => ciWorkflowRun(50 + index, sha)),
+        artifacts,
+        blobs,
+      });
+    }
+
+    test("stays on the served commit even when its ci.yml run is no longer listed", async () => {
+      await deploy(SHA_B, "B", 2);
+      const status = await runOnce(
+        deps(githubWith([SHA_A, SHA_B], [SHA_A]).fetch),
+      );
+      expect(status.sha).toBe(SHA_B);
+    });
+
+    test("does not check ci.yml once it reaches the served commit", async () => {
+      await deploy(SHA_B, "B", 2);
+      const github = githubWith([SHA_A, SHA_B], [SHA_A]);
+      await runOnce(deps(github.fetch));
+      expect(
+        github.calls.filter((call) => call.url.includes("/workflows/ci.yml/")),
+      ).toEqual([]);
+    });
+
+    test("deploys a newer commit that passed both workflows", async () => {
+      await deploy(SHA_A, "A", 1);
+      const status = await runOnce(
+        deps(githubWith([SHA_A, SHA_B], [SHA_A, SHA_B]).fetch),
+      );
+      expect(status.sha).toBe(SHA_B);
+    });
+
+    test("skips a revoked commit and serves the previous one", async () => {
+      await writeRevoked([SHA_B]);
+      const status = await runOnce(
+        deps(githubWith([SHA_A, SHA_B], [SHA_A, SHA_B]).fetch),
+      );
+      expect(status.sha).toBe(SHA_A);
+    });
+
+    test("keeps the revoked record after skipping the commit", async () => {
+      await writeRevoked([SHA_B]);
+      await runOnce(deps(githubWith([SHA_A, SHA_B], [SHA_A, SHA_B]).fetch));
+      expect((await readRevoked()).shas).toEqual([SHA_B]);
+    });
+
+    test("does not bring the revoked commit back on a later run", async () => {
+      await writeRevoked([SHA_B]);
+      const github = githubWith([SHA_A, SHA_B], [SHA_A, SHA_B]);
+      await runOnce(deps(github.fetch));
+      const status = await runOnce(deps(github.fetch));
+      expect(status.sha).toBe(SHA_A);
+    });
+
+    test("keeps current on the previous commit while the revoked one is newest", async () => {
+      await deploy(SHA_A, "A", 1);
+      await writeRevoked([SHA_B]);
+      await runOnce(deps(githubWith([SHA_A, SHA_B], [SHA_A, SHA_B]).fetch));
+      expect(await readlink(join(root, "current"))).toBe(`releases/${SHA_A}`);
+    });
+
+    test("reports no_successful_run when the only candidate is revoked", async () => {
+      await writeRevoked([SHA_B]);
+      const status = await runOnce(deps(githubWith([SHA_B], [SHA_B]).fetch));
+      expect(status.error).toBe("no_successful_run");
+    });
+  });
+
   test("reports no_successful_run when only a ci.yml run is listed", async () => {
     const ciRun = {
       ...workflowRun(1, SHA_A),
@@ -765,15 +846,15 @@ describe("runOnce", () => {
     expect(await exists(join(root, "releases", SHA_B))).toBe(true);
   });
 
-  test("prunes the revoked shas whose releases are gone", async () => {
+  test("keeps the revoked shas whose releases are gone", async () => {
     await deploy(SHA_A, "A", 1);
     await deploy(SHA_B, "B", 2);
     await writeRevoked([SHA_A, SHA_D]);
     await runOnce(deps(githubServing(SHA_B, "B", 2).fetch));
-    expect((await readRevoked()).shas).toEqual([]);
+    expect((await readRevoked()).shas).toEqual([SHA_A, SHA_D]);
   });
 
-  test("keeps the revoked digests when pruning", async () => {
+  test("keeps the revoked digests after removing the revoked release", async () => {
     await deploy(SHA_A, "A", 1);
     await deploy(SHA_B, "B", 2);
     const digest = await digestOfRelease(SHA_A);
@@ -862,7 +943,7 @@ describe("runOnce", () => {
     await rm(join(root, "current"));
     await symlink(`releases/${SHA_A}`, join(root, "current"));
     await writeRevoked([SHA_B], [await digestOfRelease(SHA_B)]);
-    await runOnce(deps(githubServing(SHA_B, "B", 2).fetch));
+    await runOnce(deps(githubServing(SHA_C, "B", 3).fetch));
     expect((await readRevoked()).shas).toEqual([]);
   });
 
@@ -941,14 +1022,14 @@ describe("runOnce", () => {
     expect(events).toContain("revoked_digest_clear_failed");
   });
 
-  test("drops the sha of a released version even when its digest was not recorded", async () => {
+  test("keeps the sha of a revoked version when its digest was not recorded", async () => {
     await deploy(SHA_A, "A", 1);
     await deploy(SHA_B, "B", 2);
     await rm(join(root, "current"));
     await symlink(`releases/${SHA_A}`, join(root, "current"));
     await writeRevoked([SHA_B], []);
     await runOnce(deps(githubServing(SHA_B, "B", 2).fetch));
-    expect((await readRevoked()).shas).toEqual([]);
+    expect((await readRevoked()).shas).toEqual([SHA_B]);
   });
 });
 
@@ -1394,13 +1475,22 @@ describe("rollback", () => {
     ).toEqual(digests);
   });
 
-  test("downloads the release rolled back from again after unpinning", async () => {
+  test("does not bring the commit rolled back from back after unpinning", async () => {
     await deploy(SHA_A, "A", 1);
     await deploy(SHA_B, "B", 2);
     await rollback(root, () => NOW);
     await unpin(unpinDeps(failingFetch), { force: true, ignoreCleanup: false });
     await runOnce(deps(githubServing(SHA_B, "B", 2).fetch));
-    expect(await readlink(join(root, "current"))).toBe(`releases/${SHA_B}`);
+    expect(await readlink(join(root, "current"))).toBe(`releases/${SHA_A}`);
+  });
+
+  test("serves a new commit with the content rolled back from after unpinning", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await rollback(root, () => NOW);
+    await unpin(unpinDeps(failingFetch), { force: true, ignoreCleanup: false });
+    await runOnce(deps(githubServing(SHA_C, "B", 3).fetch));
+    expect(await readlink(join(root, "current"))).toBe(`releases/${SHA_C}`);
   });
 
   test("reports the cleanup as done", async () => {

@@ -575,13 +575,13 @@ export function parsePinContent(value: unknown): string[] {
  * 後から戻し先に選ばれたり、保持の対象として残ったりしないようにする。
  */
 export type RevokedState = {
-  /** 戻した元の版のsha。消えた版は整理で外す。 */
+  /** 戻した元の版のsha。消えた版も残し、取り込みの候補から外す。 */
   readonly shas: readonly string[];
   /** 戻した元の版の中身(`files`のsha256)。同じ中身の新しい版を見分けるために残す。 */
   readonly digests: readonly string[];
 };
 
-/** 記録する中身のsha256の上限。超えたら古いものから捨てる。 */
+/** 記録する中身のsha256とshaの、それぞれの上限。超えたら古いものから捨てる。 */
 export const REVOKED_DIGEST_LIMIT = 100;
 
 /** `revoked.json`の中身が記録の形(`shas`と`digests`の配列を持つオブジェクト)かを返す。 */
@@ -606,14 +606,17 @@ export function parseRevokedState(value: unknown): RevokedState {
   };
 }
 
-/** 記録に`shas`と`digests`を足す。すでにあるものは重ねず、中身は`REVOKED_DIGEST_LIMIT`個まで残す。 */
+/**
+ * 記録に`shas`と`digests`を足す。すでにあるものは重ねず、それぞれ`REVOKED_DIGEST_LIMIT`個まで残す。
+ * shaは版が消えても記録に残す。消すと、取り込みが戻した元のcommitを候補に戻してしまうため。
+ */
 export function mergeRevokedState(
   state: RevokedState,
   shas: readonly string[],
   digests: readonly string[],
 ): RevokedState {
   return {
-    shas: [...new Set([...state.shas, ...shas])],
+    shas: [...new Set([...state.shas, ...shas])].slice(-REVOKED_DIGEST_LIMIT),
     digests: [...new Set([...state.digests, ...digests])].slice(
       -REVOKED_DIGEST_LIMIT,
     ),
@@ -654,18 +657,6 @@ export function selectRevokedReleases(
   return existing.filter((sha) =>
     isRevokedRelease(sha, manifests.get(sha) ?? null, state),
   );
-}
-
-/** 消えた版のshaを記録から外す。中身は、同じ中身の新しい版を見分けるために残す。 */
-export function pruneRevokedState(
-  state: RevokedState,
-  existing: readonly string[],
-): RevokedState {
-  const present = new Set(existing);
-  return {
-    shas: state.shas.filter((sha) => present.has(sha)),
-    digests: state.digests,
-  };
 }
 
 /**

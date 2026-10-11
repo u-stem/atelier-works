@@ -31,7 +31,6 @@ import {
   parseRevokedState,
   parseUnpinFlags,
   parseWorkflowRuns,
-  pruneRevokedState,
   REVOKED_DIGEST_LIMIT,
   rankReleaseRuns,
   referencedAssetNames,
@@ -1342,6 +1341,24 @@ describe("mergeRevokedState", () => {
     ).toEqual({ shas: [SHA_A], digests: [HASH_1] });
   });
 
+  test("caps the number of shas", () => {
+    const shas = Array.from({ length: REVOKED_DIGEST_LIMIT }, (_, i) =>
+      i.toString(16).padStart(40, "0"),
+    );
+    expect(
+      mergeRevokedState({ shas, digests: [] }, [SHA_A], []).shas,
+    ).toHaveLength(REVOKED_DIGEST_LIMIT);
+  });
+
+  test("keeps the newest shas beyond the limit", () => {
+    const shas = Array.from({ length: REVOKED_DIGEST_LIMIT }, (_, i) =>
+      i.toString(16).padStart(40, "0"),
+    );
+    expect(
+      mergeRevokedState({ shas, digests: [] }, [SHA_A], []).shas.at(-1),
+    ).toBe(SHA_A);
+  });
+
   test("keeps the newest digests beyond the limit", () => {
     const digests = Array.from({ length: REVOKED_DIGEST_LIMIT }, (_, i) =>
       i.toString(16).padStart(64, "0"),
@@ -1444,14 +1461,6 @@ describe("selectRevokedReleases", () => {
         digests: [contentDigestOf(HASH_2)],
       }),
     ).toEqual([SHA_A, SHA_B]);
-  });
-});
-
-describe("pruneRevokedState", () => {
-  test("drops the shas whose releases are gone", () => {
-    expect(
-      pruneRevokedState({ shas: [SHA_A, SHA_B], digests: [HASH_1] }, [SHA_B]),
-    ).toEqual({ shas: [SHA_B], digests: [HASH_1] });
   });
 });
 
