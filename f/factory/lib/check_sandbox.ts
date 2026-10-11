@@ -228,6 +228,12 @@ const CHOWN_TIMEOUT_MS = 300_000;
 const CHOWN_MAX_OUTPUT_BYTES = 16 * 1024;
 /** symlinkの一覧の出力の上限(バイト)。`node_modules/.bin`のように多いものがあっても切れない大きさにする。 */
 const LINK_LIST_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
+/** 1つのsymlinkの中身をたどる要素数の上限。超えたら、たどれないものとして外とみなす。 */
+const LINK_MAX_SEGMENTS = 1000;
+/** symlinkの走査にかける時間の上限(ミリ秒)。超えたら、検出が不完全だったものとして扱う。 */
+const LINK_SCAN_MAX_MS = 60_000;
+/** 正当な道具が外向きのsymlinkで指す、システムのインタープリタの置き場。 */
+const SYSTEM_BIN_PREFIXES = ["/usr/bin/", "/usr/local/bin/", "/bin/"];
 /**
  * 所有権の受け渡しに使う道具が見つかるPATH。実行ファイルは絶対パスで呼ぶ。
  * `find -execdir`は、PATHに相対のディレクトリ(`.`や空の要素)があると実行を拒むので、絶対パスだけにする。
@@ -499,6 +505,30 @@ export function reclaimBulkArgv(
     "0:0",
     "--",
     dir,
+  ];
+}
+
+/**
+ * `dir`の下の、中身が絶対パスか`..`を含むsymlinkをすべて消すargv。rootで実行する。
+ * 検出が不完全だったときの後始末で、名前の文字コードや長さによらない。
+ * `find`は名前をバイトのまま扱い、`-delete`は親のfdを起点に消すので、差し替えられてもたどらない。
+ */
+export function sweepLinksArgv(dir: string): string[] {
+  assertChownableDir(dir);
+  return [
+    FIND_PATH,
+    "-P",
+    dir,
+    "-type",
+    "l",
+    "(",
+    "-lname",
+    "/*",
+    "-o",
+    "-lname",
+    "*..*",
+    ")",
+    "-delete",
   ];
 }
 
@@ -1556,6 +1586,7 @@ async function resolveLinkTarget(
   if (start === null) return null;
   let current = start;
   const segments = content.split("/").filter((part) => part !== "");
+  if (segments.length > LINK_MAX_SEGMENTS) return null;
   for (const [index, segment] of segments.entries()) {
     if (segment === ".") continue;
     if (segment === "..") {
@@ -1588,6 +1619,8 @@ type LinkScan = {
   readonly unreadable: readonly string[];
   /** 一覧が出力の上限で途中を省かれたか。 */
   readonly truncated: boolean;
+  /** 省いた印を含む名前があった、または時間の上限を超えて、全部は調べられなかったか。 */
+  readonly incomplete: boolean;
 };
 
 /**
@@ -1611,9 +1644,19 @@ async function collectEscapingLinks(
   );
   const links = new Map<string, string>();
   const unreadable: string[] = [];
+  const startedAt = deps.reap.now();
+  let incomplete = false;
   for (const path of listed.split("\0")) {
-    // 途中を省いた印を含む要素は、前後が欠けた壊れたパスなので読まない。省いたことは`truncated`で伝える。
-    if (path === "" || isCappedOutput(path)) continue;
+    if (path === "") continue;
+    // 省いた印を含む名前は、前後が欠けた壊れたパスか、印そのものを名前にしたものである。どちらも読めないので、不完全に倒す。
+    if (isCappedOutput(path)) {
+      incomplete = true;
+      continue;
+    }
+    if (deps.reap.now() - startedAt > LINK_SCAN_MAX_MS) {
+      incomplete = true;
+      break;
+    }
     let content: string;
     try {
       content = await deps.readLink(path);
@@ -1627,13 +1670,18 @@ async function collectEscapingLinks(
     } catch (error) {
       warn.warn("a symlink could not be resolved, so it counts as outside", {
         path,
-        error: errorMessage(error),
+        code: errorCode(error) || "unknown",
       });
       target = null;
     }
     if (target === null) links.set(path, content);
   }
-  return { links, unreadable, truncated: isCappedOutput(listed) };
+  return {
+    links,
+    unreadable,
+    truncated: isCappedOutput(listed),
+    incomplete,
+  };
 }
 
 /**
@@ -1674,14 +1722,27 @@ async function takeBack(
   }
 }
 
-/** worktreeがあれば取り戻し、HOMEを消す。どちらも、枠のuidのプロセスが止まった後に呼ぶ。 */
+/**
+ * worktreeがあれば取り戻し、HOMEを消す。どちらも、枠のuidのプロセスが止まった後に呼ぶ。
+ * `sweepLinks`が真なら、取り戻しの後に、中身が絶対パスか`..`を含むsymlinkをすべて消す。
+ * 前の実行が検出まで進まなかった回復の経路で使う。そのsymlinkが、次の実行の控えに入って残らないようにするためである。
+ * 消せなければ投げる。呼び出し側は記録を残し、次の実行が取り戻し直す。
+ */
 async function takeBackDirs(
   deps: CheckSandboxDeps,
   identity: CheckIdentity,
   dirs: SlotRecord,
+  sweepLinks: boolean,
 ): Promise<void> {
   if ((await deps.pathKind(dirs.worktreeDir)) === "directory") {
     await takeBack(deps, identity, dirs.worktreeDir);
+    if (sweepLinks) {
+      await runTool(
+        deps,
+        sweepLinksArgv(dirs.worktreeDir),
+        `removing symlinks in ${dirs.worktreeDir}`,
+      );
+    }
   }
   await runTool(deps, removeTreeArgv(dirs.homeDir), `removing ${dirs.homeDir}`);
 }
@@ -1773,7 +1834,7 @@ async function recoverSlot(
   const identity = newCheckIdentity(uid, random);
   const record = await readOrSetAside(deps, index, uid, notify);
   if (record !== null) {
-    await takeBackDirs(deps, identity, record);
+    await takeBackDirs(deps, identity, record, true);
     await deps.slotRecords.clear(index);
   }
   await purgeShared(deps, identity);
@@ -1941,7 +2002,7 @@ export function createCheckSandbox(opts: {
       active = null;
       try {
         stoppedOrThrow(await reapUidProcesses(identity.uid, deps.reap));
-        await takeBackDirs(deps, identity, dirs);
+        await takeBackDirs(deps, identity, dirs, false);
         // 枠の数が同時実行数より多いと、番号の大きい枠は次に使われるまで長く空く。その間、共有の一時ディレクトリに検査の残りを置かない。
         try {
           await purgeShared(deps, identity);
@@ -1961,6 +2022,7 @@ export function createCheckSandbox(opts: {
       const scan = await collectEscapingLinks(deps, dirs.worktreeDir, log);
       const removed: string[] = [];
       const problems: string[] = [];
+      let removeFailed = false;
       for (const [path, content] of scan.links) {
         const before = baseline.get(path);
         try {
@@ -1974,8 +2036,9 @@ export function createCheckSandbox(opts: {
             );
           }
         } catch (error) {
+          removeFailed = true;
           problems.push(
-            `could not remove or restore ${path}: ${errorMessage(error)}`,
+            `could not remove or restore ${path}: ${errorCode(error) || "unknown"}`,
           );
         }
       }
@@ -1986,6 +2049,36 @@ export function createCheckSandbox(opts: {
         problems.push(
           "the list of symlinks was cut short, so some symlinks were not checked",
         );
+      }
+      if (
+        scan.truncated ||
+        scan.incomplete ||
+        scan.unreadable.length > 0 ||
+        removeFailed
+      ) {
+        // 全部を調べ切れていないので、外を指すかもしれないものを、名前の文字コードや長さによらずに消す。
+        // 失敗したら投げて、rootのClaudeのラウンドに進ませない。
+        await runTool(
+          deps,
+          sweepLinksArgv(dirs.worktreeDir),
+          `removing symlinks in ${dirs.worktreeDir}`,
+        );
+        problems.push(
+          "the symlink scan was incomplete, so every symlink whose content is an absolute path or contains .. was removed",
+        );
+      }
+      const suspicious = removed.filter((path) => {
+        const content = scan.links.get(path) ?? "";
+        return (
+          !content.startsWith(`${dirs.homeDir}/`) &&
+          !SYSTEM_BIN_PREFIXES.some((prefix) => content.startsWith(prefix))
+        );
+      });
+      if (suspicious.length > 0) {
+        log.warn("removed suspicious outward symlinks", {
+          count: suspicious.length,
+          paths: suspicious.slice(0, 20),
+        });
       }
       if (removed.length > 0) {
         log.warn(
@@ -2069,7 +2162,7 @@ export async function restoreCheckOwnership(
       if (held === null || held.worktreeDir !== dir) continue;
       try {
         stoppedOrThrow(await reapUidProcesses(uid, deps.reap));
-        await takeBackDirs(deps, newCheckIdentity(uid), held);
+        await takeBackDirs(deps, newCheckIdentity(uid), held, true);
       } catch (error) {
         throw new CheckOwnershipRestoreError(
           `the worktree recorded by slot ${CHECK_USER_PREFIX}${String(index)} (uid ${String(uid)}) could not be taken back: ${errorMessage(error)}`,

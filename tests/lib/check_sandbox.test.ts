@@ -79,6 +79,7 @@ import {
   setprivArgv,
   slotRecordUnreadableNoticeText,
   slotSkipNoticeText,
+  sweepLinksArgv,
   symlinksArgv,
   UnreadableSlotRecordError,
   WINDMILL_TMP_DIR,
@@ -504,6 +505,18 @@ describe("reclaimBulkArgv", () => {
 
   test("refuses a top-level directory", () => {
     expect(() => reclaimBulkArgv(IDENTITY, "/workspaces")).toThrow();
+  });
+});
+
+describe("sweepLinksArgv", () => {
+  test("deletes the symlinks whose content is absolute or contains ..", () => {
+    expect(sweepLinksArgv(DIRS.worktreeDir).join(" ")).toBe(
+      `/usr/bin/find -P ${DIRS.worktreeDir} -type l ( -lname /* -o -lname *..* ) -delete`,
+    );
+  });
+
+  test("refuses a top-level directory", () => {
+    expect(() => sweepLinksArgv("/workspaces")).toThrow();
   });
 });
 
@@ -1872,7 +1885,8 @@ function fakeSandboxDeps(opts?: {
         : resolve(path);
     },
     removeLink: async (path) => {
-      if (path === opts?.removeFails) throw new Error("EPERM: not permitted");
+      if (path === opts?.removeFails)
+        throw Object.assign(new Error(`EPERM: ${path}`), { code: "EPERM" });
       removedLinks.push(path);
       symlinks.delete(path);
     },
@@ -1939,8 +1953,6 @@ const withoutTag = (argvs: readonly (readonly string[])[]): string[][] =>
   );
 
 /** `dir`を`identity`の枠からrootへ戻すコマンドの並び。 */
-const TAKE_BACK_LENGTH = takeBackSequence(IDENTITY, DIRS.worktreeDir).length;
-
 function takeBackSequence(identity: CheckIdentity, dir: string): string[][] {
   return [
     gatherArgv(identity, dir),
@@ -1952,6 +1964,8 @@ function takeBackSequence(identity: CheckIdentity, dir: string): string[][] {
     aclLeftoverArgv(dir),
   ];
 }
+
+const TAKE_BACK_LENGTH = takeBackSequence(IDENTITY, DIRS.worktreeDir).length;
 
 /** `dir`のACLを探す1回目だけ見つかったと答え、2回目からは無いと答える`respond`。 */
 function aclFoundOnce(dir: string) {
@@ -2203,9 +2217,9 @@ describe("escapingSymlinks", () => {
       unreadablePaths: [`${WT}/bad`],
     });
     fake.symlinks.set(`${WT}/bad`, OUT);
-    expect((await sandbox.escapingSymlinks(DIRS)).problems).toEqual([
+    expect((await sandbox.escapingSymlinks(DIRS)).problems).toContain(
       `could not inspect a symlink, so it was left: ${WT}/bad`,
-    ]);
+    );
   });
 
   test("reports a symlink that cannot be removed and still removes the others", async () => {
@@ -2224,9 +2238,9 @@ describe("escapingSymlinks", () => {
       removeFails: `${WT}/stuck`,
     });
     fake.symlinks.set(`${WT}/stuck`, OUT);
-    expect((await sandbox.escapingSymlinks(DIRS)).problems).toEqual([
-      `could not remove or restore ${WT}/stuck: EPERM: not permitted`,
-    ]);
+    expect((await sandbox.escapingSymlinks(DIRS)).problems).toContain(
+      `could not remove or restore ${WT}/stuck: EPERM`,
+    );
   });
 
   test("reports a cut-short listing as a problem", async () => {
@@ -2234,9 +2248,145 @@ describe("escapingSymlinks", () => {
       listingTail: "\n[... 99 bytes omitted ...]\n",
     });
     fake.symlinks.set(`${WT}/evil`, OUT);
-    expect((await sandbox.escapingSymlinks(DIRS)).problems).toEqual([
+    expect((await sandbox.escapingSymlinks(DIRS)).problems).toContain(
       "the list of symlinks was cut short, so some symlinks were not checked",
+    );
+  });
+
+  const SWEEP = sweepLinksArgv(WT);
+  const INCOMPLETE =
+    "the symlink scan was incomplete, so every symlink whose content is an absolute path or contains .. was removed";
+
+  test("does not sweep when the scan was complete", async () => {
+    const { fake, sandbox } = await preparedWith();
+    fake.symlinks.set(`${WT}/evil`, OUT);
+    await sandbox.escapingSymlinks(DIRS);
+    expect(argvOf(fake.calls)).not.toContainEqual(SWEEP);
+  });
+
+  test("sweeps when a symlink cannot be read", async () => {
+    const { fake, sandbox } = await preparedWith({
+      unreadablePaths: [`${WT}/bad`],
+    });
+    fake.symlinks.set(`${WT}/bad`, OUT);
+    await sandbox.escapingSymlinks(DIRS);
+    expect(argvOf(fake.calls)).toContainEqual(SWEEP);
+  });
+
+  test("sweeps when the listing was cut short", async () => {
+    const { fake, sandbox } = await preparedWith({
+      listingTail: "\n[... 99 bytes omitted ...]\n",
+    });
+    await sandbox.escapingSymlinks(DIRS);
+    expect(argvOf(fake.calls)).toContainEqual(SWEEP);
+  });
+
+  test("sweeps when a name contains the omission marker", async () => {
+    const { fake, sandbox } = await preparedWith();
+    fake.symlinks.set(`${WT}/[... 5 bytes omitted ...]`, OUT);
+    await sandbox.escapingSymlinks(DIRS);
+    expect(argvOf(fake.calls)).toContainEqual(SWEEP);
+  });
+
+  test("sweeps when a symlink cannot be removed", async () => {
+    const { fake, sandbox } = await preparedWith({
+      removeFails: `${WT}/stuck`,
+    });
+    fake.symlinks.set(`${WT}/stuck`, OUT);
+    await sandbox.escapingSymlinks(DIRS);
+    expect(argvOf(fake.calls)).toContainEqual(SWEEP);
+  });
+
+  test("sweeps when the scan runs out of time", async () => {
+    const fake = fakeSandboxDeps();
+    let clock = 0;
+    const sandbox = sandboxOf({
+      ...fake.deps,
+      reap: { ...fake.deps.reap, now: () => (clock += 40_000) },
+    });
+    await sandbox.prepare(DIRS);
+    fake.symlinks.set(`${WT}/a`, OUT);
+    fake.symlinks.set(`${WT}/b`, OUT);
+    await sandbox.escapingSymlinks(DIRS);
+    expect(argvOf(fake.calls)).toContainEqual(SWEEP);
+  });
+
+  test("says the sweep happened", async () => {
+    const { fake, sandbox } = await preparedWith({
+      unreadablePaths: [`${WT}/bad`],
+    });
+    fake.symlinks.set(`${WT}/bad`, OUT);
+    expect((await sandbox.escapingSymlinks(DIRS)).problems).toContain(
+      INCOMPLETE,
+    );
+  });
+
+  test("throws when the sweep fails, so the work item stops", async () => {
+    const { fake, sandbox } = await preparedWith({
+      unreadablePaths: [`${WT}/bad`],
+      respond: (argv) => (matches(SWEEP)(argv) ? fail("denied", 1) : undefined),
+    });
+    fake.symlinks.set(`${WT}/bad`, OUT);
+    await expect(sandbox.escapingSymlinks(DIRS)).rejects.toThrow("denied");
+  });
+
+  test("throws when listing the symlinks fails", async () => {
+    const fake = fakeSandboxDeps({ failSymlinkListing: true });
+    const sandbox = sandboxOf(fake.deps);
+    await sandbox.prepare(DIRS).catch(() => {});
+    await expect(sandbox.escapingSymlinks(DIRS)).rejects.toThrow(
+      "listing symlinks",
+    );
+  });
+
+  test("treats a target with too many components as outside", async () => {
+    const { fake, sandbox } = await preparedWith();
+    fake.symlinks.set(`${WT}/deep`, {
+      content: Array.from({ length: 1001 }, () => "d").join("/"),
+      resolved: null,
+    });
+    expect((await sandbox.escapingSymlinks(DIRS)).removed).toEqual([
+      `${WT}/deep`,
     ]);
+  });
+
+  test("keeps the error message out of the problems", async () => {
+    const { fake, sandbox } = await preparedWith({
+      removeFails: `${WT}/secret-target`,
+    });
+    fake.symlinks.set(`${WT}/secret-target`, OUT);
+    const problems = (await sandbox.escapingSymlinks(DIRS)).problems.join("\n");
+    expect(problems).not.toContain("EPERM:");
+  });
+
+  test("logs a removed symlink to an unusual place as suspicious", async () => {
+    const lines: string[] = [];
+    const fake = fakeSandboxDeps();
+    const sandbox = sandboxOf(fake.deps, {
+      log: logger("check_sandbox", { sink: (line) => lines.push(line) }),
+    });
+    await sandbox.prepare(DIRS);
+    fake.symlinks.set(`${WT}/odd`, {
+      content: "/root/.ssh/id",
+      resolved: "/root/.ssh/id",
+    });
+    await sandbox.escapingSymlinks(DIRS);
+    expect(lines.some((line) => line.includes("suspicious"))).toBe(true);
+  });
+
+  test("does not log a removed symlink to a system interpreter as suspicious", async () => {
+    const lines: string[] = [];
+    const fake = fakeSandboxDeps();
+    const sandbox = sandboxOf(fake.deps, {
+      log: logger("check_sandbox", { sink: (line) => lines.push(line) }),
+    });
+    await sandbox.prepare(DIRS);
+    fake.symlinks.set(`${WT}/py`, {
+      content: "/usr/bin/python3",
+      resolved: "/usr/bin/python3",
+    });
+    await sandbox.escapingSymlinks(DIRS);
+    expect(lines.some((line) => line.includes("suspicious"))).toBe(false);
   });
 
   test("logs the removed symlinks", async () => {
@@ -2511,10 +2661,27 @@ describe("createCheckSandbox", () => {
     );
   });
 
-  test("prepare removes the home a dead run recorded in the slot", async () => {
+  test("prepare sweeps the symlinks after taking back the worktree a dead run recorded", async () => {
     const fake = fakeSandboxDeps({ records: { 0: OLD } });
     await sandboxOf(fake.deps).prepare(DIRS);
     expect(fake.calls[TAKE_BACK_LENGTH]?.argv).toEqual(
+      sweepLinksArgv(OLD.worktreeDir),
+    );
+  });
+
+  test("release does not sweep the symlinks of a completed run", async () => {
+    const fake = fakeSandboxDeps();
+    const { sandbox, before } = await prepared(fake);
+    await sandbox.release(DIRS);
+    expect(argvOf(fake.calls.slice(before))).not.toContainEqual(
+      sweepLinksArgv(DIRS.worktreeDir),
+    );
+  });
+
+  test("prepare removes the home a dead run recorded in the slot", async () => {
+    const fake = fakeSandboxDeps({ records: { 0: OLD } });
+    await sandboxOf(fake.deps).prepare(DIRS);
+    expect(fake.calls[TAKE_BACK_LENGTH + 1]?.argv).toEqual(
       removeTreeArgv(OLD.homeDir),
     );
   });
@@ -3143,6 +3310,22 @@ describe("restoreCheckOwnership", () => {
     expect(withoutTag(argvOf(fake.calls).slice(0, TAKE_BACK_LENGTH))).toEqual(
       withoutTag(takeBackSequence(SLOT1, WT)),
     );
+  });
+
+  test("sweeps the symlinks after taking the recorded worktree back", async () => {
+    const fake = fakeSandboxDeps({ records: RECORDED });
+    await restoreCheckOwnership(WT, POOL, fake.deps);
+    expect(argvOf(fake.calls)[TAKE_BACK_LENGTH]).toEqual(sweepLinksArgv(WT));
+  });
+
+  test("fails and keeps the record when the sweep fails", async () => {
+    const fake = fakeSandboxDeps({
+      records: RECORDED,
+      respond: (argv) =>
+        matches(sweepLinksArgv(WT))(argv) ? fail("denied", 1) : undefined,
+    });
+    await restoreCheckOwnership(WT, POOL, fake.deps).catch(() => {});
+    expect(fake.records.has(1)).toBe(true);
   });
 
   test("removes the recorded home", async () => {
