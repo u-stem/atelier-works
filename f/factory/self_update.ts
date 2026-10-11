@@ -5,8 +5,11 @@
 // 判断と整形の純粋なロジック(再デプロイが要るか、どの変更パスがworkerの中から
 // は反映できずホスト側の次回起動で反映されるか、`wmill` CLIの子プロセスに渡す
 // 最小のenv)は`./lib/self_update_support.ts`にあり、このファイルは入出力を
-// つなぐだけ。`infra/`と`mise.toml`の変更は次の`mise run up`で反映されるため、
-// 通知はせずログと`deployments`の記録だけを残す。
+// つなぐだけ。`infra/`と`mise.toml`の変更はworkerの中からは反映できず、
+// 人が`mise run up`するまで効かないため、`deployments`に記録したうえで
+// 要対応の通知とDiscordで知らせる(`./lib/host_action.ts`)。
+// ホストが`mise run up`の最後に書く印を毎回読み、反映が済んだ通知は解決する。
+// 解決は、反映の判断と記録の後に行う(反映が不要な回でも行う)。解決が遅れても反映を遅らせないため。
 //
 // ジョブ全体の上限(`self_update.script.yaml`の`timeout`)は、`SELF_UPDATE_WORST_CASE_MS`以上にする。
 // 内訳と、打ち切られた回の扱いは`docs/architecture.md`の「自己更新」にある。
@@ -24,12 +27,26 @@ import {
   watchConsoleWorker,
   watchRunsQuery,
 } from "./lib/console_worker.ts";
-import { addNoticeUnlessUnresolved, recordDeployment } from "./lib/db.ts";
+import {
+  addNoticeUnlessUnresolved,
+  listUnresolvedNoticesByKind,
+  recordDeployment,
+  resolveNoticeIfUnresolved,
+} from "./lib/db.ts";
 import {
   DISCORD_RETRY_MAX_WAIT_MS,
   type FetchLike,
   notifyBestEffort,
 } from "./lib/discord.ts";
+import {
+  HOST_ACTION_NOTICE_KIND,
+  HOST_ACTION_RECONCILE_LIMIT,
+  HOST_ACTION_RESOLVER,
+  hostAppliedChecker,
+  readHostAppliedSha,
+  reconcileHostActionNotices,
+  recordHostAction,
+} from "./lib/host_action.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import {
   MERGED_PULL_REQUESTS_LOG_FORMAT,
@@ -72,6 +89,12 @@ import {
 // self cloneのgit操作。判断を含まない単発のgitの入出力なので、
 // libに出さずこのscriptに閉じる(`poll_issues.ts`の`readRepoHeadSha`と同じ)。
 // ---------------------------------------------------------------------------
+
+/**
+ * ローカルのオブジェクトを参照するだけのgit(`cat-file`、`merge-base`)の上限(ミリ秒)。
+ * ネットワークにもワークツリーにも触れないので、既定の上限より短くする。
+ */
+export const SELF_UPDATE_LOCAL_GIT_TIMEOUT_MS = 10_000;
 
 const GIT_BASE_ARGV: readonly string[] = [
   "git",
@@ -245,6 +268,61 @@ export async function listMergedPullRequests(
 }
 
 /**
+ * self cloneで`ancestor`が`descendant`の祖先か(同じコミットを含む)を返す
+ * (`git merge-base --is-ancestor`)。終了コード0が祖先、1が祖先でない。
+ * それ以外(未知のコミットなど)は確かめられないので例外を投げる。
+ * どちらのshaも`assertSha`で検査する(理由は`diffPaths`と同じ)。
+ */
+export async function isAncestorSha(
+  run: CommandRunner,
+  dir: string,
+  ancestor: string,
+  descendant: string,
+): Promise<boolean> {
+  assertSha(ancestor);
+  assertSha(descendant);
+  const result = await run(
+    [...GIT_BASE_ARGV, "merge-base", "--is-ancestor", ancestor, descendant],
+    {
+      cwd: dir,
+      env: selfCloneGitEnv(),
+      timeoutMs: SELF_UPDATE_LOCAL_GIT_TIMEOUT_MS,
+    },
+  );
+  if (result.exitCode === 0) return true;
+  if (result.exitCode === 1 && !result.timedOut) return false;
+  throw new Error(
+    maskSecrets(
+      `git merge-base --is-ancestor failed in ${dir}: ${result.stderr.trim()}`,
+    ),
+  );
+}
+
+/**
+ * self cloneに`sha`のコミットがあるかを返す(`git cat-file -e <sha>^{commit}`)。
+ * 無ければ`false`。時間切れのときは確かめられないので例外を投げる。
+ */
+export async function isCommitInClone(
+  run: CommandRunner,
+  dir: string,
+  sha: string,
+): Promise<boolean> {
+  assertSha(sha);
+  const result = await run(
+    [...GIT_BASE_ARGV, "cat-file", "-e", `${sha}^{commit}`],
+    {
+      cwd: dir,
+      env: selfCloneGitEnv(),
+      timeoutMs: SELF_UPDATE_LOCAL_GIT_TIMEOUT_MS,
+    },
+  );
+  if (result.timedOut) {
+    throw new Error(`git cat-file timed out in ${dir}`);
+  }
+  return result.exitCode === 0;
+}
+
+/**
  * `<dir>/wmill.yaml`が無ければ例外を投げる。
  * 実際のworkerで、syncのルートでないディレクトリからCLIを実行し、
  * `wmill sync push`が"No wmill.yaml found."と表示しつつ"0 changes"で
@@ -375,9 +453,18 @@ async function runWmillCli(
  * cloneの更新(`FACTORY_CLONE_UPDATE_GIT_COMMAND_COUNT`回)、HEADとブランチの確認で2回、
  * 変更パスの列挙で1回、反映に含まれるPRの列挙(`git log`)で1回、`mise.toml`の比較(`git show`)で最大2回。
  * `git show`は時間切れでも失敗として続くので、最大回数まで走りうる。
+ * 上限は`DEFAULT_TIMEOUT_MS`である。ホストの印の確認は`SELF_UPDATE_LOCAL_GIT_COMMAND_COUNT`に数える。
  */
 export const SELF_UPDATE_GIT_COMMAND_COUNT =
   FACTORY_CLONE_UPDATE_GIT_COMMAND_COUNT + 2 + 1 + 1 + 2;
+
+/**
+ * 1回の実行で走る、ローカルだけのgit(上限は`SELF_UPDATE_LOCAL_GIT_TIMEOUT_MS`)の最大回数。
+ * ホストの印の確認は、コミットの有無で1回、祖先の確認で最大`HOST_ACTION_RECONCILE_LIMIT + 1`回
+ * (通知の解決で上限の数まで、この回の通知の判断で1回)。
+ */
+export const SELF_UPDATE_LOCAL_GIT_COMMAND_COUNT =
+  1 + (HOST_ACTION_RECONCILE_LIMIT + 1);
 
 /** 1回の実行で走る`npm ci`、`wmill sync push`、`wmill datatable migrate up`の回数。 */
 export const SELF_UPDATE_CLI_COMMAND_COUNT = 3;
@@ -390,8 +477,11 @@ export const SELF_UPDATE_CLI_COMMAND_COUNT = 3;
  *   `recordDeployment`の成功、`recordDeployment`の失敗: 8
  *   (成功の記録と失敗の記録は一方しか通らないが、呼び出しの箇所を数えるので両方を数える)
  * - finally: stateの読み、stateの書き、noticeの挿入、通知先の取得: 4
+ * - ホスト側の作業の通知: 印の読み取り、未解決の通知の一覧、通知の解決(上限の数まで)、
+ *   noticeの挿入、通知先の取得: 4 + `HOST_ACTION_RECONCILE_LIMIT`
  */
-export const SELF_UPDATE_BOUNDED_CALL_COUNT = 13;
+export const SELF_UPDATE_BOUNDED_CALL_COUNT =
+  13 + 4 + HOST_ACTION_RECONCILE_LIMIT;
 
 /**
  * finallyの通知1回の上限(ミリ秒)。
@@ -416,7 +506,8 @@ const boundedFetch: FetchLike = (url, init) =>
  * - cloneのロック待ち(最大の待ちと、確かめる間隔1回)
  * - コマンド: 上限に、停止の上乗せ(`RUNNER_MAX_STOP_OVERHEAD_MS`)を足した時間の、回数分
  * - 区切った呼び出し: 上限の回数分
- * - finallyの通知とConsole用workerの確認
+ * - 通知: ホスト側の作業の通知とfinallyの通知の2回
+ * - Console用workerの確認
  * 区切りの時間切れの後に、中断されずに残る背景の処理は数えない。
  */
 export const SELF_UPDATE_WORST_CASE_MS =
@@ -424,10 +515,12 @@ export const SELF_UPDATE_WORST_CASE_MS =
   REPO_LOCK_POLL_MS +
   SELF_UPDATE_GIT_COMMAND_COUNT *
     (DEFAULT_TIMEOUT_MS + RUNNER_MAX_STOP_OVERHEAD_MS) +
+  SELF_UPDATE_LOCAL_GIT_COMMAND_COUNT *
+    (SELF_UPDATE_LOCAL_GIT_TIMEOUT_MS + RUNNER_MAX_STOP_OVERHEAD_MS) +
   SELF_UPDATE_CLI_COMMAND_COUNT *
     (WMILL_CLI_TIMEOUT_MS + RUNNER_MAX_STOP_OVERHEAD_MS) +
   SELF_UPDATE_BOUNDED_CALL_COUNT * SELF_UPDATE_CALL_TIMEOUT_MS +
-  SELF_UPDATE_NOTIFY_TIMEOUT_MS +
+  2 * SELF_UPDATE_NOTIFY_TIMEOUT_MS +
   CONSOLE_WORKER_CHECK_TIMEOUT_MS;
 
 // ---------------------------------------------------------------------------
@@ -515,6 +608,36 @@ async function updateSelf(
 
   const currentSha = await readSelfCloneHeadSha(runCommand, factoryClone.dir);
 
+  // 印の読み取りとself cloneでの確認は、通知の解決とこの回の通知の判断(`recordHostAction`)で使い回す。
+  const hostApplied = hostAppliedChecker({
+    readAppliedSha: () =>
+      withCallTimeout("read host applied sha", () => readHostAppliedSha()),
+    commitExists: (sha) => isCommitInClone(runCommand, factoryClone.dir, sha),
+    isAncestor: (ancestor, descendant) =>
+      isAncestorSha(runCommand, factoryClone.dir, ancestor, descendant),
+    log,
+  });
+  // ホストで反映が済んだ通知を解決する。反映が不要な回でも、反映の後でも呼ぶ。
+  // 反映の判断を遅らせないよう、反映の判断と記録より後に呼ぶ。
+  const resolveHostActionNotices = () =>
+    reconcileHostActionNotices({
+      listUnresolved: () =>
+        withCallTimeout("list host action notices", () =>
+          listUnresolvedNoticesByKind(HOST_ACTION_NOTICE_KIND),
+        ),
+      isApplied: hostApplied,
+      resolve: (id) =>
+        withCallTimeout("resolve host action notice", () =>
+          resolveNoticeIfUnresolved(
+            id,
+            HOST_ACTION_NOTICE_KIND,
+            HOST_ACTION_RESOLVER,
+            [],
+          ),
+        ),
+      log,
+    });
+
   // 変数が無いと確かめられたときだけ未デプロイ(空)として扱う(`readDeployedSha`を参照)。
   const deployedSha = await readDeployedSha(
     () => wmill.getVariable("f/factory/deployed_sha"),
@@ -528,6 +651,7 @@ async function updateSelf(
   const decision = decideUpdate(currentSha, deployedSha);
   if (decision.outcome === "unchanged") {
     log.info("self clone unchanged, nothing to deploy", { sha: currentSha });
+    await resolveHostActionNotices();
     return { outcome: "unchanged" };
   }
 
@@ -628,15 +752,6 @@ async function updateSelf(
       : false;
     const classification = classifyChangedPaths(changedPaths, miseChanged);
 
-    if (classification.needs_host_action) {
-      // `infra/`と`mise.toml`の変更はworkerの中からは反映できないが、
-      // 次にホストで`mise run up`して起動したときにビルドされて反映される。
-      // 人の操作は要らないので通知せず、ログと`deployments`の記録だけを残す。
-      log.info("host-side changes will apply on next mise run up", {
-        host_paths: classification.host_paths,
-      });
-    }
-
     // PRの一覧は表示のための付随情報なので、取れなくても反映の成功を失敗にしない。
     let pullRequests: DeploymentPullRequest[] = [];
     try {
@@ -672,6 +787,44 @@ async function updateSelf(
         });
       },
     );
+
+    if (classification.needs_host_action) {
+      // `infra/`と`mise.toml`の変更はworkerの中からは反映できず、人が
+      // ホストで`mise run up`するまで効かない。気づけるよう通知で知らせる。
+      // 反映は済んでいるので、通知の失敗では更新を失敗にしない。
+      log.info("host-side changes need mise run up", {
+        host_paths: classification.host_paths,
+      });
+      await recordHostAction(
+        {
+          addNotice: (record) =>
+            withCallTimeout("addNotice host action", () =>
+              addNoticeUnlessUnresolved(record),
+            ),
+          notify: async (event) => {
+            const webhookUrl = await withCallTimeout(
+              "getVariable webhook host action",
+              () => wmill.getVariable("f/factory/discord_webhook_url"),
+            );
+            return await withCallTimeout(
+              "notify",
+              () =>
+                notifyBestEffort(webhookUrl, event, log, {
+                  fetch: boundedFetch,
+                }),
+              SELF_UPDATE_NOTIFY_TIMEOUT_MS,
+            );
+          },
+          isApplied: hostApplied,
+          instanceName: config.instance_name,
+          log,
+        },
+        currentSha,
+        classification.host_paths,
+      );
+    }
+
+    await resolveHostActionNotices();
 
     return {
       outcome: "updated",

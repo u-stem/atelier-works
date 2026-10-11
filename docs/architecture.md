@@ -178,12 +178,12 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加だけにし、
 | テーブル | 役割 |
 | --- | --- |
 | `work_items` | 作業項目1件の状態。`(owner, repo, issue_number, cycle)`で一意 |
-| `work_item_events` | 状態遷移の履歴 |
+| `work_item_events` | 状態遷移の履歴。遷移を起こしたステップのジョブIDと、そのフローのルートジョブIDを持つ |
 | `requirement_drafts` | 要件定義ドラフト。attemptごとに本文、図の参照、未確定事項、ファイルの置き場所(`doc_dir`)を持つ |
 | `approval_requests` | 承認依頼。要件定義の承認とIssue化の提案の承認の両方を持つ |
 | `approvals` | 承認と却下の古い履歴。今は書き込まない |
 | `agent_runs` | Claudeの実行1回ごとのモデル、トークン数、費用、所要時間、終了コード |
-| `job_failures` | フローの失敗の記録。トークンはマスクしてから書く |
+| `job_failures` | フローの失敗の記録。失敗を記録したジョブのルートジョブIDも持つ。トークンはマスクしてから書く |
 | `deployments` | 自己更新によるデプロイの結果。変更したパスと、含まれるPR(`pull_requests`)も持つ |
 | `notices` | 人が対応すべき事項。PATの失効やSHAの不一致など。解決した人と時刻(`resolved_by`、`resolved_at`)も持ち、DBの掃除が解決した行の`resolved_by`は`cleanup_db`になる |
 | `reviews` | pr_reviewの実行1回ごとの判定、総評、指摘、投稿したレビューのID |
@@ -242,7 +242,7 @@ Consoleの一覧と集計は次のviewを読む。
 | view | 内容 |
 | --- | --- |
 | `summary` | サイドバーの件数と、要対応の一覧。承認待ち、作業項目の失敗、要対応の通知を返す |
-| `work_item_detail` | 作業項目1件の概要、要件定義の試行、承認の履歴、実装のラウンド、失敗。PRの作業項目では、レビューと修正の一覧(件数だけ)も返す。検査コマンドの出力は返さない |
+| `work_item_detail` | 作業項目1件の概要、要件定義の試行、承認の履歴、実装のラウンド、失敗、状態の遷移とそのジョブID。PRの作業項目では、レビューと修正の一覧(件数だけ)も返す。検査コマンドの出力は返さない |
 | `system_status` | 反映の状態、Consoleの取り込みの状態、作業項目の無い失敗、情報の通知、解決済みの通知 |
 
 次の6つのscriptは、tag `console`を付け、Console用のworkerで動かす。
@@ -285,7 +285,7 @@ Consoleの一覧と集計は次のviewを読む。
 | notify_daily_summary | `0 0 9 * * *` | `f/factory/notify_daily_summary` | 毎日9:00(Asia/Tokyo)に実行します。前日分の実行回数・コスト・失敗回数と承認/却下の件数を集計し、Discordへ日次サマリを投稿します。 |
 | poll_issues | `0 */5 * * * *` | `f/factory/poll_issues` | 5分ごとに実行します。稼働確認とデプロイ状況の通知を行い、担当リポジトリのIssueを検索して担当を確定します。あわせて、進行中のすべての作業項目をGitHub側の状態と突き合わせ、後始末が必要なものを処理します。失敗、人の対応待ち、期限切れの作業項目は、対象のIssueやPRが閉じられていれば取り消して、要対応の一覧から外します。 |
 | poll_prs | `0 */5 * * * *` | `f/factory/poll_prs` | 5分ごとに実行します。PRにレビュー依頼のラベルが付いている、レビューをリクエストされている、または担当者(assignee)に指定されている場合はレビュー処理を開始します。修正依頼のラベルが付いている場合は修正処理を開始します。作業項目の後始末はIssueの巡回処理側で行います。 |
-| self_update | `0 */10 * * * *` | `f/factory/self_update` | 10分ごとに実行します。Software Factory自身の最新のコミットを取り込み、変更があればWindmillへの反映とデータベースの更新を自動的に行います。ホスト側の変更は次にホストで起動したときに反映されるため、通知はしません。更新の最後に、Console用のworkerが止まっていないかを確かめ、止まっていれば通知を残してDiscordにも知らせます。 |
+| self_update | `0 */10 * * * *` | `f/factory/self_update` | 10分ごとに実行します。Software Factory自身の最新のコミットを取り込み、変更があればWindmillへの反映とデータベースの更新を自動的に行います。ホスト側の変更(workerイメージの再ビルドなど)はホストで起動し直すまで反映されないため、要対応の通知とDiscordで知らせ、反映が済んだら通知を解決します。更新の最後に、Console用のworkerが止まっていないかを確かめ、止まっていれば通知を残してDiscordにも知らせます。 |
 <!-- /generated:schedules -->
 
 cronはWindmillの6フィールドの形式で、タイムゾーンは`Asia/Tokyo`である。各スケジュールは`no_flow_overlap: true`を持ち、前回の実行が終わっていなければその回を飛ばす。スケジュールの失敗は`on_error_schedule`が記録して通知する。
@@ -342,8 +342,10 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/claude` | script | [LIB] headless Claude実行 |
 | `f/factory/lib/claim_support` | script | [LIB] Issue取得の後処理 |
 | `f/factory/steps/pr_workflow_support` | script | [LIB] PRワークフロー共通処理 |
+| `f/factory/lib/job_ids` | script | [LIB] WindmillのジョブIDの検査 |
 | `f/factory/lib/process_lock` | script | [LIB] worktree単位のプロセス排他 |
 | `f/factory/lib/prompts` | script | [LIB] プロンプト定義 |
+| `f/factory/lib/host_action` | script | [LIB] ホスト側の作業が要る反映の通知 |
 | `f/factory/lib/log` | script | [LIB] ログとマスク |
 | `f/factory/lib/cleanup_support` | script | [LIB] 作業領域掃除の純粋ロジック |
 | `f/factory/lib/protected_paths` | script | [LIB] 保護パスの判定 |
@@ -460,7 +462,12 @@ squashでマージされて件名の末尾が`(#<N>)`の形のPRは、ブラン�
 `git log`の出力が4MiBを超えたときは、中間の要素を失う。新しい側の要素は保たれる。印をまたぐ要素は壊れているので、使わない。
 PRを取り出せなくても、反映の成功は変えない。その反映のPRは空で記録するので、画面では「PRが無い」反映と同じ表示になる。
 
-ジョブ全体には上限(`timeout`)を2700秒で置く。
+`infra/**`の変更と、`mise.toml`の`[tools]`か`[env]`の変更は、worker自身では反映できない。`self_update`は`deployments.needs_host_action`を`true`にして記録し、要対応の通知`host_action_required`とDiscordで知らせる。
+これらはホスト側のcheckoutをpullしたうえで、`mise run up`で起動したときに反映される。
+`mise run up`は終わりに、ホストのcheckoutのHEADをworkerの共有ボリュームへ書く。
+`self_update`はこのHEADを毎回読み、通知の版を含んでいれば通知を解決する。
+
+ジョブ全体には上限(`timeout`)を3000秒で置く。
 この上限はWindmillが外から打ち切る最後の砦で、通常は内側の上限で先に終わる。
 子プロセスは別のプロセスグループで起動し、その上限はworkerの中のタイマーなので、子の実行中に外から打ち切られると子が残りうるためである([セキュリティ](security.md)の「自己更新の打ち切り」)。
 変数の取得と更新、stateの読み書き、データベースの記録は個別の上限が無いので、1回30秒で区切り、超えたら例外にする。
@@ -476,9 +483,9 @@ Discordへの通知は、送信を30秒で中断し、429の待ち(最大30秒)�
 これらはジョブの失敗(`job_failed`と`schedule_failing`)になるだけである。
 
 ジョブの`timeout`はインスタンスの上限を超えられないが、セルフホストの上限は環境変数`TIMEOUT`で、未設定なら7日である。
-`job_default_timeout`は21600秒以上にする決まりなので([実装フローの仕様](internals/implement.md)の「Windmillのtimeoutで打ち切られたとき」)、2700秒は切り詰められない。
+`job_default_timeout`は21600秒以上にする決まりなので([実装フローの仕様](internals/implement.md)の「Windmillのtimeoutで打ち切られたとき」)、3000秒は切り詰められない。
 
-2700秒は、全部が最悪のときの長さ2489.2秒に余裕を足した値である。
+3000秒は、全部が最悪のときの長さ2934.2秒に余裕を足した値である。
 コマンドの上限には、停止の上乗せ13秒を足す。
 時間切れ後のSIGKILLまでの猶予が5秒、終了後のプロセスグループの停止が最大6秒、出力の読み取り待ちが2秒である。
 
@@ -486,20 +493,27 @@ Discordへの通知は、送信を30秒で中断し、429の待ち(最大30秒)�
 | --- | --- | --- | --- | --- |
 | self cloneのロック待ち | 1 | 300秒 | 確かめる間隔0.2秒 | 300.2秒 |
 | git | 10 | 60秒 | 13秒 | 730秒 |
+| ホストの印を確かめるローカルのgit | 5 | 10秒 | 13秒 | 115秒 |
 | `npm ci`、`wmill sync push`、`wmill datatable migrate up` | 3 | 300秒 | 13秒 | 939秒 |
-| 区切った呼び出し | 13 | 30秒 | なし | 390秒 |
-| Discordへの通知 | 1 | 120秒 | なし | 120秒 |
+| 区切った呼び出し | 20 | 30秒 | なし | 600秒 |
+| Discordへの通知 | 2 | 120秒 | なし | 240秒 |
 | Console用のworkerの確認 | 1 | 10秒 | なし | 10秒 |
 
 gitの10回は、cloneの更新で4回、HEADとブランチの確認で2回、変更パスの列挙で1回、反映に含まれるPRの列挙で1回、`mise.toml`の比較で最大2回である。
 PRの列挙の`git log`も、ほかのgitと同じく`runCommand`の上限(60秒)で区切る。`withCallTimeout`で区切るのはWindmillのSDKとDBの呼び出しである。
+ローカルのgitの5回は、ホストの印の確認である。
+コミットの有無で1回、祖先の確認で最大4回である。
+祖先の確認は、通知の解決で上限の3件まで、この回の通知の判断で1回である。
+ローカルのgitは、オブジェクトを参照するだけで、ネットワークとワークツリーに触れないので、上限を10秒にする。
 `mise.toml`の比較は時間切れでも失敗として続くので、最大回数まで走りうる。
-区切った呼び出しの13回は、設定の取得が1回、更新が8回、最後の確認が4回に分かれる。
+区切った呼び出しの20回は、設定の取得が1回、更新が8回、最後の確認が4回、ホスト側の作業の通知が7回に分かれる。
 更新の8回は、3つの変数の取得と、`deployed_sha`の読み取りが失敗したときの存在の確認である。
 残りは、`deployed_sha`の更新、更新が時間切れになったときの読み直し、成功の記録、失敗の記録である。
 成功の記録と失敗の記録は一方しか通らないが、呼び出しの箇所を数えるので、両方を数える。
 時間切れの後に中断されず残る処理は、この合計に含めない。
 最後の確認では、stateの読みと書き、noticeの挿入、通知先の取得を区切る。
+ホスト側の作業の通知の7回は、印の読み取り、未解決の通知の一覧、通知の解決(上限の3件まで)、noticeの挿入、通知先の取得である。
+Discordへの通知の2回は、ホスト側の作業の通知と、最後の確認の通知である。
 値を変えるときは、`tests/scripts/self_update_timeout.test.ts`が次の2点を確かめる。
 
 - `timeout`が、`self_update.ts`の見積もり以上であること。
@@ -515,7 +529,7 @@ PRの列挙の`git log`も、ほかのgitと同じく`runCommand`の上限(60秒
 ジョブの上限で打ち切られた回の扱いは次のとおりである。
 
 - 最後に行うConsole用のworkerの確認が走らず、`deployments`にも記録が残らない。
-- 打ち切られるまでの最大45分、実行が終わらない。
+- 打ち切られるまでの最大約50分、実行が終わらない。
   10分ごとの次の4回は多重実行の防止で飛ばされる。
   この間は、自己更新の反映とConsole用のworkerの確認が止まる。
 - `on_error_schedule`が時間切れでも呼ばれるなら、打ち切りのたびにDiscordの`job_failed`で即時に気づける。
@@ -525,8 +539,6 @@ PRの列挙の`git log`も、ほかのgitと同じく`runCommand`の上限(60秒
   人が止めた回は数えない。
   `canceled_by`が`timeout`になるかは確かめていない。
 - ユーザー名が`timeout`の人が取り消した回は、時間切れと見分けられず、失敗に数えられる。
-
-`infra/**`の変更と、`mise.toml`の`[tools]`か`[env]`の変更は、worker自身では反映できない。`self_update`は`deployments.needs_host_action`を`true`にしてログに残し、通知はしない。これらはホスト側のcheckoutをpullしたうえで、次に`mise run up`で起動したときに反映される。
 
 `console/`の変更は`self_update`の対象ではない。
 マージ後にCIが成果物`console-dist`を作り、`console_fetcher`が数分で取り込む。

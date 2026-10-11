@@ -49,6 +49,7 @@ import {
   listPendingIssueProposals,
   listStaleTerminalWorkItems,
   listTrackedPrs,
+  listUnresolvedNoticesByKind,
   newestNewerIssueCycle,
   newestNewerPrWorkItem,
   nextCycleForIssue,
@@ -115,6 +116,9 @@ function createFakeSqlClient(responses: SqlRow[][] = []): {
 }
 
 const NOW = new Date("2026-09-26T00:00:00.000Z");
+
+/** ジョブの外で動いたときの記録。環境変数に頼らず、値の並びを固定するために明示して渡す。 */
+const NO_JOBS = { job_id: null, root_job_id: null };
 
 const WORK_ITEM_ROW: SqlRow = {
   id: 1,
@@ -219,8 +223,21 @@ describe("insertIssueWorkItemUnlessActive", () => {
 
   test("passes the issue, the new cycle and the new id to the sweep", async () => {
     const { sql, calls } = createFakeSqlClient([WON, []]);
-    await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql);
-    expect(calls[1]?.values).toEqual(["octo-owner", "atelier-works", 42, 1, 7]);
+    await insertIssueWorkItemUnlessActive(
+      NEW_WORK_ITEM,
+      sql,
+      undefined,
+      NO_JOBS,
+    );
+    expect(calls[1]?.values).toEqual([
+      "octo-owner",
+      "atelier-works",
+      42,
+      1,
+      7,
+      null,
+      null,
+    ]);
   });
 
   test("records an event for each cancelled work item", async () => {
@@ -776,6 +793,7 @@ describe("updateStatusIfLeaseHolderClearingFlowJobId", () => {
       "job-1",
       "note",
       sql,
+      NO_JOBS,
     );
     expect(calls[0]?.values).toEqual([
       "requirements_generating",
@@ -785,6 +803,8 @@ describe("updateStatusIfLeaseHolderClearingFlowJobId", () => {
       "pr_open",
       "requirements_generating",
       "note",
+      null,
+      null,
     ]);
   });
 
@@ -3218,6 +3238,32 @@ describe("getNoticeById", () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await getNoticeById(5, sql);
     expect(calls[0]?.text).toContain("FROM factory.notices WHERE id =");
+  });
+});
+
+describe("listUnresolvedNoticesByKind", () => {
+  test("returns the id and message of each row", async () => {
+    const { sql } = createFakeSqlClient([[{ id: "5", message: "m" }]]);
+    expect(await listUnresolvedNoticesByKind("k", sql)).toEqual([
+      { id: 5, message: "m" },
+    ]);
+  });
+
+  test("returns an empty list when nothing is unresolved", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await listUnresolvedNoticesByKind("k", sql)).toEqual([]);
+  });
+
+  test("selects only unresolved rows of the kind", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listUnresolvedNoticesByKind("k", sql);
+    expect(calls[0]?.text).toContain("resolved = false");
+  });
+
+  test("passes the kind as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listUnresolvedNoticesByKind("k", sql);
+    expect(calls[0]?.values).toContain("k");
   });
 });
 
