@@ -121,13 +121,62 @@ export type AttemptChoice = {
 /** 試行の選択肢に並べる件数の上限。新しいほうから数える。 */
 const MAX_ATTEMPT_CHOICES = 50;
 
-/** 最新の試行の番号から、新しい順に試行の選択肢を作る。 */
-export function attemptChoices(latestAttempt: number): AttemptChoice[] {
-  const count = Math.min(latestAttempt, MAX_ATTEMPT_CHOICES);
+/**
+ * 試行の選択肢を、`top`から1まで新しい順に作る。
+ * `latestConfirmed`が真のときだけ、先頭を最新とする。
+ * 古い試行を開いていて、最新の試行をまだ確かめられないときは偽にする。
+ * 開いた試行を最新と誤って示さないためである。
+ */
+export function attemptChoices(
+  top: number,
+  latestConfirmed: boolean,
+): AttemptChoice[] {
+  const count = Math.min(top, MAX_ATTEMPT_CHOICES);
   return Array.from({ length: count }, (_, index) => ({
-    attempt: latestAttempt - index,
-    latest: index === 0,
+    attempt: top - index,
+    latest: latestConfirmed && index === 0,
   }));
+}
+
+/**
+ * 最新の試行の番号を、確かめられたときだけ返す。
+ * 最新を指定して取った本文は、その試行が最新である。
+ * 試行の番号を指定して取ったときは、一覧の行の最新の試行を使う。
+ * 一覧がまだ答えないときと、一覧に行が無いときは`null`にする。
+ * 一覧の取得後に増えた試行を見逃さないよう、開いている試行より小さい値にはしない。
+ */
+export function confirmedLatestAttempt(input: {
+  readonly requested: number | null;
+  readonly shown: number;
+  readonly indexed: number | null;
+}): number | null {
+  if (input.requested === null) {
+    return input.shown;
+  }
+  return input.indexed === null ? null : Math.max(input.indexed, input.shown);
+}
+
+export type AttemptParam =
+  | { readonly kind: "latest" }
+  | { readonly kind: "attempt"; readonly attempt: number }
+  | { readonly kind: "invalid" };
+
+/** backendが試行の番号として受け付ける最大値(32ビット符号つき整数)。 */
+const MAX_ATTEMPT = 2147483647;
+
+/**
+ * URLの`attempt`の値を読む。無ければ最新を指す。
+ * あって、先頭が0でない正の整数でないか、`MAX_ATTEMPT`を超えるときは不正とする。
+ * 不正な値を最新として扱うと、別の試行を読んでいるのに気づけないためである。
+ */
+export function parseAttemptParam(raw: string | null): AttemptParam {
+  if (raw === null) {
+    return { kind: "latest" };
+  }
+  const attempt = parseIdParam(raw);
+  return attempt === null || attempt > MAX_ATTEMPT
+    ? { kind: "invalid" }
+    : { kind: "attempt", attempt };
 }
 
 /**

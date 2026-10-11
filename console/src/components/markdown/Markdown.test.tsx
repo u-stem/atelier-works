@@ -86,6 +86,12 @@ describe("Markdown links", () => {
     expect(render("[x](javascript:alert(1))")).not.toContain("<a ");
   });
 
+  test("renders a footnote reference as text", () => {
+    expect(render("see[^1]\n\n[^1]: note")).not.toContain(
+      'href="#h-user-content',
+    );
+  });
+
   test("points a heading link at the prefixed id", () => {
     expect(render("[jump](#background)\n\n## Background")).toContain(
       'href="#h-background"',
@@ -134,6 +140,22 @@ describe("Markdown diagrams", () => {
     expect(
       render("![flow](flow.drawio)", { rejectedDiagrams: ["flow"] }),
     ).not.toContain("<iframe");
+  });
+
+  test("does not put a figure inside a paragraph", () => {
+    expect(
+      render("see ![flow](flow.drawio) here", {
+        diagrams: [{ name: "flow", xml: DIAGRAM_XML }],
+      }),
+    ).not.toMatch(/<p[\s\S]*<figure/);
+  });
+
+  test("keeps the text around a diagram in the same block", () => {
+    expect(
+      render("see ![flow](flow.drawio) here", {
+        diagrams: [{ name: "flow", xml: DIAGRAM_XML }],
+      }),
+    ).toContain("see ");
   });
 
   test("says a diagram that is not in the document is missing", () => {

@@ -6,7 +6,11 @@ import { PageHeader } from "../../app/PageHeader.tsx";
 import { refreshStatusOf } from "../../app/refreshStatus.ts";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
 import { attemptRef, workItemRef } from "../../lib/labels.ts";
-import { prepareDoc } from "../../lib/requirementsView.ts";
+import {
+  confirmedLatestAttempt,
+  parseAttemptParam,
+  prepareDoc,
+} from "../../lib/requirementsView.ts";
 import { parseIdParam } from "../../lib/routeParams.ts";
 import { QueryFailure } from "./QueryFailure.tsx";
 import { RequirementsDocumentView } from "./RequirementsDocumentView.tsx";
@@ -98,7 +102,11 @@ function ItemRequirements({
     );
   }
   const indexRow = index.data?.find((row) => row.work_item_id === workItemId);
-  const latestAttempt = Math.max(doc.attempt, indexRow?.latest_attempt ?? 0);
+  const latestAttempt = confirmedLatestAttempt({
+    requested: attempt,
+    shown: doc.attempt,
+    indexed: indexRow?.latest_attempt ?? null,
+  });
   return (
     <>
       <PageHeader
@@ -121,13 +129,13 @@ function ItemRequirements({
 
 /**
  * 作業項目の要件定義書の画面。`?attempt=<k>`で試行を指し、無ければ最新の試行を出す。
- * 番号が正しくないときは、取得せずにその旨を出す。
+ * 作業項目の番号か試行の番号が正しくないときは、取得せずにその旨を出す。
  */
 export function ItemRequirementsScreen() {
   const params = useParams();
   const [searchParams] = useSearchParams();
   const workItemId = parseIdParam(params.id);
-  const attempt = parseIdParam(searchParams.get("attempt"));
+  const attemptParam = parseAttemptParam(searchParams.get("attempt"));
   if (workItemId === null) {
     return (
       <>
@@ -138,6 +146,17 @@ export function ItemRequirementsScreen() {
       </>
     );
   }
+  if (attemptParam.kind === "invalid") {
+    return (
+      <>
+        <PageHeader title="要件定義">
+          <BackLink />
+        </PageHeader>
+        <Message>試行の番号が正しくありません。</Message>
+      </>
+    );
+  }
+  const attempt = attemptParam.kind === "attempt" ? attemptParam.attempt : null;
   return (
     <ItemRequirements
       key={`${workItemId}-${attempt ?? "latest"}`}

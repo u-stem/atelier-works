@@ -57,7 +57,8 @@ export function RequirementsDocumentView({
 }: {
   doc: RequirementsDoc;
   prepared: PreparedDoc;
-  latestAttempt: number;
+  /** 最新の試行の番号。確かめられていないときは`null`。 */
+  latestAttempt: number | null;
 }) {
   const repo = useMemo(
     () => ({ owner: doc.owner, repo: doc.repo }),

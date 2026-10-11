@@ -111,11 +111,12 @@ export function extractTitle(markdown: string): string | null {
 
 /**
  * `##`と`###`の見出しをすべて、文書の順に返す。
- * 同じスラッグが重なったときは、2つ目から`-2`、`-3`…を付け、`id`を一意にする。
+ * `id`が使用済みのときは、使われていない`id`になるまで`-2`、`-3`…を付けて一意にする。
+ * 見出しの`a`が2つと`a-2`が1つあっても、3つの`id`は重ならない。
  * 文字が残らない見出しは、`id`を作れないので含めない。
  */
 export function extractHeadings(markdown: string): Heading[] {
-  const seen = new Map<string, number>();
+  const used = new Set<string>();
   const headings: Heading[] = [];
   for (const heading of scanHeadings(markdown)) {
     if (heading.level === 1) {
@@ -125,13 +126,15 @@ export function extractHeadings(markdown: string): Heading[] {
     if (slug === "") {
       continue;
     }
-    const count = (seen.get(slug) ?? 0) + 1;
-    seen.set(slug, count);
-    const suffix = count === 1 ? "" : `-${String(count)}`;
+    let id = `${HEADING_ID_PREFIX}${slug}`;
+    for (let count = 2; used.has(id); count += 1) {
+      id = `${HEADING_ID_PREFIX}${slug}-${String(count)}`;
+    }
+    used.add(id);
     headings.push({
       level: heading.level,
       text: heading.text,
-      id: `${HEADING_ID_PREFIX}${slug}${suffix}`,
+      id,
       line: heading.line,
     });
   }

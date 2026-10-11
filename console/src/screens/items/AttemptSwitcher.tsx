@@ -9,6 +9,7 @@ import {
 /**
  * 要件定義の試行を切り替えるリンクの並び。新しい試行から並べ、表示中の試行に印を付ける。
  * 最新の試行へのリンクは番号を付けず、最新を指し続ける。
+ * 最新を確かめられないあいだは、どの試行にも「(最新)」を付けず、番号を付けたリンクにする。
  * 却下による作り直しで試行は増えるが、それまでの試行も読める。
  */
 export function AttemptSwitcher({
@@ -18,11 +19,12 @@ export function AttemptSwitcher({
 }: {
   workItemId: number;
   current: number;
-  latest: number;
+  /** 最新の試行の番号。確かめられていないときは`null`で、開いている試行までを並べる。 */
+  latest: number | null;
 }) {
   return (
     <nav aria-label="試行の切り替え" className="flex flex-wrap gap-2">
-      {attemptChoices(latest).map((choice) => (
+      {attemptChoices(latest ?? current, latest !== null).map((choice) => (
         <Link
           key={choice.attempt}
           to={requirementsPath(

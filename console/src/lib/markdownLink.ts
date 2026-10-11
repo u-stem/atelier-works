@@ -37,6 +37,13 @@ function shorten(text: string): string {
 }
 
 /**
+ * 脚注への参照が使う`id`の接頭辞。無害化が脚注の`id`に付ける。
+ * 本文は脚注の記法を使わない方針で、この`id`の要素は描かれない。
+ * 見出しへのリンクと同じ形に見えるので、読み替えずに文字にする。
+ */
+const FOOTNOTE_ID_PREFIX = "user-content-fn";
+
+/**
  * `#`で始まり、`slugify`が作る見出しのスラッグと同じ形のときだけ、
  * `#`を除いたスラッグを返す。そうでなければ`null`を返す。
  * Markdownの処理系は`href`の非ASCIIをパーセントエンコードするので、
@@ -52,7 +59,11 @@ function headingSlugOf(href: string): string | null {
   } catch {
     return null;
   }
-  if (decoded === "" || slugify(decoded) !== decoded) {
+  if (
+    decoded === "" ||
+    slugify(decoded) !== decoded ||
+    decoded.startsWith(FOOTNOTE_ID_PREFIX)
+  ) {
     return null;
   }
   return decoded;

@@ -928,6 +928,7 @@ GitHubへのリンクは、`rel="noopener noreferrer"`を付けて新しいタ�
 `Markdown`が`repo`を必須の引数で受けるので、リポジトリを渡さずにGitHubのURLをリンクにする経路は無い。
 見出しへのフラグメントは、接頭辞`h-`を付けた見出しの`id`を指すように読み替える。
 見出しの`id`が、ページの他の要素の`id`や`name`と重ならないようにするためである。
+脚注の記法は使わない。脚注への参照(`#user-content-fn`で始まるフラグメント)は、リンクにせず文字で出す。
 本文、要約、未確定事項、題名は、描く前に`displayableIssueText`で見えない文字を置き換える。
 画像は図の参照`<name>.drawio`だけを無害化のスキーマで通し、それ以外の画像のURLは描かない。
 `src/components/markdown/Markdown.test.tsx`が、次のものを描かないことを固定している。

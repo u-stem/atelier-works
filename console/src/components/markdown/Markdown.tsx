@@ -22,6 +22,7 @@ import {
   Children,
   createContext,
   isValidElement,
+  memo,
   type ReactNode,
   useContext,
   useMemo,
@@ -218,12 +219,27 @@ function TitleHeading({
   return <h2 className={H2_CLASS}>{children}</h2>;
 }
 
-/** 図の参照だけを含む段落かを返す。 */
-function isSoleImage(
-  node: { children: readonly { type: string; tagName?: string }[] } | undefined,
-): boolean {
-  const only = node?.children.length === 1 ? node.children[0] : undefined;
-  return only?.type === "element" && only.tagName === "img";
+type ParagraphNode = {
+  children: readonly { type: string; tagName?: string }[];
+};
+
+function isImage(child: { type: string; tagName?: string }): boolean {
+  return child.type === "element" && child.tagName === "img";
+}
+
+/**
+ * 段落の描き方を決める。
+ * 図の参照だけの段落は、包まずに図を直接描く。
+ * 文章と図が混ざる段落は`div`にする。図は`figure`で、`p`の中に置けないためである。
+ */
+function paragraphKind(
+  node: ParagraphNode | undefined,
+): "bare" | "block" | "paragraph" {
+  const children = node?.children ?? [];
+  if (children.length === 1 && children.every(isImage)) {
+    return "bare";
+  }
+  return children.some(isImage) ? "block" : "paragraph";
 }
 
 const components: Components = {
@@ -254,8 +270,16 @@ const components: Components = {
       {children}
     </h6>
   ),
-  p: ({ node, children }) =>
-    isSoleImage(node) ? <>{children}</> : <p className="my-3">{children}</p>,
+  p: ({ node, children }) => {
+    switch (paragraphKind(node)) {
+      case "bare":
+        return <>{children}</>;
+      case "block":
+        return <div className="my-3">{children}</div>;
+      case "paragraph":
+        return <p className="my-3">{children}</p>;
+    }
+  },
   ul: ({ children }) => (
     <ul className="my-3 list-disc space-y-1 pl-6">{children}</ul>
   ),
@@ -347,7 +371,11 @@ type MarkdownProps = {
   readonly repo: RepoRef;
 };
 
-export function Markdown({
+/**
+ * 本文の描画は重く、図のiframeを含む。親が再描画されても、入力が同じなら描き直さない。
+ * 入力の配列とオブジェクトは、呼び出し側が同じ参照を渡し続ける。
+ */
+export const Markdown = memo(function Markdown({
   markdown,
   headings,
   hiddenTitleLine = null,
@@ -372,4 +400,4 @@ export function Markdown({
       </div>
     </MarkdownContext.Provider>
   );
-}
+});

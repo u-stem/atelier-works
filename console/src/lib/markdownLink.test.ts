@@ -80,6 +80,8 @@ describe("resolveMarkdownLink", () => {
     ["fragment with a malformed escape", "#%E0%A4%A"],
     ["fragment with an encoded control character", "#a%00b"],
     ["fragment with a query", "#a?b=1"],
+    ["footnote reference", "#user-content-fn-1"],
+    ["footnote back reference", "#user-content-fnref-1"],
   ])("renders %s as text", (_name, href) => {
     expect(resolveMarkdownLink(href, "label", REPO).kind).toBe("text");
   });

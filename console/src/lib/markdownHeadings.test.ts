@@ -67,6 +67,27 @@ describe("extractHeadings", () => {
     expect(ids).toEqual(["h-notes", "h-notes-2", "h-notes-3"]);
   });
 
+  test("avoids an id that a numbered heading already uses", () => {
+    const ids = extractHeadings("## a\n## a\n## a-2").map(
+      (heading) => heading.id,
+    );
+    expect(ids).toEqual(["h-a", "h-a-2", "h-a-2-2"]);
+  });
+
+  test("skips a number that an earlier heading already uses", () => {
+    const ids = extractHeadings("## a-2\n## a\n## a").map(
+      (heading) => heading.id,
+    );
+    expect(ids).toEqual(["h-a-2", "h-a", "h-a-3"]);
+  });
+
+  test("keeps every id unique", () => {
+    const ids = extractHeadings("## a\n## a-2\n## a\n## a-2\n## a").map(
+      (heading) => heading.id,
+    );
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
   test("records the line of each heading", () => {
     const headings = extractHeadings("# Title\n\ntext\n## First");
     expect(headings[0]?.line).toBe(4);

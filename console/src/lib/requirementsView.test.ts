@@ -6,11 +6,13 @@ import type {
 } from "../api/guards/requirements.ts";
 import {
   attemptChoices,
+  confirmedLatestAttempt,
   DRAWIO_IMAGE_SRC,
   diagramSlotState,
   docSourceNotice,
   emptyFilterMessage,
   filterRequirementsRows,
+  parseAttemptParam,
   parseWorkItemFilter,
   prepareDoc,
   requirementsPath,
@@ -182,29 +184,99 @@ describe("requirementsPath", () => {
 
 describe("attemptChoices", () => {
   test("lists every attempt from the newest", () => {
-    expect(attemptChoices(3).map((choice) => choice.attempt)).toEqual([
+    expect(attemptChoices(3, true).map((choice) => choice.attempt)).toEqual([
       3, 2, 1,
     ]);
   });
 
-  test("marks only the newest attempt as the latest", () => {
-    expect(attemptChoices(3).map((choice) => choice.latest)).toEqual([
+  test("marks only the newest attempt as the latest when it is confirmed", () => {
+    expect(attemptChoices(3, true).map((choice) => choice.latest)).toEqual([
       true,
       false,
       false,
     ]);
   });
 
+  test("marks no attempt as the latest when it is not confirmed", () => {
+    expect(attemptChoices(3, false).map((choice) => choice.latest)).toEqual([
+      false,
+      false,
+      false,
+    ]);
+  });
+
+  test("still lists the attempts up to the open one when it is not confirmed", () => {
+    expect(attemptChoices(3, false).map((choice) => choice.attempt)).toEqual([
+      3, 2, 1,
+    ]);
+  });
+
   test("lists a single attempt", () => {
-    expect(attemptChoices(1)).toEqual([{ attempt: 1, latest: true }]);
+    expect(attemptChoices(1, true)).toEqual([{ attempt: 1, latest: true }]);
   });
 
   test("limits the list for an implausibly large number", () => {
-    expect(attemptChoices(1_000_000).length).toBe(50);
+    expect(attemptChoices(1_000_000, true).length).toBe(50);
   });
 
   test("keeps the newest attempts when it limits the list", () => {
-    expect(attemptChoices(1_000_000)[0]?.attempt).toBe(1_000_000);
+    expect(attemptChoices(1_000_000, true)[0]?.attempt).toBe(1_000_000);
+  });
+});
+
+describe("confirmedLatestAttempt", () => {
+  test("is the attempt of the document when the latest was requested", () => {
+    expect(
+      confirmedLatestAttempt({ requested: null, shown: 2, indexed: null }),
+    ).toBe(2);
+  });
+
+  test("is unknown for an older attempt while the list has not answered", () => {
+    expect(
+      confirmedLatestAttempt({ requested: 1, shown: 1, indexed: null }),
+    ).toBeNull();
+  });
+
+  test("is the latest attempt of the list row for an older attempt", () => {
+    expect(confirmedLatestAttempt({ requested: 1, shown: 1, indexed: 3 })).toBe(
+      3,
+    );
+  });
+
+  test("is never older than the attempt shown", () => {
+    expect(confirmedLatestAttempt({ requested: 4, shown: 4, indexed: 3 })).toBe(
+      4,
+    );
+  });
+});
+
+describe("parseAttemptParam", () => {
+  test("means the latest attempt without a parameter", () => {
+    expect(parseAttemptParam(null)).toEqual({ kind: "latest" });
+  });
+
+  test("reads a number", () => {
+    expect(parseAttemptParam("2")).toEqual({ kind: "attempt", attempt: 2 });
+  });
+
+  test("reads the largest number the backend accepts", () => {
+    expect(parseAttemptParam("2147483647")).toEqual({
+      kind: "attempt",
+      attempt: 2147483647,
+    });
+  });
+
+  test.each([
+    ["empty", ""],
+    ["text", "abc"],
+    ["zero", "0"],
+    ["leading zero", "02"],
+    ["decimal", "1.5"],
+    ["negative", "-1"],
+    ["above the integer range", "2147483648"],
+    ["unsafe integer", "99999999999999999999"],
+  ])("rejects %s", (_name, value) => {
+    expect(parseAttemptParam(value)).toEqual({ kind: "invalid" });
   });
 });
 
