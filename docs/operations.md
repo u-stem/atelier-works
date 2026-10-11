@@ -1396,9 +1396,9 @@ workerのイメージに入れるツールのバージョンは、`mise.toml`の
 
 ### Console(console/)を反映する・戻す
 
-`console/`の変更は、`main`にマージされてCIが通れば、数分で`console_fetcher`が取り込んで反映する。
+`console/`の変更は、`main`にマージされて`console-dist.yml`が成功すれば、数分で`console_fetcher`が取り込んで反映する。
 `self_update`は関与しない。
-`console`ジョブは、draw.ioのビューアを外部から取得する。
+`console-dist.yml`は、draw.ioのビューアを外部から取得する。
 取得に失敗したときの対応は、[Consoleの配信の仕様](internals/console.md)の「ビューアの取得」にある。
 `infra/console_fetcher/`の変更は、ほかの`infra/`と同じく次の`mise run up`で反映される。
 `infra/Caddyfile`は、`mise run up`と`mise run deploy`が起動の後にCaddyを再起動して反映する。
@@ -1409,7 +1409,7 @@ Caddyを再起動するまで、`/console/drawio.html`には`frame-ancestors 'no
 mise exec -- docker compose -f infra/docker-compose.yml restart caddy
 ```
 
-`console_fetcher`は5分ごとに、`main`へのpushで全体が成功した`ci.yml`の最新の実行を探す。
+`console_fetcher`は5分ごとに、`main`へのpushで成功した`console-dist.yml`の最新の実行を探す。
 その成果物`console-dist`を検証して`factory_console`の`releases/<sha>/`に置き、`current`を付け替える。
 状態は`status.json`に書き、ログにも出す。
 `status.json`には、`state`(`ok`、`failed`、`pinned`)、`sha`、`checked_at`、`error`が入る。
@@ -1481,14 +1481,14 @@ Caddyfileを更新してCaddyを再起動するまでは、`/console/status.json
 - 戻した元の版と同じ中身が、`main`の最新の成功した実行として配信し直されると、その中身は記録から外れる。
   `console:unpin --force`で外して`console_fetcher`が取り込んだ場合も同じである。
   外れたときは`revoked_digest_cleared`をログに出す。
-  CIを通った中身を意図して配信し直したものとして扱うためで、記録を手で編集する必要は無い。
+  ワークフローを通った中身を意図して配信し直したものとして扱うためで、記録を手で編集する必要は無い。
 - 外す処理が失敗したときは、`revoked_digest_clear_failed`をログに出す。
   記録は残るので、その中身の版は戻し先に選ばれず、配信中の版でなくなると整理が消す。
   原因を直すと、次にその中身が配信されるときに外れる。
 
 戻した元の版のマニフェストを読めないと、その版の中身を`pin`に記録できない。
 このとき`console:rollback`は、`The files of the release rolled back from could not be recorded`で始まる文を出す。
-この`pin`は、`console:unpin`がshaだけを照らすので、外す前に最新のCIの結果を確かめる。
+この`pin`は、`console:unpin`がshaだけを照らすので、外す前に最新の`console-dist.yml`の結果を確かめる。
 
 `pin`を外すと、`console_fetcher`は最新の成功した実行を取り込む。
 その実行が戻した元の版と同じ中身だと、問題の版が再び配信される。
@@ -1502,9 +1502,9 @@ Caddyfileを更新してCaddyを再起動するまでは、`/console/status.json
 
 | 状況 | 人がすること |
 | --- | --- |
-| `pin`を読めない(JSONでない、`rolled_back_from`や`rolled_back_content`の要素がshaやsha256の形でない) | 最新のCIの結果を確かめ、`--force`で外す |
-| 最新の成功した実行のshaが、戻した元の版のshaである | 修正を`main`に入れ、そのCIが成功してからやり直す |
-| 最新の成功した実行の`files`が、戻した元の版と同じである | `console/`を変える修正を`main`に入れ、そのCIが成功してからやり直す |
+| `pin`を読めない(JSONでない、`rolled_back_from`や`rolled_back_content`の要素がshaやsha256の形でない) | 最新の`console-dist.yml`の結果を確かめ、`--force`で外す |
+| 最新の成功した実行のshaが、戻した元の版のshaである | 修正を`main`に入れ、その`console-dist.yml`が成功してからやり直す |
+| 最新の成功した実行の`files`が、戻した元の版と同じである | `console/`を変える修正を`main`に入れ、その`console-dist.yml`が成功してからやり直す |
 | 最新の実行を調べられない(トークンや`CONSOLE_GITHUB_REPO`の不備、ネットワークの失敗) | 原因を直してやり直す |
 | 最新の実行の`files`を調べられない(成果物の取得か検証に失敗) | 原因を直してやり直す |
 | 戻した元の版を消せていない | このコマンドの出力か`console_fetcher`のログの`revoked_cleanup_skipped`、`revoked_cleanup_failed`を確かめ、原因を直してやり直す |
@@ -1535,7 +1535,7 @@ Caddyfileを更新してCaddyを再起動するまでは、`/console/status.json
 | `auth_failed` | トークンが失効した | 再発行して投入し、`mise run up`する |
 | `forbidden`、`not_found` | トークンの対象リポジトリか権限(Actions: Read)が違う | トークンと`mise.toml`の`CONSOLE_GITHUB_REPO`を確かめる |
 | `rate_limited` | GitHub APIの呼び出し回数の上限に達した | 何もしなくてよい。5分ごとの次の確認で再試行し、その間も今の版を配信し続ける |
-| `no_successful_run`、`artifact_missing`、`artifact_expired` | 取り込める成果物が無い | CIの結果を確かめ、必要なら`main`にpushしてCIを動かす |
+| `no_successful_run`、`artifact_missing`、`artifact_expired` | 取り込める成果物が無い | `console-dist.yml`の実行の結果を確かめ、必要なら`main`にpushして動かす |
 | `digest_mismatch`、`manifest_mismatch`、`zip_unsafe_entry`、`unexpected_redirect` | 検証に失敗した | 今の版を配信し続けるので急ぎではないが、原因を調べる |
 | `asset_conflict` | 新しい版の`assets/`のファイルが、既にある同じ名前のファイルと中身が違う(`console/public/assets/`の名前の付け替え忘れなど) | 置き換えると配信中の版が壊れるので取り込まない。名前を直したcommitを`main`に入れる |
 
