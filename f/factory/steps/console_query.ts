@@ -776,7 +776,8 @@ export type RequirementsDocRow = {
 /**
  * doc dirの`requirements.md`と、宣言された図のファイルをディスクから読んで返す。
  * `readFile`はテスト用に差し替えられる。
- * このランナブルと、ファイルを書く`pipeline_generate.ts`は同じworkerのコンテナで動くので、
+ * このランナブルはConsole用のworkerで動き、ファイルを書く`pipeline_generate.ts`はdefaultのworkerで動く。
+ * Console用のworkerは、書き込み先の`requirements`だけを同じパスに読み取り専用でマウントするので、
  * 普通のファイル読み込みで読める。
  *
  * `docDir`は絶対パスで、`..`を字面で解決した後に`REQUIREMENTS_BASE_DIR`の下でなければならない。
