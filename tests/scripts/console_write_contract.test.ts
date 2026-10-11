@@ -119,14 +119,33 @@ describe("allowlist", () => {
     },
   );
 
-  test("rejects every script that is not on the list", async () => {
+  test("rejects the name of every script that is not on the list", async () => {
     const listed = new Set<string>(Object.values(SCRIPT_PATHS));
     const accepted: string[] = [];
     for await (const file of new Glob("f/**/*.script.yaml").scan(".")) {
       const path = file.replace(/\.script\.yaml$/, "");
-      if (!listed.has(path) && isScriptName(path)) accepted.push(path);
+      const basename = path.split("/").pop() ?? path;
+      if (!listed.has(path) && isScriptName(basename)) accepted.push(path);
     }
     expect(accepted).toEqual([]);
+  });
+
+  test("rejects the path of every script, because only names are accepted", async () => {
+    const accepted: string[] = [];
+    for await (const file of new Glob("f/**/*.script.yaml").scan(".")) {
+      const path = file.replace(/\.script\.yaml$/, "");
+      if (isScriptName(path)) accepted.push(path);
+    }
+    expect(accepted).toEqual([]);
+  });
+
+  test("the scan sees scripts outside the list", async () => {
+    const listed = new Set<string>(Object.values(SCRIPT_PATHS));
+    let outside = 0;
+    for await (const file of new Glob("f/**/*.script.yaml").scan(".")) {
+      if (!listed.has(file.replace(/\.script\.yaml$/, ""))) outside += 1;
+    }
+    expect(outside).toBeGreaterThan(10);
   });
 });
 
@@ -332,7 +351,14 @@ function isTestFile(file: string): boolean {
   return /\.test\.tsx?$/.test(file);
 }
 
-/** src/apiの外でfetchを呼んでよいファイル。Windmillのscriptの呼び出しではない。 */
+/**
+ * src/apiの外でfetchを呼んでよいファイル。Windmillのscriptの呼び出しではない。
+ * 検出するのは、fetch()、globalThis.fetch、window.fetch、self.fetch、XMLHttpRequest、sendBeaconである。
+ * 見ないもの: fetchを別名に代入してから呼ぶ形、動的に組み立てた識別子、WebSocketとEventSource。
+ */
+const FETCH_LIKE =
+  /(?<![.\w])fetch\s*\(|\b(?:globalThis|window|self)\s*\.\s*fetch\b|XMLHttpRequest|sendBeacon/;
+
 const FETCH_OUTSIDE_API = ["console/src/useReleaseWatch.ts"];
 
 describe("api boundary", () => {
@@ -362,7 +388,7 @@ describe("api boundary", () => {
     for (const file of await consoleSourcesOutsideApi()) {
       if (isTestFile(file) || FETCH_OUTSIDE_API.includes(file)) continue;
       const source = await Bun.file(file).text();
-      if (/(?<![.\w])fetch\s*\(/.test(source)) offenders.push(file);
+      if (FETCH_LIKE.test(source)) offenders.push(file);
     }
     expect(offenders).toEqual([]);
   });

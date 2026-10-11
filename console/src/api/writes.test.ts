@@ -5,6 +5,7 @@ import {
   CONSOLE_DECISION_NOTE,
   decideApproval,
   kickoffAudit,
+  MAX_REASON_LENGTH,
   resolveNotice,
   retryWorkItem,
 } from "./writes.ts";
@@ -35,6 +36,36 @@ async function failureOf(promise: Promise<unknown>): Promise<unknown> {
 }
 
 const APPROVED = { ok: true, status: "approved", job_id: JOB } as const;
+
+describe("decideApproval reason length", () => {
+  const input = (reason: string) =>
+    ({ approvalRequestId: 3, decision: "reject", reason }) as const;
+
+  test("limits the reason to 4000 characters", () => {
+    expect(MAX_REASON_LENGTH).toBe(4000);
+  });
+
+  test("sends a reason of exactly the limit", async () => {
+    const { fetchFn, calls } = respondWith({ ...APPROVED, status: "rejected" });
+    await decideApproval(input("x".repeat(MAX_REASON_LENGTH)), { fetchFn });
+    expect(calls.length).toBe(1);
+  });
+
+  test("refuses a reason over the limit", async () => {
+    const { fetchFn } = respondWith(APPROVED);
+    await expect(
+      decideApproval(input("x".repeat(MAX_REASON_LENGTH + 1)), { fetchFn }),
+    ).rejects.toBeInstanceOf(RangeError);
+  });
+
+  test("sends nothing for a reason over the limit", async () => {
+    const { fetchFn, calls } = respondWith(APPROVED);
+    await decideApproval(input("x".repeat(MAX_REASON_LENGTH + 1)), {
+      fetchFn,
+    }).catch(() => undefined);
+    expect(calls).toEqual([]);
+  });
+});
 
 describe("decideApproval", () => {
   test("calls approval_decide", async () => {

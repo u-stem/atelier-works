@@ -55,4 +55,42 @@ describe("holdUntilFresh", () => {
     client.setQueryData(SUMMARY_KEY, 1);
     expect(released).toBe(false);
   });
+
+  test("does not release until every watched query has fresh data", () => {
+    const client = new QueryClient();
+    let released = false;
+    holdUntilFresh(
+      client.getQueryCache(),
+      [SUMMARY_KEY, ["console", "deployments"]],
+      () => {
+        released = true;
+      },
+    );
+    client.setQueryData(SUMMARY_KEY, 1);
+    expect(released).toBe(false);
+  });
+
+  test("releases once every watched query has fresh data", () => {
+    const client = new QueryClient();
+    let released = false;
+    holdUntilFresh(
+      client.getQueryCache(),
+      [SUMMARY_KEY, ["console", "deployments"]],
+      () => {
+        released = true;
+      },
+    );
+    client.setQueryData(SUMMARY_KEY, 1);
+    client.setQueryData(["console", "deployments"], []);
+    expect(released).toBe(true);
+  });
+
+  test("releases at once when nothing is watched", () => {
+    const client = new QueryClient();
+    let released = false;
+    holdUntilFresh(client.getQueryCache(), [], () => {
+      released = true;
+    });
+    expect(released).toBe(true);
+  });
 });

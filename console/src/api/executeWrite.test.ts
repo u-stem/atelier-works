@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { type ApiError, ApiFailure } from "./errors.ts";
+import { type ApiError, ApiFailure, describeApiError } from "./errors.ts";
 import {
   executeWrite,
   isResultUnknown,
@@ -10,6 +10,7 @@ type Setup = {
   run: () => Promise<string>;
   refetch?: () => Promise<unknown>;
   onOutcome?: (outcome: WriteOutcome<string>) => void;
+  onStale?: () => void;
   refetchTimeoutMs?: number;
 };
 
@@ -29,6 +30,7 @@ function setup(options: Setup) {
     },
     onStale: () => {
       events.push("stale");
+      options.onStale?.();
     },
     ...(options.refetchTimeoutMs === undefined
       ? {}
@@ -65,6 +67,25 @@ describe("isResultUnknown", () => {
       expect(isResultUnknown(error)).toBe(false);
     },
   );
+});
+
+describe("isResultUnknown and the write wording", () => {
+  const EVERY_KIND = [
+    { kind: "unauthorized" },
+    { kind: "forbidden" },
+    { kind: "job_failed", message: "boom" },
+    { kind: "timeout_or_unknown" },
+    { kind: "http", status: 400, detail: "bad" },
+    { kind: "http", status: 502, detail: "" },
+    { kind: "network" },
+    { kind: "invalid_response" },
+  ] satisfies ApiError[];
+
+  test.each(EVERY_KIND)("agree for %o", (error) => {
+    expect(
+      describeApiError(error, "write").includes("結果が分かりません"),
+    ).toBe(isResultUnknown(error));
+  });
 });
 
 describe("executeWrite on success", () => {
@@ -248,6 +269,29 @@ describe("executeWrite when the refetch does not succeed", () => {
     const { deps, events } = setup({ run: failWith({ kind: "forbidden" }) });
     await executeWrite(deps);
     expect(events).not.toContain("stale");
+  });
+});
+
+describe("executeWrite when the stale report fails", () => {
+  const STALE = {
+    run: () => Promise.resolve("ok"),
+    refetch: () => Promise.reject(new Error("refetch failed")),
+    onStale: () => {
+      throw new Error("toast failed");
+    },
+  };
+
+  test("still says the list is stale", async () => {
+    const { deps } = setup(STALE);
+    expect((await executeWrite(deps)).refetched).toBe(false);
+  });
+
+  test("still returns the outcome", async () => {
+    const { deps } = setup(STALE);
+    expect((await executeWrite(deps)).outcome).toEqual({
+      kind: "done",
+      result: "ok",
+    });
   });
 });
 

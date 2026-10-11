@@ -57,11 +57,27 @@ export type DecideApprovalInput = {
   readonly withFactoryLabel?: boolean;
 };
 
-/** 保留中の承認依頼に、承認か却下を記録する。 */
+/**
+ * 理由の長さの上限(文字数)。
+ * 理由はDBに記録され、Issueやレポートに出るので、画面から無制限には送らせない。
+ * script側には上限が無い。Windmillのapiを直に呼ぶ者には効かない。
+ */
+export const MAX_REASON_LENGTH = 4000;
+
+/**
+ * 保留中の承認依頼に、承認か却下を記録する。
+ * 理由が`MAX_REASON_LENGTH`を超えるときは、送らずに`RangeError`で断る。
+ * 画面は、送る前に長さを確かめて、入力欄で知らせる。
+ */
 export function decideApproval(
   input: DecideApprovalInput,
   options: RunScriptOptions = {},
 ): Promise<ApprovalDecideResult> {
+  if (input.reason.length > MAX_REASON_LENGTH) {
+    return Promise.reject(
+      new RangeError(`reason is longer than ${String(MAX_REASON_LENGTH)}`),
+    );
+  }
   return callWrite(
     "approval_decide",
     {

@@ -85,7 +85,7 @@ async function refetchWithin(
  * 成功と、結果が分からない失敗の後は、関連する取得を読み直し、終わるまで待つ。
  * 読み直しが失敗したか上限の時間を超えたときは、`refetched`を`false`にして`onStale`を呼ぶ。
  * 呼び出し側は、一覧が最新になるまで、その対象の操作を止めておく。
- * `onOutcome`が例外を投げても、読み直しと戻り値は変えない。画面の知らせの失敗で、書き込みの扱いを変えないためである。
+ * `onOutcome`と`onStale`が例外を投げても、読み直しと戻り値は変えない。画面の知らせの失敗で、書き込みの扱いを変えないためである。
  * `ApiFailure`でない例外は、プログラムの誤りなので投げ直す。
  */
 export async function executeWrite<T>(
@@ -118,7 +118,11 @@ export async function executeWrite<T>(
     deps.refetchTimeoutMs ?? REFETCH_TIMEOUT_MS,
   );
   if (!refetched) {
-    deps.onStale?.();
+    try {
+      deps.onStale?.();
+    } catch {
+      // 知らせの失敗で、一覧が古いことを返す戻り値を変えない。呼び出し側がロックを保つ。
+    }
   }
   return { outcome, refetched };
 }
