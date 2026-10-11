@@ -8,7 +8,7 @@
 // 期限の計算と要約の整形は`./lib/cleanup_db_support.ts`にあり、
 // このファイルは入出力をつなぐだけ。掃除は表ごとに独立しており、
 // 1つの表の削除が失敗してもログと`factory.notices`の行に残して残りを続ける。
-// 各catchの中の`addNotice`は例外を捕まえないので、DBに接続できないときは
+// 各catchの中の`addNoticeUnlessUnresolved`は例外を捕まえないので、DBに接続できないときは
 // その呼び出しも失敗して`main`の外へ伝わる。
 // こうして、接続障害を全件0件の結果として握りつぶさずに表に出す。
 //
@@ -28,7 +28,7 @@ import {
 import { loadConfig } from "./lib/config.ts";
 import { INFO_NOTICE_KINDS } from "./lib/console_support.ts";
 import {
-  addNotice,
+  addNoticeUnlessUnresolved,
   type DeletedWorkItemRef,
   deleteDeploymentsBefore,
   deleteJobFailuresBefore,
@@ -68,7 +68,7 @@ async function cleanupWorkItems(
     log.error("cleanup_db: failed to delete terminal work items", {
       error: message,
     });
-    await addNotice({
+    await addNoticeUnlessUnresolved({
       kind: "cleanup_db_failed",
       message: `終端work itemの削除に失敗しました: ${message}`,
     });
@@ -101,7 +101,7 @@ async function cleanupDocDirs(
         wiDir,
         error: message,
       });
-      await addNotice({
+      await addNoticeUnlessUnresolved({
         kind: "cleanup_db_failed",
         message: `要件定義ディレクトリの削除に失敗しました(${wiDir}): ${message}`,
       });
@@ -116,7 +116,7 @@ async function cleanupJobFailures(cutoff: Date, log: Logger): Promise<number> {
   } catch (err) {
     const message = errorMessage(err);
     log.error("cleanup_db: failed to delete job_failures", { error: message });
-    await addNotice({
+    await addNoticeUnlessUnresolved({
       kind: "cleanup_db_failed",
       message: `失敗記録の削除に失敗しました: ${message}`,
     });
@@ -130,7 +130,7 @@ async function cleanupDeployments(cutoff: Date, log: Logger): Promise<number> {
   } catch (err) {
     const message = errorMessage(err);
     log.error("cleanup_db: failed to delete deployments", { error: message });
-    await addNotice({
+    await addNoticeUnlessUnresolved({
       kind: "cleanup_db_failed",
       message: `デプロイ記録の削除に失敗しました: ${message}`,
     });
@@ -147,7 +147,7 @@ async function cleanupNotices(cutoff: Date, log: Logger): Promise<number> {
     log.error("cleanup_db: failed to delete resolved notices", {
       error: message,
     });
-    await addNotice({
+    await addNoticeUnlessUnresolved({
       kind: "cleanup_db_failed",
       message: `解決済みの通知の削除に失敗しました: ${message}`,
     });
@@ -170,7 +170,7 @@ async function cleanupInfoNotices(cutoff: Date, log: Logger): Promise<number> {
     log.error("cleanup_db: failed to resolve stale info notices", {
       error: message,
     });
-    await addNotice({
+    await addNoticeUnlessUnresolved({
       kind: "cleanup_db_failed",
       message: `古い情報の通知の解決に失敗しました: ${message}`,
     });
@@ -191,7 +191,7 @@ async function recordRun(counts: CleanupCounts, log: Logger): Promise<void> {
     log.error("cleanup_db: failed to record cleanup_runs row", {
       error: message,
     });
-    await addNotice({
+    await addNoticeUnlessUnresolved({
       kind: "cleanup_db_failed",
       message: `掃除結果の記録に失敗しました: ${message}`,
     });

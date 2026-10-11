@@ -12,7 +12,7 @@ import {
 } from "../lib/claude.ts";
 import { loadConfig } from "../lib/config.ts";
 import {
-  addNotice,
+  addNoticeUnlessUnresolved,
   countPrFixFailures,
   latestDraft,
   recordAgentRun,
@@ -352,9 +352,10 @@ export async function main(
       // `allowed_check_commands`は、対象リポジトリの検証されていないコードを、
       // worker内でサンドボックスなしにroot権限で実行する。
       // この常設リスクを記録に残らないままにせずNoticesの画面に見え続けるよう、
-      // 1日1回ではなく実行のたびにnoticeを記録する。
+      // 本文は件数と対象のPRと作業項目で決まるので、作業項目ごとに記録する。
+      // 同じ本文の未解決のnoticeは重ねず、1日を過ぎていれば作成時刻を更新して、一覧に出し続ける。
       announceChecks: async () => {
-        await addNotice({
+        await addNoticeUnlessUnresolved({
           kind: "unsandboxed_check_commands",
           message: `pr_fix_verifyはこれから${String(config.allowed_check_commands.length)}件のallowed_check_commandsを、サンドボックス分離なしでroot権限により${owner}/${repo}#${String(pr_number)}の未検証コードに対して実行します(work item ${String(work_item_id)})。`,
         });

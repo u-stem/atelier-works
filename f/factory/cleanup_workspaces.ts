@@ -35,7 +35,11 @@ import {
   type WorktreeHolder,
 } from "./lib/cleanup_support.ts";
 import { loadConfig } from "./lib/config.ts";
-import { addNotice, listActive, listStaleTerminalWorkItems } from "./lib/db.ts";
+import {
+  addNoticeUnlessUnresolved,
+  listActive,
+  listStaleTerminalWorkItems,
+} from "./lib/db.ts";
 import { type GhClient, getPr } from "./lib/github.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import {
@@ -83,7 +87,7 @@ async function recordBusyWorktreeNotice(
   log: Logger,
 ): Promise<void> {
   try {
-    await addNotice({
+    await addNoticeUnlessUnresolved({
       kind: "cleanup_worktree_busy",
       message: busyWorktreeNoticeMessage(input),
     });
@@ -330,7 +334,7 @@ async function removeStaleWorktrees(
   );
   for (const group of skipped) {
     try {
-      await addNotice({
+      await addNoticeUnlessUnresolved({
         kind: "cleanup_worktrees_skipped",
         message: unresolvedHoldersNoticeMessage(group.owner, group.repo),
       });
@@ -400,7 +404,7 @@ async function recordDiskUsage(log: Logger): Promise<number> {
     return 0;
   }
   const usageKb = parseDiskUsageKb(duResult.stdout);
-  await addNotice({
+  await addNoticeUnlessUnresolved({
     kind: "workspace_disk_usage",
     message: formatDiskUsageMessage(usageKb, WORKSPACES_ROOT),
   });

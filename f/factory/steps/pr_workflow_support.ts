@@ -3494,7 +3494,7 @@ export function decidePostProposalTransition(
 
 // ---------------------------------------------------------------------------
 // describeReason: `reason` / `status_reason`の文字列を、表示のためだけに日本語に訳す。
-// `updateStatusIfCurrent` / `addNotice`で記録する`reason`は、
+// `updateStatusIfCurrent` / `addNoticeUnlessUnresolved`で記録する`reason`は、
 // 元の英語の形のまま保つ必要がある。
 // 他のツールがその値を手がかりにしており、`factory.notices`と`status_reason`は
 // 機械的に比べられる状態を保つためのものだから。
@@ -3503,7 +3503,7 @@ export function decidePostProposalTransition(
 // `describeReason`は、`pr_workflow_support.ts`と、pr_fix_*、pipeline_*、
 // `pr_review_generate.ts`の各ステップが出す既知の関門と結果の理由の文字列を、
 // その表示のためだけに日本語の文へ対応させる。呼び出し側は、訳していない値を
-// 引き続き`updateStatusIfCurrent` / `addNotice`に渡す。
+// 引き続き`updateStatusIfCurrent` / `addNoticeUnlessUnresolved`に渡す。
 // この関数が知らない理由(Claude自身の自由文の`summary`や`blocked_reason`を含む)は、
 // 黙って捨てたり崩したりせず、そのまま返す。
 // ---------------------------------------------------------------------------

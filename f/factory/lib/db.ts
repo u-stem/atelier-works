@@ -12,7 +12,10 @@
 // クライアントとサーバーのバージョンが食い違う。
 import * as wmill from "windmill-client@1.817.0";
 import type { CleanupCounts } from "./cleanup_db_support.ts";
-import { ACTIONABLE_WORK_ITEM_STATUSES } from "./console_support.ts";
+import {
+  ACTIONABLE_WORK_ITEM_STATUSES,
+  INFO_NOTICE_KINDS,
+} from "./console_support.ts";
 import { type JobIds, jobIdsFromEnv } from "./job_ids.ts";
 import { type Logger, logger, maskSecrets } from "./log.ts";
 import {
@@ -1184,28 +1187,26 @@ export async function getLatestDeployment(
 // notices
 // ---------------------------------------------------------------------------
 
-/** `factory.notices`に行を挿入し、そのIDを返す。 */
-export async function addNotice(
-  record: NoticeRecord,
-  sql: SqlClient = defaultSqlClient,
-): Promise<number> {
-  const statement = sql`
-    INSERT INTO factory.notices (kind, message)
-    VALUES (${record.kind}, ${record.message})
-    RETURNING id
-  `;
-  const row = await fetchOneRow(statement, "addNotice");
-  return parseId(row.id, "id");
-}
-
 /**
  * 同じ`kind`と`message`の未解決のnoticeが無いときだけ`factory.notices`に挿入し、
- * そのIDを返す。あれば挿入せず`null`を返す。
+ * 挿入した行のIDを返す。未解決のnoticeがあれば挿入せず`null`を返す。
  * 状態が変わらない間、スケジュールのたびに同じnoticeが積み上がるのを防ぐため。
  * 解決済みのnoticeは数えないので、解決した後に同じ状況が起きれば再び挿入する。
  * `message`が状態の値(版の組など)を含めば、値が変わったときは新しいnoticeになる。
- * 確認と挿入は1つの文で行うが、並行して実行すると重複しうる。
- * 呼び出し元は、同時に実行しないこと(スケジュールの`no_flow_overlap`)に頼る。
+ * 通知を作る経路は、この関数だけを使う。
+ *
+ * 既存の未解決のnoticeは、「情報」の種類(`INFO_NOTICE_KINDS`)で`created_at`が1日より前なら、
+ * 現在時刻に更新する。
+ * 「情報」のnoticeはConsoleの一覧に作成から7日しか出さず、解決はDBの掃除(30日)まで起きない。
+ * 更新しないと、状況が続いているのに、8日目から一覧に出ず新しいnoticeも作られないため。
+ * 「要対応」の種類は期間で絞らずに出すので更新しない。更新すると、詳細の発生時刻と受信箱の並びが変わる。
+ * 1日の間隔を空けるのは、スケジュールのたびに行を書き換えないため。
+ * 更新だけの呼び出しは`null`を返すので、挿入のときだけ別の通知を送る呼び出し元の意味は変わらない。
+ *
+ * 確認と挿入は1つの文で行う。並行した挿入との競合は、未解決のnoticeの部分一意索引
+ * (`kind`と`message`のmd5)で受け、`ON CONFLICT`の更新に回る。
+ * 更新の条件に合わない行は`RETURNING`に出ないので、その場合も`null`になる。
+ * `xmax = 0`は、その行をこの文が挿入したときだけ成り立つ。
  */
 export async function addNoticeUnlessUnresolved(
   record: NoticeRecord,
@@ -1213,16 +1214,18 @@ export async function addNoticeUnlessUnresolved(
 ): Promise<number | null> {
   const rows = await sql`
     INSERT INTO factory.notices (kind, message)
-    SELECT ${record.kind}, ${record.message}
-    WHERE NOT EXISTS (
-      SELECT 1 FROM factory.notices
-      WHERE kind = ${record.kind} AND message = ${record.message}
-        AND resolved = false
-    )
-    RETURNING id
+    VALUES (${record.kind}, ${record.message})
+    ON CONFLICT (kind, md5(message)) WHERE resolved = false
+    DO UPDATE SET created_at = now()
+    WHERE factory.notices.created_at < now() - interval '1 day'
+      AND factory.notices.kind = ANY(${[...INFO_NOTICE_KINDS]}::text[])
+    RETURNING id, (xmax = 0) AS inserted
   `.fetch();
   const row = rows[0];
-  return row === undefined ? null : parseId(row.id, "id");
+  if (row === undefined || !parseBoolean(row.inserted, "inserted")) {
+    return null;
+  }
+  return parseId(row.id, "id");
 }
 
 /** `factory.notices`の行をIDで1件取得する。無ければ`null`を返す。 */

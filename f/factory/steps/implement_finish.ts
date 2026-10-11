@@ -10,7 +10,7 @@ import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "../lib/config.ts";
 import { INTAKE_REFRESHED_NOTE_PREFIX } from "../lib/console_support.ts";
 import {
-  addNotice,
+  addNoticeUnlessUnresolved,
   getWorkItem,
   hasIntakeRefreshEvent,
   setFlowJobId,
@@ -360,7 +360,7 @@ async function finishImplement(
         : `${describeReason(reason)}\n${options.detail}`;
     if (moved) {
       try {
-        await addNotice({
+        await addNoticeUnlessUnresolved({
           kind: "implement_needs_human",
           message: `${owner}/${repo}#${String(issueNumber)} (work item ${String(work_item_id)}): ${described}`,
         });

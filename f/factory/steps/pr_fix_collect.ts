@@ -13,7 +13,7 @@
 
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "../lib/config.ts";
-import { addNotice, getWorkItem } from "../lib/db.ts";
+import { addNoticeUnlessUnresolved, getWorkItem } from "../lib/db.ts";
 import {
   type GhClient,
   getViewer,
@@ -118,7 +118,7 @@ export async function main(
       pr_number,
       authors: excludedAuthors,
     });
-    await addNotice({
+    await addNoticeUnlessUnresolved({
       kind: "fix_feedback_association_excluded",
       message: `${owner}/${repo}#${String(pr_number)}: allowed_labeler_associationsに含まれていないため${excludedAuthors.join(", ")}のフィードバックを除外しました(work item ${String(work_item_id)})`,
     });

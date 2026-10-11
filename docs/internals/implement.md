@@ -490,7 +490,7 @@ noticeは1回の掃除でパスごとに1件で、Discordには通知しない�
 
 検査コマンドは、Claudeが書いたテストやソースを、workerのコンテナ内でrootとして、サンドボックスなしで実行する。そのため実装フローは、そのリポジトリについて`check_commands_by_repo`に明示したコマンドだけを実行する。`allowed_check_commands`には落とさない。
 
-検査コマンドを実行するたびに、noticeの`unsandboxed_check_commands`を記録する。workerのサンドボックスができるまでは、Issueを信頼できる人だけが起票するリポジトリにだけ、このエントリを設定する。
+検査コマンドを実行するときに、作業項目ごとにnoticeの`unsandboxed_check_commands`を記録する。同じ本文の未解決のnoticeがあれば、新しく作らず、作成から1日を過ぎていれば時刻を更新する。workerのサンドボックスができるまでは、Issueを信頼できる人だけが起票するリポジトリにだけ、このエントリを設定する。
 
 lockfileは保護パスなので、Claudeが書き換えたラウンドでは検査コマンドを実行しない。
 

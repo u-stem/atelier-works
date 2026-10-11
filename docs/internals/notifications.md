@@ -9,7 +9,7 @@ Factoryは、知らせる内容によって経路を使い分ける。
 | 経路 | 載せるもの | 実装 |
 | --- | --- | --- |
 | Discordの通知 | 人の行動が要るイベントと、日次サマリー | `f/factory/lib/discord.ts` |
-| Consoleの**要対応**と**システム** | Discordに送らない事項(notice)。要対応の通知は**要対応**に、情報の通知は**システム**に出る | `factory.notices`、`addNotice` |
+| Consoleの**要対応**と**システム** | Discordに送らない事項(notice)。要対応の通知は**要対応**に、情報の通知は**システム**に出る | `factory.notices`、`addNoticeUnlessUnresolved` |
 | Consoleの**要対応**と**システム** | フローとスケジュールの失敗の記録。作業項目の失敗は**要対応**に、作業項目に紐づかない失敗は**システム**に出る | `factory.job_failures`、`recordFailure` |
 | GitHub | 成果物だけ | Issueへの承認のコメントと、承認を取り消したときのコメント、PRのレビューと返信 |
 
@@ -220,24 +220,49 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `cleanup_worktree_busy` | `cleanup_workspaces` | 作業項目のID、worktreeのパス、worktreeを使っているプロセス |
 | `workspace_disk_usage` | `cleanup_workspaces` | 作業領域のディスク使用量(MiB) |
 
-`fix_reply_post_failed`は、返信の投稿に1件以上失敗したとき1件だけ残す。Discordには通知しない。`unsandboxed_check_commands`は、検査コマンドを実行するたびに残す。
-`cleanup_worktree_busy`は、1回の掃除でworktreeのパスごとに1件残す。Discordには通知しない。
-次のnoticeは、同じ本文の未解決のものがあるあいだは追加しない。
-対象は、次の7種類である。
+`fix_reply_post_failed`は、返信の投稿に1件以上失敗したとき1件だけ残す。Discordには通知しない。`unsandboxed_check_commands`は、検査コマンドを実行するときに、作業項目ごとに残す。
+`cleanup_worktree_busy`は、1回の掃除でworktreeのパスごとに1件残す。同じ本文の未解決のnoticeがあるあいだは、[重複の抑止](#重複の抑止)のとおり新しく作らない。Discordには通知しない。
 
-- `labeler_denied`
-- `fork_head_denied`
-- `labeler_check_limit`
-- `claim_assignee_missing`
-- `claim_race_lost`
-- `supersede_failed`
-- `pr_trigger_label_left_removed`
+### 重複の抑止
 
-`claim_race_lost`のうち、`poll_issues`と`manual_intake_register`が残すものは対象である。
-`poll_prs`が残すものは、確認できずにトリガーラベルを付け直したときだけ対象にする。
-`poll_prs`のその他の`claim_race_lost`は、毎回追加する。
+noticeは、すべて`addNoticeUnlessUnresolved`で作る。
+同じ種類と本文の未解決のnoticeがあるあいだは、新しく追加しない。
+同じ状況が続く間、スケジュールや実行のたびに、見分けの付かないnoticeが積み上がるのを防ぐためである。
+本文が対象(作業項目、PR、版など)で決まるので、対象が違えば別のnoticeになる。
+解決済みのnoticeは数えないので、解決した後に同じ状況が起きれば、再び追加する。
+
+DBには、未解決のnoticeの種類と本文のmd5に対する部分一意索引があり、並行した追加の重複も拒む。
+`resolved_by`が`migration`の解決済みnoticeは、索引を作るmigrationが、同じ種類と本文の未解決のうち作成が最古の1件を残して解決したものである。
+
+### 作成時刻の更新
+
+既存の未解決のnoticeが重要度「情報」の種類で、作成(`created_at`)から1日を過ぎていれば、作成時刻を現在に更新する。
+「情報」のnoticeはConsoleの一覧に作成から7日しか出ず、解決はDBの掃除(既定30日)まで起きない。
+更新しないと、状況が続いていても8日目から一覧に出ない。新しいnoticeも作られないためである。
+1日の間隔は、スケジュールのたびに行を書き換えないために空ける。
+「情報」の種類の一覧は、Consoleの一覧と掃除が使う`INFO_NOTICE_KINDS`と同じものを使う。
+
+「要対応」のnoticeは、Consoleが期間で絞らずに出すので更新しない。
+更新すると、詳細の発生時刻と受信箱の並び(作成時刻の降順)が変わるためである。
+「要対応」のnoticeの作成時刻は、最初に起きた時刻のままである。
+時刻からは、状況が今も続いているかを判断できない。
+
+更新だけの呼び出しは、新しい行のIDを返さない。Discordの通知を、追加したときだけ送る呼び出し元の動作は変わらない。
+更新は「情報」のnoticeの作成時刻を進めるので、時刻を基準にする集計と処理には次の影響がある。
+
+- 監査の通知の集計は、更新された未解決のnoticeを、更新後の時刻の期間に数える。更新の前の期間を後から集計すると、その通知は含まれない。
+- 古い情報のnoticeを解決済みにする掃除は、更新後の時刻から保持期間を数える。状況が続く間は解決済みにならない。
+
+### 反映の順序
+
+`self_update`は、`wmill sync push`を先に、`wmill datatable migrate up`を後に実行する。
+両者の間は通常数秒で、新しいコードの`ON CONFLICT`が索引なしのまま失敗しうる。
+migrationが失敗したときは、次の自己更新(10分後)まで、noticeを作れない。migrationの失敗は、自己更新の失敗として知らされる。
+どちらも受け入れる。
+
+### 種類ごとの記録の条件
+
 `supersede_failed`は、新しいサイクルの挿入の後に、古い承認済みの作業項目を取り消す文が失敗したときに残す。Discordには通知しない。
-同じ状況が続く間、ポーリングのたびに積み上がるのを防ぐためである。
 `deployed_sha_mismatch`は、反映が止まったときだけ残す。
 mergeの直後から自己更新が反映するまでの間は、版が必ず食い違うためである。
 `poll_issues`は、食い違いを最初に見た時刻を、このスケジュールのWindmillのstateのキー`deployed_sha_check`の下に保存する。
