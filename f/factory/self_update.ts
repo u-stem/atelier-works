@@ -71,11 +71,13 @@ import {
 } from "./lib/self_update_support.ts";
 import { assertSha, type DeploymentPullRequest } from "./lib/types.ts";
 import {
+  assertOutputComplete,
   type CommandResult,
   type CommandRunner,
   DEFAULT_TIMEOUT_MS,
   ensureFactoryClone,
   FACTORY_CLONE_UPDATE_GIT_COMMAND_COUNT,
+  omittedMarkerIndex,
   pathExists,
   REPO_LOCK_MAX_WAIT_MS,
   REPO_LOCK_POLL_MS,
@@ -321,6 +323,50 @@ export async function isCommitInClone(
 }
 
 /**
+ * `listDifferingPaths`が保持する出力の上限(バイト)。超えるほど多くのパスが異なる版は、内容を比べずに未反映として扱う。
+ * 全部を読めないまま比べると、読めなかったパスの違いを見落とすためである。
+ */
+export const HOST_CONTENT_DIFF_MAX_BYTES = 1024 * 1024;
+
+/**
+ * self cloneの`from`と`to`の間で内容が異なるパスを返す(`git diff --name-only --no-renames -z from to`)。
+ * ホストの反映済みの版と内容を比べるために使う。改名を検出しないのは、旧名と新名の両方を列挙させるためである。
+ * 失敗、時間切れ、出力の読み取りの打ち切り、出力が`HOST_CONTENT_DIFF_MAX_BYTES`を超えて間が省かれたときは、例外を投げる。
+ * 省かれた印に見えるパスがあっても、比べるのを諦めるだけで、反映済みにはならない。
+ */
+export async function listDifferingPaths(
+  run: CommandRunner,
+  dir: string,
+  from: string,
+  to: string,
+): Promise<string[]> {
+  assertSha(from);
+  assertSha(to);
+  const result = await run(
+    [...GIT_BASE_ARGV, "diff", "--name-only", "--no-renames", "-z", from, to],
+    {
+      cwd: dir,
+      env: selfCloneGitEnv(),
+      timeoutMs: SELF_UPDATE_LOCAL_GIT_TIMEOUT_MS,
+      maxOutputBytes: HOST_CONTENT_DIFF_MAX_BYTES,
+    },
+  );
+  if (result.timedOut) {
+    throw new Error(`git diff timed out in ${dir}`);
+  }
+  if (result.exitCode !== 0) {
+    throw new Error(
+      maskSecrets(`git diff failed in ${dir}: ${result.stderr.trim()}`),
+    );
+  }
+  assertOutputComplete(`git diff in ${dir}`, result);
+  if (omittedMarkerIndex(result.stdout) >= 0) {
+    throw new Error(`too many differing paths between ${from} and ${to}`);
+  }
+  return parseNulSeparatedPaths(result.stdout);
+}
+
+/**
  * `<dir>/wmill.yaml`が無ければ例外を投げる。
  * 実際のworkerで、syncのルートでないディレクトリからCLIを実行し、
  * `wmill sync push`が"No wmill.yaml found."と表示しつつ"0 changes"で
@@ -458,11 +504,11 @@ export const SELF_UPDATE_GIT_COMMAND_COUNT =
 
 /**
  * 1回の実行で走る、ローカルだけのgit(上限は`SELF_UPDATE_LOCAL_GIT_TIMEOUT_MS`)の最大回数。
- * ホストの印の確認は、コミットの有無で1回、祖先の確認で最大`HOST_ACTION_RECONCILE_LIMIT + 1`回
+ * ホストの印の確認は、コミットの有無で1回、祖先の確認と内容の比較でそれぞれ最大`HOST_ACTION_RECONCILE_LIMIT + 1`回
  * (通知の解決で上限の数まで、この回の通知の判断で1回)。
  */
 export const SELF_UPDATE_LOCAL_GIT_COMMAND_COUNT =
-  1 + (HOST_ACTION_RECONCILE_LIMIT + 1);
+  1 + 2 * (HOST_ACTION_RECONCILE_LIMIT + 1);
 
 /** 1回の実行で走る`wmill sync push`と`wmill datatable migrate up`の回数。 */
 export const SELF_UPDATE_CLI_COMMAND_COUNT = 2;
@@ -613,6 +659,8 @@ async function updateSelf(
     commitExists: (sha) => isCommitInClone(runCommand, factoryClone.dir, sha),
     isAncestor: (ancestor, descendant) =>
       isAncestorSha(runCommand, factoryClone.dir, ancestor, descendant),
+    differingPaths: (from, to) =>
+      listDifferingPaths(runCommand, factoryClone.dir, from, to),
     log,
   });
   // ホストで反映が済んだ通知を解決する。反映が不要な回でも、反映の後でも呼ぶ。
