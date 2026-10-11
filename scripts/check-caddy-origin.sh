@@ -93,6 +93,7 @@ expect 403 "run_wait_result/fv/<version>" -H 'Sec-Fetch-Dest: image' "${localhos
 expect 403 "run_and_stream/f/<path>" -H 'Sec-Fetch-Dest: image' "${localhost}/api/w/factory/jobs/run_and_stream/f/factory/steps/x"
 expect 403 "run_and_stream/h/<hash>" -H 'Sec-Fetch-Dest: image' "${localhost}/api/w/factory/jobs/run_and_stream/h/abc"
 expect 403 "move_s3_file(末尾に/)" -H 'Sec-Fetch-Dest: image' "${localhost}/api/w/factory/job_helpers/move_s3_file/"
+expect 403 "GET + Sec-Fetch-Dest: empty + Sec-Fetch-Mode: navigate(<a download>)" -H 'Sec-Fetch-Dest: empty' -H 'Sec-Fetch-Mode: navigate' "${run}"
 expect 502 "GET + Sec-Fetch-Dest: empty + Cookie(fetch)" -H 'Sec-Fetch-Dest: empty' -H 'Cookie: token=x' "${run}"
 
 # ページの移動で送られる書き込み(注入された<form method=post>)は止める。fetchの書き込みは通す。

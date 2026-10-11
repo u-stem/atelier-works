@@ -361,6 +361,12 @@ describe("the rule for GET requests with side effects", () => {
     );
   });
 
+  test("the matcher stops navigation even when Sec-Fetch-Dest is empty", () => {
+    expect(sideEffectMatcher).toContain(
+      '|| {http.request.header.Sec-Fetch-Mode} == "navigate"',
+    );
+  });
+
   test("the handler responds 403", () => {
     expect(sideEffectHandler).toContain("respond 403");
   });

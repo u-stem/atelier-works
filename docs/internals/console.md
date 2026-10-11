@@ -142,6 +142,8 @@ Consoleは管理者のCookieで動くので、呼べる範囲を固定する。
 | 別のサイトの`Origin`で`/api/*`を呼ぶ | Caddyが403を返す | `scripts/check-caddy-origin.sh`で実測 |
 | `Sec-Fetch-Dest: image`で`run_wait_result`をGETする | Caddyが403を返す | `scripts/check-caddy-origin.sh`で実測 |
 | `Sec-Fetch-Mode: navigate`で`/api/*`へPOSTする | Caddyが403を返す | `scripts/check-caddy-origin.sh`で実測 |
+| `Sec-Fetch-Dest: empty`と`Sec-Fetch-Mode: navigate`で`run_wait_result`をGETする | Caddyが403を返す | `scripts/check-caddy-origin.sh`で実測 |
+| WindmillのUI(`/`と`/user/login`)の応答 | `Referrer-Policy`のヘッダーも`<meta name="referrer">`も無い。参照元の扱いはブラウザの既定に任される | 実測(1.817.0、`curl`) |
 | superadminでない主体が、tag`console`のscriptを呼ぶ | 400、JSON文字列`"Bad request: Tag console is not included in the allowed CUSTOM_TAGS, ..."` | 実測 |
 | ジョブの失敗の結果(CLIで確認) | `{"error":{"name","message","stack"}}`。HTTPの状態は未実測 | 結果の形だけ実測 |
 | ジョブが失敗する | 500を想定する。本文はJSONでもテキストでも読める | 状態は未実測 |
@@ -686,7 +688,9 @@ Firefox 70未満は、フォームのPOSTにも付けない。
 
 ブラウザが開いたオリジンは、`Host`ヘッダーのホスト名とポートに、`http://`か`https://`を付けたものである。
 許すのはこの2つだけで、`WM_HTTP_PORT`やホスト名を変えても規則はそのまま合う。
-前段でTLSを終端するときは、プロキシがブラウザの使った`Host`を保つ必要がある(`proxy_set_header Host $host`など)。
+前段でTLSを終端するときは、プロキシがブラウザの使った`Host`を、ポートを含めて保つ必要がある(nginxなら`proxy_set_header Host $http_host`)。
+nginxの既定は`Host`を転送先の名前に書き換え、`$host`はポートを落とす。
+どちらも`Origin`と合わなくなり、ログインを含む書き込みがすべて403になる。
 `Host`が内部の名前に変わると、ブラウザの`Origin`と合わず、書き込みがすべて403になる。
 `http://localhost:8080`で開いたなら、`http://localhost:8080`と`https://localhost:8080`が通る。
 同じポートでも、`http://127.0.0.1:8080`は通らない。
@@ -698,7 +702,9 @@ Windmillには、GETでジョブを起動するAPIがある。
 例は`GET /api/w/<workspace>/jobs/run_wait_result/p/<path>?payload=<base64>`である。
 同じオリジンの`<img>`やリンクから呼ぶと、`Sec-Fetch-Site: same-origin`で`Origin`も付かず、上の2つの規則を通る。
 Cookieの持ち主の権限でジョブが動き、承認のscriptなら、Cookieの持ち主が承認者として記録される。
-そのため、次のGETとHEADは、`Sec-Fetch-Dest`が`empty`(fetchとXHR)のときだけ通し、それ以外は403にする。
+そのため、次のGETとHEADは、`Sec-Fetch-Dest`が`empty`(fetchとXHR)で、かつ`Sec-Fetch-Mode`が`navigate`でないときだけ通し、それ以外は403にする。
+`<a download>`は`Sec-Fetch-Dest`が`empty`でも`navigate`になるので、`Sec-Fetch-Mode`でも止める。
+この規則の対象は、下の表のGETだけである。読み取りのナビゲーションには影響しない。
 Consoleの呼び出しはPOSTの`fetch`なので、影響しない。
 
 | 経路(`/api/w/<workspace>/`の下) | 理由 |

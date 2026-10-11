@@ -80,13 +80,14 @@
         # 上の2つの規則を通り抜けて、Cookieの持ち主の権限でジョブを起動できるためである。
         # ジョブを起動するrun_wait_resultとrun_and_stream、Slack/Teamsへ送るapproval、S3のファイルを動かすmove_s3_fileを止める。
         # 作業スペースの部分は`/`をまたいで一致させ、`/`の重なりも許す。余分に止めても害は無い。
+        # <a download>はSec-Fetch-Destがemptyでも、Sec-Fetch-Modeがnavigateになるので、これも止める。
         # Sec-Fetch-Destが無い古いブラウザやHTTPで公開したブラウザは、Cookieを持つときだけ止める。
         # CLIはSec-Fetch-*もCookieも送らないので通る。
         # 署名付きの承認リンク(jobs_u/resume、jobs_u/cancel)はメールから開くので、対象にしない。
         @side_effect_get_api {
                 method GET HEAD
                 path_regexp (?i)^/+api/+w/.+/(jobs/+(run_wait_result|run_and_stream|slack_approval|teams_approval)|job_helpers/+move_s3_file)(/|$)
-                expression `{http.request.header.Sec-Fetch-Dest} != "empty" && ({http.request.header.Sec-Fetch-Dest} != "" || {http.request.header.Cookie} != "")`
+                expression `({http.request.header.Sec-Fetch-Dest} != "empty" && ({http.request.header.Sec-Fetch-Dest} != "" || {http.request.header.Cookie} != "")) || {http.request.header.Sec-Fetch-Mode} == "navigate"`
         }
 
         # ページの移動(navigate)で送られる書き込みを止める。
