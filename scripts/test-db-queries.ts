@@ -1543,7 +1543,10 @@ execPsql(target, "DELETE FROM factory.drawio_viewer_observations");
 // 未解決の通知の重複の抑止
 // ---------------------------------------------------------------------------
 
-const dedupRecord = { kind: "qdb_dedup", message: "qdb dedup same body" };
+const dedupRecord = {
+  kind: INFO_NOTICE_KINDS[0] ?? "claim_race_lost",
+  message: "qdb dedup same body",
+};
 const dedupFirst = await addNoticeUnlessUnresolved(dedupRecord, sql);
 check(
   "notice dedup: the first insert returns the id",
@@ -1573,14 +1576,14 @@ check(
 const dedupRefreshed =
   dedupFirst === null ? null : await getNoticeById(dedupFirst, sql);
 check(
-  "notice dedup: an open notice older than a day gets a new created_at",
+  "notice dedup: an open info notice older than a day gets a new created_at",
   dedupRefreshed !== null &&
     Date.now() - dedupRefreshed.created_at.getTime() < 60 * 60 * 1000,
   dedupRefreshed,
 );
 const dedupCount = await sql`
   SELECT count(*)::integer AS n FROM factory.notices
-  WHERE kind = ${dedupRecord.kind}
+  WHERE kind = ${dedupRecord.kind} AND message = ${dedupRecord.message}
 `.fetch();
 check(
   "notice dedup: the refresh does not add a row",
@@ -1596,7 +1599,40 @@ check(
 );
 execPsql(
   target,
-  `DELETE FROM factory.notices WHERE kind = '${dedupRecord.kind}'`,
+  `DELETE FROM factory.notices WHERE kind = '${dedupRecord.kind}' AND message = '${dedupRecord.message}'`,
+);
+
+// 「要対応」の種類は、1日を過ぎても作成時刻を更新しない。受信箱の並びと詳細の発生時刻を変えないため。
+const actionRecord = {
+  kind: "qdb_dedup_action",
+  message: "qdb dedup action body",
+};
+check(
+  "notice dedup: the action kind used by the check is not an info kind",
+  !INFO_NOTICE_KINDS.includes(actionRecord.kind),
+);
+const actionFirst = await addNoticeUnlessUnresolved(actionRecord, sql);
+execPsql(
+  target,
+  `UPDATE factory.notices SET created_at = now() - interval '2 days' WHERE id = ${String(actionFirst)}`,
+);
+const actionBefore =
+  actionFirst === null ? null : await getNoticeById(actionFirst, sql);
+check(
+  "notice dedup: a repeated action notice returns null",
+  (await addNoticeUnlessUnresolved(actionRecord, sql)) === null,
+);
+const actionAfter =
+  actionFirst === null ? null : await getNoticeById(actionFirst, sql);
+check(
+  "notice dedup: an action notice older than a day keeps its created_at",
+  actionBefore !== null &&
+    actionAfter?.created_at.getTime() === actionBefore.created_at.getTime(),
+  actionAfter,
+);
+execPsql(
+  target,
+  `DELETE FROM factory.notices WHERE kind = '${actionRecord.kind}'`,
 );
 
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。

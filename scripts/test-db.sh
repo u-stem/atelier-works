@@ -99,6 +99,8 @@ verify_notice_dedup_index() {
     *notices_unresolved_key*) ;;
     *) die "the duplicate notice was rejected, but not by notices_unresolved_key: ${rejected}" ;;
   esac
+  # アプリのコードは`ON CONFLICT DO NOTHING`を使わない(競合は`DO UPDATE`で受ける)。
+  # ここでは、索引が`ON CONFLICT`の衝突先として働くことだけを確かめる。
   local skipped
   skipped="$(printf "INSERT INTO factory.notices (kind, message) VALUES ('dup_probe', 'same') ON CONFLICT DO NOTHING RETURNING id;\n" \
     | psql_exec "${SCRATCH_DB}" -q -t -A)" \

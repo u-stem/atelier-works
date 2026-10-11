@@ -12,7 +12,10 @@
 // クライアントとサーバーのバージョンが食い違う。
 import * as wmill from "windmill-client@1.817.0";
 import type { CleanupCounts } from "./cleanup_db_support.ts";
-import { ACTIONABLE_WORK_ITEM_STATUSES } from "./console_support.ts";
+import {
+  ACTIONABLE_WORK_ITEM_STATUSES,
+  INFO_NOTICE_KINDS,
+} from "./console_support.ts";
 import { type JobIds, jobIdsFromEnv } from "./job_ids.ts";
 import { type Logger, logger, maskSecrets } from "./log.ts";
 import {
@@ -1192,9 +1195,11 @@ export async function getLatestDeployment(
  * `message`が状態の値(版の組など)を含めば、値が変わったときは新しいnoticeになる。
  * 通知を作る経路は、この関数だけを使う。
  *
- * 既存の未解決のnoticeは、`created_at`が1日より前なら現在時刻に更新する。
+ * 既存の未解決のnoticeは、「情報」の種類(`INFO_NOTICE_KINDS`)で`created_at`が1日より前なら、
+ * 現在時刻に更新する。
  * 「情報」のnoticeはConsoleの一覧に作成から7日しか出さず、解決はDBの掃除(30日)まで起きない。
  * 更新しないと、状況が続いているのに、8日目から一覧に出ず新しいnoticeも作られないため。
+ * 「要対応」の種類は期間で絞らずに出すので更新しない。更新すると、詳細の発生時刻と受信箱の並びが変わる。
  * 1日の間隔を空けるのは、スケジュールのたびに行を書き換えないため。
  * 更新だけの呼び出しは`null`を返すので、挿入のときだけ別の通知を送る呼び出し元の意味は変わらない。
  *
@@ -1213,6 +1218,7 @@ export async function addNoticeUnlessUnresolved(
     ON CONFLICT (kind, md5(message)) WHERE resolved = false
     DO UPDATE SET created_at = now()
     WHERE factory.notices.created_at < now() - interval '1 day'
+      AND factory.notices.kind = ANY(${[...INFO_NOTICE_KINDS]}::text[])
     RETURNING id, (xmax = 0) AS inserted
   `.fetch();
   const row = rows[0];

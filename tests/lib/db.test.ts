@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { INFO_NOTICE_KINDS } from "../../f/factory/lib/console_support.ts";
 import {
   acquireImplementLease,
   addNoticeUnlessUnresolved,
@@ -1398,10 +1399,20 @@ describe("addNoticeUnlessUnresolved", () => {
     );
   });
 
-  test("passes the kind and the message once", async () => {
+  test("refreshes only a notice of an info kind", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 15, inserted: true }]]);
     await addNoticeUnlessUnresolved(record, sql);
-    expect(calls[0]?.values).toEqual([record.kind, record.message]);
+    expect(calls[0]?.text).toContain("AND factory.notices.kind = ANY(");
+  });
+
+  test("passes the kind, the message and the info kinds", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 15, inserted: true }]]);
+    await addNoticeUnlessUnresolved(record, sql);
+    expect(calls[0]?.values).toEqual([
+      record.kind,
+      record.message,
+      [...INFO_NOTICE_KINDS],
+    ]);
   });
 
   test("returns the new id when a row was inserted", async () => {
