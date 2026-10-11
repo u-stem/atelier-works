@@ -20,6 +20,7 @@ export function QueryFailure({
   loginHint,
   error,
   onRetry,
+  compact = false,
 }: {
   /** 取得できなかったものを指す題。 */
   title: string;
@@ -27,9 +28,14 @@ export function QueryFailure({
   loginHint: string;
   error: unknown;
   onRetry: () => void;
+  /** 画面の一部の節に出すときは真にする。画面全体を占めず、ログインの案内も文だけにする。 */
+  compact?: boolean;
 }) {
   const apiError = error instanceof ApiFailure ? error.apiError : null;
   if (apiError !== null && isBannerError(apiError)) {
+    if (compact) {
+      return <p className="text-small text-muted-foreground">{loginHint}</p>;
+    }
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
         <span className="inline-flex size-12 items-center justify-center rounded-full bg-muted text-subtle">
@@ -40,21 +46,18 @@ export function QueryFailure({
       </div>
     );
   }
-  return (
-    <div className="p-8">
-      <Alert variant="destructive">
-        <AlertTitle>{title}</AlertTitle>
-        <AlertDescription>
-          <p>
-            {apiError === null
-              ? "原因は不明です。"
-              : describeApiError(apiError)}
-          </p>
-          <Button size="sm" variant="outline" onClick={onRetry}>
-            もう一度取得する
-          </Button>
-        </AlertDescription>
-      </Alert>
-    </div>
+  const alert = (
+    <Alert variant="destructive">
+      <AlertTitle>{title}</AlertTitle>
+      <AlertDescription>
+        <p>
+          {apiError === null ? "原因は不明です。" : describeApiError(apiError)}
+        </p>
+        <Button size="sm" variant="outline" onClick={onRetry}>
+          もう一度取得する
+        </Button>
+      </AlertDescription>
+    </Alert>
   );
+  return compact ? alert : <div className="p-8">{alert}</div>;
 }

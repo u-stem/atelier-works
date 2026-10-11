@@ -57,7 +57,7 @@ export function RequirementsIndexList({
   const inputId = useId();
   const visible = filterRequirementsRows(rows, filter);
   return (
-    <div className="mx-auto flex w-full max-w-[60rem] flex-col gap-4 px-8 py-6">
+    <div className="flex w-full flex-col gap-4">
       <div className="flex items-center gap-3">
         <label htmlFor={inputId} className="text-small text-muted-foreground">
           作業項目の番号で絞り込む
