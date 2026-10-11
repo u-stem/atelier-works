@@ -17,7 +17,7 @@ import {
 import { displayableIssueText } from "../../lib/intakeText.ts";
 import { ApprovalBar } from "./ApprovalBar.tsx";
 
-function ProposalBody({ proposal }: { proposal: InboxProposal }) {
+export function ProposalBody({ proposal }: { proposal: InboxProposal }) {
   const title = displayableIssueText(proposal.proposal_title);
   const body = displayableIssueText(proposal.proposal_body);
   const origin = proposalOrigin(proposal);

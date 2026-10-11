@@ -241,6 +241,16 @@ describe("approvalConfirmation", () => {
     expect(confirmation.consequence).toContain("要件定義");
   });
 
+  test("does not claim an implementation for a kind it does not know", () => {
+    const confirmation = approvalConfirmation({
+      kind: "other",
+      subject: "Something",
+      approvalRequestId: 9,
+      withFactoryLabel: undefined,
+    });
+    expect(confirmation.consequence).not.toContain("実装");
+  });
+
   test("says that it cannot be undone", () => {
     const confirmation = approvalConfirmation({
       kind: "requirements",

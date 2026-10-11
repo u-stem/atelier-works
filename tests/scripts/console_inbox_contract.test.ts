@@ -71,6 +71,13 @@ async function inboxAsDelivered(rows: SqlRow[]): Promise<unknown> {
   return JSON.parse(JSON.stringify(result));
 }
 
+/** 配信された"inbox"の先頭の提案。提案でなければ`undefined`。 */
+async function firstProposal(row: SqlRow) {
+  const delivered = await inboxAsDelivered([row]);
+  const first = Array.isArray(delivered) ? delivered[0] : undefined;
+  return isInboxProposal(first) ? first : undefined;
+}
+
 describe("inbox contract between console_query and the console guard", () => {
   test("accepts an inbox with requirements and both kinds of proposal", async () => {
     const delivered = await inboxAsDelivered([
@@ -85,23 +92,29 @@ describe("inbox contract between console_query and the console guard", () => {
     expect(isInboxRows(await inboxAsDelivered([]))).toBe(true);
   });
 
-  test("delivers the audit proposal fields the approval bar reads", async () => {
-    const delivered = await inboxAsDelivered([AUDIT_PROPOSAL_ROW]);
+  test("delivers the origin of an audit proposal", async () => {
+    expect((await firstProposal(AUDIT_PROPOSAL_ROW))?.origin).toBe("audit");
+  });
+
+  test("delivers the period of an audit proposal", async () => {
+    expect((await firstProposal(AUDIT_PROPOSAL_ROW))?.period_label).toBe(
+      "2026-10-01〜2026-10-07",
+    );
+  });
+
+  test("delivers that an audit proposal can take the label", async () => {
     expect(
-      Array.isArray(delivered) &&
-        delivered.length === 1 &&
-        isInboxProposal(delivered[0]) &&
-        delivered[0].origin === "audit" &&
-        delivered[0].factory_label_available,
+      (await firstProposal(AUDIT_PROPOSAL_ROW))?.factory_label_available,
     ).toBe(true);
   });
 
-  test("delivers a proposal from a pull request without the label", async () => {
-    const delivered = await inboxAsDelivered([PR_PROPOSAL_ROW]);
+  test("delivers that a proposal from a pull request cannot take the label", async () => {
     expect(
-      Array.isArray(delivered) &&
-        isInboxProposal(delivered[0]) &&
-        !delivered[0].factory_label_available,
-    ).toBe(true);
+      (await firstProposal(PR_PROPOSAL_ROW))?.factory_label_available,
+    ).toBe(false);
+  });
+
+  test("delivers the pull request number of a proposal from a pull request", async () => {
+    expect((await firstProposal(PR_PROPOSAL_ROW))?.pr_number).toBe(12);
   });
 });

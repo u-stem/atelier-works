@@ -21,7 +21,7 @@ export function approvalOutcomeNotice(
 ): ToastNotice {
   if (outcome.kind === "done") {
     return mode === "redo"
-      ? { tone: "success", message: "Issueの作成をやり直しました。" }
+      ? { tone: "success", message: "Issueの作成のやり直しを始めました。" }
       : describeApprovalResult(outcome.result);
   }
   const refusal = classifyDecisionRefusal(outcome.error);

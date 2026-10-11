@@ -1,6 +1,7 @@
 // approval_decideが、ジョブの中で確定して断った理由を、日本語の固定文と取れる手にする。
 // scriptの断りはジョブの失敗として返り、本文は英語である。
-// 他のscriptの失敗と取り違えないよう、文頭の`approval_decide:`を根拠にする。
+// Windmillは失敗の文に`Error: `などを前置きすることがあるので、文頭は見ない。
+// 他のscriptの失敗と取り違えないよう、断りの文に固有の部分だけを根拠にする。
 // 断りは、承認の記録より前に起きる。記録も起動もされていない。
 
 import type { ApiError } from "../api/errors.ts";
@@ -18,8 +19,6 @@ export type DecisionRefusal = {
   /** 承認者が取れる手。 */
   readonly actions: readonly string[];
 };
-
-const PREFIX = "approval_decide:";
 
 const REFUSALS: readonly {
   readonly marker: string;
@@ -78,14 +77,16 @@ const REFUSALS: readonly {
 
 /**
  * 承認の失敗が、approval_decideの確定した断りなら、その説明を返す。そうでなければ`null`。
+ * 文の出どころはbackendの`approval_decide.ts`と`approval_support.ts`で、契約テストが突き合わせる。
  * `null`のときは、結果が分からない失敗の案内を使う。
  */
 export function classifyDecisionRefusal(
   error: ApiError,
 ): DecisionRefusal | null {
-  if (error.kind !== "job_failed" || !error.message.startsWith(PREFIX)) {
+  if (error.kind !== "job_failed") {
     return null;
   }
-  const found = REFUSALS.find(({ marker }) => error.message.includes(marker));
+  const message = error.message;
+  const found = REFUSALS.find(({ marker }) => message.includes(marker));
   return found?.refusal ?? null;
 }

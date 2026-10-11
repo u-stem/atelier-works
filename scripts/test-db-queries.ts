@@ -11,6 +11,7 @@ import {
 } from "../f/factory/lib/console_support.ts";
 import {
   addNotice,
+  claimIssueCreation,
   countImplementFailedRounds,
   countPrFixFailures,
   deleteResolvedNoticesBefore,
@@ -26,6 +27,8 @@ import {
   resolveStaleInfoNoticesBefore,
   resolveUnresolvedNoticesByMessage,
   resolveUnresolvedNoticesByPrefix,
+  revertIssueProposalToPending,
+  setIssueProposalCreatedIssue,
   updateIntakeIfRegenerating,
 } from "../f/factory/lib/db.ts";
 import { getCleanupSummary } from "../f/factory/lib/summary_support.ts";
@@ -1437,6 +1440,60 @@ check(
     listed[0]?.id === listFirst &&
     listed[1]?.id === listSecond,
   listed,
+);
+
+// Issueを作る処理の印: 同時に呼んでも、取れるのは1つだけにする。
+const claimItem = await prWorkItem("pr_fix", 9101, "needs_human", "qdb claim");
+const claimRows = await sql`
+  INSERT INTO factory.issue_proposals (work_item_id, review_comment_id, title, body, status)
+  VALUES (${claimItem}::bigint, 1, 'qdb claim proposal', 'body', 'approved')
+  RETURNING id
+`.fetch();
+const claimId = Number(claimRows[0]?.id);
+const claimResults = await Promise.all([
+  claimIssueCreation(claimId, 600, sql),
+  claimIssueCreation(claimId, 600, sql),
+  claimIssueCreation(claimId, 600, sql),
+]);
+check(
+  "claimIssueCreation: exactly one of three concurrent calls takes the claim",
+  claimResults.filter((taken) => taken).length === 1,
+  claimResults,
+);
+check(
+  "claimIssueCreation: a claim within its lease cannot be taken again",
+  (await claimIssueCreation(claimId, 600, sql)) === false,
+);
+execPsql(
+  target,
+  `UPDATE factory.issue_proposals SET issue_creation_claimed_at = now() - interval '1 hour' WHERE id = ${String(claimId)}`,
+);
+check(
+  "claimIssueCreation: a claim past its lease can be taken over",
+  (await claimIssueCreation(claimId, 600, sql)) === true,
+);
+check(
+  "revertIssueProposalToPending: lets go of the claim",
+  (await revertIssueProposalToPending(claimId, sql)) === true &&
+    (
+      await sql`SELECT issue_creation_claimed_at FROM factory.issue_proposals WHERE id = ${claimId}::bigint`.fetch()
+    )[0]?.issue_creation_claimed_at === null,
+);
+execPsql(
+  target,
+  `UPDATE factory.issue_proposals SET status = 'approved' WHERE id = ${String(claimId)}`,
+);
+await setIssueProposalCreatedIssue(
+  claimId,
+  {
+    created_issue_number: 7,
+    created_issue_url: "https://github.com/qdb/r/issues/7",
+  },
+  sql,
+);
+check(
+  "claimIssueCreation: a row whose Issue is created cannot be claimed",
+  (await claimIssueCreation(claimId, 600, sql)) === false,
 );
 
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。

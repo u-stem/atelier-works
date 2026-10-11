@@ -47,7 +47,7 @@ describe("approvalOutcomeNotice", () => {
       result: APPROVED,
     };
     expect(approvalOutcomeNotice(outcome, "redo").message).toBe(
-      "Issueの作成をやり直しました。",
+      "Issueの作成のやり直しを始めました。",
     );
   });
 

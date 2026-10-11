@@ -3,7 +3,9 @@
 
 import type { SummaryApproval } from "../api/guards/summary.ts";
 import { MAX_REASON_LENGTH } from "../api/writes.ts";
+import { auditReportPath } from "./auditView.ts";
 import { displayableIssueText } from "./intakeText.ts";
+import { requirementsPath } from "./requirementsView.ts";
 
 /**
  * 承認と却下の操作を出してよい依頼か。承認待ち(pending)で、期限内のものに限る。
@@ -286,10 +288,17 @@ export function approvalConfirmation(input: {
       consequence: `承認すると、GitHubにIssueを作ります。${label}取り消せません。`,
     };
   }
+  if (input.kind === "requirements") {
+    return {
+      subject: input.subject,
+      idLabel,
+      consequence: "承認すると、Claudeによる実装が始まります。取り消せません。",
+    };
+  }
   return {
     subject: input.subject,
     idLabel,
-    consequence: "承認すると、Claudeによる実装が始まります。取り消せません。",
+    consequence: "承認すると、承認の処理が始まります。取り消せません。",
   };
 }
 
@@ -384,18 +393,14 @@ export function approvalLinks(
     "kind" | "work_item_id" | "draft_attempt" | "origin"
   >,
 ): ApprovalLinks {
-  const workItemId = String(approval.work_item_id);
-  const requirementsPath = `/items/${workItemId}/requirements`;
   return {
     requirements:
-      approval.kind !== "requirements"
-        ? null
-        : approval.draft_attempt === null
-          ? requirementsPath
-          : `${requirementsPath}?attempt=${String(approval.draft_attempt)}`,
+      approval.kind === "requirements"
+        ? requirementsPath(approval.work_item_id, approval.draft_attempt)
+        : null,
     auditReport:
       approval.kind === "issue_proposal" && approval.origin === "audit"
-        ? `/reports/audit/${workItemId}`
+        ? auditReportPath(approval.work_item_id)
         : null,
   };
 }

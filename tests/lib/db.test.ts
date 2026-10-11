@@ -4,6 +4,7 @@ import {
   addNotice,
   addNoticeUnlessUnresolved,
   bumpWatermarks,
+  claimIssueCreation,
   countImplementFailedRounds,
   countPendingIssueProposals,
   countPrFixFailures,
@@ -1959,6 +1960,12 @@ describe("revertIssueProposalToPending", () => {
     expect(reverted).toBe(true);
   });
 
+  test("lets go of the claim on the Issue creation", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 3 }]]);
+    await revertIssueProposalToPending(3, sql);
+    expect(calls[0]?.text).toContain("issue_creation_claimed_at = NULL");
+  });
+
   test("guards the update with status = 'approved' AND created_issue_number IS NULL", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 3 }]]);
     await revertIssueProposalToPending(3, sql);
@@ -1970,6 +1977,38 @@ describe("revertIssueProposalToPending", () => {
     const { sql } = createFakeSqlClient([[]]);
     const reverted = await revertIssueProposalToPending(3, sql);
     expect(reverted).toBe(false);
+  });
+});
+
+describe("claimIssueCreation", () => {
+  test("returns true when the claim is taken", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 3 }]]);
+    expect(await claimIssueCreation(3, 600, sql)).toBe(true);
+  });
+
+  test("returns false when another call holds the claim", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await claimIssueCreation(3, 600, sql)).toBe(false);
+  });
+
+  test("takes the claim only for an approved row with no created Issue", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 3 }]]);
+    await claimIssueCreation(3, 600, sql);
+    expect(calls[0]?.text).toContain(
+      "status = 'approved'\n      AND created_issue_number IS NULL",
+    );
+  });
+
+  test("takes over a claim whose lease has run out", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 3 }]]);
+    await claimIssueCreation(3, 600, sql);
+    expect(calls[0]?.text).toContain("issue_creation_claimed_at < now()");
+  });
+
+  test("passes the lease length as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 3 }]]);
+    await claimIssueCreation(3, 600, sql);
+    expect(calls[0]?.values).toContain(600);
   });
 });
 

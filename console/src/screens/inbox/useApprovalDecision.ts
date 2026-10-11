@@ -12,6 +12,7 @@ import {
   classifyDecisionRefusal,
   type DecisionRefusal,
 } from "../../lib/approvalRefusal.ts";
+import { redoCooldowns } from "../../lib/redoCooldown.ts";
 import { STALE_LIST_NOTICE } from "../../lib/writeNotices.ts";
 
 export type DecisionInput = {
@@ -56,7 +57,8 @@ function showToast(notice: ToastNotice): void {
 /**
  * 承認と却下の呼び出しを、ロックと読み直しに載せるフック。
  * scriptが確定して断ったときは、断りの説明を返す。トーストは消えるので、承認バーの中に残して出すためである。
- * `redo`は、承認済みの提案のIssue作成をやり直す呼び出しで、結果の文だけが違う。
+ * `redo`は、承認済みの提案のIssue作成をやり直す呼び出しで、結果の文が違う。
+ * やり直しが成功したら、その依頼のボタンを一定時間止める(`redoCooldowns`)。
  */
 export function useApprovalDecision(mode: "decide" | "redo"): {
   readonly submit: (input: DecisionInput) => boolean;
@@ -67,7 +69,10 @@ export function useApprovalDecision(mode: "decide" | "redo"): {
   const mutation = useWriteMutation<DecisionInput, ApprovalDecideResult>({
     keyOf,
     run,
-    onOutcome: (outcome) => {
+    onOutcome: (outcome, input) => {
+      if (mode === "redo" && outcome.kind === "done") {
+        redoCooldowns.start(input.approvalRequestId, Date.now());
+      }
       setRefusal(
         outcome.kind === "failed"
           ? classifyDecisionRefusal(outcome.error)

@@ -1862,6 +1862,36 @@ export async function setIssueProposalCreatedIssue(
 }
 
 /**
+ * 承認済みでIssueをまだ作っていない提案について、Issueを作る処理の印を取る。
+ * 取れたら`true`を返す。取れないのは、Issueを作り終えた行、承認済みでない行、
+ * または`leaseSeconds`以内に別の呼び出しが印を取った行である。
+ *
+ * 条件付きの1回のUPDATEで取るので、同時に呼ばれても取れるのは1つだけになる。
+ * GitHubの検索は索引の反映が遅れ、マーカーで探すだけでは、同時の呼び出しが
+ * どちらも空振りしてIssueを2件作りうるため、`issue_proposal_apply.ts`が作る直前に取る。
+ * 期限を過ぎた印は取り直せるので、処理が途中で止まっても、やり直しを塞がない。
+ */
+export async function claimIssueCreation(
+  id: number,
+  leaseSeconds: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  const rows = await sql`
+    UPDATE factory.issue_proposals
+    SET issue_creation_claimed_at = now()
+    WHERE id = ${id}
+      AND status = 'approved'
+      AND created_issue_number IS NULL
+      AND (
+        issue_creation_claimed_at IS NULL
+        OR issue_creation_claimed_at < now() - make_interval(secs => ${leaseSeconds}::integer)
+      )
+    RETURNING id
+  `.fetch();
+  return rows.length > 0;
+}
+
+/**
  * 承認済みの`factory.issue_proposals`の行を`pending`に戻す。
  * `WHERE status = 'approved' AND created_issue_number IS NULL`で守るので、
  * Issueがすでにある行(本当に完了した承認)は、誤って呼んでも変えない。
@@ -1886,7 +1916,8 @@ export async function revertIssueProposalToPending(
         decided_by = NULL,
         decision_reason = NULL,
         with_factory_label = NULL,
-        decided_at = NULL
+        decided_at = NULL,
+        issue_creation_claimed_at = NULL
     WHERE id = ${id} AND status = 'approved' AND created_issue_number IS NULL
     RETURNING id
   `.fetch();

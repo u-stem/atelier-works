@@ -65,18 +65,22 @@ describe("classifyDecisionRefusal", () => {
     ).toBeNull();
   });
 
-  test("ignores a failure that does not start with the script prefix", () => {
+  test("ignores a failure of another script", () => {
     expect(
       classifyDecisionRefusal(
-        jobFailed(
-          "retry_work_item: the issue title or body changed after intake",
-        ),
+        jobFailed("retry_work_item: work item 3 is not in a retryable status"),
       ),
     ).toBeNull();
   });
 
-  test("ignores a prefix that appears later in the message", () => {
-    expect(classifyDecisionRefusal(jobFailed(`x ${CHANGED}`))).toBeNull();
+  test("ignores an unrelated failure message", () => {
+    expect(classifyDecisionRefusal(jobFailed("connection reset"))).toBeNull();
+  });
+
+  test("recognizes a refusal that Windmill prefixed with Error:", () => {
+    expect(classifyDecisionRefusal(jobFailed(`Error: ${CHANGED}`))?.kind).toBe(
+      "changed",
+    );
   });
 
   test("ignores an error that is not a job failure", () => {

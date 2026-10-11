@@ -64,7 +64,7 @@ export function ApprovalBar(props: BarProps) {
     case "decide":
       return <DecideBar {...props} />;
     case "redo_issue":
-      return <IssueRedoBar approval={approval} subject={subject} />;
+      return <IssueRedoBar approval={approval} subject={subject} now={now} />;
     case "expired":
       return <Note>{EXPIRED_MESSAGE}</Note>;
     case "waiting":
