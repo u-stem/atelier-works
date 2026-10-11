@@ -1672,6 +1672,76 @@ describe("a process that cannot be inspected", () => {
     expect(entries[0]?.uninspectable).toBe(true);
   });
 
+  // 検査コマンドは別のuidで動くので、rootのworkerはそのenvironを読めない。
+  // ロックを持つflock(root)と同じプロセスグループの中なら、そのflockの持ち主として扱う。
+  /** pid 10(ロックを持つflock)の子で、同じプロセスグループのpid 11。environは読めない。 */
+  const CHECK_CHILD: FakeProc = {
+    stat: statLine(11, 10, 10, 2),
+    environ: "",
+  };
+
+  const scanWithCheckChild = (child: FakeProc = CHECK_CHILD) =>
+    scanLockProcesses(
+      LOCK,
+      failingProcFs(
+        { "10": TAGGED_HOLDER, "11": child },
+        "readText",
+        "/proc/11/environ",
+        errno("EACCES"),
+      ),
+      900,
+    );
+
+  test("covers an unreadable process in the group of a tagged holder", async () => {
+    const entries = await scanWithCheckChild();
+    expect(entries.find((found) => found.pid === 11)?.uninspectable).toBe(
+      false,
+    );
+  });
+
+  test("gives the covered process the holder's owner tag", async () => {
+    const entries = await scanWithCheckChild();
+    expect(entries.find((found) => found.pid === 11)?.owner).toEqual(OTHER_JOB);
+  });
+
+  test("gives the covered process the holder's lock file tag", async () => {
+    const entries = await scanWithCheckChild();
+    expect(entries.find((found) => found.pid === 11)?.lockPath).toBe(
+      LOCK.lockPath,
+    );
+  });
+
+  test("does not cover an unreadable process outside every tagged group", async () => {
+    const entries = await scanWithCheckChild({
+      stat: statLine(11, 1, 11, 2),
+      environ: "",
+    });
+    expect(entries.find((found) => found.pid === 11)?.uninspectable).toBe(true);
+  });
+
+  test("does not cover an unreadable process by a holder that has no tag", async () => {
+    const entries = await scanLockProcesses(
+      LOCK,
+      failingProcFs(
+        {
+          "10": { ...TAGGED_HOLDER, environ: "" },
+          "11": CHECK_CHILD,
+        },
+        "readText",
+        "/proc/11/environ",
+        errno("EACCES"),
+      ),
+      900,
+    );
+    expect(entries.find((found) => found.pid === 11)?.uninspectable).toBe(true);
+  });
+
+  test("plans to stop a holder together with its covered check processes", async () => {
+    const entries = await scanWithCheckChild();
+    const plan = planLockRelease(entries, LOCK, THIS_JOB);
+    expect(plan.kind).toBe("stop");
+  });
+
   test("skips a process whose environment is gone", async () => {
     const entries = await scanFailing(
       "readText",

@@ -608,7 +608,37 @@ export async function scanLockProcesses(
       uninspectable,
     });
   }
-  return found;
+  return coverUninspectableByGroup(found);
+}
+
+/**
+ * 読めなかったプロセスのうち、タグを持つ保持者と同じプロセスグループにいるものを、その保持者の子として扱う。
+ * 検査コマンドは別のuidで動き、`CAP_SYS_PTRACE`の無いworkerはそのenvironとfdを読めない。
+ * ロックを持つflockはworkerのuidで、検査コマンドの親として同じグループの先頭に残る。
+ * グループへのkillは別のuidのプロセスにも届くので、保持者と一緒に止められる。
+ * 保持者に持ち主のタグがなければ(タグの無い別の実行の確かめなど)、持ち主が分からないので読めないままにする。
+ * 別のセッションへ抜けた読めないプロセスは、グループに含まれないので読めないままで、止めない。
+ */
+function coverUninspectableByGroup(
+  entries: readonly LockProcess[],
+): LockProcess[] {
+  const anchors = new Map<number, LockProcess>();
+  for (const item of entries) {
+    if (item.uninspectable || (item.owner === null && item.lockPath === null))
+      continue;
+    if (!anchors.has(item.pgid)) anchors.set(item.pgid, item);
+  }
+  return entries.map((item) => {
+    const anchor = item.uninspectable ? anchors.get(item.pgid) : undefined;
+    return anchor === undefined
+      ? item
+      : {
+          ...item,
+          uninspectable: false,
+          owner: anchor.owner,
+          lockPath: anchor.lockPath,
+        };
+  });
 }
 
 /**

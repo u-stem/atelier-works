@@ -2,6 +2,7 @@
 // `.git`ポインタとHEADの照合、変更の検査、検査コマンド、再実行の順序を、注入した偽の依存で確かめる。
 
 import { describe, expect, test } from "bun:test";
+import type { CheckCommandResult } from "../../f/factory/lib/check_runner.ts";
 import type { CheckFailure } from "../../f/factory/lib/prompts.ts";
 import { WorktreeGitPointerModifiedError } from "../../f/factory/lib/workspace.ts";
 import {
@@ -11,7 +12,6 @@ import {
   runPrFixVerify,
 } from "../../f/factory/steps/pr_fix_verify.ts";
 import {
-  type CheckCommandResult,
   type FixClaudeOutput,
   type ForbiddenChangeResult,
   recordedGitPointerStopReason,

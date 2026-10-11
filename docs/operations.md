@@ -488,14 +488,15 @@ PRには`factory:review`ラベルが付くので、自動レビューが起動�
 - 検査の前に毎回`git clean -fdX`で無視ファイル(`node_modules/`など)を消す。そのため先頭で依存関係をインストールする。
 - workerのイメージにmiseは無い。worker内で直接動くコマンドにする。例は`bun install --frozen-lockfile`、`bun test`、`bunx --bun tsc --noEmit`、`bunx --bun biome check .`である。
 - 1つのリポジトリの検査コマンドは4件までを目安にする。検査コマンドが多いほど、修正のラウンドを始められる時間が短くなるためである。
+- 検査コマンドは、worktreeとその`HOME`と`/tmp`にだけ書き込める。main cloneの`.git`に書けないので、検査コマンドの中の`git add`と`git commit`は失敗する。
 - 検査コマンドに常駐のデーモンを残させない。ロックのファイル記述子を持ったまま残ると、以降のラウンドがロックを取れずに失敗する。記述子を閉じて残ったものも、次の準備やPRの修正を止める。
 
 > [!WARNING]
-> 検査コマンドは、Claudeが書いたコードをworker内でrootとして、サンドボックスなしで実行する。workerのサンドボックスができるまでは、Issueを信頼できる人だけが起票するリポジトリにだけ`check_commands_by_repo`を設定する。
+> 検査コマンドは、Claudeが書いたコードをworker内で非特権のユーザーとして、コンテナの分離なしに実行する。networkとworkerの資源を共有するので、Issueを信頼できる人だけが起票するリポジトリにだけ`check_commands_by_repo`を設定する。
 
 実装ブランチのpushとPRの作成で、人のレビューの前に対象リポジトリ自身のCIも動く。atelier-worksのCIはPRの作成から動く。そのCIが使えるsecretsの範囲を確かめておく。
 
-検査コマンドを実行するたびに、Consoleの**システム**の「情報の通知」に未サンドボックスの検査コマンドの実行(`unsandboxed_check_commands`)が記録される。秘密情報の検査(gitleaks)は、設定に関わらず毎ラウンド実行する。
+検査コマンドを実行するたびに、Consoleの**システム**の「情報の通知」にコンテナの分離が無い検査コマンドの実行(`unsandboxed_check_commands`)が記録される。秘密情報の検査(gitleaks)は、設定に関わらず毎ラウンド実行する。
 
 ### PRができたら
 
@@ -919,7 +920,7 @@ noticeには、Discordに送らない事項と、Discordに届かなくても残
 | `approval_comment_failed` | 承認のコメントをIssueに投稿できなかった | 承認と実装の起動は進んでいる。必要ならnoticeのリンクを載せたコメントを人がIssueに投稿する |
 | `implement_launch_failed` | 承認の後、実装フローへ進める処理がDBの失敗で例外になった | Windmillで`f/factory/retry_work_item`を作業項目のIDで実行して再開する |
 | `implement_needs_human` | 実装フローが人の対応待ちで止まった。作業項目はConsoleの**要対応**の失敗に出る | [人の対応待ちになったら](#人の対応待ちになったら)で原因を取り除いてから、**要対応**の失敗で**再実行**を押す |
-| `unsandboxed_check_commands` | 検査コマンドをサンドボックスなしで実行した | 設定が意図どおりか確かめる |
+| `unsandboxed_check_commands` | 検査コマンドをコンテナの分離なしで実行した | 設定が意図どおりか確かめる |
 | `fix_reply_post_failed` | 修正の返信の投稿に失敗した | PRで人が返信する |
 | `pr_fix_reviewer_request_failed` | 再レビューの依頼のAPIが失敗した。PRの取得の失敗と、Botや削除済みの作成者の名前で依頼を組み立てられない場合を含む | GitHubのPRで人がレビュアーを依頼する |
 | `issue_proposal_record_failed` | Issue化の提案を記録できなかった | PRのスレッドを確かめ、必要なら人がIssueを起票する |

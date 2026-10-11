@@ -361,6 +361,8 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/approver` | script | [LIB] 承認者の導出 |
 | `f/factory/lib/prose_check` | script | [LIB] 文章の検査 |
 | `f/factory/lib/summary_support` | script | [LIB] 日次サマリの集計 |
+| `f/factory/lib/check_runner` | script | [LIB] 検査コマンドの実行 |
+| `f/factory/lib/check_sandbox` | script | [LIB] 検査コマンドの実行ユーザーの切り替え |
 | `f/factory/lib/audit_support` | script | [LIB] 監査の期間計算と起動判定 |
 | `f/factory/lib/audit_evidence` | script | [LIB] 監査の証跡収集 |
 | `f/factory/lib/audit_doc` | script | [LIB] 監査レポートの検査 |

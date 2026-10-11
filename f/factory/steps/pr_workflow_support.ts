@@ -5,8 +5,7 @@
 // I/O補助(gitの実行やworktreeのファイル読み取りなど)は、
 // `lib/`にまだ同等の関数が無い操作に限って置く。
 
-import { lstat, mkdtemp, readlink, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { lstat, readlink } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
 import {
   isOwnPost,
@@ -2555,127 +2554,6 @@ function extractScripts(text: string | null): Record<string, string> {
     if (typeof value === "string") scripts[key] = value;
   }
   return scripts;
-}
-
-// ---------------------------------------------------------------------------
-// pr_fix_verify: `factory_config.allowed_check_commands`の実行(I/O)
-// ---------------------------------------------------------------------------
-
-export type CheckCommandResult = {
-  readonly command: string;
-  readonly ok: boolean;
-  readonly exitCode: number;
-  readonly timedOut: boolean;
-  readonly outputTail: string;
-  /**
-   * stdoutとstderrを合わせた出力のうち、`CHECK_COMMAND_MAX_OUTPUT_BYTES`の範囲で
-   * 残った全体を、秘密をマスクして持つ。implementフローはその先頭16KBを
-   * `implement_rounds.check_output`に保存する(`truncateCheckOutput`)。
-   * プロンプトに載せる抜粋は引き続き`outputTail`を使う。
-   */
-  readonly output: string;
-};
-
-const CHECK_OUTPUT_TAIL_CHARS = 2000;
-
-export const CHECK_COMMAND_MAX_OUTPUT_BYTES = 1024 * 1024;
-
-/**
- * 検査コマンドに渡す`PATH`。workerのPATHは引き継がず、この固定値を使う。
- * workerのPATHに、rootのホームや書き込める一時ディレクトリが入っていても、
- * そこに置かれた実行ファイルを検査コマンドが名前の解決で拾わないようにするため。
- * workerのイメージでは、bun・node・git・wmillが`/usr/bin`に、ghとgitleaksが`/usr/local/bin`に、
- * goが`/usr/local/go/bin`にある。どれもrootが所有する。
- * 値の説明は`docs/security.md`の「検査コマンドはフローが実行する」にある。
- */
-export const CHECK_COMMAND_PATH =
-  "/usr/local/bin:/usr/bin:/bin:/usr/local/go/bin";
-
-export type CheckHomeDir = {
-  readonly path: string;
-  readonly cleanup: () => Promise<void>;
-};
-
-export type CreateCheckHomeDir = () => Promise<CheckHomeDir>;
-
-/**
- * `runAllowedCheckCommands`の1回の呼び出し用に、新しい非公開の一時ディレクトリを作る。
- * 検査コマンドは信頼できない対象リポジトリのコードを、他に隔離の無いままrootで実行する。
- * 全実行で共有する固定の`/tmp/factory-home`だと、ある実行の検査ツールが残した
- * キャッシュファイルや仕込まれた設定が残り、別のPRやリポジトリに対する
- * 後の実行に読まれうる。
- * `claude.ts`の`buildSystemPrompt` / `WriteTempFile`と同じく、
- * mkdtempと後始末の形にしている。
- */
-const defaultCreateCheckHomeDir: CreateCheckHomeDir = async () => {
-  const dir = await mkdtemp(join(tmpdir(), "factory-check-home-"));
-  return {
-    path: dir,
-    cleanup: async () => {
-      await rm(dir, { recursive: true, force: true });
-    },
-  };
-};
-
-/**
- * `allowed_check_commands`の各項目を、`cwd`で順に実行する。
- * 環境変数は最小限を明示的に渡し(固定のPATH(`CHECK_COMMAND_PATH`)と新しい非公開のHOMEだけで、秘密は引き継がない。
- * `docs/internals/pr-workflow.md`の「検査コマンドの実行」)、終わったらHOMEのディレクトリを消す。
- * miseの設定の信頼(trust)は決して与えない(`MISE_TRUSTED_CONFIG_PATHS`も
- * `mise --yes trust`も使わない)。信頼が無いと動かない検査コマンド
- * (信頼されていない対象リポジトリの`mise.toml`に対する`mise run check`など)は、
- * 他の0以外の終了と同じく失敗し、呼び出し側は通常の検査の失敗として扱う
- * (Claudeの再試行を1回してから`blocked`)。
- * これで、コマンドを解析して「`mise.toml`に依存するか」を推測する事前確認をしなくても、
- * 「信頼が要るものは実行しない」という同じ結果になる。
- * コマンドはシェルを使わず、空白で区切ってargvにする。
- * `allowed_check_commands`は対象リポジトリの内容ではなく、
- * 運用者が書く設定(`factory_config`)だから。
- * 出力の読み取りを打ち切ったコマンド(`outputAbandoned`)は、終了コードに関わらず失敗にする。
- * 別セッションへ抜けたプロセスがworkerに残ったことを検査結果に出すためである。
- */
-export async function runAllowedCheckCommands(
-  run: CommandRunner,
-  cwd: string,
-  commands: readonly string[],
-  timeoutMs: number,
-  createHomeDir: CreateCheckHomeDir = defaultCreateCheckHomeDir,
-  path: string = CHECK_COMMAND_PATH,
-): Promise<CheckCommandResult[]> {
-  const homeDir = await createHomeDir();
-  try {
-    const env: Record<string, string> = { HOME: homeDir.path, PATH: path };
-
-    const results: CheckCommandResult[] = [];
-    for (const command of commands) {
-      const argv = command
-        .trim()
-        .split(/\s+/)
-        .filter((token) => token.length > 0);
-      if (argv.length === 0) continue;
-      const result = await run(argv, {
-        cwd,
-        env,
-        timeoutMs,
-        maxOutputBytes: CHECK_COMMAND_MAX_OUTPUT_BYTES,
-      });
-      const masked = maskSecrets(`${result.stdout}\n${result.stderr}`.trim());
-      results.push({
-        command,
-        ok:
-          !result.timedOut &&
-          result.exitCode === 0 &&
-          result.outputAbandoned !== true,
-        exitCode: result.exitCode,
-        timedOut: result.timedOut,
-        outputTail: masked.slice(-CHECK_OUTPUT_TAIL_CHARS),
-        output: masked,
-      });
-    }
-    return results;
-  } finally {
-    await homeDir.cleanup();
-  }
 }
 
 // ---------------------------------------------------------------------------

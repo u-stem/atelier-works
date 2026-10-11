@@ -344,7 +344,14 @@ workerは`privileged`にせず、`FAVOR_UNSHARE_PID`も有効にしない。Wind
 
 ジョブ間の隔離は、追加の特権に頼らず、工程ごとのツールの制限と読み取り専用の方針で確保する。
 
-workerには`no-new-privileges:true`と、プロセス数の上限(`deploy.resources.limits.pids`)を設定する。`cap_drop`によるケーパビリティの削減と、rootでないユーザーでの実行はしない。ベースのWindmill公式イメージがrootでの実行を前提にしているためである。
+workerには`no-new-privileges:true`と、プロセス数の上限(`deploy.resources.limits.pids`)を設定する。
+`cap_drop`は、ジョブが使わない`NET_RAW`、`MKNOD`、`SETFCAP`、`AUDIT_WRITE`に限る。
+`NET_RAW`は、同じnetworkの他のコンテナへのなりすましの足場になるため、落とす。
+`SYS_CHROOT`、`FSETID`、`NET_BIND_SERVICE`は、Windmill本体が使わないことを確かめていないので残す。
+`ALL`を落として必要なものだけを足す構成は、Windmill本体が使うものを確かめていないので採らない。
+検査コマンドの実行には`CHOWN`、`DAC_OVERRIDE`、`FOWNER`、`SETUID`、`SETGID`、`SETPCAP`、`KILL`が要るので、これらは落とさない。
+workerのプロセスは、ベースのWindmill公式イメージがrootでの実行を前提にしているため、rootで動かす。
+信頼できないコードを実行する検査コマンドだけを、非特権のユーザーに落とす([検査コマンドの権限](#検査コマンドの権限))。
 
 workerのPATHには、rootのホームの`/root/.local/bin`と、誰でも書き込める`/tmp`の下の`/tmp/.local/bin`を入れない。
 ベースのイメージのPATHは、この2つを含む。
@@ -352,22 +359,15 @@ workerのPATHには、rootのホームの`/root/.local/bin`と、誰でも書き
 非特権のuidがそこに`git`などを置くと、rootのworkerの名前解決を奪えるため、外している。
 `claude`は`/usr/local/bin`のsymlinkから名前で起動する。
 
-イメージには、固定のuid 10001のユーザー`factory-check`を作ってある。
+イメージには、検査コマンドを動かす非特権のユーザー`factory-check`を作ってある。
+uidは環境変数`FACTORY_CHECK_UID`で決まり、既定は10001である。
+uidはイメージのビルドと、worktreeの所有権の受け渡しと、`setpriv`の引数で同じ値を使うので、`mise.toml`の`[env]`に置く。
 `useradd -M`でホームのディレクトリは作らず、passwdに記録されるホームのパスも実在しない。
-`HOME`は、このuidで何かを動かす側が、書き込めるディレクトリを渡す。
+`HOME`は、実行のたびに作る非公開のディレクトリを渡す。
 ログインシェルは使えない。
-uidの切り替えに使う`setpriv`と、残ったプロセスを止める`pkill`も入っている。
-検査コマンドを含め、このuidで動く処理はまだ無い。
-検査コマンドは、[検査コマンドはフローが実行する](#検査コマンドはフローが実行する)のとおりrootで動く。
-
-`factory-check`で何かを動かす前に、次を満たす。
-
-- `/tmp/windmill`の下は、`cache`などが誰でも書き込めるディレクトリ(0777)である。
-  rootのworkerが実行する依存のバンドルを、`factory-check`が差し替えられないよう、書き込めない状態にする。
-- main cloneとworktreeの`.git`(`config`、`hooks/`、`info/attributes`)を、`factory-check`が書き換えられないようにする。
-  検査の前後でハッシュを比べる方法は、別のジョブが`git worktree add`で`.git/config`に追跡の設定を書くため、正規の操作で誤検知する。
-- `/var/lib/factory`の下で、`factory-check`が読めるものを確かめる。
-  `claude`、`requirements`、`audits`のディレクトリは0755で、一覧を読める。
+uidの切り替えに使う`setpriv`も入っている。
+イメージのビルドは、検査の実行と同じ引数の`setpriv`で、uid、ケーパビリティの上限が空であること、`no_new_privs`を確かめる。
+使い方は[検査コマンドの権限](#検査コマンドの権限)に書く。
 
 ## Console用workerの境界
 
@@ -962,10 +962,77 @@ Claudeに渡すツールは`Read`、`Glob`、`Grep`、`Edit`、`Write`だけで�
 
 ### 検査コマンドはフローが実行する
 
-対象リポジトリのlintやテストは、Claudeではなくフローのステップが`factory_config`の`allowed_check_commands`を実行する。検査コマンドは対象リポジトリのコードをworkerの中でrootとして、隔離なしに実行する。そのため既定値は空の配列にし、空でなければ実行のたびに隔離していないことを知らせる記録(notice)を残す。
+対象リポジトリのlintやテストは、Claudeではなくフローのステップが`factory_config`の`allowed_check_commands`として実行する。
+実装フローは、`check_commands_by_repo`に明示したコマンドを実行する。
+検査コマンドは対象リポジトリのコードを実行するので、workerのrootではなく、非特権のユーザー`factory-check`で動かす([検査コマンドの権限](#検査コマンドの権限))。
+ただしコンテナ、network、CPUとメモリはworkerと共有する。
+そのため既定値は空の配列にし、空でなければ実行のたびにコンテナの分離が無いことを知らせる記録(notice)を残す。
+
 検査コマンドに渡す`PATH`は固定の`/usr/local/bin:/usr/bin:/bin:/usr/local/go/bin`で、workerの`PATH`は引き継がない。
 どのディレクトリもrootが所有し、非特権のuidは書き込めない。
 rootのホームと`/tmp`の下は入れない。そこに置かれた実行ファイルを、名前の解決で拾わないようにするためである。
+
+### 検査コマンドの権限
+
+検査コマンドは、実uidと実gidを`factory-check`にして実行する。
+対象リポジトリのコードから、workerの秘密と、workerが後で実行するファイルを守るためである。
+実装は`f/factory/lib/check_runner.ts`と`f/factory/lib/check_sandbox.ts`にある。
+uidはイメージのビルド引数`FACTORY_CHECK_UID`(`mise.toml`の`[env]`)で決まる。
+ジョブにはworkerの環境変数がほとんど渡らないので、scriptは`/etc/passwd`の`factory-check`からuidを読む。
+読んだ値が1000未満(rootを含む)なら、検査を始めずに失敗させる。
+
+| 守るもの | 仕組み |
+| --- | --- |
+| 権限 | `setpriv`で、実uidと実gidを切り替え、補助グループを実行ごとの目印の1つだけにし、ケーパビリティの上限と継承を空にし、`no_new_privs`を立てる。setuidのバイナリやファイルのケーパビリティで特権を戻せない |
+| 環境変数 | 許可リストの`PATH`、`HOME`、`LANG`と、worktreeだけを`safe.directory`にするgitの設定(`GIT_CONFIG_COUNT`など)だけを渡す。workerの環境変数は1つも引き継がない |
+| workerの秘密 | 別のuidのプロセスは、rootのプロセスの`/proc/<pid>/environ`とfdを読めない。`DATABASE_URL`や`WM_TOKEN`などの環境変数と、0600のファイルに届かない |
+| 書き込める場所 | worktree、実行ごとの`HOME`、`/tmp`である。main cloneの`.git`、worktreeの隣、システムのディレクトリ、`/var/lib/factory`には書けない |
+| Windmillの実行時のディレクトリ | `/tmp/windmill`の下の`cache`などは、Windmillが誰でも書き込める権限(0777)で作る。rootのworkerが実行する依存のバンドルを`factory-check`が差し替えられないよう、検査の前に`/tmp/windmill`を所有者以外が入れない権限(0700)にする |
+| 後始末 | コマンドごとと実行の最後に、この実行の目印を持つプロセスをSIGKILLで止める。止まらないプロセスが残れば、所有権を戻さずに失敗させる |
+
+実行の順序は次のとおりである。
+
+1. `/tmp/windmill`を0700にする。
+2. worktreeと`HOME`のうち、rootが所有するものを`factory-check`に渡す。
+3. コマンドを、worktreeのロック(`flock`)の下の`setpriv`で実行する。コマンドごとに、残ったプロセスを止める。
+4. 目印を持つプロセスがいないことを確かめてから、`factory-check`が所有するものをrootに戻す。
+5. `HOME`のディレクトリを消す。
+
+所有権の受け渡しは、symlinkをたどらない。
+`find -P`はsymlinkに入らず、`chown -h`はsymlink自身の所有者を変える。
+そのため、worktreeの中のsymlinkが指すファイルは、worktreeの外でも中でも所有者が変わらない。
+ハードリンクが2つ以上あるファイルは渡さない。worktreeの外のファイルへのリンクの所有者を変えないためである。
+渡さなかったファイルはrootの所有のままで、検査コマンドは書き換えられない。
+戻すときは、検査の間にできたファイルをすべて戻す。
+
+実行ごとの目印は、補助グループの大きなgidである。
+子孫に受け継がれ、`factory-check`は`CAP_SETGID`が無いので外せない。
+別のセッションに抜けたプロセスも、`/proc/<pid>/status`の`Groups`行で見つかる。
+`factory-check`のプロセスをすべて止める`pkill -u`は使わない。並行して動く別の作業項目の検査を巻き込むためである。
+
+workerには`CAP_SYS_PTRACE`が無いので、別のuidのプロセスの環境変数とfdは読めない。
+プロセスロックの走査は、ロックを持つ`flock`と同じプロセスグループにいる、読めないプロセスを、その`flock`の子として扱う([実装フロー](internals/implement.md#調べられないプロセス))。
+`flock`はworkerのuidで残るので、取り消されたジョブが残した検査コマンドも、次の実行がグループごと止められる。
+
+main cloneの`.git`はrootが所有する。
+`factory-check`は、`config`、`hooks/`、`info/attributes`、worktreeごとの`config.worktree`を書き換えられない。
+そのため、検査コマンドがgitの設定を書き換えて、rootのgitに実行させる経路は無い。
+検査コマンドの中のgitは、indexを書けないので`git add`と`git commit`が失敗する。`git status`と`git diff`は動く。
+
+残るリスクは次のとおりである。
+
+- 検査コマンドは、workerと同じコンテナとnetworkで動く。DBとWindmillの宛先に届く。認証に使う秘密には届かないが、認証が要らない経路には届く。
+- メモリ、CPU、プロセス数はworkerと共有する。検査コマンドがworkerのジョブを枯渇させうる。
+- `/tmp`と`/dev/shm`は共有する。並行して動く別の検査と、同じuidでファイルを読み書きできる。
+- `/proc/<pid>/cmdline`は誰でも読める。workerのプロセスの引数に秘密を載せない。
+- `/var/lib/factory`の`requirements`と`audits`は0755で、`factory-check`が読める。`claude`は一覧を読めるが、中のファイルは0600である。
+- Windmillが`/tmp/windmill`の権限を戻す契機は確かめていない。戻ると、その間だけ上の保護が外れる。検査の前には、毎回0700へ直す。
+- 取り消されたジョブが、別のセッションに抜けた検査コマンドを残すと、次の実行はworktreeが使用中として止まる。人がそのプロセスを止める。
+- コンテナで共有するカーネルの脆弱性による脱出は防げない。
+
+これらは、検査コマンドを別のコンテナで、networkなしに動かすまで残る。
+`scripts/verify-check-sandbox.sh`(`mise run test:check-sandbox`)が、上の表の項目を確かめる。
+workerと同じ制限の使い捨てのコンテナで、実際のsetpriv、flock、chown、`/proc`を使う。
 
 ### 対象リポジトリの設定を信頼しない
 
@@ -1017,7 +1084,8 @@ Dockerfileとworkerの`docker-compose.yml`に、`USER`と`user:`の指定は無�
 
 main cloneの`.git/config`は、gitがremoteやブランチの設定を読むので、読ませないことはできない。
 `extensions.worktreeConfig`が有効なときは、worktreeごとの`config.worktree`も読まれる。
-どちらも検査コマンドが書き換えられ、`-c`では`config.worktree`の読み込みを止められない。
+どちらも書き換えられると、`-c`では`config.worktree`の読み込みを止められない。
+検査コマンドは別のuidで動き、書き込めない。書き込める経路が増えたときに備えて固定する。
 そこで、プログラムの実行と検証の前提に関わる設定を、コマンドラインの`-c`で固定する。
 `-c`はどの設定ファイルよりも優先されるので、設定ファイルに別の値を書かれても効かない。
 `git gtr`の子のgitにも、環境変数`GIT_CONFIG_PARAMETERS`を通して渡る。
@@ -1050,10 +1118,9 @@ Factoryのリポジトリにsymlinkを足すと、self cloneでは普通のフ�
 `git gtr new`のcheckoutは`GH_TOKEN`を持つ環境で動く。
 そのため、`.git/config`の`filter.<名前>.smudge`や`process`を、PRの内容の`.gitattributes`が指名すると、`GH_TOKEN`を読めるプログラムが動く。
 根本の対処は、ネットワーク操作とcheckoutを分け、checkoutを`localGitEnv`で行うことである。
-検査コマンドはworkerのrootとして隔離なしに動く([検査コマンドはフローが実行する](#検査コマンドはフローが実行する))。
-そのため、`.git/config`を書き換えなくても、gitプロセスの環境変数を読むなど、同じことができる。
-この隔離は、設定の誤動作への備えである。
-根本の対処は、検査コマンドの実行ユーザーをgitの実行ユーザーと分けることである。
+検査コマンドは`factory-check`のuidで動き、main cloneの`.git`に書き込めない([検査コマンドの権限](#検査コマンドの権限))。
+そのため、検査コマンドが`.git/config`を書き換えて、`GH_TOKEN`を持つgitにプログラムを実行させる経路は無い。
+検査コマンドが書き換えられるworktreeの`.git`ファイルは、記録との照合で止める。
 
 ### コミットの直前の再検査
 
@@ -1138,7 +1205,9 @@ Claudeには、要件定義のディレクトリを一時ディレクトリに�
 
 ### 検査コマンドを明示したリポジトリだけで実行する
 
-検査コマンドは、Claudeが書いたコードをworkerの中でrootとして、隔離なしに実行する。そのため、`check_commands_by_repo`にそのリポジトリのコマンドを明示したときだけ実行し、`allowed_check_commands`は使わない。Issueを信頼できる人だけが起票するリポジトリにだけ設定する。
+検査コマンドは、Claudeが書いたコードをworkerの中で、非特権のユーザーとして、コンテナの分離なしに実行する([検査コマンドの権限](#検査コマンドの権限))。
+そのため、`check_commands_by_repo`にそのリポジトリのコマンドを明示したときだけ実行し、`allowed_check_commands`は使わない。
+networkとworkerの資源を共有するので、Issueを信頼できる人だけが起票するリポジトリにだけ設定する。
 
 ### 対象リポジトリのCIが動く
 
@@ -1197,6 +1266,7 @@ Claudeが書くコミットメッセージの`#12`などのIssue参照は`No.12`
 ### 子プロセスをグループごと止める
 
 git、gh、Claude、検査コマンドは、新しいプロセスグループで起動する。終了した後もグループに残ったプロセスを止め、出力のパイプが閉じなければ読み取りを打ち切る。打ち切った出力は途中で切れているので、判断に使う実行は失敗として扱う。
+検査コマンドが別のセッションに抜けたときは、実行ごとの目印の補助グループで探して止める([検査コマンドの権限](#検査コマンドの権限))。
 
 ### 検査コマンドの出力を絞って保存する
 

@@ -3,6 +3,8 @@
 // 検査が通るまでClaudeによる修正ラウンドを繰り返す。
 
 import * as wmill from "windmill-client@1.817.0";
+import { runAllowedCheckCommands } from "../lib/check_runner.ts";
+import { checkSandboxFromEnv } from "../lib/check_sandbox.ts";
 import {
   buildSystemPrompt,
   dailyBudgetStatus,
@@ -60,7 +62,6 @@ import {
   IMPLEMENT_DIFF_SIZE_LIMIT_NAMES,
   listChangedPaths,
   listSymlinkChanges,
-  runAllowedCheckCommands,
 } from "./pr_workflow_support.ts";
 
 /**
@@ -143,14 +144,16 @@ export async function main(
     context.owner,
     context.repo,
   );
+  // 検査コマンドは、検査用の非特権uidに落として実行する。rootのまま実行することはしない。
+  const checkSandbox = commands.length > 0 ? checkSandboxFromEnv() : null;
   // `pr_fix_verify`と同じ常設リスクの告知。
   // 検査コマンドは、対象リポジトリの検証されていないコードを、
-  // worker内でサンドボックスなしにroot権限で実行する。
+  // workerのコンテナの中で、コンテナの分離なしに実行する。
   // generateがリースを失っていたときは検査を実行しないので告知しない。
   if (commands.length > 0 && first_round.kind !== "lease_lost") {
     await addNotice({
       kind: "unsandboxed_check_commands",
-      message: `implement_verifyはこれから${String(commands.length)}件の検査コマンドを、サンドボックス分離なしでroot権限により${context.owner}/${context.repo}#${String(context.issue_number)}の未検証コードに対して実行します(work item ${String(work_item_id)})。`,
+      message: `implement_verifyはこれから${String(commands.length)}件の検査コマンドを、コンテナの分離なしで非特権の検査用ユーザーにより${context.owner}/${context.repo}#${String(context.issue_number)}の未検証コードに対して実行します(work item ${String(work_item_id)})。`,
     });
   }
   const oauthToken = await wmill.getVariable("f/factory/claude_oauth_token");
@@ -204,6 +207,9 @@ export async function main(
             worktreeDir,
             commands,
             config.implement_check_timeout_sec * 1000,
+            undefined,
+            undefined,
+            checkSandbox,
           ),
         runFixRound: async (request) => {
           // 直前のラウンドは記録済みなので、その失敗も数に入る。

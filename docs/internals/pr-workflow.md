@@ -532,10 +532,16 @@ PR修正のClaudeに渡すツールは`Read,Glob,Grep,Edit,Write`だけで、`Ba
 
 対象リポジトリの検査(lint、typecheck、testに当たるもの)は、Claudeではなく検証のステップが実行する。実行するのは`factory_config.allowed_check_commands`に書いたコマンドで、例えば`["mise run check"]`である。結果は、Claudeの2回目の実行(修正)への入力にする。
 
-検査コマンドは、対象リポジトリのコードをworkerのコンテナ内でrootとして実行する。環境変数を最小にしても隔離にはならず、同じuidなので`/proc`を経由してジョブのトークンに届きうる。そのため、サンドボックス(別のコンテナ、非root、network none)ができるまで、既定値の`[]`を保つ。空でなければ、実行のたびにnoticeの`unsandboxed_check_commands`を記録する。
+検査コマンドは、対象リポジトリのコードをworkerのコンテナ内で、非特権のユーザー`factory-check`として実行する。
+コンテナとnetworkは分けない。別のコンテナでnetworkなしに動かせるまで、既定値の`[]`を保つ。
+空でなければ、実行のたびにnoticeの`unsandboxed_check_commands`を記録する。
 
-検査コマンドには、固定の`PATH`と、実行ごとに作る非公開の`HOME`だけを渡し、秘密情報は引き継がない。終わったら`HOME`のディレクトリを消す。
-`PATH`の値と、workerの値を使わない理由は、[検査コマンドはフローが実行する](../security.md#検査コマンドはフローが実行する)にある。
+検査コマンドには、許可リストの環境変数だけを渡し、workerの環境変数は引き継がない。
+許可するのは、固定の`PATH`、実行ごとに作る非公開の`HOME`、`LANG`、worktreeだけを`safe.directory`にするgitの設定である。
+実行の前に、worktreeと`HOME`の所有者を`factory-check`にする。
+実行の後は、所有者をrootに戻してから`HOME`のディレクトリを消す。
+コマンドごとに、実行ごとの目印を持つ残りのプロセスを止める。止まらなければ、所有権を戻さずにステップを失敗させる。
+`PATH`の値と、workerの値を使わない理由、uidの切り替えと所有権の受け渡しは、[検査コマンドはフローが実行する](../security.md#検査コマンドはフローが実行する)と[検査コマンドの権限](../security.md#検査コマンドの権限)にある。
 
 検査コマンドが指す先(対象リポジトリの`mise.toml`や`package.json`のscriptsなど)は、信頼できない内容として扱う。workerのmiseは対象リポジトリの`mise.toml`をtrustしない(`mise --yes trust`をしない)。`mise.toml`に頼るコマンドと、`MISE_TRUSTED_CONFIG_PATHS`を使わずには実行できないコマンドは、実行せずにブロックとして報告する。
 

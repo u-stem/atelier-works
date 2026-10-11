@@ -4,6 +4,11 @@
 
 import * as wmill from "windmill-client@1.817.0";
 import {
+  type CheckCommandResult,
+  runAllowedCheckCommands,
+} from "../lib/check_runner.ts";
+import { checkSandboxFromEnv } from "../lib/check_sandbox.ts";
+import {
   buildSystemPrompt,
   type DailyBudgetStatus,
   dailyBudgetStatus,
@@ -33,7 +38,6 @@ import {
   worktreeGitPointerMatches,
 } from "../lib/workspace.ts";
 import {
-  type CheckCommandResult,
   type CollectedComment,
   type CollectedReview,
   claudeBlockedReason,
@@ -44,7 +48,6 @@ import {
   localHeadStopReason,
   PR_HEAD_NOT_RECORDED_REASON,
   recordedGitPointerStopReason,
-  runAllowedCheckCommands,
   WORKTREE_GIT_POINTER_NOT_RECORDED_REASON,
 } from "./pr_workflow_support.ts";
 
@@ -346,17 +349,20 @@ export async function main(
   );
 
   const timeoutMs = config.claude_timeout_sec * 1000;
+  // 検査コマンドは、検査用の非特権uidに落として実行する。rootのまま実行することはしない。
+  const checkSandbox =
+    config.allowed_check_commands.length > 0 ? checkSandboxFromEnv() : null;
 
   return await runPrFixVerify(
     {
       // `allowed_check_commands`は、対象リポジトリの検証されていないコードを、
-      // worker内でサンドボックスなしにroot権限で実行する。
+      // workerのコンテナの中で、コンテナの分離なしに実行する。
       // この常設リスクを記録に残らないままにせずNoticesの画面に見え続けるよう、
       // 1日1回ではなく実行のたびにnoticeを記録する。
       announceChecks: async () => {
         await addNotice({
           kind: "unsandboxed_check_commands",
-          message: `pr_fix_verifyはこれから${String(config.allowed_check_commands.length)}件のallowed_check_commandsを、サンドボックス分離なしでroot権限により${owner}/${repo}#${String(pr_number)}の未検証コードに対して実行します(work item ${String(work_item_id)})。`,
+          message: `pr_fix_verifyはこれから${String(config.allowed_check_commands.length)}件のallowed_check_commandsを、コンテナの分離なしで非特権の検査用ユーザーにより${owner}/${repo}#${String(pr_number)}の未検証コードに対して実行します(work item ${String(work_item_id)})。`,
         });
       },
       assertGitPointer: (expected) =>
@@ -374,6 +380,9 @@ export async function main(
           worktree_dir,
           config.allowed_check_commands,
           timeoutMs,
+          undefined,
+          undefined,
+          checkSandbox,
         ),
       budgetStatus: () => dailyBudgetStatus(config),
       runRetry: async (checkFailures) => {

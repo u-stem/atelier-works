@@ -73,11 +73,17 @@ describe("infra/worker/Dockerfile PATH", () => {
 });
 
 describe("infra/worker/Dockerfile check user", () => {
-  test("creates factory-check with the fixed uid 10001, no home and no login shell", () => {
+  test("creates factory-check with the configured uid, no home and no login shell", () => {
     const created = startingWith("RUN").some((line) =>
-      line.includes("useradd -u 10001 -M -s /usr/sbin/nologin factory-check"),
+      line.includes(
+        'useradd -u "${FACTORY_CHECK_UID}" -M -s /usr/sbin/nologin factory-check',
+      ),
     );
     expect(created).toBe(true);
+  });
+
+  test("defaults the check uid to 10001", () => {
+    expect(startingWith("ARG")).toContain("ARG FACTORY_CHECK_UID=10001");
   });
 
   test("installs util-linux for setpriv", () => {
@@ -94,13 +100,21 @@ describe("infra/worker/Dockerfile check user", () => {
     expect(installed).toBe(true);
   });
 
+  const verification = (): string =>
+    startingWith("RUN").find((line) => line.includes("claude --version")) ?? "";
+
   test("verifies at build time that setpriv drops to the check uid", () => {
-    const verified = startingWith("RUN").some((line) =>
-      line.includes(
-        '[ "$(setpriv --reuid=10001 --regid=10001 --clear-groups -- id -u)" = 10001 ]',
-      ),
+    expect(verification()).toContain(
+      '[ "$(setpriv --reuid="${FACTORY_CHECK_UID}" --regid="${FACTORY_CHECK_UID}" --groups=1000000 --bounding-set=-all --inh-caps=-all --no-new-privs -- id -u)" = "${FACTORY_CHECK_UID}" ]',
     );
-    expect(verified).toBe(true);
+  });
+
+  test("verifies at build time that the bounding set ends up empty", () => {
+    expect(verification()).toContain("'^CapBnd:[[:space:]]*0+$'");
+  });
+
+  test("verifies at build time that no_new_privs is set", () => {
+    expect(verification()).toContain("'^NoNewPrivs:[[:space:]]*1$'");
   });
 
   test("does not switch the image to a non-root USER", () => {

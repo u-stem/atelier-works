@@ -451,3 +451,90 @@ describe("infra/docker-compose.yml factory_state_init", () => {
     expect(svc.privileged).toBeUndefined();
   });
 });
+
+// 検査コマンドをworker内で非特権のuidに落として動かすための構成を確かめる。
+// 落とさないケーパビリティが欠けると、worktreeの所有権の受け渡しや`setpriv`が動かなくなる。
+describe("infra/docker-compose.yml windmill_worker check sandbox", () => {
+  const NEEDED_BY_THE_SANDBOX = [
+    "CHOWN",
+    "DAC_OVERRIDE",
+    "FOWNER",
+    "SETUID",
+    "SETGID",
+    "SETPCAP",
+    "KILL",
+  ];
+
+  test("passes the check uid to the image build", () => {
+    const build = service("windmill_worker").build;
+    const args = isRecord(build) && isRecord(build.args) ? build.args : {};
+
+    expect(args.FACTORY_CHECK_UID).toBe("${FACTORY_CHECK_UID:?run via mise}");
+  });
+
+  test("drops the capabilities no job of the worker uses", () => {
+    expect(stringList(service("windmill_worker"), "cap_drop")).toEqual([
+      "NET_RAW",
+      "MKNOD",
+      "SETFCAP",
+      "AUDIT_WRITE",
+    ]);
+  });
+
+  test("keeps the capabilities the check sandbox needs", () => {
+    const dropped = stringList(service("windmill_worker"), "cap_drop");
+
+    expect(
+      NEEDED_BY_THE_SANDBOX.filter((cap) => dropped.includes(cap)),
+    ).toEqual([]);
+  });
+
+  test("does not drop every capability", () => {
+    expect(stringList(service("windmill_worker"), "cap_drop")).not.toContain(
+      "ALL",
+    );
+  });
+
+  test("still forbids gaining privileges", () => {
+    expect(stringList(service("windmill_worker"), "security_opt")).toContain(
+      "no-new-privileges:true",
+    );
+  });
+
+  test("is not privileged", () => {
+    expect(service("windmill_worker").privileged).toBeUndefined();
+  });
+
+  test("does not mount the docker socket", () => {
+    expect(
+      mounts(service("windmill_worker")).filter((m) =>
+        m.source.includes("docker.sock"),
+      ),
+    ).toEqual([]);
+  });
+
+  test("the verification script drops the same capabilities as the worker", () => {
+    const script = readFileSync(
+      join(REPO_ROOT, "scripts/verify-check-sandbox.sh"),
+      "utf8",
+    );
+    const listed = /^CAP_DROP=\(([^)]*)\)$/m.exec(script)?.[1]?.split(/\s+/);
+
+    expect(listed).toEqual(stringList(service("windmill_worker"), "cap_drop"));
+  });
+
+  test("mise.toml sets the same default uid as the Dockerfile", () => {
+    const parsed: unknown = Bun.TOML.parse(
+      readFileSync(join(REPO_ROOT, "mise.toml"), "utf8"),
+    );
+    const env = isRecord(parsed) && isRecord(parsed.env) ? parsed.env : {};
+    const dockerfile = readFileSync(
+      join(REPO_ROOT, "infra/worker/Dockerfile"),
+      "utf8",
+    );
+
+    expect(/^ARG FACTORY_CHECK_UID=(\S+)$/m.exec(dockerfile)?.[1]).toBe(
+      String(env.FACTORY_CHECK_UID),
+    );
+  });
+});

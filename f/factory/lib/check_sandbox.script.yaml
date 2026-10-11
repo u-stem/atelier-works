@@ -1,0 +1,9 @@
+summary: '[LIB] 検査コマンドの実行ユーザーの切り替え'
+description: 内部ライブラリです。直接実行するものではありません。検査コマンドを非特権のuidで動かすための引数、環境変数、所有権の受け渡し、残ったプロセスの後始末を扱います。
+lock: '!inline f/factory/lib/check_sandbox.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []
