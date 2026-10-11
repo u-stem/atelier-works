@@ -256,6 +256,16 @@ const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
       "on_error_scheduleのジョブのログで、failed to read the schedule historyのエラーを確かめ、ジョブ履歴を読む権限があるかを確かめてください。",
     ),
   ],
+  [
+    "drawio_viewer_bump_held",
+    guide(
+      "draw.ioのビューアの固定を、自動では上げませんでした。メジャー版が違うか、ビューアの大きさが大きく変わったか、取得したファイルがGitHubの記録と一致しませんでした。",
+      "本文の「次の操作」に従ってください。上げてよい版は、Windmillでf/factory/drawio_viewer_bumpをapproved_versionにその版を指定して実行します。",
+      {
+        note: "解決しても、原因が続けば次の週に同じ通知が出直します。上げるか、新しい版が出るまで待ちます。",
+      },
+    ),
+  ],
 ]);
 
 /** `kind`の説明。表に無い種類は`GENERIC_NOTICE_GUIDE`を返す。 */

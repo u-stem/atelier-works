@@ -39,6 +39,10 @@ describe("noticeSeverity", () => {
     expect(noticeSeverity("implement_launch_failed")).toBe("action");
   });
 
+  test("treats a held draw.io viewer bump as action", () => {
+    expect(noticeSeverity("drawio_viewer_bump_held")).toBe("action");
+  });
+
   test("returns action for an unknown kind", () => {
     expect(noticeSeverity("some_future_kind")).toBe("action");
   });

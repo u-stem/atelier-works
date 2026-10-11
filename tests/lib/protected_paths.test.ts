@@ -106,6 +106,16 @@ describe("matchesForbiddenPath", () => {
     expect(matchesForbiddenPath("console/drawio-viewer.json")).toBe(true);
   });
 
+  test("matches the script that proposes a new viewer pin", () => {
+    expect(matchesForbiddenPath("f/factory/drawio_viewer_bump.ts")).toBe(true);
+  });
+
+  test("matches the library that rewrites the viewer pin", () => {
+    expect(matchesForbiddenPath("f/factory/lib/drawio_viewer_bump.ts")).toBe(
+      true,
+    );
+  });
+
   test("matches console/scripts/drawio-viewer.ts", () => {
     expect(matchesForbiddenPath("console/scripts/drawio-viewer.ts")).toBe(true);
   });

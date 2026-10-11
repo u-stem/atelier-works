@@ -44,6 +44,8 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * ファイル名だけでは他の`index.html`と区別できないので、パスで判定する。
  * `console/drawio-viewer.json`は、CIが取得して配信するdraw.ioのビューアの取得元とsha256を固定する。
  * 書き換えられると、別のスクリプトを固定の値として配信される。
+ * 固定を書き換えるPRを作る`f/factory/drawio_viewer_bump.ts`と、その判断の`lib/drawio_viewer_bump.ts`も
+ * 同じ理由で守る。書き換えられると、人の確認なしに別の取得元や版を固定のPRにできる。
  * 固定を強制する側も同じ理由で守る。ビューアの照合と取得、配信物の一覧(manifest.json)の作成、
  * lockfileの検査のスクリプトは、書き換えられると検査をすり抜けて配信物に混ざる。
  * `asset-name.ts`は照合したビューアの書き込み先の名前を決め、`vite.config.ts`は
@@ -60,6 +62,8 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
 export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "console/index.html",
   "console/drawio-viewer.json",
+  "f/factory/drawio_viewer_bump.ts",
+  "f/factory/lib/drawio_viewer_bump.ts",
   "console/scripts/drawio-viewer.ts",
   "console/scripts/fetch-drawio-viewer.ts",
   "console/scripts/manifest.ts",

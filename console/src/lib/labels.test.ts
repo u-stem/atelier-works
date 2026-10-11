@@ -91,6 +91,12 @@ describe("approvalStatusLabel", () => {
 });
 
 describe("noticeKindLabel", () => {
+  test("names the held draw.io viewer bump", () => {
+    expect(noticeKindLabel("drawio_viewer_bump_held")).toBe(
+      "draw.ioのビューアの更新の保留",
+    );
+  });
+
   test("translates a known notice kind", () => {
     expect(noticeKindLabel("console_fetch_failed")).toBe(
       "Consoleの取り込みの失敗",

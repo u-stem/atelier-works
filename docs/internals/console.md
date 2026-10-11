@@ -1297,21 +1297,71 @@ raw.githubusercontent.comの障害で取得に失敗したら、CIのジョブ�
 ローカルの`mise run console:check`は、ビューアを取得しない。
 ネットワークが無くても通る。
 
-固定を更新するときは、次の順に行う。
+`console/scripts/public-assets.test.ts`が、`drawio.html`の参照と固定の値の一致を確かめる。
+受け口のscriptを直したときは、ファイル名のハッシュを中身に合わせて付け直す。
+同じテストが、合っていないファイル名を検出する。
+
+### ビューアの更新
+
+固定の更新は、Windmillの`f/factory/drawio_viewer_bump`が毎週月曜の10:00(Asia/Tokyo)に行う。
+新しい版があれば、固定を書き換えるPRを作る。
+人が固定のファイルを手で直す必要はない。
+どこで動かすかと、何を守るかは、[セキュリティ](../security.md)の「ビューアの更新」にある。
+
+| ファイル | 役割 |
+| --- | --- |
+| `f/factory/drawio_viewer_bump.ts` | スケジュールが呼ぶ。取得、重複の確認、PRの作成。判断は純粋関数に任せる |
+| `f/factory/lib/drawio_viewer_bump.ts` | 版の比較、14日の待ち、大きさの確認、sha256の計算、固定のファイルとページの書き換え。純粋関数 |
+| `f/factory/lib/github.ts` | リリースの一覧、タグの解決、ファイルの読み取り、1つのcommitでのブランチの作成 |
+
+処理は次の順に進む。
+
+1. `main`の`console/drawio-viewer.json`を読み、今の版を知る。
+2. jgraph/drawioのリリースの一覧から、公開から14日以上たち、今と同じメジャー版の最新を選ぶ。無ければ、何もせず終わる。
+3. 未完了の更新のPR(ブランチ名が`factory/drawio-viewer-`で始まる)があれば、何もせず終わる。同じ版のブランチにPRがあれば、閉じていても作らない。
+4. 選んだタグが指すcommitを、GitHubのAPIでたどる。
+5. そのcommitのビューアを、固定と同じ形のURLから取得する。取得物の大きさとgit blobのIDを、GitHubのAPIの値と照合する。
+6. 大きさが今から2割を超えて増減していないかを確かめる。
+7. 取得物のsha256を計算し、`console/drawio-viewer.json`と、`console/public/drawio.html`が読むビューアの名前を書き換える。
+8. 1つのcommitでブランチを作り、PRを開き、自動レビューのラベルを付ける。
+
+PRの本文は、PRテンプレートの章立てで、版、commit、sha256、大きさを書く。
+PRは通常のCIを通る。
+`console`ジョブが、書き換えた固定のURLからビューアを取得し、sha256を照合する。
+`public-assets.test.ts`が、ページの参照と固定の一致を確かめる。
+自動レビューが指摘を付けても、固定のファイルは保護パスなので、PR修正は止まる。直すときは人がする。
+マージの後は、他のConsoleの変更と同じく、CIが通れば数分で`console_fetcher`が反映する。
+図が描かれることは自動では確かめないので、マージの後にConsoleの要件定義書の図を開いて確かめる。
+
+自動では上げない版は、noticeの`drawio_viewer_bump_held`に残る。
+
+| 原因 | 本文に載ること |
+| --- | --- |
+| 今と違うメジャー版が、公開から14日以上たった | その版。同じメジャー版の新しい版があれば、そちらはPRになる |
+| 大きさが今から2割を超えて増減した | 版と、今と新しい大きさ |
+| 大きさとgit blobのIDが、GitHubのAPIの値と違う | 版 |
+
+上げてよい版は、Windmillで`f/factory/drawio_viewer_bump`を、`approved_version`にその版(例: `v33.0.0`)を指定して実行する。
+指名した版は、メジャー版の違いと、2割の制限を免れる。
+公開から14日の待ちは、指名しても免れない。
+空のファイルと10MBを超えるファイルは、指名しても上げない。
+上げないと決めたときは、noticeを解決する。原因が続くと、次の週に出直す。
+
+失敗(GitHubのAPIの障害、ネットワーク、トークンの失効)はジョブの失敗になり、スケジュールの失敗の通知に流れる。
+次の週に再び試すので、人が再実行する必要はない。
+
+更新のPRが閉じられたときは、その版を再び提案しない。
+次の版が出れば、また提案する。
+更新のPRが開いたまま残ると、次の更新は止まる。マージするか閉じる。
+
+自動の更新が使えないときだけ、固定を手で上げる。
+手順は次のとおりである。
 
 1. jgraph/drawioのリポジトリを、blobを取らない部分cloneで取る。
 2. 新しいcommitがリリースのタグ(`v<版>`)にあることを、`git tag --contains <commit>`で確かめる。
 3. `git show <commit>:src/main/webapp/js/viewer-static.min.js | shasum -a 256`で、sha256を計算する。配信用のURL(raw.githubusercontent.com)から取ったバイト列を使わず、gitのオブジェクトから取る。
 4. `console/drawio-viewer.json`の4項目を書き換える。URLはそのcommitを指し、sha256は3.の値である。
 5. `console/public/drawio.html`が読むビューアの名前を、新しいsha256の先頭8桁に合わせる。
-
-固定している版(32.4.1)は、この手順で確かめている。
-commit `9034053fba80a435e27d68d374bc564b83917ae9`は、`v32.4.1`のタグが指す`32.4.1 release`のcommitである。
-そのcommitのファイルのsha256は、固定の値と一致した。
-
-`console/scripts/public-assets.test.ts`が、`drawio.html`の参照と固定の値の一致を確かめる。
-受け口のscriptを直したときは、ファイル名のハッシュを中身に合わせて付け直す。
-同じテストが、合っていないファイル名を検出する。
 
 ### iframeとメッセージ
 
