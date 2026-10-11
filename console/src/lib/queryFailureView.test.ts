@@ -212,6 +212,14 @@ describe("describeQueryFailure", () => {
     );
   });
 
+  test("points an invalid response to the self_update log when the system screen does not open", () => {
+    expect(
+      describeQueryFailure({ kind: "invalid_response" }).nextStep,
+    ).toContain(
+      "システムの画面が開けないときは、Windmillでself_updateのジョブのログを確かめてください",
+    );
+  });
+
   test("points an invalid response to the version check", () => {
     expect(
       describeQueryFailure({ kind: "invalid_response" }).nextStep,
@@ -272,7 +280,7 @@ describe("describeQueryFailure", () => {
 
   test("points forbidden to the Origin and Host checks", () => {
     expect(describeQueryFailure({ kind: "forbidden" }).nextStep).toContain(
-      "OriginとHostの検査",
+      "OriginやHostなどの検査",
     );
   });
 

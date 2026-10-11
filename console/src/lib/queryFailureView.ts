@@ -116,7 +116,7 @@ export function describeQueryFailure(error: ApiError | null): QueryFailureView {
       return {
         summary: "サーバーに要求を断られました。",
         nextStep:
-          "配信の設定で要求が断られた可能性があります。CaddyのOriginとHostの検査を確かめてください。Windmill自身の権限不足でも同じ状態になるので、アカウントの権限も確かめてください。",
+          "配信の設定で要求が断られた可能性があります。CaddyのOriginやHostなどの検査を確かめてください。Windmill自身の権限不足でも同じ状態になるので、アカウントの権限も確かめてください。",
         detail,
       };
     case "job_failed":
@@ -148,7 +148,8 @@ export function describeQueryFailure(error: ApiError | null): QueryFailureView {
       return {
         summary:
           "サーバーの応答を読み取れませんでした。Consoleとバックエンドの版がずれている可能性があります。",
-        nextStep: versionMismatchNextStep(detail),
+        // どの`view`の応答か分からない。システムの画面の応答が不正なら、その画面も開けない。
+        nextStep: `${versionMismatchNextStep(detail)}システムの画面が開けないときは、Windmillでself_updateのジョブのログを確かめてください。`,
         detail,
       };
   }
