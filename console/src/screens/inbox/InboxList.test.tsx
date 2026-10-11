@@ -6,6 +6,7 @@ import type {
   SummaryNotice,
 } from "../../api/guards/summary.ts";
 import { TooltipProvider } from "../../components/ui/tooltip.tsx";
+import type { InboxSelection } from "../../lib/inboxSelection.ts";
 import type { InboxItem } from "../../lib/inboxView.ts";
 import { InboxList } from "./InboxList.tsx";
 
@@ -77,12 +78,13 @@ function failure(): InboxItem {
 function render(
   items: readonly InboxItem[],
   allItems: readonly InboxItem[] = items,
+  selected: InboxSelection | null = null,
 ): string {
   return renderToStaticMarkup(
     <TooltipProvider>
       <InboxList
         items={items}
-        selected={null}
+        selected={selected}
         now={NOW}
         allItems={allItems}
         onSelect={() => {}}
@@ -120,7 +122,8 @@ describe("InboxList", () => {
   });
 
   test("shows the version that tells same-titled notices apart", () => {
-    expect(render([notice(1, SHA_A), notice(2, SHA_B)])).toContain(
+    const pair = [notice(1, SHA_A), notice(2, SHA_B)];
+    expect(render(pair, pair, { type: "notice", id: 1 })).toContain(
       "版 fedcba9",
     );
   });
@@ -141,5 +144,60 @@ describe("InboxList", () => {
 
   test("marks a notice row so that the focus can return to it", () => {
     expect(render([notice(21, SHA_A)])).toContain('data-row="notice:21"');
+  });
+});
+
+describe("InboxList groups", () => {
+  const pair = [notice(1, SHA_A), notice(2, SHA_B)];
+
+  test("folds same-kind notices into one row with their count", () => {
+    expect(render(pair)).toContain(">2件<");
+  });
+
+  test("starts a group closed", () => {
+    expect(render(pair)).toContain('aria-expanded="false"');
+  });
+
+  test("hides the notices of a closed group", () => {
+    expect(render(pair)).not.toContain('data-row="notice:1"');
+  });
+
+  test("leaves a lone notice without a group row", () => {
+    expect(render([notice(1, SHA_A)])).not.toContain("aria-expanded");
+  });
+
+  test("leaves an approval without a group row", () => {
+    expect(render([approval(1), approval(2)])).not.toContain("aria-expanded");
+  });
+
+  test("opens the group that holds the selected notice", () => {
+    expect(render(pair, pair, { type: "notice", id: 2 })).toContain(
+      'aria-expanded="true"',
+    );
+  });
+
+  test("shows the notices of an open group", () => {
+    expect(render(pair, pair, { type: "notice", id: 2 })).toContain(
+      'data-row="notice:1"',
+    );
+  });
+
+  test("marks the selected notice inside an open group", () => {
+    expect(render(pair, pair, { type: "notice", id: 2 })).toContain(
+      'data-row="notice:2" aria-current="true"',
+    );
+  });
+
+  test("links the toggle to the list it opens", () => {
+    const html = render(pair, pair, { type: "notice", id: 2 });
+    const controls = /aria-controls="([^"]+)"/.exec(html)?.[1];
+    expect(html).toContain(`id="${controls}"`);
+  });
+
+  test("leaves the kind label off the notices under a group", () => {
+    const rows = [approval(), ...pair];
+    expect(
+      render(rows, rows, { type: "notice", id: 2 }).match(/>通知</g)?.length,
+    ).toBe(1);
   });
 });
