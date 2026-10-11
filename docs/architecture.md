@@ -89,7 +89,7 @@ flowchart TD
 | `reviewed` | レビューをCOMMENTとして投稿した | pr_review、pr_fix | 終端 |
 | `fixing` | レビューの指摘やコメントを修正している | pr_fix | |
 | `rereview_requested` | 修正をpushし、再レビューを依頼した | pr_fix | 終端 |
-| `blocked` | 準備の確認で修正の前に止めた、修正の実行中にPRのheadが動いた、要件の不足で親のIssueへ差し戻した | pr_fix | 終端 |
+| `blocked` | 準備の確認でレビューか修正の前に止めた(headがforkのPRなど)、修正の実行中にPRのheadが動いた、要件の不足で親のIssueへ差し戻した | pr_review、pr_fix | 終端 |
 | `needs_human` | 自動処理を打ち切り、人の対応を待つ | すべて | 終端 |
 | `failed` | 実行時エラーで失敗した | すべて | 終端 |
 | `expired` | 承認依頼が7日の期限を過ぎた | issue | 終端 |
@@ -132,6 +132,7 @@ stateDiagram-v2
 stateDiagram-v2
     [*] --> reviewing: poll_prsがpr_reviewを起動
     reviewing --> reviewed: レビューを投稿
+    reviewing --> blocked: headがforkのPRを準備で見送った
     reviewing --> needs_human
     reviewing --> cancelled: PRがclosedかmerged
     [*] --> fixing: poll_prsがpr_fixを起動

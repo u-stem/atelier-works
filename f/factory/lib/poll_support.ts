@@ -154,6 +154,24 @@ export function labelerDeniedMessage(
 /** ラベルの付与者が許可されていないときのnoticeの`kind`。IssueとPRで共通する。 */
 export const LABELER_DENIED_KIND = "labeler_denied";
 
+/**
+ * レビューを始めるはずのPRのheadが、baseと同じリポジトリにないときのnoticeの`kind`。
+ * ラベルを外さないので、ポーリングのたびに同じ状況になる。
+ */
+export const FORK_HEAD_DENIED_KIND = "fork_head_denied";
+
+/**
+ * `fork_head_denied`のnoticeの本文。対象だけで決まり、時刻やheadのshaを含めない。
+ * 同じ状況が続く間、同じ本文の未解決のnoticeを重ねて登録しないためである。
+ */
+export function forkHeadDeniedMessage(target: {
+  readonly owner: string;
+  readonly repo: string;
+  readonly number: number;
+}): string {
+  return `${target.owner}/${target.repo}#${String(target.number)}: headのリポジトリが対象のリポジトリと異なるため、レビューを始めません`;
+}
+
 /** ラベルの付与者を判定できないときのnoticeの`kind`。 */
 export const LABELER_CHECK_LIMIT_KIND = "labeler_check_limit";
 
@@ -263,6 +281,13 @@ export type PrCandidate = {
    */
   readonly authorLogin: string | null;
   /**
+   * PRのheadが、baseと同じリポジトリにあるか。
+   * forkのPRと、headのリポジトリを取得できないPRは`false`。
+   * レビューは、`false`のPRでは始めない。forkの内容は第三者が書いたもので、
+   * 許可されたアカウントがラベルを付けても、信頼してレビューに渡せないためである。
+   */
+  readonly headInBaseRepo: boolean;
+  /**
    * `review_label`を付けた最後のイベントの付与者のログイン名。
    * ラベルが付いていないとき、イベントが無いとき、付与者を特定できないときは`null`。
    * ラベルが付いているのに`null`なら、拒否する。
@@ -299,7 +324,9 @@ export type PrReviewAction =
       readonly removeLabel: boolean;
     }
   /** `review_label`を付けたのが許可された人ではないので、始めない。 */
-  | { readonly kind: "deny_labeler" };
+  | { readonly kind: "deny_labeler" }
+  /** headがbaseと同じリポジトリにないので、始めない。 */
+  | { readonly kind: "deny_fork_head" };
 
 export type PrFixAction =
   | { readonly kind: "none" }
@@ -323,6 +350,8 @@ export type PrDecision = {
  * - レビューと修正のどちらのトリガーラベルも、拒否された状態で付いていない。
  * 未処理の`head_sha`から自動で検出するレビューは、
  * このPRに実行中の`pr_review`があれば見送る。
+ * ラベルの経路も検出の経路も、PRのheadがbaseと同じリポジトリにないとき
+ * (forkのPRと、headのリポジトリを取得できないPR)は始めず、`deny_fork_head`を返す。
  * `pr_fix`に自動検出の経路は無く、`fix_label`からだけ始め、コメントからは始めない。
  */
 export function decidePrActions(
@@ -343,7 +372,7 @@ export function decidePrActions(
       (!hasReviewLabel || reviewLabelAllowed) &&
       (!hasFixLabel || fixLabelAllowed);
 
-    const review: PrReviewAction = hasReviewLabel
+    const wouldReview: PrReviewAction = hasReviewLabel
       ? reviewLabelAllowed
         ? { kind: "trigger_review", reason: "label", removeLabel: true }
         : { kind: "deny_labeler" }
@@ -352,6 +381,12 @@ export function decidePrActions(
           candidate.lastKnownHeadSha !== candidate.headSha
         ? { kind: "trigger_review", reason: "assignment", removeLabel: false }
         : { kind: "none" };
+    // 始めるはずだったレビューだけを止める。見送りの記録がポーリングのたびに
+    // 増えないよう、始める条件を満たさないPRは`none`のままにする。
+    const review: PrReviewAction =
+      wouldReview.kind === "trigger_review" && !candidate.headInBaseRepo
+        ? { kind: "deny_fork_head" }
+        : wouldReview;
 
     const fix: PrFixAction = hasFixLabel
       ? fixLabelAllowed

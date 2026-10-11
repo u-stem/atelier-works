@@ -835,6 +835,25 @@ export type PrFixGuardResult =
   | { readonly ok: true }
   | { readonly ok: false; readonly reason: string };
 
+/**
+ * PRのheadがbaseと同じリポジトリにあるかを判定する。
+ * forkのPRと、headのリポジトリを取得できないPR(forkの削除など)は通さない。
+ * forkの内容は第三者が書いたもので、レビューにもpushにも信頼して渡せないためである。
+ * レビューを始める判定(`poll_prs`)と、レビューと修正の準備のステップで同じ判定を使う。
+ */
+export function evaluateSameRepoHeadGuard(
+  headRepoFullName: string | null,
+  baseRepoFullName: string,
+): PrFixGuardResult {
+  if (headRepoFullName === null || headRepoFullName !== baseRepoFullName) {
+    return {
+      ok: false,
+      reason: "head repository differs from base repository (fork PR)",
+    };
+  }
+  return { ok: true };
+}
+
 export type PrFixSafetyGuardInput = {
   readonly open: boolean;
   readonly headRepoFullName: string | null;
@@ -857,14 +876,12 @@ export function evaluatePrFixSafetyGuards(
   if (!input.open) {
     return { ok: false, reason: "pull request is not open" };
   }
-  if (
-    input.headRepoFullName === null ||
-    input.headRepoFullName !== input.baseRepoFullName
-  ) {
-    return {
-      ok: false,
-      reason: "head repository differs from base repository (fork PR)",
-    };
+  const sameRepo = evaluateSameRepoHeadGuard(
+    input.headRepoFullName,
+    input.baseRepoFullName,
+  );
+  if (!sameRepo.ok) {
+    return sameRepo;
   }
   if (input.draft) {
     return { ok: false, reason: "pull request is a draft" };
