@@ -341,3 +341,126 @@ export function buildNpmCiArgv(rawAppDir: string): string[] {
     "--ignore-scripts",
   ];
 }
+
+/**
+ * `self_update`が、上限を持たないSDKとDBの呼び出し(変数の取得と更新、stateの読み書き、
+ * DBへの記録、Discordへの通知)1回に許す時間(ミリ秒)。
+ * ジョブ全体の`timeout`は、子プロセスの実行中に当たると子が残りうる最後の砦なので、
+ * 通常はこの上限で先に終わらせる。
+ */
+export const SELF_UPDATE_CALL_TIMEOUT_MS = 30_000;
+
+/** `withCallTimeout`が時間切れのときに投げる例外。ほかの失敗と見分けるために型を分ける。 */
+export class CallTimeoutError extends Error {
+  constructor(label: string, timeoutMs: number) {
+    super(`${label} timed out after ${String(timeoutMs)}ms`);
+    this.name = "CallTimeoutError";
+  }
+}
+
+/**
+ * `work`が`timeoutMs`以内に終わらなければ、`CallTimeoutError`を投げる。
+ * `work`自体は中断しないので、副作用が後から完了することはありうる。
+ * `label`は例外の文に入る。秘密値を含めてはならない。
+ */
+export async function withCallTimeout<T>(
+  label: string,
+  work: () => Promise<T>,
+  timeoutMs: number = SELF_UPDATE_CALL_TIMEOUT_MS,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      reject(new CallTimeoutError(label, timeoutMs));
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([work(), expired]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * 前回デプロイしたコミットのshaを読む。変数が無いときだけ、未デプロイとして空文字を返す。
+ * `windmill-client`の`getVariable`は、変数が無い場合もほかの失敗も、同じ形の通常の`Error`にして
+ * 投げるので、失敗した理由では見分けられない。そこで読み取りが失敗したら、`exists`で変数の有無を確かめる。
+ * `false`が返ったときだけ未デプロイとし、`true`のとき、`exists`が失敗か時間切れのとき、
+ * 真偽値でない値を返したときは、最初の失敗を投げる。時間切れも同じく投げる。
+ * 一時的な失敗を未デプロイと取り違えると、実際はデプロイ済みなのに全体を反映し直す。
+ */
+export async function readDeployedSha(
+  get: () => Promise<string>,
+  exists: () => Promise<unknown>,
+  timeoutMs: number = SELF_UPDATE_CALL_TIMEOUT_MS,
+): Promise<string> {
+  try {
+    return await withCallTimeout("getVariable deployed_sha", get, timeoutMs);
+  } catch (err) {
+    if (err instanceof CallTimeoutError) throw err;
+    let found: unknown;
+    try {
+      found = await withCallTimeout(
+        "existsVariable deployed_sha",
+        exists,
+        timeoutMs,
+      );
+    } catch {
+      throw err;
+    }
+    if (found === false) return "";
+    throw err;
+  }
+}
+
+/**
+ * 成功した反映を`deployments`に記録する。記録が時間切れになったときは`onTimeout`を呼び、例外にしない。
+ * 区切りは記録を中断しないので、後から成功の行が入りうる。時間切れを失敗として扱って失敗の行を足すと、
+ * 同じコミットに成功と失敗の行が並び、件数に誤った失敗が混ざる。反映は済んでいて、
+ * `deployed_sha`も更新済みなので、次の回は記録し直さない。時間切れ以外の失敗はそのまま投げる。
+ */
+export async function recordSuccessDeployment(
+  record: () => Promise<unknown>,
+  onTimeout: (err: CallTimeoutError) => void,
+  timeoutMs: number = SELF_UPDATE_CALL_TIMEOUT_MS,
+): Promise<void> {
+  try {
+    await withCallTimeout("recordDeployment success", record, timeoutMs);
+  } catch (err) {
+    if (!(err instanceof CallTimeoutError)) throw err;
+    onTimeout(err);
+  }
+}
+
+/**
+ * デプロイしたコミットのshaを変数に書く。書き込みが時間切れになったときは、書き込みが後から
+ * 済んでいることがあるので、変数を読み直し、`sha`と同じなら成功として扱う。
+ * 読み直せないとき、値が違うときは、最初の時間切れを投げる。時間切れ以外の失敗はそのまま投げる。
+ */
+export async function setDeployedSha(
+  deps: {
+    readonly set: () => Promise<void>;
+    readonly get: () => Promise<string>;
+  },
+  sha: string,
+  timeoutMs: number = SELF_UPDATE_CALL_TIMEOUT_MS,
+): Promise<void> {
+  try {
+    await withCallTimeout("setVariable deployed_sha", deps.set, timeoutMs);
+    return;
+  } catch (err) {
+    if (!(err instanceof CallTimeoutError)) throw err;
+    let current: string | null = null;
+    try {
+      current = await withCallTimeout(
+        "getVariable deployed_sha (confirm)",
+        deps.get,
+        timeoutMs,
+      );
+    } catch {
+      current = null;
+    }
+    if (current === sha) return;
+    throw err;
+  }
+}

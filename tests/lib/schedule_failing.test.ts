@@ -15,6 +15,17 @@ const FAILED = { success: false, canceled: false };
 const SUCCEEDED = { success: true, canceled: false };
 const SKIPPED = { success: false, canceled: false, is_skipped: true };
 const CANCELED = { success: false, canceled: true };
+const CANCELED_BY_PERSON = {
+  success: false,
+  canceled: true,
+  canceled_by: "admin@example.com",
+  canceled_reason: "timeout while waiting",
+};
+const CANCELED_BY_TIMEOUT = {
+  success: false,
+  canceled: true,
+  canceled_by: "timeout",
+};
 
 describe("allRecentRunsFailed", () => {
   test("is true when the last three runs all failed", () => {
@@ -43,6 +54,54 @@ describe("allRecentRunsFailed", () => {
 
   test("does not let a canceled run break the streak", () => {
     expect(allRecentRunsFailed([FAILED, CANCELED, FAILED, FAILED])).toBe(true);
+  });
+
+  test("counts runs canceled by the timeout as failures", () => {
+    expect(
+      allRecentRunsFailed([CANCELED_BY_TIMEOUT, CANCELED_BY_TIMEOUT, FAILED]),
+    ).toBe(true);
+  });
+
+  test("keeps the streak across a run canceled by the timeout", () => {
+    expect(
+      allRecentRunsFailed([FAILED, CANCELED_BY_TIMEOUT, FAILED, SUCCEEDED]),
+    ).toBe(true);
+  });
+
+  test("is false when a success sits among runs canceled by the timeout", () => {
+    expect(
+      allRecentRunsFailed([
+        CANCELED_BY_TIMEOUT,
+        SUCCEEDED,
+        CANCELED_BY_TIMEOUT,
+      ]),
+    ).toBe(false);
+  });
+
+  test("does not count a run canceled by a person even if the reason mentions a timeout", () => {
+    expect(allRecentRunsFailed([FAILED, CANCELED_BY_PERSON, FAILED])).toBe(
+      false,
+    );
+  });
+
+  test("does not count a canceled run whose canceled_by is not a string", () => {
+    expect(
+      allRecentRunsFailed([
+        FAILED,
+        { success: false, canceled: true, canceled_by: 1 },
+        FAILED,
+      ]),
+    ).toBe(false);
+  });
+
+  test("is false when a run canceled by the timeout reports success", () => {
+    expect(
+      allRecentRunsFailed([
+        FAILED,
+        { success: true, canceled: true, canceled_by: "timeout" },
+        FAILED,
+      ]),
+    ).toBe(false);
   });
 
   test("ignores canceled runs at the head of the list", () => {

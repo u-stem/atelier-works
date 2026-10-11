@@ -308,6 +308,58 @@ GitHubには何も書き込まない。
 監査の作業項目は再実行できない。
 監査が失敗した期間は、次の週次の監査か、**監査**タブの**今すぐ監査**で取り込む。
 
+### 閉じたIssueやPRの失敗
+
+Consoleの要対応の一覧にある失敗、人の対応待ち、期限切れの作業項目は、対象のIssueやPRを閉じると自動で外れる。
+`poll_issues`が5分ごとに、閉じたものを取り消し(`cancelled`)にするためである。
+PRのcloseにはマージを含む。
+Discordには通知しない。
+
+マージ済みのPRは、閉じた人によらず取り消す。
+それ以外は、作者以外の人が閉じたときに取り消す。
+作者自身が閉じたときは、作者の関係が許可する関係(`allowed_labeler_associations`、既定はOWNER、MEMBER、COLLABORATOR)のときだけ取り消す。
+Botが閉じた対象と、GitHubが閉じた人を返さない対象は、取り消さず、一覧に残す。
+判定の理由は[セキュリティ](security.md)の「閉じた人の確認」に書く。
+一覧に残した理由と対象は、`poll_issues`のジョブのログにinfoで出る。
+一覧に残った作業項目は、再実行して扱うか、リポジトリの権限を持つ人が開き直して閉じ直す。
+
+Botが閉じた対象と、作者が許可されない関係で閉じた対象は、要対応に残る。
+たとえば、stale Botが閉じた対象や、依存更新のBotが自分のPRを閉じた対象である。
+残った対象は毎回調べ直すので、問い合わせの上限を使い続けることがある。
+closing keywordを含むPRをmerge queueがマージしたとき、Issueの`closed_by`がBotか空になるかは実機で確かめる。
+Botか空になるなら、Issueの作業項目も要対応に残る。
+外すには、人が対象を開き直してから閉じ直す。
+PRの作業項目は、マージ済みなら`merged_at`で外れるので、この操作は要らない。
+削除された対象(404、410)と、移動したIssue(リダイレクト先の状態を読む)も、一覧に残る。
+Consoleから外す操作は無い。
+
+再実行しない失敗を一覧から外したいときは、権限を持つ人が対象のIssueかPRを閉じる。
+失敗した監査の作業項目は、対象のIssueやPRが無いので外れない。
+対象のIssueやリポジトリが削除されたり、アクセスを失ったりした作業項目も外れない。この場合は`poll_issues`のジョブのログに警告が残る。
+
+取り消した作業項目は、対象を開き直してから再実行できる。
+作業項目のIDはConsoleの**パイプライン**タブで確かめ、Windmillの`f/factory/retry_work_item`に渡して実行する。
+取り消す前の状態から再実行するのと同じ扱いになる。
+対象が閉じたままのときと、開いているかGitHubで確かめられないときは、再実行を断る。
+取り消す前の状態からの再実行が二度とできなくなるのを避けるためで、先に開き直してから、もう一度実行する。
+この再実行ができるのは、この照合が取り消した作業項目だけである。
+Issueの新しいサイクルに置き換えられた作業項目などは、再実行できない。
+
+取り消しは`cancelled`として集計され、`updated_at`も取り消した時刻に更新される。
+そのため、**分析**のリードタイムと、DBの保持期間は、閉じた時刻ではなく取り消した時刻から数える。
+PRを開き直しても、追跡は自動では戻らない。
+PRは、開き直してから`retry_work_item`で再実行する方法を勧める。
+トリガーラベルの付け直しと再実行の両方を行うと、同じPRに作業項目が並んで動くので避ける。
+取り消した後にトリガーラベルを付け直したときの断りは、[再実行が拒否される場合](#再実行が拒否される場合)に書く。
+トリガーラベルの付け直しは、取り消す前の状態から再実行できないときに使う。
+
+`poll_issues`が1回の実行でGitHubに問い合わせる対象は、30件までである。
+対象ごとにIssueかPRの取得を1回行い、閉じた人もこの応答で確かめる。
+要対応の一覧が多いときは、前回の続きから調べるので、閉じたものが外れるまでに数回の実行がかかる。
+上限に達したことは`poll_issues`のジョブのログに警告で残る。
+rate limitを受けたときは、その回の問い合わせを打ち切り、次の実行で続ける。
+取得の失敗は、1回の実行につき1行だけ失敗に記録する。
+
 ### 再実行が拒否される場合
 
 次のときは、Factoryが理由を示して再実行を拒否する。
@@ -319,6 +371,9 @@ GitHubには何も書き込まない。
 | 作業項目のフローのジョブがまだ実行中か、キュー待ち | Windmillでそのジョブを止めるか、終わるのを待ってから再実行する |
 | ジョブの状態を読めない(Windmill APIの一時的な障害など) | 時間をおいて再実行する |
 | 読み取った後に、別の処理が作業項目の状態を変えた | パイプラインタブで今の状態を確かめる |
+| 取り消された作業項目の対象のIssueやPRが閉じたまま、または開いているか確かめられない | 対象を開き直して、もう一度実行する。確かめられないときは、時間をおいて実行する |
+| 取り消された作業項目の`pr_review`か`pr_fix`に、同じPRで`id`の大きい作業項目がある(取り消した後にトリガーラベルを付け直した)。エラーは「work item N … now tracks the same pull request … follow work item M」 | 取り消した作業項目は再実行せず、エラーに表示された新しい作業項目(M)に従う |
+| 取り消された作業項目の対象が移動した。Issueの移動、リポジトリの改名、所有者の移管でGitHubがリダイレクトを返す。エラーは「was redirected (the issue or repository moved); it cannot be restarted」 | 待っても直らず、再実行は常に断られる。Issueなら、移した先のIssueにトリガーラベルを付けて新しく始める |
 
 別の実行が先に作業項目を取っていたときの表示と、再実行の内部の仕組みは、[作業項目の状態とリース](internals/work-items.md)を参照する。
 
@@ -798,7 +853,7 @@ Consoleの**通知**タブには、Discordに送らない事項と、Discordに�
 | `console_fetch_stale` | Consoleの取り込みの結果が30分以上更新されていない | 取り込みのコンテナ(`console_fetcher`)が動いているか確かめる |
 | `console_worker_missing` | tag `console`のジョブが、予定時刻から5分以上実行されずに待っている。Console用のworkerが居ない、2枠とも塞がっている、またはtagの設定がずれていて、Consoleのジョブがqueueに溜まり、Consoleが止まる | `docker compose ps windmill_worker_console`でコンテナの状態を確かめ、無ければ`mise run up`で起動する。動いていれば、`mise run up`を実行し、続けて`mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_worker_console`で作り直す(`restart`は`factory_state_init`を経ずにマウントを解決し直す)。コンテナが作られていなければ、`factory_state_init`が失敗していないかを[Console用workerを確かめる](#console用workerを確かめる)の手順で確かめる。直らなければ、Windmillの画面でtag `console`の実行中のジョブとワーカーグループのtagを確かめる。自己更新(10分ごと)が検知し、Discordにも届く |
 | `console_worker_check_failed` | Console用のworkerがジョブを受けているかを、自己更新が1時間(6回)続けて確かめられなかった。workerが止まっていても気づけない状態である | 自己更新のジョブログで、下の4種類の警告のどれが出ているかを確かめて原因を直す。`could not confirm the console worker from the job lists`が続くなら、`console_fetch_watch`のスケジュールが有効か、直近の実行がtag `console`で動いているかを確かめる。Discordにも届く |
-| `schedule_failing` | 同じスケジュールの直近3回の実行が続けて失敗した。数えるのはスケジュールの実行そのものの失敗で、成功した実行の中で記録する部分的な失敗は含まない。GitHubのPATの失効などが原因になる | ジョブのログで失敗の内容を確かめて原因を直す。PATは[秘密をローテーションする](#秘密をローテーションする)で再発行する |
+| `schedule_failing` | 同じスケジュールの直近3回の実行が続けて失敗した。数えるのはスケジュールの実行そのものの失敗で、成功した実行の中で記録する部分的な失敗は含まない。ジョブの上限(`timeout`)で打ち切られた回も失敗に数える想定だが、実機では未確認である。GitHubのPATの失効などが原因になる | ジョブのログで失敗の内容を確かめて原因を直す。PATは[秘密をローテーションする](#秘密をローテーションする)で再発行する |
 | `schedule_failing_check_failed` | スケジュールが続けて失敗しているかを、ジョブ履歴から判定できなかった。失敗が続いても気づけない状態である | `on_error_schedule`のジョブのログで`failed to read the schedule history`のエラーを確かめ、ジョブ履歴を読む権限があるかを確かめる |
 
 ### Console用のworkerの検知を確かめる
@@ -840,6 +895,7 @@ workerが居ても、2枠とも塞がっているときや、tagの設定がず�
 - `console worker check timed out`: 10秒以内に終わらなかった。
 
 確認できない回数は自己更新のstateに数える。
+stateを読めなかった回は、数えず、stateも書かない。
 6回(1時間)続くと、通知`console_worker_check_failed`を残し、Discordにも知らせる。
 確認できれば回数は0に戻る。
 
@@ -861,7 +917,10 @@ Consoleが止まっていてもDiscordには届くので、通知の確認先は
 ### 続けて失敗するスケジュールの検知を確かめる
 
 スケジュールの直近3回の実行が続けて失敗したかどうかは、失敗のハンドラ(`on_error_schedule`)がジョブ履歴を読んで判定する。
-飛ばされた回(前回の実行中で見送った回)と取り消された回(人が止めた回)は、失敗として数えず、連続も切らない。
+飛ばされた回(前回の実行中で見送った回)と、人が取り消した回は、失敗として数えず、連続も切らない。
+ジョブの上限(`timeout`)で打ち切られた回は、失敗として数える。
+時間切れの取り消しは、ジョブ履歴で`canceled_by`が`timeout`になる想定で判定する。
+この値は実機で未確認である。
 マージの後は、次の手順で検知が動いていることを確かめる。
 
 1. 失敗する状態を作る。たとえば、あるスケジュールのscriptを一時的に失敗させるか、直近3回が失敗の状態を用意する。
@@ -874,6 +933,217 @@ Consoleが止まっていてもDiscordには届くので、通知の確認先は
 
 ジョブ履歴を読めないとき(APIの失敗と、想定外の形の応答)は、通知`schedule_failing_check_failed`が残る。
 その場合は、ジョブ履歴を読む権限を確かめる。
+
+### 自己更新の打ち切りを確かめる
+
+`self_update`のジョブには、全体の上限(2700秒)がある。
+値の内訳は[アーキテクチャ](architecture.md)の「自己更新」に書く。
+通常は、各コマンドの上限と、区切った呼び出し(1回30秒)の上限で先に終わる。
+全体の上限は、それでも止まったときの最後の砦である。
+
+上限で打ち切られた回は、最後に行うConsole用のworkerの確認が走らない。
+打ち切られるまでの最大45分は、10分ごとの次の4回が飛ばされる。
+この間は、自己更新の反映とConsole用のworkerの停止の検知が止まる。
+
+気づく経路は2つある。
+
+- `on_error_schedule`が時間切れでも呼ばれるなら、打ち切りのたびにDiscordの`job_failed`が届く。
+  これが主な経路になる想定である。
+- 打ち切りが3回続くと、通知`schedule_failing`が残る想定である。
+  補助の経路になる。
+
+どちらも、次の2点を実機で確かめていない。
+確かめるまでは、頼れる経路とみなさない。
+確かめていなければ、自己更新が止まっても気づけない。
+なお、ユーザー名が`timeout`の人が取り消した回は、時間切れと見分けられず、失敗に数えられる。
+
+- 時間切れの取り消しが、ジョブ履歴で`canceled_by`が`timeout`になること。
+  違う値なら、打ち切られた回が失敗として数えられず、`schedule_failing`が出ない。
+- `on_error_schedule`が、打ち切られた回でも呼ばれること。
+  呼ばれなければ、`job_failed`と`schedule_failing`のどちらも出ない。
+
+あわせて、`self_update`の実行ユーザーに`f/factory/deployed_sha`が見えることも実機で確かめる。
+見えないと存在の確認が`false`になり、全体を反映し直す。
+このとき、見えない既存の変数に対して、`setVariable`の作成が既存のパスと衝突しうる。
+
+確かめるには、本番の`self_update`やロックには触れず、使い捨てのscriptとスケジュールを使う。
+`wmill sync`の対象は`f/**`だけなので、`u/<user>/`のscriptとスケジュールはWindmillの画面で作る。
+自己更新の`wmill sync push`で消えたり上書きされたりしない。
+
+次の点に注意する。
+
+- 作る人は、`f/factory`のスケジュールと同じ権限(admin)にする。
+  失敗のハンドラはスケジュールの`permissioned_as`で動くので、`f/factory`の資源と変数を読めないと、黙って失敗する。
+- 手順の前に、Discordのチャンネルの人へ知らせる。
+  使い捨てのスケジュールの失敗が、`job_failed`として届くためである。
+- `on_error_schedule`は、`factory.job_failures`に`flow_path`が`u/<user>/timeout_probe`の行を残す。
+  この行は週次監査(月曜9時30分)の証跡に入るので、後片付けで消すか、監査の前に手順を終える。
+
+手順は次のとおりである。
+
+1. `self_update`の上限が反映されていることを確かめる。
+   `wmill script get f/factory/self_update`の出力で、`timeout`が2700であることを見る。
+   2700秒がインスタンスの上限で切り詰められないのは、セルフホストの上限が環境変数`TIMEOUT`で、未設定なら7日だからである。
+   `job_default_timeout`は21600秒以上にする決まりなので、2700秒はその範囲に収まる([実装フローの仕様](internals/implement.md)の「Windmillのtimeoutで打ち切られたとき」)。
+2. `u/<user>/timeout_probe`というscriptを作る。
+   子プロセスを起動せず、60秒待つだけにする。
+   設定の`timeout`は10秒にする。
+
+   ```ts
+   export async function main() {
+     await new Promise((resolve) => setTimeout(resolve, 60_000));
+   }
+   ```
+
+3. `u/<user>/timeout_probe`のスケジュールを作る。
+   cronは`0 */2 * * * *`(2分ごと)にし、`no_flow_overlap`を有効にする。
+   失敗時のハンドラは`f/factory/on_error_schedule`にする。
+4. スケジュールの実行を待つ。
+   手動の実行では`on_error_schedule`が呼ばれないので、手動では確かめられない。
+5. `wmill job list --script-path u/<user>/timeout_probe`で打ち切られた回を見つける。
+   `wmill job get <id> --json`で`canceled`、`canceled_by`、`canceled_reason`を読む。
+   出力に`canceled_by`が無いときは、Windmillの画面のジョブ詳細で読む。
+   `canceled_by`が`timeout`であることを見る。
+   違う値なら、`f/factory/lib/schedule_failing.ts`の判定を、読んだ値に合わせて直す。
+6. 先に`wmill job list --script-path f/factory/on_error_schedule`を見る。
+   `on_error_schedule`のジョブが、打ち切られた回の直後にあることを確かめる。
+   ジョブが無ければ、`on_error_schedule`は時間切れでは呼ばれない。
+   ジョブがあれば、続けてDiscordに`job_failed`が届いたことを見る。
+7. 通知`schedule_failing`まで見るなら、打ち切りが3回続くまで(約6分)待つ。
+   Consoleの**通知**タブに出ることを見る。
+8. 終わったら、スケジュールとscriptを消す。
+   出た`schedule_failing`は、Consoleで解決する。
+9. `factory.job_failures`に残った使い捨ての記録を消す。
+   Data Tableのデータベースに接続し、消す前に行を確かめる。
+   データベース名は、`main`のData Tableのresource_pathで、既定は`datatable_db`である。
+   `<user>`は、作ったscriptのパスに合わせて置き換える。
+
+   ```bash
+   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "SELECT id, flow_path, occurred_at FROM factory.job_failures WHERE flow_path = 'u/<user>/timeout_probe'"
+   ```
+
+   表示された行の件数が使い捨ての実行の回数と合うことを確かめ、行の`id`を控える。
+   確かめた`id`だけを、同じ`flow_path`の条件で消す。
+   `<確かめたid>`には、控えた`id`をカンマで区切って並べる。
+
+   ```bash
+   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "DELETE FROM factory.job_failures WHERE flow_path = 'u/<user>/timeout_probe' AND id IN (<確かめたid>)"
+   ```
+
+   `u/<user>/timeout_probe_child`と`u/<user>/timeout_probe_tail`は手動で実行するので、`on_error_schedule`が呼ばれず、通常は行が付かない。
+   SELECTで行が出た場合だけ、同じ手順で消す。
+
+打ち切りの扱いの確認は、同じ手順の使い捨てのscriptで続ける。
+
+- 打ち切りが子を止めるか。
+  `u/<user>/timeout_probe_child`を作り、`timeout`を10秒にする。
+  本体で、`Bun.spawn(["sleep", "600"], { detached: true })`で別のセッションの子を起動し、60秒待つ。
+  `wmill script run`で実行し、打ち切られた後に、後述の`ps`で`sleep 600`が残っているかを見る。
+  残っていれば、Windmillの打ち切りは子を止めない。
+  確かめたら、残った`sleep`を`kill`で止め、scriptを消す。
+- 取り残した処理が、ジョブの終わりを遅らせるか。
+  `withCallTimeout`は呼び出しを中断しないので、時間切れの後も処理が残りうる。
+  `u/<user>/timeout_probe_tail`を作り、60秒のタイマーを残したまま、すぐに戻るようにする。
+  実行して`wmill job get <id>`の`duration_ms`を見る。
+  60秒近くかかるなら、取り残した処理が終わりを遅らせる。
+  実際の`self_update`では、区切った呼び出しが時間切れになった回で、ジョブの終了がログの最後の時刻より大きく遅れないかを見る。
+
+### 打ち切りで残ったプロセスを確かめる
+
+Windmillの打ち切りが子プロセスを止めるかは、上の手順で確かめる。
+止めなければ、子の実行中に打ち切られたとき、`npm ci`や`wmill sync push`などが上限なしで残る。
+残った`wmill sync push`は次の回の作業ツリーを読み続け、`wmill datatable migrate up`は次の回と並行しうる。
+リスクは[セキュリティ](security.md)の「自己更新の打ち切り」に書く。
+
+打ち切られた回の後は、workerで残ったプロセスを探す。
+
+```bash
+mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker ps -eo pid,pgid,etime,args
+```
+
+出力から`wmill`、`npm`、`git`を探し、経過時間(`etime`)が打ち切りより長いものがあれば残っている。
+内容を確かめてから、`kill <pid>`で止める。
+
+### 自己更新が繰り返し打ち切られるとき
+
+自己更新が打ち切られ続けると、反映とConsole用のworkerの停止の検知が止まる。
+次の順で復旧する。
+
+1. `wmill job list --script-path f/factory/self_update`で、打ち切りが続いているかを見る。
+   原因はジョブのログで確かめる。
+2. 上の「打ち切りで残ったプロセスを確かめる」で、残った`wmill`、`npm`、`git`を探して止める。
+3. ホスト側のcheckoutで`git pull --ff-only`を実行する。
+   続けて`mise run push`と`mise run migrate`を実行し、自己更新が済ませるはずだった反映を手で行う。
+   `mise run push`は`--keep-deleted`付きなので、削除は反映しない。
+4. 次の回で自己更新が成功することを見る。
+   次の「打ち切られた回の記録を確かめる」の見比べで、`deployed_sha`がself cloneのHEADと同じになっていることを確かめる。
+
+### 区切った呼び出しが時間切れになったとき
+
+`self_update`の区切った呼び出しが30秒で終わらないと、例外にする。
+呼び出し自体は中断しないので、後から完了することがある。
+
+- 更新のうち、`wmill_token`の取得を含め、それ以降の失敗と時間切れは、更新の失敗として`factory.deployments`に記録する。
+  記録されない範囲は[アーキテクチャ](architecture.md)の「自己更新」に書く。
+  ジョブの失敗は、Discordの`job_failed`と、3回続いたときの`schedule_failing`で知る。
+  ただし`deployed_sha`の更新が時間切れのときは、変数を読み直し、書けていれば成功として続ける。
+  成功の記録そのものが時間切れのときは、反映が済んでいるので失敗にしない。
+  ログに警告を残し、成功として終わる。
+  この回の`deployments`の行は欠けることがある。
+  後から成功の行が入ることもある。
+  監査は、失敗の時刻以前で最後の成功の行から稼働版を導く。
+  そのため、成功の行が欠けると、次の成功の行までの間の失敗が1つ前の版に帰属しうる。
+- `deployed_sha`の読み取りが時間切れのときは、未デプロイとは扱わず、更新を失敗にする。
+  読み取りがそれ以外で失敗したときは、区切った`existsVariable`で変数の有無を確かめる。
+  `false`のときだけ未デプロイとして全体を反映し直す。
+  `true`のときと、確認できないときも、更新を失敗にする。
+  このとき、エラーは`Variable not found at f/factory/deployed_sha or not visible to you`になるが、変数が存在することもある。
+  一時的な失敗か、存在の確認(`existsVariable`)の失敗を疑う。
+- noticeの挿入が時間切れになり、後から挿入されたときは、その回のDiscordの通知は出ない。
+  次の回からは、同じ本文の未解決のnoticeがあるので、通知しない。
+  Consoleの要対応には残る。
+- stateの読み取りが失敗か時間切れの回は、stateを書かない。
+  確認できなかった回数の積み上げを、0に戻さないためである。
+  stateを書けなかった回は、警告だけにして、noticeの判定は数えた回数で続ける。
+- Console用workerの確認で、stateを書けなかった回の後は、保存された回数が実際と食い違う。
+  回数を0に戻す書き込みが失敗すると、古い回数が残る。
+  その後は、1回の確認失敗でも通知`console_worker_check_failed`が出うる。
+  回数を増やす書き込みが失敗すると、保存された回数は実際より少なくなり、通知が遅れる。
+
+### 打ち切られた回の記録を確かめる
+
+打ち切られた回は`factory.deployments`に記録が残らない。
+成功と失敗のどちらの記録も、更新の最後のほうで書くためである。
+
+`wmill sync push`と`wmill datatable migrate up`が済み、`deployed_sha`を更新した後で、記録の前に打ち切られることがある。
+このときは、その版の反映が済んでいるのに`deployments`に行が無い。
+次の回は、`deployed_sha`がself cloneのHEADと同じなので、何もせずに終わる。
+欠けた記録は補われない。
+
+見分けるには、次の3つを見比べる。
+
+- `deployed_sha`の値。
+  Windmillの画面で変数`f/factory/deployed_sha`を開いて読む。
+- self cloneのHEAD。
+- `deployments`の最新の行の`sha_to`。
+
+self cloneのHEADは、次のコマンドで読む。
+
+```bash
+mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker git -C /workspaces/factory/atelier-works rev-parse HEAD
+```
+
+`deployed_sha`とHEADが違えば、反映が済んでいないか、打ち切りが`deployed_sha`の更新より前に当たっている。
+通知`deployed_sha_mismatch`が残り、次の回が反映をやり直す。
+`deployed_sha`とHEADが同じで、`deployments`の最新の`sha_to`だけが違えば、その版の記録が欠けている。
+`wmill job list --script-path f/factory/self_update`で、打ち切られた回の時刻が、その版の反映の時刻と合うかを確かめる。
+
+`sha_to`がHEADと同じで、`result`が`failed`の行だけがあることもある。
+`deployed_sha`の更新が時間切れになった後で、実は書けていた場合の組である。
+更新は読み直しで成功として続けるので、この組は起きにくい。
+起きていれば、`deployed_sha`がHEADと同じかを見て、同じなら反映は済んでいる。
+
+欠けた記録は監査の「デプロイ」に出ないので、必要なら人が補う。
 
 ### 通知を解決する
 
