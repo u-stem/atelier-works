@@ -7,6 +7,7 @@
 import { access, cp, lstat, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { CheckImageStaleError } from "./check_sandbox.ts";
 import {
   type RunClaudeOptions,
   type RunClaudeResult,
@@ -525,6 +526,7 @@ export type ImplementLoopExit =
   | "symlink"
   | "git_pointer_modified"
   | "worktree_changed"
+  | "check_image_stale"
   | "claude_error"
   | "lease_lost";
 
@@ -540,6 +542,7 @@ export const IMPLEMENT_LOOP_EXITS: readonly ImplementLoopExit[] = [
   "symlink",
   "git_pointer_modified",
   "worktree_changed",
+  "check_image_stale",
   "claude_error",
   "lease_lost",
 ];
@@ -666,6 +669,13 @@ export type ImplementLoopDeps = {
   /** 現在時刻(epoch ms)。期限までの残りを測る。 */
   readonly now: () => number;
   readonly log: (message: string, fields: Record<string, unknown>) => void;
+  /**
+   * `runChecks`が`CheckImageStaleError`を投げたときに1回呼ぶ。運用者に`mise run up`を求める通知を残す。
+   * ループはそのラウンドで止まる。
+   */
+  readonly reportCheckImageStale: (
+    error: CheckImageStaleError,
+  ) => Promise<void>;
 };
 
 export type ImplementLoopInput = {
@@ -887,6 +897,8 @@ export async function gitPointerStopReason(
  *    差があれば、gitleaks、次に検証コマンドを実行する。検証コマンドは、
  *    保護パスが変わったときと未設定のときは実行しない。
  *    実行する直前に、gitが無視するファイルを削除する。検査コマンドは期限で切らない。
+ *    workerのイメージが古く検査を実行できなければ(`CheckImageStaleError`)、`reportCheckImageStale`で知らせ、
+ *    修正ラウンドに進まずに`check_image_stale`で止める。
  * 8. 終了を判定する(`decideImplementRoundExit`)。検査に失敗し、期限までの残りが修正ラウンドの最悪の所要時間に足りなければ`deadline`で止める。
  *    差分の指紋には、ステージしたツリーのshaを使う。
  * 9. 修正ラウンドに進む前にリースを確かめ、失っていれば止める。続けて`.git`ポインタを確かめ、変わっていれば止める。
@@ -1034,12 +1046,36 @@ export async function runImplementVerifyLoop(
       });
     }
 
-    const evaluation = await evaluateChecks(deps, produced, {
-      noChanges: fingerprint.diffStat.files === 0,
-      protectedChanged: protectedChanges.length > 0,
-      hasCheckCommands: input.hasCheckCommands,
-      inspectedTreeSha: fingerprint.treeSha,
-    });
+    let evaluation: CheckEvaluation;
+    try {
+      evaluation = await evaluateChecks(deps, produced, {
+        noChanges: fingerprint.diffStat.files === 0,
+        protectedChanged: protectedChanges.length > 0,
+        hasCheckCommands: input.hasCheckCommands,
+        inspectedTreeSha: fingerprint.treeSha,
+      });
+    } catch (err) {
+      // イメージが古く検査を実行できないのは、Claudeが直せる検査の失敗ではない。修正ラウンドに進まず、人に`mise run up`を求めて止まる。
+      if (!(err instanceof CheckImageStaleError)) throw err;
+      await deps.reportCheckImageStale(err);
+      await deps.recordRound({
+        ...base,
+        outcome: "error",
+        summary: produced.output.summary,
+        gap_report: null,
+        check_output: truncateCheckOutput(err.message),
+        checks_skipped_reason: null,
+        protected_changes: protectedChanges,
+        diff_stat: fingerprint.diffStat,
+      });
+      return stopped({
+        exit: "check_image_stale",
+        reason: err.message,
+        protected_changes: protectedChanges,
+        diff_stat: fingerprint.diffStat,
+        changed_paths: changedPaths,
+      });
+    }
     if (evaluation.scannedTreeChanged) {
       const reason = scannedTreeChangedReason(round);
       await deps.recordRound({

@@ -22,6 +22,7 @@ import {
   insertImplementRound,
   recordAgentRun,
 } from "../lib/db.ts";
+import { recordCheckImageStaleNotice } from "../lib/host_action.ts";
 import {
   rootFlowJobId,
   stillHoldsImplementLease,
@@ -279,6 +280,16 @@ export async function main(
           stillHoldsImplementLease(() => getWorkItem(work_item_id), leaseJobId),
         now: Date.now,
         log: (message, fields) => log.info(message, fields),
+        reportCheckImageStale: (error) =>
+          recordCheckImageStaleNotice(
+            {
+              readDeployedSha: () =>
+                wmill.getVariable("f/factory/deployed_sha"),
+              addNotice: addNoticeUnlessUnresolved,
+              log,
+            },
+            error.problems.join(", "),
+          ),
       },
       {
         workItemId: work_item_id,

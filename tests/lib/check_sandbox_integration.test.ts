@@ -17,8 +17,10 @@ import { join } from "node:path";
 import { runAllowedCheckCommands } from "../../f/factory/lib/check_runner.ts";
 import {
   CHECK_ENV_KEYS,
+  CHECK_NPROC_LIMIT,
   type CheckSandbox,
   type CheckSlotNotice,
+  checkImageProblems,
   createCheckSandbox,
   defaultSandboxDeps,
   parsePasswdUsers,
@@ -160,6 +162,7 @@ printf 'write_tmpdir=%s\\n' "$(touch "$TMPDIR/made-by-check" 2>/dev/null && echo
 printf 'git_status=%s\\n' "$(git status --porcelain >/dev/null 2>&1 && echo ok || echo failed)"
 printf 'git_head=%s\\n' "$(git rev-parse --verify HEAD 2>/dev/null)"
 printf 'gain_privilege=%s\\n' "$(${SETPRIV} --reuid=0 -- id -u 2>/dev/null || echo denied)"
+printf 'max_processes=%s\\n' "$(awk '/^Max processes/{print $3 ":" $4}' /proc/self/limits)"
 setsid sleep 300 >/dev/null 2>&1 &
 sleep 0.2
 `;
@@ -259,6 +262,12 @@ sleep 0.2
 
   test("the command runs with no_new_privs", () => {
     expect(probed("no_new_privs")).toBe("1");
+  });
+
+  test("the command's process count is capped for its uid", () => {
+    expect(probed("max_processes")).toBe(
+      `${String(CHECK_NPROC_LIMIT)}:${String(CHECK_NPROC_LIMIT)}`,
+    );
   });
 
   test("the command cannot switch back to root", () => {
@@ -658,6 +667,12 @@ suite("check slots in the worker image", () => {
     expect(
       parsePasswdUsers(readPasswd(), "factory-check-").map((user) => user.uid),
     ).toEqual(POOL);
+  });
+
+  test("the worker image meets every prerequisite of the sandbox", async () => {
+    expect(await checkImageProblems(POOL, defaultSandboxDeps(lockDir))).toEqual(
+      [],
+    );
   });
 
   test("there are at least as many slots as the worker's processes", () => {
@@ -1127,51 +1142,74 @@ suite("restoring a worktree from the slot record", () => {
   });
 });
 
-suite("shared temporary files between runs on one slot", () => {
-  const fx = makeRepo();
-  const lockDir = join(fx.base, "slots");
-  const uid = POOL[2] ?? 0;
-  const tag = `it-${String(process.pid)}`;
-  const paths = [
+/** System Vの共有メモリのうち、所有者か作成者が`owner`のものの数。 */
+function shmOf(owner: number): number {
+  return readFileSync("/proc/sysvipc/shm", "utf8")
+    .split("\n")
+    .slice(1)
+    .map((line) => line.trim().split(/\s+/))
+    .filter(
+      (fields) => fields[7] === String(owner) || fields[9] === String(owner),
+    ).length;
+}
+
+/** 共有の一時ディレクトリに、名前が`tag`で始まるファイルとディレクトリを置き、共有メモリを1つ作るスクリプト。 */
+function leaveSharedScript(tag: string): string {
+  return [
+    "umask 077",
+    `echo secret > /tmp/${tag}-file`,
+    `mkdir /tmp/${tag}-dir && chmod 777 /tmp/${tag}-dir && echo secret > /tmp/${tag}-dir/inner`,
+    `echo secret > /var/tmp/${tag}-file`,
+    `echo secret > /dev/shm/${tag}-file`,
+    "ipcmk -M 4096 >/dev/null",
+    "",
+  ].join("\n");
+}
+
+/** `leaveSharedScript`が置くパス。 */
+function sharedPaths(tag: string): string[] {
+  return [
     `/tmp/${tag}-file`,
     `/tmp/${tag}-dir`,
     `/var/tmp/${tag}-file`,
     `/dev/shm/${tag}-file`,
   ];
+}
+
+suite("shared temporary files between runs on one slot", () => {
+  const fx = makeRepo();
+  const lockDir = join(fx.base, "slots");
+  const uid = POOL[2] ?? 0;
+  const tag = `it-${String(process.pid)}`;
+  const paths = sharedPaths(tag);
   let created: boolean[] = [];
   let ipcBefore = 0;
-
-  /** System Vの共有メモリのうち、所有者か作成者が`uid`のものの数。 */
-  const shmOf = (owner: number): number =>
-    readFileSync("/proc/sysvipc/shm", "utf8")
-      .split("\n")
-      .slice(1)
-      .map((line) => line.trim().split(/\s+/))
-      .filter(
-        (fields) => fields[7] === String(owner) || fields[9] === String(owner),
-      ).length;
+  let seen: string[] = [];
 
   beforeAll(async () => {
     mkdirSync(WINDMILL_TMP_DIR, { recursive: true });
     const worktree = fx.addWorktree("shared");
-    writeFileSync(
-      join(worktree, "leave.sh"),
-      [
-        `umask 077`,
-        `echo secret > /tmp/${tag}-file`,
-        `mkdir /tmp/${tag}-dir && chmod 777 /tmp/${tag}-dir && echo secret > /tmp/${tag}-dir/inner`,
-        `echo secret > /var/tmp/${tag}-file`,
-        `echo secret > /dev/shm/${tag}-file`,
-        "ipcmk -M 4096 >/dev/null",
-        "",
-      ].join("\n"),
-    );
-    await runChecks(worktree, ["sh ./leave.sh"], sandboxIn(lockDir, [uid]));
+    // 後始末が走らなかった実行の残りを、枠のuidで直に作って再現する。
+    runAsUid(uid, leaveSharedScript(tag), "/");
     created = paths.map((path) => existsSync(path));
     ipcBefore = shmOf(uid);
     // 別の枠のuidが、残ったディレクトリの中にファイルを置く。
     runAsUid(POOL[3] ?? 0, `echo x > /tmp/${tag}-dir/by-other`, "/");
-    await runChecks(worktree, ["true"], sandboxIn(lockDir, [uid]));
+    // 次の実行の検査の中から、残りが見えるかを確かめる。終わった後の後始末より前に消えていることを見るためである。
+    writeFileSync(
+      join(worktree, "look.sh"),
+      [
+        ...paths.map((path) => `test -e ${path} && echo present || echo gone`),
+        `awk 'NR > 1 && ($8 == ${String(uid)} || $10 == ${String(uid)})' /proc/sysvipc/shm | wc -l`,
+        "",
+      ].join("\n"),
+    );
+    const [result] = await runChecks(
+      worktree,
+      ["sh ./look.sh"],
+      sandboxIn(lockDir, [uid]),
+    );
+    seen = (result?.output ?? "").trim().split("\n");
   }, 60_000);
 
   afterAll(() => {
@@ -1179,22 +1217,63 @@ suite("shared temporary files between runs on one slot", () => {
     fx.cleanup();
   });
 
-  test("the first run left its files in the shared directories", () => {
+  test("the dead run left its files in the shared directories", () => {
     expect(created).toEqual([true, true, true, true]);
   });
 
-  test("the first run left a shared memory segment", () => {
+  test("the dead run left a shared memory segment", () => {
     expect(ipcBefore).toBe(1);
   });
 
   test.each([0, 1, 2, 3])(
-    "the next run on the slot removed shared path %d first",
+    "the next run on the slot removed shared path %d before its check",
+    (index) => {
+      expect(seen[index]).toBe("gone");
+    },
+  );
+
+  test("the next run on the slot removed the shared memory segment before its check", () => {
+    expect(seen[4]?.trim()).toBe("0");
+  });
+});
+
+suite("shared temporary files a finished check leaves", () => {
+  const fx = makeRepo();
+  const lockDir = join(fx.base, "slots");
+  const uid = POOL[3] ?? 0;
+  const tag = `it-done-${String(process.pid)}`;
+  const paths = sharedPaths(tag);
+  let ok: boolean | undefined;
+
+  beforeAll(async () => {
+    mkdirSync(WINDMILL_TMP_DIR, { recursive: true });
+    const worktree = fx.addWorktree("shared-done");
+    writeFileSync(join(worktree, "leave.sh"), leaveSharedScript(tag));
+    const [result] = await runChecks(
+      worktree,
+      ["sh ./leave.sh"],
+      sandboxIn(lockDir, [uid]),
+    );
+    ok = result?.ok;
+  }, 60_000);
+
+  afterAll(() => {
+    for (const path of paths) rmSync(path, { recursive: true, force: true });
+    fx.cleanup();
+  });
+
+  test("the check could write to the shared directories", () => {
+    expect(ok).toBe(true);
+  });
+
+  test.each([0, 1, 2, 3])(
+    "the check's own release removed shared path %d",
     (index) => {
       expect(existsSync(paths[index] ?? "")).toBe(false);
     },
   );
 
-  test("the next run on the slot removed the shared memory segment first", () => {
+  test("the check's own release removed its shared memory segment", () => {
     expect(shmOf(uid)).toBe(0);
   });
 });
@@ -1392,5 +1471,93 @@ suite("a worktree lock a cancelled check keeps", () => {
 
   test("root can run git in the worktree again", () => {
     expect(runSync(["git", "status", "--porcelain"], worktree)).toBe(0);
+  });
+});
+
+/**
+ * 枠を取った実行が、`runCommand`で検査コマンドを起動し、検査コマンドが別のセッションに抜けたプロセスを残してから、
+ * 走らせている側のプロセスごと殺されたところを再現する。枠のロックは、走らせている側が持つパイプが閉じると解放される。
+ * 抜けたプロセスがそのパイプを受け継いでいると、ロックが解放されないままになる。
+ */
+async function killedRunWithEscapedCheck(opts: {
+  readonly lockDir: string;
+  readonly worktreeDir: string;
+  readonly homeDir: string;
+}): Promise<string> {
+  const module = (name: string): string =>
+    JSON.stringify(join(import.meta.dir, `../../f/factory/lib/${name}`));
+  const child = Bun.spawn(
+    [
+      "bun",
+      "-e",
+      `import { createCheckSandbox, defaultSandboxDeps } from ${module("check_sandbox.ts")};
+import { runCommand } from ${module("workspace.ts")};
+const sandbox = createCheckSandbox({ uids: ${JSON.stringify(POOL)}, deps: defaultSandboxDeps(${JSON.stringify(opts.lockDir)}) });
+const dirs = { worktreeDir: ${JSON.stringify(opts.worktreeDir)}, homeDir: ${JSON.stringify(opts.homeDir)} };
+await sandbox.prepare(dirs);
+await runCommand(sandbox.wrap(["/bin/sh", "-c", "setsid sleep 300 </dev/null >/dev/null 2>&1 & sleep 0.3"]), { cwd: dirs.worktreeDir, env: { PATH: "/usr/bin:/bin", HOME: dirs.homeDir } });
+console.log("prepared");
+process.kill(process.pid, "SIGKILL");`,
+    ],
+    { stdout: "pipe", env: { PATH: "/usr/local/bin:/usr/bin:/bin" } },
+  );
+  const said = await new Response(child.stdout).text();
+  await child.exited;
+  return said.trim();
+}
+
+suite("the slot lock of a run killed while its check escaped", () => {
+  const fx = makeRepo();
+  const lockDir = join(fx.base, "slots");
+  const uid = POOL[0] ?? 0;
+  let worktree = "";
+  let staleHome = "";
+  let said = "";
+  let escapedAlive = false;
+  let freed = false;
+
+  beforeAll(async () => {
+    mkdirSync(WINDMILL_TMP_DIR, { recursive: true });
+    worktree = fx.addWorktree("escaped");
+    staleHome = makeHome();
+    said = await killedRunWithEscapedCheck({
+      lockDir,
+      worktreeDir: worktree,
+      homeDir: staleHome,
+    });
+    const deps = defaultSandboxDeps(lockDir);
+    for (let attempt = 0; attempt < 50 && !freed; attempt += 1) {
+      escapedAlive = processesOf([uid]).length > 0;
+      const handle = await deps.slots.tryAcquire(0);
+      if (handle !== null) {
+        freed = true;
+        await handle.release();
+      } else {
+        await Bun.sleep(100);
+      }
+    }
+    // 抜けたプロセスを止め、worktreeをrootに戻す。
+    await restoreCheckOwnership(worktree, POOL, deps);
+  }, 60_000);
+
+  afterAll(() => {
+    rmSync(staleHome, { recursive: true, force: true });
+    fx.cleanup();
+  });
+
+  test("the killed run had started its check", () => {
+    expect(said).toBe("prepared");
+  });
+
+  test("the escaped process still runs when the slot frees", () => {
+    expect(escapedAlive).toBe(true);
+  });
+
+  test("the slot frees although the escaped process still runs", () => {
+    expect(freed).toBe(true);
+  });
+
+  test("restoring the worktree stops the escaped process", () => {
+    expect(processesOf([uid])).toEqual([]);
   });
 });

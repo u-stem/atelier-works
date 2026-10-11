@@ -7,8 +7,9 @@
 // 枠は後の実行で別のリポジトリに使い回すので、枠を取るたびに前の実行の残り(プロセス、所有権、一時ファイル、IPC)を消す。
 
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { constants, readFileSync } from "node:fs";
 import {
+  access,
   chmod,
   lstat,
   mkdir,
@@ -55,9 +56,11 @@ const TAG_GID_MAX = 2_000_000_000;
 
 /**
  * PATHに頼らず、絶対パスで呼ぶ道具。
- * イメージでは`util-linux`、`findutils`、`coreutils`、`procps`(`kill`)、`acl`(`getfacl`、`setfacl`)が入れる。
+ * イメージでは`util-linux`(`setpriv`、`prlimit`、`flock`、`ipcrm`)、`findutils`、`coreutils`、
+ * `procps`(`kill`)、`acl`(`getfacl`、`setfacl`)が入れる。
  */
 export const SETPRIV_PATH = "/usr/bin/setpriv";
+export const PRLIMIT_PATH = "/usr/bin/prlimit";
 export const FIND_PATH = "/usr/bin/find";
 export const CHOWN_PATH = "/usr/bin/chown";
 export const CHMOD_PATH = "/usr/bin/chmod";
@@ -68,6 +71,27 @@ export const KILL_PATH = "/usr/bin/kill";
 export const GETFACL_PATH = "/usr/bin/getfacl";
 export const SETFACL_PATH = "/usr/bin/setfacl";
 
+/** 検査と後始末が呼ぶ道具の一覧。`prepare`は、1つでも無ければ何にも触れずに失敗する。 */
+export const REQUIRED_TOOL_PATHS = [
+  SETPRIV_PATH,
+  PRLIMIT_PATH,
+  FIND_PATH,
+  CHOWN_PATH,
+  CHMOD_PATH,
+  FLOCK_PATH,
+  RM_PATH,
+  IPCRM_PATH,
+  KILL_PATH,
+  GETFACL_PATH,
+  SETFACL_PATH,
+] as const;
+
+/**
+ * 検査コマンドの枠のuidが同時に持てるプロセスの数(スレッドを含む)の上限。
+ * 子を作り続ける検査が、workerのコンテナのpidsの上限(512)を使い切り、ほかのジョブとWindmill本体を止めないようにする。
+ * カーネルは実uidごとに数えるので、枠ごとの上限になる。`bun test`や`go build`のスレッドが収まる値にする。
+ */
+export const CHECK_NPROC_LIMIT = 256;
 /**
  * Windmillの実行時のディレクトリ。依存のキャッシュ(`cache`)とログ(`logs`)が、
  * 誰でも書き込める(0777)権限で作られる。
@@ -177,6 +201,13 @@ export function newCheckIdentity(
   };
 }
 
+/** 枠のuidとして動く前に、uidが一般のユーザーの範囲の整数であることを確かめる。rootやシステムのユーザーとして動かないためである。 */
+function assertCheckUid(uid: number): void {
+  if (!Number.isInteger(uid) || uid < MIN_CHECK_UID || uid > MAX_CHECK_UID) {
+    throw new Error(`check sandbox: refusing to act as uid ${String(uid)}`);
+  }
+}
+
 /**
  * `argv`を、検査用のuidに落として実行するargvにする。
  * uidとgidを切り替え、補助グループを目印の1つだけにし、ケーパビリティの上限と継承を空にし、
@@ -187,6 +218,7 @@ export function setprivArgv(
   identity: CheckIdentity,
   argv: readonly string[],
 ): string[] {
+  assertCheckUid(identity.uid);
   return [
     SETPRIV_PATH,
     `--reuid=${String(identity.uid)}`,
@@ -197,6 +229,24 @@ export function setprivArgv(
     "--no-new-privs",
     "--",
     ...argv,
+  ];
+}
+
+/**
+ * 検査コマンドの`argv`を、枠のuidのプロセス数を`CHECK_NPROC_LIMIT`に抑えたうえで、検査用のuidに落として実行するargvにする。
+ * `prlimit`はrootのまま上限を付けてから`setpriv`を実行し、上限は検査コマンドとその子孫に受け継がれる。
+ * 後始末の`kill`は上限を付けずに起動するので、上限に達した枠のプロセスも止められる。
+ */
+export function checkCommandArgv(
+  identity: CheckIdentity,
+  argv: readonly string[],
+): string[] {
+  const limit = String(CHECK_NPROC_LIMIT);
+  return [
+    PRLIMIT_PATH,
+    `--nproc=${limit}:${limit}`,
+    "--",
+    ...setprivArgv(identity, argv),
   ];
 }
 
@@ -447,6 +497,12 @@ export function leftoverArgv(dir: string): string[] {
   ];
 }
 
+/** `dir`の下に、rootでないものがあれば最初の1つのパスを出すargv。読めない枠の記録がそのworktreeを指していたかを推し量るのに使う。 */
+export function notRootOwnedArgv(dir: string): string[] {
+  assertChownableDir(dir);
+  return [FIND_PATH, "-P", dir, "-xdev", "!", "-uid", "0", "-print", "-quit"];
+}
+
 /**
  * 取り戻しの確かめ。`dir`の下に、拡張のACL(名前付きのエントリかデフォルトのACL)を持つものがあれば、その一覧を出す。
  * ACLは`chown`と`chmod`では消えない。枠のuidがディレクトリに付けたデフォルトのACLが残ると、
@@ -627,11 +683,39 @@ export function parseSlotRecord(text: string): SlotRecord | null {
   return { worktreeDir, homeDir };
 }
 
-/** 枠の記録の本文が読めない(形が違う)。 */
+/** 枠の記録の本文が読めない(形が違う)。`path`は記録のファイル。 */
 export class UnreadableSlotRecordError extends Error {
-  constructor(index: number) {
-    super(`check sandbox: the record of slot ${String(index)} is unreadable`);
+  constructor(index: number, path: string) {
+    super(
+      `check sandbox: the record of slot ${String(index)} is unreadable: ${path}`,
+    );
     this.name = "UnreadableSlotRecordError";
+  }
+}
+
+/** イメージの前提を満たさないときの理由の先頭。運用者が取る操作(`mise run up`)を含める。 */
+export const CHECK_IMAGE_STALE_REASON =
+  "worker image is stale: run mise run up";
+
+/**
+ * workerのイメージが、検査を枠のuidで動かす前提(道具と`factory-check-N`のユーザー)を満たさない。
+ * `f/`の変更がイメージの作り直しより先に反映されたときに起きる。検査の失敗ではなく、検査を実行できない環境の問題である。
+ * 問題は`, `でつなぐ。理由の区切り(`; `)で別の理由に見えないようにするためである。
+ */
+export class CheckImageStaleError extends Error {
+  readonly problems: readonly string[];
+  constructor(problems: readonly string[]) {
+    super(`${CHECK_IMAGE_STALE_REASON}: ${problems.join(", ")}`);
+    this.name = "CheckImageStaleError";
+    this.problems = problems;
+  }
+}
+
+/** worktreeに残った枠のuidの所有を、rootへ戻せなかった。メッセージに枠と理由が載る。 */
+export class CheckOwnershipRestoreError extends Error {
+  constructor(detail: string) {
+    super(`check sandbox: ${detail}`);
+    this.name = "CheckOwnershipRestoreError";
   }
 }
 
@@ -708,6 +792,8 @@ export type ReapDeps = {
  * procps-ngの`kill`は、`-1`を`--`の後に置かないとオプションとして読み、送らずに失敗する。
  */
 export function killAllArgv(uid: number): string[] {
+  // rootとして`kill -1`を送ると、コンテナのすべてのプロセスが止まる。
+  assertCheckUid(uid);
   return [
     SETPRIV_PATH,
     `--reuid=${String(uid)}`,
@@ -811,6 +897,45 @@ export function resolveCheckPool(
   return users.map((user) => parseCheckUid(String(user.uid)));
 }
 
+/** イメージの前提を確かめるための読み取り。 */
+export type ImageDeps = {
+  /** `path`が実行できるファイルかを返す。 */
+  readonly isExecutable: (path: string) => Promise<boolean>;
+  /** `/etc/passwd`の本文。読めなければ例外を投げる。 */
+  readonly readPasswd: () => Promise<string>;
+};
+
+/**
+ * workerのイメージが、`uids`の枠で検査を動かす前提を満たすかを確かめ、満たさない点を返す。空なら満たす。
+ * 前提は、`REQUIRED_TOOL_PATHS`の道具がすべて実行できることと、`uids`のどれにも`factory-check-N`のユーザーがあることである。
+ * 古いイメージには、番号の無い`factory-check`のユーザーしか無く、`acl`も入っていない。
+ */
+export async function checkImageProblems(
+  uids: readonly number[],
+  deps: ImageDeps,
+): Promise<string[]> {
+  const problems: string[] = [];
+  for (const path of REQUIRED_TOOL_PATHS) {
+    if (!(await deps.isExecutable(path))) problems.push(`${path} is missing`);
+  }
+  let passwd = "";
+  try {
+    passwd = await deps.readPasswd();
+  } catch {
+    problems.push("/etc/passwd is unreadable");
+  }
+  const known = new Set(
+    parsePasswdUsers(passwd, CHECK_USER_PREFIX).map((user) => user.uid),
+  );
+  const absent = uids.filter((uid) => !known.has(uid));
+  if (absent.length > 0) {
+    problems.push(
+      `no ${CHECK_USER_PREFIX}N user for uid ${absent.map(String).join(", ")}`,
+    );
+  }
+  return problems;
+}
+
 export type CheckDirs = {
   /** 検査を実行するworktree。 */
   readonly worktreeDir: string;
@@ -883,7 +1008,7 @@ export async function acquireSlot(
   }
 }
 
-export type CheckSandboxDeps = {
+export type CheckSandboxDeps = ImageDeps & {
   /** rootで実行するコマンドのランナー。所有権の受け渡しに使う。ロックは付けない。 */
   readonly run: CommandRunner;
   readonly reap: ReapDeps;
@@ -907,7 +1032,8 @@ export type CheckSandbox = {
   /** 検査コマンドのargvを、取った枠のuidで実行するargvにする。`prepare`の後に呼ぶ。 */
   readonly wrap: (argv: readonly string[]) => string[];
   /**
-   * 検査の前に1回。Windmillの実行時のディレクトリを閉じ、空いている枠を取り、
+   * 検査の前に1回。最初にイメージの前提を確かめ、満たさなければ何にも触れずに`CheckImageStaleError`を投げる。
+   * 続けてWindmillの実行時のディレクトリを閉じ、空いている枠を取り、
    * 前の実行が残したその枠のものを片付け、枠の記録を書いてから、worktreeとHOMEを枠のuidに渡す。
    * 片付けられない枠は手放して次の枠を試す。
    */
@@ -916,8 +1042,10 @@ export type CheckSandbox = {
   readonly settle: () => Promise<void>;
   /**
    * 検査の後に1回。`prepare`が途中で投げた後にも呼ぶ。
-   * 残りを止め、止まったことを確かめてから所有権をrootに戻し、HOMEを消し、枠の記録を消して、枠を手放す。
-   * 途中で失敗したときは記録を残し、次にその枠を取る実行に片付けを任せる。
+   * 残りを止め、止まったことを確かめてから所有権をrootに戻し、HOMEを消す。
+   * 共有の一時ディレクトリとIPCから枠のuidのものを消し、枠の記録を消して、枠を手放す。
+   * 取り戻しが途中で失敗したときは記録を残し、次にその枠を取る実行に片付けを任せる。
+   * 共有の一時ディレクトリとIPCを消し切れないときは、ログに残すだけで失敗にしない。次にその枠を取る実行が消し直すためである。
    */
   readonly release: (dirs: CheckDirs) => Promise<void>;
   /** ホストのカーネルの設定が前提を満たさないときの警告。空なら前提を満たす。 */
@@ -1177,6 +1305,14 @@ export function createCheckSandbox(opts: {
   const log = opts.log ?? logger("check_sandbox");
   const indices = opts.uids.map((_, index) => index);
   let active: { identity: CheckIdentity; handle: SlotHandle } | null = null;
+  // 動いているコンテナのイメージは変わらないので、前提を満たした結果は部品の寿命の間覚える。
+  let imageReady = false;
+  const assertImageReady = async (): Promise<void> => {
+    if (imageReady) return;
+    const problems = await checkImageProblems(opts.uids, deps);
+    if (problems.length > 0) throw new CheckImageStaleError(problems);
+    imageReady = true;
+  };
   const notify = async (notice: CheckSlotNotice): Promise<void> => {
     if (opts.onNotice === undefined) return;
     try {
@@ -1237,8 +1373,10 @@ export function createCheckSandbox(opts: {
     }
   };
   return {
-    wrap: (argv) => setprivArgv(current(), argv),
+    wrap: (argv) => checkCommandArgv(current(), argv),
     prepare: async (dirs) => {
+      // 記録を書く前、所有権に触れる前に確かめる。古いイメージで記録だけが残ると、次の準備も同じ例外で止まるためである。
+      await assertImageReady();
       const record: SlotRecord = {
         worktreeDir: dirs.worktreeDir,
         homeDir: dirs.homeDir,
@@ -1273,6 +1411,16 @@ export function createCheckSandbox(opts: {
       try {
         stoppedOrThrow(await reapUidProcesses(identity.uid, deps.reap));
         await takeBackDirs(deps, identity, dirs);
+        // 枠の数が同時実行数より多いと、番号の大きい枠は次に使われるまで長く空く。その間、共有の一時ディレクトリに検査の残りを置かない。
+        try {
+          await purgeShared(deps, identity);
+        } catch (error) {
+          log.warn("shared files of the check slot remain", {
+            slot: handle.index,
+            uid: identity.uid,
+            error: errorMessage(error),
+          });
+        }
         await deps.slotRecords.clear(handle.index);
       } finally {
         await handle.release();
@@ -1292,9 +1440,14 @@ export function createCheckSandbox(opts: {
  * そのままだとrootのgitが所有者の違いで実行を拒み、次の作業項目が止まる。
  * ロックを取れた枠は、その枠のuidのプロセスを止め、worktreeを取り戻し、HOMEを消し、記録を消す。
  * 記録はロックを取った後に読み直し、まだ`dir`を指すときだけ片付ける。
- * `maxWaitMs`待ってもロックを取れなければ、`CheckSlotInUseError`を投げる。
+ * `maxWaitMs`待ってもロックを取れなければ、記録を読み直す。
+ * もう`dir`を指さなければ、ロックを持つ実行が片付けを終えたので先へ進む。まだ指していれば`CheckSlotInUseError`を投げる。
  * ロックを持つのは、そのworktreeで検査している実行か、その枠を取って片付けている実行なので、worktreeに触れずに引き返すためである。
- * 読めない記録は、どのworktreeを指すか分からないので飛ばす。その枠を次に取る実行が退避して知らせる。
+ * プロセスを止められないか、worktreeを取り戻せないときは、枠と理由を載せた`CheckOwnershipRestoreError`を投げる。
+ * 読めない記録(`UnreadableSlotRecordError`)は、どのworktreeを指すか分からないので飛ばす。その枠を次に取る実行が退避して知らせる。
+ * ただし、読めない記録があり、`dir`の下にrootでないものが残っていれば、その記録が`dir`を指していたとみなし、記録のパスを載せた`CheckOwnershipRestoreError`を投げる。
+ * rootでないものが残ったworktreeでは、rootのgitが所有者の違いで実行を拒み、理由の分からない失敗になるためである。
+ * 記録の読み取りのそれ以外の失敗は、そのまま投げる。
  */
 export async function restoreCheckOwnership(
   dir: string,
@@ -1302,17 +1455,21 @@ export async function restoreCheckOwnership(
   deps: CheckSandboxDeps,
   maxWaitMs: number = RESTORE_MAX_WAIT_MS,
 ): Promise<boolean> {
-  const readOrNull = async (index: number): Promise<SlotRecord | null> => {
+  const unreadable = new Map<number, UnreadableSlotRecordError>();
+  const readRecord = async (index: number): Promise<SlotRecord | null> => {
     try {
       return await deps.slotRecords.read(index);
-    } catch {
+    } catch (error) {
+      if (!(error instanceof UnreadableSlotRecordError)) throw error;
+      unreadable.set(index, error);
       return null;
     }
   };
+  const pointsHere = (record: SlotRecord | null): boolean =>
+    record !== null && record.worktreeDir === dir;
   let restored = false;
   for (const [index, uid] of uids.entries()) {
-    const record = await readOrNull(index);
-    if (record?.worktreeDir !== dir) continue;
+    if (!pointsHere(await readRecord(index))) continue;
     let handle: SlotHandle;
     try {
       handle = await acquireSlot([index], deps.slots, {
@@ -1320,19 +1477,40 @@ export async function restoreCheckOwnership(
         pollMs: SLOT_POLL_MS,
       });
     } catch (error) {
-      if (error instanceof CheckSlotsBusyError)
-        throw new CheckSlotInUseError(index, uid);
-      throw error;
+      if (!(error instanceof CheckSlotsBusyError)) throw error;
+      if (!pointsHere(await readRecord(index))) continue;
+      throw new CheckSlotInUseError(index, uid);
     }
     try {
-      const held = await readOrNull(index);
-      if (held?.worktreeDir !== dir) continue;
-      stoppedOrThrow(await reapUidProcesses(uid, deps.reap));
-      await takeBackDirs(deps, newCheckIdentity(uid), held);
+      const held = await readRecord(index);
+      if (held === null || held.worktreeDir !== dir) continue;
+      try {
+        stoppedOrThrow(await reapUidProcesses(uid, deps.reap));
+        await takeBackDirs(deps, newCheckIdentity(uid), held);
+      } catch (error) {
+        throw new CheckOwnershipRestoreError(
+          `the worktree recorded by slot ${CHECK_USER_PREFIX}${String(index)} (uid ${String(uid)}) could not be taken back: ${errorMessage(error)}`,
+        );
+      }
       await deps.slotRecords.clear(index);
       restored = true;
     } finally {
       await handle.release();
+    }
+  }
+  if (unreadable.size > 0 && (await deps.pathKind(dir)) === "directory") {
+    const foreign = await runToolOutput(
+      deps,
+      notRootOwnedArgv(dir),
+      `checking ${dir}`,
+    );
+    if (foreign.trim() !== "") {
+      const records = [...unreadable.values()]
+        .map((error) => error.message)
+        .join(", ");
+      throw new CheckOwnershipRestoreError(
+        `an entry not owned by root remains (${firstLine(foreign)}) and no readable slot record names the worktree: ${records}`,
+      );
     }
   }
   return restored;
@@ -1423,7 +1601,8 @@ function fileSlotRecordDeps(lockDir: string): SlotRecordDeps {
         throw error;
       }
       const record = parseSlotRecord(text);
-      if (record === null) throw new UnreadableSlotRecordError(index);
+      if (record === null)
+        throw new UnreadableSlotRecordError(index, pathOf(index));
       return record;
     },
     setAside: async (index) => {
@@ -1520,6 +1699,15 @@ export function defaultSandboxDeps(
         return null;
       }
     },
+    isExecutable: async (path) => {
+      try {
+        await access(path, constants.X_OK);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    readPasswd: () => readFile("/etc/passwd", "utf8"),
   };
 }
 

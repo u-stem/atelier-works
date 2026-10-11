@@ -1028,3 +1028,20 @@ describe("describeReason / nextActionFor (GitHub rate limit)", () => {
     );
   });
 });
+
+describe("describeReason / nextActionFor (stale worker image)", () => {
+  const STALE =
+    "worker image is stale: run mise run up: /usr/bin/getfacl is missing, no factory-check-N user for uid 10001";
+
+  test("translates a stale worker image with what it lacks", () => {
+    expect(describeReason(STALE)).toBe(
+      "workerのイメージが古く、検査コマンドを非特権のユーザーで実行できません(/usr/bin/getfacl is missing, no factory-check-N user for uid 10001)",
+    );
+  });
+
+  test("asks to rebuild the image with mise run up and then rerun", () => {
+    expect(nextActionFor(STALE)).toBe(
+      "ホストのcheckoutでgit pullし、mise installとmise run upでworkerのイメージを作り直してから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+    );
+  });
+});

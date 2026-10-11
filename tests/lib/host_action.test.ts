@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { NotifyEvent } from "../../f/factory/lib/discord.ts";
 import {
+  buildCheckImageStaleNotice,
   buildHostActionNotice,
   extractNoticeSha,
   HOST_ACTION_NOTICE_KIND,
@@ -14,6 +15,7 @@ import {
   type ReconcileDeps,
   readHostAppliedSha,
   reconcileHostActionNotices,
+  recordCheckImageStaleNotice,
   recordHostAction,
 } from "../../f/factory/lib/host_action.ts";
 import { logger } from "../../f/factory/lib/log.ts";
@@ -568,5 +570,104 @@ describe("buildHostActionNotice paths", () => {
   test("keeps the message on one line", () => {
     const { notice } = buildHostActionNotice(SHA_A, ["infra/a\r\nb"]);
     expect(notice.message.includes("\n")).toBe(false);
+  });
+});
+
+describe("buildCheckImageStaleNotice", () => {
+  test("uses the host action notice kind", () => {
+    expect(
+      buildCheckImageStaleNotice(SHA_A, "/usr/bin/getfacl is missing").kind,
+    ).toBe(HOST_ACTION_NOTICE_KIND);
+  });
+
+  test("names the deployed sha so that the self update resolves it once the host applied it", () => {
+    const notice = buildCheckImageStaleNotice(SHA_A, "x");
+    expect(extractNoticeSha(notice.message)).toBe(SHA_A);
+  });
+
+  test("carries what the image lacks", () => {
+    expect(
+      buildCheckImageStaleNotice(SHA_A, "/usr/bin/getfacl is missing").message,
+    ).toContain("/usr/bin/getfacl is missing");
+  });
+
+  test("tells the operator to run mise run up", () => {
+    expect(buildCheckImageStaleNotice(SHA_A, "x").message).toContain(
+      "mise run up",
+    );
+  });
+
+  test("leaves the sha out when the deployed version is unknown", () => {
+    expect(
+      extractNoticeSha(buildCheckImageStaleNotice(null, "x").message),
+    ).toBeNull();
+  });
+
+  test("asks the operator to resolve the notice when the deployed version is unknown", () => {
+    expect(buildCheckImageStaleNotice(null, "x").message).toContain(
+      "この通知を解決",
+    );
+  });
+
+  test("produces the same message for the same sha and problems", () => {
+    expect(buildCheckImageStaleNotice(SHA_A, "x")).toEqual(
+      buildCheckImageStaleNotice(SHA_A, "x"),
+    );
+  });
+});
+
+describe("recordCheckImageStaleNotice", () => {
+  const harness = (overrides: {
+    readonly sha?: () => Promise<string>;
+    readonly addNotice?: (record: NoticeRecord) => Promise<number | null>;
+  }) => {
+    const notices: NoticeRecord[] = [];
+    const lines: string[] = [];
+    return {
+      notices,
+      lines,
+      deps: {
+        readDeployedSha: overrides.sha ?? (async () => `${SHA_A}\n`),
+        addNotice:
+          overrides.addNotice ??
+          (async (record: NoticeRecord) => {
+            notices.push(record);
+            return 1;
+          }),
+        log: logger("test", { sink: (line: string) => lines.push(line) }),
+      },
+    };
+  };
+
+  test("adds the notice with the deployed sha", async () => {
+    const h = harness({});
+    await recordCheckImageStaleNotice(h.deps, "x");
+    expect(h.notices).toEqual([buildCheckImageStaleNotice(SHA_A, "x")]);
+  });
+
+  test("adds the notice without a sha when the deployed sha cannot be read", async () => {
+    const h = harness({
+      sha: async () => {
+        throw new Error("variable not found");
+      },
+    });
+    await recordCheckImageStaleNotice(h.deps, "x");
+    expect(h.notices).toEqual([buildCheckImageStaleNotice(null, "x")]);
+  });
+
+  test("adds the notice without a sha when the deployed value is not a sha", async () => {
+    const h = harness({ sha: async () => "main" });
+    await recordCheckImageStaleNotice(h.deps, "x");
+    expect(h.notices).toEqual([buildCheckImageStaleNotice(null, "x")]);
+  });
+
+  test("does not throw when the notice cannot be recorded", async () => {
+    const h = harness({
+      addNotice: async () => {
+        throw new Error("db down");
+      },
+    });
+    await recordCheckImageStaleNotice(h.deps, "x");
+    expect(h.lines.join("\n")).toContain("db down");
   });
 });

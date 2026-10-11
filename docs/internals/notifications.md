@@ -216,7 +216,7 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `pr_trigger_label_left_removed` | `poll_prs` | 対象のPRと、外れたままのトリガーラベル |
 | `supersede_failed` | `insertIssueWorkItemUnlessActive`(`poll_issues`が呼ぶ) | 対象、新しい作業項目のID、操作が要らないこと |
 | `deployed_sha_mismatch` | `poll_issues` | `f/factory/deployed_sha`、原因の候補 |
-| `host_action_required` | `self_update` | 反映した版(40桁)、変わった`infra/`や`mise.toml`のパス、`mise run up`を実行する手順 |
+| `host_action_required` | `self_update`、`implement_verify`、`pr_fix_verify` | 反映した版(40桁)、変わった`infra/`や`mise.toml`のパスかイメージに足りないもの、`mise run up`を実行する手順 |
 | `cleanup_db_failed` | `cleanup_db` | 削除に失敗した対象とエラー |
 | `cleanup_worktrees_skipped` | `cleanup_workspaces` | 掃除を見送ったリポジトリ |
 | `cleanup_worktree_busy` | `cleanup_workspaces` | 作業項目のID、worktreeのパス、worktreeを使っているプロセス |
@@ -302,6 +302,13 @@ stateは、このキーだけを書き換え、消すときもこのキーだけ
 本文は、反映した版(40桁)と変わったパスで決まる。同じ版で通知が重なるのは、同じ本文の未解決のnoticeがあるあいだは追加しないためである。
 パスは10件まで並べ、残りは件数で示す。
 Discordには、noticeを新しく残したときだけ送る。noticeの記録とDiscordの送信が失敗しても、反映は成功のまま終わり、警告のログだけを残す。
+
+`implement_verify`と`pr_fix_verify`も、workerのイメージが古く検査コマンドを実行できないときに`host_action_required`を残す。
+本文には、自己更新が反映した版(`f/factory/deployed_sha`)と、イメージに足りない道具か枠のユーザーが載る。
+同じ本文の未解決のnoticeがあるあいだは追加しない。
+版を40桁で読めたときは、下の判定で自己更新が自動で解決する。読めないときは本文に版を含めず、人が解決する。
+Discordには送らない。止まった作業項目の通知が、別に届くためである。
+noticeを記録できなくても、作業項目は止まり、警告のログだけを残す。
 解決は、`self_update`が反映の要否によらず毎回、反映の判断と記録の後に行う(`resolved_by`は`self_update`)。
 解決の処理が遅れても、反映を遅らせないためである。
 判定の入力は、ホストのcheckoutのHEADである。

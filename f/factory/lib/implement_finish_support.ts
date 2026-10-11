@@ -72,12 +72,13 @@ export function decideImplementFinishAction(
       return { kind: "cancel" };
     // worktreeができる前の停止には残す作業が無い。
     // 検証を経ていないラウンドでの停止(シンボリックリンク、Claudeの実行失敗、
-    // `.git`ポインタの書き換え、判定とgitleaksの間のworktreeの変化)の後は何もpushしない。
+    // `.git`ポインタの書き換え、判定とgitleaksの間のworktreeの変化、古いイメージで検査を実行できない)の後は何もpushしない。
     case "needs_human":
     case "symlink":
     case "claude_error":
     case "git_pointer_modified":
     case "worktree_changed":
+    case "check_image_stale":
       return { kind: "needs_human", preserveWork: false };
     case "checks_passed":
     case "checks_skipped":

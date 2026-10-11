@@ -135,6 +135,13 @@ describe("decideImplementFinishAction", () => {
     });
   });
 
+  test("waits for a person and keeps nothing when the worker image cannot run the checks", () => {
+    expect(decideImplementFinishAction("check_image_stale")).toEqual({
+      kind: "needs_human",
+      preserveWork: false,
+    });
+  });
+
   test("keeps nothing after the worktree's .git pointer changed", () => {
     expect(decideImplementFinishAction("git_pointer_modified")).toEqual({
       kind: "needs_human",

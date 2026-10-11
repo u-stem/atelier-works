@@ -4007,6 +4007,14 @@ const REASON_RULES: readonly ReasonRule[] = [
         : `前の実行のプロセスがまだworktreeを使っています(${m[1]})`,
     nextAction: () => WORKTREE_BUSY_NEXT_ACTION,
   },
+  // `lib/check_sandbox.ts`の`CheckImageStaleError`(実装フローとpr_fixの検証ステップ)
+  {
+    pattern: /^worker image is stale: run mise run up: ([\s\S]+)$/,
+    describe: (m) =>
+      `workerのイメージが古く、検査コマンドを非特権のユーザーで実行できません(${m[1]})`,
+    nextAction: () =>
+      `ホストのcheckoutでgit pullし、mise installとmise run upでworkerのイメージを作り直してから、${RETRY_WORK_ITEM_ACTION}`,
+  },
   {
     pattern: /^implementation of the branch's work item is running$/,
     describe: () =>

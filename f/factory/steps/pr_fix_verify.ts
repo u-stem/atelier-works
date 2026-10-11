@@ -8,6 +8,7 @@ import {
   runAllowedCheckCommands,
 } from "../lib/check_runner.ts";
 import {
+  CheckImageStaleError,
   checkSandboxFromEnv,
   kernelWarningText,
 } from "../lib/check_sandbox.ts";
@@ -27,6 +28,7 @@ import {
   recordAgentRun,
 } from "../lib/db.ts";
 import { type GhClient, getPr } from "../lib/github.ts";
+import { recordCheckImageStaleNotice } from "../lib/host_action.ts";
 import { escapeReasonSeparator, logger } from "../lib/log.ts";
 import { prFixRetryModel } from "../lib/model_policy.ts";
 import {
@@ -94,6 +96,10 @@ export type PrFixVerifyDeps = {
     failures: readonly CheckFailure[],
   ) => Promise<PrFixRetryResult>;
   readonly warn: (message: string, fields: Record<string, unknown>) => void;
+  /** `runChecks`が`CheckImageStaleError`を投げたときに1回呼ぶ。運用者に`mise run up`を求める通知を残す。 */
+  readonly reportCheckImageStale: (
+    error: CheckImageStaleError,
+  ) => Promise<void>;
 };
 
 export type PrFixVerifyInput = {
@@ -126,6 +132,8 @@ export type PrFixVerifyInput = {
  * 検査が失敗したら、日次予算の範囲で、失敗の出力を添えてClaudeの修正を1回だけ追加で走らせ、
  * 変更の検査と検査コマンドをもう一度行う。それでも失敗するときは"blocked"にする。
  * 検査コマンドがあれば、準備ステップの記録がそろっていることを確かめた後、最初の検査の前に`announceChecks`を呼ぶ。
+ * workerのイメージが古く検査を実行できなければ(`CheckImageStaleError`)、`reportCheckImageStale`で知らせ、
+ * Claudeを再実行せずに"blocked"にする。Claudeが直せる検査の失敗ではないためである。
  * `assertGitPointer`が`WorktreeGitPointerModifiedError`以外を投げたときは、そのまま投げる。
  */
 export async function runPrFixVerify(
@@ -198,7 +206,27 @@ export async function runPrFixVerify(
   };
   if (!input.hasCheckCommands) return applyDone;
 
-  const firstChecks = await deps.runChecks();
+  /** 検査コマンドを実行する。イメージが古くて実行できなければ、知らせてからその例外を返す。 */
+  const runChecks = async (): Promise<
+    readonly CheckCommandResult[] | CheckImageStaleError
+  > => {
+    try {
+      return await deps.runChecks();
+    } catch (error) {
+      if (!(error instanceof CheckImageStaleError)) throw error;
+      await deps.reportCheckImageStale(error);
+      return error;
+    }
+  };
+
+  const firstChecks = await runChecks();
+  if (firstChecks instanceof CheckImageStaleError) {
+    return blocked(
+      firstChecks.message,
+      input.apply.summary,
+      input.apply.replies,
+    );
+  }
   if (firstChecks.every((result) => result.ok)) {
     const afterChecksReason = await inspect();
     return afterChecksReason === null
@@ -274,7 +302,10 @@ export async function runPrFixVerify(
   if (afterRetryReason !== null) {
     return blocked(afterRetryReason, output.summary, output.replies);
   }
-  const secondChecks = await deps.runChecks();
+  const secondChecks = await runChecks();
+  if (secondChecks instanceof CheckImageStaleError) {
+    return blocked(secondChecks.message, output.summary, output.replies);
+  }
   if (!secondChecks.every((result) => result.ok)) {
     return blocked(
       "repository checks still failing after one automated fix retry",
@@ -471,6 +502,15 @@ export async function main(
         }
       },
       warn: (message, fields) => log.warn(message, { work_item_id, ...fields }),
+      reportCheckImageStale: (error) =>
+        recordCheckImageStaleNotice(
+          {
+            readDeployedSha: () => wmill.getVariable("f/factory/deployed_sha"),
+            addNotice: addNoticeUnlessUnresolved,
+            log,
+          },
+          error.problems.join(", "),
+        ),
     },
     {
       worktreeGitPointer: worktree_git_pointer,

@@ -12,7 +12,10 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CheckSlotInUseError } from "../../f/factory/lib/check_sandbox.ts";
+import {
+  CheckOwnershipRestoreError,
+  CheckSlotInUseError,
+} from "../../f/factory/lib/check_sandbox.ts";
 import {
   defaultLockReleaseDeps,
   defaultOrphanLockFileDeps,
@@ -2044,6 +2047,27 @@ describe("restoreOwnershipStep", () => {
       throw new Error("chown failed");
     });
     await expect(step(LOCK)).rejects.toThrow("chown failed");
+  });
+
+  test("turns a worktree that could not be taken back into WorktreeBusyError", async () => {
+    const step = restoreOwnershipStep(async () => {
+      throw new CheckOwnershipRestoreError("entries with an ACL remain");
+    });
+    await expect(step(LOCK)).rejects.toBeInstanceOf(WorktreeBusyError);
+  });
+
+  test("keeps why the worktree could not be taken back in the busy reason", async () => {
+    const step = restoreOwnershipStep(async () => {
+      throw new CheckOwnershipRestoreError("entries with an ACL remain");
+    });
+    await expect(step(LOCK)).rejects.toThrow("entries with an ACL remain");
+  });
+
+  test("keeps the busy reason a single reason", async () => {
+    const step = restoreOwnershipStep(async () => {
+      throw new CheckOwnershipRestoreError("rm failed; disk full");
+    });
+    await expect(step(LOCK)).rejects.toThrow("rm failed, disk full");
   });
 
   test("restores the worktree of the lock", async () => {

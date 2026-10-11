@@ -14,12 +14,13 @@ import {
 } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import {
+  CheckOwnershipRestoreError,
   CheckSlotInUseError,
   parseProcStatus,
   resolveCheckPool,
   restoreCheckOwnershipFromEnv,
 } from "./check_sandbox.ts";
-import { maskSecrets } from "./log.ts";
+import { escapeReasonSeparator, maskSecrets } from "./log.ts";
 import type { CommandResult, CommandRunner } from "./workspace.ts";
 
 /** workerのイメージ(Debian)のutil-linuxが入れるflock。PATHに頼らず絶対パスで呼ぶ。 */
@@ -835,7 +836,7 @@ export type LockReleaseDeps = {
    * worktreeに残った検査用のuidの所有を、rootへ戻す。記録がworktreeを指す枠の、残ったプロセスも止める。
    * 関係するプロセスが走査で見えないと分かった後に1回呼ぶ。
    * 取り消された検査が後始末せずに残すと、rootのgitが所有者の違いで実行を拒むためである。
-   * その枠を別の実行が持っていれば`WorktreeBusyError`を投げる。
+   * その枠を別の実行が持っているか、取り戻せなければ`WorktreeBusyError`を投げる。
    * 指定しなければ何もしない。
    */
   readonly restoreOwnership?: (lock: WorktreeLock) => Promise<void>;
@@ -848,6 +849,9 @@ export type LockReleaseDeps = {
  * `restore`(既定は`restoreCheckOwnershipFromEnv`)を、`LockReleaseDeps.restoreOwnership`の形にする。
  * 記録がworktreeを指す枠を別の実行が持っていれば(`CheckSlotInUseError`)、`WorktreeBusyError`にする。
  * その実行がworktreeを使っているか片付けている最中なので、使用中のworktreeと同じく引き返すためである。
+ * worktreeを取り戻せなかったとき(`CheckOwnershipRestoreError`)も、理由を載せた`WorktreeBusyError`にする。
+ * 準備は人の対応待ちで止まり、止まらないプロセスや残ったACLなど、取り戻せなかった理由が状態の理由に見えるようにするためである。
+ * 理由は1つの項目として読まれるよう、区切り(`; `)を含めない。
  */
 export function restoreOwnershipStep(
   restore: (dir: string) => Promise<unknown>,
@@ -856,8 +860,11 @@ export function restoreOwnershipStep(
     try {
       await restore(lock.worktreeDir);
     } catch (error) {
-      if (error instanceof CheckSlotInUseError)
-        throw new WorktreeBusyError([], error.message);
+      if (
+        error instanceof CheckSlotInUseError ||
+        error instanceof CheckOwnershipRestoreError
+      )
+        throw new WorktreeBusyError([], escapeReasonSeparator(error.message));
       throw error;
     }
   };

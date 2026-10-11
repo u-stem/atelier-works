@@ -8,6 +8,10 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  CHECK_IMAGE_STALE_REASON,
+  CheckImageStaleError,
+} from "../../f/factory/lib/check_sandbox.ts";
 import type {
   ClaudeRunResult,
   RunClaudeResult,
@@ -705,6 +709,8 @@ type HarnessOptions = {
   readonly pointerError?: { readonly from: number; readonly error: Error };
   /** `now`が返す時刻(epoch ms)。既定は0。 */
   readonly now?: number;
+  /** `runChecks`が投げる例外。 */
+  readonly checksError?: Error;
 };
 
 type Harness = {
@@ -761,6 +767,7 @@ function harness(options: HarnessOptions = {}): Harness {
     },
     runChecks: async () => {
       events.push("checks");
+      if (options.checksError !== undefined) throw options.checksError;
       const value = pick(options.checks ?? [[PASS]], calls.checks);
       calls.checks += 1;
       return value;
@@ -793,6 +800,9 @@ function harness(options: HarnessOptions = {}): Harness {
     },
     now: () => options.now ?? 0,
     log: () => {},
+    reportCheckImageStale: async (error) => {
+      events.push(`stale ${error.message}`);
+    },
   };
   return { deps, recorded, fixRequests, calls, events };
 }
@@ -1160,6 +1170,53 @@ describe("runImplementVerifyLoop", () => {
       },
     });
     expect((await run(h)).exit).toBe("symlink");
+  });
+
+  test("exits check_image_stale when the image cannot run the checks", async () => {
+    const h = harness({
+      checksError: new CheckImageStaleError(["/usr/bin/getfacl is missing"]),
+    });
+    expect((await run(h)).exit).toBe("check_image_stale");
+  });
+
+  test("gives the stale image as the reason", async () => {
+    const h = harness({
+      checksError: new CheckImageStaleError(["/usr/bin/getfacl is missing"]),
+    });
+    expect((await run(h)).reason).toBe(
+      `${CHECK_IMAGE_STALE_REASON}: /usr/bin/getfacl is missing`,
+    );
+  });
+
+  test("reports the stale image once", async () => {
+    const h = harness({
+      checksError: new CheckImageStaleError(["/usr/bin/getfacl is missing"]),
+    });
+    await run(h);
+    expect(h.events.filter((event) => event.startsWith("stale "))).toEqual([
+      `stale ${CHECK_IMAGE_STALE_REASON}: /usr/bin/getfacl is missing`,
+    ]);
+  });
+
+  test("does not start a fix round when the image cannot run the checks", async () => {
+    const h = harness({
+      checksError: new CheckImageStaleError(["/usr/bin/getfacl is missing"]),
+    });
+    await run(h);
+    expect(h.fixRequests).toEqual([]);
+  });
+
+  test("records the round with the stale image as an error, not a check failure", async () => {
+    const h = harness({
+      checksError: new CheckImageStaleError(["/usr/bin/getfacl is missing"]),
+    });
+    await run(h);
+    expect(h.recorded.map((record) => record.outcome)).toEqual(["error"]);
+  });
+
+  test("passes another error from the checks through", async () => {
+    const h = harness({ checksError: new Error("disk full") });
+    await expect(run(h)).rejects.toThrow("disk full");
   });
 
   test("exits worktree_changed when gitleaks scanned another tree than the inspected one", async () => {

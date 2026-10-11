@@ -125,11 +125,17 @@ Claudeの実行ごとに`implement_rounds`へ1行記録する。リースを失�
 - 差分の超過(`diff_too_large`)
 - `.git`の書き換え(`git_pointer_modified`)
 - 変更の判定とgitleaksの検査の間のworktreeの変化(`worktree_changed`)
+- workerのイメージが古く、検査コマンドを実行できない(`check_image_stale`)
 - Claudeの実行の失敗(`claude_error`)
 - リースの喪失(`lease_lost`)
 
 `worktree_changed`で止めるのは、変更の判定とgitleaksの検査の両方を経たツリーだけを、検証済みとして記録するためである。
 理由は`worktree changed before the secret scan in round <N>`になる。
+
+ループは、検査コマンドの準備がイメージに枠のユーザーか後始末の道具が無いと分かると、`check_image_stale`で止まる。
+準備は所有権にも枠の記録にも触れる前に止まり、ループはそのラウンドを`error`として記録する。
+Claudeが直せる検査の失敗ではないので、修正のラウンドに進まず、作業項目は人の対応待ちになる。
+理由は`worker image is stale: run mise run up`で始まる。要対応の通知`host_action_required`も1件残す([運用](../operations.md#fとworkerのイメージを両方変えたとき))。
 
 ### 期限と修正ラウンド
 
@@ -457,8 +463,12 @@ workerには`CAP_SYS_PTRACE`が無い。そのため、uidを変えたプロセ�
 その枠のロックを取れれば、枠のuidのプロセスを止めてから、worktreeの所有権を取り戻す。
 続けて、`HOME`と記録を消す。
 最上位のディレクトリの所有者では判断しない。取り戻しが途中で止まると、最上位だけがrootで、中に枠のuidのものが残るためである。
-ロックを最大5秒待っても取れなければ、`WorktreeBusyError`で引き返す。
+ロックを最大5秒待っても取れなければ、記録を読み直す。
+記録がもうそのworktreeを指さなければ先へ進み、まだ指していれば`WorktreeBusyError`で引き返す。
 その枠を持つのは、そのworktreeで検査している実行か、その枠を取って記録を片付けている実行なので、worktreeに触れないためである。
+プロセスを止められないときと、取り戻しが失敗したときも、詳細を載せた`WorktreeBusyError`にする。
+読めない記録が残っていて、worktreeにrootでないものがあるときも同じである。
+準備は人の対応待ちになり、詳細に枠のユーザーと理由が載る。
 
 ロックが塞がっているのに保持者が見えないときも、この復旧を先に行う。
 取り消された検査が別のセッションに残したプロセスは、枠のuidで動くので走査に見えず、worktreeのロックを受け継いで持ち続けるためである。

@@ -3,6 +3,7 @@
 //
 // 自己更新はworkerの中でしか動かないので、これらの変更を自分では反映できない。
 // 人が`mise run up`を実行するまで古い構成で動き続けるため、気づく手段として通知を出す。
+// 古いイメージのまま検査コマンドを実行できなかったことも、同じ種類の通知で知らせる(`buildCheckImageStaleNotice`)。
 //
 // 反映が済んだ印は、`mise run up`が終わりに共有ボリューム(`factory_state`)へ書く
 // ホストのcheckoutのHEAD(`HOST_APPLIED_SHA_PATH`)である。
@@ -104,6 +105,63 @@ export function buildHostActionNotice(
     cause,
     next_action: NEXT_ACTION,
   };
+}
+
+const STALE_IMAGE_NEXT_ACTION_UNRESOLVABLE =
+  "ホストのcheckoutでgit pullし、mise installとmise run upを実行する。実行が済んだら、この通知を解決する";
+
+/**
+ * workerのイメージが古く、検査コマンドを枠のユーザーで実行できないことを知らせるnoticeを作る。
+ * `f/`の変更がイメージの作り直しより先に反映されたときに、検証のステップが残す。
+ * `deployedSha`は自己更新が反映した版で、40桁なら本文に含める。ホストがその版以降で`mise run up`すると、自己更新が自動で解決する。
+ * 版が分からなければ含めず、人が解決する。
+ * 本文は、版と`detail`が同じなら同じ文になる。`addNoticeUnlessUnresolved`が重ねて記録しないためである。
+ */
+export function buildCheckImageStaleNotice(
+  deployedSha: string | null,
+  detail: string,
+): NoticeRecord {
+  const version = deployedSha === null ? "" : `反映した版: ${deployedSha}。`;
+  const nextAction =
+    deployedSha === null ? STALE_IMAGE_NEXT_ACTION_UNRESOLVABLE : NEXT_ACTION;
+  return {
+    kind: HOST_ACTION_NOTICE_KIND,
+    message: `${version}workerのイメージが古く、検査コマンドを非特権のユーザーで実行できません(${printablePath(detail)})。イメージを作り直すまで、検査コマンドのある実装とPR修正は人の対応待ちで止まります。次の操作: ${nextAction}`,
+  };
+}
+
+export type CheckImageStaleDeps = {
+  /** 自己更新が反映した版(`f/factory/deployed_sha`)。読めなければ例外を投げる。 */
+  readonly readDeployedSha: () => Promise<string>;
+  /** 同じ本文の未解決のnoticeが無ければ挿入してIDを返し、あれば`null`を返す。 */
+  readonly addNotice: (record: NoticeRecord) => Promise<number | null>;
+  readonly log: Logger;
+};
+
+/**
+ * `buildCheckImageStaleNotice`のnoticeを残す。版が読めないか40桁でなければ、版を含めずに残す。
+ * 呼び出し側は、続けて作業項目を人の対応待ちにするので、記録に失敗しても例外を投げず、警告ログに残す。
+ */
+export async function recordCheckImageStaleNotice(
+  deps: CheckImageStaleDeps,
+  detail: string,
+): Promise<void> {
+  let deployedSha: string | null = null;
+  try {
+    const raw = (await deps.readDeployedSha()).trim();
+    deployedSha = FULL_SHA.test(raw) ? raw : null;
+  } catch (err) {
+    deps.log.warn("deployed sha could not be read for the stale image notice", {
+      error: errorMessage(err),
+    });
+  }
+  try {
+    await deps.addNotice(buildCheckImageStaleNotice(deployedSha, detail));
+  } catch (err) {
+    deps.log.warn("stale image notice could not be recorded", {
+      error: errorMessage(err),
+    });
+  }
 }
 
 /** 通知の本文から、反映した版を読み戻す。読めなければ`null`を返す。 */

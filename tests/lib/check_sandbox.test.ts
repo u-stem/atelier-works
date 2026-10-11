@@ -12,13 +12,18 @@ import {
   aclLeftoverArgv,
   acquireSlot,
   CHECK_ENV_KEYS,
+  CHECK_IMAGE_STALE_REASON,
+  CHECK_NPROC_LIMIT,
   type CheckDirs,
   type CheckIdentity,
+  CheckImageStaleError,
+  CheckOwnershipRestoreError,
   type CheckSandboxDeps,
   CheckSlotInUseError,
   type CheckSlotNotice,
   CheckSlotsBusyError,
   checkEnv,
+  checkImageProblems,
   chownToArgv,
   createCheckSandbox,
   DEFAULT_CHECK_UID,
@@ -33,7 +38,9 @@ import {
   killAllArgv,
   leftoverArgv,
   newCheckIdentity,
+  notRootOwnedArgv,
   openDirsArgv,
+  PRLIMIT_PATH,
   parseCheckUid,
   parsePasswdUsers,
   parsePoolSize,
@@ -43,6 +50,7 @@ import {
   purgeDirsArgv,
   purgeFilesArgv,
   REAP_MAX_WAIT_MS,
+  REQUIRED_TOOL_PATHS,
   type ReapDeps,
   reapUidProcesses,
   reclaimArgv,
@@ -751,6 +759,14 @@ describe("the slot record files", () => {
     );
   });
 
+  test("the error for a record that does not parse names the record's path", async () => {
+    const dir = lockDir();
+    const records = defaultSandboxDeps(dir).slotRecords;
+    await records.write(0, DIRS);
+    writeFileSync(join(dir, "slot-0.state"), "{");
+    await expect(records.read(0)).rejects.toThrow(join(dir, "slot-0.state"));
+  });
+
   test("setting a record aside leaves no record behind", async () => {
     const dir = lockDir();
     const records = defaultSandboxDeps(dir).slotRecords;
@@ -888,6 +904,108 @@ describe("killAllArgv", () => {
       "-9",
       "--",
       "-1",
+    ]);
+  });
+
+  test("refuses to act as root", () => {
+    expect(() => killAllArgv(0)).toThrow("refusing to act as uid 0");
+  });
+
+  test("refuses a system uid below 1000", () => {
+    expect(() => killAllArgv(999)).toThrow("refusing to act as uid 999");
+  });
+
+  test("refuses a uid that is not an integer", () => {
+    expect(() => killAllArgv(10001.5)).toThrow("refusing to act as uid");
+  });
+});
+
+describe("setprivArgv's uid check", () => {
+  test("refuses to switch to root", () => {
+    expect(() =>
+      setprivArgv({ uid: 0, gid: 0, tagGid: 424242 }, ["true"]),
+    ).toThrow("refusing to act as uid 0");
+  });
+});
+
+describe("checkImageProblems", () => {
+  const passwd = [
+    "root:x:0:0:root:/root:/bin/bash",
+    "factory-check-0:x:20000:20000::/home/factory-check-0:/usr/sbin/nologin",
+    "factory-check-1:x:20001:20001::/home/factory-check-1:/usr/sbin/nologin",
+    "",
+  ].join("\n");
+  const image = (opts?: {
+    readonly missing?: readonly string[];
+    readonly passwd?: string | null;
+  }) => ({
+    isExecutable: async (path: string) => !(opts?.missing ?? []).includes(path),
+    readPasswd: async () => {
+      const text = opts?.passwd === undefined ? passwd : opts.passwd;
+      if (text === null) throw new Error("EACCES");
+      return text;
+    },
+  });
+
+  test("finds nothing on an image that has every tool and user", async () => {
+    expect(await checkImageProblems([20000, 20001], image())).toEqual([]);
+  });
+
+  test.each([...REQUIRED_TOOL_PATHS])("reports a missing %s", async (path) => {
+    expect(
+      await checkImageProblems([20000], image({ missing: [path] })),
+    ).toEqual([`${path} is missing`]);
+  });
+
+  test("reports the uids no numbered check user has", async () => {
+    expect(await checkImageProblems([20000, 20002, 20003], image())).toEqual([
+      "no factory-check-N user for uid 20002, 20003",
+    ]);
+  });
+
+  test("does not count the unnumbered user of an older image", async () => {
+    expect(
+      await checkImageProblems(
+        [10001],
+        image({
+          passwd:
+            "factory-check:x:10001:10001::/home/factory-check:/usr/sbin/nologin\n",
+        }),
+      ),
+    ).toEqual(["no factory-check-N user for uid 10001"]);
+  });
+
+  test("reports an unreadable passwd", async () => {
+    expect(
+      await checkImageProblems([20000], image({ passwd: null })),
+    ).toContain("/etc/passwd is unreadable");
+  });
+});
+
+describe("CheckImageStaleError", () => {
+  test("starts with the reason that tells the operator to run mise run up", () => {
+    expect(
+      new CheckImageStaleError(["/usr/bin/getfacl is missing"]).message,
+    ).toBe(`${CHECK_IMAGE_STALE_REASON}: /usr/bin/getfacl is missing`);
+  });
+
+  test("joins the problems without the reason separator", () => {
+    expect(new CheckImageStaleError(["a", "b"]).message).not.toContain("; ");
+  });
+});
+
+describe("notRootOwnedArgv", () => {
+  test("prints the first entry that root does not own", () => {
+    expect(notRootOwnedArgv("/workspaces/acme/widgets/wt-1")).toEqual([
+      "/usr/bin/find",
+      "-P",
+      "/workspaces/acme/widgets/wt-1",
+      "-xdev",
+      "!",
+      "-uid",
+      "0",
+      "-print",
+      "-quit",
     ]);
   });
 });
@@ -1098,9 +1216,16 @@ function fakeSandboxDeps(opts?: {
   readonly ipc?: readonly IpcEntry[];
   /** `ipcrm`を実行しても消えない。 */
   readonly ipcStuck?: boolean;
+  /** イメージに無い道具の絶対パス。 */
+  readonly missingTools?: readonly string[];
+  /** `/etc/passwd`の本文。既定は枠0と枠1のユーザーを持つ。 */
+  readonly passwd?: string;
+  /** 記録を読むと、形の違いではない例外になる枠。 */
+  readonly failingRecordReads?: readonly number[];
 }) {
   const events: string[] = [];
   const calls: FakeCall[] = [];
+  let imageChecks = 0;
   const slots = fakeSlots({ busy: opts?.busySlots ?? [] });
   const live = new Map<number, string>(
     Object.entries(opts?.processes ?? {}).map(([pid, text]) => [
@@ -1172,7 +1297,13 @@ function fakeSandboxDeps(opts?: {
     },
     slotRecords: {
       read: async (index) => {
-        if (corrupt.has(index)) throw new UnreadableSlotRecordError(index);
+        if (opts?.failingRecordReads?.includes(index) === true)
+          throw new Error("EIO: i/o error");
+        if (corrupt.has(index))
+          throw new UnreadableSlotRecordError(
+            index,
+            `/var/lib/factory/check-slots/slot-${String(index)}.state`,
+          );
         return records.get(index) ?? null;
       },
       write: async (index, record) => {
@@ -1199,11 +1330,31 @@ function fakeSandboxDeps(opts?: {
     },
     pathKind: async (path) => opts?.pathKinds?.[path] ?? "directory",
     readSysctl: (name) => opts?.sysctl?.[name] ?? null,
+    isExecutable: async (path) => {
+      imageChecks += 1;
+      return !(opts?.missingTools ?? []).includes(path);
+    },
+    readPasswd: async () =>
+      opts?.passwd ??
+      [
+        "factory-check-0:x:20000:20000::/:/usr/sbin/nologin",
+        "factory-check-1:x:20001:20001::/:/usr/sbin/nologin",
+        "",
+      ].join("\n"),
   };
   const onNotice = async (notice: CheckSlotNotice): Promise<void> => {
     notices.push(notice);
   };
-  return { deps, events, calls, killed, records, notices, onNotice };
+  return {
+    deps,
+    events,
+    calls,
+    killed,
+    records,
+    notices,
+    onNotice,
+    imageChecks: () => imageChecks,
+  };
 }
 
 const POOL = [20000, 20001];
@@ -1309,10 +1460,63 @@ describe("createCheckSandbox", () => {
     const second = sandboxOf(fake.deps);
     await first.prepare(DIRS);
     await second.prepare(DIRS);
-    expect([first.wrap(["true"])[1], second.wrap(["true"])[1]]).toEqual([
-      "--reuid=20000",
-      "--reuid=20001",
+    const reuid = (argv: readonly string[]) =>
+      argv.find((arg) => arg.startsWith("--reuid="));
+    expect([reuid(first.wrap(["true"])), reuid(second.wrap(["true"]))]).toEqual(
+      ["--reuid=20000", "--reuid=20001"],
+    );
+  });
+
+  test("caps the processes of the slot's uid before switching to it", async () => {
+    const { sandbox } = await prepared(fakeSandboxDeps());
+    expect(sandbox.wrap(["bun", "test"]).slice(0, 4)).toEqual([
+      PRLIMIT_PATH,
+      `--nproc=${String(CHECK_NPROC_LIMIT)}:${String(CHECK_NPROC_LIMIT)}`,
+      "--",
+      SETPRIV_PATH,
     ]);
+  });
+
+  test("prepare fails with CheckImageStaleError on an image without a tool", async () => {
+    const fake = fakeSandboxDeps({ missingTools: ["/usr/bin/getfacl"] });
+    await expect(sandboxOf(fake.deps).prepare(DIRS)).rejects.toBeInstanceOf(
+      CheckImageStaleError,
+    );
+  });
+
+  test("prepare fails with CheckImageStaleError on an image without the slot users", async () => {
+    const fake = fakeSandboxDeps({
+      passwd: "factory-check:x:10001:10001::/:/usr/sbin/nologin\n",
+    });
+    await expect(sandboxOf(fake.deps).prepare(DIRS)).rejects.toBeInstanceOf(
+      CheckImageStaleError,
+    );
+  });
+
+  test("prepare on a stale image runs nothing", async () => {
+    const fake = fakeSandboxDeps({ missingTools: ["/usr/bin/getfacl"] });
+    await sandboxOf(fake.deps)
+      .prepare(DIRS)
+      .catch(() => {});
+    expect(fake.calls).toEqual([]);
+  });
+
+  test("prepare on a stale image takes no slot and writes no record", async () => {
+    const fake = fakeSandboxDeps({ missingTools: ["/usr/bin/kill"] });
+    await sandboxOf(fake.deps)
+      .prepare(DIRS)
+      .catch(() => {});
+    expect(fake.events).toEqual([]);
+  });
+
+  test("checks the image only once for a sandbox", async () => {
+    const fake = fakeSandboxDeps();
+    const sandbox = sandboxOf(fake.deps);
+    await sandbox.prepare(DIRS);
+    await sandbox.release(DIRS);
+    const once = fake.imageChecks();
+    await sandbox.prepare(DIRS);
+    expect(fake.imageChecks()).toBe(once);
   });
 
   test("fails with a slot error when every slot stays held", async () => {
@@ -1728,10 +1932,82 @@ describe("createCheckSandbox", () => {
     const fake = fakeSandboxDeps();
     const { sandbox, before } = await prepared(fake);
     await sandbox.release(DIRS);
-    expect(argvOf(fake.calls.slice(before))).toEqual([
+    expect(argvOf(fake.calls.slice(before)).slice(0, 7)).toEqual([
       ...takeBackSequence(SLOT0, DIRS.worktreeDir),
       removeTreeArgv(DIRS.homeDir),
     ]);
+  });
+
+  test.each([...SHARED_TMP_DIRS])(
+    "release removes the slot uid's files in %s",
+    async (dir) => {
+      const fake = fakeSandboxDeps();
+      const { sandbox, before } = await prepared(fake);
+      await sandbox.release(DIRS);
+      expect(argvOf(fake.calls.slice(before))).toContainEqual(
+        purgeFilesArgv(20000, dir),
+      );
+    },
+  );
+
+  test("release purges the shared directories after removing the home", async () => {
+    const fake = fakeSandboxDeps();
+    const { sandbox, before } = await prepared(fake);
+    await sandbox.release(DIRS);
+    expect(argvOf(fake.calls.slice(before))[7]).toEqual(
+      purgeDirsArgv(20000, "/tmp"),
+    );
+  });
+
+  test("release purges the shared directories before clearing the record", async () => {
+    const fake = fakeSandboxDeps();
+    const { sandbox } = await prepared(fake);
+    await sandbox.release(DIRS);
+    expect(
+      fake.events.lastIndexOf(ran(remainingOfUidArgv(20000, "/dev/mqueue"))),
+    ).toBeLessThan(fake.events.lastIndexOf("record-clear 0"));
+  });
+
+  test("release removes the IPC objects the check left", async () => {
+    const fake = fakeSandboxDeps();
+    const { sandbox, before } = await prepared(fake);
+    Object.assign(fake.deps, {
+      listIpc: async () => [{ kind: "shm", id: 9, uid: 20000, cuid: 20000 }],
+    });
+    await sandbox.release(DIRS);
+    expect(argvOf(fake.calls.slice(before))).toContainEqual(
+      setprivArgv(SLOT0, ["/usr/bin/ipcrm", "-m", "9"]),
+    );
+  });
+
+  test("release still clears the record when shared files remain", async () => {
+    const fake = fakeSandboxDeps();
+    const { sandbox } = await prepared(fake);
+    Object.assign(fake.deps, {
+      run: async (argv: readonly string[]) =>
+        matches(remainingOfUidArgv(20000, "/tmp"))(argv)
+          ? ok("/tmp/left\n")
+          : ok(),
+    });
+    await sandbox.release(DIRS);
+    expect(fake.records.has(0)).toBe(false);
+  });
+
+  test("release logs the shared files it could not remove", async () => {
+    const fake = fakeSandboxDeps();
+    const lines: string[] = [];
+    const sandbox = sandboxOf(fake.deps, {
+      log: logger("check_sandbox", { sink: (line) => lines.push(line) }),
+    });
+    await sandbox.prepare(DIRS);
+    Object.assign(fake.deps, {
+      run: async (argv: readonly string[]) =>
+        matches(remainingOfUidArgv(20000, "/tmp"))(argv)
+          ? ok("/tmp/left\n")
+          : ok(),
+    });
+    await sandbox.release(DIRS);
+    expect(lines.join("\n")).toContain("/tmp/left");
   });
 
   test("release never changes modes as root", async () => {
@@ -1765,7 +2041,7 @@ describe("createCheckSandbox", () => {
     const fake = fakeSandboxDeps({ respond: aclFoundOnce(DIRS.worktreeDir) });
     const { sandbox, before } = await prepared(fake);
     await sandbox.release(DIRS);
-    expect(argvOf(fake.calls.slice(before))).toEqual([
+    expect(argvOf(fake.calls.slice(before)).slice(0, 10)).toEqual([
       ...takeBackSequence(SLOT0, DIRS.worktreeDir),
       removeAclArgv(DIRS.worktreeDir),
       leftoverArgv(DIRS.worktreeDir),
@@ -1824,9 +2100,9 @@ describe("createCheckSandbox", () => {
     });
     const { sandbox, before } = await prepared(fake);
     await sandbox.release(DIRS);
-    expect(argvOf(fake.calls.slice(before))).toEqual([
+    expect(argvOf(fake.calls.slice(before))[0]).toEqual(
       removeTreeArgv(DIRS.homeDir),
-    ]);
+    );
   });
 
   test("release fails when entries of others remain in the worktree", async () => {
@@ -2047,6 +2323,103 @@ describe("restoreCheckOwnership", () => {
   test("ignores a slot whose record cannot be read", async () => {
     const fake = fakeSandboxDeps({ records: RECORDED, corruptRecords: [0] });
     expect(await restoreCheckOwnership(WT, POOL, fake.deps)).toBe(true);
+  });
+
+  test("goes on when an unreadable record remains but root owns the whole worktree", async () => {
+    const fake = fakeSandboxDeps({ corruptRecords: [0] });
+    expect(await restoreCheckOwnership(WT, POOL, fake.deps)).toBe(false);
+  });
+
+  test("looks for entries root does not own when a record cannot be read", async () => {
+    const fake = fakeSandboxDeps({ corruptRecords: [0] });
+    await restoreCheckOwnership(WT, POOL, fake.deps);
+    expect(argvOf(fake.calls)).toEqual([notRootOwnedArgv(WT)]);
+  });
+
+  test("fails with CheckOwnershipRestoreError when an unreadable record remains and others own entries", async () => {
+    const fake = fakeSandboxDeps({
+      corruptRecords: [0],
+      respond: (argv) =>
+        matches(notRootOwnedArgv(WT))(argv) ? ok(`${WT}/x\n`) : undefined,
+    });
+    await expect(
+      restoreCheckOwnership(WT, POOL, fake.deps),
+    ).rejects.toBeInstanceOf(CheckOwnershipRestoreError);
+  });
+
+  test("names the path of the unreadable record in the failure", async () => {
+    const fake = fakeSandboxDeps({
+      corruptRecords: [0],
+      respond: (argv) =>
+        matches(notRootOwnedArgv(WT))(argv) ? ok(`${WT}/x\n`) : undefined,
+    });
+    await expect(restoreCheckOwnership(WT, POOL, fake.deps)).rejects.toThrow(
+      "/var/lib/factory/check-slots/slot-0.state",
+    );
+  });
+
+  test("names the entry others own in the failure", async () => {
+    const fake = fakeSandboxDeps({
+      corruptRecords: [0],
+      respond: (argv) =>
+        matches(notRootOwnedArgv(WT))(argv) ? ok(`${WT}/x\n`) : undefined,
+    });
+    await expect(restoreCheckOwnership(WT, POOL, fake.deps)).rejects.toThrow(
+      `${WT}/x`,
+    );
+  });
+
+  test("passes through an error reading a record other than an unreadable one", async () => {
+    const fake = fakeSandboxDeps({ failingRecordReads: [0] });
+    await expect(restoreCheckOwnership(WT, POOL, fake.deps)).rejects.toThrow(
+      "EIO",
+    );
+  });
+
+  test("goes on when the run holding the slot cleared the record while it waited", async () => {
+    const fake = fakeSandboxDeps({ records: RECORDED, busySlots: [1] });
+    let reads = 0;
+    const deps: CheckSandboxDeps = {
+      ...fake.deps,
+      slotRecords: {
+        ...fake.deps.slotRecords,
+        read: async (index) => {
+          if (index !== 1) return null;
+          reads += 1;
+          return reads === 1 ? DIRS : null;
+        },
+      },
+    };
+    expect(await restoreCheckOwnership(WT, POOL, deps, 100)).toBe(false);
+  });
+
+  test("fails with CheckOwnershipRestoreError when taking the worktree back fails", async () => {
+    const fake = fakeSandboxDeps({
+      records: RECORDED,
+      respond: (argv) =>
+        matches(gatherArgv(SLOT1, WT))(argv) ? fail("denied", 1) : undefined,
+    });
+    await expect(
+      restoreCheckOwnership(WT, POOL, fake.deps),
+    ).rejects.toBeInstanceOf(CheckOwnershipRestoreError);
+  });
+
+  test("names the slot whose worktree could not be taken back", async () => {
+    const fake = fakeSandboxDeps({
+      records: RECORDED,
+      respond: (argv) =>
+        matches(gatherArgv(SLOT1, WT))(argv) ? fail("denied", 1) : undefined,
+    });
+    await expect(restoreCheckOwnership(WT, POOL, fake.deps)).rejects.toThrow(
+      "factory-check-1",
+    );
+  });
+
+  test("fails with CheckOwnershipRestoreError when a process of the slot cannot be stopped", async () => {
+    const fake = fakeSandboxDeps({ records: RECORDED, stuck: { 50: 20001 } });
+    await expect(
+      restoreCheckOwnership(WT, POOL, fake.deps),
+    ).rejects.toBeInstanceOf(CheckOwnershipRestoreError);
   });
 
   test("fails when taking the worktree back fails", async () => {
