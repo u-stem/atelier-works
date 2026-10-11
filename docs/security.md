@@ -292,18 +292,19 @@ Console用のworker(`windmill_worker_console`)は、Consoleの問い合わせと
 このサービスは`factory_state`を書き込みでマウントするが、ネットワークを持たず、権限もすべて落とし、固定の短いシェルのコマンドだけを実行して終わる。
 `requirements`がsymlinkならディレクトリを作らずに失敗で終わり、そうでなければ`mkdir -p -m 0755`を実行する。
 defaultのworkerで動くものが置いたsymlinkの先を、Console用のworkerにマウントさせないためである。
+`requirements`がsymlinkだと`factory_state_init`が失敗し、`mise run deploy`は`wmill sync push`とmigrationの前で止まる。
 
 `volume.subpath`は、古いEngineでは気づかないうちに無視され、`factory_state`の根が付きうる。
 そのため、スタックを起動するmiseのタスク(`up`、`deploy`)は、起動の前にEngineが26.0(API 1.45)以上、Composeが2.26.0以上かを確かめ、満たさなければ止まる。
 この強制が止めるのは、`mise run up`と`mise run deploy`を通した起動だけである。
 `mise exec -- docker compose ... up`を直接実行した場合や、restart policyによる再起動は止めない。
 `doctor`は同じ検査に加えて、起動中のConsole用workerの中から、`factory_state`の根の証拠が見えないことを確かめる。
-証拠は、`/var/lib/factory`の直下の`claude`、`gh`、`audits`と、根にだけある`requirements/requirements`である。
+証拠は、`/var/lib/factory`の直下の`claude`、`gh`、`audits`と、`requirements/requirements`である。
+対象リポジトリのowner名が`requirements`だと、サブパスだけが付いていても`requirements/requirements`が見えるので、この証拠だけでは根を見分けられない。
 Podmanは対象外である。
 
 次のことは、この境界では守れない。
 
-- `factory_state`の`requirements`がsymlinkだと、`factory_state_init`が失敗する。`mise run deploy`は、`wmill sync push`とmigrationの前で止まる。止める向きに倒れる設計である。
 - DBには届く。`DATABASE_URL`はdefaultのworkerと同じ管理者の接続だからである。
 - tag`console`のscriptは、管理者の`DATABASE_URL`か`wmill.getVariable()`で、Windmillのsecret変数を読める。
   読める変数には`f/factory/claude_oauth_token`と`f/factory/github_token`がある。

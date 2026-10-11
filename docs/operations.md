@@ -1120,8 +1120,10 @@ Discordの通知とConsoleの通知には、上の表の次の操作が載る。
 Console用のworker(`windmill_worker_console`)は、`mise run up`で作られる。
 ワーカーグループ`console`に属し、tag`console`のジョブだけを受ける。
 どのscriptをこのworkerで動かすかは、scriptの`tag`で決める。
-まず`mise run doctor`を実行する。起動の状態に加えて、マウントの判定も表示する。
-Claudeのセッションでは、フックが`docker compose exec ... sh -c`を拒否する。そのため、`exec`を使う手順は、人が実行するか`mise run doctor`を通して行う。
+まず`mise run doctor`を実行する。
+Dockerの版と、起動中のworkerのマウントを判定する。
+`sh -c`を渡す`exec`(下のマウントの判定のコマンド)は、フックが拒否する。
+そのため、Claudeのセッションでは人が実行するか、`mise run doctor`を使う。
 動いていることは、コンテナの状態とログで確かめる。
 
 ```bash
@@ -1192,15 +1194,15 @@ mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate w
 証拠は次の2つである。
 
 - `/var/lib/factory`の直下の`claude`、`gh`、`audits`。根を`/var/lib/factory`に付ける設定で作られたworkerが残っていると見える。直下の名前なので、owner名とはぶつからない。
-- `/var/lib/factory/requirements/requirements`。`volume.subpath`が無視されて、根が`/var/lib/factory/requirements`に付くと見える。根には`factory_state_init`が必ず`requirements`を作るためである。
+- `/var/lib/factory/requirements/requirements`。`volume.subpath`が無視されて、根が`/var/lib/factory/requirements`に付くと見える。根には`factory_state_init`が必ず`requirements`を作るためである。ただし、対象リポジトリのowner名が`requirements`だと、サブパスだけが正しく付いていても見える。
 
 `docker inspect`のSourceは、サブパスを反映しないので、判定に使わない。
 
 判定は1回の`exec`で行い、`sh -c`の終了コードで結果を返す。
 composeの失敗(1、126、127など)とぶつからないよう、専用の値を使う。
 
-- 11なら、根は付いていない。
-- 10なら、根が付いている。Dockerの版を下限以上にし、`mise run up`を実行してから、Console用のworkerを作り直す。
+- 11なら、根の証拠は見えない。
+- 10なら、根の証拠が見える。
 - 3なら、マウント先が見えない。マウントが設定どおりに付いていないので、`mise run up`を実行してから、Console用のworkerを作り直す。
 - ほかの終了コードか、コンテナが動いていないときは、確かめられない。
 
@@ -1208,26 +1210,46 @@ composeの失敗(1、126、127など)とぶつからないよう、専用の値�
 mise exec -- docker compose -f infra/docker-compose.yml exec -T windmill_worker_console sh -c 'test -e /var/lib/factory/claude || test -e /var/lib/factory/gh || test -e /var/lib/factory/audits && exit 10; test -d /var/lib/factory/requirements || exit 3; test -e /var/lib/factory/requirements/requirements && exit 10; exit 11'; echo "exit=$?"
 ```
 
-`mise run doctor`も同じ判定をし、11を「`factory_state`の根は付いていません」と表示する。3はNGとして、終了コードを添えて表示する。
-この判定が見分けるのは、根が付いたかどうかだけである。symlinkの先がマウントされた場合は見分けられないので、その疑いは、上の手順の`ls -la`で確かめる。
-対象リポジトリのowner名が`requirements`だと、サブパスだけが付いていても`requirements/requirements`が見え、想定外と判定される。
-10と判定されたときは、次の2つの`ls`でどちらの証拠が見えたかを確かめる。
+`mise run doctor`は同じ判定をし、画面には終了コードではなく`console worker mount`の行を出す。
+
+- 11は、OKと「`factory_state`の根は付いていません」を出す。
+- 10は、NGを出す。メッセージは「/var/lib/factory/requirements/requirements」か「/var/lib/factoryの直下のclaude、gh、audits」で始まる。
+- 3は、NGと終了コードを出す。
+- workerが起動していないときは、確かめられない旨をOKで出す。このとき、マウントは判定されていない。
+
+NGの行が10を表すときは、次の2つの`ls`でどちらの証拠が見えたかを確かめる。
 
 ```bash
 mise exec -- docker compose -f infra/docker-compose.yml exec -T windmill_worker_console ls -la /var/lib/factory
 mise exec -- docker compose -f infra/docker-compose.yml exec -T windmill_worker_console ls -la /var/lib/factory/requirements
 ```
 
-`mise run doctor`の判定が10なら、根を付けた状態とみなす。10は、根を付けた状態を表す値である。
-正常なのは、11を返したときと、10でも`/var/lib/factory/requirements/requirements`だけが見えたときの2つである。後者は、対象リポジトリのowner名が`requirements`で、サブパスだけが正しく付いているときに限る。
-上の2つの`ls`で、どちらの証拠が見えたかを確かめる。
+- 1つめの`ls`に`claude`、`gh`、`audits`のどれかが並べば、根が`/var/lib/factory`に付いている。Dockerの版を下限以上にし、Console用のworkerを作り直す。
+- 2つめの`ls`に`requirements`が並ぶのは、次のどちらかのときである。
+  根が`/var/lib/factory/requirements`に付いているか、owner名が`requirements`でサブパスだけが付いている。
+  この判定では見分けられないので、`requirements/requirements`だけが見えても、正常とは断定しない。
+  見分けられない分は、Dockerの版の下限と、workerの作り直しで補う。
+- `audits`は、監査を1回実行するまで作られない。
+  `gh`は、作られないことがある。
+  4つの名前が揃わなくても、根が付いていることがある。
+  名前が揃うことを、根が付いている条件にしない。
 
-- 1つめの`ls`に`claude`、`gh`、`audits`のどれかが並べば、根が`/var/lib/factory`に付いている。
-- 2つめの`ls`に`requirements`が並ぶのは、根が付いているときと、owner名が`requirements`のときである。このため、`requirements`1つだけでは根の証拠にならない。
-- `audits`は監査を1回実行するまで作られず、`gh`はトークンを環境変数で渡す運用では作られない。4つの名前が揃わなくても、根が付いていることがある。名前が揃うことを、根が付いている条件にしない。
+この判定が見分けるのは、根が付いたかどうかだけである。
+symlinkの先がマウントされた場合は見分けられないので、その疑いは、上の`ls -la`で確かめる。
 
-owner名が`requirements`で、1つめの`ls`にも該当する名前が無いときは、正常とみなす。ただし、Docker EngineとComposeが下限以上で、`mise run up`の後にworkerが作り直されていることを`mise run doctor`で確かめる。
-根が付く原因として考えられるのは、根を付ける設定で作られたworkerが残っていることと、DockerのEngineかComposeが下限に届いていないことである。`mise run doctor`で版を確かめる。
+Dockerの版は`mise run doctor`で確かめる。
+`doctor`はworkerが作り直されたかを確かめないので、作り直しは別に行う。
+次のコマンドで作り直す。
+
+```bash
+mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_worker_console
+```
+
+`mise run up`は、設定の変わらないworkerを作り直さない。
+根が付く原因として考えられるのは、次の2つである。
+
+- 根を付ける設定で作られたworkerが残っている。
+- DockerのEngineかComposeが下限に届いていない。
 
 ### adminsワークスペースの組み込み項目
 
