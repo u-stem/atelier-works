@@ -5,6 +5,7 @@ import {
 } from "../../api/systemQueries.ts";
 import { PageHeader } from "../../app/PageHeader.tsx";
 import {
+  auditFailureLimitNote,
   auditFailuresOf,
   listLimitNote,
   SYSTEM_WINDOW_DAYS,
@@ -15,11 +16,14 @@ import { ReleaseStatus } from "./ReleaseStatus.tsx";
 import { SystemSection } from "./SystemSection.tsx";
 import { UpdateHistory } from "./UpdateHistory.tsx";
 
-function LimitNote({ count }: { count: number }) {
-  const note = listLimitNote(count, SYSTEM_STATUS_LIMIT);
-  return note === null ? null : (
-    <p className="text-small text-muted-foreground">{note}</p>
+function Note({ text }: { text: string | null }) {
+  return text === null ? null : (
+    <p className="text-small text-muted-foreground">{text}</p>
   );
+}
+
+function LimitNote({ count }: { count: number }) {
+  return <Note text={listLimitNote(count, SYSTEM_STATUS_LIMIT)} />;
 }
 
 function ReleaseSection() {
@@ -63,12 +67,7 @@ function InfoNoticeSection() {
     <SystemSection
       id="info-notices-heading"
       title="情報の通知"
-      description={
-        <>
-          人の行動が要らない通知です。要対応の一覧には出ません。 直近
-          {SYSTEM_WINDOW_DAYS}日の未解決のものを表示します。
-        </>
-      }
+      description={`人の行動が要らない通知です。要対応の一覧には出ません。直近${String(SYSTEM_WINDOW_DAYS)}日の未解決のものを表示します。`}
       query={status}
       loginHint="上のバナーからログインすると、情報の通知を表示します。"
     >
@@ -113,7 +112,18 @@ function AuditFailureSection() {
       loginHint="上のバナーからログインすると、監査の失敗を表示します。"
     >
       {(data, now) => (
-        <AuditFailureList failures={auditFailuresOf(data.failures)} now={now} />
+        <>
+          <AuditFailureList
+            failures={auditFailuresOf(data.failures)}
+            now={now}
+          />
+          <Note
+            text={auditFailureLimitNote({
+              counts: data.counts.failures,
+              listed: data.failures.length,
+            })}
+          />
+        </>
       )}
     </SystemSection>
   );
@@ -125,13 +135,7 @@ function OrphanFailureSection() {
     <SystemSection
       id="orphan-failures-heading"
       title="作業項目に紐づかない失敗"
-      description={
-        <>
-          定期のジョブなど、作業項目を持たないジョブの失敗です。
-          要対応の画面には出ません。 直近{SYSTEM_WINDOW_DAYS}
-          日のものを新しい順に表示します。
-        </>
-      }
+      description={`定期のジョブなど、作業項目を持たないジョブの失敗です。要対応の画面には出ません。直近${String(SYSTEM_WINDOW_DAYS)}日のものを新しい順に表示します。`}
       query={status}
       loginHint="上のバナーからログインすると、作業項目に紐づかない失敗を表示します。"
     >

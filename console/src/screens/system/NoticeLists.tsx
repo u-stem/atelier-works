@@ -2,6 +2,7 @@ import { Link } from "react-router";
 import type { NoticeRow } from "../../api/guards/notices.ts";
 import type { SystemResolvedNotice } from "../../api/guards/systemStatus.ts";
 import { TimeText } from "../../components/TimeText.tsx";
+import { FAILURE_TEXT_LIMIT } from "../../lib/failureView.ts";
 import {
   describeInfoNotice,
   describeResolvedNotice,
@@ -94,6 +95,11 @@ function ResolvedItem({
           >
             {row.message}
           </p>
+          {row.truncated ? (
+            <p className="text-small text-warning">
+              先頭の{FAILURE_TEXT_LIMIT}字だけを表示しています。
+            </p>
+          ) : null}
           <p className="text-small text-subtle">
             <TimeText iso={row.createdAt} now={now} prefix="発生 " />
           </p>

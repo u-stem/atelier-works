@@ -9,6 +9,7 @@ import type {
   SystemOrphanFailure,
   SystemResolvedNotice,
 } from "../api/guards/systemStatus.ts";
+import { FAILURE_TEXT_LIMIT } from "./failureView.ts";
 import { withSelection } from "./inboxSelection.ts";
 import { displayableIssueText } from "./intakeText.ts";
 import { isJobId } from "./jobLink.ts";
@@ -24,11 +25,8 @@ export type Tone = "success" | "warning" | "failure";
 /** 情報の通知と作業項目に紐づかない失敗を出す期間(日)。`console_support`の`INFO_NOTICE_WINDOW_DAYS`に合わせる。 */
 export const SYSTEM_WINDOW_DAYS = 7;
 
-/**
- * summaryとsystem_statusが本文や失敗の文を切る文字数(コードポイント)。
- * `console_query`の`SUMMARY_TEXT_LIMIT`に合わせる。この長さに達した文は切られている可能性がある。
- */
-export const SYSTEM_TEXT_LIMIT = 500;
+/** 取り込みの結果が更新されていなければ停止とみなす分数。`FETCHER_STALE_MINUTES`に合わせる。 */
+export const FETCHER_STALE_MINUTES = 30;
 
 /** 一覧の1行に出す本文の長さ(文字数)。全文は開いて読む。 */
 export const PREVIEW_LENGTH = 120;
@@ -72,7 +70,7 @@ const UNAVAILABLE_DETAILS: ReadonlyMap<string, string> = new Map([
   ["invalid", "取り込みの状態のファイルの形式が正しくありません。"],
 ]);
 
-const STALE_DETAIL = "30分以上、取り込みの結果が更新されていません。";
+const STALE_DETAIL = `${String(FETCHER_STALE_MINUTES)}分以上、取り込みの結果が更新されていません。`;
 
 function fetcherTone(state: string, assessment: string): Tone {
   if (assessment === "failed") {
@@ -86,6 +84,12 @@ function fetcherTone(state: string, assessment: string): Tone {
         : "success";
   }
   return "warning";
+}
+
+/** 状態の日本語。更新が止まっているときは、記録が古いことを添える。 */
+function fetcherLabel(state: string, assessment: string): string {
+  const label = FETCHER_STATE_LABELS.get(state) ?? UNKNOWN_FETCHER_LABEL;
+  return assessment === "stale" ? `${label}(古い記録)` : label;
 }
 
 /** Consoleの取り込みの状態を、画面に出す内容にする。 */
@@ -105,7 +109,7 @@ export function describeFetcher(fetcher: SystemFetcher): FetcherDescription {
   }
   return {
     tone: fetcherTone(fetcher.state, fetcher.assessment),
-    label: FETCHER_STATE_LABELS.get(fetcher.state) ?? UNKNOWN_FETCHER_LABEL,
+    label: fetcherLabel(fetcher.state, fetcher.assessment),
     detail: fetcher.assessment === "stale" ? STALE_DETAIL : null,
     versionLabel: fetcher.sha === null ? null : shortSha(fetcher.sha),
     checkedAt: fetcher.checked_at,
@@ -197,6 +201,7 @@ const RESOLVER_LABELS: ReadonlyMap<string, string> = new Map([
   ["cleanup_db", "DBの掃除(自動)"],
   ["self_update", "自己更新(自動)"],
   ["poll_issues", "Issueの取得(自動)"],
+  ["poll_prs", "PRの取得(自動)"],
 ]);
 
 /**
@@ -216,8 +221,10 @@ export type ResolvedNoticeDescription = {
   readonly noticeId: number;
   readonly title: string;
   readonly preview: string;
-  /** 本文の全文。`SYSTEM_TEXT_LIMIT`文字で切ってある。 */
+  /** 本文。backendが先頭の`FAILURE_TEXT_LIMIT`文字で切っている。 */
   readonly message: string;
+  /** 本文が切られている可能性があるか。長さが上限に達したときに真。 */
+  readonly truncated: boolean;
   readonly createdAt: string;
   /** 解決した時刻(ISO文字列)。記録が無ければ`null`。 */
   readonly resolvedAt: string | null;
@@ -234,6 +241,7 @@ export function describeResolvedNotice(
     title: noticeKindLabel(notice.kind),
     preview: messagePreview(message, PREVIEW_LENGTH),
     message,
+    truncated: [...notice.message].length >= FAILURE_TEXT_LIMIT,
     createdAt: notice.created_at,
     resolvedAt: notice.resolved_at,
     resolver: resolverLabel(notice.resolved_by),
@@ -265,7 +273,7 @@ export function describeOrphanFailure(
     occurredAt: failure.occurred_at,
     error: {
       text: displayableIssueText(failure.error).text,
-      truncated: [...failure.error].length >= SYSTEM_TEXT_LIMIT,
+      truncated: [...failure.error].length >= FAILURE_TEXT_LIMIT,
     },
   };
 }
@@ -275,4 +283,18 @@ export function auditFailuresOf(
   failures: readonly SummaryFailure[],
 ): SummaryFailure[] {
   return failures.filter((failure) => failure.kind === "audit");
+}
+
+/**
+ * 監査の失敗の一覧に添える注記。無ければ`null`。
+ * 要対応の失敗の件数が、取得した一覧の件数より多いときは、取得の上限を超えた分がある。
+ * 一覧は新しい順なので、見えないのは古い失敗である。
+ */
+export function auditFailureLimitNote(count: {
+  readonly counts: number;
+  readonly listed: number;
+}): string | null {
+  return count.counts > count.listed
+    ? "取得の上限を超えた失敗があるので、古い監査の失敗は表示していない場合があります。"
+    : null;
 }

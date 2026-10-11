@@ -4,14 +4,18 @@
 
 import { describe, expect, test } from "bun:test";
 import { isSystemStatus } from "../../console/src/api/guards/systemStatus.ts";
+import * as systemView from "../../console/src/lib/systemView.ts";
 import {
   resolverLabel,
   SYSTEM_WINDOW_DAYS,
 } from "../../console/src/lib/systemView.ts";
+import { FETCHER_STALE_MINUTES } from "../../f/factory/lib/console_status.ts";
 import { INFO_NOTICE_WINDOW_DAYS } from "../../f/factory/lib/console_support.ts";
 import type { SqlClient, SqlRow } from "../../f/factory/lib/db.ts";
 import { CLEANUP_RESOLVER } from "../../f/factory/lib/db.ts";
 import { HOST_ACTION_RESOLVER } from "../../f/factory/lib/host_action.ts";
+import { POLL_ISSUES_RESOLVER } from "../../f/factory/poll_issues.ts";
+import { POLL_PRS_RESOLVER } from "../../f/factory/poll_prs.ts";
 import {
   runSystemStatus,
   type SystemStatusDeps,
@@ -158,6 +162,10 @@ describe("system view constants", () => {
   test("uses the same window as the backend", () => {
     expect(SYSTEM_WINDOW_DAYS).toBe(INFO_NOTICE_WINDOW_DAYS);
   });
+
+  test("uses the same stale threshold as the backend", () => {
+    expect(systemView.FETCHER_STALE_MINUTES).toBe(FETCHER_STALE_MINUTES);
+  });
 });
 
 describe("resolver labels", () => {
@@ -167,5 +175,15 @@ describe("resolver labels", () => {
 
   test("names the self update", () => {
     expect(resolverLabel(HOST_ACTION_RESOLVER)).not.toBe(HOST_ACTION_RESOLVER);
+  });
+});
+
+describe("automatic resolver labels", () => {
+  test("names the issue poller", () => {
+    expect(resolverLabel(POLL_ISSUES_RESOLVER)).not.toBe(POLL_ISSUES_RESOLVER);
+  });
+
+  test("names the pull request poller", () => {
+    expect(resolverLabel(POLL_PRS_RESOLVER)).not.toBe(POLL_PRS_RESOLVER);
   });
 });

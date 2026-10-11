@@ -7,12 +7,14 @@ import type {
   SystemResolvedNotice,
 } from "../api/guards/systemStatus.ts";
 import {
+  auditFailureLimitNote,
   auditFailuresOf,
   describeFetcher,
   describeInfoNotice,
   describeLatestDeployment,
   describeOrphanFailure,
   describeResolvedNotice,
+  FETCHER_STALE_MINUTES,
   listLimitNote,
   messagePreview,
   noticeDetailPath,
@@ -71,6 +73,16 @@ describe("describeFetcher", () => {
     expect(describeFetcher({ ...FETCHER_OK, assessment: "stale" }).tone).toBe(
       "warning",
     );
+  });
+
+  test("marks the label of a stale record", () => {
+    expect(describeFetcher({ ...FETCHER_OK, assessment: "stale" }).label).toBe(
+      "取り込み済み(古い記録)",
+    );
+  });
+
+  test("states the stale threshold in the explanation", () => {
+    expect(FETCHER_STALE_MINUTES).toBe(30);
   });
 
   test("explains a stale assessment", () => {
@@ -231,6 +243,10 @@ describe("resolverLabel", () => {
     expect(resolverLabel("poll_issues")).toBe("Issueの取得(自動)");
   });
 
+  test("labels the pull request poller as automatic", () => {
+    expect(resolverLabel("poll_prs")).toBe("PRの取得(自動)");
+  });
+
   test("shows a person's name as plain text", () => {
     expect(resolverLabel("operator")).toBe("operator");
   });
@@ -259,6 +275,17 @@ describe("describeResolvedNotice", () => {
     expect(
       describeResolvedNotice({ ...RESOLVED, resolved_at: null }).resolvedAt,
     ).toBe(null);
+  });
+
+  test("marks a message cut at the limit", () => {
+    expect(
+      describeResolvedNotice({ ...RESOLVED, message: "x".repeat(500) })
+        .truncated,
+    ).toBe(true);
+  });
+
+  test("does not mark a short message as cut", () => {
+    expect(describeResolvedNotice(RESOLVED).truncated).toBe(false);
   });
 
   test("shows the resolver", () => {
@@ -369,6 +396,18 @@ describe("listLimitNote", () => {
   test("warns that older entries may be missing at the limit", () => {
     expect(listLimitNote(200, 200)).toBe(
       "200件に達したので、これより古いものは表示していない場合があります。",
+    );
+  });
+});
+
+describe("auditFailureLimitNote", () => {
+  test("is empty when every failure is listed", () => {
+    expect(auditFailureLimitNote({ counts: 2, listed: 2 })).toBe(null);
+  });
+
+  test("warns that older audit failures may be missing", () => {
+    expect(auditFailureLimitNote({ counts: 3, listed: 2 })).toBe(
+      "取得の上限を超えた失敗があるので、古い監査の失敗は表示していない場合があります。",
     );
   });
 });
