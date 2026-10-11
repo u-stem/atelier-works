@@ -864,7 +864,8 @@ Consoleが止まっていてもDiscordには届くので、通知の確認先は
 スケジュールの直近3回の実行が続けて失敗したかどうかは、失敗のハンドラ(`on_error_schedule`)がジョブ履歴を読んで判定する。
 飛ばされた回(前回の実行中で見送った回)と、人が取り消した回は、失敗として数えず、連続も切らない。
 ジョブの上限(`timeout`)で打ち切られた回は、失敗として数える。
-時間切れの取り消しは、ジョブ履歴で`canceled_by`が`timeout`になる想定で判定する。この値は実機で未確認である。
+時間切れの取り消しは、ジョブ履歴で`canceled_by`が`timeout`になる想定で判定する。
+この値は実機で未確認である。
 マージの後は、次の手順で検知が動いていることを確かめる。
 
 1. 失敗する状態を作る。たとえば、あるスケジュールのscriptを一時的に失敗させるか、直近3回が失敗の状態を用意する。
@@ -891,16 +892,20 @@ Consoleが止まっていてもDiscordには届くので、通知の確認先は
 
 気づく経路は2つある。
 
-- `on_error_schedule`が時間切れでも呼ばれるなら、打ち切りのたびにDiscordの`job_failed`が届く。これが主な経路になる想定である。
-- 打ち切りが3回続くと、通知`schedule_failing`が残る想定である。補助の経路になる。
+- `on_error_schedule`が時間切れでも呼ばれるなら、打ち切りのたびにDiscordの`job_failed`が届く。
+  これが主な経路になる想定である。
+- 打ち切りが3回続くと、通知`schedule_failing`が残る想定である。
+  補助の経路になる。
 
 どちらも、次の2点を実機で確かめていない。
 確かめるまでは、頼れる経路とみなさない。
 確かめていなければ、自己更新が止まっても気づけない。
 なお、ユーザー名が`timeout`の人が取り消した回は、時間切れと見分けられず、失敗に数えられる。
 
-- 時間切れの取り消しが、ジョブ履歴で`canceled_by`が`timeout`になること。違う値なら、打ち切られた回が失敗として数えられず、`schedule_failing`が出ない。
-- `on_error_schedule`が、打ち切られた回でも呼ばれること。呼ばれなければ、`job_failed`と`schedule_failing`のどちらも出ない。
+- 時間切れの取り消しが、ジョブ履歴で`canceled_by`が`timeout`になること。
+  違う値なら、打ち切られた回が失敗として数えられず、`schedule_failing`が出ない。
+- `on_error_schedule`が、打ち切られた回でも呼ばれること。
+  呼ばれなければ、`job_failed`と`schedule_failing`のどちらも出ない。
 
 あわせて、`self_update`の実行ユーザーに`f/factory/deployed_sha`が見えることも実機で確かめる。
 見えないと存在の確認が`false`になり、全体を反映し直す。
@@ -1027,8 +1032,12 @@ mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker ps 
   記録されない範囲は[アーキテクチャ](architecture.md)の「自己更新」に書く。
   ジョブの失敗は、Discordの`job_failed`と、3回続いたときの`schedule_failing`で知る。
   ただし`deployed_sha`の更新が時間切れのときは、変数を読み直し、書けていれば成功として続ける。
-  成功の記録そのものが時間切れのときは、反映が済んでいるので失敗にしない。ログに警告を残し、成功として終わる。
-  この回の`deployments`の行は欠けることがある。後から成功の行が入ることもある。
+  成功の記録そのものが時間切れのときは、反映が済んでいるので失敗にしない。
+  ログに警告を残し、成功として終わる。
+  この回の`deployments`の行は欠けることがある。
+  後から成功の行が入ることもある。
+  監査は、失敗の時刻以前で最後の成功の行から稼働版を導く。
+  そのため、成功の行が欠けると、次の成功の行までの間の失敗が1つ前の版に帰属しうる。
 - `deployed_sha`の読み取りが時間切れのときは、未デプロイとは扱わず、更新を失敗にする。
   読み取りがそれ以外で失敗したときは、区切った`existsVariable`で変数の有無を確かめる。
   `false`のときだけ未デプロイとして全体を反映し直す。
@@ -1053,11 +1062,13 @@ mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker ps 
 
 `wmill sync push`と`wmill datatable migrate up`が済み、`deployed_sha`を更新した後で、記録の前に打ち切られることがある。
 このときは、その版の反映が済んでいるのに`deployments`に行が無い。
-次の回は、`deployed_sha`がself cloneのHEADと同じなので、何もせずに終わる。欠けた記録は補われない。
+次の回は、`deployed_sha`がself cloneのHEADと同じなので、何もせずに終わる。
+欠けた記録は補われない。
 
 見分けるには、次の3つを見比べる。
 
-- `deployed_sha`の値。Windmillの画面で変数`f/factory/deployed_sha`を開いて読む。
+- `deployed_sha`の値。
+  Windmillの画面で変数`f/factory/deployed_sha`を開いて読む。
 - self cloneのHEAD。
 - `deployments`の最新の行の`sha_to`。
 

@@ -68,6 +68,22 @@ describe("self_update timeout", () => {
     expect(outside).toEqual([]);
   });
 
+  test("the success record sits directly inside recordSuccessDeployment", async () => {
+    const source = await selfUpdateSource();
+    const openings: string[] = [];
+    for (const match of source.matchAll(
+      /\brecordDeployment\(\{[^}]*result: "success"/g,
+    )) {
+      const before = source.slice(0, match.index ?? 0);
+      const opening = Math.max(...WRAPPERS.map((w) => before.lastIndexOf(w)));
+      openings.push(
+        WRAPPERS.find((w) => source.startsWith(w, opening)) ?? "none",
+      );
+    }
+
+    expect(openings).toEqual(["recordSuccessDeployment("]);
+  });
+
   test("the bounded call count matches the call sites", async () => {
     const source = await selfUpdateSource();
     const notify = count(source, /withCallTimeout\(\s*"notify"/g);
