@@ -42,6 +42,7 @@ import {
   claimIssue,
   type GhClient,
   GitHubHttpError,
+  GitHubRateLimitError,
   getIssue,
   getLabelerLogin,
   getViewer,
@@ -84,12 +85,12 @@ import type {
 import {
   type CommandRunner,
   ensureFactoryClone,
+  isReviewWorktreeOf,
   listWorktrees,
   pathExists,
   removeWorktree,
   runCommand,
 } from "./lib/workspace.ts";
-import { isReviewWorktreeOf } from "./steps/pr_review_prepare.ts";
 import { describeReason, nextActionFor } from "./steps/pr_workflow_support.ts";
 
 // ---------------------------------------------------------------------------
@@ -249,6 +250,13 @@ async function removePrWorktrees(
   if (!(await pathExists(repoDir))) return;
   try {
     const entries = await listWorktrees({ run: runCommand, repoDir });
+    if (!entries.some((entry) => entry.path === repoDir)) {
+      // 列挙されたパスが`repoDir`と違う綴りだと、レビューのworktreeを1つも選べず、無言で残る。
+      log.warn(
+        "reconcile: listed worktree paths differ from the repo dir spelling",
+        { repo_dir: repoDir },
+      );
+    }
     const targets = entries.filter((entry) =>
       isReviewWorktreeOf(repoDir, prNumber, entry),
     );
@@ -470,8 +478,12 @@ function isGoneFromGithub(err: unknown): boolean {
  * - 人が対応しないと決めた後の片付けなので、Discordには通知しない。
  * - 問い合わせは対象`limit`件までで、前回の続きから回す(`rotateTargets`)。
  *   上限に達して一部を次の実行に回すときは警告を出す。
- * 1件の失敗では例外を投げず、`recordFailure`に渡して次へ進む。
+ * 1件の失敗では例外を投げず、次へ進む。
+ * 失敗は1回の実行につき1行だけ`recordFailure`に渡す(最初の対象のキーで、2件目以降は件数にする)。
+ * GitHubの障害の間に、同じ原因の行が対象の数だけ増えて、Consoleのシステム画面を埋めないため。
  * 対象の削除やアクセスの喪失(404、410)は、失敗として記録せず警告のログだけを残す。
+ * rate limitを受けたら、残りを調べずに打ち切り、カーソルをその対象の直前に戻して次の実行で続ける。
+ * 制限の間も問い合わせを続けず、後ろの承認の期限切れを遅らせないため。
  */
 export async function reconcileClosedActionableItems(
   input: {
@@ -503,9 +515,15 @@ export async function reconcileClosedActionableItems(
 
   let cancelled = 0;
   let checked = 0;
-  let lastId: number | null = null;
+  let lastId: number | null = cursor;
+  let rateLimited = false;
+  const failedTargets: { readonly key: string; readonly err: unknown }[] = [];
+  const noteFailure = (key: string, err: unknown): void => {
+    failedTargets.push({ key, err });
+  };
   for (const target of ordered) {
     if (checked >= limit) break;
+    const previousId = lastId;
     checked += 1;
     lastId = target.id;
     try {
@@ -582,23 +600,51 @@ export async function reconcileClosedActionableItems(
         }
       }
     } catch (err) {
+      if (err instanceof GitHubRateLimitError) {
+        checked -= 1;
+        lastId = previousId;
+        rateLimited = true;
+        noteFailure(target.key, err);
+        break;
+      }
       if (isGoneFromGithub(err)) {
         log.warn("reconcile: an actionable target is gone or inaccessible", {
           target: target.key,
           error: maskSecrets(err instanceof Error ? err.message : String(err)),
         });
       } else {
-        await deps.recordFailure(`reconcile_actionable:${target.key}`, err);
+        noteFailure(target.key, err);
       }
     }
   }
 
-  if (checked < ordered.length) {
-    log.warn("reconcile: actionable items exceed the per-run limit", {
-      targets: ordered.length,
-      checked,
-      limit,
-    });
+  const [firstFailure] = failedTargets;
+  if (firstFailure !== undefined) {
+    const { key, err } = firstFailure;
+    const message = err instanceof Error ? err.message : String(err);
+    await deps.recordFailure(
+      `reconcile_actionable:${key}`,
+      failedTargets.length === 1
+        ? err
+        : new Error(
+            `${message} (and ${String(failedTargets.length - 1)} more failures in this run)`,
+          ),
+    );
+  }
+
+  if (rateLimited || checked < ordered.length) {
+    if (rateLimited) {
+      log.warn("reconcile: stopped at the GitHub rate limit", {
+        targets: ordered.length,
+        checked,
+      });
+    } else {
+      log.warn("reconcile: actionable items exceed the per-run limit", {
+        targets: ordered.length,
+        checked,
+        limit,
+      });
+    }
     try {
       await deps.setCursor(lastId);
     } catch (err) {

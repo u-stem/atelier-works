@@ -55,23 +55,6 @@ export function buildReviewWorktreeDir(
   return `${repoDir.replace(/\/main$/, "")}/review-${String(prNumber)}-${sha7}`;
 }
 
-/**
- * `entry`が、PR番号`prNumber`のレビューのworktree(`buildReviewWorktreeDir`が作るパス)かを返す。
- * `repoDir`と同じ親の直下にある`review-<PR番号>-<sha7>`というdetachedのworktreeだけを対象にする。
- * パスの一部が一致しただけで選ぶと、別の場所のdirectoryやブランチのworktreeまで消しうるためである。
- */
-export function isReviewWorktreeOf(
-  repoDir: string,
-  prNumber: number,
-  entry: Pick<WorktreeEntry, "path" | "detached">,
-): boolean {
-  if (!entry.detached) return false;
-  const prefix = `${repoDir.replace(/\/main$/, "")}/`;
-  if (!entry.path.startsWith(prefix)) return false;
-  const name = entry.path.slice(prefix.length);
-  return new RegExp(`^review-${String(prNumber)}-[0-9a-f]{7}$`).test(name);
-}
-
 const SKIPPED_BASE = {
   owner: "",
   repo: "",

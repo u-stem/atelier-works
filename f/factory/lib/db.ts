@@ -554,6 +554,38 @@ export async function newestNewerIssueCycle(
   return { id: parseId(row.id, "id"), status };
 }
 
+/**
+ * 同じPRで、同じ種類(`pr_review`か`pr_fix`)の作業項目のうち、`id`が`id`より大きいものの中で
+ * `id`が最大のものを返す。無ければ`null`。
+ * `listActionableWorkItems`が引き継ぎ済みとみなす行と同じ条件で、
+ * `retry_work_item`が取り消された古い行を、並んで動く新しい行があるときに再開しないために使う。
+ */
+export async function newestNewerPrWorkItem(
+  kind: "pr_review" | "pr_fix",
+  owner: string,
+  repo: string,
+  prNumber: number,
+  id: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<{ readonly id: number; readonly status: WorkItemStatus } | null> {
+  const rows = await sql`
+    SELECT id, status FROM factory.work_items
+    WHERE kind = ${kind} AND owner = ${owner} AND repo = ${repo}
+      AND pr_number = ${prNumber}::integer AND id > ${id}::integer
+    ORDER BY id DESC
+    LIMIT 1
+  `.fetch();
+  const row = rows[0];
+  if (row === undefined) return null;
+  const status = row.status;
+  if (typeof status !== "string" || !isOneOf(status, WORK_ITEM_STATUSES)) {
+    throw new Error(
+      `db: newestNewerPrWorkItem: unknown status ${String(status)}`,
+    );
+  }
+  return { id: parseId(row.id, "id"), status };
+}
+
 /** `factory.work_item_events`の1行のうち、再開の判断に要る部分。 */
 export type StatusEventSummary = {
   readonly from_status: WorkItemStatus | null;

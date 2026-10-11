@@ -49,6 +49,7 @@ import {
   listStaleTerminalWorkItems,
   listTrackedPrs,
   newestNewerIssueCycle,
+  newestNewerPrWorkItem,
   nextCycleForIssue,
   recordAgentRun,
   recordDeployment,
@@ -303,6 +304,40 @@ describe("newestNewerIssueCycle", () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await newestNewerIssueCycle("o", "r", 12, 3, sql);
     expect(calls[0]?.values).toEqual(["o", "r", 12, 3]);
+  });
+});
+
+describe("newestNewerPrWorkItem", () => {
+  test("returns the id and status of the newest larger row", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 9, status: "reviewed" }]]);
+    expect(
+      await newestNewerPrWorkItem("pr_review", "o", "r", 7, 3, sql),
+    ).toEqual({ id: 9, status: "reviewed" });
+  });
+
+  test("returns null when no larger row exists", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(
+      await newestNewerPrWorkItem("pr_review", "o", "r", 7, 3, sql),
+    ).toBeNull();
+  });
+
+  test("looks only at larger ids", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await newestNewerPrWorkItem("pr_review", "o", "r", 7, 3, sql);
+    expect(calls[0]?.text).toContain("id >  ? ::integer");
+  });
+
+  test("takes the newest of them", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await newestNewerPrWorkItem("pr_review", "o", "r", 7, 3, sql);
+    expect(calls[0]?.text).toContain("ORDER BY id DESC");
+  });
+
+  test("passes the kind, the pull request and the id", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await newestNewerPrWorkItem("pr_fix", "o", "r", 7, 3, sql);
+    expect(calls[0]?.values).toEqual(["pr_fix", "o", "r", 7, 3]);
   });
 });
 

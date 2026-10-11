@@ -124,7 +124,10 @@ Windmillで実行する間、秘密値はWindmillのsecret変数に置く。
 - `f/factory/discord_webhook_url`
 
 scriptは`wmill.getVariable()`で値を取得し、子プロセスの環境変数(`GH_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`など)としてだけ渡す。URLのクエリとパス、ログ、Data Tableの列、Discordの通知本文には出さない。
-例外は、Console用のworkerで動く`retry_work_item`だけである。このworkerでは`gh`を起動できないので、`github_token`を`fetch`の`Authorization`ヘッダに載せる。宛先は`https://api.github.com`に固定する。境界は[Console用workerの境界](#console用workerの境界)に書く。
+親プロセスが`fetch`で使う秘密値は、次の2か所である。
+
+- Console用のworkerで動く`retry_work_item`は、`gh`を起動できないので、`github_token`を`fetch`の`Authorization`ヘッダに載せる。宛先は`https://api.github.com`に固定し、リダイレクトは辿らない。境界は[Console用workerの境界](#console用workerの境界)に書く。
+- Discordへの送信(`lib/discord.ts`の`notify`)は、`discord_webhook_url`を`fetch`の宛先のURLにする。URLそのものが秘密なので、エラーメッセージとログには含めない。
 
 エラーメッセージと失敗の記録(`job_failures`)には、マスク処理を通してから値を入れる。マスクの関数はテストで検証する。
 
@@ -332,9 +335,9 @@ Podmanは対象外である。
 次のことは、この境界では守れない。
 
 - DBには届く。`DATABASE_URL`はdefaultのworkerと同じ管理者の接続だからである。
-- `retry_work_item`は、取り消された作業項目の再開のときだけ、`github_token`を読んでIssueの状態を確かめる。このworkerには`gh`が無いので、`fetch`で読む。
 - tag`console`のscriptは、管理者の`DATABASE_URL`か`wmill.getVariable()`で、Windmillのsecret変数を読める。
   読める変数には`f/factory/claude_oauth_token`と`f/factory/github_token`がある。
+  `retry_work_item`が実際に読むのは、取り消された作業項目の再開のときの`github_token`だけである。
   マウントの制限で守るのは、Claude Codeとghの設定と履歴のファイルだけである。
   トークンそのものは守らない。
 - scriptを編集できる者は、tagを付けずにdefaultのworkerで動かせば、`factory_state`のボリューム全体を読み書きできる。

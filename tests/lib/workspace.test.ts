@@ -34,6 +34,7 @@ import {
   formatGitleaksReport,
   type GitleaksConfigDir,
   isCappedOutput,
+  isReviewWorktreeOf,
   type LockFs,
   listWorktrees,
   mapDiffLineToFile,
@@ -72,6 +73,7 @@ import {
   worktreeGitPointerMatches,
   writeTextFile,
 } from "../../f/factory/lib/workspace.ts";
+import { buildReviewWorktreeDir } from "../../f/factory/steps/pr_review_prepare.ts";
 import { createFakeCommandRunner, fail, ok } from "./testSupport.ts";
 
 describe("runCommand", () => {
@@ -6383,5 +6385,51 @@ describe("runGitleaksOnWorktree against a real git repository", () => {
         scannedTreeSha: repo.treeSha,
       }),
     ).toEqual([WORKTREE_CHANGED_AFTER_SECRET_SCAN_REASON]);
+  });
+});
+
+describe("isReviewWorktreeOf", () => {
+  const REPO_DIR = "/workspaces/acme/widgets/main";
+
+  test("matches the path buildReviewWorktreeDir creates", () => {
+    const path = buildReviewWorktreeDir(REPO_DIR, 42, "abc1234");
+    expect(isReviewWorktreeOf(REPO_DIR, 42, { path, detached: true })).toBe(
+      true,
+    );
+  });
+
+  test("does not match a worktree of another pr", () => {
+    const path = buildReviewWorktreeDir(REPO_DIR, 421, "abc1234");
+    expect(isReviewWorktreeOf(REPO_DIR, 42, { path, detached: true })).toBe(
+      false,
+    );
+  });
+
+  test("does not match a worktree that is not detached", () => {
+    const path = buildReviewWorktreeDir(REPO_DIR, 42, "abc1234");
+    expect(isReviewWorktreeOf(REPO_DIR, 42, { path, detached: false })).toBe(
+      false,
+    );
+  });
+
+  test("does not match the same name under another directory", () => {
+    const path = "/workspaces/acme/other/review-42-abc1234";
+    expect(isReviewWorktreeOf(REPO_DIR, 42, { path, detached: true })).toBe(
+      false,
+    );
+  });
+
+  test("does not match a directory nested below the repo's parent", () => {
+    const path = "/workspaces/acme/widgets/x/review-42-abc1234";
+    expect(isReviewWorktreeOf(REPO_DIR, 42, { path, detached: true })).toBe(
+      false,
+    );
+  });
+
+  test("does not match a name whose suffix is not a 7-digit hex sha", () => {
+    const path = "/workspaces/acme/widgets/review-42-abc1234-extra";
+    expect(isReviewWorktreeOf(REPO_DIR, 42, { path, detached: true })).toBe(
+      false,
+    );
   });
 });

@@ -25,6 +25,7 @@ import {
   latestStatusEvent,
   listActiveIssueWorkItems,
   newestNewerIssueCycle,
+  newestNewerPrWorkItem,
   type StatusEventSummary,
   setFlowJobId,
   setFlowJobIdIfUnset,
@@ -105,6 +106,24 @@ export function newerCycleRefusal(
     return `${head}, retry work item ${String(newest.id)} instead`;
   }
   return `${head}, add the "${triggerLabel}" label to the Issue again to start a new cycle`;
+}
+
+/**
+ * 取り消された`pr_review` / `pr_fix`の作業項目に、同じ種類・同じPRで`id`の大きい行があるとき、
+ * 再開を断る理由を返す。無ければ`null`。
+ * 取り消した後にラベルを付け直すと、同じPRに新しい行ができる。
+ * 古い行を再開すると、同じPRの作業項目が並んで動くので、新しい行に従わせる。
+ * 基準は`listActionableWorkItems`が引き継ぎ済みとみなす行(同じ種類・同じPRで`id`が大きい)と同じである。
+ * 理由の文は英語の1文で、そのままConsoleとWindmillに表示される。
+ */
+export function newerPrRowRefusal(
+  workItem: Pick<WorkItem, "id" | "kind">,
+  newer: { readonly id: number; readonly status: WorkItemStatus } | null,
+): string | null {
+  if (workItem.kind === "issue" || newer === null) return null;
+  const id = String(workItem.id);
+  const newerId = String(newer.id);
+  return `retry_work_item: work item ${id} was cancelled when its target was closed, and work item ${newerId} (status ${newer.status}) now tracks the same pull request, so work item ${id} will not be restarted, follow work item ${newerId}`;
 }
 
 /**
@@ -429,6 +448,19 @@ export async function main(work_item_id: number): Promise<RetryWorkItemResult> {
   if (refusal !== null) throw new Error(refusal);
 
   if (restartItem.status !== workItem.status) {
+    const newerRow =
+      (workItem.kind === "pr_review" || workItem.kind === "pr_fix") &&
+      workItem.pr_number !== null
+        ? await newestNewerPrWorkItem(
+            workItem.kind,
+            workItem.owner,
+            workItem.repo,
+            workItem.pr_number,
+            workItem.id,
+          )
+        : null;
+    const taken = newerPrRowRefusal(workItem, newerRow);
+    if (taken !== null) throw new Error(taken);
     // Console用のworkerには`gh`が無いので、`gh`を起動せず`fetch`で読む。
     const closed = await closedTargetRefusal(
       workItem,

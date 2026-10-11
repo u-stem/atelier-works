@@ -10,6 +10,7 @@ import {
   computeRestartPlan,
   launchFailureError,
   newerCycleRefusal,
+  newerPrRowRefusal,
   retryResult,
   runningFlowRefusal,
   usesFlowJobIdLease,
@@ -533,6 +534,29 @@ describe("closedTargetRefusal", () => {
       async () => "open",
     );
     expect(refusal).toContain("no number to check");
+  });
+});
+
+describe("newerPrRowRefusal", () => {
+  test("allows the restart when no newer row exists", () => {
+    expect(newerPrRowRefusal({ id: 3, kind: "pr_review" }, null)).toBeNull();
+  });
+
+  test("refuses when a newer row of the same pull request exists", () => {
+    expect(
+      newerPrRowRefusal(
+        { id: 3, kind: "pr_fix" },
+        { id: 9, status: "reviewed" },
+      ),
+    ).toBe(
+      "retry_work_item: work item 3 was cancelled when its target was closed, and work item 9 (status reviewed) now tracks the same pull request, so work item 3 will not be restarted, follow work item 9",
+    );
+  });
+
+  test("does not apply to an issue work item", () => {
+    expect(
+      newerPrRowRefusal({ id: 3, kind: "issue" }, { id: 9, status: "failed" }),
+    ).toBeNull();
   });
 });
 

@@ -1025,6 +1025,24 @@ describe("fetchIssueState", () => {
     expect(error instanceof GitHubHttpError && error.status).toBe(404);
   });
 
+  test("does not follow redirects", async () => {
+    const { fetchFn, calls } = fakeFetch(200, { state: "open" });
+    await fetchIssueState(fetchFn, "tok", "acme", "widgets", 5);
+    expect(calls[0]?.init.redirect).toBe("manual");
+  });
+
+  test("treats a redirect as a failed check", async () => {
+    const { fetchFn } = fakeFetch(301, {});
+    const error = await fetchIssueState(
+      fetchFn,
+      "tok",
+      "acme",
+      "widgets",
+      5,
+    ).catch((err: unknown) => err);
+    expect(error instanceof GitHubHttpError && error.status).toBe(301);
+  });
+
   test("does not put the token in the error message", async () => {
     const { fetchFn } = fakeFetch(500, {});
     const error = await fetchIssueState(

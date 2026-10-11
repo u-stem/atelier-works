@@ -5,7 +5,10 @@
 // 状態の競合、1回の実行の上限、順番の回し方を確かめる。
 
 import { describe, expect, test } from "bun:test";
-import { GitHubHttpError } from "../../f/factory/lib/github.ts";
+import {
+  GitHubHttpError,
+  GitHubRateLimitError,
+} from "../../f/factory/lib/github.ts";
 import type { Logger } from "../../f/factory/lib/log.ts";
 import {
   actionableCancelNote,
@@ -623,6 +626,86 @@ describe("reconcileClosedActionableItems failures", () => {
     });
     await run(deps);
     expect(failures).toHaveLength(1);
+  });
+
+  const failingEvery = (err: Error): Partial<ActionableReconcileDeps> => ({
+    getTarget: async () => {
+      throw err;
+    },
+  });
+
+  test("records one failure when every target fails for the same reason", async () => {
+    const { deps, failures } = harness(issues(5), {
+      failures: failingEvery(new GitHubHttpError("server error", 500)),
+    });
+    await run(deps);
+    expect(failures).toHaveLength(1);
+  });
+
+  test("counts the other failures in the recorded error", async () => {
+    const { deps, failures } = harness(issues(5), {
+      failures: failingEvery(new GitHubHttpError("server error", 500)),
+    });
+    await run(deps);
+    expect(String(failures[0]?.err)).toContain("and 4 more failures");
+  });
+
+  test("still checks every target after failures", async () => {
+    let calls = 0;
+    const { deps } = harness(issues(5), {
+      failures: {
+        getTarget: async () => {
+          calls += 1;
+          throw new GitHubHttpError("server error", 500);
+        },
+      },
+    });
+    await run(deps);
+    expect(calls).toBe(5);
+  });
+
+  test("stops at the first rate limit", async () => {
+    let calls = 0;
+    const { deps } = harness(issues(30), {
+      failures: {
+        getTarget: async () => {
+          calls += 1;
+          throw new GitHubRateLimitError("GET /repos", 60_000, false);
+        },
+      },
+    });
+    await run(deps);
+    expect(calls).toBe(1);
+  });
+
+  test("records the rate limit once", async () => {
+    const { deps, failures } = harness(issues(30), {
+      failures: failingEvery(new GitHubRateLimitError("GET /x", null, false)),
+    });
+    await run(deps);
+    expect(failures).toHaveLength(1);
+  });
+
+  test("keeps the cursor before the target that hit the rate limit", async () => {
+    const { deps, cursors } = harness(issues(5), {
+      failures: {
+        getTarget: async (_owner, _repo, number) => {
+          if (number === 103) {
+            throw new GitHubRateLimitError("GET /x", null, false);
+          }
+          return {
+            state: "open",
+            mergedAt: null,
+            closedByLogin: null,
+            closedByType: null,
+            authorLogin: null,
+            authorAssociation: null,
+          };
+        },
+      },
+    });
+    await run(deps);
+    expect(cursors).toEqual([2]);
   });
 
   test("records a failure and continues when the transition throws", async () => {

@@ -994,6 +994,9 @@ export async function fetchIssueState(
         Accept: "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
       },
+      // リダイレクトは辿らない。移したIssueの新しい宛先へ`Authorization`を送らず、
+      // 状態を確かめられないものとして扱うため。
+      redirect: "manual",
       signal: AbortSignal.timeout(FETCH_ISSUE_TIMEOUT_MS),
     },
   );
