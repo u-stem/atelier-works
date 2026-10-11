@@ -8,7 +8,10 @@ import {
   computeExpiresAt,
   expiredRequirementsRequests,
   handlerPathFor,
+  ISSUE_CHECK_SCRIPT_PATH,
   isExpired,
+  issueCheckRefusal,
+  parseIssueCheckVerdict,
 } from "../../f/factory/lib/approval_support.ts";
 
 describe("computeExpiresAt", () => {
@@ -150,5 +153,57 @@ describe("expiredRequirementsRequests", () => {
   test("returns an empty array when none are requirements-kind", () => {
     const requests = [{ kind: "issue_proposal" as const, id: 2 }];
     expect(expiredRequirementsRequests(requests)).toEqual([]);
+  });
+});
+
+describe("ISSUE_CHECK_SCRIPT_PATH", () => {
+  test("points at the step script that runs on the default worker", () => {
+    expect(ISSUE_CHECK_SCRIPT_PATH).toBe(
+      "f/factory/steps/approval_check_issue",
+    );
+  });
+});
+
+describe("parseIssueCheckVerdict", () => {
+  test("reads the verdict from a well-formed result", () => {
+    expect(parseIssueCheckVerdict({ verdict: "changed" })).toBe("changed");
+  });
+
+  test("returns null for an unknown verdict", () => {
+    expect(parseIssueCheckVerdict({ verdict: "maybe" })).toBeNull();
+  });
+
+  test("returns null when the result is not an object", () => {
+    expect(parseIssueCheckVerdict("match")).toBeNull();
+  });
+
+  test("returns null for null", () => {
+    expect(parseIssueCheckVerdict(null)).toBeNull();
+  });
+});
+
+describe("issueCheckRefusal", () => {
+  test("allows approval when the issue matches the intake snapshot", () => {
+    expect(issueCheckRefusal("match", 7)).toBeNull();
+  });
+
+  test("allows approval when the check does not apply", () => {
+    expect(issueCheckRefusal("not_applicable", 7)).toBeNull();
+  });
+
+  test("refuses approval when the issue changed after intake", () => {
+    expect(issueCheckRefusal("changed", 7)).toContain("changed after intake");
+  });
+
+  test("tells the approver to put the new content in a rejection reason", () => {
+    expect(issueCheckRefusal("changed", 7)).toContain("reject the request");
+  });
+
+  test("refuses approval when the issue could not be fetched", () => {
+    expect(issueCheckRefusal("unavailable", 7)).toContain("try again");
+  });
+
+  test("names the approval request in the refusal", () => {
+    expect(issueCheckRefusal("changed", 7)).toContain("approval request 7");
   });
 });

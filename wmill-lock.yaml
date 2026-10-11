@@ -5,7 +5,7 @@ locks:
   f/factory/_smoke_suspend__flow+__flow_hash: c642c40389574e98140d74c6a555ab5e6eeade0d1462c8bb7cfffa3205ecdc37
   f/factory/_smoke_suspend__flow+report_what_resume_produced.ts: dbb0ef9c729a74523bae031d57667cb2595c867000eecba39c033e08e0dd7ae8
   f/factory/_smoke_suspend__flow+request_approval.ts: c56881749f5785c8546f4e79e0f78c7a069735c17873845b4234251c5e9b9729
-  f/factory/approval_decide: 951aaace7986e7c41a6ee4b77daae951cb8a52a1a773108f215589e954c6dd6b
+  f/factory/approval_decide: d971a5fe3aee6841bf0a919ac75dfc92ccc03464244ee7c6e4f65c0fbc3af373
   f/factory/audit__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/audit_kickoff: 71c7133b44557fd85a106161794abc5964175f23695993577b209827b95d5757
   f/factory/cleanup_db: 365fb8b2a9a410c2bc5e6e6cf42af1e56330b2c2b5a42bcffa9ab4e1fd9f7aa3
@@ -13,7 +13,7 @@ locks:
   f/factory/console_fetch_watch: bc9989c956e804ed6c7e42b789b08f92ee8800ea4937d524d1b5f99619eb8c82
   f/factory/factory_console__raw_app+__app_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/implement__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
-  f/factory/lib/approval_support: 20f96fdb02ddba3ca38eeb6b259ffb0a063acbe3339e68c5a94ceb5e11d14602
+  f/factory/lib/approval_support: 51a71c459f571a2faf603c84a1f8e760ed7e67a99449a6a4c2a81dbae66ae4ca
   f/factory/lib/approver: 1c82cf702f2bb7ac29d81bf9a5d439ced908228a3ee8229b415118a13619c300
   f/factory/lib/audit_doc: 0dcccfcfd59607c2aff289b48940f5dfd98de36ce6db462375394f2b6d696aa1
   f/factory/lib/audit_evidence: ac1ccc03e083e673184500451f40287247023042a52e597954379c12a9e79269
@@ -62,6 +62,7 @@ locks:
   f/factory/pr_review__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/retry_work_item: 567ac00e42402851ccb694c963cafaf8aa880f70925d6a0a1d6c515fa25323f9
   f/factory/self_update: 2f19f7a0709eb5e2e8a696f510a1189954cd0709dcfd4e10501e2984973c4384
+  f/factory/steps/approval_check_issue: 0895c6723f11fcadbf72fe0482cc759a1f963876531d0e26ee00e44489ae82e7
   f/factory/steps/audit_generate: 23f909e777c1593ac09022dc5efa8c892f982b3b6639d9de3e0c29e55919d60d
   f/factory/steps/audit_prepare: 3bc36e6c5c703430960a777ad34ca2380d8574db93a5c930486d42cf07a05c81
   f/factory/steps/console_query: b1230ff2c270dcd77234b06f97461dd91ba1013b2cbc7188416c502d61863ec2

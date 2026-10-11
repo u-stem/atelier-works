@@ -344,6 +344,8 @@ Claudeに渡すツールは`Read,Glob,Grep,Edit,Write`だけで、`Bash`は渡�
 
 Claudeに渡すIssueの題名と本文は、取り込み時点のもの(`work_items.title`、`body`)である。承認の後にIssueを書き換えて、プロンプトに指示を差し込むことはできない。
 
+承認の時点でも、現在のIssueが取り込み時点と違えば、承認を断る。確認の仕組みは[要件定義](requirements.md)の「承認の前のIssueの確認」にある。
+
 GitHubから取得した今のIssueは、次の3つにだけ使う。
 
 - openかどうかの判定

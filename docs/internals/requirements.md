@@ -141,6 +141,27 @@ raw appの`components/RequirementsDocument.tsx`、`Markdown.tsx`、`DrawioViewer
 
 反映するscriptは`wmill.runScriptByPathAsync`で起動する。
 
+### 承認の前のIssueの確認
+
+要件定義を承認するときは、決定を記録する前に、現在のIssueの題名と本文が取り込み時点(`work_items.title`、`body`)と同じかを確かめる。実装のClaudeに渡るのは取り込み時点の内容なので、承認者が見た内容と一致させるためである。
+
+確認は`f/factory/steps/approval_check_issue`が行う。`approval_decide`が同期で呼び、結果の判定だけを受け取る。
+
+| 判定 | 意味 | 承認 |
+| --- | --- | --- |
+| `match` | 題名と本文が同じ。改行コードと前後の空白の違いは無視する | 記録する |
+| `changed` | 取り込み後に題名か本文が変わった | 断る |
+| `unavailable` | GitHubから取得できないなど、比べられなかった | 断る |
+| `not_applicable` | 要件定義以外の承認依頼 | 記録する |
+
+断るときのエラーは、Issueが変わった旨と、承認者が取れる手を示す。1つは、Issueを取り込み時点の内容に戻して、もう一度承認することである。もう1つは、新しい内容を使うために、承認を却下し、変えたい内容を却下理由に書くことである。Issueを取り込み直すことはできない。承認待ちの作業項目はIssueごとに1つしか持てず、トリガーラベルを付け直しても新しいサイクルは始まらないためである。
+
+`unavailable`はしばらく待ってからやり直す。確認のjobが失敗したときと、結果の形が違うときも、同じく断る。却下と、決定が記録済みの行への再実行では確認しない。
+
+確認は`github_token`を読むので、このscriptはtagを付けずにdefaultのworkerで動かす。`approval_decide`はConsole用のworkerで動くため、`github_token`を読ませない。確認のjobには30秒の`timeout`を付け、Console用workerの枠を長く塞がないようにする。
+
+確認から決定の記録までの間のIssueの書き換えは防げない。実装を終えたときのPR本文の注記が残りを拾う。
+
 承認者(`decided_by`)は引数ではなく、ジョブの実行文脈から決める(`deriveApprover`)。`WM_USERNAME`を使い、無ければ`WM_EMAIL`を使う。どちらも無ければ例外にし、承認者が分からないまま記録しない。
 
 ### 要件定義の承認の反映

@@ -1,7 +1,12 @@
 // 承認待ち(`approval_requests`)を扱うスクリプト群が共有する判定ロジック。
 // 入出力は行わず、単体テストのためにすべての関数を公開する。
 
-import type { ApprovalRequest, ApprovalRequestKind } from "./types.ts";
+import {
+  type ApprovalRequest,
+  type ApprovalRequestKind,
+  isOneOf,
+  isRecord,
+} from "./types.ts";
 
 /**
  * `requirements`の承認依頼が`pending`のまま待つ秒数(7日)。
@@ -139,4 +144,65 @@ export function expiredRequirementsRequests<
   T extends { kind: ApprovalRequestKind },
 >(requests: readonly T[]): T[] {
   return requests.filter((request) => request.kind === "requirements");
+}
+
+/**
+ * 承認の前にIssueを取り込み時点と比べるscriptのパス。
+ * GitHubを呼ぶので、`github_token`を読めるdefaultのworkerで動く。
+ * Console用workerで動く`approval_decide.ts`は、`github_token`を読まずに、このscriptの結果だけを受け取る。
+ */
+export const ISSUE_CHECK_SCRIPT_PATH = "f/factory/steps/approval_check_issue";
+
+/**
+ * Issueの確認の結果。
+ * - `match`: 現在のIssueの題名と本文が取り込み時点と同じ。
+ * - `changed`: 取り込み後に題名か本文が変わった。
+ * - `not_applicable`: 承認の対象がIssueに基づく要件定義ではない。
+ * - `unavailable`: GitHubから取得できないなどで、比べられなかった。
+ */
+export const ISSUE_CHECK_VERDICTS = [
+  "match",
+  "changed",
+  "not_applicable",
+  "unavailable",
+] as const;
+
+export type IssueCheckVerdict = (typeof ISSUE_CHECK_VERDICTS)[number];
+
+/**
+ * `ISSUE_CHECK_SCRIPT_PATH`のscriptの結果から判定を取り出す。
+ * 形が違うときはnullを返す。呼び出し側は、nullを`unavailable`として扱い、承認を通さない。
+ */
+export function parseIssueCheckVerdict(
+  value: unknown,
+): IssueCheckVerdict | null {
+  if (!isRecord(value)) return null;
+  return isOneOf(value.verdict, ISSUE_CHECK_VERDICTS) ? value.verdict : null;
+}
+
+/**
+ * Issueの確認の判定から、承認を断る理由を返す。承認してよいときはnullを返す。
+ * 承認者が見た取り込み時点の内容と、実装のClaudeが受け取る内容を一致させるため、
+ * 比べられなかったときも断る(安全側)。
+ * 新しい内容を使うには、却下の理由に書く。
+ * 承認待ちの作業項目はIssueごとに1つしか持てず、トリガーラベルを付け直しても取り込み直せないためである。
+ */
+export function issueCheckRefusal(
+  verdict: IssueCheckVerdict,
+  approvalRequestId: number,
+): string | null {
+  switch (verdict) {
+    case "match":
+    case "not_applicable":
+      return null;
+    case "changed":
+      return [
+        `approval_decide: the issue title or body changed after intake, so approval request ${String(approvalRequestId)} was not approved.`,
+        "Claude implements the content captured at intake, which the Console shows.",
+        "To approve it, restore the issue to that content and approve again.",
+        "To apply the new content, reject the request and write the changes in the reason; the requirements are regenerated with that feedback.",
+      ].join(" ");
+    case "unavailable":
+      return `approval_decide: the issue could not be compared with the intake content, so approval request ${String(approvalRequestId)} was not approved. Wait a moment and try again.`;
+  }
 }
