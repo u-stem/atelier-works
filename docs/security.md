@@ -492,6 +492,36 @@ install scriptは、workerの権限のまま、ネットワークにも出られ
 廃止した旧Consoleのappは、人が`mise run push:prune`を実行するまでWindmillに残る。
 残ったappは更新されず、閲覧のURLはCaddyが新しいConsoleへ302で飛ばす。
 
+## 依存の脆弱性
+
+ルートの`bun audit`の指摘のうち、修正版が無いものを受け入れる。
+`overrides`で解消できるものは[コーディング規約](coding-guidelines.md#依存の脆弱性)の手順で固定する。
+
+ルートの依存はすべて開発用で、文書の検査(markdownlint-cli2、textlint)、型検査、整形に使う。
+本番のコードからは読まれない。
+ただし、このリポジトリを対象に`check_commands_by_repo`か`allowed_check_commands`を設定すると、検査がworkerのコンテナの中で走る。
+そのとき`bun install`で入る依存は、workerのコンテナの中で動く。
+設定の詳細は[実装フローの仕様](internals/implement.md)と[PRワークフローの仕様](internals/pr-workflow.md)にある。
+
+### 受け入れている指摘
+
+| パッケージ | 重大度 | 経路 | 受け入れる理由 |
+| --- | --- | --- | --- |
+| `braces` | high | markdownlint-cli2 > globby > fast-glob > micromatch | `scripts/lint-docs.ts`はファイル名をglobとしてmarkdownlint-cli2に渡す。`{`を含む名前をコミットできる者は、深くネストしたパターンに到達しうる。影響は文書検査の停止だけで、非0で終了して失敗する側に倒れる |
+| `sprintf-js` | moderate | prh > js-yaml@3.15.2 > argparse@1.0.10 > sprintf-js | js-yaml@3でargparseを読むのはCLIの`bin/js-yaml.js`だけで、`lib/`からは読まれない。prhの実行時にsprintf-jsは読み込まれない |
+
+markdown-itはargparse@3を、rc-config-loaderのjs-yaml@4はargparse@2を使い、どちらもsprintf-jsに依存しない。
+
+### 修正版が出たときの確認
+
+`bun audit`は定期には走らない。
+依存を更新するPRの前と、指摘の報告を受けたときに、人かClaudeが次の順で確かめる。
+
+1. ルートで`bun audit`を実行する。
+2. 受け入れている指摘に修正版が出ていれば、`bun update`か`overrides`で解消し、上の表から外す。
+3. `overrides`で固定しているパッケージの親が修正版を取り込んでいれば、`overrides`を外す。
+4. `mise run lint:docs`が通ることを確かめる。
+
 ## 自己更新の打ち切り
 
 `self_update`のジョブには、全体の上限がある。
