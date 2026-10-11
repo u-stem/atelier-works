@@ -69,6 +69,115 @@ export function dailyTotals(rows: readonly AgentCostDailyRow[]): DailyTotal[] {
     .map(([day, total]) => ({ day, ...total }));
 }
 
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/**
+ * 期間の前後に、範囲を広げて並べる日数の上限。
+ * 取得した行の日付に上限が無いので、遠い日付の行1件で並べる日数が際限なく増えるのを防ぐ。
+ */
+const MAX_EXTENSION_DAYS = 3;
+
+/** `YYYY-MM-DD`(UTC)を、その日の0時の時刻(ms)にする。日付として読めない値は`null`。 */
+function dayStartMs(day: string): number | null {
+  const time = Date.parse(`${day}T00:00:00.000Z`);
+  return Number.isNaN(time) ? null : time;
+}
+
+/**
+ * 実行の無い日を値0で補い、期間の全日を古い日から新しい日の順に並べる。
+ * 期間は`now`の日(UTC)を最後とする`days`日で、棒の間隔を日数に比例させるために使う。
+ * 期間の前後`MAX_EXTENSION_DAYS`日以内の日は、範囲を広げて含める。端末の時計とbackendの時刻が少しずれても、行を捨てないためである。
+ * それより遠い日は並べない。並べる日数は、`days`に`MAX_EXTENSION_DAYS`の2倍を足した値までに収まる。
+ * 日付として読めない日は、並べる位置が決まらないので除く。
+ * `truncated`が真のとき、取得した最も古い日とそれより前を並べない。
+ * 行数の上限で古い日が切れているので、その前を0で補うと、実際にはあった実行を無いものとして描く。
+ * 最も古い日も、段階とモデルの行が途中で切れて、合計が実際より小さい可能性があるためである。
+ */
+export function fillDailyTotals(
+  totals: readonly DailyTotal[],
+  days: AnalyticsPeriodDays,
+  now: Date,
+  truncated = false,
+): DailyTotal[] {
+  const today = Math.floor(now.getTime() / MS_PER_DAY) * MS_PER_DAY;
+  const windowStart = today - (days - 1) * MS_PER_DAY;
+  const earliest = windowStart - MAX_EXTENSION_DAYS * MS_PER_DAY;
+  const latest = today + MAX_EXTENSION_DAYS * MS_PER_DAY;
+  const byTime = new Map<number, DailyTotal>();
+  for (const total of totals) {
+    const time = dayStartMs(total.day);
+    if (time !== null && time >= earliest && time <= latest) {
+      byTime.set(time, total);
+    }
+  }
+  const fetched = [...byTime.keys()];
+  const times = [windowStart, today, ...fetched];
+  const last = Math.max(...times);
+  let first = Math.min(...times);
+  if (truncated && fetched.length > 0) {
+    const oldest = Math.min(...fetched);
+    byTime.delete(oldest);
+    // 取得した日が最終日の1日だけのときは、始まりが終わりを越えて系列が空になる。
+    // 切れた最古の日しか無く、描ける日が無いので、空のままでよい。
+    first = oldest + MS_PER_DAY;
+  }
+  const filled: DailyTotal[] = [];
+  for (let time = first; time <= last; time += MS_PER_DAY) {
+    filled.push(
+      byTime.get(time) ?? {
+        day: new Date(time).toISOString().slice(0, 10),
+        costUsd: 0,
+        runCount: 0,
+      },
+    );
+  }
+  return filled;
+}
+
+/** 棒グラフ1本分のデータ。 */
+export type ChartDatum = {
+  readonly key: string;
+  readonly label: string;
+  readonly value: number;
+};
+
+export type CostChartSeries = {
+  readonly costData: ChartDatum[];
+  readonly countData: ChartDatum[];
+};
+
+/**
+ * 日別コストと日別実行件数のグラフに渡す系列。
+ * 実行の無い日を補った日ごとの合計を使い、行数が`limit`に届いたときは古い日を切る。
+ * 行が1件も無いときは、期間を0で埋めずに空にする。空の表示は画面が決める。
+ */
+export function chartSeries(
+  rows: readonly AgentCostDailyRow[],
+  days: AnalyticsPeriodDays,
+  now: Date,
+  limit: number,
+): CostChartSeries {
+  if (rows.length === 0) {
+    return { costData: [], countData: [] };
+  }
+  const filled = fillDailyTotals(
+    dailyTotals(rows),
+    days,
+    now,
+    hitsRowLimit(rows.length, limit),
+  );
+  const series = (pick: (total: DailyTotal) => number): ChartDatum[] =>
+    filled.map((total) => ({
+      key: total.day,
+      label: formatMonthDay(total.day),
+      value: pick(total),
+    }));
+  return {
+    costData: series((total) => total.costUsd),
+    countData: series((total) => total.runCount),
+  };
+}
+
 /**
  * 1回目の判断のうち承認の割合(百分率)。
  * 承認か却下の判断が1件も無ければ、割り切れないので`null`を返す。

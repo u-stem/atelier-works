@@ -1,4 +1,12 @@
-import { labelStride, layoutBars } from "../lib/barChart.ts";
+import {
+  isLabeledIndex,
+  labelStride,
+  layoutBars,
+  placeAxisLabel,
+  resolvePlotWidth,
+} from "../lib/barChart.ts";
+import { cn } from "../lib/cn.ts";
+import { useElementWidth } from "../lib/useElementWidth.ts";
 
 export type BarChartDatum = {
   /** 棒を見分けるキー。同じグラフの中で重ならない値にする。 */
@@ -8,7 +16,6 @@ export type BarChartDatum = {
   readonly value: number;
 };
 
-const VIEW_WIDTH = 640;
 const PLOT_HEIGHT = 150;
 const VIEW_HEIGHT = 190;
 const LABEL_BASELINE = 172;
@@ -19,6 +26,8 @@ const VALUE_LABEL_GAP = 4;
  * 値は表にも出すことを前提にして、グラフ自体は読み上げの対象にせず、題だけを伝える。
  * 空の`data`は描かない。空の表示は呼び出し側が決める。
  *
+ * 幅は置かれた領域に合わせて測り、文字の大きさを変えずに棒の間隔だけを広げる。
+ * `sequence`は領域いっぱいに広げる。`category`は項目が少なく、広げると棒が離れすぎるので、幅に上限を置く。
  * 棒の上の値と横軸のラベルは、文字の幅の見積もりが1本分の幅に収まるときだけ出す。
  * 収まらないとき、`axis`が`sequence`(日のような連続する並び)なら横軸のラベルを間引く。
  * `category`(状態のような別々の項目)では、間引くと棒が何か分からなくなるので、
@@ -35,74 +44,86 @@ export function BarChart({
   axis: "sequence" | "category";
   formatValue: (value: number) => string;
 }) {
+  const { ref, width } = useElementWidth();
+  const viewWidth = resolvePlotWidth(width);
   const bars = layoutBars(
     data.map((datum) => datum.value),
-    { width: VIEW_WIDTH, height: PLOT_HEIGHT },
+    { width: viewWidth, height: PLOT_HEIGHT },
   );
   const axisStride = labelStride(
     data.map((datum) => datum.label),
-    VIEW_WIDTH,
+    viewWidth,
   );
   const showAxisLabels = axis === "sequence" || axisStride === 1;
   const stride = axis === "sequence" ? axisStride : 1;
   const showValues =
     labelStride(
       data.map((datum) => formatValue(datum.value)),
-      VIEW_WIDTH,
+      viewWidth,
     ) === 1;
   return (
-    <svg
-      viewBox={`0 0 ${VIEW_WIDTH} ${VIEW_HEIGHT}`}
-      role="img"
-      aria-label={`${title}の棒グラフ。数値は下の表にある`}
-      className="h-auto w-full max-w-3xl"
+    <div
+      ref={ref}
+      className={cn("w-full min-w-0", axis === "category" && "max-w-3xl")}
     >
-      <line
-        x1={0}
-        x2={VIEW_WIDTH}
-        y1={PLOT_HEIGHT}
-        y2={PLOT_HEIGHT}
-        className="stroke-border"
-      />
-      {data.map((datum, index) => {
-        const bar = bars[index];
-        if (bar === undefined) {
-          return null;
-        }
-        const center = bar.x + bar.width / 2;
-        return (
-          <g key={datum.key}>
-            <rect
-              x={bar.x}
-              y={bar.y}
-              width={bar.width}
-              height={bar.height}
-              rx={2}
-              className="fill-primary"
-            />
-            {showValues ? (
-              <text
-                x={center}
-                y={bar.y - VALUE_LABEL_GAP}
-                textAnchor="middle"
-                className="fill-muted-foreground text-[11px] tabular-nums"
-              >
-                {formatValue(datum.value)}
-              </text>
-            ) : null}
-            {showAxisLabels && index % stride === 0 ? (
-              <text
-                x={center}
-                y={LABEL_BASELINE}
-                textAnchor="middle"
-                className="fill-muted-foreground text-[11px] tabular-nums"
-              >
-                {datum.label}
-              </text>
-            ) : null}
-          </g>
-        );
-      })}
-    </svg>
+      <svg
+        width={viewWidth}
+        height={VIEW_HEIGHT}
+        viewBox={`0 0 ${viewWidth} ${VIEW_HEIGHT}`}
+        role="img"
+        aria-label={`${title}の棒グラフ。数値は下の表にある`}
+        className="block"
+      >
+        <line
+          x1={0}
+          x2={viewWidth}
+          y1={PLOT_HEIGHT}
+          y2={PLOT_HEIGHT}
+          className="stroke-border"
+        />
+        {data.map((datum, index) => {
+          const bar = bars[index];
+          if (bar === undefined) {
+            return null;
+          }
+          const center = bar.x + bar.width / 2;
+          const labelPlace = placeAxisLabel(center, datum.label, viewWidth);
+          return (
+            <g key={datum.key}>
+              {bar.height > 0 ? (
+                <rect
+                  x={bar.x}
+                  y={bar.y}
+                  width={bar.width}
+                  height={bar.height}
+                  rx={2}
+                  className="fill-primary"
+                />
+              ) : null}
+              {showValues ? (
+                <text
+                  x={center}
+                  y={bar.y - VALUE_LABEL_GAP}
+                  textAnchor="middle"
+                  className="fill-muted-foreground text-[11px] tabular-nums"
+                >
+                  {formatValue(datum.value)}
+                </text>
+              ) : null}
+              {showAxisLabels && isLabeledIndex(index, data.length, stride) ? (
+                <text
+                  x={labelPlace.x}
+                  y={LABEL_BASELINE}
+                  textAnchor={labelPlace.anchor}
+                  className="fill-muted-foreground text-[11px] tabular-nums"
+                >
+                  {datum.label}
+                </text>
+              ) : null}
+            </g>
+          );
+        })}
+      </svg>
+    </div>
   );
 }
