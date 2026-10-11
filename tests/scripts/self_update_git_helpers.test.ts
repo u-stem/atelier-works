@@ -8,11 +8,17 @@ import {
   assertWmillYamlExists,
   diffPaths,
   isAncestorSha,
+  isCommitInClone,
   listAllPaths,
   readSelfCloneBranch,
   readSelfCloneHeadSha,
 } from "../../f/factory/self_update.ts";
-import { createFakeCommandRunner, fail, ok } from "../lib/testSupport.ts";
+import {
+  createFakeCommandRunner,
+  fail,
+  ok,
+  timeout,
+} from "../lib/testSupport.ts";
 
 describe("assertWmillYamlExists", () => {
   test("does not throw when wmill.yaml exists at the given dir", async () => {
@@ -268,5 +274,40 @@ describe("isAncestorSha", () => {
   test("throws on an invalid sha", async () => {
     const { run } = createFakeCommandRunner([ok("")]);
     await expect(isAncestorSha(run, DIR, "not-a-sha", B)).rejects.toThrow();
+  });
+});
+
+describe("isCommitInClone", () => {
+  const DIR = "/workspaces/factory/atelier-works";
+  const A = "0000000000000000000000000000000000000a";
+
+  test("returns true when cat-file exits 0", async () => {
+    const { run } = createFakeCommandRunner([ok("")]);
+    expect(await isCommitInClone(run, DIR, A)).toBe(true);
+  });
+
+  test("returns false when cat-file exits non-zero", async () => {
+    const { run } = createFakeCommandRunner([fail("bad object", 128)]);
+    expect(await isCommitInClone(run, DIR, A)).toBe(false);
+  });
+
+  test("throws when cat-file times out", async () => {
+    const { run } = createFakeCommandRunner([timeout()]);
+    await expect(isCommitInClone(run, DIR, A)).rejects.toThrow();
+  });
+
+  test("asks for a commit object", async () => {
+    const fake = createFakeCommandRunner([ok("")]);
+    await isCommitInClone(fake.run, DIR, A);
+    expect(fake.calls[0]?.argv.slice(-3)).toEqual([
+      "cat-file",
+      "-e",
+      `${A}^{commit}`,
+    ]);
+  });
+
+  test("throws on an invalid sha", async () => {
+    const { run } = createFakeCommandRunner([ok("")]);
+    await expect(isCommitInClone(run, DIR, "not-a-sha")).rejects.toThrow();
   });
 });

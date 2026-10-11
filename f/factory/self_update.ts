@@ -10,6 +10,10 @@
 // 要対応の通知とDiscordで知らせる(`./lib/host_action.ts`)。
 // ホストが`mise run up`の最後に書く印を毎回読み、反映が済んだ通知は解決する。
 //
+// ジョブ全体の上限(`self_update.script.yaml`の`timeout`)は、`SELF_UPDATE_WORST_CASE_MS`以上にする。
+// 内訳と、打ち切られた回の扱いは`docs/architecture.md`の「自己更新」にある。
+// 上限の無い呼び出しは`withCallTimeout`で区切り、通常は内側の上限で先に終わらせる。
+//
 // `f/factory/deployed_sha`(秘密でないWindmillの変数)はsyncの対象から
 // 完全に外している(`wmill.yaml`の`excludes`のコメントを参照)。
 // `scripts/bootstrap.sh`が空の値で一度だけ作り、以降は下の
@@ -17,6 +21,7 @@
 import wmillDefault, * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "./lib/config.ts";
 import {
+  CONSOLE_WORKER_CHECK_TIMEOUT_MS,
   consoleQueueQuery,
   watchConsoleWorker,
   watchRunsQuery,
@@ -27,11 +32,17 @@ import {
   recordDeployment,
   resolveNoticeIfUnresolved,
 } from "./lib/db.ts";
-import { notifyBestEffort } from "./lib/discord.ts";
+import {
+  DISCORD_RETRY_MAX_WAIT_MS,
+  type FetchLike,
+  notifyBestEffort,
+} from "./lib/discord.ts";
 import {
   HOST_ACTION_NOTICE_KIND,
+  HOST_ACTION_RECONCILE_LIMIT,
   HOST_ACTION_RESOLVER,
-  HOST_APPLIED_SHA_PATH,
+  hostAppliedChecker,
+  readHostAppliedSha,
   reconcileHostActionNotices,
   recordHostAction,
 } from "./lib/host_action.ts";
@@ -47,16 +58,25 @@ import {
   miseTomlNeedsHostAction,
   parseNulSeparatedPaths,
   RAW_APP_RELATIVE_DIR,
+  readDeployedSha,
+  recordSuccessDeployment,
   resolveWmillCliContext,
+  SELF_UPDATE_CALL_TIMEOUT_MS,
+  setDeployedSha,
   truncateOutput,
+  withCallTimeout,
 } from "./lib/self_update_support.ts";
 import { assertSha } from "./lib/types.ts";
 import {
   type CommandResult,
   type CommandRunner,
+  DEFAULT_TIMEOUT_MS,
   ensureFactoryClone,
+  FACTORY_CLONE_UPDATE_GIT_COMMAND_COUNT,
   pathExists,
-  readTextFile,
+  REPO_LOCK_MAX_WAIT_MS,
+  REPO_LOCK_POLL_MS,
+  RUNNER_MAX_STOP_OVERHEAD_MS,
   runCommand,
 } from "./lib/workspace.ts";
 
@@ -218,6 +238,26 @@ export async function isAncestorSha(
 }
 
 /**
+ * self cloneに`sha`のコミットがあるかを返す(`git cat-file -e <sha>^{commit}`)。
+ * 無ければ`false`。時間切れのときは確かめられないので例外を投げる。
+ */
+export async function isCommitInClone(
+  run: CommandRunner,
+  dir: string,
+  sha: string,
+): Promise<boolean> {
+  assertSha(sha);
+  const result = await run(
+    [...GIT_BASE_ARGV, "cat-file", "-e", `${sha}^{commit}`],
+    { cwd: dir, env: selfCloneGitEnv() },
+  );
+  if (result.timedOut) {
+    throw new Error(`git cat-file timed out in ${dir}`);
+  }
+  return result.exitCode === 0;
+}
+
+/**
  * `<dir>/wmill.yaml`が無ければ例外を投げる。
  * 実際のworkerで、syncのルートでないディレクトリからCLIを実行し、
  * `wmill sync push`が"No wmill.yaml found."と表示しつつ"0 changes"で
@@ -340,6 +380,81 @@ async function runWmillCli(
 }
 
 // ---------------------------------------------------------------------------
+// ジョブ全体の上限の見積もり
+// ---------------------------------------------------------------------------
+
+/**
+ * 1回の実行で走るgitの最大回数。
+ * cloneの更新(`FACTORY_CLONE_UPDATE_GIT_COMMAND_COUNT`回)、HEADとブランチの確認で2回、
+ * 変更パスの列挙で1回、`mise.toml`の比較(`git show`)で最大2回。
+ * `git show`は時間切れでも失敗として続くので、最大回数まで走りうる。
+ * ホストの印の確認は、コミットの有無で1回、祖先の確認で最大`HOST_ACTION_RECONCILE_LIMIT + 1`回
+ * (通知の解決で上限の数まで、この回の通知の判断で1回)。
+ */
+export const SELF_UPDATE_GIT_COMMAND_COUNT =
+  FACTORY_CLONE_UPDATE_GIT_COMMAND_COUNT +
+  2 +
+  1 +
+  2 +
+  1 +
+  (HOST_ACTION_RECONCILE_LIMIT + 1);
+
+/** 1回の実行で走る`npm ci`、`wmill sync push`、`wmill datatable migrate up`の回数。 */
+export const SELF_UPDATE_CLI_COMMAND_COUNT = 3;
+
+/**
+ * 1回の実行で通りうる、`SELF_UPDATE_CALL_TIMEOUT_MS`で区切った呼び出しの最大回数。通知は含めない。
+ * - config(`getResource`): 1
+ * - 更新: github_token、deployed_sha、deployed_shaの読み取りが失敗したときの存在の確認、wmill_token、
+ *   `setVariable`、`setVariable`が時間切れのときの読み直し、
+ *   `recordDeployment`の成功、`recordDeployment`の失敗: 8
+ *   (成功の記録と失敗の記録は一方しか通らないが、呼び出しの箇所を数えるので両方を数える)
+ * - finally: stateの読み、stateの書き、noticeの挿入、通知先の取得: 4
+ * - ホスト側の作業の通知: 印の読み取り、未解決の通知の一覧、通知の解決(上限の数まで)、
+ *   noticeの挿入、通知先の取得: 4 + `HOST_ACTION_RECONCILE_LIMIT`
+ */
+export const SELF_UPDATE_BOUNDED_CALL_COUNT =
+  13 + 4 + HOST_ACTION_RECONCILE_LIMIT;
+
+/**
+ * finallyの通知1回の上限(ミリ秒)。
+ * `notify`は、HTTPの送信、429の待ち(最大`DISCORD_RETRY_MAX_WAIT_MS`)、再送の順に進み、
+ * 送信には上限が無い。そこで送信ごとに`SELF_UPDATE_CALL_TIMEOUT_MS`で中断し(`boundedFetch`)、
+ * 全体の上限は、待ちと送信2回に、応答の読み取りの余裕1回分を足した値にする。
+ */
+export const SELF_UPDATE_NOTIFY_TIMEOUT_MS =
+  DISCORD_RETRY_MAX_WAIT_MS + 3 * SELF_UPDATE_CALL_TIMEOUT_MS;
+
+/** 送信を`SELF_UPDATE_CALL_TIMEOUT_MS`で中断する`fetch`。 */
+const boundedFetch: FetchLike = (url, init) =>
+  fetch(url, {
+    ...init,
+    signal: AbortSignal.timeout(SELF_UPDATE_CALL_TIMEOUT_MS),
+  });
+
+/**
+ * 全部が最悪のときの、1回の実行の長さ(ミリ秒)。`self_update.script.yaml`の`timeout`は、これ以上にする。
+ * ジョブの`timeout`はWindmillが外から打ち切る最後の砦で、子プロセスの実行中に当たると、
+ * 子が上限なしで残りうる(`runCommand`は子を別のセッションで起動する)。
+ * - cloneのロック待ち(最大の待ちと、確かめる間隔1回)
+ * - コマンド: 上限に、停止の上乗せ(`RUNNER_MAX_STOP_OVERHEAD_MS`)を足した時間の、回数分
+ * - 区切った呼び出し: 上限の回数分
+ * - 通知: ホスト側の作業の通知とfinallyの通知の2回
+ * - Console用workerの確認
+ * 区切りの時間切れの後に、中断されずに残る背景の処理は数えない。
+ */
+export const SELF_UPDATE_WORST_CASE_MS =
+  REPO_LOCK_MAX_WAIT_MS +
+  REPO_LOCK_POLL_MS +
+  SELF_UPDATE_GIT_COMMAND_COUNT *
+    (DEFAULT_TIMEOUT_MS + RUNNER_MAX_STOP_OVERHEAD_MS) +
+  SELF_UPDATE_CLI_COMMAND_COUNT *
+    (WMILL_CLI_TIMEOUT_MS + RUNNER_MAX_STOP_OVERHEAD_MS) +
+  SELF_UPDATE_BOUNDED_CALL_COUNT * SELF_UPDATE_CALL_TIMEOUT_MS +
+  2 * SELF_UPDATE_NOTIFY_TIMEOUT_MS +
+  CONSOLE_WORKER_CHECK_TIMEOUT_MS;
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -362,7 +477,9 @@ type FactoryConfig = Awaited<ReturnType<typeof loadConfig>>;
 export async function main(): Promise<SelfUpdateResult> {
   const log = logger("self_update");
   const config = await loadConfig(() =>
-    wmill.getResource("f/factory/factory_config"),
+    withCallTimeout("getResource factory_config", () =>
+      wmill.getResource("f/factory/factory_config"),
+    ),
   );
   try {
     return await updateSelf(log, config);
@@ -378,15 +495,22 @@ export async function main(): Promise<SelfUpdateResult> {
           watchRunsQuery(wmillDefault.getWorkspace()),
         ),
       now: () => Date.now(),
-      addNotice: (record) => addNoticeUnlessUnresolved(record),
+      addNotice: (record) =>
+        withCallTimeout("addNotice", () => addNoticeUnlessUnresolved(record)),
       notify: async (event) => {
-        const webhookUrl = await wmill.getVariable(
-          "f/factory/discord_webhook_url",
+        const webhookUrl = await withCallTimeout("getVariable webhook", () =>
+          wmill.getVariable("f/factory/discord_webhook_url"),
         );
-        await notifyBestEffort(webhookUrl, event, log);
+        await withCallTimeout(
+          "notify",
+          () =>
+            notifyBestEffort(webhookUrl, event, log, { fetch: boundedFetch }),
+          SELF_UPDATE_NOTIFY_TIMEOUT_MS,
+        );
       },
-      getState: () => wmill.getState(),
-      setState: (state) => wmill.setState(state),
+      getState: () => withCallTimeout("getState", () => wmill.getState()),
+      setState: (state) =>
+        withCallTimeout("setState", () => wmill.setState(state)),
       instanceName: config.instance_name,
       log,
     });
@@ -397,7 +521,9 @@ async function updateSelf(
   log: Logger,
   config: FactoryConfig,
 ): Promise<SelfUpdateResult> {
-  const ghToken = await wmill.getVariable("f/factory/github_token");
+  const ghToken = await withCallTimeout("getVariable github_token", () =>
+    wmill.getVariable("f/factory/github_token"),
+  );
 
   const factoryClone = await ensureFactoryClone({
     run: runCommand,
@@ -414,27 +540,42 @@ async function updateSelf(
   const currentSha = await readSelfCloneHeadSha(runCommand, factoryClone.dir);
 
   // 反映の要否によらず毎回、ホストで反映が済んだ通知を解決する。
-  await reconcileHostActionNotices({
-    readAppliedSha: () => readTextFile(HOST_APPLIED_SHA_PATH),
-    listUnresolved: () => listUnresolvedNoticesByKind(HOST_ACTION_NOTICE_KIND),
+  // 印の読み取りとself cloneでの確認は、この回の通知の判断(`recordHostAction`)でも使い回す。
+  const hostApplied = hostAppliedChecker({
+    readAppliedSha: () =>
+      withCallTimeout("read host applied sha", () => readHostAppliedSha()),
+    commitExists: (sha) => isCommitInClone(runCommand, factoryClone.dir, sha),
     isAncestor: (ancestor, descendant) =>
       isAncestorSha(runCommand, factoryClone.dir, ancestor, descendant),
+    log,
+  });
+  await reconcileHostActionNotices({
+    listUnresolved: () =>
+      withCallTimeout("list host action notices", () =>
+        listUnresolvedNoticesByKind(HOST_ACTION_NOTICE_KIND),
+      ),
+    isApplied: hostApplied,
     resolve: (id) =>
-      resolveNoticeIfUnresolved(
-        id,
-        HOST_ACTION_NOTICE_KIND,
-        HOST_ACTION_RESOLVER,
-        [],
+      withCallTimeout("resolve host action notice", () =>
+        resolveNoticeIfUnresolved(
+          id,
+          HOST_ACTION_NOTICE_KIND,
+          HOST_ACTION_RESOLVER,
+          [],
+        ),
       ),
     log,
   });
 
-  let deployedSha = "";
-  try {
-    deployedSha = await wmill.getVariable("f/factory/deployed_sha");
-  } catch {
-    deployedSha = ""; // 変数がまだ無いときは、未デプロイとして扱う。
-  }
+  // 変数が無いと確かめられたときだけ未デプロイ(空)として扱う(`readDeployedSha`を参照)。
+  const deployedSha = await readDeployedSha(
+    () => wmill.getVariable("f/factory/deployed_sha"),
+    () =>
+      wmill.VariableService.existsVariable({
+        workspace: wmillDefault.getWorkspace(),
+        path: "f/factory/deployed_sha",
+      }),
+  );
 
   const decision = decideUpdate(currentSha, deployedSha);
   if (decision.outcome === "unchanged") {
@@ -452,7 +593,9 @@ async function updateSelf(
   let secrets: string[] = [];
 
   try {
-    const wmillToken = await wmill.getVariable("f/factory/wmill_token");
+    const wmillToken = await withCallTimeout("getVariable wmill_token", () =>
+      wmill.getVariable("f/factory/wmill_token"),
+    );
     secrets = [wmillToken];
     const context = resolveWmillCliContext({
       BASE_INTERNAL_URL: process.env.BASE_INTERNAL_URL,
@@ -507,11 +650,18 @@ async function updateSelf(
       secrets,
     );
 
-    await wmill.setVariable(
-      "f/factory/deployed_sha",
+    await setDeployedSha(
+      {
+        set: () =>
+          wmill.setVariable(
+            "f/factory/deployed_sha",
+            currentSha,
+            false,
+            "Software Factory自身のうち、直近でWindmillに反映済みのコミットです。自己更新処理が自動的に更新します。",
+          ),
+        get: () => wmill.getVariable("f/factory/deployed_sha"),
+      },
       currentSha,
-      false,
-      "Software Factory自身のうち、直近でWindmillに反映済みのコミットです。自己更新処理が自動的に更新します。",
     );
 
     const changedPaths = await resolveChangedPaths(
@@ -531,13 +681,23 @@ async function updateSelf(
     const classification = classifyChangedPaths(changedPaths, miseChanged);
 
     const shaFrom = deployedSha.length > 0 ? deployedSha : null;
-    await recordDeployment({
-      sha_from: shaFrom,
-      sha_to: currentSha,
-      changed_paths: changedPaths,
-      result: "success",
-      needs_host_action: classification.needs_host_action,
-    });
+    // 記録の時間切れは、反映が済んでいるので失敗にせず、警告だけ残す。
+    await recordSuccessDeployment(
+      () =>
+        recordDeployment({
+          sha_from: shaFrom,
+          sha_to: currentSha,
+          changed_paths: changedPaths,
+          result: "success",
+          needs_host_action: classification.needs_host_action,
+        }),
+      (timeout) => {
+        log.warn("recording the successful deployment timed out", {
+          error: timeout.message,
+          sha_to: currentSha,
+        });
+      },
+    );
 
     if (classification.needs_host_action) {
       // `infra/`と`mise.toml`の変更はworkerの中からは反映できず、人が
@@ -548,13 +708,25 @@ async function updateSelf(
       });
       await recordHostAction(
         {
-          addNotice: (record) => addNoticeUnlessUnresolved(record),
+          addNotice: (record) =>
+            withCallTimeout("addNotice host action", () =>
+              addNoticeUnlessUnresolved(record),
+            ),
           notify: async (event) => {
-            const webhookUrl = await wmill.getVariable(
-              "f/factory/discord_webhook_url",
+            const webhookUrl = await withCallTimeout(
+              "getVariable webhook host action",
+              () => wmill.getVariable("f/factory/discord_webhook_url"),
             );
-            return notifyBestEffort(webhookUrl, event, log);
+            return await withCallTimeout(
+              "notify",
+              () =>
+                notifyBestEffort(webhookUrl, event, log, {
+                  fetch: boundedFetch,
+                }),
+              SELF_UPDATE_NOTIFY_TIMEOUT_MS,
+            );
           },
+          isApplied: hostApplied,
           instanceName: config.instance_name,
           log,
         },
@@ -576,13 +748,15 @@ async function updateSelf(
     );
     log.error("self_update failed", { error: message });
     try {
-      await recordDeployment({
-        sha_from: deployedSha.length > 0 ? deployedSha : null,
-        sha_to: currentSha,
-        changed_paths: [],
-        result: "failed",
-        needs_host_action: false,
-      });
+      await withCallTimeout("recordDeployment failed", () =>
+        recordDeployment({
+          sha_from: deployedSha.length > 0 ? deployedSha : null,
+          sha_to: currentSha,
+          changed_paths: [],
+          result: "failed",
+          needs_host_action: false,
+        }),
+      );
     } catch (recordErr) {
       log.error("failed to record deployment", {
         error: maskSecrets(

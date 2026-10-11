@@ -29,6 +29,7 @@ run = """
 set -e
 scripts/check-docker-version.sh
 docker compose -f infra/docker-compose.yml up -d --build
+docker compose -f infra/docker-compose.yml restart caddy
 scripts/record-host-applied.sh
 """
 
@@ -70,6 +71,7 @@ scripts/check-docker-version.sh
 docker compose -f infra/docker-compose.yml pull
 docker compose -f infra/docker-compose.yml build windmill_worker console_fetcher
 docker compose -f infra/docker-compose.yml up -d
+docker compose -f infra/docker-compose.yml restart caddy
 npm ci --prefix f/factory/factory_console__raw_app --no-audit --no-fund --ignore-scripts
 NPM_CONFIG_IGNORE_SCRIPTS=true wmill sync push --yes --keep-deleted
 wmill datatable migrate up

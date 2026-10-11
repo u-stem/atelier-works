@@ -8,8 +8,10 @@
 #
 # 印を書けなくても、起動は成功しているので終了コード0で終わる。
 # そのときは警告を出す。通知は自動では解決されないので、人がConsoleで解決する。
+# `-e`は付けない。書けなくても起動は済んでいるので、各失敗を警告にして終了コード0で終える。
 set -uo pipefail
 
+# 自己更新が読むパス(`HOST_APPLIED_SHA_PATH`、`f/factory/lib/host_action.ts`)と同じ値にする。
 MARKER_PATH="/var/lib/factory/host_applied_sha"
 
 if ! sha="$(git rev-parse HEAD 2>/dev/null)" || [[ ! "${sha}" =~ ^[0-9a-f]{40}$ ]]; then

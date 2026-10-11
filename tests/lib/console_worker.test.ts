@@ -454,6 +454,7 @@ function harness(options: {
   readonly addNoticeThrows?: boolean;
   readonly notifyThrows?: boolean;
   readonly getStateThrows?: boolean;
+  readonly setStateThrows?: boolean;
   readonly timeoutMs?: number;
 }): Harness {
   const notices: NoticeRecord[] = [];
@@ -486,6 +487,7 @@ function harness(options: {
           : { console_worker_unknown_count: options.storedCount };
       },
       setState: async (state) => {
+        if (options.setStateThrows === true) throw new Error("state down");
         states.push(state);
       },
       instanceName: "local",
@@ -678,6 +680,30 @@ describe("watchConsoleWorker", () => {
     expect(h.notices).toEqual([CONSOLE_WORKER_CHECK_FAILED_NOTICE]);
   });
 
+  test("raises the check failed notice on the sixth unknown even when the state cannot be written", async () => {
+    const h = harness({
+      response: FAILS,
+      storedCount: 5,
+      setStateThrows: true,
+    });
+    await watchConsoleWorker(h.deps);
+    expect(h.notices).toEqual([CONSOLE_WORKER_CHECK_FAILED_NOTICE]);
+  });
+
+  test("warns when the state cannot be written", async () => {
+    const h = harness({
+      response: FAILS,
+      storedCount: 5,
+      setStateThrows: true,
+    });
+    await watchConsoleWorker(h.deps);
+    expect(
+      h.logLines.some((line) =>
+        line.includes("could not write the console worker check state"),
+      ),
+    ).toBe(true);
+  });
+
   test("sends Discord when the check failed notice is newly inserted", async () => {
     const h = harness({ response: FAILS, storedCount: 5 });
     await watchConsoleWorker(h.deps);
@@ -721,10 +747,26 @@ describe("watchConsoleWorker", () => {
     expect(h.notices).toEqual([CONSOLE_WORKER_MISSING_NOTICE]);
   });
 
-  test("treats an unreadable state as a count of zero", async () => {
+  test("does not write the state when it cannot be read and the check fails", async () => {
     const h = harness({ response: FAILS, getStateThrows: true });
     await watchConsoleWorker(h.deps);
-    expect(h.states).toEqual([{ console_worker_unknown_count: 1 }]);
+    expect(h.states).toEqual([]);
+  });
+
+  test("does not write the state when it cannot be read and the queue is stalled", async () => {
+    const h = harness({ response: ABSENT, getStateThrows: true });
+    await watchConsoleWorker(h.deps);
+    expect(h.states).toEqual([]);
+  });
+
+  test("warns when the state cannot be read", async () => {
+    const h = harness({ response: FAILS, getStateThrows: true });
+    await watchConsoleWorker(h.deps);
+    expect(
+      h.logLines.some((line) =>
+        line.includes("could not read the console worker check state"),
+      ),
+    ).toBe(true);
   });
 
   test("keeps the other keys of the stored state", async () => {

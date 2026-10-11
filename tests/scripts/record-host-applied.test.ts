@@ -9,6 +9,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { HOST_APPLIED_SHA_PATH } from "../../f/factory/lib/host_action.ts";
 
 const SCRIPT = resolve(import.meta.dir, "../../scripts/record-host-applied.sh");
 const BASH = Bun.which("bash") ?? "bash";
@@ -75,7 +76,7 @@ describe("record-host-applied.sh", () => {
 
   test("writes the sha into the shared state volume", () => {
     const { dockerArgs } = run({ head: SHA, dockerExit: 0 });
-    expect(dockerArgs.join(" ")).toContain("/var/lib/factory/host_applied_sha");
+    expect(dockerArgs).toContain(HOST_APPLIED_SHA_PATH);
   });
 
   test("executes in the default worker without a tty", () => {

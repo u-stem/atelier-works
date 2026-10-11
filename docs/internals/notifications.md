@@ -61,7 +61,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | 処理 | 送るとき |
 | --- | --- |
 | `on_error_flow` | フロー(pipeline、implement、pr_review、pr_fix、manual_intakeなど)が失敗した |
-| `on_error_schedule` | スケジュールのジョブが失敗した。GitHubのPATの失効は、`poll_issues`の冒頭の確認が失敗してここに来る。直近3回の実行(飛ばされた回と取り消された回を除く)が続けて失敗すると、要対応の通知`schedule_failing`も残す。ジョブ履歴を読めないときは、`schedule_failing_check_failed`を残す |
+| `on_error_schedule` | スケジュールのジョブが失敗した。GitHubのPATの失効は、`poll_issues`の冒頭の確認が失敗してここに来る。直近3回の実行(飛ばされた回と人が取り消した回を除き、ジョブの上限で打ち切られた回は、`canceled_by`が`timeout`の取り消しとみなして失敗に数える。この値は実機で未確認である)が続けて失敗すると、要対応の通知`schedule_failing`も残す。ジョブ履歴を読めないときは、`schedule_failing_check_failed`を残す |
 | `poll_issues`の点検 | 閉じたIssue・PRや孤児のジョブを見つけ、作業項目を取り消しか失敗にした |
 | `requirements_apply` | 承認の反映の処理が例外で終わった。却下の後の作り直しを起動できなかったときも含む |
 | `issue_proposal_apply` | Issue化の提案の反映が失敗した |
@@ -293,16 +293,30 @@ stateは、このキーだけを書き換え、消すときもこのキーだけ
 パスは10件まで並べ、残りは件数で示す。
 Discordには、noticeを新しく残したときだけ送る。noticeの記録とDiscordの送信が失敗しても、反映は成功のまま終わり、警告のログだけを残す。
 解決は、`self_update`が反映の要否によらず毎回、反映の前に行う(`resolved_by`は`self_update`)。
-判定の入力は、`mise run up`と`mise run deploy`が起動の最後に書く、ホストのcheckoutのHEAD(`/var/lib/factory/host_applied_sha`)である。
+判定の入力は、ホストのcheckoutのHEADである。
+`mise run up`と`mise run deploy`が、Caddyの再起動の後に、`/var/lib/factory/host_applied_sha`へ書く。
 未解決のnoticeの版が、このHEADと同じか、self cloneの履歴でHEADの祖先であれば、解決する(`git merge-base --is-ancestor`)。
 ホストがその版以降を含んで起動し直されたことを示すためである。
+印は、symlinkでない通常のファイルで、128バイト以下のときだけ読む。読むのは先頭の64バイトである。
+self cloneにあるかは、実行ごとに1回だけ`git cat-file -e`で確かめる。無ければ、全件を1回の警告で飛ばす。
+印のファイルが無いだけのときは、警告を出さない。
+
+1回の実行で調べる未解決のnoticeは、古いものから5件までである。
+通知ごとにgitを1回呼ぶので、数を固定して最悪の長さを抑える。
+残りは、解決が進んだ次の回に調べる。
+
+反映を記録するとき、印がその版を含んでいれば、noticeとDiscordのどちらも出さない。
+運用者が先に`mise run deploy`などで反映した場合に、操作の要らない通知を送らないためである。
+本文に並べるパスの制御文字は`?`に置き換える。gitのファイル名は改行などを含められるためである。
+
 次のときは解決しない。人が、ホストの反映が済んだことを確かめて、Consoleで解決してよい。
 
-- 値のファイルが無い、版として読めない
-- 値がself cloneに無い版で、祖先かどうかを確かめられない
-- noticeの版が、HEADより新しい
+- 印のファイルが無い、通常のファイルでない、大きすぎる、版として読めない
+- 印の版がself cloneに無い、または祖先かどうかを確かめられない
+- noticeの版が、印の版より新しい
 
-値はworkerのジョブが書ける場所にあるので、ホストの反映の証明にはならない。通知を静かにする以外の力は持たず、書き換えられても反映の安全には影響しない。
+印はworkerのジョブが書ける場所にあるので、ホストの反映の証明にはならない。
+偽の印で黙らせられるのは、この通知だけである。影響は、ホストでの反映の遅れに気づけなくなるところまでで、突くにはdefaultのworkerでのコード実行が要る([セキュリティ](../security.md)の「ホストの反映の印」)。
 
 Issueの取得に成功すると、`poll_issues`は未解決の`labeler_denied`を解決済みにする。
 対象は、本文が`<owner>/<repo>#<番号>:`と空白1つで始まるすべてのnoticeで、`resolved_by`は`poll_issues`になる。

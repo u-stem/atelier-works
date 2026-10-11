@@ -2,6 +2,7 @@
 // 各`main()`はこれらを呼び、その結果に従ってI/Oだけを行う。
 
 import { normalizeRepoUrl } from "./config.ts";
+import { ACTIONABLE_WORK_ITEM_STATUSES } from "./console_support.ts";
 import { type GhClient, getLabelerLogin } from "./github.ts";
 import { isFlowJobId } from "./implement_launch_support.ts";
 import { type Logger, maskSecrets } from "./log.ts";
@@ -10,7 +11,9 @@ import {
   hasLabel,
   isBoolean,
   isNumber,
+  isOneOf,
   isRecord,
+  type LabelerAssociation,
   type LatestDeployment,
   type NoticeRecord,
   type WorkItem,
@@ -870,4 +873,193 @@ export function decideClosureOnly(
   return github.open
     ? { action: "none" }
     : { action: "cancel", reason: "pr_closed" };
+}
+
+// ---------------------------------------------------------------------------
+// 要対応の終端の作業項目の照合
+// ---------------------------------------------------------------------------
+
+/** GitHubの1つのIssueまたはPRと、それに紐づく要対応の作業項目。 */
+export type ActionableTarget<T> = {
+  /** `<owner>/<repo>#<番号>`。IssueとPRは同じ番号の空間にある。 */
+  readonly key: string;
+  /** 束ねた作業項目のIDのうち最小のもの。回す順番とカーソルの基準になる。 */
+  readonly id: number;
+  readonly owner: string;
+  readonly repo: string;
+  /** IssueまたはPRの番号。 */
+  readonly number: number;
+  readonly items: readonly [T, ...T[]];
+};
+
+/**
+ * 要対応の作業項目を、GitHubのIssueまたはPRごとに束ねて、`id`の昇順で返す。
+ * 同じPRのレビューと修正の行は、1回の問い合わせで足りるので1つにする。
+ * GitHubのオブジェクトが無い`audit`と、番号の無い行は含めない。
+ */
+export function groupActionableTargets<
+  T extends Pick<
+    WorkItem,
+    "id" | "kind" | "owner" | "repo" | "issue_number" | "pr_number"
+  >,
+>(items: readonly T[]): ActionableTarget<T>[] {
+  const byKey = new Map<
+    string,
+    {
+      id: number;
+      owner: string;
+      repo: string;
+      number: number;
+      items: [T, ...T[]];
+    }
+  >();
+  for (const item of items) {
+    if (item.kind === "audit") continue;
+    const number = item.kind === "issue" ? item.issue_number : item.pr_number;
+    if (number === null) continue;
+    const key = `${item.owner}/${item.repo}#${String(number)}`;
+    const group = byKey.get(key);
+    if (group === undefined) {
+      byKey.set(key, {
+        id: item.id,
+        owner: item.owner,
+        repo: item.repo,
+        number,
+        items: [item],
+      });
+    } else {
+      group.id = Math.min(group.id, item.id);
+      group.items.push(item);
+    }
+  }
+  return [...byKey.entries()]
+    .map(([key, group]) => ({ key, ...group }))
+    .sort((a, b) => a.id - b.id);
+}
+
+/**
+ * `targets`(`id`の昇順)を、`cursor`の次を先頭にした順に並べ直す。
+ * 末尾の後は先頭に戻る。前回の実行が最後に調べた対象の`id`を`cursor`に渡せば、
+ * 打ち切られた対象から続きを調べられる。`cursor`が`null`なら並べ直さない。
+ */
+export function rotateTargets<T extends { readonly id: number }>(
+  targets: readonly T[],
+  cursor: number | null,
+): T[] {
+  if (cursor === null) return [...targets];
+  const after = targets.filter((target) => target.id > cursor);
+  const before = targets.filter((target) => target.id <= cursor);
+  return [...after, ...before];
+}
+
+/**
+ * Windmillのstateに保存した、要対応の照合のカーソルを読む。
+ * 形が違うもの(初回の`null`を含む)は、先頭からやり直すので`null`を返す。
+ */
+export function parseActionableCursor(value: unknown): number | null {
+  if (!isRecord(value)) return null;
+  const cursor = value.cursor;
+  return isNumber(cursor) && Number.isInteger(cursor) && cursor >= 0
+    ? cursor
+    : null;
+}
+
+/** 閉じた対象について、閉じた人の確認に使うIssue(PR)の応答の部分。 */
+export type ClosedTargetInfo = {
+  /** PRがマージされた時刻。マージされていないとき、PRでないときは`null`。 */
+  readonly mergedAt: string | null;
+  /** 閉じた人のログイン名。GitHubが返さなければ`null`。 */
+  readonly closedByLogin: string | null;
+  /** 閉じた人の種別(`User`、`Bot`など)。分からなければ`null`。 */
+  readonly closedByType: string | null;
+  /** 作者のログイン名。分からなければ`null`か空文字列。 */
+  readonly authorLogin: string | null;
+  /** 作者の`author_association`。分からなければ`null`。 */
+  readonly authorAssociation: string | null;
+};
+
+export type CloserDecision =
+  | {
+      readonly allowed: true;
+      readonly basis: "merged" | "other_than_author" | "author";
+    }
+  | {
+      readonly allowed: false;
+      readonly reason:
+        | "no_closer"
+        | "bot_closer"
+        | "author_unknown"
+        | "author_not_allowed";
+    };
+
+function isBotCloser(info: ClosedTargetInfo): boolean {
+  return (
+    info.closedByType === "Bot" ||
+    (info.closedByLogin?.toLowerCase().endsWith("[bot]") ?? false)
+  );
+}
+
+/**
+ * 対象を閉じた人が、要対応の取り消しを許せる人かを、Issue(PR)の1回の応答から次の順に判定する。
+ * 1. PRがマージされていれば許す。マージにもmerge queueへの投入にも、write権限が要るため。
+ * 2. 閉じた人が分からなければ許さない。
+ * 3. Botが閉じたなら許さない。BotやActionsは、第三者のイベントを受けて閉じることがあるため。
+ * 4. 作者が分からなければ許さない。
+ * 5. 作者以外の人が閉じたなら許す。他人のIssueやPRを閉じるには、triage以上の権限が要るため。
+ * 6. 作者が閉じたなら、作者の`author_association`が許可する関係に含まれるときだけ許す。
+ * ログイン名は大文字と小文字を区別せずに比べる。
+ * 第三者が自分のIssueやPRを閉じて、安全策で止まった作業項目を要対応の一覧から消せないようにするため。
+ */
+export function decideCloser(
+  info: ClosedTargetInfo,
+  allowed: readonly LabelerAssociation[],
+): CloserDecision {
+  if (info.mergedAt !== null) return { allowed: true, basis: "merged" };
+  if (info.closedByLogin === null) {
+    return { allowed: false, reason: "no_closer" };
+  }
+  if (isBotCloser(info)) return { allowed: false, reason: "bot_closer" };
+  if (info.authorLogin === null || info.authorLogin === "") {
+    return { allowed: false, reason: "author_unknown" };
+  }
+  if (info.closedByLogin.toLowerCase() !== info.authorLogin.toLowerCase()) {
+    return { allowed: true, basis: "other_than_author" };
+  }
+  return info.authorAssociation !== null &&
+    isOneOf(info.authorAssociation, allowed)
+    ? { allowed: true, basis: "author" }
+    : { allowed: false, reason: "author_not_allowed" };
+}
+
+/**
+ * 要対応の終端の作業項目を取り消すときの状態の注記。
+ * `retry_work_item`が、この照合で取り消した作業項目だけを再開できるよう、注記で見分ける。
+ */
+export function actionableCancelNote(reason: "closed" | "pr_closed"): string {
+  return `reconcile: ${reason} (actionable)`;
+}
+
+const ACTIONABLE_CANCEL_NOTES: readonly string[] = [
+  actionableCancelNote("closed"),
+  actionableCancelNote("pr_closed"),
+];
+
+/**
+ * `cancelled`への最新の遷移の記録から、取り消す前の状態を返す。
+ * 要対応の照合(`actionableCancelNote`の注記)が、要対応の状態から取り消した遷移でなければ`null`を返す。
+ * ほかの理由の取り消し(Issueが閉じられた直後のreconcile、新しいサイクルによる置き換えなど)は、再開の対象にしない。
+ */
+export function statusBeforeActionableCancel(
+  event: {
+    readonly from_status: WorkItemStatus | null;
+    readonly note: string | null;
+  } | null,
+): WorkItemStatus | null {
+  if (event === null || event.from_status === null || event.note === null) {
+    return null;
+  }
+  if (!ACTIONABLE_CANCEL_NOTES.includes(event.note)) return null;
+  return isOneOf(event.from_status, ACTIONABLE_WORK_ITEM_STATUSES)
+    ? event.from_status
+    : null;
 }

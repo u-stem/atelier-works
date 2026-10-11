@@ -82,6 +82,27 @@ describe("mise.toml stack tasks", () => {
     );
   });
 
+  // Caddyfileは単一ファイルのbind mountなので、`up -d`はcaddyを作り直さない。
+  // 再起動をはさまないと、古い設定のまま印が書かれ、通知が解決されてしまう。
+  const RESTART_CADDY =
+    "docker compose -f infra/docker-compose.yml restart caddy";
+  const RECORD = "scripts/record-host-applied.sh";
+
+  for (const task of ["up", "deploy"]) {
+    test(`${task} restarts caddy after compose up`, () => {
+      const lines = taskRuns().get(task) ?? [];
+      expect(lines.indexOf(RESTART_CADDY)).toBeGreaterThan(
+        lines.findIndex(isComposeUp),
+      );
+    });
+
+    test(`${task} restarts caddy before recording the applied version`, () => {
+      const lines = taskRuns().get(task) ?? [];
+      const restart = lines.indexOf(RESTART_CADDY);
+      expect(restart > -1 && restart < lines.indexOf(RECORD)).toBe(true);
+    });
+  }
+
   test("every task that runs docker compose up stops on a failed Docker version check", () => {
     const unchecked = [...taskRuns()]
       .filter(([, lines]) => lines.some(isComposeUp))
