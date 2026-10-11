@@ -1539,6 +1539,66 @@ check(
 );
 execPsql(target, "DELETE FROM factory.drawio_viewer_observations");
 
+// ---------------------------------------------------------------------------
+// 未解決の通知の重複の抑止
+// ---------------------------------------------------------------------------
+
+const dedupRecord = { kind: "qdb_dedup", message: "qdb dedup same body" };
+const dedupFirst = await addNoticeUnlessUnresolved(dedupRecord, sql);
+check(
+  "notice dedup: the first insert returns the id",
+  typeof dedupFirst === "number",
+  dedupFirst,
+);
+const dedupFirstRow =
+  dedupFirst === null ? null : await getNoticeById(dedupFirst, sql);
+check(
+  "notice dedup: a second call with an open notice returns null",
+  (await addNoticeUnlessUnresolved(dedupRecord, sql)) === null,
+);
+check(
+  "notice dedup: the second call leaves a young notice's created_at as it is",
+  dedupFirst !== null &&
+    (await getNoticeById(dedupFirst, sql))?.created_at.getTime() ===
+      dedupFirstRow?.created_at.getTime(),
+);
+execPsql(
+  target,
+  `UPDATE factory.notices SET created_at = now() - interval '2 days' WHERE id = ${String(dedupFirst)}`,
+);
+check(
+  "notice dedup: a call that refreshes an old notice returns null",
+  (await addNoticeUnlessUnresolved(dedupRecord, sql)) === null,
+);
+const dedupRefreshed =
+  dedupFirst === null ? null : await getNoticeById(dedupFirst, sql);
+check(
+  "notice dedup: an open notice older than a day gets a new created_at",
+  dedupRefreshed !== null &&
+    Date.now() - dedupRefreshed.created_at.getTime() < 60 * 60 * 1000,
+  dedupRefreshed,
+);
+const dedupCount = await sql`
+  SELECT count(*)::integer AS n FROM factory.notices
+  WHERE kind = ${dedupRecord.kind}
+`.fetch();
+check(
+  "notice dedup: the refresh does not add a row",
+  dedupCount[0]?.n === 1,
+  dedupCount,
+);
+if (dedupFirst !== null) {
+  await resolveNoticeIfUnresolved(dedupFirst, dedupRecord.kind, "op", [], sql);
+}
+check(
+  "notice dedup: after the notice is resolved the same body inserts again",
+  typeof (await addNoticeUnlessUnresolved(dedupRecord, sql)) === "number",
+);
+execPsql(
+  target,
+  `DELETE FROM factory.notices WHERE kind = '${dedupRecord.kind}'`,
+);
+
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。
 // 子の表の行は`ON DELETE CASCADE`で一緒に消える。
 execPsql(target, `DELETE FROM factory.work_items WHERE owner = '${OWNER}'`);

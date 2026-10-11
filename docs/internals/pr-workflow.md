@@ -538,7 +538,7 @@ PR修正のClaudeに渡すツールは`Read,Glob,Grep,Edit,Write`だけで、`Ba
 
 対象リポジトリの検査(lint、typecheck、testに当たるもの)は、Claudeではなく検証のステップが実行する。実行するのは`factory_config.allowed_check_commands`に書いたコマンドで、例えば`["mise run check"]`である。結果は、Claudeの2回目の実行(修正)への入力にする。
 
-検査コマンドは、対象リポジトリのコードをworkerのコンテナ内でrootとして実行する。環境変数を最小にしても隔離にはならず、同じuidなので`/proc`を経由してジョブのトークンに届きうる。そのため、サンドボックス(別のコンテナ、非root、network none)ができるまで、既定値の`[]`を保つ。空でなければ、実行のたびにnoticeの`unsandboxed_check_commands`を記録する。
+検査コマンドは、対象リポジトリのコードをworkerのコンテナ内でrootとして実行する。環境変数を最小にしても隔離にはならず、同じuidなので`/proc`を経由してジョブのトークンに届きうる。そのため、サンドボックス(別のコンテナ、非root、network none)ができるまで、既定値の`[]`を保つ。空でなければ、実行する作業項目ごとにnoticeの`unsandboxed_check_commands`を記録する。同じ本文の未解決のnoticeがあれば新しく作らない。作成から1日を過ぎていれば、時刻を更新する。
 
 検査コマンドには、固定の`PATH`と、実行ごとに作る非公開の`HOME`だけを渡し、秘密情報は引き継がない。終わったら`HOME`のディレクトリを消す。
 `PATH`の値と、workerの値を使わない理由は、[検査コマンドはフローが実行する](../security.md#検査コマンドはフローが実行する)にある。

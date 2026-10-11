@@ -1186,13 +1186,22 @@ export async function getLatestDeployment(
 
 /**
  * 同じ`kind`と`message`の未解決のnoticeが無いときだけ`factory.notices`に挿入し、
- * そのIDを返す。あれば挿入せず`null`を返す。
+ * 挿入した行のIDを返す。未解決のnoticeがあれば挿入せず`null`を返す。
  * 状態が変わらない間、スケジュールのたびに同じnoticeが積み上がるのを防ぐため。
  * 解決済みのnoticeは数えないので、解決した後に同じ状況が起きれば再び挿入する。
  * `message`が状態の値(版の組など)を含めば、値が変わったときは新しいnoticeになる。
  * 通知を作る経路は、この関数だけを使う。
- * 確認と挿入は1つの文で行い、並行した挿入との競合は、未解決のnoticeの部分一意索引
- * (`kind`と`message`のmd5)が拒む。`ON CONFLICT DO NOTHING`で受けるので、競合した側は`null`を返す。
+ *
+ * 既存の未解決のnoticeは、`created_at`が1日より前なら現在時刻に更新する。
+ * 「情報」のnoticeはConsoleの一覧に作成から7日しか出さず、解決はDBの掃除(30日)まで起きない。
+ * 更新しないと、状況が続いているのに、8日目から一覧に出ず新しいnoticeも作られないため。
+ * 1日の間隔を空けるのは、スケジュールのたびに行を書き換えないため。
+ * 更新だけの呼び出しは`null`を返すので、挿入のときだけ別の通知を送る呼び出し元の意味は変わらない。
+ *
+ * 確認と挿入は1つの文で行う。並行した挿入との競合は、未解決のnoticeの部分一意索引
+ * (`kind`と`message`のmd5)で受け、`ON CONFLICT`の更新に回る。
+ * 更新の条件に合わない行は`RETURNING`に出ないので、その場合も`null`になる。
+ * `xmax = 0`は、その行をこの文が挿入したときだけ成り立つ。
  */
 export async function addNoticeUnlessUnresolved(
   record: NoticeRecord,
@@ -1200,17 +1209,17 @@ export async function addNoticeUnlessUnresolved(
 ): Promise<number | null> {
   const rows = await sql`
     INSERT INTO factory.notices (kind, message)
-    SELECT ${record.kind}, ${record.message}
-    WHERE NOT EXISTS (
-      SELECT 1 FROM factory.notices
-      WHERE kind = ${record.kind} AND message = ${record.message}
-        AND resolved = false
-    )
-    ON CONFLICT DO NOTHING
-    RETURNING id
+    VALUES (${record.kind}, ${record.message})
+    ON CONFLICT (kind, md5(message)) WHERE resolved = false
+    DO UPDATE SET created_at = now()
+    WHERE factory.notices.created_at < now() - interval '1 day'
+    RETURNING id, (xmax = 0) AS inserted
   `.fetch();
   const row = rows[0];
-  return row === undefined ? null : parseId(row.id, "id");
+  if (row === undefined || !parseBoolean(row.inserted, "inserted")) {
+    return null;
+  }
+  return parseId(row.id, "id");
 }
 
 /** `factory.notices`の行をIDで1件取得する。無ければ`null`を返す。 */

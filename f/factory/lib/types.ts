@@ -808,7 +808,7 @@ export type LatestDeployment = {
   readonly sha_to: string;
 };
 
-/** `db.addNotice`に渡す、`factory.notices`の1行。 */
+/** `db.addNoticeUnlessUnresolved`に渡す、`factory.notices`の1行。 */
 export type NoticeRecord = {
   kind: string;
   message: string;

@@ -26,7 +26,7 @@ locks:
   f/factory/lib/console_status: ee1e2ab9df9b3fc2b5fd492d3576a137dc418f3d616373a555e043d373b411c9
   f/factory/lib/console_support: 0b0080de526aab11747c485390f610e9d1911e0b8734e5e685895172325a4694
   f/factory/lib/console_worker: 5aa1f64ef4c0f327c902d4e92c5bc7c7a2af50aac860ce4d288e993cf0bd5b83
-  f/factory/lib/db: 2d628112271c4e69c2da1a4d51bca00ad1495422b5688032186c41f965fa4ce4
+  f/factory/lib/db: 726c733c10a86242de34577944c9d54ea4033f87f732a09fb8f425406c25c94a
   f/factory/lib/discord: 56c67d091d4f1da1e40c6e912bae4a2e6355e11230b79dc81f80dd2cb96a5802
   f/factory/lib/drawio: d6c208d61c640f7019c865f28fb77f2a50dcf539ced468e33d2e731709a7be32
   f/factory/lib/drawio_viewer_bump: 9970434f61c82d9f1e5ea228c2e5a1649b7e9eae5a6f7c332a1e31f17d9434aa
@@ -55,7 +55,7 @@ locks:
   f/factory/lib/self_update_support: e719cb9c58dd5a142721138327d0bbad0671b7f20c6be39045cb0559d8e76ce4
   f/factory/lib/summary_support: 0baf32a9659017e51af7cbe3171a357f6960f1609ec27ff204eb30c1b852368b
   f/factory/lib/supersede_support: 0bd26793924642319a83c6b2759c8ac26229e889e57ab70a1de8ac0d9c1848db
-  f/factory/lib/types: ae73bc7516f4dbecaa2084290b83082c0964f450a740fe91f6616fa3d92ec919
+  f/factory/lib/types: 84311e6ae60e70060d92e5a3816b0d4e663612a9b7fc105dcf6b96c37ee3b8b9
   f/factory/lib/workspace: cc8c1dbec70c90b6689012f3b87a764831eb0bbec8312e367dc9ea27cfba6e9f
   f/factory/manual_intake__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/notice_resolve: 3794cae7243a5e3efa50091313272a61aae6d8c6930e3a2060d4e8b8c48067ac
@@ -86,7 +86,7 @@ locks:
   f/factory/steps/pr_fix_collect: e876f98562766a969e52c2ce46799ec2fd218e811633cd9dced971a3d93350e4
   f/factory/steps/pr_fix_finish: f3750d8b571689cbb40b8d33d530b2e2109914791048b882a79345f8fb122a3c
   f/factory/steps/pr_fix_prepare: 7e4df0e4626650e3adc93af15bae29a0da45f2adcefdc32b4b267a65b3a82fd2
-  f/factory/steps/pr_fix_verify: d37b9b33e78a3332524a0547e4d134d7dabb8b56e447b1ccefecc5276ee201de
+  f/factory/steps/pr_fix_verify: 3e245da9a86f0493ee29ac1d719a8e9f7a46abdb1dc805420f8d09ac4685d2c4
   f/factory/steps/pr_review_generate: 6473d4f400325943043b2404ab4296a913f60db9f4d24b25605abb0adf4df5e3
   f/factory/steps/pr_review_post: eed26e78c65d0f339b99530491dffb0b3044bd16324f07ff97c5ef9035c2b314
   f/factory/steps/pr_review_prepare: 4f258ff787df1ea0659550eec7e3923bc8db578698beb2b72781bc2f7050001b
