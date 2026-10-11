@@ -764,7 +764,8 @@ ConsoleのSPAは、図を最上位のページでは描かず、隔離したifra
 図のXMLはIssue本文に由来する信用できない入力で、ビューアは第三者の大きなコードだからである。
 最上位のページで描くと、ビューアの欠陥が、Windmillを管理者として操作できるXSSになる。
 実装は`console/src/components/drawio/DrawioFrame.tsx`と、`console/public/drawio.html`である。
-`DrawioFrame`はどの画面にも組み込まれていない。Consoleの画面で図を描くのは、Windmillのraw app(Factory Console)のコンポーネントである。
+要件定義書の画面(`/console/items/:id/requirements`)が、図ごとに`DrawioFrame`で描く。
+安全の検査を通らなかった図(`rejected_diagrams`)は、iframeを作らず、表示しない旨だけを出す。
 仕組みは[Consoleの配信の仕様](internals/console.md)の「draw.ioの図」にある。
 
 | 守ること | 内容 |
@@ -920,6 +921,33 @@ Windmillのraw appは、これをWindmillと同じオリジンで描く。
 添えたURLは`<bdi>`で包む。文字の向きを変える制御文字が、周りの表示を崩さないようにするためである。
 同じページの見出しへのリンクは、行き先を取り違えようがないので、URLを添えない。
 GitHubへのリンクは、`rel="noopener noreferrer"`を付けて新しいタブで開く。
+
+新しいConsoleの`src/components/markdown/Markdown.tsx`も、同じ規則でリンクを絞る。
+判定は`src/lib/markdownLink.ts`の`resolveMarkdownLink`である。
+`src/lib/safeUrl.ts`の`safeGitHubUrl`を通り、作業項目と同じリポジトリのURLだけを、リンクにする。
+`Markdown`が`repo`を必須の引数で受けるので、リポジトリを渡さずにGitHubのURLをリンクにする経路は無い。
+見出しへのフラグメントは、接頭辞`h-`を付けた見出しの`id`を指すように読み替える。
+見出しの`id`が、ページの他の要素の`id`や`name`と重ならないようにするためである。
+脚注の記法は使わない。脚注への参照(`#user-content-fn`で始まるフラグメント)は、リンクにせず文字で出す。
+本文、要約、未確定事項、題名は、描く前に`displayableIssueText`で見えない文字を置き換える。
+画像は図の参照`<name>.drawio`だけを無害化のスキーマで通し、それ以外の画像のURLは描かない。
+`src/components/markdown/Markdown.test.tsx`が、次のものを描かないことを固定している。
+生のHTML、外のリンク、別のリポジトリのリンク、`javascript:`のリンク、外の画像である。
+
+### 監査レポートの本文
+
+新しいConsoleの監査レポートの本文(`console/src/screens/reports/AuditMarkdown.tsx`)は、リンクを張らない。
+本文は、監査のClaudeが信頼できない運用記録から書くためである。
+監査レポートの本文にはURLを書かない決まりで、リポジトリの情報も渡されないので、張ってよいリンクが無い。
+同じページの見出しへのリンクも張らない。見出しに`id`を付けないので、行き先が無い。
+
+リンクの文字はそのまま文字で出し、URLが文字と違うときは括弧で添える。
+添えたURLは`<bdi>`で包む。
+画像は読み込まず、「画像は表示しません」と出す。
+外のURLを読み込むと、レポートを開いただけで外へ通信が出るためである。
+本文の生のHTMLは、`rehype-raw`を使わないので要素にならず、描かずに捨てる。
+`rehype-sanitize`の既定のスキーマは、変換後の要素と属性を絞る二重の防御である。
+描く前に`displayableIssueText`で見えない文字を置き換える。
 
 ## 更新履歴のPR
 

@@ -23,6 +23,7 @@ import {
   withSelection,
 } from "../../lib/inboxSelection.ts";
 import {
+  auditFailureCount,
   buildInboxItems,
   chipCounts,
   effectiveChip,
@@ -116,7 +117,7 @@ function FailureState({
  * 要対応の画面。項目を新しい順に並べ、種類のチップで絞り込む。
  * 選んだ行は`?approval=<id>`などに持つ(同時に1つだけ)。選択の変更は履歴を積まない。
  * 一覧が空のときは、画面を割らずに状況の面を出す。
- * 一覧と詳細は別々にスクロールする。承認・却下は、詳細のペインの承認バーから行う。
+ * 一覧と詳細は別々にスクロールする。一覧の行は選ぶだけで、承認・却下や再実行などの操作は詳細のペインに置く。
  */
 export function InboxScreen() {
   const summary = useSummary();
@@ -153,7 +154,11 @@ export function InboxScreen() {
     );
   }
 
-  const unlisted = unlistedCounts(summary.data.counts, items);
+  const unlisted = unlistedCounts(
+    summary.data.counts,
+    items,
+    auditFailureCount(summary.data),
+  );
   const header = (
     <PageHeader
       title="要対応"

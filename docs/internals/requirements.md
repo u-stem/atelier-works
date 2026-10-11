@@ -86,6 +86,8 @@ raw appの`components/RequirementsDocument.tsx`、`Markdown.tsx`、`DrawioViewer
 図は、読み戻すときにも`validateDrawioXml`で検査し、通らない図は落として、名前を`rejected_diagrams`で返す。
 本文は、落とした図を「安全の検査を通らなかったので表示しません」と出す。
 通った図は、隔離したiframeの中で描く。
+新しいConsoleでは、作業項目の下の要件定義書の画面(`/console/items/:id/requirements`)が、同じビューで本文、目次、試行の切り替え、図を描く。
+画面の仕様は[Consoleの仕様](console.md)の「要件定義書の画面」にある。
 理由は[セキュリティ](../security.md)の「draw.ioの図の描画」と「要件定義書のリンク」にある。
 
 読み戻しの規則は次のとおり。
