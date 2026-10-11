@@ -8,6 +8,7 @@ import {
   formatAbsoluteWithRelative,
   formatDeadline,
 } from "../../lib/relativeTime.ts";
+import { IntakeSnapshotPanel } from "./IntakeSnapshotPanel.tsx";
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -20,7 +21,8 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
 
 /**
  * 選んだ承認の概要。題名、種類、作業項目、Issueへのリンク、期限、依頼の時刻を出す。
- * 本文の表示と承認・却下の操作は持たない。
+ * 要件定義の承認では、取り込み時点のIssueの題名と本文も出す。
+ * 要件定義の本文と承認・却下の操作は持たない。
  */
 export function ApprovalOverview({
   approval,
@@ -87,6 +89,12 @@ export function ApprovalOverview({
           </time>
         </Row>
       </dl>
+      {approval.kind === "requirements" ? (
+        <IntakeSnapshotPanel
+          workItemId={approval.work_item_id}
+          approvalRequestId={approval.approval_request_id}
+        />
+      ) : null}
       <p className="flex items-start gap-2 rounded-xl border border-dashed border-border px-4 py-3 text-small text-muted-foreground">
         <Info
           aria-hidden="true"

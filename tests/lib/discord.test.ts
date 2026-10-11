@@ -524,6 +524,22 @@ describe("buildEmbed", () => {
     });
   });
 
+  test("links the intake_refreshed embed to the issue and asks for a check", () => {
+    const embed = buildEmbed({
+      kind: "intake_refreshed",
+      instance_name: "local",
+      owner: "octo-owner",
+      repo: "atelier-works",
+      issue_number: 42,
+      issue_url: "https://github.com/octo-owner/atelier-works/issues/42",
+      title: "Add feature",
+    });
+    expect([embed.url, embed.description]).toEqual([
+      "https://github.com/octo-owner/atelier-works/issues/42",
+      "Issueが取り込み後に書き換えられたので、取り込み内容を現在のIssueで更新しました。新しいConsoleの要対応で更新後の内容を確かめてから承認してください。",
+    ]);
+  });
+
   test("sets the embed url to the Console deep link on requirements_approved", () => {
     const embed = buildEmbed({
       kind: "requirements_approved",

@@ -143,6 +143,44 @@ raw appの`components/RequirementsDocument.tsx`、`Markdown.tsx`、`DrawioViewer
 
 承認者(`decided_by`)は引数ではなく、ジョブの実行文脈から決める(`deriveApprover`)。`WM_USERNAME`を使い、無ければ`WM_EMAIL`を使う。どちらも無ければ例外にし、承認者が分からないまま記録しない。
 
+### 承認の前のIssueの確認
+
+要件定義を承認するときは、決定を記録する前に、現在のIssueの題名と本文が取り込み時点(`work_items.title`、`body`)と同じかを確かめる。実装のClaudeに渡るのは取り込み時点の内容なので、承認者が見た内容と一致させるためである。
+
+確認は`approval_decide`の中で行う。
+`approval_decide`はConsole用のworkerで動き、`gh`を起動できない。
+そのため、`github_token`を読み、GitHubのREST APIを`fetch`で直接呼ぶ(`fetchIssueContent`)。読むのは`GET /repos/<owner>/<repo>/issues/<番号>`である。
+別のscriptに頼むと、defaultのworkerの待ち行列に並ぶ間、Console用workerの枠を塞ぐためである。
+通信の決まりは次のとおりである。
+
+- 宛先は`https://api.github.com`に固定し、ownerとrepoは検査してから使う。
+- `github_token`は`Authorization`ヘッダだけに載せる。
+- リダイレクトは辿らない。
+- 10秒の締め切りを付ける。
+- エラーの文とログに、トークンとIssueの内容を含めない。
+
+判定は次の3つである。
+
+| 判定 | 意味 | 承認 |
+| --- | --- | --- |
+| `match` | 題名と本文が同じ。改行コードと本文の前後の空白の違いは無視する | 記録する |
+| `changed` | 取り込み後に題名か本文が変わった | 断る |
+| `unavailable` | 作業項目やIssue番号が無い、トークンを読めない、通信の失敗、締め切りの超過、2xx以外の応答(3xx、4xx、5xxを含む)、形の違う応答のどれかで、比べられなかった | 断る |
+
+確認するのは、要件定義の承認を新しく記録するときだけである(`needsIssueCheck`)。却下、決定が記録済みの行への再実行、Issue化の提案は確認しない。
+
+断るときのエラーは、Issueが変わった旨と、承認者が取れる手を示す。
+1つは、Issueを取り込み時点の内容に戻して、もう一度承認することである。
+もう1つは、却下することである。却下による作り直しは、現在のIssueの題名と本文を取り込み直し、更新したことを承認者に知らせる([作業項目の状態とリース](work-items.md)の「却下と再生成」)。作り直した要件定義には、あらためて承認が要る。
+`unavailable`はしばらく待ってからやり直す。
+
+確認から決定の記録までの間のIssueの書き換えは防げない。
+承認者が見た内容のハッシュに結び付ければ防げるが、承認の操作は旧Consoleにあり、旧Consoleは取り込み時点の内容を出さないので、今は採れない。
+実装を終えたときの、PR本文の注記が残りを拾う。
+
+Console用のworkerで動くscriptのうち、`github_token`を読むのは、`retry_work_item`と`approval_decide`である。
+`approval_decide`は2つ目の例外にあたる([セキュリティ](../security.md)の「Console用workerの境界」を参照)。
+
 ### 要件定義の承認の反映
 
 `requirements_apply`は、作業項目が承認待ち(`awaiting_approval`)のときだけ処理する。それ以外の状態なら何もしない。

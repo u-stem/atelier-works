@@ -19,6 +19,7 @@
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "./lib/config.ts";
 import {
+  addNotice,
   getWorkItem,
   isActiveIssueUniqueViolation,
   latestRequirementsApproval,
@@ -29,14 +30,24 @@ import {
   type StatusEventSummary,
   setFlowJobId,
   setFlowJobIdIfUnset,
+  updateIntakeIfRegenerating,
   updateStatusIfCurrent,
   updateStatusIfCurrentClearingFlowJobId,
   updateStatusIfLeaseHolder,
 } from "./lib/db.ts";
-import { fetchIssueState, GitHubHttpError } from "./lib/github.ts";
+import {
+  fetchIssueContent,
+  fetchIssueState,
+  GitHubHttpError,
+} from "./lib/github.ts";
 import { parseFlowJobId } from "./lib/implement_launch_support.ts";
 import { IMPLEMENT_FLOW_PATH } from "./lib/implement_loop.ts";
 import { isRequirementsApprovedForAttempt } from "./lib/implement_support.ts";
+import {
+  buildIntakeRefreshedNoticeMessage,
+  INTAKE_REFRESHED_NOTICE_KIND,
+  refreshIntakeFromIssue,
+} from "./lib/intake_refresh.ts";
 import { logger, maskSecrets } from "./lib/log.ts";
 import { PIPELINE_FLOW_PATH } from "./lib/pipeline_lease.ts";
 import {
@@ -447,6 +458,23 @@ export async function launchFailureError(
   );
 }
 
+/**
+ * 再実行の前に、取り込んだ題名と本文を現在のIssueの内容へ更新するか。
+ * 要件定義を作り直す再実行(Issueの作業項目を`requirements_generating`へ戻す)だけが対象である。
+ * 却下が`max_attempts`に達して人の対応待ちになった作業項目は、この再実行が唯一の出口になる。
+ * 実装フローの再開は、承認済みの要件定義を使うので更新しない。
+ */
+export function shouldRefreshIntakeOnRestart(
+  workItem: Pick<WorkItem, "kind" | "issue_number">,
+  plan: Pick<RestartPlan, "toStatus">,
+): boolean {
+  return (
+    workItem.kind === "issue" &&
+    workItem.issue_number !== null &&
+    plan.toStatus === "requirements_generating"
+  );
+}
+
 export async function main(work_item_id: number): Promise<RetryWorkItemResult> {
   const config = await loadConfig(() =>
     wmill.getResource("f/factory/factory_config"),
@@ -564,6 +592,38 @@ export async function main(work_item_id: number): Promise<RetryWorkItemResult> {
     throw new Error(
       `retry_work_item: work item ${work_item_id} is no longer "${workItem.status}"; not restarted`,
     );
+  }
+
+  const issueNumber = workItem.issue_number;
+  if (shouldRefreshIntakeOnRestart(workItem, plan) && issueNumber !== null) {
+    // Console用のworkerには`gh`が無いので、`fetch`で読む。
+    // 通知はnoticeだけにする。このscriptは`discord_webhook_url`を読まない。
+    await refreshIntakeFromIssue({
+      snapshot: workItem,
+      getIssue: async () =>
+        fetchIssueContent(
+          fetch,
+          await wmill.getVariable("f/factory/github_token"),
+          workItem.owner,
+          workItem.repo,
+          issueNumber,
+        ),
+      writeIntake: (intake, note) =>
+        updateIntakeIfRegenerating(work_item_id, intake, note),
+      announce: async () => {
+        await addNotice({
+          kind: INTAKE_REFRESHED_NOTICE_KIND,
+          message: buildIntakeRefreshedNoticeMessage({
+            owner: workItem.owner,
+            repo: workItem.repo,
+            issue_number: issueNumber,
+            work_item_id,
+          }),
+        });
+      },
+      log: (message, fields) =>
+        logger("retry_work_item").warn(message, { work_item_id, ...fields }),
+    });
   }
 
   let flowJobId: string;

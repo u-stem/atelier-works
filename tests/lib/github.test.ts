@@ -10,6 +10,7 @@ import {
   createPullRequest,
   ensureLabel,
   type FetchLike,
+  fetchIssueContent,
   fetchIssueState,
   findIssueByMarker,
   findOpenPullRequestByHead,
@@ -1066,6 +1067,108 @@ describe("fetchIssueState", () => {
     const { fetchFn } = fakeFetch(200, { state: "open" });
     await expect(
       fetchIssueState(fetchFn, "tok", "../etc", "widgets", 5),
+    ).rejects.toThrow();
+  });
+});
+
+describe("fetchIssueContent", () => {
+  function fakeFetch(status: number, body: unknown) {
+    const calls: { url: string; init: RequestInit }[] = [];
+    const fetchFn: FetchLike = async (url, init) => {
+      calls.push({ url, init });
+      return { status, json: async () => body };
+    };
+    return { fetchFn, calls };
+  }
+  const issue = { title: "Add feature", body: "Original body", state: "open" };
+
+  test("returns the title and body", async () => {
+    const { fetchFn } = fakeFetch(200, issue);
+    expect(
+      await fetchIssueContent(fetchFn, "tok", "acme", "widgets", 5),
+    ).toEqual({
+      title: "Add feature",
+      body: "Original body",
+    });
+  });
+
+  test("treats a null body as empty", async () => {
+    const { fetchFn } = fakeFetch(200, { ...issue, body: null });
+    expect(
+      (await fetchIssueContent(fetchFn, "tok", "acme", "widgets", 5)).body,
+    ).toBe("");
+  });
+
+  test("reads the issues endpoint on api.github.com", async () => {
+    const { fetchFn, calls } = fakeFetch(200, issue);
+    await fetchIssueContent(fetchFn, "tok", "acme", "widgets", 5);
+    expect(calls[0]?.url).toBe(
+      "https://api.github.com/repos/acme/widgets/issues/5",
+    );
+  });
+
+  test("sends the token in the authorization header", async () => {
+    const { fetchFn, calls } = fakeFetch(200, issue);
+    await fetchIssueContent(fetchFn, "tok", "acme", "widgets", 5);
+    expect(calls[0]?.init.headers).toMatchObject({
+      Authorization: "Bearer tok",
+    });
+  });
+
+  test("does not follow redirects", async () => {
+    const { fetchFn, calls } = fakeFetch(200, issue);
+    await fetchIssueContent(fetchFn, "tok", "acme", "widgets", 5);
+    expect(calls[0]?.init.redirect).toBe("manual");
+  });
+
+  test("passes a deadline signal", async () => {
+    const { fetchFn, calls } = fakeFetch(200, issue);
+    await fetchIssueContent(fetchFn, "tok", "acme", "widgets", 5);
+    expect(calls[0]?.init.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  test.each([301, 404, 500])("throws an http error for %d", async (status) => {
+    const { fetchFn } = fakeFetch(status, {});
+    const error = await fetchIssueContent(
+      fetchFn,
+      "tok",
+      "acme",
+      "widgets",
+      5,
+    ).catch((err: unknown) => err);
+    expect(error instanceof GitHubHttpError && error.status).toBe(status);
+  });
+
+  test("does not put the token or the issue text in the error message", async () => {
+    const { fetchFn } = fakeFetch(500, { title: "secret title" });
+    const error = await fetchIssueContent(
+      fetchFn,
+      "secret-token",
+      "acme",
+      "widgets",
+      5,
+    ).catch((err: unknown) => String(err));
+    expect(error).not.toMatch(/secret-token|secret title/);
+  });
+
+  test("rejects a response whose title is not a string", async () => {
+    const { fetchFn } = fakeFetch(200, { ...issue, title: 1 });
+    await expect(
+      fetchIssueContent(fetchFn, "tok", "acme", "widgets", 5),
+    ).rejects.toThrow("unexpected response shape");
+  });
+
+  test("rejects a response whose body is not a string or null", async () => {
+    const { fetchFn } = fakeFetch(200, { ...issue, body: 1 });
+    await expect(
+      fetchIssueContent(fetchFn, "tok", "acme", "widgets", 5),
+    ).rejects.toThrow("unexpected response shape");
+  });
+
+  test("rejects an owner that isn't a valid GitHub name", async () => {
+    const { fetchFn } = fakeFetch(200, issue);
+    await expect(
+      fetchIssueContent(fetchFn, "tok", "../etc", "widgets", 5),
     ).rejects.toThrow();
   });
 });

@@ -6,6 +6,10 @@ import {
   type DeploymentEntry,
   isDeploymentHistory,
 } from "./guards/deployments.ts";
+import {
+  type IntakeSnapshot,
+  isIntakeSnapshotRows,
+} from "./guards/intakeSnapshot.ts";
 import { type ConsoleSummary, isConsoleSummary } from "./guards/summary.ts";
 import { type RunScriptOptions, runScript } from "./windmill.ts";
 
@@ -29,6 +33,59 @@ export async function fetchSummary(
     throw new ApiFailure({ kind: "invalid_response" });
   }
   return result.value;
+}
+
+/**
+ * 作業項目に取り込んだ時点のIssueの題名と本文を取り、型ガードを通してから返す。
+ * 作業項目が無いか、Issueの作業項目でないときは`null`を返す。失敗は`ApiFailure`で投げる。
+ */
+export async function fetchIntakeSnapshot(
+  workItemId: number,
+  options: RunScriptOptions = {},
+): Promise<IntakeSnapshot | null> {
+  const result = await runScript(
+    "console_query",
+    { view: "intake_snapshot", work_item_id: workItemId },
+    options,
+  );
+  if (!result.ok) {
+    throw new ApiFailure(result.error);
+  }
+  if (!isIntakeSnapshotRows(result.value)) {
+    throw new ApiFailure({ kind: "invalid_response" });
+  }
+  return result.value[0] ?? null;
+}
+
+/** 取り込み時点のIssueが新しいとみなす間隔。短くして、更新後の内容を長く隠さないようにする。 */
+export const INTAKE_SNAPSHOT_STALE_MS = 10_000;
+
+/**
+ * 取り込み時点のIssueのキャッシュのキー。
+ * 却下による作り直しは、同じ作業項目の取り込み内容を書き換える。
+ * 承認依頼は作り直しのたびに新しくなるので、キーに含めると、更新前の内容を新しい承認の画面に出さない。
+ */
+export function intakeSnapshotQueryKey(
+  workItemId: number,
+  approvalRequestId: number,
+): readonly ["console", "intake_snapshot", number, number] {
+  return ["console", "intake_snapshot", workItemId, approvalRequestId];
+}
+
+/**
+ * 取り込み時点のIssueを取る。画面を開くたびに取り直す。
+ * 却下による作り直しで書き換わりうるので、承認依頼ごとに別のキャッシュにし、古い値を使い回さない。
+ */
+export function useIntakeSnapshot(
+  workItemId: number,
+  approvalRequestId: number,
+): UseQueryResult<IntakeSnapshot | null, Error> {
+  return useQuery({
+    queryKey: intakeSnapshotQueryKey(workItemId, approvalRequestId),
+    queryFn: ({ signal }) => fetchIntakeSnapshot(workItemId, { signal }),
+    staleTime: INTAKE_SNAPSHOT_STALE_MS,
+    refetchOnMount: "always",
+  });
 }
 
 /**
