@@ -1045,3 +1045,34 @@ describe("describeReason / nextActionFor (stale worker image)", () => {
     );
   });
 });
+
+describe("describeReason / nextActionFor (ownership the check sandbox could not take back)", () => {
+  const RESTORE_FAILED =
+    "worktree is still used by processes from an earlier run: check sandbox: the worktree recorded by slot factory-check-1 (uid 10002) could not be taken back: entries with an ACL remain";
+
+  test("says the worktree could not be taken back from the check user, not that processes use it", () => {
+    expect(describeReason(RESTORE_FAILED)).toBe(
+      "検査用のユーザーに渡したworktreeを、rootに戻せませんでした(the worktree recorded by slot factory-check-1 (uid 10002) could not be taken back: entries with an ACL remain)",
+    );
+  });
+
+  test("points to the procedure that cleans up the check slot records", () => {
+    expect(nextActionFor(RESTORE_FAILED, "implement")).toBe(
+      "運用の文書(docs/operations.md)の「検査の枠の記録を片付ける」の手順で、枠の記録が指すworktreeをrootに戻して記録を消してから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+    );
+  });
+
+  test("gives a pr_fix the same procedure", () => {
+    expect(nextActionFor(RESTORE_FAILED, "pr_fix")).toBe(
+      nextActionFor(RESTORE_FAILED, "implement"),
+    );
+  });
+
+  test("keeps the process rule for a slot another run holds", () => {
+    expect(
+      describeReason(
+        "worktree is still used by processes from an earlier run: check slot factory-check-2 (uid 10003) that recorded the worktree is held by another run",
+      ),
+    ).toStartWith("前の実行のプロセスがまだworktreeを使っています");
+  });
+});

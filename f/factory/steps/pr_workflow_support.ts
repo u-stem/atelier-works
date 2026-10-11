@@ -3484,6 +3484,13 @@ function leftoverProcessNextAction(flow: NextActionFlow | undefined): string {
 const WORKTREE_BUSY_NEXT_ACTION = `理由に載ったプロセスが終わるのを待つか、workerのコンテナでそのプロセスを止めてから、${RETRY_WORK_ITEM_ACTION}`;
 
 /**
+ * 検査用のユーザーからworktreeを取り戻せなかったときの次の操作。
+ * 止まらないプロセス、残ったACL、読めない枠の記録のように、再実行しても同じ理由で止まる原因なので、
+ * 人が枠の記録を確かめて所有権を戻してから再実行する。フローによらず同じ手順である。
+ */
+const OWNERSHIP_RESTORE_FAILED_NEXT_ACTION = `運用の文書(docs/operations.md)の「検査の枠の記録を片付ける」の手順で、枠の記録が指すworktreeをrootに戻して記録を消してから、${RETRY_WORK_ITEM_ACTION}`;
+
+/**
  * 実行中に、この実行の検査コマンドなどが残したプロセスがworktreeのロックを持ち続けていたときの次の操作。
  * 残ったプロセスは、この実行のジョブIDの持ち主タグを持つ。
  * 実装フローは再実行の準備がそれを止めてから続けるので、再実行するだけでよい。
@@ -3997,6 +4004,15 @@ const REASON_RULES: readonly ReasonRule[] = [
     pattern: /^nested repository or \.git path changed: (.+)$/,
     describe: (m) => `入れ子のリポジトリか.gitのパスが変更されました: ${m[1]}`,
     nextAction: () => FORBIDDEN_CHANGE_NEXT_ACTION,
+  },
+  // `lib/process_lock.ts`の`restoreOwnershipStep`が、取り戻せなかった所有権を`WorktreeBusyError`にしたもの。
+  // 一般のプロセスの規則より先に置く。
+  {
+    pattern:
+      /^worktree is still used by processes from an earlier run: check sandbox: ([\s\S]+)$/,
+    describe: (m) =>
+      `検査用のユーザーに渡したworktreeを、rootに戻せませんでした(${m[1]})`,
+    nextAction: () => OWNERSHIP_RESTORE_FAILED_NEXT_ACTION,
   },
   {
     pattern:

@@ -23,7 +23,7 @@ locks:
   f/factory/lib/claim_support: a1a20cdbf0b277b24529f736e86cf4d439ba0c93030c74a4d211feb439ff583a
   f/factory/lib/claude: 37bd94b7315969113b4900f1ad8e82d5b75bcb8619d6ef6722cf610bc378d400
   f/factory/lib/cleanup_db_support: d9ef6bb600246990c3b2c4d3d22419356217fed835fe22499834491ed951138f
-  f/factory/lib/cleanup_support: e407bf86c3eabc8ff8718b391fe5200c9ecb1f79a3d3515248ed68e56e128e20
+  f/factory/lib/cleanup_support: 335cb6e739bbc9cf2cc51e06a4f3794586b6a86f216c0cfc58bed00f55adc570
   f/factory/lib/config: dadefb0940f34b641d568ee4dd74171a1f2756194eaefd75de5583439c5a5355
   f/factory/lib/console_status: ee1e2ab9df9b3fc2b5fd492d3576a137dc418f3d616373a555e043d373b411c9
   f/factory/lib/console_support: 6a71e415b490bcc2eca489aae58d42110718c851b5542f0420a548028fe975d4
@@ -46,7 +46,7 @@ locks:
   f/factory/lib/model_policy: 507baa197fd5ebf1c36cafa901b5290523365b5733725fbe79e4f9824e288221
   f/factory/lib/pipeline_lease: 44c3d7736bbcbb10945f2524b7fbf9af55924127cf31de7e7ed21e6cabe01a26
   f/factory/lib/poll_support: fb8ea800623b0a9cc4688e74aafc51a754ed2e4704c6ca7d6cc02c8ec301008e
-  f/factory/lib/process_lock: 858132d0d8d8923fe12c9e343eee64baaedfeaee3603b68a1a0c2c8af0566dfa
+  f/factory/lib/process_lock: c573d101aa1e64f2e651165d1eb94f4c59dab556251275bf8d53652387d9c37c
   f/factory/lib/prompts: ca793c6b0118340afadb19157c3c99c8d9bda1a448c049767cb3a05a2906387f
   f/factory/lib/prose_check: 99b737a644deedc8f9f321494e959ad09f343e938ee5af5b958111a74b37172e
   f/factory/lib/protected_paths: 330409b3b7ada24f4e7036555e54ef4dcb45e16dc84212720ff92938974d2b62
@@ -92,5 +92,5 @@ locks:
   f/factory/steps/pr_review_generate: 6473d4f400325943043b2404ab4296a913f60db9f4d24b25605abb0adf4df5e3
   f/factory/steps/pr_review_post: eed26e78c65d0f339b99530491dffb0b3044bd16324f07ff97c5ef9035c2b314
   f/factory/steps/pr_review_prepare: 4f258ff787df1ea0659550eec7e3923bc8db578698beb2b72781bc2f7050001b
-  f/factory/steps/pr_workflow_support: a951247b40bb2d2a8b1e12d0d44e649a299946dd3d526a81a0bc9714bcbc1dc4
+  f/factory/steps/pr_workflow_support: 3fd633f1c4f7c15e3dfc906172c1e08c8cae47326f64bffeefd0f217ce2355b6
   f/factory/steps/requirements_apply: 569df961344fe6defbfb4f822f4a092c9003a7ed5837e16bc1f8173518c61d1b

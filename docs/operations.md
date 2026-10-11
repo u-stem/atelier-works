@@ -516,9 +516,11 @@ PRには`factory:review`ラベルが付くので、自動レビューが起動�
 - `check_slot_record_unreadable`が残った。
   読めない記録は`slot-<N>.state.corrupt-<時刻>-<乱数>`へ退避されていて、それが指していたworktreeは自動では戻らない。
 - `check_slot_skipped`が、worktreeを取り戻せない理由で続く。
-- 実装かPR修正の準備が、使用中のworktreeを理由に止まり、理由の詳細が`check sandbox:`で始まる。
+- 実装かPR修正が、検査用のユーザーへ渡したworktreeをrootへ戻せないまま止まった。
+  理由の詳細は`check sandbox:`で始まり、通知の次の操作がこの手順を示す。
   記録が指すworktreeを取り戻せなかったか、読めない記録が残っていてworktreeにrootでないものがある。
   詳細に枠のユーザーと記録のパスが載る。
+  作業領域の掃除が同じ理由でworktreeを飛ばしたときは、`cleanup_worktree_busy`が残る。
 - 枠の数(`FACTORY_CHECK_POOL_SIZE`)を減らすか、先頭のuid(`FACTORY_CHECK_UID`)を変える。
   または、検査を枠のユーザーで動かす前の版へ`f/`を戻す。
   範囲の外になった枠の記録と、前の版が読まない記録は、どの実行も片付けないためである。
@@ -1012,7 +1014,7 @@ noticeには、Discordに送らない事項と、Discordに届かなくても残
 | `host_action_required` | 自己更新が反映した版に、worker自身では反映できない変更(`infra/`、`mise.toml`の`[tools]`・`[env]`)が含まれる。本文に、反映した版と変わったパスが載る。ホストで作業するまで、新しい構成は動かない。検査の準備が、workerのイメージが古く検査コマンドを実行できないと分かったときにも残す。そのときは本文に、足りない道具か枠のユーザーが載る([f/とworkerのイメージを両方変えたとき](#fとworkerのイメージを両方変えたとき)) | ホスト側のcheckoutで`git pull`し、`mise install`と`mise run up`を実行する。`mise run up`は、Caddyを再起動したうえで、終わりにそのcheckoutのHEADをworkerへ渡す。自己更新(10分ごと)が、通知の版がそのHEADと同じか祖先なら、通知を自動で解決する。HEADを書けなかったとき(警告が出る)と、このスクリプトを持たない版から`mise run deploy`で取り込む最初の1回(`mise run deploy`はpullの前のタスク定義で動く)は、自動では解決されない。`mise run up`が済んでいれば人が解決してよい([ホスト側で反映するもの](#ホスト側で反映するもの)) |
 | `cleanup_db_failed` | 保持期間を過ぎたレコードの削除に失敗した | 内容を確かめる。次の日の掃除でやり直す |
 | `cleanup_worktrees_skipped` | 動いているPRの修正のブランチを確かめられず、そのリポジトリの作業領域の掃除を見送った | 次の日の掃除を待つ |
-| `cleanup_worktree_busy` | 残ったプロセスが使っているので、終端の作業項目のworktreeを消さなかった。作業項目のID、worktreeのパス、使っているプロセスが載る | 載ったプロセスを止める。止めない限り毎日残る |
+| `cleanup_worktree_busy` | 終端の作業項目のworktreeを、使用中として消さなかった。原因は、残ったプロセスが使っていることか、検査用のユーザーからrootに戻せないことである。作業項目のID、worktreeのパス、理由が載る | 理由がプロセスなら、載ったプロセスを止める。rootに戻せないなら、[検査の枠の記録を片付ける](#検査の枠の記録を片付ける)の手順で片付ける。対処しない限り毎日残る |
 | `workspace_disk_usage` | 作業領域の掃除(毎日03:00)が記録したディスク使用量 | 増え続けていないか見る |
 | `console_fetch_failed` | Consoleの取り込みが失敗した | 通知の「次の操作」に従う |
 | `console_fetch_stale` | Consoleの取り込みの結果が30分以上更新されていない | 取り込みのコンテナ(`console_fetcher`)が動いているか確かめる |

@@ -2,6 +2,7 @@
 // 入出力(gitのworktree操作、`ps`とシグナル、`du`)はあちらのスクリプトが行う。
 
 import { dirname } from "node:path";
+import { isOwnershipRestoreFailure } from "./process_lock.ts";
 import type { FactoryConfig } from "./types.ts";
 import type { WorktreeEntry } from "./workspace.ts";
 
@@ -231,9 +232,10 @@ export function unresolvedHoldersNoticeMessage(
 }
 
 /**
- * 前の実行のプロセスがまだ使っているので消さなかったworktreeについてのnoticeの文言を返す。
- * 掃除は誰のプロセスも止めないので、人が止めない限り毎日同じworktreeを飛ばし続ける。
- * 運用者が止めるプロセスを選べるよう、保持者を載せた`reason`(`WorktreeBusyError`のメッセージ)をそのまま含める。
+ * 使用中として消さなかったworktreeについてのnoticeの文言を返す。
+ * 掃除は誰のプロセスも止めないので、人が対処しない限り毎日同じworktreeを飛ばし続ける。
+ * 運用者が原因を選べるよう、`reason`(`WorktreeBusyError`のメッセージ)をそのまま含める。
+ * 検査用のユーザーから所有権を取り戻せなかった理由(`isOwnershipRestoreFailure`)なら、プロセスではなく枠の記録を片付ける手順を示す。
  */
 export function busyWorktreeNoticeMessage(input: {
   readonly owner: string;
@@ -242,7 +244,11 @@ export function busyWorktreeNoticeMessage(input: {
   readonly worktreeDir: string;
   readonly reason: string;
 }): string {
-  return `${input.owner}/${input.repo}の作業項目${String(input.workItemId)}のworktree(${input.worktreeDir})は、プロセスがまだ使っているため削除しませんでした(${input.reason})。使っているプロセス(検査コマンドの生き残りなど)をworkerのコンテナで止めると、次の掃除で削除されます。`;
+  const target = `${input.owner}/${input.repo}の作業項目${String(input.workItemId)}のworktree(${input.worktreeDir})`;
+  if (isOwnershipRestoreFailure(input.reason)) {
+    return `${target}は、検査用のユーザーからrootに戻せないため削除しませんでした(${input.reason})。運用の文書の「検査の枠の記録を片付ける」の手順で片付けると、次の掃除で削除されます。`;
+  }
+  return `${target}は、プロセスがまだ使っているため削除しませんでした(${input.reason})。使っているプロセス(検査コマンドの生き残りなど)をworkerのコンテナで止めると、次の掃除で削除されます。`;
 }
 
 // ---------------------------------------------------------------------------

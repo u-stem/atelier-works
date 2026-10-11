@@ -54,6 +54,12 @@ describe("noticeGuide", () => {
     expect(noticeGuide("fork_head_denied").note).toContain("出直します");
   });
 
+  test("points a worktree the check user still owns to the slot record cleanup", () => {
+    expect(noticeGuide("cleanup_worktree_busy").action).toContain(
+      "検査の枠の記録を片付ける",
+    );
+  });
+
   test("asks the operator to check the body for an unknown kind", () => {
     expect(GENERIC_NOTICE_GUIDE.action).toContain("本文");
   });

@@ -55,6 +55,18 @@ const UNKNOWN_JOB_ID = "unknown";
 
 export const WORKTREE_BUSY_REASON =
   "worktree is still used by processes from an earlier run";
+
+/**
+ * `restoreOwnershipStep`が、検査用のユーザーからworktreeを取り戻せなかったときに作る理由の先頭。
+ * 後ろに`CheckOwnershipRestoreError`の詳細が続く。
+ * 原因はプロセスではなく残った所有権なので、通知はプロセスを止める案内ではなく、枠の記録を片付ける手順を示す。
+ */
+export const OWNERSHIP_RESTORE_FAILED_PREFIX = `${WORKTREE_BUSY_REASON}: check sandbox: `;
+
+/** `reason`が、検査用のユーザーからworktreeを取り戻せなかった理由(`OWNERSHIP_RESTORE_FAILED_PREFIX`で始まる)かを返す。 */
+export function isOwnershipRestoreFailure(reason: string): boolean {
+  return reason.startsWith(OWNERSHIP_RESTORE_FAILED_PREFIX);
+}
 export const WORKTREE_LOCK_HELD_IN_RUN_REASON =
   "worktree lock is held by a process this run left behind";
 
