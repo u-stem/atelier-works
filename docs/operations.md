@@ -478,8 +478,15 @@ PRのレビュー(`pr_review`)と修正(`pr_fix`)の内部の挙動は、[PRワ�
 許可されていない人が付けたラベルは、外さずに残し、**通知**タブに`labeler_denied`を残す。
 そのPRは、人がラベルを外すまで、ラベルを介さないレビューの自動検出も止まる。
 追跡中のPRの新しいcommitによる再レビューも、PRの作成者が許可されたアカウントのときに限る。
-forkのPRと第三者のPRは、許可されたアカウントがラベルを付けたときだけレビューされる。
+同じリポジトリのブランチから出した第三者のPRは、許可されたアカウントがラベルを付けたときだけレビューされる。
 新しいcommitが入るたびに、ラベルを付け直す。
+
+PRのheadが対象のリポジトリにないときは、レビューを始めない。
+対象は、forkのPRと、headのリポジトリを取得できないPRである。
+ラベルを付けても、レビュー依頼やassigneeを入れても同じである。
+forkの内容は第三者が書いたもので、信頼してレビューに渡せないためである。
+ラベルは外さずに残し、**通知**タブに`fork_head_denied`を残す。
+レビューさせたいときは、同じリポジトリにブランチを作ってPRを出し直す。
 
 修正の材料にするコメントやレビューは、投稿者の関係(`author_association`)が`allowed_labeler_associations`に含まれるものだけにする。
 
@@ -748,6 +755,7 @@ Consoleの**通知**タブには、Discordに送らない事項と、Discordに�
 - `workspace_disk_usage`
 - `fix_feedback_association_excluded`
 - `labeler_denied`
+- `fork_head_denied`
 - `unsandboxed_check_commands`
 - `implement_needs_human`
 
@@ -763,6 +771,7 @@ Consoleの**通知**タブには、Discordに送らない事項と、Discordに�
 | `issue_proposal_record_failed` | Issue化の提案を記録できなかった | PRのスレッドを確かめ、必要なら人がIssueを起票する |
 | `fix_feedback_association_excluded` | 許可されていない関係の人のコメントを、修正の材料から除いた | 必要なら許可された人が指示を書き直す |
 | `labeler_denied` | 許可されていない人が、または付与者を特定できないままトリガーラベルを付けた。Issueの`factory`と、PRの`factory:review`、`factory:fix`が対象 | 拾わせるなら、ラベルを外して、許可された人が付け直す。付ける人を増やすなら`allowed_labeler_logins`に足す |
+| `fork_head_denied` | PRのheadが対象のリポジトリにない(forkのPR、またはheadのリポジトリを取得できない)ので、レビューを始めなかった。本文は`<owner>/<repo>#<PR番号>:`で始まり、PRごとに残る | 同じリポジトリにブランチを作ってPRを出し直す。fork元の内容を確かめてレビューさせたいときは、人が確かめてからブランチに取り込む |
 | `labeler_check_limit` | 付与者を判定できない。直近100件のラベルのイベントにトリガーラベルのイベントが無く、古いイベントが残っている | ラベルを外し、許可された人が付け直す。対応した後に、Consoleでnoticeを解決する |
 | `claim_race_lost` | ほかのインスタンスか人が先にIssue・PRのトリガーラベルを外した。または、別の取得が同じIssueを先に取得した。Issueでは、同じ本文の未解決のnoticeがあるあいだは追加しない。PRでは、確認できずにトリガーラベルを付け直したときだけ、同じ本文の未解決のnoticeがあるあいだは追加しない | 理由がラベルを先に外されたことなら、人が意図して外したのか確かめる。意図していなければ、何もしない |
 | `pr_trigger_label_left_removed` | PRのトリガーラベルを外した後に取得を確認できず、ラベルが外れたままで作業項目も無い。本文は`<owner>/<repo>#<PR番号>: <ラベル>`で、PRごとに残る | [PRのトリガーラベルが外れたままになったとき](#prのトリガーラベルが外れたままになったとき)の手順で、ラベルが付いていないか、サイクルが始まっていないかを確かめてから付け直す |

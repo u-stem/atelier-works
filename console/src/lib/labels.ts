@@ -42,6 +42,7 @@ const NOTICE_KIND_LABELS: ReadonlyMap<string, string> = new Map([
   ["fix_feedback_association_excluded", "修正の指摘の除外"],
   ["labeler_denied", "ラベル付与者の拒否"],
   ["labeler_check_limit", "ラベル付与者の判定不能"],
+  ["fork_head_denied", "forkのPRのレビューの見送り"],
   // 種類名を改める前に解決済みになった通知が、保持期間のあいだ履歴に残る。
   ["labeler_association_denied", "ラベル付与者の拒否"],
   ["unsandboxed_check_commands", "隔離されない検査コマンド"],

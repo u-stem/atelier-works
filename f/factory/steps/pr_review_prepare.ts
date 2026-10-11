@@ -17,7 +17,10 @@ import {
   fetchPrHeadRef,
   runCommand,
 } from "../lib/workspace.ts";
-import { decideReviewPrepare } from "./pr_workflow_support.ts";
+import {
+  decideReviewPrepare,
+  evaluateSameRepoHeadGuard,
+} from "./pr_workflow_support.ts";
 
 export type PrReviewPrepareResult = {
   readonly skip: boolean;
@@ -96,6 +99,23 @@ export async function main(
 
   const ghToken = await wmill.getVariable("f/factory/github_token");
   const client: GhClient = { run: runCommand, ghToken };
+
+  // 多層防御のための再確認。`poll_prs.ts`は、headがbaseと同じリポジトリにない
+  // PRのレビューを始めないが、作業項目を手で追加するなどの経路は止められない。
+  // forkの内容はcloneにもfetchにも入れず、worktreeも作らない。
+  const prForRepoCheck = await getPr(
+    client,
+    workItem.owner,
+    workItem.repo,
+    workItem.pr_number,
+  );
+  const sameRepoHead = evaluateSameRepoHeadGuard(
+    prForRepoCheck.headRepoFullName,
+    prForRepoCheck.baseRepoFullName,
+  );
+  if (!sameRepoHead.ok) {
+    return { skip: true, reason: sameRepoHead.reason, ...SKIPPED_BASE };
+  }
 
   const factoryClone = await ensureFactoryClone({
     run: runCommand,

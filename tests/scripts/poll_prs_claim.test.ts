@@ -23,6 +23,7 @@ import {
   type PrLabelLeftRemoved,
   processPrDecisions,
   recordPrClaimNotClaimed,
+  recordPrForkHeadDenied,
   recordPrLabelerDenied,
   resolveClaimNotices,
 } from "../../f/factory/poll_prs.ts";
@@ -882,6 +883,40 @@ describe("recordPrLabelerDenied", () => {
   });
 });
 
+describe("recordPrForkHeadDenied", () => {
+  const TARGET = { owner: "octo-owner", repo: "atelier-works", number: 7 };
+
+  function recording() {
+    const records: { kind: string; message: string }[] = [];
+    return {
+      records,
+      deps: {
+        addNoticeUnlessUnresolved: async (record: {
+          kind: string;
+          message: string;
+        }) => {
+          records.push(record);
+          return 1;
+        },
+      },
+    };
+  }
+
+  test("records the notice kind", async () => {
+    const { records, deps } = recording();
+    await recordPrForkHeadDenied(TARGET, deps);
+    expect(records[0]?.kind).toBe("fork_head_denied");
+  });
+
+  test("names the target in the message", async () => {
+    const { records, deps } = recording();
+    await recordPrForkHeadDenied(TARGET, deps);
+    expect(records[0]?.message).toBe(
+      "octo-owner/atelier-works#7: headのリポジトリが対象のリポジトリと異なるため、レビューを始めません",
+    );
+  });
+});
+
 describe("collectLabelLeftRemoved", () => {
   const TARGET = { owner: "octo-owner", repo: "atelier-works", number: 7 };
   const leftRemoved = new PrClaimLabelLeftRemovedError(
@@ -982,6 +1017,7 @@ describe("processPrDecisions", () => {
     headSha: "abc",
     labels: [],
     authorLogin: "octo-owner",
+    headInBaseRepo: true,
     reviewLabelerLogin: null,
     fixLabelerLogin: null,
     hasActiveReviewingItem: false,
@@ -1020,6 +1056,7 @@ describe("processPrDecisions", () => {
       recordNotClaimed: async () => {},
       confirmLabeler: async () => true,
       recordLabelerDenied: async () => {},
+      recordForkHeadDenied: async () => {},
       startReview: async () => {
         calls.push("startReview");
       },
@@ -1342,6 +1379,77 @@ describe("processPrDecisions", () => {
       const result = await run([REVIEW_DENIED], handlers);
 
       expect(result.failed).toBe(1);
+    });
+  });
+
+  describe("when the head repository of the PR is not the base repository", () => {
+    const REVIEW_FORK: PrDecision = {
+      candidate: CANDIDATE,
+      review: { kind: "deny_fork_head" },
+      fix: { kind: "none" },
+    };
+
+    test("counts the review as skipped", async () => {
+      const { handlers } = handlersWith();
+
+      const result = await run([REVIEW_FORK], handlers);
+
+      expect(result.skipped).toBe(1);
+    });
+
+    test("records the denial for the PR", async () => {
+      const recorded: number[] = [];
+      const { handlers } = handlersWith({
+        recordForkHeadDenied: async (candidate) => {
+          recorded.push(candidate.number);
+        },
+      });
+
+      await run([REVIEW_FORK], handlers);
+
+      expect(recorded).toEqual([7]);
+    });
+
+    test("neither claims nor starts the review", async () => {
+      const claimed: string[] = [];
+      const { handlers, calls } = handlersWith({
+        claim: async (_candidate, label) => {
+          claimed.push(label);
+          return { claimed: true };
+        },
+      });
+
+      await run([REVIEW_FORK], handlers);
+
+      expect([claimed, calls]).toEqual([[], []]);
+    });
+
+    test("counts a failing record as failed", async () => {
+      const { handlers } = handlersWith({
+        recordForkHeadDenied: async () => {
+          throw new Error("db down");
+        },
+      });
+
+      const result = await run([REVIEW_FORK], handlers);
+
+      expect(result.failed).toBe(1);
+    });
+
+    test("records a failing record under a fork_head_denied step", async () => {
+      const steps: string[] = [];
+      const { handlers } = handlersWith({
+        recordForkHeadDenied: async () => {
+          throw new Error("db down");
+        },
+        recordFailure: async (step) => {
+          steps.push(step);
+        },
+      });
+
+      await run([REVIEW_FORK], handlers);
+
+      expect(steps).toEqual(["fork_head_denied:octo-owner/atelier-works#7"]);
     });
   });
 

@@ -22,6 +22,7 @@ export const NOTICE_SEVERITY: Readonly<Record<string, NoticeSeverity>> = {
   workspace_disk_usage: "info",
   fix_feedback_association_excluded: "info",
   labeler_denied: "info",
+  fork_head_denied: "info",
   unsandboxed_check_commands: "info",
   implement_needs_human: "info",
   approval_comment_failed: "action",
