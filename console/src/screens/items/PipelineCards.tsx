@@ -5,18 +5,18 @@ import { Badge } from "../../components/ui/badge.tsx";
 import { workItemKindLabel } from "../../lib/labels.ts";
 import {
   DEFAULT_PIPELINE_SORT,
-  issueOrPrLink,
   itemDetailPath,
   itemRequirementsPath,
   pipelineStatusLabel,
   pipelineStatusVariant,
-  prLink,
+  relatedLinks,
   showsRequirementsLink,
   sortPipelineRows,
 } from "../../lib/pipelineView.ts";
 import { ExternalLink, PlainText } from "./PipelineParts.tsx";
 
 function PipelineCard({ row, now }: { row: PipelineRow; now: number }) {
+  const links = relatedLinks(row);
   return (
     <li className="flex flex-col gap-2 px-4 py-3">
       <div className="flex items-start justify-between gap-3">
@@ -41,12 +41,12 @@ function PipelineCard({ row, now }: { row: PipelineRow; now: number }) {
           {row.owner}/{row.repo}
         </dd>
         <dt className="text-muted-foreground">Issue/PR</dt>
-        <dd>
-          <ExternalLink link={issueOrPrLink(row)} />
-        </dd>
-        <dt className="text-muted-foreground">PR</dt>
-        <dd>
-          <ExternalLink link={prLink(row.pr_url)} />
+        <dd className="flex flex-col gap-0.5">
+          {links.length === 0 ? (
+            <ExternalLink link={null} />
+          ) : (
+            links.map((link) => <ExternalLink key={link.url} link={link} />)
+          )}
         </dd>
         <dt className="text-muted-foreground">更新</dt>
         <dd className="text-muted-foreground">

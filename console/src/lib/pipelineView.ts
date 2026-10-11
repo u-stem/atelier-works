@@ -246,11 +246,7 @@ export function nextPipelineSort(
 }
 
 /** 状態の表示の色。`Badge`の`variant`の名前に合わせている。 */
-export type PipelineStatusVariant =
-  | "warning"
-  | "success"
-  | "failure"
-  | "outline";
+export type PipelineStatusVariant = "warning" | "success" | "failure" | "muted";
 
 const SUCCESS_STATUSES: ReadonlySet<string> = new Set([
   "approved",
@@ -265,43 +261,48 @@ const FAILURE_STATUSES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * 状態を表示の色に分ける。承認待ちは警告、完了に近い状態は成功、失敗と人の対応待ちは失敗、それ以外は無地にする。
+ * 状態を表示の色に分ける。承認待ちは警告、完了に近い状態は成功、失敗と人の対応待ちは失敗、それ以外は枠の無い灰色にする。
  * 色だけに頼らず、状態の名前を隣に出す。
  */
 export function pipelineStatusVariant(status: string): PipelineStatusVariant {
   if (status === "awaiting_approval") return "warning";
   if (SUCCESS_STATUSES.has(status)) return "success";
   if (FAILURE_STATUSES.has(status)) return "failure";
-  return "outline";
+  return "muted";
 }
 
 export type PipelineLink = { readonly label: string; readonly url: string };
 
 /**
- * Issue/PR列のリンク。IssueのURLと番号があればIssueを、無ければPR番号から組み立てたPRを指す。
- * URLがGitHubのIssueかPRの形でなければ、次の候補へ進まず`null`を返す。
- * 壊れたIssueのURLを、別物であるPRへのリンクで隠さないためである。
+ * 関連リンクの列に並べるリンク。IssueのリンクがあればPRのリンクより前に置く。
+ * IssueはURLと番号が揃うときだけ、PRは記録したURLを先に、無ければPR番号から組み立てて指す。
+ * GitHubのIssueやPRの形でないURLは、リンクにせず落とす。
+ * 壊れたIssueのURLがあっても、PRのリンクは残す。
  */
-export function issueOrPrLink(
+export function relatedLinks(
   row: Pick<
     PipelineRow,
-    "issue_url" | "issue_number" | "pr_number" | "owner" | "repo"
+    "issue_url" | "issue_number" | "pr_url" | "pr_number" | "owner" | "repo"
   >,
-): PipelineLink | null {
+): PipelineLink[] {
+  const links: PipelineLink[] = [];
   if (row.issue_url !== null && row.issue_number !== null) {
     const url = safeGitHubUrl(row.issue_url);
-    return url === null ? null : { label: `#${row.issue_number}`, url };
+    if (url !== null) links.push({ label: `#${row.issue_number}`, url });
   }
-  if (row.pr_number !== null) {
+  const recorded = prLink(row.pr_url);
+  if (recorded !== null) {
+    links.push(recorded);
+  } else if (row.pr_number !== null) {
     const url = safeGitHubUrl(
       `https://github.com/${row.owner}/${row.repo}/pull/${row.pr_number}`,
     );
-    return url === null ? null : { label: `PR #${row.pr_number}`, url };
+    if (url !== null) links.push({ label: `PR #${row.pr_number}`, url });
   }
-  return null;
+  return links;
 }
 
-/** PR列のリンク。PRのURLの形でなければ`null`を返す。 */
+/** PRのURLからリンクを作る。PRのURLの形でなければ`null`を返す。 */
 export function prLink(prUrl: string | null): PipelineLink | null {
   const url = safeGitHubUrl(prUrl);
   if (url === null) return null;

@@ -167,8 +167,8 @@ describe("toneBadgeVariant", () => {
     expect(toneBadgeVariant("warning")).toBe("warning");
   });
 
-  test("shows neutral with the outline badge", () => {
-    expect(toneBadgeVariant("neutral")).toBe("outline");
+  test("shows neutral with the muted badge", () => {
+    expect(toneBadgeVariant("neutral")).toBe("muted");
   });
 });
 

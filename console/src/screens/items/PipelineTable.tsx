@@ -1,37 +1,76 @@
 import { ArrowDown, ArrowUp, ChevronsUpDown } from "lucide-react";
-import { useState } from "react";
+import { useId, useState } from "react";
 import { Link } from "react-router";
 import type { PipelineRow } from "../../api/guards/pipeline.ts";
 import { TimeText } from "../../components/TimeText.tsx";
 import { Badge } from "../../components/ui/badge.tsx";
 import { Button } from "../../components/ui/button.tsx";
+import { Input } from "../../components/ui/input.tsx";
+import { Select } from "../../components/ui/select.tsx";
+import { cn } from "../../lib/cn.ts";
 import { workItemKindLabel } from "../../lib/labels.ts";
 import {
   DEFAULT_PIPELINE_SORT,
   EMPTY_PIPELINE_FILTER,
   filterPipelineRows,
   isPipelineFilterActive,
-  issueOrPrLink,
   itemDetailPath,
   itemRequirementsPath,
   nextPipelineSort,
   type PipelineFilter,
+  type PipelineLink,
   type PipelineSort,
   type PipelineSortKey,
   pipelineStatusLabel,
   pipelineStatusVariant,
-  prLink,
   reconcilePipelineFilter,
+  relatedLinks,
   repoOptions,
   showsRequirementsLink,
   sortPipelineRows,
   statusOptions,
 } from "../../lib/pipelineView.ts";
 import { PipelineCards } from "./PipelineCards.tsx";
-import { ExternalLink, PlainText } from "./PipelineParts.tsx";
+import { PlainText } from "./PipelineParts.tsx";
 
-const FIELD_CLASS =
-  "h-9 rounded-md border border-input bg-card px-2 text-body text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring";
+/**
+ * 表の幅が足りないときに隠す列。題名、状態、更新を先に確保するため、
+ * 補助の情報であるブランチ、試行、修正回数をここに置く。
+ * 幅は画面ではなく表を包む領域で測る。サイドバーの有無で使える幅が変わるためである。
+ * 実測で、全列を出したときの表の最小幅は約87.5remだった。ブランチ列の最小幅に`min-w-40`を与えた状態で、
+ * 実データ(リポジトリ名が約20文字)で測っている。
+ * 閾値がこれより低いと、列が戻った直後に横スクロールが出るため、余裕を足して88remにしている。
+ * リポジトリ名がさらに長いと、88remでも横スクロールが出ることがある。
+ */
+const NARROW_HIDDEN = "hidden @[88rem]:table-cell";
+
+/**
+ * 題名の列が潰れないための最小幅。
+ * 表のセルへの`min-width`は効き方が仕様で定まらないので、セルの中の`div`に付ける。
+ * 見出しと本文の両方の`div`に付けて、列の幅をそろえる。
+ */
+const TITLE_MIN_WIDTH = "min-w-56";
+
+function ExternalLinks({ links }: { links: readonly PipelineLink[] }) {
+  if (links.length === 0) {
+    return <span className="text-subtle">-</span>;
+  }
+  return (
+    <div className="flex flex-col gap-0.5">
+      {links.map((link) => (
+        <a
+          key={link.url}
+          href={link.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="w-fit rounded-sm tabular-nums underline underline-offset-2"
+        >
+          {link.label}
+        </a>
+      ))}
+    </div>
+  );
+}
 
 function sortIcon(sort: PipelineSort, key: PipelineSortKey) {
   if (sort.key !== key) {
@@ -58,18 +97,20 @@ function SortableHeader({
   sort,
   onSort,
   numeric = false,
+  className,
 }: {
   label: string;
   sortKey: PipelineSortKey;
   sort: PipelineSort;
   onSort: (key: PipelineSortKey) => void;
   numeric?: boolean;
+  className?: string;
 }) {
   return (
     <th
       scope="col"
       aria-sort={ariaSort(sort, sortKey)}
-      className="px-3 py-2 text-left font-medium"
+      className={cn("px-3 py-2 text-left font-medium", className)}
     >
       <button
         type="button"
@@ -83,13 +124,29 @@ function SortableHeader({
   );
 }
 
-function PlainHeader({ label }: { label: string }) {
+function PlainHeader({
+  label,
+  className,
+  labelClassName,
+}: {
+  label: string;
+  className?: string;
+  /** 指定すると、文字を`div`で包んでクラスを付ける。セルでなく中身に最小幅を与えるときに使う。 */
+  labelClassName?: string;
+}) {
   return (
     <th
       scope="col"
-      className="whitespace-nowrap px-3 py-2 text-left font-medium"
+      className={cn(
+        "whitespace-nowrap px-3 py-2 text-left font-medium",
+        className,
+      )}
     >
-      {label}
+      {labelClassName === undefined ? (
+        label
+      ) : (
+        <div className={labelClassName}>{label}</div>
+      )}
     </th>
   );
 }
@@ -103,12 +160,17 @@ function FilterBar({
   filter: PipelineFilter;
   onChange: (next: PipelineFilter) => void;
 }) {
+  // 自作の部品を包む`label`は、静的検査が入力欄と結べないと見なすので、`htmlFor`でも結ぶ。
+  const id = useId();
   return (
     <div className="flex flex-wrap items-end gap-4">
-      <label className="flex flex-col gap-1 text-small text-muted-foreground">
+      <label
+        htmlFor={`${id}-status`}
+        className="flex flex-col gap-1 text-small text-muted-foreground"
+      >
         状態
-        <select
-          className={FIELD_CLASS}
+        <Select
+          id={`${id}-status`}
           value={filter.status ?? ""}
           onChange={(event) =>
             onChange({
@@ -123,12 +185,15 @@ function FilterBar({
               {pipelineStatusLabel(status)}
             </option>
           ))}
-        </select>
+        </Select>
       </label>
-      <label className="flex flex-col gap-1 text-small text-muted-foreground">
+      <label
+        htmlFor={`${id}-repo`}
+        className="flex flex-col gap-1 text-small text-muted-foreground"
+      >
         リポジトリ
-        <select
-          className={FIELD_CLASS}
+        <Select
+          id={`${id}-repo`}
           value={filter.repo ?? ""}
           onChange={(event) =>
             onChange({
@@ -143,13 +208,16 @@ function FilterBar({
               {repo}
             </option>
           ))}
-        </select>
+        </Select>
       </label>
-      <label className="flex min-w-56 flex-1 flex-col gap-1 text-small text-muted-foreground">
+      <label
+        htmlFor={`${id}-text`}
+        className="flex min-w-56 flex-1 flex-col gap-1 text-small text-muted-foreground"
+      >
         検索
-        <input
+        <Input
+          id={`${id}-text`}
           type="search"
-          className={FIELD_CLASS}
           placeholder="題名、ブランチ、番号など"
           value={filter.text}
           onChange={(event) =>
@@ -181,8 +249,10 @@ function PipelineRowView({ row, now }: { row: PipelineRow; now: number }) {
           #{row.work_item_id}
         </Link>
       </td>
-      <td className="max-w-80 break-words px-3 py-2">
-        <PlainText value={row.title} />
+      <td className="px-3 py-2">
+        <div className={cn("max-w-lg break-words", TITLE_MIN_WIDTH)}>
+          <PlainText value={row.title} />
+        </div>
       </td>
       <td className="whitespace-nowrap px-3 py-2">
         {workItemKindLabel(row.kind)}
@@ -196,16 +266,19 @@ function PipelineRowView({ row, now }: { row: PipelineRow; now: number }) {
         {row.owner}/{row.repo}
       </td>
       <td className="whitespace-nowrap px-3 py-2">
-        <ExternalLink link={issueOrPrLink(row)} />
+        <ExternalLinks links={relatedLinks(row)} />
       </td>
-      <td className="max-w-64 break-all px-3 py-2 font-mono text-small">
-        <PlainText value={row.branch} />
+      <td className={cn("px-3 py-2 font-mono text-small", NARROW_HIDDEN)}>
+        <div className="max-w-64 min-w-40 break-all">
+          <PlainText value={row.branch} />
+        </div>
       </td>
-      <td className="whitespace-nowrap px-3 py-2">
-        <ExternalLink link={prLink(row.pr_url)} />
+      <td className={cn("px-3 py-2 tabular-nums", NARROW_HIDDEN)}>
+        {row.attempt}
       </td>
-      <td className="px-3 py-2 tabular-nums">{row.attempt}</td>
-      <td className="px-3 py-2 tabular-nums">{row.fix_round}</td>
+      <td className={cn("px-3 py-2 tabular-nums", NARROW_HIDDEN)}>
+        {row.fix_round}
+      </td>
       <td className="whitespace-nowrap px-3 py-2 text-muted-foreground">
         <TimeText iso={row.updated_at} now={now} />
       </td>
@@ -276,8 +349,8 @@ export function PipelineTable({
           <div className="@4xl:hidden">
             <PipelineCards rows={visible} now={now} />
           </div>
-          <div className="hidden overflow-x-auto rounded-xl border border-border bg-card @4xl:block">
-            <table className="w-full min-w-[72rem] border-collapse text-body">
+          <div className="@container hidden overflow-x-auto rounded-xl border border-border bg-card @4xl:block">
+            <table className="w-full border-collapse text-body">
               <thead className="text-small text-muted-foreground">
                 <tr>
                   <SortableHeader
@@ -286,7 +359,7 @@ export function PipelineTable({
                     sort={sort}
                     onSort={onSort}
                   />
-                  <PlainHeader label="題名" />
+                  <PlainHeader label="題名" labelClassName={TITLE_MIN_WIDTH} />
                   <PlainHeader label="種別" />
                   <SortableHeader
                     label="状態"
@@ -301,14 +374,14 @@ export function PipelineTable({
                     onSort={onSort}
                   />
                   <PlainHeader label="Issue/PR" />
-                  <PlainHeader label="ブランチ" />
-                  <PlainHeader label="PR" />
+                  <PlainHeader label="ブランチ" className={NARROW_HIDDEN} />
                   <SortableHeader
                     label="試行"
                     sortKey="attempt"
                     sort={sort}
                     onSort={onSort}
                     numeric
+                    className={NARROW_HIDDEN}
                   />
                   <SortableHeader
                     label="修正回数"
@@ -316,6 +389,7 @@ export function PipelineTable({
                     sort={sort}
                     onSort={onSort}
                     numeric
+                    className={NARROW_HIDDEN}
                   />
                   <SortableHeader
                     label="更新"
