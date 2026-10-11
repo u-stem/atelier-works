@@ -106,9 +106,23 @@
                 header Sec-Fetch-Mode nested-navigate
         }
 
+        # 旧Console(Windmillのraw app)のURLと、その配下。
+        # 過去のDiscordの通知、Issueのコメント、PRの本文に残る旧Consoleのリンクを、新しいConsoleの入口に飛ばす。
+        # `(?i)`と`/+`は、大文字小文字と重なった`/`の違いで、飛ばし損ねないためである。
+        @legacy_console path_regexp (?i)^/+apps(_raw)?/+get/+f/+factory/+factory_console(/.*)?$
+
         # Caddyはhandleをmatcherの種類で並べ替えるので、routeで書いた順に評価させる。
-        # Consoleの経路と@console_rawを、どのreverse_proxyよりも先に置く。
+        # 旧Consoleの転送、Consoleの経路、@console_rawを、どのreverse_proxyよりも先に置く。
         route {
+                # 行き先は固定の/console/にする。旧URLのパスとクエリから行き先を作らないので、
+                # オープンリダイレクトにならない。#requirements/<id>のようなフラグメントはブラウザが保ち、
+                # 新しいConsoleが読み替える。一時的な転送(302)にするのは、
+                # ブラウザに転送を覚えさせず、戻す(Caddyfileを戻す)ときに旧Consoleへ届かなくなるのを防ぐため。
+                handle @legacy_console {
+                        header Cache-Control "no-store"
+                        redir * /console/ 302
+                }
+
                 handle /console {
                         import console_headers
                         # ?approval=<id>などのクエリを保つ。クエリが無いときは?を付けない。

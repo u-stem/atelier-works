@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# CaddyがAPIの他のサイトからの要求を止めることを、実際にCaddyを起動して確かめる。
-# composeと同じイメージで`infra/Caddyfile`を動かし、`curl`の応答の状態を比べる。
+# CaddyがAPIの他のサイトからの要求を止めることと、旧ConsoleのURLを新しいConsoleに飛ばすことを、
+# 実際にCaddyを起動して確かめる。
+# composeと同じイメージで`infra/Caddyfile`を動かし、`curl`の応答の状態とLocationを比べる。
 # 転送先のWindmillは起動しないので、止められなかった要求は502になる。
 # 全部期待どおりなら終了コード0、1つでも違えば1で終わる。
 set -euo pipefail
@@ -42,6 +43,23 @@ expect() {
     printf 'ok    %s -> %s\n' "${label}" "${got}"
   else
     printf 'FAIL  %s -> %s (期待: %s)\n' "${label}" "${got}" "${want}"
+    failures=$((failures + 1))
+  fi
+}
+
+# expect_redirect <期待する状態> <期待するLocation> <説明> <curlの引数...>
+# Locationは、行き先が固定であることを確かめるため、応答のヘッダーの値を完全に一致させる。
+expect_redirect() {
+  local want_status="$1" want_location="$2" label="$3"
+  shift 3
+  local headers got_status got_location
+  headers="$(curl -s -o /dev/null -D - "$@" | tr -d '\r')"
+  got_status="$(printf '%s\n' "${headers}" | awk 'NR == 1 { print $2 }')"
+  got_location="$(printf '%s\n' "${headers}" | awk -F': ' 'tolower($1) == "location" { print $2 }')"
+  if [[ "${got_status}" == "${want_status}" && "${got_location}" == "${want_location}" ]]; then
+    printf 'ok    %s -> %s %s\n' "${label}" "${got_status}" "${got_location}"
+  else
+    printf 'FAIL  %s -> %s %s (期待: %s %s)\n' "${label}" "${got_status}" "${got_location}" "${want_status}" "${want_location}"
     failures=$((failures + 1))
   fi
 }
@@ -106,6 +124,21 @@ expect 502 "Sec-Fetch-Modeが無いPOST(古いブラウザやCLI)" -X POST -H "O
 
 # 規則は/api/*だけに効く。
 expect 502 "/api/*以外ではOriginを見ない" -H 'Origin: http://evil.example' "${localhost}/ws/ready"
+
+# 旧Console(raw app)のURLは、パスの配下とクエリがあっても、固定の/console/へ一時的に飛ばす。
+# #requirements/<id>のフラグメントはブラウザが保つので、curlでは確かめない。
+console="/console/"
+expect_redirect 302 "${console}" "旧Console(apps)" "${localhost}/apps/get/f/factory/factory_console"
+expect_redirect 302 "${console}" "旧Console(apps_raw)" "${localhost}/apps_raw/get/f/factory/factory_console"
+expect_redirect 302 "${console}" "旧Consoleの配下" "${localhost}/apps/get/f/factory/factory_console/assets/a.js"
+expect_redirect 302 "${console}" "旧Consoleの末尾の/" "${localhost}/apps/get/f/factory/factory_console/"
+expect_redirect 302 "${console}" "旧Consoleの/の重なり" "${localhost}//apps//get//f/factory/factory_console"
+expect_redirect 302 "${console}" "旧Consoleのクエリは行き先に写さない" "${localhost}/apps/get/f/factory/factory_console?next=http://evil.example/&x=1"
+expect_redirect 302 "${console}" "旧Consoleの配下にURLらしいパス" "${localhost}/apps/get/f/factory/factory_console/http://evil.example/"
+expect_redirect 302 "${console}" "旧Console(別のホスト名のHost)" -H 'Host: evil.example' "${localhost}/apps/get/f/factory/factory_console"
+expect 502 "名前が続く別のアプリは飛ばさない" "${localhost}/apps/get/f/factory/factory_console2"
+expect 502 "旧Consoleの編集画面は飛ばさない" "${localhost}/apps/edit/f/factory/factory_console"
+expect_redirect 308 "${console}?approval=9" "/consoleはクエリを保って入口へ" "${localhost}/console?approval=9"
 
 if [[ "${failures}" -gt 0 ]]; then
   printf '%s件が期待と違う\n' "${failures}" >&2
