@@ -318,7 +318,7 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
       return {
         title: `取り込み内容を更新: #${event.issue_number} ${event.title}`,
         description:
-          "Issueが取り込み後に書き換えられたので、取り込み内容を現在のIssueで更新しました。新しいConsoleの要対応で更新後の内容を確かめてから承認してください。",
+          "Issueが取り込み後に書き換えられたので、取り込み内容を現在のIssueで更新しました。Consoleの要対応で更新後の内容を確かめてから承認してください。",
         url: event.issue_url,
         fields: [
           instanceField(event.instance_name),

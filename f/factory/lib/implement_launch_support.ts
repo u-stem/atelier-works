@@ -169,7 +169,7 @@ async function attempt(
  *   移行したかどうか分からないので、`needs_human`へは移さない。
  * - フローの起動が例外を投げるか、戻り値がジョブIDでない場合は、
  *   リースが空のときだけ`needs_human`へ移し、`job_failures`への記録
- *   (ConsoleのFailuresタブから再実行できる)、noticeの追加、Discordへの通知を行い、`launch_failed`を返す。
+ *   (Consoleの要対応から再実行できる)、noticeの追加、Discordへの通知を行い、`launch_failed`を返す。
  *   `needs_human`への移行が`false`を返すとき(フローが既にリースを取っている、または別の処理が動かした)は、
  *   フローが動いているので何も残さず`flow_holds_lease`を返す。
  *   移行自体が例外を投げたときは、フローが動いている確証がないので、人に知らせて`launch_failed`を返す。

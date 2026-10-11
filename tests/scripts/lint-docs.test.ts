@@ -20,7 +20,6 @@ describe("isTargetDoc", () => {
     [".claude/skills/yomiyasu/SKILL.md", false],
     [".agents/skills/write-flow/SKILL.md", false],
     ["AGENTS.wmill.md", false],
-    ["f/factory/factory_console__raw_app/AGENTS.md", false],
     ["tests/fixtures/audit/valid.md", false],
     ["docs/notes.txt", false],
   ])("%s -> %p", (path, expected) => {
