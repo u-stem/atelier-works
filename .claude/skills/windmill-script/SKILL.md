@@ -28,7 +28,7 @@ scriptからは相対importで読み込む(例: `import { runClaude } from "./li
 
 - このリポジトリのscriptは、`child_process`や`fs`で`git` / `gh` / `claude` / `wmill`をサブプロセスとして起動する。そのため、native runtime(`//native`の指定)は使わない。
 - 管理スキルがnativeを推奨していても、このリポジトリでは通常のbun runtimeを使う。先頭に`//native`を書かない。
-- `windmill_worker_native`コンテナは、Appの軽量なrunnableのような別の用途のために残っている。factoryのscriptは、そこでは動かさない前提で書く。
+- `windmill_worker_native`コンテナは、nativeのジョブのために残っている。factoryのscriptは、そこでは動かさない前提で書く。
 
 ## シークレットの扱い
 
@@ -112,8 +112,8 @@ function isClaudeResult(value: unknown): value is ClaudeResult {
 - 実装者(implementer)は、lockのバージョンの変化(差分)を、レビューを依頼する前に報告する。
 - libの`.script.yaml`と`.lock`も、生成物としてコミットする。
 - デプロイは`mise run push`で行う。内部では`wmill sync push --yes --keep-deleted`を実行する。
-- `--keep-deleted`は、UIで作成途中のAppのような、リポジトリに未反映のリモートの項目を誤って消さないために付ける。
-- リモートの項目を自動で削除しない。削除が必要な場合は、人が個別に判断して行う。通常の`push`タスクには削除を含めない。
+- `--keep-deleted`は、UIで作成途中のものなど、リポジトリに未反映のリモートの項目を誤って消さないために付ける。
+- リモートの項目を自動で削除しない。削除が必要な場合は、人が`mise run push:prune`で行う。通常の`push`タスクには削除を含めない。
 
 ## 外部サービスの契約と実装上の注意
 

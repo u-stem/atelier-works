@@ -163,7 +163,7 @@ function requirePrNumber(prNumber: number | null, workItemId: number): number {
  *
  * 未完了の承認を見えるままにする: Issueの番号が分かる前にIssueの作成・再利用が失敗したら、
  * 行を"pending"に戻す(`revertIssueProposalToPending`)。
- * `created_issue_number`がnullの"approved"のまま残すと、ConsoleのInboxのどこにも出ないため。
+ * `created_issue_number`がnullの"approved"のまま残すと、Consoleの要対応のどこにも出ないため。
  * `console_query.ts`のinboxも、Issueが作られていない"approved"の行を表示する。
  * そのため、Issueが既にGitHubにある状態で後の段階(`setIssueProposalCreatedIssue`の書き込み、
  * 返信、スレッドの解決、状態の切り替え)が失敗しても、提案は人が再試行できるよう見えている。
@@ -377,7 +377,7 @@ async function run(
       } catch (err) {
         // この時点ではIssueの番号が分からない。
         // このままだと行は`created_issue_number`がnullの"approved"で止まり、人から見えなくなる。
-        // "pending"に戻し、再試行できるようConsoleのInboxに再び出す。
+        // "pending"に戻し、再試行できるようConsoleの要対応に再び出す。
         // 印は残す。Issueが作られていた場合に、期限が切れるまで次の承認が何もせず終わる。
         await revertIssueProposalToPending(proposal_id);
         throw new Error(

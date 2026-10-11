@@ -12,10 +12,10 @@ import {
   UNRESOLVABLE_NOTICE_KINDS,
 } from "../../f/factory/lib/console_support.ts";
 
-/** `docs/operations.md`の「Consoleの通知タブ」の表から、種類の列を取り出す。 */
+/** `docs/operations.md`の「通知の種類」の表から、種類の列を取り出す。 */
 async function documentedNoticeKinds(): Promise<string[]> {
   const doc = await Bun.file("docs/operations.md").text();
-  const start = doc.indexOf("### Consoleの通知タブ");
+  const start = doc.indexOf("### 通知の種類");
   const rest = doc.slice(start + 1);
   const end = rest.search(/\n#{2,3} /);
   const section = end === -1 ? rest : rest.slice(0, end);
