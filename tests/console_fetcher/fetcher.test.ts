@@ -334,7 +334,7 @@ describe("runOnce", () => {
     github.calls.length = 0;
     await runOnce(deps(github.fetch));
     expect(github.calls.map((call) => new URL(call.url).pathname)).toEqual([
-      "/repos/o/r/actions/workflows/ci.yml/runs",
+      "/repos/o/r/actions/workflows/console-dist.yml/runs",
     ]);
   });
 
@@ -502,6 +502,16 @@ describe("runOnce", () => {
     expect(status.error).toBe("no_successful_run");
   });
 
+  test("reports no_successful_run when only a ci.yml run is listed", async () => {
+    const ciRun = {
+      ...workflowRun(1, SHA_A),
+      name: "CI",
+      path: ".github/workflows/ci.yml",
+    };
+    const status = await runOnce(deps(fakeGitHub({ runs: [ciRun] }).fetch));
+    expect(status.error).toBe("no_successful_run");
+  });
+
   test("refuses a redirect to an unexpected host", async () => {
     const zip = buildRelease(SHA_A, filesFor("A"));
     const github = fakeGitHub({
@@ -575,7 +585,7 @@ describe("runOnce", () => {
     const github = githubServing(SHA_B, "B", 2);
     await runOnce(deps(github.fetch));
     expect(github.calls.map((call) => new URL(call.url).pathname)).toEqual([
-      "/repos/o/r/actions/workflows/ci.yml/runs",
+      "/repos/o/r/actions/workflows/console-dist.yml/runs",
     ]);
   });
 

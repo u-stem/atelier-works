@@ -92,7 +92,7 @@ export function buildZip(entries: readonly FixtureEntry[]): Uint8Array {
   return concat([...locals, ...centrals, end]);
 }
 
-/** GitHubの実行の一覧の1要素。既定は「mainへのpushで成功したci.yml」。 */
+/** GitHubの実行の一覧の1要素。既定は「mainへのpushで成功したconsole-dist.yml」。 */
 export function workflowRun(
   id: number,
   headSha: string,
@@ -105,7 +105,8 @@ export function workflowRun(
     event: "push",
     status: "completed",
     conclusion: "success",
-    path: ".github/workflows/ci.yml",
+    name: "Console dist",
+    path: ".github/workflows/console-dist.yml",
     created_at: createdAt,
   };
 }
@@ -181,7 +182,9 @@ export function fakeGitHub(options: FakeGitHubOptions): {
     });
     const parsed = new URL(url);
     if (parsed.hostname === "api.github.com") {
-      if (parsed.pathname === "/repos/o/r/actions/workflows/ci.yml/runs") {
+      if (
+        parsed.pathname === "/repos/o/r/actions/workflows/console-dist.yml/runs"
+      ) {
         const status = options.runsStatus ?? 200;
         return status === 200
           ? Response.json({ workflow_runs: options.runs ?? [] })

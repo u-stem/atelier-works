@@ -4,8 +4,11 @@ import { createHash } from "node:crypto";
 import { isSafeReleasePath } from "./zip.ts";
 
 export const ARTIFACT_NAME = "console-dist";
-export const WORKFLOW_FILE = "ci.yml";
-export const WORKFLOW_PATH = ".github/workflows/ci.yml";
+// 配布物を上げるのは、このワークフローだけにする。
+// ci.ymlのほかのジョブも同名の成果物を上げられるので、取得元をこのワークフローの実行に限る。
+export const WORKFLOW_FILE = "console-dist.yml";
+export const WORKFLOW_PATH = ".github/workflows/console-dist.yml";
+export const WORKFLOW_NAME = "Console dist";
 export const RELEASE_BRANCH = "main";
 export const MANIFEST_FILE = "manifest.json";
 export const HISTORY_LIMIT = 20;
@@ -96,6 +99,7 @@ export type WorkflowRun = {
   readonly event: string;
   readonly status: string | null;
   readonly conclusion: string | null;
+  readonly name: string;
   readonly path: string;
   readonly createdAt: string;
 };
@@ -110,11 +114,12 @@ export function parseWorkflowRuns(body: unknown): WorkflowRun[] | null {
   const runs: WorkflowRun[] = [];
   for (const item of body.workflow_runs) {
     if (!isRecord(item)) continue;
-    const { id, head_sha, event, path, created_at } = item;
+    const { id, head_sha, event, name, path, created_at } = item;
     if (
       typeof id !== "number" ||
       typeof head_sha !== "string" ||
       typeof event !== "string" ||
+      typeof name !== "string" ||
       typeof path !== "string" ||
       typeof created_at !== "string"
     ) {
@@ -127,6 +132,7 @@ export function parseWorkflowRuns(body: unknown): WorkflowRun[] | null {
       event,
       status: nullableString(item.status),
       conclusion: nullableString(item.conclusion),
+      name,
       path,
       createdAt: created_at,
     });
@@ -135,7 +141,8 @@ export function parseWorkflowRuns(body: unknown): WorkflowRun[] | null {
 }
 
 /**
- * `main`へのpushで動き、全体が成功した`ci.yml`の実行のうち、最も新しく作られたものを返す。
+ * `main`へのpushで動き、全体が成功した`console-dist.yml`の実行のうち、最も新しく作られたものを返す。
+ * ワークフローは、ファイルのパスと名前の両方で確かめる。
  * APIの絞り込みに加えてここでも条件を確かめる(APIの仕様が変わっても、別の実行を取り込まないため)。
  */
 export function selectLatestRun(
@@ -150,6 +157,7 @@ export function selectLatestRun(
       run.status !== "completed" ||
       run.conclusion !== "success" ||
       run.path !== WORKFLOW_PATH ||
+      run.name !== WORKFLOW_NAME ||
       !isCommitSha(run.headSha)
     ) {
       continue;

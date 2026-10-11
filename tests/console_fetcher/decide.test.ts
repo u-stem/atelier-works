@@ -75,7 +75,8 @@ function run(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     event: "push",
     status: "completed",
     conclusion: "success",
-    path: ".github/workflows/ci.yml",
+    name: "Console dist",
+    path: ".github/workflows/console-dist.yml",
     createdAt: "2026-10-08T00:00:00Z",
     ...overrides,
   };
@@ -153,7 +154,8 @@ describe("parseWorkflowRuns", () => {
             event: "push",
             status: "completed",
             conclusion: "success",
-            path: ".github/workflows/ci.yml",
+            name: "Console dist",
+            path: ".github/workflows/console-dist.yml",
             created_at: "2026-10-08T00:00:00Z",
           },
         ],
@@ -163,6 +165,25 @@ describe("parseWorkflowRuns", () => {
 
   test("skips a malformed run", () => {
     expect(parseWorkflowRuns({ workflow_runs: [{ id: "7" }] })).toEqual([]);
+  });
+
+  test("skips a run without a workflow name", () => {
+    expect(
+      parseWorkflowRuns({
+        workflow_runs: [
+          {
+            id: 7,
+            head_sha: SHA_A,
+            head_branch: "main",
+            event: "push",
+            status: "completed",
+            conclusion: "success",
+            path: ".github/workflows/console-dist.yml",
+            created_at: "2026-10-08T00:00:00Z",
+          },
+        ],
+      }),
+    ).toEqual([]);
   });
 
   test("rejects a body without workflow_runs", () => {
@@ -197,6 +218,28 @@ describe("selectLatestRun", () => {
     expect(
       selectLatestRun([run({ path: ".github/workflows/other.yml" })]),
     ).toBeNull();
+  });
+
+  test("ignores the ci.yml workflow that other jobs can upload from", () => {
+    expect(
+      selectLatestRun([run({ path: ".github/workflows/ci.yml", name: "CI" })]),
+    ).toBeNull();
+  });
+
+  test("ignores a run whose workflow name differs", () => {
+    expect(selectLatestRun([run({ name: "CI" })])).toBeNull();
+  });
+
+  test("ignores a run whose path carries a ref suffix", () => {
+    expect(
+      selectLatestRun([
+        run({ path: ".github/workflows/console-dist.yml@refs/heads/main" }),
+      ]),
+    ).toBeNull();
+  });
+
+  test("ignores a run that is not completed", () => {
+    expect(selectLatestRun([run({ status: "in_progress" })])).toBeNull();
   });
 
   test("ignores a malformed head sha", () => {
