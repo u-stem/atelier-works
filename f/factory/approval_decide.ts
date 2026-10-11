@@ -137,6 +137,19 @@ export type ApprovalDecideResult = {
   readonly job_id: string;
 };
 
+/** 決定に対して`approval_requests.status`へ記録する値。 */
+export function recordedStatusFor(decision: Decision): "approved" | "rejected" {
+  return decision === "approve" ? "approved" : "rejected";
+}
+
+/** 決定を記録し、ハンドラを起動した後の戻り値。Consoleの型ガードと突き合わせるため、関数に切り出している。 */
+export function buildApprovalDecideResult(
+  decision: Decision,
+  jobId: string,
+): ApprovalDecideResult {
+  return { ok: true, status: recordedStatusFor(decision), job_id: jobId };
+}
+
 export async function main(
   approval_request_id: number,
   decision: string,
@@ -158,7 +171,7 @@ export async function main(
     );
   }
 
-  const recordedStatus = decision === "approve" ? "approved" : "rejected";
+  const recordedStatus = recordedStatusFor(decision);
 
   function classify(status: string): "record_and_dispatch" | "redispatch" {
     const action = classifyExistingDecision(status, recordedStatus);
@@ -214,5 +227,5 @@ export async function main(
     approval_request_id,
   });
 
-  return { ok: true, status: recordedStatus, job_id: jobId };
+  return buildApprovalDecideResult(decision, jobId);
 }

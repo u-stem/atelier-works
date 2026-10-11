@@ -31,13 +31,35 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 describe("SCRIPT_PATHS", () => {
   test("allows only the scripts the console calls", () => {
-    expect(Object.keys(SCRIPT_PATHS)).toEqual(["console_query"]);
+    expect(Object.keys(SCRIPT_PATHS)).toEqual([
+      "console_query",
+      "approval_decide",
+      "retry_work_item",
+      "audit_kickoff",
+      "notice_resolve",
+    ]);
+  });
+
+  test("maps each name to its Windmill path", () => {
+    expect(SCRIPT_PATHS).toEqual({
+      console_query: "f/factory/steps/console_query",
+      approval_decide: "f/factory/approval_decide",
+      retry_work_item: "f/factory/retry_work_item",
+      audit_kickoff: "f/factory/audit_kickoff",
+      notice_resolve: "f/factory/notice_resolve",
+    });
   });
 });
 
 describe("isScriptName", () => {
-  test("accepts an allowed name", () => {
-    expect(isScriptName("console_query")).toBe(true);
+  test.each([
+    "console_query",
+    "approval_decide",
+    "retry_work_item",
+    "audit_kickoff",
+    "notice_resolve",
+  ])("accepts the allowed name %s", (name) => {
+    expect(isScriptName(name)).toBe(true);
   });
 
   test.each([
@@ -46,7 +68,8 @@ describe("isScriptName", () => {
     "__proto__",
     "hasOwnProperty",
     "f/factory/steps/console_query",
-    "approval_decide",
+    "f/factory/approval_decide",
+    "cleanup_db",
     "",
   ])("rejects %s", (name) => {
     expect(isScriptName(name)).toBe(false);

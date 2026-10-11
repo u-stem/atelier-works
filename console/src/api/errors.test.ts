@@ -220,6 +220,48 @@ describe("describeApiError", () => {
     );
   });
 
+  test("says the result is unknown for a network failure on writes", () => {
+    expect(describeApiError({ kind: "network" }, "write")).toContain(
+      "結果が分かりません。一覧を読み直して確かめてください",
+    );
+  });
+
+  test("keeps a network failure on reads as it is", () => {
+    expect(describeApiError({ kind: "network" }, "read")).toBe(
+      "サーバーに接続できませんでした。",
+    );
+  });
+
+  test("says the result is unknown for an unreadable response on writes", () => {
+    expect(describeApiError({ kind: "invalid_response" }, "write")).toContain(
+      "結果が分かりません。一覧を読み直して確かめてください",
+    );
+  });
+
+  test("says the result is unknown for a 502 on writes", () => {
+    expect(
+      describeApiError({ kind: "http", status: 502, detail: "" }, "write"),
+    ).toContain("結果が分かりません。一覧を読み直して確かめてください");
+  });
+
+  test("keeps the status of a 502 on writes", () => {
+    expect(
+      describeApiError({ kind: "http", status: 502, detail: "" }, "write"),
+    ).toContain("502");
+  });
+
+  test("does not say the result is unknown for a 400 on writes", () => {
+    expect(
+      describeApiError({ kind: "http", status: 400, detail: "bad" }, "write"),
+    ).not.toContain("結果が分かりません");
+  });
+
+  test("does not say the result is unknown for a 502 on reads", () => {
+    expect(
+      describeApiError({ kind: "http", status: 502, detail: "" }, "read"),
+    ).not.toContain("結果が分かりません");
+  });
+
   test("tells a read that a timeout left the list stale", () => {
     expect(describeApiError({ kind: "timeout_or_unknown" }, "read")).toContain(
       "一覧を読み直して",

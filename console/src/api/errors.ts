@@ -126,13 +126,16 @@ const UNKNOWN_RESULT = "結果が分かりません。一覧を読み直して�
 
 /**
  * 失敗を画面に出す日本語の文にする。
- * 書き込み(`write`)では、ジョブの失敗と待ちの上限のどちらも、処理が途中まで進んだかもしれない。
- * そのため結果が分からないものとして案内する。読み取り(`read`)は、失敗をそのまま伝える。
+ * 書き込み(`write`)では、4xxと401、403を除く失敗は、処理が途中まで進んだかもしれない。
+ * ジョブの失敗、待ちの上限、形が違う応答、通信の失敗、5xxがそれにあたる。
+ * これらは結果が分からないものとして、一覧を読み直して確かめるよう案内する。
+ * 読み取り(`read`)は、失敗をそのまま伝える。
  */
 export function describeApiError(
   error: ApiError,
   operation: Operation = "read",
 ): string {
+  const unknownResult = operation === "write" ? UNKNOWN_RESULT : "";
   switch (error.kind) {
     case "unauthorized":
       return "ログインの有効期限が切れました。ログインし直してください。";
@@ -148,13 +151,16 @@ export function describeApiError(
     }
     case "timeout_or_unknown":
       return `応答が時間内に返りませんでした。${UNKNOWN_RESULT}`;
-    case "http":
-      return error.detail === ""
-        ? `サーバーがエラーを返しました(状態 ${error.status})。`
-        : `サーバーがエラーを返しました(状態 ${error.status}): ${error.detail}`;
+    case "http": {
+      const text =
+        error.detail === ""
+          ? `サーバーがエラーを返しました(状態 ${error.status})。`
+          : `サーバーがエラーを返しました(状態 ${error.status}): ${error.detail}`;
+      return error.status >= 500 ? `${text}${unknownResult}` : text;
+    }
     case "network":
-      return "サーバーに接続できませんでした。";
+      return `サーバーに接続できませんでした。${unknownResult}`;
     case "invalid_response":
-      return "サーバーの応答を読み取れませんでした。";
+      return `サーバーの応答を読み取れませんでした。${unknownResult}`;
   }
 }

@@ -103,10 +103,24 @@ Consoleは、`src/api/windmill.ts`の`runScript`だけを通してWindmillのscr
 `POST /api/w/factory/jobs/run_wait_result/p/<path>`を、`credentials: "same-origin"`と`cache: "no-store"`で呼ぶ。
 ログインのCookieだけで動くので、トークンは持たない。
 
-呼べるscriptは、`SCRIPT_PATHS`の許可リストにある`console_query`だけである。
-読み取り専用の画面だけを持つので、書き込みのscriptは許可リストに入れない。操作の画面を足すときに、そのscriptを足す。
+`runScript`は`src/api/`の中にとどめる。
+画面は、取得の`queries.ts`と書き込みの`writes.ts`にある型付きの関数だけを使う。
+`src/api/`の外が`windmill.ts`をimportしないことは、契約テストが確かめる。
+
+呼べるscriptは、`SCRIPT_PATHS`の許可リストにある次の5つだけである。
+どれもtag`console`を持ち、Console用のworkerで動く。
+
+| 名前 | 用途 | 型付きの関数 |
+| --- | --- | --- |
+| `console_query` | 読み取り | `fetchSummary`など(`queries.ts`) |
+| `approval_decide` | 承認依頼への承認か却下の記録 | `decideApproval` |
+| `retry_work_item` | 止まった作業項目の再開 | `retryWorkItem` |
+| `audit_kickoff` | 監査の手動起動 | `kickoffAudit` |
+| `notice_resolve` | 通知1件の解決 | `resolveNotice` |
+
 パスは呼び出し側の名前から引き、外から受け取った文字列では呼ばない。
 Consoleは管理者のCookieで動くので、呼べる範囲を固定する。
+許可リストに足すscriptは、tag`console`を付け、秘密値を読む範囲を[Console用workerの境界](../security.md#console用workerの境界)に合わせる。
 
 `runScript`は例外を投げず、応答を`classifyRunResponse`で分類して返す。
 中断(`AbortSignal`)だけは、取り消しとして扱えるよう例外を再び投げる。
@@ -126,8 +140,8 @@ Consoleは管理者のCookieで動くので、呼べる範囲を固定する。
 本文はContent-Typeを見ずに読む。
 失敗の本文は、JSONの`error.message`、`message`、文字列の`error`の順に探し、JSONでなければ本文のテキストを使う。
 `timeout_or_unknown`は、ジョブが終わったか分からない状態を表す。
-書き込みでは、`job_failed`と`timeout_or_unknown`のどちらも、処理が途中まで進んでいる可能性がある。
-そのため`describeApiError`は、書き込みの失敗を「結果が分かりません。一覧を読み直して確かめてください」と案内する。
+書き込みでは、ジョブの失敗、待ちの上限、形が違う応答、通信の失敗、5xxで、処理が途中まで進んでいる可能性がある。
+そのため`describeApiError`は、書き込みのこれらの失敗を「結果が分かりません。一覧を読み直して確かめてください」と案内する。
 読み取りの失敗は、そのまま伝える。
 500を除く5xxの本文はHTMLなどになりうるので、画面に出さない。
 ジョブの失敗の結果は`{"error":{"name","message","stack"}}`の形で、`stack`には内部のパスが入る。
@@ -191,6 +205,78 @@ backendが先に新しい値を反映した間や、配信を前の版に固定�
 
 1つのタブが`summary`を取り直すと、1日に720件のジョブができる(120秒ごと)。
 ジョブの保持期間は、#138で扱う。
+
+### 書き込み
+
+書き込みのscriptは、`src/api/writes.ts`の型付きの関数だけから呼ぶ。
+関数は失敗を`ApiFailure`で投げ、戻りを`src/api/guards/writeResults.ts`の型ガードに通してから返す。
+形が違う戻りは`invalid_response`にする。
+
+| 決まり | 理由 |
+| --- | --- |
+| 認可はWindmillのログインに任せる | Consoleは独自の認可を持たない。ログインしていない呼び出しは、Windmillが401にする |
+| 承認者と解決者は引数に取らない | 画面から渡した名前は信用できない。scriptがジョブの実行文脈(`WM_USERNAME`、無ければ`WM_EMAIL`)から導き、導けなければ拒否する |
+| 同一オリジンの`fetch`でPOSTし、本文はJSONにする | 他のサイトや注入されたリンクから、運用者のCookieで操作させないため。副作用のあるGETと、ページの移動による書き込みは、Caddyが403にする([セキュリティ](../security.md)の「Consoleの配信」)。Consoleの呼び出しはPOSTの`fetch`なので、この規則に当たらない |
+| 操作の値をConsole側で固定する | 監査は`force: false`、`source: "manual"`、`days: 7`で起動する。承認の補足(`note`)は固定の文にする。画面から変えさせない |
+| 再試行しない | 結果が分からないまま2回実行しないため |
+
+承認は、同じ決定が記録済みの行にもう一度呼ぶと、ハンドラの起動をやり直す。
+二重の送信は、画面側で止める。
+
+却下の理由は、4000文字までにする(`MAX_REASON_LENGTH`)。文字はコードポイントで数える。
+`decideApproval`は、上限を超える理由を送らず、`RangeError`で断る。
+画面は、送る前に長さを確かめて入力欄で知らせる。
+理由はDBに記録され、Issueやレポートに出るためである。
+script側には上限が無く、Windmillのapiを直に呼ぶ者には効かない。script側の上限は、別のIssueで扱う。
+
+#### 共通のフック
+
+`useWriteMutation`(`src/api/mutations.ts`)が、ロック、実行、読み直しをつなぐ。
+結線は、Reactから切り離した`createWriteRunner`(`src/api/writeRunner.ts`)に置く。
+`bun test`が、実際のQueryClientで確かめる。
+実行の流れは`executeWrite`、ロックは`runLocked`と`writeLocks`、読み直せなかったときの待ちは`holdUntilFresh`に切り出してある。
+
+- 対象のキー単位でボタンをロックする。キーは`writeTargetKey`が作り、承認の承認と却下のように、同じ対象への操作は同じキーで止める。一覧と詳細のボタンは、同じロックを共有する
+- ロックはmutationの実行の中で取る。同じ瞬間に2回押されても、実行は1回になる
+- 成功と、結果が分からない失敗の後に、関連する取得(既定はsummary)を読み直す。読み直しが終わるまでロックを残す
+- 画面の知らせの関数は、結果用も一覧が古いこと用も、例外を投げても読み直しとロックの扱いを変えない
+- 401は取得と同じ経路でログインの帯に流す
+- 成功の知らせの文は、`src/lib/writeNotices.ts`の純関数が作る。解決済みだった通知の解決は成功として扱う
+
+結果が分からない失敗は、ジョブの失敗、待ちの上限、形が違う応答、通信の失敗、5xxである。
+401、403、4xxは、ジョブが動く前に断られたので、読み直さない。
+ジョブの失敗(`job_failed`)は、結果が分からないものとして扱う。
+scriptの断り(理由なしの却下、記録済みの別の決定など)と、副作用の後の失敗が、同じ形で返り、本文から区別できないためである。
+区別するには、scriptが断りを固定の接頭辞で投げる必要がある。
+
+読み直しが失敗したか、30秒以内に終わらなかったときは、一覧が古いことを知らせる(`STALE_LIST_NOTICE`)。
+その対象は、読み直せなかった取得のすべてが次に成功するまで、押せないままにする。読み直せた取得は待たない。
+古い一覧のままだと、済んだ操作をもう一度押せるためである。
+summaryは120秒ごとに取り直すので、通信が戻れば解ける。
+
+ロックを持つのは、このタブの中だけである。
+複数のタブや、リロードの後の二重の送信は止められない。
+サーバー側の冪等性の課題で、Consoleの外で扱う。
+
+Issueに由来する文字は、`displayableIssueText`(`src/lib/intakeText.ts`)を通してプレーンテキストで描く。
+書き込みの失敗の文に入るジョブの失敗の文と4xxの詳細も、同じ関数を通す。
+見えない文字や並びの見た目を入れ替える文字を、代替文字に置き換えるためである。
+置き換える分類は、backendの`countHiddenCharacters`と同じである。
+全コードポイントで同じことを、`tests/scripts/console_hidden_characters_contract.test.ts`が確かめる。
+リンクは`safeGitHubUrl`を通したものだけにする。
+
+#### 契約テスト
+
+`tests/scripts/console_write_contract.test.ts`は、次を確かめる。
+
+- 許可リストの行き先が、tag`console`を持つ実在のscriptであること
+- 型付きの関数の引数は、scriptの入力の項目と必須の項目に合うこと
+- 各scriptの戻りが、型ガードを通ること
+- `src/api/`の外が、`windmill.ts`をimportせず、`run_wait_result`の経路を直に書かず、`fetch`、`XMLHttpRequest`、`sendBeacon`も使わないこと。例外は、版の確認の`useReleaseWatch.ts`だけである。`fetch`を別名に代入してから呼ぶ形は見ない
+- `runScript`と`SCRIPT_PATHS`が、`windmill.ts`の外へ再エクスポートされないこと
+
+Console用workerのscriptが読むsecret変数は、`tests/scripts/console_worker_boundary.test.ts`が数える。
+走査がたどれない形と、見ないものは、[セキュリティ](../security.md)の「Console用workerの境界」に書く。
 
 ## ログイン切れの扱い
 
