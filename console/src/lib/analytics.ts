@@ -63,6 +63,49 @@ export function dailyTotals(rows: readonly AgentCostDailyRow[]): DailyTotal[] {
     .map(([day, total]) => ({ day, ...total }));
 }
 
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/** `YYYY-MM-DD`(UTC)を、その日の0時の時刻(ms)にする。日付として読めない値は`null`。 */
+function dayStartMs(day: string): number | null {
+  const time = Date.parse(`${day}T00:00:00.000Z`);
+  return Number.isNaN(time) ? null : time;
+}
+
+/**
+ * 実行の無い日を値0で補い、期間の全日を古い日から新しい日の順に並べる。
+ * 期間は`now`の日(UTC)を最後とする`days`日で、棒の間隔を日数に比例させるために使う。
+ * 期間の外の日の合計は捨てず、範囲を広げて含める。端末の時計とbackendの時刻はずれうるため。
+ * 日付として読めない日は、並べる位置が決まらないので除く。
+ */
+export function fillDailyTotals(
+  totals: readonly DailyTotal[],
+  days: number,
+  now: Date,
+): DailyTotal[] {
+  const byTime = new Map<number, DailyTotal>();
+  for (const total of totals) {
+    const time = dayStartMs(total.day);
+    if (time !== null) {
+      byTime.set(time, total);
+    }
+  }
+  const today = Math.floor(now.getTime() / MS_PER_DAY) * MS_PER_DAY;
+  const times = [today - (days - 1) * MS_PER_DAY, today, ...byTime.keys()];
+  const first = Math.min(...times);
+  const last = Math.max(...times);
+  const filled: DailyTotal[] = [];
+  for (let time = first; time <= last; time += MS_PER_DAY) {
+    filled.push(
+      byTime.get(time) ?? {
+        day: new Date(time).toISOString().slice(0, 10),
+        costUsd: 0,
+        runCount: 0,
+      },
+    );
+  }
+  return filled;
+}
+
 /**
  * 1回目の判断のうち承認の割合(百分率)。
  * 承認か却下の判断が1件も無ければ、割り切れないので`null`を返す。

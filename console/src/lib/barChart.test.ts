@@ -3,6 +3,8 @@ import {
   estimateLabelWidth,
   labelStride,
   layoutBars,
+  MIN_PLOT_WIDTH,
+  resolvePlotWidth,
   VALUE_LABEL_ROOM,
 } from "./barChart.ts";
 
@@ -90,5 +92,33 @@ describe("labelStride", () => {
 
   test("returns one for no labels", () => {
     expect(labelStride([], 640)).toBe(1);
+  });
+
+  test("labels more bars on a wider plot", () => {
+    expect(labelStride(days(90), 1200)).toBeLessThan(
+      labelStride(days(90), 640),
+    );
+  });
+});
+
+describe("resolvePlotWidth", () => {
+  test("follows the measured width of the container", () => {
+    expect(resolvePlotWidth(1000)).toBe(1000);
+  });
+
+  test("rounds a fractional width down", () => {
+    expect(resolvePlotWidth(812.7)).toBe(812);
+  });
+
+  test("keeps a minimum width for a narrow container", () => {
+    expect(resolvePlotWidth(100)).toBe(MIN_PLOT_WIDTH);
+  });
+
+  test("falls back to the minimum width before the first measurement", () => {
+    expect(resolvePlotWidth(0)).toBe(MIN_PLOT_WIDTH);
+  });
+
+  test("falls back to the minimum width for a value that is not a width", () => {
+    expect(resolvePlotWidth(Number.NaN)).toBe(MIN_PLOT_WIDTH);
   });
 });

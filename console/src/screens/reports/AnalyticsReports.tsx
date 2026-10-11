@@ -19,6 +19,7 @@ import {
   type AnalyticsPeriodDays,
   DEFAULT_ANALYTICS_DAYS,
   dailyTotals,
+  fillDailyTotals,
   firstTryApprovalRate,
   formatHours,
   formatIsoDate,
@@ -61,14 +62,22 @@ function ChartBlock({
   );
 }
 
-function CostReport({ rows }: { rows: readonly AgentCostDailyRow[] }) {
+function CostReport({
+  rows,
+  days,
+}: {
+  rows: readonly AgentCostDailyRow[];
+  days: number;
+}) {
   const totals = dailyTotals(rows);
-  const costData = totals.map((total) => ({
+  // グラフは実行の無い日も0で並べ、間隔を日数に比例させる。表は実行のあった日だけを出す。
+  const chartDays = fillDailyTotals(totals, days, new Date());
+  const costData = chartDays.map((total) => ({
     key: total.day,
     label: formatMonthDay(total.day),
     value: total.costUsd,
   }));
-  const countData = totals.map((total) => ({
+  const countData = chartDays.map((total) => ({
     key: total.day,
     label: formatMonthDay(total.day),
     value: total.runCount,
@@ -201,7 +210,7 @@ export function AnalyticsReports() {
     cost.isFetching || approvals.isFetching || leadTime.isFetching;
 
   return (
-    <section aria-labelledby="analytics-heading" className="max-w-3xl">
+    <section aria-labelledby="analytics-heading">
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <h2 id="analytics-heading" className="text-title font-semibold">
           分析
@@ -252,7 +261,7 @@ export function AnalyticsReports() {
         emptyMessage="この期間に記録された実行はありません。"
         query={cost}
       >
-        {(rows) => <CostReport rows={rows} />}
+        {(rows) => <CostReport rows={rows} days={days} />}
       </AnalyticsSection>
       <AnalyticsSection
         id="analytics-approval-heading"

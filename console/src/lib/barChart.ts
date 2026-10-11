@@ -34,6 +34,20 @@ const NARROW_CHAR_RATIO = 0.6;
 /** 隣のラベルとの間に空ける幅(px)。 */
 const LABEL_GAP = 8;
 
+/** グラフの幅(px)の下限。測る前と、狭い画面で、ラベルの計算が崩れないようにする。 */
+export const MIN_PLOT_WIDTH = 320;
+
+/**
+ * 測った領域の幅(px)を、グラフの幅にする。
+ * 文字の大きさを変えずに画面の幅へ合わせるため、グラフは測った幅をそのまま座標の幅に使う。
+ * 小数は切り捨て、下限を下回る値や数でない値は下限にする。
+ */
+export function resolvePlotWidth(measured: number): number {
+  return Number.isFinite(measured)
+    ? Math.max(Math.floor(measured), MIN_PLOT_WIDTH)
+    : MIN_PLOT_WIDTH;
+}
+
 /**
  * 値の並びを、描画領域に収まる棒の座標にする。
  * 最大の値の棒は、領域の高さから`VALUE_LABEL_ROOM`を引いた高さになり、その上に値のラベルが入る。

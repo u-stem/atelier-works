@@ -6,6 +6,7 @@ import type {
 } from "../api/guards/analytics.ts";
 import {
   dailyTotals,
+  fillDailyTotals,
   firstTryApprovalRate,
   formatHours,
   formatIsoDate,
@@ -93,6 +94,89 @@ describe("dailyTotals", () => {
 
   test("returns an empty list for no rows", () => {
     expect(dailyTotals([])).toEqual([]);
+  });
+});
+
+describe("fillDailyTotals", () => {
+  const NOW = new Date("2026-10-11T15:30:00.000Z");
+  const total = (day: string, runCount: number) => ({
+    day,
+    costUsd: runCount,
+    runCount,
+  });
+
+  test("lists every day of the period, ending today", () => {
+    const filled = fillDailyTotals([], 7, NOW);
+    expect(filled.map((entry) => entry.day)).toEqual([
+      "2026-10-05",
+      "2026-10-06",
+      "2026-10-07",
+      "2026-10-08",
+      "2026-10-09",
+      "2026-10-10",
+      "2026-10-11",
+    ]);
+  });
+
+  test("fills a day without runs with zero", () => {
+    const filled = fillDailyTotals([total("2026-10-08", 3)], 7, NOW);
+    expect(filled.find((entry) => entry.day === "2026-10-09")).toEqual({
+      day: "2026-10-09",
+      costUsd: 0,
+      runCount: 0,
+    });
+  });
+
+  test("keeps the totals of a day with runs", () => {
+    const filled = fillDailyTotals([total("2026-10-08", 3)], 7, NOW);
+    expect(filled.find((entry) => entry.day === "2026-10-08")).toEqual(
+      total("2026-10-08", 3),
+    );
+  });
+
+  test("keeps the gap between distant days", () => {
+    const filled = fillDailyTotals(
+      [total("2026-09-28", 1), total("2026-10-08", 1)],
+      30,
+      NOW,
+    );
+    expect(filled.length).toBe(30);
+  });
+
+  test("counts the days in UTC rather than the local time zone", () => {
+    const justBeforeUtcMidnight = new Date("2026-10-11T23:59:59.000Z");
+    expect(fillDailyTotals([], 1, justBeforeUtcMidnight)[0]?.day).toBe(
+      "2026-10-11",
+    );
+  });
+
+  test("crosses a month boundary", () => {
+    const filled = fillDailyTotals([], 3, new Date("2026-11-01T00:00:00.000Z"));
+    expect(filled.map((entry) => entry.day)).toEqual([
+      "2026-10-30",
+      "2026-10-31",
+      "2026-11-01",
+    ]);
+  });
+
+  test("extends the range to a day after today", () => {
+    const filled = fillDailyTotals([total("2026-10-12", 2)], 3, NOW);
+    expect(filled.at(-1)?.day).toBe("2026-10-12");
+  });
+
+  test("extends the range to a day before the period", () => {
+    const filled = fillDailyTotals([total("2026-10-01", 2)], 3, NOW);
+    expect(filled[0]?.day).toBe("2026-10-01");
+  });
+
+  test("drops a day that is not a date", () => {
+    const filled = fillDailyTotals([total("unknown", 2)], 3, NOW);
+    expect(filled.some((entry) => entry.day === "unknown")).toBe(false);
+  });
+
+  test("returns the period of zero days for no rows", () => {
+    const filled = fillDailyTotals([], 3, NOW);
+    expect(filled.map((entry) => entry.runCount)).toEqual([0, 0, 0]);
   });
 });
 
