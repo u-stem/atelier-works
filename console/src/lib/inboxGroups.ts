@@ -66,7 +66,8 @@ export type GroupDescription = {
   /** 中で最も新しい通知の時刻。一覧の並び(新しい順)の根拠と揃える。 */
   readonly iso: string;
   /**
-   * 閉じた行の副題。メンバーの本文が挙げる最初の対象を、重複なしで最大2つ並べ、残りは「ほかN件」にする。
+   * 閉じた行の副題。メンバーの本文が挙げる最初の対象を、重複なしで最大2つ並べ、残りは「ほか対象N件」にする。
+   * 件数の表示(「3件」は通知の数)と紛れないよう、対象の数だと分かる語を添える。
    * 対象を挙げない通知は数えない。どの通知も挙げなければ`null`。
    * 閉じたままでも、別の対象の通知が紛れ込んだことに気づけるようにするためである。
    */
@@ -92,7 +93,7 @@ function targetsLabelOf(
   }
   const shown = labels.slice(0, TARGETS_SHOWN).join("、");
   const rest = labels.length - TARGETS_SHOWN;
-  return rest > 0 ? `${shown} ほか${rest}件` : shown;
+  return rest > 0 ? `${shown} ほか対象${rest}件` : shown;
 }
 
 /** グループの行に出す内容。題名は種別の語で、個々の通知の違いは開いた行の副題が担う。 */
@@ -168,13 +169,14 @@ export function syncExpansion(
   const kind = groupKindOfSelection(rows, selection);
   const openedFor =
     kind === null || selection === null ? null : `${kind}:${selection.id}`;
-  const opens = openedFor !== null && openedFor !== state.openedFor;
-  const expanded = new Set(opens && kind !== null ? [...kept, kind] : kept);
-  const unchanged =
-    openedFor === state.openedFor &&
-    expanded.size === state.expanded.size &&
-    kept.length === state.expanded.size;
-  return unchanged ? state : { openedFor, expanded };
+  const selectionMoved = openedFor !== state.openedFor;
+  if (!selectionMoved && kept.length === state.expanded.size) {
+    return state;
+  }
+  return {
+    openedFor,
+    expanded: new Set(selectionMoved && kind !== null ? [...kept, kind] : kept),
+  };
 }
 
 /** 種別のグループを開閉し直す。`openedFor`は変えない。 */

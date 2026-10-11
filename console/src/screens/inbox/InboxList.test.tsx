@@ -210,11 +210,11 @@ describe("InboxList group header", () => {
   ];
 
   test("names the targets of a closed group", () => {
-    expect(render(pair)).toContain("a/b#12、a/b#15 ほか1件");
+    expect(render(pair)).toContain("a/b#12、a/b#15 ほか対象1件");
   });
 
-  test("keeps the count badge out of the warning color", () => {
-    expect(render(pair)).not.toContain("bg-warning");
+  test("gives the count badge the neutral look", () => {
+    expect(render(pair)).toContain("bg-foreground/10");
   });
 
   /** 閉じ具合と選択の有無を指定して、グループの見出しを描く。 */

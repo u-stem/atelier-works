@@ -272,7 +272,7 @@ describe("describeGroup targets", () => {
 
   test("counts the targets beyond the second", () => {
     expect(targetsOf(["a/b#12 x", "a/b#15 x", "a/b#20 x"])).toBe(
-      "a/b#12、a/b#15 ほか1件",
+      "a/b#12、a/b#15 ほか対象1件",
     );
   });
 
@@ -389,6 +389,44 @@ describe("syncExpansion", () => {
       expanded: new Set(["a"]),
     };
     expect(syncExpansion(state, rows, null).openedFor).toBeNull();
+  });
+});
+
+describe("syncExpansion settling", () => {
+  const rows = groupInboxItems([
+    noticeItem({ notice_id: 1, kind: "a" }),
+    noticeItem({ notice_id: 2, kind: "a" }),
+  ]);
+  const closed: GroupExpansion = { openedFor: null, expanded: new Set() };
+
+  test("settles after opening the group that holds the selection", () => {
+    const opened = syncExpansion(closed, rows, { type: "notice", id: 1 });
+    expect(syncExpansion(opened, rows, { type: "notice", id: 1 })).toBe(opened);
+  });
+
+  test("settles after dropping a kind that no longer forms a group", () => {
+    const dropped = syncExpansion(
+      { openedFor: null, expanded: new Set(["gone"]) },
+      rows,
+      null,
+    );
+    expect(syncExpansion(dropped, rows, null)).toBe(dropped);
+  });
+
+  test("settles after forgetting a selection that went away", () => {
+    const forgotten = syncExpansion(
+      { openedFor: "a:1", expanded: new Set(["a"]) },
+      rows,
+      null,
+    );
+    expect(syncExpansion(forgotten, rows, null)).toBe(forgotten);
+  });
+
+  test("settles after the group forms around a selected notice", () => {
+    const alone = groupInboxItems([noticeItem({ notice_id: 1, kind: "a" })]);
+    const first = syncExpansion(closed, alone, { type: "notice", id: 1 });
+    const formed = syncExpansion(first, rows, { type: "notice", id: 1 });
+    expect(syncExpansion(formed, rows, { type: "notice", id: 1 })).toBe(formed);
   });
 });
 
