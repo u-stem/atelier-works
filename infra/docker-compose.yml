@@ -77,6 +77,8 @@ services:
         GTR_REF: ${GTR_REF:?run via mise}
         GTR_COMMIT: ${GTR_COMMIT:?run via mise}
         WMILL_VERSION: ${WMILL_VERSION:?run via mise}
+        FACTORY_CHECK_UID: ${FACTORY_CHECK_UID:?run via mise}
+        FACTORY_CHECK_POOL_SIZE: ${FACTORY_CHECK_POOL_SIZE:?run via mise}
     deploy:
       replicas: 1
       resources:
@@ -87,7 +89,10 @@ services:
           # 混ぜたサービスを、片方しか設定していなくても拒否するため
           # ("can't set distinct values on 'pids_limit' and
           # 'deploy.resources.limits.pids'")。
-          pids: 512
+          # 検査コマンドは枠ごとに`CHECK_NPROC_LIMIT`(256)までプロセスを持てる。
+          # NUM_WORKERSの数の検査がそろって上限まで使っても、検査の外に256が残る値にする。
+          # `tests/infra/docker_compose.test.ts`がこの関係を確かめる。
+          pids: 1024
     # 孤立した子プロセスを回収するため、docker-init(tini)をPID 1で動かす。
     # ジョブはgit・gh・esbuildの子プロセスを起動し、それらは親より長く残る
     # (裏での保守、タイムアウト時のプロセスグループごとのkill)。initが無いと
@@ -101,6 +106,17 @@ services:
     # 必要な範囲より影響が大きいため。`docs/security.md`を参照。
     security_opt:
       - "no-new-privileges:true"
+    # 既定のケーパビリティのうち、workerのジョブが使わないものを落とす。
+    # 検査コマンドの実行は`CHOWN`・`DAC_OVERRIDE`・`FOWNER`(worktreeの所有権の受け渡し)、
+    # `SETUID`・`SETGID`・`SETPCAP`(`setpriv`)、`KILL`(別のuidのプロセスを止める)を要する。
+    # `NET_RAW`は他のコンテナへのなりすましの足場になり、`MKNOD`・`SETFCAP`・`AUDIT_WRITE`は
+    # gitもbunもghもclaudeも使わない。`SYS_CHROOT`・`FSETID`・`NET_BIND_SERVICE`は、
+    # Windmill本体が使わないことをここでは確かめていないので、残す。
+    cap_drop:
+      - NET_RAW
+      - MKNOD
+      - SETFCAP
+      - AUDIT_WRITE
     environment:
       - DATABASE_URL=postgres://postgres:${DB_PASSWORD:?run via mise}@db/windmill?sslmode=disable
       - MODE=worker

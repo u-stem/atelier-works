@@ -189,11 +189,11 @@ const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
   [
     "host_action_required",
     guide(
-      "自己更新が反映した版に、worker自身では反映できない変更(infra/、mise.tomlの[tools]・[env])が含まれています。ホストで作業するまで、新しい構成は動きません。",
-      "ホストのcheckoutで、次のコマンドを順に実行してください。mise run upは、Caddyを再起動したうえで、終わりにそのcheckoutのHEADをworkerへ渡します。",
+      "自己更新が反映した版に、worker自身では反映できない変更(infra/、mise.tomlの[tools]・[env])が含まれています。ホストで作業するまで、新しい構成は動きません。実装、PR修正、作業領域の掃除が、workerのイメージが古くて検査コマンドを実行できないと分かったときにも出ます。そのときは、検査コマンドのある作業項目は進みません。",
+      "ホストのcheckoutで、次のコマンドを順に実行してください。mise run upは、Caddyを再起動したうえで、終わりにそのcheckoutのHEADをworkerへ渡します。イメージが古くて止まった作業項目は、mise run upの後に、Windmillでf/factory/retry_work_itemを作業項目のIDで実行して再開してください。",
       {
         commands: ["git pull", "mise install", "mise run up"],
-        note: "通知の版がホストのHEADと同じか祖先なら、自己更新(10分ごと)が自動で解決します。HEADを書けなかったときは自動では解決されないので、mise run upが済んでいれば人が解決してかまいません。",
+        note: "通知の版がホストのHEADと同じか祖先なら、自己更新(10分ごと)が自動で解決します。HEADを書けなかったときと、版が載らない通知(イメージが古いと分かったときに、反映した版を読めなかったもの)は自動では解決されないので、mise run upが済んでいれば人が解決してかまいません。",
       },
     ),
   ],
@@ -207,8 +207,39 @@ const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
   [
     "cleanup_worktree_busy",
     guide(
-      "残ったプロセスが使っているので、終端の作業項目のworktreeを消しませんでした。",
-      "本文に載ったプロセスを止めてください。止めない限り、同じ通知が1件残り続けます。",
+      "終端の作業項目のworktreeを、使用中として消しませんでした。残ったプロセスが使っているか、検査用のユーザーからrootに戻せないためです。",
+      "本文の理由がプロセスなら、載ったプロセスを止めてください。rootに戻せないなら、運用の文書の「検査の枠の記録を片付ける」の手順で片付けてください。対処しない限り、同じ通知が1件残り続けます。",
+    ),
+  ],
+  [
+    "check_slot_skipped",
+    guide(
+      "検査の枠を、前の実行の残りを片付けられないため飛ばし、別の枠で検査しました。本文に枠のユーザーと理由が載ります。",
+      "理由が止まらないプロセスなら、workerを再起動してください。残ったファイルなら、本文のパスを確かめて消してください。worktreeの取り戻しに失敗し続けるなら、枠の記録が指すworktreeをrootに戻してから記録を消してください。手順は運用の文書の「検査の枠の記録を片付ける」にあります。",
+      {
+        note: "飛ばした枠は、次にその枠を取る検査が片付け直します。片付くまでは、同じ理由のnoticeが未解決のまま1件残ります。",
+      },
+    ),
+  ],
+  [
+    "check_runtime_unsafe",
+    guide(
+      "稼働中のworkerに、誰でも書き込めるパスができたか、それを確かめられなかったため、検査コマンドを非特権のユーザーで実行できません。本文にパスか確かめられなかった理由が載ります。直すまで、検査コマンドのある実装とPR修正は止まります。",
+      "本文のパスを、ホストのcheckoutから次の1つ目のコマンドで閉じるか、2つ目のコマンドでworkerを作り直してください。作り直すと、そのとき動いているジョブも止まります。/workspacesと/var/lib/factoryは、ボリュームのマウントポイントで、作り直しでは閉じないので、1つ目のコマンドで閉じてください。直したら、止まった作業項目をWindmillでf/factory/retry_work_itemを作業項目のIDで実行して再開し、この通知を解決してください。",
+      {
+        commands: [
+          "mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker chmod o-w <パス>",
+          "mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_worker",
+        ],
+        note: "イメージの問題ではないので、mise run upは要りません。自動では解決されません。パスが何度もできるときは、作ったジョブを確かめてください。",
+      },
+    ),
+  ],
+  [
+    "check_slot_record_unreadable",
+    guide(
+      "検査の枠の記録が読めないため、記録を退避して、その枠の片付けを続けました。本文に枠のユーザーと退避した先のパスが載ります。",
+      "退避した記録の中身を確かめ、記録が指すworktreeが枠のユーザーの所有のまま残っていればrootに戻し、HOMEが残っていれば消してから、退避した記録を消してください。手順は運用の文書の「検査の枠の記録を片付ける」にあります。",
     ),
   ],
   [

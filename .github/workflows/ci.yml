@@ -152,7 +152,9 @@ jobs:
               --build-arg GITLEAKS_VERSION=$GITLEAKS_VERSION \
               --build-arg GTR_REF=$GTR_REF \
               --build-arg GTR_COMMIT=$GTR_COMMIT \
-              --build-arg WMILL_VERSION=$WMILL_VERSION
+              --build-arg WMILL_VERSION=$WMILL_VERSION \
+              --build-arg FACTORY_CHECK_UID=$FACTORY_CHECK_UID \
+              --build-arg FACTORY_CHECK_POOL_SIZE=$FACTORY_CHECK_POOL_SIZE
           '
 
       - name: Test the process lock in the worker image
@@ -163,6 +165,14 @@ jobs:
         # bunがPID 1だと孤児がゾンビのまま残り、保持者を止める処理がその終了を待ち続ける。
         # このテストファイルは外部パッケージを使わないので、`node_modules`は要らない。
         run: docker run --rm --init --entrypoint bun -v "$PWD:/src" -w /src factory-worker-ci test tests/lib/process_lock.test.ts
+
+      - name: Test the check sandbox in the worker image
+        if: needs.scope.outputs.worker != 'false'
+        # 検査コマンドの境界(別のuidへの切り替え、秘密に届かないこと、書き込める場所、
+        # 所有権の受け渡し、残ったプロセスの後始末)を、本物のsetpriv・flock・chown・/procで確かめる。
+        # workerと同じ制限のコンテナを使い捨てで起動する。`/tmp/windmill`の権限を書き換えるテストなので、
+        # このスクリプトの使い捨てのコンテナの中でだけ走らせる。
+        run: scripts/verify-check-sandbox.sh factory-worker-ci
 
   test-db:
     # `check`ジョブ(とworkerイメージのビルド)から独立させる。

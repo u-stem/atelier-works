@@ -599,7 +599,7 @@ export function isRepoAllowed(
  * そのリポジトリを明示した`check_commands_by_repo`のエントリーだけを使い
  * (キーの照合は`checkCommandsFor`と同じ)、無ければ`[]`を返す。
  * `allowed_check_commands`は決して使わない。
- * 検査コマンドはClaudeが書いたコード(テストやソース)をworkerのrootで実行するため、
+ * 検査コマンドはClaudeが書いたコード(テストやソース)を、workerのコンテナの中で非特権のuidとして、コンテナの分離なしに実行するため、
  * リポジトリごとに名前を挙げて有効にさせる(docs/security.md)。
  */
 export function implementCheckCommandsFor(

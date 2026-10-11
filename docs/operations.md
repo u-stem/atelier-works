@@ -488,14 +488,102 @@ PRには`factory:review`ラベルが付くので、自動レビューが起動�
 - 検査の前に毎回`git clean -fdX`で無視ファイル(`node_modules/`など)を消す。そのため先頭で依存関係をインストールする。
 - workerのイメージにmiseは無い。worker内で直接動くコマンドにする。例は`bun install --frozen-lockfile`、`bun test`、`bunx --bun tsc --noEmit`、`bunx --bun biome check .`である。
 - 1つのリポジトリの検査コマンドは4件までを目安にする。検査コマンドが多いほど、修正のラウンドを始められる時間が短くなるためである。
+- 検査コマンドが書き込めるのは、worktree、その`HOME`、共有の一時ディレクトリ(`/tmp`、`/var/tmp`、`/dev/shm`、`/dev/mqueue`、`/run/lock`)だけである。main cloneの`.git`に書けないので、`git add`、`git commit`、`git stash`、lint-stagedのように`.git`へ書き込む検査コマンドは失敗する。検査コマンドには使わない。
+- 検査コマンドの`TMPDIR`は`HOME`の下を指す。共有の一時ディレクトリに置いたものは、並行して動く別の検査から読めることがある。
+- 取り消しやworkerの再起動で後始末が走らなかった検査の残りは、次にその枠を取る検査か、次にそのworktreeを使うステップが片付ける。片付けられない枠は手放して次の枠を試し、`check_slot_skipped`を残す。すべての枠で片付けに失敗したときだけ、検査が失敗する([検査の枠の記録を片付ける](#検査の枠の記録を片付ける))。
+- 検査コマンドの枠のユーザーが同時に持てるプロセスは、スレッドを含めて256までである。超えるとforkが失敗し、その検査コマンドは失敗する。子を作り続ける検査コマンドが、workerのほかのジョブを止めないためである。値の根拠は[プロセス数の上限の決め方](security.md#プロセス数の上限の決め方)にある。
+- worktreeのディレクトリが50万個を超えると、所有権の受け渡しが300秒の上限で打ち切られ、検査が失敗する。目安は、9,000個のディレクトリで1回あたり約5秒である。
+- 同時に動く検査が枠の数(8)を超えると、検査は空くのを最大5分待つ。待っても取れなければ「no check slot became free」で失敗し、作業項目は失敗になる。`retry_work_item`で再実行する。
 - 検査コマンドに常駐のデーモンを残させない。ロックのファイル記述子を持ったまま残ると、以降のラウンドがロックを取れずに失敗する。記述子を閉じて残ったものも、次の準備やPRの修正を止める。
 
 > [!WARNING]
-> 検査コマンドは、Claudeが書いたコードをworker内でrootとして、サンドボックスなしで実行する。workerのサンドボックスができるまでは、Issueを信頼できる人だけが起票するリポジトリにだけ`check_commands_by_repo`を設定する。
+> 検査コマンドは、Claudeが書いたコードをworker内で非特権のユーザーとして、コンテナの分離なしに実行する。networkとworkerの資源を共有するので、Issueを信頼できる人だけが起票するリポジトリにだけ`check_commands_by_repo`を設定する。
 
 実装ブランチのpushとPRの作成で、人のレビューの前に対象リポジトリ自身のCIも動く。atelier-worksのCIはPRの作成から動く。そのCIが使えるsecretsの範囲を確かめておく。
 
-検査コマンドを実行すると、Consoleの**システム**の「情報の通知」に未サンドボックスの検査コマンドの実行(`unsandboxed_check_commands`)が記録される。本文は件数と対象と作業項目で決まるので、記録は作業項目ごとになる。同じ本文の未解決の通知があれば、新しく作らず、作成から1日を過ぎていれば時刻を更新する。秘密情報の検査(gitleaks)は、設定に関わらず毎ラウンド実行する。
+検査コマンドを実行すると、Consoleの**システム**の「情報の通知」にコンテナの分離が無い検査コマンドの実行(`unsandboxed_check_commands`)が記録される。
+本文は件数と対象と作業項目で決まるので、記録は作業項目ごとになる。
+同じ本文の未解決の通知があれば、新しく作らず、作成から1日を過ぎていれば時刻を更新する。
+秘密情報の検査(gitleaks)は、設定に関わらず毎ラウンド実行する。
+
+### 検査の枠の記録を片付ける
+
+検査は、worktreeを枠のユーザーへ渡す前に、worktreeと`HOME`のパスを枠の記録に書く。
+記録はworkerの`/var/lib/factory/check-slots/slot-<N>.state`である。
+記録は、所有権をrootに戻し終えたときだけ消える。
+残った記録は、次にその枠を取る検査か、次にそのworktreeを使うステップが使って片付ける。
+仕組みは[セキュリティ](security.md#枠の記録と片付け)にある。
+
+人が片付けるのは、次の4つの場合である。
+
+- `check_slot_record_unreadable`が残った。
+  読めない記録は`slot-<N>.state.corrupt-<時刻>-<乱数>`へ退避されていて、それが指していたworktreeは自動では戻らない。
+- `check_slot_skipped`が、worktreeを取り戻せない理由で続く。
+- 実装かPR修正が、検査用のユーザーへ渡したworktreeをrootへ戻せないまま止まった。
+  理由の詳細は`check sandbox:`で始まり、通知の次の操作がこの手順を示す。
+  記録が指すworktreeを取り戻せなかったか、読めない記録が残っていてworktreeにrootでないものがある。
+  詳細に枠のユーザーと記録のパスが載る。
+  作業領域の掃除が同じ理由でworktreeを飛ばしたときは、`cleanup_worktree_busy`が残る。
+- 枠の数(`FACTORY_CHECK_POOL_SIZE`)を減らすか、先頭のuid(`FACTORY_CHECK_UID`)を変える。
+  または、検査を枠のユーザーで動かす前の版へ`f/`を戻す。
+  範囲の外になった枠の記録と、前の版が読まない記録は、どの実行も片付けないためである。
+
+片付けは、実装フローとPR修正のフローが動いていないときに、次の順で行う。
+
+1. 記録の一覧を見る。
+
+   ```bash
+   mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker ls -l /var/lib/factory/check-slots
+   ```
+
+   枠の数を変える前と`f/`を戻す前は、`slot-<N>.state`が1つも無ければ片付けは要らない。
+
+2. 記録の中身を読み、worktreeと`HOME`のパスを確かめる。
+
+   ```bash
+   mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker cat /var/lib/factory/check-slots/<記録のファイル>
+   ```
+
+3. worktreeが残っていれば、rootに戻し、グループとその他の書き込みと、拡張のACLを消す。
+   ACLは`chown`と`chmod`では消えず、残ると後でrootが作るファイルに、ほかの枠から書ける権限が付くためである。
+   `HOME`が残っていれば消す。
+
+   ```bash
+   mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker chown -R -h 0:0 <worktree>
+   mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker chmod -R go-w,ug-s <worktree>
+   mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker setfacl -R -P -b -k <worktree>
+   mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker rm -rf --one-file-system <HOME>
+   ```
+
+4. 記録のファイルを消す。
+
+   ```bash
+   mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker rm /var/lib/factory/check-slots/<記録のファイル>
+   ```
+
+`check_slot_skipped`のときは、4を飛ばしてもよい。
+記録が残っていれば、次にその枠を取る検査が、同じworktreeを取り戻し直してから記録を消す。
+止まらないプロセスが理由なら、片付けの前にworkerを再起動する。
+片付けた後は、止まった作業項目をWindmillの`f/factory/retry_work_item`で再実行する。
+
+#### 前の版へ戻したときに記録が残っていたら
+
+検査を枠のユーザーで動かす前の版へ`f/`を戻すrevertは、マージすると自己更新が10分以内に反映する。
+マージの前に手順1で記録が無いことを確かめても、反映までの間に取り消された検査が記録を残すことがある。
+そのため、反映の後にも手順1で記録の一覧を見る。
+
+前の版の`f/`は記録を読まない。
+記録が残ったworktreeは枠のユーザーの所有のままで、rootのgitが所有者の違い(`detected dubious ownership`)で実行を拒む。
+そのworktreeを使う作業項目だけが失敗(`job_failed`)になり、ほかのworktreeには影響しない。
+手順2から4で片付けてから、失敗した作業項目を`retry_work_item`で再実行する。
+
+`f/`はそのままで、workerのイメージだけを前の版へ戻したときは、記録を片付けなくてよい。
+記録がworktreeを指していても、そのworktreeを次に使うステップは、取り戻す前にイメージの前提を確かめる。
+満たさなければ、所有権と記録のどちらにも触れずに止まり、`host_action_required`を残す。
+準備のステップなら、作業項目は[f/とworkerのイメージを両方変えたとき](#fとworkerのイメージを両方変えたとき)と同じ状態で止まる。
+作業領域の掃除は、そのworktreeを消さずに飛ばす。
+イメージを作り直すまで、そのworktreeを使う作業項目は進まない。
+作り直した後の準備のステップが記録を使って取り戻すので、止まった作業項目を`retry_work_item`で再実行する。
 
 ### PRができたら
 
@@ -919,7 +1007,10 @@ noticeには、Discordに送らない事項と、Discordに届かなくても残
 | `approval_comment_failed` | 承認のコメントをIssueに投稿できなかった | 承認と実装の起動は進んでいる。必要ならnoticeのリンクを載せたコメントを人がIssueに投稿する |
 | `implement_launch_failed` | 承認の後、実装フローへ進める処理がDBの失敗で例外になった | Windmillで`f/factory/retry_work_item`を作業項目のIDで実行して再開する |
 | `implement_needs_human` | 実装フローが人の対応待ちで止まった。作業項目はConsoleの**要対応**の失敗に出る | [人の対応待ちになったら](#人の対応待ちになったら)で原因を取り除いてから、**要対応**の失敗で**再実行**を押す |
-| `unsandboxed_check_commands` | 検査コマンドをサンドボックスなしで実行した | 設定が意図どおりか確かめる |
+| `unsandboxed_check_commands` | 検査コマンドをコンテナの分離なしで実行した | 設定が意図どおりか確かめる |
+| `check_slot_skipped` | 検査の枠を、前の実行の残り(止まらないプロセス、消せないファイルやIPC、取り戻せないworktree)を片付けられないため手放し、次の枠で検査した。本文に枠のユーザーと理由が載る。同じ本文の未解決のnoticeがあれば足さない。すべての枠で片付けに失敗したときだけ、検査が失敗する | 理由が止まらないプロセスなら、workerを再起動する。残ったファイルなら、本文のパスを確かめて消す。worktreeを取り戻せないなら、[検査の枠の記録を片付ける](#検査の枠の記録を片付ける)の手順で、記録を確かめ、worktreeが枠のユーザーの所有のままならrootに戻す。片付くまで、その枠は検査のたびに手放される |
+| `check_slot_record_unreadable` | 検査の枠の記録が読めないため、記録を退避して、その枠の片付けを続けた。本文に枠のユーザーと退避した先のパスが載る | [検査の枠の記録を片付ける](#検査の枠の記録を片付ける)の手順で、退避した記録が指すworktreeとHOMEを片付け、退避した記録を消す |
+| `check_runtime_unsafe` | 実装、PR修正、作業領域の掃除が、稼働中のworkerに誰でも書き込めるパスができたか、それを確かめられなかったと分かった。本文にパスか、確かめられなかった理由が載る。検査コマンドのある作業項目は、その間進まない | [稼働中のworkerが検査の前提を満たさないとき](#稼働中のworkerが検査の前提を満たさないとき)の手順で、パスを閉じるかworkerを作り直し、止まった作業項目を`retry_work_item`で再実行してから、通知を解決する。自動では解決されない |
 | `fix_reply_post_failed` | 修正の返信の投稿に失敗した | PRで人が返信する |
 | `pr_fix_reviewer_request_failed` | 再レビューの依頼のAPIが失敗した。PRの取得の失敗と、Botや削除済みの作成者の名前で依頼を組み立てられない場合を含む | GitHubのPRで人がレビュアーを依頼する |
 | `issue_proposal_record_failed` | Issue化の提案を記録できなかった | PRのスレッドを確かめ、必要なら人がIssueを起票する |
@@ -932,10 +1023,10 @@ noticeには、Discordに送らない事項と、Discordに届かなくても残
 | `claim_assignee_missing` | Issueを取得したが、FactoryのGitHubユーザーをassigneeにできなかった。作業は続く | そのユーザーがリポジトリのpush権限を持つcollaboratorか確かめる |
 | `supersede_failed` | 新しいサイクルを始めたが、古い承認済みの作業項目を取り消せなかった | なし。古い承認は再開できず、次の新しいサイクルで取り消される |
 | `deployed_sha_mismatch` | 自己更新が反映した版(`f/factory/deployed_sha`)が、self cloneのHEADに30分を超えて追いついていない。mergeの直後に反映を待つ間は通知しない。本文に、直近の反映の記録から読んだ原因の候補が付く。Windmillのdefaultのworkerが埋まって自己更新が待たされたときや、自己更新の実行が長引いて次の回が飛ばされたときは、反映が遅れただけでも通知されうる | 自己更新のジョブのログを確かめる。自己更新が反映に成功すると、その記録より前に作られたnoticeを、`poll_issues`が自動で解決する。人が解決しても、反映が止まっている限り、次の`poll_issues`で再び残る。本文が名指しする版が今の`f/factory/deployed_sha`と違い、自己更新が成功しているときは、反映と判定が重なって残ったnoticeなので、人が解決してよい。人が`f/factory/deployed_sha`を今のHEADへ手で書き換えて版を一致させたときや、自己更新が変数を更新した後に失敗して成功の行が作られなかったときも、止まっていた版を名指しするnoticeは自動では解決されないので、人が解決してよい([通知](internals/notifications.md)) |
-| `host_action_required` | 自己更新が反映した版に、worker自身では反映できない変更(`infra/`、`mise.toml`の`[tools]`・`[env]`)が含まれる。本文に、反映した版と変わったパスが載る。ホストで作業するまで、新しい構成は動かない | ホスト側のcheckoutで`git pull`し、`mise install`と`mise run up`を実行する。`mise run up`は、Caddyを再起動したうえで、終わりにそのcheckoutのHEADをworkerへ渡す。自己更新(10分ごと)が、通知の版がそのHEADと同じか祖先なら、通知を自動で解決する。HEADを書けなかったとき(警告が出る)と、このスクリプトを持たない版から`mise run deploy`で取り込む最初の1回(`mise run deploy`はpullの前のタスク定義で動く)は、自動では解決されない。`mise run up`が済んでいれば人が解決してよい([ホスト側で反映するもの](#ホスト側で反映するもの)) |
+| `host_action_required` | 自己更新が反映した版に、worker自身では反映できない変更(`infra/`、`mise.toml`の`[tools]`・`[env]`)が含まれる。本文に、反映した版と変わったパスが載る。ホストで作業するまで、新しい構成は動かない。実装、PR修正、作業領域の掃除が、workerのイメージが古くて検査コマンドを実行できないと分かったときにも残す。そのときは本文に、イメージの満たさない前提(足りない道具、枠のユーザー、ベースのイメージが開いたままのパス)が載る。検査コマンドのある作業項目は、その間進まない([f/とworkerのイメージを両方変えたとき](#fとworkerのイメージを両方変えたとき)) | ホスト側のcheckoutで`git pull`し、`mise install`と`mise run up`を実行する。`mise run up`は、Caddyを再起動したうえで、終わりにそのcheckoutのHEADをworkerへ渡す。自己更新(10分ごと)が、通知の版がそのHEADと同じか祖先なら、通知を自動で解決する。HEADを書けなかったとき(警告が出る)と、このスクリプトを持たない版から`mise run deploy`で取り込む最初の1回(`mise run deploy`はpullの前のタスク定義で動く)は、自動では解決されない。`mise run up`が済んでいれば人が解決してよい([ホスト側で反映するもの](#ホスト側で反映するもの))。イメージが古くて止まった作業項目は、`mise run up`の後に`retry_work_item`で再実行する。本文に反映した版が載らない通知も自動では解決されないので、人が解決する |
 | `cleanup_db_failed` | 保持期間を過ぎたレコードの削除に失敗した | 内容を確かめる。次の日の掃除でやり直す |
 | `cleanup_worktrees_skipped` | 動いているPRの修正のブランチを確かめられず、そのリポジトリの作業領域の掃除を見送った | 次の日の掃除を待つ |
-| `cleanup_worktree_busy` | 残ったプロセスが使っているので、終端の作業項目のworktreeを消さなかった。作業項目のID、worktreeのパス、使っているプロセスが載る | 載ったプロセスを止める。止めない限り毎日の掃除で記録しようとするが、同じ本文の未解決のnoticeがあるあいだは新しく作らない。同じ通知が1件残り続ける |
+| `cleanup_worktree_busy` | 終端の作業項目のworktreeを、使用中として消さなかった。原因は、残ったプロセスが使っていることか、検査用のユーザーからrootに戻せないことである。作業項目のID、worktreeのパス、理由が載る | 理由がプロセスなら、載ったプロセスを止める。rootに戻せないなら、[検査の枠の記録を片付ける](#検査の枠の記録を片付ける)の手順で片付ける。対処しない限り毎日の掃除で記録しようとするが、同じ本文の未解決のnoticeがあるあいだは新しく作らない。同じ通知が1件残り続ける |
 | `workspace_disk_usage` | 作業領域の掃除(毎日03:00)が記録したディスク使用量 | 増え続けていないか見る |
 | `console_fetch_failed` | Consoleの取り込みが失敗した | 通知の「次の操作」に従う |
 | `console_fetch_stale` | Consoleの取り込みの結果が30分以上更新されていない | 取り込みのコンテナ(`console_fetcher`)が動いているか確かめる |
@@ -1347,6 +1438,131 @@ workerの並列数(`NUM_WORKERS`)のような`infra/docker-compose.yml`の変更
 `wmill`がnpmを走らせることがあっても、依存のinstall scriptを動かさないためである。
 理由は[セキュリティ](security.md)の「サブプロセスのnpmのinstall script」にある。
 
+### f/とworkerのイメージを両方変えたとき
+
+`f/`の変更が、新しいworkerのイメージを前提にすることがある。
+例えば、検査コマンドを枠のユーザー(`factory-check-N`)で動かす`f/`は、イメージの`acl`、`procps`、`prlimit`と枠のユーザーを前提にする。
+ベースのイメージが誰でも書き込めるようにしている`/usr/src/app`と`/tmp/.cache`を、イメージが閉じていることも前提にする。
+マージすると、自己更新が10分以内に`f/`を反映するが、イメージは人が`mise run up`するまで古いままである。
+
+この種の変更は、イメージを先に作り直す。
+
+1. PRのブランチに、先にmainを取り込んでおく。
+   `mise run up`はcheckoutの`infra/`でイメージを作るので、PRのブランチがmainより遅れていると、mainで入った`infra/`の変更が戻るためである。
+2. 稼働中のworkerの状態を確かめる([稼働中のworkerの状態の確かめ方](#稼働中のworkerの状態の確かめ方))。
+   1つ目の走査が何も出さず、2つ目の走査が`/usr/src/app`と`/tmp/.cache`のディレクトリそのものだけを出すことを確かめる。
+   この2つは、次の`mise run up`で閉じる。
+   ほかに出たものは、先に閉じる。
+3. マージの前に、ホストのcheckoutでPRのブランチを取り込み、`mise run up`を実行する。
+   新しいイメージは前の版の`f/`でも動く。前の版の`f/`は検査コマンドをrootのまま実行し、枠のユーザーとACLを使わないためである。
+4. PRをマージする。
+5. マージの後に、ホストのcheckoutをmainに戻して`git pull`し、もう一度`mise run up`を実行する。
+   ビルドはキャッシュで済む。
+   `mise run up`が共有ボリュームに書くのはcheckoutのHEADで、3で書いたのはPRのブランチのHEADである。
+   自己更新の通知`host_action_required`が名指すのはマージの版で、PRのブランチのHEADの祖先ではないので、3だけでは自動で解決しない。
+6. 稼働中のworkerの状態を、2と同じ走査で確かめる。
+   2つの走査が何も出さないことを確かめ、出たものは閉じる。
+
+`f/`だけが先に反映された間は、検査コマンドのある実装とPR修正が、Claudeを動かす前に止まる。
+実装とPR修正の準備のステップは、検査コマンドを設定したリポジトリでは、最初にイメージの前提を確かめるためである。
+検査の準備も、所有権と枠の記録へ触れる前に同じことを確かめ直す。
+準備から検証までの間に、イメージは変わりうるためである。
+
+止まった作業項目の状態は次のとおりである。
+理由はどちらも`worker image is stale: run mise run up`で始まる。
+
+| フロー | 作業項目の状態 | 修正のラウンドの記録 |
+| --- | --- | --- |
+| 実装 | 人の対応待ち(`needs_human`) | 記録しない |
+| PR修正 | `blocked` | 記録しない(`fix_rounds`の行を作らない) |
+
+ラウンドを記録しないので、モデルの失敗にも数えず、`heavy_model`への切り替えを早めない。
+要対応の通知`host_action_required`が1件残り、本文にイメージの満たさない前提が載る。
+稼働中のworkerの問題も一緒に見つかれば、その問題は別の通知`check_runtime_unsafe`に載る([稼働中のworkerが検査の前提を満たさないとき](#稼働中のworkerが検査の前提を満たさないとき))。
+`host_action_required`は`mise run up`の後に自動で解決されるが、ボリュームのマウントポイントは作り直しでは閉じないので、人が閉じるまで残すためである。
+PR修正の`blocked`はConsoleの**要対応**の失敗に出ないので、この通知とDiscordの通知で気づく。
+
+対処は、ホストのcheckoutで`git pull`し、`mise install`と`mise run up`を実行する。
+続けて、止まった作業項目をWindmillの`f/factory/retry_work_item`で再実行する。
+通知の本文に反映した版が載っていれば、ホストがその版以降で`mise run up`したときに、自己更新が自動で解決する。
+版が載らない通知は自動では解決されないので、`mise run up`の後に人が解決する。
+
+`/usr/src/app`か`/tmp/.cache`の下に誰でも書けるものがあれば、ベースのイメージが置いたものでも`check_runtime_unsafe`に載る。
+この通知は`mise run up`の後も自動では解決されない。
+[稼働中のworkerの状態の確かめ方](#稼働中のworkerの状態の確かめ方)の2つ目の走査で何も出ないことを確かめてから、通知を人が解決する。
+
+#### 稼働中のworkerの状態の確かめ方
+
+ホストのcheckoutで、次の2つの走査をする。
+
+1つ目の走査は、ボリュームの中から、誰でも書けるもの(symlinkを除く)を探す。
+検査の準備の走査は、ボリュームのマウントポイントそのものしか見ないためである。
+検査を枠のユーザーで動かす前の版では、rootが検査コマンドを実行するので、誰でも書けるworktreeやファイルが`/workspaces`に残りうる。
+残ったままだと、検査用のユーザーがそこへ書き込める。
+
+```bash
+mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker /usr/bin/find /workspaces /var/lib/factory -xdev '!' -type l -perm -0002 -print
+```
+
+2つ目の走査は、検査の準備と同じ走査である([セキュリティ](security.md#誰でも書き込めるものの探し方))。
+引数は`f/factory/lib/check_sandbox.ts`の`worldWritablePathsArgv`と同じである。
+食い違わないことは`tests/lib/check_sandbox.test.ts`が確かめる。
+
+```bash
+mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker \
+  /usr/bin/find -P / /dev/shm -xdev -path /tmp/windmill -prune -o '!' -type l -perm -0002 \
+  '!' '(' -path /tmp -o -path /var/tmp -o -path /run/lock -o -path /dev/shm ')' \
+  '(' -path /usr/src/app -o -path '/usr/src/app/*' -o -path /tmp/.cache -o -path '/tmp/.cache/*' \
+  -o '!' '(' -path '/tmp/*' -o -path '/var/tmp/*' -o -path '/run/lock/*' -o -path '/dev/shm/*' ')' \
+  -o '(' -uid 0 -type d '!' -perm -1000 ')' ')' -print
+```
+
+出たものは、次のコマンドで、中のものも含めて閉じる。
+`<パス>`には、走査が出したパスを1つずつ指定する。
+ボリュームのマウントポイント(`/workspaces`と`/var/lib/factory`)そのものが出たときは、`-R`を付けずに`chmod o-w`で閉じる。
+`-R`を付けると、ボリュームの中のすべてに及ぶためである。
+閉じたら、同じ走査をもう一度実行し、何も出ないことを確かめる。
+
+```bash
+mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker chmod -R o-w <パス>
+```
+
+### 稼働中のworkerが検査の前提を満たさないとき
+
+検査の準備は、イメージの前提のほかに、稼働中のworkerに誰でも書き込めるパスが無いことを確かめる。
+イメージのビルドが同じことを確かめるので、見つかったパスは稼働中にできたものである。
+共有の一時ディレクトリの下で数えるのは、rootが所有し、stickyでない、誰でも書き込めるディレクトリだけである。
+ただし、`/tmp/.cache`とその下では、ファイルも数える。
+探し方は[セキュリティ](security.md#誰でも書き込めるものの探し方)にある。
+走査がタイムアウトしたときと、走査が失敗したときも、同じ扱いにする。
+
+止まった作業項目の状態とラウンドの記録は、[f/とworkerのイメージを両方変えたとき](#fとworkerのイメージを両方変えたとき)の表と同じである。
+理由は`worker runtime is unsafe for checks:`で始まる。
+要対応の通知`check_runtime_unsafe`が1件残り、本文にパスか、確かめられなかった理由が載る。
+イメージの問題ではないので、`mise run up`は要らない。
+
+対処は、ホストのcheckoutで次のどちらかを行う。
+
+- 本文のパスを閉じる。
+
+  ```bash
+  mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker chmod o-w <パス>
+  ```
+
+- workerのコンテナを作り直す。
+  ボリュームの外はイメージの状態に戻るので、稼働中にできたパスも消える。
+  ボリュームのマウントポイント(`/workspaces`と`/var/lib/factory`)は直らないので、上のコマンドで閉じる。
+  マウントポイントの権限は、コンテナではなくボリュームが持つためである。
+  作り直すと、そのとき動いているジョブも止まる。
+
+  ```bash
+  mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_worker
+  ```
+
+続けて、止まった作業項目をWindmillの`f/factory/retry_work_item`で再実行し、通知を人が解決する。
+走査のタイムアウトで止まったときは、workerの負荷を確かめてから再実行する。
+同じパスが繰り返しできるときは、そのパスを作るジョブを確かめる。
+
 ### mise run upで反映されないもの
 
 | 変更 | 反映のしかた |
@@ -1725,7 +1941,8 @@ Factoryの資産は、すべて`factory`ワークスペースの`f/factory/**`�
 ### workerがプロセスを作れなくなったとき
 
 workerのコンテナは、`init: true`でdocker-initをPID 1にし、終了した子プロセスを回収する。ジョブが起こすgit、gh、esbuildの子プロセスは、親より長く残ることがある。initが無いと、回収されないプロセスが上限を使い切り、すべてのジョブが`errno=11`(EAGAIN)で失敗する。
-上限は、defaultとnativeのworker(`windmill_worker`、`windmill_worker_native`)が`pids: 512`である。
+上限は、defaultのworker(`windmill_worker`)が`pids: 1024`、nativeのworker(`windmill_worker_native`)が`pids: 512`である。
+defaultのworkerは検査コマンドを動かすので、その分を足している([プロセス数の上限の決め方](security.md#プロセス数の上限の決め方))。
 Console用のworker(`windmill_worker_console`)は`pids: 256`である。
 
 同じ症状が出たら、使用量を確かめてからworkerを再起動する。

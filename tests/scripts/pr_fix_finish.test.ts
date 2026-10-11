@@ -4,6 +4,10 @@
 // requirements_gapの差し戻しの手順は`pr_fix_reroute.test.ts`でテストする。
 
 import { describe, expect, test } from "bun:test";
+import {
+  CheckImageStaleError,
+  CheckRuntimeUnsafeError,
+} from "../../f/factory/lib/check_sandbox.ts";
 import type { ReviewThread } from "../../f/factory/lib/github.ts";
 import { SECRETS_NOT_PUSHED_REASON } from "../../f/factory/lib/implement_finish_support.ts";
 import { WorktreeBusyError } from "../../f/factory/lib/process_lock.ts";
@@ -47,6 +51,36 @@ describe("stopBeforeCommitTerminal", () => {
 
   test("moves the work item to needs_human", () => {
     expect(stopBeforeCommitTerminal(REASON).toStatus).toBe("needs_human");
+  });
+
+  test("records the round it stopped", () => {
+    expect(stopBeforeCommitTerminal(REASON).recordsRound).toBe(true);
+  });
+
+  const STALE = new CheckImageStaleError(["/usr/bin/getfacl is missing"])
+    .message;
+  const RUNTIME = new CheckRuntimeUnsafeError([
+    "world-writable paths created at runtime: /tmp/open",
+  ]).message;
+
+  test("blocks the work item when the image is stale, like the other steps", () => {
+    expect(stopBeforeCommitTerminal(STALE).toStatus).toBe("blocked");
+  });
+
+  test("does not record a round when the image is stale, so that it is not a model failure", () => {
+    expect(stopBeforeCommitTerminal(STALE).recordsRound).toBe(false);
+  });
+
+  test("blocks the work item when the running worker is unsafe for checks", () => {
+    expect(stopBeforeCommitTerminal(RUNTIME).toStatus).toBe("blocked");
+  });
+
+  test("does not record a round when the running worker is unsafe for checks", () => {
+    expect(stopBeforeCommitTerminal(RUNTIME).recordsRound).toBe(false);
+  });
+
+  test("keeps the environment problem as status_reason", () => {
+    expect(stopBeforeCommitTerminal(RUNTIME).statusNote).toBe(RUNTIME);
   });
 });
 
@@ -93,6 +127,28 @@ describe("prFixPushGateReason", () => {
     });
     await prFixPushGateReason(deps, POINTER, "fix/x");
     expect(calls).toEqual(["ensureLockFree"]);
+  });
+
+  test("stops with the stale image when the image cannot take the worktree back", async () => {
+    const { deps } = gateDeps({
+      ensureLockFree: async () => {
+        throw new CheckImageStaleError(["/usr/bin/getfacl is missing"]);
+      },
+    });
+    expect(await prFixPushGateReason(deps, POINTER, "fix/x")).toBe(
+      "worker image is stale: run mise run up: /usr/bin/getfacl is missing",
+    );
+  });
+
+  test("stops with the runtime problem when the running worker cannot take the worktree back", async () => {
+    const { deps } = gateDeps({
+      ensureLockFree: async () => {
+        throw new CheckRuntimeUnsafeError(["x"]);
+      },
+    });
+    expect(await prFixPushGateReason(deps, POINTER, "fix/x")).toBe(
+      new CheckRuntimeUnsafeError(["x"]).message,
+    );
   });
 
   test("rethrows an unexpected error from the lock check", async () => {

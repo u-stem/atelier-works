@@ -21,7 +21,7 @@
   - `§`などのセクション記号と、設計文書・計画書の章番号やファイル名。リポジトリの外にある文書は読み手が辿れない。
   - 変更の経緯(「〜から移した」「PR #Nで追加」など)。経緯はコミットとPRに残す。
   - TODO。今やるかIssueにする。
-- 既知の制限を説明するためにIssue番号を書くのはよい(例: 「検査コマンドはworkerの中でrootのまま実行し、隔離しない(#39)」)。
+- 既知の制限を説明するためにIssue番号を書くのはよい(例: 「検査コマンドはworkerと同じコンテナで動き、networkを分離しない(#146)」)。
 
 ```ts
 // 悪い例: 英語、外部文書の章番号、経緯
@@ -104,7 +104,7 @@ if (!isClaudeResult(parsed)) {
 | サイズ | 対象 | 実行 |
 | --- | --- | --- |
 | small | DB、ネットワーク、コンテナを使わない単体テスト。`f/factory/lib/**`の大半がここに入り、外部プロセスの起動や`fetch`は注入したダミーに差し替える | `mise run test`(`bun test`) |
-| medium | composeのPostgresを使うSQLのスモークテストなど、1台のマシンの中の依存を使うテスト | `mise run test:db` |
+| medium | composeのPostgresを使うSQLのスモークテストや、workerのイメージの使い捨てのコンテナで実際のsetpriv・flock・chownを使う検査コマンドの境界のテストなど、1台のマシンの中の依存を使うテスト | `mise run test:db`、`mise run test:check-sandbox` |
 | large | 実際にIssueを起票して確かめるE2E | `factory-dev`スキルの「E2Eの動作確認」の手順 |
 
 ## Windmill scriptの作法

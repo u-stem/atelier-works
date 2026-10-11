@@ -1,18 +1,27 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   realpathSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  CheckImageStaleError,
+  CheckOwnershipRestoreError,
+  CheckRuntimeUnsafeError,
+  CheckSlotInUseError,
+} from "../../f/factory/lib/check_sandbox.ts";
+import {
   defaultLockReleaseDeps,
   defaultOrphanLockFileDeps,
+  ensurePrivateLockFile,
   ensureWorktreeLockFree,
   FLOCK_PATH,
   formatLockHolders,
@@ -37,6 +46,7 @@ import {
   removeLockFileArgv,
   removeLockFileUnderLock,
   removeOrphanLockFiles,
+  restoreOwnershipStep,
   type SignalDeps,
   scanLockProcesses,
   stopProcesses,
@@ -102,6 +112,7 @@ function entry(overrides: Partial<LockProcess> = {}): LockProcess {
 
 type FakeProc = {
   readonly stat: string;
+  readonly status?: string;
   readonly environ?: string;
   readonly cmdline?: string;
   readonly fds?: Record<
@@ -134,6 +145,10 @@ function fakeProcFs(procs: Record<string, FakeProc>): ProcFs {
       if (kind === "stat") return p.stat;
       if (kind === "environ") return p.environ ?? "";
       if (kind === "cmdline") return p.cmdline ?? "";
+      if (kind === "status") {
+        if (p.status !== undefined) return p.status;
+        throw errno("ENOENT");
+      }
       const info = p.fds?.[fd]?.fdinfo;
       if (kind === "fdinfo" && info !== undefined) return info;
       throw errno("ENOENT");
@@ -1672,6 +1687,54 @@ describe("a process that cannot be inspected", () => {
     expect(entries[0]?.uninspectable).toBe(true);
   });
 
+  // 検査コマンドは枠のuidで動き、rootのworkerはそのenvironを読めない。
+  // どのworktreeの検査かを特定できず、読めないまま返すと無関係なworktreeの走査を塞ぐので、走査から外す。
+  const SLOT_CHILD: FakeProc = {
+    stat: statLine(11, 10, 10, 2),
+    environ: "",
+    status:
+      "Name:\tbun\nState:\tS (sleeping)\nUid:\t20000\t20000\t20000\t20000\nGroups:\t1000000 \n",
+  };
+
+  const scanWithSlotChild = (child: FakeProc = SLOT_CHILD, slots = [20000]) =>
+    scanLockProcesses(
+      LOCK,
+      failingProcFs(
+        { "10": TAGGED_HOLDER, "11": child },
+        "readText",
+        "/proc/11/environ",
+        errno("EACCES"),
+      ),
+      900,
+      new Set(slots),
+    );
+
+  test("does not list an unreadable process that runs as a slot uid", async () => {
+    const entries = await scanWithSlotChild();
+    expect(entries.map((found) => found.pid)).toEqual([10]);
+  });
+
+  test("still lists an unreadable process that runs as another uid", async () => {
+    const entries = await scanWithSlotChild(SLOT_CHILD, [20001]);
+    expect(entries.find((found) => found.pid === 11)?.uninspectable).toBe(true);
+  });
+
+  test("still lists an unreadable process whose uid cannot be read", async () => {
+    const entries = await scanWithSlotChild({
+      stat: statLine(11, 10, 10, 2),
+      environ: "",
+    });
+    expect(entries.find((found) => found.pid === 11)?.uninspectable).toBe(true);
+  });
+
+  test("an unreadable slot process outside every tagged group does not make the worktree busy", async () => {
+    const entries = await scanWithSlotChild({
+      ...SLOT_CHILD,
+      stat: statLine(11, 1, 11, 2),
+    });
+    expect(planLockRelease(entries, LOCK, THIS_JOB).kind).toBe("stop");
+  });
+
   test("skips a process whose environment is gone", async () => {
     const entries = await scanFailing(
       "readText",
@@ -1792,6 +1855,354 @@ describe("a process that cannot be inspected", () => {
       },
     );
     expect(stopped).toHaveLength(0);
+  });
+});
+
+describe("ensureWorktreeLockFree restoring ownership", () => {
+  function restoringDeps(
+    events: string[],
+    failure?: Error,
+    scanned: readonly LockProcess[] = [],
+  ): LockReleaseDeps {
+    return {
+      restoreOwnership: async () => {
+        events.push("restore");
+        if (failure !== undefined) throw failure;
+      },
+      scan: async () => {
+        events.push("scan");
+        return scanned;
+      },
+      stop: async () => {},
+      sleep: async () => {},
+    };
+  }
+
+  test("restores the ownership only after the lock is found free", async () => {
+    const events: string[] = [];
+    const fake = createFakeCommandRunner([ok()]);
+    const run: typeof fake.run = async (argv, options) => {
+      events.push("probe");
+      return fake.run(argv, options);
+    };
+    await ensureWorktreeLockFree({
+      run,
+      lock: LOCK,
+      policy: null,
+      deps: restoringDeps(events),
+    });
+    expect(events).toEqual(["probe", "scan", "restore"]);
+  });
+
+  test("does not restore the ownership while a holder it can see keeps the lock", async () => {
+    const events: string[] = [];
+    const fake = createFakeCommandRunner(busyTimes(4));
+    await ensureWorktreeLockFree({
+      run: fake.run,
+      lock: LOCK,
+      policy: null,
+      deps: restoringDeps(events, undefined, [entry()]),
+    }).catch(() => {});
+    expect(events).not.toContain("restore");
+  });
+
+  test("restores the ownership when the lock is held but no holder can be seen", async () => {
+    const events: string[] = [];
+    const fake = createFakeCommandRunner([...busyTimes(4), ok()]);
+    await ensureWorktreeLockFree({
+      run: fake.run,
+      lock: LOCK,
+      policy: null,
+      deps: restoringDeps(events),
+    });
+    expect(events).toEqual(["scan", "restore"]);
+  });
+
+  test("goes on once the lock frees after restoring the ownership", async () => {
+    const fake = createFakeCommandRunner([...busyTimes(4), ok()]);
+    await expect(
+      ensureWorktreeLockFree({
+        run: fake.run,
+        lock: LOCK,
+        policy: null,
+        deps: restoringDeps([]),
+      }),
+    ).resolves.toEqual([]);
+  });
+
+  test("stays busy when the lock is still held after restoring the ownership", async () => {
+    const fake = createFakeCommandRunner(busyTimes(20));
+    await expect(
+      ensureWorktreeLockFree({
+        run: fake.run,
+        lock: LOCK,
+        policy: null,
+        deps: restoringDeps([]),
+      }),
+    ).rejects.toBeInstanceOf(WorktreeBusyError);
+  });
+
+  test("restores the ownership for an invisible holder even when stopping is allowed", async () => {
+    const events: string[] = [];
+    const fake = createFakeCommandRunner([...busyTimes(4), ok()]);
+    await ensureWorktreeLockFree({
+      run: fake.run,
+      lock: LOCK,
+      policy: { self: THIS_JOB, recheck: async () => {} },
+      deps: restoringDeps(events),
+    });
+    expect(events).toContain("restore");
+  });
+
+  test("passes on a WorktreeBusyError from restoring the ownership", async () => {
+    const fake = createFakeCommandRunner(busyTimes(4));
+    await expect(
+      ensureWorktreeLockFree({
+        run: fake.run,
+        lock: LOCK,
+        policy: null,
+        deps: restoringDeps([], new WorktreeBusyError([], "slot held")),
+      }),
+    ).rejects.toThrow("slot held");
+  });
+
+  test("does not restore the ownership while a related process remains", async () => {
+    const events: string[] = [];
+    const fake = createFakeCommandRunner([ok()]);
+    await ensureWorktreeLockFree({
+      run: fake.run,
+      lock: LOCK,
+      policy: null,
+      deps: restoringDeps(events, undefined, [entry({ holdsLock: false })]),
+    }).catch(() => {});
+    expect(events).not.toContain("restore");
+  });
+
+  test("restores the ownership after stopping a stoppable leftover", async () => {
+    const events: string[] = [];
+    const fake = createFakeCommandRunner([ok(), ok()]);
+    let scans = 0;
+    const deps: LockReleaseDeps = {
+      ...restoringDeps(events),
+      scan: async () => {
+        scans += 1;
+        events.push("scan");
+        return scans === 1 ? [entry({ holdsLock: false })] : [];
+      },
+      stop: async () => {
+        events.push("stop");
+      },
+    };
+    await ensureWorktreeLockFree({
+      run: fake.run,
+      lock: LOCK,
+      policy: { self: THIS_JOB, recheck: async () => {} },
+      deps,
+    });
+    expect(events.slice(-2)).toEqual(["scan", "restore"]);
+  });
+
+  test("fails with the restore error", async () => {
+    const fake = createFakeCommandRunner([ok()]);
+    await expect(
+      ensureWorktreeLockFree({
+        run: fake.run,
+        lock: LOCK,
+        policy: null,
+        deps: restoringDeps([], new Error("chown failed")),
+      }),
+    ).rejects.toThrow("chown failed");
+  });
+
+  test("works with dependencies that have no restore step", async () => {
+    const fake = createFakeCommandRunner([ok()]);
+    const deps = restoringDeps([]);
+    const { restoreOwnership: _unused, ...withoutRestore } = deps;
+    await expect(
+      ensureWorktreeLockFree({
+        run: fake.run,
+        lock: LOCK,
+        policy: null,
+        deps: withoutRestore,
+      }),
+    ).resolves.toEqual([]);
+  });
+});
+
+describe("restoreOwnershipStep", () => {
+  test("turns a slot that another run holds into WorktreeBusyError", async () => {
+    const step = restoreOwnershipStep(async () => {
+      throw new CheckSlotInUseError(2, 10003);
+    });
+    await expect(step(LOCK)).rejects.toBeInstanceOf(WorktreeBusyError);
+  });
+
+  test("names the held slot in the busy reason", async () => {
+    const step = restoreOwnershipStep(async () => {
+      throw new CheckSlotInUseError(2, 10003);
+    });
+    await expect(step(LOCK)).rejects.toThrow("factory-check-2");
+  });
+
+  test("passes another error through", async () => {
+    const step = restoreOwnershipStep(async () => {
+      throw new Error("chown failed");
+    });
+    await expect(step(LOCK)).rejects.toThrow("chown failed");
+  });
+
+  // 準備のステップが、運用者の操作に合った通知を残せるよう、どちらの問題も種類を保って投げ直す。
+  test.each([
+    {
+      name: "a stale image",
+      error: new CheckImageStaleError(["/usr/bin/getfacl is missing"]),
+    },
+    {
+      name: "an unsafe running worker",
+      error: new CheckRuntimeUnsafeError([
+        "world-writable paths created at runtime: /tmp/open",
+      ]),
+    },
+  ])(
+    "passes $name through as it is so that the preparation reports it as one",
+    async ({ error }) => {
+      const step = restoreOwnershipStep(async () => {
+        throw error;
+      });
+      await expect(step(LOCK)).rejects.toBe(error);
+    },
+  );
+
+  test("turns a worktree that could not be taken back into WorktreeBusyError", async () => {
+    const step = restoreOwnershipStep(async () => {
+      throw new CheckOwnershipRestoreError("entries with an ACL remain");
+    });
+    await expect(step(LOCK)).rejects.toBeInstanceOf(WorktreeBusyError);
+  });
+
+  test("keeps why the worktree could not be taken back in the busy reason", async () => {
+    const step = restoreOwnershipStep(async () => {
+      throw new CheckOwnershipRestoreError("entries with an ACL remain");
+    });
+    await expect(step(LOCK)).rejects.toThrow("entries with an ACL remain");
+  });
+
+  test("keeps the busy reason a single reason", async () => {
+    const step = restoreOwnershipStep(async () => {
+      throw new CheckOwnershipRestoreError("rm failed; disk full");
+    });
+    await expect(step(LOCK)).rejects.toThrow("rm failed, disk full");
+  });
+
+  test("restores the worktree of the lock", async () => {
+    const dirs: string[] = [];
+    const step = restoreOwnershipStep(async (dir) => {
+      dirs.push(dir);
+      return true;
+    });
+    await step(LOCK);
+    expect(dirs).toEqual([LOCK.worktreeDir]);
+  });
+});
+
+describe("WorktreeBusyError", () => {
+  test("carries a detail when no holder is known", () => {
+    expect(new WorktreeBusyError([], "slot held").message).toBe(
+      `${WORKTREE_BUSY_REASON}: slot held`,
+    );
+  });
+
+  test("keeps the plain reason without holders or detail", () => {
+    expect(new WorktreeBusyError([]).message).toBe(WORKTREE_BUSY_REASON);
+  });
+});
+
+describe("ensurePrivateLockFile", () => {
+  const tempDirs: string[] = [];
+  const tempPath = () => {
+    const dir = mkdtempSync(join(tmpdir(), "factory-lockfile-"));
+    tempDirs.push(dir);
+    return join(dir, ".wt.process.lock");
+  };
+
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("creates a missing lock file readable only by its owner", async () => {
+    const path = tempPath();
+    await ensurePrivateLockFile(path);
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+  });
+
+  test("narrows an existing lock file to its owner", async () => {
+    const path = tempPath();
+    writeFileSync(path, "", { mode: 0o644 });
+    chmodSync(path, 0o644);
+    await ensurePrivateLockFile(path);
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+  });
+
+  test("keeps an existing lock file empty", async () => {
+    const path = tempPath();
+    writeFileSync(path, "");
+    await ensurePrivateLockFile(path);
+    expect(statSync(path).size).toBe(0);
+  });
+
+  test("does nothing when the parent directory is missing", async () => {
+    await expect(
+      ensurePrivateLockFile("/nowhere/at/all/.wt.process.lock"),
+    ).resolves.toBeUndefined();
+  });
+
+  test("refuses a symlink in place of the lock file", async () => {
+    const path = tempPath();
+    symlinkSync("/etc/hostname", path);
+    await expect(ensurePrivateLockFile(path)).rejects.toThrow();
+  });
+
+  test("refuses a directory in place of the lock file", async () => {
+    const path = tempPath();
+    mkdirSync(path);
+    await expect(ensurePrivateLockFile(path)).rejects.toThrow();
+  });
+});
+
+describe("lock file preparation", () => {
+  test("probing prepares the lock file before running flock", async () => {
+    const events: string[] = [];
+    const fake = createFakeCommandRunner([ok()]);
+    await probeWorktreeLock({
+      run: async (argv, options) => {
+        events.push("flock");
+        return fake.run(argv, options);
+      },
+      lock: LOCK,
+      prepareLockFile: async (path) => {
+        events.push(`prepare ${path}`);
+      },
+    });
+    expect(events).toEqual([`prepare ${LOCK.lockPath}`, "flock"]);
+  });
+
+  test("a locked run prepares the lock file before running flock", async () => {
+    const events: string[] = [];
+    const fake = createFakeCommandRunner([ok()]);
+    await withWorktreeProcessLock(
+      async (argv, options) => {
+        events.push("flock");
+        return fake.run(argv, options);
+      },
+      LOCK,
+      THIS_JOB,
+      async (path) => {
+        events.push(`prepare ${path}`);
+      },
+    )(["/bin/true"]);
+    expect(events).toEqual([`prepare ${LOCK.lockPath}`, "flock"]);
   });
 });
 

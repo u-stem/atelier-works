@@ -4,6 +4,15 @@
 
 import * as wmill from "windmill-client@1.817.0";
 import {
+  type CheckCommandResult,
+  runAllowedCheckCommands,
+} from "../lib/check_runner.ts";
+import {
+  CheckEnvironmentError,
+  checkSandboxFromEnv,
+  kernelWarningText,
+} from "../lib/check_sandbox.ts";
+import {
   buildSystemPrompt,
   type DailyBudgetStatus,
   dailyBudgetStatus,
@@ -18,6 +27,7 @@ import {
   recordAgentRun,
 } from "../lib/db.ts";
 import { type GhClient, getPr } from "../lib/github.ts";
+import { recordCheckEnvironmentNotice } from "../lib/host_action.ts";
 import { escapeReasonSeparator, logger } from "../lib/log.ts";
 import { prFixRetryModel } from "../lib/model_policy.ts";
 import {
@@ -33,7 +43,6 @@ import {
   worktreeGitPointerMatches,
 } from "../lib/workspace.ts";
 import {
-  type CheckCommandResult,
   type CollectedComment,
   type CollectedReview,
   claudeBlockedReason,
@@ -44,12 +53,15 @@ import {
   localHeadStopReason,
   PR_HEAD_NOT_RECORDED_REASON,
   recordedGitPointerStopReason,
-  runAllowedCheckCommands,
   WORKTREE_GIT_POINTER_NOT_RECORDED_REASON,
 } from "./pr_workflow_support.ts";
 
 export type PrFixVerifyResult = {
-  readonly outcome: FixOutcome;
+  /**
+   * `guard_blocked`は、workerが検査の前提を満たさず検査を実行できなかったときだけ返す。
+   * 完了のステップが修正のラウンドを記録せずに`blocked`にするので、モデルの失敗に数えない。
+   */
+  readonly outcome: FixOutcome | "guard_blocked";
   readonly reason: string | null;
   readonly summary: string;
   readonly replies: FixReply[];
@@ -68,7 +80,7 @@ export type PrFixRetryResult =
 
 /** `runPrFixVerify`が使うI/O。テストでは偽物に差し替える。 */
 export type PrFixVerifyDeps = {
-  /** 検査コマンドをサンドボックスなしで実行することをnoticeに記録する。 */
+  /** 検査コマンドをコンテナの分離なしで実行することをnoticeに記録する。 */
   readonly announceChecks: () => Promise<void>;
   /** worktreeの`.git`を`expected`と比べ、違えば`WorktreeGitPointerModifiedError`を投げる。 */
   readonly assertGitPointer: (expected: string) => Promise<void>;
@@ -87,6 +99,10 @@ export type PrFixVerifyDeps = {
     failures: readonly CheckFailure[],
   ) => Promise<PrFixRetryResult>;
   readonly warn: (message: string, fields: Record<string, unknown>) => void;
+  /** `runChecks`が`CheckEnvironmentError`を投げたときに1回呼ぶ。運用者に直し方を示す通知を残す。 */
+  readonly reportCheckImageStale: (
+    error: CheckEnvironmentError,
+  ) => Promise<void>;
 };
 
 export type PrFixVerifyInput = {
@@ -119,6 +135,9 @@ export type PrFixVerifyInput = {
  * 検査が失敗したら、日次予算の範囲で、失敗の出力を添えてClaudeの修正を1回だけ追加で走らせ、
  * 変更の検査と検査コマンドをもう一度行う。それでも失敗するときは"blocked"にする。
  * 検査コマンドがあれば、準備ステップの記録がそろっていることを確かめた後、最初の検査の前に`announceChecks`を呼ぶ。
+ * workerが検査の前提を満たさず検査を実行できなければ(`CheckEnvironmentError`)、`reportCheckImageStale`で知らせ、
+ * Claudeを再実行せずに"guard_blocked"にする。Claudeが直せる検査の失敗ではないので、
+ * 準備の関門と同じく修正のラウンドを記録させず、モデルの失敗に数えないためである。
  * `assertGitPointer`が`WorktreeGitPointerModifiedError`以外を投げたときは、そのまま投げる。
  */
 export async function runPrFixVerify(
@@ -191,7 +210,33 @@ export async function runPrFixVerify(
   };
   if (!input.hasCheckCommands) return applyDone;
 
-  const firstChecks = await deps.runChecks();
+  /** 検査コマンドを実行する。workerが前提を満たさず実行できなければ、知らせてからその例外を返す。 */
+  const runChecks = async (): Promise<
+    readonly CheckCommandResult[] | CheckEnvironmentError
+  > => {
+    try {
+      return await deps.runChecks();
+    } catch (error) {
+      if (!(error instanceof CheckEnvironmentError)) throw error;
+      await deps.reportCheckImageStale(error);
+      return error;
+    }
+  };
+
+  /** workerが前提を満たさず検査を実行できなかったときの結果。 */
+  const staleImage = (
+    error: CheckEnvironmentError,
+    summary: string,
+    replies: FixReply[],
+  ): PrFixVerifyResult => ({
+    ...blocked(error.message, summary, replies),
+    outcome: "guard_blocked",
+  });
+
+  const firstChecks = await runChecks();
+  if (firstChecks instanceof CheckEnvironmentError) {
+    return staleImage(firstChecks, input.apply.summary, input.apply.replies);
+  }
   if (firstChecks.every((result) => result.ok)) {
     const afterChecksReason = await inspect();
     return afterChecksReason === null
@@ -267,7 +312,10 @@ export async function runPrFixVerify(
   if (afterRetryReason !== null) {
     return blocked(afterRetryReason, output.summary, output.replies);
   }
-  const secondChecks = await deps.runChecks();
+  const secondChecks = await runChecks();
+  if (secondChecks instanceof CheckEnvironmentError) {
+    return staleImage(secondChecks, output.summary, output.replies);
+  }
   if (!secondChecks.every((result) => result.ok)) {
     return blocked(
       "repository checks still failing after one automated fix retry",
@@ -346,18 +394,27 @@ export async function main(
   );
 
   const timeoutMs = config.claude_timeout_sec * 1000;
+  // 検査コマンドは、検査用の非特権uidに落として実行する。rootのまま実行することはしない。
+  // 枠を片付けられずに飛ばしたときと、読めない枠の記録を退避したときは、検査を止めずにnoticeで知らせる。
+  // 同じ状況が続いても検査のたびに積み上がらないよう、同じ本文の未解決のnoticeがあれば足さない。
+  const checkSandbox =
+    config.allowed_check_commands.length > 0
+      ? checkSandboxFromEnv(process.env, async (notice) => {
+          await addNoticeUnlessUnresolved(notice);
+        })
+      : null;
 
   return await runPrFixVerify(
     {
       // `allowed_check_commands`は、対象リポジトリの検証されていないコードを、
-      // worker内でサンドボックスなしにroot権限で実行する。
+      // workerのコンテナの中で、コンテナの分離なしに実行する。
       // この常設リスクを記録に残らないままにせずNoticesの画面に見え続けるよう、
       // 本文は件数と対象のPRと作業項目で決まるので、作業項目ごとに記録する。
       // 同じ本文の未解決のnoticeは重ねず、1日を過ぎていれば作成時刻を更新して、一覧に出し続ける。
       announceChecks: async () => {
         await addNoticeUnlessUnresolved({
           kind: "unsandboxed_check_commands",
-          message: `pr_fix_verifyはこれから${String(config.allowed_check_commands.length)}件のallowed_check_commandsを、サンドボックス分離なしでroot権限により${owner}/${repo}#${String(pr_number)}の未検証コードに対して実行します(work item ${String(work_item_id)})。`,
+          message: `pr_fix_verifyはこれから${String(config.allowed_check_commands.length)}件のallowed_check_commandsを、コンテナの分離なしで非特権の検査用ユーザーにより${owner}/${repo}#${String(pr_number)}の未検証コードに対して実行します(work item ${String(work_item_id)})。${kernelWarningText(checkSandbox?.kernelWarnings() ?? [])}`,
         });
       },
       assertGitPointer: (expected) =>
@@ -375,6 +432,9 @@ export async function main(
           worktree_dir,
           config.allowed_check_commands,
           timeoutMs,
+          undefined,
+          undefined,
+          checkSandbox,
         ),
       budgetStatus: () => dailyBudgetStatus(config),
       runRetry: async (checkFailures) => {
@@ -453,6 +513,15 @@ export async function main(
         }
       },
       warn: (message, fields) => log.warn(message, { work_item_id, ...fields }),
+      reportCheckImageStale: (error) =>
+        recordCheckEnvironmentNotice(
+          {
+            readDeployedSha: () => wmill.getVariable("f/factory/deployed_sha"),
+            addNotice: addNoticeUnlessUnresolved,
+            log,
+          },
+          error,
+        ),
     },
     {
       worktreeGitPointer: worktree_git_pointer,

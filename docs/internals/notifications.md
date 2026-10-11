@@ -202,6 +202,9 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `implement_launch_failed` | `requirements_apply` | 対象、理由、次の操作 |
 | `implement_needs_human` | `implement_finish` | 対象、止まった理由 |
 | `unsandboxed_check_commands` | `implement_verify`、`pr_fix_verify` | 実行する検査コマンドの件数、対象 |
+| `check_slot_skipped` | `implement_verify`、`pr_fix_verify` | 飛ばした枠のユーザーとuid、片付けられなかった理由 |
+| `check_slot_record_unreadable` | `implement_verify`、`pr_fix_verify` | 枠のユーザーとuid、読めない記録を退避した先のパス |
+| `check_runtime_unsafe` | `implement_prepare`、`implement_verify`、`pr_fix_prepare`、`pr_fix_verify`、`cleanup_workspaces` | 稼働中のworkerにできた誰でも書き込めるパスか、確かめられなかった理由、パスを閉じるかworkerを作り直す手順 |
 | `fix_reply_post_failed` | `pr_fix_finish` | 失敗した件数、`review_comment_id`、最初のエラー |
 | `pr_fix_reviewer_request_failed` | `pr_fix_finish` | 対象、依頼できなかった理由 |
 | `issue_proposal_record_failed` | `pr_fix_finish` | 対象、記録の失敗の理由 |
@@ -214,13 +217,16 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `pr_trigger_label_left_removed` | `poll_prs` | 対象のPRと、外れたままのトリガーラベル |
 | `supersede_failed` | `insertIssueWorkItemUnlessActive`(`poll_issues`が呼ぶ) | 対象、新しい作業項目のID、操作が要らないこと |
 | `deployed_sha_mismatch` | `poll_issues` | `f/factory/deployed_sha`、原因の候補 |
-| `host_action_required` | `self_update` | 反映した版(40桁)、変わった`infra/`や`mise.toml`のパス、`mise run up`を実行する手順 |
+| `host_action_required` | `self_update`、`implement_verify`、`pr_fix_verify` | 反映した版(40桁)、変わった`infra/`や`mise.toml`のパスかイメージに足りないもの、`mise run up`を実行する手順 |
 | `cleanup_db_failed` | `cleanup_db` | 削除に失敗した対象とエラー |
 | `cleanup_worktrees_skipped` | `cleanup_workspaces` | 掃除を見送ったリポジトリ |
 | `cleanup_worktree_busy` | `cleanup_workspaces` | 作業項目のID、worktreeのパス、worktreeを使っているプロセス |
 | `workspace_disk_usage` | `cleanup_workspaces` | 作業領域のディスク使用量(MiB) |
 
 `fix_reply_post_failed`は、返信の投稿に1件以上失敗したとき1件だけ残す。Discordには通知しない。`unsandboxed_check_commands`は、検査コマンドを実行するときに、作業項目ごとに残す。
+`check_slot_skipped`は、枠を飛ばすときに残す。Discordには通知しない。
+`check_slot_record_unreadable`は、読めない記録を退避するときに残す。退避した記録は読み直さないので、同じ記録では1回だけ残る。Discordには通知しない。
+検査の枠のnoticeを記録できなかったときは、検査を止めずに`check slot notice could not be recorded`をログに出す。
 `cleanup_worktree_busy`は、1回の掃除でworktreeのパスごとに1件残す。同じ本文の未解決のnoticeがあるあいだは、[重複の抑止](#重複の抑止)のとおり新しく作らない。Discordには通知しない。
 
 ### 重複の抑止
@@ -320,6 +326,16 @@ stateは、このキーだけを書き換え、消すときもこのキーだけ
 本文は、反映した版(40桁)と変わったパスで決まる。同じ版で通知が重なるのは、同じ本文の未解決のnoticeがあるあいだは追加しないためである。
 パスは10件まで並べ、残りは件数で示す。
 Discordには、noticeを新しく残したときだけ送る。noticeの記録とDiscordの送信が失敗しても、反映は成功のまま終わり、警告のログだけを残す。
+
+実装とPR修正の準備と検証のステップと、作業領域の掃除も、workerのイメージが古く検査コマンドを実行できないときに`host_action_required`を残す。
+本文には、自己更新が反映した版(`f/factory/deployed_sha`)と、イメージの満たさない前提(足りない道具、枠のユーザー、ベースのイメージが開いたままのディレクトリ)が載る。
+稼働中のworkerの問題も一緒に見つかれば、その問題はこの本文に載せず、下の`check_runtime_unsafe`に残す。
+この通知は`mise run up`の後に自動で解決されるが、ボリュームのマウントポイントは作り直しでは閉じないためである。
+同じ本文の未解決のnoticeがあるあいだは追加しない。
+版を40桁で読めたときは、下の判定で自己更新が自動で解決する。読めないときは本文に版を含めず、人が解決する。
+Discordには送らない。止まった作業項目の通知が、別に届くためである。
+noticeを記録できなくても、作業項目は止まり、警告のログだけを残す。
+
 解決は、`self_update`が反映の要否によらず毎回、反映の判断と記録の後に行う(`resolved_by`は`self_update`)。
 解決の処理が遅れても、反映を遅らせないためである。
 判定の入力は、ホストのcheckoutのHEADである。
@@ -348,6 +364,15 @@ self cloneにあるかは、実行ごとに1回だけ`git cat-file -e`で確か�
 
 印はworkerのジョブが書ける場所にあるので、ホストの反映の証明にはならない。
 偽の印で黙らせられるのは、この通知だけである。影響は、ホストでの反映の遅れに気づけなくなるところまでで、突くにはdefaultのworkerでのコード実行が要る([セキュリティ](../security.md)の「ホストの反映の印」)。
+
+実装とPR修正の準備と検証のステップと、作業領域の掃除は、`check_runtime_unsafe`も残す。
+稼働中のworkerに誰でも書き込めるパスができたか、それを確かめられなかったときである。
+イメージも前提を満たさなければ、`host_action_required`と両方を残す。
+本文には、パスか確かめられなかった理由と、パスを閉じるかworkerを作り直す手順が載り、版は載せない。
+ボリュームのマウントポイント(`/workspaces`と`/var/lib/factory`)は、作り直しでは閉じないので、`chmod`で閉じるよう書き分ける。
+`mise run up`では直らないので、自己更新は解決せず、人が解決する。
+同じ本文の未解決のnoticeがあるあいだは追加しない。
+Discordには送らない。止まった作業項目の通知が、別に届くためである。
 
 Issueの取得に成功すると、`poll_issues`は未解決の`labeler_denied`を解決済みにする。
 対象は、本文が`<owner>/<repo>#<番号>:`と空白1つで始まるすべてのnoticeで、`resolved_by`は`poll_issues`になる。

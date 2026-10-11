@@ -2,9 +2,16 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  CheckImageStaleError,
+  CheckRuntimeUnsafeError,
+} from "../../f/factory/lib/check_sandbox.ts";
 import type { NotifyEvent } from "../../f/factory/lib/discord.ts";
 import {
+  buildCheckImageStaleNotice,
+  buildCheckRuntimeUnsafeNotice,
   buildHostActionNotice,
+  CHECK_RUNTIME_NOTICE_KIND,
   extractNoticeSha,
   HOST_ACTION_NOTICE_KIND,
   HOST_ACTION_RECONCILE_LIMIT,
@@ -14,6 +21,7 @@ import {
   type ReconcileDeps,
   readHostAppliedSha,
   reconcileHostActionNotices,
+  recordCheckEnvironmentNotice,
   recordHostAction,
 } from "../../f/factory/lib/host_action.ts";
 import { logger } from "../../f/factory/lib/log.ts";
@@ -568,5 +576,209 @@ describe("buildHostActionNotice paths", () => {
   test("keeps the message on one line", () => {
     const { notice } = buildHostActionNotice(SHA_A, ["infra/a\r\nb"]);
     expect(notice.message.includes("\n")).toBe(false);
+  });
+});
+
+describe("buildCheckImageStaleNotice", () => {
+  test("uses the host action notice kind", () => {
+    expect(
+      buildCheckImageStaleNotice(SHA_A, "/usr/bin/getfacl is missing").kind,
+    ).toBe(HOST_ACTION_NOTICE_KIND);
+  });
+
+  test("names the deployed sha so that the self update resolves it once the host applied it", () => {
+    const notice = buildCheckImageStaleNotice(SHA_A, "x");
+    expect(extractNoticeSha(notice.message)).toBe(SHA_A);
+  });
+
+  test("carries what the image lacks", () => {
+    expect(
+      buildCheckImageStaleNotice(SHA_A, "/usr/bin/getfacl is missing").message,
+    ).toContain("/usr/bin/getfacl is missing");
+  });
+
+  test("tells the operator to run mise run up", () => {
+    expect(buildCheckImageStaleNotice(SHA_A, "x").message).toContain(
+      "mise run up",
+    );
+  });
+
+  test("leaves the sha out when the deployed version is unknown", () => {
+    expect(
+      extractNoticeSha(buildCheckImageStaleNotice(null, "x").message),
+    ).toBeNull();
+  });
+
+  test("asks the operator to resolve the notice when the deployed version is unknown", () => {
+    expect(buildCheckImageStaleNotice(null, "x").message).toContain(
+      "この通知を解決",
+    );
+  });
+
+  test("produces the same message for the same sha and problems", () => {
+    expect(buildCheckImageStaleNotice(SHA_A, "x")).toEqual(
+      buildCheckImageStaleNotice(SHA_A, "x"),
+    );
+  });
+});
+
+describe("recordCheckEnvironmentNotice", () => {
+  const harness = (overrides: {
+    readonly sha?: () => Promise<string>;
+    readonly addNotice?: (record: NoticeRecord) => Promise<number | null>;
+  }) => {
+    const notices: NoticeRecord[] = [];
+    const lines: string[] = [];
+    return {
+      notices,
+      lines,
+      deps: {
+        readDeployedSha: overrides.sha ?? (async () => `${SHA_A}\n`),
+        addNotice:
+          overrides.addNotice ??
+          (async (record: NoticeRecord) => {
+            notices.push(record);
+            return 1;
+          }),
+        log: logger("test", { sink: (line: string) => lines.push(line) }),
+      },
+    };
+  };
+
+  const STALE = new CheckImageStaleError(["x"]);
+  const RUNTIME = new CheckRuntimeUnsafeError(["/tmp/open", "y"]);
+
+  test("adds the notice with the deployed sha", async () => {
+    const h = harness({});
+    await recordCheckEnvironmentNotice(h.deps, STALE);
+    expect(h.notices).toEqual([buildCheckImageStaleNotice(SHA_A, "x")]);
+  });
+
+  test("adds the notice without a sha when the deployed sha cannot be read", async () => {
+    const h = harness({
+      sha: async () => {
+        throw new Error("variable not found");
+      },
+    });
+    await recordCheckEnvironmentNotice(h.deps, STALE);
+    expect(h.notices).toEqual([buildCheckImageStaleNotice(null, "x")]);
+  });
+
+  test("adds the notice without a sha when the deployed value is not a sha", async () => {
+    const h = harness({ sha: async () => "main" });
+    await recordCheckEnvironmentNotice(h.deps, STALE);
+    expect(h.notices).toEqual([buildCheckImageStaleNotice(null, "x")]);
+  });
+
+  test("does not throw when the notice cannot be recorded", async () => {
+    const h = harness({
+      addNotice: async () => {
+        throw new Error("db down");
+      },
+    });
+    await recordCheckEnvironmentNotice(h.deps, STALE);
+    expect(h.lines.join("\n")).toContain("db down");
+  });
+
+  test("adds the runtime notice for a problem of the running worker", async () => {
+    const h = harness({});
+    await recordCheckEnvironmentNotice(h.deps, RUNTIME);
+    expect(h.notices).toEqual([buildCheckRuntimeUnsafeNotice("/tmp/open, y")]);
+  });
+
+  test("does not read the deployed sha for a problem of the running worker", async () => {
+    let reads = 0;
+    const h = harness({
+      sha: async () => {
+        reads += 1;
+        return SHA_A;
+      },
+    });
+    await recordCheckEnvironmentNotice(h.deps, RUNTIME);
+    expect(reads).toBe(0);
+  });
+
+  // イメージの通知は`mise run up`の後に自己更新が解決するが、ボリュームのマウントポイントは作り直しでは閉じない。
+  // 稼働中にできた点を別の通知に残し、人が閉じて止まった作業項目を再実行するまで残す。
+  test("adds the runtime notice too when a stale image comes with runtime problems", async () => {
+    const h = harness({});
+    await recordCheckEnvironmentNotice(
+      h.deps,
+      new CheckImageStaleError(["x"], ["/workspaces"]),
+    );
+    expect(h.notices).toEqual([
+      buildCheckImageStaleNotice(SHA_A, "x"),
+      buildCheckRuntimeUnsafeNotice("/workspaces"),
+    ]);
+  });
+
+  test("adds the runtime notice even when the image notice cannot be recorded", async () => {
+    const kinds: string[] = [];
+    const h = harness({
+      addNotice: async (record) => {
+        if (record.kind === HOST_ACTION_NOTICE_KIND) throw new Error("db down");
+        kinds.push(record.kind);
+        return 1;
+      },
+    });
+    await recordCheckEnvironmentNotice(
+      h.deps,
+      new CheckImageStaleError(["x"], ["/workspaces"]),
+    );
+    expect(kinds).toEqual([CHECK_RUNTIME_NOTICE_KIND]);
+  });
+
+  test("does not throw when the runtime notice cannot be recorded", async () => {
+    const h = harness({
+      addNotice: async () => {
+        throw new Error("db down");
+      },
+    });
+    await recordCheckEnvironmentNotice(h.deps, RUNTIME);
+    expect(h.lines.join("\n")).toContain("db down");
+  });
+});
+
+describe("buildCheckRuntimeUnsafeNotice", () => {
+  test("uses its own notice kind, not the host action one the self update resolves", () => {
+    expect(buildCheckRuntimeUnsafeNotice("/tmp/open").kind).toBe(
+      CHECK_RUNTIME_NOTICE_KIND,
+    );
+  });
+
+  test("carries the paths", () => {
+    expect(buildCheckRuntimeUnsafeNotice("/tmp/open").message).toContain(
+      "/tmp/open",
+    );
+  });
+
+  test("names no version, so that nothing resolves it by itself", () => {
+    expect(
+      extractNoticeSha(buildCheckRuntimeUnsafeNotice(`/tmp/${SHA_A}`).message),
+    ).toBeNull();
+  });
+
+  test("tells the operator to close the paths", () => {
+    expect(buildCheckRuntimeUnsafeNotice("/tmp/open").message).toContain(
+      "chmod o-w",
+    );
+  });
+
+  test("tells the operator how to recreate the worker", () => {
+    expect(buildCheckRuntimeUnsafeNotice("/tmp/open").message).toContain(
+      "docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_worker",
+    );
+  });
+
+  test("tells the operator that recreating the worker does not close the volume mount points", () => {
+    expect(buildCheckRuntimeUnsafeNotice("/workspaces").message).toContain(
+      "/workspacesと/var/lib/factoryは、ボリュームのマウントポイントで、作り直しでは閉じないので、chmodで閉じる",
+    );
+  });
+
+  test("escapes Markdown in the paths", () => {
+    expect(buildCheckRuntimeUnsafeNotice("/tmp/[a](b)").message).toContain(
+      "/tmp/\\[a\\]\\(b\\)",
+    );
   });
 });

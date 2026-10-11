@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
+  CheckImageStaleError,
+  CheckRuntimeUnsafeError,
+} from "../../f/factory/lib/check_sandbox.ts";
+import {
   buildPrOpenedEvent,
   decideAfterCommit,
   decideGapReroute,
@@ -130,6 +134,13 @@ describe("decideImplementFinishAction", () => {
 
   test("keeps nothing after the worktree changed before the secret scan", () => {
     expect(decideImplementFinishAction("worktree_changed")).toEqual({
+      kind: "needs_human",
+      preserveWork: false,
+    });
+  });
+
+  test("waits for a person and keeps nothing when the worker image cannot run the checks", () => {
+    expect(decideImplementFinishAction("check_image_stale")).toEqual({
       kind: "needs_human",
       preserveWork: false,
     });
@@ -507,6 +518,24 @@ describe("worktreeBusyStopReason", () => {
         throw new WorktreeBusyError([]);
       }),
     ).toBe(WORKTREE_BUSY_REASON);
+  });
+
+  test("returns the stale image when the image cannot take the worktree back", async () => {
+    expect(
+      await worktreeBusyStopReason(async () => {
+        throw new CheckImageStaleError(["/usr/bin/getfacl is missing"]);
+      }),
+    ).toBe(
+      "worker image is stale: run mise run up: /usr/bin/getfacl is missing",
+    );
+  });
+
+  test("returns the runtime problem when the running worker cannot take the worktree back", async () => {
+    expect(
+      await worktreeBusyStopReason(async () => {
+        throw new CheckRuntimeUnsafeError(["x"]);
+      }),
+    ).toBe(new CheckRuntimeUnsafeError(["x"]).message);
   });
 
   test("rethrows any other error", async () => {

@@ -5,9 +5,12 @@
 // I/O補助(gitの実行やworktreeのファイル読み取りなど)は、
 // `lib/`にまだ同等の関数が無い操作に限って置く。
 
-import { lstat, mkdtemp, readlink, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { lstat, readlink } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
+import {
+  CheckEnvironmentError,
+  isCheckEnvironmentReason,
+} from "../lib/check_sandbox.ts";
 import { isViewerBumpBranch } from "../lib/drawio_viewer_bump.ts";
 import {
   isOwnPost,
@@ -2491,14 +2494,20 @@ export async function recordedGitPointerStopReason(
  * pr_fixの完了ステップがcommitの前に止めたとき(`prFixPushGateReason`か`CommitBlockedError`)の遷移を返す。
  * `statusNote`(`work_items.status_reason`に記録する値)にも止めた理由を入れる。
  * このとき直前のステップの`reason`はdoneでnullなので、それを使うと理由が記録に残らないため。
+ * 理由が、workerが検査の前提を満たさないこと(`isCheckEnvironmentReason`)なら、準備と検証のステップの関門と同じく、
+ * `blocked`にして修正のラウンドを記録しない(`recordsRound`がfalse)。Claudeの修正の失敗ではないので、モデルの失敗に数えないためである。
+ * それ以外は`needs_human`にして、止めたラウンドを記録する。
  */
 export function stopBeforeCommitTerminal(stopReason: string): {
-  readonly toStatus: "needs_human";
+  readonly toStatus: "needs_human" | "blocked";
+  readonly recordsRound: boolean;
   readonly discordReason: string;
   readonly statusNote: string;
 } {
+  const environment = isCheckEnvironmentReason(stopReason);
   return {
-    toStatus: "needs_human",
+    toStatus: environment ? "blocked" : "needs_human",
+    recordsRound: !environment,
     discordReason: stopReason,
     statusNote: stopReason,
   };
@@ -2516,6 +2525,7 @@ export type PrFixPushGateDeps = {
  * pr_fixの完了ステップがcommitとpushの前に、worktreeに触れてよいかを確かめ、止める理由を返す(問題が無ければnull)。
  * 先にworktreeのロックを確かめ、前のステップのClaudeや検査コマンドが残っていれば`WorktreeBusyError`のmessageを返す。
  * 検証ステップの最後の検査の後に、残ったプロセスがworktreeを書き換えうるため。
+ * 残った所有権を、workerが検査の前提を満たさず取り戻せないとき(`CheckEnvironmentError`)も、そのmessageを返す。
  * 次に`.git`を準備ステップの記録と比べる(`recordedGitPointerStopReason`)。
  * 最後に、準備ステップの結果にPRのブランチ(`recordedBranch`)があることを確かめ、無ければ`PR_HEAD_NOT_RECORDED_REASON`を返す。
  * `commitAndPush`の`expectedBranch`に渡す値で、無いとpushする先を確かめられないため。
@@ -2529,7 +2539,11 @@ export async function prFixPushGateReason(
   try {
     await deps.ensureLockFree();
   } catch (err) {
-    if (err instanceof WorktreeBusyError) return err.message;
+    if (
+      err instanceof WorktreeBusyError ||
+      err instanceof CheckEnvironmentError
+    )
+      return err.message;
     throw err;
   }
   const pointerReason = await recordedGitPointerStopReason(
@@ -2577,127 +2591,6 @@ function extractScripts(text: string | null): Record<string, string> {
 }
 
 // ---------------------------------------------------------------------------
-// pr_fix_verify: `factory_config.allowed_check_commands`の実行(I/O)
-// ---------------------------------------------------------------------------
-
-export type CheckCommandResult = {
-  readonly command: string;
-  readonly ok: boolean;
-  readonly exitCode: number;
-  readonly timedOut: boolean;
-  readonly outputTail: string;
-  /**
-   * stdoutとstderrを合わせた出力のうち、`CHECK_COMMAND_MAX_OUTPUT_BYTES`の範囲で
-   * 残った全体を、秘密をマスクして持つ。implementフローはその先頭16KBを
-   * `implement_rounds.check_output`に保存する(`truncateCheckOutput`)。
-   * プロンプトに載せる抜粋は引き続き`outputTail`を使う。
-   */
-  readonly output: string;
-};
-
-const CHECK_OUTPUT_TAIL_CHARS = 2000;
-
-export const CHECK_COMMAND_MAX_OUTPUT_BYTES = 1024 * 1024;
-
-/**
- * 検査コマンドに渡す`PATH`。workerのPATHは引き継がず、この固定値を使う。
- * workerのPATHに、rootのホームや書き込める一時ディレクトリが入っていても、
- * そこに置かれた実行ファイルを検査コマンドが名前の解決で拾わないようにするため。
- * workerのイメージでは、bun・node・git・wmillが`/usr/bin`に、ghとgitleaksが`/usr/local/bin`に、
- * goが`/usr/local/go/bin`にある。どれもrootが所有する。
- * 値の説明は`docs/security.md`の「検査コマンドはフローが実行する」にある。
- */
-export const CHECK_COMMAND_PATH =
-  "/usr/local/bin:/usr/bin:/bin:/usr/local/go/bin";
-
-export type CheckHomeDir = {
-  readonly path: string;
-  readonly cleanup: () => Promise<void>;
-};
-
-export type CreateCheckHomeDir = () => Promise<CheckHomeDir>;
-
-/**
- * `runAllowedCheckCommands`の1回の呼び出し用に、新しい非公開の一時ディレクトリを作る。
- * 検査コマンドは信頼できない対象リポジトリのコードを、他に隔離の無いままrootで実行する。
- * 全実行で共有する固定の`/tmp/factory-home`だと、ある実行の検査ツールが残した
- * キャッシュファイルや仕込まれた設定が残り、別のPRやリポジトリに対する
- * 後の実行に読まれうる。
- * `claude.ts`の`buildSystemPrompt` / `WriteTempFile`と同じく、
- * mkdtempと後始末の形にしている。
- */
-const defaultCreateCheckHomeDir: CreateCheckHomeDir = async () => {
-  const dir = await mkdtemp(join(tmpdir(), "factory-check-home-"));
-  return {
-    path: dir,
-    cleanup: async () => {
-      await rm(dir, { recursive: true, force: true });
-    },
-  };
-};
-
-/**
- * `allowed_check_commands`の各項目を、`cwd`で順に実行する。
- * 環境変数は最小限を明示的に渡し(固定のPATH(`CHECK_COMMAND_PATH`)と新しい非公開のHOMEだけで、秘密は引き継がない。
- * `docs/internals/pr-workflow.md`の「検査コマンドの実行」)、終わったらHOMEのディレクトリを消す。
- * miseの設定の信頼(trust)は決して与えない(`MISE_TRUSTED_CONFIG_PATHS`も
- * `mise --yes trust`も使わない)。信頼が無いと動かない検査コマンド
- * (信頼されていない対象リポジトリの`mise.toml`に対する`mise run check`など)は、
- * 他の0以外の終了と同じく失敗し、呼び出し側は通常の検査の失敗として扱う
- * (Claudeの再試行を1回してから`blocked`)。
- * これで、コマンドを解析して「`mise.toml`に依存するか」を推測する事前確認をしなくても、
- * 「信頼が要るものは実行しない」という同じ結果になる。
- * コマンドはシェルを使わず、空白で区切ってargvにする。
- * `allowed_check_commands`は対象リポジトリの内容ではなく、
- * 運用者が書く設定(`factory_config`)だから。
- * 出力の読み取りを打ち切ったコマンド(`outputAbandoned`)は、終了コードに関わらず失敗にする。
- * 別セッションへ抜けたプロセスがworkerに残ったことを検査結果に出すためである。
- */
-export async function runAllowedCheckCommands(
-  run: CommandRunner,
-  cwd: string,
-  commands: readonly string[],
-  timeoutMs: number,
-  createHomeDir: CreateCheckHomeDir = defaultCreateCheckHomeDir,
-  path: string = CHECK_COMMAND_PATH,
-): Promise<CheckCommandResult[]> {
-  const homeDir = await createHomeDir();
-  try {
-    const env: Record<string, string> = { HOME: homeDir.path, PATH: path };
-
-    const results: CheckCommandResult[] = [];
-    for (const command of commands) {
-      const argv = command
-        .trim()
-        .split(/\s+/)
-        .filter((token) => token.length > 0);
-      if (argv.length === 0) continue;
-      const result = await run(argv, {
-        cwd,
-        env,
-        timeoutMs,
-        maxOutputBytes: CHECK_COMMAND_MAX_OUTPUT_BYTES,
-      });
-      const masked = maskSecrets(`${result.stdout}\n${result.stderr}`.trim());
-      results.push({
-        command,
-        ok:
-          !result.timedOut &&
-          result.exitCode === 0 &&
-          result.outputAbandoned !== true,
-        exitCode: result.exitCode,
-        timedOut: result.timedOut,
-        outputTail: masked.slice(-CHECK_OUTPUT_TAIL_CHARS),
-        output: masked,
-      });
-    }
-    return results;
-  } finally {
-    await homeDir.cleanup();
-  }
-}
-
-// ---------------------------------------------------------------------------
 // pr_fix_finish: 結果に応じた振り分け(純粋関数)
 // ---------------------------------------------------------------------------
 
@@ -2723,8 +2616,8 @@ export type PrFixFinalAction =
  * `pr_fix_finish.ts`が取るべき終端の動作に振り分ける。
  *
  * `guard_blocked`(prepareの、PRがopen・forkでない・draftでない・
- * 保護ブランチでないという関門)は、`docs/internals/pr-workflow.md`の
- * 「準備での確認」のとおり`work_items`の`"blocked"`にする。
+ * 保護ブランチでないという関門と、prepareかverifyがworkerのイメージが古く検査を実行できないと分かったとき)は、
+ * `docs/internals/pr-workflow.md`の「準備での確認」のとおり`work_items`の`"blocked"`にする。修正のラウンドは記録しない。
  * `blocked`(Claude自身の判断か、`pr_fix_verify`が検出した禁止ファイルや
  * 検査コマンドの失敗)は`"needs_human"`にする。
  * どちらも上流では`"blocked"`の形の結果だが、失敗の種類が違うので、
@@ -3606,6 +3499,13 @@ function leftoverProcessNextAction(flow: NextActionFlow | undefined): string {
 const WORKTREE_BUSY_NEXT_ACTION = `理由に載ったプロセスが終わるのを待つか、workerのコンテナでそのプロセスを止めてから、${RETRY_WORK_ITEM_ACTION}`;
 
 /**
+ * 検査用のユーザーからworktreeを取り戻せなかったときの次の操作。
+ * 止まらないプロセス、残ったACL、読めない枠の記録のように、再実行しても同じ理由で止まる原因なので、
+ * 人が枠の記録を確かめて所有権を戻してから再実行する。フローによらず同じ手順である。
+ */
+const OWNERSHIP_RESTORE_FAILED_NEXT_ACTION = `運用の文書(docs/operations.md)の「検査の枠の記録を片付ける」の手順で、枠の記録が指すworktreeをrootに戻して記録を消してから、${RETRY_WORK_ITEM_ACTION}`;
+
+/**
  * 実行中に、この実行の検査コマンドなどが残したプロセスがworktreeのロックを持ち続けていたときの次の操作。
  * 残ったプロセスは、この実行のジョブIDの持ち主タグを持つ。
  * 実装フローは再実行の準備がそれを止めてから続けるので、再実行するだけでよい。
@@ -4120,6 +4020,15 @@ const REASON_RULES: readonly ReasonRule[] = [
     describe: (m) => `入れ子のリポジトリか.gitのパスが変更されました: ${m[1]}`,
     nextAction: () => FORBIDDEN_CHANGE_NEXT_ACTION,
   },
+  // `lib/process_lock.ts`の`restoreOwnershipStep`が、取り戻せなかった所有権を`WorktreeBusyError`にしたもの。
+  // 一般のプロセスの規則より先に置く。
+  {
+    pattern:
+      /^worktree is still used by processes from an earlier run: check sandbox: ([\s\S]+)$/,
+    describe: (m) =>
+      `検査用のユーザーに渡したworktreeを、rootに戻せませんでした(${m[1]})`,
+    nextAction: () => OWNERSHIP_RESTORE_FAILED_NEXT_ACTION,
+  },
   {
     pattern:
       /^worktree is still used by processes from an earlier run(?:: ([\s\S]+))?$/,
@@ -4128,6 +4037,24 @@ const REASON_RULES: readonly ReasonRule[] = [
         ? "前の実行のプロセスがまだworktreeを使っています"
         : `前の実行のプロセスがまだworktreeを使っています(${m[1]})`,
     nextAction: () => WORKTREE_BUSY_NEXT_ACTION,
+  },
+  // `lib/check_sandbox.ts`の`CheckImageStaleError`(実装フローとpr_fixの準備・検証・完了のステップ)
+  {
+    pattern: /^worker image is stale: run mise run up: ([\s\S]+)$/,
+    describe: (m) =>
+      `workerのイメージが古く、検査コマンドを非特権のユーザーで実行できません(${m[1]})`,
+    nextAction: () =>
+      `ホストのcheckoutでgit pullし、mise installとmise run upでworkerのイメージを作り直してから、${RETRY_WORK_ITEM_ACTION}`,
+  },
+  // `lib/check_sandbox.ts`の`CheckRuntimeUnsafeError`(同じステップ)。イメージは作り直さず、パスを閉じるかworkerを作り直す。
+  // ボリュームのマウントポイントの権限はボリュームにあり、workerを作り直しても変わらない。
+  {
+    pattern:
+      /^worker runtime is unsafe for checks: chmod o-w the paths or recreate windmill_worker: ([\s\S]+)$/,
+    describe: (m) =>
+      `workerの稼働中に、検査コマンドを非特権のユーザーで安全に実行できない状態になりました(${m[1]})`,
+    nextAction: () =>
+      `理由に載ったパスをmise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker chmod o-w <パス>で閉じるか、mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_workerでworkerを作り直してから、${RETRY_WORK_ITEM_ACTION}(/workspacesと/var/lib/factoryは、ボリュームのマウントポイントで、作り直しでは閉じないので、chmodで閉じてください)`,
   },
   {
     pattern: /^implementation of the branch's work item is running$/,

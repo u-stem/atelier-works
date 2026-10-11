@@ -624,19 +624,24 @@ export async function main(
     }
   }
 
-  /** commitせずに止めたラウンドを記録し、止めた理由を`status_reason`に入れてneeds_humanにする。 */
+  /**
+   * commitせずに止め、止めた理由を`status_reason`に入れる。遷移とラウンドの記録は`stopBeforeCommitTerminal`が決める。
+   * workerが検査の前提を満たさないときはラウンドを記録せずに`blocked`にし、それ以外はラウンドを記録して`needs_human`にする。
+   */
   async function stopBeforeCommit(
     stopReason: string,
   ): Promise<PrFixFinishResult> {
-    await insertFixRound({
-      work_item_id,
-      round: fix_round,
-      trigger_review_ids,
-      outcome: "blocked",
-      replies,
-      commit_shas: [],
-    });
     const terminal = stopBeforeCommitTerminal(stopReason);
+    if (terminal.recordsRound) {
+      await insertFixRound({
+        work_item_id,
+        round: fix_round,
+        trigger_review_ids,
+        outcome: "blocked",
+        replies,
+        commit_shas: [],
+      });
+    }
     await finalizeTerminal(
       terminal.toStatus,
       terminal.discordReason,

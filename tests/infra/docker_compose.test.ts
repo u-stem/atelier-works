@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { CHECK_NPROC_LIMIT } from "../../f/factory/lib/check_sandbox.ts";
 
 // Console用workerの構成を静的に確かめる。
 // 書き込めるマウントをworker_logsと専用の依存キャッシュに限ること、
@@ -449,5 +450,132 @@ describe("infra/docker-compose.yml factory_state_init", () => {
     const svc = service("factory_state_init");
 
     expect(svc.privileged).toBeUndefined();
+  });
+});
+
+// 検査コマンドをworker内で非特権のuidに落として動かすための構成を確かめる。
+// 落とさないケーパビリティが欠けると、worktreeの所有権の受け渡しや`setpriv`が動かなくなる。
+describe("infra/docker-compose.yml windmill_worker check sandbox", () => {
+  const NEEDED_BY_THE_SANDBOX = [
+    "CHOWN",
+    "DAC_OVERRIDE",
+    "FOWNER",
+    "SETUID",
+    "SETGID",
+    "SETPCAP",
+    "KILL",
+  ];
+
+  test("passes the check uid to the image build", () => {
+    const build = service("windmill_worker").build;
+    const args = isRecord(build) && isRecord(build.args) ? build.args : {};
+
+    expect(args.FACTORY_CHECK_UID).toBe("${FACTORY_CHECK_UID:?run via mise}");
+  });
+
+  test("passes the number of check slots to the image build", () => {
+    const build = service("windmill_worker").build;
+    const args = isRecord(build) && isRecord(build.args) ? build.args : {};
+
+    expect(args.FACTORY_CHECK_POOL_SIZE).toBe(
+      "${FACTORY_CHECK_POOL_SIZE:?run via mise}",
+    );
+  });
+
+  test("drops the capabilities no job of the worker uses", () => {
+    expect(stringList(service("windmill_worker"), "cap_drop")).toEqual([
+      "NET_RAW",
+      "MKNOD",
+      "SETFCAP",
+      "AUDIT_WRITE",
+    ]);
+  });
+
+  test("keeps the capabilities the check sandbox needs", () => {
+    const dropped = stringList(service("windmill_worker"), "cap_drop");
+
+    expect(
+      NEEDED_BY_THE_SANDBOX.filter((cap) => dropped.includes(cap)),
+    ).toEqual([]);
+  });
+
+  test("does not drop every capability", () => {
+    expect(stringList(service("windmill_worker"), "cap_drop")).not.toContain(
+      "ALL",
+    );
+  });
+
+  test("still forbids gaining privileges", () => {
+    expect(stringList(service("windmill_worker"), "security_opt")).toContain(
+      "no-new-privileges:true",
+    );
+  });
+
+  test("is not privileged", () => {
+    expect(service("windmill_worker").privileged).toBeUndefined();
+  });
+
+  test("does not mount the docker socket", () => {
+    expect(
+      mounts(service("windmill_worker")).filter((m) =>
+        m.source.includes("docker.sock"),
+      ),
+    ).toEqual([]);
+  });
+
+  test("the verification script drops the same capabilities as the worker", () => {
+    const script = readFileSync(
+      join(REPO_ROOT, "scripts/verify-check-sandbox.sh"),
+      "utf8",
+    );
+    const listed = /^CAP_DROP=\(([^)]*)\)$/m.exec(script)?.[1]?.split(/\s+/);
+
+    expect(listed).toEqual(stringList(service("windmill_worker"), "cap_drop"));
+  });
+
+  const miseEnv = (): Json => {
+    const parsed: unknown = Bun.TOML.parse(
+      readFileSync(join(REPO_ROOT, "mise.toml"), "utf8"),
+    );
+    return isRecord(parsed) && isRecord(parsed.env) ? parsed.env : {};
+  };
+  const dockerfileDefault = (name: string): string | undefined =>
+    new RegExp(`^ARG ${name}=(\\S+)$`, "m").exec(
+      readFileSync(join(REPO_ROOT, "infra/worker/Dockerfile"), "utf8"),
+    )?.[1];
+
+  test("mise.toml sets the same default uid as the Dockerfile", () => {
+    expect(dockerfileDefault("FACTORY_CHECK_UID")).toBe(
+      String(miseEnv().FACTORY_CHECK_UID),
+    );
+  });
+
+  test("mise.toml sets the same default slot count as the Dockerfile", () => {
+    expect(dockerfileDefault("FACTORY_CHECK_POOL_SIZE")).toBe(
+      String(miseEnv().FACTORY_CHECK_POOL_SIZE),
+    );
+  });
+
+  /**
+   * workerのコンテナで、検査の外のプロセス(Windmill本体、ジョブのbun、Claude、git)に残す数。
+   * 動いているworkerで、待機中が53、起動からの最大が112だったので、その2倍強にする。
+   */
+  const WORKER_PIDS_RESERVE = 256;
+
+  test("every worker process running a check at the cap leaves the reserve within the pids limit", () => {
+    const workers = envEntries(service("windmill_worker"), "NUM_WORKERS=")[0];
+    const concurrentChecks = Number(workers?.slice("NUM_WORKERS=".length));
+
+    expect(
+      concurrentChecks * CHECK_NPROC_LIMIT + WORKER_PIDS_RESERVE,
+    ).toBeLessThanOrEqual(Number(limits(service("windmill_worker")).pids));
+  });
+
+  test("there are at least as many slots as worker processes", () => {
+    const workers = envEntries(service("windmill_worker"), "NUM_WORKERS=")[0];
+
+    expect(Number(miseEnv().FACTORY_CHECK_POOL_SIZE)).toBeGreaterThanOrEqual(
+      Number(workers?.slice("NUM_WORKERS=".length)),
+    );
   });
 });

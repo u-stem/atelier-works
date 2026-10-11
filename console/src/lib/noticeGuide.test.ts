@@ -44,6 +44,24 @@ describe("noticeGuide", () => {
     expect(noticeGuide("host_action_required").note).toContain("人が解決");
   });
 
+  test("says a host notice also comes when the image is too old to run the checks", () => {
+    expect(noticeGuide("host_action_required").meaning).toContain(
+      "検査コマンドを実行できない",
+    );
+  });
+
+  test("tells to rerun the work items the stale image stopped", () => {
+    expect(noticeGuide("host_action_required").action).toContain(
+      "f/factory/retry_work_item",
+    );
+  });
+
+  test("tells that a host notice without a version is not resolved automatically", () => {
+    expect(noticeGuide("host_action_required").note).toContain(
+      "版が載らない通知",
+    );
+  });
+
   test("tells how to rerun a work item stopped for a person", () => {
     expect(noticeGuide("implement_needs_human").action).toContain(
       "f/factory/retry_work_item",
@@ -58,6 +76,31 @@ describe("noticeGuide", () => {
 
   test("tells that a denied fork notice comes back until the trigger is removed", () => {
     expect(noticeGuide("fork_head_denied").note).toContain("出直します");
+  });
+
+  test("points a worktree the check user still owns to the slot record cleanup", () => {
+    expect(noticeGuide("cleanup_worktree_busy").action).toContain(
+      "検査の枠の記録を片付ける",
+    );
+  });
+
+  test("tells to close the paths or recreate the worker when the running worker is unsafe for checks", () => {
+    expect(noticeGuide("check_runtime_unsafe").commands).toEqual([
+      "mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker chmod o-w <パス>",
+      "mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_worker",
+    ]);
+  });
+
+  test("tells that recreating the worker does not close the volume mount points", () => {
+    expect(noticeGuide("check_runtime_unsafe").action).toContain(
+      "/workspacesと/var/lib/factoryは、ボリュームのマウントポイントで、作り直しでは閉じないので、1つ目のコマンドで閉じてください",
+    );
+  });
+
+  test("says the runtime problem does not need mise run up", () => {
+    expect(noticeGuide("check_runtime_unsafe").note).toContain(
+      "mise run upは要りません",
+    );
   });
 
   test("asks the operator to check the body for an unknown kind", () => {

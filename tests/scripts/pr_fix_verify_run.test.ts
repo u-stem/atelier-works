@@ -2,6 +2,12 @@
 // `.git`ポインタとHEADの照合、変更の検査、検査コマンド、再実行の順序を、注入した偽の依存で確かめる。
 
 import { describe, expect, test } from "bun:test";
+import type { CheckCommandResult } from "../../f/factory/lib/check_runner.ts";
+import {
+  CHECK_IMAGE_STALE_REASON,
+  CheckImageStaleError,
+  CheckRuntimeUnsafeError,
+} from "../../f/factory/lib/check_sandbox.ts";
 import type { CheckFailure } from "../../f/factory/lib/prompts.ts";
 import { WorktreeGitPointerModifiedError } from "../../f/factory/lib/workspace.ts";
 import {
@@ -11,7 +17,6 @@ import {
   runPrFixVerify,
 } from "../../f/factory/steps/pr_fix_verify.ts";
 import {
-  type CheckCommandResult,
   type FixClaudeOutput,
   type ForbiddenChangeResult,
   recordedGitPointerStopReason,
@@ -76,6 +81,8 @@ type HarnessOptions = {
   readonly checks?: readonly boolean[];
   readonly budgetExceeded?: boolean;
   readonly retry?: PrFixRetryResult;
+  /** `runChecks`が、0始まりで`at`回目の呼び出しで投げる例外。 */
+  readonly checksError?: { readonly at: number; readonly error: Error };
 };
 
 function harness(options: HarnessOptions = {}): Harness {
@@ -110,6 +117,8 @@ function harness(options: HarnessOptions = {}): Harness {
     },
     runChecks: async () => {
       calls.push("runChecks");
+      if (options.checksError?.at === checkIndex)
+        throw options.checksError.error;
       const ok = options.checks?.[checkIndex] ?? true;
       checkIndex += 1;
       return [check(ok)];
@@ -127,6 +136,9 @@ function harness(options: HarnessOptions = {}): Harness {
       return options.retry ?? { outcome: "success", output: RETRY_OUTPUT };
     },
     warn: () => {},
+    reportCheckImageStale: async (error) => {
+      calls.push(`reportCheckImageStale:${error.message}`);
+    },
   };
   return { deps, calls };
 }
@@ -532,5 +544,87 @@ describe("runPrFixVerify: retry after failing checks", () => {
     expect(received).toEqual([
       [{ command: "bun test", outputTail: "FAIL a.test.ts" }],
     ]);
+  });
+});
+
+describe("runPrFixVerify: a worker that cannot run the checks", () => {
+  const stale = new CheckImageStaleError(["/usr/bin/getfacl is missing"]);
+  // イメージの問題と稼働中のworkerの問題は、運用者の操作が違うだけで、検証のステップの扱いは同じである。
+  const ENVIRONMENT_ERRORS = [
+    { name: "a stale image", error: stale },
+    {
+      name: "an unsafe running worker",
+      error: new CheckRuntimeUnsafeError([
+        "world-writable paths created at runtime: /tmp/open",
+      ]),
+    },
+  ];
+
+  test("blocks with the stale image as a reason that asks for mise run up", async () => {
+    const h = harness({ checksError: { at: 0, error: stale } });
+    expect((await runPrFixVerify(h.deps, INPUT)).reason).toBe(
+      `${CHECK_IMAGE_STALE_REASON}: /usr/bin/getfacl is missing`,
+    );
+  });
+
+  test.each(ENVIRONMENT_ERRORS)(
+    "blocks with $name as the reason",
+    async ({ error }) => {
+      const h = harness({ checksError: { at: 0, error } });
+      expect((await runPrFixVerify(h.deps, INPUT)).reason).toBe(error.message);
+    },
+  );
+
+  test.each(ENVIRONMENT_ERRORS)(
+    "ends guard_blocked on $name so that the finish step records no fix round to count as a failure",
+    async ({ error }) => {
+      const h = harness({ checksError: { at: 0, error } });
+      expect((await runPrFixVerify(h.deps, INPUT)).outcome).toBe(
+        "guard_blocked",
+      );
+    },
+  );
+
+  test.each(ENVIRONMENT_ERRORS)(
+    "reports $name once and does not retry with Claude",
+    async ({ error }) => {
+      const h = harness({ checksError: { at: 0, error } });
+      await runPrFixVerify(h.deps, INPUT);
+      expect(h.calls.slice(h.calls.indexOf("runChecks"))).toEqual([
+        "runChecks",
+        `reportCheckImageStale:${error.message}`,
+      ]);
+    },
+  );
+
+  test.each(ENVIRONMENT_ERRORS)(
+    "blocks with $name when it shows up after the retry",
+    async ({ error }) => {
+      const h = harness({
+        checks: [false],
+        checksError: { at: 1, error },
+      });
+      expect((await runPrFixVerify(h.deps, INPUT)).reason).toBe(error.message);
+    },
+  );
+
+  test.each(ENVIRONMENT_ERRORS)(
+    "ends guard_blocked when $name shows up after the retry",
+    async ({ error }) => {
+      const h = harness({
+        checks: [false],
+        checksError: { at: 1, error },
+      });
+      expect((await runPrFixVerify(h.deps, INPUT)).outcome).toBe(
+        "guard_blocked",
+      );
+    },
+  );
+
+  test("passes another error from the checks through", async () => {
+    const h = harness({
+      checksError: { at: 0, error: new Error("disk full") },
+    });
+    await expect(runPrFixVerify(h.deps, INPUT)).rejects.toThrow("disk full");
   });
 });

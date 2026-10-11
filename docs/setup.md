@@ -197,6 +197,7 @@ CI自身と環境の定義が変わると、どのジョブの結果も変わり
 | `migrations/`、`scripts/test-db`で始まるファイル | `test-db` |
 | `test:db`が読み込む`f/factory/`の下のファイル | `test-db`と`metadata` |
 | `f/factory/lib/process_lock`と`tests/lib/process_lock`で始まるファイル、そのテストが読み込むファイル | `check`の中のworkerのステップ |
+| `f/factory/lib/check_sandbox`と`f/factory/lib/check_runner`で始まるファイル、`tests/lib/check_sandbox_integration`で始まるファイル、そのテストが読み込むファイル | `check`の中のworkerのステップ |
 | `f/`、`dependencies/`、`wmill-lock.yaml` | `metadata` |
 | `scripts/check-metadata-fresh.sh`、`scripts/ci-metadata-login.sh` | `metadata` |
 | `console/`、`scripts/check-console-lockfile.ts` | `console` |
@@ -287,6 +288,7 @@ post-checkoutのフックは、メイン作業ツリーの`.wmill`へのシン�
 | 環境の診断 | `mise run doctor` | すべての項目が`OK`で、最後に`=== 全項目OK ===`が出る。終了コードは0 |
 | Windmillサーバーの応答 | `curl http://127.0.0.1:8080/api/version` | `CE v`に続いて、`mise.toml`の`WM_VERSION`の値が出る |
 | ローカルとリモートの一致 | `mise exec -- wmill sync push --dry-run` | `0 changes` |
+| 検査コマンドの境界 | `mise run test:check-sandbox` | workerのイメージの使い捨てのコンテナで、検査用のuidに落ちること、workerの秘密に届かないこと、所有権が戻ること、枠の取得と待ちなど、すべてのテストが通る。`mise run up`や`mise run build`でイメージを作った後に実行する |
 | Data Tableのmigration | `mise run test:db` | すべてのview(`v_inbox`など)のSELECTと、down migrationでの戻しが成功し、最後に`[test-db] OK`が出る |
 | Consoleの取り込み | `mise exec -- docker compose -f infra/docker-compose.yml logs --tail 20 console_fetcher` | `"event":"status","state":"ok"`の行が出る。初回は`"event":"deployed"`も出る。`config_missing`なら、`CONSOLE_GITHUB_TOKEN`の投入と`mise run up`を確かめる |
 | Consoleの配信 | `curl -sI http://127.0.0.1:8080/console/` | `HTTP/1.1 200`と`Content-Security-Policy`が出る。`/`と`/api/version`には`Content-Security-Policy`が付かない |

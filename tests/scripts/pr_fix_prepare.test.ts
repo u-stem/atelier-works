@@ -5,6 +5,7 @@
 // GitHubのコメントやDiscordの通知を作るときに使う。
 
 import { describe, expect, test } from "bun:test";
+import { CheckRuntimeUnsafeError } from "../../f/factory/lib/check_sandbox.ts";
 import { RUNNER_MAX_STOP_OVERHEAD_MS } from "../../f/factory/lib/workspace.ts";
 import {
   describeReason,
@@ -1026,5 +1027,71 @@ describe("describeReason / nextActionFor (GitHub rate limit)", () => {
     expect(nextActionFor(`failed to request reviewers: ${RATE_LIMIT}`)).toBe(
       "GitHubのレビュアー設定を確認し、必要なら再度`factory:fix`を付け直してください",
     );
+  });
+});
+
+describe("describeReason / nextActionFor (stale worker image)", () => {
+  const STALE =
+    "worker image is stale: run mise run up: /usr/bin/getfacl is missing, no factory-check-N user for uid 10001";
+
+  test("translates a stale worker image with what it lacks", () => {
+    expect(describeReason(STALE)).toBe(
+      "workerのイメージが古く、検査コマンドを非特権のユーザーで実行できません(/usr/bin/getfacl is missing, no factory-check-N user for uid 10001)",
+    );
+  });
+
+  test("asks to rebuild the image with mise run up and then rerun", () => {
+    expect(nextActionFor(STALE)).toBe(
+      "ホストのcheckoutでgit pullし、mise installとmise run upでworkerのイメージを作り直してから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+    );
+  });
+});
+
+describe("describeReason / nextActionFor (a running worker unsafe for checks)", () => {
+  const RUNTIME = new CheckRuntimeUnsafeError([
+    "world-writable paths created at runtime: /tmp/open",
+  ]).message;
+
+  test("translates the runtime problem with its paths", () => {
+    expect(describeReason(RUNTIME)).toBe(
+      "workerの稼働中に、検査コマンドを非特権のユーザーで安全に実行できない状態になりました(world-writable paths created at runtime: /tmp/open)",
+    );
+  });
+
+  test("asks to close the paths or recreate the worker, not to rebuild the image", () => {
+    expect(nextActionFor(RUNTIME)).toBe(
+      "理由に載ったパスをmise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker chmod o-w <パス>で閉じるか、mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_workerでworkerを作り直してから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください(/workspacesと/var/lib/factoryは、ボリュームのマウントポイントで、作り直しでは閉じないので、chmodで閉じてください)",
+    );
+  });
+});
+
+describe("describeReason / nextActionFor (ownership the check sandbox could not take back)", () => {
+  const RESTORE_FAILED =
+    "worktree is still used by processes from an earlier run: check sandbox: the worktree recorded by slot factory-check-1 (uid 10002) could not be taken back: entries with an ACL remain";
+
+  test("says the worktree could not be taken back from the check user, not that processes use it", () => {
+    expect(describeReason(RESTORE_FAILED)).toBe(
+      "検査用のユーザーに渡したworktreeを、rootに戻せませんでした(the worktree recorded by slot factory-check-1 (uid 10002) could not be taken back: entries with an ACL remain)",
+    );
+  });
+
+  test("points to the procedure that cleans up the check slot records", () => {
+    expect(nextActionFor(RESTORE_FAILED, "implement")).toBe(
+      "運用の文書(docs/operations.md)の「検査の枠の記録を片付ける」の手順で、枠の記録が指すworktreeをrootに戻して記録を消してから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+    );
+  });
+
+  test("gives a pr_fix the same procedure", () => {
+    expect(nextActionFor(RESTORE_FAILED, "pr_fix")).toBe(
+      nextActionFor(RESTORE_FAILED, "implement"),
+    );
+  });
+
+  test("keeps the process rule for a slot another run holds", () => {
+    expect(
+      describeReason(
+        "worktree is still used by processes from an earlier run: check slot factory-check-2 (uid 10003) that recorded the worktree is held by another run",
+      ),
+    ).toStartWith("前の実行のプロセスがまだworktreeを使っています");
   });
 });

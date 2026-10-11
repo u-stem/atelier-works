@@ -8,6 +8,11 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  CHECK_IMAGE_STALE_REASON,
+  CheckImageStaleError,
+  CheckRuntimeUnsafeError,
+} from "../../f/factory/lib/check_sandbox.ts";
 import type {
   ClaudeRunResult,
   RunClaudeResult,
@@ -705,6 +710,10 @@ type HarnessOptions = {
   readonly pointerError?: { readonly from: number; readonly error: Error };
   /** `now`が返す時刻(epoch ms)。既定は0。 */
   readonly now?: number;
+  /** `runChecks`が投げる例外。 */
+  readonly checksError?: Error;
+  /** `at`回目(0から数える)以降の`runChecks`が投げる例外。 */
+  readonly checksErrorFrom?: { readonly at: number; readonly error: Error };
 };
 
 type Harness = {
@@ -761,6 +770,12 @@ function harness(options: HarnessOptions = {}): Harness {
     },
     runChecks: async () => {
       events.push("checks");
+      if (options.checksError !== undefined) throw options.checksError;
+      if (
+        options.checksErrorFrom !== undefined &&
+        calls.checks >= options.checksErrorFrom.at
+      )
+        throw options.checksErrorFrom.error;
       const value = pick(options.checks ?? [[PASS]], calls.checks);
       calls.checks += 1;
       return value;
@@ -793,6 +808,9 @@ function harness(options: HarnessOptions = {}): Harness {
     },
     now: () => options.now ?? 0,
     log: () => {},
+    reportCheckImageStale: async (error) => {
+      events.push(`stale ${error.message}`);
+    },
   };
   return { deps, recorded, fixRequests, calls, events };
 }
@@ -1160,6 +1178,90 @@ describe("runImplementVerifyLoop", () => {
       },
     });
     expect((await run(h)).exit).toBe("symlink");
+  });
+
+  // イメージの問題と稼働中のworkerの問題は、運用者の操作が違うだけで、ループの扱いは同じである。
+  const ENVIRONMENT_ERRORS = [
+    {
+      name: "a stale image",
+      error: new CheckImageStaleError(["/usr/bin/getfacl is missing"]),
+    },
+    {
+      name: "an unsafe running worker",
+      error: new CheckRuntimeUnsafeError([
+        "world-writable paths created at runtime: /tmp/open",
+      ]),
+    },
+  ];
+
+  test.each(ENVIRONMENT_ERRORS)(
+    "exits check_image_stale on $name",
+    async ({ error }) => {
+      const h = harness({ checksError: error });
+      expect((await run(h)).exit).toBe("check_image_stale");
+    },
+  );
+
+  test.each(ENVIRONMENT_ERRORS)(
+    "gives $name as the reason",
+    async ({ error }) => {
+      const h = harness({ checksError: error });
+      expect((await run(h)).reason).toBe(error.message);
+    },
+  );
+
+  test("gives the stale image as a reason that asks for mise run up", async () => {
+    const h = harness({
+      checksError: new CheckImageStaleError(["/usr/bin/getfacl is missing"]),
+    });
+    expect((await run(h)).reason).toBe(
+      `${CHECK_IMAGE_STALE_REASON}: /usr/bin/getfacl is missing`,
+    );
+  });
+
+  test.each(ENVIRONMENT_ERRORS)("reports $name once", async ({ error }) => {
+    const h = harness({ checksError: error });
+    await run(h);
+    expect(h.events.filter((event) => event.startsWith("stale "))).toEqual([
+      `stale ${error.message}`,
+    ]);
+  });
+
+  test.each(ENVIRONMENT_ERRORS)(
+    "does not start a fix round on $name",
+    async ({ error }) => {
+      const h = harness({ checksError: error });
+      await run(h);
+      expect(h.fixRequests).toEqual([]);
+    },
+  );
+
+  test.each(ENVIRONMENT_ERRORS)(
+    "does not record the round $name stopped, so that it is not counted as a failure",
+    async ({ error }) => {
+      const h = harness({ checksError: error });
+      await run(h);
+      expect(h.recorded).toEqual([]);
+    },
+  );
+
+  test.each(ENVIRONMENT_ERRORS)(
+    "keeps the failed rounds before $name",
+    async ({ error }) => {
+      const h = harness({
+        checks: [[FAIL]],
+        checksErrorFrom: { at: 1, error },
+      });
+      await run(h);
+      expect(h.recorded.map((record) => record.outcome)).toEqual([
+        "check_failed",
+      ]);
+    },
+  );
+
+  test("passes another error from the checks through", async () => {
+    const h = harness({ checksError: new Error("disk full") });
+    await expect(run(h)).rejects.toThrow("disk full");
   });
 
   test("exits worktree_changed when gitleaks scanned another tree than the inspected one", async () => {

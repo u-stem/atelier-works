@@ -368,7 +368,7 @@ export type PromptComment = {
 
 /**
  * `factory_config.allowed_check_commands`の1件が失敗した結果。
- * `pr_workflow_support.ts`の`runAllowedCheckCommands`が記録する。
+ * `check_runner.ts`の`runAllowedCheckCommands`が記録する。
  * `outputTail`は対象リポジトリのコマンドの出力で、信頼できない。
  * `command`は運用者が`factory_config`に書いたものなので、囲みの外に出してよい。
  */

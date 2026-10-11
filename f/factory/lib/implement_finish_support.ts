@@ -3,6 +3,7 @@
 // needs_humanの次の操作、Discordの`pr_opened`イベントを扱う。
 // 入出力は注入された依存を通してだけ行う。
 
+import { CheckEnvironmentError } from "./check_sandbox.ts";
 import { normalizeRepoUrl } from "./config.ts";
 import type { NotifyEvent } from "./discord.ts";
 import { ImplementLeaseLostError } from "./implement_launch_support.ts";
@@ -72,12 +73,13 @@ export function decideImplementFinishAction(
       return { kind: "cancel" };
     // worktreeができる前の停止には残す作業が無い。
     // 検証を経ていないラウンドでの停止(シンボリックリンク、Claudeの実行失敗、
-    // `.git`ポインタの書き換え、判定とgitleaksの間のworktreeの変化)の後は何もpushしない。
+    // `.git`ポインタの書き換え、判定とgitleaksの間のworktreeの変化、workerが前提を満たさず検査を実行できない)の後は何もpushしない。
     case "needs_human":
     case "symlink":
     case "claude_error":
     case "git_pointer_modified":
     case "worktree_changed":
+    case "check_image_stale":
       return { kind: "needs_human", preserveWork: false };
     case "checks_passed":
     case "checks_skipped":
@@ -167,6 +169,7 @@ export function implementCommitGuards(branch: string): {
  * worktreeのロックを持つプロセスが残っていないかを`ensureLockFree`で確かめ、残っていれば止める理由を返す(いなければnull)。
  * `ensureLockFree`は何も止めずに`WorktreeBusyError`を投げるもの(`ensureWorktreeLockFree`の`policy: null`)を渡す。
  * 検証ステップの後に残ったClaudeや検査コマンドは、検査とcommitの間にworktreeを書き換えうるため、pushの前に呼ぶ。
+ * 残った所有権を、workerが検査の前提を満たさず取り戻せないとき(`CheckEnvironmentError`)も、そのメッセージを止める理由として返す。
  * それ以外の例外はそのまま投げる。
  */
 export async function worktreeBusyStopReason(
@@ -176,7 +179,11 @@ export async function worktreeBusyStopReason(
     await ensureLockFree();
     return null;
   } catch (err) {
-    if (err instanceof WorktreeBusyError) return err.message;
+    if (
+      err instanceof WorktreeBusyError ||
+      err instanceof CheckEnvironmentError
+    )
+      return err.message;
     throw err;
   }
 }

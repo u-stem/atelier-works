@@ -17,6 +17,7 @@
 // 掃除したリポジトリでは、worktreeが無くなったロックファイルも、ロックを取ったまま消す(`removeOrphanLockFiles`)。
 
 import * as wmill from "windmill-client@1.817.0";
+import { CheckEnvironmentError } from "./lib/check_sandbox.ts";
 import {
   busyWorktreeNoticeMessage,
   dirsNotYetVisited,
@@ -41,6 +42,7 @@ import {
   listStaleTerminalWorkItems,
 } from "./lib/db.ts";
 import { type GhClient, getPr } from "./lib/github.ts";
+import { recordCheckEnvironmentNotice } from "./lib/host_action.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import {
   defaultLockReleaseDeps,
@@ -169,6 +171,30 @@ async function removeStaleWorktreesForRepo(
             deps: defaultLockReleaseDeps(),
           });
         } catch (err) {
+          // 枠の記録が指すworktreeを、workerが検査の前提を満たさないので取り戻せない。消すと記録だけが残るので、前提を満たすまで飛ばす。
+          if (err instanceof CheckEnvironmentError) {
+            skippedBusyDirs.add(targetDir);
+            log.warn(
+              "cleanup: skipping a worktree the worker cannot take back now",
+              {
+                work_item_id: item.id,
+                owner,
+                repo,
+                worktree_dir: targetDir,
+                reason: err.message,
+              },
+            );
+            await recordCheckEnvironmentNotice(
+              {
+                readDeployedSha: () =>
+                  wmill.getVariable("f/factory/deployed_sha"),
+                addNotice: addNoticeUnlessUnresolved,
+                log,
+              },
+              err,
+            );
+            continue;
+          }
           if (!(err instanceof WorktreeBusyError)) throw err;
           skippedBusyDirs.add(targetDir);
           log.warn("cleanup: skipping a worktree still used by processes", {

@@ -1,0 +1,9 @@
+summary: '[LIB] 検査コマンドの実行'
+description: 内部ライブラリです。直接実行するものではありません。allowed_check_commandsの各コマンドを、許可リストの環境変数と検査用のuidで実行し、結果を集めます。
+lock: '!inline f/factory/lib/check_runner.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

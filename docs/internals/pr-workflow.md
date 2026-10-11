@@ -538,10 +538,37 @@ PR修正のClaudeに渡すツールは`Read,Glob,Grep,Edit,Write`だけで、`Ba
 
 対象リポジトリの検査(lint、typecheck、testに当たるもの)は、Claudeではなく検証のステップが実行する。実行するのは`factory_config.allowed_check_commands`に書いたコマンドで、例えば`["mise run check"]`である。結果は、Claudeの2回目の実行(修正)への入力にする。
 
-検査コマンドは、対象リポジトリのコードをworkerのコンテナ内でrootとして実行する。環境変数を最小にしても隔離にはならず、同じuidなので`/proc`を経由してジョブのトークンに届きうる。そのため、サンドボックス(別のコンテナ、非root、network none)ができるまで、既定値の`[]`を保つ。空でなければ、実行する作業項目ごとにnoticeの`unsandboxed_check_commands`を記録する。同じ本文の未解決のnoticeがあれば新しく作らない。作成から1日を過ぎていれば、時刻を更新する。
+検査コマンドは、対象リポジトリのコードをworkerのコンテナ内で、非特権のユーザー(`factory-check-N`)として実行する。
+コンテナとnetworkは分けない。別のコンテナでnetworkなしに動かせるまで、既定値の`[]`を保つ。
+空でなければ、実行する作業項目ごとにnoticeの`unsandboxed_check_commands`を記録する。
+同じ本文の未解決のnoticeがあれば新しく作らない。作成から1日を過ぎていれば、時刻を更新する。
 
-検査コマンドには、固定の`PATH`と、実行ごとに作る非公開の`HOME`だけを渡し、秘密情報は引き継がない。終わったら`HOME`のディレクトリを消す。
-`PATH`の値と、workerの値を使わない理由は、[検査コマンドはフローが実行する](../security.md#検査コマンドはフローが実行する)にある。
+検査コマンドには、許可リストの環境変数だけを渡し、workerの環境変数は引き継がない。
+許可するのは、固定の`PATH`、実行ごとに作る非公開の`HOME`とその下の`TMPDIR`、`LANG`、worktreeだけを`safe.directory`にするgitの設定である。
+実行の前に、空いている枠を取って前の実行の残りを片付け、枠の記録を書いてから、worktreeと`HOME`の所有者をその枠のユーザーにする。
+実行の後は、所有者をrootに戻してから`HOME`のディレクトリを消し、共有の一時ディレクトリから枠のユーザーのものを消して、枠の記録を消す。
+コマンドごとに、枠のユーザーの残りのプロセスを止める。止まらなければ、所有権を戻さずにステップを失敗させる。
+戻せなかった所有権と`HOME`は、枠の記録を通して、次にその枠を取る検査が片付ける。
+
+準備のステップは、`allowed_check_commands`を設定していれば、Claudeより前に、イメージと実行時の前提([検査コマンドの権限](../security.md#検査コマンドの権限))を確かめる。
+満たさなければ、関門と同じ`guard_blocked`で止め、作業項目は`blocked`になる。
+前提を満たさないまま進むと、Claudeの修正を1回使ってから検証で止まるためである。
+検証のステップも検査の前に確かめ直し、満たさなければClaudeの修正を再実行せずに`guard_blocked`を返す。
+準備から検証までの間に、イメージも稼働中のworkerも変わりうるためである。
+完了のステップが、commitの前に残った所有権を同じ理由で取り戻せずに止まったときも、`blocked`にする。
+どれも修正のラウンド(`fix_rounds`)を記録しない。
+Claudeが直せる検査の失敗ではないので、Sonnetの失敗として数え(`countPrFixFailures`)、`heavy_model`への切り替えを早めないためである。
+理由と要対応の通知は、原因によって次のとおりである。
+
+| 原因 | 理由の先頭 | 要対応の通知 |
+| --- | --- | --- |
+| イメージが古い | `worker image is stale: run mise run up` | `host_action_required`([運用](../operations.md#fとworkerのイメージを両方変えたとき)) |
+| 稼働中のworkerの問題 | `worker runtime is unsafe for checks:` | `check_runtime_unsafe`([運用](../operations.md#稼働中のworkerが検査の前提を満たさないとき)) |
+
+イメージが古く、稼働中のworkerの問題も一緒に見つかったときは、両方の通知を残す([Consoleのnotice](notifications.md#consoleのnotice))。
+`host_action_required`は`mise run up`の後に自動で解決されるが、ボリュームのマウントポイントは作り直しでは閉じないためである。
+
+`PATH`の値と、workerの値を使わない理由、uidの切り替えと所有権の受け渡しは、[検査コマンドはフローが実行する](../security.md#検査コマンドはフローが実行する)と[検査コマンドの権限](../security.md#検査コマンドの権限)にある。
 
 検査コマンドが指す先(対象リポジトリの`mise.toml`や`package.json`のscriptsなど)は、信頼できない内容として扱う。workerのmiseは対象リポジトリの`mise.toml`をtrustしない(`mise --yes trust`をしない)。`mise.toml`に頼るコマンドと、`MISE_TRUSTED_CONFIG_PATHS`を使わずには実行できないコマンドは、実行せずにブロックとして報告する。
 

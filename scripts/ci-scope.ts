@@ -195,6 +195,15 @@ const ADDITIVE_RULES: readonly Rule[] = [
     matches: under("f/factory/lib/process_lock", "tests/lib/process_lock"),
     flags: ["worker"],
   },
+  // 検査コマンドを非特権のuidで動かす部品と、その結果テスト。workerイメージの中で動かす。
+  {
+    matches: under(
+      "f/factory/lib/check_sandbox",
+      "f/factory/lib/check_runner",
+      "tests/lib/check_sandbox_integration",
+    ),
+    flags: ["worker"],
+  },
   // プロセスロックのテストが読み込むファイル。
   { matches: exact(...WORKER_DEPENDENCY_FILES), flags: ["worker"] },
   // メタデータの入力は、f/、依存の定義(dependencies/)、ロックのハッシュ。

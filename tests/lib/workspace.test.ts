@@ -101,6 +101,30 @@ describe("runCommand", () => {
   });
 });
 
+// workerのイメージは`LD_LIBRARY_PATH=.`を持つ。rootの子プロセスに渡ると、cwdのworktreeに検査用のユーザーが置いた
+// 共有ライブラリを読み込むので、子プロセスの環境は渡したものだけになることを確かめる。
+describe("runCommand environment", () => {
+  const saved = process.env.LD_LIBRARY_PATH;
+  afterEach(() => {
+    if (saved === undefined) delete process.env.LD_LIBRARY_PATH;
+    else process.env.LD_LIBRARY_PATH = saved;
+  });
+
+  test("does not pass the runner's LD_LIBRARY_PATH to a child given an environment", async () => {
+    process.env.LD_LIBRARY_PATH = ".";
+    const result = await runCommand(["/usr/bin/env"], {
+      env: { PATH: "/usr/bin:/bin" },
+    });
+    expect(result.stdout).not.toContain("LD_LIBRARY_PATH");
+  });
+
+  test("does not pass the runner's LD_LIBRARY_PATH to a child given no environment", async () => {
+    process.env.LD_LIBRARY_PATH = ".";
+    const result = await runCommand(["/usr/bin/env"]);
+    expect(result.stdout).not.toContain("LD_LIBRARY_PATH");
+  });
+});
+
 describe("boundedTimerMs", () => {
   test("keeps a value within the timer range", () => {
     expect(boundedTimerMs(1_500)).toBe(1_500);

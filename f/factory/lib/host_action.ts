@@ -3,6 +3,8 @@
 //
 // 自己更新はworkerの中でしか動かないので、これらの変更を自分では反映できない。
 // 人が`mise run up`を実行するまで古い構成で動き続けるため、気づく手段として通知を出す。
+// 古いイメージのまま検査コマンドを実行できなかったことも、同じ種類の通知で知らせる(`buildCheckImageStaleNotice`)。
+// 稼働中のworkerが検査の前提を満たさなくなったことは、別の種類の通知で知らせる(`buildCheckRuntimeUnsafeNotice`)。
 //
 // 反映が済んだ印は、`mise run up`が終わりに共有ボリューム(`factory_state`)へ書く
 // ホストのcheckoutのHEAD(`HOST_APPLIED_SHA_PATH`)である。
@@ -14,6 +16,11 @@
 
 import { constants } from "node:fs";
 import { lstat, open } from "node:fs/promises";
+import {
+  type CheckEnvironmentError,
+  CheckImageStaleError,
+  CheckRuntimeUnsafeError,
+} from "./check_sandbox.ts";
 import type { NotifyBestEffortResult, NotifyEvent } from "./discord.ts";
 import { type Logger, maskSecrets } from "./log.ts";
 import type { NoticeRecord } from "./types.ts";
@@ -104,6 +111,120 @@ export function buildHostActionNotice(
     cause,
     next_action: NEXT_ACTION,
   };
+}
+
+const STALE_IMAGE_NEXT_ACTION_UNRESOLVABLE =
+  "ホストのcheckoutでgit pullし、mise installとmise run upを実行する。実行が済んだら、この通知を解決する";
+
+/**
+ * workerのイメージが古く、検査コマンドを枠のユーザーで実行できないことを知らせるnoticeを作る。
+ * `f/`の変更がイメージの作り直しより先に反映されたときに、検証のステップが残す。
+ * `deployedSha`は自己更新が反映した版で、40桁なら本文に含める。ホストがその版以降で`mise run up`すると、自己更新が自動で解決する。
+ * 版が分からなければ含めず、人が解決する。
+ * 本文は、版と`detail`が同じなら同じ文になる。`addNoticeUnlessUnresolved`が重ねて記録しないためである。
+ */
+export function buildCheckImageStaleNotice(
+  deployedSha: string | null,
+  detail: string,
+): NoticeRecord {
+  const version = deployedSha === null ? "" : `反映した版: ${deployedSha}。`;
+  const nextAction =
+    deployedSha === null ? STALE_IMAGE_NEXT_ACTION_UNRESOLVABLE : NEXT_ACTION;
+  return {
+    kind: HOST_ACTION_NOTICE_KIND,
+    message: `${version}workerのイメージが古く、検査コマンドを非特権のユーザーで実行できません(${printablePath(detail)})。イメージを作り直すまで、検査コマンドのある実装とPR修正は人の対応待ちで止まります。次の操作: ${nextAction}`,
+  };
+}
+
+/** 稼働中のworkerが検査の前提を満たさないことを示すnoticeの種類。 */
+export const CHECK_RUNTIME_NOTICE_KIND = "check_runtime_unsafe";
+
+const RUNTIME_NEXT_ACTION =
+  "本文のパスを、ホストのcheckoutからmise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker chmod o-w <パス>で閉じるか、mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_workerでworkerを作り直す。/workspacesと/var/lib/factoryは、ボリュームのマウントポイントで、作り直しでは閉じないので、chmodで閉じる。直したら、止まった作業項目を再実行し、この通知を解決する";
+
+/**
+ * 稼働中のworkerに誰でも書き込めるパスができたか、それを確かめられず、検査コマンドを枠のユーザーで実行できないことを知らせるnoticeを作る。
+ * イメージの問題ではないので、`mise run up`を求めず、自己更新が自動で解決する版も載せない。人が直して解決する。
+ * 本文は、`detail`が同じなら同じ文になる。`addNoticeUnlessUnresolved`が重ねて記録しないためである。
+ */
+export function buildCheckRuntimeUnsafeNotice(detail: string): NoticeRecord {
+  return {
+    kind: CHECK_RUNTIME_NOTICE_KIND,
+    message: `workerの稼働中に、検査コマンドを非特権のユーザーで安全に実行できない状態になりました(${printablePath(detail)})。直すまで、検査コマンドのある実装とPR修正は止まります。次の操作: ${RUNTIME_NEXT_ACTION}`,
+  };
+}
+
+export type CheckEnvironmentNoticeDeps = {
+  /** 自己更新が反映した版(`f/factory/deployed_sha`)。読めなければ例外を投げる。 */
+  readonly readDeployedSha: () => Promise<string>;
+  /** 同じ本文の未解決のnoticeが無ければ挿入してIDを返し、あれば`null`を返す。 */
+  readonly addNotice: (record: NoticeRecord) => Promise<number | null>;
+  readonly log: Logger;
+};
+
+/**
+ * 検査の前提を満たさないことをnoticeに残す。
+ * イメージの問題(`CheckImageStaleError`)は`buildCheckImageStaleNotice`で残す。版が読めないか40桁でなければ、版を含めずに残す。
+ * イメージの問題と一緒に稼働中のworkerの点が見つかっていれば、その点は`buildCheckRuntimeUnsafeNotice`でも残す。
+ * イメージの通知は`mise run up`の後に自己更新が解決するが、ボリュームのマウントポイントは作り直しでは閉じず、
+ * 人が閉じて止まった作業項目を再実行するまで、通知を残すためである。
+ * 稼働中のworkerの問題(`CheckRuntimeUnsafeError`)は`buildCheckRuntimeUnsafeNotice`で残す。
+ * 呼び出し側は、続けて作業項目を止めるので、記録に失敗しても例外を投げず、警告ログに残す。
+ */
+export async function recordCheckEnvironmentNotice(
+  deps: CheckEnvironmentNoticeDeps,
+  error: CheckEnvironmentError,
+): Promise<void> {
+  if (error instanceof CheckRuntimeUnsafeError) {
+    await addNoticeOrWarn(
+      deps,
+      buildCheckRuntimeUnsafeNotice(error.problems.join(", ")),
+    );
+    return;
+  }
+  const imageProblems =
+    error instanceof CheckImageStaleError
+      ? error.imageProblems
+      : error.problems;
+  const runtimeProblems =
+    error instanceof CheckImageStaleError ? error.runtimeProblems : [];
+  await recordStaleImageNotice(deps, imageProblems.join(", "));
+  if (runtimeProblems.length > 0) {
+    await addNoticeOrWarn(
+      deps,
+      buildCheckRuntimeUnsafeNotice(runtimeProblems.join(", ")),
+    );
+  }
+}
+
+async function recordStaleImageNotice(
+  deps: CheckEnvironmentNoticeDeps,
+  detail: string,
+): Promise<void> {
+  let deployedSha: string | null = null;
+  try {
+    const raw = (await deps.readDeployedSha()).trim();
+    deployedSha = FULL_SHA.test(raw) ? raw : null;
+  } catch (err) {
+    deps.log.warn("deployed sha could not be read for the stale image notice", {
+      error: errorMessage(err),
+    });
+  }
+  await addNoticeOrWarn(deps, buildCheckImageStaleNotice(deployedSha, detail));
+}
+
+async function addNoticeOrWarn(
+  deps: CheckEnvironmentNoticeDeps,
+  notice: NoticeRecord,
+): Promise<void> {
+  try {
+    await deps.addNotice(notice);
+  } catch (err) {
+    deps.log.warn("check environment notice could not be recorded", {
+      kind: notice.kind,
+      error: errorMessage(err),
+    });
+  }
 }
 
 /** 通知の本文から、反映した版を読み戻す。読めなければ`null`を返す。 */

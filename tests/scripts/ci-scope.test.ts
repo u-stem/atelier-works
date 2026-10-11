@@ -140,6 +140,24 @@ describe("scopeOfPaths", () => {
     );
   });
 
+  test("runs worker and metadata for the check sandbox", () => {
+    expect(scopeOfPaths(["f/factory/lib/check_sandbox.ts"])).toEqual(
+      noneScope({ worker: true, metadata: true }),
+    );
+  });
+
+  test("runs worker and metadata for the check runner", () => {
+    expect(scopeOfPaths(["f/factory/lib/check_runner.ts"])).toEqual(
+      noneScope({ worker: true, metadata: true }),
+    );
+  });
+
+  test("runs worker for the check sandbox image test", () => {
+    expect(
+      scopeOfPaths(["tests/lib/check_sandbox_integration.test.ts"]),
+    ).toEqual(noneScope({ worker: true }));
+  });
+
   test("runs console only for a change under console/", () => {
     expect(scopeOfPaths(["console/src/App.tsx"])).toEqual(
       noneScope({ console: true }),
@@ -1144,10 +1162,19 @@ describe("import closure of the CI tests", () => {
     expect(uncovered).toEqual([]);
   });
 
+  test("every file the check sandbox image test imports triggers worker", () => {
+    const uncovered = importClosure(
+      "tests/lib/check_sandbox_integration.test.ts",
+    ).filter((path) => scopeOfPaths([path]).worker === false);
+
+    expect(uncovered).toEqual([]);
+  });
+
   test("the traced files use no dynamic import or require", () => {
     const files = [
       ...importClosure("scripts/test-db-queries.ts"),
       ...importClosure("tests/lib/process_lock.test.ts"),
+      ...importClosure("tests/lib/check_sandbox_integration.test.ts"),
     ];
     const dynamic = files.filter((path) =>
       /\b(?:import|require)\s*\(/.test(readFileSync(join(ROOT, path), "utf8")),
@@ -1323,6 +1350,18 @@ describe("ci.yml wiring", () => {
   test("the worker image build runs unless scope says worker is false", () => {
     expect(stepNamed("check", "Build worker image").if).toBe(
       "needs.scope.outputs.worker != 'false'",
+    );
+  });
+
+  test("the check sandbox test runs unless scope says worker is false", () => {
+    expect(
+      stepNamed("check", "Test the check sandbox in the worker image").if,
+    ).toBe("needs.scope.outputs.worker != 'false'");
+  });
+
+  test("the worker image build passes the check uid", () => {
+    expect(String(stepNamed("check", "Build worker image").run)).toContain(
+      "--build-arg FACTORY_CHECK_UID=$FACTORY_CHECK_UID",
     );
   });
 

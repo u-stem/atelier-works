@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import {
+  BASE_IMAGE_OPEN_PATHS,
+  SHARED_TMP_DIRS,
+} from "../../f/factory/lib/check_sandbox.ts";
 
 // workerのイメージの構成を静的に確かめる。
 // workerのPATHにrootのホームを入れないこと、検査コマンド用の非特権ユーザーを
@@ -73,34 +77,93 @@ describe("infra/worker/Dockerfile PATH", () => {
 });
 
 describe("infra/worker/Dockerfile check user", () => {
-  test("creates factory-check with the fixed uid 10001, no home and no login shell", () => {
-    const created = startingWith("RUN").some((line) =>
-      line.includes("useradd -u 10001 -M -s /usr/sbin/nologin factory-check"),
+  const userCreation = (): string =>
+    startingWith("RUN").find((line) => line.includes("useradd")) ?? "";
+
+  test("creates one numbered user per slot with no home and no login shell", () => {
+    expect(userCreation()).toContain(
+      'useradd -u "$((FACTORY_CHECK_UID + i))" -M -s /usr/sbin/nologin "factory-check-${i}"',
     );
-    expect(created).toBe(true);
   });
 
-  test("installs util-linux for setpriv", () => {
+  test("loops over every slot when creating the users", () => {
+    expect(userCreation()).toContain(
+      "for i in $(seq 0 $((FACTORY_CHECK_POOL_SIZE - 1)))",
+    );
+  });
+
+  test("defaults the check uid to 10001", () => {
+    expect(startingWith("ARG")).toContain("ARG FACTORY_CHECK_UID=10001");
+  });
+
+  test("defaults the number of slots to 8", () => {
+    expect(startingWith("ARG")).toContain("ARG FACTORY_CHECK_POOL_SIZE=8");
+  });
+
+  test("installs util-linux for setpriv and flock", () => {
     const installed = startingWith("RUN").some(
       (line) => line.includes("apt-get install") && /\sutil-linux\b/.test(line),
     );
     expect(installed).toBe(true);
   });
 
-  test("installs procps for pkill", () => {
+  test("installs procps for kill", () => {
     const installed = startingWith("RUN").some(
       (line) => line.includes("apt-get install") && /\sprocps\b/.test(line),
     );
     expect(installed).toBe(true);
   });
 
-  test("verifies at build time that setpriv drops to the check uid", () => {
-    const verified = startingWith("RUN").some((line) =>
-      line.includes(
-        '[ "$(setpriv --reuid=10001 --regid=10001 --clear-groups -- id -u)" = 10001 ]',
-      ),
+  test("installs acl for getfacl and setfacl", () => {
+    const installed = startingWith("RUN").some(
+      (line) => line.includes("apt-get install") && /\sacl\b/.test(line),
     );
-    expect(verified).toBe(true);
+    expect(installed).toBe(true);
+  });
+
+  const verification = (): string =>
+    startingWith("RUN").find((line) => line.includes("claude --version")) ?? "";
+
+  test("verifies every slot at build time", () => {
+    expect(verification()).toContain(
+      "for i in $(seq 0 $((FACTORY_CHECK_POOL_SIZE - 1)))",
+    );
+  });
+
+  test("verifies at build time that setpriv drops to the slot's uid", () => {
+    expect(verification()).toContain(
+      '[ "$(setpriv --reuid="${uid}" --regid="${uid}" --groups=1000000 --bounding-set=-all --inh-caps=-all --no-new-privs -- id -u)" = "${uid}" ]',
+    );
+  });
+
+  test("verifies at build time that the bounding set ends up empty", () => {
+    expect(verification()).toContain("'^CapBnd:[[:space:]]*0+$'");
+  });
+
+  test("verifies at build time that no_new_privs is set", () => {
+    expect(verification()).toContain("'^NoNewPrivs:[[:space:]]*1$'");
+  });
+
+  test("verifies at build time that the tools the takeback calls by path exist", () => {
+    expect(verification()).toContain(
+      "test -x /usr/bin/kill && test -x /usr/bin/getfacl && test -x /usr/bin/setfacl",
+    );
+  });
+
+  test("fails the build when a slot does not verify", () => {
+    expect(verification()).toContain("|| exit 1");
+  });
+
+  test("closes the places the base image opens, with the files in them, to the group and others", () => {
+    expect(startingWith("RUN")).toContain(
+      `RUN chmod -R go-w ${BASE_IMAGE_OPEN_PATHS.join(" ")}`,
+    );
+  });
+
+  test("fails the build on a world-writable file or directory other than the shared temporary ones", () => {
+    expect(verification()).toContain(
+      `test -z "$(find / -xdev -path /tmp/windmill -prune -o ! -type l -perm -0002 -print | grep -vxE '${SHARED_TMP_DIRS.join("|")}')"`,
+    );
   });
 
   test("does not switch the image to a non-root USER", () => {
