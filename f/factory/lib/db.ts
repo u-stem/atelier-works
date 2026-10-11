@@ -2759,12 +2759,13 @@ export async function insertImplementRound(
 }
 
 /**
- * 作業項目の、指定した試行(同じ要件定義)の実装で失敗したラウンドの数を返す。
+ * 作業項目の、指定した試行(同じ要件定義)の実装で、直近に連続して失敗したラウンドの数を返す。
  * 失敗は、検査が通らなかった(`check_failed`)、変更が進まなかった(`stalled`)、
  * Claudeの実行が失敗した(`error`)ラウンドである。
- * `done`は成功、`checks_skipped`は検査が無かっただけ、`requirements_gap`は要件の不足で、
- * どれもモデルの失敗ではない。
- * 検証ループの修正ラウンドと、`retry_work_item`で再開する前の実行の失敗の合計になる。
+ * それ以外の結果(`done`、`checks_skipped`、`requirements_gap`)のラウンドが入ると、
+ * それより前の失敗は数えない。モデルが成功した後に、基盤の障害などの古い失敗で
+ * `heavy_model`のまま戻らないようにするためである。
+ * 検証ループの修正ラウンドと、`retry_work_item`で再開する前の実行の失敗が、続いていれば合わさる。
  * ラウンドは記録してから次のラウンドを始めるので、修正ラウンドの直前の失敗も含む。
  * 試行(`attempt`)が増えると数え直す。却下や要件の不足で要件定義からやり直した実装は、
  * 前の要件定義の失敗を引き継がない。
@@ -2780,6 +2781,16 @@ export async function countImplementFailedRounds(
     WHERE work_item_id = ${workItemId}::bigint
       AND attempt = ${attempt}::integer
       AND outcome IN ('check_failed', 'stalled', 'error')
+      AND round > COALESCE(
+        (
+          SELECT MAX(round)
+          FROM factory.implement_rounds
+          WHERE work_item_id = ${workItemId}::bigint
+            AND attempt = ${attempt}::integer
+            AND outcome NOT IN ('check_failed', 'stalled', 'error')
+        ),
+        0
+      )
   `.fetch();
   const row = rows[0];
   return row === undefined
@@ -2788,13 +2799,20 @@ export async function countImplementFailedRounds(
 }
 
 /**
- * 作業項目と同じPRのPR修正で、これまでにSonnetが失敗した回数を返す。
+ * PR修正で、次の実行の前にSonnetが失敗した回数とみなす値を返す。
+ * 次の2つの大きいほうである。
+ * - 同じPRで直近に連続して失敗した回数。
+ * - 作業項目の`fix_round`から1を引いた値。再レビューで指摘が続いたラウンドの数である。
+ *
  * 同じPRのpr_fixの作業項目(前のラウンドと、`retry_work_item`で再実行した同じ作業項目)を対象に、
- * 次の3つを足す。
+ * 連続した失敗は次の3つを足す。成功は、`blocked`でないラウンド(`done`、`requirements_gap`)で、
+ * 同じPRで最後の成功より後の失敗だけを数える。成功が入ると数え直すので、
+ * 基盤の障害で数えた失敗は、次に成功したラウンドの後には残らない。
  * - Claudeが動いた(`agent_runs`にstageが`pr_fix`の行がある)のに、修正をpushせず
  *   `blocked`で終えたラウンド。`fix_rounds`の行を数える。
  * - 検査が通らず、検査の失敗を添えて再実行した(stageが`pr_fix_verify_retry`の行がある)作業項目。
  *   不正な出力の再試行で同じstageの行が増えるので、作業項目ごとに1回と数える。
+ *   時刻は、その作業項目で最初の再実行の行で見る。
  * - Claudeの実行そのものが失敗した(`agent_runs.error`が入っている)行。`runClaude`は、
  *   タイムアウト、0以外の終了コード、`is_error`、ターンや予算の上限、不正な出力のどれでも
  *   失敗した行に`error`を書く。適用の実行の失敗は例外で終わってラウンドの記録を残さず、flowの再試行と`on_error_flow`は
@@ -2809,13 +2827,15 @@ export async function countImplementFailedRounds(
  *     続けて書くので、同じ作業項目、stage、試行で10秒以内に次の行がある失敗の行と見なす。
  *     別の実行の行は、flowの再試行の60秒の待ちか、flowとClaudeの実行のやり直しを経てから
  *     書かれるので、10秒以内には来ない。
- *   `done`や`requirements_gap`で終えたラウンドより前の失敗も数える。
- *   後の実行が成功しても、Sonnetがその実行で失敗した事実は変わらないためである。
+ *
  * 新しい指摘でラベルが付き直しただけのラウンドは数えない。
- * `blocked`の行は、`done`で終わったラウンドを数えない。
  * Claudeが動いたかは作業項目の単位で見るので、同じ作業項目で前にClaudeが動いていれば、
  * Claudeを起動しなかった後の`blocked`も数える。
- * 検査の再実行は、ラウンドが`done`で終わっても、作業項目ごとに1回数える。
+ *
+ * `fix_round`の下限は、`done`で終えて成功が続いても、再レビューが続くかぎり
+ * `heavy_model`への昇格を進める。Sonnetが毎回pushして`done`で終え、同じ指摘が
+ * 続く場合は、失敗の記録が無いためである。基盤の障害は`fix_round`を進めないので、
+ * 下限は障害で上がらない。
  */
 export async function countPrFixFailures(
   workItemId: number,
@@ -2828,23 +2848,38 @@ export async function countPrFixFailures(
       JOIN factory.work_items wi
         ON wi.owner = cur.owner AND wi.repo = cur.repo AND wi.pr_number = cur.pr_number
       WHERE cur.id = ${workItemId}::bigint AND wi.kind = 'pr_fix'
+    ),
+    last_success AS (
+      SELECT MAX(fr.created_at) AS at
+      FROM factory.fix_rounds fr
+      WHERE fr.work_item_id IN (SELECT id FROM same_pr)
+        AND fr.outcome <> 'blocked'
     )
     SELECT
+      (
+        SELECT cur.fix_round FROM factory.work_items cur WHERE cur.id = ${workItemId}::bigint
+      ) AS fix_round,
       (
         SELECT COUNT(*)
         FROM factory.fix_rounds fr
         WHERE fr.work_item_id IN (SELECT id FROM same_pr)
           AND fr.outcome = 'blocked'
+          AND fr.created_at > COALESCE((SELECT at FROM last_success), '-infinity'::timestamptz)
           AND EXISTS (
             SELECT 1 FROM factory.agent_runs ar
             WHERE ar.work_item_id = fr.work_item_id AND ar.stage = 'pr_fix'
           )
       ) AS blocked_rounds,
       (
-        SELECT COUNT(DISTINCT ar.work_item_id)
-        FROM factory.agent_runs ar
-        WHERE ar.work_item_id IN (SELECT id FROM same_pr)
-          AND ar.stage = 'pr_fix_verify_retry'
+        SELECT COUNT(*)
+        FROM (
+          SELECT ar.work_item_id
+          FROM factory.agent_runs ar
+          WHERE ar.work_item_id IN (SELECT id FROM same_pr)
+            AND ar.stage = 'pr_fix_verify_retry'
+          GROUP BY ar.work_item_id
+          HAVING MIN(ar.created_at) > COALESCE((SELECT at FROM last_success), '-infinity'::timestamptz)
+        ) retried
       ) AS verify_retry_items,
       (
         SELECT COUNT(*)
@@ -2852,6 +2887,7 @@ export async function countPrFixFailures(
         WHERE ar.work_item_id IN (SELECT id FROM same_pr)
           AND ar.stage IN ('pr_fix', 'pr_fix_verify_retry')
           AND ar.error IS NOT NULL
+          AND ar.created_at > COALESCE((SELECT at FROM last_success), '-infinity'::timestamptz)
           AND NOT EXISTS (
             SELECT 1 FROM factory.fix_rounds fr
             WHERE fr.work_item_id = ar.work_item_id
@@ -2876,11 +2912,18 @@ export async function countPrFixFailures(
       ) AS failed_runs
   `.fetch();
   const row = rows[0];
-  return row === undefined
-    ? 0
-    : parseNumericLike(row.blocked_rounds, "blocked_rounds") +
-        parseNumericLike(row.verify_retry_items, "verify_retry_items") +
-        parseNumericLike(row.failed_runs, "failed_runs");
+  if (row === undefined) {
+    return 0;
+  }
+  const consecutiveFailures =
+    parseNumericLike(row.blocked_rounds, "blocked_rounds") +
+    parseNumericLike(row.verify_retry_items, "verify_retry_items") +
+    parseNumericLike(row.failed_runs, "failed_runs");
+  const priorRounds =
+    row.fix_round === null || row.fix_round === undefined
+      ? 0
+      : parseNumericLike(row.fix_round, "fix_round") - 1;
+  return Math.max(consecutiveFailures, priorRounds);
 }
 
 function parseImplementDiffStat(value: unknown): ImplementDiffStat | null {

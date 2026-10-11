@@ -1,8 +1,8 @@
 // 工程ごとに使うClaudeのモデルを決める。
 // 判断が重い工程は`heavy_model`を使う。
-// 実装とPR修正は既定の`model`(Sonnet)で始め、同じ作業でSonnetが2回失敗したら、
-// 以後は`heavy_model`に上げる。失敗の数え方は`db.ts`の
-// `countImplementFailedRounds`と`countPrFixFailures`が決める。
+// 実装とPR修正は既定の`model`(Sonnet)で始め、同じ作業でSonnetが続けて2回失敗したら、
+// `heavy_model`に上げる。失敗の数は、成功が入ると数え直す。
+// 数え方は`db.ts`の`countImplementFailedRounds`と`countPrFixFailures`が決める。
 
 import type { FactoryConfig } from "./types.ts";
 
@@ -21,12 +21,12 @@ const ALWAYS_HEAVY_STAGES: readonly ModelStage[] = [
   "audit",
 ];
 
-/** `model`での失敗がこの回数に達したら、以後は`heavy_model`を使う。 */
+/** `model`での失敗がこの回数に達したら、`heavy_model`を使う。 */
 const SONNET_FAILURES_BEFORE_ESCALATION = 2;
 
 /**
  * `stage`で使うモデル名を返す。
- * `sonnetFailures`は、同じ作業でこれまでに`model`が失敗した回数である。
+ * `sonnetFailures`は、同じ作業で直近に`model`が続けて失敗した回数である。
  * 要件定義の生成、PRのレビュー、監査は、回数にかかわらず`heavy_model`を使う。
  * この3工程の呼び出しは、回数が使われないことを示すために0を渡す。
  */

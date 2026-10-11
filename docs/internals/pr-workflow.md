@@ -408,15 +408,16 @@ PRワークフローは`f/factory/factory_config`の次の値を読む。
 | `default_reviewers` | `[]` | 再レビューを依頼する人 |
 | `daily_budget_usd` | `50` | 全フローで共有する1日の費用の上限(USD) |
 | `max_attempts` | `3` | 要件定義の試行回数の上限 |
-| `model` | `claude-sonnet-5-5` | PR修正のモデル。同じPRの修正が2回失敗した後は`heavy_model`を使う |
-| `heavy_model` | `claude-opus-5-5` | PRレビューのモデルと、2回失敗した後のPR修正のモデル |
+| `model` | `claude-sonnet-5-5` | PR修正のモデル。同じPRの修正が続けて2回失敗した後は`heavy_model`を使う |
+| `heavy_model` | `claude-opus-5-5` | PRレビューのモデルと、続けて2回失敗した後のPR修正のモデル |
 
-モデルの昇格に使う失敗の数は、同じPRの`pr_fix`の作業項目から数える。
-次の3つを足す。
+モデルの昇格に使う失敗の数は、同じPRの`pr_fix`の作業項目から数え、次の2つの大きいほうにする。
 
-- Claudeが動いて`blocked`で終えた`fix_rounds`の行
-- 検査の再実行(`pr_fix_verify_retry`)をした作業項目
-- `agent_runs.error`がある失敗した実行の行
+- 直近に連続した失敗。`blocked`でないラウンド(`done`か`requirements_gap`)で最後に終えた時刻より後の、次の3つの合計である。
+  - Claudeが動いて`blocked`で終えた`fix_rounds`の行
+  - 検査の再実行(`pr_fix_verify_retry`)をした作業項目
+  - `agent_runs.error`がある失敗した実行の行
+- 作業項目の`fix_round`から1を引いた値。毎回`done`で終えても再レビューが続くと、失敗の記録が残らないためである。
 
 除く条件と数の理由は、[運用](../operations.md)の「モデルを使い分ける」にある。
 
