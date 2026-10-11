@@ -13,6 +13,7 @@
 import * as wmill from "windmill-client@1.817.0";
 import type { CleanupCounts } from "./cleanup_db_support.ts";
 import { ACTIONABLE_WORK_ITEM_STATUSES } from "./console_support.ts";
+import { type JobIds, jobIdsFromEnv } from "./job_ids.ts";
 import { type Logger, logger, maskSecrets } from "./log.ts";
 import {
   type AgentRunRecord,
@@ -406,6 +407,7 @@ export async function supersedeApprovedIssueWorkItems(
   },
   newWorkItemId: number,
   sql: SqlClient = defaultSqlClient,
+  jobIds: JobIds = jobIdsFromEnv(process.env),
 ): Promise<{ readonly id: number; readonly attempt: number }[]> {
   const rows = await sql`
     WITH cancelled AS (
@@ -418,8 +420,9 @@ export async function supersedeApprovedIssueWorkItems(
       RETURNING wi.id, wi.attempt
     ),
     recorded AS (
-      INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note)
-      SELECT id, 'approved', 'cancelled', 'superseded by a newer cycle (work item ' || ${newWorkItemId}::bigint || ')'
+      INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note, job_id, root_job_id)
+      SELECT id, 'approved', 'cancelled', 'superseded by a newer cycle (work item ' || ${newWorkItemId}::bigint || ')',
+        ${jobIds.job_id}::text, ${jobIds.root_job_id}::text
       FROM cancelled
       RETURNING work_item_id
     )
@@ -464,6 +467,7 @@ export async function insertIssueWorkItemUnlessActive(
   item: NewWorkItem,
   sql: SqlClient = defaultSqlClient,
   log: Logger = logger("db"),
+  jobIds: JobIds = jobIdsFromEnv(process.env),
 ): Promise<InsertedIssueWorkItem | null> {
   const rows = await sql`
     INSERT INTO factory.work_items (
@@ -494,6 +498,7 @@ export async function insertIssueWorkItemUnlessActive(
       },
       id,
       sql,
+      jobIds,
     );
     return { id, superseded };
   } catch (err) {
@@ -704,6 +709,7 @@ export async function updateStatus(
   to: WorkItemStatus,
   note: string | null,
   sql: SqlClient = defaultSqlClient,
+  jobIds: JobIds = jobIdsFromEnv(process.env),
 ): Promise<void> {
   const statement = sql`
     WITH previous AS MATERIALIZED (
@@ -716,8 +722,8 @@ export async function updateStatus(
       WHERE factory.work_items.id = ${id}
       RETURNING factory.work_items.id, previous.status AS from_status
     )
-    INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note)
-    SELECT updated.id, updated.from_status, ${to}, ${note}
+    INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note, job_id, root_job_id)
+    SELECT updated.id, updated.from_status, ${to}, ${note}, ${jobIds.job_id}::text, ${jobIds.root_job_id}::text
     FROM updated
     RETURNING from_status
   `;
@@ -740,6 +746,7 @@ export async function updateStatusIfCurrent(
   to: WorkItemStatus,
   note: string | null = null,
   sql: SqlClient = defaultSqlClient,
+  jobIds: JobIds = jobIdsFromEnv(process.env),
 ): Promise<boolean> {
   const statement = sql`
     WITH updated AS (
@@ -748,8 +755,8 @@ export async function updateStatusIfCurrent(
       WHERE id = ${id} AND status = ${expectedFrom}
       RETURNING id
     )
-    INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note)
-    SELECT updated.id, ${expectedFrom}, ${to}, ${note}
+    INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note, job_id, root_job_id)
+    SELECT updated.id, ${expectedFrom}, ${to}, ${note}, ${jobIds.job_id}::text, ${jobIds.root_job_id}::text
     FROM updated
     RETURNING work_item_id
   `;
@@ -771,6 +778,7 @@ export async function updateStatusIfCurrentClearingFlowJobId(
   to: WorkItemStatus,
   note: string | null = null,
   sql: SqlClient = defaultSqlClient,
+  jobIds: JobIds = jobIdsFromEnv(process.env),
 ): Promise<boolean> {
   const statement = sql`
     WITH updated AS (
@@ -779,8 +787,8 @@ export async function updateStatusIfCurrentClearingFlowJobId(
       WHERE id = ${id} AND status = ${expectedFrom}
       RETURNING id
     )
-    INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note)
-    SELECT updated.id, ${expectedFrom}, ${to}, ${note}
+    INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note, job_id, root_job_id)
+    SELECT updated.id, ${expectedFrom}, ${to}, ${note}, ${jobIds.job_id}::text, ${jobIds.root_job_id}::text
     FROM updated
     RETURNING work_item_id
   `;
@@ -801,6 +809,7 @@ export async function updateStatusIfLeaseHolder(
   expectedFlowJobId: string | null,
   note: string | null = null,
   sql: SqlClient = defaultSqlClient,
+  jobIds: JobIds = jobIdsFromEnv(process.env),
 ): Promise<boolean> {
   const statement = sql`
     WITH updated AS (
@@ -810,8 +819,8 @@ export async function updateStatusIfLeaseHolder(
         AND flow_job_id IS NOT DISTINCT FROM ${expectedFlowJobId}::text
       RETURNING id
     )
-    INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note)
-    SELECT updated.id, ${expectedFrom}, ${to}, ${note}
+    INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note, job_id, root_job_id)
+    SELECT updated.id, ${expectedFrom}, ${to}, ${note}, ${jobIds.job_id}::text, ${jobIds.root_job_id}::text
     FROM updated
     RETURNING work_item_id
   `;
@@ -833,6 +842,7 @@ export async function updateStatusIfLeaseHolderClearingFlowJobId(
   expectedFlowJobId: string | null,
   note: string | null = null,
   sql: SqlClient = defaultSqlClient,
+  jobIds: JobIds = jobIdsFromEnv(process.env),
 ): Promise<boolean> {
   const statement = sql`
     WITH updated AS (
@@ -842,8 +852,8 @@ export async function updateStatusIfLeaseHolderClearingFlowJobId(
         AND flow_job_id IS NOT DISTINCT FROM ${expectedFlowJobId}::text
       RETURNING id
     )
-    INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note)
-    SELECT updated.id, ${expectedFrom}, ${to}, ${note}
+    INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note, job_id, root_job_id)
+    SELECT updated.id, ${expectedFrom}, ${to}, ${note}, ${jobIds.job_id}::text, ${jobIds.root_job_id}::text
     FROM updated
     RETURNING work_item_id
   `;
@@ -1010,17 +1020,56 @@ export async function recordAgentRun(
 // job_failures
 // ---------------------------------------------------------------------------
 
-/** `factory.job_failures`に行を挿入し、そのIDを返す。 */
+const JOB_LINK_COLUMN_PATTERN =
+  /column "root_job_id" of relation "job_failures" does not exist/;
+
+/**
+ * 例外が、`job_failures.root_job_id`の列が無いことによるもの(PostgreSQLのundefined_column)かを返す。
+ * 今の呼び出し元は`recordFailure`だけである。その文が指名する列のうち、新しい列は`root_job_id`だけなので、
+ * エラーコード42703か、列と表の名前を含む文のどちらかで判定する。
+ * windmill-clientは、500以外のAPIのエラーではサーバーの文を`body`に入れる。
+ */
+export function isMissingJobLinkColumnError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  if (Reflect.get(err, "code") === "42703") return true;
+  if (JOB_LINK_COLUMN_PATTERN.test(err.message)) return true;
+  const body: unknown = Reflect.get(err, "body");
+  return typeof body === "string" && JOB_LINK_COLUMN_PATTERN.test(body);
+}
+
+/**
+ * `factory.job_failures`に行を挿入し、そのIDを返す。
+ * ルートジョブIDの列を足すmigrationより先に、この関数を含むコードが反映されると、
+ * 列が無いエラーになる。そのときだけ、新しい列を含まない文で記録し直す。
+ * 失敗の記録が消えると、反映の遅れ自体に気づけないためである。ほかのエラーは投げる。
+ */
 export async function recordFailure(
   record: FailureRecord,
   sql: SqlClient = defaultSqlClient,
+  jobIds: JobIds = jobIdsFromEnv(process.env),
+  log: Logger = logger("db"),
 ): Promise<number> {
   const statement = sql`
-    INSERT INTO factory.job_failures (work_item_id, flow_path, job_id, step, error)
-    VALUES (${record.work_item_id}::bigint, ${record.flow_path}, ${record.job_id}, ${record.step}, ${record.error})
+    INSERT INTO factory.job_failures (work_item_id, flow_path, job_id, step, error, root_job_id)
+    VALUES (${record.work_item_id}::bigint, ${record.flow_path}, ${record.job_id}, ${record.step}, ${record.error}, ${jobIds.root_job_id}::text)
     RETURNING id
   `;
-  const row = await fetchOneRow(statement, "recordFailure");
+  let row: SqlRow;
+  try {
+    row = await fetchOneRow(statement, "recordFailure");
+  } catch (err) {
+    if (!isMissingJobLinkColumnError(err)) throw err;
+    log.warn(
+      "job_failures.root_job_id is missing; recorded the failure without it (the datatable migration has not run yet)",
+      { flow_path: record.flow_path },
+    );
+    const legacy = sql`
+      INSERT INTO factory.job_failures (work_item_id, flow_path, job_id, step, error)
+      VALUES (${record.work_item_id}::bigint, ${record.flow_path}, ${record.job_id}, ${record.step}, ${record.error})
+      RETURNING id
+    `;
+    row = await fetchOneRow(legacy, "recordFailure");
+  }
   return parseId(row.id, "id");
 }
 

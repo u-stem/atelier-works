@@ -456,6 +456,64 @@ check(
 );
 
 // ---------------------------------------------------------------------------
+// 遷移と失敗に結び付けたジョブID
+// ---------------------------------------------------------------------------
+
+const STEP_JOB = "0198a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
+const ROOT_JOB = "0198a1b2-0000-7000-8000-000000000001";
+const jobLinked = await issueWorkItem(920, 1, "implementing", "qdb-job-linked");
+// 状態を移す文は、データを変更するWITHを含み、この`SqlClient`の包みを通せない。
+// 列に書けることと、Consoleの問い合わせが読むことを、行を直に入れて確かめる。
+execPsql(
+  target,
+  `INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note, job_id, root_job_id) VALUES (${String(jobLinked)}, 'implementing', 'failed', 'boom', '${STEP_JOB}', '${ROOT_JOB}'), (${String(jobLinked)}, 'failed', 'needs_human', 'manual', NULL, NULL)`,
+);
+await recordFailure(
+  {
+    work_item_id: jobLinked,
+    flow_path: "f/factory/pipeline",
+    job_id: STEP_JOB,
+    step: "s",
+    error: "boom",
+  },
+  sql,
+  { job_id: STEP_JOB, root_job_id: ROOT_JOB },
+);
+execPsql(
+  target,
+  `INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note, job_id, root_job_id) VALUES (${String(jobLinked)}, 'picked', 'failed', 'forged', '../../admin', 'unknown')`,
+);
+const jobDetail = await runWorkItemDetail(jobLinked, sql);
+const byNote = (note: string) =>
+  jobDetail.transitions.find((row) => row.note === note);
+check(
+  "work_item_detail: a transition returns the job ids recorded with it",
+  byNote("boom")?.job_id === STEP_JOB &&
+    byNote("boom")?.root_job_id === ROOT_JOB,
+  jobDetail.transitions,
+);
+check(
+  "work_item_detail: a transition recorded outside a job has null job ids",
+  jobDetail.transitions.some(
+    (row) =>
+      row.to_status === "needs_human" &&
+      row.job_id === null &&
+      row.root_job_id === null,
+  ),
+  jobDetail.transitions,
+);
+check(
+  "work_item_detail: job ids that are not UUIDs are dropped",
+  byNote("forged")?.job_id === null && byNote("forged")?.root_job_id === null,
+  jobDetail.transitions,
+);
+check(
+  "work_item_detail: a failure returns the root job id",
+  jobDetail.failures[0]?.root_job_id === ROOT_JOB,
+  jobDetail.failures,
+);
+
+// ---------------------------------------------------------------------------
 // モデルの昇格に使う失敗の数
 // ---------------------------------------------------------------------------
 

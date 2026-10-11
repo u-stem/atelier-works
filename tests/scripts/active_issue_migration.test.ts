@@ -147,6 +147,8 @@ describe("the sweep statement checked by scripts/test-db.sh", () => {
     [`${bound("target.issue_number")}::integer`, ":'issue'::integer"],
     [`${bound("target.cycle")}::integer`, ":'cycle'::integer"],
     [`${bound("newWorkItemId")}::bigint`, ":'new_id'::bigint"],
+    [`${bound("jobIds.job_id")}::text`, ":'job_id'::text"],
+    [`${bound("jobIds.root_job_id")}::text`, ":'root_job_id'::text"],
   ];
 
   function normalize(text: string): string {

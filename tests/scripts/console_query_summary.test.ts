@@ -376,13 +376,27 @@ const ROUND_ROW: SqlRow = {
   created_at: T0,
 };
 
+const JOB_ID = "0198a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
+const ROOT_JOB_ID = "0198a1b2-0000-7000-8000-000000000001";
+
 const DETAIL_FAILURE_ROW: SqlRow = {
   job_failure_id: 11,
   flow_path: "f/factory/pipeline",
-  job_id: "job-1",
+  job_id: JOB_ID,
+  root_job_id: ROOT_JOB_ID,
   step: "generate",
   error: "boom",
   occurred_at: T0,
+};
+
+const TRANSITION_ROW: SqlRow = {
+  event_id: 31,
+  from_status: "implementing",
+  to_status: "pr_open",
+  note: "pr opened",
+  occurred_at: T0,
+  job_id: JOB_ID,
+  root_job_id: ROOT_JOB_ID,
 };
 
 const REVIEW_ROW: SqlRow = {
@@ -413,20 +427,22 @@ function detailResponses(): SqlRow[][] {
     [DETAIL_FAILURE_ROW],
     [REVIEW_ROW],
     [FIX_ROUND_ROW],
+    [TRANSITION_ROW],
   ];
 }
 
 describe("runWorkItemDetail queries", () => {
-  test("runs seven queries", async () => {
+  test("runs eight queries", async () => {
     const { sql, calls } = createFakeSqlClient(detailResponses());
     await runWorkItemDetail(7, sql);
-    expect(calls.length).toBe(7);
+    expect(calls.length).toBe(8);
   });
 
   test("binds the work item id to every query", async () => {
     const { sql, calls } = createFakeSqlClient(detailResponses());
     await runWorkItemDetail(7, sql);
     expect(calls.map((call) => call.values.includes(7))).toEqual([
+      true,
       true,
       true,
       true,
@@ -489,6 +505,33 @@ describe("runWorkItemDetail queries", () => {
     const { sql, calls } = createFakeSqlClient(detailResponses());
     await runWorkItemDetail(7, sql);
     expect(calls[6]?.text).not.toMatch(/replies,|replies\s*$/m);
+  });
+
+  test("reads the transitions from the events", async () => {
+    const { sql, calls } = createFakeSqlClient(detailResponses());
+    await runWorkItemDetail(7, sql);
+    expect(calls[7]?.text).toContain("FROM factory.work_item_events e");
+  });
+
+  test("selects the job ids of the transitions", async () => {
+    const { sql, calls } = createFakeSqlClient(detailResponses());
+    await runWorkItemDetail(7, sql);
+    expect(calls[7]?.text).toContain("e.job_id, e.root_job_id");
+  });
+
+  test("lists the newest transitions first", async () => {
+    const { sql, calls } = createFakeSqlClient(detailResponses());
+    await runWorkItemDetail(7, sql);
+    expect(calls[7]?.text).toContain("ORDER BY e.occurred_at DESC, e.id DESC");
+  });
+
+  test("limits the transitions to one hundred", async () => {
+    const { sql, calls } = createFakeSqlClient(detailResponses());
+    await runWorkItemDetail(7, sql);
+    expect([calls[7]?.text.includes("LIMIT"), calls[7]?.values]).toEqual([
+      true,
+      [500, 7, 100],
+    ]);
   });
 
   test("sums the cost of the agent runs", async () => {
@@ -608,12 +651,64 @@ describe("runWorkItemDetail result", () => {
       {
         job_failure_id: 11,
         flow_path: "f/factory/pipeline",
-        job_id: "job-1",
+        job_id: JOB_ID,
+        root_job_id: ROOT_JOB_ID,
         step: "generate",
         error: "boom",
         occurred_at: T0,
       },
     ]);
+  });
+
+  test("parses a transition with its job ids", async () => {
+    const { sql } = createFakeSqlClient(detailResponses());
+    const detail = await runWorkItemDetail(7, sql);
+    expect(detail.transitions).toEqual([
+      {
+        event_id: 31,
+        from_status: "implementing",
+        to_status: "pr_open",
+        note: "pr opened",
+        occurred_at: T0,
+        job_id: JOB_ID,
+        root_job_id: ROOT_JOB_ID,
+      },
+    ]);
+  });
+
+  test("returns null job ids for a transition recorded outside a job", async () => {
+    const responses = detailResponses();
+    responses[7] = [{ ...TRANSITION_ROW, job_id: null, root_job_id: null }];
+    const { sql } = createFakeSqlClient(responses);
+    const detail = await runWorkItemDetail(7, sql);
+    expect([
+      detail.transitions[0]?.job_id,
+      detail.transitions[0]?.root_job_id,
+    ]).toEqual([null, null]);
+  });
+
+  test("drops a transition job id that is not a UUID", async () => {
+    const responses = detailResponses();
+    responses[7] = [{ ...TRANSITION_ROW, job_id: "../../admin" }];
+    const { sql } = createFakeSqlClient(responses);
+    const detail = await runWorkItemDetail(7, sql);
+    expect(detail.transitions[0]?.job_id).toBeNull();
+  });
+
+  test("returns a null failure job id for the placeholder unknown", async () => {
+    const responses = detailResponses();
+    responses[4] = [{ ...DETAIL_FAILURE_ROW, job_id: "unknown" }];
+    const { sql } = createFakeSqlClient(responses);
+    const detail = await runWorkItemDetail(7, sql);
+    expect(detail.failures[0]?.job_id).toBeNull();
+  });
+
+  test("drops a failure root job id that is not a UUID", async () => {
+    const responses = detailResponses();
+    responses[4] = [{ ...DETAIL_FAILURE_ROW, root_job_id: "unknown" }];
+    const { sql } = createFakeSqlClient(responses);
+    const detail = await runWorkItemDetail(7, sql);
+    expect(detail.failures[0]?.root_job_id).toBeNull();
   });
 
   test("parses a review as counts and identifiers only", async () => {
