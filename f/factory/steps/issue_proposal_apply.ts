@@ -50,9 +50,12 @@ import {
 /**
  * Issueを作る処理の印の有効期間(秒)。
  * 印を取った呼び出しが途中で止まったときに、やり直しが塞がれる最長の時間になる。
- * 検索の索引の反映の遅れと、GitHubの応答の遅れを、十分に覆う長さにする。
+ * 最悪の経路は、マーカーの検索(約380秒)の後にIssueの作成(約250秒)が続く約630秒である。
+ * これを覆い、余裕を持たせて900秒(15分)にする。
+ * Consoleの画面がやり直しを止める時間(`REDO_COOLDOWN_MS`)も、同じ長さにそろえる。
+ * 印に持ち主の識別子は無いので、期限を超えた処理と、取り直した処理が重なる可能性は、理論上残る。
  */
-export const ISSUE_CREATION_LEASE_SECONDS = 600;
+export const ISSUE_CREATION_LEASE_SECONDS = 900;
 
 export type IssueProposalApplyResult = {
   readonly ok: boolean;
@@ -375,6 +378,7 @@ async function run(
         // この時点ではIssueの番号が分からない。
         // このままだと行は`created_issue_number`がnullの"approved"で止まり、人から見えなくなる。
         // "pending"に戻し、再試行できるようConsoleのInboxに再び出す。
+        // 印は残す。Issueが作られていた場合に、期限が切れるまで次の承認が何もせず終わる。
         await revertIssueProposalToPending(proposal_id);
         throw new Error(
           `issue_proposal_apply: Issueの起票に失敗しました: ${maskSecrets(err instanceof Error ? err.message : String(err))}。Consoleの承認タブから再度承認してください`,

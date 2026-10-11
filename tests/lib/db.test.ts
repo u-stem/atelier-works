@@ -1960,10 +1960,10 @@ describe("revertIssueProposalToPending", () => {
     expect(reverted).toBe(true);
   });
 
-  test("lets go of the claim on the Issue creation", async () => {
+  test("keeps the claim on the Issue creation until it expires", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 3 }]]);
     await revertIssueProposalToPending(3, sql);
-    expect(calls[0]?.text).toContain("issue_creation_claimed_at = NULL");
+    expect(calls[0]?.text).not.toContain("issue_creation_claimed_at");
   });
 
   test("guards the update with status = 'approved' AND created_issue_number IS NULL", async () => {

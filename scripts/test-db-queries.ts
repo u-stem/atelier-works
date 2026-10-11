@@ -1473,11 +1473,11 @@ check(
   (await claimIssueCreation(claimId, 600, sql)) === true,
 );
 check(
-  "revertIssueProposalToPending: lets go of the claim",
+  "revertIssueProposalToPending: keeps the claim until it expires",
   (await revertIssueProposalToPending(claimId, sql)) === true &&
     (
       await sql`SELECT issue_creation_claimed_at FROM factory.issue_proposals WHERE id = ${claimId}::bigint`.fetch()
-    )[0]?.issue_creation_claimed_at === null,
+    )[0]?.issue_creation_claimed_at !== null,
 );
 execPsql(
   target,

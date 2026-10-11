@@ -29,7 +29,7 @@ describe("redoCooldownRemaining", () => {
 describe("redoCooldownMessage", () => {
   test("says that the creation takes minutes and how long to wait", () => {
     expect(redoCooldownMessage(REDO_COOLDOWN_MS)).toBe(
-      "起票に数分かかります。あと約10分は押せません。",
+      "起票に数分かかります。あと約15分は押せません。",
     );
   });
 

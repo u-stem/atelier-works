@@ -1903,6 +1903,10 @@ export async function claimIssueCreation(
  * 古い判断を持ったままの`pending`ではなく、`insertIssueProposal`が作る
  * 新しい保留中の提案と同じ見た目にする。
  *
+ * Issueを作る処理の印(`issue_creation_claimed_at`)は残す。
+ * 例外で終わった呼び出しの中で、Issueが作られていることがありうる(応答の取りこぼしなど)。
+ * 印が期限で切れるまで、次の承認が何もせずに終わるようにして、GitHubの検索の索引の遅れを覆う。
+ *
  * この呼び出しで実際に戻したら`true`を返す。一致する行が無ければ`false`を返す
  * (並行する再試行がすでに戻した、その間にIssueが作られたなど)。
  */
@@ -1916,8 +1920,7 @@ export async function revertIssueProposalToPending(
         decided_by = NULL,
         decision_reason = NULL,
         with_factory_label = NULL,
-        decided_at = NULL,
-        issue_creation_claimed_at = NULL
+        decided_at = NULL
     WHERE id = ${id} AND status = 'approved' AND created_issue_number IS NULL
     RETURNING id
   `.fetch();

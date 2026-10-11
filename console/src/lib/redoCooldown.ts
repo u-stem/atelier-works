@@ -3,8 +3,11 @@
 // サーバーも同時の処理を1つに絞るが、画面でも早い押し直しを止める。
 // 時刻はこのタブのメモリにだけ持つ。別のタブや別の端末、リロードの後は止められない。
 
-/** やり直しの後にボタンを止める時間(ミリ秒)。 */
-export const REDO_COOLDOWN_MS = 10 * 60 * 1000;
+/**
+ * やり直しの後にボタンを止める時間(ミリ秒)。
+ * サーバーのIssue作成の印の有効期間(`ISSUE_CREATION_LEASE_SECONDS`、900秒)と同じ長さにする。
+ */
+export const REDO_COOLDOWN_MS = 15 * 60 * 1000;
 
 /** 止めている時間の残り(ミリ秒)。やり直していないか、時間が過ぎていれば0。 */
 export function redoCooldownRemaining(
