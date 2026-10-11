@@ -943,6 +943,7 @@ noticeには、Discordに送らない事項と、Discordに届かなくても残
 | `console_worker_check_failed` | Console用のworkerがジョブを受けているかを、自己更新が1時間(6回)続けて確かめられなかった。workerが止まっていても気づけない状態である | 自己更新のジョブログで、下の4種類の警告のどれが出ているかを確かめて原因を直す。`could not confirm the console worker from the job lists`が続くなら、`console_fetch_watch`のスケジュールが有効か、直近の実行がtag `console`で動いているかを確かめる。Discordにも届く |
 | `schedule_failing` | 同じスケジュールの直近3回の実行が続けて失敗した。数えるのはスケジュールの実行そのものの失敗で、成功した実行の中で記録する部分的な失敗は含まない。ジョブの上限(`timeout`)で打ち切られた回も失敗に数える想定だが、実機では未確認である。GitHubのPATの失効などが原因になる | ジョブのログで失敗の内容を確かめて原因を直す。PATは[秘密をローテーションする](#秘密をローテーションする)で再発行する |
 | `schedule_failing_check_failed` | スケジュールが続けて失敗しているかを、ジョブ履歴から判定できなかった。失敗が続いても気づけない状態である | `on_error_schedule`のジョブのログで`failed to read the schedule history`のエラーを確かめ、ジョブ履歴を読む権限があるかを確かめる |
+| `drawio_viewer_bump_held` | draw.ioのビューアの固定を、自動では上げなかった。原因は3つある。ビューアの大きさが2割を超えて変わった。取得したファイルがGitHubの記録と一致しない。PRの無い既存のブランチの中身が作るはずの内容と違う。本文に版と理由が載る。上げる版に選んだ最新の版を保留している間は、古い版も上げない。メジャー版の更新は、このお知らせではなく、題名が[major]で始まるPRになる | 本文の「次の操作」に従う。大きさの変化が正当なら、Windmillで`f/factory/drawio_viewer_bump`を`approved_version`にその版を指定して実行する。既存のブランチが原因なら、ブランチを確かめ、不要なら削除する。原因が続けば、解決しても次の週に出直す([draw.ioのビューアの更新](internals/console.md#ビューアの更新)) |
 
 ### Console用のworkerの検知を確かめる
 

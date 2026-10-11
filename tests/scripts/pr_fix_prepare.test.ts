@@ -11,6 +11,7 @@ import {
   earlyExitBase,
   evaluateBranchImplementingGuard,
   evaluateFixRoundGuard,
+  evaluateHumanOnlyBranchGuard,
   evaluateParentImplementingGuard,
   evaluatePrFixSafetyGuards,
   evaluateRepoAllowedGuard,
@@ -74,6 +75,29 @@ describe("evaluatePrFixSafetyGuards", () => {
       draft: true,
     });
     expect(!result.ok && result.reason).toContain("open");
+  });
+});
+
+describe("evaluateHumanOnlyBranchGuard", () => {
+  test("passes for an ordinary branch", () => {
+    expect(evaluateHumanOnlyBranchGuard("feature/x")).toEqual({ ok: true });
+  });
+
+  test("blocks a draw.io viewer pin update branch", () => {
+    expect(
+      evaluateHumanOnlyBranchGuard("factory/drawio-viewer-32.5.0").ok,
+    ).toBe(false);
+  });
+
+  test("explains that a person fixes it", () => {
+    const result = evaluateHumanOnlyBranchGuard("factory/drawio-viewer-32.5.0");
+    expect(!result.ok && result.reason).toContain("person only");
+  });
+
+  test("does not block an implementation branch", () => {
+    expect(evaluateHumanOnlyBranchGuard("factory/issue-7-wi-3")).toEqual({
+      ok: true,
+    });
   });
 });
 

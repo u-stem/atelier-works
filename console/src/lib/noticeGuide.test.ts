@@ -8,6 +8,12 @@ describe("noticeGuide", () => {
     );
   });
 
+  test("tells how to approve a held draw.io viewer bump", () => {
+    expect(noticeGuide("drawio_viewer_bump_held").action).toContain(
+      "approved_version",
+    );
+  });
+
   test("falls back to the generic guide for an unknown kind", () => {
     expect(noticeGuide("future_kind")).toBe(GENERIC_NOTICE_GUIDE);
   });

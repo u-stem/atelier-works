@@ -38,6 +38,12 @@ PRに投稿するのは、PRレビューの指摘と総評、PR修正の返信�
 
 トリガーのラベルは、着手(claim)したときに消費して外す。レビューの依頼とassigneeの経路には、消費するラベルが無い。ラベル名は`factory_config`の`review_label`と`fix_label`で決める。
 
+ブランチ名が`factory/drawio-viewer-`で始まるPR(draw.ioのビューアの固定を上げるPR)には、`factory:fix`ラベルが付いていてもPR修正を始めない。
+`decidePrActions`が`headRef`で判定し、ラベルは消費せずに残す。ラベルは外れず、修正は人が行う。
+判定はブランチ名だけで行うので、`factory_repo`に限らず、担当するすべてのリポジトリに効く。
+`pr_fix_prepare`も同じ判定(`evaluateHumanOnlyBranchGuard`)で止め、作業項目をblockedにする。
+修正を許すと、固定のファイル以外も書き換えたcommitを、人が気づかずにマージするおそれがある。このPRは人が直す。レビューは動く。
+
 PR修正はラベルからしか起動しない。コメントやcommitのpushだけでは起動しない。次のラウンドを始めるには、PRに`factory:fix`ラベルを付け直す。PRレビューが終わった(`reviewed`)PRにも付けられる。
 
 修正への指示は、ラベルを付ける前に、PRへ通常のコメントとして書く。`pr_fix_collect`が、ほかの人のコメントと同じくフィードバックとして集める。
@@ -570,10 +576,11 @@ PR修正のClaudeに渡すツールは`Read,Glob,Grep,Edit,Write`だけで、`Ba
 `console/public/`と`console/index.html`は、Consoleでバンドルを通らずにそのまま配信され、ページの中で動く。
 `console/index.html`はファイル名だけではほかの`index.html`と区別できないので、パスで判定する。
 個別のファイルの一覧は、`FORBIDDEN_EXACT_PATHS`にある。
-一覧には、次の6種類が入る。
+一覧には、次の7種類が入る。
 
 - Consoleのページの入口: `console/index.html`
 - draw.ioのビューアの固定: `console/drawio-viewer.json`
+- 固定を書き換えるPRを作る側: `f/factory/drawio_viewer_bump*`と、それが使う`f/factory/lib/`の3ファイル
 - 固定を強制し、配信物を作って検査する側: `console/scripts/`の一部、`console/vite.config.ts`、`scripts/check-console-lockfile.ts`
 - 配信の設定: `infra/Caddyfile`
 - 図を隔離して描くiframeの検査: `tests/lib/drawio_frame_isolation.test.ts`
@@ -581,6 +588,7 @@ PR修正のClaudeに渡すツールは`Read,Glob,Grep,Edit,Write`だけで、`Ba
 
 `console/drawio-viewer.json`は、CIが取得して配信するビューアの取得元とsha256を固定する。
 書き換えられると、別のスクリプトが固定の値として配信される。
+固定を書き換えるPRを作る側は、書き換えられると、人の確認なしに別の版や取得元を固定するPRを作れる。
 固定を強制する側のスクリプトは、書き換えられると、検査をすり抜けた内容が配信物に混ざる。
 `scripts/ci-scope.ts`は、書き換えられると、検査のジョブを黙って飛ばせる。
 `infra/Caddyfile`には、Consoleのscriptの許可と、draw.ioの図を隔離するCSPがある。

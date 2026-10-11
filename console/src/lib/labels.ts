@@ -65,6 +65,7 @@ const NOTICE_KIND_LABELS: ReadonlyMap<string, string> = new Map([
   ["console_worker_check_failed", "Console専用workerの確認の失敗"],
   ["schedule_failing", "定期実行の失敗"],
   ["schedule_failing_check_failed", "定期実行の確認の失敗"],
+  ["drawio_viewer_bump_held", "draw.ioのビューアの更新の保留"],
 ]);
 
 /** 作業項目の状態の日本語。表に無い状態は`UNKNOWN_STATUS_LABEL`にする。 */

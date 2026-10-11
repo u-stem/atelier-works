@@ -25,6 +25,7 @@ function candidate(overrides: Partial<PrCandidate> = {}): PrCandidate {
     labels: [],
     authorLogin: "octo-owner",
     headInBaseRepo: true,
+    headRef: "feature",
     reviewLabelerLogin: null,
     fixLabelerLogin: null,
     hasActiveReviewingItem: false,
@@ -34,6 +35,78 @@ function candidate(overrides: Partial<PrCandidate> = {}): PrCandidate {
     ...overrides,
   };
 }
+
+describe("decidePrActions — draw.io viewer pin update branches", () => {
+  const bumpBranch = "factory/drawio-viewer-32.5.0";
+
+  test("does not start a fix for a viewer pin update branch", () => {
+    const [decision] = decidePrActions(
+      [
+        candidate({
+          headRef: bumpBranch,
+          labels: [FIX_LABEL],
+          fixLabelerLogin: "octo-owner",
+        }),
+      ],
+      REVIEW_LABEL,
+      FIX_LABEL,
+      POLICY,
+    );
+    expect(decision?.fix).toEqual({ kind: "none" });
+  });
+
+  test("still starts a fix for another branch", () => {
+    const [decision] = decidePrActions(
+      [
+        candidate({
+          headRef: "feature",
+          labels: [FIX_LABEL],
+          fixLabelerLogin: "octo-owner",
+        }),
+      ],
+      REVIEW_LABEL,
+      FIX_LABEL,
+      POLICY,
+    );
+    expect(decision?.fix).toEqual({ kind: "trigger_fix", removeLabel: true });
+  });
+
+  test("still reviews a viewer pin update branch", () => {
+    const [decision] = decidePrActions(
+      [
+        candidate({
+          headRef: bumpBranch,
+          labels: [REVIEW_LABEL],
+          reviewLabelerLogin: "octo-owner",
+        }),
+      ],
+      REVIEW_LABEL,
+      FIX_LABEL,
+      POLICY,
+    );
+    expect(decision?.review).toEqual({
+      kind: "trigger_review",
+      reason: "label",
+      removeLabel: true,
+    });
+  });
+
+  test("keeps denying a fix label from someone who is not allowed", () => {
+    const [decision] = decidePrActions(
+      [
+        candidate({
+          headRef: bumpBranch,
+          labels: [FIX_LABEL],
+          fixLabelerLogin: "mallory",
+        }),
+      ],
+      REVIEW_LABEL,
+      FIX_LABEL,
+      POLICY,
+    );
+    expect(decision?.fix).toEqual({ kind: "deny_labeler" });
+  });
+});
 
 describe("decidePrActions — review", () => {
   test("triggers a label-based review and asks to remove the label", () => {

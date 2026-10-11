@@ -31,6 +31,7 @@ import {
   setIssueProposalCreatedIssue,
   updateIntakeIfRegenerating,
 } from "../f/factory/lib/db.ts";
+import { recordViewerObservation } from "../f/factory/lib/drawio_viewer_observations.ts";
 import { getCleanupSummary } from "../f/factory/lib/summary_support.ts";
 import type { WorkItemStatus } from "../f/factory/lib/types.ts";
 import {
@@ -1495,6 +1496,36 @@ check(
   "claimIssueCreation: a row whose Issue is created cannot be claimed",
   (await claimIssueCreation(claimId, 600, sql)) === false,
 );
+
+// draw.ioのビューアの観測: 同じcommitでは最初に見た時刻を保ち、別のcommitに付け替えられたら取り直す。
+const VIEWER_COMMIT_A = "a".repeat(40);
+const VIEWER_COMMIT_B = "b".repeat(40);
+await recordViewerObservation("v0.0.1", VIEWER_COMMIT_A, sql);
+execPsql(
+  target,
+  "UPDATE factory.drawio_viewer_observations SET first_seen_at = now() - interval '20 days' WHERE tag = 'v0.0.1'",
+);
+const viewerSeenAgain = await recordViewerObservation(
+  "v0.0.1",
+  VIEWER_COMMIT_A,
+  sql,
+);
+check(
+  "drawio_viewer_observations: the same commit keeps the first-seen time",
+  Date.now() - viewerSeenAgain.getTime() > 19 * 24 * 60 * 60 * 1000,
+  viewerSeenAgain,
+);
+const viewerSeenMoved = await recordViewerObservation(
+  "v0.0.1",
+  VIEWER_COMMIT_B,
+  sql,
+);
+check(
+  "drawio_viewer_observations: a moved tag restarts the clock",
+  Date.now() - viewerSeenMoved.getTime() < 60 * 60 * 1000,
+  viewerSeenMoved,
+);
+execPsql(target, "DELETE FROM factory.drawio_viewer_observations");
 
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。
 // 子の表の行は`ON DELETE CASCADE`で一緒に消える。

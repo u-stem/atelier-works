@@ -38,7 +38,7 @@ import {
 } from "./workspace.ts";
 
 /** エンドポイントやURLを組み立てる前に、`owner/repo`の両方を検証する。 */
-function validateOwnerRepo(owner: string, repo: string): void {
+export function validateOwnerRepo(owner: string, repo: string): void {
   assertGitHubName(owner);
   assertGitHubName(repo);
 }
@@ -395,7 +395,7 @@ async function sendGhApi(
  * レート制限以外のHTTPのエラーのステータスでは例外を投げない。
  * 呼び出し側が`response.status`を確かめる(`ensureSuccess`を参照)。
  */
-async function callGhApi(
+export async function callGhApi(
   client: GhClient,
   endpoint: string,
   options: GhApiCallOptions = {},
@@ -434,7 +434,7 @@ export class GitHubHttpError extends Error {
   }
 }
 
-function ensureSuccess(response: GhApiResponse, context: string): void {
+export function ensureSuccess(response: GhApiResponse, context: string): void {
   if (response.status >= 200 && response.status < 300) return;
   throw new GitHubHttpError(
     maskSecrets(
@@ -444,7 +444,10 @@ function ensureSuccess(response: GhApiResponse, context: string): void {
   );
 }
 
-function parseJsonBody(response: GhApiResponse, context: string): unknown {
+export function parseJsonBody(
+  response: GhApiResponse,
+  context: string,
+): unknown {
   try {
     return JSON.parse(response.bodyText);
   } catch (err) {
@@ -490,7 +493,7 @@ export class GitHubPaginationLimitError extends Error {
  * (timeline・comments・reviewsは裸のJSON配列、`/search/issues`は
  * `{ items: [...] }`で包まれている)。
  */
-async function paginateGhApi<T>(
+export async function paginateGhApi<T>(
   client: GhClient,
   endpoint: string,
   extractPage: (parsed: unknown, context: string) => readonly T[],
