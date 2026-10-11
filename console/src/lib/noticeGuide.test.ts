@@ -38,6 +38,24 @@ describe("noticeGuide", () => {
     expect(noticeGuide("host_action_required").note).toContain("人が解決");
   });
 
+  test("says a host notice also comes when the image is too old to run the checks", () => {
+    expect(noticeGuide("host_action_required").meaning).toContain(
+      "検査コマンドを実行できない",
+    );
+  });
+
+  test("tells to rerun the work items the stale image stopped", () => {
+    expect(noticeGuide("host_action_required").action).toContain(
+      "f/factory/retry_work_item",
+    );
+  });
+
+  test("tells that a host notice without a version is not resolved automatically", () => {
+    expect(noticeGuide("host_action_required").note).toContain(
+      "版が載らない通知",
+    );
+  });
+
   test("tells how to rerun a work item stopped for a person", () => {
     expect(noticeGuide("implement_needs_human").action).toContain(
       "f/factory/retry_work_item",
