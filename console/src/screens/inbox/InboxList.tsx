@@ -5,6 +5,7 @@ import { cn } from "../../lib/cn.ts";
 import type { InboxSelection } from "../../lib/inboxSelection.ts";
 import {
   describeRow,
+  hasSingleKind,
   type InboxItem,
   selectionOf,
 } from "../../lib/inboxView.ts";
@@ -29,6 +30,8 @@ export function InboxList({
   onSelect: (selection: InboxSelection) => void;
 }) {
   const listRef = useRef<HTMLUListElement>(null);
+  // 1種類だけの一覧では、どの行にも同じ種別が付いて情報にならないので省く。
+  const showKind = !hasSingleKind(items);
 
   const handleKeyDown = (event: KeyboardEvent<HTMLUListElement>): void => {
     const rows = Array.from(listRef.current?.querySelectorAll("button") ?? []);
@@ -49,7 +52,7 @@ export function InboxList({
       onKeyDown={handleKeyDown}
     >
       {items.map((item) => {
-        const row = describeRow(item, now);
+        const row = describeRow(item, now, showKind);
         const itemSelection = selectionOf(item);
         const isSelected =
           selected !== null &&
@@ -79,11 +82,13 @@ export function InboxList({
                 </span>
               </span>
               <span className="mt-1 flex h-6 items-center gap-2.5 overflow-hidden text-small whitespace-nowrap text-subtle">
-                <span className="shrink-0 font-medium text-muted-foreground">
-                  {row.kindLabel}
-                </span>
+                {row.kindLabel === null ? null : (
+                  <span className="shrink-0 font-medium text-muted-foreground">
+                    {row.kindLabel}
+                  </span>
+                )}
                 {row.subLabel === null ? null : (
-                  <span className="shrink-0">{row.subLabel}</span>
+                  <span className="min-w-0 truncate">{row.subLabel}</span>
                 )}
                 {row.expiry === null ? null : (
                   <span

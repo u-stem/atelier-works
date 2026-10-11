@@ -23,7 +23,11 @@ import {
   workItemRef,
   workItemStatusLabel,
 } from "./labels.ts";
-import { describeNotice } from "./noticeView.ts";
+import {
+  describeNotice,
+  type NoticeDescription,
+  shortSha,
+} from "./noticeView.ts";
 import { formatRemainingTime } from "./relativeTime.ts";
 import { safeGitHubUrl } from "./safeUrl.ts";
 
@@ -308,15 +312,51 @@ export type RowDescription = {
   /** 一覧の行の識別子。`type:id`の形。 */
   readonly key: string;
   readonly title: string;
-  readonly kindLabel: string;
+  /** 種別の語。種別を省くとき(`showKind`が偽)は`null`。ただし情報の通知は「情報」を残す。 */
+  readonly kindLabel: string | null;
   readonly statusLabel: string | null;
   readonly subLabel: string | null;
   readonly iso: string;
   readonly expiry: ExpiryDescription | null;
 };
 
-/** 一覧の1行に出す内容。期限は`nowMs`からの残りで決める。種類ごとの違いはここに閉じ込め、行の部品は種類を知らずに描く。 */
-export function describeRow(item: InboxItem, nowMs: number): RowDescription {
+/** 一覧の項目がすべて同じ種類か。空の一覧は、種類が無いので偽にする。 */
+export function hasSingleKind(items: readonly InboxItem[]): boolean {
+  return items.length > 0 && new Set(items.map((item) => item.type)).size === 1;
+}
+
+/**
+ * 通知の行の副題。同じ題名の通知を見分ける値として、本文の最初の版と最初の対象を並べる。
+ * どちらも本文に無いときは`null`にする。
+ */
+function noticeSubLabel(description: NoticeDescription): string | null {
+  const sha = description.shas[0];
+  const parts = [
+    ...(sha === undefined ? [] : [`版 ${shortSha(sha)}`]),
+    ...(description.targets[0] === undefined
+      ? []
+      : [description.targets[0].label]),
+  ];
+  return parts.length === 0 ? null : parts.join("・");
+}
+
+/** 通知の行の種別の語。種別を省いても、情報の通知は要対応と区別できるよう「情報」を残す。 */
+function noticeKindMark(info: boolean, showKind: boolean): string | null {
+  if (showKind) {
+    return info ? "通知(情報)" : "通知";
+  }
+  return info ? "情報" : null;
+}
+
+/**
+ * 一覧の1行に出す内容。期限は`nowMs`からの残りで決める。種類ごとの違いはここに閉じ込め、行の部品は種類を知らずに描く。
+ * `showKind`が偽のとき、種別の語を省く。一覧が1種類だけで、種別が情報にならないときに使う。
+ */
+export function describeRow(
+  item: InboxItem,
+  nowMs: number,
+  showKind = true,
+): RowDescription {
   const key = `${item.type}:${itemId(item)}`;
   switch (item.type) {
     case "approval": {
@@ -324,7 +364,7 @@ export function describeRow(item: InboxItem, nowMs: number): RowDescription {
       return {
         key,
         title: description.title,
-        kindLabel: description.kindLabel,
+        kindLabel: showKind ? description.kindLabel : null,
         statusLabel: description.statusLabel,
         subLabel: description.workItemLabel,
         iso: item.approval.requested_at,
@@ -337,7 +377,7 @@ export function describeRow(item: InboxItem, nowMs: number): RowDescription {
         title: displayableIssueText(
           item.failure.title ?? workItemRef(item.failure.work_item_id),
         ).text,
-        kindLabel: "失敗",
+        kindLabel: showKind ? "失敗" : null,
         statusLabel: workItemStatusLabel(item.failure.status),
         subLabel: `${workItemKindLabel(item.failure.kind)}・${workItemRef(item.failure.work_item_id)}`,
         iso: item.failure.updated_at,
@@ -345,12 +385,13 @@ export function describeRow(item: InboxItem, nowMs: number): RowDescription {
       };
     case "notice": {
       const description = describeNotice(item.notice);
+      const info = description.severity === "info";
       return {
         key,
         title: description.title,
-        kindLabel: description.severity === "info" ? "通知(情報)" : "通知",
+        kindLabel: noticeKindMark(info, showKind),
         statusLabel: description.resolved ? "解決済み" : null,
-        subLabel: description.targets[0]?.label ?? null,
+        subLabel: noticeSubLabel(description),
         iso: item.notice.created_at,
         expiry: null,
       };
@@ -385,6 +426,17 @@ export function unlistedNote(entry: UnlistedCount): string {
     case "failure":
       return "取得の上限を超えた分は、更新の古いものから表示されません";
   }
+}
+
+/** システムの画面のパス。ルーターのbasenameは含まない。 */
+const SYSTEM_PATH = "/system";
+
+/**
+ * 一覧に出ていない件数から、続きを見る画面のパス。
+ * 失敗と通知はシステムの画面で読める。承認はシステムの画面に無いので`null`にする。
+ */
+export function unlistedPath(entry: UnlistedCount): string | null {
+  return entry.type === "approval" ? null : SYSTEM_PATH;
 }
 
 /**

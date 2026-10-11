@@ -17,6 +17,7 @@ import {
   emptyStateTone,
   filterInboxItems,
   findInboxItem,
+  hasSingleKind,
   type InboxItem,
   inboxSubtitle,
   itemId,
@@ -26,8 +27,12 @@ import {
   sortInboxItems,
   unlistedCounts,
   unlistedNote,
+  unlistedPath,
   visibleChips,
 } from "./inboxView.ts";
+
+const SHA_A = "0123456789abcdef0123456789abcdef01234567";
+const SHA_B = "fedcba9876543210fedcba9876543210fedcba98";
 
 function approval(overrides: Partial<SummaryApproval> = {}): SummaryApproval {
   return {
@@ -490,6 +495,99 @@ describe("describeRow for a notice", () => {
         NOW,
       ).subLabel,
     ).toBe("o/r#12");
+  });
+
+  test("names the first version of the body in the sub label", () => {
+    expect(
+      describeRow(
+        { type: "notice", notice: notice({ message: `deployed(${SHA_A})` }) },
+        NOW,
+      ).subLabel,
+    ).toBe("版 0123456");
+  });
+
+  test("joins the version and the first target in the sub label", () => {
+    expect(
+      describeRow(
+        {
+          type: "notice",
+          notice: notice({ message: `${SHA_A} for o/r#12 and p/q#3` }),
+        },
+        NOW,
+      ).subLabel,
+    ).toBe("版 0123456・o/r#12");
+  });
+
+  test("tells two notices of one kind apart by their versions", () => {
+    const labels = [SHA_A, SHA_B].map(
+      (sha) =>
+        describeRow(
+          { type: "notice", notice: notice({ message: `deployed(${sha})` }) },
+          NOW,
+        ).subLabel,
+    );
+    expect(new Set(labels).size).toBe(2);
+  });
+});
+
+describe("describeRow without the kind", () => {
+  test("drops the kind label of an action notice", () => {
+    expect(describeRow(N21, NOW, false).kindLabel).toBeNull();
+  });
+
+  test("keeps the information mark of an info notice", () => {
+    expect(
+      describeRow(
+        { type: "notice", notice: notice({ severity: "info" }) },
+        NOW,
+        false,
+      ).kindLabel,
+    ).toBe("情報");
+  });
+
+  test("drops the kind label of a failure", () => {
+    expect(describeRow(F7, NOW, false).kindLabel).toBeNull();
+  });
+});
+
+describe("hasSingleKind", () => {
+  test("is true when every item has the same type", () => {
+    expect(hasSingleKind([N21, { type: "notice", notice: notice() }])).toBe(
+      true,
+    );
+  });
+
+  test("is false when the types differ", () => {
+    expect(hasSingleKind([A1, N21])).toBe(false);
+  });
+
+  test("is false for an empty list", () => {
+    expect(hasSingleKind([])).toBe(false);
+  });
+});
+
+describe("unlistedPath", () => {
+  test("points an audit failure to the system screen", () => {
+    expect(
+      unlistedPath({
+        type: "failure",
+        label: "監査の失敗",
+        count: 3,
+        cause: "audit",
+      }),
+    ).toBe("/system");
+  });
+
+  test("points the notices over the limit to the system screen", () => {
+    expect(unlistedPath({ type: "notice", label: "通知", count: 2 })).toBe(
+      "/system",
+    );
+  });
+
+  test("has no destination for approvals over the limit", () => {
+    expect(
+      unlistedPath({ type: "approval", label: "承認", count: 2 }),
+    ).toBeNull();
   });
 });
 

@@ -17,6 +17,7 @@ import {
   describeNoticeResult,
   STALE_LIST_NOTICE,
 } from "../../lib/writeNotices.ts";
+import { NoticeMessageText } from "./NoticeMessageText.tsx";
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -90,11 +91,10 @@ export function NoticeDetail({
     <article className="flex max-w-[47.5rem] flex-col gap-6 p-8">
       <header className="flex flex-col gap-3">
         <div className="flex flex-wrap items-center gap-2">
-          <Badge variant="notice">通知</Badge>
           <Badge
             variant={description.severity === "info" ? "outline" : "warning"}
           >
-            {description.severityLabel}
+            {description.badgeLabel}
           </Badge>
           {description.resolved ? (
             <Badge variant="success">解決済み</Badge>
@@ -115,7 +115,7 @@ export function NoticeDetail({
             dir="ltr"
             className="text-body break-words whitespace-pre-wrap text-foreground [unicode-bidi:isolate]"
           >
-            {description.message}
+            <NoticeMessageText parts={description.messageParts} />
           </p>
           {description.messageTruncated ? (
             <p className="mt-2 text-small text-muted-foreground">

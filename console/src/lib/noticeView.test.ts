@@ -6,7 +6,12 @@ import {
   noticeSeverityLabel,
   noticeTargets,
   SUMMARY_MESSAGE_LIMIT,
+  shortSha,
+  splitNoticeMessage,
 } from "./noticeView.ts";
+
+const FULL_SHA = "0123456789abcdef0123456789abcdef01234567";
+const OTHER_SHA = "fedcba9876543210fedcba9876543210fedcba98";
 
 function notice(overrides: Partial<SummaryNotice> = {}): SummaryNotice {
   return {
@@ -213,5 +218,67 @@ describe("describeNotice for a cut body", () => {
         (target) => target.label,
       ),
     ).toEqual(["o/r#12"]);
+  });
+});
+
+describe("shortSha", () => {
+  test("keeps the first seven characters", () => {
+    expect(shortSha(FULL_SHA)).toBe("0123456");
+  });
+});
+
+describe("splitNoticeMessage", () => {
+  test("leaves a body without a version as one text part", () => {
+    expect(splitNoticeMessage("disk full")).toEqual([{ text: "disk full" }]);
+  });
+
+  test("shortens a full version and keeps the full one", () => {
+    expect(splitNoticeMessage(`deployed(${FULL_SHA}) is behind`)).toEqual([
+      { text: "deployed(" },
+      { text: "0123456", sha: FULL_SHA },
+      { text: ") is behind" },
+    ]);
+  });
+
+  test("does not shorten a hex run longer than a version", () => {
+    expect(splitNoticeMessage(`${FULL_SHA}0`)).toEqual([
+      { text: `${FULL_SHA}0` },
+    ]);
+  });
+
+  test("does not shorten a hex run shorter than a version", () => {
+    expect(splitNoticeMessage("abcdef0")).toEqual([{ text: "abcdef0" }]);
+  });
+});
+
+describe("describeNotice versions", () => {
+  test("lists each version once, in order of appearance", () => {
+    const message = `${OTHER_SHA} then ${FULL_SHA} ${OTHER_SHA}`;
+    expect(describeNotice(notice({ message })).shas).toEqual([
+      OTHER_SHA,
+      FULL_SHA,
+    ]);
+  });
+
+  test("has no version for an ordinary body", () => {
+    expect(describeNotice(notice()).shas).toEqual([]);
+  });
+
+  test("splits the displayed body into parts", () => {
+    expect(
+      describeNotice(notice({ message: `v ${FULL_SHA}` })).messageParts,
+    ).toEqual([{ text: "v " }, { text: "0123456", sha: FULL_SHA }]);
+  });
+});
+
+describe("describeNotice badge", () => {
+  test("merges the kind and the severity of an action notice", () => {
+    expect(describeNotice(notice()).badgeLabel).toBe("要対応の通知");
+  });
+
+  test("merges the kind and the severity of an info notice", () => {
+    expect(describeNotice(notice({ severity: "info" })).badgeLabel).toBe(
+      "情報の通知",
+    );
   });
 });
