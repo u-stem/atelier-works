@@ -2281,6 +2281,22 @@ describe("escapingSymlinks", () => {
     expect(argvOf(fake.calls)).toContainEqual(SWEEP);
   });
 
+  test("sweeps when a name contains U+FFFD", async () => {
+    const { fake, sandbox } = await preparedWith();
+    fake.symlinks.set(`${WT}/a\uFFFD`, OUT);
+    await sandbox.escapingSymlinks(DIRS);
+    expect(argvOf(fake.calls)).toContainEqual(SWEEP);
+  });
+
+  test("sweeps when a name with U+FFFD hides an outward symlink behind an inward one", async () => {
+    const { fake, sandbox } = await preparedWith({
+      symlinks: { [`${WT}/a\uFFFD`]: { content: "ok", resolved: `${WT}/ok` } },
+    });
+    fake.symlinks.set(`${WT}/a\uFFFD`, OUT);
+    await sandbox.escapingSymlinks(DIRS);
+    expect(argvOf(fake.calls)).toContainEqual(SWEEP);
+  });
+
   test("sweeps when a name contains the omission marker", async () => {
     const { fake, sandbox } = await preparedWith();
     fake.symlinks.set(`${WT}/[... 5 bytes omitted ...]`, OUT);

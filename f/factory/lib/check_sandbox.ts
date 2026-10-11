@@ -1648,8 +1648,10 @@ async function collectEscapingLinks(
   let incomplete = false;
   for (const path of listed.split("\0")) {
     if (path === "") continue;
-    // 省いた印を含む名前は、前後が欠けた壊れたパスか、印そのものを名前にしたものである。どちらも読めないので、不完全に倒す。
-    if (isCappedOutput(path)) {
+    // 省いた印を含む名前は、前後が欠けた壊れたパスか、印そのものを名前にしたものである。
+    // U+FFFDを含む名前は、UTF-8でないバイトが置き換わっている。別々の名前が同じ文字列になり、控えとの照合を取り違えうる。
+    // どちらも読めないものとして、不完全に倒す。
+    if (isCappedOutput(path) || path.includes("\uFFFD")) {
       incomplete = true;
       continue;
     }

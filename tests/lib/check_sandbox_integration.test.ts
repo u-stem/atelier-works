@@ -1927,8 +1927,9 @@ suite("an incomplete symlink scan", () => {
         "ln -s ok inside",
         // 省いた印を、名前にしたもの。
         "ln -s /etc/passwd '[... 5 bytes omitted ...]'",
-        // UTF-8でない名前。
-        'ln -s /etc/passwd "$(printf "bad\\377")"',
+        // 同じ見た目の名前の組。UTF-8でない外向きのものと、U+FFFDそのものを名前にした内向きのおとり。
+        'ln -s /etc/passwd "$(printf "a\\377")"',
+        'ln -s ok "$(printf "a\\357\\277\\275")"',
         "",
       ].join("\n"),
     );
@@ -1962,12 +1963,12 @@ suite("an incomplete symlink scan", () => {
     expect(names.filter((name) => name.includes("omitted"))).toEqual([]);
   });
 
-  test("a symlink with a name that is not UTF-8 is removed", () => {
-    expect(names.filter((name) => name.startsWith("bad"))).toEqual([]);
-  });
-
   test("a relative symlink that stays inside is kept", () => {
     expect(names).toContain("inside");
+  });
+
+  test("of a pair that looks the same, the non-UTF-8 outward one is removed and the decoy is kept", () => {
+    expect(names.filter((name) => name.startsWith("a"))).toEqual(["a\uFFFD"]);
   });
 });
 
