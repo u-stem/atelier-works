@@ -6,7 +6,7 @@ import {
   describeApiError,
   isBannerError,
 } from "../../api/errors.ts";
-import { useSummary } from "../../api/queries.ts";
+import { SUMMARY_REFRESH_MS, useSummary } from "../../api/queries.ts";
 import { PageHeader } from "../../app/PageHeader.tsx";
 import { refreshStatusOf } from "../../app/refreshStatus.ts";
 import { useNow } from "../../app/useNow.ts";
@@ -125,7 +125,9 @@ export function InboxScreen() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [chip, setChip] = useState<InboxChip>("all");
   const selection = parseSelection(searchParams);
-  const refresh = refreshStatusOf(summary);
+  const refresh = refreshStatusOf(summary, {
+    autoRefreshMs: SUMMARY_REFRESH_MS,
+  });
   const items =
     summary.data === undefined
       ? []

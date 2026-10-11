@@ -1,7 +1,6 @@
-import { RefreshCw } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router";
-import { useAuditIndex } from "../../api/auditQueries.ts";
+import type { useAuditIndex } from "../../api/auditQueries.ts";
 import {
   ApiFailure,
   describeApiError,
@@ -135,9 +134,13 @@ function ListState({
  * 行を選ぶと、本文の画面へ移る。
  * 「今すぐ監査」は確認を経て起動し、結果(起動、見送りの理由、失敗)を一覧の上に残す。
  * 起動の後は一覧を読み直す。
+ * 一覧の取得は画面が持ち、更新ボタンも画面の見出しにある。この区画は失敗したときの「もう一度取得する」だけを持つ。
  */
-export function AuditReports() {
-  const query = useAuditIndex();
+export function AuditReports({
+  query,
+}: {
+  query: ReturnType<typeof useAuditIndex>;
+}) {
   const now = useNow();
   const [confirming, setConfirming] = useState(false);
   const kickoff = useAuditKickoff();
@@ -158,20 +161,6 @@ export function AuditReports() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={query.isFetching}
-            onClick={() => {
-              void query.refetch();
-            }}
-          >
-            <RefreshCw
-              aria-hidden="true"
-              className={query.isFetching ? "animate-spin" : undefined}
-            />
-            更新
-          </Button>
           <Button
             size="sm"
             disabled={kickoff.locked}

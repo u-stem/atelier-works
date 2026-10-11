@@ -1,8 +1,26 @@
 import { describe, expect, test } from "bun:test";
-import { formatClockTime, formatNextRefresh } from "./refreshTiming.ts";
+import {
+  formatAutoRefreshNote,
+  formatClockTime,
+  formatNextRefresh,
+} from "./refreshTiming.ts";
 
 const NOW = Date.parse("2026-10-09T12:00:00.000Z");
 const INTERVAL = 120_000;
+
+describe("formatAutoRefreshNote", () => {
+  test("states a whole number of minutes", () => {
+    expect(formatAutoRefreshNote(120_000)).toBe("2分ごとに自動更新");
+  });
+
+  test("states seconds under one minute", () => {
+    expect(formatAutoRefreshNote(30_000)).toBe("30秒ごとに自動更新");
+  });
+
+  test("rounds a fractional number of minutes", () => {
+    expect(formatAutoRefreshNote(90_000)).toBe("2分ごとに自動更新");
+  });
+});
 
 describe("formatNextRefresh", () => {
   test("is null before the first fetch", () => {

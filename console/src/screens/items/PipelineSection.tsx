@@ -1,4 +1,3 @@
-import { RefreshCw } from "lucide-react";
 import {
   ApiFailure,
   describeApiError,
@@ -7,11 +6,9 @@ import {
 import {
   PIPELINE_DAYS,
   PIPELINE_LIMIT,
-  usePipeline,
+  type usePipeline,
 } from "../../api/queries.ts";
-import { refreshStatusOf } from "../../app/refreshStatus.ts";
 import { useNow } from "../../app/useNow.ts";
-import { TimeText } from "../../components/TimeText.tsx";
 import {
   Alert,
   AlertDescription,
@@ -19,12 +16,6 @@ import {
 } from "../../components/ui/alert.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "../../components/ui/tooltip.tsx";
-import { cn } from "../../lib/cn.ts";
 import { pipelineScopeNote } from "../../lib/pipelineView.ts";
 import { PipelineTable } from "./PipelineTable.tsx";
 
@@ -74,67 +65,41 @@ function FailureState({
 }
 
 /**
- * 作業項目の進捗の節。見出し、最終更新と再読み込み、取得の状態、表を持つ。
- * 作業項目の画面にある他の節と、取得も表示も共有しない。
+ * 作業項目の進捗の節。見出し、取得の状態、表を持つ。
+ * 取得は画面が持ち、更新ボタンも画面の見出しにある。この節は失敗したときの「もう一度取得する」だけを持つ。
  * 読み取り専用で、操作は起こさない。
  */
-export function PipelineSection() {
-  const pipeline = usePipeline();
+export function PipelineSection({
+  pipeline,
+}: {
+  pipeline: ReturnType<typeof usePipeline>;
+}) {
   const now = useNow();
-  const refresh = refreshStatusOf(pipeline);
 
   return (
     <section aria-labelledby="pipeline-heading" className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h2 id="pipeline-heading" className="text-lead font-semibold">
-            進捗
-          </h2>
-          <p className="text-small text-muted-foreground">
-            {pipeline.data === undefined
-              ? "作業項目の状態、ブランチ、PRを一覧します。"
-              : pipelineScopeNote(
-                  pipeline.data.length,
-                  PIPELINE_LIMIT,
-                  PIPELINE_DAYS,
-                )}
-          </p>
-        </div>
-        <div className="flex items-center gap-2 text-small text-subtle">
-          {refresh.isError ? (
-            <span className="font-medium text-failure">更新に失敗しました</span>
-          ) : null}
-          {refresh.updatedAt > 0 ? (
-            <TimeText
-              iso={new Date(refresh.updatedAt).toISOString()}
-              now={now}
-              prefix="最終更新 "
-            />
-          ) : null}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label="進捗を再読み込み"
-                aria-disabled={refresh.isFetching}
-                onClick={refresh.isFetching ? undefined : refresh.onRefresh}
-              >
-                <RefreshCw
-                  aria-hidden="true"
-                  className={cn(refresh.isFetching && "animate-spin")}
-                />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>
-              {refresh.isFetching ? "取得しています" : "再読み込み"}
-            </TooltipContent>
-          </Tooltip>
-        </div>
+      <div>
+        <h2 id="pipeline-heading" className="text-lead font-semibold">
+          進捗
+        </h2>
+        <p className="text-small text-muted-foreground">
+          {pipeline.data === undefined
+            ? "作業項目の状態、ブランチ、PRを一覧します。"
+            : pipelineScopeNote(
+                pipeline.data.length,
+                PIPELINE_LIMIT,
+                PIPELINE_DAYS,
+              )}
+        </p>
       </div>
       {pipeline.data === undefined ? (
         pipeline.isError ? (
-          <FailureState error={pipeline.error} onRetry={refresh.onRefresh} />
+          <FailureState
+            error={pipeline.error}
+            onRetry={() => {
+              void pipeline.refetch();
+            }}
+          />
         ) : (
           <LoadingState />
         )

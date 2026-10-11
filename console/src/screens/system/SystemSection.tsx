@@ -1,17 +1,7 @@
 import type { UseQueryResult } from "@tanstack/react-query";
-import { RefreshCw } from "lucide-react";
 import type { ReactNode } from "react";
-import { refreshStatusOf } from "../../app/refreshStatus.ts";
 import { useNow } from "../../app/useNow.ts";
-import { TimeText } from "../../components/TimeText.tsx";
-import { Button } from "../../components/ui/button.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "../../components/ui/tooltip.tsx";
-import { cn } from "../../lib/cn.ts";
 import { QueryFailure } from "../items/QueryFailure.tsx";
 
 function LoadingState() {
@@ -26,8 +16,9 @@ function LoadingState() {
 }
 
 /**
- * システムの画面の1つの節。見出し、最終更新と再読み込み、取得の状態、本文を持つ。
- * 取得は節ごとに持つ。同じ取得を読む節は、キャッシュと再読み込みを分け合う。
+ * システムの画面の1つの節。見出し、取得の状態、本文を持つ。
+ * 取得は画面が持ち、更新ボタンも画面の見出しにある。この節は失敗したときの「もう一度取得する」だけを持つ。
+ * 同じ取得を読む節は、結果を分け合う。
  * 読み取り専用で、操作は起こさない。
  */
 export function SystemSection<T>({
@@ -49,47 +40,13 @@ export function SystemSection<T>({
   children: (data: T, now: number) => ReactNode;
 }) {
   const now = useNow();
-  const refresh = refreshStatusOf(query);
   return (
     <section aria-labelledby={id} className="flex max-w-3xl flex-col gap-3">
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="min-w-0 flex-1">
-          <h2 id={id} className="text-lead font-semibold">
-            {title}
-          </h2>
-          <div className="text-small text-muted-foreground">{description}</div>
-        </div>
-        <div className="flex items-center gap-2 text-small text-subtle">
-          {refresh.isError ? (
-            <span className="font-medium text-failure">更新に失敗しました</span>
-          ) : null}
-          {refresh.updatedAt > 0 ? (
-            <TimeText
-              iso={new Date(refresh.updatedAt).toISOString()}
-              now={now}
-              prefix="最終更新 "
-            />
-          ) : null}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label={`${title}を再読み込み`}
-                aria-disabled={refresh.isFetching}
-                onClick={refresh.isFetching ? undefined : refresh.onRefresh}
-              >
-                <RefreshCw
-                  aria-hidden="true"
-                  className={cn(refresh.isFetching && "animate-spin")}
-                />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>
-              {refresh.isFetching ? "取得しています" : "再読み込み"}
-            </TooltipContent>
-          </Tooltip>
-        </div>
+      <div className="min-w-0">
+        <h2 id={id} className="text-lead font-semibold">
+          {title}
+        </h2>
+        <div className="text-small text-muted-foreground">{description}</div>
       </div>
       {query.data === undefined ? (
         query.isError ? (
@@ -98,7 +55,9 @@ export function SystemSection<T>({
             title={`${title}を取得できませんでした`}
             loginHint={loginHint}
             error={query.error}
-            onRetry={refresh.onRefresh}
+            onRetry={() => {
+              void query.refetch();
+            }}
           />
         ) : (
           <LoadingState />

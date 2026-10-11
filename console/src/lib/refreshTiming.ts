@@ -15,6 +15,17 @@ export function formatClockTime(ms: number): string {
 }
 
 /**
+ * 自動更新の間隔を「2分ごとに自動更新」の形にする。
+ * 1分に満たなければ秒で、それ以外は四捨五入した分で書く。
+ */
+export function formatAutoRefreshNote(intervalMs: number): string {
+  if (intervalMs < MINUTE_MS) {
+    return `${String(Math.round(intervalMs / 1000))}秒ごとに自動更新`;
+  }
+  return `${String(Math.round(intervalMs / MINUTE_MS))}分ごとに自動更新`;
+}
+
+/**
  * 次の自動更新までの時間を日本語にする。まだ取得していなければ`null`。
  * 残りは分に切り上げて「約2分後」とし、1分を切ったら「1分以内」、間隔を過ぎたら「まもなく」とする。
  * 切り上げるのは、実際より早く更新されるとは見せないためである。

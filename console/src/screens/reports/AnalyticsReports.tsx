@@ -1,10 +1,9 @@
-import { RefreshCw } from "lucide-react";
-import { type ReactNode, useState } from "react";
+import type { ReactNode } from "react";
 import {
   ANALYTICS_ROW_LIMIT,
-  useAgentCostDaily,
-  useApprovalStats,
-  useLeadTime,
+  type useAgentCostDaily,
+  type useApprovalStats,
+  type useLeadTime,
 } from "../../api/analyticsQueries.ts";
 import type {
   AgentCostDailyRow,
@@ -17,7 +16,6 @@ import { Button } from "../../components/ui/button.tsx";
 import {
   ANALYTICS_PERIOD_DAYS,
   type AnalyticsPeriodDays,
-  DEFAULT_ANALYTICS_DAYS,
   dailyTotals,
   firstTryApprovalRate,
   formatHours,
@@ -29,7 +27,6 @@ import {
   leadTimeByStatus,
   rejectionsByAttempt,
 } from "../../lib/analytics.ts";
-import { cn } from "../../lib/cn.ts";
 import { attemptRef, workItemStatusLabel } from "../../lib/labels.ts";
 import { AnalyticsSection } from "./AnalyticsSection.tsx";
 
@@ -191,15 +188,21 @@ function LeadTimeReport({ rows }: { rows: readonly LeadTimeRow[] }) {
  * 分析。Claudeの実行のコスト、承認の統計、リードタイムを、期間を選んでグラフと表で出す。
  * 3つのviewは別々に取得し、区画ごとに取得中、失敗、空、値ありを出し分ける。
  * 画面の見出しや余白は持たず、置き場所は呼び出し側が決める。
+ * 期間と3つの取得は画面が持ち、更新ボタンも画面の見出しにある。区画は失敗したときの「もう一度取得する」だけを持つ。
  */
-export function AnalyticsReports() {
-  const [days, setDays] = useState<AnalyticsPeriodDays>(DEFAULT_ANALYTICS_DAYS);
-  const cost = useAgentCostDaily(days);
-  const approvals = useApprovalStats(days);
-  const leadTime = useLeadTime(days);
-  const isFetching =
-    cost.isFetching || approvals.isFetching || leadTime.isFetching;
-
+export function AnalyticsReports({
+  days,
+  onDaysChange,
+  cost,
+  approvals,
+  leadTime,
+}: {
+  days: AnalyticsPeriodDays;
+  onDaysChange: (days: AnalyticsPeriodDays) => void;
+  cost: ReturnType<typeof useAgentCostDaily>;
+  approvals: ReturnType<typeof useApprovalStats>;
+  leadTime: ReturnType<typeof useLeadTime>;
+}) {
   return (
     <section aria-labelledby="analytics-heading" className="max-w-3xl">
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
@@ -215,34 +218,12 @@ export function AnalyticsReports() {
                 size="sm"
                 variant={option === days ? "secondary" : "outline"}
                 aria-pressed={option === days}
-                onClick={() => setDays(option)}
+                onClick={() => onDaysChange(option)}
               >
                 直近{option}日
               </Button>
             ))}
           </fieldset>
-          <Button
-            size="icon"
-            variant="ghost"
-            aria-label="分析を再読み込み"
-            aria-disabled={isFetching}
-            onClick={
-              isFetching
-                ? undefined
-                : () => {
-                    void Promise.all([
-                      cost.refetch(),
-                      approvals.refetch(),
-                      leadTime.refetch(),
-                    ]);
-                  }
-            }
-          >
-            <RefreshCw
-              aria-hidden="true"
-              className={cn(isFetching && "animate-spin")}
-            />
-          </Button>
         </div>
       </div>
       <AnalyticsSection
