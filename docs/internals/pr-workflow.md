@@ -543,10 +543,11 @@ PR修正のClaudeに渡すツールは`Read,Glob,Grep,Edit,Write`だけで、`Ba
 空でなければ、実行のたびにnoticeの`unsandboxed_check_commands`を記録する。
 
 検査コマンドには、許可リストの環境変数だけを渡し、workerの環境変数は引き継がない。
-許可するのは、固定の`PATH`、実行ごとに作る非公開の`HOME`、`LANG`、worktreeだけを`safe.directory`にするgitの設定である。
-実行の前に、空いている枠を取り、worktreeと`HOME`の所有者をその枠のユーザーにする。
-実行の後は、所有者をrootに戻してから`HOME`のディレクトリを消す。
+許可するのは、固定の`PATH`、実行ごとに作る非公開の`HOME`とその下の`TMPDIR`、`LANG`、worktreeだけを`safe.directory`にするgitの設定である。
+実行の前に、空いている枠を取って前の実行の残りを片付け、枠の記録を書いてから、worktreeと`HOME`の所有者をその枠のユーザーにする。
+実行の後は、所有者をrootに戻してから`HOME`のディレクトリを消し、枠の記録を消す。
 コマンドごとに、実行ごとの目印を持つ残りのプロセスを止める。止まらなければ、所有権を戻さずにステップを失敗させる。
+戻せなかった所有権と`HOME`は、枠の記録を通して、次にその枠を取る検査が片付ける。
 `PATH`の値と、workerの値を使わない理由、uidの切り替えと所有権の受け渡しは、[検査コマンドはフローが実行する](../security.md#検査コマンドはフローが実行する)と[検査コマンドの権限](../security.md#検査コマンドの権限)にある。
 
 検査コマンドが指す先(対象リポジトリの`mise.toml`や`package.json`のscriptsなど)は、信頼できない内容として扱う。workerのmiseは対象リポジトリの`mise.toml`をtrustしない(`mise --yes trust`をしない)。`mise.toml`に頼るコマンドと、`MISE_TRUSTED_CONFIG_PATHS`を使わずには実行できないコマンドは、実行せずにブロックとして報告する。

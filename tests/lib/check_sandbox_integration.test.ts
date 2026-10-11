@@ -138,6 +138,9 @@ printf 'hardlink_owner=%s\\n' "$(stat -c %u ./hardlink-to-secret)"
 printf 'symlink_target_owner=%s\\n' "$(stat -L -c %u ./symlink-to-secret)"
 printf 'outside_owner=%s\\n' "$(stat -c %u ${outsideFile})"
 printf 'read_slot_locks=%s\\n' "$(ls ${slotLockDir} >/dev/null 2>&1 && echo readable || echo denied)"
+printf 'open_worktree_lock=%s\\n' "$(cat ${worktreeLockFor(worktree).lockPath} >/dev/null 2>&1 && echo opened || echo denied)"
+printf 'tmpdir=%s\\n' "$TMPDIR"
+printf 'write_tmpdir=%s\\n' "$(touch "$TMPDIR/made-by-check" 2>/dev/null && echo ok || echo denied)"
 printf 'git_status=%s\\n' "$(git status --porcelain >/dev/null 2>&1 && echo ok || echo failed)"
 printf 'git_head=%s\\n' "$(git rev-parse --verify HEAD 2>/dev/null)"
 printf 'gain_privilege=%s\\n' "$(${SETPRIV} --reuid=0 -- id -u 2>/dev/null || echo denied)"
@@ -356,6 +359,30 @@ sleep 0.2
 
   test("the command cannot list the slot locks", () => {
     expect(probed("read_slot_locks")).toBe("denied");
+  });
+
+  test("the command cannot open the worktree's lock file", () => {
+    expect(probed("open_worktree_lock")).toBe("denied");
+  });
+
+  test("the worktree's lock file is readable only by root", () => {
+    expect(statSync(worktreeLockFor(worktree).lockPath).mode & 0o777).toBe(
+      0o600,
+    );
+  });
+
+  test("the command's TMPDIR is inside its home", () => {
+    expect(probed("tmpdir")).toBe(`${home}/tmp`);
+  });
+
+  test("the command can write to its TMPDIR", () => {
+    expect(probed("write_tmpdir")).toBe("ok");
+  });
+
+  test("no slot record is left after a completed run", () => {
+    expect(
+      readdirSync(slotLockDir).filter((name) => name.endsWith(".state")),
+    ).toEqual([]);
   });
 
   test("root can run git in the worktree afterwards", () => {
@@ -758,41 +785,21 @@ process.kill(process.pid, "SIGKILL");`,
     expect([before, processesOf([uid]).length]).toEqual([1, 0]);
   }, 60_000);
 
-  test("a worktree a cancelled run left owned by a slot uid is taken back", async () => {
-    const uid = POOL[1] ?? 0;
-    const target = dir(3);
-    mustRun(["chown", "-R", `${String(uid)}:${String(uid)}`, target], fx.base);
-    Bun.spawn(
-      [
-        SETPRIV,
-        `--reuid=${String(uid)}`,
-        `--regid=${String(uid)}`,
-        "--clear-groups",
-        "--",
-        "sleep",
-        "300",
-      ],
-      { env: { PATH: "/usr/bin:/bin" } },
-    );
-    await Bun.sleep(300);
-    const restored = await restoreCheckOwnership(
-      target,
-      POOL,
-      defaultSandboxDeps(lockDir),
-    );
-    expect([
-      restored,
-      lstatSync(target).uid,
-      processesOf([uid]).length,
-      runSync(["git", "status", "--porcelain"], target),
-    ]).toEqual([true, 0, 0, 0]);
-  }, 60_000);
-
-  test("a worktree owned by root is left alone", async () => {
+  test("a worktree no slot recorded is left alone", async () => {
     expect(
       await restoreCheckOwnership(dir(2), POOL, defaultSandboxDeps(lockDir)),
     ).toBe(false);
   });
+
+  test("a directory the check closed to itself is taken back", async () => {
+    writeFileSync(
+      join(dir(2), "close.sh"),
+      "mkdir closed\ntouch closed/f\nchmod 666 closed/f\nchmod 000 closed\n",
+    );
+    await runChecks(dir(2), ["sh ./close.sh"], sandboxIn(lockDir, POOL));
+    const file = statSync(join(dir(2), "closed", "f"));
+    expect([file.uid, file.mode & 0o022]).toEqual([0, 0]);
+  }, 60_000);
 
   test("the write bits a check set are dropped afterwards", async () => {
     writeFileSync(
@@ -805,4 +812,347 @@ process.kill(process.pid, "SIGKILL");`,
     );
     expect(modes).toEqual([0, 0, 0]);
   }, 60_000);
+});
+
+/** `setpriv`で`uid`に落としてシェルのスクリプトを実行し、終了コードを返す。 */
+function runAsUid(uid: number, script: string, cwd: string): number {
+  return runSync(
+    [
+      SETPRIV,
+      `--reuid=${String(uid)}`,
+      `--regid=${String(uid)}`,
+      "--clear-groups",
+      "--",
+      "/bin/sh",
+      "-c",
+      script,
+    ],
+    cwd,
+  );
+}
+
+/** 検査用のHOMEを、`runAllowedCheckCommands`の既定と同じ形で作る。 */
+function makeHome(): string {
+  const dir = mkdtempSync("/tmp/factory-check-home-");
+  mkdirSync(join(dir, "tmp"), { mode: 0o700 });
+  return dir;
+}
+
+/**
+ * 取り消された実行を再現する。別のプロセスで、空いている先頭の枠(枠0)を取ってworktreeとHOMEを渡し、
+ * 枠のuidで`script`を実行し、別のセッションに抜けたプロセスを残してから、そのプロセスごと殺す。
+ * 後始末は走らないので、枠の記録と所有権とプロセスが残る。
+ */
+async function cancelledRun(opts: {
+  readonly lockDir: string;
+  readonly worktreeDir: string;
+  readonly homeDir: string;
+  readonly script: string;
+}): Promise<string> {
+  const module = join(import.meta.dir, "../../f/factory/lib/check_sandbox.ts");
+  const child = Bun.spawn(
+    [
+      "bun",
+      "-e",
+      `import { createCheckSandbox, defaultSandboxDeps } from ${JSON.stringify(module)};
+const sandbox = createCheckSandbox({ uids: ${JSON.stringify(POOL)}, deps: defaultSandboxDeps(${JSON.stringify(opts.lockDir)}) });
+const dirs = { worktreeDir: ${JSON.stringify(opts.worktreeDir)}, homeDir: ${JSON.stringify(opts.homeDir)} };
+await sandbox.prepare(dirs);
+const env = { PATH: "/usr/bin:/bin", HOME: dirs.homeDir };
+Bun.spawnSync({ cmd: sandbox.wrap(["/bin/sh", "-c", ${JSON.stringify(opts.script)}]), cwd: dirs.worktreeDir, env });
+Bun.spawn({ cmd: sandbox.wrap(["/usr/bin/setsid", "/bin/sleep", "300"]), cwd: dirs.worktreeDir, env, stdio: ["ignore", "ignore", "ignore"] });
+await Bun.sleep(300);
+console.log("prepared");
+process.kill(process.pid, "SIGKILL");`,
+    ],
+    { stdout: "pipe", env: { PATH: "/usr/local/bin:/usr/bin:/bin" } },
+  );
+  const said = await new Response(child.stdout).text();
+  await child.exited;
+  // 殺したプロセスの下でロックを持っていた`flock`が、パイプの終わりを見て抜けるのを待つ。
+  await Bun.sleep(300);
+  return said.trim();
+}
+
+suite("recovery of a slot a cancelled run left", () => {
+  const first = makeRepo();
+  const second = makeRepo();
+  const lockDir = join(first.base, "slots");
+  const uid = POOL[0] ?? 0;
+  let stale = "";
+  let staleHome = "";
+  let said = "";
+  let outputs = new Map<string, string>();
+
+  beforeAll(async () => {
+    mkdirSync(WINDMILL_TMP_DIR, { recursive: true });
+    stale = first.addWorktree("cancelled");
+    staleHome = makeHome();
+    said = await cancelledRun({
+      lockDir,
+      worktreeDir: stale,
+      homeDir: staleHome,
+      script: "mkdir open && chmod 777 open && chmod 777 .",
+    });
+    const next = second.addWorktree("next");
+    writeFileSync(
+      join(next, "attack.sh"),
+      [
+        `printf 'write_top=%s\\n' "$(touch ${stale}/made-by-next 2>/dev/null && echo ok || echo denied)"`,
+        `printf 'write_open=%s\\n' "$(touch ${stale}/open/made-by-next 2>/dev/null && echo ok || echo denied)"`,
+        `printf 'read_home=%s\\n' "$(ls ${staleHome} >/dev/null 2>&1 && echo readable || echo gone)"`,
+        "",
+      ].join("\n"),
+    );
+    const [result] = await runChecks(
+      next,
+      ["sh ./attack.sh"],
+      sandboxIn(lockDir, [uid]),
+    );
+    outputs = parseProbeOutput(result?.output ?? "");
+  }, 120_000);
+
+  afterAll(() => {
+    rmSync(staleHome, { recursive: true, force: true });
+    first.cleanup();
+    second.cleanup();
+  });
+
+  test("the cancelled run had handed its worktree over", () => {
+    expect(said).toBe("prepared");
+  });
+
+  test("the next run on the same slot cannot write to the old worktree", () => {
+    expect(outputs.get("write_top")).toBe("denied");
+  });
+
+  test("the next run cannot write to a directory the old run opened to everyone", () => {
+    expect(outputs.get("write_open")).toBe("denied");
+  });
+
+  test("the next run cannot see the old run's home", () => {
+    expect(outputs.get("read_home")).toBe("gone");
+  });
+
+  test("the old worktree is owned by root again", () => {
+    expect(lstatSync(stale).uid).toBe(0);
+  });
+
+  test("the old worktree is no longer open to everyone", () => {
+    expect(lstatSync(stale).mode & 0o022).toBe(0);
+  });
+
+  test("the directory the old run opened is closed again", () => {
+    expect(statSync(join(stale, "open")).mode & 0o022).toBe(0);
+  });
+
+  test("the process the old run left is stopped", () => {
+    expect(processesOf([uid])).toEqual([]);
+  });
+
+  test("root can run git in the old worktree again", () => {
+    expect(runSync(["git", "status", "--porcelain"], stale)).toBe(0);
+  });
+
+  test("the slot record of the old run is gone", () => {
+    expect(
+      readdirSync(lockDir).filter((name) => name.endsWith(".state")),
+    ).toEqual([]);
+  });
+});
+
+suite("restoring a worktree from the slot record", () => {
+  const fx = makeRepo();
+  const lockDir = join(fx.base, "slots");
+  const uid = POOL[0] ?? 0;
+  let worktree = "";
+  let staleHome = "";
+  let restored = false;
+
+  beforeAll(async () => {
+    mkdirSync(WINDMILL_TMP_DIR, { recursive: true });
+    worktree = fx.addWorktree("partial");
+    staleHome = makeHome();
+    await cancelledRun({
+      lockDir,
+      worktreeDir: worktree,
+      homeDir: staleHome,
+      script:
+        "mkdir open && chmod 777 open && touch open/f && chmod 666 open/f",
+    });
+    // 取り戻しが途中で止まった状態にする。最上位だけがrootに戻り、中は枠のuidのまま残る。
+    mustRun(["chown", "0:0", worktree], fx.base);
+    restored = await restoreCheckOwnership(
+      worktree,
+      POOL,
+      defaultSandboxDeps(lockDir),
+    );
+  }, 60_000);
+
+  afterAll(() => {
+    rmSync(staleHome, { recursive: true, force: true });
+    fx.cleanup();
+  });
+
+  test("the record is used even though root owns the top directory", () => {
+    expect(restored).toBe(true);
+  });
+
+  test("an entry the old run left inside is owned by root", () => {
+    expect(statSync(join(worktree, "open", "f")).uid).toBe(0);
+  });
+
+  test("a directory the old run opened is closed again", () => {
+    expect(statSync(join(worktree, "open")).mode & 0o022).toBe(0);
+  });
+
+  test("a file the old run opened is closed again", () => {
+    expect(statSync(join(worktree, "open", "f")).mode & 0o022).toBe(0);
+  });
+
+  test("the process the old run left is stopped", () => {
+    expect(processesOf([uid])).toEqual([]);
+  });
+
+  test("the home the old run recorded is removed", () => {
+    expect(existsSync(staleHome)).toBe(false);
+  });
+});
+
+suite("shared temporary files between runs on one slot", () => {
+  const fx = makeRepo();
+  const lockDir = join(fx.base, "slots");
+  const uid = POOL[2] ?? 0;
+  const tag = `it-${String(process.pid)}`;
+  const paths = [
+    `/tmp/${tag}-file`,
+    `/tmp/${tag}-dir`,
+    `/var/tmp/${tag}-file`,
+    `/dev/shm/${tag}-file`,
+  ];
+  let created: boolean[] = [];
+  let ipcBefore = 0;
+
+  /** System Vの共有メモリのうち、所有者か作成者が`uid`のものの数。 */
+  const shmOf = (owner: number): number =>
+    readFileSync("/proc/sysvipc/shm", "utf8")
+      .split("\n")
+      .slice(1)
+      .map((line) => line.trim().split(/\s+/))
+      .filter(
+        (fields) => fields[7] === String(owner) || fields[9] === String(owner),
+      ).length;
+
+  beforeAll(async () => {
+    mkdirSync(WINDMILL_TMP_DIR, { recursive: true });
+    const worktree = fx.addWorktree("shared");
+    writeFileSync(
+      join(worktree, "leave.sh"),
+      [
+        `umask 077`,
+        `echo secret > /tmp/${tag}-file`,
+        `mkdir /tmp/${tag}-dir && chmod 777 /tmp/${tag}-dir && echo secret > /tmp/${tag}-dir/inner`,
+        `echo secret > /var/tmp/${tag}-file`,
+        `echo secret > /dev/shm/${tag}-file`,
+        "ipcmk -M 4096 >/dev/null",
+        "",
+      ].join("\n"),
+    );
+    await runChecks(worktree, ["sh ./leave.sh"], sandboxIn(lockDir, [uid]));
+    created = paths.map((path) => existsSync(path));
+    ipcBefore = shmOf(uid);
+    // 別の枠のuidが、残ったディレクトリの中にファイルを置く。
+    runAsUid(POOL[3] ?? 0, `echo x > /tmp/${tag}-dir/by-other`, "/");
+    await runChecks(worktree, ["true"], sandboxIn(lockDir, [uid]));
+  }, 60_000);
+
+  afterAll(() => {
+    for (const path of paths) rmSync(path, { recursive: true, force: true });
+    fx.cleanup();
+  });
+
+  test("the first run left its files in the shared directories", () => {
+    expect(created).toEqual([true, true, true, true]);
+  });
+
+  test("the first run left a shared memory segment", () => {
+    expect(ipcBefore).toBe(1);
+  });
+
+  test.each([0, 1, 2, 3])(
+    "the next run on the slot removed shared path %d first",
+    (index) => {
+      expect(existsSync(paths[index] ?? "")).toBe(false);
+    },
+  );
+
+  test("the next run on the slot removed the shared memory segment first", () => {
+    expect(shmOf(uid)).toBe(0);
+  });
+});
+
+suite("entries another slot adds during a check", () => {
+  const fx = makeRepo();
+  const lockDir = join(fx.base, "slots");
+  const uid = POOL[4] ?? 0;
+  const other = POOL[5] ?? 0;
+  const victim = join(fx.base, "victim");
+  let worktree = "";
+  let added = -1;
+
+  beforeAll(async () => {
+    mkdirSync(WINDMILL_TMP_DIR, { recursive: true });
+    worktree = fx.addWorktree("foreign");
+    writeFileSync(victim, "x\n");
+    chmodSync(victim, 0o666);
+    writeFileSync(
+      join(worktree, "open.sh"),
+      "mkdir shared && chmod 777 shared && touch shared/.ready && sleep 3\n",
+    );
+    const running = runChecks(
+      worktree,
+      ["sh ./open.sh"],
+      sandboxIn(lockDir, [uid]),
+    );
+    const ready = join(worktree, "shared", ".ready");
+    for (let attempt = 0; attempt < 100 && !existsSync(ready); attempt += 1) {
+      await Bun.sleep(50);
+    }
+    added = runAsUid(
+      other,
+      [
+        "mkdir shared/b-dir && chmod 777 shared/b-dir",
+        "touch shared/b-file && chmod 666 shared/b-file",
+        `ln -s ${victim} shared/b-link`,
+      ].join(" && "),
+      worktree,
+    );
+    await running;
+  }, 60_000);
+
+  afterAll(() => fx.cleanup());
+
+  test("the other slot could add entries while the check ran", () => {
+    expect(added).toBe(0);
+  });
+
+  test("a directory the other slot added is owned by root afterwards", () => {
+    expect(lstatSync(join(worktree, "shared", "b-dir")).uid).toBe(0);
+  });
+
+  test("a directory the other slot added is closed afterwards", () => {
+    expect(lstatSync(join(worktree, "shared", "b-dir")).mode & 0o022).toBe(0);
+  });
+
+  test("a file the other slot added is closed afterwards", () => {
+    expect(lstatSync(join(worktree, "shared", "b-file")).mode & 0o022).toBe(0);
+  });
+
+  test("a symlink the other slot added is owned by root afterwards", () => {
+    expect(lstatSync(join(worktree, "shared", "b-link")).uid).toBe(0);
+  });
+
+  test("the target of that symlink keeps its mode", () => {
+    expect(statSync(victim).mode & 0o777).toBe(0o666);
+  });
 });

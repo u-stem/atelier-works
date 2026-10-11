@@ -10,6 +10,7 @@ import {
 import {
   checkSandboxFromEnv,
   kernelWarningText,
+  slotSkipNoticeText,
 } from "../lib/check_sandbox.ts";
 import {
   buildSystemPrompt,
@@ -353,8 +354,16 @@ export async function main(
 
   const timeoutMs = config.claude_timeout_sec * 1000;
   // 検査コマンドは、検査用の非特権uidに落として実行する。rootのまま実行することはしない。
+  // 片付けられずに飛ばした枠は、検査を止めずにnoticeで知らせる。
   const checkSandbox =
-    config.allowed_check_commands.length > 0 ? checkSandboxFromEnv() : null;
+    config.allowed_check_commands.length > 0
+      ? checkSandboxFromEnv(process.env, async (skip) => {
+          await addNotice({
+            kind: "check_slot_skipped",
+            message: slotSkipNoticeText(skip),
+          });
+        })
+      : null;
 
   return await runPrFixVerify(
     {

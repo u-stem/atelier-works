@@ -31,7 +31,11 @@ describe("check sandbox wiring", () => {
     });
 
     test(`${name} builds the check sandbox from the environment`, () => {
-      expect(source(name)).toContain("checkSandboxFromEnv()");
+      expect(source(name)).toContain("checkSandboxFromEnv(process.env,");
+    });
+
+    test(`${name} reports a skipped check slot as a notice`, () => {
+      expect(source(name)).toContain('kind: "check_slot_skipped"');
     });
   }
 });

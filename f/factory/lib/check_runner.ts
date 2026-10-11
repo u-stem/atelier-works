@@ -3,10 +3,10 @@
 // 許可リストの環境変数だけで実行する。
 // 呼び出し側(`implement_verify`、`pr_fix_verify`)は、実行するコマンドのランナーを注入する。
 
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type CheckSandbox, checkEnv } from "./check_sandbox.ts";
+import { type CheckSandbox, checkEnv, checkTmpDir } from "./check_sandbox.ts";
 import { maskSecrets } from "./log.ts";
 import type { CommandRunner } from "./workspace.ts";
 
@@ -55,9 +55,12 @@ export type CreateCheckHomeDir = () => Promise<CheckHomeDir>;
  * 後の実行に読まれうる。
  * `claude.ts`の`buildSystemPrompt` / `WriteTempFile`と同じく、
  * mkdtempと後始末の形にしている。
+ * 中に検査コマンドの`TMPDIR`(`checkTmpDir`、0700)も作る。共有の`/tmp`に置かれたファイルは、
+ * 同じuidを次に使う別のリポジトリの検査から読めるためである。
  */
 const defaultCreateCheckHomeDir: CreateCheckHomeDir = async () => {
   const dir = await mkdtemp(join(tmpdir(), "factory-check-home-"));
+  await mkdir(checkTmpDir(dir), { mode: 0o700 });
   return {
     path: dir,
     cleanup: async () => {
@@ -68,12 +71,14 @@ const defaultCreateCheckHomeDir: CreateCheckHomeDir = async () => {
 
 /**
  * `allowed_check_commands`の各項目を、`cwd`で順に実行する。
- * 環境変数は許可リスト(`checkEnv`。固定のPATH(`CHECK_COMMAND_PATH`)、新しい非公開のHOME、ロケール、
+ * 環境変数は許可リスト(`checkEnv`。固定のPATH(`CHECK_COMMAND_PATH`)、新しい非公開のHOMEとその下のTMPDIR、ロケール、
  * worktreeだけを信頼するgitの設定)で作り、workerの秘密は引き継がない。
  * 終わったらHOMEのディレクトリを消す。`docs/internals/pr-workflow.md`の「検査コマンドの実行」に書く。
  * `sandbox`があれば、コマンドを検査用の非特権uidに落として実行する(`setpriv`)。
  * 実行の前にworktreeとHOMEをそのuidに渡し、コマンドごとに残ったプロセスを止め、
  * 実行の後(失敗しても)所有権をrootに戻してからHOMEを消す。
+ * 戻すのに失敗したときはHOMEを消さない。止まらないプロセスが書き換えている木をrootでたどらないためで、
+ * HOMEは枠の記録に残り、次にその枠を取る実行が片付ける。
  * `sandbox`が無いと、コマンドはworkerのuidのまま動く。本番の呼び出し(`implement_verify`、`pr_fix_verify`)は必ず渡す。
  * miseの設定の信頼(trust)は決して与えない(`MISE_TRUSTED_CONFIG_PATHS`も
  * `mise --yes trust`も使わない)。信頼が無いと動かない検査コマンド
@@ -99,6 +104,7 @@ export async function runAllowedCheckCommands(
 ): Promise<CheckCommandResult[]> {
   const homeDir = await createHomeDir();
   const dirs = { worktreeDir: cwd, homeDir: homeDir.path };
+  let released = true;
   try {
     try {
       if (sandbox !== null) await sandbox.prepare(dirs);
@@ -133,9 +139,13 @@ export async function runAllowedCheckCommands(
       }
       return results;
     } finally {
-      if (sandbox !== null) await sandbox.release(dirs);
+      if (sandbox !== null) {
+        released = false;
+        await sandbox.release(dirs);
+        released = true;
+      }
     }
   } finally {
-    await homeDir.cleanup();
+    if (released) await homeDir.cleanup();
   }
 }

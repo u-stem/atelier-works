@@ -212,6 +212,16 @@ const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
     ),
   ],
   [
+    "check_slot_skipped",
+    guide(
+      "検査の枠を、前の実行の残りを片付けられないため飛ばし、別の枠で検査しました。本文に枠のユーザーと理由が載ります。",
+      "理由が止まらないプロセスなら、workerを再起動してください。残ったファイルなら、本文のパスを確かめて消してください。",
+      {
+        note: "飛ばした枠は、次にその枠を取る検査が片付け直します。片付くまでは、検査のたびに出ます。",
+      },
+    ),
+  ],
+  [
     "console_fetch_failed",
     guide(
       "Consoleの取り込みが失敗しました。",

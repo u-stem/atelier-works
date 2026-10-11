@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   realpathSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -13,6 +15,7 @@ import { join } from "node:path";
 import {
   defaultLockReleaseDeps,
   defaultOrphanLockFileDeps,
+  ensurePrivateLockFile,
   ensureWorktreeLockFree,
   FLOCK_PATH,
   formatLockHolders,
@@ -1849,19 +1852,26 @@ describe("a process that cannot be inspected", () => {
 });
 
 describe("ensureWorktreeLockFree restoring ownership", () => {
-  function restoringDeps(events: string[], failure?: Error): LockReleaseDeps {
+  function restoringDeps(
+    events: string[],
+    failure?: Error,
+    scanned: readonly LockProcess[] = [],
+  ): LockReleaseDeps {
     return {
       restoreOwnership: async () => {
         events.push("restore");
         if (failure !== undefined) throw failure;
       },
-      scan: async () => [],
+      scan: async () => {
+        events.push("scan");
+        return scanned;
+      },
       stop: async () => {},
       sleep: async () => {},
     };
   }
 
-  test("restores the ownership before probing the lock", async () => {
+  test("restores the ownership only after the lock is found free", async () => {
     const events: string[] = [];
     const fake = createFakeCommandRunner([ok()]);
     const run: typeof fake.run = async (argv, options) => {
@@ -1874,18 +1884,55 @@ describe("ensureWorktreeLockFree restoring ownership", () => {
       policy: null,
       deps: restoringDeps(events),
     });
-    expect(events).toEqual(["restore", "probe"]);
+    expect(events).toEqual(["probe", "scan", "restore"]);
   });
 
-  test("does not probe the lock when restoring the ownership fails", async () => {
+  test("does not restore the ownership while the lock is held", async () => {
+    const events: string[] = [];
+    const fake = createFakeCommandRunner(busyTimes(4));
+    await ensureWorktreeLockFree({
+      run: fake.run,
+      lock: LOCK,
+      policy: null,
+      deps: restoringDeps(events),
+    }).catch(() => {});
+    expect(events).not.toContain("restore");
+  });
+
+  test("does not restore the ownership while a related process remains", async () => {
+    const events: string[] = [];
     const fake = createFakeCommandRunner([ok()]);
     await ensureWorktreeLockFree({
       run: fake.run,
       lock: LOCK,
       policy: null,
-      deps: restoringDeps([], new Error("chown failed")),
+      deps: restoringDeps(events, undefined, [entry({ holdsLock: false })]),
     }).catch(() => {});
-    expect(fake.calls).toEqual([]);
+    expect(events).not.toContain("restore");
+  });
+
+  test("restores the ownership after stopping a stoppable leftover", async () => {
+    const events: string[] = [];
+    const fake = createFakeCommandRunner([ok(), ok()]);
+    let scans = 0;
+    const deps: LockReleaseDeps = {
+      ...restoringDeps(events),
+      scan: async () => {
+        scans += 1;
+        events.push("scan");
+        return scans === 1 ? [entry({ holdsLock: false })] : [];
+      },
+      stop: async () => {
+        events.push("stop");
+      },
+    };
+    await ensureWorktreeLockFree({
+      run: fake.run,
+      lock: LOCK,
+      policy: { self: THIS_JOB, recheck: async () => {} },
+      deps,
+    });
+    expect(events.slice(-2)).toEqual(["scan", "restore"]);
   });
 
   test("fails with the restore error", async () => {
@@ -1912,6 +1959,95 @@ describe("ensureWorktreeLockFree restoring ownership", () => {
         deps: withoutRestore,
       }),
     ).resolves.toEqual([]);
+  });
+});
+
+describe("ensurePrivateLockFile", () => {
+  const tempDirs: string[] = [];
+  const tempPath = () => {
+    const dir = mkdtempSync(join(tmpdir(), "factory-lockfile-"));
+    tempDirs.push(dir);
+    return join(dir, ".wt.process.lock");
+  };
+
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("creates a missing lock file readable only by its owner", async () => {
+    const path = tempPath();
+    await ensurePrivateLockFile(path);
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+  });
+
+  test("narrows an existing lock file to its owner", async () => {
+    const path = tempPath();
+    writeFileSync(path, "", { mode: 0o644 });
+    chmodSync(path, 0o644);
+    await ensurePrivateLockFile(path);
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+  });
+
+  test("keeps an existing lock file empty", async () => {
+    const path = tempPath();
+    writeFileSync(path, "");
+    await ensurePrivateLockFile(path);
+    expect(statSync(path).size).toBe(0);
+  });
+
+  test("does nothing when the parent directory is missing", async () => {
+    await expect(
+      ensurePrivateLockFile("/nowhere/at/all/.wt.process.lock"),
+    ).resolves.toBeUndefined();
+  });
+
+  test("refuses a symlink in place of the lock file", async () => {
+    const path = tempPath();
+    symlinkSync("/etc/hostname", path);
+    await expect(ensurePrivateLockFile(path)).rejects.toThrow();
+  });
+
+  test("refuses a directory in place of the lock file", async () => {
+    const path = tempPath();
+    mkdirSync(path);
+    await expect(ensurePrivateLockFile(path)).rejects.toThrow();
+  });
+});
+
+describe("lock file preparation", () => {
+  test("probing prepares the lock file before running flock", async () => {
+    const events: string[] = [];
+    const fake = createFakeCommandRunner([ok()]);
+    await probeWorktreeLock({
+      run: async (argv, options) => {
+        events.push("flock");
+        return fake.run(argv, options);
+      },
+      lock: LOCK,
+      prepareLockFile: async (path) => {
+        events.push(`prepare ${path}`);
+      },
+    });
+    expect(events).toEqual([`prepare ${LOCK.lockPath}`, "flock"]);
+  });
+
+  test("a locked run prepares the lock file before running flock", async () => {
+    const events: string[] = [];
+    const fake = createFakeCommandRunner([ok()]);
+    await withWorktreeProcessLock(
+      async (argv, options) => {
+        events.push("flock");
+        return fake.run(argv, options);
+      },
+      LOCK,
+      THIS_JOB,
+      async (path) => {
+        events.push(`prepare ${path}`);
+      },
+    )(["/bin/true"]);
+    expect(events).toEqual([`prepare ${LOCK.lockPath}`, "flock"]);
   });
 });
 

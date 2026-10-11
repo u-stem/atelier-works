@@ -3,8 +3,15 @@
 // Windmillでジョブを取り消しても新しいセッションで起動したプロセスは止まらないので、
 // 次の実行はworktreeに触れる前にロックが空いているかを確かめ、塞がっていれば保持者を/procから特定する。
 
-import { readFileSync, realpathSync } from "node:fs";
-import { lstat, readdir, readFile, realpath, stat } from "node:fs/promises";
+import { constants, readFileSync, realpathSync } from "node:fs";
+import {
+  lstat,
+  open,
+  readdir,
+  readFile,
+  realpath,
+  stat,
+} from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import {
   parseProcStatus,
@@ -288,6 +295,38 @@ function isLockConflict(result: CommandResult): boolean {
   );
 }
 
+/**
+ * ロックファイルを、所有者だけが開ける(0600)空の通常ファイルにする。無ければ作り、あれば権限を狭める。
+ * flockは読み取りで開いたfdでも取れるので、他のユーザーが開けると、検査用のuidがworktreeのロックを握って塞げるためである。
+ * flock(1)が作ると0644になるので、flockを起動する前に呼ぶ。
+ * 親ディレクトリが無ければ何もしない(flock自体が失敗する)。symlinkか通常ファイルでなければ例外を投げる。
+ */
+export async function ensurePrivateLockFile(path: string): Promise<void> {
+  let handle: Awaited<ReturnType<typeof open>>;
+  try {
+    handle = await open(
+      path,
+      constants.O_RDONLY |
+        constants.O_CREAT |
+        constants.O_NOFOLLOW |
+        constants.O_NONBLOCK,
+      0o600,
+    );
+  } catch (err) {
+    if (isGoneError(err)) return;
+    throw err;
+  }
+  try {
+    const found = await handle.stat();
+    if (!found.isFile()) {
+      throw new Error(`lock file is not a regular file: ${path}`);
+    }
+    if ((found.mode & 0o077) !== 0) await handle.chmod(0o600);
+  } finally {
+    await handle.close();
+  }
+}
+
 /** ロックを待たずに取れるかを確かめるflockのargv。ロックを取れたら`true`を起動してすぐ放す。 */
 function probeArgv(lock: WorktreeLock): string[] {
   return [
@@ -303,11 +342,14 @@ function probeArgv(lock: WorktreeLock): string[] {
 /**
  * worktreeのロックを待たずに取れるかを確かめ、すぐ放す。
  * 空いていれば"free"、塞がっていれば"held"を返し、flock自体が失敗すれば例外を投げる。
+ * 確かめる前に、ロックファイルを所有者だけが開けるようにする(`prepareLockFile`。既定は`ensurePrivateLockFile`)。
  */
 export async function probeWorktreeLock(opts: {
   readonly run: CommandRunner;
   readonly lock: WorktreeLock;
+  readonly prepareLockFile?: (path: string) => Promise<void>;
 }): Promise<"free" | "held"> {
+  await (opts.prepareLockFile ?? ensurePrivateLockFile)(opts.lock.lockPath);
   const result = await opts.run(probeArgv(opts.lock));
   if (isLockConflict(result)) return "held";
   if (result.exitCode === 0) return "free";
@@ -412,11 +454,13 @@ export async function removeLockFileUnderLock(opts: {
  * argvが空のとき、コマンド名が空か`-`で始まるときは、起動せずに例外を投げる。
  * flockはロックファイルの次の引数をオプションとして読み、`-c`ならシェルで実行しうるためである。
  * worktreeで長く走るClaudeと検査コマンドに使う(短命なgit・ghには使わない)。
+ * 起動の前に、ロックファイルを所有者だけが開けるようにする(`prepareLockFile`)。
  */
 export function withWorktreeProcessLock(
   run: CommandRunner,
   lock: WorktreeLock,
   owner: LockOwner,
+  prepareLockFile: (path: string) => Promise<void> = ensurePrivateLockFile,
 ): CommandRunner {
   return async (argv, options) => {
     const command = argv[0];
@@ -424,6 +468,7 @@ export function withWorktreeProcessLock(
       throw new Error("locked command must not be empty");
     if (command.startsWith("-"))
       throw new Error(`locked command must not start with '-': ${command}`);
+    await prepareLockFile(lock.lockPath);
     const env = {
       ...(options?.env ?? {}),
       [LOCK_OWNER_ENV]: formatLockOwner(owner),
@@ -569,7 +614,7 @@ async function lockFdState(
  * 検査コマンドの枠のuid(`slotUids`)で動くプロセスも返さない。workerは別のuidのenvironとfdを読めず、
  * どのworktreeの検査かを特定できないので、読めないまま返すと、無関係なworktreeの走査まで塞ぐためである。
  * 枠のuidのプロセスは、検査の実行が終わるときに止め、取り消された実行が残したものは次の実行が枠を取るときか
- * `restoreCheckOwnership`が止める。所有権をrootに戻したworktreeは、そのuidのプロセスから書き込めない。
+ * `restoreCheckOwnership`が、枠のロックを持って止める。
  * 生きているのにenvironかfdの情報を読めないプロセスは、`uninspectable`を付けて返す(タグもロックとの関係も分からないため)。
  * ロックファイルが無ければ、保持者は探さずにタグだけで探す(ロックファイルを消されても残りを見逃さない)。
  */
@@ -781,7 +826,7 @@ export type StopPolicy = {
 
 export type LockReleaseDeps = {
   /**
-   * worktreeに残った検査用のuidの所有を、rootへ戻す。走査の前に1回呼ぶ。
+   * worktreeに残った検査用のuidの所有を、rootへ戻す。ロックが空き、関係するプロセスもいないと分かった後に1回呼ぶ。
    * 取り消された検査が後始末せずに残すと、rootのgitが所有者の違いで実行を拒むためである。
    * 指定しなければ何もしない。
    */
@@ -908,8 +953,9 @@ async function releasedWithin(opts: {
 
 /**
  * worktreeを前の実行のプロセスが使っていないことを確かめる。止めたプロセスを返す(何も止めなければ空)。
- * 最初に、検査用のuidの所有が残っていればrootへ戻す(`deps.restoreOwnership`)。
  * ロックを確かめ(塞がっていれば確かめ直し)、ロックが空いていても必ず`/proc`を走査して、`planLockRelease`で決める。
+ * ロックが空き、関係するプロセスもいないと分かったときだけ、検査用のuidの所有が残っていればrootへ戻してから返す(`deps.restoreOwnership`)。
+ * 使用中のworktreeには触れずに`WorktreeBusyError`で引き返すためである。
  * `policy`がnullなら何も止めず、関係するプロセス(保持者か、このロックファイルのタグを持つ残り)がいれば`WorktreeBusyError`を投げる。
  * `policy`があり、関係するプロセスがすべて止めてよいものなら、`policy.recheck`を呼んでから止め、ロックが空くのを確かめて走査し直す。
  * 止めてよい残りがまだ見つかれば、合わせて`STOP_ROUNDS`回まで止め直す。
@@ -923,7 +969,6 @@ export async function ensureWorktreeLockFree(opts: {
   readonly policy: StopPolicy | null;
   readonly deps: LockReleaseDeps;
 }): Promise<readonly LockProcess[]> {
-  await opts.deps.restoreOwnership?.(opts.lock);
   let lockHeld = await heldAfterRetries(opts);
   const self = opts.policy?.self ?? null;
   let plan = await scanAndPlan({ lock: opts.lock, self, deps: opts.deps });
@@ -932,6 +977,7 @@ export async function ensureWorktreeLockFree(opts: {
     if (plan.kind === "busy") throw new WorktreeBusyError(plan.holders);
     if (plan.kind === "none") {
       if (lockHeld) throw new WorktreeBusyError([]);
+      await opts.deps.restoreOwnership?.(opts.lock);
       return stopped;
     }
     // "stop"は`self`があるとき(policyがあるとき)だけ出る。

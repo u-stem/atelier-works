@@ -59,6 +59,7 @@ const NOTICE_KIND_LABELS: ReadonlyMap<string, string> = new Map([
   ["host_action_required", "ホスト側の作業"],
   ["cleanup_db_failed", "データベースの掃除の失敗"],
   ["cleanup_worktree_busy", "作業ディレクトリの使用中"],
+  ["check_slot_skipped", "検査の枠の飛ばし"],
   ["console_fetch_failed", "Consoleの取り込みの失敗"],
   ["console_fetch_stale", "Consoleの取り込みの停止"],
   ["console_worker_missing", "Console専用workerの不在"],

@@ -1,14 +1,25 @@
 // 検査コマンドを、workerのrootではなく非特権のuidで動かすための部品。
-// argvと環境変数の組み立て、uidの枠の取得、worktreeの所有権の受け渡し、残ったプロセスの後始末を、
+// argvと環境変数の組み立て、uidの枠の取得と回復、worktreeの所有権の受け渡し、残ったプロセスの後始末を、
 // 副作用の無い関数と、注入できる依存に分けて持つ。
 // 検査コマンドは信頼できない対象リポジトリのコードなので、workerの秘密(環境変数、
-// トークンのファイル)に届かず、書き込める場所をworktreeとそのHOMEと`/tmp`に限る。
+// トークンのファイル)に届かず、書き込める場所をworktreeとそのHOMEと共有の一時ディレクトリに限る。
 // 並行して動く検査どうしが同じuidを共有しないよう、実行ごとにuidの枠を1つ取る。
+// 枠は後の実行で別のリポジトリに使い回すので、枠を取るたびに前の実行の残り(プロセス、所有権、一時ファイル、IPC)を消す。
 
 import { readFileSync } from "node:fs";
-import { chmod, lstat, mkdir, readdir, readFile } from "node:fs/promises";
+import {
+  chmod,
+  lstat,
+  mkdir,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import { maskSecrets } from "./log.ts";
+import { isRecord, isString } from "./types.ts";
 import { type CommandRunner, runCommand } from "./workspace.ts";
 
 /** 枠の先頭のuid。`FACTORY_CHECK_UID`が無いときの値で、`infra/worker/Dockerfile`の既定と同じ。 */
@@ -46,6 +57,8 @@ export const FIND_PATH = "/usr/bin/find";
 export const CHOWN_PATH = "/usr/bin/chown";
 export const CHMOD_PATH = "/usr/bin/chmod";
 export const FLOCK_PATH = "/usr/bin/flock";
+export const RM_PATH = "/usr/bin/rm";
+export const IPCRM_PATH = "/usr/bin/ipcrm";
 
 /**
  * Windmillの実行時のディレクトリ。依存のキャッシュ(`cache`)とログ(`logs`)が、
@@ -56,7 +69,19 @@ export const FLOCK_PATH = "/usr/bin/flock";
 export const WINDMILL_TMP_DIR = "/tmp/windmill";
 
 /**
- * 枠のロックファイルを置くディレクトリ。永続のボリューム(`/var/lib/factory`)の下で、rootだけが入れる。
+ * 誰でも書き込める共有の一時ディレクトリ。POSIXの共有メモリとセマフォは`/dev/shm`に、
+ * メッセージキューは`/dev/mqueue`に置かれる。
+ * 枠を取るたびに、そのuidのものをここから消す。同じuidを次に使う実行が、前の実行の残したファイルを読めないようにするためである。
+ */
+export const SHARED_TMP_DIRS = [
+  "/tmp",
+  "/var/tmp",
+  "/dev/shm",
+  "/dev/mqueue",
+] as const;
+
+/**
+ * 枠のロックファイルと記録を置くディレクトリ。永続のボリューム(`/var/lib/factory`)の下で、rootだけが入れる。
  * 検査用のuidが読めると、ロックを握って枠を塞げてしまうため。
  */
 export const SLOT_LOCK_DIR = "/var/lib/factory/check-slots";
@@ -79,6 +104,11 @@ const CHOWN_MAX_OUTPUT_BYTES = 16 * 1024;
  * `find -execdir`は、PATHに相対のディレクトリ(`.`や空の要素)があると実行を拒むので、絶対パスだけにする。
  */
 const TOOL_PATH = "/usr/bin:/bin";
+/**
+ * 道具を起動するディレクトリ。枠のuidで動く`find`は起動したディレクトリを開くので、
+ * 誰でも入れる`/`にする。ジョブのディレクトリはrootだけが入れることがある。
+ */
+const TOOL_CWD = "/";
 
 const REAP_ROUNDS = 5;
 const REAP_POLL_MS = 100;
@@ -163,11 +193,17 @@ export function setprivArgv(
 export const CHECK_ENV_KEYS = [
   "PATH",
   "HOME",
+  "TMPDIR",
   "LANG",
   "GIT_CONFIG_COUNT",
   "GIT_CONFIG_KEY_0",
   "GIT_CONFIG_VALUE_0",
 ] as const;
+
+/** 検査コマンドの一時ディレクトリ。HOMEの下に置き、他の枠から読めない共有の`/tmp`を既定にさせない。 */
+export function checkTmpDir(home: string): string {
+  return join(home, "tmp");
+}
 
 /**
  * 検査コマンドの環境変数を、許可リストから組み立てる。workerの環境変数は読まない。
@@ -183,6 +219,7 @@ export function checkEnv(input: {
   return {
     PATH: input.path,
     HOME: input.home,
+    TMPDIR: checkTmpDir(input.home),
     LANG: "C.UTF-8",
     GIT_CONFIG_COUNT: "1",
     GIT_CONFIG_KEY_0: "safe.directory",
@@ -190,13 +227,18 @@ export function checkEnv(input: {
   };
 }
 
+/** 正規化された絶対パスで、最上位の1段ではないかを返す。 */
+function isNestedAbsolutePath(dir: string): boolean {
+  const segments = dir.split("/").filter((part) => part !== "");
+  return isAbsolute(dir) && resolve(dir) === dir && segments.length >= 2;
+}
+
 /**
  * 所有権を変えてよいディレクトリかを確かめる。
  * 正規化された絶対パスで、最上位の1段ではないものに限る。`/`や`/workspaces`のような広い範囲を誤って渡さないためである。
  */
 function assertChownableDir(dir: string): void {
-  const segments = dir.split("/").filter((part) => part !== "");
-  if (!isAbsolute(dir) || resolve(dir) !== dir || segments.length < 2) {
+  if (!isNestedAbsolutePath(dir)) {
     throw new Error(`refusing to change ownership of: ${dir}`);
   }
 }
@@ -234,35 +276,93 @@ export function chownToArgv(identity: CheckIdentity, dir: string): string[] {
   ];
 }
 
-/** `dir`の下の、検査用のuidが所有するものをrootに戻すargv。検査の間にできたファイルもすべて戻す。 */
-export function chownBackArgv(identity: CheckIdentity, dir: string): string[] {
+/**
+ * 取り戻しの1段目。rootで、`dir`の下のうち、枠のuidが所有していないディレクトリすべてと、
+ * ほかの非rootのユーザー(並行して動く別の枠など)のもの、書き込みかsetidのビットが立ったrootの単独のファイルを、枠のuidに集める。
+ * 権限のビットは次の段で枠のuidとして落とす。rootのまま`chmod`すると、差し替えられたsymlinkの先を変えうるためである。
+ * ディレクトリをすべて集めるのは、次の段の`find`が枠のuidのまま全体に入れるようにするためである。
+ */
+export function gatherArgv(identity: CheckIdentity, dir: string): string[] {
   assertChownableDir(dir);
   return [
     FIND_PATH,
     "-P",
     dir,
     "-xdev",
+    "!",
+    "-uid",
+    String(identity.uid),
+    "(",
+    "-type",
+    "d",
+    "-o",
+    "!",
+    "-uid",
+    "0",
+    "-o",
+    "(",
+    "!",
+    "-type",
+    "l",
+    "-links",
+    "1",
+    "-perm",
+    "/6022",
+    ")",
+    ")",
     "-execdir",
     CHOWN_PATH,
     "-h",
-    `--from=${String(identity.uid)}`,
-    "0:0",
+    `${String(identity.uid)}:${String(identity.gid)}`,
     "{}",
     "+",
   ];
 }
 
 /**
- * `dir`の下の、グループとその他の書き込みと、setuid・setgidのビットを落とすargv。
- * rootに戻した後に、他の枠の検査が書き込める状態を残さない。symlinkは対象にしない。
+ * 取り戻しの2段目。枠のuidとして、所有者が入れないディレクトリに入れるようにする。
+ * 検査コマンドがディレクトリを0000などにしても、次の段の`find`が中に入れるようにするためである。
+ * `-execdir ... ;`は、そのディレクトリに入る前に実行される。
  */
-export function dropWriteBitsArgv(dir: string): string[] {
+export function openDirsArgv(identity: CheckIdentity, dir: string): string[] {
   assertChownableDir(dir);
-  return [
+  return setprivArgv(identity, [
     FIND_PATH,
     "-P",
     dir,
     "-xdev",
+    "-uid",
+    String(identity.uid),
+    "-type",
+    "d",
+    "!",
+    "-perm",
+    "-u=rwx",
+    "-execdir",
+    CHMOD_PATH,
+    "u+rwx",
+    "{}",
+    ";",
+  ]);
+}
+
+/**
+ * 取り戻しの3段目。枠のuidとして、グループとその他の書き込みと、setuid・setgidのビットを落とす。
+ * rootに戻した後に、他の枠の検査が書き込める状態を残さない。symlinkは対象にしない。
+ * 枠のuidで動かすので、列挙と変更の間にsymlinkへ差し替えられても、枠のuidのもの以外は変わらない。
+ */
+export function dropWriteBitsArgv(
+  identity: CheckIdentity,
+  dir: string,
+): string[] {
+  assertChownableDir(dir);
+  return setprivArgv(identity, [
+    FIND_PATH,
+    "-P",
+    dir,
+    "-xdev",
+    "-uid",
+    String(identity.uid),
     "!",
     "-type",
     "l",
@@ -273,7 +373,220 @@ export function dropWriteBitsArgv(dir: string): string[] {
     "go-w,ug-s",
     "{}",
     "+",
+  ]);
+}
+
+/** 取り戻しの4段目。rootで、`dir`の下のrootでないものをすべてrootに戻す。権限のビットは変えない。 */
+export function reclaimArgv(dir: string): string[] {
+  assertChownableDir(dir);
+  return [
+    FIND_PATH,
+    "-P",
+    dir,
+    "-xdev",
+    "!",
+    "-uid",
+    "0",
+    "-execdir",
+    CHOWN_PATH,
+    "-h",
+    "0:0",
+    "{}",
+    "+",
   ];
+}
+
+/**
+ * 取り戻しの確かめ。`dir`の下に、rootでないものか、書き込みかsetidのビットが立ったものが残っていれば、最初の1つのパスを出す。
+ * 並行して動く別の枠のプロセスが、途中で書き足した場合に残る。
+ * ハードリンクが2つ以上あるファイルは、worktreeの外のファイルでありうるので見ない。
+ */
+export function leftoverArgv(dir: string): string[] {
+  assertChownableDir(dir);
+  return [
+    FIND_PATH,
+    "-P",
+    dir,
+    "-xdev",
+    "(",
+    "!",
+    "-uid",
+    "0",
+    "-o",
+    "(",
+    "!",
+    "-type",
+    "l",
+    "(",
+    "-type",
+    "d",
+    "-o",
+    "-links",
+    "1",
+    ")",
+    "-perm",
+    "/6022",
+    ")",
+    ")",
+    "-print",
+    "-quit",
+  ];
+}
+
+/**
+ * `dir`を中身ごと消すargv。GNUの`rm`は`openat`で降り、symlinkをたどらない。
+ * 消している間に別の枠のプロセスがsymlinkへ差し替えても、外のファイルを消さないためである。
+ */
+export function removeTreeArgv(dir: string): string[] {
+  assertChownableDir(dir);
+  return [RM_PATH, "-rf", "--one-file-system", "--", dir];
+}
+
+/**
+ * 共有の一時ディレクトリ`dir`の下の、枠のuidのディレクトリを中身ごと消すargv。
+ * 中に別のユーザーのものがあっても消せるよう、rootの`rm -rf`を、親ディレクトリを起点にした`./名前`で呼ぶ。
+ */
+export function purgeDirsArgv(uid: number, dir: string): string[] {
+  return [
+    FIND_PATH,
+    "-P",
+    dir,
+    "-xdev",
+    "-mindepth",
+    "1",
+    "-uid",
+    String(uid),
+    "-type",
+    "d",
+    "-prune",
+    "-execdir",
+    RM_PATH,
+    "-rf",
+    "--one-file-system",
+    "--",
+    "{}",
+    "+",
+  ];
+}
+
+/** 共有の一時ディレクトリ`dir`の下の、枠のuidのディレクトリ以外のものを消すargv。`-delete`は親のfdを起点に消す。 */
+export function purgeFilesArgv(uid: number, dir: string): string[] {
+  return [
+    FIND_PATH,
+    "-P",
+    dir,
+    "-xdev",
+    "-uid",
+    String(uid),
+    "!",
+    "-type",
+    "d",
+    "-delete",
+  ];
+}
+
+/** 共有の一時ディレクトリ`dir`の下に、枠のuidのものが残っていれば、最初の1つのパスを出すargv。 */
+export function remainingOfUidArgv(uid: number, dir: string): string[] {
+  return [
+    FIND_PATH,
+    "-P",
+    dir,
+    "-xdev",
+    "-uid",
+    String(uid),
+    "-print",
+    "-quit",
+  ];
+}
+
+/** System VのIPCの1つ。`kind`は共有メモリ(`shm`)、セマフォ(`sem`)、メッセージキュー(`msg`)。 */
+export type IpcEntry = {
+  readonly kind: "shm" | "sem" | "msg";
+  readonly id: number;
+  /** 所有者のuid。 */
+  readonly uid: number;
+  /** 作成者のuid。所有者を他人に変えても、作成者は消せる。 */
+  readonly cuid: number;
+};
+
+const IPC_ID_COLUMNS = { shm: "shmid", sem: "semid", msg: "msqid" } as const;
+
+/**
+ * `/proc/sysvipc/<kind>`の本文を解析する。列は見出しの名前で探す。
+ * 見出しに必要な列が無いか、数でない欄がある行は飛ばす。
+ */
+export function parseSysvIpc(text: string, kind: IpcEntry["kind"]): IpcEntry[] {
+  const lines = text.split("\n").filter((line) => line.trim() !== "");
+  const header = (lines[0] ?? "").trim().split(/\s+/);
+  const idAt = header.indexOf(IPC_ID_COLUMNS[kind]);
+  const uidAt = header.indexOf("uid");
+  const cuidAt = header.indexOf("cuid");
+  if (idAt < 0 || uidAt < 0 || cuidAt < 0) return [];
+  const entries: IpcEntry[] = [];
+  for (const line of lines.slice(1)) {
+    const fields = line.trim().split(/\s+/);
+    const values = [fields[idAt], fields[uidAt], fields[cuidAt]];
+    if (!values.every((value) => value !== undefined && /^\d+$/.test(value)))
+      continue;
+    entries.push({
+      kind,
+      id: Number(values[0]),
+      uid: Number(values[1]),
+      cuid: Number(values[2]),
+    });
+  }
+  return entries;
+}
+
+const IPCRM_FLAGS = { shm: "-m", sem: "-s", msg: "-q" } as const;
+
+/** IPCを識別子で消す`ipcrm`のargv。 */
+export function ipcrmArgv(entries: readonly IpcEntry[]): string[] {
+  return [
+    IPCRM_PATH,
+    ...entries.flatMap((entry) => [IPCRM_FLAGS[entry.kind], String(entry.id)]),
+  ];
+}
+
+/**
+ * 枠の記録。枠を使う実行が、所有権を渡す前に書き、すべて取り戻したときだけ消す。
+ * 取り消しやタイムアウトで後始末が走らなかった実行の残りを、次にその枠を取る実行が見つけて戻すために使う。
+ */
+export type SlotRecord = {
+  readonly worktreeDir: string;
+  readonly homeDir: string;
+};
+
+export function formatSlotRecord(record: SlotRecord): string {
+  return `${JSON.stringify({ worktreeDir: record.worktreeDir, homeDir: record.homeDir })}\n`;
+}
+
+/** 枠の記録の本文を解析する。形が違うか、パスが正規化された2段以上の絶対パスでなければnullを返す。 */
+export function parseSlotRecord(text: string): SlotRecord | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!isRecord(parsed)) return null;
+  const { worktreeDir, homeDir } = parsed;
+  if (!isString(worktreeDir) || !isString(homeDir)) return null;
+  if (!isNestedAbsolutePath(worktreeDir) || !isNestedAbsolutePath(homeDir))
+    return null;
+  return { worktreeDir, homeDir };
+}
+
+/** 回復できずに飛ばした枠。 */
+export type SlotSkip = {
+  readonly index: number;
+  readonly uid: number;
+  readonly reason: string;
+};
+
+/** 飛ばした枠を知らせるnoticeの本文。 */
+export function slotSkipNoticeText(skip: SlotSkip): string {
+  return `検査の枠${CHECK_USER_PREFIX}${String(skip.index)}(uid ${String(skip.uid)})を、前の実行の残りを片付けられないため飛ばし、別の枠で検査しました。理由: ${skip.reason}。止まらないプロセスが残っているときは、workerを再起動してください。`;
 }
 
 export type ProcStatus = {
@@ -460,6 +773,14 @@ export type SlotDeps = {
   readonly now: () => number;
 };
 
+/** 枠の記録の読み書き。枠のロックを持っている間だけ、書くか消す。 */
+export type SlotRecordDeps = {
+  /** 記録が無ければnullを返す。読めないか形が違えば例外を投げる。 */
+  readonly read: (index: number) => Promise<SlotRecord | null>;
+  readonly write: (index: number, record: SlotRecord) => Promise<void>;
+  readonly clear: (index: number) => Promise<void>;
+};
+
 /** 枠が`maxWaitMs`の間に空かなかった。同時実行が枠の数を超え続けている。 */
 export class CheckSlotsBusyError extends Error {
   constructor(waitedMs: number) {
@@ -497,12 +818,17 @@ export type CheckSandboxDeps = {
   readonly run: CommandRunner;
   readonly reap: ReapDeps;
   readonly slots: SlotDeps;
+  readonly slotRecords: SlotRecordDeps;
+  /** System VのIPCの一覧。 */
+  readonly listIpc: () => Promise<readonly IpcEntry[]>;
   /** Windmillの実行時のディレクトリに、所有者以外が入れないようにする。 */
   readonly lockDownRuntimeDir: (dir: string) => Promise<void>;
   /** `path`が、symlinkでない実在のディレクトリであることを確かめる。違えば例外を投げる。 */
   readonly assertDirectory: (path: string) => Promise<void>;
-  /** `path`(symlinkはたどらない)の所有者のuid。無ければnull。 */
-  readonly ownerOf: (path: string) => Promise<number | null>;
+  /** `path`(symlinkはたどらない)の種類。 */
+  readonly pathKind: (
+    path: string,
+  ) => Promise<"missing" | "directory" | "other">;
   /** カーネルの設定`/proc/sys/...`の値。読めなければnull。 */
   readonly readSysctl: (name: string) => string | null;
 };
@@ -512,35 +838,48 @@ export type CheckSandbox = {
   readonly wrap: (argv: readonly string[]) => string[];
   /**
    * 検査の前に1回。Windmillの実行時のディレクトリを閉じ、空いている枠を取り、
-   * 前の実行が残したその枠のプロセスを止め、worktreeとHOMEを枠のuidに渡す。
+   * 前の実行が残したその枠のものを片付け、枠の記録を書いてから、worktreeとHOMEを枠のuidに渡す。
+   * 片付けられない枠は手放して次の枠を試す。
    */
   readonly prepare: (dirs: CheckDirs) => Promise<void>;
   /** コマンド1つの後に。目印を持つプロセスを止める。止められなければ例外を投げる。 */
   readonly settle: () => Promise<void>;
   /**
    * 検査の後に1回。`prepare`が途中で投げた後にも呼ぶ。
-   * 残りを止め、止まったことを確かめてから所有権をrootに戻し、枠を手放す。
+   * 残りを止め、止まったことを確かめてから所有権をrootに戻し、HOMEを消し、枠の記録を消して、枠を手放す。
+   * 途中で失敗したときは記録を残し、次にその枠を取る実行に片付けを任せる。
    */
   readonly release: (dirs: CheckDirs) => Promise<void>;
   /** ホストのカーネルの設定が前提を満たさないときの警告。空なら前提を満たす。 */
   readonly kernelWarnings: () => string[];
 };
 
+async function runToolOutput(
+  deps: CheckSandboxDeps,
+  argv: string[],
+  what: string,
+  opts?: { readonly ignoreExitCode?: boolean },
+): Promise<string> {
+  const result = await deps.run(argv, {
+    cwd: TOOL_CWD,
+    env: { PATH: TOOL_PATH },
+    timeoutMs: CHOWN_TIMEOUT_MS,
+    maxOutputBytes: CHOWN_MAX_OUTPUT_BYTES,
+  });
+  if (!result.timedOut && (result.exitCode === 0 || opts?.ignoreExitCode))
+    return result.stdout;
+  const detail = maskSecrets(result.stderr.trim());
+  throw new Error(
+    `check sandbox: ${what} failed (exit ${String(result.exitCode)}${result.timedOut ? ", timed out" : ""}): ${detail}`,
+  );
+}
+
 async function runTool(
   deps: CheckSandboxDeps,
   argv: string[],
   what: string,
 ): Promise<void> {
-  const result = await deps.run(argv, {
-    env: { PATH: TOOL_PATH },
-    timeoutMs: CHOWN_TIMEOUT_MS,
-    maxOutputBytes: CHOWN_MAX_OUTPUT_BYTES,
-  });
-  if (result.exitCode === 0 && !result.timedOut) return;
-  const detail = maskSecrets(result.stderr.trim());
-  throw new Error(
-    `check sandbox: ${what} failed (exit ${String(result.exitCode)}${result.timedOut ? ", timed out" : ""}): ${detail}`,
-  );
+  await runToolOutput(deps, argv, what);
 }
 
 function stoppedOrThrow(remaining: readonly number[]): void {
@@ -551,19 +890,123 @@ function stoppedOrThrow(remaining: readonly number[]): void {
   }
 }
 
-/** `dir`を枠のuidからrootに戻し、グループとその他の書き込みとsetuid・setgidのビットを落とす。 */
+/** 出力の最初の1行を、秘密をマスクして返す。 */
+function firstLine(output: string): string {
+  return maskSecrets(output.split("\n")[0] ?? "");
+}
+
+/**
+ * `dir`を枠のuidからrootに戻す。枠のuidのプロセスが止まった後に呼ぶ。
+ * 権限のビットは枠のuidとして落とし、rootは`chown -h`だけを行う。
+ * 戻した後、rootでないものか書き込めるものが残っていれば例外を投げる。
+ */
 async function takeBack(
   deps: CheckSandboxDeps,
   identity: CheckIdentity,
   dir: string,
-  what: string,
 ): Promise<void> {
-  await runTool(deps, chownBackArgv(identity, dir), `taking ${what} back`);
+  await runTool(deps, gatherArgv(identity, dir), `gathering ${dir}`);
+  await runTool(deps, openDirsArgv(identity, dir), `opening ${dir}`);
   await runTool(
     deps,
-    dropWriteBitsArgv(dir),
-    `dropping write bits from ${what}`,
+    dropWriteBitsArgv(identity, dir),
+    `dropping write bits in ${dir}`,
   );
+  await runTool(deps, reclaimArgv(dir), `taking ${dir} back`);
+  const leftover = await runToolOutput(
+    deps,
+    leftoverArgv(dir),
+    `checking ${dir}`,
+  );
+  if (leftover.trim() !== "") {
+    throw new Error(
+      `check sandbox: entries owned by others or writable by others remain: ${firstLine(leftover)}`,
+    );
+  }
+}
+
+/** worktreeがあれば取り戻し、HOMEを消す。どちらも、枠のuidのプロセスが止まった後に呼ぶ。 */
+async function takeBackDirs(
+  deps: CheckSandboxDeps,
+  identity: CheckIdentity,
+  dirs: SlotRecord,
+): Promise<void> {
+  if ((await deps.pathKind(dirs.worktreeDir)) === "directory") {
+    await takeBack(deps, identity, dirs.worktreeDir);
+  }
+  await runTool(deps, removeTreeArgv(dirs.homeDir), `removing ${dirs.homeDir}`);
+}
+
+/**
+ * 共有の一時ディレクトリとIPCから、枠のuidのものを消す。消し切れなければ例外を投げる。
+ * IPCは枠のuidとして消す。workerのrootは`CAP_IPC_OWNER`を持たず、他人のIPCを消せないためである。
+ */
+async function purgeShared(
+  deps: CheckSandboxDeps,
+  identity: CheckIdentity,
+): Promise<void> {
+  const uid = identity.uid;
+  for (const dir of SHARED_TMP_DIRS) {
+    // 他の実行が同時に消したファイルを読みかけると`find`は0以外で終わるので、終了コードは見ず、残りで判断する。
+    await runToolOutput(deps, purgeDirsArgv(uid, dir), `purging ${dir}`, {
+      ignoreExitCode: true,
+    });
+    await runToolOutput(deps, purgeFilesArgv(uid, dir), `purging ${dir}`, {
+      ignoreExitCode: true,
+    });
+    const remaining = await runToolOutput(
+      deps,
+      remainingOfUidArgv(uid, dir),
+      `checking ${dir}`,
+      { ignoreExitCode: true },
+    );
+    if (remaining.trim() !== "") {
+      throw new Error(
+        `check sandbox: files of uid ${String(uid)} remain: ${firstLine(remaining)}`,
+      );
+    }
+  }
+  const ofUid = (entries: readonly IpcEntry[]) =>
+    entries.filter((entry) => entry.uid === uid || entry.cuid === uid);
+  const owned = ofUid(await deps.listIpc());
+  if (owned.length === 0) return;
+  await runToolOutput(
+    deps,
+    setprivArgv(identity, ipcrmArgv(owned)),
+    "removing IPC objects",
+    { ignoreExitCode: true },
+  );
+  const left = ofUid(await deps.listIpc());
+  if (left.length > 0) {
+    throw new Error(
+      `check sandbox: IPC objects of uid ${String(uid)} remain: ${left.map((entry) => `${entry.kind} ${String(entry.id)}`).join(", ")}`,
+    );
+  }
+}
+
+/**
+ * 枠のロックを持った状態で、前の実行が残したものを片付ける。
+ * 枠のuidのプロセスを止め、記録があればそのworktreeを取り戻してHOMEを消し、記録を消す。
+ * 最後に共有の一時ディレクトリとIPCから枠のuidのものを消す。
+ */
+async function recoverSlot(
+  deps: CheckSandboxDeps,
+  index: number,
+  uid: number,
+  random: (() => number) | undefined,
+): Promise<void> {
+  stoppedOrThrow(await reapUidProcesses(uid, deps.reap));
+  const identity = newCheckIdentity(uid, random);
+  const record = await deps.slotRecords.read(index);
+  if (record !== null) {
+    await takeBackDirs(deps, identity, record);
+    await deps.slotRecords.clear(index);
+  }
+  await purgeShared(deps, identity);
+}
+
+function errorMessage(error: unknown): string {
+  return maskSecrets(error instanceof Error ? error.message : String(error));
 }
 
 const KERNEL_PROTECTIONS = [
@@ -583,6 +1026,7 @@ export function kernelWarningText(warnings: readonly string[]): string {
  * `uids`が枠で、実行(`prepare`から`release`まで)ごとに空いている1つを取る。
  * 所有権の受け渡しは`prepare`と`release`の対で行い、`release`はプロセスが残っている間は
  * 所有権を戻さない(生きている検査のプロセスが、戻した後のworktreeを書き換えうるため)。
+ * 枠を片付けられなかったときは`onSlotSkipped`で知らせ、別の枠を使う。
  * 1つの部品は、同時に1つの実行だけに使う。
  */
 export function createCheckSandbox(opts: {
@@ -591,6 +1035,7 @@ export function createCheckSandbox(opts: {
   readonly random?: () => number;
   readonly maxWaitMs?: number;
   readonly pollMs?: number;
+  readonly onSlotSkipped?: (skip: SlotSkip) => Promise<void>;
 }): CheckSandbox {
   const deps = opts.deps ?? defaultSandboxDeps();
   const indices = opts.uids.map((_, index) => index);
@@ -601,12 +1046,21 @@ export function createCheckSandbox(opts: {
     }
     return active.identity;
   };
-  return {
-    wrap: (argv) => setprivArgv(current(), argv),
-    prepare: async (dirs) => {
-      await deps.lockDownRuntimeDir(WINDMILL_TMP_DIR);
-      await deps.assertDirectory(dirs.worktreeDir);
-      const handle = await acquireSlot(indices, deps.slots, {
+  /** 片付けまで済んだ枠を1つ取る。片付けられない枠は手放して飛ばす。 */
+  const takeUsableSlot = async (): Promise<{
+    handle: SlotHandle;
+    uid: number;
+  }> => {
+    const skipped = new Set<number>();
+    let lastReason = "";
+    for (;;) {
+      const candidates = indices.filter((index) => !skipped.has(index));
+      if (candidates.length === 0) {
+        throw new Error(
+          `check sandbox: no check slot could be used: ${lastReason}`,
+        );
+      }
+      const handle = await acquireSlot(candidates, deps.slots, {
         maxWaitMs: opts.maxWaitMs ?? SLOT_MAX_WAIT_MS,
         pollMs: opts.pollMs ?? SLOT_POLL_MS,
       });
@@ -615,10 +1069,34 @@ export function createCheckSandbox(opts: {
         await handle.release();
         throw new Error("check sandbox: slot index out of range");
       }
+      try {
+        await recoverSlot(deps, handle.index, uid, opts.random);
+        return { handle, uid };
+      } catch (error) {
+        await handle.release();
+        skipped.add(handle.index);
+        lastReason = errorMessage(error);
+        await opts.onSlotSkipped?.({
+          index: handle.index,
+          uid,
+          reason: lastReason,
+        });
+      }
+    }
+  };
+  return {
+    wrap: (argv) => setprivArgv(current(), argv),
+    prepare: async (dirs) => {
+      await deps.lockDownRuntimeDir(WINDMILL_TMP_DIR);
+      await deps.assertDirectory(dirs.worktreeDir);
+      const { handle, uid } = await takeUsableSlot();
       const identity = newCheckIdentity(uid, opts.random);
       active = { identity, handle };
-      // ロックを持つ間、この枠のuidのプロセスは、終わった実行が残したものだけである。
-      stoppedOrThrow(await reapUidProcesses(uid, deps.reap));
+      // 渡す前に記録する。後始末が走らなくても、次にこの枠を取る実行が戻せるようにするためである。
+      await deps.slotRecords.write(handle.index, {
+        worktreeDir: dirs.worktreeDir,
+        homeDir: dirs.homeDir,
+      });
       await runTool(
         deps,
         chownToArgv(identity, dirs.worktreeDir),
@@ -639,12 +1117,8 @@ export function createCheckSandbox(opts: {
       active = null;
       try {
         stoppedOrThrow(await reapCheckProcesses(identity, deps.reap));
-        await takeBack(deps, identity, dirs.worktreeDir, "the worktree");
-        await runTool(
-          deps,
-          chownBackArgv(identity, dirs.homeDir),
-          "taking the home directory back",
-        );
+        await takeBackDirs(deps, identity, dirs);
+        await deps.slotRecords.clear(handle.index);
       } finally {
         await handle.release();
       }
@@ -658,14 +1132,13 @@ export function createCheckSandbox(opts: {
 }
 
 /**
- * worktreeが検査用のuidの所有のまま残っていれば、rootに戻す。戻したらtrueを返す。
+ * 枠の記録が`dir`を指していれば、その枠のロックを取って片付ける。片付けたらtrueを返す。
  * 検査を実行したジョブが、取り消しやタイムアウトで後始末の前に止められると、所有権が残る。
  * そのままだとrootのgitが所有者の違いで実行を拒み、次の作業項目が止まる。
- * 所有者の枠のロックを取れれば、その枠のプロセス(終わった実行が残したもの)を止めてから戻す。
- * `maxWaitMs`待ってもロックを取れなければ(その枠で別の検査が動いている)、プロセスは止めず、所有権だけ戻す。
- * 戻すのはrootへの変更なので、動いている別の検査が競合しても、worktreeの外のファイルは検査用のuidの所有にならない。
- * 戻した後は、グループとその他の書き込みも落とすので、残ったプロセスはworktreeを書き換えられない。
- * worktreeが無いか、所有者が枠のuidでなければ、何もせずfalseを返す。
+ * ロックを取れた枠は、その枠のuidのプロセスを止め、worktreeを取り戻し、HOMEを消し、記録を消す。
+ * 記録はロックを取った後に読み直し、まだ`dir`を指すときだけ片付ける。
+ * `maxWaitMs`待ってもロックを取れない枠には何もしない。ロックを持つ実行が、その枠を取ったときに片付けるためである。
+ * 読めない記録は飛ばす。その枠は次に取る実行が片付けるか、飛ばして知らせる。
  */
 export async function restoreCheckOwnership(
   dir: string,
@@ -673,27 +1146,37 @@ export async function restoreCheckOwnership(
   deps: CheckSandboxDeps,
   maxWaitMs: number = RESTORE_MAX_WAIT_MS,
 ): Promise<boolean> {
-  const owner = await deps.ownerOf(dir);
-  const index = owner === null ? -1 : uids.indexOf(owner);
-  if (owner === null || index < 0) return false;
-  let handle: SlotHandle | null = null;
-  try {
-    handle = await acquireSlot([index], deps.slots, {
-      maxWaitMs,
-      pollMs: SLOT_POLL_MS,
-    });
-  } catch (error) {
-    if (!(error instanceof CheckSlotsBusyError)) throw error;
-  }
-  try {
-    if (handle !== null) {
-      stoppedOrThrow(await reapUidProcesses(owner, deps.reap));
+  let restored = false;
+  for (const [index, uid] of uids.entries()) {
+    let record: SlotRecord | null;
+    try {
+      record = await deps.slotRecords.read(index);
+    } catch {
+      continue;
     }
-    await takeBack(deps, newCheckIdentity(owner), dir, "the worktree");
-    return true;
-  } finally {
-    await handle?.release();
+    if (record?.worktreeDir !== dir) continue;
+    let handle: SlotHandle;
+    try {
+      handle = await acquireSlot([index], deps.slots, {
+        maxWaitMs,
+        pollMs: SLOT_POLL_MS,
+      });
+    } catch (error) {
+      if (error instanceof CheckSlotsBusyError) continue;
+      throw error;
+    }
+    try {
+      const held = await deps.slotRecords.read(index);
+      if (held?.worktreeDir !== dir) continue;
+      stoppedOrThrow(await reapUidProcesses(uid, deps.reap));
+      await takeBackDirs(deps, newCheckIdentity(uid), held);
+      await deps.slotRecords.clear(index);
+      restored = true;
+    } finally {
+      await handle.release();
+    }
   }
+  return restored;
 }
 
 function isNotFound(error: unknown): boolean {
@@ -763,6 +1246,58 @@ function flockSlotDeps(lockDir: string): SlotDeps {
   };
 }
 
+/**
+ * 枠の記録を、ロックファイルの隣の`slot-N.state`(0600)に置く。
+ * 書くときは一時ファイルに書いてから置き換え、途中で止まっても壊れた記録を残さない。
+ */
+function fileSlotRecordDeps(lockDir: string): SlotRecordDeps {
+  const pathOf = (index: number): string =>
+    join(lockDir, `slot-${String(index)}.state`);
+  return {
+    read: async (index) => {
+      let text: string;
+      try {
+        text = await readFile(pathOf(index), "utf8");
+      } catch (error) {
+        if (isNotFound(error)) return null;
+        throw error;
+      }
+      const record = parseSlotRecord(text);
+      if (record === null) {
+        throw new Error(
+          `check sandbox: the record of slot ${String(index)} is unreadable`,
+        );
+      }
+      return record;
+    },
+    write: async (index, record) => {
+      await mkdir(lockDir, { recursive: true, mode: 0o700 });
+      const temporary = `${pathOf(index)}.tmp`;
+      await writeFile(temporary, formatSlotRecord(record), { mode: 0o600 });
+      await chmod(temporary, 0o600);
+      await rename(temporary, pathOf(index));
+    },
+    clear: async (index) => {
+      await rm(pathOf(index), { force: true });
+    },
+  };
+}
+
+/** `/proc/sysvipc`の3つの表を読む。無い表(IPCの無いカーネル)は空とみなす。 */
+async function listSysvIpc(): Promise<IpcEntry[]> {
+  const entries: IpcEntry[] = [];
+  for (const kind of ["shm", "sem", "msg"] as const) {
+    try {
+      entries.push(
+        ...parseSysvIpc(await readFile(`/proc/sysvipc/${kind}`, "utf8"), kind),
+      );
+    } catch (error) {
+      if (!isNotFound(error)) throw error;
+    }
+  }
+  return entries;
+}
+
 export function defaultSandboxDeps(
   lockDir: string = SLOT_LOCK_DIR,
 ): CheckSandboxDeps {
@@ -790,6 +1325,8 @@ export function defaultSandboxDeps(
       sleep: (ms) => Bun.sleep(ms),
     },
     slots: flockSlotDeps(lockDir),
+    slotRecords: fileSlotRecordDeps(lockDir),
+    listIpc: listSysvIpc,
     lockDownRuntimeDir: async (dir) => {
       try {
         await chmod(dir, 0o700);
@@ -804,11 +1341,11 @@ export function defaultSandboxDeps(
         throw new Error(`check sandbox: not a plain directory: ${path}`);
       }
     },
-    ownerOf: async (path) => {
+    pathKind: async (path) => {
       try {
-        return (await lstat(path)).uid;
+        return (await lstat(path)).isDirectory() ? "directory" : "other";
       } catch (error) {
-        if (isNotFound(error)) return null;
+        if (isNotFound(error)) return "missing";
         throw error;
       }
     },
@@ -827,8 +1364,12 @@ const readPasswd = (): string => readFileSync("/etc/passwd", "utf8");
 /** 本番の検査用の部品を作る。枠のuidは`resolveCheckPool`で決める。 */
 export function checkSandboxFromEnv(
   env: Readonly<Record<string, string | undefined>> = process.env,
+  onSlotSkipped?: (skip: SlotSkip) => Promise<void>,
 ): CheckSandbox {
-  return createCheckSandbox({ uids: resolveCheckPool(env, readPasswd) });
+  return createCheckSandbox({
+    uids: resolveCheckPool(env, readPasswd),
+    ...(onSlotSkipped === undefined ? {} : { onSlotSkipped }),
+  });
 }
 
 /** 本番の設定で、worktreeに残った検査用のuidの所有を戻す。`restoreCheckOwnership`を参照。 */

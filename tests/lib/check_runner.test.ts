@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import {
   CHECK_COMMAND_MAX_OUTPUT_BYTES,
   CHECK_COMMAND_PATH,
@@ -183,6 +183,28 @@ describe("runAllowedCheckCommands", () => {
     await runAllowedCheckCommands(run, "/work", ["true"], 1000);
     const homeUsed = calls[0]?.options?.env?.HOME;
     expect(homeUsed !== undefined && existsSync(homeUsed)).toBe(false);
+  });
+
+  test("the real default createHomeDir makes the TMPDIR inside the HOME during the run", async () => {
+    let tmpExisted = false;
+    const run: CommandRunner = async (_argv, options) => {
+      const tmp = options?.env?.TMPDIR;
+      tmpExisted = tmp !== undefined && existsSync(tmp);
+      return ok("");
+    };
+    await runAllowedCheckCommands(run, "/work", ["true"], 1000);
+    expect(tmpExisted).toBe(true);
+  });
+
+  test("the real default createHomeDir keeps the TMPDIR private", async () => {
+    let mode = -1;
+    const run: CommandRunner = async (_argv, options) => {
+      const tmp = options?.env?.TMPDIR;
+      mode = tmp === undefined ? -1 : statSync(tmp).mode & 0o777;
+      return ok("");
+    };
+    await runAllowedCheckCommands(run, "/work", ["true"], 1000);
+    expect(mode).toBe(0o700);
   });
 
   test("two runs using the real default createHomeDir get different HOME dirs", async () => {
@@ -444,11 +466,27 @@ describe("runAllowedCheckCommands with a sandbox", () => {
     expect(home.state.cleanupCalls).toBe(1);
   });
 
-  test("removes the home even when taking the worktree back fails", async () => {
+  test("leaves the home to the slot's recovery when the release fails", async () => {
     const { sandbox, events } = fakeSandbox({
       releaseError: new Error("take back failed"),
     });
     const { run } = recordingRunner(events, [ok("")]);
+    const home = fakeCheckHomeDir();
+    await runAllowedCheckCommands(
+      run,
+      "/work",
+      ["true"],
+      1000,
+      home.factory,
+      "/usr/bin",
+      sandbox,
+    ).catch(() => {});
+    expect(home.state.cleanupCalls).toBe(0);
+  });
+
+  test("removes the home when a command fails and the release succeeds", async () => {
+    const { sandbox, events } = fakeSandbox();
+    const { run } = recordingRunner(events, [new Error("spawn failed")]);
     const home = fakeCheckHomeDir();
     await runAllowedCheckCommands(
       run,

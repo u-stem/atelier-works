@@ -7,6 +7,7 @@ import { runAllowedCheckCommands } from "../lib/check_runner.ts";
 import {
   checkSandboxFromEnv,
   kernelWarningText,
+  slotSkipNoticeText,
 } from "../lib/check_sandbox.ts";
 import {
   buildSystemPrompt,
@@ -148,7 +149,16 @@ export async function main(
     context.repo,
   );
   // 検査コマンドは、検査用の非特権uidに落として実行する。rootのまま実行することはしない。
-  const checkSandbox = commands.length > 0 ? checkSandboxFromEnv() : null;
+  // 片付けられずに飛ばした枠は、検査を止めずにnoticeで知らせる。
+  const checkSandbox =
+    commands.length > 0
+      ? checkSandboxFromEnv(process.env, async (skip) => {
+          await addNotice({
+            kind: "check_slot_skipped",
+            message: slotSkipNoticeText(skip),
+          });
+        })
+      : null;
   // `pr_fix_verify`と同じ常設リスクの告知。
   // 検査コマンドは、対象リポジトリの検証されていないコードを、
   // workerのコンテナの中で、コンテナの分離なしに実行する。

@@ -202,6 +202,7 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `implement_launch_failed` | `requirements_apply` | 対象、理由、次の操作 |
 | `implement_needs_human` | `implement_finish` | 対象、止まった理由 |
 | `unsandboxed_check_commands` | `implement_verify`、`pr_fix_verify` | 実行する検査コマンドの件数、対象 |
+| `check_slot_skipped` | `implement_verify`、`pr_fix_verify` | 飛ばした枠のユーザーとuid、片付けられなかった理由 |
 | `fix_reply_post_failed` | `pr_fix_finish` | 失敗した件数、`review_comment_id`、最初のエラー |
 | `pr_fix_reviewer_request_failed` | `pr_fix_finish` | 対象、依頼できなかった理由 |
 | `issue_proposal_record_failed` | `pr_fix_finish` | 対象、記録の失敗の理由 |
@@ -221,6 +222,7 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `workspace_disk_usage` | `cleanup_workspaces` | 作業領域のディスク使用量(MiB) |
 
 `fix_reply_post_failed`は、返信の投稿に1件以上失敗したとき1件だけ残す。Discordには通知しない。`unsandboxed_check_commands`は、検査コマンドを実行するたびに残す。
+`check_slot_skipped`は、枠を飛ばすたびに1件残す。Discordには通知しない。
 `cleanup_worktree_busy`は、1回の掃除でworktreeのパスごとに1件残す。Discordには通知しない。
 次のnoticeは、同じ本文の未解決のものがあるあいだは追加しない。
 対象は、次の7種類である。
