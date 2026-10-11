@@ -534,7 +534,7 @@ describe("buildEmbed", () => {
     });
     expect([embed.url, embed.description]).toEqual([
       "https://github.com/octo-owner/atelier-works/issues/42",
-      "Issueが取り込み後に書き換えられたので、取り込み内容を現在のIssueで更新しました。新しいConsoleの要対応で更新後の内容を確かめてから承認してください。",
+      "Issueが取り込み後に書き換えられたので、取り込み内容を現在のIssueで更新しました。Consoleの要対応で更新後の内容を確かめてから承認してください。",
     ]);
   });
 

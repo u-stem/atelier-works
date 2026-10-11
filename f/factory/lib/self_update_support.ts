@@ -281,9 +281,9 @@ export type WmillEnvInput = {
  * 入れるのは`HOME`(CLIの設定ディレクトリ用)と`PATH`(`wmill`本体を探す用)、
  * それに`NPM_CONFIG_IGNORE_SCRIPTS`である。`process.env`全体は渡さず、
  * workerのプロセスがたまたま持つほかの値がサブプロセスに漏れないようにする。
- * `NPM_CONFIG_IGNORE_SCRIPTS`は、`wmill sync push`がraw appのバンドルで
- * 走らせるnpmにも、依存のinstall scriptを動かさせないためのものである
- * (`npm ci`の`--ignore-scripts`はそのバンドルには効かない)。
+ * `NPM_CONFIG_IGNORE_SCRIPTS`は、`wmill`がnpmを走らせることがあっても、
+ * 依存のinstall scriptを動かさせないためのものである。
+ * install scriptはworkerの権限のまま、ネットワークにも出られる状態で動く。
  * workspace・base-url・tokenは意図して環境変数にしない。
  * このCLIはそれらを環境変数から読まないことを実測で確かめている
  * (この節の前にある、wmill CLIの接続の節の冒頭コメントを参照)。
@@ -309,38 +309,8 @@ export function truncateOutput(text: string, max: number): string {
 }
 
 // ---------------------------------------------------------------------------
-// raw appの依存: `wmill sync push`はConsoleのraw appをその場でバンドルし、
-// importをself clone内の`node_modules`から解決する。
+// withCallTimeout: 上限の無いSDKとDBの呼び出しを時間で区切る
 // ---------------------------------------------------------------------------
-
-/**
- * Consoleのraw appのディレクトリ(リポジトリからの相対パス)。
- * `wmill sync push`でバンドルする前に、npmの依存を入れておく必要がある。
- */
-export const RAW_APP_RELATIVE_DIR = "f/factory/factory_console__raw_app";
-
-/**
- * raw appに対する`npm ci`の引数を返す。
- * `npm ci`は`package-lock.json`が固定するものをそのまま入れ、ファイルを
- * 書き換えない。self clone内で`npm install`を使うと`package-lock.json`が
- * 書き換わったまま残り、次の`git checkout -B`を妨げたことがある。
- * `--no-audit --no-fund`は出力を減らし、オフラインでも動きやすくする。
- * `--ignore-scripts`は依存のinstall scriptを動かさない。install scriptは
- * workerの権限のまま、ネットワークにも出られる状態で動くため。
- * raw appの依存にinstall scriptを要するものは無く(`package-lock.json`に
- * `hasInstallScript`が無い)、バンドルは`wmill`が行うので、組み立ては変わらない。
- */
-export function buildNpmCiArgv(rawAppDir: string): string[] {
-  return [
-    "npm",
-    "ci",
-    "--prefix",
-    rawAppDir,
-    "--no-audit",
-    "--no-fund",
-    "--ignore-scripts",
-  ];
-}
 
 /**
  * `self_update`が、上限を持たないSDKとDBの呼び出し(変数の取得と更新、stateの読み書き、

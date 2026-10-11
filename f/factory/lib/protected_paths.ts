@@ -52,12 +52,10 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 黙って飛ばせるので、固定を強制する側と同じ理由で守る。
  * `infra/Caddyfile`には、Consoleのscriptの許可と、draw.ioの図を隔離するCSPがある。
  * `infra/`全体は、pr_fixでは止めない。
- * 旧Consoleのraw appが図を隔離して描く部品も守る。iframeを作る`DrawioViewer.tsx`、
- * iframeの`src`とsandboxの定数(`drawioMessages.ts`)、iframeへ送るXMLと受ける応答の扱い
- * (`drawioFrameState.ts`)、それらを固定値と照合するテストである。
- * 書き換えられると、図を描くiframeにsandboxを外したり別のページを読ませたりできる。
- * `Markdown.tsx`は守らない。旧Consoleの普段の変更を止めないためで、`sandbox`は
- * HTTPのCSP(`infra/Caddyfile`)も後ろ盾になる。
+ * 図を隔離して描くiframeの検査(`tests/lib/drawio_frame_isolation.test.ts`)も守る。
+ * このテストは、`DrawioFrame.tsx`のsandboxとiframeの受け口のメッセージを固定値と照合する。
+ * 書き換えられると、図を描くiframeにsandboxを外したり別のページを読ませたりしても、検査を通る。
+ * sandboxは、HTTPのCSP(`infra/Caddyfile`)も後ろ盾になる。
  */
 export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "console/index.html",
@@ -71,10 +69,7 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "console/scripts/asset-name.ts",
   "console/vite.config.ts",
   "infra/Caddyfile",
-  "f/factory/factory_console__raw_app/components/DrawioViewer.tsx",
-  "f/factory/factory_console__raw_app/lib/drawioMessages.ts",
-  "f/factory/factory_console__raw_app/lib/drawioFrameState.ts",
-  "tests/lib/drawio_raw_app_isolation.test.ts",
+  "tests/lib/drawio_frame_isolation.test.ts",
 ];
 
 /**

@@ -5,7 +5,7 @@
 // 生成範囲は`<!-- generated:名前 -->`と`<!-- /generated:名前 -->`の行で囲む。
 // 名前ごとの中身は次のとおり。
 // - schedules: `f/factory/*.schedule.yaml`の一覧(`docs/architecture.md`)
-// - assets: `f/factory`のscript・flow・appのpathとsummaryの一覧(`docs/architecture.md`)
+// - assets: `f/factory`のscriptとflowのpathとsummaryの一覧(`docs/architecture.md`)
 // READMEのmiseタスクの表は日本語の説明を手で書くので生成せず、
 // `mise.toml`のタスクと過不足が無いかだけを`--check`で確かめる。
 //
@@ -34,7 +34,7 @@ export type ScheduleEntry = {
 
 export type AssetEntry = {
   readonly path: string;
-  readonly kind: "script" | "flow" | "app";
+  readonly kind: "script" | "flow";
   readonly summary: string;
 };
 
@@ -61,7 +61,7 @@ export function renderSchedules(entries: readonly ScheduleEntry[]): string {
   ].join("\n");
 }
 
-/** script・flow・appの一覧を表にする。並びはWindmillの画面と同じくsummaryの順。 */
+/** scriptとflowの一覧を表にする。並びはWindmillの画面と同じくsummaryの順。 */
 export function renderAssets(entries: readonly AssetEntry[]): string {
   const rows = [...entries]
     .sort((a, b) => a.summary.localeCompare(b.summary, "en"))
@@ -155,24 +155,17 @@ function loadSchedules(): ScheduleEntry[] {
 }
 
 function loadAssets(): AssetEntry[] {
-  const scripts = listFiles("f/factory/**/*.script.yaml")
-    .filter((path) => !path.includes("__raw_app/"))
-    .map((path) => ({
-      path: path.replace(/\.script\.yaml$/, ""),
-      kind: "script" as const,
-      summary: stringField(readYaml(path), "summary"),
-    }));
+  const scripts = listFiles("f/factory/**/*.script.yaml").map((path) => ({
+    path: path.replace(/\.script\.yaml$/, ""),
+    kind: "script" as const,
+    summary: stringField(readYaml(path), "summary"),
+  }));
   const flows = listFiles("f/factory/*__flow/flow.yaml").map((path) => ({
     path: path.replace(/__flow\/flow\.yaml$/, ""),
     kind: "flow" as const,
     summary: stringField(readYaml(path), "summary"),
   }));
-  const apps = listFiles("f/factory/*__raw_app/raw_app.yaml").map((path) => ({
-    path: path.replace(/__raw_app\/raw_app\.yaml$/, ""),
-    kind: "app" as const,
-    summary: stringField(readYaml(path), "summary"),
-  }));
-  return [...scripts, ...flows, ...apps];
+  return [...scripts, ...flows];
 }
 
 function loadMiseTaskNames(): string[] {
