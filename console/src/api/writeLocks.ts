@@ -62,5 +62,42 @@ export function createWriteLocks(): WriteLocks {
   };
 }
 
+export type LockedRun<T> =
+  | { readonly started: false }
+  | { readonly started: true; readonly value: T };
+
+/**
+ * `key`が空いていれば取り、`run`を実行して、終わったら放す。取れなければ`run`を呼ばない。
+ * `run`が`keepLocked: true`を返したときは放さず、`holdUntilReleased`に放す関数を渡す。
+ * 書き込みの後に一覧を読み直せなかったときに、古い一覧で同じ対象を操作させないためである。
+ * `run`が例外を投げたときは、種類を問わず放してから投げ直す。プログラムの誤りで、押せないまま残さないためである。
+ * ロックを持つのは、このタブの中だけである。
+ */
+export async function runLocked<T>(
+  locks: WriteLocks,
+  key: string,
+  run: () => Promise<{ readonly value: T; readonly keepLocked: boolean }>,
+  holdUntilReleased: (release: () => void) => void,
+): Promise<LockedRun<T>> {
+  if (!locks.tryAcquire(key)) {
+    return { started: false };
+  }
+  let result: { readonly value: T; readonly keepLocked: boolean };
+  try {
+    result = await run();
+  } catch (error) {
+    locks.release(key);
+    throw error;
+  }
+  if (result.keepLocked) {
+    holdUntilReleased(() => {
+      locks.release(key);
+    });
+  } else {
+    locks.release(key);
+  }
+  return { started: true, value: result.value };
+}
+
 /** 画面全体で共有するロック。 */
 export const writeLocks: WriteLocks = createWriteLocks();

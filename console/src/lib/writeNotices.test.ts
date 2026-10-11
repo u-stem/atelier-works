@@ -4,9 +4,20 @@ import {
   describeAuditResult,
   describeNoticeResult,
   describeRetryResult,
+  STALE_LIST_NOTICE,
 } from "./writeNotices.ts";
 
 const JOB = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
+
+describe("STALE_LIST_NOTICE", () => {
+  test("warns that the list is old and the target stays locked", () => {
+    expect(STALE_LIST_NOTICE).toEqual({
+      tone: "warning",
+      message:
+        "一覧を読み直せませんでした。一覧が更新されるまで、この対象は操作できません。",
+    });
+  });
+});
 
 describe("describeApprovalResult", () => {
   test("reports an approval as a success", () => {

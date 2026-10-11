@@ -166,28 +166,22 @@ describe("kickoffAudit", () => {
 
   test("calls audit_kickoff as a manual run without force", async () => {
     const { fetchFn, calls } = respondWith(STARTED);
-    await kickoffAudit(undefined, { fetchFn });
+    await kickoffAudit({ fetchFn });
     expect(calls[0]).toEqual({
       url: "/api/w/factory/jobs/run_wait_result/p/f/factory/audit_kickoff",
       body: { days: 7, force: false, source: "manual" },
     });
   });
 
-  test("sends the requested number of days", async () => {
-    const { fetchFn, calls } = respondWith(STARTED);
-    await kickoffAudit(14, { fetchFn });
-    expect(calls[0]?.body).toMatchObject({ days: 14 });
-  });
-
   test("returns a skipped result", async () => {
     const skipped = { skipped: true, reason: "audit_in_progress" } as const;
     const { fetchFn } = respondWith(skipped);
-    expect(await kickoffAudit(undefined, { fetchFn })).toEqual(skipped);
+    expect(await kickoffAudit({ fetchFn })).toEqual(skipped);
   });
 
   test("fails with invalid_response when the result has the wrong shape", async () => {
     const { fetchFn } = respondWith({ skipped: true, reason: "other" });
-    expect(await failureOf(kickoffAudit(undefined, { fetchFn }))).toEqual({
+    expect(await failureOf(kickoffAudit({ fetchFn }))).toEqual({
       kind: "invalid_response",
     });
   });

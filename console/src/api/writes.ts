@@ -4,7 +4,7 @@
 //
 // 承認者と解決者は、引数に取らない。scriptがジョブのWindmill実行文脈から導く。
 // 画面から渡した名前は信用できないためである。
-// Consoleの操作として決まっている値(`force`、`source`、`note`)は、ここで固定する。
+// Consoleの操作として決まっている値(`force`、`source`、`days`、`note`)は、ここで固定する。
 // 失敗は`ApiFailure`で投げ、戻りは型ガードを通してから返す。
 // 結果が分からない失敗でも再試行しない。再試行するかは呼び出し側が決める。
 
@@ -29,8 +29,8 @@ import {
 /** 承認の記録に添える補足。操作がConsoleから来たことを、記録の理由の欄に残す。 */
 export const CONSOLE_DECISION_NOTE = "decided from the Factory Console";
 
-/** 監査の対象期間の日数。レポートがまだ1件も無いときだけ、scriptが使う。 */
-const DEFAULT_AUDIT_DAYS = 7;
+/** 監査の対象期間の日数。レポートがまだ1件も無いときだけ、scriptが使う。画面から変えさせない。 */
+const AUDIT_DAYS = 7;
 
 async function callWrite<T>(
   name: ScriptName,
@@ -94,12 +94,11 @@ export function retryWorkItem(
 
 /** 監査を手動で起動する。対象が無いときなどは、起動せずに理由を返す。 */
 export function kickoffAudit(
-  days: number = DEFAULT_AUDIT_DAYS,
   options: RunScriptOptions = {},
 ): Promise<AuditKickoffResult> {
   return callWrite(
     "audit_kickoff",
-    { days, force: false, source: "manual" },
+    { days: AUDIT_DAYS, force: false, source: "manual" },
     isAuditKickoffResult,
     options,
   );

@@ -20,6 +20,16 @@ export type WriteNotice = {
   readonly message: string;
 };
 
+/**
+ * 書き込みの後に一覧を読み直せなかったときの知らせ。
+ * 一覧は古いままで、済んだ操作を押し直せてしまうので、更新されるまでその対象は止めておく。
+ */
+export const STALE_LIST_NOTICE: WriteNotice = {
+  tone: "warning",
+  message:
+    "一覧を読み直せませんでした。一覧が更新されるまで、この対象は操作できません。",
+};
+
 export function describeApprovalResult(
   result: ApprovalDecideResult,
 ): WriteNotice {

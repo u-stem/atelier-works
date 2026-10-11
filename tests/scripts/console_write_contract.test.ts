@@ -10,6 +10,7 @@ import { Glob } from "bun";
 import {
   AUDIT_SKIP_REASONS,
   type AuditSkipReason,
+  isApprovalDecideResult,
   isAuditKickoffResult,
   isNoticeResolveResult,
   isRetryWorkItemResult,
@@ -22,13 +23,13 @@ import {
   SCRIPT_PATHS,
 } from "../../console/src/api/windmill.ts";
 import * as consoleWrites from "../../console/src/api/writes.ts";
+import * as approvalScript from "../../f/factory/approval_decide.ts";
 import type * as auditKickoff from "../../f/factory/audit_kickoff.ts";
 import {
   type AuditKickoffSkip,
   decideAuditKickoff,
 } from "../../f/factory/lib/audit_support.ts";
 import type { Notice } from "../../f/factory/lib/types.ts";
-import { APPROVAL_REQUEST_STATUSES } from "../../f/factory/lib/types.ts";
 import * as noticeResolve from "../../f/factory/notice_resolve.ts";
 import * as retryScript from "../../f/factory/retry_work_item.ts";
 
@@ -98,8 +99,7 @@ const WRAPPER_CALLS: Readonly<
       { fetchFn },
     ),
   retry_work_item: (fetchFn) => consoleWrites.retryWorkItem(7, { fetchFn }),
-  audit_kickoff: (fetchFn) =>
-    consoleWrites.kickoffAudit(undefined, { fetchFn }),
+  audit_kickoff: (fetchFn) => consoleWrites.kickoffAudit({ fetchFn }),
   notice_resolve: (fetchFn) => consoleWrites.resolveNotice(4, { fetchFn }),
 };
 
@@ -226,13 +226,16 @@ describe("what the scripts return", () => {
     ).toBe(true);
   });
 
-  test("approval_decide records statuses that exist in the backend", () => {
-    expect(
-      ["approved", "rejected"].every((status) =>
-        APPROVAL_REQUEST_STATUSES.some((known) => known === status),
-      ),
-    ).toBe(true);
-  });
+  test.each(["approve", "reject"] as const)(
+    "approval_decide's result for %s passes the guard",
+    (decision) => {
+      expect(
+        isApprovalDecideResult(
+          approvalScript.buildApprovalDecideResult(decision, JOB),
+        ),
+      ).toBe(true);
+    },
+  );
 
   function skipReasonsOfDecide(): AuditKickoffSkip[] {
     const period = {
@@ -317,16 +320,75 @@ describe("types", () => {
   });
 });
 
+async function consoleSourcesOutsideApi(): Promise<string[]> {
+  const files: string[] = [];
+  for await (const file of new Glob("console/src/**/*.{ts,tsx}").scan(".")) {
+    if (!file.startsWith("console/src/api/")) files.push(file);
+  }
+  return files.sort();
+}
+
+function isTestFile(file: string): boolean {
+  return /\.test\.tsx?$/.test(file);
+}
+
+/** src/apiの外でfetchを呼んでよいファイル。Windmillのscriptの呼び出しではない。 */
+const FETCH_OUTSIDE_API = ["console/src/useReleaseWatch.ts"];
+
 describe("api boundary", () => {
   test("only src/api imports the raw script runner", async () => {
     const importers: string[] = [];
-    for await (const file of new Glob("console/src/**/*.{ts,tsx}").scan(".")) {
-      if (file.startsWith("console/src/api/")) continue;
+    for (const file of await consoleSourcesOutsideApi()) {
       const source = await Bun.file(file).text();
       if (/from\s+["'][^"']*\/windmill(?:\.ts)?["']/.test(source)) {
         importers.push(file);
       }
     }
     expect(importers).toEqual([]);
+  });
+
+  test("nothing outside src/api writes the run_wait_result path by hand", async () => {
+    const offenders: string[] = [];
+    for (const file of await consoleSourcesOutsideApi()) {
+      if (isTestFile(file)) continue;
+      const source = await Bun.file(file).text();
+      if (/run_wait_result|["'`]\/api\/w\//.test(source)) offenders.push(file);
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  test("nothing outside src/api calls fetch, except the listed files", async () => {
+    const offenders: string[] = [];
+    for (const file of await consoleSourcesOutsideApi()) {
+      if (isTestFile(file) || FETCH_OUTSIDE_API.includes(file)) continue;
+      const source = await Bun.file(file).text();
+      if (/(?<![.\w])fetch\s*\(/.test(source)) offenders.push(file);
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  test("the listed fetch callers exist", async () => {
+    const present = await Promise.all(
+      FETCH_OUTSIDE_API.map((file) => Bun.file(file).exists()),
+    );
+    expect(present.every(Boolean)).toBe(true);
+  });
+
+  test("nothing re-exports the runner or the allowlist", async () => {
+    const offenders: string[] = [];
+    for await (const file of new Glob("console/src/**/*.{ts,tsx}").scan(".")) {
+      if (isTestFile(file) || file === "console/src/api/windmill.ts") continue;
+      const source = await Bun.file(file).text();
+      const reexport =
+        /export\s+(?:type\s+)?\*\s+from\s+["'][^"']*\/windmill/.test(source) ||
+        /export\s+(?:type\s+)?\{[^}]*\b(?:runScript|SCRIPT_PATHS)\b[^}]*\}/.test(
+          source,
+        ) ||
+        /export\s+(?:const|let|var)\s+\w+\s*=\s*(?:runScript|SCRIPT_PATHS)\b/.test(
+          source,
+        );
+      if (reexport) offenders.push(file);
+    }
+    expect(offenders).toEqual([]);
   });
 });
