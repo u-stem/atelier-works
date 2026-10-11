@@ -6,6 +6,7 @@ import {
   LIST_ORIGIN_STATE,
   listBackAction,
   rowDomKey,
+  selectionHistoryState,
   selectionPushesHistory,
 } from "./inboxPane.ts";
 
@@ -102,5 +103,21 @@ describe("rowDomKey", () => {
     expect(rowDomKey({ type: "approval", id: 1 })).not.toBe(
       rowDomKey({ type: "failure", id: 1 }),
     );
+  });
+});
+
+describe("selectionHistoryState", () => {
+  test("marks an entry pushed from the list", () => {
+    expect(selectionHistoryState(true, null)).toBe(LIST_ORIGIN_STATE);
+  });
+
+  test("keeps the mark of the entry that a replace overwrites", () => {
+    expect(selectionHistoryState(false, LIST_ORIGIN_STATE)).toBe(
+      LIST_ORIGIN_STATE,
+    );
+  });
+
+  test("leaves an unmarked entry unmarked when it is replaced", () => {
+    expect(selectionHistoryState(false, null)).toBeNull();
   });
 });

@@ -60,3 +60,15 @@ export function listBackAction(state: unknown): "pop" | "clear" {
 export function rowDomKey(selection: InboxSelection): string {
   return `${selection.type}:${selection.id}`;
 }
+
+/**
+ * 選択の変更で履歴の項目に載せる`location.state`。
+ * 積むときは一覧から選んだ印を付ける。置き換えるときは、置き換わる項目の印をそのまま引き継ぐ。
+ * 印を落とすと、広い幅で選び直した後に狭い幅へ戻ったとき、戻る操作が置き換えになり一覧の履歴が重なるためである。
+ */
+export function selectionHistoryState(
+  push: boolean,
+  current: unknown,
+): unknown {
+  return push ? LIST_ORIGIN_STATE : current;
+}

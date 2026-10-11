@@ -23,9 +23,9 @@ import {
   inboxDetailClass,
   inboxListClass,
   inboxPane,
-  LIST_ORIGIN_STATE,
   listBackAction,
   rowDomKey,
+  selectionHistoryState,
   selectionPushesHistory,
 } from "../../lib/inboxPane.ts";
 import {
@@ -206,7 +206,7 @@ export function InboxScreen() {
     const push = selectionPushesHistory(!wide, next);
     setSearchParams(withSelection(searchParams, next), {
       replace: !push,
-      state: push ? LIST_ORIGIN_STATE : null,
+      state: selectionHistoryState(push, location.state),
     });
   };
 
