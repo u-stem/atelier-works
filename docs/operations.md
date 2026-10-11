@@ -1120,6 +1120,8 @@ Discordの通知とConsoleの通知には、上の表の次の操作が載る。
 Console用のworker(`windmill_worker_console`)は、`mise run up`で作られる。
 ワーカーグループ`console`に属し、tag`console`のジョブだけを受ける。
 どのscriptをこのworkerで動かすかは、scriptの`tag`で決める。
+このworkerには、`factory_state`のボリューム全体をマウントしない。
+ボリューム全体とは、`factory_state`の最上位を指す。`claude`、`gh`、`audits`、`requirements`などが並ぶ層である。
 まず`mise run doctor`を実行する。
 Dockerの版と、起動中のworkerのマウントを判定する。
 `sh -c`を渡す`exec`(下のマウントの判定のコマンド)は、フックが拒否する。
@@ -1189,20 +1191,20 @@ mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate w
 > `--pull never`は、外向きの通信が無いときでも使え、余計なpullをしないために付ける。
 > `rm`が権限のエラーで失敗したときは、出力を控えて、運用者が対処を決める。
 
-マウントが想定どおりかは、起動中のworkerの中から`factory_state`の根の証拠が見えるかで判定する。
+マウントが想定どおりかは、起動中のworkerの中から、`factory_state`のボリューム全体がマウントされている証拠が見えるかで判定する。
 正しい設定では、`/var/lib/factory`はコンテナのrootfsにあり、その下にはマウント先の`requirements`しか無い。
 証拠は次の2つである。
 
-- `/var/lib/factory`の直下の`claude`、`gh`、`audits`。根を`/var/lib/factory`に付ける設定で作られたworkerが残っていると見える。直下の名前なので、owner名とはぶつからない。
-- `/var/lib/factory/requirements/requirements`。`volume.subpath`が無視されて、根が`/var/lib/factory/requirements`に付くと見える。根には`factory_state_init`が必ず`requirements`を作るためである。ただし、対象リポジトリのowner名が`requirements`だと、サブパスだけが正しく付いていても見える。
+- `/var/lib/factory`の直下の`claude`、`gh`、`audits`。ボリューム全体を`/var/lib/factory`にマウントする設定で作られたworkerが残っていると見える。直下の名前なので、owner名とはぶつからない。
+- `/var/lib/factory/requirements/requirements`。`volume.subpath`が無視されて、ボリューム全体が`/var/lib/factory/requirements`にマウントされると見える。ボリューム全体には`factory_state_init`が必ず`requirements`を作るためである。ただし、対象リポジトリのowner名が`requirements`だと、サブパスだけが正しく付いていても見える。
 
 `docker inspect`のSourceは、サブパスを反映しないので、判定に使わない。
 
 判定は1回の`exec`で行い、`sh -c`の終了コードで結果を返す。
 composeの失敗(1、126、127など)とぶつからないよう、専用の値を使う。
 
-- 11なら、根の証拠は見えない。
-- 10なら、根の証拠が見える。
+- 11なら、ボリューム全体がマウントされている証拠は見えない。
+- 10なら、ボリューム全体がマウントされている証拠が見える。
 - 3なら、マウント先が見えない。マウントが設定どおりに付いていないので、`mise run up`を実行してから、Console用のworkerを作り直す。
 - ほかの終了コードか、コンテナが動いていないときは、確かめられない。
 
@@ -1212,7 +1214,7 @@ mise exec -- docker compose -f infra/docker-compose.yml exec -T windmill_worker_
 
 `mise run doctor`は同じ判定をし、画面には終了コードではなく`console worker mount`の行を出す。
 
-- 11は、OKと「`factory_state`の根は付いていません」を出す。
+- 11は、OKと「`factory_state`のボリューム全体はマウントされていません」を出す。
 - 10は、NGを出す。メッセージは「/var/lib/factory/requirements/requirements」か「/var/lib/factoryの直下のclaude、gh、audits」で始まる。
 - 3は、NGと終了コードを出す。
 - workerが起動していないときは、確かめられない旨をOKで出す。このとき、マウントは判定されていない。
@@ -1224,17 +1226,17 @@ mise exec -- docker compose -f infra/docker-compose.yml exec -T windmill_worker_
 mise exec -- docker compose -f infra/docker-compose.yml exec -T windmill_worker_console ls -la /var/lib/factory/requirements
 ```
 
-- 1つめの`ls`に`claude`、`gh`、`audits`のどれかが並べば、根が`/var/lib/factory`に付いている。Dockerの版を下限以上にし、Console用のworkerを作り直す。
+- 1つめの`ls`に`claude`、`gh`、`audits`のどれかが並べば、ボリューム全体が`/var/lib/factory`にマウントされている。Dockerの版を下限以上にし、Console用のworkerを作り直す。
 - 2つめの`ls`に`requirements`が並ぶのは、次のどちらかのときである。
-  根が`/var/lib/factory/requirements`に付いているか、owner名が`requirements`でサブパスだけが付いている。
+  ボリューム全体が`/var/lib/factory/requirements`にマウントされているか、owner名が`requirements`でサブパスだけがマウントされている。
   この判定では見分けられないので、`requirements/requirements`だけが見えても、正常とは断定しない。
   見分けられない分は、Dockerの版の下限と、workerの作り直しで補う。
 - `audits`は、監査を1回実行するまで作られない。
   `gh`は、作られないことがある。
-  4つの名前が揃わなくても、根が付いていることがある。
-  名前が揃うことを、根が付いている条件にしない。
+  4つの名前が揃わなくても、ボリューム全体がマウントされていることがある。
+  名前が揃うことを、ボリューム全体がマウントされている条件にしない。
 
-この判定が見分けるのは、根が付いたかどうかだけである。
+この判定が見分けるのは、ボリューム全体がマウントされたかどうかだけである。
 symlinkの先がマウントされた場合は見分けられないので、その疑いは、上の`ls -la`で確かめる。
 
 Dockerの版は`mise run doctor`で確かめる。
@@ -1246,9 +1248,9 @@ mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate w
 ```
 
 `mise run up`は、設定の変わらないworkerを作り直さない。
-根が付く原因として考えられるのは、次の2つである。
+ボリューム全体がマウントされる原因として考えられるのは、次の2つである。
 
-- 根を付ける設定で作られたworkerが残っている。
+- ボリューム全体をマウントする設定で作られたworkerが残っている。
 - DockerのEngineかComposeが下限に届いていない。
 
 ### adminsワークスペースの組み込み項目

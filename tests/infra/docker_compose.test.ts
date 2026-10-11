@@ -13,7 +13,7 @@ import { join } from "node:path";
 
 // Console用workerの構成を静的に確かめる。
 // 書き込めるマウントをworker_logsと専用の依存キャッシュに限ること、
-// factory_workspacesを共有しないこと、factory_stateの根ではなく
+// factory_workspacesを共有しないこと、factory_stateのボリューム全体ではなく
 // requirementsのサブパスだけを読み取り専用で付けることが境界の要なので、
 // composeの編集で崩れたらここで落とす。
 const REPO_ROOT = join(import.meta.dir, "../..");

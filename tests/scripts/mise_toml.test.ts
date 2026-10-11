@@ -26,7 +26,7 @@ describe("mise.toml", () => {
 
 // スタックを起動するタスクは、起動の前にDockerの版を確かめる。
 // 下限を満たさないEngineは`volume.subpath`を黙って無視し、
-// Console用workerに`factory_state`の根が付きうるため。
+// Console用workerに`factory_state`のボリューム全体がマウントされうるため。
 // 検査に失敗したら必ず止まるよう、タスクの先頭で`set -e`を置く。
 // miseの既定のシェルの引数が変わっても、検査の後の行へ進まないためである。
 function isRecord(value: unknown): value is Record<string, unknown> {

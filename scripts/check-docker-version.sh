@@ -5,9 +5,9 @@
 # Console用のworkerは、`volume.subpath`で`factory_state`の一部だけをマウントする。
 # Compose 2.26.0以上でEngineがAPI 1.45(Docker Engine 26.0)未満の組み合わせでは、
 # Composeはエラーにせず、Engineが`subpath`を黙って無視する。
-# 無視されると、サブパスではなく`factory_state`の根が付き、Claude Codeとghの設定まで届く。
+# 無視されると、サブパスではなく`factory_state`のボリューム全体がマウントされ、Claude Codeとghの設定まで届く。
 # Compose 2.26.0未満が`subpath`を拒否するのか、黙って無視するのかは確かめていない。
-# どちらであっても、根が付く経路を残さないため、両方の下限を要求する。
+# どちらであっても、ボリューム全体がマウントされる経路を残さないため、両方の下限を要求する。
 # 起動の前に止めるため、スタックを起動するmiseのタスクと`doctor`がこれを呼ぶ。
 # 対象はDocker Engineである。Podmanは検査も動作確認もしていない。
 set -euo pipefail

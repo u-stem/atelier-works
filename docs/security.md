@@ -270,12 +270,13 @@ workerには`no-new-privileges:true`と、プロセス数の上限(`deploy.resou
 Console用のworker(`windmill_worker_console`)は、Consoleの問い合わせと操作の受付だけを処理する。
 信頼できないIssueを読むClaudeは、このworkerでは動かさない。
 このworkerの境界が守るのは、ファイルシステムだけである。
+以下で「ボリューム全体」と書くのは、`factory_state`の最上位を指す。`claude`、`gh`、`audits`、`requirements`などが並ぶ層である。
 絞り方は次のとおりである。
 
 | 項目 | 設定 |
 | --- | --- |
 | 書き込めるマウント | `worker_logs`と専用の依存キャッシュ`worker_console_dependency_cache`だけである。`worker_logs`は、`windmill_server`、defaultのworker、nativeのworkerとも共有する書き込みのマウントである |
-| `factory_state` | 根はマウントしない。サブパス`requirements`だけを、同じパス(`/var/lib/factory/requirements`)に読み取り専用でマウントする。Claude Codeとghの設定は、根の直下にあるので届かない |
+| `factory_state` | ボリューム全体はマウントしない。サブパス`requirements`だけを、同じパス(`/var/lib/factory/requirements`)に読み取り専用でマウントする。Claude Codeとghの設定は、ボリューム全体の直下にあるので届かない |
 | `factory_console` | 読み取り専用でマウントする |
 | `factory_workspaces` | マウントしない。対象リポジトリのチェックアウトに届かない |
 | `worker_dependency_cache` | 共有しない。Console用のworkerは専用のボリュームを使うので、defaultのworkerと依存のキャッシュを通して影響し合わない |
@@ -294,13 +295,14 @@ Console用のworker(`windmill_worker_console`)は、Consoleの問い合わせと
 defaultのworkerで動くものが置いたsymlinkの先を、Console用のworkerにマウントさせないためである。
 `requirements`がsymlinkだと`factory_state_init`が失敗し、`mise run deploy`は`wmill sync push`とmigrationの前で止まる。
 
-`volume.subpath`は、古いEngineでは気づかないうちに無視され、`factory_state`の根が付きうる。
+`volume.subpath`は、古いEngineでは気づかないうちに無視され、`factory_state`のボリューム全体がマウントされうる。
 そのため、スタックを起動するmiseのタスク(`up`、`deploy`)は、起動の前にEngineが26.0(API 1.45)以上、Composeが2.26.0以上かを確かめ、満たさなければ止まる。
 この強制が止めるのは、`mise run up`と`mise run deploy`を通した起動だけである。
 `mise exec -- docker compose ... up`を直接実行した場合や、restart policyによる再起動は止めない。
-`doctor`は同じ検査に加えて、起動中のConsole用workerの中から、`factory_state`の根の証拠が見えないことを確かめる。
+`doctor`は同じ検査に加えて、起動中のConsole用workerの中から、`factory_state`のボリューム全体がマウントされている証拠が見えないことを確かめる。
 証拠は、`/var/lib/factory`の直下の`claude`、`gh`、`audits`と、`requirements/requirements`である。
-対象リポジトリのowner名が`requirements`だと、サブパスだけが付いていても`requirements/requirements`が見えるので、この証拠だけでは根を見分けられない。
+対象リポジトリのowner名が`requirements`だと、サブパスだけが付いていても`requirements/requirements`が見える。
+そのため、この証拠だけではボリューム全体のマウントを見分けられない。
 Podmanは対象外である。
 
 次のことは、この境界では守れない。
@@ -310,7 +312,7 @@ Podmanは対象外である。
   読める変数には`f/factory/claude_oauth_token`と`f/factory/github_token`がある。
   マウントの制限で守るのは、Claude Codeとghの設定と履歴のファイルだけである。
   トークンそのものは守らない。
-- scriptを編集できる者は、tagを付けずにdefaultのworkerで動かせば、`factory_state`を根から読み書きできる。
+- scriptを編集できる者は、tagを付けずにdefaultのworkerで動かせば、`factory_state`のボリューム全体を読み書きできる。
 - 要件定義書と図は読める。Consoleが表示するのと同じ内容である。
 - このworkerで動かすのはリポジトリのscriptの想定だが、これを強制する仕組みは無い。ワークスペースでscriptを編集できる者は、任意のscriptにtag`console`を付けられる。
   tag`console`を付けたscriptは、`requirements`の下を読める。書けるのはdefaultのworkerだけである。
@@ -323,7 +325,7 @@ Podmanは対象外である。
   誤ったマウントは、symlinkを消してworkerを起動し直すまで残る。`mise run up`は、設定の変わらない、動いているworkerを作り直さないためである。
   `mise run up`が`factory_state_init`の失敗で止まったときは、その時点のworkerのマウントを疑う。
   [Console用workerを確かめる](operations.md#console用workerを確かめる)の手順でsymlinkを消し、workerを作り直す。
-  突くにはdefaultのworkerでのコード実行が要る。その権限があれば`factory_state`の根を直接読めるので、実害は増えない。
+  突くにはdefaultのworkerでのコード実行が要る。その権限があれば`factory_state`のボリューム全体を直接読めるので、実害は増えない。
 
 ## 自己更新の依存インストール
 

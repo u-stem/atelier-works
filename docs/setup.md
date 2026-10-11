@@ -9,7 +9,7 @@
 
 Dockerは、Engineを26.0以上(API 1.45以上)、Composeを2.26.0以上にする。
 Console用のworkerが、ボリュームのサブパスをマウントするためである。
-Composeが2.26.0以上でEngineが26.0未満だと、Engineがサブパスを気づかないうちに無視し、`factory_state`の根が付きうる。
+Composeが2.26.0以上でEngineが26.0未満だと、Engineがサブパスを気づかないうちに無視し、`factory_state`のボリューム全体がマウントされうる。
 そのため`mise run up`と`mise run deploy`は、起動の前に版を確かめ、満たさなければ止まる。
 この強制が止めるのは、この2つのタスクを通した起動だけである。`mise exec -- docker compose ... up`を直接実行した場合や、restart policyによる再起動は止めない。
 `mise run doctor`も同じ検査を報告する。

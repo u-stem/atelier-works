@@ -21,7 +21,7 @@ type Fake = {
   consoleId: string | undefined;
   // `docker inspect -f '{{.State.Running}}'`が返す値。
   running: boolean;
-  // `compose exec`の判定の終了コード。11は根が付いていない、10は根が付いている、
+  // `compose exec`の判定の終了コード。11はボリューム全体がマウントされていない、10はマウントされている、
   // 3はマウント先が見えない。それ以外はcomposeやshellの失敗。
   execStatus: number;
   // `docker version`が返すEngineのAPI版。
@@ -99,7 +99,7 @@ describe("doctor.sh Console worker mount", () => {
     installFakeDocker({ execStatus: 11 });
 
     expect(doctorLine("console worker mount")).toMatch(
-      /^\s+OK\s.*根は付いていません/,
+      /^\s+OK\s.*ボリューム全体はマウントされていません/,
     );
   });
 

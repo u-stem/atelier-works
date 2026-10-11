@@ -191,9 +191,10 @@ services:
   ## 監査のフロー)はdefaultのworkerで動く。
   ## 書き込めるマウントは`worker_logs`と専用の依存キャッシュだけにする。
   ## 依存のキャッシュはdefaultの`worker_dependency_cache`とは共有しない。
-  ## `factory_state`は根ではなく、`requirements`のサブパスだけを読み取り専用で付ける。
+  ## `factory_state`はボリューム全体ではなく、`requirements`のサブパスだけを読み取り専用で付ける。
+  ## ボリューム全体とは、`claude`、`gh`、`audits`、`requirements`などが並ぶ`factory_state`の最上位を指す。
   ## `requirements_doc`が要件定義書と図のファイルをここから読むためで、
-  ## 根を付けると、`claude`と`gh`の設定(`CLAUDE_CONFIG_DIR`と`GH_CONFIG_DIR`)まで読めてしまう。
+  ## ボリューム全体を付けると、`claude`と`gh`の設定(`CLAUDE_CONFIG_DIR`と`GH_CONFIG_DIR`)まで読めてしまう。
   ## 監査レポートは本文をDBから読むので、`audits`は付けない。
   ## `volume.subpath`はDocker Engine 26.0以上とDocker Compose 2.26.0以上が要る。
   ## サブパスのディレクトリが無いとコンテナが起動しないので、
@@ -206,7 +207,7 @@ services:
   ## 設定の変わらない、動いているworkerを作り直さないため。`factory_state_init`の失敗で
   ## `up`が止まったら、その時点のworkerのマウントを疑い、docs/operations.mdの手順で直す。
   ## 突くにはdefaultのworkerでのコード実行が要り、
-  ## その権限があれば根を直接読めるので、実害は増えない。
+  ## その権限があればボリューム全体を直接読めるので、実害は増えない。
   ## `factory_console`を読み取り専用で付けるのは、取り込みの失敗を見張るscriptが
   ## `status.json`を読むため。`factory_workspaces`は付けない。
   ## 2つのworkerプロセスは、1件のjobが止まっても全体を止めないためで、
