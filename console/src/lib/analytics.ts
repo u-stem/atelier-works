@@ -65,6 +65,12 @@ export function dailyTotals(rows: readonly AgentCostDailyRow[]): DailyTotal[] {
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
+/**
+ * 期間の前後に、範囲を広げて並べる日数の上限。
+ * 取得した行の日付に上限が無いので、遠い日付の行1件で並べる日数が際限なく増えるのを防ぐ。
+ */
+const MAX_EXTENSION_DAYS = 3;
+
 /** `YYYY-MM-DD`(UTC)を、その日の0時の時刻(ms)にする。日付として読めない値は`null`。 */
 function dayStartMs(day: string): number | null {
   const time = Date.parse(`${day}T00:00:00.000Z`);
@@ -74,7 +80,8 @@ function dayStartMs(day: string): number | null {
 /**
  * 実行の無い日を値0で補い、期間の全日を古い日から新しい日の順に並べる。
  * 期間は`now`の日(UTC)を最後とする`days`日で、棒の間隔を日数に比例させるために使う。
- * 期間の外の日の合計は捨てず、範囲を広げて含める。端末の時計とbackendの時刻はずれうるため。
+ * 期間の前後`MAX_EXTENSION_DAYS`日以内の日は、範囲を広げて含める。端末の時計とbackendの時刻が少しずれても、行を捨てないためである。
+ * それより遠い日は並べない。並べる日数は、`days`に`MAX_EXTENSION_DAYS`の2倍を足した値までに収まる。
  * 日付として読めない日は、並べる位置が決まらないので除く。
  * `truncated`が真のとき、取得した最も古い日とそれより前を並べない。
  * 行数の上限で古い日が切れているので、その前を0で補うと、実際にはあった実行を無いものとして描く。
@@ -86,15 +93,17 @@ export function fillDailyTotals(
   now: Date,
   truncated = false,
 ): DailyTotal[] {
+  const today = Math.floor(now.getTime() / MS_PER_DAY) * MS_PER_DAY;
+  const windowStart = today - (days - 1) * MS_PER_DAY;
+  const earliest = windowStart - MAX_EXTENSION_DAYS * MS_PER_DAY;
+  const latest = today + MAX_EXTENSION_DAYS * MS_PER_DAY;
   const byTime = new Map<number, DailyTotal>();
   for (const total of totals) {
     const time = dayStartMs(total.day);
-    if (time !== null) {
+    if (time !== null && time >= earliest && time <= latest) {
       byTime.set(time, total);
     }
   }
-  const today = Math.floor(now.getTime() / MS_PER_DAY) * MS_PER_DAY;
-  const windowStart = today - (days - 1) * MS_PER_DAY;
   const fetched = [...byTime.keys()];
   const times = [windowStart, today, ...fetched];
   const last = Math.max(...times);

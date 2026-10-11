@@ -188,9 +188,38 @@ describe("fillDailyTotals", () => {
     expect(filled.at(-1)?.day).toBe("2026-10-12");
   });
 
-  test("extends the range to a day before the period", () => {
-    const filled = fillDailyTotals([total("2026-10-01", 2)], 7, NOW);
-    expect(filled[0]?.day).toBe("2026-10-01");
+  test("extends the range to a day just before the period", () => {
+    const filled = fillDailyTotals([total("2026-10-03", 2)], 7, NOW);
+    expect(filled[0]?.day).toBe("2026-10-03");
+  });
+
+  test("does not list a day far after today", () => {
+    const filled = fillDailyTotals([total("9999-12-31", 2)], 7, NOW);
+    expect(filled.some((entry) => entry.day === "9999-12-31")).toBe(false);
+  });
+
+  test("keeps the number of days bounded for a day far after today", () => {
+    const filled = fillDailyTotals([total("9999-12-31", 2)], 7, NOW);
+    expect(filled.length).toBeLessThanOrEqual(7 + 7);
+  });
+
+  test("does not list a day far before the period", () => {
+    const filled = fillDailyTotals([total("1970-01-01", 2)], 7, NOW);
+    expect(filled.some((entry) => entry.day === "1970-01-01")).toBe(false);
+  });
+
+  test("keeps the number of days bounded when the clock is years behind", () => {
+    const filled = fillDailyTotals(
+      [total("2026-10-08", 2)],
+      7,
+      new Date("2020-01-01T00:00:00.000Z"),
+    );
+    expect(filled.length).toBeLessThanOrEqual(7 + 7);
+  });
+
+  test("keeps the number of days bounded when truncated with a far day", () => {
+    const filled = fillDailyTotals([total("9999-12-31", 2)], 7, NOW, true);
+    expect(filled.length).toBeLessThanOrEqual(7 + 7);
   });
 
   test("drops a day that is not a date", () => {
