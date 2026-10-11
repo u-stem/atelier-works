@@ -815,6 +815,10 @@ export type AutoRetryCandidate = {
  * `noticeKind`のnoticeが`resolvedBy`に解決された作業項目を、IDの小さい順に`limit`件まで返す。
  * 対象は、実装(`issue`)の`needs_human`と、PR修正(`pr_fix`)の`blocked`である。
  * 理由は、その状態へ移った最新の遷移の注記である。
+ * 同じIssueに新しいサイクルがある`issue`は、新しいサイクルに置き換えられているので除く。
+ * 注記が`notePrefix`で始まる遷移(これまでの自動の再開)が`maxRestarts`回に達したものも除く。
+ * 再開できない項目が`limit`件を占めて、後ろの項目を締め出さないためである。
+ * 要件が未承認の項目のように、DBの条件だけでは除けないものは、呼び出し側が飛ばす。
  * noticeの解決の時刻が止まった時刻より後であることが、止まった後に原因が直ったことの印になる。
  * 止まった後の解決に限るので、再開後に同じ理由で止まった作業項目は、次の解決まで対象にならない。
  */
@@ -824,6 +828,8 @@ export async function listAutoRetryCandidates(
     readonly noticeKind: string;
     readonly noticeMarker: string;
     readonly resolvedBy: string;
+    readonly notePrefix: string;
+    readonly maxRestarts: number;
     readonly limit: number;
   },
   sql: SqlClient = defaultSqlClient,
@@ -843,6 +849,16 @@ export async function listAutoRetryCandidates(
         SELECT 1 FROM unnest(${[...params.reasonPrefixes]}::text[]) AS p(prefix)
         WHERE starts_with(last.note, p.prefix)
       )
+      AND NOT EXISTS (
+        SELECT 1 FROM factory.work_items newer
+        WHERE w.kind = 'issue' AND newer.kind = 'issue'
+          AND newer.owner = w.owner AND newer.repo = w.repo
+          AND newer.issue_number = w.issue_number AND newer.cycle > w.cycle
+      )
+      AND (
+        SELECT count(*) FROM factory.work_item_events c
+        WHERE c.work_item_id = w.id AND starts_with(c.note, ${params.notePrefix})
+      ) < ${params.maxRestarts}::integer
       AND EXISTS (
         SELECT 1 FROM factory.notices n
         WHERE n.kind = ${params.noticeKind}
@@ -866,8 +882,8 @@ export async function listAutoRetryCandidates(
 /**
  * 止まった作業項目を、理由を条件にした比較と交換で再開の状態へ移す。
  * 状態が`expectedFrom`で、その状態へ移った最新の遷移の注記が`reasonPrefixes`のどれかで始まり、
- * 注記が`notePrefix`で始まる遷移(これまでの自動の再開)が`maxRestarts`回未満のときだけ更新し、
- * 同じ文で遷移の記録を残す。`clearFlowJobId`なら`flow_job_id`も空にする。
+ * 注記が`notePrefix`で始まる遷移(これまでの自動の再開)が`maxRestarts`回未満で、
+ * 同じIssueに新しいサイクルの`issue`が無いときだけ更新し、同じ文で遷移の記録を残す。`clearFlowJobId`なら`flow_job_id`も空にする。
  * 条件に合わなければ何も書かずに`false`を返す。人が先に再開した場合や、
  * 並行する別の実行が先に再開した場合も、状態が変わっているので`false`になり、二重に起動しない。
  */
@@ -905,6 +921,13 @@ export async function restartStoppedWorkItem(
           SELECT count(*) FROM factory.work_item_events c
           WHERE c.work_item_id = factory.work_items.id AND starts_with(c.note, ${params.notePrefix})
         ) < ${params.maxRestarts}::integer
+        AND NOT EXISTS (
+          SELECT 1 FROM factory.work_items newer
+          WHERE factory.work_items.kind = 'issue' AND newer.kind = 'issue'
+            AND newer.owner = factory.work_items.owner AND newer.repo = factory.work_items.repo
+            AND newer.issue_number = factory.work_items.issue_number
+            AND newer.cycle > factory.work_items.cycle
+        )
       RETURNING id
     )
     INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note, job_id, root_job_id)

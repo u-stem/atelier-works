@@ -11,6 +11,8 @@
 // 再開は`retry_work_item`と同じ遷移とフローの起動で行う。違いは次の点である。
 // - 状態の交換は、止まった理由も条件にする(`restartStoppedWorkItem`)。人が先に再開したり、
 //   別の理由で止まり直したりした作業項目は、再開しない。
+// - 同じIssueに新しいサイクルがある作業項目は、新しいサイクルに置き換えられているので、
+//   候補にも比較交換にも入れない。
 // - 同じ作業項目の自動の再開は、`AUTO_RETRY_MAX_RESTARTS`回までである。
 // - 要件が承認済みでないIssueと、`implement_enabled`が無効のIssueは、要件定義を作り直さないよう再開しない。
 
@@ -32,8 +34,14 @@ export const AUTO_RETRY_NOTE_PREFIX = "auto_retry: ";
 /** 1つの作業項目を自動で再開する回数の上限。同じ理由で止まり続けても、再開を繰り返さない。 */
 export const AUTO_RETRY_MAX_RESTARTS = 3;
 
-/** 1回の実行で再開する作業項目の数の上限。 */
+/** 1回の実行で再開する(起動を試みる)作業項目の数の上限。飛ばした項目は数えない。 */
 export const AUTO_RETRY_LIMIT_PER_RUN = 5;
+
+/**
+ * 1回の実行で読む候補の数の上限。再開する数の上限より多くする。
+ * 要件が未承認の項目のように、DBの条件だけでは除けないものが、先頭を占めて後ろの項目を締め出さないためである。
+ */
+export const AUTO_RETRY_LIST_LIMIT = 50;
 
 /** 解決したnoticeのうち、イメージが古いことを知らせるものを見分ける本文の一部。 */
 export { STALE_IMAGE_NOTICE_MARKER } from "./host_action.ts";
@@ -200,6 +208,7 @@ export async function retryStaleImageItems(
   }
   const counts = { restarted: 0, skipped: 0, failed: 0 };
   for (const candidate of candidates) {
+    if (counts.restarted + counts.failed >= AUTO_RETRY_LIMIT_PER_RUN) break;
     try {
       counts[await retryOne(deps, candidate)] += 1;
     } catch (err) {

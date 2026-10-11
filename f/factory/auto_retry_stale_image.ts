@@ -5,7 +5,7 @@
 // 二重に起動したりしても、同じ作業項目を二度起動しない。
 import * as wmill from "windmill-client@1.817.0";
 import {
-  AUTO_RETRY_LIMIT_PER_RUN,
+  AUTO_RETRY_LIST_LIMIT,
   AUTO_RETRY_MAX_RESTARTS,
   AUTO_RETRY_NOTE_PREFIX,
   AUTO_RETRY_REASON_PREFIXES,
@@ -43,7 +43,9 @@ export async function main(): Promise<AutoRetryResult> {
         noticeKind: HOST_ACTION_NOTICE_KIND,
         noticeMarker: STALE_IMAGE_NOTICE_MARKER,
         resolvedBy: HOST_ACTION_RESOLVER,
-        limit: AUTO_RETRY_LIMIT_PER_RUN,
+        notePrefix: AUTO_RETRY_NOTE_PREFIX,
+        maxRestarts: AUTO_RETRY_MAX_RESTARTS,
+        limit: AUTO_RETRY_LIST_LIMIT,
       }),
     isImplementReady: async (candidate) =>
       isRequirementsApprovedForAttempt(

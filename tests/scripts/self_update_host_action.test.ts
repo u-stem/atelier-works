@@ -88,12 +88,10 @@ describe("self_update host action wiring", () => {
     ).toBe(true);
   });
 
-  test("starts the automatic retry only when a notice was resolved", async () => {
+  test("starts the automatic retry whether or not a notice was resolved", async () => {
     const source = await selfUpdateSource();
 
-    expect(source).toMatch(
-      /if \(resolved > 0\) \{\s*await startStaleImageRetry\(log\);/,
-    );
+    expect(source).not.toMatch(/if \(resolved > 0\)/);
   });
 
   test("starts the automatic retry script by its path", async () => {

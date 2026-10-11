@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
+  AUTO_RETRY_LIMIT_PER_RUN,
+  AUTO_RETRY_LIST_LIMIT,
   AUTO_RETRY_MAX_RESTARTS,
   AUTO_RETRY_NOTE_PREFIX,
   AUTO_RETRY_REASON_PREFIXES,
@@ -245,7 +247,100 @@ describe("retryStaleImageItems", () => {
   });
 });
 
+/** 警告のメッセージを集めるログ。 */
+function warnCollector(): { log: Logger; warnings: string[] } {
+  const warnings: string[] = [];
+  return {
+    warnings,
+    log: { ...quietLog, warn: (message) => void warnings.push(message) },
+  };
+}
+
+describe("retryStaleImageItems edge cases", () => {
+  const launchFails = async (): Promise<string> => {
+    throw new Error("boom");
+  };
+
+  test("still counts the item as failed when the rollback does not apply", async () => {
+    const { deps } = fakeDeps([ISSUE], {
+      launchFlow: launchFails,
+      rollBack: async () => false,
+    });
+    expect((await retryStaleImageItems(deps)).failed).toBe(1);
+  });
+
+  test("warns that the item was not rolled back when the rollback does not apply", async () => {
+    const { log, warnings } = warnCollector();
+    const { deps } = fakeDeps([ISSUE], {
+      launchFlow: launchFails,
+      rollBack: async () => false,
+      log,
+    });
+    await retryStaleImageItems(deps);
+    expect(warnings).toEqual(["auto retry could not start the flow"]);
+  });
+
+  test("still counts the item as restarted when the job id is not recorded", async () => {
+    const { deps } = fakeDeps([ISSUE], { recordFlowJobId: async () => false });
+    expect((await retryStaleImageItems(deps)).restarted).toBe(1);
+  });
+
+  test("warns when the job id is not recorded", async () => {
+    const { log, warnings } = warnCollector();
+    const { deps } = fakeDeps([ISSUE], {
+      recordFlowJobId: async () => false,
+      log,
+    });
+    await retryStaleImageItems(deps);
+    expect(warnings).toEqual(["auto retry did not record the flow job id"]);
+  });
+
+  test("does not ask whether requirements are approved for a pr_fix item", async () => {
+    let asked = 0;
+    const { deps } = fakeDeps([PR_FIX], {
+      isImplementReady: async () => {
+        asked += 1;
+        return true;
+      },
+    });
+    await retryStaleImageItems(deps);
+    expect(asked).toBe(0);
+  });
+
+  test("stops after the per-run limit of restarts", async () => {
+    const many = Array.from(
+      { length: AUTO_RETRY_LIMIT_PER_RUN + 2 },
+      (_, i) => ({
+        ...PR_FIX,
+        id: 100 + i,
+      }),
+    );
+    const { deps, rec } = fakeDeps(many);
+    await retryStaleImageItems(deps);
+    expect(rec.restarted).toHaveLength(AUTO_RETRY_LIMIT_PER_RUN);
+  });
+
+  test("does not count skipped items against the per-run limit", async () => {
+    const skipped = Array.from(
+      { length: AUTO_RETRY_LIMIT_PER_RUN },
+      (_, i) => ({
+        ...ISSUE,
+        id: 200 + i,
+      }),
+    );
+    const { deps, rec } = fakeDeps([...skipped, PR_FIX], {
+      isImplementReady: async () => false,
+    });
+    await retryStaleImageItems(deps);
+    expect(rec.restarted).toEqual([PR_FIX.id]);
+  });
+});
+
 describe("auto retry limits", () => {
+  test("lists more candidates than it restarts in one run", () => {
+    expect(AUTO_RETRY_LIST_LIMIT).toBeGreaterThan(AUTO_RETRY_LIMIT_PER_RUN);
+  });
+
   test("caps the restarts of one work item at three", () => {
     expect(AUTO_RETRY_MAX_RESTARTS).toBe(3);
   });

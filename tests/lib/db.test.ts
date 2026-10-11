@@ -4130,7 +4130,9 @@ describe("listAutoRetryCandidates", () => {
     noticeKind: "host_action_required",
     noticeMarker: "workerのイメージが古く",
     resolvedBy: "self_update",
-    limit: 5,
+    notePrefix: "auto_retry: ",
+    maxRestarts: 3,
+    limit: 50,
   };
 
   test("parses the candidate rows", async () => {
@@ -4188,6 +4190,24 @@ describe("listAutoRetryCandidates", () => {
     await listAutoRetryCandidates(params, sql);
     expect(calls[0]?.values).toContain("self_update");
   });
+
+  test("excludes an issue that a newer cycle replaced", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listAutoRetryCandidates(params, sql);
+    expect(calls[0]?.text).toContain("newer.cycle > w.cycle");
+  });
+
+  test("excludes an item that used up its restarts", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listAutoRetryCandidates(params, sql);
+    expect(calls[0]?.text).toContain("c.work_item_id = w.id AND starts_with(");
+  });
+
+  test("passes the restart cap as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listAutoRetryCandidates(params, sql);
+    expect(calls[0]?.values).toContain(3);
+  });
 });
 
 describe("restartStoppedWorkItem", () => {
@@ -4228,6 +4248,12 @@ describe("restartStoppedWorkItem", () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await restartStoppedWorkItem(params, sql, NO_JOBS);
     expect(calls[0]?.values).toContain(3);
+  });
+
+  test("guards the update against a newer cycle of the same Issue", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await restartStoppedWorkItem(params, sql, NO_JOBS);
+    expect(calls[0]?.text).toContain("newer.cycle > factory.work_items.cycle");
   });
 
   test("records the event in the same statement", async () => {

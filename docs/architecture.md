@@ -474,7 +474,7 @@ PRを取り出せなくても、反映の成功は変えない。その反映の
 これらはホスト側のcheckoutをpullしたうえで、`mise run up`で起動したときに反映される。
 `mise run up`は終わりに、ホストのcheckoutのHEADをworkerの共有ボリュームへ書く。
 `self_update`はこのHEADを毎回読み、通知の版を含んでいれば通知を解決する。
-イメージが古いことを知らせる通知を解決した回は、続けて`auto_retry_stale_image`を別のジョブで起動する。
+通知の解決の後に、毎回`auto_retry_stale_image`を別のジョブで起動する。
 このscriptが、イメージが古くて止まった実装とPR修正を再開する([実装フローの仕様](internals/implement.md)の「イメージが古くて止まったとき」)。
 
 ジョブ全体には上限(`timeout`)を2700秒で置く。
