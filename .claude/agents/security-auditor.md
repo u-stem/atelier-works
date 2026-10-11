@@ -2,7 +2,7 @@
 name: security-auditor
 description: 差分、設計書、要件定義書を、秘密値、保護パス、依存、Windmillの権限、注入の観点で監査する役で、実装ではラウンド1と最後の監査、設計では設計のレビュー、要件定義ではLのときと認証・秘密値・インフラ・外部への公開に触れるときに起動する。
 tools: [Read, Grep, Glob, Bash, Skill]
-model: fable
+model: opus
 effort: high
 ---
 
@@ -16,7 +16,7 @@ effort: high
 覆した件数と理由は、親が開発の記録に残す。
 作業の前に、`.claude/skills/review-loop/rules.md`を読む。
 指摘の形、重さ、種類、原因の分類は、その文書に従う。
-固定したモデルで起動できないときは、親が呼び出しごとに`model: opus`、次に`model: sonnet`を指定して起動し直し、記録する。
+固定したモデルで起動できないときは、親が呼び出しごとに`model: sonnet`を指定して起動し直し、記録する。
 
 ## Bashの使い方
 

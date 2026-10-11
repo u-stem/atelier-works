@@ -163,6 +163,34 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 Generated-By: Software Factory (<instance_name>)
 ```
 
+## Claudeのモデルの使い分け
+
+このリポジトリでClaudeを使うときも、Factoryの工程も、同じ方針でモデルを選ぶ。
+間違えたときにやり直しが高くつく作業は上位のモデルに任せ、安く直せる作業は既定のモデルで済ませる。
+
+| モデル | 使う場面 |
+| --- | --- |
+| Sonnet | 既定。実装、review-loopのcode-reviewer、文書の追従 |
+| Opus | 設計の判断、原因が分からないバグ、大きな計画とレビュー、Sonnetで2回失敗した課題 |
+| Fable | 最難関の課題だけ。subagentの定義やFactoryの既定には入れない |
+
+review-loopでimplementerをOpusで起動し直す条件は、[review-loopスキル](../.claude/skills/review-loop/SKILL.md)が定める。
+
+`.claude/settings.json`の`model`は`opusplan`にしている。計画モードだけがOpusで、実装はSonnetで動く。
+`/model opus`は人が打つコマンドで、Claudeの親のセッションは自分で切り替えられない。
+review-loopの親が指摘の判定を覆すときや、`[Q]`に答えるときのように、重い判断をする場面では、次のように分ける。
+人が見ているセッションでは、人が`/model opus`に切り替える。
+クラウドやheadlessでは、重い判断の材料をOpusのsubagent(triage、devil-advocate)に出させる。
+subagentのモデルは、各定義の`model`で決める。
+implementer、code-reviewer、doc-writerはSonnetで動く。
+design-reviewer、requirements-reviewer、security-auditor、devil-advocate、triageはOpusで動く。
+Opusで起動できないときの扱いは、review-loopスキルにある。
+
+Factoryも同じ方針で、`f/factory/factory_config`の`model`(既定はSonnet)と`heavy_model`(既定はOpus)を使い分ける。
+実装とPR修正は、同じ作業でSonnetが2回失敗したら、以後は`heavy_model`で動く。
+FactoryのPRのレビューは、失敗の数にかかわらず`heavy_model`で動く。
+工程ごとの割り当てと、既存のリソースの書き換えは[運用](operations.md)の「モデルを使い分ける」にある。
+
 ## PRチェックリスト
 
 - [ ] `mise run check`が緑

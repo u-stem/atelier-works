@@ -43,6 +43,57 @@ headless Claudeの起動には、次のフラグと環境変数で防御を足�
 PRの修正(`pr_fix`)と実装(`implement`)のフローは、Claudeが対象リポジトリのworktreeに書き込み、その変更をpushする。
 そのための追加の安全策は[PR修正の安全策](#pr修正の安全策)と[実装の安全策](#実装の安全策)に書く。
 
+### mainの保護とリポジトリの公開
+
+このリポジトリは公開している。
+`main`はrulesetの`protect-main`で保護し、次の制限をかける。
+
+- `main`の削除とforce pushを禁止する。
+- `main`への変更はPRを必須にする。承認は0件でよく、人のレビューをGitHubが強制するわけではない。
+- 必須チェックは`scope`、`check`、`test-db`、`metadata`、`console`、`caddyfile`、`console-fetcher-image`である。条件付きのジョブは、スキップされると通過として扱われる。
+- 設定を迂回できるのは、管理者のロールだけである。迂回のモードは`pull_request`なので、直接pushはできず、PRを経由する迂回に限られる。
+
+公開に伴い、外部からの操作は次のように絞る。
+
+- GitHubのinteraction-limitsを`collaborators_only`にしている。期限付きの設定で、切れると外部の利用者もIssueやPRを作れるようになる。期限はGitHubの設定画面で確かめる。
+- forkのPRのワークフローは、すべての外部の投稿者について、承認があるまで動かさない。
+- secret scanningとpush protection、Dependabot security updatesを有効にしている。
+- 脆弱性は、非公開の報告で受ける。窓口は[SECURITY.md](../SECURITY.md)にある。
+
+FactoryはPAT(`f/factory/github_token`)で、人と同じアカウントとしてGitHubを操作する。
+`f/factory`にはPRをマージするAPIの呼び出しが無い。
+ただし、PATが`main`へのマージの権限を持つかは確かめていない。
+承認が0件なので、PATで開いたPRを人の確認なしにマージできるかも確かめていない。
+どちらも確かめるまでは、残るリスクとして扱う。
+
+### CIで走査されないコミット
+
+atelier-worksのCIは、gitleaksでPRのコミットを走査する。
+走査されないコミットが、次の2つの場合に残る。
+
+残るリスクとして、PRのCIの実行は、同じPRの新しい実行が始まると`cancel-in-progress`で止まる。
+秘密値を含むコミットを、実行の途中でforce pushにより置き換えると、置き換えられたコミットはCIのgitleaksで走査されない。
+置き換えられるのは、PRの履歴から外れたコミットなので、受け入れる。
+手前の防御として、lefthookのpre-commitのgitleaksと、Factoryのpush前の走査がある。
+
+残るリスクとして、`push`は`main`だけで動くので、PRを作るまで、人がpushしたブランチのコミットはCIで走査されない。
+実行されるのはlefthookのpre-commitのgitleaksだけで、ローカルで飛ばせる。
+PRを作ればCIが走査し、Factoryは実装ブランチのpushの前に走査するので、受け入れる。
+
+### CIのトークンの権限
+
+`ci.yml`の既定の権限は、リポジトリの読み取り(`contents: read`)だけである。
+`scope`ジョブだけが、実行の一覧を読む権限(`actions: read`)を足す。
+`main`へのpushで、直近で成功した実行のcommitを調べ、差分の基点にするためである。
+どちらも読み取りだけで、書き込みの権限は付けない。
+トークンを`gh`に渡すのは`main`へのpushの実行だけで、PRの実行には渡さない。
+
+### CIの実行の範囲の判定
+
+残るリスクとして、PRの実行の判定は、PRの版の`scripts/ci-scope.ts`で行う。
+判定を書き換える変更は、保護パスとして`pr_fix`と`implement`が止める。
+人が書いたPRは`ci.yml`も書き換えられるので、レビューで確かめる。
+
 ### 開発セッションのsubagent
 
 `.claude/agents/`のsubagentは、開発のセッションで使うものである。
@@ -215,7 +266,7 @@ ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者�
 
 残るリスクは次のとおりである。
 
-- `main`にpushできる者(FactoryのPATを含む)が書いたコードは、人のレビューを経ずに運用者のブラウザで動きうる。今のGitHubのプランではこのリポジトリにbranch protection(rulesets)を設定できず、`main`へのpushを人のレビュー済みのものに限れない。Consoleの変更のレビューは、Windmillの管理者権限を持つコードのレビューとして行う。
+- `main`へのマージは、承認0件のPRで済む。PRの必須チェックは通る必要があるが、人のレビューは強制されない。FactoryのPATが`main`へマージできるか、人の確認なしにマージできるかは確かめていない([mainの保護とリポジトリの公開](#mainの保護とリポジトリの公開))。そのため、マージされたコードは人のレビューを経ずに運用者のブラウザで動きうる。Consoleの変更のレビューは、Windmillの管理者権限を持つコードのレビューとして行う。
 - CIの組み立ての途中で動くもの(miseが入れるbunなどのツール、Viteのプラグインなどの依存)が侵害されると、出力が改ざんされうる。`digest`とマニフェストが保証するのは、GitHubのCIが作ったものであることまでである。
 - 信頼の境界は`console`ジョブだけでなく、`ci.yml`のすべてのジョブとそこで動くツールや依存に及ぶ。同じ実行のほかのジョブも、ランナーから取れるトークンで成果物`console-dist`を上げ直せるためである。成果物は`overwrite: true`で上げ、`console_fetcher`はその名前の`id`が最大の成果物を取り込む。
 - draw.ioのビューアも、この成果物の差し替えの範囲に入る。ビューアは`console`ジョブが取得して、同じ成果物に入れるためである。
@@ -226,8 +277,8 @@ ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者�
 - `console_fetcher`の外への通信はnetworkでは絞れない。コードが侵害されれば、任意の宛先へ出られる。
 - `console_egress`は通常のbridgeで、ホストのloopbackから切り離されない。既定の`WM_BIND=127.0.0.1`のままでも、`host.docker.internal`経由でホストのCaddy、つまりWindmillに届く(OrbStackで確認)。`WM_BIND`を外向きにすると、ホストのゲートウェイのIP経由でも届く。`console_fetcher`はWindmillの資格情報を持たないが、認証の要らない経路には届く。
 - `CONSOLE_GITHUB_TOKEN`は、ホストのdockerを使える人には`docker inspect`で見える。
-- 成果物を取りに行くリポジトリ`CONSOLE_GITHUB_REPO`は、コミットされた`mise.toml`にある。これを書き換える変更がマージされると、任意のpublicリポジトリの成果物を取り込みうる。`mise.toml`は保護パスで、マージは人が行うことで抑えている。
-- 成果物の保持は30日である。30日以上`main`へのpushが無いと、新しく立ち上げた環境は取り込めない。そのときは`main`に何かをpushしてCIを動かす。
+- 成果物を取りに行くリポジトリ`CONSOLE_GITHUB_REPO`は、コミットされた`mise.toml`にある。これを書き換える変更がマージされると、任意のpublicリポジトリの成果物を取り込みうる。`mise.toml`は保護パスで、マージは人が行うことで抑えている。ただしPATのマージ権限は未確認である。
+- 成果物の保持は30日である。30日以上`main`へのpushが無いと、新しく立ち上げた環境は取り込めない。そのときは`main`に何かをマージしてCIを動かす。
 
 ## workerコンテナの権限
 
@@ -242,30 +293,62 @@ workerには`no-new-privileges:true`と、プロセス数の上限(`deploy.resou
 Console用のworker(`windmill_worker_console`)は、Consoleの問い合わせと操作の受付だけを処理する。
 信頼できないIssueを読むClaudeは、このworkerでは動かさない。
 このworkerの境界が守るのは、ファイルシステムだけである。
+以下で「ボリューム全体」と書くのは、`factory_state`の最上位を指す。`claude`、`gh`、`audits`、`requirements`などが並ぶ層である。
 絞り方は次のとおりである。
 
 | 項目 | 設定 |
 | --- | --- |
-| 書き込めるマウント | `worker_logs`と専用の依存キャッシュ`worker_console_dependency_cache`だけである。`factory_state`と`factory_console`は読み取り専用でマウントする。`worker_logs`は、`windmill_server`、defaultのworker、nativeのworkerとも共有する書き込みのマウントである |
+| 書き込めるマウント | `worker_logs`と専用の依存キャッシュ`worker_console_dependency_cache`だけである。`worker_logs`は、`windmill_server`、defaultのworker、nativeのworkerとも共有する書き込みのマウントである |
+| `factory_state` | ボリューム全体はマウントしない。サブパス`requirements`だけを、同じパス(`/var/lib/factory/requirements`)に読み取り専用でマウントする。Claude Codeとghの設定は、ボリューム全体の直下にあるので届かない |
+| `factory_console` | 読み取り専用でマウントする |
 | `factory_workspaces` | マウントしない。対象リポジトリのチェックアウトに届かない |
 | `worker_dependency_cache` | 共有しない。Console用のworkerは専用のボリュームを使うので、defaultのworkerと依存のキャッシュを通して影響し合わない |
 | `docker.sock` | マウントしない |
 | 権限 | `privileged`にしない。`no-new-privileges:true`と`init`を設定し、プロセス数は256、メモリは1024Mに絞る |
 
-`factory_state`を読めるのは、要件定義書と図のファイルを返すためである。
+`requirements`を読めるのは、要件定義書と図のファイルを返すためである。
+監査レポートは本文をDBから読むので、`audits`はマウントしない。
 `factory_console`は配信中のJSの置き場所なので、書き込みでマウントしない。
 読み取り専用で付けるのは、取り込みの失敗を見張るscriptが`status.json`を読むためである。
+
+サブパスのマウントは、ディレクトリが無いとコンテナが起動しない。
+1回限りのサービス`factory_state_init`が、起動の前に`requirements`を作る。
+このサービスは`factory_state`を書き込みでマウントするが、ネットワークを持たず、権限もすべて落とし、固定の短いシェルのコマンドだけを実行して終わる。
+`requirements`がsymlinkならディレクトリを作らずに失敗で終わり、そうでなければ`mkdir -p -m 0755`を実行する。
+defaultのworkerで動くものが置いたsymlinkの先を、Console用のworkerにマウントさせないためである。
+`requirements`がsymlinkだと`factory_state_init`が失敗し、`mise run deploy`は`wmill sync push`とmigrationの前で止まる。
+
+`volume.subpath`は、古いEngineでは気づかないうちに無視され、`factory_state`のボリューム全体がマウントされうる。
+そのため、スタックを起動するmiseのタスク(`up`、`deploy`)は、起動の前にEngineが26.0(API 1.45)以上、Composeが2.26.0以上かを確かめ、満たさなければ止まる。
+この強制が止めるのは、`mise run up`と`mise run deploy`を通した起動だけである。
+`mise exec -- docker compose ... up`を直接実行した場合や、restart policyによる再起動は止めない。
+`doctor`は同じ検査に加えて、起動中のConsole用workerの中から、`factory_state`のボリューム全体がマウントされている証拠が見えないことを確かめる。
+証拠は、`/var/lib/factory`の直下の`claude`、`gh`、`audits`と、`requirements/requirements`である。
+対象リポジトリのowner名が`requirements`だと、サブパスだけが付いていても`requirements/requirements`が見える。
+そのため、この証拠だけではボリューム全体のマウントを見分けられない。
+Podmanは対象外である。
 
 次のことは、この境界では守れない。
 
 - DBには届く。`DATABASE_URL`はdefaultのworkerと同じ管理者の接続だからである。
-- `factory_state`には、`requirements/`と`audits/`のほかに、次のものも入っていて、Console用のworkerから読める。
-  - Claude Codeの設定と履歴(`CLAUDE_CONFIG_DIR=/var/lib/factory/claude`)
-  - ghの設定(`GH_CONFIG_DIR=/var/lib/factory/gh`)
+- tag`console`のscriptは、管理者の`DATABASE_URL`か`wmill.getVariable()`で、Windmillのsecret変数を読める。
+  読める変数には`f/factory/claude_oauth_token`と`f/factory/github_token`がある。
+  マウントの制限で守るのは、Claude Codeとghの設定と履歴のファイルだけである。
+  トークンそのものは守らない。
+- scriptを編集できる者は、tagを付けずにdefaultのworkerで動かせば、`factory_state`のボリューム全体を読み書きできる。
+- 要件定義書と図は読める。Consoleが表示するのと同じ内容である。
 - このworkerで動かすのはリポジトリのscriptの想定だが、これを強制する仕組みは無い。ワークスペースでscriptを編集できる者は、任意のscriptにtag`console`を付けられる。
-  tag`console`を付けたscriptは、上の設定と履歴を読める。書けるのはdefaultのworkerだけである。
-  読めると、Claude Codeとghの認証情報が漏れうる。
+  tag`console`を付けたscriptは、`requirements`の下を読める。書けるのはdefaultのworkerだけである。
 - composeの環境変数`WORKER_TAGS`は既定値である。DBにワーカーグループの設定があると、そちらが実効になる。変化はWindmillの画面の「Workers」で確かめる。
+- `factory_state_init`の確認の後にも隙がある。
+  Console用のworkerは、`factory_state_init`を経ない起動のたびに、サブパスを解決し直す。
+  契機は、restart policy、Dockerデーモンの再起動、ホストの再起動、手動の`docker compose restart windmill_worker_console`である。
+  その前にdefaultのworkerが`requirements`をsymlinkに置き換えると、symlinkの先がマウントされうる。
+  隙は、`factory_state_init`を経ずにworkerが起動するたびに開く。
+  誤ったマウントは、symlinkを消してworkerを起動し直すまで残る。`mise run up`は、設定の変わらない、動いているworkerを作り直さないためである。
+  `mise run up`が`factory_state_init`の失敗で止まったときは、その時点のworkerのマウントを疑う。
+  [Console用workerを確かめる](operations.md#console用workerを確かめる)の手順でsymlinkを消し、workerを作り直す。
+  突くにはdefaultのworkerでのコード実行が要る。その権限があれば`factory_state`のボリューム全体を直接読めるので、実害は増えない。
 
 ## 自己更新の依存インストール
 
@@ -740,6 +823,7 @@ Consoleでバンドルを通らずに配信される`console/public/`と`console
 配信するdraw.ioのビューアを固定する`console/drawio-viewer.json`も止める。
 固定を強制し、配信物を作って検査するスクリプトも止める。
 旧Consoleのraw appが図を隔離して描く部品(iframeを作る`DrawioViewer.tsx`、`src`とsandboxの定数、iframeとの状態の遷移、それらを照合するテスト)も止める。一覧は`f/factory/lib/protected_paths.ts`の`FORBIDDEN_EXACT_PATHS`にある。
+CIがどのジョブを動かすかを決める`scripts/ci-scope.ts`も止める。書き換えられると、検査のジョブを飛ばされるためである。
 配信のCSPを持つ`infra/Caddyfile`と、配信物を検証する`infra/console_fetcher/`も止める。
 一覧は`f/factory/lib/protected_paths.ts`にある。
 
@@ -823,7 +907,7 @@ Claudeには、要件定義のディレクトリを一時ディレクトリに�
 
 ### 対象リポジトリのCIが動く
 
-実装ブランチのpushとPRの作成で、対象リポジトリの`push`と`pull_request`のCIが動く。Claudeの書いたコードは、人のレビューより前に、そのリポジトリのsecretsを使える状態で実行されうる。対象リポジトリのCIの権限とsecretsの範囲は、この前提で設定する。
+実装ブランチのpushとPRの作成で、対象リポジトリの`push`と`pull_request`のCIが動く。atelier-worksのCIはPRの作成から動く。Claudeの書いたコードは、人のレビューより前に、そのリポジトリのsecretsを使える状態で実行されうる。対象リポジトリのCIの権限とsecretsの範囲は、この前提で設定する。
 
 ### 保護パスは止めずに明示する
 
@@ -911,16 +995,150 @@ self cloneは`self_update`のデプロイ元なので、Claudeに書き換えら
 
 ## ラベル付与の制限
 
-publicのリポジトリで第三者がラベルを付けてパイプラインを起動するのを防ぐため、ラベルを付けた人を確かめる。
+publicのリポジトリで第三者がラベルを付けてパイプラインを起動するのを防ぐため、トリガーラベルを付けた人を確かめる。
+対象は、Issueの`factory`ラベルと、PRの`factory:review`、`factory:fix`ラベルである。
 
-`poll_issues`は、Issueのタイムラインから、最後に`factory`ラベルを付けた人の`author_association`を確かめる。OWNER、MEMBER、COLLABORATORのどれかでなければ、Issueを拾わずにnoticeを記録する。タイムラインはラベルの付与と剥奪の履歴なので、取り込みでラベルが外れた後もこの確認は働く。
+GitHubでは、ラベルを付けるのにtriage以上の権限が要る。
+一方、Issueフォームが自動で付けるラベルは、起票者の権限によらず付く。
+そのため、Issueフォームにはトリガーラベルを設定せず、ラベルを付けた人をFactoryが確かめて、許可された人でなければ反応しない。
 
-GitHubでは、ラベルを付けるのにtriage以上の権限が要る。`author_association`の確認は、この制約に重ねる補助の確認である。
+### 付与者の確認
+
+`poll_issues`と`poll_prs`は、IssueとPRのラベルのイベントから、トリガーラベルの最後の`labeled`か`unlabeled`を探す。
+イベントはGraphQLで、直近100件のラベルのイベントだけを読む。
+コメントや参照のイベントは含まれない。
+ラベルのイベントを増やせるのは、ラベルを付け外しできる権限を持つ人と、その権限で動く自動化だけである。
+自動化は、第三者の入力に応じてラベルを付け外しするActionsやAppを指す。
+最後のイベントは、並び順ではなく、作成時刻の最大で決める。
+作成時刻は秒単位なので、同じ秒のイベントが複数あれば、順序を判定できないものとして拒否する。
+同じ秒のイベントは時刻が変わらないので、時間が経っても判定できない。
+許可された人がラベルを外して付け直すと、新しいイベントが最後になり、判定できる。
+最後のイベントが`labeled`なら、その`actor`のログイン名を確かめる。
+他のラベルのイベントは見ない。
+ラベルが一度外されて付け直されていれば、最後のイベントが対象になる。
+ラベル名は、GitHubと同じく大文字小文字を区別せずに比べる。
+
+`labeled`イベントは`author_association`を持たない。
+そのため、付与者はGitHubの関係(OWNERなど)ではなく、ログイン名で判定する。
+
+許可するのは、次のアカウントである。
+大文字小文字は区別しない。
+
+- FactoryのPATのアカウント。
+- `factory_config`の`allowed_labeler_logins`に挙げたアカウント。
+  既定値は空である。
+
+次のどれかのときは、判定できないものとして拒否する。
+許可されたものだけが通るので、判定の失敗が拒否に倒れる。
+
+- トリガーラベルの`labeled`イベントが無い。
+- ラベルが付いているのに、最後のイベントが`unlabeled`である。
+  イベントの反映が遅れていて、今の付与者を特定できない。
+- 作成時刻が最大のイベントが、同じ秒に2件以上ある。
+- イベントに`actor`が無い(削除されたユーザーなど)。
+- `actor`が人のアカウント(`User`)でない。
+  GitHub Appなどのログイン名は`[bot]`を伴わないため、人のログイン名と取り違えないようにする。
+- イベントを取得できなかった。
+  そのポーリングでは対象にせず、次のポーリングで取得し直す。
+- FactoryのPATのアカウントを取得できなかった。
+  ポーリングのジョブが失敗し、何も始めない。
+- 直近100件のラベルのイベントにトリガーラベルのイベントが無く、それより古いイベントが残っている。
+  読んだ範囲では付与者が分からない。
+
+拒否したときは、ラベルを外さずに、noticeの`labeler_denied`を記録する。
+本文は対象とラベルだけで決まり、同じ本文の未解決のnoticeがあるあいだは追加しない。
+イベントの取得に失敗したときは、noticeを増やさず、**失敗**タブに記録する。
+記録されるステップ名は、Issueが`fetch_labeler:<owner>/<repo>#<番号>`、PRが`fetch_pr:<owner>/<repo>#<番号>`である。
+
+付与者を判定できないときは、失敗ではなく、noticeの`labeler_check_limit`を1回だけ記録する。
+本文は対象とラベルだけで決まり、同じ本文の未解決のnoticeがあるあいだは追加しない。
+次の操作として、ラベルを外し、許可された人が付け直すことを示す。
+付け直すと、トリガーラベルの新しい`labeled`イベントが直近100件に入り、判定できるようになる。
+人がラベルを外して付け直すまで、ポーリングのたびに同じ取得を繰り返す。
+noticeは、対応した後にConsoleで解決する。
+
+判定から取得までには時間差があるので、取得の直前に同じ確認をもう一度行う。
+拒否されたときは、取得せずに`labeler_denied`を記録する。
+取得できなかったときは、取得せず、**失敗**タブに`confirm_labeler:<owner>/<repo>#<番号>`として記録する。
+このときラベルは外れていないので、操作は要らない。
+次のポーリングが、自動で拾い直す。
+ラベルを付け直すと、付与者がその人に変わる。
+そのため、この失敗を理由にラベルを付け直さない。
+
+許可するアカウントに、他人の入力に応じてラベルを付ける自動化のアカウントを入れない。
+FactoryのPATを使う自動化も、入れない。
+GitHub Appがオーナーの代理でラベルを付けると、`actor`はオーナーになる。
+そのため、第三者の入力に応じてオーナーの権限でラベルを付けるAppやワークフローを、設定しない。
+自動化が第三者の入力でラベルを付けると、付与者の確認が素通りになるためである。
+`[bot]`で終わるログイン名は、設定の検証で拒否する。
+
+許可はログイン名で判定する。
+アカウント名を変更すると、他人が古い名前を取得できる場合がある。
+名前を変えたアカウントは、`allowed_labeler_logins`から外す。
 
 `factory`ラベルを付け直すと新しいサイクルが始まり、同じIssueの承認済みの作業項目は取り消される。
 そのため、ラベルを付けられる人は、承認の取り消しも起こせる。
-pushの権限を持たないtriageの権限のcollaboratorも、これに含まれる。
+許可するアカウントを増やすときは、この影響も含めて決める。
 
-PRのレビューとコメントも、投稿者で絞る。許可する関係は`allowed_labeler_associations`で、既定値は`["OWNER", "MEMBER", "COLLABORATOR"]`である。これに当たらない投稿者のレビューコメントと新しいコメントは、`pr_review`と`pr_fix`の起動に使わない。
+許可されていない人の操作を運用者に見せるnotice(`labeler_denied`)は、運用者が確かめないまま解決済みになることがある。
+このnoticeは重要度が「情報」なので、要対応の一覧には出ず、Consoleのシステム画面に7日だけ出る。
+その間に、許可された人がラベルを付け直してIssueかPRを取得すると、同じ対象の未解決のnoticeが解決済みになる。
+対象の範囲は[通知とrate limit](internals/notifications.md)にある。
+解決しなかったnoticeも、作成から`retention_logs_days`(既定30日)を過ぎると、DBの掃除が解決済みにする。
+どちらの場合も行は残り、解決の時刻から同じ期間の掃除までは、解決済みの履歴として読める。
+許可されていない人は、取得の条件である最後のラベル付与者が許可された人であることを満たせない。
+そのため、この解決を起こせない。
+Consoleからは解決できない種類だが、人の介在を減らすため、この自動の解決を受け入れる。
 
-`factory:review`と`factory:fix`のラベルについては、タイムラインを確かめず、GitHubの権限の制約だけに頼る。この制約は付与の操作そのものにかかるので、取り込みでラベルが外れた後も弱まらない。
+### 確認しない経路
+
+ラベルを介さずに始まるレビューは、付与者ではなくPRの作成者で確かめる。
+対象は、次の2つである。
+
+- PRのレビュー依頼かassigneeにFactoryのアカウントが入っているときのレビュー。
+- 追跡中のPRに新しいcommitが入ったときの再レビュー。
+
+どちらも、PRの作成者が許可されたアカウントのときに限る。
+許可されるのは、FactoryのPATのアカウントと`allowed_labeler_logins`のアカウントである。
+作成者を取得できないときは始めない。
+Factoryが作ったPRの作成者はFactoryのPATのアカウントである。
+そのため、Factory以外が追加したcommitで再レビューされる。
+
+`factory:review`か`factory:fix`が、許可されていない人に付けられた状態で付いているPRでも、ラベルを介さないレビューは始めない。
+ラベル名の大文字小文字がconfigと違っていても、同じラベルとして扱う。
+
+同じリポジトリのブランチから出した第三者のPRは、許可されたアカウントがトリガーラベルを付けたときだけレビューされる。
+新しいcommitが入るたびに、ラベルを付け直す必要がある。
+自動の再レビューは起きない。
+CODEOWNERSなどによるレビュー依頼も、作成者が許可されていなければ起動しない。
+
+PRのheadが対象のリポジトリにないとき(forkのPRと、headのリポジトリを取得できないPR)は、許可されたアカウントがラベルを付けても、レビューを始めない。
+forkの内容は第三者が書いたもので、信頼してレビューに渡せないためである。
+見送ったときは、ラベルを外さず、noticeの`fork_head_denied`を記録する。
+
+### 残るリスク
+
+次のリスクは、受け入れている。
+
+- 作成者が許可されたアカウントのPRに、書き込み権限のある共同作業者がpushすると、ラベル無しの再レビューが起動する。
+  書き込み権限を持つ人は、信頼された共同作業者とみなす。
+  Factory自身のpushは`setHeadSha`で記録されるので、起動しない。
+- ラベルを付けた後から取得までの間に、起票者がIssueの本文を編集できる。
+  承認前の本文が`work_items.body`に保存されるので、編集後の本文が要件定義の入力になる。
+- 確認からラベルを外すまでの窓は数百ミリ秒である。
+  付け直しを成功させるには、狙ったタイミングが要る。
+- 書き込み権限のある人がラベルを改名すると、過去の付与が現在のトリガーラベルの付与として数えられる。
+  書き込み権限を持つ人は、元から信頼する前提である。
+- ラベルを付け外しできる権限で動く自動化が、第三者の入力に応じてイベントを積むと、判定不能が続く。
+  判定不能は拒否に倒れるので、作業は始まらない。
+- 拒否したトリガーラベルはPRに残る。
+  人がラベルを外すまで、そのPRはラベルを介さないレビューの自動検出も止まる。
+- Factory自身のPRで拒否したラベルのせいでサイクルが止まっても、気づく手段は「情報」のnoticeだけである。
+  人がラベルを外すと、サイクルが再開する。
+
+### 投稿者の関係の確認
+
+PRのレビューとコメントは、投稿者で絞る。
+許可する関係は`allowed_labeler_associations`で、既定値は`["OWNER", "MEMBER", "COLLABORATOR"]`である。
+コメントとレビューの応答は`author_association`を持つので、この関係で判定できる。
+これに当たらない投稿者のレビューコメントと新しいコメントは、`pr_review`と`pr_fix`の起動に使わない。

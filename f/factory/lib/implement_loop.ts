@@ -20,12 +20,14 @@ import {
   type ImplementCheckSummary,
   type ImplementClaudeOutput,
   isImplementClaudeOutput,
+  roundIsStalled,
   roundOutcomeForExit,
   stallHash,
   truncateCheckOutput,
   validateImplementOutput,
 } from "./implement_support.ts";
 import { escapeReasonSeparator } from "./log.ts";
+import { modelFor } from "./model_policy.ts";
 import {
   type CheckFailure,
   IMPLEMENT_SCHEMA,
@@ -419,12 +421,18 @@ export type ImplementClaudeRunInput = {
   readonly config: Pick<
     FactoryConfig,
     | "model"
+    | "heavy_model"
     | "implement_max_turns"
     | "implement_max_budget_usd_per_run"
     | "implement_timeout_sec"
   >;
   readonly workItemId: number;
   readonly attempt: number;
+  /**
+   * 同じ作業項目の同じ試行で、これまでに実装のラウンドが失敗した回数
+   * (`countImplementFailedRounds`)。2回に達したら`heavy_model`を使う。
+   */
+  readonly sonnetFailures: number;
   readonly stage: "implement" | "implement_fix";
   readonly prompt: string;
   /** `buildSystemPrompt([IMPLEMENT_SKILL_NAME])`が作ったファイル。 */
@@ -463,7 +471,7 @@ export function buildImplementClaudeOptions(
     workItemId: input.workItemId,
     stage: input.stage,
     attempt: input.attempt,
-    model: input.config.model,
+    model: modelFor(input.config, "implement", input.sonnetFailures),
     prompt: input.prompt,
     appendSystemPromptFile: input.systemPromptPath,
     jsonSchema: IMPLEMENT_SCHEMA,
@@ -607,6 +615,11 @@ export type FixRoundRequest = {
    * `true`なら`IMPLEMENT_OUTPUT_CONTRACT_NOTE`を`outputContractNote`として渡す。
    */
   readonly contractViolated: boolean;
+  /**
+   * 前のラウンドの差分か検査出力のどちらかがその前のラウンドと同じで、停滞の判定を飛ばして続けたことを表す。
+   * `true`なら、上位のモデルが同じ直し方を繰り返さないよう、プロンプトでそれを伝える。
+   */
+  readonly previousRoundStalled: boolean;
 };
 
 export type ImplementLoopDeps = {
@@ -639,6 +652,12 @@ export type ImplementLoopDeps = {
   ) => Promise<ImplementClaudeRound>;
   readonly recordRound: (record: ImplementRoundRecord) => Promise<void>;
   readonly dailyBudgetExceeded: () => Promise<boolean>;
+  /**
+   * 検査に失敗したラウンドを数えに入れる前の呼び出しで、
+   * このラウンドの失敗の次に使うモデルが、今のモデルと変わるかを返す。
+   * 失敗したラウンドでだけ呼ぶ。
+   */
+  readonly modelChangesAfterFailure: () => Promise<boolean>;
   /**
    * 作業項目がまだimplementingで、flow_job_idがこの実行のルートジョブIDならtrueを返す(1回のSELECT)。
    * 各ラウンドの冒頭(worktreeに触れる前)と、修正ラウンドを始める直前に呼ぶ。
@@ -1045,6 +1064,11 @@ export async function runImplementVerifyLoop(
       evaluation.state === "failed" ? stallHash(evaluation.stallText) : null;
     const dailyBudgetExceeded =
       evaluation.state === "failed" ? await deps.dailyBudgetExceeded() : false;
+    // 記録の前に呼ぶので、数えるのはこのラウンドを含まない失敗の回数になる。
+    const modelChangesNext =
+      evaluation.state === "failed"
+        ? await deps.modelChangesAfterFailure()
+        : false;
     // 期限は、ラウンド上限・日次予算と同じく修正ラウンド前のリース確認より先に判定する。両方が成り立っても、完了ステップがリースを確かめて何もしないので結果は変わらない。
     const deadlineReached =
       evaluation.state === "failed" &&
@@ -1056,11 +1080,22 @@ export async function runImplementVerifyLoop(
       maxRounds: input.maxRounds,
       dailyBudgetExceeded,
       deadlineReached,
+      modelChangesNext,
       checkOutputHash: checkHash,
       previousCheckOutputHash: previousCheckHash,
       diffHash: fingerprint.treeSha,
       previousDiffHash,
     });
+    // 停滞の判定を飛ばして続けるラウンドだけが、次の修正ラウンドに伝える対象になる。
+    const stallSkipped =
+      exit === "continue" &&
+      modelChangesNext &&
+      roundIsStalled({
+        diffHash: fingerprint.treeSha,
+        previousDiffHash,
+        checkOutputHash: checkHash,
+        previousCheckOutputHash: previousCheckHash,
+      });
     await deps.recordRound({
       ...base,
       outcome: roundOutcomeForExit(exit),
@@ -1122,6 +1157,7 @@ export async function runImplementVerifyLoop(
       round,
       failed: evaluation.failures.map((failure) => failure.command),
       contract_violated: evaluation.contractViolated,
+      previous_round_stalled: stallSkipped,
     });
     previousDiffHash = fingerprint.treeSha;
     previousCheckHash = checkHash;
@@ -1130,6 +1166,7 @@ export async function runImplementVerifyLoop(
       round,
       failures: evaluation.failures,
       contractViolated: evaluation.contractViolated,
+      previousRoundStalled: stallSkipped,
     });
   }
 }

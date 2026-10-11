@@ -866,9 +866,12 @@ describe("posting a review once per sha", () => {
     });
 
     test("rejects when listing the reviews fails", async () => {
-      const fake = createFakeCommandRunner([serverError()]);
+      const fake = createFakeCommandRunner([serverError(), serverError()]);
       await expect(
-        findPostedReview({ run: fake.run, ghToken: "tok" }, TARGET),
+        findPostedReview(
+          { run: fake.run, ghToken: "tok", sleep: async () => {} },
+          TARGET,
+        ),
       ).rejects.toThrow("HTTP 500");
     });
   });
@@ -984,19 +987,24 @@ describe("posting a review once per sha", () => {
     });
 
     test("rejects when listing the reviews fails", async () => {
-      const fake = createFakeCommandRunner([serverError()]);
+      const fake = createFakeCommandRunner([serverError(), serverError()]);
       await expect(
-        publishReview({ run: fake.run, ghToken: "tok" }, rerunInput(), SILENT),
+        publishReview(
+          { run: fake.run, ghToken: "tok", sleep: async () => {} },
+          rerunInput(),
+          SILENT,
+        ),
       ).rejects.toThrow("HTTP 500");
     });
 
     test("does not post when listing the reviews fails", async () => {
       const fake = createFakeCommandRunner([
         serverError(),
+        serverError(),
         ghApiOk({ id: 99 }),
       ]);
       await publishReview(
-        { run: fake.run, ghToken: "tok" },
+        { run: fake.run, ghToken: "tok", sleep: async () => {} },
         rerunInput(),
         SILENT,
       ).catch(() => {});
@@ -1009,9 +1017,14 @@ describe("posting a review once per sha", () => {
       const fake = createFakeCommandRunner([
         ghApiOk([postedReview(55)]),
         serverError(),
+        serverError(),
       ]);
       await expect(
-        publishReview({ run: fake.run, ghToken: "tok" }, rerunInput(), SILENT),
+        publishReview(
+          { run: fake.run, ghToken: "tok", sleep: async () => {} },
+          rerunInput(),
+          SILENT,
+        ),
       ).rejects.toThrow("HTTP 500");
     });
 
