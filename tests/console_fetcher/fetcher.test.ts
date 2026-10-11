@@ -37,6 +37,7 @@ import {
 import {
   artifactJson,
   buildRelease,
+  ciWorkflowRun,
   FAKE_BLOB_HOST,
   fakeGitHub,
   workflowRun,
@@ -335,6 +336,7 @@ describe("runOnce", () => {
     await runOnce(deps(github.fetch));
     expect(github.calls.map((call) => new URL(call.url).pathname)).toEqual([
       "/repos/o/r/actions/workflows/console-dist.yml/runs",
+      "/repos/o/r/actions/workflows/ci.yml/runs",
     ]);
   });
 
@@ -502,6 +504,112 @@ describe("runOnce", () => {
     expect(status.error).toBe("no_successful_run");
   });
 
+  describe("with the ci.yml result", () => {
+    function githubWithCi(ciRuns: readonly Record<string, unknown>[]) {
+      const zip = buildRelease(SHA_A, filesFor("A"));
+      return fakeGitHub({
+        runs: [workflowRun(1, SHA_A)],
+        ciRuns,
+        artifacts: { 1: [artifactJson(101, SHA_A, zip)] },
+        blobs: { 101: zip },
+      });
+    }
+
+    test("reports no_successful_run when ci.yml has no successful run for the commit", async () => {
+      const status = await runOnce(deps(githubWithCi([]).fetch));
+      expect(status.error).toBe("no_successful_run");
+    });
+
+    test("does not point current at a commit whose ci.yml did not succeed", async () => {
+      await runOnce(deps(githubWithCi([]).fetch));
+      expect(await exists(join(root, "current"))).toBe(false);
+    });
+
+    test("does not download the artifact while ci.yml has not succeeded", async () => {
+      const github = githubWithCi([]);
+      await runOnce(deps(github.fetch));
+      expect(
+        github.calls.filter((call) => call.url.includes("/artifacts")),
+      ).toEqual([]);
+    });
+
+    test("ignores a ci.yml run of another commit", async () => {
+      const status = await runOnce(
+        deps(githubWithCi([ciWorkflowRun(5, SHA_B)]).fetch),
+      );
+      expect(status.error).toBe("no_successful_run");
+    });
+
+    test("ignores a ci.yml run on a branch other than main", async () => {
+      const onTag = { ...ciWorkflowRun(5, SHA_A), head_branch: "v1" };
+      const status = await runOnce(deps(githubWithCi([onTag]).fetch));
+      expect(status.error).toBe("no_successful_run");
+    });
+
+    test("ignores a ci.yml run that failed", async () => {
+      const failed = { ...ciWorkflowRun(5, SHA_A), conclusion: "failure" };
+      const status = await runOnce(deps(githubWithCi([failed]).fetch));
+      expect(status.error).toBe("no_successful_run");
+    });
+
+    test("ignores a ci.yml run that is a pull_request run", async () => {
+      const pr = { ...ciWorkflowRun(5, SHA_A), event: "pull_request" };
+      const status = await runOnce(deps(githubWithCi([pr]).fetch));
+      expect(status.error).toBe("no_successful_run");
+    });
+
+    test("deploys when ci.yml succeeded for the commit", async () => {
+      const status = await runOnce(
+        deps(githubWithCi([ciWorkflowRun(5, SHA_A)]).fetch),
+      );
+      expect(status.sha).toBe(SHA_A);
+    });
+
+    test("asks ci.yml for the commit on main pushes", async () => {
+      const github = githubWithCi([ciWorkflowRun(5, SHA_A)]);
+      await runOnce(deps(github.fetch));
+      const ciCall = github.calls.find((call) =>
+        call.url.includes("/workflows/ci.yml/runs"),
+      );
+      expect(
+        Object.fromEntries(new URL(ciCall?.url ?? "").searchParams),
+      ).toMatchObject({
+        head_sha: SHA_A,
+        branch: "main",
+        event: "push",
+        status: "success",
+      });
+    });
+
+    test("falls back to the newest commit that both workflows passed", async () => {
+      const zipA = buildRelease(SHA_A, filesFor("A"));
+      const zipB = buildRelease(SHA_B, filesFor("B"));
+      const github = fakeGitHub({
+        runs: [
+          workflowRun(1, SHA_A, "2026-10-07T00:00:00Z"),
+          workflowRun(2, SHA_B, "2026-10-08T00:00:00Z"),
+        ],
+        ciRuns: [ciWorkflowRun(5, SHA_A)],
+        artifacts: {
+          1: [artifactJson(101, SHA_A, zipA)],
+          2: [artifactJson(102, SHA_B, zipB)],
+        },
+        blobs: { 101: zipA, 102: zipB },
+      });
+      const status = await runOnce(deps(github.fetch));
+      expect(status.sha).toBe(SHA_A);
+    });
+
+    test("reports github_unavailable when the ci.yml run list fails", async () => {
+      const github = fakeGitHub({
+        runs: [workflowRun(1, SHA_A)],
+        ciRunsStatus: 500,
+      });
+      const status = await runOnce(deps(github.fetch));
+      expect(status.error).toBe("github_unavailable");
+    });
+  });
+
   test("reports no_successful_run when only a ci.yml run is listed", async () => {
     const ciRun = {
       ...workflowRun(1, SHA_A),
@@ -586,6 +694,7 @@ describe("runOnce", () => {
     await runOnce(deps(github.fetch));
     expect(github.calls.map((call) => new URL(call.url).pathname)).toEqual([
       "/repos/o/r/actions/workflows/console-dist.yml/runs",
+      "/repos/o/r/actions/workflows/ci.yml/runs",
     ]);
   });
 

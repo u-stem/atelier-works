@@ -10,14 +10,6 @@ import {
 
 const ROOT = join(import.meta.dir, "..", "..");
 const WORKFLOWS_DIR = join(ROOT, ".github", "workflows");
-const ACTION_PATH = join(
-  ROOT,
-  ".github",
-  "actions",
-  "build-console",
-  "action.yml",
-);
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -62,15 +54,11 @@ function stepNamed(
 
 const consoleDist = readYaml(join(WORKFLOWS_DIR, WORKFLOW_FILE));
 const ci = readYaml(join(WORKFLOWS_DIR, "ci.yml"));
-const action = readYaml(ACTION_PATH);
 
 function allUses(...documents: readonly Record<string, unknown>[]): string[] {
   const uses: string[] = [];
   for (const document of documents) {
-    const containers = isRecord(document.jobs)
-      ? Object.values(document.jobs)
-      : [recordAt(document, "runs")];
-    for (const container of containers) {
+    for (const container of Object.values(recordAt(document, "jobs"))) {
       for (const step of stepsOf(container)) {
         if (typeof step.uses === "string") {
           uses.push(step.uses);
@@ -145,8 +133,26 @@ describe("console-dist.yml", () => {
     const steps = stepsOf(recordAt(recordAt(consoleDist, "jobs"), "build"));
 
     expect(
-      recordAt(stepNamed(steps, "Build the console"), "with")["source-sha"],
+      recordAt(stepNamed(steps, "Write the release manifest"), "env")
+        .SOURCE_SHA,
     ).toBe("$" + "{{ github.sha }}");
+  });
+
+  test("runs the lockfile check as a file", () => {
+    const steps = stepsOf(recordAt(recordAt(consoleDist, "jobs"), "build"));
+
+    expect(stepNamed(steps, "Check the console lockfile policy").run).toBe(
+      "bun ./scripts/check-console-lockfile.ts console/bun.lock",
+    );
+  });
+
+  test("keeps the build steps in the file instead of a local action", () => {
+    const steps = stepsOf(recordAt(recordAt(consoleDist, "jobs"), "build"));
+    const local = steps.filter(
+      (step) => typeof step.uses === "string" && step.uses.startsWith("./"),
+    );
+
+    expect(local).toEqual([]);
   });
 });
 
@@ -159,35 +165,22 @@ describe("ci.yml", () => {
     expect(uploads).toEqual([]);
   });
 
-  test("builds the console with the shared action", () => {
-    const steps = stepsOf(recordAt(recordAt(ci, "jobs"), "console"));
+  test("builds the console with the same steps as console-dist.yml", () => {
+    const build = stepsOf(recordAt(recordAt(consoleDist, "jobs"), "build"));
+    const check = stepsOf(recordAt(recordAt(ci, "jobs"), "console"));
+    const shared = (steps: readonly Record<string, unknown>[]) =>
+      steps.filter(
+        (step) =>
+          step.name !== "Checkout" && step.name !== "Upload the console build",
+      );
 
-    expect(stepNamed(steps, "Build the console").uses).toBe(
-      "./.github/actions/build-console",
-    );
+    expect(shared(check)).toEqual(shared(build));
   });
 });
 
-describe("build-console action", () => {
-  test("runs the lockfile check as a file", () => {
-    expect(
-      stepNamed(
-        stepsOf(recordAt(action, "runs")),
-        "Check the console lockfile policy",
-      ).run,
-    ).toBe("bun ./scripts/check-console-lockfile.ts console/bun.lock");
-  });
-
-  test("passes the commit to the manifest through the environment", () => {
-    expect(
-      recordAt(
-        stepNamed(
-          stepsOf(recordAt(action, "runs")),
-          "Write the release manifest",
-        ),
-        "env",
-      ).SOURCE_SHA,
-    ).toBe("$" + "{{ inputs.source-sha }}");
+describe("local actions", () => {
+  test("none exist, so no unreviewed file joins the build", () => {
+    expect(existsSync(join(ROOT, ".github", "actions"))).toBe(false);
   });
 });
 
@@ -197,7 +190,7 @@ describe("every workflow", () => {
     .map((file) => readYaml(join(WORKFLOWS_DIR, file)));
 
   test("pins each external action to a commit sha", () => {
-    const unpinned = allUses(...workflowDocuments, action)
+    const unpinned = allUses(...workflowDocuments)
       .filter((uses) => !uses.startsWith("./"))
       .filter((uses) => !/^[^@]+@[0-9a-f]{40}$/.test(uses));
 

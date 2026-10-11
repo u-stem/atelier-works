@@ -20,6 +20,7 @@ import {
   ARTIFACT_NAME,
   type AssetFile,
   appendHistory,
+  CI_WORKFLOW_FILE,
   CORRUPT_COPIES_TO_KEEP,
   type ConsoleManifest,
   type CurrentLink,
@@ -31,6 +32,7 @@ import {
   type FetcherConfig,
   type FetcherStatus,
   HISTORY_LIMIT,
+  hasCiSuccess,
   isAllowedDownloadUrl,
   isCommitSha,
   isLockStale,
@@ -52,11 +54,11 @@ import {
   pruneRevokedState,
   RELEASE_BRANCH,
   type RevokedState,
+  rankReleaseRuns,
   referencedAssetNames,
   selectAssetsToDelete,
   selectCorruptCopiesToDelete,
   selectIdenticalReleases,
-  selectLatestRun,
   selectReleasesToDelete,
   selectRevokedAssets,
   selectRevokedReleases,
@@ -321,6 +323,36 @@ async function getJson(deps: FetcherDeps, path: string): Promise<unknown> {
   }
 }
 
+/** `ci.yml`の成功の確認に使う、新しい順の候補の上限。 */
+const MAX_CANDIDATES = 5;
+
+/** そのcommitの`ci.yml`が、`main`へのpushで成功しているかをAPIで確かめる。 */
+async function isCiGreen(deps: FetcherDeps, sha: string): Promise<boolean> {
+  const query = new URLSearchParams({
+    head_sha: sha,
+    branch: RELEASE_BRANCH,
+    event: "push",
+    status: "success",
+    exclude_pull_requests: "true",
+    per_page: "20",
+  });
+  const runs = parseWorkflowRuns(
+    await getJson(deps, `/actions/workflows/${CI_WORKFLOW_FILE}/runs?${query}`),
+  );
+  if (runs === null) {
+    throw new FetchFailure(
+      "unexpected_response",
+      "ci workflow run list has an unexpected shape",
+    );
+  }
+  return hasCiSuccess(runs, sha);
+}
+
+/**
+ * 取り込む実行を選ぶ。`console-dist.yml`が成功した新しい実行のうち、
+ * 同じcommitの`ci.yml`も成功しているものを返す。
+ * `ci.yml`が実行中か失敗しているcommitは飛ばし、前の版を配信し続ける。
+ */
 async function findLatestRun(deps: FetcherDeps): Promise<WorkflowRun> {
   const query = new URLSearchParams({
     branch: RELEASE_BRANCH,
@@ -338,14 +370,17 @@ async function findLatestRun(deps: FetcherDeps): Promise<WorkflowRun> {
       "workflow run list has an unexpected shape",
     );
   }
-  const latest = selectLatestRun(runs);
-  if (latest === null) {
-    throw new FetchFailure(
-      "no_successful_run",
-      "no successful push run on main",
-    );
+  const checked = new Set<string>();
+  for (const candidate of rankReleaseRuns(runs)) {
+    if (checked.has(candidate.headSha)) continue;
+    if (checked.size >= MAX_CANDIDATES) break;
+    checked.add(candidate.headSha);
+    if (await isCiGreen(deps, candidate.headSha)) return candidate;
   }
-  return latest;
+  throw new FetchFailure(
+    "no_successful_run",
+    "no push run on main succeeded in both workflows",
+  );
 }
 
 /** 本文の次の断片を読む。途中で切れた接続や時間切れは`github_unavailable`にする。 */

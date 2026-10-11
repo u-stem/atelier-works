@@ -51,6 +51,7 @@ PRの修正(`pr_fix`)と実装(`implement`)のフローは、Claudeが対象リ�
 - `main`の削除とforce pushを禁止する。
 - `main`への変更はPRを必須にする。承認は0件でよく、人のレビューをGitHubが強制するわけではない。
 - 必須チェックは`scope`、`check`、`test-db`、`metadata`、`console`、`caddyfile`、`console-fetcher-image`である。条件付きのジョブは、スキップされると通過として扱われる。
+- タグの作成と更新は、rulesetで管理者に限る。`main`という名前のタグの実行を、`main`のブランチの実行と見分けられなくするためである。
 - 設定を迂回できるのは、管理者のロールだけである。迂回のモードは`pull_request`なので、直接pushはできず、PRを経由する迂回に限られる。
 
 公開に伴い、外部からの操作は次のように絞る。
@@ -222,6 +223,7 @@ workerが持つ`f/factory/wmill_token`は、ワークスペース`factory`に限
 | Account permissions | すべてNo access |
 
 ContentsをRead and writeにするのは、PR修正と実装のフローがブランチにpushするためである。WorkflowsはNo accessのままにする。`.github/workflows/`を含むpushをGitHubに拒否させるためである。実装フローは`.github/`の変更を止めずに記録するので、この拒否が実質のガードになる。
+ただし、この拒否が及ぶのは`.github/workflows/`の下だけである。`.github/actions/`のcomposite actionには及ばないので、PR修正はパスで止め、実装フローは記録する。組み立てなど配布物に関わる手順は、composite actionに分けない。
 
 fine-grained PATは、トークンの値を変えずに権限の設定だけを変えられる。権限を変えるときは既存のトークンを更新すればよく、再発行は要らない。
 
@@ -293,7 +295,7 @@ ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者�
 | 守ること | 内容 |
 | --- | --- |
 | 書ける場所を1つにする | 配信物の置き場所`factory_console`(dockerの名前付きボリューム)に書けるのは`console_fetcher`だけである。CaddyとConsole用のworkerは読み取り専用でマウントし、defaultのworkerはマウントしない |
-| 取り込むものを絞る | 専用のワークフロー`console-dist.yml`が`main`へのpushで動き、成功した実行の成果物`console-dist`だけを取り込む。ワークフローのパスと名前、ブランチ、イベント、結論を確かめる。zipと展開した各ファイルのsha256を照合してから書く |
+| 取り込むものを絞る | 専用のワークフロー`console-dist.yml`が`main`へのpushで動き、成功した実行の成果物`console-dist`だけを取り込む。同じcommitの`ci.yml`が`main`へのpushで成功していることも要る。どちらもワークフローのパスと名前、ブランチ、イベント、結論を確かめる。zipと展開した各ファイルのsha256を照合してから書く |
 | `console_fetcher`を閉じ込める | rootでないuid、読み取り専用のファイルシステム、ケーパビリティなし、DBにもWindmillにも届かない専用のnetworkで動かす |
 | ブラウザ側で制限する | `/console/*`の応答だけに、scriptの読み込み先を`/console/assets/`に絞ったCSPと、埋め込みを禁じるヘッダーを付ける |
 | CSPとCaddyのパスの解釈の違いを塞ぐ | パーセント符号を戻した元のパスが`/console/`で始まる要求は、Windmillへ転送しない。Consoleの経路では、生のパスに`%2f`か`%5c`があれば400にする |
@@ -321,10 +323,12 @@ ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者�
   印に持ち主の識別子は無い。期限を超える処理と取り直した処理は、理論上は重なりうる。
 - `main`へのマージは、承認0件のPRで済む。PRの必須チェックは通る必要があるが、人のレビューは強制されない。FactoryのPATが`main`へマージできるか、人の確認なしにマージできるかは確かめていない([mainの保護とリポジトリの公開](#mainの保護とリポジトリの公開))。そのため、マージされたコードは人のレビューを経ずに運用者のブラウザで動きうる。Consoleの変更のレビューは、Windmillの管理者権限を持つコードのレビューとして行う。
 - CIの組み立ての途中で動くもの(miseが入れるbunなどのツール、Viteのプラグインなどの依存)が侵害されると、出力が改ざんされうる。`digest`とマニフェストが保証するのは、GitHubのCIが作ったものであることまでである。
-- 信頼の境界は`console-dist.yml`の1つのジョブと、そこで動くツールや依存、共有の組み立ての部品(`.github/actions/build-console/`)に及ぶ。`ci.yml`のジョブは同名の成果物を上げても、取り込み先の実行(`console-dist.yml`)に入らない。`console-dist.yml`を書き換える変更と、その部品を書き換える変更は、`main`へのマージで反映されるので、マージ前のレビューが唯一の防御である。
+- 信頼の境界は`console-dist.yml`の1つのジョブと、そこで動くツールや依存に及ぶ。`ci.yml`のジョブは同名の成果物を上げても、取り込み先の実行(`console-dist.yml`)に入らない。組み立ての手順は`console-dist.yml`に直接書き、composite actionに分けない。`console-dist.yml`を書き換える変更は、`main`へのマージで反映されるので、マージ前のレビューが唯一の防御である。
 - 同じ実行の中では、成果物を`overwrite: true`で上げ、`console_fetcher`はその名前の`id`が最大の成果物を取り込む。`console-dist.yml`のジョブは1つなので、同じ実行にほかの上げ手はいない。
-- `console-dist.yml`の成功は、組み立てが通ったことだけを示す。型検査、lint、テストは`ci.yml`の`check`ジョブが担う。このジョブはPRの必須チェックなので、`main`へ入る前に通っている。ただし`main`へのpushの`ci.yml`が失敗しても、配布物は取り込まれうる。
-- draw.ioのビューアも、この成果物の差し替えの範囲に入る。ビューアは組み立ての部品が取得して、同じ成果物に入れるためである。
+- `console-dist.yml`の成功が示すのは、組み立てが通ったことだけである。型検査、lint、テストを担う`ci.yml`の成功も、同じcommitについて取り込みの条件にする。`ci.yml`が実行中のcommitは、成功するまで取り込まない。
+- `main`という名前のタグの実行は、ブランチ名が`main`で現れる。`console_fetcher`は同じcommitで、`console-dist.yml`と`ci.yml`のどちらも`main`へのpushとして成功していることを要る。FactoryのPATはWorkflowsの権限が無く、ワークフローのファイルを書き換えたcommitを作れない。現在のワークフローは`main`のブランチのpushでしか動かないので、PATによるタグでは実行が作られない。
+- 両方のワークフローを書き換えたcommitに`main`というタグを付けられる人は、この照合を通せる。タグの作成と更新は、rulesetで管理者に限る。管理者は迂回できるので、管理者のアカウントの侵害は防げない。取り込むcommitが`main`の履歴に含まれるかは、確かめていない。
+- draw.ioのビューアも、この成果物の差し替えの範囲に入る。ビューアは`console-dist.yml`が取得して、同じ成果物に入れるためである。
 - `Sec-Fetch-Site`をブラウザが送るのは、信頼できるオリジン(localhostかHTTPS)のときだけである。`WM_BIND`を外向きにしてHTTPで公開すると、この防御は効かない。外向きにするならHTTPSで公開する。
 - `Origin`の検査が比べる相手は、要求の`Host`ヘッダーから作ったオリジンである。DNSリバインディングで`Host`が攻撃者のホスト名になると、`Origin`も一致して通る。ただしCookieはホスト名ごとに付くので、運用者のCookieは付かない。
 - `Origin`の検査が補えるのは、GETとHEAD以外のブラウザの要求だけである。ナビゲーションや`<img>`のGETには`Origin`が付かず、Firefox 70未満はフォームのPOSTにも付けない。この検査は、HTTPで公開してもブラウザが送るので、`Sec-Fetch-Site`の弱点を補う。
@@ -980,7 +984,9 @@ rootのホームと`/tmp`の下は入れない。そこに置かれた実行フ�
 
 ### 保護パスの変更を止める
 
-保護パスを変更したら、修正を止める。保護パスは`.claude/`、`.agents/`、`mise.toml`、`lefthook.yml`、`.github/workflows/`、`package.json`のscripts、新しい`*.sh`などである。これらはFactoryやCIが実行する設定で、書き換えられるとコードを実行されるためである。
+保護パスを変更したら、修正を止める。保護パスは`.claude/`、`.agents/`、`mise.toml`、`lefthook.yml`、`package.json`のscripts、新しい`*.sh`などである。
+CIのワークフローとcomposite action(`.github/workflows/`と`.github/actions/`)も含む。
+これらはFactoryやCIが実行する設定で、書き換えられるとコードを実行されるためである。
 markdownlint-cli2とtextlintの設定(`.markdownlint-cli2.jsonc`、`.textlintrc.json`など)も止める。どちらも設定から任意のモジュールを読み込め、pre-commitと`mise run check`が読むためである。
 Consoleでバンドルを通らずに配信される`console/public/`と`console/index.html`も止める。
 配信するdraw.ioのビューアを固定する`console/drawio-viewer.json`も止める。

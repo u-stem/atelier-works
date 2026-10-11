@@ -9,6 +9,10 @@ export const ARTIFACT_NAME = "console-dist";
 export const WORKFLOW_FILE = "console-dist.yml";
 export const WORKFLOW_PATH = ".github/workflows/console-dist.yml";
 export const WORKFLOW_NAME = "Console dist";
+// 検査の結果を確かめるワークフロー。配布物のcommitは、ここも成功していなければ取り込まない。
+export const CI_WORKFLOW_FILE = "ci.yml";
+export const CI_WORKFLOW_PATH = ".github/workflows/ci.yml";
+export const CI_WORKFLOW_NAME = "CI";
 export const RELEASE_BRANCH = "main";
 export const MANIFEST_FILE = "manifest.json";
 export const HISTORY_LIMIT = 20;
@@ -140,40 +144,56 @@ export function parseWorkflowRuns(body: unknown): WorkflowRun[] | null {
   return runs;
 }
 
+function isReleaseRun(run: WorkflowRun, path: string, name: string): boolean {
+  return (
+    run.event === "push" &&
+    run.headBranch === RELEASE_BRANCH &&
+    run.status === "completed" &&
+    run.conclusion === "success" &&
+    run.path === path &&
+    run.name === name &&
+    isCommitSha(run.headSha)
+  );
+}
+
 /**
- * `main`へのpushで動き、全体が成功した`console-dist.yml`の実行のうち、最も新しく作られたものを返す。
+ * `main`へのpushで動き、全体が成功した`console-dist.yml`の実行を、新しく作られた順に返す。
  * ワークフローは、ファイルのパスと名前の両方で確かめる。
  * APIの絞り込みに加えてここでも条件を確かめる(APIの仕様が変わっても、別の実行を取り込まないため)。
  */
+export function rankReleaseRuns(runs: readonly WorkflowRun[]): WorkflowRun[] {
+  const ranked: { readonly run: WorkflowRun; readonly time: number }[] = [];
+  for (const run of runs) {
+    if (!isReleaseRun(run, WORKFLOW_PATH, WORKFLOW_NAME)) continue;
+    const time = Date.parse(run.createdAt);
+    if (Number.isNaN(time)) continue;
+    ranked.push({ run, time });
+  }
+  ranked.sort((a, b) => b.time - a.time || b.run.id - a.run.id);
+  return ranked.map((entry) => entry.run);
+}
+
+/** 最も新しく作られた`console-dist.yml`の実行を返す。無ければ`null`。 */
 export function selectLatestRun(
   runs: readonly WorkflowRun[],
 ): WorkflowRun | null {
-  let latest: WorkflowRun | null = null;
-  let latestTime = Number.NEGATIVE_INFINITY;
-  for (const run of runs) {
-    if (
-      run.event !== "push" ||
-      run.headBranch !== RELEASE_BRANCH ||
-      run.status !== "completed" ||
-      run.conclusion !== "success" ||
-      run.path !== WORKFLOW_PATH ||
-      run.name !== WORKFLOW_NAME ||
-      !isCommitSha(run.headSha)
-    ) {
-      continue;
-    }
-    const time = Date.parse(run.createdAt);
-    if (Number.isNaN(time)) continue;
-    if (
-      latest === null ||
-      time > latestTime ||
-      (time === latestTime && run.id > latest.id)
-    ) {
-      latest = run;
-      latestTime = time;
-    }
-  }
-  return latest;
+  return rankReleaseRuns(runs)[0] ?? null;
+}
+
+/**
+ * 同じcommitの`ci.yml`が、`main`へのpushで成功しているかを返す。
+ * 配布物のワークフローは組み立てしか確かめないので、型検査やテストを担うCIの成功も条件にする。
+ * パス、名前、ブランチ、イベント、結論は、APIの絞り込みに頼らずここでも確かめる。
+ */
+export function hasCiSuccess(
+  ciRuns: readonly WorkflowRun[],
+  sha: string,
+): boolean {
+  return ciRuns.some(
+    (run) =>
+      run.headSha === sha &&
+      isReleaseRun(run, CI_WORKFLOW_PATH, CI_WORKFLOW_NAME),
+  );
 }
 
 export function needsDeploy(

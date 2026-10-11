@@ -11,6 +11,7 @@ import {
   describeRollbackNotice,
   describeUnpinRefusal,
   findUnknownUnpinFlags,
+  hasCiSuccess,
   isAllowedDownloadUrl,
   isLockStale,
   isReadablePin,
@@ -32,6 +33,7 @@ import {
   parseWorkflowRuns,
   pruneRevokedState,
   REVOKED_DIGEST_LIMIT,
+  rankReleaseRuns,
   referencedAssetNames,
   selectAssetsToDelete,
   selectCorruptCopiesToDelete,
@@ -244,6 +246,76 @@ describe("selectLatestRun", () => {
 
   test("ignores a malformed head sha", () => {
     expect(selectLatestRun([run({ headSha: "abc" })])).toBeNull();
+  });
+});
+
+function ciRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
+  return run({
+    name: "CI",
+    path: ".github/workflows/ci.yml",
+    ...overrides,
+  });
+}
+
+describe("rankReleaseRuns", () => {
+  test("orders the qualifying runs newest first", () => {
+    const older = run({ id: 1, createdAt: "2026-10-07T00:00:00Z" });
+    const newer = run({
+      id: 2,
+      headSha: SHA_B,
+      createdAt: "2026-10-08T00:00:00Z",
+    });
+    expect(rankReleaseRuns([older, newer]).map((r) => r.id)).toEqual([2, 1]);
+  });
+
+  test("leaves out a run that does not qualify", () => {
+    expect(rankReleaseRuns([run({ headBranch: "v1" })])).toEqual([]);
+  });
+});
+
+describe("hasCiSuccess", () => {
+  test("accepts a successful ci.yml push run on main for the sha", () => {
+    expect(hasCiSuccess([ciRun()], SHA_A)).toBe(true);
+  });
+
+  test("rejects a run of another commit", () => {
+    expect(hasCiSuccess([ciRun({ headSha: SHA_B })], SHA_A)).toBe(false);
+  });
+
+  test("rejects a failed run", () => {
+    expect(hasCiSuccess([ciRun({ conclusion: "failure" })], SHA_A)).toBe(false);
+  });
+
+  test("rejects a run that is not completed", () => {
+    expect(
+      hasCiSuccess([ciRun({ status: "in_progress", conclusion: null })], SHA_A),
+    ).toBe(false);
+  });
+
+  test("rejects a run on a branch other than main", () => {
+    expect(hasCiSuccess([ciRun({ headBranch: "v1" })], SHA_A)).toBe(false);
+  });
+
+  test("rejects a pull_request run", () => {
+    expect(hasCiSuccess([ciRun({ event: "pull_request" })], SHA_A)).toBe(false);
+  });
+
+  test("rejects another workflow file", () => {
+    expect(
+      hasCiSuccess([ciRun({ path: ".github/workflows/other.yml" })], SHA_A),
+    ).toBe(false);
+  });
+
+  test("rejects a run whose workflow name differs", () => {
+    expect(hasCiSuccess([ciRun({ name: "Console dist" })], SHA_A)).toBe(false);
+  });
+
+  test("rejects the console-dist.yml run itself", () => {
+    expect(hasCiSuccess([run()], SHA_A)).toBe(false);
+  });
+
+  test("rejects an empty list", () => {
+    expect(hasCiSuccess([], SHA_A)).toBe(false);
   });
 });
 

@@ -545,7 +545,7 @@ PR修正のClaudeに渡すツールは`Read,Glob,Grep,Edit,Write`だけで、`Ba
 
 修正の差分に次のどれかが含まれると、検証のステップが止める結果を返す。作業項目は人の対応待ちになる。
 
-- `.claude/`、`.agents/`、`.github/workflows/`、`.mise/`、`.config/mise/`、`.lefthook/`の下のファイル
+- `.claude/`、`.agents/`、`.github/workflows/`、`.github/actions/`、`.mise/`、`.config/mise/`、`.lefthook/`の下のファイル
 - `console/public/`、`infra/console_fetcher/`の下のファイル
 - 個別のファイル(一覧は下の説明を参照)
 - `mise.toml`、`mise.*.toml`、`.mise.toml`

@@ -1401,6 +1401,9 @@ workerのイメージに入れるツールのバージョンは、`mise.toml`の
 `console-dist.yml`は、draw.ioのビューアを外部から取得する。
 取得に失敗したときの対応は、[Consoleの配信の仕様](internals/console.md)の「ビューアの取得」にある。
 `infra/console_fetcher/`の変更は、ほかの`infra/`と同じく次の`mise run up`で反映される。
+取得元や検証を変える変更は、マージ後に`mise run up`でfetcherのイメージを作り直すまで反映されない。
+それまでは、古いイメージが新しい取得元の成果物を見つけられず、`artifact_missing`になる。
+配信中の版は変わらない。急ぎではないが、マージしたらすぐ`mise run up`を実行する。
 `infra/Caddyfile`は、`mise run up`と`mise run deploy`が起動の後にCaddyを再起動して反映する。
 composeを直接実行したときは、次のコマンドでCaddyを再起動する。
 Caddyを再起動するまで、`/console/drawio.html`には`frame-ancestors 'none'`のヘッダーが付き、図のページを埋め込めない。
@@ -1410,6 +1413,7 @@ mise exec -- docker compose -f infra/docker-compose.yml restart caddy
 ```
 
 `console_fetcher`は5分ごとに、`main`へのpushで成功した`console-dist.yml`の最新の実行を探す。
+同じcommitの`ci.yml`も成功していることを確かめ、実行中か失敗していれば、その前の候補を選ぶ。
 その成果物`console-dist`を検証して`factory_console`の`releases/<sha>/`に置き、`current`を付け替える。
 状態は`status.json`に書き、ログにも出す。
 `status.json`には、`state`(`ok`、`failed`、`pinned`)、`sha`、`checked_at`、`error`が入る。

@@ -1092,8 +1092,7 @@ URLにワークスペースの指定(`?workspace=`)を付けない。
 | --- | --- |
 | `console/` | Consoleのソースコード(Vite + React) |
 | `.github/workflows/console-dist.yml` | `main`へのpushで、`console/`を組み立てて成果物`console-dist`として上げる。成果物を上げるのはこのワークフローだけである |
-| `.github/actions/build-console/` | 組み立てとマニフェストの書き出しの手順。`console-dist.yml`と`ci.yml`の`console`ジョブが共有する |
-| `ci.yml`の`console`ジョブ | PRで、同じ手順で組み立てられることを確かめる。成果物は上げない。型検査、lint、テストは`check`ジョブが担う |
+| `ci.yml`の`console`ジョブ | PRで、`console-dist.yml`と同じ手順で組み立てられることを確かめる。成果物は上げない。型検査、lint、テストは`check`ジョブが担う |
 | `infra/console_fetcher/` | 成果物を検証して、名前付きボリューム`factory_console`に書く |
 | Caddy | `factory_console`を読み取り専用でマウントし、`/console/`で配信する |
 
@@ -1124,8 +1123,21 @@ APIの絞り込みに頼らず、取り込み側でも確かめる。
 3. 状態が完了で、結論が成功である。
 4. commitが40桁の16進数である。
 
-候補のうち、最も新しく作られた実行の成果物を取り込む。
-書く前に、次をすべて確かめる。
+候補を新しく作られた順に見て、同じcommitの`ci.yml`も成功している最初の実行を選ぶ。
+`ci.yml`の確認は、`ci.yml`の実行の一覧にcommitを指定して取得し、次をすべて満たす実行があるかで決める。
+こちらも、APIの絞り込みに頼らず取り込み側で確かめる。
+
+1. ワークフローのパスが`.github/workflows/ci.yml`で、名前が`CI`である。
+2. ブランチが`main`で、イベントが`push`である。
+3. 状態が完了で、結論が成功である。
+4. commitが、候補のcommitと一致する。
+
+`console-dist.yml`は組み立てしか確かめないので、型検査、lint、テスト、秘密情報の走査を担う`ci.yml`の成功も条件にする。
+`ci.yml`が実行中か失敗しているcommitは飛ばして、その前の候補を選ぶ。
+確かめる候補は、新しい順に5つを上限にする。どれも満たさなければ、取り込まず今の版を配信し続ける。
+`main`という名前のタグの実行は、`main`のブランチの実行と見分けがつかないので、両方のワークフローが同じcommitで揃うことを要る。ただしこの照合だけでは、タグを作れる人は防げない。残るリスクは[セキュリティ](../security.md)にある。
+
+選んだ実行の成果物を、書く前に次をすべて確かめる。
 
 1. 成果物の元のcommitが、その実行のcommitと一致する。
 2. zip全体のsha256が、GitHubの`digest`と一致する。
@@ -1141,13 +1153,17 @@ zipは自前のreaderでメモリ上に展開する。
 変更したパスによらず毎回動かす。
 `console_fetcher`が、そのcommitの成果物を取り込むためである。
 PRとタグのpushでは動かさず、`ci.yml`のジョブを足さない。
+組み立ての手順は、このファイルに直接書き、別のファイルに分けない。
+Factoryのトークンは`.github/workflows/`を書けない。
+composite action(`.github/actions/`)は書けるので、分けると配布物がその変更に左右されるためである。
 
 - ワークフローの権限は、リポジトリの読み取り(`contents: read`)だけにする。成果物の書き込みには、`GITHUB_TOKEN`の書き込み権限を使わない。
 - ジョブは1つで、`console-dist.yml`にほかのジョブやトリガーを足さない。
 - 実行を取り消さない。取り消した実行は成功しないので、そのcommitの成果物が欠けるためである。
 - 同じ実行を「Re-run all jobs」で上げ直しても失敗しないように、成果物は上書きで上げる。
 
-`ci.yml`の`console`ジョブは、PRで同じ手順(`build-console`)を動かし、組み立てとビューアの取得を確かめる。
+`ci.yml`の`console`ジョブは、PRで同じ手順を書き写して動かし、組み立てとビューアの取得を確かめる。
+2つの手順が食い違わないことは、テストが確かめる。
 成果物は上げない。
 `scope`ジョブの`console`のフラグが偽のとき、このジョブを飛ばす。
 型検査、lint、テストは`check`ジョブの`mise run check`(`console:check`)が担い、どちらのワークフローも重ねて実行しない。
@@ -1302,7 +1318,7 @@ IPv4のアドレス(`127.0.0.1`など)かホスト名で開く。
 ### ビューアの取得
 
 ビューアはリポジトリに入れない。
-組み立ての手順(`build-console`)は、組み立ての後に`fetch-drawio-viewer.ts`を動かす。
+`console-dist.yml`の手順は、組み立ての後に`fetch-drawio-viewer.ts`を動かす。
 ビューアは`dist/drawio/drawio-viewer-<sha256の先頭8桁>.js`に書く。
 取得したバイト列のsha256が固定の値と違えば、何も書かずに失敗する。
 URLはリダイレクトを許さず、パスはcommit配下のビューア1ファイルに限る。

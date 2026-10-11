@@ -111,6 +111,18 @@ export function workflowRun(
   };
 }
 
+/** GitHubの実行の一覧の1要素。既定は「mainへのpushで成功したci.yml」。 */
+export function ciWorkflowRun(
+  id: number,
+  headSha: string,
+): Record<string, unknown> {
+  return {
+    ...workflowRun(id, headSha),
+    name: "CI",
+    path: ".github/workflows/ci.yml",
+  };
+}
+
 /** GitHubの成果物の一覧の1要素。`digest`の既定は`zip`の本当のsha256。 */
 export function artifactJson(
   id: number,
@@ -156,6 +168,9 @@ export type FakeCall = {
 export type FakeGitHubOptions = {
   readonly runs?: readonly unknown[];
   readonly runsStatus?: number;
+  /** ci.ymlの実行の一覧。省略すると、問い合わせたcommitの成功した実行を返す。 */
+  readonly ciRuns?: readonly Record<string, unknown>[];
+  readonly ciRunsStatus?: number;
   readonly artifacts?: Readonly<Record<number, readonly unknown[]>>;
   readonly blobs?: Readonly<Record<number, Uint8Array>>;
   readonly location?: (artifactId: number) => string;
@@ -189,6 +204,15 @@ export function fakeGitHub(options: FakeGitHubOptions): {
         return status === 200
           ? Response.json({ workflow_runs: options.runs ?? [] })
           : new Response("{}", { status });
+      }
+      if (parsed.pathname === "/repos/o/r/actions/workflows/ci.yml/runs") {
+        const status = options.ciRunsStatus ?? 200;
+        if (status !== 200) return new Response("{}", { status });
+        const sha = parsed.searchParams.get("head_sha") ?? "";
+        const listed = options.ciRuns?.filter(
+          (run) => run.head_sha === sha,
+        ) ?? [ciWorkflowRun(900, sha)];
+        return Response.json({ workflow_runs: listed });
       }
       const artifacts = /^\/repos\/o\/r\/actions\/runs\/(\d+)\/artifacts$/.exec(
         parsed.pathname,
