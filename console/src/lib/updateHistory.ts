@@ -50,3 +50,11 @@ export const PULL_REQUEST_RECORD_LIMIT = 100;
 export function isPullRequestListTruncated(count: number): boolean {
   return count >= PULL_REQUEST_RECORD_LIMIT;
 }
+
+/**
+ * 記録が上限に達した反映に添える注記。
+ * 件数がちょうど上限のときも同じ件数になるので、古いPRが無いとは言い切らない。
+ */
+export function pullRequestTruncationNote(): string {
+  return `${String(PULL_REQUEST_RECORD_LIMIT)}件に達したので、これより古いPRは表示していない場合があります。`;
+}

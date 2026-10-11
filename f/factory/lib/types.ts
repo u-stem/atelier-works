@@ -753,15 +753,26 @@ export type PullRequestOrigin = (typeof PULL_REQUEST_ORIGINS)[number];
 export const MAX_PULL_REQUEST_TITLE_LENGTH = 200;
 
 /**
+ * 題名から取り除く文字。空白に置き換える。
+ * - 制御文字と行・段落の区切り(`\p{Cc}\p{Zl}\p{Zp}`)
+ * - 書字方向の制御文字(U+061C、U+200E、U+200F、U+202A-202E、U+2066-2069)
+ * - 幅の無い空白と、見えない演算子など、形を変えない書式文字(U+200B、U+2060-2064、U+FEFF)
+ * - タグ文字(U+E0000-E007F)
+ * ZWJ(U+200D)とZWNJ(U+200C)は残す。絵文字の列やペルシア語、インド系の文字の題名が崩れるためである。
+ */
+const TITLE_REMOVED_CHARS =
+  /[\p{Cc}\p{Zl}\p{Zp}\u061C\u200B\u200E\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF\u{E0000}-\u{E007F}]/gu;
+
+/**
  * PRの題名として記録、表示してよい形にする。
- * 制御文字と書字方向の制御文字を空白にし、連続する空白を1つにして、
+ * `TITLE_REMOVED_CHARS`を空白にし、連続する空白を1つにして、
  * `MAX_PULL_REQUEST_TITLE_LENGTH`文字で切る。空になれば`null`を返す。
- * 題名はPRの作者が決める文字列なので、記録するときと読み出すときの両方で通し、
- * 表示を崩す文字を持ち込ませない。
+ * 題名はPRの作者が決める文字列で、表示だけに使い、承認の判断には使わない。
+ * 記録するときと読み出すときの両方で通し、表示を崩す文字を持ち込ませない。
  */
 export function sanitizePullRequestTitle(raw: string): string | null {
   const cleaned = raw
-    .replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ")
+    .replace(TITLE_REMOVED_CHARS, " ")
     .replace(/\s+/g, " ")
     .trim();
   if (cleaned.length === 0) return null;

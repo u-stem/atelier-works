@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { parseMergedPullRequests } from "../../f/factory/lib/self_update_pull_requests.ts";
+import { omittedMarker } from "../../f/factory/lib/workspace.ts";
 
 // ログの1件は`%P`、`%s`、`%b`を0x1fで区切り、NULで終える。
 const PARENT_A = "1111111111111111111111111111111111111111";
@@ -180,5 +181,77 @@ describe("parseMergedPullRequests url", () => {
     expect(
       parseMergedPullRequests(output, "ssh://example.com/o/r.git")[0]?.url,
     ).toBeNull();
+  });
+});
+
+describe("parseMergedPullRequests with capped output", () => {
+  const complete = mergeEntry(9, "octo-owner/fix/a", "complete");
+  const cutHead = `${TWO_PARENTS}\x1fMerge pull request #8 from octo-owner/fix/b\x1ftit`;
+  const cutTail = `le\n\0${mergeEntry(5, "octo-owner/fix/c", "older")}`;
+  const capped = `${complete}${cutHead}${omittedMarker(4096)}${cutTail}`;
+
+  test("keeps the complete entries before the omitted marker", () => {
+    expect(
+      parseMergedPullRequests(capped, FACTORY_REPO).map((pr) => pr.number),
+    ).toEqual([9]);
+  });
+
+  test("drops the entry that the marker cut", () => {
+    expect(
+      parseMergedPullRequests(capped, FACTORY_REPO).some(
+        (pr) => pr.number === 8,
+      ),
+    ).toBe(false);
+  });
+
+  test("drops the entries after the marker", () => {
+    expect(
+      parseMergedPullRequests(capped, FACTORY_REPO).some(
+        (pr) => pr.number === 5,
+      ),
+    ).toBe(false);
+  });
+
+  test("does not read a fake merge made from the marker text", () => {
+    const fake = `${TWO_PARENTS}${omittedMarker(1)}Merge pull request #7 from octo-owner/factory/issue-1-wi-1\x1ftitle\0`;
+    expect(parseMergedPullRequests(fake, FACTORY_REPO)).toEqual([]);
+  });
+});
+
+describe("parseMergedPullRequests title characters", () => {
+  test("keeps a zero width joiner in an emoji sequence", () => {
+    const output = mergeEntry(
+      7,
+      "octo-owner/fix/a",
+      "fix: \u{1F468}\u200D\u{1F469} family",
+    );
+    expect(parseMergedPullRequests(output, FACTORY_REPO)[0]?.title).toBe(
+      "fix: \u{1F468}\u200D\u{1F469} family",
+    );
+  });
+
+  test("keeps a zero width non-joiner", () => {
+    const output = mergeEntry(7, "octo-owner/fix/a", "fix: \u0645\u200C\u0647");
+    expect(parseMergedPullRequests(output, FACTORY_REPO)[0]?.title).toBe(
+      "fix: \u0645\u200C\u0647",
+    );
+  });
+
+  test("replaces the isolate and override controls", () => {
+    const output = mergeEntry(7, "octo-owner/fix/a", "a\u2066b\u2069c\u200Ed");
+    expect(parseMergedPullRequests(output, FACTORY_REPO)[0]?.title).toBe(
+      "a b c d",
+    );
+  });
+
+  test("replaces invisible operators, the byte order mark and tag characters", () => {
+    const output = mergeEntry(
+      7,
+      "octo-owner/fix/a",
+      "a\u2062b\uFEFFc\u{E0041}d",
+    );
+    expect(parseMergedPullRequests(output, FACTORY_REPO)[0]?.title).toBe(
+      "a b c d",
+    );
   });
 });

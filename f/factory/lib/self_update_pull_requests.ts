@@ -8,6 +8,7 @@ import {
   type PullRequestOrigin,
   sanitizePullRequestTitle,
 } from "./types.ts";
+import { omittedMarkerIndex } from "./workspace.ts";
 
 /**
  * `git log -z --first-parent`に渡す`--format`。
@@ -109,6 +110,23 @@ function parseEntry(
 }
 
 /**
+ * 出力を、完全な要素に分ける。
+ * 出力が上限を超えると、`readStreamCapped`が先頭と末尾の間を捨てて印を入れる。
+ * 印をまたぐ要素は壊れているので、印を含む要素とそれ以降は使わない。
+ * ログは新しい順なので、先頭側の要素は保たれ、失うのは間の要素である。
+ */
+function completeEntries(output: string): string[] {
+  const marker = omittedMarkerIndex(output);
+  const kept = marker < 0 ? output : output.slice(0, marker);
+  // 各要素はNULで終わる。印の手前で途切れた最後の要素にはNULが無いので、捨てる。
+  const end = marker < 0 ? kept.length : kept.lastIndexOf("\0") + 1;
+  return kept
+    .slice(0, end)
+    .split("\0")
+    .filter((entry) => entry.length > 0);
+}
+
+/**
  * `git log -z --first-parent --format=MERGED_PULL_REQUESTS_LOG_FORMAT`の出力から、
  * 反映に含まれるPRを新しい順に返す。同じ番号は最初の1件だけを残し、
  * `MAX_PULL_REQUESTS_PER_DEPLOYMENT`件で打ち切る。
@@ -127,7 +145,7 @@ export function parseMergedPullRequests(
   const repoRef = parseRepoUrl(factoryRepoUrl);
   const seen = new Set<number>();
   const result: DeploymentPullRequest[] = [];
-  for (const entry of output.split("\0")) {
+  for (const entry of completeEntries(output)) {
     if (entry.length === 0) continue;
     const parsed = parseEntry(entry, repoRef);
     if (parsed === null || seen.has(parsed.number)) continue;

@@ -13,6 +13,7 @@ import {
   isPullRequestListTruncated,
   pullRequestHref,
   pullRequestTitleText,
+  pullRequestTruncationNote,
   versionText,
 } from "../../lib/updateHistory.ts";
 
@@ -107,7 +108,7 @@ function DeploymentItem({
       )}
       {isPullRequestListTruncated(entry.pull_requests.length) ? (
         <p className="mt-2 text-small text-muted-foreground">
-          記録するPRは1回の反映につき100件までです。これを超えた分は表示していません。
+          {pullRequestTruncationNote()}
         </p>
       ) : null}
     </li>

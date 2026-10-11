@@ -4,6 +4,7 @@ import {
   PULL_REQUEST_RECORD_LIMIT,
   pullRequestHref,
   pullRequestTitleText,
+  pullRequestTruncationNote,
   shortSha,
   versionText,
 } from "./updateHistory.ts";
@@ -94,5 +95,19 @@ describe("isPullRequestListTruncated", () => {
 
   test("is true at the record limit", () => {
     expect(isPullRequestListTruncated(PULL_REQUEST_RECORD_LIMIT)).toBe(true);
+  });
+});
+
+describe("pullRequestTruncationNote", () => {
+  test("builds the number from the record limit", () => {
+    expect(pullRequestTruncationNote()).toContain(
+      `${PULL_REQUEST_RECORD_LIMIT}件`,
+    );
+  });
+
+  test("does not state that older pull requests are missing", () => {
+    expect(pullRequestTruncationNote()).toContain(
+      "表示していない場合があります",
+    );
   });
 });
