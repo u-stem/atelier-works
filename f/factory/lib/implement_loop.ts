@@ -429,7 +429,7 @@ export type ImplementClaudeRunInput = {
   readonly workItemId: number;
   readonly attempt: number;
   /**
-   * 同じ作業項目の同じ試行で、これまでに実装のラウンドが失敗した回数
+   * 同じ作業項目の同じ試行で、直近に実装のラウンドが続けて失敗した回数
    * (`countImplementFailedRounds`)。2回に達したら`heavy_model`を使う。
    */
   readonly sonnetFailures: number;
