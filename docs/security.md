@@ -112,6 +112,17 @@ Claudeや検査コマンドが書ける詳細と、pr_fixのClaudeが理由と�
 残るリスクとして、Claudeは`blocked_reason`の全体を既知の理由と同じ文にできる。
 そのときは、その理由の訳文と次の操作が表示される。
 
+### 自己更新の通知の状態
+
+`poll_issues`は、版の食い違いを最初に見た時刻をWindmillのstateに保存し、猶予を超えたときに`deployed_sha_mismatch`を通知する。
+通知は、今の`deployed_sha`への反映が成功した記録(`factory.deployments`)のうち最も新しいものより前に作られたものだけが、自動で解決される。
+残るリスクは次のとおりである。
+
+- stateを書けるWindmillの利用者は、`deployed_sha_mismatch`の通知を遅らせられる。`deployed_sha`を書ける者と同じ範囲である。
+- stateや`deployed_sha`を書き換えても、通知より新しい反映の成功の記録が無い限り、通知は解決されない。
+- `deployed_sha`を今のHEADに書き換えると、版が一致するので、自己更新もそれを反映済みとみなす。これは通知の仕組みより前からある性質である。
+- `factory.deployments`に書けるDBの利用者は、この判定も動かせる。
+
 ## シークレットの扱い
 
 ### Windmillでの保持
