@@ -8,11 +8,11 @@ type AuditKickoff = {
   readonly start: () => void;
   /** 起動が実行中か、一覧を読み直せないままで止まっているか。 */
   readonly locked: boolean;
-  /** 直近の起動の結果。次に起動するまで残す。 */
+  /** 直近の起動の結果。次に起動するか、画面を離れるまで残す。 */
   readonly notice: AuditKickoffNotice | null;
 };
 
-/** 監査の手動起動。結果の知らせは、次に起動するまで画面に残す。 */
+/** 監査の手動起動。結果の知らせは、次に起動するか、画面を離れるまで残す。 */
 export function useAuditKickoff(): AuditKickoff {
   const [notice, setNotice] = useState<AuditKickoffNotice | null>(null);
   const config = useMemo(() => auditKickoffConfig({ onNotice: setNotice }), []);

@@ -412,7 +412,9 @@ IssueのリンクはGitHubのIssueのURLの形のときだけ張る。
 レポートが無いのは、監査がまだ終わっていないか、監査の作業項目でないときである。
 
 本文のMarkdownは`AuditMarkdown`(`src/screens/reports/AuditMarkdown.tsx`)が描く。
-`react-markdown`と`remark-gfm`で描き、`rehype-sanitize`でHTMLを無害化する。
+`react-markdown`と`remark-gfm`で描く。
+`rehype-raw`を使わないので、本文の生のHTMLは要素にならず、描かずに捨てる。
+`rehype-sanitize`は、変換後の要素と属性を絞る二重の防御である。
 `dangerouslySetInnerHTML`は使わない。
 描く前に、`displayableIssueText`で見えない文字を代替文字に置き換える。
 リンクと画像の扱いは、[セキュリティ](../security.md)の「監査レポートの本文」にある。
@@ -434,7 +436,7 @@ IssueのリンクはGitHubのIssueのURLの形のときだけ張る。
 `force`は渡さない。
 `force`を付けると、対象の記録が無くても起動するので、画面からは出さない。
 
-結果は、一覧の上に次の起動まで残す(`src/lib/auditKickoff.ts`)。
+結果は、一覧の上に画面を離れるまで残す(`src/lib/auditKickoff.ts`)。
 トーストは数秒で消え、見送りの理由を読み落とすおそれがあるためである。
 
 | 結果 | 表示 |

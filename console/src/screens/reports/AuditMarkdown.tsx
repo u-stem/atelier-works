@@ -4,29 +4,23 @@ import {
   isValidElement,
   type ReactNode,
 } from "react";
-import ReactMarkdown, { type Components } from "react-markdown";
+import ReactMarkdown, {
+  type Components,
+  type ExtraProps,
+} from "react-markdown";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
-import {
-  ALERT_LABELS,
-  type AlertKind,
-  linkNote,
-  stripAlertMarker,
-} from "../../lib/auditMarkdown.ts";
+import { linkNote } from "../../lib/auditMarkdown.ts";
 import { cn } from "../../lib/cn.ts";
 import { displayableIssueText } from "../../lib/intakeText.ts";
 
 // 監査レポートの本文を描く薄い部品。
 // 本文は監査のClaudeが、信頼できない運用記録から書いた文章なので、
-// `rehype-sanitize`でHTMLを無害化し、`dangerouslySetInnerHTML`は使わない。
+// `rehype-raw`を使わないので、本文の生のHTMLは要素にならず、描かずに捨てる。
+// `rehype-sanitize`は、変換後の要素と属性を絞る二重の防御である。
+// `dangerouslySetInnerHTML`は使わない。
 // リンクは張らず、画像は読み込まず、どちらも文字で出す。
 // 外のURLを読み込むと、レポートを開いただけで外へ通信が出るためである。
-
-const ALERT_CLASSES: Readonly<Record<AlertKind, string>> = {
-  note: "border-approval/50",
-  warning: "border-warning/50",
-  important: "border-destructive/50",
-};
 
 function hasChildren(value: unknown): value is { children?: ReactNode } {
   return typeof value === "object" && value !== null && "children" in value;
@@ -69,40 +63,12 @@ function Anchor({
   );
 }
 
-function Blockquote({ children }: { children?: ReactNode }) {
-  const items = Children.toArray(children);
-  const first = items[0];
-  if (
-    isValidElement(first) &&
-    hasChildren(first.props) &&
-    typeof first.props.children === "string"
-  ) {
-    const alert = stripAlertMarker(first.props.children);
-    if (alert !== null) {
-      return (
-        <div
-          className={cn(
-            "my-4 rounded-lg border-l-4 bg-muted px-4 py-3",
-            ALERT_CLASSES[alert.kind],
-          )}
-        >
-          <p className="text-caption font-semibold tracking-wide">
-            {ALERT_LABELS[alert.kind]}
-          </p>
-          <p>{alert.rest}</p>
-          {items.slice(1)}
-        </div>
-      );
-    }
-  }
-  return (
-    <blockquote className="my-4 border-l-4 border-border pl-4 text-muted-foreground">
-      {children}
-    </blockquote>
-  );
-}
-
-function Pre({ className, ...props }: ComponentPropsWithoutRef<"pre">) {
+/** `node`は react-markdown が渡す構文木で、DOMの属性ではないので捨てる。 */
+function Pre({
+  node: _node,
+  className,
+  ...props
+}: ComponentPropsWithoutRef<"pre"> & ExtraProps) {
   return (
     <pre
       className={cn(
@@ -151,7 +117,11 @@ const COMPONENTS: Components = {
     </code>
   ),
   pre: Pre,
-  blockquote: Blockquote,
+  blockquote: ({ children }) => (
+    <blockquote className="my-4 border-l-4 border-border pl-4 text-muted-foreground">
+      {children}
+    </blockquote>
+  ),
   table: ({ children }) => (
     <div className="my-4 overflow-x-auto">
       <table className="w-full border-collapse text-small">{children}</table>

@@ -932,7 +932,9 @@ GitHubへのリンクは、`rel="noopener noreferrer"`を付けて新しいタ�
 添えたURLは`<bdi>`で包む。
 画像は読み込まず、「画像は表示しません」と出す。
 外のURLを読み込むと、レポートを開いただけで外へ通信が出るためである。
-HTMLは`rehype-sanitize`の既定のスキーマで無害化し、描く前に`displayableIssueText`で見えない文字を置き換える。
+本文の生のHTMLは、`rehype-raw`を使わないので要素にならず、描かずに捨てる。
+`rehype-sanitize`の既定のスキーマは、変換後の要素と属性を絞る二重の防御である。
+描く前に`displayableIssueText`で見えない文字を置き換える。
 
 ## 更新履歴のPR
 
