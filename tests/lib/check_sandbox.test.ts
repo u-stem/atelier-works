@@ -2065,7 +2065,7 @@ describe("escapingSymlinks", () => {
       resolved: "/root/.ssh",
     });
     expect((await sandbox.escapingSymlinks(DIRS)).problems).toEqual([
-      `a symlink that existed before the check was changed, so it was restored: ${WT}/tracked`,
+      `a symlink that existed before the check was changed, so it was restored: ${JSON.stringify(`${WT}/tracked`)}`,
     ]);
   });
 
@@ -2218,7 +2218,7 @@ describe("escapingSymlinks", () => {
     });
     fake.symlinks.set(`${WT}/bad`, OUT);
     expect((await sandbox.escapingSymlinks(DIRS)).problems).toContain(
-      `could not inspect a symlink, so it was left: ${WT}/bad`,
+      `could not inspect a symlink, so it was left: ${JSON.stringify(`${WT}/bad`)}`,
     );
   });
 
@@ -2239,7 +2239,7 @@ describe("escapingSymlinks", () => {
     });
     fake.symlinks.set(`${WT}/stuck`, OUT);
     expect((await sandbox.escapingSymlinks(DIRS)).problems).toContain(
-      `could not remove or restore ${WT}/stuck: EPERM`,
+      `could not remove or restore ${JSON.stringify(`${WT}/stuck`)}: EPERM`,
     );
   });
 
@@ -2364,6 +2364,16 @@ describe("escapingSymlinks", () => {
     expect((await sandbox.escapingSymlinks(DIRS)).removed).toEqual([
       `${WT}/deep`,
     ]);
+  });
+
+  test("escapes a newline in a path so the problems cannot forge lines", async () => {
+    const { fake, sandbox } = await preparedWith({
+      unreadablePaths: [`${WT}/a\nb`],
+    });
+    fake.symlinks.set(`${WT}/a\nb`, OUT);
+    expect(
+      (await sandbox.escapingSymlinks(DIRS)).problems.join("\n"),
+    ).not.toContain("a\nb");
   });
 
   test("keeps the error message out of the problems", async () => {
@@ -3049,6 +3059,7 @@ describe("createCheckSandbox", () => {
     const fake = fakeSandboxDeps();
     const { sandbox } = await prepared(fake);
     await sandbox.release(DIRS);
+    await sandbox.escapingSymlinks(DIRS);
     expect(
       fake.events.lastIndexOf(ran(remainingOfUidArgv(20000, "/dev/mqueue"))),
     ).toBeLessThan(fake.events.lastIndexOf("record-clear 0"));
@@ -3076,6 +3087,7 @@ describe("createCheckSandbox", () => {
           : ok(),
     });
     await sandbox.release(DIRS);
+    await sandbox.escapingSymlinks(DIRS);
     expect(fake.records.has(0)).toBe(false);
   });
 
@@ -3107,11 +3119,90 @@ describe("createCheckSandbox", () => {
     ).toEqual([]);
   });
 
-  test("release clears the record after taking everything back", async () => {
+  test("release keeps the record until the symlink scan is done", async () => {
     const fake = fakeSandboxDeps();
     const { sandbox } = await prepared(fake);
     await sandbox.release(DIRS);
-    expect(fake.events.slice(-2)).toEqual(["record-clear 0", "release-slot 0"]);
+    expect(fake.records.has(0)).toBe(true);
+  });
+
+  test("the symlink scan clears the record after the slot is given back", async () => {
+    const fake = fakeSandboxDeps();
+    const { sandbox } = await prepared(fake);
+    await sandbox.release(DIRS);
+    await sandbox.escapingSymlinks(DIRS);
+    expect(fake.events.indexOf("release-slot 0")).toBeLessThan(
+      fake.events.indexOf("record-clear 0"),
+    );
+  });
+
+  test("the symlink scan clears the record", async () => {
+    const fake = fakeSandboxDeps();
+    const { sandbox } = await prepared(fake);
+    await sandbox.release(DIRS);
+    await sandbox.escapingSymlinks(DIRS);
+    expect(fake.records.has(0)).toBe(false);
+  });
+
+  test("the record stays when the symlink scan throws", async () => {
+    const fake = fakeSandboxDeps();
+    const { sandbox } = await prepared(fake);
+    await sandbox.release(DIRS);
+    Object.assign(fake.deps, {
+      run: async (argv: readonly string[]) =>
+        matches(symlinksArgv(DIRS.worktreeDir))(argv)
+          ? fail("find failed", 1)
+          : ok(),
+    });
+    await sandbox.escapingSymlinks(DIRS).catch(() => {});
+    expect(fake.records.has(0)).toBe(true);
+  });
+
+  test("the record stays when the sweep fails", async () => {
+    const fake = fakeSandboxDeps({
+      unreadablePaths: [`${DIRS.worktreeDir}/bad`],
+      respond: (argv) =>
+        matches(sweepLinksArgv(DIRS.worktreeDir))(argv)
+          ? fail("denied", 1)
+          : undefined,
+    });
+    const { sandbox } = await prepared(fake);
+    fake.symlinks.set(`${DIRS.worktreeDir}/bad`, {
+      content: "/etc/passwd",
+      resolved: "/etc/passwd",
+    });
+    await sandbox.release(DIRS);
+    await sandbox.escapingSymlinks(DIRS).catch(() => {});
+    expect(fake.records.has(0)).toBe(true);
+  });
+
+  test("the scan does not clear a record that points to another worktree", async () => {
+    const fake = fakeSandboxDeps();
+    const { sandbox } = await prepared(fake);
+    await sandbox.release(DIRS);
+    fake.records.set(0, OLD);
+    await sandbox.escapingSymlinks(DIRS);
+    expect(fake.records.get(0)).toEqual(OLD);
+  });
+
+  test("a recovery sweeps the symlinks of a run that was cancelled before its scan", async () => {
+    const fake = fakeSandboxDeps();
+    const { sandbox } = await prepared(fake);
+    await sandbox.release(DIRS);
+    const next = sandboxOf(fake.deps);
+    await next.prepare({
+      worktreeDir: "/workspaces/acme/other/wt-2",
+      homeDir: "/tmp/factory-check-home-next",
+    });
+    expect(argvOf(fake.calls)).toContainEqual(sweepLinksArgv(DIRS.worktreeDir));
+  });
+
+  test("release clears the record of a run whose prepare failed before the scan", async () => {
+    const fake = fakeSandboxDeps({ failSymlinkListing: true });
+    const sandbox = sandboxOf(fake.deps);
+    await sandbox.prepare(DIRS).catch(() => {});
+    await sandbox.release(DIRS);
+    expect(fake.records.has(0)).toBe(false);
   });
 
   test("release removes no ACL when none is found", async () => {
@@ -3142,6 +3233,7 @@ describe("createCheckSandbox", () => {
     const fake = fakeSandboxDeps({ respond: aclFoundOnce(DIRS.worktreeDir) });
     const { sandbox } = await prepared(fake);
     await sandbox.release(DIRS);
+    await sandbox.escapingSymlinks(DIRS);
     expect(fake.records.has(0)).toBe(false);
   });
 

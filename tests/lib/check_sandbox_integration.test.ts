@@ -2066,3 +2066,53 @@ suite("restoring the worktree of a run that never reached the scan", () => {
     expect(names).toContain("ok");
   });
 });
+
+suite("a run cancelled between the release and the symlink scan", () => {
+  const fx = makeRepo();
+  const lockDir = join(fx.base, "slots");
+  let first = "";
+  let second = "";
+  let recordKept = false;
+  let names: string[] = [];
+
+  beforeAll(async () => {
+    mkdirSync(WINDMILL_TMP_DIR, { recursive: true });
+    first = fx.addWorktree("interrupted");
+    second = fx.addWorktree("next");
+    const homeA = makeHome();
+    const homeB = makeHome();
+    const deps = defaultSandboxDeps(lockDir);
+    const sandbox = sandboxIn(lockDir, POOL);
+    await sandbox.prepare({ worktreeDir: first, homeDir: homeA });
+    // 検査コマンドの代わりに、枠のuidで外向きのsymlinkを置く。
+    const uid = POOL[0] ?? 0;
+    runAsUid(uid, "ln -s /etc/passwd evil; touch ok", first);
+    // 取り戻しまで終えて、走査の前に打ち切られた状態にする。
+    await sandbox.release({ worktreeDir: first, homeDir: homeA });
+    recordKept = (await deps.slotRecords.read(0)) !== null;
+    // 次の実行が同じ枠を取り、回復の経路で掃く。
+    const next = sandboxIn(lockDir, POOL);
+    await next.prepare({ worktreeDir: second, homeDir: homeB });
+    await next.release({ worktreeDir: second, homeDir: homeB });
+    await next.escapingSymlinks({ worktreeDir: second, homeDir: homeB });
+    names = readdirSync(first);
+    rmSync(homeA, { recursive: true, force: true });
+    rmSync(homeB, { recursive: true, force: true });
+  }, 60_000);
+
+  afterAll(() => {
+    fx.cleanup();
+  });
+
+  test("the record was kept after the release", () => {
+    expect(recordKept).toBe(true);
+  });
+
+  test("the recovery removes the symlink the interrupted run left", () => {
+    expect(names).not.toContain("evil");
+  });
+
+  test("the recovery keeps a regular file", () => {
+    expect(names).toContain("ok");
+  });
+});

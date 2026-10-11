@@ -1890,6 +1890,15 @@ export function createCheckSandbox(opts: {
   const indices = opts.uids.map((_, index) => index);
   let active: { identity: CheckIdentity; handle: SlotHandle } | null = null;
   let baseline: LinkMap = new Map();
+  /** 控えを取った後の枠と記録。`release`が記録を残し、走査の後始末が終わったときに消す。 */
+  let armedScan: {
+    readonly index: number;
+    readonly record: SlotRecord;
+  } | null = null;
+  let pendingScan: {
+    readonly index: number;
+    readonly record: SlotRecord;
+  } | null = null;
   // 前提を満たした結果は部品の寿命(1回の実行)の間覚える。動いているコンテナのイメージは変わらないためである。
   let imageReady = false;
   const assertImageReady = async (): Promise<void> => {
@@ -1979,6 +1988,7 @@ export function createCheckSandbox(opts: {
       // 渡す前の、rootの所有の木で控える。投げても枠は`active`にあるので、`release`が手放して取り戻す。
       baseline = (await collectEscapingLinks(deps, dirs.worktreeDir, log))
         .links;
+      armedScan = { index: handle.index, record };
       await handOver(
         deps,
         identity,
@@ -2002,6 +2012,8 @@ export function createCheckSandbox(opts: {
       if (active === null) return;
       const { identity, handle } = active;
       active = null;
+      const scan = armedScan;
+      armedScan = null;
       try {
         stoppedOrThrow(await reapUidProcesses(identity.uid, deps.reap));
         await takeBackDirs(deps, identity, dirs, false);
@@ -2015,7 +2027,13 @@ export function createCheckSandbox(opts: {
             error: errorMessage(error),
           });
         }
-        await deps.slotRecords.clear(handle.index);
+        // 走査の前に取り消されても、次の回復で後始末できるよう、控えを取った実行の記録は残す。
+        // 消すのは、`escapingSymlinks`が終わったときである。
+        if (scan === null) {
+          await deps.slotRecords.clear(handle.index);
+        } else {
+          pendingScan = scan;
+        }
       } finally {
         await handle.release();
       }
@@ -2034,18 +2052,20 @@ export function createCheckSandbox(opts: {
           } else if (before !== content) {
             await deps.replaceLink(path, before);
             problems.push(
-              `a symlink that existed before the check was changed, so it was restored: ${path}`,
+              `a symlink that existed before the check was changed, so it was restored: ${JSON.stringify(path)}`,
             );
           }
         } catch (error) {
           removeFailed = true;
           problems.push(
-            `could not remove or restore ${path}: ${errorCode(error) || "unknown"}`,
+            `could not remove or restore ${JSON.stringify(path)}: ${errorCode(error) || "unknown"}`,
           );
         }
       }
       for (const path of scan.unreadable) {
-        problems.push(`could not inspect a symlink, so it was left: ${path}`);
+        problems.push(
+          `could not inspect a symlink, so it was left: ${JSON.stringify(path)}`,
+        );
       }
       if (scan.truncated) {
         problems.push(
@@ -2090,6 +2110,20 @@ export function createCheckSandbox(opts: {
             paths: removed.slice(0, 20),
           },
         );
+      }
+      // 走査と後始末が終わったので、記録を消す。投げた場合は記録が残り、次の回復が掃く。
+      // 枠は`release`で手放されているので、同じ記録のときだけ消す。
+      const pending = pendingScan;
+      pendingScan = null;
+      if (pending !== null) {
+        const held = await deps.slotRecords.read(pending.index);
+        if (
+          held !== null &&
+          held.worktreeDir === pending.record.worktreeDir &&
+          held.homeDir === pending.record.homeDir
+        ) {
+          await deps.slotRecords.clear(pending.index);
+        }
       }
       return { removed, problems };
     },
