@@ -51,6 +51,19 @@ describe("decideApproval reason length", () => {
     expect(calls.length).toBe(1);
   });
 
+  test("counts an emoji as one character", async () => {
+    const { fetchFn, calls } = respondWith({ ...APPROVED, status: "rejected" });
+    await decideApproval(input("😀".repeat(MAX_REASON_LENGTH)), { fetchFn });
+    expect(calls.length).toBe(1);
+  });
+
+  test("refuses a reason of emoji over the limit", async () => {
+    const { fetchFn } = respondWith(APPROVED);
+    await expect(
+      decideApproval(input("😀".repeat(MAX_REASON_LENGTH + 1)), { fetchFn }),
+    ).rejects.toBeInstanceOf(RangeError);
+  });
+
   test("refuses a reason over the limit", async () => {
     const { fetchFn } = respondWith(APPROVED);
     await expect(

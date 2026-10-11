@@ -24,10 +24,7 @@ export type WriteRunnerConfig<TInput, TResult> = {
   readonly locks?: WriteLocks;
 };
 
-export type WriteRunnerDeps<TInput, TResult> = WriteRunnerConfig<
-  TInput,
-  TResult
-> & {
+type WriteRunnerDeps<TInput, TResult> = WriteRunnerConfig<TInput, TResult> & {
   readonly queryClient: Pick<
     QueryClient,
     "invalidateQueries" | "getQueryCache"
@@ -50,21 +47,28 @@ export function createWriteRunner<TInput, TResult>(
   const queryKeys = deps.invalidates ?? DEFAULT_INVALIDATES;
 
   return async (input) => {
+    // 読み直しが成功した取得の番号。失敗したか、終わらなかった取得だけを、解くまで待つ。
+    const readAgain = new Set<number>();
     const ran = await runLocked(
       locks,
       deps.keyOf(input),
       async () => {
         const run = await executeWrite({
           run: () => deps.run(input),
-          refetch: () =>
-            Promise.all(
-              queryKeys.map((queryKey) =>
-                deps.queryClient.invalidateQueries(
-                  { queryKey },
-                  { throwOnError: true },
-                ),
+          refetch: async () => {
+            const results = await Promise.allSettled(
+              queryKeys.map((queryKey, index) =>
+                deps.queryClient
+                  .invalidateQueries({ queryKey }, { throwOnError: true })
+                  .then(() => {
+                    readAgain.add(index);
+                  }),
               ),
-            ),
+            );
+            if (results.some((result) => result.status === "rejected")) {
+              throw new Error("some queries could not be read again");
+            }
+          },
           onOutcome: (outcome) => {
             deps.onOutcome(outcome, input);
           },
@@ -75,7 +79,11 @@ export function createWriteRunner<TInput, TResult>(
         return { value: run.outcome, keepLocked: !run.refetched };
       },
       (release) => {
-        holdUntilFresh(deps.queryClient.getQueryCache(), queryKeys, release);
+        holdUntilFresh(
+          deps.queryClient.getQueryCache(),
+          queryKeys.filter((_, index) => !readAgain.has(index)),
+          release,
+        );
       },
     );
     if (!ran.started) {

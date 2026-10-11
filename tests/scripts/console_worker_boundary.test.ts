@@ -15,7 +15,10 @@ import { Glob } from "bun";
 // - 相対importと、副作用だけのimport、再エクスポート、リテラルの動的importをたどる。
 // - たどれない形が現れたら、走査の穴になるのでテストを落とす。
 //   絶対パス(/f/...)とf/・u/で始まるimport、require、引数が単純な文字列リテラルでないimport()。
-// - getVariable()とgetResource()の引数が、単純な文字列リテラルでないときも落とす。
+// - コード中のgetVariableとgetResourceの出現をすべて数え、`.name("literal")`の形の呼び出しで説明できる分を引く。
+//   残りが1つでもあれば落とす。添字アクセス、分割代入、名前付きimport、別名への代入、
+//   引数が変数や組み立てた文字列の呼び出し、注入された関数の呼び出しが残る。
+//   文字列とテンプレートの文字部分、正規表現の中の言及は数えない。
 //   例外は、呼び出し側が定数だけを渡すことを確かめた箇所で、下の許可リストに理由を書く。
 // - script.yamlに$var:と$res:の参照があれば落とす。入力の既定値で変数を読めるためである。
 // - 見ないもの: 文字列を組み立てて作ったsecretのパス、環境変数や DB を経由して受け取る名前、
@@ -35,6 +38,8 @@ const READS_NO_SECRET = ["f/factory/audit_kickoff", "f/factory/notice_resolve"];
  * 呼び出し側が定数だけを渡すことを確かめた箇所に限り、理由を書く。
  */
 const NON_LITERAL_VARIABLE_READS: Readonly<Record<string, string>> = {
+  "f/factory/lib/config.ts":
+    "loadConfigの引数getResource(注入された関数)。呼び出し側は、リテラルのwmill.getResource(...)を包んで渡す",
   "f/factory/steps/console_query.ts":
     "deployed_shaの読み取りの依存(deps.getVariable)。呼び出し側は定数DEPLOYED_SHA_VARIABLEだけを渡す",
 };
@@ -42,12 +47,12 @@ const NON_LITERAL_VARIABLE_READS: Readonly<Record<string, string>> = {
 const transpiler = new Bun.Transpiler({ loader: "ts" });
 
 /** コメントと型を落としたJavaScript。コメントの中の文字列で誤検知せず、行頭のブロックコメントの後ろのコードも残す。 */
-export function codeOf(source: string): string {
+function codeOf(source: string): string {
   return transpiler.transformSync(source);
 }
 
 /** `source`が相対パスで読み込む先。副作用だけのimport、再エクスポート、リテラルの動的importを含む。 */
-export function relativeImports(source: string): string[] {
+function relativeImports(source: string): string[] {
   return transpiler
     .scanImports(source)
     .map((entry) => entry.path)
@@ -57,7 +62,7 @@ export function relativeImports(source: string): string[] {
 const SIMPLE_DYNAMIC_IMPORT = /^import\s*\(\s*(?:"[^"\\]*"|'[^'\\]*')\s*\)/;
 
 /** 走査がたどれないimportの形。たどれない理由を返す。 */
-export function unfollowableImports(source: string): string[] {
+function unfollowableImports(source: string): string[] {
   const found: string[] = [];
   for (const entry of transpiler.scanImports(source)) {
     if (entry.path.startsWith("/") || /^[fu]\//.test(entry.path)) {
@@ -74,31 +79,117 @@ export function unfollowableImports(source: string): string[] {
   return found;
 }
 
-const SIMPLE_LITERAL_ARGUMENT = /^\s*(?:"[^"\\]*"|'[^'\\]*'|`[^`\\$]*`)\s*[,)]/;
+const VARIABLE_NAME = /\b(?:getVariable|getResource)\b/g;
+const LITERAL_CALL =
+  /\.\s*(?:getVariable|getResource)\s*\(\s*(?:""|``)\s*[,)]/g;
+const NAME_ONLY_STRING = /^["'](?:getVariable|getResource)["']$/;
+const REGEX_PRECEDER =
+  /(?:^|[(,=:[!&|?{};+\-*%<>~^]|\b(?:return|typeof|case|in|of))\s*$/;
 
 /**
- * 引数が単純な文字列リテラルでない、getVariable()かgetResource()の呼び出しの先頭。
- * 数えるのはメンバー呼び出し(`wmill.getVariable(...)`)である。
- * 注入された関数の呼び出し(`getResource()`)は、呼び出し側のリテラルを見るので数えない。
- * 別名で読む形(名前付きimport、分割代入、呼び出さずに別名へ代入)は、見分けられないので数える。
+ * 変換後のコードから、文字列、テンプレートの文字部分、正規表現リテラルの中身を落とした骨組み。
+ * 文字列は`""`に、テンプレートは`` ` ` ``に置き換える。テンプレートの`${}`の中のコードは残す。
+ * 名前だけの文字列(`"getVariable"`)は、添字アクセスに使えるので残す。
+ * 文字列の中のgetVariableの言及(ログの文など)を、読み取りと数えないための前処理である。
  */
-export function nonLiteralVariableReads(source: string): string[] {
-  const code = codeOf(source);
-  const found: string[] = [];
-  for (const match of code.matchAll(/\.\s*(?:getVariable|getResource)\s*\(/g)) {
-    const rest = code.slice(match.index + match[0].length);
-    if (!SIMPLE_LITERAL_ARGUMENT.test(rest)) {
-      found.push(`${match[0]}${rest.slice(0, 30).split("\n")[0] ?? ""}`);
+function codeSkeleton(code: string): string {
+  let out = "";
+  let i = 0;
+  let braces = 0;
+  const resume: number[] = [];
+
+  const readTemplate = (): void => {
+    while (i < code.length) {
+      const ch = code[i];
+      if (ch === "\\") {
+        i += 2;
+      } else if (ch === "`") {
+        i += 1;
+        out += "``";
+        return;
+      } else if (ch === "$" && code[i + 1] === "{") {
+        i += 2;
+        resume.push(braces);
+        braces += 1;
+        out += " ";
+        return;
+      } else {
+        i += 1;
+      }
+    }
+  };
+
+  const skipQuoted = (quote: string): string => {
+    const start = i;
+    i += 1;
+    while (i < code.length && code[i] !== quote) {
+      i += code[i] === "\\" ? 2 : 1;
+    }
+    i += 1;
+    return code.slice(start, i);
+  };
+
+  const skipRegex = (): void => {
+    i += 1;
+    let inClass = false;
+    while (i < code.length) {
+      const ch = code[i];
+      if (ch === "\\") {
+        i += 2;
+        continue;
+      }
+      if (ch === "[") inClass = true;
+      else if (ch === "]") inClass = false;
+      else if (ch === "/" && !inClass) break;
+      i += 1;
+    }
+    i += 1;
+    out += "//";
+  };
+
+  while (i < code.length) {
+    const ch = code[i];
+    if (ch === '"' || ch === "'") {
+      const literal = skipQuoted(ch);
+      out += NAME_ONLY_STRING.test(literal) ? literal : '""';
+    } else if (ch === "`") {
+      i += 1;
+      readTemplate();
+    } else if (ch === "{") {
+      braces += 1;
+      out += ch;
+      i += 1;
+    } else if (ch === "}") {
+      braces -= 1;
+      i += 1;
+      if (resume.length > 0 && resume[resume.length - 1] === braces) {
+        resume.pop();
+        readTemplate();
+      } else {
+        out += ch;
+      }
+    } else if (ch === "/" && REGEX_PRECEDER.test(out)) {
+      skipRegex();
+    } else {
+      out += ch;
+      i += 1;
     }
   }
-  for (const alias of [
-    /import\s*\{[^}]*\b(?:getVariable|getResource)\b[^}]*\}\s*from\s*["']windmill-client/g,
-    /\{[^}]*\b(?:getVariable|getResource)\b[^}]*\}\s*=\s*\w*wmill/g,
-    /\.\s*(?:getVariable|getResource)\b(?!\s*\()/g,
-  ]) {
-    for (const match of code.matchAll(alias)) found.push(match[0]);
-  }
-  return found;
+  return out;
+}
+
+/**
+ * getVariable()かgetResource()の名前の出現のうち、`.name("literal")`の形の呼び出しで説明できないもの。
+ * コード中の出現をすべて数え、説明できるものを引く。残りは、読み取りの対象を静的に決められない。
+ * 添字アクセス(`w["getVariable"](p)`)、分割代入、名前付きimport、別名への代入、
+ * 引数が変数や組み立てた文字列の呼び出し、注入された関数の呼び出しが残る。
+ */
+function nonLiteralVariableReads(source: string): string[] {
+  const skeleton = codeSkeleton(codeOf(source));
+  const unexplained =
+    [...skeleton.matchAll(VARIABLE_NAME)].length -
+    [...skeleton.matchAll(LITERAL_CALL)].length;
+  return unexplained > 0 ? [`${String(unexplained)} unexplained`] : [];
 }
 
 /** `entry`のTypeScriptと、そこから相対importでたどれるファイルすべての本文。 */
@@ -128,10 +219,18 @@ async function scan(pattern: string): Promise<string[]> {
   return found.sort();
 }
 
+async function yamlOf(file: string): Promise<Record<string, unknown>> {
+  const parsed: unknown = Bun.YAML.parse(await Bun.file(file).text());
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`${file}: not a YAML mapping`);
+  }
+  return Object.fromEntries(Object.entries(parsed));
+}
+
 async function consoleScripts(): Promise<string[]> {
   const paths: string[] = [];
   for (const file of await scan("f/**/*.script.yaml")) {
-    if (/^tag: console$/m.test(await Bun.file(file).text())) {
+    if ((await yamlOf(file)).tag === "console") {
       paths.push(file.replace(/\.script\.yaml$/, ""));
     }
   }
@@ -141,7 +240,7 @@ async function consoleScripts(): Promise<string[]> {
 async function secretVariablePaths(): Promise<string[]> {
   const paths: string[] = [];
   for (const file of await scan("f/factory/*.variable.yaml")) {
-    if (/^is_secret: true$/m.test(await Bun.file(file).text())) {
+    if ((await yamlOf(file)).is_secret === true) {
       paths.push(file.replace(/\.variable\.yaml$/, ""));
     }
   }
@@ -259,12 +358,6 @@ describe("the variable read scan", () => {
 
   test("does not flag a mention in a comment", () => {
     expect(nonLiteralVariableReads("// getVariable(path)\n")).toEqual([]);
-  });
-
-  test("does not flag a call of an injected function", () => {
-    expect(nonLiteralVariableReads("const raw = await getResource();")).toEqual(
-      [],
-    );
   });
 
   test("flags a named import of getVariable", () => {

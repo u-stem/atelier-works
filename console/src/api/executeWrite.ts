@@ -34,9 +34,9 @@ export function isResultUnknown(error: ApiError): boolean {
 }
 
 /** 読み直しの完了を待つ上限(ミリ秒)。超えたら待つのをやめ、一覧が古いと知らせる。 */
-export const REFETCH_TIMEOUT_MS = 30_000;
+const REFETCH_TIMEOUT_MS = 30_000;
 
-export type ExecuteWriteDeps<T> = {
+type ExecuteWriteDeps<T> = {
   readonly run: () => Promise<T>;
   /** 関連する取得を読み直す。失敗したら例外を投げる。 */
   readonly refetch: () => Promise<unknown>;
@@ -47,7 +47,7 @@ export type ExecuteWriteDeps<T> = {
   readonly refetchTimeoutMs?: number;
 };
 
-export type WriteRun<T> = {
+type WriteRun<T> = {
   readonly outcome: WriteOutcome<T>;
   /** 一覧が最新か。読み直しが要らなかったときと、読み直しが成功したときは`true`。 */
   readonly refetched: boolean;

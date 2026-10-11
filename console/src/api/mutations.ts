@@ -10,12 +10,9 @@ import { useCallback, useSyncExternalStore } from "react";
 import { writeLocks } from "./writeLocks.ts";
 import { createWriteRunner, type WriteRunnerConfig } from "./writeRunner.ts";
 
-export type WriteMutationConfig<TInput, TResult> = WriteRunnerConfig<
-  TInput,
-  TResult
->;
+type WriteMutationConfig<TInput, TResult> = WriteRunnerConfig<TInput, TResult>;
 
-export type WriteMutation<TInput> = {
+type WriteMutation<TInput> = {
   /** 始められれば`true`。同じ対象が実行中か、一覧が古いなら何もせず`false`を返す。 */
   readonly submit: (input: TInput) => boolean;
   /** `input`の対象が止まっているか。ボタンを無効にするのに使う。 */

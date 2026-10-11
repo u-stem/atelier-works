@@ -48,7 +48,7 @@ async function callWrite<T>(
   return result.value;
 }
 
-export type DecideApprovalInput = {
+type DecideApprovalInput = {
   readonly approvalRequestId: number;
   readonly decision: "approve" | "reject";
   /** 却下では必須で、空白だけならscriptが拒否する。承認では空でよい。 */
@@ -58,7 +58,7 @@ export type DecideApprovalInput = {
 };
 
 /**
- * 理由の長さの上限(文字数)。
+ * 理由の長さの上限。コードポイントで数える。絵文字などは1文字に数える。
  * 理由はDBに記録され、Issueやレポートに出るので、画面から無制限には送らせない。
  * script側には上限が無い。Windmillのapiを直に呼ぶ者には効かない。
  */
@@ -73,7 +73,7 @@ export function decideApproval(
   input: DecideApprovalInput,
   options: RunScriptOptions = {},
 ): Promise<ApprovalDecideResult> {
-  if (input.reason.length > MAX_REASON_LENGTH) {
+  if ([...input.reason].length > MAX_REASON_LENGTH) {
     return Promise.reject(
       new RangeError(`reason is longer than ${String(MAX_REASON_LENGTH)}`),
     );
