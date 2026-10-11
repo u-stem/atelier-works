@@ -150,6 +150,9 @@ Claudeが直せる検査の失敗ではないので、修正のラウンドに�
 | イメージが古い | `worker image is stale: run mise run up` | `host_action_required`([運用](../operations.md#fとworkerのイメージを両方変えたとき)) |
 | 稼働中のworkerの問題 | `worker runtime is unsafe for checks:` | `check_runtime_unsafe`([運用](../operations.md#稼働中のworkerが検査の前提を満たさないとき)) |
 
+イメージが古く、稼働中のworkerの問題も一緒に見つかったときは、両方の通知を残す([Consoleのnotice](notifications.md#consoleのnotice))。
+`host_action_required`は`mise run up`の後に自動で解決されるが、ボリュームのマウントポイントは作り直しでは閉じないためである。
+
 ### 期限と修正ラウンド
 
 検査に失敗したラウンドの後は、期限までの残りが修正ラウンドの最悪の所要時間(`fixRoundWorstCaseSec`)以上のときだけ、次の修正ラウンドを始める。足りなければ期限(`deadline`)でループを終える。最悪の所要時間は次の式で求める。

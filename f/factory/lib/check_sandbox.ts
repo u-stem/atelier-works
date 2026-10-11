@@ -122,10 +122,26 @@ export const SHARED_TMP_DIRS = [
 ] as const;
 
 /**
- * ベースのイメージが誰でも書き込めるようにしている場所。Windmillの実行ファイルと共有ライブラリの置き場と、`/tmp/.cache`である。
- * workerのイメージはビルドで閉じるので、ここに誰でも書き込めるものがあれば、閉じる前のイメージで動いている。
+ * ベースのイメージが誰でも書き込めるようにしているディレクトリ。Windmillの実行ファイルと共有ライブラリの置き場と、`/tmp/.cache`である。
+ * workerのイメージはビルドで中のものまで閉じるので、このディレクトリそのものが誰でも書き込めれば、閉じる前のイメージで動いている。
+ * 下にある誰でも書き込めるものは、ベースのイメージには無く、稼働中にできたものである。
  */
 export const BASE_IMAGE_OPEN_PATHS = ["/usr/src/app", "/tmp/.cache"] as const;
+
+/**
+ * 誰でも書き込めるものを探す走査の起点。
+ * `/dev/shm`は`/`と別のファイルシステムなので、`/`から`-xdev`でたどっても入らない。起点に足して、同じ条件でたどる。
+ * `/dev/mqueue`は起点にしない。メッセージキューのファイルシステムにはディレクトリを作れず、共有の一時ディレクトリの下ではディレクトリだけを数えるためである。
+ */
+const WORLD_WRITABLE_SCAN_ROOTS = ["/", "/dev/shm"] as const;
+
+/** 走査が通る共有の一時ディレクトリ。`/tmp`、`/var/tmp`、`/run/lock`は`/`のファイルシステムにある。 */
+const SCANNED_SHARED_TMP_DIRS = [
+  "/tmp",
+  "/var/tmp",
+  "/run/lock",
+  "/dev/shm",
+] as const;
 
 /** `-path`の条件を`-o`でつないだもの。 */
 function anyPath(patterns: readonly string[]): string[] {
@@ -136,18 +152,19 @@ function anyPath(patterns: readonly string[]): string[] {
 
 /**
  * 誰でも書き込めるもの(symlinkを除く)を列挙するargv。rootで実行する。
- * `/`から、ほかのマウント(`/workspaces`などのボリューム、`/proc`)に入らずにたどる。マウントポイントそのものは見る。
+ * `/`と`/dev/shm`から、ほかのマウント(`/workspaces`などのボリューム、`/proc`)に入らずにたどる。マウントポイントそのものは見る。
  * `/tmp/windmill`の下は見ない。検査の前に所有者だけが入れるように閉じるためである。
  * 共有の一時ディレクトリそのものは数えない。
  * 共有の一時ディレクトリの下では、rootが所有し、stickyでない、誰でも書き込めるディレクトリだけを数える。
  * 枠のuidのものは、枠を取るたびに消すので数えない。
  * rootの開いたディレクトリは、検査用のuidがrootの使う名前を差し替えられる場所になるので数える。
+ * `BASE_IMAGE_OPEN_PATHS`とその下では、この緩和を当てず、ファイルも数える。`/tmp/.cache`は`/tmp`の下にあるが、イメージのビルドで閉じるためである。
  */
 export function worldWritablePathsArgv(): string[] {
   return [
     FIND_PATH,
     "-P",
-    "/",
+    ...WORLD_WRITABLE_SCAN_ROOTS,
     "-xdev",
     "-path",
     WINDMILL_TMP_DIR,
@@ -160,12 +177,14 @@ export function worldWritablePathsArgv(): string[] {
     "-0002",
     "!",
     "(",
-    ...anyPath(SHARED_TMP_DIRS),
+    ...anyPath(SCANNED_SHARED_TMP_DIRS),
     ")",
     "(",
+    ...anyPath(BASE_IMAGE_OPEN_PATHS.flatMap((path) => [path, `${path}/*`])),
+    "-o",
     "!",
     "(",
-    ...anyPath(SHARED_TMP_DIRS.map((dir) => `${dir}/*`)),
+    ...anyPath(SCANNED_SHARED_TMP_DIRS.map((dir) => `${dir}/*`)),
     ")",
     "-o",
     "(",
@@ -787,12 +806,21 @@ export class CheckEnvironmentError extends Error {
 
 /**
  * workerのイメージが、検査の前提を満たさない。`f/`の変更がイメージの作り直しより先に反映されたときに起きる。
- * イメージを作り直せば(`mise run up`)直る。
+ * イメージの点(`imageProblems`)は、イメージを作り直せば(`mise run up`)直る。
+ * 一緒に見つかった稼働中のworkerの点(`runtimeProblems`)も持ち、メッセージにはイメージの点の後に並べる。
+ * 稼働中の点のうち、ボリュームのマウントポイントは作り直しでは直らないので、呼び出し側は別の通知で知らせる。
  */
 export class CheckImageStaleError extends CheckEnvironmentError {
-  constructor(problems: readonly string[]) {
-    super(CHECK_IMAGE_STALE_REASON, problems);
+  readonly imageProblems: readonly string[];
+  readonly runtimeProblems: readonly string[];
+  constructor(
+    imageProblems: readonly string[],
+    runtimeProblems: readonly string[] = [],
+  ) {
+    super(CHECK_IMAGE_STALE_REASON, [...imageProblems, ...runtimeProblems]);
     this.name = "CheckImageStaleError";
+    this.imageProblems = imageProblems;
+    this.runtimeProblems = runtimeProblems;
   }
 }
 
@@ -1034,16 +1062,18 @@ function listedPaths(paths: readonly string[]): string {
   );
 }
 
-function isUnderBaseImageOpenPath(path: string): boolean {
-  return BASE_IMAGE_OPEN_PATHS.some(
-    (open) => path === open || path.startsWith(`${open}/`),
-  );
+/**
+ * イメージの問題とするのは、ベースのイメージが開いているディレクトリそのものだけである。
+ * その下にあるものまでイメージの問題とすると、稼働中にできたものが、`mise run up`の後に自動で解決される通知に紛れるためである。
+ */
+function isBaseImageOpenPath(path: string): boolean {
+  return BASE_IMAGE_OPEN_PATHS.some((open) => path === open);
 }
 
 /**
  * workerが、`uids`の枠で検査を動かす前提を満たすかを確かめ、満たさない点を返す。
  * イメージの前提は、`REQUIRED_TOOL_PATHS`の道具がすべて実行できることと、`uids`のどれにも`factory-check-N`のユーザーがあることと、
- * ベースのイメージが開いている場所(`BASE_IMAGE_OPEN_PATHS`)を閉じてあることである。
+ * ベースのイメージが開いているディレクトリ(`BASE_IMAGE_OPEN_PATHS`)を閉じてあることである。
  * 古いイメージには、番号の無い`factory-check`のユーザーしか無く、`acl`も入っていない。
  * 開いたままだと、検査用のユーザーがrootの実行するファイルを差し替えられる。
  * 実行時の前提は、それ以外に誰でも書き込めるもの(`worldWritablePathsArgv`)が無いことである。
@@ -1076,8 +1106,8 @@ export async function checkImageProblems(
   }
   try {
     const open = await deps.listWorldWritablePaths();
-    const fromImage = open.filter(isUnderBaseImageOpenPath);
-    const atRuntime = open.filter((path) => !isUnderBaseImageOpenPath(path));
+    const fromImage = open.filter(isBaseImageOpenPath);
+    const atRuntime = open.filter((path) => !isBaseImageOpenPath(path));
     if (fromImage.length > 0) {
       image.push(
         `world-writable paths the image leaves open: ${listedPaths(fromImage)}`,
@@ -1098,14 +1128,15 @@ export async function checkImageProblems(
 
 /**
  * 満たさない点から、止める例外を作る。満たしていればnullを返す。
- * イメージの点があれば`CheckImageStaleError`にし、実行時の点も並べる。イメージを作り直すとコンテナも作り直され、実行時の点も消えるためである。
+ * イメージの点があれば`CheckImageStaleError`にし、実行時の点も分けて持たせる。
+ * イメージを作り直すとコンテナも作り直され、ボリュームの外の実行時の点は消えるが、ボリュームのマウントポイントの権限は残るためである。
  * 実行時の点だけなら`CheckRuntimeUnsafeError`にする。
  */
 export function checkEnvironmentError(
   problems: CheckEnvironmentProblems,
 ): CheckEnvironmentError | null {
   if (problems.image.length > 0) {
-    return new CheckImageStaleError([...problems.image, ...problems.runtime]);
+    return new CheckImageStaleError(problems.image, problems.runtime);
   }
   if (problems.runtime.length > 0) {
     return new CheckRuntimeUnsafeError(problems.runtime);

@@ -4047,13 +4047,14 @@ const REASON_RULES: readonly ReasonRule[] = [
       `ホストのcheckoutでgit pullし、mise installとmise run upでworkerのイメージを作り直してから、${RETRY_WORK_ITEM_ACTION}`,
   },
   // `lib/check_sandbox.ts`の`CheckRuntimeUnsafeError`(同じステップ)。イメージは作り直さず、パスを閉じるかworkerを作り直す。
+  // ボリュームのマウントポイントの権限はボリュームにあり、workerを作り直しても変わらない。
   {
     pattern:
       /^worker runtime is unsafe for checks: chmod o-w the paths or recreate windmill_worker: ([\s\S]+)$/,
     describe: (m) =>
       `workerの稼働中に、検査コマンドを非特権のユーザーで安全に実行できない状態になりました(${m[1]})`,
     nextAction: () =>
-      `理由に載ったパスをmise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker chmod o-w <パス>で閉じるか、mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_workerでworkerを作り直してから、${RETRY_WORK_ITEM_ACTION}`,
+      `理由に載ったパスをmise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker chmod o-w <パス>で閉じるか、mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_workerでworkerを作り直してから、${RETRY_WORK_ITEM_ACTION}(/workspacesと/var/lib/factoryは、ボリュームのマウントポイントで、作り直しでは閉じないので、chmodで閉じてください)`,
   },
   {
     pattern: /^implementation of the branch's work item is running$/,

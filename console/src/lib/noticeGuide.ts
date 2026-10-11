@@ -225,7 +225,7 @@ const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
     "check_runtime_unsafe",
     guide(
       "稼働中のworkerに、誰でも書き込めるパスができたか、それを確かめられなかったため、検査コマンドを非特権のユーザーで実行できません。本文にパスか確かめられなかった理由が載ります。直すまで、検査コマンドのある実装とPR修正は止まります。",
-      "本文のパスを、ホストのcheckoutから次の1つ目のコマンドで閉じるか、2つ目のコマンドでworkerを作り直してください。作り直すと、そのとき動いているジョブも止まります。直したら、止まった作業項目をWindmillでf/factory/retry_work_itemを作業項目のIDで実行して再開し、この通知を解決してください。",
+      "本文のパスを、ホストのcheckoutから次の1つ目のコマンドで閉じるか、2つ目のコマンドでworkerを作り直してください。作り直すと、そのとき動いているジョブも止まります。/workspacesと/var/lib/factoryは、ボリュームのマウントポイントで、作り直しでは閉じないので、1つ目のコマンドで閉じてください。直したら、止まった作業項目をWindmillでf/factory/retry_work_itemを作業項目のIDで実行して再開し、この通知を解決してください。",
       {
         commands: [
           "mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker chmod o-w <パス>",

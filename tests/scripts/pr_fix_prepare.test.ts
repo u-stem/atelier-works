@@ -1060,7 +1060,7 @@ describe("describeReason / nextActionFor (a running worker unsafe for checks)", 
 
   test("asks to close the paths or recreate the worker, not to rebuild the image", () => {
     expect(nextActionFor(RUNTIME)).toBe(
-      "理由に載ったパスをmise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker chmod o-w <パス>で閉じるか、mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_workerでworkerを作り直してから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+      "理由に載ったパスをmise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker chmod o-w <パス>で閉じるか、mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_workerでworkerを作り直してから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください(/workspacesと/var/lib/factoryは、ボリュームのマウントポイントで、作り直しでは閉じないので、chmodで閉じてください)",
     );
   });
 });

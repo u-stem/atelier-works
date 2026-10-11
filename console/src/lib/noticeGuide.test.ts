@@ -85,6 +85,12 @@ describe("noticeGuide", () => {
     ]);
   });
 
+  test("tells that recreating the worker does not close the volume mount points", () => {
+    expect(noticeGuide("check_runtime_unsafe").action).toContain(
+      "/workspacesと/var/lib/factoryは、ボリュームのマウントポイントで、作り直しでは閉じないので、1つ目のコマンドで閉じてください",
+    );
+  });
+
   test("says the runtime problem does not need mise run up", () => {
     expect(noticeGuide("check_runtime_unsafe").note).toContain(
       "mise run upは要りません",

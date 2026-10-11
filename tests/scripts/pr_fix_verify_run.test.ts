@@ -6,6 +6,7 @@ import type { CheckCommandResult } from "../../f/factory/lib/check_runner.ts";
 import {
   CHECK_IMAGE_STALE_REASON,
   CheckImageStaleError,
+  CheckRuntimeUnsafeError,
 } from "../../f/factory/lib/check_sandbox.ts";
 import type { CheckFailure } from "../../f/factory/lib/prompts.ts";
 import { WorktreeGitPointerModifiedError } from "../../f/factory/lib/workspace.ts";
@@ -546,44 +547,79 @@ describe("runPrFixVerify: retry after failing checks", () => {
   });
 });
 
-describe("runPrFixVerify: a worker image that cannot run the checks", () => {
+describe("runPrFixVerify: a worker that cannot run the checks", () => {
   const stale = new CheckImageStaleError(["/usr/bin/getfacl is missing"]);
-  const reason = `${CHECK_IMAGE_STALE_REASON}: /usr/bin/getfacl is missing`;
+  // イメージの問題と稼働中のworkerの問題は、運用者の操作が違うだけで、検証のステップの扱いは同じである。
+  const ENVIRONMENT_ERRORS = [
+    { name: "a stale image", error: stale },
+    {
+      name: "an unsafe running worker",
+      error: new CheckRuntimeUnsafeError([
+        "world-writable paths created at runtime: /tmp/open",
+      ]),
+    },
+  ];
 
-  test("blocks with the stale image as the reason", async () => {
+  test("blocks with the stale image as a reason that asks for mise run up", async () => {
     const h = harness({ checksError: { at: 0, error: stale } });
-    expect((await runPrFixVerify(h.deps, INPUT)).reason).toBe(reason);
+    expect((await runPrFixVerify(h.deps, INPUT)).reason).toBe(
+      `${CHECK_IMAGE_STALE_REASON}: /usr/bin/getfacl is missing`,
+    );
   });
 
-  test("ends guard_blocked so that the finish step records no fix round to count as a failure", async () => {
-    const h = harness({ checksError: { at: 0, error: stale } });
-    expect((await runPrFixVerify(h.deps, INPUT)).outcome).toBe("guard_blocked");
-  });
+  test.each(ENVIRONMENT_ERRORS)(
+    "blocks with $name as the reason",
+    async ({ error }) => {
+      const h = harness({ checksError: { at: 0, error } });
+      expect((await runPrFixVerify(h.deps, INPUT)).reason).toBe(error.message);
+    },
+  );
 
-  test("reports the stale image once and does not retry with Claude", async () => {
-    const h = harness({ checksError: { at: 0, error: stale } });
-    await runPrFixVerify(h.deps, INPUT);
-    expect(h.calls.slice(h.calls.indexOf("runChecks"))).toEqual([
-      "runChecks",
-      `reportCheckImageStale:${reason}`,
-    ]);
-  });
+  test.each(ENVIRONMENT_ERRORS)(
+    "ends guard_blocked on $name so that the finish step records no fix round to count as a failure",
+    async ({ error }) => {
+      const h = harness({ checksError: { at: 0, error } });
+      expect((await runPrFixVerify(h.deps, INPUT)).outcome).toBe(
+        "guard_blocked",
+      );
+    },
+  );
 
-  test("blocks with the stale image when it shows up after the retry", async () => {
-    const h = harness({
-      checks: [false],
-      checksError: { at: 1, error: stale },
-    });
-    expect((await runPrFixVerify(h.deps, INPUT)).reason).toBe(reason);
-  });
+  test.each(ENVIRONMENT_ERRORS)(
+    "reports $name once and does not retry with Claude",
+    async ({ error }) => {
+      const h = harness({ checksError: { at: 0, error } });
+      await runPrFixVerify(h.deps, INPUT);
+      expect(h.calls.slice(h.calls.indexOf("runChecks"))).toEqual([
+        "runChecks",
+        `reportCheckImageStale:${error.message}`,
+      ]);
+    },
+  );
 
-  test("ends guard_blocked when the stale image shows up after the retry", async () => {
-    const h = harness({
-      checks: [false],
-      checksError: { at: 1, error: stale },
-    });
-    expect((await runPrFixVerify(h.deps, INPUT)).outcome).toBe("guard_blocked");
-  });
+  test.each(ENVIRONMENT_ERRORS)(
+    "blocks with $name when it shows up after the retry",
+    async ({ error }) => {
+      const h = harness({
+        checks: [false],
+        checksError: { at: 1, error },
+      });
+      expect((await runPrFixVerify(h.deps, INPUT)).reason).toBe(error.message);
+    },
+  );
+
+  test.each(ENVIRONMENT_ERRORS)(
+    "ends guard_blocked when $name shows up after the retry",
+    async ({ error }) => {
+      const h = harness({
+        checks: [false],
+        checksError: { at: 1, error },
+      });
+      expect((await runPrFixVerify(h.deps, INPUT)).outcome).toBe(
+        "guard_blocked",
+      );
+    },
+  );
 
   test("passes another error from the checks through", async () => {
     const h = harness({

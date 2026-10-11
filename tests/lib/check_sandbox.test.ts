@@ -636,10 +636,21 @@ describe("shared temporary directories", () => {
     ]);
   });
 
-  test("world-writable paths are listed from the root without crossing mounts, counting only root's open directories inside them", () => {
+  test("world-writable paths are listed from the root and /dev/shm without crossing mounts, counting everything under the base image's open paths and only root's open directories in the shared ones", () => {
     expect(worldWritablePathsArgv().join(" ")).toBe(
-      "/usr/bin/find -P / -xdev -path /tmp/windmill -prune -o ! -type l -perm -0002 ! ( -path /tmp -o -path /var/tmp -o -path /dev/shm -o -path /dev/mqueue -o -path /run/lock ) ( ! ( -path /tmp/* -o -path /var/tmp/* -o -path /dev/shm/* -o -path /dev/mqueue/* -o -path /run/lock/* ) -o ( -uid 0 -type d ! -perm -1000 ) ) -print",
+      "/usr/bin/find -P / /dev/shm -xdev -path /tmp/windmill -prune -o ! -type l -perm -0002 ! ( -path /tmp -o -path /var/tmp -o -path /run/lock -o -path /dev/shm ) ( -path /usr/src/app -o -path /usr/src/app/* -o -path /tmp/.cache -o -path /tmp/.cache/* -o ! ( -path /tmp/* -o -path /var/tmp/* -o -path /run/lock/* -o -path /dev/shm/* ) -o ( -uid 0 -type d ! -perm -1000 ) ) -print",
     );
+  });
+
+  test("the operations guide gives the same listing as a command to run in the worker", () => {
+    const quoted = worldWritablePathsArgv()
+      .map((arg) => (/^[\w./=:-]+$/.test(arg) ? arg : `'${arg}'`))
+      .join(" ");
+    const guide = readFileSync(
+      join(import.meta.dir, "../../docs/operations.md"),
+      "utf8",
+    ).replace(/ \\\n\s*/g, " ");
+    expect(guide).toContain(`exec windmill_worker ${quoted}`);
   });
 
   test("directories of the slot uid are removed whole from their parent", () => {
@@ -1017,17 +1028,50 @@ describe("checkImageProblems", () => {
     ).toEqual(["world-writable paths the image leaves open: /usr/src/app"]);
   });
 
-  test("reports a file under a directory the base image opens as an image problem", async () => {
+  test("reports /tmp/.cache left open as an image problem", async () => {
     expect(
       (
         await checkImageProblems(
           [20000],
-          image({ worldWritable: ["/usr/src/app/windmill"] }),
+          image({ worldWritable: ["/tmp/.cache"] }),
         )
       ).image,
-    ).toEqual([
-      "world-writable paths the image leaves open: /usr/src/app/windmill",
-    ]);
+    ).toEqual(["world-writable paths the image leaves open: /tmp/.cache"]);
+  });
+
+  // ベースのイメージが開いているのはディレクトリそのものだけで、その下にできたものは稼働中にできたものである。
+  test.each(["/usr/src/app/windmill", "/tmp/.cache/bun"])(
+    "reports %s, under a directory the base image opens, as a runtime problem",
+    async (path) => {
+      expect(
+        (await checkImageProblems([20000], image({ worldWritable: [path] })))
+          .runtime,
+      ).toEqual([`world-writable paths created at runtime: ${path}`]);
+    },
+  );
+
+  test.each(["/usr/src/app/windmill", "/tmp/.cache/bun"])(
+    "does not blame the image for %s, under a directory the base image opens",
+    async (path) => {
+      expect(
+        (await checkImageProblems([20000], image({ worldWritable: [path] })))
+          .image,
+      ).toEqual([]);
+    },
+  );
+
+  test("keeps the base image's directory and what was created under it apart", async () => {
+    expect(
+      await checkImageProblems(
+        [20000],
+        image({ worldWritable: ["/usr/src/app", "/usr/src/app/planted"] }),
+      ),
+    ).toEqual({
+      image: ["world-writable paths the image leaves open: /usr/src/app"],
+      runtime: [
+        "world-writable paths created at runtime: /usr/src/app/planted",
+      ],
+    });
   });
 
   test("does not count a path that only shares a prefix with a base image directory", async () => {
@@ -1174,6 +1218,26 @@ describe("checkEnvironmentError", () => {
     ]);
   });
 
+  test("keeps the image problems of a stale image apart", () => {
+    const error = checkEnvironmentError({
+      image: ["/usr/bin/getfacl is missing"],
+      runtime: ["world-writable paths created at runtime: /workspaces"],
+    });
+    expect(
+      error instanceof CheckImageStaleError ? error.imageProblems : null,
+    ).toEqual(["/usr/bin/getfacl is missing"]);
+  });
+
+  test("keeps the runtime problems found with a stale image apart, so that they get their own notice", () => {
+    const error = checkEnvironmentError({
+      image: ["/usr/bin/getfacl is missing"],
+      runtime: ["world-writable paths created at runtime: /workspaces"],
+    });
+    expect(
+      error instanceof CheckImageStaleError ? error.runtimeProblems : null,
+    ).toEqual(["world-writable paths created at runtime: /workspaces"]);
+  });
+
   test("blames the runtime when only the running worker has a problem", () => {
     expect(
       checkEnvironmentError({
@@ -1265,6 +1329,14 @@ describe("CheckImageStaleError", () => {
 
   test("joins the problems without the reason separator", () => {
     expect(new CheckImageStaleError(["a", "b"]).message).not.toContain("; ");
+  });
+
+  test("lists the runtime problems after the image problems", () => {
+    expect(new CheckImageStaleError(["a"], ["b"]).problems).toEqual(["a", "b"]);
+  });
+
+  test("has no runtime problems unless given", () => {
+    expect(new CheckImageStaleError(["a"]).runtimeProblems).toEqual([]);
   });
 });
 

@@ -1439,20 +1439,26 @@ workerの並列数(`NUM_WORKERS`)のような`infra/docker-compose.yml`の変更
 
 `f/`の変更が、新しいworkerのイメージを前提にすることがある。
 例えば、検査コマンドを枠のユーザー(`factory-check-N`)で動かす`f/`は、イメージの`acl`、`procps`、`prlimit`と枠のユーザーを前提にする。
-ベースのイメージが誰でも書き込めるようにしている`/usr/src/app`を、イメージが閉じていることも前提にする。
+ベースのイメージが誰でも書き込めるようにしている`/usr/src/app`と`/tmp/.cache`を、イメージが閉じていることも前提にする。
 マージすると、自己更新が10分以内に`f/`を反映するが、イメージは人が`mise run up`するまで古いままである。
 
 この種の変更は、イメージを先に作り直す。
 
 1. PRのブランチに、先にmainを取り込んでおく。
    `mise run up`はcheckoutの`infra/`でイメージを作るので、PRのブランチがmainより遅れていると、mainで入った`infra/`の変更が戻るためである。
-2. マージの前に、ホストのcheckoutでPRのブランチを取り込み、`mise run up`を実行する。
+2. 稼働中のworkerの状態を確かめる([稼働中のworkerの状態の確かめ方](#稼働中のworkerの状態の確かめ方))。
+   1つ目の走査が何も出さず、2つ目の走査が`/usr/src/app`と`/tmp/.cache`、その下のものだけを出すことを確かめる。
+   これらは、次の`mise run up`で閉じる。
+   ほかに出たものは、先に閉じる。
+3. マージの前に、ホストのcheckoutでPRのブランチを取り込み、`mise run up`を実行する。
    新しいイメージは前の版の`f/`でも動く。前の版の`f/`は検査コマンドをrootのまま実行し、枠のユーザーとACLを使わないためである。
-3. PRをマージする。
-4. マージの後に、ホストのcheckoutをmainに戻して`git pull`し、もう一度`mise run up`を実行する。
+4. PRをマージする。
+5. マージの後に、ホストのcheckoutをmainに戻して`git pull`し、もう一度`mise run up`を実行する。
    ビルドはキャッシュで済む。
-   `mise run up`が共有ボリュームに書くのはcheckoutのHEADで、2で書いたのはPRのブランチのHEADである。
-   自己更新の通知`host_action_required`が名指すのはマージの版で、PRのブランチのHEADの祖先ではないので、2だけでは自動で解決しない。
+   `mise run up`が共有ボリュームに書くのはcheckoutのHEADで、3で書いたのはPRのブランチのHEADである。
+   自己更新の通知`host_action_required`が名指すのはマージの版で、PRのブランチのHEADの祖先ではないので、3だけでは自動で解決しない。
+6. 稼働中のworkerの状態を、2と同じ走査で確かめる。
+   2つの走査が何も出さないことを確かめ、出たものは閉じる。
 
 `f/`だけが先に反映された間は、検査コマンドのある実装とPR修正が、Claudeを動かす前に止まる。
 実装とPR修正の準備のステップは、検査コマンドを設定したリポジトリでは、最初にイメージの前提を確かめるためである。
@@ -1469,6 +1475,8 @@ workerの並列数(`NUM_WORKERS`)のような`infra/docker-compose.yml`の変更
 
 ラウンドを記録しないので、モデルの失敗にも数えず、`heavy_model`への切り替えを早めない。
 要対応の通知`host_action_required`が1件残り、本文にイメージの満たさない前提が載る。
+稼働中のworkerの問題も一緒に見つかれば、その問題は別の通知`check_runtime_unsafe`に載る([稼働中のworkerが検査の前提を満たさないとき](#稼働中のworkerが検査の前提を満たさないとき))。
+`host_action_required`は`mise run up`の後に自動で解決されるが、ボリュームのマウントポイントは作り直しでは閉じないので、人が閉じるまで残すためである。
 PR修正の`blocked`はConsoleの**要対応**の失敗に出ないので、この通知とDiscordの通知で気づく。
 
 対処は、ホストのcheckoutで`git pull`し、`mise install`と`mise run up`を実行する。
@@ -1476,11 +1484,45 @@ PR修正の`blocked`はConsoleの**要対応**の失敗に出ないので、こ�
 通知の本文に反映した版が載っていれば、ホストがその版以降で`mise run up`したときに、自己更新が自動で解決する。
 版が載らない通知は自動では解決されないので、`mise run up`の後に人が解決する。
 
+#### 稼働中のworkerの状態の確かめ方
+
+ホストのcheckoutで、次の2つの走査をする。
+
+1つ目の走査は、ボリュームの中から、誰でも書けるもの(symlinkを除く)を探す。
+検査の準備の走査は、ボリュームのマウントポイントそのものしか見ないためである。
+検査を枠のユーザーで動かす前の版では、rootが検査コマンドを実行するので、誰でも書けるworktreeやファイルが`/workspaces`に残りうる。
+残ったままだと、検査用のユーザーがそこへ書き込める。
+
+```bash
+mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker /usr/bin/find /workspaces /var/lib/factory -xdev '!' -type l -perm -0002 -print
+```
+
+2つ目の走査は、検査の準備と同じ走査である([セキュリティ](security.md#誰でも書き込めるものの探し方))。
+引数は`f/factory/lib/check_sandbox.ts`の`worldWritablePathsArgv`と同じである。
+食い違わないことは`tests/lib/check_sandbox.test.ts`が確かめる。
+
+```bash
+mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker \
+  /usr/bin/find -P / /dev/shm -xdev -path /tmp/windmill -prune -o '!' -type l -perm -0002 \
+  '!' '(' -path /tmp -o -path /var/tmp -o -path /run/lock -o -path /dev/shm ')' \
+  '(' -path /usr/src/app -o -path '/usr/src/app/*' -o -path /tmp/.cache -o -path '/tmp/.cache/*' \
+  -o '!' '(' -path '/tmp/*' -o -path '/var/tmp/*' -o -path '/run/lock/*' -o -path '/dev/shm/*' ')' \
+  -o '(' -uid 0 -type d '!' -perm -1000 ')' ')' -print
+```
+
+出たものは、次のコマンドで、中のものも含めて閉じる。
+閉じたら、同じ走査をもう一度実行し、何も出ないことを確かめる。
+
+```bash
+mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker chmod -R o-w <パス>
+```
+
 ### 稼働中のworkerが検査の前提を満たさないとき
 
 検査の準備は、イメージの前提のほかに、稼働中のworkerに誰でも書き込めるパスが無いことを確かめる。
 イメージのビルドが同じことを確かめるので、見つかったパスは稼働中にできたものである。
 共有の一時ディレクトリの下で数えるのは、rootが所有し、stickyでない、誰でも書き込めるディレクトリだけである。
+ただし、`/tmp/.cache`とその下では、ファイルも数える。
 探し方は[セキュリティ](security.md#誰でも書き込めるものの探し方)にある。
 走査がタイムアウトしたときと、走査が失敗したときも、同じ扱いにする。
 
@@ -1499,6 +1541,8 @@ PR修正の`blocked`はConsoleの**要対応**の失敗に出ないので、こ�
 
 - workerのコンテナを作り直す。
   ボリュームの外はイメージの状態に戻るので、稼働中にできたパスも消える。
+  ボリュームのマウントポイント(`/workspaces`と`/var/lib/factory`)は直らないので、上のコマンドで閉じる。
+  マウントポイントの権限は、コンテナではなくボリュームが持つためである。
   作り直すと、そのとき動いているジョブも止まる。
 
   ```bash

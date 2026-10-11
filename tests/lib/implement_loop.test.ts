@@ -11,6 +11,7 @@ import { join } from "node:path";
 import {
   CHECK_IMAGE_STALE_REASON,
   CheckImageStaleError,
+  CheckRuntimeUnsafeError,
 } from "../../f/factory/lib/check_sandbox.ts";
 import type {
   ClaudeRunResult,
@@ -1179,14 +1180,37 @@ describe("runImplementVerifyLoop", () => {
     expect((await run(h)).exit).toBe("symlink");
   });
 
-  test("exits check_image_stale when the image cannot run the checks", async () => {
-    const h = harness({
-      checksError: new CheckImageStaleError(["/usr/bin/getfacl is missing"]),
-    });
-    expect((await run(h)).exit).toBe("check_image_stale");
-  });
+  // イメージの問題と稼働中のworkerの問題は、運用者の操作が違うだけで、ループの扱いは同じである。
+  const ENVIRONMENT_ERRORS = [
+    {
+      name: "a stale image",
+      error: new CheckImageStaleError(["/usr/bin/getfacl is missing"]),
+    },
+    {
+      name: "an unsafe running worker",
+      error: new CheckRuntimeUnsafeError([
+        "world-writable paths created at runtime: /tmp/open",
+      ]),
+    },
+  ];
 
-  test("gives the stale image as the reason", async () => {
+  test.each(ENVIRONMENT_ERRORS)(
+    "exits check_image_stale on $name",
+    async ({ error }) => {
+      const h = harness({ checksError: error });
+      expect((await run(h)).exit).toBe("check_image_stale");
+    },
+  );
+
+  test.each(ENVIRONMENT_ERRORS)(
+    "gives $name as the reason",
+    async ({ error }) => {
+      const h = harness({ checksError: error });
+      expect((await run(h)).reason).toBe(error.message);
+    },
+  );
+
+  test("gives the stale image as a reason that asks for mise run up", async () => {
     const h = harness({
       checksError: new CheckImageStaleError(["/usr/bin/getfacl is missing"]),
     });
@@ -1195,45 +1219,45 @@ describe("runImplementVerifyLoop", () => {
     );
   });
 
-  test("reports the stale image once", async () => {
-    const h = harness({
-      checksError: new CheckImageStaleError(["/usr/bin/getfacl is missing"]),
-    });
+  test.each(ENVIRONMENT_ERRORS)("reports $name once", async ({ error }) => {
+    const h = harness({ checksError: error });
     await run(h);
     expect(h.events.filter((event) => event.startsWith("stale "))).toEqual([
-      `stale ${CHECK_IMAGE_STALE_REASON}: /usr/bin/getfacl is missing`,
+      `stale ${error.message}`,
     ]);
   });
 
-  test("does not start a fix round when the image cannot run the checks", async () => {
-    const h = harness({
-      checksError: new CheckImageStaleError(["/usr/bin/getfacl is missing"]),
-    });
-    await run(h);
-    expect(h.fixRequests).toEqual([]);
-  });
+  test.each(ENVIRONMENT_ERRORS)(
+    "does not start a fix round on $name",
+    async ({ error }) => {
+      const h = harness({ checksError: error });
+      await run(h);
+      expect(h.fixRequests).toEqual([]);
+    },
+  );
 
-  test("does not record the round the stale image stopped, so that it is not counted as a failure", async () => {
-    const h = harness({
-      checksError: new CheckImageStaleError(["/usr/bin/getfacl is missing"]),
-    });
-    await run(h);
-    expect(h.recorded).toEqual([]);
-  });
+  test.each(ENVIRONMENT_ERRORS)(
+    "does not record the round $name stopped, so that it is not counted as a failure",
+    async ({ error }) => {
+      const h = harness({ checksError: error });
+      await run(h);
+      expect(h.recorded).toEqual([]);
+    },
+  );
 
-  test("keeps the failed rounds before the stale image", async () => {
-    const h = harness({
-      checks: [[FAIL]],
-      checksErrorFrom: {
-        at: 1,
-        error: new CheckImageStaleError(["/usr/bin/getfacl is missing"]),
-      },
-    });
-    await run(h);
-    expect(h.recorded.map((record) => record.outcome)).toEqual([
-      "check_failed",
-    ]);
-  });
+  test.each(ENVIRONMENT_ERRORS)(
+    "keeps the failed rounds before $name",
+    async ({ error }) => {
+      const h = harness({
+        checks: [[FAIL]],
+        checksErrorFrom: { at: 1, error },
+      });
+      await run(h);
+      expect(h.recorded.map((record) => record.outcome)).toEqual([
+        "check_failed",
+      ]);
+    },
+  );
 
   test("passes another error from the checks through", async () => {
     const h = harness({ checksError: new Error("disk full") });

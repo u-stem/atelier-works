@@ -1712,10 +1712,16 @@ suite("world-writable paths created while the worker runs", () => {
       "/",
     );
     created.push(slotDir);
-    const openFile = "/etc/factory-it-open";
-    writeFileSync(openFile, "");
-    chmodSync(openFile, 0o666);
-    created.push(openFile);
+    rootDir("/dev/shm/factory-it-root-open", 0o777);
+    for (const openFile of [
+      "/etc/factory-it-open",
+      "/tmp/factory-it-open-file",
+      "/tmp/.cache/factory-it-open-file",
+    ]) {
+      writeFileSync(openFile, "");
+      chmodSync(openFile, 0o666);
+      created.push(openFile);
+    }
     listed = await listWorldWritablePaths(runCommand);
   });
 
@@ -1743,9 +1749,25 @@ suite("world-writable paths created while the worker runs", () => {
     expect(listed).toContain("/etc/factory-it-open");
   });
 
+  // `/dev/shm`は別のファイルシステムなので、`/`からの`-xdev`の走査には入らず、別の起点からたどる。
+  test("a directory root left open under /dev/shm is listed", () => {
+    expect(listed).toContain("/dev/shm/factory-it-root-open");
+  });
+
+  test("a world-writable file of root under /tmp is not listed", () => {
+    expect(listed).not.toContain("/tmp/factory-it-open-file");
+  });
+
+  // `/tmp/.cache`はベースのイメージが開いている場所で、ビルドで閉じるので、共有の一時ディレクトリの緩和を当てない。
+  test("a world-writable file under /tmp/.cache is listed", () => {
+    expect(listed).toContain("/tmp/.cache/factory-it-open-file");
+  });
+
   test("the shared temporary directories themselves are not listed", () => {
     expect(
-      listed.filter((path) => path === "/tmp" || path === "/var/tmp"),
+      listed.filter((path) =>
+        ["/tmp", "/var/tmp", "/run/lock", "/dev/shm"].includes(path),
+      ),
     ).toEqual([]);
   });
 

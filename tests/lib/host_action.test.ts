@@ -698,6 +698,36 @@ describe("recordCheckEnvironmentNotice", () => {
     expect(reads).toBe(0);
   });
 
+  // イメージの通知は`mise run up`の後に自己更新が解決するが、ボリュームのマウントポイントは作り直しでは閉じない。
+  // 稼働中にできた点を別の通知に残し、人が閉じて止まった作業項目を再実行するまで残す。
+  test("adds the runtime notice too when a stale image comes with runtime problems", async () => {
+    const h = harness({});
+    await recordCheckEnvironmentNotice(
+      h.deps,
+      new CheckImageStaleError(["x"], ["/workspaces"]),
+    );
+    expect(h.notices).toEqual([
+      buildCheckImageStaleNotice(SHA_A, "x"),
+      buildCheckRuntimeUnsafeNotice("/workspaces"),
+    ]);
+  });
+
+  test("adds the runtime notice even when the image notice cannot be recorded", async () => {
+    const kinds: string[] = [];
+    const h = harness({
+      addNotice: async (record) => {
+        if (record.kind === HOST_ACTION_NOTICE_KIND) throw new Error("db down");
+        kinds.push(record.kind);
+        return 1;
+      },
+    });
+    await recordCheckEnvironmentNotice(
+      h.deps,
+      new CheckImageStaleError(["x"], ["/workspaces"]),
+    );
+    expect(kinds).toEqual([CHECK_RUNTIME_NOTICE_KIND]);
+  });
+
   test("does not throw when the runtime notice cannot be recorded", async () => {
     const h = harness({
       addNotice: async () => {
@@ -737,6 +767,12 @@ describe("buildCheckRuntimeUnsafeNotice", () => {
   test("tells the operator how to recreate the worker", () => {
     expect(buildCheckRuntimeUnsafeNotice("/tmp/open").message).toContain(
       "docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_worker",
+    );
+  });
+
+  test("tells the operator that recreating the worker does not close the volume mount points", () => {
+    expect(buildCheckRuntimeUnsafeNotice("/workspaces").message).toContain(
+      "/workspacesと/var/lib/factoryは、ボリュームのマウントポイントで、作り直しでは閉じないので、chmodで閉じる",
     );
   });
 

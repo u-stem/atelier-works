@@ -564,6 +564,9 @@ Claudeが直せる検査の失敗ではないので、Sonnetの失敗として�
 | イメージが古い | `worker image is stale: run mise run up` | `host_action_required`([運用](../operations.md#fとworkerのイメージを両方変えたとき)) |
 | 稼働中のworkerの問題 | `worker runtime is unsafe for checks:` | `check_runtime_unsafe`([運用](../operations.md#稼働中のworkerが検査の前提を満たさないとき)) |
 
+イメージが古く、稼働中のworkerの問題も一緒に見つかったときは、両方の通知を残す([Consoleのnotice](notifications.md#consoleのnotice))。
+`host_action_required`は`mise run up`の後に自動で解決されるが、ボリュームのマウントポイントは作り直しでは閉じないためである。
+
 `PATH`の値と、workerの値を使わない理由、uidの切り替えと所有権の受け渡しは、[検査コマンドはフローが実行する](../security.md#検査コマンドはフローが実行する)と[検査コマンドの権限](../security.md#検査コマンドの権限)にある。
 
 検査コマンドが指す先(対象リポジトリの`mise.toml`や`package.json`のscriptsなど)は、信頼できない内容として扱う。workerのmiseは対象リポジトリの`mise.toml`をtrustしない(`mise --yes trust`をしない)。`mise.toml`に頼るコマンドと、`MISE_TRUSTED_CONFIG_PATHS`を使わずには実行できないコマンドは、実行せずにブロックとして報告する。

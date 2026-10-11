@@ -18,6 +18,7 @@ import { constants } from "node:fs";
 import { lstat, open } from "node:fs/promises";
 import {
   type CheckEnvironmentError,
+  CheckImageStaleError,
   CheckRuntimeUnsafeError,
 } from "./check_sandbox.ts";
 import type { NotifyBestEffortResult, NotifyEvent } from "./discord.ts";
@@ -139,7 +140,7 @@ export function buildCheckImageStaleNotice(
 export const CHECK_RUNTIME_NOTICE_KIND = "check_runtime_unsafe";
 
 const RUNTIME_NEXT_ACTION =
-  "本文のパスを、ホストのcheckoutからmise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker chmod o-w <パス>で閉じるか、mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_workerでworkerを作り直す。直したら、止まった作業項目を再実行し、この通知を解決する";
+  "本文のパスを、ホストのcheckoutからmise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker chmod o-w <パス>で閉じるか、mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_workerでworkerを作り直す。/workspacesと/var/lib/factoryは、ボリュームのマウントポイントで、作り直しでは閉じないので、chmodで閉じる。直したら、止まった作業項目を再実行し、この通知を解決する";
 
 /**
  * 稼働中のworkerに誰でも書き込めるパスができたか、それを確かめられず、検査コマンドを枠のユーザーで実行できないことを知らせるnoticeを作る。
@@ -164,6 +165,9 @@ export type CheckEnvironmentNoticeDeps = {
 /**
  * 検査の前提を満たさないことをnoticeに残す。
  * イメージの問題(`CheckImageStaleError`)は`buildCheckImageStaleNotice`で残す。版が読めないか40桁でなければ、版を含めずに残す。
+ * イメージの問題と一緒に稼働中のworkerの点が見つかっていれば、その点は`buildCheckRuntimeUnsafeNotice`でも残す。
+ * イメージの通知は`mise run up`の後に自己更新が解決するが、ボリュームのマウントポイントは作り直しでは閉じず、
+ * 人が閉じて止まった作業項目を再実行するまで、通知を残すためである。
  * 稼働中のworkerの問題(`CheckRuntimeUnsafeError`)は`buildCheckRuntimeUnsafeNotice`で残す。
  * 呼び出し側は、続けて作業項目を止めるので、記録に失敗しても例外を投げず、警告ログに残す。
  */
@@ -171,11 +175,32 @@ export async function recordCheckEnvironmentNotice(
   deps: CheckEnvironmentNoticeDeps,
   error: CheckEnvironmentError,
 ): Promise<void> {
-  const detail = error.problems.join(", ");
   if (error instanceof CheckRuntimeUnsafeError) {
-    await addNoticeOrWarn(deps, buildCheckRuntimeUnsafeNotice(detail));
+    await addNoticeOrWarn(
+      deps,
+      buildCheckRuntimeUnsafeNotice(error.problems.join(", ")),
+    );
     return;
   }
+  const imageProblems =
+    error instanceof CheckImageStaleError
+      ? error.imageProblems
+      : error.problems;
+  const runtimeProblems =
+    error instanceof CheckImageStaleError ? error.runtimeProblems : [];
+  await recordStaleImageNotice(deps, imageProblems.join(", "));
+  if (runtimeProblems.length > 0) {
+    await addNoticeOrWarn(
+      deps,
+      buildCheckRuntimeUnsafeNotice(runtimeProblems.join(", ")),
+    );
+  }
+}
+
+async function recordStaleImageNotice(
+  deps: CheckEnvironmentNoticeDeps,
+  detail: string,
+): Promise<void> {
   let deployedSha: string | null = null;
   try {
     const raw = (await deps.readDeployedSha()).trim();

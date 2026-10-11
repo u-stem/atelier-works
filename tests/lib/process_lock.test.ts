@@ -15,6 +15,7 @@ import { join } from "node:path";
 import {
   CheckImageStaleError,
   CheckOwnershipRestoreError,
+  CheckRuntimeUnsafeError,
   CheckSlotInUseError,
 } from "../../f/factory/lib/check_sandbox.ts";
 import {
@@ -2050,12 +2051,27 @@ describe("restoreOwnershipStep", () => {
     await expect(step(LOCK)).rejects.toThrow("chown failed");
   });
 
-  test("passes a stale image through so that the preparation reports it as one", async () => {
-    const step = restoreOwnershipStep(async () => {
-      throw new CheckImageStaleError(["/usr/bin/getfacl is missing"]);
-    });
-    await expect(step(LOCK)).rejects.toBeInstanceOf(CheckImageStaleError);
-  });
+  // 準備のステップが、運用者の操作に合った通知を残せるよう、どちらの問題も種類を保って投げ直す。
+  test.each([
+    {
+      name: "a stale image",
+      error: new CheckImageStaleError(["/usr/bin/getfacl is missing"]),
+    },
+    {
+      name: "an unsafe running worker",
+      error: new CheckRuntimeUnsafeError([
+        "world-writable paths created at runtime: /tmp/open",
+      ]),
+    },
+  ])(
+    "passes $name through as it is so that the preparation reports it as one",
+    async ({ error }) => {
+      const step = restoreOwnershipStep(async () => {
+        throw error;
+      });
+      await expect(step(LOCK)).rejects.toBe(error);
+    },
+  );
 
   test("turns a worktree that could not be taken back into WorktreeBusyError", async () => {
     const step = restoreOwnershipStep(async () => {

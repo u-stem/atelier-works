@@ -19,7 +19,7 @@ locks:
   f/factory/lib/audit_evidence: ac1ccc03e083e673184500451f40287247023042a52e597954379c12a9e79269
   f/factory/lib/audit_support: 7e3a1a0e9b438c651812eee365575dbcba2c789388dec74458106c39b3a0d032
   f/factory/lib/check_runner: 9d132a60c76663c3eef2a8c1cfadaceaa61318a590ad435d5f7edafe94309153
-  f/factory/lib/check_sandbox: b98740e545f4a761d0818b7dfdab950046290eb459c11668319291f309b6b2aa
+  f/factory/lib/check_sandbox: 363cfaaadbb0f2f2d231a4ac2ecd0a10a3fdf568f1ebe15ed5997dcc7d13a099
   f/factory/lib/claim_support: a1a20cdbf0b277b24529f736e86cf4d439ba0c93030c74a4d211feb439ff583a
   f/factory/lib/claude: 37bd94b7315969113b4900f1ad8e82d5b75bcb8619d6ef6722cf610bc378d400
   f/factory/lib/cleanup_db_support: d9ef6bb600246990c3b2c4d3d22419356217fed835fe22499834491ed951138f
@@ -35,7 +35,7 @@ locks:
   f/factory/lib/drawio_viewer_bump_github: 15b3ba986a6ece3a53dda277ec91680765319fce1137707e5c65e32ba6b8c124
   f/factory/lib/drawio_viewer_observations: 33e09dc40e72b47e2be3da91c06b88429b73e9f6d89e3291947aaaca23841886
   f/factory/lib/github: e343bd8515e62bbc56f05ffab8c9fa417702d9e195b3a329a5400772c58d6818
-  f/factory/lib/host_action: 581a2b32e77ffa123473cfd44fe27abee7a7fb351f2a06847de2968a1ba9da8b
+  f/factory/lib/host_action: d7eed905036f76ace8a75a9d8e2dac4ba01b01a8221bb59eff318ef1916783fc
   f/factory/lib/implement_finish_support: 650e75bc3c8f4568472a5d94a06d86aac9ec5ec2151a1b4b8679956ab544d4c5
   f/factory/lib/implement_launch_support: ba2f3db0e4dcd3635bded5d79cabbce1b108b5fcb274ec853b8a24dcd0038c77
   f/factory/lib/implement_loop: 9bfef0f4127c99575febe30587a91355ac5d7cb8666d9a182a1e97b1e478f98e
@@ -92,5 +92,5 @@ locks:
   f/factory/steps/pr_review_generate: 6473d4f400325943043b2404ab4296a913f60db9f4d24b25605abb0adf4df5e3
   f/factory/steps/pr_review_post: eed26e78c65d0f339b99530491dffb0b3044bd16324f07ff97c5ef9035c2b314
   f/factory/steps/pr_review_prepare: 4f258ff787df1ea0659550eec7e3923bc8db578698beb2b72781bc2f7050001b
-  f/factory/steps/pr_workflow_support: 60bdb7007da78754f7d84ac6c0b0a5b82a29fd1aaa651e067d921254360d4928
+  f/factory/steps/pr_workflow_support: e357e0924f15c6b81aaf761986776a1e469c063ea387643f24dab058ca1d4ee2
   f/factory/steps/requirements_apply: 569df961344fe6defbfb4f822f4a092c9003a7ed5837e16bc1f8173518c61d1b
