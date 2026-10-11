@@ -2,6 +2,10 @@
 
 import { type UseQueryResult, useQuery } from "@tanstack/react-query";
 import { ApiFailure } from "./errors.ts";
+import {
+  type IntakeSnapshot,
+  isIntakeSnapshotRows,
+} from "./guards/intakeSnapshot.ts";
 import { type ConsoleSummary, isConsoleSummary } from "./guards/summary.ts";
 import { type RunScriptOptions, runScript } from "./windmill.ts";
 
@@ -25,6 +29,42 @@ export async function fetchSummary(
     throw new ApiFailure({ kind: "invalid_response" });
   }
   return result.value;
+}
+
+/**
+ * 作業項目に取り込んだ時点のIssueの題名と本文を取り、型ガードを通してから返す。
+ * 作業項目が無いか、Issueの作業項目でないときは`null`を返す。失敗は`ApiFailure`で投げる。
+ */
+export async function fetchIntakeSnapshot(
+  workItemId: number,
+  options: RunScriptOptions = {},
+): Promise<IntakeSnapshot | null> {
+  const result = await runScript(
+    "console_query",
+    { view: "intake_snapshot", work_item_id: workItemId },
+    options,
+  );
+  if (!result.ok) {
+    throw new ApiFailure(result.error);
+  }
+  if (!isIntakeSnapshotRows(result.value)) {
+    throw new ApiFailure({ kind: "invalid_response" });
+  }
+  return result.value[0] ?? null;
+}
+
+/**
+ * 取り込み時点のIssueを取る。取り込み時点の内容は変わらないので、自動では取り直さない。
+ * `workItemId`が違えば、別のキャッシュとして取り直す。
+ */
+export function useIntakeSnapshot(
+  workItemId: number,
+): UseQueryResult<IntakeSnapshot | null, Error> {
+  return useQuery({
+    queryKey: ["console", "intake_snapshot", workItemId],
+    queryFn: ({ signal }) => fetchIntakeSnapshot(workItemId, { signal }),
+    staleTime: Number.POSITIVE_INFINITY,
+  });
 }
 
 /**

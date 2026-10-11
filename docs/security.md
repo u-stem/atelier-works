@@ -978,7 +978,7 @@ Claudeに渡すツールは`Read`、`Glob`、`Grep`、`Edit`、`Write`だけで�
 
 Claudeに渡すIssueの題名と本文は、取り込んだ時点のものである。承認の後にIssueを書き換えて指示を差し込むことはできない。現在のIssueは、openかどうかの確認と、PR本文の注記にだけ使う。
 
-承認者が見ていない内容が渡らないよう、要件定義の承認では、決定を記録する前に現在のIssueを取り込み時点と比べる。違うときと、比べられなかったときは、承認を断る。比べるscriptはGitHubを呼ぶので、`github_token`を読めるdefaultのworkerで動かす。Console用のworkerには`github_token`を読ませない。確認から記録までの間の書き換えは防げない。
+承認者が見ていない内容が渡らないよう、Consoleの要件定義の承認画面に取り込み時点の題名と本文を出す。さらに、要件定義の承認では、決定を記録する前に現在のIssueを取り込み時点と比べる。違うときと、比べられなかったときは、承認を断る。比べるscriptはGitHubを呼ぶので、`github_token`を読めるdefaultのworkerで動かす。Console用のworkerには`github_token`を読ませない。確認から記録までの間の書き換えは防げない。
 
 ### 同じ作業項目を同時に実装しない
 

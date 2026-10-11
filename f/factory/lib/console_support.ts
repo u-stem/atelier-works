@@ -90,3 +90,26 @@ export function noticeSeverity(kind: string): NoticeSeverity {
 export function isNoticeResolvable(kind: string): boolean {
   return !UNRESOLVABLE_NOTICE_KINDS.includes(kind);
 }
+
+/** Consoleに返す、取り込み時点のIssueの題名の最大の文字数。GitHubの題名の上限は256文字だが、DBの値を信用せずに切る。 */
+export const INTAKE_TITLE_MAX_CHARS = 300;
+
+/**
+ * Consoleに返す、取り込み時点のIssueの本文の最大の文字数。
+ * GitHubの本文の上限(65,536文字)より小さくして、承認画面の応答を肥大させない。
+ * 超えた分は返さないので、Consoleは切った旨を承認者に示す。
+ */
+export const INTAKE_BODY_MAX_CHARS = 20_000;
+
+/**
+ * `text`を最大`max`文字(サロゲートペアは1文字)に切る。
+ * 切ったかどうかを`truncated`で返す。副作用は無い。
+ */
+export function truncateChars(
+  text: string,
+  max: number,
+): { readonly text: string; readonly truncated: boolean } {
+  const chars = Array.from(text);
+  if (chars.length <= max) return { text, truncated: false };
+  return { text: chars.slice(0, max).join(""), truncated: true };
+}

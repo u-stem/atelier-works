@@ -15,9 +15,12 @@ import {
   ACTIONABLE_WORK_ITEM_STATUSES,
   INFO_NOTICE_KINDS,
   INFO_NOTICE_WINDOW_DAYS,
+  INTAKE_BODY_MAX_CHARS,
+  INTAKE_TITLE_MAX_CHARS,
   isNoticeResolvable,
   type NoticeSeverity,
   noticeSeverity,
+  truncateChars,
 } from "../lib/console_support.ts";
 import {
   CLEANUP_RESOLVER,
@@ -66,6 +69,7 @@ const CONSOLE_ROW_VIEWS = [
   "fix_rounds",
   "requirements_index",
   "requirements_doc",
+  "intake_snapshot",
   "audit_index",
   "audit_doc",
 ] as const;
@@ -908,6 +912,41 @@ async function toRequirementsDocRow(
     rejected_diagrams: fromDisk?.rejected_diagrams ?? [],
     open_questions: parseStringArray(row.open_questions, "open_questions"),
     doc_dir_source: fromDisk === null ? "db_fallback" : "file",
+  };
+}
+
+/**
+ * "intake_snapshot"ビューの1行。作業項目に取り込んだ時点のIssueの題名と本文。
+ * 実装のClaudeに渡る内容で、承認者がGitHub上の現在のIssueと別に確かめるために返す。
+ * Issueの起票者が書いた信頼できない入力なので、Consoleは文字列として描き、解釈しない。
+ * 本文は`INTAKE_BODY_MAX_CHARS`で切り、切ったときは`body_truncated`が真になる。
+ */
+export type IntakeSnapshotRow = {
+  readonly work_item_id: number;
+  readonly owner: string;
+  readonly repo: string;
+  readonly issue_number: number;
+  readonly issue_url: string;
+  readonly title: string;
+  readonly body: string;
+  readonly body_truncated: boolean;
+};
+
+function toIntakeSnapshotRow(row: SqlRow): IntakeSnapshotRow {
+  const title = truncateChars(
+    asStr(row.title, "title"),
+    INTAKE_TITLE_MAX_CHARS,
+  );
+  const body = truncateChars(asStr(row.body, "body"), INTAKE_BODY_MAX_CHARS);
+  return {
+    work_item_id: asId(row.work_item_id, "work_item_id"),
+    owner: asStr(row.owner, "owner"),
+    repo: asStr(row.repo, "repo"),
+    issue_number: asNumeric(row.issue_number, "issue_number"),
+    issue_url: asStr(row.issue_url, "issue_url"),
+    title: title.text,
+    body: body.text,
+    body_truncated: body.truncated,
   };
 }
 
@@ -1812,6 +1851,7 @@ export type ConsoleQueryRow =
   | FixRoundRow
   | RequirementsIndexRow
   | RequirementsDocRow
+  | IntakeSnapshotRow
   | AuditIndexRow
   | AuditDocRow;
 
@@ -1826,7 +1866,7 @@ export type ConsoleQueryRow =
  * inbox(未決の承認依頼に絞り済み)とnotices(未解決に絞り済み)は期間で絞らない。
  * 古い未決の承認依頼や未解決のnoticeが、それを見せるためのタブから黙って消えてはならないため。
  *
- * "requirements_doc"と"audit_doc"で`workItemId`が無ければ例外を投げる。
+ * "requirements_doc"と"intake_snapshot"と"audit_doc"で`workItemId`が無ければ例外を投げる。
  * テストで偽の`SqlClient`を渡し、実際のDBなしでクエリ文と行の解析を確かめられるよう、
  * `main`に畳み込まずにexportしている。
  */
@@ -1999,6 +2039,22 @@ export async function runConsoleQuery(
         return [];
       }
       return [await toRequirementsDocRow(rows[0], readFile)];
+    }
+    case "intake_snapshot": {
+      if (workItemId === null) {
+        throw new Error(
+          'console_query: "work_item_id" is required for view "intake_snapshot"',
+        );
+      }
+      const rows = await sql`
+        SELECT
+          id AS work_item_id, owner, repo, issue_number, issue_url, title, body
+        FROM factory.work_items
+        WHERE id = ${workItemId}::bigint
+          AND kind = 'issue'
+        LIMIT 1
+      `.fetch();
+      return rows.map(toIntakeSnapshotRow);
     }
     case "audit_index": {
       const rows = await sql`

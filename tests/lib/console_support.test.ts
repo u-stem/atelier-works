@@ -6,6 +6,7 @@ import {
   isNoticeResolvable,
   NOTICE_SEVERITY,
   noticeSeverity,
+  truncateChars,
   UNRESOLVABLE_NOTICE_KINDS,
 } from "../../f/factory/lib/console_support.ts";
 
@@ -139,5 +140,29 @@ describe("operations.md notice table", () => {
   test("documents no kind that NOTICE_SEVERITY lacks", async () => {
     const documented = await documentedNoticeKinds();
     expect(documented.filter((kind) => !(kind in NOTICE_SEVERITY))).toEqual([]);
+  });
+});
+
+describe("truncateChars", () => {
+  test("returns a short text unchanged", () => {
+    expect(truncateChars("abc", 5)).toEqual({ text: "abc", truncated: false });
+  });
+
+  test("returns a text of exactly the limit unchanged", () => {
+    expect(truncateChars("abcde", 5)).toEqual({
+      text: "abcde",
+      truncated: false,
+    });
+  });
+
+  test("cuts a longer text to the limit", () => {
+    expect(truncateChars("abcdef", 5)).toEqual({
+      text: "abcde",
+      truncated: true,
+    });
+  });
+
+  test("counts a surrogate pair as one character", () => {
+    expect(truncateChars("a😀b", 2)).toEqual({ text: "a😀", truncated: true });
   });
 });
