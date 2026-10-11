@@ -29,6 +29,7 @@ import {
   type DrawioValidationResult,
   validateDrawioXml,
 } from "../lib/drawio.ts";
+import { parseJobId } from "../lib/job_ids.ts";
 import { logger } from "../lib/log.ts";
 import {
   DIAGRAM_NAME_PATTERN,
@@ -1383,6 +1384,8 @@ export type WorkItemFailureRow = {
   readonly job_failure_id: number;
   readonly flow_path: string;
   readonly job_id: string;
+  /** 失敗を記録したジョブのルートジョブID。UUIDの形のものだけで、記録が無いか形が違えば`null`。 */
+  readonly root_job_id: string | null;
   readonly step: string | null;
   readonly error: string;
   readonly occurred_at: string;
@@ -1393,9 +1396,46 @@ function toWorkItemFailureRow(row: SqlRow): WorkItemFailureRow {
     job_failure_id: asId(row.job_failure_id, "job_failure_id"),
     flow_path: asStr(row.flow_path, "flow_path"),
     job_id: asStr(row.job_id, "job_id"),
+    root_job_id: asNullableJobId(row.root_job_id),
     step: asNullableStr(row.step, "step"),
     error: asStr(row.error, "error"),
     occurred_at: asIsoDate(row.occurred_at, "occurred_at"),
+  };
+}
+
+/**
+ * 状態の遷移1回分。遷移を起こしたジョブのIDを持つ。
+ * Consoleはこれらのジョブの画面へのリンクを作る。ジョブの無い遷移(移行や、フローの外の操作)では両方`null`。
+ */
+export type WorkItemTransitionRow = {
+  readonly event_id: number;
+  readonly from_status: string | null;
+  readonly to_status: string;
+  readonly note: string | null;
+  readonly occurred_at: string;
+  /** 遷移を起こしたステップ(またはscript)のジョブID。UUIDの形のものだけで、無いか形が違えば`null`。 */
+  readonly job_id: string | null;
+  /** そのステップを含むフローのルートジョブID。UUIDの形のものだけで、無いか形が違えば`null`。 */
+  readonly root_job_id: string | null;
+};
+
+/**
+ * DBから読んだジョブIDを、UUIDの形のものだけ通す。
+ * Consoleがリンクの一部に使うので、形の違う値は返さず`null`にする。
+ */
+function asNullableJobId(value: unknown): string | null {
+  return isString(value) ? parseJobId(value) : null;
+}
+
+function toWorkItemTransitionRow(row: SqlRow): WorkItemTransitionRow {
+  return {
+    event_id: asId(row.event_id, "event_id"),
+    from_status: asNullableStr(row.from_status, "from_status"),
+    to_status: asStr(row.to_status, "to_status"),
+    note: asNullableStr(row.note, "note"),
+    occurred_at: asIsoDate(row.occurred_at, "occurred_at"),
+    job_id: asNullableJobId(row.job_id),
+    root_job_id: asNullableJobId(row.root_job_id),
   };
 }
 
@@ -1457,6 +1497,8 @@ const DETAIL_FAILURE_LIMIT = 20;
 /** 詳細に載せるPRのレビューと修正の件数の上限(それぞれ新しい順)。 */
 const DETAIL_LIST_LIMIT = 50;
 const DETAIL_ERROR_LIMIT = 4000;
+/** 詳細に載せる状態の遷移の件数の上限(新しい順)。 */
+const DETAIL_TRANSITION_LIMIT = 100;
 
 /** "work_item_detail"ビューの結果。作業項目1件の概要と、その履歴。 */
 export type WorkItemDetail = {
@@ -1465,6 +1507,11 @@ export type WorkItemDetail = {
   readonly approvals: WorkItemApprovalRow[];
   readonly implement_rounds: WorkItemRoundRow[];
   readonly failures: WorkItemFailureRow[];
+  /**
+   * 状態の遷移と、それを起こしたジョブ。新しい順。
+   * 試行やラウンドの境は、遷移の時刻と各試行・ラウンドの`created_at`で対応づける。
+   */
+  readonly transitions: WorkItemTransitionRow[];
   /** PRの作業項目のレビュー。Issueの作業項目では空。 */
   readonly reviews: WorkItemReviewRow[];
   /** PRの作業項目の修正。Issueの作業項目では空。 */
@@ -1473,7 +1520,7 @@ export type WorkItemDetail = {
 
 /**
  * 作業項目`workItemId`の概要、要件定義の試行、承認の履歴、実装のラウンド、失敗、
- * PRのレビューと修正の一覧(件数だけ)を返す。
+ * 状態の遷移とそのジョブID、PRのレビューと修正の一覧(件数だけ)を返す。
  * 作業項目が無ければ例外を投げる。実装のラウンドに`check_output`は含めない。
  */
 export async function runWorkItemDetail(
@@ -1546,7 +1593,7 @@ export async function runWorkItemDetail(
 
   const failureRows = await sql`
     SELECT
-      id AS job_failure_id, flow_path, job_id, step,
+      id AS job_failure_id, flow_path, job_id, root_job_id, step,
       left(error, ${DETAIL_ERROR_LIMIT}::integer) AS error, occurred_at
     FROM factory.job_failures
     WHERE work_item_id = ${workItemId}::bigint
@@ -1578,12 +1625,24 @@ export async function runWorkItemDetail(
     LIMIT ${DETAIL_LIST_LIMIT}::integer
   `.fetch();
 
+  const transitionRows = await sql`
+    SELECT
+      e.id AS event_id, e.from_status, e.to_status,
+      left(e.note, ${SUMMARY_TEXT_LIMIT}::integer) AS note, e.occurred_at,
+      e.job_id, e.root_job_id
+    FROM factory.work_item_events e
+    WHERE e.work_item_id = ${workItemId}::bigint
+    ORDER BY e.occurred_at DESC, e.id DESC
+    LIMIT ${DETAIL_TRANSITION_LIMIT}::integer
+  `.fetch();
+
   return {
     work_item: toWorkItemOverview(overview),
     attempts: attemptRows.map(toWorkItemAttemptRow),
     approvals: approvalRows.map(toWorkItemApprovalRow),
     implement_rounds: roundRows.map(toWorkItemRoundRow),
     failures: failureRows.map(toWorkItemFailureRow),
+    transitions: transitionRows.map(toWorkItemTransitionRow),
     reviews: reviewRows.map(toWorkItemReviewRow),
     fix_rounds: fixRoundRows.map(toWorkItemFixRoundRow),
   };

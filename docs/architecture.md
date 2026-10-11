@@ -168,12 +168,12 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加だけにし、
 | テーブル | 役割 |
 | --- | --- |
 | `work_items` | 作業項目1件の状態。`(owner, repo, issue_number, cycle)`で一意 |
-| `work_item_events` | 状態遷移の履歴 |
+| `work_item_events` | 状態遷移の履歴。遷移を起こしたステップのジョブIDと、そのフローのルートジョブIDを持つ |
 | `requirement_drafts` | 要件定義ドラフト。attemptごとに本文、図の参照、未確定事項、ファイルの置き場所(`doc_dir`)を持つ |
 | `approval_requests` | 承認依頼。要件定義の承認とIssue化の提案の承認の両方を持つ |
 | `approvals` | 承認と却下の古い履歴。今は書き込まない |
 | `agent_runs` | Claudeの実行1回ごとのモデル、トークン数、費用、所要時間、終了コード |
-| `job_failures` | フローの失敗の記録。トークンはマスクしてから書く |
+| `job_failures` | フローの失敗の記録。失敗を記録したジョブのルートジョブIDも持つ。トークンはマスクしてから書く |
 | `deployments` | 自己更新によるデプロイの結果 |
 | `notices` | 人が対応すべき事項。PATの失効やSHAの不一致など。解決した人と時刻(`resolved_by`、`resolved_at`)も持ち、DBの掃除が解決した行の`resolved_by`は`cleanup_db`になる |
 | `reviews` | pr_reviewの実行1回ごとの判定、総評、指摘、投稿したレビューのID |
@@ -230,7 +230,7 @@ Consoleの一覧と集計は次のviewを読む。
 | view | 内容 |
 | --- | --- |
 | `summary` | サイドバーの件数と、要対応の一覧。承認待ち、作業項目の失敗、要対応の通知を返す |
-| `work_item_detail` | 作業項目1件の概要、要件定義の試行、承認の履歴、実装のラウンド、失敗。PRの作業項目では、レビューと修正の一覧(件数だけ)も返す。検査コマンドの出力は返さない |
+| `work_item_detail` | 作業項目1件の概要、要件定義の試行、承認の履歴、実装のラウンド、失敗、状態の遷移とそのジョブID。PRの作業項目では、レビューと修正の一覧(件数だけ)も返す。検査コマンドの出力は返さない |
 | `system_status` | 反映の状態、Consoleの取り込みの状態、作業項目の無い失敗、情報の通知、解決済みの通知 |
 
 次の6つのscriptは、tag `console`を付け、Console用のworkerで動かす。
@@ -330,6 +330,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/claude` | script | [LIB] headless Claude実行 |
 | `f/factory/lib/claim_support` | script | [LIB] Issue取得の後処理 |
 | `f/factory/steps/pr_workflow_support` | script | [LIB] PRワークフロー共通処理 |
+| `f/factory/lib/job_ids` | script | [LIB] WindmillのジョブIDの検査 |
 | `f/factory/lib/process_lock` | script | [LIB] worktree単位のプロセス排他 |
 | `f/factory/lib/prompts` | script | [LIB] プロンプト定義 |
 | `f/factory/lib/log` | script | [LIB] ログとマスク |

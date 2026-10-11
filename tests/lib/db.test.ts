@@ -216,7 +216,15 @@ describe("insertIssueWorkItemUnlessActive", () => {
   test("passes the issue, the new cycle and the new id to the sweep", async () => {
     const { sql, calls } = createFakeSqlClient([WON, []]);
     await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql);
-    expect(calls[1]?.values).toEqual(["octo-owner", "atelier-works", 42, 1, 7]);
+    expect(calls[1]?.values).toEqual([
+      "octo-owner",
+      "atelier-works",
+      42,
+      1,
+      7,
+      null,
+      null,
+    ]);
   });
 
   test("records an event for each cancelled work item", async () => {
@@ -747,6 +755,8 @@ describe("updateStatusIfLeaseHolderClearingFlowJobId", () => {
       "pr_open",
       "requirements_generating",
       "note",
+      null,
+      null,
     ]);
   });
 

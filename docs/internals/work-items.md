@@ -133,6 +133,31 @@ Issueの新しいサイクルの作業項目を挿入すると、同じIssueの�
 
 終端の状態を増やすときは、migrationで`v_lead_time`を`CREATE OR REPLACE`し、同じPRで`TERMINAL_WORK_ITEM_STATUSES`を更新する。`poll_issues`のreconcileは終端の作業項目を照合の対象から外す(`listActive`)。片方だけを更新すると、完了した作業項目が孤児と判定されて失敗にされる。
 
+## ジョブの記録
+
+状態の遷移と失敗は、動いたWindmillのジョブに結び付ける。
+Consoleは、このIDからジョブの画面(`/run/<job_id>`)へのリンクを作る。
+
+| 記録先 | 列 | 値 |
+| --- | --- | --- |
+| `work_item_events` | `job_id` | 遷移を起こしたステップ(またはscript)のジョブID。環境変数`WM_JOB_ID` |
+| `work_item_events` | `root_job_id` | そのステップを含むフローのルートジョブID。環境変数`WM_ROOT_FLOW_JOB_ID` |
+| `job_failures` | `root_job_id` | 失敗を記録したジョブのルートジョブID。`job_id`は呼び出し側が渡す、失敗したジョブのID |
+
+遷移を記録する`lib/db.ts`の関数が、入口で環境変数から読んで同じ文に書く。
+呼び出し側は何も渡さない。
+対象は、`updateStatus`と、`updateStatusIf`で始まる4つの比較交換と、新しいサイクルによる取り消し(`supersedeApprovedIssueWorkItems`)である。
+失敗の記録(`recordFailure`)も同じ仕組みでルートジョブIDを書く。
+
+読んだ値がUUIDの形でなければ、記録せずNULLにする。
+フローの外で動いた処理と、migrationが書く行は、NULLになる。
+`console_query`の`work_item_detail`も、DBから読んだ値がUUIDの形でなければNULLにして返す。
+値がリンクの一部になるため、書くときと読むときの両方で形を確かめる。
+
+`work_item_detail`は、遷移を`transitions`に新しい順で最大100件返す。
+要件定義の試行や実装のラウンドの行は、ジョブIDを持たない。
+試行やラウンドの境は、遷移の時刻と、各行の`created_at`を突き合わせて読む。
+
 ## リース
 
 作業項目の`flow_job_id`は、その作業項目を書き換えてよいフローの実行を表すリースである。値はフローのルートジョブID(`WM_ROOT_FLOW_JOB_ID`)で、起動側が記録する`runFlowAsync`の戻り値と一致する。リースは要件定義のフロー(pipeline)と実装フローが使う。

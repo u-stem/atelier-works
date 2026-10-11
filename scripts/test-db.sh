@@ -146,6 +146,11 @@ verify_active_issue_index() {
     *work_items_active_issue_key*) ;;
     *) die "moving the approved work item was rejected, but not by work_items_active_issue_key: ${reverted}" ;;
   esac
+}
+
+# `insertIssueWorkItemUnlessActive`の2つの文を、全migrationの適用後に確かめる。
+# 取り消しの文は、後のmigrationが足す列(work_item_eventsのジョブID)にも書くため。
+verify_issue_intake() {
   # `insertIssueWorkItemUnlessActive`の2つの文を、本物のPostgreSQLで確かめる。
   # 1つ目は挿入、2つ目は古いサイクルの承認済みの項目の取り消しである。
   # Issue(6): cycle 1がapproved、cycle 2がfailed。cycle 3の挿入が通り、cycle 1だけが取り消され、イベントが残る。
@@ -166,7 +171,8 @@ SQL
       || die "the intake insert failed for issue ${issue}"
     new_id="$(printf '%s' "${new_id}" | tr -d '[:space:]')"
     [ -n "${new_id}" ] || return 0
-    psql_exec "${SCRATCH_DB}" -q -t -A -v owner=o -v repo=r -v issue="${issue}" -v cycle=3 -v new_id="${new_id}" >/dev/null <<'SQL' \
+    psql_exec "${SCRATCH_DB}" -q -t -A -v owner=o -v repo=r -v issue="${issue}" -v cycle=3 -v new_id="${new_id}" \
+      -v job_id=0198a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b -v root_job_id=0198a1b2-0000-7000-8000-000000000001 >/dev/null <<'SQL' \
       || die "the sweep statement failed for issue ${issue}"
 WITH cancelled AS (
       UPDATE factory.work_items AS wi
@@ -178,8 +184,9 @@ WITH cancelled AS (
       RETURNING wi.id, wi.attempt
     ),
     recorded AS (
-      INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note)
-      SELECT id, 'approved', 'cancelled', 'superseded by a newer cycle (work item ' || :'new_id'::bigint || ')'
+      INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note, job_id, root_job_id)
+      SELECT id, 'approved', 'cancelled', 'superseded by a newer cycle (work item ' || :'new_id'::bigint || ')',
+        :'job_id'::text, :'root_job_id'::text
       FROM cancelled
       RETURNING work_item_id
     )
@@ -223,6 +230,12 @@ SQL
     || die "could not read the superseded events"
   [ "$(printf '%s' "${superseded_events}" | tr -d '[:space:]')" = "1" ] \
     || die "expected exactly one superseded event, got '${superseded_events}'"
+  local superseded_root
+  superseded_root="$(printf "SELECT root_job_id FROM factory.work_item_events WHERE note LIKE 'superseded by a newer cycle%%';\n" \
+    | psql_exec "${SCRATCH_DB}" -q -t -A)" \
+    || die "could not read the root job id of the superseded event"
+  [ "$(printf '%s' "${superseded_root}" | tr -d '[:space:]')" = "0198a1b2-0000-7000-8000-000000000001" ] \
+    || die "expected the superseded event to record the root job id, got '${superseded_root}'"
   log "active issue index rejects a second active work item"
 }
 
@@ -237,6 +250,8 @@ for up_file in "${up_files[@]}"; do
     verify_active_issue_index
   fi
 done
+
+verify_issue_intake
 
 views=(v_inbox v_pipeline v_agent_cost_daily v_approval_stats v_lead_time v_failures v_notices v_reviews v_fix_rounds v_issue_proposals v_approval_requests)
 for view in "${views[@]}"; do
