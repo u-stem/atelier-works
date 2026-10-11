@@ -248,3 +248,181 @@ describe("the console fallback", () => {
     expect(fallbackBlock).toContain("import console_headers");
   });
 });
+
+// /api/*で、他のサイトからの要求を止める規則を静的に確かめる。
+// Sec-Fetch-Siteを送らない古いブラウザでも、Originの不一致で止める。
+const crossSiteMatcher = braceBlock("@cross_site_api {");
+const crossSiteHandler = braceBlock("handle @cross_site_api {");
+const crossOriginMatcher = braceBlock("@cross_origin_api {");
+const crossOriginHandler = braceBlock("handle @cross_origin_api {");
+
+describe("the Sec-Fetch-Site rule on /api/*", () => {
+  test("matches cross-site requests", () => {
+    expect(crossSiteMatcher).toContain("header Sec-Fetch-Site cross-site");
+  });
+
+  test("matches same-site requests", () => {
+    expect(crossSiteMatcher).toContain("header Sec-Fetch-Site same-site");
+  });
+
+  test("responds 403", () => {
+    expect(crossSiteHandler).toContain("respond 403");
+  });
+});
+
+describe("the Origin rule on /api/*", () => {
+  test("the matcher exists", () => {
+    expect(crossOriginMatcher).not.toBe("");
+  });
+
+  test("the matcher is limited to /api/*", () => {
+    expect(crossOriginMatcher).toContain("path /api/*");
+  });
+
+  test("the matcher ignores requests without an Origin header", () => {
+    expect(crossOriginMatcher).toContain('{http.request.header.Origin} != ""');
+  });
+
+  test("the matcher allows the http origin of the host the browser used", () => {
+    expect(crossOriginMatcher).toContain(
+      '{http.request.header.Origin} != "http://" + {http.request.hostport}',
+    );
+  });
+
+  test("the matcher allows the https origin of the host the browser used", () => {
+    expect(crossOriginMatcher).toContain(
+      '{http.request.header.Origin} != "https://" + {http.request.hostport}',
+    );
+  });
+
+  test("the handler responds 403", () => {
+    expect(crossOriginHandler).toContain("respond 403");
+  });
+
+  test("the handler comes before the default reverse proxy", () => {
+    expect(CADDYFILE.indexOf("handle @cross_origin_api")).toBeLessThan(
+      CADDYFILE.indexOf("reverse_proxy http://windmill_server:8000"),
+    );
+  });
+
+  test("the handler comes after the console routes", () => {
+    expect(CADDYFILE.indexOf("handle @cross_origin_api")).toBeGreaterThan(
+      CADDYFILE.indexOf("handle @console_raw"),
+    );
+  });
+});
+
+// GETなのに副作用を起こすAPIを、fetch以外の読み込み(img、document、iframeなど)から呼ばせない規則を静的に確かめる。
+// 同じオリジンの<img>はSec-Fetch-Site: same-originでOriginも付かないので、上の2規則では止まらない。
+const sideEffectMatcher = braceBlock("@side_effect_get_api {");
+const sideEffectHandler = braceBlock("handle @side_effect_get_api {");
+
+describe("the rule for GET requests with side effects", () => {
+  test("the matcher exists", () => {
+    expect(sideEffectMatcher).not.toBe("");
+  });
+
+  test("the matcher is limited to GET and HEAD", () => {
+    expect(sideEffectMatcher).toContain("method GET HEAD");
+  });
+
+  test.each([
+    "run_wait_result",
+    "run_and_stream",
+    "slack_approval",
+    "teams_approval",
+  ])("the matcher covers jobs/%s", (name) => {
+    expect(sideEffectMatcher).toMatch(
+      new RegExp(`path_regexp [^\\n]*jobs/\\+\\([^)]*\\b${name}\\b`),
+    );
+  });
+
+  test("the matcher covers job_helpers/move_s3_file with its end anchored like the others", () => {
+    expect(sideEffectMatcher).toContain("move_s3_file)(/|$)");
+  });
+
+  test("the matcher lets the workspace part cross a slash", () => {
+    expect(sideEffectMatcher).toContain("^/+api/+w/.+/");
+  });
+
+  test("the matcher ignores case", () => {
+    expect(sideEffectMatcher).toContain("(?i)");
+  });
+
+  test("the matcher lets fetch through", () => {
+    expect(sideEffectMatcher).toContain(
+      '{http.request.header.Sec-Fetch-Dest} != "empty"',
+    );
+  });
+
+  test("the matcher also stops a cookie request without Sec-Fetch-Dest", () => {
+    expect(sideEffectMatcher).toContain(
+      '{http.request.header.Sec-Fetch-Dest} != "" || {http.request.header.Cookie} != ""',
+    );
+  });
+
+  test("the matcher stops navigation even when Sec-Fetch-Dest is empty", () => {
+    expect(sideEffectMatcher).toContain(
+      '|| {http.request.header.Sec-Fetch-Mode} == "navigate"',
+    );
+  });
+
+  test("the handler responds 403", () => {
+    expect(sideEffectHandler).toContain("respond 403");
+  });
+
+  test("the handler comes before the default reverse proxy", () => {
+    expect(CADDYFILE.indexOf("handle @side_effect_get_api")).toBeLessThan(
+      CADDYFILE.indexOf("reverse_proxy http://windmill_server:8000"),
+    );
+  });
+
+  test("the handler comes after the console routes", () => {
+    expect(CADDYFILE.indexOf("handle @side_effect_get_api")).toBeGreaterThan(
+      CADDYFILE.indexOf("handle @console_raw"),
+    );
+  });
+});
+
+// フォームのPOSTのように、ページの移動(navigate)で送られる書き込みを止める規則を静的に確かめる。
+// ConsoleとWindmillのUIのAPI呼び出しはfetchなので、Sec-Fetch-Modeはcorsかsame-originになる。
+const navigateMatcher = braceBlock("@navigate_write_api {");
+const navigateHandler = braceBlock("handle @navigate_write_api {");
+
+describe("the rule for writes sent by navigation", () => {
+  test("the matcher exists", () => {
+    expect(navigateMatcher).not.toBe("");
+  });
+
+  test("the matcher is limited to /api/*", () => {
+    expect(navigateMatcher).toContain("path /api/*");
+  });
+
+  test("the matcher leaves GET and HEAD to the other rules", () => {
+    expect(navigateMatcher).toMatch(/not \{[^}]*method GET HEAD/);
+  });
+
+  test("the matcher matches Sec-Fetch-Mode navigate", () => {
+    expect(navigateMatcher).toContain("header Sec-Fetch-Mode navigate\n");
+  });
+
+  test("the matcher matches Sec-Fetch-Mode nested-navigate", () => {
+    expect(navigateMatcher).toContain("header Sec-Fetch-Mode nested-navigate");
+  });
+
+  test("the handler responds 403", () => {
+    expect(navigateHandler).toContain("respond 403");
+  });
+
+  test("the handler comes before the default reverse proxy", () => {
+    expect(CADDYFILE.indexOf("handle @navigate_write_api")).toBeLessThan(
+      CADDYFILE.indexOf("reverse_proxy http://windmill_server:8000"),
+    );
+  });
+
+  test("the handler comes after the console routes", () => {
+    expect(CADDYFILE.indexOf("handle @navigate_write_api")).toBeGreaterThan(
+      CADDYFILE.indexOf("handle @console_raw"),
+    );
+  });
+});

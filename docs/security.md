@@ -292,7 +292,7 @@ ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者�
 | `console_fetcher`を閉じ込める | rootでないuid、読み取り専用のファイルシステム、ケーパビリティなし、DBにもWindmillにも届かない専用のnetworkで動かす |
 | ブラウザ側で制限する | `/console/*`の応答だけに、scriptの読み込み先を`/console/assets/`に絞ったCSPと、埋め込みを禁じるヘッダーを付ける |
 | CSPとCaddyのパスの解釈の違いを塞ぐ | パーセント符号を戻した元のパスが`/console/`で始まる要求は、Windmillへ転送しない。Consoleの経路では、生のパスに`%2f`か`%5c`があれば400にする |
-| 他のサイトからAPIを呼ばせない | `/api/*`への要求で`Sec-Fetch-Site`が`cross-site`か`same-site`のものは、Caddyが403にする |
+| 他のサイトからAPIを呼ばせない | `/api/*`への要求は、次の4つをCaddyが403にする。`Sec-Fetch-Site`が`cross-site`か`same-site`のもの。`Origin`がブラウザの開いたオリジンと一致しないもの。ジョブを起動するGET(`run_wait_result`、`run_and_stream`、`slack_approval`、`teams_approval`、`move_s3_file`)を、fetchとXHR以外(`Sec-Fetch-Dest`が`empty`でないもの)で呼んだもの。GETとHEAD以外の要求を、ページの移動(`Sec-Fetch-Mode`が`navigate`か`nested-navigate`)で送ったもの。副作用のあるGETも、`Sec-Fetch-Mode`が`navigate`のときは止める。`Sec-Fetch-*`、`Origin`、`Cookie`のどれも送らないCLIは通す |
 | 配信する状態を絞る | `/console/status.json`で配信するのは、`console_fetcher`の状態の4項目(`state`、`sha`、`checked_at`、`error`)だけである。`checked_at`と`error`から、自動の配信が止まっていることなど運用の状態が外から見える。`error`には分類した失敗の種類だけを書き、トークンや応答の本文などの秘密は含まない。ボリュームの他のファイルは配信しない |
 | 秘密を配信物に入れない | Consoleのバンドルは認証なしで配信されるので、`VITE_*`の変数に秘密を入れない |
 
@@ -308,7 +308,16 @@ ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者�
 - 信頼の境界は`console`ジョブだけでなく、`ci.yml`のすべてのジョブとそこで動くツールや依存に及ぶ。同じ実行のほかのジョブも、ランナーから取れるトークンで成果物`console-dist`を上げ直せるためである。成果物は`overwrite: true`で上げ、`console_fetcher`はその名前の`id`が最大の成果物を取り込む。
 - draw.ioのビューアも、この成果物の差し替えの範囲に入る。ビューアは`console`ジョブが取得して、同じ成果物に入れるためである。
 - `Sec-Fetch-Site`をブラウザが送るのは、信頼できるオリジン(localhostかHTTPS)のときだけである。`WM_BIND`を外向きにしてHTTPで公開すると、この防御は効かない。外向きにするならHTTPSで公開する。
-- `Sec-Fetch-Site`の規則が効くのは`/api/*`だけである。`windmill_extra`の経路(`/ws/*`、`/ws_mp/*`、`/ws_debug/*`)には効かない。
+- `Origin`の検査が比べる相手は、要求の`Host`ヘッダーから作ったオリジンである。DNSリバインディングで`Host`が攻撃者のホスト名になると、`Origin`も一致して通る。ただしCookieはホスト名ごとに付くので、運用者のCookieは付かない。
+- `Origin`の検査が補えるのは、GETとHEAD以外のブラウザの要求だけである。ナビゲーションや`<img>`のGETには`Origin`が付かず、Firefox 70未満はフォームのPOSTにも付けない。この検査は、HTTPで公開してもブラウザが送るので、`Sec-Fetch-Site`の弱点を補う。
+- 前段でTLSを終端するときは、プロキシが`Host`をポートを含めて保つ(nginxなら`proxy_set_header Host $http_host`)。nginxの既定は`Host`を書き換え、`$host`はポートを落とす。どちらも`Origin`と合わず、ログインを含む書き込みがすべて403になる。
+- スキームを問わず許すので、HTTPS公開のときも、同じホスト名とポートの`http://`の`Origin`が通る。`Sec-Fetch-*`を送るブラウザは、`Sec-Fetch-Site`の規則が止める。止められないのは、`Sec-Fetch-*`を送らないブラウザだけである。
+- GETでも副作用のあるAPIは、`Sec-Fetch-Site`と`Origin`では止まらない。同じオリジンの`<img>`やリンクから、Cookieの持ち主の権限でジョブを起動できる。そのため、副作用のあるGETの経路を洗い出し、fetchとXHR以外を403にしている。洗い出しの一覧は[Consoleの仕様](internals/console.md)にある。洗い出したのは`windmill-client`の型定義にあるAPIまでで、サーバーの全経路ではない。HTTPトリガー(`/api/r/*`)を足すときは、GETでジョブを起動する経路にならないかを確かめる。
+- 古いブラウザと、HTTPで公開したブラウザは、`Sec-Fetch-Dest`を送らない。`Sec-Fetch-*`は、localhostかHTTPSのオリジンにだけ付くためである。この場合、副作用のあるGETは`Cookie`を持つときだけ止める。WindmillのフロントエンドがこれらのGETを使うと、その環境では403になる。
+- 注入された`<form method="post">`のクリックは、`Sec-Fetch-Mode: navigate`で止める。`Sec-Fetch-Mode`を送らないブラウザは止めない。止めるとfetchの書き込みまで巻き込むためである。
+- `<link rel="prefetch">`、`<link rel="preload">`、`<a ping>`は、`Sec-Fetch-Dest: empty`などで、副作用のあるGETを送りうる。
+  どれも生のHTMLの注入が要り、サニタイザが落とすので、止めていない。
+- この4つの規則が効くのは`/api/*`だけである。`windmill_extra`の経路(`/ws/*`、`/ws_mp/*`、`/ws_debug/*`)には、`Origin`の検査も含めて効かない。`handle @extra`が先に当たるためである。
 - 共有の`assets/`には古い版のファイルも残る。その間は`script-src`で読み込めるので、XSSの足がかり(script gadget)に使われうる。
 - Trusted TypesのReport-Onlyの方針には報告先が無い。違反はブラウザの開発者ツールのコンソールにしか出ない。
 - `console_fetcher`の外への通信はnetworkでは絞れない。コードが侵害されれば、任意の宛先へ出られる。
