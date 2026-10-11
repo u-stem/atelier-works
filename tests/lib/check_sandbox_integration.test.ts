@@ -8,6 +8,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -1404,8 +1405,8 @@ suite("entries another slot adds during a check", () => {
     expect(lstatSync(join(worktree, "shared", "b-file")).mode & 0o022).toBe(0);
   });
 
-  test("a symlink the other slot added is owned by root afterwards", () => {
-    expect(lstatSync(join(worktree, "shared", "b-link")).uid).toBe(0);
+  test("a symlink the other slot added is removed afterwards because it points outside", () => {
+    expect(existsSync(join(worktree, "shared", "b-link"))).toBe(false);
   });
 
   test("the target of that symlink keeps its mode", () => {
@@ -1777,5 +1778,362 @@ suite("world-writable paths created while the worker runs", () => {
         await checkImageProblems(POOL, defaultSandboxDeps()),
       ),
     ).toBeInstanceOf(CheckRuntimeUnsafeError);
+  });
+});
+
+suite("symlinks a check leaves pointing outside the worktree", () => {
+  const fx = makeRepo();
+  const lockDir = join(fx.base, "slots");
+  let worktree = "";
+  let detected = "";
+  let scanCommand = "";
+  let ownerOfHardLinkedFile = -1;
+
+  beforeAll(async () => {
+    mkdirSync(WINDMILL_TMP_DIR, { recursive: true });
+    worktree = fx.addWorktree("links");
+    // 準備の時点で既にある、外を指すsymlink。追跡されているものにあたる。
+    symlinkSync("/etc/hostname", join(worktree, "keep"));
+    // ハードリンクがあると、受け渡しはディレクトリごとの方法に切り替わる。
+    writeFileSync(join(worktree, "one.txt"), "x\n");
+    linkSync(join(worktree, "one.txt"), join(worktree, "two.txt"));
+    writeFileSync(
+      join(worktree, "links.sh"),
+      [
+        "mkdir -p a/b",
+        // 途中のsymlinkを経由する`..`で、worktreeの外の、まだ無いファイルを指す。
+        "ln -s ../.. a/b/il",
+        "ln -s il/../outside/new.txt a/b/x",
+        "ln -s /etc/passwd evil",
+        "ln -s ../ok a/inside",
+        "touch ok",
+        // 名前の上限(255)を超える1要素。
+        'ln -s "$(printf "x%.0s" $(seq 1 300))" long300',
+        // 道具が置く、外を指す正当なsymlink。
+        "mkdir -p .venv/bin",
+        "ln -s /usr/bin/python3 .venv/bin/python3",
+        // 準備の時点にあったsymlinkの中身を書き換える。
+        "rm keep",
+        "ln -s /etc/shadow keep",
+        "",
+      ].join("\n"),
+    );
+    const results = await runChecks(
+      worktree,
+      ["sh ./links.sh"],
+      sandboxIn(lockDir, POOL),
+    );
+    const scanned = results.at(-1);
+    detected = scanned?.output ?? "";
+    scanCommand = scanned?.command ?? "";
+    ownerOfHardLinkedFile = lstatSync(join(worktree, "one.txt")).uid;
+  }, 60_000);
+
+  afterAll(() => {
+    fx.cleanup();
+  });
+
+  test("the scan is added as a failed check because a tracked symlink changed", () => {
+    expect(scanCommand).toBe("check sandbox: symlink scan");
+  });
+
+  test("the changed symlink is named", () => {
+    expect(detected).toContain(join(worktree, "keep"));
+  });
+
+  test("the changed symlink is restored to its original content", () => {
+    expect(readlinkSync(join(worktree, "keep"))).toBe("/etc/hostname");
+  });
+
+  test("a symlink to an existing file outside is removed", () => {
+    expect(existsSync(join(worktree, "evil"))).toBe(false);
+  });
+
+  test("a symlink to an existing file outside is not named in the failure", () => {
+    expect(detected).not.toContain(join(worktree, "evil"));
+  });
+
+  test("a dangling symlink through another symlink and .. is removed", () => {
+    expect(() => lstatSync(join(worktree, "a/b/x"))).toThrow();
+  });
+
+  test("a symlink with a component beyond the name limit is removed", () => {
+    expect(() => lstatSync(join(worktree, "long300"))).toThrow();
+  });
+
+  test("a symlink a tool places to a system file is removed", () => {
+    expect(() => lstatSync(join(worktree, ".venv/bin/python3"))).toThrow();
+  });
+
+  test("a symlink that stays inside the worktree is kept", () => {
+    expect(lstatSync(join(worktree, "a/inside")).isSymbolicLink()).toBe(true);
+  });
+
+  test("the file with a hard link is owned by root afterwards", () => {
+    expect(ownerOfHardLinkedFile).toBe(0);
+  });
+});
+
+suite("a tool's symlink to a system file", () => {
+  const fx = makeRepo();
+  const lockDir = join(fx.base, "slots");
+  let worktree = "";
+  let resultCount = -1;
+
+  beforeAll(async () => {
+    mkdirSync(WINDMILL_TMP_DIR, { recursive: true });
+    worktree = fx.addWorktree("venv");
+    writeFileSync(
+      join(worktree, "venv.sh"),
+      "mkdir -p .venv/bin\nln -s /usr/bin/python3 .venv/bin/python3\n",
+    );
+    const results = await runChecks(
+      worktree,
+      ["sh ./venv.sh"],
+      sandboxIn(lockDir, POOL),
+    );
+    resultCount = results.length;
+  }, 60_000);
+
+  afterAll(() => {
+    fx.cleanup();
+  });
+
+  test("does not add a failed check", () => {
+    expect(resultCount).toBe(1);
+  });
+
+  test("is removed", () => {
+    expect(() => lstatSync(join(worktree, ".venv/bin/python3"))).toThrow();
+  });
+});
+
+suite("an incomplete symlink scan", () => {
+  const fx = makeRepo();
+  const lockDir = join(fx.base, "slots");
+  let worktree = "";
+  let detected = "";
+  let names: string[] = [];
+
+  beforeAll(async () => {
+    mkdirSync(WINDMILL_TMP_DIR, { recursive: true });
+    worktree = fx.addWorktree("incomplete");
+    writeFileSync(
+      join(worktree, "incomplete.sh"),
+      [
+        "touch ok",
+        "ln -s /etc/passwd evil",
+        "ln -s ../ok dotdot",
+        "ln -s ok inside",
+        // 省いた印を、名前にしたもの。
+        "ln -s /etc/passwd '[... 5 bytes omitted ...]'",
+        // 同じ見た目の名前の組。UTF-8でない外向きのものと、U+FFFDそのものを名前にした内向きのおとり。
+        'ln -s /etc/passwd "$(printf "a\\377")"',
+        'ln -s ok "$(printf "a\\357\\277\\275")"',
+        "",
+      ].join("\n"),
+    );
+    const results = await runChecks(
+      worktree,
+      ["sh ./incomplete.sh"],
+      sandboxIn(lockDir, POOL),
+    );
+    detected = results.at(-1)?.output ?? "";
+    names = readdirSync(worktree);
+  }, 60_000);
+
+  afterAll(() => {
+    // UTF-8でない名前は、Node由来の`rmSync`では消せない。
+    Bun.spawnSync(["rm", "-rf", fx.base]);
+  });
+
+  test("the failed check says every symlink with an absolute or .. content was removed", () => {
+    expect(detected).toContain("was incomplete, so every symlink");
+  });
+
+  test("a symlink to an absolute path is removed", () => {
+    expect(names).not.toContain("evil");
+  });
+
+  test("a symlink with .. in its content is removed", () => {
+    expect(names).not.toContain("dotdot");
+  });
+
+  test("a symlink named like the omission marker is removed", () => {
+    expect(names.filter((name) => name.includes("omitted"))).toEqual([]);
+  });
+
+  test("a relative symlink that stays inside is kept", () => {
+    expect(names).toContain("inside");
+  });
+
+  test("of a pair that looks the same, the non-UTF-8 outward one is removed and the decoy is kept", () => {
+    expect(names.filter((name) => name.startsWith("a"))).toEqual(["a\uFFFD"]);
+  });
+});
+
+suite("a symlink list longer than the output limit", () => {
+  const fx = makeRepo();
+  const lockDir = join(fx.base, "slots");
+  let worktree = "";
+  let detected = "";
+  let remaining = -1;
+
+  beforeAll(async () => {
+    mkdirSync(WINDMILL_TMP_DIR, { recursive: true });
+    worktree = fx.addWorktree("many");
+    writeFileSync(
+      join(worktree, "many.ts"),
+      [
+        'import { symlinkSync } from "node:fs";',
+        "for (let i = 0; i < 40000; i += 1) {",
+        '  symlinkSync("/etc/passwd", String(i).padStart(8, "0") + "x".repeat(230));',
+        "}",
+        "",
+      ].join("\n"),
+    );
+    const results = await runChecks(
+      worktree,
+      ["bun ./many.ts"],
+      sandboxIn(lockDir, POOL),
+      120_000,
+    );
+    detected = results.at(-1)?.output ?? "";
+    remaining = readdirSync(worktree).filter((name) =>
+      /^0000/.test(name),
+    ).length;
+  }, 240_000);
+
+  afterAll(() => {
+    fx.cleanup();
+  });
+
+  test("the failed check says the list was cut short", () => {
+    expect(detected).toContain("cut short");
+  });
+
+  test("no symlink with an absolute content remains", () => {
+    expect(remaining).toBe(0);
+  });
+});
+
+suite("restoring the worktree of a run that never reached the scan", () => {
+  const fx = makeRepo();
+  const lockDir = join(fx.base, "slots");
+  const uid = POOL[0] ?? 0;
+  let worktree = "";
+  let staleHome = "";
+  let restored = false;
+  let names: string[] = [];
+
+  beforeAll(async () => {
+    mkdirSync(WINDMILL_TMP_DIR, { recursive: true });
+    worktree = fx.addWorktree("restore");
+    staleHome = makeHome();
+    const deps = defaultSandboxDeps(lockDir);
+    await deps.slotRecords.write(0, {
+      worktreeDir: worktree,
+      homeDir: staleHome,
+    });
+    mustRun(["chown", "-R", `${String(uid)}:${String(uid)}`, worktree], "/");
+    runAsUid(
+      uid,
+      "ln -s /etc/passwd evil; ln -s ../ok dotdot; touch ok",
+      worktree,
+    );
+    restored = await restoreCheckOwnership(worktree, POOL, deps);
+    names = readdirSync(worktree);
+  }, 60_000);
+
+  afterAll(() => {
+    rmSync(staleHome, { recursive: true, force: true });
+    fx.cleanup();
+  });
+
+  test("the worktree is restored", () => {
+    expect(restored).toBe(true);
+  });
+
+  test("a symlink to an absolute path the run left is removed", () => {
+    expect(names).not.toContain("evil");
+  });
+
+  test("a symlink with .. in its content the run left is removed", () => {
+    expect(names).not.toContain("dotdot");
+  });
+
+  test("a regular file the run left is kept", () => {
+    expect(names).toContain("ok");
+  });
+});
+
+suite("a run whose symlink scan was cut off", () => {
+  const fx = makeRepo();
+  const lockDir = join(fx.base, "slots");
+  let first = "";
+  let second = "";
+  let recordKept = false;
+  let lockHeldDuringScan = false;
+  let names: string[] = [];
+
+  beforeAll(async () => {
+    mkdirSync(WINDMILL_TMP_DIR, { recursive: true });
+    first = fx.addWorktree("interrupted");
+    second = fx.addWorktree("next");
+    const homeA = makeHome();
+    const homeB = makeHome();
+    const base = defaultSandboxDeps(lockDir);
+    let scanning = false;
+    // 走査の間だけ、別の取得がブロックされることを確かめ、走査を打ち切る。
+    const sandbox = createCheckSandbox({
+      uids: POOL,
+      pollMs: 100,
+      deps: {
+        ...base,
+        run: async (argv, options) => {
+          if (scanning && argv.includes("-print0")) {
+            const handle = await base.slots.tryAcquire(0);
+            lockHeldDuringScan = handle === null;
+            await handle?.release();
+            return { ...(await base.run(["/bin/false"], options)) };
+          }
+          return base.run(argv, options);
+        },
+      },
+    });
+    await sandbox.prepare({ worktreeDir: first, homeDir: homeA });
+    // 検査コマンドの代わりに、枠のuidで外向きのsymlinkを置く。
+    runAsUid(POOL[0] ?? 0, "ln -s /etc/passwd evil; touch ok", first);
+    scanning = true;
+    await sandbox.release({ worktreeDir: first, homeDir: homeA });
+    scanning = false;
+    recordKept = (await base.slotRecords.read(0)) !== null;
+    // 次の実行が同じ枠を取り、回復の経路で掃く。
+    const next = sandboxIn(lockDir, POOL);
+    await next.prepare({ worktreeDir: second, homeDir: homeB });
+    await next.release({ worktreeDir: second, homeDir: homeB });
+    names = readdirSync(first);
+    rmSync(homeA, { recursive: true, force: true });
+    rmSync(homeB, { recursive: true, force: true });
+  }, 60_000);
+
+  afterAll(() => {
+    fx.cleanup();
+  });
+
+  test("another acquisition is blocked while the scan runs", () => {
+    expect(lockHeldDuringScan).toBe(true);
+  });
+
+  test("the record was kept when the scan was cut off", () => {
+    expect(recordKept).toBe(true);
+  });
+
+  test("the recovery removes the symlink the interrupted run left", () => {
+    expect(names).not.toContain("evil");
+  });
+
+  test("the recovery keeps a regular file", () => {
+    expect(names).toContain("ok");
   });
 });

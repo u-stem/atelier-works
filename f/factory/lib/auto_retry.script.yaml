@@ -1,0 +1,9 @@
+summary: '[LIB] イメージが古くて止まった作業項目の再開'
+description: 内部ライブラリです。直接実行するものではありません。止まった作業項目の再開先と手順を決めます。
+lock: '!inline f/factory/lib/auto_retry.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

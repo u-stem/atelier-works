@@ -23,6 +23,7 @@ import {
   reconcileHostActionNotices,
   recordCheckEnvironmentNotice,
   recordHostAction,
+  STALE_IMAGE_NOTICE_MARKER,
 } from "../../f/factory/lib/host_action.ts";
 import { logger } from "../../f/factory/lib/log.ts";
 import type { NoticeRecord } from "../../f/factory/lib/types.ts";
@@ -104,7 +105,7 @@ function recordHarness(
       events.push(event);
       return { status: "sent" };
     },
-    isApplied: async () => false,
+    isApplied: async () => "not_applied",
     instanceName: "local",
     log: logger("test", { sink: (line) => lines.push(line) }),
     ...overrides,
@@ -165,22 +166,74 @@ describe("recordHostAction", () => {
   });
 
   test("adds no notice when the host already applied the sha", async () => {
-    const h = recordHarness({ isApplied: async () => true });
+    const h = recordHarness({ isApplied: async () => "included" });
     await recordHostAction(h.deps, SHA_A, ["mise.toml"]);
     expect(h.notices).toEqual([]);
   });
 
   test("sends no Discord message when the host already applied the sha", async () => {
-    const h = recordHarness({ isApplied: async () => true });
+    const h = recordHarness({ isApplied: async () => "included" });
     await recordHostAction(h.deps, SHA_A, ["mise.toml"]);
     expect(h.events).toEqual([]);
   });
 
   test("returns already_applied when the host already applied the sha", async () => {
-    const h = recordHarness({ isApplied: async () => true });
+    const h = recordHarness({ isApplied: async () => "included" });
     expect(await recordHostAction(h.deps, SHA_A, ["mise.toml"])).toBe(
       "already_applied",
     );
+  });
+
+  test("adds no notice when the host applied the same content", async () => {
+    const h = recordHarness({ isApplied: async () => "same_content" });
+    await recordHostAction(h.deps, SHA_A, ["mise.toml"]);
+    expect(h.notices).toEqual([]);
+  });
+
+  test("sends no Discord message when the host applied the same content", async () => {
+    const h = recordHarness({ isApplied: async () => "same_content" });
+    await recordHostAction(h.deps, SHA_A, ["mise.toml"]);
+    expect(h.events).toEqual([]);
+  });
+
+  test("returns already_applied when the host applied the same content", async () => {
+    const h = recordHarness({ isApplied: async () => "same_content" });
+    expect(await recordHostAction(h.deps, SHA_A, ["mise.toml"])).toBe(
+      "already_applied",
+    );
+  });
+
+  test("logs that it skipped the notice for the same content", async () => {
+    const h = recordHarness({ isApplied: async () => "same_content" });
+    await recordHostAction(h.deps, SHA_A, ["mise.toml"]);
+    expect(
+      h.lines.some((l) =>
+        l.includes("skipped: host already applied the same content"),
+      ),
+    ).toBe(true);
+  });
+
+  test("notifies when a host path outside this change differs from the applied sha", async () => {
+    // 並行するPRを両方とも先にmise run upしてからマージした回は、この回の変更の外のinfra/も比べる。
+    const checker = checkerHarness({
+      applied: SHA_B,
+      differing: ["infra/worker/Dockerfile"],
+    });
+    const h = recordHarness({ isApplied: checker.check });
+    expect(
+      await recordHostAction(h.deps, SHA_A, ["infra/docker-compose.yml"]),
+    ).toBe("recorded");
+  });
+
+  test("skips the notice when no host path differs from the applied sha", async () => {
+    const checker = checkerHarness({
+      applied: SHA_B,
+      differing: ["f/factory/x.ts"],
+    });
+    const h = recordHarness({ isApplied: checker.check });
+    expect(
+      await recordHostAction(h.deps, SHA_A, ["infra/docker-compose.yml"]),
+    ).toBe("already_applied");
   });
 
   test("notifies when the applied check throws", async () => {
@@ -206,16 +259,21 @@ describe("recordHostAction", () => {
   });
 });
 
+/** 反映済みの版と内容が異なるパスの既定。ホスト側のパスを含むので、内容の比較では反映済みにならない。 */
+const DIFFERING_HOST_PATHS = ["infra/docker-compose.yml", "mise.toml"];
+
 function checkerHarness(options: {
   applied?: string | Error;
   ancestors?: Array<[string, string]>;
   isAncestorThrows?: boolean;
   commitExists?: boolean;
   commitExistsThrows?: boolean;
+  differing?: readonly string[] | Error;
 }) {
   const lines: string[] = [];
   const reads: number[] = [];
   const lookups: string[] = [];
+  const compared: Array<[string, string]> = [];
   const check = hostAppliedChecker({
     readAppliedSha: async () => {
       reads.push(1);
@@ -234,9 +292,15 @@ function checkerHarness(options: {
         ([a, d]) => a === ancestor && d === descendant,
       );
     },
+    differingPaths: async (from, to) => {
+      compared.push([from, to]);
+      const differing = options.differing ?? DIFFERING_HOST_PATHS;
+      if (differing instanceof Error) throw differing;
+      return differing;
+    },
     log: logger("test", { sink: (line) => lines.push(line) }),
   });
-  return { check, lines, reads, lookups };
+  return { check, lines, reads, lookups, compared };
 }
 
 const missingFile = () =>
@@ -244,21 +308,75 @@ const missingFile = () =>
 
 describe("hostAppliedChecker", () => {
   test("covers the same sha", async () => {
-    expect(await checkerHarness({ applied: SHA_A }).check(SHA_A)).toBe(true);
+    expect(await checkerHarness({ applied: SHA_A }).check(SHA_A)).toBe(
+      "included",
+    );
   });
 
   test("covers an ancestor of the applied sha", async () => {
     const h = checkerHarness({ applied: SHA_B, ancestors: [[SHA_A, SHA_B]] });
-    expect(await h.check(SHA_A)).toBe(true);
+    expect(await h.check(SHA_A)).toBe("included");
   });
 
-  test("does not cover a sha that is not an ancestor", async () => {
-    expect(await checkerHarness({ applied: SHA_B }).check(SHA_A)).toBe(false);
+  test("does not compare the content of an ancestor", async () => {
+    const h = checkerHarness({ applied: SHA_B, ancestors: [[SHA_A, SHA_B]] });
+    await h.check(SHA_A);
+    expect(h.compared).toEqual([]);
+  });
+
+  test("does not cover a sha that is not an ancestor when the host paths differ", async () => {
+    expect(await checkerHarness({ applied: SHA_B }).check(SHA_A)).toBe(
+      "not_applied",
+    );
+  });
+
+  test("compares the applied sha with the sha", async () => {
+    const h = checkerHarness({ applied: SHA_B, differing: [] });
+    await h.check(SHA_A);
+    expect(h.compared).toEqual([[SHA_B, SHA_A]]);
+  });
+
+  test("does not cover a sha when the content comparison fails", async () => {
+    const h = checkerHarness({
+      applied: SHA_B,
+      differing: new Error("git diff failed"),
+    });
+    expect(await h.check(SHA_A)).toBe("not_applied");
+  });
+
+  test("warns when the content comparison fails", async () => {
+    const h = checkerHarness({
+      applied: SHA_B,
+      differing: new Error("git diff failed"),
+    });
+    await h.check(SHA_A);
+    expect(h.lines.some((l) => l.includes("could not be compared"))).toBe(true);
+  });
+
+  test("covers a sha that is not an ancestor when only paths without host action differ", async () => {
+    const h = checkerHarness({
+      applied: SHA_B,
+      differing: ["f/factory/x.ts", "scripts/up.sh"],
+    });
+    expect(await h.check(SHA_A)).toBe("same_content");
+  });
+
+  test("does not cover a sha that is not an ancestor when an infra path differs", async () => {
+    const h = checkerHarness({
+      applied: SHA_B,
+      differing: ["infra/Caddyfile"],
+    });
+    expect(await h.check(SHA_A)).toBe("not_applied");
+  });
+
+  test("does not cover a sha that is not an ancestor when mise.toml differs", async () => {
+    const h = checkerHarness({ applied: SHA_B, differing: ["mise.toml"] });
+    expect(await h.check(SHA_A)).toBe("not_applied");
   });
 
   test("does not cover anything when nothing is recorded", async () => {
     const h = checkerHarness({ applied: missingFile() });
-    expect(await h.check(SHA_A)).toBe(false);
+    expect(await h.check(SHA_A)).toBe("not_applied");
   });
 
   test("stays silent when the file does not exist", async () => {
@@ -274,19 +392,26 @@ describe("hostAppliedChecker", () => {
   });
 
   test("does not cover anything when the value is not a sha", async () => {
-    expect(await checkerHarness({ applied: "garbage" }).check(SHA_A)).toBe(
-      false,
-    );
+    const h = checkerHarness({ applied: "garbage", differing: [] });
+    expect(await h.check(SHA_A)).toBe("not_applied");
   });
 
   test("does not cover a sha when the ancestry check fails", async () => {
-    const h = checkerHarness({ applied: SHA_B, isAncestorThrows: true });
-    expect(await h.check(SHA_A)).toBe(false);
+    const h = checkerHarness({
+      applied: SHA_B,
+      isAncestorThrows: true,
+      differing: [],
+    });
+    expect(await h.check(SHA_A)).toBe("not_applied");
   });
 
   test("does not cover anything when the applied sha is not in the clone", async () => {
-    const h = checkerHarness({ applied: SHA_B, commitExists: false });
-    expect(await h.check(SHA_B)).toBe(false);
+    const h = checkerHarness({
+      applied: SHA_B,
+      commitExists: false,
+      differing: [],
+    });
+    expect(await h.check(SHA_B)).toBe("not_applied");
   });
 
   test("warns once about a missing commit however many shas it checks", async () => {
@@ -299,8 +424,12 @@ describe("hostAppliedChecker", () => {
   });
 
   test("does not cover anything when the commit lookup fails", async () => {
-    const h = checkerHarness({ applied: SHA_B, commitExistsThrows: true });
-    expect(await h.check(SHA_B)).toBe(false);
+    const h = checkerHarness({
+      applied: SHA_B,
+      commitExistsThrows: true,
+      differing: [],
+    });
+    expect(await h.check(SHA_B)).toBe("not_applied");
   });
 
   test("reads the file and looks up the commit only once", async () => {
@@ -365,6 +494,7 @@ function reconcileHarness(options: {
   isAncestorThrows?: boolean;
   listThrows?: boolean;
   commitExists?: boolean;
+  differing?: readonly string[] | Error;
 }) {
   const resolved: number[] = [];
   const lines: string[] = [];
@@ -383,6 +513,11 @@ function reconcileHarness(options: {
       return (options.ancestors ?? []).some(
         ([a, d]) => a === ancestor && d === descendant,
       );
+    },
+    differingPaths: async () => {
+      const differing = options.differing ?? DIFFERING_HOST_PATHS;
+      if (differing instanceof Error) throw differing;
+      return differing;
     },
     log,
   });
@@ -419,6 +554,36 @@ describe("reconcileHostActionNotices", () => {
     });
     await reconcileHostActionNotices(h.deps);
     expect(h.resolved).toEqual([1]);
+  });
+
+  test("resolves a notice whose sha is not an ancestor but has the same host content", async () => {
+    const h = reconcileHarness({
+      applied: SHA_B,
+      rows: [noticeRow(1, SHA_A)],
+      differing: ["f/factory/self_update.ts"],
+    });
+    await reconcileHostActionNotices(h.deps);
+    expect(h.resolved).toEqual([1]);
+  });
+
+  test("keeps a notice whose sha is not an ancestor and has different host content", async () => {
+    const h = reconcileHarness({
+      applied: SHA_B,
+      rows: [noticeRow(1, SHA_A)],
+      differing: ["infra/docker-compose.yml"],
+    });
+    await reconcileHostActionNotices(h.deps);
+    expect(h.resolved).toEqual([]);
+  });
+
+  test("keeps a notice when the content comparison fails", async () => {
+    const h = reconcileHarness({
+      applied: SHA_B,
+      rows: [noticeRow(1, SHA_A)],
+      differing: new Error("git diff failed"),
+    });
+    await reconcileHostActionNotices(h.deps);
+    expect(h.resolved).toEqual([]);
   });
 
   test("keeps a notice for a sha newer than the applied sha", async () => {
@@ -580,6 +745,18 @@ describe("buildHostActionNotice paths", () => {
 });
 
 describe("buildCheckImageStaleNotice", () => {
+  test("carries the marker the automatic retry looks for", () => {
+    expect(buildCheckImageStaleNotice(SHA_A, "x").message).toContain(
+      STALE_IMAGE_NOTICE_MARKER,
+    );
+  });
+
+  test("keeps the marker out of the deployment notice", () => {
+    expect(
+      buildHostActionNotice(SHA_A, ["infra/docker-compose.yml"]).notice.message,
+    ).not.toContain(STALE_IMAGE_NOTICE_MARKER);
+  });
+
   test("uses the host action notice kind", () => {
     expect(
       buildCheckImageStaleNotice(SHA_A, "/usr/bin/getfacl is missing").kind,

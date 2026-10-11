@@ -567,6 +567,7 @@ Claudeが直せる検査の失敗ではないので、Sonnetの失敗として�
 
 イメージが古く、稼働中のworkerの問題も一緒に見つかったときは、両方の通知を残す([Consoleのnotice](notifications.md#consoleのnotice))。
 `host_action_required`は`mise run up`の後に自動で解決されるが、ボリュームのマウントポイントは作り直しでは閉じないためである。
+イメージが古くて止まった`blocked`は、通知の自動の解決の後に、自動で`fixing`へ戻って再開する([実装フロー](implement.md#イメージが古くて止まったとき))。
 
 `PATH`の値と、workerの値を使わない理由、uidの切り替えと所有権の受け渡しは、[検査コマンドはフローが実行する](../security.md#検査コマンドはフローが実行する)と[検査コマンドの権限](../security.md#検査コマンドの権限)にある。
 

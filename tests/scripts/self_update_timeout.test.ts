@@ -125,9 +125,11 @@ describe("self_update timeout", () => {
       source,
       /(readSelfCloneBranch|readSelfCloneHeadSha|resolveChangedPaths|listMergedPullRequests)\(\s*runCommand,/g,
     );
-    // ホストの印の確認: コミットの有無は1回、祖先の確認は通知の解決の上限の数と、この回の通知の判断の1回。
+    // ホストの印の確認: コミットの有無は1回。祖先の確認と内容の比較は、
+    // それぞれ通知の解決の上限の数と、この回の通知の判断の1回。
     const hostCommit = count(source, /isCommitInClone\(\s*runCommand,/g);
     const hostAncestor = count(source, /isAncestorSha\(\s*runCommand,/g);
+    const hostContent = count(source, /listDifferingPaths\(\s*runCommand,/g);
     const passed = count(source, /\(\s*runCommand,/g);
 
     expect({
@@ -137,9 +139,10 @@ describe("self_update timeout", () => {
         2 * miseCompare +
         single,
       localCommands:
-        hostCommit + (HOST_ACTION_RECONCILE_LIMIT + 1) * hostAncestor,
+        hostCommit +
+        (HOST_ACTION_RECONCILE_LIMIT + 1) * (hostAncestor + hostContent),
     }).toEqual({
-      passed: miseCompare + single + hostCommit + hostAncestor,
+      passed: miseCompare + single + hostCommit + hostAncestor + hostContent,
       commands: SELF_UPDATE_GIT_COMMAND_COUNT,
       localCommands: SELF_UPDATE_LOCAL_GIT_COMMAND_COUNT,
     });
