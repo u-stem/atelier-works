@@ -1,5 +1,5 @@
 import { ArrowLeft, LogIn } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router";
 import { isBannerError } from "../../api/errors.ts";
 import { useSummary } from "../../api/queries.ts";
@@ -176,10 +176,12 @@ export function InboxScreen() {
       detailRef.current?.focus();
     }
   }, [pane, wide]);
-  const items =
-    summary.data === undefined
-      ? []
-      : sortInboxItems(buildInboxItems(summary.data));
+  // 一覧の配列が同じなら、通知の副題を作り直さない。時刻の更新や選択の変更のたびに、全通知を解析し直さないためである。
+  const data = summary.data;
+  const items = useMemo(
+    () => (data === undefined ? [] : sortInboxItems(buildInboxItems(data))),
+    [data],
+  );
   const activeChip = effectiveChip(items, chip);
   if (activeChip !== chip) {
     // 選んだ種類の項目がなくなったら、状態も「すべて」に揃える。
@@ -289,6 +291,7 @@ export function InboxScreen() {
             items={visible}
             selected={selection}
             now={now}
+            allItems={items}
             onSelect={select}
           />
         </section>
