@@ -697,7 +697,11 @@ Windmillのraw app(Factory Console)も、図をWindmillのオリジンで直接�
 ビューアはWindmillのオリジンでは動かず、iframeの中でだけ動く。
 iframeの`src`は、SPAのConsoleが配信する`/console/drawio.html`である。
 そのページの同梱のビューア、受け口のscript、HTTPのCSPは、上の表のとおりで、raw appは別のビューアも別のCSPも持たない。
-raw appはsandboxなしでWindmillと同じオリジンで動き、`/console/`も同じサイトなので、`frame-ancestors`に一致して読み込める。
+raw appがsandboxなしでWindmillと同じオリジンで動くなら、`/console/`も同じサイトなので、`frame-ancestors`に一致して読み込めるはずである。
+ただし、実機で確かめるまでは前提として扱う。
+管理スキルの`.claude/skills/raw-app/SKILL.md`に、バンドルが不透明なオリジンから動くという記述があり、この前提に反するためである。
+読み込めない場合は、隔離なしの描画には戻らず、図の代わりに「図のページが応答しませんでした」と出す。
+図を描けなくなる側に倒れるので、安全側である。
 
 | 守ること | 内容 |
 | --- | --- |
@@ -727,6 +731,12 @@ raw appの`backend.*`の呼び出しは、メッセージを通してWindmillの
 - raw app内の、応答を受けるリスナー
 
 この前提は、Windmill 1.817.0のコードと実機で確かめる必要がある。
+このリポジトリで読めるのは、次の2点までである。
+
+- 図の部品(`DrawioViewer.tsx`)が`event.source`を確かめること
+- `windmill-client`の1.817.0に`message`のリスナーが無いこと
+
+Windmill本体の画面と、raw appの実行時に注入される応答のリスナーは、このリポジトリに無く、`event.source`を確かめているかは未確認である。
 `mise.toml`の`WM_VERSION`を上げるたびに、確かめ直す。
 
 SPAのConsoleには、この経路が無い。
@@ -759,7 +769,10 @@ iframeへ送るXMLと、受ける応答の扱いも変えられる。
 残るリスクは次のとおりである。
 
 - ビューアがiframeの中で`window.location`を書き換えて遷移する経路は、`sandbox`で防げない。2回目のloadの検知で表示を止めるが、loadが起きない遷移は検知できない。そのときも、親が受け取るのは、範囲に収めた高さと、固定の失敗の種類だけである。
-- 図のiframeが`window.top.postMessage`と`window.parent.postMessage`で、WindmillのSPAとraw appのメッセージの通り道に届く。上のとおり、WindmillのSPAとraw appの応答のリスナーが`event.source`を確かめていることが前提で、`WM_VERSION`を上げるたびに確かめ直す。確かめていない版では、この経路を塞げているとは言えない。
+- 図のiframeが`window.top.postMessage`と`window.parent.postMessage`で、WindmillのSPAとraw appのメッセージの通り道に届く。上のとおり、Windmill本体の画面とraw appの応答のリスナーが`event.source`を確かめているかは、未確認である。`WM_VERSION`を上げるたびに確かめ直す。確かめていない版では、この経路を塞げているとは言えない。
+  それでも受け入れる理由は、この隔離が新しい経路を作らないためである。
+  届くには、ビューアの欠陥、検査のすり抜け、送り元を確かめないリスナーの3つが揃う必要がある。
+  ビューアをWindmillのオリジンで直接動かす構成なら、より広く届く。
 - ラベルの`%名前%`を別の値に置き換える`placeholders`と`vars`は、検査が拒否する。
   draw.ioが別の属性でも同じ置き換えをするようになると、検査はその図を拒否できない。
   その図は、iframeの隔離とCSPで止める。
@@ -767,6 +780,7 @@ iframeへ送るXMLと、受ける応答の扱いも変えられる。
 実機でしか確かめられない点は次のとおりである。
 
 - raw appから`/console/drawio.html`をiframeで読めること。`frame-ancestors`が合わないと、図の代わりに応答なしの文が出る。
+- raw appがsandboxなしで動くこと。管理スキルの`.claude/skills/raw-app/SKILL.md`は、バンドルが不透明なオリジンから動くと書いており、反する。
 - raw appの文書が`srcdoc`か`blob:`かで、相対パス`/console/drawio.html`が解決できるかが変わる。`blob:`だと解決できないおそれがある。
 - 図が描かれ、高さが図に追従すること。
 - リンクを含む図を描いても、クリックで遷移しないこと。

@@ -583,6 +583,7 @@ PR修正のClaudeに渡すツールは`Read,Glob,Grep,Edit,Write`だけで、`Ba
 `infra/Caddyfile`には、Consoleのscriptの許可と、draw.ioの図を隔離するCSPがある。
 `infra/console_fetcher/`は、配信物を検証して配信する。
 どちらも書き換えられると、検証や隔離をすり抜けた内容が運用者のブラウザで動く。
+旧Consoleのraw appが図を隔離して描く部品は、書き換えられると、sandboxを外したり、別のページをiframeに読ませたりできる。
 
 markdownlint-cli2の設定は、`customRules`、`markdownItPlugins`、`modulePaths`で任意のモジュールを`import()`できる。
 textlintの設定は、`rules`の名前からモジュールを解決して読み込む。

@@ -60,6 +60,10 @@ describe("raw app DrawioViewer iframe", () => {
     expect(VIEWER_CODE).toContain("src={DRAWIO_FRAME_SRC}");
   });
 
+  test("creates exactly one iframe", () => {
+    expect(VIEWER_CODE.match(/<iframe/g)?.length).toBe(1);
+  });
+
   test("does not use srcDoc", () => {
     expect(VIEWER_CODE).not.toMatch(/srcdoc/i);
   });
