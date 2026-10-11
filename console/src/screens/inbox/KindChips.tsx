@@ -25,7 +25,7 @@ export function KindChips({
             type="button"
             aria-pressed={pressed}
             className={cn(
-              "inline-flex h-7 items-center gap-1.5 rounded-md border border-transparent px-3 text-small text-muted-foreground outline-none transition-colors duration-150 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
+              "inline-flex h-7 items-center gap-1.5 rounded-md border border-transparent px-3 text-small text-muted-foreground outline-none transition-colors duration-150 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-muted motion-reduce:transition-none",
               pressed && SELECTED_STYLE,
             )}
             onClick={() => {

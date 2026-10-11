@@ -4,7 +4,6 @@ import type {
   ApprovalStatsRow,
   LeadTimeRow,
 } from "../api/guards/analytics.ts";
-import { buttonVariants } from "../components/ui/button.tsx";
 import {
   dailyTotals,
   firstTryApprovalRate,
@@ -15,10 +14,9 @@ import {
   formatUsd,
   hitsRowLimit,
   leadTimeByStatus,
-  periodButtonStyle,
+  periodButtonClass,
   rejectionsByAttempt,
 } from "./analytics.ts";
-import { cn } from "./cn.ts";
 import { SELECTED_STYLE } from "./selectedStyle.ts";
 
 function costRow(overrides: Partial<AgentCostDailyRow>): AgentCostDailyRow {
@@ -235,27 +233,12 @@ describe("hitsRowLimit", () => {
   });
 });
 
-describe("periodButtonStyle", () => {
+describe("periodButtonClass", () => {
   test("marks the selected period like the other switches", () => {
-    expect(periodButtonStyle(true).className).toBe(SELECTED_STYLE);
+    expect(periodButtonClass(true)).toBe(SELECTED_STYLE);
   });
 
   test("leaves the other periods plain", () => {
-    expect(periodButtonStyle(false).className).toBe("");
-  });
-
-  test("keeps the selected colors after the button classes are merged", () => {
-    const style = periodButtonStyle(true);
-    const merged = cn(
-      buttonVariants({ variant: style.variant, size: "sm" }),
-      style.className,
-    ).split(" ");
-    expect(merged).toEqual(
-      expect.arrayContaining([
-        "border-primary",
-        "bg-selected",
-        "text-selected-foreground",
-      ]),
-    );
+    expect(periodButtonClass(false)).toBe("");
   });
 });

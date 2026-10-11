@@ -3,28 +3,29 @@ import { buttonVariants } from "../components/ui/button.tsx";
 import { cn } from "./cn.ts";
 import { SELECTED_STYLE } from "./selectedStyle.ts";
 
-// 選択中を重ねる先の、未選択のクラスと、そこで落ちるべき背景。
-const UNSELECTED = [
-  ["border border-transparent bg-muted text-subtle", "bg-muted"],
-  [buttonVariants({ variant: "outline", size: "sm" }), "bg-card"],
-] as const;
+// 期間切替が選択中を重ねる先。KindChipsとThemeSwitchは、描画のテストで確かめる。
+const merged = cn(
+  buttonVariants({ variant: "outline", size: "sm" }),
+  SELECTED_STYLE,
+).split(" ");
 
 describe("SELECTED_STYLE after the class merge", () => {
-  test.each(UNSELECTED)("keeps the selected colors over %s", (base) => {
-    const merged = cn(base, SELECTED_STYLE).split(" ");
-    expect(merged).toEqual(
-      expect.arrayContaining([
-        "border-primary",
-        "bg-selected",
-        "text-selected-foreground",
-      ]),
-    );
+  test.each([
+    "border-primary",
+    "bg-selected",
+    "text-selected-foreground",
+    "hover:bg-selected",
+    "hover:text-selected-foreground",
+  ])("keeps %s", (token) => {
+    expect(merged).toContain(token);
   });
 
-  test.each(UNSELECTED)("drops the unselected background of %s", (base, bg) => {
-    const merged = cn(base, SELECTED_STYLE).split(" ");
-    expect(merged).not.toContain(bg);
-  });
+  test.each(["bg-card", "hover:bg-accent", "hover:text-accent-foreground"])(
+    "drops %s of the unselected button",
+    (token) => {
+      expect(merged).not.toContain(token);
+    },
+  );
 
   test("does not change the font weight", () => {
     expect(SELECTED_STYLE).not.toContain("font-");

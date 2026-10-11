@@ -27,7 +27,7 @@ import {
   formatUsd,
   hitsRowLimit,
   leadTimeByStatus,
-  periodButtonStyle,
+  periodButtonClass,
   rejectionsByAttempt,
 } from "../../lib/analytics.ts";
 import { cn } from "../../lib/cn.ts";
@@ -210,21 +210,18 @@ export function AnalyticsReports() {
         <div className="flex items-center gap-2">
           <fieldset className="flex gap-1">
             <legend className="sr-only">集計期間</legend>
-            {ANALYTICS_PERIOD_DAYS.map((option) => {
-              const style = periodButtonStyle(option === days);
-              return (
-                <Button
-                  key={option}
-                  size="sm"
-                  variant={style.variant}
-                  className={style.className}
-                  aria-pressed={option === days}
-                  onClick={() => setDays(option)}
-                >
-                  直近{option}日
-                </Button>
-              );
-            })}
+            {ANALYTICS_PERIOD_DAYS.map((option) => (
+              <Button
+                key={option}
+                size="sm"
+                variant="outline"
+                className={periodButtonClass(option === days)}
+                aria-pressed={option === days}
+                onClick={() => setDays(option)}
+              >
+                直近{option}日
+              </Button>
+            ))}
           </fieldset>
           <Button
             size="icon"
