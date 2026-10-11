@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { SHARED_TMP_DIRS } from "../../f/factory/lib/check_sandbox.ts";
 
 // workerのイメージの構成を静的に確かめる。
 // workerのPATHにrootのホームを入れないこと、検査コマンド用の非特権ユーザーを
@@ -148,6 +149,18 @@ describe("infra/worker/Dockerfile check user", () => {
 
   test("fails the build when a slot does not verify", () => {
     expect(verification()).toContain("|| exit 1");
+  });
+
+  test("closes the world-writable directories of the base image that no slot cleanup purges", () => {
+    expect(startingWith("RUN")).toContain(
+      "RUN chmod 0755 /usr/src/app /tmp/.cache",
+    );
+  });
+
+  test("fails the build on a world-writable directory other than the shared temporary ones", () => {
+    expect(verification()).toContain(
+      `test -z "$(find / -xdev -path /tmp/windmill -prune -o -type d -perm -0002 -print | grep -vxE '${SHARED_TMP_DIRS.join("|")}')"`,
+    );
   });
 
   test("does not switch the image to a non-root USER", () => {

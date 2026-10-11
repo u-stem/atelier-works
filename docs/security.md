@@ -1056,10 +1056,10 @@ rootのホームと`/tmp`の下は入れない。そこに置かれた実行フ�
 | 環境変数 | 許可リストの`PATH`、`HOME`、`TMPDIR`、`LANG`と、worktreeだけを`safe.directory`にするgitの設定(`GIT_CONFIG_COUNT`など)だけを渡す。workerの環境変数は1つも引き継がない。`TMPDIR`は`HOME`の下の0700のディレクトリである |
 | workerの秘密 | 別のuidのプロセスは、rootのプロセスの`/proc/<pid>/environ`とfdを読めない。`DATABASE_URL`や`WM_TOKEN`などの環境変数と、0600のファイルに届かない。枠のロックファイルと記録のディレクトリは0700である |
 | worktreeのロック | worktreeのロックファイルは0600で、検査用のユーザーは開けない。flockは読み取りで開いたファイルにもかけられるので、開けるとロックを握ってworktreeを塞げるためである |
-| 書き込める場所 | worktree、実行ごとの`HOME`、共有の一時ディレクトリ(`/tmp`、`/var/tmp`、`/dev/shm`、`/dev/mqueue`)である。main cloneの`.git`、worktreeの隣、システムのディレクトリ、`/var/lib/factory`には書けない |
+| 書き込める場所 | worktree、実行ごとの`HOME`、共有の一時ディレクトリ(`/tmp`、`/var/tmp`、`/dev/shm`、`/dev/mqueue`、`/run/lock`)である。main cloneの`.git`、worktreeの隣、システムのディレクトリ、`/var/lib/factory`には書けない。ベースのイメージが誰でも書けるようにしている`/usr/src/app`(Windmillの実行ファイルと共有ライブラリの置き場)と`/tmp/.cache`は、イメージのビルドで所有者だけが書けるようにする。共有の一時ディレクトリの外に誰でも書けるディレクトリがあれば、ビルドを失敗させる |
 | Windmillの実行時のディレクトリ | `/tmp/windmill`の下の`cache`などは、Windmillが誰でも書き込める権限(0777)で作る。rootのworkerが実行する依存のバンドルを検査用のユーザーが差し替えられないよう、検査の前に`/tmp/windmill`を所有者以外が入れない権限(0700)にする |
 | 後始末 | コマンドごとと実行の最後に、枠のuidのプロセスをSIGKILLで止める。止まらないプロセスが残れば、所有権を戻さずに失敗させる。実行の最後には、共有の一時ディレクトリとIPCからも枠のuidのものを消す |
-| イメージの前提 | 準備の最初に、後始末が呼ぶ道具(`setpriv`、`prlimit`、`find`、`chown`、`chmod`、`flock`、`rm`、`ipcrm`、`kill`、`getfacl`、`setfacl`)と、枠のuidの`factory-check-N`がイメージにあるかを確かめる。無ければ、所有権にも枠の記録にも触れずに止まる |
+| イメージの前提 | 準備の最初に、後始末が呼ぶ道具(`setpriv`、`prlimit`、`find`、`chown`、`chmod`、`flock`、`rm`、`ipcrm`、`kill`、`getfacl`、`setfacl`)と、枠のuidの`factory-check-N`がイメージにあるかを確かめる。共有の一時ディレクトリの外に、誰でも書けるディレクトリが無いことも確かめる。満たさなければ、所有権と枠の記録のどちらにも触れずに止まる |
 
 実行の順序は次のとおりである。
 

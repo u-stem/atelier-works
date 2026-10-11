@@ -675,6 +675,18 @@ suite("check slots in the worker image", () => {
     );
   });
 
+  test("a slot cannot add a file next to the Windmill binary root runs", () => {
+    expect(runAsUid(POOL[0] ?? 0, "touch /usr/src/app/planted", "/")).not.toBe(
+      0,
+    );
+  });
+
+  test("a slot can write only into the shared temporary directories outside the worktree and its home", async () => {
+    expect(await defaultSandboxDeps(lockDir).listWorldWritableDirs()).toEqual(
+      [],
+    );
+  });
+
   test("there are at least as many slots as the worker's processes", () => {
     expect(POOL.length).toBeGreaterThanOrEqual(3);
   });

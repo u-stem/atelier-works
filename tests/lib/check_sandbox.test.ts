@@ -71,6 +71,7 @@ import {
   slotSkipNoticeText,
   UnreadableSlotRecordError,
   WINDMILL_TMP_DIR,
+  worldWritableDirsArgv,
 } from "../../f/factory/lib/check_sandbox.ts";
 import { logger } from "../../f/factory/lib/log.ts";
 import type {
@@ -618,13 +619,20 @@ describe("removeAclArgv", () => {
 });
 
 describe("shared temporary directories", () => {
-  test("cover /tmp, /var/tmp, /dev/shm and the POSIX message queues", () => {
+  test("cover /tmp, /var/tmp, /dev/shm, the POSIX message queues and /run/lock", () => {
     expect(SHARED_TMP_DIRS).toEqual([
       "/tmp",
       "/var/tmp",
       "/dev/shm",
       "/dev/mqueue",
+      "/run/lock",
     ]);
+  });
+
+  test("the world-writable directories outside them are listed from the root without crossing mounts", () => {
+    expect(worldWritableDirsArgv().join(" ")).toBe(
+      "/usr/bin/find -P / -xdev ( -path /tmp -o -path /var/tmp -o -path /dev/shm -o -path /dev/mqueue -o -path /run/lock ) -prune -o -type d -perm -0002 -print",
+    );
   });
 
   test("directories of the slot uid are removed whole from their parent", () => {
@@ -943,7 +951,13 @@ describe("checkImageProblems", () => {
   const image = (opts?: {
     readonly missing?: readonly string[];
     readonly passwd?: string | null;
+    readonly worldWritable?: readonly string[] | null;
   }) => ({
+    listWorldWritableDirs: async () => {
+      const dirs = opts?.worldWritable === undefined ? [] : opts.worldWritable;
+      if (dirs === null) throw new Error("find failed");
+      return dirs;
+    },
     isExecutable: async (path: string) => !(opts?.missing ?? []).includes(path),
     readPasswd: async () => {
       const text = opts?.passwd === undefined ? passwd : opts.passwd;
@@ -978,6 +992,23 @@ describe("checkImageProblems", () => {
         }),
       ),
     ).toEqual(["no factory-check-N user for uid 10001"]);
+  });
+
+  test("reports a world-writable directory that no slot cleanup purges", async () => {
+    expect(
+      await checkImageProblems(
+        [20000],
+        image({ worldWritable: ["/usr/src/app"] }),
+      ),
+    ).toEqual([
+      "world-writable directories outside the shared temporary directories: /usr/src/app",
+    ]);
+  });
+
+  test("reports world-writable directories that cannot be listed", async () => {
+    expect(
+      await checkImageProblems([20000], image({ worldWritable: null })),
+    ).toEqual(["world-writable directories could not be listed"]);
   });
 
   test("reports an unreadable passwd", async () => {
@@ -1386,6 +1417,7 @@ function fakeSandboxDeps(opts?: {
     },
     pathKind: async (path) => opts?.pathKinds?.[path] ?? "directory",
     readSysctl: (name) => opts?.sysctl?.[name] ?? null,
+    listWorldWritableDirs: async () => [],
     isExecutable: async (path) => {
       imageChecks += 1;
       return !(opts?.missingTools ?? []).includes(path);

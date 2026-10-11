@@ -132,7 +132,7 @@ Claudeの実行ごとに`implement_rounds`へ1行記録する。リースを失�
 `worktree_changed`で止めるのは、変更の判定とgitleaksの検査の両方を経たツリーだけを、検証済みとして記録するためである。
 理由は`worktree changed before the secret scan in round <N>`になる。
 
-準備のステップ(`implement_prepare`)は、検査コマンドを設定したリポジトリでは、Claudeより前に、イメージに枠のユーザーと後始末の道具があるかを確かめる。
+準備のステップ(`implement_prepare`)は、検査コマンドを設定したリポジトリでは、Claudeより前に、イメージの前提([検査コマンドの権限](../security.md#検査コマンドの権限))を確かめる。
 無ければ、Claudeを動かさずに人の対応待ちで止まる。
 古いイメージのまま進むと、Claudeの1ラウンド分を使ってから検証で止まるためである。
 
@@ -538,7 +538,7 @@ noticeは1回の掃除でパスごとに1件で、Discordには通知しない�
 検査コマンドを実行するたびに、noticeの`unsandboxed_check_commands`を記録する。networkとworkerの資源を共有するので、Issueを信頼できる人だけが起票するリポジトリにだけ、このエントリを設定する。
 
 検査の間、worktreeと`HOME`の所有者は、取った枠のユーザーである。
-検査コマンドが書き込めるのは、worktree、その`HOME`、共有の一時ディレクトリ(`/tmp`、`/var/tmp`、`/dev/shm`、`/dev/mqueue`)だけである。
+検査コマンドが書き込めるのは、worktree、その`HOME`、共有の一時ディレクトリ(`/tmp`、`/var/tmp`、`/dev/shm`、`/dev/mqueue`、`/run/lock`)だけである。
 `TMPDIR`は`HOME`の下を指すので、一時ファイルは他の枠から読めない。
 検査が終わると、worktreeの所有者はrootに戻り、`HOME`は消える。
 枠は別のリポジトリの検査に使い回すので、枠を取るたびに、前の実行がそのuidで残したものを消してから使う。

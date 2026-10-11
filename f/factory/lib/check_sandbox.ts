@@ -104,15 +104,44 @@ export const WINDMILL_TMP_DIR = "/tmp/windmill";
 
 /**
  * 誰でも書き込める共有の一時ディレクトリ。POSIXの共有メモリとセマフォは`/dev/shm`に、
- * メッセージキューは`/dev/mqueue`に置かれる。
+ * メッセージキューは`/dev/mqueue`に置かれる。`/run/lock`(`/var/lock`の実体)はロックファイルの置き場である。
  * 枠を取るたびに、そのuidのものをここから消す。同じuidを次に使う実行が、前の実行の残したファイルを読めないようにするためである。
+ * これ以外に誰でも書き込めるディレクトリがあると、イメージの前提を満たさないとして検査を始めない(`checkImageProblems`)。
  */
 export const SHARED_TMP_DIRS = [
   "/tmp",
   "/var/tmp",
   "/dev/shm",
   "/dev/mqueue",
+  "/run/lock",
 ] as const;
+
+/**
+ * 共有の一時ディレクトリの外で、誰でも書き込めるディレクトリを列挙するargv。rootで実行する。
+ * `/`から、ほかのマウント(`/workspaces`などのボリューム、`/proc`)に入らずにたどり、共有の一時ディレクトリの下は見ない。
+ * 共有の一時ディレクトリの下のものは、枠を取るたびに枠のuidのものを消すためである。
+ */
+export function worldWritableDirsArgv(): string[] {
+  const prune = SHARED_TMP_DIRS.flatMap((dir, index) =>
+    index === 0 ? ["-path", dir] : ["-o", "-path", dir],
+  );
+  return [
+    FIND_PATH,
+    "-P",
+    "/",
+    "-xdev",
+    "(",
+    ...prune,
+    ")",
+    "-prune",
+    "-o",
+    "-type",
+    "d",
+    "-perm",
+    "-0002",
+    "-print",
+  ];
+}
 
 /**
  * 枠のロックファイルと記録を置くディレクトリ。永続のボリューム(`/var/lib/factory`)の下で、rootだけが入れる。
@@ -699,7 +728,7 @@ export const CHECK_IMAGE_STALE_REASON =
   "worker image is stale: run mise run up";
 
 /**
- * workerのイメージが、検査を枠のuidで動かす前提(道具と`factory-check-N`のユーザー)を満たさない。
+ * workerのイメージが、検査を枠のuidで動かす前提(`checkImageProblems`)を満たさない。
  * `f/`の変更がイメージの作り直しより先に反映されたときに起きる。検査の失敗ではなく、検査を実行できない環境の問題である。
  * 問題は`, `でつなぐ。理由の区切り(`; `)で別の理由に見えないようにするためである。
  */
@@ -900,6 +929,8 @@ export function resolveCheckPool(
 
 /** イメージの前提を確かめるための読み取り。 */
 export type ImageDeps = {
+  /** 共有の一時ディレクトリの外で、誰でも書き込めるディレクトリ(`worldWritableDirsArgv`)。列挙できなければ例外を投げる。 */
+  readonly listWorldWritableDirs: () => Promise<readonly string[]>;
   /** `path`が実行できるファイルかを返す。 */
   readonly isExecutable: (path: string) => Promise<boolean>;
   /** `/etc/passwd`の本文。読めなければ例外を投げる。 */
@@ -908,8 +939,11 @@ export type ImageDeps = {
 
 /**
  * workerのイメージが、`uids`の枠で検査を動かす前提を満たすかを確かめ、満たさない点を返す。空なら満たす。
- * 前提は、`REQUIRED_TOOL_PATHS`の道具がすべて実行できることと、`uids`のどれにも`factory-check-N`のユーザーがあることである。
+ * 前提は、`REQUIRED_TOOL_PATHS`の道具がすべて実行できることと、`uids`のどれにも`factory-check-N`のユーザーがあることと、
+ * 共有の一時ディレクトリの外に、誰でも書き込めるディレクトリが無いことである。
  * 古いイメージには、番号の無い`factory-check`のユーザーしか無く、`acl`も入っていない。
+ * ベースのイメージは`/usr/src/app`(Windmillの実行ファイルと共有ライブラリの置き場)を誰でも書き込めるようにしている。
+ * 開いたままだと、検査用のユーザーがrootの実行するファイルを差し替えられるので、イメージが閉じていなければ検査を始めない。
  */
 export async function checkImageProblems(
   uids: readonly number[],
@@ -933,6 +967,16 @@ export async function checkImageProblems(
     problems.push(
       `no ${CHECK_USER_PREFIX}N user for uid ${absent.map(String).join(", ")}`,
     );
+  }
+  try {
+    const open = await deps.listWorldWritableDirs();
+    if (open.length > 0) {
+      problems.push(
+        `world-writable directories outside the shared temporary directories: ${open.join(", ")}`,
+      );
+    }
+  } catch {
+    problems.push("world-writable directories could not be listed");
   }
   return problems;
 }
@@ -1741,6 +1785,18 @@ export function defaultSandboxDeps(
       }
     },
     readPasswd: () => readFile("/etc/passwd", "utf8"),
+    listWorldWritableDirs: async () => {
+      // 走査の間に消えたディレクトリでは`find`が0以外で終わるので、終了コードは見ず、出力で判断する。
+      const result = await runCommand(worldWritableDirsArgv(), {
+        cwd: TOOL_CWD,
+        env: { PATH: TOOL_PATH },
+        timeoutMs: CHOWN_TIMEOUT_MS,
+        maxOutputBytes: CHOWN_MAX_OUTPUT_BYTES,
+      });
+      if (result.timedOut)
+        throw new Error("listing world-writable directories timed out");
+      return result.stdout.split("\n").filter((line) => line !== "");
+    },
   };
 }
 
