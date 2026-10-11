@@ -9,8 +9,8 @@ function LoadingState() {
   return (
     <div className="flex flex-col gap-3" role="status">
       <span className="sr-only">読み込み中</span>
-      <Skeleton className="h-40 w-full max-w-3xl rounded-xl" />
-      <Skeleton className="h-24 w-full max-w-3xl rounded-xl" />
+      <Skeleton className="h-40 w-full rounded-xl" />
+      <Skeleton className="h-24 w-full rounded-xl" />
     </div>
   );
 }
