@@ -883,6 +883,66 @@ symlinkの作成・変更・削除、入れ子のリポジトリ、`.git`とい�
 
 worktreeの`.git`ファイルは、準備のときに検証して中身を記録する。以降、Claudeを起動する前とgitを実行する前に、記録と一致することを確かめる。参照先を別のディレクトリに向けられると、そこのconfigの設定を次のgitがrootで実行するためである。この安全策は実装のフローでも同じように働く。
 
+### gitが読む設定を限る
+
+`f/factory/lib/workspace.ts`と`f/factory/steps/pr_workflow_support.ts`が実行するgitは、読む設定を同じ方法で限る。
+どちらも`workspace.ts`の`buildGitArgv`と`localGitEnv`を使う。
+
+システムとグローバルの設定は、環境変数`GIT_CONFIG_NOSYSTEM`、`GIT_CONFIG_SYSTEM`、`GIT_CONFIG_GLOBAL`、`GIT_ATTR_NOSYSTEM`で読ませない。
+workerのホストの設定が、検証の前提を変えないためである。
+コミットのauthorは環境変数で、認証は`GH_TOKEN`で渡すので、これらの設定は要らない。
+workerのイメージは、グローバルのgit設定もgtrのグローバル設定も持たない。
+HOMEは、ghなどの子プロセスと、gitの`~`の展開(`.git/config`のパスの`~`、httpsの`$HOME/.netrc`)のために渡す。
+workerのHOMEには`.netrc`を置かない。イメージにも置いていない。
+`safe.directory`は設定しない。
+workerとcloneはどちらもrootで動き、`/workspaces`のボリュームの所有者が同じになるためである。
+Dockerfileとworkerの`docker-compose.yml`に、`USER`と`user:`の指定は無い。
+
+転送はhttpsだけを許す。環境変数`GIT_ALLOW_PROTOCOL`を`https`にする。
+`.git/config`に`protocol.ext.allow=always`と`ext::`のremoteを書かれると、`GH_TOKEN`を持つ環境でコマンドを実行されうる。
+この環境変数は`protocol.*`の設定より優先されるので、設定ファイルでは許可を広げられない。
+対象のremoteはhttpsだけなので、fileやsshは使えなくてよい。
+
+main cloneの`.git/config`は、gitがremoteやブランチの設定を読むので、読ませないことはできない。
+`extensions.worktreeConfig`が有効なときは、worktreeごとの`config.worktree`も読まれる。
+どちらも検査コマンドが書き換えられ、`-c`では`config.worktree`の読み込みを止められない。
+そこで、プログラムの実行と検証の前提に関わる設定を、コマンドラインの`-c`で固定する。
+`-c`はどの設定ファイルよりも優先されるので、設定ファイルに別の値を書かれても効かない。
+`git gtr`の子のgitにも、環境変数`GIT_CONFIG_PARAMETERS`を通して渡る。
+
+| 設定 | 固定する値 | 防ぐこと |
+| --- | --- | --- |
+| `core.hooksPath` | `/dev/null` | 設定のフックの実行 |
+| `core.fsmonitor` | `false` | 設定のfsmonitorのヘルパーの実行 |
+| `core.askPass` | 空 | 設定のaskpassのプログラムの実行 |
+| `commit.gpgsign` | `false` | commitの署名で`gpg.program`を実行させること |
+| `push.gpgSign` | `false` | pushの署名で`gpg.program`を実行させること |
+| `core.symlinks` | `false` | symlinkの検出が前提にする値の巻き戻し |
+| `core.excludesFile` | `/dev/null` | `$HOME/.config/git/ignore`の読み込み |
+| `core.attributesFile` | `/dev/null` | `$HOME/.config/git/attributes`の読み込み |
+| `credential.helper` | 空 | 設定のcredential helperの実行。`credential.<URL>.helper`も一覧ごと消える |
+
+`ignore`と`attributes`は設定ファイルではないので、`GIT_CONFIG_GLOBAL`では止まらない。
+ネットワーク操作では、この後にghのcredential helperを加える。
+
+`core.symlinks=false`はFactory自身のself cloneにも効く。
+Factoryのリポジトリにsymlinkを足すと、self cloneでは普通のファイルになる。
+
+固定していない設定は、そのまま読まれる。
+`url.*.insteadOf`、`remote.*.pushurl`、`http.*`、`filter.*`、`diff.*`などは、キーが対象ごとに変わり、名前で固定できない。
+名前が決まっていて、プログラムを実行できたり作業ツリーを変えたりする設定にも、固定していないものがある。
+`core.alternateRefsCommand`は、`objects/info/alternates`があるcloneのfetchで、シェルから実行される。
+`core.worktree`は、`config.worktree`に書くと、`status`、`clean`、`add -A`が見る作業ツリーを別のディレクトリに変える。
+どちらも実際のgitで確かめた。
+これらは残るリスクである。
+`git gtr new`のcheckoutは`GH_TOKEN`を持つ環境で動く。
+そのため、`.git/config`の`filter.<名前>.smudge`や`process`を、PRの内容の`.gitattributes`が指名すると、`GH_TOKEN`を読めるプログラムが動く。
+根本の対処は、ネットワーク操作とcheckoutを分け、checkoutを`localGitEnv`で行うことである。
+検査コマンドはworkerのrootとして隔離なしに動く([検査コマンドはフローが実行する](#検査コマンドはフローが実行する))。
+そのため、`.git/config`を書き換えなくても、gitプロセスの環境変数を読むなど、同じことができる。
+この隔離は、設定の誤動作への備えである。
+根本の対処は、検査コマンドの実行ユーザーをgitの実行ユーザーと分けることである。
+
 ### コミットの直前の再検査
 
 完了のステップは検証とは別のジョブなので、commitの前にもう一度確かめる。worktreeを使うプロセスが残っていないこと、ブランチとHEADが記録どおりであること、ステージした内容に保護パスやsymlinkが無いことを見る。1つでも通らなければ、commitとpushをしない。
