@@ -64,7 +64,8 @@ PR修正はラベルからしか起動しない。コメントやcommitのpush�
 PRのheadが対象のリポジトリにないとき(forkのPRと、headのリポジトリを取得できないPR)は、ラベルの経路もラベルを介さない経路も、レビューを始めない。
 `decidePrActions`が、始めるはずだったレビューを見送りとして返し、`poll_prs`が`fork_head_denied`のnoticeを残す。
 ラベルは外さない。
-`pr_review_prepare`も、作業項目を手で作るなどの経路に備えて、clone、fetch、worktreeの前に同じ確認をして、通らなければ処理を飛ばす。
+`pr_review_prepare`も、作業項目を手で作るなどの経路に備えて、clone、fetch、worktreeの前に同じ確認をする。
+通らなければ、作業項目を終端の`blocked`にして理由を残し、Discordで人に知らせてから、処理を飛ばす。
 同じ判定は、PR修正の準備のステップの「forkからでない」確認と共有する。
 
 ### 対象のリポジトリ
