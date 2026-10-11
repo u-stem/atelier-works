@@ -449,6 +449,8 @@ IPv4のアドレス(`127.0.0.1`など)かホスト名で開く。
 要件定義書の図は、最上位のページではなく、隔離したiframeの中で描く。
 何を守るかは、[セキュリティ](../security.md)の「draw.ioの図の描画」にある。
 `DrawioFrame`はどの画面にも組み込まれていない。部品と`drawio.html`が配信物に入っているだけである。
+旧Consoleのraw appは、同じ`/console/drawio.html`をiframeで読み込んで図を描く。
+そのため、旧Consoleで図を見るには、このConsoleの配信が動いている必要がある。
 
 | ファイル | 役割 |
 | --- | --- |
@@ -457,7 +459,7 @@ IPv4のアドレス(`127.0.0.1`など)かホスト名で開く。
 | `console/scripts/fetch-drawio-viewer.ts` | CIが呼ぶ。取得して照合し、`dist/drawio/`に書く |
 | `console/public/drawio.html` | 図を描くページ。scriptはすべて外部のファイルで、通常のscriptとして読む |
 | `console/public/drawio/drawio-frame-*.js` | ページの中の受け口。素のJavaScriptで、ビルドを通らない |
-| `console/src/lib/drawioMessages.ts` | 親が送るメッセージの組み立てと、iframeから届いたメッセージ(高さ、失敗の種類)の検査。純粋関数 |
+| `console/src/lib/drawioMessages.ts` | 親が送るメッセージの組み立てと、iframeから届いたメッセージ(高さ、失敗の種類)の検査。純粋関数。raw appの`lib/drawioMessages.ts`が、同じ`DRAWIO_FRAME_SRC`と`MAX_XML_BYTES`を持つ |
 | `console/src/lib/drawioFrameState.ts` | iframeの状態の遷移(load、メッセージ、応答なし、XMLの差し替え)を`(state, event) => state`で表す。純粋関数 |
 | `console/src/components/drawio/DrawioFrame.tsx` | 親の部品。どの画面からも使える |
 
