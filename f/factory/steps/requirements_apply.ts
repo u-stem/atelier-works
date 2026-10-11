@@ -67,10 +67,8 @@ export function shouldProceed(status: WorkItem["status"]): boolean {
  * Consoleへのリンクを1つだけ載せる。
  * リンクはMarkdownの形で書く。URLを裸で書くと、GitHubの自動リンクが
  * 直後の`(work_item_id`までURLに含めてしまい、リンクが壊れるため。
- * URLに加えて`work_item_id`も書くのは、Consoleがディープリンクの
- * フラグメントを読めないとき(opaque originのraw app。
- * `lib/approval_support.ts`の`buildConsoleUrl`を参照)の手動の代替手段にするため。
- * 人はこの値を要件定義タブの`work_item_id`フィルタに貼り付けられる。
+ * URLに加えて`work_item_id`も書くのは、リンクが開けないときでも、
+ * 人がどの作業項目の承認かを特定できるようにするため。
  */
 export function buildApprovedComment(
   consoleUrl: string,
@@ -454,6 +452,7 @@ async function run(
     }
     const consoleUrl = buildConsoleUrl(config.windmill_public_url, {
       work_item_id: workItem.id,
+      attempt,
     });
     const issueNumber = workItem.issue_number;
     const launchImplement = (): Promise<StartImplementOutcome> =>

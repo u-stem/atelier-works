@@ -1,20 +1,10 @@
-import { ExternalLink } from "lucide-react";
-import { LEGACY_CONSOLE_PATH } from "../../app/legacyConsole.ts";
 import { KindDot } from "../../components/KindDot.tsx";
 import { cn } from "../../lib/cn.ts";
-import {
-  hasLegacyLink,
-  type UnlistedCount,
-  unlistedNote,
-} from "../../lib/inboxView.ts";
-
-const LINK_CLASS =
-  "inline-flex items-center gap-1 rounded-sm font-medium text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring";
+import { type UnlistedCount, unlistedNote } from "../../lib/inboxView.ts";
 
 /**
  * 一覧に出していない要対応の件数を、種類ごとのカードで示す。
- * 旧Consoleの一覧が受け持つ種類は、旧Consoleへのリンクにする。
- * 一覧が受け持つ種類(失敗)の残りは、再実行できない監査の失敗と、取得の上限を超えた分なので、リンクの代わりにその旨を添える。
+ * 一覧にない分は、取得の上限を超えた分と、再実行できない監査の失敗なので、その旨を添える。
  * `compact`は、一覧の上の帯に収める1行の形である。
  */
 export function UnlistedCards({
@@ -46,21 +36,7 @@ export function UnlistedCards({
                 件
               </span>
             </span>
-            {hasLegacyLink(entry.type) ? (
-              <a
-                className={LINK_CLASS}
-                href={LEGACY_CONSOLE_PATH}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                旧Consoleで見る
-                <ExternalLink aria-hidden="true" className="size-3" />
-              </a>
-            ) : (
-              <span className="text-muted-foreground">
-                {unlistedNote(entry)}
-              </span>
-            )}
+            <span className="text-muted-foreground">{unlistedNote(entry)}</span>
           </li>
         ) : (
           <li
@@ -77,21 +53,9 @@ export function UnlistedCards({
                 件
               </span>
             </p>
-            {hasLegacyLink(entry.type) ? (
-              <a
-                className={cn(LINK_CLASS, "mt-1 text-small")}
-                href={LEGACY_CONSOLE_PATH}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                旧Consoleで見る
-                <ExternalLink aria-hidden="true" className="size-3" />
-              </a>
-            ) : (
-              <p className="mt-1 text-small text-muted-foreground">
-                {unlistedNote(entry)}
-              </p>
-            )}
+            <p className="mt-1 text-small text-muted-foreground">
+              {unlistedNote(entry)}
+            </p>
           </li>
         ),
       )}

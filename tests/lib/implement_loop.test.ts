@@ -100,7 +100,7 @@ const CONTEXT: ImplementContext = {
   requirements_diagrams: [],
   requirements_doc_dir: DOC_DIR,
   requirements_console_url:
-    "http://127.0.0.1:8080/apps/get/f/factory/factory_console#requirements/3",
+    "http://127.0.0.1:8080/console/items/3/requirements",
   is_factory_repo: false,
   worktree_git_pointer:
     "gitdir: /workspaces/acme/widgets/main/.git/worktrees/factory-issue-7-wi-3\n",

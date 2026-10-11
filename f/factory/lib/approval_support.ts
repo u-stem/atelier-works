@@ -78,40 +78,52 @@ export function buildRecordedReason(
 }
 
 /**
- * Factory ConsoleのWindmill Appのパス。
- * 承認フローのスクリプトはすべてこの定数からConsoleへのリンクを作る。
- * 実際のURLを確かめて直す必要が出たときに、1行の変更で済むよう1箇所にまとめている。
+ * Consoleの入口のパス。承認フローのscriptはすべてここからConsoleへのリンクを作る。
+ * 末尾の`/`を含める。Caddyは`/console/`の下だけをConsoleのSPAとして配るため。
  */
-const FACTORY_CONSOLE_APP_PATH = "f/factory/factory_console";
+const CONSOLE_ENTRANCE_PATH = "/console/";
 
 /**
- * Factory Console AppのInboxのURLを返す。このURLはログインを求める。
- * 承認・却下を求めるときに投稿するリンクはこれだけで、
- * 漏れると困るsuspendの権限付きURLはもう存在しない。
+ * ConsoleのURLを返す。このURLはログインを求める。
+ * 承認・却下を求めるときに投稿するリンクは、ログインを求めるConsoleのURLだけにする。
+ * `getResumeUrls()`の署名付きURLは、見た人が承認の記録を残さずに止まったフローを再開できるため載せない。
  *
- * `target.work_item_id`を渡すと`#requirements/<id>`のフラグメントを付け、
- * Consoleの要件定義タブがその作業項目の要件定義書を直接開けるようにする
- * (raw appの`lib/deepLink.ts`を参照)。
- * ただし、raw appは親フレームのURLを読めない場合があるため、これは保証ではない。
- * 手で辿れるよう、呼び出し側はどれもURLと一緒に`work_item_id`も書き出す
- * (IssueのコメントやDiscordのフィールド)。
+ * `target`を渡すと、その作業項目の要件定義書のページ
+ * (`/console/items/<work_item_id>/requirements`)を指す。
+ * `target.attempt`があるとその試行の要件定義書を、無ければ最新の試行を開く。
+ * 経路の形は`console/src/app/screens.ts`の表に合わせる。
  */
 export function buildConsoleUrl(
   windmillPublicUrl: string,
-  target?: { work_item_id: number },
+  target?: { work_item_id: number; attempt?: number },
 ): string {
-  const base = `${windmillPublicUrl}/apps/get/${FACTORY_CONSOLE_APP_PATH}`;
-  return target === undefined
-    ? base
-    : `${base}#requirements/${String(target.work_item_id)}`;
+  const entrance = `${windmillPublicUrl}${CONSOLE_ENTRANCE_PATH}`;
+  if (target === undefined) {
+    return entrance;
+  }
+  const page = `${entrance}items/${String(target.work_item_id)}/requirements`;
+  return target.attempt === undefined
+    ? page
+    : `${page}?attempt=${String(target.attempt)}`;
 }
 
-/** 監査レポート1件を開くConsoleのURL(監査タブ、`#audit/<work_item_id>`)を返す。 */
+/**
+ * 承認依頼1件を選んだ状態のConsoleの要対応のURL(`/console/?approval=<id>`)を返す。
+ * 承認と却下はこの画面で行う。
+ */
+export function buildApprovalConsoleUrl(
+  windmillPublicUrl: string,
+  approvalRequestId: number,
+): string {
+  return `${windmillPublicUrl}${CONSOLE_ENTRANCE_PATH}?approval=${String(approvalRequestId)}`;
+}
+
+/** 監査レポート1件を開くConsoleのURL(`/console/reports/audit/<work_item_id>`)を返す。 */
 export function buildAuditConsoleUrl(
   windmillPublicUrl: string,
   workItemId: number,
 ): string {
-  return `${windmillPublicUrl}/apps/get/${FACTORY_CONSOLE_APP_PATH}#audit/${String(workItemId)}`;
+  return `${windmillPublicUrl}${CONSOLE_ENTRANCE_PATH}reports/audit/${String(workItemId)}`;
 }
 
 /**

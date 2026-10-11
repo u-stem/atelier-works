@@ -223,6 +223,97 @@ describe("redirect from /console", () => {
   });
 });
 
+// 旧Console(raw app)のURLを、新しいConsoleの入口に飛ばす規則を静的に確かめる。
+const legacyBlock = braceBlock("handle @legacy_console {");
+const legacyPattern = /@legacy_console path_regexp \(\?i\)(\S+)/.exec(
+  CADDYFILE,
+)?.[1];
+
+/** Caddyfileの`@legacy_console`の正規表現が、このパスに合うか。 */
+function matchesLegacyConsole(pathname: string): boolean {
+  return (
+    legacyPattern !== undefined && new RegExp(legacyPattern, "i").test(pathname)
+  );
+}
+
+describe("redirect from the legacy console", () => {
+  test("sends the legacy console to a fixed /console/ with a temporary redirect", () => {
+    expect(legacyBlock).toContain("redir * /console/ 302");
+  });
+
+  test("builds the destination from no part of the request", () => {
+    expect(legacyBlock.slice(legacyBlock.indexOf("{") + 1)).not.toContain("{");
+  });
+
+  test("tells the browser not to cache the redirect", () => {
+    expect(legacyBlock).toContain('header Cache-Control "no-store"');
+  });
+
+  test("comes before the redirect from /console", () => {
+    expect(CADDYFILE.indexOf("handle @legacy_console {")).toBeLessThan(
+      CADDYFILE.indexOf("handle /console {"),
+    );
+  });
+
+  test("comes before the proxy to the Windmill server", () => {
+    expect(CADDYFILE.indexOf("handle @legacy_console {")).toBeLessThan(
+      CADDYFILE.indexOf("reverse_proxy http://windmill_server:8000"),
+    );
+  });
+
+  test("matches the app view path", () => {
+    expect(matchesLegacyConsole("/apps/get/f/factory/factory_console")).toBe(
+      true,
+    );
+  });
+
+  test("matches the raw app view path", () => {
+    expect(
+      matchesLegacyConsole("/apps_raw/get/f/factory/factory_console"),
+    ).toBe(true);
+  });
+
+  test("matches a path below the legacy console", () => {
+    expect(
+      matchesLegacyConsole("/apps/get/f/factory/factory_console/assets/a.js"),
+    ).toBe(true);
+  });
+
+  test("matches a path with a trailing slash", () => {
+    expect(matchesLegacyConsole("/apps/get/f/factory/factory_console/")).toBe(
+      true,
+    );
+  });
+
+  test("matches a path with repeated slashes", () => {
+    expect(matchesLegacyConsole("//apps//get//f/factory/factory_console")).toBe(
+      true,
+    );
+  });
+
+  test("does not match another app whose name starts the same", () => {
+    expect(matchesLegacyConsole("/apps/get/f/factory/factory_console2")).toBe(
+      false,
+    );
+  });
+
+  test("does not match another app of the factory", () => {
+    expect(matchesLegacyConsole("/apps/get/f/factory/other")).toBe(false);
+  });
+
+  test("does not match the editor of the legacy console", () => {
+    expect(matchesLegacyConsole("/apps/edit/f/factory/factory_console")).toBe(
+      false,
+    );
+  });
+
+  test("does not match a path that only contains the legacy path", () => {
+    expect(matchesLegacyConsole("/x/apps/get/f/factory/factory_console")).toBe(
+      false,
+    );
+  });
+});
+
 describe("the console fallback", () => {
   test("refuses the draw.io page and scripts, which only drawio_headers may serve", () => {
     expect(fallbackBlock).toContain("error @drawio 404");

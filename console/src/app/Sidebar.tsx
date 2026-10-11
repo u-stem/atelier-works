@@ -1,4 +1,4 @@
-import { ExternalLink, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { type KeyboardEvent, useRef, useState } from "react";
 import { NavLink } from "react-router";
 import { useConsoleStatus } from "../api/consoleStatus.ts";
@@ -19,7 +19,6 @@ import {
   parseSidebarCollapsed,
   SIDEBAR_STORAGE_KEY,
 } from "../lib/navigation.ts";
-import { LEGACY_CONSOLE_PATH } from "./legacyConsole.ts";
 import { SCREENS } from "./screens.ts";
 import { ThemeSwitch } from "./ThemeSwitch.tsx";
 import { useNow } from "./useNow.ts";
@@ -192,15 +191,6 @@ export function Sidebar() {
           <>
             <ReleaseInfo />
             <ThemeSwitch />
-            <a
-              className="inline-flex w-fit items-center gap-1 rounded-sm text-small text-subtle underline underline-offset-4 outline-none transition-colors duration-150 hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring motion-reduce:transition-none"
-              href={LEGACY_CONSOLE_PATH}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              旧Consoleを開く
-              <ExternalLink aria-hidden="true" className="size-3" />
-            </a>
           </>
         )}
         <Tooltip>

@@ -177,7 +177,7 @@ raw appの`components/RequirementsDocument.tsx`、`Markdown.tsx`、`DrawioViewer
 `unavailable`はしばらく待ってからやり直す。
 
 確認から決定の記録までの間のIssueの書き換えは防げない。
-承認者が見た内容のハッシュに結び付ければ防げるが、承認の操作が2つのConsoleにあり、旧Consoleの承認タブは取り込み時点の内容を出さないので、今は採れない。
+承認者が見た内容のハッシュに結び付ければ防げるが、`approval_decide`がそのハッシュを受け取らないので、今は採れない。
 実装を終えたときの、PR本文の注記が残りを拾う。
 
 Console用のworkerで動くscriptのうち、`github_token`を読むのは、`retry_work_item`と`approval_decide`である。
@@ -189,7 +189,7 @@ Console用のworkerで動くscriptのうち、`github_token`を読むのは、`r
 
 承認なら、作業項目を承認済み(`approved`)にする。続けてIssueへのコメント、Discordへの通知、`req-<N>`のworktreeの削除を順に実行する。Issueへのコメントは、Consoleの要件定義へのリンク1件だけである。本文と図はIssueに書かない。
 
-リンクの末尾には`#requirements/<work_item_id>`を付け、コメントには`work_item_id`も書く。Consoleがこのフラグメントを読めない環境でも、IDで探せるようにするためである。
+リンクは、承認した試行の要件定義書のページ(`/console/items/<work_item_id>/requirements?attempt=<k>`)を指す。コメントには`work_item_id`も書き、リンクが開けないときでも、どの作業項目の承認かを特定できるようにする。
 
 `implement_enabled`が真なら、続けて実装フローを起動する。却下のときの遷移と、実装フローの起動の手順は[作業項目の状態とリース](work-items.md)に書く。
 

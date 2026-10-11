@@ -1,5 +1,5 @@
 summary: '[SF-5-2] 運用記録の監査と改善提案'
-description: Factory自身の運用記録(失敗・却下・要人手・コスト・通知・デプロイ)を監査し、監査レポートとFactory自身への改善提案を生成します。提案はConsoleの承認タブで人が承認
+description: Factory自身の運用記録(失敗・却下・要人手・コスト・通知・デプロイ)を監査し、監査レポートとFactory自身への改善提案を生成します。提案はConsoleの要対応で人が承認
   / 却下し、承認した提案だけがIssueとして起票されます。
 value:
   modules:

@@ -382,11 +382,11 @@ describe("buildEmbed", () => {
       url: "https://github.com/octo-owner/atelier-works/issues/42",
       reason: "承認がタイムアウトしました",
       target: { kind: "issue", number: 42 },
-      next_action: "Consoleの承認タブで承認または却下してください",
+      next_action: "Consoleの要対応で承認または却下してください",
     });
     expect(embed.fields).toContainEqual({
       name: "次の操作",
-      value: "Consoleの承認タブで承認または却下してください",
+      value: "Consoleの要対応で承認または却下してください",
     });
   });
 
@@ -399,7 +399,7 @@ describe("buildEmbed", () => {
       url: "https://github.com/octo-owner/atelier-works/issues/42",
       reason: "承認がタイムアウトしました",
       target: { kind: "issue", number: 42 },
-      next_action: "Consoleの承認タブで承認または却下してください",
+      next_action: "Consoleの要対応で承認または却下してください",
     });
     expect(embed.title).toBe("人による対応が必要です: Issue #42");
   });
@@ -500,11 +500,9 @@ describe("buildEmbed", () => {
       issue_number: 42,
       issue_url: "https://github.com/octo-owner/atelier-works/issues/42",
       title: "Add feature",
-      inbox_url: "http://127.0.0.1:8080/apps/get/f/factory/factory_console",
+      inbox_url: "http://127.0.0.1:8080/console/?approval=9",
     });
-    expect(embed.url).toBe(
-      "http://127.0.0.1:8080/apps/get/f/factory/factory_console",
-    );
+    expect(embed.url).toBe("http://127.0.0.1:8080/console/?approval=9");
   });
 
   test("still includes the issue url as a field on approval_requested", () => {
@@ -516,7 +514,7 @@ describe("buildEmbed", () => {
       issue_number: 42,
       issue_url: "https://github.com/octo-owner/atelier-works/issues/42",
       title: "Add feature",
-      inbox_url: "http://127.0.0.1:8080/apps/get/f/factory/factory_console",
+      inbox_url: "http://127.0.0.1:8080/console/?approval=9",
     });
     expect(embed.fields).toContainEqual({
       name: "Issue",
@@ -549,11 +547,10 @@ describe("buildEmbed", () => {
       issue_number: 42,
       issue_url: "https://github.com/octo-owner/atelier-works/issues/42",
       title: "Add feature",
-      console_url:
-        "http://127.0.0.1:8080/apps/get/f/factory/factory_console#requirements/7",
+      console_url: "http://127.0.0.1:8080/console/items/7/requirements",
     });
     expect(embed.url).toBe(
-      "http://127.0.0.1:8080/apps/get/f/factory/factory_console#requirements/7",
+      "http://127.0.0.1:8080/console/items/7/requirements",
     );
   });
 
@@ -566,8 +563,7 @@ describe("buildEmbed", () => {
       issue_number: 42,
       issue_url: "https://github.com/octo-owner/atelier-works/issues/42",
       title: "Add feature",
-      console_url:
-        "http://127.0.0.1:8080/apps/get/f/factory/factory_console#requirements/7",
+      console_url: "http://127.0.0.1:8080/console/items/7/requirements",
     });
     expect(embed.fields).toContainEqual({
       name: "Issue",
@@ -581,26 +577,24 @@ describe("buildEmbed", () => {
       instance_name: "local",
       period_label: "2026-09-22〜2026-09-28",
       proposal_count: 2,
-      console_url:
-        "http://127.0.0.1:8080/apps/get/f/factory/factory_console#audit/12",
+      console_url: "http://127.0.0.1:8080/console/reports/audit/12",
       work_item_id: 12,
     });
     expect(embed.fields.map((f) => f.name)).toContain("次の操作");
   });
 
-  test("audit_completed points to the 承認 tab of the Console", () => {
+  test("audit_completed points to the inbox of the Console", () => {
     const embed = buildEmbed({
       kind: "audit_completed",
       instance_name: "local",
       period_label: "2026-09-22〜2026-09-28",
       proposal_count: 2,
-      console_url:
-        "http://127.0.0.1:8080/apps/get/f/factory/factory_console#audit/12",
+      console_url: "http://127.0.0.1:8080/console/reports/audit/12",
       work_item_id: 12,
     });
     expect(embed.fields).toContainEqual({
       name: "次の操作",
-      value: "Consoleの承認タブで提案を承認または却下してください",
+      value: "Consoleの要対応で提案を承認または却下してください",
     });
   });
 

@@ -214,7 +214,7 @@ URLの許可リストは、Factory自身のリポジトリのGitHubのURL(`facto
 
 すべての提案が決定すると、`issue_proposal_apply`が作業項目を`awaiting_approval`から`audited`へ進める。
 
-Discordの`audit_completed`の通知は、提案が1件以上あるときだけ送る。通知のリンクは`#audit/<work_item_id>`で終わる。通知の失敗はジョブを失敗させない。
+Discordの`audit_completed`の通知は、提案が1件以上あるときだけ送る。通知のリンクは、Consoleの監査レポートのページ(`/console/reports/audit/<work_item_id>`)を指す。通知の失敗はジョブを失敗させない。
 
 ### 起票
 

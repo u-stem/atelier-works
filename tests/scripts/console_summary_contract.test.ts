@@ -4,7 +4,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { isConsoleSummary } from "../../console/src/api/guards/summary.ts";
-import { LEGACY_CONSOLE_PATH } from "../../console/src/app/legacyConsole.ts";
+import { parseSelection } from "../../console/src/lib/inboxSelection.ts";
 import {
   approvalKindLabel,
   approvalStatusLabel,
@@ -14,7 +14,13 @@ import {
   workItemKindLabel,
   workItemStatusLabel,
 } from "../../console/src/lib/labels.ts";
-import { buildConsoleUrl } from "../../f/factory/lib/approval_support.ts";
+import { legacyDeepLinkTarget } from "../../console/src/lib/legacyDeepLink.ts";
+import { parseAttemptParam } from "../../console/src/lib/requirementsView.ts";
+import {
+  buildApprovalConsoleUrl,
+  buildAuditConsoleUrl,
+  buildConsoleUrl,
+} from "../../f/factory/lib/approval_support.ts";
 import { NOTICE_SEVERITY } from "../../f/factory/lib/console_support.ts";
 import type { SqlClient, SqlRow } from "../../f/factory/lib/db.ts";
 import {
@@ -155,9 +161,37 @@ describe("timestamps in the delivered summary", () => {
   });
 });
 
-describe("legacy console location", () => {
-  test("the console link matches the app path that the backend links to", () => {
-    expect(buildConsoleUrl("")).toBe(LEGACY_CONSOLE_PATH);
+const CONSOLE_PUBLIC_URL = "http://127.0.0.1:8080";
+
+describe("console links built by the approval flow", () => {
+  test("the approval link selects the approval in the inbox", () => {
+    const { searchParams } = new URL(
+      buildApprovalConsoleUrl(CONSOLE_PUBLIC_URL, 9),
+    );
+    expect(parseSelection(searchParams)).toEqual({ type: "approval", id: 9 });
+  });
+
+  test("the requirements link carries the attempt that the screen reads", () => {
+    const { searchParams } = new URL(
+      buildConsoleUrl(CONSOLE_PUBLIC_URL, { work_item_id: 7, attempt: 2 }),
+    );
+    expect(parseAttemptParam(searchParams.get("attempt"))).toEqual({
+      kind: "attempt",
+      attempt: 2,
+    });
+  });
+
+  test("the audit report link has the path that the legacy audit link is read as", () => {
+    expect(legacyDeepLinkTarget("#audit/12")).toBe(
+      new URL(buildAuditConsoleUrl(CONSOLE_PUBLIC_URL, 12)).pathname,
+    );
+  });
+
+  test("the requirements link has the path that the legacy requirements link is read as", () => {
+    expect(legacyDeepLinkTarget("#requirements/7")).toBe(
+      new URL(buildConsoleUrl(CONSOLE_PUBLIC_URL, { work_item_id: 7 }))
+        .pathname,
+    );
   });
 });
 

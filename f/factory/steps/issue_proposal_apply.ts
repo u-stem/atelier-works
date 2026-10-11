@@ -381,7 +381,7 @@ async function run(
         // 印は残す。Issueが作られていた場合に、期限が切れるまで次の承認が何もせず終わる。
         await revertIssueProposalToPending(proposal_id);
         throw new Error(
-          `issue_proposal_apply: Issueの起票に失敗しました: ${maskSecrets(err instanceof Error ? err.message : String(err))}。Consoleの承認タブから再度承認してください`,
+          `issue_proposal_apply: Issueの起票に失敗しました: ${maskSecrets(err instanceof Error ? err.message : String(err))}。Consoleの要対応から再度承認してください`,
         );
       }
       await setIssueProposalCreatedIssue(proposal_id, {

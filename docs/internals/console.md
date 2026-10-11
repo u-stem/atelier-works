@@ -82,7 +82,9 @@ routerの基準は`/console`で、Caddyが`/console/`の下のパスに`index.ht
 
 ### 旧Consoleのリンク
 
-URLのフラグメントが旧Consoleの形なら、新しい経路に置き換える。
+過去のDiscordの通知、Issueのコメント、PRの本文には、旧Console(Windmillのraw app)のリンクが残る。
+旧ConsoleのURLを開くと、Caddyが固定の`/console/`へ302で飛ばす。規則は「配信の経路」にある。
+URLのフラグメントはブラウザが保つので、新しいConsoleが読み替える。
 `main.tsx`が、routerを作る前に`history.replaceState`で置き換える。
 routerが先に`/console/`の画面を描くと、その画面が一瞬動いてしまうためである。
 置き換えは履歴を増やさない。
@@ -94,9 +96,19 @@ routerが先に`/console/`の画面を描くと、その画面が一瞬動いて
 | `#requirements/<id>/attempt-<k>` | `/console/items/<id>/requirements?attempt=<k>` |
 | `#audit/<id>` | `/console/reports/audit/<id>` |
 
-サイドバーの「旧Consoleを開く」は、Windmillのraw appの旧Consoleへのリンクである。
-旧Consoleは新しいタブで開く。件数のカードのリンクも同じである。
-行き先のパスは、承認フローが投稿するConsoleのリンクと同じでなければならない。契約テストで固定している。
+上の表に合わない旧ConsoleのフラグメントとフラグメントのないURLは、`/console/`の入口(要対応)に着く。
+
+承認フローが投稿するConsoleのリンクは、新しいConsoleの経路を直接指す。
+`f/factory/lib/approval_support.ts`が、次の3つを作る。
+
+| リンク | 作る関数 | 経路 |
+| --- | --- | --- |
+| 要件定義書 | `buildConsoleUrl` | `/console/items/<id>/requirements`。試行が分かるときは`?attempt=<k>`を付ける |
+| 承認の詳細 | `buildApprovalConsoleUrl` | `/console/?approval=<id>` |
+| 監査レポート | `buildAuditConsoleUrl` | `/console/reports/audit/<id>` |
+
+サイドバーと件数のカードは、旧Consoleへのリンクを持たない。
+旧Consoleの入口は`/console/`に飛ぶので、リンクを置いても新しいConsoleに戻るだけである。
 
 ## API層
 
@@ -179,12 +191,16 @@ backendが先に新しい値を反映した間や、配信を前の版に固定�
 時刻の文字列は、`Z`か`+09:00`のオフセットが付いた形だけを通す。
 オフセットが無いと、ブラウザがローカル時刻として読み、閲覧する場所で絶対時刻がずれるためである。
 `summary`の型は、`f/factory/steps/console_query.ts`の`ConsoleSummary`に合わせてある。
-`tests/scripts/console_summary_contract.test.ts`が、次の4点を確かめる。
+`tests/scripts/console_summary_contract.test.ts`が、次の5点を確かめる。
 
 - backendの変換結果が型ガードを通ること
 - backendの列挙の値が`labels.ts`の表に漏れていないこと
 - backendの時刻にオフセットが付くこと
-- 旧Consoleのパスが、承認フローの投稿するConsoleのリンクと一致すること
+- 承認フローの投稿するConsoleのリンクが、画面が読む引数(`approval`、`attempt`)を持つこと
+- 承認フローの投稿するConsoleのリンクの経路が、旧Consoleのフラグメントの読み替え先と同じになること
+
+リンクが経路の表(`screens.ts`)の経路に解決できることは、`console/src/app/consoleLinks.test.ts`が確かめる。
+ルートのテストは`.tsx`の画面を読み込めないので、経路の表を引くこのテストはConsoleの側に置く。
 
 新しい値に気づくのは、この契約テストの役目である。
 `deployments`viewの型は`DeploymentHistoryRow`に合わせてある。
@@ -311,7 +327,7 @@ Console用workerのscriptが読むsecret変数は、`tests/scripts/console_worke
 通知は、重要度が要対応の未解決のものを数える。重要度が情報の通知は、一覧に出さないので数えない。
 一覧の件数と食い違う数字を、最初に見る場所へ出さないためである。
 
-下部には、配信している版と取り込みの最後の確認、テーマの切り替え、旧Consoleへのリンク、たたむ操作を置く。
+下部には、配信している版と取り込みの最後の確認、テーマの切り替え、たたむ操作を置く。
 版の情報は`/console/status.json`から読む。取れなければ出さない。
 状態が固定中か失敗のときは、その旨の注意を添える。
 テーマはライト、ダーク、OSに合わせるの3つをアイコンで切り替える。
@@ -556,7 +572,7 @@ Windmillの失敗の包み方を通した場合も、同じテストが確かめ
 最新の試行は、承認する試行と違うことがあるためである。
 取得した書の試行が承認の試行と違うときも、承認を止める。
 
-承認の前の確認は、旧Consoleから承認しても働く([要件定義](requirements.md)の「承認の前のIssueの確認」)。
+承認の前の確認は、承認の操作を受ける側で働く([要件定義](requirements.md)の「承認の前のIssueの確認」)。
 
 ### Issue提案の本文
 
@@ -572,12 +588,10 @@ Issue提案の本文と、ラベルの選択肢の出し分けに使う情報は
 詳細から行える操作は、承認と却下、失敗の再実行、通知の解決である。
 一覧に出ていない件数は、種類ごとのカード(色の点、件数)で知らせる。
 対象は、取得の上限を超えた承認、失敗、通知と、再実行できない監査の失敗である。
-承認のカードは、旧Consoleへのリンク(「旧Consoleで見る」)にする。サイドバーの「旧Consoleを開く」と同じ行き先にする。
-旧Consoleにはタブを指す方法が無いので、リンクは既定のタブを開く。
-失敗と通知のカードは、新しい画面の一覧が受け持つので、リンクを持たない。
+カードはリンクを持たず、文を添える。
 残る件数は、再実行できない監査の失敗と、取得の上限を超えた分である。
 監査の失敗のカードには、再実行できないこととシステムの画面で確認することを添える。
-取得は新しい順に上限まで読むので、上限を超えた分は古いものから表示されない。失敗と通知のカードにその旨を添える。
+取得は新しい順に上限まで読むので、上限を超えた分は古いものから表示されない。承認、失敗、通知のカードにその旨を添える。
 同じ数をサイドバーには出さない。画面の中で1か所だけに示すためである。
 
 一覧が空のときは、画面を2つに割らず、中央に1枚の面を出す。
@@ -1129,12 +1143,18 @@ Caddyは、`/console/`の下を次の経路で返す。
 
 | パス | 返すもの | キャッシュ |
 | --- | --- | --- |
+| `/apps/get/f/factory/factory_console`と`/apps_raw/get/f/factory/factory_console`(配下を含む) | 固定の`/console/`への302のリダイレクト。パスとクエリは行き先に写さない | `no-store` |
 | `/console` | `/console/`への308のリダイレクト。クエリ(`?approval=<id>`など)は保つ | - |
 | `/console/status.json` | ボリューム直下の`status.json`。無ければ404 | `no-store` |
 | `/console/assets/*` | 共有の`assets/`。無ければ404 | 長期(immutable) |
 | `/console/drawio/*` | `current/`の`drawio/`。ビューアと受け口。無ければ404 | 長期(immutable) |
 | `/console/drawio.html` | `current/`の`drawio.html`。無ければ404 | `no-cache` |
 | `/console/*` | `current/`のファイル。無いパスは`index.html` | `no-cache` |
+
+旧Consoleへの規則は、`/console/`の経路より先に評価する。
+旧Consoleの編集画面(`/apps/edit/...`)とAPIは飛ばさない。
+旧Consoleのraw appを削除した後も、この規則は残す。過去のリンクが残り続けるためである。
+302にするのは、ブラウザに転送を覚えさせないためである。Caddyfileを戻したときに、旧Consoleへ届かなくなるのを防ぐ。
 
 `/console/manifest.json`は、`current/`の`manifest.json`である。
 `status.json`は`state`、`sha`、`checked_at`、`error`の4項目だけを持つ。
@@ -1480,6 +1500,8 @@ GETとHEAD以外をナビゲーションで送る導線は、型定義から見�
 
 規則は、Caddyを起動して`bash scripts/check-caddy-origin.sh`で確かめる。
 composeと同じイメージで`infra/Caddyfile`を動かし、止めるべき要求が403に、通すべき要求が(転送先のWindmillを起動しないので)502になることを、`curl`で比べる。
+旧ConsoleのURLの転送も、同じスクリプトで確かめる。
+旧Consoleのパスと配下、重なった`/`、クエリ付きの要求が、どれも`Location`が`/console/`だけの302になること、名前の続く別のアプリと編集画面は飛ばさないことを比べる。
 Caddyが起動しないときは、コンテナのログを出して失敗する。
 CIの`caddyfile`ジョブも、同じスクリプトを動かす。
 Dockerが要る。

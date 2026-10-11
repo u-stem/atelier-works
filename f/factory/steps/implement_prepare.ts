@@ -105,7 +105,10 @@ export type BuildImplementContextInput = {
    * (題名と本文はworkItemの取り込み時点の値を使う)。
    */
   readonly issue: Pick<Issue, "title" | "body" | "htmlUrl">;
-  readonly draft: Pick<RequirementDraft, "markdown" | "diagrams" | "doc_dir">;
+  readonly draft: Pick<
+    RequirementDraft,
+    "attempt" | "markdown" | "diagrams" | "doc_dir"
+  >;
   readonly branch: string;
   readonly baseBranch: string;
   readonly baseSha: string;
@@ -164,7 +167,7 @@ export function buildImplementContext(
     requirements_doc_dir: input.draft.doc_dir,
     requirements_console_url: buildConsoleUrl(
       input.config.windmill_public_url,
-      { work_item_id: workItem.id },
+      { work_item_id: workItem.id, attempt: input.draft.attempt },
     ),
     is_factory_repo: isFactoryRepo(
       input.config.factory_repo,

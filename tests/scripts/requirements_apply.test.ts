@@ -121,8 +121,7 @@ describe("shouldProceed", () => {
 });
 
 describe("buildApprovedComment", () => {
-  const CONSOLE_URL =
-    "http://127.0.0.1:8080/apps/get/f/factory/factory_console#requirements/7";
+  const CONSOLE_URL = "http://127.0.0.1:8080/console/items/7/requirements";
 
   test("states that requirements are approved", () => {
     expect(buildApprovedComment(CONSOLE_URL, 7)).toContain(
@@ -152,8 +151,7 @@ describe("buildApprovalCommentFailedMessage", () => {
     issue_number: 42,
     work_item_id: 7,
   };
-  const CONSOLE_URL =
-    "http://127.0.0.1:8080/apps/get/f/factory/factory_console#requirements/7";
+  const CONSOLE_URL = "http://127.0.0.1:8080/console/items/7/requirements";
 
   test("names the issue and the work item", () => {
     expect(
