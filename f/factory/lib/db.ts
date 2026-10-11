@@ -698,6 +698,27 @@ export async function updateStatusIfCurrentClearingFlowJobId(
 }
 
 /**
+ * 却下による作り直しの前に、Issueの作業項目に取り込んだ題名と本文を更新する。
+ * 作り直しのために`requirements_generating`へ移したばかりで、pipelineのリース
+ * (`flow_job_id`)がまだ空の作業項目だけを更新する。
+ * 別の実行がリースを取った後や、作業項目が先に動いた後は何も書かずに`false`を返す。
+ */
+export async function updateIntakeIfRegenerating(
+  id: number,
+  intake: { readonly title: string; readonly body: string },
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  const rows = await sql`
+    UPDATE factory.work_items
+    SET title = ${intake.title}, body = ${intake.body}, updated_at = now()
+    WHERE id = ${id}
+      AND kind = 'issue' AND status = 'requirements_generating' AND flow_job_id IS NULL
+    RETURNING id
+  `.fetch();
+  return rows.length > 0;
+}
+
+/**
  * updateStatusIfCurrentと同じ比較と交換に、flow_job_idがexpectedFlowJobIdのままであること
  * (nullならNULLのままであること)を条件として足す。実装フローは自分のルートジョブIDを渡して、
  * リースを失った実行が状態を動かせないようにする。reconcileとon_error_flowは読み取った時点の値を渡す。

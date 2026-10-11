@@ -10,8 +10,10 @@ import {
   buildApprovedComment,
   buildImplementLaunchNoticeMessage,
   decideRejectedOutcome,
+  type RefreshIntakeDeps,
   type RejectedRetryDeps,
   readRequestAttempt,
+  refreshIntakeFromIssue,
   relaunchPipelineAfterRejection,
   shouldProceed,
 } from "../../f/factory/steps/requirements_apply.ts";
@@ -48,6 +50,9 @@ function rejectedDeps(overrides: Partial<RejectedRetryDeps> = {}): {
     },
     removeWorktree: async () => {
       calls.push("remove_worktree");
+    },
+    refreshIntake: async () => {
+      calls.push("refresh_intake");
     },
     launchPipeline: async () => {
       calls.push("launch");
@@ -384,9 +389,30 @@ describe("relaunchPipelineAfterRejection", () => {
       "cas",
       "mark_restartable",
       "remove_worktree",
+      "refresh_intake",
       "launch",
       "record",
     ]);
+  });
+
+  test("refreshes the intake after the move and before the launch", async () => {
+    const h = rejectedDeps();
+    await relaunchPipelineAfterRejection(h.deps);
+    expect(h.calls.indexOf("refresh_intake")).toBeLessThan(
+      h.calls.indexOf("launch"),
+    );
+  });
+
+  test("does not refresh the intake when the CAS did not match", async () => {
+    const h = rejectedDeps({ casToGenerating: async () => false });
+    await relaunchPipelineAfterRejection(h.deps);
+    expect(h.calls).not.toContain("refresh_intake");
+  });
+
+  test("launches even when the intake refresh throws", async () => {
+    const h = rejectedDeps({ refreshIntake: boom });
+    await relaunchPipelineAfterRejection(h.deps);
+    expect(h.calls).toContain("launch");
   });
 
   test("does not mark restartable when the CAS throws", async () => {
@@ -530,5 +556,91 @@ describe("readRequestAttempt", () => {
 
   test("falls back when attempt is not a number", () => {
     expect(readRequestAttempt({ attempt: "2" }, 1)).toBe(1);
+  });
+});
+
+describe("refreshIntakeFromIssue", () => {
+  const SNAPSHOT = { title: "Add feature", body: "Original body" };
+
+  function refreshDeps(overrides: Partial<RefreshIntakeDeps> = {}): {
+    deps: RefreshIntakeDeps;
+    written: { title: string; body: string }[];
+    logs: string[];
+  } {
+    const written: { title: string; body: string }[] = [];
+    const logs: string[] = [];
+    const deps: RefreshIntakeDeps = {
+      snapshot: SNAPSHOT,
+      getIssue: async () => ({ title: "Add feature", body: "New body" }),
+      writeIntake: async (intake) => {
+        written.push(intake);
+        return true;
+      },
+      log: (message) => {
+        logs.push(message);
+      },
+      ...overrides,
+    };
+    return { deps, written, logs };
+  }
+
+  test("writes the current title and body when they differ from the snapshot", async () => {
+    const h = refreshDeps();
+    await refreshIntakeFromIssue(h.deps);
+    expect(h.written).toEqual([{ title: "Add feature", body: "New body" }]);
+  });
+
+  test("reports updated after writing", async () => {
+    expect(await refreshIntakeFromIssue(refreshDeps().deps)).toBe("updated");
+  });
+
+  test("does not write when the issue equals the snapshot", async () => {
+    const h = refreshDeps({
+      getIssue: async () => ({ title: "Add feature", body: "Original body" }),
+    });
+    await refreshIntakeFromIssue(h.deps);
+    expect(h.written).toEqual([]);
+  });
+
+  test("reports unchanged when the issue equals the snapshot", async () => {
+    const h = refreshDeps({
+      getIssue: async () => ({ title: "Add feature", body: "Original body" }),
+    });
+    expect(await refreshIntakeFromIssue(h.deps)).toBe("unchanged");
+  });
+
+  test("keeps the snapshot when GitHub fails", async () => {
+    const h = refreshDeps({ getIssue: boom });
+    await refreshIntakeFromIssue(h.deps);
+    expect(h.written).toEqual([]);
+  });
+
+  test("reports fetch_failed when GitHub fails", async () => {
+    const h = refreshDeps({ getIssue: boom });
+    expect(await refreshIntakeFromIssue(h.deps)).toBe("fetch_failed");
+  });
+
+  test("reports not_written when the work item moved on", async () => {
+    const h = refreshDeps({ writeIntake: async () => false });
+    expect(await refreshIntakeFromIssue(h.deps)).toBe("not_written");
+  });
+
+  test("reports write_failed when the write throws", async () => {
+    const h = refreshDeps({ writeIntake: boom });
+    expect(await refreshIntakeFromIssue(h.deps)).toBe("write_failed");
+  });
+
+  test("does not put the token in the log when GitHub fails", async () => {
+    const logged: string[] = [];
+    const h = refreshDeps({
+      getIssue: async () => {
+        throw new Error(`bad credentials ${GITHUB_TOKEN}`);
+      },
+      log: (message, fields) => {
+        logged.push(`${message} ${JSON.stringify(fields)}`);
+      },
+    });
+    await refreshIntakeFromIssue(h.deps);
+    expect(logged.join("\n")).not.toContain(GITHUB_TOKEN);
   });
 });

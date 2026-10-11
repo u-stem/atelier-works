@@ -11,12 +11,18 @@ import {
   getWorkItem,
   recordFailure,
   setFlowJobIdIfUnset,
+  updateIntakeIfRegenerating,
   updateStatusIfCurrent,
   updateStatusIfCurrentClearingFlowJobId,
   updateStatusIfLeaseHolder,
 } from "../lib/db.ts";
 import { notify, notifyBestEffort } from "../lib/discord.ts";
-import { commentIssue, type GhClient, getViewer } from "../lib/github.ts";
+import {
+  commentIssue,
+  type GhClient,
+  getIssue,
+  getViewer,
+} from "../lib/github.ts";
 import { REQUIREMENTS_REGENERATION_FAILED_REASON } from "../lib/implement_finish_support.ts";
 import {
   parseFlowJobId,
@@ -24,6 +30,7 @@ import {
   startImplement,
 } from "../lib/implement_launch_support.ts";
 import { IMPLEMENT_FLOW_PATH } from "../lib/implement_loop.ts";
+import { issueChangedSinceIntake } from "../lib/implement_support.ts";
 import { type Logger, logger, maskSecrets } from "../lib/log.ts";
 import { PIPELINE_FLOW_PATH } from "../lib/pipeline_lease.ts";
 import { type FactoryConfig, isNumber, type WorkItem } from "../lib/types.ts";
@@ -195,6 +202,12 @@ export type RejectedRetryDeps = {
    * 失敗してもwarnを残すだけで投げない約束だが、約束が破られても起動を止めないよう、呼び出し側でも捕まえる。
    */
   readonly removeWorktree: () => Promise<void>;
+  /**
+   * 作業項目に取り込んだ題名と本文を、現在のIssueの内容に更新する(`refreshIntakeFromIssue`)。
+   * 比較交換の後、pipelineを起動する前に呼ぶ。pipelineは起動後に作業項目を読むので、新しい内容で作り直される。
+   * 更新できなくても作り直しは止めないので、投げない約束だが、約束が破られても起動を止めないよう、呼び出し側でも捕まえる。
+   */
+  readonly refreshIntake: () => Promise<unknown>;
   /** `runFlowAsync(PIPELINE_FLOW_PATH, ...)`の戻り値をそのまま返す。ジョブIDの解析は呼び出し先が行う。 */
   readonly launchPipeline: () => Promise<string>;
   /** `setFlowJobIdIfUnset`でジョブIDを記録する。別の実行が先にリースを取っていれば`false`を返す。 */
@@ -213,9 +226,75 @@ export type RejectedRetryDeps = {
   readonly log: (message: string, fields: Record<string, unknown>) => void;
 };
 
+export type RefreshIntakeOutcome =
+  | "updated"
+  | "unchanged"
+  | "fetch_failed"
+  | "not_written"
+  | "write_failed";
+
+export type RefreshIntakeDeps = {
+  /** 作業項目に保存されている、取り込み時点の題名と本文。 */
+  readonly snapshot: {
+    readonly title: string | null;
+    readonly body: string | null;
+  };
+  /** GitHubから現在のIssueの題名と本文を取る。 */
+  readonly getIssue: () => Promise<{
+    readonly title: string;
+    readonly body: string;
+  }>;
+  /** `updateIntakeIfRegenerating`で書く。作業項目が先に動いていれば`false`を返す。 */
+  readonly writeIntake: (intake: {
+    readonly title: string;
+    readonly body: string;
+  }) => Promise<boolean>;
+  readonly log: (message: string, fields: Record<string, unknown>) => void;
+};
+
+/**
+ * 却下による作り直しの前に、作業項目の題名と本文を現在のIssueの内容に更新する。
+ * 却下の理由が「Issueを書き換えた」ことのとき、作り直した要件定義が書き換え後の内容に基づき、
+ * 次の承認の確認(`approval_check_issue`)が通るようにするためである。
+ * 承認者がConsoleで見る取り込み時点の内容は更新後の値で、実装のClaudeに渡る内容と一致する。
+ *
+ * GitHubから取れなかったとき、書き込みに失敗したとき、作業項目が先に動いたときは、更新せずに
+ * 元の値を保つ。例外は投げない。作り直しは元の値で進み、Issueが違えば次の承認が断られるので、
+ * 承認者がもう一度却下すれば更新を再試行できる。
+ */
+export async function refreshIntakeFromIssue(
+  deps: RefreshIntakeDeps,
+): Promise<RefreshIntakeOutcome> {
+  let live: { readonly title: string; readonly body: string };
+  try {
+    live = await deps.getIssue();
+  } catch (err) {
+    deps.log("could not fetch the issue; keeping the intake content", {
+      error: messageOf(err),
+    });
+    return "fetch_failed";
+  }
+  if (!issueChangedSinceIntake(deps.snapshot, live)) return "unchanged";
+  try {
+    const written = await deps.writeIntake({
+      title: live.title,
+      body: live.body,
+    });
+    if (!written) {
+      deps.log("work item moved on; the intake content was not updated", {});
+      return "not_written";
+    }
+    return "updated";
+  } catch (err) {
+    deps.log("could not write the intake content", { error: messageOf(err) });
+    return "write_failed";
+  }
+}
+
 /**
  * 却下された要件定義を作り直すため、作業項目を`requirements_generating`へ移してpipelineを起動する。
  * 比較交換が一致しなければ何もせずに`not_moved`を返す。
+ * 移した後、起動の前に、取り込んだ題名と本文を現在のIssueの内容に更新する(`refreshIntake`)。
  *
  * 比較交換で`flow_job_id`(pipelineのリース)を空にし、起動したジョブIDは空のときだけ記録する。
  * pipelineは起動するとすぐ準備ステップで作業項目を読み直すので、worktreeの片付けは起動より先に行う。
@@ -234,6 +313,14 @@ export async function relaunchPipelineAfterRejection(
     await deps.removeWorktree();
   } catch (err) {
     deps.log("failed to remove requirements worktree", {
+      error: messageOf(err),
+    });
+  }
+
+  try {
+    await deps.refreshIntake();
+  } catch (err) {
+    deps.log("failed to refresh the intake content", {
       error: messageOf(err),
     });
   }
@@ -557,6 +644,16 @@ async function run(
           request.reason,
         ),
       removeWorktree: () => removeReqWorktree(workItem),
+      refreshIntake: () =>
+        refreshIntakeFromIssue({
+          snapshot: workItem,
+          getIssue: () =>
+            getIssue(client, workItem.owner, workItem.repo, issueNumber),
+          writeIntake: (intake) =>
+            updateIntakeIfRegenerating(workItem.id, intake),
+          log: (message, fields) =>
+            log.warn(message, { work_item_id: workItem.id, ...fields }),
+        }),
       launchPipeline: () =>
         wmill.runFlowAsync(PIPELINE_FLOW_PATH, {
           work_item_id: workItem.id,

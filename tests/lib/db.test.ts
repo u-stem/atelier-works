@@ -77,6 +77,7 @@ import {
   toIssueProposal,
   toRequirementDraft,
   toReviewRecord,
+  updateIntakeIfRegenerating,
   updateStatus,
   updateStatusIfCurrent,
   updateStatusIfCurrentClearingFlowJobId,
@@ -3696,5 +3697,35 @@ describe("resolveNoticesBeforeSuccessfulDeployment", () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await call(sql);
     expect(calls[0]?.text).toContain("resolved_at = now()");
+  });
+});
+
+describe("updateIntakeIfRegenerating", () => {
+  test("writes the title and body", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await updateIntakeIfRegenerating(1, { title: "T", body: "B" }, sql);
+    expect(calls[0]?.values).toEqual(["T", "B", 1]);
+  });
+
+  test("only updates an issue work item that is regenerating without a lease", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await updateIntakeIfRegenerating(1, { title: "T", body: "B" }, sql);
+    expect(calls[0]?.text).toContain(
+      "kind = 'issue' AND status = 'requirements_generating' AND flow_job_id IS NULL",
+    );
+  });
+
+  test("returns true when a row was updated", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 1 }]]);
+    expect(
+      await updateIntakeIfRegenerating(1, { title: "T", body: "B" }, sql),
+    ).toBe(true);
+  });
+
+  test("returns false when the work item moved on", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(
+      await updateIntakeIfRegenerating(1, { title: "T", body: "B" }, sql),
+    ).toBe(false);
   });
 });

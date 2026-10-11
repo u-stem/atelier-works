@@ -26,7 +26,7 @@ locks:
   f/factory/lib/console_status: ee1e2ab9df9b3fc2b5fd492d3576a137dc418f3d616373a555e043d373b411c9
   f/factory/lib/console_support: 74749e31a0354f1414f7514c4b0f93ded86e21580e1a5779a4d459add649cd30
   f/factory/lib/console_worker: 11bd1a25b12937a6988d70beab4c5d482459551275673c69369f1e6b78138189
-  f/factory/lib/db: 4306360932e1a0de887e50272d742e0d46207084bf1a2cf34286db8d64cd429a
+  f/factory/lib/db: 4b6c6996e9a99887463d28f3f1218d53bdb8c8ad6d330e81db159c4734e9d5b8
   f/factory/lib/discord: 341d92926bbc1d4293cbebfe753371562ddf428caa2f1c3483438dc5dd014e2e
   f/factory/lib/drawio: d6c208d61c640f7019c865f28fb77f2a50dcf539ced468e33d2e731709a7be32
   f/factory/lib/github: bd0aedc6f86ea8a0e761259bf08db6431fc012507603c22581f448134c3acaab
@@ -85,4 +85,4 @@ locks:
   f/factory/steps/pr_review_post: eed26e78c65d0f339b99530491dffb0b3044bd16324f07ff97c5ef9035c2b314
   f/factory/steps/pr_review_prepare: 4f258ff787df1ea0659550eec7e3923bc8db578698beb2b72781bc2f7050001b
   f/factory/steps/pr_workflow_support: f86bc16ea4f05aeb1aa5695090138dc0562bde8deba5705e5000505e20cf7c69
-  f/factory/steps/requirements_apply: 9c9587b41e7a7df7b71fd09b8e287d3acfa01531e1cd83816b22b547de308fc9
+  f/factory/steps/requirements_apply: 6ec9e455a3d525feef63bdececd44f1de003335079a965dce33d43ede016281b
