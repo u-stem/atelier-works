@@ -4194,13 +4194,19 @@ describe("listAutoRetryCandidates", () => {
   test("excludes an issue that a newer cycle replaced", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await listAutoRetryCandidates(params, sql);
-    expect(calls[0]?.text).toContain("newer.cycle > w.cycle");
+    expect(calls[0]?.text).toContain("newer.cycle");
+  });
+
+  test("excludes a pr_fix item that a newer row of the same pull request replaced", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listAutoRetryCandidates(params, sql);
+    expect(calls[0]?.text).toContain("newer_fix.id");
   });
 
   test("excludes an item that used up its restarts", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await listAutoRetryCandidates(params, sql);
-    expect(calls[0]?.text).toContain("c.work_item_id = w.id AND starts_with(");
+    expect(calls[0]?.text).toContain("starts_with(");
   });
 
   test("passes the restart cap as a parameter", async () => {
@@ -4253,7 +4259,13 @@ describe("restartStoppedWorkItem", () => {
   test("guards the update against a newer cycle of the same Issue", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await restartStoppedWorkItem(params, sql, NO_JOBS);
-    expect(calls[0]?.text).toContain("newer.cycle > factory.work_items.cycle");
+    expect(calls[0]?.text).toContain("newer.cycle");
+  });
+
+  test("guards the update against a newer pr_fix row of the same pull request", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await restartStoppedWorkItem(params, sql, NO_JOBS);
+    expect(calls[0]?.text).toContain("newer_fix.id");
   });
 
   test("records the event in the same statement", async () => {

@@ -816,6 +816,8 @@ export type AutoRetryCandidate = {
  * 対象は、実装(`issue`)の`needs_human`と、PR修正(`pr_fix`)の`blocked`である。
  * 理由は、その状態へ移った最新の遷移の注記である。
  * 同じIssueに新しいサイクルがある`issue`は、新しいサイクルに置き換えられているので除く。
+ * 同じPRに`id`の大きい`pr_fix`がある`pr_fix`も、新しい行に置き換えられているので除く。
+ * 新しい行は、終端でも稼働中でも構わない(`newestNewerPrWorkItem`と同じ条件)。
  * 注記が`notePrefix`で始まる遷移(これまでの自動の再開)が`maxRestarts`回に達したものも除く。
  * 再開できない項目が`limit`件を占めて、後ろの項目を締め出さないためである。
  * 要件が未承認の項目のように、DBの条件だけでは除けないものは、呼び出し側が飛ばす。
@@ -855,6 +857,12 @@ export async function listAutoRetryCandidates(
           AND newer.owner = w.owner AND newer.repo = w.repo
           AND newer.issue_number = w.issue_number AND newer.cycle > w.cycle
       )
+      AND NOT EXISTS (
+        SELECT 1 FROM factory.work_items newer_fix
+        WHERE w.kind = 'pr_fix' AND newer_fix.kind = 'pr_fix'
+          AND newer_fix.owner = w.owner AND newer_fix.repo = w.repo
+          AND newer_fix.pr_number = w.pr_number AND newer_fix.id > w.id
+      )
       AND (
         SELECT count(*) FROM factory.work_item_events c
         WHERE c.work_item_id = w.id AND starts_with(c.note, ${params.notePrefix})
@@ -883,7 +891,8 @@ export async function listAutoRetryCandidates(
  * 止まった作業項目を、理由を条件にした比較と交換で再開の状態へ移す。
  * 状態が`expectedFrom`で、その状態へ移った最新の遷移の注記が`reasonPrefixes`のどれかで始まり、
  * 注記が`notePrefix`で始まる遷移(これまでの自動の再開)が`maxRestarts`回未満で、
- * 同じIssueに新しいサイクルの`issue`が無いときだけ更新し、同じ文で遷移の記録を残す。`clearFlowJobId`なら`flow_job_id`も空にする。
+ * 同じIssueに新しいサイクルの`issue`が無く、同じPRに`id`の大きい`pr_fix`も無いときだけ更新し、
+ * 同じ文で遷移の記録を残す。`clearFlowJobId`なら`flow_job_id`も空にする。
  * 条件に合わなければ何も書かずに`false`を返す。人が先に再開した場合や、
  * 並行する別の実行が先に再開した場合も、状態が変わっているので`false`になり、二重に起動しない。
  */
@@ -927,6 +936,13 @@ export async function restartStoppedWorkItem(
             AND newer.owner = factory.work_items.owner AND newer.repo = factory.work_items.repo
             AND newer.issue_number = factory.work_items.issue_number
             AND newer.cycle > factory.work_items.cycle
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM factory.work_items newer_fix
+          WHERE factory.work_items.kind = 'pr_fix' AND newer_fix.kind = 'pr_fix'
+            AND newer_fix.owner = factory.work_items.owner AND newer_fix.repo = factory.work_items.repo
+            AND newer_fix.pr_number = factory.work_items.pr_number
+            AND newer_fix.id > factory.work_items.id
         )
       RETURNING id
     )
