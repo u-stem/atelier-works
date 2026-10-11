@@ -209,7 +209,7 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `claim_assignee_missing` | `poll_issues` | 対象、assigneeにできなかったユーザー、確かめる点 |
 | `pr_trigger_label_left_removed` | `poll_prs` | 対象のPRと、外れたままのトリガーラベル |
 | `supersede_failed` | `insertIssueWorkItemUnlessActive`(`poll_issues`が呼ぶ) | 対象、新しい作業項目のID、操作が要らないこと |
-| `deployed_sha_mismatch` | `poll_issues` | self cloneのHEADと`f/factory/deployed_sha` |
+| `deployed_sha_mismatch` | `poll_issues` | `f/factory/deployed_sha`、原因の候補 |
 | `cleanup_db_failed` | `cleanup_db` | 削除に失敗した対象とエラー |
 | `cleanup_worktrees_skipped` | `cleanup_workspaces` | 掃除を見送ったリポジトリ |
 | `cleanup_worktree_busy` | `cleanup_workspaces` | 作業項目のID、worktreeのパス、worktreeを使っているプロセス |
@@ -233,9 +233,57 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 `poll_prs`のその他の`claim_race_lost`は、毎回追加する。
 `supersede_failed`は、新しいサイクルの挿入の後に、古い承認済みの作業項目を取り消す文が失敗したときに残す。Discordには通知しない。
 同じ状況が続く間、ポーリングのたびに積み上がるのを防ぐためである。
-`deployed_sha_mismatch`は、self cloneのHEADとデプロイ版が同じ組で、未解決のnoticeがあるあいだは追加しない。
-`poll_issues`が実行されるたびに同じnoticeが積み上がり、ほかの種類が埋もれるためである。
-版の組が変わったときと、既存のnoticeを解決した後に再び食い違ったときは、1件残す。
+`deployed_sha_mismatch`は、反映が止まったときだけ残す。
+mergeの直後から自己更新が反映するまでの間は、版が必ず食い違うためである。
+`poll_issues`は、食い違いを最初に見た時刻を、このスケジュールのWindmillのstateのキー`deployed_sha_check`の下に保存する。
+自己更新の2周期(20分)に、`poll_issues`の1周期(5分)と反映にかかる時間の見込み(5分)を足した30分を超えて続いたときに、1件残す。
+反映にかかる時間は見込みで、実測の上限ではない。
+自己更新は反映のために外部コマンドを最大3回呼び、1回の上限は5分である。正常な反映も、見込みを超えうる。
+超えたときは通知が出るが、反映が成功すると自動で解決される。
+2つのスケジュールは毎時0分で位置が重なるので、20分ちょうどでは判定が反映より先に動いて誤って知らせうる。
+数え直すのは、反映済みの版(`f/factory/deployed_sha`)が変わったとき、つまり反映が進んだときだけである。
+止まったままmergeが続き、self cloneのHEADだけが変わっても、数え直さない。
+`f/factory/deployed_sha`が空のときは、変数が無いときと同じく、何もしない。stateとnoticeは変えない。
+本文は反映済みの版を中心にし、今のself cloneのHEADを含めない。
+重複の判定は本文の一致で行うので、HEADを含めると、止まっている間にmergeのたびにnoticeが増える。時刻も入れない。
+今のHEADは、`poll_issues`のログで分かる。
+noticeを新しく残したときは`deployed_sha_mismatch notice recorded`に、noticeのIDを添えて出る。
+同じ本文の未解決のnoticeがあったときは`deployed_sha_mismatch notice already open`に出る。
+本文には、直近の反映の記録(`factory.deployments`)から読んだ原因の候補を添える。
+記録の行の対象の版が今のHEADで、結果が失敗のときだけ、反映の失敗を候補にする。
+それ以外は、自己更新が止まっているか、まだ今のHEADを試していないことを候補にする。
+記録を読めない場合と、1行も無い場合でも、noticeは残す。そのときは候補を添えない。
+候補が変わると本文も変わるので、同じ反映済みの版でも、候補ごとに最大で1件ずつ残る。
+stateを読めないとき、書けないときは、猶予を数えられない。反映の停止を見逃さないよう、待たずに残す。
+
+`poll_issues`は、`f/factory/deployed_sha`が空でない実行のたびに、判定の結果によらず、先にnoticeを解決する。
+解決するのは、未解決の`deployed_sha_mismatch`のうち、次の行より前に作られたものだけである(`resolved_by`は`poll_issues`)。
+今の`f/factory/deployed_sha`への反映が成功した行のうち、最も新しい行である。
+成功した行は、`factory.deployments`の`result`が`success`で`sha_to`が反映済みの版の行を指す。
+時刻の比較は、noticeの`created_at`と、行の`occurred_at`で行う。どちらも行を入れたときのDBの`now()`で決まる。workerの時計とstateは使わない。
+判定と更新は1つの文で行う。その版への成功した行が無ければ、何も解決しない。
+
+この条件には、次の意味がある。
+
+- 普通の反映では、自己更新が成功の行を記録する。それより前に作られた停止のnoticeは、古い版を名指しするので解決される。版が一致した場合も同じである。
+- 反映が止まったままなら、新しい成功の行が無いので、noticeは残る。
+- `deployed_sha`を過去に成功した版へ書き戻しても、その成功の行より後に作られたnoticeは解決されない。
+- stateを書き換えても、解決には影響しない。
+- 自己更新が変数を更新した後、記録の前に動いた回は、成功の行がまだ無いので何も解決しない。次の実行が、記録された行を見て解決する。
+- 自己更新が変数をself cloneのHEADへ更新した後、変更したパスの取得か反映の記録が失敗すると、その版への失敗の行だけが残る。次の回は版が一致して「変更なし」で終わり、成功の行が作られない。この間に作られた停止のnoticeは、次に別の版の反映が成功するまで残る。人が解決してよい。
+- 人が変数を今のHEADへ手で書き換えて版を一致させたときも、その版への成功の行が無いので、止まっていた版を名指しするnoticeは自動では解決されない。人が解決してよい。
+
+解決を先に行うので、その後で残す新しいnoticeは、成功の行より後に作られ、解決されない。
+ただし、`poll_issues`が変数を読んだ後、noticeを作る前に、`self_update`が反映を終えて成功を記録することがある。
+このとき、古い版を名指しするnoticeが、成功より後の時刻で作られる。
+このnoticeは、次に別の版の反映が成功するまで残ることがある。
+人がConsoleで解決してよい。
+解決したあとも、self cloneのHEADが反映済みの版と一致していれば、noticeは再び作られない。
+解決の失敗は警告のログだけにし、判定と通知は続ける。
+反映が進んだときに、新しい版のstateを記録できなければ、通知へ進む。
+版が一致してもstateのキーを消せなかったとき、またはstateを読めず消さなかったときは、古い記録が残る。
+次のmergeで同じ版の食い違いが起きると、猶予を待たずに通知することがある。次に版が一致すれば、自動で解決される。
+stateは、このキーだけを書き換え、消すときもこのキーだけを除く。ほかのキーは保つ。
 
 Issueの取得に成功すると、`poll_issues`は未解決の`labeler_denied`を解決済みにする。
 対象は、本文が`<owner>/<repo>#<番号>:`と空白1つで始まるすべてのnoticeで、`resolved_by`は`poll_issues`になる。

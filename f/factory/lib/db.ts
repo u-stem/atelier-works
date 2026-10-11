@@ -48,6 +48,7 @@ import {
   isOneOf,
   isRecord,
   isString,
+  type LatestDeployment,
   type Notice,
   type NoticeRecord,
   type RequirementDraft,
@@ -1044,6 +1045,26 @@ export async function recordDeployment(
   return parseId(row.id, "id");
 }
 
+/** `factory.deployments`の最新の1行を返す。1行も無ければ`null`を返す。 */
+export async function getLatestDeployment(
+  sql: SqlClient = defaultSqlClient,
+): Promise<LatestDeployment | null> {
+  const rows = await sql`
+    SELECT result, sha_to
+    FROM factory.deployments
+    ORDER BY occurred_at DESC, id DESC
+    LIMIT 1
+  `.fetch();
+  const row = rows[0];
+  if (row === undefined) {
+    return null;
+  }
+  return {
+    result: parseRequiredString(row.result, "result"),
+    sha_to: parseRequiredString(row.sha_to, "sha_to"),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // notices
 // ---------------------------------------------------------------------------
@@ -1114,6 +1135,35 @@ export async function getNoticeById(
         : parseDate(row.resolved_at, "resolved_at"),
     created_at: parseDate(row.created_at, "created_at"),
   };
+}
+
+/**
+ * `kind`の未解決のnoticeのうち、`shaTo`への反映の成功の記録より前に作られたものを
+ * 解決済みにし(`resolved_by`は`resolvedBy`)、解決した行数を返す。
+ * 基準は、`factory.deployments`の`result = 'success'`かつ`sha_to = shaTo`の行のうち、最も新しい`occurred_at`である。
+ * 成功の記録が無ければ基準がNULLになり、何も解決しない。
+ * 比べる2つの時刻は、どちらも行を入れたときのDBの`now()`なので、workerの時計にもstateにも頼らない。
+ * 反映の後に作られたnoticeは、その反映より後の状況を表すので解決しない。
+ * 判定と更新は1つの文で行う。
+ */
+export async function resolveNoticesBeforeSuccessfulDeployment(
+  kind: string,
+  shaTo: string,
+  resolvedBy: string,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  const rows = await sql`
+    UPDATE factory.notices
+    SET resolved = true, resolved_by = ${resolvedBy}, resolved_at = now()
+    WHERE kind = ${kind}
+      AND resolved = false
+      AND created_at < (
+        SELECT max(occurred_at) FROM factory.deployments
+        WHERE result = 'success' AND sha_to = ${shaTo}
+      )
+    RETURNING id
+  `.fetch();
+  return rows.length;
 }
 
 /**

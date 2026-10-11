@@ -22,6 +22,7 @@ import { loadConfig } from "./lib/config.ts";
 import {
   addNoticeUnlessUnresolved,
   expireApprovalRequestIfPending,
+  getLatestDeployment,
   getWorkItem,
   hasNonTerminalPrWorkItem,
   type InsertedIssueWorkItem,
@@ -31,6 +32,7 @@ import {
   listExpiredPendingApprovalRequests,
   nextCycleForIssue,
   recordFailure,
+  resolveNoticesBeforeSuccessfulDeployment,
   resolveUnresolvedNoticesByPrefix,
   setFlowJobId,
   updateStatusIfCurrent,
@@ -60,7 +62,6 @@ import {
   decideClosureOnly,
   decideIssueActions,
   decideReconcileAction,
-  deployedShaMismatchMessage,
   filterByRepoAllowlist,
   groupActionableTargets,
   type IssueCandidate,
@@ -75,6 +76,7 @@ import {
   readJobState,
   recordLabelerCheckLimit,
   rotateTargets,
+  runDeployedShaCheck,
 } from "./lib/poll_support.ts";
 import { postSupersededComments } from "./lib/supersede_support.ts";
 import type {
@@ -166,10 +168,15 @@ async function recordFailureSafe(
   }
 }
 
+/** `deployed_sha_mismatch`のnoticeを、反映が追いついたとして解決するときの`resolved_by`。 */
+const DEPLOYED_SHA_RESOLVER = "poll_issues";
+
 /**
  * self cloneのHEADのshaを変数`f/factory/deployed_sha`と比べ、
- * 食い違えばnoticeを記録する。noticeを残すだけでジョブは失敗させない。
- * 同じ版の組の未解決のnoticeがあれば、新しく記録しない(版の組が変われば記録する)。
+ * 食い違いが猶予を超えて続くときだけnoticeを記録する。
+ * 食い違いを最初に見た時刻は、このscheduleのWindmillのstateに保存する。
+ * 毎回、今の`deployed_sha`への反映の成功の記録より前のnoticeを解決済みにする。判定は`runDeployedShaCheck`にある。
+ * noticeを残すだけでジョブは失敗させない。
  * 変数が無い・空のときは、まだ比べる対象が無いとみなす。
  */
 async function checkDeployedSha(
@@ -186,17 +193,28 @@ async function checkDeployedSha(
     });
     const selfSha = await readRepoHeadSha(runCommand, factoryClone.dir);
 
-    let deployedSha: string;
+    let deployedSha: string | null;
     try {
       deployedSha = await wmill.getVariable("f/factory/deployed_sha");
     } catch {
-      return; // 変数がまだ無い。`self_update`が一度も動いていない。
+      deployedSha = null; // 変数がまだ無い。`self_update`が一度も動いていない。
     }
-    if (deployedSha.length === 0 || deployedSha === selfSha) return;
 
-    await addNoticeUnlessUnresolved({
-      kind: "deployed_sha_mismatch",
-      message: deployedShaMismatchMessage(selfSha, deployedSha),
+    await runDeployedShaCheck({
+      selfSha,
+      deployedSha,
+      getState: () => wmill.getState(),
+      setState: (state) => wmill.setState(state),
+      getLatestDeployment: () => getLatestDeployment(),
+      addNotice: (record) => addNoticeUnlessUnresolved(record),
+      resolveNotices: (sha) =>
+        resolveNoticesBeforeSuccessfulDeployment(
+          "deployed_sha_mismatch",
+          sha,
+          DEPLOYED_SHA_RESOLVER,
+        ),
+      nowMs: () => Date.now(),
+      log,
     });
   } catch (err) {
     log.warn("deployed_sha check failed", {

@@ -18,6 +18,7 @@ import {
   insertWorkItem,
   recordFailure,
   resolveNoticeIfUnresolved,
+  resolveNoticesBeforeSuccessfulDeployment,
   resolveStaleInfoNoticesBefore,
   resolveUnresolvedNoticesByMessage,
   resolveUnresolvedNoticesByPrefix,
@@ -899,6 +900,146 @@ check(
   cleanupSummary?.info_notices_resolved === 3 &&
     cleanupSummary.notices_deleted === 2,
   cleanupSummary,
+);
+
+// ---------------------------------------------------------------------------
+// deployed_sha_mismatchの解決(反映の成功の記録より前に作られたnoticeだけ)
+// ---------------------------------------------------------------------------
+
+const MISMATCH_KIND = "deployed_sha_mismatch";
+const MISMATCH_RESOLVER = "qdb_resolver";
+
+async function mismatchNotice(message: string, createdAgo: string) {
+  const id = await addNotice({ kind: MISMATCH_KIND, message }, sql);
+  execPsql(
+    target,
+    `UPDATE factory.notices SET created_at = now() - interval '${createdAgo}' WHERE id = ${String(id)}`,
+  );
+  return id;
+}
+
+function recordDeploymentRow(sha: string, result: string, ago: string): void {
+  execPsql(
+    target,
+    `INSERT INTO factory.deployments (sha_from, sha_to, changed_paths, result, needs_host_action, occurred_at) VALUES (NULL, '${sha}', '[]'::jsonb, '${result}', false, now() - interval '${ago}')`,
+  );
+}
+
+async function isResolved(id: number): Promise<boolean | null> {
+  const notice = await getNoticeById(id, sql);
+  return notice === null ? null : notice.resolved;
+}
+
+// 普通の反映: 成功の記録(30分前)より前(60分前)のnoticeは解決し、後(10分前)のnoticeは残す。
+// 別の種類のnoticeは、成功の記録より前でも触らない。
+recordDeploymentRow("qdb-sha-normal", "success", "30 minutes");
+const normalBefore = await mismatchNotice("qdb normal before", "60 minutes");
+const normalAfter = await mismatchNotice("qdb normal after", "10 minutes");
+const otherKindBefore = await addNotice(
+  { kind: "cleanup_db_failed", message: "qdb other kind before" },
+  sql,
+);
+execPsql(
+  target,
+  `UPDATE factory.notices SET created_at = now() - interval '60 minutes' WHERE id = ${String(otherKindBefore)}`,
+);
+const normalResolvedCount = await resolveNoticesBeforeSuccessfulDeployment(
+  MISMATCH_KIND,
+  "qdb-sha-normal",
+  MISMATCH_RESOLVER,
+  sql,
+);
+check(
+  "deployed_sha_mismatch: one notice before the successful deployment is resolved",
+  normalResolvedCount === 1,
+  normalResolvedCount,
+);
+check(
+  "deployed_sha_mismatch: the notice before the successful deployment is resolved",
+  (await isResolved(normalBefore)) === true,
+);
+check(
+  "deployed_sha_mismatch: the notice after the successful deployment stays open",
+  (await isResolved(normalAfter)) === false,
+);
+check(
+  "deployed_sha_mismatch: a notice of another kind is not touched",
+  (await isResolved(otherKindBefore)) === false,
+);
+check(
+  "deployed_sha_mismatch: the resolver and time are recorded",
+  (await getNoticeById(normalBefore, sql))?.resolved_by === MISMATCH_RESOLVER &&
+    (await getNoticeById(normalBefore, sql))?.resolved_at !== null,
+);
+
+// 記録の前に動いた回: その版への成功の行がまだ無ければ、何も解決しない。
+const noRecord = await mismatchNotice("qdb no record", "20 minutes");
+const noRecordResolved = await resolveNoticesBeforeSuccessfulDeployment(
+  MISMATCH_KIND,
+  "qdb-sha-unrecorded",
+  MISMATCH_RESOLVER,
+  sql,
+);
+check(
+  "deployed_sha_mismatch: nothing is resolved without a successful deployment of the sha",
+  noRecordResolved === 0 && (await isResolved(noRecord)) === false,
+  noRecordResolved,
+);
+
+// 古い版への書き戻し・止まったまま: 古い成功の行(3時間前)と、直近の失敗の行(1分前)しか無い版では、
+// その後(20分前)に作られたnoticeは解決しない。失敗の行は基準にならない。
+recordDeploymentRow("qdb-sha-old", "success", "3 hours");
+recordDeploymentRow("qdb-sha-old", "failed", "1 minute");
+const writtenBack = await mismatchNotice("qdb written back", "20 minutes");
+const writtenBackResolved = await resolveNoticesBeforeSuccessfulDeployment(
+  MISMATCH_KIND,
+  "qdb-sha-old",
+  MISMATCH_RESOLVER,
+  sql,
+);
+check(
+  "deployed_sha_mismatch: a notice created after an old successful deployment stays open",
+  writtenBackResolved === 0 && (await isResolved(writtenBack)) === false,
+  writtenBackResolved,
+);
+
+// 解決済みのnoticeは、もう一度呼んでも件数に数えない。
+const again = await resolveNoticesBeforeSuccessfulDeployment(
+  MISMATCH_KIND,
+  "qdb-sha-normal",
+  MISMATCH_RESOLVER,
+  sql,
+);
+check(
+  "deployed_sha_mismatch: a second call resolves nothing",
+  again === 0,
+  again,
+);
+
+// 境界: noticeの`created_at`と成功の行の`occurred_at`が同時刻なら、noticeは解決しない。
+// 比較は「より前」であり、「以下」ではない。
+// 時刻は、ほかのnoticeより古くし、その版の判定が他を解決しないようにする。
+// 上の普通の反映の判定(30分前)で解決されないよう、「もう一度呼んでも」の後に置く。
+const boundaryTime = new Date(Date.now() - 40 * 60 * 1000).toISOString();
+execPsql(
+  target,
+  `INSERT INTO factory.deployments (sha_from, sha_to, changed_paths, result, needs_host_action, occurred_at) VALUES (NULL, 'qdb-sha-boundary', '[]'::jsonb, 'success', false, '${boundaryTime}'::timestamptz)`,
+);
+const boundaryNotice = await mismatchNotice("qdb boundary", "0 seconds");
+execPsql(
+  target,
+  `UPDATE factory.notices SET created_at = '${boundaryTime}'::timestamptz WHERE id = ${String(boundaryNotice)}`,
+);
+const boundaryResolved = await resolveNoticesBeforeSuccessfulDeployment(
+  MISMATCH_KIND,
+  "qdb-sha-boundary",
+  MISMATCH_RESOLVER,
+  sql,
+);
+check(
+  "deployed_sha_mismatch: a notice created at the same time as the successful deployment stays open",
+  boundaryResolved === 0 && (await isResolved(boundaryNotice)) === false,
+  boundaryResolved,
 );
 
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。

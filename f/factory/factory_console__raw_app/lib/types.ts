@@ -386,6 +386,8 @@ export type RequirementsDocRow = {
   summary: string;
   markdown: string;
   diagrams: RequirementsDiagram[];
+  /** 安全の検査を通らなかった図の名前。 */
+  rejected_diagrams: string[];
   open_questions: string[];
   doc_dir_source: DocDirSource;
 };
@@ -405,6 +407,7 @@ export function toRequirementsDocRow(
     summary: str(row.summary),
     markdown: str(row.markdown),
     diagrams: toRequirementsDiagrams(row.diagrams),
+    rejected_diagrams: strArray(row.rejected_diagrams),
     open_questions: strArray(row.open_questions),
     doc_dir_source: row.doc_dir_source === "file" ? "file" : "db_fallback",
   };

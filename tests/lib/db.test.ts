@@ -18,6 +18,7 @@ import {
   findApprovedWorkItemForIssue,
   getApprovalRequest,
   getIssueProposal,
+  getLatestDeployment,
   getNoticeById,
   getRequirementDraft,
   getWorkItem,
@@ -55,6 +56,7 @@ import {
   recordDeployment,
   recordFailure,
   resolveNoticeIfUnresolved,
+  resolveNoticesBeforeSuccessfulDeployment,
   resolveStaleInfoNoticesBefore,
   resolveUnresolvedNoticesByMessage,
   resolveUnresolvedNoticesByPrefix,
@@ -3721,5 +3723,108 @@ describe("listActiveIssueWorkItems", () => {
     const { sql } = createFakeSqlClient([[{ ...WORK_ITEM_ROW, id: 9 }]]);
     const items = await listActiveIssueWorkItems("o", "r", 12, sql);
     expect(items.map((item) => item.id)).toEqual([9]);
+  });
+});
+
+describe("getLatestDeployment", () => {
+  test("returns null when there is no deployment", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await getLatestDeployment(sql)).toBeNull();
+  });
+
+  test("returns the result of the newest row", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ result: "failed", sha_to: "bbb" }],
+    ]);
+    expect((await getLatestDeployment(sql))?.result).toBe("failed");
+  });
+
+  test("returns the target sha of the newest row", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ result: "failed", sha_to: "bbb" }],
+    ]);
+    expect((await getLatestDeployment(sql))?.sha_to).toBe("bbb");
+  });
+
+  test("orders by newest first", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getLatestDeployment(sql);
+    expect(calls[0]?.text).toContain("ORDER BY occurred_at DESC");
+  });
+});
+
+describe("resolveNoticesBeforeSuccessfulDeployment", () => {
+  const call = (sql: SqlClient) =>
+    resolveNoticesBeforeSuccessfulDeployment(
+      "deployed_sha_mismatch",
+      "bbb",
+      "poll_issues",
+      sql,
+    );
+
+  test("returns the number of resolved rows", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 1 }, { id: 2 }]]);
+    expect(await call(sql)).toBe(2);
+  });
+
+  test("returns 0 when nothing is resolved", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await call(sql)).toBe(0);
+  });
+
+  test("updates factory.notices in a single statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await call(sql);
+    expect(calls.length).toBe(1);
+  });
+
+  test("only touches unresolved notices", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await call(sql);
+    expect(calls[0]?.text).toContain("AND resolved = false");
+  });
+
+  test("only touches notices created before the deployment", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await call(sql);
+    expect(calls[0]?.text).toContain("created_at < (");
+  });
+
+  test("uses the newest occurred_at as the reference", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await call(sql);
+    expect(calls[0]?.text).toContain(
+      "SELECT max(occurred_at) FROM factory.deployments",
+    );
+  });
+
+  test("counts only successful deployments", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await call(sql);
+    expect(calls[0]?.text).toContain("result = 'success'");
+  });
+
+  test("filters the deployment by the target sha", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await call(sql);
+    expect(calls[0]?.values).toContain("bbb");
+  });
+
+  test("filters the notices by kind", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await call(sql);
+    expect(calls[0]?.values).toContain("deployed_sha_mismatch");
+  });
+
+  test("records the resolver", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await call(sql);
+    expect(calls[0]?.values).toContain("poll_issues");
+  });
+
+  test("stamps resolved_at with now()", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await call(sql);
+    expect(calls[0]?.text).toContain("resolved_at = now()");
   });
 });
