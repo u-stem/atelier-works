@@ -849,6 +849,7 @@ export type LockReleaseDeps = {
    * 関係するプロセスが走査で見えないと分かった後に1回呼ぶ。
    * 取り消された検査が後始末せずに残すと、rootのgitが所有者の違いで実行を拒むためである。
    * その枠を別の実行が持っているか、取り戻せなければ`WorktreeBusyError`を投げる。
+   * workerのイメージが古くて取り戻せなければ、`CheckImageStaleError`を投げる。
    * 指定しなければ何もしない。
    */
   readonly restoreOwnership?: (lock: WorktreeLock) => Promise<void>;
@@ -864,6 +865,8 @@ export type LockReleaseDeps = {
  * worktreeを取り戻せなかったとき(`CheckOwnershipRestoreError`)も、理由を載せた`WorktreeBusyError`にする。
  * 準備は人の対応待ちで止まり、止まらないプロセスや残ったACLなど、取り戻せなかった理由が状態の理由に見えるようにするためである。
  * 理由は1つの項目として読まれるよう、区切り(`; `)を含めない。
+ * イメージが古くて取り戻せないとき(`CheckImageStaleError`)は、そのまま投げる。
+ * 準備のステップが、ホストの作業を求める通知を残して止まれるようにするためである。
  */
 export function restoreOwnershipStep(
   restore: (dir: string) => Promise<unknown>,

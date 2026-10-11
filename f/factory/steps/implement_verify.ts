@@ -116,7 +116,7 @@ async function inspectChanges(
  * 失敗すれば、リースを確かめてから(失っていれば止める)`implementFixPrompt`で修正ラウンドを走らせる。
  * リースの値は、フローのルートジョブID(`rootFlowJobId`)。
  * 修正ラウンドごとに`doc_dir`の読み取り専用コピーを新しく作り、
- * Claudeの実行1回ごとに`implement_rounds`へ1行記録する。
+ * Claudeの実行1回ごとに`implement_rounds`へ1行記録する。workerのイメージが古く検査を実行できなかったラウンドは記録しない。
  * 検査コマンドがあるときは、コンテナの分離なしで非特権のuidにより実行することを
  * noticeとして記録する。
  * `first_round.kind`が想定外なら例外を投げる。

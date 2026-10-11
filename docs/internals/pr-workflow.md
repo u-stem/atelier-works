@@ -549,9 +549,14 @@ PR修正のClaudeに渡すツールは`Read,Glob,Grep,Edit,Write`だけで、`Ba
 コマンドごとに、枠のユーザーの残りのプロセスを止める。止まらなければ、所有権を戻さずにステップを失敗させる。
 戻せなかった所有権と`HOME`は、枠の記録を通して、次にその枠を取る検査が片付ける。
 
-workerのイメージに枠のユーザーか後始末の道具が無ければ、検査を始めずに`blocked`で止める。
-理由は`worker image is stale: run mise run up`で始まり、Claudeの修正は再実行しない。
-Claudeが直せる検査の失敗ではないためである。
+準備のステップは、`allowed_check_commands`を設定していれば、Claudeより前に、イメージに枠のユーザーと後始末の道具があるかを確かめる。
+無ければ、関門と同じ`guard_blocked`で止め、作業項目は`blocked`になる。
+古いイメージのまま進むと、Claudeの修正を1回使ってから検証で止まるためである。
+検証のステップも検査の前に確かめ直し、満たさなければClaudeの修正を再実行せずに`guard_blocked`を返す。
+準備から検証までの間に、イメージは変わりうるためである。
+どちらも修正のラウンド(`fix_rounds`)を記録しない。
+Claudeが直せる検査の失敗ではないので、Sonnetの失敗として数え(`countPrFixFailures`)、`heavy_model`への切り替えを早めないためである。
+理由は`worker image is stale: run mise run up`で始まる。
 要対応の通知`host_action_required`も1件残す([運用](../operations.md#fとworkerのイメージを両方変えたとき))。
 `PATH`の値と、workerの値を使わない理由、uidの切り替えと所有権の受け渡しは、[検査コマンドはフローが実行する](../security.md#検査コマンドはフローが実行する)と[検査コマンドの権限](../security.md#検査コマンドの権限)にある。
 

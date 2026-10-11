@@ -555,9 +555,9 @@ describe("runPrFixVerify: a worker image that cannot run the checks", () => {
     expect((await runPrFixVerify(h.deps, INPUT)).reason).toBe(reason);
   });
 
-  test("ends blocked so that the finish step waits for a person", async () => {
+  test("ends guard_blocked so that the finish step records no fix round to count as a failure", async () => {
     const h = harness({ checksError: { at: 0, error: stale } });
-    expect((await runPrFixVerify(h.deps, INPUT)).outcome).toBe("blocked");
+    expect((await runPrFixVerify(h.deps, INPUT)).outcome).toBe("guard_blocked");
   });
 
   test("reports the stale image once and does not retry with Claude", async () => {
@@ -575,6 +575,14 @@ describe("runPrFixVerify: a worker image that cannot run the checks", () => {
       checksError: { at: 1, error: stale },
     });
     expect((await runPrFixVerify(h.deps, INPUT)).reason).toBe(reason);
+  });
+
+  test("ends guard_blocked when the stale image shows up after the retry", async () => {
+    const h = harness({
+      checks: [false],
+      checksError: { at: 1, error: stale },
+    });
+    expect((await runPrFixVerify(h.deps, INPUT)).outcome).toBe("guard_blocked");
   });
 
   test("passes another error from the checks through", async () => {

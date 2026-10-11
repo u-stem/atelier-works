@@ -936,6 +936,27 @@ export async function checkImageProblems(
   return problems;
 }
 
+/**
+ * 検査コマンドがあるときだけ、workerのイメージが検査の前提を満たすかを`problems`で確かめる。
+ * 満たさなければ`CheckImageStaleError`を`report`で1回知らせ、そのメッセージを止める理由として返す。満たせばnullを返す。
+ * 実装とPR修正の準備が、Claudeを動かす前に呼ぶ。古いイメージのまま進むと、Claudeの1回分の実行が検査の前に無駄になるためである。
+ * 検査コマンドが無ければイメージを見ない。検査の無いリポジトリは、古いイメージでも止めない。
+ */
+export async function checkImageGate(
+  hasCheckCommands: boolean,
+  deps: {
+    readonly problems: () => Promise<readonly string[]>;
+    readonly report: (error: CheckImageStaleError) => Promise<void>;
+  },
+): Promise<string | null> {
+  if (!hasCheckCommands) return null;
+  const problems = await deps.problems();
+  if (problems.length === 0) return null;
+  const error = new CheckImageStaleError(problems);
+  await deps.report(error);
+  return error.message;
+}
+
 export type CheckDirs = {
   /** 検査を実行するworktree。 */
   readonly worktreeDir: string;
@@ -1448,6 +1469,9 @@ export function createCheckSandbox(opts: {
  * ただし、読めない記録があり、`dir`の下にrootでないものが残っていれば、その記録が`dir`を指していたとみなし、記録のパスを載せた`CheckOwnershipRestoreError`を投げる。
  * rootでないものが残ったworktreeでは、rootのgitが所有者の違いで実行を拒み、理由の分からない失敗になるためである。
  * 記録の読み取りのそれ以外の失敗は、そのまま投げる。
+ * 記録がworktreeを指すと分かったら、枠のロックを取る前にイメージの前提(`checkImageProblems`)を確かめる。
+ * 満たさなければ、所有権にも記録にも触れずに`CheckImageStaleError`を投げる。
+ * 古いイメージには取り戻しの道具が無く、途中で失敗すると取り戻しの失敗に見えるためである。記録は残るので、イメージを作り直した後の準備が取り戻す。
  */
 export async function restoreCheckOwnership(
   dir: string,
@@ -1467,9 +1491,17 @@ export async function restoreCheckOwnership(
   };
   const pointsHere = (record: SlotRecord | null): boolean =>
     record !== null && record.worktreeDir === dir;
+  let imageReady = false;
+  const assertImageReady = async (): Promise<void> => {
+    if (imageReady) return;
+    const problems = await checkImageProblems(uids, deps);
+    if (problems.length > 0) throw new CheckImageStaleError(problems);
+    imageReady = true;
+  };
   let restored = false;
   for (const [index, uid] of uids.entries()) {
     if (!pointsHere(await readRecord(index))) continue;
+    await assertImageReady();
     let handle: SlotHandle;
     try {
       handle = await acquireSlot([index], deps.slots, {
@@ -1722,6 +1754,16 @@ export function checkSandboxFromEnv(
     uids: resolveCheckPool(env, readPasswd),
     ...(onNotice === undefined ? {} : { onNotice }),
   });
+}
+
+/** 本番の設定の枠とイメージで、`checkImageProblems`を呼ぶ。 */
+export function checkImageProblemsFromEnv(
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): Promise<string[]> {
+  return checkImageProblems(
+    resolveCheckPool(env, readPasswd),
+    defaultSandboxDeps(),
+  );
 }
 
 /** 本番の設定で、worktreeに残った検査用のuidの所有を戻す。`restoreCheckOwnership`を参照。 */

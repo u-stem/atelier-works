@@ -7,6 +7,7 @@
 
 import { lstat, readlink } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
+import { CheckImageStaleError } from "../lib/check_sandbox.ts";
 import { isViewerBumpBranch } from "../lib/drawio_viewer_bump.ts";
 import {
   isOwnPost,
@@ -2515,6 +2516,7 @@ export type PrFixPushGateDeps = {
  * pr_fixの完了ステップがcommitとpushの前に、worktreeに触れてよいかを確かめ、止める理由を返す(問題が無ければnull)。
  * 先にworktreeのロックを確かめ、前のステップのClaudeや検査コマンドが残っていれば`WorktreeBusyError`のmessageを返す。
  * 検証ステップの最後の検査の後に、残ったプロセスがworktreeを書き換えうるため。
+ * 残った所有権をworkerのイメージが古くて取り戻せないとき(`CheckImageStaleError`)も、そのmessageを返す。
  * 次に`.git`を準備ステップの記録と比べる(`recordedGitPointerStopReason`)。
  * 最後に、準備ステップの結果にPRのブランチ(`recordedBranch`)があることを確かめ、無ければ`PR_HEAD_NOT_RECORDED_REASON`を返す。
  * `commitAndPush`の`expectedBranch`に渡す値で、無いとpushする先を確かめられないため。
@@ -2528,7 +2530,8 @@ export async function prFixPushGateReason(
   try {
     await deps.ensureLockFree();
   } catch (err) {
-    if (err instanceof WorktreeBusyError) return err.message;
+    if (err instanceof WorktreeBusyError || err instanceof CheckImageStaleError)
+      return err.message;
     throw err;
   }
   const pointerReason = await recordedGitPointerStopReason(
@@ -2601,8 +2604,8 @@ export type PrFixFinalAction =
  * `pr_fix_finish.ts`が取るべき終端の動作に振り分ける。
  *
  * `guard_blocked`(prepareの、PRがopen・forkでない・draftでない・
- * 保護ブランチでないという関門)は、`docs/internals/pr-workflow.md`の
- * 「準備での確認」のとおり`work_items`の`"blocked"`にする。
+ * 保護ブランチでないという関門と、prepareかverifyがworkerのイメージが古く検査を実行できないと分かったとき)は、
+ * `docs/internals/pr-workflow.md`の「準備での確認」のとおり`work_items`の`"blocked"`にする。修正のラウンドは記録しない。
  * `blocked`(Claude自身の判断か、`pr_fix_verify`が検出した禁止ファイルや
  * 検査コマンドの失敗)は`"needs_human"`にする。
  * どちらも上流では`"blocked"`の形の結果だが、失敗の種類が違うので、
@@ -4023,7 +4026,7 @@ const REASON_RULES: readonly ReasonRule[] = [
         : `前の実行のプロセスがまだworktreeを使っています(${m[1]})`,
     nextAction: () => WORKTREE_BUSY_NEXT_ACTION,
   },
-  // `lib/check_sandbox.ts`の`CheckImageStaleError`(実装フローとpr_fixの検証ステップ)
+  // `lib/check_sandbox.ts`の`CheckImageStaleError`(実装フローとpr_fixの準備・検証・完了のステップ)
   {
     pattern: /^worker image is stale: run mise run up: ([\s\S]+)$/,
     describe: (m) =>

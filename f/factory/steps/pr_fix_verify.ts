@@ -58,7 +58,11 @@ import {
 } from "./pr_workflow_support.ts";
 
 export type PrFixVerifyResult = {
-  readonly outcome: FixOutcome;
+  /**
+   * `guard_blocked`は、workerのイメージが古く検査を実行できなかったときだけ返す。
+   * 完了のステップが修正のラウンドを記録せずに`blocked`にするので、モデルの失敗に数えない。
+   */
+  readonly outcome: FixOutcome | "guard_blocked";
   readonly reason: string | null;
   readonly summary: string;
   readonly replies: FixReply[];
@@ -133,7 +137,8 @@ export type PrFixVerifyInput = {
  * 変更の検査と検査コマンドをもう一度行う。それでも失敗するときは"blocked"にする。
  * 検査コマンドがあれば、準備ステップの記録がそろっていることを確かめた後、最初の検査の前に`announceChecks`を呼ぶ。
  * workerのイメージが古く検査を実行できなければ(`CheckImageStaleError`)、`reportCheckImageStale`で知らせ、
- * Claudeを再実行せずに"blocked"にする。Claudeが直せる検査の失敗ではないためである。
+ * Claudeを再実行せずに"guard_blocked"にする。Claudeが直せる検査の失敗ではないので、
+ * 準備の関門と同じく修正のラウンドを記録させず、モデルの失敗に数えないためである。
  * `assertGitPointer`が`WorktreeGitPointerModifiedError`以外を投げたときは、そのまま投げる。
  */
 export async function runPrFixVerify(
@@ -219,13 +224,19 @@ export async function runPrFixVerify(
     }
   };
 
+  /** イメージが古くて検査を実行できなかったときの結果。 */
+  const staleImage = (
+    error: CheckImageStaleError,
+    summary: string,
+    replies: FixReply[],
+  ): PrFixVerifyResult => ({
+    ...blocked(error.message, summary, replies),
+    outcome: "guard_blocked",
+  });
+
   const firstChecks = await runChecks();
   if (firstChecks instanceof CheckImageStaleError) {
-    return blocked(
-      firstChecks.message,
-      input.apply.summary,
-      input.apply.replies,
-    );
+    return staleImage(firstChecks, input.apply.summary, input.apply.replies);
   }
   if (firstChecks.every((result) => result.ok)) {
     const afterChecksReason = await inspect();
@@ -304,7 +315,7 @@ export async function runPrFixVerify(
   }
   const secondChecks = await runChecks();
   if (secondChecks instanceof CheckImageStaleError) {
-    return blocked(secondChecks.message, output.summary, output.replies);
+    return staleImage(secondChecks, output.summary, output.replies);
   }
   if (!secondChecks.every((result) => result.ok)) {
     return blocked(

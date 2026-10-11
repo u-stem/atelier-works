@@ -23,6 +23,7 @@ import {
   type CheckSlotNotice,
   CheckSlotsBusyError,
   checkEnv,
+  checkImageGate,
   checkImageProblems,
   chownToArgv,
   createCheckSandbox,
@@ -979,6 +980,57 @@ describe("checkImageProblems", () => {
     expect(
       await checkImageProblems([20000], image({ passwd: null })),
     ).toContain("/etc/passwd is unreadable");
+  });
+});
+
+describe("checkImageGate", () => {
+  /** 確かめた回数と知らせた例外を記録する、`checkImageGate`の依存。 */
+  function gate(problems: readonly string[]) {
+    const reported: string[] = [];
+    const seen = { checks: 0, reported };
+    return {
+      seen,
+      deps: {
+        problems: async () => {
+          seen.checks += 1;
+          return problems;
+        },
+        report: async (error: CheckImageStaleError) => {
+          seen.reported.push(error.message);
+        },
+      },
+    };
+  }
+
+  test("does not look at the image when there are no check commands", async () => {
+    const g = gate(["/usr/bin/getfacl is missing"]);
+    await checkImageGate(false, g.deps);
+    expect(g.seen.checks).toBe(0);
+  });
+
+  test("lets a run without check commands go on", async () => {
+    const g = gate(["/usr/bin/getfacl is missing"]);
+    expect(await checkImageGate(false, g.deps)).toBeNull();
+  });
+
+  test("lets a run go on when the image can run the checks", async () => {
+    const g = gate([]);
+    expect(await checkImageGate(true, g.deps)).toBeNull();
+  });
+
+  test("stops with the stale image as the reason", async () => {
+    const g = gate(["/usr/bin/getfacl is missing"]);
+    expect(await checkImageGate(true, g.deps)).toBe(
+      `${CHECK_IMAGE_STALE_REASON}: /usr/bin/getfacl is missing`,
+    );
+  });
+
+  test("reports the stale image once", async () => {
+    const g = gate(["/usr/bin/getfacl is missing"]);
+    await checkImageGate(true, g.deps);
+    expect(g.seen.reported).toEqual([
+      `${CHECK_IMAGE_STALE_REASON}: /usr/bin/getfacl is missing`,
+    ]);
   });
 });
 
@@ -2441,6 +2493,54 @@ describe("restoreCheckOwnership", () => {
     });
     await restoreCheckOwnership(WT, POOL, fake.deps).catch(() => {});
     expect(fake.records.get(1)).toEqual(DIRS);
+  });
+
+  test("fails with CheckImageStaleError on an image that cannot take the worktree back", async () => {
+    const fake = fakeSandboxDeps({
+      records: RECORDED,
+      missingTools: ["/usr/bin/getfacl"],
+    });
+    await expect(
+      restoreCheckOwnership(WT, POOL, fake.deps),
+    ).rejects.toBeInstanceOf(CheckImageStaleError);
+  });
+
+  test("runs nothing on a stale image", async () => {
+    const fake = fakeSandboxDeps({
+      records: RECORDED,
+      missingTools: ["/usr/bin/getfacl"],
+    });
+    await restoreCheckOwnership(WT, POOL, fake.deps).catch(() => {});
+    expect(fake.calls).toEqual([]);
+  });
+
+  test("does not take the slot on a stale image", async () => {
+    const fake = fakeSandboxDeps({
+      records: RECORDED,
+      missingTools: ["/usr/bin/getfacl"],
+    });
+    await restoreCheckOwnership(WT, POOL, fake.deps).catch(() => {});
+    expect(fake.events.filter((event) => event.startsWith("acquire"))).toEqual(
+      [],
+    );
+  });
+
+  test("keeps the record on a stale image", async () => {
+    const fake = fakeSandboxDeps({
+      records: RECORDED,
+      missingTools: ["/usr/bin/getfacl"],
+    });
+    await restoreCheckOwnership(WT, POOL, fake.deps).catch(() => {});
+    expect(fake.records.get(1)).toEqual(DIRS);
+  });
+
+  test("does not look at the image when no record names the worktree", async () => {
+    const fake = fakeSandboxDeps({
+      records: { 0: OLD },
+      missingTools: ["/usr/bin/getfacl"],
+    });
+    await restoreCheckOwnership(WT, POOL, fake.deps);
+    expect(fake.imageChecks()).toBe(0);
   });
 
   test("gives the slot back when taking the worktree back fails", async () => {

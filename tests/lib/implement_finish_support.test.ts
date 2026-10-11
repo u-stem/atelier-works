@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { CheckImageStaleError } from "../../f/factory/lib/check_sandbox.ts";
 import {
   buildPrOpenedEvent,
   decideAfterCommit,
@@ -514,6 +515,16 @@ describe("worktreeBusyStopReason", () => {
         throw new WorktreeBusyError([]);
       }),
     ).toBe(WORKTREE_BUSY_REASON);
+  });
+
+  test("returns the stale image when the image cannot take the worktree back", async () => {
+    expect(
+      await worktreeBusyStopReason(async () => {
+        throw new CheckImageStaleError(["/usr/bin/getfacl is missing"]);
+      }),
+    ).toBe(
+      "worker image is stale: run mise run up: /usr/bin/getfacl is missing",
+    );
   });
 
   test("rethrows any other error", async () => {

@@ -2,10 +2,17 @@
 // 修正を始めてよいかを検査し、通ればPRのheadブランチのworktreeを用意する。
 
 import * as wmill from "windmill-client@1.817.0";
+import {
+  CheckImageStaleError,
+  checkImageGate,
+  checkImageProblemsFromEnv,
+} from "../lib/check_sandbox.ts";
 import { isRepoAllowed, loadConfig } from "../lib/config.ts";
-import { getWorkItem } from "../lib/db.ts";
+import { addNoticeUnlessUnresolved, getWorkItem } from "../lib/db.ts";
 import { type GhClient, getBranchProtected, getPr } from "../lib/github.ts";
+import { recordCheckImageStaleNotice } from "../lib/host_action.ts";
 import { parseImplementBranchWorkItemId } from "../lib/implement_support.ts";
+import { logger } from "../lib/log.ts";
 import {
   defaultLockReleaseDeps,
   ensureWorktreeLockFree,
@@ -71,6 +78,8 @@ export type PrFixPrepareResult = {
  * 検証に通らなければ例外を投げる。
  * PRのブランチ名から引いた実装の作業項目が`implementing`なら`guard_blocked`を返す。
  * worktreeを前の実行のプロセスがまだ使っていれば、何も止めずに保持者を理由に載せて`guard_blocked`を返す。
+ * `allowed_check_commands`があり、workerのイメージが検査を実行できないときと、枠の記録が指すworktreeをイメージが古くて取り戻せないときは、
+ * 要対応の通知`host_action_required`を残して`guard_blocked`を返す。
  * 作業項目が無い、またはPR番号が無いときは例外を投げる。
  */
 export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
@@ -132,6 +141,29 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
     return {
       outcome: "guard_blocked",
       reason: timeoutMisfit,
+      ...earlyExitBase(workItem),
+    };
+  }
+
+  // 古いイメージのまま進むと、Claudeの修正を1回使ってから検証のステップで止まるので、Claudeより前に確かめる。
+  // 関門と同じ`guard_blocked`で止め、修正のラウンドを記録しない。
+  const reportStaleImage = (error: CheckImageStaleError): Promise<void> =>
+    recordCheckImageStaleNotice(
+      {
+        readDeployedSha: () => wmill.getVariable("f/factory/deployed_sha"),
+        addNotice: addNoticeUnlessUnresolved,
+        log: logger("pr_fix_prepare"),
+      },
+      error.problems.join(", "),
+    );
+  const staleImage = await checkImageGate(
+    config.allowed_check_commands.length > 0,
+    { problems: () => checkImageProblemsFromEnv(), report: reportStaleImage },
+  );
+  if (staleImage !== null) {
+    return {
+      outcome: "guard_blocked",
+      reason: staleImage,
       ...earlyExitBase(workItem),
     };
   }
@@ -243,6 +275,15 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
   } catch (err) {
     // pr_fixのprepareにはneeds_humanの出口が無い。blockedはretry_work_itemで再実行できる。
     if (err instanceof WorktreeBusyError) {
+      return {
+        outcome: "guard_blocked",
+        reason: err.message,
+        ...earlyExitBase(workItem),
+      };
+    }
+    // 枠の記録がworktreeを指すのに、イメージが古くて取り戻せない。worktreeには触れていない。
+    if (err instanceof CheckImageStaleError) {
+      await reportStaleImage(err);
       return {
         outcome: "guard_blocked",
         reason: err.message,

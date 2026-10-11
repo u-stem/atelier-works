@@ -132,10 +132,18 @@ Claudeの実行ごとに`implement_rounds`へ1行記録する。リースを失�
 `worktree_changed`で止めるのは、変更の判定とgitleaksの検査の両方を経たツリーだけを、検証済みとして記録するためである。
 理由は`worktree changed before the secret scan in round <N>`になる。
 
-ループは、検査コマンドの準備がイメージに枠のユーザーか後始末の道具が無いと分かると、`check_image_stale`で止まる。
-準備は所有権にも枠の記録にも触れる前に止まり、ループはそのラウンドを`error`として記録する。
+準備のステップ(`implement_prepare`)は、検査コマンドを設定したリポジトリでは、Claudeより前に、イメージに枠のユーザーと後始末の道具があるかを確かめる。
+無ければ、Claudeを動かさずに人の対応待ちで止まる。
+古いイメージのまま進むと、Claudeの1ラウンド分を使ってから検証で止まるためである。
+
+ループも、検査コマンドの準備がイメージの前提を確かめ直し、満たさなければ`check_image_stale`で止まる。
+準備から検証までの間に、イメージは変わりうるためである。
+検査の準備は所有権にも枠の記録にも触れる前に止まり、ループはそのラウンドを記録しない。
+記録すると、Sonnetの失敗として数えられ(`countImplementFailedRounds`)、`heavy_model`への切り替えを早めるためである。
 Claudeが直せる検査の失敗ではないので、修正のラウンドに進まず、作業項目は人の対応待ちになる。
-理由は`worker image is stale: run mise run up`で始まる。要対応の通知`host_action_required`も1件残す([運用](../operations.md#fとworkerのイメージを両方変えたとき))。
+
+どちらで止まっても、理由は`worker image is stale: run mise run up`で始まる。
+要対応の通知`host_action_required`も1件残す([運用](../operations.md#fとworkerのイメージを両方変えたとき))。
 
 ### 期限と修正ラウンド
 
@@ -470,6 +478,9 @@ workerには`CAP_SYS_PTRACE`が無い。そのため、uidを変えたプロセ�
 読めない記録が残っていて、worktreeにrootでないものがあるときも同じである。
 準備は人の対応待ちになり、詳細に枠のユーザーと理由が載る。
 取り戻せなかった理由は`check sandbox:`で始まり、通知の次の操作は、プロセスを止める案内ではなく、[枠の記録を片付ける手順](../operations.md#検査の枠の記録を片付ける)になる。
+取り戻す前には、イメージの前提を確かめる。
+満たさなければ、所有権と記録のどちらにも触れずに`CheckImageStaleError`を投げる。
+準備のステップは`host_action_required`を残して人の対応待ちになり、完了のステップは理由に載せてpushせずに止まる。掃除はそのworktreeを飛ばす。
 
 ロックが塞がっているのに保持者が見えないときも、この復旧を先に行う。
 取り消された検査が別のセッションに残したプロセスは、枠のuidで動くので走査に見えず、worktreeのロックを受け継いで持ち続けるためである。

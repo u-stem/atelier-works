@@ -898,7 +898,7 @@ export async function gitPointerStopReason(
  *    保護パスが変わったときと未設定のときは実行しない。
  *    実行する直前に、gitが無視するファイルを削除する。検査コマンドは期限で切らない。
  *    workerのイメージが古く検査を実行できなければ(`CheckImageStaleError`)、`reportCheckImageStale`で知らせ、
- *    修正ラウンドに進まずに`check_image_stale`で止める。
+ *    そのラウンドを記録せず、修正ラウンドに進まずに`check_image_stale`で止める。
  * 8. 終了を判定する(`decideImplementRoundExit`)。検査に失敗し、期限までの残りが修正ラウンドの最悪の所要時間に足りなければ`deadline`で止める。
  *    差分の指紋には、ステージしたツリーのshaを使う。
  * 9. 修正ラウンドに進む前にリースを確かめ、失っていれば止める。続けて`.git`ポインタを確かめ、変わっていれば止める。
@@ -1056,18 +1056,9 @@ export async function runImplementVerifyLoop(
       });
     } catch (err) {
       // イメージが古く検査を実行できないのは、Claudeが直せる検査の失敗ではない。修正ラウンドに進まず、人に`mise run up`を求めて止まる。
+      // ラウンドは記録しない。記録すると、モデルの失敗として数えられ、`heavy_model`への切り替えを早めるためである。
       if (!(err instanceof CheckImageStaleError)) throw err;
       await deps.reportCheckImageStale(err);
-      await deps.recordRound({
-        ...base,
-        outcome: "error",
-        summary: produced.output.summary,
-        gap_report: null,
-        check_output: truncateCheckOutput(err.message),
-        checks_skipped_reason: null,
-        protected_changes: protectedChanges,
-        diff_stat: fingerprint.diffStat,
-      });
       return stopped({
         exit: "check_image_stale",
         reason: err.message,

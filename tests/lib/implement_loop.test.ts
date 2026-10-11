@@ -711,6 +711,8 @@ type HarnessOptions = {
   readonly now?: number;
   /** `runChecks`が投げる例外。 */
   readonly checksError?: Error;
+  /** `at`回目(0から数える)以降の`runChecks`が投げる例外。 */
+  readonly checksErrorFrom?: { readonly at: number; readonly error: Error };
 };
 
 type Harness = {
@@ -768,6 +770,11 @@ function harness(options: HarnessOptions = {}): Harness {
     runChecks: async () => {
       events.push("checks");
       if (options.checksError !== undefined) throw options.checksError;
+      if (
+        options.checksErrorFrom !== undefined &&
+        calls.checks >= options.checksErrorFrom.at
+      )
+        throw options.checksErrorFrom.error;
       const value = pick(options.checks ?? [[PASS]], calls.checks);
       calls.checks += 1;
       return value;
@@ -1206,12 +1213,26 @@ describe("runImplementVerifyLoop", () => {
     expect(h.fixRequests).toEqual([]);
   });
 
-  test("records the round with the stale image as an error, not a check failure", async () => {
+  test("does not record the round the stale image stopped, so that it is not counted as a failure", async () => {
     const h = harness({
       checksError: new CheckImageStaleError(["/usr/bin/getfacl is missing"]),
     });
     await run(h);
-    expect(h.recorded.map((record) => record.outcome)).toEqual(["error"]);
+    expect(h.recorded).toEqual([]);
+  });
+
+  test("keeps the failed rounds before the stale image", async () => {
+    const h = harness({
+      checks: [[FAIL]],
+      checksErrorFrom: {
+        at: 1,
+        error: new CheckImageStaleError(["/usr/bin/getfacl is missing"]),
+      },
+    });
+    await run(h);
+    expect(h.recorded.map((record) => record.outcome)).toEqual([
+      "check_failed",
+    ]);
   });
 
   test("passes another error from the checks through", async () => {

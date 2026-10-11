@@ -4,6 +4,7 @@
 // requirements_gapの差し戻しの手順は`pr_fix_reroute.test.ts`でテストする。
 
 import { describe, expect, test } from "bun:test";
+import { CheckImageStaleError } from "../../f/factory/lib/check_sandbox.ts";
 import type { ReviewThread } from "../../f/factory/lib/github.ts";
 import { SECRETS_NOT_PUSHED_REASON } from "../../f/factory/lib/implement_finish_support.ts";
 import { WorktreeBusyError } from "../../f/factory/lib/process_lock.ts";
@@ -93,6 +94,17 @@ describe("prFixPushGateReason", () => {
     });
     await prFixPushGateReason(deps, POINTER, "fix/x");
     expect(calls).toEqual(["ensureLockFree"]);
+  });
+
+  test("stops with the stale image when the image cannot take the worktree back", async () => {
+    const { deps } = gateDeps({
+      ensureLockFree: async () => {
+        throw new CheckImageStaleError(["/usr/bin/getfacl is missing"]);
+      },
+    });
+    expect(await prFixPushGateReason(deps, POINTER, "fix/x")).toBe(
+      "worker image is stale: run mise run up: /usr/bin/getfacl is missing",
+    );
   });
 
   test("rethrows an unexpected error from the lock check", async () => {

@@ -17,6 +17,7 @@
 // 掃除したリポジトリでは、worktreeが無くなったロックファイルも、ロックを取ったまま消す(`removeOrphanLockFiles`)。
 
 import * as wmill from "windmill-client@1.817.0";
+import { CheckImageStaleError } from "./lib/check_sandbox.ts";
 import {
   busyWorktreeNoticeMessage,
   dirsNotYetVisited,
@@ -35,8 +36,14 @@ import {
   type WorktreeHolder,
 } from "./lib/cleanup_support.ts";
 import { loadConfig } from "./lib/config.ts";
-import { addNotice, listActive, listStaleTerminalWorkItems } from "./lib/db.ts";
+import {
+  addNotice,
+  addNoticeUnlessUnresolved,
+  listActive,
+  listStaleTerminalWorkItems,
+} from "./lib/db.ts";
 import { type GhClient, getPr } from "./lib/github.ts";
+import { recordCheckImageStaleNotice } from "./lib/host_action.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import {
   defaultLockReleaseDeps,
@@ -165,6 +172,30 @@ async function removeStaleWorktreesForRepo(
             deps: defaultLockReleaseDeps(),
           });
         } catch (err) {
+          // 枠の記録が指すworktreeを、イメージが古くて取り戻せない。消すと記録だけが残るので、イメージを作り直すまで飛ばす。
+          if (err instanceof CheckImageStaleError) {
+            skippedBusyDirs.add(targetDir);
+            log.warn(
+              "cleanup: skipping a worktree the stale image cannot take back",
+              {
+                work_item_id: item.id,
+                owner,
+                repo,
+                worktree_dir: targetDir,
+                reason: err.message,
+              },
+            );
+            await recordCheckImageStaleNotice(
+              {
+                readDeployedSha: () =>
+                  wmill.getVariable("f/factory/deployed_sha"),
+                addNotice: addNoticeUnlessUnresolved,
+                log,
+              },
+              err.problems.join(", "),
+            );
+            continue;
+          }
           if (!(err instanceof WorktreeBusyError)) throw err;
           skippedBusyDirs.add(targetDir);
           log.warn("cleanup: skipping a worktree still used by processes", {

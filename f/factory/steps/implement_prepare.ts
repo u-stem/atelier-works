@@ -7,6 +7,11 @@
 
 import * as wmill from "windmill-client@1.817.0";
 import { buildConsoleUrl } from "../lib/approval_support.ts";
+import {
+  CheckImageStaleError,
+  checkImageGate,
+  checkImageProblemsFromEnv,
+} from "../lib/check_sandbox.ts";
 import { dailyBudgetStatus } from "../lib/claude.ts";
 import {
   implementCheckCommandsFor,
@@ -15,6 +20,7 @@ import {
 } from "../lib/config.ts";
 import {
   acquireImplementLease,
+  addNoticeUnlessUnresolved,
   getRequirementDraft,
   getWorkItem,
   hasUnfinishedPrRun,
@@ -29,6 +35,7 @@ import {
   listPullRequestNumbersByHead,
   type PullRequestRef,
 } from "../lib/github.ts";
+import { recordCheckImageStaleNotice } from "../lib/host_action.ts";
 import { isFactoryRepo } from "../lib/implement_finish_support.ts";
 import {
   assertImplementLease,
@@ -191,7 +198,7 @@ function stop(
 
 /**
  * 承認時の前提(作業項目の状態、日次予算、リポジトリの許可、
- * 時間設定がflow.yamlのstep timeoutに収まるか、Issueがopenか、
+ * 時間設定がflow.yamlのstep timeoutに収まるか、検査コマンドがあればworkerのイメージが検査を実行できるか、Issueがopenか、
  * 作業項目のattemptに承認済みの要件定義があるか、
  * ブランチのPR(閉じたものを含む)で終端でないpr_fix / pr_reviewが無いか)を確かめ直す。
  * 満たさなければ`outcome`と理由を返し、状態の遷移は`implement_finish`に任せる。
@@ -200,6 +207,8 @@ function stop(
  *
  * worktreeを前の実行のプロセスがまだ使っていれば、同じ作業項目の前のジョブのものだけを、リースとブランチのPRの修正・レビューを確かめ直してから止める。
  * それ以外のプロセスがいるか、止めても空かなければ、worktreeに触れずに`needs_human`を返す。
+ * イメージが検査を実行できないと分かったとき(枠の記録が指すworktreeを取り戻せないときを含む)は、
+ * 要対応の通知`host_action_required`を残して`needs_human`を返す。
  * 満たせば、実装用のブランチと`git gtr`のworktreeを用意し、
  * リモートにブランチが無ければ、既定のブランチの先頭だけを載せた空のブランチとしてpushしておく。
  * 先にpushしておくのは、後のpushをすべて`commitAndPush`のまま行えるようにするため。
@@ -265,11 +274,29 @@ export async function main(
   if (!repoGuard.ok) return stop("needs_human", repoGuard.reason);
   // 時間設定がflow.yamlのstep timeoutに収まらなければ、Windmillがアプリ側の期限より先にステップを打ち切りうるので始めない。
   // 設定全体ではなく実装フローの入口で確かめるのは、検査コマンド数がリポジトリごとに違い、他のスクリプトを止めないためである。
-  const misfit = implementTimeoutMisfit(
+  const checkCommands = implementCheckCommandsFor(
     config,
-    implementCheckCommandsFor(config, workItem.owner, workItem.repo).length,
+    workItem.owner,
+    workItem.repo,
   );
+  const misfit = implementTimeoutMisfit(config, checkCommands.length);
   if (misfit !== null) return stop("needs_human", misfit);
+  // 古いイメージのまま進むと、Claudeの1ラウンド分を使ってから検証のステップで止まるので、Claudeより前に確かめる。
+  // 検証のステップも検査の前に確かめ直す。準備と検証の間にイメージが変わることがあるためである。
+  const reportStaleImage = (error: CheckImageStaleError): Promise<void> =>
+    recordCheckImageStaleNotice(
+      {
+        readDeployedSha: () => wmill.getVariable("f/factory/deployed_sha"),
+        addNotice: addNoticeUnlessUnresolved,
+        log: logger("implement_prepare"),
+      },
+      error.problems.join(", "),
+    );
+  const staleImage = await checkImageGate(checkCommands.length > 0, {
+    problems: () => checkImageProblemsFromEnv(),
+    report: reportStaleImage,
+  });
+  if (staleImage !== null) return stop("needs_human", staleImage);
 
   const ghToken = await wmill.getVariable("f/factory/github_token");
   const client: GhClient = { run: runCommand, ghToken };
@@ -404,15 +431,20 @@ export async function main(
         ).baseSha,
     });
   } catch (err) {
-    // 理由付きの結果にするのは、確かめ(ensureIdle)と、止める直前の確かめ直しが投げる3種類の例外だけである。
+    // 理由付きの結果にするのは、確かめ(ensureIdle)と、止める直前の確かめ直しが投げる4種類の例外だけである。
     // それ以外(worktreeの一覧、`git gtr new`、ブランチの公開、reset・cleanなどの失敗)はそのまま投げ直す。
-    // 3種類の例外のとき、worktreeに何をした後かは、どの確かめで投げたかで決まる。
+    // 4種類の例外のとき、worktreeに何をした後かは、どの確かめで投げたかで決まる。
     // 既存のworktreeを見つけた直後の確かめ(公開より前と、createGtrWorktreeのポインタの検証より前)で投げたときは、worktreeには何もしていない。
     // `git gtr new`の直後の確かめで投げたときは、作ったworktreeがリモートから作ったまま残る(次の実行は再利用の経路で確かめ直す)。
     // この場合には、既存のworktreeの`.git`ポインタが検証を通らず、それを削除して作り直した後も含まれるので、元のworktreeはもう無いことがある。
     // 公開の後に再利用の経路で確かめ直す場合があるので、空のブランチがpush済みのことはある。
     if (err instanceof WorktreeBusyError)
       return stop("needs_human", err.message);
+    // 枠の記録がworktreeを指すのに、イメージが古くて取り戻せない。worktreeには触れていない。
+    if (err instanceof CheckImageStaleError) {
+      await reportStaleImage(err);
+      return stop("needs_human", err.message);
+    }
     if (err instanceof ActivePrRunError)
       return stop("needs_human", ACTIVE_PR_RUN_REASON);
     if (err instanceof ImplementLeaseLostError)

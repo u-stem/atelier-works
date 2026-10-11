@@ -13,6 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  CheckImageStaleError,
   CheckOwnershipRestoreError,
   CheckSlotInUseError,
 } from "../../f/factory/lib/check_sandbox.ts";
@@ -2047,6 +2048,13 @@ describe("restoreOwnershipStep", () => {
       throw new Error("chown failed");
     });
     await expect(step(LOCK)).rejects.toThrow("chown failed");
+  });
+
+  test("passes a stale image through so that the preparation reports it as one", async () => {
+    const step = restoreOwnershipStep(async () => {
+      throw new CheckImageStaleError(["/usr/bin/getfacl is missing"]);
+    });
+    await expect(step(LOCK)).rejects.toBeInstanceOf(CheckImageStaleError);
   });
 
   test("turns a worktree that could not be taken back into WorktreeBusyError", async () => {
