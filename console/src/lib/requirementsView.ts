@@ -94,6 +94,13 @@ export function requirementsStatusTone(status: string): StatusTone {
   return STATUS_TONES.get(status) ?? "neutral";
 }
 
+/** 色の系統に対応するバッジの種類。色だけに頼らず、バッジの文字でも状態を伝える。 */
+export function toneBadgeVariant(
+  tone: StatusTone,
+): "success" | "warning" | "failure" | "outline" {
+  return tone === "neutral" ? "outline" : tone;
+}
+
 /**
  * 要件定義書の画面のパス(routerの基準からの絶対パス)。
  * `attempt`が`null`なら最新の試行を指し、番号は付けない。

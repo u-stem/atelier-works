@@ -17,6 +17,7 @@ import {
   requirementsRowSummary,
   requirementsRowTitle,
   requirementsStatusTone,
+  toneBadgeVariant,
 } from "./requirementsView.ts";
 
 function row(overrides: Partial<RequirementsIndexRow> = {}) {
@@ -148,6 +149,24 @@ describe("requirementsStatusTone", () => {
 
   test("marks an unknown status as neutral", () => {
     expect(requirementsStatusTone("something_new")).toBe("neutral");
+  });
+});
+
+describe("toneBadgeVariant", () => {
+  test("shows success with the success badge", () => {
+    expect(toneBadgeVariant("success")).toBe("success");
+  });
+
+  test("shows failure with the failure badge", () => {
+    expect(toneBadgeVariant("failure")).toBe("failure");
+  });
+
+  test("shows warning with the warning badge", () => {
+    expect(toneBadgeVariant("warning")).toBe("warning");
+  });
+
+  test("shows neutral with the outline badge", () => {
+    expect(toneBadgeVariant("neutral")).toBe("outline");
   });
 });
 

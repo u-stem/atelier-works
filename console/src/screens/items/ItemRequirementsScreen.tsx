@@ -1,10 +1,128 @@
-import { useParams, useSearchParams } from "react-router";
+import { ArrowLeft, FileQuestion } from "lucide-react";
+import { useMemo } from "react";
+import { Link, useParams, useSearchParams } from "react-router";
+import { useRequirementsDoc, useRequirementsIndex } from "../../api/queries.ts";
 import { PageHeader } from "../../app/PageHeader.tsx";
-import { ComingSoon } from "../../components/ComingSoon.tsx";
+import { refreshStatusOf } from "../../app/refreshStatus.ts";
+import { Skeleton } from "../../components/ui/skeleton.tsx";
 import { attemptRef, workItemRef } from "../../lib/labels.ts";
+import { prepareDoc } from "../../lib/requirementsView.ts";
 import { parseIdParam } from "../../lib/routeParams.ts";
+import { QueryFailure } from "./QueryFailure.tsx";
+import { RequirementsDocumentView } from "./RequirementsDocumentView.tsx";
 
-/** 作業項目の要件定義書の枠。旧Consoleのリンクの行き先を受けるために経路だけ用意している。 */
+function BackLink() {
+  return (
+    <Link
+      to="/items"
+      className="mt-1 inline-flex items-center gap-1 rounded-sm text-small text-muted-foreground outline-none hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      <ArrowLeft aria-hidden="true" className="size-3.5" />
+      作業項目の一覧
+    </Link>
+  );
+}
+
+function Message({ children }: { children: string }) {
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
+      <span className="inline-flex size-12 items-center justify-center rounded-full bg-muted text-subtle">
+        <FileQuestion aria-hidden="true" className="size-6" />
+      </span>
+      <p className="max-w-sm text-small text-muted-foreground">{children}</p>
+    </div>
+  );
+}
+
+function LoadingState() {
+  return (
+    <div
+      className="mx-auto w-full max-w-[75rem] space-y-4 px-8 py-6"
+      role="status"
+    >
+      <span className="sr-only">読み込み中</span>
+      <Skeleton className="h-40 w-full max-w-[47.5rem] rounded-xl" />
+      <Skeleton className="h-5 w-2/3 max-w-[47.5rem]" />
+      <Skeleton className="h-32 w-full max-w-[47.5rem]" />
+    </div>
+  );
+}
+
+function ItemRequirements({
+  workItemId,
+  attempt,
+}: {
+  workItemId: number;
+  attempt: number | null;
+}) {
+  const query = useRequirementsDoc(workItemId, attempt);
+  const index = useRequirementsIndex();
+  const refresh = refreshStatusOf(query);
+  const doc = query.data;
+  const prepared = useMemo(
+    () => (doc === undefined || doc === null ? null : prepareDoc(doc)),
+    [doc],
+  );
+  const requested =
+    attempt === null
+      ? `${workItemRef(workItemId)}の要件定義`
+      : `${workItemRef(workItemId)}の要件定義(${attemptRef(attempt)})`;
+
+  if (doc === undefined) {
+    return (
+      <>
+        <PageHeader title={requested} refresh={refresh}>
+          <BackLink />
+        </PageHeader>
+        {query.isError ? (
+          <QueryFailure
+            title="要件定義書を取得できませんでした"
+            loginHint="上のバナーからログインすると、要件定義書を表示します。"
+            error={query.error}
+            onRetry={refresh.onRefresh}
+          />
+        ) : (
+          <LoadingState />
+        )}
+      </>
+    );
+  }
+  if (doc === null || prepared === null) {
+    return (
+      <>
+        <PageHeader title={requested} refresh={refresh}>
+          <BackLink />
+        </PageHeader>
+        <Message>{`${requested}は見つかりませんでした。`}</Message>
+      </>
+    );
+  }
+  const indexRow = index.data?.find((row) => row.work_item_id === workItemId);
+  const latestAttempt = Math.max(doc.attempt, indexRow?.latest_attempt ?? 0);
+  return (
+    <>
+      <PageHeader
+        title={prepared.title}
+        subtitle={`${workItemRef(doc.work_item_id)}・${attemptRef(doc.attempt)}`}
+        refresh={refresh}
+      >
+        <BackLink />
+      </PageHeader>
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <RequirementsDocumentView
+          doc={doc}
+          prepared={prepared}
+          latestAttempt={latestAttempt}
+        />
+      </div>
+    </>
+  );
+}
+
+/**
+ * 作業項目の要件定義書の画面。`?attempt=<k>`で試行を指し、無ければ最新の試行を出す。
+ * 番号が正しくないときは、取得せずにその旨を出す。
+ */
 export function ItemRequirementsScreen() {
   const params = useParams();
   const [searchParams] = useSearchParams();
@@ -13,19 +131,18 @@ export function ItemRequirementsScreen() {
   if (workItemId === null) {
     return (
       <>
-        <PageHeader title="要件定義" />
-        <ComingSoon>作業項目の番号が正しくありません。</ComingSoon>
+        <PageHeader title="要件定義">
+          <BackLink />
+        </PageHeader>
+        <Message>作業項目の番号が正しくありません。</Message>
       </>
     );
   }
-  const title =
-    attempt === null
-      ? `${workItemRef(workItemId)}の要件定義`
-      : `${workItemRef(workItemId)}の要件定義(${attemptRef(attempt)})`;
   return (
-    <>
-      <PageHeader title={title} />
-      <ComingSoon>要件定義書は、ここに表示する予定です。</ComingSoon>
-    </>
+    <ItemRequirements
+      key={`${workItemId}-${attempt ?? "latest"}`}
+      workItemId={workItemId}
+      attempt={attempt}
+    />
   );
 }
