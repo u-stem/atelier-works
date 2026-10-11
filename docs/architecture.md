@@ -13,8 +13,7 @@ Software FactoryはGitHub Issueを起点に、要件定義から自己改善ま�
 | GitHub | Issue、PR、コメントのやり取り先。Factoryはここに成果物だけを書く |
 | Windmillのserverとworker | フローとスケジュールの実行基盤 |
 | Data Tables | 作業の状態、要件定義ドラフト、承認依頼、実行ログ、失敗記録を持つPostgresのテーブル群 |
-| Factory Console | 承認、要件定義書と監査レポートの閲覧、パイプラインの一覧、コストの分析、失敗の再実行、通知の一覧を提供するraw app |
-| Console(`console/`) | Vite + Reactで作り直しているConsole。GitHubのCIが組み立てて成果物`console-dist`にし、`console_fetcher`が取り込み、Caddyが`/console/`で配信する |
+| Factory Console(`console/`) | 承認と却下、失敗の再実行、通知の解決、作業項目の進捗、要件定義書と監査レポートの閲覧、コストの分析、システムの状態を提供する。Vite + Reactで作る。GitHubのCIが組み立てて成果物`console-dist`にし、`console_fetcher`が取り込み、Caddyが`/console/`で配信する |
 | Discord | 拾い上げ、承認待ち、承認、要対応、失敗などのイベントをWebhookで通知する |
 
 Claudeを動かすworker(`windmill_worker`)はカスタムイメージで動く。
@@ -220,8 +219,8 @@ Consoleの一覧と集計は次のviewを読む。
 
 | view | 内容 |
 | --- | --- |
-| `v_inbox` | 承認タブの一覧 |
-| `v_pipeline` | パイプラインの一覧 |
+| `v_inbox` | 承認の一覧 |
+| `v_pipeline` | 作業項目の進捗の一覧 |
 | `v_agent_cost_daily` | Claudeの実行の日ごとの費用 |
 | `v_approval_stats` | 承認と却下の集計 |
 | `v_lead_time` | 作業項目が終端になるまでの時間 |
@@ -372,7 +371,6 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/pipeline_lease` | script | [LIB] 要件定義フローのリース判定 |
 | `f/factory/lib/config` | script | [LIB] 設定の読み込み |
 | `f/factory/lib/poll_support` | script | [LIB] 巡回の純粋ロジック |
-| `f/factory/factory_console` | app | [OP-0-1] Factory Console(承認・進捗・分析) |
 | `f/factory/steps/console_query` | script | [OP-0-1/1] Console用データ取得 |
 | `f/factory/manual_intake` | flow | [OP-1-1] 手動投入フォーム(Issueを作成して工程に乗せる) |
 | `f/factory/steps/manual_intake_create_issue` | script | [OP-1-1/1] Issueを作成 |
@@ -445,10 +443,9 @@ Factoryの投稿の見分け方、総評の組み立て、スレッドの解決�
 `self_update`はFactory自身のリポジトリを10分ごとに取り込み、Windmillに反映する。
 
 1. worker内のself clone(`/workspaces/factory/atelier-works`)をpullする。HEADのSHAがWindmill変数`f/factory/deployed_sha`と同じなら何もしない。
-2. 変わっていれば、Consoleのraw appの依存を`npm ci --ignore-scripts`でそろえる。依存のinstall scriptは動かさない。
-3. workerの中から`wmill sync push --yes --keep-deleted`を実行し、script、flow、スケジュールを最新にする。
-4. `wmill datatable migrate up`を実行し、Data Tableの定義を最新にする。
-5. 結果を`deployments`に記録し、`f/factory/deployed_sha`を更新する。
+2. workerの中から`wmill sync push --yes --keep-deleted`を実行し、script、flow、スケジュールを最新にする。依存のinstall scriptは動かさない。
+3. `wmill datatable migrate up`を実行し、Data Tableの定義を最新にする。
+4. 結果を`deployments`に記録し、`f/factory/deployed_sha`を更新する。
 
 記録には、前回の版から今回の版までの間にmainへマージされたPRの番号、題名、作り手、リンクを含める。
 PRは、self cloneの`git log --first-parent`にあるマージのコミットから取り出す。
@@ -468,7 +465,7 @@ PRを取り出せなくても、反映の成功は変えない。その反映の
 `mise run up`は終わりに、ホストのcheckoutのHEADをworkerの共有ボリュームへ書く。
 `self_update`はこのHEADを毎回読み、通知の版を含んでいれば通知を解決する。
 
-ジョブ全体には上限(`timeout`)を3000秒で置く。
+ジョブ全体には上限(`timeout`)を2700秒で置く。
 この上限はWindmillが外から打ち切る最後の砦で、通常は内側の上限で先に終わる。
 子プロセスは別のプロセスグループで起動し、その上限はworkerの中のタイマーなので、子の実行中に外から打ち切られると子が残りうるためである([セキュリティ](security.md)の「自己更新の打ち切り」)。
 変数の取得と更新、stateの読み書き、データベースの記録は個別の上限が無いので、1回30秒で区切り、超えたら例外にする。
@@ -484,9 +481,9 @@ Discordへの通知は、送信を30秒で中断し、429の待ち(最大30秒)�
 これらはジョブの失敗(`job_failed`と`schedule_failing`)になるだけである。
 
 ジョブの`timeout`はインスタンスの上限を超えられないが、セルフホストの上限は環境変数`TIMEOUT`で、未設定なら7日である。
-`job_default_timeout`は21600秒以上にする決まりなので([実装フローの仕様](internals/implement.md)の「Windmillのtimeoutで打ち切られたとき」)、3000秒は切り詰められない。
+`job_default_timeout`は21600秒以上にする決まりなので([実装フローの仕様](internals/implement.md)の「Windmillのtimeoutで打ち切られたとき」)、2700秒は切り詰められない。
 
-3000秒は、全部が最悪のときの長さ2934.2秒に余裕を足した値である。
+2700秒は、全部が最悪のときの長さ2621.2秒に余裕を足した値である。
 コマンドの上限には、停止の上乗せ13秒を足す。
 時間切れ後のSIGKILLまでの猶予が5秒、終了後のプロセスグループの停止が最大6秒、出力の読み取り待ちが2秒である。
 
@@ -495,7 +492,7 @@ Discordへの通知は、送信を30秒で中断し、429の待ち(最大30秒)�
 | self cloneのロック待ち | 1 | 300秒 | 確かめる間隔0.2秒 | 300.2秒 |
 | git | 10 | 60秒 | 13秒 | 730秒 |
 | ホストの印を確かめるローカルのgit | 5 | 10秒 | 13秒 | 115秒 |
-| `npm ci`、`wmill sync push`、`wmill datatable migrate up` | 3 | 300秒 | 13秒 | 939秒 |
+| `wmill sync push`、`wmill datatable migrate up` | 2 | 300秒 | 13秒 | 626秒 |
 | 区切った呼び出し | 20 | 30秒 | なし | 600秒 |
 | Discordへの通知 | 2 | 120秒 | なし | 240秒 |
 | Console用のworkerの確認 | 1 | 10秒 | なし | 10秒 |
@@ -530,7 +527,7 @@ Discordへの通知の2回は、ホスト側の作業の通知と、最後の確
 ジョブの上限で打ち切られた回の扱いは次のとおりである。
 
 - 最後に行うConsole用のworkerの確認が走らず、`deployments`にも記録が残らない。
-- 打ち切られるまでの最大約50分、実行が終わらない。
+- 打ち切られるまでの最大約45分、実行が終わらない。
   10分ごとの次の4回は多重実行の防止で飛ばされる。
   この間は、自己更新の反映とConsole用のworkerの確認が止まる。
 - `on_error_schedule`が時間切れでも呼ばれるなら、打ち切りのたびにDiscordの`job_failed`で即時に気づける。
@@ -550,7 +547,7 @@ Claudeに渡すスキル(`.claude/skills/**`)は、実行のたびにself clone�
 
 ## 工程5の監査
 
-`audit_kickoff`が毎週月曜09:30に、前回の監査以降の運用記録を確かめる。行動につながる記録があれば、監査の作業項目を作って`audit`フローを起動する。Consoleの監査タブの**今すぐ監査**からも起動できる。
+`audit_kickoff`が毎週月曜09:30に、前回の監査以降の運用記録を確かめる。行動につながる記録があれば、監査の作業項目を作って`audit`フローを起動する。Consoleの**レポート**の**今すぐ監査**からも起動できる。
 
 `audit`フローは、証跡をまとめた資料(証跡パック)を作り、headless Claudeに監査レポートと改善提案を書かせる。提案は人が承認したものだけが、Factory自身のリポジトリ(`factory_repo`)にIssueとして起票される。起動の条件、期間、検査は[監査の内部仕様](internals/audit.md)に書く。
 
