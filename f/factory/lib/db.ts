@@ -891,8 +891,11 @@ export async function listAutoRetryCandidates(
  * 止まった作業項目を、理由を条件にした比較と交換で再開の状態へ移す。
  * 状態が`expectedFrom`で、その状態へ移った最新の遷移の注記が`reasonPrefixes`のどれかで始まり、
  * 注記が`notePrefix`で始まる遷移(これまでの自動の再開)が`maxRestarts`回未満で、
- * 同じIssueに新しいサイクルの`issue`が無く、同じPRに`id`の大きい`pr_fix`も無いときだけ更新し、
- * 同じ文で遷移の記録を残す。`clearFlowJobId`なら`flow_job_id`も空にする。
+ * 同じIssueに新しいサイクルの`issue`が無く、同じPRに`id`の大きい`pr_fix`も無く、
+ * 止まった後に、本文に`noticeMarker`を含む`noticeKind`のnoticeが`resolvedBy`に解決されているときだけ更新し、
+ * 同じ文で遷移の記録を残す。
+ * 最後の条件は、候補の一覧を読んだ後に別の実行が再開し、同じ理由で止まり直した作業項目を、
+ * 新しい解決の無いまま再び再開しないための歯止めである。`clearFlowJobId`なら`flow_job_id`も空にする。
  * 条件に合わなければ何も書かずに`false`を返す。人が先に再開した場合や、
  * 並行する別の実行が先に再開した場合も、状態が変わっているので`false`になり、二重に起動しない。
  */
@@ -905,6 +908,9 @@ export async function restartStoppedWorkItem(
     readonly clearFlowJobId: boolean;
     readonly notePrefix: string;
     readonly maxRestarts: number;
+    readonly noticeKind: string;
+    readonly noticeMarker: string;
+    readonly resolvedBy: string;
     readonly note: string;
   },
   sql: SqlClient = defaultSqlClient,
@@ -930,6 +936,19 @@ export async function restartStoppedWorkItem(
           SELECT count(*) FROM factory.work_item_events c
           WHERE c.work_item_id = factory.work_items.id AND starts_with(c.note, ${params.notePrefix})
         ) < ${params.maxRestarts}::integer
+        AND EXISTS (
+          SELECT 1 FROM factory.notices n
+          WHERE n.kind = ${params.noticeKind}
+            AND n.resolved = true
+            AND n.resolved_by = ${params.resolvedBy}
+            AND position(${params.noticeMarker} in n.message) > 0
+            AND n.resolved_at > (
+              SELECT e.occurred_at FROM factory.work_item_events e
+              WHERE e.work_item_id = factory.work_items.id AND e.to_status = ${params.expectedFrom}
+              ORDER BY e.occurred_at DESC, e.id DESC
+              LIMIT 1
+            )
+        )
         AND NOT EXISTS (
           SELECT 1 FROM factory.work_items newer
           WHERE factory.work_items.kind = 'issue' AND newer.kind = 'issue'

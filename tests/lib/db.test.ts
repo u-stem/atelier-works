@@ -4225,6 +4225,9 @@ describe("restartStoppedWorkItem", () => {
     clearFlowJobId: true,
     notePrefix: "auto_retry: ",
     maxRestarts: 3,
+    noticeKind: "host_action_required",
+    noticeMarker: "workerのイメージが古く",
+    resolvedBy: "self_update",
     note: "auto_retry: restarted from needs_human",
   } as const;
 
@@ -4260,6 +4263,18 @@ describe("restartStoppedWorkItem", () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await restartStoppedWorkItem(params, sql, NO_JOBS);
     expect(calls[0]?.text).toContain("newer.cycle");
+  });
+
+  test("requires a notice resolved after the stop", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await restartStoppedWorkItem(params, sql, NO_JOBS);
+    expect(calls[0]?.text).toContain("n.resolved_at");
+  });
+
+  test("passes the resolver as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await restartStoppedWorkItem(params, sql, NO_JOBS);
+    expect(calls[0]?.values).toContain("self_update");
   });
 
   test("guards the update against a newer pr_fix row of the same pull request", async () => {

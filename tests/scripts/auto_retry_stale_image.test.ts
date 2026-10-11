@@ -56,9 +56,17 @@ describe("auto_retry_stale_image wiring", () => {
     );
   });
 
-  test("restricts the candidates to notices the self update resolved", async () => {
+  test("restricts the candidates and the restart to notices the self update resolved", async () => {
     const source = await scriptSource();
 
-    expect(source).toContain("resolvedBy: HOST_ACTION_RESOLVER,");
+    expect(source.match(/resolvedBy: HOST_ACTION_RESOLVER,/g)).toHaveLength(2);
+  });
+
+  test("restricts the restart to the stale image notice", async () => {
+    const source = await scriptSource();
+
+    expect(source).toMatch(
+      /restartStoppedWorkItem\(\{[\s\S]*?noticeMarker: STALE_IMAGE_NOTICE_MARKER,/,
+    );
   });
 });

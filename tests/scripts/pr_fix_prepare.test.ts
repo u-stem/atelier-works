@@ -1042,7 +1042,7 @@ describe("describeReason / nextActionFor (stale worker image)", () => {
 
   test("asks to rebuild the image with mise run up and then rerun", () => {
     expect(nextActionFor(STALE)).toBe(
-      "ホストのcheckoutでgit pullし、mise installとmise run upでworkerのイメージを作り直してから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+      "ホストのcheckoutでgit pullし、mise installとmise run upでworkerのイメージを作り直してください。作り直した後は、止まった作業項目が自動で再開します。自動の再開が3回の上限に達したときと、通知に版が載らないときだけ、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
     );
   });
 });

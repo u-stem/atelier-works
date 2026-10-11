@@ -4044,7 +4044,7 @@ const REASON_RULES: readonly ReasonRule[] = [
     describe: (m) =>
       `workerのイメージが古く、検査コマンドを非特権のユーザーで実行できません(${m[1]})`,
     nextAction: () =>
-      `ホストのcheckoutでgit pullし、mise installとmise run upでworkerのイメージを作り直してから、${RETRY_WORK_ITEM_ACTION}`,
+      `ホストのcheckoutでgit pullし、mise installとmise run upでworkerのイメージを作り直してください。作り直した後は、止まった作業項目が自動で再開します。自動の再開が3回の上限に達したときと、通知に版が載らないときだけ、${RETRY_WORK_ITEM_ACTION}`,
   },
   // `lib/check_sandbox.ts`の`CheckRuntimeUnsafeError`(同じステップ)。イメージは作り直さず、パスを閉じるかworkerを作り直す。
   // ボリュームのマウントポイントの権限はボリュームにあり、workerを作り直しても変わらない。
