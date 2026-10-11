@@ -305,6 +305,37 @@ describe("describeOverview", () => {
     ).toBeNull();
   });
 
+  test("drops a status note that is the pull request URL built from the number", () => {
+    expect(
+      describeOverview(
+        overview({
+          pr_url: null,
+          status_note: "https://github.com/o/r/pull/12",
+        }),
+      ).statusNote,
+    ).toBeNull();
+  });
+
+  test("drops a status note that matches the URL apart from surrounding whitespace", () => {
+    expect(
+      describeOverview(
+        overview({ status_note: " https://github.com/o/r/pull/12\n" }),
+      ).statusNote,
+    ).toBeNull();
+  });
+
+  test("keeps a status note that equals a pull request URL that is not shown", () => {
+    expect(
+      describeOverview(
+        overview({
+          pr_number: null,
+          pr_url: "https://evil.example/pull/12",
+          status_note: "https://evil.example/pull/12",
+        }),
+      ).statusNote,
+    ).toBe("https://evil.example/pull/12");
+  });
+
   test("keeps a status note that is only another URL", () => {
     expect(
       describeOverview(

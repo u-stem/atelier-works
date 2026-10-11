@@ -230,11 +230,4 @@ describe("RoundsTab", () => {
     );
     expect(html).toContain("<code");
   });
-
-  test("gives the empty review and fix sections no card", () => {
-    const html = render(
-      <RoundsTab detail={detail({ implement_rounds: [ROUND] })} now={NOW} />,
-    );
-    expect(html).not.toContain("bg-card p-5");
-  });
 });

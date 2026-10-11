@@ -198,16 +198,14 @@ export function formatDiffStat(stat: WorkItemDiffStat | null): string | null {
 }
 
 /**
- * 状態の注記。注記がこの項目のPRかIssueのURLだけなら`null`にする。
- * 同じリンクが「PR」「Issue」の行に出ており、生の文字で重ねる必要がないためである。
- * 別のURLは、その行のどこにも出ていないので残す。
+ * 状態の注記。注記が「PR」「Issue」の行に出るリンクのURLだけなら`null`にする。
+ * 同じリンクが行に出ており、生の文字で重ねる必要がないためである。
+ * 行に出ていないURLは、検査を通らなかった値も含めて残す。
  */
 function statusNoteOf(item: WorkItemOverview): string | null {
   const note = plainOrNull(item.status_note);
   if (note === null) return null;
-  const shown = [item.pr_url, item.issue_url, pullTarget(item)?.url]
-    .filter((url) => url !== null && url !== undefined)
-    .map((url) => url.trim());
+  const shown = [issueTarget(item)?.url, pullTarget(item)?.url];
   return shown.includes(note.trim()) ? null : note;
 }
 
