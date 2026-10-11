@@ -65,7 +65,7 @@ const BRANCH_CELL = 6;
 const ATTEMPT_CELL = 7;
 const FIX_ROUND_CELL = 8;
 const UPDATED_CELL = 9;
-const SHOWN_FROM_WIDE = "@[80rem]:table-cell";
+const SHOWN_FROM_WIDE = "@[88rem]:table-cell";
 
 /** セルの中の最初の`div`のクラス。最小幅と上限をセルでなく中身に付けているかを見る。 */
 function innerClasses(cell: string): string[] {
