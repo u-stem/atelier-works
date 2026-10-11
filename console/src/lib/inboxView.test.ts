@@ -6,6 +6,8 @@ import type {
   SummaryNotice,
 } from "../api/guards/summary.ts";
 import {
+  actionableCounts,
+  auditFailureCount,
   buildInboxItems,
   chipCounts,
   describeApproval,
@@ -15,6 +17,7 @@ import {
   emptyStateTone,
   filterInboxItems,
   findInboxItem,
+  hasLegacyLink,
   type InboxItem,
   inboxSubtitle,
   itemId,
@@ -23,6 +26,7 @@ import {
   selectionOf,
   sortInboxItems,
   unlistedCounts,
+  unlistedNote,
   visibleChips,
 } from "./inboxView.ts";
 
@@ -114,6 +118,31 @@ describe("buildInboxItems", () => {
     ).toEqual([["approval", 5]]);
   });
 
+  test("wraps each failure as a failure item keyed by its work item id", () => {
+    expect(
+      buildInboxItems(
+        summaryOf({ failures: [failure({ work_item_id: 9 })] }),
+      ).map((item) => [item.type, itemId(item)]),
+    ).toEqual([
+      ["approval", 1],
+      ["failure", 9],
+    ]);
+  });
+
+  test("leaves out the failures of an audit, which cannot be retried", () => {
+    expect(
+      buildInboxItems(
+        summaryOf({
+          approvals: [],
+          failures: [
+            failure({ work_item_id: 9, kind: "audit" }),
+            failure({ work_item_id: 10 }),
+          ],
+        }),
+      ).map((item) => itemId(item)),
+    ).toEqual([10]);
+  });
+
   test("wraps each notice as a notice item keyed by its notice id", () => {
     expect(
       buildInboxItems(
@@ -122,20 +151,12 @@ describe("buildInboxItems", () => {
     ).toEqual([["notice", 9]]);
   });
 
-  test("lists approvals before notices", () => {
+  test("lists approvals, then failures, then notices", () => {
     expect(
-      buildInboxItems(summaryOf({ notices: [notice()] })).map(
-        (item) => item.type,
-      ),
-    ).toEqual(["approval", "notice"]);
-  });
-
-  test("does not list failures yet", () => {
-    expect(
-      buildInboxItems(summaryOf({ approvals: [], failures: [failure()] })).map(
-        (item) => item.type,
-      ),
-    ).toEqual([]);
+      buildInboxItems(
+        summaryOf({ failures: [failure()], notices: [notice()] }),
+      ).map((item) => item.type),
+    ).toEqual(["approval", "failure", "notice"]);
   });
 });
 
@@ -428,6 +449,13 @@ describe("describeRow", () => {
     ).toBe("人の対応待ち");
   });
 
+  test("replaces hidden characters in the title of a failure row", () => {
+    expect(
+      describeRow({ type: "failure", failure: failure({ title: "a‮b" }) }, NOW)
+        .title,
+    ).toBe("a�b");
+  });
+
   test("describes a notice row without leaking the code", () => {
     expect(describeRow(N21, NOW)).toEqual({
       key: "notice:21",
@@ -466,6 +494,113 @@ describe("describeRow for a notice", () => {
   });
 });
 
+describe("auditFailureCount", () => {
+  test("counts the audit failures of the summary", () => {
+    expect(
+      auditFailureCount(
+        summaryOf({
+          failures: [
+            failure({ work_item_id: 8, kind: "audit" }),
+            failure({ work_item_id: 9, kind: "audit" }),
+            failure({ work_item_id: 10 }),
+          ],
+        }),
+      ),
+    ).toBe(2);
+  });
+});
+
+describe("actionableCounts", () => {
+  test("leaves the audit failures out of the failure count", () => {
+    expect(
+      actionableCounts(
+        summaryOf({
+          counts: { approvals: 2, failures: 5, notices: 1 },
+          failures: [failure({ kind: "audit" }), failure({ kind: "audit" })],
+        }),
+      ),
+    ).toEqual({ approvals: 2, failures: 3, notices: 1 });
+  });
+
+  test("never goes below zero", () => {
+    expect(
+      actionableCounts(
+        summaryOf({
+          counts: { approvals: 0, failures: 0, notices: 0 },
+          failures: [failure({ kind: "audit" })],
+        }),
+      ).failures,
+    ).toBe(0);
+  });
+});
+
+describe("hasLegacyLink", () => {
+  test("keeps the link for approvals cut by the limit", () => {
+    expect(hasLegacyLink("approval")).toBe(true);
+  });
+
+  test("drops the link for failures, which the list now handles", () => {
+    expect(hasLegacyLink("failure")).toBe(false);
+  });
+
+  test("drops the link for notices, which the list now shows", () => {
+    expect(hasLegacyLink("notice")).toBe(false);
+  });
+});
+
+describe("unlistedNote", () => {
+  test("has no note for an entry with the legacy link", () => {
+    expect(
+      unlistedNote({ type: "approval", label: "承認", count: 1 }),
+    ).toBeNull();
+  });
+
+  test("says audit failures cannot be retried", () => {
+    expect(
+      unlistedNote({
+        type: "failure",
+        label: "監査の失敗",
+        count: 1,
+        cause: "audit",
+      }),
+    ).toBe("再実行できません。システムの画面で確認してください");
+  });
+
+  test("says the failures beyond the limit are not shown, oldest first", () => {
+    expect(unlistedNote({ type: "failure", label: "失敗", count: 3 })).toBe(
+      "取得の上限を超えた分は、更新の古いものから表示されません",
+    );
+  });
+});
+
+describe("unlistedNote for notices", () => {
+  test("says the notices beyond the limit are not shown, oldest first", () => {
+    expect(unlistedNote({ type: "notice", label: "通知", count: 3 })).toBe(
+      "取得の上限を超えた分は、発生の古いものから表示されません",
+    );
+  });
+});
+
+describe("unlistedCounts with audit failures", () => {
+  test("reports the audit failures as their own entry", () => {
+    expect(
+      unlistedCounts({ approvals: 1, failures: 2, notices: 0 }, [A1], 2),
+    ).toEqual([
+      { type: "failure", label: "監査の失敗", count: 2, cause: "audit" },
+    ]);
+  });
+
+  test("keeps the audit failures out of the count of failures beyond the list", () => {
+    expect(
+      unlistedCounts(
+        { approvals: 1, failures: 5, notices: 0 },
+        [A1, F7],
+        2,
+      ).map((entry) => entry.count),
+    ).toEqual([2, 2]);
+  });
+});
+
 describe("unlistedCounts", () => {
   test("is empty when every count is listed", () => {
     expect(
@@ -479,11 +614,11 @@ describe("unlistedCounts", () => {
     ).toEqual([{ type: "approval", label: "承認", count: 249 }]);
   });
 
-  test("reports failures that the list does not show yet and notices cut by the limit", () => {
+  test("reports failures beyond the listed ones and notices cut by the limit", () => {
     expect(
-      unlistedCounts({ approvals: 1, failures: 5, notices: 4 }, [A1]),
+      unlistedCounts({ approvals: 1, failures: 5, notices: 4 }, [A1, F7]),
     ).toEqual([
-      { type: "failure", label: "失敗", count: 5 },
+      { type: "failure", label: "失敗", count: 4 },
       { type: "notice", label: "通知", count: 4 },
     ]);
   });
@@ -585,9 +720,9 @@ describe("missingSelectionMessage", () => {
     );
   });
 
-  test("says a failure list is not ready", () => {
-    expect(missingSelectionMessage({ type: "failure", id: 3 })).toBe(
-      "この種類の一覧は準備中です。",
+  test("says a failure may already be handled", () => {
+    expect(missingSelectionMessage({ type: "failure", id: 3 })).toContain(
+      "すでに処理された",
     );
   });
 

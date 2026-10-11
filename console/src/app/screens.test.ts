@@ -42,8 +42,8 @@ describe("SCREENS", () => {
 describe("inbox badge", () => {
   const inbox = SCREENS[0];
 
-  test("counts the approvals and the notices that the list shows", () => {
-    expect(inbox?.badge({ approvals: 2, failures: 3, notices: 4 })).toBe(6);
+  test("counts the approvals, the failures and the notices that the list shows", () => {
+    expect(inbox?.badge({ approvals: 2, failures: 3, notices: 4 })).toBe(9);
   });
 
   test("is zero before the counts are known", () => {

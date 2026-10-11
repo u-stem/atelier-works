@@ -14,6 +14,7 @@ import {
   type InboxKind,
   type InboxSelection,
 } from "./inboxSelection.ts";
+import { displayableIssueText } from "./intakeText.ts";
 import {
   approvalKindLabel,
   approvalStatusLabel,
@@ -65,16 +66,39 @@ const CHIP_LABELS: Readonly<Record<InboxChip, string>> = {
 };
 
 /**
- * summaryから一覧の項目を作る。承認、通知の順に並べる。
- * 失敗は、詳細を描く画面ができるまで含めない。件数は`unlistedCounts`で知らせる。
+ * summaryから一覧の項目を作る。承認、失敗、通知の順に並べる。
+ * 監査の失敗は再実行できないので含めない。
  */
 export function buildInboxItems(summary: ConsoleSummary): InboxItem[] {
   return [
     ...summary.approvals.map(
       (approval): InboxItem => ({ type: "approval", approval }),
     ),
+    ...summary.failures
+      .filter((failure) => failure.kind !== "audit")
+      .map((failure): InboxItem => ({ type: "failure", failure })),
     ...summary.notices.map((notice): InboxItem => ({ type: "notice", notice })),
   ];
+}
+
+/**
+ * summaryの失敗のうち、監査の失敗の数。
+ * 監査は再実行できず、次の定期の監査が扱うので、一覧の行にもバッジにも数えない。
+ * 取得の上限を超えた分は見えないので、見えている行だけを数える。
+ */
+export function auditFailureCount(summary: ConsoleSummary): number {
+  return summary.failures.filter((failure) => failure.kind === "audit").length;
+}
+
+/**
+ * バッジと、一覧に出ていない件数に使う件数。失敗は、再実行できるもの(監査を除く)だけを数える。
+ * 数え続けて0にならない件数を、最初に見る場所に出さないためである。
+ */
+export function actionableCounts(summary: ConsoleSummary): SummaryCounts {
+  return {
+    ...summary.counts,
+    failures: Math.max(0, summary.counts.failures - auditFailureCount(summary)),
+  };
 }
 
 export function selectionOf(item: InboxItem): InboxSelection {
@@ -165,7 +189,6 @@ export function effectiveChip(
 
 /**
  * 選んだ項目が一覧に無いときに、詳細のペインに出す文。
- * 失敗は一覧に載せない種類なので、処理済みとは言わない。
  */
 export function missingSelectionMessage(
   selection: InboxSelection | null,
@@ -173,14 +196,9 @@ export function missingSelectionMessage(
   if (selection === null) {
     return "一覧から項目を選んでください。";
   }
-  switch (selection.type) {
-    case "approval":
-      return "選んだ項目は一覧にありません。すでに処理されたか、まだ取得できていません。";
-    case "notice":
-      return "選んだ通知は一覧にありません。すでに解決されたか、まだ取得できていません。";
-    case "failure":
-      return "この種類の一覧は準備中です。";
-  }
+  return selection.type === "notice"
+    ? "選んだ通知は一覧にありません。すでに解決されたか、まだ取得できていません。"
+    : "選んだ項目は一覧にありません。すでに処理されたか、まだ取得できていません。";
 }
 
 /** 選択に当たる項目を返す。選んでいないとき、または一覧に無いときは`null`。 */
@@ -316,7 +334,9 @@ export function describeRow(item: InboxItem, nowMs: number): RowDescription {
     case "failure":
       return {
         key,
-        title: item.failure.title ?? workItemRef(item.failure.work_item_id),
+        title: displayableIssueText(
+          item.failure.title ?? workItemRef(item.failure.work_item_id),
+        ).text,
         kindLabel: "失敗",
         statusLabel: workItemStatusLabel(item.failure.status),
         subLabel: `${workItemKindLabel(item.failure.kind)}・${workItemRef(item.failure.work_item_id)}`,
@@ -342,16 +362,47 @@ export type UnlistedCount = {
   readonly type: InboxKind;
   readonly label: string;
   readonly count: number;
+  /** 取得の上限を超えた分ではなく、一覧に載せない理由があるときの理由。 */
+  readonly cause?: "audit";
 };
+
+/**
+ * 一覧に出ていない件数のカードが、旧Consoleへのリンクを持つ種類か。
+ * 失敗と通知は新しい画面の一覧が受け持つので、旧Consoleへ誘導しない。
+ * 残る件数は、取得の上限を超えた分だけである。
+ */
+export function hasLegacyLink(type: InboxKind): boolean {
+  return type === "approval";
+}
+
+/**
+ * 旧Consoleへのリンクを持たない件数のカードに添える文。リンクを持つ種類は`null`。
+ * 失敗の残りは、監査の失敗(再実行できない)と、取得の上限を超えた分である。
+ * 通知の残りは、取得の上限を超えた分である。
+ * 取得は新しい順に上限まで読むので、超えた分は古いものから見えない。
+ * 古い失敗に、再実行できるものが含まれることもある。
+ */
+export function unlistedNote(entry: UnlistedCount): string | null {
+  if (hasLegacyLink(entry.type)) {
+    return null;
+  }
+  if (entry.cause === "audit") {
+    return "再実行できません。システムの画面で確認してください";
+  }
+  return entry.type === "notice"
+    ? "取得の上限を超えた分は、発生の古いものから表示されません"
+    : "取得の上限を超えた分は、更新の古いものから表示されません";
+}
 
 /**
  * 一覧に出ていない要対応の件数を、種類ごとに返す。無ければ空の配列。
  * 件数(`counts`)は取得の上限を超えた分も数える。種類ごとに、件数から一覧にある項目を引いた差を返す。
- * 承認と通知は上限を超えた分、失敗は一覧に載せていない分である。
+ * 承認、失敗、通知とも、一覧にない分は取得の上限を超えた分である(監査の失敗は別に数える)。
  */
 export function unlistedCounts(
   counts: SummaryCounts,
   items: readonly InboxItem[],
+  auditFailures = 0,
 ): UnlistedCount[] {
   const listed = chipCounts(items);
   const entries: UnlistedCount[] = [
@@ -363,7 +414,13 @@ export function unlistedCounts(
     {
       type: "failure",
       label: CHIP_LABELS.failure,
-      count: counts.failures - listed.failure,
+      count: counts.failures - auditFailures - listed.failure,
+    },
+    {
+      type: "failure",
+      label: "監査の失敗",
+      count: auditFailures,
+      cause: "audit",
     },
     {
       type: "notice",
