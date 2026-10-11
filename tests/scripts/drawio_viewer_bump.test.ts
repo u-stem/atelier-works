@@ -10,7 +10,7 @@ import {
   renderPin,
   sha256Hex,
 } from "../../f/factory/lib/drawio_viewer_bump.ts";
-import type { GitHubRelease } from "../../f/factory/lib/github.ts";
+import type { GitHubRelease } from "../../f/factory/lib/drawio_viewer_bump_github.ts";
 import { logger } from "../../f/factory/lib/log.ts";
 import type { NoticeRecord } from "../../f/factory/lib/types.ts";
 
@@ -56,6 +56,7 @@ function harness(overrides: Partial<BumpDeps> = {}): Harness {
       path === "console/drawio-viewer.json" ? PIN_TEXT : PAGE_TEXT,
     listReleases: async () => [release("v32.5.0", 20)],
     resolveTagCommit: async () => NEW_COMMIT,
+    observe: async () => new Date(NOW.getTime() - 20 * DAY_MS),
     getViewerMeta: async (commit) =>
       commit === OLD_COMMIT
         ? { sha: gitBlobSha1(OLD_BYTES), size: OLD_BYTES.length }
@@ -64,6 +65,7 @@ function harness(overrides: Partial<BumpDeps> = {}): Harness {
     listOpenHeads: async () => [],
     branchExists: async () => false,
     countPullRequests: async () => 0,
+    verifyBranch: async () => ({ ok: true }),
     publish: async (input) => {
       published.push(input);
       return { number: 7, htmlUrl: "https://github.com/acme/widgets/pull/7" };
@@ -155,7 +157,82 @@ describe("runBump opening the pull request", () => {
   });
 });
 
+describe("runBump observing releases", () => {
+  test("waits for a release whose commit was seen only recently", async () => {
+    const { deps } = harness({
+      observe: async () => new Date(NOW.getTime() - 2 * DAY_MS),
+    });
+    expect((await runBump(deps, null)).outcome).toBe("waiting");
+  });
+
+  test("records an observation for every newer release, young ones too", async () => {
+    const seen: string[] = [];
+    const { deps } = harness({
+      listReleases: async () => [release("v32.6.0", 2), release("v32.5.0", 20)],
+      observe: async (tag) => {
+        seen.push(tag);
+        return new Date(NOW.getTime() - 20 * DAY_MS);
+      },
+    });
+    await runBump(deps, null);
+    expect(seen).toEqual(["v32.6.0", "v32.5.0"]);
+  });
+
+  test("passes the commit that the tag points at to the observation", async () => {
+    let seenCommit = "";
+    const { deps } = harness({
+      observe: async (_tag, commit) => {
+        seenCommit = commit;
+        return new Date(NOW.getTime() - 20 * DAY_MS);
+      },
+    });
+    await runBump(deps, null);
+    expect(seenCommit).toBe(NEW_COMMIT);
+  });
+
+  test("records no observation when no release is newer", async () => {
+    let calls = 0;
+    const { deps } = harness({
+      listReleases: async () => [release("v32.4.1", 30)],
+      observe: async () => {
+        calls += 1;
+        return NOW;
+      },
+    });
+    await runBump(deps, null);
+    expect(calls).toBe(0);
+  });
+
+  test("skips a tag that cannot be resolved and keeps the others", async () => {
+    const { deps } = harness({
+      listReleases: async () => [
+        release("v32.6.0", 25),
+        release("v32.5.0", 25),
+      ],
+      resolveTagCommit: async (tag) => {
+        if (tag === "v32.6.0") throw new Error("tag points at a tree");
+        return NEW_COMMIT;
+      },
+    });
+    const result = await runBump(deps, null);
+    expect(result).toEqual({
+      outcome: "opened",
+      branch: "factory/drawio-viewer-32.5.0",
+      pr_url: "https://github.com/acme/widgets/pull/7",
+    });
+  });
+});
+
 describe("runBump avoiding duplicates", () => {
+  test("does not propose again a version whose branch was deleted but whose pull request was closed", async () => {
+    const { deps, published } = harness({
+      branchExists: async () => false,
+      countPullRequests: async () => 1,
+    });
+    const result = await runBump(deps, null);
+    expect([result.outcome, published.length]).toEqual(["already_proposed", 0]);
+  });
+
   test("waits while another bump pull request is open", async () => {
     const { deps, published } = harness({
       listOpenHeads: async () => ["factory/drawio-viewer-32.4.2"],
@@ -190,6 +267,63 @@ describe("runBump avoiding duplicates", () => {
     });
     await runBump(deps, null);
     expect(published[0]?.createBranch).toBe(false);
+  });
+});
+
+describe("runBump reusing an existing branch", () => {
+  const existing = (verify: BumpDeps["verifyBranch"]) => ({
+    branchExists: async () => true,
+    countPullRequests: async () => 0,
+    verifyBranch: verify,
+  });
+
+  test("opens the pull request from a branch that matches", async () => {
+    const { deps, published } = harness(existing(async () => ({ ok: true })));
+    await runBump(deps, null);
+    expect(published[0]?.createBranch).toBe(false);
+  });
+
+  test("does not open a pull request from a branch with other content", async () => {
+    const { deps, published } = harness(
+      existing(async () => ({ ok: false, reason: "other files changed" })),
+    );
+    const result = await runBump(deps, null);
+    expect([result.outcome, published.length]).toEqual(["rejected", 0]);
+  });
+
+  test("records a notice for a branch with other content", async () => {
+    const { deps, notices } = harness(
+      existing(async () => ({ ok: false, reason: "other files changed" })),
+    );
+    await runBump(deps, null);
+    expect(notices[0]?.kind).toBe("drawio_viewer_bump_held");
+  });
+
+  test("checks the branch against the files it would have created", async () => {
+    let checked: string[] = [];
+    const { deps } = harness(
+      existing(async (_branch, files) => {
+        checked = files.map((file) => file.path);
+        return { ok: true };
+      }),
+    );
+    await runBump(deps, null);
+    expect(checked).toEqual([
+      "console/drawio-viewer.json",
+      "console/public/drawio.html",
+    ]);
+  });
+
+  test("does not check a branch that does not exist", async () => {
+    let checks = 0;
+    const { deps } = harness({
+      verifyBranch: async () => {
+        checks += 1;
+        return { ok: true };
+      },
+    });
+    await runBump(deps, null);
+    expect(checks).toBe(0);
   });
 });
 
@@ -293,6 +427,11 @@ describe("runBump rejecting a download", () => {
     const { deps, published } = harness(bigDeps());
     const result = await runBump(deps, null);
     expect([result.outcome, published.length]).toEqual(["rejected", 0]);
+  });
+
+  test("accepts a large size change for a version approved without the v prefix", async () => {
+    const { deps } = harness(bigDeps());
+    expect((await runBump(deps, "32.5.0")).outcome).toBe("opened");
   });
 
   test("accepts a large size change for the approved version", async () => {

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  compareChangedFiles,
   createBranchWithFiles,
   getBranchHeadSha,
   getRepoFileMeta,
@@ -7,7 +8,8 @@ import {
   listOpenPullRequestHeads,
   listReleases,
   resolveTagCommit,
-} from "../../f/factory/lib/github.ts";
+} from "../../f/factory/lib/drawio_viewer_bump_github.ts";
+import { GitHubPaginationLimitError } from "../../f/factory/lib/github.ts";
 import {
   createFakeCommandRunner,
   ghApiOk,
@@ -169,14 +171,97 @@ describe("getBranchHeadSha", () => {
 });
 
 describe("listOpenPullRequestHeads", () => {
-  test("returns the head branch names", async () => {
+  const pr = (ref: string, fullName: string | null) => ({
+    head: { ref, repo: fullName === null ? null : { full_name: fullName } },
+  });
+
+  test("returns the head branch names of this repository", async () => {
     const { client } = clientFor([
-      ghApiOk([{ head: { ref: "feat/a" } }, { head: { ref: "feat/b" } }]),
+      ghApiOk([pr("feat/a", "acme/widgets"), pr("feat/b", "acme/widgets")]),
     ]);
     expect(await listOpenPullRequestHeads(client, "acme", "widgets")).toEqual([
       "feat/a",
       "feat/b",
     ]);
+  });
+
+  test("ignores a branch of another repository with the same name", async () => {
+    const { client } = clientFor([
+      ghApiOk([
+        pr("factory/drawio-viewer-9.9.9", "attacker/widgets"),
+        pr("feat/a", "acme/widgets"),
+      ]),
+    ]);
+    expect(await listOpenPullRequestHeads(client, "acme", "widgets")).toEqual([
+      "feat/a",
+    ]);
+  });
+
+  test("ignores a pull request whose head repository was deleted", async () => {
+    const { client } = clientFor([ghApiOk([pr("feat/a", null)])]);
+    expect(await listOpenPullRequestHeads(client, "acme", "widgets")).toEqual(
+      [],
+    );
+  });
+
+  test("compares the repository name without regard to case", async () => {
+    const { client } = clientFor([ghApiOk([pr("feat/a", "ACME/Widgets")])]);
+    expect(await listOpenPullRequestHeads(client, "acme", "widgets")).toEqual([
+      "feat/a",
+    ]);
+  });
+
+  test("follows the next page after a full page of 100", async () => {
+    const full = Array.from({ length: 100 }, (_, i) =>
+      pr(`feat/${String(i)}`, "acme/widgets"),
+    );
+    const { client } = clientFor([
+      ok(
+        ghApiStdout(200, full, {
+          link: '<https://api.github.com/repos/acme/widgets/pulls?page=2>; rel="next"',
+        }),
+      ),
+      ghApiOk([pr("factory/drawio-viewer-32.5.0", "acme/widgets")]),
+    ]);
+    const heads = await listOpenPullRequestHeads(client, "acme", "widgets");
+    expect(heads).toContain("factory/drawio-viewer-32.5.0");
+  });
+
+  test("fails when the pages never end", async () => {
+    const link =
+      '<https://api.github.com/repos/acme/widgets/pulls?page=2>; rel="next"';
+    const { client } = clientFor(
+      Array.from({ length: 11 }, () => ok(ghApiStdout(200, [], { link }))),
+    );
+    await expect(
+      listOpenPullRequestHeads(client, "acme", "widgets"),
+    ).rejects.toBeInstanceOf(GitHubPaginationLimitError);
+  });
+});
+
+describe("compareChangedFiles", () => {
+  test("returns the changed paths in sorted order", async () => {
+    const { client } = clientFor([
+      ghApiOk({ files: [{ filename: "b.json" }, { filename: "a.html" }] }),
+    ]);
+    expect(
+      await compareChangedFiles(client, "acme", "widgets", "main", "feat/x"),
+    ).toEqual(["a.html", "b.json"]);
+  });
+
+  test("compares from the base to the head with three dots", async () => {
+    const { client, fake } = clientFor([ghApiOk({ files: [] })]);
+    await compareChangedFiles(client, "acme", "widgets", "main", "feat/x");
+    expect(fake.calls[0]?.argv).toContain(
+      "repos/acme/widgets/compare/main...feat/x",
+    );
+  });
+
+  test("throws for an unexpected shape", async () => {
+    const { client } = clientFor([ghApiOk({ status: "ahead" })]);
+    await expect(
+      compareChangedFiles(client, "acme", "widgets", "main", "feat/x"),
+    ).rejects.toThrow("unexpected response shape");
   });
 });
 

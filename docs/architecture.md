@@ -191,6 +191,7 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加だけにし、
 | `issue_proposals` | Issue化の提案の題名と本文、決定の履歴 |
 | `audit_reports` | 監査1回のレポート。作業項目と1対1に対応する |
 | `cleanup_runs` | DBの掃除1回ごとの削除件数 |
+| `drawio_viewer_observations` | draw.ioのリリースのタグごとに、最初に見たcommitと時刻。ビューアの固定を上げる処理が、14日の待ちを数えるのに使う |
 
 `work_items`の列は種別によって使うものが違う。実装ブランチ(`branch`)と作成したPRのURL(`pr_url`)はIssueの作業項目だけが持ち、PR番号(`pr_number`)はPRの作業項目だけが持つ。PR番号をIssueの作業項目に入れないのは、PRの作業項目の束ね方がこの列で決まるためである。実装ブランチの名前は`factory/issue-<N>-wi-<id>`である。
 
@@ -337,6 +338,8 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/cleanup_db_support` | script | [LIB] DB掃除の純粋ロジック |
 | `f/factory/lib/discord` | script | [LIB] Discord通知 |
 | `f/factory/lib/drawio_viewer_bump` | script | [LIB] draw.ioのビューアの固定の更新 |
+| `f/factory/lib/drawio_viewer_bump_github` | script | [LIB] draw.ioのビューアの更新のGitHub操作 |
+| `f/factory/lib/drawio_viewer_observations` | script | [LIB] draw.ioのリリースの観測の記録 |
 | `f/factory/lib/drawio` | script | [LIB] draw.io図の生成 |
 | `f/factory/lib/workspace` | script | [LIB] git worktreeと作業領域 |
 | `f/factory/lib/github` | script | [LIB] GitHub APIラッパー |

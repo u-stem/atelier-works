@@ -1,24 +1,28 @@
 // draw.ioのビューアの固定(console/drawio-viewer.json)を、新しい公式のリリースへ上げるPRを作る。
-// 週に1回動く。判断は`lib/drawio_viewer_bump.ts`の純関数が行い、ここは取得、重複の確認、PRの作成だけを担う。
+// 週に1回動く。判断は`lib/drawio_viewer_bump.ts`の純関数が行い、ここは取得、観測の記録、重複の確認、PRの作成だけを担う。
 //
-// 上げるのは、公開から14日以上たった最新のリリースだけである。
+// 上げるのは、公開から14日以上たち、同じcommitを14日以上前から見ている最新のリリースだけである。
 // 取得したバイト列は、GitHubのAPIが返すgit blobのIDと大きさに照合する。
 // メジャー版が変わる版もPRにする。題名の`[major]`と本文の先頭の文で、人の確認を求める。
-// 大きさが大きく変わる版と、照合に通らない版は上げず、noticeに残す。
-// 人は、noticeの手順で`approved_version`にその版を指定して、大きさの制限を外して手で実行できる。
+// 大きさが大きく変わる版と、照合に通らない版、中身の合わない既存のブランチは、上げずにnoticeに残す。
+// 大きさの変化が正当なら、人が`approved_version`にその版を指定して手で実行する。
+// 最新の版を保留にしている間は、それより古い版も上げない。保留の理由はnoticeに出る。
 // PRはDraftにせず、`factory:review`ラベルで自動レビューに回す。マージは人が行う。
 
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "./lib/config.ts";
 import { addNoticeUnlessUnresolved } from "./lib/db.ts";
 import {
+  type BranchVerdict,
   buildBumpCommitMessage,
   buildBumpPrBody,
   buildBumpTitle,
   bumpBranchName,
   bumpBranchPrefix,
+  compareVersions,
   DRAWIO_OWNER,
   DRAWIO_REPO,
+  type DrawioRelease,
   decideBump,
   downloadViewer,
   formatVersion,
@@ -29,32 +33,39 @@ import {
   parseReleases,
   parseReleaseVersion,
   pinUrlFor,
+  releasesToObserve,
   renderPin,
   rewriteViewerReference,
   sha256Hex,
   sizeChangeVerdict,
   VIEWER_PATH,
+  verifyBranchContents,
 } from "./lib/drawio_viewer_bump.ts";
 import {
-  addLabels,
   type BranchFile,
+  compareChangedFiles,
   createBranchWithFiles,
-  createPullRequest,
-  type GhClient,
   type GitHubRelease,
   getBranchHeadSha,
   getDefaultBranch,
   getRepoFileMeta,
   getRepoFileText,
-  getViewer,
-  gitIdentityForViewer,
   listOpenPullRequestHeads,
-  listPullRequestNumbersByHead,
   listReleases,
-  type PullRequestRef,
-  parseGitHubRepoUrl,
   type RepoFileMeta,
   resolveTagCommit,
+} from "./lib/drawio_viewer_bump_github.ts";
+import { recordViewerObservation } from "./lib/drawio_viewer_observations.ts";
+import {
+  addLabels,
+  createPullRequest,
+  type GhClient,
+  GitHubHttpError,
+  getViewer,
+  gitIdentityForViewer,
+  listPullRequestNumbersByHead,
+  type PullRequestRef,
+  parseGitHubRepoUrl,
 } from "./lib/github.ts";
 import { type Logger, logger } from "./lib/log.ts";
 import type { NoticeRecord } from "./lib/types.ts";
@@ -83,6 +94,8 @@ export type BumpDeps = {
   readonly listReleases: () => Promise<GitHubRelease[]>;
   /** タグが指すcommitのIDを返す。 */
   readonly resolveTagCommit: (tag: string) => Promise<string>;
+  /** タグとcommitを記録し、そのcommitを最初に見た時刻を返す。付け替えられていれば取り直す。 */
+  readonly observe: (tag: string, commit: string) => Promise<Date>;
   /** 上流の`commit`の時点のビューアのgit blobのIDと大きさを返す。 */
   readonly getViewerMeta: (commit: string) => Promise<RepoFileMeta>;
   readonly download: (commit: string) => Promise<Uint8Array>;
@@ -91,6 +104,11 @@ export type BumpDeps = {
   readonly branchExists: (branch: string) => Promise<boolean>;
   /** ブランチをheadにしたPRの数(閉じたものを含む)。 */
   readonly countPullRequests: (branch: string) => Promise<number>;
+  /** PRの無い既存のブランチの中身が、`files`と一致し、差分がそのファイルだけかを確かめる。 */
+  readonly verifyBranch: (
+    branch: string,
+    files: readonly BranchFile[],
+  ) => Promise<BranchVerdict>;
   readonly publish: (input: BumpPullRequestInput) => Promise<PullRequestRef>;
   /** 同じ本文の未解決のnoticeが無ければ挿入してIDを返し、あれば`null`を返す。 */
   readonly addNotice: (record: NoticeRecord) => Promise<number | null>;
@@ -125,9 +143,12 @@ function rejectedNotice(
 
 /**
  * 固定を確かめ、上げる版があればPRを1件作る。
- * - 重複の防止: 未完了の更新のPRがあるあいだは何もしない。同じ版のブランチにPRがあれば作らない。
+ * - 待ち: 公開から14日以上たち、同じcommitを14日以上前から見ている版だけを上げる。見始めた時刻は、タグごとに記録する。
+ * - 重複の防止: 未完了の更新のPRがあるあいだは何もしない。同じ版のブランチをheadにしたPRが、閉じたものを含めて
+ *   1件でもあれば作らない。
  * - 照合: 取得したバイト列の大きさとgit blobのIDが、GitHubのAPIの値と違えば、PRを作らずnoticeに残す。
  * - 大きさ: 今の大きさから2割を超えて増減した版は、`approvedTag`の指名が無ければ、PRを作らずnoticeに残す。
+ * - 既存のブランチ: PRの無いブランチが既にあるときは、中身を確かめ、合わなければPRを作らずnoticeに残す。
  * - メジャー版: 変わる版も、他の確認を通ればPRにする。題名と本文で人の確認を求める。
  * 失敗はすべて例外にして、ジョブを失敗させる(スケジュールの失敗の通知に流れる)。次の週に再び試す。
  */
@@ -137,7 +158,28 @@ export async function runBump(
 ): Promise<BumpResult> {
   const pin = parsePinText(await deps.readBaseText(PIN_PATH));
   const releases = parseReleases(await deps.listReleases());
-  const decision = decideBump(pin.version, releases, deps.now(), approvedTag);
+
+  const commits = new Map<string, string>();
+  const observed: DrawioRelease[] = [];
+  for (const release of releasesToObserve(pin.version, releases)) {
+    let commit: string;
+    try {
+      commit = await deps.resolveTagCommit(release.tag);
+    } catch (error) {
+      // 1つのタグが壊れていても、他の版の観測は続ける。
+      deps.log.warn("could not resolve the tag, skipping it", {
+        tag: release.tag,
+        error: error instanceof Error ? error.message : "unknown error",
+      });
+      continue;
+    }
+    commits.set(release.tag, commit);
+    observed.push({
+      ...release,
+      firstSeenAt: await deps.observe(release.tag, commit),
+    });
+  }
+  const decision = decideBump(pin.version, observed, deps.now(), approvedTag);
 
   const target = decision.target;
   if (target === null) {
@@ -151,13 +193,16 @@ export async function runBump(
     return { outcome: "pull_request_pending", branch: pending };
   }
   const branch = bumpBranchName(target.tag);
-  const branchExists = await deps.branchExists(branch);
-  if (branchExists && (await deps.countPullRequests(branch)) > 0) {
+  // ブランチが消されていても、閉じたPRが残っていれば、同じ版を提案し直さない。
+  if ((await deps.countPullRequests(branch)) > 0) {
     deps.log.info("this version was already proposed", { branch });
     return { outcome: "already_proposed", branch };
   }
 
-  const commit = await deps.resolveTagCommit(target.tag);
+  const commit = commits.get(target.tag);
+  if (commit === undefined) {
+    throw new Error(`no observed commit for ${target.tag}`);
+  }
   const currentMeta = await deps.getViewerMeta(pin.commit);
   const newMeta = await deps.getViewerMeta(commit);
   const bytes = await deps.download(commit);
@@ -175,7 +220,7 @@ export async function runBump(
     });
     return { outcome: "rejected", tag: target.tag };
   }
-  const sizeApproved = approvedTag === target.tag;
+  const sizeApproved = isApproved(approvedTag, target);
   const verdict = sizeChangeVerdict(
     currentMeta.size,
     bytes.length,
@@ -220,6 +265,25 @@ export async function runBump(
       content: rewriteViewerReference(page, pin.sha256, sha256),
     },
   ];
+
+  const branchExists = await deps.branchExists(branch);
+  if (branchExists) {
+    const branchVerdict = await deps.verifyBranch(branch, files);
+    if (!branchVerdict.ok) {
+      await deps.addNotice(
+        rejectedNotice(
+          target.tag,
+          `既にあるブランチ${branch}の中身が、作るはずの内容と一致しません`,
+          "ブランチの内容を確かめ、不要なら削除してください。削除すると、次の週に作り直します",
+        ),
+      );
+      deps.log.warn("the existing bump branch does not match", {
+        branch,
+        reason: branchVerdict.reason,
+      });
+      return { outcome: "rejected", tag: target.tag };
+    }
+  }
   const pr = await deps.publish({
     branch,
     title: buildBumpTitle(pin.version, target.version),
@@ -242,6 +306,16 @@ export async function runBump(
     pr: pr.htmlUrl,
   });
   return { outcome: "opened", branch, pr_url: pr.htmlUrl };
+}
+
+/** 人の指名が、この版を指すか。`v`の有無によらず、版の数で比べる。 */
+function isApproved(
+  approvedTag: string | null,
+  target: DrawioRelease,
+): boolean {
+  if (approvedTag === null) return false;
+  const approved = parseReleaseVersion(approvedTag);
+  return approved !== null && compareVersions(approved, target.version) === 0;
 }
 
 /** 人が指名する版を読む。空なら指名なし。版の形でなければ例外を投げる。結果は`v`付きのタグの形にそろえる。 */
@@ -280,6 +354,7 @@ export async function main(approved_version = ""): Promise<BumpResult> {
       listReleases: () => listReleases(client, DRAWIO_OWNER, DRAWIO_REPO),
       resolveTagCommit: (tag) =>
         resolveTagCommit(client, DRAWIO_OWNER, DRAWIO_REPO, tag),
+      observe: (tag, commit) => recordViewerObservation(tag, commit),
       getViewerMeta: (commit) =>
         getRepoFileMeta(client, DRAWIO_OWNER, DRAWIO_REPO, VIEWER_PATH, commit),
       download: (commit) => downloadViewer(commit, fetch),
@@ -301,6 +376,36 @@ export async function main(approved_version = ""): Promise<BumpResult> {
             branch,
           )
         ).length,
+      verifyBranch: (branch, files) =>
+        verifyBranchContents(
+          files,
+          async (path) => {
+            try {
+              return (
+                await getRepoFileMeta(
+                  client,
+                  repoRef.owner,
+                  repoRef.repo,
+                  path,
+                  branch,
+                )
+              ).sha;
+            } catch (error) {
+              if (error instanceof GitHubHttpError && error.status === 404) {
+                return null;
+              }
+              throw error;
+            }
+          },
+          () =>
+            compareChangedFiles(
+              client,
+              repoRef.owner,
+              repoRef.repo,
+              baseBranch,
+              branch,
+            ),
+        ),
       publish: async (input) => {
         if (input.createBranch) {
           await createBranchWithFiles(client, repoRef.owner, repoRef.repo, {

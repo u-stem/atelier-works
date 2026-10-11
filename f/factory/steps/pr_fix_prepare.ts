@@ -25,6 +25,7 @@ import {
   earlyExitBase,
   evaluateBranchImplementingGuard,
   evaluateFixRoundGuard,
+  evaluateHumanOnlyBranchGuard,
   evaluateParentImplementingGuard,
   evaluatePrFixSafetyGuards,
   evaluateRepoAllowedGuard,
@@ -175,6 +176,14 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
     return {
       outcome: "guard_blocked",
       reason: branchGuard.reason,
+      ...earlyExitBase(workItem),
+    };
+  }
+  const humanOnly = evaluateHumanOnlyBranchGuard(pr.headRef);
+  if (!humanOnly.ok) {
+    return {
+      outcome: "guard_blocked",
+      reason: humanOnly.reason,
       ...earlyExitBase(workItem),
     };
   }

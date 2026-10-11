@@ -1019,6 +1019,7 @@ describe("processPrDecisions", () => {
     labels: [],
     authorLogin: "octo-owner",
     headInBaseRepo: true,
+    headRef: "feature",
     reviewLabelerLogin: null,
     fixLabelerLogin: null,
     hasActiveReviewingItem: false,

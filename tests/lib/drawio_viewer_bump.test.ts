@@ -22,12 +22,14 @@ import {
   parseReleases,
   parseReleaseVersion,
   pinUrlFor,
+  releasesToObserve,
   renderPin,
   rewriteViewerReference,
   sha256Hex,
   sizeChangeVerdict,
+  verifyBranchContents,
 } from "../../f/factory/lib/drawio_viewer_bump.ts";
-import type { GitHubRelease } from "../../f/factory/lib/github.ts";
+import type { GitHubRelease } from "../../f/factory/lib/drawio_viewer_bump_github.ts";
 
 const NOW = new Date("2026-10-20T00:00:00.000Z");
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -36,13 +38,22 @@ const SHA = "bc7586cb62eec98018c13b78619078d3a7179cc7bfc711c566dda19527520a30";
 const NEW_SHA =
   "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
-function release(tag: string, daysAgo: number): DrawioRelease {
+/** 公開と最初の観測の両方を`daysAgo`日前にしたリリース。観測だけ変えるときは`seenDaysAgo`を渡す。 */
+function release(
+  tag: string,
+  daysAgo: number,
+  seenDaysAgo: number | null = daysAgo,
+): DrawioRelease {
   const version = parseReleaseVersion(tag);
   if (version === null) throw new Error(`bad test tag: ${tag}`);
   return {
     tag,
     version,
     publishedAt: new Date(NOW.getTime() - daysAgo * DAY_MS),
+    firstSeenAt:
+      seenDaysAgo === null
+        ? null
+        : new Date(NOW.getTime() - seenDaysAgo * DAY_MS),
   };
 }
 
@@ -134,6 +145,10 @@ describe("parseReleases", () => {
     expect(parseReleases([raw({ publishedAt: "yesterday" })])).toEqual([]);
   });
 
+  test("leaves the first-seen time empty until the release is observed", () => {
+    expect(parseReleases([raw({})])[0]?.firstSeenAt).toBeNull();
+  });
+
   test("drops a tag that is not a plain version", () => {
     expect(parseReleases([raw({ tagName: "latest" })])).toEqual([]);
   });
@@ -157,8 +172,83 @@ describe("isOldEnough", () => {
   });
 });
 
+describe("isOldEnough with observations", () => {
+  test("rejects a release that was first seen less than 14 days ago", () => {
+    expect(isOldEnough(release("v32.5.0", 30, 3), NOW)).toBe(false);
+  });
+
+  test("rejects a release that was never observed", () => {
+    expect(isOldEnough(release("v32.5.0", 30, null), NOW)).toBe(false);
+  });
+
+  test("accepts a release that was first seen exactly 14 days ago", () => {
+    expect(isOldEnough(release("v32.5.0", 30, 14), NOW)).toBe(true);
+  });
+
+  test("rejects an old observation of a release published recently", () => {
+    expect(isOldEnough(release("v32.5.0", 3, 30), NOW)).toBe(false);
+  });
+});
+
+describe("releasesToObserve", () => {
+  test("returns only releases newer than the pinned version", () => {
+    const tags = releasesToObserve("32.4.1", [
+      release("v32.3.0", 40),
+      release("v32.4.1", 30),
+      release("v32.5.0", 20),
+    ]).map((r) => r.tag);
+    expect(tags).toEqual(["v32.5.0"]);
+  });
+
+  test("orders the newest first", () => {
+    const tags = releasesToObserve("32.4.1", [
+      release("v32.5.0", 20),
+      release("v33.0.0", 10),
+      release("v32.6.0", 15),
+    ]).map((r) => r.tag);
+    expect(tags).toEqual(["v33.0.0", "v32.6.0", "v32.5.0"]);
+  });
+
+  test("keeps young releases so that their wait starts early", () => {
+    expect(
+      releasesToObserve("32.4.1", [release("v32.5.0", 1, null)]).length,
+    ).toBe(1);
+  });
+
+  test("keeps only the newest 20", () => {
+    const many = Array.from({ length: 30 }, (_, i) =>
+      release(`v33.${String(i)}.0`, 30),
+    );
+    expect(releasesToObserve("32.4.1", many).length).toBe(20);
+  });
+
+  test("throws when the pinned version is not a plain version", () => {
+    expect(() => releasesToObserve("latest", [])).toThrow();
+  });
+});
+
 describe("decideBump", () => {
   const current = "32.4.1";
+
+  test("waits for a release whose commit was seen only recently", () => {
+    const decision = decideBump(
+      current,
+      [release("v32.5.0", 30, 2)],
+      NOW,
+      null,
+    );
+    expect(decision).toEqual({ target: null, waiting: true });
+  });
+
+  test("matches an approved tag written without the v prefix", () => {
+    const decision = decideBump(
+      current,
+      [release("v33.0.0", 20), release("v32.6.0", 25)],
+      NOW,
+      "32.6.0",
+    );
+    expect(decision.target?.tag).toBe("v32.6.0");
+  });
 
   test("does nothing when no release is newer", () => {
     const decision = decideBump(current, [release("v32.4.1", 30)], NOW, null);
@@ -276,6 +366,14 @@ describe("isMajorBump", () => {
 describe("sizeChangeVerdict", () => {
   test("accepts a small growth", () => {
     expect(sizeChangeVerdict(1000, 1100, false)).toEqual({ ok: true });
+  });
+
+  test("accepts exactly the limit of growth", () => {
+    expect(sizeChangeVerdict(1000, 1200, false)).toEqual({ ok: true });
+  });
+
+  test("accepts exactly the limit of shrink", () => {
+    expect(sizeChangeVerdict(1000, 800, false)).toEqual({ ok: true });
   });
 
   test("rejects a growth beyond the limit", () => {
@@ -471,6 +569,26 @@ describe("downloadViewer", () => {
     await expect(downloadViewer(COMMIT, fetch)).rejects.toThrow("too large");
   });
 
+  test("rejects a body over the limit when no length is declared", async () => {
+    const chunk = new Uint8Array(1024 * 1024);
+    let sent = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (sent > MAX_VIEWER_BYTES / chunk.length + 1) {
+          controller.close();
+          return;
+        }
+        sent += 1;
+        controller.enqueue(chunk);
+      },
+    });
+    const fetchLike: FetchLike = async () =>
+      new Response(stream, { status: 200 });
+    await expect(downloadViewer(COMMIT, fetchLike)).rejects.toThrow(
+      "too large",
+    );
+  });
+
   test("rejects a commit that is not a 40-digit sha", async () => {
     const { fetch } = respond("viewer");
     await expect(downloadViewer("main", fetch)).rejects.toThrow("commit");
@@ -518,5 +636,80 @@ describe("major bump pull request", () => {
     expect(buildBumpTitle("32.4.1", { major: 32, minor: 5, patch: 0 })).toBe(
       "chore: draw.ioのビューアを32.5.0へ上げる",
     );
+  });
+});
+
+describe("verifyBranchContents", () => {
+  const files = [
+    { path: "console/drawio-viewer.json", content: "{}\n" },
+    { path: "console/public/drawio.html", content: "<html></html>\n" },
+  ];
+  const blobOf = (content: string) =>
+    gitBlobSha1(new TextEncoder().encode(content));
+  const shaFor = (path: string): string | null => {
+    const file = files.find((candidate) => candidate.path === path);
+    return file === undefined ? null : blobOf(file.content);
+  };
+  const samePaths = async () => files.map((file) => file.path);
+
+  test("accepts a branch with the expected content and only those files", async () => {
+    const verdict = await verifyBranchContents(
+      files,
+      async (path) => shaFor(path),
+      samePaths,
+    );
+    expect(verdict).toEqual({ ok: true });
+  });
+
+  test("rejects a branch whose file content differs", async () => {
+    const verdict = await verifyBranchContents(
+      files,
+      async (path) =>
+        path === "console/drawio-viewer.json"
+          ? blobOf("tampered")
+          : shaFor(path),
+      samePaths,
+    );
+    expect(verdict.ok).toBe(false);
+  });
+
+  test("rejects a branch where an expected file is missing", async () => {
+    const verdict = await verifyBranchContents(
+      files,
+      async (path) =>
+        path === "console/public/drawio.html" ? null : shaFor(path),
+      samePaths,
+    );
+    expect(verdict.ok).toBe(false);
+  });
+
+  test("rejects a branch that changes an extra file", async () => {
+    const verdict = await verifyBranchContents(
+      files,
+      async (path) => shaFor(path),
+      async () => [
+        ...files.map((file) => file.path),
+        ".github/workflows/ci.yml",
+      ],
+    );
+    expect(verdict.ok).toBe(false);
+  });
+
+  test("rejects a branch that changes fewer files than expected", async () => {
+    const verdict = await verifyBranchContents(
+      files,
+      async (path) => shaFor(path),
+      async () => ["console/drawio-viewer.json"],
+    );
+    expect(verdict.ok).toBe(false);
+  });
+
+  test("accepts the changed paths in any order", async () => {
+    const verdict = await verifyBranchContents(
+      files,
+      async (path) => shaFor(path),
+      async () => files.map((file) => file.path).reverse(),
+    );
+    expect(verdict).toEqual({ ok: true });
   });
 });

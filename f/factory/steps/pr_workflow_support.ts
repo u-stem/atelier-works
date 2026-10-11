@@ -8,6 +8,7 @@
 import { lstat, mkdtemp, readlink, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
+import { bumpBranchPrefix } from "../lib/drawio_viewer_bump.ts";
 import {
   isOwnPost,
   type PrReview,
@@ -851,6 +852,24 @@ export function evaluateSameRepoHeadGuard(
     return {
       ok: false,
       reason: "head repository differs from base repository (fork PR)",
+    };
+  }
+  return { ok: true };
+}
+
+/**
+ * draw.ioのビューアの固定を上げるPRのブランチ(`bumpBranchPrefix`で始まる名前)は、修正を始めない。
+ * このPRは保護パスを変える。修正を許すと、固定のファイル以外も書き換えたcommitを、
+ * 人が気づかずにマージするおそれがある。直すときは、人が行う。
+ * 修正を始める判定(`poll_prs`)と、修正の準備のステップで同じ判定を使う。
+ */
+export function evaluateHumanOnlyBranchGuard(
+  headRef: string,
+): PrFixGuardResult {
+  if (headRef.startsWith(bumpBranchPrefix())) {
+    return {
+      ok: false,
+      reason: `the branch ${headRef} is fixed by a person only (draw.io viewer pin update)`,
     };
   }
   return { ok: true };

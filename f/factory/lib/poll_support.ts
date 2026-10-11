@@ -3,6 +3,7 @@
 
 import { normalizeRepoUrl } from "./config.ts";
 import { ACTIONABLE_WORK_ITEM_STATUSES } from "./console_support.ts";
+import { bumpBranchPrefix } from "./drawio_viewer_bump.ts";
 import { type GhClient, getLabelerLogin } from "./github.ts";
 import { isFlowJobId } from "./implement_launch_support.ts";
 import { type Logger, maskSecrets } from "./log.ts";
@@ -573,6 +574,12 @@ export type PrCandidate = {
    */
   readonly headInBaseRepo: boolean;
   /**
+   * PRのheadのブランチ名。
+   * draw.ioのビューアの固定を上げるPR(`factory/drawio-viewer-`で始まる)には、修正を始めない。
+   * 修正は固定のファイル以外も書き換えて、人が気づかずにマージするおそれがあるためである。
+   */
+  readonly headRef: string;
+  /**
    * `review_label`を付けた最後のイベントの付与者のログイン名。
    * ラベルが付いていないとき、イベントが無いとき、付与者を特定できないときは`null`。
    * ラベルが付いているのに`null`なら、拒否する。
@@ -638,6 +645,7 @@ export type PrDecision = {
  * ラベルの経路も検出の経路も、PRのheadがbaseと同じリポジトリにないとき
  * (forkのPRと、headのリポジトリを取得できないPR)は始めず、`deny_fork_head`を返す。
  * `pr_fix`に自動検出の経路は無く、`fix_label`からだけ始め、コメントからは始めない。
+ * draw.ioのビューアの固定を上げるPRのブランチ(`bumpBranchPrefix`)には、`fix_label`が付いていても始めない。
  */
 export function decidePrActions(
   candidates: readonly PrCandidate[],
@@ -673,9 +681,12 @@ export function decidePrActions(
         ? { kind: "deny_fork_head" }
         : wouldReview;
 
+    // 人だけが直すブランチのPRでは、修正を始めない。ラベルは消費せずに残す。
     const fix: PrFixAction = hasFixLabel
       ? fixLabelAllowed
-        ? { kind: "trigger_fix", removeLabel: true }
+        ? candidate.headRef.startsWith(bumpBranchPrefix())
+          ? { kind: "none" }
+          : { kind: "trigger_fix", removeLabel: true }
         : { kind: "deny_labeler" }
       : { kind: "none" };
 

@@ -9,7 +9,7 @@
 // ここで作る固定のファイルは、`console/scripts/drawio-viewer.ts`の検査を通る形に限る。
 
 import { createHash } from "node:crypto";
-import type { GitHubRelease } from "./github.ts";
+import type { GitHubRelease } from "./drawio_viewer_bump_github.ts";
 import { isRecord } from "./types.ts";
 
 /** ビューアの取得元のリポジトリ。公式の配布元だけを読む。 */
@@ -82,6 +82,11 @@ export type DrawioRelease = {
   readonly tag: string;
   readonly version: Version;
   readonly publishedAt: Date;
+  /**
+   * 今のcommitでこのタグを最初に見た時刻。まだ見ていなければ`null`。
+   * 公開日はリリースを作る側が書き換えられるので、待ちの根拠はこの時刻にも置く。
+   */
+  readonly firstSeenAt: Date | null;
 };
 
 /**
@@ -98,17 +103,48 @@ export function parseReleases(
     if (version === null) continue;
     const publishedAt = new Date(raw.publishedAt);
     if (Number.isNaN(publishedAt.getTime())) continue;
-    result.push({ tag: raw.tagName, version, publishedAt });
+    result.push({ tag: raw.tagName, version, publishedAt, firstSeenAt: null });
   }
   return result;
 }
 
-/** 公開から`MIN_RELEASE_AGE_DAYS`日以上たっているか。 */
+/**
+ * 上げてよいだけ時間がたっているか。次の両方を満たす。
+ * - 公開日から`MIN_RELEASE_AGE_DAYS`日以上たっている。
+ * - 今と同じcommitを、`MIN_RELEASE_AGE_DAYS`日以上前から見ている(`firstSeenAt`)。
+ *   見ていない版と、タグの付け替えで見直した版は、待ちを数え直す。
+ */
 export function isOldEnough(release: DrawioRelease, now: Date): boolean {
+  if (release.firstSeenAt === null) return false;
+  const wait = MIN_RELEASE_AGE_DAYS * DAY_MS;
   return (
-    now.getTime() - release.publishedAt.getTime() >=
-    MIN_RELEASE_AGE_DAYS * DAY_MS
+    now.getTime() - release.publishedAt.getTime() >= wait &&
+    now.getTime() - release.firstSeenAt.getTime() >= wait
   );
+}
+
+/** 一度に観測するリリースの数の上限。新しい順に数える。 */
+export const MAX_OBSERVED_RELEASES = 20;
+
+/**
+ * 観測の記録を取るリリースを選ぶ。今の版より新しいものを、新しい順に`MAX_OBSERVED_RELEASES`件まで返す。
+ * 公開から日が浅い版も含める。早く見始めるほど、待ちの数え始めが早くなるためである。
+ * `currentVersion`が`32.4.1`の形でなければ、固定が壊れているので例外を投げる。
+ */
+export function releasesToObserve(
+  currentVersion: string,
+  releases: readonly DrawioRelease[],
+): DrawioRelease[] {
+  const current = parseReleaseVersion(currentVersion);
+  if (current === null) {
+    throw new Error(
+      `the pinned version is not a plain version: ${currentVersion}`,
+    );
+  }
+  return releases
+    .filter((release) => compareVersions(release.version, current) > 0)
+    .sort((a, b) => compareVersions(b.version, a.version))
+    .slice(0, MAX_OBSERVED_RELEASES);
 }
 
 export type BumpDecision = {
@@ -153,10 +189,14 @@ export function decideBump(
   const eligible = newer.filter((release) => isOldEnough(release, now));
   const waiting = eligible.length < newer.length;
 
+  const approvedVersion =
+    approvedTag === null ? null : parseReleaseVersion(approvedTag);
   const approved =
-    approvedTag === null
+    approvedVersion === null
       ? undefined
-      : eligible.find((release) => release.tag === approvedTag);
+      : eligible.find(
+          (release) => compareVersions(release.version, approvedVersion) === 0,
+        );
   if (approved !== undefined) {
     return { target: approved, waiting };
   }
@@ -316,6 +356,52 @@ export function rewriteViewerReference(
     );
   }
   return html.replace(oldPath, viewerScriptPath(newSha256));
+}
+
+// ---------------------------------------------------------------------------
+// 既にあるブランチの中身の確認
+// ---------------------------------------------------------------------------
+
+export type BranchVerdict =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly reason: string };
+
+/**
+ * PRの無い既存のブランチを、そのままPRの元にしてよいかを確かめる。
+ * 同じ名前のブランチを他の人が作っておくと、中身を確かめずにPRにすれば、
+ * 想定していない変更が更新のPRに混ざるためである。
+ * - 各ファイルのgit blobのIDが、今回作る内容のIDと一致する。
+ * - 基点のブランチとの差分が、今回書き換えるファイルだけである。
+ * `readBlobSha`は、ブランチ上のファイルのgit blobのIDを返す(無ければ`null`)。
+ * `listChangedPaths`は、基点との差分のパスを返す。
+ */
+export async function verifyBranchContents(
+  files: readonly { readonly path: string; readonly content: string }[],
+  readBlobSha: (path: string) => Promise<string | null>,
+  listChangedPaths: () => Promise<readonly string[]>,
+): Promise<BranchVerdict> {
+  for (const file of files) {
+    const actual = await readBlobSha(file.path);
+    const expected = gitBlobSha1(new TextEncoder().encode(file.content));
+    if (actual !== expected) {
+      return {
+        ok: false,
+        reason: `${file.path} on the branch differs from the expected content`,
+      };
+    }
+  }
+  const changed = [...(await listChangedPaths())].sort();
+  const expectedPaths = files.map((file) => file.path).sort();
+  if (
+    changed.length !== expectedPaths.length ||
+    changed.some((path, index) => path !== expectedPaths[index])
+  ) {
+    return {
+      ok: false,
+      reason: `the branch changes ${changed.join(", ")}, expected ${expectedPaths.join(", ")}`,
+    };
+  }
+  return { ok: true };
 }
 
 // ---------------------------------------------------------------------------

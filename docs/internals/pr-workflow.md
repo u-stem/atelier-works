@@ -38,6 +38,11 @@ PRに投稿するのは、PRレビューの指摘と総評、PR修正の返信�
 
 トリガーのラベルは、着手(claim)したときに消費して外す。レビューの依頼とassigneeの経路には、消費するラベルが無い。ラベル名は`factory_config`の`review_label`と`fix_label`で決める。
 
+ブランチ名が`factory/drawio-viewer-`で始まるPR(draw.ioのビューアの固定を上げるPR)には、`factory:fix`ラベルが付いていてもPR修正を始めない。
+`decidePrActions`が`headRef`で判定し、ラベルは消費せずに残す。
+`pr_fix_prepare`も同じ判定(`evaluateHumanOnlyBranchGuard`)で止め、作業項目をblockedにする。
+修正を許すと、固定のファイル以外も書き換えたcommitを、人が気づかずにマージするおそれがある。このPRは人が直す。レビューは動く。
+
 PR修正はラベルからしか起動しない。コメントやcommitのpushだけでは起動しない。次のラウンドを始めるには、PRに`factory:fix`ラベルを付け直す。PRレビューが終わった(`reviewed`)PRにも付けられる。
 
 修正への指示は、ラベルを付ける前に、PRへ通常のコメントとして書く。`pr_fix_collect`が、ほかの人のコメントと同じくフィードバックとして集める。
@@ -574,7 +579,7 @@ PR修正のClaudeに渡すツールは`Read,Glob,Grep,Edit,Write`だけで、`Ba
 
 - Consoleのページの入口: `console/index.html`
 - draw.ioのビューアの固定: `console/drawio-viewer.json`
-- 固定を書き換えるPRを作る側: `f/factory/drawio_viewer_bump.ts`、`f/factory/lib/drawio_viewer_bump.ts`
+- 固定を書き換えるPRを作る側: `f/factory/drawio_viewer_bump*`と、それが使う`f/factory/lib/`の3ファイル
 - 固定を強制し、配信物を作って検査する側: `console/scripts/`の一部、`console/vite.config.ts`、`scripts/check-console-lockfile.ts`
 - 配信の設定: `infra/Caddyfile`
 - 図を隔離して描くiframeの検査: `tests/lib/drawio_frame_isolation.test.ts`
