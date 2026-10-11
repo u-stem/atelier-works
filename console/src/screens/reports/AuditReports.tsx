@@ -1,11 +1,11 @@
-import { RefreshCw } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router";
-import { useAuditIndex } from "../../api/auditQueries.ts";
 import { isBannerError } from "../../api/errors.ts";
 import type { AuditIndexRow } from "../../api/guards/audit.ts";
+import type { SectionQuery } from "../../api/sectionQuery.ts";
 import { useNow } from "../../app/useNow.ts";
 import { QueryFailureAlert } from "../../components/QueryFailureAlert.tsx";
+import { StaleDataNotice } from "../../components/StaleDataNotice.tsx";
 import { TimeText } from "../../components/TimeText.tsx";
 import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
 import { Button } from "../../components/ui/button.tsx";
@@ -52,25 +52,30 @@ function AuditRow({ row, now }: { row: AuditIndexRow; now: number }) {
   );
 }
 
-function ListState({
+/**
+ * 一覧の本体。取得中、失敗、空、行ありを出し分ける。
+ * 前回の一覧があるときは、取り直しに失敗しても一覧を出したまま、古いことを先頭に添える。
+ */
+export function AuditListState({
   query,
   now,
 }: {
-  query: ReturnType<typeof useAuditIndex>;
+  query: SectionQuery<AuditIndexRow[]>;
   now: number;
 }) {
-  if (query.isPending) {
-    return (
-      <div className="space-y-2 px-6 py-4" role="status">
-        <span className="sr-only">読み込み中</span>
-        <Skeleton className="h-4 w-1/2" />
-        <Skeleton className="h-3 w-4/5" />
-        <Skeleton className="h-4 w-1/2" />
-        <Skeleton className="h-3 w-4/5" />
-      </div>
-    );
-  }
-  if (query.isError) {
+  const rows = query.data;
+  if (rows === undefined) {
+    if (!query.isError) {
+      return (
+        <div className="space-y-2 px-6 py-4" role="status">
+          <span className="sr-only">読み込み中</span>
+          <Skeleton className="h-4 w-1/2" />
+          <Skeleton className="h-3 w-4/5" />
+          <Skeleton className="h-4 w-1/2" />
+          <Skeleton className="h-3 w-4/5" />
+        </div>
+      );
+    }
     const apiError = apiErrorOf(query.error);
     // 401は画面上部のバナーが知らせるので、同じ内容を重ねない。
     if (apiError !== null && isBannerError(apiError)) {
@@ -92,22 +97,36 @@ function ListState({
       </div>
     );
   }
-  if (query.data.length === 0) {
-    return (
-      <div className="flex flex-col gap-1 px-6 py-8 text-center">
-        <p className="text-body font-medium">監査レポートはまだありません。</p>
-        <p className="text-small text-muted-foreground">
-          毎週月曜09:30に自動で実行されます。「今すぐ監査」で前倒しできます。
-        </p>
-      </div>
-    );
-  }
   return (
-    <ul className="flex flex-col divide-y divide-border">
-      {query.data.map((row) => (
-        <AuditRow key={row.audit_report_id} row={row} now={now} />
-      ))}
-    </ul>
+    <>
+      {query.isError ? (
+        <div className="px-6 py-4">
+          <StaleDataNotice
+            error={query.error}
+            isFetching={query.isFetching}
+            onRetry={() => {
+              void query.refetch();
+            }}
+          />
+        </div>
+      ) : null}
+      {rows.length === 0 ? (
+        <div className="flex flex-col gap-1 px-6 py-8 text-center">
+          <p className="text-body font-medium">
+            監査レポートはまだありません。
+          </p>
+          <p className="text-small text-muted-foreground">
+            毎週月曜09:30に自動で実行されます。「今すぐ監査」で前倒しできます。
+          </p>
+        </div>
+      ) : (
+        <ul className="flex flex-col divide-y divide-border">
+          {rows.map((row) => (
+            <AuditRow key={row.audit_report_id} row={row} now={now} />
+          ))}
+        </ul>
+      )}
+    </>
   );
 }
 
@@ -116,9 +135,13 @@ function ListState({
  * 行を選ぶと、本文の画面へ移る。
  * 「今すぐ監査」は確認を経て起動し、結果(起動、見送りの理由、失敗)を一覧の上に残す。
  * 起動の後は一覧を読み直す。
+ * 一覧の取得は画面が持ち、更新ボタンも画面の見出しにある。この区画は失敗したときの「もう一度取得する」だけを持つ。
  */
-export function AuditReports() {
-  const query = useAuditIndex();
+export function AuditReports({
+  query,
+}: {
+  query: SectionQuery<AuditIndexRow[]>;
+}) {
   const now = useNow();
   const [confirming, setConfirming] = useState(false);
   const kickoff = useAuditKickoff();
@@ -139,20 +162,6 @@ export function AuditReports() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={query.isFetching}
-            onClick={() => {
-              void query.refetch();
-            }}
-          >
-            <RefreshCw
-              aria-hidden="true"
-              className={query.isFetching ? "animate-spin" : undefined}
-            />
-            更新
-          </Button>
           <Button
             size="sm"
             disabled={kickoff.locked}
@@ -181,7 +190,7 @@ export function AuditReports() {
           </Alert>
         </div>
       )}
-      <ListState query={query} now={now} />
+      <AuditListState query={query} now={now} />
       <KickoffConfirmDialog
         open={confirming}
         onCancel={() => {

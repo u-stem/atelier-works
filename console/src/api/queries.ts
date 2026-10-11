@@ -140,7 +140,7 @@ export async function fetchDeployments(
   return result.value;
 }
 
-/** 反映の履歴を取る。自動では取り直さず、画面の再読み込みで取り直す。 */
+/** 反映の履歴を取る。自動では取り直さず、画面の更新ボタンで取り直す。 */
 export function useDeployments(): UseQueryResult<DeploymentEntry[], Error> {
   return useQuery({
     queryKey: deploymentsQueryKey,
@@ -153,7 +153,7 @@ export function useDeployments(): UseQueryResult<DeploymentEntry[], Error> {
 export const PIPELINE_DAYS = 90;
 export const PIPELINE_LIMIT = 500;
 
-/** 作業項目の一覧を取り直さない間隔。状態は進むが、開いたまま追うのは再読み込みに任せる。 */
+/** 作業項目の一覧を取り直さない間隔。状態は進むが、開いたまま追うのは画面の更新ボタンに任せる。 */
 const PIPELINE_STALE_MS = 30_000;
 
 export const pipelineQueryKey = ["console", "pipeline"] as const;
@@ -176,7 +176,7 @@ export async function fetchPipeline(
   return result.value;
 }
 
-/** 作業項目の進捗を取る。自動では取り直さず、画面の再読み込みで取り直す。 */
+/** 作業項目の進捗を取る。自動では取り直さず、画面の更新ボタンで取り直す。 */
 export function usePipeline(): UseQueryResult<PipelineRow[], Error> {
   return useQuery({
     queryKey: pipelineQueryKey,
@@ -219,7 +219,7 @@ export async function fetchRequirementsIndex(
   return result.value;
 }
 
-/** 要件定義の一覧を取る。自動では取り直さず、画面の再読み込みで取り直す。 */
+/** 要件定義の一覧を取る。自動では取り直さず、画面の更新ボタンで取り直す。 */
 export function useRequirementsIndex(): UseQueryResult<
   readonly RequirementsIndexRow[],
   Error
