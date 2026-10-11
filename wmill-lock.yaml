@@ -24,12 +24,13 @@ locks:
   f/factory/lib/cleanup_support: e407bf86c3eabc8ff8718b391fe5200c9ecb1f79a3d3515248ed68e56e128e20
   f/factory/lib/config: 67bf659caabd8a601b3736a6fbe013585d7d12fe77fe1568a885b05e06b87980
   f/factory/lib/console_status: ee1e2ab9df9b3fc2b5fd492d3576a137dc418f3d616373a555e043d373b411c9
-  f/factory/lib/console_support: e50b660ed235471d08df5732cb1265b10d65da800986e49bc0720017cf1185f4
+  f/factory/lib/console_support: 4cb4ca26d22370f74efbceb194f800e1b7e4bf53d4fe8cf348a8ccd49e3f6bd2
   f/factory/lib/console_worker: 11bd1a25b12937a6988d70beab4c5d482459551275673c69369f1e6b78138189
-  f/factory/lib/db: 4306360932e1a0de887e50272d742e0d46207084bf1a2cf34286db8d64cd429a
-  f/factory/lib/discord: 341d92926bbc1d4293cbebfe753371562ddf428caa2f1c3483438dc5dd014e2e
+  f/factory/lib/db: 3c33ebb6f8d4cff43305c03777afe55a7bdc67907243b5bd5ee6938509d2304f
+  f/factory/lib/discord: 68f977525e19eb410957ea0ffd838b6acc648184e31f30f040210429ea453daf
   f/factory/lib/drawio: d6c208d61c640f7019c865f28fb77f2a50dcf539ced468e33d2e731709a7be32
   f/factory/lib/github: bd0aedc6f86ea8a0e761259bf08db6431fc012507603c22581f448134c3acaab
+  f/factory/lib/host_action: 9f71440989ba7ccb0111bc386b79a611d8a30c0c610c6262f2078af4cecc5b1f
   f/factory/lib/implement_finish_support: 5d1d1af0b285914903c2cdc3ce09575feef4a98aaf304bb19abf5af2cc4c76fa
   f/factory/lib/implement_launch_support: 6fa700a51538677f880a6b6244f6ef7c51f9c968337557b27229f4c5cbbf41f6
   f/factory/lib/implement_loop: 8752c952112ef996529cb96580f4a3682e491482494c01718be59d38fb088bdc
@@ -61,7 +62,7 @@ locks:
   f/factory/pr_fix__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/pr_review__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/retry_work_item: 567ac00e42402851ccb694c963cafaf8aa880f70925d6a0a1d6c515fa25323f9
-  f/factory/self_update: 2f19f7a0709eb5e2e8a696f510a1189954cd0709dcfd4e10501e2984973c4384
+  f/factory/self_update: 3887ed24e33a8dde1fb300d257de1e4a0121e09b92d4254375360140a4e855a8
   f/factory/steps/audit_generate: 23f909e777c1593ac09022dc5efa8c892f982b3b6639d9de3e0c29e55919d60d
   f/factory/steps/audit_prepare: 3bc36e6c5c703430960a777ad34ca2380d8574db93a5c930486d42cf07a05c81
   f/factory/steps/console_query: b1230ff2c270dcd77234b06f97461dd91ba1013b2cbc7188416c502d61863ec2

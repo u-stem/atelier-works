@@ -32,6 +32,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | `console_fetch_problem` | Consoleの取り込みに問題があります | `console_fetch_watch`(10分ごと) | Consoleの取り込みの失敗、更新の停止、状態が読めないことを検知し、通知を新しく残した |
 | `console_worker_check_failed` | Console用のworkerの動きを確かめられません | `self_update`(10分ごと) | Console用のworkerがジョブを受けているかを、1時間(6回)続けて確かめられなかった |
 | `console_worker_missing` | Console用のworkerがジョブを受けていません | `self_update`(10分ごと) | tag `console`のジョブが予定時刻から5分以上待たされていることを検知し、通知を新しく残した |
+| `host_action_required` | ホスト側の作業が必要です | `self_update`(10分ごと) | 反映した版に、worker自身では反映できない変更(`infra/`、`mise.toml`の`[tools]`・`[env]`)があり、通知を新しく残した |
 | `daily_summary` | 日次サマリー | `notify_daily_summary`(毎日09:00) | 前日の集計 |
 | `audit_completed` | 監査レポートができました | `audit_generate` | 改善提案が1件以上ある監査レポートを保存した |
 | `pr_opened` | PR作成 / PR更新 | `implement_finish` | 実装フローがPRを作成か更新した |
@@ -81,6 +82,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | `console_fetch_problem` | なし | 説明に原因、「次の操作」 |
 | `console_worker_check_failed` | なし | 説明に原因、「次の操作」 |
 | `console_worker_missing` | なし | 説明に原因、「次の操作」 |
+| `host_action_required` | なし | 説明に反映した版と変わったパス、「次の操作」 |
 | `daily_summary` | なし | 説明に実行件数と費用、失敗、承認、却下、DB掃除 |
 | `audit_completed` | Consoleの監査のページ | 「次の操作」、`work_item_id` |
 | `pr_opened` | PR | 「次の操作」、Issue、「確認して欲しい点」、ラウンドと費用、差分 |
@@ -185,7 +187,6 @@ DiscordがHTTP 429を返したら、待ってから1回だけ再送する。待�
 - 承認のコメントをIssueに投稿できなかったときは、Discordには知らせず、`approval_comment_failed`のnoticeだけを残す。承認の通知はそのまま送る。
 - 実装フローが取得したIssueの題名か本文が取り込み時点と違っても、通知はしない。PR本文の「確認して欲しい点」に1行書くだけである。
 - 監査のスキップと、提案が0件の監査は通知しない。
-- 自己更新がホスト側の操作が要る変更を検知しても、通知しない。
 
 ## Consoleのnotice
 
@@ -210,6 +211,7 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `pr_trigger_label_left_removed` | `poll_prs` | 対象のPRと、外れたままのトリガーラベル |
 | `supersede_failed` | `insertIssueWorkItemUnlessActive`(`poll_issues`が呼ぶ) | 対象、新しい作業項目のID、操作が要らないこと |
 | `deployed_sha_mismatch` | `poll_issues` | `f/factory/deployed_sha`、原因の候補 |
+| `host_action_required` | `self_update` | 反映した版(40桁)、変わった`infra/`や`mise.toml`のパス、`mise run up`を実行する手順 |
 | `cleanup_db_failed` | `cleanup_db` | 削除に失敗した対象とエラー |
 | `cleanup_worktrees_skipped` | `cleanup_workspaces` | 掃除を見送ったリポジトリ |
 | `cleanup_worktree_busy` | `cleanup_workspaces` | 作業項目のID、worktreeのパス、worktreeを使っているプロセス |
@@ -284,6 +286,23 @@ stateを読めないとき、書けないときは、猶予を数えられない
 版が一致してもstateのキーを消せなかったとき、またはstateを読めず消さなかったときは、古い記録が残る。
 次のmergeで同じ版の食い違いが起きると、猶予を待たずに通知することがある。次に版が一致すれば、自動で解決される。
 stateは、このキーだけを書き換え、消すときもこのキーだけを除く。ほかのキーは保つ。
+
+`host_action_required`は、`self_update`が反映の記録を`deployments`へ入れた後に残す。
+対象は、`infra/`か`mise.toml`の`[tools]`・`[env]`を変える版である。
+本文は、反映した版(40桁)と変わったパスで決まる。同じ版で通知が重なるのは、同じ本文の未解決のnoticeがあるあいだは追加しないためである。
+パスは10件まで並べ、残りは件数で示す。
+Discordには、noticeを新しく残したときだけ送る。noticeの記録とDiscordの送信が失敗しても、反映は成功のまま終わり、警告のログだけを残す。
+解決は、`self_update`が反映の要否によらず毎回、反映の前に行う(`resolved_by`は`self_update`)。
+判定の入力は、`mise run up`と`mise run deploy`が起動の最後に書く、ホストのcheckoutのHEAD(`/var/lib/factory/host_applied_sha`)である。
+未解決のnoticeの版が、このHEADと同じか、self cloneの履歴でHEADの祖先であれば、解決する(`git merge-base --is-ancestor`)。
+ホストがその版以降を含んで起動し直されたことを示すためである。
+次のときは解決しない。人が、ホストの反映が済んだことを確かめて、Consoleで解決してよい。
+
+- 値のファイルが無い、版として読めない
+- 値がself cloneに無い版で、祖先かどうかを確かめられない
+- noticeの版が、HEADより新しい
+
+値はworkerのジョブが書ける場所にあるので、ホストの反映の証明にはならない。通知を静かにする以外の力は持たず、書き換えられても反映の安全には影響しない。
 
 Issueの取得に成功すると、`poll_issues`は未解決の`labeler_denied`を解決済みにする。
 対象は、本文が`<owner>/<repo>#<番号>:`と空白1つで始まるすべてのnoticeで、`resolved_by`は`poll_issues`になる。

@@ -5,8 +5,10 @@
 // 判断と整形の純粋なロジック(再デプロイが要るか、どの変更パスがworkerの中から
 // は反映できずホスト側の次回起動で反映されるか、`wmill` CLIの子プロセスに渡す
 // 最小のenv)は`./lib/self_update_support.ts`にあり、このファイルは入出力を
-// つなぐだけ。`infra/`と`mise.toml`の変更は次の`mise run up`で反映されるため、
-// 通知はせずログと`deployments`の記録だけを残す。
+// つなぐだけ。`infra/`と`mise.toml`の変更はworkerの中からは反映できず、
+// 人が`mise run up`するまで効かないため、`deployments`に記録したうえで
+// 要対応の通知とDiscordで知らせる(`./lib/host_action.ts`)。
+// ホストが`mise run up`の最後に書く印を毎回読み、反映が済んだ通知は解決する。
 //
 // `f/factory/deployed_sha`(秘密でないWindmillの変数)はsyncの対象から
 // 完全に外している(`wmill.yaml`の`excludes`のコメントを参照)。
@@ -19,8 +21,20 @@ import {
   watchConsoleWorker,
   watchRunsQuery,
 } from "./lib/console_worker.ts";
-import { addNoticeUnlessUnresolved, recordDeployment } from "./lib/db.ts";
+import {
+  addNoticeUnlessUnresolved,
+  listUnresolvedNoticesByKind,
+  recordDeployment,
+  resolveNoticeIfUnresolved,
+} from "./lib/db.ts";
 import { notifyBestEffort } from "./lib/discord.ts";
+import {
+  HOST_ACTION_NOTICE_KIND,
+  HOST_ACTION_RESOLVER,
+  HOST_APPLIED_SHA_PATH,
+  reconcileHostActionNotices,
+  recordHostAction,
+} from "./lib/host_action.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import {
   assertBranchMatches,
@@ -42,6 +56,7 @@ import {
   type CommandRunner,
   ensureFactoryClone,
   pathExists,
+  readTextFile,
   runCommand,
 } from "./lib/workspace.ts";
 
@@ -173,6 +188,33 @@ export async function diffPaths(
     );
   }
   return parseNulSeparatedPaths(result.stdout);
+}
+
+/**
+ * self cloneで`ancestor`が`descendant`の祖先か(同じコミットを含む)を返す
+ * (`git merge-base --is-ancestor`)。終了コード0が祖先、1が祖先でない。
+ * それ以外(未知のコミットなど)は確かめられないので例外を投げる。
+ * どちらのshaも`assertSha`で検査する(理由は`diffPaths`と同じ)。
+ */
+export async function isAncestorSha(
+  run: CommandRunner,
+  dir: string,
+  ancestor: string,
+  descendant: string,
+): Promise<boolean> {
+  assertSha(ancestor);
+  assertSha(descendant);
+  const result = await run(
+    [...GIT_BASE_ARGV, "merge-base", "--is-ancestor", ancestor, descendant],
+    { cwd: dir, env: selfCloneGitEnv() },
+  );
+  if (result.exitCode === 0) return true;
+  if (result.exitCode === 1 && !result.timedOut) return false;
+  throw new Error(
+    maskSecrets(
+      `git merge-base --is-ancestor failed in ${dir}: ${result.stderr.trim()}`,
+    ),
+  );
 }
 
 /**
@@ -371,6 +413,22 @@ async function updateSelf(
 
   const currentSha = await readSelfCloneHeadSha(runCommand, factoryClone.dir);
 
+  // 反映の要否によらず毎回、ホストで反映が済んだ通知を解決する。
+  await reconcileHostActionNotices({
+    readAppliedSha: () => readTextFile(HOST_APPLIED_SHA_PATH),
+    listUnresolved: () => listUnresolvedNoticesByKind(HOST_ACTION_NOTICE_KIND),
+    isAncestor: (ancestor, descendant) =>
+      isAncestorSha(runCommand, factoryClone.dir, ancestor, descendant),
+    resolve: (id) =>
+      resolveNoticeIfUnresolved(
+        id,
+        HOST_ACTION_NOTICE_KIND,
+        HOST_ACTION_RESOLVER,
+        [],
+      ),
+    log,
+  });
+
   let deployedSha = "";
   try {
     deployedSha = await wmill.getVariable("f/factory/deployed_sha");
@@ -472,15 +530,6 @@ async function updateSelf(
       : false;
     const classification = classifyChangedPaths(changedPaths, miseChanged);
 
-    if (classification.needs_host_action) {
-      // `infra/`と`mise.toml`の変更はworkerの中からは反映できないが、
-      // 次にホストで`mise run up`して起動したときにビルドされて反映される。
-      // 人の操作は要らないので通知せず、ログと`deployments`の記録だけを残す。
-      log.info("host-side changes will apply on next mise run up", {
-        host_paths: classification.host_paths,
-      });
-    }
-
     const shaFrom = deployedSha.length > 0 ? deployedSha : null;
     await recordDeployment({
       sha_from: shaFrom,
@@ -489,6 +538,30 @@ async function updateSelf(
       result: "success",
       needs_host_action: classification.needs_host_action,
     });
+
+    if (classification.needs_host_action) {
+      // `infra/`と`mise.toml`の変更はworkerの中からは反映できず、人が
+      // ホストで`mise run up`するまで効かない。気づけるよう通知で知らせる。
+      // 反映は済んでいるので、通知の失敗では更新を失敗にしない。
+      log.info("host-side changes need mise run up", {
+        host_paths: classification.host_paths,
+      });
+      await recordHostAction(
+        {
+          addNotice: (record) => addNoticeUnlessUnresolved(record),
+          notify: async (event) => {
+            const webhookUrl = await wmill.getVariable(
+              "f/factory/discord_webhook_url",
+            );
+            return notifyBestEffort(webhookUrl, event, log);
+          },
+          instanceName: config.instance_name,
+          log,
+        },
+        currentSha,
+        classification.host_paths,
+      );
+    }
 
     return {
       outcome: "updated",

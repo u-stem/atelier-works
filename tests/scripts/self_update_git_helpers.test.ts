@@ -7,6 +7,7 @@ import { describe, expect, test } from "bun:test";
 import {
   assertWmillYamlExists,
   diffPaths,
+  isAncestorSha,
   listAllPaths,
   readSelfCloneBranch,
   readSelfCloneHeadSha,
@@ -235,5 +236,37 @@ describe("diffPaths", () => {
         "0000000000000000000000000000000000000b",
       ),
     ).rejects.toThrow();
+  });
+});
+
+describe("isAncestorSha", () => {
+  const DIR = "/workspaces/factory/atelier-works";
+  const A = "0000000000000000000000000000000000000a";
+  const B = "0000000000000000000000000000000000000b";
+
+  test("returns true when merge-base exits 0", async () => {
+    const { run } = createFakeCommandRunner([ok("")]);
+    expect(await isAncestorSha(run, DIR, A, B)).toBe(true);
+  });
+
+  test("returns false when merge-base exits 1", async () => {
+    const { run } = createFakeCommandRunner([fail("", 1)]);
+    expect(await isAncestorSha(run, DIR, A, B)).toBe(false);
+  });
+
+  test("throws when merge-base fails for another reason", async () => {
+    const { run } = createFakeCommandRunner([fail("bad object", 128)]);
+    await expect(isAncestorSha(run, DIR, A, B)).rejects.toThrow();
+  });
+
+  test("passes the ancestor first and the descendant second", async () => {
+    const fake = createFakeCommandRunner([ok("")]);
+    await isAncestorSha(fake.run, DIR, A, B);
+    expect(fake.calls[0]?.argv.slice(-3)).toEqual(["--is-ancestor", A, B]);
+  });
+
+  test("throws on an invalid sha", async () => {
+    const { run } = createFakeCommandRunner([ok("")]);
+    await expect(isAncestorSha(run, DIR, "not-a-sha", B)).rejects.toThrow();
   });
 });

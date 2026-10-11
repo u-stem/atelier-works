@@ -29,6 +29,7 @@ run = """
 set -e
 scripts/check-docker-version.sh
 docker compose -f infra/docker-compose.yml up -d --build
+scripts/record-host-applied.sh
 """
 
 [tasks.down]
@@ -72,6 +73,7 @@ docker compose -f infra/docker-compose.yml up -d
 npm ci --prefix f/factory/factory_console__raw_app --no-audit --no-fund --ignore-scripts
 NPM_CONFIG_IGNORE_SCRIPTS=true wmill sync push --yes --keep-deleted
 wmill datatable migrate up
+scripts/record-host-applied.sh
 """
 
 [tasks.push]

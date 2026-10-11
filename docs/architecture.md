@@ -332,6 +332,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/steps/pr_workflow_support` | script | [LIB] PRワークフロー共通処理 |
 | `f/factory/lib/process_lock` | script | [LIB] worktree単位のプロセス排他 |
 | `f/factory/lib/prompts` | script | [LIB] プロンプト定義 |
+| `f/factory/lib/host_action` | script | [LIB] ホスト側の作業が要る反映の通知 |
 | `f/factory/lib/log` | script | [LIB] ログとマスク |
 | `f/factory/lib/cleanup_support` | script | [LIB] 作業領域掃除の純粋ロジック |
 | `f/factory/lib/protected_paths` | script | [LIB] 保護パスの判定 |
@@ -434,7 +435,10 @@ Factoryの投稿の見分け方、総評の組み立て、スレッドの解決�
 4. `wmill datatable migrate up`を実行し、Data Tableの定義を最新にする。
 5. 結果を`deployments`に記録し、`f/factory/deployed_sha`を更新する。
 
-`infra/**`の変更と、`mise.toml`の`[tools]`か`[env]`の変更は、worker自身では反映できない。`self_update`は`deployments.needs_host_action`を`true`にしてログに残し、通知はしない。これらはホスト側のcheckoutをpullしたうえで、次に`mise run up`で起動したときに反映される。
+`infra/**`の変更と、`mise.toml`の`[tools]`か`[env]`の変更は、worker自身では反映できない。`self_update`は`deployments.needs_host_action`を`true`にして記録し、要対応の通知`host_action_required`とDiscordで知らせる。
+これらはホスト側のcheckoutをpullしたうえで、`mise run up`で起動したときに反映される。
+`mise run up`は終わりに、ホストのcheckoutのHEADをworkerの共有ボリュームへ書く。
+`self_update`はこのHEADを毎回読み、通知の版を含んでいれば通知を解決する。
 
 `console/`の変更は`self_update`の対象ではない。
 マージ後にCIが成果物`console-dist`を作り、`console_fetcher`が数分で取り込む。

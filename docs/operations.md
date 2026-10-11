@@ -745,6 +745,7 @@ Factoryは、人の行動が要るものだけをDiscordに送る。通知の仕
 | PRレビュー完了(`pr_reviewed`) | レビューを投稿した | 指摘を確かめる。指摘が無ければApproveを判断する |
 | PR修正適用(`pr_fixed`) | 修正をpushし、再レビューを依頼した | 再レビューを待つ。補足に依頼の失敗が載っていれば、GitHubのPRで人がレビュアーを依頼する |
 | Consoleの取り込みの問題(`console_fetch_problem`) | Consoleの取り込みが失敗したか、結果が30分以上更新されていないか、状態を読めない | 通知の「次の操作」に従う。通知を新しく残したときだけ届く |
+| ホスト側の作業が必要(`host_action_required`) | 自己更新が反映した版に、ホスト側の作業が要る変更(`infra/`、`mise.toml`の`[tools]`・`[env]`)が含まれる。通知を新しく残したときだけ届く | [ホスト側で反映するもの](#ホスト側で反映するもの)の手順で、`mise run up`を実行する |
 | 日次サマリー(`daily_summary`) | 前日のコスト、件数、失敗、DBの掃除の件数 | 異常が無いか見る |
 | 監査レポート(`audit_completed`) | 監査で改善提案が1件以上できた | **承認**タブで提案を承認か却下する |
 
@@ -790,6 +791,7 @@ Consoleの**通知**タブには、Discordに送らない事項と、Discordに�
 | `claim_assignee_missing` | Issueを取得したが、FactoryのGitHubユーザーをassigneeにできなかった。作業は続く | そのユーザーがリポジトリのpush権限を持つcollaboratorか確かめる |
 | `supersede_failed` | 新しいサイクルを始めたが、古い承認済みの作業項目を取り消せなかった | なし。古い承認は再開できず、次の新しいサイクルで取り消される |
 | `deployed_sha_mismatch` | 自己更新が反映した版(`f/factory/deployed_sha`)が、self cloneのHEADに30分を超えて追いついていない。mergeの直後に反映を待つ間は通知しない。本文に、直近の反映の記録から読んだ原因の候補が付く。Windmillのdefaultのworkerが埋まって自己更新が待たされたときや、自己更新の実行が長引いて次の回が飛ばされたときは、反映が遅れただけでも通知されうる | 自己更新のジョブのログを確かめる。自己更新が反映に成功すると、その記録より前に作られたnoticeを、`poll_issues`が自動で解決する。人が解決しても、反映が止まっている限り、次の`poll_issues`で再び残る。本文が名指しする版が今の`f/factory/deployed_sha`と違い、自己更新が成功しているときは、反映と判定が重なって残ったnoticeなので、人が解決してよい。人が`f/factory/deployed_sha`を今のHEADへ手で書き換えて版を一致させたときや、自己更新が変数を更新した後に失敗して成功の行が作られなかったときも、止まっていた版を名指しするnoticeは自動では解決されないので、人が解決してよい([通知](internals/notifications.md)) |
+| `host_action_required` | 自己更新が反映した版に、worker自身では反映できない変更(`infra/`、`mise.toml`の`[tools]`・`[env]`)が含まれる。本文に、反映した版と変わったパスが載る。ホストで作業するまで、新しい構成は動かない | ホスト側のcheckoutで`git pull`し、`mise run up`を実行する。`mise run up`は、終わりにそのcheckoutのHEADをworkerへ渡す。自己更新(10分ごと)が、通知の版がそのHEADと同じか祖先なら、通知を自動で解決する。印を書けなかったとき(警告が出る)や、`git pull`を含まない`mise run deploy`でこの仕組みを取り込む最初の1回は、自動では解決されないので、`mise run up`が済んでいれば人が解決してよい([ホスト側で反映するもの](#ホスト側で反映するもの)) |
 | `cleanup_db_failed` | 保持期間を過ぎたレコードの削除に失敗した | 内容を確かめる。次の日の掃除でやり直す |
 | `cleanup_worktrees_skipped` | 動いているPRの修正のブランチを確かめられず、そのリポジトリの作業領域の掃除を見送った | 次の日の掃除を待つ |
 | `cleanup_worktree_busy` | 残ったプロセスが使っているので、終端の作業項目のworktreeを消さなかった。作業項目のID、worktreeのパス、使っているプロセスが載る | 載ったプロセスを止める。止めない限り毎日残る |
@@ -910,7 +912,10 @@ Consoleが止まっていてもDiscordには届くので、通知の確認先は
 
 `f/`、`migrations/`、`.claude/skills/`の変更は、自己更新のスケジュール(`self_update`、10分ごと)が自動で反映する。ホスト側の操作は要らない。
 
-自己更新は`infra/`の変更と、`mise.toml`の`[tools]`・`[env]`の変更を検知すると、ログとデプロイの記録(`deployments.needs_host_action`)に残す。通知はしない。これらは、次にホスト側で`mise run up`したときに反映される。
+自己更新は、`infra/`か`mise.toml`の`[tools]`・`[env]`の変更を検知すると、デプロイの記録(`deployments.needs_host_action`)に残す。
+続けて、要対応の通知`host_action_required`とDiscordで知らせる。
+これらは、ホスト側で`mise run up`するまで反映されない。
+人が気づかないと、古い構成で動き続けるためである。
 
 `mise.toml`の`[tasks.*]`だけの変更、`scripts/`の変更、`mise.local.toml.example`の変更は記録しない。workerの動作に影響しないためである。
 
@@ -928,6 +933,16 @@ clone、fetch、push、`git gtr new`が1回ずつ成功することを見る。
 workerの並列数(`NUM_WORKERS`)のような`infra/docker-compose.yml`の変更も、`git pull`だけでは反映されず、`mise run up`で反映される。
 マウントの変更では、該当するコンテナが作り直される。Console用のworkerが作り直される間は、Consoleの問い合わせが待たされる。
 
+`mise run up`と`mise run deploy`は、起動の最後に`scripts/record-host-applied.sh`を呼ぶ。
+このスクリプトは、ホストのcheckoutのHEADを、workerの共有ボリュームの`/var/lib/factory/host_applied_sha`に書く。
+自己更新は10分ごとにこの値を読む。
+通知`host_action_required`の版が、この値と同じか祖先であれば、通知を自動で解決する。
+ホストのcheckoutがその版を含んで起動し直されたことを、確かめられるためである。
+値を書けなかったときは警告が出るが、起動は成功のまま終わる。値が無いとき、値が版として読めないとき、self cloneに無い版のときは、通知を解決しない。
+その場合は、`mise run up`が済んでいることを確かめたうえで、人がConsoleの**通知**タブで解決してよい。
+このスクリプトを持たない版から取り込む最初の1回は、先に`git pull`を済ませてから`mise run up`を実行する。
+`mise run deploy`はpullの前のタスク定義で動くので、HEADを書かないためである。
+
 まとめて反映したいときは、`mise run deploy`を手で実行する。必須の手順ではない。`mise run deploy`は次を順に行う。
 
 1. ホスト側のcheckoutで`git pull --ff-only`
@@ -936,6 +951,7 @@ workerの並列数(`NUM_WORKERS`)のような`infra/docker-compose.yml`の変更
 4. `docker compose up -d`
 5. Consoleのraw appの依存の`npm ci --ignore-scripts`と`wmill sync push`
 6. migrationの実行
+7. 反映したHEADの記録
 
 版の検査は`git pull --ff-only`の後に行う。取り込んだ新しい版の検査を使うためである。
 この検査を持たない版から取り込む最初の1回は、`mise run deploy`を使わない。miseは起動の時点のタスク定義で動くので、取り込んだ検査が走らないためである。

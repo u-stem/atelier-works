@@ -70,6 +70,18 @@ describe("mise.toml stack tasks", () => {
     expect(lines[lines.indexOf(CHECK) - 1]).toBe("git pull --ff-only");
   });
 
+  // ホスト側の作業が要る反映の通知は、この印で自動で解決される。
+  // 起動のたびに印を書かないと、通知が残り続ける。
+  test("up records the applied version as its last step", () => {
+    expect(taskRuns().get("up")?.at(-1)).toBe("scripts/record-host-applied.sh");
+  });
+
+  test("deploy records the applied version as its last step", () => {
+    expect(taskRuns().get("deploy")?.at(-1)).toBe(
+      "scripts/record-host-applied.sh",
+    );
+  });
+
   test("every task that runs docker compose up stops on a failed Docker version check", () => {
     const unchecked = [...taskRuns()]
       .filter(([, lines]) => lines.some(isComposeUp))
