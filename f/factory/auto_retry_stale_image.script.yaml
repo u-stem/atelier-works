@@ -1,0 +1,11 @@
+summary: '[SYS-9] イメージが古くて止まった作業項目を再開'
+description: 自己更新が、イメージが古いことを知らせる通知を自動で解決した後に起動します。止まった理由が「worker image is
+  stale」の実装(人の対応待ち)とPR修正(blocked)を、理由を条件にした比較と交換で再開します。同じ作業項目の自動の再開は3回までです。
+lock: '!inline f/factory/auto_retry_stale_image.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []
+timeout: 300

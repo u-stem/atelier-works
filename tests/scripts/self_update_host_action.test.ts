@@ -79,6 +79,31 @@ describe("self_update host action wiring", () => {
     expect(source.match(/isApplied: hostApplied,/g)?.length).toBe(2);
   });
 
+  test("starts the automatic retry after resolving notices", async () => {
+    const source = await selfUpdateSource();
+
+    expect(
+      source.indexOf("await reconcileHostActionNotices(") <
+        source.indexOf("startStaleImageRetry(log)"),
+    ).toBe(true);
+  });
+
+  test("starts the automatic retry only when a notice was resolved", async () => {
+    const source = await selfUpdateSource();
+
+    expect(source).toMatch(
+      /if \(resolved > 0\) \{\s*await startStaleImageRetry\(log\);/,
+    );
+  });
+
+  test("starts the automatic retry script by its path", async () => {
+    const source = await selfUpdateSource();
+
+    expect(source).toMatch(
+      /runScriptByPathAsync\(\s*"f\/factory\/auto_retry_stale_image",/,
+    );
+  });
+
   test("reads the current HEAD from the self clone", async () => {
     const source = await selfUpdateSource();
 

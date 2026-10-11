@@ -799,6 +799,123 @@ export async function updateStatusIfCurrentClearingFlowJobId(
   return rows.length > 0;
 }
 
+/** 自動で再開できる作業項目の種類。実装の`issue`とPR修正の`pr_fix`である。 */
+const AUTO_RETRY_KINDS = ["issue", "pr_fix"] as const;
+
+export type AutoRetryCandidate = {
+  readonly id: number;
+  readonly kind: (typeof AUTO_RETRY_KINDS)[number];
+  readonly status: WorkItemStatus;
+  readonly attempt: number;
+  readonly flow_job_id: string | null;
+};
+
+/**
+ * 止まった理由が`reasonPrefixes`のどれかで始まり、その止まった後に、本文に`noticeMarker`を含む
+ * `noticeKind`のnoticeが`resolvedBy`に解決された作業項目を、IDの小さい順に`limit`件まで返す。
+ * 対象は、実装(`issue`)の`needs_human`と、PR修正(`pr_fix`)の`blocked`である。
+ * 理由は、その状態へ移った最新の遷移の注記である。
+ * noticeの解決の時刻が止まった時刻より後であることが、止まった後に原因が直ったことの印になる。
+ * 止まった後の解決に限るので、再開後に同じ理由で止まった作業項目は、次の解決まで対象にならない。
+ */
+export async function listAutoRetryCandidates(
+  params: {
+    readonly reasonPrefixes: readonly string[];
+    readonly noticeKind: string;
+    readonly noticeMarker: string;
+    readonly resolvedBy: string;
+    readonly limit: number;
+  },
+  sql: SqlClient = defaultSqlClient,
+): Promise<AutoRetryCandidate[]> {
+  const rows = await sql`
+    SELECT w.id, w.kind, w.status, w.attempt, w.flow_job_id
+    FROM factory.work_items w
+    JOIN LATERAL (
+      SELECT e.note, e.occurred_at FROM factory.work_item_events e
+      WHERE e.work_item_id = w.id AND e.to_status = w.status
+      ORDER BY e.occurred_at DESC, e.id DESC
+      LIMIT 1
+    ) last ON true
+    WHERE ((w.kind = 'issue' AND w.status = 'needs_human')
+        OR (w.kind = 'pr_fix' AND w.status = 'blocked'))
+      AND EXISTS (
+        SELECT 1 FROM unnest(${[...params.reasonPrefixes]}::text[]) AS p(prefix)
+        WHERE starts_with(last.note, p.prefix)
+      )
+      AND EXISTS (
+        SELECT 1 FROM factory.notices n
+        WHERE n.kind = ${params.noticeKind}
+          AND n.resolved = true
+          AND n.resolved_by = ${params.resolvedBy}
+          AND n.resolved_at > last.occurred_at
+          AND position(${params.noticeMarker} in n.message) > 0
+      )
+    ORDER BY w.id
+    LIMIT ${params.limit}::integer
+  `.fetch();
+  return rows.map((row) => ({
+    id: parseId(row.id, "id"),
+    kind: parseEnum(row.kind, AUTO_RETRY_KINDS, "kind"),
+    status: parseEnum(row.status, WORK_ITEM_STATUSES, "status"),
+    attempt: parseRequiredNumber(row.attempt, "attempt"),
+    flow_job_id: parseNullableString(row.flow_job_id, "flow_job_id"),
+  }));
+}
+
+/**
+ * 止まった作業項目を、理由を条件にした比較と交換で再開の状態へ移す。
+ * 状態が`expectedFrom`で、その状態へ移った最新の遷移の注記が`reasonPrefixes`のどれかで始まり、
+ * 注記が`notePrefix`で始まる遷移(これまでの自動の再開)が`maxRestarts`回未満のときだけ更新し、
+ * 同じ文で遷移の記録を残す。`clearFlowJobId`なら`flow_job_id`も空にする。
+ * 条件に合わなければ何も書かずに`false`を返す。人が先に再開した場合や、
+ * 並行する別の実行が先に再開した場合も、状態が変わっているので`false`になり、二重に起動しない。
+ */
+export async function restartStoppedWorkItem(
+  params: {
+    readonly id: number;
+    readonly expectedFrom: WorkItemStatus;
+    readonly to: WorkItemStatus;
+    readonly reasonPrefixes: readonly string[];
+    readonly clearFlowJobId: boolean;
+    readonly notePrefix: string;
+    readonly maxRestarts: number;
+    readonly note: string;
+  },
+  sql: SqlClient = defaultSqlClient,
+  jobIds: JobIds = jobIdsFromEnv(process.env),
+): Promise<boolean> {
+  const statement = sql`
+    WITH updated AS (
+      UPDATE factory.work_items
+      SET status = ${params.to},
+          flow_job_id = CASE WHEN ${params.clearFlowJobId}::boolean THEN NULL ELSE flow_job_id END,
+          updated_at = now()
+      WHERE id = ${params.id}::bigint AND status = ${params.expectedFrom}
+        AND EXISTS (
+          SELECT 1 FROM unnest(${[...params.reasonPrefixes]}::text[]) AS p(prefix)
+          WHERE starts_with((
+            SELECT e.note FROM factory.work_item_events e
+            WHERE e.work_item_id = factory.work_items.id AND e.to_status = ${params.expectedFrom}
+            ORDER BY e.occurred_at DESC, e.id DESC
+            LIMIT 1
+          ), p.prefix)
+        )
+        AND (
+          SELECT count(*) FROM factory.work_item_events c
+          WHERE c.work_item_id = factory.work_items.id AND starts_with(c.note, ${params.notePrefix})
+        ) < ${params.maxRestarts}::integer
+      RETURNING id
+    )
+    INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note, job_id, root_job_id)
+    SELECT updated.id, ${params.expectedFrom}, ${params.to}, ${params.note}, ${jobIds.job_id}::text, ${jobIds.root_job_id}::text
+    FROM updated
+    RETURNING work_item_id
+  `;
+  const rows = await statement.fetch();
+  return rows.length > 0;
+}
+
 /**
  * 作り直しの前に、Issueの作業項目に取り込んだ題名と本文を更新する。
  * 作り直しのために`requirements_generating`へ移したばかりで、pipelineのリース

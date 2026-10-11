@@ -348,6 +348,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/steps/pr_workflow_support` | script | [LIB] PRワークフロー共通処理 |
 | `f/factory/lib/job_ids` | script | [LIB] WindmillのジョブIDの検査 |
 | `f/factory/lib/process_lock` | script | [LIB] worktree単位のプロセス排他 |
+| `f/factory/lib/auto_retry` | script | [LIB] イメージが古くて止まった作業項目の再開 |
 | `f/factory/lib/prompts` | script | [LIB] プロンプト定義 |
 | `f/factory/lib/host_action` | script | [LIB] ホスト側の作業が要る反映の通知 |
 | `f/factory/lib/log` | script | [LIB] ログとマスク |
@@ -420,6 +421,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/cleanup_db` | script | [SYS-6] DBを掃除 |
 | `f/factory/console_fetch_watch` | script | [SYS-7] Consoleの取り込みを見張る |
 | `f/factory/drawio_viewer_bump` | script | [SYS-8] draw.ioのビューアの固定を最新化 |
+| `f/factory/auto_retry_stale_image` | script | [SYS-9] イメージが古くて止まった作業項目を再開 |
 <!-- /generated:assets -->
 
 ## PRワークフロー
@@ -472,6 +474,8 @@ PRを取り出せなくても、反映の成功は変えない。その反映の
 これらはホスト側のcheckoutをpullしたうえで、`mise run up`で起動したときに反映される。
 `mise run up`は終わりに、ホストのcheckoutのHEADをworkerの共有ボリュームへ書く。
 `self_update`はこのHEADを毎回読み、通知の版を含んでいれば通知を解決する。
+イメージが古いことを知らせる通知を解決した回は、続けて`auto_retry_stale_image`を別のジョブで起動する。
+このscriptが、イメージが古くて止まった実装とPR修正を再開する([実装フローの仕様](internals/implement.md)の「イメージが古くて止まったとき」)。
 
 ジョブ全体には上限(`timeout`)を2700秒で置く。
 この上限はWindmillが外から打ち切る最後の砦で、通常は内側の上限で先に終わる。
@@ -491,7 +495,7 @@ Discordへの通知は、送信を30秒で中断し、429の待ち(最大30秒)�
 ジョブの`timeout`はインスタンスの上限を超えられないが、セルフホストの上限は環境変数`TIMEOUT`で、未設定なら7日である。
 `job_default_timeout`は21600秒以上にする決まりなので([実装フローの仕様](internals/implement.md)の「Windmillのtimeoutで打ち切られたとき」)、2700秒は切り詰められない。
 
-2700秒は、全部が最悪のときの長さ2621.2秒に余裕を足した値である。
+2700秒は、全部が最悪のときの長さ2651.2秒に余裕を足した値である。
 コマンドの上限には、停止の上乗せ13秒を足す。
 時間切れ後のSIGKILLまでの猶予が5秒、終了後のプロセスグループの停止が最大6秒、出力の読み取り待ちが2秒である。
 
@@ -501,7 +505,7 @@ Discordへの通知は、送信を30秒で中断し、429の待ち(最大30秒)�
 | git | 10 | 60秒 | 13秒 | 730秒 |
 | ホストの印を確かめるローカルのgit | 5 | 10秒 | 13秒 | 115秒 |
 | `wmill sync push`、`wmill datatable migrate up` | 2 | 300秒 | 13秒 | 626秒 |
-| 区切った呼び出し | 20 | 30秒 | なし | 600秒 |
+| 区切った呼び出し | 21 | 30秒 | なし | 630秒 |
 | Discordへの通知 | 2 | 120秒 | なし | 240秒 |
 | Console用のworkerの確認 | 1 | 10秒 | なし | 10秒 |
 
@@ -512,13 +516,13 @@ PRの列挙の`git log`も、ほかのgitと同じく`runCommand`の上限(60秒
 祖先の確認は、通知の解決で上限の3件まで、この回の通知の判断で1回である。
 ローカルのgitは、オブジェクトを参照するだけで、ネットワークとワークツリーに触れないので、上限を10秒にする。
 `mise.toml`の比較は時間切れでも失敗として続くので、最大回数まで走りうる。
-区切った呼び出しの20回は、設定の取得が1回、更新が8回、最後の確認が4回、ホスト側の作業の通知が7回に分かれる。
+区切った呼び出しの21回は、設定の取得が1回、更新が8回、最後の確認が4回、ホスト側の作業の通知が8回に分かれる。
 更新の8回は、3つの変数の取得と、`deployed_sha`の読み取りが失敗したときの存在の確認である。
 残りは、`deployed_sha`の更新、更新が時間切れになったときの読み直し、成功の記録、失敗の記録である。
 成功の記録と失敗の記録は一方しか通らないが、呼び出しの箇所を数えるので、両方を数える。
 時間切れの後に中断されず残る処理は、この合計に含めない。
 最後の確認では、stateの読みと書き、noticeの挿入、通知先の取得を区切る。
-ホスト側の作業の通知の7回は、印の読み取り、未解決の通知の一覧、通知の解決(上限の3件まで)、noticeの挿入、通知先の取得である。
+ホスト側の作業の通知の8回は、印の読み取り、未解決の通知の一覧、通知の解決(上限の3件まで)、noticeの挿入、通知先の取得、止まった作業項目の再開の起動である。
 Discordへの通知の2回は、ホスト側の作業の通知と、最後の確認の通知である。
 値を変えるときは、`tests/scripts/self_update_timeout.test.ts`が次の2点を確かめる。
 

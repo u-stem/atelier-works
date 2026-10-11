@@ -46,6 +46,7 @@ import {
   listActionableWorkItems,
   listActive,
   listActiveIssueWorkItems,
+  listAutoRetryCandidates,
   listExpiredPendingApprovalRequests,
   listImplementRounds,
   listPendingIssueProposals,
@@ -63,6 +64,7 @@ import {
   resolveStaleInfoNoticesBefore,
   resolveUnresolvedNoticesByMessage,
   resolveUnresolvedNoticesByPrefix,
+  restartStoppedWorkItem,
   revertIssueProposalToPending,
   type SqlClient,
   type SqlRow,
@@ -4119,5 +4121,124 @@ describe("hasIntakeRefreshEvent", () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await hasIntakeRefreshEvent(1, "intake refreshed", sql);
     expect(calls[0]?.values).toEqual([1, "intake refreshed"]);
+  });
+});
+
+describe("listAutoRetryCandidates", () => {
+  const params = {
+    reasonPrefixes: ["worker image is stale: "],
+    noticeKind: "host_action_required",
+    noticeMarker: "workerのイメージが古く",
+    resolvedBy: "self_update",
+    limit: 5,
+  };
+
+  test("parses the candidate rows", async () => {
+    const { sql } = createFakeSqlClient([
+      [
+        {
+          id: "7",
+          kind: "pr_fix",
+          status: "blocked",
+          attempt: 1,
+          flow_job_id: "job-1",
+        },
+      ],
+    ]);
+    expect(await listAutoRetryCandidates(params, sql)).toEqual([
+      {
+        id: 7,
+        kind: "pr_fix",
+        status: "blocked",
+        attempt: 1,
+        flow_job_id: "job-1",
+      },
+    ]);
+  });
+
+  test("rejects a kind that cannot be restarted automatically", async () => {
+    const { sql } = createFakeSqlClient([
+      [
+        {
+          id: 7,
+          kind: "audit",
+          status: "blocked",
+          attempt: 1,
+          flow_job_id: null,
+        },
+      ],
+    ]);
+    await expect(listAutoRetryCandidates(params, sql)).rejects.toThrow();
+  });
+
+  test("passes the reason prefixes as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listAutoRetryCandidates(params, sql);
+    expect(calls[0]?.values).toContainEqual(["worker image is stale: "]);
+  });
+
+  test("requires a notice resolved after the stop", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listAutoRetryCandidates(params, sql);
+    expect(calls[0]?.text).toContain("n.resolved_at > last.occurred_at");
+  });
+
+  test("passes the resolver as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listAutoRetryCandidates(params, sql);
+    expect(calls[0]?.values).toContain("self_update");
+  });
+});
+
+describe("restartStoppedWorkItem", () => {
+  const params = {
+    id: 7,
+    expectedFrom: "needs_human",
+    to: "implementing",
+    reasonPrefixes: ["worker image is stale: "],
+    clearFlowJobId: true,
+    notePrefix: "auto_retry: ",
+    maxRestarts: 3,
+    note: "auto_retry: restarted from needs_human",
+  } as const;
+
+  test("returns true when the guarded update matched a row", async () => {
+    const { sql } = createFakeSqlClient([[{ work_item_id: 7 }]]);
+    expect(await restartStoppedWorkItem(params, sql, NO_JOBS)).toBe(true);
+  });
+
+  test("returns false when the status or the reason no longer matches", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await restartStoppedWorkItem(params, sql, NO_JOBS)).toBe(false);
+  });
+
+  test("guards the update with the latest event note of the expected status", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await restartStoppedWorkItem(params, sql, NO_JOBS);
+    expect(calls[0]?.text).toContain("starts_with(");
+  });
+
+  test("passes the reason prefixes as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await restartStoppedWorkItem(params, sql, NO_JOBS);
+    expect(calls[0]?.values).toContainEqual(["worker image is stale: "]);
+  });
+
+  test("passes the restart cap as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await restartStoppedWorkItem(params, sql, NO_JOBS);
+    expect(calls[0]?.values).toContain(3);
+  });
+
+  test("records the event in the same statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await restartStoppedWorkItem(params, sql, NO_JOBS);
+    expect(calls[0]?.text).toContain("INSERT INTO factory.work_item_events");
+  });
+
+  test("issues a single query", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await restartStoppedWorkItem(params, sql, NO_JOBS);
+    expect(calls).toHaveLength(1);
   });
 });
