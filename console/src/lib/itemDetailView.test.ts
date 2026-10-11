@@ -12,7 +12,6 @@ import type { WorkItemTransition } from "../api/guards/workItemTransitions.ts";
 import {
   describeApproval,
   describeAttempt,
-  describeDiffStat,
   describeFailureRecord,
   describeFixRound,
   describeOverview,
@@ -330,36 +329,44 @@ describe("formatCostUsd", () => {
 });
 
 describe("formatDiffStat", () => {
-  test("shows the files and the lines", () => {
-    expect(formatDiffStat({ files: 3, added: 10, deleted: 2 })).toBe(
-      "3ファイル +10 -2",
+  test("shows the files and the lines in words", () => {
+    expect(formatDiffStat({ files: 3, added: 17, deleted: 0 })).toBe(
+      "3ファイル・追加17行・削除0行",
     );
   });
 
   test("returns null without a stat", () => {
     expect(formatDiffStat(null)).toBeNull();
   });
-
-  test("explains the signs in words", () => {
-    expect(describeDiffStat({ files: 3, added: 17, deleted: 0 })).toBe(
-      "追加17行・削除0行",
-    );
-  });
-
-  test("has no explanation without a stat", () => {
-    expect(describeDiffStat(null)).toBeNull();
-  });
 });
 
 describe("describeAttempt", () => {
-  test("links the requirements document of the attempt", () => {
-    expect(describeAttempt(7, attempt()).path).toBe(
+  test("links the requirements document of an older attempt by its number", () => {
+    expect(describeAttempt(7, attempt(), false).path).toBe(
       "/items/7/requirements?attempt=2",
     );
   });
 
+  test("links the latest attempt without a number", () => {
+    expect(describeAttempt(7, attempt(), true).path).toBe(
+      "/items/7/requirements",
+    );
+  });
+
+  test("marks the link of the latest attempt", () => {
+    expect(describeAttempt(7, attempt(), true).linkLabel).toBe(
+      "要件定義書を開く(試行 2・最新)",
+    );
+  });
+
+  test("names the attempt in the link of an older attempt", () => {
+    expect(describeAttempt(7, attempt(), false).linkLabel).toBe(
+      "要件定義書を開く(試行 2)",
+    );
+  });
+
   test("labels the approval status", () => {
-    expect(describeAttempt(7, attempt()).approvalLabel).toBe("承認済み");
+    expect(describeAttempt(7, attempt(), false).approvalLabel).toBe("承認済み");
   });
 
   test("has no approval label without an approval request", () => {
@@ -367,12 +374,15 @@ describe("describeAttempt", () => {
       describeAttempt(
         7,
         attempt({ approval_request_id: null, approval_status: null }),
+        false,
       ).approvalLabel,
     ).toBeNull();
   });
 
   test("replaces hidden characters in the summary", () => {
-    expect(describeAttempt(7, attempt({ summary: "a‮b" })).summary).toBe("a�b");
+    expect(describeAttempt(7, attempt({ summary: "a‮b" }), false).summary).toBe(
+      "a�b",
+    );
   });
 });
 
@@ -548,14 +558,7 @@ describe("describeRound", () => {
     expect(
       describeRound(round({ diff_stat: { files: 1, added: 2, deleted: 3 } }))
         .diffLabel,
-    ).toBe("1ファイル +2 -3");
-  });
-
-  test("explains the diff stat in words", () => {
-    expect(
-      describeRound(round({ diff_stat: { files: 1, added: 2, deleted: 3 } }))
-        .diffHint,
-    ).toBe("追加2行・削除3行");
+    ).toBe("1ファイル・追加2行・削除3行");
   });
 });
 
@@ -660,6 +663,13 @@ describe("describeTransition", () => {
 
   test("replaces hidden characters in the note", () => {
     expect(describeTransition(transition({ note: "a‮b" })).note).toBe("a�b");
+  });
+
+  test("drops a note that is only a URL", () => {
+    expect(
+      describeTransition(transition({ note: "https://github.com/o/r/pull/12" }))
+        .note,
+    ).toBeNull();
   });
 });
 

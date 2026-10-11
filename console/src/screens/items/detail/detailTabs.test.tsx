@@ -125,11 +125,25 @@ describe("RequirementsTab", () => {
     expect(html).not.toContain("最新の要件定義書を開く");
   });
 
-  test("says which attempt the link opens", () => {
+  test("marks the link of the latest attempt", () => {
     const html = render(
       <RequirementsTab detail={detail({ attempts })} now={NOW} />,
     );
-    expect(html).toContain("試行 2の要件定義書を開く");
+    expect(html).toContain("要件定義書を開く(試行 2・最新)");
+  });
+
+  test("names the attempt in the link of an older attempt", () => {
+    const html = render(
+      <RequirementsTab detail={detail({ attempts })} now={NOW} />,
+    );
+    expect(html).toContain("要件定義書を開く(試行 1)");
+  });
+
+  test("points the latest attempt at the document without a number", () => {
+    const html = render(
+      <RequirementsTab detail={detail({ attempts })} now={NOW} />,
+    );
+    expect(html).toContain('href="/items/7/requirements"');
   });
 });
 
@@ -141,20 +155,27 @@ describe("RoundsTab", () => {
     expect(html).toContain("<code");
   });
 
-  test("explains the diff signs in words", () => {
+  test("writes the diff stat in words instead of signs", () => {
     const html = render(
       <RoundsTab detail={detail({ implement_rounds: [ROUND] })} now={NOW} />,
     );
-    expect(html).toContain("追加17行・削除0行");
+    expect(html).toContain("2ファイル・追加17行・削除0行");
   });
 
-  test("shows an empty review section as one line without a card", () => {
-    const html = render(<RoundsTab detail={detail()} now={NOW} />);
-    expect(html).not.toContain("PRのレビューはまだありません。");
-  });
-
-  test("still says the reviews are absent", () => {
+  test("shows an empty review section as one line", () => {
     const html = render(<RoundsTab detail={detail()} now={NOW} />);
     expect(html).toContain("PRのレビュー</h2><p");
+  });
+
+  test("shows an empty fix section as one line", () => {
+    const html = render(<RoundsTab detail={detail()} now={NOW} />);
+    expect(html).toContain("PRの修正</h2><p");
+  });
+
+  test("gives the empty review and fix sections no card", () => {
+    const html = render(
+      <RoundsTab detail={detail({ implement_rounds: [ROUND] })} now={NOW} />,
+    );
+    expect(html).not.toContain("bg-card p-5");
   });
 });

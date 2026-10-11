@@ -1,5 +1,4 @@
 import type { WorkItemDetail } from "../../../api/guards/workItemDetail.ts";
-import { InlineCodeMarkdown } from "../../../components/markdown/InlineCodeMarkdown.tsx";
 import { Badge } from "../../../components/ui/badge.tsx";
 import {
   DETAIL_LIMITS,
@@ -12,6 +11,7 @@ import {
 } from "../../../lib/itemDetailView.ts";
 import { attemptRef } from "../../../lib/labels.ts";
 import {
+  CodeSpanBlock,
   CompactEmpty,
   EmptyNote,
   Panel,
@@ -36,14 +36,13 @@ function RoundCard({ round, now }: { round: RoundView; now: number }) {
         {round.diffLabel === null ? null : (
           <span className="text-small text-muted-foreground tabular-nums">
             {round.diffLabel}
-            {round.diffHint === null ? null : `(${round.diffHint})`}
           </span>
         )}
         <span className="text-small text-muted-foreground">
           <TimeLabel iso={round.createdAt} now={now} />
         </span>
       </div>
-      <InlineCodeMarkdown>{round.summary}</InlineCodeMarkdown>
+      <CodeSpanBlock>{round.summary}</CodeSpanBlock>
       {round.gapReport === null ? null : (
         <div className="flex flex-col gap-1">
           <p className="text-small text-subtle">要件の不足の報告</p>

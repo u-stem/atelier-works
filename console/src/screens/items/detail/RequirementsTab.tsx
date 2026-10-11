@@ -13,8 +13,9 @@ import {
 } from "./DetailParts.tsx";
 
 /**
- * 要件定義のタブ。試行ごとに、要約と承認の状態と、その試行の要件定義書の画面へのリンクを出す。
- * 同じ要件定義書へのリンクが重ならないよう、リンクは試行ごとの1つだけにする。
+ * 要件定義のタブ。試行ごとに、要約と承認の状態と、要件定義書の画面へのリンクを出す。
+ * 同じ書類へのリンクが重ならないよう、リンクは試行ごとの1つだけにする。
+ * 最新の試行のリンクは、試行の番号を付けず、常に最新を指す。
  * 本文はここに埋め込まず、要件定義書の画面で読む。
  */
 export function RequirementsTab({
@@ -32,8 +33,9 @@ export function RequirementsTab({
       </EmptyNote>
     );
   }
+  const latest = Math.max(...detail.attempts.map((attempt) => attempt.attempt));
   const attempts = detail.attempts.map((attempt) =>
-    describeAttempt(workItemId, attempt),
+    describeAttempt(workItemId, attempt, attempt.attempt === latest),
   );
   return (
     <div className="flex max-w-[47.5rem] flex-col gap-6">
@@ -53,7 +55,7 @@ export function RequirementsTab({
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                   <Link to={attempt.path} className={LINK_CLASS}>
                     <FileText aria-hidden="true" className="size-4" />
-                    {`${attempt.attemptLabel}の要件定義書を開く`}
+                    {attempt.linkLabel}
                   </Link>
                   {attempt.approvalLabel === null ? null : (
                     <Badge variant={attempt.approvalVariant}>

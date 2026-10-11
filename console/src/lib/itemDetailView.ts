@@ -190,26 +190,21 @@ export function formatCostUsd(cost: number | null): string {
   return `$${cost.toFixed(2)}`;
 }
 
-/** 差分の規模の表示。記録が無ければ`null`。 */
+/** 差分の規模の表示。符号ではなく言葉で書く。記録が無ければ`null`。 */
 export function formatDiffStat(stat: WorkItemDiffStat | null): string | null {
   return stat === null
     ? null
-    : `${stat.files}ファイル +${stat.added} -${stat.deleted}`;
-}
-
-/** 差分の規模の補助文。「+17 -0」の符号が何の数かを言葉で示す。記録が無ければ`null`。 */
-export function describeDiffStat(stat: WorkItemDiffStat | null): string | null {
-  return stat === null ? null : `追加${stat.added}行・削除${stat.deleted}行`;
+    : `${stat.files}ファイル・追加${stat.added}行・削除${stat.deleted}行`;
 }
 
 const BARE_URL_PATTERN = /^https?:\/\/\S+$/;
 
 /**
- * 状態の注記。URLだけの注記は`null`にする。
+ * 状態や遷移の注記。URLだけの注記は`null`にする。
  * PRとIssueのリンクは別の行に出ており、同じURLを生の文字で重ねる必要がないためである。
  */
-function statusNoteOf(item: WorkItemOverview): string | null {
-  const note = plainOrNull(item.status_note);
+function noteOrNull(text: string | null): string | null {
+  const note = plainOrNull(text);
   return note !== null && BARE_URL_PATTERN.test(note.trim()) ? null : note;
 }
 
@@ -219,7 +214,7 @@ export function describeOverview(item: WorkItemOverview): OverviewView {
     kindLabel: workItemKindLabel(item.kind),
     statusLabel: pipelineStatusLabel(item.status),
     statusVariant: pipelineStatusVariant(item.status),
-    statusNote: statusNoteOf(item),
+    statusNote: noteOrNull(item.status_note),
     repoLabel: `${item.owner}/${item.repo}`,
     issue: issueTarget(item),
     pr: pullTarget(item),
@@ -247,17 +242,22 @@ export type AttemptView = {
   /** 承認依頼があるときの状態の名前。無ければ`null`。 */
   readonly approvalLabel: string | null;
   readonly approvalVariant: PipelineStatusVariant;
-  /** この試行の要件定義書の経路。 */
+  /** 要件定義書の画面への経路。最新の試行は試行の番号を付けず、常に最新を指す。 */
   readonly path: string;
+  /** 経路のリンクの文言。どの試行の書類を開くかを添える。 */
+  readonly linkLabel: string;
 };
 
+/** `isLatest`は、作業項目の試行のうち最新のものかどうか。 */
 export function describeAttempt(
   workItemId: number,
   attempt: WorkItemAttempt,
+  isLatest: boolean,
 ): AttemptView {
+  const label = attemptRef(attempt.attempt);
   return {
     attempt: attempt.attempt,
-    attemptLabel: attemptRef(attempt.attempt),
+    attemptLabel: label,
     summary: plain(attempt.summary),
     createdAt: attempt.created_at,
     approvalLabel:
@@ -265,7 +265,10 @@ export function describeAttempt(
         ? null
         : approvalStatusLabel(attempt.approval_status, "requirements"),
     approvalVariant: approvalVariant(attempt.approval_status),
-    path: requirementsPath(workItemId, attempt.attempt),
+    path: requirementsPath(workItemId, isLatest ? null : attempt.attempt),
+    linkLabel: isLatest
+      ? `要件定義書を開く(${label}・最新)`
+      : `要件定義書を開く(${label})`,
   };
 }
 
@@ -409,8 +412,6 @@ export type RoundView = {
   readonly skippedReason: string | null;
   readonly protectedChanges: string[];
   readonly diffLabel: string | null;
-  /** `diffLabel`の符号を言葉にした補助文。 */
-  readonly diffHint: string | null;
   readonly createdAt: string;
 };
 
@@ -427,7 +428,6 @@ export function describeRound(round: WorkItemRound): RoundView {
     skippedReason: plainOrNull(round.checks_skipped_reason),
     protectedChanges: round.protected_changes.map(plain),
     diffLabel: formatDiffStat(round.diff_stat),
-    diffHint: describeDiffStat(round.diff_stat),
     createdAt: round.created_at,
   };
 }
@@ -577,7 +577,7 @@ export function describeTransition(
         ? null
         : pipelineStatusLabel(transition.from_status),
     toLabel: pipelineStatusLabel(transition.to_status),
-    note: plainOrNull(transition.note),
+    note: noteOrNull(transition.note),
     occurredAt: transition.occurred_at,
     jobs: jobLinks(
       transition.job_id,

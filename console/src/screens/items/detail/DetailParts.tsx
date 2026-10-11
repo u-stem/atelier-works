@@ -1,6 +1,7 @@
 import { ExternalLink } from "lucide-react";
-import type { ReactNode } from "react";
+import { Fragment, type ReactNode } from "react";
 import { JobLink } from "../../../components/JobLink.tsx";
+import { splitCodeSpans } from "../../../lib/codeSpans.ts";
 import type { JobLinkView, TargetLink } from "../../../lib/itemDetailView.ts";
 import { formatAbsoluteWithRelative } from "../../../lib/relativeTime.ts";
 
@@ -9,17 +10,19 @@ export const LINK_CLASS =
 
 /**
  * 見出し付きの区画。
- * タブの名前と同じ見出しは重なるので、`heading`を省くと見出しも注記も出さない。
+ * タブの名前と同じ見出しは重なるので、`heading`は省ける。
+ * 注記は見出しの下に出すので、`heading`が無いときは`note`を渡せない。
  */
 export function Panel({
   heading,
   note,
   children,
 }: {
-  heading?: string;
-  note?: ReactNode;
   children: ReactNode;
-}) {
+} & (
+  | { heading: string; note?: ReactNode }
+  | { heading?: undefined; note?: undefined }
+)) {
   return (
     <section className="flex flex-col gap-3">
       {heading === undefined ? null : (
@@ -85,6 +88,36 @@ export function PlainBlock({ children }: { children: string }) {
       className="text-body break-words whitespace-pre-wrap [unicode-bidi:isolate]"
     >
       {children}
+    </p>
+  );
+}
+
+/**
+ * `で囲んだ範囲だけをコードの書式で描き、残りは改行を保ったままプレーンテキストで描く。
+ * Markdownは解析しない。`<T>`や`*.ts`のような記号も、そのまま文字で出る。
+ */
+export function CodeSpanBlock({ children }: { children: string }) {
+  let offset = 0;
+  return (
+    <p
+      dir="ltr"
+      className="text-body break-words whitespace-pre-wrap [unicode-bidi:isolate]"
+    >
+      {splitCodeSpans(children).map((part) => {
+        // 位置は文字数の累計で決まり、並びは変わらないのでキーに使える。
+        const key = offset;
+        offset += part.text.length + (part.code ? 2 : 0);
+        return part.code ? (
+          <code
+            key={key}
+            className="rounded bg-muted px-1 py-0.5 font-mono text-small break-all"
+          >
+            {part.text}
+          </code>
+        ) : (
+          <Fragment key={key}>{part.text}</Fragment>
+        );
+      })}
     </p>
   );
 }
