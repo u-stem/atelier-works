@@ -502,6 +502,19 @@ describe("reconcileHostActionNotices", () => {
     expect(h.checked).toHaveLength(HOST_ACTION_RECONCILE_LIMIT);
   });
 
+  test("does not let notices without a readable sha fill the limit", async () => {
+    const unreadable = Array.from(
+      { length: HOST_ACTION_RECONCILE_LIMIT },
+      (_, i) => ({ id: i + 1, message: "rewritten" }),
+    );
+    const h = reconcileHarness({
+      applied: SHA_A,
+      rows: [...unreadable, noticeRow(100, SHA_A)],
+    });
+    await reconcileHostActionNotices(h.deps);
+    expect(h.resolved).toEqual([100]);
+  });
+
   test("resolves nothing when the applied sha is not in the clone", async () => {
     const h = reconcileHarness({
       applied: SHA_A,
@@ -529,6 +542,16 @@ describe("buildHostActionNotice paths", () => {
   test("replaces control characters in a path", () => {
     const { notice } = buildHostActionNotice(SHA_A, ["infra/a\nb\u0007c"]);
     expect(notice.message).toContain("infra/a?b?c");
+  });
+
+  test("replaces C1 controls, bidi controls and line separators", () => {
+    const { notice } = buildHostActionNotice(SHA_A, ["infra/a\u0085b‮c⁦d e f"]);
+    expect(notice.message).toContain("infra/a?b?c?d?e?f");
+  });
+
+  test("escapes the characters that build a Markdown link", () => {
+    const { cause } = buildHostActionNotice(SHA_A, ["[x](https://evil)"]);
+    expect(cause).toContain("\\[x\\]\\(https://evil\\)");
   });
 
   test("keeps the message on one line", () => {

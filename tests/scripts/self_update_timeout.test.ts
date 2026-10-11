@@ -5,6 +5,7 @@ import {
   SELF_UPDATE_BOUNDED_CALL_COUNT,
   SELF_UPDATE_CLI_COMMAND_COUNT,
   SELF_UPDATE_GIT_COMMAND_COUNT,
+  SELF_UPDATE_LOCAL_GIT_COMMAND_COUNT,
   SELF_UPDATE_WORST_CASE_MS,
 } from "../../f/factory/self_update.ts";
 
@@ -44,7 +45,7 @@ const WRAPPERS = [
 // 例外は`wmill.JobService.`で、Console用workerの確認(`watchConsoleWorker`)が
 // 自前の上限(`CONSOLE_WORKER_CHECK_TIMEOUT_MS`)で区切る。
 const UNBOUNDED_CALL =
-  /\bwmill\.(?!JobService\.)[A-Za-z]+(?:\.[A-Za-z]+)*\(|\brecordDeployment\(|\baddNoticeUnlessUnresolved\(|\bnotifyBestEffort\(/g;
+  /\bwmill\.(?!JobService\.)[A-Za-z]+(?:\.[A-Za-z]+)*\(|\brecordDeployment\(|\baddNoticeUnlessUnresolved\(|\bnotifyBestEffort\(|\blistUnresolvedNoticesByKind\(|\bresolveNoticeIfUnresolved\(|\breadHostAppliedSha\(/g;
 /** 区切りの呼び出しの開きから、その中の呼び出しまでの、最も長い距離。 */
 const WRAPPER_REACH = 700;
 
@@ -134,12 +135,13 @@ describe("self_update timeout", () => {
       commands:
         FACTORY_CLONE_UPDATE_GIT_COMMAND_COUNT * cloneUpdate +
         2 * miseCompare +
-        single +
-        hostCommit +
-        (HOST_ACTION_RECONCILE_LIMIT + 1) * hostAncestor,
+        single,
+      localCommands:
+        hostCommit + (HOST_ACTION_RECONCILE_LIMIT + 1) * hostAncestor,
     }).toEqual({
       passed: miseCompare + single + hostCommit + hostAncestor,
       commands: SELF_UPDATE_GIT_COMMAND_COUNT,
+      localCommands: SELF_UPDATE_LOCAL_GIT_COMMAND_COUNT,
     });
   });
 

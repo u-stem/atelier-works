@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   chmodSync,
+  lstatSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   symlinkSync,
@@ -106,5 +108,46 @@ describe("record-host-applied.sh", () => {
 
   test("does not call docker when HEAD is not a sha", () => {
     expect(run({ head: "not-a-sha", dockerExit: 0 }).dockerArgs).toEqual([]);
+  });
+});
+
+// コンテナの中で動くシェルを、記録した引数から取り出して実際に動かす。
+describe("record-host-applied.sh in-container write", () => {
+  function runInner(target: string): void {
+    const { dockerArgs } = run({ head: SHA, dockerExit: 0 });
+    const script = dockerArgs[dockerArgs.indexOf("-c") + 1] ?? "";
+    Bun.spawnSync(["sh", "-c", script, "sh", SHA, target]);
+  }
+
+  test("writes the sha to a regular file", () => {
+    const target = join(dir, "marker");
+    runInner(target);
+    expect(readFileSync(target, "utf8")).toBe(`${SHA}\n`);
+  });
+
+  test("replaces a symlinked marker instead of following it", () => {
+    const victim = join(dir, "victim");
+    const target = join(dir, "marker");
+    writeFileSync(victim, "keep");
+    symlinkSync(victim, target);
+    runInner(target);
+    expect(readFileSync(victim, "utf8")).toBe("keep");
+  });
+
+  test("turns a symlinked marker into a regular file", () => {
+    const victim = join(dir, "victim");
+    const target = join(dir, "marker");
+    writeFileSync(victim, "keep");
+    symlinkSync(victim, target);
+    runInner(target);
+    expect(lstatSync(target).isFile()).toBe(true);
+  });
+
+  test("leaves no temporary file behind", () => {
+    const target = join(dir, "marker");
+    runInner(target);
+    expect(readdirSync(dir).filter((name) => name.includes(".tmp."))).toEqual(
+      [],
+    );
   });
 });

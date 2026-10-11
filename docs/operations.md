@@ -938,13 +938,13 @@ Consoleが止まっていてもDiscordには届くので、通知の確認先は
 
 ### 自己更新の打ち切りを確かめる
 
-`self_update`のジョブには、全体の上限(3600秒)がある。
+`self_update`のジョブには、全体の上限(2900秒)がある。
 値の内訳は[アーキテクチャ](architecture.md)の「自己更新」に書く。
 通常は、各コマンドの上限と、区切った呼び出し(1回30秒)の上限で先に終わる。
 全体の上限は、それでも止まったときの最後の砦である。
 
 上限で打ち切られた回は、最後に行うConsole用のworkerの確認が走らない。
-打ち切られるまでの最大60分は、10分ごとの次の5回が飛ばされる。
+打ち切られるまでの最大約48分は、10分ごとの次の4回が飛ばされる。
 この間は、自己更新の反映とConsole用のworkerの停止の検知が止まる。
 
 気づく経路は2つある。
@@ -984,9 +984,9 @@ Consoleが止まっていてもDiscordには届くので、通知の確認先は
 手順は次のとおりである。
 
 1. `self_update`の上限が反映されていることを確かめる。
-   `wmill script get f/factory/self_update`の出力で、`timeout`が3600であることを見る。
-   3600秒がインスタンスの上限で切り詰められないのは、セルフホストの上限が環境変数`TIMEOUT`で、未設定なら7日だからである。
-   `job_default_timeout`は21600秒以上にする決まりなので、3600秒はその範囲に収まる([実装フローの仕様](internals/implement.md)の「Windmillのtimeoutで打ち切られたとき」)。
+   `wmill script get f/factory/self_update`の出力で、`timeout`が2900であることを見る。
+   2900秒がインスタンスの上限で切り詰められないのは、セルフホストの上限が環境変数`TIMEOUT`で、未設定なら7日だからである。
+   `job_default_timeout`は21600秒以上にする決まりなので、2900秒はその範囲に収まる([実装フローの仕様](internals/implement.md)の「Windmillのtimeoutで打ち切られたとき」)。
 2. `u/<user>/timeout_probe`というscriptを作る。
    子プロセスを起動せず、60秒待つだけにする。
    設定の`timeout`は10秒にする。
@@ -1208,6 +1208,9 @@ workerの並列数(`NUM_WORKERS`)のような`infra/docker-compose.yml`の変更
 マウントの変更では、該当するコンテナが作り直される。Console用のworkerが作り直される間は、Consoleの問い合わせが待たされる。
 
 `mise run up`と`mise run deploy`は、`up -d`の後に、Caddyを再起動する。
+再起動の後に、動いているCaddyが`caddy validate`でCaddyfileを読めることを確かめ、失敗したら止まる。
+`restart`はコンテナを起動できれば成功を返し、Caddyfileの誤りで直後に落ちても気づけないためである。
+止まったときは、HEADを書かないので、通知は解決されない。
 `infra/Caddyfile`は単一ファイルのbind mountで、`up -d`はcomposeの設定が変わらない限りCaddyを作り直さず、再読み込みもしないためである。
 再起動しないと、古いCaddyfileのまま、次に書くHEADが反映済みを表してしまう。
 `mise run up`を使わずにcomposeを直接実行したときは、Caddyの再起動もHEADの記録も行われない。
@@ -1219,7 +1222,7 @@ workerの並列数(`NUM_WORKERS`)のような`infra/docker-compose.yml`の変更
 ホストのcheckoutがその版を含んで起動し直されたことを、確かめられるためである。
 値を書けなかったときは警告が出るが、起動は成功のまま終わる。
 値のファイルが無いとき、通常のファイルでない(symlinkなど)か128バイトを超えるとき、版として読めないとき、self cloneに無い版のときは、通知を解決しない。
-1回の実行で調べる未解決の通知は、古いものから5件までである。残りは次の回に調べる。
+1回の実行で調べる未解決の通知は、版を読めたものの古い順に3件までである。残りは次の回に調べる。
 自己更新が反映した時点で、ホストがその版を反映済みなら、通知とDiscordのどちらも出さない。
 運用者が先に`mise run deploy`などで反映した場合に、操作の要らない通知を送らないためである。
 その場合は、`mise run up`が済んでいることを確かめたうえで、人がConsoleの**通知**タブで解決してよい。
@@ -1232,7 +1235,7 @@ workerの並列数(`NUM_WORKERS`)のような`infra/docker-compose.yml`の変更
 2. Dockerの版の検査。Engineが26.0以上、Composeが2.26.0以上でなければ止まる
 3. イメージの取得と、`windmill_worker`と`console_fetcher`のイメージのビルド
 4. `docker compose up -d`
-5. Caddyの再起動
+5. Caddyの再起動と、`caddy validate`による設定の確認
 6. Consoleのraw appの依存の`npm ci --ignore-scripts`と`wmill sync push`
 7. migrationの実行
 8. 反映したHEADの記録

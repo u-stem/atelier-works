@@ -20,8 +20,11 @@ if ! sha="$(git rev-parse HEAD 2>/dev/null)" || [[ ! "${sha}" =~ ^[0-9a-f]{40}$ 
 fi
 
 # shaは40桁の16進だけを確かめて渡すので、シェルに解釈される文字を含まない。
+# 同じディレクトリの一時ファイルに書いて`mv -f`で置き換える。読む側が書きかけの値を読まず、
+# 印のパスがsymlinkに差し替えられていても、その先ではなくsymlink自体を置き換える。
+# `set -C`で、一時ファイルのパスに既にあるファイルやsymlinkへは書かない。
 if ! docker compose -f infra/docker-compose.yml exec -T windmill_worker \
-  sh -c 'printf "%s\n" "$1" > "$2"' sh "${sha}" "${MARKER_PATH}"; then
+  sh -c 'set -C; tmp="$2.tmp.$$"; printf "%s\n" "$1" > "$tmp" && mv -f "$tmp" "$2"' sh "${sha}" "${MARKER_PATH}"; then
   echo "warning: could not record ${sha} for the worker; the host action notice will not resolve by itself" >&2
   exit 0
 fi

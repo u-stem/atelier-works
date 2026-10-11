@@ -9,6 +9,7 @@
 // 人が`mise run up`するまで効かないため、`deployments`に記録したうえで
 // 要対応の通知とDiscordで知らせる(`./lib/host_action.ts`)。
 // ホストが`mise run up`の最後に書く印を毎回読み、反映が済んだ通知は解決する。
+// 解決は、反映の判断と記録の後に行う(反映が不要な回でも行う)。解決が遅れても反映を遅らせないため。
 //
 // ジョブ全体の上限(`self_update.script.yaml`の`timeout`)は、`SELF_UPDATE_WORST_CASE_MS`以上にする。
 // 内訳と、打ち切られた回の扱いは`docs/architecture.md`の「自己更新」にある。
@@ -84,6 +85,12 @@ import {
 // self cloneのgit操作。判断を含まない単発のgitの入出力なので、
 // libに出さずこのscriptに閉じる(`poll_issues.ts`の`readRepoHeadSha`と同じ)。
 // ---------------------------------------------------------------------------
+
+/**
+ * ローカルのオブジェクトを参照するだけのgit(`cat-file`、`merge-base`)の上限(ミリ秒)。
+ * ネットワークにもワークツリーにも触れないので、既定の上限より短くする。
+ */
+export const SELF_UPDATE_LOCAL_GIT_TIMEOUT_MS = 10_000;
 
 const GIT_BASE_ARGV: readonly string[] = [
   "git",
@@ -226,7 +233,11 @@ export async function isAncestorSha(
   assertSha(descendant);
   const result = await run(
     [...GIT_BASE_ARGV, "merge-base", "--is-ancestor", ancestor, descendant],
-    { cwd: dir, env: selfCloneGitEnv() },
+    {
+      cwd: dir,
+      env: selfCloneGitEnv(),
+      timeoutMs: SELF_UPDATE_LOCAL_GIT_TIMEOUT_MS,
+    },
   );
   if (result.exitCode === 0) return true;
   if (result.exitCode === 1 && !result.timedOut) return false;
@@ -249,7 +260,11 @@ export async function isCommitInClone(
   assertSha(sha);
   const result = await run(
     [...GIT_BASE_ARGV, "cat-file", "-e", `${sha}^{commit}`],
-    { cwd: dir, env: selfCloneGitEnv() },
+    {
+      cwd: dir,
+      env: selfCloneGitEnv(),
+      timeoutMs: SELF_UPDATE_LOCAL_GIT_TIMEOUT_MS,
+    },
   );
   if (result.timedOut) {
     throw new Error(`git cat-file timed out in ${dir}`);
@@ -388,16 +403,18 @@ async function runWmillCli(
  * cloneの更新(`FACTORY_CLONE_UPDATE_GIT_COMMAND_COUNT`回)、HEADとブランチの確認で2回、
  * 変更パスの列挙で1回、`mise.toml`の比較(`git show`)で最大2回。
  * `git show`は時間切れでも失敗として続くので、最大回数まで走りうる。
+ * 上限は`DEFAULT_TIMEOUT_MS`である。ホストの印の確認は`SELF_UPDATE_LOCAL_GIT_COMMAND_COUNT`に数える。
+ */
+export const SELF_UPDATE_GIT_COMMAND_COUNT =
+  FACTORY_CLONE_UPDATE_GIT_COMMAND_COUNT + 2 + 1 + 2;
+
+/**
+ * 1回の実行で走る、ローカルだけのgit(上限は`SELF_UPDATE_LOCAL_GIT_TIMEOUT_MS`)の最大回数。
  * ホストの印の確認は、コミットの有無で1回、祖先の確認で最大`HOST_ACTION_RECONCILE_LIMIT + 1`回
  * (通知の解決で上限の数まで、この回の通知の判断で1回)。
  */
-export const SELF_UPDATE_GIT_COMMAND_COUNT =
-  FACTORY_CLONE_UPDATE_GIT_COMMAND_COUNT +
-  2 +
-  1 +
-  2 +
-  1 +
-  (HOST_ACTION_RECONCILE_LIMIT + 1);
+export const SELF_UPDATE_LOCAL_GIT_COMMAND_COUNT =
+  1 + (HOST_ACTION_RECONCILE_LIMIT + 1);
 
 /** 1回の実行で走る`npm ci`、`wmill sync push`、`wmill datatable migrate up`の回数。 */
 export const SELF_UPDATE_CLI_COMMAND_COUNT = 3;
@@ -448,6 +465,8 @@ export const SELF_UPDATE_WORST_CASE_MS =
   REPO_LOCK_POLL_MS +
   SELF_UPDATE_GIT_COMMAND_COUNT *
     (DEFAULT_TIMEOUT_MS + RUNNER_MAX_STOP_OVERHEAD_MS) +
+  SELF_UPDATE_LOCAL_GIT_COMMAND_COUNT *
+    (SELF_UPDATE_LOCAL_GIT_TIMEOUT_MS + RUNNER_MAX_STOP_OVERHEAD_MS) +
   SELF_UPDATE_CLI_COMMAND_COUNT *
     (WMILL_CLI_TIMEOUT_MS + RUNNER_MAX_STOP_OVERHEAD_MS) +
   SELF_UPDATE_BOUNDED_CALL_COUNT * SELF_UPDATE_CALL_TIMEOUT_MS +
@@ -539,8 +558,7 @@ async function updateSelf(
 
   const currentSha = await readSelfCloneHeadSha(runCommand, factoryClone.dir);
 
-  // 反映の要否によらず毎回、ホストで反映が済んだ通知を解決する。
-  // 印の読み取りとself cloneでの確認は、この回の通知の判断(`recordHostAction`)でも使い回す。
+  // 印の読み取りとself cloneでの確認は、通知の解決とこの回の通知の判断(`recordHostAction`)で使い回す。
   const hostApplied = hostAppliedChecker({
     readAppliedSha: () =>
       withCallTimeout("read host applied sha", () => readHostAppliedSha()),
@@ -549,23 +567,26 @@ async function updateSelf(
       isAncestorSha(runCommand, factoryClone.dir, ancestor, descendant),
     log,
   });
-  await reconcileHostActionNotices({
-    listUnresolved: () =>
-      withCallTimeout("list host action notices", () =>
-        listUnresolvedNoticesByKind(HOST_ACTION_NOTICE_KIND),
-      ),
-    isApplied: hostApplied,
-    resolve: (id) =>
-      withCallTimeout("resolve host action notice", () =>
-        resolveNoticeIfUnresolved(
-          id,
-          HOST_ACTION_NOTICE_KIND,
-          HOST_ACTION_RESOLVER,
-          [],
+  // ホストで反映が済んだ通知を解決する。反映が不要な回でも、反映の後でも呼ぶ。
+  // 反映の判断を遅らせないよう、反映の判断と記録より後に呼ぶ。
+  const resolveHostActionNotices = () =>
+    reconcileHostActionNotices({
+      listUnresolved: () =>
+        withCallTimeout("list host action notices", () =>
+          listUnresolvedNoticesByKind(HOST_ACTION_NOTICE_KIND),
         ),
-      ),
-    log,
-  });
+      isApplied: hostApplied,
+      resolve: (id) =>
+        withCallTimeout("resolve host action notice", () =>
+          resolveNoticeIfUnresolved(
+            id,
+            HOST_ACTION_NOTICE_KIND,
+            HOST_ACTION_RESOLVER,
+            [],
+          ),
+        ),
+      log,
+    });
 
   // 変数が無いと確かめられたときだけ未デプロイ(空)として扱う(`readDeployedSha`を参照)。
   const deployedSha = await readDeployedSha(
@@ -580,6 +601,7 @@ async function updateSelf(
   const decision = decideUpdate(currentSha, deployedSha);
   if (decision.outcome === "unchanged") {
     log.info("self clone unchanged, nothing to deploy", { sha: currentSha });
+    await resolveHostActionNotices();
     return { outcome: "unchanged" };
   }
 
@@ -734,6 +756,8 @@ async function updateSelf(
         classification.host_paths,
       );
     }
+
+    await resolveHostActionNotices();
 
     return {
       outcome: "updated",

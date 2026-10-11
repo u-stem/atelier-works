@@ -31,8 +31,10 @@ export const HOST_ACTION_RESOLVER = "self_update";
  * 1回の実行で調べる未解決の通知の数の上限。古いものから調べる。
  * 通知ごとにgitを1回呼ぶので、数を固定して最悪の長さを抑える。
  * 古い通知はホストの反映に含まれやすく、解決されれば次の回で残りに進む。
+ * 未解決の通知は、ふだん0〜1件である。
+ * 本文から版を読めない通知は数えず、版を読めた通知の先頭から数える。
  */
-export const HOST_ACTION_RECONCILE_LIMIT = 5;
+export const HOST_ACTION_RECONCILE_LIMIT = 3;
 
 /** 印のファイルの大きさの上限(バイト)。40桁の版と改行より十分に大きい。 */
 const MAX_APPLIED_FILE_BYTES = 128;
@@ -49,8 +51,11 @@ const NEXT_ACTION =
 const SHA_IN_MESSAGE = /反映した版: ([0-9a-f]{40})/;
 const FULL_SHA = /^[0-9a-f]{40}$/;
 
-// biome-ignore lint/suspicious/noControlCharactersInRegex: 本文に入れるパスから制御文字を除くため。
-const CONTROL_CHARS = /[\u0000-\u001f\u007f]/g;
+/** 制御文字(C0、DEL、C1)、書式文字(双方向制御など)、行と段落の区切りを表すUnicodeの分類。 */
+const INVISIBLE_CHARS = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
+
+/** Markdownのリンクを組み立てる文字。 */
+const LINK_CHARS = /[[\]()]/g;
 
 export type HostActionNotice = {
   readonly notice: NoticeRecord;
@@ -60,9 +65,13 @@ export type HostActionNotice = {
   readonly next_action: string;
 };
 
-/** gitで管理するファイル名には改行などを含められる。本文とDiscordの表示を崩さないよう、制御文字を`?`にする。 */
+/**
+ * gitで管理するファイル名は、改行や双方向制御などの文字を含められる。
+ * 本文とDiscordの表示を崩さないよう、見えない文字を`?`にする。
+ * リンクを組み立てる`[]()`は、Discordのマスクリンクにならないよう`\\`でエスケープする。
+ */
 function printablePath(path: string): string {
-  return path.replace(CONTROL_CHARS, "?");
+  return path.replace(INVISIBLE_CHARS, "?").replace(LINK_CHARS, "\\$&");
 }
 
 /**
@@ -321,29 +330,35 @@ export async function reconcileHostActionNotices(
     });
     return 0;
   }
-  if (rows.length > HOST_ACTION_RECONCILE_LIMIT) {
+  // 版を読めない通知(本文が書き換えられたものなど)で枠を埋めないよう、読めた通知から数える。
+  const readable = rows.flatMap((row) => {
+    const sha = extractNoticeSha(row.message);
+    return sha === null ? [] : [{ id: row.id, sha }];
+  });
+  if (readable.length > HOST_ACTION_RECONCILE_LIMIT) {
     deps.log.info("host action notices exceed the check limit", {
-      unresolved: rows.length,
+      unresolved: readable.length,
       limit: HOST_ACTION_RECONCILE_LIMIT,
     });
   }
 
   let resolvedCount = 0;
-  for (const row of rows.slice(0, HOST_ACTION_RECONCILE_LIMIT)) {
-    const noticeSha = extractNoticeSha(row.message);
-    if (noticeSha === null) continue;
+  for (const { id, sha: noticeSha } of readable.slice(
+    0,
+    HOST_ACTION_RECONCILE_LIMIT,
+  )) {
     try {
       if (!(await deps.isApplied(noticeSha))) continue;
-      if (await deps.resolve(row.id)) {
+      if (await deps.resolve(id)) {
         resolvedCount += 1;
         deps.log.info("host action notice resolved", {
-          notice_id: row.id,
+          notice_id: id,
           sha: noticeSha,
         });
       }
     } catch (err) {
       deps.log.warn("host action notice could not be checked", {
-        notice_id: row.id,
+        notice_id: id,
         error: errorMessage(err),
       });
     }

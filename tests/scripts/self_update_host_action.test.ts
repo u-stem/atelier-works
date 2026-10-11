@@ -15,12 +15,12 @@ async function selfUpdateSource(): Promise<string> {
 }
 
 describe("self_update host action wiring", () => {
-  test("resolves notices before deciding whether to deploy", async () => {
+  test("does not resolve notices before the deployment decision", async () => {
     const source = await selfUpdateSource();
 
     expect(
-      source.indexOf("await reconcileHostActionNotices(") <
-        source.indexOf("decideUpdate(currentSha"),
+      source.indexOf("decideUpdate(currentSha") <
+        source.indexOf("await resolveHostActionNotices()"),
     ).toBe(true);
   });
 
@@ -28,9 +28,24 @@ describe("self_update host action wiring", () => {
     const source = await selfUpdateSource();
 
     expect(
-      source.indexOf("await reconcileHostActionNotices(") <
+      source.indexOf("await resolveHostActionNotices()") <
         source.indexOf('return { outcome: "unchanged" }'),
     ).toBe(true);
+  });
+
+  test("resolves notices after raising the notice on a deployed run", async () => {
+    const source = await selfUpdateSource();
+
+    expect(
+      source.indexOf("await recordHostAction(") <
+        source.lastIndexOf("await resolveHostActionNotices()"),
+    ).toBe(true);
+  });
+
+  test("resolves notices once on each path", async () => {
+    const source = await selfUpdateSource();
+
+    expect(source.match(/await resolveHostActionNotices\(\)/g)?.length).toBe(2);
   });
 
   test("records the deployment before raising the notice", async () => {

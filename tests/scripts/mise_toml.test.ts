@@ -87,6 +87,10 @@ describe("mise.toml stack tasks", () => {
   const RESTART_CADDY =
     "docker compose -f infra/docker-compose.yml restart caddy";
   const RECORD = "scripts/record-host-applied.sh";
+  // `restart`はコンテナを起動できれば0を返す。Caddyfileの誤りで直後に落ちても印が書かれないよう、
+  // 再起動の後に、動いているCaddyが設定を読めることを確かめて、失敗したら止める。
+  const VALIDATE_CADDY =
+    "docker compose -f infra/docker-compose.yml exec -T caddy caddy validate --config /etc/caddy/Caddyfile";
 
   for (const task of ["up", "deploy"]) {
     test(`${task} restarts caddy after compose up`, () => {
@@ -94,6 +98,23 @@ describe("mise.toml stack tasks", () => {
       expect(lines.indexOf(RESTART_CADDY)).toBeGreaterThan(
         lines.findIndex(isComposeUp),
       );
+    });
+
+    test(`${task} validates the running caddy after restarting it`, () => {
+      const lines = taskRuns().get(task) ?? [];
+      expect(lines.indexOf(VALIDATE_CADDY)).toBeGreaterThan(
+        lines.indexOf(RESTART_CADDY),
+      );
+    });
+
+    test(`${task} validates caddy before recording the applied version`, () => {
+      const lines = taskRuns().get(task) ?? [];
+      const validate = lines.indexOf(VALIDATE_CADDY);
+      expect(validate > -1 && validate < lines.indexOf(RECORD)).toBe(true);
+    });
+
+    test(`${task} stops on a failed command`, () => {
+      expect(taskRuns().get(task)?.[0]).toBe(ERREXIT);
     });
 
     test(`${task} restarts caddy before recording the applied version`, () => {
