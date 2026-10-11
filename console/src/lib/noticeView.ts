@@ -30,16 +30,29 @@ const TARGET_PATTERN =
   /(?<![A-Za-z0-9._/-])([A-Za-z0-9][A-Za-z0-9_-]{0,38})\/([A-Za-z0-9._-]{1,100})#([1-9][0-9]{0,8})(?![0-9])/g;
 
 /**
+ * summaryが本文を切る文字数(コードポイント)。`console_query`の`SUMMARY_TEXT_LIMIT`に合わせる。
+ * 本文がちょうどこの長さのときは、後ろが切れている可能性がある。
+ */
+export const SUMMARY_MESSAGE_LIMIT = 500;
+
+/**
  * 本文が挙げる対象を、現れた順に重複なしで`MAX_NOTICE_TARGETS`件まで返す。
  * 対象がIssueかPRかは本文から分からない。GitHubは`/issues/<番号>`をPRなら`/pull/<番号>`に転送するので、
  * 常にIssueの形のURLを作る。
+ * `truncated`が真のとき、本文の末尾に接する対象は拾わない。番号の途中で切れていると、別のIssueを指すためである。
  */
-export function noticeTargets(message: string): NoticeTarget[] {
+export function noticeTargets(
+  message: string,
+  truncated = false,
+): NoticeTarget[] {
   const targets: NoticeTarget[] = [];
   const seen = new Set<string>();
   for (const match of message.matchAll(TARGET_PATTERN)) {
     const [label, owner, repo, number] = match;
     if (label === undefined || seen.has(label)) {
+      continue;
+    }
+    if (truncated && match.index + label.length === message.length) {
       continue;
     }
     seen.add(label);
@@ -69,6 +82,8 @@ export type NoticeDescription = {
   readonly message: string;
   /** 本文の文字を置き換えたか。 */
   readonly messageReplaced: boolean;
+  /** 本文の後ろが切れている可能性があるか。summary由来で、長さが上限ちょうどのときだけ真。 */
+  readonly messageTruncated: boolean;
   readonly targets: readonly NoticeTarget[];
   readonly guide: NoticeGuide;
 };
@@ -76,9 +91,17 @@ export type NoticeDescription = {
 const UNRESOLVABLE_REASON =
   "設定や権限の問題を示す通知です。内容を確かめないまま消せないよう、Consoleからは解決できません。";
 
-/** 通知の1行を、詳細に出す内容にする。 */
-export function describeNotice(notice: SummaryNotice): NoticeDescription {
+/**
+ * 通知の1行を、詳細に出す内容にする。
+ * `source`は本文の出どころで、summaryは上限で切るが、notices viewは全文を返す。
+ */
+export function describeNotice(
+  notice: SummaryNotice,
+  source: "summary" | "full" = "summary",
+): NoticeDescription {
   const message = displayableIssueText(notice.message);
+  const truncated =
+    source === "summary" && [...notice.message].length >= SUMMARY_MESSAGE_LIMIT;
   return {
     title: noticeKindLabel(notice.kind),
     severity: notice.severity === "info" ? "info" : "action",
@@ -89,7 +112,8 @@ export function describeNotice(notice: SummaryNotice): NoticeDescription {
       notice.resolved || notice.resolvable ? null : UNRESOLVABLE_REASON,
     message: message.text,
     messageReplaced: message.replaced,
-    targets: noticeTargets(message.text),
+    messageTruncated: truncated,
+    targets: noticeTargets(message.text, truncated),
     guide: noticeGuide(notice.kind),
   };
 }

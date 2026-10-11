@@ -5,6 +5,7 @@ import {
   MAX_NOTICE_TARGETS,
   noticeSeverityLabel,
   noticeTargets,
+  SUMMARY_MESSAGE_LIMIT,
 } from "./noticeView.ts";
 
 function notice(overrides: Partial<SummaryNotice> = {}): SummaryNotice {
@@ -145,5 +146,72 @@ describe("describeNotice", () => {
     expect(
       describeNotice(notice({ message: "o/r#5 (work item 2): x" })).targets,
     ).toEqual([{ label: "o/r#5", url: "https://github.com/o/r/issues/5" }]);
+  });
+});
+
+describe("noticeTargets for a cut body", () => {
+  test("drops a target that touches the cut", () => {
+    expect(
+      noticeTargets("a/b#1 and o/r#12", true).map((target) => target.label),
+    ).toEqual(["a/b#1"]);
+  });
+
+  test("keeps a target that ends before the cut", () => {
+    expect(
+      noticeTargets("o/r#12 and more", true).map((target) => target.label),
+    ).toEqual(["o/r#12"]);
+  });
+
+  test("keeps a target at the end of a body that is not cut", () => {
+    expect(
+      noticeTargets("a/b#1 and o/r#12").map((target) => target.label),
+    ).toEqual(["a/b#1", "o/r#12"]);
+  });
+});
+
+describe("describeNotice for a cut body", () => {
+  const limit = SUMMARY_MESSAGE_LIMIT;
+  // 末尾が`o/r#12`で、全体がちょうど上限の文字数になる本文。
+  const endsWithTarget = `${"x ".repeat((limit - 6) / 2)}o/r#12`;
+
+  test("says the body is cut when it has exactly the limit of characters", () => {
+    expect(
+      describeNotice(notice({ message: "x".repeat(limit) })).messageTruncated,
+    ).toBe(true);
+  });
+
+  test("says nothing when the body is shorter than the limit", () => {
+    expect(
+      describeNotice(notice({ message: "x".repeat(limit - 1) }))
+        .messageTruncated,
+    ).toBe(false);
+  });
+
+  test("counts characters outside the basic plane once", () => {
+    expect(
+      describeNotice(notice({ message: "\u{1F600}".repeat(limit) }))
+        .messageTruncated,
+    ).toBe(true);
+  });
+
+  test("says nothing about a body read in full", () => {
+    expect(
+      describeNotice(notice({ message: "x".repeat(limit) }), "full")
+        .messageTruncated,
+    ).toBe(false);
+  });
+
+  test("does not link a target at the cut", () => {
+    expect(describeNotice(notice({ message: endsWithTarget })).targets).toEqual(
+      [],
+    );
+  });
+
+  test("links the same target when the body is read in full", () => {
+    expect(
+      describeNotice(notice({ message: endsWithTarget }), "full").targets.map(
+        (target) => target.label,
+      ),
+    ).toEqual(["o/r#12"]);
   });
 });

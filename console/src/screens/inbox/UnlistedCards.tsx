@@ -12,7 +12,7 @@ const LINK_CLASS =
  * 通知は一覧に出しているので、残りは取得の上限を超えた分である。行き先が無いので、リンクにしない。
  * 一覧が無い種類だけ、旧Consoleの一覧へのリンクにする。
  */
-function LegacyLink({
+function UnlistedTarget({
   type,
   className,
 }: {
@@ -73,7 +73,7 @@ export function UnlistedCards({
                 件
               </span>
             </span>
-            <LegacyLink type={entry.type} />
+            <UnlistedTarget type={entry.type} />
           </li>
         ) : (
           <li
@@ -90,7 +90,7 @@ export function UnlistedCards({
                 件
               </span>
             </p>
-            <LegacyLink type={entry.type} className="mt-1 text-small" />
+            <UnlistedTarget type={entry.type} className="mt-1 text-small" />
           </li>
         ),
       )}

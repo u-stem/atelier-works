@@ -75,11 +75,14 @@ const RESOLVE_CONFIG = {
 export function NoticeDetail({
   notice,
   now,
+  source = "summary",
 }: {
   notice: SummaryNotice;
   now: number;
+  /** 通知の出どころ。summaryの本文は上限で切れているので、切れた旨を添える。 */
+  source?: "summary" | "full";
 }) {
-  const description = describeNotice(notice);
+  const description = describeNotice(notice, source);
   const { submit, isLocked } = useWriteMutation(RESOLVE_CONFIG);
   const locked = isLocked(notice.notice_id);
   const { guide } = description;
@@ -114,6 +117,11 @@ export function NoticeDetail({
           >
             {description.message}
           </p>
+          {description.messageTruncated ? (
+            <p className="mt-2 text-small text-muted-foreground">
+              本文が長いため、途中までを表示しています。
+            </p>
+          ) : null}
         </Row>
         {description.targets.length === 0 ? null : (
           <Row label="対象">

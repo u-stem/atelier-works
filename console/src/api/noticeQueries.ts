@@ -9,11 +9,21 @@ import { type RunScriptOptions, runScript } from "./windmill.ts";
 
 export const noticesQueryKey = ["console", "notices"] as const;
 
+/**
+ * 取る件数の上限。backendが受ける最大に合わせる。
+ * summaryの上限(200件)を超えた通知も、`?notice=<id>`で開けるようにするためである。
+ */
+export const NOTICES_LIMIT = 2000;
+
 /** 未解決の通知を新しい順に取り、型ガードを通してから返す。失敗は`ApiFailure`で投げる。 */
 export async function fetchNotices(
   options: RunScriptOptions = {},
 ): Promise<NoticeRow[]> {
-  const result = await runScript("console_query", { view: "notices" }, options);
+  const result = await runScript(
+    "console_query",
+    { view: "notices", limit: NOTICES_LIMIT },
+    options,
+  );
   if (!result.ok) {
     throw new ApiFailure(result.error);
   }
@@ -24,7 +34,7 @@ export async function fetchNotices(
 }
 
 /**
- * 未解決の通知を取る。使う画面を開くたびに取り直す。
+ * 未解決の通知を取る。使う画面を開くたびに取り直し、タブへ戻っただけでは取り直さない。
  * 解決された通知を、古い値のまま詳細に出さないためである。
  */
 export function useNotices(): UseQueryResult<NoticeRow[], Error> {
@@ -32,5 +42,6 @@ export function useNotices(): UseQueryResult<NoticeRow[], Error> {
     queryKey: noticesQueryKey,
     queryFn: ({ signal }) => fetchNotices({ signal }),
     refetchOnMount: "always",
+    refetchOnWindowFocus: false,
   });
 }

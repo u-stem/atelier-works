@@ -33,14 +33,14 @@ describe("fetchNotices", () => {
     ).toEqual([NOTICE]);
   });
 
-  test("asks for the notices view", async () => {
+  test("asks for the notices view with the backend maximum", async () => {
     const bodies: string[] = [];
     const fetchFn: FetchLike = (_input, init) => {
       bodies.push(String(init.body));
       return Promise.resolve(new Response("[]"));
     };
     await fetchNotices({ fetchFn });
-    expect(bodies).toEqual(['{"view":"notices"}']);
+    expect(bodies).toEqual(['{"view":"notices","limit":2000}']);
   });
 
   test("throws invalid_response for an object instead of a list", async () => {

@@ -32,6 +32,22 @@ describe("noticeGuide", () => {
     expect(noticeGuide("host_action_required").note).toContain("人が解決");
   });
 
+  test("tells how to rerun a work item stopped for a person", () => {
+    expect(noticeGuide("implement_needs_human").action).toContain(
+      "f/factory/retry_work_item",
+    );
+  });
+
+  test("tells when a lost claim needs no action", () => {
+    expect(noticeGuide("claim_race_lost").note).toContain(
+      "同じ本文の未解決の通知がある",
+    );
+  });
+
+  test("tells that a denied fork notice comes back until the trigger is removed", () => {
+    expect(noticeGuide("fork_head_denied").note).toContain("出直します");
+  });
+
   test("asks the operator to check the body for an unknown kind", () => {
     expect(GENERIC_NOTICE_GUIDE.action).toContain("本文");
   });

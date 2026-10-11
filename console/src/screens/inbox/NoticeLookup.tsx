@@ -68,6 +68,6 @@ export function NoticeLookup({
   return notice === undefined ? (
     <Message>{missing}</Message>
   ) : (
-    <NoticeDetail notice={notice} now={now} />
+    <NoticeDetail notice={notice} now={now} source="full" />
   );
 }
