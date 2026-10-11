@@ -3,15 +3,13 @@
 // リース判定の純関数もここに置く。
 // フロー自身のルートジョブIDを返す`rootFlowJobId`は、pipelineのステップもリースの値として使う。
 
+import { isJobId } from "./job_ids.ts";
 import { maskSecrets } from "./log.ts";
 import type { WorkItem } from "./types.ts";
 
-const JOB_ID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /** `value`がWindmillのジョブID(UUID。大文字と小文字は区別しない)の形ならtrueを返す。 */
 export function isFlowJobId(value: string): boolean {
-  return JOB_ID_PATTERN.test(value);
+  return isJobId(value);
 }
 
 /**
