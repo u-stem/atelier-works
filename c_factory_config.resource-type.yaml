@@ -1,5 +1,5 @@
 description: >-
-  Software Factoryの動作を決める設定です。対象リポジトリの所有者、各種ラベル名、Claude Codeの実行上限・予算、インスタンスを識別する情報などを持ちます。
+  Software Factoryの動作を決める設定です。対象リポジトリの所有者、各種ラベル名、Claude Codeの工程ごとのモデルと実行上限・予算、インスタンスを識別する情報などを持ちます。
 format_extension: null
 is_fileset: false
 schema:
@@ -9,7 +9,9 @@ schema:
     - owners
     - trigger_label
     - allowed_labeler_associations
+    - allowed_labeler_logins
     - model
+    - heavy_model
     - max_attempts
     - max_turns
     - max_budget_usd_per_run
@@ -55,7 +57,7 @@ schema:
     allowed_labeler_associations:
       type: array
       description: >-
-        `trigger_label`のラベルを付けてIssueを処理対象にすることを許可する、GitHub上の関係(所有者・メンバー・コラボレーターなど)です。ここに含まれない人がラベルを付けても、処理は始まりません。
+        PRのレビューと修正で、コメントやレビューの投稿者として扱うGitHub上の関係(所有者・メンバー・コラボレーターなど)です。ここに含まれない人の発言は、修正の指摘に使いません。トリガーラベルを付けた人の確認には使わず、`allowed_labeler_logins`で行います。
       default:
         - OWNER
         - MEMBER
@@ -66,6 +68,13 @@ schema:
           - OWNER
           - MEMBER
           - COLLABORATOR
+    allowed_labeler_logins:
+      type: array
+      description: >-
+        トリガーラベル(`trigger_label`、`review_label`、`fix_label`)を付けてよい、Factoryを動かすアカウント以外のGitHubのログイン名です。空の場合は、Factoryのアカウントが付けたラベルにだけ反応します。大文字小文字は区別しません。他人の入力に応じてラベルを付ける自動化のアカウントや、FactoryのPATを使う自動化は、許可しないでください。`[bot]`で終わるログイン名は設定の検証で拒否します。許可はログイン名で判定するため、アカウント名を変更したアカウントは、古い名前を他人が取れることがあるので外してください。
+      default: []
+      items:
+        type: string
     check_commands_by_repo:
       type: object
       description: >-
@@ -110,6 +119,11 @@ schema:
       type: string
       description: このラベルが付いたPRは修正処理の対象になります。
       default: factory:fix
+    heavy_model:
+      type: string
+      description: >-
+        要件定義の生成、PRのレビュー、監査と、実装やPR修正で`model`が2回失敗した後に使うClaude Codeのモデル名です。判断が重い作業に使います。
+      default: claude-opus-5-5
     implement_check_timeout_sec:
       type: integer
       description: >-
@@ -191,8 +205,9 @@ schema:
       default: 40
     model:
       type: string
-      description: 各処理でClaude Codeが使用するモデル名。
-      default: claude-opus-5-5
+      description: >-
+        実装とPR修正など、安く直せる作業で使うClaude Codeのモデル名です。同じ作業で2回失敗すると`heavy_model`に切り替わります。
+      default: claude-sonnet-5-5
     owners:
       type: array
       description: >-

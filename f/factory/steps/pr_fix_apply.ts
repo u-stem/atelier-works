@@ -10,9 +10,10 @@ import {
   runClaude,
 } from "../lib/claude.ts";
 import { loadConfig } from "../lib/config.ts";
-import { latestDraft, recordAgentRun } from "../lib/db.ts";
+import { countPrFixFailures, latestDraft, recordAgentRun } from "../lib/db.ts";
 import { type GhClient, getPr } from "../lib/github.ts";
 import { logger } from "../lib/log.ts";
+import { modelFor } from "../lib/model_policy.ts";
 import {
   lockJobIdFromEnv,
   withWorktreeProcessLock,
@@ -147,6 +148,7 @@ export async function main(
   });
 
   try {
+    const sonnetFailures = await countPrFixFailures(work_item_id);
     const result = await runClaude({
       run: withWorktreeProcessLock(runCommand, worktreeLockFor(worktree_dir), {
         kind: "pr_fix",
@@ -156,7 +158,7 @@ export async function main(
       workItemId: work_item_id,
       stage: "pr_fix",
       attempt,
-      model: config.model,
+      model: modelFor(config, "pr_fix", sonnetFailures),
       prompt: promptText,
       appendSystemPromptFile: systemPrompt.path,
       jsonSchema: FIX_SCHEMA,

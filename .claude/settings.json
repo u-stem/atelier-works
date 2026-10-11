@@ -1,4 +1,5 @@
 {
+  "model": "opusplan",
   "permissions": {
     "allow": [
       "Bash(docker compose -f infra/docker-compose.yml ps:*)",

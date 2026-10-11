@@ -132,6 +132,10 @@ describe("matchesForbiddenPath", () => {
     );
   });
 
+  test("matches scripts/ci-scope.ts", () => {
+    expect(matchesForbiddenPath("scripts/ci-scope.ts")).toBe(true);
+  });
+
   test("matches console/scripts/asset-name.ts", () => {
     expect(matchesForbiddenPath("console/scripts/asset-name.ts")).toBe(true);
   });
@@ -240,6 +244,10 @@ describe("matchesImplementProtectedPath", () => {
     expect(
       matchesImplementProtectedPath("scripts/check-console-lockfile.ts"),
     ).toBe(true);
+  });
+
+  test("matches scripts/ci-scope.ts", () => {
+    expect(matchesImplementProtectedPath("scripts/ci-scope.ts")).toBe(true);
   });
 
   test("matches files under console/public/", () => {

@@ -29,7 +29,7 @@ Claudeの長いジョブがdefaultワーカーグループの枠を埋めても�
 このworkerはワーカーグループ`console`に属し、tag`console`のジョブだけを受ける。
 どのscriptをこのworkerで動かすかは、scriptの`tag`で決める。
 上流のWindmillイメージで動き、`NUM_WORKERS=2`により2つのワーカープロセスが動く。1件のジョブが止まっても、全体は止まらない。メモリの上限は1024Mである。
-`factory_state`と`factory_console`は読み取り専用でマウントし、`factory_workspaces`はマウントしない。
+`factory_state`は要件定義書のサブパス`requirements`だけを、`factory_console`は全体を読み取り専用でマウントし、`factory_workspaces`はマウントしない。
 
 ## パイプライン
 
@@ -89,7 +89,7 @@ flowchart TD
 | `reviewed` | レビューをCOMMENTとして投稿した | pr_review、pr_fix | 終端 |
 | `fixing` | レビューの指摘やコメントを修正している | pr_fix | |
 | `rereview_requested` | 修正をpushし、再レビューを依頼した | pr_fix | 終端 |
-| `blocked` | 準備の確認で修正の前に止めた、修正の実行中にPRのheadが動いた、要件の不足で親のIssueへ差し戻した | pr_fix | 終端 |
+| `blocked` | 準備の確認でレビューか修正の前に止めた(headがforkのPRなど)、修正の実行中にPRのheadが動いた、要件の不足で親のIssueへ差し戻した | pr_review、pr_fix | 終端 |
 | `needs_human` | 自動処理を打ち切り、人の対応を待つ | すべて | 終端 |
 | `failed` | 実行時エラーで失敗した | すべて | 終端 |
 | `expired` | 承認依頼が7日の期限を過ぎた | issue | 終端 |
@@ -134,6 +134,7 @@ stateDiagram-v2
 stateDiagram-v2
     [*] --> reviewing: poll_prsがpr_reviewを起動
     reviewing --> reviewed: レビューを投稿
+    reviewing --> blocked: headがforkのPRを準備で見送った
     reviewing --> needs_human
     reviewing --> cancelled: PRがclosedかmerged
     [*] --> fixing: poll_prsがpr_fixを起動
@@ -181,7 +182,7 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加だけにし、
 | `requirement_drafts` | 要件定義ドラフト。attemptごとに本文、図の参照、未確定事項、ファイルの置き場所(`doc_dir`)を持つ |
 | `approval_requests` | 承認依頼。要件定義の承認とIssue化の提案の承認の両方を持つ |
 | `approvals` | 承認と却下の古い履歴。今は書き込まない |
-| `agent_runs` | Claudeの実行1回ごとのトークン数、費用、所要時間、終了コード |
+| `agent_runs` | Claudeの実行1回ごとのモデル、トークン数、費用、所要時間、終了コード |
 | `job_failures` | フローの失敗の記録。トークンはマスクしてから書く |
 | `deployments` | 自己更新によるデプロイの結果 |
 | `notices` | 人が対応すべき事項。PATの失効やSHAの不一致など。解決した人と時刻(`resolved_by`、`resolved_at`)も持ち、DBの掃除が解決した行の`resolved_by`は`cleanup_db`になる |
@@ -300,6 +301,8 @@ cronはWindmillの6フィールドの形式で、タイムゾーンは`Asia/Toky
 Issueはassigneeを追加してからトリガーラベルを外し、外す要求に成功したインスタンスが受け持つ。
 PRも同じくトリガーラベルの削除で所有を決め、削除が404なら引く。
 外せた後は取り直して残っていないかを確かめる。
+取り直しが数回とも失敗したときは、トリガーラベルを付け直して引く。
+PRのラベルの経路は、稼働中の作業項目があっても止まらないので、確認できないまま始めると同じPRのサイクルが重なりうるためである。
 この排他はベストエフォートである。
 最後の防御は、`work_items`の部分一意インデックス`work_items_active_issue_key`である。
 終端でないIssueの作業項目は、`owner`、`repo`、Issueの番号の組ごとに、同時に1つしか持てない。
@@ -347,6 +350,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/implement_loop` | script | [LIB] 実装フローの検証ループ |
 | `f/factory/lib/implement_support` | script | [LIB] 実装フローの純粋関数群 |
 | `f/factory/lib/implement_launch_support` | script | [LIB] 実装フローの起動判定 |
+| `f/factory/lib/model_policy` | script | [LIB] 工程ごとのモデルの選択 |
 | `f/factory/lib/supersede_support` | script | [LIB] 承認の取り消しのコメント |
 | `f/factory/lib/approval_support` | script | [LIB] 承認依頼の純粋ロジック |
 | `f/factory/lib/approver` | script | [LIB] 承認者の導出 |

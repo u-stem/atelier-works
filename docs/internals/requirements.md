@@ -24,7 +24,7 @@ pipelineフロー(`f/factory/pipeline`)は次の3つのステップで動く。�
 /var/lib/factory/requirements/<owner>/<repo>/issue-<N>/wi-<work_item_id>/attempt-<attempt>/
 ```
 
-`/var/lib/factory`は、名前付きボリューム`factory_state`である。defaultのworkerが読み書きし、Console用のworkerが読み取り専用でマウントする。このディレクトリはコミットしない。`owner`と`repo`は、GitHubの名前として正しいかを確かめてからパスに埋め込む。
+`/var/lib/factory`は、名前付きボリューム`factory_state`である。defaultのworkerが読み書きし、Console用のworkerはサブパス`requirements`だけを読み取り専用でマウントする。このディレクトリはコミットしない。`owner`と`repo`は、GitHubの名前として正しいかを確かめてからパスに埋め込む。
 
 ディレクトリには、要件定義書の`requirements.md`と、図の`<name>.drawio`だけを置く。DBの`requirement_drafts`には、本文(`markdown`)、図の参照(`{name, file}`)、未確定事項、`doc_dir`を保存する。図のXMLはDBに保存しない。
 
@@ -44,6 +44,7 @@ Consoleのbackendがどのworkerで動くかは、scriptの`tag`で決まる。�
 | 対象リポジトリ | worktreeを`--add-dir`で読み取り専用として渡す。カレントディレクトリにはしない |
 | スキル | `factory-requirements`と`drawio-diagram` |
 | 構造化出力 | `{summary, open_questions}` |
+| モデル | `heavy_model` |
 | 上限 | `max_turns`、`max_budget_usd_per_run`、`claude_timeout_sec` |
 
 Claudeは`requirements.md`を`Edit`で埋め、図があれば`<name>.drawio`を`Write`で横に置く。`Write`と`Edit`を許可しても、`--restricted`によって書き込みはカレントディレクトリの下に閉じる。

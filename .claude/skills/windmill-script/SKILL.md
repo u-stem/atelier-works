@@ -203,7 +203,7 @@ worker内で実測した、外部コマンドとAPIの挙動を示す。型ガ�
 
 - 成功すると、stdoutにTAB区切りの次の3行が出る: `path\t<worktree のディレクトリ>`、`branch\t<ブランチ名>`、`hook_status\tnone`。
 - `origin`リモートの無いリポジトリでは、`fatal: invalid reference: origin/main`を出してexit code 1で終わる。対象のリポジトリに`origin`があることを前提にする。
-- worktreeの一覧は`git worktree list --porcelain`で確かめる。`git gtr`独自のリスト機能には頼らない。
+- worktreeの一覧は`git worktree list --porcelain -z`(NUL区切り、git 2.36以上)で確かめる。`git gtr`独自のリスト機能には頼らない。
 
 ### GitHub CLIのAPI呼び出し
 

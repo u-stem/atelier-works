@@ -252,6 +252,22 @@ notice_row="$(printf "INSERT INTO factory.notices (kind, message) VALUES ('probe
 [ "${notice_row}" = "op" ] || die "expected resolved_by to be 'op', got '${notice_row}'"
 log "notices resolution columns are writable"
 
+# 通知の種類名を改めるmigrationが、未解決の旧い種類だけを書き換え、解決済みの履歴には触れないことを確かめる。
+# 全migrationの適用後は旧い種類の行が無いので、行を入れてからmigrationを適用し直す。
+rename_sql="${MIGRATIONS_DIR}/20261011120000_rename_labeler_notice_kind.up.sql"
+[ -f "${rename_sql}" ] || die "missing migration: ${rename_sql}"
+printf "INSERT INTO factory.notices (kind, message, resolved) VALUES ('labeler_association_denied', 'o/r#1: open', false), ('labeler_association_denied', 'o/r#2: done', true);\n" \
+  | psql_exec "${SCRATCH_DB}" -q >/dev/null || die "could not insert the legacy notices"
+psql_exec "${SCRATCH_DB}" -q <"${rename_sql}" >/dev/null || die "could not re-apply the rename migration"
+rename_rows="$(printf "SELECT message || '=' || kind FROM factory.notices WHERE message IN ('o/r#1: open', 'o/r#2: done') ORDER BY message;\n" \
+  | psql_exec "${SCRATCH_DB}" -q -t -A | paste -sd ',' -)" \
+  || die "could not read the renamed notices"
+[ "${rename_rows}" = "o/r#1: open=labeler_denied,o/r#2: done=labeler_association_denied" ] \
+  || die "unexpected notice kinds after the rename migration: '${rename_rows}'"
+printf "DELETE FROM factory.notices WHERE message IN ('o/r#1: open', 'o/r#2: done');\n" \
+  | psql_exec "${SCRATCH_DB}" -q >/dev/null
+log "notice kind rename rewrites only unresolved rows"
+
 # アプリのコードが組み立てるSQL文(`resolveNoticeIfUnresolved`、summaryの失敗のクエリ、
 # system_status、work_item_detail、通知の掃除)を、最小の行を入れた
 # 使い捨てデータベースで本物のPostgreSQLに流して確かめる。手書きの別の文は流さない。

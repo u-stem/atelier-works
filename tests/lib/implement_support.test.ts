@@ -27,6 +27,7 @@ import {
   neutralizeIssueRefs,
   parseImplementBranchWorkItemId,
   requireDeadlineAt,
+  roundIsStalled,
   roundOutcomeForExit,
   stallHash,
   truncateCheckOutput,
@@ -875,11 +876,40 @@ const CONTINUE_STATE = {
   maxRounds: 5,
   dailyBudgetExceeded: false,
   deadlineReached: false,
+  modelChangesNext: false,
   checkOutputHash: "h1",
   previousCheckOutputHash: null,
   diffHash: "d1",
   previousDiffHash: null,
 };
+
+describe("roundIsStalled", () => {
+  test("is false for the first round", () => {
+    expect(roundIsStalled(CONTINUE_STATE)).toBe(false);
+  });
+
+  test("is true when the diff matches the previous round", () => {
+    expect(roundIsStalled({ ...CONTINUE_STATE, previousDiffHash: "d1" })).toBe(
+      true,
+    );
+  });
+
+  test("is true when the check output matches the previous round", () => {
+    expect(
+      roundIsStalled({ ...CONTINUE_STATE, previousCheckOutputHash: "h1" }),
+    ).toBe(true);
+  });
+
+  test("is false when both the diff and the check output changed", () => {
+    expect(
+      roundIsStalled({
+        ...CONTINUE_STATE,
+        previousDiffHash: "d0",
+        previousCheckOutputHash: "h0",
+      }),
+    ).toBe(false);
+  });
+});
 
 describe("decideImplementRoundExit", () => {
   test("continues when checks failed and no guard fired", () => {
@@ -936,6 +966,57 @@ describe("decideImplementRoundExit", () => {
         previousCheckOutputHash: "h1",
       }),
     ).toBe("stalled");
+  });
+
+  test("continues past a repeated diff when the next failure changes the model", () => {
+    expect(
+      decideImplementRoundExit({
+        ...CONTINUE_STATE,
+        previousDiffHash: "d1",
+        modelChangesNext: true,
+      }),
+    ).toBe("continue");
+  });
+
+  test("continues past a repeated check output when the next failure changes the model", () => {
+    expect(
+      decideImplementRoundExit({
+        ...CONTINUE_STATE,
+        previousCheckOutputHash: "h1",
+        modelChangesNext: true,
+      }),
+    ).toBe("continue");
+  });
+
+  test("still exits with max_rounds when the next failure changes the model", () => {
+    expect(
+      decideImplementRoundExit({
+        ...CONTINUE_STATE,
+        round: 5,
+        previousDiffHash: "d1",
+        modelChangesNext: true,
+      }),
+    ).toBe("max_rounds");
+  });
+
+  test("still exits with daily_budget when the next failure changes the model", () => {
+    expect(
+      decideImplementRoundExit({
+        ...CONTINUE_STATE,
+        dailyBudgetExceeded: true,
+        modelChangesNext: true,
+      }),
+    ).toBe("daily_budget");
+  });
+
+  test("still exits with deadline when the next failure changes the model", () => {
+    expect(
+      decideImplementRoundExit({
+        ...CONTINUE_STATE,
+        deadlineReached: true,
+        modelChangesNext: true,
+      }),
+    ).toBe("deadline");
   });
 
   test("does not treat a null check output hash as a repeat", () => {

@@ -97,10 +97,39 @@ Factory自身のリポジトリ(`factory_repo`)は、`repo_allowlist`の内容�
 
 ### ラベルで投入する
 
-Issueに`factory`ラベルを付けると、Factoryがそれを拾う。拾うのは、最後にラベルを付けた人が許可された関係(既定ではOWNER、MEMBER、COLLABORATORのいずれか)のときだけである。
+Issueに`factory`ラベルを付けると、Factoryがそれを拾う。
+拾うのは、そのラベルを最後に付けたのが、次のアカウントのときだけである。
 
-許可されていない人がラベルを付けたIssueは拾わない。Consoleの**通知**タブに、ラベル付与者の関係が許可されていない旨(`labeler_association_denied`)が残る。
+- FactoryのPATのアカウント。
+- `factory_config`の`allowed_labeler_logins`に挙げたアカウント。
+
+通常は、Factoryを動かすアカウントでラベルを付ける。
+確認の仕組みは[ラベル付与の制限](security.md#ラベル付与の制限)にある。
+
+許可されていない人がラベルを付けたIssueは拾わない。
+Consoleの**通知**タブに、ラベルを付けたのが許可されていないユーザーである旨(`labeler_denied`)が残る。
+付与者を確かめられなかったときも、同じく拾わない。
+許可された人がラベルを付け直し、FactoryがそのIssueを取得すると、このnoticeは解決済みになる。
+フォームで投入したIssueは`manual_intake_register`が登録するので、このnoticeは自動では解決されない。
+Consoleからも解決できない種類なので、DBの掃除が保持期間を過ぎてから解決済みにする。
 このnoticeの記録に失敗してもジョブは止まらず、**失敗**タブに`labeler_denied:<owner>/<repo>#<Issue番号>`として残る。
+
+付与者を確かめるイベントを取得できなかったときは、noticeを残さず、**失敗**タブに`fetch_labeler:<owner>/<repo>#<Issue番号>`として残る。
+取得の直前の確認で取得できなかったときは、**失敗**タブに`confirm_labeler:<owner>/<repo>#<Issue番号>`として残る。
+どちらもラベルは外れていないので、操作は要らない。
+次のポーリングが、自動で拾い直す。
+ラベルを付け直すと付与者が変わるので、付け直さない。
+
+付与者を判定できないIssueは、**通知**タブに`labeler_check_limit`が残る。
+判定できないのは、直近100件のラベルのイベントにトリガーラベルのイベントが無く、それより古いイベントが残っているときである。
+このIssueは、人が対応するまで、ポーリングのたびに同じ取得を繰り返す。
+拾わせたいときは、ラベルを外してから、許可された人が付け直す。
+付け直したラベルのイベントが直近に入り、判定できるようになる。
+対応した後は、Consoleでこのnoticeを解決する。
+
+GitHubのIssueフォーム(`.github/ISSUE_TEMPLATE/factory-task.yml`)は、ラベルを付けない。
+フォームが付けるラベルは起票者の権限によらず付くため、第三者の起票で作業が始まってしまうからである。
+フォームで起票した後は、許可された人が手でラベルを付けて、作業を始める。
 
 ### フォームで投入する
 
@@ -125,7 +154,7 @@ Windmillで手動投入のフロー(`f/factory/manual_intake`)を開き、フォ
 作業項目が無いので、**再実行**は使えない。
 `poll_issues`のジョブ自体は失敗しない。
 Factoryが自分でラベルを付け直さないのは、次の2つの害があるためである。
-ラベルの付与者の記録がFactoryに置き換わり、ラベルを付けられる人の制限(`allowed_labeler_associations`)の検査が、人ではなくFactoryに対して行われる。
+ラベルの付与者の記録がFactoryに置き換わり、付与者の確認が、人ではなくFactoryに対して行われる。
 DBの障害が続く間は、取得と失敗が`poll_issues`のたびに繰り返される。
 
 DBが挿入を確定したのに応答が失われたときは、作業項目が既にある。
@@ -165,13 +194,41 @@ Issueにはラベルが無いので、次のポーリングは拾わない。
 4. 始まっていなければ、Issueに`factory`ラベルを付け直す。
 
 原因は、Consoleの**失敗**タブの`claim_issue:<owner>/<repo>#<Issue番号>`か、`poll_issues`のジョブのログで確かめる。
-関係の検査で見送ったIssueのnoticeを記録できなかった失敗は、同じタブに`labeler_denied:<owner>/<repo>#<Issue番号>`で残る。
+`confirm_labeler:`と`fetch_labeler:`の失敗は、ラベルを外す前に起きているので、この手順の対象ではない。
+付与者の確認で見送ったIssueのnoticeを記録できなかった失敗は、同じタブに`labeler_denied:<owner>/<repo>#<Issue番号>`で残る。
 
 次の場合は、人の操作は要らない。
 
 - 外す要求が失敗し、読み直してもラベルが残っていた。次のポーリングが拾い直す。
 - ほかのインスタンスか人が先にラベルを外していた。そのIssueはFactoryが処理せず、**通知**タブに`claim_race_lost`が残る。
 - ラベルを外せた後に、Issueを読み直せなかった。作業はそのまま進む。
+
+### PRのトリガーラベルが外れたままになったとき
+
+FactoryはPRを取得するとき、トリガーラベル(`factory:review`か`factory:fix`)を外し、外せたか読み直して確かめる。
+読み直しが数回とも失敗したときは、ラベルを付け直して引く。次のポーリングが拾い直すので、人の操作は要らない。
+**通知**タブには、`claim_race_lost`として「確認できなかったのでラベルを戻した」旨が残る。同じPRで作業を始めると、このnoticeは自動で解決済みになる。
+
+次の場合は、ラベルが外れたままで、作業項目も無い。Factoryはそのまま拾い直さない。
+
+- 読み直しがレート制限で失敗した。この場合は、同じ制限に当たるので、ラベルも付け直さない。
+- ラベルの付け直しも失敗した。
+
+この場合は、Discordに「人による対応が必要です: PR #<番号>」の通知が届く。
+1回のポーリングで複数のPRが該当したときは、通知は1件にまとまる。
+本文に、該当したPRがリンクと外れたラベルの組で並ぶ。並ぶのは10件までで、残りは件数で示す。
+
+1. 通知のリンクからPRを開く。
+2. PRにラベルが既に付いていないか確かめる。
+3. Consoleで、同じPRの`pr_review`か`pr_fix`が始まっていないか確かめる。
+4. どちらも該当しなければ、レート制限の解除を待ってから、外れたラベル(通知の括弧内)をPRに付け直す。
+
+Consoleの**失敗**タブには、`trigger_review:<owner>/<repo>#<PR番号>`か`trigger_fix:<owner>/<repo>#<PR番号>`の行が残る。
+作業項目が無いので、**再実行**は使えない。`poll_prs`のジョブ自体は失敗しない。
+**通知**タブには、PRごとに`pr_trigger_label_left_removed`が残る。Discordの通知を見逃しても、こちらから該当のPRを確かめられる。
+そのPRとラベルで次に作業を始めると、このnoticeは自動で解決済みになる。取得が不要なら、人がConsoleで解決する。
+未解決のあいだに同じPRとラベルで再発しても、行は増えず、最初の日時のまま残る。Discordには毎回届く。
+リポジトリの改名や移管でPRの表記が変わると、自動では解決されないので、人がConsoleで解決する。
 
 ### assigneeが付かなかったとき
 
@@ -333,6 +390,10 @@ rate limitが原因で人の対応待ちになったときは、通知の次の�
 この作業項目に`job_failures`の行が無ければ**失敗**タブに出ないので、解除を待ってからWindmillで`retry_work_item`を実行する。
 待つ時間の上限などの仕組みは[通知とrate limit](internals/notifications.md)を参照する。
 
+PRのトリガーラベルを外した直後のrate limitで、ラベルが外れたままになることがある。
+作業項目が無く、**失敗**タブの`trigger_review:`と`trigger_fix:`の行からは再実行できない。
+Discordの通知に従い、解除を待ってからラベルを付け直す([PRのトリガーラベルが外れたままになったとき](#prのトリガーラベルが外れたままになったとき))。
+
 ### 既定のブランチが食い違って実装フローが失敗するとき
 
 実装フローの準備が、次のエラーで失敗することがある。
@@ -382,7 +443,7 @@ PRには`factory:review`ラベルが付くので、自動レビューが起動�
 > [!WARNING]
 > 検査コマンドは、Claudeが書いたコードをworker内でrootとして、サンドボックスなしで実行する。workerのサンドボックスができるまでは、Issueを信頼できる人だけが起票するリポジトリにだけ`check_commands_by_repo`を設定する。
 
-実装ブランチをpushすると、人のレビューの前に対象リポジトリ自身のCIも動く。そのCIが使えるsecretsの範囲を確かめておく。
+実装ブランチのpushとPRの作成で、人のレビューの前に対象リポジトリ自身のCIも動く。atelier-worksのCIはPRの作成から動く。そのCIが使えるsecretsの範囲を確かめておく。
 
 検査コマンドを実行するたびに、**通知**タブに未サンドボックスの検査コマンドの実行(`unsandboxed_check_commands`)が記録される。秘密情報の検査(gitleaks)は、設定に関わらず毎ラウンド実行する。
 
@@ -412,6 +473,9 @@ Discordの通知の「次の操作」に従う。主な場合は次のとおり�
 | 検証のラウンドで、変更の判定と秘密情報の検査の間にworktreeが変わった | そのラウンドで止め、pushしない | 同上 |
 
 完了時に新しい変更が無くても、ブランチに分岐点より先のコミット(途中経過のコミットなど)があれば、FactoryはそれでPRを作るか更新する。ブランチに分岐点より先のものが何も無いときだけ、変更を生まなかったとして止まる。
+
+atelier-worksのCIはPRの作成から動くので、PRを作らずに止まったブランチはCIの結果が無い。
+PRを作るか、手元で`mise run check`を実行して確かめる。
 
 原因を取り除いたら、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行し、実装フローを再実行する。
 人の対応待ちの作業項目は、`job_failures`の行が無ければ**失敗**タブに出ない。
@@ -455,9 +519,38 @@ PRのレビュー(`pr_review`)と修正(`pr_fix`)の内部の挙動は、[PRワ�
 次のどれかでレビューが起動する。
 
 - PRに`factory:review`ラベルを付ける。
-- PRのレビュー依頼かassigneeにこのインスタンスのGitHubアカウントを入れる。まだレビューしていないcommitがあるときだけ起動する。
+- PRのレビュー依頼かassigneeにこのインスタンスのGitHubアカウントを入れる。
 
-Factoryは、コメントやレビューの投稿者の関係(`author_association`)が`allowed_labeler_associations`に含まれることを確かめてから起動する。
+レビュー依頼かassigneeによる起動は、まだレビューしていないcommitがあり、PRの作成者が許可されたアカウントのときだけ起こる。
+
+`factory:review`ラベルは、最後に付けたのが許可されたアカウントのときだけ起動する。
+許可されるアカウントはIssueの`factory`ラベルと同じである。
+許可されていない人が付けたラベルは、外さずに残し、**通知**タブに`labeler_denied`を残す。
+そのPRは、人がラベルを外すまで、ラベルを介さないレビューの自動検出も止まる。
+追跡中のPRの新しいcommitによる再レビューも、PRの作成者が許可されたアカウントのときに限る。
+同じリポジトリのブランチから出した第三者のPRは、許可されたアカウントがラベルを付けたときだけレビューされる。
+新しいcommitが入るたびに、ラベルを付け直す。
+
+PRのheadのリポジトリが、このリポジトリと同一でないときは、レビューを始めない。
+同じ組織の別のリポジトリのfork、許可されたアカウントのfork、headのリポジトリを取得できないPRも対象である。
+ラベルを付けても、レビュー依頼やassigneeを入れても同じである。
+forkの内容は第三者が書いたもので、信頼してレビューに渡せないためである。
+判定できないときも見送る。
+ラベルは外さずに残し、**通知**タブに`fork_head_denied`を残す。
+作業項目をすでに作っていたときは、終端の`blocked`にして、Discordで人に知らせる。
+
+レビューさせたいときは、同じリポジトリにブランチを作ってPRを出し直す。
+通知を止めるには、次のどれかを行う。
+
+- `factory:review`ラベルを外す。
+- FactoryのGitHubアカウントを、assigneeとレビュー依頼から外す。
+- PRを閉じる。
+
+ラベルとassigneeが残る間は、通知を解決しても次のポーリングで同じ通知が出直す。
+PRを閉じるかマージすると、新しい通知は出ない。
+残った通知は自動では解決されず、情報としてシステム画面から7日で外れる。
+
+修正の材料にするコメントやレビューは、投稿者の関係(`author_association`)が`allowed_labeler_associations`に含まれるものだけにする。
 
 レビューは、GitHubのCOMMENTのレビューとして投稿する。総評とインラインコメントの1行目には、`[pr_review 自動レビュー] @<author>`という印とメンションが付く。運用者自身のアカウントで投稿するため、Factoryの投稿だと分かるようにしている。
 
@@ -574,7 +667,7 @@ worktreeの差分から秘密情報を取り除いてから、人が修正する
 | --- | --- | --- |
 | レビュー済み(`reviewed`) | レビューが終わり、修正は不要 | 内容を確かめてApproveする |
 | 再レビュー依頼(`rereview_requested`) | 修正をpushし、再レビューを依頼した | 再レビューを待つ |
-| ブロック(`blocked`) | 準備の確認で修正の前に止めた、修正の実行中にPRのheadが動いた、要件の不足で元のIssueへ差し戻した | 通知の理由に従う。修正の前に止めたときは、原因を取り除いて再実行する |
+| ブロック(`blocked`) | 準備の確認でレビューか修正の前に止めた(headがforkのPRのレビューなど)、修正の実行中にPRのheadが動いた、要件の不足で元のIssueへ差し戻した | 通知の理由に従う。修正の前に止めたときは、原因を取り除いて再実行する。headがforkのPRは、同一リポジトリのブランチから出し直す |
 | 人の対応待ち(`needs_human`) | 修正を安全策や検査の失敗で止めた、レビューが失敗した、Issue化の提案がある | 通知の「次の操作」に従う |
 
 ### ラベルを外した後の追跡
@@ -608,6 +701,80 @@ Discordの監査完了の通知(`audit_completed`)のリンクは、末尾に`#a
 
 監査の内部の挙動は[監査の仕様](internals/audit.md)にある。
 
+## モデルを使い分ける
+
+Factoryは、工程によってClaudeのモデルを使い分ける。
+間違えたときにやり直しが高くつく判断は上位のモデルに任せ、安く直せる作業は既定のモデルで済ませるためである。
+モデルは`f/factory/factory_config`の2つの項目で決める。
+
+| 項目 | 既定値 | 使う工程 |
+| --- | --- | --- |
+| `model` | `claude-sonnet-5-5` | 実装、PR修正 |
+| `heavy_model` | `claude-opus-5-5` | 要件定義の生成、PRのレビュー、監査 |
+
+実装とPR修正は、同じ作業で`model`が2回失敗したら、以後は`heavy_model`に上げる。
+Sonnetで試して届かなかった課題を、上位のモデルでやり直すためである。
+失敗は、工程ごとに次の記録から数える。
+
+- 実装は、同じ作業項目の同じ要件定義(同じ試行)の実装ラウンドのうち、検査が通らなかったもの、変更が進まなかったもの、Claudeの実行が失敗したものを数える。実装フローの中の修正ラウンドも、`retry_work_item`で再開する前の失敗も入る。
+- PR修正は、同じPRの修正のうち、Claudeが動いたのに修正をpushせず`blocked`で終えたラウンドと、検査が通らず再実行したラウンドを数える。
+  新しい指摘でラベルを付け直しただけのラウンドは数えない。
+  Claudeが動かなかったラウンドも数えないが、同じ作業項目で前にClaudeが動いていれば数える。
+
+実装のラウンドが停滞したときの扱いは、[実装](internals/implement.md)の「ループの終わり方」にある。
+
+PR修正では、Claudeの実行そのものの失敗(ターン上限、予算上限、タイムアウト、不正な出力)も数える。
+適用の実行(`pr_fix_apply`)の失敗は例外で終わってラウンドの記録を残さないので、実行の記録(`agent_runs`)の`error`から1回ずつ数える。
+検査の再実行の失敗は、`pr_fix_verify`ステップで起きる。
+例外にならず、`blocked`のラウンドを残すので、そのラウンドを`blocked`の1回として数える。
+flowの再試行や`retry_work_item`で同じ作業項目の実行が何度失敗しても、失敗した回数だけ数える。
+ラウンドの記録と重なる失敗は、次のように扱う。
+
+- `blocked`で終えたラウンドの直前の実行の失敗は、`blocked`の1回に含めて重ねない。
+  たとえば、検査の再実行が失敗して`blocked`になったときである。
+- `blocked`のラウンドより前の失敗と、`blocked`の後に`retry_work_item`で再実行した失敗は、別に数える。
+- `done`で終えたラウンドより前の失敗も数える。後の実行が成功しても、Sonnetが一度失敗したことは変わらないためである。
+- 不正な出力を返して再試行したときは、捨てた最初の試行を数えず、再試行も失敗したときだけ1回と数える。
+  捨てた試行は、同じ作業項目、stage、試行で10秒以内に次の記録がある失敗として見分ける。
+  別の実行の記録は、flowの再試行の60秒の待ちを経て書かれるので、10秒以内には来ない。
+  この見分けは、捨てた行と最後の行が同じ実行の中で続けて書かれ、両者の書き込みの間が10秒を超えないことを前提にする。
+- 検査の再実行は、作業項目ごとに1回と数える。
+  同じ作業項目で再実行が続いても増えない。
+- 同じラウンドで検査の再実行と`blocked`が重なると、2回と数える。初回と再実行で、Sonnetが2回失敗しているためである。
+
+PR修正の検査の再実行では、このラウンドの最初の修正が検査に通らなかった失敗が、まだ記録に無い。
+そこで、検査の再実行のモデルを決める`prFixRetryModel`が、その1回を足してモデルを選ぶ。
+
+数えるのは記録に残った結果だけなので、モデルの失敗でないものも入る。
+
+- 実装の`error`と`check_failed`には、トークンの失効やAPIの障害、期限切れ、`.git`ポインタの不一致など、基盤の失敗も含まれる。
+- PR修正の`blocked`には、返信だけで終えて何もcommitしなかったラウンド、人のpushでheadが動いたラウンド、ロックなど基盤の停止も含まれる。
+  実行の失敗には、トークンの失効やAPIの障害も含まれる。
+- PR修正は同じPRで数える。要件の不足で要件定義をやり直しても、数え直さない。
+
+そのため、実際より早く上がることがある。
+上がり方が早すぎても、損失の上限は`max_fix_rounds`(PR修正)、`implement_max_rounds`(実装)と、予算の上限で決まる。
+ただし、PR修正を`retry_work_item`で再実行してもラウンドの番号は進まない。
+人が再実行を繰り返す間は、予算の上限だけが損失を抑える。
+
+要件定義の却下や実装中の要件の不足で試行が増えても、それだけでは上げない。
+試行が増えると、実装の失敗の数は0から数え直す。
+要件定義の生成、PRのレビュー、監査は、失敗の数にかかわらず`heavy_model`を使う。
+
+実際に使ったモデルは、Claudeの実行の記録(`agent_runs`)の`model`列に残る。
+`heavy_model`に上がったかどうかは、この列で確かめる。
+
+`heavy_model`が無い既存のリソースでも、既定値の`claude-opus-5-5`で動く。
+一方、既存のリソースに`model: claude-opus-5-5`が書かれていると、既定が変わっても書き換わらない。
+その間は、実装とPR修正もOpusで動く。
+Sonnetを既定にするには、Windmillの画面で`f/factory/factory_config`を開き、`model`を`claude-sonnet-5-5`に書き換える。
+リソースはgitで同期しないので、リポジトリの変更だけでは反映されない。
+
+モデル名は、英数字で始まり、英数字と`.`、`_`、`-`、`[`、`]`だけで書く。
+`-`で始まる値や空白を含む値は、設定の読み込みで拒否する。`claude --model`の引数にそのまま渡すためである。
+
+このリポジトリでClaudeを使うときのモデルの方針は、[コーディング規約](coding-guidelines.md)の「Claudeのモデルの使い分け」にある。
+
 ## 通知を受けたら
 
 Factoryは、人の行動が要るものだけをDiscordに送る。通知の仕組み、送れなかったときの扱い、rate limitは[通知とrate limit](internals/notifications.md)にある。
@@ -635,7 +802,7 @@ GitHubのPATが失効していると、Issueの取得のスケジュール(`poll
 
 ### Consoleの通知タブ
 
-Consoleの**通知**タブには、Discordに送らない要対応の事項が残る。
+Consoleの**通知**タブには、Discordに送らない事項と、Discordに届かなくても残しておく事項が残る。
 
 通知には重要度がある。
 「要対応」の通知は、解決するまでConsoleの要対応の一覧に残る。
@@ -649,7 +816,8 @@ Consoleの**通知**タブには、Discordに送らない要対応の事項が�
 - `cleanup_worktrees_skipped`
 - `workspace_disk_usage`
 - `fix_feedback_association_excluded`
-- `labeler_association_denied`
+- `labeler_denied`
+- `fork_head_denied`
 - `unsandboxed_check_commands`
 - `implement_needs_human`
 
@@ -664,8 +832,11 @@ Consoleの**通知**タブには、Discordに送らない要対応の事項が�
 | `pr_fix_reviewer_request_failed` | 再レビューの依頼のAPIが失敗した。PRの取得の失敗と、Botや削除済みの作成者の名前で依頼を組み立てられない場合を含む | GitHubのPRで人がレビュアーを依頼する |
 | `issue_proposal_record_failed` | Issue化の提案を記録できなかった | PRのスレッドを確かめ、必要なら人がIssueを起票する |
 | `fix_feedback_association_excluded` | 許可されていない関係の人のコメントを、修正の材料から除いた | 必要なら許可された人が指示を書き直す |
-| `labeler_association_denied` | 許可されていない関係の人が`factory`ラベルを付けた | 拾わせるなら、許可された人がラベルを付け直す |
-| `claim_race_lost` | ほかのインスタンスか人が先にIssue・PRのトリガーラベルを外した。または、別の取得が同じIssueを先に取得した。Issueでは、同じ本文の未解決のnoticeがあるあいだは追加しない | 理由がラベルを先に外されたことなら、人が意図して外したのか確かめる。意図していなければ、何もしない |
+| `labeler_denied` | 許可されていない人が、または付与者を特定できないままトリガーラベルを付けた。Issueの`factory`と、PRの`factory:review`、`factory:fix`が対象 | 拾わせるなら、ラベルを外して、許可された人が付け直す。付ける人を増やすなら`allowed_labeler_logins`に足す |
+| `fork_head_denied` | PRのheadのリポジトリが、このリポジトリと同一でない(fork、または取得できない)ので、レビューを始めなかった。本文は`<owner>/<repo>#<PR番号>:`で始まり、PRごとに残る | 同じリポジトリにブランチを作ってPRを出し直す。止めるなら、`factory:review`ラベルとassignee、レビュー依頼を外すか、PRを閉じる。外すまでは、解決しても出直す |
+| `labeler_check_limit` | 付与者を判定できない。直近100件のラベルのイベントにトリガーラベルのイベントが無く、古いイベントが残っている | ラベルを外し、許可された人が付け直す。対応した後に、Consoleでnoticeを解決する |
+| `claim_race_lost` | ほかのインスタンスか人が先にIssue・PRのトリガーラベルを外した。または、別の取得が同じIssueを先に取得した。Issueでは、同じ本文の未解決のnoticeがあるあいだは追加しない。PRでは、確認できずにトリガーラベルを付け直したときだけ、同じ本文の未解決のnoticeがあるあいだは追加しない | 理由がラベルを先に外されたことなら、人が意図して外したのか確かめる。意図していなければ、何もしない |
+| `pr_trigger_label_left_removed` | PRのトリガーラベルを外した後に取得を確認できず、ラベルが外れたままで作業項目も無い。本文は`<owner>/<repo>#<PR番号>: <ラベル>`で、PRごとに残る | [PRのトリガーラベルが外れたままになったとき](#prのトリガーラベルが外れたままになったとき)の手順で、ラベルが付いていないか、サイクルが始まっていないかを確かめてから付け直す |
 | `claim_assignee_missing` | Issueを取得したが、FactoryのGitHubユーザーをassigneeにできなかった。作業は続く | そのユーザーがリポジトリのpush権限を持つcollaboratorか確かめる |
 | `supersede_failed` | 新しいサイクルを始めたが、古い承認済みの作業項目を取り消せなかった | なし。古い承認は再開できず、次の新しいサイクルで取り消される |
 | `deployed_sha_mismatch` | 自己更新が反映した版と、self cloneの版が一致しない | 自己更新のジョブの失敗を確かめる |
@@ -675,7 +846,7 @@ Consoleの**通知**タブには、Discordに送らない要対応の事項が�
 | `workspace_disk_usage` | 作業領域の掃除(毎日03:00)が記録したディスク使用量 | 増え続けていないか見る |
 | `console_fetch_failed` | Consoleの取り込みが失敗した | 通知の「次の操作」に従う |
 | `console_fetch_stale` | Consoleの取り込みの結果が30分以上更新されていない | 取り込みのコンテナ(`console_fetcher`)が動いているか確かめる |
-| `console_worker_missing` | tag `console`のジョブが、予定時刻から5分以上実行されずに待っている。Console用のworkerが居ない、2枠とも塞がっている、またはtagの設定がずれていて、Consoleのジョブがqueueに溜まり、Consoleが止まる | `docker compose ps windmill_worker_console`でコンテナの状態を確かめ、無ければ`mise run up`で起動し、動いていれば`docker compose restart windmill_worker_console`で再起動する。直らなければ、Windmillの画面でtag `console`の実行中のジョブとワーカーグループのtagを確かめる。自己更新(10分ごと)が検知し、Discordにも届く |
+| `console_worker_missing` | tag `console`のジョブが、予定時刻から5分以上実行されずに待っている。Console用のworkerが居ない、2枠とも塞がっている、またはtagの設定がずれていて、Consoleのジョブがqueueに溜まり、Consoleが止まる | `docker compose ps windmill_worker_console`でコンテナの状態を確かめ、無ければ`mise run up`で起動する。動いていれば、`mise run up`を実行し、続けて`mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_worker_console`で作り直す(`restart`は`factory_state_init`を経ずにマウントを解決し直す)。コンテナが作られていなければ、`factory_state_init`が失敗していないかを[Console用workerを確かめる](#console用workerを確かめる)の手順で確かめる。直らなければ、Windmillの画面でtag `console`の実行中のジョブとワーカーグループのtagを確かめる。自己更新(10分ごと)が検知し、Discordにも届く |
 | `console_worker_check_failed` | Console用のworkerがジョブを受けているかを、自己更新が1時間(6回)続けて確かめられなかった。workerが止まっていても気づけない状態である | 自己更新のジョブログで、下の4種類の警告のどれが出ているかを確かめて原因を直す。`could not confirm the console worker from the job lists`が続くなら、`console_fetch_watch`のスケジュールが有効か、直近の実行がtag `console`で動いているかを確かめる。Discordにも届く |
 | `schedule_failing` | 同じスケジュールの直近3回の実行が続けて失敗した。数えるのはスケジュールの実行そのものの失敗で、成功した実行の中で記録する部分的な失敗は含まない。GitHubのPATの失効などが原因になる | ジョブのログで失敗の内容を確かめて原因を直す。PATは[秘密をローテーションする](#秘密をローテーションする)で再発行する |
 | `schedule_failing_check_failed` | スケジュールが続けて失敗しているかを、ジョブ履歴から判定できなかった。失敗が続いても気づけない状態である | `on_error_schedule`のジョブのログで`failed to read the schedule history`のエラーを確かめ、ジョブ履歴を読む権限があるかを確かめる |
@@ -761,7 +932,7 @@ Consoleが止まっていてもDiscordには届くので、通知の確認先は
 次の3種類は、設定や権限の問題を示すので、Consoleから解決できない。「情報」として7日で一覧から外れる。
 
 - `unsandboxed_check_commands`
-- `labeler_association_denied`
+- `labeler_denied`
 - `fix_feedback_association_excluded`
 
 解決済みの通知は、システムの画面に履歴として残り、既定30日で消える。
@@ -801,14 +972,20 @@ Consoleが止まっていてもDiscordには届くので、通知の確認先は
 2. `mise run up`で起動し直す。workerのイメージの再ビルドとコンテナの再作成まで行う。
 
 workerの並列数(`NUM_WORKERS`)のような`infra/docker-compose.yml`の変更も、`git pull`だけでは反映されず、`mise run up`で反映される。
+マウントの変更では、該当するコンテナが作り直される。Console用のworkerが作り直される間は、Consoleの問い合わせが待たされる。
 
 まとめて反映したいときは、`mise run deploy`を手で実行する。必須の手順ではない。`mise run deploy`は次を順に行う。
 
 1. ホスト側のcheckoutで`git pull --ff-only`
-2. イメージの取得と、`windmill_worker`と`console_fetcher`のイメージのビルド
-3. `docker compose up -d`
-4. Consoleのraw appの依存の`npm ci --ignore-scripts`と`wmill sync push`
-5. migrationの実行
+2. Dockerの版の検査。Engineが26.0以上、Composeが2.26.0以上でなければ止まる
+3. イメージの取得と、`windmill_worker`と`console_fetcher`のイメージのビルド
+4. `docker compose up -d`
+5. Consoleのraw appの依存の`npm ci --ignore-scripts`と`wmill sync push`
+6. migrationの実行
+
+版の検査は`git pull --ff-only`の後に行う。取り込んだ新しい版の検査を使うためである。
+この検査を持たない版から取り込む最初の1回は、`mise run deploy`を使わない。miseは起動の時点のタスク定義で動くので、取り込んだ検査が走らないためである。
+`git pull --ff-only`を実行してから`mise run up`を実行する。`wmill sync push`とmigrationも要るときは、その後に`mise run deploy`を実行する。
 
 `mise run push`と`mise run deploy`は、`wmill sync push`の前にConsoleのraw appの`npm ci --ignore-scripts`を実行する。
 raw appのバンドルに依存が要るためである。
@@ -1014,6 +1191,12 @@ Discordの通知とConsoleの通知には、上の表の次の操作が載る。
 Console用のworker(`windmill_worker_console`)は、`mise run up`で作られる。
 ワーカーグループ`console`に属し、tag`console`のジョブだけを受ける。
 どのscriptをこのworkerで動かすかは、scriptの`tag`で決める。
+このworkerには、`factory_state`のボリューム全体をマウントしない。
+ボリューム全体とは、`factory_state`の最上位を指す。`claude`、`gh`、`audits`、`requirements`などが並ぶ層である。
+まず`mise run doctor`を実行する。
+Dockerの版と、起動中のworkerのマウントを判定する。
+`sh -c`を渡す`exec`(下のマウントの判定のコマンド)は、フックが拒否する。
+そのため、Claudeのセッションでは人が実行するか、`mise run doctor`を使う。
 動いていることは、コンテナの状態とログで確かめる。
 
 ```bash
@@ -1036,6 +1219,110 @@ mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker_con
 このworkerがボリュームに書くのは、ログと専用の依存キャッシュ(`worker_console_dependency_cache`)だけである。
 再起動しても、キャッシュのボリュームは残る。
 ボリュームを消したときは、次のジョブで依存をレジストリから取り直すので、外向きの通信が要る。
+
+このworkerは、要件定義書のディレクトリ(`factory_state`のサブパス`requirements`)を読み取り専用でマウントする。
+サブパスのディレクトリが無いと起動しないので、1回限りのサービス`factory_state_init`が先に作る。
+このサービスは、`requirements`がsymlinkなら失敗で終わり、そうでなければ`mkdir -p -m 0755`を実行して正常に終了する。
+停止したコンテナが残る。
+`mise run up`のたびに実行し直すが、ディレクトリがあれば何も変えない。
+既存の環境でも、`mise run up`を1回実行すれば、このworkerが作り直されて新しいマウントになる。
+`windmill_worker_console`が起動しないときは、このサービスのログを確かめる。
+`requirements is a symlink`と出たときは、`requirements`を通常のディレクトリに直してから、`mise run up`を実行し直す。
+
+```bash
+mise exec -- docker compose -f infra/docker-compose.yml ps -a factory_state_init
+mise exec -- docker compose -f infra/docker-compose.yml logs factory_state_init
+```
+
+symlinkを消す手順は次のとおりである。
+defaultのworkerで動いたコードがsymlinkを置いた可能性がある。`ls -la`に出るリンク先を控え、置いた経緯を調べてから消す。
+
+1. `factory_state_init`の一時コンテナで`ls -la`を実行し、`requirements`が`->`でリンク先を示すsymlinkであることを確かめる。ボリューム名は、Composeが解決するので指定しない。
+2. 同じ形の一時コンテナで`rm`を実行する。
+3. `mise run up`を実行する。`factory_state_init`が成功し、`requirements`が通常のディレクトリとして作られる。
+4. Console用のworkerを作り直す。
+
+```bash
+mise exec -- docker compose -f infra/docker-compose.yml run --rm --no-deps --pull never --entrypoint ls factory_state_init -la /var/lib/factory
+mise exec -- docker compose -f infra/docker-compose.yml run --rm --no-deps --pull never --entrypoint rm factory_state_init /var/lib/factory/requirements
+mise run up
+mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_worker_console
+```
+
+> [!WARNING]
+> `rm`の対象は、`ls -la`で確かめたsymlinkだけにする。パスの末尾に`/`を付けない。付けるとリンク先のディレクトリを指す。
+> `-r`と`-f`は付けない。`requirements`が通常のディレクトリなら、`rm`は何も消さずに失敗する。
+
+作り直す段が要る理由は、Composeが、設定の変わらない、動いているworkerを作り直さないことである。
+作り直さないと、symlinkの先をマウントしたworkerが残る。
+
+> [!NOTE]
+> `factory_state_init`は`read_only`で、権限もすべて落としている。
+> この条件でも`rm`は通る見込みである。`factory_state_init`が新しいボリュームで`mkdir`できたのと同じ条件(所有者がrootでモードが0755の`_data`)だからである。実機では確かめていない。
+> `--pull never`は、外向きの通信が無いときでも使え、余計なpullをしないために付ける。
+> `rm`が権限のエラーで失敗したときは、出力を控えて、運用者が対処を決める。
+
+マウントが想定どおりかは、起動中のworkerの中から、`factory_state`のボリューム全体がマウントされている証拠が見えるかで判定する。
+正しい設定では、`/var/lib/factory`はコンテナのrootfsにあり、その下にはマウント先の`requirements`しか無い。
+証拠は次の2つである。
+
+- `/var/lib/factory`の直下の`claude`、`gh`、`audits`。ボリューム全体を`/var/lib/factory`にマウントする設定で作られたworkerが残っていると見える。直下の名前なので、owner名とはぶつからない。
+- `/var/lib/factory/requirements/requirements`。`volume.subpath`が無視されて、ボリューム全体が`/var/lib/factory/requirements`にマウントされると見える。ボリューム全体には`factory_state_init`が必ず`requirements`を作るためである。ただし、対象リポジトリのowner名が`requirements`だと、サブパスだけが正しく付いていても見える。
+
+`docker inspect`のSourceは、サブパスを反映しないので、判定に使わない。
+
+判定は1回の`exec`で行い、`sh -c`の終了コードで結果を返す。
+composeの失敗(1、126、127など)とぶつからないよう、専用の値を使う。
+
+- 11なら、ボリューム全体がマウントされている証拠は見えない。
+- 10なら、ボリューム全体がマウントされている証拠が見える。
+- 3なら、マウント先が見えない。マウントが設定どおりに付いていないので、`mise run up`を実行してから、Console用のworkerを作り直す。
+- ほかの終了コードか、コンテナが動いていないときは、確かめられない。
+
+```bash
+mise exec -- docker compose -f infra/docker-compose.yml exec -T windmill_worker_console sh -c 'test -e /var/lib/factory/claude || test -e /var/lib/factory/gh || test -e /var/lib/factory/audits && exit 10; test -d /var/lib/factory/requirements || exit 3; test -e /var/lib/factory/requirements/requirements && exit 10; exit 11'; echo "exit=$?"
+```
+
+`mise run doctor`は同じ判定をし、画面には終了コードではなく`console worker mount`の行を出す。
+
+- 11は、OKと「`factory_state`のボリューム全体はマウントされていません」を出す。
+- 10は、NGを出す。メッセージは「/var/lib/factory/requirements/requirements」か「/var/lib/factoryの直下のclaude、gh、audits」で始まる。
+- 3は、NGと終了コードを出す。
+- workerが起動していないときは、確かめられない旨をOKで出す。このとき、マウントは判定されていない。
+
+NGの行が10を表すときは、次の2つの`ls`でどちらの証拠が見えたかを確かめる。
+
+```bash
+mise exec -- docker compose -f infra/docker-compose.yml exec -T windmill_worker_console ls -la /var/lib/factory
+mise exec -- docker compose -f infra/docker-compose.yml exec -T windmill_worker_console ls -la /var/lib/factory/requirements
+```
+
+- 1つめの`ls`に`claude`、`gh`、`audits`のどれかが並べば、ボリューム全体が`/var/lib/factory`にマウントされている。Dockerの版を下限以上にし、Console用のworkerを作り直す。
+- 2つめの`ls`に`requirements`が並ぶのは、次のどちらかのときである。
+  ボリューム全体が`/var/lib/factory/requirements`にマウントされているか、owner名が`requirements`でサブパスだけがマウントされている。
+  この判定では見分けられないので、`requirements/requirements`だけが見えても、正常とは断定しない。
+  見分けられない分は、Dockerの版の下限と、workerの作り直しで補う。
+- `audits`は、監査を1回実行するまで作られない。
+  `gh`は、作られないことがある。
+  4つの名前が揃わなくても、ボリューム全体がマウントされていることがある。
+  名前が揃うことを、ボリューム全体がマウントされている条件にしない。
+
+この判定が見分けるのは、ボリューム全体がマウントされたかどうかだけである。
+symlinkの先がマウントされた場合は見分けられないので、その疑いは、上の`ls -la`で確かめる。
+
+Dockerの版は`mise run doctor`で確かめる。
+`doctor`はworkerが作り直されたかを確かめないので、作り直しは別に行う。
+次のコマンドで作り直す。
+
+```bash
+mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_worker_console
+```
+
+`mise run up`は、設定の変わらないworkerを作り直さない。
+ボリューム全体がマウントされる原因として考えられるのは、次の2つである。
+
+- ボリューム全体をマウントする設定で作られたworkerが残っている。
+- DockerのEngineかComposeが下限に届いていない。
 
 ### adminsワークスペースの組み込み項目
 
