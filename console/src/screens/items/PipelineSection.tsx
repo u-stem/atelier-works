@@ -1,9 +1,5 @@
 import { RefreshCw } from "lucide-react";
-import {
-  ApiFailure,
-  describeApiError,
-  isBannerError,
-} from "../../api/errors.ts";
+import { isBannerError } from "../../api/errors.ts";
 import {
   PIPELINE_DAYS,
   PIPELINE_LIMIT,
@@ -11,12 +7,8 @@ import {
 } from "../../api/queries.ts";
 import { refreshStatusOf } from "../../app/refreshStatus.ts";
 import { useNow } from "../../app/useNow.ts";
+import { QueryFailureAlert } from "../../components/QueryFailureAlert.tsx";
 import { TimeText } from "../../components/TimeText.tsx";
-import {
-  Alert,
-  AlertDescription,
-  AlertTitle,
-} from "../../components/ui/alert.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
 import {
@@ -26,6 +18,7 @@ import {
 } from "../../components/ui/tooltip.tsx";
 import { cn } from "../../lib/cn.ts";
 import { pipelineScopeNote } from "../../lib/pipelineView.ts";
+import { apiErrorOf } from "../../lib/queryFailureView.ts";
 import { PipelineTable } from "./PipelineTable.tsx";
 
 function LoadingState() {
@@ -50,7 +43,7 @@ function FailureState({
   error: unknown;
   onRetry: () => void;
 }) {
-  const apiError = error instanceof ApiFailure ? error.apiError : null;
+  const apiError = apiErrorOf(error);
   if (apiError !== null && isBannerError(apiError)) {
     return (
       <p className="text-small text-muted-foreground">
@@ -59,17 +52,11 @@ function FailureState({
     );
   }
   return (
-    <Alert variant="destructive">
-      <AlertTitle>作業項目の進捗を取得できませんでした</AlertTitle>
-      <AlertDescription>
-        <p>
-          {apiError === null ? "原因は不明です。" : describeApiError(apiError)}
-        </p>
-        <Button size="sm" variant="outline" onClick={onRetry}>
-          もう一度取得する
-        </Button>
-      </AlertDescription>
-    </Alert>
+    <QueryFailureAlert
+      title="作業項目の進捗を取得できませんでした"
+      error={error}
+      onRetry={onRetry}
+    />
   );
 }
 

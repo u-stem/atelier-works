@@ -1,17 +1,9 @@
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { ReactNode } from "react";
-import {
-  ApiFailure,
-  describeApiError,
-  isBannerError,
-} from "../../api/errors.ts";
-import {
-  Alert,
-  AlertDescription,
-  AlertTitle,
-} from "../../components/ui/alert.tsx";
-import { Button } from "../../components/ui/button.tsx";
+import { isBannerError } from "../../api/errors.ts";
+import { QueryFailureAlert } from "../../components/QueryFailureAlert.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
+import { apiErrorOf } from "../../lib/queryFailureView.ts";
 
 function LoadingState() {
   return (
@@ -36,7 +28,7 @@ function FailureState({
   error: unknown;
   onRetry: () => void;
 }) {
-  const apiError = error instanceof ApiFailure ? error.apiError : null;
+  const apiError = apiErrorOf(error);
   if (apiError !== null && isBannerError(apiError)) {
     return (
       <p className="text-small text-muted-foreground">
@@ -45,17 +37,12 @@ function FailureState({
     );
   }
   return (
-    <Alert variant="destructive" className="max-w-3xl">
-      <AlertTitle>{title}を取得できませんでした</AlertTitle>
-      <AlertDescription>
-        <p>
-          {apiError === null ? "原因は不明です。" : describeApiError(apiError)}
-        </p>
-        <Button size="sm" variant="outline" onClick={onRetry}>
-          もう一度取得する
-        </Button>
-      </AlertDescription>
-    </Alert>
+    <QueryFailureAlert
+      title={`${title}を取得できませんでした`}
+      error={error}
+      onRetry={onRetry}
+      className="max-w-3xl"
+    />
   );
 }
 

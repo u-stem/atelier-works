@@ -1,21 +1,13 @@
 import { ArrowLeft, LogIn } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router";
-import {
-  ApiFailure,
-  describeApiError,
-  isBannerError,
-} from "../../api/errors.ts";
+import { isBannerError } from "../../api/errors.ts";
 import { useSummary } from "../../api/queries.ts";
 import { PageHeader } from "../../app/PageHeader.tsx";
 import { refreshStatusOf } from "../../app/refreshStatus.ts";
 import { useMediaQuery } from "../../app/useMediaQuery.ts";
 import { useNow } from "../../app/useNow.ts";
-import {
-  Alert,
-  AlertDescription,
-  AlertTitle,
-} from "../../components/ui/alert.tsx";
+import { QueryFailureAlert } from "../../components/QueryFailureAlert.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
 import { cn } from "../../lib/cn.ts";
@@ -47,6 +39,7 @@ import {
   unlistedCounts,
   visibleChips,
 } from "../../lib/inboxView.ts";
+import { apiErrorOf } from "../../lib/queryFailureView.ts";
 import { InboxDetail } from "./InboxDetail.tsx";
 import { InboxEmpty } from "./InboxEmpty.tsx";
 import { InboxList } from "./InboxList.tsx";
@@ -94,7 +87,7 @@ function FailureState({
   error: unknown;
   onRetry: () => void;
 }) {
-  const apiError = error instanceof ApiFailure ? error.apiError : null;
+  const apiError = apiErrorOf(error);
   if (apiError !== null && isBannerError(apiError)) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
@@ -110,19 +103,11 @@ function FailureState({
   }
   return (
     <div className="p-8">
-      <Alert variant="destructive">
-        <AlertTitle>要対応の一覧を取得できませんでした</AlertTitle>
-        <AlertDescription>
-          <p>
-            {apiError === null
-              ? "原因は不明です。"
-              : describeApiError(apiError)}
-          </p>
-          <Button size="sm" variant="outline" onClick={onRetry}>
-            もう一度取得する
-          </Button>
-        </AlertDescription>
-      </Alert>
+      <QueryFailureAlert
+        title="要対応の一覧を取得できませんでした"
+        error={error}
+        onRetry={onRetry}
+      />
     </div>
   );
 }

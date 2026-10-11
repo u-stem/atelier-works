@@ -2,7 +2,7 @@
 // フックから切り離した関数にして、`bun test`で確かめる。
 
 import { displayableIssueText } from "../lib/intakeText.ts";
-import { type ApiError, ApiFailure, describeApiError } from "./errors.ts";
+import { type ApiError, ApiFailure, describeWriteFailure } from "./errors.ts";
 
 export type WriteOutcome<T> =
   | { readonly kind: "done"; readonly result: T }
@@ -102,7 +102,7 @@ export async function executeWrite<T>(
     outcome = {
       kind: "failed",
       error: shown,
-      message: describeApiError(shown, "write"),
+      message: describeWriteFailure(shown),
     };
   }
   try {
