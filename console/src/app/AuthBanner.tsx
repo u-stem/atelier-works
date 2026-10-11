@@ -19,7 +19,7 @@ export function AuthBanner() {
   return (
     <div
       role="alert"
-      className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-warning/40 bg-warning/7 px-8 py-3"
+      className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-warning/40 bg-warning/7 px-4 py-3 md:px-8"
     >
       <LogIn aria-hidden="true" className="size-4 shrink-0 text-warning" />
       <div className="min-w-0 flex-1">

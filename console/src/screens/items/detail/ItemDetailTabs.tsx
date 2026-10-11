@@ -54,7 +54,7 @@ export function ItemDetailTabs({
     <div
       role="tablist"
       aria-label="作業項目の詳細"
-      className="flex gap-1 border-b border-border px-8"
+      className="flex gap-1 overflow-x-auto border-b border-border px-4 md:px-8"
     >
       {ITEM_DETAIL_TABS.map((tab, index) => {
         const isSelected = tab.id === selected;
@@ -77,7 +77,7 @@ export function ItemDetailTabs({
               onKeyDown(event, index);
             }}
             className={cn(
-              "-mb-px border-b-2 px-3 py-2 text-body outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              "-mb-px shrink-0 border-b-2 px-3 whitespace-nowrap py-2 text-body outline-none focus-visible:ring-2 focus-visible:ring-ring",
               isSelected
                 ? "border-primary font-semibold text-foreground"
                 : "border-transparent text-muted-foreground hover:text-foreground",

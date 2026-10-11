@@ -16,15 +16,16 @@ import { Button } from "../../components/ui/button.tsx";
 import {
   ANALYTICS_PERIOD_DAYS,
   type AnalyticsPeriodDays,
+  chartSeries,
   dailyTotals,
   firstTryApprovalRate,
   formatHours,
   formatIsoDate,
-  formatMonthDay,
   formatPercent,
   formatUsd,
   hitsRowLimit,
   leadTimeByStatus,
+  periodButtonClass,
   rejectionsByAttempt,
 } from "../../lib/analytics.ts";
 import { attemptRef, workItemStatusLabel } from "../../lib/labels.ts";
@@ -58,32 +59,35 @@ function ChartBlock({
   );
 }
 
-function CostReport({ rows }: { rows: readonly AgentCostDailyRow[] }) {
+function CostReport({
+  rows,
+  days,
+}: {
+  rows: readonly AgentCostDailyRow[];
+  days: AnalyticsPeriodDays;
+}) {
+  // 表は実行のあった日だけを出す。グラフは実行の無い日も0で並べ、行数が上限に届いたときは古い日を切る。
   const totals = dailyTotals(rows);
-  const costData = totals.map((total) => ({
-    key: total.day,
-    label: formatMonthDay(total.day),
-    value: total.costUsd,
-  }));
-  const countData = totals.map((total) => ({
-    key: total.day,
-    label: formatMonthDay(total.day),
-    value: total.runCount,
-  }));
+  const { costData, countData } = chartSeries(
+    rows,
+    days,
+    new Date(),
+    ANALYTICS_ROW_LIMIT,
+  );
   return (
     <>
       <TruncationNote rowCount={rows.length} />
-      <ChartBlock title="日別コスト(USD)">
+      <ChartBlock title="日別コスト(USD・UTC)">
         <BarChart
-          title="日別コスト"
+          title="日別コスト(UTC)"
           data={costData}
           axis="sequence"
           formatValue={formatUsd}
         />
       </ChartBlock>
-      <ChartBlock title="日別実行件数">
+      <ChartBlock title="日別実行件数(UTC)">
         <BarChart
-          title="日別実行件数"
+          title="日別実行件数(UTC)"
           data={countData}
           axis="sequence"
           formatValue={formatCount}
@@ -204,7 +208,7 @@ export function AnalyticsReports({
   leadTime: ReturnType<typeof useLeadTime>;
 }) {
   return (
-    <section aria-labelledby="analytics-heading" className="max-w-3xl">
+    <section aria-labelledby="analytics-heading">
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <h2 id="analytics-heading" className="text-title font-semibold">
           分析
@@ -216,7 +220,8 @@ export function AnalyticsReports({
               <Button
                 key={option}
                 size="sm"
-                variant={option === days ? "secondary" : "outline"}
+                variant="outline"
+                className={periodButtonClass(option === days)}
                 aria-pressed={option === days}
                 onClick={() => onDaysChange(option)}
               >
@@ -233,7 +238,7 @@ export function AnalyticsReports({
         emptyMessage="この期間に記録された実行はありません。"
         query={cost}
       >
-        {(rows) => <CostReport rows={rows} />}
+        {(rows) => <CostReport rows={rows} days={days} />}
       </AnalyticsSection>
       <AnalyticsSection
         id="analytics-approval-heading"

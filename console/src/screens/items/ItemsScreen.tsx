@@ -16,7 +16,7 @@ export function ItemsScreen() {
   return (
     <>
       <PageHeader title="作業項目" refresh={refresh} />
-      <div className="flex min-h-0 flex-1 flex-col gap-10 overflow-y-auto px-8 py-6">
+      <div className="flex min-h-0 flex-1 flex-col gap-10 overflow-y-auto px-4 py-6 md:px-8">
         <PipelineSection pipeline={pipeline} />
         <RequirementsSection index={requirements} />
       </div>

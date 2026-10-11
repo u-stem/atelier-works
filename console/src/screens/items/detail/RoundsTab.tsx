@@ -10,7 +10,14 @@ import {
   type RoundView,
 } from "../../../lib/itemDetailView.ts";
 import { attemptRef } from "../../../lib/labels.ts";
-import { EmptyNote, Panel, PlainBlock, TimeLabel } from "./DetailParts.tsx";
+import {
+  CodeSpanBlock,
+  CompactEmpty,
+  EmptyNote,
+  Panel,
+  PlainBlock,
+  TimeLabel,
+} from "./DetailParts.tsx";
 
 /** 新しい順の履歴の注記。上限に届いたときは、古い記録を表示していないと添える。 */
 function limitedNote(count: number, limit: number): string {
@@ -24,7 +31,7 @@ function RoundCard({ round, now }: { round: RoundView; now: number }) {
     <li className="flex flex-col gap-2 rounded-xl border border-border bg-card px-5 py-4">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <span className="font-semibold">{round.roundLabel}</span>
-        <Badge variant="outline">{round.modeLabel}</Badge>
+        <Badge variant="muted">{round.modeLabel}</Badge>
         <Badge variant={round.outcomeVariant}>{round.outcomeLabel}</Badge>
         {round.diffLabel === null ? null : (
           <span className="text-small text-muted-foreground tabular-nums">
@@ -35,11 +42,11 @@ function RoundCard({ round, now }: { round: RoundView; now: number }) {
           <TimeLabel iso={round.createdAt} now={now} />
         </span>
       </div>
-      <PlainBlock>{round.summary}</PlainBlock>
+      <CodeSpanBlock>{round.summary}</CodeSpanBlock>
       {round.gapReport === null ? null : (
         <div className="flex flex-col gap-1">
           <p className="text-small text-subtle">要件の不足の報告</p>
-          <PlainBlock>{round.gapReport}</PlainBlock>
+          <CodeSpanBlock>{round.gapReport}</CodeSpanBlock>
         </div>
       )}
       {round.skippedReason === null ? null : (
@@ -108,70 +115,66 @@ function ImplementRounds({
 
 function Reviews({ detail, now }: { detail: WorkItemDetail; now: number }) {
   const reviews = detail.reviews.map(describeReview);
+  if (reviews.length === 0) {
+    return <CompactEmpty heading="PRのレビュー">まだありません。</CompactEmpty>;
+  }
   return (
     <Panel
       heading="PRのレビュー"
       note={limitedNote(detail.reviews.length, DETAIL_LIMITS.reviews)}
     >
-      {reviews.length === 0 ? (
-        <EmptyNote>PRのレビューはまだありません。</EmptyNote>
-      ) : (
-        <ul className="divide-y divide-border rounded-xl border border-border bg-card">
-          {reviews.map((review) => (
-            <li
-              key={review.key}
-              className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3"
-            >
-              <Badge variant={review.verdictVariant}>
-                {review.verdictLabel}
-              </Badge>
-              <span className="text-body tabular-nums">
-                {review.findingLabel}
-              </span>
-              <span className="font-mono text-small text-muted-foreground">
-                {review.shaLabel}
-              </span>
-              <span className="text-small text-muted-foreground">
-                <TimeLabel iso={review.createdAt} now={now} />
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
+      <ul className="divide-y divide-border rounded-xl border border-border bg-card">
+        {reviews.map((review) => (
+          <li
+            key={review.key}
+            className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3"
+          >
+            <Badge variant={review.verdictVariant}>{review.verdictLabel}</Badge>
+            <span className="text-body tabular-nums">
+              {review.findingLabel}
+            </span>
+            <span className="font-mono text-small text-muted-foreground">
+              {review.shaLabel}
+            </span>
+            <span className="text-small text-muted-foreground">
+              <TimeLabel iso={review.createdAt} now={now} />
+            </span>
+          </li>
+        ))}
+      </ul>
     </Panel>
   );
 }
 
 function FixRounds({ detail, now }: { detail: WorkItemDetail; now: number }) {
   const fixRounds = detail.fix_rounds.map(describeFixRound);
+  if (fixRounds.length === 0) {
+    return <CompactEmpty heading="PRの修正">まだありません。</CompactEmpty>;
+  }
   return (
     <Panel
       heading="PRの修正"
       note={limitedNote(detail.fix_rounds.length, DETAIL_LIMITS.fixRounds)}
     >
-      {fixRounds.length === 0 ? (
-        <EmptyNote>PRの修正はまだありません。</EmptyNote>
-      ) : (
-        <ul className="divide-y divide-border rounded-xl border border-border bg-card">
-          {fixRounds.map((fixRound) => (
-            <li
-              key={fixRound.key}
-              className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3"
-            >
-              <span className="font-semibold">{fixRound.roundLabel}</span>
-              <Badge variant={fixRound.outcomeVariant}>
-                {fixRound.outcomeLabel}
-              </Badge>
-              <span className="text-small text-muted-foreground tabular-nums">
-                {fixRound.countsLabel}
-              </span>
-              <span className="text-small text-muted-foreground">
-                <TimeLabel iso={fixRound.createdAt} now={now} />
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
+      <ul className="divide-y divide-border rounded-xl border border-border bg-card">
+        {fixRounds.map((fixRound) => (
+          <li
+            key={fixRound.key}
+            className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3"
+          >
+            <span className="font-semibold">{fixRound.roundLabel}</span>
+            <Badge variant={fixRound.outcomeVariant}>
+              {fixRound.outcomeLabel}
+            </Badge>
+            <span className="text-small text-muted-foreground tabular-nums">
+              {fixRound.countsLabel}
+            </span>
+            <span className="text-small text-muted-foreground">
+              <TimeLabel iso={fixRound.createdAt} now={now} />
+            </span>
+          </li>
+        ))}
+      </ul>
     </Panel>
   );
 }

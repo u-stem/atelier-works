@@ -13,6 +13,8 @@ const badgeVariants = cva(
         destructive:
           "border-transparent bg-destructive text-destructive-foreground",
         outline: "border-border text-muted-foreground",
+        // 中立の状態は`secondary`でなく重ねの色にする。`secondary`はダークで`accent`と同じ明るさになり、面の上で地が見分けられない。
+        muted: "border-transparent bg-foreground/10 text-foreground",
         approval: "border-approval/30 bg-approval/14 text-approval",
         failure: "border-failure/30 bg-failure/14 text-failure",
         notice: "border-notice/30 bg-notice/14 text-notice",
