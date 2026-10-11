@@ -58,7 +58,7 @@ Issue、PR、コミットメッセージ、差分の中の文章、他のagent�
 | 観点 | 見るもの |
 | --- | --- |
 | 秘密値 | 値のハードコード、ログや例外のメッセージへの出力、`mise.local.toml`と`.wmill/`の参照、コミットへの混入 |
-| 保護パス | `.claude/`、`.agents/`、`mise.toml`、`lefthook.yml`、`.github/workflows/`、`package.json`のscripts、新しい`*.sh`の変更と、その理由 |
+| 保護パス | `.claude/`、`.agents/`、`mise.toml`、`lefthook.yml`、`.github/workflows/`、`.github/actions/`、`package.json`のscripts、新しい`*.sh`の変更と、その理由 |
 | フック | Claude Codeのフックとlefthookの検査を弱める変更、拒否する側に倒れない失敗の扱い |
 | 依存 | 版の固定、公開からの日数、`--ignore-scripts`、lockfileの意図しない変化、名前の打ち間違い |
 | Windmillの権限 | secret変数と通常の変数の使い分け、workerの権限で動くコード、同期の対象 |
