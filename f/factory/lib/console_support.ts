@@ -26,6 +26,7 @@ export const NOTICE_SEVERITY: Readonly<Record<string, NoticeSeverity>> = {
   unsandboxed_check_commands: "info",
   implement_needs_human: "info",
   approval_comment_failed: "action",
+  intake_refreshed: "action",
   implement_launch_failed: "action",
   fix_reply_post_failed: "action",
   pr_fix_reviewer_request_failed: "action",
@@ -113,3 +114,36 @@ export function truncateChars(
   if (chars.length <= max) return { text, truncated: false };
   return { text: chars.slice(0, max).join(""), truncated: true };
 }
+
+/**
+ * 画面に出せない文字。書式の制御文字(Unicodeの分類Cf)、制御文字(Cc)、行と段落の区切り(Zl、Zp)、異体字セレクタ。
+ * Consoleの`src/lib/intakeText.ts`が代替文字に置き換える対象と同じ分類である。
+ * 改行、キャリッジリターン、タブは、見える空白なので数えない。
+ */
+const HIDDEN_CHARACTERS =
+  /\p{Cf}|\p{Cc}|\p{Zl}|\p{Zp}|\p{Variation_Selector}/gu;
+
+/** `text`に含まれる、画面に出せない文字の数を返す。 */
+export function countHiddenCharacters(text: string): number {
+  let count = 0;
+  for (const match of text.matchAll(HIDDEN_CHARACTERS)) {
+    if (match[0] !== "\n" && match[0] !== "\r" && match[0] !== "\t") count += 1;
+  }
+  return count;
+}
+
+/**
+ * `text`に含まれる、HTMLのコメントの開始(`<!--`)の数を返す。
+ * GitHubはIssueの本文をMarkdownとして描き、コメントの中身を画面に出さない。
+ */
+export function countHtmlCommentOpeners(text: string): number {
+  return text.split("<!--").length - 1;
+}
+
+/**
+ * 取り込み内容を更新したときに、`work_item_events.note`の先頭に置く文。
+ * 更新の有無を、この先頭の文で読み取る(`hasIntakeRefreshEvent`、`intake_snapshot`のビュー)。
+ * Consoleのビューが、更新の処理(`intake_refresh.ts`)の依存を引かずに読めるよう、ここに置く。
+ */
+export const INTAKE_REFRESHED_NOTE_PREFIX =
+  "intake refreshed from the current issue";

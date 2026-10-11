@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import {
   assertIssueMatchesIntake,
   assertValidApprovalDecideInput,
-  checkBeforeRecording,
   checkIssueAgainstIntake,
   type IssueCheckDeps,
 } from "../../f/factory/approval_decide.ts";
@@ -222,61 +221,6 @@ describe("assertIssueMatchesIntake", () => {
       String(err),
     );
     expect(message).not.toContain(TOKEN);
-  });
-});
-
-describe("checkBeforeRecording", () => {
-  test("does not record when the check refuses", async () => {
-    const calls: string[] = [];
-    await checkBeforeRecording(
-      true,
-      async () => {
-        throw new Error("refused");
-      },
-      async () => {
-        calls.push("record");
-      },
-    ).catch(() => {});
-    expect(calls).toEqual([]);
-  });
-
-  test("passes the refusal on to the caller", async () => {
-    const result = checkBeforeRecording(
-      true,
-      async () => {
-        throw new Error("refused");
-      },
-      async () => {},
-    );
-    await expect(result).rejects.toThrow("refused");
-  });
-
-  test("records after the check passes", async () => {
-    const calls: string[] = [];
-    await checkBeforeRecording(
-      true,
-      async () => {
-        calls.push("check");
-      },
-      async () => {
-        calls.push("record");
-      },
-    );
-    expect(calls).toEqual(["check", "record"]);
-  });
-
-  test("records without a check when none is needed", async () => {
-    const calls: string[] = [];
-    await checkBeforeRecording(
-      false,
-      async () => {
-        calls.push("check");
-      },
-      async () => {
-        calls.push("record");
-      },
-    );
-    expect(calls).toEqual(["record"]);
   });
 });
 

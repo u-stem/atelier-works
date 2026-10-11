@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
   ACTIONABLE_WORK_ITEM_STATUSES,
+  countHiddenCharacters,
+  countHtmlCommentOpeners,
   INFO_NOTICE_KINDS,
   INFO_NOTICE_WINDOW_DAYS,
   isNoticeResolvable,
@@ -164,5 +166,41 @@ describe("truncateChars", () => {
 
   test("counts a surrogate pair as one character", () => {
     expect(truncateChars("a😀b", 2)).toEqual({ text: "a😀", truncated: true });
+  });
+});
+
+describe("countHiddenCharacters", () => {
+  test("counts nothing in ordinary text with newlines and tabs", () => {
+    expect(countHiddenCharacters("a\r\nb\tc 日本語")).toBe(0);
+  });
+
+  test("counts a zero width space", () => {
+    expect(countHiddenCharacters("a\u200Bb")).toBe(1);
+  });
+
+  test("counts a tag character", () => {
+    expect(countHiddenCharacters("a\u{E0041}b")).toBe(1);
+  });
+
+  test("counts a bidirectional override", () => {
+    expect(countHiddenCharacters("a\u202Eb")).toBe(1);
+  });
+
+  test("counts a variation selector", () => {
+    expect(countHiddenCharacters("a\uFE0F\u{E0100}")).toBe(2);
+  });
+
+  test("counts a control character other than the line break and tab", () => {
+    expect(countHiddenCharacters("a\u0007b")).toBe(1);
+  });
+});
+
+describe("countHtmlCommentOpeners", () => {
+  test("counts nothing without a comment", () => {
+    expect(countHtmlCommentOpeners("a <b> c")).toBe(0);
+  });
+
+  test("counts each opener", () => {
+    expect(countHtmlCommentOpeners("<!-- a --> x <!-- b")).toBe(2);
   });
 });

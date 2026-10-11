@@ -30,7 +30,11 @@ import {
   startImplement,
 } from "../lib/implement_launch_support.ts";
 import { IMPLEMENT_FLOW_PATH } from "../lib/implement_loop.ts";
-import { issueChangedSinceIntake } from "../lib/implement_support.ts";
+import {
+  buildIntakeRefreshedNoticeMessage,
+  INTAKE_REFRESHED_NOTICE_KIND,
+  refreshIntakeFromIssue,
+} from "../lib/intake_refresh.ts";
 import { type Logger, logger, maskSecrets } from "../lib/log.ts";
 import { PIPELINE_FLOW_PATH } from "../lib/pipeline_lease.ts";
 import { type FactoryConfig, isNumber, type WorkItem } from "../lib/types.ts";
@@ -225,71 +229,6 @@ export type RejectedRetryDeps = {
   readonly markRestartable: () => void;
   readonly log: (message: string, fields: Record<string, unknown>) => void;
 };
-
-export type RefreshIntakeOutcome =
-  | "updated"
-  | "unchanged"
-  | "fetch_failed"
-  | "not_written"
-  | "write_failed";
-
-export type RefreshIntakeDeps = {
-  /** 作業項目に保存されている、取り込み時点の題名と本文。 */
-  readonly snapshot: {
-    readonly title: string | null;
-    readonly body: string | null;
-  };
-  /** GitHubから現在のIssueの題名と本文を取る。 */
-  readonly getIssue: () => Promise<{
-    readonly title: string;
-    readonly body: string;
-  }>;
-  /** `updateIntakeIfRegenerating`で書く。作業項目が先に動いていれば`false`を返す。 */
-  readonly writeIntake: (intake: {
-    readonly title: string;
-    readonly body: string;
-  }) => Promise<boolean>;
-  readonly log: (message: string, fields: Record<string, unknown>) => void;
-};
-
-/**
- * 却下による作り直しの前に、作業項目の題名と本文を現在のIssueの内容に更新する。
- * 却下の理由が「Issueを書き換えた」ことのとき、作り直した要件定義が書き換え後の内容に基づき、
- * 次の承認の前の確認(`approval_decide`の`checkIssueAgainstIntake`)が通るようにするためである。
- * 承認者がConsoleで見る取り込み時点の内容は更新後の値で、実装のClaudeに渡る内容と一致する。
- *
- * GitHubから取れなかったとき、書き込みに失敗したとき、作業項目が先に動いたときは、更新せずに
- * 元の値を保つ。例外は投げない。作り直しは元の値で進み、Issueが違えば次の承認が断られるので、
- * 承認者がもう一度却下すれば更新を再試行できる。
- */
-export async function refreshIntakeFromIssue(
-  deps: RefreshIntakeDeps,
-): Promise<RefreshIntakeOutcome> {
-  let live: { readonly title: string; readonly body: string };
-  try {
-    live = await deps.getIssue();
-  } catch (err) {
-    deps.log("could not fetch the issue; keeping the intake content", {
-      error: messageOf(err),
-    });
-    return "fetch_failed";
-  }
-  if (!issueChangedSinceIntake(deps.snapshot, live)) return "unchanged";
-  try {
-    const written = await deps.writeIntake({
-      title: live.title,
-      body: live.body,
-    });
-    if (!written) {
-      deps.log("work item moved on; the intake content was not updated", {});
-      return "not_written";
-    }
-    return "updated";
-  } catch (err) {
-    deps.log("could not write the intake content", { error: messageOf(err) });
-    return "write_failed";
-  }
-}
 
 /**
  * 却下された要件定義を作り直すため、作業項目を`requirements_generating`へ移してpipelineを起動する。
@@ -650,8 +589,32 @@ async function run(
           snapshot: workItem,
           getIssue: () =>
             getIssue(client, workItem.owner, workItem.repo, intakeIssueNumber),
-          writeIntake: (intake) =>
-            updateIntakeIfRegenerating(workItem.id, intake),
+          writeIntake: (intake, note) =>
+            updateIntakeIfRegenerating(workItem.id, intake, note),
+          announce: async () => {
+            await addNotice({
+              kind: INTAKE_REFRESHED_NOTICE_KIND,
+              message: buildIntakeRefreshedNoticeMessage({
+                owner: workItem.owner,
+                repo: workItem.repo,
+                issue_number: intakeIssueNumber,
+                work_item_id: workItem.id,
+              }),
+            });
+            await notifyBestEffort(
+              webhookUrl,
+              {
+                kind: "intake_refreshed",
+                instance_name: config.instance_name,
+                owner: workItem.owner,
+                repo: workItem.repo,
+                issue_number: intakeIssueNumber,
+                issue_url: workItem.issue_url ?? "",
+                title: workItem.title ?? "",
+              },
+              log,
+            );
+          },
           log: (message, fields) =>
             log.warn(message, { work_item_id: workItem.id, ...fields }),
         }),

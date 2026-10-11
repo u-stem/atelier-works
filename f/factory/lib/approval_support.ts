@@ -195,6 +195,6 @@ export function issueCheckRefusal(
         "To use the current issue instead, reject the request; the requirements are regenerated from the current issue and need a new approval.",
       ].join(" ");
     case "unavailable":
-      return `approval_decide: the issue could not be compared with the intake content, so approval request ${String(approvalRequestId)} was not approved. Wait a moment and try again.`;
+      return `approval_decide: the issue could not be compared with the intake content, so approval request ${String(approvalRequestId)} was not approved. Wait a moment and try again. If the issue was transferred or deleted, reject the request.`;
   }
 }

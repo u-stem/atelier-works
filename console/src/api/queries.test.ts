@@ -3,6 +3,8 @@ import { ApiFailure } from "./errors.ts";
 import {
   fetchIntakeSnapshot,
   fetchSummary,
+  INTAKE_SNAPSHOT_STALE_MS,
+  intakeSnapshotQueryKey,
   SUMMARY_REFRESH_MS,
 } from "./queries.ts";
 import type { FetchLike } from "./windmill.ts";
@@ -76,6 +78,9 @@ const SNAPSHOT_ROW = {
   title: "Add feature",
   body: "Original body",
   body_truncated: false,
+  body_tail_html_comments: 0,
+  body_tail_hidden_chars: 0,
+  refreshed: false,
 };
 
 describe("fetchIntakeSnapshot", () => {
@@ -119,5 +124,29 @@ describe("fetchIntakeSnapshot", () => {
         fetchIntakeSnapshot(7, { fetchFn: respondWith("Unauthorized", 401) }),
       ),
     ).toEqual({ kind: "unauthorized" });
+  });
+});
+
+describe("intakeSnapshotQueryKey", () => {
+  test("changes with the approval request", () => {
+    expect(intakeSnapshotQueryKey(7, 3)).not.toEqual(
+      intakeSnapshotQueryKey(7, 4),
+    );
+  });
+
+  test("changes with the work item", () => {
+    expect(intakeSnapshotQueryKey(7, 3)).not.toEqual(
+      intakeSnapshotQueryKey(8, 3),
+    );
+  });
+
+  test("is the same for the same request", () => {
+    expect(intakeSnapshotQueryKey(7, 3)).toEqual(intakeSnapshotQueryKey(7, 3));
+  });
+});
+
+describe("INTAKE_SNAPSHOT_STALE_MS", () => {
+  test("is finite so that a refreshed snapshot is fetched again", () => {
+    expect(Number.isFinite(INTAKE_SNAPSHOT_STALE_MS)).toBe(true);
   });
 });

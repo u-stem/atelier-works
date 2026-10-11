@@ -10,6 +10,9 @@ const ROW = {
   title: "Add feature",
   body: "Original body",
   body_truncated: false,
+  body_tail_html_comments: 0,
+  body_tail_hidden_chars: 0,
+  refreshed: false,
 };
 
 describe("isIntakeSnapshotRows", () => {
@@ -36,6 +39,17 @@ describe("isIntakeSnapshotRows", () => {
   test("rejects a row without the truncation flag", () => {
     const { body_truncated: _omitted, ...rest } = ROW;
     expect(isIntakeSnapshotRows([rest])).toBe(false);
+  });
+
+  test("rejects a row without the refreshed flag", () => {
+    const { refreshed: _omitted, ...rest } = ROW;
+    expect(isIntakeSnapshotRows([rest])).toBe(false);
+  });
+
+  test("rejects a row with a negative tail count", () => {
+    expect(isIntakeSnapshotRows([{ ...ROW, body_tail_hidden_chars: -1 }])).toBe(
+      false,
+    );
   });
 
   test("rejects a row with an invalid work item id", () => {

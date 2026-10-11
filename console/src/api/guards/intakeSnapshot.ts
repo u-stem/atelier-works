@@ -6,6 +6,7 @@
 import {
   isBoolean,
   isInteger,
+  isNonNegativeInteger,
   isPositiveInteger,
   isRecord,
   isString,
@@ -24,6 +25,12 @@ export type IntakeSnapshot = {
   readonly title: string;
   readonly body: string;
   readonly body_truncated: boolean;
+  /** 切った後ろの部分にある、HTMLのコメントの開始(`<!--`)の数。 */
+  readonly body_tail_html_comments: number;
+  /** 切った後ろの部分にある、画面に出せない文字の数。 */
+  readonly body_tail_hidden_chars: number;
+  /** 却下や再実行による作り直しで、取り込み内容を現在のIssueに更新したことがあるか。 */
+  readonly refreshed: boolean;
 };
 
 function isIntakeSnapshot(value: unknown): value is IntakeSnapshot {
@@ -36,7 +43,10 @@ function isIntakeSnapshot(value: unknown): value is IntakeSnapshot {
     isString(value.issue_url) &&
     isString(value.title) &&
     isString(value.body) &&
-    isBoolean(value.body_truncated)
+    isBoolean(value.body_truncated) &&
+    isNonNegativeInteger(value.body_tail_html_comments) &&
+    isNonNegativeInteger(value.body_tail_hidden_chars) &&
+    isBoolean(value.refreshed)
   );
 }
 

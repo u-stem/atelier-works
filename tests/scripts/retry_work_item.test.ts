@@ -15,6 +15,7 @@ import {
   newerPrRowRefusal,
   retryResult,
   runningFlowRefusal,
+  shouldRefreshIntakeOnRestart,
   usesFlowJobIdLease,
 } from "../../f/factory/retry_work_item.ts";
 
@@ -732,5 +733,43 @@ describe("newerCycleRefusal", () => {
         "factory",
       ),
     ).toBeNull();
+  });
+});
+
+describe("shouldRefreshIntakeOnRestart", () => {
+  test("refreshes when an issue work item goes back to requirements_generating", () => {
+    expect(
+      shouldRefreshIntakeOnRestart(
+        { kind: "issue", issue_number: 42 },
+        { toStatus: "requirements_generating" },
+      ),
+    ).toBe(true);
+  });
+
+  test("does not refresh when the implement flow is resumed", () => {
+    expect(
+      shouldRefreshIntakeOnRestart(
+        { kind: "issue", issue_number: 42 },
+        { toStatus: "implementing" },
+      ),
+    ).toBe(false);
+  });
+
+  test("does not refresh a pull request work item", () => {
+    expect(
+      shouldRefreshIntakeOnRestart(
+        { kind: "pr_review", issue_number: null },
+        { toStatus: "reviewing" },
+      ),
+    ).toBe(false);
+  });
+
+  test("does not refresh an issue work item without an issue number", () => {
+    expect(
+      shouldRefreshIntakeOnRestart(
+        { kind: "issue", issue_number: null },
+        { toStatus: "requirements_generating" },
+      ),
+    ).toBe(false);
   });
 });

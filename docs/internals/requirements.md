@@ -141,6 +141,8 @@ raw appの`components/RequirementsDocument.tsx`、`Markdown.tsx`、`DrawioViewer
 
 反映するscriptは`wmill.runScriptByPathAsync`で起動する。
 
+承認者(`decided_by`)は引数ではなく、ジョブの実行文脈から決める(`deriveApprover`)。`WM_USERNAME`を使い、無ければ`WM_EMAIL`を使う。どちらも無ければ例外にし、承認者が分からないまま記録しない。
+
 ### 承認の前のIssueの確認
 
 要件定義を承認するときは、決定を記録する前に、現在のIssueの題名と本文が取り込み時点(`work_items.title`、`body`)と同じかを確かめる。実装のClaudeに渡るのは取り込み時点の内容なので、承認者が見た内容と一致させるためである。
@@ -169,7 +171,7 @@ raw appの`components/RequirementsDocument.tsx`、`Markdown.tsx`、`DrawioViewer
 
 断るときのエラーは、Issueが変わった旨と、承認者が取れる手を示す。
 1つは、Issueを取り込み時点の内容に戻して、もう一度承認することである。
-もう1つは、却下することである。却下による作り直しは、現在のIssueの題名と本文を取り込み直す([作業項目の状態とリース](work-items.md)の「却下と再生成」)。作り直した要件定義には、あらためて承認が要る。
+もう1つは、却下することである。却下による作り直しは、現在のIssueの題名と本文を取り込み直し、更新したことを承認者に知らせる([作業項目の状態とリース](work-items.md)の「却下と再生成」)。作り直した要件定義には、あらためて承認が要る。
 `unavailable`はしばらく待ってからやり直す。
 
 確認から決定の記録までの間のIssueの書き換えは防げない。

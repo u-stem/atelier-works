@@ -99,6 +99,9 @@ function runPsql(target: PsqlTarget, sql: string): string {
   return result.stdout.toString().trim();
 }
 
+/** PostgreSQLが、更新を含む`WITH`を最上位以外に置けないときのエラーの文。 */
+const TOP_LEVEL_ONLY = "must be at the top level";
+
 /** 結果の行をJSONの配列として1行で返すよう、文を`WITH`で包む。更新の`RETURNING`も行として読める。 */
 function wrapForRows(statement: string): string {
   return `WITH q AS (${statement.trim().replace(/;+$/, "")}) SELECT coalesce(json_agg(q), '[]'::json) FROM q`;
@@ -122,7 +125,24 @@ export function createPsqlClient(target: PsqlTarget): SqlClient {
   return (strings, ...values): SqlStatementHandle => {
     const statement = renderSql(strings, values);
     return {
-      fetch: async () => parseRows(runPsql(target, wrapForRows(statement))),
+      fetch: async () => {
+        try {
+          return parseRows(runPsql(target, wrapForRows(statement)));
+        } catch (err) {
+          // 更新を`WITH`で包んだ文は、PostgreSQLが最上位でしか受け付けない。
+          // そのときは包まずに実行し、返った行を1行ずつ`value`に入れる。
+          if (
+            !(err instanceof Error) ||
+            !err.message.includes(TOP_LEVEL_ONLY)
+          ) {
+            throw err;
+          }
+          const output = runPsql(target, statement);
+          return output === ""
+            ? []
+            : output.split("\n").map((line) => ({ value: line }));
+        }
+      },
       execute: async () => {
         runPsql(target, statement);
       },

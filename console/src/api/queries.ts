@@ -53,17 +53,34 @@ export async function fetchIntakeSnapshot(
   return result.value[0] ?? null;
 }
 
+/** 取り込み時点のIssueが新しいとみなす間隔。短くして、更新後の内容を長く隠さないようにする。 */
+export const INTAKE_SNAPSHOT_STALE_MS = 10_000;
+
 /**
- * 取り込み時点のIssueを取る。取り込み時点の内容は変わらないので、自動では取り直さない。
- * `workItemId`が違えば、別のキャッシュとして取り直す。
+ * 取り込み時点のIssueのキャッシュのキー。
+ * 却下による作り直しは、同じ作業項目の取り込み内容を書き換える。
+ * 承認依頼は作り直しのたびに新しくなるので、キーに含めると、更新前の内容を新しい承認の画面に出さない。
+ */
+export function intakeSnapshotQueryKey(
+  workItemId: number,
+  approvalRequestId: number,
+): readonly ["console", "intake_snapshot", number, number] {
+  return ["console", "intake_snapshot", workItemId, approvalRequestId];
+}
+
+/**
+ * 取り込み時点のIssueを取る。画面を開くたびに取り直す。
+ * 却下による作り直しで書き換わりうるので、承認依頼ごとに別のキャッシュにし、古い値を使い回さない。
  */
 export function useIntakeSnapshot(
   workItemId: number,
+  approvalRequestId: number,
 ): UseQueryResult<IntakeSnapshot | null, Error> {
   return useQuery({
-    queryKey: ["console", "intake_snapshot", workItemId],
+    queryKey: intakeSnapshotQueryKey(workItemId, approvalRequestId),
     queryFn: ({ signal }) => fetchIntakeSnapshot(workItemId, { signal }),
-    staleTime: Number.POSITIVE_INFINITY,
+    staleTime: INTAKE_SNAPSHOT_STALE_MS,
+    refetchOnMount: "always",
   });
 }
 

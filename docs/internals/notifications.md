@@ -25,6 +25,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | `issue_claimed` | Issue着手 | `poll_issues`、`manual_intake_register` | Issueを取得し、要件定義の生成を始めた |
 | `approval_requested` | 承認待ち | `pipeline_request_approval` | 要件定義の承認依頼を記録した |
 | `requirements_approved` | 要件定義承認 | `requirements_apply` | 要件定義が承認された |
+| `intake_refreshed` | 取り込み内容を更新 | `requirements_apply` | 却下による作り直しで、取り込んだ題名と本文を現在のIssueの内容に更新した |
 | `needs_human` | 人による対応が必要です | 下の表を参照 | 作業項目が人の対応を待つ状態になった |
 | `pr_reviewed` | PRレビュー完了 | `pr_review_post` | レビューを投稿した |
 | `pr_fixed` | PR修正適用 | `pr_fix_finish` | 修正をpushし、再レビューを依頼した |
@@ -74,6 +75,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | `issue_claimed` | Issue | リポジトリ |
 | `approval_requested` | Consoleの承認の画面 | リポジトリ、Issue |
 | `requirements_approved` | Consoleの要件定義のページ | リポジトリ、Issue |
+| `intake_refreshed` | Issue | リポジトリ。説明に、新しいConsoleで更新後の内容を確かめる旨 |
 | `needs_human` | 対象のIssueかPR | 説明に理由、「次の操作」、リポジトリ |
 | `pr_reviewed` | PR | 説明に指摘の件数と状態 |
 | `pr_fixed` | PR | 再レビュー依頼のAPIが失敗したときだけ「補足」 |
@@ -195,6 +197,7 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | --- | --- | --- |
 | `approval_notify_failed` | `pipeline_request_approval` | 対象、送れなかった理由 |
 | `approval_comment_failed` | `requirements_apply` | 対象、理由、要件定義を開くConsoleのリンク |
+| `intake_refreshed` | `requirements_apply`、`retry_work_item` | 対象、新しいConsoleで更新後の内容を確かめる旨 |
 | `implement_launch_failed` | `requirements_apply` | 対象、理由、次の操作 |
 | `implement_needs_human` | `implement_finish` | 対象、止まった理由 |
 | `unsandboxed_check_commands` | `implement_verify`、`pr_fix_verify` | 実行する検査コマンドの件数、対象 |

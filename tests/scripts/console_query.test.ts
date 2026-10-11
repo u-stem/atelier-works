@@ -860,6 +860,7 @@ describe("runConsoleQuery intake_snapshot", () => {
     issue_url: "https://github.com/octo-owner/atelier-works/issues/42",
     title: "Add feature",
     body: "Original body",
+    refreshed: false,
   };
 
   test("requires a work_item_id", async () => {
@@ -885,6 +886,9 @@ describe("runConsoleQuery intake_snapshot", () => {
         title: "Add feature",
         body: "Original body",
         body_truncated: false,
+        body_tail_html_comments: 0,
+        body_tail_hidden_chars: 0,
+        refreshed: false,
       },
     ]);
   });
@@ -902,12 +906,66 @@ describe("runConsoleQuery intake_snapshot", () => {
     });
   });
 
-  test("binds the work item id instead of building it into the statement", async () => {
+  test("counts HTML comment openers in the part that was cut off", async () => {
+    const { sql } = createFakeSqlClient([
+      [
+        {
+          ...ROW,
+          body: `${"x".repeat(INTAKE_BODY_MAX_CHARS)}<!-- a --><!-- b`,
+        },
+      ],
+    ]);
+
+    const rows = await runConsoleQuery("intake_snapshot", 200, 30, sql, 7);
+
+    expect(rows[0]).toMatchObject({ body_tail_html_comments: 2 });
+  });
+
+  test("counts hidden characters in the part that was cut off", async () => {
+    const { sql } = createFakeSqlClient([
+      [
+        {
+          ...ROW,
+          body: `${"x".repeat(INTAKE_BODY_MAX_CHARS)}a\u200Bb\u{E0041}`,
+        },
+      ],
+    ]);
+
+    const rows = await runConsoleQuery("intake_snapshot", 200, 30, sql, 7);
+
+    expect(rows[0]).toMatchObject({ body_tail_hidden_chars: 2 });
+  });
+
+  test("does not count the part that was returned", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ ...ROW, body: "<!-- shown --> a\u200Bb" }],
+    ]);
+
+    const rows = await runConsoleQuery("intake_snapshot", 200, 30, sql, 7);
+
+    expect(rows[0]).toMatchObject({
+      body_tail_html_comments: 0,
+      body_tail_hidden_chars: 0,
+    });
+  });
+
+  test("returns whether the intake content was refreshed", async () => {
+    const { sql } = createFakeSqlClient([[{ ...ROW, refreshed: true }]]);
+
+    const rows = await runConsoleQuery("intake_snapshot", 200, 30, sql, 7);
+
+    expect(rows[0]).toMatchObject({ refreshed: true });
+  });
+
+  test("looks for the refresh note by its prefix", async () => {
     const { sql, calls } = createFakeSqlClient([[ROW]]);
 
     await runConsoleQuery("intake_snapshot", 200, 30, sql, 7);
 
-    expect(calls[0]?.values).toEqual([7]);
+    expect(calls[0]?.values).toEqual([
+      "intake refreshed from the current issue",
+      7,
+    ]);
   });
 
   test("reads only issue work items", async () => {

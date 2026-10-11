@@ -131,19 +131,6 @@ export async function assertIssueMatchesIntake(
   }
 }
 
-/**
- * `needsCheck`が真なら`check`を先に実行し、例外を投げたら`record`を呼ばずに伝える。
- * 状態を変える記録の前に、必ず確認を済ませるための順序の固定である。
- */
-export async function checkBeforeRecording<T>(
-  needsCheck: boolean,
-  check: () => Promise<void>,
-  record: () => Promise<T>,
-): Promise<T> {
-  if (needsCheck) await check();
-  return await record();
-}
-
 export type ApprovalDecideResult = {
   readonly ok: boolean;
   readonly status: string;
@@ -186,18 +173,20 @@ export async function main(
   const initialAction = classify(request.status);
 
   if (initialAction === "record_and_dispatch") {
-    await checkBeforeRecording(
-      needsIssueCheck(initialAction, decision, request.kind),
-      () =>
-        assertIssueMatchesIntake(approval_request_id, request.work_item_id, {
+    // 状態を変える記録の前に、必ず確認を済ませる。断られたときは、記録に進まない。
+    if (needsIssueCheck(initialAction, decision, request.kind)) {
+      await assertIssueMatchesIntake(
+        approval_request_id,
+        request.work_item_id,
+        {
           getWorkItem: (id) => getWorkItem(id),
           getToken: () => wmill.getVariable("f/factory/github_token"),
           fetchFn: fetch,
           warn: (message, fields) =>
             logger("approval_decide").warn(message, fields),
-        }),
-      () => Promise.resolve(),
-    );
+        },
+      );
+    }
     const approver = deriveApprover({
       WM_USERNAME: process.env.WM_USERNAME,
       WM_EMAIL: process.env.WM_EMAIL,

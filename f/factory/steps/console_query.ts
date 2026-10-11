@@ -13,9 +13,12 @@ import {
 } from "../lib/console_status.ts";
 import {
   ACTIONABLE_WORK_ITEM_STATUSES,
+  countHiddenCharacters,
+  countHtmlCommentOpeners,
   INFO_NOTICE_KINDS,
   INFO_NOTICE_WINDOW_DAYS,
   INTAKE_BODY_MAX_CHARS,
+  INTAKE_REFRESHED_NOTE_PREFIX,
   INTAKE_TITLE_MAX_CHARS,
   isNoticeResolvable,
   type NoticeSeverity,
@@ -920,6 +923,9 @@ async function toRequirementsDocRow(
  * 実装のClaudeに渡る内容で、承認者がGitHub上の現在のIssueと別に確かめるために返す。
  * Issueの起票者が書いた信頼できない入力なので、Consoleは文字列として描き、解釈しない。
  * 本文は`INTAKE_BODY_MAX_CHARS`で切り、切ったときは`body_truncated`が真になる。
+ * 切った後ろの部分は、承認者がConsoleでもGitHubでも確かめられない。
+ * そこにHTMLのコメントの開始と画面に出せない文字があれば、その数を返し、Consoleが警告する。
+ * `refreshed`は、却下や再実行による作り直しで、取り込み内容を現在のIssueに更新したことがあるか。
  */
 export type IntakeSnapshotRow = {
   readonly work_item_id: number;
@@ -930,6 +936,9 @@ export type IntakeSnapshotRow = {
   readonly title: string;
   readonly body: string;
   readonly body_truncated: boolean;
+  readonly body_tail_html_comments: number;
+  readonly body_tail_hidden_chars: number;
+  readonly refreshed: boolean;
 };
 
 function toIntakeSnapshotRow(row: SqlRow): IntakeSnapshotRow {
@@ -937,7 +946,11 @@ function toIntakeSnapshotRow(row: SqlRow): IntakeSnapshotRow {
     asStr(row.title, "title"),
     INTAKE_TITLE_MAX_CHARS,
   );
-  const body = truncateChars(asStr(row.body, "body"), INTAKE_BODY_MAX_CHARS);
+  const rawBody = asStr(row.body, "body");
+  const body = truncateChars(rawBody, INTAKE_BODY_MAX_CHARS);
+  const tail = body.truncated
+    ? Array.from(rawBody).slice(INTAKE_BODY_MAX_CHARS).join("")
+    : "";
   return {
     work_item_id: asId(row.work_item_id, "work_item_id"),
     owner: asStr(row.owner, "owner"),
@@ -947,6 +960,9 @@ function toIntakeSnapshotRow(row: SqlRow): IntakeSnapshotRow {
     title: title.text,
     body: body.text,
     body_truncated: body.truncated,
+    body_tail_html_comments: countHtmlCommentOpeners(tail),
+    body_tail_hidden_chars: countHiddenCharacters(tail),
+    refreshed: asBool(row.refreshed, "refreshed"),
   };
 }
 
@@ -2048,10 +2064,16 @@ export async function runConsoleQuery(
       }
       const rows = await sql`
         SELECT
-          id AS work_item_id, owner, repo, issue_number, issue_url, title, body
-        FROM factory.work_items
-        WHERE id = ${workItemId}::bigint
-          AND kind = 'issue'
+          wi.id AS work_item_id, wi.owner, wi.repo, wi.issue_number,
+          wi.issue_url, wi.title, wi.body,
+          EXISTS (
+            SELECT 1 FROM factory.work_item_events e
+            WHERE e.work_item_id = wi.id
+              AND starts_with(e.note, ${INTAKE_REFRESHED_NOTE_PREFIX})
+          ) AS refreshed
+        FROM factory.work_items wi
+        WHERE wi.id = ${workItemId}::bigint
+          AND wi.kind = 'issue'
         LIMIT 1
       `.fetch();
       return rows.map(toIntakeSnapshotRow);

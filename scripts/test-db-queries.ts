@@ -6,6 +6,7 @@
 
 import {
   INFO_NOTICE_KINDS,
+  INTAKE_REFRESHED_NOTE_PREFIX,
   UNRESOLVABLE_NOTICE_KINDS,
 } from "../f/factory/lib/console_support.ts";
 import {
@@ -14,6 +15,7 @@ import {
   countPrFixFailures,
   deleteResolvedNoticesBefore,
   getNoticeById,
+  hasIntakeRefreshEvent,
   insertCleanupRun,
   insertWorkItem,
   recordFailure,
@@ -22,10 +24,12 @@ import {
   resolveStaleInfoNoticesBefore,
   resolveUnresolvedNoticesByMessage,
   resolveUnresolvedNoticesByPrefix,
+  updateIntakeIfRegenerating,
 } from "../f/factory/lib/db.ts";
 import { getCleanupSummary } from "../f/factory/lib/summary_support.ts";
 import type { WorkItemStatus } from "../f/factory/lib/types.ts";
 import {
+  runConsoleQuery,
   runConsoleSummary,
   runSystemStatus,
   runWorkItemDetail,
@@ -1157,6 +1161,64 @@ check(
   "deployed_sha_mismatch: a notice created at the same time as the successful deployment stays open",
   boundaryResolved === 0 && (await isResolved(boundaryNotice)) === false,
   boundaryResolved,
+);
+
+// 取り込み内容の更新: 更新と履歴の行が同じ文で書かれ、Consoleのビューが更新を導く。
+const refreshItem = await issueWorkItem(
+  9001,
+  1,
+  "requirements_generating",
+  "qdb before",
+);
+async function intakeSnapshotOf(id: number) {
+  const row = (await runConsoleQuery("intake_snapshot", 200, 30, sql, id))[0];
+  return row !== undefined && "refreshed" in row ? row : null;
+}
+check(
+  "intake refresh: the snapshot starts as not refreshed",
+  (await intakeSnapshotOf(refreshItem))?.refreshed === false,
+);
+const refreshNote = `${INTAKE_REFRESHED_NOTE_PREFIX}; before: x; after: y`;
+const refreshWritten = await updateIntakeIfRegenerating(
+  refreshItem,
+  { title: "qdb after", body: "new body" },
+  refreshNote,
+  sql,
+);
+check("intake refresh: updates a regenerating work item", refreshWritten);
+const refreshed = await intakeSnapshotOf(refreshItem);
+check(
+  "intake refresh: the snapshot returns the new content and the refreshed flag",
+  refreshed?.refreshed === true && refreshed.title === "qdb after",
+  refreshed,
+);
+check(
+  "intake refresh: the event is found by its prefix",
+  await hasIntakeRefreshEvent(refreshItem, INTAKE_REFRESHED_NOTE_PREFIX, sql),
+);
+const leasedItem = await issueWorkItem(
+  9002,
+  1,
+  "requirements_generating",
+  "qdb leased",
+);
+execPsql(
+  target,
+  `UPDATE factory.work_items SET flow_job_id = 'job-1' WHERE id = ${String(leasedItem)}`,
+);
+check(
+  "intake refresh: does not update a work item whose pipeline holds the lease",
+  (await updateIntakeIfRegenerating(
+    leasedItem,
+    { title: "x", body: "y" },
+    refreshNote,
+    sql,
+  )) === false &&
+    (await hasIntakeRefreshEvent(
+      leasedItem,
+      INTAKE_REFRESHED_NOTE_PREFIX,
+      sql,
+    )) === false,
 );
 
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。

@@ -22,6 +22,7 @@ import {
   getNoticeById,
   getRequirementDraft,
   getWorkItem,
+  hasIntakeRefreshEvent,
   hasNonTerminalPrWorkItem,
   hasPriorReview,
   hasUnfinishedPrRun,
@@ -3889,31 +3890,55 @@ describe("resolveNoticesBeforeSuccessfulDeployment", () => {
 });
 
 describe("updateIntakeIfRegenerating", () => {
-  test("writes the title and body", async () => {
+  test("writes the title, body and note", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
-    await updateIntakeIfRegenerating(1, { title: "T", body: "B" }, sql);
-    expect(calls[0]?.values).toEqual(["T", "B", 1]);
+    await updateIntakeIfRegenerating(1, { title: "T", body: "B" }, "N", sql);
+    expect(calls[0]?.values).toEqual(["T", "B", 1, "N"]);
   });
 
   test("only updates an issue work item that is regenerating without a lease", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
-    await updateIntakeIfRegenerating(1, { title: "T", body: "B" }, sql);
+    await updateIntakeIfRegenerating(1, { title: "T", body: "B" }, "N", sql);
     expect(calls[0]?.text).toContain(
       "kind = 'issue' AND status = 'requirements_generating' AND flow_job_id IS NULL",
     );
   });
 
+  test("records the event in the same statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await updateIntakeIfRegenerating(1, { title: "T", body: "B" }, "N", sql);
+    expect(calls[0]?.text).toContain("INSERT INTO factory.work_item_events");
+  });
+
   test("returns true when a row was updated", async () => {
     const { sql } = createFakeSqlClient([[{ id: 1 }]]);
     expect(
-      await updateIntakeIfRegenerating(1, { title: "T", body: "B" }, sql),
+      await updateIntakeIfRegenerating(1, { title: "T", body: "B" }, "N", sql),
     ).toBe(true);
   });
 
   test("returns false when the work item moved on", async () => {
     const { sql } = createFakeSqlClient([[]]);
     expect(
-      await updateIntakeIfRegenerating(1, { title: "T", body: "B" }, sql),
+      await updateIntakeIfRegenerating(1, { title: "T", body: "B" }, "N", sql),
     ).toBe(false);
+  });
+});
+
+describe("hasIntakeRefreshEvent", () => {
+  test("is true when an event note starts with the prefix", async () => {
+    const { sql } = createFakeSqlClient([[{ found: 1 }]]);
+    expect(await hasIntakeRefreshEvent(1, "intake refreshed", sql)).toBe(true);
+  });
+
+  test("is false when no event matches", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await hasIntakeRefreshEvent(1, "intake refreshed", sql)).toBe(false);
+  });
+
+  test("binds the work item and the prefix", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasIntakeRefreshEvent(1, "intake refreshed", sql);
+    expect(calls[0]?.values).toEqual([1, "intake refreshed"]);
   });
 });

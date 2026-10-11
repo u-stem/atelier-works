@@ -214,6 +214,12 @@ describe("issueCheckRefusal", () => {
     expect(issueCheckRefusal("unavailable", 7)).toContain("try again");
   });
 
+  test("tells the approver to reject when the issue was moved or deleted", () => {
+    expect(issueCheckRefusal("unavailable", 7)).toContain(
+      "If the issue was transferred or deleted, reject the request.",
+    );
+  });
+
   test("names the approval request in the refusal", () => {
     expect(issueCheckRefusal("changed", 7)).toContain("approval request 7");
   });

@@ -90,7 +90,10 @@ export function ApprovalOverview({
         </Row>
       </dl>
       {approval.kind === "requirements" ? (
-        <IntakeSnapshotPanel workItemId={approval.work_item_id} />
+        <IntakeSnapshotPanel
+          workItemId={approval.work_item_id}
+          approvalRequestId={approval.approval_request_id}
+        />
       ) : null}
       <p className="flex items-start gap-2 rounded-xl border border-dashed border-border px-4 py-3 text-small text-muted-foreground">
         <Info
