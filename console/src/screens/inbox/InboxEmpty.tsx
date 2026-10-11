@@ -36,7 +36,7 @@ export function InboxEmpty({
             </span>
           )}
           <h2 className="text-title font-semibold tracking-tight">
-            対応が必要な承認はありません
+            対応が必要な承認と失敗はありません
           </h2>
           <p className="text-small text-muted-foreground tabular-nums">
             {updatedAt > 0

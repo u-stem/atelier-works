@@ -15,7 +15,7 @@ import { workItemStatusLabel } from "./labels.ts";
  * `success`は操作が済んだこと、`info`は何も変えなかった正常な結果、
  * `warning`は済んだが確かめてほしいことを表す。
  */
-type WriteNotice = {
+export type WriteNotice = {
   readonly tone: "success" | "info" | "warning";
   readonly message: string;
 };

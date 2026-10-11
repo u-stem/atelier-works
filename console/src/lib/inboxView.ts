@@ -14,6 +14,7 @@ import {
   type InboxKind,
   type InboxSelection,
 } from "./inboxSelection.ts";
+import { displayableIssueText } from "./intakeText.ts";
 import {
   approvalKindLabel,
   approvalStatusLabel,
@@ -66,12 +67,17 @@ const CHIP_LABELS: Readonly<Record<InboxChip, string>> = {
 
 /**
  * summaryから一覧の項目を作る。
- * 失敗と通知は、詳細を描く画面ができるまで含めない。件数は`unlistedCounts`で知らせる。
+ * 通知は、詳細を描く画面ができるまで含めない。件数は`unlistedCounts`で知らせる。
  */
 export function buildInboxItems(summary: ConsoleSummary): InboxItem[] {
-  return summary.approvals.map(
-    (approval): InboxItem => ({ type: "approval", approval }),
-  );
+  return [
+    ...summary.approvals.map(
+      (approval): InboxItem => ({ type: "approval", approval }),
+    ),
+    ...summary.failures.map(
+      (failure): InboxItem => ({ type: "failure", failure }),
+    ),
+  ];
 }
 
 export function selectionOf(item: InboxItem): InboxSelection {
@@ -162,7 +168,7 @@ export function effectiveChip(
 
 /**
  * 選んだ項目が一覧に無いときに、詳細のペインに出す文。
- * 失敗と通知は一覧に載せない種類なので、処理済みとは言わない。
+ * 通知は一覧に載せない種類なので、処理済みとは言わない。
  */
 export function missingSelectionMessage(
   selection: InboxSelection | null,
@@ -170,9 +176,9 @@ export function missingSelectionMessage(
   if (selection === null) {
     return "一覧から項目を選んでください。";
   }
-  return selection.type === "approval"
-    ? "選んだ項目は一覧にありません。すでに処理されたか、まだ取得できていません。"
-    : "この種類の一覧は準備中です。";
+  return selection.type === "notice"
+    ? "この種類の一覧は準備中です。"
+    : "選んだ項目は一覧にありません。すでに処理されたか、まだ取得できていません。";
 }
 
 /** 選択に当たる項目を返す。選んでいないとき、または一覧に無いときは`null`。 */
@@ -308,7 +314,9 @@ export function describeRow(item: InboxItem, nowMs: number): RowDescription {
     case "failure":
       return {
         key,
-        title: item.failure.title ?? workItemRef(item.failure.work_item_id),
+        title: displayableIssueText(
+          item.failure.title ?? workItemRef(item.failure.work_item_id),
+        ).text,
         kindLabel: "失敗",
         statusLabel: workItemStatusLabel(item.failure.status),
         subLabel: `${workItemKindLabel(item.failure.kind)}・${workItemRef(item.failure.work_item_id)}`,
@@ -335,9 +343,18 @@ export type UnlistedCount = {
 };
 
 /**
+ * 一覧に出ていない件数のカードが、旧Consoleへのリンクを持つ種類か。
+ * 失敗は新しい画面の一覧が受け持つので、旧Consoleへ誘導しない。
+ * 残る件数は、取得の上限を超えた分だけである。
+ */
+export function hasLegacyLink(type: InboxKind): boolean {
+  return type !== "failure";
+}
+
+/**
  * 一覧に出ていない要対応の件数を、種類ごとに返す。無ければ空の配列。
  * 件数(`counts`)は取得の上限を超えた分も数える。種類ごとに、件数から一覧にある項目を引いた差を返す。
- * 承認は上限を超えた分、失敗と通知は一覧に載せていない分である。
+ * 承認と失敗は上限を超えた分、通知は一覧に載せていない分である。
  */
 export function unlistedCounts(
   counts: SummaryCounts,

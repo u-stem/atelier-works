@@ -15,6 +15,7 @@ import {
   emptyStateTone,
   filterInboxItems,
   findInboxItem,
+  hasLegacyLink,
   type InboxItem,
   inboxSubtitle,
   itemId,
@@ -114,14 +115,22 @@ describe("buildInboxItems", () => {
     ).toEqual([["approval", 5]]);
   });
 
-  test("does not list failures or notices yet", () => {
+  test("wraps each failure as a failure item keyed by its work item id", () => {
     expect(
       buildInboxItems(
-        summaryOf({
-          failures: [failure()],
-          notices: [notice()],
-        }),
-      ).map((item) => item.type),
+        summaryOf({ failures: [failure({ work_item_id: 9 })] }),
+      ).map((item) => [item.type, itemId(item)]),
+    ).toEqual([
+      ["approval", 1],
+      ["failure", 9],
+    ]);
+  });
+
+  test("does not list notices yet", () => {
+    expect(
+      buildInboxItems(summaryOf({ notices: [notice()] })).map(
+        (item) => item.type,
+      ),
     ).toEqual(["approval"]);
   });
 });
@@ -415,6 +424,13 @@ describe("describeRow", () => {
     ).toBe("人の対応待ち");
   });
 
+  test("replaces hidden characters in the title of a failure row", () => {
+    expect(
+      describeRow({ type: "failure", failure: failure({ title: "a‮b" }) }, NOW)
+        .title,
+    ).toBe("a�b");
+  });
+
   test("describes a notice row without leaking the code", () => {
     expect(describeRow(N21, NOW)).toEqual({
       key: "notice:21",
@@ -425,6 +441,20 @@ describe("describeRow", () => {
       iso: "2026-10-03T00:00:00.000Z",
       expiry: null,
     });
+  });
+});
+
+describe("hasLegacyLink", () => {
+  test("keeps the link for approvals cut by the limit", () => {
+    expect(hasLegacyLink("approval")).toBe(true);
+  });
+
+  test("drops the link for failures, which the list now handles", () => {
+    expect(hasLegacyLink("failure")).toBe(false);
+  });
+
+  test("keeps the link for notices until the list shows them", () => {
+    expect(hasLegacyLink("notice")).toBe(true);
   });
 });
 
@@ -441,11 +471,11 @@ describe("unlistedCounts", () => {
     ).toEqual([{ type: "approval", label: "承認", count: 249 }]);
   });
 
-  test("reports failures and notices that the list does not show yet", () => {
+  test("reports failures beyond the listed ones and the unlisted notices", () => {
     expect(
-      unlistedCounts({ approvals: 1, failures: 5, notices: 4 }, [A1]),
+      unlistedCounts({ approvals: 1, failures: 5, notices: 4 }, [A1, F7]),
     ).toEqual([
-      { type: "failure", label: "失敗", count: 5 },
+      { type: "failure", label: "失敗", count: 4 },
       { type: "notice", label: "通知", count: 4 },
     ]);
   });
@@ -547,9 +577,9 @@ describe("missingSelectionMessage", () => {
     );
   });
 
-  test("says a failure list is not ready", () => {
-    expect(missingSelectionMessage({ type: "failure", id: 3 })).toBe(
-      "この種類の一覧は準備中です。",
+  test("says a failure may already be handled", () => {
+    expect(missingSelectionMessage({ type: "failure", id: 3 })).toContain(
+      "すでに処理された",
     );
   });
 
