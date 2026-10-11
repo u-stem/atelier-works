@@ -87,16 +87,23 @@ RUN set -eux; \
 # 食い違っても`WMILL_VERSION`だけを正とする。
 RUN npm install -g --force "windmill-cli@${WMILL_VERSION}"
 
-# Claude Code CLI。`/root/.local/bin`に入る。
+# Claude Code CLI。インストーラーは`/root/.local/bin`に置くので、名前で起動
+# できるよう`/usr/local/bin`にsymlinkを張る。
 ENV DISABLE_AUTOUPDATER=1 \
     CLAUDE_CONFIG_DIR=/var/lib/factory/claude \
     GH_CONFIG_DIR=/var/lib/factory/gh \
     GIT_TERMINAL_PROMPT=0
-RUN curl -fsSL https://claude.ai/install.sh | bash -s -- "${CLAUDE_VERSION}"
-ENV PATH="/root/.local/bin:${PATH}"
+RUN curl -fsSL https://claude.ai/install.sh | bash -s -- "${CLAUDE_VERSION}" \
+    && ln -sf /root/.local/bin/claude /usr/local/bin/claude
+
+# workerのPATHからrootのホームを外す。ベースのイメージのPATHは
+# `/root/.local/bin`と`/tmp/.local/bin`を含むので、継承せず明示的に書く。
+# 値はベースのイメージのPATHから`/root/.local/bin`だけを除いたものである。
+ENV PATH="/usr/local/bin:/tmp/.local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/go/bin"
 
 # ビルド時の検証。道具が欠けている・壊れているとき、ジョブの実行時に
 # 気づくのではなく、その場でビルドを失敗させる。
+# `claude`はPATHの名前で解決して確かめる。
 RUN claude --version && gh --version && gitleaks version && git gtr version && wmill --version && bun --version
 
 CMD ["windmill"]

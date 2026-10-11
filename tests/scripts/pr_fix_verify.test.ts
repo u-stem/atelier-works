@@ -23,6 +23,7 @@ import type { CreateCheckHomeDir } from "../../f/factory/steps/pr_workflow_suppo
 import {
   anyPackageJsonScriptsChanged,
   CHECK_COMMAND_MAX_OUTPUT_BYTES,
+  CHECK_COMMAND_PATH,
   countUntrackedFileLines,
   detectEscapingSymlinks,
   detectForbiddenChanges,
@@ -1337,6 +1338,31 @@ describe("runAllowedCheckCommands", () => {
       HOME: "/fake-check-home",
       PATH: "/usr/bin",
     });
+  });
+
+  test("passes the fixed PATH even when the worker's PATH differs", async () => {
+    const { run, calls } = createFakeCommandRunner([ok("")]);
+    const workerPath = process.env.PATH;
+    process.env.PATH = "/root/.local/bin:/tmp/.local/bin:/usr/bin";
+    try {
+      await runAllowedCheckCommands(
+        run,
+        "/work",
+        ["true"],
+        1000,
+        fakeCheckHomeDir().factory,
+      );
+    } finally {
+      if (workerPath === undefined) delete process.env.PATH;
+      else process.env.PATH = workerPath;
+    }
+    expect(calls[0]?.options?.env?.PATH).toBe("/usr/local/bin:/usr/bin:/bin");
+  });
+
+  test("the fixed PATH holds no directory under /root", () => {
+    expect(
+      CHECK_COMMAND_PATH.split(":").filter((dir) => dir.startsWith("/root")),
+    ).toEqual([]);
   });
 
   test("cleans up the HOME dir after every command finishes", async () => {

@@ -303,6 +303,8 @@ workerは`privileged`にせず、`FAVOR_UNSHARE_PID`も有効にしない。Wind
 
 workerには`no-new-privileges:true`と、プロセス数の上限(`deploy.resources.limits.pids`)を設定する。`cap_drop`によるケーパビリティの削減と、rootでないユーザーでの実行はしない。ベースのWindmill公式イメージがrootでの実行を前提にしているためである。
 
+workerのPATHには、rootのホームの`/root/.local/bin`を入れない。`claude`は`/usr/local/bin`のsymlinkから名前で起動する。
+
 ## Console用workerの境界
 
 Console用のworker(`windmill_worker_console`)は、Consoleの問い合わせと操作の受付だけを処理する。
@@ -859,6 +861,7 @@ Claudeに渡すツールは`Read`、`Glob`、`Grep`、`Edit`、`Write`だけで�
 ### 検査コマンドはフローが実行する
 
 対象リポジトリのlintやテストは、Claudeではなくフローのステップが`factory_config`の`allowed_check_commands`を実行する。検査コマンドは対象リポジトリのコードをworkerの中でrootとして、隔離なしに実行する。そのため既定値は空の配列にし、空でなければ実行のたびに隔離していないことを知らせる記録(notice)を残す。
+検査コマンドに渡す`PATH`は固定の`/usr/local/bin:/usr/bin:/bin`で、workerの`PATH`は引き継がない。
 
 ### 対象リポジトリの設定を信頼しない
 
