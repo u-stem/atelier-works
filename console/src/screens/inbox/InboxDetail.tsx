@@ -19,7 +19,8 @@ function Message({ children }: { children: string }) {
 
 /**
  * 要対応の詳細のペイン。選んだ項目の種類ごとに、描く部品を1か所で振り分ける。
- * 承認は概要を描く。失敗と通知は、詳細を描く部品がないので、準備中である旨の文だけを出す。
+ * 承認は詳細と承認バーを描く。選んだ依頼が変わると、入力中の理由を引き継がない。
+ * 失敗と通知は、詳細を描く部品がないので、準備中である旨の文だけを出す。
  */
 export function InboxDetail({
   item,
@@ -35,7 +36,13 @@ export function InboxDetail({
   }
   switch (item.type) {
     case "approval":
-      return <ApprovalOverview approval={item.approval} now={now} />;
+      return (
+        <ApprovalOverview
+          key={item.approval.approval_request_id}
+          approval={item.approval}
+          now={now}
+        />
+      );
     case "failure":
       return <Message>失敗の詳細は準備中です。</Message>;
     case "notice":
