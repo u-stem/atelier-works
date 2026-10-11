@@ -13,7 +13,7 @@ Software FactoryはGitHub Issueを起点に、要件定義から自己改善ま�
 | GitHub | Issue、PR、コメントのやり取り先。Factoryはここに成果物だけを書く |
 | Windmillのserverとworker | フローとスケジュールの実行基盤 |
 | Data Tables | 作業の状態、要件定義ドラフト、承認依頼、実行ログ、失敗記録を持つPostgresのテーブル群 |
-| Factory Console(`console/`) | 承認と却下、失敗の再実行、通知の解決、作業項目の進捗、要件定義書と監査レポートの閲覧、コストの分析、システムの状態を提供する。Vite + Reactで作る。GitHubのCIが組み立てて成果物`console-dist`にし、`console_fetcher`が取り込み、Caddyが`/console/`で配信する |
+| Factory Console(`console/`) | 承認と却下、失敗の再実行、通知の解決、作業項目の進捗、要件定義書と監査レポートの閲覧、コストの分析、システムの状態を提供する。Vite + Reactで作る。専用のワークフロー(`console-dist.yml`)が組み立てて成果物`console-dist`にし、`console_fetcher`が取り込み、Caddyが`/console/`で配信する |
 | Discord | 拾い上げ、承認待ち、承認、要対応、失敗などのイベントをWebhookで通知する |
 
 Claudeを動かすworker(`windmill_worker`)はカスタムイメージで動く。
@@ -539,7 +539,7 @@ Discordへの通知の2回は、ホスト側の作業の通知と、最後の確
 - ユーザー名が`timeout`の人が取り消した回は、時間切れと見分けられず、失敗に数えられる。
 
 `console/`の変更は`self_update`の対象ではない。
-マージ後にCIが成果物`console-dist`を作り、`console_fetcher`が数分で取り込む。
+マージ後に`console-dist.yml`が成果物`console-dist`を作り、`console_fetcher`が数分で取り込む。
 `classifyChangedPaths`は`console/`の変更を`console_paths`として分けて返し、実装フローはPR本文の「Windmillへの反映」に印を付ける。
 仕組みは[Consoleの仕様](internals/console.md)に書く。
 

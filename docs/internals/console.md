@@ -1209,7 +1209,8 @@ URLにワークスペースの指定(`?workspace=`)を付けない。
 | 要素 | 役割 |
 | --- | --- |
 | `console/` | Consoleのソースコード(Vite + React) |
-| `ci.yml`の`console`ジョブ | `console/`を組み立て、`main`へのpushで成果物`console-dist`として上げる。型検査、lint、テストは`check`ジョブが担う |
+| `.github/workflows/console-dist.yml` | `main`へのpushで、`console/`を組み立てて成果物`console-dist`として上げる。成果物を上げるのはこのワークフローだけである |
+| `ci.yml`の`console`ジョブ | PRで、`console-dist.yml`と同じ手順で組み立てられることを確かめる。成果物は上げない。型検査、lint、テストは`check`ジョブが担う |
 | `infra/console_fetcher/` | 成果物を検証して、名前付きボリューム`factory_console`に書く |
 | Caddy | `factory_console`を読み取り専用でマウントし、`/console/`で配信する |
 
@@ -1227,23 +1228,70 @@ URLにワークスペースの指定(`?workspace=`)を付けない。
 
 ## 取り込みの検証
 
-`console_fetcher`は、`main`へのpushで動き、全体が成功した`ci.yml`の実行の成果物`console-dist`だけを取り込む。
-書く前に、次をすべて確かめる。
+`console_fetcher`は、`console-dist.yml`の実行の成果物`console-dist`だけを取り込む。
+`ci.yml`のジョブは、同名の成果物を上げても取り込まれない。
+権限の違うジョブが成果物を上げ直して、配信物をすり替えるのを防ぐためである。
 
-1. zip全体のsha256が、GitHubの`digest`と一致する。
-2. 展開した全ファイルのsha256が、`manifest.json`と一致する。
-3. マニフェストが、その実行のcommitのものである。
+実行の一覧は、ワークフローのファイル`console-dist.yml`で絞って取得する。
+取得した実行は、次をすべて満たすものだけを候補にする。
+APIの絞り込みに頼らず、取り込み側でも確かめる。
+
+1. ワークフローのパスが`.github/workflows/console-dist.yml`で、名前が`Console dist`である。
+2. ブランチが`main`で、イベントが`push`である。
+3. 状態が完了で、結論が成功である。
+4. commitが40桁の16進数である。
+
+候補を新しく作られた順に見て、同じcommitの`ci.yml`も成功している最初の実行を選ぶ。
+`ci.yml`の確認は、`ci.yml`の実行の一覧にcommitを指定して取得し、次をすべて満たす実行があるかで決める。
+こちらも、APIの絞り込みに頼らず取り込み側で確かめる。
+
+1. ワークフローのパスが`.github/workflows/ci.yml`で、名前が`CI`である。
+2. ブランチが`main`で、イベントが`push`である。
+3. 状態が完了で、結論が成功である。
+4. commitが、候補のcommitと一致する。
+
+`console-dist.yml`は組み立てしか確かめないので、型検査、lint、テスト、秘密情報の走査を担う`ci.yml`の成功も条件にする。
+`ci.yml`が実行中か失敗しているcommitは飛ばして、その前の候補を選ぶ。
+確かめる候補は、新しい順に5つを上限にする。
+候補を見ている途中で配信中の版に当たったら、その版を選んで探索を止める。
+配信中の版より古いcommitに、版が戻らないためである。
+戻して取り消した版(`revoked.json`のsha)は、候補から外す。
+どの候補も満たさなければ、取り込まず今の版を配信し続ける。
+
+`main`という名前のタグの実行は、`main`のブランチの実行と見分けがつかない。
+そのため、両方のワークフローが同じcommitで成功していることを要る。
+ただしこの照合だけでは、タグを作れる人は防げない。残るリスクは[セキュリティ](../security.md)にある。
+
+選んだ実行の成果物を、書く前に次をすべて確かめる。
+
+1. 成果物の元のcommitが、その実行のcommitと一致する。
+2. zip全体のsha256が、GitHubの`digest`と一致する。
+3. 展開した全ファイルのsha256が、`manifest.json`と一致する。
+4. マニフェストが、その実行のcommitのものである。
 
 zipは自前のreaderでメモリ上に展開する。
 `..`、絶対パス、symlink、通常のファイル以外、暗号化、zip64は拒む。
 
 ## CIの組み立て
 
-`ci.yml`の`console`ジョブが組み立てる。
-型検査、lint、テストは`check`ジョブの`mise run check`(`console:check`)が担い、`console`ジョブは重ねて実行しない。
-PRでは、`scope`ジョブの`console`のフラグが偽のとき、このジョブを飛ばす。
-`main`へのpushでは、変更に関わらず毎回動かす。
-`console_fetcher`が、その実行の成果物を取り込むためである。
+`console-dist.yml`が、`main`へのpushのたびに組み立てて、成果物を上げる。
+変更したパスによらず毎回動かす。
+`console_fetcher`が、そのcommitの成果物を取り込むためである。
+PRとタグのpushでは動かさず、`ci.yml`のジョブを足さない。
+組み立ての手順は、このファイルに直接書き、別のファイルに分けない。
+Factoryのトークンは`.github/workflows/`を書けない。
+composite action(`.github/actions/`)は書けるので、分けると配布物がその変更に左右されるためである。
+
+- ワークフローの権限は、リポジトリの読み取り(`contents: read`)だけにする。成果物の書き込みには、`GITHUB_TOKEN`の書き込み権限を使わない。
+- ジョブは1つで、`console-dist.yml`にほかのジョブやトリガーを足さない。
+- 実行を取り消さない。取り消した実行は成功しないので、そのcommitの成果物が欠けるためである。
+- 同じ実行を「Re-run all jobs」で上げ直しても失敗しないように、成果物は上書きで上げる。
+
+`ci.yml`の`console`ジョブは、PRで同じ手順を書き写して動かし、組み立てとビューアの取得を確かめる。
+2つの手順が食い違わないことは、テストが確かめる。
+成果物は上げない。
+`scope`ジョブの`console`のフラグが偽のとき、このジョブを飛ばす。
+型検査、lint、テストは`check`ジョブの`mise run check`(`console:check`)が担い、どちらのワークフローも重ねて実行しない。
 判定の詳細は[セットアップ](../setup.md)の「CIの実行の範囲」にある。
 
 - miseで入れるツールは、bunと、viteとtscを動かすnodeだけにする。ほかの`[tools]`とそのinstall scriptを動かさない。
@@ -1395,7 +1443,8 @@ IPv4のアドレス(`127.0.0.1`など)かホスト名で開く。
 ### ビューアの取得
 
 ビューアはリポジトリに入れない。
-CIの`console`ジョブが、組み立ての後に`fetch-drawio-viewer.ts`を動かし、`dist/drawio/drawio-viewer-<sha256の先頭8桁>.js`に書く。
+`console-dist.yml`の手順は、組み立ての後に`fetch-drawio-viewer.ts`を動かす。
+ビューアは`dist/drawio/drawio-viewer-<sha256の先頭8桁>.js`に書く。
 取得したバイト列のsha256が固定の値と違えば、何も書かずに失敗する。
 URLはリダイレクトを許さず、パスはcommit配下のビューア1ファイルに限る。
 応答は10MBまでで、一時的な失敗(ネットワーク、429、5xx)は、待ちを倍にしながら3回まで再試行する。
@@ -1405,7 +1454,7 @@ URLはリダイレクトを許さず、パスはcommit配下のビューア1フ�
 キャッシュに一致するファイルがあれば取得しない。
 キャッシュの中身は信用せず、使う前に固定のsha256と照合する。照合に通らなければ、取得し直す。
 キャッシュは`dist/`の外に置く。`dist/drawio/`には受け口のscriptもあり、キャッシュから戻すと、組み立てた受け口を上書きしてしまうためである。
-raw.githubusercontent.comの障害で取得に失敗したら、CIのジョブを再実行する。キャッシュに当たれば取得せず、外れれば取得し直す。
+raw.githubusercontent.comの障害で取得に失敗したら、失敗したワークフローの実行を再実行する。キャッシュに当たれば取得せず、外れれば取得し直す。
 ビューアはApache-2.0のライセンスである。
 `console_fetcher`は、他の配信物と同じように、マニフェストの照合を経て`releases/<sha>/drawio/`に置く。
 共有の`assets/`には入れない。`current`から`/console/drawio/`として配信する。

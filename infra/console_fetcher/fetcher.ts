@@ -20,6 +20,7 @@ import {
   ARTIFACT_NAME,
   type AssetFile,
   appendHistory,
+  CI_WORKFLOW_FILE,
   CORRUPT_COPIES_TO_KEEP,
   type ConsoleManifest,
   type CurrentLink,
@@ -31,6 +32,7 @@ import {
   type FetcherConfig,
   type FetcherStatus,
   HISTORY_LIMIT,
+  hasCiSuccess,
   isAllowedDownloadUrl,
   isCommitSha,
   isLockStale,
@@ -49,14 +51,13 @@ import {
   parsePinSha,
   parseRevokedState,
   parseWorkflowRuns,
-  pruneRevokedState,
   RELEASE_BRANCH,
   type RevokedState,
+  rankReleaseRuns,
   referencedAssetNames,
   selectAssetsToDelete,
   selectCorruptCopiesToDelete,
   selectIdenticalReleases,
-  selectLatestRun,
   selectReleasesToDelete,
   selectRevokedAssets,
   selectRevokedReleases,
@@ -321,7 +322,51 @@ async function getJson(deps: FetcherDeps, path: string): Promise<unknown> {
   }
 }
 
-async function findLatestRun(deps: FetcherDeps): Promise<WorkflowRun> {
+/** `ci.yml`の成功の確認に使う、新しい順の候補の上限。 */
+const MAX_CANDIDATES = 5;
+
+/** そのcommitの`ci.yml`が、`main`へのpushで成功しているかをAPIで確かめる。 */
+async function isCiGreen(deps: FetcherDeps, sha: string): Promise<boolean> {
+  const query = new URLSearchParams({
+    head_sha: sha,
+    branch: RELEASE_BRANCH,
+    event: "push",
+    status: "success",
+    exclude_pull_requests: "true",
+    per_page: "20",
+  });
+  const runs = parseWorkflowRuns(
+    await getJson(deps, `/actions/workflows/${CI_WORKFLOW_FILE}/runs?${query}`),
+  );
+  if (runs === null) {
+    throw new FetchFailure(
+      "unexpected_response",
+      "ci workflow run list has an unexpected shape",
+    );
+  }
+  return hasCiSuccess(runs, sha);
+}
+
+/** 取り込む実行の選び方を、配信中の版と取り消した版で絞る。 */
+type RunSelection = {
+  /** 配信中の版。候補を新しい順に見て、この版に当たったらそれを返して探索を止める。 */
+  readonly currentSha: string | null;
+  /** 戻して取り消した版。候補から外す。 */
+  readonly revokedShas: readonly string[];
+};
+
+/**
+ * 取り込む実行を選ぶ。`console-dist.yml`が成功した新しい実行を新しい順に見て、
+ * 同じcommitの`ci.yml`も成功している最初のものを返す。
+ * `ci.yml`が実行中か失敗しているcommitは飛ばし、前の候補を選ぶ。
+ * `selection`を渡すと、配信中の版に当たった時点でその版を返す。
+ * 配信中の版より古いcommitを選んで、版が古い方へ戻らないためである。
+ * 取り消した版は候補から外す。`selection`を省くと、条件を満たす最新の実行をそのまま返す。
+ */
+async function findLatestRun(
+  deps: FetcherDeps,
+  selection: RunSelection = { currentSha: null, revokedShas: [] },
+): Promise<WorkflowRun> {
   const query = new URLSearchParams({
     branch: RELEASE_BRANCH,
     event: "push",
@@ -338,14 +383,19 @@ async function findLatestRun(deps: FetcherDeps): Promise<WorkflowRun> {
       "workflow run list has an unexpected shape",
     );
   }
-  const latest = selectLatestRun(runs);
-  if (latest === null) {
-    throw new FetchFailure(
-      "no_successful_run",
-      "no successful push run on main",
-    );
+  const checked = new Set<string>();
+  for (const candidate of rankReleaseRuns(runs)) {
+    const sha = candidate.headSha;
+    if (sha === selection.currentSha) return candidate;
+    if (checked.has(sha) || selection.revokedShas.includes(sha)) continue;
+    if (checked.size >= MAX_CANDIDATES) break;
+    checked.add(sha);
+    if (await isCiGreen(deps, sha)) return candidate;
   }
-  return latest;
+  throw new FetchFailure(
+    "no_successful_run",
+    "no push run on main succeeded in both workflows",
+  );
 }
 
 /** 本文の次の断片を読む。途中で切れた接続や時間切れは`github_unavailable`にする。 */
@@ -878,15 +928,6 @@ async function cleanup(deps: FetcherDeps, layout: Layout): Promise<void> {
   for (const name of stale) {
     await rm(join(layout.assets, name), { force: true });
   }
-  const onDisk = (await readdir(layout.releases)).filter(isCommitSha);
-  const pruned = pruneRevokedState(revokedState, onDisk);
-  if (pruned.shas.length !== revokedState.shas.length) {
-    await writeAtomically(
-      layout,
-      layout.revoked,
-      `${JSON.stringify(pruned)}\n`,
-    );
-  }
 }
 
 async function finish(
@@ -947,7 +988,15 @@ export async function runOnce(deps: FetcherDeps): Promise<FetcherStatus> {
         error: null,
       });
     }
-    const run = await findLatestRun(deps);
+    const revokedState = await readRevokedStateOrEmpty(
+      layout,
+      deps.log,
+      deps.now,
+    );
+    const run = await findLatestRun(deps, {
+      currentSha,
+      revokedShas: revokedState.shas,
+    });
     if (needsDeploy(currentSha, run.headSha)) {
       // assetsが欠けた版(戻した元の版の削除が途中で止まったものなど)は、消して取り直す。
       if (!(await isCompleteRelease(layout, run.headSha))) {
