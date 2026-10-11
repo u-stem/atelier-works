@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { INFO_NOTICE_KINDS } from "../../f/factory/lib/console_support.ts";
 import {
   acquireImplementLease,
-  addNotice,
   addNoticeUnlessUnresolved,
   bumpWatermarks,
   claimIssueCreation,
@@ -383,7 +383,7 @@ describe("insertIssueWorkItemUnlessActive when the sweep fails", () => {
           if (call === 2) return Promise.reject(new Error("sweep failed"));
           return noticeFails
             ? Promise.reject(new Error("notice failed"))
-            : Promise.resolve([{ id: 1 }]);
+            : Promise.resolve([{ id: 1, inserted: true }]);
         },
         execute: () => Promise.resolve(),
       };
@@ -1371,55 +1371,61 @@ describe("recordDeployment", () => {
   });
 });
 
-describe("addNotice", () => {
-  test("inserts into factory.notices", async () => {
-    const { sql, calls } = createFakeSqlClient([[{ id: 15 }]]);
-    await addNotice(
-      {
-        kind: "sha_mismatch",
-        message: "self clone SHA does not match deployed_sha",
-      },
-      sql,
-    );
-    expect(calls[0]?.text).toContain("INSERT INTO factory.notices");
-  });
-});
-
 describe("addNoticeUnlessUnresolved", () => {
   const record = {
     kind: "deployed_sha_mismatch",
     message: "head abc1234 differs from deployed def5678",
   };
 
-  test("guards the insert with NOT EXISTS", async () => {
-    const { sql, calls } = createFakeSqlClient([[{ id: 15 }]]);
+  test("targets the partial unique index over unresolved notices", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 15, inserted: true }]]);
     await addNoticeUnlessUnresolved(record, sql);
-    expect(calls[0]?.text).toContain("WHERE NOT EXISTS");
+    expect(calls[0]?.text).toContain(
+      "ON CONFLICT (kind, md5(message)) WHERE resolved = false",
+    );
   });
 
-  test("looks only at unresolved notices", async () => {
-    const { sql, calls } = createFakeSqlClient([[{ id: 15 }]]);
+  test("refreshes created_at of the open notice on a conflict", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 15, inserted: true }]]);
     await addNoticeUnlessUnresolved(record, sql);
-    expect(calls[0]?.text).toContain("resolved = false");
+    expect(calls[0]?.text).toContain("DO UPDATE SET created_at = now()");
   });
 
-  test("passes the kind and the message to both the insert and the existence check", async () => {
-    const { sql, calls } = createFakeSqlClient([[{ id: 15 }]]);
+  test("refreshes only a notice created more than a day ago", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 15, inserted: true }]]);
+    await addNoticeUnlessUnresolved(record, sql);
+    expect(calls[0]?.text).toContain(
+      "WHERE factory.notices.created_at < now() - interval '1 day'",
+    );
+  });
+
+  test("refreshes only a notice of an info kind", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 15, inserted: true }]]);
+    await addNoticeUnlessUnresolved(record, sql);
+    expect(calls[0]?.text).toContain("AND factory.notices.kind = ANY(");
+  });
+
+  test("passes the kind, the message and the info kinds", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 15, inserted: true }]]);
     await addNoticeUnlessUnresolved(record, sql);
     expect(calls[0]?.values).toEqual([
       record.kind,
       record.message,
-      record.kind,
-      record.message,
+      [...INFO_NOTICE_KINDS],
     ]);
   });
 
   test("returns the new id when a row was inserted", async () => {
-    const { sql } = createFakeSqlClient([[{ id: 15 }]]);
+    const { sql } = createFakeSqlClient([[{ id: 15, inserted: true }]]);
     expect(await addNoticeUnlessUnresolved(record, sql)).toBe(15);
   });
 
-  test("returns null when an unresolved notice already exists", async () => {
+  test("returns null when an open notice was refreshed", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 9, inserted: false }]]);
+    expect(await addNoticeUnlessUnresolved(record, sql)).toBeNull();
+  });
+
+  test("returns null when an open notice was left as it is", async () => {
     const { sql } = createFakeSqlClient([[]]);
     expect(await addNoticeUnlessUnresolved(record, sql)).toBeNull();
   });

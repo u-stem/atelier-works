@@ -15,7 +15,6 @@ import {
 } from "../lib/claude.ts";
 import { implementCheckCommandsFor, loadConfig } from "../lib/config.ts";
 import {
-  addNotice,
   addNoticeUnlessUnresolved,
   countImplementFailedRounds,
   getWorkItem,
@@ -163,7 +162,7 @@ export async function main(
   // workerのコンテナの中で、コンテナの分離なしに実行する。
   // generateがリースを失っていたときは検査を実行しないので告知しない。
   if (commands.length > 0 && first_round.kind !== "lease_lost") {
-    await addNotice({
+    await addNoticeUnlessUnresolved({
       kind: "unsandboxed_check_commands",
       message: `implement_verifyはこれから${String(commands.length)}件の検査コマンドを、コンテナの分離なしで非特権の検査用ユーザーにより${context.owner}/${context.repo}#${String(context.issue_number)}の未検証コードに対して実行します(work item ${String(work_item_id)})。${kernelWarningText(checkSandbox?.kernelWarnings() ?? [])}`,
     });

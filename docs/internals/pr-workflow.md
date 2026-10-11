@@ -540,7 +540,8 @@ PR修正のClaudeに渡すツールは`Read,Glob,Grep,Edit,Write`だけで、`Ba
 
 検査コマンドは、対象リポジトリのコードをworkerのコンテナ内で、非特権のユーザー(`factory-check-N`)として実行する。
 コンテナとnetworkは分けない。別のコンテナでnetworkなしに動かせるまで、既定値の`[]`を保つ。
-空でなければ、実行のたびにnoticeの`unsandboxed_check_commands`を記録する。
+空でなければ、実行する作業項目ごとにnoticeの`unsandboxed_check_commands`を記録する。
+同じ本文の未解決のnoticeがあれば新しく作らない。作成から1日を過ぎていれば、時刻を更新する。
 
 検査コマンドには、許可リストの環境変数だけを渡し、workerの環境変数は引き継がない。
 許可するのは、固定の`PATH`、実行ごとに作る非公開の`HOME`とその下の`TMPDIR`、`LANG`、worktreeだけを`safe.directory`にするgitの設定である。

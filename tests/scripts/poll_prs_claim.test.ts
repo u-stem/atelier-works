@@ -474,19 +474,12 @@ describe("recordPrClaimNotClaimed", () => {
 
   function fakeNoticeDeps(): {
     deps: ClaimNotClaimedDeps;
-    plain: unknown[];
     deduplicated: unknown[];
   } {
-    const plain: unknown[] = [];
     const deduplicated: unknown[] = [];
     return {
-      plain,
       deduplicated,
       deps: {
-        addNotice: async (record) => {
-          plain.push(record);
-          return 1;
-        },
         addNoticeUnlessUnresolved: async (record) => {
           deduplicated.push(record);
           return 1;
@@ -516,18 +509,8 @@ describe("recordPrClaimNotClaimed", () => {
     ]);
   });
 
-  test("does not use the plain insert when the label was restored", async () => {
-    const { deps, plain } = fakeNoticeDeps();
-    await recordPrClaimNotClaimed(
-      TARGET,
-      { claimed: false, reason: "r", restored: true },
-      deps,
-    );
-    expect(plain).toEqual([]);
-  });
-
-  test("inserts every time for other reasons", async () => {
-    const { deps, plain } = fakeNoticeDeps();
+  test("skips an unresolved duplicate for other reasons", async () => {
+    const { deps, deduplicated } = fakeNoticeDeps();
     await recordPrClaimNotClaimed(
       TARGET,
       {
@@ -536,23 +519,13 @@ describe("recordPrClaimNotClaimed", () => {
       },
       deps,
     );
-    expect(plain).toEqual([
+    expect(deduplicated).toEqual([
       {
         kind: "claim_race_lost",
         message:
           "octo-owner/atelier-works#7: trigger label factory:review was already removed",
       },
     ]);
-  });
-
-  test("does not use the deduplicating insert for other reasons", async () => {
-    const { deps, deduplicated } = fakeNoticeDeps();
-    await recordPrClaimNotClaimed(
-      TARGET,
-      { claimed: false, reason: "r" },
-      deps,
-    );
-    expect(deduplicated).toEqual([]);
   });
 });
 
@@ -766,7 +739,6 @@ describe("resolveClaimNotices", () => {
         restored: true,
       },
       {
-        addNotice: async () => 1,
         addNoticeUnlessUnresolved: async (record) => {
           recorded.push(record.message);
           return 1;

@@ -14,6 +14,12 @@ describe("noticeGuide", () => {
     );
   });
 
+  test("says a busy worktree keeps one notice open, not a new one each day", () => {
+    expect(noticeGuide("cleanup_worktree_busy").action).toContain(
+      "同じ通知が1件残り続けます",
+    );
+  });
+
   test("falls back to the generic guide for an unknown kind", () => {
     expect(noticeGuide("future_kind")).toBe(GENERIC_NOTICE_GUIDE);
   });

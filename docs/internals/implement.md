@@ -544,7 +544,9 @@ noticeは1回の掃除でパスごとに1件で、Discordには通知しない�
 
 検査コマンドは、Claudeが書いたテストやソースを、workerのコンテナ内で非特権のユーザー(`factory-check-N`)として、コンテナの分離なしに実行する。そのため実装フローは、そのリポジトリについて`check_commands_by_repo`に明示したコマンドだけを実行する。`allowed_check_commands`には落とさない。
 
-検査コマンドを実行するたびに、noticeの`unsandboxed_check_commands`を記録する。networkとworkerの資源を共有するので、Issueを信頼できる人だけが起票するリポジトリにだけ、このエントリを設定する。
+検査コマンドを実行するときに、作業項目ごとにnoticeの`unsandboxed_check_commands`を記録する。
+同じ本文の未解決のnoticeがあれば、新しく作らず、作成から1日を過ぎていれば時刻を更新する。
+networkとworkerの資源を共有するので、Issueを信頼できる人だけが起票するリポジトリにだけ、このエントリを設定する。
 
 検査の間、worktreeと`HOME`の所有者は、取った枠のユーザーである。
 検査コマンドが書き込めるのは、worktree、その`HOME`、共有の一時ディレクトリ(`/tmp`、`/var/tmp`、`/dev/shm`、`/dev/mqueue`、`/run/lock`)だけである。

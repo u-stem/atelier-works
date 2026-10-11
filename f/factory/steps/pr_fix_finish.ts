@@ -5,7 +5,7 @@
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "../lib/config.ts";
 import {
-  addNotice,
+  addNoticeUnlessUnresolved,
   bumpWatermarks,
   getWorkItem,
   insertApprovalRequest,
@@ -558,7 +558,7 @@ export async function main(
             error: message,
           });
           try {
-            await addNotice({
+            await addNoticeUnlessUnresolved({
               kind: "issue_proposal_record_failed",
               message: `${owner}/${repo}#${String(pr_number)} (work item ${String(work_item_id)}): 提案の記録に失敗しました: ${message}`,
             });
@@ -614,7 +614,7 @@ export async function main(
     );
     if (notice === null) return;
     try {
-      await addNotice(notice);
+      await addNoticeUnlessUnresolved(notice);
     } catch (noticeErr) {
       log.warn("failed to record fix_reply_post_failed notice", {
         error: maskSecrets(
@@ -863,7 +863,7 @@ export async function main(
   if (moved) {
     if (reviewerReport.note !== null && reviewerReport.noticeKind !== null) {
       try {
-        await addNotice({
+        await addNoticeUnlessUnresolved({
           kind: reviewerReport.noticeKind,
           message: `${owner}/${repo}#${String(pr_number)} (work item ${String(work_item_id)}): ${reviewerReport.note}`,
         });
