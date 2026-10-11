@@ -172,3 +172,16 @@ describe("Markdown notes", () => {
     expect(render("> [!WARNING] careful")).toContain("careful");
   });
 });
+
+describe("Markdown table cells", () => {
+  const TABLE =
+    "| ID | Body |\n| --- | --- |\n| FR-001 | Users can sign in |\n";
+
+  test("keeps an id cell on one line", () => {
+    expect(render(TABLE)).toMatch(/whitespace-nowrap">FR-001<\/td>/);
+  });
+
+  test("lets a text cell wrap", () => {
+    expect(render(TABLE)).not.toMatch(/whitespace-nowrap">Users/);
+  });
+});

@@ -17,9 +17,9 @@ import { RequirementsToc } from "./RequirementsToc.tsx";
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="grid grid-cols-[7rem_1fr] items-baseline gap-x-4 px-5 py-3">
+    <div className="flex items-center gap-1.5">
       <dt className="text-small text-subtle">{label}</dt>
-      <dd className="min-w-0 text-body text-foreground">{children}</dd>
+      <dd className="min-w-0 text-small text-foreground">{children}</dd>
     </div>
   );
 }
@@ -48,6 +48,7 @@ function IssueLink({ doc }: { doc: RequirementsDoc }) {
 
 /**
  * 要件定義書1件の本文。メタ情報、試行の切り替え、要約、本文、未確定事項を左に、目次を右に置く。
+ * メタ情報は、本文を押し下げないよう、折り返す1〜2行にまとめる。
  * 本文と要約と未確定事項はIssueの内容に由来するので、`prepared`(見えない文字を置き換え済み)だけを描く。
  * `embedded`のときは、承認の画面の中に置くため、メタ情報、試行の切り替え、目次を省き、幅も親に合わせる。
  * 承認の画面は、承認する試行を固定して出すので、試行を切り替えさせない。
@@ -85,7 +86,7 @@ export function RequirementsDocumentView({
         }
       >
         {embedded ? null : (
-          <dl className="divide-y divide-border rounded-xl border border-border bg-card">
+          <dl className="flex flex-wrap items-center gap-x-6 gap-y-2">
             <Row label="状態">
               <Badge
                 variant={toneBadgeVariant(

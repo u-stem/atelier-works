@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
+import { MemoryRouter } from "react-router";
 import type { RequirementsDoc } from "../../api/guards/requirements.ts";
 import { prepareDoc } from "../../lib/requirementsView.ts";
 import { RequirementsDocumentView } from "./RequirementsDocumentView.tsx";
@@ -32,6 +33,41 @@ function renderEmbedded(overrides: Partial<RequirementsDoc> = {}): string {
     />,
   );
 }
+
+function renderPage(overrides: Partial<RequirementsDoc> = {}): string {
+  const doc = { ...DOC, ...overrides };
+  return renderToStaticMarkup(
+    <MemoryRouter>
+      <RequirementsDocumentView
+        doc={doc}
+        prepared={prepareDoc(doc)}
+        latestAttempt={2}
+      />
+    </MemoryRouter>,
+  );
+}
+
+describe("RequirementsDocumentView page", () => {
+  test("lays the metadata out in one wrapping row", () => {
+    expect(renderPage()).toContain('<dl class="flex flex-wrap');
+  });
+
+  test("keeps the metadata out of a bordered card", () => {
+    expect(renderPage()).not.toContain("divide-y");
+  });
+
+  test("shows the repository", () => {
+    expect(renderPage()).toContain("o/r");
+  });
+
+  test("shows the attempt switcher", () => {
+    expect(renderPage()).toContain("試行の切り替え");
+  });
+
+  test("shows the table of contents", () => {
+    expect(renderPage()).toContain("目次");
+  });
+});
 
 describe("RequirementsDocumentView embedded", () => {
   test("shows the body", () => {

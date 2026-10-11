@@ -116,7 +116,7 @@ function ItemRequirements({
       >
         <BackLink />
       </PageHeader>
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div data-scroll-root="" className="min-h-0 flex-1 overflow-y-auto">
         <RequirementsDocumentView
           doc={doc}
           prepared={prepared}

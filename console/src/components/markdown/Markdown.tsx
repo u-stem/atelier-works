@@ -39,6 +39,7 @@ import {
   DRAWIO_IMAGE_SRC,
   diagramSlotState,
 } from "../../lib/requirementsView.ts";
+import { isIdCellText } from "../../lib/tableCell.ts";
 import { DrawioFrame } from "../drawio/DrawioFrame.tsx";
 
 /**
@@ -312,7 +313,15 @@ const components: Components = {
     </th>
   ),
   td: ({ children }) => (
-    <td className="border border-border px-3 py-1.5 align-top">{children}</td>
+    <td
+      className={cn(
+        "border border-border px-3 py-1.5 align-top",
+        // IDはハイフンで折り返されると読めなくなる。
+        isIdCellText(childrenText(children)) && "whitespace-nowrap",
+      )}
+    >
+      {children}
+    </td>
   ),
   blockquote: ({ children }) => {
     // 子の先頭には、段落の前の改行の文字列が入るので、最初の要素を探す。
