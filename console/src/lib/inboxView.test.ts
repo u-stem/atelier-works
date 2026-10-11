@@ -17,7 +17,6 @@ import {
   emptyStateTone,
   filterInboxItems,
   findInboxItem,
-  hasLegacyLink,
   type InboxItem,
   inboxSubtitle,
   itemId,
@@ -534,25 +533,11 @@ describe("actionableCounts", () => {
   });
 });
 
-describe("hasLegacyLink", () => {
-  test("keeps the link for approvals cut by the limit", () => {
-    expect(hasLegacyLink("approval")).toBe(true);
-  });
-
-  test("drops the link for failures, which the list now handles", () => {
-    expect(hasLegacyLink("failure")).toBe(false);
-  });
-
-  test("drops the link for notices, which the list now shows", () => {
-    expect(hasLegacyLink("notice")).toBe(false);
-  });
-});
-
 describe("unlistedNote", () => {
-  test("has no note for an entry with the legacy link", () => {
-    expect(
-      unlistedNote({ type: "approval", label: "承認", count: 1 }),
-    ).toBeNull();
+  test("says the approvals beyond the limit are not shown, oldest first", () => {
+    expect(unlistedNote({ type: "approval", label: "承認", count: 1 })).toBe(
+      "取得の上限を超えた分は、依頼の古いものから表示されません",
+    );
   });
 
   test("says audit failures cannot be retried", () => {

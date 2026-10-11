@@ -382,11 +382,11 @@ describe("buildEmbed", () => {
       url: "https://github.com/octo-owner/atelier-works/issues/42",
       reason: "承認がタイムアウトしました",
       target: { kind: "issue", number: 42 },
-      next_action: "Consoleの承認タブで承認または却下してください",
+      next_action: "Consoleの要対応で承認または却下してください",
     });
     expect(embed.fields).toContainEqual({
       name: "次の操作",
-      value: "Consoleの承認タブで承認または却下してください",
+      value: "Consoleの要対応で承認または却下してください",
     });
   });
 
@@ -399,7 +399,7 @@ describe("buildEmbed", () => {
       url: "https://github.com/octo-owner/atelier-works/issues/42",
       reason: "承認がタイムアウトしました",
       target: { kind: "issue", number: 42 },
-      next_action: "Consoleの承認タブで承認または却下してください",
+      next_action: "Consoleの要対応で承認または却下してください",
     });
     expect(embed.title).toBe("人による対応が必要です: Issue #42");
   });

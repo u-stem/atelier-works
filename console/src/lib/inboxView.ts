@@ -367,31 +367,24 @@ export type UnlistedCount = {
 };
 
 /**
- * 一覧に出ていない件数のカードが、旧Consoleへのリンクを持つ種類か。
- * 失敗と通知は新しい画面の一覧が受け持つので、旧Consoleへ誘導しない。
- * 残る件数は、取得の上限を超えた分だけである。
- */
-export function hasLegacyLink(type: InboxKind): boolean {
-  return type === "approval";
-}
-
-/**
- * 旧Consoleへのリンクを持たない件数のカードに添える文。リンクを持つ種類は`null`。
+ * 一覧に出ていない件数のカードに添える文。
  * 失敗の残りは、監査の失敗(再実行できない)と、取得の上限を超えた分である。
- * 通知の残りは、取得の上限を超えた分である。
+ * 承認と通知の残りは、取得の上限を超えた分である。
  * 取得は新しい順に上限まで読むので、超えた分は古いものから見えない。
  * 古い失敗に、再実行できるものが含まれることもある。
  */
-export function unlistedNote(entry: UnlistedCount): string | null {
-  if (hasLegacyLink(entry.type)) {
-    return null;
-  }
+export function unlistedNote(entry: UnlistedCount): string {
   if (entry.cause === "audit") {
     return "再実行できません。システムの画面で確認してください";
   }
-  return entry.type === "notice"
-    ? "取得の上限を超えた分は、発生の古いものから表示されません"
-    : "取得の上限を超えた分は、更新の古いものから表示されません";
+  switch (entry.type) {
+    case "approval":
+      return "取得の上限を超えた分は、依頼の古いものから表示されません";
+    case "notice":
+      return "取得の上限を超えた分は、発生の古いものから表示されません";
+    case "failure":
+      return "取得の上限を超えた分は、更新の古いものから表示されません";
+  }
 }
 
 /**

@@ -3512,7 +3512,7 @@ export type NextActionFlow = LockOwner["kind"];
 
 /**
  * 作業項目を同じ作業項目のまま再実行する操作。どの種別の作業項目にも使える。
- * ConsoleのFailuresタブはジョブの失敗(`job_failures`)だけを並べ、`needs_human`や`blocked`で止めた作業項目は出ないので、
+ * Consoleの要対応の失敗の一覧はジョブの失敗(`job_failures`)だけを並べ、`needs_human`や`blocked`で止めた作業項目は出ないので、
  * Windmillで直接実行してもらう。
  */
 const RETRY_WORK_ITEM_ACTION =
@@ -3520,10 +3520,10 @@ const RETRY_WORK_ITEM_ACTION =
 
 /**
  * 汎用の次の対応。より具体的な対応が無いときの既定にする。
- * 原因は通知の理由と、Consoleの通知タブ(`factory_console__raw_app`)のnoticeに残る。
+ * 原因は通知の理由と、Consoleのシステム画面のnoticeに残る。
  * 取り除いた後の再実行は、どの種別の作業項目にも使える`retry_work_item`を案内する。
  */
-const GENERIC_NEXT_ACTION = `通知の理由とConsoleの通知タブで原因を確かめ、取り除いてから、${RETRY_WORK_ITEM_ACTION}`;
+const GENERIC_NEXT_ACTION = `通知の理由とConsoleのシステム画面で原因を確かめ、取り除いてから、${RETRY_WORK_ITEM_ACTION}`;
 
 const FACTORY_FIX_RELABEL_ACTION =
   "対応してほしい指摘をコメントしてから`factory:fix`を付け直してください";
@@ -3541,7 +3541,7 @@ const DAILY_BUDGET_NEXT_ACTION =
 const NOTHING_TO_COMMIT_NEXT_ACTION =
   "返信内容を確認し、必要なら指示をコメントして`factory:fix`を付け直してください";
 const ISSUE_PROPOSAL_NEXT_ACTION =
-  "Consoleの承認タブで提案を承認または却下してください";
+  "Consoleの要対応で提案を承認または却下してください";
 
 /**
  * 確かめる内容`check`の後に、フローごとの再実行を続けた次の操作を返す。
@@ -3846,7 +3846,7 @@ const REASON_RULES: readonly ReasonRule[] = [
     pattern: /^claimed issue could not be registered$/,
     describe: () => "Issueを取得しましたが、作業項目を登録できませんでした",
     nextAction: () =>
-      "原因をConsoleの失敗タブかジョブのログで確かめて取り除き、Issueに`factory`ラベルを付け直してください",
+      "原因をConsoleの要対応かジョブのログで確かめて取り除き、Issueに`factory`ラベルを付け直してください",
   },
   // poll_issues.tsの`claimIssueWithNotice`。ラベルの削除が応答の無い失敗かサーバーエラーで終わり、
   // 読み直しでも自分が外したか判断できなかった。ラベルは無く、作業項目が始まっているかも分からない。
@@ -3872,7 +3872,7 @@ const REASON_RULES: readonly ReasonRule[] = [
   {
     pattern: /^approval timed out$/,
     describe: () => "承認がタイムアウトしました",
-    nextAction: () => "Consoleの承認タブで承認または却下してください",
+    nextAction: () => "Consoleの要対応で承認または却下してください",
   },
   // pr_fix_finish.tsのpush後のレビュアー依頼の結果(`reportReviewerRequest`の`note`で、
   // 作業項目の`status_reason`に残す文)。
@@ -4000,7 +4000,7 @@ const REASON_RULES: readonly ReasonRule[] = [
     describe: (m) => `実装フローのジョブIDを記録できませんでした: ${m[1]}`,
     // 起動したフローは動いており、作業項目は`implementing`のままなので、retry_work_itemは再実行を拒否する。
     nextAction: () =>
-      "実装フローは動いているので、終わるのを待ち、Consoleのパイプラインタブで作業項目の状態を確認してください",
+      "実装フローは動いているので、終わるのを待ち、Consoleの作業項目で状態を確認してください",
   },
   {
     pattern: /^secrets detected, changes not pushed$/,

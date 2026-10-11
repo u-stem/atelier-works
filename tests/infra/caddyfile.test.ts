@@ -249,9 +249,15 @@ describe("redirect from the legacy console", () => {
     expect(legacyBlock).toContain('header Cache-Control "no-store"');
   });
 
-  test("comes before the console routes and every proxy", () => {
+  test("comes before the redirect from /console", () => {
     expect(CADDYFILE.indexOf("handle @legacy_console {")).toBeLessThan(
       CADDYFILE.indexOf("handle /console {"),
+    );
+  });
+
+  test("comes before the proxy to the Windmill server", () => {
+    expect(CADDYFILE.indexOf("handle @legacy_console {")).toBeLessThan(
+      CADDYFILE.indexOf("reverse_proxy http://windmill_server:8000"),
     );
   });
 

@@ -64,6 +64,21 @@ expect_redirect() {
   fi
 }
 
+# expect_no_store <説明> <curlの引数...>
+# 転送の応答に`Cache-Control: no-store`が付くことを確かめる。付かないと、ブラウザが転送を覚える。
+expect_no_store() {
+  local label="$1"
+  shift
+  local got
+  got="$(curl -s -o /dev/null -D - "$@" | tr -d '\r' | awk -F': ' 'tolower($1) == "cache-control" { print $2 }')"
+  if [[ "${got}" == "no-store" ]]; then
+    printf 'ok    %s -> %s\n' "${label}" "${got}"
+  else
+    printf 'FAIL  %s -> %s (期待: no-store)\n' "${label}" "${got}"
+    failures=$((failures + 1))
+  fi
+}
+
 localhost="http://localhost:${port}"
 loopback="http://127.0.0.1:${port}"
 
@@ -136,6 +151,7 @@ expect_redirect 302 "${console}" "旧Consoleの/の重なり" "${localhost}//app
 expect_redirect 302 "${console}" "旧Consoleのクエリは行き先に写さない" "${localhost}/apps/get/f/factory/factory_console?next=http://evil.example/&x=1"
 expect_redirect 302 "${console}" "旧Consoleの配下にURLらしいパス" "${localhost}/apps/get/f/factory/factory_console/http://evil.example/"
 expect_redirect 302 "${console}" "旧Console(別のホスト名のHost)" -H 'Host: evil.example' "${localhost}/apps/get/f/factory/factory_console"
+expect_no_store "旧Consoleの転送はキャッシュさせない" "${localhost}/apps/get/f/factory/factory_console"
 expect 502 "名前が続く別のアプリは飛ばさない" "${localhost}/apps/get/f/factory/factory_console2"
 expect 502 "旧Consoleの編集画面は飛ばさない" "${localhost}/apps/edit/f/factory/factory_console"
 expect_redirect 308 "${console}?approval=9" "/consoleはクエリを保って入口へ" "${localhost}/console?approval=9"
